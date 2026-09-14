@@ -483,8 +483,9 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 	/**
 	 * Container transfer primitive: all-or-nothing extraction of an exact volume near the
 	 * target. Availability is verified in double precision first; removal takes whole markers and
-	 * splits the last one, so the returned volume is the exact double sum of real marker
-	 * decreases and exceeds the request by at most one ulp of the split marker.
+	 * splits the last one. Settlement reports real marker decreases without exceeding the request;
+	 * a positive request with no representable transfer is refused before mutation.
+	 * The overload without a material handle extracts the default carrier (handle zero).
 	 */
 public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius) {
 return tryExtractExactVolume(centerX, centerY, centerZ, volume, maxRadius, 0);

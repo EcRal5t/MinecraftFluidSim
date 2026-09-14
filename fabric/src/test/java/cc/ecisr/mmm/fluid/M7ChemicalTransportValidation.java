@@ -732,8 +732,18 @@ public final class M7ChemicalTransportValidation {
 		return contentsSpecies(first, second);
 	}
 
-	private static void validateTransferResolutionIsAtomic() {
+	private static void validateTransferResolutionIsAtomic() throws Exception {
 		FluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
+		FluidDomainState coarseState = domain.captureAuthoritativeState();
+		float belowMarkerResolution = 0.75F * (0.125F - Math.nextDown(0.125F));
+		check(!domain.tryExtractExactChemical(1, 1, 1, belowMarkerResolution, 0).transferred(),
+				"sub-resolution chemical extraction reported empty success");
+		FluidDomainStateAssertions.assertSameState(coarseState, domain.captureAuthoritativeState(),
+				"sub-resolution chemical extraction");
+		check(!domain.tryExtractExactVolume(1, 1, 1, belowMarkerResolution, 0).transferred(),
+				"sub-resolution canonical carrier extraction reported empty success");
+		FluidDomainStateAssertions.assertSameState(coarseState, domain.captureAuthoritativeState(),
+				"sub-resolution canonical carrier extraction");
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
 		FluidDomainState before = domain.captureAuthoritativeState();
 		check(!domain.tryExtractExactChemical(1, 1, 1, 0.0625F, 0).transferred(),
@@ -760,6 +770,23 @@ public final class M7ChemicalTransportValidation {
 			check(speciesBefore[species] == speciesAfter[species] + removed,
 					"alternate extraction changed exact species inventory");
 		}
+
+		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
+		FluidSolverConfig thermalConfig = new FluidSolverConfig(
+				0.5F, 1_000.0F, 0.0F, 0.05F, 64, 1.0E-6F, 0.45F, 0.002F, 0.0F);
+		FluidDomain thermal = new FluidDomain(4, 4, 4, thermalConfig, 64);
+		thermal.sealDomainBoundary();
+		FullCapabilityTestFixture.bindFull(thermal, registries, 293.15, 8);
+		check(thermal.tryInsertExactVolume(1, 1, 1, 0.125F, 0).transferred(), "thermal coarse marker setup");
+		FluidDomainState thermalBefore = thermal.captureAuthoritativeState();
+		check(!thermal.tryExtractExactVolume(1, 1, 1, belowMarkerResolution, 0).transferred(),
+				"thermal sub-resolution extraction reported empty success");
+		FluidDomainStateAssertions.assertSameState(thermalBefore, thermal.captureAuthoritativeState(),
+				"thermal sub-resolution extraction preserved inventory and energy audit");
+		check(!thermal.tryExtractExactChemical(1, 1, 1, belowMarkerResolution, 0).transferred(),
+				"thermal chemical sub-resolution extraction reported empty success");
+		FluidDomainStateAssertions.assertSameState(thermalBefore, thermal.captureAuthoritativeState(),
+				"thermal chemical sub-resolution extraction preserved inventory and energy audit");
 	}
 
 	private static void validateInsertionAccountsForDisplacedLiquid() {

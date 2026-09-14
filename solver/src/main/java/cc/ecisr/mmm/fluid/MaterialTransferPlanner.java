@@ -290,15 +290,17 @@ final class MaterialTransferPlanner {
 				float previousVolume = domain.particles.volume(marker);
 				double take = Math.min(previousVolume, remaining);
 				float newVolume = (float) (previousVolume - take);
-				double actual = previousVolume - newVolume;
+				double actual = (double) previousVolume - newVolume;
+				double markerTolerance = Math.ulp(volume);
 				if (actual > remaining && newVolume < previousVolume) {
-					newVolume = Math.nextUp(newVolume); actual = previousVolume - newVolume;
-					settlementTolerance = Math.max(settlementTolerance, Math.ulp(previousVolume));
+					newVolume = Math.nextUp(newVolume); actual = (double) previousVolume - newVolume;
+					markerTolerance = Math.ulp(previousVolume);
 				}
 				if (actual <= 0.0) continue;
 				double previousMass = domain.particles.mass(marker);
 				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
 				double removedMass = previousMass - newMass;
+				if (!(removedMass > 0.0)) continue;
 				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels.tryPlanTruncate(
 						marker, newVolume, previousVolume - newVolume, newMass, removedMass);
 				if (chemicalPlan == null) continue;
@@ -307,10 +309,13 @@ final class MaterialTransferPlanner {
 				LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(marker, newMass,
 						chemicalPlan.kept(), domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(marker));
 				plan.add(new ExtractionAllocation(marker, newVolume, newMass, chemicalPlan, thermalPlan));
+				settlementTolerance = Math.max(settlementTolerance, markerTolerance);
 				remaining -= actual;
 			}
 		}
-		if (remaining > settlementTolerance) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		if (plan.isEmpty() || remaining > settlementTolerance) {
+			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+		}
 		ChemicalTransferLedger removed = ledger.build();
 		if (removed.totalQuanta() > ChemicalLimits.MAX_BUCKET_TOTAL_QUANTA) {
 			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
@@ -356,12 +361,10 @@ final class MaterialTransferPlanner {
 		double settlementTolerance = Math.ulp(volume);
 		java.util.List<ExtractionAllocation> plan = new java.util.ArrayList<>();
 		int ledgerSize = domain.materialRegistry == null ? 1 : domain.materialRegistry.size();
-		double[] volumeBefore = new double[ledgerSize];
-		double[] massBefore = new double[ledgerSize];
-		for (int particle = 0; particle < domain.particles.count(); particle++) {
-			volumeBefore[domain.particles.materialHandle(particle)] += domain.particles.volume(particle);
-			massBefore[domain.particles.materialHandle(particle)] += domain.particles.mass(particle);
-		}
+		SignedDyadic[] removedVolumes = new SignedDyadic[ledgerSize];
+		SignedDyadic[] removedMasses = new SignedDyadic[ledgerSize];
+		java.util.Arrays.fill(removedVolumes, SignedDyadic.ZERO);
+		java.util.Arrays.fill(removedMasses, SignedDyadic.ZERO);
 		java.util.Set<Integer> changedHandles = new java.util.TreeSet<>();
 		for (FluidDomain.CellCandidate candidate : cells) {
 			if (remaining <= 0.0) break;
@@ -375,18 +378,20 @@ final class MaterialTransferPlanner {
 				float previousVolume = domain.particles.volume(i);
 				double take = Math.min(previousVolume, remaining);
 				float newVolume = (float) (previousVolume - take);
-				double actual = previousVolume - newVolume;
+				double actual = (double) previousVolume - newVolume;
+				double markerTolerance = Math.ulp(volume);
 				// A nearest-float remainder may round downward and remove more than requested.
 				// Keep the authoritative marker delta at or below the caller's remaining cap;
 				// a later marker can settle any still-representable remainder.
 				if (actual > remaining && newVolume < previousVolume) {
 					newVolume = Math.nextUp(newVolume);
-					actual = previousVolume - newVolume;
-					settlementTolerance = Math.max(settlementTolerance, Math.ulp(previousVolume));
+					actual = (double) previousVolume - newVolume;
+					markerTolerance = Math.ulp(previousVolume);
 				}
 				if (actual <= 0.0) continue;
 				double previousMass = domain.particles.mass(i);
 				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
+				if (!(previousMass - newMass > 0.0)) continue;
 				int handle = domain.particles.materialHandle(i);
 				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels == null ? null
 						: domain.chemicalParcels.tryPlanTruncate(i, newVolume, previousVolume - newVolume,
@@ -397,10 +402,27 @@ final class MaterialTransferPlanner {
 						domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(i));
 				plan.add(new ExtractionAllocation(i, newVolume, newMass, chemicalPlan, thermalPlan));
 				changedHandles.add(handle);
+				removedVolumes[handle] = removedVolumes[handle].add(SignedDyadic.of(previousVolume)
+						.subtract(SignedDyadic.of(newVolume)));
+				removedMasses[handle] = removedMasses[handle].add(SignedDyadic.of(previousMass)
+						.subtract(SignedDyadic.of(newMass)));
+				settlementTolerance = Math.max(settlementTolerance, markerTolerance);
 				remaining -= actual;
 			}
 		}
-		if (remaining > settlementTolerance) return new FluidDomain.ExactMixtureTransfer(false, List.of());
+		if (plan.isEmpty() || remaining > settlementTolerance) return new FluidDomain.ExactMixtureTransfer(false, List.of());
+		// Derive settlement from planned carrier deltas before committing. Subtracting rounded
+		// whole-domain totals can erase a small extraction or include unrelated summation drift.
+		List<FluidDomain.MaterialPortion> result = new ArrayList<>(changedHandles.size());
+		for (int handle : changedHandles) {
+			double removedVolume = removedVolumes[handle].toDouble();
+			double removedMass = removedMasses[handle].toDouble();
+			if (!(Double.isFinite(removedVolume) && removedVolume > 0.0
+					&& Double.isFinite(removedMass) && removedMass > 0.0)) {
+				return new FluidDomain.ExactMixtureTransfer(false, List.of());
+			}
+			result.add(new FluidDomain.MaterialPortion(handle, removedVolume, removedMass));
+		}
 		SignedDyadic extractionEnergy = exactExtractionEnergy(plan);
 		for (ExtractionAllocation allocation : plan) {
 			if (domain.chemicalParcels != null && allocation.chemicalPlan().kept() != null) {
@@ -416,20 +438,6 @@ final class MaterialTransferPlanner {
 			if (domain.particles.volume(particle) == 0.0F) domain.removeParticle(particle);
 		}
 		domain.gridDirty = true;
-		double[] volumeAfter = new double[ledgerSize];
-		double[] massAfter = new double[ledgerSize];
-		for (int particle = 0; particle < domain.particles.count(); particle++) {
-			volumeAfter[domain.particles.materialHandle(particle)] += domain.particles.volume(particle);
-			massAfter[domain.particles.materialHandle(particle)] += domain.particles.mass(particle);
-		}
-		List<FluidDomain.MaterialPortion> result = new java.util.ArrayList<>(changedHandles.size());
-		for (int handle : changedHandles) {
-			double removedVolume = volumeBefore[handle] - volumeAfter[handle];
-			double removedMass = massBefore[handle] - massAfter[handle];
-			if (removedVolume > 0.0 && removedMass > 0.0) {
-				result.add(new FluidDomain.MaterialPortion(handle, removedVolume, removedMass));
-			}
-		}
 		double removedEnergy = extractionEnergy.toDouble();
 		if (domain.thermalState != null) {
 			domain.thermalState.settleExternalExtraction(extractionEnergy, removedEnergy);

@@ -4,6 +4,7 @@ import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.fluid.FluidDomain;
+import cc.ecisr.mmm.fluid.FluidDomainStateAssertions;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
@@ -378,6 +379,43 @@ public final class M6ContainerValidation {
 				"marker ledger did not lose the extracted volume");
 		check(domain.tryExtractExactVolume(3, 2, 3, 0.0F, 2).transferred(),
 				"a zero-volume extract is a successful no-op");
+
+		FluidDomain coarse = new FluidDomain(4, 4, 4, CONFIG, 64);
+		check(coarse.tryInsertExactVolume(1, 1, 1, 0.125F, 0).transferred(), "coarse marker setup");
+		var unchanged = coarse.captureAuthoritativeState();
+		float belowMarkerResolution = 0.75F * (0.125F - Math.nextDown(0.125F));
+		check(!coarse.tryExtractExactVolume(1, 1, 1, belowMarkerResolution, 0).transferred(),
+				"sub-resolution extraction reported success without removing a marker delta");
+		FluidDomainStateAssertions.assertSameState(unchanged, coarse.captureAuthoritativeState(),
+				"sub-resolution single-material refusal");
+		check(!coarse.tryExtractExactMixture(1, 1, 1, belowMarkerResolution, 0).transferred(),
+				"sub-resolution mixture extraction reported empty success");
+		FluidDomainStateAssertions.assertSameState(unchanged, coarse.captureAuthoritativeState(),
+				"sub-resolution mixture refusal");
+		FluidDomain insufficient = FluidDomain.restoreAuthoritativeState(unchanged);
+		check(insufficient.tryInsertExactVolume(2, 1, 1, belowMarkerResolution / 3.0F, 0).transferred(),
+				"partial fine marker setup");
+		var insufficientBefore = insufficient.captureAuthoritativeState();
+		check(!insufficient.tryExtractExactVolume(1, 1, 1, belowMarkerResolution, 1).transferred(),
+				"skipped coarse marker inflated tolerance for an insufficient fine extraction");
+		FluidDomainStateAssertions.assertSameState(insufficientBefore, insufficient.captureAuthoritativeState(),
+				"insufficient fine extraction did not commit its partial plan");
+
+		// A small marker remains extractable even when the same request cannot shrink a large one.
+		float fineVolume = Math.scalb(1.0F, -60);
+		check(coarse.tryInsertExactVolume(2, 1, 1, fineVolume, 0).transferred(), "fine marker setup");
+		var fineState = coarse.captureAuthoritativeState();
+		var fine = coarse.tryExtractExactVolume(1, 1, 1, fineVolume, 1);
+		check(fine.transferred() && fine.volume() == fineVolume && fine.mass() == fineVolume * 1_000.0,
+				"whole fine marker disappeared from the settlement next to a larger inventory");
+		FluidDomainStateAssertions.assertSameState(unchanged, coarse.captureAuthoritativeState(),
+				"fine extraction left the coarse inventory intact");
+		FluidDomain mixture = FluidDomain.restoreAuthoritativeState(fineState);
+		var fineMixture = mixture.tryExtractExactMixture(2, 1, 1, fineVolume, 0);
+		check(fineMixture.transferred() && fineMixture.portions().size() == 1
+				&& fineMixture.portions().getFirst().volume() == fineVolume
+				&& fineMixture.portions().getFirst().mass() == fine.mass(),
+				"mixture settlement lost a fine carrier delta to whole-domain cancellation");
 	}
 
 	private static void testExactMaterialMass() {
@@ -414,6 +452,11 @@ public final class M6ContainerValidation {
 		check(Math.abs(domain.totalMass() - 0.375 * 800.0) > 100.0,
 				"material insert silently reconstructed mass from reference density");
 		double massBefore = domain.totalMass();
+		var materialBefore = domain.captureAuthoritativeState();
+		check(!domain.tryExtractExactVolume(2, 2, 2, 0.125F, 1).transferred(),
+				"default-carrier extraction removed another material");
+		FluidDomainStateAssertions.assertSameState(materialBefore, domain.captureAuthoritativeState(),
+				"default-carrier extraction preserved non-default material");
 		FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(2, 2, 2, 0.125F, 1, 1);
 		check(extracted.transferred() && extracted.mass() > 0.0,
 				"material extraction did not return removed mass");
