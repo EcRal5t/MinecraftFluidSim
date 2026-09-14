@@ -399,6 +399,11 @@ final class ControllerInventoryDurabilityValidation {
 		private int diskRoundTrips;
 		private FluidDomain domain;
 		private long generation;
+		long substepsThisAction;
+
+		private void recordSubsteps(FluidStepCandidate candidate) {
+			substepsThisAction = Math.addExact(substepsThisAction, candidate.stats().substeps());
+		}
 
 		NormalPlayState(FullCapabilityTestFixture.Registries registries) throws Exception {
 			this(registries, BASELINE_SCENE);
@@ -757,6 +762,7 @@ final class ControllerInventoryDurabilityValidation {
 				check(candidate.stats().thermalAxis().granularPhase().transfers() == 0
 							&& candidate.stats().chemistryEvaluations() == 0,
 						"pending phase-work settlement advanced thermochemistry");
+				recordSubsteps(candidate);
 				adopt(candidate);
 				check(!domain.hasPendingPhaseVolumeWork(),
 						"pending phase-work settlement retained the prior lien");
@@ -773,6 +779,7 @@ final class ControllerInventoryDurabilityValidation {
 				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
 						solverGeneration(), domain.captureAuthoritativeState(), java.util.List.of(), phase,
 						phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
+				recordSubsteps(candidate);
 				adopt(candidate);
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("normal-play logical step failed at generation " + generation
@@ -812,6 +819,7 @@ final class ControllerInventoryDurabilityValidation {
 				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
 						solverGeneration(), domain.captureAuthoritativeState(), bodies, true,
 						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+				recordSubsteps(candidate);
 				adopt(candidate);
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("normal-play moving-body step failed at generation " + generation
@@ -1195,7 +1203,31 @@ final class ControllerInventoryDurabilityValidation {
 		ACTION_COVERAGE.entrySet().stream()
 				.sorted((left, right) -> Long.compare(right.getValue().get(), left.getValue().get()))
 				.forEach(entry -> System.out.println("  " + entry.getValue() + " " + entry.getKey()));
+		printHotspots();
 		check(failures == 0, "scenario fuzz found " + failures + " interrupted jobs");
+	}
+
+	private static void printHotspots() {
+		System.out.println("action hotspots (total ms / count / ms-per-call / substeps):");
+		ACTION_NANOS.entrySet().stream()
+				.sorted((left, right) -> Long.compare(right.getValue().sum(), left.getValue().sum()))
+				.limit(12)
+				.forEach(entry -> {
+					long totalNanos = entry.getValue().sum();
+					long count = ACTION_COUNTS.get(entry.getKey()).sum();
+					long substeps = ACTION_SUBSTEPS.containsKey(entry.getKey())
+							? ACTION_SUBSTEPS.get(entry.getKey()).sum() : 0L;
+					System.out.printf(java.util.Locale.ROOT, "  %9d ms  %6d x  %9.2f ms  %10d substeps  %s%n",
+							totalNanos / 1_000_000L, count,
+							count == 0L ? 0.0 : (double) totalNanos / 1_000_000.0 / count,
+							substeps, entry.getKey());
+				});
+		System.out.println("slowest jobs (ms / substeps / scene/seed):");
+		JOB_MILLIS.entrySet().stream()
+				.sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+				.limit(10)
+				.forEach(entry -> System.out.println("  " + entry.getValue() + " ms  substeps="
+						+ JOB_SUBSTEPS.getOrDefault(entry.getKey(), 0L) + "  " + entry.getKey()));
 	}
 
 	private static void cover(String action) {
@@ -1264,16 +1296,29 @@ final class ControllerInventoryDurabilityValidation {
 			FullCapabilityTestFixture.Registries registries, FuzzScene scene, int seed, int actionCount
 	) throws Exception {
 		NormalPlayState state = new NormalPlayState(registries, scene);
+		long jobStartNanos = System.nanoTime();
+		long jobSubsteps = 0L;
 		try {
 			java.util.Random random = new java.util.Random(seed);
 			java.util.List<String> trace = new java.util.ArrayList<>();
 			for (int index = 0; index < actionCount; index++) {
 				String action;
+				state.substepsThisAction = 0L;
+				long actionStartNanos = System.nanoTime();
 				try {
 					action = applyExpandedRandomAction(state, random);
 				} catch (Throwable failure) {
 					return new Failure(index + 1, failure, java.util.List.copyOf(trace));
 				}
+				long elapsedNanos = System.nanoTime() - actionStartNanos;
+				String label = coverageLabel(action);
+				ACTION_NANOS.computeIfAbsent(label, key -> new java.util.concurrent.atomic.LongAdder())
+						.add(elapsedNanos);
+				ACTION_COUNTS.computeIfAbsent(label, key -> new java.util.concurrent.atomic.LongAdder())
+						.increment();
+				ACTION_SUBSTEPS.computeIfAbsent(label, key -> new java.util.concurrent.atomic.LongAdder())
+						.add(state.substepsThisAction);
+				jobSubsteps += state.substepsThisAction;
 				trace.add((index + 1) + ":" + action);
 				cover(action);
 				if (Boolean.getBoolean("mmm.fuzzDebug")) {
@@ -1291,6 +1336,9 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return null;
 		} finally {
+			String job = scene.name() + "/" + seed;
+			JOB_MILLIS.put(job, (System.nanoTime() - jobStartNanos) / 1_000_000L);
+			JOB_SUBSTEPS.put(job, jobSubsteps);
 			state.close();
 		}
 	}
@@ -1542,6 +1590,14 @@ final class ControllerInventoryDurabilityValidation {
 	private static final int FUZZ_DISK_ROUND_TRIP_INTERVAL = 4;
 	private static final java.util.Map<String, java.util.concurrent.atomic.AtomicLong> ACTION_COVERAGE =
 			new java.util.concurrent.ConcurrentHashMap<>();
+	private static final java.util.Map<String, java.util.concurrent.atomic.LongAdder> ACTION_NANOS =
+			new java.util.concurrent.ConcurrentHashMap<>();
+	private static final java.util.Map<String, java.util.concurrent.atomic.LongAdder> ACTION_COUNTS =
+			new java.util.concurrent.ConcurrentHashMap<>();
+	private static final java.util.Map<String, java.util.concurrent.atomic.LongAdder> ACTION_SUBSTEPS =
+			new java.util.concurrent.ConcurrentHashMap<>();
+	private static final java.util.Map<String, Long> JOB_MILLIS = new java.util.concurrent.ConcurrentHashMap<>();
+	private static final java.util.Map<String, Long> JOB_SUBSTEPS = new java.util.concurrent.ConcurrentHashMap<>();
 
 	private static float partialVolume(int x, int y, int z) {
 		return 0.25F + ((x * 31 + y * 17 + z * 7) % 32) * 0.24F;
