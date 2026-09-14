@@ -24,6 +24,9 @@ import static cc.ecisr.mmm.simulation.FuzzMetrics.cover;
 import static cc.ecisr.mmm.simulation.FuzzMetrics.coverageLabel;
 
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
+import cc.ecisr.mmm.application.command.MotionStepCommand;
+import cc.ecisr.mmm.application.result.MotionStepResult;
+import cc.ecisr.mmm.application.result.RegionStepStatus;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
@@ -434,7 +437,8 @@ final class ControllerInventoryDurabilityValidation {
 		private FluidRegion region;
 		private Path diskRoot;
 		private int diskRoundTrips;
-		private boolean chemistryTouched;
+		private FluidRegionManager regionManager;
+		private cc.ecisr.mmm.application.RegionApplicationService application;
 		private FluidDomain domain;
 		private long generation;
 		long substepsThisAction;
@@ -482,6 +486,7 @@ final class ControllerInventoryDurabilityValidation {
 				region = new FluidRegion(java.util.UUID.randomUUID(), DIMENSION, scene.origin(), domain,
 						scene.capacity(), footprint(scene.sizeX(), scene.sizeY(), scene.sizeZ(), scene.origin()));
 				persistence.checkpoint(region);
+				wireApplicationChannel();
 			}
 			roundTrip();
 			java.util.function.Consumer<NormalPlayState> prefill = PREFILL.get(scene.name());
@@ -556,6 +561,7 @@ final class ControllerInventoryDurabilityValidation {
 					"cold restart did not advance the committed checkpoint generation");
 			region = fresh;
 			domain = fresh.domain();
+			wireApplicationChannel();
 			FluidDomainStateAssertions.assertSameDurableState(beforeRestart, domain.captureAuthoritativeState(),
 					"cold restart changed durable authoritative state");
 			roundTrip();
@@ -650,7 +656,6 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		void insertChemical(ChemicalTransferLedger ledger, double energy, String name) {
 			settle();
-			chemistryTouched = true;
 			check(domain.tryInsertExactChemical(injectX, injectY, injectZ, ledger, 6, true, energy).transferred(),
 					"normal-play " + name + " insertion was rejected at generation " + generation
 							+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
@@ -676,7 +681,6 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		boolean tryInsertChemicalAt(int x, int y, int z, ChemicalTransferLedger ledger, double energy) {
 			settle();
-			chemistryTouched = true;
 			FluidDomainState before = snapshot();
 			if (!domain.tryInsertExactChemical(x, y, z, ledger, 6, true, energy).transferred()) {
 				assertUnchanged(before, "chemical insertion at " + x + "," + y + "," + z);
@@ -866,9 +870,13 @@ final class ControllerInventoryDurabilityValidation {
 			return "extractSubBucket(" + requested + ")";
 		}
 
-		/** Extracts one bucket then pours it straight back; the durable inventory must return to baseline. */
+		/**
+		 * Extracts one bucket then pours it straight back; the durable inventory must return to baseline.
+		 * Only valid on a purely aqueous body: on a mixture the extraction removes carrier water together
+		 * with its solutes and the pour returns pure water, so composition legitimately changes.
+		 */
 		String extractThenRestore() {
-			if (chemistryTouched) return "skip(chemistryTouched)";
+			if (!holdsOnlyWater()) return "skip(notPureWater)";
 			settle();
 			int[] target = maximumNearbyLiquidCell(6, water);
 			if (domain.exactVolumeNear(target[0], target[1], target[2], 6, water) < 8.0) {
@@ -935,6 +943,104 @@ final class ControllerInventoryDurabilityValidation {
 			if (!domain.replaceThermalBoundaryTemperatures(edited)) return "skip(boundaryUnchanged)";
 			roundTrip();
 			return "editBoundarySource(" + edited[face] + ")";
+		}
+
+		/** True when every liquid marker in the domain carries only builtin water. */
+		private boolean holdsOnlyWater() {
+			String waterId = cc.ecisr.mmm.fluid.BuiltinFluidMaterials.WATER.id().toString();
+			for (int z = 0; z < domain.sizeZ(); z++) {
+				for (int y = 0; y < domain.sizeY(); y++) {
+					for (int x = 0; x < domain.sizeX(); x++) {
+						FluidCellInventoryView view = domain.observeCellInventory(x, y, z);
+						if (view == null) continue;
+						for (FluidCellInventoryView.MaterialAmount amount : view.materials()) {
+							if (!amount.materialId().equals(waterId)) return false;
+						}
+					}
+				}
+			}
+			return true;
+		}
+
+		/** Rebuilds the loader-neutral application channel around the current live region. */
+		private void wireApplicationChannel() {
+			if (region == null) return;
+			regionManager = new FluidRegionManager(new cc.ecisr.mmm.application.RegionCatalog.Limits(
+					8, 1_000_000L, 1_000_000L, 10_000_000L, 10_000_000L));
+			regionManager.addAndSelect(region);
+			region.enableThermalActivity();
+			application = new cc.ecisr.mmm.application.RegionApplicationService(
+					new CpuFluidSolverBackend(), new FluidRegionRepository(regionManager),
+					(regionId, expectedGeneration) -> {
+						throw new UnsupportedOperationException(
+								"fuzz application channel does not use the checkpoint port");
+					});
+		}
+
+		/** Steps through the real application service and proves the generation token is single-use. */
+		String applicationStep(java.util.Random random) {
+			if (application == null) return "skip(noApplicationChannel)";
+			if (!region.canStep()) return "skip(notSteppable)";
+			boolean phase = random.nextBoolean();
+			long baseGeneration = region.solverGeneration();
+			MotionStepResult accepted = application.stepMotion(new MotionStepCommand(region.id(), baseGeneration,
+					List.of(), phase, phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0, false));
+			if (!accepted.accepted()) {
+				throw new AssertionError("application rejected a fresh motion step: " + accepted.status());
+			}
+			FuzzMetrics.recordEvents(accepted.stats());
+			MotionStepResult stale = application.stepMotion(new MotionStepCommand(region.id(), baseGeneration,
+					List.of(), phase, phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0, false));
+			if (stale.status() != RegionStepStatus.STALE_GENERATION) {
+				throw new AssertionError("application did not reject a spent generation: " + stale.status());
+			}
+			domain = region.domain();
+			generation++;
+			roundTrip();
+			return "applicationStep(phase=" + phase + ")";
+		}
+
+		/** Drives hydrostatic and thermal sleep to their latched states, then wakes each axis. */
+		String sleepWake(java.util.Random random) {
+			if (region == null) return "skip(noLifecycleChannel)";
+			if (region.paused()) return "skip(paused)";
+			region.enableThermalActivity();
+			boolean enteredHydrostatic = false;
+			for (int step = 0; step < 260 && !enteredHydrostatic; step++) {
+				enteredHydrostatic = region.lifecycle().observeCompletedStep(true, 200);
+			}
+			if (!enteredHydrostatic) return "skip(noHydrostaticSleep)";
+			region.domain().commitHydrostaticSleep();
+			check(region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP,
+					"hydrostatic sleep did not latch the lifecycle state");
+			check(!region.canStep(), "hydrostatically sleeping region still reports steppable");
+			region.wakeForActivity();
+			check(region.lifecycle().state() != FluidRegionLifecycle.State.HYDROSTATIC_SLEEP,
+					"activity wake left the region hydrostatically asleep");
+			if (region.thermalActivity() != null) {
+				check(region.thermalActivity().state() != ThermalActivity.State.SLEEP,
+						"mechanical wake did not wake the thermal axis");
+			}
+			boolean enteredThermal = false;
+			for (int step = 0; step < 260 && !enteredThermal; step++) {
+				enteredThermal = region.observeThermal(quietThermalObservation(), 200);
+			}
+			if (!enteredThermal) return "skip(noThermalSleep)";
+			check(region.thermalActivity().state() == ThermalActivity.State.SLEEP,
+					"thermal idle observation did not latch thermal sleep");
+			region.wakeThermal(ThermalActivity.WakeReason.FINITE_DEVICE_EXCHANGE);
+			check(region.thermalActivity().state() != ThermalActivity.State.SLEEP,
+					"thermal wake reason did not wake the thermal axis");
+			roundTrip();
+			return "sleepWake(hydrostatic+thermal)";
+		}
+
+		/** A physically quiet thermal observation, used to drive the sleep latch without waiting for calm. */
+		private static ThermalActivity.Observation quietThermalObservation() {
+			return new ThermalActivity.Observation(
+					new cc.ecisr.mmm.thermal.ThermalTransport.Stats(0, 0, 0.0, 0.0,
+							cc.ecisr.mmm.units.SignedDyadic.ZERO, cc.ecisr.mmm.units.SignedDyadic.ZERO),
+					false, false, false, false, false, false, true);
 		}
 
 		/** Drives the loader-neutral container-transfer chain: private candidate, staged HEAD, adoption. */
@@ -1643,6 +1749,10 @@ final class ControllerInventoryDurabilityValidation {
 				return state.toggleSolid(random);
 			case "editBoundarySource":
 				return state.editBoundarySource(random);
+			case "applicationStep":
+				return state.applicationStep(random);
+			case "sleepWake":
+				return state.sleepWake(random);
 			case "indicator": {
 				var edit = state.domain.editIndicatorFloodFill(state.injectX, state.injectY, state.injectZ,
 						random.nextBoolean(), state.cellBudget(), 100.0);
