@@ -673,6 +673,47 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 			return true;
 		}
+
+		/** Drives the loader-neutral container-transfer chain: private candidate, staged HEAD, adoption. */
+		boolean containerTransfer(java.util.Random random) {
+			settle();
+			long baseGeneration = region.checkpointGeneration();
+			FluidDomain candidateDomain = FluidDomain.restoreAuthoritativeState(
+					region.domain().captureAuthoritativeState());
+			int x = random.nextInt(candidateDomain.sizeX());
+			int y = random.nextInt(candidateDomain.sizeY());
+			int z = random.nextInt(candidateDomain.sizeZ());
+			float volume = FUZZ_PARTIAL ? partialVolume(x, y, z) : 8.0F;
+			boolean transferred = random.nextBoolean()
+					? candidateDomain.tryInsertExactVolume(x, y, z, volume, 6, water, true).transferred()
+					: candidateDomain.tryExtractExactVolume(x, y, z, volume, 6, water).transferred();
+			if (!transferred) return false;
+			double targetVolume = candidateDomain.totalVolumeExact();
+			long targetGeneration = baseGeneration + 1L;
+			long published;
+			try {
+				RegionRepositoryAdapter.StagedCheckpoint staged = persistence.stageCandidateCheckpoint(
+						region, candidateDomain, targetGeneration, region.paused());
+				published = persistence.commitStagedLifecycleCheckpoint(staged);
+			} catch (java.io.IOException failure) {
+				throw new IllegalStateException("container transfer staging failed", failure);
+			}
+			check(published == targetGeneration, "container transfer published generation " + published
+					+ " instead of " + targetGeneration);
+			check(region.checkpointGeneration() == baseGeneration,
+					"container transfer mutated the live region before adoption");
+			try {
+				persistence.adoptCommittedContainerCheckpoint(region, baseGeneration, published);
+			} catch (java.io.IOException failure) {
+				throw new IllegalStateException("container transfer adoption failed", failure);
+			}
+			domain = region.domain();
+			check(region.checkpointGeneration() == published, "container transfer did not adopt the published HEAD");
+			check(domain.totalVolumeExact() == targetVolume,
+					"container transfer adopted volume " + domain.totalVolumeExact() + " instead of " + targetVolume);
+			roundTrip();
+			return true;
+		}
 		void extractChemical() {
 			settle();
 			int[] target = maximumNearbyLiquidCell(6);
@@ -755,24 +796,27 @@ final class ControllerInventoryDurabilityValidation {
 			generation++;
 			roundTrip();
 		}
-		void stepWithMovingBody(java.util.Random random) {
+		void stepWithMovingBodies(java.util.Random random, int count) {
 			double half = domain.sizeX() * 0.5;
-			double displaced = 0.001 + random.nextDouble() * 0.05;
-			var body = new MovingBodyFluidCoupling.Request(
-					(float) (0.25 + random.nextDouble() * (half - 0.5)),
-					(float) (0.25 + random.nextDouble() * (half - 0.5)),
-					(float) (0.25 + random.nextDouble() * (half - 0.5)),
-					(random.nextDouble() - 0.5) * 20.0, (random.nextDouble() - 0.5) * 20.0,
-					(random.nextDouble() - 0.5) * 20.0, displaced);
+			java.util.List<MovingBodyFluidCoupling.Request> bodies = new java.util.ArrayList<>(count);
+			for (int index = 0; index < count; index++) {
+				double displaced = 0.001 + random.nextDouble() * 0.05;
+				bodies.add(new MovingBodyFluidCoupling.Request(
+						(float) (0.25 + random.nextDouble() * (half - 0.5)),
+						(float) (0.25 + random.nextDouble() * (half - 0.5)),
+						(float) (0.25 + random.nextDouble() * (half - 0.5)),
+						(random.nextDouble() - 0.5) * 20.0, (random.nextDouble() - 0.5) * 20.0,
+						(random.nextDouble() - 0.5) * 20.0, displaced));
+			}
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
-						solverGeneration(), domain.captureAuthoritativeState(), java.util.List.of(body), true,
+						solverGeneration(), domain.captureAuthoritativeState(), bodies, true,
 						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
 				adopt(candidate);
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("normal-play moving-body step failed at generation " + generation
 						+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
-						+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq(), failure);
+						+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq() + ", bodies=" + count, failure);
 			}
 			generation++;
 			roundTrip();
@@ -978,10 +1022,11 @@ final class ControllerInventoryDurabilityValidation {
 		if (pick < 79) return "pause";
 		if (pick < 81) return "resume";
 		if (pick < 83) return "saveWhilePaused";
-		if (pick < 85) return "coldRestart";
-		if (pick < 89) return "extractWater";
-		if (pick < 92) return "extractChemical";
-		if (pick < 95) return "extractMixture";
+		if (pick < 86) return "containerTransfer";
+		if (pick < 88) return "coldRestart";
+		if (pick < 91) return "extractWater";
+		if (pick < 94) return "extractChemical";
+		if (pick < 96) return "extractMixture";
 		if (pick < 97) return "indicator";
 		if (pick < 98) return "clear";
 		if (pick < 99) return "vent";
@@ -1166,7 +1211,13 @@ final class ControllerInventoryDurabilityValidation {
 			return "skip:" + (cut > 0 ? inner.substring(0, cut) : inner);
 		}
 		int cut = action.indexOf('(');
-		return cut > 0 ? action.substring(0, cut) : action;
+		if (cut <= 0) return action;
+		String inner = action.substring(cut + 1);
+		if (inner.isEmpty() || !Character.isLetter(inner.charAt(0))) return action.substring(0, cut);
+		int comma = inner.indexOf(',');
+		int close = inner.indexOf(')');
+		int end = comma > 0 ? comma : (close > 0 ? close : inner.length());
+		return action.substring(0, cut) + ":" + inner.substring(0, end);
 	}
 
 	private static String rootCause(Throwable failure) {
@@ -1391,7 +1442,9 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		if (pick < 77) {
 			if (frozen) return "skip(paused)";
-			state.stepWithMovingBody(random); return "step(movingBody)";
+			int bodies = 1 + random.nextInt(4);
+			state.stepWithMovingBodies(random, bodies);
+			return "step(movingBody," + bodies + ")";
 		}
 		if (pick < 79) {
 			if (state.region == null) return "skip(pause)";
@@ -1410,12 +1463,16 @@ final class ControllerInventoryDurabilityValidation {
 			state.saveWhilePaused();
 			return "saveWhilePaused";
 		}
-		if (pick < 85) {
+		if (pick < 86) {
+			if (state.region == null) return "skip(containerTransfer)";
+			return state.containerTransfer(random) ? "containerTransfer" : "skip(containerTransfer)";
+		}
+		if (pick < 88) {
 			if (state.region == null) return "skip(coldRestart)";
 			state.coldRestart(random);
 			return "coldRestart";
 		}
-		if (pick < 89) {
+		if (pick < 91) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6, state.water);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, state.water) >= 8.0
@@ -1424,7 +1481,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalWater)";
 		}
-		if (pick < 92) {
+		if (pick < 94) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
@@ -1433,7 +1490,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalLiquid)";
 		}
-		if (pick < 95) {
+		if (pick < 96) {
 			state.settle();
 			int[] target = state.maximumNearbyLiquidCell(6);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
