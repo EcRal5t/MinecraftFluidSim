@@ -27,7 +27,8 @@
 | 盘上 / 分数 / 叠加 | `disk\|partial\|partialdisk` + 扫描参数 | `disk` 真 publish/unload/restore；`partial` 用分数体积；`partialdisk` 两者叠加 |
 | 单序列复现 | `replay[,disk\|partial\|partialdisk],<scene>,<seed>[,步数][,picks\|debug]` | 失败时打印完整动作 trace |
 | 最小化 | `minimize[,disk\|partial\|partialdisk],<scene>,<seed>[,步数]` | 记录 RNG token，ddmin 求严格子序列 |
-| 指定种子 | `reported` 或 `a:b:c` | 走原动作集 `applyRandomAction` + 基线场景（回归路径） |
+| 指定种子 | `reported` 或 `a:b:c` | 走扩展动作表 `applyExpandedRandomPlay`，在基线场景逐种子运行；当前失败仅打印、不使进程失败 |
+| 回归矩阵 | 无参数时的校验入口 | `runNormalPlayStateMatrix`：固定种子 4/54/103 走旧动作集 `applyRandomAction` + 命名场景，由其它校验入口调用，不经本 `main` |
 
 诊断 token（追加在末尾）：`picks` 逐动作打印耗时与机械子步数；`debug` 打印每动作后的完整气体节点状态。
 
@@ -138,6 +139,80 @@
 - 多区域：`FluidRegionManager` 预算、多区域 gas/network generation 交互（当前每次只驱动单区域）。
 - 生命周期：`HYDROSTATIC_SLEEP`（需要真正的静默步进序列）；`REDUCED` 仅通过 coldRestart 改步长触及。
 - 客户端/网络：快照发送、渲染、Jade 适配（超出本工具范围）。
+
+此外，现有覆盖还存在「判断能力」缺口：合法操作被静默拒绝时无法判定、拒绝后状态未核对、账本闭合与结果正确之间缺少独立基准比对。这些缺口的成因与补法见 §十二。
+
+## 十二、补覆盖路线图（计划，尚未实现）
+
+优先级来自一次静态评审：**先补现有覆盖的判断能力**，让工具能区分「合法操作被静默拒绝」「应当恢复运行却停住」，比继续堆随机种子更有效。每条给出目标、改动点（file:line）与验收方式。
+
+### W1 拒绝判定与拒绝后状态核对（最高优先）
+
+- 现状：`tryInsertLiquidAt` / `tryInsertChemicalAt` / `tryInsertSandAt` / `tryExtractWaterAt` / `tryExtractChemicalAt` / `tryInsertMixtureAt` / `tryExtractMixtureAt` 返回 `false` 时统一 `skip(...)`（`ControllerInventoryDurabilityValidation.java:641-701`，抽取筛选在 `:1322-1347`）；`indicator` 与 `containerTransfer` 同样只报告失败原因。
+- 缺口：若回归让所有注入恒被拒绝，随机分支仍会通过；且拒绝路径不校验状态未变。
+- 做法：
+  1. 增加「前置条件明确、必须成功」的动作：先按只读访问选定已知容量的目标格，再请求一个确定量并要求 `transferred()`/`inserted()`，失败即抛（现有断言式原语 `:609-640` 是模板）。
+  2. 所有 `try*` 的拒绝路径统一核对操作前后状态未变：`totalVolumeExact`、逐材料体积、`particleCount`、`totalGranularSolidVolumeSvq`、`gasBoundary().auditClosed()`。
+  3. `skip(...)` 保留具体失败原因（如 `skip(noCanonicalWater)`）并纳入统计，便于识别「某类拒绝比例异常升高」。
+- 验收：用临时 mutation 让某类注入必然失败，现有序列必须报 FAIL；撤销后全绿。
+
+### W2 尾量抽取与临界容量
+
+- 现状：三种扩展抽取都先要求附近液量 `>= 8.0`（一桶）才调用分数抽取（`:1322-1327`、`:1330-1334`、`:1339-1343`）；`partialVolume` 仅 32 个按坐标的固定值（`FuzzConfig.java:25`）；酸碱与沙注入仍用整份库存。
+- 缺口：亚桶余量、抽到归零、临界容量从未触发。
+- 做法：
+  1. 抽取改为「读 `exactVolumeNear` → 请求 `min(可用量, 期望量)`」，期望量取自确定集合：`{最小正量, 1 ulp 级 nanos, 1.0, 4.0, 8.0, available, available − ε}`。
+  2. 新增闭环动作：抽干 → 倒回等量 → 断言逐材料质量回到基准（复用 W3 的快照比对）。
+  3. `partialVolume` 扩充为覆盖整数 nanos/SVQ 最小余量的集合；酸碱与沙也走分数注入路径。
+- 验收：闭环后逐材料质量与基准一致；抽取 `available` 时目标格归零且不抛。
+
+### W3 独立状态基准比对
+
+- 现状：`roundTrip()` 只查 gas 闭合与内能闭合（`:853-859`）；容器「live 未改变」只比 `checkpointGeneration`（`:704-706`）；adopt 后只比总液量。
+- 缺口：库存与账本同时错误变化仍可能内部自洽。
+- 做法：
+  1. 增加 `StateSnapshot`：逐材料体积、species 向量、颗粒组 SVQ/质量、载体内能、气体归属（节点 → 体积/标准量/温度/压力/物质）。
+  2. `containerTransfer`：stage 前后比对**旧 live 完整快照**；adopt 后比对**恢复态与已提交候选的完整快照**。允许契约规定的派生数据按规则重建（marker ordinal、缓存）。
+  3. `roundTrip()` 盘上分支：比对 restore 前后完整快照（当前只比 paused/state/interval）。
+- 依赖：优先复用 `captureAuthoritativeState()` 与 `exactVolumeNear` / `ChemicalTransferLedger` / `GranularTransferLedger` / `thermalAudit()` / `gasBoundary()` 等只读访问；不足时补只读快照方法（不改仿真语义）。
+- 验收：人为同时篡改库存与对应账本，快照比对必须报 FAIL。
+
+### W4 application 用例与恢复可操作性（新增层）
+
+- 现状：`step` / `thermalStep` 直接构造 `CpuFluidSolverBackend` 并 `adopt`（`:798-826`）；`pause`/`resume` 直接 `region.setPaused`（`:474-483`）；`clear`/`vent` 直接 `domain.commitOperator*`（`:768-777`）。
+- 缺口：不经 `RegionApplicationService`、`RegionLifecycleUseCase`、控制台预览确认、真实相变几何处理器；覆盖不到过世代次拒绝、一次性令牌、阻塞条件解除后重试、数值/性能暂停后的清理。
+- 做法：新增「应用通道」模式，步进与生命周期操作改走生产用例入口；补**力学休眠与热休眠分别唤醒**各一条：构造入睡条件 → 改变触发条件（注入热源/移动刚体/注入质量）→ 断言用例唤醒并实际推进。
+- 验收：临时去掉唤醒分支时必须 FAIL。
+
+### W5 跨 section 持久化
+
+- 现状：所有盘上场景用 `BlockPos.ZERO`、尺寸 ≤ 10 求解单元（`:461`），库存落在单个 Minecraft section。
+- 缺口：多 section 的 marker ordinal、side column、气体 lineage 拆分与重组未被触及。
+- 做法：把小域平移到 section 交界或负坐标（如 `new BlockPos(-8, 64, 8)`），复用现有场景；roundTrip 快照比对自然覆盖拆分/重组。另补 full profile 之外的合法布局与完整世界能力包启动。
+- 验收：跨 section 场景在 `disk` 模式全绿。
+
+### W6 动态世界输入
+
+- 现状：几何只在 `scene.geometry()` 初始化时设置（`:441`）；`temperature` / `rampTemperature` 只改有液格（`:587-607`）。
+- 缺口：运行中改变内部障碍、开闭喉道、改恒温源与接触面，再跨保存恢复，均未覆盖；现有生产恒温源的热通量输入也未覆盖（不只有限热设备）。
+- 做法：新增运行期几何动作（set/unset 内部实心格、开/闭喉道、改恒温源与接触面），与保存恢复交错。
+- 验收：几何改变后按契约重新划分 lineage 且 `auditClosed` 成立；快照比对通过。
+
+### W7 事件级过程验证
+
+- 现状：`FuzzMetrics` 只统计动作命中（`FuzzMetrics.java:25`）；`step(phase)` 成功不等于发生相变，注沙成功不等于经历沉积—唤醒—再抽取；无颗粒抽取动作（`:827` 级刚体每次重随机位置与速度）。
+- 做法：从 `candidate.stats()` 采集实际事件计数（相变、颗粒沉积/唤醒、气腔拆/合、化学反应/量子），在热点报告中与「动作次数」并列，区分「动作执行」与「目标过程发生」；补颗粒抽取动作与移动刚体的连续轨迹（进入 → 停留 → 离开）。
+- 验收：热点场景报告实际事件计数；对「应当发生却为 0」的场景报 WARN。
+
+### W8 工具自身缺陷（小修）
+
+- `runExplicitSeeds`（`:962-971`）：失败只打印不使进程失败 → 收集后抛出；文档已更正为「走扩展动作表」。
+- `runSceneFuzz`（`:1018`）：`future.get()` 无超时 → 改为带超时的 `get(timeout)`，超时记 FAIL 并 `cancel(true)`；超时上限需可配置且足够宽松，避免把已知的长时 job 误判为卡死。
+- `FuzzMinimizer`（`FuzzMinimizer.java:109`）：创建的 `NormalPlayState` 未 `close()` → try-with-resources / finally，避免盘上最小化遗留临时目录。
+
+### 建议实施顺序
+
+W1 → W2 → W3 → W4 → W5/W6，其中 W8 可随时独立进行。
 
 ## 十、已知限制与性能
 
