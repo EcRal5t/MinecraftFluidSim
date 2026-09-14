@@ -76,7 +76,7 @@ final class ControllerInventoryDurabilityValidation {
 	static void run() throws Exception {
 		Path root = Files.createTempDirectory("mmm-controller-inventory-durability");
 		try {
-			FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
+		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
 			FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 			domain.sealDomainBoundary();
 			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
@@ -446,7 +446,7 @@ final class ControllerInventoryDurabilityValidation {
 
 		private void recordSubsteps(FluidStepCandidate candidate) {
 			substepsThisAction = Math.addExact(substepsThisAction, candidate.stats().substeps());
-			FuzzMetrics.recordEvents(candidate.stats());
+			FuzzMetrics.recordEvents(scene.name(), candidate.stats());
 		}
 
 		NormalPlayState(FullCapabilityTestFixture.Registries registries) throws Exception {
@@ -492,6 +492,51 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 			java.util.function.Consumer<NormalPlayState> prefill = PREFILL.get(scene.name());
 			if (prefill != null) prefill.accept(this);
+			verifySleepLadder();
+		}
+
+		/**
+		 * Exercises the hydrostatic and thermal sleep latches on the freshly built, at-rest region,
+		 * before the random sequence starts. Latching sleep mid-sequence would suppress motion that is
+		 * legitimately accumulating, so the ladder runs once here and always wakes both axes.
+		 */
+		private void verifySleepLadder() {
+			if (region == null) return;
+			boolean wasPaused = region.paused();
+			region.setPaused(false);
+			try {
+				region.enableThermalActivity();
+				if (!domainIsAtRest()) return;
+				boolean entered = false;
+				for (int step = 0; step < 260 && !entered; step++) {
+					entered = region.lifecycle().observeCompletedStep(true, 200);
+				}
+				check(entered, "a region at rest did not enter hydrostatic sleep after 200 quiet steps"
+						+ " (state=" + region.lifecycle().state() + ", availability="
+						+ region.availabilityDescription() + ")");
+				region.domain().commitHydrostaticSleep();
+				check(region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP,
+						"hydrostatic sleep did not latch the lifecycle state");
+				check(!region.canStep(), "hydrostatically sleeping region still reports steppable");
+				region.wakeForActivity();
+				check(region.lifecycle().state() != FluidRegionLifecycle.State.HYDROSTATIC_SLEEP
+								&& region.canStep(), "activity wake did not restore the region to steppable");
+				FuzzMetrics.cover("sleepWake(ladder)");
+				ThermalActivity.Observation observation = restingThermalObservation();
+				if (observation == null) return;
+				boolean thermalEntered = false;
+				for (int step = 0; step < 260 && !thermalEntered; step++) {
+					thermalEntered = region.observeThermal(observation, 200);
+				}
+				check(thermalEntered, "an at-rest thermal axis did not enter sleep after 200 quiet observations");
+				check(region.thermalActivity().state() == ThermalActivity.State.SLEEP,
+						"thermal idle observation did not latch thermal sleep");
+				region.wakeThermal(ThermalActivity.WakeReason.FINITE_DEVICE_EXCHANGE);
+				check(region.thermalActivity().state() != ThermalActivity.State.SLEEP,
+						"thermal wake reason did not wake the thermal axis");
+			} finally {
+				region.setPaused(wasPaused);
+			}
 		}
 
 		long solverGeneration() { return region != null ? region.solverGeneration() : generation; }
@@ -616,7 +661,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 
 		void temperature(double kelvin) {
-			FuzzMetrics.note("thermal");
+			FuzzMetrics.note(scene.name(), "thermal");
 			for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 				for (int x = 0; x < domain.sizeX(); x++) {
 					if (domain.exactVolumeNear(x, y, z, 0, -1) > 0.0) {
@@ -627,7 +672,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 
 		void rampTemperature(double delta) {
-			FuzzMetrics.note("thermal");
+			FuzzMetrics.note(scene.name(), "thermal");
 			for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 				for (int x = 0; x < domain.sizeX(); x++) {
 					if (domain.exactVolumeNear(x, y, z, 0, -1) > 0.0) {
@@ -659,7 +704,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		void insertChemical(ChemicalTransferLedger ledger, double energy, String name) {
 			settle();
-			FuzzMetrics.note("chemistry");
+			FuzzMetrics.note(scene.name(), "chemistry");
 			check(domain.tryInsertExactChemical(injectX, injectY, injectZ, ledger, 6, true, energy).transferred(),
 					"normal-play " + name + " insertion was rejected at generation " + generation
 							+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
@@ -685,7 +730,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		boolean tryInsertChemicalAt(int x, int y, int z, ChemicalTransferLedger ledger, double energy) {
 			settle();
-			FuzzMetrics.note("chemistry");
+			FuzzMetrics.note(scene.name(), "chemistry");
 			FluidDomainState before = snapshot();
 			if (!domain.tryInsertExactChemical(x, y, z, ledger, 6, true, energy).transferred()) {
 				assertUnchanged(before, "chemical insertion at " + x + "," + y + "," + z);
@@ -696,7 +741,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		boolean tryInsertSandAt(int x, int y, int z) {
 			settle();
-			FuzzMetrics.note("granular");
+			FuzzMetrics.note(scene.name(), "granular");
 			FluidDomainState before = snapshot();
 			if (!domain.tryInsertExactGranular(x, y, z, sand, 6, true).inserted()) {
 				assertUnchanged(before, "granular insertion at " + x + "," + y + "," + z);
@@ -774,7 +819,8 @@ final class ControllerInventoryDurabilityValidation {
 
 		/** Durable per-material inventory, independent of marker order or grid layout. */
 		record AggregateInventory(long particles, double liquidVolume, double liquidMass, long solidSvq,
-				double solidMass, long speciesQuanta, java.util.TreeMap<String, double[]> perMaterial) { }
+				double solidMass, double internalEnergy, long speciesQuanta,
+				java.util.TreeMap<String, double[]> perMaterial) { }
 
 		AggregateInventory aggregateInventory() {
 			java.util.TreeMap<String, double[]> perMaterial = new java.util.TreeMap<>();
@@ -793,7 +839,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return new AggregateInventory(domain.particleCount(), domain.totalVolumeExact(), domain.totalMass(),
 					domain.totalGranularSolidVolumeSvq(), domain.totalGranularMass(),
-					domain.totalChemicalSpeciesQuanta(), perMaterial);
+					domain.totalInternalEnergy(), domain.totalChemicalSpeciesQuanta(), perMaterial);
 		}
 
 		private static boolean inventoryClose(double baseline, double actual) {
@@ -827,80 +873,143 @@ final class ControllerInventoryDurabilityValidation {
 			}
 		}
 
-		/** Draws exactly the tail available at the fullest cell; the request must not be rejected. */
+		/**
+		 * Closed-loop comparison: inventory plus the two conserved carriers that a symmetric
+		 * extract-and-return must restore. Species quanta are integer counts, so the bound is tight.
+		 */
+		void checkClosedLoopMatches(AggregateInventory baseline, String context) {
+			checkInventoryMatches(baseline, context);
+			AggregateInventory actual = aggregateInventory();
+			check(inventoryClose(baseline.internalEnergy(), actual.internalEnergy()),
+					context + ": internal energy changed " + baseline.internalEnergy()
+							+ " -> " + actual.internalEnergy());
+			long allowed = Math.max(1L, (long) (Math.abs(baseline.speciesQuanta()) * 1.0E-9));
+			check(Math.abs(baseline.speciesQuanta() - actual.speciesQuanta()) <= allowed,
+					context + ": species quanta changed " + baseline.speciesQuanta() + " -> "
+							+ actual.speciesQuanta() + " (allowed " + allowed + ")");
+		}
+
+		/** Requested material scope that matches the availability probe: -1 means every material. */
+		private static final int ALL_MATERIALS = -1;
+
+		/** Largest float strictly below {@code available}, so the request can never exceed availability. */
+		private static float representableBelow(double available) {
+			float requested = (float) available;
+			while ((double) requested >= available) requested = Math.nextDown(requested);
+			return requested;
+		}
+
+		/**
+		 * Drains toward the tail at the fullest cell. {@code exactVolumeNear} is only an upper bound:
+		 * it ignores the per-marker chemical/thermal split resolution that the planner enforces, so the
+		 * observed amount cannot be requested directly. Descend until the planner accepts a rung, and
+		 * fail only if every rung down to the resolution floor is refused while liquid is observable.
+		 */
 		String extractTail() {
 			settle();
 			int[] target = maximumNearbyLiquidCell(6);
-			double available = domain.exactVolumeNear(target[0], target[1], target[2], 6, -1);
-			if (available <= 0.0) return "skip(noLiquid)";
-			float requested = (float) Math.nextDown(available);
-			FluidDomainState before = snapshot();
-			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], requested, 6).transferred()) {
-				assertUnchanged(before, "tail extraction");
-				return "skip(tailRejected)";
+			double observed = domain.exactVolumeNear(target[0], target[1], target[2], 6, ALL_MATERIALS);
+			if (observed <= 0.0) return "skip(noLiquid)";
+			float floor = MINIMUM_VOLUMES[0];
+			for (float request = representableBelow(observed); request >= floor; request *= 0.5F) {
+				FluidDomainState before = snapshot();
+				var transfer = domain.tryExtractExactVolume(target[0], target[1], target[2], request, 6,
+						ALL_MATERIALS);
+				if (!transfer.transferred()) {
+					assertUnchanged(before, "tail extraction");
+					continue;
+				}
+				check(transfer.volume() > 0.0
+								&& transfer.volume() <= (double) request + Math.ulp((double) request),
+						"tail extraction reported volume " + transfer.volume()
+								+ " above its request of " + request);
+				roundTrip();
+				return "extractTail(" + request + ")";
 			}
-			roundTrip();
-			return "extractTail";
+			throw new AssertionError("every representable tail request down to " + floor + " m3 was refused with "
+					+ observed + " m3 observable at generation " + generation);
 		}
 
-		/** Requests marginally more than the fullest cell holds, exercising the capacity threshold. */
+		/**
+		 * Requests more than the whole domain holds, which no reachable settlement can cover. Acceptance
+		 * would be a real accounting failure; rejection must also leave the inventory untouched.
+		 */
 		String extractOverCapacity() {
 			settle();
+			double total = domain.totalVolumeExact();
+			float requested = (float) (total + Math.max(1.0, total * 0.01));
+			if (!Float.isFinite(requested)) return "skip(overflow)";
 			int[] target = maximumNearbyLiquidCell(6);
-			double available = domain.exactVolumeNear(target[0], target[1], target[2], 6, -1);
-			if (available <= 0.0) return "skip(noLiquid)";
-			float requested = available > 1.0E6 ? 1.0E6F : (float) (available * 1.0000001 + 1.0E-3);
 			FluidDomainState before = snapshot();
-			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], requested, 6).transferred()) {
-				assertUnchanged(before, "over-capacity extraction");
-				return "skip(overCapacityRejected)";
+			if (domain.tryExtractExactVolume(target[0], target[1], target[2], requested, 6, ALL_MATERIALS)
+					.transferred()) {
+				throw new AssertionError("extraction of " + requested + " m3 succeeded with only " + total
+						+ " m3 in the whole domain at generation " + generation);
 			}
-			roundTrip();
+			assertUnchanged(before, "over-capacity extraction");
 			return "extractOverCapacity";
 		}
 
-		/** Requests a sub-bucket or minimal-remainder volume, sized against what the cell holds. */
+		/**
+		 * Probes a sub-bucket or minimal-remainder request. Below the reachable split resolution a
+		 * refusal is correct, so acceptance is not required; both outcomes are still asserted: a
+		 * refusal must not mutate state and a settlement must not exceed its request.
+		 */
 		String extractSubBucket(int variant) {
 			settle();
 			int[] target = maximumNearbyLiquidCell(6);
-			double available = domain.exactVolumeNear(target[0], target[1], target[2], 6, -1);
-			if (available <= 0.0) return "skip(noLiquid)";
+			double observed = domain.exactVolumeNear(target[0], target[1], target[2], 6, ALL_MATERIALS);
+			if (observed <= 0.0) return "skip(noLiquid)";
 			float requested = MINIMUM_VOLUMES[variant % MINIMUM_VOLUMES.length];
-			if (requested > available) requested = (float) available;
 			FluidDomainState before = snapshot();
-			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], requested, 6).transferred()) {
+			var transfer = domain.tryExtractExactVolume(target[0], target[1], target[2], requested, 6,
+					ALL_MATERIALS);
+			if (!transfer.transferred()) {
 				assertUnchanged(before, "sub-bucket extraction");
 				return "skip(subBucketRejected)";
 			}
+			check(transfer.volume() > 0.0
+							&& transfer.volume() <= (double) requested + Math.ulp((double) requested),
+					"sub-bucket extraction reported volume " + transfer.volume()
+							+ " above its request of " + requested);
 			roundTrip();
 			return "extractSubBucket(" + requested + ")";
 		}
 
 		/**
-		 * Extracts one bucket then pours it straight back; the durable inventory must return to baseline.
-		 * Only valid on a purely aqueous body: on a mixture the extraction removes carrier water together
-		 * with its solutes and the pour returns pure water, so composition legitimately changes.
+		 * Extracts locally then pours the returned amount straight back; per-material inventory, species
+		 * quanta and internal energy must all return to baseline. Both the purity precondition and the
+		 * extraction are limited to the same small radius, so the loop runs on a local aqueous pocket
+		 * rather than requiring the whole domain to be water.
 		 */
 		String extractThenRestore() {
-			if (!holdsOnlyWater()) return "skip(notPureWater)";
 			settle();
-			int[] target = maximumNearbyLiquidCell(6, water);
-			if (domain.exactVolumeNear(target[0], target[1], target[2], 6, water) < 8.0) {
-				return "skip(noCanonicalWaterLoop)";
+			int radius = 3;
+			int[] target = maximumNearbyLiquidCell(radius, water);
+			double observed = domain.exactVolumeNear(target[0], target[1], target[2], radius, water);
+			if (observed <= 0.0) return "skip(noCanonicalWaterLoop)";
+			double neighbourhood = domain.exactVolumeNear(target[0], target[1], target[2], radius, ALL_MATERIALS);
+			if (Math.abs(neighbourhood - observed) > 1.0E-9 * Math.max(1.0, neighbourhood)) {
+				return "skip(notPureWaterNeighbourhood)";
 			}
+			float request = representableBelow(Math.min(2.0, observed));
 			AggregateInventory baseline = aggregateInventory();
 			FluidDomainState beforeExtract = snapshot();
-			if (!domain.tryExtractExactVolume(target[0], target[1], target[2], 8.0F, 6, water).transferred()) {
+			var extracted = domain.tryExtractExactVolume(target[0], target[1], target[2], request, radius, water);
+			if (!extracted.transferred()) {
 				assertUnchanged(beforeExtract, "closed-loop extraction");
 				return "skip(loopExtractRejected)";
 			}
+			check(extracted.volume() > 0.0, "closed-loop extraction reported no volume");
+			float returned = (float) extracted.volume();
 			FluidDomainState beforeInsert = snapshot();
-			if (!domain.tryInsertExactVolume(target[0], target[1], target[2], 8.0F, 6, water, true).transferred()) {
+			if (!domain.tryInsertExactVolume(target[0], target[1], target[2], returned, radius, water, true)
+					.transferred()) {
 				assertUnchanged(beforeInsert, "closed-loop re-insertion");
 				return "skip(loopInsertRejected)";
 			}
 			roundTrip();
-			checkInventoryMatches(baseline, "closed-loop extract/pour at generation " + generation);
+			checkClosedLoopMatches(baseline, "closed-loop extract/pour at generation " + generation);
 			return "extractThenRestore";
 		}
 
@@ -951,23 +1060,6 @@ final class ControllerInventoryDurabilityValidation {
 			return "editBoundarySource(" + edited[face] + ")";
 		}
 
-		/** True when every liquid marker in the domain carries only builtin water. */
-		private boolean holdsOnlyWater() {
-			String waterId = cc.ecisr.mmm.fluid.BuiltinFluidMaterials.WATER.id().toString();
-			for (int z = 0; z < domain.sizeZ(); z++) {
-				for (int y = 0; y < domain.sizeY(); y++) {
-					for (int x = 0; x < domain.sizeX(); x++) {
-						FluidCellInventoryView view = domain.observeCellInventory(x, y, z);
-						if (view == null) continue;
-						for (FluidCellInventoryView.MaterialAmount amount : view.materials()) {
-							if (!amount.materialId().equals(waterId)) return false;
-						}
-					}
-				}
-			}
-			return true;
-		}
-
 		/** Rebuilds the loader-neutral application channel around the current live region. */
 		private void wireApplicationChannel() {
 			if (region == null) return;
@@ -994,7 +1086,7 @@ final class ControllerInventoryDurabilityValidation {
 			if (!accepted.accepted()) {
 				throw new AssertionError("application rejected a fresh motion step: " + accepted.status());
 			}
-			FuzzMetrics.recordEvents(accepted.stats());
+			FuzzMetrics.recordEvents(scene.name(), accepted.stats());
 			MotionStepResult stale = application.stepMotion(new MotionStepCommand(region.id(), baseGeneration,
 					List.of(), phase, phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0, false));
 			if (stale.status() != RegionStepStatus.STALE_GENERATION) {
@@ -1006,16 +1098,24 @@ final class ControllerInventoryDurabilityValidation {
 			return "applicationStep(phase=" + phase + ")";
 		}
 
-		/** Drives hydrostatic and thermal sleep to their latched states, then wakes each axis. */
+		/**
+		 * Drives hydrostatic and thermal sleep to their latched states, then wakes each axis. Runs only
+		 * when the domain is empirically at rest, so latching sleep cannot suppress a moving instability
+		 * and {@code commitHydrostaticSleep} merely confirms momentum that is already zero.
+		 */
 		String sleepWake(java.util.Random random) {
 			if (region == null) return "skip(noLifecycleChannel)";
 			if (region.paused()) return "skip(paused)";
+			if (!domainIsAtRest()) return "skip(domainNotAtRest)";
 			region.enableThermalActivity();
 			boolean enteredHydrostatic = false;
 			for (int step = 0; step < 260 && !enteredHydrostatic; step++) {
+				if (!domainIsAtRest()) return "skip(domainStartedMoving)";
 				enteredHydrostatic = region.lifecycle().observeCompletedStep(true, 200);
 			}
 			if (!enteredHydrostatic) return "skip(noHydrostaticSleep)";
+			check(domain.maximumParticleSpeed() <= QUIET_MARKER_SPEED,
+					"hydrostatic sleep was latched while markers were still moving");
 			region.domain().commitHydrostaticSleep();
 			check(region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP,
 					"hydrostatic sleep did not latch the lifecycle state");
@@ -1029,7 +1129,9 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			boolean enteredThermal = false;
 			for (int step = 0; step < 260 && !enteredThermal; step++) {
-				enteredThermal = region.observeThermal(quietThermalObservation(), 200);
+				ThermalActivity.Observation observation = restingThermalObservation();
+				if (observation == null) return "skip(thermalNotAtRest)";
+				enteredThermal = region.observeThermal(observation, 200);
 			}
 			if (!enteredThermal) return "skip(noThermalSleep)";
 			check(region.thermalActivity().state() == ThermalActivity.State.SLEEP,
@@ -1041,9 +1143,37 @@ final class ControllerInventoryDurabilityValidation {
 			return "sleepWake(hydrostatic+thermal)";
 		}
 
-		/** Injects and then clears an availability block, proving the region steps again after unblocking. */
+		/** Empirical rest: no meaningful marker motion, no pending phase lien, sealed gas audit intact. */
+		private boolean domainIsAtRest() {
+			return domain.maximumParticleSpeed() <= QUIET_MARKER_SPEED
+					&& !domain.hasPendingPhaseVolumeWork()
+					&& (!scene.sealed() || domain.gasBoundary().auditClosed());
+		}
+
+		/**
+		 * The thermal axis observation actually implied by the current domain. Returns null when the
+		 * domain is not measurably quiet, so sleep is never latched over real activity.
+		 */
+		private ThermalActivity.Observation restingThermalObservation() {
+			var transport = domain.lastThermalTransportStats();
+			if (transport == null) return null;
+			if (transport.maximumAbsoluteTransferEu() != 0.0
+					|| !transport.reservoirExchange().equals(cc.ecisr.mmm.units.SignedDyadic.ZERO)) return null;
+			if (domain.chemicalParcels() != null && domain.chemicalParcels().hasDirtyCells()) return null;
+			if (domain.hasPendingPhaseVolumeWork() || !domainIsAtRest()) return null;
+			return new ThermalActivity.Observation(transport, false, false, false, false, false, false, true);
+		}
+
+		private static final double QUIET_MARKER_SPEED = 1.0E-6;
+
+		/**
+		 * Injects and then clears an availability block. Runs only when the region was steppable
+		 * beforehand, so clearing the injected block must restore a steppable state and an accepted
+		 * step; a region that was already paused or blocked is left untouched.
+		 */
 		String blockAndRetry(java.util.Random random) {
 			if (region == null) return "skip(noLifecycleChannel)";
+			if (!region.canStep()) return "skip(notSteppableBefore)";
 			RegionAvailabilityReason reason = random.nextBoolean()
 					? RegionAvailabilityReason.NUMERICAL_PAUSE : RegionAvailabilityReason.PERFORMANCE_PAUSE;
 			region.setAvailabilityFailure(reason, "fuzz injected availability block");
@@ -1055,9 +1185,8 @@ final class ControllerInventoryDurabilityValidation {
 			if (reason == RegionAvailabilityReason.PERFORMANCE_PAUSE) region.clearPerformanceBlock();
 			else region.setAvailabilityFailure(null);
 			check(region.availabilityFailure() == null, "region kept a cleared availability block");
-			if (region.paused() || application == null || !region.canStep()) {
-				return "blockAndRetry(" + reason + ",cleared)";
-			}
+			check(region.canStep(), "clearing the injected " + reason + " block did not restore steppability");
+			if (application == null) return "blockAndRetry(" + reason + ",clearedNoChannel)";
 			long baseGeneration = region.solverGeneration();
 			MotionStepResult retried = application.stepMotion(new MotionStepCommand(
 					region.id(), baseGeneration, List.of(), false, 0, false));
@@ -1065,19 +1194,11 @@ final class ControllerInventoryDurabilityValidation {
 				throw new AssertionError("region did not resume stepping after an injected "
 						+ reason + " block: " + retried.status());
 			}
-			FuzzMetrics.recordEvents(retried.stats());
+			FuzzMetrics.recordEvents(scene.name(), retried.stats());
 			domain = region.domain();
 			generation++;
 			roundTrip();
 			return "blockAndRetry(" + reason + ")";
-		}
-
-		/** A physically quiet thermal observation, used to drive the sleep latch without waiting for calm. */
-		private static ThermalActivity.Observation quietThermalObservation() {
-			return new ThermalActivity.Observation(
-					new cc.ecisr.mmm.thermal.ThermalTransport.Stats(0, 0, 0.0, 0.0,
-							cc.ecisr.mmm.units.SignedDyadic.ZERO, cc.ecisr.mmm.units.SignedDyadic.ZERO),
-					false, false, false, false, false, false, true);
 		}
 
 		/** Drives the loader-neutral container-transfer chain: private candidate, staged HEAD, adoption. */
@@ -1201,12 +1322,12 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		void thermalStep(boolean phase) {
-			FuzzMetrics.note("thermal");
+			FuzzMetrics.note(scene.name(), "thermal");
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluateThermal(new FluidThermalStepRequest(
 						solverGeneration(), domain.captureAuthoritativeState(), phase,
 						phase ? ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP : 0));
-				FuzzMetrics.recordEvents(candidate.stats());
+				FuzzMetrics.recordEvents(scene.name(), candidate.stats());
 				adoptThermal(candidate);
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("normal-play thermal-only step failed at generation " + generation
@@ -1287,6 +1408,48 @@ final class ControllerInventoryDurabilityValidation {
 		}
 	}
 
+	/**
+	 * Mutation-style validation of the harness itself: each judgement is fed a state that must trip it,
+	 * so a green run means the checks can fire rather than merely that no sample threw.
+	 */
+	static void runHarnessSelfCheck(FullCapabilityTestFixture.Registries registries) throws Exception {
+		NormalPlayState state = new NormalPlayState(registries);
+		try {
+			FluidDomainState before = state.snapshot();
+			if (!state.domain.tryInsertExactVolume(state.injectX, state.injectY, state.injectZ,
+					1.0F, 6, state.water, true).transferred()) {
+				throw new IllegalStateException("selfcheck could not stage a mutation");
+			}
+			boolean guardFired = false;
+			try {
+				state.assertUnchanged(before, "selfcheck");
+			} catch (AssertionError expected) {
+				guardFired = true;
+			}
+			check(guardFired, "selfcheck: rejection guard did not detect a mutated state");
+
+			NormalPlayState.AggregateInventory baseline = state.aggregateInventory();
+			if (!state.domain.tryInsertExactVolume(state.injectX, state.injectY, state.injectZ,
+					1.0F, 6, state.water, true).transferred()) {
+				throw new IllegalStateException("selfcheck could not stage a second mutation");
+			}
+			boolean loopFired = false;
+			try {
+				state.checkClosedLoopMatches(baseline, "selfcheck");
+			} catch (AssertionError expected) {
+				loopFired = true;
+			}
+			check(loopFired, "selfcheck: closed-loop comparison missed an inventory change");
+
+			FuzzMetrics.note("selfcheck", "thermal");
+			check(FuzzMetrics.familyGapExists("selfcheck", "thermal"),
+					"selfcheck: coverage gap detection missed an exercised family with no events");
+			System.out.println("harness selfcheck PASS (rejection guard, closed-loop comparison, coverage gap)");
+		} finally {
+			state.close();
+		}
+	}
+
 	/** Seeded normal-play fuzzing entry point used to surface forced simulation interruptions. */
 	public static void main(String[] args) throws Exception {
 		for (String arg : args) if (arg.equals("debug")) FUZZ_DEBUG = true;
@@ -1297,6 +1460,10 @@ final class ControllerInventoryDurabilityValidation {
 				: args.length > 0 && args[0].contains(":")
 				? java.util.Arrays.stream(args[0].split(":")).mapToInt(Integer::parseInt).toArray() : null;
 		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
+		if (args.length > 0 && args[0].equals("selfcheck")) {
+			runHarnessSelfCheck(registries);
+			return;
+		}
 		if (args.length > 0 && args[0].equals("replay")) {
 			FUZZ_PROGRESS = true;
 			int base = parseFuzzMode(args, 1);
@@ -1419,11 +1586,13 @@ final class ControllerInventoryDurabilityValidation {
 						+ ", failures=" + failureCount.get());
 			}));
 		}
+		SceneJob timedOut = null;
 		for (int index = 0; index < futures.size(); index++) {
 			try {
 				futures.get(index).get(JOB_TIMEOUT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS);
 			} catch (java.util.concurrent.TimeoutException timeout) {
 				futures.get(index).cancel(true);
+				if (timedOut == null) timedOut = jobs.get(index);
 				if (results[index] == null) {
 					results[index] = new SceneFailure(jobs.get(index), new Failure(0, new AssertionError(
 							"fuzz job exceeded " + JOB_TIMEOUT_MILLIS + " ms without completing", timeout),
@@ -1438,6 +1607,16 @@ final class ControllerInventoryDurabilityValidation {
 					failureCount.incrementAndGet();
 				}
 			}
+		}
+		if (timedOut != null) {
+			pool.shutdownNow();
+			String mode = FUZZ_DISK ? (FUZZ_PARTIAL ? "partialdisk" : "disk") : null;
+			System.err.println("A fuzz job exceeded " + JOB_TIMEOUT_MILLIS + " ms. A hang that ignores"
+					+ " interruption cannot be reclaimed in-process, so exiting with code 3."
+					+ " Replay: " + (mode == null ? "" : mode + ",")
+					+ FUZZ_SCENES.indexOf(timedOut.scene()) + "," + timedOut.seed() + "," + actions);
+			System.err.flush();
+			System.exit(3);
 		}
 		pool.shutdown();
 		java.util.LinkedHashMap<String, Integer> classes = new java.util.LinkedHashMap<>();
