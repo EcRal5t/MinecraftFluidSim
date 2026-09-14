@@ -192,8 +192,8 @@ public final class GasThermalModel {
 					: nextLowerCaloricBoundary(portions, temperature);
 			if (heating && boundary == Double.POSITIVE_INFINITY) {
 				double heatCapacity = heatCapacityAt(portions, temperature);
-				double result = temperature * Math.exp(remaining / heatCapacity);
-				if (!(Double.isFinite(result) && result > temperature)) {
+				double result = temperature + temperature * Math.expm1(remaining / heatCapacity);
+				if (!(Double.isFinite(result) && result >= temperature)) {
 					throw new CaloricRangeException(remaining);
 				}
 				return result;
@@ -221,6 +221,8 @@ public final class GasThermalModel {
 		private final double remainingEntropyEuPerK;
 
 		private CaloricRangeException(double remainingEntropyEuPerK) {
+			super("Isentrope leaves the positive-temperature domain with " + remainingEntropyEuPerK
+					+ " EU/K unconsumed");
 			this.remainingEntropyEuPerK = remainingEntropyEuPerK;
 		}
 	}

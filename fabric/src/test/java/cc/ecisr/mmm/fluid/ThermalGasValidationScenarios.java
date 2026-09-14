@@ -211,6 +211,13 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& Double.isFinite(effectivelyZero.finalInternalEnergy())
 				&& effectivelyZeroReversed.finalTemperatureK() > 250.0,
 				"finite deep expansion still encountered an arbitrary one-kelvin stop wall");
+		GasThermalModel.Compression beyondRangeCompression = model.compressAdiabatically(
+				inventory, model.internalEnergyAtTemperature(inventory, 2_000.0), 1.0, Math.nextDown(1.0));
+		require(beyondRangeCompression.finalTemperatureK() > 1_999.0
+				&& beyondRangeCompression.finalTemperatureK() < 2_001.0
+				&& Double.isFinite(beyondRangeCompression.finalInternalEnergy())
+				&& beyondRangeCompression.workIntoGas() >= 0.0,
+				"below-resolution isentropic compression above the caloric range was rejected");
 		List<GasInventory> children = inventory.partition(new long[] { 1L, 2L, 3L });
 		double[] energies = model.partitionEnergy(inventory, initial, children);
 		double partitioned = 0.0;
