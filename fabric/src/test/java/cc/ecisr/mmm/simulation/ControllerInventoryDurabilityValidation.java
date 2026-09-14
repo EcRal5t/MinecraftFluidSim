@@ -24,6 +24,7 @@ import static cc.ecisr.mmm.simulation.FuzzMetrics.cover;
 import static cc.ecisr.mmm.simulation.FuzzMetrics.coverageLabel;
 
 import cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions;
+import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.application.command.MotionStepCommand;
 import cc.ecisr.mmm.application.result.MotionStepResult;
 import cc.ecisr.mmm.application.result.RegionStepStatus;
@@ -615,6 +616,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 
 		void temperature(double kelvin) {
+			FuzzMetrics.note("thermal");
 			for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 				for (int x = 0; x < domain.sizeX(); x++) {
 					if (domain.exactVolumeNear(x, y, z, 0, -1) > 0.0) {
@@ -625,6 +627,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 
 		void rampTemperature(double delta) {
+			FuzzMetrics.note("thermal");
 			for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 				for (int x = 0; x < domain.sizeX(); x++) {
 					if (domain.exactVolumeNear(x, y, z, 0, -1) > 0.0) {
@@ -656,6 +659,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		void insertChemical(ChemicalTransferLedger ledger, double energy, String name) {
 			settle();
+			FuzzMetrics.note("chemistry");
 			check(domain.tryInsertExactChemical(injectX, injectY, injectZ, ledger, 6, true, energy).transferred(),
 					"normal-play " + name + " insertion was rejected at generation " + generation
 							+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
@@ -681,6 +685,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		boolean tryInsertChemicalAt(int x, int y, int z, ChemicalTransferLedger ledger, double energy) {
 			settle();
+			FuzzMetrics.note("chemistry");
 			FluidDomainState before = snapshot();
 			if (!domain.tryInsertExactChemical(x, y, z, ledger, 6, true, energy).transferred()) {
 				assertUnchanged(before, "chemical insertion at " + x + "," + y + "," + z);
@@ -691,6 +696,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		boolean tryInsertSandAt(int x, int y, int z) {
 			settle();
+			FuzzMetrics.note("granular");
 			FluidDomainState before = snapshot();
 			if (!domain.tryInsertExactGranular(x, y, z, sand, 6, true).inserted()) {
 				assertUnchanged(before, "granular insertion at " + x + "," + y + "," + z);
@@ -1035,6 +1041,37 @@ final class ControllerInventoryDurabilityValidation {
 			return "sleepWake(hydrostatic+thermal)";
 		}
 
+		/** Injects and then clears an availability block, proving the region steps again after unblocking. */
+		String blockAndRetry(java.util.Random random) {
+			if (region == null) return "skip(noLifecycleChannel)";
+			RegionAvailabilityReason reason = random.nextBoolean()
+					? RegionAvailabilityReason.NUMERICAL_PAUSE : RegionAvailabilityReason.PERFORMANCE_PAUSE;
+			region.setAvailabilityFailure(reason, "fuzz injected availability block");
+			check(!region.canStep(), "region with an injected block still reports steppable");
+			check(region.availabilityReason() == reason,
+					"region lost the injected availability reason " + reason);
+			check(region.availabilityDescription().startsWith(reason.name()),
+					"region availability description ignored the injected block");
+			if (reason == RegionAvailabilityReason.PERFORMANCE_PAUSE) region.clearPerformanceBlock();
+			else region.setAvailabilityFailure(null);
+			check(region.availabilityFailure() == null, "region kept a cleared availability block");
+			if (region.paused() || application == null || !region.canStep()) {
+				return "blockAndRetry(" + reason + ",cleared)";
+			}
+			long baseGeneration = region.solverGeneration();
+			MotionStepResult retried = application.stepMotion(new MotionStepCommand(
+					region.id(), baseGeneration, List.of(), false, 0, false));
+			if (!retried.accepted()) {
+				throw new AssertionError("region did not resume stepping after an injected "
+						+ reason + " block: " + retried.status());
+			}
+			FuzzMetrics.recordEvents(retried.stats());
+			domain = region.domain();
+			generation++;
+			roundTrip();
+			return "blockAndRetry(" + reason + ")";
+		}
+
 		/** A physically quiet thermal observation, used to drive the sleep latch without waiting for calm. */
 		private static ThermalActivity.Observation quietThermalObservation() {
 			return new ThermalActivity.Observation(
@@ -1164,6 +1201,7 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		void thermalStep(boolean phase) {
+			FuzzMetrics.note("thermal");
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluateThermal(new FluidThermalStepRequest(
 						solverGeneration(), domain.captureAuthoritativeState(), phase,
@@ -1753,6 +1791,8 @@ final class ControllerInventoryDurabilityValidation {
 				return state.applicationStep(random);
 			case "sleepWake":
 				return state.sleepWake(random);
+			case "blockAndRetry":
+				return state.blockAndRetry(random);
 			case "indicator": {
 				var edit = state.domain.editIndicatorFloodFill(state.injectX, state.injectY, state.injectZ,
 						random.nextBoolean(), state.cellBudget(), 100.0);
@@ -1933,7 +1973,22 @@ final class ControllerInventoryDurabilityValidation {
 					domain.setSolid(3, y, z, true);
 					domain.setSolid(5, y, z, true);
 				}
-			}).at(new BlockPos(-2, 64, -2))
+			}).at(new BlockPos(-2, 64, -2)),
+			new FuzzScene("sealed-bottleneck-8", 2100, 8, 8, 8, 8 * 8 * 8 * 8, true, 6, 6, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int y = 0; y < 8; y++) {
+					if (y == 1 && z == 4) continue;
+					domain.setSolid(4, y, z, true);
+				}
+			}),
+			new FuzzScene("sealed-microthroat-8", 2200, 8, 8, 8, 8 * 8 * 8 * 8, true, 2, 6, 4, domain -> {
+				for (int z = 0; z < 8; z++) for (int y = 0; y < 8; y++) {
+					if (y == 4 && z == 4) {
+						domain.setSolidMicroMask(4, y, z, SCENE_HALF_BOTTOM);
+					} else {
+						domain.setSolid(4, y, z, true);
+					}
+				}
+			})
 	);
 
 	@FunctionalInterface private interface Scenario { void run(NormalPlayState state) throws Exception; }

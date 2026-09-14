@@ -36,50 +36,48 @@
 
 ## 四、动作矩阵与权重
 
-权威阈值表在 `FuzzConfig.actionName(int)`：`applyExpandedRandomAction` 按名称 `switch` 分派，`FuzzMinimizer.branchName` 直接复用它，因此两者不会漂移。下表是当前档位与物理含义（`pick = random.nextInt(100)`）。
+权威阈值表在 `FuzzConfig.actionName(int)`：`applyExpandedRandomAction` 按名称 `switch` 分派，`FuzzMinimizer.branchName` 直接复用它，因此两者不会漂移。下表按权重档顺序列出动作与物理含义，`pick` 区间以该函数为准（`pick = random.nextInt(100)`）。
 
-| pick | 动作 | 次数/参数 | 物理含义 |
-|---|---|---|---|
-| 0–3 | `insertWater` | 1 | 单材料液体注入 |
-| 4–7 | `insertMercury` | 1 | 高密度液体 |
-| 8–11 | `insertOil` | 1 | 低密度液体 |
-| 12–17 | `insertAcid` | 1–2 | 化学桶注入（HCl + 水） |
-| 18–23 | `insertBase` | 1–2 | 化学桶注入（NaOH + 水） |
-| 24–27 | `insertSand` | 1 | 颗粒注入 |
-| 28–31 | `burst` | 2–9 | 同一材料的连续注入（水/汞/酸/碱/沙） |
-| 32–34 | `insertMixture` | 1 | 多材料混合桶（水+汞+油） |
-| 35–38 | `step(motion)` | 1 | 纯力学步 |
-| 39–42 | `step(phase)` | 1 | 带相变的力学步 |
-| 43–47 | `steps(phase)` | 2–5 | 连续相变步 |
-| 48–50 | `steps(motion)` | 2–6 | 连续力学步 |
-| 51–54 | `temperature` | 1–3000 K | 全液体格绝对温度 |
-| 55–57 | `rampTemperature` | ±5/±50/±300 K | 相对温度斜坡 |
-| 58–60 | `thermalStep(motion)` | 1 | 仅热学步 |
-| 61–63 | `thermalStep(phase)` | 1 | 仅热学步（带相变） |
-| 64–67 | `step(movingBody)` | 1–4 刚体 | 同时作用多个移动刚体 |
-| 68–69 | `pause` | — | 盘上：设置操作者暂停 |
-| 70–71 | `resume` | — | 盘上：清除暂停 |
-| 72–73 | `saveWhilePaused` | — | 盘上：暂停后 `persistence.checkpoint` |
-| 74–76 | `containerTransfer` | — | 盘上：私域 candidate → stage → commit HEAD → adopt |
-| 77–78 | `coldRestart` | — | 盘上：`checkpointAndUnload` → `loadMetadata` → `restore`；随机改步长与运行时意图 |
-| 79–81 | `extractWater` | 分数/8 | 抽取水 |
-| 82–84 | `extractChemical` | 分数/8 | 抽取化学液体 |
-| 85–86 | `extractMixture` | 分数/4 | 抽取混合液体 |
-| 87 | `extractTail` | `nextDown(可用量)` | 抽到目标格归零的边界抽取，必须成功 |
-| 88 | `extractOverCapacity` | 略超可用量 | 临界容量，拒绝时核对状态未变 |
-| 89 | `extractSubBucket` | 1e-9–7.999 m³ | 亚桶/最小余量抽取 |
-| 90 | `extractThenRestore` | 8.0 m³ | 抽一桶再倒回，纯水域上逐材料质量回到基准 |
-| 91 | `insertMinimalVolume` | 最小体积档 | 极小体积注入；空注入格上拒绝即失败 |
-| 92 | `toggleSolid` | — | 运行期翻转内部碰撞格（世界编辑） |
-| 93 | `editBoundarySource` | — | 改世界恒温边界场单个面 |
-| 94 | `applicationStep` | — | 经 `RegionApplicationService` 步进，并验证世代令牌单次有效 |
-| 95 | `sleepWake` | — | 力学休眠与热休眠各自闩锁后分别唤醒 |
-| 96 | `indicator` | — | 泛洪填充指示剂（用 `reservedCellCapacity` 作预算） |
-| 97 | `clear` | — | 操作者清空 |
-| 98 | `vent` | — | 操作者排空密封气体 |
-| 99 | `settle` | — | 结算未决相位功 |
+| 动作 | 次数/参数 | 物理含义 |
+|---|---|---|
+| `insertWater` | 1 | 单材料液体注入 |
+| `insertMercury` | 1 | 高密度液体 |
+| `insertOil` | 1 | 低密度液体 |
+| `insertAcid` | 1–2 | 化学桶注入（HCl + 水） |
+| `insertBase` | 1–2 | 化学桶注入（NaOH + 水） |
+| `insertSand` | 1 | 颗粒注入 |
+| `burst` | 2–9 | 同一材料的连续注入（水/汞/酸/碱/沙） |
+| `insertMixture` | 1 | 多材料混合桶（水+汞+油） |
+| `step(motion)` | 1 | 纯力学步 |
+| `step(phase)` | 1 | 带相变的力学步 |
+| `steps(phase)` | 2–5 | 连续相变步 |
+| `steps(motion)` | 2–6 | 连续力学步 |
+| `temperature` | 1–3000 K | 全液体格绝对温度 |
+| `rampTemperature` | ±5/±50/±300 K | 相对温度斜坡 |
+| `thermalStep(motion)` | 1 | 仅热学步 |
+| `thermalStep(phase)` | 1 | 仅热学步（带相变） |
+| `step(movingBody)` | 1–4 刚体 | 同时作用多个移动刚体 |
+| `pause` / `resume` | — | 盘上：操作者暂停 / 恢复 |
+| `saveWhilePaused` | — | 盘上：暂停后 `persistence.checkpoint` |
+| `containerTransfer` | — | 盘上：私域 candidate → stage → commit HEAD → adopt |
+| `coldRestart` | — | 盘上：`checkpointAndUnload` → `loadMetadata` → `restore`；随机改步长与运行时意图 |
+| `extractWater` / `extractChemical` | 分数/8 | 抽取水 / 化学液体 |
+| `extractMixture` | 分数/4 | 抽取混合液体 |
+| `extractTail` | `nextDown(可用量)` | 抽到目标格归零的边界抽取，必须成功 |
+| `extractOverCapacity` | 略超可用量 | 临界容量，拒绝时核对状态未变 |
+| `extractSubBucket` | 1e-9–7.999 m³ | 亚桶/最小余量抽取 |
+| `extractThenRestore` | 8.0 m³ | 抽一桶再倒回，纯水域上逐材料质量回到基准 |
+| `insertMinimalVolume` | 最小体积档 | 极小体积注入；空注入格上拒绝即失败 |
+| `toggleSolid` | — | 运行期翻转内部碰撞格（世界编辑） |
+| `editBoundarySource` | — | 改世界恒温边界场单个面 |
+| `applicationStep` | — | 经 `RegionApplicationService` 步进，并验证世代令牌单次有效 |
+| `sleepWake` | — | 力学休眠与热休眠各自闩锁后分别唤醒 |
+| `blockAndRetry` | — | 注入 NUMERICAL/PERFORMANCE 可用性阻塞、断言不可步进、清除后断言恢复步进 |
+| `indicator` | — | 泛洪填充指示剂（用 `reservedCellCapacity` 作预算） |
+| `clear` / `vent` | — | 操作者清空 / 排空密封气体 |
+| `settle` | — | 结算未决相位功 |
 
-暂停期间 `step`/`steps`/`thermalStep`/`movingBody`/`settle` 返回 `skip(paused)`；`insert`/`extract`/`temperature` 不受暂停限制（对应生产中的 inventory bypass）。
+暂停期间 `step`/`steps`/`thermalStep`/`movingBody`/`settle` 返回 `skip(paused)`；`insert`/`extract`/`temperature` 不受暂停限制（对应生产中的 inventory bypass）。`applicationStep`/`sleepWake`/`blockAndRetry` 只在 `disk`/`partialdisk`（存在 `FluidRegion`）时生效，其余模式返回 `skip(...)`。
 
 ## 五、场景
 
@@ -107,6 +105,8 @@
 | 17 | prefill-corridor-8 | 1800 | 8³ | 走廊 + 预填 |
 | 18 | sealed-netsplit-8 | 1900 | 8³ | 基线上移到 `(-2,64,-2)`，库存跨 section 边界 |
 | 19 | sealed-netsplit-corridor-8 | 2000 | 8³ | 走廊上移到 `(-2,64,-2)`，跨 section |
+| 20 | sealed-bottleneck-8 | 2100 | 8³ | 隔墙只在底部单格连通，底部喉道 + 半封闭气腔 |
+| 21 | sealed-microthroat-8 | 2200 | 8³ | 喉道为半格 micro mask，cut-cell 通道 |
 
 ## 六、断言的不变量
 
@@ -175,11 +175,11 @@
 - **W1 拒绝判定**：全部 `try*` 拒绝路径用 `FluidDomainStateAssertions.assertSameState` 核对操作前后状态未变；新增前置条件明确、要求成功的动作 `insertMinimalVolume`（注入点为空格子时拒绝即判失败）。验收：`insertMinimalVolume` 在空注入格上的断言即为常驻判据。
 - **W2 尾量抽取**：新增 `extractTail`（请求 `nextDown(可用量)`，必须成功）、`extractOverCapacity`（请求略超容量，拒绝则核对状态未变）、`extractSubBucket`（1e-9–7.999 m³ 档）、`extractThenRestore`（抽一桶再倒回，逐材料质量/体积回到基准）。闭环仅在**纯水**域上断言（`holdsOnlyWater`）；混合域上抽水会带走溶质、倒回纯水，组分本就不对称。
 - **W3 独立比对**：`roundTrip` 盘上与内存分支、`coldRestart`、`containerTransfer` 的 live/adopt 全部改为 `FluidDomainStateAssertions.assertSameDurableState`（持久层不含调度队列、每步压力草稿与世界边界温度场，这些按契约在载入时重建）。**该断言已实际命中一处契约事实**：化学 dirty-cell 队列不入存档。
-- **W4 application 通道**：`applicationStep` 经真实 `RegionApplicationService.stepMotion` 步进，并复用同一世代令牌复交以断言 `STALE_GENERATION`；`sleepWake` 驱动力学休眠与热休眠各自闩锁再分别唤醒（力学走 `observeCompletedStep`，热学走 `ThermalActivity.Observation`），断言两个轴独立。
-- **W5 跨 section**：`FuzzScene` 增加 `origin`，新增场景 18/19 位于 `BlockPos(-2, 64, -2)`，库存跨 section 边界。
+- **W4 application 通道**：`applicationStep` 经真实 `RegionApplicationService.stepMotion` 步进，并复用同一世代令牌复交以断言 `STALE_GENERATION`；`sleepWake` 驱动力学休眠与热休眠各自闩锁再分别唤醒（力学走 `observeCompletedStep`，热学走 `ThermalActivity.Observation`），断言两个轴独立；`blockAndRetry` 注入 NUMERICAL/PERFORMANCE 可用性阻塞、断言期间不可步进，清除后断言经应用通道恢复步进。
+- **W5 跨 section**：`FuzzScene` 增加 `origin`，新增场景 18/19 位于 `BlockPos(-2, 64, -2)`，库存跨 section 边界；新增 20 `sealed-bottleneck-8`、21 `sealed-microthroat-8` 两个几何压力场景。
 - **W6 动态世界输入**：新增 `toggleSolid`（运行期改内部碰撞格，位移计入 escaped sink）与 `editBoundarySource`（改世界恒温边界场的一个面）。
-- **W7 事件级验证**：从 `StepStats`/`ThermalAxisStats` 采集实际事件（相变、颗粒沉积/唤醒、化学求值、重播种合/分），新增「process coverage」报告，并对未发生的关键过程打 WARN。
+- **W7 事件级验证**：从 `StepStats`/`ThermalAxisStats` 采集实际事件（相变、颗粒沉积/唤醒、化学求值、重播种合/分），新增「process coverage」报告；仅当对应物理族确实执行过动作、却一次事件都没观测到时才打 WARN，避免冷跑噪声。
 - **W8 工具缺陷**：显式种子模式失败改为抛错；扫描等待加可配置超时 `-Dmmm.fuzzJobTimeoutMillis`（默认 30 分钟/job）；`FuzzMinimizer` 回放与记录路径均 `close()` 临时目录。
 
-仍未覆盖：容器 WAL 故障注入与 recovery、ownership/removal、`ServerLevel` 侧接管与区块加载、多区域交互、客户端/网络；`MinecraftRegionTick` 的 pacing/`recordStep`/快照需服务器，`RegionApplicationService` 不经过它。
+仍未覆盖及原因：容器 WAL 故障注入与 recovery 已由 `ContainerApplicationValidation` 用 `FakeJournals`/`FakeRegionPort` + `FaultControl` 做确定性覆盖，真实适配器 `MinecraftContainerTransactionAdapter.RegionPort` 依赖物品/加载器层，超出本 fuzzer 的 loader-neutral 范围；ownership/removal、`ServerLevel` 侧接管与区块加载、多区域交互、客户端/网络同理。`MinecraftRegionTick` 的 pacing/`recordStep`/快照需服务器，`RegionApplicationService` 不经过它。
 

@@ -83,6 +83,13 @@ final class FuzzMetrics {
 		if (withChemistry && axis.chemistry() != null) addEvent("chemistry:evaluations", axis.chemistry().evaluations());
 	}
 
+	private static final java.util.Set<String> EXERCISED = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+	/** Marks a physics family as exercised so its absence from process coverage can be judged. */
+	static void note(String family) {
+		EXERCISED.add(family);
+	}
+
 	static void printEvents() {
 		System.out.println("process coverage (events that actually occurred):");
 		if (EVENT_COUNTS.isEmpty()) {
@@ -92,12 +99,16 @@ final class FuzzMetrics {
 		EVENT_COUNTS.entrySet().stream()
 				.sorted((left, right) -> Long.compare(right.getValue().sum(), left.getValue().sum()))
 				.forEach(entry -> System.out.println("  " + entry.getValue().sum() + " " + entry.getKey()));
-		for (String required : new String[]{"phase:condensedOperations", "granular:settledParcels",
-				"chemistry:evaluations"}) {
-			if (!EVENT_COUNTS.containsKey(required)) {
-				System.out.println("  WARN no observed process: " + required);
-			}
-		}
+		warnIfMissing("thermal", "phase:condensedOperations", "phase:gasOperations");
+		warnIfMissing("granular", "granular:settledParcels");
+		warnIfMissing("chemistry", "chemistry:evaluations");
+	}
+
+	/** Warns only when a family ran but none of its expected events were ever observed. */
+	private static void warnIfMissing(String family, String... events) {
+		if (!EXERCISED.contains(family)) return;
+		for (String event : events) if (EVENT_COUNTS.containsKey(event)) return;
+		System.out.println("  WARN no observed process in " + family + ": " + String.join("/", events));
 	}
 
 	static void printHotspots() {
