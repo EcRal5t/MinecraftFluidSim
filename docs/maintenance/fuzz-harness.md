@@ -27,6 +27,7 @@
 | 盘上 / 分数 / 叠加 | `disk\|partial\|partialdisk` + 扫描参数 | `disk` 真 publish/unload/restore；`partial` 用分数体积；`partialdisk` 两者叠加 |
 | 单序列复现 | `replay[,disk\|partial\|partialdisk],<scene>,<seed>[,步数][,picks\|debug]` | 失败时打印完整动作 trace |
 | 最小化 | `minimize[,disk\|partial\|partialdisk],<scene>,<seed>[,步数]` | 记录 RNG token，ddmin 求严格子序列 |
+| 工具自检 | `selfcheck` | 用故意植入的错误验证工具自身的判据能触发（拒绝守卫、闭环比对、覆盖缺口检测） |
 | 指定种子 | `reported` 或 `a:b:c` | 走扩展动作表 `applyExpandedRandomPlay`，在基线场景逐种子运行；当前失败仅打印、不使进程失败 |
 | 回归矩阵 | 无参数时的校验入口 | `runNormalPlayStateMatrix`：固定种子 4/54/103 走旧动作集 `applyRandomAction` + 命名场景，由其它校验入口调用，不经本 `main` |
 
@@ -128,6 +129,10 @@
 
 每轮结束打印 `action coverage`、`process coverage`（真实发生的求解事件：相变、颗粒沉积/唤醒、化学求值、重播种合/分）、`action hotspots`（按动作类型汇总总耗时/次数/单次均耗时/机械子步）与 `slowest jobs`（最慢单个 job 及其子步数）。`picks` token 提供逐动作耗时与子步数，用于区分「子步多」与「单步贵」。
 
+过程覆盖是**按场景**判定的：某场景执行过某物理族的动作、却一次该族事件都没出现时打印 `COVERAGE GAP scene=... family=...`；`REQUIRED_ACTIONS` 中的动作若全程没成功过，也打印 `COVERAGE GAP action=...`。最后一行汇总 `FUZZ COVERAGE adequate` 或 `insufficient gaps=N`，作为与「失败数为零」并列的独立结果。默认只是报告；加 `-Dmmm.fuzzRequireCoverage=true` 才会因覆盖不足而失败。
+
+扫描等待有可配置超时 `-Dmmm.fuzzJobTimeoutMillis`（默认 30 分钟/job）。真卡死时进程打印可回放参数并以退出码 3 结束，因为忽略中断的挂起无法在进程内回收。
+
 ## 九、覆盖矩阵（供评审找缺口）
 
 已覆盖的生产层：
@@ -173,13 +178,15 @@
 优先级来自一次静态评审：**先补现有覆盖的判断能力**，让工具能区分「合法操作被静默拒绝」「应当恢复运行却停住」。以下为落地结果，权威阈值表已收敛到 `FuzzConfig.actionName(int)`（`applyExpandedRandomAction` 与 `FuzzMinimizer` 共用，不再各自维护）。
 
 - **W1 拒绝判定**：全部 `try*` 拒绝路径用 `FluidDomainStateAssertions.assertSameState` 核对操作前后状态未变；新增前置条件明确、要求成功的动作 `insertMinimalVolume`（注入点为空格子时拒绝即判失败）。验收：`insertMinimalVolume` 在空注入格上的断言即为常驻判据。
-- **W2 尾量抽取**：新增 `extractTail`（请求 `nextDown(可用量)`，必须成功）、`extractOverCapacity`（请求略超容量，拒绝则核对状态未变）、`extractSubBucket`（1e-9–7.999 m³ 档）、`extractThenRestore`（抽一桶再倒回，逐材料质量/体积回到基准）。闭环仅在**纯水**域上断言（`holdsOnlyWater`）；混合域上抽水会带走溶质、倒回纯水，组分本就不对称。
+- **W2 尾量抽取**：`extractTail` 不再把 `exactVolumeNear` 当作精确可用量——它只忽略逐 marker 的化学/热拆分分辨率，是**上界**。动作改为阶梯下降：请求观测量的可表示下界，逐次减半直到规划器接受；只要观测到液体、而降到分辨率下限仍全被拒绝，即判失败。`extractOverCapacity` 请求 `totalVolumeExact + 1`（任何可达结算都不可能覆盖），成功即判失败、拒绝则核对状态未变。`extractSubBucket` 为探针：低于可达拆分分辨率时拒绝是正确结果，但拒绝必须不改状态、结算必须不超过请求。`extractThenRestore` 用返回的真实体积回灌，并在**同一小半径**内先断言邻域为纯水，再比较逐材料质量、物种 quanta 与内能。
 - **W3 独立比对**：`roundTrip` 盘上与内存分支、`coldRestart`、`containerTransfer` 的 live/adopt 全部改为 `FluidDomainStateAssertions.assertSameDurableState`（持久层不含调度队列、每步压力草稿与世界边界温度场，这些按契约在载入时重建）。**该断言已实际命中一处契约事实**：化学 dirty-cell 队列不入存档。
-- **W4 application 通道**：`applicationStep` 经真实 `RegionApplicationService.stepMotion` 步进，并复用同一世代令牌复交以断言 `STALE_GENERATION`；`sleepWake` 驱动力学休眠与热休眠各自闩锁再分别唤醒（力学走 `observeCompletedStep`，热学走 `ThermalActivity.Observation`），断言两个轴独立；`blockAndRetry` 注入 NUMERICAL/PERFORMANCE 可用性阻塞、断言期间不可步进，清除后断言经应用通道恢复步进。
+- **W4 application 通道**：`applicationStep` 经真实 `RegionApplicationService.stepMotion` 步进，并复用同一世代令牌复交以断言 `STALE_GENERATION`；`blockAndRetry` 仅在区域本就可步进时注入 NUMERICAL/PERFORMANCE 阻塞，清除后强制要求恢复可步进并经应用通道成功步进一步；`sleepWake` 随机动作只在**实测静止**（marker 速度、未决相变、气体审计）时才闩锁休眠，且热学观察取自真实传输统计而非合成值。此外每个盘上 job 在随机序列开始前，用一次确定性的**休眠阶梯**（临时解除暂停、走完进入/唤醒、再恢复暂停）覆盖两条轴的状态机，避免在主序列中人为停机掩盖振荡。
 - **W5 跨 section**：`FuzzScene` 增加 `origin`，新增场景 18/19 位于 `BlockPos(-2, 64, -2)`，库存跨 section 边界；新增 20 `sealed-bottleneck-8`、21 `sealed-microthroat-8` 两个几何压力场景。
 - **W6 动态世界输入**：新增 `toggleSolid`（运行期改内部碰撞格，位移计入 escaped sink）与 `editBoundarySource`（改世界恒温边界场的一个面）。
-- **W7 事件级验证**：从 `StepStats`/`ThermalAxisStats` 采集实际事件（相变、颗粒沉积/唤醒、化学求值、重播种合/分），新增「process coverage」报告；仅当对应物理族确实执行过动作、却一次事件都没观测到时才打 WARN，避免冷跑噪声。
-- **W8 工具缺陷**：显式种子模式失败改为抛错；扫描等待加可配置超时 `-Dmmm.fuzzJobTimeoutMillis`（默认 30 分钟/job）；`FuzzMinimizer` 回放与记录路径均 `close()` 临时目录。
+- **W7 事件级验证**：从 `StepStats`/`ThermalAxisStats` 采集实际事件并**按场景**留痕，输出 `COVERAGE GAP` 与 `FUZZ COVERAGE` 汇总（见 §八）。
+- **W8 工具缺陷**：显式种子模式失败改为抛错；扫描等待加可配置超时并在真卡死时以退出码 3 结束；`FuzzMinimizer` 回放与记录路径均 `close()` 临时目录；新增 `selfcheck` 模式用植入错误验证判据确实能触发。
 
-仍未覆盖及原因：容器 WAL 故障注入与 recovery 已由 `ContainerApplicationValidation` 用 `FakeJournals`/`FakeRegionPort` + `FaultControl` 做确定性覆盖，真实适配器 `MinecraftContainerTransactionAdapter.RegionPort` 依赖物品/加载器层，超出本 fuzzer 的 loader-neutral 范围；ownership/removal、`ServerLevel` 侧接管与区块加载、多区域交互、客户端/网络同理。`MinecraftRegionTick` 的 pacing/`recordStep`/快照需服务器，`RegionApplicationService` 不经过它。
+已知未达成的覆盖目标（长留 `COVERAGE GAP`，属真实观测不足而非回归）：`extractThenRestore` 需要局部纯水口袋，污染性动作很快破坏前置条件；颗粒族的 `settledParcels/wokenParcels` 在 60 动作内常为 0。两者都可作为后续加深方向。
+
+仍未覆盖及原因：**本工具有意不接入容器 WAL/recovery**，以保持聚焦于随机物理序列；协调器的各故障点已由 `ContainerApplicationValidation` 用 `FakeJournals`/`FakeRegionPort` + `FaultControl` 做确定性覆盖，但那只验证「协调器如何调用端口」，**不代表真实适配链已被证明**——`MinecraftContainerTransactionAdapter.RegionPort` 在 HEAD 已提交而调用报错时的重读与接管等实质逻辑仍缺独立证据，应列为剩余验证项，优先用 Fabric 侧少量定向集成场景检查（HEAD 已提交但报错、接管失败、actor 保存失败、恢复后能继续下一笔）。ownership/removal、`ServerLevel` 侧接管与区块加载、多区域交互、客户端/网络同理。`MinecraftRegionTick` 的 pacing/`recordStep`/快照需服务器，`RegionApplicationService` 不经过它。
 
