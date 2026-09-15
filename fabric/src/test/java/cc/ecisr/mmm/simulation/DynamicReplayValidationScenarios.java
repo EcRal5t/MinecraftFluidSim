@@ -439,11 +439,15 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		boolean observedTrappedAmbient = false;
 		boolean observedAirVaporMixture = false;
+		long totalPhaseOperations = 0L;
+		boolean reportedFirstSealedNode = false;
+		int maximumSealedNodes = 0;
 		for (int generation = 0; generation < 200; generation++) {
 			try {
 				FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 						generation, domain.captureAuthoritativeState(), List.of(), true,
 						ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+				totalPhaseOperations += candidate.stats().gasPhase().operations();
 				domain = requirePreparedCpuDomain(candidate);
 				require(domain.gasBoundary().auditClosed()
 						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
@@ -459,6 +463,12 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 							.component(BuiltinGasDefinitions.WATER_VAPOR) != null;
 				}
 				observedTrappedAmbient |= domain.gasBoundary().drawnFromAmbientNanos() > 0L;
+				maximumSealedNodes = Math.max(maximumSealedNodes, domain.gasBoundary().nodeCount());
+				if (domain.gasBoundary().nodeCount() >= 1 && !reportedFirstSealedNode) {
+					reportedFirstSealedNode = true;
+					System.out.printf("  floor dam-break first sealed node at step %d: %s%n",
+							generation + 1, domain.gasBoundary().inventory(1));
+				}
 				if ((generation + 1) % 20 == 0) {
 					System.out.printf("  floor dam-break step %d: particles=%d, volume=%.9f, "
 							+ "gasNodes=%d, phase=%d%n", generation + 1, domain.particleCount(),
@@ -476,6 +486,9 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 						+ ": " + failure.getMessage(), failure);
 			}
 		}
+		System.out.printf("  floor dam-break gas: phaseOperations=%d, peakSealedNodes=%d, "
+						+ "trappedAmbient=%b, airVaporMixture=%b%n",
+				totalPhaseOperations, maximumSealedNodes, observedTrappedAmbient, observedAirVaporMixture);
 		require(observedTrappedAmbient && observedAirVaporMixture,
 				"floor dam-break did not exercise ambient pinch-off into a finite air/vapor node:"
 						+ " trappedAmbient=" + observedTrappedAmbient
