@@ -19,10 +19,19 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 	static void controllerPourSequenceWithoutGasSettles() {
 		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
+		// The backend owns time refinement: it restores a private candidate per attempt, so a step
+		// whose projected motion needs finer substeps is retried instead of escaping to the caller.
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		long generation = 0L;
 		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
 		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
 				"gas-free control did not inject the first 16 BV source: " + first);
-		for (int step = 0; step < 40; step++) domain.stepWithMechanicalAudit(false, 0);
+		FluidDomainState state = domain.captureAuthoritativeState();
+		for (int step = 0; step < 40; step++) {
+			state = backend.evaluate(new FluidStepRequest(
+					generation++, state, List.of(), false, 0, true)).state();
+		}
+		domain = FluidDomain.restoreAuthoritativeState(state);
 		FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
 				"gas-free control did not inject the second 14 BV source: " + second);
@@ -37,8 +46,12 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		double cumulativePressureWork = 0.0;
 		double reportedVolumeChange = 0.0, reportedMassChange = 0.0;
 		long reseededMerges = 0;
+		state = domain.captureAuthoritativeState();
 		for (int step = 0; step < 1_000; step++) {
-			FluidDomain.StepStats stats = domain.stepWithMechanicalAudit(false, 0);
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					generation++, state, List.of(), false, 0, true));
+			FluidDomain.StepStats stats = candidate.stats();
+			domain = FluidDomain.restoreAuthoritativeState(candidate.state());
 			FluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
 			if (step == 0) initialMechanicalEnergy = audit.initialParticleKineticEnergyJoules()
 					+ audit.initialGravitationalPotentialEnergyJoules();
@@ -57,6 +70,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 			reseededMerges += stats.reseededMerges();
 			maximumKinetic = Math.max(maximumKinetic, finalKinetic);
 			if (step >= 800) tailMaximumKinetic = Math.max(tailMaximumKinetic, finalKinetic);
+			state = candidate.state();
 		}
 		double volumeChange = domain.totalVolumeExact() - expectedVolume;
 		double massChange = domain.totalMass() - expectedMass;
@@ -326,7 +340,11 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(
 				domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
-		domain.step(false, 0);
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		long generation = 0L;
+		FluidDomainState state = domain.captureAuthoritativeState();
+		state = backend.evaluate(new FluidStepRequest(generation++, state, List.of(), false, 0)).state();
+		domain = FluidDomain.restoreAuthoritativeState(state);
 		long inventory = domain.gasBoundary().sealedInventoryNanos();
 		require(inventory == 64_000_000_000L && domain.gasBoundary().nodeCount() == 1,
 				"empty default-gate controller did not bootstrap one closed gas owner: "
@@ -335,7 +353,11 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(2, 0, 0, 128.0F, 6);
 		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
 				"reported first pour did not inject the complete 16 BV source: " + first);
-		for (int step = 0; step < 60; step++) domain.step(false, 0);
+		state = domain.captureAuthoritativeState();
+		for (int step = 0; step < 60; step++) {
+			state = backend.evaluate(new FluidStepRequest(generation++, state, List.of(), false, 0)).state();
+		}
+		domain = FluidDomain.restoreAuthoritativeState(state);
 		require(Math.abs(totalGasAvailableVolume(domain) - 48.0) <= 1.0E-12,
 				"first reported pour did not compress the closed headspace to 48 m3");
 
@@ -343,8 +365,10 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
 				"reported second pour did not inject the complete 14 BV source: " + second);
 		int maximumNodes = domain.gasBoundary().nodeCount();
+		state = domain.captureAuthoritativeState();
 		for (int step = 0; step < 200; step++) {
-			domain.step(false, 0);
+			state = backend.evaluate(new FluidStepRequest(generation++, state, List.of(), false, 0)).state();
+			domain = FluidDomain.restoreAuthoritativeState(state);
 			maximumNodes = Math.max(maximumNodes, domain.gasBoundary().nodeCount());
 			require(domain.gasBoundary().auditClosed(),
 					"reported two-pour replay opened the gas ledger at step " + step

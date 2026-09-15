@@ -477,7 +477,9 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			}
 		}
 		require(observedTrappedAmbient && observedAirVaporMixture,
-				"floor dam-break did not exercise ambient pinch-off into a finite air/vapor node");
+				"floor dam-break did not exercise ambient pinch-off into a finite air/vapor node:"
+						+ " trappedAmbient=" + observedTrappedAmbient
+						+ ", airVaporMixture=" + observedAirVaporMixture);
 	}
 
 	private static FluidDomain requirePreparedCpuDomain(FluidStepCandidate candidate) {
