@@ -5,7 +5,6 @@ import cc.ecisr.mmm.fluid.FluidDomainState;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
-import cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import net.minecraft.world.phys.Vec3;
@@ -433,12 +432,19 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 				maximumMillis, performancePauseThresholdMillis, maximumConsecutiveOverruns);
 	}
 
+	/**
+	 * Production-scale replay of the four-floor {@code /mmm demo}: every step keeps the gas and
+	 * exact total-U audits closed with finite sealed nodes, and the run exercises real sealed-cavity
+	 * phase work. Since the binary64 pressure overhaul (b7a8d15f) the collapsing column no longer
+	 * folds ambient air into a pocket inside this replay - the entrapment is structurally absent
+	 * over 600 steps, not merely delayed - so the ambient pinch-off and air/vapor mixture
+	 * observables are owned by the deterministic thermal scenario
+	 * {@code ThermalGasValidationScenarios#ambientTrappedAirBoilsIntoMixedNode}.
+	 */
 	static void floorDamBreakGasThermalPathRemainsDefined() throws Exception {
 		FullCapabilityTestFixture.Registries registries = loadProductionRegistries();
 		FluidDomain domain = createFullyBoundFloorDamBreakDemo(registries);
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
-		boolean observedTrappedAmbient = false;
-		boolean observedAirVaporMixture = false;
 		long totalPhaseOperations = 0L;
 		boolean reportedFirstSealedNode = false;
 		int maximumSealedNodes = 0;
@@ -457,12 +463,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 							&& domain.gasBoundary().availableVolume(node) > 0.0
 							&& domain.gasBoundary().standardVolumeNanos(node) >= 0L,
 							"floor dam-break produced an invalid sealed gas node at step " + (generation + 1));
-					observedAirVaporMixture |= domain.gasBoundary().inventory(node)
-							.component(BuiltinGasDefinitions.AIR) != null
-							&& domain.gasBoundary().inventory(node)
-							.component(BuiltinGasDefinitions.WATER_VAPOR) != null;
 				}
-				observedTrappedAmbient |= domain.gasBoundary().drawnFromAmbientNanos() > 0L;
 				maximumSealedNodes = Math.max(maximumSealedNodes, domain.gasBoundary().nodeCount());
 				if (domain.gasBoundary().nodeCount() >= 1 && !reportedFirstSealedNode) {
 					reportedFirstSealedNode = true;
@@ -486,13 +487,11 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 						+ ": " + failure.getMessage(), failure);
 			}
 		}
-		System.out.printf("  floor dam-break gas: phaseOperations=%d, peakSealedNodes=%d, "
-						+ "trappedAmbient=%b, airVaporMixture=%b%n",
-				totalPhaseOperations, maximumSealedNodes, observedTrappedAmbient, observedAirVaporMixture);
-		require(observedTrappedAmbient && observedAirVaporMixture,
-				"floor dam-break did not exercise ambient pinch-off into a finite air/vapor node:"
-						+ " trappedAmbient=" + observedTrappedAmbient
-						+ ", airVaporMixture=" + observedAirVaporMixture);
+		System.out.printf("  floor dam-break gas: phaseOperations=%d, peakSealedNodes=%d, externalSource=%s%n",
+				totalPhaseOperations, maximumSealedNodes, domain.gasBoundary().externalSource());
+		require(maximumSealedNodes >= 1 && totalPhaseOperations > 0,
+				"floor dam-break replay no longer exercises sealed-gas phase work: peakSealedNodes="
+						+ maximumSealedNodes + ", phaseOperations=" + totalPhaseOperations);
 	}
 
 	private static FluidDomain requirePreparedCpuDomain(FluidStepCandidate candidate) {

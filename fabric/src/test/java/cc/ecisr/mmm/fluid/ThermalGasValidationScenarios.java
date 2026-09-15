@@ -1109,6 +1109,77 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"condensation phase volume was not consumed by the next real pressure projection");
 	}
 
+	/**
+	 * Ambient-lineage trapping combined with sealed-interface boiling: an open pocket that the
+	 * shell closes after bootstrap must trap its real ambient air inventory through the topology
+	 * remap, and boiling from the adjacent liquid must add water vapor to that same node without
+	 * disturbing the trapped air columns. This is the deterministic owner of the air/vapor mixture
+	 * observable; the production floor dam-break replay can no longer exercise it because the
+	 * binary64 pressure overhaul changed the collapsing front so it stops folding ambient air.
+	 */
+	static void ambientTrappedAirBoilsIntoMixedNode() {
+		FluidMaterial waterCarrier = FluidMaterial.withSurfaceTension(
+				"test:mix_water", 1_000.0, "test:miscible", 0.0, 90.0);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(waterCarrier));
+		ThermalMaterialDefinition water = new ThermalMaterialDefinition("test:thermal/mix_water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, waterCarrier.id(), 373.15, 0.0, 0.6,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 4_180.0)));
+		ThermalMaterialDefinition air = new ThermalMaterialDefinition("test:thermal/mix_air",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR, 373.15, 0.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 718.0)));
+		ThermalMaterialDefinition vapor = new ThermalMaterialDefinition("test:thermal/mix_vapor",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.WATER_VAPOR,
+				373.15, 2_256_000.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 1_410.0)));
+		long liquidSvq = SolidVolume.SVQ_PER_CELL / 20_000L;
+		long vaporSvq = liquidSvq * 1_700L;
+		ExactRational batchMass = ExactRational.parse("52375/8388608");
+		ThermalPhaseTransition boiling = new ThermalPhaseTransition("test:phase/mix_boiling",
+				water.id(), vapor.id(), 373.15, liquidSvq, vaporSvq, batchMass,
+				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000.0, 3_000_000.0);
+		ThermalRegistry thermal = new ThermalRegistry(
+				List.of(water, air, vapor), List.of(), List.of(boiling), "", "");
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
+		domain.setVolume(2, 1, 1, 1.0F);
+		domain.setMarkerMaterial(0, liquids, 0);
+		domain.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
+		domain.bootstrapGasState("");
+		domain.bindThermal(thermal, liquids, 500.0);
+		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
+			if ((x == 1 && y == 1 && z == 1) || (x == 2 && y == 1 && z == 1)) continue;
+			domain.setSolid(x, y, z, true);
+		}
+		domain.synchronizeGasTopologyForPersistence();
+		long pocketNanos = AirNetwork.nanos(0.125);
+		require(domain.gasBoundary().nodeCount() == 1
+				&& domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.AIR) != null
+				&& domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR) == null
+				&& domain.gasBoundary().standardVolumeNanos(1) == pocketNanos
+				&& domain.gasBoundary().drawnFromAmbientNanos() == pocketNanos
+				&& domain.gasBoundary().auditClosed()
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"enclosed ambient pocket did not trap its air inventory through the remap: nodes="
+						+ domain.gasBoundary().nodeCount() + " inventory=" + domain.gasBoundary().inventory(1)
+						+ " drawn=" + domain.gasBoundary().drawnFromAmbientNanos() + "/" + pocketNanos);
+		domain.step(true, 128);
+		FluidDomain.GasThermalPhaseStats stats = domain.lastGasThermalPhaseStats();
+		GasComponentAmount trappedAir = domain.gasBoundary().inventory(1)
+				.component(BuiltinGasDefinitions.AIR);
+		GasComponentAmount boiledVapor = domain.gasBoundary().inventory(1)
+				.component(BuiltinGasDefinitions.WATER_VAPOR);
+		require(stats.operations() > 0
+				&& trappedAir != null && trappedAir.standardVolumeNanos() == pocketNanos
+				&& boiledVapor != null && boiledVapor.mass() > 0.0
+				&& domain.gasBoundary().escapedSink().standardVolumeNanos() == 0L
+				&& domain.gasBoundary().auditClosed()
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"boiling into trapped ambient air did not form a conserved air/vapor mixture: stats="
+						+ stats + " air=" + trappedAir + " vapor=" + boiledVapor
+						+ " escaped=" + domain.gasBoundary().escapedSink());
+	}
+
 	static void compositionBearingBoilingMovesOnlyGasAdmittedSpecies() {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();

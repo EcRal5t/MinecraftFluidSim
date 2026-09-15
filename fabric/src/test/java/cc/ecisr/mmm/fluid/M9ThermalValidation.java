@@ -20,6 +20,7 @@ public final class M9ThermalValidation {
 		ThermalGasValidationScenarios.persistenceBarrierSynchronizesGasTopology();
 		ThermalGasValidationScenarios.operatorVentClearsGasAndEnergyTogether();
 		ThermalGasValidationScenarios.sealedInterfaceBoilingCommitsJointInventory();
+		ThermalGasValidationScenarios.ambientTrappedAirBoilsIntoMixedNode();
 		ThermalGasValidationScenarios.compositionBearingBoilingMovesOnlyGasAdmittedSpecies();
 		ThermalGasValidationScenarios.thermalSleepIsOrthogonalToMotion();
 		ThermochemistryValidationScenarios.reactionHeatIsPathIndependentStateEnergy();
