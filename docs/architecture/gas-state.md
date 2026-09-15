@@ -41,12 +41,12 @@ marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 compone
 
 完整重扫后若仍没有节点，扫描器为具有正残余体积的部分充液连通区建立显式归属，按原规则规范化节点顺序和闭域总容量。这覆盖满液域的分数抽取，以及旧 membership 全部消失、抽取位置没有旧 lineage 的情况。节点通过正常 remap 接受库存：没有可转移库存时保持真空，旧密闭库存仍按既有容量权重转移。持久化与恢复使用相同的扫描规则。
 
-密闭壳内失去全部拓扑去向的库存**不判为丢失**：腔体消失时 `normalizeClosedCapacity` 已经把它的容量重新分给仍然存在的腔体，库存按同一组容量权重随之转移。被载体挤没的气泡、被抬升液面压碎的 headspace 碎片、以及闪断的载体空隙在这里是同一个事件——闭体积里的气，腔体没了；只有守恒决定它去哪。开放域中同样的情形才记 escaped sink。
+密闭壳内失去全部拓扑去向的库存**不判为丢失**：腔体消失时先沿开放面交给仍能到达的最近腔体，一个都到不了时才按全部剩余腔体的容量权重转移，库存随容量一起走。被载体挤没的气泡、被抬升液面压碎的 headspace 碎片、以及闪断的载体空隙在这里是同一个事件——闭体积里的气，腔体没了；可达性先决定它去哪，守恒只在没有可达腔体时兜底。开放域中同样的情形才记 escaped sink。
 
 - controller 已验证闭壳时，solver 外边界不自动判作 ambient；命令临时域和真实缺口仍连接 ambient node 0。
 - scan 按固定邻居顺序执行，节点以 canonical minimum-cell key 排序，保证同一几何得到确定 topology。
 - 超过 scan budget 时，尚未完成的空间 fail-open 为 ambient，不能凭不完整 flood fill 创建有限密闭库存。
-- available volume 是每 cell 的几何 open volume 减逐格 exact marker volume 与统一固体 occupancy，再乘 `cellSize³`；平滑液体 fraction 不结算气体容量或绝热功。单格 residual 只在局部拓扑归属时钳在几何范围内；完整闭域的节点容量总和随后必须严格等于“有效 open geometry 总量减全部权威 liquid carrier 体积”，局部 marker 聚集不能凭逐格钳制创造额外气相体积或绝热功。runtime attribution 可沿 gas-centered（gas residual 至少占 open volume 一半）的连通部分充液格传播，随后只给相邻的一层 liquid-centered interface residual 归属，不能借 marker 空隙穿过整个液体 bulk；多 node 相遇时 ambient/较小 node 优先。
+- available volume 是每 cell 的几何 open volume 减逐格 exact marker volume 与统一固体 occupancy，再乘 `cellSize³`；平滑液体 fraction 不结算气体容量或绝热功。单格 residual 只在局部拓扑归属时钳在几何范围内；完整闭域的每个节点按它实际拥有的 cell 结算带符号补量（有效 open volume 减权威 liquid），局部 marker 聚集只缩小这些 marker 所归属的腔体，不能越过实墙影响另一个腔体，也不能凭逐格钳制创造额外气相体积或绝热功。没有任何腔体拥有的残余体积（与任何气腔都不连通的部分充液格）才进入全域结算，因此节点容量总和仍严格等于“有效 open geometry 总量减全部权威 liquid carrier 体积”。runtime attribution 可沿 gas-centered（gas residual 至少占 open volume 一半）的连通部分充液格传播，随后只给相邻的一层 liquid-centered interface residual 归属，不能借 marker 空隙穿过整个液体 bulk；多 node 相遇时 ambient/较小 node 优先。
 
 ## 权威数据
 
@@ -89,7 +89,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 旧 node 的 full-air membership 完全消失且旧 residual component 仍与新 gas component 相邻时，从原 interface cells 返回该新 lineage。若该 residual component 具有正容量但不接触任何新 gas component，它必须继续拥有原有限库存：该 component 的 partial owner cells 进入本代 topology membership，并按 minimum cell 与其他节点一起重新 canonicalize；若分裂成多个不连通 residual component，则按各自实际容量规划库存 split。
 
-这样不会把无法以 full-air cell 表示的真实气泡删除或任意并入另一节点。marker bulk 的普通空隙也不需要专门识别：它即使成为 component 也拿不到库存，消失时又按上一条守恒规则把库存交回余下腔体。
+这样不会把无法以 full-air cell 表示的真实气泡删除或任意并入另一节点。marker bulk 的普通空隙也不需要专门识别：它即使成为 component 也拿不到库存，消失时又按上一条规则把库存交回可达腔体。
 
 稳定 topology 快路每次仍从当前 exact residual volume 重新分配 interface lineage；相变新打开的微小气隙不能沿用上一轮空 residual 的归属，也不能被当成凭空新 node。
 

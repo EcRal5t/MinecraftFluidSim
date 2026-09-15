@@ -10,6 +10,7 @@ public final class AirCavityScannerValidation {
 		validateOpenTankIsAmbient();
 		validateControllerExtentIsSealed();
 		validateClosedCapacityComplementsCarrierInventory();
+		validateIsolatedCompartmentCapacityIsLocal();
 		validateNewPartialVacuumOwners();
 		validateSealedTankVolume();
 		validateOpenUTubeIsAmbient();
@@ -47,6 +48,45 @@ public final class AirCavityScannerValidation {
 				"closed controller capacity regression must retain one gas owner");
 		checkRelative(result.sealedAvailableVolume()[0], (n * n * n - 2.0) * 0.125,
 				"closed gas capacity must complement total authoritative liquid volume");
+	}
+
+	/**
+	 * A closed shell is settled one cavity at a time. Liquid redistributed inside one watertight
+	 * compartment must not move a compartment behind a solid wall, even when the markers cluster
+	 * past the open volume of a single cell.
+	 */
+	private static void validateIsolatedCompartmentCapacityIsLocal() {
+		Grid grid = new Grid(5, 2, 2, 1.0F);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) {
+			int wall = (z * 2 + y) * 5 + 2;
+			grid.solid[wall] = true;
+			grid.cutCells.replaceMask(wall, 255);
+		}
+		grid.markerCount[0] = 1;
+		grid.markerCount[1] = 1;
+		grid.liquidVolume[0] = 0.75;
+		grid.liquidVolume[1] = 0.75;
+		AirCavityScanner scanner = new AirCavityScanner(5, 2, 2, 1.0F, 20);
+		AirCavityScanner.Result before = scanner.scan(
+				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true);
+		grid.liquidVolume[0] = 1.25;
+		grid.liquidVolume[1] = 0.25;
+		AirCavityScanner.Result after = scanner.scan(
+				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true);
+		check(before.sealedNodeCount() == 2 && after.sealedNodeCount() == 2,
+				"a solid wall must keep two sealed compartments, got " + before.sealedNodeCount()
+						+ "/" + after.sealedNodeCount());
+		check(before.geometricEdges().isEmpty() && after.geometricEdges().isEmpty(),
+				"compartments must stay isolated");
+		int left = after.cellNodeId()[5] - 1;
+		int right = after.cellNodeId()[3] - 1;
+		check(left >= 0 && right >= 0 && left != right, "compartments must own distinct cavities");
+		checkRelative(after.sealedAvailableVolume()[left], 6.5, "clustered compartment capacity");
+		checkRelative(after.sealedAvailableVolume()[right], 8.0, "isolated compartment capacity");
+		checkRelative(before.sealedAvailableVolume()[left], after.sealedAvailableVolume()[left],
+				"redistributing an unchanged liquid total must not move its own compartment");
+		checkRelative(before.sealedAvailableVolume()[right], after.sealedAvailableVolume()[right],
+				"liquid clustering must not reach a compartment behind a solid wall");
 	}
 
 	private static void validateNewPartialVacuumOwners() {

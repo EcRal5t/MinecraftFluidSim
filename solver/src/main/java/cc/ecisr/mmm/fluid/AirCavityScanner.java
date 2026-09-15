@@ -18,8 +18,9 @@ import java.util.TreeMap;
 	 * domain boundary or when the scan budget is exhausted — never a sealed cavity with finite
 	 * inventory. Cavity volume is measured from exact per-cell marker volume: every attributed
 	 * cell contributes its open volume minus the locally clamped liquid inventory, while a
-	 * completed closed-domain scan normalizes the node total to the exact global complement. The smoothed
-	 * free-surface field is derived geometry and cannot settle gas capacity or adiabatic work.
+	 * completed closed-domain scan settles each node against the exact complement of the cells it
+	 * owns. The smoothed free-surface field is derived geometry and cannot settle gas capacity or
+	 * adiabatic work.
 	 * A partially filled surface cell attributes to the adjacent node with the smallest id
 	 * (ambient wins).</p>
 	 */
@@ -115,7 +116,7 @@ import java.util.TreeMap;
 				scanned = retainOrphanedPartialLineages(scanned, solid, cutCells, unowned, 0);
 			}
 			normalizeClosedCapacity(solid, cellLiquidVolume, cutCells, granular,
-					scanned.sealedAvailableVolume());
+					scanned.cellNodeId(), scanned.cellLineageNodeId(), scanned.sealedAvailableVolume());
 		}
 		return scanned;
 	}
@@ -171,7 +172,8 @@ import java.util.TreeMap;
 		attributeInterfaceResiduals(cellNodeId, cellLineageNodeId, solid, markerCount, cellLiquidVolume,
 				cutCells, granular, cellAvailableVolume, sealedAvailableVolume);
 		if (sealedDomainBoundary && !budgetExhausted && normalizeClosedCapacity) normalizeClosedCapacity(
-				solid, cellLiquidVolume, cutCells, granular, sealedAvailableVolume);
+				solid, cellLiquidVolume, cutCells, granular, cellNodeId, cellLineageNodeId,
+				sealedAvailableVolume);
 		List<GeometricEdge> edges = collectGeometricEdges(cellNodeId, cutCells);
 		return new Result(cellNodeId, cellLineageNodeId, cellAvailableVolume,
 				sealedNodes, sealedAvailableVolume, edges, visitedAirCells,
@@ -323,22 +325,34 @@ import java.util.TreeMap;
 			result[node - 1] += cellAirVolume(cell, cellLiquidVolume, cutCells, granular);
 		}
 		if (sealedDomainBoundary) normalizeClosedCapacity(
-				solid, cellLiquidVolume, cutCells, granular, result);
+				solid, cellLiquidVolume, cutCells, granular, cellNodeId, cellLineageNodeId, result);
 		return result;
 	}
 
-	/** Makes a closed shell's total gas capacity the exact complement of its carrier inventories. */
+	/**
+	 * Settles a closed shell's gas capacity against the carrier inventory each cavity owns.
+	 *
+	 * <p>Every cell pays its own signed complement - effective open volume minus authoritative
+	 * liquid inventory - to the one cavity that currently owns it. Marker clustering therefore
+	 * shrinks only the cavity those markers are attributed to and can no longer reach a cavity
+	 * behind a solid wall; a free-surface cell's liquid is charged to the gas it touches, and a
+	 * filled bulk cell settles at exactly zero. Volume that no cavity owns is the residual of
+	 * partially filled cells that touch no gas at all. Such a cell has no owner to pay, so its
+	 * residual keeps the existing capacity-weighted settlement, which is what preserves the exact
+	 * complement of the whole shell. A cavity whose own attributed carriers exceed its open volume
+	 * is crushed to zero here; the topology coordinator then hands its finite gas to a cavity it can
+	 * reach, so a zero-volume control volume only ever carries vacuum.</p>
+	 */
 	private void normalizeClosedCapacity(
 			boolean[] solid, double[] cellLiquidVolume, FlipCutCellGeometry cutCells,
-			GranularCouplingFields granular, double[] sealedAvailableVolume
+			GranularCouplingFields granular, int[] cellNodeId, int[] cellLineageNodeId,
+			double[] sealedAvailableVolume
 	) {
+		int nodes = sealedAvailableVolume.length;
 		double open = 0.0;
 		double liquid = 0.0;
 		for (int cell = 0; cell < cellCount; cell++) {
-			if (!solid[cell]) {
-				float geometricOpen = cutCells.openCellVolume(cell);
-				open += geometricOpen;
-			}
+			if (!solid[cell]) open += cutCells.openCellVolume(cell);
 			liquid += cellLiquidVolume[cell];
 		}
 		if (granular != null) open -= granular.totalSolidSvq() / (double) cc.ecisr.mmm.granular.SolidVolume.SVQ_PER_CELL;
@@ -346,24 +360,50 @@ import java.util.TreeMap;
 		if (!(Double.isFinite(expected) && expected >= 0.0)) {
 			throw new GasTopologyBlockedException("Closed gas capacity is smaller than carrier inventory");
 		}
-		if (sealedAvailableVolume.length == 0) {
+		if (nodes == 0) {
 			if (expected > 1.0E-12) throw new GasTopologyBlockedException(
 					"Closed residual gas volume has no topology owner");
 			return;
 		}
-		double measured = 0.0;
-		for (double volume : sealedAvailableVolume) measured += volume;
-		if (!(Double.isFinite(measured) && measured > 0.0)) {
-			if (expected == 0.0) return;
+		double[] owned = new double[nodes];
+		for (int cell = 0; cell < cellCount; cell++) {
+			double inventory = Math.max(cellLiquidVolume[cell], 0.0);
+			double complement = (openCellVolume(cell, cutCells, granular) - inventory) * cellVolumeCubicMeters;
+			int owner = cellNodeId[cell] >= 1 ? cellNodeId[cell] : cellLineageNodeId[cell];
+			if (owner < 1 && complement < 0.0) {
+				// A cell whose markers over-fill it owns no gas, so interface lineage has nothing to
+				// attribute to it. Its excess is still paid by the cavity those markers sit in - the
+				// one a face-adjacent cell already owns - never by a cavity behind a solid wall.
+				owner = adjacentCavityOwner(cell, cellNodeId, cellLineageNodeId, cutCells);
+			}
+			if (owner < 1) continue;
+			owned[owner - 1] += complement;
+		}
+		double settled = 0.0;
+		for (int node = 0; node < nodes; node++) {
+			// A cavity whose own attributed carriers already exceed its open volume is crushed to
+			// zero; the deficit joins the unowned residual instead of being hidden in a neighbour.
+			owned[node] = Math.max(owned[node], 0.0);
+			settled += owned[node];
+		}
+		if (!(settled > 0.0)) {
+			if (expected == 0.0) {
+				Arrays.fill(sealedAvailableVolume, 0.0);
+				return;
+			}
 			throw new GasTopologyBlockedException("Closed gas topology has no measurable capacity");
 		}
-		double scale = expected / measured;
+		double scale = expected / settled;
 		double assigned = 0.0;
-		for (int node = 0; node + 1 < sealedAvailableVolume.length; node++) {
-			sealedAvailableVolume[node] *= scale;
+		int largest = 0;
+		for (int node = 0; node < nodes; node++) {
+			sealedAvailableVolume[node] = owned[node] * scale;
 			assigned += sealedAvailableVolume[node];
+			if (sealedAvailableVolume[node] > sealedAvailableVolume[largest]) largest = node;
 		}
-		sealedAvailableVolume[sealedAvailableVolume.length - 1] = expected - assigned;
+		// The complement is exact, so the rounding remainder belongs to the cavity that can absorb
+		// it. Taking it from the last slot instead would make a crushed cavity negative.
+		sealedAvailableVolume[largest] += expected - assigned;
 	}
 
 	/**
@@ -377,9 +417,7 @@ import java.util.TreeMap;
 	 */
 	private boolean isAirCell(int cell, boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,
 	                          GranularCouplingFields granular) {
-		float geometricOpen = cutCells.openCellVolume(cell);
-		float available = granular == null ? geometricOpen : granular.effectiveOpenCellVolume(cell, geometricOpen);
-		return !solid[cell] && markerCount[cell] == 0 && available > 0.0F;
+		return !solid[cell] && markerCount[cell] == 0 && openCellVolume(cell, cutCells, granular) > 0.0;
 	}
 
 	private int floodNeighbors(int[] cellNodeId, boolean[] solid, int[] markerCount, FlipCutCellGeometry cutCells,
@@ -415,11 +453,39 @@ import java.util.TreeMap;
 		throw new IllegalArgumentException("Cells are not face-adjacent");
 	}
 
+	/** Owning cavity of a face-adjacent cell that already owns gas, or -1 when there is none. */
+	private int adjacentCavityOwner(
+			int cell, int[] cellNodeId, int[] cellLineageNodeId, FlipCutCellGeometry cutCells
+	) {
+		int x = cell % sizeX;
+		int yz = cell / sizeX;
+		int y = yz % sizeY;
+		int z = yz / sizeY;
+		int owner = -1;
+		for (int axis = 0; axis < 3; axis++) for (int direction = -1; direction <= 1; direction += 2) {
+			int nx = x + (axis == 0 ? direction : 0);
+			int ny = y + (axis == 1 ? direction : 0);
+			int nz = z + (axis == 2 ? direction : 0);
+			if (nx < 0 || nx >= sizeX || ny < 0 || ny >= sizeY || nz < 0 || nz >= sizeZ) continue;
+			int neighbor = (nz * sizeY + ny) * sizeX + nx;
+			if (faceOpen(cutCells, cell, neighbor) <= 0.0F) continue;
+			int node = cellNodeId[neighbor] >= 1 ? cellNodeId[neighbor] : cellLineageNodeId[neighbor];
+			if (node < 1) continue;
+			owner = owner < 0 ? node : Math.min(owner, node);
+		}
+		return owner;
+	}
+
+	/** Open volume of one cell after cut-cell geometry and granular/coherent occupancy. */
+	private double openCellVolume(int cell, FlipCutCellGeometry cutCells, GranularCouplingFields granular) {
+		float geometricOpen = cutCells.openCellVolume(cell);
+		return granular == null ? geometricOpen : granular.effectiveOpenCellVolume(cell, geometricOpen);
+	}
+
 	/** Continuous air volume of one cell: open volume minus the clamped liquid fraction. */
 	private double cellAirVolume(int cell, double[] cellLiquidVolume, FlipCutCellGeometry cutCells,
 	                             GranularCouplingFields granular) {
-		float geometricOpen = cutCells.openCellVolume(cell);
-		double openVolume = granular == null ? geometricOpen : granular.effectiveOpenCellVolume(cell, geometricOpen);
+		double openVolume = openCellVolume(cell, cutCells, granular);
 		double liquid = Math.min(Math.max(cellLiquidVolume[cell], 0.0), openVolume);
 		return (openVolume - liquid) * cellVolumeCubicMeters;
 	}
@@ -507,10 +573,8 @@ import java.util.TreeMap;
 			int cell, double[] cellAvailableVolume, FlipCutCellGeometry cutCells,
 			GranularCouplingFields granular
 	) {
-		float geometricOpen = cutCells.openCellVolume(cell);
-		double openVolume = granular == null ? geometricOpen
-				: granular.effectiveOpenCellVolume(cell, geometricOpen);
-		return cellAvailableVolume[cell] >= 0.5 * openVolume * cellVolumeCubicMeters;
+		return cellAvailableVolume[cell]
+				>= 0.5 * openCellVolume(cell, cutCells, granular) * cellVolumeCubicMeters;
 	}
 	private List<GeometricEdge> collectGeometricEdges(int[] cellNodeId, FlipCutCellGeometry cutCells) {
 		TreeMap<Long, Double> areas = new TreeMap<>();

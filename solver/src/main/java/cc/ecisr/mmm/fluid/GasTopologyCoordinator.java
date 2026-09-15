@@ -221,7 +221,8 @@ final class GasTopologyCoordinator {
 			// completely. It must not siphon a still-present cavity into ambient as its liquid surface moves.
 			addDisappearingPreviousGasOverlaps(hasMembershipOverlap,
 					newMembership, newLabels, cellAvailableVolume, overlap);
-			if (domain.gasState.sealedDomainBoundary) retainClosedOrphans(overlap, previous, sealed, availableVolumes);
+			if (domain.gasState.sealedDomainBoundary) retainClosedOrphans(overlap, previous, sealed,
+				availableVolumes, newMembership, newLabels, cellAvailableVolume);
 			boolean[] contributed = new boolean[sealed + 1];
 			for (int old = 1; old <= previous; old++) {
 				GasInventory inventory = domain.gasState.network.inventory(old);
@@ -427,34 +428,116 @@ final class GasTopologyCoordinator {
 	}
 
 	/**
-	 * Hands inventory that lost every topological destination to the cavities that still exist.
+	 * Hands inventory that lost every topological destination to a cavity it can actually reach.
 	 *
 	 * <p>A sealed shell cannot lose gas. When a node's cells end up carrying no air volume at all -
 	 * a pocket the carrier closed over, or a headspace fragment it crushed - the scan gives it no
-	 * destination, but `normalizeClosedCapacity` has already reassigned its capacity to the cavities
-	 * that remain. The inventory travels with that capacity, weighted the same way, instead of being
-	 * reported as lost.</p>
+	 * destination, but `normalizeClosedCapacity` has already settled its capacity onto the cavities
+	 * that remain. The inventory travels with that capacity instead of being reported as lost.</p>
 	 *
 	 * <p>This is deliberately not a judgement about what the node used to be. A bubble pinched off by
 	 * the carrier, a headspace split by a rising surface and a carrier void that flickered shut are
-	 * all the same event here: gas in a closed volume whose cavity is gone. Only conservation decides
-	 * where it goes.</p>
+	 * all the same event here: gas in a closed volume whose cavity is gone. Where it goes is decided
+	 * by reachability first and by conservation only when nothing is reachable.</p>
 	 */
 	private void retainClosedOrphans(
-			TreeMap<Long, Long> overlap, int previous, int sealed, double[] availableVolumes
+			TreeMap<Long, Long> overlap, int previous, int sealed, double[] availableVolumes,
+			int[] newMembership, int[] newLabels, double[] cellAvailableVolume
 	) {
+		boolean anyCapacity = false;
+		for (int node = 1; node <= sealed; node++) anyCapacity |= availableVolumes[node - 1] > 0.0;
 		boolean[] orphaned = new boolean[previous + 1];
 		for (int old = 1; old <= previous; old++) {
-			orphaned[old] = !domain.gasState.network.inventory(old).isEmpty()
-					&& overlap.subMap((long) old << 32, (long) (old + 1) << 32).isEmpty();
+			if (domain.gasState.network.inventory(old).isEmpty()) continue;
+			// Finite gas cannot stay in a cavity whose control volume is already gone, so a crushed
+			// destination is not a destination. Stranding the inventory there would make the next
+			// thermal remap a singular node instead of moving the gas the shell still owns.
+			overlap.subMap((long) old << 32, (long) (old + 1) << 32).keySet()
+					.removeIf(key -> !cavityHasVolume(key.longValue(), availableVolumes));
+			orphaned[old] = overlap.subMap((long) old << 32, (long) (old + 1) << 32).isEmpty();
 		}
 		for (int old = 1; old <= previous; old++) {
 			if (!orphaned[old]) continue;
+			Map<Integer, Long> reachable = nearestReachableCavities(
+					old, newMembership, newLabels, cellAvailableVolume, availableVolumes);
+			if (!reachable.isEmpty()) {
+				for (Map.Entry<Integer, Long> destination : reachable.entrySet()) {
+					overlap.merge(gasOverlapKey(old, destination.getKey()),
+							destination.getValue(), Math::addExact);
+				}
+				continue;
+			}
+			// Nothing is reachable through open geometry: the shell is the only owner left. A shell
+			// that ran out of gas space leaves every cavity at zero, and the inventory still has to
+			// land somewhere - dropping it would break the shell's conservation audit instead of
+			// reporting the over-filled state.
 			for (int node = 1; node <= sealed; node++) {
+				if (anyCapacity && !(availableVolumes[node - 1] > 0.0)) continue;
 				overlap.merge(gasOverlapKey(old, node),
 						Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])), Math::addExact);
 			}
 		}
+	}
+
+	private static boolean cavityHasVolume(long overlapKey, double[] availableVolumes) {
+		int node = (int) (overlapKey & 0xffffffffL);
+		return node >= 1 && availableVolumes[node - 1] > 0.0;
+	}
+
+	/**
+	 * Reports the cavities an orphaned node can still reach, nearest ring first.
+	 *
+	 * <p>Adjacent destinations are already covered by the disappearing-lineage pass, so a surviving
+	 * orphan starts from the cells it used to own and widens one face-neighbour ring at a time. The
+	 * first ring that owns any current gas receives the inventory: a pocket the carrier closed over
+	 * hands its gas to the cavity it is actually next to instead of to every cavity in the shell.
+	 * An orphan that reaches no cavity at all reports an empty map.</p>
+	 */
+	private Map<Integer, Long> nearestReachableCavities(
+			int old, int[] newMembership, int[] newLabels, double[] cellAvailableVolume,
+			double[] availableVolumes
+	) {
+		boolean[] seen = new boolean[domain.cellCount];
+		int[] queue = new int[domain.cellCount];
+		int tail = 0;
+		for (int cell = 0; cell < domain.cellCount; cell++) {
+			if (domain.gasState.cellLineageNodeId[cell] == old) {
+				seen[cell] = true;
+				queue[tail++] = cell;
+			}
+		}
+		int head = 0;
+		while (head < tail) {
+			TreeMap<Integer, Long> ring = new TreeMap<>();
+			int ringEnd = tail;
+			while (head < ringEnd) {
+				int cell = queue[head++];
+				int x = cell % domain.sizeX;
+				int yz = cell / domain.sizeX;
+				int y = yz % domain.sizeY;
+				int z = yz / domain.sizeY;
+				for (int axis = 0; axis < 3; axis++) for (int direction = -1; direction <= 1; direction += 2) {
+					int nx = x + (axis == 0 ? direction : 0);
+					int ny = y + (axis == 1 ? direction : 0);
+					int nz = z + (axis == 2 ? direction : 0);
+					if (nx < 0 || nx >= domain.sizeX || ny < 0 || ny >= domain.sizeY || nz < 0 || nz >= domain.sizeZ) continue;
+					if (domain.openFaceFromCell(cell, nx - x, ny - y, nz - z) <= 0.0F) continue;
+					int neighbor = domain.cellIndex(nx, ny, nz);
+					if (!(cellAvailableVolume[neighbor] > 0.0)) continue;
+					int destination = newMembership[neighbor] >= 0 ? newMembership[neighbor] : newLabels[neighbor];
+					if (destination > 0 && availableVolumes[destination - 1] > 0.0) {
+						ring.merge(destination,
+								Math.max(1L, AirNetwork.nanos(cellAvailableVolume[neighbor])), Long::sum);
+					}
+					if (!seen[neighbor]) {
+						seen[neighbor] = true;
+						queue[tail++] = neighbor;
+					}
+				}
+			}
+			if (!ring.isEmpty()) return ring;
+		}
+		return Map.of();
 	}
 
 	private static void addGasOverlapDestination(
