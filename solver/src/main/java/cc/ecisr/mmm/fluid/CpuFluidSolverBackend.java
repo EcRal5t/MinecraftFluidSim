@@ -9,6 +9,12 @@ import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 public final class CpuFluidSolverBackend implements FluidSolverBackend {
 	public static final String ID = "mmm:cpu-flip";
 	private static final int MAXIMUM_TIME_REFINEMENTS = 16;
+	/**
+	 * Mechanical substeps one complete candidate may spend in total. Every time refinement doubles
+	 * the substep count and the CFL count itself is unbounded, so counting attempts alone leaves a
+	 * synchronous request able to occupy the server thread for far longer than one step budget.
+	 */
+	public static final long MAXIMUM_CUMULATIVE_SUBSTEPS = 4096L;
 
 	@Override public String id() { return ID; }
 
@@ -16,12 +22,22 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 		if (request == null) throw new IllegalArgumentException("Step request is missing");
 		try {
 			int minimumSubsteps = 1;
+			long spentSubsteps = 0L;
 			for (int refinement = 0; ; refinement++) {
 				FluidDomain candidate = restoreCandidate(request.state());
 				candidate.minimumMechanicalSubsteps = minimumSubsteps;
 				MovingBodyFluidCoupling.Result movingBodyCoupling = MovingBodyFluidCoupling.Result.NONE;
 				for (var movingBody : request.movingBodies()) {
 					movingBodyCoupling = movingBodyCoupling.plus(candidate.applyMovingBodyCoupling(movingBody));
+				}
+				spentSubsteps = Math.addExact(spentSubsteps,
+						candidate.calculateSubsteps(candidate.config.timeStep()));
+				if (spentSubsteps > MAXIMUM_CUMULATIVE_SUBSTEPS) {
+					// The private candidate is still the only thing that exists here, so the whole
+					// request can be refused without leaving a half-stepped owner behind.
+					throw new FluidSolverBackend.MechanicalWorkBudgetExceededException(
+							"Mechanical candidate needs more than " + MAXIMUM_CUMULATIVE_SUBSTEPS
+									+ " cumulative substeps after " + refinement + " time refinement(s)");
 				}
 				FluidDomain.StepStats stats;
 				try {
@@ -66,7 +82,8 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 				|| rejected instanceof FluidDomain.ThermalPhaseBlockedException
 				|| rejected instanceof ChemicalReactionEngine.BudgetExceededException
 				|| rejected instanceof GranularPhaseTransferEngine.BlockedException
-				|| rejected instanceof GranularMechanics.ValidityExceededException) return rejected;
+				|| rejected instanceof GranularMechanics.ValidityExceededException
+				|| rejected instanceof FluidSolverBackend.MechanicalWorkBudgetExceededException) return rejected;
 		return new FluidSolverBackend.CandidateEvaluationRejectedException(
 				"Private " + axis + " candidate evaluation failed: " + rejected.getMessage(), rejected);
 	}

@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.simulation;
 
+import cc.ecisr.mmm.MmmMod;
 import cc.ecisr.mmm.model.region.RegionManifest;
 import cc.ecisr.mmm.model.region.RegionStateLayout;
 
@@ -155,9 +156,44 @@ final class RegionRepositoryAdapter {
 			throw new IOException("Unresolved world ownership state blocks checkpoint: " + ownershipLock);
 		}
 		long generation = GenerationSequence.next(region.checkpointGeneration(), "Region checkpoint");
-		long published = files.publish(capture(region, generation));
-		if (!region.recordPublishedCheckpoint(published)) throw new IOException("Published checkpoint was not accepted by the live region");
+		RegionState state = capture(region, generation);
+		return publishAndRecord(region, generation, state.manifest().checksum(),
+				() -> files.publish(state), "Published checkpoint was not accepted by the live region");
+	}
+
+	/**
+	 * Publishes HEAD and adopts the durable result even when the publish call itself fails.
+	 *
+	 * <p>HEAD moves before the store reads the generation back, so a readback failure can leave the
+	 * disk one generation ahead of the live region. Recording the durable generation keeps the next
+	 * capture aligned with its own published HEAD instead of colliding with it forever.</p>
+	 */
+	private long publishAndRecord(
+			FluidRegion region, long generation, long manifestChecksum,
+			Publisher publisher, String rejection
+	) throws IOException {
+		long published;
+		try {
+			published = publisher.publish();
+		} catch (IOException | RuntimeException failure) {
+			try {
+				long durableGeneration = files.committedGeneration(region.id());
+				if (durableGeneration != generation
+						|| files.committedManifestChecksum(region.id()) != manifestChecksum) throw failure;
+				published = durableGeneration;
+				MmmMod.LOGGER.warn("Region HEAD {} for region {} committed despite a post-publish exception",
+						published, region.id(), failure);
+			} catch (IOException | RuntimeException inspectionFailure) {
+				if (inspectionFailure != failure) failure.addSuppressed(inspectionFailure);
+				throw failure;
+			}
+		}
+		if (!region.recordPublishedCheckpoint(published)) throw new IOException(rejection);
 		return published;
+	}
+
+	private interface Publisher {
+		long publish() throws IOException;
 	}
 
 	long committedGeneration(UUID regionId) throws IOException {
@@ -251,9 +287,9 @@ final class RegionRepositoryAdapter {
 	}
 
 	long commitStagedCheckpoint(FluidRegion region, StagedCheckpoint staged) throws IOException {
-		long published = files.commit(staged.prepared(), (point, path) -> { });
-		if (!region.recordPublishedCheckpoint(published)) throw new IOException("Published staged checkpoint was not accepted");
-		return published;
+		return publishAndRecord(region, staged.prepared().generation(), staged.manifestChecksum(),
+				() -> files.commit(staged.prepared(), (point, path) -> { }),
+				"Published staged checkpoint was not accepted");
 	}
 
 	void abortStagedCheckpoint(StagedCheckpoint staged) throws IOException {

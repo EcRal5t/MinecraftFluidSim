@@ -26,6 +26,8 @@ public final class ContainerApplicationValidation {
 				ContainerApplicationValidation::responseLossRecovery);
 		run("unavailable actor retries only on its matching availability event",
 				ContainerApplicationValidation::unavailableActorRetry);
+		run("a WAL published before its store failure stays pending",
+				ContainerApplicationValidation::publishedWalStaysPending);
 		System.out.println("ContainerApplicationValidation passed " + passed + " scenarios");
 	}
 
@@ -131,6 +133,32 @@ public final class ContainerApplicationValidation {
 				"matching player event did not converge the actor");
 	}
 
+	/**
+	 * A store can publish the WAL file and still fail its own durability step. The coordinator must
+	 * not read that failure as "nothing was written": the transaction stays indexed so the next
+	 * recovery pass reads the WAL back from disk instead of letting further transfers proceed.
+	 */
+	private static void publishedWalStaysPending() {
+		ContainerTransferJournal journal = committedJournal(ContainerTransferActor.player(
+				UUID.randomUUID(), ContainerTransferActor.Hand.MAIN));
+		FakeStore store = new FakeStore();
+		store.failWriteAfterPublish = true;
+		FakeRecoveryPort port = new FakeRecoveryPort(journal.targetGeneration(),
+				journal.targetManifestChecksum(), CrossDomainRecovery.ExternalTruth.BEFORE);
+		port.store = store;
+		ContainerRecoveryCoordinator recovery = new ContainerRecoveryCoordinator(store, port, Map.of(), Set.of());
+		check(!recovery.hasPending(journal.regionId()), "an empty index reported a pending WAL");
+		try {
+			recovery.write(journal);
+			check(false, "a store write failure was swallowed");
+		} catch (IOException expected) {
+			check(store.journals.containsKey(journal.transactionId()),
+					"the injected store did not publish before failing");
+		}
+		check(recovery.hasPending(journal.regionId()) && recovery.hasAnyLock(),
+				"a WAL that may already be published was dropped from the online index");
+	}
+
 	private static ContainerTransferUseCase.Command command(String itemProfile) {
 		ContainerTransferJournal.ItemFingerprint before = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET,
@@ -215,9 +243,14 @@ public final class ContainerApplicationValidation {
 
 	private static final class FakeStore implements ContainerRecoveryCoordinator.JournalStore {
 		private final Map<UUID, ContainerTransferJournal> journals = new HashMap<>();
+		private boolean failWriteAfterPublish;
 
+		private FakeStore() { }
 		private FakeStore(ContainerTransferJournal journal) { journals.put(journal.transactionId(), journal); }
-		@Override public void write(ContainerTransferJournal journal) { journals.put(journal.transactionId(), journal); }
+		@Override public void write(ContainerTransferJournal journal) throws IOException {
+			journals.put(journal.transactionId(), journal);
+			if (failWriteAfterPublish) throw new IOException("WAL published but the directory sync failed");
+		}
 		@Override public void delete(UUID transactionId) { journals.remove(transactionId); }
 	}
 

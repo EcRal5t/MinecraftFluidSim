@@ -15,7 +15,7 @@ public sealed interface TransferQuantity permits TransferQuantity.Liquid, Transf
 		}
 	}
 
-	/** Granular occupied volume in 2^-40 block-volume quanta. */
+	/** Granular occupied volume in 2^-27 block-volume quanta. */
 	record Granular(long solidVolumeQuanta) implements TransferQuantity {
 		public Granular {
 			if (solidVolumeQuanta <= 0L) {

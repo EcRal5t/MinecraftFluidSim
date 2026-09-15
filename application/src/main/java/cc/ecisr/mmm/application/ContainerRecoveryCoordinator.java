@@ -57,13 +57,25 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 
 	public boolean hasStoreIssues() { return !storeIssues.isEmpty(); }
 
+	/**
+	 * Stages one WAL and keeps it indexed whatever the store reports.
+	 *
+	 * <p>The store publishes the WAL file and only then completes its own durability step, so a
+	 * failure on that step cannot mean "nothing was written". Indexing the transaction in the
+	 * failure case too keeps {@code hasPending} honest: the recovery pass re-reads the WAL from
+	 * disk and decides what actually happened, instead of letting the next operation run while a
+	 * published WAL is invisible to the online index.</p>
+	 */
 	@Override
 	public void write(ContainerTransferJournal journal) throws IOException {
 		Objects.requireNonNull(journal, "journal");
-		store.write(journal);
-		indexed.put(journal.transactionId(), journal);
-		audited.remove(journal.transactionId());
-		awaitingActors.remove(journal.transactionId());
+		try {
+			store.write(journal);
+		} finally {
+			indexed.put(journal.transactionId(), journal);
+			audited.remove(journal.transactionId());
+			awaitingActors.remove(journal.transactionId());
+		}
 	}
 
 	@Override
