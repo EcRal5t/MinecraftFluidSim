@@ -14,8 +14,6 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -54,19 +52,33 @@ final class ThermalBoundaryResolver {
 		if (level == null || region == null || cellsPerBlock <= 0
 				|| !region.solverLoaded() || !region.domain().hasThermalState()) return false;
 		int sizeX = region.domain().sizeX(), sizeY = region.domain().sizeY(), sizeZ = region.domain().sizeZ();
+		return region.domain().replaceThermalBoundaryTemperatures(sampleField(region.origin(), sizeX, sizeY, sizeZ,
+				cellsPerBlock, position -> surfaceTemperature(level, position)));
+	}
+
+	static double[] sampleField(BlockPos origin, int sizeX, int sizeY, int sizeZ, int cellsPerBlock,
+			java.util.function.ToDoubleFunction<BlockPos> source) {
 		double[] temperatures = new double[Math.multiplyExact(Math.multiplyExact(
 				Math.multiplyExact(sizeX, sizeY), sizeZ), 6)];
-		Arrays.fill(temperatures, Double.NaN);
-		HashMap<BlockPos, Double> cache = new HashMap<>();
+		int blocksX = sizeX / cellsPerBlock + 2, blocksY = sizeY / cellsPerBlock + 2;
+		int blocksZ = sizeZ / cellsPerBlock + 2;
+		double[] cache = new double[Math.multiplyExact(Math.multiplyExact(blocksX, blocksY), blocksZ)];
+		boolean[] sampled = new boolean[cache.length];
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int cell = (z * sizeY + y) * sizeX + x;
 			for (int direction = 0; direction < 6; direction++) {
-				BlockPos target = targetBlock(region.origin(), x, y, z, direction, cellsPerBlock);
-				double temperature = cache.computeIfAbsent(target, pos -> surfaceTemperature(level, pos));
-				if (!Double.isNaN(temperature)) temperatures[cell * 6 + direction] = temperature;
+				int bx = Math.floorDiv(x + (direction == 0 ? -1 : direction == 1 ? 1 : 0), cellsPerBlock);
+				int by = Math.floorDiv(y + (direction == 2 ? -1 : direction == 3 ? 1 : 0), cellsPerBlock);
+				int bz = Math.floorDiv(z + (direction == 4 ? -1 : direction == 5 ? 1 : 0), cellsPerBlock);
+				int block = ((bz + 1) * blocksY + by + 1) * blocksX + bx + 1;
+				if (!sampled[block]) {
+					cache[block] = source.applyAsDouble(origin.offset(bx, by, bz));
+					sampled[block] = true;
+				}
+				temperatures[cell * 6 + direction] = cache[block];
 			}
 		}
-		return region.domain().replaceThermalBoundaryTemperatures(temperatures);
+		return temperatures;
 	}
 
 	private double surfaceTemperature(ServerLevel level, BlockPos position) {
@@ -96,15 +108,6 @@ final class ThermalBoundaryResolver {
 			result = target.definition();
 		}
 		return result;
-	}
-
-	private static BlockPos targetBlock(
-			BlockPos origin, int x, int y, int z, int direction, int cellsPerBlock
-	) {
-		int blockX = Math.floorDiv(x + (direction == 0 ? -1 : direction == 1 ? 1 : 0), cellsPerBlock);
-		int blockY = Math.floorDiv(y + (direction == 2 ? -1 : direction == 3 ? 1 : 0), cellsPerBlock);
-		int blockZ = Math.floorDiv(z + (direction == 4 ? -1 : direction == 5 ? 1 : 0), cellsPerBlock);
-		return origin.offset(blockX, blockY, blockZ);
 	}
 
 	private record TagTarget(TagKey<Block> tag, ThermalBoundaryDefinition definition) { }

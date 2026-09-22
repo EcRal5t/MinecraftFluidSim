@@ -25,6 +25,7 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 		}
 		byte[] masks = new byte[Math.multiplyExact(Math.multiplyExact(
 				region.cellsX(), region.cellsY()), region.cellsZ())];
+		var shapeMasks = new java.util.IdentityHashMap<VoxelShape, byte[]>();
 		for (int blockZ = 0; blockZ < region.blocksZ(); blockZ++) {
 			for (int blockY = 0; blockY < region.blocksY(); blockY++) {
 				for (int blockX = 0; blockX < region.blocksX(); blockX++) {
@@ -34,6 +35,8 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 					BlockState state = interior ? level.getBlockState(position) : null;
 					boolean full = !interior || state.isCollisionShapeFullBlock(level, position);
 					VoxelShape shape = full ? Shapes.block() : state.getCollisionShape(level, position);
+					byte[] blockMasks = full ? null : shapeMasks.computeIfAbsent(shape,
+							value -> sampleBlockMasks(value, region.cellsPerBlock()));
 					for (int localZ = 0; localZ < region.cellsPerBlock(); localZ++) {
 						for (int localY = 0; localY < region.cellsPerBlock(); localY++) {
 							for (int localX = 0; localX < region.cellsPerBlock(); localX++) {
@@ -41,8 +44,8 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 								int cellY = blockY * region.cellsPerBlock() + localY;
 								int cellZ = blockZ * region.cellsPerBlock() + localZ;
 								masks[(cellZ * region.cellsY() + cellY) * region.cellsX() + cellX] =
-										(byte) (full ? 0xff : sampleCutCellMask(shape, localX, localY, localZ,
-												region.cellsPerBlock(), SAMPLE_INSET));
+										full ? (byte) 0xff : blockMasks[(localZ * region.cellsPerBlock() + localY)
+												* region.cellsPerBlock() + localX];
 							}
 						}
 					}
@@ -50,6 +53,15 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 			}
 		}
 		return new CollisionField(region.cellsX(), region.cellsY(), region.cellsZ(), masks);
+	}
+
+	static byte[] sampleBlockMasks(VoxelShape shape, int cellsPerBlock) {
+		byte[] masks = new byte[Math.multiplyExact(Math.multiplyExact(cellsPerBlock, cellsPerBlock), cellsPerBlock)];
+		for (int z = 0; z < cellsPerBlock; z++) for (int y = 0; y < cellsPerBlock; y++) {
+			for (int x = 0; x < cellsPerBlock; x++) masks[(z * cellsPerBlock + y) * cellsPerBlock + x] =
+					(byte) sampleCutCellMask(shape, x, y, z, cellsPerBlock, SAMPLE_INSET);
+		}
+		return masks;
 	}
 
 	static int sampleCutCellMask(

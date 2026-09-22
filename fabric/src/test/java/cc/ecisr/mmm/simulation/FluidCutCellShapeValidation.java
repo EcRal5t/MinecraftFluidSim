@@ -17,7 +17,51 @@ public final class FluidCutCellShapeValidation {
 		stairCornerProducesFractionalSolverCells();
 		thinPaneRemainsAClosedConservativeBarrier();
 		documentedStairPlacementRestoresExactLedger();
+		blockSamplingMatchesIndividualCells();
+		thermalFacesSampleEachWorldBlockOnce();
 		System.out.println("Minecraft cut-cell shape validation passed");
+	}
+
+	private static void blockSamplingMatchesIndividualCells() {
+		for (VoxelShape shape : new VoxelShape[] {Shapes.empty(), Shapes.block(),
+				Shapes.box(0.25, 0, 0.25, 0.75, 1, 0.75)}) {
+			for (int subdivision = 1; subdivision <= 3; subdivision++) {
+				byte[] masks = MinecraftCollisionWorldPort.sampleBlockMasks(shape, subdivision);
+				for (int z = 0; z < subdivision; z++) for (int y = 0; y < subdivision; y++) {
+					for (int x = 0; x < subdivision; x++) check(Byte.toUnsignedInt(masks[(z * subdivision + y) * subdivision + x])
+							== MinecraftCollisionWorldPort.sampleCutCellMask(shape, x, y, z, subdivision, INSET),
+							"block sampling preserves each cut-cell mask");
+				}
+			}
+		}
+	}
+
+	private static void thermalFacesSampleEachWorldBlockOnce() {
+		var origin = new net.minecraft.core.BlockPos(-13, 4, -17);
+		for (int subdivision = 1; subdivision <= 3; subdivision++) {
+			var visits = new java.util.HashSet<net.minecraft.core.BlockPos>();
+			double[] field = ThermalBoundaryResolver.sampleField(origin, 5, 3, 7, subdivision, position -> {
+				check(visits.add(position), "each world temperature is read once per capture");
+				return temperatureAt(position);
+			});
+			int[][] directions = {{-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1}};
+			var expectedVisits = new java.util.HashSet<net.minecraft.core.BlockPos>();
+			for (int z = 0; z < 7; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 5; x++) {
+				for (int direction = 0; direction < 6; direction++) {
+					int[] offset = directions[direction];
+					var target = origin.offset(Math.floorDiv(x + offset[0], subdivision),
+							Math.floorDiv(y + offset[1], subdivision), Math.floorDiv(z + offset[2], subdivision));
+					expectedVisits.add(target);
+					check(Double.doubleToLongBits(field[((z * 3 + y) * 5 + x) * 6 + direction])
+							== Double.doubleToLongBits(temperatureAt(target)), "thermal face keeps its exact source block");
+				}
+			}
+			check(visits.equals(expectedVisits), "world sampling reads exactly the face targets");
+		}
+	}
+
+	private static double temperatureAt(net.minecraft.core.BlockPos position) {
+		return position.getX() % 2 == 0 ? Double.NaN : 300 + position.getX() + 2 * position.getY() + position.getZ();
 	}
 
 	private static void halfSlabPreservesSolverAlignedFaces() {
