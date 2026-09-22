@@ -64,6 +64,21 @@ public final class M7ChemicalTransportValidation {
 				"maximum default-domain chemical heap model exceeds 64 MiB: " + residentBytes);
 		check(maximum.pool().handleCapacity() == 73_729, "packed handle cap is not reservedMarkerCapacity + 1");
 		check(maximum.pool().packedEntryCapacity() == 16 * 73_729, "packed entry cap is not 16 * handle cap");
+		check(maximum.pool().cpuBytes() < 32_768, "empty mixture pool allocates only its initial storage");
+		var growing = new cc.ecisr.mmm.chemistry.PackedChemicalMixturePool(130);
+		var record = new ChemicalMixtureRecord(new int[] {0}, new long[] {1}, 0);
+		for (int handle = 1; handle <= 130; handle++) {
+			check(growing.create(record) == handle, "pool growth preserves handle order");
+		}
+		try { growing.create(record); throw new AssertionError("full pool accepted another handle"); }
+		catch (cc.ecisr.mmm.chemistry.PackedChemicalMixturePool.PoolBudgetExceededException expected) { }
+		for (int handle = 1; handle <= 130; handle++) {
+			check(growing.record(handle).equals(record), "pool growth preserves records");
+			growing.release(handle);
+		}
+		for (int handle = 130; handle >= 1; handle--) {
+			check(growing.create(record) == handle, "released handles retain stack order");
+		}
 		long[] equal = BinaryVolumeAllocator.allocate(5L, new float[]{0.125F, 0.125F}, new int[]{7, 3});
 		check(Arrays.equals(equal, new long[]{2L, 3L}), "largest remainder did not use marker ordinal tie-break");
 		long[] unequal = BinaryVolumeAllocator.allocate(10L, new float[]{0.1F, 0.2F, 0.3F}, new int[]{0, 1, 2});

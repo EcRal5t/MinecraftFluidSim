@@ -5,30 +5,34 @@ import java.util.Arrays;
 /** Primitive fixed-stride packed records. Every live marker owns one unique nonzero handle. */
 public final class PackedChemicalMixturePool {
 	private final int handleCapacity;
-	private final byte[] entryCount;
-	private final short[] species;
-	private final long[] amounts;
-	private final long[] residualBits;
-	private final ChemicalMixtureRecord[] records;
-	private final int[] freeHandles;
+	private byte[] entryCount;
+	private short[] species;
+	private long[] amounts;
+	private long[] residualBits;
+	private ChemicalMixtureRecord[] records;
+	private int[] freeHandles;
+	private int nextHandle = 1;
 	private int freeCount;
 	private int liveCount;
 
 	public PackedChemicalMixturePool(int reservedMarkerCapacity) {
 		if (reservedMarkerCapacity <= 0) throw new IllegalArgumentException("Marker capacity must be positive");
 		this.handleCapacity = Math.addExact(reservedMarkerCapacity, 1);
-		this.entryCount = new byte[handleCapacity];
-		this.species = new short[Math.multiplyExact(handleCapacity, ChemicalLimits.MAX_SPECIES_PER_PARCEL)];
+		Math.multiplyExact(handleCapacity, ChemicalLimits.MAX_SPECIES_PER_PARCEL);
+		int allocated = Math.min(handleCapacity, 65);
+		this.entryCount = new byte[allocated];
+		this.species = new short[allocated * ChemicalLimits.MAX_SPECIES_PER_PARCEL];
 		this.amounts = new long[species.length];
-		this.residualBits = new long[handleCapacity];
-		this.records = new ChemicalMixtureRecord[handleCapacity];
-		this.freeHandles = new int[reservedMarkerCapacity];
-		for (int handle = reservedMarkerCapacity; handle >= 1; handle--) freeHandles[freeCount++] = handle;
+		this.residualBits = new long[allocated];
+		this.records = new ChemicalMixtureRecord[allocated];
+		this.freeHandles = new int[allocated - 1];
 	}
 
 	public int create(ChemicalMixtureRecord record) {
-		if (freeCount == 0) throw new PoolBudgetExceededException("Live mixture handle budget exceeded");
-		int handle = freeHandles[--freeCount];
+		validate(record);
+		if (liveCount == handleCapacity - 1) throw new PoolBudgetExceededException("Live mixture handle budget exceeded");
+		int handle = freeCount > 0 ? freeHandles[--freeCount] : nextHandle++;
+		ensureAllocated(handle);
 		write(handle, record);
 		liveCount++;
 		return handle;
@@ -36,6 +40,7 @@ public final class PackedChemicalMixturePool {
 
 	public void overwrite(int handle, ChemicalMixtureRecord record) {
 		requireLive(handle);
+		validate(record);
 		write(handle, record);
 	}
 
@@ -68,24 +73,42 @@ public final class PackedChemicalMixturePool {
 	}
 
 	public boolean isLive(int handle) {
-		return handle > 0 && handle < handleCapacity && entryCount[handle] != 0;
+		return handle > 0 && handle < entryCount.length && entryCount[handle] != 0;
 	}
 	public int liveCount() { return liveCount; }
 	public int handleCapacity() { return handleCapacity; }
-	public int packedEntryCapacity() { return species.length; }
+	public int packedEntryCapacity() { return handleCapacity * ChemicalLimits.MAX_SPECIES_PER_PARCEL; }
 	public long cpuBytes() {
 		return entryCount.length + (long) species.length * Short.BYTES + (long) amounts.length * Long.BYTES
 				+ (long) residualBits.length * Long.BYTES + (long) records.length * Long.BYTES
 				+ (long) freeHandles.length * Integer.BYTES;
 	}
 
-	private void write(int handle, ChemicalMixtureRecord record) {
+	private static void validate(ChemicalMixtureRecord record) {
 		if (record == null) throw new IllegalArgumentException("Chemical mixture is missing");
+		for (int entry = 0; entry < record.entryCount(); entry++) {
+			if (record.speciesHandle(entry) >= ChemicalLimits.MAX_SPECIES) {
+				throw new IllegalArgumentException("Species handle is over budget");
+			}
+		}
+	}
+
+	private void ensureAllocated(int handle) {
+		if (handle < entryCount.length) return;
+		int capacity = (int) Math.min(handleCapacity, (long) entryCount.length * 2);
+		entryCount = Arrays.copyOf(entryCount, capacity);
+		species = Arrays.copyOf(species, capacity * ChemicalLimits.MAX_SPECIES_PER_PARCEL);
+		amounts = Arrays.copyOf(amounts, species.length);
+		residualBits = Arrays.copyOf(residualBits, capacity);
+		records = Arrays.copyOf(records, capacity);
+		freeHandles = Arrays.copyOf(freeHandles, capacity - 1);
+	}
+
+	private void write(int handle, ChemicalMixtureRecord record) {
 		int base = handle * ChemicalLimits.MAX_SPECIES_PER_PARCEL;
 		int previous = Byte.toUnsignedInt(entryCount[handle]);
 		for (int entry = 0; entry < record.entryCount(); entry++) {
 			int speciesHandle = record.speciesHandle(entry);
-			if (speciesHandle >= ChemicalLimits.MAX_SPECIES) throw new IllegalArgumentException("Species handle is over budget");
 			species[base + entry] = (short) speciesHandle;
 			amounts[base + entry] = record.amountAt(entry);
 		}

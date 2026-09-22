@@ -228,6 +228,17 @@ public final class M8GranularValidation {
 						BuiltinChemicalDefinitions.NA_PLUS, 640L,
 						BuiltinChemicalDefinitions.CL_MINUS, 640L), 0.0);
 		SolidCompositionPool rollbackPool = new SolidCompositionPool(BuiltinChemicalDefinitions.REGISTRY, 4);
+		SolidCompositionPool growing = new SolidCompositionPool(BuiltinChemicalDefinitions.REGISTRY, 130);
+		for (int handle = 1; handle <= 130; handle++) require(growing.create(activeRecord) == handle,
+				"solid composition growth preserves handle order");
+		require(!growing.hasCapacity(1), "solid composition pool retains its hard budget");
+		for (int handle = 1; handle <= 130; handle++) {
+			require(growing.record(handle).equals(activeRecord), "solid composition growth preserves records");
+			growing.release(handle);
+		}
+		require(growing.hasCapacity(130), "releases restore the complete budget");
+		for (int handle = 130; handle >= 1; handle--) require(growing.create(activeRecord) == handle,
+				"solid composition releases retain stack order");
 		int firstReserved = rollbackPool.create(activeRecord);
 		int secondReserved = rollbackPool.create(activeRecord);
 		rollbackPool.release(secondReserved);

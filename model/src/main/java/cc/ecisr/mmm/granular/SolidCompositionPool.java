@@ -7,10 +7,12 @@ import java.util.Arrays;
 /** Fixed-budget primitive pool. Every reactive parcel/deposit group owns one unique live handle. */
 public final class SolidCompositionPool {
 	private final ChemicalRegistry registry;
-	private final byte[] entryCount;
-	private final short[] species;
-	private final long[] amounts, residualBits;
-	private final int[] freeHandles;
+	private final int capacity;
+	private byte[] entryCount;
+	private short[] species;
+	private long[] amounts, residualBits;
+	private int[] freeHandles;
+	private int nextHandle = 1;
 	private int freeCount, liveCount;
 
 	public SolidCompositionPool(ChemicalRegistry registry, int capacity) {
@@ -20,22 +22,24 @@ public final class SolidCompositionPool {
 			throw new IllegalArgumentException("Solid composition capacity is invalid");
 		}
 		this.registry = registry;
-		int handleCapacity = Math.addExact(capacity, 1);
+		this.capacity = capacity;
+		int handleCapacity = Math.min(capacity + 1, 65);
 		entryCount = new byte[handleCapacity];
 		species = new short[Math.multiplyExact(handleCapacity, GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES)];
-		amounts = new long[species.length]; residualBits = new long[handleCapacity]; freeHandles = new int[capacity];
-		for (int handle = capacity; handle >= 1; handle--) freeHandles[freeCount++] = handle;
+		amounts = new long[species.length]; residualBits = new long[handleCapacity]; freeHandles = new int[handleCapacity - 1];
 	}
 
 	public ChemicalRegistry registry() { return registry; }
 	public int liveCount() { return liveCount; }
-	public boolean hasCapacity(int additional) { return additional >= 0 && additional <= freeCount; }
+	public boolean hasCapacity(int additional) { return additional >= 0 && additional <= capacity - liveCount; }
 	public boolean isLive(int handle) { return handle > 0 && handle < entryCount.length && entryCount[handle] != 0; }
 
 	public int create(SolidCompositionRecord record) {
 		validate(record);
-		if (freeCount == 0) throw new BudgetExceededException("Solid composition handle budget exceeded");
-		int handle = freeHandles[--freeCount]; write(handle, record); liveCount++; return handle;
+		if (!hasCapacity(1)) throw new BudgetExceededException("Solid composition handle budget exceeded");
+		int handle = freeCount > 0 ? freeHandles[--freeCount] : nextHandle++;
+		ensureAllocated(handle);
+		write(handle, record); liveCount++; return handle;
 	}
 
 	public SolidCompositionRecord record(int handle) {
@@ -79,9 +83,20 @@ public final class SolidCompositionPool {
 	private void validate(SolidCompositionRecord record) {
 		if (record == null) throw new IllegalArgumentException("Solid composition is missing");
 		for (int entry = 0; entry < record.entryCount(); entry++) registry.species(record.speciesHandle(entry));
-		if (!(Double.isFinite(record.totalMass(registry)) && record.totalMass(registry) > 0.0)) {
+		double mass = record.totalMass(registry);
+		if (!(Double.isFinite(mass) && mass > 0.0)) {
 			throw new IllegalArgumentException("Solid composition mass is non-positive");
 		}
+	}
+
+	private void ensureAllocated(int handle) {
+		if (handle < entryCount.length) return;
+		int allocated = Math.min(capacity + 1, entryCount.length * 2);
+		entryCount = Arrays.copyOf(entryCount, allocated);
+		species = Arrays.copyOf(species, allocated * GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES);
+		amounts = Arrays.copyOf(amounts, species.length);
+		residualBits = Arrays.copyOf(residualBits, allocated);
+		freeHandles = Arrays.copyOf(freeHandles, allocated - 1);
 	}
 
 	private void write(int handle, SolidCompositionRecord record) {
