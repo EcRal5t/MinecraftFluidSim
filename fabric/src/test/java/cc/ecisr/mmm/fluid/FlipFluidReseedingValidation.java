@@ -190,8 +190,12 @@ public final class FlipFluidReseedingValidation {
 		double exactVolume = domain.totalVolumeExact();
 		long merges = 0, splits = 0, budgetSkipped = 0, geometrySkipped = 0, conservationSkipped = 0;
 		double maximumLedgerError = 0.0;
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		for (int step = 0; step < 5_000; step++) {
-			FluidDomain.StepStats stats = domain.step();
+			var candidate = backend.evaluate(new FluidStepRequest(step,
+					domain.captureAuthoritativeState(), java.util.List.of(), false, 0));
+			FluidDomain.StepStats stats = candidate.stats();
+			domain = candidate.claimPreparedCpuDomain();
 			merges += stats.reseededMerges();
 			splits += stats.reseededSplits();
 			budgetSkipped += stats.reseedBudgetSkipped();
@@ -264,8 +268,12 @@ public final class FlipFluidReseedingValidation {
 		int initialParticleCount = domain.particleCount();
 		long merges = 0, splits = 0, budgetSkipped = 0, geometrySkipped = 0, conservationSkipped = 0;
 		double maximumLedgerError = 0.0;
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		for (int step = 0; step < 5_000; step++) {
-			FluidDomain.StepStats stats = domain.step();
+			var candidate = backend.evaluate(new FluidStepRequest(step,
+					domain.captureAuthoritativeState(), java.util.List.of(), false, 0));
+			FluidDomain.StepStats stats = candidate.stats();
+			domain = candidate.claimPreparedCpuDomain();
 			merges += stats.reseededMerges();
 			splits += stats.reseededSplits();
 			budgetSkipped += stats.reseedBudgetSkipped();
