@@ -11,7 +11,7 @@ final class ThermalReferenceEnergyCache {
 	private record Entry(ThermalSpeciesOffset offset, long quanta, double energy) { }
 
 	double energy(ThermalSpeciesOffset offset, long quanta) {
-		long hash = quanta ^ ((long) offset.id().hashCode() << 32);
+		long hash = quanta ^ ((long) System.identityHashCode(offset) << 32);
 		hash = (hash ^ (hash >>> 30)) * 0xbf58476d1ce4e5b9L;
 		hash = (hash ^ (hash >>> 27)) * 0x94d049bb133111ebL;
 		int slot = (int) (hash ^ (hash >>> 31)) & (CAPACITY - 1);
