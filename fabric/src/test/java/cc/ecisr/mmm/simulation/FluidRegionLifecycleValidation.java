@@ -56,6 +56,7 @@ public final class FluidRegionLifecycleValidation {
 		validateAvailabilityPreservesRunIntent();
 		validateHydrostaticSleepAndWake();
 		validateHydrostaticSleepPreservesMarkerLedger();
+		validateInternalConductionWakesMotion();
 		validateBackendCandidateAdoption();
 		validateLiveCaptureFailureIsTyped();
 		validateApplicationCheckpointResults();
@@ -302,10 +303,39 @@ public final class FluidRegionLifecycleValidation {
 		double volume = domain.totalVolumeExact();
 		double mass = domain.totalMass();
 		int markers = domain.particleCount();
-		domain.commitHydrostaticSleep();
-		require(domain.maximumParticleSpeed() == 0.0F, "hydrostatic sleep left marker momentum");
+		float[] velocities = domain.exportParticleState().copyParticleVelocities();
+		FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO,
+				domain, domain.maximumParticleCount());
+		region.setPaused(false);
+		require(region.lifecycle().observeCompletedStep(true, 1), "sleep fixture did not enter sleep");
+		require(java.util.Arrays.equals(velocities, region.domain().exportParticleState().copyParticleVelocities()),
+				"scheduling sleep changed marker momentum and kinetic energy");
+		region.wakeForActivity();
+		require(java.util.Arrays.equals(velocities, region.domain().exportParticleState().copyParticleVelocities()),
+				"waking changed retained marker momentum");
 		require(domain.particleCount() == markers && domain.totalVolumeExact() == volume && domain.totalMass() == mass,
 				"hydrostatic sleep changed marker ledgers");
+	}
+
+	private static void validateInternalConductionWakesMotion() {
+		FluidDomain domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO,
+				domain, domain.maximumParticleCount());
+		region.setPaused(false);
+		region.enableThermalActivity();
+		require(region.lifecycle().observeCompletedStep(true, 1), "conduction fixture did not sleep");
+		var zero = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		var quiet = new ThermalActivity.Observation(new cc.ecisr.mmm.thermal.ThermalTransport.Stats(
+				1, 1, 0.0, 0.0, zero, zero), false, false, false, false, false, false, true);
+		require(!MinecraftRegionTick.applyThermalObservation(region, quiet) && !region.canStep(),
+				"zero internal heat transfer woke mechanics");
+		var conducting = new ThermalActivity.Observation(new cc.ecisr.mmm.thermal.ThermalTransport.Stats(
+				1, 1, 1.0e-12, 1.0e-8, zero, zero), false, false, false, false, false, false, true);
+		require(MinecraftRegionTick.applyThermalObservation(region, conducting) && region.canStep(),
+				"internal conduction without external energy exchange failed to wake mechanics");
+		region.setPaused(true);
+		MinecraftRegionTick.applyThermalObservation(region, conducting);
+		require(!region.canStep(), "thermal activity overrode the operator's pause");
 	}
 
 	private static void validatePacingAndOperatorPause() {

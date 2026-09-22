@@ -46,6 +46,9 @@ public final class GasPressureBoundary {
 	public long ventedNanos() { return domain.gasState.network.ventedNanos(); }
 	public long drawnFromAmbientNanos() { return domain.gasState.network.drawnFromAmbientNanos(); }
 	public int edgeCount() { return domain.gasState.network.edgeCount(); }
+	public boolean hasPressureDrivenFlow() {
+		return domain.gasState.network.hasPressureDrivenFlow(this::nodeGaugePressurePa);
+	}
 	public GasAuditLedger externalSource() { return domain.gasState.network.externalSource(); }
 	public GasAuditLedger escapedSink() { return domain.gasState.network.escapedSink(); }
 	public cc.ecisr.mmm.units.SignedDyadic massRoundoff() { return domain.gasState.network.massRoundoff(); }

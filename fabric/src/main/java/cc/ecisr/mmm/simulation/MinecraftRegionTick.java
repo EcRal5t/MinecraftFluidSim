@@ -117,23 +117,21 @@ final class MinecraftRegionTick {
 			if (!blockStepFailure(level, region, failure)) throw failure;
 			return;
 		}
+		boolean thermalRequiresMotion = false;
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
-			observeThermalStep(region, thermalBefore, motionStepDue,
+			thermalRequiresMotion = observeThermalStep(region, thermalBefore, motionStepDue,
 					completedThermalAxis, completedGranularTransition);
 		}
 		FluidDomain.StepStats stats = region.lastStats();
 		float residualLimit = Math.max(1.0E-5F, region.domain().config().pressureTolerance() * 4.0F);
-		boolean hydrostaticCandidate = !collisionsChanged && affectedEntities == 0
+		boolean hydrostaticCandidate = !collisionsChanged && affectedEntities == 0 && !thermalRequiresMotion
+				&& !region.domain().gasBoundary().hasPressureDrivenFlow()
 				&& region.domain().maximumParticleSpeed() <= HYDROSTATIC_MAX_MARKER_SPEED
 				&& region.domain().granularReadyForHydrostaticSleep()
 				&& stats != null && stats.pressureResidual() <= residualLimit;
 		if (motionStepDue && region.lifecycle().observeCompletedStep(hydrostaticCandidate, HYDROSTATIC_QUIET_STEPS)) {
 			float exactVolume = region.domain().totalVolume();
 			int markerCount = region.domain().particleCount();
-			region.domain().commitHydrostaticSleep();
-			if (markerCount != region.domain().particleCount() || exactVolume != region.domain().totalVolume()) {
-				throw new IllegalStateException("Hydrostatic sleep changed the exact marker ledger for region " + region.id());
-			}
 			MmmMod.LOGGER.info("Region {} entered hydrostatic sleep with {} markers and {} exact cell volume",
 					region.id(), markerCount, exactVolume);
 		}
@@ -310,7 +308,7 @@ final class MinecraftRegionTick {
 		return false;
 	}
 
-	private static void observeThermalStep(
+	private static boolean observeThermalStep(
 			FluidRegion region, ThermalAuditLedger before, boolean carrierMotion,
 			FluidDomain.ThermalAxisStats thermalAxis,
 			GranularDepositDynamics.Stats granularTransition
@@ -331,13 +329,18 @@ final class MinecraftRegionTick {
 				|| thermalAxis.gasPhase().operations() != 0;
 		boolean auditClosed = domain.exactInternalEnergy().equals(after.expectedInventory());
 		boolean pendingVolumeOrWork = domain.hasPendingPhaseVolumeWork();
-		region.observeThermal(new ThermalActivity.Observation(thermalAxis.transport(),
+		ThermalActivity.Observation observation = new ThermalActivity.Observation(thermalAxis.transport(),
 				chemistryDirty, granularDirty, phaseDirty, gasActivity, carrierMotion,
-				pendingVolumeOrWork, auditClosed), THERMAL_QUIET_STEPS);
-		if (!carrierMotion && (chemistryDirty || granularDirty || phaseDirty || gasActivity
-				|| pendingVolumeOrWork)) {
+				pendingVolumeOrWork, auditClosed);
+		return applyThermalObservation(region, observation);
+	}
+
+	static boolean applyThermalObservation(FluidRegion region, ThermalActivity.Observation observation) {
+		region.observeThermal(observation, THERMAL_QUIET_STEPS);
+		if (!observation.carrierMotion() && observation.requiresMotion()) {
 			region.wakeForActivity();
 		}
+		return observation.requiresMotion();
 	}
 
 	private static void applyRuntime(

@@ -33,6 +33,13 @@ public final class ThermalActivity {
 					&& !chemistryDirty && !granularDirty && !phaseDirty && !gasActivity && !carrierMotion
 					&& !pendingVolumeOrWork && auditClosed;
 		}
+
+		/** Internal conduction changes buoyancy and gas pressure even when external energy ledgers are unchanged. */
+		boolean requiresMotion() {
+			return transport.maximumAbsoluteTransferEu() != 0.0 || transport.maximumTemperatureChangeK() != 0.0
+					|| !transport.reservoirExchange().equals(SignedDyadic.ZERO)
+					|| chemistryDirty || granularDirty || phaseDirty || gasActivity || pendingVolumeOrWork;
+		}
 	}
 
 	private State state = State.ACTIVE;

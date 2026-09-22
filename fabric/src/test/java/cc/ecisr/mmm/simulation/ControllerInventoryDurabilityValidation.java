@@ -514,7 +514,6 @@ final class ControllerInventoryDurabilityValidation {
 				check(entered, "a region at rest did not enter hydrostatic sleep after 200 quiet steps"
 						+ " (state=" + region.lifecycle().state() + ", availability="
 						+ region.availabilityDescription() + ")");
-				region.domain().commitHydrostaticSleep();
 				check(region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP,
 						"hydrostatic sleep did not latch the lifecycle state");
 				check(!region.canStep(), "hydrostatically sleeping region still reports steppable");
@@ -1100,8 +1099,7 @@ final class ControllerInventoryDurabilityValidation {
 
 		/**
 		 * Drives hydrostatic and thermal sleep to their latched states, then wakes each axis. Runs only
-		 * when the domain is empirically at rest, so latching sleep cannot suppress a moving instability
-		 * and {@code commitHydrostaticSleep} merely confirms momentum that is already zero.
+		 * when the domain is empirically at rest; the scheduling transition retains all marker momentum.
 		 */
 		String sleepWake(java.util.Random random) {
 			if (region == null) return "skip(noLifecycleChannel)";
@@ -1116,7 +1114,6 @@ final class ControllerInventoryDurabilityValidation {
 			if (!enteredHydrostatic) return "skip(noHydrostaticSleep)";
 			check(domain.maximumParticleSpeed() <= QUIET_MARKER_SPEED,
 					"hydrostatic sleep was latched while markers were still moving");
-			region.domain().commitHydrostaticSleep();
 			check(region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP,
 					"hydrostatic sleep did not latch the lifecycle state");
 			check(!region.canStep(), "hydrostatically sleeping region still reports steppable");
@@ -1146,6 +1143,7 @@ final class ControllerInventoryDurabilityValidation {
 		/** Empirical rest: no meaningful marker motion, no pending phase lien, sealed gas audit intact. */
 		private boolean domainIsAtRest() {
 			return domain.maximumParticleSpeed() <= QUIET_MARKER_SPEED
+					&& !domain.gasBoundary().hasPressureDrivenFlow()
 					&& !domain.hasPendingPhaseVolumeWork()
 					&& (!scene.sealed() || domain.gasBoundary().auditClosed());
 		}

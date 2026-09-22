@@ -314,6 +314,8 @@ motion 和 thermal activity 是正交轴。只有温度残差、边界通量、�
 
 thermal activity 与 motion pacing 相互独立：有 face transfer、reservoir exchange、finite-device exchange、chemistry/granular/phase dirty、gas activity、carrier motion、pending work 或未闭合 audit 时保持 ACTIVE；连续安静观察先进入 REDUCED，再进入 SLEEP。
 
+内部导热即使没有外部 source/sink 变化，也会改变热浮力和气体压力。`ThermalActivity.Observation.requiresMotion` 将非零面热量转移、温度变化及已有反应/相变活动一并交给力学调度：单独热计算后唤醒力学，联合计算后阻止静水休眠。此观察不修改库存，玩家暂停仍优先。
+
 boundary、容器、管理员 source、有限设备、化学、颗粒、气体、相变或 carrier movement 都是精确唤醒原因。
 
 PAUSED 覆盖运行时内能、压力、已提交相库存的守恒或几何不变量失败，以及有限热设备的步数预算耗尽。registry identity、持久 payload、ordinal/generation 身份损坏归入 LOCKED，恢复依据来自权威状态与事务证据。

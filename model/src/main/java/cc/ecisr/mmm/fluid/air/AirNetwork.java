@@ -97,6 +97,15 @@ public final class AirNetwork {
 
 	public int nodeCount() { return nodes.size(); }
 
+	/** Conservative scheduling observation: even sub-quantum pressure-driven flow keeps mechanics active. */
+	public boolean hasPressureDrivenFlow(java.util.function.IntToDoubleFunction pressure) {
+		Objects.requireNonNull(pressure, "pressure");
+		for (AirEdge edge : edges) {
+			if (pressure.applyAsDouble(edge.firstNode()) != pressure.applyAsDouble(edge.secondNode())) return true;
+		}
+		return false;
+	}
+
 	public double availableVolume(int nodeId) { return sealed(nodeId).availableVolume(); }
 
 	public void updateAvailableVolume(int nodeId, double availableVolume) {

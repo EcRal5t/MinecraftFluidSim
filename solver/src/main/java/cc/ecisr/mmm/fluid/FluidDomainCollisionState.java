@@ -597,15 +597,6 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 	/** Maximum marker speed used only as a scheduling observation; it is not a water-volume estimate. */
 	public float maximumParticleSpeed() { return metrics.maximumParticleSpeed(); }
 
-	/**
-	 * Commits a validated hydrostatic scheduling transition by removing residual marker momentum.
-	 * Marker positions, counts, particleVolume and particleMass are unchanged, so both exact ledgers are unchanged.
-	 */
-	public void commitHydrostaticSleep() {
-		particles.clearVelocities();
-		gridDirty = true;
-	}
-
 	public float maximumPressure() { return metrics.maximumPressure(); }
 
 	public byte[] copyQuantizedVolume() { return carriers.copyQuantizedVolume(); }

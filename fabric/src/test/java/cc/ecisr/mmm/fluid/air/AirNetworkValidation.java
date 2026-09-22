@@ -13,6 +13,7 @@ public final class AirNetworkValidation {
 		validateEquationOfState();
 		validateVacuumNode();
 		validateOrificeEqualization();
+		validateFlowActivity();
 		validateHoleOpenClose();
 		validateSplitMergeVentLedger();
 		validateAmbientInteraction();
@@ -54,6 +55,25 @@ public final class AirNetworkValidation {
 				throw new AssertionError("gas registry codec cleanup failed", cleanup);
 			}
 		}
+	}
+
+	private static void validateFlowActivity() {
+		AirNetwork network = new AirNetwork();
+		int first = network.addNode(1.0, 1.0);
+		int second = network.addNode(1.0, 1.0);
+		check(!network.hasPressureDrivenFlow(network::gaugePressure), "isolated nodes demand transport");
+		network.addOrMergeEdge(first, second, 1.0e-12, 0.65);
+		check(!network.hasPressureDrivenFlow(network::gaugePressure), "equal-pressure edge demands transport");
+		long revision = network.revision();
+		check(network.hasPressureDrivenFlow(node -> node == first ? 1.0e-12 : 0.0),
+				"thermal pressure or a very slow pore flow was ignored by sleep observation");
+		check(network.revision() == revision, "activity observation changed the gas inventory");
+		network.updateAvailableVolume(first, 0.5);
+		check(network.hasPressureDrivenFlow(network::gaugePressure), "compressed gas edge allowed sleep");
+		network.removeEdge(first, second);
+		check(!network.hasPressureDrivenFlow(network::gaugePressure), "disconnected pressure difference prevents sleep");
+		network.addOrMergeEdge(first, AirNetwork.AMBIENT_NODE, 0.01, 0.65);
+		check(network.hasPressureDrivenFlow(network::gaugePressure), "ambient edge flow allowed sleep");
 	}
 
 	private static void validateEquationOfState() {

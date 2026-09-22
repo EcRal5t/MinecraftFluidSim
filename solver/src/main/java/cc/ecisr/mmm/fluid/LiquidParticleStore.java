@@ -129,12 +129,6 @@ final class LiquidParticleStore {
 		return capacity;
 	}
 
-	void clearVelocities() {
-		Arrays.fill(velocityX, 0, count, 0.0F);
-		Arrays.fill(velocityY, 0, count, 0.0F);
-		Arrays.fill(velocityZ, 0, count, 0.0F);
-	}
-
 	double[] copyMass() { return Arrays.copyOf(mass, count); }
 
 	int[] copyMaterialHandles() { return Arrays.copyOf(materialHandle, count); }
