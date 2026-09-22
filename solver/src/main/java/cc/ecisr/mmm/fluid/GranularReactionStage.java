@@ -52,6 +52,7 @@ final class GranularReactionStage {
 	private final Workspace state;
 	private final Access access;
 	private Map<Integer, List<Integer>> activeByCell;
+	private boolean occupancyCurrent;
 
 	GranularReactionStage(Workspace state, Access access) {
 		this.state = state;
@@ -60,6 +61,7 @@ final class GranularReactionStage {
 
 	FluidDomain.PhaseTransferStats step(int[] dirtyCells) {
 		activeByCell = null;
+		occupancyCurrent = false;
 		if (!access.enabled() || dirtyCells.length == 0) {
 			return new FluidDomain.PhaseTransferStats(0, 0, 0, 0L);
 		}
@@ -242,11 +244,13 @@ final class GranularReactionStage {
 				state.particles().positionZ(carrierMarker));
 		if (position == null) return false;
 		GranularCouplingFields coupling = access.coupling();
-		coupling.rebuild(granular.parcels, granular.deposits);
-		long[] occupiedBefore = coupling.copySolidSvq();
+		if (!occupancyCurrent) {
+			coupling.rebuild(granular.parcels, granular.deposits);
+			occupancyCurrent = true;
+		}
 		int material = granular.registry.materialHandle(rule.solidMaterialId());
 		PrecipitationMerge merge = precipitationMerge(
-				cell, material, plan, position, carrierMarker, occupiedBefore);
+				cell, material, plan, position, carrierMarker);
 		ThermalDomainState thermal = access.thermalState();
 		if (merge != null) {
 			ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : planThermalReaction(
@@ -267,8 +271,8 @@ final class GranularReactionStage {
 		if (!granular.compositions.hasCapacity(1) || !granular.parcels.hasCapacity(1)) {
 			return false;
 		}
-		if (!coupling.tryPlanParcel(
-				occupiedBefore, position, plan.signedSolidSvq(), access::geometricOpenSvq)) {
+		if (!coupling.canReplaceParcel(
+				null, 0, position, plan.signedSolidSvq(), access::geometricOpenSvq)) {
 			return false;
 		}
 		int composition = granular.compositions.create(plan.transferredComposition());
@@ -308,7 +312,7 @@ final class GranularReactionStage {
 
 	private PrecipitationMerge precipitationMerge(
 			int cell, int material, GranularPhaseTransferEngine.Plan plan,
-			GranularCouplingFields.Position spawned, int carrierMarker, long[] occupiedBefore
+			GranularCouplingFields.Position spawned, int carrierMarker
 	) {
 		GranularDomainState granular = access.granularState();
 		long maximum = granular.registry.material(material).maximumActiveParcelSvq();
@@ -341,12 +345,9 @@ final class GranularReactionStage {
 					weighted(existing.velocityY(), existing.mass(), velocityY, plan.signedSolidMass(), combinedMass),
 					weighted(existing.velocityZ(), existing.mass(), velocityZ, plan.signedSolidMass(), combinedMass),
 					combinedSvq, combinedMass, material, existing.solidCompositionHandle(), 0, (byte) 0);
-			long[] planned = occupiedBefore.clone();
-			access.coupling().removePlannedParcel(planned,
-					new GranularCouplingFields.Position(existing.x(), existing.y(), existing.z()),
-					existing.solidVolumeSvq());
-			if (!access.coupling().tryPlanParcel(
-					planned, new GranularCouplingFields.Position(x, y, z), combinedSvq,
+			if (!access.coupling().canReplaceParcel(
+					new GranularCouplingFields.Position(existing.x(), existing.y(), existing.z()), existing.solidVolumeSvq(),
+					new GranularCouplingFields.Position(x, y, z), combinedSvq,
 					access::geometricOpenSvq)) continue;
 			return new PrecipitationMerge(
 					parcelIndex, existing.solidCompositionHandle(), composition, merged);
@@ -533,6 +534,7 @@ final class GranularReactionStage {
 
 	private void markPhaseTransferDirty(int cell) {
 		activeByCell = null; // A commit can append, move or swap-remove an active parcel.
+		occupancyCurrent = false;
 		access.chemistry().markDirtyCell(cell);
 		access.depositDynamics().disturbCell(cell);
 		access.markGridDirty();

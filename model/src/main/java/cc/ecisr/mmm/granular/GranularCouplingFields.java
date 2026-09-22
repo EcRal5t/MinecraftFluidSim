@@ -120,6 +120,31 @@ public final class GranularCouplingFields {
 		return true;
 	}
 
+	/** Read-only capacity check over the two parcels' at-most-eight-cell supports. */
+	public boolean canReplaceParcel(Position previous, long previousSvq, Position replacement, long replacementSvq,
+			IntToLongFunction geometricCapacity) {
+		if (replacement == null || geometricCapacity == null || (previous == null) != (previousSvq == 0)) {
+			throw new IllegalArgumentException("Granular replacement plan is incomplete");
+		}
+		int removedCount = previous == null ? 0 : allocate(previous.x(), previous.y(), previous.z(), previousSvq);
+		int[] removedCells = Arrays.copyOf(candidateCell, removedCount);
+		long[] removedShares = Arrays.copyOf(candidateShare, removedCount);
+		for (int index = 0; index < removedCount; index++) if (solidSvq[removedCells[index]] < removedShares[index]) {
+			throw new IllegalStateException("Granular replacement plan underflow");
+		}
+		int addedCount = allocate(replacement.x(), replacement.y(), replacement.z(), replacementSvq);
+		for (int index = 0; index < addedCount; index++) {
+			int cell = candidateCell[index];
+			long occupied = solidSvq[cell];
+			for (int removed = 0; removed < removedCount; removed++) {
+				if (removedCells[removed] == cell) occupied -= removedShares[removed];
+			}
+			long capacity = geometricCapacity.applyAsLong(cell);
+			if (capacity < 0 || Math.addExact(occupied, candidateShare[index]) > capacity) return false;
+		}
+		return true;
+	}
+
 	/** Removes one parcel using the exact same shares as rebuild/placement planning. */
 	public void removePlannedParcel(long[] plannedSolidSvq, Position position, long parcelSvq) {
 		if (plannedSolidSvq == null || plannedSolidSvq.length != cellCount || position == null) {

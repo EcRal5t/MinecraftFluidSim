@@ -672,6 +672,21 @@ public final class M8GranularValidation {
 		GranularCouplingFields fields = new GranularCouplingFields(4, 4, 4, 0.5);
 		fields.rebuild(parcels, deposits);
 		long[] before = fields.copySolidSvq();
+		var previousPosition = new GranularCouplingFields.Position(0.73F, 0.91F, 1.12F);
+		for (int trial = 0; trial < 40; trial++) {
+			var replacement = new GranularCouplingFields.Position(0.05F + trial % 7 * 0.3F,
+					0.05F + trial % 5 * 0.4F, 0.05F + trial % 6 * 0.3F);
+			long limit = trial % 2 == 0 ? 100 : SolidVolume.SVQ_PER_CELL;
+			long[] planned = before.clone();
+			fields.removePlannedParcel(planned, previousPosition, parcelVolume);
+			boolean expected = fields.tryPlanParcel(planned, replacement, parcelVolume + 19, cell -> limit);
+			require(fields.canReplaceParcel(previousPosition, parcelVolume, replacement, parcelVolume + 19, cell -> limit)
+					== expected && fields.matchesSolidSvq(before), "local replacement matches copied occupancy planning");
+			planned = before.clone();
+			expected = fields.tryPlanParcel(planned, replacement, parcelVolume, cell -> limit);
+			require(fields.canReplaceParcel(null, 0, replacement, parcelVolume, cell -> limit) == expected
+					&& fields.matchesSolidSvq(before), "local insertion keeps occupancy read-only");
+		}
 		require(fields.totalSolidSvq() == parcelVolume + 123_457L, "coupling field lost SVQ");
 		GranularParcelStore.Parcel old = parcels.parcel(0);
 		parcels.overwrite(0, new GranularParcelStore.Parcel(1.23F, 0.61F, 0.72F,
