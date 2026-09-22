@@ -29,17 +29,21 @@ public final class ThermalOwnerStoreValidation {
 		var material = new ThermalMaterialDefinition("test:thermal", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"test:liquid", 300, 20, 0.5,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 4)));
-		var registry = new ThermalRegistry(List.of(material));
+		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var registry = new ThermalRegistry(List.of(material), List.of(new ThermalSpeciesOffset(
+				"test:water_offset", BuiltinChemicalDefinitions.H2O, material.id(), ExactRational.of(1000))),
+				List.of(), chemistry.fingerprint(), "");
 		var function = new ThermalStateFunction(registry);
 		class Markers implements ThermalCarrierContext {
 			double mass = 2;
+			ChemicalMixtureRecord composition;
 			public int markerCount() { return 1; }
 			public int cell(int marker) { return 0; }
 			public int fluidMaterialHandle(int marker) { return 0; }
 			public double mass(int marker) { return mass; }
 			public double volume(int marker) { return 1; }
-			public ChemicalMixtureRecord mixture(int marker) { return null; }
-			public ChemicalRegistry chemicalRegistry() { return null; }
+			public ChemicalMixtureRecord mixture(int marker) { return composition; }
+			public ChemicalRegistry chemicalRegistry() { return chemistry; }
 		}
 		var markers = new Markers();
 		var column = new LiquidEnergyColumn(registry, function, new cc.ecisr.mmm.units.SolverUnitScale(1),
@@ -55,6 +59,13 @@ public final class ThermalOwnerStoreValidation {
 		markers.mass = 2;
 		column.resetMarkerTemperature(0, 315, markers);
 		require(close(column.temperature(0, markers), 315), "An evicted input is recomputed exactly");
+		for (long amount : new long[] {1_000_000_000L, 2_000_000_000L, 1_000_000_000L}) {
+			markers.composition = ChemicalMixtureRecord.fromStableAmounts(chemistry,
+					Map.of(BuiltinChemicalDefinitions.H2O, amount), 0);
+			double energy = function.internalEnergyAtTemperature(0, markers.mass, markers.composition, chemistry, 330);
+			column.setEnergy(0, energy);
+			require(close(column.temperature(0, markers), 330), "Composition edits select the matching reference energy");
+		}
 	}
 
 	private static void coherentPhaseMergeSplitConservesInventories() {

@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.world.MovingBodyFluidCoupling;
 import java.util.Arrays;
 import java.util.function.IntUnaryOperator;
 
@@ -19,13 +20,14 @@ final class MarkerNeighborhoodIndex {
 	}
 
 	int[] around(float x, float y, float z, float cellSize) {
-		// The kernel spans 1.5 cells; a two-cell halo also covers float position subtraction at its edge.
+		// Round support outward to cover float position subtraction at the kernel edge.
+		int radius = (int) Math.ceil(MovingBodyFluidCoupling.KERNEL_SUPPORT_CELLS);
 		int cx = (int) Math.floor(x / cellSize), cy = (int) Math.floor(y / cellSize), cz = (int) Math.floor(z / cellSize);
 		int[] markers = new int[Math.min(64, next.length)];
 		int count = 0;
-		for (int iz = Math.max(0, cz - 2); iz <= Math.min(sizeZ - 1, (long) cz + 2); iz++) {
-			for (int iy = Math.max(0, cy - 2); iy <= Math.min(sizeY - 1, (long) cy + 2); iy++) {
-				for (int ix = Math.max(0, cx - 2); ix <= Math.min(sizeX - 1, (long) cx + 2); ix++) {
+		for (int iz = (int) Math.max(0, (long) cz - radius); iz <= Math.min(sizeZ - 1, (long) cz + radius); iz++) {
+			for (int iy = (int) Math.max(0, (long) cy - radius); iy <= Math.min(sizeY - 1, (long) cy + radius); iy++) {
+				for (int ix = (int) Math.max(0, (long) cx - radius); ix <= Math.min(sizeX - 1, (long) cx + radius); ix++) {
 					for (int marker = heads[(iz * sizeY + iy) * sizeX + ix]; marker >= 0; marker = next[marker]) {
 						if (count == markers.length) markers = Arrays.copyOf(markers, Math.min(next.length, Math.max(1, count * 2)));
 						markers[count++] = marker;

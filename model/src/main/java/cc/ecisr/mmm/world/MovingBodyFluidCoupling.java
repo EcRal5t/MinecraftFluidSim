@@ -3,7 +3,7 @@ package cc.ecisr.mmm.world;
 /** Loader-neutral moving-body sample and the physical momentum actually committed to liquid markers. */
 public final class MovingBodyFluidCoupling {
 	public static final int MAXIMUM_REQUESTS_PER_STEP = 256;
-	private static final double KERNEL_SUPPORT_CELLS = 1.5;
+	public static final double KERNEL_SUPPORT_CELLS = 1.5;
 	private static final double KERNEL_PEAK = 0.75;
 
 	private MovingBodyFluidCoupling() { }
