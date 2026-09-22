@@ -224,6 +224,19 @@ public final class FluidRegion {
 	}
 
 	public long reservedMarkerCapacity() { return reservedMarkerCapacity; }
+
+	/** Validates all carrier topology before publishing a synchronous world-collision successor. */
+	void adoptCollisionCandidate(FluidDomain original, long baseGeneration, FluidDomain candidate) {
+		Objects.requireNonNull(candidate, "candidate");
+		if (domain != original || solverGeneration != baseGeneration || candidate == original
+				|| !candidate.authoritativeLayout().equals(domain.authoritativeLayout())) {
+			throw new IllegalStateException("Collision candidate identity, generation or layout changed");
+		}
+		long nextGeneration = Math.addExact(solverGeneration, 1L);
+		candidate.captureAuthoritativeState();
+		domain = candidate;
+		solverGeneration = nextGeneration;
+	}
 	public FluidRegionFootprint footprint() { return footprint; }
 	public boolean controllerManaged() { return footprint != null; }
 	public long networkGeneration() { return networkGeneration; }

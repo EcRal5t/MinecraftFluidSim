@@ -114,6 +114,10 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 
 `MinecraftRegionInputs` 按五 tick 节拍刷新到期的世界碰撞输入。[MinecraftCollisionWorldPort](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftCollisionWorldPort.java) 把 `VoxelShape` 采样为纯 Java [CollisionField](../../model/src/main/java/cc/ecisr/mmm/world/CollisionField.java)，变化的网格单元同时唤醒力学与热计算。
 
+[FluidRegionWorldInteraction](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidRegionWorldInteraction.java) 先比较采样结果与当前几何。存在变化时，从完整状态快照重建私有流体域，在副本上完成碰撞编辑、颗粒处理及液体排出和回填。`FluidRegion.adoptCollisionCandidate` 核对原对象、求解器代次和功能布局，再通过完整状态捕获同步并校验气体拓扑；成功后一次替换流体域并递增求解器代次。持久化 HEAD 代次保持原值，沿既有 checkpoint 流程存盘。
+
+密闭气体失去全部可用容量时，本次碰撞候选被拒绝，原几何、物质库存和收支记录保留，调用方按碰撞失败暂停区域。没有碰撞变化时直接返回，不创建私有副本。`region-manager` 覆盖排液提交、过期候选拒绝、气腔消失时保持原状态，以及修正碰撞场后的再次提交。
+
 实体位置、包围盒和原版速度响应留在 Fabric。输入适配器比较相邻服务器 tick 的实际观测位置，得到本 tick 位移；`Entity#oldPosition` 会在 Minecraft tick 内被重写，无法提供这里需要的完整位移。首次观测或中断一 tick 的实体只接收实体侧响应。
 
 求解器按实体包围盒、液层与局部碰撞几何计算浸湿体积。[MovingBodyFluidCoupling](../../model/src/main/java/cc/ecisr/mmm/world/MovingBodyFluidCoupling.java) 把位置、实际位移速度和湿体积交给力学请求。到期的力学计算使用一次该请求，热计算保留独立流程。当前模型采用运动学包围盒近似，双向动量与动态排水仍在产品路线中。

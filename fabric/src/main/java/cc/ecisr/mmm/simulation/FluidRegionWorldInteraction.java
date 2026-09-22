@@ -2,6 +2,7 @@ package cc.ecisr.mmm.simulation;
 
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.fluid.FluidDomain;
+import cc.ecisr.mmm.fluid.GasTopologyBlockedException;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.world.CollisionField;
@@ -38,6 +39,23 @@ final class FluidRegionWorldInteraction {
 				origin.getX(), origin.getY(), origin.getZ(), blockSizeX, blockSizeY, blockSizeZ,
 				cellsPerBlock, interiorBlocks);
 		CollisionField collisionField = new MinecraftCollisionWorldPort(level).capture(captureRegion);
+		return applyCapturedCollisions(region, collisionField, cellsPerBlock);
+	}
+
+	/** Applies one captured field on a private successor; failures leave the live solver untouched. */
+	static FluidRegion.CollisionStats applyCapturedCollisions(
+			FluidRegion region, CollisionField collisionField, int cellsPerBlock
+	) {
+		FluidDomain domain = region.domain();
+		if (cellsPerBlock <= 0 || domain.sizeX() % cellsPerBlock != 0
+				|| domain.sizeY() % cellsPerBlock != 0 || domain.sizeZ() % cellsPerBlock != 0
+				|| collisionField.sizeX() != domain.sizeX() || collisionField.sizeY() != domain.sizeY()
+				|| collisionField.sizeZ() != domain.sizeZ()) {
+			throw new IllegalArgumentException("Collision capture does not match the region layout");
+		}
+		int blockSizeX = domain.sizeX() / cellsPerBlock;
+		int blockSizeY = domain.sizeY() / cellsPerBlock;
+		int blockSizeZ = domain.sizeZ() / cellsPerBlock;
 		List<PlannedBlock> plannedBlocks = new ArrayList<>();
 		List<FluidDomain.CollisionEdit> allEdits = new ArrayList<>();
 
@@ -71,6 +89,22 @@ final class FluidRegionWorldInteraction {
 		}
 		if (allEdits.isEmpty()) return FluidRegion.CollisionStats.EMPTY;
 
+		FluidDomain original = domain;
+		long baseGeneration = region.solverGeneration();
+		try {
+			domain = FluidDomain.restoreAuthoritativeState(original.captureAuthoritativeState());
+			FluidRegion.CollisionStats stats = applyEdits(domain, allEdits, plannedBlocks);
+			region.adoptCollisionCandidate(original, baseGeneration, domain);
+			return stats;
+		} catch (GasTopologyBlockedException blocked) {
+			throw new FluidDomain.CollisionEditBlockedException(
+					"World collision leaves closed gas without a valid cavity", blocked);
+		}
+	}
+
+	private static FluidRegion.CollisionStats applyEdits(
+			FluidDomain domain, List<FluidDomain.CollisionEdit> allEdits, List<PlannedBlock> plannedBlocks
+	) {
 		FluidDomain.CollisionEditPlan plan = domain.planCollisionEdits(allEdits);
 		domain.beginCollisionEdits(plan);
 		int changedCells = 0;

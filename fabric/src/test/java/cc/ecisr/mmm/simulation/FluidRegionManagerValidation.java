@@ -4,6 +4,8 @@ import cc.ecisr.mmm.api.RegionAvailabilityReason;
 import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.GasTopologyBlockedException;
+import cc.ecisr.mmm.world.CollisionField;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.Identifier;
@@ -37,6 +39,8 @@ public final class FluidRegionManagerValidation {
 		validateOverlapRejection();
 		validateCommittedMetadataSurvivesPolicyBudget();
 		validateBlockedRegionDoesNotBlockPeer();
+		validateCollisionPublication();
+		validateClosedGasCollisionRejection();
 		System.out.println("FluidRegionManager validation passed");
 	}
 
@@ -199,6 +203,77 @@ public final class FluidRegionManagerValidation {
 
 	private static FluidRegionManager manager() {
 		return new FluidRegionManager(new RegionCatalog.Limits(2, 16L, 128L, 24L, 160L));
+	}
+
+	private static void validateCollisionPublication() {
+		FluidRegion region = region(2, 2, 2, 64L);
+		FluidDomain original = region.domain();
+		original.setVolume(0, 0, 0, 0.5F);
+		float volume = original.totalVolume();
+		long generation = region.solverGeneration();
+		byte[] masks = new byte[8];
+		CollisionField empty = new CollisionField(2, 2, 2, masks);
+		require(FluidRegionWorldInteraction.applyCapturedCollisions(region, empty, 2).changedCells() == 0
+				&& region.domain() == original && region.solverGeneration() == generation,
+				"unchanged collision capture replaced the live solver");
+		masks[0] = (byte) 255;
+		CollisionField occupied = new CollisionField(2, 2, 2, masks);
+		FluidRegion.CollisionStats stats = FluidRegionWorldInteraction.applyCapturedCollisions(region, occupied, 2);
+		require(stats.changedCells() == 1 && stats.displacedCellVolume() == volume
+				&& stats.escapedCellVolume() == 0.0F && region.domain().totalVolume() == volume,
+				"collision successor lost displaced liquid or reported uncommitted statistics");
+		require(region.domain() != original && region.solverGeneration() == generation + 1
+				&& region.domain().solidMicroMask(0, 0, 0) == 255
+				&& original.solidMicroMask(0, 0, 0) == 0 && original.totalVolume() == volume,
+				"collision publication mutated its original or failed to advance the solver generation");
+		FluidDomain committed = region.domain();
+		FluidDomain stale = FluidDomain.restoreAuthoritativeState(original.captureAuthoritativeState());
+		try {
+			region.adoptCollisionCandidate(original, generation, stale);
+			throw new AssertionError("stale collision candidate was accepted");
+		} catch (IllegalStateException expected) {
+			require(region.domain() == committed && region.solverGeneration() == generation + 1,
+					"stale collision candidate changed the committed solver");
+		}
+	}
+
+	private static void validateClosedGasCollisionRejection() {
+		FluidRegion region = region(2, 2, 2, 64L);
+		FluidDomain original = region.domain();
+		original.sealDomainBoundary();
+		var before = original.bootstrapGasState(null);
+		require(!before.nodes().isEmpty(), "closed gas collision fixture has no finite inventory");
+		long generation = region.solverGeneration();
+		byte[] masks = new byte[8];
+		java.util.Arrays.fill(masks, (byte) 255);
+		try {
+			FluidRegionWorldInteraction.applyCapturedCollisions(region, new CollisionField(2, 2, 2, masks), 2);
+			throw new AssertionError("collision removed every cavity holding closed gas");
+		} catch (FluidDomain.CollisionEditBlockedException expected) {
+			require(expected.getCause() instanceof GasTopologyBlockedException,
+					"gas-capacity rejection lost its typed physical cause");
+		}
+		require(region.domain() == original && region.solverGeneration() == generation,
+				"rejected gas collision published a partial successor");
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) {
+			require(original.solidMicroMask(x, y, z) == 0, "rejected collision changed live geometry");
+		}
+		var after = original.captureAuthoritativeState().gas();
+		require(before.nodes().equals(after.nodes()) && before.externalSource().equals(after.externalSource())
+				&& before.escapedSink().equals(after.escapedSink())
+				&& before.massRoundoff().equals(after.massRoundoff())
+				&& before.residualRoundoff().equals(after.residualRoundoff())
+				&& java.util.Arrays.equals(before.cellNodeOrdinal(), after.cellNodeOrdinal())
+				&& java.util.Arrays.equals(before.cellLineageOrdinal(), after.cellLineageOrdinal()),
+				"rejected collision changed closed gas inventory, audit or ownership");
+		// Removing the offending world block must allow a later refresh without repairing the live domain.
+		masks[0] = 0;
+		require(FluidRegionWorldInteraction.applyCapturedCollisions(region,
+				new CollisionField(2, 2, 2, masks), 2).changedCells() == 7,
+				"a corrected collision capture could not be committed after rejection");
+		require(region.solverGeneration() == generation + 1
+				&& region.domain().captureAuthoritativeState().gas().nodes().equals(before.nodes()),
+				"valid closed-gas compression changed the finite inventory");
 	}
 
 	private static FluidRegion region(int nx, int ny, int nz, long reservedMarkers) {
