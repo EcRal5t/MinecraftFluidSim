@@ -600,7 +600,18 @@ public final class M7ChemicalTransportValidation {
 			source.setMarkerChemical(marker, Map.of(acid
 					? BuiltinChemicalDefinitions.HCL : BuiltinChemicalDefinitions.NAOH, 1_000_000L), acid);
 		}
-		for (int step = 0; step < 40; step++) source.step();
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		boolean refined = false;
+		for (int step = 0; step < 40; step++) {
+			int predictedSubsteps = source.calculateSubsteps(config.timeStep());
+			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
+					step, source.captureAuthoritativeState(), List.of(), false, 0));
+			refined |= candidate.stats().substeps() > predictedSubsteps;
+			source = candidate.claimPreparedCpuDomain();
+			check(source.exactInternalEnergy().equals(source.thermalAudit().expectedInventory())
+					&& source.gasBoundary().auditClosed(), "chemical transport step audit diverged");
+		}
+		check(refined, "thermal chemical extraction fixture must exercise time refinement");
 		SignedDyadic sinkBefore = source.thermalAudit().externalSink();
 		SignedDyadic roundoffBefore = source.thermalAudit().roundoffResidual();
 		SignedDyadic inventoryBefore = source.exactInternalEnergy();
