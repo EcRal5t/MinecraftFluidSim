@@ -27,7 +27,7 @@ public final class ThermalRegistry {
 	private final Map<String, Integer> materialHandles;
 	private final Map<String, Integer> transitionHandles;
 	private final Map<String, Integer> materialByCarrier;
-	private final Map<String, ThermalSpeciesOffset> offsetByHostSpecies;
+	private final Map<String, Map<String, ThermalSpeciesOffset>> offsetByHostSpecies;
 	private final String chemicalRegistryFingerprint;
 	private final String granularRegistryFingerprint;
 	private final String gasRegistryFingerprint;
@@ -132,14 +132,14 @@ public final class ThermalRegistry {
 	}
 	public ThermalSpeciesOffset speciesOffset(int materialHandle, String speciesId) {
 		ThermalMaterialDefinition material = material(materialHandle);
-		ThermalSpeciesOffset offset = offsetByHostSpecies.get(offsetKey(material.id(), speciesId));
+		ThermalSpeciesOffset offset = offsetByHostSpecies.getOrDefault(material.id(), Map.of()).get(speciesId);
 		if (offset == null) throw new IllegalArgumentException(
 				"Missing thermal species offset for " + speciesId + " in " + material.id());
 		return offset;
 	}
 	/** Presence is the registry declaration that this host can carry the named chemical species. */
 	public boolean hasSpeciesOffset(int materialHandle, String speciesId) {
-		return offsetByHostSpecies.containsKey(offsetKey(material(materialHandle).id(), speciesId));
+		return offsetByHostSpecies.getOrDefault(material(materialHandle).id(), Map.of()).containsKey(speciesId);
 	}
 	public String chemicalRegistryFingerprint() { return chemicalRegistryFingerprint; }
 	public String granularRegistryFingerprint() { return granularRegistryFingerprint; }
@@ -248,19 +248,21 @@ public final class ThermalRegistry {
 		return Collections.unmodifiableMap(result);
 	}
 
-	private Map<String, ThermalSpeciesOffset> validateSpeciesOffsets() {
+	private Map<String, Map<String, ThermalSpeciesOffset>> validateSpeciesOffsets() {
 		if (!speciesOffsets.isEmpty() && chemicalRegistryFingerprint.isEmpty()) {
 			throw new IllegalArgumentException("Thermal species offsets require a chemical registry fingerprint");
 		}
-		LinkedHashMap<String, ThermalSpeciesOffset> result = new LinkedHashMap<>();
+		LinkedHashMap<String, Map<String, ThermalSpeciesOffset>> result = new LinkedHashMap<>();
 		for (ThermalSpeciesOffset offset : speciesOffsets) {
 			materialHandle(offset.hostThermalMaterialId());
-			String key = offsetKey(offset.hostThermalMaterialId(), offset.speciesId());
-			if (result.putIfAbsent(key, offset) != null) {
+			Map<String, ThermalSpeciesOffset> host = result.computeIfAbsent(
+					offset.hostThermalMaterialId(), ignored -> new LinkedHashMap<>());
+			if (host.putIfAbsent(offset.speciesId(), offset) != null) {
 				throw new IllegalArgumentException("Duplicate thermal species offset " + offset.speciesId()
 						+ " in " + offset.hostThermalMaterialId());
 			}
 		}
+		result.replaceAll((host, offsets) -> Collections.unmodifiableMap(offsets));
 		return Collections.unmodifiableMap(result);
 	}
 
@@ -471,9 +473,6 @@ public final class ThermalRegistry {
 	private static String carrierKey(ThermalMaterialDefinition.CarrierKind kind, String carrierId) {
 		return kind + "\0" + carrierId;
 	}
-
-	private static String offsetKey(String host, String species) { return host + '\0' + species; }
-
 	private static String sha256(byte[] bytes) {
 		try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)); }
 		catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException("SHA-256 is unavailable", impossible); }

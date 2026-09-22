@@ -67,19 +67,22 @@ public final class FlipChemicalParticleState {
 		SolverUnitScale unitScale = SolverUnitScale.forCellSize(materials.cellSize());
 		List<ChemicalMixtureRecord> runtimeMixtures = mixtures.stream()
 				.map(mixture -> mixture.toRuntime(registry)).toList();
+		double[] mixtureMass = new double[runtimeMixtures.size()];
+		for (int table = 0; table < mixtureMass.length; table++) {
+			mixtureMass[table] = runtimeMixtures.get(table).massKilograms(registry);
+		}
 		for (int marker = 0; marker < markerMixtureIndex.length; marker++) {
 			int table = markerMixtureIndex[marker];
 			if (table < 0 || table >= mixtures.size() || (indicator[marker] & ~1) != 0) {
 				throw new IllegalArgumentException("Invalid per-marker chemical table index/indicator");
 			}
-			StableMixture mixture = mixtures.get(table);
 			ChemicalMixtureRecord runtime = runtimeMixtures.get(table);
 			for (int entry = 0; entry < runtime.entryCount(); entry++) {
 				recomputed[runtime.speciesHandle(entry)] = Math.addExact(
 						recomputed[runtime.speciesHandle(entry)], runtime.amountAt(entry));
 			}
 			residual += runtime.massResidualKilograms();
-			double representedMass = runtime.massKilograms(registry);
+			double representedMass = mixtureMass[table];
 			double physicalMass = unitScale.kilograms(mass[marker]);
 			double tolerance = Math.max(1.0E-9, Math.ulp(physicalMass) * 8.0);
 			if (Math.abs(representedMass - physicalMass) > tolerance) {

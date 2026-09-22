@@ -433,7 +433,7 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateChemicalHandoff() {
-		FluidDomain source = domainWithCell(1, 1, 1, 0.25F);
+		FluidDomain source = domainWithCell(1, 1, 1, 1.0F);
 		source.setMarkerChemical(0, Map.of(
 				BuiltinChemicalDefinitions.H2O, 123_457L,
 				BuiltinChemicalDefinitions.NACL, 999L), true);
@@ -441,6 +441,25 @@ public final class M7ChemicalTransportValidation {
 		source.chemicalParcels().recordExternalSource(auditFixture);
 		source.chemicalParcels().recordEscapedSink(auditFixture);
 		FlipChemicalParticleState state = source.exportChemicalParticleState();
+		int[] mixtureIndices = state.copyMarkerMixtureIndex();
+		check(state.mixtures().size() < mixtureIndices.length && mixtureIndices[0] != mixtureIndices[1],
+				"handoff fixture must include shared and distinct compositions");
+		FlipMaterialParticleState material = state.materials();
+		double[] alteredMass = material.copyParticleMass();
+		alteredMass[1] += 1.0;
+		alteredMass[2] -= 1.0;
+		FlipMaterialParticleState altered = new FlipMaterialParticleState(
+				material.sizeX(), material.sizeY(), material.sizeZ(), material.cellSize(), material.particleCount(),
+				material.totalVolume(), material.totalMass(), material.materials(), material.copyPositionVolume(),
+				material.copyParticleVelocities(), material.copySolidMask(), alteredMass, material.copyMaterialPaletteIndex());
+		try {
+			new FlipChemicalParticleState(altered, CHEMISTRY, state.mixtures(), mixtureIndices,
+					state.copyIndicator(), state.copySpeciesTotals(), state.residualLedgerBits(),
+					state.externalSource(), state.escapedSink());
+			throw new AssertionError("Per-marker mass validation must detect redistributed mass");
+		} catch (IllegalArgumentException expected) {
+			check(expected.getMessage().contains("mass relation"), "Expected per-marker mass rejection");
+		}
 		FluidDomain restored = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		restored.restoreChemicalParticleState(state, CHEMISTRY);
 		check(Arrays.equals(source.chemicalParcels().speciesTotals(source.particleCount()),
