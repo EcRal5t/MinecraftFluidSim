@@ -22,6 +22,39 @@ public final class ThermalOwnerStoreValidation {
 	public static void validate() {
 		coherentPhaseMergeSplitConservesInventories();
 		granularColumnTransactionsConserveEnergy();
+		liquidTemperatureTracksMutableInventory();
+	}
+
+	private static void liquidTemperatureTracksMutableInventory() {
+		var material = new ThermalMaterialDefinition("test:thermal", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:liquid", 300, 20, 0.5,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 4)));
+		var registry = new ThermalRegistry(List.of(material));
+		var function = new ThermalStateFunction(registry);
+		class Markers implements ThermalCarrierContext {
+			double mass = 2;
+			public int markerCount() { return 1; }
+			public int cell(int marker) { return 0; }
+			public int fluidMaterialHandle(int marker) { return 0; }
+			public double mass(int marker) { return mass; }
+			public double volume(int marker) { return 1; }
+			public ChemicalMixtureRecord mixture(int marker) { return null; }
+			public ChemicalRegistry chemicalRegistry() { return null; }
+		}
+		var markers = new Markers();
+		var column = new LiquidEnergyColumn(registry, function, new cc.ecisr.mmm.units.SolverUnitScale(1),
+				new int[] {0}, 300, new ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO)), 1, markers);
+		for (int iteration = 0; iteration < 1100; iteration++) {
+			markers.mass = iteration + 1;
+			double temperature = 310 + iteration % 20;
+			column.setEnergy(0, function.internalEnergyAtTemperature(0, markers.mass, Map.of(), temperature));
+			require(close(column.temperature(0, markers), temperature), "Mass edits and cache eviction preserve temperature");
+			column.setEnergy(0, function.internalEnergyAtTemperature(0, markers.mass, Map.of(), temperature + 5));
+			require(close(column.temperature(0, markers), temperature + 5), "Energy edits remain visible on cache hits");
+		}
+		markers.mass = 2;
+		column.resetMarkerTemperature(0, 315, markers);
+		require(close(column.temperature(0, markers), 315), "An evicted input is recomputed exactly");
 	}
 
 	private static void coherentPhaseMergeSplitConservesInventories() {

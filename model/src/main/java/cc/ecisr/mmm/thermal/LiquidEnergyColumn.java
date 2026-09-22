@@ -7,8 +7,9 @@ import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Owns the per-liquid-marker internal energy column: ordinal storage, exact sums, modeled
@@ -17,6 +18,12 @@ import java.util.List;
  * truth token.
  */
 public final class LiquidEnergyColumn {
+	// Derived values are bounded and keyed by every input; ordinal edits need no cache invalidation.
+	private final LinkedHashMap<BaseEnergyKey, Double> baseEnergies = new LinkedHashMap<>(128, 0.75F, true) {
+		@Override protected boolean removeEldestEntry(Map.Entry<BaseEnergyKey, Double> eldest) {
+			return size() > 1024;
+		}
+	};
 	private final ThermalRegistry registry;
 	private final ThermalStateFunction stateFunction;
 	private final SolverUnitScale unitScale;
@@ -54,13 +61,12 @@ public final class LiquidEnergyColumn {
 			System.arraycopy(restoredEnergy, 0, internalEnergy, 0, restoredEnergy.length);
 			return;
 		}
-		HashMap<BaseEnergyKey, Double> baseEnergies = new HashMap<>();
 		for (int marker = 0; marker < markers.markerCount(); marker++) {
 			int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
 			double physicalMass = unitScale.kilograms(markers.mass(marker));
 			ChemicalMixtureRecord mixture = markers.mixture(marker);
 			BaseEnergyKey key = new BaseEnergyKey(
-					thermalHandle, Double.doubleToRawLongBits(physicalMass), mixture);
+					thermalHandle, Double.doubleToRawLongBits(physicalMass), mixture, markers.chemicalRegistry());
 			double base = baseEnergies.computeIfAbsent(key, ignored -> stateFunction.baseEnergy(
 					thermalHandle, physicalMass, mixture, markers.chemicalRegistry()));
 			internalEnergy[marker] = base + physicalMass
@@ -281,16 +287,19 @@ public final class LiquidEnergyColumn {
 	}
 
 	private double baseEnergy(int marker, ThermalCarrierContext markers) {
-		return stateFunction.baseEnergy(materialByFluidHandle[markers.fluidMaterialHandle(marker)],
-				unitScale.kilograms(markers.mass(marker)),
-				markers.mixture(marker), markers.chemicalRegistry());
+		int material = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
+		double mass = unitScale.kilograms(markers.mass(marker));
+		ChemicalMixtureRecord mixture = markers.mixture(marker);
+		ChemicalRegistry chemistry = markers.chemicalRegistry();
+		BaseEnergyKey key = new BaseEnergyKey(material, Double.doubleToRawLongBits(mass), mixture, chemistry);
+		return baseEnergies.computeIfAbsent(key, ignored -> stateFunction.baseEnergy(material, mass, mixture, chemistry));
 	}
 
 	private ThermalMaterialDefinition material(int marker, ThermalCarrierContext markers) {
 		return registry.material(materialByFluidHandle[markers.fluidMaterialHandle(marker)]);
 	}
 
-	private record BaseEnergyKey(int materialHandle, long massBits, ChemicalMixtureRecord mixture) { }
+	private record BaseEnergyKey(int materialHandle, long massBits, ChemicalMixtureRecord mixture, ChemicalRegistry registry) { }
 
 	public record Truncation(double newEnergy, double removedEnergy) {
 		public Truncation {
