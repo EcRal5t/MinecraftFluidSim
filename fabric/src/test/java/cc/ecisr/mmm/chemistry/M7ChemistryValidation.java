@@ -70,6 +70,19 @@ public final class M7ChemistryValidation {
 				"registry canonical bytes depend on file order");
 		check(reference.fingerprint().equals(shuffled.fingerprint()), "registry fingerprint depends on file order");
 		check(reference.fingerprint().matches("[0-9a-f]{64}"), "fingerprint is not SHA-256 hex");
+		ChemicalRegistry heavier = new ChemicalRegistry(reference.species().stream().map(value ->
+				new ChemicalSpecies(value.id(), value.composition(), value.charge(),
+						value.massKilogramsPerAu().multiply(2), value.baseArgb())).toList(),
+				reference.phases(), reference.reactions());
+		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(reference,
+				Map.of(BuiltinChemicalDefinitions.H2O, 123_457L), 0.125);
+		ExactRational expected = reference.species(reference.speciesHandle(BuiltinChemicalDefinitions.H2O))
+				.massKilogramsPerAu().multiply(123_457L).divide(ChemicalLimits.QUANTA_PER_AU);
+		java.util.stream.IntStream.range(0, 256).parallel().forEach(index -> {
+			ChemicalRegistry target = (index & 1) == 0 ? reference : heavier;
+			check(record.exactSpeciesMassKilograms(target).equals((index & 1) == 0 ? expected : expected.multiply(2)),
+					"chemical mass memo mixed registry identity and value");
+		});
 	}
 
 	private static void validateBundledDataDefinitions() throws Exception {

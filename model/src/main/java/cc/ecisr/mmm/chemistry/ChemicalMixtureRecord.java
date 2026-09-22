@@ -11,6 +11,9 @@ public final class ChemicalMixtureRecord {
 	private final long[] amounts;
 	private final long massResidualKilogramsBits;
 	private final int hash;
+	// A single immutable memo keeps registry identity and value atomically paired across readers.
+	private volatile SpeciesMass speciesMass;
+	private record SpeciesMass(ChemicalRegistry registry, ExactRational kilograms) { }
 
 	public ChemicalMixtureRecord(int[] speciesHandles, long[] amounts, long massResidualKilogramsBits) {
 		if (speciesHandles == null || amounts == null || speciesHandles.length == 0
@@ -76,11 +79,14 @@ public final class ChemicalMixtureRecord {
 	}
 
 	public ExactRational exactSpeciesMassKilograms(ChemicalRegistry registry) {
+		SpeciesMass cached = speciesMass;
+		if (cached != null && cached.registry() == registry) return cached.kilograms();
 		ExactRational result = ExactRational.ZERO;
 		for (int i = 0; i < speciesHandles.length; i++) {
 			result = result.add(registry.species(speciesHandles[i]).massKilogramsPerAu().multiply(amounts[i])
 					.divide(ChemicalLimits.QUANTA_PER_AU));
 		}
+		speciesMass = new SpeciesMass(registry, result);
 		return result;
 	}
 

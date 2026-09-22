@@ -480,6 +480,20 @@ public final class M7ChemicalTransportValidation {
 		} catch (IllegalArgumentException expected) {
 			check(expected.getMessage().contains("mass relation"), "Expected per-marker mass rejection");
 		}
+		FlipChemicalParticleState decoded = new FlipChemicalParticleState(material, CHEMISTRY,
+				state.mixtures(), mixtureIndices, state.copyIndicator(), state.copySpeciesTotals(),
+				state.residualLedgerBits(), state.externalSource(), state.escapedSink());
+		var equivalent = new ChemicalRegistry(CHEMISTRY.species(), CHEMISTRY.phases(), CHEMISTRY.reactions());
+		check(decoded.runtimeMixtures(equivalent).equals(state.runtimeMixtures(CHEMISTRY)),
+				"decoded and captured chemical records disagree");
+		var reversed = new java.util.ArrayList<>(state.mixtures());
+		java.util.Collections.reverse(reversed);
+		try {
+			new FlipChemicalParticleState(material, CHEMISTRY, reversed, mixtureIndices,
+					state.copyIndicator(), state.copySpeciesTotals(), state.residualLedgerBits(),
+					state.externalSource(), state.escapedSink());
+			throw new AssertionError("Unsorted chemical handoff was accepted");
+		} catch (IllegalArgumentException expected) { }
 		FluidDomain restored = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		restored.restoreChemicalParticleState(state, CHEMISTRY);
 		check(Arrays.equals(source.chemicalParcels().speciesTotals(source.particleCount()),
@@ -494,6 +508,14 @@ public final class M7ChemicalTransportValidation {
 		check(state.externalSource().groups().equals(restored.exportChemicalParticleState().externalSource().groups())
 				&& state.escapedSink().groups().equals(restored.exportChemicalParticleState().escapedSink().groups()),
 				"chemical handoff changed external source/sink audit ledgers");
+		var capturedRecord = state.runtimeMixtures(CHEMISTRY).get(mixtureIndices[0]);
+		restored.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 27L), false);
+		check(source.chemicalParcels().record(0).equals(capturedRecord)
+				&& state.runtimeMixtures(CHEMISTRY).get(mixtureIndices[0]).equals(capturedRecord),
+				"editing a restored store changed its source or snapshot");
+		restored.restoreChemicalParticleState(decoded, equivalent);
+		check(restored.exportChemicalParticleState().mixtures().equals(state.mixtures()),
+				"cold record conversion failed after independent candidate mutation");
 	}
 
 	private static void validateConcentrationControlsDensity() {

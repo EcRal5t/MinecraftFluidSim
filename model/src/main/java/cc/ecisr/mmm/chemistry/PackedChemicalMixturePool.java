@@ -28,6 +28,12 @@ public final class PackedChemicalMixturePool {
 		this.freeHandles = new int[allocated - 1];
 	}
 
+	/** Reserve a known restore inventory once, retaining the same hard handle budget. */
+	public void reserveRecords(int count) {
+		if (count < 0 || count >= handleCapacity) throw new IllegalArgumentException("Mixture reserve exceeds budget");
+		ensureAllocated(count);
+	}
+
 	public int create(ChemicalMixtureRecord record) {
 		validate(record);
 		if (liveCount == handleCapacity - 1) throw new PoolBudgetExceededException("Live mixture handle budget exceeded");
@@ -95,7 +101,7 @@ public final class PackedChemicalMixturePool {
 
 	private void ensureAllocated(int handle) {
 		if (handle < entryCount.length) return;
-		int capacity = (int) Math.min(handleCapacity, (long) entryCount.length * 2);
+		int capacity = (int) Math.min(handleCapacity, Math.max((long) handle + 1, (long) entryCount.length * 2));
 		entryCount = Arrays.copyOf(entryCount, capacity);
 		species = Arrays.copyOf(species, capacity * ChemicalLimits.MAX_SPECIES_PER_PARCEL);
 		amounts = Arrays.copyOf(amounts, species.length);

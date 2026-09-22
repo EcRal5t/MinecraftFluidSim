@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -18,7 +19,9 @@ public final class FlipChemicalParticleState {
 	private final FlipMaterialParticleState materials;
 	private final String registryFingerprint;
 	private final List<String> speciesPalette;
-	private final List<StableMixture> mixtures;
+	private volatile List<StableMixture> mixtures;
+	private final ChemicalRegistry runtimeRegistry;
+	private final List<ChemicalMixtureRecord> runtimeMixtures;
 	private final int[] markerMixtureIndex;
 	private final byte[] indicator;
 	private final long[] speciesTotals;
@@ -37,21 +40,37 @@ public final class FlipChemicalParticleState {
 			ChemicalTransferLedger externalSource,
 			ChemicalTransferLedger escapedSink
 	) {
+		this(materials, registry, mixtureTable, markerMixtureIndex, indicator, speciesTotals,
+				residualLedgerBits, externalSource, escapedSink, null);
+	}
+
+	private FlipChemicalParticleState(
+			FlipMaterialParticleState materials, ChemicalRegistry registry, List<StableMixture> mixtureTable,
+			int[] markerMixtureIndex, byte[] indicator, long[] speciesTotals, long residualLedgerBits,
+			ChemicalTransferLedger externalSource, ChemicalTransferLedger escapedSink,
+			List<ChemicalMixtureRecord> runtimeMixtures
+	) {
 		this.materials = java.util.Objects.requireNonNull(materials, "materials");
 		java.util.Objects.requireNonNull(registry, "registry");
 		this.registryFingerprint = registry.fingerprint();
 		this.speciesPalette = registry.species().stream().map(cc.ecisr.mmm.chemistry.ChemicalSpecies::id).toList();
-		if (mixtureTable == null || mixtureTable.size() > materials.particleCount()
-				|| (materials.particleCount() > 0 && mixtureTable.isEmpty())) {
+		this.runtimeRegistry = registry;
+		if (runtimeMixtures == null && (mixtureTable == null || mixtureTable.size() > materials.particleCount())) {
+			throw new IllegalArgumentException("Chemical mixture table is missing or over budget");
+		}
+		this.mixtures = mixtureTable == null ? null : List.copyOf(mixtureTable);
+		this.runtimeMixtures = runtimeMixtures == null ? mixtures.stream()
+				.map(mixture -> mixture.toRuntime(registry)).toList() : List.copyOf(runtimeMixtures);
+		runtimeMixtures = this.runtimeMixtures;
+		if (runtimeMixtures.size() > materials.particleCount()
+				|| (materials.particleCount() > 0 && runtimeMixtures.isEmpty())) {
 			throw new IllegalArgumentException("Chemical mixture table disagrees with marker inventory");
 		}
-		ArrayList<StableMixture> canonical = new ArrayList<>(mixtureTable);
-		canonical.sort(StableMixture.ORDER);
-		if (!canonical.equals(mixtureTable)) throw new IllegalArgumentException("Chemical mixture table is not canonical");
-		for (int i = 1; i < canonical.size(); i++) if (canonical.get(i - 1).equals(canonical.get(i))) {
-			throw new IllegalArgumentException("Chemical mixture table contains duplicates");
+		for (int i = 1; i < runtimeMixtures.size(); i++) {
+			if (compareMixtures(runtimeMixtures.get(i - 1), runtimeMixtures.get(i)) >= 0) {
+				throw new IllegalArgumentException("Chemical mixture table is not canonical/unique");
+			}
 		}
-		this.mixtures = List.copyOf(canonical);
 		if (markerMixtureIndex == null || indicator == null || speciesTotals == null
 				|| markerMixtureIndex.length != materials.particleCount()
 				|| indicator.length != materials.particleCount()
@@ -65,15 +84,13 @@ public final class FlipChemicalParticleState {
 		double residual = 0.0;
 		double[] mass = materials.copyParticleMass();
 		SolverUnitScale unitScale = SolverUnitScale.forCellSize(materials.cellSize());
-		List<ChemicalMixtureRecord> runtimeMixtures = mixtures.stream()
-				.map(mixture -> mixture.toRuntime(registry)).toList();
 		double[] mixtureMass = new double[runtimeMixtures.size()];
 		for (int table = 0; table < mixtureMass.length; table++) {
 			mixtureMass[table] = runtimeMixtures.get(table).massKilograms(registry);
 		}
 		for (int marker = 0; marker < markerMixtureIndex.length; marker++) {
 			int table = markerMixtureIndex[marker];
-			if (table < 0 || table >= mixtures.size() || (indicator[marker] & ~1) != 0) {
+			if (table < 0 || table >= runtimeMixtures.size() || (indicator[marker] & ~1) != 0) {
 				throw new IllegalArgumentException("Invalid per-marker chemical table index/indicator");
 			}
 			ChemicalMixtureRecord runtime = runtimeMixtures.get(table);
@@ -104,19 +121,12 @@ public final class FlipChemicalParticleState {
 			ChemicalTransferLedger externalSource, ChemicalTransferLedger escapedSink
 	) {
 		if (markerMixtures.size() != materials.particleCount()) throw new IllegalArgumentException("Marker mixture count mismatch");
-		ArrayList<StableMixture> perMarker = new ArrayList<>(markerMixtures.size());
-		HashMap<ChemicalMixtureRecord, StableMixture> stableByRuntime = new HashMap<>();
-		for (ChemicalMixtureRecord mixture : markerMixtures) {
-			perMarker.add(stableByRuntime.computeIfAbsent(
-					mixture, value -> StableMixture.fromRuntime(registry, value)));
-		}
-		java.util.TreeSet<StableMixture> unique = new java.util.TreeSet<>(StableMixture.ORDER);
-		unique.addAll(perMarker);
-		ArrayList<StableMixture> table = new ArrayList<>(unique);
-		Map<StableMixture, Integer> indices = new HashMap<>();
+		ArrayList<ChemicalMixtureRecord> table = new ArrayList<>(new HashSet<>(markerMixtures));
+		table.sort(FlipChemicalParticleState::compareMixtures);
+		Map<ChemicalMixtureRecord, Integer> indices = new HashMap<>();
 		for (int i = 0; i < table.size(); i++) indices.put(table.get(i), i);
-		int[] markerTable = new int[perMarker.size()];
-		for (int marker = 0; marker < markerTable.length; marker++) markerTable[marker] = indices.get(perMarker.get(marker));
+		int[] markerTable = new int[markerMixtures.size()];
+		for (int marker = 0; marker < markerTable.length; marker++) markerTable[marker] = indices.get(markerMixtures.get(marker));
 		long[] totals = new long[registry.species().size()];
 		double residual = 0.0;
 		for (ChemicalMixtureRecord mixture : markerMixtures) {
@@ -124,14 +134,39 @@ public final class FlipChemicalParticleState {
 					totals[mixture.speciesHandle(entry)], mixture.amountAt(entry));
 			residual += mixture.massResidualKilograms();
 		}
-		return new FlipChemicalParticleState(materials, registry, table, markerTable, indicator, totals,
-				Double.doubleToRawLongBits(residual), externalSource, escapedSink);
+		return new FlipChemicalParticleState(materials, registry, null, markerTable, indicator, totals,
+				Double.doubleToRawLongBits(residual), externalSource, escapedSink, table);
+	}
+
+	// ChemicalRegistry assigns handles in stable species-ID order, matching the exported table order.
+	private static int compareMixtures(ChemicalMixtureRecord left, ChemicalMixtureRecord right) {
+		int size = Integer.compare(left.entryCount(), right.entryCount());
+		for (int i = 0; size == 0 && i < left.entryCount(); i++) {
+			int species = Integer.compare(left.speciesHandle(i), right.speciesHandle(i));
+			if (species != 0) return species;
+			int amount = Long.compare(left.amountAt(i), right.amountAt(i));
+			if (amount != 0) return amount;
+		}
+		return size != 0 ? size : Long.compareUnsigned(left.massResidualKilogramsBits(), right.massResidualKilogramsBits());
 	}
 
 	public FlipMaterialParticleState materials() { return materials; }
 	public String registryFingerprint() { return registryFingerprint; }
 	public List<String> speciesPalette() { return speciesPalette; }
-	public List<StableMixture> mixtures() { return mixtures; }
+	public List<StableMixture> mixtures() {
+		List<StableMixture> stable = mixtures;
+		if (stable == null) mixtures = stable = runtimeMixtures.stream()
+				.map(mixture -> StableMixture.fromRuntime(runtimeRegistry, mixture)).toList();
+		return stable;
+	}
+	/** Immutable records may be shared; every restored store owns its marker handles and packed arrays. */
+	public List<ChemicalMixtureRecord> runtimeMixtures(ChemicalRegistry registry) {
+		if (registry == runtimeRegistry) return runtimeMixtures;
+		if (registry == null || !registryFingerprint.equals(registry.fingerprint())) {
+			throw new IllegalArgumentException("Chemical handoff registry identity mismatch");
+		}
+		return mixtures().stream().map(mixture -> mixture.toRuntime(registry)).toList();
+	}
 	public int[] copyMarkerMixtureIndex() { return markerMixtureIndex.clone(); }
 	public byte[] copyIndicator() { return indicator.clone(); }
 	public long[] copySpeciesTotals() { return speciesTotals.clone(); }
@@ -142,22 +177,12 @@ public final class FlipChemicalParticleState {
 	public int particleCount() { return materials.particleCount(); }
 	public long cpuBytes() {
 		long tableBytes = 0L;
-		for (StableMixture mixture : mixtures) tableBytes += Long.BYTES + (long) mixture.components().size() * (Long.BYTES + 4L);
+		for (ChemicalMixtureRecord mixture : runtimeMixtures) tableBytes += Long.BYTES + (long) mixture.entryCount() * (Long.BYTES + 4L);
 		return materials.cpuBytes() + tableBytes + (long) markerMixtureIndex.length * Integer.BYTES
 				+ indicator.length + (long) speciesTotals.length * Long.BYTES;
 	}
 
 	public record StableMixture(List<Component> components, long massResidualBits) {
-		private static final Comparator<StableMixture> ORDER = (left, right) -> {
-			int size = Integer.compare(left.components.size(), right.components.size());
-			for (int i = 0; size == 0 && i < left.components.size(); i++) {
-				int id = left.components.get(i).speciesId.compareTo(right.components.get(i).speciesId);
-				if (id != 0) return id;
-				int amount = Long.compare(left.components.get(i).amountQuanta, right.components.get(i).amountQuanta);
-				if (amount != 0) return amount;
-			}
-			return size != 0 ? size : Long.compareUnsigned(left.massResidualBits, right.massResidualBits);
-		};
 
 		public StableMixture {
 			components = List.copyOf(components);
