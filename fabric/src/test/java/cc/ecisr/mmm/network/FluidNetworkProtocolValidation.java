@@ -358,6 +358,17 @@ public final class FluidNetworkProtocolValidation {
 		} finally { buffer.release(); }
 
 		FluidGranularSnapshotPayload defaultGranular = defaultSizedGranularSnapshot();
+		FluidChemicalSnapshotPayload chemical = chemicalSnapshot(2L, 1L, "a".repeat(64));
+		FluidThermalSnapshotPayload chemicalThermal = thermalSnapshot(materialSnapshot(2L, 1L),
+				2L, 1L, "e".repeat(64), chemical, null);
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		try {
+			FluidThermalSnapshotPayload.CODEC.encode(buffer, chemicalThermal);
+			decoded = FluidThermalSnapshotPayload.CODEC.decode(buffer);
+			require(decoded.chemicalLayer().material() == decoded.material()
+					&& Arrays.equals(decoded.chemicalLayer().ph(), chemical.ph()) && buffer.readableBytes() == 0,
+					"thermal chemical layer shares equivalent material snapshots through the codec");
+		} finally { buffer.release(); }
 		int cells = 9_216; short[] temperatures = new short[cells];
 		Arrays.fill(temperatures, (short) (300 * 16));
 		FluidThermalSnapshotPayload defaultSized = new FluidThermalSnapshotPayload(FluidProtocol.Layout.THERMAL,
@@ -367,8 +378,8 @@ public final class FluidNetworkProtocolValidation {
 		try {
 			FluidThermalSnapshotPayload.CODEC.encode(buffer, defaultSized);
 			System.out.println("Composed thermal snapshot bytes: " + buffer.writerIndex());
-			require(buffer.writerIndex() <= 512 * 1024,
-					"default 9,216-cell composed thermal snapshot exceeded 512 KiB: " + buffer.writerIndex());
+			require(buffer.writerIndex() <= 300 * 1024,
+					"default 9,216-cell composed thermal snapshot exceeded 300 KiB: " + buffer.writerIndex());
 		} finally { buffer.release(); }
 	}
 

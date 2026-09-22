@@ -51,9 +51,13 @@ public final class FluidMaterialSurfaceMesher {
 		Point[] cubePoints = new Point[8];
 		double[] cubeLiquid = new double[8];
 		double[][] cubePhases = new double[snapshot.phaseGroups().size()][8];
-		for (int z = -1; z < snapshot.sizeZ(); z++) for (int y = -1; y < snapshot.sizeY(); y++) {
-			for (int x = -1; x < snapshot.sizeX(); x++) {
-				setCube(snapshot, liquid, nodeSizeX, nodeSizeY, x, y, z, cubePoints, cubeLiquid, cubePhases);
+		// Adjacent cubes share their node samples. Two Z planes keep scratch proportional to cross-section.
+		double[][] phaseNodes = new double[cubePhases.length][2 * nodeSizeX * nodeSizeY];
+		samplePhasePlane(snapshot, phaseNodes, -1, nodeSizeX, nodeSizeY);
+		for (int z = -1; z < snapshot.sizeZ(); z++) {
+			samplePhasePlane(snapshot, phaseNodes, z + 1, nodeSizeX, nodeSizeY);
+			for (int y = -1; y < snapshot.sizeY(); y++) for (int x = -1; x < snapshot.sizeX(); x++) {
+				setCube(snapshot, liquid, phaseNodes, nodeSizeX, nodeSizeY, x, y, z, cubePoints, cubeLiquid, cubePhases);
 				for (int[] tetrahedron : CUBE_TETRAHEDRA) {
 					for (Triangle triangle : outerTriangles(cubePoints, cubeLiquid, tetrahedron)) {
 						TriangleKey key = TriangleKey.of(triangle);
@@ -137,7 +141,7 @@ public final class FluidMaterialSurfaceMesher {
 	}
 
 	private static void setCube(
-			FluidMaterialRenderSnapshot snapshot, double[] liquid, int nodeSizeX, int nodeSizeY,
+			FluidMaterialRenderSnapshot snapshot, double[] liquid, double[][] phaseNodes, int nodeSizeX, int nodeSizeY,
 			int x, int y, int z, Point[] points, double[] values, double[][] phases
 	) {
 		for (int vertex = 0; vertex < 8; vertex++) {
@@ -151,9 +155,21 @@ public final class FluidMaterialSurfaceMesher {
 			);
 			values[vertex] = liquid[nodeIndex(nodeSizeX, nodeSizeY, sampleX, sampleY, sampleZ)];
 			for (int phase = 0; phase < phases.length; phase++) {
-				phases[phase][vertex] = phaseFraction(snapshot, phase, sampleX, sampleY, sampleZ);
+				phases[phase][vertex] = phaseNodes[phase][phaseNodeIndex(nodeSizeX, nodeSizeY, sampleX, sampleY, sampleZ)];
 			}
 		}
+	}
+
+	private static void samplePhasePlane(FluidMaterialRenderSnapshot snapshot, double[][] phases, int z,
+			int sizeX, int sizeY) {
+		for (int y = -1; y <= snapshot.sizeY(); y++) for (int x = -1; x <= snapshot.sizeX(); x++) {
+			int node = phaseNodeIndex(sizeX, sizeY, x, y, z);
+			for (int phase = 0; phase < phases.length; phase++) phases[phase][node] = phaseFraction(snapshot, phase, x, y, z);
+		}
+	}
+
+	private static int phaseNodeIndex(int sizeX, int sizeY, int x, int y, int z) {
+		return ((z + 1) % 2 * sizeY + y + 1) * sizeX + x + 1;
 	}
 
 	private static List<Triangle> outerTriangles(Point[] points, double[] values, int[] tetrahedron) {

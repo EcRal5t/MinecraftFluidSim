@@ -67,6 +67,11 @@ public final class M7ChemicalTransportValidation {
 		check(maximum.pool().cpuBytes() < 32_768, "empty mixture pool allocates only its initial storage");
 		var growing = new cc.ecisr.mmm.chemistry.PackedChemicalMixturePool(130);
 		var record = new ChemicalMixtureRecord(new int[] {0}, new long[] {1}, 0);
+		try {
+			growing.create(new ChemicalMixtureRecord(new int[] {ChemicalLimits.MAX_SPECIES}, new long[] {1}, 0));
+			throw new AssertionError("out-of-budget species was accepted");
+		} catch (IllegalArgumentException expected) { }
+		check(growing.liveCount() == 0, "invalid insertion preserves the pool budget");
 		for (int handle = 1; handle <= 130; handle++) {
 			check(growing.create(record) == handle, "pool growth preserves handle order");
 		}
