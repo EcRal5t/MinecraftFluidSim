@@ -65,10 +65,7 @@ public final class LiquidEnergyColumn {
 			int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
 			double physicalMass = unitScale.kilograms(markers.mass(marker));
 			ChemicalMixtureRecord mixture = markers.mixture(marker);
-			BaseEnergyKey key = new BaseEnergyKey(
-					thermalHandle, Double.doubleToRawLongBits(physicalMass), mixture, markers.chemicalRegistry());
-			double base = baseEnergies.computeIfAbsent(key, ignored -> stateFunction.baseEnergy(
-					thermalHandle, physicalMass, mixture, markers.chemicalRegistry()));
+			double base = baseEnergy(thermalHandle, physicalMass, mixture, markers.chemicalRegistry());
 			internalEnergy[marker] = base + physicalMass
 					* registry.material(thermalHandle).sensibleSpecificEnergyAt(insertionTemperatureK);
 			if (!Double.isFinite(internalEnergy[marker])) {
@@ -150,7 +147,7 @@ public final class LiquidEnergyColumn {
 		ThermalMaterialDefinition material = material(marker, markers);
 		int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
 		double physicalMass = unitScale.kilograms(candidateMass);
-		double base = stateFunction.baseEnergy(
+		double base = baseEnergy(
 				thermalHandle, physicalMass, candidateMixture, markers.chemicalRegistry());
 		double sensible = (internalEnergy[marker] - base) / physicalMass;
 		if (sensible < material.sensibleSpecificEnergyAt(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) {
@@ -280,7 +277,7 @@ public final class LiquidEnergyColumn {
 		int thermalHandle = materialByFluidHandle[fluidMaterialHandle];
 		ThermalMaterialDefinition material = registry.material(thermalHandle);
 		double physicalMass = unitScale.kilograms(mass);
-		double base = stateFunction.baseEnergy(thermalHandle, physicalMass, mixture, chemicalRegistry);
+		double base = baseEnergy(thermalHandle, physicalMass, mixture, chemicalRegistry);
 		double energy = base + physicalMass * material.sensibleSpecificEnergyAt(temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
 		return energy;
@@ -291,6 +288,10 @@ public final class LiquidEnergyColumn {
 		double mass = unitScale.kilograms(markers.mass(marker));
 		ChemicalMixtureRecord mixture = markers.mixture(marker);
 		ChemicalRegistry chemistry = markers.chemicalRegistry();
+		return baseEnergy(material, mass, mixture, chemistry);
+	}
+
+	private double baseEnergy(int material, double mass, ChemicalMixtureRecord mixture, ChemicalRegistry chemistry) {
 		BaseEnergyKey key = new BaseEnergyKey(material, Double.doubleToRawLongBits(mass), mixture, chemistry);
 		return baseEnergies.computeIfAbsent(key, ignored -> stateFunction.baseEnergy(material, mass, mixture, chemistry));
 	}
