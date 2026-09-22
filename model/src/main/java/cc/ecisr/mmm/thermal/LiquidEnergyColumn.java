@@ -7,9 +7,7 @@ import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Owns the per-liquid-marker internal energy column: ordinal storage, exact sums, modeled
@@ -18,12 +16,6 @@ import java.util.Map;
  * truth token.
  */
 public final class LiquidEnergyColumn {
-	// Derived values are bounded and keyed by every input; ordinal edits need no cache invalidation.
-	private final LinkedHashMap<BaseEnergyKey, Double> baseEnergies = new LinkedHashMap<>(128, 0.75F, true) {
-		@Override protected boolean removeEldestEntry(Map.Entry<BaseEnergyKey, Double> eldest) {
-			return size() > 1024;
-		}
-	};
 	private final ThermalRegistry registry;
 	private final ThermalStateFunction stateFunction;
 	private final SolverUnitScale unitScale;
@@ -292,15 +284,12 @@ public final class LiquidEnergyColumn {
 	}
 
 	private double baseEnergy(int material, double mass, ChemicalMixtureRecord mixture, ChemicalRegistry chemistry) {
-		BaseEnergyKey key = new BaseEnergyKey(material, Double.doubleToRawLongBits(mass), mixture, chemistry);
-		return baseEnergies.computeIfAbsent(key, ignored -> stateFunction.baseEnergy(material, mass, mixture, chemistry));
+		return stateFunction.baseEnergy(material, mass, mixture, chemistry);
 	}
 
 	private ThermalMaterialDefinition material(int marker, ThermalCarrierContext markers) {
 		return registry.material(materialByFluidHandle[markers.fluidMaterialHandle(marker)]);
 	}
-
-	private record BaseEnergyKey(int materialHandle, long massBits, ChemicalMixtureRecord mixture, ChemicalRegistry registry) { }
 
 	public record Truncation(double newEnergy, double removedEnergy) {
 		public Truncation {

@@ -169,6 +169,46 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		double productTemperatureB = state.stateForInternalEnergy(handle, 1.0, productsB, reactantReference).temperatureK();
 		require(productTemperatureA > 300.0 && close(productTemperatureA, productTemperatureB),
 				"formation energy did not produce path-independent exothermic temperature rise");
+		validateReferenceEnergyReuse(solution);
+	}
+
+	private static void validateReferenceEnergyReuse(ThermalMaterialDefinition solution) {
+		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		ThermalMaterialDefinition other = material("test:thermal/other", "test:other", -13.0,
+				solution.caloricSegments());
+		List<ThermalSpeciesOffset> offsets = new java.util.ArrayList<>();
+		for (var host : List.of(solution, other)) {
+			offsets.add(new ThermalSpeciesOffset(host.id() + "/h", "mmm:h_plus", host.id(), ExactRational.parse("17/13")));
+			offsets.add(new ThermalSpeciesOffset(host.id() + "/oh", "mmm:oh_minus", host.id(), ExactRational.ZERO));
+			offsets.add(new ThermalSpeciesOffset(host.id() + "/water", "mmm:h2o", host.id(),
+					ExactRational.parse(host == solution ? "-59/7" : "97/11")));
+		}
+		ThermalRegistry registry = new ThermalRegistry(List.of(solution, other), offsets, List.of(),
+				chemistry.fingerprint(), "");
+		ThermalStateFunction function = new ThermalStateFunction(registry);
+		// More distinct terms than cache slots, with concurrent readers and opposite map orders.
+		java.util.stream.IntStream.range(0, 20_000).parallel().forEach(index -> {
+			int host = index & 1;
+			double mass = 0.125 + index / 32.0;
+			Map<String, Long> amounts = new java.util.TreeMap<>();
+			amounts.put("mmm:h_plus", 9_007_199_254_741L + index);
+			amounts.put("mmm:oh_minus", 19L);
+			amounts.put("mmm:h2o", 13L + index);
+			var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry, amounts, index / 128.0);
+			for (int order = 0; order < 2; order++) {
+				double expected = mass * registry.material(host).referenceSpecificEnergyEuPerMu();
+				for (var entry : amounts.entrySet()) expected += registry.speciesOffset(host, entry.getKey())
+						.referenceInternalEnergyEuPerAu().multiply(entry.getValue())
+						.divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+				for (int repeat = 0; repeat < 2; repeat++) {
+					require(Double.doubleToRawLongBits(function.baseEnergy(host, mass, amounts))
+							== Double.doubleToRawLongBits(expected), "cached thermal terms changed sum order or rounding");
+					if (order == 0) require(Double.doubleToRawLongBits(function.baseEnergy(host, mass, mixture, chemistry))
+							== Double.doubleToRawLongBits(expected), "packed thermal terms disagree with canonical species order");
+				}
+				if (order == 0) amounts = ((java.util.TreeMap<String, Long>) amounts).descendingMap();
+			}
+		});
 	}
 
 	static void reactionCommitValidatesEnergyBeforeMutation() {
