@@ -26,10 +26,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 			for (int refinement = 0; ; refinement++) {
 				FluidDomain candidate = restoreCandidate(request.state());
 				candidate.minimumMechanicalSubsteps = minimumSubsteps;
-				MovingBodyFluidCoupling.Result movingBodyCoupling = MovingBodyFluidCoupling.Result.NONE;
-				for (var movingBody : request.movingBodies()) {
-					movingBodyCoupling = movingBodyCoupling.plus(candidate.applyMovingBodyCoupling(movingBody));
-				}
+				MovingBodyFluidCoupling.Result movingBodyCoupling = candidate.applyMovingBodyCouplings(request.movingBodies());
 				spentSubsteps = Math.addExact(spentSubsteps,
 						candidate.calculateSubsteps(candidate.config.timeStep()));
 				if (spentSubsteps > MAXIMUM_CUMULATIVE_SUBSTEPS) {

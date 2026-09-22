@@ -619,6 +619,23 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	 * the actual float velocity writes, including their representational roundoff.
 	 */
 	public MovingBodyFluidCoupling.Result applyMovingBodyCoupling(MovingBodyFluidCoupling.Request request) {
+		return applyMovingBodyCoupling(request, null);
+	}
+
+	MovingBodyFluidCoupling.Result applyMovingBodyCouplings(java.util.List<MovingBodyFluidCoupling.Request> requests) {
+		if (requests.isEmpty()) return MovingBodyFluidCoupling.Result.NONE;
+		if (requests.size() == 1) return applyMovingBodyCoupling(requests.getFirst());
+		var neighborhoods = new MarkerNeighborhoodIndex(sizeX, sizeY, sizeZ, particles.count(), marker -> particleCellIndex(
+				particles.positionX(marker), particles.positionY(marker), particles.positionZ(marker)));
+		MovingBodyFluidCoupling.Result result = MovingBodyFluidCoupling.Result.NONE;
+		for (var request : requests) {
+			result = result.plus(applyMovingBodyCoupling(request, neighborhoods.around(
+					request.localXMetres(), request.localYMetres(), request.localZMetres(), config.cellSize())));
+		}
+		return result;
+	}
+
+	private MovingBodyFluidCoupling.Result applyMovingBodyCoupling(MovingBodyFluidCoupling.Request request, int[] ordinals) {
 		if (request == null) throw new IllegalArgumentException("Moving-body coupling request is missing");
 		requireFiniteMarkerVelocity(request.velocityXMetresPerSecond());
 		requireFiniteMarkerVelocity(request.velocityYMetresPerSecond());
@@ -630,7 +647,9 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		}
 		double weightedVolume = 0.0;
 		int coupledMarkers = 0;
-		for (int marker = 0; marker < particles.count(); marker++) {
+		int count = ordinals == null ? particles.count() : ordinals.length;
+		for (int index = 0; index < count; index++) {
+			int marker = ordinals == null ? index : ordinals[index];
 			double weight = movingBodyWeight(request, marker);
 			if (weight <= 0.0) continue;
 			weightedVolume += weight * particles.volume(marker);
@@ -640,7 +659,8 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		double volumeScale = Math.min(1.0, requestedCellVolume / weightedVolume);
 		double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0, coupledVolume = 0.0;
 		boolean changed = false;
-		for (int marker = 0; marker < particles.count(); marker++) {
+		for (int index = 0; index < count; index++) {
+			int marker = ordinals == null ? index : ordinals[index];
 			double weight = movingBodyWeight(request, marker);
 			double blend = volumeScale * weight;
 			if (blend <= 0.0) continue;
