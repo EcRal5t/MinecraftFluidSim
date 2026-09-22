@@ -24,6 +24,14 @@ final class CellInventoryReader {
 		this.domain = domain;
 	}
 
+	int nextMarkerInCell(int cell, int after) {
+		if (!domain.gridDirty) return after < 0 ? domain.markerGrid.cellMarkerHead[cell] : domain.markerGrid.particleCellNext[after];
+		for (int marker = after + 1; marker < domain.particles.count(); marker++) {
+			if (domain.particleCellIndex(marker) == cell) return marker;
+		}
+		return -1;
+	}
+
 	CellCarrierInventoryView observeCellCarriers(int x, int y, int z) {
 		int requested = domain.cellIndexChecked(x, y, z);
 		TreeMap<String, SolidObservationAccumulator> accumulated = new TreeMap<>();
@@ -79,9 +87,7 @@ final class CellInventoryReader {
 
 	boolean hasCondensedInventoryInCell(int x, int y, int z) {
 		int requested = domain.cellIndexChecked(x, y, z);
-		for (int marker = 0; marker < domain.particles.count(); marker++) {
-			if (domain.particleCellIndex(marker) == requested) return true;
-		}
+		if (nextMarkerInCell(requested, -1) >= 0) return true;
 		if (domain.granularState != null) {
 			for (int ordinal = 0; ordinal < domain.granularState.parcels.count(); ordinal++) {
 				if (domain.granularParcelCell(domain.granularState.parcels.parcel(ordinal)) == requested) return true;
@@ -98,8 +104,7 @@ final class CellInventoryReader {
 				? new double[]{0.0} : new double[domain.materialRegistry.size()];
 		double[] materialMass = new double[materialVolume.length];
 		TreeMap<String, Long> species = new TreeMap<>();
-		for (int marker = 0; marker < domain.particles.count(); marker++) {
-			if (domain.particleCellIndex(marker) != requested) continue;
+		for (int marker = nextMarkerInCell(requested, -1); marker >= 0; marker = nextMarkerInCell(requested, marker)) {
 			normalizedVolume += domain.particles.volume(marker);
 			solverMass += domain.particles.mass(marker);
 			int material = domain.materialRegistry == null ? 0 : domain.particles.materialHandle(marker);

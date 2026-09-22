@@ -20,7 +20,24 @@ public final class CarrierMutationValidation {
 		capacityEdgeRejectsBeforeAnyWrite();
 		stalePlansRejectWithoutStateChange();
 		wholesaleCountBindsRevisionAndBudget();
+		readOnlyCellQueriesFollowCarrierEdits();
 		System.out.println("Carrier mutation validation passed");
+	}
+
+	private static void readOnlyCellQueriesFollowCarrierEdits() {
+		FluidDomain domain = emptyMaterialDomain(256);
+		domain.setVolume(1, 1, 1, 1);
+		domain.setVolume(2, 1, 1, 0.5F);
+		for (int round = 0; round < 3; round++) {
+			boolean dirty = domain.gridDirty;
+			var before = domain.observeCellInventory(1, 1, 1);
+			require(domain.gridDirty == dirty, "query preserves grid rebuild scheduling");
+			domain.ensureGrid();
+			var after = domain.observeCellInventory(1, 1, 1);
+			require(java.util.Objects.equals(before, after), "indexed query matches the authoritative full scan");
+			require(!domain.gridDirty, "indexed observation keeps the grid clean");
+			domain.setVolume(1, 1, 1, round == 0 ? 0 : 0.75F);
+		}
 	}
 
 	private static FluidSolverConfig config() {

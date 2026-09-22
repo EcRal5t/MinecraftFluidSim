@@ -239,7 +239,7 @@ final class ThermalCellOperations {
 		}
 		ArrayList<ThermalStateFunction.InventoryPortion> inventory = new ArrayList<>();
 		SignedDyadic energy = SignedDyadic.ZERO;
-		for (int marker = 0; marker < markers.markerCount(); marker++) if (markers.cell(marker) == cell) {
+		for (int marker = markers.nextMarkerInCell(cell, -1); marker >= 0; marker = markers.nextMarkerInCell(cell, marker)) {
 			inventory.add(new ThermalStateFunction.InventoryPortion(
 					materialByFluidHandle[markers.fluidMaterialHandle(marker)],
 					unitScale.kilograms(markers.mass(marker)),

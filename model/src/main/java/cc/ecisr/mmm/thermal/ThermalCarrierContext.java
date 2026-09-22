@@ -15,6 +15,11 @@ import java.util.Map;
 public interface ThermalCarrierContext {
 	int markerCount();
 	int cell(int marker);
+	/** Ascending marker ordinals in one cell; callers start with after = -1. */
+	default int nextMarkerInCell(int cell, int after) {
+		for (int marker = after + 1; marker < markerCount(); marker++) if (cell(marker) == cell) return marker;
+		return -1;
+	}
 	int fluidMaterialHandle(int marker);
 	double mass(int marker);
 	double volume(int marker);

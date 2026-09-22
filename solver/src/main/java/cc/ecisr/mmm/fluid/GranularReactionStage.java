@@ -51,6 +51,7 @@ final class GranularReactionStage {
 
 	private final Workspace state;
 	private final Access access;
+	private Map<Integer, List<Integer>> activeByCell;
 
 	GranularReactionStage(Workspace state, Access access) {
 		this.state = state;
@@ -58,6 +59,7 @@ final class GranularReactionStage {
 	}
 
 	FluidDomain.PhaseTransferStats step(int[] dirtyCells) {
+		activeByCell = null;
 		if (!access.enabled() || dirtyCells.length == 0) {
 			return new FluidDomain.PhaseTransferStats(0, 0, 0, 0L);
 		}
@@ -167,9 +169,9 @@ final class GranularReactionStage {
 		long total = 0L;
 		SolidEntity selected = null;
 		int material = granular.registry.materialHandle(rule.solidMaterialId());
-		for (int parcelIndex = 0; parcelIndex < granular.parcels.count(); parcelIndex++) {
+		for (int parcelIndex : activeParcels(cell)) {
 			GranularParcelStore.Parcel parcel = granular.parcels.parcel(parcelIndex);
-			if (parcel.materialHandle() != material || access.parcelCell(parcel) != cell) continue;
+			if (parcel.materialHandle() != material) continue;
 			long extent = matchingSolidExtent(
 					parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.mass(), rule);
 			if (extent <= 0L) continue;
@@ -186,6 +188,18 @@ final class GranularReactionStage {
 			}
 		}
 		return total == 0L ? null : new AccessibleSolid(total, selected);
+	}
+
+	private List<Integer> activeParcels(int cell) {
+		if (activeByCell == null) {
+			activeByCell = new java.util.HashMap<>();
+			GranularParcelStore parcels = access.granularState().parcels;
+			for (int ordinal = 0; ordinal < parcels.count(); ordinal++) {
+				int parcelCell = access.parcelCell(parcels.parcel(ordinal));
+				activeByCell.computeIfAbsent(parcelCell, ignored -> new ArrayList<>()).add(ordinal);
+			}
+		}
+		return activeByCell.getOrDefault(cell, List.of());
 	}
 
 	private long matchingSolidExtent(
@@ -302,10 +316,9 @@ final class GranularReactionStage {
 		float velocityY = state.particles().velocityY(carrierMarker);
 		float velocityZ = state.particles().velocityZ(carrierMarker);
 		float maximumVelocityDelta = access.mergeVelocityDelta();
-		for (int parcelIndex = 0; parcelIndex < granular.parcels.count(); parcelIndex++) {
+		for (int parcelIndex : activeParcels(cell)) {
 			GranularParcelStore.Parcel existing = granular.parcels.parcel(parcelIndex);
-			if (existing.materialHandle() != material || existing.solidCompositionHandle() == 0
-					|| access.parcelCell(existing) != cell) continue;
+			if (existing.materialHandle() != material || existing.solidCompositionHandle() == 0) continue;
 			long combinedSvq = Math.addExact(existing.solidVolumeSvq(), plan.signedSolidSvq());
 			if (combinedSvq > maximum || !plan.transferredComposition().proportionalTo(
 					granular.compositions.record(existing.solidCompositionHandle()),
@@ -519,6 +532,7 @@ final class GranularReactionStage {
 	}
 
 	private void markPhaseTransferDirty(int cell) {
+		activeByCell = null; // A commit can append, move or swap-remove an active parcel.
 		access.chemistry().markDirtyCell(cell);
 		access.depositDynamics().disturbCell(cell);
 		access.markGridDirty();
