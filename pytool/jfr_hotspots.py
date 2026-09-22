@@ -57,9 +57,8 @@ def tally(stacks: list[list[str]], module: str) -> tuple[Counter, Counter]:
     self_hits: Counter = Counter()
     inclusive_hits: Counter = Counter()
     for frames in stacks:
-        if module not in frames[0]:
-            continue
-        self_hits[frames[0]] += 1
+        if frames and module in frames[0]:
+            self_hits[frames[0]] += 1
         for frame in frames:
             if module in frame:
                 inclusive_hits[frame] += 1
@@ -89,7 +88,7 @@ def neighbours(stacks: list[list[str]], pattern: str, direction: str, top: int) 
         for depth, frame in enumerate(frames):
             if pattern not in frame:
                 continue
-            index = depth - 1 if direction == "caller" else depth + 1
+            index = depth + 1 if direction == "caller" else depth - 1
             if 0 <= index < len(frames):
                 hits[frames[index]] += 1
             break
