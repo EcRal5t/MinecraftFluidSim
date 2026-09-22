@@ -2,15 +2,20 @@ package cc.ecisr.mmm.fluid;
 
 /** Selects the liquid/gas PCG or the double-precision pressure system with shared granular drag. */
 final class PressureSystem {
+	private static final int LIQUID_PRESSURE = -1;
+	private static final int FIXED_PRESSURE = 0;
 	private final FluidDomain domain;
 	private final GranularPressureCoupling granular;
 	private final GranularImplicitDrag drag;
 	private final double[] liquidPressure, gasPressure;
+	/** Per-projection pressure source: liquid, fixed zero, or a positive gas node id. */
+	private final int[] neighborPressureSource;
 	private float substepDuration;
 
 	PressureSystem(FluidDomain domain) {
 		this.domain = domain;
 		liquidPressure = new double[domain.cellCount]; gasPressure = new double[domain.cellCount + 1];
+		neighborPressureSource = new int[domain.cellCount];
 		this.granular = new GranularPressureCoupling(domain);
 		this.drag = new GranularImplicitDrag(domain, granular);
 	}
@@ -147,6 +152,11 @@ final class PressureSystem {
 
 	/** Freezes the physical face operator once for this projection; PCG only changes its vectors. */
 	private void assembleMatrix() {
+		for (int cell = 0; cell < domain.cellCount; cell++) {
+			neighborPressureSource[cell] = domain.isFluid(cell)
+					? (cell == domain.pressureAnchor ? FIXED_PRESSURE : LIQUID_PRESSURE)
+					: Math.max(FIXED_PRESSURE, gasUnknownOfAirCell(cell));
+		}
 		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
 			int index = domain.projection.fluidUnknownCells[ordinal];
 			int x = index % domain.sizeX;
@@ -235,8 +245,8 @@ final class PressureSystem {
 	}
 
 	private double neighborValue(int neighbor, double[] source, double[] gasSource) {
-		if (domain.isFluid(neighbor)) return neighbor != domain.pressureAnchor ? source[neighbor] : 0.0F;
-		int node = gasUnknownOfAirCell(neighbor);
+		int node = neighborPressureSource[neighbor];
+		if (node == LIQUID_PRESSURE) return source[neighbor];
 		return node > 0 ? gasSource[node] : 0.0F;
 	}
 
@@ -244,7 +254,7 @@ final class PressureSystem {
 			int fluid, int neighbor, float coefficient, double[] source, double[] gasSource,
 			double[] gasDestination, double inverseCellSquared
 	) {
-		int node = gasUnknownOfAirCell(neighbor);
+		int node = neighborPressureSource[neighbor];
 		if (node > 0 && coefficient > 0.0F) {
 			gasDestination[node] += coefficient * (gasSource[node] - source[fluid]) * inverseCellSquared;
 		}

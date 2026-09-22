@@ -14,6 +14,7 @@ public final class M5GasLiquidCouplingValidation {
 
 	public static void main(String[] args) {
 		validateSharedLiquidGasFaceAlgebra();
+		validatePressureSourceRefresh();
 		validateSealedGasAndCapillaryJumpShareFaces();
 		validateSplitRetainsSealedShareWhenPeerVents();
 		validateClosedCavityAfterBootstrapStartsAsVacuum();
@@ -33,6 +34,48 @@ public final class M5GasLiquidCouplingValidation {
 		validateOrificeEqualization();
 		System.out.println("M5 gas-liquid coupling gate passed: analytic positive/negative hydrostatics, "
 				+ "sealed compression, negative-gauge suction, finite-rate orifice equalization and exact ledgers");
+	}
+
+	/** Compare prepared neighbor sources with direct classification across successive projections. */
+	private static void validatePressureSourceRefresh() {
+		FluidDomain domain = new FluidDomain(4, 3, 2, FluidSolverConfig.prototypeDefaults());
+		PressureSystem system = new PressureSystem(domain);
+		double[] liquid = new double[domain.cellCount], gas = new double[domain.cellCount + 1];
+		for (int i = 0; i < liquid.length; i++) liquid[i] = (i - 11) * 0.3125;
+		for (int i = 0; i < gas.length; i++) gas[i] = (i + 3) * -0.1875;
+		try {
+			var assemble = PressureSystem.class.getDeclaredMethod("assembleMatrix");
+			var neighbor = PressureSystem.class.getDeclaredMethod("neighborValue", int.class, double[].class, double[].class);
+			var accumulate = PressureSystem.class.getDeclaredMethod("accumulateGasFace", int.class, int.class,
+					float.class, double[].class, double[].class, double[].class, double.class);
+			assemble.setAccessible(true); neighbor.setAccessible(true); accumulate.setAccessible(true);
+			for (int pass = 0; pass < 6; pass++) {
+				domain.pressureAnchor = pass;
+				for (int node = 1; node <= 3; node++) domain.projection.gasPressureUnknown[node] = (node + pass) % 2 == 0;
+				for (int cell = 0; cell < domain.cellCount; cell++) {
+					domain.geometry.solid[cell] = (cell + pass) % 5 == 0;
+					domain.projection.pressureFluid[cell] = !domain.geometry.solid[cell] && (cell + pass) % 2 == 0;
+					domain.projection.pressureAirNodeId[cell] = (cell + pass) % 4;
+				}
+				assemble.invoke(system);
+				double[] expectedGas = new double[gas.length], actualGas = new double[gas.length];
+				for (int cell = 0; cell < domain.cellCount; cell++) {
+					int node = domain.isAir(cell) ? domain.gasNodeOfAirCell(cell) : -1;
+					boolean gasUnknown = node > 0 && domain.projection.gasPressureUnknown[node];
+					double expected = domain.isFluid(cell) ? (cell == domain.pressureAnchor ? 0 : liquid[cell])
+							: gasUnknown ? gas[node] : 0;
+					double actual = (double) neighbor.invoke(system, cell, liquid, gas);
+					check(Double.doubleToRawLongBits(actual) == Double.doubleToRawLongBits(expected),
+							"prepared pressure source differs from current classification");
+					float coefficient = 0.625F;
+					if (gasUnknown) expectedGas[node] += coefficient * (gas[node] - liquid[0]) * 4.0;
+					accumulate.invoke(system, 0, cell, coefficient, liquid, gas, actualGas, 4.0);
+				}
+				check(java.util.Arrays.equals(expectedGas, actualGas), "prepared gas face changed accumulation order");
+			}
+		} catch (ReflectiveOperationException failure) {
+			throw new AssertionError("pressure source validation failed", failure);
+		}
 	}
 
 	/**
