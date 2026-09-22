@@ -121,6 +121,8 @@
 
 协议和查询修改先运行 `protocol`。控制台授权追加 `lifecycle`，容器提交通知追加 `containers`，Jade 或客户端类型变化需要编译 main 和 client。界面读取已提交的状态；涉及库存的修改由服务端业务模块执行。
 
+快照表面复用与化学颜色更新由 [ClientSurfaceValidation](../../fabric/src/test/java/cc/ecisr/mmm/client/ClientSurfaceValidation.java) 覆盖，随 `protocol` 运行。
+
 接口参数、单位和线程要求见 [外部 API](../architecture/external-api.md)。液面重建算法见 [流体求解器](../architecture/fluid-solver.md)。
 
 <a id="performance"></a>

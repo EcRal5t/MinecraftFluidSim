@@ -116,6 +116,10 @@ public record FluidChemicalSnapshotPayload(
 	private static void encode(FriendlyByteBuf buffer, FluidChemicalSnapshotPayload payload) {
 		buffer.writeEnum(payload.layout);
 		FluidMaterialSnapshotPayload.encode(buffer, payload.material);
+		encodeLayer(buffer, payload);
+	}
+
+	static void encodeLayer(FriendlyByteBuf buffer, FluidChemicalSnapshotPayload payload) {
 		buffer.writeUtf(payload.registryFingerprint, 64);
 		buffer.writeVarInt(payload.species.size());
 		for (SpeciesEntry species : payload.species) {
@@ -132,6 +136,11 @@ public record FluidChemicalSnapshotPayload(
 	private static FluidChemicalSnapshotPayload decode(FriendlyByteBuf buffer) {
 		FluidProtocol.Layout layout = buffer.readEnum(FluidProtocol.Layout.class);
 		FluidMaterialSnapshotPayload material = FluidMaterialSnapshotPayload.decode(buffer);
+		if (layout != FluidProtocol.Layout.CHEMICAL) throw new IllegalArgumentException("Invalid chemical layout");
+		return decodeLayer(buffer, material);
+	}
+
+	static FluidChemicalSnapshotPayload decodeLayer(FriendlyByteBuf buffer, FluidMaterialSnapshotPayload material) {
 		String fingerprint = buffer.readUtf(64);
 		int speciesCount = bounded(buffer.readVarInt(), ChemicalLimits.MAX_SPECIES, "species palette");
 		List<SpeciesEntry> species = new ArrayList<>(speciesCount);
@@ -142,7 +151,7 @@ public record FluidChemicalSnapshotPayload(
 		byte[] residual = buffer.readByteArray(MAX_CELLS);
 		byte[] ph = buffer.readByteArray(MAX_CELLS);
 		byte[] indicator = buffer.readByteArray(MAX_CELLS);
-		return new FluidChemicalSnapshotPayload(layout, material, fingerprint, species, top, weights, residual, ph, indicator);
+		return new FluidChemicalSnapshotPayload(FluidProtocol.Layout.CHEMICAL, material, fingerprint, species, top, weights, residual, ph, indicator);
 	}
 
 	private static int bounded(int count, int maximum, String label) {

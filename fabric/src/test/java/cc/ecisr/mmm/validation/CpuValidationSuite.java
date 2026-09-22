@@ -162,6 +162,7 @@ public final class CpuValidationSuite {
 		});
 		gate(gates, "protocol", () -> {
 			FluidNetworkProtocolValidation.main(NONE);
+			cc.ecisr.mmm.client.ClientSurfaceValidation.main(NONE);
 			CommittedEventHubValidation.main(NONE);
 			ShellFluidQueryValidation.main(NONE);
 		});

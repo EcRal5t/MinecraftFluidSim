@@ -81,7 +81,7 @@ final class ClientRegionSnapshotStore {
 			case ACCEPT_SNAPSHOT -> {
 				FluidMaterialRenderSnapshot snapshot = payload.toRenderSnapshot();
 				latestMaterials.put(payload.regionId(), new MaterialFrame(
-						payload, snapshot, FluidMaterialSurfaceMesher.build(snapshot), null
+						payload, snapshot, surfaceMesh(payload, snapshot), null
 				));
 			}
 			case REJECT_PROTOCOL -> MmmMod.LOGGER.error(
@@ -99,7 +99,7 @@ final class ClientRegionSnapshotStore {
 			case ACCEPT_SNAPSHOT -> {
 				FluidMaterialRenderSnapshot snapshot = material.toRenderSnapshot();
 				latestMaterials.put(material.regionId(), new MaterialFrame(
-						material, snapshot, FluidMaterialSurfaceMesher.build(snapshot), new ChemicalFrame(
+						material, snapshot, surfaceMesh(material, snapshot), new ChemicalFrame(
 								payload, payload.topSpecies(), payload.topWeights(), payload.residualWeights(),
 								payload.ph(), payload.indicatorFraction())));
 			}
@@ -124,7 +124,7 @@ final class ClientRegionSnapshotStore {
 						chemicalPayload.topSpecies(), chemicalPayload.topWeights(), chemicalPayload.residualWeights(),
 						chemicalPayload.ph(), chemicalPayload.indicatorFraction());
 				MaterialFrame materialFrame = new MaterialFrame(material, snapshot,
-						FluidMaterialSurfaceMesher.build(snapshot), chemical);
+						surfaceMesh(material, snapshot), chemical);
 				latestGranular.put(material.regionId(), new GranularFrame(payload, materialFrame,
 						payload.depositBulkFill(), payload.depositPorosity(), payload.depositTopMaterial()));
 			}
@@ -156,7 +156,7 @@ final class ClientRegionSnapshotStore {
 						chemicalPayload.topSpecies(), chemicalPayload.topWeights(), chemicalPayload.residualWeights(),
 						chemicalPayload.ph(), chemicalPayload.indicatorFraction());
 				MaterialFrame materialFrame = new MaterialFrame(material, snapshot,
-						FluidMaterialSurfaceMesher.build(snapshot), chemical);
+						surfaceMesh(material, snapshot), chemical);
 				if (granular == null) {
 					latestMaterials.put(material.regionId(), materialFrame); latestGranular.remove(material.regionId());
 				} else {
@@ -172,6 +172,16 @@ final class ClientRegionSnapshotStore {
 					"Discarded Matter, Motion & Mechanics thermal region {} with a foreign registry fingerprint", material.regionId());
 			case IGNORE_STALE -> { }
 		}
+	}
+
+	FluidMaterialSurfaceMesher.Mesh surfaceMesh(
+			FluidMaterialSnapshotPayload payload, FluidMaterialRenderSnapshot snapshot
+	) {
+		MaterialFrame previous = latestMaterials.get(payload.regionId());
+		GranularFrame granular = latestGranular.get(payload.regionId());
+		if (previous == null && granular != null) previous = granular.material();
+		return previous != null && payload.sameSurface(previous.payload())
+				? previous.mesh() : FluidMaterialSurfaceMesher.build(snapshot);
 	}
 
 	public void extract(LevelExtractionContext context) {
@@ -248,8 +258,14 @@ final class ClientRegionSnapshotStore {
 			FluidMaterialSnapshotPayload payload,
 			FluidMaterialRenderSnapshot snapshot,
 			FluidMaterialSurfaceMesher.Mesh mesh,
-			ChemicalFrame chemical
-	) { }
+			ChemicalFrame chemical,
+			List<MaterialSurfaceGeometry.ColoredTriangle> triangles
+	) {
+		MaterialFrame(FluidMaterialSnapshotPayload payload, FluidMaterialRenderSnapshot snapshot,
+				FluidMaterialSurfaceMesher.Mesh mesh, ChemicalFrame chemical) {
+			this(payload, snapshot, mesh, chemical, MaterialSurfaceGeometry.prepare(payload, snapshot, mesh, chemical));
+		}
+	}
 	record ChemicalFrame(
 			FluidChemicalSnapshotPayload payload, short[] topSpecies, byte[] topWeights,
 			byte[] residualWeights, byte[] ph, byte[] indicatorFraction

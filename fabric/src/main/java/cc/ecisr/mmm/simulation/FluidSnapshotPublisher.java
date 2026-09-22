@@ -64,6 +64,7 @@ final class FluidSnapshotPublisher {
 	void sendToLevel(ServerLevel level, FluidRegion region) {
 		Objects.requireNonNull(level, "level");
 		if (region == null || !region.solverLoaded() || !level.dimension().equals(region.dimension())) return;
+		if (level.players().isEmpty()) return;
 		SnapshotDispatch dispatch = createDispatch(region);
 		for (ServerPlayer player : level.players()) dispatch.sendTo(player);
 	}

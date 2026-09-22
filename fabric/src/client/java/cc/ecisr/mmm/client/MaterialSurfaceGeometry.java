@@ -2,6 +2,7 @@ package cc.ecisr.mmm.client;
 
 import cc.ecisr.mmm.chemistry.ChemicalDisplaySnapshot;
 import cc.ecisr.mmm.fluid.FluidMaterialSurfaceMesher;
+import cc.ecisr.mmm.fluid.FluidMaterialRenderSnapshot;
 import cc.ecisr.mmm.network.FluidChemicalSnapshotPayload;
 import cc.ecisr.mmm.network.FluidMaterialSnapshotPayload;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -9,6 +10,9 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4fc;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static cc.ecisr.mmm.client.QuadGeometry.vertex;
 
@@ -26,30 +30,39 @@ final class MaterialSurfaceGeometry {
 		poses.pushPose();
 		poses.translate(-camera.x, -camera.y, -camera.z);
 		Matrix4fc matrix = poses.last().pose();
-		for (FluidMaterialSurfaceMesher.Triangle triangle : frame.mesh().outerTriangles()) {
-			int material = FluidMaterialSurfaceMesher.dominantMaterialAt(frame.snapshot(), triangle.centroid());
-			if (material < 0) continue;
-			int color = chemicalArgb(frame, triangle.centroid(), state.materials().get(material).argb());
-			emitMaterialTriangle(matrix, vertices, state, triangle, color, 0.62F);
-		}
-		for (FluidMaterialSurfaceMesher.InterfaceTriangle owned : frame.mesh().interfaceTriangles()) {
-			int first = phaseArgb(state, owned.firstPhase());
-			int second = phaseArgb(state, owned.secondPhase());
-			int color = chemicalArgb(frame, owned.triangle().centroid(), blendArgb(first, second));
-			emitMaterialTriangle(matrix, vertices, state, owned.triangle(), color, 0.48F);
+		for (ColoredTriangle triangle : frame.triangles()) {
+			emitMaterialTriangle(matrix, vertices, state, triangle.triangle(), triangle.argb(), triangle.alpha());
 		}
 		poses.popPose();
 	}
 
+	static List<ColoredTriangle> prepare(FluidMaterialSnapshotPayload state, FluidMaterialRenderSnapshot snapshot,
+			FluidMaterialSurfaceMesher.Mesh mesh, ClientRegionSnapshotStore.ChemicalFrame chemical) {
+		ArrayList<ColoredTriangle> triangles = new ArrayList<>(mesh.outerTriangles().size() + mesh.interfaceTriangles().size());
+		for (FluidMaterialSurfaceMesher.Triangle triangle : mesh.outerTriangles()) {
+			int material = FluidMaterialSurfaceMesher.dominantMaterialAt(snapshot, triangle.centroid());
+			if (material < 0) continue;
+			int color = chemicalArgb(chemical, state, triangle.centroid(), state.materials().get(material).argb());
+			triangles.add(new ColoredTriangle(triangle, color, 0.62F));
+		}
+		for (FluidMaterialSurfaceMesher.InterfaceTriangle owned : mesh.interfaceTriangles()) {
+			int first = phaseArgb(state, owned.firstPhase());
+			int second = phaseArgb(state, owned.secondPhase());
+			int color = chemicalArgb(chemical, state, owned.triangle().centroid(), blendArgb(first, second));
+			triangles.add(new ColoredTriangle(owned.triangle(), color, 0.48F));
+		}
+		return List.copyOf(triangles);
+	}
+
+	record ColoredTriangle(FluidMaterialSurfaceMesher.Triangle triangle, int argb, float alpha) { }
+
 	private static int chemicalArgb(
-			ClientRegionSnapshotStore.MaterialFrame frame,
+			ClientRegionSnapshotStore.ChemicalFrame chemical, FluidMaterialSnapshotPayload state,
 			FluidMaterialSurfaceMesher.Point point,
 			int materialArgb
 	) {
-		ClientRegionSnapshotStore.ChemicalFrame chemical = frame.chemical();
 		if (chemical == null) return materialArgb;
 		FluidChemicalSnapshotPayload payload = chemical.payload();
-		FluidMaterialSnapshotPayload state = frame.payload();
 		int x = Math.max(0, Math.min(state.sizeX() - 1, (int) Math.floor(point.x() / state.cellSize())));
 		int y = Math.max(0, Math.min(state.sizeY() - 1, (int) Math.floor(point.y() / state.cellSize())));
 		int z = Math.max(0, Math.min(state.sizeZ() - 1, (int) Math.floor(point.z() / state.cellSize())));

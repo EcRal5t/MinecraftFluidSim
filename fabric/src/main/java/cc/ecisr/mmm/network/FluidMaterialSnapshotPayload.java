@@ -55,6 +55,17 @@ public record FluidMaterialSnapshotPayload(
 			FluidMaterialSnapshotPayload::decode
 	);
 
+	/** Fields that determine local surface geometry and material attribution. */
+	public boolean sameSurface(FluidMaterialSnapshotPayload other) {
+		return other != null && sizeX == other.sizeX && sizeY == other.sizeY && sizeZ == other.sizeZ
+				&& Float.compare(cellSize, other.cellSize) == 0 && materials.equals(other.materials)
+				&& phaseGroups.equals(other.phaseGroups)
+				&& java.util.Arrays.equals(totalVolume, other.totalVolume)
+				&& java.util.Arrays.equals(markers, other.markers) && java.util.Arrays.equals(solids, other.solids)
+				&& java.util.Arrays.deepEquals(materialFractions, other.materialFractions)
+				&& java.util.Arrays.deepEquals(phaseFractions, other.phaseFractions);
+	}
+
 	public FluidMaterialSnapshotPayload {
 		if (layout != FluidProtocol.Layout.MATERIAL) throw new IllegalArgumentException("Material snapshot layout is required");
 		kind = Objects.requireNonNull(kind, "kind");

@@ -53,8 +53,8 @@ public record FluidThermalSnapshotPayload(
 				if (gas.nodeId() <= previousNode) throw new IllegalArgumentException("Thermal gas display is not canonical");
 				previousNode = gas.nodeId();
 			}
-			if (chemicalLayer != null && !sameMaterialIdentity(material, chemicalLayer.material())
-					|| granularLayer != null && !sameMaterialIdentity(material, granularLayer.material())) {
+			if (chemicalLayer != null && !sameMaterialSnapshot(material, chemicalLayer.material())
+					|| granularLayer != null && !sameMaterialSnapshot(material, granularLayer.material())) {
 				throw new IllegalArgumentException("Thermal optional display layer names another snapshot");
 			}
 		} else if (!registryFingerprint.isEmpty() || cellTemperatureQ.length != 0
@@ -92,9 +92,9 @@ public record FluidThermalSnapshotPayload(
 			buffer.writeVarInt(gas.nodeId()); buffer.writeShort(gas.temperatureQ()); buffer.writeInt(gas.pressureDecaPa());
 		}
 		buffer.writeBoolean(payload.chemicalLayer != null);
-		if (payload.chemicalLayer != null) FluidChemicalSnapshotPayload.CODEC.encode(buffer, payload.chemicalLayer);
+		if (payload.chemicalLayer != null) FluidChemicalSnapshotPayload.encodeLayer(buffer, payload.chemicalLayer);
 		buffer.writeBoolean(payload.granularLayer != null);
-		if (payload.granularLayer != null) FluidGranularSnapshotPayload.CODEC.encode(buffer, payload.granularLayer);
+		if (payload.granularLayer != null) FluidGranularSnapshotPayload.encodeLayer(buffer, payload.granularLayer);
 	}
 
 	private static FluidThermalSnapshotPayload decode(FriendlyByteBuf buffer) {
@@ -110,9 +110,9 @@ public record FluidThermalSnapshotPayload(
 		for (int node = 0; node < gasCount; node++) gas.add(
 				new GasNodeDisplay(buffer.readVarInt(), buffer.readUnsignedShort(), buffer.readInt()));
 		FluidChemicalSnapshotPayload chemical = buffer.readBoolean()
-				? FluidChemicalSnapshotPayload.CODEC.decode(buffer) : null;
+				? FluidChemicalSnapshotPayload.decodeLayer(buffer, material) : null;
 		FluidGranularSnapshotPayload granular = buffer.readBoolean()
-				? FluidGranularSnapshotPayload.CODEC.decode(buffer) : null;
+				? FluidGranularSnapshotPayload.decodeLayer(buffer, material) : null;
 		return new FluidThermalSnapshotPayload(layout, material, fingerprint, temperatures,
 				coherent, flags, gas, chemical, granular);
 	}
@@ -122,13 +122,20 @@ public record FluidThermalSnapshotPayload(
 		return count;
 	}
 
-	private static boolean sameMaterialIdentity(
+	private static boolean sameMaterialSnapshot(
 			FluidMaterialSnapshotPayload first, FluidMaterialSnapshotPayload second
 	) {
+		if (first == second) return true;
+		if (first.extensions().size() != second.extensions().size()) return false;
+		for (int index = 0; index < first.extensions().size(); index++) {
+			var a = first.extensions().get(index);
+			var b = second.extensions().get(index);
+			if (a.type() != b.type() || !java.util.Arrays.equals(a.data(), b.data())) return false;
+		}
 		return first.kind() == second.kind() && first.dimension().equals(second.dimension())
 				&& first.regionId().equals(second.regionId()) && first.generation() == second.generation()
-				&& first.sequence() == second.sequence() && first.sizeX() == second.sizeX()
-				&& first.sizeY() == second.sizeY() && first.sizeZ() == second.sizeZ();
+				&& first.sequence() == second.sequence() && first.origin().equals(second.origin())
+				&& first.sameSurface(second) && first.debugOverlays() == second.debugOverlays();
 	}
 
 	public record GasNodeDisplay(int nodeId, int temperatureQ, int pressureDecaPa) {

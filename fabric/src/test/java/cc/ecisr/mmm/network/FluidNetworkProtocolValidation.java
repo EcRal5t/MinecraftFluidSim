@@ -347,6 +347,15 @@ public final class FluidNetworkProtocolValidation {
 		require(new FluidThermalSnapshotLedger().evaluate(composed, granularNegotiation)
 				== FluidThermalSnapshotLedger.Decision.ACCEPT_SNAPSHOT,
 				"thermal layout rejected composable granular/chemical display layers");
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		try {
+			FluidThermalSnapshotPayload.CODEC.encode(buffer, composed);
+			decoded = FluidThermalSnapshotPayload.CODEC.decode(buffer);
+			require(decoded.granularLayer().material() == decoded.material()
+					&& decoded.material().sameSurface(composed.material())
+					&& Arrays.equals(decoded.granularLayer().chemical().topSpecies(), granular.chemical().topSpecies())
+					&& buffer.readableBytes() == 0, "composed thermal codec must share its complete material base");
+		} finally { buffer.release(); }
 
 		FluidGranularSnapshotPayload defaultGranular = defaultSizedGranularSnapshot();
 		int cells = 9_216; short[] temperatures = new short[cells];
@@ -357,6 +366,7 @@ public final class FluidNetworkProtocolValidation {
 		buffer = new FriendlyByteBuf(Unpooled.buffer());
 		try {
 			FluidThermalSnapshotPayload.CODEC.encode(buffer, defaultSized);
+			System.out.println("Composed thermal snapshot bytes: " + buffer.writerIndex());
 			require(buffer.writerIndex() <= 512 * 1024,
 					"default 9,216-cell composed thermal snapshot exceeded 512 KiB: " + buffer.writerIndex());
 		} finally { buffer.release(); }

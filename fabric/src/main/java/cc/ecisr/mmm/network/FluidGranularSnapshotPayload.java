@@ -93,6 +93,10 @@ public record FluidGranularSnapshotPayload(
 	private static void encode(FriendlyByteBuf buffer, FluidGranularSnapshotPayload payload) {
 		buffer.writeEnum(payload.layout);
 		FluidMaterialSnapshotPayload.encode(buffer, payload.material);
+		encodeLayer(buffer, payload);
+	}
+
+	static void encodeLayer(FriendlyByteBuf buffer, FluidGranularSnapshotPayload payload) {
 		buffer.writeUtf(payload.registryFingerprint, 64);
 		buffer.writeVarInt(payload.granularMaterials.size());
 		for (GranularDisplaySnapshot.MaterialEntry entry : payload.granularMaterials) {
@@ -114,6 +118,11 @@ public record FluidGranularSnapshotPayload(
 	private static FluidGranularSnapshotPayload decode(FriendlyByteBuf buffer) {
 		FluidProtocol.Layout layout = buffer.readEnum(FluidProtocol.Layout.class);
 		FluidMaterialSnapshotPayload material = FluidMaterialSnapshotPayload.decode(buffer);
+		if (layout != FluidProtocol.Layout.GRANULAR) throw new IllegalArgumentException("Invalid granular layout");
+		return decodeLayer(buffer, material);
+	}
+
+	static FluidGranularSnapshotPayload decodeLayer(FriendlyByteBuf buffer, FluidMaterialSnapshotPayload material) {
 		String fingerprint = buffer.readUtf(64);
 		int materialCount = bounded(buffer.readVarInt(), GranularLimits.MAX_MATERIALS, "material palette");
 		ArrayList<GranularDisplaySnapshot.MaterialEntry> materials = new ArrayList<>(materialCount);
@@ -129,7 +138,7 @@ public record FluidGranularSnapshotPayload(
 				buffer.readUnsignedShort(), buffer.readUnsignedShort(), buffer.readUnsignedShort(),
 				buffer.readUnsignedByte(), buffer.readUnsignedShort()));
 		ChemicalLayer chemical = buffer.readBoolean() ? ChemicalLayer.decode(buffer) : null;
-		return new FluidGranularSnapshotPayload(layout, material, fingerprint, materials,
+		return new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR, material, fingerprint, materials,
 				bulk, porosity, top, parcels, chemical);
 	}
 

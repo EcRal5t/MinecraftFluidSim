@@ -46,6 +46,7 @@ dependencies {
 	testImplementation project(path: ':model', configuration: 'testArtifacts')
 	testImplementation project(path: ':solver', configuration: 'testArtifacts')
 	testImplementation project(path: ':application', configuration: 'testArtifacts')
+	testImplementation files(sourceSets.client.output)
 }
 
 processResources {
