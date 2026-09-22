@@ -73,6 +73,24 @@
 <a id="performance"></a>
 ## 性能和长期场景
 
+快速离线测量使用 `./gradlew.bat :fabric:runStepBenchmark --offline`，无需启动游戏。
+[ProductionStepBenchmark](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionStepBenchmark.java)
+使用正式注册表和完整功能夹具，分别推进控制器半满场景与大型 demo；每个场景先预热 20 步，再测量随后 20 步。
+报告捕获状态、后端计算、候选提交的平均值、p50、p95，以及当前线程每步分配字节数。
+每步额外检查气体与内能收支，检查耗时排除在三个阶段之外。
+该短测用于同机同配置优化对比，包含 JIT、GC 和场景演化影响；不设置硬件相关的 CI 阈值，也不覆盖世界扫描、网络、存盘与渲染。
+
+2026-09-23 在本机 JDK 26、JFR `profile` 采样下，有理数约分优化前后的短测记录如下。
+优化跳过零值和整数的约分，并省去分子分母已互素时的除法，精确数值及输入限制保持相同。
+
+| 场景 | 每步平均总耗时：优化前 → 后 | 线程分配量：优化前 → 后 |
+|---|---|---|
+| 控制器半满 | 32.57 → 29.64 ms | 25.43 → 22.69 MiB |
+| 大型 demo | 210.96 → 204.39 ms | 216.56 → 182.58 MiB |
+
+总耗时为捕获、计算、提交三个阶段均值之和。短测耗时尚不足以证明稳定提速，分配量下降更明确；大型场景仍有明显计算和分配开销。
+同轮 `chemistry` 的输运测试在 `validateThermalChemicalExtractionAudit` 直接步进时触发 `MechanicalTimeRefinement`；恢复优化前约分实现也复现，需将该夹具接入后端的子步细化流程。化学核心、热学和架构检查通过。
+
 `production-live-budget` 调用 `defaultLiveStepsRemainBounded`，验证两种生产负载：
 
 | 场景 | 规模 | 耗时要求 |

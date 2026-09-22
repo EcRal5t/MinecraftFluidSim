@@ -126,6 +126,8 @@
 <a id="performance"></a>
 ## 性能与 GPU
 
+短时离线分阶段测量入口是 [ProductionStepBenchmark](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionStepBenchmark.java)，任务 `:fabric:runStepBenchmark`；输出状态捕获、后端计算、提交耗时与线程分配量。
+
 CPU 性能问题先从 [ProductionFluidReplayValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionFluidReplayValidation.java) 的 `defaultLiveStepsRemainBounded` 复现，再结合 [jfr_hotspots.py](../../pytool/jfr_hotspots.py) 定位耗时。测试名称为 `production-live-budget`，指标见 [验证指南](validation.md#performance)。
 
 GPU probe 分为纯 Java/Vulkan 的 `gpu-probe-kernel` 和 Fabric 适配模块 `gpu-probe`：

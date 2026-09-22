@@ -30,6 +30,21 @@ public final class M7ChemistryValidation {
 	private static void validateRationalsAndCodec() {
 		check(ExactRational.parse("1.25").canonical().equals("5/4"), "finite decimal did not canonicalize exactly");
 		check(ExactRational.parse("10/8").canonical().equals("5/4"), "fraction did not reduce");
+		for (int numerator = -24; numerator <= 24; numerator++) {
+			for (int denominator = -24; denominator <= 24; denominator++) {
+				if (denominator == 0) continue;
+				var n = java.math.BigInteger.valueOf(numerator);
+				var d = java.math.BigInteger.valueOf(denominator);
+				var divisor = n.gcd(d).multiply(java.math.BigInteger.valueOf(d.signum()));
+				var rational = new ExactRational(n, d);
+				check(rational.numerator().equals(n.divide(divisor))
+						&& rational.denominator().equals(d.divide(divisor)), "rational canonical form changed");
+			}
+		}
+		expectFailure(() -> ExactRational.parse("0/0"), "zero fast path accepted zero denominator");
+		expectFailure(() -> new ExactRational(java.math.BigInteger.ZERO,
+				java.math.BigInteger.ONE.shiftLeft(ChemicalLimits.MAX_RATIONAL_BITS)),
+				"zero fast path bypassed rational magnitude budget");
 		String species = "{\"composition\":{\"H\":\"2\",\"O\":\"1\"},\"charge\":\"0\","
 				+ "\"mass_per_au\":\"18\",\"base_argb\":\"#ff4e9cff\"}";
 		ChemicalSpecies decoded = ChemicalDefinitionCodec.decodeSpecies("test:h2o", new StringReader(species));

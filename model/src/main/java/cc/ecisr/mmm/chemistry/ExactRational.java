@@ -21,9 +21,15 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 			numerator = numerator.negate();
 			denominator = denominator.negate();
 		}
-		BigInteger divisor = numerator.gcd(denominator);
-		numerator = numerator.divide(divisor);
-		denominator = denominator.divide(divisor);
+		if (numerator.signum() == 0) {
+			denominator = BigInteger.ONE;
+		} else if (!denominator.equals(BigInteger.ONE)) {
+			BigInteger divisor = numerator.gcd(denominator);
+			if (!divisor.equals(BigInteger.ONE)) {
+				numerator = numerator.divide(divisor);
+				denominator = denominator.divide(divisor);
+			}
+		}
 	}
 
 	public static ExactRational of(long value) {
