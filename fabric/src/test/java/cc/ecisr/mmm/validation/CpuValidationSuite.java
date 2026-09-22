@@ -168,6 +168,7 @@ public final class CpuValidationSuite {
 		gate(gates, "boundary", () -> FluidBoundaryScannerValidation.main(NONE));
 		gate(gates, "takeover", () -> TakeoverJournalValidation.main(NONE));
 		gate(gates, "containers", () -> {
+			cc.ecisr.mmm.simulation.persistence.PlayerInventorySaveValidation.main(NONE);
 			M6ContainerValidation.main(NONE);
 			ContainerApplicationValidation.main(NONE);
 			ContainerTransferStoreValidation.main(NONE);

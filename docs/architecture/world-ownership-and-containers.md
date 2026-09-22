@@ -174,6 +174,8 @@ mixin 与原版 dispenser registry 分别直连这两个 adapter，不保留旧 
 7. actor adapter 把 item 收敛为 after；`ContainerRecoveryCoordinator` 随即或在对应 player/chunk availability 事件上驱动玩家同步 save 或 owning dimension flushing save。Minecraft 当前没有公开的单 chunk durable save，因此 dispenser 完成路径宁可承担低频的 dimension flush，也不能用非 flush autosave 后提前删除 WAL。
 8. durable save 后回读 exact after truth；只有回读仍为 after 才由 recovery coordinator 删除 WAL 并移出 boot index。删除失败只留下可幂等收敛的 WAL，不重复资源转移；committed event 只能在删除完成后发布。
 
+玩家保存由原版 `PlayerList.saveAll` 执行，但其正常返回不能单独证明存盘成功。适配器先使用原版 player serializer 捕获当前数据并拒绝编码错误，再保存；[PlayerInventorySaveVerifier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/PlayerInventorySaveVerifier.java) 强制写入并回读 `playerdata/<uuid>.dat`，逐项核对 UUID、完整 Inventory、SelectedItemSlot 和 equipment（包括副手）。核对完成后仍需确认在线物品等于事务 after。缺失、过期或读取失败的文件保留 WAL，等待 I/O 重试。
+
 WAL/WARNING/committed/HEAD 的文件内容在 rename 前 `force`，rename 与事务完成后的 delete 还要同步父目录 entry；支持目录 channel 的文件系统执行 directory fsync。Windows JDK 不暴露目录 channel，因此仍依赖同卷原子 rename 与已强制写入的文件内容，但不会把一次普通进程崩溃误当成已提交。
 
 `REGION_COMMITTED` 是“WAL 已经拥有权威 after item”的含义，不表示 HEAD 必然已经移动；实际 commit 仍由 HEAD 判断。
@@ -188,6 +190,8 @@ WAL/WARNING/committed/HEAD 的文件内容在 rename 前 `force`，rename 与事
 | 其他 generation 或 checksum 不符 | 任意 | 锁定：无法证明 region 属于本事务 |
 
 任一外部成员 `UNAVAILABLE` 时不改任何 truth 并保留 WAL。玩家 actor 只在该玩家完成协议加入时重试；dispenser actor 只在其 owning dimension/chunk 加载时重试，不在 tick 中轮询。
+
+I/O 失败保留独立的重试状态，由单调时钟安排 1、2、4、8、16、30 秒退避，后续最多每 30 秒重试一次，每次重新核对 HEAD、校验和与 actor。首次失败报告日志，连续失败不逐 tick 重复报告。重试期间 actor 离线则转入上述事件等待；身份、物品或校验和冲突，以及运行时校验异常仍保持锁定。成功删除 WAL 后才发布完成事件。`ContainerApplicationValidation` 通过可注入时钟验证这些时序，无需实际等待。
 
 多成员事务只有每个成员都分别匹配 before 或 after 才能收敛剩余 before；成员索引与顺序由 journal 冻结。恢复在判定前还必须验证 dimension、resource kind、base/target 连续性、actor identity、before/after shape、所有适用 registry fingerprint 和 thermal underlying hash。
 

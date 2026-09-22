@@ -28,6 +28,7 @@ public final class ContainerApplicationValidation {
 				ContainerApplicationValidation::unavailableActorRetry);
 		run("a WAL published before its store failure stays pending",
 				ContainerApplicationValidation::publishedWalStaysPending);
+		run("I/O recovery backs off and retains semantic locks", ContainerApplicationValidation::ioRetry);
 		System.out.println("ContainerApplicationValidation passed " + passed + " scenarios");
 	}
 
@@ -173,6 +174,76 @@ public final class ContainerApplicationValidation {
 				ContainerFluidLedger.NANOS_PER_BLOCK, 0L);
 	}
 
+	private static void ioRetry() {
+		ContainerTransferJournal journal = committedJournal(ContainerTransferActor.player(
+				UUID.randomUUID(), ContainerTransferActor.Hand.MAIN));
+		FakeStore store = new FakeStore(journal);
+		FakeRecoveryPort port = new FakeRecoveryPort(journal.targetGeneration(),
+				journal.targetManifestChecksum(), CrossDomainRecovery.ExternalTruth.BEFORE);
+		port.store = store;
+		port.failPersist = true;
+		long[] clock = {0L};
+		ContainerRecoveryCoordinator recovery = new ContainerRecoveryCoordinator(
+				store, port, Map.of(journal.transactionId(), journal), Set.of(), () -> clock[0]);
+		recovery.recoverIndexed();
+		check(port.applyCount == 1 && port.persistCount == 1 && recovery.hasAnyLock()
+				&& port.publishCount == 0, "failed save discarded WAL or published completion");
+		long delay = 1_000_000_000L;
+		for (int attempt = 0; attempt < 8; attempt++) {
+			int saves = port.persistCount;
+			clock[0] += delay - 1;
+			recovery.recoverIndexed();
+			check(port.persistCount == saves, "I/O retry ignored its backoff deadline");
+			clock[0]++;
+			recovery.recoverIndexed();
+			check(port.persistCount == saves + 1 && port.applyCount == 1
+					&& port.publishCount == 0, "I/O retry repeated actor mutation or stopped retrying");
+			delay = Math.min(30_000_000_000L, delay * 2);
+		}
+		port.failPersist = false;
+		store.failDelete = true;
+		clock[0] += delay;
+		recovery.recoverIndexed();
+		check(recovery.hasAnyLock() && port.publishCount == 0, "delete failure released the WAL lock");
+		store.failDelete = false;
+		clock[0] += delay;
+		recovery.recoverIndexed();
+		check(!recovery.hasAnyLock() && port.publishCount == 1 && port.applyCount == 1,
+				"recovered I/O did not finish exactly once");
+		recovery.recoverIndexed();
+		check(port.publishCount == 1, "completed retry published twice");
+
+		// Availability still owns offline actors after a failed save; arbitrary ticks never poll them.
+		store.journals.put(journal.transactionId(), journal);
+		port.truth = CrossDomainRecovery.ExternalTruth.AFTER;
+		port.failPersist = true;
+		recovery = new ContainerRecoveryCoordinator(store, port,
+				Map.of(journal.transactionId(), journal), Set.of(), () -> clock[0]);
+		recovery.recoverIndexed();
+		port.truth = CrossDomainRecovery.ExternalTruth.UNAVAILABLE;
+		clock[0] += 1_000_000_000L;
+		recovery.recoverIndexed();
+		port.truth = CrossDomainRecovery.ExternalTruth.AFTER;
+		port.failPersist = false;
+		int saves = port.persistCount;
+		clock[0] += 60_000_000_000L;
+		recovery.recoverIndexed();
+		check(port.persistCount == saves, "offline I/O retry became a per-tick actor poll");
+		recovery.retryPlayer(((ContainerTransferActor.PlayerHand) journal.actor()).playerId());
+		check(!recovery.hasAnyLock(), "matching availability event failed to finish a previous I/O retry");
+
+		store.journals.put(journal.transactionId(), journal);
+		port.truth = CrossDomainRecovery.ExternalTruth.THIRD;
+		recovery = new ContainerRecoveryCoordinator(store, port,
+				Map.of(journal.transactionId(), journal), Set.of(), () -> clock[0]);
+		recovery.recoverIndexed();
+		port.truth = CrossDomainRecovery.ExternalTruth.AFTER;
+		clock[0] += 60_000_000_000L;
+		recovery.recoverIndexed();
+		recovery.retryPlayer(((ContainerTransferActor.PlayerHand) journal.actor()).playerId());
+		check(recovery.hasAnyLock(), "semantic conflict was silently retried as transient I/O");
+	}
+
 	private static ContainerTransferJournal committedJournal(ContainerTransferActor actor) {
 		UUID tx = UUID.randomUUID();
 		ContainerTransferJournal.ItemFingerprint before = new ContainerTransferJournal.ItemFingerprint(
@@ -244,6 +315,7 @@ public final class ContainerApplicationValidation {
 	private static final class FakeStore implements ContainerRecoveryCoordinator.JournalStore {
 		private final Map<UUID, ContainerTransferJournal> journals = new HashMap<>();
 		private boolean failWriteAfterPublish;
+		private boolean failDelete;
 
 		private FakeStore() { }
 		private FakeStore(ContainerTransferJournal journal) { journals.put(journal.transactionId(), journal); }
@@ -251,7 +323,10 @@ public final class ContainerApplicationValidation {
 			journals.put(journal.transactionId(), journal);
 			if (failWriteAfterPublish) throw new IOException("WAL published but the directory sync failed");
 		}
-		@Override public void delete(UUID transactionId) { journals.remove(transactionId); }
+		@Override public void delete(UUID transactionId) throws IOException {
+			if (failDelete) throw new IOException("injected WAL delete failure");
+			journals.remove(transactionId);
+		}
 	}
 
 	private static final class FakeRecoveryPort implements ContainerRecoveryCoordinator.RecoveryPort {
@@ -260,6 +335,7 @@ public final class ContainerApplicationValidation {
 		private CrossDomainRecovery.ExternalTruth truth;
 		private int applyCount;
 		private int persistCount;
+		private boolean failPersist;
 		private int adoptCount;
 		private int publishCount;
 		private boolean adoptedBeforeDelete;
@@ -281,7 +357,10 @@ public final class ContainerApplicationValidation {
 			truth = CrossDomainRecovery.ExternalTruth.AFTER;
 			return ContainerRecoveryCoordinator.Convergence.APPLIED;
 		}
-		@Override public void persistAfterItem(ContainerTransferActor actor) { persistCount++; }
+		@Override public void persistAfterItem(ContainerTransferActor actor) throws IOException {
+			persistCount++;
+			if (failPersist) throw new IOException("injected actor save failure");
+		}
 		@Override public CrossDomainRecovery.ExternalTruth verifyAfterItem(ContainerTransferJournal journal) { return truth; }
 		@Override public void adoptRecoveredCheckpoint(ContainerTransferJournal journal) {
 			adoptCount++;

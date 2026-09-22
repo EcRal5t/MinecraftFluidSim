@@ -3,6 +3,7 @@ package cc.ecisr.mmm.simulation;
 import cc.ecisr.mmm.application.ContainerRecoveryCoordinator;
 import cc.ecisr.mmm.item.ContainerItemMapper;
 import cc.ecisr.mmm.recovery.CrossDomainRecovery;
+import cc.ecisr.mmm.simulation.persistence.PlayerInventorySaveVerifier;
 import cc.ecisr.mmm.transfer.ContainerTransferActor;
 import cc.ecisr.mmm.transfer.ContainerTransferJournal;
 import net.minecraft.core.BlockPos;
@@ -15,6 +16,9 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.entity.DispenserBlockEntity;
+import net.minecraft.world.level.storage.LevelResource;
+import net.minecraft.world.level.storage.TagValueOutput;
+import net.minecraft.util.ProblemReporter;
 
 import java.io.IOException;
 
@@ -46,7 +50,18 @@ final class MinecraftContainerActorAdapter {
 	/** The WAL may be deleted only after this forces the actor's owning save domain. */
 	void persistAfterItem(MinecraftServer server, ContainerTransferActor actor) throws IOException {
 		switch (actor) {
-			case ContainerTransferActor.PlayerHand ignored -> server.getPlayerList().saveAll();
+			case ContainerTransferActor.PlayerHand playerActor -> {
+				ServerPlayer player = server.getPlayerList().getPlayer(playerActor.playerId());
+				if (player == null) throw new IOException("Container transfer player is not loaded");
+				ProblemReporter.Collector problems = new ProblemReporter.Collector();
+				TagValueOutput expected = TagValueOutput.createWithContext(problems, player.registryAccess());
+				player.saveWithoutId(expected);
+				if (!problems.isEmpty()) throw new IllegalStateException(
+						"Player inventory could not be encoded: " + problems.getReport());
+				server.getPlayerList().saveAll();
+				PlayerInventorySaveVerifier.forceAndVerify(server.getWorldPath(LevelResource.PLAYER_DATA_DIR)
+						.resolve(playerActor.playerId() + ".dat"), expected.buildResult());
+			}
 			case ContainerTransferActor.Dispenser dispenser -> {
 				ServerLevel level = level(server, dispenser.dimensionId());
 				if (level == null) throw new IOException("Container transfer actor dimension is not loaded");

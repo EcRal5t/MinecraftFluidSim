@@ -14,11 +14,16 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
+import java.util.function.LongSupplier;
 
 /** Owns the boot-indexed container WAL set and event-driven external-actor recovery state. */
 public final class ContainerRecoveryCoordinator implements ContainerJournalRepository {
+	private static final long INITIAL_RETRY_NANOS = 1_000_000_000L;
+	private static final long MAXIMUM_RETRY_NANOS = 30_000_000_000L;
 	private final JournalStore store;
 	private final RecoveryPort port;
+	private final LongSupplier nanoTime;
+	private final Map<UUID, Retry> ioRetries = new HashMap<>();
 	private final Map<UUID, ContainerTransferJournal> indexed = new HashMap<>();
 	private final Set<UUID> audited = new HashSet<>();
 	private final Set<UUID> awaitingActors = new HashSet<>();
@@ -32,8 +37,17 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 			Map<UUID, ContainerTransferJournal> indexed,
 			Set<String> storeIssues
 	) {
+		this(store, port, indexed, storeIssues, System::nanoTime);
+	}
+
+	/** Injectable monotonic clock keeps I/O backoff independent of wall-clock adjustments and tests fast. */
+	public ContainerRecoveryCoordinator(
+			JournalStore store, RecoveryPort port, Map<UUID, ContainerTransferJournal> indexed,
+			Set<String> storeIssues, LongSupplier nanoTime
+	) {
 		this.store = Objects.requireNonNull(store, "store");
 		this.port = Objects.requireNonNull(port, "port");
+		this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
 		this.indexed.putAll(Objects.requireNonNull(indexed, "indexed"));
 		this.storeIssues = Set.copyOf(Objects.requireNonNull(storeIssues, "storeIssues"));
 	}
@@ -62,8 +76,8 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 	 *
 	 * <p>The store publishes the WAL file and only then completes its own durability step, so a
 	 * failure on that step cannot mean "nothing was written". Indexing the transaction in the
-	 * failure case too keeps {@code hasPending} honest: the recovery pass re-reads the WAL from
-	 * disk and decides what actually happened, instead of letting the next operation run while a
+	 * failure case too keeps {@code hasPending} honest: recovery checks HEAD and actor evidence
+	 * before deciding what happened, instead of letting the next operation run while a
 	 * published WAL is invisible to the online index.</p>
 	 */
 	@Override
@@ -75,6 +89,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 			indexed.put(journal.transactionId(), journal);
 			audited.remove(journal.transactionId());
 			awaitingActors.remove(journal.transactionId());
+			ioRetries.remove(journal.transactionId());
 		}
 	}
 
@@ -85,9 +100,10 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 		audited.remove(transactionId);
 		awaitingActors.remove(transactionId);
 		reportedLocks.remove(transactionId);
+		ioRetries.remove(transactionId);
 	}
 
-	/** Processes only boot-indexed or newly committed entries; unavailable actors remain event-driven. */
+	/** Processes indexed work and due I/O retries; unavailable actors remain event-driven. */
 	public void recoverIndexed() {
 		if (!storeIssues.isEmpty()) {
 			for (String issue : storeIssues) if (!reportedStoreIssues.contains(issue)) {
@@ -99,7 +115,9 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 		reportedStoreIssues = Set.of();
 		reportedLocks.keySet().retainAll(indexed.keySet());
 		for (UUID transactionId : List.copyOf(indexed.keySet())) {
-			if (!awaitingActors.contains(transactionId) && !audited.contains(transactionId)) {
+			Retry retry = ioRetries.get(transactionId);
+			if (!awaitingActors.contains(transactionId) && !audited.contains(transactionId)
+					&& (retry == null || nanoTime.getAsLong() - retry.dueNanos() >= 0L)) {
 				process(transactionId);
 			}
 		}
@@ -153,7 +171,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 									+ " for region " + journal.regionId(), null);
 				}
 				case CONVERGE_AFTER -> converge(journal, decision.beforeMembers().contains(0));
-				case WAIT_UNAVAILABLE -> awaitingActors.add(transactionId);
+				case WAIT_UNAVAILABLE -> awaitActor(transactionId);
 				case LOCKED -> lockOnce(transactionId,
 						"Container transfer WAL " + transactionId
 								+ " is locked by cross-domain recovery: " + decision.reason()
@@ -161,7 +179,15 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 								+ ", base=" + journal.baseGeneration() + ", target="
 								+ journal.targetGeneration() + ", actor=" + actorTruth + ")");
 			}
-		} catch (IOException | RuntimeException failure) {
+		} catch (IOException failure) {
+			Retry previous = ioRetries.get(transactionId);
+			long delay = previous == null ? INITIAL_RETRY_NANOS
+					: Math.min(MAXIMUM_RETRY_NANOS, previous.delayNanos() * 2L);
+			ioRetries.put(transactionId, new Retry(nanoTime.getAsLong() + delay, delay));
+			if (previous == null) port.report(Report.ERROR,
+					"Container transfer WAL " + transactionId + " retained for bounded I/O retry", failure);
+		} catch (RuntimeException failure) {
+			ioRetries.remove(transactionId);
 			audited.add(transactionId);
 			port.report(Report.ERROR, "Could not recover container transfer WAL " + transactionId, failure);
 		}
@@ -171,7 +197,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 		if (applyAfter) {
 			Convergence applied = port.applyAfterItem(journal);
 			if (applied == Convergence.UNAVAILABLE) {
-				awaitingActors.add(journal.transactionId());
+				awaitActor(journal.transactionId());
 				return;
 			}
 			if (applied == Convergence.CONFLICT) {
@@ -182,7 +208,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 		port.persistAfterItem(journal.actor());
 		CrossDomainRecovery.ExternalTruth readback = port.verifyAfterItem(journal);
 		if (readback == CrossDomainRecovery.ExternalTruth.UNAVAILABLE) {
-			awaitingActors.add(journal.transactionId());
+			awaitActor(journal.transactionId());
 			return;
 		}
 		if (readback != CrossDomainRecovery.ExternalTruth.AFTER) {
@@ -205,11 +231,19 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 	}
 
 	private void lockOnce(UUID transactionId, String message) {
+		ioRetries.remove(transactionId);
 		audited.add(transactionId);
 		if (!message.equals(reportedLocks.put(transactionId, message))) {
 			port.report(Report.ERROR, message, null);
 		}
 	}
+
+	private void awaitActor(UUID transactionId) {
+		ioRetries.remove(transactionId);
+		awaitingActors.add(transactionId);
+	}
+
+	private record Retry(long dueNanos, long delayNanos) { }
 
 	public static CrossDomainRecovery.Decision decide(
 			long head,
