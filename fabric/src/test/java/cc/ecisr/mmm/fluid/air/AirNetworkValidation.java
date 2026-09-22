@@ -65,11 +65,17 @@ public final class AirNetworkValidation {
 		network.addOrMergeEdge(first, second, 1.0e-12, 0.65);
 		check(!network.hasPressureDrivenFlow(network::gaugePressure), "equal-pressure edge demands transport");
 		long revision = network.revision();
-		check(network.hasPressureDrivenFlow(node -> node == first ? 1.0e-12 : 0.0),
+		check(!network.hasPressureDrivenFlow(node -> node == first ? 1.0e-12 : 0.0),
+				"unrepresentable equilibrium remainder kept an idle network awake");
+		check(network.hasPressureDrivenFlow(node -> node == first ? 100.0 : 0.0),
 				"thermal pressure or a very slow pore flow was ignored by sleep observation");
 		check(network.revision() == revision, "activity observation changed the gas inventory");
 		network.updateAvailableVolume(first, 0.5);
 		check(network.hasPressureDrivenFlow(network::gaugePressure), "compressed gas edge allowed sleep");
+		long beforeSlowStep = network.revision();
+		network.stepEdges(0.05);
+		check(network.revision() == beforeSlowStep && network.hasPressureDrivenFlow(network::gaugePressure),
+				"zero rounded transfer through a tiny opening was mistaken for equilibrium");
 		network.removeEdge(first, second);
 		check(!network.hasPressureDrivenFlow(network::gaugePressure), "disconnected pressure difference prevents sleep");
 		network.addOrMergeEdge(first, AirNetwork.AMBIENT_NODE, 0.01, 0.65);
@@ -166,6 +172,12 @@ public final class AirNetworkValidation {
 		double expectedFirst = 2.0 * 7.5 / 8.0;
 		checkRelative(network.standardVolume(first), expectedFirst, "equalization split of the first cavity");
 		checkRelative(network.standardVolume(second), 7.5 - expectedFirst, "equalization split of the second cavity");
+		check(!network.hasPressureDrivenFlow(network::gaugePressure),
+				"integer-equilibrated cavities still prevented sleep due to floating-point pressure residue");
+		long settledRevision = network.revision();
+		for (int step = 0; step < 200; step++) network.stepEdges(0.05);
+		check(network.revision() == settledRevision,
+				"sleep observation hid an executable equilibrium transfer");
 		System.out.printf("  two-cavity equalization converged in %d steps to deltaP=%.3g Pa%n", steps, previousDelta);
 	}
 
@@ -246,6 +258,7 @@ public final class AirNetworkValidation {
 		}
 		check(previous <= 1.0E-3, "venting to ambient did not reach gauge zero");
 		check(venting.ventedNanos() == 2_000_000_000L, "vented ledger must equal the excess inventory");
+		check(!venting.hasPressureDrivenFlow(venting::gaugePressure), "equilibrated ambient outlet prevented sleep");
 
 		AirNetwork drawing = new AirNetwork();
 		int evacuated = drawing.addNode(2.0, 1.0);
@@ -264,6 +277,7 @@ public final class AirNetworkValidation {
 		check(previous >= -1.0E-3, "drawing from ambient did not reach gauge zero");
 		check(drawing.drawnFromAmbientNanos() == 2_000_000_000L,
 				"drawn ledger must equal creation plus the drawn deficit");
+		check(!drawing.hasPressureDrivenFlow(drawing::gaugePressure), "equilibrated ambient inlet prevented sleep");
 		System.out.printf("  ambient venting and drawing both converged in <= %d-step budgets%n", steps);
 	}
 

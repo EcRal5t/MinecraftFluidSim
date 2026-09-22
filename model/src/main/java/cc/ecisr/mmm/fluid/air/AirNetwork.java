@@ -97,11 +97,21 @@ public final class AirNetwork {
 
 	public int nodeCount() { return nodes.size(); }
 
-	/** Conservative scheduling observation: even sub-quantum pressure-driven flow keeps mechanics active. */
+	/** Uses the transport's integer equilibrium limit; slow openings remain active until that limit is zero. */
 	public boolean hasPressureDrivenFlow(java.util.function.IntToDoubleFunction pressure) {
 		Objects.requireNonNull(pressure, "pressure");
 		for (AirEdge edge : edges) {
-			if (pressure.applyAsDouble(edge.firstNode()) != pressure.applyAsDouble(edge.secondNode())) return true;
+			double first = pressure.applyAsDouble(edge.firstNode());
+			double second = pressure.applyAsDouble(edge.secondNode());
+			// Invalid thermodynamic evidence must never authorize sleep.
+			if (!Double.isFinite(first) || !Double.isFinite(second)) return true;
+			if (first == second) continue;
+			int source = first > second ? edge.firstNode() : edge.secondNode();
+			int target = first > second ? edge.secondNode() : edge.firstNode();
+			// Ignore the rate here: a small aperture must not make a non-equilibrium state look idle.
+			if (equalizationClampedTransfer(source, target, Double.MAX_VALUE,
+					REFERENCE_PRESSURE + Math.max(first, second),
+					REFERENCE_PRESSURE + Math.min(first, second)) > 0L) return true;
 		}
 		return false;
 	}

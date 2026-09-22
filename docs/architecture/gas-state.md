@@ -173,6 +173,8 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 
 一个 step 的 transfer 会被共同平衡压力所需的最大份额限制，不能越过均压点。标准体积 nanos 用整数结算；热状态同时搬运源侧焓 `h = u + p*v`。ambient 流入记 source，流出记 sink；节点间转移不记外部源汇。
 
+休眠观察复用这项整数均压限制，读取当前热力学压力而不修改库存。全部 edge 的均压可转移量为零时，气体允许休眠；存在浮点压差但已达到整数均压状态的节点无需反复执行空步骤。仍有均压余量的细小孔保持活动，判断与孔面积、单步时长无关，避免把低流率误认为平衡。`air-network` 同时验证均压后连续空步骤、环境流入/流出，以及微小孔的非平衡状态。
+
 ## 持久化
 
 气体作为完整热区域 generation 的 required payload 发布。快照和逐 section payload 同时保存 `cellNodeOrdinal`（拓扑 membership）与 `cellLineageOrdinal`（包含部分充液格的气体归属）。两列使用同一 minimum-cell 顺序的节点 ordinal；lineage 的 `-1` 表示无归属，`0` 表示 ambient。恢复时从已提交的液体、颗粒和 coherent 库存共同推导几何后重扫。气体节点先于其热能恢复，因此重扫直接读取同一输入热快照中的 coherent 体积，避免使用尚未恢复的热状态，并用完整 lineage 保留仅存在于部分充液格中的气泡。随后要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 一致；差异归入状态恢复失败。
