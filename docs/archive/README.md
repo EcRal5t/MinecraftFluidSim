@@ -6,6 +6,7 @@
 |---|---|
 | [代码架构重整实施记录](progress/code-architecture-restructuring-implement.md) | 按 S00–S21 切片和提交号追溯结构变化 |
 | [架构重整基线](maintenance/architecture-baseline.md) | 查看重整完成时的源码规模与本机性能数据 |
+| [CPU 状态交接与参考能优化](maintenance/cpu-hotspot-optimization-2026-09-23.md) | 2026-09-23 分阶段性能、缓存命中、状态摘要及长跑对照 |
 | [旧提案](proposals/) | 查询当时的方案、阶段划分和取舍 |
 | [历史审查](review/) | 查询当时发现的问题与审查意见 |
 

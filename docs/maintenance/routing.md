@@ -133,6 +133,8 @@
 
 CPU 性能问题先从 [ProductionFluidReplayValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionFluidReplayValidation.java) 的 `defaultLiveStepsRemainBounded` 复现，再结合 [jfr_hotspots.py](../../pytool/jfr_hotspots.py) 定位耗时。测试名称为 `production-live-budget`，指标见 [验证指南](validation.md#performance)。
 
+化学状态交接的捕获、规范排序和恢复复用位于 [FlipChemicalParticleState](../../model/src/main/java/cc/ecisr/mmm/fluid/FlipChemicalParticleState.java)、[FluidDomainCollisionState](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainCollisionState.java)；精确质量复用位于 [ChemicalMixtureRecord](../../model/src/main/java/cc/ecisr/mmm/chemistry/ChemicalMixtureRecord.java)。热参考能重复计算从 [ThermalStateFunction](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalStateFunction.java) 和 [ThermalReferenceEnergyCache](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalReferenceEnergyCache.java) 排查。
+
 GPU probe 分为纯 Java/Vulkan 的 `gpu-probe-kernel` 和 Fabric 适配模块 `gpu-probe`：
 
 - 设备与资源：[VulkanDeviceContext](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/VulkanDeviceContext.java)、[FlipGpuResources](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/FlipGpuResources.java)、[FlipKernelBindings](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/FlipKernelBindings.java)。
