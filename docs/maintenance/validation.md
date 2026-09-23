@@ -78,6 +78,29 @@
 测量控制器半满场景与大型 demo，各预热 20 步、采样 20 步，报告分阶段耗时和内存分配量，并检查物质与能量收支。
 测量范围是 CPU 计算流程，适合同机同配置的优化对比；评估耗时收益时应结合多次测量的波动。
 
+组合过程使用 [CompositeStepBenchmark](../../fabric/src/test/java/cc/ecisr/mmm/simulation/CompositeStepBenchmark.java)，例如：
+
+```powershell
+./gradlew.bat :fabric:runCompositeBenchmark -PbenchmarkScene=thermochem -PbenchmarkWarmup=20 -PbenchmarkSamples=80 --offline
+```
+
+`benchmarkOutput` 指定输出前缀（建议绝对路径），默认写入根目录 `build/composite-profile/<scene>.csv`。
+`-PbenchmarkJfr=true` 另录制采样阶段的 JFR；采样运行的耗时应与普通计时分开报告。
+
+| scene | 测量范围与实际过程 |
+|---|---|
+| `granular` | 256 个初始细砂 parcel，连续推进至沉积后，向床面附近液体施加刚体扰动；需要足够步数形成沉积。CSV 分别记录沉积、唤醒、接触粒子和冲量，接触不保证唤醒 |
+| `granular-active` / `granular-large` | 每次重放同一初态的完整后端步并提交，分别保留 256 / 1,536 个活动 parcel；初态捕获在计时外，适合对比持续活动的耦合算子成本 |
+| `thermochem` | 每步注入带酸碱和盐离子的液体，结算待处理相变体积并执行完整步；采样阶段必须有实际化学变化和析出 |
+| `mixed` | 显式安排三个区域：隔轮运动、每轮独立热轴、保持静止；记录实际入口调用次数，测量离线组合工作量 |
+| `presentation` | 对固定大型状态分别测量捕获、恢复、四类展示快照与液面网格生成的时间和分配量 |
+
+完整计时和线程分配量使用相同工作范围，额外状态导出、审计与 CSV 格式化位于范围外。
+连续推进场景包含请求捕获、计算和提交；`thermochem` 还包含注液操作。
+这些场景不包含 Minecraft 活动分类、到期调度、世界读取、网络编码、磁盘写入或 GPU 绘制。
+`mixed` 的调用次数统计全部区域；粒子、固体和内能列描述第一个区域，其余区域也逐步检查气体与内能收支。
+应在同机交错启动独立 JVM 重复测量，并查看逐步过程计数；诊断列相同只能说明这些观测一致，完整状态等价需要另行比较。
+
 `production-live-budget` 调用 `defaultLiveStepsRemainBounded`，验证两种生产负载：
 
 | 场景 | 规模 | 耗时要求 |

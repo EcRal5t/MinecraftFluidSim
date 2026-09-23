@@ -89,6 +89,23 @@ tasks.register('runStepBenchmark', JavaExec) {
 	doFirst { benchmarkWorkDir.mkdirs() }
 }
 
+tasks.register('runCompositeBenchmark', JavaExec) {
+	group = 'verification'
+	description = 'Measures observable composite workloads; see validation.md for scene scope.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = 'cc.ecisr.mmm.simulation.CompositeStepBenchmark'
+	enableAssertions = true
+	def scene = providers.gradleProperty('benchmarkScene').getOrElse('thermochem')
+	args scene, providers.gradleProperty('benchmarkWarmup').getOrElse('20'),
+		providers.gradleProperty('benchmarkSamples').getOrElse('80'),
+		providers.gradleProperty('benchmarkOutput').getOrElse(rootProject.layout.buildDirectory.file("composite-profile/${scene}").get().asFile.absolutePath),
+		providers.gradleProperty('benchmarkJfr').getOrElse('false')
+	def benchmarkWorkDir = layout.buildDirectory.dir('step-benchmark-work').get().asFile
+	workingDir benchmarkWorkDir
+	doFirst { benchmarkWorkDir.mkdirs() }
+}
+
 tasks.register('runNormalPlayFuzz', JavaExec) {
 	group = 'verification'
 	dependsOn tasks.named('testClasses')

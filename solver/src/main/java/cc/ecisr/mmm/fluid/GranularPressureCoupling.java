@@ -23,7 +23,7 @@ final class GranularPressureCoupling {
 	void forEachGasNode(java.util.function.IntConsumer accept) {
 		if (domain.granularState == null) return;
 		for (int parcel = 0; parcel < domain.granularState.parcels.count(); parcel++) {
-			int entries = gradient(parcel);
+			int entries = gradient(domain.granularState.parcels.parcel(parcel));
 			for (int slot = 0; slot < entries; slot++) if (domain.isAir(cells[slot])) {
 				accept.accept(domain.gasNodeOfAirCell(cells[slot]));
 			}
@@ -36,10 +36,10 @@ final class GranularPressureCoupling {
 		ensureCapacity(count);
 		double h = domain.config.cellSize(), cellVolume = h * h * h;
 		for (int parcel = 0; parcel < count; parcel++) {
-			var particles = domain.granularState.parcels;
-			inverseMass[parcel] = cellVolume / particles.mass(parcel);
+			var p = domain.granularState.parcels.parcel(parcel);
+			inverseMass[parcel] = cellVolume / p.mass();
 			boundaryX[parcel] = boundaryY[parcel] = boundaryZ[parcel] = 0;
-			int entries = gradient(parcel);
+			int entries = gradient(p);
 			int base = parcel * 8;
 			for (int slot = 0; slot < 8; slot++) {
 				int index = base + slot;
@@ -65,9 +65,9 @@ final class GranularPressureCoupling {
 				}
 			}
 			double scale = dt * inverseMass[parcel];
-			double vx = particles.velocityX(parcel) - scale * boundaryX[parcel];
-			double vy = particles.velocityY(parcel) - scale * boundaryY[parcel];
-			double vz = particles.velocityZ(parcel) - scale * boundaryZ[parcel];
+			double vx = p.velocityX() - scale * boundaryX[parcel];
+			double vy = p.velocityY() - scale * boundaryY[parcel];
+			double vz = p.velocityZ() - scale * boundaryZ[parcel];
 			for (int index = base; index < base + 8; index++) {
 				add(rows[index], domain.projection.rhs, domain.projection.gasRhs,
 						domain.config.density() / dt * (gx[index] * vx + gy[index] * vy + gz[index] * vz));
@@ -127,7 +127,7 @@ final class GranularPressureCoupling {
 
 	void project(float dt, double[] liquidPressure, double[] gasPressure) {
 		for (int parcel = 0; parcel < count; parcel++) {
-			var particles = domain.granularState.parcels;
+			var p = domain.granularState.parcels.parcel(parcel);
 			double x = boundaryX[parcel], y = boundaryY[parcel], z = boundaryZ[parcel];
 			for (int index = parcel * 8; index < (parcel + 1) * 8; index++) {
 				double pressure = liquidPressure == null
@@ -136,14 +136,13 @@ final class GranularPressureCoupling {
 				x += gx[index] * pressure; y += gy[index] * pressure; z += gz[index] * pressure;
 			}
 			double scale = dt * inverseMass[parcel];
-			double mass = particles.mass(parcel);
-			double vx = particles.velocityX(parcel) - scale * x, vy = particles.velocityY(parcel) - scale * y, vz = particles.velocityZ(parcel) - scale * z;
-			particles.overwrite(parcel, new GranularParcelStore.Parcel(particles.x(parcel), particles.y(parcel), particles.z(parcel),
-					(float) vx, (float) vy, (float) vz, particles.solidVolumeSvq(parcel), mass, particles.materialHandle(parcel),
-					particles.solidCompositionHandle(parcel), particles.contactAge(parcel), particles.flags(parcel)));
-			domain.lastGranularBoundaryImpulseX += mass * (vx - (float) vx);
-			domain.lastGranularBoundaryImpulseY += mass * (vy - (float) vy);
-			domain.lastGranularBoundaryImpulseZ += mass * (vz - (float) vz);
+			double vx = p.velocityX() - scale * x, vy = p.velocityY() - scale * y, vz = p.velocityZ() - scale * z;
+			domain.granularState.parcels.overwrite(parcel, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(),
+					(float) vx, (float) vy, (float) vz, p.solidVolumeSvq(), p.mass(), p.materialHandle(),
+					p.solidCompositionHandle(), p.contactAge(), p.flags()));
+			domain.lastGranularBoundaryImpulseX += p.mass() * (vx - (float) vx);
+			domain.lastGranularBoundaryImpulseY += p.mass() * (vy - (float) vy);
+			domain.lastGranularBoundaryImpulseZ += p.mass() * (vz - (float) vz);
 		}
 	}
 
@@ -176,10 +175,9 @@ final class GranularPressureCoupling {
 	}
 
 	/** Derivative of normalized trilinear solid fraction; all eight derivatives sum to zero. */
-	private int gradient(int parcel) {
-		var particles = domain.granularState.parcels;
+	private int gradient(GranularParcelStore.Parcel p) {
 		double h = domain.config.cellSize();
-		double x = particles.x(parcel) / h - 0.5, y = particles.y(parcel) / h - 0.5, z = particles.z(parcel) / h - 0.5;
+		double x = p.x() / h - 0.5, y = p.y() / h - 0.5, z = p.z() / h - 0.5;
 		int x0 = (int) Math.floor(x), y0 = (int) Math.floor(y), z0 = (int) Math.floor(z);
 		double fx = x - x0, fy = y - y0, fz = z - z0;
 		double sum = 0, sumX = 0, sumY = 0, sumZ = 0;
@@ -196,7 +194,7 @@ final class GranularPressureCoupling {
 			sum += weights[entries]; sumX += dx[entries]; sumY += dy[entries]; sumZ += dz[entries];
 			entries++;
 		}
-		double fraction = particles.solidVolumeSvq(parcel) / (double) SolidVolume.SVQ_PER_CELL;
+		double fraction = p.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_CELL;
 		for (int i = 0; i < entries; i++) {
 			dx[i] = fraction * (dx[i] * sum - weights[i] * sumX) / (sum * sum);
 			dy[i] = fraction * (dy[i] * sum - weights[i] * sumY) / (sum * sum);

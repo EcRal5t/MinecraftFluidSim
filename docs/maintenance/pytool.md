@@ -12,3 +12,5 @@
 | [water_melting_curve.py](../../pytool/water_melting_curve.py) | 按 IAPWS 熔化压力公式更新内置水冰相图，并核对公式表列值 | `uv run pytool/water_melting_curve.py` |
 
 `arch_baseline.py` 的输出反映运行时的源码。架构重整完成时的数字保存在 [历史基线](../archive/maintenance/architecture-baseline.md)。`unused_imports.py` 的结果供人工核对，Java 编译仍负责检查类型和依赖。
+
+`compare_step_profiles.py` 支持历史完整步程序及 `CompositeStepBenchmark` 的 CSV，分别列出每个独立 JVM 的均值。组合场景的 `--check-trajectory` 还比较调用次数、反应/沉积/接触计数、固体体积和精确内能等观测列；它不证明完整状态逐位一致。

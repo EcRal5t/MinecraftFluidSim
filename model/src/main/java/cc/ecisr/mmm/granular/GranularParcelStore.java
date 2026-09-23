@@ -78,20 +78,6 @@ public final class GranularParcelStore {
 				contactAge[index], flags[index]);
 	}
 
-	/** Primitive column access for solver kernels; avoids materializing a record per array element. */
-	public float x(int index) { requireIndex(index); return x[index]; }
-	public float y(int index) { requireIndex(index); return y[index]; }
-	public float z(int index) { requireIndex(index); return z[index]; }
-	public float velocityX(int index) { requireIndex(index); return velocityX[index]; }
-	public float velocityY(int index) { requireIndex(index); return velocityY[index]; }
-	public float velocityZ(int index) { requireIndex(index); return velocityZ[index]; }
-	public long solidVolumeSvq(int index) { requireIndex(index); return solidVolumeSvq[index]; }
-	public double mass(int index) { requireIndex(index); return mass[index]; }
-	public int materialHandle(int index) { requireIndex(index); return materialHandle[index]; }
-	public int solidCompositionHandle(int index) { requireIndex(index); return solidCompositionHandle[index]; }
-	public int contactAge(int index) { requireIndex(index); return contactAge[index]; }
-	public byte flags(int index) { requireIndex(index); return flags[index]; }
-
 	public void overwrite(int index, Parcel parcel) {
 		requireIndex(index);
 		validate(parcel);

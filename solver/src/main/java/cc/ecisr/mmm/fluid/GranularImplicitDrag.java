@@ -74,19 +74,19 @@ final class GranularImplicitDrag {
 		Arrays.fill(firstRow, Integer.MAX_VALUE); Arrays.fill(secondRow, Integer.MAX_VALUE);
 		prepareFaces();
 		for (int index = 0; index < parcels; index++) {
-			var particles = domain.granularState.parcels;
-			for (int axis = 0; axis < 3; axis++) mass[faceCount + 3 * index + axis] = particles.mass(index);
-			var fluid = domain.granularMechanicalStage.sample(particles.x(index), particles.y(index), particles.z(index));
+			var p = domain.granularState.parcels.parcel(index);
+			for (int axis = 0; axis < 3; axis++) mass[faceCount + 3 * index + axis] = p.mass();
+			var fluid = domain.granularMechanicalStage.sample(p.x(), p.y(), p.z());
 			if (!fluid.hasLiquid()) continue;
-			double diameter = domain.granularState.registry.material(particles.materialHandle(index)).primaryGrainDiameterMeters();
-			double sx = particles.velocityX(index) - fluid.velocityX(), sy = particles.velocityY(index) - fluid.velocityY();
-			double sz = particles.velocityZ(index) - fluid.velocityZ(), slip = Math.sqrt(sx*sx + sy*sy + sz*sz);
+			double diameter = domain.granularState.registry.material(p.materialHandle()).primaryGrainDiameterMeters();
+			double sx = p.velocityX() - fluid.velocityX(), sy = p.velocityY() - fluid.velocityY();
+			double sz = p.velocityZ() - fluid.velocityZ(), slip = Math.sqrt(sx*sx + sy*sy + sz*sz);
 			reynoldsScale[index] = fluid.density() * diameter / fluid.dynamicViscosity();
-			double grains = particles.solidVolumeSvq(index) / (double) SolidVolume.SVQ_PER_BV
+			double grains = p.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_BV
 					/ (Math.PI * diameter * diameter * diameter / 6) * fluid.submergedFraction();
 			stokes[index] = 3 * Math.PI * fluid.dynamicViscosity() * diameter * grains;
 			dragValue[index] = resistance(index, slip);
-			for (int axis = 0; axis < 3; axis++) prepareContact(index, particles.x(index), particles.y(index), particles.z(index), axis, dragValue[index]);
+			for (int axis = 0; axis < 3; axis++) prepareContact(index, p, axis, dragValue[index]);
 		}
 		if (contacts == 0) return;
 		if (solver == null) solver = new GranularCoupledPressureSolver(domain, this);
@@ -219,10 +219,10 @@ final class GranularImplicitDrag {
 		}
 	}
 
-	private void prepareContact(int index, float px, float py, float pz, int axis, double drag) {
+	private void prepareContact(int index, GranularParcelStore.Parcel p, int axis, double drag) {
 		double h = domain.config.cellSize();
-		double x = px / h - (axis == 0 ? 0 : 0.5), y = py / h - (axis == 1 ? 0 : 0.5);
-		double z = pz / h - (axis == 2 ? 0 : 0.5);
+		double x = p.x() / h - (axis == 0 ? 0 : 0.5), y = p.y() / h - (axis == 1 ? 0 : 0.5);
+		double z = p.z() / h - (axis == 2 ? 0 : 0.5);
 		int x0 = (int) Math.floor(x), y0 = (int) Math.floor(y), z0 = (int) Math.floor(z);
 		int nx = domain.sizeX + (axis == 0 ? 1 : 0), ny = domain.sizeY + (axis == 1 ? 1 : 0);
 		int nz = domain.sizeZ + (axis == 2 ? 1 : 0), count = 0, base = contacts * 8;
@@ -391,10 +391,10 @@ final class GranularImplicitDrag {
 			vector[offsets[axis] + face] = fields[axis][face];
 		}
 		for (int index = 0; index < domain.granularState.parcels.count(); index++) {
-			var particles = domain.granularState.parcels;
-			vector[faceCount + 3 * index] = particles.velocityX(index);
-			vector[faceCount + 3 * index + 1] = particles.velocityY(index);
-			vector[faceCount + 3 * index + 2] = particles.velocityZ(index);
+			var p = domain.granularState.parcels.parcel(index);
+			vector[faceCount + 3 * index] = p.velocityX();
+			vector[faceCount + 3 * index + 1] = p.velocityY();
+			vector[faceCount + 3 * index + 2] = p.velocityZ();
 		}
 	}
 
@@ -407,18 +407,17 @@ final class GranularImplicitDrag {
 			if (accountRounding) rounding[axis] += mass[offsets[axis] + face] * (velocity - fields[axis][face]);
 		}
 		for (int index = 0; index < domain.granularState.parcels.count(); index++) {
-			var particles = domain.granularState.parcels;
-			float px = particles.x(index), py = particles.y(index), pz = particles.z(index);
+			var p = domain.granularState.parcels.parcel(index);
 			double vx = vector[faceCount + 3 * index];
 			double vy = vector[faceCount + 3 * index + 1];
 			double vz = vector[faceCount + 3 * index + 2];
-			particles.overwrite(index, new GranularParcelStore.Parcel(px, py, pz,
-					(float) vx, (float) vy, (float) vz, particles.solidVolumeSvq(index), particles.mass(index), particles.materialHandle(index),
-					particles.solidCompositionHandle(index), particles.contactAge(index), particles.flags(index)));
+			domain.granularState.parcels.overwrite(index, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(),
+					(float) vx, (float) vy, (float) vz, p.solidVolumeSvq(), p.mass(), p.materialHandle(),
+					p.solidCompositionHandle(), p.contactAge(), p.flags()));
 			if (accountRounding) {
-				rounding[0] += particles.mass(index) * (vx - (float) vx);
-				rounding[1] += particles.mass(index) * (vy - (float) vy);
-				rounding[2] += particles.mass(index) * (vz - (float) vz);
+				rounding[0] += p.mass() * (vx - (float) vx);
+				rounding[1] += p.mass() * (vy - (float) vy);
+				rounding[2] += p.mass() * (vz - (float) vz);
 			}
 		}
 		domain.lastGranularBoundaryImpulseX += rounding[0];
