@@ -117,6 +117,8 @@
 ./gradlew.bat verifyArchitecture --offline --no-daemon
 ```
 
+`verifyArchitecture` 是仓库根任务，会调用 `:fabric:runArchitectureValidation`；它不是 `:fabric:runCpuValidation` 的 `cpuValidation` 选择器。架构检查应使用上面的根任务，不要写成 `-PcpuValidation=architecture` 或 `:fabric:verifyArchitecture`。
+
 [ArchitectureDependencyValidation](../../fabric/src/test/java/cc/ecisr/mmm/validation/ArchitectureDependencyValidation.java) 检查模块 import 方向、纯 Java 模块包循环、持久化与运行时依赖隔离、唯一服务器运行时注册点，以及生产类 1000 行上限。超过 600 行会提示，超过 1000 行会失败。[CarrierMutationPointInventoryValidation](../../fabric/src/test/java/cc/ecisr/mmm/validation/CarrierMutationPointInventoryValidation.java) 同时检查粒子结构修改的调用位置。
 
 需要单独运行 model、solver、application 的验证时，使用根任务 `runModuleValidation`。当前源码规模可用 [Python 工具](pytool.md)重新统计。
