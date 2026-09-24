@@ -268,9 +268,7 @@ final class FlipGranularCollision {
 	}
 
 	private float collisionRadius(long svq) {
-		double cellVolume = SolidVolume.toCellVolume(svq);
-		double radius = Math.cbrt(3.0 * cellVolume / (4.0 * Math.PI)) * cellSize;
-		return (float) clamp(radius, cellSize * 0.02F, cellSize * 0.20F);
+		return cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(svq, cellSize);
 	}
 
 	private static double radicalInverse(long value, int base) {

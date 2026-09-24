@@ -7,6 +7,12 @@ public final class GranularMechanics {
 
 	private GranularMechanics() { }
 
+	/** Collision footprint of a representative parcel, shared by bed release and advection. */
+	public static float representativeRadius(long solidVolumeSvq, float cellSize) {
+		double radius = Math.cbrt(3.0 * SolidVolume.toCellVolume(solidVolumeSvq) / (4.0 * Math.PI)) * cellSize;
+		return (float) Math.max(cellSize * .02F, Math.min(cellSize * .20F, radius));
+	}
+
 	public static StepStats stepVelocities(
 			GranularParcelStore parcels, GranularRegistry registry, Environment environment,
 			double dt

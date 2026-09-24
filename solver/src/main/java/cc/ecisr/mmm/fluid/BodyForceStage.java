@@ -4,6 +4,7 @@ import java.util.Map;
 
 import cc.ecisr.mmm.granular.GranularDepositStore;
 import cc.ecisr.mmm.granular.GranularLimits;
+import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 
 /**
@@ -60,30 +61,41 @@ final class BodyForceStage {
 		if (access.granularState() == null || access.granularState().deposits.occupiedCellCount() == 0) return;
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
 			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z);
-			state.mac.velocityX[access.xFaceIndex(x, y, z)] *= granularPorousFaceDamping(left, right, dt);
+			state.mac.velocityX[access.xFaceIndex(x, y, z)] *= granularPorousFaceDamping(left, right, dt, false);
 		}
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
-			state.mac.velocityY[access.yFaceIndex(x, y, z)] *= granularPorousFaceDamping(below, above, dt);
+			state.mac.velocityY[access.yFaceIndex(x, y, z)] *= granularPorousFaceDamping(below, above, dt, true);
 		}
 		for (int z = 1; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int back = access.cellIndex(x, y, z - 1), front = access.cellIndex(x, y, z);
-			state.mac.velocityZ[access.zFaceIndex(x, y, z)] *= granularPorousFaceDamping(back, front, dt);
+			state.mac.velocityZ[access.zFaceIndex(x, y, z)] *= granularPorousFaceDamping(back, front, dt, false);
 		}
 	}
 
-	private float granularPorousFaceDamping(int first, int second, float dt) {
+	private float granularPorousFaceDamping(int first, int second, float dt, boolean normal) {
 		double firstK = granularPermeability(first), secondK = granularPermeability(second);
 		if (Double.isInfinite(firstK) && Double.isInfinite(secondK)) return 1.0F;
-		double resistance;
-		if (Double.isInfinite(firstK)) resistance = 1.0 / secondK;
-		else if (Double.isInfinite(secondK)) resistance = 1.0 / firstK;
-		else resistance = 0.5 / firstK + 0.5 / secondK;
 		CarrierProperties firstCarrier = access.granularCarrierProperties(first),
 				secondCarrier = access.granularCarrierProperties(second);
 		double viscosity = 0.5 * (firstCarrier.viscosity() + secondCarrier.viscosity());
 		double density = 0.5 * (firstCarrier.density() + secondCarrier.density());
-		return (float) (1.0 / (1.0 + dt * viscosity / density * resistance));
+		double firstFraction = access.granularState().deposits.cellBulkVolumeSvq(first) / (double) SolidVolume.SVQ_PER_CELL;
+		double secondFraction = access.granularState().deposits.cellBulkVolumeSvq(second) / (double) SolidVolume.SVQ_PER_CELL;
+		double scale = dt * viscosity / density;
+		if (normal) return (float) (1 / (1 + scale * (.5 * firstFraction / firstK + .5 * secondFraction / secondK)));
+		// Parallel permeabilities, followed by ONE implicit Darcy update. Averaging two damping
+		// factors would repeatedly mix free/pore velocities and make drag depend on substep size.
+		firstK = tangentialPermeability(firstK, firstFraction);
+		secondK = tangentialPermeability(secondK, secondFraction);
+		return (float) (1 / (1 + scale * (.5 / firstK + .5 / secondK)));
+	}
+
+	private double tangentialPermeability(double pore, double fraction) {
+		if (fraction == 0) return Double.POSITIVE_INFINITY;
+		double freeDepth = (1 - fraction) * state.config.cellSize();
+		// Laminar layer with no-slip below and zero shear above: K = depth² / 3.
+		return fraction * pore + (1 - fraction) * freeDepth * freeDepth / 3;
 	}
 
 	private double granularPermeability(int cell) {

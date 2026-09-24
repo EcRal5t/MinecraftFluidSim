@@ -8,6 +8,7 @@
 |---|---|---|
 | 库存和压力耦合 | [GranularInventory](../../model/src/main/java/cc/ecisr/mmm/granular/GranularInventory.java)、[GranularCouplingFields](../../model/src/main/java/cc/ecisr/mmm/granular/GranularCouplingFields.java) | `granular` |
 | 运动、反应和沉积 | [GranularMechanicalStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularMechanicalStage.java)、[GranularPressureCoupling](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularPressureCoupling.java)、[GranularReactionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularReactionStage.java)、[GranularTransitionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularTransitionStage.java) | `granular` |
+| 水流起动与薄沙床阻力 | [GranularBedShear](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularBedShear.java)、[BodyForceStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/BodyForceStage.java)、[GranularDepositDynamics](../../model/src/main/java/cc/ecisr/mmm/granular/GranularDepositDynamics.java) | `granular` |
 | 定义与存档 | [GranularRegistryCodec](../../fabric/src/main/java/cc/ecisr/mmm/granular/GranularRegistryCodec.java) | `region-state` |
 | 物品转移 | [MinecraftContainerTransferPlan](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftContainerTransferPlan.java)、[ContainerItemMapper](../../fabric/src/main/java/cc/ecisr/mmm/item/ContainerItemMapper.java) | `containers,granular` |
 
@@ -121,12 +122,32 @@ backend/checkpoint handoff 保存 active parcel 的接触年龄与支撑标志�
 - active parcel 连续受到支撑且速度低于阈值满 3 次接触后，才原子转入 deposit；转换保持 SVQ、质量、组成和内能不变。
 - deposit 只在 dirty column 及相邻列执行确定性安息角松弛；邻居起点按 generation/cell 旋转，避免固定方向偏置。
 - 单次形态转移有严格 SVQ 上限，直到局部坡度不超过材料安息角或预算耗尽；预算耗尽保留 dirty 状态到后续 step，不丢库存。
-- 液流的 bed shear 以 Shields 判据与材料阈值比较；越阈值时按 registry 侵蚀率把 exact SVQ 唤醒为 active parcel。
-- 无扰动列连续 20 个 logical step 后休眠。几何变化、parcel 碰撞、压力/液流、相变或反应只标脏受影响邻域。
+- 液流的床面剪切应力以 Shields 判据与材料阈值比较；越阈值时按注册表侵蚀率和超临界程度把 exact SVQ 转为 active parcel。
+- 无扰动列连续 20 个 logical step 后休眠，暂停坡度松弛。每次真实运动步仍检查未排队列的暴露床面受力，超临界的列重新排队；亚临界水流保持原安静年龄。几何变化、颗粒沉积及反应也会标脏局部邻域。
 
 dirty queue、安静年龄和邻居轮转步不是库存，不能用于恢复 SVQ/kg/组成；但它们决定有界局部工作是否完成，必须随每次 immutable backend handoff 交给私有候选，否则每 tick 重建会让沉积列永远无法休眠。region HEAD 冷恢复不信任这些调度值，而是从 committed deposit 重新标脏并完成一次安全重检。
 
 这里的 deposit 是低成本地貌松弛，不声称求解连续颗粒应力、力链或弹塑性。若 fixture 显示安息角、排水或侵蚀误差越过产品适用条件，应先量化失败机制，再评审更重模型。
+
+### 水流起动与床面输运
+
+`GranularBedShear` 在沉积单元上方的第一层自由液体单元中心采样水平速度，使用真实床高到采样点的距离。床高由所在层高度和沉积 bulk SVQ 推导。沿途必须存在实际液体 marker，且中心采样路径不能穿过 cut-cell 固体；空气中的外推速度不产生侵蚀。
+
+未解析近壁层使用 [Spalding 连续壁面关系](https://doc.openfoam.com/2312/tools/processing/boundary-conditions/rtm/derived/wall/nutUSpaldingWallFunction/)，取 `kappa=0.41`、`E=9.8`。从 `Re_y=U*y/nu=u+*y+` 单调求解摩擦速度 `u*=U/u+`，得到 `tau=rho*u*²`，再按液体支撑比例加权。低 Reynolds 数下连续退化为 `tau=mu*U/y`；小量指数余项使用级数，避免相消误差。Shields 数为 `tau / ((rho_s-rho_l)*g*d)`。无水平流速时为零；有水流且有效沉降重量非正时按无重力起动阻力处理。
+
+对正的临界值，计划侵蚀量为 `floor(rate*dt*(theta/theta_c-1))`，再受可用库存、单 parcel 容量和几何约束限制。`rate` 表示无量纲超额为 1 时的 SVQ/s；不足一个 SVQ 的量不提交。临界值为零时，有正剪切即可尝试最大可容纳批次。无法精确拆分的反应性组成继续延期。
+
+起动颗粒从静止床体释放，初速度为零，内能随库存搬运。下一次现有液体—颗粒联合压力/阻力求解提供加速及液体反作用。释放位置使用与运动碰撞相同的代表 parcel 半径，先验证墙体、顶部和固体容量，避免在沙床或顶板内生成颗粒。这个半径是宏观代表颗粒的碰撞尺寸；注册表的真实粒径仍用于阻力和 Shields 判据。
+
+床面检查沿有限网格列寻找最高沉积层，仅在有库存的表面采样液流，不增加持久调度列。独立热轴、暂停和未到期 tick 不执行该检查。
+
+这是一项平缓、非黏聚性颗粒床面的平衡近壁近似。当前采用水力光滑壁面关系，尚未包含粗糙度修正、湍流扩散或随机升力；起动后由已解析流场、重力和阻力决定搬运与再沉积。它不保证静水中或停止驱动后仍能维持悬浮颗粒云。采样要求床上相邻单元有水，尚未覆盖仅在沉积单元内流动的浅水薄层。
+
+### 薄沙床与孔隙阻力
+
+`BodyForceStage` 保留孔隙率和粒径给出的 Kozeny–Carman 渗透率 `Kp=d²*phi³/[180*(1-phi)²]`。沉积 bulk 占格比例为 `f`，床上自由层厚度为 `H=(1-f)*h`。切向采用平行流动近似 `Kt=f*Kp+(1-f)*H²/3`；`H²/3` 来自下侧无滑移、上侧零剪切的层流速度剖面。法向按两侧实际床层厚度叠加阻力。无沉积侧的阻力为零。
+
+两侧渗透率形成同一面上的阻力后，只执行一次隐式 Darcy 更新 `u_next=u/(1+dt*mu/rho*resistance)`。因此薄床保留床上自由流动，满床恢复孔隙阻力，细化时间步不会反复把自由流速度与停滞孔隙速度混合。更新仍在重力与压力投影之前，保留静水平衡。该处理是单元内层状流动近似，未扩展为全域黏性或湍流求解器。
 
 ## 固液相转移
 

@@ -114,6 +114,8 @@
 
 `granular` 中的 [GranularCarrierValidation](../../solver/src/test/java/cc/ecisr/mmm/fluid/GranularCarrierValidation.java) 检查多 parcel 阻力交换的动量守恒、能量耗散和顺序无关性、有限颗粒质量的压力功和连续性、跨单元面的连续液体接触、静水梯度给出的浮力、步末阻力有效性检查，以及小时间步下对压力零点的独立性。`containers` 保留正常操作随机序列的种子 4、54、103，覆盖薄液层反冲、密集颗粒排水与高压下的时间细化。
 
+同一 `granular` 选择器中的 [GranularBedWakeValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/GranularBedWakeValidation.java) 使用正式全能力注册表、启用相变，并逐步经过后端捕获/恢复：细砂沉积并休眠后，弱刚体扰动应无侵蚀，较强扰动应重新起动并实际水平搬运，减弱为静止物体后应再次沉积、休眠。逐步记录起动数、活动数、床面 Shields 数与真实接触数，检查固体质量/体积和气体、内能收支；另检查释放瞬间的零速度、内能搬运、碰撞空间及干区/隔墙误触发。`GranularCarrierValidation` 同时检查薄床切向自由流动和时间细化。
+
 批量排查使用 [ControllerInventoryDurabilityValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ControllerInventoryDurabilityValidation.java) 的带种子操作序列，每次操作后执行完整状态往返。参数依次是起始种子、种子数量、操作数和是否禁用沙粒（可省略，默认 `false`）：
 
 ```powershell

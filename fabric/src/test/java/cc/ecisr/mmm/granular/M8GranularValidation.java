@@ -44,6 +44,7 @@ public final class M8GranularValidation {
 		couplingOccupancyResumsExactly();
 		porousBedPreservesHydrostatics();
 		settlingRelaxationSleepAndWakeAreLocal();
+		cc.ecisr.mmm.fluid.GranularBedWakeValidation.validate();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
 		wholeBucketCongestionRemainsLocal(fast ? 40 : 200);
 		if (!fast) singleBucketPourSettlesWithinTenSeconds();
@@ -802,7 +803,9 @@ public final class M8GranularValidation {
 		require(quiet.wokenParcels() == 0 && parcels.count() == 0
 				&& inventory.totalSolidVolumeSvq() == beforeSubcritical, "subcritical flow caused granular creep");
 
-		TestDepositEnvironment eroding = new TestDepositEnvironment(sizeX, sizeY, sizeZ, 1.0);
+		TestDepositEnvironment eroding = new TestDepositEnvironment(sizeX, sizeY, sizeZ, 1.0) {
+			@Override public double shields(int cell, ParticulateMaterial material) { return cell == remoteCell ? 0 : 1; }
+		};
 		GranularDepositDynamics.Stats wake = dynamics.step(eroding, 0.05F);
 		require(wake.wokenParcels() > 0 && parcels.count() == wake.wokenParcels(),
 				"supercritical exposed deposit did not wake locally");
@@ -835,7 +838,7 @@ public final class M8GranularValidation {
 		return (z * sizeY + y) * sizeX + x;
 	}
 
-	private static final class TestDepositEnvironment implements GranularDepositDynamics.Environment {
+	private static class TestDepositEnvironment implements GranularDepositDynamics.Environment {
 		private final int sizeX, sizeY, sizeZ;
 		private final double shields;
 
@@ -850,9 +853,7 @@ public final class M8GranularValidation {
 					&& z + directionZ >= 0 && z + directionZ < sizeZ;
 		}
 		@Override public double shields(int surfaceCell, ParticulateMaterial material) { return shields; }
-		@Override public GranularDepositDynamics.Velocity wakeVelocity(int surfaceCell) {
-			return new GranularDepositDynamics.Velocity(0.2F, 0.0F, 0.0F);
-		}
+
 	}
 
 	private static void solverCouplingPreservesInventories(int steps) {

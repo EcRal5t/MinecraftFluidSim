@@ -345,26 +345,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			}
 
 			@Override public double shields(int surfaceCell, cc.ecisr.mmm.granular.ParticulateMaterial material) {
-				int x = surfaceCell % sizeX, yz = surfaceCell / sizeX, y = yz % sizeY, z = yz / sizeY;
-				int fluidCell = y + 1 < sizeY ? cellIndex(x, y + 1, z) : surfaceCell;
-				float px = (x + 0.5F) * config.cellSize();
-				float py = (Math.min(sizeY - 1, y + 1) + 0.5F) * config.cellSize();
-				float pz = (z + 0.5F) * config.cellSize();
-				double speed = Math.hypot(sampleX(mac.velocityX, px, py, pz), sampleZ(mac.velocityZ, px, py, pz));
-				CarrierProperties carrier = granularCarrierProperties(fluidCell);
-				double denominator = Math.abs(material.referenceDensity() - carrier.density())
-						* config.gravity() * material.primaryGrainDiameterMeters();
-				if (!(denominator > 1.0e-18)) return speed > 0.0 ? Double.POSITIVE_INFINITY : 0.0;
-				double bedShear = carrier.viscosity() * speed / config.cellSize();
-				return bedShear / denominator;
-			}
-
-			@Override public GranularDepositDynamics.Velocity wakeVelocity(int surfaceCell) {
-				int x = surfaceCell % sizeX, yz = surfaceCell / sizeX, y = yz % sizeY, z = yz / sizeY;
-				float px = (x + 0.5F) * config.cellSize(), py = (y + 0.5F) * config.cellSize();
-				float pz = (z + 0.5F) * config.cellSize();
-				return new GranularDepositDynamics.Velocity(sampleX(mac.velocityX, px, py, pz),
-						sampleY(mac.velocityY, px, py, pz), sampleZ(mac.velocityZ, px, py, pz));
+				return GranularBedShear.shields(domain(), surfaceCell, material);
 			}
 
 			@Override public boolean planSettlement(GranularParcelStore.Parcel parcel, int cell) {
@@ -413,6 +394,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			}
 
 			@Override public boolean planWake(int cell, long solidSvq, float x, float y, float z) {
+				if (!granularCollision.positionValid(x, y, z, solidSvq)) return false;
 				granularCoupling.removePlannedCell(plannedSolid, cell, solidSvq);
 				GranularCouplingFields.Position position = new GranularCouplingFields.Position(x, y, z);
 				if (granularCoupling.tryPlanParcel(plannedSolid, position, solidSvq,

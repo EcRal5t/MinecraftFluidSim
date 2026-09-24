@@ -11,14 +11,6 @@ public final class GranularDepositDynamics {
 	private static final int[] NEIGHBOR_X = {-1, 1, 0, 0, -1, -1, 1, 1};
 	private static final int[] NEIGHBOR_Z = {0, 0, -1, 1, -1, 1, -1, 1};
 
-	public record Velocity(float x, float y, float z) {
-		public Velocity {
-			if (!(Float.isFinite(x) && Float.isFinite(y) && Float.isFinite(z))) {
-				throw new IllegalArgumentException("Granular wake velocity is not finite");
-			}
-		}
-	}
-
 	public record Stats(int settledParcels, int relaxedMoves, int wokenParcels,
 	                    int processedColumns, int dirtyColumns) { }
 
@@ -49,7 +41,6 @@ public final class GranularDepositDynamics {
 		long geometricOpenSvq(int cell);
 		boolean horizontalPathOpen(int fromCell, int directionX, int directionZ);
 		double shields(int surfaceCell, ParticulateMaterial material);
-		Velocity wakeVelocity(int surfaceCell);
 		default boolean planSettlement(GranularParcelStore.Parcel parcel, int cell) { return true; }
 		default void cancelSettlement(GranularParcelStore.Parcel parcel, int cell) { }
 		default boolean planRelaxation(int fromCell, int toCell, long solidSvq) { return true; }
@@ -127,7 +118,7 @@ public final class GranularDepositDynamics {
 		queueHead = 0; queueSize = queue.length; logicalStep = state.logicalStep();
 	}
 
-	/** Explicit diagnostic; normal logical steps do not scan sleeping deposit columns. */
+	/** Explicit diagnostic; the shear check in a motion step does not change subcritical sleep ages. */
 	public int sleepingColumnCount() {
 		int sleeping = 0;
 		for (int column = 0; column < columnCount; column++) {
@@ -198,6 +189,19 @@ public final class GranularDepositDynamics {
 			if (!deposited) parcelIndex++;
 		}
 
+		// Resting geometry can sleep while the carrier changes. Inspect only occupied surfaces on
+		// motion steps; a supercritical local flow re-enqueues its bed without waking distant slopes.
+		for (int column = 0; column < columnCount; column++) {
+			if (queued[column]) continue;
+			int surface = surfaceCell(column);
+			if (surface < 0) continue;
+			ParticulateMaterial material = registry.material(deposits.dominantGroup(surface).materialHandle());
+			double shields = environment.shields(surface, material);
+			if (Double.isFinite(shields) && shields > material.criticalShields()) {
+				stableAge[column] = 0;
+				enqueue(column);
+			}
+		}
 		int scheduled = Math.min(queueSize, GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - operations);
 		for (int visit = 0; visit < scheduled; visit++) {
 			int column = pollColumn();
@@ -231,17 +235,22 @@ public final class GranularDepositDynamics {
 	                        ParticulateMaterial material, Environment environment, float dt) {
 		double shields = environment.shields(surfaceCell, material);
 		if (!(Double.isFinite(shields) && shields > material.criticalShields())) return false;
-		long erosion = Math.max(1L, (long) Math.floor(material.erosionRateSvqPerSecond() * (double) dt));
+		double excess = material.criticalShields() == 0 ? Double.POSITIVE_INFINITY
+				: shields / material.criticalShields() - 1;
+		long erosion = (long) Math.floor(material.erosionRateSvqPerSecond() * (double) dt * excess);
 		erosion = Math.min(erosion, Math.min(exposed.solidVolumeSvq(), material.maximumActiveParcelSvq()));
-		Velocity velocity = environment.wakeVelocity(surfaceCell);
+		if (erosion <= 0) return false;
 		int x = column % sizeX, z = column / sizeX;
 		float height = (float) ((double) columnSurfaceSvq(column) / SolidVolume.SVQ_PER_CELL * cellSize);
-		float px = (x + 0.5F) * cellSize, py = Math.min(sizeY * cellSize - cellSize * 0.05F,
-				height + cellSize * 0.05F), pz = (z + 0.5F) * cellSize;
+		float px = (x + 0.5F) * cellSize,
+				py = height + GranularMechanics.representativeRadius(erosion, cellSize) + cellSize * 1e-5F,
+				pz = (z + 0.5F) * cellSize;
 		if (!environment.planWake(surfaceCell, erosion, px, py, pz)) return false;
 		try {
+			// Bed material starts at rest; the next coupled mechanical solve supplies acceleration
+			// and its equal liquid reaction. Copying carrier velocity here would create momentum.
 			boolean woken = inventory.wake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion,
-					px, py, pz, velocity.x(), velocity.y(), velocity.z());
+					px, py, pz, 0, 0, 0);
 			if (woken) environment.onSolidChanged(surfaceCell);
 			else environment.cancelWake(surfaceCell, erosion, px, py, pz);
 			return woken;
@@ -390,7 +399,7 @@ public final class GranularDepositDynamics {
 			int cell = cell(x, y, z);
 			if (deposits.cellSolidVolumeSvq(cell) > 0L) return cell;
 		}
-		throw new IllegalStateException("Occupied granular column has no surface cell");
+		return -1;
 	}
 
 	private void disturbColumn(int x, int z) {

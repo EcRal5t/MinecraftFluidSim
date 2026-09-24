@@ -21,6 +21,29 @@ public final class GranularCarrierValidation {
 		require(Math.abs(below - above) < 1.0e-12, "drag resistance must remain continuous at the branch transition");
 		implicitSharedCarrier();
 		implicitCarrierValidity();
+		thinBedRetainsFreeFlow();
+	}
+
+	private static void thinBedRetainsFreeFlow() {
+		var domain = domain();
+		for (int z = 0; z < 6; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 6; x++) domain.setVolume(x, y, z, .5F);
+		domain.ensureGrid();
+		int sand = domain.granularState.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long volume = SolidVolume.SVQ_PER_CELL / 4;
+		for (int x = 2; x <= 3; x++) require(domain.granularState.deposits.tryAdd(domain.cellIndex(x, 1, 2),
+				new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(sand, 0, volume,
+						2600 * volume / (double) SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "Thin bed rejected");
+		int face = domain.xFaceIndex(3, 1, 2), vertical = domain.yFaceIndex(2, 1, 2);
+		java.util.Arrays.fill(domain.mac.velocityX, 1);
+		java.util.Arrays.fill(domain.mac.velocityY, 1);
+		domain.bodyForceStage.applyGranularPorousDamping(.05F);
+		double oneStep = domain.mac.velocityX[face];
+		require(oneStep > .99 && oneStep < 1 && domain.mac.velocityY[vertical] < .05,
+				"Thin bed must admit tangential free flow while resisting flow through pores: " + oneStep + ", " + domain.mac.velocityY[vertical]);
+		java.util.Arrays.fill(domain.mac.velocityX, 1);
+		for (int step = 0; step < 100; step++) domain.bodyForceStage.applyGranularPorousDamping(.0005F);
+		require(Math.abs(domain.mac.velocityX[face] - oneStep) < 2e-5,
+				"Porous free-flow response changed under time refinement");
 	}
 
 	private static void pressureReferenceDoesNotAccelerateMatter() {
