@@ -160,7 +160,7 @@
 
 ## 阶段 5：实体双向边界
 
-工作包 C02。当前 `MinecraftEntityFluidInteraction` 以 AABB 湿体积比例和固定 drag/neutral-submergence 参数修改实体速度，同时向 core 提交 moving-body marker 动量；实体力和液体冲量不是同一离散边界的镜像，实体占位也未进入容量。
+工作包 C02。当前 `MinecraftRegionInputs` 以 AABB 湿体积比例和固定参数（`FULL_SUBMERGENCE_DRAG = 0.20`、`NEUTRAL_SUBMERGENCE = 0.72`）修改实体速度，同时向 core 提交 moving-body marker 动量；实体力和液体冲量不是同一离散边界的镜像，实体占位也未进入容量。
 
 按依赖拆成可独立关闭的切片，前一步都应能单独退化回当前行为：
 
