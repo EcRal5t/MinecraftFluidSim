@@ -28,7 +28,8 @@
 - 区域总量与逐材料体积/质量账本必须由 marker 精确和闭合。
 - `FluidMaterialRegistry` 是运行时材料定义入口；持久化和容器使用稳定 ID，不保存运行时 handle。
 - 当前机械定义包含 stable ID、参考密度、miscibility group、液气表面张力和接触角；液液张力由 registry 的 phase 无序对表给出。
-- 显示颜色来自独立只读 palette。当前没有把每液体黏度作为 `FluidMaterial` 的权威字段；颗粒阻力使用 granular carrier 自己声明的流体参数。
+- 显示颜色来自独立只读 palette。
+- 液体动态黏度只有一份权威定义：world material registry 按 `Pa·s` 保存分段 `mu(T)` 与有效温区，写进世界能力包。`FluidMaterial` 不保存黏度，granular carrier 也不再自带 `dynamic_viscosity`，它只声明颗粒阻力标定用的 Reynolds 上限。
 - 只有 marker 质量和体积参与库存结算；参考密度用于创建、校验和状态函数绑定，不能覆盖已有 marker 质量。
 
 ## Registry 与运行时 handle
@@ -38,6 +39,19 @@
 handle 只为了数组索引。checkpoint 保存 canonical material palette，容器保存 stable ID；恢复时先验证完整 palette/registry identity，再建立当前进程 handle。不能把一次进程中的整数 handle 写入长期状态。
 
 内置基线目前提供 water、oil 和 mercury。内置 palette 是生产默认定义集，不是存档的替代品；已提交区域仍由 checkpoint 中的 palette 与 registry identity 解释。
+
+### 黏度求值
+
+分段 `mu(T)` 在连接点上连续，两段共享同一端点值。两条求值方式共享同一次分段查找，只在越域处理上不同：
+
+| 方式 | 声明温区外 | 用途 |
+|---|---|---|
+| 严格 `dynamicViscosityAt` | 抛 `IllegalArgumentException` | registry 校验、显式温度写入校验、测试断言 |
+| 延拓 `dynamicViscosityExtendingAt` | 取最近端点的声明值（常值延拓，不外推斜率） | 载体耦合，必须覆盖热学可达的全部温度 |
+
+延拓不在两个实测点之间发明数据，只保持边界值，因此不会产生负黏度。`minimumViscosityTemperatureK` / `maximumViscosityTemperatureK` 供诊断报告声明温区。
+
+材料定义随后端交接一起走：`FluidDomainState` 保存不可变 `MaterialRegistry` 引用，`Layout` 保存其 fingerprint。有颗粒库存的交接必须携带定义，否则恢复后的候选会用别的物性求值。
 
 ## 求解器边界
 

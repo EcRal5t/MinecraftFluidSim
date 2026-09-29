@@ -63,6 +63,23 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 		}
 	}
 	record MaterialInventory(double volume, double mass, double centerY) { }
+	/**
+	 * Carrier viscosity evaluations that left the material's declared temperature domain.
+	 *
+	 * <p>Counted per cell per property build, so a cell read by many parcels, Darcy faces or the bed
+	 * shear closure in one revision counts once. A candidate that never publishes accumulates into
+	 * this record only through the successful step's stats.
+	 */
+	public record CarrierViscosityStats(int extrapolatedCells, String sample) {
+		public CarrierViscosityStats {
+			if (extrapolatedCells < 0) throw new IllegalArgumentException("Extrapolated cell count is negative");
+			if (extrapolatedCells == 0) sample = "";
+			else java.util.Objects.requireNonNull(sample, "sample");
+		}
+
+		public boolean extrapolated() { return extrapolatedCells > 0; }
+	}
+
 	public record StepStats(
 			int substeps,
 			int pressureIterations,
@@ -85,11 +102,13 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 			FluidDomain.GasThermalPhaseStats gasPhase,
 			MechanicalStepAudit mechanicalAudit,
 			FluidDomain.ThermalAxisStats thermalAxis,
-			GranularDepositDynamics.Stats granularTransition
+			GranularDepositDynamics.Stats granularTransition,
+			CarrierViscosityStats carrierViscosity
 	) {
 		public StepStats {
 			java.util.Objects.requireNonNull(thermalAxis, "thermalAxis");
 			java.util.Objects.requireNonNull(granularTransition, "granularTransition");
+			java.util.Objects.requireNonNull(carrierViscosity, "carrierViscosity");
 		}
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
 		public double relativeMassError() { return massBefore == 0.0 ? 0.0 : Math.abs(massAfter - massBefore) / massBefore; }

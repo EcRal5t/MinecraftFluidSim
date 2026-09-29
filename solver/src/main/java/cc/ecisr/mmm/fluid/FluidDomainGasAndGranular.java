@@ -46,6 +46,15 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		return carrierPropertiesWorkspace;
 	}
 
+	/** Last derived carrier property build's viscosity extrapolation summary. */
+	public FluidDomain.CarrierViscosityStats carrierViscosityStats() { return derivedCarrierState().stats(); }
+
+	/** Derived liquid carrier dynamic viscosity in one cell, in Pa·s; null when the cell holds no liquid. */
+	public Double carrierViscosityPaPerS(int cell) {
+		LiquidCarrierProperties properties = derivedCarrierState();
+		return properties.hasLiquid(cell) ? properties.viscosityPaPerS(cell) : null;
+	}
+
 	public GasPressureBoundary gasBoundary() { return gasBoundary; }
 
 	/** Demo/setup tuning entry: the network books the ambient source or sink for the change itself. */

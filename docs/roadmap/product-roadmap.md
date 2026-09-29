@@ -150,16 +150,19 @@
 
 工作包 C01。当前 material registry 已按 `Pa·s` 保存分段 `mu(T)` 与有效温区，`MaterialRegistryCodec` 把它写进世界能力包；缺的是一份权威定义和它的动量扩散。
 
-### 1a 统一黏度来源
+### ~~1a 统一黏度来源~~（已于 2026-09-30 关闭）
 
-- `GranularCarrier` 仍自带 `dynamic_viscosity`，与 material registry 的分段 `mu(T)` 重复：`granular_carriers/*.json` 各自保存一份数值，`GranularImplicitDrag`、`GranularBedShear` 与 `GranularMechanicalStage` 读的是这份副本，而 `MaterialRegistry.dynamicViscosityAt` 目前只有 registry 校验一处调用方。
-- 先删除副本：carrier 只保留 liquid material 绑定与 Reynolds 上限，三处读取改为经共享的 carrier 属性入口。这一步会改变世界能力包的 registry fingerprint 与载荷解释，因此单独提交，不与 solver 改动合并。
-- 删除副本后，黏度成为温度的函数，需要为采样点取得温度。这一点比"删字段"本身深：
-  - 当前颗粒阻力只采样液体密度与材料身份，`GranularMechanicalStage` 没有温度入口；同一力学阶段的 `BodyForceStage.applyThermalBuoyancy` 已经按 marker 取 `thermalMarkerTemperature`，是既有先例。
-  - 可用的 cell 温度观测 `ThermalCellOperations.observeTemperatureInCell` 每次调用都新建 `InventoryPortion` 列表并遍历该 cell 的 marker、coherent group 与全部 active parcel，无法承受"每 parcel × 8 支撑格 × 每子步"的调用量。要按温度取黏度，必须先有每个子步只建一次的温度入口。
-  - `MaterialRegistry.dynamicViscosityAt` 在声明温区之外直接抛错（水 `273.15–645 K`、油 `253.15–473 K`、汞 `234.32–630 K`），而热学允许的温度范围远大于此。相变路径改用 cell 温度时会影响 `ExtremeThermalValidation` 的 `10 Pa / 10^7 K` 与 `10^12 Pa / 150 K` 等场景。
-  - 因此 1a 需要先冻结"颗粒阻力用哪个温度"以及"温度越出黏度声明域时是拒绝候选还是沿边界延拓"。不能用参考温度常数代替，那只是把副本换成硬编码。
-- 完成条件：仓库内不再有第二份液体黏度真值；颗粒阻力使用的温度来源与越域语义写入架构文档；`materials`、`granular`、`region-state` 三个最近门通过。
+液体黏度只剩一份权威定义：world material registry 的分段 `mu(T)`。`GranularCarrier` 不再带 `dynamic_viscosity`，只声明颗粒阻力标定用的 Reynolds 上限。
+
+关闭时落地的内容：
+
+- `LiquidCarrierProperties` 按格派生「是否有液体、材料 handle、密度、温度、`mu(T)`、Reynolds 上限」，以载体结构 revision 与热学 carrier revision 为键，一格每 revision 只反演一次温度。活动颗粒阻力、Darcy 孔隙阻力与床面剪切读同一份派生值。
+- 温度走热学批量入口（一次建格、多格读取），不逐格遍历载体；湿格取不到温度直接停止候选，无热学布局用 `STANDARD_TEMPERATURE_K` 等温约定。
+- 越域沿最近端点常值延拓，按「格 × 属性构建批次」计数，经 `StepStats.carrierViscosity` 与 `/mmm status` 发布。
+- `FluidDomainState` 与 `Layout` 携带材料定义引用与指纹；运行时由 `bindGranular` 注入，冷恢复由世界能力包注入，两条路径同一身份。
+- 绑定校验前置：未知材料定义、缺粘度段、基础物性冲突、已绑定后定义变化全部拒绝且不留部分状态。
+
+验证：`materials,granular,region-state,lifecycle,thermal,thermal-extremes` 六门与 `verifyArchitecture` 通过。性能：`granular-active` mean 63.68 ms / p95 116.03 ms / 9.31 MiB per step；`granular` mean 78.40 ms / p95 154.47 ms / 13.99 MiB per step（同机、单进程、预热 20 + 采样 80）。本次没有改动前的同路径对照，因此这两个数字是基线记录，不构成优化声明。
 
 ### 1b 有限体积黏性扩散
 

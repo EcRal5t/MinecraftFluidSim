@@ -11,6 +11,7 @@ import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
+import cc.ecisr.mmm.fluid.MaterialRegistry;
 import cc.ecisr.mmm.simulation.FullCapabilityTestFixture;
 import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.units.SolverUnitScale;
@@ -31,6 +32,8 @@ public final class M8GranularValidation {
 		boolean fast = Arrays.asList(args).contains("--fast");
 		registryIsCanonicalAndBounded();
 		registryDefinitionsAndWorldSnapshotAreStrict();
+		carrierBindingIdentityIsEnforced();
+		carrierViscosityFollowsCellTemperature();
 		solidCompositionStateIsIndependentAndPersistent();
 		phaseTransferPrecipitatesAndDissolves();
 		exactDryContainerTransferIsAtomic();
@@ -52,8 +55,94 @@ public final class M8GranularValidation {
 		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
 	}
 
-	private static void exactDryContainerTransferIsAtomic() throws Exception {
-		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+	/**
+	 * Granular drag evaluates material viscosity from cell temperature, so a domain may only bind
+	 * liquid palettes that the world material definitions actually cover — and it may not swap those
+	 * definitions later. Every rejection must leave the domain untouched.
+	 */
+	private static void carrierBindingIdentityIsEnforced() {		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
+				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FluidMaterialRegistry palette = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		MaterialRegistry definitions = BuiltinFluidMaterials.createRegistry();
+
+		// A liquid the definitions do not mention cannot participate in carrier coupling.
+		FluidDomain unknownLiquid = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidMaterialRegistry extended = new FluidMaterialRegistry(List.of(
+				BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.OIL, BuiltinFluidMaterials.MERCURY,
+				new cc.ecisr.mmm.fluid.FluidMaterial("mmm:ghost", 900.0, "mmm:ghost", 0.0, Math.PI / 2.0)));
+		expectIllegal("has no world material definition",
+				() -> unknownLiquid.bindGranular(granular, extended, definitions));
+		require(!unknownLiquid.hasGranularState() && !unknownLiquid.hasMaterialState(),
+				"a rejected binding must not leave granular or material state behind");
+
+		// A liquid that disagrees with its definition on base properties is a second source of truth.
+		FluidDomain conflicting = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidMaterialRegistry wrongDensity = new FluidMaterialRegistry(List.of(
+				new cc.ecisr.mmm.fluid.FluidMaterial("mmm:water", 1_050.0, "mmm:aqueous", 0.0, Math.PI / 2.0),
+				BuiltinFluidMaterials.OIL, BuiltinFluidMaterials.MERCURY));
+		expectIllegal("disagrees with its world material definition",
+				() -> conflicting.bindGranular(granular, wrongDensity, definitions));
+		require(!conflicting.hasGranularState(), "a rejected binding must not install granular state");
+
+		// A liquid whose definition declares no viscosity cannot be coupled at any temperature.
+		FluidDomain undeclared = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		MaterialRegistry withoutViscosity = new MaterialRegistry(List.of(
+				new MaterialRegistry.MaterialEntry(BuiltinFluidMaterials.WATER, List.of()),
+				new MaterialRegistry.MaterialEntry(BuiltinFluidMaterials.OIL,
+						definitions.entry("mmm:oil").viscosity()),
+				new MaterialRegistry.MaterialEntry(BuiltinFluidMaterials.MERCURY,
+						definitions.entry("mmm:mercury").viscosity())), List.of());
+		expectIllegal("does not declare a dynamic viscosity domain",
+				() -> undeclared.bindGranular(granular, palette, withoutViscosity));
+		require(!undeclared.hasGranularState(), "a rejected binding must not install granular state");
+
+		// Rebinding the same definitions stays legal, including after material state already exists.
+		FluidDomain bound = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		bound.bindGranular(granular, palette, definitions);
+		long granularRevisionBefore = bound.totalGranularSolidVolumeSvq();
+		bound.bindGranular(granular, palette, definitions);
+		require(bound.hasGranularState() && bound.totalGranularSolidVolumeSvq() == granularRevisionBefore,
+				"rebinding identical definitions must be idempotent");
+		expectIllegal("cannot change its world material definitions",
+				() -> bound.bindGranular(granular, palette, BuiltinFluidMaterials.createRegistryWithWaterViscosityOffset()));
+		require(bound.totalGranularSolidVolumeSvq() == granularRevisionBefore,
+				"a rejected rebinding must not change granular inventory");
+	}
+
+	/**
+	 * Carrier drag must follow the world material's declared mu(T) at the cell's authoritative
+	 * temperature, and the same workspace must serve both the mechanical stage and Darcy damping.
+	 */
+	private static void carrierViscosityFollowsCellTemperature() throws Exception {
+		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
+		MaterialRegistry definitions = registries.materials();
+		for (double temperatureK : new double[] {293.15, 353.15}) {
+			FluidDomain domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(0.5F, 1_000.0F, 0.0F,
+					1.0F / 20.0F, 200, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F), 4 * 4 * 4 * 8);
+			FullCapabilityTestFixture.bindFull(domain, registries, temperatureK, 4);
+			domain.setVolume(1, 1, 1, 1.0F);
+			domain.setThermalTemperatureInCell(1, 1, 1, temperatureK);
+			// The per-cell carrier material is only resolved once granular inventory exists, so a parcel
+			// must sit in the wet cell for drag to have a carrier to evaluate at all.
+			GranularTransferLedger wetCell = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
+					BuiltinGranularDefinitions.FINE_SAND, 4_096L, 2_600.0, null)));
+			require(domain.tryInsertExactGranular(1, 1, 1, wetCell, 0, false).inserted(),
+					"the wet cell must accept a parcel");
+			int cell = (1 * domain.sizeY() + 1) * domain.sizeX() + 1;
+			Double sampled = domain.carrierViscosityPaPerS(cell);
+			require(sampled != null, "the wet carrier cell must be visible to the derived carrier workspace");
+			double expected = definitions.dynamicViscosityAt("mmm:water", temperatureK);
+			double relative = Math.abs(sampled - expected) / expected;
+			require(relative <= 1.0e-6, "carrier viscosity must follow the declared mu(T): expected " + expected
+					+ " but sampled " + sampled + " at " + temperatureK + " K");
+			// The shared workspace, not a second derivation, answers Darcy damping for the same cell.
+			cc.ecisr.mmm.fluid.FluidDomain.CarrierViscosityStats stats = domain.carrierViscosityStats();
+			require(!stats.extrapolated(), "an in-domain temperature must not report a viscosity excursion");
+		}
+	}
+
+	private static void exactDryContainerTransferIsAtomic() throws Exception {		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
@@ -1219,5 +1308,18 @@ public final class M8GranularValidation {
 
 	private static void require(boolean condition, String message) {
 		if (!condition) throw new AssertionError(message);
+	}
+
+	/** Asserts a rejection whose message names the specific reason, and that nothing else was thrown. */
+	private static void expectIllegal(String messagePart, Runnable action) {
+		try {
+			action.run();
+		} catch (IllegalArgumentException | IllegalStateException expected) {
+			if (!String.valueOf(expected.getMessage()).contains(messagePart)) {
+				throw new AssertionError("unexpected rejection: " + expected.getMessage(), expected);
+			}
+			return;
+		}
+		throw new AssertionError("expected a rejection containing '" + messagePart + "'");
 	}
 }

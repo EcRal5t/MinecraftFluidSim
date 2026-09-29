@@ -14,6 +14,11 @@ public final class BuiltinFluidMaterials {
 			{273.15, 1.788e-3}, {293.15, 1.002e-3}, {313.15, 6.53e-4}, {333.15, 4.66e-4},
 			{353.15, 3.54e-4}, {373.15, 2.82e-4}, {423.15, 1.86e-4}, {473.15, 1.36e-4},
 			{523.15, 1.07e-4}, {573.15, 8.60e-5}, {623.15, 6.70e-5}, {645.0, 5.00e-5}};
+	/** Same domain as the default water segments with every value doubled; used only to prove handoffs. */
+	private static final double[][] WATER_VISCOSITY_OFFSET_POINTS = {
+			{273.15, 3.576e-3}, {293.15, 2.004e-3}, {313.15, 1.306e-3}, {333.15, 9.32e-4},
+			{353.15, 7.08e-4}, {373.15, 5.64e-4}, {423.15, 3.72e-4}, {473.15, 2.72e-4},
+			{523.15, 2.14e-4}, {573.15, 1.72e-4}, {623.15, 1.34e-4}, {645.0, 1.00e-4}};
 	private static final double[][] OIL_VISCOSITY_POINTS = {
 			{253.15, 0.180}, {273.15, 0.112}, {293.15, 0.055}, {313.15, 0.028},
 			{333.15, 0.016}, {353.15, 0.010}, {373.15, 6.0e-3}, {423.15, 3.0e-3}, {473.15, 1.8e-3}};
@@ -27,6 +32,17 @@ public final class BuiltinFluidMaterials {
 	public static MaterialRegistry createRegistry() {
 		return new MaterialRegistry(List.of(
 				new MaterialRegistry.MaterialEntry(WATER, viscositySegments(WATER_VISCOSITY_POINTS)),
+				new MaterialRegistry.MaterialEntry(OIL, viscositySegments(OIL_VISCOSITY_POINTS)),
+				new MaterialRegistry.MaterialEntry(MERCURY, viscositySegments(MERCURY_VISCOSITY_POINTS))), List.of());
+	}
+
+	/**
+	 * The default registry with a deliberately shifted water viscosity, for fixtures that must prove a
+	 * handoff carries its own definitions instead of falling back to the built-in ones.
+	 */
+	public static MaterialRegistry createRegistryWithWaterViscosityOffset() {
+		return new MaterialRegistry(List.of(
+				new MaterialRegistry.MaterialEntry(WATER, viscositySegments(WATER_VISCOSITY_OFFSET_POINTS)),
 				new MaterialRegistry.MaterialEntry(OIL, viscositySegments(OIL_VISCOSITY_POINTS)),
 				new MaterialRegistry.MaterialEntry(MERCURY, viscositySegments(MERCURY_VISCOSITY_POINTS))), List.of());
 	}

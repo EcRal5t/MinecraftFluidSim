@@ -85,6 +85,14 @@ caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线�
 
 异质 cell 在所有 carrier 合并后的 segment 边界上反演 `sum U_i(T) = U_cell`，因此即使声明温区不重叠仍有唯一 LTE 温度。严格正温数值域下界是 binary64 的最小正常正数，不是 1 K 或其他经验墙；有限过程可连续逼近并在 UI 舍入显示为 `0 K`。
 
+### 批量格温度观察
+
+求解器侧需要成批读取格温度时（当前唯一消费者是颗粒载体属性工作区），走 `preparePhaseScan` + `phaseScanTemperatureInCell`：先一次建格，再逐格读取。这条路径只更新派生 LTE grid，**不重新分配也不修改任何载体 `U`**。
+
+它替代逐格 `observeTemperatureInCell`：后者每次调用都新建 inventory 列表并遍历该格的全部 marker、coherent group、活动 parcel 与 deposit，无法承受「每 parcel × 8 支撑格 × 每子步」的调用量。`observeTemperatureInCell` 保留原样（每次分配独立列表），因为它与私有后端候选共享同一个热学对象，复用 scratch 列表会跨并发观测串扰。
+
+批量读取的缓存只在明确的阶段内有效，跨库存、组成、内能或位置修改即失效；它不进入 `FluidDomainState`，也不进存档，恢复后重建。
+
 只有能量低于该数学域、数值非有限或热容量非正才拒绝候选。固定温度 reservoir 等外部设定值仍限于 committed registry 的共同标定闭区间，不能借延拓注入任意边界条件。
 
 相变平台由上下相在 `T_eq` 的状态函数能隙定义。能量落在两端之间时，派生温度保持 `T_eq`，相分数由 exact phase inventory 决定；相分数本身不是库存列。

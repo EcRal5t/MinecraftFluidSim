@@ -58,6 +58,11 @@ final class LiquidCarrierProperties {
 				+ " K outside [" + sampleMinimumTemperatureK + ", " + sampleMaximumTemperatureK + "] K";
 	}
 
+	/** Last build's extrapolation summary, as published through the successful step's stats. */
+	FluidDomain.CarrierViscosityStats stats() {
+		return new FluidDomain.CarrierViscosityStats(extrapolatedCells, extrapolatedSample());
+	}
+
 	/**
 	 * Rebuilds the workspace when the given revision differs from the last build.
 	 *

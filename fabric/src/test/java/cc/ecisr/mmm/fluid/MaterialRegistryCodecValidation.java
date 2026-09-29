@@ -17,6 +17,7 @@ public final class MaterialRegistryCodecValidation {
 		definitionMutationChangesSnapshotBytes();
 		strictDecodeRejectsTampering();
 		viscosityDomainIsStrict();
+		viscosityContinuationIsBounded();
 		System.out.println("Material registry codec validation passed");
 	}
 
@@ -113,6 +114,45 @@ public final class MaterialRegistryCodecValidation {
 
 	private static MaterialRegistry.ViscositySegment segment(double minK, double maxK, double muMin, double muMax) {
 		return new MaterialRegistry.ViscositySegment(minK, maxK, muMin, muMax);
+	}
+
+	/**
+	 * Carrier coupling must stay defined wherever the caloric data reaches, so temperatures outside the
+	 * declared segments take the nearest endpoint value. Nothing is invented between measured points,
+	 * and the endpoints stay bitwise identical to the strict lookup.
+	 */
+	private static void viscosityContinuationIsBounded() {
+		MaterialRegistry registry = BuiltinFluidMaterials.createRegistry();
+		double low = registry.dynamicViscosityAt("mmm:water", 273.15);
+		double high = registry.dynamicViscosityAt("mmm:water", 645.0);
+		require(Double.doubleToRawLongBits(registry.dynamicViscosityExtendingAt("mmm:water", 273.15))
+						== Double.doubleToRawLongBits(low),
+				"the lowest declared endpoint must stay bitwise identical under continuation");
+		require(Double.doubleToRawLongBits(registry.dynamicViscosityExtendingAt("mmm:water", 645.0))
+						== Double.doubleToRawLongBits(high),
+				"the highest declared endpoint must stay bitwise identical under continuation");
+		double cold = registry.dynamicViscosityExtendingAt("mmm:water", 1.0);
+		double hot = registry.dynamicViscosityExtendingAt("mmm:water", 5_000.0);
+		require(cold == low && hot == high, "outside the domain the boundary value must be held, not extrapolated");
+		require(registry.viscosityDomainContains("mmm:water", 293.15), "293.15 K is inside the water domain");
+		require(!registry.viscosityDomainContains("mmm:water", 646.0), "646 K is outside the water domain");
+		require(!registry.viscosityDomainContains("mmm:oil", 500.0), "500 K is outside the oil domain");
+		double oil = registry.dynamicViscosityExtendingAt("mmm:oil", 500.0);
+		require(Double.doubleToRawLongBits(oil)
+						== Double.doubleToRawLongBits(registry.dynamicViscosityAt("mmm:oil", 473.15)),
+				"oil continuation must hold its declared upper endpoint");
+		// The continuation must stay positive and finite over the whole thermal range, never crossing zero.
+		for (double temperature : new double[] {1.0, 273.15, 473.15, 645.0, 1_000.0, 1.0e7}) {
+			for (String id : new String[] {"mmm:water", "mmm:oil", "mmm:mercury"}) {
+				double mu = registry.dynamicViscosityExtendingAt(id, temperature);
+				require(Double.isFinite(mu) && mu > 0.0,
+						"continuation must stay finite and positive for " + id + " at " + temperature + " K");
+			}
+		}
+		// The declarations a diagnostic reports must bracket exactly the strict domain.
+		require(registry.entry("mmm:water").minimumViscosityTemperatureK() == 273.15
+						&& registry.entry("mmm:water").maximumViscosityTemperatureK() == 645.0,
+				"declared water viscosity bounds drifted");
 	}
 
 	private static void expectIOException(ThrowingAction action, String message) {

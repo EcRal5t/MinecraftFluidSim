@@ -102,7 +102,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 						finalParticleKineticEnergy, gravitationalPotentialEnergyJoules(),
 						(thermalState == null ? SignedDyadic.ZERO : thermalState.auditLedger().mechanicalWork())
 								.subtract(thermalMechanicalWorkBefore)) : MechanicalStepAudit.notCaptured(),
-				thermalAxis, lastGranularDepositStats
+				thermalAxis, lastGranularDepositStats, domain().carrierViscosityStats()
 		);
 	}
 

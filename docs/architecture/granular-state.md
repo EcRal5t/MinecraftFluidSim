@@ -30,7 +30,7 @@
 
 区域载荷中的 granular 与 chemistry presence 必须与启动时确定的功能配置一致；不从其他布局构造空颗粒层。
 
-`ParticulateMaterial` 至少固定以下计算定义：颗粒密度、代表粒径、孔隙率、安息角、静/动摩擦系数、恢复系数、临界 Shields 数、侵蚀率、单 parcel 容量、显示信息和 reactive 标志。`GranularCarrier` 将液相材料绑定到动力黏度与 Reynolds 标定上限。注册表验证所有范围和引用后冻结；运行时只使用冻结 ordinal，不按数据包名称重复解析。
+`ParticulateMaterial` 至少固定以下计算定义：颗粒密度、代表粒径、孔隙率、安息角、静/动摩擦系数、恢复系数、临界 Shields 数、侵蚀率、单 parcel 容量、显示信息和 reactive 标志。`GranularCarrier` 把液相材料绑定到颗粒阻力标定用的 Reynolds 上限；动态黏度不在这里，它由 world material registry 的 `mu(T)` 提供。注册表验证所有范围和引用后冻结；运行时只使用冻结 ordinal，不按数据包名称重复解析。
 
 当前硬上限为：256 个 particulate material、512 个 carrier、512 个 reaction；单 region 16384 个 active parcel、单 server 65536 个；单 cell 8 个 deposit group、单 region 65536 个、单 server 262144 个；solid composition 最多 16 项；每 logical step 131072 次颗粒操作。
 
@@ -79,6 +79,19 @@ Vpore = Vbulk - Vs
 ### Active parcel 力学
 
 parcel 的物理质量列使用 kg，SVQ 通过 `SVQ_PER_BV` 给出 m³。每个机械子步先积分重力，再联合求解液体、颗粒阻力与压力。浸没比例、液体密度和黏度按颗粒连续位置的八格支撑采样；中心穿过单元面时，接触随位置连续改变。每份载体的标定滑移范围取交集，并转换为混合物的 Reynolds 标度，保留作诊断。
+
+### 载体属性工作区
+
+液体密度、温度和黏度只在一处派生：`LiquidCarrierProperties` 按格保存「是否有液体、液体材料 handle、实际密度、温度、`mu(T)`、Reynolds 上限」。三个使用方都读同一份派生值——活动颗粒阻力、Darcy 孔隙阻力、床面剪切（Spalding 壁面关系）。因此一格在每个 revision 内只反演一次温度，不再按 parcel 支撑点或阻力面重复求值。
+
+- 键是载体结构 revision 与热学 carrier revision 的组合；任一推进就重建，不跨库存、组成、内能或位置修改继续使用。
+- 温度取该格凝聚相载体的 LTE 温度，由液体、活动颗粒、沉积与连续固相的质量、组成和内能共同反演，走热学既有的批量入口（一次建格、多格读取），只更新派生工作区，不重新分配也不修改载体 `U`。
+- 没有热学能力的布局使用 `MaterialRegistry.STANDARD_TEMPERATURE_K` 的等温计算约定。**热学已启用而湿格取不到温度是状态失败，直接停止候选，不静默改用常温。**
+- 干格不计算液体黏度、不产生越域记录，沿用既有的空气常数行为。
+- 工作区是固定容量 scratch，不进 `FluidDomainState`、不进存档；恢复或候选域从自己的状态重建。
+- 格内材料选择沿用「该格体积最大的 marker，同体积取更小 handle」的既有规则，它是单元内单一主导材料的近似，不解析同格多材料混合黏度。
+
+温度超出材料声明黏度域时，黏度取最近端点的声明值（见 [材料状态](material-state.md#黏度求值)），并按「格 × 属性构建批次」计数。计数通过成功步的 `StepStats.carrierViscosity` 发布，`/mmm status` 只在该步确有越域时显示格数与一个确定性样例（材料 ID、实际温度、声明温区）。重复读取同一批次不重复计数；失败或细化重算的候选不污染已发布统计。
 
 球形颗粒的相对 Reynolds 数与阻力相关式为：
 
