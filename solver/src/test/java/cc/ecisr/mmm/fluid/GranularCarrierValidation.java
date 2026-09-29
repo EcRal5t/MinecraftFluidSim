@@ -87,7 +87,8 @@ public final class GranularCarrierValidation {
 		var domain = new FluidDomain(6, 6, 6,
 				new FluidSolverConfig(0.5F, 1_000F, 0, 0.05F, 400, 1.0e-5F, 0.45F, 0.002F, 0.8F), 4096);
 		domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
-				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
+				BuiltinFluidMaterials.createRegistry());
 		return domain;
 	}
 

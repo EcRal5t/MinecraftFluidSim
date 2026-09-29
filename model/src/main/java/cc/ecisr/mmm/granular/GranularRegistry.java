@@ -89,7 +89,6 @@ public final class GranularRegistry {
 		}
 		for (GranularCarrier carrier : carriers) {
 			out.append("C|").append(carrier.liquidMaterialId()).append('|')
-					.append(Long.toUnsignedString(Double.doubleToRawLongBits(carrier.dynamicViscosity()))).append('|')
 					.append(Long.toUnsignedString(Double.doubleToRawLongBits(carrier.maximumReynolds()))).append('\n');
 		}
 		for (SolidLiquidReaction reaction : reactions) {

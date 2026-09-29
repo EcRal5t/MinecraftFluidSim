@@ -122,7 +122,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.8F);
 		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
-		domain.bindGranular(granular, productionLiquids);
+		domain.bindGranular(granular, productionLiquids, BuiltinFluidMaterials.createRegistry());
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long parcelSvq = SolidVolume.SVQ_PER_BV;
 		double parcelMass = parcelSvq / (double) SolidVolume.SVQ_PER_BV

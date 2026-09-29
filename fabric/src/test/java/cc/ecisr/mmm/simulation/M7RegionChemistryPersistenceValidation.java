@@ -143,7 +143,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		Path gateRoot = Files.createTempDirectory(Path.of("."), "granular-gate-off-");
 		FluidRegion source = populatedRegion(UUID.randomUUID()); bindDefaultMaterials(source);
 		source.domain().bindChemistry(chemistry);
-		source.domain().bindGranular(granular, source.domain().materialRegistry());
+		source.domain().bindGranular(granular, source.domain().materialRegistry(), TestProfiles.materialRegistry());
 		new RegionGenerationStore(gateRoot, chemistry, granular).publish(RegionCheckpointFixtures.captureGranular(source, 1L));
 		FluidRegionManager currentManager = manager();
 		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, TestProfiles.granular(chemistry, granular), chemistry, granular, null, null);

@@ -58,7 +58,7 @@ public final class M8GranularValidation {
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		FluidDomain domain = new FluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
-		domain.bindGranular(registry, liquids); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		domain.bindGranular(registry, liquids, BuiltinFluidMaterials.createRegistry()); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		long reactiveSvq = 4_096L;
 		SolidCompositionRecord reactive = SolidCompositionRecord.fromStableAmounts(
 				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
@@ -108,7 +108,7 @@ public final class M8GranularValidation {
 
 		FluidDomain sealed = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) sealed.setVolume(x, y, z, 1.0F);
-		sealed.bindGranular(registry, liquids); sealed.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		sealed.bindGranular(registry, liquids, BuiltinFluidMaterials.createRegistry()); sealed.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		GranularTransferLedger small = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
 				BuiltinGranularDefinitions.FINE_SAND, 1_024L, 1.0, null)));
 		require(!sealed.tryInsertExactGranular(1, 1, 1, small, 1).inserted()
@@ -116,7 +116,7 @@ public final class M8GranularValidation {
 				"sealed dry granular insertion was not rejected atomically");
 
 		FluidDomain collision = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
-		collision.bindGranular(registry, liquids); collision.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		collision.bindGranular(registry, liquids, BuiltinFluidMaterials.createRegistry()); collision.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		require(collision.tryInsertExactGranular(1, 1, 1, small, 0, true).inserted(),
 				"collision displacement fixture could not insert its local parcel");
 		FluidDomain.CollisionEditPlan collisionPlan = collision.planCollisionEdits(List.of(
@@ -143,7 +143,7 @@ public final class M8GranularValidation {
 		// Real transported/reseeded marker volumes are arbitrary IEEE-754 dyadics, not necessarily
 		// integer SVQ. Exercise the production bridge with such a tail instead of an aligned full cell.
 		domain.setVolume(1, 1, 1, 0.1F);
-		domain.bindGranular(granular, liquids);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		domain.setPrecipitationEnabled(true);
 		domain.setMarkerChemical(0, java.util.Map.of(
@@ -706,7 +706,7 @@ public final class M8GranularValidation {
 		return new GranularRegistry(List.of(new ParticulateMaterial("mmm:neutral_probe", 1_000.0, 0.0005,
 				400_000, Math.toRadians(30.0), 0.6, 0.4, 0.1, 0.05, 1L,
 				GranularLimits.MAX_PARCEL_VOLUME_SVQ, 0xffffffff, "mmm:neutral_probe", false)),
-				List.of(new GranularCarrier("mmm:water", 1.002e-3, 100_000.0)));
+				List.of(new GranularCarrier("mmm:water", 100_000.0)));
 	}
 
 	private static void porousBedPreservesHydrostatics() {
@@ -733,7 +733,7 @@ public final class M8GranularValidation {
 		double totalMass = cellMass * groups.size();
 		domain.restoreGranularState(new GranularStateSnapshot(sizeX, sizeY, sizeZ, registry.fingerprint(),
 				registry.materials().stream().map(ParticulateMaterial::id).toList(), List.of(), groups,
-				totalSvq, Double.doubleToRawLongBits(totalMass)), registry, liquids);
+				totalSvq, Double.doubleToRawLongBits(totalMass)), registry, liquids, BuiltinFluidMaterials.createRegistry());
 
 		FluidDomain.StepStats stats = null;
 		for (int step = 0; step < 200; step++) stats = domain.step();
@@ -865,7 +865,7 @@ public final class M8GranularValidation {
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
-		domain.bindGranular(granular, liquids);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		double mass = svq / (double) SolidVolume.SVQ_PER_BV * granular.material(sand).referenceDensity();
@@ -885,7 +885,7 @@ public final class M8GranularValidation {
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) {
 			sealed.setVolume(x, y, z, 1.0F);
 		}
-		sealed.bindGranular(granular, liquids);
+		sealed.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		FluidDomain.GranularInsertion refused = sealed.tryInsertExactGranular(1, 1, 1, sand, 0, svq, mass);
 		require(!refused.inserted() && sealed.totalGranularSolidVolumeSvq() == 0L,
 				"sealed granular insertion did not refuse atomically");
@@ -897,7 +897,7 @@ public final class M8GranularValidation {
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
-		domain.bindGranular(granular, liquids);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		double density = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND))
 				.referenceDensity();
 		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
@@ -1004,7 +1004,7 @@ public final class M8GranularValidation {
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
-		domain.bindGranular(granular, liquids);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		double density = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND))
 				.referenceDensity();
 		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
@@ -1129,7 +1129,7 @@ public final class M8GranularValidation {
 			baseline.setVolume(x, y, z, 1.0F); granular.setVolume(x, y, z, 1.0F);
 		}
 		granular.bindGranular(BuiltinGranularDefinitions.createRegistry(),
-				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 		for (int warmup = 0; warmup < 8; warmup++) { baseline.step(); granular.step(); }
 		long[] baselineNanos = new long[samples], granularNanos = new long[samples];
 		for (int sample = 0; sample < samples; sample++) {

@@ -21,6 +21,12 @@ public final class MaterialRegistry {
 	public static final int MAX_MATERIALS = 256;
 	public static final int MAX_PAIR_TENSIONS = 4096;
 
+	/**
+	 * Standard reference temperature for material properties. Material definitions carry no thermal
+	 * host of their own, so a property evaluated without a bound thermal carrier uses this state.
+	 */
+	public static final double STANDARD_TEMPERATURE_K = 293.15;
+
 	/** Newtonian dynamic viscosity, linear in temperature on one closed interval of a contiguous domain. */
 	public record ViscositySegment(double minimumTemperatureK, double maximumTemperatureK,
 			double dynamicViscosityPaPerSAtMinimum, double dynamicViscosityPaPerSAtMaximum) {
@@ -71,6 +77,47 @@ public final class MaterialRegistry {
 				throw new IllegalArgumentException("Temperature " + temperatureK + " is outside the declared viscosity domain of "
 						+ material.id());
 			}
+			return interpolate(temperatureK);
+		}
+
+		/**
+		 * Viscosity for a carrier coupling that must stay defined over the whole thermal domain.
+		 *
+		 * <p>Temperatures outside the declared segments take the nearest segment's endpoint value, the
+		 * same continuous continuation the caloric state functions use outside their measured range.
+		 * Nothing is invented between measured points; only the boundary value is held. The caller
+		 * records the excursion so it stays observable instead of being silently clamped.
+		 */
+		public double dynamicViscosityExtendingAt(double temperatureK) {
+			if (!declaresViscosity()) {
+				throw new IllegalArgumentException("Material " + material.id() + " does not declare dynamic viscosity");
+			}
+			return interpolate(Math.min(viscosity.getLast().maximumTemperatureK(),
+					Math.max(viscosity.getFirst().minimumTemperatureK(), temperatureK)));
+		}
+
+		public boolean viscosityDomainContains(double temperatureK) {
+			return declaresViscosity() && temperatureK >= viscosity.getFirst().minimumTemperatureK()
+					&& temperatureK <= viscosity.getLast().maximumTemperatureK();
+		}
+
+		/** Lowest declared viscosity temperature; diagnostics only. */
+		public double minimumViscosityTemperatureK() {
+			if (!declaresViscosity()) {
+				throw new IllegalArgumentException("Material " + material.id() + " does not declare dynamic viscosity");
+			}
+			return viscosity.getFirst().minimumTemperatureK();
+		}
+
+		/** Highest declared viscosity temperature; diagnostics only. */
+		public double maximumViscosityTemperatureK() {
+			if (!declaresViscosity()) {
+				throw new IllegalArgumentException("Material " + material.id() + " does not declare dynamic viscosity");
+			}
+			return viscosity.getLast().maximumTemperatureK();
+		}
+
+		private double interpolate(double temperatureK) {
 			int low = 0;
 			int high = viscosity.size() - 1;
 			while (low < high) {
@@ -164,6 +211,16 @@ public final class MaterialRegistry {
 	public boolean declaresViscosity(String id) { return entry(id).declaresViscosity(); }
 
 	public double dynamicViscosityAt(String id, double temperatureK) { return entry(id).dynamicViscosityAt(temperatureK); }
+
+	/** Continuation lookup by stable id; see {@link MaterialEntry#dynamicViscosityExtendingAt}. */
+	public double dynamicViscosityExtendingAt(String id, double temperatureK) {
+		return entry(id).dynamicViscosityExtendingAt(temperatureK);
+	}
+
+	/** True when the temperature sits inside the id's declared viscosity domain. */
+	public boolean viscosityDomainContains(String id, double temperatureK) {
+		return entry(id).viscosityDomainContains(temperatureK);
+	}
 
 	public double liquidPairTension(String firstGroup, String secondGroup) {
 		String low = firstGroup.compareTo(secondGroup) <= 0 ? firstGroup : secondGroup;

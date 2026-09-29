@@ -103,8 +103,7 @@ final class MechanicalStageAssembly {
 			@Override public boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling) {
 				return domain.granularOccupancyFitsGeometry(coupling);
 			}
-			@Override public int[] granularCarrierMaterialByCell() { return domain.granularCarrierMaterialByCell; }
-			@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
+			@Override public LiquidCarrierProperties liquidCarrierProperties() { return domain.derivedCarrierState(); }
 			@Override public float effectiveOpenCellVolume(int cell) { return domain.effectiveOpenCellVolume(cell); }
 			@Override public float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) {
 				return domain.trilinearWeight(ox, oy, oz, fx, fy, fz);

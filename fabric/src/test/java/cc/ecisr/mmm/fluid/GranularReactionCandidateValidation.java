@@ -34,7 +34,7 @@ public final class GranularReactionCandidateValidation {
 				new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 100, 1.0e-5F, 0.45F, 0.002F, 0.8F), 216);
 		domain.setVolume(1, 1, 1, 0.1F);
 		if (mode.equals("region-budget")) domain.setVolume(2, 1, 1, 0.1F);
-		domain.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+		domain.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(chemistry);
 		domain.setPrecipitationEnabled(true);
 		long amount = mode.equals("marker-budget") ? ChemicalLimits.MAX_REGION_TOTAL_QUANTA

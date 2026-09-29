@@ -81,7 +81,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
 						sand, 0, depositSvq, depositMass)), Math.addExact(activeSvq, depositSvq),
 				Double.doubleToRawLongBits(activeMass + depositMass));
-		region.domain().restoreGranularState(granularFixture, granular, liquids);
+		region.domain().restoreGranularState(granularFixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
 		ThermalRegistry thermal = thermalRegistry(liquids, granular);
 		region.domain().bindThermal(thermal, liquids, 300.0);
 		ThermalStateFunction thermalState = new ThermalStateFunction(thermal);
@@ -153,7 +153,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		restoredDomain.sealDomainBoundary();
 		restoredDomain.restoreMaterialParticleState(restorer(state).reconstructMaterial());
 		restoredDomain.restoreGranularState(restorer(state).reconstructGranular(granular), granular,
-				restoredDomain.materialRegistry());
+				restoredDomain.materialRegistry(), BuiltinFluidMaterials.createRegistry());
 		restoredDomain.restoreGasState(restorer(state).reconstructGas(gas, null), gas);
 		restoredDomain.restoreThermalParticleState(restorer(state).reconstructThermal(thermal), thermal);
 		restoredDomain.restorePendingPhaseVolumeState(restorer(state).reconstructPendingPhaseVolume());
@@ -297,7 +297,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
 						sand, 0, depositSvq, depositMass)), Math.addExact(activeSvq, depositSvq),
 				Double.doubleToRawLongBits(activeMass + depositMass));
-		region.domain().restoreGranularState(fixture, granular, liquids);
+		region.domain().restoreGranularState(fixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
 		GranularStateSnapshot expected = region.domain().exportGranularState();
 		RegionState state = RegionCheckpointFixtures.captureGranular(region, 1L);
 		state.validate();
@@ -366,7 +366,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 						10L, composition.totalMass(BuiltinChemicalDefinitions.REGISTRY),
 						granular.materialHandle(BuiltinGranularDefinitions.PRECIPITATE), 1, 0, (byte) 0)), List.of(), 10L,
 				Double.doubleToRawLongBits(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)));
-		reactiveRegion.domain().restoreGranularState(reactiveFixture, granular, liquids);
+		reactiveRegion.domain().restoreGranularState(reactiveFixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
 		var removedReactive = reactiveRegion.domain().tryExtractExactGranular(1, 1, 1, 10L, 0, true);
 		require(removedReactive.transferred()
 				&& reactiveRegion.domain().tryInsertExactGranular(1, 1, 1, removedReactive.ledger(), 0, true).inserted(),

@@ -28,6 +28,12 @@ public final class FluidDomainState {
 	private final FlipMaterialParticleState materials;
 	private final FlipChemicalParticleState chemicals;
 	private final ChemicalRegistry chemicalRegistry;
+	/**
+	 * World material properties. Granular drag evaluates dynamic viscosity from the cell liquid
+	 * temperature, so a handoff carrying granular inventory must carry the same definitions the
+	 * private candidate is allowed to evaluate against.
+	 */
+	private final MaterialRegistry materialDefinitions;
 	private final int[] chemicalDirtyCells;
 	private final int chemicalReactionCursor;
 	private final GranularRegistry granularRegistry;
@@ -52,7 +58,8 @@ public final class FluidDomainState {
 			boolean precipitationEnabled, GasRegistry gasRegistry, GasStateSnapshot gas,
 			ThermalRegistry thermalRegistry, FlipThermalParticleState thermal,
 			int maximumThermalTransportSubsteps, PendingPhaseVolumeState pendingPhaseVolume,
-			double[] thermalBoundaryTemperaturesK, CondensedPhasePressureField condensedPhasePressure
+			double[] thermalBoundaryTemperaturesK, CondensedPhasePressureField condensedPhasePressure,
+			MaterialRegistry materialDefinitions
 	) {
 		this.config = Objects.requireNonNull(config, "config");
 		if (maximumParticleCount <= 0) throw new IllegalArgumentException("Marker budget must be positive");
@@ -93,6 +100,18 @@ public final class FluidDomainState {
 				|| (granular == null) != (granularDynamics == null)
 				|| granular != null && !granular.registryFingerprint().equals(granularRegistry.fingerprint())) {
 			throw new IllegalArgumentException("Granular state/registry identity mismatch");
+		}
+		this.materialDefinitions = materialDefinitions;
+		if (granular != null && materialDefinitions == null) {
+			throw new IllegalArgumentException("Granular handoff requires world material definitions");
+		}
+		if (materialDefinitions != null && materials != null) {
+			for (cc.ecisr.mmm.fluid.FluidMaterial material : materials.materials()) {
+				if (!materialDefinitions.hasMaterial(material.id())) {
+					throw new IllegalArgumentException(
+							"Material definitions do not cover carrier liquid " + material.id());
+				}
+			}
 		}
 		if (precipitationEnabled && (chemicals == null || granular == null)) {
 			throw new IllegalArgumentException("Precipitation requires chemical and granular state");
@@ -169,6 +188,9 @@ public final class FluidDomainState {
 	}
 	public int chemicalReactionCursor() { return chemicalReactionCursor; }
 	public GranularRegistry granularRegistry() { return granularRegistry; }
+
+	/** World material definitions this handoff was captured against; null only without granular inventory. */
+	public MaterialRegistry materialDefinitions() { return materialDefinitions; }
 	public GranularStateSnapshot granular() { return granular; }
 	public GranularDepositDynamics.State granularDynamics() { return granularDynamics; }
 	public boolean precipitationEnabled() { return precipitationEnabled; }
@@ -184,8 +206,7 @@ public final class FluidDomainState {
 	public CondensedPhasePressureField condensedPhasePressure() { return condensedPhasePressure; }
 
 	/** Immutable feature/registry identity which a backend step is not allowed to replace. */
-	public Layout layout() {
-		List<FluidMaterial> materials = switch (carrierKind) {
+	public Layout layout() {		List<FluidMaterial> materials = switch (carrierKind) {
 			case PURE -> List.of();
 			case MATERIAL -> this.materials.materials();
 			case CHEMICAL -> chemicals.materials().materials();
@@ -195,7 +216,8 @@ public final class FluidDomainState {
 				chemicalRegistry == null ? "" : chemicalRegistry.fingerprint(),
 				granularRegistry == null ? "" : granularRegistry.fingerprint(), precipitationEnabled,
 				gasRegistry.fingerprint(), thermalRegistry == null ? "" : thermalRegistry.fingerprint(),
-				maximumThermalTransportSubsteps);
+				maximumThermalTransportSubsteps,
+				materialDefinitions == null ? "" : materialDefinitions.fingerprint());
 	}
 
 	public record Layout(
@@ -212,7 +234,8 @@ public final class FluidDomainState {
 			boolean precipitationEnabled,
 			String gasRegistryFingerprint,
 			String thermalRegistryFingerprint,
-			int maximumThermalTransportSubsteps
+			int maximumThermalTransportSubsteps,
+			String materialDefinitionsFingerprint
 	) {
 		public Layout {
 			Objects.requireNonNull(config, "config");
@@ -222,6 +245,7 @@ public final class FluidDomainState {
 			Objects.requireNonNull(granularRegistryFingerprint, "granularRegistryFingerprint");
 			Objects.requireNonNull(gasRegistryFingerprint, "gasRegistryFingerprint");
 			Objects.requireNonNull(thermalRegistryFingerprint, "thermalRegistryFingerprint");
+			Objects.requireNonNull(materialDefinitionsFingerprint, "materialDefinitionsFingerprint");
 		}
 	}
 

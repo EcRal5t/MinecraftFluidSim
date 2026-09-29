@@ -7,6 +7,7 @@ import cc.ecisr.mmm.application.port.RegionCheckpointPort;
 import cc.ecisr.mmm.application.result.CheckpointRegionResult;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.fluid.FluidDomain;
+import cc.ecisr.mmm.fluid.MaterialRegistry;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.simulation.controller.FluidBoundaryScanner;
@@ -45,22 +46,13 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	FluidRegionOperations(
 			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean worldProfileProven,
 			WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
-			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
-	) {
-		this(worldRoot, manager, configurationLocked, worldProfileProven, profile, chemicalRegistry, granularRegistry, thermalRegistry,
-				gasRegistry, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-	}
-
-	FluidRegionOperations(
-			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean worldProfileProven,
-			WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
 			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
-			int maximumThermalSubsteps
+			int maximumThermalSubsteps, MaterialRegistry materialDefinitions
 	) {
 		this.manager = manager;
 		this.worldProfileProven = worldProfileProven;
 		this.persistence = new RegionRepositoryAdapter(worldRoot, profile, chemicalRegistry, granularRegistry,
-				thermalRegistry, gasRegistry, maximumThermalSubsteps);
+				thermalRegistry, gasRegistry, maximumThermalSubsteps, materialDefinitions);
 		this.ownershipTransactions = persistence.newOwnershipTransactions();
 		creationLocked = configurationLocked || !worldProfileProven;
 		if (worldProfileProven) {

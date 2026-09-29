@@ -69,6 +69,10 @@ abstract class FluidDomainStorage {
 	long carrierMutationRevision;
 	final CarrierMutationCoordinator coordinator;
 	FluidMaterialRegistry materialRegistry;
+	/** World material properties (temperature-dependent viscosity and pair tensions); bound with granular state. */
+	MaterialRegistry materialDefinitions;
+	/** Derived per-cell carrier properties, rebuilt per carrier/thermal revision. */
+	final LiquidCarrierProperties carrierPropertiesWorkspace;
 	ChemicalParcelStore chemicalParcels;
 	int[] chemicalPreviousCells;
 	int[] chemicalMovingMarkers;
@@ -127,6 +131,7 @@ abstract class FluidDomainStorage {
 		this.particles = new LiquidParticleStore(maximumParticleCount);
 		int initialParticleCapacity = Math.min(16_384, maximumParticleCount);
 		this.geometry = new DomainGeometry(sizeX, sizeY, sizeZ, cellCount);
+		this.carrierPropertiesWorkspace = new LiquidCarrierProperties(cellCount);
 		this.markerGrid = new MarkerGridIndex(cellCount, initialParticleCapacity);
 		this.pressurePhaseGeometry = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
 		this.freeSurfaceGeometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);

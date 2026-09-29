@@ -237,6 +237,8 @@ final class ThermalCellOperations {
 		if (cell < 0 || cell >= cellGrid.cellCount() || markers == null) {
 			throw new IllegalArgumentException("Thermal observation cell is invalid");
 		}
+		// Fresh per call: private backend candidates share this thermal object, so a reusable scratch
+		// list would alias across concurrent observations. Bulk temperature reads use preparePhaseScan.
 		ArrayList<ThermalStateFunction.InventoryPortion> inventory = new ArrayList<>();
 		SignedDyadic energy = SignedDyadic.ZERO;
 		for (int marker = markers.nextMarkerInCell(cell, -1); marker >= 0; marker = markers.nextMarkerInCell(cell, marker)) {

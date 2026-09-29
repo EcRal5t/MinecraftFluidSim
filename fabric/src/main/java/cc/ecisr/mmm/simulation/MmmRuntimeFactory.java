@@ -44,7 +44,8 @@ public final class MmmRuntimeFactory {
 				registries == null ? null : registries.chemical(),
 				registries == null ? null : registries.granular(),
 				registries == null ? null : registries.thermal(),
-				registries == null ? null : registries.gas(), config.maximumThermalSubstepsPerStep());
+				registries == null ? null : registries.gas(), config.maximumThermalSubstepsPerStep(),
+				registries == null ? null : registries.material());
 		regionOperations.recoverRemovedQuarantines();
 		for (WorldStartupCoordinator.Issue issue : startup.issues()) if (issue.blocksCreation()) {
 			regionOperations.recordIssue("startup " + issue.stage() + "/" + issue.code() + ": " + issue.detail());

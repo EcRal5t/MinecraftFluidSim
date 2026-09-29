@@ -50,7 +50,8 @@ final class FluidDomainStateMapper {
 				domain.thermalState == null ? null : domain.exportPendingPhaseVolumeState(),
 				domain.thermalBoundaryTemperatureK,
 				domain.thermalState == null ? null : new CondensedPhasePressureField(
-						domain.pressureReference, domain.projection.pressure));
+						domain.pressureReference, domain.projection.pressure),
+				domain.materialDefinitions);
 	}
 
 	static FluidDomainState.Layout layout(FluidDomain domain) {
@@ -66,7 +67,8 @@ final class FluidDomainStateMapper {
 				domain.granularState == null ? "" : domain.granularState.registry.fingerprint(),
 				domain.precipitationEnabled(), domain.gasState.network.registry().fingerprint(),
 				domain.thermalState == null ? "" : domain.thermalState.registry().fingerprint(),
-				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps());
+				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps(),
+				domain.materialDefinitions == null ? "" : domain.materialDefinitions.fingerprint());
 	}
 
 	static FluidDomain restore(FluidDomainState state) {
@@ -84,7 +86,8 @@ final class FluidDomainStateMapper {
 			}
 		}
 		if (state.granular() != null) {
-			domain.restoreGranularState(state.granular(), state.granularRegistry(), domain.materialRegistry());
+			domain.restoreGranularState(state.granular(), state.granularRegistry(), domain.materialRegistry(),
+					state.materialDefinitions());
 			domain.granularDepositDynamics.restoreState(state.granularDynamics());
 		}
 		if (state.gas() == null) domain.bindGasRegistry(state.gasRegistry());

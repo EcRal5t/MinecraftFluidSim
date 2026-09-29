@@ -1222,7 +1222,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			if (x == 0 || x == 3 || y == 0 || y == 3 || z == 0 || z == 3) domain.setSolid(x, y, z, true);
 		}
 		domain.setVolume(1, 1, 1, 0.75F);
-		domain.bindGranular(granular, liquids);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(chemistry);
 		for (int marker = 0; marker < domain.particleCount(); marker++) domain.setMarkerChemical(marker, Map.of(
 				BuiltinChemicalDefinitions.H2O, 20_000_000L,

@@ -458,12 +458,15 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		}
 	}
 
+	/**
+	 * Darcy pore damping reads the same derived carrier workspace the granular drag and bed shear use,
+	 * so one revision derives each cell's density, temperature and viscosity exactly once.
+	 */
 	CarrierProperties granularCarrierProperties(int cell) {
-		int liquidMaterial = granularCarrierMaterialByCell == null ? -1 : granularCarrierMaterialByCell[cell];
-		if (markerGrid.markerCount[cell] <= 0 || liquidMaterial < 0) return new CarrierProperties(1.225, 1.81e-5);
-		String materialId = materialRegistry.material(liquidMaterial).id();
-		GranularCarrier carrier = granularState.registry.carrier(granularState.registry.carrierHandle(materialId));
-		return new CarrierProperties(markerGrid.cellDensity[cell], carrier.dynamicViscosity());
+		LiquidCarrierProperties properties = domain().derivedCarrierState();
+		return properties.hasLiquid(cell)
+				? new CarrierProperties(properties.density(cell), properties.viscosityPaPerS(cell))
+				: new CarrierProperties(LiquidCarrierProperties.AIR_DENSITY, LiquidCarrierProperties.AIR_VISCOSITY);
 	}
 
 	void splatCenter(float px, float py, float pz, float particleAmount) {

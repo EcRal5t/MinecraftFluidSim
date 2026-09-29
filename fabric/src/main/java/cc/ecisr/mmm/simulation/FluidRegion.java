@@ -17,6 +17,7 @@ import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidThermalStepCandidate;
+import cc.ecisr.mmm.fluid.MaterialRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
@@ -567,13 +568,14 @@ public final class FluidRegion {
 
 	/** Completes a granular restore after the matching liquid/material generation has been reconstructed. */
 	public void restoreGranularState(
-			GranularStateSnapshot state, GranularRegistry registry, long loadedCheckpointGeneration
+			GranularStateSnapshot state, GranularRegistry registry, long loadedCheckpointGeneration,
+			MaterialRegistry materialDefinitions
 	) {
 		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
 		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
 			throw new IllegalStateException("Granular restore requires the matching loaded material generation");
 		}
-		domain.restoreGranularState(state, registry, domain.materialRegistry());
+		domain.restoreGranularState(state, registry, domain.materialRegistry(), materialDefinitions);
 	}
 
 	/** Completes a gas restore after the matching liquid/material generation. */

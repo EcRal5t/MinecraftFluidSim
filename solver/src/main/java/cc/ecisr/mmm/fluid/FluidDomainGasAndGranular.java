@@ -32,7 +32,20 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	public int sizeZ() { return sizeZ; }
 	public int particleCount() { return particles.count(); }
 
-	/** Read-only gas view for the pressure stage and adapter reads; no mutable network escapes. */
+	/**
+	 * Per-cell liquid carrier properties for the current carrier and thermal revision.
+	 *
+	 * <p>Rebuilds when the revision advanced, so a step observes each cell once while drag, Darcy
+	 * damping and bed shear all read the same derived values.
+	 */
+	LiquidCarrierProperties derivedCarrierState() {
+		carrierPropertiesWorkspace.refresh(this, thermalMarkerContext(), materialRegistry, materialDefinitions,
+				granularState, thermalState,
+				new LiquidCarrierProperties.Revision(carrierMutationRevision,
+						thermalState == null ? null : thermalState.thermalRevision()));
+		return carrierPropertiesWorkspace;
+	}
+
 	public GasPressureBoundary gasBoundary() { return gasBoundary; }
 
 	/** Demo/setup tuning entry: the network books the ambient source or sink for the change itself. */
@@ -340,16 +353,52 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		precipitationEnabled = enabled;
 	}
 
-	/** Binds the runtime granular registry without changing liquid or chemical carrier truth. */
-	public void bindGranular(GranularRegistry registry, FluidMaterialRegistry liquidRegistry) {
-		if (registry == null || liquidRegistry == null) throw new IllegalArgumentException("Granular/liquid registry is missing");
+	/**
+	 * Binds the runtime granular registry without changing liquid or chemical carrier truth.
+	 *
+	 * <p>{@code materialDefinitions} carries the world's temperature-dependent material properties.
+	 * Granular drag evaluates dynamic viscosity per cell from the liquid temperature, so every bound
+	 * liquid must declare a viscosity domain; the check happens here rather than inside the step.
+	 */
+	public void bindGranular(GranularRegistry registry, FluidMaterialRegistry liquidRegistry,
+			MaterialRegistry materialDefinitions) {
+		if (registry == null || liquidRegistry == null || materialDefinitions == null) {
+			throw new IllegalArgumentException("Granular/liquid/material definition registry is missing");
+		}
 		if (thermalState != null) {
 			throw new IllegalStateException("Granular state must be bound before its joint thermal inventory");
 		}
 		if (Float.floatToRawIntBits(config.cellSize()) != Float.floatToRawIntBits(0.5F)) {
 			throw new IllegalArgumentException("Granular SVQ requires a 0.5 m solver cell");
 		}
-		bindMaterialRegistry(liquidRegistry);
+		// Every check runs before the domain is touched, so a rejected binding leaves no partial state.
+		if (materialRegistry != null) {
+			if (!materialRegistry.materials().equals(liquidRegistry.materials())) {
+				throw new IllegalArgumentException("A domain cannot change its granular liquid palette");
+			}
+			liquidRegistry = materialRegistry;
+		}
+		if (granularState != null && (this.materialDefinitions == null
+				|| !this.materialDefinitions.fingerprint().equals(materialDefinitions.fingerprint()))) {
+			throw new IllegalArgumentException("A domain cannot change its world material definitions");
+		}
+		for (FluidMaterial material : liquidRegistry.materials()) {
+			MaterialRegistry.MaterialEntry definition;
+			try {
+				definition = materialDefinitions.entry(material.id());
+			} catch (IllegalArgumentException unknown) {
+				throw new IllegalArgumentException("Granular carrier liquid " + material.id()
+						+ " has no world material definition", unknown);
+			}
+			if (!definition.declaresViscosity()) {
+				throw new IllegalArgumentException("Granular carrier liquid " + material.id()
+						+ " does not declare a dynamic viscosity domain");
+			}
+			if (!definition.material().equals(material)) {
+				throw new IllegalArgumentException("Granular carrier liquid " + material.id()
+						+ " disagrees with its world material definition");
+			}
+		}
 		if (granularState != null) {
 			if (!granularState.registry.fingerprint().equals(registry.fingerprint())) {
 				throw new IllegalArgumentException("A domain cannot change its granular registry");
@@ -365,6 +414,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 				&& !registry.chemicalRegistryFingerprint().equals(chemicalParcels.registry().fingerprint())) {
 			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
 		}
+		bindMaterialRegistry(liquidRegistry);
 		granularState = new GranularDomainState(registry, cellCount);
 		granularDepositDynamics = new GranularDepositDynamics(registry, granularState.parcels, granularState.deposits,
 				granularState.inventory, sizeX, sizeY, sizeZ, config.cellSize());
@@ -375,12 +425,14 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		granularCarrierMaterialByCell = new int[cellCount];
 		granularCarrierVolumeByCell = new double[cellCount];
 		granularReactivePreviousCells = new int[GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION];
+		this.materialDefinitions = materialDefinitions;
 		bindSolidCompositionPoolIfReady();
 		gridDirty = true;
 	}
 
 	public void restoreGranularState(
-			GranularStateSnapshot snapshot, GranularRegistry registry, FluidMaterialRegistry liquidRegistry
+			GranularStateSnapshot snapshot, GranularRegistry registry, FluidMaterialRegistry liquidRegistry,
+			MaterialRegistry materialDefinitions
 	) {
 		if (snapshot == null) throw new IllegalArgumentException("Granular snapshot is missing");
 		if (snapshot.sizeX() != sizeX || snapshot.sizeY() != sizeY || snapshot.sizeZ() != sizeZ) {
@@ -393,7 +445,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 			}
 			liquidRegistry = materialRegistry;
 		}
-		bindGranular(registry, liquidRegistry);
+		bindGranular(registry, liquidRegistry, materialDefinitions);
 		snapshot.restoreInto(registry, granularState.parcels, granularState.deposits, granularState.compositions,
 				cell -> SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell)));
 		snapshot.externalSource().validateAgainst(registry, granularState.compositions == null ? null : granularState.compositions.registry());

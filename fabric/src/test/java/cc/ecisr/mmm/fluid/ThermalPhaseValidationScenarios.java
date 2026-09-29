@@ -343,7 +343,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 256);
 		domain.setVolume(1, 1, 1, 0.75F);
-		domain.bindGranular(granular, liquids);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(chemistry);
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L), true);
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
@@ -641,7 +641,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 256);
 		domain.setVolume(1, 1, 1, 0.75F);
-		domain.bindGranular(granular, liquids);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(chemistry);
 		domain.bindThermal(compositionPhaseThermalRegistry(liquids, granular, chemistry), liquids, 295.0);
 		CondensedLedger before = condensedLedger(domain, chemistry);

@@ -6,8 +6,10 @@ import cc.ecisr.mmm.model.region.RegionStateLayout;
 
 import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
+import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
+import cc.ecisr.mmm.fluid.MaterialRegistry;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.simulation.ownership.OwnershipCommitted;
@@ -44,6 +46,8 @@ final class RegionRepositoryAdapter {
 	private final GranularRegistry granularRegistry;
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
+	/** World material properties from the committed capability bundle; required once granular state exists. */
+	private final MaterialRegistry materialDefinitions;
 	private final int maximumThermalSubsteps;
 
 	RegionRepositoryAdapter(
@@ -58,6 +62,15 @@ final class RegionRepositoryAdapter {
 			Path worldRoot, WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
 			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
 			int maximumThermalSubsteps
+	) {
+		this(worldRoot, profile, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry,
+				maximumThermalSubsteps, BuiltinFluidMaterials.createRegistry());
+	}
+
+	RegionRepositoryAdapter(
+			Path worldRoot, WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
+			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
+			int maximumThermalSubsteps, MaterialRegistry materialDefinitions
 	) {
 		Objects.requireNonNull(profile, "profile");
 		requireRegistry(profile, WorldCapability.CHEMISTRY, chemicalRegistry);
@@ -83,6 +96,7 @@ final class RegionRepositoryAdapter {
 		this.granularRegistry = granularRegistry;
 		this.thermalRegistry = thermalRegistry;
 		this.gasRegistry = gasRegistry;
+		this.materialDefinitions = Objects.requireNonNull(materialDefinitions, "materialDefinitions");
 		if (maximumThermalSubsteps <= 0
 				|| maximumThermalSubsteps > ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS) {
 			throw new IllegalArgumentException("Thermal transport substep budget is invalid");
@@ -484,7 +498,7 @@ final class RegionRepositoryAdapter {
 			if (profile.hasCapability(WorldCapability.GRANULAR)) {
 				if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
 				if (!region.domain().hasGranularState()) {
-					region.domain().bindGranular(granularRegistry, region.domain().materialRegistry());
+					region.domain().bindGranular(granularRegistry, region.domain().materialRegistry(), materialDefinitions);
 				}
 				enablePrecipitationIfConfigured(region);
 			}
@@ -510,7 +524,7 @@ final class RegionRepositoryAdapter {
 				if (!region.domain().hasChemistryState()) region.domain().bindChemistry(chemicalRegistry);
 			}
 			if (!region.domain().hasGranularState()) {
-				region.domain().bindGranular(granularRegistry, region.domain().materialRegistry());
+				region.domain().bindGranular(granularRegistry, region.domain().materialRegistry(), materialDefinitions);
 			}
 			enablePrecipitationIfConfigured(region);
 			return new RegionState(RegionCheckpointAssembler.captureGranular(source, generation));
@@ -550,7 +564,7 @@ final class RegionRepositoryAdapter {
 				if (!profile.hasCapability(WorldCapability.GRANULAR) || granularRegistry == null) {
 					throw new IOException("Granular thermal checkpoint requires the granular registry and gate");
 				}
-				region.restoreGranularState(restorer.reconstructGranular(granularRegistry), granularRegistry, generation);
+				region.restoreGranularState(restorer.reconstructGranular(granularRegistry), granularRegistry, generation, materialDefinitions);
 			} else if (profile.hasCapability(WorldCapability.GRANULAR)) {
 				throw new IOException("Thermal checkpoint omits granular truth while the granular gate is enabled");
 			}
@@ -588,7 +602,7 @@ final class RegionRepositoryAdapter {
 		} else {
 			region.restoreMaterialSolver(restorer.reconstructMaterial(), generation);
 		}
-		region.restoreGranularState(restorer.reconstructGranular(granularRegistry), granularRegistry, generation);
+		region.restoreGranularState(restorer.reconstructGranular(granularRegistry), granularRegistry, generation, materialDefinitions);
 		enablePrecipitationIfConfigured(region);
 	}
 

@@ -11,4 +11,12 @@ public final class FluidDomain extends FluidDomainGasAndGranular {
 	public FluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, int maximumParticleCount) {
 		super(sizeX, sizeY, sizeZ, config, maximumParticleCount);
 	}
+
+	/**
+	 * Derived per-cell liquid carrier properties for the current carrier and thermal revision.
+	 *
+	 * <p>Declared here so every collaborator that holds a {@link FluidDomain} reaches the one entry
+	 * point instead of re-deriving density, temperature or viscosity per support point.
+	 */
+	LiquidCarrierProperties derivedCarrierState() { return super.derivedCarrierState(); }
 }

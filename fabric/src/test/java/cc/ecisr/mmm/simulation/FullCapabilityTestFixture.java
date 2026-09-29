@@ -5,6 +5,7 @@ import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
+import cc.ecisr.mmm.fluid.MaterialRegistry;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
@@ -16,7 +17,8 @@ public final class FullCapabilityTestFixture {
 	public static Registries load() throws Exception {
 		ProductionRegistries.Set production = ProductionRegistries.load();
 		return new Registries(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
-				production.chemical(), production.granular(), production.gas(), production.thermal());
+				production.chemical(), production.granular(), production.gas(), production.thermal(),
+				production.material());
 	}
 
 	public static FluidMaterialRegistry bindEmptyMaterialState(FluidDomain domain, FluidMaterialRegistry liquids) {
@@ -33,7 +35,7 @@ public final class FullCapabilityTestFixture {
 		FluidMaterialRegistry liquids = domain.materialRegistry() == null
 				? bindEmptyMaterialState(domain, registries.liquids()) : domain.materialRegistry();
 		domain.bindChemistry(registries.chemical());
-		domain.bindGranular(registries.granular(), liquids);
+		domain.bindGranular(registries.granular(), liquids, registries.materials());
 		domain.setPrecipitationEnabled(true);
 		domain.bindGasRegistry(registries.gas());
 		domain.bindThermal(registries.thermal(), liquids, initialTemperatureK, maximumThermalSubsteps);
@@ -44,6 +46,7 @@ public final class FullCapabilityTestFixture {
 			ChemicalRegistry chemical,
 			GranularRegistry granular,
 			GasRegistry gas,
-			ThermalRegistry thermal
+			ThermalRegistry thermal,
+			MaterialRegistry materials
 	) { }
 }

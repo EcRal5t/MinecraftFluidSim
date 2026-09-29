@@ -1,6 +1,5 @@
 package cc.ecisr.mmm.fluid;
 
-import cc.ecisr.mmm.granular.GranularCarrier;
 import cc.ecisr.mmm.granular.GranularMechanics;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.granular.GranularCouplingFields;
@@ -20,8 +19,8 @@ final class GranularMechanicalStage {
 		GranularCouplingFields granularCoupling();
 		GranularCouplingFields granularNextCoupling();
 		boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling);
-		int[] granularCarrierMaterialByCell();
-		FluidMaterialRegistry materialRegistry();
+		/** Derived per-cell liquid carrier properties for the current revision. */
+		LiquidCarrierProperties liquidCarrierProperties();
 		boolean massWeightedP2G();
 		boolean granularCarrierFaceActive(int axis, int x, int y, int z);
 		float effectiveOpenCellVolume(int cell);
@@ -109,7 +108,8 @@ final class GranularMechanicalStage {
 	GranularMechanics.FluidSample sample(float x, float y, float z) {
 		CarrierProperties properties = carrierProperties(x, y, z);
 		if (!(properties.submerged() > 0)) {
-			return new GranularMechanics.FluidSample(false, 0, 0, 0, 1.225, 1.81e-5, 100_000, 0, 0, 0, 0);
+			return new GranularMechanics.FluidSample(false, 0, 0, 0, LiquidCarrierProperties.AIR_DENSITY,
+					LiquidCarrierProperties.AIR_VISCOSITY, LiquidCarrierProperties.AIR_MAXIMUM_REYNOLDS, 0, 0, 0, 0);
 		}
 		CarrierKernel xKernel = sampleCarrier(state.mac.velocityX, state.mac.p2gWeightX, 0, x, y, z);
 		CarrierKernel yKernel = sampleCarrier(state.mac.velocityY, state.mac.p2gWeightY, 1, x, y, z);
@@ -124,6 +124,7 @@ final class GranularMechanicalStage {
 
 	/** Wet support follows the parcel's continuous volume footprint across cell and liquid interfaces. */
 	private CarrierProperties carrierProperties(float px, float py, float pz) {
+		LiquidCarrierProperties properties = access.liquidCarrierProperties();
 		double h = state.config.cellSize();
 		double x = px / h - 0.5, y = py / h - 0.5, z = pz / h - 0.5;
 		int x0 = (int) Math.floor(x), y0 = (int) Math.floor(y), z0 = (int) Math.floor(z);
@@ -135,23 +136,22 @@ final class GranularMechanicalStage {
 			double weight = (ox == 0 ? 1 - fx : fx) * (oy == 0 ? 1 - fy : fy) * (oz == 0 ? 1 - fz : fz);
 			support += weight;
 			int cell = (cz * state.sizeY + cy) * state.sizeX + cx;
-			int material = access.granularCarrierMaterialByCell()[cell];
 			double capacity = access.effectiveOpenCellVolume(cell);
-			if (weight <= 0 || capacity <= 0 || material < 0 || state.markerGrid.markerCount[cell] <= 0) continue;
+			if (weight <= 0 || capacity <= 0 || !properties.hasLiquid(cell)) continue;
 			double portion = weight * Math.min(1.0, state.markerGrid.exactCellMarkerVolume[cell] / capacity);
-			String materialId = access.materialRegistry().material(material).id();
-			GranularCarrier carrier = access.granularState().registry.carrier(
-					access.granularState().registry.carrierHandle(materialId));
+			double cellViscosity = properties.viscosityPaPerS(cell);
+			double cellDensity = properties.density(cell);
 			wet += portion;
-			density += portion * state.markerGrid.cellDensity[cell];
-			viscosity += portion * carrier.dynamicViscosity();
+			density += portion * cellDensity;
+			viscosity += portion * cellViscosity;
 			maximumSlipDiameter = Math.min(maximumSlipDiameter,
-					carrier.maximumReynolds() * carrier.dynamicViscosity() / state.markerGrid.cellDensity[cell]);
+					properties.maximumReynolds(cell) * cellViscosity / cellDensity);
 		}
 		// Validity is the intersection of constituent slip ranges, expressed in the mixture's Reynolds scale.
 		return wet > 0 ? new CarrierProperties(wet / support, density / wet, viscosity / wet,
 				maximumSlipDiameter * density / viscosity)
-				: new CarrierProperties(0, 1.225, 1.81e-5, 100_000);
+				: new CarrierProperties(0, LiquidCarrierProperties.AIR_DENSITY,
+						LiquidCarrierProperties.AIR_VISCOSITY, LiquidCarrierProperties.AIR_MAXIMUM_REYNOLDS);
 	}
 
 	/** The sampled impulse response is sum(w*w*m)/sum(w*m)^2; its reciprocal is the coupled mass. */

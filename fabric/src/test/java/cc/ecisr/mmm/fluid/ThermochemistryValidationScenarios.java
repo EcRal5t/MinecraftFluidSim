@@ -289,7 +289,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
 		domain.setVolume(1, 1, 1, 0.1F);
-		domain.bindGranular(granular, liquids);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		domain.setMarkerChemical(0, Map.of(
 				BuiltinChemicalDefinitions.NA_PLUS, 1_100_000L,

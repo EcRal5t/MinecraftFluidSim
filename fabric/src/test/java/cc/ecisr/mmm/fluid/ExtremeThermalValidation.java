@@ -29,7 +29,7 @@ public final class ExtremeThermalValidation {
 			domain.gasState.network.setStandardVolume(1, pressure * capacity
 					* GasRegistry.STANDARD_TEMPERATURE_K / (GasRegistry.STANDARD_PRESSURE_PA * temperature));
 			domain.bindChemistry(registries.chemical());
-			domain.bindGranular(registries.granular(), registries.liquids());
+			domain.bindGranular(registries.granular(), registries.liquids(), registries.materials());
 			domain.setPrecipitationEnabled(true);
 			domain.bindThermal(registries.thermal(), registries.liquids(), 293.15, 8);
 			domain.setThermalTemperatureInCell(1, 1, 1, temperature);

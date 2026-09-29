@@ -149,7 +149,7 @@ public final class CommittedWorldRegistries {
 			domain.bindChemistry(chemicalRegistry());
 		}
 		if (hasCapability(WorldCapability.GRANULAR) && !domain.hasGranularState()) {
-			domain.bindGranular(granularRegistry(), domain.materialRegistry());
+			domain.bindGranular(granularRegistry(), domain.materialRegistry(), materialRegistry());
 		}
 		if (hasCapability(WorldCapability.PRECIPITATION)) domain.setPrecipitationEnabled(true);
 		if (hasCapability(WorldCapability.THERMAL) && !domain.hasThermalState()) {
