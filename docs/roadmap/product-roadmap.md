@@ -69,6 +69,35 @@
 - section 是一个 region 原子 generation 内的存储分片，不具有独立提交、卸载或 ownership 生命周期。
 - controller 外天然洞穴、河流、海洋和世界生成水不在当前 ownership 范围。
 
+## 当前主线：一个能完整游玩的创造模式 Mod
+
+目标范围锁定为**创造模式完整可玩**：新世界无需改配置或执行管理员命令即可建立并运行完整能力区域，所有已实现能力都有正常玩家入口，退出重进后行为确定。生存配方只要求外壳与控制器（`fluid_boundary`、`fluid_controller`），其余组件从创造栏取得；不需要扩张生存取得路径。
+
+判断进度只用一个标准：下表每个场景能否**从全新默认世界、不使用 `/mmm`** 做到。命令场景继续用于开发与 fixture，但不能作为产品入口或单独作为通过证据。
+
+| 场景 | 现在能不能做到 | 阻塞点 |
+|---|---|---|
+| CX-01 首次世界与重进 | 可以 | — |
+| CX-02 建壳与生命周期 | 可以（创造栏取得外壳与控制器，空手激活自动运行） | — |
+| CX-03 水与容器 | 可以（材料桶、部分水桶、发射器） | — |
+| CX-04 多材料分层 | 可以（water/oil/mercury 与混合桶） | — |
+| CX-05 化学与指示剂 | 可以（试剂桶、指示剂、抹除器） | — |
+| CX-06 颗粒与沉淀 | 可以（细沙、轻珠与颗粒容器） | — |
+| CX-07 密闭气体 | **取不到**：创造栏没有 gas source/vent，也没有排气入口 | B08（阶段 4a） |
+| CX-08 导热与相变 | 可以（可调温的 thermal reservoir、冰/水/蒸气相变） | — |
+| CX-09 有限换热器 | **没有这个方块**，只有无限热浴 | C04（阶段 6） |
+| CX-10 实体边界 | 能玩（划水、浮沉有响应），但排水与双向冲量不闭合 | C02（阶段 5） |
+| CX-11 边界故障与恢复 | 可以（拆壳、卸 chunk、availability pause 保持玩家意图） | — |
+| CX-12 清空与拆除 | 可以（探针打开控制台，逐项预览确认） | — |
+
+因此当前缺口分成三类，而不是"缺高级拟真功能"：
+
+1. **功能性死路**：CX-07 与 CX-09，玩家根本没有入口，对应 B08 与 C04。
+2. **品质缺口**：液面仍由经验阈值与增厚重建（CX-01~CX-12 都受影响），对应 D01–D03；流体没有粘性耗散，相干晃动长期不衰减（CX-04、CX-10），对应 C01。
+3. **物理闭合**：实体排水与双向冲量（CX-10）、气液组分交换（CX-07 之后），对应 C02 与 C05。
+
+上面的阶段编号就是这些缺口的依赖顺序。每关闭一项，本表至少有一个场景从"取不到"或"不闭合"变为"可以"，这就是本路线唯一的进度证据。
+
 ## 路线是怎么走到这里的
 
 这一步是为了说明为什么下面只列剩余工作，也是为了让后来者不再重复已完成的重建。完整记录见 [架构重整实施记录](../archive/progress/code-architecture-restructuring-implement.md)与 [版本历史](../progress/version-history.md)。
@@ -123,9 +152,14 @@
 
 ### 1a 统一黏度来源
 
-- `GranularCarrier` 仍自带 `dynamic_viscosity`，与 material registry 的分段 `mu(T)` 重复：`granular_carriers/*.json` 各自保存一份数值，`GranularImplicitDrag`、`GranularBedShear` 与 `GranularMechanicalStage` 读的是这份副本，而 `MaterialRegistry.dynamicViscosityAt` 目前只有 registry 校验一处调用方。删掉副本，让 carrier 只绑定 liquid material 与 Reynolds 上限，颗粒阻力统一从 material state 取 `mu(T)`。
-- 该改动会改变世界能力包的 registry fingerprint 和载荷解释，属于本阶段的第一步，不与 solver 改动放在同一提交。
-- 完成条件：仓库内不再有第二份液体黏度真值；`materials`、`granular`、`region-state` 三个最近门通过。
+- `GranularCarrier` 仍自带 `dynamic_viscosity`，与 material registry 的分段 `mu(T)` 重复：`granular_carriers/*.json` 各自保存一份数值，`GranularImplicitDrag`、`GranularBedShear` 与 `GranularMechanicalStage` 读的是这份副本，而 `MaterialRegistry.dynamicViscosityAt` 目前只有 registry 校验一处调用方。
+- 先删除副本：carrier 只保留 liquid material 绑定与 Reynolds 上限，三处读取改为经共享的 carrier 属性入口。这一步会改变世界能力包的 registry fingerprint 与载荷解释，因此单独提交，不与 solver 改动合并。
+- 删除副本后，黏度成为温度的函数，需要为采样点取得温度。这一点比"删字段"本身深：
+  - 当前颗粒阻力只采样液体密度与材料身份，`GranularMechanicalStage` 没有温度入口；同一力学阶段的 `BodyForceStage.applyThermalBuoyancy` 已经按 marker 取 `thermalMarkerTemperature`，是既有先例。
+  - 可用的 cell 温度观测 `ThermalCellOperations.observeTemperatureInCell` 每次调用都新建 `InventoryPortion` 列表并遍历该 cell 的 marker、coherent group 与全部 active parcel，无法承受"每 parcel × 8 支撑格 × 每子步"的调用量。要按温度取黏度，必须先有每个子步只建一次的温度入口。
+  - `MaterialRegistry.dynamicViscosityAt` 在声明温区之外直接抛错（水 `273.15–645 K`、油 `253.15–473 K`、汞 `234.32–630 K`），而热学允许的温度范围远大于此。相变路径改用 cell 温度时会影响 `ExtremeThermalValidation` 的 `10 Pa / 10^7 K` 与 `10^12 Pa / 150 K` 等场景。
+  - 因此 1a 需要先冻结"颗粒阻力用哪个温度"以及"温度越出黏度声明域时是拒绝候选还是沿边界延拓"。不能用参考温度常数代替，那只是把副本换成硬编码。
+- 完成条件：仓库内不再有第二份液体黏度真值；颗粒阻力使用的温度来源与越域语义写入架构文档；`materials`、`granular`、`region-state` 三个最近门通过。
 
 ### 1b 有限体积黏性扩散
 

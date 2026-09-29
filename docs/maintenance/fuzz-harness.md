@@ -28,7 +28,7 @@
 | 单序列复现 | `replay[,disk\|partial\|partialdisk],<scene>,<seed>[,步数][,picks\|debug]` | 失败时打印完整动作 trace |
 | 最小化 | `minimize[,disk\|partial\|partialdisk],<scene>,<seed>[,步数]` | 记录 RNG token，ddmin 求严格子序列 |
 | 工具自检 | `selfcheck` | 用故意植入的错误验证工具自身的判据能触发（拒绝守卫、闭环比对、覆盖缺口检测） |
-| 指定种子 | `reported` 或 `a:b:c` | 走扩展动作表 `applyExpandedRandomPlay`，在基线场景逐种子运行；当前失败仅打印、不使进程失败 |
+| 指定种子 | `reported` 或 `a:b:c` | 走扩展动作表 `applyExpandedRandomPlay`，在基线场景逐种子运行；最后断言全部种子通过，任一失败使进程以非零码结束 |
 | 回归矩阵 | 无参数时的校验入口 | `runNormalPlayStateMatrix`：固定种子 4/54/103 走旧动作集 `applyRandomAction` + 命名场景，由其它校验入口调用，不经本 `main` |
 
 诊断 token（追加在末尾）：`picks` 逐动作打印耗时与机械子步数；`debug` 打印每动作后的完整气体节点状态。
