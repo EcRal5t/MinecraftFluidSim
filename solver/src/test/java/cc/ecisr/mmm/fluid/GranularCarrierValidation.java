@@ -10,6 +10,7 @@ public final class GranularCarrierValidation {
 	private GranularCarrierValidation() { }
 
 	public static void validate() {
+		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
 		finitePressureResponse();
 		hydrostaticParcelForce();
@@ -22,6 +23,25 @@ public final class GranularCarrierValidation {
 		implicitSharedCarrier();
 		implicitCarrierValidity();
 		thinBedRetainsFreeFlow();
+	}
+
+	private static void carrierCacheFollowsAdvection() {
+		FluidDomain domain = domain();
+		domain.setVolume(1, 1, 1, .125F);
+		int source = domain.cellIndex(1, 1, 1), target = domain.cellIndex(2, 1, 1);
+		double expected = BuiltinFluidMaterials.createRegistry().dynamicViscosityAt("mmm:water", 293.15);
+		require(domain.carrierViscosityPaPerS(source) == expected
+				&& domain.carrierViscosityPaPerS(target) == null,
+				"liquid properties must be available without any granular inventory");
+		long revision = domain.carrierMutationRevision;
+		java.util.Arrays.fill(domain.mac.velocityX, 1);
+		java.util.Arrays.fill(domain.mac.velocityY, 0);
+		java.util.Arrays.fill(domain.mac.velocityZ, 0);
+		domain.particleAdvectionStage.advect(.5F);
+		require(domain.carrierMutationRevision == revision, "advection fixture must retain carrier structure");
+		require(domain.carrierViscosityPaPerS(source) == null
+				&& domain.carrierViscosityPaPerS(target) == expected,
+				"advection must invalidate spatial carrier properties despite unchanged inventory revision");
 	}
 
 	private static void thinBedRetainsFreeFlow() {

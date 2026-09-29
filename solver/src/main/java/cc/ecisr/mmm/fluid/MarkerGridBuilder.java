@@ -13,6 +13,7 @@ final class MarkerGridBuilder {
 	private MarkerGridBuilder() { }
 
 	static void build(FluidDomain domain) {
+		domain.carrierPropertiesWorkspace.invalidate();
 		MarkerGridIndex grid = domain.markerGrid;
 		Arrays.fill(grid.markerCount, 0);
 		Arrays.fill(grid.cellMarkerHead, -1);
@@ -22,8 +23,7 @@ final class MarkerGridBuilder {
 		Arrays.fill(grid.cellDensity, domain.config.density());
 		Arrays.fill(grid.cellPhaseHead, -1);
 		grid.phaseEntryCount = 0;
-		boolean granularInventoryPresent = domain.hasGranularInventory();
-		if (domain.granularCarrierMaterialByCell != null && granularInventoryPresent) {
+		if (domain.granularCarrierMaterialByCell != null) {
 			Arrays.fill(domain.granularCarrierMaterialByCell, -1);
 			Arrays.fill(domain.granularCarrierVolumeByCell, -1.0);
 		}
@@ -45,7 +45,7 @@ final class MarkerGridBuilder {
 			grid.exactCellMarkerVolume[particleCell] += particleVolume;
 			grid.exactCellMarkerMass[particleCell] += particleMass;
 			grid.addCellPhaseVolume(particleCell, domain.particles.phaseLabel(i), particleVolume);
-			if (domain.granularCarrierMaterialByCell != null && granularInventoryPresent
+			if (domain.granularCarrierMaterialByCell != null
 					&& (particleVolume > domain.granularCarrierVolumeByCell[particleCell]
 					|| particleVolume == domain.granularCarrierVolumeByCell[particleCell]
 					&& materialHandle < domain.granularCarrierMaterialByCell[particleCell])) {

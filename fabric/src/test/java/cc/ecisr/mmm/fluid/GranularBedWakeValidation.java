@@ -17,6 +17,7 @@ public final class GranularBedWakeValidation {
 	public static void main(String[] args) throws Exception { validate(); }
 
 	public static void validate() throws Exception {
+		carrierTemperatureRefreshAndDiagnostics();
 		wallLawLimits();
 		var domain = fixture();
 		var backend = new CpuFluidSolverBackend();
@@ -62,6 +63,44 @@ public final class GranularBedWakeValidation {
 		wakeStartsAtRest(sleeping);
 		System.out.printf("Bed lifecycle passed: wakes=%d peakActive=%d horizontalMomentChange=%.6f kg*m%n",
 				woken, peakActive, depositMoment(domain) - initialMoment);
+	}
+
+	private static void carrierTemperatureRefreshAndDiagnostics() throws Exception {
+		var domain = new FluidDomain(4, 4, 4,
+				new FluidSolverConfig(.5F, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, .8F), 512);
+		var registries = FullCapabilityTestFixture.load();
+		FullCapabilityTestFixture.bindFull(domain, registries, 293.15, 4);
+		domain.setVolume(1, 1, 1, .5F);
+		int cell = domain.cellIndex(1, 1, 1);
+		domain.carrierPropertiesWorkspace.beginStep();
+		for (double temperature : new double[] {1, 5000, 353.15}) {
+			domain.setThermalTemperatureInCell(1, 1, 1, temperature);
+			var before = domain.exactInternalEnergy();
+			double expected = registries.materials().dynamicViscosityExtendingAt("mmm:water", temperature);
+			for (int repeat = 0; repeat < 3; repeat++) {
+				require(Math.abs(domain.carrierViscosityPaPerS(cell) - expected) < expected * 1e-12,
+						"Carrier properties retained an obsolete thermal state");
+				require(Math.abs(domain.granularMechanicalStage.sample(.75F, .75F, .75F).dynamicViscosity() - expected)
+						< expected * 1e-12, "Drag and bed shear must use the refreshed viscosity");
+				require(Math.abs(domain.granularCarrierProperties(cell).viscosity() - expected) < expected * 1e-12,
+						"Darcy damping must use the same refreshed viscosity");
+			}
+			require(domain.exactInternalEnergy().equals(before), "Property observation changed authoritative energy");
+		}
+		var stats = domain.carrierPropertiesWorkspace.finishStep();
+		require(stats.extrapolatedCells() == 2 && stats.sample().contains("mmm:water"),
+				"Step diagnostics must retain earlier excursions and count each build once");
+		domain.setThermalTemperatureInCell(1, 1, 1, 5000);
+		for (int repeat = 0; repeat < 3; repeat++) require(domain.carrierViscosityStats().equals(stats),
+				"Reading diagnostics must retain the last completed step");
+		domain.carrierPropertiesWorkspace.beginStep();
+		domain.carrierViscosityPaPerS(cell);
+		require(domain.carrierViscosityStats().equals(stats), "An unfinished attempt published diagnostics");
+		domain.carrierPropertiesWorkspace.beginStep();
+		domain.setThermalTemperatureInCell(1, 1, 1, 293.15);
+		domain.carrierViscosityPaPerS(cell);
+		require(!domain.carrierPropertiesWorkspace.finishStep().extrapolated(),
+				"Retried step inherited a discarded attempt's excursions");
 	}
 
 	private static double depositMoment(FluidDomain domain) {

@@ -85,7 +85,7 @@ final class ControllerInventoryDurabilityValidation {
 			FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, domain, 4_096L,
 					footprint());
 			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.full(),
-					registries.chemical(), registries.granular(), registries.thermal(), registries.gas());
+					registries.chemical(), registries.granular(), registries.thermal(), registries.gas(), TestProfiles.materialRegistry());
 			check(persistence.checkpoint(region) == 1L, "operation matrix did not publish its empty base");
 
 			int water = registries.liquids().handle(BuiltinFluidMaterials.WATER.id());
@@ -483,7 +483,7 @@ final class ControllerInventoryDurabilityValidation {
 			if (FUZZ_DISK) {
 				diskRoot = Files.createTempDirectory("mmm-fuzz-disk");
 				persistence = new RegionRepositoryAdapter(diskRoot, TestProfiles.full(), registries.chemical(),
-						registries.granular(), registries.thermal(), registries.gas());
+						registries.granular(), registries.thermal(), registries.gas(), TestProfiles.materialRegistry());
 				region = new FluidRegion(java.util.UUID.randomUUID(), DIMENSION, scene.origin(), domain,
 						scene.capacity(), footprint(scene.sizeX(), scene.sizeY(), scene.sizeZ(), scene.origin()));
 				persistence.checkpoint(region);

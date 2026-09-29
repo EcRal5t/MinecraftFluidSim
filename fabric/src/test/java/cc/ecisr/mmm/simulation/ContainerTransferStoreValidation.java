@@ -711,7 +711,7 @@ public final class ContainerTransferStoreValidation {
 			domain.setVolume(1, 1, 1, 0.25F);
 			FluidRegion region = new FluidRegion(regionId, DIMENSION,
 					origin, domain, 64L, footprint);
-			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.materials(), null, null, null, null);
+			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry());
 			check(persistence.checkpoint(region) == 1L, "fixture did not publish its first checkpoint");
 
 			Path ownershipDirectory = root.resolve("mmm").resolve("ownership").resolve(regionId.toString());
@@ -762,7 +762,7 @@ public final class ContainerTransferStoreValidation {
 			check(base.gasBoundary().nodeCount() == 1,
 					"private-target fixture did not initialize one sealed gas topology");
 			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(
-					root, TestProfiles.materials(), null, null, null, null);
+					root, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry());
 			long baseGeneration = persistence.checkpoint(region);
 			FluidDomain candidate = FluidDomain.restoreAuthoritativeState(base.captureAuthoritativeState());
 			check(candidate.tryInsertExactVolume(1, 1, 1, 0.125F, 1).transferred(),
@@ -810,7 +810,7 @@ public final class ContainerTransferStoreValidation {
 					interior, Set.of(controller.asLong()), Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(-1, 0)));
 			FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, origin, domain, 4_096L, footprint);
 			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.full(),
-					registries.chemical(), registries.granular(), registries.thermal(), registries.gas());
+					registries.chemical(), registries.granular(), registries.thermal(), registries.gas(), TestProfiles.materialRegistry());
 			check(persistence.checkpoint(region) == 1L,
 					"full-profile rapid-pour fixture did not publish its empty base");
 

@@ -5,11 +5,11 @@ import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 import cc.ecisr.mmm.thermal.ThermalDomainState;
 
 /**
- * Per-cell liquid carrier properties derived once per carrier/thermal revision.
+ * Per-cell liquid properties prepared per mechanical substep and invalidated by grid or inventory edits.
  *
  * <p>Every consumer of liquid density, temperature and dynamic viscosity — active granular drag,
  * Darcy pore damping and the bed-shear closure — reads this one workspace, so a cell is observed
- * once per revision instead of once per parcel support point or resistance face.
+ * once per prepared batch instead of once per parcel support point or resistance face.
  *
  * <p>The arrays are fixed-capacity scratch. Nothing here is authoritative and nothing here is
  * persisted: the workspace is rebuilt from the marker grid, the world material definitions and the
@@ -27,6 +27,10 @@ final class LiquidCarrierProperties {
 	private final double[] viscosityPaPerS;
 	private final double[] maximumReynolds;
 	private Revision built;
+	private boolean recording;
+	private int stepExtrapolatedCells;
+	private String stepSample;
+	private FluidDomain.CarrierViscosityStats publishedStats = new FluidDomain.CarrierViscosityStats(0, "");
 	private int extrapolatedCells;
 	private String sampleMaterialId;
 	private double sampleTemperatureK;
@@ -58,9 +62,24 @@ final class LiquidCarrierProperties {
 				+ " K outside [" + sampleMinimumTemperatureK + ", " + sampleMaximumTemperatureK + "] K";
 	}
 
-	/** Last build's extrapolation summary, as published through the successful step's stats. */
+	void invalidate() { built = null; }
+
+	void beginStep() {
+		invalidate();
+		recording = true;
+		stepExtrapolatedCells = 0;
+		stepSample = null;
+	}
+
+	FluidDomain.CarrierViscosityStats finishStep() {
+		publishedStats = new FluidDomain.CarrierViscosityStats(stepExtrapolatedCells, stepSample);
+		recording = false;
+		return publishedStats;
+	}
+
+	/** Reading diagnostics never rebuilds physical properties or changes the last successful result. */
 	FluidDomain.CarrierViscosityStats stats() {
-		return new FluidDomain.CarrierViscosityStats(extrapolatedCells, extrapolatedSample());
+		return publishedStats;
 	}
 
 	/**
@@ -73,13 +92,13 @@ final class LiquidCarrierProperties {
 			MaterialRegistry definitions, GranularDomainState granular, ThermalDomainState thermal, Revision revision) {
 		if (revision.equals(built)) return;
 		MarkerGridIndex grid = domain.markerGrid;
-		if (thermal != null) thermal.preparePhaseScan(markers);
+		if (definitions != null && thermal != null) thermal.preparePhaseScan(markers);
 		extrapolatedCells = 0;
 		sampleMaterialId = null;
 		for (int cell = 0; cell < cellCount; cell++) {
 			int handle = domain.granularCarrierMaterialByCell == null ? -1
 					: domain.granularCarrierMaterialByCell[cell];
-			boolean wet = handle >= 0 && grid.markerCount[cell] > 0;
+			boolean wet = definitions != null && handle >= 0 && grid.markerCount[cell] > 0;
 			if (!wet) {
 				liquid[cell] = false;
 				materialHandle[cell] = -1;
@@ -117,6 +136,10 @@ final class LiquidCarrierProperties {
 			}
 		}
 		built = revision;
+		if (recording) {
+			stepExtrapolatedCells = Math.addExact(stepExtrapolatedCells, extrapolatedCells);
+			if (stepSample == null) stepSample = extrapolatedSample();
+		}
 	}
 
 	static final double AIR_DENSITY = 1.225;

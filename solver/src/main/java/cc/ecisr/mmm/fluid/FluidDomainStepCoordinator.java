@@ -46,6 +46,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
+		carrierPropertiesWorkspace.beginStep();
 		float before = domain().totalVolume();
 		double massBefore = domain().totalMass();
 		MechanicalAuditAccumulator mechanicalAudit = captureMechanicalAudit
@@ -102,7 +103,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 						finalParticleKineticEnergy, gravitationalPotentialEnergyJoules(),
 						(thermalState == null ? SignedDyadic.ZERO : thermalState.auditLedger().mechanicalWork())
 								.subtract(thermalMechanicalWorkBefore)) : MechanicalStepAudit.notCaptured(),
-				thermalAxis, lastGranularDepositStats, domain().carrierViscosityStats()
+				thermalAxis, lastGranularDepositStats, carrierPropertiesWorkspace.finishStep()
 		);
 	}
 

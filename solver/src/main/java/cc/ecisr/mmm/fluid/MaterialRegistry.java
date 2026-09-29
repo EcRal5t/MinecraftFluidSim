@@ -69,6 +69,7 @@ public final class MaterialRegistry {
 		public boolean declaresViscosity() { return !viscosity.isEmpty(); }
 
 		public double dynamicViscosityAt(double temperatureK) {
+			requireTemperature(temperatureK);
 			if (!declaresViscosity()) {
 				throw new IllegalArgumentException("Material " + material.id() + " does not declare dynamic viscosity");
 			}
@@ -89,6 +90,7 @@ public final class MaterialRegistry {
 		 * records the excursion so it stays observable instead of being silently clamped.
 		 */
 		public double dynamicViscosityExtendingAt(double temperatureK) {
+			requireTemperature(temperatureK);
 			if (!declaresViscosity()) {
 				throw new IllegalArgumentException("Material " + material.id() + " does not declare dynamic viscosity");
 			}
@@ -126,10 +128,18 @@ public final class MaterialRegistry {
 				else high = middle;
 			}
 			ViscositySegment segment = viscosity.get(low);
+			if (temperatureK == segment.minimumTemperatureK()) return segment.dynamicViscosityPaPerSAtMinimum();
+			if (temperatureK == segment.maximumTemperatureK()) return segment.dynamicViscosityPaPerSAtMaximum();
 			double span = segment.maximumTemperatureK() - segment.minimumTemperatureK();
 			double alpha = span <= 0.0 ? 0.0 : (temperatureK - segment.minimumTemperatureK()) / span;
 			return segment.dynamicViscosityPaPerSAtMinimum() * (1.0 - alpha)
 					+ segment.dynamicViscosityPaPerSAtMaximum() * alpha;
+		}
+
+		private static void requireTemperature(double temperatureK) {
+			if (!Double.isFinite(temperatureK) || temperatureK < Double.MIN_NORMAL) {
+				throw new IllegalArgumentException("Viscosity temperature must be finite and in the positive thermal domain");
+			}
 		}
 	}
 

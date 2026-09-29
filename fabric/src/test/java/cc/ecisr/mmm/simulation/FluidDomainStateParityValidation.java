@@ -24,11 +24,37 @@ public final class FluidDomainStateParityValidation {
 
 	public static void main(String[] args) throws Exception {
 		captureRestoreCapturePreservesRawBits();
+		customViscositySurvivesHandoff();
 		phaseOffCandidateRestoresToIdenticalState();
 		phaseOnCandidateRestoresToIdenticalState();
 		thermalOnlyCandidateIsPrivateAndRestorable();
 		privateCandidateAssertionIsTypedAndLeavesLiveStateUntouched();
 		System.out.println("Fluid domain state parity characterization passed.");
+	}
+
+	private static void customViscositySurvivesHandoff() throws Exception {
+		var original = FullCapabilityTestFixture.load();
+		var definitions = FullCapabilityTestFixture.doubledWaterViscosity();
+		var registries = new FullCapabilityTestFixture.Registries(original.liquids(), original.chemical(),
+				original.granular(), original.gas(), original.thermal(), definitions);
+		FluidDomain domain = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
+		FluidDomainState input = domain.captureAuthoritativeState();
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(input);
+		FluidDomainStateAssertions.assertSameState(input, restored.captureAuthoritativeState(), "custom viscosity handoff");
+		if (!domain.authoritativeLayout().equals(input.layout()) || !restored.authoritativeLayout().equals(input.layout())) {
+			throw new AssertionError("material definition layout identity changed during handoff");
+		}
+		boolean observed = false;
+		for (int cell = 0; cell < domain.sizeX() * domain.sizeY() * domain.sizeZ(); cell++) {
+			Double before = domain.carrierViscosityPaPerS(cell), after = restored.carrierViscosityPaPerS(cell);
+			if (!java.util.Objects.equals(before, after)) throw new AssertionError("restored carrier viscosity changed");
+			observed |= before != null;
+		}
+		if (!observed) throw new AssertionError("custom viscosity handoff fixture has no liquid");
+		var backend = new CpuFluidSolverBackend();
+		var first = backend.evaluate(new FluidStepRequest(0, input, List.of(), false, 0, false));
+		var second = backend.evaluate(new FluidStepRequest(0, restored.captureAuthoritativeState(), List.of(), false, 0, false));
+		FluidDomainStateAssertions.assertSameState(first.state(), second.state(), "custom viscosity next step");
 	}
 
 	/** An unforeseen private-candidate assertion must pause one region, never escape as a server crash. */

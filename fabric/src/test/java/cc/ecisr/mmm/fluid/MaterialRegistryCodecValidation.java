@@ -122,6 +122,12 @@ public final class MaterialRegistryCodecValidation {
 	 * and the endpoints stay bitwise identical to the strict lookup.
 	 */
 	private static void viscosityContinuationIsBounded() {
+		MaterialRegistry inputs = BuiltinFluidMaterials.createRegistry();
+		for (double invalid : new double[] {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY,
+				0, -1, Double.MIN_VALUE}) {
+			expectIllegal("temperature", () -> inputs.dynamicViscosityAt("mmm:water", invalid));
+			expectIllegal("temperature", () -> inputs.dynamicViscosityExtendingAt("mmm:water", invalid));
+		}
 		MaterialRegistry registry = BuiltinFluidMaterials.createRegistry();
 		double low = registry.dynamicViscosityAt("mmm:water", 273.15);
 		double high = registry.dynamicViscosityAt("mmm:water", 645.0);

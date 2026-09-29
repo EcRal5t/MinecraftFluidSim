@@ -33,12 +33,10 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	public int particleCount() { return particles.count(); }
 
 	/**
-	 * Per-cell liquid carrier properties for the current carrier and thermal revision.
-	 *
-	 * <p>Rebuilds when the revision advanced, so a step observes each cell once while drag, Darcy
-	 * damping and bed shear all read the same derived values.
+	 * Current spatial carrier properties. Grid rebuilds and carrier/thermal edits invalidate the batch.
 	 */
 	LiquidCarrierProperties derivedCarrierState() {
+		ensureGrid();
 		carrierPropertiesWorkspace.refresh(this, thermalMarkerContext(), materialRegistry, materialDefinitions,
 				granularState, thermalState,
 				new LiquidCarrierProperties.Revision(carrierMutationRevision,
@@ -46,8 +44,8 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		return carrierPropertiesWorkspace;
 	}
 
-	/** Last derived carrier property build's viscosity extrapolation summary. */
-	public FluidDomain.CarrierViscosityStats carrierViscosityStats() { return derivedCarrierState().stats(); }
+	/** Viscosity extrapolation summary from the last successful mechanical step. */
+	public FluidDomain.CarrierViscosityStats carrierViscosityStats() { return carrierPropertiesWorkspace.stats(); }
 
 	/** Derived liquid carrier dynamic viscosity in one cell, in Pa·s; null when the cell holds no liquid. */
 	public Double carrierViscosityPaPerS(int cell) {

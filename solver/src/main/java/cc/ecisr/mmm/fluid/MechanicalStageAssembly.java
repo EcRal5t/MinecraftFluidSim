@@ -199,6 +199,11 @@ final class MechanicalStageAssembly {
 	private static MechanicalStepPipeline.Access pipelineAccess(FluidDomain domain) {
 		return new MechanicalStepPipeline.Access() {
 			@Override public void ensureGrid() { domain.ensureGrid(); }
+			@Override public void prepareCarrierProperties() {
+				if (domain.granularState == null) return;
+				domain.carrierPropertiesWorkspace.invalidate();
+				domain.derivedCarrierState();
+			}
 			@Override public double gridKineticEnergyJoules() { return domain.gridKineticEnergyJoules(); }
 			@Override public double particleKineticEnergyJoules() { return domain.particleKineticEnergyJoules(); }
 			@Override public int lastPressureIterations() { return domain.lastPressureIterations; }

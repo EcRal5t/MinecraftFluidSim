@@ -22,6 +22,7 @@ final class MechanicalStepPipeline {
 
 	interface Access {
 		void ensureGrid();
+		void prepareCarrierProperties();
 		double gridKineticEnergyJoules();
 		double particleKineticEnergyJoules();
 		int lastPressureIterations();
@@ -67,6 +68,7 @@ final class MechanicalStepPipeline {
 			if (access.thermalState() == null) throw invalidGasThermal;
 			throw new FluidDomain.GasThermalBlockedException(invalidGasThermal.getMessage(), invalidGasThermal);
 		}
+		access.prepareCarrierProperties();
 		MacVelocityGrid mac = state.mac;
 		System.arraycopy(mac.velocityX, 0, mac.p2gVelocityX, 0, mac.velocityX.length);
 		System.arraycopy(mac.velocityY, 0, mac.p2gVelocityY, 0, mac.velocityY.length);

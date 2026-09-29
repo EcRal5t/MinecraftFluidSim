@@ -38,6 +38,9 @@ public final class FluidDomainStateAssertions {
 		require(expected.sealedDomainBoundary() == actual.sealedDomainBoundary(),
 				context + ": sealed boundary flag changed");
 		require(expected.carrierKind() == actual.carrierKind(), context + ": carrier kind changed");
+		require(Arrays.equals(expected.materialDefinitions() == null ? null : expected.materialDefinitions().canonicalBytes(),
+				actual.materialDefinitions() == null ? null : actual.materialDefinitions().canonicalBytes()),
+				context + ": world material definitions changed");
 		require(expected.precipitationEnabled() == actual.precipitationEnabled(),
 				context + ": precipitation flag changed");
 		require(expected.maximumThermalTransportSubsteps() == actual.maximumThermalTransportSubsteps(),

@@ -73,3 +73,9 @@
 - 删除 `FluidSimulationService`、`FlipThermalState`、`FlipFluidDomain`、`FluidTransferService` 与 `RegionStateFiles` 等过渡层；运行时组合、tick、policy、operator、事务、thermal 与 GPU native 资源均有唯一 owner。
 - `FluidDomain` 保持唯一 public live aggregate，但实现按同一对象的 mechanics、step、inventory、collision、capability 与 gas/granular 责任分区；生产类 1000 行硬门不再含迁移 allowlist。
 - validation 按 scenario 文件拆分且 selector 语义不变；当前 world capability、ACTIVE/REMOVED region、ownership/container fault、CPU milestone/soak 与 GPU probe 门继续使用同一现行格式和不变量。
+
+## 2026-09-30：统一液体黏度来源
+
+C01 的 1a 将颗粒阻力、Darcy 孔隙阻力和床面剪切统一到世界材料定义的 `mu(T)`，移除 granular carrier 的黏度字段。后端交接携带材料定义，冷恢复从已提交世界能力包取得定义。审查补齐平流后的属性失效、无颗粒湿格、逐步越域诊断、自定义物性恢复及存档前身份校验。
+
+验证通过 `materials,granular,region-state,lifecycle,thermal,thermal-extremes` 与 `verifyArchitecture`。审查后 `granular-active` 单进程预热 20 步、采样 80 步，平均 57.31 ms、p95 100.60 ms、9.03 MiB/步；无受控的改前对照，不作为性能提升证据。

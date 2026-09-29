@@ -87,9 +87,9 @@ caloric segment 内 `cv` 为常量，所以积分与反演都是分段闭式线�
 
 ### 批量格温度观察
 
-求解器侧需要成批读取格温度时（当前唯一消费者是颗粒载体属性工作区），走 `preparePhaseScan` + `phaseScanTemperatureInCell`：先一次建格，再逐格读取。这条路径只更新派生 LTE grid，**不重新分配也不修改任何载体 `U`**。
+颗粒载体属性工作区复用相变扫描的 `preparePhaseScan` + `phaseScanTemperatureInCell`：先一次建格，再逐格读取。这条路径只更新派生 LTE grid，**不重新分配也不修改任何载体 `U`**。
 
-它替代逐格 `observeTemperatureInCell`：后者每次调用都新建 inventory 列表并遍历该格的全部 marker、coherent group、活动 parcel 与 deposit，无法承受「每 parcel × 8 支撑格 × 每子步」的调用量。`observeTemperatureInCell` 保留原样（每次分配独立列表），因为它与私有后端候选共享同一个热学对象，复用 scratch 列表会跨并发观测串扰。
+`observeTemperatureInCell` 用于独立的局部只读观测，保留调用内的 inventory 列表。它还会扫描全域固相库存，不用于「每 parcel × 8 支撑格 × 每子步」的热点。后端恢复为每份私有候选创建独立的热学状态，批量工作区随该候选使用。
 
 批量读取的缓存只在明确的阶段内有效，跨库存、组成、内能或位置修改即失效；它不进入 `FluidDomainState`，也不进存档，恢复后重建。
 

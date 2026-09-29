@@ -21,6 +21,17 @@ public final class FullCapabilityTestFixture {
 				production.material());
 	}
 
+	/** Custom constitutive data exercises both in-memory and disk restoration. */
+	public static MaterialRegistry doubledWaterViscosity() {
+		MaterialRegistry baseline = BuiltinFluidMaterials.createRegistry();
+		return new MaterialRegistry(baseline.entries().stream().map(entry ->
+				!entry.material().id().equals("mmm:water") ? entry : new MaterialRegistry.MaterialEntry(
+						entry.material(), entry.viscosity().stream().map(segment -> new MaterialRegistry.ViscositySegment(
+								segment.minimumTemperatureK(), segment.maximumTemperatureK(),
+								2 * segment.dynamicViscosityPaPerSAtMinimum(),
+								2 * segment.dynamicViscosityPaPerSAtMaximum())).toList())).toList(), baseline.pairTensions());
+	}
+
 	public static FluidMaterialRegistry bindEmptyMaterialState(FluidDomain domain, FluidMaterialRegistry liquids) {
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				domain.sizeX(), domain.sizeY(), domain.sizeZ(), domain.config().cellSize(),

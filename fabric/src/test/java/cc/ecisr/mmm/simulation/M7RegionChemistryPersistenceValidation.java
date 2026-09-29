@@ -51,7 +51,63 @@ public final class M7RegionChemistryPersistenceValidation {
 		validateChemicalFeatureLayout();
 		validateGranularFeatureLayout();
 		validateThermalProductionGate();
+		customViscosityRestoresFromCommittedBundle();
 		System.out.println("Region persistence passed: current chemistry, granular and thermal feature layouts");
+	}
+
+	private static void customViscosityRestoresFromCommittedBundle() throws Exception {
+		Path root = Files.createTempDirectory(Path.of("."), "custom-viscosity-restore-");
+		var production = FullCapabilityTestFixture.load();
+		var custom = FullCapabilityTestFixture.doubledWaterViscosity();
+		var definitions = new cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore.Definitions(
+				java.util.EnumSet.allOf(cc.ecisr.mmm.worldprofile.WorldCapability.class), custom,
+				production.chemical(), production.granular(), production.gas(), production.thermal());
+		var store = new cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore(root,
+				new cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore.QuarantineAdmission(64, 64L << 20));
+		var committed = store.openOrPublish(definitions).bundle();
+		FluidRegion source = populatedRegion(UUID.randomUUID());
+		bindDefaultMaterials(source);
+		FullCapabilityTestFixture.bindFull(source.domain(), new FullCapabilityTestFixture.Registries(
+				production.liquids(), production.chemical(), production.granular(), production.gas(),
+				production.thermal(), custom), 293.15, 4);
+		source.domain().setThermalTemperatureInCell(2, 1, 2, 353.15);
+		try {
+			new RegionRepositoryAdapter(root, committed.profile(), committed.chemical(), committed.granular(),
+					committed.thermal(), committed.gas(), 4, production.materials());
+			throw new AssertionError("repository accepted definitions from another world profile");
+		} catch (IllegalArgumentException expectedMismatch) {
+			check(expectedMismatch.getMessage().contains("world profile"), "unexpected repository rejection");
+		}
+		try {
+			new RegionRepositoryAdapter(root, TestProfiles.full(), production.chemical(), production.granular(),
+					production.thermal(), production.gas(), 4, production.materials()).checkpoint(source);
+			throw new AssertionError("checkpoint reinterpreted a domain with different material definitions");
+		} catch (java.io.IOException expectedMismatch) {
+			check(expectedMismatch.getMessage().contains("material definitions"), "unexpected checkpoint rejection");
+		}
+		var writer = new RegionRepositoryAdapter(root, committed.profile(), committed.chemical(), committed.granular(),
+				committed.thermal(), committed.gas(), 4, committed.material());
+		writer.checkpoint(source);
+		var drifted = store.openOrPublish(new cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore.Definitions(
+				definitions.capabilities(), production.materials(), production.chemical(), production.granular(),
+				production.gas(), production.thermal()));
+		check(drifted.definitionMismatch(), "changed datapack definitions must report drift");
+		var restoredBundle = drifted.bundle();
+		var reader = new RegionRepositoryAdapter(root, restoredBundle.profile(), restoredBundle.chemical(),
+				restoredBundle.granular(), restoredBundle.thermal(), restoredBundle.gas(), 4, restoredBundle.material());
+		FluidRegionManager manager = manager();
+		check(reader.loadMetadata(manager).isEmpty(), "custom viscosity checkpoint metadata was rejected");
+		FluidRegion restored = manager.regions().getFirst();
+		reader.restore(restored);
+		cc.ecisr.mmm.fluid.FluidDomainStateAssertions.assertSameDurableState(
+				source.domain().captureAuthoritativeState(), restored.domain().captureAuthoritativeState(),
+				"custom viscosity disk restore");
+		int cell = (2 * 4 + 1) * 6 + 2;
+		double actual = restored.domain().carrierViscosityPaPerS(cell);
+		double expected = custom.dynamicViscosityAt("mmm:water", 353.15);
+		check(Math.abs(actual - expected) <= expected * 1e-12
+				&& actual > 1.9 * production.materials().dynamicViscosityAt("mmm:water", 353.15),
+				"disk restore replaced committed viscosity with built-in definitions");
 	}
 
 	private static void validateThermalProductionGate() throws Exception {
@@ -63,11 +119,11 @@ public final class M7RegionChemistryPersistenceValidation {
 		source.domain().bindGasRegistry(gas);
 		source.domain().bindThermal(thermal, source.domain().materialRegistry(), 300.0);
 		source.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
-		RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.thermal(null, thermal), null, null, thermal, gas);
+		RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.thermal(null, thermal), null, null, thermal, gas, TestProfiles.materialRegistry());
 		check(persistence.checkpoint(source) == 1L, "production thermal checkpoint was not published");
 
 		FluidRegionManager manager = manager();
-		RegionRepositoryAdapter restoring = new RegionRepositoryAdapter(root, TestProfiles.thermal(null, thermal), null, null, thermal, gas);
+		RegionRepositoryAdapter restoring = new RegionRepositoryAdapter(root, TestProfiles.thermal(null, thermal), null, null, thermal, gas, TestProfiles.materialRegistry());
 		check(restoring.loadMetadata(manager).isEmpty(), "valid thermal metadata was locked");
 		FluidRegion admitted = manager.regions().getFirst(); restoring.restore(admitted);
 		check(admitted.solverLoaded() && admitted.domain().hasThermalState()
@@ -84,7 +140,7 @@ public final class M7RegionChemistryPersistenceValidation {
 				"over-budget committed metadata was not retained as PAUSED_BUDGET");
 
 		FluidRegionManager gateOff = manager();
-		List<String> gateIssues = new RegionRepositoryAdapter(root, TestProfiles.materials(), null, null, null, null).loadMetadata(gateOff);
+		List<String> gateIssues = new RegionRepositoryAdapter(root, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry()).loadMetadata(gateOff);
 		check(gateOff.regions().isEmpty() && gateIssues.stream().anyMatch(issue -> issue.contains("thermal")),
 				"thermal-off discovery did not preserve and lock thermal region state");
 
@@ -146,13 +202,13 @@ public final class M7RegionChemistryPersistenceValidation {
 		source.domain().bindGranular(granular, source.domain().materialRegistry(), TestProfiles.materialRegistry());
 		new RegionGenerationStore(gateRoot, chemistry, granular).publish(RegionCheckpointFixtures.captureGranular(source, 1L));
 		FluidRegionManager currentManager = manager();
-		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, TestProfiles.granular(chemistry, granular), chemistry, granular, null, null);
+		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, TestProfiles.granular(chemistry, granular), chemistry, granular, null, null, TestProfiles.materialRegistry());
 		check(current.loadMetadata(currentManager).isEmpty(), "current granular layout was locked");
 		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
 		check(restored.domain().hasChemistryState() && restored.domain().hasGranularState()
 				&& restored.domain().precipitationEnabled(), "current granular layout did not restore");
 		FluidRegionManager gateManager = manager();
-		List<String> issues = new RegionRepositoryAdapter(gateRoot, TestProfiles.materials(), null, null, null, null).loadMetadata(gateManager);
+		List<String> issues = new RegionRepositoryAdapter(gateRoot, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry()).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
 				"granular-off discovery did not preserve and lock granular region state");
 	}
@@ -165,12 +221,12 @@ public final class M7RegionChemistryPersistenceValidation {
 		chemical.domain().bindChemistry(chemistry);
 		new RegionGenerationStore(gateRoot, chemistry).publish(RegionCheckpointFixtures.captureChemical(chemical, 1L));
 		FluidRegionManager currentManager = manager();
-		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, TestProfiles.chemical(chemistry), chemistry, null, null, null);
+		RegionRepositoryAdapter current = new RegionRepositoryAdapter(gateRoot, TestProfiles.chemical(chemistry), chemistry, null, null, null, TestProfiles.materialRegistry());
 		check(current.loadMetadata(currentManager).isEmpty(), "current chemical layout was locked");
 		FluidRegion restored = currentManager.regions().getFirst(); current.restore(restored);
 		assertChemicalStateEquals(chemical.domain().exportChemicalParticleState(), restored.domain().exportChemicalParticleState());
 		FluidRegionManager gateManager = manager();
-		List<String> issues = new RegionRepositoryAdapter(gateRoot, TestProfiles.materials(), null, null, null, null).loadMetadata(gateManager);
+		List<String> issues = new RegionRepositoryAdapter(gateRoot, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry()).loadMetadata(gateManager);
 		check(gateManager.regions().isEmpty() && !issues.isEmpty(),
 				"chemistry-off discovery did not preserve and lock chemical region state");
 	}

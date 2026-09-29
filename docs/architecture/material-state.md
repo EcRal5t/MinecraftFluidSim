@@ -46,10 +46,10 @@ handle 只为了数组索引。checkpoint 保存 canonical material palette，�
 
 | 方式 | 声明温区外 | 用途 |
 |---|---|---|
-| 严格 `dynamicViscosityAt` | 抛 `IllegalArgumentException` | registry 校验、显式温度写入校验、测试断言 |
+| 严格 `dynamicViscosityAt` | 抛 `IllegalArgumentException` | registry 校验、测试断言 |
 | 延拓 `dynamicViscosityExtendingAt` | 取最近端点的声明值（常值延拓，不外推斜率） | 载体耦合，必须覆盖热学可达的全部温度 |
 
-延拓不在两个实测点之间发明数据，只保持边界值，因此不会产生负黏度。`minimumViscosityTemperatureK` / `maximumViscosityTemperatureK` 供诊断报告声明温区。
+域内沿声明段线性插值，域外保持最近端点的正黏度。两种求值都拒绝非有限温度和低于热学严格正温数值域的输入。`minimumViscosityTemperatureK` / `maximumViscosityTemperatureK` 供诊断报告声明温区。
 
 材料定义随后端交接一起走：`FluidDomainState` 保存不可变 `MaterialRegistry` 引用，`Layout` 保存其 fingerprint。有颗粒库存的交接必须携带定义，否则恢复后的候选会用别的物性求值。
 

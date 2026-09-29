@@ -148,21 +148,7 @@
 
 ## 阶段 1–2：物性统一与对流
 
-工作包 C01。当前 material registry 已按 `Pa·s` 保存分段 `mu(T)` 与有效温区，`MaterialRegistryCodec` 把它写进世界能力包；缺的是一份权威定义和它的动量扩散。
-
-### ~~1a 统一黏度来源~~（已于 2026-09-30 关闭）
-
-液体黏度只剩一份权威定义：world material registry 的分段 `mu(T)`。`GranularCarrier` 不再带 `dynamic_viscosity`，只声明颗粒阻力标定用的 Reynolds 上限。
-
-关闭时落地的内容：
-
-- `LiquidCarrierProperties` 按格派生「是否有液体、材料 handle、密度、温度、`mu(T)`、Reynolds 上限」，以载体结构 revision 与热学 carrier revision 为键，一格每 revision 只反演一次温度。活动颗粒阻力、Darcy 孔隙阻力与床面剪切读同一份派生值。
-- 温度走热学批量入口（一次建格、多格读取），不逐格遍历载体；湿格取不到温度直接停止候选，无热学布局用 `STANDARD_TEMPERATURE_K` 等温约定。
-- 越域沿最近端点常值延拓，按「格 × 属性构建批次」计数，经 `StepStats.carrierViscosity` 与 `/mmm status` 发布。
-- `FluidDomainState` 与 `Layout` 携带材料定义引用与指纹；运行时由 `bindGranular` 注入，冷恢复由世界能力包注入，两条路径同一身份。
-- 绑定校验前置：未知材料定义、缺粘度段、基础物性冲突、已绑定后定义变化全部拒绝且不留部分状态。
-
-验证：`materials,granular,region-state,lifecycle,thermal,thermal-extremes` 六门与 `verifyArchitecture` 通过。性能：`granular-active` mean 63.68 ms / p95 116.03 ms / 9.31 MiB per step；`granular` mean 78.40 ms / p95 154.47 ms / 13.99 MiB per step（同机、单进程、预热 20 + 采样 80）。本次没有改动前的同路径对照，因此这两个数字是基线记录，不构成优化声明。
+工作包 C01。液体黏度已统一为世界材料定义中的分段 `mu(T)`，现行契约见[材料状态](../architecture/material-state.md#黏度求值)和[颗粒载体属性](../architecture/granular-state.md#载体属性工作区)。后续实现连续液体动量扩散、分层与对流。
 
 ### 1b 有限体积黏性扩散
 

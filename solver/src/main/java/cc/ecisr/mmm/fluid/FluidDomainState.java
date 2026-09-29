@@ -102,14 +102,18 @@ public final class FluidDomainState {
 			throw new IllegalArgumentException("Granular state/registry identity mismatch");
 		}
 		this.materialDefinitions = materialDefinitions;
-		if (granular != null && materialDefinitions == null) {
-			throw new IllegalArgumentException("Granular handoff requires world material definitions");
+		if ((granular == null) != (materialDefinitions == null)) {
+			throw new IllegalArgumentException("Granular handoff/material definitions presence mismatch");
 		}
-		if (materialDefinitions != null && materials != null) {
-			for (cc.ecisr.mmm.fluid.FluidMaterial material : materials.materials()) {
-				if (!materialDefinitions.hasMaterial(material.id())) {
-					throw new IllegalArgumentException(
-							"Material definitions do not cover carrier liquid " + material.id());
+		if (materialDefinitions != null) {
+			List<FluidMaterial> palette = chemicals != null ? chemicals.materials().materials()
+					: materials != null ? materials.materials() : List.of();
+			if (palette.isEmpty()) throw new IllegalArgumentException("Granular handoff requires a liquid palette");
+			for (FluidMaterial material : palette) {
+				MaterialRegistry.MaterialEntry definition = materialDefinitions.entry(material.id());
+				if (!definition.material().equals(material) || !definition.declaresViscosity()
+						|| !granularRegistry.hasCarrier(material.id())) {
+					throw new IllegalArgumentException("Invalid granular liquid definition for " + material.id());
 				}
 			}
 		}
@@ -206,7 +210,8 @@ public final class FluidDomainState {
 	public CondensedPhasePressureField condensedPhasePressure() { return condensedPhasePressure; }
 
 	/** Immutable feature/registry identity which a backend step is not allowed to replace. */
-	public Layout layout() {		List<FluidMaterial> materials = switch (carrierKind) {
+	public Layout layout() {
+		List<FluidMaterial> materials = switch (carrierKind) {
 			case PURE -> List.of();
 			case MATERIAL -> this.materials.materials();
 			case CHEMICAL -> chemicals.materials().materials();

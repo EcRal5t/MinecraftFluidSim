@@ -6,7 +6,6 @@ import cc.ecisr.mmm.model.region.RegionStateLayout;
 
 import cc.ecisr.mmm.application.RegionCatalog;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
-import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.MaterialRegistry;
@@ -52,19 +51,11 @@ final class RegionRepositoryAdapter {
 
 	RegionRepositoryAdapter(
 			Path worldRoot, WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
-			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry
-	) {
-		this(worldRoot, profile, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry,
-				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-	}
-
-	RegionRepositoryAdapter(
-			Path worldRoot, WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
 			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry, GasRegistry gasRegistry,
-			int maximumThermalSubsteps
+			MaterialRegistry materialDefinitions
 	) {
 		this(worldRoot, profile, chemicalRegistry, granularRegistry, thermalRegistry, gasRegistry,
-				maximumThermalSubsteps, BuiltinFluidMaterials.createRegistry());
+				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS, materialDefinitions);
 	}
 
 	RegionRepositoryAdapter(
@@ -73,6 +64,11 @@ final class RegionRepositoryAdapter {
 			int maximumThermalSubsteps, MaterialRegistry materialDefinitions
 	) {
 		Objects.requireNonNull(profile, "profile");
+		Objects.requireNonNull(materialDefinitions, "materialDefinitions");
+		if (profile.hasCapability(WorldCapability.MATERIALS)
+				&& !profile.registryFingerprints().material().equals(materialDefinitions.fingerprint())) {
+			throw new IllegalArgumentException("Material definitions differ from the committed world profile");
+		}
 		requireRegistry(profile, WorldCapability.CHEMISTRY, chemicalRegistry);
 		requireRegistry(profile, WorldCapability.GRANULAR, granularRegistry);
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
@@ -485,6 +481,10 @@ final class RegionRepositoryAdapter {
 	private RegionState captureForFeatureGate(
 			FluidRegion region, long generation, boolean synchronizeGasTopology
 	) throws IOException {
+		if (region.domain().hasGranularState() && !region.domain().authoritativeLayout()
+				.materialDefinitionsFingerprint().equals(materialDefinitions.fingerprint())) {
+			throw new IOException("Region material definitions differ from the committed world bundle");
+		}
 		MinecraftRegionCheckpointSource source = new MinecraftRegionCheckpointSource(region);
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
 			if (thermalRegistry == null || gasRegistry == null) {
