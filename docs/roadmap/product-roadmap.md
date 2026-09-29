@@ -111,7 +111,7 @@
 
 ### 1a 统一黏度来源
 
-- `GranularCarrier` 仍自带 `dynamic_viscosity`，与 material registry 的分段 `mu(T)` 重复。删掉这份副本，让 `granular_carriers/*.json` 只绑定 liquid material 与 Reynolds 上限，颗粒阻力统一从 material state 取 `mu(T)`。
+- `GranularCarrier` 仍自带 `dynamic_viscosity`，与 material registry 的分段 `mu(T)` 重复：`granular_carriers/*.json` 各自保存一份数值，`GranularImplicitDrag`、`GranularBedShear` 与 `GranularMechanicalStage` 读的是这份副本，而 `MaterialRegistry.dynamicViscosityAt` 目前只有 registry 校验一处调用方。删掉副本，让 carrier 只绑定 liquid material 与 Reynolds 上限，颗粒阻力统一从 material state 取 `mu(T)`。
 - 该改动会改变世界能力包的 registry fingerprint 和载荷解释，属于本阶段的第一步，不与 solver 改动放在同一提交。
 - 完成条件：仓库内不再有第二份液体黏度真值；`materials`、`granular`、`region-state` 三个最近门通过。
 
@@ -140,7 +140,7 @@
 
 ## 阶段 4：gas 创造端口与气液 species 交换
 
-工作包 B08 与 C05。创造目录当前只有 `mmm:source/material/*`、`mmm:source/reagent/*`、`mmm:source/granular/*`，没有 gas 入口，因此玩家无法在不使用命令的前提下建立 sealed CO2 场景。registry 侧已冻结 `gas_liquid_pairs/co2_water.json`、`species/co2.json` 与 `thermal_species/water_co2.json`，缺的是入口和联合 candidate。
+工作包 B08 与 C05。创造目录当前只有 `mmm:source/material/*`、`mmm:source/reagent/*`、`mmm:source/granular/*`，`CreativeSourceCatalog.resolve` 对其它前缀直接拒绝，因此玩家无法在不使用命令的前提下建立 sealed CO2 场景。registry 侧已冻结 `gas_liquid_pairs/co2_water.json`（含 stable mapping、Henry 分段与膜传质定义）、`species/co2.json` 与 `thermal_species/water_co2.json`；`GasLiquidSpeciesPair` 目前只有 codec 与校验的消费者，solver 里没有任何溶解/脱气 stage，缺的是入口和联合 candidate。
 
 ### 4a gas 创造端口
 
