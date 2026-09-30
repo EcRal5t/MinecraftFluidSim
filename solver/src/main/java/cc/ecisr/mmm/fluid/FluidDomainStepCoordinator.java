@@ -61,10 +61,12 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		float dt = config.timeStep() / substeps;
 		int granularParcelCountBeforeAdvection = precipitationEnabled ? captureReactiveGranularCells() : 0;
 		int pressureIterations = 0;
+		ViscousStepStats viscosity = ViscousStepStats.INACTIVE;
 		for (int substep = 0; substep < substeps; substep++) {
 			MechanicalStepPipeline.SubstepOutcome outcome = mechanicalPipeline.substep(
 					dt, substep, captureMechanicalAudit, mechanicalAudit);
 			pressureIterations += outcome.pressureIterations();
+			viscosity = viscosity.plus(outcome.viscosity());
 			if (outcome.granularMechanics() != null) {
 				lastGranularBoundaryImpulseX += outcome.granularMechanics().boundaryImpulseX();
 				lastGranularBoundaryImpulseY += outcome.granularMechanics().boundaryImpulseY();
@@ -103,7 +105,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 						finalParticleKineticEnergy, gravitationalPotentialEnergyJoules(),
 						(thermalState == null ? SignedDyadic.ZERO : thermalState.auditLedger().mechanicalWork())
 								.subtract(thermalMechanicalWorkBefore)) : MechanicalStepAudit.notCaptured(),
-				thermalAxis, lastGranularDepositStats, carrierPropertiesWorkspace.finishStep()
+				thermalAxis, lastGranularDepositStats, carrierPropertiesWorkspace.finishStep(), viscosity
 		);
 	}
 

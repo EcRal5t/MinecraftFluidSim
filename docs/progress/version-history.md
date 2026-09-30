@@ -79,3 +79,13 @@
 C01 的 1a 将颗粒阻力、Darcy 孔隙阻力和床面剪切统一到世界材料定义的 `mu(T)`，移除 granular carrier 的黏度字段。后端交接携带材料定义，冷恢复从已提交世界能力包取得定义。审查补齐平流后的属性失效、无颗粒湿格、逐步越域诊断、自定义物性恢复及存档前身份校验。
 
 验证通过 `materials,granular,region-state,lifecycle,thermal,thermal-extremes` 与 `verifyArchitecture`。审查后 `granular-active` 单进程预热 20 步、采样 80 步，平均 57.31 ms、p95 100.60 ms、9.03 MiB/步；无受控的改前对照，不作为性能提升证据。
+
+## 2026-10-01：有限体积液体黏性扩散
+
+C01 的 1b 在外力与固定面处理后、压力投影前加入 Newtonian 对称应变应力。法向与交叉剪切行共享实际 cut aperture、液体控制体容量和按格 `mu(T)`；显式谱界由当前装配矩阵的正行和向外舍入计算，子步超限沿私有候选细化，预算耗尽拒绝。固定壁面显式选择 free-slip/no-slip；sealed gas 保持自由面零切向 traction。
+
+液体物性绑定独立于颗粒能力，完整后端交接与材料、化学、颗粒和热学冷恢复使用同一材料定义。`ViscousWallCondition` 进入求解配置的 NBT 与 manifest checksum。诊断单列黏性控制体耗散、固定壁面冲量、谱界及 float 写回舍入冲量；阶段动能审计增加黏性工作项。
+
+解析剪切层相对 RMS 误差由 `4.45e-4` 降至 `1.11e-4`；二维耦合解析场由 `2.45e-3` 降至 `6.14e-4`，均随网格加密一倍约缩小四倍。黏性发热回填与 moving-body 黏性反冲尚未接入；当前固定壁面与压力 owner 自由面使用已记录的网格近似。
+
+最终验证：`runCpuValidation '-PcpuValidation=free-surface,cut-cell,materials,granular,region-state,lifecycle,thermal,thermal-extremes' verifyArchitecture` 全部通过，8 组 CPU 校验用时 25.248 s，架构检查扫描 459 个生产源文件。包含实际封闭气腔的自由面条件、自定义材料定义的纯材料冷恢复、恢复操作的绑定身份保护，以及高黏度私有候选细化和预算拒绝。

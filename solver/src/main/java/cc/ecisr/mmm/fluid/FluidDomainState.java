@@ -29,9 +29,8 @@ public final class FluidDomainState {
 	private final FlipChemicalParticleState chemicals;
 	private final ChemicalRegistry chemicalRegistry;
 	/**
-	 * World material properties. Granular drag evaluates dynamic viscosity from the cell liquid
-	 * temperature, so a handoff carrying granular inventory must carry the same definitions the
-	 * private candidate is allowed to evaluate against.
+	 * World material properties used by liquid stress and granular drag at the shared cell temperature.
+	 * The private candidate must evaluate against the same immutable definitions.
 	 */
 	private final MaterialRegistry materialDefinitions;
 	private final int[] chemicalDirtyCells;
@@ -102,18 +101,18 @@ public final class FluidDomainState {
 			throw new IllegalArgumentException("Granular state/registry identity mismatch");
 		}
 		this.materialDefinitions = materialDefinitions;
-		if ((granular == null) != (materialDefinitions == null)) {
+		if (granular != null && materialDefinitions == null) {
 			throw new IllegalArgumentException("Granular handoff/material definitions presence mismatch");
 		}
 		if (materialDefinitions != null) {
 			List<FluidMaterial> palette = chemicals != null ? chemicals.materials().materials()
 					: materials != null ? materials.materials() : List.of();
-			if (palette.isEmpty()) throw new IllegalArgumentException("Granular handoff requires a liquid palette");
+			if (palette.isEmpty()) throw new IllegalArgumentException("Material definitions require a liquid palette");
 			for (FluidMaterial material : palette) {
 				MaterialRegistry.MaterialEntry definition = materialDefinitions.entry(material.id());
 				if (!definition.material().equals(material) || !definition.declaresViscosity()
-						|| !granularRegistry.hasCarrier(material.id())) {
-					throw new IllegalArgumentException("Invalid granular liquid definition for " + material.id());
+						|| granularRegistry != null && !granularRegistry.hasCarrier(material.id())) {
+					throw new IllegalArgumentException("Invalid liquid definition for " + material.id());
 				}
 			}
 		}
@@ -193,7 +192,7 @@ public final class FluidDomainState {
 	public int chemicalReactionCursor() { return chemicalReactionCursor; }
 	public GranularRegistry granularRegistry() { return granularRegistry; }
 
-	/** World material definitions this handoff was captured against; null only without granular inventory. */
+	/** World material definitions this handoff was captured against; null for explicitly inviscid test domains. */
 	public MaterialRegistry materialDefinitions() { return materialDefinitions; }
 	public GranularStateSnapshot granular() { return granular; }
 	public GranularDepositDynamics.State granularDynamics() { return granularDynamics; }

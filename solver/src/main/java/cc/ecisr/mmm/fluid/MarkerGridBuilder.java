@@ -23,9 +23,9 @@ final class MarkerGridBuilder {
 		Arrays.fill(grid.cellDensity, domain.config.density());
 		Arrays.fill(grid.cellPhaseHead, -1);
 		grid.phaseEntryCount = 0;
-		if (domain.granularCarrierMaterialByCell != null) {
-			Arrays.fill(domain.granularCarrierMaterialByCell, -1);
-			Arrays.fill(domain.granularCarrierVolumeByCell, -1.0);
+		if (domain.liquidCarrierMaterialByCell != null) {
+			Arrays.fill(domain.liquidCarrierMaterialByCell, -1);
+			Arrays.fill(domain.liquidCarrierVolumeByCell, -1.0);
 		}
 		for (int i = 0; i < domain.particles.count(); i++) {
 			float positionX = domain.particles.positionX(i);
@@ -45,12 +45,12 @@ final class MarkerGridBuilder {
 			grid.exactCellMarkerVolume[particleCell] += particleVolume;
 			grid.exactCellMarkerMass[particleCell] += particleMass;
 			grid.addCellPhaseVolume(particleCell, domain.particles.phaseLabel(i), particleVolume);
-			if (domain.granularCarrierMaterialByCell != null
-					&& (particleVolume > domain.granularCarrierVolumeByCell[particleCell]
-					|| particleVolume == domain.granularCarrierVolumeByCell[particleCell]
-					&& materialHandle < domain.granularCarrierMaterialByCell[particleCell])) {
-				domain.granularCarrierVolumeByCell[particleCell] = particleVolume;
-				domain.granularCarrierMaterialByCell[particleCell] = materialHandle;
+			if (domain.liquidCarrierMaterialByCell != null
+					&& (particleVolume > domain.liquidCarrierVolumeByCell[particleCell]
+					|| particleVolume == domain.liquidCarrierVolumeByCell[particleCell]
+					&& materialHandle < domain.liquidCarrierMaterialByCell[particleCell])) {
+				domain.liquidCarrierVolumeByCell[particleCell] = particleVolume;
+				domain.liquidCarrierMaterialByCell[particleCell] = materialHandle;
 			}
 			domain.freeSurfaceGeometry.addExactVolume(particleCell, particleVolume);
 			domain.splatCenter(positionX, positionY, positionZ, particleVolume);

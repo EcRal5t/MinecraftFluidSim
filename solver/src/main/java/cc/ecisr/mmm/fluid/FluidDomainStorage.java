@@ -69,7 +69,7 @@ abstract class FluidDomainStorage {
 	long carrierMutationRevision;
 	final CarrierMutationCoordinator coordinator;
 	FluidMaterialRegistry materialRegistry;
-	/** World material properties (temperature-dependent viscosity and pair tensions); bound with granular state. */
+	/** World material properties (temperature-dependent viscosity and pair tensions); bound independently of granular state. */
 	MaterialRegistry materialDefinitions;
 	/** Derived per-cell carrier properties, rebuilt per carrier/thermal revision. */
 	final LiquidCarrierProperties carrierPropertiesWorkspace;
@@ -97,8 +97,8 @@ abstract class FluidDomainStorage {
 	GranularCouplingFields granularNextCoupling;
 	GranularCouplingFields pressureGranularCoupling;
 	FlipGranularCollision granularCollision;
-	int[] granularCarrierMaterialByCell;
-	double[] granularCarrierVolumeByCell;
+	int[] liquidCarrierMaterialByCell;
+	double[] liquidCarrierVolumeByCell;
 	boolean gridDirty = true;
 	int pressureAnchor = -1;
 	float pressureReference;

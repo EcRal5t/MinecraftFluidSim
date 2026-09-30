@@ -47,6 +47,7 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 			double gravityWorkJoules,
 			double thermalBuoyancyWorkJoules,
 			double surfaceTensionWorkJoules,
+			double viscousWorkJoules,
 			double fixedBoundaryWorkJoules,
 			double pressureProjectionWorkJoules,
 			double gridToParticleTransferJoules,
@@ -59,7 +60,7 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 		static MechanicalStepAudit notCaptured() {
 			return new MechanicalStepAudit(false, 0.0, 0.0, 0.0, 0.0,
 					0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-					0.0, 0.0, 0.0, 0.0, SignedDyadic.ZERO, 0.0);
+					0.0, 0.0, 0.0, 0.0, 0.0, SignedDyadic.ZERO, 0.0);
 		}
 	}
 	record MaterialInventory(double volume, double mass, double centerY) { }
@@ -78,6 +79,21 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 		}
 
 		public boolean extrapolated() { return extrapolatedCells > 0; }
+	}
+
+	/** Liquid momentum supplied by fixed walls; dissipation uses the viscous control-volume metric. */
+	public record ViscousStepStats(int stressRows, double spectralBoundPerSecond,
+			double boundaryImpulseX, double boundaryImpulseY, double boundaryImpulseZ, double dissipatedJoules,
+			double roundoffImpulseX, double roundoffImpulseY, double roundoffImpulseZ) {
+		static final ViscousStepStats INACTIVE = new ViscousStepStats(0, 0, 0, 0, 0, 0, 0, 0, 0);
+		ViscousStepStats plus(ViscousStepStats other) {
+			return new ViscousStepStats(Math.addExact(stressRows, other.stressRows),
+					Math.max(spectralBoundPerSecond, other.spectralBoundPerSecond),
+					boundaryImpulseX + other.boundaryImpulseX, boundaryImpulseY + other.boundaryImpulseY,
+					boundaryImpulseZ + other.boundaryImpulseZ, dissipatedJoules + other.dissipatedJoules,
+					roundoffImpulseX + other.roundoffImpulseX, roundoffImpulseY + other.roundoffImpulseY,
+					roundoffImpulseZ + other.roundoffImpulseZ);
+		}
 	}
 
 	public record StepStats(
@@ -103,12 +119,14 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 			MechanicalStepAudit mechanicalAudit,
 			FluidDomain.ThermalAxisStats thermalAxis,
 			GranularDepositDynamics.Stats granularTransition,
-			CarrierViscosityStats carrierViscosity
+			CarrierViscosityStats carrierViscosity,
+			ViscousStepStats viscosity
 	) {
 		public StepStats {
 			java.util.Objects.requireNonNull(thermalAxis, "thermalAxis");
 			java.util.Objects.requireNonNull(granularTransition, "granularTransition");
 			java.util.Objects.requireNonNull(carrierViscosity, "carrierViscosity");
+			java.util.Objects.requireNonNull(viscosity, "viscosity");
 		}
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
 		public double relativeMassError() { return massBefore == 0.0 ? 0.0 : Math.abs(massAfter - massBefore) / massBefore; }

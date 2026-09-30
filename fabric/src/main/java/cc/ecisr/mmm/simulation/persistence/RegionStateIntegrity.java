@@ -141,6 +141,7 @@ final class RegionStateIntegrity {
 		out.writeInt(Float.floatToRawIntBits(config.maxCourantNumber()));
 		out.writeInt(Float.floatToRawIntBits(config.fluidEpsilon()));
 		out.writeInt(Float.floatToRawIntBits(config.interfaceCompression()));
+		out.writeUTF(config.viscousWallCondition().name());
 	}
 
 	private static void writeRuntime(DataOutputStream out, RegionRuntimeIntent runtime) throws IOException {

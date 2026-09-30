@@ -9,7 +9,7 @@ import java.util.Arrays;
 /**
  * Composes one mechanical substep from the explicit solver stages in the established order:
  * gas topology step, particle-to-grid rebuild, granular mechanics, porous damping, gravity,
- * thermal buoyancy, surface tension, solid-face enforcement, pressure solve, the pending
+ * thermal buoyancy, surface tension, solid-face enforcement, viscous stress, pressure solve, the pending
  * phase-geometry synchronization, velocity projection, grid-to-particle handoff, advection
  * and collision commit. The pipeline returns only typed stats and the pending-geometry
  * completion flag; thermal/chemistry/reseed axes stay outside.
@@ -35,12 +35,13 @@ final class MechanicalStepPipeline {
 	private final GranularMechanicalStage granularMechanicalStage;
 	private final BodyForceStage bodyForceStage;
 	private final PressureProjectionStage pressureStage;
+	private final LiquidViscosityStage viscosityStage;
 	private final GridToParticleStage gridToParticleStage;
 	private final ParticleAdvectionStage particleAdvectionStage;
 
 	MechanicalStepPipeline(
 			Workspace state, Access access, GranularMechanicalStage granularMechanicalStage,
-			BodyForceStage bodyForceStage, PressureProjectionStage pressureStage,
+			BodyForceStage bodyForceStage, PressureProjectionStage pressureStage, LiquidViscosityStage viscosityStage,
 			GridToParticleStage gridToParticleStage, ParticleAdvectionStage particleAdvectionStage
 	) {
 		this.state = state;
@@ -48,12 +49,13 @@ final class MechanicalStepPipeline {
 		this.granularMechanicalStage = granularMechanicalStage;
 		this.bodyForceStage = bodyForceStage;
 		this.pressureStage = pressureStage;
+		this.viscosityStage = viscosityStage;
 		this.gridToParticleStage = gridToParticleStage;
 		this.particleAdvectionStage = particleAdvectionStage;
 	}
 
 	record SubstepOutcome(int pressureIterations, GranularMechanics.StepStats granularMechanics,
-	                      boolean pendingWorkConsumed) { }
+	                      boolean pendingWorkConsumed, FluidDomain.ViscousStepStats viscosity) { }
 
 	SubstepOutcome substep(float dt, int substep, boolean captureAudit, MechanicalAuditAccumulator audit) {
 		access.ensureGrid();
@@ -113,6 +115,12 @@ final class MechanicalStepPipeline {
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
+		FluidDomain.ViscousStepStats viscosity = viscosityStage.apply(dt);
+		if (captureAudit) {
+			nextKineticEnergy = access.gridKineticEnergyJoules();
+			audit.viscousWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
+		}
 		gridToParticleStage.capturePreProjectionEnergy();
 		pressureStage.solve(dt);
 		int pressureIterations = access.lastPressureIterations();
@@ -145,7 +153,7 @@ final class MechanicalStepPipeline {
 		if (captureAudit) audit.particleCollisionWorkJoules +=
 				access.particleKineticEnergyJoules() - particleKineticEnergy;
 		granularMechanicalStage.commitCollision();
-		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending);
+		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending, viscosity);
 	}
 
 	/** Pressure can accelerate a resting liquid beyond the initial marker-based step estimate. */

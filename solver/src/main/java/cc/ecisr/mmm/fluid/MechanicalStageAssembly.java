@@ -52,7 +52,7 @@ final class MechanicalStageAssembly {
 				new MechanicalStepPipeline.Workspace(
 						domain.gasTopologyCoordinator, domain.mac, domain.pendingPhaseCellVolume,
 						domain.config),
-				pipelineAccess(domain), granular, bodyForce, pressure, gridToParticle, advection);
+				pipelineAccess(domain), granular, bodyForce, pressure, new LiquidViscosityStage(domain), gridToParticle, advection);
 		return new Stages(pressure, granular, bodyForce, gridToParticle, advection, particleToGrid, pipeline);
 	}
 
@@ -200,7 +200,7 @@ final class MechanicalStageAssembly {
 		return new MechanicalStepPipeline.Access() {
 			@Override public void ensureGrid() { domain.ensureGrid(); }
 			@Override public void prepareCarrierProperties() {
-				if (domain.granularState == null) return;
+				if (domain.materialDefinitions == null) return;
 				domain.carrierPropertiesWorkspace.invalidate();
 				domain.derivedCarrierState();
 			}

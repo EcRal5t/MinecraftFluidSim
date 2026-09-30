@@ -47,7 +47,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	/** Viscosity extrapolation summary from the last successful mechanical step. */
 	public FluidDomain.CarrierViscosityStats carrierViscosityStats() { return carrierPropertiesWorkspace.stats(); }
 
-	/** Derived liquid carrier dynamic viscosity in one cell, in Pa·s; null when the cell holds no liquid. */
+	/** Derived liquid carrier dynamic viscosity in one cell, in Pa路s; null when the cell holds no liquid. */
 	public Double carrierViscosityPaPerS(int cell) {
 		LiquidCarrierProperties properties = derivedCarrierState();
 		return properties.hasLiquid(cell) ? properties.viscosityPaPerS(cell) : null;
@@ -385,27 +385,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 			}
 			liquidRegistry = materialRegistry;
 		}
-		if (granularState != null && (this.materialDefinitions == null
-				|| !this.materialDefinitions.fingerprint().equals(materialDefinitions.fingerprint()))) {
-			throw new IllegalArgumentException("A domain cannot change its world material definitions");
-		}
-		for (FluidMaterial material : liquidRegistry.materials()) {
-			MaterialRegistry.MaterialEntry definition;
-			try {
-				definition = materialDefinitions.entry(material.id());
-			} catch (IllegalArgumentException unknown) {
-				throw new IllegalArgumentException("Granular carrier liquid " + material.id()
-						+ " has no world material definition", unknown);
-			}
-			if (!definition.declaresViscosity()) {
-				throw new IllegalArgumentException("Granular carrier liquid " + material.id()
-						+ " does not declare a dynamic viscosity domain");
-			}
-			if (!definition.material().equals(material)) {
-				throw new IllegalArgumentException("Granular carrier liquid " + material.id()
-						+ " disagrees with its world material definition");
-			}
-		}
+		LiquidMaterialBinding.validate(domain(), liquidRegistry, materialDefinitions);
 		if (granularState != null) {
 			if (!granularState.registry.fingerprint().equals(registry.fingerprint())) {
 				throw new IllegalArgumentException("A domain cannot change its granular registry");
@@ -429,10 +409,8 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		granularNextCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
 		granularCollision = new FlipGranularCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.cutCells, granularState.deposits,
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
-		granularCarrierMaterialByCell = new int[cellCount];
-		granularCarrierVolumeByCell = new double[cellCount];
+		LiquidMaterialBinding.bind(domain(), materialDefinitions);
 		granularReactivePreviousCells = new int[GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION];
-		this.materialDefinitions = materialDefinitions;
 		bindSolidCompositionPoolIfReady();
 		gridDirty = true;
 	}

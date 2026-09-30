@@ -49,6 +49,11 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 
 	/** Replaces this domain from one validated, immutable in-memory marker state. */
 	public void restoreParticleState(FlipParticleState state) {
+		if (materialDefinitions != null) throw new IllegalStateException("Pure restore cannot remove bound liquid material identity");
+		restoreParticleColumns(state);
+	}
+
+	private void restoreParticleColumns(FlipParticleState state) {
 		if (state == null) throw new IllegalArgumentException("Particle state must not be null");
 		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize());
 		int restoredCount = state.particleCount();
@@ -93,12 +98,13 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 			throw new IllegalArgumentException("Material particle state exceeds domain marker budget");
 		}
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(state.materials());
+		if (materialDefinitions != null) LiquidMaterialBinding.validate(domain(), registry, materialDefinitions);
 		double defaultDensity = registry.material(0).referenceDensity();
 		double tolerance = Math.max(1.0E-9, Math.abs(config.density()) * 1.0E-12);
 		if (Math.abs(defaultDensity - config.density()) > tolerance) {
 			throw new IllegalArgumentException("Material handle 0 must match the domain default density");
 		}
-		restoreParticleState(state.particles());
+		restoreParticleColumns(state.particles());
 		double[] restoredMass = state.particleMass();
 		int[] restoredMaterial = state.materialPaletteIndex();
 		for (int particle = 0; particle < particles.count(); particle++) {

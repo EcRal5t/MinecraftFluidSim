@@ -144,7 +144,10 @@ public final class CommittedWorldRegistries {
 	}
 
 	void bindConfiguredState(FluidDomain domain, int maximumThermalSubstepsPerStep) {
-		if (hasCapability(WorldCapability.MATERIALS)) FluidRegionFactory.bindDefaultMaterialState(domain);
+		if (hasCapability(WorldCapability.MATERIALS)) {
+			FluidRegionFactory.bindDefaultMaterialState(domain);
+			domain.bindMaterialDefinitions(materialRegistry());
+		}
 		if (hasCapability(WorldCapability.CHEMISTRY) && !domain.hasChemistryState()) {
 			domain.bindChemistry(chemicalRegistry());
 		}

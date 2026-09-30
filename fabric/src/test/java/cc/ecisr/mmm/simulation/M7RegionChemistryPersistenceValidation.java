@@ -52,6 +52,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		validateGranularFeatureLayout();
 		validateThermalProductionGate();
 		customViscosityRestoresFromCommittedBundle();
+		materialOnlyViscosityRestores();
 		System.out.println("Region persistence passed: current chemistry, granular and thermal feature layouts");
 	}
 
@@ -65,12 +66,16 @@ public final class M7RegionChemistryPersistenceValidation {
 		var store = new cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore(root,
 				new cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore.QuarantineAdmission(64, 64L << 20));
 		var committed = store.openOrPublish(definitions).bundle();
-		FluidRegion source = populatedRegion(UUID.randomUUID());
+		FluidSolverConfig noSlip = new FluidSolverConfig(CONFIG.cellSize(), CONFIG.density(), CONFIG.gravity(),
+				CONFIG.timeStep(), CONFIG.maxPressureIterations(), CONFIG.pressureTolerance(), CONFIG.maxCourantNumber(),
+				CONFIG.fluidEpsilon(), CONFIG.interfaceCompression(), FluidSolverConfig.WallCondition.NO_SLIP);
+		FluidRegion source = populatedRegion(UUID.randomUUID(), noSlip);
 		bindDefaultMaterials(source);
 		FullCapabilityTestFixture.bindFull(source.domain(), new FullCapabilityTestFixture.Registries(
 				production.liquids(), production.chemical(), production.granular(), production.gas(),
 				production.thermal(), custom), 293.15, 4);
 		source.domain().setThermalTemperatureInCell(2, 1, 2, 353.15);
+
 		try {
 			new RegionRepositoryAdapter(root, committed.profile(), committed.chemical(), committed.granular(),
 					committed.thermal(), committed.gas(), 4, production.materials());
@@ -99,6 +104,8 @@ public final class M7RegionChemistryPersistenceValidation {
 		check(reader.loadMetadata(manager).isEmpty(), "custom viscosity checkpoint metadata was rejected");
 		FluidRegion restored = manager.regions().getFirst();
 		reader.restore(restored);
+		check(restored.domain().config().viscousWallCondition() == FluidSolverConfig.WallCondition.NO_SLIP,
+				"disk restore lost explicit no-slip boundary definition");
 		cc.ecisr.mmm.fluid.FluidDomainStateAssertions.assertSameDurableState(
 				source.domain().captureAuthoritativeState(), restored.domain().captureAuthoritativeState(),
 				"custom viscosity disk restore");
@@ -108,6 +115,30 @@ public final class M7RegionChemistryPersistenceValidation {
 		check(Math.abs(actual - expected) <= expected * 1e-12
 				&& actual > 1.9 * production.materials().dynamicViscosityAt("mmm:water", 353.15),
 				"disk restore replaced committed viscosity with built-in definitions");
+	}
+
+	/** The reduced material layout also binds constitutive data without granular inventory. */
+	private static void materialOnlyViscosityRestores() throws Exception {
+		Path root = Files.createTempDirectory(Path.of("."), "material-viscosity-restore-");
+		var custom = FullCapabilityTestFixture.doubledWaterViscosity();
+		var profile = cc.ecisr.mmm.worldprofile.WorldCapabilityProfile.of(
+				java.util.EnumSet.of(cc.ecisr.mmm.worldprofile.WorldCapability.MATERIALS),
+				new cc.ecisr.mmm.worldprofile.RegistryFingerprintSet(custom.fingerprint(), "", "", "", ""));
+		FluidRegion source = populatedRegion(UUID.randomUUID());
+		bindDefaultMaterials(source);
+		source.domain().bindMaterialDefinitions(custom);
+		var repository = new RegionRepositoryAdapter(root, profile, null, null, null, null, custom);
+		repository.checkpoint(source);
+		var manager = manager();
+		check(repository.loadMetadata(manager).isEmpty(), "material-only viscosity metadata was rejected");
+		var restored = manager.regions().getFirst(); repository.restore(restored);
+		cc.ecisr.mmm.fluid.FluidDomainStateAssertions.assertSameDurableState(
+				source.domain().captureAuthoritativeState(), restored.domain().captureAuthoritativeState(),
+				"material-only viscosity disk restore");
+		check(!restored.domain().hasGranularState()
+				&& restored.domain().carrierViscosityPaPerS((2 * 4 + 1) * 6 + 2)
+				== custom.dynamicViscosityAt("mmm:water", 293.15),
+				"material-only restore lost custom constitutive data");
 	}
 
 	private static void validateThermalProductionGate() throws Exception {
@@ -235,9 +266,11 @@ public final class M7RegionChemistryPersistenceValidation {
 		return new FluidRegionManager(new RegionCatalog.Limits(4, 10_000L, 100_000L, 40_000L, 400_000L));
 	}
 
-	private static FluidRegion populatedRegion(UUID id) {
+	private static FluidRegion populatedRegion(UUID id) { return populatedRegion(id, CONFIG); }
+
+	private static FluidRegion populatedRegion(UUID id, FluidSolverConfig config) {
 		BlockPos origin = new BlockPos(15, 16, 15);
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, config, 512);
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);

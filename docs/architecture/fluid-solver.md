@@ -67,7 +67,7 @@
 
 `FluidDomainState` 包含一种液体载体布局（pure/material/chemical），以及对应注册表、颗粒、气体、热学、待同步相变几何、求解配置和预算。
 
-颗粒阻力按格温度求液体 `mu(T)`，所以**携带颗粒库存的交接必须同时携带 world `MaterialRegistry`**：`FluidDomainState` 保存该不可变引用，`Layout` 保存其 fingerprint。缺定义或定义不覆盖载体液体时构造直接拒绝。运行时那一侧由 `bindGranular` 注入，冷恢复从已提交世界能力包取得；两条路径给出同一 fingerprint 身份。
+液体黏性应力和颗粒阻力共同读取按格温度派生的 `mu(T)`。`bindMaterialDefinitions` 独立于颗粒能力绑定 world `MaterialRegistry`；`bindGranular` 复用同一校验与绑定。`FluidDomainState` 携带不可变定义，`Layout` 包含其 fingerprint；纯材料、化学、颗粒和热学区域冷恢复均从已提交世界能力包绑定。缺黏度段、基础物性冲突、重绑定不同定义均在修改域之前拒绝。未绑定定义的独立数值测试域维持无黏度模型。
 
 交给下一次计算的输入还包含三类临时数据：化学与颗粒调度进度、世界热交换面、最近一次真实压力投影。它们随计算状态交接。区域 checkpoint 保存的字段另有定义，见 [区域存档](region-state.md)。丢失热交换面会漏掉实际热通量；反复重置颗粒调度进度会使沉积永远无法休眠。
 
@@ -93,7 +93,7 @@ CPU 在私有对象上顺序执行计算，任一阶段失败就丢弃整份候�
 - 每个 marker 的 raw float `particleVolume` 是液体体积原始数据，物理总量是这些二进制有理数的精确和；逐格 marker sum 只由该原始数据正向汇总。顺序相关的 float/double reduction 只能作带解析舍入界的诊断，不能替代 exact ledger。
 - `volume[]` 是 PIC 平滑、展示和既有表面几何的派生场，不参与库存或 pressure phase 结算；pressure 使用独立的守恒 marker footprint。
 - P2G/G2P 使用共享的 valid face；均匀密度时 face 分子/分母按 marker 体积散射，变密度时按 marker 质量散射，并在归一化前保留同一份 P2G face weight 供动能度量。MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。三轴 face splat 直接写入固定 SoA，不为每个 marker/axis 创建 callback；上一 logical step 末已完整发布且 `gridDirty == false` 的派生网格可供下一步首个 substep 直接使用，particle advection 与任何 carrier edit 都会重新置 dirty，后续 substep 不能跳过重建。
-- G2P 不使用固定 FLIP/PIC 比例。对全体 marker 写成 `v(alpha) = v_pic + alpha * (v_old - v_p2g)`，解析选择 `[0,1]` 内不超过 `max(E_pic, E_projected_grid)` 的最大 `alpha`；纯 FLIP 能量可接受时严格取 `1`，否则才退到能量可行边界。这是传递算子的全局能量约束，不是逐粒子速度钳制，也不冒充黏性。registry 已保存材料黏度，但当前连续液体动量方程还没有黏性扩散 stage。
+- G2P 不使用固定 FLIP/PIC 比例。对全体 marker 写成 `v(alpha) = v_pic + alpha * (v_old - v_p2g)`，解析选择 `[0,1]` 内不超过 `max(E_pic, E_projected_grid)` 的最大 `alpha`；纯 FLIP 能量可接受时严格取 `1`，否则才退到能量可行边界。这是传递算子的全局能量约束，不是逐粒子速度钳制，也不冒充黏性。连续液体的 Newtonian 黏性应力由独立的 `LiquidViscosityStage` 推进。
 - reseed 以标准 `2×2×2` marker quadrature 的单 marker 体积决定逐格目标数；split 保持体积、质量、动量和质心，merge 还要求两个 raw float 体积之和可由一个 float 精确表示，否则保留 residual marker 并报告 conservation refusal；不跨 material 或 phase。GPU 的相同判定必须以禁止代数重排的精确求值执行。
 
 ### 内存布局
@@ -109,6 +109,28 @@ CPU 在私有对象上顺序执行计算，任一阶段失败就丢弃整份候�
 
 marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新增、拆分、合并、相变或删除 marker 时，调用方必须在一次提交中更新全部已绑定 side column；只移动基础 marker 而留下化学或能量 ordinal 属于结构损坏。
 
+### 液体黏性应力
+
+`LiquidViscosityStage` 在外力和固定面法向速度处理之后、压力投影之前执行。`ViscousMacDiscretization` 沿用压力液体 owner 与开放面；参与单元同时须持有液体 marker。单元液体控制体为 marker 体积与当前可用体积的较小者，密度取真实质量/体积；每个开放 MAC 面由相邻参与单元各贡献半份 `rho*V`，换算到 kg。薄于压力分类分辨率的独立液滴继续由粒子输运，尚无连续黏性控制体。
+
+离散使用单元法向应变和网格边上的剪切应变。法向行保留 `2*mu`，剪切行同时含 `du_a/dx_b + du_b/dx_a`，相邻四格黏度使用两次调和平均；开放剪切面积取四个支撑压力面的共同最小开口。每行形成非负的 `w*b*b^T`，同轴内部成对冲量用相反系数写入。
+
+```text
+M du/dt = -K u
+M_ii = rho_i V_i
+K = sum_rows w b b^T
+L = max_i [ sum_rows w |b_i| sum_active_j |b_j| / M_ii ]
+dt <= 2/L
+```
+
+`M^-1 K` 与对称半正定矩阵相似，`L` 是由已装配应力行计算的谱上界。Forward Euler 在负实轴上的稳定区为 `[-2,0]`；均匀标量扩散退化为 `dt <= C/sum(G)`。小切割体积直接进入容量，零开口没有通量。非正容量、无效物性、非有限 conductance 或谱界立即拒绝候选；有效但过大的步长通过现有私有候选重试机制细化，超过累计 4096 个子步预算即暂停。每子步重建，包含平流、占据率和温度变化。
+
+接触气体的剪切支撑采用零 traction，sealed gas 与 ambient gas 相同。固定壁面保持法向不可穿透；`FluidSolverConfig.viscousWallCondition` 显式选择 `FREE_SLIP`（默认）或 `NO_SLIP`。后者按 cut-cell 所属固壁面积向两个切向速度面分配静止壁面阻力，使用随液体体积缩小的等效半格距离。这是当前 micro-mask 几何下的集总壁面近似；尚未重建斜壁上的速度梯度或引入 moving-body 表面速度。颗粒阻力与 Darcy 项继续由其专职阶段计算。
+
+`StepStats.viscosity` 保存应力行数、最大谱界、固定壁面对液体的三轴冲量、控制体动能耗散以及 MAC float 写回的三轴舍入冲量。应力算子内部总动量变化由壁面冲量闭合，float 写回误差单列；P2G/G2P 和压力阶段使用各自既有动量与动能度量。`MechanicalStepAudit.viscousWorkJoules` 单列本阶段在 P2G 能量度量下的变化。黏性耗散目前作为机械诊断记录，尚未回填载体内能；不得将该值称为已完成的黏性发热。
+
+`/mmm status` 发布最近成功步的谱界、耗散与壁面冲量。`cut-cell` 包含一维解析剪切层、二维交叉应力解析衰减、刚体旋转、调和界面、壁面动量、均匀/小体积/零开口谱界，以及后端细化和预算拒绝用例。
+
 ### 时间步与 CFL
 
 配置中的 `timeStep` 是 logical step 时间；mechanical core 根据液体 marker、颗粒速度和重力预测、cell size 与 `maxCourantNumber` 选择子步，并复检压力后的液体与颗粒位移。子步细化保持本 logical step 的总时间、外部 source/sink 和相变预算。wall-time pacing 只改变 logical step 被调度的 tick 间隔。
@@ -117,7 +139,7 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 
 1. 读取当前 geometry、cut-cell、carrier occupancy 和边界条件。
 2. 体积/质量加权 P2G，施加重力、热浮力、气压、颗粒和实体的派生力。
-3. 构造物理目标散度并求解 pressure projection；该解是本步对外 pressure/机械功原始数据。
+3. 施加完整 Newtonian 黏性应力，以实际离散矩阵检查显式步长。然后构造物理目标散度并求解 pressure projection；该解是本步对外 pressure/机械功原始数据。
 4. 以投影后网格动能约束 G2P 的最大 FLIP 增量；marker 位置沿与 MAC 离散散度一致的二阶 `H(div)` 场以 RK4 推进，再进入 CCD；partial cut-face 暂沿用 cut-cell 插值与 CCD。
 5. 在传导前冻结颗粒反应 dirty cell，随后依次执行有限体积传导、液相反应、颗粒析出/溶解、凝聚相变和气液相变；两类相变共享同一操作预算。
 6. 执行 active/deposit compaction、沉积与局部唤醒。

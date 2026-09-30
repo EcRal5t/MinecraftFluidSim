@@ -8,6 +8,7 @@ public final class FlipCutCellValidation {
 	private FlipCutCellValidation() { }
 
 	public static void main(String[] args) {
+		LiquidViscosityValidation.validate();
 		volumeAndSharedFaceFractionsAreConsistent();
 		wallAreasFollowMicroGeometry();
 		bodyOverlapExcludesOccupiedMicroCells();

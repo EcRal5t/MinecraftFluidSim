@@ -51,7 +51,7 @@ handle 只为了数组索引。checkpoint 保存 canonical material palette，�
 
 域内沿声明段线性插值，域外保持最近端点的正黏度。两种求值都拒绝非有限温度和低于热学严格正温数值域的输入。`minimumViscosityTemperatureK` / `maximumViscosityTemperatureK` 供诊断报告声明温区。
 
-材料定义随后端交接一起走：`FluidDomainState` 保存不可变 `MaterialRegistry` 引用，`Layout` 保存其 fingerprint。有颗粒库存的交接必须携带定义，否则恢复后的候选会用别的物性求值。
+材料定义随后端交接一起走：`FluidDomainState` 保存不可变 `MaterialRegistry` 引用，`Layout` 保存其 fingerprint。`bindMaterialDefinitions` 独立于颗粒能力；生产材料域和各附加能力域均绑定世界定义，冷恢复从已提交能力包取得。颗粒交接必须有定义，独立无黏度数值测试域可以不绑定。
 
 ## 求解器边界
 

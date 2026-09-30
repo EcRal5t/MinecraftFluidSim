@@ -93,7 +93,7 @@
 因此当前缺口分成三类，而不是"缺高级拟真功能"：
 
 1. **功能性死路**：CX-07 与 CX-09，玩家根本没有入口，对应 B08 与 C04。
-2. **品质缺口**：液面仍由经验阈值与增厚重建（CX-01~CX-12 都受影响），对应 D01–D03；流体没有粘性耗散，相干晃动长期不衰减（CX-04、CX-10），对应 C01。
+2. **品质缺口**：液面仍由经验阈值与增厚重建（CX-01~CX-12 都受影响），对应 D01–D03；C01 已加入连续液体黏性耗散，分层与自然对流的系统验收待阶段 1c 完成。
 3. **物理闭合**：实体排水与双向冲量（CX-10）、气液组分交换（CX-07 之后），对应 C02 与 C05。
 
 上面的阶段编号就是这些缺口的依赖顺序。每关闭一项，本表至少有一个场景从"取不到"或"不闭合"变为"可以"，这就是本路线唯一的进度证据。
@@ -148,20 +148,15 @@
 
 ## 阶段 1–2：物性统一与对流
 
-工作包 C01。液体黏度已统一为世界材料定义中的分段 `mu(T)`，现行契约见[材料状态](../architecture/material-state.md#黏度求值)和[颗粒载体属性](../architecture/granular-state.md#载体属性工作区)。后续实现连续液体动量扩散、分层与对流。
+工作包 C01。已完成 1a 统一黏度来源与 1b 有限体积 Newtonian 动量扩散。现行物性、谱界、固定壁面条件与诊断契约见[材料状态](../architecture/material-state.md#黏度求值)和[流体求解器](../architecture/fluid-solver.md#液体黏性应力)。解析剪切层与二维交叉应力收敛、内部动量与壁面冲量、实际矩阵的小体积谱界、纯材料物性交接与恢复均有自动验证。
 
-### 1b 有限体积黏性扩散
-
-- 在 P2G 外力之后、压力投影之前加入 Newtonian 动量扩散 `rho·du/dt = div(tau)`，`tau = mu*(grad u + grad u^T)`。
-- face 与 control volume 复用 pressure 相同的 cut aperture、实际 liquid control volume 和 owner 分类；两侧黏度用守恒调和平均。相同连续液体的内部 face 应力冲量严格反向。
-- 未实现 gas viscosity 前，液气自由面使用零切向 traction，不能把 sealed gas 当 no-slip wall；固定边界默认 no-penetration，切向条件由显式 boundary 定义选择。
-- 显式子步的稳定步长必须从本次实际离散矩阵求界（容量 `C_i = rho_i*V_i` 与各开放 face 的 block conductance），sliver cut-cell 的真实体积进入分子；零或负容量、非有限 conductance、无法证明的谱界直接 PAUSED。不能加 velocity clamp 或“高黏度每帧衰减”。
-- 完成条件：等密度等温剪切层与解析扩散解收敛对照，总动量只由 boundary impulse ledger 改变；均匀满格、极小 cut volume、零 aperture 三例都验证谱界；`free-surface,cut-cell` 为最近门。
+当前下一步是 1c。开始前须区分控制体黏性耗散、P2G/G2P 传递耗散和载体内能收支：目前黏性耗散单列机械诊断，尚未回填 `U`；自由面按压力 owner 的网格分类处理，固定壁面切向应力使用 micro-mask 的集总面积近似。自然对流验收须明确这些近似的适用范围与热量模型。
 
 ### 1c 密度、分层与对流
 
 - 组成密度直接来自实际 mass/volume，不加“盐度密度公式”；Boussinesq 只作参考态附近的温差修正，必须声明 `|rho-rho_ref|/rho_ref` 有效比例，越界 PAUSED。
 - fixture：同温盐水在下保持稳定、反置后发生 Rayleigh–Taylor 型翻转；同组成温差分层；热盐竞争分别报告组成项与温差项；受热底板封闭池用 registry 的 `rho, mu, beta, k, cv` 计算 `Ra`，用两个相差固定倍数、都在线性域的振幅证明归一化增长率一致。
+- 对流验收先明确壁面切向条件、热交换条件和 Boussinesq 有效范围，再选择对应的临界判据；临界值两侧分别验证扰动衰减与增长，并以两级网格检查增长率收敛。计算继续复用 `LiquidCarrierProperties` 与已绑定的世界材料定义。
 - 完成条件：全部 fixture 的体积、逐材料质量、species、`U` 与 source/sink 闭合；稳定分层的静水速度残差有量化上限；`materials,thermal` 为最近门。
 
 ## 阶段 3：展示几何契约与重建

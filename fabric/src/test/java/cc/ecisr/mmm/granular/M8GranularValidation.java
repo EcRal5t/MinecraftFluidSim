@@ -1207,6 +1207,9 @@ public final class M8GranularValidation {
 				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
 		int sizeX = 24, sizeY = 16, sizeZ = 24, capacity = sizeX * sizeY * sizeZ * 8;
 		FluidDomain baseline = new FluidDomain(sizeX, sizeY, sizeZ, config, capacity);
+		FullCapabilityTestFixture.bindEmptyMaterialState(baseline,
+				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+		baseline.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
 		FluidDomain granular = new FluidDomain(sizeX, sizeY, sizeZ, config, capacity);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < sizeX; x++) {
 			baseline.setVolume(x, y, z, 1.0F); granular.setVolume(x, y, z, 1.0F);

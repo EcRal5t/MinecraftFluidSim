@@ -16,9 +16,20 @@ public record FluidSolverConfig(
 		float pressureTolerance,
 		float maxCourantNumber,
 		float fluidEpsilon,
-		float interfaceCompression
+		float interfaceCompression,
+		WallCondition viscousWallCondition
 ) {
+	public enum WallCondition { FREE_SLIP, NO_SLIP }
+
+	public FluidSolverConfig(float cellSize, float density, float gravity, float timeStep,
+			int maxPressureIterations, float pressureTolerance, float maxCourantNumber,
+			float fluidEpsilon, float interfaceCompression) {
+		this(cellSize, density, gravity, timeStep, maxPressureIterations, pressureTolerance,
+				maxCourantNumber, fluidEpsilon, interfaceCompression, WallCondition.FREE_SLIP);
+	}
+
 	public FluidSolverConfig {
+		java.util.Objects.requireNonNull(viscousWallCondition, "viscousWallCondition");
 		if (!(cellSize > 0.0F)) throw new IllegalArgumentException("cellSize must be positive");
 		if (!(density > 0.0F)) throw new IllegalArgumentException("density must be positive");
 		if (!(gravity >= 0.0F)) throw new IllegalArgumentException("gravity cannot be negative");

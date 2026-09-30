@@ -85,6 +85,7 @@ final class FluidDomainStateMapper {
 				domain.chemicalParcels.restoreReactionCursor(state.chemicalReactionCursor());
 			}
 		}
+		if (state.materialDefinitions() != null) domain.bindMaterialDefinitions(state.materialDefinitions());
 		if (state.granular() != null) {
 			domain.restoreGranularState(state.granular(), state.granularRegistry(), domain.materialRegistry(),
 					state.materialDefinitions());

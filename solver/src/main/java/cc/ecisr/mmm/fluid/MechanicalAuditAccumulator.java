@@ -17,6 +17,7 @@ final class MechanicalAuditAccumulator {
 	double gravityWorkJoules;
 	double thermalBuoyancyWorkJoules;
 	double surfaceTensionWorkJoules;
+	double viscousWorkJoules;
 	double fixedBoundaryWorkJoules;
 	double pressureProjectionWorkJoules;
 	double gridToParticleTransferJoules;
@@ -39,7 +40,7 @@ final class MechanicalAuditAccumulator {
 	) {
 		double accounted = particleToGridTransferJoules + granularCouplingWorkJoules
 				+ porousBoundaryWorkJoules + gravityWorkJoules + thermalBuoyancyWorkJoules
-				+ surfaceTensionWorkJoules + fixedBoundaryWorkJoules
+				+ surfaceTensionWorkJoules + viscousWorkJoules + fixedBoundaryWorkJoules
 				+ pressureProjectionWorkJoules + gridToParticleTransferJoules
 				+ particleCollisionWorkJoules + carrierInventoryTransferJoules
 				+ reseedTransferJoules;
@@ -50,7 +51,7 @@ final class MechanicalAuditAccumulator {
 				+ Math.abs(particleToGridTransferJoules) + Math.abs(granularCouplingWorkJoules)
 				+ Math.abs(porousBoundaryWorkJoules) + Math.abs(gravityWorkJoules)
 				+ Math.abs(thermalBuoyancyWorkJoules) + Math.abs(surfaceTensionWorkJoules)
-				+ Math.abs(fixedBoundaryWorkJoules) + Math.abs(pressureProjectionWorkJoules)
+				+ Math.abs(viscousWorkJoules) + Math.abs(fixedBoundaryWorkJoules) + Math.abs(pressureProjectionWorkJoules)
 				+ Math.abs(gridToParticleTransferJoules) + Math.abs(particleCollisionWorkJoules)
 				+ Math.abs(carrierInventoryTransferJoules) + Math.abs(reseedTransferJoules);
 		if (!Double.isFinite(residual) || !Double.isFinite(scale)
@@ -62,7 +63,7 @@ final class MechanicalAuditAccumulator {
 				initialParticleKineticEnergyJoules, finalParticleKineticEnergyJoules,
 				initialGravitationalPotentialEnergyJoules, finalGravitationalPotentialEnergyJoules,
 				particleToGridTransferJoules, granularCouplingWorkJoules, porousBoundaryWorkJoules,
-				gravityWorkJoules, thermalBuoyancyWorkJoules, surfaceTensionWorkJoules,
+				gravityWorkJoules, thermalBuoyancyWorkJoules, surfaceTensionWorkJoules, viscousWorkJoules,
 				fixedBoundaryWorkJoules, pressureProjectionWorkJoules,
 				gridToParticleTransferJoules, particleCollisionWorkJoules,
 				carrierInventoryTransferJoules, reseedTransferJoules,

@@ -82,6 +82,8 @@ parcel 的物理质量列使用 kg，SVQ 通过 `SVQ_PER_BV` 给出 m³。每个
 
 ### 载体属性工作区
 
+`LiquidCarrierProperties` 同时服务于连续液体黏性应力、活动颗粒阻力、Darcy 与床面剪切。液体物性绑定由 `bindMaterialDefinitions` 独立提供，空颗粒能力与纯材料域读取相同物性。
+
 液体密度、温度和黏度只在一处派生：`LiquidCarrierProperties` 按格保存「是否有液体、液体材料 handle、实际密度、温度、`mu(T)`、Reynolds 上限」。三个使用方都读同一份派生值——活动颗粒阻力、Darcy 孔隙阻力、床面剪切（Spalding 壁面关系）。因此一格在每个 revision 内只反演一次温度，不再按 parcel 支撑点或阻力面重复求值。
 
 - 每个力学子步在气体更新后预建一次属性。载体结构与热学 revision 改变、marker 网格重建都会使缓存失效；平流只改变位置时也必须重建。床面检查在热化学轴之后读取当前属性。

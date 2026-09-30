@@ -45,7 +45,7 @@ final class RegionRepositoryAdapter {
 	private final GranularRegistry granularRegistry;
 	private final ThermalRegistry thermalRegistry;
 	private final GasRegistry gasRegistry;
-	/** World material properties from the committed capability bundle; required once granular state exists. */
+	/** World material properties from the committed capability bundle; required for material-bound liquid domains. */
 	private final MaterialRegistry materialDefinitions;
 	private final int maximumThermalSubsteps;
 
@@ -481,10 +481,12 @@ final class RegionRepositoryAdapter {
 	private RegionState captureForFeatureGate(
 			FluidRegion region, long generation, boolean synchronizeGasTopology
 	) throws IOException {
-		if (region.domain().hasGranularState() && !region.domain().authoritativeLayout()
+		if (region.domain().hasMaterialState() && !region.domain().authoritativeLayout()
+				.materialDefinitionsFingerprint().isEmpty() && !region.domain().authoritativeLayout()
 				.materialDefinitionsFingerprint().equals(materialDefinitions.fingerprint())) {
 			throw new IOException("Region material definitions differ from the committed world bundle");
 		}
+		if (region.domain().hasMaterialState()) region.domain().bindMaterialDefinitions(materialDefinitions);
 		MinecraftRegionCheckpointSource source = new MinecraftRegionCheckpointSource(region);
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
 			if (thermalRegistry == null || gasRegistry == null) {
@@ -607,6 +609,11 @@ final class RegionRepositoryAdapter {
 	}
 
 	private void restoreFeatureGeneration(FluidRegion region, RegionState state) throws IOException {
+		restoreFeatureInventory(region, state);
+		if (region.domain().hasMaterialState()) region.domain().bindMaterialDefinitions(materialDefinitions);
+	}
+
+	private void restoreFeatureInventory(FluidRegion region, RegionState state) throws IOException {
 		RegionManifest manifest = state.manifest();
 		RegionCheckpointRestorer restorer = new RegionCheckpointRestorer(state.checkpoint());
 		if (profile.hasCapability(WorldCapability.THERMAL)) {

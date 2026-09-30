@@ -96,8 +96,8 @@ final class LiquidCarrierProperties {
 		extrapolatedCells = 0;
 		sampleMaterialId = null;
 		for (int cell = 0; cell < cellCount; cell++) {
-			int handle = domain.granularCarrierMaterialByCell == null ? -1
-					: domain.granularCarrierMaterialByCell[cell];
+			int handle = domain.liquidCarrierMaterialByCell == null ? -1
+					: domain.liquidCarrierMaterialByCell[cell];
 			boolean wet = definitions != null && handle >= 0 && grid.markerCount[cell] > 0;
 			if (!wet) {
 				liquid[cell] = false;

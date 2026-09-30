@@ -148,6 +148,8 @@ REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine
 
 ### Manifest
 
+求解配置包含 `ViscousWallCondition`（`FREE_SLIP` / `NO_SLIP`），编码与 manifest checksum 同时覆盖它。恢复材料域时由已提交能力包重新绑定黏度定义，黏性矩阵与物性派生数组在候选内重建。
+
 manifest 是无需分配 solver 或 Minecraft runtime 对象即可审计和预算 admission 的索引，保存：
 
 - `RegionIdentity` 中的 region UUID、dimension stable ID 与 checkpoint/network generation；

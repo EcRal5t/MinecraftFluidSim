@@ -12,6 +12,9 @@ public final class FluidDomain extends FluidDomainGasAndGranular {
 		super(sizeX, sizeY, sizeZ, config, maximumParticleCount);
 	}
 
+	/** Binds immutable liquid constitutive definitions independently of granular capability. */
+	public void bindMaterialDefinitions(MaterialRegistry definitions) { LiquidMaterialBinding.bind(this, definitions); }
+
 	/**
 	 * Derived per-cell liquid carrier properties for the current carrier and thermal revision.
 	 *

@@ -131,7 +131,7 @@ public final class RegionDiagnosticsReport {
 		String availability = region.availabilityDescription();
 		String gas = gasSummary(domain);
 		String thermal = world.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";
-		String carrierViscosity = carrierViscositySummary(lastStats);
+		String carrierViscosity = carrierViscositySummary(lastStats) + viscousStressSummary(lastStats);
 		return String.format(
 				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | liquid %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
@@ -158,10 +158,15 @@ public final class RegionDiagnosticsReport {
 				carrierViscosity);
 	}
 
-	/**
-	 * Carrier viscosity samples that took the nearest declared-domain endpoint. A nonzero count is not
-	 * an error: it means granular drag ran outside the material's measured viscosity range.
-	 */
+	private static String viscousStressSummary(FluidDomain.StepStats lastStats) {
+		if (lastStats == null || lastStats.viscosity().stressRows() == 0) return "";
+		var stats = lastStats.viscosity();
+		return String.format(" | viscosity bound %.3g /s, dissipated %.3g J, wall impulse [%.3g,%.3g,%.3g] kg·m/s",
+				stats.spectralBoundPerSecond(), stats.dissipatedJoules(),
+				stats.boundaryImpulseX(), stats.boundaryImpulseY(), stats.boundaryImpulseZ());
+	}
+
+	/** Extrapolated constitutive samples from the last successful step. */
 	private static String carrierViscositySummary(FluidDomain.StepStats lastStats) {
 		if (lastStats == null) return "";
 		FluidDomain.CarrierViscosityStats stats = lastStats.carrierViscosity();
