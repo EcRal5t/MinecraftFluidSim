@@ -173,20 +173,15 @@
 - 新增不变量：优先放进 `NormalPlayState.roundTrip()` 或对应操作原语，失败信息带上 generation 与账本量。
 - 建议的下一步拆分：把场景数据与 `NormalPlayState`（含操作原语）移出入口类，动作表独立成文件，使入口只剩模式与调度。
 
-## 十二、补覆盖路线图（W1–W8 已实现，2026-09-14）
+## 十二、断言判定与校验机制
 
-优先级来自一次静态评审：**先补现有覆盖的判断能力**，让工具能区分「合法操作被静默拒绝」「应当恢复运行却停住」。以下为落地结果，权威阈值表已收敛到 `FuzzConfig.actionName(int)`（`applyExpandedRandomAction` 与 `FuzzMinimizer` 共用，不再各自维护）。
+Fuzzer 通过多层断言保证物理仿真与状态转换的确定性：
 
-- **W1 拒绝判定**：全部 `try*` 拒绝路径用 `FluidDomainStateAssertions.assertSameState` 核对操作前后状态未变；新增前置条件明确、要求成功的动作 `insertMinimalVolume`（注入点为空格子时拒绝即判失败）。验收：`insertMinimalVolume` 在空注入格上的断言即为常驻判据。
-- **W2 尾量抽取**：`extractTail` 不再把 `exactVolumeNear` 当作精确可用量——它只忽略逐 marker 的化学/热拆分分辨率，是**上界**。动作改为阶梯下降：请求观测量的可表示下界，逐次减半直到规划器接受；只要观测到液体、而降到分辨率下限仍全被拒绝，即判失败。`extractOverCapacity` 请求 `totalVolumeExact + 1`（任何可达结算都不可能覆盖），成功即判失败、拒绝则核对状态未变。`extractSubBucket` 为探针：低于可达拆分分辨率时拒绝是正确结果，但拒绝必须不改状态、结算必须不超过请求。`extractThenRestore` 用返回的真实体积回灌，并在**同一小半径**内先断言邻域为纯水，再比较逐材料质量、物种 quanta 与内能。
-- **W3 独立比对**：`roundTrip` 盘上与内存分支、`coldRestart`、`containerTransfer` 的 live/adopt 全部改为 `FluidDomainStateAssertions.assertSameDurableState`（持久层不含调度队列、每步压力草稿与世界边界温度场，这些按契约在载入时重建）。**该断言已实际命中一处契约事实**：化学 dirty-cell 队列不入存档。
-- **W4 application 通道**：`applicationStep` 经真实 `RegionApplicationService.stepMotion` 步进，并复用同一世代令牌复交以断言 `STALE_GENERATION`；`blockAndRetry` 仅在区域本就可步进时注入 NUMERICAL/PERFORMANCE 阻塞，清除后强制要求恢复可步进并经应用通道成功步进一步；`sleepWake` 随机动作只在**实测静止**（marker 速度、未决相变、气体审计）时才闩锁休眠，且热学观察取自真实传输统计而非合成值。此外每个盘上 job 在随机序列开始前，用一次确定性的**休眠阶梯**（临时解除暂停、走完进入/唤醒、再恢复暂停）覆盖两条轴的状态机，避免在主序列中人为停机掩盖振荡。
-- **W5 跨 section**：`FuzzScene` 增加 `origin`，新增场景 18/19 位于 `BlockPos(-2, 64, -2)`，库存跨 section 边界；新增 20 `sealed-bottleneck-8`、21 `sealed-microthroat-8` 两个几何压力场景。
-- **W6 动态世界输入**：新增 `toggleSolid`（运行期改内部碰撞格，位移计入 escaped sink）与 `editBoundarySource`（改世界恒温边界场的一个面）。
-- **W7 事件级验证**：从 `StepStats`/`ThermalAxisStats` 采集实际事件并**按场景**留痕，输出 `COVERAGE GAP` 与 `FUZZ COVERAGE` 汇总（见 §八）。
-- **W8 工具缺陷**：显式种子模式失败改为抛错；扫描等待加可配置超时并在真卡死时以退出码 3 结束；`FuzzMinimizer` 回放与记录路径均 `close()` 临时目录；新增 `selfcheck` 模式用植入错误验证判据确实能触发。
-
-已知未达成的覆盖目标（长留 `COVERAGE GAP`，属真实观测不足而非回归）：`extractThenRestore` 需要局部纯水口袋，污染性动作很快破坏前置条件；颗粒族的 `settledParcels/wokenParcels` 在 60 动作内常为 0。两者都可作为后续加深方向。
-
-仍未覆盖及原因：**本工具有意不接入容器 WAL/recovery**，以保持聚焦于随机物理序列；协调器的各故障点已由 `ContainerApplicationValidation` 用 `FakeJournals`/`FakeRegionPort` + `FaultControl` 做确定性覆盖，但那只验证「协调器如何调用端口」，**不代表真实适配链已被证明**——`MinecraftContainerTransactionAdapter.RegionPort` 在 HEAD 已提交而调用报错时的重读与接管等实质逻辑仍缺独立证据，应列为剩余验证项，优先用 Fabric 侧少量定向集成场景检查（HEAD 已提交但报错、接管失败、actor 保存失败、恢复后能继续下一笔）。ownership/removal、`ServerLevel` 侧接管与区块加载、多区域交互、客户端/网络同理。`MinecraftRegionTick` 的 pacing/`recordStep`/快照需服务器，`RegionApplicationService` 不经过它。
+- **拒绝判定与状态核对**：全部 `try*` 拒绝路径通过 `FluidDomainStateAssertions.assertSameState` 断言操作前后内存状态未变；对合法条件下的注入（如空网格注入 `insertMinimalVolume`）断言必须成功。
+- **边界抽取精度**：`extractTail` 采用阶梯下降探测可用量下限，验证临界抽取的边界处理；`extractOverCapacity` 验证超量请求安全拒绝且状态守恒；`extractThenRestore` 验证抽取回灌后的逐材料质量、组分与内能守恒。
+- **持久状态独立比对**：盘上往返与重启通过 `FluidDomainStateAssertions.assertSameDurableState` 严格比对持久层状态一致性（调度队列与临时压力场按契约在载入时重建）。
+- **应用通道调度**：`applicationStep` 经 `RegionApplicationService.stepMotion` 执行并验证世代令牌单次有效；`blockAndRetry` 验证阻塞清除后的恢复步进；`sleepWake` 在实测静止状态下验证休眠机制。
+- **跨分片边界**：场景 18 与 19 跨越 Section 边界（坐标 `(-2, 64, -2)`），验证跨分片几何与库存完整性；场景 20 与 21 提供喉道与 micro-mask 几何压力测试。
+- **动态世界交互**：`toggleSolid` 动态修改内部碰撞格并将位移计入 escaped sink；`editBoundarySource` 动态修改世界恒温边界场。
+- **事件留痕与覆盖统计**：从运行统计中按场景采集相变、沉积、唤醒与重播种等真实物理事件，输出覆盖分析报告。
 

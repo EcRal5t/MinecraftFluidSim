@@ -72,7 +72,7 @@ Fabric 提供可选 Jade 适配，通过 Query API 读取并展示摘要。受�
 
 材料和 species 都按 stable ID 排序。`regionNetworkGeneration` 标识网络中的区域 incarnation，不是 checkpoint generation 或逐 tick state revision；调用方需要新鲜值时重新查询，不能用它判断两个 observation 之间没有发生物理步。
 
-Query API 不承诺 pressure、速度、相分数、gas/颗粒/coherent solid 摘要或内部调度字段。新增字段或其他库存类型必须保持调用方可判定的单位与失败语义，不能悄悄复用 `detail` 文本扩展协议。
+Query API 提供宏观状态查询（体积、质量、密度、温度、材料与化学组分），不包含内部速度场或调度字段。新增字段或其他库存类型必须保持调用方可判定的单位与失败语义。
 
 ## 内置探针与控制界面
 
@@ -104,7 +104,7 @@ Fabric 最后持久化 BlockEntity、刷新相邻已加载区域的 boundary flu
 
 Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会解析任何 Jade 类，也不影响主 Mod 启动。服务端 provider 只对 `fluid_boundary`、`fluid_controller` 和 `thermal_reservoir` 请求数据，并通过上述 Query API 观察命中面近侧或跨过一格壳体的反侧位置。非 `OK` 结果不产生 tooltip，不从方块外观猜测流体。
 
-发送给客户端的是有界展示摘要：体积、质量、密度、可选温度，以及按量排序的至多四项材料和 species；若项目更多会明确显示隐藏项数。该摘要不是库存协议，不能用于转移或回写。当前适配依赖玩家命中闭壳方块，不声称直接 ray trace 空气格内的自由面；扩展自由面目标前必须继续保持不加载、不唤醒和服务端权威查询。
+发送给客户端的是有界展示摘要：体积、质量、密度、可选温度，以及按量排序的至多四项材料和 species；若项目更多会明确显示隐藏项数。该摘要专用于客户端渲染与界面展示，不参与库存转移与持久化回写。当前适配由玩家交互命中外壳方块触发；查询过程保持无加载、不唤醒与服务端权威数据。
 
 ## Committed event
 
@@ -112,7 +112,7 @@ Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会�
 
 `ContainerTransferCommittedEvent` 只在 region HEAD 已指向 target、player/dispenser after-item 已完成强制保存且 WAL 已删除后发布。它携带 transaction UUID、dimension、region UUID、checkpoint generation、相对区域的 insert/extract 方向，以及封闭的 `TransferQuantity`：液体记录 `10^-9 m³` nanovolume 和可选 raw `U`，颗粒记录 `2^-27 BV` 的 SVQ，调用方不需要用枚举与无类型 long 自行配对。
 
-事件不声称包含材料/species 明细；监听者需要当前库存时重新查询。
+事件只通知提交动作完成；监听者需要具体材料或化学组分时按区域重新查询。
 
 `core/.../transfer/` 已保存与 loader 无关的容器体积、逐材料质量、species/residual、颗粒组成、raw `U`、actor identity 和 journal 数据；Fabric 只负责 NBT 持久编码、Minecraft actor 收敛，以及由 `ContainerItemStacks` 映射 `ItemStack` component。
 

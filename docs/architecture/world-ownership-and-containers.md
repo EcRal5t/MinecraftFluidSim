@@ -33,11 +33,11 @@ controller 产品跨越三个彼此不能假装原子的持久域：
 - Minecraft world/actor：方块、玩家手中物品或 dispenser inventory；
 - sidecar WAL/registry：记录跨域事务足以确定恢复方向的 before/after truth。
 
-所有跨域操作都采用“先持久准备与可重建结果，后发布 region HEAD，再把外部域收敛到已提交结果”的次序。WAL 不是另一份库存，也不能成为绕开 region HEAD 的提交点。
+所有跨域操作都采用“先持久准备与可重建结果，后发布 region HEAD，再把外部域收敛到已提交结果”的次序。WAL 专用于记录跨域事务步骤与故障回滚，事务最终以 region HEAD 提交为准。
 
 ## Ownership 模型
 
-controller 内部由空气和独立 ownership registry 表示。原版水方块不是 solver 库存的副本。
+controller 内部接管的方块标记为空气，水体由 solver 内部粒子与网格权威表示。
 
 新激活区域只有在 world bridge 已生效时才接管内部纯 `Blocks.WATER`：
 
@@ -116,7 +116,7 @@ actual container 缺失、损坏或不匹配当前世界 profile 时在准备 WA
 
 液体抽取允许生成不足 1 BV 的 partial item；放入已有部分桶时仍按实际剩余容量规划。`FluidMixture`、`ChemicalContents`、`GranularContents` 和 `ThermalContents` 都有自己的规范编码与总账，item component 只是这些原始数据的载体。
 
-创造栏 source template 保存的 `CreativeSourceDescriptor` 只是稳定 source ID、精确 typed amount 和可选温度的意图，不是 actual inventory，也不绑定某个 world profile。
+创造栏中的 `CreativeSourceDescriptor` 记录生成意图（材料 ID、数量、温度），具体库存由服务端的 `CreativeSourceCatalog` 依据世界材料定义实例化。
 
 每次使用时服务端重新确认玩家仍处于创造模式，按当前已提交 world registry 和封闭 catalog 解析材料/species/SVQ/kg/U，拒绝未知 source、错误数量和越过物性有效域的温度。descriptor item 在事务前后保持相同；对热区域，coordinator 用独立的 server-resolved actual source stack 准备 coupled `U`，不能从 descriptor 猜能量。
 

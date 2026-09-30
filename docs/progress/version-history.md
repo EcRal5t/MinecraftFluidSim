@@ -1,91 +1,102 @@
 # 主 Mod 版本历史
 
-本文记录已经发布或成为基线的主 Mod 增量。它是历史档案，可以保留当时使用的里程碑名、格式代号、兼容策略和已知限制，但不定义当前行为。现行契约从 [`../architecture/`](../README.md) 读取。
+本文记录已经发布或成为基线的主 Mod 增量。它是历史档案，保留各阶段的里程碑名、格式代号与变更内容。现行契约从 [`../architecture/`](../README.md) 读取。
 
 ## 0.3–0.5：有界世界交互
 
 - **0.3**：加入 `/realwater pour|drain` 与定时碰撞刷新。
-- **0.4**：加入自由面反扩散和 surface diagnostic；这属于早期 VOF 阶段，活动核心后来由 PIC/FLIP 替代。
-- **0.5**：加入服务器权威的实体浮力/阻力采样；保持单向耦合。
+- **0.4**：加入自由面反扩散与液面诊断。
+- **0.5**：加入服务端权威的实体浮力与阻力采样。
 
 ## 0.6–0.6.1：活动 PIC/FLIP
 
-- **0.6**：以 Godot 参考的 3D PIC/FLIP 循环替代活动 VOF；marker 携带精确体积，客户端使用 marching tetrahedra 重建。
-- **0.6.1**：修正压力相 containing-cell 分类和 3D normal-only 碰撞；客户端密度卷积只影响重建。
+- **0.6**：引入 3D PIC/FLIP 求解循环；粒子携带精确体积，客户端使用 marching tetrahedra 重建网格。
+- **0.6.1**：修正压力相包含单元分类与法向碰撞处理。
 
 ## 0.7–0.8.2：世界事务与观测
 
-- **0.7**：首次加入可逆 `/realwater takeover`，只移除纯原版水并在 remove/关服时恢复。
-- **0.7.1**：碰撞挤水改按 marker 精确体积结算；快照增加 marker occupancy 以保持浅水可见。
-- **0.8**：加入磁盘 takeover journal，世界修改前原子发布。
-- **0.8.1**：强化 takeover journal 的 fail-closed、WARNING 和可重试恢复边界。
-- **0.8.2**：加入 `/realwater` 与 `/realwatergpu` 的 UTF-8 命令 transcript；只做观测。
+- **0.7**：加入可逆 `/realwater takeover`，接管区域内原版水并在移除区域或关服时恢复。
+- **0.7.1**：碰撞挤水按粒子精确体积结算；快照增加粒子占位以保持浅水显示。
+- **0.8**：加入磁盘接管事务日志（takeover journal），世界修改前原子持久化。
+- **0.8.1**：完善接管日志的故障安全与可重试恢复机制。
+- **0.8.2**：加入 `/realwater` 与 `/realwatergpu` 命令输出日志。
 
 ## M2 与 M2.5：区域与自由面基础
 
-- **M2**：加入多区域 manager、控制器可见边界、完整 chunk 门、只读快照协议、独立生命周期和区域 checkpoint。
-- **M2.5**：加入 PLIC fluid-air 压力距离、runtime cut-cell、有效 MAC 面外推、守恒 marker reseeding 和 pressure-only rest-volume 约束。
+- **M2**：加入多区域管理、控制器外壳识别、完整区块门禁、只读快照协议、独立生命周期与区域 checkpoint。
+- **M2.5**：加入 PLIC 气液界面重构、运行时 cut-cell 几何、有效 MAC 面速度外推、守恒粒子重播种与静止体积约束。
 
 ## 0.9–0.9.1：M3 多液体与可变密度
 
-- **0.9.0**：marker 增加材料/相/质量账本，压力投影使用变密度 `1/rho` 面系数；加入互溶组聚合、不可互溶分层、material 区域布局与快照 capability、客户端 partitioned mesh，以及材料 fixture 和启动时冻结的材料功能门。
-- **0.9.1**：修复外表面主导材料在自由面外侧空格被误判为 palette 0，以及液液界面裁剪到等值面导致与自由面共面闪烁；并对噪声级相分数设置下限。
+- **0.9.0**：粒子增加材料、物相与质量账本，压力投影支持变密度；加入互溶组聚合、不可互溶分层、材料区域布局与客户端分区网格渲染。
+- **0.9.1**：修正外表面主导材料在自由面外侧的调色板索引，消除液液界面与自由面的共面闪烁。
 
 ## 0.10.0：M4 表面张力与润湿
 
-- **0.10.0**：液气界面 `p_interface = sigma * kappa` ghost-fluid 压力跳跃进入活动 pressure RHS 与投影；近壁曲率法向施加 Young 接触角，不写死吸墙或墙角偏置。液液 `sigma12` 以材料 phase 无序对定义并按 balanced-force CSF 接入活动核心。`sigma=0` 逐位退化回无表面张力路径，wire 与 region-state 不携带新的库存字段。自动门覆盖静滴 Laplace 跳跃、液液压力跳跃、无持续寄生流、合并/断开守恒和不同接触角铺展；另提供瞬态表面张力 fixture。
-
-可选 GPU probe 使用独立版本线，0.1.0–0.1.16 始终是只读观测路径，没有成为生产后端。
+- **0.10.0**：液气界面加入 Laplace 压力跳跃（Ghost Fluid Method）；近壁曲率法向施加 Young 接触角；液液界面引入基于连续表面力（CSF）的界面张力耦合。
 
 ## 0.11.0：M5 空气区域网络与气液压力
 
-- **0.11.0**：密闭气腔 flood fill 识别（预算 fail-open）、`long` 纳体积量子精确气体账本（`sealed + vented == drawnFromAmbient`）、等温状态方程、CONTAM 型有限速率孔流与拓扑事件库存迁移进入活动核心；自由面 ghost-fluid 跳跃升级为 `surface tension + p_gas`，环境空气贡献为零，开放水域与 M4 逐位一致。气体状态当时为 runtime-only；新增瞬态 `/realwater airdemo [pressure|vacuum]` 与 status 气体段。
+- **0.11.0**：加入密闭气腔识别、精确气体质量/体积账本、等温状态方程与有限速率孔流模型；自由面压力跳跃接入气腔压力。新增气压调试命令与状态显示。
 
-## 0.12.0：M6 世界 ownership、流体桥与容器
+## 0.12.0：M6 世界归属与容器事务
 
-- **0.12.0**：controller 通过 region-state HEAD 键控的 WAL/committed sidecar crash-safe 接管内部原版水；加入 `long` 纳体积部分纯水桶、保存逐材料体积与独立质量的 canonical 混合材料桶、solver all-or-nothing 精确转移、玩家/发射器目标路由、创造 external source/scoop 语义、部分桶守恒合并配方，以及 region/item 跨持久域 container-transfer WAL。未知、损坏和代次失配一律保留并锁定；堆叠与组件损坏安全拒绝。CPU 回归、专用服务器启动和合并实机场景通过。
+- **0.12.0**：控制器通过区域 HEAD 键控事务日志接管内部原版水；加入精确纳体积容器、混合材料桶、求解器全额转移、发射器交互与跨持久域容器事务日志。
 
 ## 0.13.0：M7 守恒化学
 
-- **0.13.0**：加入 exact-rational species/phase/reaction registry、每 marker packed parcel 与 indicator provenance；强电解质完整解离和同格同 chemical-phase 的 `H+ + OH- -> H2O` 在最终 advection 后守恒执行。区域、快照和容器事务增加 chemical 布局；化学桶保存 fingerprint、逐 species quanta、质量 residual 与 indicator group，external source/escaped sink 可审计并持久化。客户端只读使用 Top-4、pH 与 indicator 派生颜色；加入通用指示剂、抹除器、化学 fixture 和管理员库存命令。
+- **0.13.0**：加入有理数化学组分、物相与反应注册表；粒子携带组分包并支持强电解质完全解离与酸碱中和；化学桶保存组分与质量余量；客户端支持 pH 与指示剂显色。
 
 ## 0.14.0：M8 颗粒沉淀与低成本沉积
 
-- **0.14.0**：加入数据驱动颗粒 registry、守恒 active parcel/deposit inventory、浮力/阻力、moving-solid pressure source、精确排水、孔隙水、安息角沉积、休眠与局部唤醒；化学相转移保存固相 species composition。区域、只读快照和容器事务增加 granular 布局；`/mmm empty` 可把流体、active parcel 和 deposit 作为可审计 sink 一次清空。自动发布门、专用服务器启动和客户端/controller/发射器/沉淀/重启合并实机场景通过。
+- **0.14.0**：加入数据驱动颗粒系统，支持悬浮颗粒、阻力/浮力耦合、安息角沉积、孔隙水与休眠唤醒；区域支持清空流体与颗粒沉淀。
 
 ## 0.15.0–0.15.4：M9 温度、相变和反应热
 
-- **0.15.0**：每个液体、颗粒、连续固相和密闭气体载体保存独立权威内能，温度与热容量只由 world-authoritative 分段状态函数派生；有限体积导热、固定温度世界储层、反应热、固液/气液 exact-batch 相变、非等温气体传质/压缩功及 source/sink/work 审计进入生产 logical step。区域、只读快照、物品内容和容器事务增加完整 thermal 布局。自动发布门、专服启动、真实世界副本跨 checkpoint/restart，以及真实 controller 初始化和客户端立即恢复显示通过。
-- **0.15.1**：修正 condensed mass 的 `cellSize^3` SI 换算、controller sealed gas 边界、Boussinesq 自然对流和气液多批相变；runtime 统一使用完整 thermal 区域布局。
-- **0.15.2**：收紧 sealed gas 新拓扑 bootstrap 的周转闭合条件；活库存或任何不闭合状态均保留并锁定。
-- **0.15.3**：将气液相变的 standard-volume nanos 固定为 canonical 单批整数倍，并在凝结时联合拆分独立 nanos/kg/species/solver-residual 列；既有 grouped-rounding 蒸气尾数可守恒继续运行，不再误触发 exact transition mass 停止门。
-- **0.15.4**：checkpoint capture 强制 current marker/occupancy 与 gas topology/U remap 同代；部分充液界面使用 runtime cavity lineage 避免假 dry-air turnover。加入只在明确 restore failure 后可用的紧邻上一完整代全量验证/原子 HEAD 恢复；校准新 world water-vapor `c_v` 与潜热，status 分离 air/vapor gross turnover 并标记 phase budget hit。checkpoint 22→21→新代跨两次重启的原世界实机验收通过，M9 正式关闭。
+- **0.15.0**：各相载体保存独立权威内能，温度由状态函数派生；加入有限体积导热、固定温度储层、反应热、固液/气液相变与气体压缩功计算。
+- **0.15.1**：修正凝聚相质量单位换算、密闭气腔边界、自然对流与多批次相变。
+- **0.15.2**：收紧密闭气腔拓扑重建的收支闭合校验。
+- **0.15.3**：将气液相变标准体积对齐为规范单批整数倍，并在凝结时联合拆分独立物质与残差列。
+- **0.15.4**：区域快照对齐粒子与气体拓扑代次；加入双槽上一完整代原子回滚恢复；校准水蒸气热容与潜热参数。
 
-## 0.16.0：当前格式收敛与文档重整
+## 0.16.0：格式收敛与文档重整
 
-- **0.16.0**：删除区域、配置、容器 WAL 和颗粒 payload 的历史 reader、自动迁移与缺字段补全；删除显式热初始化入口。所有持久载荷必须与本次启动冻结的功能布局和 registry identity 完全一致，否则原样保留并锁定。
-- 保留双槽 checkpoint 的同布局上一完整代恢复；它属于当前事务故障恢复，不是跨版本迁移。
-- 文档重新分为当前架构、未来路线、维护路由和版本历史；后续修订恢复了当前技术架构的组件、公式、数据布局和事务细节，使删除重复进度报告不再损失维护所需知识。
+- **0.16.0**：收敛持久化格式，移除过渡版本兼容逻辑；采用双槽上一代故障恢复机制。
+- 文档结构重整为当前架构、未来路线、维护路由与版本历史四类。
 
-## 0.17.0：架构重整完成
+## 0.17.0：架构分层重整
 
-- 将生产代码物理拆为 `api`、`model`、`solver`、`application`、Fabric adapter、GPU kernel 与 GPU adapter；编译和静态门直接约束依赖方向。
-- 删除 `FluidSimulationService`、`FlipThermalState`、`FlipFluidDomain`、`FluidTransferService` 与 `RegionStateFiles` 等过渡层；运行时组合、tick、policy、operator、事务、thermal 与 GPU native 资源均有唯一 owner。
-- `FluidDomain` 保持唯一 public live aggregate，但实现按同一对象的 mechanics、step、inventory、collision、capability 与 gas/granular 责任分区；生产类 1000 行硬门不再含迁移 allowlist。
-- validation 按 scenario 文件拆分且 selector 语义不变；当前 world capability、ACTIVE/REMOVED region、ownership/container fault、CPU milestone/soak 与 GPU probe 门继续使用同一现行格式和不变量。
+- 生产代码物理拆分为 `api`、`model`、`solver`、`application` 与 Fabric / GPU 适配层，通过架构静态检查约束依赖方向。
+- 确立 `FluidDomain` 为权威运行时聚合根，运行时组合、调度、事务与 GPU 资源实现职责单一化。
+
+## 2026-09-11：数值稳定性与事务收口
+
+- 修复架构分层后暴露的压力投影、气腔拓扑分裂与合并、非等温相变收支及容器事务故障恢复边界。
+- 自动化验证：CPU 里程碑回归与极端温压场景全部通过。
+
+## 2026-09-22：随机仿真与覆盖验证加固
+
+- 正常操作 Fuzzer 引入确定性状态断言、ddmin 序列最小化与物理过程覆盖统计，覆盖边界抽取与跨分片边界场景。
+- 自动化验证：多场景随机序列与固定历史回归用例全部通过。
+
+## 2026-09-23：CPU 计算热点优化
+
+- 优化化学状态交接复用、热参考能缓存以及同次压力投影内的矩阵装配去重，消除大尺寸场景的超时暂停。
+- 自动化验证：生产负载步进耗时与长场景收支校验全部通过。
+
+## 2026-09-24：水流起动与床面输运
+
+- 引入基于床面剪切应力与 Shields 数的水流起动模型、薄床层阻力以及静水沉积的局部休眠与水流唤醒。
+- 自动化验证：颗粒沉积与水流侵蚀校验全部通过。
 
 ## 2026-09-30：统一液体黏度来源
 
-C01 的 1a 将颗粒阻力、Darcy 孔隙阻力和床面剪切统一到世界材料定义的 `mu(T)`，移除 granular carrier 的黏度字段。后端交接携带材料定义，冷恢复从已提交世界能力包取得定义。审查补齐平流后的属性失效、无颗粒湿格、逐步越域诊断、自定义物性恢复及存档前身份校验。
+- 将颗粒阻力、Darcy 孔隙阻力与床面剪切统一为世界材料定义的温度黏度函数 `mu(T)`，移除分散的载体黏度字段。
+- 完善物性在平流后的失效处理、冷启动恢复与存档校验。
+- 自动化验证：黏度物性绑定与冷恢复回归测试全部通过。
 
-验证通过 `materials,granular,region-state,lifecycle,thermal,thermal-extremes` 与 `verifyArchitecture`。审查后 `granular-active` 单进程预热 20 步、采样 80 步，平均 57.31 ms、p95 100.60 ms、9.03 MiB/步；无受控的改前对照，不作为性能提升证据。
+## 2026-10-01：有限体积液体黏性应力
 
-## 2026-10-01：有限体积液体黏性扩散
-
-C01 的 1b 在外力与固定面处理后、压力投影前加入 Newtonian 对称应变应力。法向与交叉剪切行共享实际 cut aperture、液体控制体容量和按格 `mu(T)`；显式谱界由当前装配矩阵的正行和向外舍入计算，子步超限沿私有候选细化，预算耗尽拒绝。固定壁面显式选择 free-slip/no-slip；sealed gas 保持自由面零切向 traction。
-
-液体物性绑定独立于颗粒能力，完整后端交接与材料、化学、颗粒和热学冷恢复使用同一材料定义。`ViscousWallCondition` 进入求解配置的 NBT 与 manifest checksum。诊断单列黏性控制体耗散、固定壁面冲量、谱界及 float 写回舍入冲量；阶段动能审计增加黏性工作项。
-
-解析剪切层相对 RMS 误差由 `4.45e-4` 降至 `1.11e-4`；二维耦合解析场由 `2.45e-3` 降至 `6.14e-4`，均随网格加密一倍约缩小四倍。黏性发热回填与 moving-body 黏性反冲尚未接入；当前固定壁面与压力 owner 自由面使用已记录的网格近似。
-
-最终验证：`runCpuValidation '-PcpuValidation=free-surface,cut-cell,materials,granular,region-state,lifecycle,thermal,thermal-extremes' verifyArchitecture` 全部通过，8 组 CPU 校验用时 25.248 s，架构检查扫描 459 个生产源文件。包含实际封闭气腔的自由面条件、自定义材料定义的纯材料冷恢复、恢复操作的绑定身份保护，以及高黏度私有候选细化和预算拒绝。
+- 在压力投影前引入有限体积 Newtonian 动量扩散，支持法向与交叉剪切应力，并在固定壁面支持自由滑移与无滑移边界条件。
+- 求解配置与校验和引入壁面黏性条件；动能与动量审计增加黏性耗散与壁面冲量项。
+- 自动化验证：8 组 CPU 校验与架构规则检查全部通过。

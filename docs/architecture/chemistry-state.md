@@ -86,7 +86,7 @@ particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 
 indicator 添加只标记当时可接受 indicator 的互溶连通 parcel，受 100 BV 硬上限；超过上限整次拒绝。标记随 advection、reseed 和容器传输，后续混入的未标记 parcel 不自动继承。
 
-pH 是本项目从局部 `H+`/`OH-` 相对库存派生的 0–14 展示刻度，不承诺现实活度精度。客户端只接收每格最多四个展示 species、量化 pH 和可见 indicator fraction；这些值既不能恢复 exact quanta，也不能参与 reaction extent。
+pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指示剂显色与界面显示。客户端接收每格至多四个展示 species、量化 pH 和可见 indicator fraction，专用于渲染展示。
 
 ## 求解顺序
 

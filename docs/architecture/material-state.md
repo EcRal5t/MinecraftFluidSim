@@ -73,7 +73,7 @@ volume_m3 = marker_normalized_volume * cellSize^3
 
 pressure face 的 `1/rho` 系数按界面距离加权；不得从 material reference density、客户端颜色或平滑 fraction 反推存量质量。热学 Boussinesq 项是参考态附近的温差浮力近似，与这份组成质量密度正交，不能覆盖它。
 
-同一 miscibility group 的材料共享 phase 和速度，但当前没有分子扩散或每 marker 连续浓度场：marker 仍各自保存一种机械材料库存，局部格聚合给出混合比例。不同材料不在 reseed 中互相吞并，因此未解析扩散不会丢失组分。不可互溶材料也共享一个压力/速度框架，不承诺双速度界面动力学。
+同一互溶组的材料共享物相与速度场，每个粒子保存单一机械材料库存，通过局部网格聚合得到混合比例。不同材料在粒子重播种时不互相吞并，以保持组分守恒。不可互溶材料共享统一压力与速度框架。
 
 ## 表面与展示
 

@@ -189,7 +189,7 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 
 未知的 length-delimited optional extension 可随读取保留，但不能被解释为 required truth；下一次从活动 solver 捕获时只写当前 runtime 明确定义的载荷。
 
-布局选择不是“缺什么就补什么”：
+布局选择严格依据已提交的世界能力包决定各扩展字段是否必须存在：
 
 - materials 决定 marker 是否必须有 material ordinal 和独立 mass；
 - chemistry 决定 mixture/indicator/species/residual 列及 registry fingerprint 是否 required；
@@ -240,7 +240,7 @@ application 的 `RegionRuntime` 只是单次 tick 的不可变调度快照，不
 - 正常启动只读取 HEAD 指向的 generation，不自动猜测另一槽。
 - 只有当前 HEAD 已出现可复核 restore failure、区域仍为 metadata-only 且暂停、ownership 与容器 WAL 无歧义时，管理员才能执行 `regions recoverprevious <expectedCheckpoint>`。
 - 恢复命令完整重建并审计紧邻上一槽，再原子移动 HEAD；成功后必须退出并重新进入世界。
-- 该命令不是任意撤销工具，不跨功能布局，也不修改被拒绝的 slot。
+- 该命令仅用于回滚到紧邻上一代同布局的有效存档，不修改被拒绝的当前槽位。
 
 恢复上一完整代的原子边界仍然只有 HEAD：命令要求操作者给出当前 expected generation，先重新读取并完全重建 inactive slot，确认其恰为 `current - 1`；发布前再次核对当前 HEAD generation/checksum 未移动，再只替换 HEAD。被拒绝的当前 slot 保持字节不变，下一次正常 checkpoint 才可能覆盖它。
 
@@ -256,7 +256,7 @@ application 的 `RegionRuntime` 只是单次 tick 的不可变调度快照，不
 
 发布路径在 slot 写前、每个 section 后、manifest 后、临时回读后、slot rename 后以及 HEAD rename 前后都有故障注入点。相关持久化测试必须证明任一点异常退出后，启动只会得到完整旧代或完整新代，不会把 staging 当成 HEAD。
 
-只允许自动清理实现自己产生、名称集合与内容都完全可验证的首次发布或 ACTIVE 删除标记 staging；目录出现未知文件就原样保留并锁定。区域删除发布永久 `REMOVED` HEAD 后，旧 ACTIVE payload 才移入持久 quarantine，并保留可核对 删除标记 的 manifest；它不是 best-effort 物理删除。
+只允许自动清理实现自己产生、名称集合与内容都完全可验证的首次发布或 ACTIVE 删除标记 staging；目录出现未知文件就原样保留并锁定。区域删除发布永久 `REMOVED` HEAD 后，旧 ACTIVE payload 移入持久隔离区，并保留可核对删除标记的 manifest 记录。
 
 任何中断都只能恢复到 ACTIVE exact BEFORE、REMOVED 可收敛中间态或 LOCKED third state，不能让旧 payload 重新被 discovery 接纳为 solver。
 
