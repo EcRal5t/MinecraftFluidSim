@@ -70,7 +70,7 @@ Fabric 提供可选 Jade 适配，通过 Query API 读取并展示摘要。受�
 
 数据只使用目标 cell 的权威 marker、chemical parcel 和 thermal carrier side column，并直接由该 cell 的总 `U` 与载体清单反演 LTE 温度：不依赖平滑 volume、pressure、客户端 mesh，也不重建 fluid/thermal grid。
 
-材料和 species 都按 stable ID 排序。`regionNetworkGeneration` 标识网络中的区域 incarnation，不是 checkpoint generation 或逐 tick state revision；调用方需要新鲜值时重新查询，不能用它判断两个 observation 之间没有发生物理步。
+材料和 species 均按 stable ID 排序。`regionNetworkGeneration` 专用于标识网络中的区域实例（incarnation），独立于 checkpoint generation 与逐 tick revision；调用方获取最新状态需重新执行查询。
 
 Query API 提供宏观状态查询（体积、质量、密度、温度、材料与化学组分），不包含内部速度场或调度字段。新增字段或其他库存类型必须保持调用方可判定的单位与失败语义。
 
@@ -82,7 +82,7 @@ Query API 提供宏观状态查询（体积、质量、密度、温度、材料�
 
 液体 observation 与 carrier observation 身份不一致时整次拒绝，不拼接两个时刻的部分原始数据；路径不加载 chunk、不恢复 solver、不唤醒、不 checkpoint，也不重建 gas topology 或 thermal grid。
 
-这个额外 carrier view 是内部诊断模型，外部 Mod 不能由它推断公开 Query 已承诺 gas/solid 字段。
+该 carrier view 属于内部诊断结构，不构成公开 Query 的稳定契约承诺。
 
 对 controller 使用探针会打开 server-authored bounded summary：identity、完整 footprint、当前/保留预算、operator intent、motion/thermal state、封闭 availability reason、live inventory（若 solver 已加载）、已观测载体温度范围、事务执行条件和数值诊断。
 

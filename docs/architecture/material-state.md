@@ -37,9 +37,9 @@
 
 定义按声明顺序建立稠密 material handle；stable ID 必须是合法 Minecraft identifier 且唯一。miscibility group 再映射为 phase handle：同组材料不生成内部液液界面，不同组材料保持 phase 分区。
 
-handle 只为了数组索引。checkpoint 保存 canonical material palette，容器保存 stable ID；恢复时先验证完整 palette/registry identity，再建立当前进程 handle。不能把一次进程中的整数 handle 写入长期状态。
+handle 用于数组索引。checkpoint 保存 canonical material palette，容器保存 stable ID；恢复时先验证完整 palette/registry identity，再建立当前进程 handle。长期状态仅保存 stable ID，不持久化瞬态整数 handle。
 
-内置基线目前提供 water、oil 和 mercury。内置 palette 是生产默认定义集，不是存档的替代品；已提交区域仍由 checkpoint 中的 palette 与 registry identity 解释。
+内置基线目前提供 water、oil 和 mercury。内置 palette 作为生产默认定义集使用；已提交区域由 checkpoint 中的 palette 与 registry identity 权威解释。
 
 ### 黏度求值
 

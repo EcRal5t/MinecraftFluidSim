@@ -141,7 +141,7 @@ backend/checkpoint handoff 保存 active parcel 的接触年龄与支撑标志�
 - 液流的床面剪切应力以 Shields 判据与材料阈值比较；越阈值时按注册表侵蚀率和超临界程度把 exact SVQ 转为 active parcel。
 - 无扰动列连续 20 个 logical step 后休眠，暂停坡度松弛。每次真实运动步仍检查未排队列的暴露床面受力，超临界的列重新排队；亚临界水流保持原安静年龄。几何变化、颗粒沉积及反应也会标脏局部邻域。
 
-dirty queue、安静年龄和邻居轮转步不是库存，不能用于恢复 SVQ/kg/组成；但它们决定有界局部工作是否完成，必须随每次 immutable backend handoff 交给私有候选，否则每 tick 重建会让沉积列永远无法休眠。region HEAD 冷恢复不信任这些调度值，而是从 committed deposit 重新标脏并完成一次安全重检。
+dirty queue、安静年龄和邻居轮转步属于调度瞬态运行数据。它们控制有界局部工作收敛与休眠状态，随 immutable backend handoff 移交私有候选；region HEAD 冷恢复从 committed deposit 重新标脏并执行安全重检。
 
 沉积层采用地貌松弛模型，计算几何休止角与孔隙水，不包含连续介质颗粒力链求解。若安息角、排水或侵蚀误差超出范围，需结合具体失败机制量化评估。
 

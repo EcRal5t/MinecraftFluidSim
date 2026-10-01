@@ -93,7 +93,7 @@ CPU 在私有对象上顺序执行计算，任一阶段失败就丢弃整份候�
 - 每个 marker 的 raw float `particleVolume` 是液体体积原始数据，物理总量是这些二进制有理数的精确和；逐格 marker sum 只由该原始数据正向汇总。顺序相关的 float/double reduction 只能作带解析舍入界的诊断，不能替代 exact ledger。
 - `volume[]` 是 PIC 平滑、展示和既有表面几何的派生场，不参与库存或 pressure phase 结算；pressure 使用独立的守恒 marker footprint。
 - P2G/G2P 使用共享的 valid face；均匀密度时 face 分子/分母按 marker 体积散射，变密度时按 marker 质量散射，并在归一化前保留同一份 P2G face weight 供动能度量。MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。三轴 face splat 直接写入固定 SoA，不为每个 marker/axis 创建 callback；上一 logical step 末已完整发布且 `gridDirty == false` 的派生网格可供下一步首个 substep 直接使用，particle advection 与任何 carrier edit 都会重新置 dirty，后续 substep 不能跳过重建。
-- G2P 不使用固定 FLIP/PIC 比例。对全体 marker 写成 `v(alpha) = v_pic + alpha * (v_old - v_p2g)`，解析选择 `[0,1]` 内不超过 `max(E_pic, E_projected_grid)` 的最大 `alpha`；纯 FLIP 能量可接受时严格取 `1`，否则才退到能量可行边界。这是传递算子的全局能量约束，不是逐粒子速度钳制，也不冒充黏性。连续液体的 Newtonian 黏性应力由独立的 `LiquidViscosityStage` 推进。
+- G2P 不使用固定 FLIP/PIC 比例。对全体 marker 写成 `v(alpha) = v_pic + alpha * (v_old - v_p2g)`，解析选择 `[0,1]` 内不超过 `max(E_pic, E_projected_grid)` 的最大 `alpha`；纯 FLIP 能量可行时取 `1`，否则退至能量可行边界。此约束作用于传递算子的全局动能守恒；连续液体的 Newtonian 黏性应力由独立的 `LiquidViscosityStage` 推进。
 - reseed 以标准 `2×2×2` marker quadrature 的单 marker 体积决定逐格目标数；split 保持体积、质量、动量和质心，merge 还要求两个 raw float 体积之和可由一个 float 精确表示，否则保留 residual marker 并报告 conservation refusal；不跨 material 或 phase。GPU 的相同判定必须以禁止代数重排的精确求值执行。
 
 ### 内存布局
@@ -188,7 +188,7 @@ m_f = rho_ref / (rho_l*d_l + rho_g*d_g)
 u[n+1] = u* - dt/(rho_ref*h) * m_f * (p_g - p_l + J)
 ```
 
-当前 node 没有空间 gas inertia segment，因此严格取 `d_g = 0`，恰好退化为既有 one-sided ghost-fluid 消元；未来两侧都有 pressure unknown 时使用同一 series mass resistance，而不是按密度比切算法。
+当前 node 没有空间 gas inertia segment，因此严格取 `d_g = 0`，退化为既有 one-sided ghost-fluid 消元；两侧均有 pressure unknown 时统一使用 series mass resistance 计算。
 
 一个 face 向 liquid/gas 两行加入相同对角与相反 off-diagonal，`J` 以等量反号进入 RHS，所以矩阵保持对称，静态 `p_l-p_g=J` 不产生冲量。集总 node 行另加 `rho_ref*V*beta_s/(dt^2*h^3)` 储存对角；真空没有 continuum unknown。
 
@@ -202,7 +202,7 @@ u[n+1] = u* - dt * (1/rho) * grad(p[n+1])
     = -div(u*)/dt + beta_s/dt² * p[adv]
 ```
 
-这里 `p[adv]` 是随质量/组分/能量一致平流到控制体的热力学压力，不是凭空保留的显示场。`beta_s → 0` 时 Helmholtz 储存项严格退化为当前不可压 Poisson projection；气体使用状态方程给出的非零 `beta_s`，不需要按材料 ID 选择另一套压力算法。
+这里 `p[adv]` 为随质量/组分/能量一致平流到控制体的热力学压力。`beta_s → 0` 时 Helmholtz 储存项退化为不可压 Poisson projection；气体依状态方程给出非零 `beta_s`，统一求解格式。
 
 空间实现还必须以守恒通量更新质量、组分、动量和**总能量**，并把 pressure work 纳入同一候选；只把该储存项加到当前液体矩阵、却不建立这些权威列，不能记为已实现空间气体。低密度、高密度比、混合与相变必须由这些方程自然产生，不能用固定 FLIP 比例、速度钳制或渲染修补代替可压缩闭合。
 
@@ -229,11 +229,11 @@ u[n+1] = u* - dt * (1/rho) * grad(p[n+1])
 
 实体交互由 Fabric 每个 Minecraft tick 冻结有界 AABB、原版更新后的实体响应速度、本 tick 实际位姿差和流体观察。core 将 AABB 与当前派生的水平液层逐格求交；每格液层按开放 `2×2×2` micro layer 自下而上分配，所以浸没体积和湿区质心随子格位移连续变化，并排除 `VoxelShape` 已占据的 micro volume。
 
-这个观察不改 marker 库存，也不是压力面积分。实体侧响应仍按游戏 tick 应用；liquid moving boundary 使用 `position - oldPosition` 的实际当 tick 位移速度，不能把原版已施加重力/阻力、供下一 tick 使用的 `deltaMovement` 反向当成本 tick 表面运动。
+该项观察保持 marker 库存不变。实体侧响应按游戏 tick 应用；liquid moving boundary 取 `position - oldPosition` 的实际当 tick 位移速度，避免误用计入下 tick 预先外力的 `deltaMovement`。
 
 moving-body 输入只能在 region 可运动且 pacing 到期的真实 logical step 使用一次，PAUSED、thermal-only 和被 pacing 跳过的 tick 不得提前或重复改写 marker。
 
-core 使用紧支撑二次 B-spline 核，在湿体积上把实体运动约束写入附近 marker 速度；返回值由实际 float velocity 写入重新计算 `kg·m/s`，体积、质量、组成和 `U` 不变。该 marker 动量会经过正常 P2G、pressure projection、G2P 和 advection，因此走动、划水和入水速度可以扰动液体，而不是只唤醒调度。
+core 使用紧支撑二次 B-spline 核，在湿体积上把实体运动约束写入附近 marker 速度；返回值由实际 float velocity 写入重新计算 `kg·m/s`，体积、质量、组成和 `U` 不变。该 marker 动量经过正常 P2G、pressure projection、G2P 和 advection，使走动、划水和入水速度直接在物理场中扰动液体。
 
 当前实体浸没基于运动学 AABB 浸润近似与位移扰动：实体按外部运动刚体处理并施加流体扰动动量。后续双向闭合将把实体表面速度接入压力边界，并将实体占位纳入统一容量排开液体。
 
@@ -243,7 +243,7 @@ core 使用紧支撑二次 B-spline 核，在湿体积上把实体运动约束�
 - merge 只有在目标 raw float volume 能精确表示两 marker 的数学和时才提交；否则 marker 数可暂时高于 nominal target，但 exact 体积/质量优先，诊断必须区分 geometry、budget 与 conservation refusal。
 - marker 预算不足时先拒绝整个候选，不允许创建基础 marker 后再丢弃 side column。
 - insert/extract 先完成容量、可表示尾数、物品形状和事务预检，再修改数组。
-- 数值清理只能删除零或被显式转入 sink 的库存；“太小而看不见”不是删除理由。
+- 数值清理严格以库存归零或显式转入 sink 为准，禁止以体积微小为由丢弃有效库存。
 
 ## 客户端重建边界
 

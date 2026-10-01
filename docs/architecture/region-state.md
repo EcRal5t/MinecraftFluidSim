@@ -34,7 +34,7 @@
 
 包是不可变的，发布一次，generation 恒为 1；定义漂移只报告 mismatch，不覆盖已提交内容。成员集合固定为 `chemical-registry.nbt`、`gas-registry.nbt`、`granular-registry.nbt`、`material-registry.nbt`、`profile.nbt`、`thermal-registry.nbt`，每个成员的字节就是对应 registry codec 的严格规范编码（`*RegistryCodec.snapshotBytes`），所以包内 checksum 与 codec 自身编出的字节逐字节一致。
 
-**包是 registry snapshot 的唯一根**：五个 codec 没有自己的世界目录，`mmm/chemistry`、`mmm/gas`、`mmm/granular`、`mmm/material`、`mmm/thermal` 这类 per-kind 目录不是权威域，出现即未知条目。
+**包是 registry snapshot 的唯一根**：五个 codec 没有各自独立的世界目录；若存在 `mmm/chemistry`、`mmm/gas` 等旧式 per-kind 目录，均按未知条目处理。
 
 manifest 校验和覆盖 manifest 自身，HEAD 额外绑定 manifest 校验和、profile fingerprint 与 aggregate fingerprint。
 
@@ -42,7 +42,7 @@ manifest 校验和覆盖 manifest 自身，HEAD 额外绑定 manifest 校验和�
 
 重开时按目录内容判定唯一状态：`{HEAD, slot-a}` 已提交；`{slot-a, HEAD.nbt.tmp}` 补完 HEAD 移动；`{slot-a}` 补发 HEAD；`{slot-a.tmp}` 把中断的 staging 原样移入 quarantine 后重新发布；空目录首次发布；其他组合一律拒绝并原样保留。
 
-staging 从不删除，没有 publication identity 的 staging 只能拒绝，不能猜测或清理。quarantine 有 admission 预算，超限即拒绝而不是静默丢弃。
+staging 目录不作主动删除；无 publication identity 的 staging 判定为非法。quarantine 具有显式 admission 预算，超限时直接拒绝操作。
 
 ## 启动判定
 
@@ -59,7 +59,7 @@ staging 从不删除，没有 publication identity 的 staging 只能拒绝，�
 
 `mmm/` 下的权威域（`container-transfer`、`ownership`、`region-state`）只在存在已提交包时才允许存在；`quarantine` 是已知的持久证据归档根，但不拥有物理原始数据。没有包却出现权威，或出现任何其他未知条目，一律 LOCKED 并原样保留。这里没有迁移、没有版本嗅探、没有字段补全——旧实现产出的存档不被解释。
 
-这条直接覆盖 per-kind registry 目录：旧 build 会各自发布 `mmm/chemistry/registry.nbt` 等文件，而 registry snapshot 现在只存在于包内。这类目录既不是权威域也不是非权威域，因此按未知条目处理——世界 LOCKED，目录原样保留，不会把它们采纳、合并或迁移成包。同理，任何 `mmm/` 下无法归属的名字都 LOCKED。
+此规则覆盖 per-kind registry 目录：registry snapshot 仅允许保存在能力包内。发现遗留或未知目录时，世界置为 LOCKED，目录原样保留，严禁静默采纳或自动合并。同理，任何 `mmm/` 下无法归属的文件或目录均触发 LOCKED。
 
 ## 文件与职责边界
 
@@ -177,7 +177,7 @@ solidMask[]
 
 启用的 chemistry/granular/thermal extension 继续绑定相同 ordinal，并保存 cell-local deposit/coherent 数据。ordinal 在全 region 唯一且 cardinality 必须与所有 required side column 相等；section identity、local bounds、体积/质量/species/energy 汇总必须重新合到 manifest。
 
-数组位置不是长期 stable ID，运行时 handle 由 world registry snapshot 重新解析。
+运行时 handle 由 world registry snapshot 重新解析，数组位置不作持久化 stable ID。
 
 section、palette、mixture、deposit group、gas node 和 ledger 都必须采用规范排序。这样 checksum、故障重放和相同状态的重复 capture 不依赖 hash-map 遍历顺序。
 
@@ -225,7 +225,7 @@ catalog descriptor 只有 UUID、dimension stable ID、AABB 与 reserved cells/m
 
 profile/layout/fingerprint/HEAD 本身不可证明才形成持久 issue/LOCKED，不能把暂时预算不足混写成载荷损坏。
 
-availability 使用封闭 reason code；详细诊断只用于日志和本地展示，不充当状态机输入。availability 变化本身不捕获库存；仅当释放已加载 solver 时，才允许先发布一个合法完整 checkpoint。恢复条件满足后重新从原 HEAD restore，并按持久 operator intent 决定是否 step。
+availability 使用封闭 reason code；详细诊断供日志和本地展示查看，状态机仅根据 reason code 转移。availability 变化不捕获库存；释放已加载 solver 时方可发布完整 checkpoint。恢复条件满足后重新从原 HEAD restore，并按持久 operator intent 决定是否 step。
 
 operator intent 与 availability 在 metadata-only 状态也保持正交：操作者可以在不恢复 solver 的情况下把 UNLOADED region 的下一次运行意图设为 PAUSED 或 RUNNING；resume intent 不得为了立即运行而加载、唤醒或改写 checkpoint。
 
@@ -233,7 +233,7 @@ controller console 的 summary 只读现有 metadata 和已维护的 bounded led
 
 显式 refresh availability 才可尝试当前 runtime admission/restore，成功后仍按保存的 operator intent 决定是否 step。
 
-application 的 `RegionRuntime` 只是单次 tick 的不可变调度快照，不进入 checkpoint，也不替代这里的持久 runtime 载荷。checkpoint 保存 resume state、operator intent、entity/debug 开关、step interval 与 tick；wall-time hard-overrun/recovery streak 是当前进程内的短期调度证据，重启不能把它解释成持久 PAUSED 或数值失败。
+`RegionRuntime` 仅为单次 tick 的不可变调度快照，不进入 checkpoint。checkpoint 保存 resume state、operator intent、entity/debug 开关、step interval 与 tick；wall-time hard-overrun/recovery streak 是进程内短期调度指标，重启时不解释为持久 PAUSED 或数值失败。
 
 ## 恢复
 
@@ -250,7 +250,7 @@ application 的 `RegionRuntime` 只是单次 tick 的不可变调度快照，不
 
 热区域 capture 前必须先把 current marker/occupancy 与 gas topology、gas inventory 和 gas energy ordinal 同步到同一个逻辑时刻。同步失败时 checkpoint 失败，活动 solver 保留，原 HEAD 不变。
 
-同步是 capture 的组成部分而不是事后修补：先根据待发布 marker/solid/coherent geometry 派生 cavity topology，再以稳定 overlap 规则规划 gas merge/split/ambient exchange，联合验证 gas inventory、node `U` 和 topology key。只有同步候选闭合后，section marker 和 gas extension 才能一起编码。
+同步为 capture 的前置必要环节：先根据待发布 marker/solid/coherent geometry 派生 cavity topology，再以稳定 overlap 规则规划 gas merge/split/ambient exchange，联合验证 gas inventory、node `U` 和 topology key。只有同步候选闭合后，section marker 和 gas extension 才能一起编码。
 
 ## 故障、清理与删除
 

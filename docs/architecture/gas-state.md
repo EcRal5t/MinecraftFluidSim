@@ -27,7 +27,7 @@
 - 开放空间连接无限环境节点；密闭空间保存有限气体库存。
 - controller 的已验证闭壳 footprint 可声明 sealed domain boundary。命令临时域保持环境开放。
 - `AirCavityScanner` 只在当前网格预算内 flood fill，不读取未加载世界；部分充液格的剩余空间参与 runtime available volume。
-- 节点 pressure、density、temperature、孔流速度和边是派生运行态，不是独立库存。
+- 节点 pressure、density、temperature、孔流速度和边均为派生运行态，不作独立库存存储。
 
 ### Cavity scan
 
@@ -101,7 +101,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 该中间候选用实际提交前后 float marker 体积差更新被编辑 cell 的 exact marker sum，再沿现有 node membership 重新汇总连续 available volume；相变期间保留联合守恒的 gas `U`，并与 node volume 一次提交；后续实际运动的容量变化才结算等熵功。
 
-只有 marker 新增/删除或其他结构变化才重新 flood fill、overlap 和 remap。logical step 末以及 capture 前仍从完整 carrier geometry 重扫，稳定路径不是持久 topology 的替代原始数据。
+只有 marker 新增/删除或其他结构变化才重新 flood fill、overlap 和 remap。logical step 末以及 capture 前仍从完整 carrier geometry 重扫，以保证持久拓扑与瞬态几何严格一致。
 
 重扫先建立旧 node 与新 node 的实际 cell overlap，再纯规划全部 transfer：
 
@@ -120,7 +120,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 一个界面 cell 可以同时含多种合法 liquid carrier。某条气液 transition 只结算其目标 liquid 的体积、质量、组成和相变能量；同格其他 liquid 原样加入该 cell 的 LTE heat-bath inventory，并计入冷凝容量，但不被改材料、不被并入目标组成，也不能仅因存在就触发候选暂停。
 - 所有 candidate 必须能由 world thermal registry 的连续状态函数从权威 `U` 唯一反演；声明 caloric 温区之外沿最近端点 `cv` 延拓，不因标定端点暂停。凝聚相的 `T_eq(p)` 在数据内插值、数据外沿端点割线延伸，详见热学专题。
 - 一个 liquid cell 可同时邻接多个独立 sealed node。gas topology 继续保留各 node 的库存和 `U`，phase planner 不合并它们；每个 pressure interval 只向绝对分压失衡最大的可执行 node 提交一次 cell 交换，随后由下一 projection 同步该体积变化。
-- mechanics 可从所有液气界面选择一个统一 sealed-node gauge reference，在 PCG 内只求相对压力并在绝对观察/热学边界加回；该数值换元不修改 node inventory、U 或不同 node 间的压差。接触液体的有限 node 会得到当次 projection 的集总可压缩 pressure unknown；它是由同一 EoS 线性化的 scratch，不是新的权威 node pressure 列。
+- mechanics 可从所有液气界面选择一个统一 sealed-node gauge reference，在 PCG 内只求相对压力并在绝对观察/热学边界加回；该数值换元不修改 node inventory、U 或不同 node 间的压差。接触液体的有限 node 会得到当次 projection 的集总可压缩 pressure unknown；该项为同一 EoS 线性化的临时求解变量，不写入权威 node pressure 列。
 
 当前 `AirNetwork` 是有限体积热力学与孔流网络模型；空间 FLIP 网格承载不可压凝聚相。有限 node 与液体接触时已用 `C_V = V*beta_s` 作为集总储存项进入同一对称 pressure block system，液体侵入/退出气腔的面通量与 node 压力响应因而在本子步隐式闭合；等温 `beta=1/p_abs`，热状态 `beta_s=1/(gamma*p_abs)`。
 
@@ -151,7 +151,7 @@ c = sqrt(K_s / rho_gas)
 beta_s = 1 / K_s
 ```
 
-`GasThermalModel.HydrodynamicState` 是上述局部 ideal-gas mixture 闭合的唯一实现：`C_v,total` 来自同一库存和权威 `U` 所在 caloric segment 或端点延拓，`R_total` 来自同一 exact standard volume；绝热体积模量 `K_s`、声速 `c` 与压力 compliance `beta_s` 都是状态方程导数，不是 CFL 调参或材料特例。
+`GasThermalModel.HydrodynamicState` 是上述局部 ideal-gas mixture 闭合的唯一实现：`C_v,total` 来自同一库存和权威 `U` 所在 caloric segment 或端点延拓，`R_total` 来自同一 exact standard volume；绝热体积模量 `K_s`、声速 `c` 与压力 compliance `beta_s` 均严格依状态方程导数推导。
 
 caloric 标定端点不截断内禀温度，相平衡曲线继续拥有自己的压力数据域。若要支持非理想气体，应扩展数据驱动的状态方程及其导数，不能在 solver 中按 component ID 修正压力。
 
@@ -185,8 +185,8 @@ gas registry fingerprint 同时绑定每个 component 的允许 species 集合�
 
 管理员 `VENT_SEALED_GAS` 是一个联合持久候选：所有 sealed component nanos/kg/species/residual 按实际值进入 gas escaped sink，所有 gas node `U` 按实际值进入 thermal external sink。
 
-操作保留由闭壳几何派生的完整 node membership、available volume 与 edge，但把每个 node 的 component inventory 和对应 `U` 精确置零，因此提交结果是显式密闭真空而不是 ambient-connected 特例。
+操作保留由闭壳几何派生的完整 node membership、available volume 与 edge，并将各 node 的 component inventory 和对应 `U` 精确置零，提交结果为显式密闭真空。
 
-plan 同时绑定 `AirNetwork` revision 与完整 thermal owner revision；commit 在第一次 mutation 前预检两者，不能先发布 thermal sink 再发现 gas topology 已 stale，也不能用旧 audit successor 覆盖新的传导或边界热账本。
+plan 同时绑定 `AirNetwork` revision 与完整 thermal owner revision；commit 在首次变更前联合校验两者，避免拓扑过期或 audit successor 冲突导致部分提交。
 
 真空节点可以 capture、恢复、清空凝聚相、再次排气并在显式 resume 后继续运行；后续注液、蒸发或拓扑 merge/split 只能从真实 transfer/phase source 建立新库存，不能用环境默认库存补回。

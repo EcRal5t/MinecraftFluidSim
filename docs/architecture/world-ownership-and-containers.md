@@ -27,7 +27,7 @@
 
 ## 三个持久域
 
-controller 产品跨越三个彼此不能假装原子的持久域：
+controller 产品跨越三个具有独立生命周期的持久域：
 
 - region-state：marker、材料、化学、固体、气体和热学库存，唯一 commit point 是 region HEAD；
 - Minecraft world/actor：方块、玩家手中物品或 dispenser inventory；
@@ -86,7 +86,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 破坏性操作只通过 controller console 的服务端预览/确认协议进入，要求与 `/mmm` Brigadier 命令相同的 server command-source 内建管理员权限。预览 token 只存在内存、短时有效、绑定玩家和一次确认；确认重新验证 generation、动作、权限、WAL、availability、solver 与有限设备 identity。四个动作的职责严格分开：
 
 - `EMPTY_CONDENSED` 联合清除 liquid、chemical、active/deposit/coherent condensed truth，把实际物质与凝聚相 `U` 记入 operator escaped/external sink；保留 controller、ownership 和 sealed gas。
-- `VENT_SEALED_GAS` 联合清除 sealed component nanos/kg/species/residual 与实际 gas `U`，分别记入 gas escaped sink 和 thermal external sink；闭壳的完整 gas membership、available volume 与 edge 保持不变，提交结果是库存与 `U` 严格为零的密闭真空，不是 ambient 连接。显式 resume 后仍可运行，后续库存只能来自真实容器、相变或拓扑 transfer。
+- `VENT_SEALED_GAS` 联合清除 sealed component nanos/kg/species/residual 与实际 gas `U`，分别记入 gas escaped sink 和 thermal external sink；闭壳的完整 gas membership、available volume 与 edge 保持不变，提交结果为库存与 `U` 严格为零的密闭真空。显式 resume 后仍可运行，后续库存只能来自真实容器、相变或拓扑 transfer。
 - `RELEASE_OWNERSHIP` 只在凝聚相、气体和有限设备为空且无 WAL/phase work 后恢复 preimage；玩家已经占据的方块优先，不被覆盖。
 - `REMOVE_EMPTY_REGION` 只在上述库存为空、ownership 已释放且 quarantine 可接纳时发布 `REMOVED` HEAD。随后发送 network 删除标记、注销 runtime，并把旧 ACTIVE payload 收敛到 `mmm/quarantine/removed-region/`；UUID 永不复用。
 
@@ -108,7 +108,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 - 任何非空 MMM actual container 还保存创建它的 world capability profile fingerprint；空容器不伪造 profile 身份。
 - item count 必须为 1；damage、tooltip、durability bar、颜色和温度不参与结算。
 
-item fingerprint 编码实际可结算的整组数据，而非仅 item id：kind、typed amount、stable mixture/chemical/granular contents、raw kg mass bits、可选 ThermalContents 及其 registry/underlying hash，以及 actual inventory 的 world profile fingerprint。
+item fingerprint 完整编码各字段以供结算：kind、typed amount、stable mixture/chemical/granular contents、raw kg mass bits、可选 ThermalContents 及其 registry/underlying hash，以及 actual inventory 的 world profile fingerprint。
 
 `ContainerTransferJournal` 只保存这一数据，Fabric `ContainerItemMapper` 独占 fingerprint 与 `ItemStack` 的双向映射。空桶、部分桶、材料桶、化学桶、颗粒容器和 creative descriptor 是不同 shape；shape 之间缺字段或同时出现冲突 component 都拒绝。
 
@@ -137,7 +137,7 @@ actor identity 与 journal 位于 core，是不引用 `BlockPos`、`ItemStack` �
 
 将来增加外部 Mod actor 时必须给它独立的稳定 provider/type identity 和跨重启可解析状态，不能把运行期 callback 写进 WAL。
 
-insert/extract 返回“实际转移量”，WAL 和 after item 必须使用这个量而非请求量。液体用 nanos，颗粒用 SVQ；两个资源域不能共用一个模糊 `amount`。含热纯水可按同质体积分拆 coupled `U`；材料/化学混合物必须按源桶共同温度和实际选中质量/组分计算 coupled `U`，item 余量以源 `U` 减法结算浮点余数，不能把体积比例冒充热容量比例。
+insert/extract 返回“实际转移量”，WAL 和 after item 必须记录该实际转移量。液体用 nanos，颗粒用 SVQ；两个资源域不能共用模糊 `amount`。含热纯水可按同质体积分拆 coupled `U`；材料/化学混合物必须按源桶共同温度和实际选中质量/组分计算 coupled `U`，item 余量以源 `U` 减法结算浮点余数，禁止按体积比例折算热容量。
 
 ## 跨持久域 WAL
 
