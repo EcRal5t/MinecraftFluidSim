@@ -214,6 +214,20 @@ public final class ThermalCellGrid {
 	}
 
 	void solveTransportCell(int cell, double energy) { solveCell(cell, energy); }
+	/** Zero-conductivity cells advect their individual carrier U without artificial intracell exchange. */
+	void setTransportCellInternalEnergies(double[] targetEnergy) {
+		validateCellInternalEnergies(targetEnergy);
+		for (int cell = 0; cell < cellCount; cell++) if (occupied(cell) && conductivity[cell] == 0.0) {
+			if (targetEnergy[cell] != internalEnergy[cell])
+				throw new IllegalArgumentException("Insulating thermal cell received a conductive flux");
+			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier])
+				carrierMaterial[carrier].temperatureForSensibleSpecificEnergy(
+						(carriers.internalEnergy(carrier) - cachedBaseEnergy(carrier)) / carrierMass[carrier]);
+		}
+		for (int cell = 0; cell < cellCount; cell++) if (occupied(cell) && conductivity[cell] > 0.0)
+			assignSolvedCellEnergy(cell, targetEnergy[cell]);
+		updateObservedTemperatureRange();
+	}
 	void assignTransportCellEnergy(int cell, double energy) {
 		solveCell(cell, energy);
 		assignSolvedCellEnergy(cell, energy);

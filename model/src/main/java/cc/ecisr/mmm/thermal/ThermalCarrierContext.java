@@ -15,6 +15,12 @@ import java.util.Map;
 public interface ThermalCarrierContext {
 	int markerCount();
 	int cell(int marker);
+	@FunctionalInterface
+	interface SupportConsumer { void accept(int cell, double weight); }
+	/** Prepares current carrier geometry once per observation batch. */
+	default void prepareObservationSupport() { }
+	/** Positive partition of unity for spatial observations; inventory membership remains {@link #cell}. */
+	default void observationSupport(int marker, SupportConsumer consumer) { consumer.accept(cell(marker), 1.0); }
 	/** Ascending marker ordinals in one cell; callers start with after = -1. */
 	default int nextMarkerInCell(int cell, int after) {
 		for (int marker = after + 1; marker < markerCount(); marker++) if (cell(marker) == cell) return marker;

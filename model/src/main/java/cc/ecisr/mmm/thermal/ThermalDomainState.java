@@ -37,6 +37,9 @@ public final class ThermalDomainState {
 	private final int[] materialByFluidHandle;
 	private final int[] materialByGranularHandle;
 	private final ThermalCellGrid cellGrid;
+	private ThermalCellGrid observationGrid;
+	private ThermalSpatialObservation spatialObservation;
+	private boolean spatialObservationPrepared;
 	private final ThermalTransport transport;
 	private final ThermalPhaseChangeEngine phaseChange;
 	private final double insertionTemperatureK;
@@ -467,6 +470,25 @@ public final class ThermalDomainState {
 	/** Rebuilds the derived LTE grid once before a phase scan over many cells. */
 	public void preparePhaseScan(ThermalCarrierContext markers) {
 		cellOperations.preparePhaseScan(markers);
+	}
+
+	/** Rebuilds a read-only spatial caloric observation without changing the phase/transport LTE grid. */
+	public void prepareSpatialObservation(ThermalCarrierContext markers) {
+		spatialObservationPrepared = false;
+		markers.prepareObservationSupport();
+		if (observationGrid == null) {
+			observationGrid = new ThermalCellGrid(cellGrid.cellCount());
+			spatialObservation = new ThermalSpatialObservation();
+		}
+		spatialObservation.prepare(carrierAccess(markers), markers);
+		observationGrid.rebuild(spatialObservation);
+		spatialObservationPrepared = true;
+	}
+
+	/** Valid within the prepared batch; rebuild after position, composition or energy changes. */
+	public double spatialTemperatureInCell(int cell) {
+		if (!spatialObservationPrepared) throw new IllegalStateException("Thermal spatial observation has not been prepared");
+		return observationGrid.temperature(cell);
 	}
 
 	/** Reads one cell from the phase-scan grid; callers must rebuild after every committed carrier edit. */

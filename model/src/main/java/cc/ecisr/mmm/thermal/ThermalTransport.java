@@ -148,7 +148,7 @@ public final class ThermalTransport {
 			if (maximumAbsoluteTransfer[0] == 0.0 && grid.carriersMatchSolvedTemperature()) continue;
 			double[] target = grid.copyInternalEnergy();
 			for (int cell = 0; cell < target.length; cell++) target[cell] += deltaEnergy[cell];
-			grid.setCellInternalEnergies(target);
+			grid.setTransportCellInternalEnergies(target);
 		}
 		double maximumChange = 0.0;
 		for (int cell = 0; cell < initialTemperature.length; cell++) if (grid.occupied(cell)) {

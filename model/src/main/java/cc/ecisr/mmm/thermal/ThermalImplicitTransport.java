@@ -18,7 +18,7 @@ final class ThermalImplicitTransport {
 			maximum = Math.max(maximum, Math.abs(transfer));
 			if (face.second() < 0) reservoir = reservoir.add(SignedDyadic.of(transfer));
 		}
-		if (!grid.carriersMatchSolvedTemperature()) grid.setCellInternalEnergies(grid.copyInternalEnergy());
+		if (!grid.carriersMatchSolvedTemperature()) grid.setTransportCellInternalEnergies(grid.copyInternalEnergy());
 		grid.finishTransport();
 		return new Exchange(maximum, reservoir);
 	}

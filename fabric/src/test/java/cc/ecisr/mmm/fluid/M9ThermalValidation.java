@@ -37,6 +37,7 @@ public final class M9ThermalValidation {
 		ThermalTransportValidationScenarios.containerTransferCarriesAuthoritativeEnergy();
 		ThermalTransportValidationScenarios.liquidTransportAndHandoffCloseEnergy();
 		ThermalTransportValidationScenarios.localizedHeatingDrivesBoussinesqCirculation();
+		LiquidThermalAdvectionValidation.main(new String[0]);
 		LiquidStratificationValidation.validityAndCommittedDefinitions();
 		LiquidStratificationValidation.stableLayers();
 		LiquidStratificationValidation.unstableLayersRespond();
