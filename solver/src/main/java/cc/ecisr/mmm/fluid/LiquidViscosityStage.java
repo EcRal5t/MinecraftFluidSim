@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
-/** Reassembles viscosity after body forces and before pressure; retries the private step when dt is too large. */
+/** Diffuses incoming flow before body-force prediction; retries the private step when dt is too large. */
 final class LiquidViscosityStage {
 	private final FluidDomain domain;
 	private ViscousMacDiscretization discretization;

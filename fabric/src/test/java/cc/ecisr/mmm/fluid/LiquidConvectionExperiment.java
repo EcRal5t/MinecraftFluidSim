@@ -8,7 +8,7 @@ import java.util.List;
 /** Quantifies the production transport response; the Ra growth criterion remains an open acceptance item. */
 public final class LiquidConvectionExperiment {
 	private static final double DELTA_T = 10, T_REF = 293.15, DIFFUSION_RATE = 0.01;
-	private record Measurement(double rayleigh, double prandtl, double growth) { }
+	private record Measurement(double rayleigh, double prandtl, double growth, double viscous, double p2g, double g2p) { }
 	private LiquidConvectionExperiment() { }
 
 	public static void main(String[] args) {
@@ -21,6 +21,7 @@ public final class LiquidConvectionExperiment {
 				System.out.printf("Convection N=%d Ra=%.6f Ra/Rac=%.2f Pr=%.6f A=%.4f K normalizedGrowth=%.6f predicted=%.6f%n",
 						grid, actual.rayleigh(), actual.rayleigh() / critical, actual.prandtl(), amplitude, actual.growth(),
 						-q2 + Math.sqrt(actual.rayleigh() * a * a / q2));
+				System.out.printf("  mechanical energy: viscous=%g P2G=%g G2P=%g J%n", actual.viscous(), actual.p2g(), actual.g2p());
 			}
 		}
 	}
@@ -67,9 +68,12 @@ public final class LiquidConvectionExperiment {
 		}
 		domain.gridDirty = true;
 		double volumeBefore = domain.totalVolume(), massBefore = domain.totalMass();
-		double first = Double.NaN, last = Double.NaN;
+		double first = Double.NaN, last = Double.NaN, viscous = 0, p2g = 0, g2p = 0;
 		for (int step = 0; step < 100; step++) {
 			var stats = domain.stepWithMechanicalAudit(false, 0);
+			viscous += stats.viscosity().dissipatedJoules();
+			p2g += stats.mechanicalAudit().particleToGridTransferJoules();
+			g2p += stats.mechanicalAudit().gridToParticleTransferJoules();
 			if (domain.totalVolume() != volumeBefore || Math.abs(domain.totalMass() - massBefore) > 1e-8
 					|| !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
 					|| Math.abs(stats.mechanicalAudit().closureResidualJoules()) > 1e-6)
@@ -78,7 +82,7 @@ public final class LiquidConvectionExperiment {
 			if (step == 19) first = last;
 		}
 		return new Measurement(actualRa, nu / alpha,
-				Math.log(Math.abs(last / first)) / (80 * config.timeStep() * alpha / (height * height)));
+				Math.log(Math.abs(last / first)) / (80 * config.timeStep() * alpha / (height * height)), viscous, p2g, g2p);
 	}
 
 	private static double temperatureMode(FluidDomain domain, int n) {

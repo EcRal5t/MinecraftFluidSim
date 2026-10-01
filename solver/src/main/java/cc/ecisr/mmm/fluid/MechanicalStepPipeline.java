@@ -8,8 +8,8 @@ import java.util.Arrays;
 
 /**
  * Composes one mechanical substep from the explicit solver stages in the established order:
- * gas topology step, particle-to-grid rebuild, granular mechanics, porous damping, gravity,
- * thermal buoyancy, surface tension, solid-face enforcement, viscous stress, pressure solve, the pending
+ * gas topology step, particle-to-grid rebuild, granular mechanics, porous damping, viscous stress,
+ * gravity, thermal buoyancy, surface tension, solid-face enforcement, pressure solve, the pending
  * phase-geometry synchronization, velocity projection, grid-to-particle handoff, advection
  * and collision commit. The pipeline returns only typed stats and the pending-geometry
  * completion flag; thermal/chemistry/reseed axes stay outside.
@@ -89,6 +89,19 @@ final class MechanicalStepPipeline {
 			audit.porousBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
+		// Evaluate incoming strain before gravity prediction so hydrostatic flow retains zero viscous dissipation.
+		bodyForceStage.enforceSolidFaceVelocities();
+		if (captureAudit) {
+			nextKineticEnergy = access.gridKineticEnergyJoules();
+			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
+		}
+		FluidDomain.ViscousStepStats viscosity = viscosityStage.apply(dt);
+		if (captureAudit) {
+			nextKineticEnergy = access.gridKineticEnergyJoules();
+			audit.viscousWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			stageKineticEnergy = nextKineticEnergy;
+		}
 		bodyForceStage.applyGravity(dt);
 		if (captureAudit) {
 			nextKineticEnergy = access.gridKineticEnergyJoules();
@@ -113,12 +126,6 @@ final class MechanicalStepPipeline {
 		if (captureAudit) {
 			nextKineticEnergy = access.gridKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
-			stageKineticEnergy = nextKineticEnergy;
-		}
-		FluidDomain.ViscousStepStats viscosity = viscosityStage.apply(dt);
-		if (captureAudit) {
-			nextKineticEnergy = access.gridKineticEnergyJoules();
-			audit.viscousWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		gridToParticleStage.capturePreProjectionEnergy();

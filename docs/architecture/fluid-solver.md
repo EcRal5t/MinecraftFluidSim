@@ -111,7 +111,7 @@ marker 数和所有 side column 使用同一个 swap-remove/append 顺序。新�
 
 ### 液体黏性应力
 
-`LiquidViscosityStage` 在外力和固定面法向速度处理之后、压力投影之前执行。`ViscousMacDiscretization` 沿用压力液体 owner 与开放面；参与单元同时须持有液体 marker。单元液体控制体为 marker 体积与当前可用体积的较小者，密度取真实质量/体积；每个开放 MAC 面由相邻参与单元各贡献半份 `rho*V`，换算到 kg。薄于压力分类分辨率的独立液滴继续由粒子输运，尚无连续黏性控制体。
+`LiquidViscosityStage` 在颗粒和多孔阻力处理、固定面法向速度校验之后，重力、热浮力与张力施力之前推进已有流动。随后压力投影建立力平衡；静水初态的临时重力预测速度由压力消除，黏性阶段保持零应变与零耗散。`ViscousMacDiscretization` 沿用压力液体 owner 与开放面；参与单元同时须持有液体 marker。单元液体控制体为 marker 体积与当前可用体积的较小者，密度取真实质量/体积；每个开放 MAC 面由相邻参与单元各贡献半份 `rho*V`，换算到 kg。薄于压力分类分辨率的独立液滴继续由粒子输运，尚无连续黏性控制体。
 
 离散使用单元法向应变和网格边上的剪切应变。法向行保留 `2*mu`，剪切行同时含 `du_a/dx_b + du_b/dx_a`，相邻四格黏度使用两次调和平均；开放剪切面积取四个支撑压力面的共同最小开口。每行形成非负的 `w*b*b^T`，同轴内部成对冲量用相反系数写入。
 
@@ -138,8 +138,8 @@ dt <= 2/L
 ## Logical step
 
 1. 读取当前 geometry、cut-cell、carrier occupancy 和边界条件。
-2. 体积/质量加权 P2G，施加重力、热浮力、气压、颗粒和实体的派生力。
-3. 施加完整 Newtonian 黏性应力，以实际离散矩阵检查显式步长。然后构造物理目标散度并求解 pressure projection；该解是本步对外 pressure/机械功原始数据。
+2. 体积/质量加权 P2G，推进颗粒与多孔阻力，校验固定面法向速度，再按完整 Newtonian 黏性应力扩散已有流动；以实际离散矩阵检查显式步长。
+3. 施加重力、热浮力、张力和气压等派生作用，再构造物理目标散度并求解 pressure projection；该解是本步对外 pressure/机械功原始数据。
 4. 以投影后网格动能约束 G2P 的最大 FLIP 增量；marker 位置沿与 MAC 离散散度一致的二阶 `H(div)` 场以 RK4 推进，再进入 CCD；partial cut-face 暂沿用 cut-cell 插值与 CCD。
 5. 在传导前冻结颗粒反应 dirty cell，随后依次执行有限体积传导、液相反应、颗粒析出/溶解、凝聚相变和气液相变；两类相变共享同一操作预算。
 6. 执行 active/deposit compaction、沉积与局部唤醒。

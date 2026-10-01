@@ -73,19 +73,24 @@ final class LiquidStratificationValidation {
 	}
 
 	static void stableLayers() {
-		for (double[] state : new double[][] {{0.10, 0}, {0, -20}, {0.01, 10}}) {
-			FluidDomain domain = fixture(state[0], false, false, state[1]);
+		for (double[] state : new double[][] {{0.10, 0, 0}, {0, -20, 0}, {0.01, 10, 0}, {0, -20, 100}}) {
+			var definitions = state[2] == 0 ? BuiltinFluidMaterials.createRegistry()
+					: new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(BuiltinFluidMaterials.WATER,
+							List.of(new MaterialRegistry.ViscositySegment(250, 600, state[2], state[2])))), List.of());
+			FluidDomain domain = fixture(state[0], false, false, state[1], definitions);
 			Inventory initial = Inventory.capture(domain);
 			double composition = densityContrast(domain);
-			double maximum = 0;
+			double maximum = 0, viscous = 0;
 			for (int i = 0; i < 40; i++) {
-				domain.stepWithMechanicalAudit(false, 0);
+				var stats = domain.stepWithMechanicalAudit(false, 0);
+				viscous += stats.viscosity().dissipatedJoules();
 				initial.check(domain);
 				maximum = Math.max(maximum, domain.maximumParticleSpeed());
 			}
 			check(maximum < 1e-8, "stable stratification hydrostatic speed exceeds 1e-8 m/s: " + maximum);
-			System.out.printf("  stable liquid layers composition=%g thermal=%g maxSpeed=%g m/s%n",
-					composition, -domain.materialDefinitions.entry("mmm:water").thermalExpansion().relativeBuoyancy(T_REF + state[1]), maximum);
+			check(viscous < 1e-16, "hydrostatic prediction generated spurious viscous dissipation: " + viscous);
+			System.out.printf("  stable liquid layers composition=%g thermal=%g maxSpeed=%g m/s viscous=%g J%n",
+					composition, -domain.materialDefinitions.entry("mmm:water").thermalExpansion().relativeBuoyancy(T_REF + state[1]), maximum, viscous);
 		}
 	}
 
