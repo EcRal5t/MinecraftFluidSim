@@ -146,7 +146,7 @@ dt <= 2/L
 7. 经 `CarrierMutationCoordinator` 执行 reseed，同时搬运 chemistry/thermal side column。
 8. 只有整个私有 candidate 成功后才替换诊断并发布完整后继。
 
-相变产生的 pending volume/work 由下一次真实 projection 按该次绝对压力 结算一次，因此 pressure step 是唯一机械功提交点。相变提交已经改变 marker 几何，pending volume 不再重复写入目标散度。
+相变在固定区域体积下联合守恒两相内能，并更新 marker 几何。pending volume 记录由下一次真实 projection 完成力学同步后清除；液体与颗粒运动造成的气腔容量变化由气体等熵模型结算机械功。能量规则见 [热学相变](thermal-state.md#相变)。
 
 自由面平衡夹具必须区分两种初态：液体几何先建立、随后按剩余空间初始化环境气体，表示无外部做功的半满平衡态；气体先按空腔初始化、随后向密闭域注液，则是压缩气体的 external-source 操作，必须保留相应气体内能和压力功，不能拿前一种夹具的环境态覆盖或归零。
 

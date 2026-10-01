@@ -29,6 +29,8 @@
 
 [MmmRuntime](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MmmRuntime.java) 提供按具体业务命名的入口。世界内可变运行政策归 [MinecraftRuntimePolicy](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRuntimePolicy.java)，同步力学计算归 [MinecraftMotionExecutor](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftMotionExecutor.java)，管理员写操作归 [MinecraftRegionOperatorActions](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionOperatorActions.java)。
 
+新增服务由 `MmmRuntimeFactory` 组装并注入对应业务模块，实例随所属服务器创建和释放。静态服务器实例查找统一通过 `MmmRuntimeRegistry`；类职责、依赖方向与注册点由架构检查约束。
+
 外部 Mod 可以在启动前订阅事件。Registry 暂存事件中心，运行时建立后接管同一实例。启动前的只读查询返回暂不可用；查找服务本身没有初始化世界的副作用。
 
 玩家协议会话由 [ProtocolSessions](../../fabric/src/main/java/cc/ecisr/mmm/network/ProtocolSessions.java) 随当前运行时保存。[FluidProtocolServer](../../fabric/src/main/java/cc/ecisr/mmm/network/FluidProtocolServer.java) 保存配置协商期间的短期任务。可选 GPU probe 使用自己的生命周期实例，通过 [MmmGpuProbeHostIntegration](../../gpu-probe/src/main/java/cc/ecisr/mmm/gpuprobe/MmmGpuProbeHostIntegration.java) 接入主模组。

@@ -9,6 +9,7 @@
 | [CPU 状态交接与参考能优化](maintenance/cpu-hotspot-optimization-2026-09-23.md) | 2026-09-23 分阶段性能、缓存命中、状态摘要及长跑对照 |
 | [CPU 性能审查与补正](maintenance/cpu-hotspot-review-2026-09-24.md) | 组合测量纠错、颗粒优化拆分对照及撤回原始列接口的依据 |
 | [细沙床面起动补正](maintenance/granular-bed-entrainment-2026-09-24.md) | 休眠检查、床面剪切、薄床阻力及完整水流搬运轨迹 |
+| [旧会话交接提示](maintenance/next-session-initial-prompt.md) | 保留旧交接文本；当前开发要求见 [AGENTS.md](../../AGENTS.md)，推进顺序见 [产品路线](../roadmap/product-roadmap.md) |
 | [旧提案](proposals/) | 查询当时的方案、阶段划分和取舍。四份专题计划与 [剩余工作实施总计划](proposals/remaining-work-implementation-plan.md) 仍提供工作包依赖图、故障注入矩阵和验收标准，但状态已过期，当前剩余工作与顺序以 [产品路线](../roadmap/product-roadmap.md)为准 |
 | [历史审查](review/) | 查询当时发现的问题与审查意见 |
 

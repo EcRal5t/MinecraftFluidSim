@@ -49,6 +49,8 @@
 
 库存结算使用左侧的原始数据。一个操作改变多种载体时，它们的物质、组成和能量一起校验、一起提交。温度、颜色和渲染网格可以重新生成。
 
+液体组成密度由实际质量除以实际体积得到，热浮力使用参考态附近的 Boussinesq 温差修正；气体温度与压力由库存、可用体积和总内能通过状态方程派生。具体规则见 [材料状态](material-state.md#求解器边界)和 [热学状态](thermal-state.md#热浮力)。
+
 ### 单位
 
 - `BV` 是一个方块的体积，按 `1 m³` 计算。默认求解单元边长为 `0.5 m`，一个方块包含八个单元。
@@ -77,7 +79,11 @@
 
 力学顺序在 [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)，传热、反应和相变顺序在 [ThermochemistryPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermochemistryPipeline.java)。具体离散方法见 [流体求解器](fluid-solver.md)，相变几何的后续处理见 [转移前同步相变几何](runtime-and-lifecycle.md#phase-work)。
 
+相变按固定区域体积联合守恒两相内能。体积变化记录留给下一次真实压力投影同步几何；液体与颗粒运动造成的气腔容量变化按气体等熵模型结算机械功。详见 [相变](thermal-state.md#相变)。
+
 ## 存档和故障恢复
+
+运行时每步计算经身份、求解器代次与布局校验后接管完整候选。存盘时由 `HEAD` 指向完整 checkpoint 代次；求解器代次与持久化代次分别维护。两种提交的步骤见 [后端计算与提交](runtime-and-lifecycle.md#candidate)和 [存档提交模型](region-state.md#提交模型)。
 
 服务器首次启动时，把数据包中的材料定义与功能布局保存为世界能力包。已有世界使用已提交的包解释库存。启动后数据包与它不同会报告差异，原存档继续使用原定义。格式、身份或布局无法验证时保留文件并锁定，处理方式见 [区域存档](region-state.md)。
 
