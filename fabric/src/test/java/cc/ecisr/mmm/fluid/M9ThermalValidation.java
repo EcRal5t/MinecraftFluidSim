@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.thermal.ThermalOwnerStoreValidation;
+import cc.ecisr.mmm.thermal.ThermalContactValidation;
 
 /** Stable thermal selector for definition, state-function, transport and phase invariants. */
 public final class M9ThermalValidation {
@@ -28,6 +29,7 @@ public final class M9ThermalValidation {
 		ThermochemistryValidationScenarios.granularReactionHeatUsesOneConservedCellEnergy();
 		ThermalPhaseValidationScenarios.phasePlateauUsesTheStateFunctionGap();
 		ThermalOwnerStoreValidation.validate();
+		ThermalContactValidation.validate();
 		ThermalPhaseValidationScenarios.coherentPhaseInventoryAndExactBatchPlanning();
 		ThermalPhaseValidationScenarios.compositionAndGranularPhaseChangeConservesJointTruth();
 		ThermalPhaseValidationScenarios.phaseVolumeWorkWaitsForMechanicalProjection();

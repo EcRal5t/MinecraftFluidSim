@@ -25,33 +25,11 @@ final class ThermalImplicitTransport {
 
 	private static double transfer(ThermalCellGrid grid, Face face, double dt) {
 		int first = face.first(), second = face.second();
-		double firstT = grid.temperature(first);
-		double secondT = second < 0 ? face.boundaryTemperature() : grid.temperature(second);
-		if (firstT == secondT) return 0.0;
-		double sign = secondT > firstT ? 1.0 : -1.0;
 		double firstU = grid.internalEnergy(first), secondU = second < 0 ? 0.0 : grid.internalEnergy(second);
-		double high = Math.abs(grid.energyChangeToTemperature(first, secondT));
-		if (second >= 0) high = Math.min(high, Math.abs(grid.energyChangeToTemperature(second, firstT)));
-		if (!(Double.isFinite(high) && high > 0.0)) throw new IllegalArgumentException("Thermal contact energy interval is invalid");
-		double inverseConductanceDt = (1.0 / face.conductance()) / dt;
-		double slope = 1.0 / grid.heatCapacity(first) + (second < 0 ? 0.0 : 1.0 / grid.heatCapacity(second));
-		double low = 0.0;
-		double amount = Math.min(high, Math.abs(secondT - firstT) / (inverseConductanceDt + slope));
-		while (true) {
-			grid.solveTransportCell(first, firstU + sign * amount);
-			if (second >= 0) grid.solveTransportCell(second, secondU - sign * amount);
-			double hot = second < 0 ? secondT : grid.temperature(second);
-			double residual = amount * inverseConductanceDt - sign * (hot - grid.temperature(first));
-			double precision = 16.0 * Math.max(Math.ulp(hot), Math.ulp(grid.temperature(first)));
-			if (Math.abs(residual) <= precision || Math.nextUp(low) >= high) break;
-			if (residual > 0.0) high = amount; else low = amount;
-			slope = 1.0 / grid.heatCapacity(first) + (second < 0 ? 0.0 : 1.0 / grid.heatCapacity(second));
-			double next = amount - residual / (inverseConductanceDt + slope);
-			if (!(next > low && next < high)) next = low + (high - low) * 0.5;
-			if (next == amount) break;
-			amount = next;
-		}
-		double transfer = sign * amount;
+		double transfer = ThermalContactExchange.transfer(grid.contactBody(first), second < 0
+				? new ThermalContactExchange.Reservoir(face.boundaryTemperature()) : grid.contactBody(second),
+				face.conductance(), dt);
+		if (transfer == 0.0) return 0.0;
 		grid.assignTransportCellEnergy(first, firstU + transfer);
 		if (second >= 0) grid.assignTransportCellEnergy(second, secondU - transfer);
 		return transfer;

@@ -61,7 +61,7 @@ public final class ThermalCellGrid {
 	}
 
 	public void rebuild(CarrierAccess carrierAccess) {
-		rebuildTopology(carrierAccess);
+		rebuildTopology(carrierAccess, -1);
 		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
 			conductivity[cell] /= totalVolume[cell];
 			solveCell(cell, internalEnergy[cell]);
@@ -74,7 +74,7 @@ public final class ThermalCellGrid {
 		if (targetCell < 0 || targetCell >= cellCount || !Double.isFinite(targetEnergy)) {
 			throw new IllegalArgumentException("Thermal rebuild override is invalid");
 		}
-		rebuildTopology(carrierAccess);
+		rebuildTopology(carrierAccess, targetCell);
 		if (carrierCount[targetCell] == 0) throw new IllegalArgumentException("Thermal reaction emptied its carrier cell");
 		internalEnergy[targetCell] = targetEnergy;
 		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
@@ -94,7 +94,7 @@ public final class ThermalCellGrid {
 		}
 		double[] previousTemperature = temperature.clone();
 		int[] previousCarrierCount = carrierCount.clone();
-		rebuildTopology(carrierAccess);
+		rebuildTopology(carrierAccess, targetCell);
 		if (carrierCount[targetCell] == 0 && targetEnergy != 0.0) {
 			throw new IllegalArgumentException("Empty thermal phase cell retains energy");
 		}
@@ -160,7 +160,7 @@ public final class ThermalCellGrid {
 		updateObservedTemperatureRange();
 	}
 
-	private void rebuildTopology(CarrierAccess carrierAccess) {
+	private void rebuildTopology(CarrierAccess carrierAccess, int prospectiveCell) {
 		if (carrierAccess == null) throw new IllegalArgumentException("Thermal carrier access is missing");
 		this.carriers = carrierAccess;
 		topologyCarrierCount = carrierAccess.carrierCount();
@@ -189,11 +189,16 @@ public final class ThermalCellGrid {
 			carrierCount[cell]++;
 			carrierMaterial[carrier] = carrierAccess.material(carrier);
 			carrierMass[carrier] = carrierAccess.mass(carrier);
+			if (!(Double.isFinite(carrierMass[carrier]) && carrierMass[carrier] > 0.0))
+				throw new IllegalArgumentException("Thermal carrier mass must be finite and positive");
 			double energy = carrierAccess.internalEnergy(carrier);
 			double volume = carrierAccess.volume(carrier);
 			if (!Double.isFinite(energy) || !(Double.isFinite(volume) && volume > 0.0)) {
 				throw new IllegalArgumentException("Thermal carrier inventory is invalid");
 			}
+			// A phase/reaction edit assigns the prospective cell's conserved U after topology changes.
+			// Every untouched carrier already owns its final U and must be valid individually.
+			if (cell != prospectiveCell) validateCarrierEnergy(carrier, energy);
 			internalEnergy[cell] += energy;
 			totalVolume[cell] += volume;
 			conductivity[cell] += volume * carrierAccess.material(carrier).conductivityEuPerSecondMeterK();
@@ -213,7 +218,26 @@ public final class ThermalCellGrid {
 		updateObservedTemperatureRange();
 	}
 
-	void solveTransportCell(int cell, double energy) { solveCell(cell, energy); }
+	ThermalContactExchange.Body contactBody(int cell) {
+		int carrier = cellHead[cell];
+		if (carrierCount[cell] == 1) return new ThermalContactExchange.Carrier(carrierMaterial[carrier],
+				carrierMass[carrier], cachedBaseEnergy(carrier), internalEnergy[cell]);
+		double initialEnergy = internalEnergy[cell], initialTemperature = temperature[cell], initialCapacity = heatCapacity[cell];
+		return new ThermalContactExchange.Body() {
+			@Override public double temperatureK() { return initialTemperature; }
+			@Override public double heatCapacityEuPerK() { return initialCapacity; }
+			@Override public double energyChangeToTemperature(double target) {
+				double change = 0.0;
+				for (int ordinal = cellHead[cell]; ordinal >= 0; ordinal = carrierNext[ordinal])
+					change += carrierMass[ordinal] * carrierMaterial[ordinal].sensibleSpecificEnergyBetween(initialTemperature, target);
+				return change;
+			}
+			@Override public ThermalStateFunction.State stateAfterEnergyChange(double change) {
+				solveCell(cell, initialEnergy + change);
+				return new ThermalStateFunction.State(temperature[cell], heatCapacity[cell]);
+			}
+		};
+	}
 	/** Zero-conductivity cells advect their individual carrier U without artificial intracell exchange. */
 	void setTransportCellInternalEnergies(double[] targetEnergy) {
 		validateCellInternalEnergies(targetEnergy);
@@ -233,15 +257,6 @@ public final class ThermalCellGrid {
 		assignSolvedCellEnergy(cell, energy);
 	}
 	void finishTransport() { updateObservedTemperatureRange(); }
-
-	double energyChangeToTemperature(int cell, double target) {
-		double change = 0.0;
-		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			ThermalMaterialDefinition material = carrierMaterial[carrier];
-			change += carrierMass[carrier] * material.sensibleSpecificEnergyBetween(temperature[cell], target);
-		}
-		return change;
-	}
 
 	double minimumHeatCapacity(int cell) {
 		double capacity = 0.0;
@@ -489,6 +504,16 @@ public final class ThermalCellGrid {
 			carrierBaseEnergy[carrier] = value;
 		}
 		return value;
+	}
+
+	private void validateCarrierEnergy(int carrier, double energy) {
+		double mass = carrierMass[carrier];
+		try {
+			carrierMaterial[carrier].temperatureForSensibleSpecificEnergy((energy - cachedBaseEnergy(carrier)) / mass);
+		} catch (IllegalArgumentException failure) {
+			throw new IllegalArgumentException("Thermal carrier energy is invalid (carrier=" + carrier
+					+ ", cell=" + carriers.cell(carrier) + ", material=" + carrierMaterial[carrier].id() + ")", failure);
+		}
 	}
 
 	private void updateObservedTemperatureRange() {

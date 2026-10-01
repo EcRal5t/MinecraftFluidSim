@@ -86,6 +86,8 @@ caloric segment 内 `cv` 为常量，积分与反演均为分段闭式线性计�
 
 异质 cell 在所有 carrier 合并后的 segment 边界上反演 `sum U_i(T) = U_cell`，在全温区求解唯一 LTE 温度。严格正温数值域下界为 binary64 最小正常正数；有限过程可连续逼近，UI 舍入显示为 `0 K`。
 
+普通建格先验证每个真实载体的质量、内能与正温反演，再求单元平均温度，避免有效平均值掩盖无效载体。局部反应或相变重建时，被编辑单元使用已预检的守恒候选 `U` 完成重新分配，其他单元仍逐载体验证；候选期间新增载体的临时能量列按该提交时点处理。
+
 ### 批量格温度观察
 
 液体黏性与颗粒载体属性工作区复用相变扫描的 `preparePhaseScan` + `phaseScanTemperatureInCell`：先一次建格，再逐格读取。这条路径只更新派生 LTE grid，**不重新分配也不修改任何载体 `U`**。
@@ -120,6 +122,10 @@ caloric segment 内 `cv` 为常量，积分与反演均为分段闭式线性计�
 - 普通世界边界默认绝热。registry 声明的 fixed-temperature 方块和 `thermal_reservoir` 是无限热浴，只经相邻 face flux 进入 source/sink。主线程解析的 face 温度场作为本次不可变计算输入冻结并提交给候选，由下一次世界采样替换，不进入持久化。
 - 液体热膨胀使用 registry-bound Boussinesq 定义，只向现有 y-face 动量路径提供派生体力，不改变质量或体积原始数据。
 - 气体孔流同时搬运组分与能量；species 的 host-gas 状态能进入气体温度反演与相变批能量，压缩/膨胀功进入 mechanical work。
+
+`ThermalContactExchange` 求解单个有限热导接触的 backward-Euler 能量变化。载体接口绑定同一份初始质量、组成参考能与 `U`；混合单元使用其完整 caloric 曲线，单载体使用材料状态函数，固定温度面使用无限热浴。对于进入第一侧的能量 `q`，求解 `q = G*dt*(T_second(U_second-q)-T_first(U_first+q))`，有限第二侧接收相反的能量变化。求解跨越 caloric 分段，正热容保证唯一解及冷热温度顺序；零热导返回零，有限热导和时间步趋零时通量连续趋零。
+
+当前隐式跨面导热以正反两次半时间步扫描调用该求解器，调用方负责提交能量与记录热浴、舍入收支。接触热导仍由现有 PLIC/cut-face 和材料热阻计算。正导热率多载体单元仍按 LTE 分配内能，格内有限接触几何与连续热平流的联合离散见[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)。
 
 `thermal_reservoir` 的 setpoint 原始数据由世界 BlockEntity 持有，不进入 region HEAD。`ThermalReservoirUseCase` 只拥有 bounded summary、world-position token 与权限/范围决策；Minecraft adapter 才能在 token 校验失效处理和当前方块重验后写 BlockEntity。
 
