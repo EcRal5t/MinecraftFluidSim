@@ -7,6 +7,7 @@
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
 | 内能状态与流体数据映射 | [ThermalDomainState](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalDomainState.java)、[FluidThermalBinding](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidThermalBinding.java) | `thermal` |
+| 热浮力有效范围与分层 | [LiquidThermalExpansion](../../model/src/main/java/cc/ecisr/mmm/thermal/LiquidThermalExpansion.java)、[LiquidCarrierProperties](../../solver/src/main/java/cc/ecisr/mmm/fluid/LiquidCarrierProperties.java)、[LiquidStratificationValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/LiquidStratificationValidation.java) | `materials,thermal` |
 | 传热与反应顺序 | [ThermochemistryPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermochemistryPipeline.java)、[ThermalTransport](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalTransport.java)、[ThermalImplicitTransport](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalImplicitTransport.java) | `thermal` |
 | 固液和气液相变 | [CondensedPhaseChangeStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/CondensedPhaseChangeStage.java)、[GasLiquidPhaseChangeStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasLiquidPhaseChangeStage.java)、[GasPhaseInterfaceResolver](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasPhaseInterfaceResolver.java) | `thermal` |
 | 有限热容量设备 | [FiniteThermalDeviceInventory](../../model/src/main/java/cc/ecisr/mmm/thermal/FiniteThermalDeviceInventory.java)、[FiniteThermalExchange](../../model/src/main/java/cc/ecisr/mmm/thermal/FiniteThermalExchange.java)、[FiniteThermalDeviceCodec](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/FiniteThermalDeviceCodec.java) | `thermal,region-state` |
@@ -179,6 +180,16 @@ Delta u_y = g * dt * volume-weighted(relative buoyancy)
 ```
 
 内置 `beta` 在 293.15 K 附近冻结为：水 `2.07e-4/K`、油 `7.00e-4/K`、汞 `1.82e-4/K`。该项不修改密度、质量或体积原始数据，也不适用于越出物性有效域的大温差外推。
+
+`MaterialRegistry.MaterialEntry.thermalExpansion` 保存每种液体的 `T_ref`、`beta` 和允许的 `|rho(T)-rho(T_ref)|/rho(T_ref)`。此处参考态使用同一组成的实际质量/体积密度；热密度修正为 `rho(T) = rho(T_ref)*(1-beta*(T-T_ref))`。组成差异继续由变密度压力离散计算。
+
+内置相对热密度变化上限为 `0.05`，闭区间内计算上述线性模型，越界抛 `ValidityExceededException`，后端拒绝完整候选并使生产区域数值暂停。这个上限约束 Boussinesq 小密度变化近似；常数 `beta` 的标定精度仍受参考温度附近的物性数据限制。零重力计算省去热浮力，极端 caloric、气体状态和相变夹具在微重力条件下验证各自的有效域。
+
+热浮力复用 `LiquidCarrierProperties` 的批量 LTE 温度，同格按逐 marker 体积汇总各自已绑定的膨胀定义，再按两侧真实 marker 体积求面平均。物性观察保持所有载体 `U` 的原始位模式。热区域 manifest 的浮力身份绑定公式与空间平均约定，材料参数由世界材料指纹绑定。
+
+静水分层夹具要求最大粒子速度小于 `1e-8 m/s`。组成反置夹具要求盐组分质心穿过池体中面；温差与热盐竞争夹具检查热量或盐组分质心的运动方向。机械诊断分别记录黏性耗散、P2G/G2P 能量变化和热库存收支。
+
+当前热学载体按粒子所属单元汇总和分配内能。粒子在格内的小位移尚不改变热库存的空间归属，因此对背景温度梯度的线性热平流响应存在分辨率限制。自然对流的临界 Ra 与增长率收敛仍待连续热平流离散完成，验收入口见[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)。
 
 ### 气体能量与功
 

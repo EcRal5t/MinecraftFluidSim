@@ -287,8 +287,6 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	}
 
 	private void finishThermalBinding() {
-		thermalBuoyancySum = new double[cellCount];
-		thermalBuoyancyVolume = new double[cellCount];
 		if (granularState != null) granularState.inventory.bindThermalEnergy(thermalGranularAdapter());
 		if (granularCoupling == null) {
 			granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
@@ -716,8 +714,6 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 
 	void clearThermalBinding() {
 		thermalState = null;
-		thermalBuoyancySum = null;
-		thermalBuoyancyVolume = null;
 		thermalBoundaryTemperatureK = null;
 		Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
 		if (granularState == null) {

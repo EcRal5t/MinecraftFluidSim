@@ -18,6 +18,7 @@ public final class MaterialRegistryCodecValidation {
 		strictDecodeRejectsTampering();
 		viscosityDomainIsStrict();
 		viscosityContinuationIsBounded();
+		expansionSnapshotPreservesItsOwnDefinition();
 		System.out.println("Material registry codec validation passed");
 	}
 
@@ -41,7 +42,7 @@ public final class MaterialRegistryCodecValidation {
 		require(water > 9.0e-4 && water < 1.1e-3, "water viscosity at ambient temperature must stay near 1 mPa·s");
 		require(stored.liquidPairTension("mmm:aqueous", "mmm:oil") == 0.0,
 				"default registry has no declared pair tensions");
-		require(definitions.fingerprint().equals("c7a27733fffd9272c60df5c8b476b5a0a9594a9827c2663de935b4f59287e5ef"),
+		require(definitions.fingerprint().equals("ff3770b933ac81c7af8f5cfa8391b23c238937d72c069c620bacae0ec9f3057d"),
 				"builtin material registry fingerprint drifted from the pinned canonical form");
 		System.out.println("builtin material registry fingerprint=" + definitions.fingerprint());
 	}
@@ -51,6 +52,31 @@ public final class MaterialRegistryCodecValidation {
 		double actual = registry.dynamicViscosityAt(id, temperatureK);
 		require(Double.doubleToRawLongBits(actual) == Double.doubleToRawLongBits(expected),
 				"restored viscosity interpolation must be bitwise identical for " + id + " at " + temperatureK);
+	}
+
+	private static void expansionSnapshotPreservesItsOwnDefinition() throws Exception {
+		var original = BuiltinFluidMaterials.createRegistry().entry("mmm:water");
+		var definition = new cc.ecisr.mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 300, 0.0003, 0.02);
+		var registry = new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(
+				original.material(), original.viscosity(), definition)), List.of());
+		Path snapshot = Files.createTempDirectory(Path.of("."), "material-expansion-").resolve("material.nbt");
+		MaterialRegistryCodec.writeSnapshot(snapshot, registry);
+		var stored = MaterialRegistryCodec.readSnapshot(snapshot);
+		require(stored.entry("mmm:water").thermalExpansion().equals(definition)
+				&& stored.fingerprint().equals(registry.fingerprint()), "snapshot lost its committed expansion definition");
+		for (var changed : List.of(
+				new cc.ecisr.mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 301, 0.0003, 0.02),
+				new cc.ecisr.mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 300, 0.0004, 0.02),
+				new cc.ecisr.mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 300, 0.0003, 0.03))) {
+			var mutated = new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(
+					original.material(), original.viscosity(), changed)), List.of());
+			require(!mutated.fingerprint().equals(registry.fingerprint()), "expansion parameter missing from world identity");
+		}
+		CompoundTag root = NbtIo.readCompressed(snapshot, net.minecraft.nbt.NbtAccounter.create(1_048_576L));
+		var material = (CompoundTag) root.getListOrEmpty("Materials").get(0);
+		material.remove("ThermalExpansion");
+		NbtIo.writeCompressed(root, snapshot);
+		expectIOException(() -> MaterialRegistryCodec.readSnapshot(snapshot), "missing expansion inventory field must be rejected");
 	}
 
 	private static void definitionMutationChangesSnapshotBytes() throws Exception {

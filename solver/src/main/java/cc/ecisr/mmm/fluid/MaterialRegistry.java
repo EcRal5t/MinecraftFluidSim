@@ -11,10 +11,11 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 
 /**
  * Immutable world-authoritative material definitions: base fluid properties, optional Newtonian
- * dynamic-viscosity segments and liquid-liquid pair tensions keyed by stable miscibility groups.
+ * dynamic-viscosity segments, bounded thermal expansion and liquid-liquid pair tensions keyed by stable miscibility groups.
  */
 public final class MaterialRegistry {
 	public static final String UNIT_SYSTEM_ID = "mmm:material_standard";
@@ -42,9 +43,15 @@ public final class MaterialRegistry {
 		}
 	}
 
-	public record MaterialEntry(FluidMaterial material, List<ViscositySegment> viscosity) {
+	public record MaterialEntry(FluidMaterial material, List<ViscositySegment> viscosity,
+			LiquidThermalExpansion.Definition thermalExpansion) {
+		public MaterialEntry(FluidMaterial material, List<ViscositySegment> viscosity) {
+			this(material, viscosity, material == null ? null : LiquidThermalExpansion.find(material.id()));
+		}
 		public MaterialEntry {
 			if (material == null) throw new IllegalArgumentException("Material definition is missing");
+			if (thermalExpansion != null && !thermalExpansion.carrierId().equals(material.id()))
+				throw new IllegalArgumentException("Thermal expansion carrier disagrees with material " + material.id());
 			TreeMap<Double, ViscositySegment> sorted = new TreeMap<>();
 			if (viscosity != null) {
 				for (ViscositySegment segment : viscosity) {
@@ -259,6 +266,11 @@ public final class MaterialRegistry {
 					.append(material.miscibilityGroup()).append('|')
 					.append(Long.toUnsignedString(Double.doubleToRawLongBits(material.surfaceTension()))).append('|')
 					.append(Long.toUnsignedString(Double.doubleToRawLongBits(material.contactAngleRadians()))).append('\n');
+			LiquidThermalExpansion.Definition expansion = entry.thermalExpansion();
+			if (expansion != null) out.append("B|").append(material.id()).append('|')
+					.append(Long.toUnsignedString(Double.doubleToRawLongBits(expansion.referenceTemperatureK()))).append('|')
+					.append(Long.toUnsignedString(Double.doubleToRawLongBits(expansion.volumetricCoefficientPerK()))).append('|')
+					.append(Long.toUnsignedString(Double.doubleToRawLongBits(expansion.maximumRelativeDensityChange()))).append('\n');
 			for (ViscositySegment segment : entry.viscosity()) {
 				out.append("V|").append(material.id()).append('|')
 						.append(Long.toUnsignedString(Double.doubleToRawLongBits(segment.minimumTemperatureK()))).append('|')

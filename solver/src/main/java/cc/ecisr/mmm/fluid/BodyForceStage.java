@@ -5,13 +5,12 @@ import java.util.Map;
 import cc.ecisr.mmm.granular.GranularDepositStore;
 import cc.ecisr.mmm.granular.GranularLimits;
 import cc.ecisr.mmm.granular.SolidVolume;
-import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 
 /**
  * Body-force stages of the substep, in pipeline order: porous damping of the previously
  * committed flow, gravity, the Boussinesq thermal buoyancy correction and the solid-face
  * velocity enforcement. Liquid-gas, liquid-solid and liquid-pair surface forces join this stage in their own
- * slice; the buoyancy scratch columns stay with the domain lifecycle.
+ * slice; thermal buoyancy shares the per-cell carrier property workspace.
  */
 final class BodyForceStage {
 	record Workspace(
@@ -32,11 +31,8 @@ final class BodyForceStage {
 		float pressureYFaceOpen(int x, int y, int z);
 		float pressureZFaceOpen(int x, int y, int z);
 		boolean thermalActive();
-		double[] thermalBuoyancySum();
-		double[] thermalBuoyancyVolume();
-		int particleCellIndex(int marker);
+		LiquidCarrierProperties thermalBuoyancyProperties();
 		FluidMaterialRegistry materialRegistry();
-		double thermalMarkerTemperature(int marker);
 		boolean liquidGasTensionActive();
 		boolean liquidPairTensionActive();
 		double phaseFraction(int cell, int phase);
@@ -125,27 +121,18 @@ final class BodyForceStage {
 	/** Adds the standard Boussinesq density correction to the existing gravity face impulse. */
 	void applyThermalBuoyancy(float dt) {
 		if (!access.thermalActive() || state.particles.count() == 0 || state.config.gravity() == 0.0F) return;
-		double[] buoyancySum = access.thermalBuoyancySum();
-		double[] buoyancyVolume = access.thermalBuoyancyVolume();
-		java.util.Arrays.fill(buoyancySum, 0.0);
-		java.util.Arrays.fill(buoyancyVolume, 0.0);
-		for (int marker = 0; marker < state.particles.count(); marker++) {
-			int cell = access.particleCellIndex(marker);
-			double markerVolume = state.particles.volume(marker);
-			String carrier = access.materialRegistry().material(state.particles.materialHandle(marker)).id();
-			double relative = LiquidThermalExpansion.require(carrier)
-					.relativeBuoyancy(access.thermalMarkerTemperature(marker));
-			buoyancySum[cell] += markerVolume * relative;
-			buoyancyVolume[cell] += markerVolume;
-		}
+		LiquidCarrierProperties properties = access.thermalBuoyancyProperties();
 		double scale = state.config.gravity() * dt;
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
 			float aperture = access.pressureYFaceOpen(x, y, z);
 			if (!access.carrierFaceActive(below, above, aperture)) continue;
-			double volumeSum = buoyancyVolume[below] + buoyancyVolume[above];
+			double belowVolume = state.markerGrid.exactCellMarkerVolume[below];
+			double aboveVolume = state.markerGrid.exactCellMarkerVolume[above];
+			double volumeSum = belowVolume + aboveVolume;
 			if (volumeSum <= 0.0) continue;
-			double relative = (buoyancySum[below] + buoyancySum[above]) / volumeSum;
+			double relative = (belowVolume * properties.relativeBuoyancy(below)
+					+ aboveVolume * properties.relativeBuoyancy(above)) / volumeSum;
 			state.mac.velocityY[access.yFaceIndex(x, y, z)] += (float) (scale * relative);
 		}
 	}

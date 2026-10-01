@@ -145,10 +145,12 @@
 
 ### 1c 密度、分层与对流
 
-- 组成密度直接来自实际 mass/volume，不加“盐度密度公式”；Boussinesq 只作参考态附近的温差修正，必须声明 `|rho-rho_ref|/rho_ref` 有效比例，越界 PAUSED。
-- fixture：同温盐水在下保持稳定、反置后发生 Rayleigh–Taylor 型翻转；同组成温差分层；热盐竞争分别报告组成项与温差项；受热底板封闭池用 registry 的 `rho, mu, beta, k, cv` 计算 `Ra`，用两个相差固定倍数、都在线性域的振幅证明归一化增长率一致。
-- 对流验收先明确壁面切向条件、热交换条件和 Boussinesq 有效范围，再选择对应的临界判据；临界值两侧分别验证扰动衰减与增长，并以两级网格检查增长率收敛。计算继续复用 `LiquidCarrierProperties` 与已绑定的世界材料定义。
-- 完成条件：全部 fixture 的体积、逐材料质量、species、`U` 与 source/sink 闭合；稳定分层的静水速度残差有量化上限；`materials,thermal` 为最近门。
+组成密度、世界绑定的有界 Boussinesq 定义、盐水静水/反置翻转、温差分层和热盐竞争的现行契约与测试见[材料状态](../architecture/material-state.md#求解器边界)和[热浮力](../architecture/thermal-state.md#热浮力)。1c 仍需完成以下工作：
+
+- 连续热平流：让背景温度梯度对格内微小位移给出一阶响应，同时保持载体质量、组成、`U` 和 source/sink 的唯一归属。首先验证零导热的线性温度场随散度为零的速度场输运，再与现有有限体积导热联合验证。迁移必须覆盖异质 caloric/species reference energy 和相变交接。
+- 对流判据：受热底板封闭池采用法向不可穿透、切向 `FREE_SLIP`、上下恒温板及绝热侧壁。用已绑定 registry 的 `rho, mu, beta, k, cv` 计算 `nu=mu/rho`、`alpha=k/(rho*cv)` 与 `Ra=g*beta*DeltaT*H^3/(nu*alpha)`。对二维模态 `a=pi*H/L`，自由滑移判据为 `Ra_c=(pi^2+a^2)^3/a^2`；长宽比 `L/H=2` 的首模态约为 `761.0085`，来源见 [Rayleigh 原论文](https://doi.org/10.1080/14786441608635602)。
+- 增长率验收：在该临界值两侧验证扰动衰减与增长，以两个相差固定倍数、处于线性域的振幅及两级网格检查 `lambda*H^2/alpha` 一致性和收敛。`LiquidConvectionExperiment` 是当前真实求解路径的试算入口。默认 `0.5 m` 热学网格下，两级二维池体需保持无量纲物性、长宽比和时间一致，深度方向取均匀模态。
+- 完成条件：对流夹具的体积、逐材料质量、species、`U` 与 source/sink 闭合；继续区分黏性耗散、P2G/G2P 传递耗散和载体内能收支。`materials,thermal` 为最近校验；涉及传递或黏性离散时追加 `free-surface,cut-cell`。
 
 ## 阶段 3：展示几何契约与重建
 

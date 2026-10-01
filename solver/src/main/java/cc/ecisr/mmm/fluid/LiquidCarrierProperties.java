@@ -3,6 +3,7 @@ package cc.ecisr.mmm.fluid;
 import cc.ecisr.mmm.granular.GranularCarrier;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 import cc.ecisr.mmm.thermal.ThermalDomainState;
+import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 
 /**
  * Per-cell liquid properties prepared per mechanical substep and invalidated by grid or inventory edits.
@@ -26,6 +27,7 @@ final class LiquidCarrierProperties {
 	private final double[] temperatureK;
 	private final double[] viscosityPaPerS;
 	private final double[] maximumReynolds;
+	private final double[] relativeBuoyancy;
 	private Revision built;
 	private boolean recording;
 	private int stepExtrapolatedCells;
@@ -45,6 +47,7 @@ final class LiquidCarrierProperties {
 		this.temperatureK = new double[cellCount];
 		this.viscosityPaPerS = new double[cellCount];
 		this.maximumReynolds = new double[cellCount];
+		this.relativeBuoyancy = new double[cellCount];
 	}
 
 	boolean hasLiquid(int cell) { return liquid[cell]; }
@@ -52,6 +55,29 @@ final class LiquidCarrierProperties {
 	double density(int cell) { return density[cell]; }
 	double viscosityPaPerS(int cell) { return viscosityPaPerS[cell]; }
 	double maximumReynolds(int cell) { return maximumReynolds[cell]; }
+	double relativeBuoyancy(int cell) { return relativeBuoyancy[cell]; }
+
+	/** Uses one LTE batch and each marker's bound expansion definition without editing any carrier. */
+	void prepareBuoyancy(FluidDomainStorage domain, ThermalCarrierContext markers,
+			FluidMaterialRegistry materials, MaterialRegistry definitions, ThermalDomainState thermal) {
+		if (definitions == null) thermal.preparePhaseScan(markers);
+		for (int cell = 0; cell < cellCount; cell++) {
+			relativeBuoyancy[cell] = 0.0;
+			if (domain.markerGrid.markerCount[cell] == 0) continue;
+			double cellTemperature = definitions == null ? thermal.phaseScanTemperatureInCell(cell) : temperatureK[cell];
+			double sum = 0.0;
+			for (int marker = domain.markerGrid.cellMarkerHead[cell]; marker >= 0;
+					marker = domain.markerGrid.particleCellNext[marker]) {
+				String id = materials.material(domain.particles.materialHandle(marker)).id();
+				LiquidThermalExpansion.Definition expansion = definitions == null
+						? LiquidThermalExpansion.require(id) : definitions.entry(id).thermalExpansion();
+				if (expansion == null) throw new LiquidThermalExpansion.ValidityExceededException(
+						"Liquid " + id + " has no committed Boussinesq definition in cell " + cell);
+				sum += domain.particles.volume(marker) * expansion.relativeBuoyancy(cellTemperature);
+			}
+			relativeBuoyancy[cell] = sum / domain.markerGrid.exactCellMarkerVolume[cell];
+		}
+	}
 
 	/** Cells whose temperature left the material's declared viscosity domain in the last build. */
 	int extrapolatedCells() { return extrapolatedCells; }

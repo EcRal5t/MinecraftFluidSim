@@ -15,7 +15,8 @@ public final class ExtremeThermalValidation {
 		var registries = FullCapabilityTestFixture.load();
 		for (double[] state : new double[][] {{1.0E7, 10.0}, {10.0, 1.0E12}, {150.0, 1.0E12}, {1.0E7, 1.0E12}}) {
 			double temperature = state[0], pressure = state[1];
-			var config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
+			// Microgravity isolates the extreme caloric/EoS/phase domain from the local Boussinesq approximation.
+			var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 					240, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
 			FluidDomain domain = new FluidDomain(4, 4, 4, config, 4096);
 			domain.sealDomainBoundary();

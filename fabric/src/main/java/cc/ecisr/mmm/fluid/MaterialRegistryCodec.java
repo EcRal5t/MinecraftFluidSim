@@ -1,7 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
-import cc.ecisr.mmm.simulation.persistence.DurableFileOperations;
 import cc.ecisr.mmm.simulation.persistence.StrictNbtFields;
+import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtAccounter;
@@ -10,11 +10,8 @@ import net.minecraft.nbt.Tag;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -95,6 +92,16 @@ public final class MaterialRegistryCodec {
 				viscosity.add(value);
 			}
 			tag.put("Viscosity", viscosity);
+			ListTag expansion = new ListTag();
+			if (entry.thermalExpansion() != null) {
+				var definition = entry.thermalExpansion();
+				CompoundTag value = new CompoundTag();
+				value.putLong("ReferenceBits", Double.doubleToRawLongBits(definition.referenceTemperatureK()));
+				value.putLong("CoefficientBits", Double.doubleToRawLongBits(definition.volumetricCoefficientPerK()));
+				value.putLong("MaximumRelativeBits", Double.doubleToRawLongBits(definition.maximumRelativeDensityChange()));
+				expansion.add(value);
+			}
+			tag.put("ThermalExpansion", expansion);
 			materials.add(tag);
 		}
 		root.put("Materials", materials);
@@ -117,7 +124,19 @@ public final class MaterialRegistryCodec {
 			CompoundTag tag = compound(list, index, "material");
 			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "DensityBits", Tag.TAG_LONG,
 					"MiscibilityGroup", Tag.TAG_STRING, "SurfaceTensionBits", Tag.TAG_LONG,
-					"ContactAngleBits", Tag.TAG_LONG, "Viscosity", Tag.TAG_LIST));
+					"ContactAngleBits", Tag.TAG_LONG, "Viscosity", Tag.TAG_LIST, "ThermalExpansion", Tag.TAG_LIST));
+			ListTag encodedExpansion = tag.getListOrEmpty("ThermalExpansion");
+			if (encodedExpansion.size() > 1) throw new IOException("Multiple thermal expansion definitions for one material");
+			LiquidThermalExpansion.Definition expansion = null;
+			if (!encodedExpansion.isEmpty()) {
+				CompoundTag value = compound(encodedExpansion, 0, "thermal expansion");
+				requireAll(value, Map.of("ReferenceBits", Tag.TAG_LONG, "CoefficientBits", Tag.TAG_LONG,
+						"MaximumRelativeBits", Tag.TAG_LONG));
+				expansion = new LiquidThermalExpansion.Definition(tag.getStringOr("Id", ""),
+						Double.longBitsToDouble(value.getLongOr("ReferenceBits", 0L)),
+						Double.longBitsToDouble(value.getLongOr("CoefficientBits", 0L)),
+						Double.longBitsToDouble(value.getLongOr("MaximumRelativeBits", 0L)));
+			}
 			ListTag encodedSegments = tag.getListOrEmpty("Viscosity");
 			ArrayList<MaterialRegistry.ViscositySegment> segments = new ArrayList<>(encodedSegments.size());
 			for (int segmentIndex = 0; segmentIndex < encodedSegments.size(); segmentIndex++) {
@@ -135,7 +154,7 @@ public final class MaterialRegistryCodec {
 					Double.longBitsToDouble(tag.getLongOr("DensityBits", 0L)),
 					tag.getStringOr("MiscibilityGroup", ""),
 					Double.longBitsToDouble(tag.getLongOr("SurfaceTensionBits", 0L)),
-					Double.longBitsToDouble(tag.getLongOr("ContactAngleBits", 0L))), segments));
+					Double.longBitsToDouble(tag.getLongOr("ContactAngleBits", 0L))), segments, expansion));
 		}
 		return List.copyOf(result);
 	}

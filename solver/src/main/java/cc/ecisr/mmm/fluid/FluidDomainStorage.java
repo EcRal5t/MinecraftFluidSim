@@ -107,8 +107,6 @@ abstract class FluidDomainStorage {
 	boolean variableDensityActive;
 	ThermalDomainState thermalState;
 	final ThermalCarrierContext thermalMarkers;
-	double[] thermalBuoyancySum;
-	double[] thermalBuoyancyVolume;
 	/** Runtime world-derived fixed-reservoir temperatures; NaN is the canonical adiabatic face. */
 	double[] thermalBoundaryTemperatureK;
 	final SignedDyadic[] pendingPhaseCellVolume;

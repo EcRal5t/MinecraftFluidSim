@@ -126,11 +126,8 @@ final class MechanicalStageAssembly {
 			@Override public float pressureYFaceOpen(int x, int y, int z) { return domain.pressureYFaceOpen(x, y, z); }
 			@Override public float pressureZFaceOpen(int x, int y, int z) { return domain.pressureZFaceOpen(x, y, z); }
 			@Override public boolean thermalActive() { return domain.thermalState != null; }
-			@Override public double[] thermalBuoyancySum() { return domain.thermalBuoyancySum; }
-			@Override public double[] thermalBuoyancyVolume() { return domain.thermalBuoyancyVolume; }
-			@Override public int particleCellIndex(int marker) { return domain.particleCellIndex(marker); }
+			@Override public LiquidCarrierProperties thermalBuoyancyProperties() { return domain.thermalBuoyancyProperties(); }
 			@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
-			@Override public double thermalMarkerTemperature(int marker) { return domain.thermalMarkerTemperature(marker); }
 			@Override public boolean liquidGasTensionActive() { return domain.surfaceTensionActive; }
 			@Override public boolean liquidPairTensionActive() { return domain.liquidPairTensionActive; }
 			@Override public double phaseFraction(int cell, int phase) { return domain.phaseFraction(cell, phase); }

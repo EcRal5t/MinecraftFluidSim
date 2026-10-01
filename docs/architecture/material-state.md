@@ -30,6 +30,7 @@
 - 当前机械定义包含 stable ID、参考密度、miscibility group、液气表面张力和接触角；液液张力由 registry 的 phase 无序对表给出。
 - 显示颜色来自独立只读 palette。
 - 液体动态黏度只有一份权威定义：world material registry 按 `Pa·s` 保存分段 `mu(T)` 与有效温区，写进世界能力包。`FluidMaterial` 不保存黏度，granular carrier 也不再自带 `dynamic_viscosity`，它只声明颗粒阻力标定用的 Reynolds 上限。
+- 同一材料条目保存可选 Boussinesq 定义：载体 ID、参考温度、体积膨胀系数和相对热密度变化上限。四项都进入材料指纹和世界能力包；浮力计算读取已绑定条目。生产热学能力要求支持的液体具有该定义。
 - 只有 marker 质量和体积参与库存结算；参考密度用于创建、校验和状态函数绑定，不能覆盖已有 marker 质量。
 
 ## Registry 与运行时 handle
@@ -72,6 +73,8 @@ volume_m3 = marker_normalized_volume * cellSize^3
 质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的闭合式为 `particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg`；溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。
 
 pressure face 的 `1/rho` 系数按界面距离加权；不得从 material reference density、客户端颜色或平滑 fraction 反推存量质量。热学 Boussinesq 项是参考态附近的温差浮力近似，与这份组成质量密度正交，不能覆盖它。
+
+同温盐水分层由溶解的 Na⁺/Cl⁻ 的实际质量得到。`LiquidStratificationValidation` 检查盐水下层静水、反置翻转、同组成温差分层及热盐竞争，并逐步核对体积、材料质量、species 和内能；热修正有效范围见[热浮力](thermal-state.md#热浮力)。
 
 同一互溶组的材料共享物相与速度场，每个粒子保存单一机械材料库存，通过局部网格聚合得到混合比例。不同材料在粒子重播种时不互相吞并，以保持组分守恒。不可互溶材料共享统一压力与速度框架。
 

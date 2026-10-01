@@ -12,28 +12,43 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * Frozen thermophysical data for the built-in liquid Boussinesq model.
+ * Bounded Boussinesq constitutive definition and built-in reference data.
  *
- * <p>The coefficients are volumetric expansion coefficients near 293.15 K. They are definition
- * truth, not a stability knob: the model fingerprint is persisted by thermal region state so later
- * executable changes cannot silently reinterpret an existing velocity/temperature field.</p>
+ * <p>Each world's material registry saves its coefficients and validity interval. The separate model
+ * fingerprint binds the formula, LTE observation and averaging convention used by thermal regions.</p>
  */
 public final class LiquidThermalExpansion {
-	public static final String MODEL_ID = "mmm:boussinesq_builtin";
+	public static final String MODEL_ID = "mmm:boussinesq";
 
-	public record Definition(String carrierId, double referenceTemperatureK, double volumetricCoefficientPerK) {
+	public record Definition(String carrierId, double referenceTemperatureK, double volumetricCoefficientPerK,
+			double maximumRelativeDensityChange) {
+		public Definition(String carrierId, double referenceTemperatureK, double volumetricCoefficientPerK) {
+			this(carrierId, referenceTemperatureK, volumetricCoefficientPerK, 0.05);
+		}
 		public Definition {
 			ThermalIds.requireId(carrierId, "liquid expansion carrier id");
 			if (!(Double.isFinite(referenceTemperatureK) && referenceTemperatureK > 0.0
-					&& Double.isFinite(volumetricCoefficientPerK) && volumetricCoefficientPerK > 0.0)) {
+					&& Double.isFinite(volumetricCoefficientPerK) && volumetricCoefficientPerK > 0.0
+					&& Double.isFinite(maximumRelativeDensityChange) && maximumRelativeDensityChange > 0.0
+					&& maximumRelativeDensityChange < 1.0)) {
 				throw new IllegalArgumentException("Liquid thermal expansion definition is invalid");
 			}
 		}
 
 		public double relativeBuoyancy(double temperatureK) {
-			if (!Double.isFinite(temperatureK)) throw new IllegalArgumentException("Liquid temperature is not finite");
-			return volumetricCoefficientPerK * (temperatureK - referenceTemperatureK);
+			if (!Double.isFinite(temperatureK) || temperatureK < Double.MIN_NORMAL)
+				throw new IllegalArgumentException("Liquid temperature must be finite and positive");
+			double relative = volumetricCoefficientPerK * (temperatureK - referenceTemperatureK);
+			if (Math.abs(relative) > maximumRelativeDensityChange) throw new ValidityExceededException(
+					"Boussinesq " + carrierId + " at " + temperatureK + " K: |rho-rho_ref|/rho_ref="
+							+ Math.abs(relative) + " exceeds " + maximumRelativeDensityChange);
+			return relative;
 		}
+	}
+
+	/** The complete private mechanical candidate is rejected when its thermal approximation expires. */
+	public static final class ValidityExceededException extends IllegalStateException {
+		public ValidityExceededException(String message) { super(message); }
 	}
 
 	private static final List<Definition> DEFINITIONS = List.of(
@@ -50,6 +65,7 @@ public final class LiquidThermalExpansion {
 
 	public static List<Definition> definitions() { return DEFINITIONS; }
 	public static String fingerprint() { return FINGERPRINT; }
+	public static Definition find(String carrierId) { return BY_CARRIER.get(carrierId); }
 
 	public static Definition require(String carrierId) {
 		Definition definition = BY_CARRIER.get(carrierId);
@@ -63,12 +79,7 @@ public final class LiquidThermalExpansion {
 			ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 			try (DataOutputStream output = new DataOutputStream(bytes)) {
 				output.writeUTF(MODEL_ID);
-				output.writeInt(DEFINITIONS.size());
-				for (Definition definition : DEFINITIONS) {
-					output.writeUTF(definition.carrierId());
-					output.writeLong(Double.doubleToRawLongBits(definition.referenceTemperatureK()));
-					output.writeLong(Double.doubleToRawLongBits(definition.volumetricCoefficientPerK()));
-				}
+				output.writeUTF("beta*(T_LTE-T_ref);cell_marker_volume_average;face_marker_volume_average;closed_relative_density_domain");
 			}
 			return bytes.toByteArray();
 		} catch (IOException impossible) {

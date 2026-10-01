@@ -11,7 +11,6 @@ import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.granular.GranularDataPackLoader;
 import cc.ecisr.mmm.granular.GranularRegistry;
 import cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore;
-import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.thermal.ThermalDataPackLoader;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
@@ -42,7 +41,7 @@ public final class RegistryBundleLoader {
 	/** Cross-registry invariants are checked once, before any runtime component can observe the bundle. */
 	static RegistryBundle validateAndExtract(WorldCapabilityBundleStore.Bundle bundle) {
 		Objects.requireNonNull(bundle, "World capability bundle");
-		validate(bundle.chemical(), bundle.granular(), bundle.gas(), bundle.thermal());
+		validate(bundle.material(), bundle.chemical(), bundle.granular(), bundle.gas(), bundle.thermal());
 		return new RegistryBundle(bundle.profile(), bundle.material(), bundle.chemical(), bundle.granular(),
 				bundle.gas(), bundle.thermal());
 	}
@@ -52,17 +51,17 @@ public final class RegistryBundleLoader {
 			WorldCapabilityBundleStore.Definitions definitions
 	) {
 		Objects.requireNonNull(definitions, "Registry definitions");
-		validate(definitions.chemical(), definitions.granular(), definitions.gas(), definitions.thermal());
+		validate(definitions.material(), definitions.chemical(), definitions.granular(), definitions.gas(), definitions.thermal());
 		return definitions;
 	}
 
 	private static void validate(
-			ChemicalRegistry chemical, GranularRegistry granular, GasRegistry gas, ThermalRegistry thermal
+			MaterialRegistry material, ChemicalRegistry chemical, GranularRegistry granular, GasRegistry gas, ThermalRegistry thermal
 	) {
 		validateSupportedChemicalMaterials(chemical);
 		validateSupportedGranularCarriers(granular);
 		validateSupportedGasComponents(gas, chemical);
-		validateSupportedThermalCarriers(thermal, chemical, granular, gas);
+		validateSupportedThermalCarriers(material, thermal, chemical, granular, gas);
 	}
 
 	private static void validateSupportedChemicalMaterials(ChemicalRegistry registry) {
@@ -88,12 +87,13 @@ public final class RegistryBundleLoader {
 	}
 
 	private static void validateSupportedThermalCarriers(
-			ThermalRegistry registry, ChemicalRegistry chemicalRegistry,
+			MaterialRegistry definitions, ThermalRegistry registry, ChemicalRegistry chemicalRegistry,
 			GranularRegistry granularRegistry, GasRegistry gasRegistry
 	) {
 		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) {
 			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, material.id());
-			LiquidThermalExpansion.require(material.id());
+			if (definitions.entry(material.id()).thermalExpansion() == null) throw new IllegalArgumentException(
+					"World material " + material.id() + " has no Boussinesq definition");
 		}
 		for (var material : granularRegistry.materials()) {
 			registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, material.id());

@@ -89,6 +89,15 @@ tasks.register('runStepBenchmark', JavaExec) {
 	doFirst { benchmarkWorkDir.mkdirs() }
 }
 
+tasks.register('runConvectionExperiment', JavaExec) {
+	group = 'verification'
+	description = 'Reports linear convection growth measurements; physical Ra acceptance remains pending.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = 'cc.ecisr.mmm.fluid.LiquidConvectionExperiment'
+	enableAssertions = true
+}
+
 tasks.register('runCompositeBenchmark', JavaExec) {
 	group = 'verification'
 	description = 'Measures observable composite workloads; see validation.md for scene scope.'
