@@ -28,6 +28,11 @@ final class MaterialTransferPlanner {
 		this.domain = domain;
 	}
 
+	private static double observedSpace(SignedDyadic room) {
+		double value = room.toDouble();
+		return SignedDyadic.of(value).compareTo(room) > 0 ? Math.nextDown(value) : value;
+	}
+
 	FluidDomain.ExactMixtureTransfer insertMixture(
 			int centerX, int centerY, int centerZ, List<FluidDomain.MaterialPortion> portions, int maxRadius,
 			boolean externalSource, Double internalEnergy) {
@@ -45,7 +50,7 @@ final class MaterialTransferPlanner {
 		if (!domain.canAddCarrierVolume(portions.stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum())) {
 			return new FluidDomain.ExactMixtureTransfer(false, List.of());
 		}
-		double[] exactCellVolume = domain.exactCellVolumes();
+		SignedDyadic[] availableCellVolume = domain.availableCellVolumes();
 		java.util.List<InsertAllocation> plan = new java.util.ArrayList<>();
 		long requiredMarkers = 0L;
 		List<FluidDomain.CellCandidate> nearby = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
@@ -55,7 +60,7 @@ final class MaterialTransferPlanner {
 			for (FluidDomain.CellCandidate candidate : nearby) {
 				if (remaining <= 0.0) break;
 				int index = candidate.index();
-				double capacity = Math.max(0.0, domain.effectiveOpenCellVolume(index) - exactCellVolume[index]);
+				double capacity = observedSpace(availableCellVolume[index]);
 				double allocate = Math.min(capacity, remaining);
 				float represented = (float) allocate;
 				if (represented > allocate) represented = Math.nextDown(represented);
@@ -70,7 +75,7 @@ final class MaterialTransferPlanner {
 				}
 				int x = index % domain.sizeX, yz = index / domain.sizeX, y = yz % domain.sizeY, z = yz / domain.sizeY;
 				plan.add(new InsertAllocation(x, y, z, allocate, portion.materialHandle(), portionIndex));
-				exactCellVolume[index] += allocate;
+				availableCellVolume[index] = availableCellVolume[index].subtract(SignedDyadic.of(allocate));
 				remaining -= allocate;
 			}
 			if (remaining > 0.0) return new FluidDomain.ExactMixtureTransfer(false, List.of());
@@ -176,7 +181,7 @@ final class MaterialTransferPlanner {
 		float capacity = (float) Math.min(amount, Math.max(0.0, domain.remainingCarrierVolumeExact()));
 		if (!domain.canAddCarrierVolume(capacity)) capacity = Math.nextDown(capacity);
 		if (!(capacity > 0.0F)) return new FluidDomain.VolumeAddition(0.0F, false);
-		double[] exactCellVolume = domain.exactCellVolumes();
+		SignedDyadic[] availableCellVolume = domain.availableCellVolumes();
 		float remaining = capacity;
 		boolean markerBudgetLimited = false;
 		List<MaterialInsertPiece> insertPieces = new ArrayList<>();
@@ -186,8 +191,9 @@ final class MaterialTransferPlanner {
 			for (FluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
 				int index = candidate.index();
 				int x = index % domain.sizeX, yz = index / domain.sizeX, y = yz % domain.sizeY, z = yz / domain.sizeY;
-				float requestedForCell = (float) Math.min(remaining,
-						Math.max(0.0, domain.effectiveOpenCellVolume(index) - exactCellVolume[index]));
+				double room = observedSpace(availableCellVolume[index]);
+				float requestedForCell = (float) Math.min(remaining, room);
+				if (requestedForCell > room) requestedForCell = Math.nextDown(requestedForCell);
 				int availableMarkers = domain.maximumParticleCount - domain.particles.count() - insertPieces.size();
 				float markerCapacity = availableMarkers * domain.PARTICLE_VOLUME;
 				float added = Math.min(requestedForCell, markerCapacity);
@@ -222,7 +228,7 @@ final class MaterialTransferPlanner {
 					plannedInCell += piece;
 					left -= piece;
 				}
-				exactCellVolume[index] += added;
+				availableCellVolume[index] = availableCellVolume[index].subtract(SignedDyadic.of(added));
 				remaining -= added;
 				if (added + 1.0E-6F < requestedForCell) {
 					markerBudgetLimited = true;
@@ -481,7 +487,7 @@ final class MaterialTransferPlanner {
 		} catch (ArithmeticException overflow) {
 			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
-		double[] exactCellVolume = domain.exactCellVolumes();
+		SignedDyadic[] availableCellVolume = domain.availableCellVolumes();
 		List<FluidDomain.CellCandidate> nearby = domain.nearbyCells(centerX, centerY, centerZ, maxRadius);
 		List<ChemicalInsertPiece> pieces = new ArrayList<>();
 		try {
@@ -491,8 +497,7 @@ final class MaterialTransferPlanner {
 			List<ChemicalPieceDraft> groupPieces = new ArrayList<>();
 			for (FluidDomain.CellCandidate candidate : nearby) {
 				if (remaining <= 0.0) break;
-				double capacity = Math.max(0.0,
-						domain.effectiveOpenCellVolume(candidate.index()) - exactCellVolume[candidate.index()]);
+				double capacity = observedSpace(availableCellVolume[candidate.index()]);
 				double allocation = Math.min(capacity, remaining);
 				if (allocation <= 0.0) continue;
 				int cellX = candidate.index() % domain.sizeX;
@@ -509,7 +514,7 @@ final class MaterialTransferPlanner {
 					}
 					left -= piece;
 				}
-				exactCellVolume[candidate.index()] += allocation;
+				availableCellVolume[candidate.index()] = availableCellVolume[candidate.index()].subtract(SignedDyadic.of(allocation));
 				remaining -= allocation;
 			}
 			if (remaining > 0.0) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);

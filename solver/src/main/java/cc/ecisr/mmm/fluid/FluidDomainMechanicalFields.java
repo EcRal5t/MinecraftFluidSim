@@ -626,14 +626,23 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		return result;
 	}
 
-	double[] exactCellVolumes() {
-		double[] exact = new double[cellCount];
+	/** Exact raw carrier capacity for transfer planning. */
+	cc.ecisr.mmm.units.SignedDyadic[] availableCellVolumes() {
+		var exact = new cc.ecisr.mmm.units.SignedDyadic[cellCount];
+		Arrays.fill(exact, cc.ecisr.mmm.units.SignedDyadic.ZERO);
 		float h = config.cellSize();
 		for (int particle = 0; particle < particles.count(); particle++) {
 			int x = (int) Math.floor(particles.positionX(particle) / h);
 			int y = (int) Math.floor(particles.positionY(particle) / h);
 			int z = (int) Math.floor(particles.positionZ(particle) / h);
-			if (inside(x, y, z)) exact[cellIndex(x, y, z)] += particles.volume(particle);
+			if (inside(x, y, z)) {
+				int cell = cellIndex(x, y, z);
+				exact[cell] = exact[cell].add(cc.ecisr.mmm.units.SignedDyadic.of(particles.volume(particle)));
+			}
+		}
+		for (int cell = 0; cell < cellCount; cell++) {
+			var room = cc.ecisr.mmm.units.SignedDyadic.of(domain().effectiveOpenCellVolume(cell)).subtract(exact[cell]);
+			exact[cell] = room.significand().signum() <= 0 ? cc.ecisr.mmm.units.SignedDyadic.ZERO : room;
 		}
 		return exact;
 	}

@@ -22,7 +22,21 @@ public final class CarrierMutationValidation {
 		wholesaleCountBindsRevisionAndBudget();
 		readOnlyCellQueriesFollowCarrierEdits();
 		volumeObservationRoundsTheExactInventoryOnce();
+		insertionNeverRoundsCapacityUp();
 		System.out.println("Carrier mutation validation passed");
+	}
+
+	private static void insertionNeverRoundsCapacityUp() {
+		float edge = Math.nextDown(Math.nextDown(Math.nextDown(0.375F)));
+		for (float initial : new float[] {edge, Math.scalb(1.0F, -60)}) {
+			FluidDomain domain = emptyMaterialDomain(64);
+			domain.carrierMutations().appendMarker(CarrierMutationPlan.append(domain.carrierMutationRevision(), 0),
+					domain.cellIndex(1, 1, 1), 0.625F, 0.625F, 0.625F, initial, 0, 1000.0 * initial, null, false, false);
+			domain.addVolumeNearBudgeted(1, 1, 1, 1, 0);
+			var actual = cc.ecisr.mmm.units.SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count());
+			require(actual.compareTo(cc.ecisr.mmm.units.SignedDyadic.of(1)) <= 0 && actual.toDouble() >= 1 - 8 * Math.ulp(1.0F),
+					"operator insertion rounded a physical capacity gap upward");
+		}
 	}
 
 	private static void volumeObservationRoundsTheExactInventoryOnce() {
