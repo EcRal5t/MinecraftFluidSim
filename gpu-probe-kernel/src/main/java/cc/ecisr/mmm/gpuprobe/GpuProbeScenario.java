@@ -2,6 +2,9 @@ package cc.ecisr.mmm.gpuprobe;
 
 import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
+import cc.ecisr.mmm.fluid.CpuFluidSolverBackend;
+import cc.ecisr.mmm.fluid.FluidStepCandidate;
+import cc.ecisr.mmm.fluid.FluidStepRequest;
 
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
@@ -50,6 +53,11 @@ final class GpuProbeScenario {
 	static FluidSolverConfig cpuConfig() {
 		return new FluidSolverConfig(CELL_SIZE, DENSITY, GRAVITY, TIME_STEP,
 				200, PRESSURE_TOLERANCE, 0.45F, 2.0E-3F, 0.80F);
+	}
+
+	static FluidStepCandidate evaluateCpuStep(FluidDomain domain, long generation) {
+		return new CpuFluidSolverBackend().evaluate(new FluidStepRequest(generation,
+				domain.captureAuthoritativeState(), java.util.List.of(), false, 0));
 	}
 
 	static boolean checkpointDue(int completedGeneration, GpuProbeCheckpoint current) {

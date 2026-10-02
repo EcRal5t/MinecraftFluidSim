@@ -71,7 +71,9 @@ public final class GpuLongRunSurfaceValidation {
 		BigDecimal expectedCpuVolumeLedger = exactVolumeLedger(initialCpuState.copyPositionVolume());
 		MechanicalStats initialCpuEnergy = MechanicalStats.of(
 				initialCpuState.copyPositionVolume(), initialCpuState.copyParticleVelocities(), GRAVITY);
-		for (int step = 0; step < steps; step++) cpu.step();
+		for (int step = 0; step < steps; step++) {
+			cpu = GpuProbeScenario.evaluateCpuStep(cpu, step).claimPreparedCpuDomain();
+		}
 		cc.ecisr.mmm.fluid.FlipParticleState finalCpuState = cpu.exportParticleState();
 		ExactSurfaceStats cpuExactStats = ExactSurfaceStats.of(
 				finalCpuState.copyPositionVolume(), NX, NY, NZ, CELL_SIZE);

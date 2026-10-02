@@ -149,6 +149,7 @@ GPU probe 分为纯 Java/Vulkan 的 `gpu-probe-kernel` 和 Fabric 适配模块 `
 
 - 设备与资源：[VulkanDeviceContext](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/VulkanDeviceContext.java)、[FlipGpuResources](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/FlipGpuResources.java)、[FlipKernelBindings](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/FlipKernelBindings.java)。
 - 计算提交与回读：[GpuStepScheduler](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/GpuStepScheduler.java)、[GpuReadback](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/GpuReadback.java)。
+- 生成场景与 CPU 对照候选计算：[GpuProbeScenario](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/GpuProbeScenario.java)；驱动发现失败的诊断方法见 [GPU 验证](validation.md#gpu)。
 - 着色器：[flip.comp](../../gpu-probe-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/flip.comp)。修改缓冲布局时同步资源分配、绑定和回读。
 - Minecraft 接入：[MmmGpuProbeHostIntegration](../../gpu-probe/src/main/java/cc/ecisr/mmm/gpuprobe/MmmGpuProbeHostIntegration.java)。它负责只读的主区域冲突检查和快照适配。
 

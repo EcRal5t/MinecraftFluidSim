@@ -248,9 +248,10 @@ final class VulkanFlipPipeline implements AutoCloseable {
 				float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
 				float oy = (slot & 2) == 0 ? 0.25F : 0.75F;
 				float oz = (slot & 4) == 0 ? 0.25F : 0.75F;
-				if (x == 0) ox = Math.max(ox, 0.45F); if (x + 1 == config.nx()) ox = Math.min(ox, 0.55F);
-				if (y == 0) oy = Math.max(oy, 0.45F); if (y + 1 == config.ny()) oy = Math.min(oy, 0.55F);
-				if (z == 0) oz = Math.max(oz, 0.45F); if (z + 1 == config.nz()) oz = Math.min(oz, 0.55F);
+				float contact = ConservativeMarkerSampling.DOMAIN_CONTACT_FRACTION;
+				if (x == 0) ox = Math.max(ox, contact); if (x + 1 == config.nx()) ox = Math.min(ox, 1.0F - contact);
+				if (y == 0) oy = Math.max(oy, contact); if (y + 1 == config.ny()) oy = Math.min(oy, 1.0F - contact);
+				if (z == 0) oz = Math.max(oz, contact); if (z + 1 == config.nz()) oz = Math.min(oz, 1.0F - contact);
 				int base = particleCount * 4;
 				positions.put(base, (x + ox) * config.cellSize());
 				positions.put(base + 1, (y + oy) * config.cellSize());

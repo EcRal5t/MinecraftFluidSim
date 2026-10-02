@@ -97,7 +97,9 @@ public final class GpuOccupancyBreakEvenValidation {
 			int maximumSubsteps = 0, pressureIterations = 0;
 			for (int step = 0; step < MEASURED_STEPS; step++) {
 				long started = System.nanoTime();
-				FluidDomain.StepStats stats = domain.step();
+				var candidate = GpuProbeScenario.evaluateCpuStep(domain, step);
+				FluidDomain.StepStats stats = candidate.stats();
+				domain = candidate.claimPreparedCpuDomain();
 				double milliseconds = (System.nanoTime() - started) / 1_000_000.0;
 				totalMillis += milliseconds;
 				minimumMillis = Math.min(minimumMillis, milliseconds);
@@ -189,7 +191,9 @@ public final class GpuOccupancyBreakEvenValidation {
 	private static void warmCpuJit() {
 		Scenario warmup = new Scenario("jit", "jit", 12, 12, 12, 432, 8);
 		FluidDomain domain = createCpuDomain(warmup);
-		for (int step = 0; step < 4; step++) domain.step();
+		for (int step = 0; step < 4; step++) {
+			domain = GpuProbeScenario.evaluateCpuStep(domain, step).claimPreparedCpuDomain();
+		}
 	}
 
 	private static String sustainedScaleCrossover(List<Result> results) {

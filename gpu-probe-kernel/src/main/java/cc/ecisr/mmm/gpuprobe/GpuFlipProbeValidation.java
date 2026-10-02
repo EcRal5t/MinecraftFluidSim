@@ -143,7 +143,7 @@ public final class GpuFlipProbeValidation {
 						"CPU recovery center of mass changed");
 				require(nonzero(recovered.copyBinarySolidMask()) == checkpoint.solidCellCount(), "CPU recovery solid mask changed");
 				float recoveredVolume = recovered.totalVolume();
-				recovered.step();
+				recovered = GpuProbeScenario.evaluateCpuStep(recovered, 4L).claimPreparedCpuDomain();
 				require(close(recovered.totalVolume(), recoveredVolume, 1.0E-4F),
 						"CPU recovery first step changed particle truth");
 
@@ -182,6 +182,8 @@ public final class GpuFlipProbeValidation {
 			require(gpu.particleCount() == expectedParticles, "dam particle count");
 			require(close(gpu.totalParticleVolume(), expectedVolume, 1.0E-4F), "GPU particle volume before stepping");
 			require(close(cpu.totalVolume(), expectedVolume, 1.0E-4F), "CPU particle volume before stepping");
+			require(java.util.Arrays.equals(gpu.copyParticlePositionVolume(),
+					cpu.exportParticleState().copyPositionVolume()), "CPU/GPU initial marker quadrature differs");
 
 			VulkanFlipPipeline.Diagnostics diagnostics = null;
 			double gpuWallMillis = 0.0;
@@ -192,7 +194,7 @@ public final class GpuFlipProbeValidation {
 				gpuWallMillis += gpu.lastStepMilliseconds();
 				gpuDeviceMillis += gpu.lastGpuStepMilliseconds();
 				long cpuStarted = System.nanoTime();
-				cpu.step();
+				cpu = GpuProbeScenario.evaluateCpuStep(cpu, step).claimPreparedCpuDomain();
 				cpuMillis += (System.nanoTime() - cpuStarted) / 1_000_000.0;
 				diagnostics = gpu.diagnostics();
 				requireFinite(diagnostics);
@@ -367,7 +369,9 @@ public final class GpuFlipProbeValidation {
 		require(mismatches(cpuFallback.copyBinarySolidMask(), solidCells) == 0, "CPU fallback world collision mask changed");
 		require(close(cpuFallback.totalVolume(), expectedFluidCells, 1.0E-3F), "CPU fallback world collision volume");
 		float cpuVolume = cpuFallback.totalVolume();
-		for (int step = 0; step < 4; step++) cpuFallback.step();
+		for (int step = 0; step < 4; step++) {
+			cpuFallback = GpuProbeScenario.evaluateCpuStep(cpuFallback, step).claimPreparedCpuDomain();
+		}
 		require(close(cpuFallback.totalVolume(), cpuVolume, 1.0E-3F), "CPU fallback world collision volume changed");
 		VulkanFlipPipeline.Config config = new VulkanFlipPipeline.Config(nx, ny, nz, CELL_SIZE, DT, GRAVITY, RHO,
 				2, nx * ny * nz * 8);
