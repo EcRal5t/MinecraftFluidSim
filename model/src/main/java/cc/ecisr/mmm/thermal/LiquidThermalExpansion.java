@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
  * Bounded Boussinesq constitutive definition and built-in reference data.
  *
  * <p>Each world's material registry saves its coefficients and validity interval. The separate model
- * fingerprint binds the formula, LTE observation and averaging convention used by thermal regions.</p>
+ * fingerprint binds the formula, carrier observation and pressure-face averaging used by thermal regions.</p>
  */
 public final class LiquidThermalExpansion {
 	public static final String MODEL_ID = "mmm:boussinesq";
@@ -79,7 +79,7 @@ public final class LiquidThermalExpansion {
 			ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 			try (DataOutputStream output = new DataOutputStream(bytes)) {
 				output.writeUTF(MODEL_ID);
-				output.writeUTF("beta*(T_LTE-T_ref);cell_marker_volume_average;face_marker_volume_average;closed_relative_density_domain");
+				output.writeUTF("beta*(T_carrier-T_ref);connected_single_phase_trilinear_mass_volume;pressure_face_density_segments;closed_carrier_relative_density_domain");
 			}
 			return bytes.toByteArray();
 		} catch (IOException impossible) {

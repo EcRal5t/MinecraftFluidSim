@@ -54,7 +54,7 @@
 | 化学反应和组分输运 | `chemistry` | [M7ChemistryValidation](../../fabric/src/test/java/cc/ecisr/mmm/chemistry/M7ChemistryValidation.java)、[M7ChemicalTransportValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M7ChemicalTransportValidation.java) |
 | 颗粒运动、沉积和固液转移 | `granular` | [M8GranularValidation](../../fabric/src/test/java/cc/ecisr/mmm/granular/M8GranularValidation.java)、[GranularReactionCandidateValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/GranularReactionCandidateValidation.java) |
 | 内能、导热、反应热、相变和设备换热 | `thermal` | [M9ThermalValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M9ThermalValidation.java) |
-| 零导热平流、caloric 空间观察与冷热尖峰单调性 | `thermal` | [LiquidThermalAdvectionValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/LiquidThermalAdvectionValidation.java) |
+| 零导热平流、连续组成密度与热浮力、caloric 空间观察及冷热尖峰单调性 | `thermal` | [LiquidThermalAdvectionValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/LiquidThermalAdvectionValidation.java)、[LiquidStratificationValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/LiquidStratificationValidation.java) |
 | 有限热接触解析解、跨热容分段熵增与逐载体正温 | `thermal` | [ThermalContactValidation](../../model/src/test/java/cc/ecisr/mmm/thermal/ThermalContactValidation.java) |
 
 表中是定位场景的入口，完整调用列表以 `CpuValidationSuite` 为准。长场景的注液坐标、循环步数和逐步断言留在测试代码中维护。

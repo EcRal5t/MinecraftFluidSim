@@ -96,11 +96,11 @@ caloric segment 内 `cv` 为常量，积分与反演均为分段闭式线性计�
 
 批量读取的缓存只在明确的阶段内有效，跨库存、组成、内能或位置修改即失效；它不进入 `FluidDomainState`，也不进存档，恢复后重建。
 
-`prepareSpatialObservation` 提供独立的连续空间温度观察，供热平流验证使用。液体按 cell-center 三线性权重分配最多八份只读 caloric portion；支撑格须持有液体且完全开放，各格之间沿完全开放面连通，空隙隔开的对角格不相互贡献。外壳附近对剩余正权重归一化，partial cut-cell 沿用所属单元。其他凝聚态载体保持所属单元。
+`prepareSpatialObservation` 提供独立的连续空间温度观察，供热平流验证使用。液体按 cell-center 三线性权重分配最多八份只读 caloric portion；支撑格须持有液体、完全开放且与原载体属于同一 pressure phase，各格之间沿完全开放面连通。外壳附近对剩余正权重归一化，partial cut-cell 与含多相单元沿用所属单元。其他凝聚态载体保持所属单元。
 
 每份 portion 使用同一权重乘原载体的质量、体积、`U` 和完整 base energy。species 参考能先由原始整数库存求出，再参与加权；观察过程中保持 species、质量和能量 owner 原样。所有真实载体先通过正温反演，随后使用既有分段 caloric 反演得到格温度。正权重保证观察温度位于贡献载体的温度范围内；均匀 quadrature 的内域线性温度场可精确重建，外壳截断与 partial cut-cell 的误差需分别观察。
 
-该工作区按需分配，重建支撑几何后读取，失败批次不能继续读旧结果。力学物性与相变读取所属单元的 LTE grid。零导热平流用例使用散度为零的真实 MAC 平流、两个微小时间间隔和两级网格，验证格内一阶温度响应、载体 `U` 位模式和交接恢复。
+该工作区按需分配，重建支撑几何后读取，失败批次不能继续读旧结果。黏度与相变继续读取所属单元的 LTE grid。热区域的组成密度与热浮力复用这套正权重支撑，分别从真实质量/体积和逐载体温度推导。零导热平流用例使用散度为零的真实 MAC 平流、两个微小时间间隔和两级网格，验证空间温度和机械热浮力的格内一阶响应、载体 `U` 位模式和交接恢复。
 
 只有能量低于该数学域、数值非有限或热容量非正才拒绝候选。固定温度 reservoir 等外部设定值仍限于 committed registry 的共同标定闭区间，不能借延拓注入任意边界条件。
 
@@ -190,20 +190,24 @@ dt_stable = min_cell(0.5 * C_min_cell / sum_faces G_face)
 
 ```text
 relative buoyancy = beta * (T - T_ref)
-Delta u_y = g * dt * volume-weighted(relative buoyancy)
+rho_i = sum(w_pi*m_p) / sum(w_pi*V_p)
+thermal density correction_i = sum(w_pi*m_p*beta_p*(T_p-T_ref,p)) / sum(w_pi*V_p)
+Delta u_y = g * dt * thermal density correction_face / rho_face
 ```
 
 内置 `beta` 在 293.15 K 附近冻结为：水 `2.07e-4/K`、油 `7.00e-4/K`、汞 `1.82e-4/K`。该项不修改密度、质量或体积原始数据，也不适用于越出物性有效域的大温差外推。
 
 `MaterialRegistry.MaterialEntry.thermalExpansion` 保存每种液体的 `T_ref`、`beta` 和允许的 `|rho(T)-rho(T_ref)|/rho(T_ref)`。此处参考态使用同一组成的实际质量/体积密度；热密度修正为 `rho(T) = rho(T_ref)*(1-beta*(T-T_ref))`。组成差异继续由变密度压力离散计算。
 
-内置相对热密度变化上限为 `0.05`，闭区间内计算上述线性模型，越界抛 `ValidityExceededException`，后端拒绝完整候选并使生产区域数值暂停。这个上限约束 Boussinesq 小密度变化近似；常数 `beta` 的标定精度仍受参考温度附近的物性数据限制。零重力计算省去热浮力，极端 caloric、气体状态和相变夹具在微重力条件下验证各自的有效域。
+内置相对热密度变化上限为 `0.05`，每个真实载体在空间平均前接受闭区间校验，越界抛 `ValidityExceededException`，后端拒绝完整候选并使生产区域数值暂停。这个上限约束 Boussinesq 小密度变化近似；常数 `beta` 的标定精度仍受参考温度附近的物性数据限制。零重力计算省去热浮力，极端 caloric、气体状态和相变夹具在微重力条件下验证各自的有效域。
 
-热浮力复用 `LiquidCarrierProperties` 的批量 LTE 温度，同格按逐 marker 体积汇总各自已绑定的膨胀定义，再按两侧真实 marker 体积求面平均。物性观察保持所有载体 `U` 的原始位模式。热区域 manifest 的浮力身份绑定公式与空间平均约定，材料参数由世界材料指纹绑定。
+`LiquidCarrierProperties` 在同一三线性支撑上汇总组成质量、体积和逐载体热密度修正，两个密度字段再按 pressure face 使用的界面距离加权。每个载体的温度由实际 `U`、质量及 species 参考能反演；对应的膨胀定义来自已绑定世界材料条目。物性观察保持所有载体 `U` 的原始位模式。热区域 manifest 的浮力身份绑定公式、空间支撑和面平均约定，材料参数由世界材料指纹绑定。
 
 静水分层夹具要求最大粒子速度小于 `1e-8 m/s`。组成反置夹具要求盐组分质心穿过池体中面；温差与热盐竞争夹具检查热量或盐组分质心的运动方向。机械诊断分别记录黏性耗散、P2G/G2P 能量变化和热库存收支。
 
-当前热学载体按粒子所属单元汇总和分配内能。粒子在格内的小位移尚不改变热库存的空间归属，因此对背景温度梯度的线性热平流响应存在分辨率限制。自然对流的临界 Ra 与增长率收敛仍待连续热平流离散完成，验收入口见[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)。
+热盐补偿夹具将逐载体的 `rho_p*(1-beta_p*(T_p-T_ref,p))` 设为同一参考密度，验证格内平流后两项仍精确对应，以及压力投影后保持静水。MAC 使用 binary32；补偿场的速度残差上限取一份重力预测冲量的 ulp，当前默认网格、`g=9.81 m/s²`、`dt=0.05 s` 下为 `2.98023e-8 m/s`。反置分层经 CPU 后端的整步 CFL 细化计算，并逐步检查完整候选的库存与能量。
+
+热浮力已保留格内小位移的连续响应。普通正导热仍在粒子所属单元汇总并按 LTE 分配内能，格内未解析温差的有限导热离散以及速度传递耗散仍待完成；自然对流的临界 Ra 与增长率收敛按[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)验收。
 
 ### 气体能量与功
 

@@ -46,7 +46,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 
 	LiquidCarrierProperties thermalBuoyancyProperties() {
 		LiquidCarrierProperties properties = derivedCarrierState();
-		properties.prepareBuoyancy(this, thermalMarkerContext(), materialRegistry, materialDefinitions, thermalState);
+		properties.prepareBuoyancy(thermalMarkerContext(), materialRegistry, materialDefinitions, thermalState);
 		return properties;
 	}
 

@@ -47,6 +47,9 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				int cell = domain.cellIndex(n / 4, n / 2 - 1, 0);
 				domain.thermalState.prepareSpatialObservation(domain.thermalMarkerContext());
 				double before = domain.thermalState.spatialTemperatureInCell(cell);
+				var expansion = cc.ecisr.mmm.thermal.LiquidThermalExpansion.require("mmm:water");
+				double beforeBuoyancy = domain.thermalBuoyancyProperties().relativeBuoyancy(cell);
+				require(close(beforeBuoyancy, expansion.relativeBuoyancy(before)), "mechanical observation lost a linear thermal field");
 				require(close(before, 300 + gradient * (n / 2 - 0.5) * 0.5), "spatial observation lost a linear field");
 				double[] energies = domain.exportThermalParticleState().copyInternalEnergy();
 				int[] cells = new int[domain.particleCount()];
@@ -57,6 +60,12 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				var transport = domain.stepThermalOnly(dt);
 				domain.thermalState.prepareSpatialObservation(domain.thermalMarkerContext());
 				double derivative = (domain.thermalState.spatialTemperatureInCell(cell) - before) / dt;
+				var properties = domain.thermalBuoyancyProperties();
+				double buoyancyDerivative = (properties.relativeBuoyancy(cell) - beforeBuoyancy)
+						/ expansion.volumetricCoefficientPerK() / dt;
+				require(Math.abs(buoyancyDerivative - derivative) < 1e-8 && Math.abs(properties.density(cell) - 1000) < 16 * Math.ulp(1000.0),
+						"mechanical buoyancy lost subcell advection: thermal=" + derivative + " buoyancy=" + buoyancyDerivative
+								+ " rho=" + properties.density(cell));
 				double expected = -gradient * speed * Math.cos(Math.PI * (n / 4 + 0.5) / n)
 						* Math.sin(Math.PI * (n / 2 - 0.5) / n);
 				error = Math.max(error, relativeError(derivative, expected));
@@ -143,6 +152,17 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		for (int marker = 0; marker < domain.particleCount(); marker++) if (domain.particleCellIndex(marker) == 0)
 			domain.thermalMarkerContext().observationSupport(marker, (cell, weight) ->
 					require(cell == 0 && weight == 1, "partial cut-cell observation left its inventory cell"));
+		var separated = new FluidDomain(2, 2, 2, domain.config, 128);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) separated.setVolume(x, y, z, 1);
+		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.OIL));
+		for (int marker = 0; marker < separated.particleCount(); marker++)
+			separated.setMarkerMaterial(marker, liquids, separated.particleCellIndex(marker) % 2);
+		separated.ensureGrid();
+		for (int marker = 0; marker < separated.particleCount(); marker++) {
+			int own = separated.particleCellIndex(marker);
+			separated.thermalMarkerContext().observationSupport(marker, (cell, weight) ->
+					require(cell % 2 == own % 2 && weight > 0 && weight <= 1, "spatial observation mixed immiscible pressure phases"));
+		}
 	}
 
 	static void insulatingCellsIgnoreUnrelatedFlux() {

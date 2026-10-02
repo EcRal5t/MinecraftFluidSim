@@ -32,6 +32,7 @@ final class BodyForceStage {
 		float pressureZFaceOpen(int x, int y, int z);
 		boolean thermalActive();
 		LiquidCarrierProperties thermalBuoyancyProperties();
+		double thermalFaceRelativeBuoyancy(int first, int second, LiquidCarrierProperties properties);
 		FluidMaterialRegistry materialRegistry();
 		boolean liquidGasTensionActive();
 		boolean liquidPairTensionActive();
@@ -118,21 +119,15 @@ final class BodyForceStage {
 		}
 	}
 
-	/** Adds the standard Boussinesq density correction to the existing gravity face impulse. */
+	/** Adds the Boussinesq correction using the pressure face's composition-density segments. */
 	void applyThermalBuoyancy(float dt) {
 		if (!access.thermalActive() || state.particles.count() == 0 || state.config.gravity() == 0.0F) return;
 		LiquidCarrierProperties properties = access.thermalBuoyancyProperties();
 		double scale = state.config.gravity() * dt;
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
-			float aperture = access.pressureYFaceOpen(x, y, z);
-			if (!access.carrierFaceActive(below, above, aperture)) continue;
-			double belowVolume = state.markerGrid.exactCellMarkerVolume[below];
-			double aboveVolume = state.markerGrid.exactCellMarkerVolume[above];
-			double volumeSum = belowVolume + aboveVolume;
-			if (volumeSum <= 0.0) continue;
-			double relative = (belowVolume * properties.relativeBuoyancy(below)
-					+ aboveVolume * properties.relativeBuoyancy(above)) / volumeSum;
+			if (!access.carrierFaceActive(below, above, access.pressureYFaceOpen(x, y, z))) continue;
+			double relative = access.thermalFaceRelativeBuoyancy(below, above, properties);
 			state.mac.velocityY[access.yFaceIndex(x, y, z)] += (float) (scale * relative);
 		}
 	}

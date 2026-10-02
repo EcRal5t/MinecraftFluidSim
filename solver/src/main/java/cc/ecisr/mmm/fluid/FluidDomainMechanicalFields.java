@@ -244,7 +244,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 			return (float) (config.density() / materialFaceEffectiveDensity(first, second));
 		}
 		int fluid = isFluid(first) ? first : second;
-		return (float) (config.density() / markerGrid.cellDensity[fluid]);
+		return (float) (config.density() / mechanicalDensity(fluid));
 	}
 
 	float carrierDensityScale(int first, int second) {
@@ -254,11 +254,33 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 			return (float) (config.density() / materialFaceEffectiveDensity(first, second));
 		}
 		int carrier = firstCarrier ? first : second;
-		return (float) (config.density() / markerGrid.cellDensity[carrier]);
+		return (float) (config.density() / mechanicalDensity(carrier));
+	}
+
+	private double mechanicalDensity(int cell) {
+		return thermalState == null || markerGrid.markerCount[cell] == 0
+				? markerGrid.cellDensity[cell] : domain().derivedCarrierState().density(cell);
 	}
 
 	double materialFaceEffectiveDensity(int one, int two) {
 		int first = Math.min(one, two), second = Math.max(one, two);
+		double fraction = materialFaceDensityFraction(first, second);
+		return fraction * mechanicalDensity(first) + (1.0 - fraction) * mechanicalDensity(second);
+	}
+
+	/** Thermal force and pressure inertia integrate the same two composition-density segments. */
+	double thermalFaceRelativeBuoyancy(int one, int two, LiquidCarrierProperties properties) {
+		int first = Math.min(one, two), second = Math.max(one, two);
+		if (markerGrid.markerCount[first] == 0) return properties.relativeBuoyancy(second);
+		if (markerGrid.markerCount[second] == 0) return properties.relativeBuoyancy(first);
+		double fraction = materialFaceDensityFraction(first, second);
+		double firstMassDensity = fraction * properties.density(first);
+		double secondMassDensity = (1.0 - fraction) * properties.density(second);
+		return (firstMassDensity * properties.relativeBuoyancy(first)
+				+ secondMassDensity * properties.relativeBuoyancy(second)) / (firstMassDensity + secondMassDensity);
+	}
+
+	private double materialFaceDensityFraction(int first, int second) {
 		double fraction = 0.5;
 		int firstPhase = dominantPhase(first), secondPhase = dominantPhase(second);
 		if (firstPhase != NO_PHASE && secondPhase != NO_PHASE && firstPhase != secondPhase) {
@@ -269,7 +291,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 				fraction = firstSigned / denominator;
 			}
 		}
-		return fraction * markerGrid.cellDensity[first] + (1.0 - fraction) * markerGrid.cellDensity[second];
+		return fraction;
 	}
 
 	int dominantPhase(int cell) {

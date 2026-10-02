@@ -45,14 +45,18 @@ final class LiquidStratificationValidation {
 		FluidDomain custom = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		custom.setThermalTemperatureInCell(2, 1, 1, T_REF + 10);
 		double[] energies = custom.exportThermalParticleState().copyInternalEnergy();
-		double expected = changed.relativeBuoyancy(T_REF + 10);
+		// One interior axis and two wall-adjacent axes: (3/4)*(7/8)*(7/8) of this cell's support is heated.
+		double expected = (147.0 / 256) * changed.relativeBuoyancy(T_REF + 10);
 		check(Math.abs(custom.thermalBuoyancyProperties().relativeBuoyancy(custom.cellIndex(2, 1, 1)) - expected) < 1e-12,
 				"thermal property batch did not use the bound expansion");
 		check(!baseline.fingerprint().equals(definitions.fingerprint()), "expansion missing from material identity");
 		check(Arrays.equals(energies, custom.exportThermalParticleState().copyInternalEnergy()), "buoyancy observation changed carrier U");
 		var snapshot = custom.captureAuthoritativeState();
 		FluidDomain outside = fixture(0, false, false, 0);
-		outside.setThermalTemperatureInCell(2, 1, 1, T_REF + 300);
+		outside.thermalState.resetMarkerTemperature(0, T_REF + 300, outside.thermalMarkerContext(), outside.exactInternalEnergy());
+		check(Math.abs(expansion.relativeBuoyancy(outside.thermalState.observeTemperatureInCell(
+				outside.particleCellIndex(0), outside.thermalMarkerContext()))) < 0.05,
+				"invalid-carrier fixture needs a valid cell mean");
 		var before = outside.exportThermalParticleState();
 		try {
 			new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, outside.captureAuthoritativeState(), List.of(), false, 0));
@@ -73,6 +77,7 @@ final class LiquidStratificationValidation {
 	}
 
 	static void stableLayers() {
+		compensatedThermalCompositionRemainsHydrostatic();
 		for (double[] state : new double[][] {{0.10, 0, 0}, {0, -20, 0}, {0.01, 10, 0}, {0, -20, 100}}) {
 			var definitions = state[2] == 0 ? BuiltinFluidMaterials.createRegistry()
 					: new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(BuiltinFluidMaterials.WATER,
@@ -94,7 +99,60 @@ final class LiquidStratificationValidation {
 		}
 	}
 
+	private static void compensatedThermalCompositionRemainsHydrostatic() {
+		FluidDomain domain = fixture(0.01, false, true, 0);
+		var expansion = domain.materialDefinitions.entry("mmm:water").thermalExpansion();
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			double rho = domain.particles.mass(marker) / domain.particles.volume(marker);
+			double temperature = T_REF + (1 - domain.config.density() / rho) / expansion.volumetricCoefficientPerK();
+			domain.thermalState.resetMarkerTemperature(marker, temperature, domain.thermalMarkerContext(), domain.exactInternalEnergy());
+		}
+		// Advect composition and temperature within cells, then require both sampled density terms to change together.
+		var advected = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		advected.ensureGrid();
+		int[] cells = new int[advected.particleCount()];
+		for (int marker = 0; marker < cells.length; marker++) cells[marker] = advected.particleCellIndex(marker);
+		double[] densities = new double[advected.cellCount];
+		var beforeProperties = advected.thermalBuoyancyProperties();
+		for (int cell = 0; cell < densities.length; cell++) densities[cell] = beforeProperties.density(cell);
+		for (int z = 1; z < 3; z++) for (int y = 1; y < 5; y++) for (int x = 1; x <= 5; x++)
+			advected.mac.velocityX[advected.xFaceIndex(x, y, z)] = (float) (-0.1 * Math.sin(Math.PI * (x - 1) / 4)
+					* Math.cos(Math.PI * (y - 0.5) / 4));
+		for (int z = 1; z < 3; z++) for (int y = 1; y <= 5; y++) for (int x = 1; x < 5; x++)
+			advected.mac.velocityY[advected.yFaceIndex(x, y, z)] = (float) (0.1 * Math.cos(Math.PI * (x - 0.5) / 4)
+					* Math.sin(Math.PI * (y - 1) / 4));
+		Inventory advectedInventory = Inventory.capture(advected);
+		double[] energies = advected.exportThermalParticleState().copyInternalEnergy();
+		advected.particleAdvectionStage.advect(0.001F);
+		var afterProperties = advected.thermalBuoyancyProperties();
+		double maximumDensityChange = 0;
+		for (int cell = 0; cell < densities.length; cell++) if (advected.markerGrid.markerCount[cell] > 0) {
+			maximumDensityChange = Math.max(maximumDensityChange, Math.abs(afterProperties.density(cell) - densities[cell]));
+			check(Math.abs(afterProperties.density(cell) * (1 - afterProperties.relativeBuoyancy(cell)) - domain.config.density()) < 1e-9,
+					"subcell motion sampled heat and composition on different supports");
+		}
+		check(maximumDensityChange > 1e-5 && Arrays.equals(energies, advected.exportThermalParticleState().copyInternalEnergy()),
+				"subcell composition response was stationary or edited U");
+		for (int marker = 0; marker < cells.length; marker++) check(cells[marker] == advected.particleCellIndex(marker),
+				"compensated advection fixture crossed a cell");
+		advectedInventory.check(advected);
+		Inventory initial = Inventory.capture(domain);
+		double maximum = 0;
+		for (int i = 0; i < 40; i++) {
+			var stats = domain.stepWithMechanicalAudit(false, 0);
+			initial.check(domain);
+			maximum = Math.max(maximum, domain.maximumParticleSpeed());
+			check(Math.abs(stats.mechanicalAudit().closureResidualJoules()) < 1e-6,
+					"compensated heat/salt mechanical energy did not close");
+		}
+		double velocityUlp = Math.ulp(domain.config.gravity() * domain.config.timeStep());
+		check(maximum < velocityUlp, "compensated heat/salt speed exceeds one binary32 gravity impulse ulp: " + maximum);
+		System.out.printf("  compensated heat/salt maxSpeed=%g m/s gravityImpulseUlp=%g m/s subcellDensityChange=%g kg/m3%n",
+				maximum, velocityUlp, maximumDensityChange);
+	}
+
 	static void unstableLayersRespond() {
+		var backend = new CpuFluidSolverBackend();
 		for (double[] state : new double[][] {{0.10, 0}, {0, 20}, {0.001, 20}}) {
 			boolean brineOnTop = state[1] == 0;
 			FluidDomain domain = fixture(state[0], brineOnTop, true, state[1]);
@@ -104,7 +162,9 @@ final class LiquidStratificationValidation {
 			double extremeMoment = initialMoment;
 			double viscous = 0, p2g = 0, g2p = 0;
 			for (int step = 0; step < 4800; step++) {
-				var stats = domain.stepWithMechanicalAudit(false, 0);
+				var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(), List.of(), false, 0, true));
+				var stats = candidate.stats();
+				domain = candidate.claimPreparedCpuDomain();
 				initial.check(domain);
 				check(Math.abs(stats.mechanicalAudit().closureResidualJoules()) < 1e-6,
 						"stratification mechanical energy stages do not close");
@@ -169,12 +229,15 @@ final class LiquidStratificationValidation {
 		FluidDomain domain = new FluidDomain(6, 6, 4, config, 2048);
 		domain.restoreChemicalParticleState(chemical, CHEMISTRY);
 		domain.bindMaterialDefinitions(definitions);
+		domain.sealDomainBoundary();
 		var water = new ThermalMaterialDefinition("test:thermal/stratification", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"mmm:water", T_REF, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, 4184)));
+		var air = new ThermalMaterialDefinition("test:thermal/stratification_air", ThermalMaterialDefinition.CarrierKind.GAS,
+				"mmm:air", T_REF, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(150, 1500, 718)));
 		var offsets = List.of(new ThermalSpeciesOffset("test:offset/water", BuiltinChemicalDefinitions.H2O, water.id(), ExactRational.ZERO),
 				new ThermalSpeciesOffset("test:offset/sodium", BuiltinChemicalDefinitions.NA_PLUS, water.id(), ExactRational.ZERO),
 				new ThermalSpeciesOffset("test:offset/chloride", BuiltinChemicalDefinitions.CL_MINUS, water.id(), ExactRational.ZERO));
-		domain.bindThermal(new ThermalRegistry(List.of(water), offsets, List.of(), CHEMISTRY.fingerprint(), ""), domain.materialRegistry, T_REF);
+		domain.bindThermal(new ThermalRegistry(List.of(water, air), offsets, List.of(), CHEMISTRY.fingerprint(), ""), domain.materialRegistry, T_REF);
 		for (int z = 1; z < 3; z++) for (int y = 1; y < 5; y++) for (int x = 1; x < 5; x++) {
 			boolean bottom = y <= 2;
 			if (perturb && (y == 2 || y == 3) && x <= 2) bottom = !bottom;

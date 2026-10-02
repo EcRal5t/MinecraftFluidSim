@@ -61,7 +61,7 @@ handle 用于数组索引。checkpoint 保存 canonical material palette，容�
 - reseed split/merge 必须保持体积、质量、动量和质心；不得跨材料或 chemical phase 合并。
 - 单一纯水域必须退化为同一机械求解路径，不额外引入材料修正源汇。
 
-格内机械密度只从实际 marker 重建：
+库存观察的格内组成密度从所属单元的实际 marker 重建：
 
 ```text
 rho_cell = sum(marker_solver_mass) / sum(marker_normalized_volume)
@@ -70,9 +70,11 @@ mass_kg   = marker_solver_mass * cellSize^3
 volume_m3 = marker_normalized_volume * cellSize^3
 ```
 
+热区域的压力与颗粒载体物性使用连续组成密度 `rho_i = sum(w_pi*m_p)/sum(w_pi*V_p)`。权重与热浮力共用 cell-center 三线性支撑，限制在完全开放、连通且属于同一 pressure phase 的有液体单元；外壳附近归一化，partial cut-cell 和含多相单元保留所属单元采样。该字段按载体位置与热状态代次重建，保持所有质量和体积库存原样。无热状态的压力密度沿用所属单元的组成密度。
+
 质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的闭合式为 `particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg`；溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。
 
-pressure face 的 `1/rho` 系数按界面距离加权；不得从 material reference density、客户端颜色或平滑 fraction 反推存量质量。热学 Boussinesq 项是参考态附近的温差浮力近似，与这份组成质量密度正交，不能覆盖它。
+pressure face 的 `1/rho` 系数按界面距离加权。热学 Boussinesq 项从相同支撑上的逐载体温度和实际质量推导热密度变化，并沿相同的两段界面距离积分；库存密度、压力惯性和热密度修正各自保存明确的派生含义。
 
 同温盐水分层由溶解的 Na⁺/Cl⁻ 的实际质量得到。`LiquidStratificationValidation` 检查盐水下层静水、反置翻转、同组成温差分层及热盐竞争，并逐步核对体积、材料质量、species 和内能；热修正有效范围见[热浮力](thermal-state.md#热浮力)。
 
