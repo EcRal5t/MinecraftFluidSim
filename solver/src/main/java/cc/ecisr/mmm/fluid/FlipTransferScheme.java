@@ -9,7 +9,7 @@ public final class FlipTransferScheme {
 
 	/**
 	 * Selects the largest FLIP increment in {@code [0,1]} whose particle kinetic
-	 * energy does not exceed the projected-grid energy budget. The candidate
+	 * energy does not exceed the supplied particle/grid work budget. The candidate
 	 * energy is {@code quadratic * alpha^2 + linear * alpha + constant}; the
 	 * caller supplies a limit no smaller than the PIC constant term.
 	 */

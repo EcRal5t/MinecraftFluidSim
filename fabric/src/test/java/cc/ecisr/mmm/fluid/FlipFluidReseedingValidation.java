@@ -93,11 +93,20 @@ public final class FlipFluidReseedingValidation {
 		int target = ConservativeMarkerSampling.targetMarkers((float) before.volume);
 		check(result.particleCount() >= target && result.particleCount() == fixture.count - result.merged(),
 				"non-binary merge count did not match its committed exact consolidations");
-		check(result.conservationSkipped() > 0,
-				"non-binary merge did not report an unrepresentable exact consolidation");
+		check(result.particleCount() == target || result.conservationSkipped() > 0,
+				"unfinished non-binary consolidation lacks a conservation refusal");
 		checkLedger(before, after, 2.0E-6, "non-binary merge");
 		check(result.ledgerError() == 0.0,
 				"non-binary merge changed the authoritative float ledger: " + result.ledgerError());
+		Fixture refused = new Fixture(2, 2);
+		for (int p = 0; p < 2; p++) refused.x[p] = refused.y[p] = refused.z[p] = 1.5F;
+		refused.volume[0] = 0.0625F;
+		refused.volume[1] = Math.ulp(refused.volume[0]) / 2;
+		Ledger refusalBefore = refused.ledger();
+		var refusal = refused.reseed(2);
+		check(refusal.particleCount() == 2 && refusal.merged() == 0 && refusal.conservationSkipped() == 1,
+				"half-ULP tail was lost during exact consolidation");
+		checkLedger(refusalBefore, refused.ledger(), 0, "half-ULP refusal");
 	}
 
 	private static void reseedingIsBitDeterministic() {

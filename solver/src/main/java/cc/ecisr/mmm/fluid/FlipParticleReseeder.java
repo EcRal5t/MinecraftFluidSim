@@ -166,7 +166,7 @@ final class FlipParticleReseeder {
 				int source = localParticles[local];
 				int targetLocal = nearestRepresentative(
 						particleX, particleY, particleZ, particleMaterialHandle, particlePhaseLabel,
-						chemicalParcels, source, localCount
+						chemicalParcels, particleVolume, source, localCount
 				);
 				if (targetLocal < 0) {
 					geometrySkipped++;
@@ -243,10 +243,13 @@ final class FlipParticleReseeder {
 			float[] particleX, float[] particleY, float[] particleZ,
 			int[] particleMaterialHandle, int[] particlePhaseLabel,
 			ChemicalParcelStore chemicalParcels,
+			float[] particleVolume,
 			int particle, int count
 	) {
 		int best = -1;
+		int fallback = -1;
 		float bestDistance = Float.POSITIVE_INFINITY;
+		float fallbackDistance = Float.POSITIVE_INFINITY;
 		for (int local = 0; local < count; local++) {
 			if (!representative[local]) continue;
 			int representativeParticle = localParticles[local];
@@ -254,12 +257,15 @@ final class FlipParticleReseeder {
 					|| particlePhaseLabel[representativeParticle] != particlePhaseLabel[particle]) continue;
 			if (chemicalParcels != null && !chemicalParcels.canMerge(representativeParticle, particle)) continue;
 			float distance = distanceSquared(particleX, particleY, particleZ, particle, representativeParticle);
+			if (distance < fallbackDistance) { fallbackDistance = distance; fallback = local; }
+			double first = particleVolume[particle], second = particleVolume[representativeParticle];
+			if (!exactlyMergeable(first, second, first + second)) continue;
 			if (distance < bestDistance) {
 				bestDistance = distance;
 				best = local;
 			}
 		}
-		return best;
+		return best >= 0 ? best : fallback;
 	}
 
 	private static MergeOutcome mergeParticleInto(
@@ -281,7 +287,7 @@ final class FlipParticleReseeder {
 		double targetVolume = particleVolume[target];
 		double sourceVolume = particleVolume[source];
 		double mergedVolume = targetVolume + sourceVolume;
-		if ((double) (float) mergedVolume != mergedVolume) return MergeOutcome.CONSERVATION_BLOCKED;
+		if (!exactlyMergeable(targetVolume, sourceVolume, mergedVolume)) return MergeOutcome.CONSERVATION_BLOCKED;
 		float mergedX = (float) ((particleX[target] * targetVolume + particleX[source] * sourceVolume) / mergedVolume);
 		float mergedY = (float) ((particleY[target] * targetVolume + particleY[source] * sourceVolume) / mergedVolume);
 		float mergedZ = (float) ((particleZ[target] * targetVolume + particleZ[source] * sourceVolume) / mergedVolume);
@@ -300,6 +306,11 @@ final class FlipParticleReseeder {
 		if (chemicalParcels != null) chemicalParcels.merge(target, source, particleMass[target]);
 		if (thermal != null) thermal.merge(target, source);
 		return MergeOutcome.MERGED;
+	}
+
+	private static boolean exactlyMergeable(double first, double second, double sum) {
+		return Double.isFinite(sum) && (double) (float) sum == sum
+				&& sum - first == second && sum - second == first;
 	}
 
 	private boolean splitParticle(

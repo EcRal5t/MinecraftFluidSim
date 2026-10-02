@@ -37,6 +37,8 @@ public final class GranularCarrierValidation {
 		java.util.Arrays.fill(domain.mac.velocityX, 1);
 		java.util.Arrays.fill(domain.mac.velocityY, 0);
 		java.util.Arrays.fill(domain.mac.velocityZ, 0);
+		// This isolated sub-grid carrier follows its authoritative velocity.
+		for (int marker = 0; marker < domain.particleCount(); marker++) domain.particles.setVelocityX(marker, 1);
 		domain.particleAdvectionStage.advect(.5F);
 		require(domain.carrierMutationRevision == revision, "advection fixture must retain carrier structure");
 		require(domain.carrierViscosityPaPerS(source) == null

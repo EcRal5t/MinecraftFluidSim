@@ -153,6 +153,7 @@ final class MechanicalStepPipeline {
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		gridToParticleStage.extrapolateAndTransfer();
+		validateProjectedCourant(dt);
 		double particleKineticEnergy = captureAudit ? access.particleKineticEnergyJoules() : 0.0;
 		if (captureAudit) audit.gridToParticleTransferJoules +=
 				particleKineticEnergy - stageKineticEnergy;

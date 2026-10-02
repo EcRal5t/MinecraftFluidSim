@@ -11,7 +11,7 @@ import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 final class ParticleAdvectionStage {
 	record Workspace(
 			LiquidParticleStore particles, FlipParticleCollision collision, MacVelocityGrid mac,
-			DomainGeometry geometry, int sizeX, int sizeY, int sizeZ, float cellSize
+			DomainGeometry geometry, boolean[] advectionCells, int sizeX, int sizeY, int sizeZ, float cellSize
 	) { }
 
 	interface Access {
@@ -45,21 +45,20 @@ final class ParticleAdvectionStage {
 		LiquidParticleStore particles = state.particles;
 		ChemicalParcelStore chemicalParcels = access.chemicalParcels();
 		int chemicalMovingCount = 0;
-		if (chemicalParcels != null) {
-			for (int marker = 0; marker < particles.count(); marker++) {
-				if (particles.velocityX(marker) == 0.0F && particles.velocityY(marker) == 0.0F
-						&& particles.velocityZ(marker) == 0.0F) continue;
-				access.chemicalPreviousCells()[marker] = access.particleCellIndex(marker);
-				access.chemicalMovingMarkers()[chemicalMovingCount++] = marker;
-			}
-		}
 		LiquidParticleStore.DirectArrays advectArrays = particles.directArrays();
 		ensureMotionCapacity(particles.count());
 		for (int marker = 0; marker < particles.count(); marker++) {
 			float x = advectArrays.positionX[marker];
 			float y = advectArrays.positionY[marker];
 			float z = advectArrays.positionZ[marker];
-			if (supportsDivergenceConformingField(x, y, z)) {
+			int cellX = Math.clamp((int) Math.floor(x / state.cellSize), 0, state.sizeX - 1);
+			int cellY = Math.clamp((int) Math.floor(y / state.cellSize), 0, state.sizeY - 1);
+			int cellZ = Math.clamp((int) Math.floor(z / state.cellSize), 0, state.sizeZ - 1);
+			if (!state.advectionCells[(cellZ * state.sizeY + cellY) * state.sizeX + cellX]) {
+				motionX[marker] = advectArrays.velocityX[marker];
+				motionY[marker] = advectArrays.velocityY[marker];
+				motionZ[marker] = advectArrays.velocityZ[marker];
+			} else if (supportsDivergenceConformingField(x, y, z)) {
 				DivergenceConformingVelocityField.sample(state.mac, state.sizeX, state.sizeY, state.sizeZ,
 						state.cellSize, x, y, z, firstVelocity);
 				float midpointX = x + 0.5F * dt * firstVelocity.x;
@@ -95,6 +94,10 @@ final class ParticleAdvectionStage {
 				motionX[marker] = trilinearX(midpointX, midpointY, midpointZ);
 				motionY[marker] = trilinearY(midpointX, midpointY, midpointZ);
 				motionZ[marker] = trilinearZ(midpointX, midpointY, midpointZ);
+			}
+			if (chemicalParcels != null && (motionX[marker] != 0 || motionY[marker] != 0 || motionZ[marker] != 0)) {
+				access.chemicalPreviousCells()[marker] = access.particleCellIndex(marker);
+				access.chemicalMovingMarkers()[chemicalMovingCount++] = marker;
 			}
 		}
 		state.collision.advect(

@@ -11,6 +11,8 @@ public final class FlipFluidFreeSurfaceValidation {
 		pressurePhaseUsesConservativeFootprintVolume();
 		divergenceConformingAdvectionMatchesMacDivergence();
 		energyStableFlipTransferUsesTheLargestAdmissibleIncrement();
+		resolvedVelocityPreservesSmoothMotionAndRejectsSamplingNoise();
+		airExtensionRetainsLiquidFacesAndResolvesMarkerFringe();
 		bodyOverlapResolvesContinuousSubmergence();
 		pureWaterMarkerMassLedgerTracksVolume();
 		fractionalHydrostaticColumnsBalanceGravity();
@@ -49,6 +51,69 @@ public final class FlipFluidFreeSurfaceValidation {
 		check(Math.abs((sample.displacedVolumeCubicMetres() - shifted.displacedVolumeCubicMetres())
 				- width * width * 0.01) < 1.0E-6,
 				"body overlap did not respond continuously to a sub-sample vertical displacement");
+	}
+
+	private static void resolvedVelocityPreservesSmoothMotionAndRejectsSamplingNoise() {
+		var config = new FluidSolverConfig(0.5F, 1000, 0, 0.001F, 300, 1e-7F, 0.4F, 0.002F, 0);
+		var domain = new FluidDomain(8, 8, 2, config, 2048);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) domain.setVolume(x, y, z, 1);
+		for (int p = 0; p < domain.particleCount(); p++) {
+			double x = Math.PI * domain.particles.positionX(p) / 4, y = Math.PI * domain.particles.positionY(p) / 4;
+			domain.particles.setVelocityX(p, (float) (-0.02 * Math.sin(x) * Math.cos(y)));
+			domain.particles.setVelocityY(p, (float) (0.02 * Math.cos(x) * Math.sin(y)));
+		}
+		double initial = domain.particleKineticEnergyJoules();
+		for (int step = 0; step < 40; step++) domain.step();
+		double ratio = domain.particleKineticEnergyJoules() / initial;
+		check(ratio <= 1 + 64 * Math.ulp(1.0F) && ratio >= 1 - 40 * 16 * Math.ulp(1.0F),
+				"unforced resolved motion lost energy beyond float transfer error: " + ratio);
+		domain.ensureGrid();
+		float[] raw = new float[domain.particleCount()], projected = new float[raw.length], residual = new float[raw.length];
+		for (int p = 0; p < raw.length; p++) raw[p] = projected[p] = ((p * 17) % 29 - 14) / 14.0F;
+		var projection = new ResolvedMarkerVelocity(8, 8, 2, 0.5F, domain.geometry.cutCells);
+		projection.project(domain.particles, 0, domain.mac.velocityValidX, projected);
+		double cross = 0, norm = 0;
+		for (int p = 0; p < raw.length; p++) {
+			residual[p] = raw[p] - projected[p];
+			cross += domain.particles.mass(p) * projected[p] * residual[p];
+			norm += domain.particles.mass(p) * raw[p] * raw[p];
+		}
+		check(Math.abs(cross) <= 32 * Math.ulp(1.0F) * norm, "resolved velocity projection is not mass-orthogonal");
+		projection.project(domain.particles, 0, domain.mac.velocityValidX, residual);
+		double remainder = 0;
+		for (int p = 0; p < raw.length; p++) remainder += domain.particles.mass(p) * residual[p] * residual[p];
+		check(remainder <= Math.pow(64 * Math.ulp(1.0F), 2) * norm,
+				"MAC-invisible velocity survived resolved transfer: " + remainder / norm);
+	}
+
+	private static void airExtensionRetainsLiquidFacesAndResolvesMarkerFringe() {
+		var domain = new FluidDomain(6, 4, 2, FluidSolverConfig.prototypeDefaults());
+		boolean[] fluid = new boolean[domain.cellCount];
+		int[] markers = new int[domain.cellCount];
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 6; x++) {
+			int c = domain.cellIndex(x, y, z); fluid[c] = x < 3; markers[c] = x <= 3 ? 8 : 0;
+		}
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 1; x < 6; x++)
+			domain.mac.velocityX[domain.xFaceIndex(x, y, z)] = 0.125F;
+		for (int z = 0; z < 2; z++) for (int y = 1; y < 4; y++)
+			domain.mac.velocityY[domain.yFaceIndex(3, y, z)] = 0.1F * y;
+		float[] original = domain.mac.velocityX.clone();
+		var extension = new DivergenceFreeVelocityExtension(6, 4, 2, domain.geometry.cutCells);
+		extension.extend(domain.mac, fluid, domain.geometry.solid, markers);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) {
+			for (int x = 1; x <= 3; x++) check(domain.mac.velocityX[domain.xFaceIndex(x, y, z)] == original[domain.xFaceIndex(x, y, z)],
+					"air extension changed a prescribed liquid face");
+			double div = domain.mac.velocityX[domain.xFaceIndex(4, y, z)] - domain.mac.velocityX[domain.xFaceIndex(3, y, z)]
+					+ domain.mac.velocityY[domain.yFaceIndex(3, y + 1, z)] - domain.mac.velocityY[domain.yFaceIndex(3, y, z)]
+					+ domain.mac.velocityZ[domain.zFaceIndex(3, y, z + 1)] - domain.mac.velocityZ[domain.zFaceIndex(3, y, z)];
+			check(Math.abs(div) < 8 * Math.ulp(1.0F), "marker fringe acquired compressible motion: " + div);
+		}
+		java.util.Arrays.fill(fluid, true);
+		int pocket = domain.cellIndex(3, 1, 0); fluid[pocket] = false;
+		original = domain.mac.velocityX.clone();
+		extension.extend(domain.mac, fluid, domain.geometry.solid, markers);
+		check(java.util.Arrays.equals(original, domain.mac.velocityX) && extension.advectionCells[pocket],
+				"closed gas component received an artificial incompressible outlet");
 	}
 
 	private static void pureWaterMarkerMassLedgerTracksVolume() {
@@ -318,8 +383,12 @@ public final class FlipFluidFreeSurfaceValidation {
 		}
 		float exactVolume = domain.totalVolume();
 		float initialCenter = domain.centerOfMassX();
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		for (int step = 0; step < 300; step++) {
-			FluidDomain.StepStats stats = domain.step();
+			var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(),
+					java.util.List.of(), false, 0));
+			FluidDomain.StepStats stats = candidate.stats();
+			domain = candidate.claimPreparedCpuDomain();
 			check(Float.isFinite(stats.pressureResidual()), "stair-slope pressure residual became non-finite");
 			check(stats.relativeVolumeError() < 2.0E-6F, "stair-slope flow changed marker volume");
 		}

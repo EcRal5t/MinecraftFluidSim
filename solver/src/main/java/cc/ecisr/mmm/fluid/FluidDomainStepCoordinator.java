@@ -567,9 +567,9 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		int nx = axis == 0 ? sizeX + 1 : sizeX;
 		int ny = axis == 1 ? sizeY + 1 : sizeY;
 		int nz = axis == 2 ? sizeZ + 1 : sizeZ;
-		float gx = px / h - (axis == 0 ? 0.0F : 0.5F);
-		float gy = py / h - (axis == 1 ? 0.0F : 0.5F);
-		float gz = pz / h - (axis == 2 ? 0.0F : 0.5F);
+		float gx = Math.clamp(px / h - (axis == 0 ? 0.0F : 0.5F), 0, nx - 1);
+		float gy = Math.clamp(py / h - (axis == 1 ? 0.0F : 0.5F), 0, ny - 1);
+		float gz = Math.clamp(pz / h - (axis == 2 ? 0.0F : 0.5F), 0, nz - 1);
 		int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
 		float fx = gx - x0, fy = gy - y0, fz = gz - z0;
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {

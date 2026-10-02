@@ -36,12 +36,13 @@ final class MechanicalStageAssembly {
 				bodyForceAccess(domain));
 		GridToParticleStage gridToParticle = new GridToParticleStage(
 				new GridToParticleStage.Workspace(
-						domain.geometry, domain.markerGrid, domain.mac, domain.particles, domain.velocityExtrapolator),
+						domain.geometry, domain.markerGrid, domain.mac, domain.projection.pressureFluid, domain.particles, domain.velocityExtrapolator,
+						domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize()),
 				gridToParticleAccess(domain));
 		ParticleAdvectionStage advection = new ParticleAdvectionStage(
 				new ParticleAdvectionStage.Workspace(
 						domain.particles, domain.particleCollision, domain.mac, domain.geometry,
-						domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize()),
+						gridToParticle.advectionCells(), domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize()),
 				advectionAccess(domain));
 		ParticleToGridStage particleToGrid = new ParticleToGridStage(
 				new ParticleToGridStage.Workspace(

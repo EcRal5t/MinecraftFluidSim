@@ -43,6 +43,7 @@ public final class M9ThermalValidation {
 		LiquidStratificationValidation.validityAndCommittedDefinitions();
 		LiquidStratificationValidation.stableLayers();
 		LiquidStratificationValidation.unstableLayersRespond();
+		LiquidConvectionExperiment.main(new String[] {"--verify-growth"});
 		ThermalTransportValidationScenarios.partialCutFaceUsesPlicThermalContact();
 		ThermalTransportValidationScenarios.finiteThermalBodyExchangesWithoutMixing();
 		ThermalGasValidationScenarios.worldBoundaryTemperatureRangeExcludesFiniteDevices();
