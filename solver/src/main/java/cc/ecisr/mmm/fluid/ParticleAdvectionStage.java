@@ -59,22 +59,22 @@ final class ParticleAdvectionStage {
 				motionY[marker] = advectArrays.velocityY[marker];
 				motionZ[marker] = advectArrays.velocityZ[marker];
 			} else if (supportsDivergenceConformingField(x, y, z)) {
-				DivergenceConformingVelocityField.sample(state.mac, state.sizeX, state.sizeY, state.sizeZ,
+				DivergenceConformingVelocityField.sample(state.mac, state.geometry.cutCells, state.sizeX, state.sizeY, state.sizeZ,
 						state.cellSize, x, y, z, firstVelocity);
 				float midpointX = x + 0.5F * dt * firstVelocity.x;
 				float midpointY = y + 0.5F * dt * firstVelocity.y;
 				float midpointZ = z + 0.5F * dt * firstVelocity.z;
-				DivergenceConformingVelocityField.sample(state.mac, state.sizeX, state.sizeY, state.sizeZ,
+				DivergenceConformingVelocityField.sample(state.mac, state.geometry.cutCells, state.sizeX, state.sizeY, state.sizeZ,
 						state.cellSize, midpointX, midpointY, midpointZ, midpointVelocity);
 				midpointX = x + 0.5F * dt * midpointVelocity.x;
 				midpointY = y + 0.5F * dt * midpointVelocity.y;
 				midpointZ = z + 0.5F * dt * midpointVelocity.z;
-				DivergenceConformingVelocityField.sample(state.mac, state.sizeX, state.sizeY, state.sizeZ,
+				DivergenceConformingVelocityField.sample(state.mac, state.geometry.cutCells, state.sizeX, state.sizeY, state.sizeZ,
 						state.cellSize, midpointX, midpointY, midpointZ, secondMidpointVelocity);
 				float endpointX = x + dt * secondMidpointVelocity.x;
 				float endpointY = y + dt * secondMidpointVelocity.y;
 				float endpointZ = z + dt * secondMidpointVelocity.z;
-				DivergenceConformingVelocityField.sample(state.mac, state.sizeX, state.sizeY, state.sizeZ,
+				DivergenceConformingVelocityField.sample(state.mac, state.geometry.cutCells, state.sizeX, state.sizeY, state.sizeZ,
 						state.cellSize, endpointX, endpointY, endpointZ, endpointVelocity);
 				motionX[marker] = (firstVelocity.x + 2.0F * midpointVelocity.x
 						+ 2.0F * secondMidpointVelocity.x + endpointVelocity.x) / 6.0F;

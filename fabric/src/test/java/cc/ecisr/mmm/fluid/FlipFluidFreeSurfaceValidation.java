@@ -10,6 +10,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pressurePhaseUsesConservativeFootprintVolume();
 		divergenceConformingAdvectionMatchesMacDivergence();
+		closedWallProfilesRetainZeroNormalVelocity();
 		energyStableFlipTransferUsesTheLargestAdmissibleIncrement();
 		resolvedVelocityPreservesSmoothMotionAndRejectsSamplingNoise();
 		airExtensionRetainsLiquidFacesAndResolvesMarkerFringe();
@@ -210,6 +211,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		int nx = 4, ny = 4, nz = 4;
 		float h = 0.5F;
 		MacVelocityGrid mac = new MacVelocityGrid(nx, ny, nz);
+		FlipCutCellGeometry cutCells = new FlipCutCellGeometry(nx, ny, nz);
 		for (int i = 0; i < mac.velocityX.length; i++) mac.velocityX[i] = (i * 17 % 23 - 11) * 0.03125F;
 		for (int i = 0; i < mac.velocityY.length; i++) mac.velocityY[i] = (i * 13 % 19 - 9) * 0.02734375F;
 		for (int i = 0; i < mac.velocityZ.length; i++) mac.velocityZ[i] = (i * 11 % 17 - 8) * 0.03515625F;
@@ -224,17 +226,65 @@ public final class FlipFluidFreeSurfaceValidation {
 		float epsilon = h / 1_024.0F;
 		DivergenceConformingVelocityField.Sample negative = new DivergenceConformingVelocityField.Sample();
 		DivergenceConformingVelocityField.Sample positive = new DivergenceConformingVelocityField.Sample();
-		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px - epsilon, py, pz, negative);
-		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px + epsilon, py, pz, positive);
+		DivergenceConformingVelocityField.sample(mac, cutCells, nx, ny, nz, h, px - epsilon, py, pz, negative);
+		DivergenceConformingVelocityField.sample(mac, cutCells, nx, ny, nz, h, px + epsilon, py, pz, positive);
 		float reconstructed = (positive.x - negative.x) / (2.0F * epsilon);
-		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px, py - epsilon, pz, negative);
-		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px, py + epsilon, pz, positive);
+		DivergenceConformingVelocityField.sample(mac, cutCells, nx, ny, nz, h, px, py - epsilon, pz, negative);
+		DivergenceConformingVelocityField.sample(mac, cutCells, nx, ny, nz, h, px, py + epsilon, pz, positive);
 		reconstructed += (positive.y - negative.y) / (2.0F * epsilon);
-		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px, py, pz - epsilon, negative);
-		DivergenceConformingVelocityField.sample(mac, nx, ny, nz, h, px, py, pz + epsilon, positive);
+		DivergenceConformingVelocityField.sample(mac, cutCells, nx, ny, nz, h, px, py, pz - epsilon, negative);
+		DivergenceConformingVelocityField.sample(mac, cutCells, nx, ny, nz, h, px, py, pz + epsilon, positive);
 		reconstructed += (positive.z - negative.z) / (2.0F * epsilon);
 		check(Math.abs(reconstructed - expected) < 2.0E-4F,
 				"H(div) reconstruction changed MAC divergence: expected=" + expected + ", actual=" + reconstructed);
+	}
+
+	private static void closedWallProfilesRetainZeroNormalVelocity() {
+		for (int axis = 0; axis < 3; axis++) {
+			int tangent = (axis + 1) % 3, third = (axis + 2) % 3;
+			var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults());
+			int[] cell = new int[3]; cell[axis] = 2; cell[tangent] = 1;
+			for (int k = 0; k < 4; k++) { cell[third] = k; domain.setSolid(cell[0], cell[1], cell[2], true); }
+			// A discrete curl around one grid vertex has zero divergence and zero
+			// average normal velocity on every solid face.
+			float[] normal = axis == 0 ? domain.mac.velocityX : axis == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
+			float[] tangential = tangent == 0 ? domain.mac.velocityX : tangent == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
+			for (int k = 0; k < 4; k++) {
+				cell[third] = k; cell[axis] = 2; cell[tangent] = 2; normal[face(domain, axis, cell)] = 1;
+				cell[tangent] = 3; normal[face(domain, axis, cell)] = -1;
+				cell[axis] = 1; tangential[face(domain, tangent, cell)] = -1;
+				cell[axis] = 2; tangential[face(domain, tangent, cell)] = 1;
+			}
+			float[] point = new float[3]; point[axis] = 2; point[tangent] = 1.75F; point[third] = 1.5F;
+			var sample = new DivergenceConformingVelocityField.Sample();
+			DivergenceConformingVelocityField.sample(domain.mac, domain.geometry.cutCells, 4, 4, 4, 1,
+					point[0], point[1], point[2], sample);
+			float normalVelocity = axis == 0 ? sample.x : axis == 1 ? sample.y : sample.z;
+			check(normalVelocity == 0, "closed wall profile leaked normal velocity on axis " + axis + ": " + normalVelocity);
+			point[axis] = 1.37F; point[tangent] = 2.43F;
+			float divergence = 0, epsilon = 1.0F / 2048;
+			for (int component = 0; component < 3; component++) {
+				point[component] -= epsilon;
+				DivergenceConformingVelocityField.sample(domain.mac, domain.geometry.cutCells, 4, 4, 4, 1,
+						point[0], point[1], point[2], sample);
+				float negative = component == 0 ? sample.x : component == 1 ? sample.y : sample.z;
+				point[component] += 2 * epsilon;
+				DivergenceConformingVelocityField.sample(domain.mac, domain.geometry.cutCells, 4, 4, 4, 1,
+						point[0], point[1], point[2], sample);
+				float positive = component == 0 ? sample.x : component == 1 ? sample.y : sample.z;
+				point[component] -= epsilon;
+				divergence += (positive - negative) / (2 * epsilon);
+			}
+			check(Math.abs(divergence) < 4e-4F, "solid wall reconstruction changed MAC divergence: " + divergence);
+		}
+	}
+
+	private static int face(FluidDomain domain, int axis, int[] cell) {
+		return switch (axis) {
+			case 0 -> domain.xFaceIndex(cell[0], cell[1], cell[2]);
+			case 1 -> domain.yFaceIndex(cell[0], cell[1], cell[2]);
+			default -> domain.zFaceIndex(cell[0], cell[1], cell[2]);
+		};
 	}
 
 	private static void energyStableFlipTransferUsesTheLargestAdmissibleIncrement() {

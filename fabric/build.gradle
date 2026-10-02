@@ -98,6 +98,15 @@ tasks.register('runConvectionExperiment', JavaExec) {
 	enableAssertions = true
 }
 
+tasks.register('runMarkerDistributionExperiment', JavaExec) {
+	group = 'verification'
+	description = 'Measures marker transport, solid-wall profiles, quadrature and resampling errors.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = 'cc.ecisr.mmm.fluid.MarkerDistributionExperiment'
+	enableAssertions = true
+}
+
 tasks.register('runCompositeBenchmark', JavaExec) {
 	group = 'verification'
 	description = 'Measures observable composite workloads; see validation.md for scene scope.'

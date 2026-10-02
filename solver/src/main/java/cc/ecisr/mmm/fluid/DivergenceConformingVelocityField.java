@@ -5,7 +5,8 @@ package cc.ecisr.mmm.fluid;
  * face profile is shared by its two cells and has the stored face value as its
  * area average. A quadratic interior bubble cancels the tangential-profile
  * divergence, so the pointwise divergence equals the cell's discrete MAC
- * divergence everywhere in the cell.
+ * divergence everywhere in the cell. Closed solid faces have zero profiles,
+ * including their tangential slopes, preserving pointwise impermeability.
  */
 final class DivergenceConformingVelocityField {
 	static final class Sample {
@@ -17,7 +18,7 @@ final class DivergenceConformingVelocityField {
 	private DivergenceConformingVelocityField() { }
 
 	static void sample(
-			MacVelocityGrid grid, int sizeX, int sizeY, int sizeZ, float cellSize,
+			MacVelocityGrid grid, FlipCutCellGeometry geometry, int sizeX, int sizeY, int sizeZ, float cellSize,
 			float physicalX, float physicalY, float physicalZ, Sample result
 	) {
 		float gridX = physicalX / cellSize;
@@ -33,26 +34,32 @@ final class DivergenceConformingVelocityField {
 		float centeredY = localY - 0.5F;
 		float centeredZ = localZ - 0.5F;
 
-		float leftU = u(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ);
-		float rightU = u(grid, sizeX, sizeY, sizeZ, cellX + 1, cellY, cellZ);
-		float leftUy = uSlopeY(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ);
-		float rightUy = uSlopeY(grid, sizeX, sizeY, sizeZ, cellX + 1, cellY, cellZ);
-		float leftUz = uSlopeZ(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ);
-		float rightUz = uSlopeZ(grid, sizeX, sizeY, sizeZ, cellX + 1, cellY, cellZ);
+		boolean leftOpen = geometry.xFaceOpen(cellX, cellY, cellZ) > 0;
+		boolean rightOpen = geometry.xFaceOpen(cellX + 1, cellY, cellZ) > 0;
+		float leftU = leftOpen ? u(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ) : 0;
+		float rightU = rightOpen ? u(grid, sizeX, sizeY, sizeZ, cellX + 1, cellY, cellZ) : 0;
+		float leftUy = leftOpen ? uSlopeY(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ) : 0;
+		float rightUy = rightOpen ? uSlopeY(grid, sizeX, sizeY, sizeZ, cellX + 1, cellY, cellZ) : 0;
+		float leftUz = leftOpen ? uSlopeZ(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ) : 0;
+		float rightUz = rightOpen ? uSlopeZ(grid, sizeX, sizeY, sizeZ, cellX + 1, cellY, cellZ) : 0;
 
-		float bottomV = v(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ);
-		float topV = v(grid, sizeX, sizeY, sizeZ, cellX, cellY + 1, cellZ);
-		float bottomVx = vSlopeX(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ);
-		float topVx = vSlopeX(grid, sizeX, sizeY, sizeZ, cellX, cellY + 1, cellZ);
-		float bottomVz = vSlopeZ(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ);
-		float topVz = vSlopeZ(grid, sizeX, sizeY, sizeZ, cellX, cellY + 1, cellZ);
+		boolean bottomOpen = geometry.yFaceOpen(cellX, cellY, cellZ) > 0;
+		boolean topOpen = geometry.yFaceOpen(cellX, cellY + 1, cellZ) > 0;
+		float bottomV = bottomOpen ? v(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ) : 0;
+		float topV = topOpen ? v(grid, sizeX, sizeY, sizeZ, cellX, cellY + 1, cellZ) : 0;
+		float bottomVx = bottomOpen ? vSlopeX(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ) : 0;
+		float topVx = topOpen ? vSlopeX(grid, sizeX, sizeY, sizeZ, cellX, cellY + 1, cellZ) : 0;
+		float bottomVz = bottomOpen ? vSlopeZ(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ) : 0;
+		float topVz = topOpen ? vSlopeZ(grid, sizeX, sizeY, sizeZ, cellX, cellY + 1, cellZ) : 0;
 
-		float backW = w(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ);
-		float frontW = w(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ + 1);
-		float backWx = wSlopeX(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ);
-		float frontWx = wSlopeX(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ + 1);
-		float backWy = wSlopeY(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ);
-		float frontWy = wSlopeY(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ + 1);
+		boolean backOpen = geometry.zFaceOpen(cellX, cellY, cellZ) > 0;
+		boolean frontOpen = geometry.zFaceOpen(cellX, cellY, cellZ + 1) > 0;
+		float backW = backOpen ? w(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ) : 0;
+		float frontW = frontOpen ? w(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ + 1) : 0;
+		float backWx = backOpen ? wSlopeX(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ) : 0;
+		float frontWx = frontOpen ? wSlopeX(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ + 1) : 0;
+		float backWy = backOpen ? wSlopeY(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ) : 0;
+		float frontWy = frontOpen ? wSlopeY(grid, sizeX, sizeY, sizeZ, cellX, cellY, cellZ + 1) : 0;
 
 		float leftProfile = leftU + leftUy * centeredY + leftUz * centeredZ;
 		float rightProfile = rightU + rightUy * centeredY + rightUz * centeredZ;
