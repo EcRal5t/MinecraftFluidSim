@@ -23,7 +23,23 @@ public final class CarrierMutationValidation {
 		readOnlyCellQueriesFollowCarrierEdits();
 		volumeObservationRoundsTheExactInventoryOnce();
 		insertionNeverRoundsCapacityUp();
+		insertionNeverRoundsTheRequestUp();
 		System.out.println("Carrier mutation validation passed");
+	}
+
+	private static void insertionNeverRoundsTheRequestUp() {
+		FluidDomain domain = emptyMaterialDomain(1024);
+		for (int c = 0; c < domain.cellCount; c++) domain.setVolume(c % 4, c / 4 % 4, c / 16, (c % 13 + 1) / 17.0F);
+		for (int round = 0; round < 12; round++) {
+			var before = cc.ecisr.mmm.units.SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count());
+			float request = 1.3F;
+			var receipt = domain.addVolumeNearBudgeted(1, 1, 1, request, 10);
+			var inserted = cc.ecisr.mmm.units.SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count()).subtract(before);
+			require(inserted.compareTo(cc.ecisr.mmm.units.SignedDyadic.of(request)) <= 0,
+					"cross-cell float subtraction increased the requested source inventory");
+			require(Math.abs(inserted.toDouble() - receipt.addedVolume()) <= 0.5 * Math.ulp(receipt.addedVolume()),
+					"insertion receipt lost more than its final binary32 rounding");
+		}
 	}
 
 	private static void insertionNeverRoundsCapacityUp() {

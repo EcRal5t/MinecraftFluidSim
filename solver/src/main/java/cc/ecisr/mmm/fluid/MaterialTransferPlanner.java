@@ -182,7 +182,7 @@ final class MaterialTransferPlanner {
 		if (!domain.canAddCarrierVolume(capacity)) capacity = Math.nextDown(capacity);
 		if (!(capacity > 0.0F)) return new FluidDomain.VolumeAddition(0.0F, false);
 		SignedDyadic[] availableCellVolume = domain.availableCellVolumes();
-		float remaining = capacity;
+		SignedDyadic remaining = SignedDyadic.of(capacity);
 		boolean markerBudgetLimited = false;
 		List<MaterialInsertPiece> insertPieces = new ArrayList<>();
 		long plannedChemicalQuanta = 0L;
@@ -192,34 +192,36 @@ final class MaterialTransferPlanner {
 				int index = candidate.index();
 				int x = index % domain.sizeX, yz = index / domain.sizeX, y = yz % domain.sizeY, z = yz / domain.sizeY;
 				double room = observedSpace(availableCellVolume[index]);
-				float requestedForCell = (float) Math.min(remaining, room);
-				if (requestedForCell > room) requestedForCell = Math.nextDown(requestedForCell);
+				double permitted = Math.min(observedSpace(remaining), room);
+				float requestedForCell = (float) permitted;
+				if (requestedForCell > permitted) requestedForCell = Math.nextDown(requestedForCell);
 				int availableMarkers = domain.maximumParticleCount - domain.particles.count() - insertPieces.size();
 				float markerCapacity = availableMarkers * domain.PARTICLE_VOLUME;
 				float added = Math.min(requestedForCell, markerCapacity);
-				if (added <= 1.0E-6F) {
-					if (requestedForCell > 1.0E-6F && availableMarkers == 0) markerBudgetLimited = true;
+				if (!(added > 0)) {
+					if (requestedForCell > 0 && availableMarkers == 0) markerBudgetLimited = true;
 					if (markerBudgetLimited) break;
 					continue;
 				}
 				int cell = domain.cellIndex(x, y, z);
-				float left = added, plannedInCell = 0.0F;
-				for (int slot = domain.firstOpenSlot(cell, 0); left > 1.0E-6F;
+				double left = added, plannedInCell = 0.0;
+				for (int slot = domain.firstOpenSlot(cell, 0); left > 0;
 						slot = domain.firstOpenSlot(cell, slot + 1)) {
 					if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
-					float piece = Math.min(domain.PARTICLE_VOLUME, left);
+					float piece = (float) Math.min(domain.PARTICLE_VOLUME, left);
 					double pieceMass = (double) piece * (domain.materialRegistry == null
 							? domain.config.density() : domain.materialRegistry.material(0).referenceDensity());
 					ChemicalMixtureRecord chemical = domain.chemicalParcels == null ? null
-							: domain.chemicalParcels.defaultRecord(
+							: domain.chemicalParcels.tryDefaultRecord(
 									domain.materialRegistry.material(0).id(), piece, domain.config.cellSize(), pieceMass, false);
+					if (domain.chemicalParcels != null && chemical == null) break;
 					if (chemical != null) {
 						long pieceQuanta = chemical.totalQuanta();
 						if (Math.addExact(domain.chemicalParcels.totalQuanta(),
 								Math.addExact(plannedChemicalQuanta, pieceQuanta))
 								> cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 							markerBudgetLimited = true;
-							remaining -= plannedInCell;
+							remaining = remaining.subtract(SignedDyadic.of(plannedInCell));
 							break cellLoop;
 						}
 						plannedChemicalQuanta = Math.addExact(plannedChemicalQuanta, pieceQuanta);
@@ -228,13 +230,13 @@ final class MaterialTransferPlanner {
 					plannedInCell += piece;
 					left -= piece;
 				}
-				availableCellVolume[index] = availableCellVolume[index].subtract(SignedDyadic.of(added));
-				remaining -= added;
-				if (added + 1.0E-6F < requestedForCell) {
+				availableCellVolume[index] = availableCellVolume[index].subtract(SignedDyadic.of(plannedInCell));
+				remaining = remaining.subtract(SignedDyadic.of(plannedInCell));
+				if (added < requestedForCell) {
 					markerBudgetLimited = true;
 					break;
 				}
-				if (remaining <= 1.0E-6F) break;
+				if (remaining.significand().signum() == 0) break;
 			}
 		} catch (IllegalArgumentException | ArithmeticException refusedPlan) {
 			return new FluidDomain.VolumeAddition(0.0F, false);
@@ -258,7 +260,7 @@ final class MaterialTransferPlanner {
 		}
 		if (!externalAddition.isEmpty()) domain.chemicalParcels.recordExternalSource(externalAddition);
 		domain.gridDirty = true;
-		return new FluidDomain.VolumeAddition(capacity - remaining, markerBudgetLimited);
+		return new FluidDomain.VolumeAddition((float) SignedDyadic.of(capacity).subtract(remaining).toDouble(), markerBudgetLimited);
 	}
 
 	float removeVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
