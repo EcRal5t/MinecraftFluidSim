@@ -58,7 +58,7 @@ final class GranularPressurePreconditioner {
 		}
 	}
 
-	private void add(int cell, int neighbor, float faceCoefficient) {
+	private void add(int cell, int neighbor, double faceCoefficient) {
 		if (!(faceCoefficient > 0)) return;
 		boolean liquid = domain.isFluid(neighbor);
 		int node = liquid ? -1 : domain.gasNodeOfAirCell(neighbor);

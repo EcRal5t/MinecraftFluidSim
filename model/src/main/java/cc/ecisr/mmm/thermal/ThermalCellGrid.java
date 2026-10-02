@@ -218,55 +218,10 @@ public final class ThermalCellGrid {
 		updateObservedTemperatureRange();
 	}
 
-	ThermalContactExchange.Body contactBody(int cell) {
-		int carrier = cellHead[cell];
-		if (carrierCount[cell] == 1) return new ThermalContactExchange.Carrier(carrierMaterial[carrier],
-				carrierMass[carrier], cachedBaseEnergy(carrier), internalEnergy[cell]);
-		double initialEnergy = internalEnergy[cell], initialTemperature = temperature[cell], initialCapacity = heatCapacity[cell];
-		return new ThermalContactExchange.Body() {
-			@Override public double temperatureK() { return initialTemperature; }
-			@Override public double heatCapacityEuPerK() { return initialCapacity; }
-			@Override public double energyChangeToTemperature(double target) {
-				double change = 0.0;
-				for (int ordinal = cellHead[cell]; ordinal >= 0; ordinal = carrierNext[ordinal])
-					change += carrierMass[ordinal] * carrierMaterial[ordinal].sensibleSpecificEnergyBetween(initialTemperature, target);
-				return change;
-			}
-			@Override public ThermalStateFunction.State stateAfterEnergyChange(double change) {
-				solveCell(cell, initialEnergy + change);
-				return new ThermalStateFunction.State(temperature[cell], heatCapacity[cell]);
-			}
-		};
-	}
-	/** Zero-conductivity cells advect their individual carrier U without artificial intracell exchange. */
-	void setTransportCellInternalEnergies(double[] targetEnergy) {
-		validateCellInternalEnergies(targetEnergy);
-		for (int cell = 0; cell < cellCount; cell++) if (occupied(cell) && conductivity[cell] == 0.0) {
-			if (targetEnergy[cell] != internalEnergy[cell])
-				throw new IllegalArgumentException("Insulating thermal cell received a conductive flux");
-			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier])
-				carrierMaterial[carrier].temperatureForSensibleSpecificEnergy(
-						(carriers.internalEnergy(carrier) - cachedBaseEnergy(carrier)) / carrierMass[carrier]);
-		}
-		for (int cell = 0; cell < cellCount; cell++) if (occupied(cell) && conductivity[cell] > 0.0)
-			assignSolvedCellEnergy(cell, targetEnergy[cell]);
-		updateObservedTemperatureRange();
-	}
-	void assignTransportCellEnergy(int cell, double energy) {
-		solveCell(cell, energy);
-		assignSolvedCellEnergy(cell, energy);
-	}
-	void finishTransport() { updateObservedTemperatureRange(); }
-
-	double minimumHeatCapacity(int cell) {
-		double capacity = 0.0;
-		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			double specific = Double.POSITIVE_INFINITY;
-			for (var segment : carrierMaterial[carrier].caloricSegments()) specific = Math.min(specific, segment.specificHeatEuPerMuK());
-			capacity += carrierMass[carrier] * specific;
-		}
-		return capacity;
-	}
+	CarrierAccess carrierAccess() { return carriers; }
+	int firstCarrier(int cell) { return cellHead[cell]; }
+	int nextCarrier(int carrier) { return carrierNext[carrier]; }
+	double carrierVolume(int cell) { return totalVolume[cell]; }
 
 	private void assignSolvedCellEnergy(int cell, double requested) {
 		int remainderCarrier = -1;

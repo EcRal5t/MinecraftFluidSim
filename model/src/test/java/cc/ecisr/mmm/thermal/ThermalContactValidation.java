@@ -13,6 +13,47 @@ public final class ThermalContactValidation {
 		heterogeneousContactsPreserveTemperatureOrderAndEntropy();
 		invalidCarrierCannotHideInValidCellMean();
 		carrierGraphPreservesCaloricInventoryAndPreflights();
+		condensedCellTransportHasFiniteRates();
+	}
+
+	private static void condensedCellTransportHasFiniteRates() {
+		for (var kind : new ThermalMaterialDefinition.CarrierKind[] {
+				ThermalMaterialDefinition.CarrierKind.LIQUID, ThermalMaterialDefinition.CarrierKind.GRANULAR,
+				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID}) {
+			double firstChange = 0;
+			for (double k : new double[] {0, 1e-8, 1e-7, 1e8}) {
+				var material = new ThermalMaterialDefinition("test:thermal/finite", kind, "test:finite", 300, 0, k,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(1, 500, 10)));
+				double[] energy = {-300, 500, -300, 500}, base = {1000, -2000, 3000, -4000};
+				for (int p = 0; p < 4; p++) energy[p] += base[p];
+				var owners = new ThermalCellGrid.CarrierAccess() {
+					@Override public int carrierCount() { return 4; }
+					@Override public int cell(int p) { return p / 2; }
+					@Override public ThermalMaterialDefinition material(int p) { return material; }
+					@Override public double mass(int p) { return 1; }
+					@Override public double volume(int p) { return 0.25; }
+					@Override public double baseEnergy(int p) { return base[p]; }
+					@Override public double internalEnergy(int p) { return energy[p]; }
+					@Override public void setInternalEnergy(int p, double u) { energy[p] = u; }
+				};
+				var grid = new ThermalCellGrid(2); grid.rebuild(owners);
+				var before = SignedDyadic.sum(energy); double[] raw = energy.clone();
+				var result = new ThermalTransport(2, 1, 1, 0.5, 8).step(grid, (x, y, z, axis) -> 0.125, 1);
+				double change = material.temperatureForSensibleSpecificEnergy(energy[0] - base[0]) - 270;
+				if (k == 0) require(Arrays.equals(raw, energy), "insulating condensed geometry edited U");
+				else if (k < 1) {
+					require(change > 0 && change < 1e-5, "positive small k lost finite condensed-carrier response");
+					if (firstChange > 0) require(Math.abs(change / firstChange - 10) < 0.001, "condensed transport lost linear k limit");
+					firstChange = change;
+				}
+				for (int p = 0; p < 4; p++) {
+					double t = material.temperatureForSensibleSpecificEnergy(energy[p] - base[p]);
+					require(t >= 270 && t <= 350, "condensed transport violated the maximum principle");
+				}
+				require(SignedDyadic.sum(energy).subtract(before).equals(result.roundoffResidual())
+						&& result.reservoirExchange().equals(SignedDyadic.ZERO), "condensed transport failed energy closure");
+			}
+		}
 	}
 
 	private static void finiteContactMatchesAnalyticPair() {

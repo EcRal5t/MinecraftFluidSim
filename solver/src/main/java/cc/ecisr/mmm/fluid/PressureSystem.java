@@ -163,18 +163,18 @@ final class PressureSystem {
 			int yz = index / domain.sizeX;
 			int y = yz % domain.sizeY;
 			int z = yz / domain.sizeY;
-			float negativeX = x > 0
+			double negativeX = x > 0
 					? pressureFaceCoefficient(index, index - 1, -1, 0, 0) : 0.0F;
-			float positiveX = x + 1 < domain.sizeX
+			double positiveX = x + 1 < domain.sizeX
 					? pressureFaceCoefficient(index, index + 1, 1, 0, 0) : 0.0F;
-			float negativeY = y > 0
+			double negativeY = y > 0
 					? pressureFaceCoefficient(index, index - domain.sizeX, 0, -1, 0) : 0.0F;
-			float positiveY = y + 1 < domain.sizeY
+			double positiveY = y + 1 < domain.sizeY
 					? pressureFaceCoefficient(index, index + domain.sizeX, 0, 1, 0) : 0.0F;
 			int zStride = domain.sizeX * domain.sizeY;
-			float negativeZ = z > 0
+			double negativeZ = z > 0
 					? pressureFaceCoefficient(index, index - zStride, 0, 0, -1) : 0.0F;
-			float positiveZ = z + 1 < domain.sizeZ
+			double positiveZ = z + 1 < domain.sizeZ
 					? pressureFaceCoefficient(index, index + zStride, 0, 0, 1) : 0.0F;
 			domain.projection.matrixNegativeX[index] = negativeX;
 			domain.projection.matrixPositiveX[index] = positiveX;
@@ -199,7 +199,7 @@ final class PressureSystem {
 		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
 			int index = domain.projection.fluidUnknownCells[ordinal];
 			double value = 0.0;
-			float coefficient = domain.projection.matrixNegativeX[index];
+			double coefficient = domain.projection.matrixNegativeX[index];
 			if (coefficient > 0.0F) {
 				int neighbor = index - 1;
 				value += coefficient * (source[index] - neighborValue(neighbor, source, gasSource));
@@ -251,7 +251,7 @@ final class PressureSystem {
 	}
 
 	private void accumulateGasFace(
-			int fluid, int neighbor, float coefficient, double[] source, double[] gasSource,
+			int fluid, int neighbor, double coefficient, double[] source, double[] gasSource,
 			double[] gasDestination, double inverseCellSquared
 	) {
 		int node = neighborPressureSource[neighbor];
@@ -266,7 +266,7 @@ final class PressureSystem {
 		return node > 0 && domain.projection.gasPressureUnknown[node] ? node : -1;
 	}
 
-	private float pressureFaceCoefficient(int fluid, int neighbor, int directionX, int directionY, int directionZ) {
+	private double pressureFaceCoefficient(int fluid, int neighbor, int directionX, int directionY, int directionZ) {
 		float openArea = domain.pressureOpenFaceFromCell(fluid, neighbor, directionX, directionY, directionZ);
 		if (openArea <= 0.0F || domain.geometry.solid[neighbor]) return 0.0F;
 		return domain.pressureFaceCoupling(fluid, neighbor, directionX, directionY, directionZ)

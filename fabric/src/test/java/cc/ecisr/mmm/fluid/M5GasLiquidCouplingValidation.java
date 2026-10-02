@@ -47,7 +47,7 @@ public final class M5GasLiquidCouplingValidation {
 			var assemble = PressureSystem.class.getDeclaredMethod("assembleMatrix");
 			var neighbor = PressureSystem.class.getDeclaredMethod("neighborValue", int.class, double[].class, double[].class);
 			var accumulate = PressureSystem.class.getDeclaredMethod("accumulateGasFace", int.class, int.class,
-					float.class, double[].class, double[].class, double[].class, double.class);
+					double.class, double[].class, double[].class, double[].class, double.class);
 			assemble.setAccessible(true); neighbor.setAccessible(true); accumulate.setAccessible(true);
 			for (int pass = 0; pass < 6; pass++) {
 				domain.pressureAnchor = pass;

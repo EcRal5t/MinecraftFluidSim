@@ -1,10 +1,9 @@
 package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.units.SignedDyadic;
-
-import java.util.Arrays;
-
-/** Conservative finite-volume conduction with explicit steps and stiff implicit face solves. */
+import java.util.ArrayList;
+import java.util.List;
+/** Finite carrier contacts using cell mixing lengths and PLIC/cut-face thermal resistance. */
 public final class ThermalTransport {
 	public static final int DEFAULT_MAXIMUM_SUBSTEPS = 8;
 
@@ -30,214 +29,103 @@ public final class ThermalTransport {
 		}
 	}
 
-	public record Stats(int substeps, int evaluatedFaces, double maximumTemperatureChangeK,
+	public record Stats(int substeps, int evaluatedContacts, double maximumTemperatureChangeK,
 	                    double maximumAbsoluteTransferEu,
 	                    SignedDyadic roundoffResidual, SignedDyadic reservoirExchange) {
-		public Stats(int substeps, int evaluatedFaces, double maximumTemperatureChangeK,
+		public Stats(int substeps, int evaluatedContacts, double maximumTemperatureChangeK,
 		             SignedDyadic roundoffResidual, SignedDyadic reservoirExchange) {
-			this(substeps, evaluatedFaces, maximumTemperatureChangeK, 0.0, roundoffResidual, reservoirExchange);
+			this(substeps, evaluatedContacts, maximumTemperatureChangeK, 0.0, roundoffResidual, reservoirExchange);
 		}
 	}
 
-	private final int sizeX, sizeY, sizeZ;
+	private final int sizeX, sizeY, sizeZ, cellCount;
 	private final double cellSizeMeters;
 	private final int maximumSubsteps;
-	private final double[] conductanceSum;
-	private final double[] deltaEnergy;
 
 	public ThermalTransport(int sizeX, int sizeY, int sizeZ, double cellSizeMeters, int maximumSubsteps) {
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0) throw new IllegalArgumentException("Thermal grid dimensions are invalid");
-		if (!(Double.isFinite(cellSizeMeters) && cellSizeMeters > 0.0)) {
+		if (!(Double.isFinite(cellSizeMeters) && cellSizeMeters > 0))
 			throw new IllegalArgumentException("Thermal cell size must be finite and positive");
-		}
-		if (maximumSubsteps <= 0 || maximumSubsteps > DEFAULT_MAXIMUM_SUBSTEPS) {
+		if (maximumSubsteps <= 0 || maximumSubsteps > DEFAULT_MAXIMUM_SUBSTEPS)
 			throw new IllegalArgumentException("Thermal substep budget is invalid");
-		}
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
-		this.cellSizeMeters = cellSizeMeters;
-		this.maximumSubsteps = maximumSubsteps;
-		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
-		this.conductanceSum = new double[cells];
-		this.deltaEnergy = new double[cells];
+		this.cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		this.cellSizeMeters = cellSizeMeters; this.maximumSubsteps = maximumSubsteps;
 	}
 
 	public int maximumSubsteps() { return maximumSubsteps; }
 
-	public Stats step(ThermalCellGrid grid, FaceArea faceArea, double logicalDtSeconds) {
-		return step(grid, faceArea, (x, y, z, direction) -> null, logicalDtSeconds);
+	public Stats step(ThermalCellGrid grid, FaceArea faceArea, double dt) {
+		return step(grid, faceArea, (x, y, z, direction) -> null, dt);
 	}
 
-	public Stats step(
-			ThermalCellGrid grid, FaceArea faceArea, BoundaryFace boundaryFace, double logicalDtSeconds
-	) {
-		if (grid == null || grid.cellCount() != conductanceSum.length || faceArea == null || boundaryFace == null) {
+	public Stats step(ThermalCellGrid grid, FaceArea faceArea, BoundaryFace boundaryFace, double dt) {
+		if (grid == null || grid.cellCount() != cellCount || faceArea == null || boundaryFace == null)
 			throw new IllegalArgumentException("Thermal transport grid/geometry is incompatible");
+		var owners = grid.carrierAccess();
+		var contacts = new ArrayList<ThermalCarrierTransport.Contact>();
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int cell = cellIndex(x, y, z);
+			if (!grid.occupied(cell)) continue;
+			// Subcell thermal geometry is unresolved here: use the cell mixing length h/2.
+			// The symmetric volume quadrature retains a finite rate for every positive k.
+			for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p))
+				for (int q = grid.nextCarrier(p); q >= 0; q = grid.nextCarrier(q))
+					addPair(owners, contacts, p, q, 2 * cellSizeMeters / grid.carrierVolume(cell));
+			for (int axis = 0; axis < 3; axis++) {
+				int nx = x + (axis == 0 ? 1 : 0), ny = y + (axis == 1 ? 1 : 0), nz = z + (axis == 2 ? 1 : 0);
+				if (!inside(nx, ny, nz)) continue;
+				int neighbor = cellIndex(nx, ny, nz);
+				if (!grid.occupied(neighbor)) continue;
+				double area = faceArea.area(x, y, z, axis);
+				validateArea(area);
+				if (area == 0) continue;
+				double scale = area / (cellSizeMeters * grid.carrierVolume(cell) * grid.carrierVolume(neighbor));
+				for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p))
+					for (int q = grid.firstCarrier(neighbor); q >= 0; q = grid.nextCarrier(q))
+						addPair(owners, contacts, p, q, scale);
+			}
+			for (int direction = 0; direction < 6; direction++) {
+				int nx = x + (direction == 0 ? -1 : direction == 1 ? 1 : 0);
+				int ny = y + (direction == 2 ? -1 : direction == 3 ? 1 : 0);
+				int nz = z + (direction == 4 ? -1 : direction == 5 ? 1 : 0);
+				if (inside(nx, ny, nz) && grid.occupied(cellIndex(nx, ny, nz))) continue;
+				FixedBoundary boundary = boundaryFace.boundary(x, y, z, direction);
+				if (boundary == null) continue;
+				validateArea(boundary.contactAreaSquareMeters());
+				for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p)) {
+					double g = 2 * owners.material(p).conductivityEuPerSecondMeterK() * boundary.contactAreaSquareMeters()
+							* owners.volume(p) / (cellSizeMeters * grid.carrierVolume(cell));
+					if (g > 0) contacts.add(new ThermalCarrierTransport.Contact(p, -1, g, boundary.surfaceTemperatureK()));
+				}
+			}
 		}
-		if (!(Double.isFinite(logicalDtSeconds) && logicalDtSeconds > 0.0)) {
-			throw new IllegalArgumentException("Thermal timestep must be finite and positive");
-		}
-		double[] markerSnapshot = grid.copyCarrierInternalEnergy();
+		double[] snapshot = grid.copyCarrierInternalEnergy();
 		try {
-			return stepValidated(grid, faceArea, boundaryFace, logicalDtSeconds);
+			Stats result = ThermalCarrierTransport.step(owners, contacts, dt, maximumSubsteps);
+			grid.rebuild(owners);
+			return result;
 		} catch (RuntimeException failure) {
-			grid.restoreCarrierInternalEnergy(markerSnapshot);
+			grid.restoreCarrierInternalEnergy(snapshot);
 			throw failure;
 		}
 	}
 
-	private Stats stepValidated(
-			ThermalCellGrid grid, FaceArea faceArea, BoundaryFace boundaryFace, double logicalDtSeconds
-	) {
-		SignedDyadic before = inventory(grid);
-		double[] initialTemperature = new double[grid.cellCount()];
-		for (int cell = 0; cell < initialTemperature.length; cell++) initialTemperature[cell] = grid.temperature(cell);
-
-		Arrays.fill(conductanceSum, 0.0);
-		boolean[] exchangeRequired = {false};
-		int evaluatedFaces = forEachFace(grid, faceArea, (first, second, conductance) -> {
-			conductanceSum[first] += conductance;
-			conductanceSum[second] += conductance;
-			exchangeRequired[0] |= grid.temperature(first) != grid.temperature(second);
-		});
-		evaluatedFaces += forEachBoundary(grid, boundaryFace, (cell, conductance, surfaceTemperature) -> {
-			conductanceSum[cell] += conductance;
-			exchangeRequired[0] |= grid.temperature(cell) != surfaceTemperature;
-		});
-		double stableDt = Double.POSITIVE_INFINITY;
-		for (int cell = 0; cell < conductanceSum.length; cell++) if (conductanceSum[cell] > 0.0) {
-			// A pair of equal cells both move during one Jacobi update. The usual positivity bound C/sum(G)
-			// permits an exact temperature swap at equality; half that bound preserves pair ordering and
-			// gives monotone approach to LTE without a mesh- or material-specific damping heuristic.
-			stableDt = Math.min(stableDt, 0.5 * grid.minimumHeatCapacity(cell) / conductanceSum[cell]);
-		}
-		// Equal temperatures on every conducting contact are an exact stationary solution.
-		// One pass still validates carrier LTE and performs any required intracell energy handoff.
-		int substeps = !exchangeRequired[0] ? 1
-				: Math.max(1, (int) Math.ceil(logicalDtSeconds / stableDt));
-		SignedDyadic[] reservoirExchange = {SignedDyadic.ZERO};
-		double[] maximumAbsoluteTransfer = {0.0};
-		boolean implicit = substeps > maximumSubsteps;
-		if (implicit) {
-			java.util.ArrayList<ThermalImplicitTransport.Face> faces = new java.util.ArrayList<>(evaluatedFaces);
-			forEachFace(grid, faceArea, (first, second, conductance) ->
-					faces.add(new ThermalImplicitTransport.Face(first, second, conductance, Double.NaN)));
-			forEachBoundary(grid, boundaryFace, (cell, conductance, temperature) ->
-					faces.add(new ThermalImplicitTransport.Face(cell, -1, conductance, temperature)));
-			ThermalImplicitTransport.Exchange exchange = ThermalImplicitTransport.step(grid, faces, logicalDtSeconds);
-			reservoirExchange[0] = exchange.reservoir();
-			maximumAbsoluteTransfer[0] = exchange.maximumTransfer();
-			substeps = 1;
-		}
-		double substepDt = logicalDtSeconds / substeps;
-		for (int step = 0; !implicit && step < substeps; step++) {
-			Arrays.fill(deltaEnergy, 0.0);
-			forEachFace(grid, faceArea, (first, second, conductance) -> {
-				double transfer = conductance * (grid.temperature(second) - grid.temperature(first)) * substepDt;
-				if (!Double.isFinite(transfer)) throw new IllegalArgumentException("Thermal face transfer is not finite");
-				maximumAbsoluteTransfer[0] = Math.max(maximumAbsoluteTransfer[0], Math.abs(transfer));
-				deltaEnergy[first] += transfer;
-				deltaEnergy[second] -= transfer;
-			});
-			forEachBoundary(grid, boundaryFace, (cell, conductance, surfaceTemperature) -> {
-				double transfer = conductance * (surfaceTemperature - grid.temperature(cell)) * substepDt;
-				if (!Double.isFinite(transfer)) throw new IllegalArgumentException("Thermal reservoir transfer is not finite");
-				maximumAbsoluteTransfer[0] = Math.max(maximumAbsoluteTransfer[0], Math.abs(transfer));
-				deltaEnergy[cell] += transfer;
-				reservoirExchange[0] = reservoirExchange[0].add(SignedDyadic.of(transfer));
-			});
-			if (maximumAbsoluteTransfer[0] == 0.0 && grid.carriersMatchSolvedTemperature()) continue;
-			double[] target = grid.copyInternalEnergy();
-			for (int cell = 0; cell < target.length; cell++) target[cell] += deltaEnergy[cell];
-			grid.setTransportCellInternalEnergies(target);
-		}
-		double maximumChange = 0.0;
-		for (int cell = 0; cell < initialTemperature.length; cell++) if (grid.occupied(cell)) {
-			maximumChange = Math.max(maximumChange, Math.abs(grid.temperature(cell) - initialTemperature[cell]));
-		}
-		SignedDyadic residual = inventory(grid).subtract(before).subtract(reservoirExchange[0]);
-		return new Stats(substeps, evaluatedFaces, maximumChange, maximumAbsoluteTransfer[0],
-				residual, reservoirExchange[0]);
+	private static void addPair(ThermalCellGrid.CarrierAccess owners,
+	                           List<ThermalCarrierTransport.Contact> contacts, int p, int q, double scale) {
+		double low = Math.min(owners.material(p).conductivityEuPerSecondMeterK(), owners.material(q).conductivityEuPerSecondMeterK());
+		double high = Math.max(owners.material(p).conductivityEuPerSecondMeterK(), owners.material(q).conductivityEuPerSecondMeterK());
+		if (low == 0) return;
+		double g = low * (2 / (1 + low / high)) * owners.volume(p) * owners.volume(q) * scale;
+		contacts.add(new ThermalCarrierTransport.Contact(p, q, g, Double.NaN));
 	}
 
-	private int forEachBoundary(ThermalCellGrid grid, BoundaryFace boundaryFace, BoundaryConsumer consumer) {
-		int evaluated = 0;
-		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int cell = cellIndex(x, y, z);
-			if (!grid.occupied(cell)) continue;
-			for (int direction = 0; direction < 6; direction++) {
-				int neighborX = x + (direction == 0 ? -1 : direction == 1 ? 1 : 0);
-				int neighborY = y + (direction == 2 ? -1 : direction == 3 ? 1 : 0);
-				int neighborZ = z + (direction == 4 ? -1 : direction == 5 ? 1 : 0);
-				if (inside(neighborX, neighborY, neighborZ)
-						&& grid.occupied(cellIndex(neighborX, neighborY, neighborZ))) continue;
-				FixedBoundary boundary = boundaryFace.boundary(x, y, z, direction);
-				if (boundary == null || boundary.contactAreaSquareMeters() == 0.0 || grid.conductivity(cell) == 0.0) continue;
-				if (boundary.contactAreaSquareMeters() > cellSizeMeters * cellSizeMeters) {
-					throw new IllegalArgumentException("Thermal boundary contact area exceeds one face");
-				}
-				double conductance = 2.0 * grid.conductivity(cell)
-						* boundary.contactAreaSquareMeters() / cellSizeMeters;
-				if (!(Double.isFinite(conductance) && conductance > 0.0)) {
-					throw new IllegalArgumentException("Thermal boundary conductance is invalid");
-				}
-				consumer.accept(cell, conductance, boundary.surfaceTemperatureK());
-				evaluated++;
-			}
-		}
-		return evaluated;
+	private void validateArea(double area) {
+		if (!(Double.isFinite(area) && area >= 0 && area <= cellSizeMeters * cellSizeMeters))
+			throw new IllegalArgumentException("Thermal contact area exceeds its face");
 	}
-
-	private int forEachFace(ThermalCellGrid grid, FaceArea faceArea, FaceConsumer consumer) {
-		int evaluated = 0;
-		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int first = cellIndex(x, y, z);
-			if (x + 1 < sizeX && grid.occupied(first) && grid.occupied(first + 1)) {
-				evaluated += consumeFace(grid, faceArea, consumer, first, first + 1, x, y, z, 0);
-			}
-			if (y + 1 < sizeY && grid.occupied(first) && grid.occupied(first + sizeX)) {
-				evaluated += consumeFace(grid, faceArea, consumer, first, first + sizeX, x, y, z, 1);
-			}
-			if (z + 1 < sizeZ && grid.occupied(first) && grid.occupied(first + sizeX * sizeY)) {
-				evaluated += consumeFace(grid, faceArea, consumer, first, first + sizeX * sizeY, x, y, z, 2);
-			}
-		}
-		return evaluated;
-	}
-
-	private int consumeFace(
-			ThermalCellGrid grid, FaceArea faceArea, FaceConsumer consumer,
-			int first, int second, int x, int y, int z, int axis
-	) {
-		double area = faceArea.area(x, y, z, axis);
-		if (!(Double.isFinite(area) && area >= 0.0 && area <= cellSizeMeters * cellSizeMeters)) {
-			throw new IllegalArgumentException("Thermal face contact area is invalid");
-		}
-		double firstK = grid.conductivity(first), secondK = grid.conductivity(second);
-		if (area == 0.0 || firstK == 0.0 || secondK == 0.0) return 0;
-		double faceK = 2.0 * firstK * secondK / (firstK + secondK);
-		double conductance = faceK * area / cellSizeMeters;
-		if (!(Double.isFinite(conductance) && conductance > 0.0)) {
-			throw new IllegalArgumentException("Thermal face conductance is invalid");
-		}
-		consumer.accept(first, second, conductance);
-		return 1;
-	}
-
-	private SignedDyadic inventory(ThermalCellGrid grid) {
-		SignedDyadic result = SignedDyadic.ZERO;
-		for (int cell = 0; cell < grid.cellCount(); cell++) if (grid.occupied(cell)) {
-			result = result.add(SignedDyadic.of(grid.internalEnergy(cell)));
-		}
-		return result;
-	}
-
 	private int cellIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
 	private boolean inside(int x, int y, int z) {
 		return x >= 0 && x < sizeX && y >= 0 && y < sizeY && z >= 0 && z < sizeZ;
 	}
-
-	@FunctionalInterface
-	private interface FaceConsumer { void accept(int first, int second, double conductance); }
-	@FunctionalInterface
-	private interface BoundaryConsumer { void accept(int cell, double conductance, double surfaceTemperature); }
 }

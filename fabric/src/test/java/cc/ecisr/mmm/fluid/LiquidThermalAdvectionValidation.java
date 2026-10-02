@@ -236,22 +236,34 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	}
 
 	static void finiteConductivityLimit() {
+		for (int layout = 0; layout < 3; layout++) {
 		double first = 0;
-		for (double k : new double[] {0.001, 0.01}) {
+		for (double k : new double[] {0, 0.001, 0.01}) {
 			var domain = pool(4, 4, 4, k);
+			if (layout > 0) domain.setVolume(0, 0, 0, 0.5F);
+			if (layout == 2) { domain.setVolume(0, 0, 0, 0); domain.setSolidMicroMask(0, 0, 0, 0x0f); domain.setVolume(0, 0, 0, 0.5F); }
+			int cold = -1, hot = -1;
+			for (int p = 0; p < domain.particleCount(); p++) if (domain.particleCellIndex(p) == 0) {
+				if (cold < 0) cold = p; else { hot = p; break; }
+			}
+			require(cold >= 0 && hot >= 0, "finite-k fixture lost its subcell carriers");
 			var context = domain.thermalMarkerContext();
-			domain.thermalState.resetMarkerTemperature(0, 270, context, domain.exactInternalEnergy());
-			domain.thermalState.resetMarkerTemperature(1, 350, context, domain.exactInternalEnergy());
-			double before = domain.thermalState.temperature(0, context);
+			domain.thermalState.resetMarkerTemperature(cold, 270, context, domain.exactInternalEnergy());
+			domain.thermalState.resetMarkerTemperature(hot, 350, context, domain.exactInternalEnergy());
+			double before = domain.thermalState.temperature(cold, context);
+			double[] energy = domain.exportThermalParticleState().copyInternalEnergy();
 			var audit = domain.thermalAudit();
 			domain.stepThermalOnly(1);
-			double change = domain.thermalState.temperature(0, context) - before;
-			require(change > 0 && change < 0.001, "positive small k caused instantaneous intracell equilibration: " + change);
+			double change = domain.thermalState.temperature(cold, context) - before;
+			if (k == 0) require(change == 0 && Arrays.equals(energy, domain.exportThermalParticleState().copyInternalEnergy()),
+					"zero-k geometry changed carrier energy");
+			else require(change > 0 && change < 0.001, "positive small k caused instantaneous intracell equilibration: " + change);
 			if (first > 0) require(Math.abs(change / first - 10) < 0.001, "carrier conduction lost its linear k limit");
 			first = change;
 			require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
 					&& audit.externalSource().equals(domain.thermalAudit().externalSource())
 					&& audit.externalSink().equals(domain.thermalAudit().externalSink()), "finite-k inventory failed closure");
+		}
 		}
 	}
 

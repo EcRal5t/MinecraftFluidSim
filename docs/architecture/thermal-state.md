@@ -125,18 +125,21 @@ caloric segment 内 `cv` 为常量，积分与反演均为分段闭式线性计�
 
 `ThermalContactExchange` 求解单个有限热导接触的 backward-Euler 能量变化。载体接口绑定同一份初始质量、组成参考能与 `U`；混合单元使用其完整 caloric 曲线，单载体使用材料状态函数，固定温度面使用无限热浴。对于进入第一侧的能量 `q`，求解 `q = G*dt*(T_second(U_second-q)-T_first(U_first+q))`，有限第二侧接收相反的能量变化。求解跨越 caloric 分段，正热容保证唯一解及冷热温度顺序；零热导返回零，有限热导和时间步趋零时通量连续趋零。
 
-隐式导热以正反两次半时间步扫描调用该求解器，调用方负责提交能量与记录热浴、舍入收支。满液体矩形域使用逐载体有限接触；自由面、切割单元和固体混合域使用 PLIC/cut-face 热阻与单元 LTE 分配。适用范围及后续迁移见[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)。
+隐式导热以正反两次半时间步扫描调用该求解器，调用方负责提交能量与记录热浴、舍入收支。凝聚态导热统一更新真实载体内能；满液体矩形域使用空间积分点接触，自由面、切割单元和固体混合域使用单元混合长度及 PLIC/cut-face 热阻。
 
 ### 满液体域的有限载体导热
 
 `LiquidThermalConduction` 为完全开放、总体积填满区域、各格均有 marker 且属于同一 pressure phase 的矩形液体域构造接触。该路径读取真实位置、体积和已绑定的导热定义；区域中有 active parcel、deposit 或 coherent group 时采用单元有限体积路径。互溶材料可以有不同 caloric、导热率和 species 参考能。
 
-接触采用 [Brookshaw 型各向同性粒子扩散](https://academic.oup.com/mnras/article/483/4/4901/5251847)的正对称形式。令 `v_p=V_p/h³`、`r_pq=|x_p-x_q|/h`，使用紧支撑权重：
+接触采用正对称的张量积三次 B-spline 权重。令 `v_p=V_p/h³`、`d=(x_q-x_p)/h`，在标准积分点间距 `h/2` 上使用紧支撑权重：
 
 ```text
-f(r) = (1-r)^3 for 0 <= r < 1; otherwise 0
-M = (v_nominal/2) * sum_standard_neighbors f(r) * (Delta x/h)^2
-G_pq = harmonic(k_p,k_q) * h * v_p * v_q * f(r_pq) / M
+B3(s) = (4-6*s²+3*s³)/6                 for 0 <= s < 1
+        (2-s)³/6                        for 1 <= s < 2
+        0                               otherwise
+f(d) = B3(2*abs(d_x))*B3(2*abs(d_y))*B3(2*abs(d_z))
+M = (v_nominal/2) * sum_standard_neighbors f(d) * d_x²
+G_pq = harmonic(k_p,k_q) * h * v_p * v_q * f(d) / M
 Delta U_p = G_pq * (T_q-T_p) * dt; Delta U_q = -Delta U_p
 ```
 
@@ -144,7 +147,7 @@ Delta U_p = G_pq * (T_q-T_p) * dt; Delta U_q = -Delta U_p
 
 `ThermalCarrierTransport` 直接更新真实载体 `U`，每个接触保持正温、同质温度最大值原理与镜像能量。显式步长取逐载体全部 caloric 分段最小热容量的 `0.5*C_min/sum(G)`；超过八个显式子步时使用有限接触隐式扫描。提交前验证全部 prospective caloric 状态；失败恢复原始载体能量与派生格，成功后才记录热浴与舍入。零接触或零转移保持载体能量位模式，同格温差以有限速率推进。
 
-该离散的精度条件是近均匀的体积积分点。位移、聚集和重播种改变离散矩，仍须通过对应的解析场与网格收敛量化误差。常态校验覆盖小正导热率极限、两级解析扩散模态、线性恒温墙、冷热尖峰、异质 caloric/species 参考能、隔离载体及候选拒绝。自由面、partial cut-cell 和固体载体的有限内部接触，以及与相变交接的联合离散仍待扩展。
+该离散的精度条件是近均匀的体积积分点。位移、聚集和重播种改变离散矩，对应误差通过解析场和网格细化检查。两级扩散首模态的相对增长率误差约 `0.321%` 与 `0.0803%`。热学重播种保留总内能及同质载体的温度范围；质量质心合并保留同密度的仿射温度场，拆分复制父载体温度，点值误差受 `|grad T|*h` 限制，并报告质量加权 RMS。常态校验还覆盖小正导热率极限、线性恒温墙、冷热尖峰、异质 caloric/species 参考能、隔离载体及候选拒绝。
 
 `thermal_reservoir` 的 setpoint 原始数据由世界 BlockEntity 持有，不进入 region HEAD。`ThermalReservoirUseCase` 只拥有 bounded summary、world-position token 与权限/范围决策；Minecraft adapter 才能在 token 校验失效处理和当前方块重验后写 BlockEntity。
 
@@ -172,28 +175,29 @@ body candidate、所有 cell `delta U`、solver `finiteDeviceExchange` 与两侧
 
 ### 有限体积离散
 
-自由面、切割单元和固体混合域沿用单元有限体积路径。两个相邻 LTE cell 的 face conductance 与热量转移为：
+自由面、切割单元和固体混合域使用 `ThermalTransport` 构造有限的载体接触图。令 `v_p=V_p/h³`、`v_cell=sum(v_p)`，同格与跨格接触为：
 
 ```text
-k_face = 2*k_a*k_b/(k_a+k_b)
-G_face = k_face*A_contact/dx
-Delta U_a = G_face*(T_b-T_a)*dt
-Delta U_b = -Delta U_a
+k_pq = harmonic(k_p,k_q)
+G_same_cell = 2*k_pq*h*v_p*v_q/v_cell
+G_face = k_pq*A_contact/h*(v_p/v_cell_a)*(v_q/v_cell_b)
+G_boundary = 2*k_p*A_contact/h*(v_p/v_cell)
+Delta U_p = G*(T_q-T_p)*dt; Delta U_q = -Delta U_p
 ```
 
-`A_contact` 由 PLIC 液面和 cut geometry 限制在一个 face 面积内。固定温度边界位于 cell 中心半个网格距之外，故 `G_boundary = 2*k_cell*A_contact/dx`。没有 registry boundary 的外露 face 返回绝热，不会默认与 293.15 K 环境交换。
+同格接触使用 `h/2` 混合长度近似未解析的载体间热阻；此路径的精度由单元尺度控制。`A_contact` 由 PLIC 液面和 cut geometry 限制在一个 face 面积内。固定温度面距单元中心 `h/2`，外露面默认绝热。气体孔流及气腔壁热交换由各自处理器执行。
 
 显式 Jacobi 更新按
 
 ```text
-dt_stable = min_cell(0.5 * C_min_cell / sum_faces G_face)
+dt_stable = min_carrier(0.5 * C_min_carrier / sum_contacts G)
 ```
 
-自动分 substep；`C_min_cell` 汇总各载体在全部 caloric segment 的最小热容，覆盖跨段更新，`0.5` 保证一对相同 cell 单调趋近平衡。所需显式 substep 超过 8 时，采用逐面后向 Euler 求解：正序、逆序各推进半个 logical step，热流由交换后的两端温度确定。每个面的标量能量方程以两端初始温度给出区间，使用当前分段热容求根。这是时间一阶的分裂离散，时间细化控制其截断误差。
+自动分 substep；`C_min_carrier` 使用载体全部 caloric segment 的最小热容，覆盖跨段更新。所需显式 substep 超过 8 时，正序、逆序各推进半个 logical step，以有限接触后向 Euler 求解热流。这是时间一阶的分裂离散，时间细化控制其截断误差。
 
-全部载体导热率为零的单元保持各载体原始 `U`，随粒子平流搬运。导热处理器仍反演并验证每个载体的正温，旁侧显式或隐式导热也不会触发该单元的格内均温。反应、相变和有限设备的显式局部能量交接仍由各自处理器执行。正导热率单元采用既有 LTE 分配；同质绝热冷热尖峰的显式与大步长隐式用例检查粒子温度范围与能量闭合。
+零导热载体保持原始 `U`，随粒子平流搬运。正导热载体的格内温差以有限速率变化，导热率趋零时通量连续趋零。所有载体在提交前逐一接受正温反演；同质绝热冷热尖峰的显式与大步长隐式用例检查载体温度范围和能量闭合。反应、相变与有限设备的局部能量交接继续由对应处理器执行。
 
-所有导热接触两端温度逐值相等时，单元路径以一个零交换步骤完成几何校验和 cell 内载体的 LTE 分配。有限设备与全部端口等温时采用相同规则，保留设备代次和原始内能。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存。
+所有导热接触两端温度逐值相等时，以一个零交换步骤完成几何与正温校验，保留载体内能位模式。有限设备与全部端口等温时也保留设备代次和原始内能。hot loop 使用 `double`，每个接触对的增减严格镜像；提交时用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存。
 
 批量求和按 binary64 固有的 2,046 个 dyadic exponent 分桶，每桶以有符号 128-bit 两字累加后只做一次 `BigInteger` 合并；该算法与逐项精确相加二进制等价，覆盖所有载体审计。
 
@@ -226,7 +230,7 @@ Delta u_y = g * dt * thermal density correction_face / rho_face
 
 热盐补偿夹具将逐载体的 `rho_p*(1-beta_p*(T_p-T_ref,p))` 设为同一参考密度，验证格内平流后两项仍精确对应，以及压力投影后保持静水。MAC 使用 binary32；补偿场的速度残差上限取一份重力预测冲量的 ulp，当前默认网格、`g=9.81 m/s²`、`dt=0.05 s` 下为 `2.98023e-8 m/s`。反置分层经 CPU 后端的整步 CFL 细化计算，并逐步检查完整候选的库存与能量。
 
-热浮力已保留格内小位移的连续响应。满液体矩形域按逐载体有限接触导热，其余凝聚态几何沿用单元 LTE 路径；速度传递耗散、完整凝聚态迁移及自然对流的临界 Ra 与增长率收敛按[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)验收。
+热浮力保留格内小位移的连续响应。凝聚态几何统一按有限载体接触导热；速度传递耗散及自然对流的临界 Ra 与增长率收敛按[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)验收。
 
 ### 气体能量与功
 
@@ -256,7 +260,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 
 固液和气液相变的容量检查共用 `PhaseChangeStageSupport`：活动颗粒按连续位置的三线性权重分摊整数 SVQ，沉积按所属单元计入；coherent 库存由相变层另行计入。这与运动、沉积及恢复检查使用同一份空间归属规则。
 
-导热若所有 face 与 reservoir 的实际通量都严格为零，并且每个 carrier 从自身 raw `U` 恢复出的温度已位于该 cell 的 LTE 容差内，则保持全部 carrier `U` raw bits 不变；需要均温时只向正导热率单元分配能量，零导热率单元逐载体验证后保持原始 `U`。这里的短路只识别数学上的零转移，不把小通量钳为零。
+导热若所有载体接触与 reservoir 的实际通量都严格为零，则逐载体验证正温并保持全部 `U` raw bits。小通量按原值进入有限接触计算。
 
 ### 固液
 

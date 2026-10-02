@@ -145,9 +145,10 @@
 
 ### 1c 密度、分层与对流
 
-组成密度、世界绑定的有界 Boussinesq 定义、盐水静水/反置翻转、温差分层和热盐竞争的现行契约与测试见[材料状态](../architecture/material-state.md#求解器边界)和[热浮力](../architecture/thermal-state.md#热浮力)。有限热接触的跨分段求解、零热导极限与逐载体正温校验见[热输运](../architecture/thermal-state.md#热输运)。1c 仍需完成以下工作：
+组成密度、世界绑定的有界 Boussinesq 定义、盐水静水/反置翻转、温差分层和热盐竞争的现行契约与测试见[材料状态](../architecture/material-state.md#求解器边界)和[热浮力](../architecture/thermal-state.md#热浮力)。压力面密度比、迁移率与矩阵系数使用双精度，补偿热盐静水速度残差保持在一次 float 重力冲量的 ULP 内。
 
-- 连续热平流与导热联合离散：零导热载体平流与连续 caloric 观察见[空间温度观察](../architecture/thermal-state.md#批量格温度观察)，满液体矩形域的有限载体导热、小正导热率极限、解析扩散收敛及异质 caloric/species 参考能见[有限载体导热](../architecture/thermal-state.md#满液体域的有限载体导热)。组成密度与逐载体热浮力已使用同一连续支撑及 pressure face 距离积分。剩余迁移须覆盖自由面、partial cut-cell、固体载体及相变交接，并量化积分点变形与重播种引入的扩散误差；各布局的正导热率趋零时均须保留格内温度响应，以有限接触替代无穷快格内均温，满足同质绝热温度最大值原理、正温与守恒。
+凝聚态导热已统一迁移到有限载体接触，覆盖满液体域、自由面、partial cut-cell、active/deposit/coherent 固体和相变交接。零与小正导热率、跨 caloric 分段、温度最大值原理、正温及能量闭合由自动验证守护。满液体扩散采用张量积 B-spline 接触核，并检查两级解析模态；重播种量化仿射场的合并与拆分误差。现行契约见[热输运](../architecture/thermal-state.md#热输运)。1c 仍需完成以下工作：
+
 - 速度交接：核对 P2G/G2P 能量预算，使可解析光滑流动的衰减由黏性控制，同时约束网格未解析的粒子速度分量。同步验证无外力流动的动能上限、线性域增长率以及颗粒床沉积、唤醒和再次休眠；时间判据须对应真实物理耗散与沉降过程。
 - 对流判据：受热底板封闭池采用法向不可穿透、切向 `FREE_SLIP`、上下恒温板及绝热侧壁。用已绑定 registry 的 `rho, mu, beta, k, cv` 计算 `nu=mu/rho`、`alpha=k/(rho*cv)` 与 `Ra=g*beta*DeltaT*H^3/(nu*alpha)`。对二维模态 `a=pi*H/L`，自由滑移判据为 `Ra_c=(pi^2+a^2)^3/a^2`；长宽比 `L/H=2` 的首模态约为 `761.0085`，来源见 [Rayleigh 原论文](https://doi.org/10.1080/14786441608635602)。
 - 增长率验收：在该临界值两侧验证扰动衰减与增长，以两个相差固定倍数、处于线性域的振幅及两级网格检查 `lambda*H^2/alpha` 一致性和收敛。`LiquidConvectionExperiment` 是当前真实求解路径的试算入口。默认 `0.5 m` 热学网格下，两级二维池体需保持无量纲物性、长宽比和时间一致，深度方向取均匀模态。

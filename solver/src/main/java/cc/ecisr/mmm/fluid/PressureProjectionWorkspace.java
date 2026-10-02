@@ -21,12 +21,12 @@ final class PressureProjectionWorkspace {
 	final double[] matrixDirection;
 	final int[] fluidUnknownCells;
 	final double[] matrixDiagonal;
-	final float[] matrixNegativeX;
-	final float[] matrixPositiveX;
-	final float[] matrixNegativeY;
-	final float[] matrixPositiveY;
-	final float[] matrixNegativeZ;
-	final float[] matrixPositiveZ;
+	final double[] matrixNegativeX;
+	final double[] matrixPositiveX;
+	final double[] matrixNegativeY;
+	final double[] matrixPositiveY;
+	final double[] matrixNegativeZ;
+	final double[] matrixPositiveZ;
 	final boolean[] gasPressureUnknown;
 	final int[] gasUnknownNodes;
 	final float[] gasPressure;
@@ -55,12 +55,12 @@ final class PressureProjectionWorkspace {
 		this.matrixDirection = new double[cellCount];
 		this.fluidUnknownCells = new int[cellCount];
 		this.matrixDiagonal = new double[cellCount];
-		this.matrixNegativeX = new float[cellCount];
-		this.matrixPositiveX = new float[cellCount];
-		this.matrixNegativeY = new float[cellCount];
-		this.matrixPositiveY = new float[cellCount];
-		this.matrixNegativeZ = new float[cellCount];
-		this.matrixPositiveZ = new float[cellCount];
+		this.matrixNegativeX = new double[cellCount];
+		this.matrixPositiveX = new double[cellCount];
+		this.matrixNegativeY = new double[cellCount];
+		this.matrixPositiveY = new double[cellCount];
+		this.matrixNegativeZ = new double[cellCount];
+		this.matrixPositiveZ = new double[cellCount];
 		// Node ids are one-based and cannot outnumber cells. These vectors are projection scratch;
 		// AirNetwork inventory/U remain the sole persistent gas truth.
 		this.gasPressureUnknown = new boolean[cellCount + 1];

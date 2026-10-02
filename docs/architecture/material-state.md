@@ -74,7 +74,7 @@ volume_m3 = marker_normalized_volume * cellSize^3
 
 质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的闭合式为 `particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg`；溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。
 
-pressure face 的 `1/rho` 系数按界面距离加权。热学 Boussinesq 项从相同支撑上的逐载体温度和实际质量推导热密度变化，并沿相同的两段界面距离积分；库存密度、压力惯性和热密度修正各自保存明确的派生含义。
+pressure face 的 `1/rho` 系数按界面距离加权。面密度比、迁移率及压力矩阵系数使用 binary64，投影结果最终写入 binary32 MAC 速度。热学 Boussinesq 项从相同支撑上的逐载体温度和实际质量推导热密度变化，并沿相同的两段界面距离积分；库存密度、压力惯性和热密度修正各自保存明确的派生含义。
 
 同温盐水分层由溶解的 Na⁺/Cl⁻ 的实际质量得到。`LiquidStratificationValidation` 检查盐水下层静水、反置翻转、同组成温差分层及热盐竞争，并逐步核对体积、材料质量、species 和内能；热修正有效范围见[热浮力](thermal-state.md#热浮力)。
 

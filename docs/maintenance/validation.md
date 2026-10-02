@@ -59,7 +59,7 @@
 
 表中是定位场景的入口，完整调用列表以 `CpuValidationSuite` 为准。长场景的注液坐标、循环步数和逐步断言留在测试代码中维护。
 
-自然对流的线性响应测量使用 `./gradlew.bat :fabric:runConvectionExperiment --offline --no-daemon`。该试算报告两级网格、临界 Ra 两侧和两倍振幅的归一化增长率，并检查库存与能量闭合。Ra 增长率属于[阶段 1c 的待验收项](../roadmap/product-roadmap.md#1c-密度分层与对流)，试算执行成功表示已取得测量数据。
+自然对流的线性响应测量使用 `./gradlew.bat :fabric:runConvectionExperiment --offline --no-daemon`。该试算报告两级网格、临界 Ra 两侧和两倍振幅的归一化增长率，并逐步检查体积、材料质量、species、壁面 source/sink、舍入及载体内能。追加 `--args="--verify-growth"` 检查增长方向、振幅线性响应与网格误差收敛。Ra 增长率属于[阶段 1c 的待验收项](../roadmap/product-roadmap.md#1c-密度分层与对流)，默认试算成功表示已取得测量数据；增长率验收须由显式校验通过确认。
 
 ### 什么时候追加测试
 

@@ -210,7 +210,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		PressureFaceCoupling coupling = pressureFaceCoupling(
 				fluid, neighbor, directionX, directionY, directionZ);
 		float gasPressure = domain().gasPressureOfAirCell(neighbor) - pressureReference;
-		return -scale * inverseCell * coupling.firstDirichletRhs(openArea, gasPressure);
+		return (float) (-scale * inverseCell * coupling.firstDirichletRhs(openArea, gasPressure));
 	}
 
 	/**
@@ -226,7 +226,8 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		if (!firstFluid && !secondFluid) {
 			throw new IllegalArgumentException("A pressure face must touch a pressure-fluid cell");
 		}
-		float densityScale = variableDensityActive ? pressureDensityScale(first, second) : 1.0F;
+		double densityScale = !variableDensityActive ? 1.0 : config.density() / (firstFluid && secondFluid
+				? materialFaceEffectiveDensity(first, second) : mechanicalDensity(firstFluid ? first : second));
 		if (firstFluid && secondFluid) return PressureFaceCoupling.centered(densityScale);
 		int fluid = firstFluid ? first : second;
 		int fluidDirectionX = firstFluid ? directionX : -directionX;

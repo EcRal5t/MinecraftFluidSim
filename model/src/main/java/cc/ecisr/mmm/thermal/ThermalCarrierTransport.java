@@ -32,10 +32,12 @@ public final class ThermalCarrierTransport {
 			initialT[p] = new ThermalContactExchange.Carrier(materials[p], mass[p], base[p], energy[p]).temperatureK();
 		}
 		SignedDyadic before = SignedDyadic.sum(energy);
+		boolean exchangeRequired = false;
 		for (Contact c : contacts) {
 			if (c.first >= n || c.second >= n) throw new IllegalArgumentException("Unknown conduction owner");
 			degree[c.first] += c.conductance;
 			if (c.second >= 0) degree[c.second] += c.conductance;
+			exchangeRequired |= initialT[c.first] != (c.second < 0 ? c.reservoirTemperatureK : initialT[c.second]);
 		}
 		double stableDt = Double.POSITIVE_INFINITY;
 		for (int p = 0; p < n; p++) if (degree[p] > 0) {
@@ -44,7 +46,7 @@ public final class ThermalCarrierTransport {
 			for (var segment : materials[p].caloricSegments()) minCv = Math.min(minCv, segment.specificHeatEuPerMuK());
 			stableDt = Math.min(stableDt, 0.5 * mass[p] * minCv / degree[p]);
 		}
-		double required = Math.ceil(dt / stableDt);
+		double required = exchangeRequired ? Math.ceil(dt / stableDt) : 1;
 		boolean implicit = required > maximumSubsteps;
 		int substeps = implicit ? 1 : Math.max(1, (int) required);
 		SignedDyadic reservoir = SignedDyadic.ZERO;

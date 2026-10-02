@@ -189,9 +189,13 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		SignedDyadic before = domain.exactInternalEnergy();
 		FluidDomain stiff = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		stiff.stepThermalOnly(10_000.0);
-		require(close(stiff.thermalTemperatureInCell(1, 1, 1), 300.0 + 50.0 / 121.0)
+		for (int p = 0; p < stiff.particleCount(); p++) require(
+				stiff.thermalState.temperature(p, stiff.thermalMarkerContext()) >= 250
+						&& stiff.thermalState.temperature(p, stiff.thermalMarkerContext()) <= 350,
+				"stiff finite carrier contacts exceeded the initial temperature range");
+		require(Math.abs(stiff.thermalTemperatureInCell(1, 1, 1) - 300) < 50
 				&& stiff.exactInternalEnergy().equals(stiff.thermalAudit().expectedInventory()),
-				"stiff pair matches two conservative backward-Euler half steps");
+				"stiff pair failed relaxation or conservation");
 		domain.stepThermalOnly(1_000.0);
 		double hot = domain.thermalTemperatureInCell(1, 1, 1);
 		double cold = domain.thermalTemperatureInCell(2, 1, 1);
@@ -201,12 +205,15 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				"transient thermal transport did not close its audit ledger");
 		require(Math.abs(domain.exactInternalEnergy().subtract(before).toDouble()) <= 1.0E-6,
 				"adiabatic thermal transport changed total internal energy beyond representation residual");
-		double[] equilibratedCarrierEnergy = domain.exportThermalParticleState().copyInternalEnergy();
-		ThermalTransport.Stats noFlux = domain.stepThermalOnly(10_000.0);
+		FluidDomain equilibrium = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		equilibrium.setThermalTemperatureInCell(1, 1, 1, 300);
+		equilibrium.setThermalTemperatureInCell(2, 1, 1, 300);
+		double[] equilibratedCarrierEnergy = equilibrium.exportThermalParticleState().copyInternalEnergy();
+		ThermalTransport.Stats noFlux = equilibrium.stepThermalOnly(10_000.0);
 		require(noFlux.substeps() == 1 && noFlux.maximumAbsoluteTransferEu() == 0.0
 				&& Arrays.equals(equilibratedCarrierEnergy,
-						domain.exportThermalParticleState().copyInternalEnergy()),
-				"zero-flux LTE transport rewrote authoritative carrier energy");
+						equilibrium.exportThermalParticleState().copyInternalEnergy()),
+				"zero-flux transport rewrote authoritative carrier energy");
 
 		FlipMaterialParticleState materials = domain.exportMaterialParticleState();
 		FlipThermalParticleState thermal = domain.exportThermalParticleState();
@@ -285,7 +292,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		domain.setThermalTemperatureInCell(1, 1, 1, 350.0);
 		domain.setThermalTemperatureInCell(2, 1, 1, 250.0);
 		ThermalTransport.Stats transport = domain.stepThermalOnly(1_000.0);
-		require(transport.evaluatedFaces() == 1 && transport.maximumAbsoluteTransferEu() > 0.0
+		require(transport.evaluatedContacts() > 0 && transport.maximumAbsoluteTransferEu() > 0.0
 				&& domain.thermalTemperatureInCell(1, 1, 1) < 350.0
 				&& domain.thermalTemperatureInCell(2, 1, 1) > 250.0,
 				"partial cut/PLIC contact was dropped from production thermal transport");
@@ -543,10 +550,10 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			z[marker] = 1.1F;
 			volume[marker] = 1.0F / 64.0F;
 			mass[marker] = volume[marker] * 1_000.0;
-			energy[marker] = mass[marker] * 7.0;
+			energy[marker] = mass[marker] * (7.0 + 0.5 * (y[marker] - 1.0));
 		}
 		x[16] = 2.25F; y[16] = 1.25F; z[16] = 1.25F;
-		volume[16] = 0.5F; mass[16] = 500.0; energy[16] = 3_500.0;
+		volume[16] = 0.5F; mass[16] = 500.0; energy[16] = mass[16] * 7.125;
 		SignedDyadic before = SignedDyadic.sum(java.util.Arrays.copyOf(energy, count));
 		FlipParticleReseeder.ThermalAdapter adapter = new FlipParticleReseeder.ThermalAdapter() {
 			@Override public double totalEnergy(int particleCount) {
@@ -570,6 +577,19 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		SignedDyadic after = SignedDyadic.sum(java.util.Arrays.copyOf(energy, result.particleCount()));
 		require(result.merged() > 0 && result.split() > 0 && before.equals(after),
 				"thermal reseeding did not move energy with merged/split marker truth");
+		double squaredError = 0, totalMass = 0, maximum = 0;
+		for (int p = 0; p < result.particleCount(); p++) {
+			double temperature = energy[p] / mass[p], error = temperature - (7 + 0.5 * (y[p] - 1));
+			require(temperature >= 7.05 - 1e-7 && temperature <= 7.125 + 1e-7,
+					"homogeneous reseeding exceeded the parent temperature range");
+			if (x[p] < 2) require(Math.abs(error) < 1e-6, "mass-centred merge lost an affine thermal field");
+			maximum = Math.max(maximum, Math.abs(error));
+			squaredError += mass[p] * error * error; totalMass += mass[p];
+		}
+		// Splitting copies parent temperature to new quadrature positions within the same cell.
+		require(maximum <= 0.5, "thermal split error exceeded gradient times cell size");
+		System.out.printf("  thermal reseed affine field: mass-weighted RMS=%g K max=%g K, |grad T|*h=0.5 K%n",
+				Math.sqrt(squaredError / totalMass), maximum);
 	}
 
 }

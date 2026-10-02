@@ -574,11 +574,19 @@ public final class ThermalDomainState {
 	) {
 		SignedDyadic before = exactEnergy(markers.markerCount());
 		cellGrid.rebuild(carrierAccess(markers));
-		lastTransport = transport.step(cellGrid, faceArea, boundaryFace, dtSeconds);
-		SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
-		auditState.update(ledger -> ledger.withHeatExchange(lastTransport.reservoirExchange())
-				.withRoundoff(physicalDelta.subtract(lastTransport.reservoirExchange())));
-		return lastTransport;
+		double[] snapshot = cellGrid.copyCarrierInternalEnergy();
+		try {
+			var result = transport.step(cellGrid, faceArea, boundaryFace, dtSeconds);
+			SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
+			var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange())
+					.withRoundoff(physicalDelta.subtract(result.reservoirExchange()));
+			auditState.replace(ledger);
+			lastTransport = result;
+			return result;
+		} catch (RuntimeException failure) {
+			cellGrid.restoreCarrierInternalEnergy(snapshot);
+			throw failure;
+		}
 	}
 
 	/** Finite conduction on real carrier contacts supplied by the spatial discretization. */

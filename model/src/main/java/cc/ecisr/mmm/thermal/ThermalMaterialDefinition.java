@@ -142,7 +142,8 @@ public record ThermalMaterialDefinition(
 				if (segment.minimumTemperatureK() >= cursor) continue;
 				double end = Math.min(cursor, segment.maximumTemperatureK());
 				double capacity = (end - segment.minimumTemperatureK()) * segment.specificHeatEuPerMuK();
-				if (remaining <= capacity) return end - remaining / segment.specificHeatEuPerMuK();
+				if (remaining <= capacity) return segment.minimumTemperatureK()
+						+ (capacity - remaining) / segment.specificHeatEuPerMuK();
 				remaining -= capacity;
 				cursor = segment.minimumTemperatureK();
 			}

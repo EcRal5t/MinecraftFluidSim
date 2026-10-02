@@ -13,11 +13,11 @@ package cc.ecisr.mmm.fluid;
  * regularization belongs here.</p>
  */
 final class PressureFaceCoupling {
-	private final float mobilityScale;
+	private final double mobilityScale;
 	private final float pressureJumpFirstMinusSecond;
 
-	private PressureFaceCoupling(float mobilityScale, float pressureJumpFirstMinusSecond) {
-		if (!(Float.isFinite(mobilityScale) && mobilityScale > 0.0F)) {
+	private PressureFaceCoupling(double mobilityScale, float pressureJumpFirstMinusSecond) {
+		if (!(Double.isFinite(mobilityScale) && mobilityScale > 0.0F)) {
 			throw new IllegalArgumentException("Pressure-face mobility must be finite and positive");
 		}
 		if (!Float.isFinite(pressureJumpFirstMinusSecond)) {
@@ -27,12 +27,12 @@ final class PressureFaceCoupling {
 		this.pressureJumpFirstMinusSecond = pressureJumpFirstMinusSecond;
 	}
 
-	static PressureFaceCoupling centered(float densityScale) {
+	static PressureFaceCoupling centered(double densityScale) {
 		return new PressureFaceCoupling(densityScale, 0.0F);
 	}
 
 	static PressureFaceCoupling oneSided(
-			float densityScale, float pressureDistanceInCells, float pressureJumpFirstMinusSecond
+			double densityScale, float pressureDistanceInCells, float pressureJumpFirstMinusSecond
 	) {
 		if (!(Float.isFinite(pressureDistanceInCells) && pressureDistanceInCells > 0.0F)) {
 			throw new IllegalArgumentException("One-sided pressure distance must be finite and positive");
@@ -65,24 +65,24 @@ final class PressureFaceCoupling {
 				&& pressureJumpFirstMinusSecond <= Float.MAX_VALUE)) {
 			throw new IllegalArgumentException("Two-sided pressure-face metric exceeds solver precision");
 		}
-		return new PressureFaceCoupling((float) mobility, (float) pressureJumpFirstMinusSecond);
+		return new PressureFaceCoupling(mobility, (float) pressureJumpFirstMinusSecond);
 	}
 
 	PressureFaceCoupling reversed() {
 		return new PressureFaceCoupling(mobilityScale, -pressureJumpFirstMinusSecond);
 	}
 
-	float mobilityScale() { return mobilityScale; }
+	double mobilityScale() { return mobilityScale; }
 	float pressureJumpFirstMinusSecond() { return pressureJumpFirstMinusSecond; }
 
-	float matrixCoefficient(float openArea) {
+	double matrixCoefficient(float openArea) {
 		if (!(Float.isFinite(openArea) && openArea >= 0.0F)) {
 			throw new IllegalArgumentException("Pressure-face open area is invalid");
 		}
 		return openArea * mobilityScale;
 	}
 
-	float orientedPressureDifference(float firstPressure, float secondPressure) {
+	double orientedPressureDifference(float firstPressure, float secondPressure) {
 		if (!Float.isFinite(firstPressure) || !Float.isFinite(secondPressure)) {
 			throw new IllegalArgumentException("Pressure-face state is non-finite");
 		}
@@ -90,18 +90,18 @@ final class PressureFaceCoupling {
 	}
 
 	/** RHS contribution after eliminating the second pressure as a Dirichlet boundary. */
-	float firstDirichletRhs(float openArea, float secondPressure) {
+	double firstDirichletRhs(float openArea, float secondPressure) {
 		if (!Float.isFinite(secondPressure)) {
 			throw new IllegalArgumentException("Pressure boundary is non-finite");
 		}
 		return matrixCoefficient(openArea) * secondPressure + firstJumpRhs(openArea);
 	}
 
-	float firstJumpRhs(float openArea) {
+	double firstJumpRhs(float openArea) {
 		return matrixCoefficient(openArea) * pressureJumpFirstMinusSecond;
 	}
 
-	float secondJumpRhs(float openArea) {
+	double secondJumpRhs(float openArea) {
 		return -firstJumpRhs(openArea);
 	}
 }

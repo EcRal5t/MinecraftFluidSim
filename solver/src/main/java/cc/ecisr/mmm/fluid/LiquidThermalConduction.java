@@ -84,7 +84,7 @@ final class LiquidThermalConduction {
 	                                     double[] pMoment, double[] qMoment, boolean self) {
 		double sum = 0;
 		for (int image = 0; image < 27; image++) {
-			double r2 = 0; boolean available = true;
+			double weight = 1; boolean available = true;
 			int code = image;
 			for (int axis = 0; axis < 3; axis++) {
 				double coordinate = q[axis];
@@ -92,10 +92,10 @@ final class LiquidThermalConduction {
 				if (reflection == 1 && p[axis] < 1 && q[axis] < 1) coordinate = -coordinate;
 				else if (reflection == 2 && p[axis] > size[axis] - 1 && q[axis] > size[axis] - 1) coordinate = 2 * size[axis] - coordinate;
 				else if (reflection != 0) { available = false; break; }
-				double d = coordinate - p[axis]; r2 += d * d;
+				weight *= cubicWeight(coordinate - p[axis]);
 			}
-			if (!available || r2 >= 1) continue;
-			double v = 1 - Math.sqrt(r2), g = scale * v * v * v;
+			if (!available || weight == 0) continue;
+			double g = scale * weight;
 			sum += g;
 			code = image;
 			for (int axis = 0; axis < 3; axis++) {
@@ -109,15 +109,22 @@ final class LiquidThermalConduction {
 		return sum;
 	}
 
+	/** Cardinal cubic B-spline at the h/2 quadrature spacing. */
+	private static double cubicWeight(double distance) {
+		double r = 2 * Math.abs(distance);
+		if (r < 1) return (4 - 6 * r * r + 3 * r * r * r) / 6;
+		if (r >= 2) return 0;
+		double v = 2 - r;
+		return v * v * v / 6;
+	}
+
 	/** Exact second moment of the fixed h/2 Cartesian quadrature, rather than a fitted diffusivity. */
 	private static double latticeMoment() {
 		double sum = 0, spacing = 1.0 / ConservativeMarkerSampling.AXIS_SAMPLES;
 		int extent = ConservativeMarkerSampling.AXIS_SAMPLES - 1;
 		for (int z = -extent; z <= extent; z++) for (int y = -extent; y <= extent; y++) for (int x = -extent; x <= extent; x++) {
-			double r = spacing * Math.sqrt(x * x + y * y + z * z);
-			if (r >= 1) continue;
-			double v = 1 - r;
-			sum += v * v * v * x * x * spacing * spacing;
+			double weight = cubicWeight(x * spacing) * cubicWeight(y * spacing) * cubicWeight(z * spacing);
+			sum += weight * x * x * spacing * spacing;
 		}
 		return ConservativeMarkerSampling.NOMINAL_MARKER_VOLUME * 0.5 * sum;
 	}
