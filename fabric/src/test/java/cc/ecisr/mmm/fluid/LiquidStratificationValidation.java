@@ -161,7 +161,7 @@ final class LiquidStratificationValidation {
 			double initialMoment = state[0] == 0 ? heatCenter(domain) : saltCenter(domain);
 			double extremeMoment = initialMoment;
 			double viscous = 0, p2g = 0, g2p = 0;
-			for (int step = 0; step < 4800; step++) {
+			for (int step = 0; step < 9600; step++) {
 				var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(), List.of(), false, 0, true));
 				var stats = candidate.stats();
 				domain = candidate.claimPreparedCpuDomain();

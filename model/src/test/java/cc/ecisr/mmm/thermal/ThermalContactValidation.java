@@ -12,6 +12,7 @@ public final class ThermalContactValidation {
 		finiteContactMatchesAnalyticPair();
 		heterogeneousContactsPreserveTemperatureOrderAndEntropy();
 		invalidCarrierCannotHideInValidCellMean();
+		carrierGraphPreservesCaloricInventoryAndPreflights();
 	}
 
 	private static void finiteContactMatchesAnalyticPair() {
@@ -91,6 +92,41 @@ public final class ThermalContactValidation {
 			boolean rejected = false;
 			try { new ThermalCellGrid(1).rebuild(access); } catch (IllegalArgumentException expected) { rejected = true; }
 			require(rejected && Arrays.equals(before, energies), "valid cell mean concealed an invalid real carrier");
+		}
+	}
+
+	private static void carrierGraphPreservesCaloricInventoryAndPreflights() {
+		var materials = new ThermalMaterialDefinition[] {material("graph_first", 10, 40), material("graph_second", 70, 20), material("isolated", 10, 10)};
+		double[] mass = {2, 3, 1}, base = {100000, -200000, 50000}, initialT = {270, 400, 300};
+		for (double g : new double[] {0.001, 1e6}) {
+			double[] energy = new double[3];
+			for (int p = 0; p < 3; p++) energy[p] = carrier(materials[p], mass[p], base[p], initialT[p]).internalEnergyEu();
+			var owners = new ThermalCellGrid.CarrierAccess() {
+				@Override public int carrierCount() { return 3; }
+				@Override public int cell(int p) { return 0; }
+				@Override public ThermalMaterialDefinition material(int p) { return materials[p]; }
+				@Override public double mass(int p) { return mass[p]; }
+				@Override public double volume(int p) { return 1; }
+				@Override public double baseEnergy(int p) { return base[p]; }
+				@Override public double internalEnergy(int p) { return energy[p]; }
+				@Override public void setInternalEnergy(int p, double u) { energy[p] = u; }
+			};
+			var before = SignedDyadic.sum(energy); double isolated = energy[2];
+			var stats = ThermalCarrierTransport.step(owners, List.of(new ThermalCarrierTransport.Contact(0, 1, g, Double.NaN)), g < 1 ? 1 : 1000, 8);
+			double entropy = 0;
+			for (int p = 0; p < 3; p++) {
+				double t = new ThermalContactExchange.Carrier(materials[p], mass[p], base[p], energy[p]).temperatureK();
+				require(t >= 270 && t <= 400, "carrier graph violated the caloric maximum principle");
+				entropy += mass[p] * entropyChange(materials[p], initialT[p], t);
+			}
+			require(entropy >= -1e-10 && energy[2] == isolated
+					&& SignedDyadic.sum(energy).subtract(before).equals(stats.roundoffResidual())
+					&& stats.reservoirExchange().equals(SignedDyadic.ZERO), "carrier graph lost entropy, isolated energy or conservative closure");
+			double[] unchanged = energy.clone();
+			boolean rejected = false;
+			try { ThermalCarrierTransport.step(owners, List.of(new ThermalCarrierTransport.Contact(0, 3, g, Double.NaN)), 1, 8); }
+			catch (IllegalArgumentException expected) { rejected = true; }
+			require(rejected && Arrays.equals(energy, unchanged), "invalid graph edited a real energy owner");
 		}
 	}
 

@@ -139,8 +139,12 @@ public final class FlipCutCellValidation {
 			domain.setVolume(x, y, z, 1.0F);
 		}
 		float exactVolume = domain.totalVolume();
+		var backend = new CpuFluidSolverBackend();
 		for (int step = 0; step < 600; step++) {
-			FluidDomain.StepStats stats = domain.step();
+			var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(),
+					java.util.List.of(), false, 0, false));
+			FluidDomain.StepStats stats = candidate.stats();
+			domain = candidate.claimPreparedCpuDomain();
 			check(Float.isFinite(stats.pressureResidual()), "cut-cell PCG residual became non-finite");
 			check(Float.isFinite(domain.maximumPressure()), "cut-cell pressure became non-finite");
 			check(stats.relativeVolumeError() < 2.0E-6F, "cut-cell step changed exact marker volume");

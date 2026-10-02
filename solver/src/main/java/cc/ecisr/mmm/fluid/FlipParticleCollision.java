@@ -38,7 +38,7 @@ final class FlipParticleCollision {
 			int particleCount,
 			float dt
 	) {
-		float radius = cellSize * 0.45F;
+		float radius = cellSize * ConservativeMarkerSampling.DOMAIN_CONTACT_FRACTION;
 		float maximumX = sizeX * cellSize - radius;
 		float maximumY = sizeY * cellSize - radius;
 		float maximumZ = sizeZ * cellSize - radius;
@@ -110,7 +110,7 @@ final class FlipParticleCollision {
 		return accepted;
 	}
 
-	/** Full-cell contact keeps the established 0.45h normal constraint and free tangential motion. */
+	/** Full-cell contact uses half a quadrature spacing and preserves tangential motion. */
 	private void constrainToFullSolidFaces(
 			int particle,
 			float radius,

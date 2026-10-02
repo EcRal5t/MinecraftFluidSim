@@ -422,7 +422,7 @@ if (chemicalParcels != null && chemicalMixture != null) {
 chemicalParcels.requireCompatible(chemicalMixture, materialRegistry.material(materialHandle).id(), indicator);
 }
 float h = config.cellSize();
-float radiusFraction = 0.45F;
+float radiusFraction = ConservativeMarkerSampling.DOMAIN_CONTACT_FRACTION;
 float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
 float oy = (slot & 2) == 0 ? 0.25F : 0.75F;
 float oz = (slot & 4) == 0 ? 0.25F : 0.75F;

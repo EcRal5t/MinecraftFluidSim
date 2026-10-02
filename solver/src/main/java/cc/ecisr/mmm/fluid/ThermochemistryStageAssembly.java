@@ -26,6 +26,9 @@ final class ThermochemistryStageAssembly {
 				new ThermalTransportStage.Workspace(domain.thermalMarkerContext()),
 				new ThermalTransportStage.Access() {
 					@Override public void ensureGrid() { domain.ensureGrid(); }
+					@Override public java.util.List<cc.ecisr.mmm.thermal.ThermalCarrierTransport.Contact> carrierContacts() {
+						return LiquidThermalConduction.contacts(domain);
+					}
 					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 					@Override public double faceArea(int x, int y, int z, int direction) {
 						return domain.thermalFaceArea(x, y, z, direction);

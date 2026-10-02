@@ -8,7 +8,7 @@
 |---|---|---|
 | 内能状态与流体数据映射 | [ThermalDomainState](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalDomainState.java)、[FluidThermalBinding](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidThermalBinding.java) | `thermal` |
 | 热浮力有效范围与分层 | [LiquidThermalExpansion](../../model/src/main/java/cc/ecisr/mmm/thermal/LiquidThermalExpansion.java)、[LiquidCarrierProperties](../../solver/src/main/java/cc/ecisr/mmm/fluid/LiquidCarrierProperties.java)、[LiquidStratificationValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/LiquidStratificationValidation.java) | `materials,thermal` |
-| 传热与反应顺序 | [ThermochemistryPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermochemistryPipeline.java)、[ThermalTransport](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalTransport.java)、[ThermalImplicitTransport](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalImplicitTransport.java) | `thermal` |
+| 传热与反应顺序 | [ThermochemistryPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermochemistryPipeline.java)、[ThermalCarrierTransport](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalCarrierTransport.java)、[LiquidThermalConduction](../../solver/src/main/java/cc/ecisr/mmm/fluid/LiquidThermalConduction.java)、[ThermalTransport](../../model/src/main/java/cc/ecisr/mmm/thermal/ThermalTransport.java) | `thermal` |
 | 固液和气液相变 | [CondensedPhaseChangeStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/CondensedPhaseChangeStage.java)、[GasLiquidPhaseChangeStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasLiquidPhaseChangeStage.java)、[GasPhaseInterfaceResolver](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasPhaseInterfaceResolver.java) | `thermal` |
 | 有限热容量设备 | [FiniteThermalDeviceInventory](../../model/src/main/java/cc/ecisr/mmm/thermal/FiniteThermalDeviceInventory.java)、[FiniteThermalExchange](../../model/src/main/java/cc/ecisr/mmm/thermal/FiniteThermalExchange.java)、[FiniteThermalDeviceCodec](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/FiniteThermalDeviceCodec.java) | `thermal,region-state` |
 | 恒温源调节 | [ThermalReservoirUseCase](../../application/src/main/java/cc/ecisr/mmm/application/ThermalReservoirUseCase.java)、[ThermalReservoirScreen](../../fabric/src/client/java/cc/ecisr/mmm/client/ThermalReservoirScreen.java) | `protocol,thermal` |
@@ -125,7 +125,26 @@ caloric segment 内 `cv` 为常量，积分与反演均为分段闭式线性计�
 
 `ThermalContactExchange` 求解单个有限热导接触的 backward-Euler 能量变化。载体接口绑定同一份初始质量、组成参考能与 `U`；混合单元使用其完整 caloric 曲线，单载体使用材料状态函数，固定温度面使用无限热浴。对于进入第一侧的能量 `q`，求解 `q = G*dt*(T_second(U_second-q)-T_first(U_first+q))`，有限第二侧接收相反的能量变化。求解跨越 caloric 分段，正热容保证唯一解及冷热温度顺序；零热导返回零，有限热导和时间步趋零时通量连续趋零。
 
-当前隐式跨面导热以正反两次半时间步扫描调用该求解器，调用方负责提交能量与记录热浴、舍入收支。接触热导仍由现有 PLIC/cut-face 和材料热阻计算。正导热率多载体单元仍按 LTE 分配内能，格内有限接触几何与连续热平流的联合离散见[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)。
+隐式导热以正反两次半时间步扫描调用该求解器，调用方负责提交能量与记录热浴、舍入收支。满液体矩形域使用逐载体有限接触；自由面、切割单元和固体混合域使用 PLIC/cut-face 热阻与单元 LTE 分配。适用范围及后续迁移见[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)。
+
+### 满液体域的有限载体导热
+
+`LiquidThermalConduction` 为完全开放、总体积填满区域、各格均有 marker 且属于同一 pressure phase 的矩形液体域构造接触。该路径读取真实位置、体积和已绑定的导热定义；区域中有 active parcel、deposit 或 coherent group 时采用单元有限体积路径。互溶材料可以有不同 caloric、导热率和 species 参考能。
+
+接触采用 [Brookshaw 型各向同性粒子扩散](https://academic.oup.com/mnras/article/483/4/4901/5251847)的正对称形式。令 `v_p=V_p/h³`、`r_pq=|x_p-x_q|/h`，使用紧支撑权重：
+
+```text
+f(r) = (1-r)^3 for 0 <= r < 1; otherwise 0
+M = (v_nominal/2) * sum_standard_neighbors f(r) * (Delta x/h)^2
+G_pq = harmonic(k_p,k_q) * h * v_p * v_q * f(r_pq) / M
+Delta U_p = G_pq * (T_q-T_p) * dt; Delta U_q = -Delta U_p
+```
+
+`M` 由标准 `2×2×2` 积分点的离散二阶矩直接求出，使该规则的扩散率对应 registry 的 `k/(rho*cv)`。紧支撑随位置连续变化，载体跨格时邻域索引保持全部有效接触。外壳通过镜像积分点延续绝热支撑；恒温墙把镜像法向的一阶矩换成与真实墙距对应的正热导。均匀积分点上的线性温度场在相反恒温板之间保持稳定。
+
+`ThermalCarrierTransport` 直接更新真实载体 `U`，每个接触保持正温、同质温度最大值原理与镜像能量。显式步长取逐载体全部 caloric 分段最小热容量的 `0.5*C_min/sum(G)`；超过八个显式子步时使用有限接触隐式扫描。提交前验证全部 prospective caloric 状态；失败恢复原始载体能量与派生格，成功后才记录热浴与舍入。零接触或零转移保持载体能量位模式，同格温差以有限速率推进。
+
+该离散的精度条件是近均匀的体积积分点。位移、聚集和重播种改变离散矩，仍须通过对应的解析场与网格收敛量化误差。常态校验覆盖小正导热率极限、两级解析扩散模态、线性恒温墙、冷热尖峰、异质 caloric/species 参考能、隔离载体及候选拒绝。自由面、partial cut-cell 和固体载体的有限内部接触，以及与相变交接的联合离散仍待扩展。
 
 `thermal_reservoir` 的 setpoint 原始数据由世界 BlockEntity 持有，不进入 region HEAD。`ThermalReservoirUseCase` 只拥有 bounded summary、world-position token 与权限/范围决策；Minecraft adapter 才能在 token 校验失效处理和当前方块重验后写 BlockEntity。
 
@@ -153,7 +172,7 @@ body candidate、所有 cell `delta U`、solver `finiteDeviceExchange` 与两侧
 
 ### 有限体积离散
 
-两个相邻 LTE cell 的 face conductance 与热量转移为：
+自由面、切割单元和固体混合域沿用单元有限体积路径。两个相邻 LTE cell 的 face conductance 与热量转移为：
 
 ```text
 k_face = 2*k_a*k_b/(k_a+k_b)
@@ -174,7 +193,7 @@ dt_stable = min_cell(0.5 * C_min_cell / sum_faces G_face)
 
 全部载体导热率为零的单元保持各载体原始 `U`，随粒子平流搬运。导热处理器仍反演并验证每个载体的正温，旁侧显式或隐式导热也不会触发该单元的格内均温。反应、相变和有限设备的显式局部能量交接仍由各自处理器执行。正导热率单元采用既有 LTE 分配；同质绝热冷热尖峰的显式与大步长隐式用例检查粒子温度范围与能量闭合。
 
-所有导热接触两端温度逐值相等时，以一个零交换步骤完成几何校验和 cell 内载体的 LTE 分配。有限设备与全部端口等温时采用相同规则，保留设备代次和原始内能。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存。
+所有导热接触两端温度逐值相等时，单元路径以一个零交换步骤完成几何校验和 cell 内载体的 LTE 分配。有限设备与全部端口等温时采用相同规则，保留设备代次和原始内能。hot loop 使用 `double`，每个 face 对的增减严格镜像；commit 边界用 `SignedDyadic` 精确求和记录 IEEE-754 有限数，舍入残差单列保存。
 
 批量求和按 binary64 固有的 2,046 个 dyadic exponent 分桶，每桶以有符号 128-bit 两字累加后只做一次 `BigInteger` 合并；该算法与逐项精确相加二进制等价，覆盖所有载体审计。
 
@@ -207,7 +226,7 @@ Delta u_y = g * dt * thermal density correction_face / rho_face
 
 热盐补偿夹具将逐载体的 `rho_p*(1-beta_p*(T_p-T_ref,p))` 设为同一参考密度，验证格内平流后两项仍精确对应，以及压力投影后保持静水。MAC 使用 binary32；补偿场的速度残差上限取一份重力预测冲量的 ulp，当前默认网格、`g=9.81 m/s²`、`dt=0.05 s` 下为 `2.98023e-8 m/s`。反置分层经 CPU 后端的整步 CFL 细化计算，并逐步检查完整候选的库存与能量。
 
-热浮力已保留格内小位移的连续响应。普通正导热仍在粒子所属单元汇总并按 LTE 分配内能，格内未解析温差的有限导热离散以及速度传递耗散仍待完成；自然对流的临界 Ra 与增长率收敛按[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)验收。
+热浮力已保留格内小位移的连续响应。满液体矩形域按逐载体有限接触导热，其余凝聚态几何沿用单元 LTE 路径；速度传递耗散、完整凝聚态迁移及自然对流的临界 Ra 与增长率收敛按[产品路线](../roadmap/product-roadmap.md#1c-密度分层与对流)验收。
 
 ### 气体能量与功
 

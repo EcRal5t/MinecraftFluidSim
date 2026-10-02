@@ -25,14 +25,17 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		insulatingCellsIgnoreUnrelatedFlux();
 		geometryRestrictsObservation();
 		conductingSpikeRemainsMonotone();
+		finiteConductivityLimit();
+		particleDiffusionConverges();
+		conductingLinearWallProfileIsStationary();
 	}
 
 	static void subcellAdvection() {
 		double coarseError = 0;
 		for (int n : new int[] {8, 16}) {
 			double error = 0, firstDerivative = 0;
-			for (float dt : new float[] {0.001F, 0.002F}) {
-				var domain = pool(n, n, 2, 0);
+			for (float dt : new float[] {0.001F, 0.002F}) for (double conductivity : new double[] {0, 1e-6}) {
+				var domain = pool(n, n, 2, conductivity);
 				double speed = 0.1, gradient = 2;
 				for (int marker = 0; marker < domain.particleCount(); marker++)
 					domain.thermalState.resetMarkerTemperature(marker, 300 + gradient * domain.particles.positionY(marker),
@@ -69,10 +72,14 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				double expected = -gradient * speed * Math.cos(Math.PI * (n / 4 + 0.5) / n)
 						* Math.sin(Math.PI * (n / 2 - 0.5) / n);
 				error = Math.max(error, relativeError(derivative, expected));
-				require(error < 0.025 && transport.maximumAbsoluteTransferEu() == 0
-						&& Arrays.equals(energies, domain.exportThermalParticleState().copyInternalEnergy())
-						&& audit.equals(domain.thermalAudit()) && domain.totalVolume() == volume && domain.totalMass() == mass,
-						"zero-conductivity advection changed U or missed the first-order response: " + derivative);
+				double[] currentEnergies = domain.exportThermalParticleState().copyInternalEnergy();
+				require(error < 0.025 && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+						&& domain.totalVolume() == volume && domain.totalMass() == mass,
+						"thermal advection missed its continuous response or conservation: " + derivative);
+				if (conductivity == 0) require(transport.maximumAbsoluteTransferEu() == 0 && Arrays.equals(energies, currentEnergies)
+						&& audit.equals(domain.thermalAudit()), "zero-conductivity advection changed raw energy");
+				else require(transport.maximumTemperatureChangeK() < 1e-6 && LiquidThermalConduction.contacts(domain) != null,
+						"positive small conductivity lost continuous carrier transport");
 				for (int marker = 0; marker < cells.length; marker++) require(cells[marker] == domain.particleCellIndex(marker),
 						"subcell advection fixture crossed a cell");
 				if (firstDerivative != 0) require(relativeError(derivative, firstDerivative) < 0.002,
@@ -80,11 +87,11 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				firstDerivative = derivative;
 				var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 				restored.ensureGrid(); restored.thermalState.prepareSpatialObservation(restored.thermalMarkerContext());
-				require(Arrays.equals(energies, restored.exportThermalParticleState().copyInternalEnergy())
-						&& audit.equals(restored.thermalAudit()) && close(restored.thermalState.spatialTemperatureInCell(cell),
+				require(Arrays.equals(currentEnergies, restored.exportThermalParticleState().copyInternalEnergy())
+						&& domain.thermalAudit().equals(restored.thermalAudit()) && close(restored.thermalState.spatialTemperatureInCell(cell),
 						domain.thermalState.spatialTemperatureInCell(cell)), "thermal advection handoff lost U or spatial response");
-				System.out.printf("  zero-k advection N=%d dt=%g derivative=%g expected=%g K/s error=%.4f%%%n",
-						n, dt, derivative, expected, 100 * relativeError(derivative, expected));
+				System.out.printf("  thermal advection N=%d k=%g dt=%g derivative=%g expected=%g K/s error=%.4f%%%n",
+						n, conductivity, dt, derivative, expected, 100 * relativeError(derivative, expected));
 			}
 			if (n == 8) coarseError = error;
 			else require(error < 0.35 * coarseError, "subcell thermal observation failed spatial convergence");
@@ -136,6 +143,18 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		thermal.step(markers, (x, y, z, axis) -> 1, 1000);
 		require(before.equals(thermal.exactEnergy(2)) && audit.equals(thermal.auditLedger()),
 				"insulating heterogeneous carriers changed energy or the external ledger");
+		// The contact processor reads the real integer-species reference energy, with no LTE handoff.
+		for (double conductance : new double[] {1e-8, 1e6}) {
+			thermal.stepCarrierConduction(markers, List.of(new cc.ecisr.mmm.thermal.ThermalCarrierTransport.Contact(
+					0, 1, conductance, Double.NaN)), conductance < 1 ? 0.001 : 1000);
+			for (int p = 0; p < 2; p++) require(thermal.temperature(p, markers) >= 270 && thermal.temperature(p, markers) <= 350,
+					"carrier contact lost heterogeneous caloric or species reference energy");
+			require(thermal.exactEnergy(2).equals(thermal.auditLedger().expectedInventory())
+					&& audit.externalSource().equals(thermal.auditLedger().externalSource())
+					&& audit.externalSink().equals(thermal.auditLedger().externalSink())
+					&& markers.mixture(0).equals(mixtures[0]) && markers.mixture(1).equals(mixtures[1]),
+					"carrier conduction changed species or external energy");
+		}
 	}
 
 	static void geometryRestrictsObservation() {
@@ -214,6 +233,75 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 						&& before.externalSink().equals(domain.thermalAudit().externalSink()), "adiabatic spike energy did not close");
 			}
 		}
+	}
+
+	static void finiteConductivityLimit() {
+		double first = 0;
+		for (double k : new double[] {0.001, 0.01}) {
+			var domain = pool(4, 4, 4, k);
+			var context = domain.thermalMarkerContext();
+			domain.thermalState.resetMarkerTemperature(0, 270, context, domain.exactInternalEnergy());
+			domain.thermalState.resetMarkerTemperature(1, 350, context, domain.exactInternalEnergy());
+			double before = domain.thermalState.temperature(0, context);
+			var audit = domain.thermalAudit();
+			domain.stepThermalOnly(1);
+			double change = domain.thermalState.temperature(0, context) - before;
+			require(change > 0 && change < 0.001, "positive small k caused instantaneous intracell equilibration: " + change);
+			if (first > 0) require(Math.abs(change / first - 10) < 0.001, "carrier conduction lost its linear k limit");
+			first = change;
+			require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+					&& audit.externalSource().equals(domain.thermalAudit().externalSource())
+					&& audit.externalSink().equals(domain.thermalAudit().externalSink()), "finite-k inventory failed closure");
+		}
+	}
+
+	static void particleDiffusionConverges() {
+		double coarse = 0;
+		for (int n : new int[] {8, 16}) {
+			var domain = pool(4, n, 2, 4e6); // alpha = 1 m^2/s from the actual rho, cv and k.
+			var context = domain.thermalMarkerContext();
+			double h = domain.config.cellSize(), height = h * n, before = 0, norm = 0;
+			for (int p = 0; p < domain.particleCount(); p++) {
+				double mode = Math.cos(Math.PI * domain.particles.positionY(p) / height);
+				domain.thermalState.resetMarkerTemperature(p, 300 + 2 * mode, context, domain.exactInternalEnergy());
+				before += mode * (domain.thermalState.temperature(p, context) - 300); norm += mode * mode;
+			}
+			double dt = 0.0001;
+			domain.stepThermalOnly(dt);
+			double after = 0;
+			for (int p = 0; p < domain.particleCount(); p++) after += Math.cos(Math.PI * domain.particles.positionY(p) / height)
+					* (domain.thermalState.temperature(p, context) - 300);
+			double normalizedRate = (1 - after / before) / dt * height * height;
+			double error = Math.abs(normalizedRate / (Math.PI * Math.PI) - 1);
+			require(error < 0.02 && Math.abs(before / norm - 2) < 1e-10, "particle diffusion has a mesh-independent diffusivity bias: rate=" + normalizedRate + " amplitude=" + before / norm);
+			if (n == 8) coarse = error;
+			else require(error < 0.3 * coarse, "particle conduction failed second-order diffusion convergence");
+			System.out.printf("  finite-k diffusion N=%d normalizedRate=%g expected=%g error=%.4f%%%n", n, normalizedRate, Math.PI * Math.PI, 100 * error);
+		}
+	}
+
+	static void conductingLinearWallProfileIsStationary() {
+		var domain = pool(4, 6, 2, 4e6);
+		double height = domain.sizeY * domain.config.cellSize();
+		var context = domain.thermalMarkerContext();
+		double[] boundary = new double[domain.cellCount * 6]; Arrays.fill(boundary, Double.NaN);
+		for (int p = 0; p < domain.particleCount(); p++) domain.thermalState.resetMarkerTemperature(p,
+				310 - 20 * domain.particles.positionY(p) / height, context, domain.exactInternalEnergy());
+		for (int z = 0; z < domain.sizeZ; z++) for (int x = 0; x < domain.sizeX; x++) {
+			boundary[6 * domain.cellIndex(x, 0, z) + 2] = 310;
+			boundary[6 * domain.cellIndex(x, domain.sizeY - 1, z) + 3] = 290;
+		}
+		domain.replaceThermalBoundaryTemperatures(boundary);
+		double[] energy = domain.exportThermalParticleState().copyInternalEnergy();
+		var result = domain.stepThermalOnly(0.001);
+		double maximum = 0;
+		for (int p = 0; p < domain.particleCount(); p++) maximum = Math.max(maximum,
+				Math.abs(domain.thermalState.temperature(p, context) - (310 - 20 * domain.particles.positionY(p) / height)));
+		require(maximum < 1e-10 && result.maximumAbsoluteTransferEu() > 0
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "thermal wall closure lost the affine stationary solution: " + maximum);
+		// A finite contact must have been evaluated while the net energy remained stationary.
+		require(Math.abs(SignedDyadic.sum(domain.exportThermalParticleState().copyInternalEnergy()).subtract(SignedDyadic.sum(energy)).toDouble()) < 1e-7,
+				"opposed fixed walls introduced net energy into a stationary profile");
 	}
 
 	private static FluidDomain pool(int nx, int ny, int nz, double conductivity) {

@@ -51,14 +51,22 @@ public final class LiquidConvectionExperiment {
 		double[] boundary = new double[domain.cellCount * 6];
 		Arrays.fill(boundary, Double.NaN);
 		for (int z = 0; z < 2; z++) for (int y = 0; y < n; y++) for (int x = 0; x < 2 * n; x++) {
-			double xx = (x + 0.5) / n, yy = (y + 0.5) / n;
-			domain.setThermalTemperatureInCell(x, y, z, T_REF + DELTA_T * (0.5 - yy)
-					+ amplitude * Math.cos(Math.PI * xx / 2) * Math.sin(Math.PI * yy));
 			int cell = domain.cellIndex(x, y, z);
 			if (y == 0) boundary[6 * cell + 2] = T_REF + DELTA_T / 2;
 			if (y == n - 1) boundary[6 * cell + 3] = T_REF - DELTA_T / 2;
 		}
 		domain.replaceThermalBoundaryTemperatures(boundary);
+		// Initialize the actual carrier field, including its stationary affine conduction profile.
+		var context = domain.thermalMarkerContext();
+		var energyBefore = domain.exactInternalEnergy();
+		double[] energy = domain.exportThermalParticleState().copyInternalEnergy();
+		for (int p = 0; p < domain.particleCount(); p++) {
+			double x = domain.particles.positionX(p) / height, y = domain.particles.positionY(p) / height;
+			double temperature = T_REF + DELTA_T * (0.5 - y) + amplitude * Math.cos(Math.PI * x / 2) * Math.sin(Math.PI * y);
+			energy[p] = domain.thermalState.liquid().modeledEnergy(p, context.mass(p), context.mixture(p), temperature, context);
+		}
+		domain.thermalState.restoreLiquidEnergies(energy);
+		domain.thermalState.restoreAuditLedger(domain.thermalAudit().withHeatExchange(domain.exactInternalEnergy().subtract(energyBefore)));
 		double q2 = 1.25 * Math.PI * Math.PI;
 		double velocity = kappa / height * (growth + q2) * amplitude / DELTA_T;
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
@@ -86,14 +94,15 @@ public final class LiquidConvectionExperiment {
 	}
 
 	private static double temperatureMode(FluidDomain domain, int n) {
-		domain.thermalState.preparePhaseScan(domain.thermalMarkerContext());
 		double sum = 0, norm = 0;
-		for (int z = 0; z < 2; z++) for (int y = 0; y < n; y++) for (int x = 0; x < 2 * n; x++) {
-			double yy = (y + 0.5) / n;
-			double mode = Math.cos(Math.PI * (x + 0.5) / (2 * n)) * Math.sin(Math.PI * yy);
-			double temperature = domain.thermalState.phaseScanTemperatureInCell(domain.cellIndex(x, y, z));
-			sum += mode * (temperature - T_REF - DELTA_T * (0.5 - yy));
-			norm += mode * mode;
+		double height = domain.config.cellSize() * n;
+		for (int p = 0; p < domain.particleCount(); p++) {
+			double x = domain.particles.positionX(p) / height, y = domain.particles.positionY(p) / height;
+			double mode = Math.cos(Math.PI * x / 2) * Math.sin(Math.PI * y);
+			double temperature = domain.thermalState.temperature(p, domain.thermalMarkerContext());
+			double volume = domain.particles.volume(p);
+			sum += volume * mode * (temperature - T_REF - DELTA_T * (0.5 - y));
+			norm += volume * mode * mode;
 		}
 		return sum / norm;
 	}

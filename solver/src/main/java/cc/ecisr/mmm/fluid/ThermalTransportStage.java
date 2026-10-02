@@ -14,6 +14,7 @@ final class ThermalTransportStage {
 		ThermalDomainState thermalState();
 		double faceArea(int x, int y, int z, int direction);
 		ThermalTransport.FixedBoundary fixedBoundary(int x, int y, int z, int direction);
+		java.util.List<cc.ecisr.mmm.thermal.ThermalCarrierTransport.Contact> carrierContacts();
 	}
 
 	private final Workspace state;
@@ -28,6 +29,8 @@ final class ThermalTransportStage {
 		ThermalDomainState thermal = access.thermalState();
 		if (thermal == null) throw new IllegalStateException("Thermal state is not bound");
 		access.ensureGrid();
+		var contacts = access.carrierContacts();
+		if (contacts != null) return thermal.stepCarrierConduction(state.markers(), contacts, dtSeconds);
 		return thermal.step(state.markers(), access::faceArea, access::fixedBoundary, dtSeconds);
 	}
 }

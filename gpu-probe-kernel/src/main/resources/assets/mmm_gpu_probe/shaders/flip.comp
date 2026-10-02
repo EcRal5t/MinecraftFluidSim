@@ -456,7 +456,7 @@ void transferEnergyFinalizeStage(uint id) {
 }
 
 void constrainToSolidFaces(inout vec3 p,inout vec3 vel) {
-    float radius=0.45*pc.h;float contactMinimum=radius+0.001*pc.h;float contactMaximum=pc.h-contactMinimum;
+    float radius=RESEED_DOMAIN_CONTACT*pc.h;float contactMinimum=radius+RESEED_POSITION_EPSILON*pc.h;float contactMaximum=pc.h-contactMinimum;
     ivec3 c=ivec3(clamp(floor(p/pc.h),vec3(0.0),vec3(pc.nx-1,pc.ny-1,pc.nz-1)));vec3 local=p-vec3(c)*pc.h;
     if(c.x>0&&local.x<radius&&solid(c+ivec3(-1,0,0))){p.x=float(c.x)*pc.h+contactMinimum;vel.x=max(0.0,vel.x);}
     if(c.x+1<pc.nx&&local.x>pc.h-radius&&solid(c+ivec3(1,0,0))){p.x=float(c.x)*pc.h+contactMaximum;vel.x=min(0.0,vel.x);}
@@ -502,7 +502,7 @@ vec3 sampleGridVelocity(vec3 physicalPoint) {
 }
 
 void advectStage(uint id) {
-    if(id>=uint(pc.particleCount)||!(positions.value[id].w>0.0))return;vec3 p=positions.value[id].xyz;vec3 vel=velocities.value[id].xyz;vec3 limit=vec3(pc.nx,pc.ny,pc.nz)*pc.h;float radius=0.45*pc.h;
+    if(id>=uint(pc.particleCount)||!(positions.value[id].w>0.0))return;vec3 p=positions.value[id].xyz;vec3 vel=velocities.value[id].xyz;vec3 limit=vec3(pc.nx,pc.ny,pc.nz)*pc.h;float radius=RESEED_DOMAIN_CONTACT*pc.h;
 	vec3 first=sampleGridVelocity(p);vec3 midpoint=sampleGridVelocity(p+0.5*pc.dt*first);vec3 secondMidpoint=sampleGridVelocity(p+0.5*pc.dt*midpoint);vec3 endpoint=sampleGridVelocity(p+pc.dt*secondMidpoint);vec3 motion=(first+2.0*midpoint+2.0*secondMidpoint+endpoint)/6.0;
 	float proposedX=p.x+motion.x*pc.dt;float nx=clamp(proposedX,radius,limit.x-radius);if(proposedX<radius)vel.x=max(0.0,vel.x);else if(proposedX>limit.x-radius)vel.x=min(0.0,vel.x);ivec3 cx=ivec3(floor(vec3(nx,p.y,p.z)/pc.h));if(solid(cx))vel.x=0.0;else p.x=nx;
 	float proposedY=p.y+motion.y*pc.dt;float ny=clamp(proposedY,radius,limit.y-radius);if(proposedY<radius)vel.y=max(0.0,vel.y);else if(proposedY>limit.y-radius)vel.y=min(0.0,vel.y);ivec3 cy=ivec3(floor(vec3(p.x,ny,p.z)/pc.h));if(solid(cy))vel.y=0.0;else p.y=ny;

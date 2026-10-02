@@ -581,6 +581,29 @@ public final class ThermalDomainState {
 		return lastTransport;
 	}
 
+	/** Finite conduction on real carrier contacts supplied by the spatial discretization. */
+	public ThermalTransport.Stats stepCarrierConduction(
+			ThermalCarrierContext markers, List<ThermalCarrierTransport.Contact> contacts, double dtSeconds
+	) {
+		SignedDyadic before = exactEnergy(markers.markerCount());
+		var owners = carrierAccess(markers);
+		cellGrid.rebuild(owners);
+		double[] snapshot = cellGrid.copyCarrierInternalEnergy();
+		try {
+			var result = ThermalCarrierTransport.step(owners, contacts, dtSeconds, transport.maximumSubsteps());
+			cellGrid.rebuild(owners);
+			SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
+			var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange())
+					.withRoundoff(physicalDelta.subtract(result.reservoirExchange()));
+			auditState.replace(ledger);
+			lastTransport = result;
+			return result;
+		} catch (RuntimeException failure) {
+			cellGrid.restoreCarrierInternalEnergy(snapshot);
+			throw failure;
+		}
+	}
+
 	// ---- finite device delegation ----
 
 	public List<FiniteThermalExchange.Contact> finiteDeviceContacts(

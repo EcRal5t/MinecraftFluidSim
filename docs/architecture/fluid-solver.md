@@ -95,6 +95,7 @@ CPU 在私有对象上顺序执行计算，任一阶段失败就丢弃整份候�
 - P2G/G2P 使用共享的 valid face；均匀密度时 face 分子/分母按 marker 体积散射，变密度时按 marker 质量散射，并在归一化前保留同一份 P2G face weight 供动能度量。MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。三轴 face splat 直接写入固定 SoA，不为每个 marker/axis 创建 callback；上一 logical step 末已完整发布且 `gridDirty == false` 的派生网格可供下一步首个 substep 直接使用，particle advection 与任何 carrier edit 都会重新置 dirty，后续 substep 不能跳过重建。
 - G2P 不使用固定 FLIP/PIC 比例。对全体 marker 写成 `v(alpha) = v_pic + alpha * (v_old - v_p2g)`，解析选择 `[0,1]` 内不超过 `max(E_pic, E_projected_grid)` 的最大 `alpha`；纯 FLIP 能量可行时取 `1`，否则退至能量可行边界。此约束作用于传递算子的全局动能守恒；连续液体的 Newtonian 黏性应力由独立的 `LiquidViscosityStage` 推进。
 - reseed 以标准 `2×2×2` marker quadrature 的单 marker 体积决定逐格目标数；split 保持体积、质量、动量和质心，merge 还要求两个 raw float 体积之和可由一个 float 精确表示，否则保留 residual marker 并报告 conservation refusal；不跨 material 或 phase。GPU 的相同判定必须以禁止代数重排的精确求值执行。
+- 生成、碰撞和 reseed 共用 `ConservativeMarkerSampling` 的外壳接触留距，取标准积分点间距的一半，即 `h/4`，保留靠墙的四分之一格积分点。整格固体接触另加同一位置舍入余量；切割微单元继续执行扫掠点碰撞。GPU probe 从共享常量生成对应 shader 定义。
 
 ### 内存布局
 

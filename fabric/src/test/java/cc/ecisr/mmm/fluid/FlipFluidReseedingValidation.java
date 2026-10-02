@@ -298,8 +298,8 @@ public final class FlipFluidReseedingValidation {
 				"long-run dam-break changed the exact float ledger: " + maximumLedgerError);
 		check(domain.particleCount() <= initialParticleCount,
 				"dam-break exact residual markers exceeded the fixture's initial marker population");
-		check(conservationSkipped > 0,
-				"dam-break did not expose any exact-consolidation refusal despite residual markers");
+		check(distribution.maximumMarkers <= ConservativeMarkerSampling.NOMINAL_MARKERS_PER_FULL_CELL || conservationSkipped > 0,
+				"overpopulated dam-break cells lack an exact-consolidation refusal");
 		check(distribution.minimumQualifyingMarkers >= ConservativeMarkerSampling.targetMarkers(0.50F),
 				"dam-break left a half-full marker cell under-sampled");
 		check(distribution.occupiedCells >= 216,
