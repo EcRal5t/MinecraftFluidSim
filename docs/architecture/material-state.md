@@ -26,6 +26,7 @@
 
 - 每个 marker 独立保存体积、质量和稳定材料身份。
 - 区域总量与逐材料体积/质量账本必须由 marker 精确和闭合。
+- 全域液体体积观察与材料 handoff 按 binary32 指数分桶精确汇总原始体积，在 binary64 接口处统一舍入一次，保持大小不同的载体与 ordinal 排列变化下的总量一致。
 - `FluidMaterialRegistry` 是运行时材料定义入口；持久化和容器使用稳定 ID，不保存运行时 handle。
 - 当前机械定义包含 stable ID、参考密度、miscibility group、液气表面张力和接触角；液液张力由 registry 的 phase 无序对表给出。
 - 显示颜色来自独立只读 palette。

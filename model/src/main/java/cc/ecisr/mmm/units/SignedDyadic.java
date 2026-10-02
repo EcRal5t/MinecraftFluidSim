@@ -51,6 +51,28 @@ public record SignedDyadic(BigInteger significand, int exponent) implements Comp
 		return sum(values, values == null ? 0 : values.length);
 	}
 
+	/** Exact binary32 inventory sum using bounded exponent bins. */
+	public static SignedDyadic sum(float[] values, int length) {
+		if (values == null || length < 0 || length > values.length) throw new IllegalArgumentException("Invalid float inventory range");
+		long[] bins = new long[254];
+		int first = bins.length, last = -1;
+		for (int i = 0; i < length; i++) {
+			float value = values[i];
+			if (!Float.isFinite(value)) throw new IllegalArgumentException("Float inventory is not finite");
+			int bits = Float.floatToRawIntBits(value), fraction = bits & 0x7fffff, rawExponent = bits >>> 23 & 0xff;
+			if (rawExponent == 0 && fraction == 0) continue;
+			int bin = rawExponent == 0 ? 0 : rawExponent - 1;
+			long significand = rawExponent == 0 ? fraction : fraction | 0x800000;
+			bins[bin] += bits < 0 ? -significand : significand;
+			first = Math.min(first, bin); last = Math.max(last, bin);
+		}
+		if (last < 0) return ZERO;
+		BigInteger total = BigInteger.ZERO;
+		for (int bin = first; bin <= last; bin++) if (bins[bin] != 0)
+			total = total.add(BigInteger.valueOf(bins[bin]).shiftLeft(bin - first));
+		return new SignedDyadic(total, -149 + first);
+	}
+
 	/**
 	 * Exact finite sum without constructing and normalizing one {@link BigInteger} per value.
 	 * IEEE-754 binary64 has only 2,046 possible dyadic exponents. Each exponent bin is accumulated

@@ -21,7 +21,35 @@ public final class CarrierMutationValidation {
 		stalePlansRejectWithoutStateChange();
 		wholesaleCountBindsRevisionAndBudget();
 		readOnlyCellQueriesFollowCarrierEdits();
+		volumeObservationRoundsTheExactInventoryOnce();
 		System.out.println("Carrier mutation validation passed");
+	}
+
+	private static void volumeObservationRoundsTheExactInventoryOnce() {
+		float[] values = new float[258]; values[0] = 1;
+		java.util.Arrays.fill(values, 1, values.length, Math.scalb(1.0F, -60));
+		var exact = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		for (float value : values) exact = exact.add(cc.ecisr.mmm.units.SignedDyadic.of(value));
+		require(exact.toDouble() == Math.nextUp(1.0), "wide-range volume fixture missed its accumulated small parcels");
+		float[] positions = new float[values.length * 4]; double[] masses = new double[values.length];
+		for (int i = 0; i < values.length; i++) {
+			positions[4 * i] = positions[4 * i + 1] = positions[4 * i + 2] = i == 0 ? 0.125F : 0.625F;
+			positions[4 * i + 3] = values[i]; masses[i] = 1000 * (double) values[i];
+		}
+		FluidDomain domain = emptyMaterialDomain(512);
+		double massLedger = 0; for (double mass : masses) massLedger += mass;
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(4, 4, 4, 0.5F, values.length,
+				exact.toDouble(), massLedger, domain.materialRegistry.materials(),
+				positions, new float[values.length * 3], new byte[64], masses, new int[values.length]));
+		require(domain.totalVolumeExact() == exact.toDouble() && domain.exportMaterialParticleState().totalVolume() == exact.toDouble(),
+				"material observation or handoff dropped small physical parcel volumes");
+		float[] varied = new float[1024]; var oracle = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		for (int i = 0; i < varied.length; i++) {
+			varied[i] = Float.intBitsToFloat((i % 255 << 23) | (i * 15485863 & 0x7fffff) | (i % 3 == 0 ? Integer.MIN_VALUE : 0));
+			oracle = oracle.add(cc.ecisr.mmm.units.SignedDyadic.of(varied[i]));
+		}
+		require(cc.ecisr.mmm.units.SignedDyadic.sum(varied, varied.length).equals(oracle),
+				"binary32 inventory bins missed cancellation, subnormal or extreme finite values");
 	}
 
 	private static void readOnlyCellQueriesFollowCarrierEdits() {

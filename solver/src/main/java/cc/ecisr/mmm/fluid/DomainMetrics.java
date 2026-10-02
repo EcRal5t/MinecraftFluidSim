@@ -19,11 +19,9 @@ final class DomainMetrics {
 		return (float) totalVolumeExact();
 	}
 
-	/** Exact double sum of the float marker-volume truth, in stable marker ordinal order. */
+	/** Exact raw binary32 inventory, rounded once at the binary64 observation boundary. */
 	double totalVolumeExact() {
-		double result = 0.0;
-		for (int i = 0; i < domain.particles.count(); i++) result += domain.particles.volume(i);
-		return result;
+		return SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count()).toDouble();
 	}
 
 	/** Total open cell volume across the domain; global capacity for exact bucket insertion. */

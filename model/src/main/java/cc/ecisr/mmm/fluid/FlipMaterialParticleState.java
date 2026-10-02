@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import java.util.List;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 /**
  * Immutable multi-material CPU handoff. Stable material definitions and exact marker mass are physical state;
@@ -31,7 +32,8 @@ public final class FlipMaterialParticleState {
 				|| particleMass.length != particleCount || materialPaletteIndex.length != particleCount) {
 			throw new IllegalArgumentException("Material marker arrays disagree with particle count");
 		}
-		double volume = 0.0, mass = 0.0;
+		double mass = 0.0;
+		float[] volumes = new float[particleCount];
 		for (int particle = 0; particle < particleCount; particle++) {
 			float amount = positionVolume[particle * 4 + 3];
 			double markerMass = particleMass[particle];
@@ -39,9 +41,10 @@ public final class FlipMaterialParticleState {
 				throw new IllegalArgumentException("Material marker mass must be finite and positive");
 			}
 			registry.material(materialPaletteIndex[particle]);
-			volume += amount;
+			volumes[particle] = amount;
 			mass += markerMass;
 		}
+		double volume = SignedDyadic.sum(volumes, particleCount).toDouble();
 		if (Double.doubleToRawLongBits(volume) != Double.doubleToRawLongBits(volumeLedger)) {
 			throw new IllegalArgumentException("Material marker volume ledger mismatch");
 		}
