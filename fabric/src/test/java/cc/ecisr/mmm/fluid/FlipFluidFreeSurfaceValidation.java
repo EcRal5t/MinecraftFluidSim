@@ -9,6 +9,8 @@ public final class FlipFluidFreeSurfaceValidation {
 		planeVolumeInversionIsAccurate();
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pressurePhaseUsesConservativeFootprintVolume();
+		closedComponentsUseExactLiquidCapacity();
+		partialWallsKeepComponentFootprintsSeparate();
 		divergenceConformingAdvectionMatchesMacDivergence();
 		closedWallProfilesRetainZeroNormalVelocity();
 		energyStableFlipTransferUsesTheLargestAdmissibleIncrement();
@@ -205,6 +207,73 @@ public final class FlipFluidFreeSurfaceValidation {
 		pressure.rebuild(solid, reconstructed, cutCells, null, fluid);
 		check(fluid[bulk] && !fluid[fringe],
 				"a wall-adjacent subcentre film was promoted into a cell-centred pressure unknown");
+	}
+
+	private static void closedComponentsUseExactLiquidCapacity() {
+		var domain = new FluidDomain(4, 4, 2, FluidSolverConfig.prototypeDefaults(), 512);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) {
+			domain.setSolid(2, y, z, true);
+			for (int x = 0; x < 2; x++) domain.setVolume(x, y, z, 1);
+			domain.setVolume(3, y, z, 0.25F);
+		}
+		// The volume rule is exact even when the moving point quadrature is badly conditioned.
+		for (int p = 0; p < domain.particleCount(); p++) if (domain.particles.positionX(p) < 2) {
+			domain.particles.setPositionX(p, 0.875F);
+			domain.particles.setPositionY(p, 0.875F);
+			domain.particles.setPositionZ(p, 0.375F);
+		}
+		domain.gridDirty = true; domain.ensureGrid();
+		double left = 0, right = 0;
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
+			int c = domain.cellIndex(x, y, z);
+			if (x < 2) {
+				check(domain.projection.pressureFluid[c] && domain.projection.pressureVolume[c] == 1,
+						"filled closed component acquired an internal free surface");
+				left += domain.projection.pressureVolume[c];
+			} else if (x == 3) right += domain.projection.pressureVolume[c];
+		}
+		check(left == 16 && Math.abs(right - 2) < 1e-12, "pressure reconstruction transferred volume across a solid component");
+		check(!domain.projection.pressureFluid[domain.cellIndex(3, 3, 1)], "unfilled neighbour component was classified full");
+
+		// A sub-double-ULP deficit must survive the fast reduction screen.
+		var full = new FluidDomain(4, 4, 2, FluidSolverConfig.prototypeDefaults(), 512);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) full.setVolume(x, y, z, 1);
+		var state = full.exportParticleState(); int count = state.particleCount() + 1;
+		float[] positions = java.util.Arrays.copyOf(state.copyPositionVolume(), count * 4);
+		for (int p = 0; p < count; p++) { positions[4 * p] = 0.375F; positions[4 * p + 1] = 0.375F; positions[4 * p + 2] = 0.375F; }
+		positions[3] = Math.nextDown(positions[3]);
+		positions[4 * (count - 1) + 3] = Math.nextDown(Math.ulp(0.125F) / 2);
+		full.restoreParticleState(new FlipParticleState(4, 4, 2, full.config.cellSize(), count, 32, positions, new float[count * 3], new byte[32]));
+		full.ensureGrid();
+		check(!full.projection.pressureFluid[full.cellIndex(3, 3, 1)], "rounded volume equality erased a real capacity deficit");
+	}
+
+	private static void partialWallsKeepComponentFootprintsSeparate() {
+		var domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults(), 128);
+		float[] positions = new float[28 * 4]; byte[] masks = new byte[8]; int ordinal = 0;
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) {
+			masks[domain.cellIndex(0, y, z)] = (byte) 0x88;
+			masks[domain.cellIndex(1, y, z)] = (byte) 0x11;
+			for (int micro = 0; micro < 8; micro++) if ((0x88 & 1 << micro) == 0) {
+				positions[ordinal++] = 0.25F + 0.5F * (micro & 1);
+				positions[ordinal++] = y + 0.25F + 0.5F * (micro >> 1 & 1);
+				positions[ordinal++] = z + 0.25F + 0.5F * (micro >> 2 & 1);
+				positions[ordinal++] = 0.125F;
+			}
+			positions[ordinal++] = 1.75F; positions[ordinal++] = y + 0.25F;
+			positions[ordinal++] = z + 0.25F; positions[ordinal++] = 0.125F;
+		}
+		// Move an admissible point next to the completely closed shared face.
+		positions[4] = 0.98F;
+		domain.restoreParticleState(new FlipParticleState(2, 2, 2, 1, 28, 3.5F, positions, new float[28 * 3], masks));
+		domain.ensureGrid(); double left = 0, right = 0;
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) {
+			int a = domain.cellIndex(0, y, z), b = domain.cellIndex(1, y, z);
+			check(domain.projection.pressureFluid[a] && domain.projection.pressureVolume[a] == 0.75,
+					"filled partial-cell component lost its exact capacity");
+			left += domain.projection.pressureVolume[a]; right += domain.projection.pressureVolume[b];
+		}
+		check(left == 3 && Math.abs(right - 0.5) < 1e-12, "pressure footprint crossed a closed partial face");
 	}
 
 	private static void divergenceConformingAdvectionMatchesMacDivergence() {

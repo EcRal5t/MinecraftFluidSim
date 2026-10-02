@@ -94,7 +94,7 @@ CPU 在私有对象上顺序执行计算，任一阶段失败就丢弃整份候�
 - `volume[]` 是 PIC 平滑、展示和既有表面几何的派生场，不参与库存或 pressure phase 结算；pressure 使用独立的守恒 marker footprint。
 - P2G/G2P 使用共享的 valid face；均匀密度时 face 分子/分母按 marker 体积散射，变密度时按 marker 质量散射，并在归一化前保留同一份 P2G face weight 供动能度量。MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。三轴 face splat 直接写入固定 SoA，不为每个 marker/axis 创建 callback；上一 logical step 末已完整发布且 `gridDirty == false` 的派生网格可供下一步首个 substep 直接使用，particle advection 与任何 carrier edit 都会重新置 dirty，后续 substep 不能跳过重建。
 - 满液体压力空间要求每个非固体单元均属于 liquid pressure phase。该空间的 G2P 先以 marker 质量内积将已有速度投影到 MAC 插值空间，丢弃该采样空间无法解析的分量，再写成 `v(alpha) = v_pic + alpha * (v_resolved - v_p2g)`。能量预算为 `E_resolved + min(E_predicted_grid, E_projected_grid) - E_p2g_grid`，保留可解析流动的 P2G 方差，使光滑流动的衰减由 Newtonian 黏性应力控制。含自由面的离散沿用原 marker FLIP 增量，并采用预测与投影网格动能的较小值作为预算；其额外数值耗散单列诊断。两者以 PIC 动能作为可行下限，解析选择 `[0,1]` 内满足预算的最大 `alpha`。质量正交投影使用矩阵无关 PCG 求解 `B^T M B q = B^T M v`，返回 `Bq`；残差精度对应 binary32 插值精度。
-- reseed 以标准 `2×2×2` marker quadrature 的单 marker 体积决定逐格目标数；split 保持体积、质量、动量和质心。merge 先选择分散的代表点，再优先匹配距离最近、体积之和可精确表示的同 material、phase 和可合并组成；可行对耗尽时保留 residual marker 并报告拒绝原因。raw float 体积的双向减法同时检查细小尾数。GPU 的相同判定须使用精确求值。
+- reseed 以标准 `2×2×2` marker quadrature 的单 marker 体积决定逐格目标数；split 保持体积、质量、动量和质心。merge 按相同 material、phase、密度、温度、指示剂和逐 species 浓度分组，先选择分散的代表点，再构造保持质心与完整空间协方差的正权重积分规则。体积之和须可精确表示；raw float 体积的双向减法同时检查细小尾数。可行方案耗尽时保留原积分点并报告拒绝原因。GPU 的相同判定须使用精确求值。
 - 生成使用标准四分之一格积分点，reseed 的对称拆分保持质心与可放置留距。运动中的 marker 按积分点处理，外壳与整格固体的接触余量取域尺度的一个 float 位置 ULP；切割微单元执行扫掠点碰撞。法向接触保留切向速度。
 
 空气外推以实际 pressure phase 面与真实 carrier 面的并集播种，保留已经投影的液体面。满液体压力空间的闭合固体面是已知零法向速度，参与 G2P 插值的完整权重；自由面沿用开放 valid face 的归一化插值，该传递近似与网格能量预算共同验收。P2G 与 G2P 在域外壳附近使用相同的截断坐标。
@@ -105,11 +105,15 @@ CPU 在私有对象上顺序执行计算，任一阶段失败就丢弃整份候�
 
 ### 空间积分误差与分布诊断
 
-总库存守恒、压力体积估计和粒子空间分布分别校验。压力体积由移动积分点和固定紧支撑核汇总；标准四分之一格积分点给出满格初态，经过剪切和旋转变形后，该固定积分规则会产生局部过量与不足。`pressureFluid` 按重建 PLIC 是否包含格中心分类；重建体积分数取容量归一值并限制在 `[0,1]`。局部过量在分类中饱和，局部不足可能形成错误的空气分类。
+总库存守恒、压力体积估计和粒子空间分布分别校验。压力体积由移动积分点和固定紧支撑核汇总；标准四分之一格积分点给出满格初态，经过剪切和旋转变形后，该固定积分规则会产生局部过量与不足。散射限制在积分点所在的开放连通分量内，闭合的切割面阻断跨分量体积贡献。
 
-当前逐格重播种保持体积、材料质量、动量、质心和已绑定的 species/内能。质心合并会减少空间二阶矩：合并体积 `V_a,V_b` 的两个积分点，其矩损失为 `V_a*V_b/(V_a+V_b)*|x_a-x_b|²`。逐格目标数检查保护采样数量，空间积分精度还需要单独测量。
+[ClosedLiquidVolumeConstraint](../../solver/src/main/java/cc/ecisr/mmm/fluid/ClosedLiquidVolumeConstraint.java) 从 cut-cell 开放面建立封闭连通分量，几何掩码变化时刷新索引。若分量内液体的精确体积等于可用容量，不可压液体充满该分量，逐格压力体积直接采用实际开放容量；颗粒占据从容量中扣除。相等判定对 raw float 按指数累加整数尾数，保留小于 double 求和分辨率的真实缺口。该派生约束保持载体库存与位置原样。含真实空气体积的分量继续使用积分点的压力核。`pressureFluid` 按重建 PLIC 是否包含格中心分类；重建体积分数取容量归一值并限制在 `[0,1]`。自由面局部过量在分类中饱和，局部不足仍可能形成采样误差。
 
-[MarkerDistributionExperiment](../../fabric/src/test/java/cc/ecisr/mmm/fluid/MarkerDistributionExperiment.java) 分别测量固壁法向轮廓、固定速度场的正反向平流、解析保面积映射、单次重播种的二阶矩和溃坝长场景。报告 raw cell volume、容量限制前的 pressure footprint、局部过量积分、低于中心分类条件的格数和体积加权位置矩。解析映射对照分别细化网格和粒子积分点；其测量帮助区分时间积分误差与空间采样误差。现有长测守护整体库存、占据格数和逐格粒子数，长期变形后的局部积分精度仍按[产品路线](../roadmap/product-roadmap.md#长期粒子分布与压力几何)推进。
+[MomentPreservingMergePlan](../../solver/src/main/java/cc/ecisr/mmm/fluid/MomentPreservingMergePlan.java) 在提交前预检整组替换。[QuadratureMomentFit](../../solver/src/main/java/cc/ecisr/mmm/fluid/QuadratureMomentFit.java) 以对称协方差映射恢复体积加权质心和六项二阶矩，并按原速度的最小二乘线性场更新新积分位置上的速度。空间秩为 `r` 的组至少保留 `r+1` 个正权重点；秩损失、越格、固体碰撞或超出速度舍入范围的动能增长均拒绝整组替换。逐材料质量、species 与内能沿原库存合并规则提交，均匀密度组同时保持质量加权矩。不可解析速度残差的耗散计入既有 reseed 机械诊断，位置与速度的误差受 binary32 写入精度限制。同温、同密度、同浓度分组保留已有局部物性场，必要时保留多于目标数的积分点。
+
+对称拆分继续按可放置区间增加积分点，其空间二阶矩会改变。逐格数量维护与合并矩约束守护不同不变量；连续变形、拆分和自由面压力核的积分精度需要单独测量。
+
+[MarkerDistributionExperiment](../../fabric/src/test/java/cc/ecisr/mmm/fluid/MarkerDistributionExperiment.java) 分别测量固壁法向轮廓、固定速度场的正反向平流、解析保面积映射、单次重播种的二阶矩和溃坝长场景。报告 raw cell volume、容量限制前的 pressure footprint、局部过量积分、低于中心分类条件的格数和体积加权位置矩，并对照封闭满液体约束后的压力体积。解析映射分别细化网格和粒子积分点，帮助区分时间积分误差与空间采样误差。长期自由面局部积分精度仍按[产品路线](../roadmap/product-roadmap.md#长期粒子分布与压力几何)推进。
 
 ### 内存布局
 

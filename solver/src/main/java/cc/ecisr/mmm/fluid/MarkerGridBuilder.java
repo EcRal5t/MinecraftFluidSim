@@ -13,6 +13,7 @@ final class MarkerGridBuilder {
 	private MarkerGridBuilder() { }
 
 	static void build(FluidDomain domain) {
+		domain.closedLiquidVolume.prepare();
 		domain.carrierPropertiesWorkspace.invalidate();
 		MarkerGridIndex grid = domain.markerGrid;
 		Arrays.fill(grid.markerCount, 0);

@@ -497,6 +497,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		double h = config.cellSize();
 		double gridX = px / h, gridY = py / h, gridZ = pz / h;
 		int centerX = (int) Math.floor(gridX), centerY = (int) Math.floor(gridY), centerZ = (int) Math.floor(gridZ);
+		int component = closedLiquidVolume.component(particleCellIndex(px, py, pz));
 		int neighborX = gridX - centerX < 0.5 ? centerX - 1 : centerX + 1;
 		int neighborY = gridY - centerY < 0.5 ? centerY - 1 : centerY + 1;
 		int neighborZ = gridZ - centerZ < 0.5 ? centerZ - 1 : centerZ + 1;
@@ -520,7 +521,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 					double weightX = ox == 0 ? centerWeightX : neighborWeightX;
 					if (x < 0 || x >= sizeX || !(weightX > 0.0)) continue;
 					int cell = cellIndex(x, y, z);
-					if (geometry.solid[cell]) continue;
+					if (geometry.solid[cell] || closedLiquidVolume.component(cell) != component) continue;
 					available += weightX * weightY * weightZ;
 				}
 			}
@@ -542,7 +543,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 					double weightX = ox == 0 ? centerWeightX : neighborWeightX;
 					if (x < 0 || x >= sizeX || !(weightX > 0.0)) continue;
 					int cell = cellIndex(x, y, z);
-					if (geometry.solid[cell]) continue;
+					if (geometry.solid[cell] || closedLiquidVolume.component(cell) != component) continue;
 					projection.pressureVolume[cell] += weightX * weightY * weightZ * scale;
 				}
 			}

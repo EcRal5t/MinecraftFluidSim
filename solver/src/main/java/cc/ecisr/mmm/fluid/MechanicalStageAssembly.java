@@ -180,6 +180,9 @@ final class MechanicalStageAssembly {
 			@Override public boolean hasAnySurfaceTension() { return domain.hasAnySurfaceTension(); }
 			@Override public boolean hasAnyLiquidPairTension() { return domain.hasAnyLiquidPairTension(); }
 			@Override public void buildMarkerGrid() { MarkerGridBuilder.build(domain); }
+			@Override public void constrainClosedLiquidVolume() {
+				domain.closedLiquidVolume.apply(domain.projection.pressureVolume, domain.particles, domain.pressureGranularCoupling);
+			}
 			@Override public void normalize(float[] values, float[] weights) { domain.normalize(values, weights); }
 			@Override public GranularCouplingFields granularCoupling() { return domain.granularCoupling; }
 			@Override public boolean hasGranularInventory() { return domain.hasGranularInventory(); }

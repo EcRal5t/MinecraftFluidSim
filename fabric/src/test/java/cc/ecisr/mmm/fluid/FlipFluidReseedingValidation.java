@@ -11,6 +11,8 @@ public final class FlipFluidReseedingValidation {
 		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		underpopulatedCellSplitsConservatively();
 		overpopulatedCellMergesConservatively();
+		mergePreservesSpatialCovarianceAndRejectsRankLoss();
+		mergeRetainsAffineVelocityWithoutEnergyGain();
 		nonBinaryVolumesRefuseInexactConsolidation();
 		hardBudgetSkipsWithoutMutation();
 		reseedingIsBitDeterministic();
@@ -61,6 +63,70 @@ public final class FlipFluidReseedingValidation {
 				"overpopulated cell did not merge to its volume-derived quadrature count: " + result);
 		checkLedger(before, after, 2.0E-6, "merge");
 		check(Math.abs(result.ledgerError()) < 1.0E-12, "binary-fraction merge changed the exact float ledger");
+	}
+
+	private static void mergePreservesSpatialCovarianceAndRejectsRankLoss() {
+		Fixture fixture = new Fixture(64, 16);
+		for (int p = 0; p < fixture.count; p++) {
+			float a = 0.25F * (p & 3) - 0.375F, b = 0.5F * (p >> 2 & 1) - 0.25F, c = 0.5F * (p >> 3 & 1) - 0.25F;
+			fixture.x[p] = 1.5F + 0.6F * a + 0.2F * b;
+			fixture.y[p] = 1.5F + 0.2F * a + 0.7F * b;
+			fixture.z[p] = 1.5F + 0.15F * a + 0.2F * b + 0.5F * c;
+			fixture.volume[p] = 0.0625F;
+		}
+		double[] before = spatialMoments(fixture, fixture.count);
+		var result = fixture.reseed(64);
+		check(result.merged() == 8, "positive-weight covariance fit did not consolidate the full-rank rule");
+		double[] after = spatialMoments(fixture, result.particleCount());
+		for (int m = 0; m < before.length; m++) check(Math.abs(after[m] - before[m]) < 2e-7,
+				"quadrature replacement changed spatial moment " + m + ": " + before[m] + " -> " + after[m]);
+		for (int p = 0; p < result.particleCount(); p++) check(fixture.volume[p] > 0
+				&& fixture.x[p] >= 1 && fixture.x[p] < 2 && fixture.y[p] >= 1 && fixture.y[p] < 2
+				&& fixture.z[p] >= 1 && fixture.z[p] < 2, "moment fit left the positive cell-local quadrature space");
+		Fixture line = new Fixture(8, 2);
+		line.x[0] = 1.25F; line.x[1] = 1.75F;
+		for (int p = 0; p < 2; p++) { line.y[p] = line.z[p] = 1.5F; line.volume[p] = 0.0625F; }
+		var refused = line.reseed(8);
+		check(refused.merged() == 0 && refused.particleCount() == 2 && refused.geometrySkipped() > 0,
+				"rank-losing replacement collapsed a finite spatial variance");
+		check(line.x[0] == 1.25F && line.x[1] == 1.75F && line.volume[0] == 0.0625F && line.volume[1] == 0.0625F,
+				"rank refusal changed the original quadrature");
+	}
+
+	private static void mergeRetainsAffineVelocityWithoutEnergyGain() {
+		Fixture fixture = new Fixture(64, 16); double beforeEnergy = 0;
+		for (int p = 0; p < fixture.count; p++) {
+			fixture.x[p] = 1.125F + 0.25F * (p & 3);
+			fixture.y[p] = 1.25F + 0.5F * (p >> 2 & 1);
+			fixture.z[p] = 1.25F + 0.5F * (p >> 3 & 1);
+			fixture.volume[p] = 0.0625F; fixture.mass[p] = 62.5;
+			fixture.vx[p] = 0.4F * (fixture.x[p] - 1.5F) - 0.2F * (fixture.y[p] - 1.5F);
+			fixture.vy[p] = 0.3F * (fixture.y[p] - 1.5F) + 0.1F * (fixture.z[p] - 1.5F);
+			fixture.vz[p] = -0.1F * (fixture.x[p] - 1.5F);
+			beforeEnergy += fixture.volume[p] * (fixture.vx[p] * fixture.vx[p] + fixture.vy[p] * fixture.vy[p] + fixture.vz[p] * fixture.vz[p]);
+		}
+		Ledger before = fixture.ledger(); var result = fixture.reseed(64); double afterEnergy = 0;
+		check(result.merged() > 0, "affine quadrature fit refused its resolvable velocity field");
+		for (int p = 0; p < result.particleCount(); p++) {
+			check(Math.abs(fixture.vx[p] - (0.4F * (fixture.x[p] - 1.5F) - 0.2F * (fixture.y[p] - 1.5F))) < 1e-7
+					&& Math.abs(fixture.vy[p] - (0.3F * (fixture.y[p] - 1.5F) + 0.1F * (fixture.z[p] - 1.5F))) < 1e-7
+					&& Math.abs(fixture.vz[p] + 0.1F * (fixture.x[p] - 1.5F)) < 1e-7, "resampling lost its affine velocity field");
+			afterEnergy += fixture.volume[p] * (fixture.vx[p] * fixture.vx[p] + fixture.vy[p] * fixture.vy[p] + fixture.vz[p] * fixture.vz[p]);
+		}
+		check(Math.abs(afterEnergy / beforeEnergy - 1) < 8 * Math.ulp(1.0F), "affine resampling changed kinetic energy beyond float roundoff");
+		checkLedger(before, fixture.ledger(result.particleCount()), 2e-7, "affine merge");
+	}
+
+	private static double[] spatialMoments(Fixture fixture, int count) {
+		double[] result = new double[10];
+		for (int p = 0; p < count; p++) {
+			double[] coordinate = {fixture.x[p] - 1.5, fixture.y[p] - 1.5, fixture.z[p] - 1.5};
+			double w = fixture.volume[p]; result[0] += w;
+			for (int a = 0; a < 3; a++) result[1 + a] += w * coordinate[a];
+			int index = 4;
+			for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++) result[index++] += w * coordinate[a] * coordinate[b];
+		}
+		return result;
 	}
 
 	private static void hardBudgetSkipsWithoutMutation() {
@@ -302,13 +368,13 @@ public final class FlipFluidReseedingValidation {
 		check(Double.doubleToRawLongBits(domain.totalVolumeExact()) == Double.doubleToRawLongBits(exactVolume),
 				"long-run dam-break changed exact marker volume");
 		check(budgetSkipped == 0, "long-run dam-break reseeding exhausted its hard marker budget");
-		check(geometrySkipped == 0, "long-run dam-break could not place a conservative split");
 		check(maximumLedgerError == 0.0,
 				"long-run dam-break changed the exact float ledger: " + maximumLedgerError);
 		check(domain.particleCount() <= initialParticleCount,
 				"dam-break exact residual markers exceeded the fixture's initial marker population");
-		check(distribution.maximumMarkers <= ConservativeMarkerSampling.NOMINAL_MARKERS_PER_FULL_CELL || conservationSkipped > 0,
-				"overpopulated dam-break cells lack an exact-consolidation refusal");
+		check(distribution.maximumMarkers <= ConservativeMarkerSampling.NOMINAL_MARKERS_PER_FULL_CELL
+				|| conservationSkipped > 0 || geometrySkipped > 0,
+				"overpopulated dam-break cells lack a conservation or spatial-quadrature refusal");
 		check(distribution.minimumQualifyingMarkers >= ConservativeMarkerSampling.targetMarkers(0.50F),
 				"dam-break left a half-full marker cell under-sampled");
 		check(distribution.occupiedCells >= 216,

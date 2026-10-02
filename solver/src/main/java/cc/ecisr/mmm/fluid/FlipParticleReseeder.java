@@ -161,30 +161,27 @@ final class FlipParticleReseeder {
 			Arrays.fill(representative, 0, localCount, false);
 			selectDistributedRepresentatives(particleX, particleY, particleZ, localCount, target);
 			ensureMaterialRepresentatives(particleMaterialHandle, particlePhaseLabel, chemicalParcels, localCount);
+			MomentPreservingMergePlan plan = new MomentPreservingMergePlan(localParticles, representative, localCount,
+					particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
+					particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
+					chemicalParcels, thermal, cellSize, positionValidator);
+			geometrySkipped += plan.geometrySkipped;
+			conservationSkipped += plan.conservationSkipped;
 			for (int local = 0; local < localCount; local++) {
-				if (representative[local]) continue;
-				int source = localParticles[local];
-				int targetLocal = nearestRepresentative(
-						particleX, particleY, particleZ, particleMaterialHandle, particlePhaseLabel,
-						chemicalParcels, particleVolume, source, localCount
-				);
-				if (targetLocal < 0) {
-					geometrySkipped++;
-					continue;
-				}
-				int targetParticle = localParticles[targetLocal];
-				MergeOutcome outcome = mergeParticleInto(
-						targetParticle, source, particleX, particleY, particleZ,
-						velocityX, velocityY, velocityZ, particleVolume, particleMass,
-						chemicalParcels, thermal, massWeightedDynamics, positionValidator
-				);
-				if (outcome != MergeOutcome.MERGED) {
-					if (outcome == MergeOutcome.CONSERVATION_BLOCKED) conservationSkipped++;
-					else geometrySkipped++;
-					continue;
-				}
+				if (plan.targets[local] < 0) continue;
+				int source = localParticles[local], targetParticle = localParticles[plan.targets[local]];
+				mergeInventories(targetParticle, source, particleVolume, particleMass, chemicalParcels, thermal);
 				removed[source] = true;
 				merged++;
+			}
+			for (int local = 0; local < localCount; local++) if (!removed[localParticles[local]]) {
+				int particle = localParticles[local];
+				particleX[particle] = plan.positions[0][local];
+				particleY[particle] = plan.positions[1][local];
+				particleZ[particle] = plan.positions[2][local];
+				velocityX[particle] = plan.velocities[0][local];
+				velocityY[particle] = plan.velocities[1][local];
+				velocityZ[particle] = plan.velocities[2][local];
 			}
 		}
 		return new MergeResult(merged, geometrySkipped, conservationSkipped);
@@ -239,73 +236,22 @@ final class FlipParticleReseeder {
 		}
 	}
 
-	private int nearestRepresentative(
-			float[] particleX, float[] particleY, float[] particleZ,
-			int[] particleMaterialHandle, int[] particlePhaseLabel,
-			ChemicalParcelStore chemicalParcels,
-			float[] particleVolume,
-			int particle, int count
-	) {
-		int best = -1;
-		int fallback = -1;
-		float bestDistance = Float.POSITIVE_INFINITY;
-		float fallbackDistance = Float.POSITIVE_INFINITY;
-		for (int local = 0; local < count; local++) {
-			if (!representative[local]) continue;
-			int representativeParticle = localParticles[local];
-			if (particleMaterialHandle[representativeParticle] != particleMaterialHandle[particle]
-					|| particlePhaseLabel[representativeParticle] != particlePhaseLabel[particle]) continue;
-			if (chemicalParcels != null && !chemicalParcels.canMerge(representativeParticle, particle)) continue;
-			float distance = distanceSquared(particleX, particleY, particleZ, particle, representativeParticle);
-			if (distance < fallbackDistance) { fallbackDistance = distance; fallback = local; }
-			double first = particleVolume[particle], second = particleVolume[representativeParticle];
-			if (!exactlyMergeable(first, second, first + second)) continue;
-			if (distance < bestDistance) {
-				bestDistance = distance;
-				best = local;
-			}
-		}
-		return best >= 0 ? best : fallback;
-	}
-
-	private static MergeOutcome mergeParticleInto(
+	private static void mergeInventories(
 			int target,
 			int source,
-			float[] particleX,
-			float[] particleY,
-			float[] particleZ,
-			float[] velocityX,
-			float[] velocityY,
-			float[] velocityZ,
 			float[] particleVolume,
 			double[] particleMass,
 			ChemicalParcelStore chemicalParcels,
-			ThermalAdapter thermal,
-			boolean massWeightedDynamics,
-			PositionValidator positionValidator
+			ThermalAdapter thermal
 	) {
 		double targetVolume = particleVolume[target];
 		double sourceVolume = particleVolume[source];
 		double mergedVolume = targetVolume + sourceVolume;
-		if (!exactlyMergeable(targetVolume, sourceVolume, mergedVolume)) return MergeOutcome.CONSERVATION_BLOCKED;
-		float mergedX = (float) ((particleX[target] * targetVolume + particleX[source] * sourceVolume) / mergedVolume);
-		float mergedY = (float) ((particleY[target] * targetVolume + particleY[source] * sourceVolume) / mergedVolume);
-		float mergedZ = (float) ((particleZ[target] * targetVolume + particleZ[source] * sourceVolume) / mergedVolume);
-		if (!positionValidator.allowed(mergedX, mergedY, mergedZ)) return MergeOutcome.GEOMETRY_BLOCKED;
-		particleX[target] = mergedX;
-		particleY[target] = mergedY;
-		particleZ[target] = mergedZ;
-		double targetWeight = massWeightedDynamics ? particleMass[target] : targetVolume;
-		double sourceWeight = massWeightedDynamics ? particleMass[source] : sourceVolume;
-		double mergedWeight = targetWeight + sourceWeight;
-		velocityX[target] = (float) ((velocityX[target] * targetWeight + velocityX[source] * sourceWeight) / mergedWeight);
-		velocityY[target] = (float) ((velocityY[target] * targetWeight + velocityY[source] * sourceWeight) / mergedWeight);
-		velocityZ[target] = (float) ((velocityZ[target] * targetWeight + velocityZ[source] * sourceWeight) / mergedWeight);
+		if (!exactlyMergeable(targetVolume, sourceVolume, mergedVolume)) throw new IllegalStateException("Preflighted quadrature merge changed its exact volume");
 		particleVolume[target] = (float) mergedVolume;
 		particleMass[target] += particleMass[source];
 		if (chemicalParcels != null) chemicalParcels.merge(target, source, particleMass[target]);
 		if (thermal != null) thermal.merge(target, source);
-		return MergeOutcome.MERGED;
 	}
 
 	private static boolean exactlyMergeable(double first, double second, double sum) {
@@ -568,8 +514,6 @@ final class FlipParticleReseeder {
 	}
 
 	record ThermalSplit(double parentEnergy, double temperatureK) { }
-
-	private enum MergeOutcome { MERGED, GEOMETRY_BLOCKED, CONSERVATION_BLOCKED }
 
 	private record MergeResult(int merged, int geometrySkipped, int conservationSkipped) { }
 

@@ -36,6 +36,7 @@ final class ParticleToGridStage {
 		GranularCouplingFields pressureGranularCoupling();
 		void rebuildPressureBoundaryLineage();
 		void rebuildSurfaceTensionPressure();
+		void constrainClosedLiquidVolume();
 		void markGridClean();
 	}
 
@@ -99,6 +100,7 @@ final class ParticleToGridStage {
 
 	/** Refreshes pressure-derived views against the current solid occupancy and retained marker footprint. */
 	void rebuildPressureGeometry() {
+		access.constrainClosedLiquidVolume();
 		state.pressurePhaseGeometry.rebuild(
 				state.geometry.solid, state.projection.pressureVolume, state.geometry.cutCells,
 				access.pressureGranularCoupling(), state.projection.pressureFluid);

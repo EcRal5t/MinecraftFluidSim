@@ -117,6 +117,7 @@ public final class MarkerDistributionExperiment {
 	}
 
 	private static void measure(FluidDomain domain, String label) {
+		domain.closedLiquidVolume.prepare();
 		double[] volume = new double[domain.cellCount], x = new double[volume.length], y = new double[volume.length], z = new double[volume.length];
 		double[] previousFootprint = domain.projection.pressureVolume.clone();
 		Arrays.fill(domain.projection.pressureVolume, 0);
@@ -144,9 +145,21 @@ public final class MarkerDistributionExperiment {
 			moment += v * (dx * dx + dy * dy + dz * dz);
 		}
 		double total = domain.totalVolumeExact(), h = domain.config.cellSize();
+		domain.closedLiquidVolume.apply(domain.projection.pressureVolume, domain.particles, domain.pressureGranularCoupling);
+		double constrainedMin = Double.POSITIVE_INFINITY, constrainedMax = 0, constrainedTotal = 0;
+		int constrainedSubcentre = 0;
+		for (int c = 0; c < volume.length; c++) {
+			double capacity = domain.geometry.cutCells.openCellVolume(c), liquid = domain.projection.pressureVolume[c];
+			constrainedTotal += liquid;
+			if (capacity <= 0) continue;
+			constrainedMin = Math.min(constrainedMin, liquid / capacity); constrainedMax = Math.max(constrainedMax, liquid / capacity);
+			if (liquid <= 0.5 * capacity) constrainedSubcentre++;
+		}
 		System.arraycopy(previousFootprint, 0, domain.projection.pressureVolume, 0, previousFootprint.length);
 		System.out.printf("%s particles=%d occupied=%d maxRaw=%g footprintMin/Max=%g/%g excessRaw=%g%% excessFootprint=%g%% subcentre=%d moment/(Vh2)=%g K=%g J%n",
 				label, domain.particleCount(), occupied, rawMaximum, footprintMinimum, footprintMaximum, 100 * rawExcess / total, 100 * footprintExcess / total, subcentre, moment / (total * h * h), domain.particleKineticEnergyJoules());
+		System.out.printf("  closed-volume geometry min/max=%g/%g subcentre=%d volumeError=%g%n",
+				constrainedMin, constrainedMax, constrainedSubcentre, constrainedTotal - total);
 	}
 
 	private static void reseedMoment() {
