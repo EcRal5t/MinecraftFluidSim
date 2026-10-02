@@ -8,13 +8,14 @@ public final class MarkerDistributionExperiment {
 	private MarkerDistributionExperiment() { }
 
 	public static void main(String[] args) {
-		for (String scenario : args.length == 0 ? new String[] {"wall", "transport", "analytic", "reseed", "dam"} : args) {
+		for (String scenario : args.length == 0 ? new String[] {"wall", "transport", "analytic", "free-analytic", "reseed", "dam"} : args) {
 			switch (scenario) {
 				case "wall" -> wallNormalProfile();
 				case "transport" -> { reversibleTransport(0.05F); reversibleTransport(0.025F); }
 				case "dam" -> damDistribution();
 				case "reseed" -> reseedMoment();
 				case "analytic" -> { analyticDeformation(12, 2); analyticDeformation(24, 2); analyticDeformation(12, 4); }
+				case "free-analytic" -> freeSurfaceConvergence();
 				default -> throw new IllegalArgumentException("Unknown marker experiment: " + scenario);
 			}
 		}
@@ -89,8 +90,8 @@ public final class MarkerDistributionExperiment {
 		// r'=r, theta'=theta+omega(r)*t has determinant one analytically. Compact
 		// support leaves every outer wall fixed; no velocity interpolation or integration runs.
 		for (int p = 0; p < count; p++) {
-			double x = positions[4 * p] - 3, y = positions[4 * p + 1] - 3, r2 = x * x + y * y;
-			double angle = r2 < 6.25 ? 6 * Math.pow(1 - r2 / 6.25, 2) : 0;
+			double x = positions[4 * p] - 3, y = positions[4 * p + 1] - 3;
+			double angle = deformationAngle(x, y);
 			domain.particles.setPositionX(p, (float) (3 + x * Math.cos(angle) - y * Math.sin(angle)));
 			domain.particles.setPositionY(p, (float) (3 + x * Math.sin(angle) + y * Math.cos(angle)));
 		}
@@ -110,6 +111,63 @@ public final class MarkerDistributionExperiment {
 			if (domain.totalVolumeExact() != inventory) throw new AssertionError("Marker experiment changed volume inventory");
 			if (s == 100 || s == 500 || s == 1000 || s == 5000) measure(domain, "dam step=" + s);
 		}
+	}
+
+	private static void freeSurfaceConvergence() {
+		double coarse = freeSurfaceDeformation(12, 2), medium = freeSurfaceDeformation(12, 4);
+		double fine = freeSurfaceDeformation(12, 8), finerGrid = freeSurfaceDeformation(24, 8);
+		if (!(medium < coarse && fine < medium && finerGrid < fine))
+			throw new AssertionError("Free-surface spatial integration did not converge under independent quadrature/grid refinement");
+	}
+
+	/** Cell coverage comes from the inverse analytic map, independently of marker splatting. */
+	private static double freeSurfaceDeformation(int n, int samples) {
+		float h = 6.0F / n;
+		int cells = n * n * 2, count = cells * samples * samples;
+		var domain = new FluidDomain(n, n, 2, config(h, 0, 0.025F), count);
+		float[] positions = new float[count * 4]; int ordinal = 0;
+		for (int z = 0; z < 2; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n / 2; x++)
+			for (int sz = 0; sz < 2; sz++) for (int sy = 0; sy < samples; sy++) for (int sx = 0; sx < samples; sx++) {
+				double dx = (x + (sx + 0.5) / samples) * h - 3, dy = (y + (sy + 0.5) / samples) * h - 3;
+				double angle = deformationAngle(dx, dy);
+				positions[ordinal++] = (float) (3 + dx * Math.cos(angle) - dy * Math.sin(angle));
+				positions[ordinal++] = (float) (3 + dx * Math.sin(angle) + dy * Math.cos(angle));
+				positions[ordinal++] = (z + (sz + 0.5F) / 2) * h;
+				positions[ordinal++] = 1.0F / (2 * samples * samples);
+			}
+		domain.restoreParticleState(new FlipParticleState(n, n, 2, h, count, cells * 0.5F,
+				positions, new float[count * 3], new byte[cells]));
+		domain.closedLiquidVolume.prepare(); Arrays.fill(domain.projection.pressureVolume, 0);
+		for (int p = 0; p < count; p++) domain.splatPressureVolume(positions[4 * p], positions[4 * p + 1], positions[4 * p + 2], positions[4 * p + 3]);
+		double error = 0, maximum = 0, total = 0, referenceDifference = 0; int referenceSamples = 128;
+		for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
+			double reference = inverseMapCoverage(x, y, h, referenceSamples);
+			referenceDifference += 2 * Math.abs(reference - inverseMapCoverage(x, y, h, referenceSamples / 2));
+			for (int z = 0; z < 2; z++) {
+				double reconstructed = domain.projection.pressureVolume[domain.cellIndex(x, y, z)];
+				error += Math.abs(reconstructed - reference); maximum = Math.max(maximum, reconstructed); total += reconstructed;
+			}
+		}
+		if (Math.abs(total - cells * 0.5) > count * Math.ulp(cells * 0.5))
+			throw new AssertionError("Free-surface footprint changed total volume beyond reduction roundoff");
+		System.out.printf("free analytic N=%d samples/xy=%d particles=%d L1/V=%g peak/capacity=%g volumeError=%g reference/xy=%d referenceDelta/V=%g%n",
+				n, samples, count, error / (cells * 0.5), maximum, total - cells * 0.5, referenceSamples, referenceDifference / (cells * 0.5));
+		return error / (cells * 0.5);
+	}
+
+	private static double inverseMapCoverage(int x, int y, float h, int samples) {
+		int inside = 0;
+		for (int sy = 0; sy < samples; sy++) for (int sx = 0; sx < samples; sx++) {
+			double dx = (x + (sx + 0.5) / samples) * h - 3, dy = (y + (sy + 0.5) / samples) * h - 3;
+			double angle = deformationAngle(dx, dy);
+			if (dx * Math.cos(angle) + dy * Math.sin(angle) < 0) inside++;
+		}
+		return (double) inside / (samples * samples);
+	}
+
+	private static double deformationAngle(double x, double y) {
+		double r2 = x * x + y * y;
+		return r2 < 6.25 ? 6 * Math.pow(1 - r2 / 6.25, 2) : 0;
 	}
 
 	private static FluidSolverConfig config(float h, float gravity, float dt) {

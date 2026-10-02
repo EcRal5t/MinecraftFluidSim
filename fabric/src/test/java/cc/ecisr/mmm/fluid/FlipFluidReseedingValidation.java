@@ -10,6 +10,7 @@ public final class FlipFluidReseedingValidation {
 	public static void main(String[] args) {
 		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		underpopulatedCellSplitsConservatively();
+		splitSpatialErrorScalesWithParcelVolume();
 		overpopulatedCellMergesConservatively();
 		mergePreservesSpatialCovarianceAndRejectsRankLoss();
 		mergeRetainsAffineVelocityWithoutEnergyGain();
@@ -63,6 +64,48 @@ public final class FlipFluidReseedingValidation {
 				"overpopulated cell did not merge to its volume-derived quadrature count: " + result);
 		checkLedger(before, after, 2.0E-6, "merge");
 		check(Math.abs(result.ledgerError()) < 1.0E-12, "binary-fraction merge changed the exact float ledger");
+	}
+
+	private static void splitSpatialErrorScalesWithParcelVolume() {
+		for (float volume : new float[] {0.25F, 0.5F, 1.0F}) {
+			Fixture fixture = new Fixture(64, 1);
+			fixture.x[0] = fixture.y[0] = fixture.z[0] = 1.5F;
+			fixture.volume[0] = volume;
+			Ledger before = fixture.ledger(); var result = fixture.reseed(64);
+			checkLedger(before, fixture.ledger(result.particleCount()), 2e-7, "volume-scaled split");
+			double[] moments = spatialMoments(fixture, result.particleCount());
+			double variance = moments[4] + moments[7] + moments[9];
+			// Each equal split adds V*d^2 <= h^2*V^(5/3)/16. Summing
+			// all levels of its binary tree gives this convergent geometric bound.
+			double bound = Math.pow(volume, 5.0 / 3) / (16 * (1 - Math.pow(0.5, 2.0 / 3)));
+			check(variance <= bound + 2e-7, "split quadrature exceeded its volume-derived second-moment bound");
+			if (volume == 0.25F) {
+				double displacement = Math.abs(fixture.x[0] - 1.5);
+				check(Math.abs(displacement - 0.25 * Math.cbrt(volume)) < 1e-7,
+						"two-point split expanded a small parcel to a full-cell quadrature");
+			}
+		}
+		Fixture transition = new Fixture(8, 1);
+		transition.x[0] = 1.625F; transition.y[0] = transition.z[0] = 1.125F; transition.volume[0] = 0.25F;
+		double[] footprintBefore = pressureFootprint(transition, 1), momentsBefore = spatialMoments(transition, 1);
+		var split = transition.reseed(8);
+		double[] footprintAfter = pressureFootprint(transition, split.particleCount()), momentsAfter = spatialMoments(transition, split.particleCount());
+		double footprintError = 0;
+		for (int c = 0; c < footprintBefore.length; c++) footprintError += Math.abs(footprintAfter[c] - footprintBefore[c]);
+		double momentIncrease = 0;
+		for (int m : new int[] {4, 7, 9}) momentIncrease += momentsAfter[m] - momentsBefore[m];
+		check(footprintError > 0 && footprintError <= 24 * momentIncrease / (CELL_SIZE * CELL_SIZE) + 2e-7,
+				"split pressure-kernel error exceeded the full-support curvature bound");
+	}
+
+	private static double[] pressureFootprint(Fixture fixture, int count) {
+		double[] footprint = new double[SIZE * SIZE * SIZE];
+		for (int z = 0; z < SIZE; z++) for (int y = 0; y < SIZE; y++) for (int x = 0; x < SIZE; x++)
+			for (int p = 0; p < count; p++) footprint[x + SIZE * (y + SIZE * z)] += fixture.volume[p]
+					* FluidDomainStepCoordinator.pressureKernelWeight(fixture.x[p] / CELL_SIZE, x)
+					* FluidDomainStepCoordinator.pressureKernelWeight(fixture.y[p] / CELL_SIZE, y)
+					* FluidDomainStepCoordinator.pressureKernelWeight(fixture.z[p] / CELL_SIZE, z);
+		return footprint;
 	}
 
 	private static void mergePreservesSpatialCovarianceAndRejectsRankLoss() {

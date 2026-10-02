@@ -111,9 +111,17 @@ CPU 在私有对象上顺序执行计算，任一阶段失败就丢弃整份候�
 
 [MomentPreservingMergePlan](../../solver/src/main/java/cc/ecisr/mmm/fluid/MomentPreservingMergePlan.java) 在提交前预检整组替换。[QuadratureMomentFit](../../solver/src/main/java/cc/ecisr/mmm/fluid/QuadratureMomentFit.java) 以对称协方差映射恢复体积加权质心和六项二阶矩，并按原速度的最小二乘线性场更新新积分位置上的速度。空间秩为 `r` 的组至少保留 `r+1` 个正权重点；秩损失、越格、固体碰撞或超出速度舍入范围的动能增长均拒绝整组替换。逐材料质量、species 与内能沿原库存合并规则提交，均匀密度组同时保持质量加权矩。不可解析速度残差的耗散计入既有 reseed 机械诊断，位置与速度的误差受 binary32 写入精度限制。同温、同密度、同浓度分组保留已有局部物性场，必要时保留多于目标数的积分点。
 
-对称拆分继续按可放置区间增加积分点，其空间二阶矩会改变。逐格数量维护与合并矩约束守护不同不变量；连续变形、拆分和自由面压力核的积分精度需要单独测量。
+对称拆分用载体体积决定积分尺度。令 `V` 为父载体的 cell-normalized 体积、`h` 为格长，各向同性特征长度为 `h*cbrt(V)`；沿所选轴将体积二等分，对应的子积分点距离父点为四分之一特征长度。位移还受既有可放置区间限制：
 
-[MarkerDistributionExperiment](../../fabric/src/test/java/cc/ecisr/mmm/fluid/MarkerDistributionExperiment.java) 分别测量固壁法向轮廓、固定速度场的正反向平流、解析保面积映射、单次重播种的二阶矩和溃坝长场景。报告 raw cell volume、容量限制前的 pressure footprint、局部过量积分、低于中心分类条件的格数和体积加权位置矩，并对照封闭满液体约束后的压力体积。解析映射分别细化网格和粒子积分点，帮助区分时间积分误差与空间采样误差。长期自由面局部积分精度仍按[产品路线](../roadmap/product-roadmap.md#长期粒子分布与压力几何)推进。
+```text
+d <= h*cbrt(V)/4
+Delta spatial_second_moment = V*d^2 <= h^2*V^(5/3)/16
+sum_binary_split_tree Delta moment <= h^2*V_initial^(5/3) / [16*(1-2^(-2/3))]
+```
+
+这些式子描述正权重积分点的空间二阶矩变化，位置写入另有 float 舍入误差。尺度采用各向同性近似；持续剪切后的载体形状还需要额外的空间解析度。完整开放核支撑中的单次拆分满足 `sum_cells |Delta pressureVolume| <= 24*V*(d/h)^2`，由现行压力核的一维二阶导数上界推导。切割几何的截断与归一化另行测量。逐格数量维护、合并矩约束及拆分误差界分别守护对应不变量；连续变形和自由面压力核的积分精度需要独立校验。
+
+[MarkerDistributionExperiment](../../fabric/src/test/java/cc/ecisr/mmm/fluid/MarkerDistributionExperiment.java) 分别测量固壁法向轮廓、固定速度场的正反向平流、解析保面积映射、单次重播种的二阶矩和溃坝长场景。报告 raw cell volume、容量限制前的 pressure footprint、局部过量积分、低于中心分类条件的格数和体积加权位置矩，并对照封闭满液体约束后的压力体积。自由面解析对照从逆映射独立积分真实覆盖率，用两级参考积分报告基准离散差异；分别细化移动积分点与网格，校验归一化 L1 误差递减。该对照保持封闭满液体约束不触发，帮助区分时间积分误差、压力核的界面平滑与粒子采样误差。长期自由面局部积分精度仍按[产品路线](../roadmap/product-roadmap.md#长期粒子分布与压力几何)推进。
 
 ### 内存布局
 

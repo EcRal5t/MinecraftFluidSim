@@ -61,7 +61,7 @@
 
 自然对流增长率随 `thermal` 选择器常驻校验：两级网格、临界 Ra 两侧、两倍线性振幅，以及体积、材料质量、species、壁面 source/sink、舍入与载体内能闭合。单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[线性对流有效域](../architecture/thermal-state.md#自然对流的线性有效域)。
 
-粒子分布研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。默认输出固壁法向轮廓、正反向平流、解析保面积映射、重播种二阶矩和 5,000 步溃坝的空间误差，并对照封闭满液体约束前后的压力体积；用 `--args="analytic transport"` 可只运行指定对照。`free-surface` 守护分量隔离、精确满液体判定及微小真实缺口，`reseeding` 守护旋转协方差、秩损失拒绝和线性速度场。完整验收条件见[长期粒子分布与压力几何](../roadmap/product-roadmap.md#长期粒子分布与压力几何)。
+粒子分布研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。默认输出固壁法向轮廓、正反向平流、满液体与自由面解析保面积映射、重播种二阶矩和 5,000 步溃坝的空间误差，并对照封闭满液体约束前后的压力体积；用 `--args="analytic transport"` 可只运行指定对照。`--args="free-analytic"` 从逆解析映射独立积分液体覆盖率，报告两级参考积分的差异，并检查积分点及网格细化后 L1 误差递减和整体体积闭合。`free-surface` 守护分量隔离、精确满液体判定及微小真实缺口，`reseeding` 守护旋转协方差、秩损失拒绝、线性速度场和体积推导的拆分空间矩误差界。完整验收条件见[长期粒子分布与压力几何](../roadmap/product-roadmap.md#长期粒子分布与压力几何)。
 
 ### 什么时候追加测试
 

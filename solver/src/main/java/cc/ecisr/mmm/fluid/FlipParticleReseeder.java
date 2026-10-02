@@ -296,10 +296,13 @@ final class FlipParticleReseeder {
 		}
 		float sourceX = particleX[source], sourceY = particleY[source], sourceZ = particleZ[source];
 		float destinationX = sourceX, destinationY = sourceY, destinationZ = sourceZ;
+		float originalVolume = particleVolume[source];
 		if (bestAxis >= 0 && bestRoom > 0.0F) {
-			// Half the available symmetric interval gives the two-point quadrature spacing
-			// without a tuned displacement or a near-wall overshoot.
-			float displacement = bestRoom * 0.5F;
+			// A volume-V cube has edge h*cbrt(V); bisecting it places the two
+			// child centers a quarter-edge from its center. Available room clips
+			// this isotropic quadrature estimate at the existing placement margin.
+			float displacement = Math.min(bestRoom * 0.5F,
+					(float) (0.25 * cellSize * Math.cbrt(originalVolume)));
 			if (bestAxis == 0) {
 				if (positionValidator.allowed(sourceX - displacement, sourceY, sourceZ)
 						&& positionValidator.allowed(sourceX + displacement, sourceY, sourceZ)) {
@@ -320,7 +323,6 @@ final class FlipParticleReseeder {
 				}
 			}
 		}
-		float originalVolume = particleVolume[source];
 		ThermalSplit thermalSplit = thermal == null ? null : thermal.beforeSplit(source);
 		float firstVolume = originalVolume * 0.5F;
 		float secondVolume = originalVolume - firstVolume;
