@@ -17,6 +17,8 @@ final class LogicalStepTailAssembly {
 		GranularTransitionStage transition = new GranularTransitionStage(
 				new GranularTransitionStage.Workspace(domain.config),
 				new GranularTransitionStage.Access() {
+					@Override public long[] beginGeometryTransition() { return GranularLiquidDisplacement.begin(domain); }
+					@Override public void commitGeometryTransition(long[] previous) { GranularLiquidDisplacement.commit(domain, previous); }
 					@Override public GranularDomainState granularState() { return domain.granularState; }
 					@Override public GranularCouplingFields coupling() { return domain.granularCoupling; }
 					@Override public GranularDepositDynamics depositDynamics() { return domain.granularDepositDynamics(); }
@@ -44,6 +46,10 @@ final class LogicalStepTailAssembly {
 		ParticleReseedStage reseed = new ParticleReseedStage(
 				new ParticleReseedStage.Workspace(domain.geometry, domain.particles, domain.particleReseeder),
 				new ParticleReseedStage.Access() {
+					@Override public boolean hasConservativeCellQuadrature() {
+						return CellLiquidVolumeTransport.enabled(domain) && domain.cellLiquidVolumeTransport != null
+								&& domain.cellLiquidVolumeTransport.publishedQuadrature;
+					}
 					@Override public void ensureParticleCapacity(int required) { domain.ensureParticleCapacity(required); }
 					@Override public cc.ecisr.mmm.chemistry.ChemicalParcelStore chemicalParcels() {
 						return domain.chemicalParcels;
@@ -62,6 +68,7 @@ final class LogicalStepTailAssembly {
 					@Override public SignedDyadic exactInternalEnergy() { return domain.exactInternalEnergy(); }
 					@Override public void markGridDirty() { domain.gridDirty = true; }
 					@Override public void rebuildGrid() { domain.rebuildGridFromParticles(); }
+					@Override public void ensureGrid() { domain.ensureGrid(); }
 				});
 		return new Stages(transition, reseed);
 	}

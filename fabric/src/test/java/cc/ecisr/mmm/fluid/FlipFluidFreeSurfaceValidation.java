@@ -7,6 +7,7 @@ public final class FlipFluidFreeSurfaceValidation {
 	public static void main(String[] args) {
 		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		planeVolumeInversionIsAccurate();
+		LiquidVolumeTransportValidation.main(new String[0]);
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pressurePhaseUsesConservativeFootprintVolume();
 		closedComponentsUseExactLiquidCapacity();
@@ -66,9 +67,15 @@ public final class FlipFluidFreeSurfaceValidation {
 			domain.particles.setVelocityY(p, (float) (0.02 * Math.cos(x) * Math.sin(y)));
 		}
 		double initial = domain.particleKineticEnergyJoules();
-		for (int step = 0; step < 40; step++) domain.step();
+		double volumeTransfer = 0;
+		for (int step = 0; step < 40; step++) {
+			var audit = domain.stepWithMechanicalAudit(false, 0).mechanicalAudit();
+			volumeTransfer += audit.volumeTransportTransferJoules();
+		}
 		double ratio = domain.particleKineticEnergyJoules() / initial;
-		check(ratio <= 1 + 64 * Math.ulp(1.0F) && ratio >= 1 - 40 * 16 * Math.ulp(1.0F),
+		double transportBound = 2 * 0.02 * (40 * config.timeStep()) / config.cellSize() * Math.pow(Math.PI * config.cellSize() / 4, 2);
+		check(ratio <= 1 + 64 * Math.ulp(1.0F) && Math.abs(ratio - 1 - volumeTransfer / initial) <= 40 * 16 * Math.ulp(1.0F)
+				&& Math.abs(volumeTransfer / initial) <= transportBound,
 				"unforced resolved motion lost energy beyond float transfer error: " + ratio);
 		domain.ensureGrid();
 		float[] raw = new float[domain.particleCount()], projected = new float[raw.length], residual = new float[raw.length];
@@ -306,6 +313,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		reconstructed += (positive.z - negative.z) / (2.0F * epsilon);
 		check(Math.abs(reconstructed - expected) < 2.0E-4F,
 				"H(div) reconstruction changed MAC divergence: expected=" + expected + ", actual=" + reconstructed);
+
 	}
 
 	private static void closedWallProfilesRetainZeroNormalVelocity() {
@@ -357,6 +365,20 @@ public final class FlipFluidFreeSurfaceValidation {
 	}
 
 	private static void energyStableFlipTransferUsesTheLargestAdmissibleIncrement() {
+		var random = new java.util.Random(0x5a17);
+		float[] field = new float[60], previous = new float[60], pair = new float[2]; boolean[] valid = new boolean[60];
+		for (int sample = 0; sample < 512; sample++) {
+			for (int f = 0; f < field.length; f++) {
+				field[f] = random.nextFloat() * 20 - 10; previous[f] = random.nextFloat() * 20 - 10;
+				valid[f] = random.nextBoolean();
+			}
+			float x = random.nextFloat() * 7 - 1, y = random.nextFloat() * 5 - 1, z = random.nextFloat() * 6 - 1;
+			FluidDomainMechanicalFields.trilinearValidPair(field, previous, valid, 5, 3, 4, x, y, z, pair);
+			check(Float.floatToRawIntBits(pair[0]) == Float.floatToRawIntBits(FluidDomainMechanicalFields.trilinearValid(field, valid, 5, 3, 4, x, y, z))
+					&& Float.floatToRawIntBits(pair[1]) == Float.floatToRawIntBits(FluidDomainMechanicalFields.trilinearValid(previous, valid, 5, 3, 4, x, y, z)),
+					"paired velocity interpolation changed scalar float reduction");
+		}
+
 		double transfer = FlipTransferScheme.maximumEnergyStableTransfer(4.0, -2.0, 3.0, 3.0);
 		check(Math.abs(transfer - 0.5) < 1.0E-12,
 				"energy-stable G2P did not select the largest admissible FLIP increment: " + transfer);
@@ -433,20 +455,26 @@ public final class FlipFluidFreeSurfaceValidation {
 	}
 
 	private static void isolatedDropletReceivesUndilutedGravity() {
+		isolatedDropletReceivesUndilutedGravity(false);
+		isolatedDropletReceivesUndilutedGravity(true);
+	}
+
+	private static void isolatedDropletReceivesUndilutedGravity(boolean withPool) {
 		float timeStep = 1.0F / 20.0F;
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, timeStep,
 				200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F
 		);
 		FluidDomain domain = new FluidDomain(8, 32, 8, config);
+		if (withPool) for (int z = 0; z < 8; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 8; x++) domain.setVolume(x, y, z, 1);
 		domain.setVolume(4, 24, 4, 0.125F);
 		float exactVolume = domain.totalVolume();
-		float initialCenterY = centerOfMassY(domain.exportParticleState());
+		float initialCenterY = dropletCenterAbovePool(domain);
 		int steps = 8;
 		for (int step = 0; step < steps; step++) domain.step();
 
 		float expectedFall = config.gravity() * timeStep * timeStep * steps * (steps + 1) * 0.5F;
-		float actualFall = initialCenterY - centerOfMassY(domain.exportParticleState());
+		float actualFall = initialCenterY - dropletCenterAbovePool(domain);
 		check(Math.abs(actualFall - expectedFall) < 2.0E-5F,
 				"isolated droplet gravity was diluted by undefined air faces: expected fall="
 						+ expectedFall + ", actual=" + actualFall);
@@ -455,6 +483,15 @@ public final class FlipFluidFreeSurfaceValidation {
 						+ domain.maximumParticleSpeed());
 		check(Math.abs(domain.totalVolume() - exactVolume) < 1.0E-7F,
 				"isolated droplet changed the exact marker ledger");
+	}
+
+	private static float dropletCenterAbovePool(FluidDomain domain) {
+		double weighted = 0, volume = 0;
+		for (int p = 0; p < domain.particleCount(); p++) if (domain.particles.positionY(p) > 6 * domain.config.cellSize()) {
+			weighted += domain.particles.positionY(p) * domain.particles.volume(p); volume += domain.particles.volume(p);
+		}
+		check(volume > 0, "isolated droplet disappeared above its pool");
+		return (float) (weighted / volume);
 	}
 
 	private static void longRunHydrostaticSurfaceDoesNotSink() {

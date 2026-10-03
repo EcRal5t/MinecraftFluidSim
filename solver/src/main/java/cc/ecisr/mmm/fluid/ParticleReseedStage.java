@@ -12,6 +12,7 @@ final class ParticleReseedStage {
 	) { }
 
 	interface Access {
+		default boolean hasConservativeCellQuadrature() { return false; }
 		void ensureParticleCapacity(int required);
 		ChemicalParcelStore chemicalParcels();
 		ThermalDomainState thermalState();
@@ -24,6 +25,7 @@ final class ParticleReseedStage {
 		SignedDyadic exactInternalEnergy();
 		void markGridDirty();
 		void rebuildGrid();
+		void ensureGrid();
 	}
 
 	record Outcome(FlipParticleReseeder.Result result, double initialKineticEnergy, double finalKineticEnergy) { }
@@ -38,6 +40,10 @@ final class ParticleReseedStage {
 
 	Outcome step(boolean captureMechanicalAudit) {
 		double initialKinetic = captureMechanicalAudit ? access.particleKineticEnergyJoules() : 0.0;
+		if (access.hasConservativeCellQuadrature()) {
+			access.ensureGrid();
+			return new Outcome(new FlipParticleReseeder.Result(state.particles().count(), 0, 0, 0, 0, 0, 0, 0, 0), initialKinetic, initialKinetic);
+		}
 		access.ensureParticleCapacity(state.reseeder().capacityUpperBound(state.particles().count()));
 		ThermalDomainState thermal = access.thermalState();
 		SignedDyadic thermalBefore = thermal == null ? SignedDyadic.ZERO : access.exactInternalEnergy();

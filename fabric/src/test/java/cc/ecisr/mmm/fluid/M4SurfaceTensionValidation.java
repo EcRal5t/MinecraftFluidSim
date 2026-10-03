@@ -375,12 +375,11 @@ return domain;
 }
 
 private static double averageFluidPressure(FluidDomain domain) {
-byte[] markerMask = domain.copyMarkerMask();
 double sum = 0.0;
 int cells = 0;
 for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 for (int x = 0; x < domain.sizeX(); x++) {
-if (markerMask[(z * domain.sizeY() + y) * domain.sizeX() + x] == 0) continue;
+if (!domain.isFluid(domain.cellIndex(x, y, z))) continue;
 sum += domain.pressure(x, y, z);
 cells++;
 }

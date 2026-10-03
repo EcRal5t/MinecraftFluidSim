@@ -15,6 +15,8 @@ final class ParticleAdvectionStage {
 	) { }
 
 	interface Access {
+		default boolean advectConservativeVolume(float dt) { return false; }
+		default double conservativeCollisionWorkJoules() { return 0; }
 		ChemicalParcelStore chemicalParcels();
 		int[] chemicalPreviousCells();
 		int[] chemicalMovingMarkers();
@@ -24,6 +26,7 @@ final class ParticleAdvectionStage {
 
 	private final Workspace state;
 	private final Access access;
+	private boolean conservativeVolume;
 	private float[] motionX = new float[0];
 	private float[] motionY = new float[0];
 	private float[] motionZ = new float[0];
@@ -42,6 +45,8 @@ final class ParticleAdvectionStage {
 	}
 
 	void advect(float dt) {
+		conservativeVolume = access.advectConservativeVolume(dt);
+		if (conservativeVolume) return;
 		LiquidParticleStore particles = state.particles;
 		ChemicalParcelStore chemicalParcels = access.chemicalParcels();
 		int chemicalMovingCount = 0;
@@ -116,6 +121,9 @@ final class ParticleAdvectionStage {
 		}
 		access.markGridDirty();
 	}
+
+	boolean usedConservativeVolume() { return conservativeVolume; }
+	double conservativeCollisionWorkJoules() { return access.conservativeCollisionWorkJoules(); }
 
 	private boolean supportsDivergenceConformingField(float x, float y, float z) {
 		int cellX = Math.clamp((int) Math.floor(x / state.cellSize), 0, state.sizeX - 1);

@@ -13,6 +13,7 @@ final class MarkerGridBuilder {
 	private MarkerGridBuilder() { }
 
 	static void build(FluidDomain domain) {
+		boolean conservativeVolume = CellLiquidVolumeTransport.enabled(domain);
 		domain.closedLiquidVolume.prepare();
 		domain.carrierPropertiesWorkspace.invalidate();
 		MarkerGridIndex grid = domain.markerGrid;
@@ -43,7 +44,6 @@ final class MarkerGridBuilder {
 			else grid.particleCellNext[previous] = i;
 			grid.cellMarkerTail[particleCell] = i;
 			grid.markerCount[particleCell]++;
-			grid.exactCellMarkerVolume[particleCell] += particleVolume;
 			grid.exactCellMarkerMass[particleCell] += particleMass;
 			grid.addCellPhaseVolume(particleCell, domain.particles.phaseLabel(i), particleVolume);
 			if (domain.liquidCarrierMaterialByCell != null
@@ -53,9 +53,8 @@ final class MarkerGridBuilder {
 				domain.liquidCarrierVolumeByCell[particleCell] = particleVolume;
 				domain.liquidCarrierMaterialByCell[particleCell] = materialHandle;
 			}
-			domain.freeSurfaceGeometry.addExactVolume(particleCell, particleVolume);
-			domain.splatCenter(positionX, positionY, positionZ, particleVolume);
-			domain.splatPressureVolume(positionX, positionY, positionZ, particleVolume);
+			if (!conservativeVolume) domain.splatCenter(positionX, positionY, positionZ, particleVolume);
+			if (!conservativeVolume) domain.splatPressureVolume(positionX, positionY, positionZ, particleVolume);
 			float transferWeight = domain.variableDensityActive
 					? (float) particleMass : particleVolume;
 			domain.splatFaceField(domain.mac.velocityX, domain.mac.velocityWeightX, 0,
@@ -65,7 +64,15 @@ final class MarkerGridBuilder {
 			domain.splatFaceField(domain.mac.velocityZ, domain.mac.velocityWeightZ, 2,
 					positionX, positionY, positionZ, domain.particles.velocityZ(i), transferWeight);
 		}
+		grid.exactCellVolumeInventory = ExactCellVolumeSums.sum(domain.particles.directArrays().volume,
+				domain.particles.count(), grid.cellMarkerHead, grid.particleCellNext);
 		for (int cell = 0; cell < grid.cellCount; cell++) if (grid.markerCount[cell] > 0) {
+			grid.exactCellMarkerVolume[cell] = grid.exactCellVolumeInventory[cell].toDouble();
+			domain.freeSurfaceGeometry.addExactVolume(cell, (float) grid.exactCellMarkerVolume[cell]);
+			if (conservativeVolume) {
+				domain.projection.pressureVolume[cell] = grid.exactCellMarkerVolume[cell];
+				domain.volume[cell] = (float) grid.exactCellMarkerVolume[cell];
+			}
 			grid.cellDensity[cell] = grid.exactCellMarkerMass[cell] / grid.exactCellMarkerVolume[cell];
 			if (!(Double.isFinite(grid.cellDensity[cell]) && grid.cellDensity[cell] > 0.0)) {
 				throw new IllegalStateException("Marker inventory produced invalid cell density");

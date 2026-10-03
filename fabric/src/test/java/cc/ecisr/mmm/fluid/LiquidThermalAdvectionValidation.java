@@ -21,6 +21,7 @@ import java.util.Map;
 final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	public static void main(String[] args) {
 		subcellAdvection();
+		boundedAdvection();
 		caloricAndSpeciesObservation();
 		insulatingCellsIgnoreUnrelatedFlux();
 		geometryRestrictsObservation();
@@ -28,6 +29,39 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		finiteConductivityLimit();
 		particleDiffusionConverges();
 		conductingLinearWallProfileIsStationary();
+	}
+
+	private static void boundedAdvection() {
+		for (boolean segmented : new boolean[] {false, true}) boundedAdvection(segmented);
+	}
+
+	private static void boundedAdvection(boolean segmented) {
+		var domain = pool(8, 8, 2, 0, segmented);
+		if (!CellLiquidVolumeTransport.enabled(domain)) return;
+		double minimum = segmented ? 295 : 1, maximum = segmented ? 305 : 599;
+		for (int p = 0; p < domain.particleCount(); p++)
+			domain.thermalState.resetMarkerTemperature(p, (segmented ? domain.particles.positionY(p) % 0.5 < 0.25 : domain.particles.positionY(p) < 2.125) ? minimum : maximum,
+					domain.thermalMarkerContext(), domain.exactInternalEnergy());
+		double volume = domain.totalVolumeExact(), mass = domain.totalMass();
+		var initialAudit = domain.thermalAudit();
+		for (int step = 0; step < 40; step++) {
+			domain.ensureGrid();
+			for (int z = 0; z < 2; z++) for (int y = 0; y < 8; y++) for (int x = 0; x <= 8; x++)
+				domain.mac.velocityX[domain.xFaceIndex(x, y, z)] = (float) (-0.5 * Math.sin(Math.PI * x / 8) * Math.cos(Math.PI * (y + 0.5) / 8));
+			for (int z = 0; z < 2; z++) for (int y = 0; y <= 8; y++) for (int x = 0; x < 8; x++)
+				domain.mac.velocityY[domain.yFaceIndex(x, y, z)] = (float) (0.5 * Math.cos(Math.PI * (x + 0.5) / 8) * Math.sin(Math.PI * y / 8));
+			domain.particleAdvectionStage.advect(0.05F);
+			double rounding = (step + 1.0) * domain.particleCount() * Math.ulp(599.0);
+			for (int p = 0; p < domain.particleCount(); p++) {
+				double temperature = domain.thermalState.temperature(p, domain.thermalMarkerContext());
+				require(temperature >= minimum - rounding && temperature <= maximum + rounding,
+						"Conservative heat advection introduced a new temperature extremum (segmented=" + segmented + "): " + temperature);
+			}
+			require(domain.totalVolumeExact() == volume && domain.totalMass() == mass
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+					&& initialAudit.externalSource().equals(domain.thermalAudit().externalSource())
+					&& initialAudit.externalSink().equals(domain.thermalAudit().externalSink()), "Bounded heat advection opened an inventory");
+		}
 	}
 
 	static void subcellAdvection() {
@@ -55,6 +89,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				require(close(beforeBuoyancy, expansion.relativeBuoyancy(before)), "mechanical observation lost a linear thermal field");
 				require(close(before, 300 + gradient * (n / 2 - 0.5) * 0.5), "spatial observation lost a linear field");
 				double[] energies = domain.exportThermalParticleState().copyInternalEnergy();
+				var cellVolumes = domain.markerGrid.exactCellVolumeInventory.clone();
 				int[] cells = new int[domain.particleCount()];
 				for (int marker = 0; marker < cells.length; marker++) cells[marker] = domain.particleCellIndex(marker);
 				var audit = domain.thermalAudit(); double volume = domain.totalVolume(), mass = domain.totalMass();
@@ -76,11 +111,22 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				require(error < 0.025 && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
 						&& domain.totalVolume() == volume && domain.totalMass() == mass,
 						"thermal advection missed its continuous response or conservation: " + derivative);
-				if (conductivity == 0) require(transport.maximumAbsoluteTransferEu() == 0 && Arrays.equals(energies, currentEnergies)
-						&& audit.equals(domain.thermalAudit()), "zero-conductivity advection changed raw energy");
+				if (conductivity == 0) {
+					boolean cellTransport = CellLiquidVolumeTransport.enabled(domain);
+					double roundingBound = 0;
+					for (double energy : currentEnergies) roundingBound += Math.ulp(energy);
+					require(transport.maximumAbsoluteTransferEu() == 0
+							&& audit.externalSource().equals(domain.thermalAudit().externalSource())
+							&& audit.externalSink().equals(domain.thermalAudit().externalSink())
+							&& (cellTransport ? Math.abs(SignedDyadic.sum(currentEnergies).subtract(SignedDyadic.sum(energies)).toDouble()) <= roundingBound
+									: Arrays.equals(energies, currentEnergies) && audit.equals(domain.thermalAudit())),
+							"zero-conductivity advection changed heat inventory beyond storage roundoff");
+				}
 				else require(transport.maximumTemperatureChangeK() < 1e-6 && LiquidThermalConduction.contacts(domain) != null,
 						"positive small conductivity lost continuous carrier transport");
-				for (int marker = 0; marker < cells.length; marker++) require(cells[marker] == domain.particleCellIndex(marker),
+				if (CellLiquidVolumeTransport.enabled(domain)) require(Arrays.equals(cellVolumes, domain.markerGrid.exactCellVolumeInventory),
+						"subcell advection changed full-cell volume inventory");
+				else for (int marker = 0; marker < cells.length; marker++) require(cells[marker] == domain.particleCellIndex(marker),
 						"subcell advection fixture crossed a cell");
 				if (firstDerivative != 0) require(relativeError(derivative, firstDerivative) < 0.002,
 						"subcell thermal response depends on the perturbation time");
@@ -317,12 +363,18 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	}
 
 	private static FluidDomain pool(int nx, int ny, int nz, double conductivity) {
+		return pool(nx, ny, nz, conductivity, false);
+	}
+
+	private static FluidDomain pool(int nx, int ny, int nz, double conductivity, boolean segmented) {
 		var domain = new FluidDomain(nx, ny, nz,
 				new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), nx * ny * nz * 16);
 		for (int z = 0; z < nz; z++) for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++) domain.setVolume(x, y, z, 1);
 		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var caloric = new ThermalMaterialDefinition("test:thermal/advection", ThermalMaterialDefinition.CarrierKind.LIQUID,
-				"mmm:water", 300, 0, conductivity, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 500, 4000)));
+				"mmm:water", 300, 0, conductivity, segmented
+						? List.of(new ThermalMaterialDefinition.CaloricSegment(1, 300, 1000), new ThermalMaterialDefinition.CaloricSegment(300, 600, 100000))
+						: List.of(new ThermalMaterialDefinition.CaloricSegment(1, 600, 4000)));
 		domain.bindThermal(new ThermalRegistry(List.of(caloric)), liquids, 300);
 		return domain;
 	}

@@ -46,6 +46,7 @@ abstract class FluidDomainStorage {
 	final BodyForceStage bodyForceStage;
 	final GridToParticleStage gridToParticleStage;
 	final ParticleAdvectionStage particleAdvectionStage;
+	CellLiquidVolumeTransport cellLiquidVolumeTransport;
 	final ParticleToGridStage particleToGridStage;
 	final MechanicalStepPipeline mechanicalPipeline;
 	final ThermalTransportStage thermalTransportStage;
@@ -133,7 +134,7 @@ abstract class FluidDomainStorage {
 		this.carrierPropertiesWorkspace = new LiquidCarrierProperties(cellCount);
 		this.markerGrid = new MarkerGridIndex(cellCount, initialParticleCapacity);
 		this.pressurePhaseGeometry = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
-		this.closedLiquidVolume = new ClosedLiquidVolumeConstraint(sizeX, sizeY, sizeZ, config.cellSize(), geometry.cutCells);
+		this.closedLiquidVolume = new ClosedLiquidVolumeConstraint(sizeX, sizeY, sizeZ, geometry.cutCells);
 		this.freeSurfaceGeometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
 		this.particleReseeder = new FlipParticleReseeder(sizeX, sizeY, sizeZ, config.cellSize(), maximumParticleCount);
 		this.particleCollision = new FlipParticleCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.solid, geometry.cutCells);

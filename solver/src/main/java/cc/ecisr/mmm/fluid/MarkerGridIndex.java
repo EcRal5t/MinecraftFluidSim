@@ -14,6 +14,7 @@ final class MarkerGridIndex {
 	final int[] cellMarkerHead;
 	final int[] cellMarkerTail;
 	final double[] exactCellMarkerVolume;
+	cc.ecisr.mmm.units.SignedDyadic[] exactCellVolumeInventory;
 	final double[] exactCellMarkerMass;
 	final double[] cellDensity;
 	final int[] cellPhaseHead;

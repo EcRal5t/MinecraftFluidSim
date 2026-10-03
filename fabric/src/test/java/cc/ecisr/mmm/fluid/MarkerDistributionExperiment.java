@@ -203,7 +203,7 @@ public final class MarkerDistributionExperiment {
 			moment += v * (dx * dx + dy * dy + dz * dz);
 		}
 		double total = domain.totalVolumeExact(), h = domain.config.cellSize();
-		domain.closedLiquidVolume.apply(domain.projection.pressureVolume, domain.particles, domain.pressureGranularCoupling);
+		domain.closedLiquidVolume.apply(domain.projection.pressureVolume, domain.particles, domain.pressureGranularCoupling, domain.markerGrid);
 		double constrainedMin = Double.POSITIVE_INFINITY, constrainedMax = 0, constrainedTotal = 0;
 		int constrainedSubcentre = 0;
 		for (int c = 0; c < volume.length; c++) {

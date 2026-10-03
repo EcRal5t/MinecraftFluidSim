@@ -162,6 +162,20 @@ dt <= 2/L
 
 配置中的 `timeStep` 是 logical step 时间；mechanical core 根据液体 marker、颗粒速度和重力预测、cell size 与 `maxCourantNumber` 选择子步，并复检压力后的液体与颗粒位移。子步细化保持本 logical step 的总时间、外部 source/sink 和相变预算。wall-time pacing 只改变 logical step 被调度的 tick 间隔。
 
+### 有限体积输运校验路径
+
+JVM 参数 `-Dmmm.cellVolumeTransport=true` 启用单元有限体积液体输运，默认构建保留上述粒子平流路径。有限体积路径从各格实际 marker 体积精确求和，压力、PLIC、气腔剩余容量和输运使用同一单元库存。该路径的生产切换条件见[产品路线](../roadmap/product-roadmap.md#长期粒子分布与压力几何)。
+
+`CellLiquidVolumeTransport` 根据投影后的 MAC 法向速度积分共享面的 PLIC 扫掠体积。`ConservativeLiquidFlux` 使用低阶供给、几何通量修正和接收格容量共同限制通量，并在 `2^-26 BV` 格点上保存精确公共面通量。单元更新满足 `V_new = V_old + sum(F_in) - sum(F_out)`，各格正体积和开放容量在提交前逐格检查。颗粒位移造成的容量变化沿已经选中的物理通量分配；供给限制保持每格本子步的实际库存。
+
+有限体积步长使用正库存供给格的总出流 Courant 数 `sum(|u_face|*dt/h*A_open/O_cell) <= 1`，partial micro face 的扫掠宽度还须小于等于半格。初始估计包含重力预测，压力后与 G2P 后再次检查。连通薄层的分类复用 `DivergenceFreeVelocityExtension` 的开放面搜索，每次 P2G 重建后重新推导；独立液滴继续使用位移 CFL 与 CCD。
+
+`CellCarrierRemapPlan` 按单元、材料、指示剂和有界 species 并集分组，同一体积通量搬运材料质量、动量、组成和内能。species 使用整数最大余数分配；质量与内能的可表示余数分配到有容量的份额，提交前检查逐材料质量的 binary64 舍入界、精确 species、精确逐格体积、内能和动量收支。热量重建复用实际质量与组成的 caloric 数据，在相邻输入温度范围内保持正温，并保留完整能量审计。
+
+提交后的 marker 是单元空间积分点：满格采用八个四分之一格点，保留完整三维协方差与可解析仿射速度场；较少 chemical quanta 使用完整的 1、2 或 4 点规则，partial cut-cell 使用开放 micro box。binary32 表示需要的正体积尾数保留为额外积分点。速度场以单元张量多项式重建，偏差动能受输入动能约束。所有基础列、chemistry 与 thermal side column 在完整预检后由 `CarrierMutationCoordinator` 一次发布；本步随后复用已发布积分点。
+
+`MechanicalStepAudit.volumeTransportTransferJoules` 单列重建造成的机械能变化，CCD 接触功、P2G/G2P 变化和黏性耗散各自记录。该空间离散的误差由解析不可压旋流的三级网格检验：`N=12/24/48` 的体积归一化 L1 误差约 `0.04199/0.01743/0.00772`，逐格容量和总精确体积同时闭合。切割几何、颗粒占据、分层和自然对流使用各自回归场景约束适用范围。
+
 ## Logical step
 
 1. 读取当前 geometry、cut-cell、carrier occupancy 和边界条件。

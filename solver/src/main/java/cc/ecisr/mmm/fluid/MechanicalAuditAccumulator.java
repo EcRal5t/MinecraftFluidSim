@@ -22,6 +22,7 @@ final class MechanicalAuditAccumulator {
 	double pressureProjectionWorkJoules;
 	double gridToParticleTransferJoules;
 	double particleCollisionWorkJoules;
+	double volumeTransportTransferJoules;
 	double carrierInventoryTransferJoules;
 	double reseedTransferJoules;
 
@@ -42,7 +43,7 @@ final class MechanicalAuditAccumulator {
 				+ porousBoundaryWorkJoules + gravityWorkJoules + thermalBuoyancyWorkJoules
 				+ surfaceTensionWorkJoules + viscousWorkJoules + fixedBoundaryWorkJoules
 				+ pressureProjectionWorkJoules + gridToParticleTransferJoules
-				+ particleCollisionWorkJoules + carrierInventoryTransferJoules
+				+ particleCollisionWorkJoules + volumeTransportTransferJoules + carrierInventoryTransferJoules
 				+ reseedTransferJoules;
 		double residual = finalParticleKineticEnergyJoules
 				- initialParticleKineticEnergyJoules - accounted;
@@ -53,7 +54,7 @@ final class MechanicalAuditAccumulator {
 				+ Math.abs(thermalBuoyancyWorkJoules) + Math.abs(surfaceTensionWorkJoules)
 				+ Math.abs(viscousWorkJoules) + Math.abs(fixedBoundaryWorkJoules) + Math.abs(pressureProjectionWorkJoules)
 				+ Math.abs(gridToParticleTransferJoules) + Math.abs(particleCollisionWorkJoules)
-				+ Math.abs(carrierInventoryTransferJoules) + Math.abs(reseedTransferJoules);
+				+ Math.abs(volumeTransportTransferJoules) + Math.abs(carrierInventoryTransferJoules) + Math.abs(reseedTransferJoules);
 		if (!Double.isFinite(residual) || !Double.isFinite(scale)
 				|| Math.abs(residual) > Math.ulp(scale == 0.0 ? 1.0 : scale) * 128.0) {
 			throw new ArithmeticException("Mechanical step energy audit does not close: residual="
@@ -65,7 +66,7 @@ final class MechanicalAuditAccumulator {
 				particleToGridTransferJoules, granularCouplingWorkJoules, porousBoundaryWorkJoules,
 				gravityWorkJoules, thermalBuoyancyWorkJoules, surfaceTensionWorkJoules, viscousWorkJoules,
 				fixedBoundaryWorkJoules, pressureProjectionWorkJoules,
-				gridToParticleTransferJoules, particleCollisionWorkJoules,
+				gridToParticleTransferJoules, particleCollisionWorkJoules, volumeTransportTransferJoules,
 				carrierInventoryTransferJoules, reseedTransferJoules,
 				thermalInventoryMechanicalWork, residual);
 	}

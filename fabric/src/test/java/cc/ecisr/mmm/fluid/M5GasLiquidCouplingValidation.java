@@ -358,7 +358,7 @@ public final class M5GasLiquidCouplingValidation {
 		double initialLiquidVolume = domain.totalVolumeExact();
 		double initialLiquidMass = domain.totalMass();
 		// Staged compression: top the right column up without entraining air below either surface.
-		float addedTotal = 0.0F;
+		double addedTotal = 0.0;
 		double maximumSpeed = 0.0;
 		for (int fill = 0; fill < 48; fill++) {
 			addedTotal += domain.addVolumeNear(9, 6, 1, 2.0F, 12);

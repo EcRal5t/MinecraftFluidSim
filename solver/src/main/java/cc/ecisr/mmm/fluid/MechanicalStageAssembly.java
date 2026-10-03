@@ -153,9 +153,13 @@ final class MechanicalStageAssembly {
 
 	private static GridToParticleStage.Access gridToParticleAccess(FluidDomain domain) {
 		return new GridToParticleStage.Access() {
-			@Override public float sampleX(float[] field, float x, float y, float z) { return domain.sampleX(field, x, y, z); }
-			@Override public float sampleY(float[] field, float x, float y, float z) { return domain.sampleY(field, x, y, z); }
-			@Override public float sampleZ(float[] field, float x, float y, float z) { return domain.sampleZ(field, x, y, z); }
+			@Override public void samplePair(int axis, float[] field, float[] previous, float x, float y, float z, float[] result) {
+				float h = domain.config.cellSize();
+				boolean[] valid = axis == 0 ? domain.mac.velocityValidX : axis == 1 ? domain.mac.velocityValidY : domain.mac.velocityValidZ;
+				FluidDomainMechanicalFields.trilinearValidPair(field, previous, valid,
+						domain.sizeX + (axis == 0 ? 1 : 0), domain.sizeY + (axis == 1 ? 1 : 0), domain.sizeZ + (axis == 2 ? 1 : 0),
+						x / h - (axis == 0 ? 0 : 0.5F), y / h - (axis == 1 ? 0 : 0.5F), z / h - (axis == 2 ? 0 : 0.5F), result);
+			}
 			@Override public boolean variableDensityActive() { return domain.variableDensityActive; }
 			@Override public float referenceDensity() { return domain.config.density(); }
 		};
@@ -163,6 +167,20 @@ final class MechanicalStageAssembly {
 
 	private static ParticleAdvectionStage.Access advectionAccess(FluidDomain domain) {
 		return new ParticleAdvectionStage.Access() {
+			@Override public boolean advectConservativeVolume(float dt) {
+				if (!CellLiquidVolumeTransport.enabled(domain)) return false;
+				boolean connected = false;
+				for (int p = 0; p < domain.particles.count(); p++)
+					if (domain.gridToParticleStage.advectionCells()[domain.particleCellIndex(p)]) { connected = true; break; }
+				if (!connected) {
+					if (domain.cellLiquidVolumeTransport != null) domain.cellLiquidVolumeTransport.publishedQuadrature = false;
+					return false;
+				}
+				if (domain.cellLiquidVolumeTransport == null) domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
+				domain.cellLiquidVolumeTransport.advect(dt);
+				return true;
+			}
+			@Override public double conservativeCollisionWorkJoules() { return domain.cellLiquidVolumeTransport.collisionWorkJoules; }
 			@Override public ChemicalParcelStore chemicalParcels() { return domain.chemicalParcels; }
 			@Override public int[] chemicalPreviousCells() { return domain.chemicalPreviousCells; }
 			@Override public int[] chemicalMovingMarkers() { return domain.chemicalMovingMarkers; }
@@ -181,7 +199,7 @@ final class MechanicalStageAssembly {
 			@Override public boolean hasAnyLiquidPairTension() { return domain.hasAnyLiquidPairTension(); }
 			@Override public void buildMarkerGrid() { MarkerGridBuilder.build(domain); }
 			@Override public void constrainClosedLiquidVolume() {
-				domain.closedLiquidVolume.apply(domain.projection.pressureVolume, domain.particles, domain.pressureGranularCoupling);
+				domain.closedLiquidVolume.apply(domain.projection.pressureVolume, domain.particles, domain.pressureGranularCoupling, domain.markerGrid);
 			}
 			@Override public void normalize(float[] values, float[] weights) { domain.normalize(values, weights); }
 			@Override public GranularCouplingFields granularCoupling() { return domain.granularCoupling; }
@@ -202,6 +220,26 @@ final class MechanicalStageAssembly {
 
 	private static MechanicalStepPipeline.Access pipelineAccess(FluidDomain domain) {
 		return new MechanicalStepPipeline.Access() {
+			@Override public double projectedCourant(float dt) {
+				if (!CellLiquidVolumeTransport.enabled(domain)) {
+					double[] maximum = new double[3];
+					float[][] velocity = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
+					for (int axis = 0; axis < 3; axis++) for (float value : velocity[axis]) maximum[axis] = Math.max(maximum[axis], Math.abs(value));
+					return Math.sqrt(maximum[0] * maximum[0] + maximum[1] * maximum[1] + maximum[2] * maximum[2])
+						* dt / (domain.config.cellSize() * domain.config.maxCourantNumber());
+				}
+				if (domain.cellLiquidVolumeTransport == null) domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
+				domain.gridToParticleStage.prepareAdvectionCells();
+				double courant = domain.cellLiquidVolumeTransport.courantRate(0) * dt;
+				for (int p = 0; p < domain.particles.count(); p++) {
+					int c = domain.particleCellIndex(p);
+					if (domain.projection.pressureFluid[c] || domain.gridToParticleStage.advectionCells()[c]) continue;
+					double x = domain.particles.velocityX(p), y = domain.particles.velocityY(p), z = domain.particles.velocityZ(p);
+					courant = Math.max(courant, Math.sqrt(x * x + y * y + z * z) * dt
+							/ (domain.config.cellSize() * domain.config.maxCourantNumber()));
+				}
+				return courant;
+			}
 			@Override public void ensureGrid() { domain.ensureGrid(); }
 			@Override public void prepareCarrierProperties() {
 				if (domain.materialDefinitions == null) return;

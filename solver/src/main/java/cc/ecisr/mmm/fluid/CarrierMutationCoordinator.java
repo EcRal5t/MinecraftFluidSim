@@ -91,6 +91,45 @@ final class CarrierMutationCoordinator {
 		domain.gridDirty = true;
 	}
 
+	/** Publishes the preflighted cell quadrature and aligned side columns. */
+	void publishCellRemap(CarrierMutationPlan plan, CellCarrierRemapPlan candidate) {
+		verify(plan, CarrierMutationPlan.Kind.WHOLESALE_COUNT);
+		int count = candidate.markers.size();
+		if (count > domain.maximumParticleCount) throw new IllegalArgumentException("Cell remap exceeds marker budget");
+		domain.ensureParticleCapacity(count);
+		cc.ecisr.mmm.chemistry.ChemicalParcelStore.MarkerRemap chemistry = null;
+		if (domain.chemicalParcels != null) {
+			ChemicalMixtureRecord[] records = new ChemicalMixtureRecord[count]; boolean[] indicators = new boolean[count];
+			for (int ordinal = 0; ordinal < count; ordinal++) {
+				var marker = candidate.markers.get(ordinal); records[ordinal] = marker.mixture(); indicators[ordinal] = marker.indicator();
+			}
+			chemistry = domain.chemicalParcels.planMarkerRemap(domain.particles.count(), records, indicators);
+		}
+		double[] energies = domain.thermalState == null ? null : new double[count];
+		float h = domain.config.cellSize();
+		for (int ordinal = 0; ordinal < count; ordinal++) {
+			var marker = candidate.markers.get(ordinal);
+			int x = marker.cell() % domain.sizeX, y = marker.cell() / domain.sizeX % domain.sizeY, z = marker.cell() / (domain.sizeX * domain.sizeY);
+			domain.particles.setPositionX(ordinal, (float) ((x + 0.5 + marker.offsetX()) * h));
+			domain.particles.setPositionY(ordinal, (float) ((y + 0.5 + marker.offsetY()) * h));
+			domain.particles.setPositionZ(ordinal, (float) ((z + 0.5 + marker.offsetZ()) * h));
+			domain.particles.setVolume(ordinal, marker.volume()); domain.particles.setMass(ordinal, marker.mass());
+			domain.particles.setVelocityX(ordinal, (float) marker.velocityX());
+			domain.particles.setVelocityY(ordinal, (float) marker.velocityY());
+			domain.particles.setVelocityZ(ordinal, (float) marker.velocityZ());
+			domain.particles.setMaterialHandle(ordinal, marker.material());
+			domain.particles.setPhaseLabel(ordinal, domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(marker.material()));
+			if (energies != null) energies[ordinal] = marker.energy();
+		}
+		if (domain.chemicalParcels != null) {
+			domain.chemicalParcels.commitMarkerRemap(chemistry);
+			for (int c = 0; c < candidate.changedSpeciesCells.length; c++) if (candidate.changedSpeciesCells[c]) domain.chemicalParcels.markDirtyCell(c);
+		}
+		if (energies != null) domain.thermalState.restoreLiquidEnergies(energies);
+		domain.particles.setCount(count); domain.bumpCarrierMutationRevision(); domain.gridDirty = true;
+		if (energies != null) domain.thermalState.recordRoundoff(domain.exactInternalEnergy().subtract(candidate.energyBefore));
+	}
+
 	/** Clears the liquid marker column together with its chemistry column after a validated plan. */
 	void clearLiquidMarkers(CarrierMutationPlan plan) {
 		verify(plan, CarrierMutationPlan.Kind.WHOLESALE_COUNT);

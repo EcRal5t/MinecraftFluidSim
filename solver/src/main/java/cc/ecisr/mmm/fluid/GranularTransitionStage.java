@@ -10,6 +10,8 @@ final class GranularTransitionStage {
 	record Workspace(FluidSolverConfig config) { }
 
 	interface Access {
+		long[] beginGeometryTransition();
+		void commitGeometryTransition(long[] previous);
 		GranularDomainState granularState();
 		GranularCouplingFields coupling();
 		GranularDepositDynamics depositDynamics();
@@ -36,6 +38,7 @@ final class GranularTransitionStage {
 	}
 
 	GranularDepositDynamics.Stats step() {
+		long[] previousSolid = access.beginGeometryTransition();
 		GranularDomainState granular = access.granularState();
 		GranularCouplingFields coupling = access.coupling();
 		if (granular != null && granular.parcels.count() > 1) {
@@ -74,6 +77,7 @@ final class GranularTransitionStage {
 			coupling.clear();
 			access.pressureCoupling(null);
 		}
+		access.commitGeometryTransition(previousSolid);
 		return stats;
 	}
 }

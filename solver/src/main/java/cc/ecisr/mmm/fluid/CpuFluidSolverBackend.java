@@ -23,6 +23,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 		try {
 			int minimumSubsteps = 1;
 			long spentSubsteps = 0L;
+			String refinementReason = "";
 			for (int refinement = 0; ; refinement++) {
 				FluidDomain candidate = restoreCandidate(request.state());
 				candidate.minimumMechanicalSubsteps = minimumSubsteps;
@@ -34,7 +35,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 					// request can be refused without leaving a half-stepped owner behind.
 					throw new FluidSolverBackend.MechanicalWorkBudgetExceededException(
 							"Mechanical candidate needs more than " + MAXIMUM_CUMULATIVE_SUBSTEPS
-									+ " cumulative substeps after " + refinement + " time refinement(s)");
+									+ " cumulative substeps after " + refinement + " time refinement(s): " + refinementReason);
 				}
 				FluidDomain.StepStats stats;
 				try {
@@ -45,6 +46,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 								request.phaseChangeEnabled(), request.maximumPhaseOperations())
 						: candidate.step(request.phaseChangeEnabled(), request.maximumPhaseOperations());
 				} catch (MechanicalTimeRefinement finer) {
+					refinementReason = finer.getMessage();
 					if (refinement >= MAXIMUM_TIME_REFINEMENTS) throw finer;
 					minimumSubsteps = Math.max(Math.multiplyExact(minimumSubsteps, 2), finer.minimumSubsteps);
 					continue;

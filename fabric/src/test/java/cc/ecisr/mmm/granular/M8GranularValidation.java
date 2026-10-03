@@ -971,8 +971,12 @@ public final class M8GranularValidation {
 		FluidDomain.GranularInsertion inserted = domain.tryInsertExactGranular(2, 5, 2, sand, 0, svq, mass);
 		require(inserted.inserted(), "solver granular insertion was rejected: " + inserted.failure());
 		double waterBefore = domain.totalVolumeExact();
+		var backend = new cc.ecisr.mmm.fluid.CpuFluidSolverBackend();
 		for (int step = 0; step < steps; step++) {
-			FluidDomain.StepStats stats = domain.step();
+			var candidate = backend.evaluate(new cc.ecisr.mmm.fluid.FluidStepRequest(
+					step, domain.captureAuthoritativeState(), List.of(), false, 0));
+			domain = candidate.claimPreparedCpuDomain();
+			FluidDomain.StepStats stats = candidate.stats();
 			require(Float.isFinite(stats.pressureResidual()), "granular pressure coupling produced non-finite residual");
 		}
 		require(Double.doubleToRawLongBits(domain.totalVolumeExact()) == Double.doubleToRawLongBits(waterBefore),

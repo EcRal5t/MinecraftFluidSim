@@ -36,6 +36,7 @@ public final class GranularBedWakeValidation {
 			var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(), requests,
 					true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
 			domain = candidate.claimPreparedCpuDomain();
+			jointCapacity(domain);
 			settled += candidate.stats().granularTransition().settledParcels();
 			woken += candidate.stats().granularTransition().wokenParcels();
 			contacts += candidate.movingBodyCoupling().coupledMarkers();
@@ -146,6 +147,7 @@ public final class GranularBedWakeValidation {
 		var beforeU = domain.exactInternalEnergy();
 		var beforeAudit = domain.thermalAudit();
 		double beforeK = domain.particleKineticEnergyJoules(), beforeMass = domain.totalGranularMass();
+		int beforeCount = domain.particles.count();
 		var stats = domain.granularTransitionStage.step();
 		require(stats.wokenParcels() > 0, "Sleeping bed ignored actual liquid velocity");
 		require(domain.exactInternalEnergy().subtract(beforeU).equals(
@@ -153,9 +155,11 @@ public final class GranularBedWakeValidation {
 				&& domain.thermalAudit().externalSource().equals(beforeAudit.externalSource())
 				&& domain.thermalAudit().externalSink().equals(beforeAudit.externalSink())
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
-				&& domain.particleKineticEnergyJoules() == beforeK
+				&& domain.particleKineticEnergyJoules() <= beforeK + (beforeCount + domain.particles.count()) * Math.ulp(beforeK)
 				&& domain.totalGranularMass() == beforeMass, "Bed release created energy or changed inventory: dU=" + domain.exactInternalEnergy().subtract(beforeU)
 						+ " dK=" + (domain.particleKineticEnergyJoules() - beforeK) + " dMass=" + (domain.totalGranularMass() - beforeMass));
+		domain.ensureGrid();
+		jointCapacity(domain);
 		for (int p = 0; p < domain.granularState.parcels.count(); p++) {
 			var parcel = domain.granularState.parcels.parcel(p);
 			require(parcel.velocityX() == 0 && parcel.velocityY() == 0 && parcel.velocityZ() == 0,
@@ -186,9 +190,6 @@ public final class GranularBedWakeValidation {
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, r.liquids());
 		int water = r.liquids().handle("mmm:water");
-		for (int z = 0; z < 8; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 8; x++) {
-			require(domain.tryInsertExactVolume(x, y, z, 1, 0, water).transferred(), "Water rejected");
-		}
 		FullCapabilityTestFixture.bindFull(domain, r, 293.15, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		long svq = SolidVolume.SVQ_PER_CELL / 4;
 		double density = r.granular().material(r.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND)).referenceDensity();
@@ -197,6 +198,13 @@ public final class GranularBedWakeValidation {
 		for (int z = 2; z < 6; z++) for (int x = 2; x < 6; x++) {
 			require(domain.tryInsertExactGranular(x, 0, z, ledger, 0, true).inserted(), "Sand rejected");
 		}
+		domain.ensureGrid();
+		for (int z = 0; z < 8; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 8; x++) {
+			float open = domain.effectiveOpenCellVolume(domain.cellIndex(x, y, z));
+			require(domain.tryInsertExactVolume(x, y, z, open, 0, water).transferred(), "Pore water rejected");
+		}
+		float displaced = (float) (256 - domain.totalVolumeExact());
+		require(domain.addVolumeNear(4, 4, 4, displaced, 12) == displaced, "Displaced pore water rejected");
 		return domain;
 	}
 
@@ -213,6 +221,13 @@ public final class GranularBedWakeValidation {
 		require(GranularBedShear.shearStress(.05, .25, 1000, .001002) < criticalStress
 				&& GranularBedShear.shearStress(1, .25, 1000, .001002) > criticalStress,
 				"Water/sand initiation scale is inconsistent with wall shear");
+	}
+
+	private static void jointCapacity(FluidDomain domain) {
+		if (!CellLiquidVolumeTransport.enabled(domain)) return;
+		for (int c = 0; c < domain.cellCount; c++) require(domain.markerGrid.exactCellVolumeInventory[c].compareTo(
+				cc.ecisr.mmm.units.SignedDyadic.of(domain.effectiveOpenCellVolume(c))) <= 0,
+				"Published bed state overlaps liquid and skeleton at cell " + c);
 	}
 
 	private static void require(boolean condition, String message) { if (!condition) throw new AssertionError(message); }

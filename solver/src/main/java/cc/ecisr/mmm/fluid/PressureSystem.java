@@ -20,7 +20,7 @@ final class PressureSystem {
 		this.drag = new GranularImplicitDrag(domain, granular);
 	}
 	void prepareGranular(float dt) { substepDuration = dt; granular.prepare(dt); drag.prepare(dt); }
-	void forEachGranularGasNode(java.util.function.IntConsumer accept) { granular.forEachGasNode(accept); }
+	void forEachGranularGasNode(float dt, java.util.function.IntConsumer accept) { granular.forEachGasNode(dt, accept); }
 	double liquidPressure(int cell) { return liquidPressure[cell]; }
 	double gasPressure(int node) { return gasPressure[node]; }
 	boolean projectGranular(float dt) {

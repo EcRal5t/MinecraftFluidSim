@@ -414,7 +414,8 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 					+ candidate.stats().thermalAxis().granularPhase().transfers();
 			if (phaseOperations == 0) {
 				require(domain.totalVolumeExact() == volumeBefore && domain.totalMass() == massBefore,
-						"phase-idle dam-break step changed liquid volume or mass");
+						"phase-idle dam-break step changed liquid volume or mass: dV=" + (domain.totalVolumeExact() - volumeBefore)
+								+ ", dM=" + (domain.totalMass() - massBefore) + ", chemistry=" + candidate.stats().chemistryChangedMarkers());
 			}
 			require(Double.isFinite(domain.totalVolumeExact()) && domain.totalVolumeExact() > 0.0
 					&& Double.isFinite(domain.totalMass()) && domain.totalMass() > 0.0,

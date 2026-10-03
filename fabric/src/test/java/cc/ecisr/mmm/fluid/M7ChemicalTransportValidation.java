@@ -550,8 +550,7 @@ public final class M7ChemicalTransportValidation {
 			mixtures.add(mixture);
 			mass[marker] = unitScale.solverMass(mixture.massKilograms(CHEMISTRY));
 		}
-		double totalMass = 0.0;
-		for (double markerMass : mass) totalMass += markerMass;
+		double totalMass = cc.ecisr.mmm.units.SignedDyadic.sum(mass).toDouble();
 		FlipMaterialParticleState materials = new FlipMaterialParticleState(
 				original.sizeX(), original.sizeY(), original.sizeZ(), original.cellSize(), original.particleCount(),
 				original.totalVolume(), totalMass, original.materials(), positionVolume,
@@ -663,16 +662,21 @@ public final class M7ChemicalTransportValidation {
 		}
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		boolean refined = false;
+		var impulse = new cc.ecisr.mmm.world.MovingBodyFluidCoupling.Request(
+				1.0F, 1.0F, 2.0F, 30.0, 0.0, 0.0, 0.125);
 		for (int step = 0; step < 40; step++) {
 			int predictedSubsteps = source.calculateSubsteps(config.timeStep());
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
-					step, source.captureAuthoritativeState(), List.of(), false, 0));
+					step, source.captureAuthoritativeState(), step == 0 ? List.of(impulse) : List.of(), false, 0));
+			if (step == 0) check(candidate.movingBodyCoupling().coupledMarkers() > 0
+					&& candidate.movingBodyCoupling().impulseXKilogramMetresPerSecond() > 0.0,
+					"chemical transport fixture must receive the moving-body impulse");
 			refined |= candidate.stats().substeps() > predictedSubsteps;
 			source = candidate.claimPreparedCpuDomain();
 			check(source.exactInternalEnergy().equals(source.thermalAudit().expectedInventory())
 					&& source.gasBoundary().auditClosed(), "chemical transport step audit diverged");
 		}
-		check(refined, "thermal chemical extraction fixture must exercise time refinement");
+		check(refined, "moving-body impulse must require finer chemical transport subdivision");
 		SignedDyadic sinkBefore = source.thermalAudit().externalSink();
 		SignedDyadic roundoffBefore = source.thermalAudit().roundoffResidual();
 		SignedDyadic inventoryBefore = source.exactInternalEnergy();

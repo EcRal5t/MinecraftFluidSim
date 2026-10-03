@@ -15,9 +15,7 @@ final class GridToParticleStage {
 	) { }
 
 	interface Access {
-		float sampleX(float[] field, float x, float y, float z);
-		float sampleY(float[] field, float x, float y, float z);
-		float sampleZ(float[] field, float x, float y, float z);
+		void samplePair(int axis, float[] field, float[] previous, float x, float y, float z, float[] result);
 		boolean variableDensityActive();
 		float referenceDensity();
 	}
@@ -27,6 +25,7 @@ final class GridToParticleStage {
 	private float[] picX = new float[0], picY = new float[0], picZ = new float[0];
 	private float[] flipDeltaX = new float[0], flipDeltaY = new float[0], flipDeltaZ = new float[0];
 	private double preProjectionEnergy = Double.NaN;
+	private final float[] sampledPair = new float[2];
 	private boolean completePressureSpace;
 	private final ResolvedMarkerVelocity resolvedVelocity;
 	private final DivergenceFreeVelocityExtension velocityExtension;
@@ -47,6 +46,10 @@ final class GridToParticleStage {
 	}
 
 	boolean[] advectionCells() { return velocityExtension.advectionCells; }
+
+	void prepareAdvectionCells() {
+		velocityExtension.prepareAdvectionCells(state.pressureFluid, state.geometry.solid, state.markerGrid.markerCount);
+	}
 
 	void extrapolateVelocityIntoAir() {
 		MacVelocityGrid mac = state.mac;
@@ -82,15 +85,15 @@ final class GridToParticleStage {
 		double quadratic = 0.0, linear = 0.0, picEnergy = 0.0, incomingEnergy = 0.0;
 		for (int i = 0; i < particles.count(); i++) {
 			float x = particles.positionX(i), y = particles.positionY(i), z = particles.positionZ(i);
-			picX[i] = access.sampleX(mac.velocityX, x, y, z);
-			picY[i] = access.sampleY(mac.velocityY, x, y, z);
-			picZ[i] = access.sampleZ(mac.velocityZ, x, y, z);
 			double mass = particles.mass(i);
 			incomingEnergy += 0.5 * mass * (flipDeltaX[i] * (double) flipDeltaX[i]
 					+ flipDeltaY[i] * (double) flipDeltaY[i] + flipDeltaZ[i] * (double) flipDeltaZ[i]);
-			flipDeltaX[i] -= access.sampleX(mac.p2gVelocityX, x, y, z);
-			flipDeltaY[i] -= access.sampleY(mac.p2gVelocityY, x, y, z);
-			flipDeltaZ[i] -= access.sampleZ(mac.p2gVelocityZ, x, y, z);
+			access.samplePair(0, mac.velocityX, mac.p2gVelocityX, x, y, z, sampledPair);
+			picX[i] = sampledPair[0]; flipDeltaX[i] -= sampledPair[1];
+			access.samplePair(1, mac.velocityY, mac.p2gVelocityY, x, y, z, sampledPair);
+			picY[i] = sampledPair[0]; flipDeltaY[i] -= sampledPair[1];
+			access.samplePair(2, mac.velocityZ, mac.p2gVelocityZ, x, y, z, sampledPair);
+			picZ[i] = sampledPair[0]; flipDeltaZ[i] -= sampledPair[1];
 			double picSquared = picX[i] * (double) picX[i] + picY[i] * (double) picY[i]
 					+ picZ[i] * (double) picZ[i];
 			double deltaSquared = flipDeltaX[i] * (double) flipDeltaX[i]

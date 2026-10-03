@@ -160,6 +160,22 @@ final class FlipFreeSurfaceGeometry {
 		float maximum = Math.max(0.0F, normalX) + Math.max(0.0F, normalY) + Math.max(0.0F, normalZ);
 		if (clampedFraction <= 0.0F) return minimum;
 		if (clampedFraction >= 1.0F) return maximum;
+		double a = Math.abs(normalX), b = Math.abs(normalY), c = Math.abs(normalZ);
+		double tail = Math.min(clampedFraction, 1.0 - clampedFraction), root, firstInterval;
+		if (a > 1.0E-10 && b > 1.0E-10 && c > 1.0E-10) {
+			root = Math.cbrt(6 * a * b * c * tail); firstInterval = Math.min(a, Math.min(b, c));
+		} else if (a > 1.0E-10 && b > 1.0E-10) {
+			root = Math.sqrt(2 * a * b * tail); firstInterval = Math.min(a, b);
+		} else if (a > 1.0E-10 && c > 1.0E-10) {
+			root = Math.sqrt(2 * a * c * tail); firstInterval = Math.min(a, c);
+		} else if (b > 1.0E-10 && c > 1.0E-10) {
+			root = Math.sqrt(2 * b * c * tail); firstInterval = Math.min(b, c);
+		} else {
+			root = tail * Math.max(a, Math.max(b, c)); firstInterval = Double.POSITIVE_INFINITY;
+		}
+		// The first vertex interval is a simplex. Its reflected complement has the
+		// same measure, so both near-empty and near-full planes have a direct inverse.
+		if (root <= firstInterval) return (float) (minimum + (clampedFraction <= 0.5 ? root : a + b + c - root));
 		float lower = minimum;
 		float upper = maximum;
 		for (int iteration = 0; iteration < 32; iteration++) {
@@ -176,6 +192,11 @@ final class FlipFreeSurfaceGeometry {
 		if (normalX < 0.0F) transformedOffset += a;
 		if (normalY < 0.0F) transformedOffset += b;
 		if (normalZ < 0.0F) transformedOffset += c;
+		if (a + b + c == 0) return transformedOffset >= 0 ? 1 : 0;
+		if (transformedOffset <= 0) return 0;
+		if (transformedOffset >= a + b + c) return 1;
+		boolean complement = transformedOffset > 0.5 * (a + b + c);
+		if (complement) transformedOffset = a + b + c - transformedOffset;
 		double result;
 		if (a > 1.0E-10 && b > 1.0E-10 && c > 1.0E-10) {
 			result = (cube(transformedOffset)
@@ -195,7 +216,7 @@ final class FlipFreeSurfaceGeometry {
 			double length = Math.max(a, Math.max(b, c));
 			result = length <= 1.0E-10 ? (transformedOffset >= 0.0 ? 1.0 : 0.0) : transformedOffset / length;
 		}
-		return (float) clamp(result, 0.0, 1.0);
+		return (float) clamp(complement ? 1 - result : result, 0.0, 1.0);
 	}
 
 	private static double square(double value) {

@@ -26,6 +26,12 @@ final class DivergenceFreeVelocityExtension {
 	}
 
 	void extend(MacVelocityGrid mac, boolean[] fluid, boolean[] solid, int[] markerCount) {
+		prepareAdvectionCells(fluid, solid, markerCount);
+		projectFringe(mac, fluid, solid);
+	}
+
+	/** Classifies connected finite-volume carriers without changing any velocity. */
+	void prepareAdvectionCells(boolean[] fluid, boolean[] solid, int[] markerCount) {
 		System.arraycopy(fluid, 0, advectionCells, 0, cells);
 		int head = 0, tail = 0;
 		for (int c = 0; c < cells; c++) if (fluid[c]) queue[tail++] = c;
@@ -43,6 +49,9 @@ final class DivergenceFreeVelocityExtension {
 				if (aperture > 0) { advectionCells[neighbor] = true; queue[tail++] = neighbor; }
 			}
 		}
+	}
+
+	private void projectFringe(MacVelocityGrid mac, boolean[] fluid, boolean[] solid) {
 		Arrays.fill(potential, 0); Arrays.fill(residual, 0); Arrays.fill(diagonal, 0);
 		for (int c = 0; c < cells; c++) active[c] = advectionCells[c] && !fluid[c];
 		edges = 0;

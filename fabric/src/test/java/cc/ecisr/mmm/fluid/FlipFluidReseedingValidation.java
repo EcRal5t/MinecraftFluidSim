@@ -413,7 +413,19 @@ public final class FlipFluidReseedingValidation {
 		check(budgetSkipped == 0, "long-run dam-break reseeding exhausted its hard marker budget");
 		check(maximumLedgerError == 0.0,
 				"long-run dam-break changed the exact float ledger: " + maximumLedgerError);
-		check(domain.particleCount() <= initialParticleCount,
+		if (CellLiquidVolumeTransport.enabled(domain)) {
+			int quadratureBudget = 0;
+			for (int cell = 0; cell < domain.cellCount; cell++) {
+				var v = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+				for (int p = domain.markerGrid.cellMarkerHead[cell]; p >= 0; p = domain.markerGrid.particleCellNext[p])
+					v = v.add(cc.ecisr.mmm.units.SignedDyadic.of(domain.particles.volume(p)));
+				check(v.compareTo(cc.ecisr.mmm.units.SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell))) <= 0,
+						"dam-break raw volume exceeded its geometric capacity");
+				int target = ConservativeMarkerSampling.targetMarkers((float) v.toDouble());
+				quadratureBudget += target == 0 ? 0 : target <= 1 ? 1 : target <= 2 ? 2 : target <= 4 ? 4 : 8;
+			}
+			check(domain.particleCount() <= quadratureBudget, "dam-break exceeded the quadrature required by its actual wet cells");
+		} else check(domain.particleCount() <= initialParticleCount,
 				"dam-break exact residual markers exceeded the fixture's initial marker population");
 		check(distribution.maximumMarkers <= ConservativeMarkerSampling.NOMINAL_MARKERS_PER_FULL_CELL
 				|| conservationSkipped > 0 || geometrySkipped > 0,

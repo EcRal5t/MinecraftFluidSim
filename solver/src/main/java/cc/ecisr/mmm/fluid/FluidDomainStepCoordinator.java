@@ -187,7 +187,16 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			markerGrid.cellMarkerTail[cell] = marker;
 			markerGrid.markerCount[cell]++;
 			markerGrid.exactCellMarkerVolume[cell] += particles.volume(marker);
-			splatCenter(particles.positionX(marker), particles.positionY(marker), particles.positionZ(marker), particles.volume(marker));
+			if (!CellLiquidVolumeTransport.enabled(this))
+				splatCenter(particles.positionX(marker), particles.positionY(marker), particles.positionZ(marker), particles.volume(marker));
+		}
+		if (CellLiquidVolumeTransport.enabled(this)) {
+			markerGrid.exactCellVolumeInventory = ExactCellVolumeSums.sum(particles.directArrays().volume,
+					particles.count(), markerGrid.cellMarkerHead, markerGrid.particleCellNext);
+			for (int cell = 0; cell < cellCount; cell++) {
+				markerGrid.exactCellMarkerVolume[cell] = markerGrid.exactCellVolumeInventory[cell].toDouble();
+				volume[cell] = (float) markerGrid.exactCellMarkerVolume[cell];
+			}
 		}
 	}
 
@@ -589,6 +598,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	int calculateSubsteps(float dt) {
+		if (CellLiquidVolumeTransport.enabled(domain())) return calculateVolumeTransportSubsteps(dt);
 		float maximum = 0.0F;
 		for (int i = 0; i < particles.count(); i++) {
 			maximum = Math.max(maximum, Math.abs(particles.velocityX(i)) + Math.abs(particles.velocityY(i)) + Math.abs(particles.velocityZ(i)));
@@ -600,6 +610,26 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		}
 		maximum += config.gravity() * dt;
 		return Math.max(minimumMechanicalSubsteps, (int) Math.ceil(maximum * dt / (config.cellSize() * config.maxCourantNumber())));
+	}
+
+	private int calculateVolumeTransportSubsteps(float dt) {
+		ensureGrid();
+		gridToParticleStage.prepareAdvectionCells();
+		if (cellLiquidVolumeTransport == null) cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain());
+		double required = cellLiquidVolumeTransport.courantRate(-config.gravity() * dt) * dt;
+		double maximum = 0;
+		for (int i = 0; i < particles.count(); i++) {
+			if (gridToParticleStage.advectionCells()[particleCellIndex(i)]) continue;
+			double x = particles.velocityX(i), y = particles.velocityY(i), z = particles.velocityZ(i);
+			maximum = Math.max(maximum, Math.sqrt(x * x + y * y + z * z));
+		}
+		if (granularState != null) for (int index = 0; index < granularState.parcels.count(); index++) {
+			var parcel = granularState.parcels.parcel(index);
+			maximum = Math.max(maximum, Math.abs(parcel.velocityX()) + Math.abs(parcel.velocityY()) + Math.abs(parcel.velocityZ()));
+		}
+		maximum += config.gravity() * dt;
+		required = Math.max(required, maximum * dt / (config.cellSize() * config.maxCourantNumber()));
+		return Math.max(minimumMechanicalSubsteps, (int) Math.ceil(required));
 	}
 
 	/**

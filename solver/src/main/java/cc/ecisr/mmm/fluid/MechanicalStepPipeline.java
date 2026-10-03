@@ -23,6 +23,7 @@ final class MechanicalStepPipeline {
 	interface Access {
 		void ensureGrid();
 		void prepareCarrierProperties();
+		double projectedCourant(float dt);
 		double gridKineticEnergyJoules();
 		double particleKineticEnergyJoules();
 		int lastPressureIterations();
@@ -158,27 +159,25 @@ final class MechanicalStepPipeline {
 		if (captureAudit) audit.gridToParticleTransferJoules +=
 				particleKineticEnergy - stageKineticEnergy;
 		particleAdvectionStage.advect(dt);
-		if (captureAudit) audit.particleCollisionWorkJoules +=
-				access.particleKineticEnergyJoules() - particleKineticEnergy;
+		if (captureAudit) {
+			double transfer = access.particleKineticEnergyJoules() - particleKineticEnergy;
+			if (particleAdvectionStage.usedConservativeVolume()) {
+				double collision = particleAdvectionStage.conservativeCollisionWorkJoules();
+				audit.volumeTransportTransferJoules += transfer - collision;
+				audit.particleCollisionWorkJoules += collision;
+			}
+			else audit.particleCollisionWorkJoules += transfer;
+		}
 		granularMechanicalStage.commitCollision();
 		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending, viscosity);
 	}
 
 	/** Pressure can accelerate a resting liquid beyond the initial marker-based step estimate. */
 	private void validateProjectedCourant(float dt) {
-		double x = maximumMagnitude(state.mac.velocityX);
-		double y = maximumMagnitude(state.mac.velocityY);
-		double z = maximumMagnitude(state.mac.velocityZ);
-		double speed = Math.sqrt(x * x + y * y + z * z);
-		double distance = state.config.cellSize() * state.config.maxCourantNumber();
-		if (speed * dt > distance * (1 + 8 * Math.ulp(1.0F))) {
-			throw new MechanicalTimeRefinement((int) Math.ceil(speed * state.config.timeStep() / distance));
+		double courant = access.projectedCourant(dt);
+		if (courant > 1 + 8 * Math.ulp(1.0F)) {
+			throw new MechanicalTimeRefinement((int) Math.ceil(courant * state.config.timeStep() / dt));
 		}
 	}
 
-	private static double maximumMagnitude(float[] velocity) {
-		double maximum = 0;
-		for (float value : velocity) maximum = Math.max(maximum, Math.abs(value));
-		return maximum;
-	}
 }

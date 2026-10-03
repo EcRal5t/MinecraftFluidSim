@@ -6,21 +6,19 @@ import java.util.Arrays;
 /** Derives completely filled closed components from exact liquid inventory and available volume. */
 final class ClosedLiquidVolumeConstraint {
 	private final int nx, ny, nz;
-	private final float h;
 	private final FlipCutCellGeometry geometry;
-	private final int[] labels, ordered, starts, ends, markerHeads;
+	private final int[] labels, ordered, starts, ends;
 	private final byte[] masks;
 	private final float[] capacities;
 	private final double[] volumes;
-	private int[] nextMarker = new int[0];
 	private final long[] bins = new long[255];
 	private int components;
 	private boolean prepared;
 
-	ClosedLiquidVolumeConstraint(int nx, int ny, int nz, float h, FlipCutCellGeometry geometry) {
-		this.nx = nx; this.ny = ny; this.nz = nz; this.h = h; this.geometry = geometry;
+	ClosedLiquidVolumeConstraint(int nx, int ny, int nz, FlipCutCellGeometry geometry) {
+		this.nx = nx; this.ny = ny; this.nz = nz; this.geometry = geometry;
 		int count = nx * ny * nz;
-		labels = new int[count]; ordered = new int[count]; starts = new int[count]; ends = new int[count]; markerHeads = new int[count];
+		labels = new int[count]; ordered = new int[count]; starts = new int[count]; ends = new int[count];
 		masks = new byte[count]; capacities = new float[count]; volumes = new double[count];
 	}
 
@@ -54,16 +52,14 @@ final class ClosedLiquidVolumeConstraint {
 
 	int component(int cell) { if (!prepared) prepare(); return labels[cell]; }
 
-	void apply(double[] pressureVolume, LiquidParticleStore particles, GranularCouplingFields granular) {
-		prepare(); Arrays.fill(volumes, 0, components, 0); Arrays.fill(markerHeads, 0, components, -1);
-		if (nextMarker.length < particles.count()) nextMarker = new int[particles.count()];
-		for (int p = 0; p < particles.count(); p++) {
-			int x = Math.clamp((int) Math.floor(particles.positionX(p) / h), 0, nx - 1);
-			int y = Math.clamp((int) Math.floor(particles.positionY(p) / h), 0, ny - 1);
-			int z = Math.clamp((int) Math.floor(particles.positionZ(p) / h), 0, nz - 1);
-			int component = labels[x + nx * (y + ny * z)];
-			if (component < 0) throw new IllegalStateException("Liquid marker is inside a closed solid cell");
-			volumes[component] += particles.volume(p); nextMarker[p] = markerHeads[component]; markerHeads[component] = p;
+	void apply(double[] pressureVolume, LiquidParticleStore particles, GranularCouplingFields granular, MarkerGridIndex grid) {
+		prepare(); Arrays.fill(volumes, 0, components, 0);
+		for (int cell = 0; cell < labels.length; cell++) {
+			if (labels[cell] < 0) {
+				if (grid.markerCount[cell] != 0) throw new IllegalStateException("Liquid marker is inside a closed solid cell");
+				continue;
+			}
+			volumes[labels[cell]] += grid.exactCellMarkerVolume[cell];
 		}
 		for (int component = 0; component < components; component++) {
 			double capacity = 0;
@@ -77,7 +73,8 @@ final class ClosedLiquidVolumeConstraint {
 			if (!(capacity > 0) || Math.abs(capacity - volumes[component]) > roundoff) continue;
 			Arrays.fill(bins, 0);
 			for (int index = starts[component]; index < ends[component]; index++) add(capacities[ordered[index]], -1);
-			for (int p = markerHeads[component]; p >= 0; p = nextMarker[p]) add(particles.volume(p), 1);
+			for (int index = starts[component]; index < ends[component]; index++)
+				for (int p = grid.cellMarkerHead[ordered[index]]; p >= 0; p = grid.particleCellNext[p]) add(particles.volume(p), 1);
 			if (!exactZero()) continue;
 			for (int index = starts[component]; index < ends[component]; index++) {
 				int cell = ordered[index]; pressureVolume[cell] = capacities[cell];

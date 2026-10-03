@@ -8,6 +8,7 @@ final class LiquidThermalSupport {
 
 	static void observe(FluidDomainStepCoordinator domain, int marker, ThermalCarrierContext.SupportConsumer consumer) {
 		int own = domain.particleCellIndex(marker);
+		if (CellLiquidVolumeTransport.enabled(domain)) { consumer.accept(own, 1.0); return; }
 		int phase = singlePhase(domain, own);
 		if (!wetOpen(domain, own) || phase < 0) { consumer.accept(own, 1.0); return; }
 		double gx = domain.particles.positionX(marker) / (double) domain.config.cellSize() - 0.5;

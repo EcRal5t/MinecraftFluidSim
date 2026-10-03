@@ -762,6 +762,36 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		return weightSum <= 1.0E-8F ? 0.0F : weighted / weightSum;
 	}
 
+	/** Shares the stencil while retaining each scalar float reduction in its original order. */
+	static void trilinearValidPair(
+			float[] values, float[] previous, boolean[] valid, int nx, int ny, int nz, float x, float y, float z, float[] result
+	) {
+		float cx = clamp(x, 0.0F, nx - 1.0F), cy = clamp(y, 0.0F, ny - 1.0F), cz = clamp(z, 0.0F, nz - 1.0F);
+		int x0 = (int) Math.floor(cx), y0 = (int) Math.floor(cy), z0 = (int) Math.floor(cz);
+		int x1 = Math.min(x0 + 1, nx - 1), y1 = Math.min(y0 + 1, ny - 1), z1 = Math.min(z0 + 1, nz - 1);
+		float fx = cx - x0, fy = cy - y0, fz = cz - z0;
+		float weighted = 0.0F, oldWeighted = 0.0F, weightSum = 0.0F;
+		for (int offsetZ = 0; offsetZ <= 1; offsetZ++) {
+			int sampleZ = offsetZ == 0 ? z0 : z1;
+			float weightZ = offsetZ == 0 ? 1.0F - fz : fz;
+			for (int offsetY = 0; offsetY <= 1; offsetY++) {
+				int sampleY = offsetY == 0 ? y0 : y1;
+				float weightY = offsetY == 0 ? 1.0F - fy : fy;
+				for (int offsetX = 0; offsetX <= 1; offsetX++) {
+					int sampleX = offsetX == 0 ? x0 : x1;
+					float weight = (offsetX == 0 ? 1.0F - fx : fx) * weightY * weightZ;
+					int index = (sampleZ * ny + sampleY) * nx + sampleX;
+					if (!valid[index] || weight <= 0.0F) continue;
+					weighted += values[index] * weight;
+					oldWeighted += previous[index] * weight;
+					weightSum += weight;
+				}
+			}
+		}
+		result[0] = weightSum <= 1.0E-8F ? 0.0F : weighted / weightSum;
+		result[1] = weightSum <= 1.0E-8F ? 0.0F : oldWeighted / weightSum;
+	}
+
 	void validateVolumeEdit(float amount, int maxRadius) {
 		if (!Float.isFinite(amount) || amount < 0.0F) throw new IllegalArgumentException("amount must be finite and non-negative");
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");

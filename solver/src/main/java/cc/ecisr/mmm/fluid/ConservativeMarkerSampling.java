@@ -10,6 +10,8 @@ public final class ConservativeMarkerSampling {
 	public static final int AXIS_SAMPLES = 2;
 	public static final int NOMINAL_MARKERS_PER_FULL_CELL = AXIS_SAMPLES * AXIS_SAMPLES * AXIS_SAMPLES;
 	public static final float NOMINAL_MARKER_VOLUME = 1.0F / NOMINAL_MARKERS_PER_FULL_CELL;
+	/** Volume-flux lattice derived from the binary32 resolution of one nominal carrier. */
+	static final double VOLUME_FLUX_RESOLUTION = Math.ulp(NOMINAL_MARKER_VOLUME);
 	/** Half the spacing of the standard 2x2x2 volume quadrature. */
 	public static final float DOMAIN_CONTACT_FRACTION = 0.5F / AXIS_SAMPLES;
 	public static final float POSITION_EPSILON_FRACTION = 1.0E-3F;

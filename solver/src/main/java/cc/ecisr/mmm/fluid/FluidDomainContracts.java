@@ -52,6 +52,7 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 			double pressureProjectionWorkJoules,
 			double gridToParticleTransferJoules,
 			double particleCollisionWorkJoules,
+			double volumeTransportTransferJoules,
 			double carrierInventoryTransferJoules,
 			double reseedTransferJoules,
 			SignedDyadic thermalInventoryMechanicalWork,
@@ -60,7 +61,7 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 		static MechanicalStepAudit notCaptured() {
 			return new MechanicalStepAudit(false, 0.0, 0.0, 0.0, 0.0,
 					0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-					0.0, 0.0, 0.0, 0.0, 0.0, SignedDyadic.ZERO, 0.0);
+					0.0, 0.0, 0.0, 0.0, 0.0, 0.0, SignedDyadic.ZERO, 0.0);
 		}
 	}
 	record MaterialInventory(double volume, double mass, double centerY) { }

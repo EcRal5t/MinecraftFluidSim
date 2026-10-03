@@ -13,6 +13,7 @@ public final class GranularCarrierValidation {
 		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
 		finitePressureResponse();
+		sweptOccupancyConservation();
 		hydrostaticParcelForce();
 		sharedGasPressureAlgebra();
 		pressureReferenceDoesNotAccelerateMatter();
@@ -97,9 +98,10 @@ public final class GranularCarrierValidation {
 		domain.ensureGrid();
 		domain.granularMechanicalStage.validateVelocities();
 		double before = pressureEnergy(domain) + solidEnergy(domain);
-		domain.granularMechanicalStage.predictVelocities(0.05F);
-		domain.pressureStage.solve(0.05F);
-		domain.pressureStage.projectVelocities(0.05F);
+		float dt = domain.config.maxCourantNumber() * domain.config.cellSize() / 250;
+		domain.granularMechanicalStage.predictVelocities(dt);
+		domain.pressureStage.solve(dt);
+		domain.pressureStage.projectVelocities(dt);
 		domain.granularMechanicalStage.validateVelocities();
 		require(pressureEnergy(domain) + solidEnergy(domain) < before,
 				"implicit drag must dissipate an initially unresolved relative velocity into a valid solution");
@@ -234,6 +236,8 @@ public final class GranularCarrierValidation {
 		domain.ensureGrid();
 		double before = pressureEnergy(domain) + solidEnergy(domain);
 		double solidBefore = solidEnergy(domain);
+		var coupling = new GranularPressureCoupling(domain);
+		coupling.prepare(0.05F);
 		domain.pressureStage.solve(0.05F);
 		domain.pressureStage.projectVelocities(0.05F);
 		double liquidAfter = pressureEnergy(domain), solidAfter = solidEnergy(domain);
@@ -242,9 +246,14 @@ public final class GranularCarrierValidation {
 		require(liquidAfter + solidAfter <= before * (1 + 2.0e-6),
 				"coupled pressure injected kinetic energy: before=" + before + ", after=" + (liquidAfter + solidAfter));
 		// Check the independent finite-volume continuity equation after both velocities were projected.
-		var coupling = new GranularPressureCoupling(domain);
-		java.util.Arrays.fill(domain.projection.rhs, 0);
-		coupling.prepare(0.05F);
+		// The pressure solve holds the predictor's swept geometry fixed. Check both
+		// projected velocities against that same operator, including its transpose.
+		double[] velocity = new double[3 * domain.granularState.parcels.count()], solidRates = new double[2 * domain.cellCount + 1];
+		for (int p = 0; p < domain.granularState.parcels.count(); p++) {
+			var parcel = domain.granularState.parcels.parcel(p);
+			velocity[3 * p] = parcel.velocityX(); velocity[3 * p + 1] = parcel.velocityY(); velocity[3 * p + 2] = parcel.velocityZ();
+		}
+		coupling.addVelocityDivergence(velocity, 0, solidRates, -1);
 		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
 			int cell = domain.projection.fluidUnknownCells[ordinal];
 			int x = cell % 6, y = cell / 6 % 6, z = cell / 36;
@@ -254,11 +263,35 @@ public final class GranularCarrierValidation {
 					- domain.pressureYFaceOpen(x, y, z) * domain.mac.velocityY[domain.yFaceIndex(x, y, z)]
 					+ domain.pressureZFaceOpen(x, y, z + 1) * domain.mac.velocityZ[domain.zFaceIndex(x, y, z + 1)]
 					- domain.pressureZFaceOpen(x, y, z) * domain.mac.velocityZ[domain.zFaceIndex(x, y, z)]) / domain.config.cellSize();
-			double solidRate = domain.projection.rhs[cell] * 0.05 / domain.config.density();
+			double solidRate = solidRates[cell];
 			// Float pressure/velocity writes and the parcel reduction can cancel to almost zero.
 			// Bound roundoff at the fixture's original 1 m/s velocity scale, not the cancelled flux.
 			double tolerance = 2 * domain.granularState.parcels.count() * Math.ulp(1.0F) / domain.config.cellSize();
 			require(Math.abs(div - solidRate) < tolerance, "liquid and solid velocities disagree on volume flux: " + (div - solidRate));
+		}
+	}
+
+	private static void sweptOccupancyConservation() {
+		for (float[] position : new float[][] {{1.749F, 1.751F, 1.749F}, {.2F, 1.751F, 1.749F}}) {
+			var domain = domain(); addParcel(domain, position[0], position[1], position[2], .5F, -.5F, .5F);
+			var p = domain.granularState.parcels.parcel(0); double dt = .05;
+			var gradient = new SweptGranularVolumeGradient(domain); int count = gradient.build(p, dt);
+			domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
+			long[] before = domain.granularCoupling.copySolidSvq();
+			domain.granularNextCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits,
+					(index, parcel) -> new cc.ecisr.mmm.granular.GranularCouplingFields.Position(
+							(float) (p.x() + dt * p.velocityX()), (float) (p.y() + dt * p.velocityY()), (float) (p.z() + dt * p.velocityZ())));
+			double sum = 0; boolean crossed = false;
+			for (int slot = 0; slot < count; slot++) {
+				int cell = gradient.cells[slot];
+				double change = dt * (gradient.x[slot] * p.velocityX() + gradient.y[slot] * p.velocityY() + gradient.z[slot] * p.velocityZ());
+				double expected = (domain.granularNextCoupling.solidSvq(cell) - before[cell]) / (double) SolidVolume.SVQ_PER_CELL;
+				require(Math.abs(change - expected) < 2.0 / SolidVolume.SVQ_PER_CELL,
+						"Swept solid gradient missed actual SVQ displacement at cell " + cell);
+				sum += change; crossed |= before[cell] == 0 && expected > 0;
+			}
+			require(crossed && Math.abs(sum) < 32 * Math.ulp(p.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_CELL),
+					"Swept support failed to enter a new cell or changed total solid volume");
 		}
 	}
 

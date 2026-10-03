@@ -58,7 +58,7 @@ final class GranularTransferPlanner {
 					cellX, cellY, cellZ, solidVolumeSvq, granular.parcels.count() + attempt * 16_384L,
 					Float.NaN, Float.NaN, Float.NaN);
 			if (candidate != null && domain.granularCoupling.tryPlanParcel(plannedSolid, candidate, solidVolumeSvq,
-					domain::granularGeometricOpenSvq)) position = candidate;
+					this::combinedInsertionCapacity)) position = candidate;
 		}
 		if (position == null) return FluidDomain.GranularInsertion.rejected("Target cell has no collision-valid solid capacity");
 		if (!domain.canAddCarrierVolume(solidVolumeSvq / (double) SolidVolume.SVQ_PER_CELL)) {
@@ -159,7 +159,7 @@ final class GranularTransferPlanner {
 							candidateX, candidateY, candidateZ, draft.solidVolumeSvq(), sequence,
 							Float.NaN, Float.NaN, Float.NaN);
 					if (spawn != null && domain.granularCoupling.tryPlanParcel(plannedSolid, spawn, draft.solidVolumeSvq(),
-							domain::granularGeometricOpenSvq)) {
+							this::combinedInsertionCapacity)) {
 						selected = candidate.index(); selectedPosition = spawn; break;
 					}
 				}
@@ -217,6 +217,19 @@ final class GranularTransferPlanner {
 		}
 		granular.externalSource = sourceAfter;
 		return new FluidDomain.GranularInsertion(true, insertedSvq, insertedMass, null);
+	}
+
+	private long combinedInsertionCapacity(int cell) {
+		SignedDyadic liquid = domain.markerGrid.exactCellVolumeInventory[cell];
+		int exponent = liquid.exponent() + 24;
+		BigInteger occupied;
+		if (exponent >= 0) occupied = liquid.significand().shiftLeft(exponent);
+		else {
+			BigInteger divisor = BigInteger.ONE.shiftLeft(-exponent);
+			BigInteger[] division = liquid.significand().divideAndRemainder(divisor);
+			occupied = division[0].add(division[1].signum() == 0 ? BigInteger.ZERO : BigInteger.ONE);
+		}
+		return Math.max(0, domain.granularGeometricOpenSvq(cell) - occupied.longValueExact());
 	}
 
 	/** Number of nearby cells needed to release the local inventory at its material-defined loose packing. */

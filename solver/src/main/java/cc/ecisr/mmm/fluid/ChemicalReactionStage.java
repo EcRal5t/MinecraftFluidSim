@@ -19,6 +19,7 @@ final class ChemicalReactionStage {
 		ChemicalParcelStore chemicalParcels();
 		FluidMaterialRegistry materialRegistry();
 		ThermalDomainState thermalState();
+		void markGridDirty();
 	}
 
 	private final Workspace state;
@@ -39,13 +40,15 @@ final class ChemicalReactionStage {
 		if (chemistry == null) return new ChemicalParcelStore.ReactionStats(0, 0, 0);
 		LiquidParticleStore.DirectArrays arrays = state.particles().directArrays();
 		ThermalDomainState thermal = access.thermalState();
-		return chemistry.reactDirtyCells(
+		var result = chemistry.reactDirtyCells(
 				state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(),
 				arrays.positionX, arrays.positionY, arrays.positionZ,
 				arrays.mass, arrays.materialHandle,
 				handle -> access.materialRegistry().material(handle).id(), state.particles().count(),
 				thermal == null ? (marker, mixture, mass) -> { }
 						: (marker, mixture, mass) -> requireThermalCandidate(thermal, marker, mixture, mass, state.thermalMarkers()));
+		if (result.changedMarkers() != 0) access.markGridDirty();
+		return result;
 	}
 
 	static void requireThermalCandidate(ThermalDomainState thermal, int marker,

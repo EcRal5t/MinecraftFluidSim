@@ -63,7 +63,7 @@ final class PressureProjectionStage {
 		state.projection.gasUnknownCount = 0;
 		pressureAnchor = findPressureAnchor();
 		access.pressureAnchor(pressureAnchor);
-		access.pressureReference(pressureAnchor < 0 ? pressureBoundaryReference() : 0.0F);
+		access.pressureReference(pressureAnchor < 0 ? pressureBoundaryReference(dt) : 0.0F);
 		Arrays.fill(state.projection.pressure, 0.0F);
 		float inverseCell = 1.0F / state.config.cellSize();
 		int fluidCells = 0;
@@ -83,7 +83,7 @@ final class PressureProjectionStage {
 			fluidCells++;
 		}
 		assembleCompressibleGasRows(dt);
-		system.forEachGranularGasNode(node -> {
+		system.forEachGranularGasNode(dt, node -> {
 			if (gasBoundary.gasNodeHasContinuumState(node)) activateCompressibleGasNode(node, dt);
 		});
 		system.prepareGranular(dt);
@@ -238,11 +238,11 @@ final class PressureProjectionStage {
 				&& (access.isFluid(first) || access.isFluid(second));
 	}
 
-	private float pressureBoundaryReference() {
+	private float pressureBoundaryReference(float dt) {
 		if (!gasBoundary.pressureActive()) return 0.0F;
 		boolean[] seen = referenceNodes;
 		Arrays.fill(seen, false);
-		system.forEachGranularGasNode(node -> seen[Math.max(0, node)] = true);
+		system.forEachGranularGasNode(dt, node -> seen[Math.max(0, node)] = true);
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int air = access.cellIndex(x, y, z);
 			if (!access.isAir(air)) continue;
