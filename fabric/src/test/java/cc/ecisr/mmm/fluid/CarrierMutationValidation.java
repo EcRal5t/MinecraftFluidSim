@@ -20,6 +20,7 @@ public final class CarrierMutationValidation {
 		capacityEdgeRejectsBeforeAnyWrite();
 		stalePlansRejectWithoutStateChange();
 		wholesaleCountBindsRevisionAndBudget();
+		chemicalRemapPublishesTheFinalBudget();
 		readOnlyCellQueriesFollowCarrierEdits();
 		volumeObservationRoundsTheExactInventoryOnce();
 		insertionNeverRoundsCapacityUp();
@@ -292,6 +293,48 @@ public final class CarrierMutationValidation {
 		} catch (IllegalArgumentException expected) {
 			require(domain.particles.count() == 2, "budget rejection changed the count");
 		}
+	}
+
+	private static void chemicalRemapPublishesTheFinalBudget() {
+		var registry = cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY;
+		var store = new cc.ecisr.mmm.chemistry.ChemicalParcelStore(registry,
+				new cc.ecisr.mmm.units.SolverUnitScale(1), 4, 64);
+		long limit = cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA;
+		var small = new ChemicalMixtureRecord(new int[] {0}, new long[] {1}, 0);
+		var large = new ChemicalMixtureRecord(new int[] {0}, new long[] {limit - 1}, 0);
+		store.assign(0, small, false); store.assign(1, large, true); store.markDirtyCell(9);
+		int first = store.mixtureHandle(0), second = store.mixtureHandle(1);
+		var replacements = new ChemicalMixtureRecord[] {large, small}; boolean[] indicators = {true, false};
+		var plan = store.planMarkerRemap(2, replacements, indicators);
+		replacements[0] = small; indicators[0] = false;
+		store.commitMarkerRemap(plan);
+		require(store.totalQuanta() == limit && store.record(0).equals(large) && store.indicator(0)
+				&& store.mixtureHandle(0) == first && store.mixtureHandle(1) == second
+				&& java.util.Arrays.equals(store.dirtyCells(), new int[] {9}),
+				"whole chemical remap lost the final budget, immutable plan, handles or dirty cells");
+		long revision = store.mutationRevision();
+		try {
+			store.planMarkerRemap(2, new ChemicalMixtureRecord[] {large, large}, new boolean[2]);
+			throw new AssertionError("over-budget chemical remap was accepted");
+		} catch (IllegalArgumentException expected) {
+			require(store.mutationRevision() == revision && store.totalQuanta() == limit,
+					"chemical remap preflight changed the store");
+		}
+		var stale = store.planMarkerRemap(2, new ChemicalMixtureRecord[] {small}, new boolean[1]);
+		store.updateIndicator(0, false);
+		try {
+			store.commitMarkerRemap(stale); throw new AssertionError("stale chemical remap was accepted");
+		} catch (IllegalStateException expected) {
+			require(store.pool().liveCount() == 2 && store.totalQuanta() == limit, "stale chemical remap changed inventory");
+		}
+		store.commitMarkerRemap(store.planMarkerRemap(2, new ChemicalMixtureRecord[] {large}, new boolean[] {true}));
+		require(store.pool().liveCount() == 1 && !store.isAssigned(1) && store.totalQuanta() == limit - 1,
+				"chemical remap shrink did not release surplus handles");
+		store.commitMarkerRemap(store.planMarkerRemap(1, new ChemicalMixtureRecord[] {large, small}, new boolean[2]));
+		require(store.pool().liveCount() == 2 && store.totalQuanta() == limit && store.isAssigned(1),
+				"chemical remap growth did not adopt aligned handles");
+		store.commitMarkerRemap(store.planMarkerRemap(2, new ChemicalMixtureRecord[0], new boolean[0]));
+		require(store.pool().liveCount() == 0 && store.totalQuanta() == 0, "empty chemical remap retained inventory");
 	}
 
 	private static void require(boolean condition, String message) {

@@ -127,6 +127,48 @@ public final class ChemicalParcelStore {
 		mutationRevision++;
 	}
 
+	/** Preflights an aligned replacement of the complete live marker inventory. */
+	public MarkerRemap planMarkerRemap(int oldCount, ChemicalMixtureRecord[] records, boolean[] indicators) {
+		if (oldCount < 0 || oldCount > markerHandles.length || records == null || indicators == null
+				|| records.length > markerHandles.length || records.length != indicators.length
+				|| pool.liveCount() != oldCount)
+			throw new IllegalArgumentException("Chemical marker remap counts are inconsistent");
+		for (int marker = 0; marker < oldCount; marker++) requireAssigned(marker);
+		long candidate = 0;
+		for (ChemicalMixtureRecord record : records) {
+			validateRecord(record); candidate = Math.addExact(candidate, record.totalQuanta());
+		}
+		if (candidate > ChemicalLimits.MAX_REGION_TOTAL_QUANTA)
+			throw new IllegalArgumentException("Region chemical inventory is over budget");
+		return new MarkerRemap(this, mutationRevision, oldCount, records.clone(), indicators.clone(), candidate);
+	}
+
+	/** Retains surviving handles and dirty cells; the preflighted total is published once. */
+	public void commitMarkerRemap(MarkerRemap plan) {
+		if (plan == null || plan.store != this || plan.revision != mutationRevision)
+			throw new IllegalStateException("Chemical marker remap is stale or belongs to another store");
+		for (int marker = plan.oldCount - 1; marker >= plan.records.length; marker--) remove(marker);
+		for (int marker = 0; marker < plan.records.length; marker++) {
+			if (marker < plan.oldCount) pool.overwrite(markerHandles[marker], plan.records[marker]);
+			else markerHandles[marker] = pool.create(plan.records[marker]);
+			setIndicator(marker, plan.indicators[marker]);
+		}
+		totalQuanta = plan.total; mutationRevision++;
+	}
+
+	public static final class MarkerRemap {
+		private final ChemicalParcelStore store;
+		private final long revision, total;
+		private final int oldCount;
+		private final ChemicalMixtureRecord[] records;
+		private final boolean[] indicators;
+		private MarkerRemap(ChemicalParcelStore store, long revision, int oldCount,
+				ChemicalMixtureRecord[] records, boolean[] indicators, long total) {
+			this.store = store; this.revision = revision; this.oldCount = oldCount;
+			this.records = records; this.indicators = indicators; this.total = total;
+		}
+	}
+
 	public void assignDefault(
 			int marker, String materialId, float cellVolume, float cellSize, double markerMass, boolean indicator
 	) {
