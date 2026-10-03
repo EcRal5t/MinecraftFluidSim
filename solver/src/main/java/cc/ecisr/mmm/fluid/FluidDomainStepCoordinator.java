@@ -572,19 +572,19 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		return (ox == 0 ? 1.0F - fx : fx) * (oy == 0 ? 1.0F - fy : fy) * (oz == 0 ? 1.0F - fz : fz);
 	}
 
-	void splatFaceField(float[] sums, float[] weights, int axis, float px, float py, float pz, float value, float particleAmount) {
-		float h = config.cellSize();
+	/** Scatters a marker already expressed in cell coordinates, preserving ordinal accumulation order. */
+	void splatFaceField(float[] sums, float[] weights, int axis, float cellX, float cellY, float cellZ, float value, float particleAmount) {
 		int nx = axis == 0 ? sizeX + 1 : sizeX;
 		int ny = axis == 1 ? sizeY + 1 : sizeY;
 		int nz = axis == 2 ? sizeZ + 1 : sizeZ;
-		float gx = Math.clamp(px / h - (axis == 0 ? 0.0F : 0.5F), 0, nx - 1);
-		float gy = Math.clamp(py / h - (axis == 1 ? 0.0F : 0.5F), 0, ny - 1);
-		float gz = Math.clamp(pz / h - (axis == 2 ? 0.0F : 0.5F), 0, nz - 1);
+		float gx = Math.clamp(cellX - (axis == 0 ? 0.0F : 0.5F), 0, nx - 1);
+		float gy = Math.clamp(cellY - (axis == 1 ? 0.0F : 0.5F), 0, ny - 1);
+		float gz = Math.clamp(cellZ - (axis == 2 ? 0.0F : 0.5F), 0, nz - 1);
 		int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
 		float fx = gx - x0, fy = gy - y0, fz = gz - z0;
-		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
+		int endX = Math.min(1, nx - 1 - x0), endY = Math.min(1, ny - 1 - y0), endZ = Math.min(1, nz - 1 - z0);
+		for (int oz = 0; oz <= endZ; oz++) for (int oy = 0; oy <= endY; oy++) for (int ox = 0; ox <= endX; ox++) {
 			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
-			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
 			float weight = (ox == 0 ? 1.0F - fx : fx) * (oy == 0 ? 1.0F - fy : fy) * (oz == 0 ? 1.0F - fz : fz);
 			int index = (z * ny + y) * nx + x;
 			float weighted = weight * particleAmount;

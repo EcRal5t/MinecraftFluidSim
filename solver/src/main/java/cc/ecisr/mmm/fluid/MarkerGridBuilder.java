@@ -57,12 +57,14 @@ final class MarkerGridBuilder {
 			if (!conservativeVolume) domain.splatPressureVolume(positionX, positionY, positionZ, particleVolume);
 			float transferWeight = domain.variableDensityActive
 					? (float) particleMass : particleVolume;
+			float h = domain.config.cellSize();
+			float gx = positionX / h, gy = positionY / h, gz = positionZ / h;
 			domain.splatFaceField(domain.mac.velocityX, domain.mac.velocityWeightX, 0,
-					positionX, positionY, positionZ, domain.particles.velocityX(i), transferWeight);
+					gx, gy, gz, domain.particles.velocityX(i), transferWeight);
 			domain.splatFaceField(domain.mac.velocityY, domain.mac.velocityWeightY, 1,
-					positionX, positionY, positionZ, domain.particles.velocityY(i), transferWeight);
+					gx, gy, gz, domain.particles.velocityY(i), transferWeight);
 			domain.splatFaceField(domain.mac.velocityZ, domain.mac.velocityWeightZ, 2,
-					positionX, positionY, positionZ, domain.particles.velocityZ(i), transferWeight);
+					gx, gy, gz, domain.particles.velocityZ(i), transferWeight);
 		}
 		grid.exactCellVolumeInventory = ExactCellVolumeSums.sum(domain.particles.directArrays().volume,
 				domain.particles.count(), grid.cellMarkerHead, grid.particleCellNext);

@@ -495,25 +495,21 @@ final class CellCarrierRemapPlan {
 			totals[donor]--; totals[p]++;
 		}
 		for (int p = 0; p < result.length; p++) if (totals[p] > 0) {
+			// Compare the planned quantities before allocating a new immutable record.
+			for (int earlier = 0; earlier < p; earlier++) if (result[earlier] != null) {
+				boolean same = true;
+				for (long[] values : quantities) if (values[earlier] != values[p]) { same = false; break; }
+				if (same) { result[p] = result[earlier]; break; }
+			}
+			if (result[p] != null) continue;
 			int count = 0; for (long[] values : quantities) if (values[p] > 0) count++;
 			int[] parcelHandles = new int[count]; long[] amounts = new long[count]; int entry = 0;
 			for (int i = 0; i < handles.length; i++) if (quantities[i][p] > 0) {
 				parcelHandles[entry] = handles[i]; amounts[entry++] = quantities[i][p];
 			}
-			// Neighboring quadrature shares often carry the same exact integer inventory.
-			// Reuse that immutable inventory and its exact-mass memo within this allocation.
-			for (int earlier = 0; earlier < p; earlier++) if (result[earlier] != null
-					&& matches(result[earlier], parcelHandles, amounts)) {
-				result[p] = result[earlier]; break;
-			}
-			if (result[p] == null) result[p] = new ChemicalMixtureRecord(parcelHandles, amounts, 0);
+			result[p] = new ChemicalMixtureRecord(parcelHandles, amounts, 0);
 		}
 		return result;
-	}
-	private static boolean matches(ChemicalMixtureRecord record, int[] handles, long[] amounts) {
-		if (record.entryCount() != handles.length) return false;
-		for (int i = 0; i < handles.length; i++) if (record.speciesHandle(i) != handles[i] || record.amountAt(i) != amounts[i]) return false;
-		return true;
 	}
 
 	private static void add(long[] destination, CellSpeciesInventory source) {

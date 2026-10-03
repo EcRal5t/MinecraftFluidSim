@@ -100,7 +100,8 @@ public record ThermalMaterialDefinition(
 			total += (Math.min(high, first.minimumTemperatureK()) - low)
 					* first.specificHeatEuPerMuK();
 		}
-		for (CaloricSegment segment : caloricSegments) {
+		for (int index = 0; index < caloricSegments.size(); index++) {
+			CaloricSegment segment = caloricSegments.get(index);
 			double overlap = Math.min(high, segment.maximumTemperatureK())
 					- Math.max(low, segment.minimumTemperatureK());
 			if (overlap > 0.0) total += overlap * segment.specificHeatEuPerMuK();
@@ -123,7 +124,8 @@ public record ThermalMaterialDefinition(
 		if (sensibleSpecificEnergy > 0.0) {
 			double remaining = sensibleSpecificEnergy;
 			double cursor = referenceTemperatureK;
-			for (CaloricSegment segment : caloricSegments) {
+			for (int index = 0; index < caloricSegments.size(); index++) {
+				CaloricSegment segment = caloricSegments.get(index);
 				if (segment.maximumTemperatureK() <= cursor) continue;
 				double start = Math.max(cursor, segment.minimumTemperatureK());
 				double capacity = (segment.maximumTemperatureK() - start) * segment.specificHeatEuPerMuK();

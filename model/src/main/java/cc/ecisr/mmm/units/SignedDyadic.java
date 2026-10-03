@@ -106,6 +106,7 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 	/** Exact binary32 inventory sum using bounded exponent bins. */
 	public static SignedDyadic sum(float[] values, int length) {
 		if (values == null || length < 0 || length > values.length) throw new IllegalArgumentException("Invalid float inventory range");
+		if (length == 0) return ZERO;
 		long[] bins = new long[254];
 		int first = bins.length, last = -1;
 		for (int i = 0; i < length; i++) {
@@ -135,6 +136,7 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 		if (values == null || length < 0 || length > values.length) {
 			throw new IllegalArgumentException("Thermal audit sum range is invalid");
 		}
+		if (length == 0) return ZERO;
 		long[] low = new long[DOUBLE_EXPONENT_BINS];
 		long[] high = new long[DOUBLE_EXPONENT_BINS];
 		int minimumBin = DOUBLE_EXPONENT_BINS;
