@@ -23,7 +23,10 @@ public final class FlipFluidFreeSurfaceValidation {
 		pressureNonConvergenceRejectsStep();
 		thinLayerRegularizationRemainsStable();
 		isolatedDropletReceivesUndilutedGravity();
-		if (!fast) longRunHydrostaticSurfaceDoesNotSink();
+		if (!fast) {
+			longRunHydrostaticSurfaceDoesNotSink();
+			if (Boolean.getBoolean("mmm.cellVolumeTransport")) MarkerDistributionExperiment.damDistribution();
+		}
 		waterDescendsAStairSlope();
 		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; 5,000-step soak skipped)" : ""));
 	}

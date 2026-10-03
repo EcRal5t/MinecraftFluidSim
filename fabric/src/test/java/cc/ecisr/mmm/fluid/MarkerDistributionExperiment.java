@@ -98,19 +98,59 @@ public final class MarkerDistributionExperiment {
 		measure(domain, "analytic map N=" + n + " samples/axis=" + samples);
 	}
 
-	private static void damDistribution() {
+	static void damDistribution() {
 		var domain = new FluidDomain(12, 8, 6, config(0.5F, 9.81F, 0.025F), 12 * 8 * 6 * 8);
 		for (int z = 0; z < 6; z++) for (int x = 0; x < 12; x++) domain.setSolid(x, 0, z, true);
 		for (int z = 0; z < 6; z++) for (int y = 1; y <= 6; y++) for (int x = 0; x < 6; x++)
 			domain.setVolume(x, y, z, 1);
 		double inventory = domain.totalVolumeExact();
+		double mass = domain.totalMass(), massRoundoff = 0, previousMassRoundoff = 0;
+		boolean conservative = CellLiquidVolumeTransport.enabled(domain);
+		if (conservative) previousMassRoundoff = auditConservativeDistribution(domain);
 		measure(domain, "dam step=0");
 		var backend = new CpuFluidSolverBackend();
 		for (int s = 1; s <= 5000; s++) {
 			domain = backend.evaluate(new FluidStepRequest(s, domain.captureAuthoritativeState(), List.of(), false, 0)).claimPreparedCpuDomain();
 			if (domain.totalVolumeExact() != inventory) throw new AssertionError("Marker experiment changed volume inventory");
+			if (conservative) {
+				double roundoff = auditConservativeDistribution(domain);
+				massRoundoff += previousMassRoundoff + roundoff; previousMassRoundoff = roundoff;
+				if (Math.abs(domain.totalMass() - mass) > massRoundoff)
+					throw new AssertionError("Sustained liquid transport exceeded its accumulated mass roundoff");
+			}
 			if (s == 100 || s == 500 || s == 1000 || s == 5000) measure(domain, "dam step=" + s);
 		}
+		if (conservative) System.out.printf("  conservative dam: 5000 steps, exact cell capacities and pressure inventory matched; massError=%g bound=%g%n",
+				domain.totalMass() - mass, massRoundoff);
+	}
+
+	private static double auditConservativeDistribution(FluidDomain domain) {
+		domain.ensureGrid();
+		for (int cell = 0; cell < domain.cellCount; cell++) {
+			var volume = domain.markerGrid.exactCellVolumeInventory[cell];
+			if (volume.signum() < 0 || volume.compareTo(cc.ecisr.mmm.units.SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell))) > 0)
+				throw new AssertionError("Sustained liquid transport exceeded cell capacity at " + cell);
+			if (domain.projection.pressureVolume[cell] != volume.toDouble())
+				throw new AssertionError("Pressure geometry diverged from transported inventory at " + cell);
+			if (!volume.equals(cc.ecisr.mmm.units.SignedDyadic.of(1))) continue;
+			if (domain.markerGrid.markerCount[cell] != 8)
+				throw new AssertionError("Full liquid cell lost its spatial integration rule");
+			int slots = 0;
+			for (int p = domain.markerGrid.cellMarkerHead[cell]; p >= 0; p = domain.markerGrid.particleCellNext[p]) {
+				int slot = 0;
+				for (int axis = 0; axis < 3; axis++) {
+					double position = switch (axis) { case 0 -> domain.particles.positionX(p); case 1 -> domain.particles.positionY(p); default -> domain.particles.positionZ(p); };
+					double offset = position / domain.config.cellSize() - Math.floor(position / domain.config.cellSize()) - 0.5;
+					if (Math.abs(offset) != 0.25) throw new AssertionError("Full-cell integration points clustered");
+					if (offset > 0) slot |= 1 << axis;
+				}
+				if ((slots & 1 << slot) != 0) throw new AssertionError("Full-cell integration point was duplicated");
+				slots |= 1 << slot;
+			}
+		}
+		double roundoff = 0;
+		for (int p = 0; p < domain.particleCount(); p++) roundoff += Math.ulp(domain.particles.mass(p));
+		return roundoff;
 	}
 
 	private static void freeSurfaceConvergence() {
