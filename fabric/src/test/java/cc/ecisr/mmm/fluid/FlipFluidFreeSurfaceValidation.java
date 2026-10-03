@@ -146,9 +146,12 @@ public final class FlipFluidFreeSurfaceValidation {
 				{1.0F, 0.0F, 0.0F},
 				{0.0F, -1.0F, 0.0F},
 				{0.70710677F, 0.70710677F, 0.0F},
+				{0.125F, -1.0F, 0.0F},
+				{0.0F, -0.125F, 1.0F},
+				{-1.0F, 0.0F, 0.125F},
 				{-0.26726124F, 0.5345225F, 0.8017837F}
 		};
-		float[] fractions = {0.05F, 0.25F, 0.50F, 0.75F, 0.95F};
+		float[] fractions = {0.001F, 0.05F, 0.0625F, 0.10F, 0.25F, 0.50F, 0.75F, 0.90F, 0.9375F, 0.95F, 0.999F};
 		for (float[] normal : normals) for (float fraction : fractions) {
 			float offset = FlipFreeSurfaceGeometry.solvePlaneOffset(normal[0], normal[1], normal[2], fraction);
 			float reconstructed = FlipFreeSurfaceGeometry.unitCubeLiquidFraction(

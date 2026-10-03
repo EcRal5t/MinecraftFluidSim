@@ -127,7 +127,7 @@ final class CarrierMutationCoordinator {
 		}
 		if (energies != null) domain.thermalState.restoreLiquidEnergies(energies);
 		domain.particles.setCount(count); domain.bumpCarrierMutationRevision(); domain.gridDirty = true;
-		if (energies != null) domain.thermalState.recordRoundoff(domain.exactInternalEnergy().subtract(candidate.energyBefore));
+		if (energies != null) domain.thermalState.recordRoundoff(candidate.energyRoundoff);
 	}
 
 	/** Clears the liquid marker column together with its chemistry column after a validated plan. */

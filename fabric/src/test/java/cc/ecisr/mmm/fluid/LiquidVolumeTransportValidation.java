@@ -42,34 +42,44 @@ public final class LiquidVolumeTransportValidation {
 		allocationMatchesIntegerOracle();
 		quadratureAndMassKeepSmallShares();
 		chemicalShareCountRespectsSpeciesGroups();
-		double previousError = Double.POSITIVE_INFINITY;
-		for (int n : new int[] {12, 24, 48}) {
-			var experiment = new LiquidVolumeTransportValidation(n); int steps = n * 10;
-			long start = System.nanoTime();
-			for (int s = 0; s < steps; s++) experiment.step(1.0 / steps);
-			double error = 0, total = 0, peak = 0;
-			for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
-				int inside = 0, reference = 128;
-				for (int sy = 0; sy < reference; sy++) for (int sx = 0; sx < reference; sx++) {
-					double dx = (x + (sx + 0.5) / reference) * experiment.h - 3;
-					double dy = (y + (sy + 0.5) / reference) * experiment.h - 3;
-					double r2 = dx * dx + dy * dy, angle = r2 < 6.25 ? 6 * Math.pow(1 - r2 / 6.25, 2) : 0;
-					if (dx * Math.cos(angle) + dy * Math.sin(angle) < 0) inside++;
+		for (double duration : new double[] {1, 4}) {
+			double previousError = Double.POSITIVE_INFINITY, previousReferenceError = 0;
+			for (int n : duration == 1 ? new int[] {12, 24, 48} : new int[] {24, 48, 96}) {
+				var experiment = new LiquidVolumeTransportValidation(n); int steps = (int) (duration * n * 10);
+				long start = System.nanoTime();
+				for (int step = 0; step < steps; step++) experiment.step(duration / steps);
+				double error = 0, referenceError = 0, peak = 0;
+				SignedDyadic inventory = SignedDyadic.ZERO;
+				for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
+					double reference = referenceFraction(x, y, experiment.h, duration, 128);
+					referenceError += Math.abs(reference - referenceFraction(x, y, experiment.h, duration, 64));
+					double v = experiment.volume[y * n + x];
+					var exact = experiment.exactVolume[y * n + x];
+					if (exact.compareTo(SignedDyadic.ZERO) < 0 || exact.compareTo(SignedDyadic.of(1)) > 0)
+						throw new AssertionError("Liquid flux exceeded exact cell capacity: " + exact);
+					inventory = inventory.add(exact); error += Math.abs(v - reference); peak = Math.max(peak, v);
 				}
-				double v = experiment.volume[y * n + x];
-				var exact = experiment.exactVolume[y * n + x];
-				if (exact.compareTo(SignedDyadic.ZERO) < 0 || exact.compareTo(SignedDyadic.of(1)) > 0)
-					throw new AssertionError("Liquid flux exceeded exact cell capacity: " + exact);
-				error += Math.abs(v - (double) inside / (reference * reference)); total += v; peak = Math.max(peak, v);
+				if (!inventory.equals(SignedDyadic.of(n * n / 2))) throw new AssertionError("Analytic swirl changed exact liquid inventory");
+				double normalizedError = error / (n * n * 0.5), normalizedReferenceError = referenceError / (n * n * 0.5);
+				if (!(normalizedError + normalizedReferenceError < previousError - previousReferenceError)
+						|| duration == 1 && !(normalizedError < 0.6 * previousError))
+					throw new AssertionError("Liquid volume failed spatial convergence beyond reference discretization: time=" + duration
+							+ " N=" + n + " L1/V=" + normalizedError + " referenceDelta=" + normalizedReferenceError);
+				previousError = normalizedError; previousReferenceError = normalizedReferenceError;
+				System.out.printf("geometric flux t=%g N=%d L1/V=%g referenceDelta=%g peak=%g elapsed=%g ms%n",
+						duration, n, normalizedError, normalizedReferenceError, peak, (System.nanoTime() - start) / 1e6);
 			}
-			SignedDyadic inventory = SignedDyadic.ZERO;
-			for (SignedDyadic v : experiment.exactVolume) inventory = inventory.add(v);
-			if (!inventory.equals(SignedDyadic.of(n * n / 2))) throw new AssertionError("Analytic swirl changed exact liquid inventory");
-			double normalizedError = error / (n * n * 0.5);
-			if (!(normalizedError < 0.6 * previousError)) throw new AssertionError("Liquid volume failed independent spatial convergence");
-			previousError = normalizedError;
-			System.out.printf("geometric flux N=%d L1/V=%g peak=%g ledger=%g elapsed=%g ms%n", n, error / (n * n * 0.5), peak, total - n * n * 0.5, (System.nanoTime() - start) / 1e6);
 		}
+	}
+
+	private static double referenceFraction(int x, int y, double h, double time, int samples) {
+		int inside = 0;
+		for (int sy = 0; sy < samples; sy++) for (int sx = 0; sx < samples; sx++) {
+			double dx = (x + (sx + 0.5) / samples) * h - 3, dy = (y + (sy + 0.5) / samples) * h - 3;
+			double r2 = dx * dx + dy * dy, angle = r2 < 6.25 ? 6 * time * Math.pow(1 - r2 / 6.25, 2) : 0;
+			if (dx * Math.cos(angle) + dy * Math.sin(angle) < 0) inside++;
+		}
+		return (double) inside / (samples * samples);
 	}
 
 	private static void courantUsesOccupiedDonors() {
@@ -153,9 +163,9 @@ public final class LiquidVolumeTransportValidation {
 		domain.setVolume(0, 0, 0, 1);
 		for (int p = 0; p < domain.particleCount(); p++) {
 			double x = domain.particles.positionX(p) / domain.config.cellSize() - 0.5, y = domain.particles.positionY(p) / domain.config.cellSize() - 0.5, z = domain.particles.positionZ(p) / domain.config.cellSize() - 0.5;
-			domain.particles.setVelocityX(p, (float) (1 + 2 * x + 3 * y + 4 * z));
-			domain.particles.setVelocityY(p, (float) (-2 + x - 2 * y + z));
-			domain.particles.setVelocityZ(p, (float) (x + y + z));
+			domain.particles.setVelocityX(p, (float) (1 + 2 * x + 3 * y + 4 * z + x * y + 2 * x * z + 3 * y * z + 4 * x * y * z));
+			domain.particles.setVelocityY(p, (float) (-2 + x - 2 * y + z - 2 * x * y + x * z - y * z + x * y * z));
+			domain.particles.setVelocityZ(p, (float) (x + y + z + x * y - x * z + y * z - 2 * x * y * z));
 		}
 		domain.rebuildGridFromParticles(); var transport = new ConservativeLiquidFlux(2, 2, 2);
 		transport.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
@@ -168,10 +178,11 @@ public final class LiquidVolumeTransportValidation {
 				firstMoment[a] += marker.volume() * offset[a];
 				for (int b = 0; b < 3; b++) secondMoment[a][b] += marker.volume() * offset[a] * offset[b];
 			}
-			if ((float) marker.velocityX() != (float) (1 + 2 * offset[0] + 3 * offset[1] + 4 * offset[2])
-					|| (float) marker.velocityY() != (float) (-2 + offset[0] - 2 * offset[1] + offset[2])
-					|| (float) marker.velocityZ() != (float) (offset[0] + offset[1] + offset[2]))
-				throw new AssertionError("Cell quadrature lost a resolved three-dimensional affine velocity: offset=" + java.util.Arrays.toString(offset) + " velocity=" + marker.toString() + " h=" + domain.config.cellSize());
+			double x = offset[0], y = offset[1], z = offset[2];
+			if ((float) marker.velocityX() != (float) (1 + 2 * x + 3 * y + 4 * z + x * y + 2 * x * z + 3 * y * z + 4 * x * y * z)
+					|| (float) marker.velocityY() != (float) (-2 + x - 2 * y + z - 2 * x * y + x * z - y * z + x * y * z)
+					|| (float) marker.velocityZ() != (float) (x + y + z + x * y - x * z + y * z - 2 * x * y * z))
+				throw new AssertionError("Cell quadrature lost a resolved three-dimensional tensor velocity: " + marker);
 		}
 		for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++)
 			if (firstMoment[a] != 0 || secondMoment[a][b] != (a == b ? 1.0 / 16 : 0))

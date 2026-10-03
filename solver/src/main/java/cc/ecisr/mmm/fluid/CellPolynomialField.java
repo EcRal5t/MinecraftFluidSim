@@ -92,6 +92,17 @@ final class CellPolynomialField {
 				+ coefficients[4] * (x * y) + coefficients[5] * (x * z) + coefficients[6] * (y * z) + coefficients[7] * (x * y * z);
 	}
 
+	/** Inverse orthogonal transform on the complete standard eight-point tensor rule. */
+	static double[] tensorValues(double[] coefficients) {
+		double[] result = {coefficients[0], coefficients[1], coefficients[2], coefficients[4],
+				coefficients[3], coefficients[5], coefficients[6], coefficients[7]};
+		for (int width = 1; width < 8; width *= 2) for (int block = 0; block < 8; block += 2 * width)
+			for (int i = block; i < block + width; i++) {
+				double a = result[i], b = result[i + width]; result[i] = a - b; result[i + width] = a + b;
+			}
+		return result;
+	}
+
 	/** Evolves intrinsic temperature variation under cell-relative deformation. */
 	static double[] deform(double[] coefficients, FluidDomain domain, int cell, float dt) {
 		boolean constant = true;

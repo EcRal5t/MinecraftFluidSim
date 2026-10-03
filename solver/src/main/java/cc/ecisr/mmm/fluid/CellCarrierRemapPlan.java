@@ -21,7 +21,7 @@ final class CellCarrierRemapPlan {
 		}
 	}
 	final ArrayList<Marker> markers = new ArrayList<>();
-	final SignedDyadic energyBefore;
+	final SignedDyadic energyRoundoff;
 	final boolean[] changedSpeciesCells;
 	private final FluidDomain domain;
 	private final ArrayList<Group>[] input, output;
@@ -42,10 +42,24 @@ final class CellCarrierRemapPlan {
 		this.geometryRemap = geometryRemap;
 		changedSpeciesCells = new boolean[domain.cellCount];
 		markers.ensureCapacity(domain.particles.count());
-		energyBefore = domain.thermalState == null ? SignedDyadic.ZERO : domain.exactInternalEnergy();
 		input = (ArrayList<Group>[]) new ArrayList<?>[domain.cellCount];
 		output = (ArrayList<Group>[]) new ArrayList<?>[domain.cellCount];
 		outgoingHead = new int[domain.cellCount]; outgoingNext = new int[flux.flux.length]; Arrays.fill(outgoingHead, -1);
+		gatherInput();
+		phaseGeometry = phaseGeometry();
+		for (int f = flux.flux.length - 1; f >= 0; f--) if (flux.exactFlux[f].signum() > 0) {
+			int c = flux.donor(f); outgoingNext[f] = outgoingHead[c]; outgoingHead[c] = f;
+		}
+		for (int cell = 0; cell < domain.cellCount; cell++) if (input[cell] != null) distribute(cell, flux);
+		for (int cell = 0; cell < domain.cellCount; cell++) if (output[cell] != null) for (Group group : output[cell]) {
+			if (domain.thermalState != null) group.temperature = temperature(group);
+		}
+		for (int cell = 0; cell < domain.cellCount; cell++) if (output[cell] != null) for (Group group : output[cell]) sample(group);
+		markers.addAll(ballistic.markers);
+		energyRoundoff = validateInventories(flux, ballistic);
+	}
+
+	private void gatherInput() {
 		for (int p = 0; p < domain.particles.count(); p++) {
 			int cell = domain.particleCellIndex(p), material = domain.particles.materialHandle(p);
 			if (!geometryRemap && !domain.gridToParticleStage.advectionCells()[cell]) continue;
@@ -71,26 +85,20 @@ final class CellCarrierRemapPlan {
 		}
 		if (domain.thermalState != null) for (ArrayList<Group> groups : input) if (groups != null)
 			for (Group group : groups) temperatureBounds(group);
-		int phases = domain.materialRegistry == null ? 1 : domain.materialRegistry.phaseCount();
-		double[][] phaseVolumes = new double[phases][domain.cellCount];
-		for (ArrayList<Group> groups : input) if (groups != null) for (Group group : groups)
-			phaseVolumes[phase(group.material)][group.cell] += group.volume.toDouble();
+	}
+
+	private PhaseVolumeTransportGeometry phaseGeometry() {
+		if (geometryRemap || domain.materialRegistry == null || domain.materialRegistry.phaseCount() <= 1) return null;
 		boolean mixedCell = false;
 		for (ArrayList<Group> groups : input) if (groups != null && groups.size() > 1) {
 			int firstPhase = phase(groups.getFirst().material);
 			for (Group group : groups) mixedCell |= phase(group.material) != firstPhase;
 		}
-		phaseGeometry = !geometryRemap && phases > 1 && mixedCell ? new PhaseVolumeTransportGeometry(domain, phaseVolumes) : null;
-		for (int f = flux.flux.length - 1; f >= 0; f--) if (flux.exactFlux[f].signum() > 0) {
-			int c = flux.donor(f); outgoingNext[f] = outgoingHead[c]; outgoingHead[c] = f;
-		}
-		for (int cell = 0; cell < domain.cellCount; cell++) if (input[cell] != null) distribute(cell, flux);
-		for (int cell = 0; cell < domain.cellCount; cell++) if (output[cell] != null) for (Group group : output[cell]) {
-			if (domain.thermalState != null) group.temperature = temperature(group);
-		}
-		for (int cell = 0; cell < domain.cellCount; cell++) if (output[cell] != null) for (Group group : output[cell]) sample(group);
-		markers.addAll(ballistic.markers);
-		validateInventories(flux, ballistic);
+		if (!mixedCell) return null;
+		double[][] volumes = new double[domain.materialRegistry.phaseCount()][domain.cellCount];
+		for (ArrayList<Group> groups : input) if (groups != null) for (Group group : groups)
+			volumes[phase(group.material)][group.cell] += group.volume.toDouble();
+		return new PhaseVolumeTransportGeometry(domain, volumes);
 	}
 
 	private void distribute(int cell, ConservativeLiquidFlux flux) {
@@ -303,27 +311,11 @@ final class CellCarrierRemapPlan {
 		for (int p = 0; p < weights.length; p++) weights[p] = SignedDyadic.of(volumes.get(p));
 		double[] masses = CellRemapMassAllocation.allocate(group.mass, group.volume, weights);
 		ChemicalMixtureRecord[] species = domain.chemicalParcels == null ? null : allocateSpecies(group.species, weights);
-		double[] mean = new double[3], fieldMean = new double[4]; double resolved = 0, meanSquare = 0;
-		double[][] fieldValues = new double[4][offsets.size()];
-		for (int a = 0; a < 3; a++) { mean[a] = group.momentum[a] / group.mass; meanSquare += square(mean[a]); }
-		for (int p = 0; p < offsets.size(); p++) for (int a = 0; a < (domain.thermalState == null ? 3 : 4); a++) {
-			double[] delta = offsets.get(p);
-			fieldValues[a][p] = CellPolynomialField.evaluate(group.field[a], delta[0], delta[1], delta[2]) / group.mass;
-			fieldMean[a] += volumes.get(p) / amount * fieldValues[a][p];
-		}
-		for (int a = 0; a < (domain.thermalState == null ? 3 : 4); a++) {
-			boolean constant = true;
-			for (int p = 1; p < offsets.size(); p++) if (fieldValues[a][p] != fieldValues[a][0]) constant = false;
-			if (constant) fieldMean[a] = fieldValues[a][0];
-		}
-		for (int p = 0; p < offsets.size(); p++) for (int a = 0; a < 3; a++) resolved += volumes.get(p) / amount * square(fieldValues[a][p] - fieldMean[a]);
-		double budget = Math.max(0, group.kinetic / group.mass - meanSquare), scale = resolved > budget ? Math.sqrt(budget / resolved) : 1;
-		double temperatureScale = 1;
-		if (domain.thermalState != null) for (int p = 0; p < volumes.size(); p++) {
-			double variation = fieldValues[3][p] - fieldMean[3];
-			if (variation > 0) temperatureScale = Math.min(temperatureScale, Math.max(0, group.maximumTemperature - group.temperature) / variation);
-			if (variation < 0) temperatureScale = Math.min(temperatureScale, Math.max(0, group.temperature - group.minimumTemperature) / -variation);
-		}
+		double[] mean = new double[3], fieldMean = new double[4];
+		for (int a = 0; a < 3; a++) mean[a] = group.momentum[a] / group.mass;
+		double[][] fieldValues = evaluateQuadrature(group, offsets, volumes, fieldMean, mask == 0 && count == 8 && volumes.size() == 8);
+		double scale = velocityScale(group, volumes, mean, fieldMean, fieldValues);
+		double temperatureScale = domain.thermalState == null ? 1 : temperatureScale(group, fieldMean[3], fieldValues[3]);
 		SignedDyadic energyRemaining = group.energy;
 		int start = markers.size();
 		var caloric = domain.thermalState == null ? null
@@ -358,6 +350,42 @@ final class CellCarrierRemapPlan {
 		}
 	}
 
+	private double[][] evaluateQuadrature(Group group, ArrayList<double[]> offsets, ArrayList<Float> volumes, double[] fieldMean, boolean tensor) {
+		int fields = domain.thermalState == null ? 3 : 4;
+		double amount = group.volume.toDouble(); double[][] fieldValues = new double[fields][];
+		for (int a = 0; a < fields; a++) fieldValues[a] = tensor ? CellPolynomialField.tensorValues(group.field[a]) : new double[offsets.size()];
+		for (int p = 0; p < offsets.size(); p++) for (int a = 0; a < fields; a++) {
+			double[] delta = offsets.get(p);
+			fieldValues[a][p] = (tensor ? fieldValues[a][p] : CellPolynomialField.evaluate(group.field[a], delta[0], delta[1], delta[2])) / group.mass;
+			fieldMean[a] += volumes.get(p) / amount * fieldValues[a][p];
+		}
+		for (int a = 0; a < fields; a++) {
+			boolean constant = true;
+			for (int p = 1; p < offsets.size(); p++) if (fieldValues[a][p] != fieldValues[a][0]) constant = false;
+			if (constant) fieldMean[a] = fieldValues[a][0];
+		}
+		return fieldValues;
+	}
+
+	private static double velocityScale(Group group, ArrayList<Float> volumes, double[] mean, double[] fieldMean, double[][] values) {
+		double resolved = 0, meanSquare = 0, amount = group.volume.toDouble();
+		for (int a = 0; a < 3; a++) meanSquare += square(mean[a]);
+		for (int p = 0; p < volumes.size(); p++) for (int a = 0; a < 3; a++)
+			resolved += volumes.get(p) / amount * square(values[a][p] - fieldMean[a]);
+		double budget = Math.max(0, group.kinetic / group.mass - meanSquare);
+		return resolved > budget ? Math.sqrt(budget / resolved) : 1;
+	}
+
+	private static double temperatureScale(Group group, double mean, double[] values) {
+		double scale = 1;
+		for (double value : values) {
+			double variation = value - mean;
+			if (variation > 0) scale = Math.min(scale, Math.max(0, group.maximumTemperature - group.temperature) / variation);
+			if (variation < 0) scale = Math.min(scale, Math.max(0, group.temperature - group.minimumTemperature) / -variation);
+		}
+		return scale;
+	}
+
 	private double temperature(Group group) {
 		return caloric(group).temperature(group.energy.toDouble());
 	}
@@ -369,6 +397,7 @@ final class CellCarrierRemapPlan {
 		return group.caloric;
 	}
 
+
 	private ChemicalMixtureRecord mixture(ChemicalMixtureRecord species, double mass) {
 		double residual = domain.unitScale.kilograms(mass) - species.exactSpeciesMassKilograms(domain.chemicalParcels.registry()).toDouble();
 		return species.withMassResidualKilograms(residual);
@@ -376,78 +405,15 @@ final class CellCarrierRemapPlan {
 
 	private ChemicalMixtureRecord speciesRecord(Group group) { return group.species.record(); }
 
-	private void validateInventories(ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
-		if (markers.size() > domain.maximumParticleCount) throw new IllegalStateException("Cell remap exceeds its marker budget");
-		int[] volumeHeads = new int[domain.cellCount], volumeNext = new int[markers.size()]; Arrays.fill(volumeHeads, -1);
-		float[] rawVolume = new float[markers.size()];
-		int speciesCount = domain.chemicalParcels == null ? 0 : domain.chemicalParcels.registry().species().size();
+	private SignedDyadic validateInventories(ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
+		SignedDyadic energyRoundoff = CellRemapInventoryAudit.validate(domain, markers, flux, ballistic);
+		if (domain.chemicalParcels == null) return energyRoundoff;
+		int speciesCount = domain.chemicalParcels.registry().species().size();
 		long[] before = new long[speciesCount], after = new long[speciesCount];
-		TreeMap<Integer, SignedDyadic> massBefore = new TreeMap<>(), massAfter = new TreeMap<>();
-		int materialCount = domain.materialRegistry == null ? 1 : domain.materialRegistry.materials().size();
-		double[] massRounding = new double[materialCount];
-		double[][] rawMassBefore = new double[materialCount][], rawMassAfter = new double[materialCount][];
-		int[] beforeCount = new int[materialCount], afterCount = new int[materialCount];
-		SignedDyadic liquidEnergyBefore = SignedDyadic.ZERO, liquidEnergyAfter = SignedDyadic.ZERO;
-		double[] rawEnergyBefore = domain.thermalState == null ? null : new double[domain.particles.count()];
-		double[] rawEnergyAfter = domain.thermalState == null ? null : new double[markers.size()];
-		double energyRounding = 0;
-		double[] momentumBefore = new double[3], momentumAfter = new double[3], momentumRounding = new double[3];
-		double kineticBefore = 0, kineticAfter = 0, kineticRounding = 0;
-		for (int p = 0; p < domain.particles.count(); p++) {
-			int material = domain.particles.materialHandle(p); double m = domain.particles.mass(p);
-			if (rawMassBefore[material] == null) rawMassBefore[material] = new double[domain.particles.count()];
-			rawMassBefore[material][beforeCount[material]++] = m;
-			massRounding[material] += Math.ulp(m);
-			double[] v = {domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
-			for (int a = 0; a < 3; a++) {
-				momentumBefore[a] += m * v[a];
-				momentumRounding[a] += Math.ulp(m * v[a]) + Math.ulp(m) * Math.abs(v[a]);
-				kineticBefore += 0.5 * domain.unitScale.kilograms(m) * v[a] * v[a];
-			}
-			if (domain.thermalState != null) rawEnergyBefore[p] = domain.thermalState.liquidInternalEnergy(p);
-		}
 		for (ArrayList<Group> groups : input) if (groups != null) for (Group group : groups) add(before, group.species);
 		for (Marker marker : ballistic.markers) if (marker.mixture != null) add(before, marker.mixture);
-		int markerOrdinal = 0;
-		for (Marker marker : markers) {
-			if (rawMassAfter[marker.material] == null) rawMassAfter[marker.material] = new double[markers.size()];
-			rawMassAfter[marker.material][afterCount[marker.material]++] = marker.mass;
-			massRounding[marker.material] += Math.ulp(marker.mass);
-			for (int a = 0; a < 3; a++) {
-				double v = (float) marker.velocity(a), ulp = Math.ulp((float) marker.velocity(a));
-				momentumAfter[a] += marker.mass * v;
-				momentumRounding[a] += marker.mass * ulp + Math.ulp(marker.mass * v) + Math.ulp(marker.mass) * Math.abs(v);
-				kineticAfter += 0.5 * domain.unitScale.kilograms(marker.mass) * v * v;
-				kineticRounding += domain.unitScale.kilograms(marker.mass) * (Math.abs(v) * ulp + ulp * ulp);
-			}
-			if (domain.thermalState != null) { rawEnergyAfter[markerOrdinal] = marker.energy; energyRounding += Math.ulp(marker.energy); }
-			volumeNext[markerOrdinal] = volumeHeads[marker.cell]; volumeHeads[marker.cell] = markerOrdinal;
-			rawVolume[markerOrdinal++] = marker.volume;
-			if (!(Double.isFinite(marker.velocityX) && Double.isFinite(marker.velocityY) && Double.isFinite(marker.velocityZ)))
-				throw new IllegalStateException("Invalid remapped velocity");
-			if (marker.mixture != null) {
-				add(after, marker.mixture);
-			}
-		}
-		SignedDyadic[] volume = ExactCellVolumeSums.sum(rawVolume, rawVolume.length, volumeHeads, volumeNext);
-		for (int c = 0; c < volume.length; c++) if (!volume[c].equals(flux.resultingVolumes()[c].add(ballistic.reserved[c]))) throw new IllegalStateException("Cell remap changed its shared volume flux");
+		for (Marker marker : markers) if (marker.mixture != null) add(after, marker.mixture);
 		if (!Arrays.equals(before, after)) throw new IllegalStateException("Cell remap changed exact species inventory");
-		for (int material = 0; material < materialCount; material++) {
-			if (rawMassBefore[material] != null) massBefore.put(material, SignedDyadic.sum(rawMassBefore[material], beforeCount[material]));
-			if (rawMassAfter[material] != null) massAfter.put(material, SignedDyadic.sum(rawMassAfter[material], afterCount[material]));
-		}
-		if (domain.thermalState != null) { liquidEnergyBefore = SignedDyadic.sum(rawEnergyBefore); liquidEnergyAfter = SignedDyadic.sum(rawEnergyAfter); }
-		if (!massBefore.keySet().equals(massAfter.keySet())) throw new IllegalStateException("Cell remap changed its material inventory");
-		for (int material : massBefore.keySet()) if (Math.abs(massAfter.get(material).subtract(massBefore.get(material)).toDouble()) > massRounding[material])
-			throw new IllegalStateException("Cell remap changed material mass beyond binary64 storage roundoff");
-		if (Math.abs(liquidEnergyAfter.subtract(liquidEnergyBefore).toDouble()) > energyRounding)
-			throw new IllegalStateException("Cell remap changed heat inventory beyond binary64 storage roundoff");
-		for (int a = 0; a < 3; a++)
-			if (Math.abs(momentumAfter[a] - momentumBefore[a] - ballistic.collisionMomentum[a])
-					> momentumRounding[a] + markers.size() * Math.ulp(momentumBefore[a]))
-				throw new IllegalStateException("Cell remap changed momentum beyond storage roundoff");
-		if (kineticAfter > kineticBefore + ballistic.collisionWorkJoules + kineticRounding + markers.size() * Math.ulp(kineticBefore))
-			throw new IllegalStateException("Cell remap created kinetic energy beyond storage roundoff");
 		if (domain.chemicalParcels != null) {
 			for (ArrayList<Group> groups : output) if (groups != null) for (Group group : groups)
 				domain.chemicalParcels.requireCompatible(speciesRecord(group), domain.materialRegistry.material(group.material).id(), group.indicator);
@@ -456,7 +422,7 @@ final class CellCarrierRemapPlan {
 				if (isolated[marker.cell] == null) isolated[marker.cell] = new TreeMap<>();
 				add(isolated[marker.cell], marker.mixture);
 			}
-			for (int c = 0; c < volume.length; c++) {
+			for (int c = 0; c < domain.cellCount; c++) {
 				if (isolated[c] == null && (geometryRemap || domain.gridToParticleStage.advectionCells()[c])
 						&& input[c] != null && output[c] != null && input[c].size() == 1 && output[c].size() == 1) {
 					changedSpeciesCells[c] = !input[c].getFirst().species.sameAmounts(output[c].getFirst().species);
@@ -472,6 +438,7 @@ final class CellCarrierRemapPlan {
 				changedSpeciesCells[c] = !original.equals(replacement);
 			}
 		}
+		return energyRoundoff;
 	}
 
 	private static Map<Integer, Long> cellSpecies(ArrayList<Group> groups) {

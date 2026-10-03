@@ -165,11 +165,11 @@ final class FlipFreeSurfaceGeometry {
 		if (a > 1.0E-10 && b > 1.0E-10 && c > 1.0E-10) {
 			root = Math.cbrt(6 * a * b * c * tail); firstInterval = Math.min(a, Math.min(b, c));
 		} else if (a > 1.0E-10 && b > 1.0E-10) {
-			root = Math.sqrt(2 * a * b * tail); firstInterval = Math.min(a, b);
+			root = rectanglePlaneOffset(a, b, tail); firstInterval = Double.POSITIVE_INFINITY;
 		} else if (a > 1.0E-10 && c > 1.0E-10) {
-			root = Math.sqrt(2 * a * c * tail); firstInterval = Math.min(a, c);
+			root = rectanglePlaneOffset(a, c, tail); firstInterval = Double.POSITIVE_INFINITY;
 		} else if (b > 1.0E-10 && c > 1.0E-10) {
-			root = Math.sqrt(2 * b * c * tail); firstInterval = Math.min(b, c);
+			root = rectanglePlaneOffset(b, c, tail); firstInterval = Double.POSITIVE_INFINITY;
 		} else {
 			root = tail * Math.max(a, Math.max(b, c)); firstInterval = Double.POSITIVE_INFINITY;
 		}
@@ -184,6 +184,12 @@ final class FlipFreeSurfaceGeometry {
 			else upper = middle;
 		}
 		return 0.5F * (lower + upper);
+	}
+
+	/** The lower half of a rectangle is a triangle followed by a constant-width strip. */
+	private static double rectanglePlaneOffset(double a, double b, double fraction) {
+		double small = Math.min(a, b), large = Math.max(a, b);
+		return fraction <= small / (2 * large) ? Math.sqrt(2 * a * b * fraction) : large * fraction + 0.5 * small;
 	}
 
 	static float unitCubeLiquidFraction(float normalX, float normalY, float normalZ, float offset) {

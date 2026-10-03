@@ -53,6 +53,16 @@ final class ConservativeLiquidFlux {
 
 	/** Volumes and capacities are in this grid's cell-volume units; velocities are m/s. */
 	void plan(double[] volume, boolean[] solid, double dtOverH, SignedDyadic[] exactVolume) {
+		prepareGeometry(solid, dtOverH, volume);
+		reconstructPlanes(volume, solid, exactVolume);
+		provisionalFluxes(volume, dtOverH);
+		limitAntidiffusion(volume, dtOverH);
+		quantizeDonorSupply(volume, dtOverH);
+		limitChemicalShares();
+		repairSharedFluxes(exactVolume, solid);
+	}
+
+	private void prepareGeometry(boolean[] solid, double dtOverH, double[] volume) {
 		for (int c = 0; c < cellCount; c++) {
 			capacity[c] = solid[c] ? 0 : geometry == null ? 1 : geometry.capacity(c);
 			exactCapacity[c] = SignedDyadic.of(solid[c] ? 0 : geometry == null ? 1 : geometry.finalCapacity(c));
@@ -70,6 +80,9 @@ final class ConservativeLiquidFlux {
 		}
 		for (int c = 0; c < cellCount; c++) if (outgoing[c] > 1 + 8 * Math.ulp(1.0F))
 			throw new IllegalArgumentException("Volume transport requires a smaller step: outgoing Courant=" + outgoing[c]);
+	}
+
+	private void reconstructPlanes(double[] volume, boolean[] solid, SignedDyadic[] exactVolume) {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int c = index(x, y, z);
 			if (exactVolume[c].compareTo(SignedDyadic.ZERO) < 0 || exactVolume[c].compareTo(SignedDyadic.of(capacity[c])) > 0)
@@ -82,6 +95,9 @@ final class ConservativeLiquidFlux {
 			offset[c] = geometry == null ? FlipFreeSurfaceGeometry.solvePlaneOffset(normalX[c], normalY[c], normalZ[c], (float) volume[c])
 					: geometry.offset(c, normalX[c], normalY[c], normalZ[c], volume[c]);
 		}
+	}
+
+	private void provisionalFluxes(double[] volume, double dtOverH) {
 		System.arraycopy(volume, 0, low, 0, cellCount);
 		Arrays.fill(positive, 0); Arrays.fill(negative, 0);
 		for (int f = 0; f < flux.length; f++) {
@@ -101,6 +117,9 @@ final class ConservativeLiquidFlux {
 			positive[left[f]] += Math.max(-a, 0); negative[left[f]] += Math.max(a, 0);
 			positive[right[f]] += Math.max(a, 0); negative[right[f]] += Math.max(-a, 0);
 		}
+	}
+
+	private void limitAntidiffusion(double[] volume, double dtOverH) {
 		for (int c = 0; c < cellCount; c++) {
 			rPositive[c] = positive[c] == 0 ? 1 : Math.min(1, Math.max(0, finalCapacity[c] - low[c]) / positive[c]);
 			rNegative[c] = negative[c] == 0 ? 1 : Math.min(1, Math.max(0, low[c]) / negative[c]);
@@ -113,6 +132,9 @@ final class ConservativeLiquidFlux {
 			flux[f] = (capacity[donor] == 0 ? 0 : velocity[f] * dtOverH * aperture[f] * volume[donor] / capacity[donor]) + a * limiter;
 			outgoing[donor] += Math.abs(flux[f]);
 		}
+	}
+
+	private void quantizeDonorSupply(double[] volume, double dtOverH) {
 		// A single-step carrier commit draws from beginning-of-step inventory.
 		// Limiting outgoing flux prevents same-step transshipment through empty parcels.
 		for (int f = 0; f < flux.length; f++) {
@@ -125,6 +147,9 @@ final class ConservativeLiquidFlux {
 			flux[f] = Math.copySign(stored, flux[f]);
 			upperFlux[f] = SignedDyadic.of(Math.floor(Math.abs(velocity[f]) * dtOverH * aperture[f] / resolution) * resolution);
 		}
+	}
+
+	private void limitChemicalShares() {
 		if (carrierShares != null) {
 			Arrays.fill(incomingHead, 0);
 			Arrays.fill(incomingNext, -1);
@@ -143,7 +168,6 @@ final class ConservativeLiquidFlux {
 				if (carrierShares[donor(f)] < 7 && (incomingNext[f] != -2 || exactFlux[f].signum() == 0))
 					upperFlux[f] = SignedDyadic.ZERO;
 		}
-		repairSharedFluxes(exactVolume, solid);
 	}
 
 	/** Adjusts shared transfers before commit. Cell inventories and positions remain untouched. */
