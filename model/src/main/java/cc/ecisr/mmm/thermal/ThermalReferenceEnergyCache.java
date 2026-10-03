@@ -4,7 +4,7 @@ import cc.ecisr.mmm.chemistry.ChemicalLimits;
 
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
-/** Bounded derived species terms shared by all callers of one thermal state function. */
+/** Bounded derived species terms shared by state functions bound to one immutable world registry. */
 final class ThermalReferenceEnergyCache {
 	private static final int CAPACITY = 16_384;
 	private final AtomicReferenceArray<Entry> entries = new AtomicReferenceArray<>(CAPACITY);

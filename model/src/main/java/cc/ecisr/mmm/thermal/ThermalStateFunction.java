@@ -28,9 +28,6 @@ public final class ThermalStateFunction {
 	                               double lowerBoundaryEnergy, double upperBoundaryEnergy) { }
 
 	private final ThermalRegistry registry;
-	private volatile ThermalReferenceEnergyCache referenceEnergies;
-	private volatile SpeciesOffsets speciesOffsets;
-	private record SpeciesOffsets(ChemicalRegistry chemistry, ThermalSpeciesOffset[][] offsets) { }
 
 	public ThermalStateFunction(ThermalRegistry registry) {
 		if (registry == null) throw new IllegalArgumentException("Thermal registry is missing");
@@ -212,16 +209,7 @@ public final class ThermalStateFunction {
 	}
 
 	private ThermalSpeciesOffset[][] offsets(ChemicalRegistry chemistry) {
-		SpeciesOffsets cached = speciesOffsets;
-		if (cached != null && cached.chemistry == chemistry) return cached.offsets;
-		if (chemistry == null) throw new IllegalArgumentException("Thermal chemical registry is missing");
-		ThermalSpeciesOffset[][] values = new ThermalSpeciesOffset[registry.materials().size()][chemistry.species().size()];
-		for (int material = 0; material < values.length; material++) for (int species = 0; species < values[material].length; species++) {
-			String id = chemistry.species(species).id();
-			if (registry.hasSpeciesOffset(material, id)) values[material][species] = registry.speciesOffset(material, id);
-		}
-		speciesOffsets = new SpeciesOffsets(chemistry, values);
-		return values;
+		return registry.speciesOffsetTable(chemistry);
 	}
 	private static ThermalSpeciesOffset requireOffset(ThermalSpeciesOffset[] offsets, int species) {
 		if (species < 0 || species >= offsets.length || offsets[species] == null)
@@ -230,9 +218,7 @@ public final class ThermalStateFunction {
 	}
 
 	private ThermalReferenceEnergyCache referenceCache() {
-		ThermalReferenceEnergyCache cache = referenceEnergies;
-		if (cache == null) referenceEnergies = cache = new ThermalReferenceEnergyCache();
-		return cache;
+		return registry.referenceEnergyCache();
 	}
 
 	private static void requireMassEnergy(double massMu, double internalEnergy) {

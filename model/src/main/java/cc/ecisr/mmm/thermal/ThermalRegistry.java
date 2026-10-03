@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.fluid.air.GasRegistry;
+import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -33,6 +34,9 @@ public final class ThermalRegistry {
 	private final String gasRegistryFingerprint;
 	private final byte[] canonicalBytes;
 	private final String fingerprint;
+	private volatile ThermalReferenceEnergyCache referenceEnergies;
+	private volatile SpeciesOffsets speciesOffsetTable;
+	private record SpeciesOffsets(ChemicalRegistry chemistry, ThermalSpeciesOffset[][] offsets) { }
 
 	public ThermalRegistry(
 			List<ThermalMaterialDefinition> materials,
@@ -146,6 +150,26 @@ public final class ThermalRegistry {
 	public String gasRegistryFingerprint() { return gasRegistryFingerprint; }
 	public byte[] canonicalBytes() { return canonicalBytes.clone(); }
 	public String fingerprint() { return fingerprint; }
+
+	/** Derived terms survive candidate replacement; immutable definitions fix every cache input. */
+	ThermalReferenceEnergyCache referenceEnergyCache() {
+		ThermalReferenceEnergyCache cache = referenceEnergies;
+		if (cache == null) referenceEnergies = cache = new ThermalReferenceEnergyCache();
+		return cache;
+	}
+
+	ThermalSpeciesOffset[][] speciesOffsetTable(ChemicalRegistry chemistry) {
+		SpeciesOffsets cached = speciesOffsetTable;
+		if (cached != null && cached.chemistry == chemistry) return cached.offsets;
+		if (chemistry == null) throw new IllegalArgumentException("Thermal chemical registry is missing");
+		ThermalSpeciesOffset[][] values = new ThermalSpeciesOffset[materials.size()][chemistry.species().size()];
+		for (int material = 0; material < values.length; material++) for (int species = 0; species < values[material].length; species++) {
+			String id = chemistry.species(species).id();
+			if (hasSpeciesOffset(material, id)) values[material][species] = speciesOffset(material, id);
+		}
+		speciesOffsetTable = new SpeciesOffsets(chemistry, values);
+		return values;
+	}
 
 	/** Common declared calibration interval accepted for an externally imposed world temperature. */
 	public TemperatureRange worldBoundaryTemperatureRange() {
