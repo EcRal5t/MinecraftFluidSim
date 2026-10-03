@@ -592,6 +592,21 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	}
 
 	static void exactDyadicAuditDoesNotLoseCancellationRemainders() {
+		var random = new java.util.Random(547219);
+		long[] extremes = {0, 1, -1, Long.MIN_VALUE, Long.MAX_VALUE, 1L << 62, -(1L << 62)};
+		for (int trial = 0; trial < 512; trial++) {
+			long a = trial < extremes.length * extremes.length ? extremes[trial % extremes.length] : random.nextLong();
+			long b = trial < extremes.length * extremes.length ? extremes[trial / extremes.length] : random.nextLong();
+			var left = new SignedDyadic(java.math.BigInteger.valueOf(a), trial % 7 == 0 ? -1074 : trial % 5 - 30);
+			var right = new SignedDyadic(java.math.BigInteger.valueOf(b), trial % 7 == 0 ? 971 : trial % 11 - 32);
+			int exponent = Math.min(left.exponent(), right.exponent());
+			var l = left.significand().shiftLeft(left.exponent() - exponent);
+			var r = right.significand().shiftLeft(right.exponent() - exponent);
+			require(left.add(right).equals(new SignedDyadic(l.add(r), exponent))
+					&& left.subtract(right).equals(new SignedDyadic(l.subtract(r), exponent))
+					&& Integer.signum(left.compareTo(right)) == Integer.signum(l.compareTo(r)),
+					"primitive dyadic arithmetic differs from the independent integer oracle");
+		}
 		SignedDyadic exact = SignedDyadic.sum(new double[]{1.0E16, 1.0, -1.0E16});
 		require(exact.equals(SignedDyadic.of(1.0)), "exact dyadic audit lost a cancellation remainder");
 		double[] varied = new double[8_192];
