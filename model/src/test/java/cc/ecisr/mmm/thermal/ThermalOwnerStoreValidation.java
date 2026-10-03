@@ -63,6 +63,14 @@ public final class ThermalOwnerStoreValidation {
 			markers.composition = ChemicalMixtureRecord.fromStableAmounts(chemistry,
 					Map.of(BuiltinChemicalDefinitions.H2O, amount), 0);
 			double energy = function.internalEnergyAtTemperature(0, markers.mass, markers.composition, chemistry, 330);
+			var prospective = column.caloricInventory(0, markers.mass, markers.composition, chemistry);
+			require(Double.doubleToRawLongBits(prospective.energy(330)) == Double.doubleToRawLongBits(energy)
+					&& prospective.temperature(energy) == column.temperatureForInventory(0, markers.mass, markers.composition, energy, chemistry)
+					&& prospective.roundoff(330) == column.modeledEnergyRoundoff(0, markers.mass, markers.composition, 330, chemistry),
+					"prospective caloric inventory changed reference terms, inversion or roundoff");
+			double previousMass = markers.mass; markers.mass *= 2;
+			require(prospective.energy(330) == energy, "prospective caloric inventory retained mutable carrier input");
+			markers.mass = previousMass;
 			column.setEnergy(0, energy);
 			require(close(column.temperature(0, markers), 330), "Composition edits select the matching reference energy");
 		}

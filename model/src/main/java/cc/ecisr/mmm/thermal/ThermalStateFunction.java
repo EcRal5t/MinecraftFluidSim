@@ -29,6 +29,8 @@ public final class ThermalStateFunction {
 
 	private final ThermalRegistry registry;
 	private volatile ThermalReferenceEnergyCache referenceEnergies;
+	private volatile SpeciesOffsets speciesOffsets;
+	private record SpeciesOffsets(ChemicalRegistry chemistry, ThermalSpeciesOffset[][] offsets) { }
 
 	public ThermalStateFunction(ThermalRegistry registry) {
 		if (registry == null) throw new IllegalArgumentException("Thermal registry is missing");
@@ -178,10 +180,10 @@ public final class ThermalStateFunction {
 		double total = massMu * material.referenceSpecificEnergyEuPerMu();
 		if (mixture != null) {
 			if (chemicalRegistry == null) throw new IllegalArgumentException("Thermal chemical registry is missing");
+			ThermalSpeciesOffset[] offsets = offsets(chemicalRegistry)[materialHandle];
 			for (int entry = 0; entry < mixture.entryCount(); entry++) {
 				long quanta = mixture.amountAt(entry);
-				String speciesId = chemicalRegistry.species(mixture.speciesHandle(entry)).id();
-				ThermalSpeciesOffset offset = registry.speciesOffset(materialHandle, speciesId);
+				ThermalSpeciesOffset offset = requireOffset(offsets, mixture.speciesHandle(entry));
 				total += referenceEnergy(offset, quanta);
 			}
 		}
@@ -190,9 +192,47 @@ public final class ThermalStateFunction {
 	}
 
 	private double referenceEnergy(ThermalSpeciesOffset offset, long quanta) {
+		if (offset.referenceInternalEnergyEuPerAu().isZero()) return 0;
+		return referenceCache().energy(offset, quanta);
+	}
+
+	/** Absolute binary64 error from reference-term conversion and ordered additions. */
+	public double baseEnergyRoundoff(int materialHandle, double massMu, ChemicalMixtureRecord mixture, ChemicalRegistry chemistry) {
+		double total = massMu * registry.material(materialHandle).referenceSpecificEnergyEuPerMu();
+		double error = Math.ulp(total);
+		ThermalSpeciesOffset[] offsets = mixture == null ? null : offsets(chemistry)[materialHandle];
+		if (mixture != null) for (int entry = 0; entry < mixture.entryCount(); entry++) {
+			var offset = requireOffset(offsets, mixture.speciesHandle(entry));
+			double term = referenceEnergy(offset, mixture.amountAt(entry));
+			total += term;
+			// Rational numerator, denominator and quotient each have one final conversion.
+			error += 3 * Math.ulp(term) + Math.ulp(total);
+		}
+		return error;
+	}
+
+	private ThermalSpeciesOffset[][] offsets(ChemicalRegistry chemistry) {
+		SpeciesOffsets cached = speciesOffsets;
+		if (cached != null && cached.chemistry == chemistry) return cached.offsets;
+		if (chemistry == null) throw new IllegalArgumentException("Thermal chemical registry is missing");
+		ThermalSpeciesOffset[][] values = new ThermalSpeciesOffset[registry.materials().size()][chemistry.species().size()];
+		for (int material = 0; material < values.length; material++) for (int species = 0; species < values[material].length; species++) {
+			String id = chemistry.species(species).id();
+			if (registry.hasSpeciesOffset(material, id)) values[material][species] = registry.speciesOffset(material, id);
+		}
+		speciesOffsets = new SpeciesOffsets(chemistry, values);
+		return values;
+	}
+	private static ThermalSpeciesOffset requireOffset(ThermalSpeciesOffset[] offsets, int species) {
+		if (species < 0 || species >= offsets.length || offsets[species] == null)
+			throw new IllegalArgumentException("Missing thermal species offset for chemical handle " + species);
+		return offsets[species];
+	}
+
+	private ThermalReferenceEnergyCache referenceCache() {
 		ThermalReferenceEnergyCache cache = referenceEnergies;
 		if (cache == null) referenceEnergies = cache = new ThermalReferenceEnergyCache();
-		return cache.energy(offset, quanta);
+		return cache;
 	}
 
 	private static void requireMassEnergy(double massMu, double internalEnergy) {

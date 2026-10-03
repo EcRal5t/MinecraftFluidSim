@@ -186,6 +186,9 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		ThermalRegistry registry = new ThermalRegistry(List.of(solution, other), offsets, List.of(),
 				chemistry.fingerprint(), "");
 		ThermalStateFunction function = new ThermalStateFunction(registry);
+		var shiftedSpecies = new java.util.ArrayList<>(chemistry.species());
+		shiftedSpecies.add(new ChemicalSpecies("aaa:unused", Map.of("X", 1), 0, ExactRational.ONE, 0xff000000));
+		ChemicalRegistry shifted = new ChemicalRegistry(shiftedSpecies, chemistry.phases(), chemistry.reactions());
 		// More distinct terms than cache slots, with concurrent readers and opposite map orders.
 		java.util.stream.IntStream.range(0, 20_000).parallel().forEach(index -> {
 			int host = index & 1;
@@ -194,7 +197,8 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 			amounts.put("mmm:h_plus", 9_007_199_254_741L + index);
 			amounts.put("mmm:oh_minus", 19L);
 			amounts.put("mmm:h2o", 13L + index);
-			var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry, amounts, index / 128.0);
+			ChemicalRegistry currentChemistry = index % 3 == 0 ? shifted : chemistry;
+			var mixture = ChemicalMixtureRecord.fromStableAmounts(currentChemistry, amounts, index / 128.0);
 			for (int order = 0; order < 2; order++) {
 				double expected = mass * registry.material(host).referenceSpecificEnergyEuPerMu();
 				for (var entry : amounts.entrySet()) expected += registry.speciesOffset(host, entry.getKey())
@@ -203,7 +207,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 				for (int repeat = 0; repeat < 2; repeat++) {
 					require(Double.doubleToRawLongBits(function.baseEnergy(host, mass, amounts))
 							== Double.doubleToRawLongBits(expected), "cached thermal terms changed sum order or rounding");
-					if (order == 0) require(Double.doubleToRawLongBits(function.baseEnergy(host, mass, mixture, chemistry))
+					if (order == 0) require(Double.doubleToRawLongBits(function.baseEnergy(host, mass, mixture, currentChemistry))
 							== Double.doubleToRawLongBits(expected), "packed thermal terms disagree with canonical species order");
 				}
 				if (order == 0) amounts = ((java.util.TreeMap<String, Long>) amounts).descendingMap();

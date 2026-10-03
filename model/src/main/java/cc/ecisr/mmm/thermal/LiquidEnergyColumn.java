@@ -133,6 +133,72 @@ public final class LiquidEnergyColumn {
 		return material.temperatureForSensibleSpecificEnergy(sensible);
 	}
 
+	/** Prepares immutable caloric data for a prospective conservative liquid inventory. */
+	public CaloricInventory caloricInventory(int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture,
+			ChemicalRegistry chemistry) {
+		int handle = thermalMaterialHandleForFluid(fluidMaterialHandle);
+		double physicalMass = unitScale.kilograms(mass);
+		if (!(Double.isFinite(physicalMass) && physicalMass > 0))
+			throw new IllegalArgumentException("Prospective liquid mass is invalid");
+		return new CaloricInventory(handle, physicalMass, mixture, chemistry);
+	}
+
+	/** Immutable prospective inventory: repeated caloric evaluations share one reference-energy calculation. */
+	public final class CaloricInventory {
+		private final int handle;
+		private final double mass, base;
+		private final ThermalMaterialDefinition material;
+		private final ChemicalMixtureRecord mixture;
+		private final ChemicalRegistry chemistry;
+		private CaloricInventory(int handle, double mass, ChemicalMixtureRecord mixture, ChemicalRegistry chemistry) {
+			this.handle = handle; this.mass = mass; this.mixture = mixture; this.chemistry = chemistry;
+			material = registry.material(handle); base = baseEnergy(handle, mass, mixture, chemistry);
+		}
+		public double energy(double temperature) {
+			double value = base + mass * material.sensibleSpecificEnergyAt(temperature);
+			if (!Double.isFinite(value)) throw new IllegalArgumentException("Prospective liquid energy is invalid");
+			return value;
+		}
+		public double temperature(double energy) {
+			if (!Double.isFinite(energy)) throw new IllegalArgumentException("Prospective liquid energy is invalid");
+			return material.temperatureForSensibleSpecificEnergy((energy - base) / mass);
+		}
+		public double roundoff(double temperature) {
+			double sensible = material.sensibleSpecificEnergyAt(temperature), term = mass * sensible;
+			return stateFunction.baseEnergyRoundoff(handle, mass, mixture, chemistry)
+					+ material.caloricSegments().size() * mass * Math.ulp(sensible)
+					+ Math.ulp(term) + Math.ulp(base + term)
+					+ Math.ulp(mass) * Math.abs(material.referenceSpecificEnergyEuPerMu() + sensible)
+					+ mass * material.specificHeatAt(temperature) * Math.ulp(temperature);
+		}
+	}
+
+	/** Pure inversion for a prospective conservative liquid inventory. */
+	public double temperatureForInventory(int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture,
+			double energy, ChemicalRegistry chemistry) {
+		int handle = thermalMaterialHandleForFluid(fluidMaterialHandle);
+		double physicalMass = unitScale.kilograms(mass);
+		if (!(Double.isFinite(physicalMass) && physicalMass > 0 && Double.isFinite(energy)))
+			throw new IllegalArgumentException("Prospective liquid energy or mass is invalid");
+		return registry.material(handle).temperatureForSensibleSpecificEnergy(
+				(energy - baseEnergy(handle, physicalMass, mixture, chemistry)) / physicalMass);
+	}
+
+	/** Roundoff in a prospective caloric evaluation, including temperature and mass storage. */
+	public double modeledEnergyRoundoff(int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture,
+			double temperature, ChemicalRegistry chemistry) {
+		int handle = thermalMaterialHandleForFluid(fluidMaterialHandle);
+		double physicalMass = unitScale.kilograms(mass);
+		var material = registry.material(handle);
+		double sensible = material.sensibleSpecificEnergyAt(temperature), term = physicalMass * sensible;
+		double base = baseEnergy(handle, physicalMass, mixture, chemistry);
+		return stateFunction.baseEnergyRoundoff(handle, physicalMass, mixture, chemistry)
+				+ material.caloricSegments().size() * physicalMass * Math.ulp(sensible)
+				+ Math.ulp(term) + Math.ulp(base + term)
+				+ Math.ulp(physicalMass) * Math.abs(material.referenceSpecificEnergyEuPerMu() + sensible)
+				+ physicalMass * material.specificHeatAt(temperature) * Math.ulp(temperature);
+	}
+
 	public void requireReactionState(
 			int marker, ChemicalMixtureRecord candidateMixture, double candidateMass, ThermalCarrierContext markers
 	) {
