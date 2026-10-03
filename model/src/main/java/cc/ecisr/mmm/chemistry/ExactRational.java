@@ -24,7 +24,12 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 		if (numerator.signum() == 0) {
 			denominator = BigInteger.ONE;
 		} else if (!denominator.equals(BigInteger.ONE)) {
-			BigInteger divisor = numerator.gcd(denominator);
+			BigInteger divisor;
+			if (numerator.abs().bitLength() < 64 && denominator.bitLength() < 64) {
+				long a = Math.abs(numerator.longValueExact()), b = denominator.longValueExact();
+				while (b != 0) { long remainder = a % b; a = b; b = remainder; }
+				divisor = BigInteger.valueOf(a);
+			} else divisor = numerator.gcd(denominator);
 			if (!divisor.equals(BigInteger.ONE)) {
 				numerator = numerator.divide(divisor);
 				denominator = denominator.divide(divisor);
@@ -83,6 +88,9 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 	}
 
 	public ExactRational add(ExactRational other) {
+		if (isZero()) return other;
+		if (other.isZero()) return this;
+		if (denominator.equals(other.denominator)) return new ExactRational(numerator.add(other.numerator), denominator);
 		return new ExactRational(numerator.multiply(other.denominator).add(other.numerator.multiply(denominator)),
 				denominator.multiply(other.denominator));
 	}
@@ -92,15 +100,21 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 	}
 
 	public ExactRational multiply(long value) {
+		if (value == 0 || isZero()) return ZERO;
+		if (value == 1) return this;
 		return new ExactRational(numerator.multiply(BigInteger.valueOf(value)), denominator);
 	}
 
 	public ExactRational multiply(ExactRational other) {
+		if (isZero() || other.isZero()) return ZERO;
+		if (equals(ONE)) return other;
+		if (other.equals(ONE)) return this;
 		return new ExactRational(numerator.multiply(other.numerator), denominator.multiply(other.denominator));
 	}
 
 	public ExactRational divide(long value) {
 		if (value == 0L) throw new IllegalArgumentException("Division by zero");
+		if (value == 1 || isZero()) return this;
 		return new ExactRational(numerator, denominator.multiply(BigInteger.valueOf(value)));
 	}
 
