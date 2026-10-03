@@ -615,6 +615,26 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.bootstrapGasState("");
 		domain.bindThermal(thermal, liquids, 300.0);
 		require(domain.gasBoundary().nodeCount() == 1, "persistence topology fixture did not start as one cavity");
+		try {
+			var reference = GasTopologyCoordinator.class.getDeclaredMethod("planWithOverlaps", AirCavityScanner.Result.class, boolean.class);
+			reference.setAccessible(true);
+			for (float volume : new float[] {0.25F, 0.75F, 0.5F}) {
+				domain.setVolume(0, 0, 0, volume); domain.ensureGrid();
+				var scan = new AirCavityScanner(4, 4, 4, config.cellSize(), domain.cellCount)
+						.scanRetainingClosedLineages(domain.geometry.solid, domain.markerGrid.markerCount,
+								domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
+								domain.pressureGranularCoupling, domain.gasState.cellLineageNodeId, 1);
+				for (boolean defer : new boolean[] {false, true}) {
+					var actual = domain.gasTopologyCoordinator.plan(scan, defer).thermalPlan();
+					var expected = ((GasTopologyCoordinator.GasTopologyPlan) reference.invoke(domain.gasTopologyCoordinator, scan, defer)).thermalPlan();
+					require(Arrays.equals(actual.nodeEnergy(), expected.nodeEnergy())
+							&& actual.sourceEnergy().equals(expected.sourceEnergy()) && actual.sinkEnergy().equals(expected.sinkEnergy())
+							&& actual.mechanicalWork().equals(expected.mechanicalWork()) && actual.roundoff().equals(expected.roundoff()),
+							"surviving single-cavity compression or deferred-phase remap changed the general energy plan");
+				}
+			}
+		} catch (ReflectiveOperationException failed) { throw new AssertionError(failed); }
+
 
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) domain.setVolume(2, y, z, 1.0F);
 		FlipMaterialParticleState carriers = domain.exportMaterialParticleState();

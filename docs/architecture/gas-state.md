@@ -93,6 +93,8 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 稳定 topology 快路每次仍从当前 exact residual volume 重新分配 interface lineage；相变新打开的微小气隙不能沿用上一轮空 residual 的归属，也不能被当成凭空新 node。
 
+闭域重扫前后均为单一气腔且存在正容量的同格 membership overlap 时，直接携带该腔完整库存、内能和原控制体积，再按当前几何与新增真空体积结算功。该路径仍完整规划气体与热学两侧的 revision 和守恒账本；气腔分裂、合并、消失或缺少 overlap 时使用一般 lineage 分配。
+
 闭域完成初次环境库存建立后，任何 topology source/sink、正容量有限库存失去 owner、有限库存被压到零容量或 scan budget 耗尽都以 typed gas-topology failure 拒绝完整候选；生产域进入 `NUMERICAL_PAUSE`，不会让该失败穿透 server tick，也不会提交部分 remap。
 
 注液只能改变现有库存的容量、拓扑分配和压缩功。

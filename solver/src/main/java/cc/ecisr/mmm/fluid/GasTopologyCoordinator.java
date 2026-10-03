@@ -147,6 +147,41 @@ final class GasTopologyCoordinator {
 
 	/** Builds the complete gas/energy topology candidate before any owner is mutated. */
 	GasTopologyPlan plan(AirCavityScanner.Result result, boolean deferPhaseVolumeWork) {
+		GasTopologyPlan single = planSurvivingSingleCavity(result, deferPhaseVolumeWork);
+		return single == null ? planWithOverlaps(result, deferPhaseVolumeWork) : single;
+	}
+
+	private GasTopologyPlan planSurvivingSingleCavity(AirCavityScanner.Result result, boolean deferPhaseVolumeWork) {
+		if (!domain.gasState.sealedDomainBoundary || domain.gasState.cellNodeId == null
+				|| domain.gasState.previousSealedNodeCount != 1 || result.sealedNodeCount() != 1
+				|| result.stopReason() != AirCavityScanner.StopReason.COMPLETED) return null;
+		boolean overlap = false; double vacuumVolume = 0;
+		for (int c = 0; c < domain.cellCount; c++) {
+			int membership = result.cellNodeId()[c]; double volume = result.cellAvailableVolume()[c];
+			if (volume <= 0) continue;
+			if (domain.gasState.cellNodeId[c] == 1) {
+				if (membership == 0) return null;
+				overlap |= membership == 1;
+			}
+			int destination = membership >= 0 ? membership : result.cellLineageNodeId()[c];
+			if (domain.rawGasNodeOfCell(c) < 0 && destination == 1) vacuumVolume += volume;
+		}
+		if (!overlap) return null;
+		boolean thermal = domain.thermalState != null && domain.thermalState.gasModelBound();
+		double[] volumes = result.sealedAvailableVolume();
+		double[] mixed = thermal ? new double[] {domain.thermalState.gasNodeEnergy(1, domain.gasState.network)} : null;
+		double[] inherited = thermal ? new double[] {domain.gasState.network.availableVolume(1)} : null;
+		if (thermal) {
+			double added = Math.max(0, volumes[0] - inherited[0]);
+			if (vacuumVolume > added) vacuumVolume *= added / vacuumVolume;
+			if (vacuumVolume > 0) inherited[0] += vacuumVolume;
+			if (deferPhaseVolumeWork) inherited[0] = volumes[0];
+		}
+		return prepareRemap(result, List.of(domain.gasState.network.inventory(1)), volumes,
+				mixed, inherited, GasInventory.EMPTY, GasInventory.EMPTY, 0, 0);
+	}
+
+	private GasTopologyPlan planWithOverlaps(AirCavityScanner.Result result, boolean deferPhaseVolumeWork) {
 		int sealed = result.sealedNodeCount();
 		boolean initialBootstrap = domain.gasState.cellNodeId == null;
 		if (domain.gasState.sealedDomainBoundary && !initialBootstrap
@@ -332,7 +367,14 @@ final class GasTopologyCoordinator {
 			// across this topology-only remap; the coupled fixed-volume phase update already conserved total U.
 			System.arraycopy(availableVolumes, 0, inheritedAvailable, 0, availableVolumes.length);
 		}
-		GasEnergyStore.GasRemapPlan thermalPlan = !thermalGas ? null : domain.thermalState.planGasRemap(
+		return prepareRemap(result, inventories, availableVolumes, mixedEnergy, inheritedAvailable,
+				sourceDelta, sinkDelta, sourceEnergy, sinkEnergy);
+	}
+
+	private GasTopologyPlan prepareRemap(AirCavityScanner.Result result, List<GasInventory> inventories,
+			double[] availableVolumes, double[] mixedEnergy, double[] inheritedAvailable,
+			GasInventory sourceDelta, GasInventory sinkDelta, double sourceEnergy, double sinkEnergy) {
+		GasEnergyStore.GasRemapPlan thermalPlan = mixedEnergy == null ? null : domain.thermalState.planGasRemap(
 				domain.gasState.network, inventories, availableVolumes, mixedEnergy, inheritedAvailable, sourceEnergy, sinkEnergy);
 		ArrayList<AirEdge> edges = new ArrayList<>(result.geometricEdges().size());
 		for (AirCavityScanner.GeometricEdge edge : result.geometricEdges()) {
