@@ -493,7 +493,8 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 
 	float effectiveOpenCellVolume(int cell) {
 		float geometric = geometry.cutCells.openCellVolume(cell);
-		return granularCoupling == null ? geometric : granularCoupling.effectiveOpenCellVolume(cell, geometric);
+		return granularCoupling == null || granularCoupling.totalSolidSvq() == 0 ? geometric
+				: granularCoupling.effectiveOpenCellVolume(cell, geometric);
 	}
 
 	/** Exact marker-mass inventory; reconstructed grid density is never used for this ledger. */

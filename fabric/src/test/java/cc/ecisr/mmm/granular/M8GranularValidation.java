@@ -783,6 +783,22 @@ public final class M8GranularValidation {
 		require(delta == 0L, "moving granular occupancy does not exact re-sum");
 		require(fields.faceVoidScale(0, 1.0F, 1, 1.0F) == fields.faceVoidScale(1, 1.0F, 0, 1.0F),
 				"granular face void scale is asymmetric");
+		long[] fixed = new long[before.length]; fixed[3] = 79L; fixed[11] = 113L;
+		fields.setFixedCellSvq(fixed);
+		fixed[3] = 0L;
+		fields.rebuild(parcels, deposits);
+		require(fields.totalSolidSvq() == parcelVolume + 123_457L + 192L,
+				"active occupancy lost fixed solid or retained a caller-owned array");
+		fields.clear(); fields.clear();
+		var emptyParcels = new GranularParcelStore(registry, 2);
+		var emptyDeposits = new GranularDepositStore(registry, before.length, 4);
+		fields.rebuild(emptyParcels, emptyDeposits);
+		require(fields.totalSolidSvq() == 192L && fields.solidSvq(3) == 79L && fields.solidSvq(11) == 113L,
+				"empty granular rebuild did not restore the exact fixed-only occupancy");
+		fields.setFixedCellSvq(new long[before.length]);
+		fields.rebuild(emptyParcels, emptyDeposits);
+		require(fields.totalSolidSvq() == 0L && fields.matchesSolidSvq(new long[before.length]),
+				"replacing fixed occupancy left a stale empty-store cache");
 	}
 
 	private static GranularRegistry neutralRegistry() {

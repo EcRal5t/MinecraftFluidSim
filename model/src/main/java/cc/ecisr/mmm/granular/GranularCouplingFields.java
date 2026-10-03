@@ -14,6 +14,8 @@ public final class GranularCouplingFields {
 	private final long[] candidateShare = new long[8];
 	private final double[] candidateRemainder = new double[8];
 	private long totalSolidSvq;
+	private long fixedSolidSvq;
+	private boolean fixedOnly = true;
 
 	public GranularCouplingFields(int sizeX, int sizeY, int sizeZ, double cellSize) {
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || !(Double.isFinite(cellSize) && cellSize > 0.0)) {
@@ -38,12 +40,16 @@ public final class GranularCouplingFields {
 		System.arraycopy(fixed, 0, fixedCellSvq, 0, cellCount);
 		System.arraycopy(fixed, 0, solidSvq, 0, cellCount);
 		totalSolidSvq = total;
+		fixedSolidSvq = total;
+		fixedOnly = true;
 	}
 
 	/** Rebuilds a fixed-only field when no granular stores are bound. */
 	public void rebuildFixed() {
+		if (fixedOnly) return;
 		System.arraycopy(fixedCellSvq, 0, solidSvq, 0, cellCount);
-		totalSolidSvq = sumSolidSvq();
+		totalSolidSvq = fixedSolidSvq;
+		fixedOnly = true;
 	}
 
 	public void rebuild(GranularParcelStore parcels, GranularDepositStore deposits) {
@@ -55,6 +61,8 @@ public final class GranularCouplingFields {
 			throw new IllegalArgumentException("Granular coupling inventory dimensions differ");
 		}
 		if (positions == null) throw new IllegalArgumentException("Granular position source is missing");
+		if (parcels.count() == 0 && deposits.groupCount() == 0) { rebuildFixed(); return; }
+		fixedOnly = false;
 		System.arraycopy(fixedCellSvq, 0, solidSvq, 0, cellCount);
 		totalSolidSvq = 0L;
 		deposits.forEachCell((cell, volume, porosity) -> solidSvq[cell] = Math.addExact(solidSvq[cell], volume));
@@ -64,9 +72,7 @@ public final class GranularCouplingFields {
 			if (position == null) throw new IllegalStateException("Granular position source returned null");
 			distribute(position.x(), position.y(), position.z(), inventory.solidVolumeSvq());
 		}
-		long fixed = 0L;
-		for (long value : fixedCellSvq) fixed = Math.addExact(fixed, value);
-		long expected = Math.addExact(fixed,
+		long expected = Math.addExact(fixedSolidSvq,
 				Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq()));
 		long actual = sumSolidSvq();
 		if (actual != expected) throw new IllegalStateException("Granular occupancy does not re-sum to exact inventory");
