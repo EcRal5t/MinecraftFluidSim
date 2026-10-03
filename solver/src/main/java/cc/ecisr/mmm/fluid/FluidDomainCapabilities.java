@@ -293,7 +293,8 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			granularNextCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
 		}
 		refreshCoherentOccupancy();
-		gridDirty = true;
+		if (thermalState.coherentPhases().groupCount() > 0) gridDirty = true;
+		else particleToGridStage.rebuildPressureGeometry();
 	}
 
 	GranularInventory.EnergyAdapter thermalGranularAdapter() {

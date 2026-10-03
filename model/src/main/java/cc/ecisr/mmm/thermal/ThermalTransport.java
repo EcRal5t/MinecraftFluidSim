@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
+import cc.ecisr.mmm.compute.CpuWorkBatch;
+
 import cc.ecisr.mmm.units.SignedDyadic;
 /** Finite carrier contacts using cell mixing lengths and PLIC/cut-face thermal resistance. */
 public final class ThermalTransport {
@@ -68,43 +70,65 @@ public final class ThermalTransport {
 			conductivity[p] = owners.material(p).conductivityEuPerSecondMeterK(); volume[p] = owners.volume(p);
 			if (conductivity[p] > 0) conductingCarriers[owners.cell(p)]++;
 		}
-		var contacts = new ThermalCarrierContacts(contactCapacity(grid, conductingCarriers));
-		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int cell = cellIndex(x, y, z);
-			if (!grid.occupied(cell)) continue;
-			// Subcell thermal geometry is unresolved here: use the cell mixing length h/2.
-			// The symmetric volume quadrature retains a finite rate for every positive k.
-			for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p))
-				for (int q = grid.nextCarrier(p); q >= 0; q = grid.nextCarrier(q))
-					addPair(conductivity, volume, contacts, p, q, 2 * cellSizeMeters / grid.carrierVolume(cell));
+		int[] starts = contactOffsets(grid, conductingCarriers), ends = new int[cellCount];
+		var contacts = new ThermalCarrierContacts(starts[cellCount]);
+		double[][] areas = new double[3][cellCount];
+		FixedBoundary[][] boundaries = new FixedBoundary[6][cellCount];
+		// Geometry callbacks run in their original order before independent numerical work.
+		for (int cell = 0; cell < cellCount; cell++) if (grid.occupied(cell)) {
+			int x = cell % sizeX, y = cell / sizeX % sizeY, z = cell / (sizeX * sizeY);
 			for (int axis = 0; axis < 3; axis++) {
 				int nx = x + (axis == 0 ? 1 : 0), ny = y + (axis == 1 ? 1 : 0), nz = z + (axis == 2 ? 1 : 0);
-				if (!inside(nx, ny, nz)) continue;
-				int neighbor = cellIndex(nx, ny, nz);
-				if (!grid.occupied(neighbor)) continue;
-				double area = faceArea.area(x, y, z, axis);
-				validateArea(area);
-				if (area == 0) continue;
-				double scale = area / (cellSizeMeters * grid.carrierVolume(cell) * grid.carrierVolume(neighbor));
-				for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p))
-					for (int q = grid.firstCarrier(neighbor); q >= 0; q = grid.nextCarrier(q))
-						addPair(conductivity, volume, contacts, p, q, scale);
+				if (!inside(nx, ny, nz) || !grid.occupied(cellIndex(nx, ny, nz))) continue;
+				validateArea(areas[axis][cell] = faceArea.area(x, y, z, axis));
 			}
 			for (int direction = 0; direction < 6; direction++) {
 				int nx = x + (direction == 0 ? -1 : direction == 1 ? 1 : 0);
 				int ny = y + (direction == 2 ? -1 : direction == 3 ? 1 : 0);
 				int nz = z + (direction == 4 ? -1 : direction == 5 ? 1 : 0);
 				if (inside(nx, ny, nz) && grid.occupied(cellIndex(nx, ny, nz))) continue;
-				FixedBoundary boundary = boundaryFace.boundary(x, y, z, direction);
+				FixedBoundary boundary = boundaries[direction][cell] = boundaryFace.boundary(x, y, z, direction);
+				if (boundary != null) validateArea(boundary.contactAreaSquareMeters());
+			}
+		}
+		CpuWorkBatch.run(cellCount, cell -> {
+			int cursor = starts[cell];
+			if (!grid.occupied(cell)) { ends[cell] = cursor; return; }
+			int x = cell % sizeX, y = cell / sizeX % sizeY, z = cell / (sizeX * sizeY);
+			// Subcell thermal geometry is unresolved here: use the cell mixing length h/2.
+			// The symmetric volume quadrature retains a finite rate for every positive k.
+			for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p))
+				for (int q = grid.nextCarrier(p); q >= 0; q = grid.nextCarrier(q))
+					cursor = addPair(conductivity, volume, contacts, cursor, p, q, 2 * cellSizeMeters / grid.carrierVolume(cell));
+			for (int axis = 0; axis < 3; axis++) {
+				int nx = x + (axis == 0 ? 1 : 0), ny = y + (axis == 1 ? 1 : 0), nz = z + (axis == 2 ? 1 : 0);
+				if (!inside(nx, ny, nz)) continue;
+				int neighbor = cellIndex(nx, ny, nz);
+				if (!grid.occupied(neighbor)) continue;
+				double area = areas[axis][cell];
+				if (area == 0) continue;
+				double scale = area / (cellSizeMeters * grid.carrierVolume(cell) * grid.carrierVolume(neighbor));
+				for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p))
+					for (int q = grid.firstCarrier(neighbor); q >= 0; q = grid.nextCarrier(q))
+						cursor = addPair(conductivity, volume, contacts, cursor, p, q, scale);
+			}
+			for (int direction = 0; direction < 6; direction++) {
+				int nx = x + (direction == 0 ? -1 : direction == 1 ? 1 : 0);
+				int ny = y + (direction == 2 ? -1 : direction == 3 ? 1 : 0);
+				int nz = z + (direction == 4 ? -1 : direction == 5 ? 1 : 0);
+				if (inside(nx, ny, nz) && grid.occupied(cellIndex(nx, ny, nz))) continue;
+				FixedBoundary boundary = boundaries[direction][cell];
 				if (boundary == null) continue;
-				validateArea(boundary.contactAreaSquareMeters());
 				for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p)) {
 					double g = 2 * conductivity[p] * boundary.contactAreaSquareMeters()
 							* volume[p] / (cellSizeMeters * grid.carrierVolume(cell));
-					if (g > 0) contacts.add(p, -1, g, boundary.surfaceTemperatureK());
+					if (g > 0) contacts.put(cursor++, p, -1, g, boundary.surfaceTemperatureK());
 				}
 			}
-		}
+			if (cursor > starts[cell + 1]) throw new IllegalStateException("Thermal contact range exceeded its capacity");
+			ends[cell] = cursor;
+		});
+		contacts.compact(starts, ends);
 		double[] snapshot = grid.copyCarrierInternalEnergy();
 		try {
 			Stats result = ThermalCarrierTransport.step(owners, contacts, dt, maximumSubsteps);
@@ -117,10 +141,12 @@ public final class ThermalTransport {
 	}
 
 	/** Topological upper bound; closed/adiabatic faces can leave unused slots. */
-	private int contactCapacity(ThermalCellGrid grid, int[] conductingCarriers) {
+	private int[] contactOffsets(ThermalCellGrid grid, int[] conductingCarriers) {
+		int[] starts = new int[cellCount + 1];
 		long capacity = 0;
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int cell = cellIndex(x, y, z);
+			starts[cell] = Math.toIntExact(capacity);
 			long local = conductingCarriers[cell];
 			if (local == 0) continue;
 			capacity = Math.addExact(capacity, local * (local - 1) / 2);
@@ -134,16 +160,18 @@ public final class ThermalTransport {
 				} else capacity = Math.addExact(capacity, local);
 			}
 		}
-		return Math.toIntExact(capacity);
+		starts[cellCount] = Math.toIntExact(capacity);
+		return starts;
 	}
 
-	private static void addPair(double[] conductivity, double[] volume,
-	                           ThermalCarrierContacts contacts, int p, int q, double scale) {
+	private static int addPair(double[] conductivity, double[] volume,
+	                           ThermalCarrierContacts contacts, int cursor, int p, int q, double scale) {
 		double low = Math.min(conductivity[p], conductivity[q]);
 		double high = Math.max(conductivity[p], conductivity[q]);
-		if (low == 0) return;
+		if (low == 0) return cursor;
 		double g = low * (2 / (1 + low / high)) * volume[p] * volume[q] * scale;
-		contacts.add(p, q, g, Double.NaN);
+		contacts.put(cursor, p, q, g, Double.NaN);
+		return cursor + 1;
 	}
 
 	private void validateArea(double area) {

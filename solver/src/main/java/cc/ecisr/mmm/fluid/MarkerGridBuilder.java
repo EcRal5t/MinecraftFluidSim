@@ -1,13 +1,12 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.compute.CpuWorkBatch;
 import java.util.Arrays;
 
 /**
- * Rebuilds the derived marker grid from the authoritative marker columns in the former
- * {@code rebuildGridFromParticles} order. The per-marker loop also scatters the P2G cell
- * fields (center volume, projection.pressure volume, face velocities) because the original loop
- * interleaved them; splitting the loops would reorder those float accumulations, so the
- * scatter stays here until the MAC workspace owns it.
+ * Rebuilds the derived marker grid from authoritative marker columns. Cell inventories and each
+ * MAC axis retain marker ordinal accumulation order; the three independent face arrays can
+ * be scattered concurrently after the cell index is complete.
  */
 final class MarkerGridBuilder {
 	private MarkerGridBuilder() { }
@@ -55,17 +54,8 @@ final class MarkerGridBuilder {
 			}
 			if (!conservativeVolume) domain.splatCenter(positionX, positionY, positionZ, particleVolume);
 			if (!conservativeVolume) domain.splatPressureVolume(positionX, positionY, positionZ, particleVolume);
-			float transferWeight = domain.variableDensityActive
-					? (float) particleMass : particleVolume;
-			float h = domain.config.cellSize();
-			float gx = positionX / h, gy = positionY / h, gz = positionZ / h;
-			domain.splatFaceField(domain.mac.velocityX, domain.mac.velocityWeightX, 0,
-					gx, gy, gz, domain.particles.velocityX(i), transferWeight);
-			domain.splatFaceField(domain.mac.velocityY, domain.mac.velocityWeightY, 1,
-					gx, gy, gz, domain.particles.velocityY(i), transferWeight);
-			domain.splatFaceField(domain.mac.velocityZ, domain.mac.velocityWeightZ, 2,
-					gx, gy, gz, domain.particles.velocityZ(i), transferWeight);
 		}
+		CpuWorkBatch.run(3, domain.particles.count() >= 2_048 ? 1 : 3, axis -> scatterAxis(domain, axis));
 		grid.exactCellVolumeInventory = ExactCellVolumeSums.sum(domain.particles.directArrays().volume,
 				domain.particles.count(), grid.cellMarkerHead, grid.particleCellNext);
 		for (int cell = 0; cell < grid.cellCount; cell++) if (grid.markerCount[cell] > 0) {
@@ -79,6 +69,18 @@ final class MarkerGridBuilder {
 			if (!(Double.isFinite(grid.cellDensity[cell]) && grid.cellDensity[cell] > 0.0)) {
 				throw new IllegalStateException("Marker inventory produced invalid cell density");
 			}
+		}
+	}
+
+	private static void scatterAxis(FluidDomain domain, int axis) {
+		float[] sums = axis == 0 ? domain.mac.velocityX : axis == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
+		float[] weights = axis == 0 ? domain.mac.velocityWeightX : axis == 1 ? domain.mac.velocityWeightY : domain.mac.velocityWeightZ;
+		float h = domain.config.cellSize();
+		for (int i = 0; i < domain.particles.count(); i++) {
+			float transferWeight = domain.variableDensityActive ? (float) domain.particles.mass(i) : domain.particles.volume(i);
+			float velocity = axis == 0 ? domain.particles.velocityX(i) : axis == 1 ? domain.particles.velocityY(i) : domain.particles.velocityZ(i);
+			domain.splatFaceField(sums, weights, axis, domain.particles.positionX(i) / h,
+					domain.particles.positionY(i) / h, domain.particles.positionZ(i) / h, velocity, transferWeight);
 		}
 	}
 }

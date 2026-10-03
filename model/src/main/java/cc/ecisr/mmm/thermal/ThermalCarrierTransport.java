@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.compute.CpuWorkBatch;
 import java.util.Arrays;
 import java.util.List;
 
@@ -28,11 +29,11 @@ public final class ThermalCarrierTransport {
 		var materials = new ThermalMaterialDefinition[n];
 		double[] mass = new double[n], base = new double[n], energy = new double[n];
 		double[] initialT = new double[n], temperature = new double[n], degree = new double[n];
-		for (int p = 0; p < n; p++) {
+		CpuWorkBatch.run(n, p -> {
 			materials[p] = owners.material(p); mass[p] = owners.mass(p); base[p] = owners.baseEnergy(p);
 			energy[p] = owners.internalEnergy(p);
 			initialT[p] = new ThermalContactExchange.Carrier(materials[p], mass[p], base[p], energy[p]).temperatureK();
-		}
+		});
 		SignedDyadic before = SignedDyadic.sum(energy);
 		boolean exchangeRequired = false;
 		for (int i = 0; i < graph.size(); i++) {
@@ -46,7 +47,9 @@ public final class ThermalCarrierTransport {
 		for (int p = 0; p < n; p++) if (degree[p] > 0) {
 			if (!Double.isFinite(degree[p])) throw new IllegalArgumentException("Non-finite conduction degree");
 			double minCv = Double.POSITIVE_INFINITY;
-			for (var segment : materials[p].caloricSegments()) minCv = Math.min(minCv, segment.specificHeatEuPerMuK());
+			var segments = materials[p].caloricSegments();
+			for (int segment = 0; segment < segments.size(); segment++)
+				minCv = Math.min(minCv, segments.get(segment).specificHeatEuPerMuK());
 			stableDt = Math.min(stableDt, 0.5 * mass[p] * minCv / degree[p]);
 		}
 		double required = exchangeRequired ? Math.ceil(dt / stableDt) : 1;
@@ -73,7 +76,7 @@ public final class ThermalCarrierTransport {
 					maximumTransfer = Math.max(maximumTransfer, Math.abs(q));
 				}
 			} else {
-				for (int p = 0; p < n; p++) temperature[p] = materials[p].temperatureForSensibleSpecificEnergy((energy[p] - base[p]) / mass[p]);
+				CpuWorkBatch.run(n, p -> temperature[p] = materials[p].temperatureForSensibleSpecificEnergy((energy[p] - base[p]) / mass[p]));
 				Arrays.fill(delta, 0);
 				for (int i = 0; i < graph.size(); i++) {
 					int first = graph.first[i], second = graph.second[i];

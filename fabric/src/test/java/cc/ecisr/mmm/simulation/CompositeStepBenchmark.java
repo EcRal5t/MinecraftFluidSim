@@ -138,7 +138,7 @@ public final class CompositeStepBenchmark {
             }
             if (recording != null) recording.stop();
             Arrays.sort(times);
-            System.out.printf(Locale.ROOT, "%s mean=%.6f p95=%.6f MiB=%.6f changed=%d precipitated=%d settled=%d woken=%d coupled=%d%n",
+            System.out.printf(Locale.ROOT, "%s mean=%.6f p95=%.6f callerMiB=%.6f changed=%d precipitated=%d settled=%d woken=%d coupled=%d%n",
                     scene, Arrays.stream(times).average().orElseThrow(), times[(int) Math.ceil(samples * .95) - 1],
                     bytes / (double) samples / 1048576, changed, precipitated, settled, woken, coupled);
             if (scene.equals("thermochem")) require(measuredChanged > 0 && measuredPrecipitated > 0, "Measured thermochemistry process coverage missing");

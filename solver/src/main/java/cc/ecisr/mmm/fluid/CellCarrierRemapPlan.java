@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
+import cc.ecisr.mmm.compute.CpuWorkBatch;
 import cc.ecisr.mmm.units.SignedDyadic;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -29,7 +30,8 @@ final class CellCarrierRemapPlan {
 	private final PhaseVolumeTransportGeometry phaseGeometry;
 	private final float dt;
 	private final boolean geometryRemap;
-	private final CellPolynomialField.Workspace fitting = new CellPolynomialField.Workspace();
+	private static final ThreadLocal<CellPolynomialField.Workspace> FITTING =
+			ThreadLocal.withInitial(CellPolynomialField.Workspace::new);
 
 	CellCarrierRemapPlan(FluidDomain domain, ConservativeLiquidFlux flux, float dt, BallisticLiquidRemap ballistic) {
 		this(domain, flux, dt, ballistic, false);
@@ -50,11 +52,30 @@ final class CellCarrierRemapPlan {
 		for (int f = flux.flux.length - 1; f >= 0; f--) if (flux.exactFlux[f].signum() > 0) {
 			int c = flux.donor(f); outgoingNext[f] = outgoingHead[c]; outgoingHead[c] = f;
 		}
-		for (int cell = 0; cell < domain.cellCount; cell++) if (input[cell] != null) distribute(cell, flux);
-		for (int cell = 0; cell < domain.cellCount; cell++) if (output[cell] != null) for (Group group : output[cell]) {
-			if (domain.thermalState != null) group.temperature = temperature(group);
+		if (domain.thermalState == null && domain.chemicalParcels == null) {
+			for (int cell = 0; cell < domain.cellCount; cell++) if (input[cell] != null) {
+				distribute(cell, flux); mergeShares(cell);
+			}
+		} else {
+			CpuWorkBatch.run(domain.cellCount, cell -> { if (input[cell] != null) distribute(cell, flux); });
+			for (int cell = 0; cell < domain.cellCount; cell++) if (input[cell] != null) mergeShares(cell);
 		}
-		for (int cell = 0; cell < domain.cellCount; cell++) if (output[cell] != null) for (Group group : output[cell]) sample(group);
+		CpuWorkBatch.run(domain.cellCount, cell -> {
+			if (domain.thermalState != null && output[cell] != null)
+				for (Group group : output[cell]) group.temperature = temperature(group);
+		});
+		int sampledCount = 0;
+		for (int cell = 0; cell < domain.cellCount; cell++) if (output[cell] != null) for (Group group : output[cell]) {
+			group.sampleStart = sampledCount;
+			group.sampleVolumes = quadratureVolumes(group);
+			sampledCount = Math.addExact(sampledCount, group.sampleVolumes.size());
+		}
+		if ((long) sampledCount + ballistic.markers.size() > domain.maximumParticleCount)
+			throw new IllegalStateException("Cell carrier remap exceeds the marker budget");
+		markers.addAll(java.util.Collections.nCopies(sampledCount, null));
+		CpuWorkBatch.run(domain.cellCount, cell -> {
+			if (output[cell] != null) for (Group group : output[cell]) sample(group);
+		});
 		markers.addAll(ballistic.markers);
 		energyRoundoff = validateInventories(flux, ballistic);
 	}
@@ -77,12 +98,18 @@ final class CellCarrierRemapPlan {
 				group.energy = group.energy.add(SignedDyadic.of(energy)); group.energyRounding += Math.ulp(energy);
 			}
 		}
-		for (ArrayList<Group> groups : input) if (groups != null) for (Group group : groups) {
-			if (groups.size() == 1) group.volume = domain.markerGrid.exactCellVolumeInventory[group.cell];
-			else for (int p : group.original) group.volume = group.volume.add(SignedDyadic.of(domain.particles.volume(p)));
-			group.mass = CellRemapMassAllocation.inventory(domain, group.original);
-			fitFields(group, dt);
-		}
+		// Bind the ordinal reference-energy cache before workers write disjoint marker entries.
+		if (domain.thermalState != null && domain.particles.count() > 0)
+			domain.thermalState.temperature(0, domain.thermalMarkerContext());
+		CpuWorkBatch.run(domain.cellCount, cell -> {
+			ArrayList<Group> groups = input[cell];
+			if (groups != null) for (Group group : groups) {
+				if (groups.size() == 1) group.volume = domain.markerGrid.exactCellVolumeInventory[group.cell];
+				else for (int p : group.original) group.volume = group.volume.add(SignedDyadic.of(domain.particles.volume(p)));
+				group.mass = CellRemapMassAllocation.inventory(domain, group.original);
+				fitFields(group, dt);
+			}
+		});
 		if (domain.thermalState != null) for (ArrayList<Group> groups : input) if (groups != null)
 			for (Group group : groups) temperatureBounds(group);
 	}
@@ -140,6 +167,7 @@ final class CellCarrierRemapPlan {
 		}
 		for (int g = 0; g < groups.size(); g++) {
 			Group source = groups.get(g); ChemicalMixtureRecord[] species = allocateSpecies(source.species, pieces[g]);
+			source.shares = new ArrayList<>(shares);
 			double[] masses = CellRemapMassAllocation.allocate(source.mass, source.volume, pieces[g]);
 			int pivot = CellRemapMassAllocation.largest(pieces[g]);
 			SignedDyadic[] energyParts = domain.thermalState == null ? null : energyParts(source, pieces[g], masses, species, faces, flux);
@@ -153,21 +181,31 @@ final class CellCarrierRemapPlan {
 				double m = masses[d];
 				double k = d == pivot ? remainingKinetic : source.kinetic * fraction;
 				SignedDyadic energy = domain.thermalState == null ? SignedDyadic.ZERO : energyParts[d];
-				Group target = find(output, destinations[d], source.material, source.indicator, species[d]);
-				target.minimumTemperature = Math.min(target.minimumTemperature, source.minimumTemperature);
-				target.maximumTemperature = Math.max(target.maximumTemperature, source.maximumTemperature);
-				target.volume = target.volume.add(pieces[g][d]); target.mass += m; target.kinetic += k; target.energy = target.energy.add(energy);
 				// The residual destination inherits the complete source reduction error;
 				// its bound cannot shrink with the (possibly tiny) remaining volume.
-				target.energyRounding += source.energyRounding * (d == pivot ? 1 : fraction) + Math.ulp(energy.toDouble());
-				if (species[d] != null) target.species.add(species[d]);
+				double rounding = source.energyRounding * (d == pivot ? 1 : fraction) + Math.ulp(energy.toDouble());
+				double[] momentum = new double[3];
 				for (int a = 0; a < 3; a++) {
 					double p = d == pivot ? remainingMomentum[a] : source.momentum[a] * fraction;
-					target.momentum[a] += p; remainingMomentum[a] -= p;
+					momentum[a] = p; remainingMomentum[a] -= p;
 				}
-				target.addFields(source, m, 4);
+				source.shares.add(new Share(destinations[d], pieces[g][d], m, k, energy, species[d], rounding, momentum));
 				remainingKinetic -= k;
 			}
+		}
+	}
+
+	/** Receiver reductions retain the donor and share order independently of worker scheduling. */
+	private void mergeShares(int cell) {
+		for (Group source : input[cell]) if (source.shares != null) for (Share share : source.shares) {
+			Group target = find(output, share.destination, source.material, source.indicator, share.species);
+			target.minimumTemperature = Math.min(target.minimumTemperature, source.minimumTemperature);
+			target.maximumTemperature = Math.max(target.maximumTemperature, source.maximumTemperature);
+			target.volume = target.volume.add(share.volume); target.mass += share.mass; target.kinetic += share.kinetic;
+			target.energy = target.energy.add(share.energy); target.energyRounding += share.rounding;
+			if (share.species != null) target.species.add(share.species);
+			for (int a = 0; a < 3; a++) target.momentum[a] += share.momentum[a];
+			target.addFields(source, share.mass, 4);
 		}
 	}
 
@@ -265,6 +303,7 @@ final class CellCarrierRemapPlan {
 	}
 
 	private void fitFields(Group group, float dt) {
+		CellPolynomialField.Workspace fitting = FITTING.get();
 		int count = group.original.size(); fitting.ensureCapacity(count);
 		double[][] positions = fitting.positions, values = fitting.values; double[] weights = fitting.weights;
 		float h = domain.config.cellSize();
@@ -279,7 +318,7 @@ final class CellCarrierRemapPlan {
 				values[3][local] = domain.thermalState.temperature(p, domain.thermalMarkerContext());
 				group.localMinimum = Math.min(group.localMinimum, values[3][local]);
 				group.localMaximum = Math.max(group.localMaximum, values[3][local]);
-			}
+			} else values[3][local] = 0;
 		}
 		group.field = CellPolynomialField.fit(positions, weights, values, count);
 		if (domain.thermalState != null) {
@@ -288,7 +327,7 @@ final class CellCarrierRemapPlan {
 		}
 	}
 
-	private void sample(Group group) {
+	private ArrayList<Float> quadratureVolumes(Group group) {
 		double amount = group.volume.toDouble();
 		int requested = ConservativeMarkerSampling.targetMarkers((float) amount);
 		int count = requested <= 1 ? 1 : requested <= 2 ? 2 : requested <= 4 ? 4 : 8;
@@ -301,12 +340,17 @@ final class CellCarrierRemapPlan {
 			count = (int) Math.min(count, quanta);
 			if (mask == 0) count = Integer.highestOneBit(count);
 		}
-		ArrayList<Float> volumes = LiquidCellQuadrature.volumes(group.volume, count);
+		group.quadratureCount = count;
+		return LiquidCellQuadrature.volumes(group.volume, count);
+	}
+
+	private void sample(Group group) {
+		int count = group.quadratureCount, mask = domain.geometry.cutCells.mask(group.cell);
+		ArrayList<Float> volumes = group.sampleVolumes;
 		ArrayList<double[]> offsets = new ArrayList<>();
 		for (int slot = 0; slot < volumes.size(); slot++) offsets.add(slot < count
 				? mask == 0 ? offset(slot, count) : openOffset(mask, slot)
 				: mask == 0 ? offset(0, 1) : openOffset(mask, 0));
-		if (markers.size() + volumes.size() > domain.maximumParticleCount) throw new IllegalStateException("Cell carrier remap exceeds the marker budget");
 		SignedDyadic[] weights = new SignedDyadic[volumes.size()];
 		for (int p = 0; p < weights.length; p++) weights[p] = SignedDyadic.of(volumes.get(p));
 		double[] masses = CellRemapMassAllocation.allocate(group.mass, group.volume, weights);
@@ -317,7 +361,7 @@ final class CellCarrierRemapPlan {
 		double scale = velocityScale(group, volumes, mean, fieldMean, fieldValues);
 		double temperatureScale = domain.thermalState == null ? 1 : temperatureScale(group, fieldMean[3], fieldValues[3]);
 		SignedDyadic energyRemaining = group.energy;
-		int start = markers.size();
+		int start = group.sampleStart;
 		var caloric = domain.thermalState == null ? null
 				: new cc.ecisr.mmm.thermal.LiquidEnergyColumn.CaloricInventory[volumes.size()];
 		for (int p = 0; p < volumes.size(); p++) {
@@ -342,7 +386,7 @@ final class CellCarrierRemapPlan {
 				energy = caloric[p].energy(t);
 				energyRemaining = energyRemaining.subtract(SignedDyadic.of(energy));
 			}
-			markers.add(new Marker(group.cell, group.material, group.indicator, volumes.get(p), m,
+			markers.set(start + p, new Marker(group.cell, group.material, group.indicator, volumes.get(p), m,
 					delta[0], delta[1], delta[2], vx, vy, vz, mixture, energy));
 		}
 		if (domain.thermalState != null) {
@@ -548,8 +592,12 @@ final class CellCarrierRemapPlan {
 		double velocity(int axis) { return switch (axis) { case 0 -> velocityX; case 1 -> velocityY; case 2 -> velocityZ; default -> throw new IllegalArgumentException("Unknown axis"); }; }
 		Marker withEnergy(double value) { return new Marker(cell, material, indicator, volume, mass, offsetX, offsetY, offsetZ, velocityX, velocityY, velocityZ, mixture, value); }
 	}
+	private record Share(int destination, SignedDyadic volume, double mass, double kinetic,
+			SignedDyadic energy, ChemicalMixtureRecord species, double rounding, double[] momentum) { }
 	private static final class Group {
 		final int cell, material; final boolean indicator;
+		int sampleStart, quadratureCount; ArrayList<Float> sampleVolumes;
+		ArrayList<Share> shares;
 		final ArrayList<Integer> original = new ArrayList<>(); final CellSpeciesInventory species = new CellSpeciesInventory();
 		SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO;
 		cc.ecisr.mmm.thermal.LiquidEnergyColumn.CaloricInventory caloric;

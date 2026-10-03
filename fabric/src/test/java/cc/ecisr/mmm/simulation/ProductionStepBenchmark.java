@@ -69,7 +69,7 @@ public final class ProductionStepBenchmark {
 					Arrays.stream(times[stage]).average().orElseThrow(), times[stage][samples / 2],
 					times[stage][samples - 2]);
 		}
-		System.out.printf("%s allocated=%s MiB/step markers=%d%n", name,
+		System.out.printf("%s callerAllocated=%s MiB/step markers=%d%n", name,
 				allocations == null ? "unavailable" : String.format(java.util.Locale.ROOT, "%.2f",
 						allocated / (double) samples / 1048576.0), region.domain().particleCount());
 	}

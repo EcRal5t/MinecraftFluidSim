@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.compute.CpuWorkBatch;
+
 /**
  * The grid-to-particle handoff: air-cell velocity extrapolation into the boundary fringe
  * followed by the largest energy-admissible FLIP increment into marker momentum.
@@ -25,7 +27,7 @@ final class GridToParticleStage {
 	private float[] picX = new float[0], picY = new float[0], picZ = new float[0];
 	private float[] flipDeltaX = new float[0], flipDeltaY = new float[0], flipDeltaZ = new float[0];
 	private double preProjectionEnergy = Double.NaN;
-	private final float[] sampledPair = new float[2];
+	private static final ThreadLocal<float[]> SAMPLED_PAIR = ThreadLocal.withInitial(() -> new float[2]);
 	private boolean completePressureSpace;
 	private final ResolvedMarkerVelocity resolvedVelocity;
 	private final DivergenceFreeVelocityExtension velocityExtension;
@@ -84,16 +86,22 @@ final class GridToParticleStage {
 		}
 		double quadratic = 0.0, linear = 0.0, picEnergy = 0.0, incomingEnergy = 0.0;
 		for (int i = 0; i < particles.count(); i++) {
-			float x = particles.positionX(i), y = particles.positionY(i), z = particles.positionZ(i);
 			double mass = particles.mass(i);
 			incomingEnergy += 0.5 * mass * (flipDeltaX[i] * (double) flipDeltaX[i]
 					+ flipDeltaY[i] * (double) flipDeltaY[i] + flipDeltaZ[i] * (double) flipDeltaZ[i]);
+		}
+		CpuWorkBatch.run(particles.count(), i -> {
+			float[] sampledPair = SAMPLED_PAIR.get();
+			float x = particles.positionX(i), y = particles.positionY(i), z = particles.positionZ(i);
 			access.samplePair(0, mac.velocityX, mac.p2gVelocityX, x, y, z, sampledPair);
 			picX[i] = sampledPair[0]; flipDeltaX[i] -= sampledPair[1];
 			access.samplePair(1, mac.velocityY, mac.p2gVelocityY, x, y, z, sampledPair);
 			picY[i] = sampledPair[0]; flipDeltaY[i] -= sampledPair[1];
 			access.samplePair(2, mac.velocityZ, mac.p2gVelocityZ, x, y, z, sampledPair);
 			picZ[i] = sampledPair[0]; flipDeltaZ[i] -= sampledPair[1];
+		});
+		for (int i = 0; i < particles.count(); i++) {
+			double mass = particles.mass(i);
 			double picSquared = picX[i] * (double) picX[i] + picY[i] * (double) picY[i]
 					+ picZ[i] * (double) picZ[i];
 			double deltaSquared = flipDeltaX[i] * (double) flipDeltaX[i]

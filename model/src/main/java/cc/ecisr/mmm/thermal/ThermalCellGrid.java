@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.compute.CpuWorkBatch;
 
 import java.util.Arrays;
 import java.util.List;
@@ -17,6 +18,7 @@ public final class ThermalCellGrid {
 		}
 	}
 
+	/** Stable topology and inventory during a solve; independent ordinal reads can run concurrently. */
 	public interface CarrierAccess {
 		int carrierCount();
 		int cell(int carrier);
@@ -62,10 +64,12 @@ public final class ThermalCellGrid {
 
 	public void rebuild(CarrierAccess carrierAccess) {
 		rebuildTopology(carrierAccess, -1);
-		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
-			conductivity[cell] /= totalVolume[cell];
-			solveCell(cell, internalEnergy[cell]);
-		}
+		CpuWorkBatch.run(cellCount, cell -> {
+			if (carrierCount[cell] > 0) {
+				conductivity[cell] /= totalVolume[cell];
+				solveCell(cell, internalEnergy[cell]);
+			}
+		});
 		updateObservedTemperatureRange();
 	}
 

@@ -26,8 +26,28 @@ public final class ThermalCarrierContacts extends AbstractList<ThermalCarrierTra
 			first = Arrays.copyOf(first, capacity); second = Arrays.copyOf(second, capacity);
 			conductance = Arrays.copyOf(conductance, capacity); reservoir = Arrays.copyOf(reservoir, capacity);
 		}
-		first[count] = a; second[count] = b; conductance[count] = g; reservoir[count++] = temperature;
+		write(count++, a, b, g, temperature);
 		modCount++;
+	}
+	/** Writes a preassigned slot; workers own disjoint intervals of the allocated columns. */
+	void put(int index, int a, int b, double g, double temperature) {
+		ThermalCarrierTransport.Contact.require(a, b, g, temperature);
+		write(index, a, b, g, temperature);
+	}
+	private void write(int index, int a, int b, double g, double temperature) {
+		first[index] = a; second[index] = b; conductance[index] = g; reservoir[index] = temperature;
+	}
+	void compact(int[] starts, int[] ends) {
+		int target = 0;
+		for (int cell = 0; cell < ends.length; cell++) {
+			int length = ends[cell] - starts[cell];
+			System.arraycopy(first, starts[cell], first, target, length);
+			System.arraycopy(second, starts[cell], second, target, length);
+			System.arraycopy(conductance, starts[cell], conductance, target, length);
+			System.arraycopy(reservoir, starts[cell], reservoir, target, length);
+			target += length;
+		}
+		count = target; modCount++;
 	}
 	@Override public boolean add(ThermalCarrierTransport.Contact contact) {
 		add(contact.first(), contact.second(), contact.conductance(), contact.reservoirTemperatureK()); return true;

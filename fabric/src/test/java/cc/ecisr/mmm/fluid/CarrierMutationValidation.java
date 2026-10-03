@@ -25,7 +25,29 @@ public final class CarrierMutationValidation {
 		volumeObservationRoundsTheExactInventoryOnce();
 		insertionNeverRoundsCapacityUp();
 		insertionNeverRoundsTheRequestUp();
+		independentWorkFinishesBeforeRejection();
 		System.out.println("Carrier mutation validation passed");
+	}
+
+	private static void independentWorkFinishesBeforeRejection() {
+		int[] visits = new int[8_192];
+		var first = new IllegalStateException("first batch rejection");
+		var last = new AssertionError("last batch rejection");
+		try {
+			cc.ecisr.mmm.compute.CpuWorkBatch.run(visits.length, index -> {
+				if (index == 0) throw first;
+				if (index == visits.length - 1) throw last;
+				visits[index]++;
+			});
+			throw new AssertionError("worker rejection was lost");
+		} catch (IllegalStateException rejected) {
+			require(rejected == first, "worker rejection changed identity or canonical batch order");
+			if (Runtime.getRuntime().availableProcessors() > 2)
+				require(visits[visits.length - 2] == 1, "rejection returned while another batch was unfinished");
+		}
+		java.util.Arrays.fill(visits, 0);
+		cc.ecisr.mmm.compute.CpuWorkBatch.run(visits.length, index -> visits[index]++);
+		for (int visit : visits) require(visit == 1, "independent work missed or repeated an index after rejection");
 	}
 
 	private static void insertionNeverRoundsTheRequestUp() {

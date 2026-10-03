@@ -11,11 +11,12 @@ final class CellRemapHeatBalance {
 			cc.ecisr.mmm.thermal.LiquidEnergyColumn.CaloricInventory[] caloric,
 			double minimum, double maximum, SignedDyadic residual, double inheritedRounding) {
 		int largest = start;
-		for (int p = start + 1; p < markers.size(); p++) if (markers.get(p).mass() > markers.get(largest).mass()) largest = p;
+		int end = start + caloric.length;
+		for (int p = start + 1; p < end; p++) if (markers.get(p).mass() > markers.get(largest).mass()) largest = p;
 		var marker = markers.get(largest);
 		double corrected = SignedDyadic.of(marker.energy()).add(residual).toDouble();
 		double roundingBound = inheritedRounding;
-		for (int p = start; p < markers.size(); p++) roundingBound += Math.ulp(markers.get(p).energy());
+		for (int p = start; p < end; p++) roundingBound += Math.ulp(markers.get(p).energy());
 		double lower = caloric[largest - start].energy(minimum), upper = caloric[largest - start].energy(maximum);
 		if (corrected < lower - roundingBound || corrected > upper + roundingBound)
 			roundingBound += caloric[largest - start].roundoff(corrected < lower ? minimum : maximum);
@@ -24,7 +25,7 @@ final class CellRemapHeatBalance {
 		} else {
 			boolean positive = residual.signum() > 0;
 			SignedDyadic amount = positive ? residual : SignedDyadic.ZERO.subtract(residual);
-			SignedDyadic[] capacities = new SignedDyadic[markers.size() - start];
+			SignedDyadic[] capacities = new SignedDyadic[caloric.length];
 			double[] weights = new double[capacities.length]; SignedDyadic available = SignedDyadic.ZERO;
 			double rounding = inheritedRounding;
 			for (int p = 0; p < capacities.length; p++) {
@@ -50,7 +51,7 @@ final class CellRemapHeatBalance {
 				markers.set(start + p, candidate.withEnergy(value));
 			}
 		}
-		for (int p = start; p < markers.size(); p++) {
+		for (int p = start; p < end; p++) {
 			var candidate = markers.get(p);
 			caloric[p - start].temperature(candidate.energy());
 		}

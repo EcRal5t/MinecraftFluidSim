@@ -14,6 +14,36 @@ public final class ThermalContactValidation {
 		invalidCarrierCannotHideInValidCellMean();
 		carrierGraphPreservesCaloricInventoryAndPreflights();
 		condensedCellTransportHasFiniteRates();
+		isolatedContactRangesRetainTheirOwners();
+	}
+
+	private static void isolatedContactRangesRetainTheirOwners() {
+		int cells = 4_096;
+		var conducting = material("parallel", 10, 10);
+		var insulating = new ThermalMaterialDefinition("test:thermal/insulating", conducting.carrierKind(),
+				"test:insulating", 300, 0, 0, conducting.caloricSegments());
+		double[] energy = new double[2 * cells];
+		for (int p = 0; p < energy.length; p++) energy[p] = (p & 1) == 0 ? -300 : 500;
+		var owners = new ThermalCellGrid.CarrierAccess() {
+			@Override public int carrierCount() { return energy.length; }
+			@Override public int cell(int p) { return p / 2; }
+			@Override public ThermalMaterialDefinition material(int p) { return p % 6 == 0 ? insulating : conducting; }
+			@Override public double mass(int p) { return 1; }
+			@Override public double volume(int p) { return 0.25; }
+			@Override public double baseEnergy(int p) { return 0; }
+			@Override public double internalEnergy(int p) { return energy[p]; }
+			@Override public void setInternalEnergy(int p, double u) { energy[p] = u; }
+		};
+		var grid = new ThermalCellGrid(cells); grid.rebuild(owners);
+		var before = SignedDyadic.sum(energy);
+		var stats = new ThermalTransport(cells, 1, 1, 0.5, 8).step(grid, (x, y, z, axis) -> 0, 0.001);
+		for (int cell = 0; cell < cells; cell++) {
+			double q = cell % 3 == 0 ? 0 : 0.01; // G = 0.125 W/K, delta T = 80 K, one explicit step.
+			require(energy[2 * cell] == -300 + q && energy[2 * cell + 1] == 500 - q,
+					"contact range compaction exchanged heat with the wrong owner or insulating cell");
+		}
+		require(SignedDyadic.sum(energy).subtract(before).equals(stats.roundoffResidual())
+				&& stats.reservoirExchange().equals(SignedDyadic.ZERO), "parallel contact ranges lost exact heat closure");
 	}
 
 	private static void condensedCellTransportHasFiniteRates() {
