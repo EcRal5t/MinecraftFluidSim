@@ -30,20 +30,23 @@ public final class ThermalOwnerStoreValidation {
 				"test:liquid", 300, 20, 0.5,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 4)));
 		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
-		var registry = new ThermalRegistry(List.of(material), List.of(new ThermalSpeciesOffset(
-				"test:water_offset", BuiltinChemicalDefinitions.H2O, material.id(), ExactRational.of(1000))),
-				List.of(), chemistry.fingerprint(), "");
+		var offsets = new java.util.ArrayList<ThermalSpeciesOffset>();
+		for (var species : chemistry.species()) offsets.add(new ThermalSpeciesOffset("test:offset/" + species.id().replace(':', '/'),
+				species.id(), material.id(), ExactRational.of(species.id().equals(BuiltinChemicalDefinitions.H2O) ? 1000 : 2000)));
+		offsets.add(new ThermalSpeciesOffset("test:unused_offset", "aaa:unused", material.id(), ExactRational.of(3000)));
+		var registry = new ThermalRegistry(List.of(material), offsets, List.of(), chemistry.fingerprint(), "");
 		var function = new ThermalStateFunction(registry);
 		class Markers implements ThermalCarrierContext {
 			double mass = 2;
 			ChemicalMixtureRecord composition;
+			ChemicalRegistry currentChemistry = chemistry;
 			public int markerCount() { return 1; }
 			public int cell(int marker) { return 0; }
 			public int fluidMaterialHandle(int marker) { return 0; }
 			public double mass(int marker) { return mass; }
 			public double volume(int marker) { return 1; }
 			public ChemicalMixtureRecord mixture(int marker) { return composition; }
-			public ChemicalRegistry chemicalRegistry() { return chemistry; }
+			public ChemicalRegistry chemicalRegistry() { return currentChemistry; }
 		}
 		var markers = new Markers();
 		var column = new LiquidEnergyColumn(registry, function, new cc.ecisr.mmm.units.SolverUnitScale(1),
@@ -73,6 +76,17 @@ public final class ThermalOwnerStoreValidation {
 			markers.mass = previousMass;
 			column.setEnergy(0, energy);
 			require(close(column.temperature(0, markers), 330), "Composition edits select the matching reference energy");
+		}
+		var shiftedSpecies = new java.util.ArrayList<>(chemistry.species());
+		shiftedSpecies.add(new ChemicalSpecies("aaa:unused", Map.of("X", 1), 0, ExactRational.ONE, 0xff000000));
+		var shifted = new ChemicalRegistry(shiftedSpecies, chemistry.phases(), chemistry.reactions());
+		for (var current : new ChemicalRegistry[] {shifted, chemistry, shifted}) {
+			markers.currentChemistry = current;
+			double expectedBase = function.baseEnergy(0, markers.mass, markers.composition, current);
+			require(Double.doubleToRawLongBits(column.baseEnergy(0, markers)) == Double.doubleToRawLongBits(expectedBase),
+					"liquid reference memo retained handles from another chemical registry");
+			column.setEnergy(0, function.internalEnergyAtTemperature(0, markers.mass, markers.composition, current, 340));
+			require(close(column.temperature(0, markers), 340), "registry replacement left a stale caloric reference");
 		}
 	}
 

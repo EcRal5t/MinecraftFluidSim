@@ -8,7 +8,8 @@ import java.util.List;
 public final class ThermalCarrierTransport {
 	/** second == -1 denotes a fixed-temperature external contact. */
 	public record Contact(int first, int second, double conductance, double reservoirTemperatureK) {
-		public Contact {
+		public Contact { require(first, second, conductance, reservoirTemperatureK); }
+		static void require(int first, int second, double conductance, double reservoirTemperatureK) {
 			if (first < 0 || second < -1 || first == second
 					|| !(Double.isFinite(conductance) && conductance > 0))
 				throw new IllegalArgumentException("Invalid carrier conduction contact");
@@ -22,6 +23,7 @@ public final class ThermalCarrierTransport {
 	                                 double dt, int maximumSubsteps) {
 		if (contacts == null || !(Double.isFinite(dt) && dt > 0))
 			throw new IllegalArgumentException("Invalid carrier conduction input");
+		ThermalCarrierContacts graph = contacts instanceof ThermalCarrierContacts packed ? packed : new ThermalCarrierContacts(contacts);
 		int n = owners.carrierCount();
 		var materials = new ThermalMaterialDefinition[n];
 		double[] mass = new double[n], base = new double[n], energy = new double[n];
@@ -33,11 +35,12 @@ public final class ThermalCarrierTransport {
 		}
 		SignedDyadic before = SignedDyadic.sum(energy);
 		boolean exchangeRequired = false;
-		for (Contact c : contacts) {
-			if (c.first >= n || c.second >= n) throw new IllegalArgumentException("Unknown conduction owner");
-			degree[c.first] += c.conductance;
-			if (c.second >= 0) degree[c.second] += c.conductance;
-			exchangeRequired |= initialT[c.first] != (c.second < 0 ? c.reservoirTemperatureK : initialT[c.second]);
+		for (int i = 0; i < graph.size(); i++) {
+			int first = graph.first[i], second = graph.second[i]; double g = graph.conductance[i];
+			if (first >= n || second >= n) throw new IllegalArgumentException("Unknown conduction owner");
+			degree[first] += g;
+			if (second >= 0) degree[second] += g;
+			exchangeRequired |= initialT[first] != (second < 0 ? graph.reservoir[i] : initialT[second]);
 		}
 		double stableDt = Double.POSITIVE_INFINITY;
 		for (int p = 0; p < n; p++) if (degree[p] > 0) {
@@ -55,28 +58,30 @@ public final class ThermalCarrierTransport {
 		for (int step = 0; step < substeps; step++) {
 			if (implicit) {
 				// Symmetric contact splitting. Each nonlinear solve has a positive caloric interval.
-				for (int sweep = 0; sweep < 2; sweep++) for (int i = 0; i < contacts.size(); i++) {
-					Contact c = contacts.get(sweep == 0 ? i : contacts.size() - 1 - i);
-					var first = new ThermalContactExchange.Carrier(materials[c.first], mass[c.first], base[c.first], energy[c.first]);
-					ThermalContactExchange.Body second = c.second < 0
-							? new ThermalContactExchange.Reservoir(c.reservoirTemperatureK)
-							: new ThermalContactExchange.Carrier(materials[c.second], mass[c.second], base[c.second], energy[c.second]);
-					double q = ThermalContactExchange.transfer(first, second, c.conductance, dt * 0.5);
+				for (int sweep = 0; sweep < 2; sweep++) for (int i = 0; i < graph.size(); i++) {
+					int index = sweep == 0 ? i : graph.size() - 1 - i;
+					int a = graph.first[index], b = graph.second[index];
+					var first = new ThermalContactExchange.Carrier(materials[a], mass[a], base[a], energy[a]);
+					ThermalContactExchange.Body second = b < 0
+							? new ThermalContactExchange.Reservoir(graph.reservoir[index])
+							: new ThermalContactExchange.Carrier(materials[b], mass[b], base[b], energy[b]);
+					double q = ThermalContactExchange.transfer(first, second, graph.conductance[index], dt * 0.5);
 					if (q == 0) continue;
-					energy[c.first] += q;
-					if (c.second >= 0) energy[c.second] -= q;
+					energy[a] += q;
+					if (b >= 0) energy[b] -= q;
 					else reservoir = reservoir.add(SignedDyadic.of(q));
 					maximumTransfer = Math.max(maximumTransfer, Math.abs(q));
 				}
 			} else {
 				for (int p = 0; p < n; p++) temperature[p] = materials[p].temperatureForSensibleSpecificEnergy((energy[p] - base[p]) / mass[p]);
 				Arrays.fill(delta, 0);
-				for (Contact c : contacts) {
-					double otherT = c.second < 0 ? c.reservoirTemperatureK : temperature[c.second];
-					double q = c.conductance * (otherT - temperature[c.first]) * (dt / substeps);
+				for (int i = 0; i < graph.size(); i++) {
+					int first = graph.first[i], second = graph.second[i];
+					double otherT = second < 0 ? graph.reservoir[i] : temperature[second];
+					double q = graph.conductance[i] * (otherT - temperature[first]) * (dt / substeps);
 					if (!Double.isFinite(q)) throw new IllegalArgumentException("Non-finite conductive transfer");
-					delta[c.first] += q;
-					if (c.second >= 0) delta[c.second] -= q;
+					delta[first] += q;
+					if (second >= 0) delta[second] -= q;
 					else reservoir = reservoir.add(SignedDyadic.of(q));
 					maximumTransfer = Math.max(maximumTransfer, Math.abs(q));
 				}

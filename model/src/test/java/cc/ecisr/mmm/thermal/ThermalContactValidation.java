@@ -153,7 +153,9 @@ public final class ThermalContactValidation {
 				@Override public void setInternalEnergy(int p, double u) { energy[p] = u; }
 			};
 			var before = SignedDyadic.sum(energy); double isolated = energy[2];
-			var stats = ThermalCarrierTransport.step(owners, List.of(new ThermalCarrierTransport.Contact(0, 1, g, Double.NaN)), g < 1 ? 1 : 1000, 8);
+			var packed = new ThermalCarrierContacts(0); packed.add(0, 1, g, Double.NaN);
+			var stats = ThermalCarrierTransport.step(owners, g < 1 ? packed
+					: List.of(new ThermalCarrierTransport.Contact(0, 1, g, Double.NaN)), g < 1 ? 1 : 1000, 8);
 			double entropy = 0;
 			for (int p = 0; p < 3; p++) {
 				double t = new ThermalContactExchange.Carrier(materials[p], mass[p], base[p], energy[p]).temperatureK();

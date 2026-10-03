@@ -1,7 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.thermal.ThermalCarrierTransport;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -41,7 +40,7 @@ final class LiquidThermalConduction {
 			int cell = markers.cell(p); next[p] = head[cell]; head[cell] = p;
 		}
 		int[] size = {domain.sizeX, domain.sizeY, domain.sizeZ};
-		var contacts = new ArrayList<ThermalCarrierTransport.Contact>();
+		var contacts = new cc.ecisr.mmm.thermal.ThermalCarrierContacts(Math.multiplyExact(n, 8));
 		double[][] wallMoment = new double[n][6];
 		for (int p = 0; p < n; p++) {
 			if (k[p] == 0) continue;
@@ -55,7 +54,7 @@ final class LiquidThermalConduction {
 							double scale = (low * (2 / (1 + low / high))) * h * volume[p] * volume[q] / MOMENT;
 							double conductance = reflectedKernel(position[p], position[q], size, scale, wallMoment[p], wallMoment[q], p == q);
 							if (p == q || conductance == 0) continue;
-							contacts.add(new ThermalCarrierTransport.Contact(p, q, conductance, Double.NaN));
+							contacts.add(p, q, conductance, Double.NaN);
 						}
 		}
 		for (int p = 0; p < n; p++) for (int axis = 0; axis < 3; axis++) for (int side = 0; side < 2; side++) {
@@ -75,7 +74,7 @@ final class LiquidThermalConduction {
 			if (conductance == 0) continue;
 			if (!(Double.isFinite(conductance) && conductance > 0))
 				throw new IllegalArgumentException("Liquid thermal wall quadrature has a non-positive first moment");
-			contacts.add(new ThermalCarrierTransport.Contact(p, -1, conductance, boundary.surfaceTemperatureK()));
+			contacts.add(p, -1, conductance, boundary.surfaceTemperatureK());
 		}
 		return contacts;
 	}

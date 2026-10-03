@@ -8,6 +8,7 @@ import cc.ecisr.mmm.units.SignedDyadic;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Owns the per-liquid-marker internal energy column: ordinal storage, exact sums, modeled
@@ -23,6 +24,11 @@ public final class LiquidEnergyColumn {
 	private final double insertionTemperatureK;
 	private final ThermalAuditState audit;
 	private double[] internalEnergy;
+	private double[] cachedBaseEnergy;
+	private long[] cachedMassBits;
+	private int[] cachedMaterial;
+	private ChemicalMixtureRecord[] cachedMixture;
+	private ChemicalRegistry cachedChemistry;
 	private long revision;
 
 	public LiquidEnergyColumn(
@@ -46,6 +52,9 @@ public final class LiquidEnergyColumn {
 		this.insertionTemperatureK = insertionTemperatureK;
 		this.audit = audit;
 		this.internalEnergy = new double[initialCapacity];
+		cachedBaseEnergy = new double[initialCapacity]; Arrays.fill(cachedBaseEnergy, Double.NaN);
+		cachedMassBits = new long[initialCapacity]; cachedMaterial = new int[initialCapacity];
+		cachedMixture = new ChemicalMixtureRecord[initialCapacity];
 		if (restoredEnergy != null) {
 			if (restoredEnergy.length != markers.markerCount()) {
 				throw new IllegalArgumentException("Restored liquid energy count differs from marker truth");
@@ -113,7 +122,14 @@ public final class LiquidEnergyColumn {
 	}
 
 	void ensureCapacity(int capacity) {
-		if (capacity > internalEnergy.length) internalEnergy = Arrays.copyOf(internalEnergy, capacity);
+		if (capacity <= internalEnergy.length) return;
+		int previous = internalEnergy.length;
+		internalEnergy = Arrays.copyOf(internalEnergy, capacity);
+		cachedBaseEnergy = Arrays.copyOf(cachedBaseEnergy, capacity);
+		Arrays.fill(cachedBaseEnergy, previous, capacity, Double.NaN);
+		cachedMassBits = Arrays.copyOf(cachedMassBits, capacity);
+		cachedMaterial = Arrays.copyOf(cachedMaterial, capacity);
+		cachedMixture = Arrays.copyOf(cachedMixture, capacity);
 	}
 
 	public double totalEnergy(int count) {
@@ -341,12 +357,22 @@ public final class LiquidEnergyColumn {
 		return energy;
 	}
 
-	private double baseEnergy(int marker, ThermalCarrierContext markers) {
+	double baseEnergy(int marker, ThermalCarrierContext markers) {
 		int material = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
 		double mass = unitScale.kilograms(markers.mass(marker));
 		ChemicalMixtureRecord mixture = markers.mixture(marker);
 		ChemicalRegistry chemistry = markers.chemicalRegistry();
-		return baseEnergy(material, mass, mixture, chemistry);
+		if (cachedChemistry != chemistry) {
+			Arrays.fill(cachedBaseEnergy, Double.NaN); cachedChemistry = chemistry;
+		}
+		long massBits = Double.doubleToRawLongBits(mass);
+		if (!Double.isNaN(cachedBaseEnergy[marker]) && cachedMassBits[marker] == massBits
+				&& cachedMaterial[marker] == material && Objects.equals(cachedMixture[marker], mixture))
+			return cachedBaseEnergy[marker];
+		double value = baseEnergy(material, mass, mixture, chemistry);
+		cachedBaseEnergy[marker] = value; cachedMassBits[marker] = massBits;
+		cachedMaterial[marker] = material; cachedMixture[marker] = mixture;
+		return value;
 	}
 
 	private double baseEnergy(int material, double mass, ChemicalMixtureRecord mixture, ChemicalRegistry chemistry) {

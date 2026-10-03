@@ -82,6 +82,8 @@ U_h(T) = m * u_ref,h
 
 packed mixture 的 offset 查找使用按 thermal material 与 chemical species handle 索引的派生表；表与化学注册表对象身份一起发布。切换注册表重新推导，缺失的 host/species 定义仍在求值时拒绝。零参考能项直接返回零，其他项沿用精确有理数贡献缓存。
 
+液体参考能按 ordinal 保存有界派生缓存，键包括 thermal material、质量的原始 binary64 位、完整不可变组成和化学注册表对象身份。温度与 LTE 载体视图共用该缓存；每次读取核对实际输入，质量、组成、材料或注册表变化立即重新求值，内能变化直接进入温度反演。
+
 `LiquidEnergyColumn.CaloricInventory` 保存候选的不可变材料、实际质量、组成和已计算参考能。同一候选的 `U(T)`、`T(U)` 与舍入误差预检复用这份数据，候选期间保持实际载体库存和内能原样。
 
 caloric segment 内 `cv` 为常量，积分与反演均为分段闭式线性计算。声明的首尾温度为数据标定范围：内禀候选超出标定范围时，状态函数沿用最近端点 segment 的 `cv` 连续延拓 `U(T)`，保持权威 `U` 守恒。
@@ -188,6 +190,8 @@ G_face = k_pq*A_contact/h*(v_p/v_cell_a)*(v_q/v_cell_b)
 G_boundary = 2*k_p*A_contact/h*(v_p/v_cell)
 Delta U_p = G*(T_q-T_p)*dt; Delta U_q = -Delta U_p
 ```
+
+接触图按原有生成顺序存于两侧 ordinal、conductance 与热浴温度的基础类型数组，显式累加与隐式正反向遍历共用该顺序。列表读取按需生成接触对象。
 
 同格接触使用 `h/2` 混合长度近似未解析的载体间热阻；此路径的精度由单元尺度控制。`A_contact` 由 PLIC 液面和 cut geometry 限制在一个 face 面积内。固定温度面距单元中心 `h/2`，外露面默认绝热。气体孔流及气腔壁热交换由各自处理器执行。
 

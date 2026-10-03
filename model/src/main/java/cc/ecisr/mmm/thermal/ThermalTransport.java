@@ -1,8 +1,6 @@
 package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.units.SignedDyadic;
-import java.util.ArrayList;
-import java.util.List;
 /** Finite carrier contacts using cell mixing lengths and PLIC/cut-face thermal resistance. */
 public final class ThermalTransport {
 	public static final int DEFAULT_MAXIMUM_SUBSTEPS = 8;
@@ -63,7 +61,7 @@ public final class ThermalTransport {
 		if (grid == null || grid.cellCount() != cellCount || faceArea == null || boundaryFace == null)
 			throw new IllegalArgumentException("Thermal transport grid/geometry is incompatible");
 		var owners = grid.carrierAccess();
-		var contacts = new ArrayList<ThermalCarrierTransport.Contact>();
+		var contacts = new ThermalCarrierContacts(Math.multiplyExact(owners.carrierCount(), 8));
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int cell = cellIndex(x, y, z);
 			if (!grid.occupied(cell)) continue;
@@ -96,7 +94,7 @@ public final class ThermalTransport {
 				for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p)) {
 					double g = 2 * owners.material(p).conductivityEuPerSecondMeterK() * boundary.contactAreaSquareMeters()
 							* owners.volume(p) / (cellSizeMeters * grid.carrierVolume(cell));
-					if (g > 0) contacts.add(new ThermalCarrierTransport.Contact(p, -1, g, boundary.surfaceTemperatureK()));
+					if (g > 0) contacts.add(p, -1, g, boundary.surfaceTemperatureK());
 				}
 			}
 		}
@@ -112,12 +110,12 @@ public final class ThermalTransport {
 	}
 
 	private static void addPair(ThermalCellGrid.CarrierAccess owners,
-	                           List<ThermalCarrierTransport.Contact> contacts, int p, int q, double scale) {
+	                           ThermalCarrierContacts contacts, int p, int q, double scale) {
 		double low = Math.min(owners.material(p).conductivityEuPerSecondMeterK(), owners.material(q).conductivityEuPerSecondMeterK());
 		double high = Math.max(owners.material(p).conductivityEuPerSecondMeterK(), owners.material(q).conductivityEuPerSecondMeterK());
 		if (low == 0) return;
 		double g = low * (2 / (1 + low / high)) * owners.volume(p) * owners.volume(q) * scale;
-		contacts.add(new ThermalCarrierTransport.Contact(p, q, g, Double.NaN));
+		contacts.add(p, q, g, Double.NaN);
 	}
 
 	private void validateArea(double area) {
