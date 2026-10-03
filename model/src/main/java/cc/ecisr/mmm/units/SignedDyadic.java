@@ -4,7 +4,10 @@ import java.math.BigInteger;
 import java.util.Objects;
 
 /** Bounded exact binary rational for inventory transfers, energy accounting and persistence. */
-public record SignedDyadic(BigInteger significand, int exponent) implements Comparable<SignedDyadic> {
+public final class SignedDyadic implements Comparable<SignedDyadic> {
+	private final int exponent, magnitudeBits, sign;
+	private final long compact;
+	private volatile BigInteger significand;
 	public static final SignedDyadic ZERO = new SignedDyadic(BigInteger.ZERO, 0);
 	private static final int MIN_DOUBLE_EXPONENT = -1074;
 	private static final int MAX_DOUBLE_EXPONENT = 971;
@@ -13,7 +16,7 @@ public record SignedDyadic(BigInteger significand, int exponent) implements Comp
 	/** Significand bit budget that keeps exact sums inside a bounded storage and codec envelope. */
 	public static final int MAX_SIGNIFICAND_BITS = 32_768;
 
-	public SignedDyadic {
+	public SignedDyadic(BigInteger significand, int exponent) {
 		Objects.requireNonNull(significand, "significand");
 		if (significand.signum() == 0) exponent = 0;
 		else {
@@ -26,7 +29,54 @@ public record SignedDyadic(BigInteger significand, int exponent) implements Comp
 				throw new IllegalArgumentException("Thermal dyadic significand is over budget");
 			}
 		}
+		this.exponent = exponent;
+		this.sign = significand.signum();
+		this.magnitudeBits = significand.abs().bitLength();
+		this.compact = magnitudeBits < Long.SIZE ? significand.longValue() : 0;
+		this.significand = significand;
 	}
+
+	/** Canonical small integers stay in machine words until a codec needs the wide view. */
+	private SignedDyadic(long significand, int exponent) {
+		int trailing = significand == 0 ? 0 : Long.numberOfTrailingZeros(significand);
+		compact = significand >> trailing;
+		this.exponent = significand == 0 ? 0 : Math.addExact(exponent, trailing);
+		magnitudeBits = Long.SIZE - Long.numberOfLeadingZeros(Math.abs(compact));
+		sign = Long.compare(compact, 0);
+	}
+
+	public static SignedDyadic of(long significand, int exponent) {
+		return significand == 0 ? ZERO : new SignedDyadic(significand, exponent);
+	}
+
+	/** Whether the canonical value is an exact signed integer in the specified binary unit. */
+	public boolean fitsLongUnits(int unitExponent) {
+		long shift = (long) exponent - unitExponent;
+		return sign == 0 || shift >= 0 && (magnitudeBits + shift < Long.SIZE || compact == -1 && shift == 63);
+	}
+
+	public long longUnitsExact(int unitExponent) {
+		if (sign == 0) return 0;
+		int shift = Math.subtractExact(exponent, unitExponent);
+		if (shift < 0) throw new ArithmeticException("Dyadic is fractional in the requested binary unit");
+		return fitsLongUnits(unitExponent) ? compact << shift : significand().shiftLeft(shift).longValueExact();
+	}
+
+	public int exponent() { return exponent; }
+	public int signum() { return sign; }
+	public BigInteger significand() {
+		BigInteger value = significand;
+		if (value == null) significand = value = BigInteger.valueOf(compact);
+		return value;
+	}
+
+	@Override public boolean equals(Object value) {
+		if (this == value) return true;
+		if (!(value instanceof SignedDyadic other) || exponent != other.exponent || magnitudeBits != other.magnitudeBits || sign != other.sign) return false;
+		return magnitudeBits < Long.SIZE ? compact == other.compact : significand().equals(other.significand());
+	}
+	@Override public int hashCode() { return 31 * significand().hashCode() + exponent; }
+	@Override public String toString() { return "SignedDyadic[significand=" + significand() + ", exponent=" + exponent + "]"; }
 
 	public static SignedDyadic of(double value) {
 		if (!Double.isFinite(value)) throw new IllegalArgumentException("Thermal audit value must be finite");
@@ -46,7 +96,7 @@ public record SignedDyadic(BigInteger significand, int exponent) implements Comp
 		int trailing = Long.numberOfTrailingZeros(rawSignificand);
 		rawSignificand >>>= trailing;
 		if ((bits & Long.MIN_VALUE) != 0L) rawSignificand = -rawSignificand;
-		return new SignedDyadic(BigInteger.valueOf(rawSignificand), exponent + trailing);
+		return new SignedDyadic(rawSignificand, exponent + trailing);
 	}
 
 	public static SignedDyadic sum(double[] values) {
@@ -125,41 +175,43 @@ public record SignedDyadic(BigInteger significand, int exponent) implements Comp
 
 	private SignedDyadic combine(SignedDyadic other, boolean subtract) {
 		Objects.requireNonNull(other, "other");
-		if (other.significand.signum() == 0) return this;
-		if (significand.signum() == 0) return subtract ? other.negate() : other;
+		if (other.sign == 0) return this;
+		if (sign == 0) return subtract ? other.negate() : other;
 		int common = Math.min(exponent, other.exponent);
 		long leftShift = (long) exponent - common, rightShift = (long) other.exponent - common;
-		if (significand.abs().bitLength() + leftShift < Long.SIZE
-				&& other.significand.abs().bitLength() + rightShift < Long.SIZE) {
-			long left = significand.longValue() << (int) leftShift, right = other.significand.longValue() << (int) rightShift;
+		if (magnitudeBits + leftShift < Long.SIZE && other.magnitudeBits + rightShift < Long.SIZE) {
+			long left = compact << (int) leftShift, right = other.compact << (int) rightShift;
 			try {
 				long sum = subtract ? Math.subtractExact(left, right) : Math.addExact(left, right);
-				if (sum == 0) return ZERO;
-				int trailing = Long.numberOfTrailingZeros(sum);
-				return new SignedDyadic(BigInteger.valueOf(sum >> trailing), Math.addExact(common, trailing));
+				return sum == 0 ? ZERO : new SignedDyadic(sum, common);
 			} catch (ArithmeticException overflow) {
 				// A wide exact result keeps the same bounded BigInteger representation.
 			}
 		}
-		BigInteger left = significand.shiftLeft(Math.subtractExact(exponent, common));
-		BigInteger right = other.significand.shiftLeft(Math.subtractExact(other.exponent, common));
+		BigInteger left = significand().shiftLeft(Math.subtractExact(exponent, common));
+		BigInteger right = other.significand().shiftLeft(Math.subtractExact(other.exponent, common));
 		return new SignedDyadic(subtract ? left.subtract(right) : left.add(right), common);
 	}
 
-	public SignedDyadic negate() { return significand.signum() == 0 ? ZERO : new SignedDyadic(significand.negate(), exponent); }
+	public SignedDyadic negate() {
+		return sign == 0 ? ZERO : magnitudeBits < Long.SIZE ? new SignedDyadic(-compact, exponent) : new SignedDyadic(significand().negate(), exponent);
+	}
 
-	public double toDouble() { return Math.scalb(significand.doubleValue(), exponent); }
+	public double toDouble() { return Math.scalb(magnitudeBits < Long.SIZE ? (double) compact : significand().doubleValue(), exponent); }
 
 	@Override
 	public int compareTo(SignedDyadic other) {
-		int sign = significand.signum(), otherSign = other.significand.signum();
-		if (sign != otherSign) return Integer.compare(sign, otherSign);
-		if (exponent == other.exponent) return significand.compareTo(other.significand);
-		long magnitude = (long) exponent + significand.abs().bitLength();
-		long otherMagnitude = (long) other.exponent + other.significand.abs().bitLength();
+		if (sign != other.sign) return Integer.compare(sign, other.sign);
+		if (exponent == other.exponent) return magnitudeBits < Long.SIZE && other.magnitudeBits < Long.SIZE
+				? Long.compare(compact, other.compact) : significand().compareTo(other.significand());
+		long magnitude = (long) exponent + magnitudeBits;
+		long otherMagnitude = (long) other.exponent + other.magnitudeBits;
 		if (magnitude != otherMagnitude) return sign * Long.compare(magnitude, otherMagnitude);
 		int common = Math.min(exponent, other.exponent);
-		return significand.shiftLeft(exponent - common)
-				.compareTo(other.significand.shiftLeft(other.exponent - common));
+		long leftShift = (long) exponent - common, rightShift = (long) other.exponent - common;
+		if (magnitudeBits + leftShift < Long.SIZE && other.magnitudeBits + rightShift < Long.SIZE)
+			return Long.compare(compact << (int) leftShift, other.compact << (int) rightShift);
+		return significand().shiftLeft(Math.subtractExact(exponent, common))
+				.compareTo(other.significand().shiftLeft(Math.subtractExact(other.exponent, common)));
 	}
 }

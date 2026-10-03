@@ -61,7 +61,12 @@ public final class ThermalTransport {
 		if (grid == null || grid.cellCount() != cellCount || faceArea == null || boundaryFace == null)
 			throw new IllegalArgumentException("Thermal transport grid/geometry is incompatible");
 		var owners = grid.carrierAccess();
-		var contacts = new ThermalCarrierContacts(Math.multiplyExact(owners.carrierCount(), 8));
+		int count = owners.carrierCount();
+		double[] conductivity = new double[count], volume = new double[count];
+		for (int p = 0; p < count; p++) {
+			conductivity[p] = owners.material(p).conductivityEuPerSecondMeterK(); volume[p] = owners.volume(p);
+		}
+		var contacts = new ThermalCarrierContacts(Math.multiplyExact(count, 8));
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int cell = cellIndex(x, y, z);
 			if (!grid.occupied(cell)) continue;
@@ -69,7 +74,7 @@ public final class ThermalTransport {
 			// The symmetric volume quadrature retains a finite rate for every positive k.
 			for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p))
 				for (int q = grid.nextCarrier(p); q >= 0; q = grid.nextCarrier(q))
-					addPair(owners, contacts, p, q, 2 * cellSizeMeters / grid.carrierVolume(cell));
+					addPair(conductivity, volume, contacts, p, q, 2 * cellSizeMeters / grid.carrierVolume(cell));
 			for (int axis = 0; axis < 3; axis++) {
 				int nx = x + (axis == 0 ? 1 : 0), ny = y + (axis == 1 ? 1 : 0), nz = z + (axis == 2 ? 1 : 0);
 				if (!inside(nx, ny, nz)) continue;
@@ -81,7 +86,7 @@ public final class ThermalTransport {
 				double scale = area / (cellSizeMeters * grid.carrierVolume(cell) * grid.carrierVolume(neighbor));
 				for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p))
 					for (int q = grid.firstCarrier(neighbor); q >= 0; q = grid.nextCarrier(q))
-						addPair(owners, contacts, p, q, scale);
+						addPair(conductivity, volume, contacts, p, q, scale);
 			}
 			for (int direction = 0; direction < 6; direction++) {
 				int nx = x + (direction == 0 ? -1 : direction == 1 ? 1 : 0);
@@ -92,8 +97,8 @@ public final class ThermalTransport {
 				if (boundary == null) continue;
 				validateArea(boundary.contactAreaSquareMeters());
 				for (int p = grid.firstCarrier(cell); p >= 0; p = grid.nextCarrier(p)) {
-					double g = 2 * owners.material(p).conductivityEuPerSecondMeterK() * boundary.contactAreaSquareMeters()
-							* owners.volume(p) / (cellSizeMeters * grid.carrierVolume(cell));
+					double g = 2 * conductivity[p] * boundary.contactAreaSquareMeters()
+							* volume[p] / (cellSizeMeters * grid.carrierVolume(cell));
 					if (g > 0) contacts.add(p, -1, g, boundary.surfaceTemperatureK());
 				}
 			}
@@ -109,12 +114,12 @@ public final class ThermalTransport {
 		}
 	}
 
-	private static void addPair(ThermalCellGrid.CarrierAccess owners,
+	private static void addPair(double[] conductivity, double[] volume,
 	                           ThermalCarrierContacts contacts, int p, int q, double scale) {
-		double low = Math.min(owners.material(p).conductivityEuPerSecondMeterK(), owners.material(q).conductivityEuPerSecondMeterK());
-		double high = Math.max(owners.material(p).conductivityEuPerSecondMeterK(), owners.material(q).conductivityEuPerSecondMeterK());
+		double low = Math.min(conductivity[p], conductivity[q]);
+		double high = Math.max(conductivity[p], conductivity[q]);
 		if (low == 0) return;
-		double g = low * (2 / (1 + low / high)) * owners.volume(p) * owners.volume(q) * scale;
+		double g = low * (2 / (1 + low / high)) * volume[p] * volume[q] * scale;
 		contacts.add(p, q, g, Double.NaN);
 	}
 

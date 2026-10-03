@@ -597,8 +597,14 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		for (int trial = 0; trial < 512; trial++) {
 			long a = trial < extremes.length * extremes.length ? extremes[trial % extremes.length] : random.nextLong();
 			long b = trial < extremes.length * extremes.length ? extremes[trial / extremes.length] : random.nextLong();
-			var left = new SignedDyadic(java.math.BigInteger.valueOf(a), trial % 7 == 0 ? -1074 : trial % 5 - 30);
-			var right = new SignedDyadic(java.math.BigInteger.valueOf(b), trial % 7 == 0 ? 971 : trial % 11 - 32);
+			var left = SignedDyadic.of(a, trial % 7 == 0 ? -1074 : trial % 5 - 30);
+			var right = SignedDyadic.of(b, trial % 7 == 0 ? 971 : trial % 11 - 32);
+			var wideLeft = new SignedDyadic(java.math.BigInteger.valueOf(a), trial % 7 == 0 ? -1074 : trial % 5 - 30);
+			require(left.equals(wideLeft) && left.hashCode() == wideLeft.hashCode() && left.toString().equals(wideLeft.toString())
+					&& left.signum() == left.significand().signum(), "compact dyadic changed canonical value identity");
+			int unit = left.exponent() - 1;
+			if (left.fitsLongUnits(unit)) require(left.longUnitsExact(unit) == left.significand().shiftLeft(1).longValueExact(),
+					"compact dyadic changed its binary unit conversion");
 			int exponent = Math.min(left.exponent(), right.exponent());
 			var l = left.significand().shiftLeft(left.exponent() - exponent);
 			var r = right.significand().shiftLeft(right.exponent() - exponent);
@@ -607,6 +613,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					&& Integer.signum(left.compareTo(right)) == Integer.signum(l.compareTo(r)),
 					"primitive dyadic arithmetic differs from the independent integer oracle");
 		}
+		require(SignedDyadic.of(-1, 63).fitsLongUnits(0) && SignedDyadic.of(-1, 63).longUnitsExact(0) == Long.MIN_VALUE
+				&& !SignedDyadic.of(1, 63).fitsLongUnits(0), "signed binary-unit conversion lost the asymmetric long range");
 		SignedDyadic exact = SignedDyadic.sum(new double[]{1.0E16, 1.0, -1.0E16});
 		require(exact.equals(SignedDyadic.of(1.0)), "exact dyadic audit lost a cancellation remainder");
 		double[] varied = new double[8_192];
