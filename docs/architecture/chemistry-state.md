@@ -49,13 +49,13 @@ exact rational 只接受整数、有限小数或 `numerator/denominator` 文本�
 
 `1 AU = 1,000,000,000 quanta`。species 绝对库存是非负 `long`，加减乘和总账使用 checked arithmetic。
 
-marker 只保存 packed mixture handle 与 indicator bit；handle 指向 `PackedChemicalMixturePool` 中按 runtime species handle 排序的 primitive `(species, amountQuanta)` 列和 raw mass-residual bits。
+marker 保存 mixture handle 与 indicator bit；handle 指向 `ChemicalMixturePool` 中的不可变 `ChemicalMixtureRecord`，记录包含按 runtime species handle 排序的 `(species, amountQuanta)` 数组和 raw mass-residual bits。
 
-每个活动 marker 独立拥有一个 pool handle；pool 的 primitive 列保存组成和余量，不可变 `ChemicalMixtureRecord` 可共享。修改时替换该 handle 的记录，删除时释放 handle。marker ordinal、handle 和 material/chemical-phase 绑定必须同时有效。
+每个活动 marker 独立拥有一个 pool handle；多个 handle 可共享同一不可变组成记录。修改时替换该 handle 的记录，删除时释放 handle。marker ordinal、handle 和 material/chemical-phase 绑定必须同时有效。
 
 整批载体重建通过 `planMarkerRemap` 校验完整记录表、注册表 handle 和最终区域总量，生成绑定 store 与 mutation revision 的不可变计划。提交复用保留 ordinal 的独立 handle，释放缩容尾部并为新增 ordinal 分配 handle，最后一次更新总量；dirty cell、反应轮转位置及 source/sink 账本保持连续。过期计划和超出最终库存上限的候选在写入之前拒绝。
 
-`FlipChemicalParticleState` 捕获时对不可变运行时记录去重，按 species 数量、规范 species handle/数量和 residual raw bits 排序。构造器逐项检查顺序、逐 marker 质量关系、species 总量和 residual 总账；同一注册表下恢复复用记录，重新建立独立的 marker handle 和 packed 工作数组。恢复时按已知 marker 数预留组成池容量，避免逐级扩容复制。
+`FlipChemicalParticleState` 捕获时对不可变运行时记录去重，按 species 数量、规范 species handle/数量和 residual raw bits 排序。构造器逐项检查顺序、逐 marker 质量关系、species 总量和 residual 总账；同一注册表下恢复复用记录，重新建立独立的 marker handle 和记录引用数组。恢复时按已知 marker 数预留组成池容量，避免逐级扩容复制。
 
 稳定 ID 表由快照在首次导出时生成不可变副本。运行时 species handle 的顺序由注册表的 stable ID 排序确定，因此延迟生成保持原有表顺序与 marker 索引。冷恢复仍从稳定记录转换并执行完整校验。不可变化学记录按注册表对象身份缓存一份精确 species 质量；缓存值与注册表引用一起发布，重复校验保持相同有理数结果。
 

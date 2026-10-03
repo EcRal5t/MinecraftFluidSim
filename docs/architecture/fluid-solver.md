@@ -164,7 +164,7 @@ dt <= 2/L
 
 ### 有限体积输运校验路径
 
-JVM 参数 `-Dmmm.cellVolumeTransport=true` 启用单元有限体积液体输运，默认构建保留上述粒子平流路径。有限体积路径从各格实际 marker 体积精确求和，压力、PLIC、气腔剩余容量和输运使用同一单元库存。该路径的生产切换条件见[产品路线](../roadmap/product-roadmap.md#长期粒子分布与压力几何)。
+JVM 启动参数 `-Dmmm.cellVolumeTransport=true` 启用单元有限体积液体输运，默认构建保留上述粒子平流路径。有限体积路径从各格实际 marker 体积精确求和，压力、PLIC、气腔剩余容量和输运使用同一单元库存。该路径的生产切换条件见[产品路线](../roadmap/product-roadmap.md#长期粒子分布与压力几何)。
 
 `CellLiquidVolumeTransport` 根据投影后的 MAC 法向速度积分共享面的 PLIC 扫掠体积。`ConservativeLiquidFlux` 使用低阶供给、几何通量修正和接收格容量共同限制通量，并在 `2^-26 BV` 格点上保存精确公共面通量。单元更新满足 `V_new = V_old + sum(F_in) - sum(F_out)`，各格正体积和开放容量在提交前逐格检查。颗粒位移造成的容量变化沿已经选中的物理通量分配；供给限制保持每格本子步的实际库存。
 

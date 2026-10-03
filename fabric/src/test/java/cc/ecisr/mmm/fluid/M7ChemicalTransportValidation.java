@@ -33,7 +33,7 @@ public final class M7ChemicalTransportValidation {
 
 	public static void main(String[] args) throws Exception {
 		boolean fast = args.length > 0 && args[0].equals("--fast");
-		validatePackedBudgetAndBinaryAllocation();
+		validateMixtureBudgetAndBinaryAllocation();
 		validateInternalTransferLedgerDiversity();
 		validateMissingPhaseRejectedBeforeBinding();
 		validateExternalSourceBoundary();
@@ -53,19 +53,19 @@ public final class M7ChemicalTransportValidation {
 		validateTransferResolutionIsAtomic();
 		validateInsertionAccountsForDisplacedLiquid();
 		if (!fast) validatePerformanceBudgets();
-		System.out.println("M7 chemical transport gate passed: packed budget, same-cell reaction, separation and reseeding conservation");
+		System.out.println("M7 chemical transport gate passed: mixture budget, same-cell reaction, separation and reseeding conservation");
 	}
 
-	private static void validatePackedBudgetAndBinaryAllocation() {
+	private static void validateMixtureBudgetAndBinaryAllocation() {
 		ChemicalParcelStore maximum = new ChemicalParcelStore(
 				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), 73_728, 9_216);
 		long residentBytes = Math.addExact(maximum.cpuBytes(), 2L * 73_728L * Integer.BYTES);
 		check(residentBytes <= 64L * 1024L * 1024L,
 				"maximum default-domain chemical heap model exceeds 64 MiB: " + residentBytes);
-		check(maximum.pool().handleCapacity() == 73_729, "packed handle cap is not reservedMarkerCapacity + 1");
-		check(maximum.pool().packedEntryCapacity() == 16 * 73_729, "packed entry cap is not 16 * handle cap");
+		check(maximum.pool().handleCapacity() == 73_729, "mixture handle cap is not reservedMarkerCapacity + 1");
+		check(maximum.pool().speciesEntryCapacity() == 16 * 73_729, "species entry cap is not 16 * handle cap");
 		check(maximum.pool().cpuBytes() < 32_768, "empty mixture pool allocates only its initial storage");
-		var growing = new cc.ecisr.mmm.chemistry.PackedChemicalMixturePool(130);
+		var growing = new cc.ecisr.mmm.chemistry.ChemicalMixturePool(130);
 		var record = new ChemicalMixtureRecord(new int[] {0}, new long[] {1}, 0);
 		try {
 			growing.create(new ChemicalMixtureRecord(new int[] {ChemicalLimits.MAX_SPECIES}, new long[] {1}, 0));
@@ -76,14 +76,27 @@ public final class M7ChemicalTransportValidation {
 			check(growing.create(record) == handle, "pool growth preserves handle order");
 		}
 		try { growing.create(record); throw new AssertionError("full pool accepted another handle"); }
-		catch (cc.ecisr.mmm.chemistry.PackedChemicalMixturePool.PoolBudgetExceededException expected) { }
+		catch (cc.ecisr.mmm.chemistry.ChemicalMixturePool.PoolBudgetExceededException expected) { }
 		for (int handle = 1; handle <= 130; handle++) {
-			check(growing.record(handle).equals(record), "pool growth preserves records");
+			check(growing.record(handle) == record, "pool growth preserves records");
 			growing.release(handle);
 		}
 		for (int handle = 130; handle >= 1; handle--) {
 			check(growing.create(record) == handle, "released handles retain stack order");
 		}
+		var replacement = new ChemicalMixtureRecord(new int[] {0, 1}, new long[] {2, 3},
+				Double.doubleToRawLongBits(-0.0));
+		growing.overwrite(1, replacement);
+		check(growing.record(1) == replacement && growing.record(2) == record,
+				"replacing one owner preserves other handles sharing its previous immutable record");
+		growing.release(1);
+		check(!growing.isLive(1) && growing.liveCount() == 129, "release removes only its owner");
+		try { growing.record(1); throw new AssertionError("released record remained readable"); }
+		catch (IllegalArgumentException expected) { }
+		try { growing.release(1); throw new AssertionError("double release was accepted"); }
+		catch (IllegalArgumentException expected) { }
+		check(growing.create(replacement) == 1 && growing.record(1).massResidualKilogramsBits()
+				== Double.doubleToRawLongBits(-0.0), "reused handle retains raw residual bits");
 		long[] equal = BinaryVolumeAllocator.allocate(5L, new float[]{0.125F, 0.125F}, new int[]{7, 3});
 		check(Arrays.equals(equal, new long[]{2L, 3L}), "largest remainder did not use marker ordinal tie-break");
 		long[] unequal = BinaryVolumeAllocator.allocate(10L, new float[]{0.1F, 0.2F, 0.3F}, new int[]{0, 1, 2});

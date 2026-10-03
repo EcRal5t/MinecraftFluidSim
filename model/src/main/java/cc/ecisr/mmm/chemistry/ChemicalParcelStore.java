@@ -11,13 +11,13 @@ import java.util.TreeMap;
 import java.util.function.IntFunction;
 
 /**
- * Per-region marker-to-packed-mixture ownership, indicator state, dirty cells and logical reactions.
- * Marker mass parameters use normalized solver mass; packed species and residual mass use kilograms.
+ * Per-region marker-to-mixture ownership, indicator state, dirty cells and logical reactions.
+ * Marker mass parameters use normalized solver mass; species and residual mass use kilograms.
  */
 public final class ChemicalParcelStore {
 	private final ChemicalRegistry registry;
 	private final SolverUnitScale unitScale;
-	private final PackedChemicalMixturePool pool;
+	private final ChemicalMixturePool pool;
 	private final int[] markerHandles;
 	private final long[] indicatorWords;
 	private final long[] dirtyCellWords;
@@ -38,7 +38,7 @@ public final class ChemicalParcelStore {
 		if (cellCount <= 0) throw new IllegalArgumentException("Cell count must be positive");
 		this.registry = java.util.Objects.requireNonNull(registry, "registry");
 		this.unitScale = java.util.Objects.requireNonNull(unitScale, "unitScale");
-		this.pool = new PackedChemicalMixturePool(reservedMarkerCapacity);
+		this.pool = new ChemicalMixturePool(reservedMarkerCapacity);
 		this.markerHandles = new int[reservedMarkerCapacity];
 		this.indicatorWords = new long[(reservedMarkerCapacity + 63) >>> 6];
 		this.dirtyCellWords = new long[(cellCount + 63) >>> 6];
@@ -46,7 +46,7 @@ public final class ChemicalParcelStore {
 
 	public ChemicalRegistry registry() { return registry; }
 	public SolverUnitScale unitScale() { return unitScale; }
-	public PackedChemicalMixturePool pool() { return pool; }
+	public ChemicalMixturePool pool() { return pool; }
 	public long totalQuanta() { return totalQuanta; }
 	/** Monotonic counter over every parcel-truth mutation; lets consumers bind plans to their planned inventory. */
 	public long mutationRevision() { return mutationRevision; }
@@ -215,7 +215,7 @@ public final class ChemicalParcelStore {
 	}
 	public int mixtureHandle(int marker) { requireAssigned(marker); return markerHandles[marker]; }
 	public boolean indicator(int marker) { requireAssigned(marker); return bit(indicatorWords, marker); }
-	/** Changes only indicator provenance; species, mass and the packed mixture handle stay untouched. */
+	/** Changes only indicator provenance; species, mass and the mixture handle stay untouched. */
 	public boolean updateIndicator(int marker, boolean value) {
 		requireAssigned(marker);
 		boolean previous = bit(indicatorWords, marker);

@@ -6,6 +6,7 @@ import java.util.Arrays;
 
 /** Conservative cell-volume transport over the pressure geometry. */
 final class CellLiquidVolumeTransport {
+	private static final boolean ENABLED = Boolean.getBoolean("mmm.cellVolumeTransport");
 	private final FluidDomain domain;
 	private final ConservativeLiquidFlux transport;
 	private final LiquidFluxGeometry geometry;
@@ -34,7 +35,7 @@ final class CellLiquidVolumeTransport {
 	}
 
 	static boolean enabled(FluidDomainStorage domain) {
-		return Boolean.getBoolean("mmm.cellVolumeTransport");
+		return ENABLED;
 	}
 
 	/** Eulerian donor outflow and partial-micro-box sweep rate; prediction is used only for step estimation. */
