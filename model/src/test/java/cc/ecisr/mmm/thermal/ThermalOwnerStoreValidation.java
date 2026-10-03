@@ -23,6 +23,22 @@ public final class ThermalOwnerStoreValidation {
 		coherentPhaseMergeSplitConservesInventories();
 		granularColumnTransactionsConserveEnergy();
 		liquidTemperatureTracksMutableInventory();
+		referenceTermsKeepCanonicalRationalRounding();
+	}
+
+	private static void referenceTermsKeepCanonicalRationalRounding() {
+		var cache = new ThermalReferenceEnergyCache(); var random = new java.util.Random(728173L);
+		for (int i = 0; i < 2048; i++) {
+			long numerator = i == 0 ? Long.MIN_VALUE : i == 1 ? -57300 : random.nextInt();
+			long denominator = i % 3 == 0 ? 1 : (random.nextLong() & 0xfffffL) + 1;
+			var rational = new ExactRational(java.math.BigInteger.valueOf(numerator), java.math.BigInteger.valueOf(denominator));
+			var offset = new ThermalSpeciesOffset("test:offset", "test:species", "test:material", rational);
+			for (long quanta : new long[] {0, 1, 6_944_444_444_444L, random.nextLong() & Long.MAX_VALUE}) {
+				double expected = rational.multiply(quanta).divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+				require(Double.doubleToRawLongBits(cache.energy(offset, quanta)) == Double.doubleToRawLongBits(expected),
+						"Reference term changed canonical exact-rational binary64 rounding");
+			}
+		}
 	}
 
 	private static void liquidTemperatureTracksMutableInventory() {

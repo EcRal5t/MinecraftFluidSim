@@ -18,9 +18,24 @@ final class ThermalReferenceEnergyCache {
 		int slot = (int) (hash ^ (hash >>> 31)) & (CAPACITY - 1);
 		Entry entry = entries.get(slot);
 		if (entry != null && entry.offset() == offset && entry.quanta() == quanta) return entry.energy();
-		double energy = offset.referenceInternalEnergyEuPerAu()
-				.multiply(quanta).divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+		double energy = exactEnergy(offset, quanta);
 		entries.set(slot, new Entry(offset, quanta, energy));
 		return energy;
 	}
+	private static double exactEnergy(ThermalSpeciesOffset offset, long quanta) {
+		var rational = offset.referenceInternalEnergyEuPerAu();
+		if (rational.numerator().bitLength() < 64 && rational.denominator().bitLength() < 64) {
+			try {
+				long numerator = Math.multiplyExact(rational.numerator().longValueExact(), quanta);
+				long denominator = Math.multiplyExact(rational.denominator().longValueExact(), ChemicalLimits.QUANTA_PER_AU);
+				if (numerator != Long.MIN_VALUE) {
+					long a = Math.abs(numerator), b = denominator;
+					while (b != 0) { long remainder = a % b; a = b; b = remainder; }
+					return (double) (numerator / a) / (double) (denominator / a);
+				}
+			} catch (ArithmeticException wide) { /* Retain the bounded exact-rational calculation below. */ }
+		}
+		return rational.multiply(quanta).divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+	}
+
 }
