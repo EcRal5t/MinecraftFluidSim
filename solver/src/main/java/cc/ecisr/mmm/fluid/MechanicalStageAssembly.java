@@ -168,7 +168,7 @@ final class MechanicalStageAssembly {
 	private static ParticleAdvectionStage.Access advectionAccess(FluidDomain domain) {
 		return new ParticleAdvectionStage.Access() {
 			@Override public boolean advectConservativeVolume(float dt) {
-				if (!CellLiquidVolumeTransport.enabled(domain)) return false;
+				if (!CellLiquidVolumeTransport.enabled()) return false;
 				boolean connected = false;
 				for (int p = 0; p < domain.particles.count(); p++)
 					if (domain.gridToParticleStage.advectionCells()[domain.particleCellIndex(p)]) { connected = true; break; }
@@ -198,6 +198,7 @@ final class MechanicalStageAssembly {
 			@Override public boolean hasAnySurfaceTension() { return domain.hasAnySurfaceTension(); }
 			@Override public boolean hasAnyLiquidPairTension() { return domain.hasAnyLiquidPairTension(); }
 			@Override public void buildMarkerGrid() { MarkerGridBuilder.build(domain); }
+			@Override public void scatterVelocities() { MarkerGridBuilder.scatterVelocities(domain); }
 			@Override public void constrainClosedLiquidVolume() {
 				domain.closedLiquidVolume.apply(domain.projection.pressureVolume, domain.particles, domain.pressureGranularCoupling, domain.markerGrid);
 			}
@@ -214,14 +215,15 @@ final class MechanicalStageAssembly {
 			@Override public GranularCouplingFields pressureGranularCoupling() { return domain.pressureGranularCoupling; }
 			@Override public void rebuildPressureBoundaryLineage() { domain.rebuildPressureBoundaryLineage(); }
 			@Override public void rebuildSurfaceTensionPressure() { domain.rebuildSurfaceTensionPressure(); }
-			@Override public void markGridClean() { domain.gridDirty = false; }
+			@Override public void markGridClean() { domain.gridDirty = false; domain.velocityGridDirty = true; }
+			@Override public void markVelocityGridClean() { domain.velocityGridDirty = false; }
 		};
 	}
 
 	private static MechanicalStepPipeline.Access pipelineAccess(FluidDomain domain) {
 		return new MechanicalStepPipeline.Access() {
 			@Override public double projectedCourant(float dt) {
-				if (!CellLiquidVolumeTransport.enabled(domain)) {
+				if (!CellLiquidVolumeTransport.enabled()) {
 					double[] maximum = new double[3];
 					float[][] velocity = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
 					for (int axis = 0; axis < 3; axis++) for (float value : velocity[axis]) maximum[axis] = Math.max(maximum[axis], Math.abs(value));

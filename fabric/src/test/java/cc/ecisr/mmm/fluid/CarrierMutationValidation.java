@@ -34,19 +34,23 @@ public final class CarrierMutationValidation {
 		var first = new IllegalStateException("first batch rejection");
 		var last = new AssertionError("last batch rejection");
 		try {
-			cc.ecisr.mmm.compute.CpuWorkBatch.run(visits.length, index -> {
-				if (index == 0) throw first;
-				if (index == visits.length - 1) throw last;
-				visits[index]++;
+			cc.ecisr.mmm.compute.CpuWorkBatch.run(visits.length, (from, until) -> {
+				for (int index = from; index < until; index++) {
+					if (index == 0) throw first;
+					if (index == visits.length - 1) throw last;
+					visits[index]++;
+				}
 			});
 			throw new AssertionError("worker rejection was lost");
 		} catch (IllegalStateException rejected) {
 			require(rejected == first, "worker rejection changed identity or canonical batch order");
-			if (Runtime.getRuntime().availableProcessors() > 2)
+			if (Runtime.getRuntime().availableProcessors() > 3)
 				require(visits[visits.length - 2] == 1, "rejection returned while another batch was unfinished");
+			if (Runtime.getRuntime().availableProcessors() > 5)
+				require(visits[visits.length / 2 - 1] == 1, "rejection returned before an independent batch finished");
 		}
 		java.util.Arrays.fill(visits, 0);
-		cc.ecisr.mmm.compute.CpuWorkBatch.run(visits.length, index -> visits[index]++);
+		cc.ecisr.mmm.compute.CpuWorkBatch.run(visits.length, (from, until) -> { for (int index = from; index < until; index++) { visits[index]++; } });
 		for (int visit : visits) require(visit == 1, "independent work missed or repeated an index after rejection");
 	}
 
@@ -113,10 +117,23 @@ public final class CarrierMutationValidation {
 		domain.setVolume(1, 1, 1, 1);
 		domain.setVolume(2, 1, 1, 0.5F);
 		for (int round = 0; round < 3; round++) {
+			for (int particle = 0; particle < domain.particles.count(); particle++)
+				domain.particles.setVelocityX(particle, round + 0.5F);
 			boolean dirty = domain.gridDirty;
 			var before = domain.observeCellInventory(1, 1, 1);
 			require(domain.gridDirty == dirty, "query preserves grid rebuild scheduling");
+			float[] previousVelocity = domain.mac.velocityX.clone();
+			domain.volume(1, 1, 1);
+			require(!domain.gridDirty && domain.velocityGridDirty, "inventory query prepares geometry and leaves velocity pending");
+			require(java.util.Arrays.equals(previousVelocity, domain.mac.velocityX), "inventory query changed the velocity grid");
+			FluidDomain reference = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			reference.ensureGrid();
 			domain.ensureGrid();
+			require(!domain.velocityGridDirty, "mechanical read left velocity pending");
+			require(java.util.Arrays.equals(reference.mac.velocityX, domain.mac.velocityX)
+					&& java.util.Arrays.equals(reference.mac.velocityY, domain.mac.velocityY)
+					&& java.util.Arrays.equals(reference.mac.velocityZ, domain.mac.velocityZ),
+					"deferred velocity transfer differs from a complete restored rebuild");
 			var after = domain.observeCellInventory(1, 1, 1);
 			require(java.util.Objects.equals(before, after), "indexed query matches the authoritative full scan");
 			require(!domain.gridDirty, "indexed observation keeps the grid clean");

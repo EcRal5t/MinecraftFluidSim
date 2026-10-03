@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.compute.CpuWorkBatch;
 import java.util.Arrays;
 
 /** Shared geometric liquid fluxes with conservative multidimensional capacity constraints. */
@@ -13,7 +14,7 @@ final class ConservativeLiquidFlux {
 	private final float[] normalX, normalY, normalZ, offset;
 	private final int[] incomingHead, incomingNext, predecessor, queue;
 	private final SignedDyadic[] after;
-	private final double[] capacity, aperture;
+	private final double[] capacity, aperture, donorFlux;
 	private final SignedDyadic[] exactCapacity;
 	private final SignedDyadic[] upperFlux, remainingSupply;
 	private final double[] finalCapacity;
@@ -32,7 +33,7 @@ final class ConservativeLiquidFlux {
 		normalX = new float[cellCount]; normalY = normalX.clone(); normalZ = normalX.clone(); offset = normalX.clone();
 		incomingHead = new int[cellCount]; incomingNext = new int[faces]; predecessor = incomingHead.clone(); queue = incomingHead.clone();
 		after = new SignedDyadic[cellCount];
-		capacity = new double[cellCount]; aperture = new double[faces];
+		capacity = new double[cellCount]; aperture = new double[faces]; donorFlux = new double[faces];
 		exactCapacity = new SignedDyadic[cellCount];
 		upperFlux = new SignedDyadic[faces]; remainingSupply = new SignedDyadic[cellCount]; finalCapacity = new double[cellCount];
 		int f = 0;
@@ -83,36 +84,45 @@ final class ConservativeLiquidFlux {
 	}
 
 	private void reconstructPlanes(double[] volume, boolean[] solid, SignedDyadic[] exactVolume) {
-		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
-			int c = index(x, y, z);
-			if (exactVolume[c].compareTo(SignedDyadic.ZERO) < 0 || exactVolume[c].compareTo(SignedDyadic.of(capacity[c])) > 0)
-				throw new IllegalStateException("Liquid integration cell " + c + " exceeds its geometric capacity: volume="
-						+ volume[c] + ", beginningCapacity=" + capacity[c] + ", finalCapacity=" + finalCapacity[c]);
-			normalX[c] = (float) (sample(volume, solid, x - 1, y, z, c) - sample(volume, solid, x + 1, y, z, c));
-			normalY[c] = (float) (sample(volume, solid, x, y - 1, z, c) - sample(volume, solid, x, y + 1, z, c));
-			normalZ[c] = (float) (sample(volume, solid, x, y, z - 1, c) - sample(volume, solid, x, y, z + 1, c));
-			if (normalX[c] == 0 && normalY[c] == 0 && normalZ[c] == 0) normalY[c] = 1;
-			offset[c] = geometry == null ? FlipFreeSurfaceGeometry.solvePlaneOffset(normalX[c], normalY[c], normalZ[c], (float) volume[c])
-					: geometry.offset(c, normalX[c], normalY[c], normalZ[c], volume[c]);
-		}
+		CpuWorkBatch.run(cellCount, (from, until) -> {
+			for (int c = from; c < until; c++) {
+				int x = c % sizeX, y = c / sizeX % sizeY, z = c / (sizeX * sizeY);
+				if (exactVolume[c].compareTo(SignedDyadic.ZERO) < 0 || exactVolume[c].compareTo(SignedDyadic.of(capacity[c])) > 0)
+					throw new IllegalStateException("Liquid integration cell " + c + " exceeds its geometric capacity: volume="
+							+ volume[c] + ", beginningCapacity=" + capacity[c] + ", finalCapacity=" + finalCapacity[c]);
+				normalX[c] = (float) (sample(volume, solid, x - 1, y, z, c) - sample(volume, solid, x + 1, y, z, c));
+				normalY[c] = (float) (sample(volume, solid, x, y - 1, z, c) - sample(volume, solid, x, y + 1, z, c));
+				normalZ[c] = (float) (sample(volume, solid, x, y, z - 1, c) - sample(volume, solid, x, y, z + 1, c));
+				if (normalX[c] == 0 && normalY[c] == 0 && normalZ[c] == 0) normalY[c] = 1;
+				offset[c] = geometry == null ? FlipFreeSurfaceGeometry.solvePlaneOffset(normalX[c], normalY[c], normalZ[c], (float) volume[c])
+						: geometry.offset(c, normalX[c], normalY[c], normalZ[c], volume[c]);
+			}
+		});
 	}
 
 	private void provisionalFluxes(double[] volume, double dtOverH) {
 		System.arraycopy(volume, 0, low, 0, cellCount);
 		Arrays.fill(positive, 0); Arrays.fill(negative, 0);
+		CpuWorkBatch.run(flux.length, (from, until) -> {
+			for (int f = from; f < until; f++) {
+				double courant = velocity[f] * dtOverH;
+				int donor = courant >= 0 ? left[f] : right[f];
+				if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) { flux[f] = 0; continue; }
+				float width = (float) Math.abs(courant), nx = normalX[donor], ny = normalY[donor], nz = normalZ[donor], off = offset[donor];
+				if (courant > 0) off -= (axis[f] == 0 ? nx : axis[f] == 1 ? ny : nz) * (1 - width);
+				if (axis[f] == 0) nx *= width; else if (axis[f] == 1) ny *= width; else nz *= width;
+				donorFlux[f] = capacity[donor] == 0 ? 0 : courant * aperture[f] * volume[donor] / capacity[donor];
+				double swept = geometry == null ? Math.abs(courant) * FlipFreeSurfaceGeometry.unitCubeLiquidFraction(nx, ny, nz, off)
+						: geometry.swept(donor, courant >= 0 ? right[f] : left[f], axis[f], Math.abs(courant), courant >= 0,
+								normalX[donor], normalY[donor], normalZ[donor], offset[donor]);
+				flux[f] = Math.copySign(swept, courant) - donorFlux[f];
+			}
+		});
 		for (int f = 0; f < flux.length; f++) {
 			double courant = velocity[f] * dtOverH;
 			int donor = courant >= 0 ? left[f] : right[f];
-			if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) { flux[f] = 0; continue; }
-			float width = (float) Math.abs(courant), nx = normalX[donor], ny = normalY[donor], nz = normalZ[donor], off = offset[donor];
-			if (courant > 0) off -= (axis[f] == 0 ? nx : axis[f] == 1 ? ny : nz) * (1 - width);
-			if (axis[f] == 0) nx *= width; else if (axis[f] == 1) ny *= width; else nz *= width;
-			double donorFlux = capacity[donor] == 0 ? 0 : courant * aperture[f] * volume[donor] / capacity[donor];
-			double swept = geometry == null ? Math.abs(courant) * FlipFreeSurfaceGeometry.unitCubeLiquidFraction(nx, ny, nz, off)
-					: geometry.swept(donor, courant >= 0 ? right[f] : left[f], axis[f], Math.abs(courant), courant >= 0,
-							normalX[donor], normalY[donor], normalZ[donor], offset[donor]);
-			flux[f] = Math.copySign(swept, courant) - donorFlux;
-			low[left[f]] -= donorFlux; low[right[f]] += donorFlux;
+			if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) continue;
+			low[left[f]] -= donorFlux[f]; low[right[f]] += donorFlux[f];
 			double a = flux[f];
 			positive[left[f]] += Math.max(-a, 0); negative[left[f]] += Math.max(a, 0);
 			positive[right[f]] += Math.max(a, 0); negative[right[f]] += Math.max(-a, 0);

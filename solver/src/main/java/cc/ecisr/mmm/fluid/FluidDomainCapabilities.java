@@ -282,7 +282,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 				.equals(chemicalParcels.registry().fingerprint())) {
 			throw new IllegalArgumentException("Thermal registry chemical dependency mismatch");
 		}
-		ensureGrid();
+		ensureInventoryGrid();
 		return true;
 	}
 
@@ -460,7 +460,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		int cell = cellIndexChecked(cellX, cellY, cellZ);
 		if (occupiedVolumeSvq <= 0L) throw new IllegalArgumentException("Coherent phase volume is invalid");
-		ensureGrid();
+		ensureInventoryGrid();
 		long geometric = SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 		long previousCoherent = thermalState.coherentPhases().cellOccupiedSvq(cell);
 		long occupied = granularCoupling.solidSvq(cell);
@@ -561,7 +561,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		return new ThermalCarrierContext() {
 			@Override public int markerCount() { return particles.count(); }
 			@Override public int cell(int marker) { return particleCellIndex(marker); }
-			@Override public void prepareObservationSupport() { ensureGrid(); }
+			@Override public void prepareObservationSupport() { ensureInventoryGrid(); }
 			@Override public void observationSupport(int marker, SupportConsumer consumer) {
 				LiquidThermalSupport.observe(FluidDomainCapabilities.this, marker, consumer);
 			}
@@ -734,6 +734,10 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		}
 		granularCoupling.setFixedCellSvq(fixed);
 		granularNextCoupling.setFixedCellSvq(fixed);
+		if (domain().hasGranularInventory()) {
+			granularCoupling.rebuild(granularState.parcels, granularState.deposits);
+			granularNextCoupling.rebuild(granularState.parcels, granularState.deposits);
+		}
 	}
 
 	void bindSolidCompositionPoolIfReady() {

@@ -25,7 +25,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		isolatedDropletReceivesUndilutedGravity();
 		if (!fast) {
 			longRunHydrostaticSurfaceDoesNotSink();
-			if (Boolean.getBoolean("mmm.cellVolumeTransport")) MarkerDistributionExperiment.damDistribution();
+			if (CellLiquidVolumeTransport.enabled()) MarkerDistributionExperiment.damDistribution();
 		}
 		waterDescendsAStairSlope();
 		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; 5,000-step soak skipped)" : ""));

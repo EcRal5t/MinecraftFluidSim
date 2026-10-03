@@ -36,7 +36,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	 * Current spatial carrier properties. Grid rebuilds and carrier/thermal edits invalidate the batch.
 	 */
 	LiquidCarrierProperties derivedCarrierState() {
-		ensureGrid();
+		ensureInventoryGrid();
 		carrierPropertiesWorkspace.refresh(this, thermalMarkerContext(), materialRegistry, materialDefinitions,
 				granularState, thermalState,
 				new LiquidCarrierProperties.Revision(carrierMutationRevision,

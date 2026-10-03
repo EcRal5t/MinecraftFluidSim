@@ -29,10 +29,12 @@ public final class ThermalCarrierTransport {
 		var materials = new ThermalMaterialDefinition[n];
 		double[] mass = new double[n], base = new double[n], energy = new double[n];
 		double[] initialT = new double[n], temperature = new double[n], degree = new double[n];
-		CpuWorkBatch.run(n, p -> {
-			materials[p] = owners.material(p); mass[p] = owners.mass(p); base[p] = owners.baseEnergy(p);
-			energy[p] = owners.internalEnergy(p);
-			initialT[p] = new ThermalContactExchange.Carrier(materials[p], mass[p], base[p], energy[p]).temperatureK();
+		CpuWorkBatch.run(n, (from, until) -> {
+			for (int p = from; p < until; p++) {
+				materials[p] = owners.material(p); mass[p] = owners.mass(p); base[p] = owners.baseEnergy(p);
+				energy[p] = owners.internalEnergy(p);
+				initialT[p] = new ThermalContactExchange.Carrier(materials[p], mass[p], base[p], energy[p]).temperatureK();
+			}
 		});
 		SignedDyadic before = SignedDyadic.sum(energy);
 		boolean exchangeRequired = false;
@@ -76,7 +78,8 @@ public final class ThermalCarrierTransport {
 					maximumTransfer = Math.max(maximumTransfer, Math.abs(q));
 				}
 			} else {
-				CpuWorkBatch.run(n, p -> temperature[p] = materials[p].temperatureForSensibleSpecificEnergy((energy[p] - base[p]) / mass[p]));
+				if (step == 0) System.arraycopy(initialT, 0, temperature, 0, n);
+				else CpuWorkBatch.run(n, (from, until) -> { for (int p = from; p < until; p++) { temperature[p] = materials[p].temperatureForSensibleSpecificEnergy((energy[p] - base[p]) / mass[p]); } });
 				Arrays.fill(delta, 0);
 				for (int i = 0; i < graph.size(); i++) {
 					int first = graph.first[i], second = graph.second[i];

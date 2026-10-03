@@ -9,7 +9,7 @@ final class GranularLiquidDisplacement {
 	private GranularLiquidDisplacement() { }
 
 	static long[] begin(FluidDomain domain) {
-		if (!CellLiquidVolumeTransport.enabled(domain) || !domain.hasGranularInventory()) return null;
+		if (!CellLiquidVolumeTransport.enabled() || !domain.hasGranularInventory()) return null;
 		domain.ensureGrid();
 		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
 		return domain.granularCoupling.copySolidSvq();

@@ -130,7 +130,7 @@ A_pressure = rho_reference * cellVolume * C L^-1 C^T + A_gas_storage
 
 压力后的颗粒位移必须满足配置中的 Courant 限制。高压差造成初始速度预测不足时，后端从原始状态细化重算。压力、阻力、位置候选和相变几何同步属于同一完整计算候选，失败时保留上一代状态。细化重算与单次提交规则见 [CPU 后端候选接口](fluid-solver.md#后端候选接口)。
 
-backend/checkpoint handoff 保存 active parcel 的接触年龄与支撑标志。恢复、相变、沉积与运动的容量检查共用 `GranularCouplingFields` 的连续位置整数 SVQ 归属：active parcel 分摊到最多八格，deposit 与 coherent 按所属单元计入。液体 marker 的短时聚集保留在液体输运层中处理。
+backend/checkpoint handoff 保存 active parcel 的接触年龄与支撑标志。恢复、相变、沉积与运动的容量检查共用 `GranularCouplingFields` 的连续位置整数 SVQ 归属：active parcel 分摊到最多八格，deposit 与 coherent 按所属单元计入。热状态恢复与 coherent 占用更新共同重建 active、deposit 和 coherent 的总占用；液体有限体积输运使用同一可用容量，逐格检查原始液体体积。
 
 非线性外层每个子步最多求解 32 轮。未达到上述动量残差要求时，后端从原始完整请求重新计算，将子步时长至少减半；较小的 `dt K / M` 降低阻力与惯性的刚性比例。重算沿用力学时间细化的统一次数上限，保留相变预算、总推进时间和外部冲量的一次提交语义。
 

@@ -451,7 +451,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 	}
 
 	public float volume(int x, int y, int z) {
-		ensureGrid();
+		ensureInventoryGrid();
 		return volume[cellIndexChecked(x, y, z)];
 	}
 

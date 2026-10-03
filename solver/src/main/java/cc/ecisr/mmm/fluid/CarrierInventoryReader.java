@@ -124,7 +124,7 @@ final class CarrierInventoryReader {
 
 	/** Read-only material rendering reconstruction; it contains no exact inventory and is not a wire format. */
 	FluidMaterialRenderSnapshot copyMaterialRenderSnapshot() {
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		if (domain.materialRegistry == null) {
 			throw new IllegalStateException("Material render snapshot requires a bound registry");
 		}
@@ -138,7 +138,7 @@ final class CarrierInventoryReader {
 	}
 
 	byte[] copyQuantizedVolume() {
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		byte[] result = new byte[domain.cellCount];
 		for (int i = 0; i < domain.cellCount; i++) {
 			result[i] = (byte) Math.round(FluidDomain.clamp01(domain.volume[i]) * 255.0F);
@@ -162,7 +162,7 @@ final class CarrierInventoryReader {
 
 	/** Actual pressure-phase occupancy, separate from the smooth P2G density. */
 	byte[] copyMarkerMask() {
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		byte[] result = new byte[domain.cellCount];
 		for (int i = 0; i < domain.cellCount; i++) result[i] = domain.markerGrid.markerCount[i] > 0 ? (byte) 1 : (byte) 0;
 		return result;

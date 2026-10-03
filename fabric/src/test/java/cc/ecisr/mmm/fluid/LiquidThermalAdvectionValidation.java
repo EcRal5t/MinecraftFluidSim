@@ -37,7 +37,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 
 	private static void boundedAdvection(boolean segmented) {
 		var domain = pool(8, 8, 2, 0, segmented);
-		if (!CellLiquidVolumeTransport.enabled(domain)) return;
+		if (!CellLiquidVolumeTransport.enabled()) return;
 		double minimum = segmented ? 295 : 1, maximum = segmented ? 305 : 599;
 		for (int p = 0; p < domain.particleCount(); p++)
 			domain.thermalState.resetMarkerTemperature(p, (segmented ? domain.particles.positionY(p) % 0.5 < 0.25 : domain.particles.positionY(p) < 2.125) ? minimum : maximum,
@@ -112,7 +112,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 						&& domain.totalVolume() == volume && domain.totalMass() == mass,
 						"thermal advection missed its continuous response or conservation: " + derivative);
 				if (conductivity == 0) {
-					boolean cellTransport = CellLiquidVolumeTransport.enabled(domain);
+					boolean cellTransport = CellLiquidVolumeTransport.enabled();
 					double roundingBound = 0;
 					for (double energy : currentEnergies) roundingBound += Math.ulp(energy);
 					require(transport.maximumAbsoluteTransferEu() == 0
@@ -124,7 +124,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				}
 				else require(transport.maximumTemperatureChangeK() < 1e-6 && LiquidThermalConduction.contacts(domain) != null,
 						"positive small conductivity lost continuous carrier transport");
-				if (CellLiquidVolumeTransport.enabled(domain)) require(Arrays.equals(cellVolumes, domain.markerGrid.exactCellVolumeInventory),
+				if (CellLiquidVolumeTransport.enabled()) require(Arrays.equals(cellVolumes, domain.markerGrid.exactCellVolumeInventory),
 						"subcell advection changed full-cell volume inventory");
 				else for (int marker = 0; marker < cells.length; marker++) require(cells[marker] == domain.particleCellIndex(marker),
 						"subcell advection fixture crossed a cell");

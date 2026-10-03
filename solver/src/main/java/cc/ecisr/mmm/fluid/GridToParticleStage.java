@@ -90,15 +90,17 @@ final class GridToParticleStage {
 			incomingEnergy += 0.5 * mass * (flipDeltaX[i] * (double) flipDeltaX[i]
 					+ flipDeltaY[i] * (double) flipDeltaY[i] + flipDeltaZ[i] * (double) flipDeltaZ[i]);
 		}
-		CpuWorkBatch.run(particles.count(), i -> {
+		CpuWorkBatch.run(particles.count(), (from, until) -> {
 			float[] sampledPair = SAMPLED_PAIR.get();
-			float x = particles.positionX(i), y = particles.positionY(i), z = particles.positionZ(i);
-			access.samplePair(0, mac.velocityX, mac.p2gVelocityX, x, y, z, sampledPair);
-			picX[i] = sampledPair[0]; flipDeltaX[i] -= sampledPair[1];
-			access.samplePair(1, mac.velocityY, mac.p2gVelocityY, x, y, z, sampledPair);
-			picY[i] = sampledPair[0]; flipDeltaY[i] -= sampledPair[1];
-			access.samplePair(2, mac.velocityZ, mac.p2gVelocityZ, x, y, z, sampledPair);
-			picZ[i] = sampledPair[0]; flipDeltaZ[i] -= sampledPair[1];
+			for (int i = from; i < until; i++) {
+				float x = particles.positionX(i), y = particles.positionY(i), z = particles.positionZ(i);
+				access.samplePair(0, mac.velocityX, mac.p2gVelocityX, x, y, z, sampledPair);
+				picX[i] = sampledPair[0]; flipDeltaX[i] -= sampledPair[1];
+				access.samplePair(1, mac.velocityY, mac.p2gVelocityY, x, y, z, sampledPair);
+				picY[i] = sampledPair[0]; flipDeltaY[i] -= sampledPair[1];
+				access.samplePair(2, mac.velocityZ, mac.p2gVelocityZ, x, y, z, sampledPair);
+				picZ[i] = sampledPair[0]; flipDeltaZ[i] -= sampledPair[1];
+			}
 		});
 		for (int i = 0; i < particles.count(); i++) {
 			double mass = particles.mass(i);

@@ -147,7 +147,7 @@ final class CellInventoryReader {
 	long granularSolidVolumeSvq(int cellX, int cellY, int cellZ) {
 		if (domain.granularCoupling == null) return 0L;
 		int cell = domain.cellIndexChecked(cellX, cellY, cellZ);
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		return domain.granularCoupling.solidSvq(cell);
 	}
 

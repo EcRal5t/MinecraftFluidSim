@@ -47,7 +47,7 @@ final class LogicalStepTailAssembly {
 				new ParticleReseedStage.Workspace(domain.geometry, domain.particles, domain.particleReseeder),
 				new ParticleReseedStage.Access() {
 					@Override public boolean hasConservativeCellQuadrature() {
-						return CellLiquidVolumeTransport.enabled(domain) && domain.cellLiquidVolumeTransport != null
+						return CellLiquidVolumeTransport.enabled() && domain.cellLiquidVolumeTransport != null
 								&& domain.cellLiquidVolumeTransport.publishedQuadrature;
 					}
 					@Override public void ensureParticleCapacity(int required) { domain.ensureParticleCapacity(required); }
@@ -68,7 +68,7 @@ final class LogicalStepTailAssembly {
 					@Override public SignedDyadic exactInternalEnergy() { return domain.exactInternalEnergy(); }
 					@Override public void markGridDirty() { domain.gridDirty = true; }
 					@Override public void rebuildGrid() { domain.rebuildGridFromParticles(); }
-					@Override public void ensureGrid() { domain.ensureGrid(); }
+					@Override public void ensureGrid() { domain.ensureInventoryGrid(); }
 				});
 		return new Stages(transition, reseed);
 	}

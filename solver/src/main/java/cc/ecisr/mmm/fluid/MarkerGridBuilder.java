@@ -12,7 +12,7 @@ final class MarkerGridBuilder {
 	private MarkerGridBuilder() { }
 
 	static void build(FluidDomain domain) {
-		boolean conservativeVolume = CellLiquidVolumeTransport.enabled(domain);
+		boolean conservativeVolume = CellLiquidVolumeTransport.enabled();
 		domain.closedLiquidVolume.prepare();
 		domain.carrierPropertiesWorkspace.invalidate();
 		MarkerGridIndex grid = domain.markerGrid;
@@ -55,7 +55,6 @@ final class MarkerGridBuilder {
 			if (!conservativeVolume) domain.splatCenter(positionX, positionY, positionZ, particleVolume);
 			if (!conservativeVolume) domain.splatPressureVolume(positionX, positionY, positionZ, particleVolume);
 		}
-		CpuWorkBatch.run(3, domain.particles.count() >= 2_048 ? 1 : 3, axis -> scatterAxis(domain, axis));
 		grid.exactCellVolumeInventory = ExactCellVolumeSums.sum(domain.particles.directArrays().volume,
 				domain.particles.count(), grid.cellMarkerHead, grid.particleCellNext);
 		for (int cell = 0; cell < grid.cellCount; cell++) if (grid.markerCount[cell] > 0) {
@@ -70,6 +69,12 @@ final class MarkerGridBuilder {
 				throw new IllegalStateException("Marker inventory produced invalid cell density");
 			}
 		}
+	}
+
+	static void scatterVelocities(FluidDomain domain) {
+		CpuWorkBatch.run(3, domain.particles.count() >= 2_048 ? 1 : 3, (from, until) -> {
+			for (int axis = from; axis < until; axis++) scatterAxis(domain, axis);
+		});
 	}
 
 	private static void scatterAxis(FluidDomain domain, int axis) {

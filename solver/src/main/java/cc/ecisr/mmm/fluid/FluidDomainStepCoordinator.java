@@ -187,10 +187,10 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			markerGrid.cellMarkerTail[cell] = marker;
 			markerGrid.markerCount[cell]++;
 			markerGrid.exactCellMarkerVolume[cell] += particles.volume(marker);
-			if (!CellLiquidVolumeTransport.enabled(this))
+			if (!CellLiquidVolumeTransport.enabled())
 				splatCenter(particles.positionX(marker), particles.positionY(marker), particles.positionZ(marker), particles.volume(marker));
 		}
-		if (CellLiquidVolumeTransport.enabled(this)) {
+		if (CellLiquidVolumeTransport.enabled()) {
 			markerGrid.exactCellVolumeInventory = ExactCellVolumeSums.sum(particles.directArrays().volume,
 					particles.count(), markerGrid.cellMarkerHead, markerGrid.particleCellNext);
 			for (int cell = 0; cell < cellCount; cell++) {
@@ -598,7 +598,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	int calculateSubsteps(float dt) {
-		if (CellLiquidVolumeTransport.enabled(domain())) return calculateVolumeTransportSubsteps(dt);
+		if (CellLiquidVolumeTransport.enabled()) return calculateVolumeTransportSubsteps(dt);
 		float maximum = 0.0F;
 		for (int i = 0; i < particles.count(); i++) {
 			maximum = Math.max(maximum, Math.abs(particles.velocityX(i)) + Math.abs(particles.velocityY(i)) + Math.abs(particles.velocityZ(i)));

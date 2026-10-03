@@ -30,7 +30,7 @@ final class DomainMetrics {
 	}
 
 	double totalOpenVolumeExact() {
-		if (domain.granularCoupling != null && domain.gridDirty) domain.ensureGrid();
+		if (domain.granularCoupling != null && domain.gridDirty) domain.ensureInventoryGrid();
 		double result = 0.0;
 		for (int cell = 0; cell < domain.cellCount; cell++) result += domain.effectiveOpenCellVolume(cell);
 		return result;
@@ -70,7 +70,7 @@ final class DomainMetrics {
 	}
 
 	FluidDomain.VolumeDistribution volumeDistribution(float visibleThreshold) {
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		int active = 0, visible = 0, dense = 0;
 		for (float value : domain.volume) {
 			if (value > domain.config.fluidEpsilon()) active++;
@@ -91,7 +91,7 @@ final class DomainMetrics {
 	}
 
 	boolean containsFluidAt(float localX, float localY, float localZ) {
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		float h = domain.config.cellSize();
 		int x = (int) Math.floor(localX / h), y = (int) Math.floor(localY / h), z = (int) Math.floor(localZ / h);
 		if (!domain.inside(x, y, z)) return false;
@@ -106,12 +106,12 @@ final class DomainMetrics {
 	/** Derived local mass/volume density for observation and acceptance; dry cells return NaN. */
 	double densityInCell(int x, int y, int z) {
 		int cell = domain.cellIndexChecked(x, y, z);
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		return domain.markerGrid.markerCount[cell] == 0 ? Double.NaN : domain.markerGrid.cellDensity[cell];
 	}
 
 	int markerCellCount() {
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		int result = 0;
 		for (int count : domain.markerGrid.markerCount) if (count > 0) result++;
 		return result;

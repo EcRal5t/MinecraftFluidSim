@@ -33,6 +33,7 @@ final class LiquidFluxGeometry {
 		float upper = Math.max(0, nx) + Math.max(0, ny) + Math.max(0, nz);
 		for (int i = 0; i < 32; i++) {
 			float middle = 0.5F * (lower + upper);
+			if (middle == lower || middle == upper) break;
 			if (integral(cell, nx, ny, nz, middle, -1, 1, true, -1) < volume) lower = middle; else upper = middle;
 		}
 		return 0.5F * (lower + upper);

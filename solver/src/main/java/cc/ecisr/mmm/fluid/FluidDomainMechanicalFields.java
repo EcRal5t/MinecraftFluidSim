@@ -687,7 +687,11 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		return result;
 	}
 
-	void ensureGrid() { if (gridDirty) particleToGridStage.rebuild(); }
+	void ensureGrid() {
+		ensureInventoryGrid();
+		if (velocityGridDirty) particleToGridStage.rebuildVelocity();
+	}
+	void ensureInventoryGrid() { if (gridDirty) particleToGridStage.rebuildInventory(); }
 	long carrierMutationRevision() { return carrierMutationRevision; }
 	void bumpCarrierMutationRevision() { carrierMutationRevision++; }
 	CarrierMutationCoordinator carrierMutations() { return coordinator; }

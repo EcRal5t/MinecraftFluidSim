@@ -25,7 +25,7 @@ final class ThermochemistryStageAssembly {
 		ThermalTransportStage transport = new ThermalTransportStage(
 				new ThermalTransportStage.Workspace(domain.thermalMarkerContext()),
 				new ThermalTransportStage.Access() {
-					@Override public void ensureGrid() { domain.ensureGrid(); }
+					@Override public void ensureGrid() { domain.ensureInventoryGrid(); }
 					@Override public java.util.List<cc.ecisr.mmm.thermal.ThermalCarrierTransport.Contact> carrierContacts() {
 						return LiquidThermalConduction.contacts(domain);
 					}
@@ -103,7 +103,7 @@ final class ThermochemistryStageAssembly {
 					@Override public SignedDyadic exactInternalEnergy() {
 						return domain.exactInternalEnergy();
 					}
-					@Override public void ensureGrid() { domain.ensureGrid(); }
+					@Override public void ensureGrid() { domain.ensureInventoryGrid(); }
 					@Override public void refreshGasTopology() { domain.gasTopologyCoordinator.refresh(); }
 					@Override public void refreshGasGeometry() { domain.refreshGasPhaseGeometry(); }
 					@Override public void refreshCoherentOccupancy() { domain.refreshCoherentOccupancy(); }

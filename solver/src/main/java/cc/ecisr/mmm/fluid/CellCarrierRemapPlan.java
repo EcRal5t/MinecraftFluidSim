@@ -54,16 +54,25 @@ final class CellCarrierRemapPlan {
 		}
 		if (domain.thermalState == null && domain.chemicalParcels == null) {
 			for (int cell = 0; cell < domain.cellCount; cell++) if (input[cell] != null) {
-				distribute(cell, flux); mergeShares(cell);
+				distribute(cell, flux);
+				for (Group group : input[cell]) if (group.shares != null) mergeShares(group.shares);
 			}
 		} else {
-			CpuWorkBatch.run(domain.cellCount, cell -> { if (input[cell] != null) distribute(cell, flux); });
-			for (int cell = 0; cell < domain.cellCount; cell++) if (input[cell] != null) mergeShares(cell);
+			CpuWorkBatch.run(domain.cellCount, (from, until) -> { for (int cell = from; cell < until; cell++) { if (input[cell] != null) distribute(cell, flux); } });
+			var incoming = (ArrayList<Share>[]) new ArrayList<?>[domain.cellCount];
+			for (ArrayList<Group> groups : input) if (groups != null) for (Group group : groups)
+				for (Share share : group.shares) {
+					if (incoming[share.destination] == null) incoming[share.destination] = new ArrayList<>();
+					incoming[share.destination].add(share);
+				}
+			CpuWorkBatch.run(domain.cellCount, (from, until) -> {
+				for (int cell = from; cell < until; cell++) if (incoming[cell] != null) {
+					mergeShares(incoming[cell]);
+					if (domain.thermalState != null) for (Group group : output[cell]) group.temperature = temperature(group);
+				}
+			});
 		}
-		CpuWorkBatch.run(domain.cellCount, cell -> {
-			if (domain.thermalState != null && output[cell] != null)
-				for (Group group : output[cell]) group.temperature = temperature(group);
-		});
+
 		int sampledCount = 0;
 		for (int cell = 0; cell < domain.cellCount; cell++) if (output[cell] != null) for (Group group : output[cell]) {
 			group.sampleStart = sampledCount;
@@ -73,41 +82,45 @@ final class CellCarrierRemapPlan {
 		if ((long) sampledCount + ballistic.markers.size() > domain.maximumParticleCount)
 			throw new IllegalStateException("Cell carrier remap exceeds the marker budget");
 		markers.addAll(java.util.Collections.nCopies(sampledCount, null));
-		CpuWorkBatch.run(domain.cellCount, cell -> {
-			if (output[cell] != null) for (Group group : output[cell]) sample(group);
+		CpuWorkBatch.run(domain.cellCount, (from, until) -> {
+			for (int cell = from; cell < until; cell++) {
+				if (output[cell] != null) for (Group group : output[cell]) sample(group);
+			}
 		});
 		markers.addAll(ballistic.markers);
 		energyRoundoff = validateInventories(flux, ballistic);
 	}
 
 	private void gatherInput() {
-		for (int p = 0; p < domain.particles.count(); p++) {
-			int cell = domain.particleCellIndex(p), material = domain.particles.materialHandle(p);
-			if (!geometryRemap && !domain.gridToParticleStage.advectionCells()[cell]) continue;
-			boolean indicator = domain.chemicalParcels != null && domain.chemicalParcels.indicator(p);
-			ChemicalMixtureRecord mixture = domain.chemicalParcels == null ? null : domain.chemicalParcels.record(p);
-			Group group = find(input, cell, material, indicator, mixture);
-			group.original.add(p);
-			group.kinetic += domain.particles.mass(p) * (square(domain.particles.velocityX(p)) + square(domain.particles.velocityY(p)) + square(domain.particles.velocityZ(p)));
-			group.momentum[0] += domain.particles.mass(p) * domain.particles.velocityX(p);
-			group.momentum[1] += domain.particles.mass(p) * domain.particles.velocityY(p);
-			group.momentum[2] += domain.particles.mass(p) * domain.particles.velocityZ(p);
-			if (mixture != null) group.species.add(mixture);
-			if (domain.thermalState != null) {
-				double energy = domain.thermalState.liquidInternalEnergy(p);
-				group.energy = group.energy.add(SignedDyadic.of(energy)); group.energyRounding += Math.ulp(energy);
-			}
-		}
 		// Bind the ordinal reference-energy cache before workers write disjoint marker entries.
 		if (domain.thermalState != null && domain.particles.count() > 0)
 			domain.thermalState.temperature(0, domain.thermalMarkerContext());
-		CpuWorkBatch.run(domain.cellCount, cell -> {
-			ArrayList<Group> groups = input[cell];
-			if (groups != null) for (Group group : groups) {
-				if (groups.size() == 1) group.volume = domain.markerGrid.exactCellVolumeInventory[group.cell];
-				else for (int p : group.original) group.volume = group.volume.add(SignedDyadic.of(domain.particles.volume(p)));
-				group.mass = CellRemapMassAllocation.inventory(domain, group.original);
-				fitFields(group, dt);
+		CpuWorkBatch.run(domain.cellCount, (from, until) -> {
+			for (int cell = from; cell < until; cell++) {
+				if (!geometryRemap && !domain.gridToParticleStage.advectionCells()[cell]) continue;
+				for (int p = domain.markerGrid.cellMarkerHead[cell]; p >= 0; p = domain.markerGrid.particleCellNext[p]) {
+					int material = domain.particles.materialHandle(p);
+					boolean indicator = domain.chemicalParcels != null && domain.chemicalParcels.indicator(p);
+					ChemicalMixtureRecord mixture = domain.chemicalParcels == null ? null : domain.chemicalParcels.record(p);
+					Group group = find(input, cell, material, indicator, mixture);
+					group.original.add(p);
+					group.kinetic += domain.particles.mass(p) * (square(domain.particles.velocityX(p)) + square(domain.particles.velocityY(p)) + square(domain.particles.velocityZ(p)));
+					group.momentum[0] += domain.particles.mass(p) * domain.particles.velocityX(p);
+					group.momentum[1] += domain.particles.mass(p) * domain.particles.velocityY(p);
+					group.momentum[2] += domain.particles.mass(p) * domain.particles.velocityZ(p);
+					if (mixture != null) group.species.add(mixture);
+					if (domain.thermalState != null) {
+						double energy = domain.thermalState.liquidInternalEnergy(p);
+						group.energy = group.energy.add(SignedDyadic.of(energy)); group.energyRounding += Math.ulp(energy);
+					}
+				}
+				ArrayList<Group> groups = input[cell];
+				if (groups != null) for (Group group : groups) {
+					if (groups.size() == 1) group.volume = domain.markerGrid.exactCellVolumeInventory[group.cell];
+					else for (int p : group.original) group.volume = group.volume.add(SignedDyadic.of(domain.particles.volume(p)));
+					group.mass = CellRemapMassAllocation.inventory(domain, group.original);
+					fitFields(group, dt);
+				}
 			}
 		});
 		if (domain.thermalState != null) for (ArrayList<Group> groups : input) if (groups != null)
@@ -189,15 +202,16 @@ final class CellCarrierRemapPlan {
 					double p = d == pivot ? remainingMomentum[a] : source.momentum[a] * fraction;
 					momentum[a] = p; remainingMomentum[a] -= p;
 				}
-				source.shares.add(new Share(destinations[d], pieces[g][d], m, k, energy, species[d], rounding, momentum));
+				source.shares.add(new Share(source, destinations[d], pieces[g][d], m, k, energy, species[d], rounding, momentum));
 				remainingKinetic -= k;
 			}
 		}
 	}
 
 	/** Receiver reductions retain the donor and share order independently of worker scheduling. */
-	private void mergeShares(int cell) {
-		for (Group source : input[cell]) if (source.shares != null) for (Share share : source.shares) {
+	private void mergeShares(ArrayList<Share> shares) {
+		for (Share share : shares) {
+			Group source = share.source;
 			Group target = find(output, share.destination, source.material, source.indicator, share.species);
 			target.minimumTemperature = Math.min(target.minimumTemperature, source.minimumTemperature);
 			target.maximumTemperature = Math.max(target.maximumTemperature, source.maximumTemperature);
@@ -592,7 +606,7 @@ final class CellCarrierRemapPlan {
 		double velocity(int axis) { return switch (axis) { case 0 -> velocityX; case 1 -> velocityY; case 2 -> velocityZ; default -> throw new IllegalArgumentException("Unknown axis"); }; }
 		Marker withEnergy(double value) { return new Marker(cell, material, indicator, volume, mass, offsetX, offsetY, offsetZ, velocityX, velocityY, velocityZ, mixture, value); }
 	}
-	private record Share(int destination, SignedDyadic volume, double mass, double kinetic,
+	private record Share(Group source, int destination, SignedDyadic volume, double mass, double kinetic,
 			SignedDyadic energy, ChemicalMixtureRecord species, double rounding, double[] momentum) { }
 	private static final class Group {
 		final int cell, material; final boolean indicator;

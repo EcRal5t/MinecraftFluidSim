@@ -61,7 +61,7 @@
 
 自然对流增长率随 `thermal` 选择器常驻校验：两级网格、临界 Ra 两侧、两倍线性振幅，以及体积、材料质量、species、壁面 source/sink、舍入与载体内能闭合。单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[线性对流有效域](../architecture/thermal-state.md#自然对流的线性有效域)。
 
-粒子分布研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。默认输出固壁法向轮廓、正反向平流、满液体与自由面解析保面积映射、重播种二阶矩和 5,000 步溃坝的空间误差，并对照封闭满液体约束前后的压力体积；用 `--args="analytic transport"` 可只运行指定对照。`--args="free-analytic"` 从逆解析映射独立积分液体覆盖率，报告两级参考积分的差异，并检查积分点及网格细化后 L1 误差递减和整体体积闭合。启用有限体积路径时，完整 `free-surface` 同时运行 5,000 步溃坝，逐步检查精确单元容量、共享压力库存、满格积分点分布及累计质量舍入界。`free-surface` 守护分量隔离、精确满液体判定及微小真实缺口，`reseeding` 守护旋转协方差、秩损失拒绝、线性速度场和体积推导的拆分空间矩误差界。完整验收条件见[长期粒子分布与压力几何](../roadmap/product-roadmap.md#长期粒子分布与压力几何)。
+粒子分布研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。默认输出固壁法向轮廓、正反向平流、满液体与自由面解析保面积映射、重播种二阶矩和 5,000 步溃坝的空间误差，并对照封闭满液体约束前后的压力体积；用 `--args="analytic transport"` 可只运行指定对照。`--args="free-analytic"` 从逆解析映射独立积分液体覆盖率，报告两级参考积分的差异，并检查积分点及网格细化后 L1 误差递减和整体体积闭合。默认构建的完整 `free-surface` 同时运行 5,000 步溃坝，逐步检查精确单元容量、共享压力库存、满格积分点分布及累计质量舍入界。`free-surface` 守护分量隔离、精确满液体判定及微小真实缺口，`reseeding` 守护旋转协方差、秩损失拒绝、线性速度场和体积推导的拆分空间矩误差界。空间验收见[单元有限体积输运](../architecture/fluid-solver.md#单元有限体积输运)，完整步的成本要求见[生产资格](../roadmap/performance-and-backends.md#有限体积输运的生产资格)。
 
 ### 什么时候追加测试
 
@@ -120,7 +120,7 @@
 
 `granular` 中的 [GranularCarrierValidation](../../solver/src/test/java/cc/ecisr/mmm/fluid/GranularCarrierValidation.java) 检查多 parcel 阻力交换的动量守恒、能量耗散和顺序无关性、有限颗粒质量的压力功和连续性、跨单元面的连续液体接触、静水梯度给出的浮力、步末阻力有效性检查，以及小时间步下对压力零点的独立性。`containers` 保留正常操作随机序列的种子 4、54、103，覆盖薄液层反冲、密集颗粒排水与高压下的时间细化。
 
-同一 `granular` 选择器中的 [GranularBedWakeValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/GranularBedWakeValidation.java) 使用正式全能力注册表、启用相变，并逐步经过后端捕获/恢复：细砂沉积并休眠后，弱刚体扰动应无侵蚀，较强扰动应重新起动并实际水平搬运，减弱为静止物体后应再次沉积、休眠。逐步记录起动数、活动数、床面 Shields 数与真实接触数，检查固体质量/体积和气体、内能收支；另检查释放瞬间的零速度、内能搬运、碰撞空间及干区/隔墙误触发。`GranularCarrierValidation` 同时检查薄床切向自由流动和时间细化。
+同一 `granular` 选择器中的 [GranularBedWakeValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/GranularBedWakeValidation.java) 使用正式全能力注册表、启用相变，并逐步经过后端捕获/恢复：细砂沉积并休眠后，弱刚体扰动应无侵蚀，较强扰动应重新起动并实际水平搬运，减弱为静止物体后应再次沉积、休眠。逐步记录起动数、活动数、床面 Shields 数与真实接触数，检查恢复后与每步液体、active、deposit、coherent 的联合逐格容量，以及固体质量/体积和气体、内能收支；另检查释放瞬间的零速度、内能搬运、碰撞空间及干区/隔墙误触发。`GranularCarrierValidation` 同时检查薄床切向自由流动和时间细化。
 
 批量排查使用 [ControllerInventoryDurabilityValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ControllerInventoryDurabilityValidation.java) 的带种子操作序列，每次操作后执行完整状态往返。参数依次是起始种子、种子数量、操作数和是否禁用沙粒（可省略，默认 `false`）：
 

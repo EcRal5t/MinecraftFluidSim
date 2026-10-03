@@ -102,6 +102,7 @@ abstract class FluidDomainStorage {
 	int[] liquidCarrierMaterialByCell;
 	double[] liquidCarrierVolumeByCell;
 	boolean gridDirty = true;
+	boolean velocityGridDirty = true;
 	int pressureAnchor = -1;
 	float pressureReference;
 	int lastPressureIterations;

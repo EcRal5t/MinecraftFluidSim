@@ -180,6 +180,7 @@ final class FlipFreeSurfaceGeometry {
 		float upper = maximum;
 		for (int iteration = 0; iteration < 32; iteration++) {
 			float middle = 0.5F * (lower + upper);
+			if (middle == lower || middle == upper) break;
 			if (unitCubeLiquidFraction(normalX, normalY, normalZ, middle) < clampedFraction) lower = middle;
 			else upper = middle;
 		}

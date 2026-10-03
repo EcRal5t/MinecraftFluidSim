@@ -107,20 +107,22 @@ final class CarrierMutationCoordinator {
 		}
 		double[] energies = domain.thermalState == null ? null : new double[count];
 		float h = domain.config.cellSize();
-		for (int ordinal = 0; ordinal < count; ordinal++) {
-			var marker = candidate.markers.get(ordinal);
-			int x = marker.cell() % domain.sizeX, y = marker.cell() / domain.sizeX % domain.sizeY, z = marker.cell() / (domain.sizeX * domain.sizeY);
-			domain.particles.setPositionX(ordinal, (float) ((x + 0.5 + marker.offsetX()) * h));
-			domain.particles.setPositionY(ordinal, (float) ((y + 0.5 + marker.offsetY()) * h));
-			domain.particles.setPositionZ(ordinal, (float) ((z + 0.5 + marker.offsetZ()) * h));
-			domain.particles.setVolume(ordinal, marker.volume()); domain.particles.setMass(ordinal, marker.mass());
-			domain.particles.setVelocityX(ordinal, (float) marker.velocityX());
-			domain.particles.setVelocityY(ordinal, (float) marker.velocityY());
-			domain.particles.setVelocityZ(ordinal, (float) marker.velocityZ());
-			domain.particles.setMaterialHandle(ordinal, marker.material());
-			domain.particles.setPhaseLabel(ordinal, domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(marker.material()));
-			if (energies != null) energies[ordinal] = marker.energy();
-		}
+		cc.ecisr.mmm.compute.CpuWorkBatch.run(count, (from, until) -> {
+			for (int ordinal = from; ordinal < until; ordinal++) {
+				var marker = candidate.markers.get(ordinal);
+				int x = marker.cell() % domain.sizeX, y = marker.cell() / domain.sizeX % domain.sizeY, z = marker.cell() / (domain.sizeX * domain.sizeY);
+				domain.particles.setPositionX(ordinal, (float) ((x + 0.5 + marker.offsetX()) * h));
+				domain.particles.setPositionY(ordinal, (float) ((y + 0.5 + marker.offsetY()) * h));
+				domain.particles.setPositionZ(ordinal, (float) ((z + 0.5 + marker.offsetZ()) * h));
+				domain.particles.setVolume(ordinal, marker.volume()); domain.particles.setMass(ordinal, marker.mass());
+				domain.particles.setVelocityX(ordinal, (float) marker.velocityX());
+				domain.particles.setVelocityY(ordinal, (float) marker.velocityY());
+				domain.particles.setVelocityZ(ordinal, (float) marker.velocityZ());
+				domain.particles.setMaterialHandle(ordinal, marker.material());
+				domain.particles.setPhaseLabel(ordinal, domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(marker.material()));
+				if (energies != null) energies[ordinal] = marker.energy();
+			}
+		});
 		if (domain.chemicalParcels != null) {
 			domain.chemicalParcels.commitMarkerRemap(chemistry);
 			for (int c = 0; c < candidate.changedSpeciesCells.length; c++) if (candidate.changedSpeciesCells[c]) domain.chemicalParcels.markDirtyCell(c);

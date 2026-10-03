@@ -34,7 +34,7 @@ final class GasTopologyCoordinator {
 
 	/** Initializes gas topology from current carrier geometry and books sealed ambient source once. */
 	GasStateSnapshot bootstrap(String chemicalRegistryFingerprint) {
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		refresh();
 		return export(chemicalRegistryFingerprint);
 	}
@@ -63,7 +63,7 @@ final class GasTopologyCoordinator {
 		if (domain.gasState.cellNodeId != null || domain.gasState.network.nodeCount() != 0) {
 			throw new IllegalStateException("Gas restore requires an uninitialized topology");
 		}
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		var occupancy = domain.pressureGranularCoupling;
 		if (thermal != null && !thermal.coherentGroups().isEmpty()) {
 			thermal.requireCompatible(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.particles.count());
@@ -711,7 +711,7 @@ final class GasTopologyCoordinator {
 	 * previous HEAD; it may never publish current markers beside a stale gas-node membership table.
 	 */
 	void synchronizeForPersistence() {
-		domain.ensureGrid();
+		domain.ensureInventoryGrid();
 		refresh();
 	}
 

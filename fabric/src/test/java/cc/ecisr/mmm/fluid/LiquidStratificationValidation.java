@@ -46,7 +46,7 @@ final class LiquidStratificationValidation {
 		custom.setThermalTemperatureInCell(2, 1, 1, T_REF + 10);
 		double[] energies = custom.exportThermalParticleState().copyInternalEnergy();
 		// One interior axis and two wall-adjacent axes: (3/4)*(7/8)*(7/8) of this cell's support is heated.
-		double expected = (CellLiquidVolumeTransport.enabled(custom) ? 1 : 147.0 / 256) * changed.relativeBuoyancy(T_REF + 10);
+		double expected = (CellLiquidVolumeTransport.enabled() ? 1 : 147.0 / 256) * changed.relativeBuoyancy(T_REF + 10);
 		check(Math.abs(custom.thermalBuoyancyProperties().relativeBuoyancy(custom.cellIndex(2, 1, 1)) - expected) < 1e-12,
 				"thermal property batch did not use the bound expansion");
 		check(!baseline.fingerprint().equals(definitions.fingerprint()), "expansion missing from material identity");
@@ -132,11 +132,11 @@ final class LiquidStratificationValidation {
 			check(Math.abs(afterProperties.density(cell) * (1 - afterProperties.relativeBuoyancy(cell)) - domain.config.density()) < 1e-9,
 					"subcell motion sampled heat and composition on different supports");
 		}
-		check(maximumDensityChange > 1e-5 && (CellLiquidVolumeTransport.enabled(advected)
+		check(maximumDensityChange > 1e-5 && (CellLiquidVolumeTransport.enabled()
 				? advected.exactInternalEnergy().equals(advected.thermalAudit().expectedInventory())
 				: Arrays.equals(energies, advected.exportThermalParticleState().copyInternalEnergy())),
 				"subcell composition response was stationary or edited U");
-		if (CellLiquidVolumeTransport.enabled(advected)) check(Arrays.equals(cellVolumes, advected.markerGrid.exactCellVolumeInventory),
+		if (CellLiquidVolumeTransport.enabled()) check(Arrays.equals(cellVolumes, advected.markerGrid.exactCellVolumeInventory),
 				"compensated advection changed full-cell volume inventory");
 		else for (int marker = 0; marker < cells.length; marker++) check(cells[marker] == advected.particleCellIndex(marker),
 				"compensated advection fixture crossed a cell");

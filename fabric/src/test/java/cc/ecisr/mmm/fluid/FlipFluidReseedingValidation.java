@@ -413,7 +413,7 @@ public final class FlipFluidReseedingValidation {
 		check(budgetSkipped == 0, "long-run dam-break reseeding exhausted its hard marker budget");
 		check(maximumLedgerError == 0.0,
 				"long-run dam-break changed the exact float ledger: " + maximumLedgerError);
-		if (CellLiquidVolumeTransport.enabled(domain)) {
+		if (CellLiquidVolumeTransport.enabled()) {
 			int quadratureBudget = 0;
 			for (int cell = 0; cell < domain.cellCount; cell++) {
 				var v = cc.ecisr.mmm.units.SignedDyadic.ZERO;

@@ -140,6 +140,9 @@ public final class GranularBedWakeValidation {
 
 	private static void wakeStartsAtRest(FluidDomainState sleeping) {
 		var domain = FluidDomain.restoreAuthoritativeState(sleeping);
+		require(domain.granularCoupling.totalSolidSvq() == domain.totalGranularSolidVolumeSvq()
+				+ domain.totalCoherentSolidVolumeSvq(), "Thermal restore lost granular joint occupancy");
+		jointCapacity(domain);
 		for (int p = 0; p < domain.particles.count(); p++) {
 			domain.particles.setVelocityX(p, 2); domain.particles.setVelocityY(p, 0); domain.particles.setVelocityZ(p, 0);
 		}
@@ -224,7 +227,7 @@ public final class GranularBedWakeValidation {
 	}
 
 	private static void jointCapacity(FluidDomain domain) {
-		if (!CellLiquidVolumeTransport.enabled(domain)) return;
+		if (!CellLiquidVolumeTransport.enabled()) return;
 		for (int c = 0; c < domain.cellCount; c++) require(domain.markerGrid.exactCellVolumeInventory[c].compareTo(
 				cc.ecisr.mmm.units.SignedDyadic.of(domain.effectiveOpenCellVolume(c))) <= 0,
 				"Published bed state overlaps liquid and skeleton at cell " + c);

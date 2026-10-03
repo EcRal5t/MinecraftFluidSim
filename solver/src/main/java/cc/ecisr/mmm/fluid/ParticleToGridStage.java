@@ -27,6 +27,7 @@ final class ParticleToGridStage {
 		boolean hasAnySurfaceTension();
 		boolean hasAnyLiquidPairTension();
 		void buildMarkerGrid();
+		void scatterVelocities();
 		void normalize(float[] values, float[] weights);
 		GranularCouplingFields granularCoupling();
 		boolean hasGranularInventory();
@@ -38,6 +39,7 @@ final class ParticleToGridStage {
 		void rebuildSurfaceTensionPressure();
 		void constrainClosedLiquidVolume();
 		void markGridClean();
+		void markVelocityGridClean();
 	}
 
 	private final Workspace state;
@@ -55,28 +57,17 @@ final class ParticleToGridStage {
 		this.gridToParticleStage = gridToParticleStage;
 	}
 
-	void rebuild() {
+	void rebuild() { rebuildInventory(); rebuildVelocity(); }
+
+	void rebuildInventory() {
 		PressureProjectionWorkspace projection = state.projection;
-		MacVelocityGrid mac = state.mac;
 		Arrays.fill(state.volume, 0.0F);
 		Arrays.fill(projection.pressureVolume, 0.0);
 		state.freeSurfaceGeometry.clearExactVolumes();
-		Arrays.fill(mac.velocityX, 0.0F);
-		Arrays.fill(mac.velocityY, 0.0F);
-		Arrays.fill(mac.velocityZ, 0.0F);
-		Arrays.fill(mac.velocityWeightX, 0.0F);
-		Arrays.fill(mac.velocityWeightY, 0.0F);
-		Arrays.fill(mac.velocityWeightZ, 0.0F);
 		access.setVariableDensityActive(access.usesMassWeightedP2G());
 		access.setSurfaceTensionActive(access.hasAnySurfaceTension());
 		access.setLiquidPairTensionActive(access.hasAnyLiquidPairTension());
 		access.buildMarkerGrid();
-		access.normalize(mac.velocityX, mac.velocityWeightX);
-		access.normalize(mac.velocityY, mac.velocityWeightY);
-		access.normalize(mac.velocityZ, mac.velocityWeightZ);
-		System.arraycopy(mac.velocityWeightX, 0, mac.p2gWeightX, 0, mac.velocityWeightX.length);
-		System.arraycopy(mac.velocityWeightY, 0, mac.p2gWeightY, 0, mac.velocityWeightY.length);
-		System.arraycopy(mac.velocityWeightZ, 0, mac.p2gWeightZ, 0, mac.velocityWeightZ.length);
 		GranularCouplingFields granularCoupling = access.granularCoupling();
 		DomainGeometry geometry = state.geometry;
 		MarkerGridIndex markerGrid = state.markerGrid;
@@ -93,9 +84,27 @@ final class ParticleToGridStage {
 					geometry.solid, markerGrid.markerCount, geometry.cutCells, granularCoupling);
 		}
 		rebuildPressureGeometry();
+		access.markGridClean();
+	}
+
+	void rebuildVelocity() {
+		MacVelocityGrid mac = state.mac;
+		Arrays.fill(mac.velocityX, 0.0F);
+		Arrays.fill(mac.velocityY, 0.0F);
+		Arrays.fill(mac.velocityZ, 0.0F);
+		Arrays.fill(mac.velocityWeightX, 0.0F);
+		Arrays.fill(mac.velocityWeightY, 0.0F);
+		Arrays.fill(mac.velocityWeightZ, 0.0F);
+		access.scatterVelocities();
+		access.normalize(mac.velocityX, mac.velocityWeightX);
+		access.normalize(mac.velocityY, mac.velocityWeightY);
+		access.normalize(mac.velocityZ, mac.velocityWeightZ);
+		System.arraycopy(mac.velocityWeightX, 0, mac.p2gWeightX, 0, mac.velocityWeightX.length);
+		System.arraycopy(mac.velocityWeightY, 0, mac.p2gWeightY, 0, mac.velocityWeightY.length);
+		System.arraycopy(mac.velocityWeightZ, 0, mac.p2gWeightZ, 0, mac.velocityWeightZ.length);
 		bodyForceStage.enforceSolidFaceVelocities();
 		gridToParticleStage.extrapolateVelocityIntoAir();
-		access.markGridClean();
+		access.markVelocityGridClean();
 	}
 
 	/** Refreshes pressure-derived views against the current solid occupancy and retained marker footprint. */

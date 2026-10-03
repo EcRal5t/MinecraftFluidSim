@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.compute.CpuWorkBatch;
 import java.util.ArrayList;
 import java.util.Arrays;
 
@@ -11,10 +12,18 @@ final class CellRemapInventoryAudit {
 	static SignedDyadic validate(FluidDomain domain, ArrayList<CellCarrierRemapPlan.Marker> markers,
 			ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
 		if (markers.size() > domain.maximumParticleCount) throw new IllegalStateException("Cell remap exceeds its marker budget");
-		volume(domain, markers, flux, ballistic);
-		SignedDyadic energyRoundoff = massAndEnergy(domain, markers);
-		momentumAndKineticEnergy(domain, markers, ballistic);
-		return energyRoundoff;
+		SignedDyadic[] energyRoundoff = new SignedDyadic[1];
+		CpuWorkBatch.run(3, markers.size() >= 2_048 ? 1 : 3, (from, until) -> {
+			for (int audit = from; audit < until; audit++) {
+				switch (audit) {
+					case 0 -> volume(domain, markers, flux, ballistic);
+					case 1 -> energyRoundoff[0] = massAndEnergy(domain, markers);
+					case 2 -> momentumAndKineticEnergy(domain, markers, ballistic);
+					default -> throw new AssertionError("Unknown remap audit");
+				}
+			}
+		});
+		return energyRoundoff[0];
 	}
 
 	private static void volume(FluidDomain domain, ArrayList<CellCarrierRemapPlan.Marker> markers,

@@ -105,7 +105,7 @@ public final class MarkerDistributionExperiment {
 			domain.setVolume(x, y, z, 1);
 		double inventory = domain.totalVolumeExact();
 		double mass = domain.totalMass(), massRoundoff = 0, previousMassRoundoff = 0;
-		boolean conservative = CellLiquidVolumeTransport.enabled(domain);
+		boolean conservative = CellLiquidVolumeTransport.enabled();
 		if (conservative) previousMassRoundoff = auditConservativeDistribution(domain);
 		measure(domain, "dam step=0");
 		var backend = new CpuFluidSolverBackend();

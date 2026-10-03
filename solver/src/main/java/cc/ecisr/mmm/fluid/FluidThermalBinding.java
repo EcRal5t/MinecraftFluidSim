@@ -134,7 +134,10 @@ final class FluidThermalBinding {
 			throw new IllegalArgumentException("Restored gas thermal ordinals differ from gas inventory");
 		}
 		state.restoreGasEnergies(airNetwork, restoredGas);
-		for (int marker = 0; marker < markers.markerCount(); marker++) state.temperature(marker, markers);
+		if (markers.markerCount() > 0) state.temperature(0, markers);
+		cc.ecisr.mmm.compute.CpuWorkBatch.run(markers.markerCount(), (from, until) -> {
+			for (int marker = from; marker < until; marker++) state.temperature(marker, markers);
+		});
 		state.restoreAuditLedger(snapshot.audit());
 		if (!state.exactEnergy(markers.markerCount()).equals(state.audit().ledger().expectedInventory())) {
 			throw new IllegalArgumentException("Restored thermal audit does not close");

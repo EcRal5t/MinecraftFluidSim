@@ -64,10 +64,12 @@ public final class ThermalCellGrid {
 
 	public void rebuild(CarrierAccess carrierAccess) {
 		rebuildTopology(carrierAccess, -1);
-		CpuWorkBatch.run(cellCount, cell -> {
-			if (carrierCount[cell] > 0) {
-				conductivity[cell] /= totalVolume[cell];
-				solveCell(cell, internalEnergy[cell]);
+		CpuWorkBatch.run(cellCount, (from, until) -> {
+			for (int cell = from; cell < until; cell++) {
+				if (carrierCount[cell] > 0) {
+					conductivity[cell] /= totalVolume[cell];
+					solveCell(cell, internalEnergy[cell]);
+				}
 			}
 		});
 		updateObservedTemperatureRange();
@@ -200,13 +202,16 @@ public final class ThermalCellGrid {
 			if (!Double.isFinite(energy) || !(Double.isFinite(volume) && volume > 0.0)) {
 				throw new IllegalArgumentException("Thermal carrier inventory is invalid");
 			}
-			// A phase/reaction edit assigns the prospective cell's conserved U after topology changes.
-			// Every untouched carrier already owns its final U and must be valid individually.
-			if (cell != prospectiveCell) validateCarrierEnergy(carrier, energy);
 			internalEnergy[cell] += energy;
 			totalVolume[cell] += volume;
-			conductivity[cell] += volume * carrierAccess.material(carrier).conductivityEuPerSecondMeterK();
+			conductivity[cell] += volume * carrierMaterial[carrier].conductivityEuPerSecondMeterK();
 		}
+		// Bind derived reference caches before independent carrier validation.
+		if (topologyCarrierCount > 0) carrierAccess.baseEnergy(0);
+		CpuWorkBatch.run(topologyCarrierCount, (from, until) -> {
+			for (int carrier = from; carrier < until; carrier++) if (carrierAccess.cell(carrier) != prospectiveCell)
+				validateCarrierEnergy(carrier, carrierAccess.internalEnergy(carrier));
+		});
 	}
 
 	public void setCellInternalEnergies(double[] targetEnergy) {

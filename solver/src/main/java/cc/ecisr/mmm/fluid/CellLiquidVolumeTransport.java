@@ -6,7 +6,7 @@ import java.util.Arrays;
 
 /** Conservative cell-volume transport over the pressure geometry. */
 final class CellLiquidVolumeTransport {
-	private static final boolean ENABLED = Boolean.getBoolean("mmm.cellVolumeTransport");
+	private static final boolean ENABLED = Boolean.parseBoolean(System.getProperty("mmm.cellVolumeTransport", "true"));
 	private final FluidDomain domain;
 	private final ConservativeLiquidFlux transport;
 	private final LiquidFluxGeometry geometry;
@@ -34,7 +34,7 @@ final class CellLiquidVolumeTransport {
 		}
 	}
 
-	static boolean enabled(FluidDomainStorage domain) {
+	static boolean enabled() {
 		return ENABLED;
 	}
 
