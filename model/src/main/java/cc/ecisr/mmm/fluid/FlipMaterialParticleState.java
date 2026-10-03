@@ -32,7 +32,6 @@ public final class FlipMaterialParticleState {
 				|| particleMass.length != particleCount || materialPaletteIndex.length != particleCount) {
 			throw new IllegalArgumentException("Material marker arrays disagree with particle count");
 		}
-		double mass = 0.0;
 		float[] volumes = new float[particleCount];
 		for (int particle = 0; particle < particleCount; particle++) {
 			float amount = positionVolume[particle * 4 + 3];
@@ -42,8 +41,8 @@ public final class FlipMaterialParticleState {
 			}
 			registry.material(materialPaletteIndex[particle]);
 			volumes[particle] = amount;
-			mass += markerMass;
 		}
+		double mass = SignedDyadic.sum(particleMass).toDouble();
 		double volume = SignedDyadic.sum(volumes, particleCount).toDouble();
 		if (Double.doubleToRawLongBits(volume) != Double.doubleToRawLongBits(volumeLedger)) {
 			throw new IllegalArgumentException("Material marker volume ledger mismatch");

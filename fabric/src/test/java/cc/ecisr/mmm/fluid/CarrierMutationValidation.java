@@ -67,12 +67,15 @@ public final class CarrierMutationValidation {
 			positions[4 * i + 3] = values[i]; masses[i] = 1000 * (double) values[i];
 		}
 		FluidDomain domain = emptyMaterialDomain(512);
-		double massLedger = 0; for (double mass : masses) massLedger += mass;
+		var exactMass = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		for (double mass : masses) exactMass = exactMass.add(cc.ecisr.mmm.units.SignedDyadic.of(mass));
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(4, 4, 4, 0.5F, values.length,
-				exact.toDouble(), massLedger, domain.materialRegistry.materials(),
+				exact.toDouble(), exactMass.toDouble(), domain.materialRegistry.materials(),
 				positions, new float[values.length * 3], new byte[64], masses, new int[values.length]));
 		require(domain.totalVolumeExact() == exact.toDouble() && domain.exportMaterialParticleState().totalVolume() == exact.toDouble(),
 				"material observation or handoff dropped small physical parcel volumes");
+		require(domain.totalMass() == exactMass.toDouble() && domain.exportMaterialParticleState().totalMass() == exactMass.toDouble(),
+				"material observation or handoff dropped small physical parcel masses");
 		float[] varied = new float[1024]; var oracle = cc.ecisr.mmm.units.SignedDyadic.ZERO;
 		for (int i = 0; i < varied.length; i++) {
 			varied[i] = Float.intBitsToFloat((i % 255 << 23) | (i * 15485863 & 0x7fffff) | (i % 3 == 0 ? Integer.MIN_VALUE : 0));

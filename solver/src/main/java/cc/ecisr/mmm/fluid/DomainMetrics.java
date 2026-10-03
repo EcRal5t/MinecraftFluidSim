@@ -38,9 +38,7 @@ final class DomainMetrics {
 
 	/** Exact marker-mass inventory; reconstructed grid density is never used for this ledger. */
 	double totalMass() {
-		double result = 0.0;
-		for (int particle = 0; particle < domain.particles.count(); particle++) result += domain.particles.mass(particle);
-		return result;
+		return SignedDyadic.sum(domain.particles.directArrays().mass, domain.particles.count()).toDouble();
 	}
 
 	float maximumParticleSpeed() {
