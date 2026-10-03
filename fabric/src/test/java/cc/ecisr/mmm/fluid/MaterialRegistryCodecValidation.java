@@ -13,6 +13,7 @@ public final class MaterialRegistryCodecValidation {
 	private MaterialRegistryCodecValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		canonicalResourceIdentifiers();
 		builtinRegistryRoundTripsCanonically();
 		definitionMutationChangesSnapshotBytes();
 		strictDecodeRejectsTampering();
@@ -20,6 +21,24 @@ public final class MaterialRegistryCodecValidation {
 		viscosityContinuationIsBounded();
 		expansionSnapshotPreservesItsOwnDefinition();
 		System.out.println("Material registry codec validation passed");
+	}
+
+	private static void canonicalResourceIdentifiers() {
+		var canonical = java.util.regex.Pattern.compile("[a-z0-9_.-]+:[a-z0-9/._-]+");
+		// Every UTF-16 code unit in namespace, separator and path positions, including surrogates.
+		for (int code = 0; code <= Character.MAX_VALUE; code++) for (int position = 0; position < 3; position++) {
+			char[] characters = {'a', ':', 'b'}; characters[position] = (char) code;
+			String value = new String(characters);
+			require(cc.ecisr.mmm.api.StableId.isValid(value, 3) == canonical.matcher(value).matches(),
+					"resource identity grammar changed for code=" + code + ", position=" + position);
+		}
+		for (String value : new String[] {null, "", ":", "a:", ":b", "a:b:c", "a/b:c", "abc", "a:b/._-09", "_.-09:z"})
+			for (int maximum : new int[] {-1, 0, 1, 2, 3, 4, 128}) {
+				boolean expected = maximum > 0 && value != null && value.length() <= maximum
+						&& canonical.matcher(value).matches();
+				require(cc.ecisr.mmm.api.StableId.isValid(value, maximum) == expected,
+						"resource identity length or separator validation changed");
+			}
 	}
 
 	private static void builtinRegistryRoundTripsCanonically() throws Exception {

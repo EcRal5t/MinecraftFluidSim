@@ -63,10 +63,12 @@ public final class ThermalTransport {
 		var owners = grid.carrierAccess();
 		int count = owners.carrierCount();
 		double[] conductivity = new double[count], volume = new double[count];
+		int[] conductingCarriers = new int[cellCount];
 		for (int p = 0; p < count; p++) {
 			conductivity[p] = owners.material(p).conductivityEuPerSecondMeterK(); volume[p] = owners.volume(p);
+			if (conductivity[p] > 0) conductingCarriers[owners.cell(p)]++;
 		}
-		var contacts = new ThermalCarrierContacts(Math.multiplyExact(count, 8));
+		var contacts = new ThermalCarrierContacts(contactCapacity(grid, conductingCarriers));
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int cell = cellIndex(x, y, z);
 			if (!grid.occupied(cell)) continue;
@@ -112,6 +114,27 @@ public final class ThermalTransport {
 			grid.restoreCarrierInternalEnergy(snapshot);
 			throw failure;
 		}
+	}
+
+	/** Topological upper bound; closed/adiabatic faces can leave unused slots. */
+	private int contactCapacity(ThermalCellGrid grid, int[] conductingCarriers) {
+		long capacity = 0;
+		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
+			int cell = cellIndex(x, y, z);
+			long local = conductingCarriers[cell];
+			if (local == 0) continue;
+			capacity = Math.addExact(capacity, local * (local - 1) / 2);
+			for (int direction = 0; direction < 6; direction++) {
+				int nx = x + (direction == 0 ? -1 : direction == 1 ? 1 : 0);
+				int ny = y + (direction == 2 ? -1 : direction == 3 ? 1 : 0);
+				int nz = z + (direction == 4 ? -1 : direction == 5 ? 1 : 0);
+				if (inside(nx, ny, nz) && grid.occupied(cellIndex(nx, ny, nz))) {
+					if ((direction & 1) != 0)
+						capacity = Math.addExact(capacity, local * conductingCarriers[cellIndex(nx, ny, nz)]);
+				} else capacity = Math.addExact(capacity, local);
+			}
+		}
+		return Math.toIntExact(capacity);
 	}
 
 	private static void addPair(double[] conductivity, double[] volume,

@@ -1,16 +1,21 @@
 package cc.ecisr.mmm.api;
 
-import java.util.regex.Pattern;
-
 /** Loader-neutral validation for canonical {@code namespace:path} resource identities. */
 public final class StableId {
-	private static final Pattern CANONICAL = Pattern.compile("[a-z0-9_.-]+:[a-z0-9/._-]+");
-
 	private StableId() { }
 
 	public static boolean isValid(String value, int maximumLength) {
-		return maximumLength > 0 && value != null && value.length() <= maximumLength
-				&& CANONICAL.matcher(value).matches();
+		if (maximumLength <= 0 || value == null || value.length() > maximumLength) return false;
+		int separator = -1;
+		for (int index = 0; index < value.length(); index++) {
+			char c = value.charAt(index);
+			if (c == ':') {
+				if (separator >= 0 || index == 0 || index + 1 == value.length()) return false;
+				separator = index;
+			} else if (!(c >= 'a' && c <= 'z' || c >= '0' && c <= '9'
+					|| c == '_' || c == '.' || c == '-' || c == '/' && separator >= 0)) return false;
+		}
+		return separator >= 0;
 	}
 
 	public static String require(String value, int maximumLength, String label) {
