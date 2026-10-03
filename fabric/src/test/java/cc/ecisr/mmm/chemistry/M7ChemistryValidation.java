@@ -85,11 +85,27 @@ public final class M7ChemistryValidation {
 				Map.of(BuiltinChemicalDefinitions.H2O, 123_457L), 0.125);
 		ExactRational expected = reference.species(reference.speciesHandle(BuiltinChemicalDefinitions.H2O))
 				.massKilogramsPerAu().multiply(123_457L).divide(ChemicalLimits.QUANTA_PER_AU);
+		ChemicalMixtureRecord adjusted = record.withMassResidualKilograms(-0.25);
+		ChemicalMixtureRecord rebuilt = ChemicalMixtureRecord.fromStableAmounts(reference,
+				Map.of(BuiltinChemicalDefinitions.H2O, 123_457L), -0.25);
+		check(adjusted.equals(rebuilt) && adjusted.hashCode() == rebuilt.hashCode()
+				&& adjusted.totalQuanta() == record.totalQuanta(), "residual replacement changed canonical inventory or hash");
+		adjusted.copyAmounts()[0] = 1;
+		check(adjusted.amountAt(0) == 123_457L && record.amountAt(0) == 123_457L,
+				"residual replacement exposed mutable inventory");
+		expectFailure(() -> record.withMassResidualKilograms(Double.NaN), "residual replacement accepted non-finite mass");
 		java.util.stream.IntStream.range(0, 256).parallel().forEach(index -> {
 			ChemicalRegistry target = (index & 1) == 0 ? reference : heavier;
-			check(record.exactSpeciesMassKilograms(target).equals((index & 1) == 0 ? expected : expected.multiply(2)),
+			check(adjusted.exactSpeciesMassKilograms(target).equals((index & 1) == 0 ? expected : expected.multiply(2)),
 					"chemical mass memo mixed registry identity and value");
 		});
+		ExactRational wideMass = new ExactRational(java.math.BigInteger.ONE,
+				java.math.BigInteger.ONE.shiftLeft(ChemicalLimits.MAX_RATIONAL_BITS - 30).add(java.math.BigInteger.valueOf(3)));
+		var wideSpecies = new ChemicalSpecies("test:wide", Map.of("X", 1), 0, wideMass, 0xff000000);
+		var wideDefinitions = new ArrayList<>(reference.species()); wideDefinitions.add(wideSpecies);
+		var wideRegistry = new ChemicalRegistry(wideDefinitions, reference.phases(), reference.reactions());
+		check(ChemicalMixtureRecord.fromStableAmounts(wideRegistry, Map.of(wideSpecies.id(), ChemicalLimits.QUANTA_PER_AU), 0)
+				.exactSpeciesMassKilograms(wideRegistry).equals(wideMass), "mass-factor cache rejected a valid wide rational definition");
 	}
 
 	private static void validateBundledDataDefinitions() throws Exception {

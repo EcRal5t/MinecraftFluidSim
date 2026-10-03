@@ -11,6 +11,7 @@ public final class ChemicalMixtureRecord {
 	private final long[] amounts;
 	private final long massResidualKilogramsBits;
 	private final int hash;
+	private final long totalQuanta;
 	// A single immutable memo keeps registry identity and value atomically paired across readers.
 	private volatile SpeciesMass speciesMass;
 	private record SpeciesMass(ChemicalRegistry registry, ExactRational kilograms) { }
@@ -36,8 +37,19 @@ public final class ChemicalMixtureRecord {
 		this.speciesHandles = speciesHandles.clone();
 		this.amounts = amounts.clone();
 		this.massResidualKilogramsBits = massResidualKilogramsBits;
+		this.totalQuanta = total;
 		this.hash = 31 * (31 * Arrays.hashCode(this.speciesHandles) + Arrays.hashCode(this.amounts))
 				+ Long.hashCode(massResidualKilogramsBits);
+	}
+
+	private ChemicalMixtureRecord(ChemicalMixtureRecord source, long residualBits) {
+		if (!Double.isFinite(Double.longBitsToDouble(residualBits))) throw new IllegalArgumentException("Chemical mass residual is not finite");
+		speciesHandles = source.speciesHandles;
+		amounts = source.amounts;
+		totalQuanta = source.totalQuanta;
+		massResidualKilogramsBits = residualBits;
+		hash = source.hash - Long.hashCode(source.massResidualKilogramsBits) + Long.hashCode(residualBits);
+		speciesMass = source.speciesMass;
 	}
 
 	public static ChemicalMixtureRecord fromStableAmounts(
@@ -64,6 +76,12 @@ public final class ChemicalMixtureRecord {
 	public long amountAt(int entry) { return amounts[entry]; }
 	public long massResidualKilogramsBits() { return massResidualKilogramsBits; }
 	public double massResidualKilograms() { return Double.longBitsToDouble(massResidualKilogramsBits); }
+
+	/** Preserves the immutable species inventory and its registry-specific exact-mass memo. */
+	public ChemicalMixtureRecord withMassResidualKilograms(double residual) {
+		long bits = Double.doubleToRawLongBits(residual);
+		return bits == massResidualKilogramsBits ? this : new ChemicalMixtureRecord(this, bits);
+	}
 	public int[] copySpeciesHandles() { return speciesHandles.clone(); }
 	public long[] copyAmounts() { return amounts.clone(); }
 
@@ -73,9 +91,7 @@ public final class ChemicalMixtureRecord {
 	}
 
 	public long totalQuanta() {
-		long result = 0L;
-		for (long amount : amounts) result = Math.addExact(result, amount);
-		return result;
+		return totalQuanta;
 	}
 
 	public ExactRational exactSpeciesMassKilograms(ChemicalRegistry registry) {
@@ -83,8 +99,7 @@ public final class ChemicalMixtureRecord {
 		if (cached != null && cached.registry() == registry) return cached.kilograms();
 		ExactRational result = ExactRational.ZERO;
 		for (int i = 0; i < speciesHandles.length; i++) {
-			result = result.add(registry.species(speciesHandles[i]).massKilogramsPerAu().multiply(amounts[i])
-					.divide(ChemicalLimits.QUANTA_PER_AU));
+			result = result.add(registry.speciesMass(speciesHandles[i], amounts[i]));
 		}
 		speciesMass = new SpeciesMass(registry, result);
 		return result;

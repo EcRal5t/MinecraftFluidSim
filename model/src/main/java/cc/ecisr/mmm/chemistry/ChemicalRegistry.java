@@ -21,6 +21,7 @@ import java.util.TreeSet;
 /** Immutable, canonically ordered chemical definition registry. */
 public final class ChemicalRegistry {
 	private final List<ChemicalSpecies> species;
+	private final ExactRational[] speciesMassPerQuantum;
 	private final List<ChemicalPhaseDefinition> phases;
 	private final List<ChemicalReaction> reactions;
 	private final List<ChemicalReaction> reactionOrder;
@@ -37,6 +38,12 @@ public final class ChemicalRegistry {
 	) {
 		this.species = canonicalUnique(speciesDefinitions, ChemicalLimits.MAX_SPECIES,
 				ChemicalSpecies::id, "species");
+		this.speciesMassPerQuantum = new ExactRational[this.species.size()];
+		for (int handle = 0; handle < this.species.size(); handle++) {
+			ExactRational mass = this.species.get(handle).massKilogramsPerAu();
+			if (mass.denominator().bitLength() + 30 <= ChemicalLimits.MAX_RATIONAL_BITS)
+				speciesMassPerQuantum[handle] = mass.divide(ChemicalLimits.QUANTA_PER_AU);
+		}
 		this.phases = canonicalUnique(phaseDefinitions, ChemicalLimits.MAX_PHASES,
 				ChemicalPhaseDefinition::id, "chemical phase");
 		this.reactions = canonicalUnique(reactionDefinitions, ChemicalLimits.MAX_REACTIONS,
@@ -56,6 +63,11 @@ public final class ChemicalRegistry {
 	public List<ChemicalReaction> reactions() { return reactions; }
 	public List<ChemicalReaction> reactionOrder() { return reactionOrder; }
 	public ChemicalSpecies species(int handle) { return species.get(handle); }
+	ExactRational speciesMass(int handle, long quanta) {
+		ExactRational factor = speciesMassPerQuantum[handle];
+		return factor == null ? species.get(handle).massKilogramsPerAu().multiply(quanta).divide(ChemicalLimits.QUANTA_PER_AU)
+				: factor.multiply(quanta);
+	}
 	public ChemicalPhaseDefinition phase(int handle) { return phases.get(handle); }
 	public int speciesHandle(String id) {
 		Integer handle = speciesHandles.get(id);
