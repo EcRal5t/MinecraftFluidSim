@@ -16,9 +16,6 @@ public final class GasLiquidPhaseModel {
 	public enum Direction { BOIL, CONDENSE, EQUILIBRIUM }
 	public record Saturation(double saturationPressurePa, double componentPartialPressurePa, Direction direction) {
 		public double pressureImbalancePa() { return saturationPressurePa - componentPartialPressurePa; }
-		public boolean closerToEquilibriumThan(double otherPressureImbalancePa) {
-			return Math.abs(pressureImbalancePa()) < Math.abs(otherPressureImbalancePa);
-		}
 	}
 
 	private final ThermalRegistry thermalRegistry;

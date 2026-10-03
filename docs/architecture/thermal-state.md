@@ -302,7 +302,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - commit 同时更新 liquid marker、gas component nanos/kg、gas node energy、source/sink 与 topology remap；任何列不闭合则整批拒绝。
 - 每次气液 commit 还按实际增加/删除的 liquid SVQ 写入带 cell 的 exact pending volume；下一次真实 projection 完成力学同步，随后清除该 entry。capture/restore 必须保留尚未结算的原始 pending 值。
 - 同一 transition、gas node 与 exact liquid temperature 在一个 logical step 内只有一个热力学方向；首次观察到的沸腾或凝结方向是该状态点的唯一方向，后续候选若试图在同一状态点反向则不提交。不同温度的热/冷界面仍独立求值。
-- exact batch 搜索以 `|p_sat-p_partial|` 为物理残差；跨越平衡点的最小批只有在严格缩小该残差时才提交，不能因“至少执行一批”在两个可表示状态间往返。
+- exact batch 搜索以饱和驱动力的方向限制整数 extent：沸腾后的 `p_sat >= p_partial`，凝结后的 `p_sat <= p_partial`。最大可提交批次在平衡点之前停止，保持两相联合内能；不足一个完整批次的剩余转移量留在原库存，等待热通量或几何变化。量化误差上限为一个声明的最小相变量子，薄液体的有限热容量同样参加候选反演。
 - 一个液体 cell 同时接触多个互不连通的 sealed node 是合法界面，不得因此暂停或合并气腔。一次 pressure interval 内该 cell 只向一个 node 提交一次守恒交换：按 `|p_sat-p_partial|` 从大到小尝试，最强候选若受库存、能量、组分或容量约束无法执行再尝试下一 node；相同驱动力按稳定 node ID 决定顺序。
 - chemistry 启用时，每个 gas transition 先把允许挥发且具有 host-gas energy offset 的 stable species 编译为本步 runtime handle 集；液体 marker 仍按 ordinal 搬运 exact species、质量 residual 与 `U`，runtime handle 不持久化。
 

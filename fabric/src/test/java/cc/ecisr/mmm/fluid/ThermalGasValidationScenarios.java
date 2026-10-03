@@ -1107,6 +1107,37 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& domain.thermalAudit().mechanicalWork().equals(referenceCondensationProjection.thermalAudit().mechanicalWork())
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"condensation phase volume was not consumed by the next real pressure projection");
+		FluidDomain thin = new FluidDomain(3, 3, 3, config, 256);
+		thin.sealDomainBoundary();
+		thin.setVolume(1, 1, 1, 0.00016F);
+		thin.setMarkerMaterial(0, liquids, 0);
+		thin.bindGasRegistry(BuiltinGasDefinitions.createRegistry()); thin.bootstrapGasState("");
+		thin.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
+		thin.commitOperatorVentSealedGas(thin.planOperatorVentSealedGas());
+		double thinVolume = thin.totalVolumeExact(), thinMass = thin.totalMass();
+		var thinEnergy = thin.exactInternalEnergy();
+		var thinPhase = thin.stepGasPhaseChangeOnly(1);
+		require(thinPhase.operations() == 0 && thin.totalVolumeExact() == thinVolume && thin.totalMass() == thinMass
+				&& thin.exactInternalEnergy().equals(thinEnergy) && thin.gasBoundary().sealedInventory().isEmpty()
+				&& thin.thermalState.temperature(0, thin.thermalMarkerContext()) == GasRegistry.STANDARD_TEMPERATURE_K,
+				"sub-quantum evaporation crossed saturation and spent latent heat on a thin liquid carrier");
+		FluidDomain finiteVapor = new FluidDomain(3, 3, 3, config, 256);
+		finiteVapor.sealDomainBoundary();
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
+			if (y != 1 || z != 1 || x == 0) finiteVapor.setSolid(x, y, z, true);
+		finiteVapor.setVolume(1, 1, 1, 0.008F); finiteVapor.setMarkerMaterial(0, liquids, 0);
+		var gasRegistry = BuiltinGasDefinitions.createRegistry();
+		finiteVapor.bindGasRegistry(gasRegistry); finiteVapor.bootstrapGasState("");
+		finiteVapor.commitOperatorVentSealedGas(finiteVapor.planOperatorVentSealedGas());
+		var phaseModel = new GasLiquidPhaseModel(thermal, gasRegistry);
+		finiteVapor.gasState.network.commitPhaseSource(1, phaseModel.gasBatch(boiling, 2));
+		finiteVapor.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
+		var pairEnergy = finiteVapor.exactInternalEnergy();
+		var limitedCondensation = finiteVapor.stepGasPhaseChangeOnly(2);
+		require(limitedCondensation.operations() == 1 && limitedCondensation.condensedCells() == 1
+				&& finiteVapor.gasBoundary().standardVolumeNanos(1) == phaseModel.gasBatch(boiling, 1).standardVolumeNanos()
+				&& finiteVapor.exactInternalEnergy().equals(pairEnergy) && finiteVapor.gasBoundary().auditClosed(),
+				"integer condensation crossed saturation instead of retaining the final vapor quantum");
 	}
 
 	/**
@@ -1266,7 +1297,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.step(false, 0);
 		require(!domain.hasPendingPhaseVolumeWork(),
 				"species-bearing boiling did not consume pending volume before condensation");
-		setAllCondensedCellTemperatures(domain, 260.0);
+		// This artificial transition has a coarse vapor-volume quantum. Strong cooling
+		// leaves sufficient saturation drive for one complete condensation batch.
+		setAllCondensedCellTemperatures(domain, 200.0);
 		condensationCapacityRetry(domain);
 		FluidDomain.GasThermalPhaseStats firstCondensed = domain.stepGasPhaseChangeOnly(1);
 		GasComponentAmount vaporRemainder = domain.gasBoundary().inventory(1)
