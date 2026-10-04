@@ -12,6 +12,17 @@ final class LiquidPhasePartition {
 	}
 	record Region(LiquidGeometryRefinement.Cell cell, int liquid) { }
 	private LiquidPhasePartition() { }
+	static int[] gasComponents(LiquidControlVolumeMesh mesh, int[] liquid) {
+		if (liquid.length != mesh.cells.size()) throw new IllegalArgumentException("Incomplete gas phase labels");
+		int[] roots = java.util.stream.IntStream.range(0, liquid.length).toArray();
+		for (var face : mesh.faces) if (face.second() >= 0 && liquid[face.first()] < 0 && liquid[face.second()] < 0) {
+			int a = root(roots, face.first()), b = root(roots, face.second()); roots[Math.max(a, b)] = Math.min(a, b);
+		}
+		for (int c = 0; c < roots.length; c++) roots[c] = root(roots, c); return roots;
+	}
+	private static int root(int[] roots, int cell) {
+		while (roots[cell] != cell) { roots[cell] = roots[roots[cell]]; cell = roots[cell]; } return cell;
+	}
 
 	static List<Region> build(LiquidGeometryRefinement.Cell leaf, List<LiquidPolyhedron> liquids, int maximumRegions) {
 		if (maximumRegions < 1) throw new IllegalArgumentException("Empty phase geometry budget");

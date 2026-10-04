@@ -9,6 +9,31 @@ final class LiquidCharacteristicValidation {
 	static void validate() {
 		repeatedGravityPreservesUniformCharacteristic();
 		wholeVolumeCharacteristicsPreserveGeometry();
+		thinLiquidLayerPreservesSeparateGasPressureNodes();
+	}
+	private static void thinLiquidLayerPreservesSeparateGasPressureNodes() {
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var layer = root.geometry().clip(0, 1, 0, 0.501).clip(0, -1, 0, -0.499);
+		var regions = LiquidPhasePartition.build(root, List.of(layer), 16); var labels = regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray();
+		var mesh = new LiquidControlVolumeMesh(regions.stream().map(LiquidPhasePartition.Region::cell).toList(), 1, 1000,
+				(c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+		var density = new double[regions.size()]; var viscosity = new double[regions.size()]; var nodes = new int[regions.size()];
+		java.util.Arrays.fill(density, 1000); java.util.Arrays.fill(viscosity, 0.001); java.util.Arrays.fill(nodes, -1);
+		for (int c = 0; c < regions.size(); c++) if (labels[c] < 0) nodes[c] = mesh.cells.get(c).centroid().y() < 0.5 ? 0 : 1;
+		var gas = List.of(new LiquidControlVolumeProjection.GasNode(100000, 1e-6), new LiquidControlVolumeProjection.GasNode(100000, 1e-6));
+		var mechanics = new LiquidPhaseMechanics(mesh, labels, density, viscosity, gas, nodes, (f, c) -> 100000, FluidSolverConfig.WallCondition.FREE_SLIP);
+		var result = mechanics.advance(new double[3 * regions.size()], new double[3 * mesh.faces.size()], new double[3 * regions.size()], 0.01, 1e-11, 1e-11, 512);
+		close(result.pressure().pressure()[0], 100000, 0);
+		for (double pressure : result.pressure().gasPressure()) close(pressure, 100000, 0);
+		for (var cell : result.velocity()) for (var tetra : cell.tetrahedra()) for (var rate : tetra.outwardFlux())
+			if (rate.signum() != 0) throw new AssertionError("Balanced thin layer acquired artificial gas or liquid motion");
+		for (int c = 0; c < nodes.length; c++) if (labels[c] < 0) nodes[c] = 0;
+		try {
+			new LiquidPhaseMechanics(mesh, labels, density, viscosity, gas, nodes, (f, c) -> 100000, FluidSolverConfig.WallCondition.FREE_SLIP);
+			throw new AssertionError("Separated gas chambers accepted one pressure node");
+		} catch (IllegalArgumentException expected) {
+			if (!expected.getMessage().contains("Separate gas chambers")) throw expected;
+		}
 	}
 	private static void repeatedGravityPreservesUniformCharacteristic() {
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
@@ -18,18 +43,14 @@ final class LiquidCharacteristicValidation {
 			var regions = LiquidPhasePartition.build(root, List.of(liquid), 64); var labels = regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray();
 			var mesh = new LiquidControlVolumeMesh(regions.stream().map(LiquidPhasePartition.Region::cell).toList(), 1, 1000,
 					(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
-			var faces = new ArrayList<LiquidControlVolumeProjection.Face>(); var indices = new ArrayList<Integer>();
-			for (int f : mesh.cellFaces[0]) {
-				var face = mesh.faces.get(f); var surface = face.surface();
-				if (face.first() != 0) { var n = surface.areaVector(); surface = new LiquidPolyhedron.Surface(surface.area(), new LiquidPolyhedron.Point(-n.x(), -n.y(), -n.z()), surface.centroid()); }
-				faces.add(new LiquidControlVolumeProjection.Face(0, -1, surface, 0)); indices.add(f);
-			}
-			var projected = new LiquidControlVolumeProjection(List.of(mesh.cells.get(0)), faces).project(velocity, GRAVITY, dt, 1e-11, 128); velocity = projected.cellVelocity();
-			var rates = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; java.util.Arrays.fill(rates, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+			var density = new double[regions.size()]; var viscosity = new double[regions.size()]; var gasNodes = new int[regions.size()];
+			java.util.Arrays.fill(density, 1000); java.util.Arrays.fill(viscosity, 0.001); java.util.Arrays.fill(gasNodes, -1);
 			var primary = new double[3 * regions.size()]; System.arraycopy(velocity, 0, primary, 0, 3);
-			for (int i = 0; i < indices.size(); i++) { int f = indices.get(i); rates[f] = mesh.faces.get(f).first() == 0 ? projected.volumeRate()[i] : projected.volumeRate()[i].negate(); }
-			var extended = LiquidInterfaceVelocityExtension.extend(mesh, labels, rates, primary, 1e-11, 512);
-			var field = LiquidControlVolumeVelocity.reconstruct(mesh, extended.volumeRate(), extended.cellVelocity());
+			var traces = new double[3 * mesh.faces.size()]; for (int f = 0; f < mesh.faces.size(); f++) System.arraycopy(velocity, 0, traces, 3 * f, 3);
+			var acceleration = new double[primary.length]; acceleration[1] = GRAVITY.y();
+			var mechanics = new LiquidPhaseMechanics(mesh, labels, density, viscosity, List.of(), gasNodes, (f, gas) -> 0, FluidSolverConfig.WallCondition.FREE_SLIP);
+			var result = mechanics.advance(primary, traces, acceleration, dt, 1e-11, 1e-11, 512); velocity = result.pressure().cellVelocity(); var field = result.velocity();
+			close(result.viscosity().dissipatedJoules(), 0, 1e-20);
 			for (var cell : field) for (var tetra : cell.tetrahedra()) {
 				var exact = LiquidCharacteristicVelocity.reconstruct(tetra.geometry(), tetra.outwardFlux());
 				for (int a = 0; a < 3; a++) if (!exact[a].equals(LiquidExactPolygon.Fraction.of(velocity[a])))

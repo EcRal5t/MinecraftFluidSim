@@ -19,10 +19,7 @@ final class LiquidInterfaceVelocityExtension {
 			throw new IllegalArgumentException("Invalid interface velocity extension request");
 		for (double v : submittedCells) if (!Double.isFinite(v)) throw new IllegalArgumentException("Non-finite submitted cell velocity");
 		for (var rate : submittedRates) if (rate == null || !Double.isFinite(rate.toDouble())) throw new IllegalArgumentException("Invalid submitted face rate");
-		int[] root = new int[count]; for (int c = 0; c < count; c++) root[c] = c;
-		for (var face : mesh.faces) if (face.second() >= 0 && liquid[face.first()] < 0 && liquid[face.second()] < 0)
-			root[find(root, face.second())] = find(root, face.first());
-		for (int c = 0; c < count; c++) root[c] = find(root, c);
+		int[] root = LiquidPhasePartition.gasComponents(mesh, liquid);
 		boolean[] adjacent = new boolean[count], ambient = adjacent.clone(), constrained = new boolean[count + 1];
 		Arrays.fill(constrained, 0, count, true);
 		int[] first = new int[faces], second = first.clone(); var fixed = new SignedDyadic[faces];
@@ -155,6 +152,5 @@ final class LiquidInterfaceVelocityExtension {
 		return true;
 	}
 	private static double[] negate(double[] values) { for (int i = 0; i < values.length; i++) values[i] = -values[i]; return values; }
-	private static int find(int[] root, int c) { while (root[c] != c) { root[c] = root[root[c]]; c = root[c]; } return c; }
 	private static double dot(double[] a, double[] b) { double sum = 0; for (int i = 0; i < a.length; i++) sum += a[i] * b[i]; return sum; }
 }

@@ -40,16 +40,6 @@ final class LiquidGeometryPlane {
 		for (int a = 0; a < 3; a++) result.add(coefficients.get(a).multiply(factor.denominator()).multiply(BigInteger.valueOf(sign)));
 		result.add(coefficients.get(3).multiply(factor.numerator()).multiply(BigInteger.valueOf(sign))); return exact(result);
 	}
-	/** A shared projective plane uses one power-of-two coefficient scale for numerical evaluation. */
-	LiquidGeometryPlane canonical() {
-		var coefficients = key().coefficients(); int bits = 0;
-		for (int a = 0; a < 3; a++) bits = Math.max(bits, coefficients.get(a).abs().bitLength());
-		double[] values = new double[4];
-		for (int a = 0; a < 4; a++) values[a] = new SignedDyadic(positive() ? coefficients.get(a) : coefficients.get(a).negate(), 1 - bits).toDouble();
-		var result = new LiquidGeometryPlane(new LiquidPolyhedron.Point(values[0], values[1], values[2]), values[3]);
-		if (!result.key().equals(key())) throw new IllegalStateException("Canonical geometric plane exceeds numerical range");
-		return result;
-	}
 	double signedDistance(LiquidPolyhedron.Point point) { return normal.dot(point) - offset; }
 	/** Forward error of plane evaluation, including rounded vertex coordinates. */
 	double evaluationError(LiquidPolyhedron.Point point) {

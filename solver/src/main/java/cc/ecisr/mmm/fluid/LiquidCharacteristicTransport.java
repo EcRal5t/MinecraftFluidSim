@@ -89,6 +89,7 @@ final class LiquidCharacteristicTransport {
 			joined = false;
 			outer: for (int i = 0; i < moved.size(); i++) for (int j = i + 1; j < moved.size(); j++) {
 				var a = moved.get(i); var b = moved.get(j); if (!a.transform.equals(b.transform)) continue;
+				if (++processed > maximumPieces) throw new IllegalStateException("Liquid characteristic coalescing exceeds its work budget");
 				var union = a.source.joined(b.source, original); if (union == null) continue;
 				moved.set(i, new Moved(union, a.transform)); moved.remove(j); joined = true; break outer;
 			}
