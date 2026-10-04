@@ -43,7 +43,32 @@ final class LiquidGeometryValidation {
 		multipleFragmentsAndGasSpaceShareCompleteFaces();
 		phasePartitionPreservesSolidOpenGeometry();
 		resolvedDomainUsesCollisionOpenSpace();
+		liquidSourcesUseExactOpenGeometry();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static void liquidSourcesUseExactOpenGeometry() {
+		var open = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 2, 3, 3);
+		var volume = LiquidConvexRegion.of(open).measure().volume();
+		for (var quantity : java.util.List.of(LiquidExactPolygon.Fraction.of(1.0 / 64), volume.divide(LiquidExactPolygon.Fraction.of(3)), volume)) {
+			var source = new LiquidGeometrySourcePlan(java.util.List.of(open), quantity, 256);
+			var measured = LiquidConvexRegion.EMPTY.measure();
+			var cells = source.geometry.stream().map(g -> new LiquidGeometryRefinement.Cell(0, 0, 0, 0, g)).toList(); LiquidPhasePartition.requireDisjoint(cells);
+			for (var piece : source.geometry) {
+				var contained = LiquidConvexRegion.of(piece);
+				for (var plane : open.planes()) contained = contained.clip(plane);
+				if (!contained.measure().same(LiquidConvexRegion.of(piece).measure())) throw new AssertionError("Geometric source left its actual open gas space");
+				measured = measured.add(contained.measure());
+			}
+			if (!measured.volume().equals(quantity)) throw new AssertionError("Geometric source rounded away a positive inventory tail");
+			var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, open);
+			var phases = LiquidPhasePartition.build(root, source.geometry, 256); var after = LiquidConvexRegion.EMPTY.measure();
+			for (var region : phases) after = after.add(LiquidConvexRegion.of(region.cell().geometry()).measure());
+			if (!after.same(LiquidConvexRegion.of(open).measure())) throw new AssertionError("Source insertion changed total open space or its first moments");
+		}
+		try {
+			new LiquidGeometrySourcePlan(java.util.List.of(open), volume.add(LiquidExactPolygon.Fraction.of(1e-30)), 256);
+			throw new AssertionError("Geometric source accepted more than the exact gas capacity");
+		} catch (IllegalStateException expected) { }
 	}
 	private static void resolvedDomainUsesCollisionOpenSpace() {
 		var collision = new FlipCutCellGeometry(3, 2, 2);

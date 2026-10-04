@@ -96,7 +96,7 @@ final class LiquidExactPolygon {
 		}
 		return vertex(result);
 	}
-	private static Vertex vertex(Fraction[] coordinates) {
+	static Vertex vertex(Fraction[] coordinates) {
 		var denominator = BigInteger.ONE;
 		for (var value : coordinates) denominator = denominator.multiply(value.denominator).divide(denominator.gcd(value.denominator));
 		return new Vertex(coordinates[0].numerator.multiply(denominator.divide(coordinates[0].denominator)),
@@ -107,7 +107,10 @@ final class LiquidExactPolygon {
 		return List.of(vertex(apex), center(), vertices.get(edge), vertices.get((edge + 1) % vertices.size()));
 	}
 	List<LiquidExactPolygon> tetrahedron(Fraction[] apex, int edge) {
-		var points = tetrahedronVertices(apex, edge);
+		return tetrahedron(tetrahedronVertices(apex, edge));
+	}
+	static List<LiquidExactPolygon> tetrahedron(List<Vertex> points) {
+		if (points.size() != 4) throw new IllegalArgumentException("A geometric tetrahedron needs four vertices");
 		var result = new ArrayList<LiquidExactPolygon>();
 		for (int f = 0; f < 4; f++) {
 			var polygon = new ArrayList<Vertex>(); for (int i = 0; i < 4; i++) if (i != f) polygon.add(points.get(i));
