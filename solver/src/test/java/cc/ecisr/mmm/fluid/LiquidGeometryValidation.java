@@ -47,7 +47,38 @@ final class LiquidGeometryValidation {
 		inventoryCentroidUsesResolvedCollisionSupport();
 		geometricSourceBatchPreservesActualCapacity();
 		geometricExtractionUsesOccupiedSupportAndVelocity();
+		exactCompactionPreservesGeometryAndPhysicalFields();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static void exactCompactionPreservesGeometryAndPhysicalFields() {
+		var a = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.125, 0.125, 0.125, 0.375, 0.375, 0.375));
+		var b = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.375, 0.125, 0.125, 0.625, 0.375, 0.375));
+		var c = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.625, 0.125, 0.125, 0.875, 0.375, 0.375));
+		var input = LiquidGeometryStateMapper.capture(java.util.List.of(a, b, c), 1, new int[]{0}, new int[]{0, 0, 0}, new double[]{1, 0, 0, 1, 0, 0, 1, 0, 0});
+		for (int budget : new int[]{0, 1, 64}) {
+			var compact = LiquidGeometryCompaction.compact(input, budget); var measure = LiquidConvexRegion.EMPTY.measure();
+			for (var cell : LiquidGeometryStateMapper.restore(compact)) measure = measure.add(LiquidConvexRegion.of(cell.geometry()).measure());
+			if (!measure.same(LiquidConvexRegion.of(LiquidPolyhedron.box(0.125, 0.125, 0.125, 0.875, 0.375, 0.375)).measure()))
+				throw new AssertionError("Exact compaction changed volume or spatial moments");
+			for (var cell : compact.cells()) if (!java.util.Arrays.equals(cell.copyVelocity(), new double[]{1, 0, 0}))
+				throw new AssertionError("Exact compaction changed the resolved field");
+			if (budget == 64 && compact.cells().size() != 1) throw new AssertionError("Convex auxiliary cuts retained unnecessary geometric work");
+		}
+		var concave = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.375, 0.125, 0.125, 0.625, 0.625, 0.375));
+		var gap = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(Math.nextUp(0.375), 0.125, 0.125, 0.625, 0.375, 0.375));
+		for (var neighbor : java.util.List.of(concave, gap)) {
+			var shape = LiquidGeometryStateMapper.capture(java.util.List.of(a, neighbor), 1, new int[]{0}, new int[]{0, 0});
+			if (LiquidGeometryCompaction.compact(shape, 64) != shape) throw new AssertionError("Compaction filled a concavity or a finite gas gap");
+		}
+		var different = LiquidGeometryStateMapper.capture(java.util.List.of(a, b), 1, new int[]{0}, new int[]{0, 0}, new double[]{1, 0, 0, -1, 0, 0});
+		if (LiquidGeometryCompaction.compact(different, 64) != different) throw new AssertionError("Compaction averaged a resolved velocity difference");
+		var separate = LiquidGeometryStateMapper.capture(java.util.List.of(a, b), 1, new int[]{0, 1});
+		if (LiquidGeometryCompaction.compact(separate, 64) != separate) throw new AssertionError("Compaction combined independent material inventories");
+		var refined = LiquidGeometryStateMapper.capture(java.util.List.of(
+				new LiquidGeometryRefinement.Cell(1, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.125, 0.125, 0.5, 0.375, 0.375)),
+				new LiquidGeometryRefinement.Cell(1, 1, 0, 0, LiquidPolyhedron.box(0.5, 0.125, 0.125, 0.75, 0.375, 0.375))),
+				1, new int[]{0}, new int[]{0, 0});
+		if (LiquidGeometryCompaction.compact(refined, 64) != refined) throw new AssertionError("Compaction removed the chosen spatial refinement");
 	}
 	private static void geometricExtractionUsesOccupiedSupportAndVelocity() {
 		var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults()); domain.setVolume(1, 1, 1, 0.125F);

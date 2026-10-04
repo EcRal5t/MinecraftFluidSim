@@ -55,7 +55,7 @@ final class LiquidGeometryMotionPlan {
 		}
 		var transportedVelocity = new double[3 * cells.size()];
 		for (int f = 0; f < cells.size(); f++) for (int a = 0; a < 3; a++) transportedVelocity[3 * f + a] = payload.get(f)[a].rounded();
-		geometry = LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, groups, transportedVelocity);
+		geometry = LiquidGeometryCompaction.compact(LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, groups, transportedVelocity), maximumFragments);
 		var restored = LiquidGeometryStateMapper.restore(geometry); int[] owners = geometry.copyFragmentOwners();
 		int[] originalMarkers = input.copyMarkerCells(), nextMarkers = geometry.copyMarkerCells(), oldGroup = new int[restored.size()]; Arrays.fill(oldGroup, -1);
 		for (int p = 0; p < originalMarkers.length; p++) oldGroup[nextMarkers[p]] = originalMarkers[p];
