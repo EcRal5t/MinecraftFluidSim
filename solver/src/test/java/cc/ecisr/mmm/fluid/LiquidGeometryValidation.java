@@ -377,17 +377,27 @@ final class LiquidGeometryValidation {
 			throw new AssertionError("Shared inventory erased distinct resolved control-volume velocities");
 		var fieldCopy = resolved.getFirst().copyVelocity(); fieldCopy[1] = 1;
 		if (resolved.getFirst().copyVelocity()[1] != -separation) throw new AssertionError("Geometric velocity snapshot exposed mutable state");
-		copied.liquidGeometryState = shear.geometry; FluidDomainStateMapper.capture(copied);
-		var motion = new LiquidGeometryMotionPlan(grouped, mesh, regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray(), field,
+		shear.publish(copied); FluidDomainStateMapper.capture(copied);
+		var motion = new LiquidGeometryMotionPlan(copied.liquidGeometryState, mesh, regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray(), field,
 				LiquidGeometryRefinement.children(root), 0.1, 4096, 128);
 		if (motion.geometry.markerCount() != 1 || motion.inventoryMotion.size() != 1) throw new AssertionError("Geometric motion duplicated inventory ownership");
 		var position = motion.inventoryMotion.getFirst();
 		moments(new LiquidPolyhedron.Moments(1, position.positionMetres().x(), position.positionMetres().y(), position.positionMetres().z()), 1, 0.375 * width + 0.0125, 0.3125 * width, 0.3125 * width);
 		if (!position.velocityMetresPerSecond().equals(new LiquidPolyhedron.Point(0.125, 0, 0))) throw new AssertionError("Inventory group lost its integrated momentum");
-		copied.liquidGeometryState = motion.geometry; copied.particles.setPositionX(0, (float) position.positionMetres().x());
-		copied.particles.setPositionY(0, (float) position.positionMetres().y()); copied.particles.setPositionZ(0, (float) position.positionMetres().z());
-		copied.particles.setVelocityX(0, (float) position.velocityMetresPerSecond().x());
-		FluidDomainStateMapper.capture(copied);
+		var beforeMotion = copied.exportParticleState(); int obstacle = copied.cellIndex(2, 1, 1);
+		copied.geometry.cutCells.replaceMask(obstacle, 1);
+		try { motion.publish(copied); throw new AssertionError("Geometric motion entered newly occupied collision space"); }
+		catch (IllegalArgumentException | IllegalStateException expected) { }
+		if (copied.liquidGeometryState != beforeMotion.liquidGeometry() || !java.util.Arrays.equals(beforeMotion.copyPositionVolume(), copied.exportParticleState().copyPositionVolume())
+				|| !java.util.Arrays.equals(beforeMotion.copyParticleVelocities(), copied.exportParticleState().copyParticleVelocities()))
+			throw new AssertionError("Rejected geometric collision changed the input geometry or observations");
+		copied.geometry.cutCells.replaceMask(obstacle, 0);
+		motion.publish(copied); FluidDomainStateMapper.capture(copied);
+		var submitted = copied.exportParticleState();
+		try { motion.publish(copied); throw new AssertionError("Obsolete geometric motion changed the next input"); }
+		catch (IllegalStateException expected) { }
+		if (copied.liquidGeometryState != submitted.liquidGeometry() || !java.util.Arrays.equals(submitted.copyPositionVolume(), copied.exportParticleState().copyPositionVolume()))
+			throw new AssertionError("Rejected geometric motion changed the submitted inventory");
 	}
 
 	private static void translationAcrossRefinementPreservesMoments() {
