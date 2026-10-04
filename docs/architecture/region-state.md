@@ -146,6 +146,8 @@ REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine
 
 所有 required payload 必须属于同一 region、dimension 和 generation。runtime handle、平滑 density、pressure、mesh 和 UI 读数不持久化。
 
+液体体积与材料质量总账从原始载体列精确求和，最后一次舍入为 binary64；区域总量、逐材料总量和 section 描述分别遵守同一规则。section 的已舍入小计用于核对该片载荷，区域总量仍由完整原始列推导。
+
 解析液体几何随库存载体保存为 manifest 扩展 `mmm:liquid_geometry`。它包含归一化根宽、控制体地址、精确整数顶点与支撑平面、面连接、片段平均速度，以及片段和原始 marker ordinal 的库存组关联。一个库存组可跨 section，占据多个互不相连的片段；section 仍按库存组质心归档点列，完整区域代次统一保存实际液体几何。
 
 几何扩展使用有长度上限的规范二进制编码，纳入 manifest 校验和。读取时先按原始 ordinal 组装载体列，再校验几何封闭性、正体积、片段互不重叠、实际碰撞开放空间、精确库存体积、空间一阶矩和质量加权动量。质心与 marker 速度的 binary32 舍入误差分别核对。几何与库存不一致时，恢复在激活求解器前失败。

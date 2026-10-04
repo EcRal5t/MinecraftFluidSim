@@ -2,6 +2,7 @@ package cc.ecisr.mmm.simulation.persistence;
 
 import cc.ecisr.mmm.model.region.RegionManifest;
 import cc.ecisr.mmm.model.region.RegionSectionState;
+import cc.ecisr.mmm.units.SignedDyadic;
 import java.io.IOException;
 import java.util.List;
 
@@ -62,8 +63,23 @@ final class RegionParticleReconstruction {
 				chemicalMixtureIndex, indicator);
 	}
 
-	private static double sumVolumes(float[] values) {
-		double sum = 0; for (int p = 3; p < values.length; p += 4) sum += values[p]; return sum;
+	static double sumVolumes(float[] values) {
+		var sum = SignedDyadic.ZERO;
+		for (int p = 3; p < values.length; p += 4) sum = sum.add(SignedDyadic.of(values[p]));
+		return sum.toDouble();
+	}
+	static List<RegionManifest.MaterialLedger> materialLedgers(float[] positions, double[] mass, int[] materials, int paletteSize) {
+		int[] count = new int[paletteSize]; var volumes = new SignedDyadic[paletteSize]; var masses = new SignedDyadic[paletteSize];
+		java.util.Arrays.fill(volumes, SignedDyadic.ZERO); java.util.Arrays.fill(masses, SignedDyadic.ZERO);
+		for (int p = 0; p < materials.length; p++) {
+			int material = materials[p]; if (material < 0 || material >= paletteSize) throw new IllegalArgumentException("Material palette index out of range");
+			count[material]++; volumes[material] = volumes[material].add(SignedDyadic.of(positions[4 * p + 3]));
+			masses[material] = masses[material].add(SignedDyadic.of(mass[p]));
+		}
+		var ledgers = new java.util.ArrayList<RegionManifest.MaterialLedger>();
+		for (int m = 0; m < paletteSize; m++) ledgers.add(new RegionManifest.MaterialLedger(count[m],
+				Double.doubleToRawLongBits(volumes[m].toDouble()), Double.doubleToRawLongBits(masses[m].toDouble())));
+		return List.copyOf(ledgers);
 	}
 	record State(
 			float[] positionVolume,

@@ -449,47 +449,15 @@ final class RegionCheckpointValidator {
 	}
 
 	private void validateMaterialLedgers() throws IOException {
-		int count = manifest.totalMarkerCount(), paletteSize = manifest.materialPalette().size();
-		double[] volumesByOrdinal = new double[count], massByOrdinal = new double[count];
-		int[] materialByOrdinal = new int[count];
-		boolean[] seen = new boolean[count];
-		for (RegionSectionState section : sections) {
-			int[] ordinals = section.markerOrdinals(), materials = section.materialPaletteIndex();
-			float[] positionVolume = section.positionVolume();
-			double[] mass = section.markerMass();
-			for (int marker = 0; marker < ordinals.length; marker++) {
-				int ordinal = ordinals[marker], material = materials[marker];
-				if (ordinal < 0 || ordinal >= count || seen[ordinal]) throw new IOException("Duplicate or invalid marker ordinal");
-				if (material < 0 || material >= paletteSize) throw new IOException("Material palette index out of range");
-				seen[ordinal] = true;
-				volumesByOrdinal[ordinal] = positionVolume[marker * 4 + 3];
-				massByOrdinal[ordinal] = mass[marker];
-				materialByOrdinal[ordinal] = material;
-			}
-		}
-		int[] markerCounts = new int[paletteSize];
-		double[] volumes = new double[paletteSize], masses = new double[paletteSize];
-		double totalVolume = 0.0, totalMass = 0.0;
-		for (int ordinal = 0; ordinal < count; ordinal++) {
-			if (!seen[ordinal]) throw new IOException("Missing marker ordinal");
-			int material = materialByOrdinal[ordinal];
-			markerCounts[material]++;
-			volumes[material] += volumesByOrdinal[ordinal];
-			masses[material] += massByOrdinal[ordinal];
-			totalVolume += volumesByOrdinal[ordinal];
-			totalMass += massByOrdinal[ordinal];
-		}
-		if (Double.doubleToRawLongBits(totalVolume) != manifest.totalVolumeBits()
-				|| Double.doubleToRawLongBits(totalMass) != manifest.totalMassBits()) {
+		if (Double.doubleToRawLongBits(SignedDyadic.sum(particleColumns.markerMass()).toDouble()) != manifest.totalMassBits()) {
 			throw new IOException("Material manifest total ledger mismatch");
 		}
-		for (int material = 0; material < paletteSize; material++) {
-			RegionManifest.MaterialLedger expected = manifest.materialLedgers().get(material);
-			if (expected.markerCount() != markerCounts[material]
-					|| expected.volumeBits() != Double.doubleToRawLongBits(volumes[material])
-					|| expected.massBits() != Double.doubleToRawLongBits(masses[material])) {
-				throw new IOException("Material marker ledger mismatch at palette index " + material);
-			}
+		try {
+			var actual = RegionParticleReconstruction.materialLedgers(particleColumns.positionVolume(), particleColumns.markerMass(),
+					particleColumns.materialPaletteIndex(), manifest.materialPalette().size());
+			if (!actual.equals(manifest.materialLedgers())) throw new IOException("Material marker ledger mismatch");
+		} catch (IllegalArgumentException invalid) {
+			throw new IOException("Invalid material marker ledger", invalid);
 		}
 	}
 
@@ -564,15 +532,11 @@ final class RegionCheckpointValidator {
 	}
 
 	private static double sumVolumes(float[] positionVolume) {
-		double result = 0.0;
-		for (int index = 3; index < positionVolume.length; index += 4) result += positionVolume[index];
-		return result;
+		return RegionParticleReconstruction.sumVolumes(positionVolume);
 	}
 
 	private static double sum(double[] values) {
-		double result = 0.0;
-		for (double value : values) result += value;
-		return result;
+		return SignedDyadic.sum(values).toDouble();
 	}
 
 	private static double[] toDoubles(long[] bits) {

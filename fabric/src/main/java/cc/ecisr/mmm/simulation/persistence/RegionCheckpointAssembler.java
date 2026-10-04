@@ -415,33 +415,16 @@ public final class RegionCheckpointAssembler {
 
 	private static List<RegionManifest.MaterialLedger> materialLedgers(CapturedParticles particles) {
 		if (!particles.layout().hasMaterials()) return List.of();
-		int paletteSize = particles.materialPalette().size();
-		int[] markerCounts = new int[paletteSize];
-		double[] volumes = new double[paletteSize], masses = new double[paletteSize];
-		for (int ordinal = 0; ordinal < particles.particleCount(); ordinal++) {
-			int material = particles.materialPaletteIndex()[ordinal];
-			markerCounts[material]++;
-			volumes[material] += particles.positionVolume()[ordinal * 4 + 3];
-			masses[material] += particles.markerMass()[ordinal];
-		}
-		List<RegionManifest.MaterialLedger> result = new ArrayList<>(paletteSize);
-		for (int material = 0; material < paletteSize; material++) {
-			result.add(new RegionManifest.MaterialLedger(markerCounts[material], Double.doubleToRawLongBits(volumes[material]),
-					Double.doubleToRawLongBits(masses[material])));
-		}
-		return List.copyOf(result);
+		return RegionParticleReconstruction.materialLedgers(particles.positionVolume(), particles.markerMass(),
+				particles.materialPaletteIndex(), particles.materialPalette().size());
 	}
 
 	private static double sumVolumes(float[] positionVolume) {
-		double result = 0.0;
-		for (int index = 3; index < positionVolume.length; index += 4) result += positionVolume[index];
-		return result;
+		return RegionParticleReconstruction.sumVolumes(positionVolume);
 	}
 
 	private static double sum(double[] values) {
-		double result = 0.0;
-		for (double value : values) result += value;
-		return result;
+		return SignedDyadic.sum(values).toDouble();
 	}
 
 	private static double[] toDoubles(long[] bits) {

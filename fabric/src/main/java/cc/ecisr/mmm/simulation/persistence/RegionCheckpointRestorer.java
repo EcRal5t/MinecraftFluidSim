@@ -437,15 +437,7 @@ public final class RegionCheckpointRestorer {
 	}
 
 	private static double sumVolumes(float[] positionVolume) {
-		double result = 0.0;
-		for (int index = 3; index < positionVolume.length; index += 4) result += positionVolume[index];
-		return result;
-	}
-
-	private static double sum(double[] values) {
-		double result = 0.0;
-		for (double value : values) result += value;
-		return result;
+		return RegionParticleReconstruction.sumVolumes(positionVolume);
 	}
 
 	private static double[] toDoubles(long[] bits) {
