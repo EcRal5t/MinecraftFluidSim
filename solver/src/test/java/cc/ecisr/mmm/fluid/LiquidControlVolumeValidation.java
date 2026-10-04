@@ -20,7 +20,107 @@ final class LiquidControlVolumeValidation {
 		vanishingContactAreaRemovesInteractionContinuously();
 		movingSolidPressureClosesWorkAndImpulse();
 		sharedVelocityTrajectoriesCrossRefinementContinuously();
+		interfaceExtensionPreservesLiquidTracesAndGasVolume();
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
+	}
+
+	private static void interfaceExtensionPreservesLiquidTracesAndGasVolume() {
+		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);
+		var regions = LiquidPhasePartition.build(root, List.of(LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75)), 64);
+		int[] liquid = regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray();
+		for (double scale : new double[] {1, 0.125, 1.0 / 1024}) for (double speed : new double[] {0, 1}) {
+			var mesh = new LiquidControlVolumeMesh(regions.stream().map(LiquidPhasePartition.Region::cell).toList(), scale, 1000,
+					(c, surface) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+			double[] traces = new double[mesh.faces.size()], primary = new double[3 * regions.size()];
+			primary[0] = speed;
+			for (int f = 0; f < traces.length; f++) {
+				var face = mesh.faces.get(f);
+				if (liquid[face.first()] >= 0 || face.second() >= 0 && liquid[face.second()] >= 0) traces[f] = speed * face.surface().areaVector().x() / face.surface().area();
+			}
+			var extended = LiquidInterfaceVelocityExtension.extend(mesh, liquid, traces, primary, 1e-11, 512);
+			for (int f = 0; f < traces.length; f++) {
+				var face = mesh.faces.get(f); double expected = speed * face.surface().areaVector().x() / face.surface().area();
+				close(extended.normalVelocity()[f], expected, 1e-10, "Interface extension changed rigid translation");
+				if (liquid[face.first()] >= 0 || face.second() >= 0 && liquid[face.second()] >= 0)
+					if (extended.normalVelocity()[f] != traces[f]) throw new AssertionError("Interface extension changed a submitted liquid trace");
+			}
+			for (int c = 0; c < regions.size(); c++) for (int a = 0; a < 3; a++) close(extended.cellVelocity()[3 * c + a], a == 0 ? speed : 0,
+					1e-10, "Interface extension changed cell translation");
+			var velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extended.normalVelocity(), extended.cellVelocity());
+			var trajectory = new LiquidVelocityTrajectory(mesh, velocity); var start = new LiquidPolyhedron.Point(0.6 * scale, 0.45 * scale, 0.4 * scale);
+			for (double duration : new double[] {0, 1e-6 * scale, 0.3 * scale}) {
+				var moved = trajectory.advance(0, start, duration, 256);
+				for (int a = 0; a < 3; a++) close(moved.position().coordinate(a) / scale, start.coordinate(a) / scale + (a == 0 ? speed * duration / scale : 0),
+						1e-10, "Liquid characteristic failed across its free interface");
+				if (speed > 0 && duration == 0.3 * scale && liquid[moved.cell()] >= 0) throw new AssertionError("Liquid characteristic did not enter gas velocity support");
+			}
+		}
+		var sheet = cube.clip(0, 1, 0, 0.501).clip(0, -1, 0, -0.499);
+		var sealed = new ArrayList<LiquidPhasePartition.Region>();
+		var leaves = new ArrayList<LiquidGeometryRefinement.Cell>();
+		for (var parent : LiquidGeometryRefinement.children(root)) leaves.addAll(LiquidGeometryRefinement.children(parent));
+		for (var leaf : leaves) {
+			var local = sheet;
+			for (int a = 0; a < 3; a++) local = local.clip(a == 0 ? 1 : 0, a == 1 ? 1 : 0, a == 2 ? 1 : 0, leaf.minimum(a) + leaf.width())
+					.clip(a == 0 ? -1 : 0, a == 1 ? -1 : 0, a == 2 ? -1 : 0, -leaf.minimum(a));
+			sealed.addAll(LiquidPhasePartition.build(leaf, local.moments().volume() > 0 ? List.of(local) : List.of(), 16));
+		}
+		var mesh = new LiquidControlVolumeMesh(sealed.stream().map(LiquidPhasePartition.Region::cell).toList(), 1, 1000,
+				(c, surface) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+		int[] labels = sealed.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray();
+		double[] traces = new double[mesh.faces.size()], primary = new double[3 * sealed.size()];
+		for (int c = 0; c < sealed.size(); c++) if (labels[c] >= 0) primary[3 * c + 1] = mesh.cells.get(c).centroid().x() < 0.5 ? 0.05 : 0.15;
+		for (int f = 0; f < traces.length; f++) {
+			var face = mesh.faces.get(f);
+			if (face.second() >= 0 && (labels[face.first()] >= 0 || labels[face.second()] >= 0)) {
+				int source = labels[face.first()] >= 0 ? face.first() : face.second();
+				traces[f] = primary[3 * source + 1] * face.surface().areaVector().y() / face.surface().area();
+			}
+		}
+		var extended = LiquidInterfaceVelocityExtension.extend(mesh, labels, traces, primary, 1e-11, 512);
+		if (extended.iterations() == 0) throw new AssertionError("Nonuniform interface displacement did not redistribute gas extension flux");
+		double lowerMoment = 0, upperMoment = 0, lowerDisplacement = 0, upperDisplacement = 0;
+		for (int c = 0; c < sealed.size(); c++) if (labels[c] < 0) {
+			var cell = mesh.cells.get(c); double y = cell.centroid().y(), volume = cell.geometry().moments().volume();
+			double expected = y < 0.25 ? 0.4 : y > 0.75 ? -0.4 : 0;
+			close(extended.gasDilatation()[c], expected, 1e-10, "Closed gas velocity support lost its submitted volume displacement");
+			if (y < 0.5) { lowerMoment += volume * extended.cellVelocity()[3 * c + 1]; lowerDisplacement += volume * extended.gasDilatation()[c]; }
+			else { upperMoment += volume * extended.cellVelocity()[3 * c + 1]; upperDisplacement += volume * extended.gasDilatation()[c]; }
+			for (int f : mesh.cellFaces[c]) {
+				var face = mesh.faces.get(f); int neighbor = face.first() == c ? face.second() : face.first();
+				if (neighbor >= 0 && labels[neighbor] >= 0) {
+					if (extended.gasDilatation()[c] != 0) throw new AssertionError("Gas compression entered conservative liquid velocity support");
+					if (extended.normalVelocity()[f] != traces[f]) throw new AssertionError("Gas extension changed a submitted liquid trace");
+				}
+			}
+		}
+		close(lowerMoment, 0.0374, 1e-10, "Lower gas first moment does not match interface displacement");
+		close(upperMoment, 0.0374, 1e-10, "Upper gas first moment does not match interface displacement");
+		close(lowerDisplacement, 0.1, 1e-10, "Lower gas displacement does not close");
+		close(upperDisplacement, -0.1, 1e-10, "Upper gas displacement does not close");
+		var velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extended.normalVelocity(), extended.cellVelocity());
+		for (int c = 0; c < velocity.length; c++) for (var tetra : velocity[c].tetrahedra())
+			close(3 * tetra.isotropicGradient(), extended.gasDilatation()[c], 1e-9, "Extended tetrahedral velocity lost its prescribed gas dilatation");
+		var trajectory = new LiquidVelocityTrajectory(mesh, velocity);
+		var start = new LiquidPolyhedron.Point(0.375, 0.5005, 0.125);
+		int source = -1;
+		for (int c = 0; c < sealed.size(); c++) if (labels[c] >= 0 && mesh.cells.get(c).centroid().x() == 0.375
+				&& mesh.cells.get(c).centroid().y() > 0.5 && mesh.cells.get(c).centroid().z() == 0.125) source = c;
+		if (source < 0) throw new AssertionError("Missing resolved liquid support");
+		var moved = trajectory.advance(source, start, 0.05, 256);
+		if (labels[moved.cell()] >= 0 || extended.gasDilatation()[moved.cell()] != 0)
+			throw new AssertionError("Moving liquid interface entered gas compression support");
+		var coarse = LiquidPhasePartition.build(root, List.of(sheet), 16);
+		var unresolved = new LiquidControlVolumeMesh(coarse.stream().map(LiquidPhasePartition.Region::cell).toList(), 1, 1000,
+				(c, surface) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+		double[] coarseTraces = new double[unresolved.faces.size()], coarseVelocity = new double[3 * coarse.size()]; coarseVelocity[1] = 0.1;
+		for (int f = 0; f < coarseTraces.length; f++) if (unresolved.faces.get(f).second() >= 0)
+			coarseTraces[f] = 0.1 * unresolved.faces.get(f).surface().areaVector().y() / unresolved.faces.get(f).surface().area();
+		try {
+			LiquidInterfaceVelocityExtension.extend(unresolved, coarse.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray(), coarseTraces, coarseVelocity, 1e-11, 512);
+			throw new AssertionError("Unresolved gas compression was allowed into liquid transport support");
+		} catch (IllegalStateException expected) { }
 	}
 
 	private static void finiteGasPressureSharesLiquidProjection() {
@@ -280,6 +380,9 @@ final class LiquidControlVolumeValidation {
 	private static void close(double actual, double expected, double tolerance) {
 		if (!Double.isFinite(actual) || Math.abs(actual - expected) > tolerance)
 			throw new AssertionError("Liquid control-volume value: actual=" + actual + " expected=" + expected);
+	}
+	private static void close(double actual, double expected, double tolerance, String message) {
+		if (!(Math.abs(actual - expected) <= tolerance)) throw new AssertionError(message + ": actual=" + actual + " expected=" + expected);
 	}
 	public static void main(String[] args) { validate(); }
 }

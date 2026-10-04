@@ -5,7 +5,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 
-/** Raviart-Thomas reconstruction: one normal trace on each shared face and zero tetrahedral divergence. */
+/** Raviart-Thomas reconstruction with shared normal traces and uniform control-volume divergence. */
 final class LiquidControlVolumeVelocity {
 	record Tetrahedron(List<LiquidPolyhedron.Point> vertices, LiquidPolyhedron.Point velocity, double volume, double isotropicGradient,
 			int boundaryFace, List<Double> outwardFlux) {
