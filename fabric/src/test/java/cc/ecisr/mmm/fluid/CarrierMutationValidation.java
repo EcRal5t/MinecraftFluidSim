@@ -91,6 +91,12 @@ public final class CarrierMutationValidation {
 			require(limited.particles.count() == 1 && limited.carrierMutationRevision() == revision && limited.liquidGeometryState == geometry,
 					"native geometric preflight rejection changed inventory or geometry");
 		}
+		domain.removeAllWaterExact();
+		require(domain.liquidGeometryState != null && domain.liquidGeometryState.cells().isEmpty()
+				&& domain.liquidGeometryState.markerCount() == 0 && domain.totalChemicalSpeciesQuanta() == 0,
+				"liquid clear retained native occupied geometry or side inventory");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "native liquid clear lost its thermal sink");
 	}
 
 	private static void insertionNeverRoundsTheRequestUp() {

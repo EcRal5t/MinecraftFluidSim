@@ -135,8 +135,11 @@ final class CarrierMutationCoordinator {
 	/** Clears the liquid marker column together with its chemistry column after a validated plan. */
 	void clearLiquidMarkers(CarrierMutationPlan plan) {
 		verify(plan, CarrierMutationPlan.Kind.WHOLESALE_COUNT);
+		var emptyGeometry = domain.liquidGeometryState == null ? null
+				: new LiquidGeometryState(domain.liquidGeometryState.rootWidthMetres(), java.util.List.of(), new int[0]);
 		if (domain.chemicalParcels != null) domain.chemicalParcels.clear(domain.particles.count());
 		domain.particles.setCount(0);
+		domain.liquidGeometryState = emptyGeometry;
 		domain.bumpCarrierMutationRevision();
 		domain.gridDirty = true;
 	}
