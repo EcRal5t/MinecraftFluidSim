@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.List;
-import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 
 /** Equal exact RT coefficients coalesce within a convex cell without changing the velocity field. */
@@ -59,6 +59,6 @@ final class LiquidVelocityRegions {
 	}
 	List<Region> cells(int cell) { return cells.get(cell); }
 	private static boolean incompressible(LiquidVelocityTrajectory.Piece piece) {
-		var sum = SignedDyadic.ZERO; for (var rate : piece.tetra.outwardFlux()) sum = sum.add(rate); return sum.signum() == 0;
+		var sum = Fraction.ZERO; for (var rate : piece.tetra.outwardFlux()) sum = sum.add(rate); return sum.signum() == 0;
 	}
 }

@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
-import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import java.util.Arrays;
 
 /** Local RT kinetic energy minimized within the exact tetrahedral continuity constraints. */
@@ -8,20 +8,20 @@ final class ConservativeTetrahedralFlux {
 	private final int[][] faces, sign;
 	private final double[][][] mass;
 	private final ConservativeFluxCoordinates coordinates;
-	private final SignedDyadic[] source;
+	private final Fraction[] source;
 	private final double[] observedSource;
 	ConservativeTetrahedralFlux(int[][] faces, int[][] sign, double[][][] mass, int[] first, int[] second,
-			SignedDyadic[] fixed, SignedDyadic[] source) {
+			Fraction[] fixed, Fraction[] source) {
 		this.faces = faces; this.sign = sign; this.mass = mass; this.source = Arrays.copyOf(source, source.length + 1);
-		this.source[source.length] = SignedDyadic.ZERO; observedSource = new double[this.source.length];
+		this.source[source.length] = Fraction.ZERO; observedSource = new double[this.source.length];
 		for (int c = 0; c < source.length; c++) observedSource[c] = source[c].toDouble();
 		boolean[] constrained = new boolean[this.source.length]; Arrays.fill(constrained, 0, source.length, true);
 		coordinates = new ConservativeFluxCoordinates(constrained.length, first, second, constrained, fixed);
 	}
-	SignedDyadic[] solve(SignedDyadic[][] target) {
-		int n = coordinates.size(); var zero = new SignedDyadic[n]; Arrays.fill(zero, SignedDyadic.ZERO);
+	Fraction[] solve(Fraction[][] target) {
+		int n = coordinates.size(); var zero = new Fraction[n]; Arrays.fill(zero, Fraction.ZERO);
 		coordinates.liftExact(zero, source);
-		var reference = new SignedDyadic[n];
+		var reference = new Fraction[n];
 		for (int t = 0; t < faces.length; t++) for (int i = 0; i < 4; i++) if (sign[t][i] > 0)
 			for (int c = 0; c < n; c++) if (coordinates.face(c) == faces[t][i]) reference[c] = target[t][i];
 		var initial = coordinates.liftExact(reference, source); double[] particular = new double[initial.length], gradient = particular.clone(), error = gradient.clone();
@@ -40,8 +40,8 @@ final class ConservativeTetrahedralFlux {
 			var values = coordinates.transpose(multiply(coordinates.lift(basis, observedSource, false)));
 			for (int row = 0; row < n; row++) matrix[row][column] = values[row];
 		}
-		var solution = stationary ? new double[n] : solve(matrix, rhs); var exact = new SignedDyadic[n];
-		for (int i = 0; i < n; i++) exact[i] = reference[i].add(SignedDyadic.of(solution[i]));
+		var solution = stationary ? new double[n] : solve(matrix, rhs); var exact = new Fraction[n];
+		for (int i = 0; i < n; i++) exact[i] = reference[i].add(Fraction.of(solution[i]));
 		return coordinates.liftExact(exact, source);
 	}
 	private double[] multiply(double[] value) {

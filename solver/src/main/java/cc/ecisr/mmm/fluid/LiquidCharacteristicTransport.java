@@ -103,7 +103,7 @@ final class LiquidCharacteristicTransport {
 			mappedVolume += geometry.moments().volume(); bound += integrationBound(geometry);
 		}
 		if (Math.abs(mappedVolume - source.moments().volume()) > bound) throw new IllegalStateException("Liquid characteristic image exceeds its incompressible integration error");
-		var allocation = ExactVolumeAllocation.allocateRate(inventory, weights).values(); var result = new ArrayList<Fragment>();
+		var allocation = ExactVolumeAllocation.allocateContinuous(inventory, weights).values(); var result = new ArrayList<Fragment>();
 		for (int i = 0; i < moved.size(); i++) {
 			if (allocation[i].signum() <= 0) throw new IllegalStateException("Characteristic inventory exceeds its fragment allocation resolution");
 			result.add(new Fragment(geometries.get(i), allocation[i]));

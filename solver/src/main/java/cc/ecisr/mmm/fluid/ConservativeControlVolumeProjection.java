@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
-import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import java.util.Arrays;
 import java.util.List;
 
@@ -15,7 +15,7 @@ final class ConservativeControlVolumeProjection {
 	private final ControlVolumeFluxMetric[] metrics;
 	private final ConservativeFluxCoordinates coordinates;
 	private final double[] zeroSource;
-	private final SignedDyadic[] exactZeroSource;
+	private final Fraction[] exactZeroSource;
 
 	ConservativeControlVolumeProjection(List<LiquidControlVolumeProjection.Cell> cells, List<LiquidControlVolumeProjection.Face> faces,
 			List<LiquidControlVolumeProjection.GasNode> nodes, int[] faceNode) {
@@ -23,14 +23,14 @@ final class ConservativeControlVolumeProjection {
 		this.cells = List.copyOf(cells); this.faces = List.copyOf(faces); this.nodes = List.copyOf(nodes); this.faceNode = faceNode.clone();
 		int n = cells.size(), vertices = n + nodes.size() + 1; int[] first = new int[faces.size()], second = first.clone(), root = new int[n];
 		for (int c = 0; c < n; c++) root[c] = c;
-		SignedDyadic[] fixed = new SignedDyadic[faces.size()]; boolean[] constrained = new boolean[vertices]; Arrays.fill(constrained, 0, n, true);
+		Fraction[] fixed = new Fraction[faces.size()]; boolean[] constrained = new boolean[vertices]; Arrays.fill(constrained, 0, n, true);
 		for (int f = 0; f < faces.size(); f++) {
 			var face = faces.get(f); int node = faceNode[f];
 			if (face.first() >= n || face.second() >= n || node < -1 || node >= nodes.size() || node >= 0 && face.second() != -1)
 				throw new IllegalArgumentException("Invalid conservative pressure face support");
 			first[f] = face.first(); second[f] = face.second() >= 0 ? face.second() : node >= 0 ? n + node : vertices - 1;
 			if (face.second() >= 0) root[find(root, face.second())] = find(root, face.first());
-			if (face.second() == -2) fixed[f] = SignedDyadic.of(face.surface().area() * face.prescribed());
+			if (face.second() == -2) fixed[f] = Fraction.of(face.surface().area() * face.prescribed());
 		}
 		reference = new double[n]; boolean[] prescribed = new boolean[n];
 		for (var face : faces) if (face.second() == -1) {
@@ -38,7 +38,7 @@ final class ConservativeControlVolumeProjection {
 		}
 		for (int c = 0; c < n; c++) reference[c] = reference[find(root, c)];
 		coordinates = new ConservativeFluxCoordinates(vertices, first, second, constrained, fixed);
-		zeroSource = new double[vertices]; exactZeroSource = new SignedDyadic[vertices]; Arrays.fill(exactZeroSource, SignedDyadic.ZERO);
+		zeroSource = new double[vertices]; exactZeroSource = new Fraction[vertices]; Arrays.fill(exactZeroSource, Fraction.ZERO);
 		vertexVolume = new double[vertices]; Arrays.fill(vertexVolume, Double.POSITIVE_INFINITY);
 		var gradients = ControlVolumeGradient.build(cells, faces); metrics = new ControlVolumeFluxMetric[n];
 		for (int c = 0; c < n; c++) { metrics[c] = new ControlVolumeFluxMetric(gradients[c], cells.get(c).density()); vertexVolume[c] = gradients[c].volume; }
@@ -55,9 +55,9 @@ final class ConservativeControlVolumeProjection {
 		double[][] predictor = new double[cells.size()][], predictorError = new double[cells.size()][];
 		for (int c = 0; c < cells.size(); c++) {
 			var g = metrics[c].geometry; predictor[c] = new double[g.indices.length]; predictorError[c] = predictor[c].clone();
-			for (int i = 0; i < g.indices.length; i++) for (int a = 0; a < 3; a++) {
-				double term = g.sign[i] * faces.get(g.indices[i]).surface().areaVector().coordinate(a) * predicted[3 * c + a];
-				predictor[c][i] += term; predictorError[c][i] += Math.ulp(term) + Math.ulp(predictor[c][i]);
+			for (int i = 0; i < g.indices.length; i++) {
+				var rate = faceRate(faces.get(g.indices[i]), predicted, c); if (g.sign[i] < 0) rate = rate.negate();
+				predictor[c][i] = rate.rounded(); predictorError[c][i] = Math.ulp(predictor[c][i]);
 			}
 		}
 		double[] storage = new double[nodes.size()], faceWeight = new double[faces.size()];
@@ -68,19 +68,17 @@ final class ConservativeControlVolumeProjection {
 		for (var metric : metrics) for (int i = 0; i < metric.geometry.indices.length; i++) faceWeight[metric.geometry.indices[i]] += metric.matrix[i][i];
 		for (int f = 0; f < faceWeight.length; f++) if (faceNode[f] >= 0) faceWeight[f] += storage[faceNode[f]];
 		double[] diagonal = coordinates.cycleWeights(faceWeight), support = coordinates.cycleMinimum(vertexVolume), variable = new double[coordinates.size()];
-		SignedDyadic[] initial = new SignedDyadic[variable.length]; Arrays.fill(initial, SignedDyadic.ZERO); coordinates.liftExact(initial, exactZeroSource);
-		var evaluation = evaluate(coordinates.lift(variable, zeroSource, true), coordinates.liftError(variable, zeroSource, true), predictor, predictorError, storage, dt);
+		Fraction[] initial = new Fraction[variable.length]; Arrays.fill(initial, Fraction.ZERO); var offset = new ConservativeFluxOffset(coordinates, initial, exactZeroSource);
+		var evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt);
 		double[] residual = negate(coordinates.transpose(evaluation.gradient));
 		var primaryReference = new double[predicted.length];
 		// Choose a feasible kinetic predictor when the zero-rate state has a resolved variational force.
 		// A numerically certified stationary zero state retains its exact rates.
 		if (!converged(residual, coordinates.transposeError(evaluation.gradient, evaluation.error), diagonal, support, 0)) {
 			System.arraycopy(predicted, 0, primaryReference, 0, predicted.length);
-			for (int i = 0; i < variable.length; i++) {
-				var face = faces.get(coordinates.face(i)); var area = face.surface().areaVector();
-				for (int a = 0; a < 3; a++) variable[i] += area.coordinate(a) * predicted[3 * face.first() + a];
-			}
-			evaluation = evaluate(coordinates.lift(variable, zeroSource, true), coordinates.liftError(variable, zeroSource, true), predictor, predictorError, storage, dt);
+			for (int i = 0; i < variable.length; i++) { var face = faces.get(coordinates.face(i)); initial[i] = faceRate(face, predicted, face.first()); }
+			offset = new ConservativeFluxOffset(coordinates, initial, exactZeroSource);
+			evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt);
 			residual = negate(coordinates.transpose(evaluation.gradient));
 		}
 		double[] direction = residual.clone(); double rz = 0;
@@ -94,18 +92,22 @@ final class ConservativeControlVolumeProjection {
 			var product = coordinates.transpose(evaluate(coordinates.lift(direction, zeroSource, false), null, null, null, storage, 0).gradient);
 			double denominator = dot(direction, product); if (!(denominator > 0) || !Double.isFinite(denominator)) throw new IllegalStateException("Invalid conservative pressure search direction");
 			double alpha = rz / denominator; for (int i = 0; i < variable.length; i++) variable[i] += alpha * direction[i];
-			evaluation = evaluate(coordinates.lift(variable, zeroSource, true), coordinates.liftError(variable, zeroSource, true), predictor, predictorError, storage, dt);
+			evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt);
 			residual = negate(coordinates.transpose(evaluation.gradient)); double next = 0;
 			for (int i = 0; i < residual.length; i++) next += residual[i] * residual[i] / diagonal[i];
 			for (int i = 0; i < direction.length; i++) direction[i] = residual[i] / diagonal[i] + next / rz * direction[i]; rz = next;
 		}
-		SignedDyadic[] exactVariables = new SignedDyadic[variable.length]; for (int i = 0; i < variable.length; i++) exactVariables[i] = SignedDyadic.of(variable[i]);
-		var rates = coordinates.liftExact(exactVariables, exactZeroSource); double[] flow = new double[rates.length], conversionError = flow.clone();
+		var rates = offset.exact(variable); double[] flow = new double[rates.length], conversionError = flow.clone();
 		for (int f = 0; f < flow.length; f++) { flow[f] = rates[f].toDouble(); conversionError[f] = flow[f] == 0 ? 0 : Math.ulp(flow[f]); }
 		evaluation = evaluate(flow, conversionError, predictor, predictorError, storage, dt);
 		if (!converged(negate(coordinates.transpose(evaluation.gradient)), coordinates.transposeError(evaluation.gradient, evaluation.error), diagonal, support, tolerance))
 			throw new IllegalStateException("Exact conservative rates exceed pressure solve accuracy");
 		return result(predicted, primaryReference, rates, flow, conversionError, evaluation, dt, iterations, tolerance);
+	}
+
+	private static Fraction faceRate(LiquidControlVolumeProjection.Face face, double[] velocity, int cell) {
+		var rate = Fraction.ZERO;
+		for (int a = 0; a < 3; a++) rate = rate.add(face.areaVector().get(a).multiply(Fraction.of(velocity[3 * cell + a]))); return rate;
 	}
 
 	private Evaluation evaluate(double[] flow, double[] flowError, double[][] predictor, double[][] predictorError, double[] storage, double dt) {
@@ -139,11 +141,11 @@ final class ConservativeControlVolumeProjection {
 		return new Evaluation(gradient, error, dual);
 	}
 
-	private LiquidControlVolumeProjection.Result result(double[] predicted, double[] primaryReference, SignedDyadic[] rates, double[] flow, double[] conversionError,
+	private LiquidControlVolumeProjection.Result result(double[] predicted, double[] primaryReference, Fraction[] rates, double[] flow, double[] conversionError,
 			Evaluation evaluation, double dt, int iterations, double tolerance) {
 		double[] pressure = new double[cells.size()], primary = primaryReference.clone(), normal = new double[faces.size()];
 		double[] gasPressure = new double[nodes.size()], gasChange = gasPressure.clone(), pressureChange = gasPressure.clone(), boundaryPressure = normal.clone();
-		SignedDyadic[] gasRate = new SignedDyadic[nodes.size()]; Arrays.fill(gasRate, SignedDyadic.ZERO);
+		Fraction[] gasRate = new Fraction[nodes.size()]; Arrays.fill(gasRate, Fraction.ZERO);
 		for (int f = 0; f < rates.length; f++) if (faceNode[f] >= 0) gasRate[faceNode[f]] = gasRate[faceNode[f]].add(rates[f]);
 		for (int node = 0; node < nodes.size(); node++) {
 			double rate = gasRate[node].toDouble(); gasChange[node] = -dt * rate;
@@ -154,7 +156,7 @@ final class ConservativeControlVolumeProjection {
 			var metric = metrics[c]; var g = metric.geometry; pressure[c] = potential[c] / dt + reference[c]; double[] dualGradient = new double[3];
 			for (int i = 0; i < g.indices.length; i++) {
 				int f = g.indices[i];
-				double referenceRate = 0; for (int a = 0; a < 3; a++) referenceRate += faces.get(f).surface().areaVector().coordinate(a) * primaryReference[3 * c + a];
+				double referenceRate = faceRate(faces.get(f), primaryReference, c).rounded();
 				double correction = g.sign[i] * (flow[f] - referenceRate);
 				for (int a = 0; a < 3; a++) {
 					primary[3 * c + a] += g.displacement[i].coordinate(a) * correction / g.volume;

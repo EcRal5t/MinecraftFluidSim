@@ -3,7 +3,7 @@ package cc.ecisr.mmm.fluid;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 
 /** Pressure, viscous stress and interface motion share the same complete phase geometry. */
 final class LiquidPhaseMechanics {
@@ -74,7 +74,7 @@ final class LiquidPhaseMechanics {
 		var viscous = viscosity.advance(incoming, traces, dt, momentumTolerance, maximumIterations); var predictor = viscous.cellVelocity().clone();
 		for (int c = 0; c < liquidCells.length; c++) for (int a = 0; a < 3; a++) predictor[3 * c + a] += dt * acceleration[3 * liquidCells[c] + a];
 		var projected = projection.project(predictor, new LiquidPolyhedron.Point(0, 0, 0), dt, continuityTolerance, maximumIterations);
-		var rates = new SignedDyadic[mesh.faces.size()]; Arrays.fill(rates, SignedDyadic.ZERO); var primary = cellVelocity.clone();
+		var rates = new Fraction[mesh.faces.size()]; Arrays.fill(rates, Fraction.ZERO); var primary = cellVelocity.clone();
 		for (int c = 0; c < liquidCells.length; c++) System.arraycopy(projected.cellVelocity(), 3 * c, primary, 3 * liquidCells[c], 3);
 		for (int f = 0; f < faceIds.length; f++) rates[faceIds[f]] = faceSigns[f] > 0 ? projected.volumeRate()[f] : projected.volumeRate()[f].negate();
 		var extended = LiquidInterfaceVelocityExtension.extend(mesh, liquid, rates, primary, continuityTolerance, maximumIterations);

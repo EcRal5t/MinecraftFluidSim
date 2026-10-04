@@ -7,29 +7,26 @@ import java.util.Arrays;
 /** Positive largest-remainder allocation over the exact binary volume lattice. */
 final class ExactVolumeAllocation {
 	private ExactVolumeAllocation() { }
-	record RateShares(SignedDyadic[] values, int quantumExponent) { }
+	record InventoryShares(SignedDyadic[] values, int quantumExponent) { }
 
-	/** Signed rates retain representable proportions and bound the remaining rounding by one quantum. */
-	static RateShares allocateRate(SignedDyadic amount, SignedDyadic[] weights) {
+	/** Continuous binary inventory uses a quantum that retains every exactly representable share. */
+	static InventoryShares allocateContinuous(SignedDyadic amount, SignedDyadic[] weights) {
+		if (amount.signum() < 0) throw new IllegalArgumentException("Negative allocation inventory");
 		int supports = 0;
 		for (var weight : weights) { if (weight.signum() < 0) throw new IllegalArgumentException("Negative allocation weight"); if (weight.signum() > 0) supports++; }
-		if (amount.signum() == 0) { var values = new SignedDyadic[weights.length]; Arrays.fill(values, SignedDyadic.ZERO); return new RateShares(values, 0); }
-		if (supports == 0) throw new IllegalArgumentException("Rate allocation has no positive support");
-		var magnitude = amount.signum() > 0 ? amount : amount.negate();
-		int exponent = Math.addExact(magnitude.exponent(), magnitude.significand().bitLength() - 1);
-		int quantum = Math.min(magnitude.exponent(), exponent - 52 - (32 - Integer.numberOfLeadingZeros(supports - 1)));
+		if (amount.signum() == 0) { var values = new SignedDyadic[weights.length]; Arrays.fill(values, SignedDyadic.ZERO); return new InventoryShares(values, 0); }
+		if (supports == 0) throw new IllegalArgumentException("Inventory allocation has no positive support");
+		int exponent = Math.addExact(amount.exponent(), amount.significand().bitLength() - 1);
+		int quantum = Math.min(amount.exponent(), exponent - 52 - (32 - Integer.numberOfLeadingZeros(supports - 1)));
 		int weightExponent = Integer.MAX_VALUE; for (var weight : weights) if (weight.signum() > 0) weightExponent = Math.min(weightExponent, weight.exponent());
 		var integerWeights = new BigInteger[weights.length]; var total = BigInteger.ZERO;
 		for (int i = 0; i < weights.length; i++) { integerWeights[i] = units(weights[i], weightExponent); total = total.add(integerWeights[i]); }
 		for (var weight : integerWeights) if (weight.signum() > 0) {
-			var denominator = total.divide(total.gcd(magnitude.significand().multiply(weight)));
-			if (denominator.bitCount() == 1) quantum = Math.min(quantum, Math.subtractExact(magnitude.exponent(), denominator.bitLength() - 1));
+			var denominator = total.divide(total.gcd(amount.significand().multiply(weight)));
+			if (denominator.bitCount() == 1) quantum = Math.min(quantum, Math.subtractExact(amount.exponent(), denominator.bitLength() - 1));
 		}
-		var values = allocate(magnitude, weights, quantum);
-		if (amount.signum() < 0) for (int i = 0; i < values.length; i++) values[i] = values[i].negate();
-		return new RateShares(values, quantum);
+		return new InventoryShares(allocate(amount, weights, quantum), quantum);
 	}
-
 	/** Explicit output quantum bounds proportional-allocation error by one binary unit per support. */
 	static SignedDyadic[] allocate(SignedDyadic amount, SignedDyadic[] weights, int unitExponent) {
 		if (amount.signum() < 0 || amount.signum() != 0 && unitExponent > amount.exponent())

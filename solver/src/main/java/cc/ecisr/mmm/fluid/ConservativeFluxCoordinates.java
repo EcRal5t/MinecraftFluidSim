@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
-import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import java.util.ArrayList;
 import java.util.Arrays;
 
@@ -9,10 +9,10 @@ final class ConservativeFluxCoordinates {
 	private final int vertices;
 	private final int[] first, second, parent, parentFace, order, independent;
 	private final boolean[] constrained;
-	private final SignedDyadic[] fixed;
+	private final Fraction[] fixed;
 
 	/** A null fixed entry denotes a free face. Unconstrained vertices carry prescribed-pressure or compliant gas nodes. */
-	ConservativeFluxCoordinates(int vertices, int[] first, int[] second, boolean[] constrained, SignedDyadic[] fixed) {
+	ConservativeFluxCoordinates(int vertices, int[] first, int[] second, boolean[] constrained, Fraction[] fixed) {
 		if (vertices < 1 || first.length != second.length || first.length != fixed.length || constrained.length != vertices)
 			throw new IllegalArgumentException("Invalid conservative flux graph");
 		this.vertices = vertices; this.first = first.clone(); this.second = second.clone();
@@ -63,13 +63,13 @@ final class ConservativeFluxCoordinates {
 	}
 
 	/** Every constrained vertex satisfies sum(outgoing volume rates) == source exactly. */
-	SignedDyadic[] liftExact(SignedDyadic[] coordinates, SignedDyadic[] source) {
+	Fraction[] liftExact(Fraction[] coordinates, Fraction[] source) {
 		if (coordinates.length != size() || source.length != vertices) throw new IllegalArgumentException("Invalid exact flux coordinates");
-		SignedDyadic[] result = new SignedDyadic[first.length], balance = new SignedDyadic[vertices];
-		Arrays.fill(result, SignedDyadic.ZERO);
+		Fraction[] result = new Fraction[first.length], balance = new Fraction[vertices];
+		Arrays.fill(result, Fraction.ZERO);
 		for (int v = 0; v < vertices; v++) {
 			if (source[v] == null) throw new IllegalArgumentException("Absent flux volume source");
-			balance[v] = constrained[v] ? source[v] : SignedDyadic.ZERO;
+			balance[v] = constrained[v] ? source[v] : Fraction.ZERO;
 		}
 		for (int c = 0; c < independent.length; c++) {
 			if (coordinates[c] == null) throw new IllegalArgumentException("Absent flux coordinate");
@@ -121,7 +121,7 @@ final class ConservativeFluxCoordinates {
 		return result;
 	}
 
-	/** Forward error for the tree evaluation relative to the exact dyadic lift. */
+	/** Forward error for the tree evaluation relative to the exact rational lift. */
 	double[] liftError(double[] coordinates, double[] source, boolean particular) {
 		double[] result = new double[first.length], balance = new double[vertices], error = new double[vertices];
 		if (particular) for (int v = 0; v < vertices; v++) if (constrained[v]) {

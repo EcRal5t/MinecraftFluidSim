@@ -55,13 +55,13 @@ final class LiquidControlVolumeValidation {
 	}
 
 	private static void conservativeCoordinatesPreserveConstraintsAndVirtualWork() {
-		var zero = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		var zero = LiquidExactPolygon.Fraction.ZERO;
 		int[] first = {0, 1, 2, 0, 0, 1, 2}, second = {1, 2, 0, 3, 4, 4, 4};
-		var fixed = new cc.ecisr.mmm.units.SignedDyadic[first.length]; fixed[6] = cc.ecisr.mmm.units.SignedDyadic.of(0.125);
+		var fixed = new LiquidExactPolygon.Fraction[first.length]; fixed[6] = LiquidExactPolygon.Fraction.of(0.125);
 		var basis = new ConservativeFluxCoordinates(5, first, second, new boolean[] {true, true, true, false, false}, fixed);
-		var source = new cc.ecisr.mmm.units.SignedDyadic[] {zero, zero, zero, zero, zero};
-		var exact = new cc.ecisr.mmm.units.SignedDyadic[basis.size()]; double[] variable = new double[basis.size()], dual = new double[first.length];
-		for (int c = 0; c < exact.length; c++) { exact[c] = cc.ecisr.mmm.units.SignedDyadic.of(c % 2 == 0 ? 1 : -1, -100 * c); variable[c] = Math.sin(c + 0.7); }
+		var source = new LiquidExactPolygon.Fraction[] {zero, zero, zero, zero, zero};
+		var exact = new LiquidExactPolygon.Fraction[basis.size()]; double[] variable = new double[basis.size()], dual = new double[first.length];
+		for (int c = 0; c < exact.length; c++) { exact[c] = new LiquidExactPolygon.Fraction(java.math.BigInteger.valueOf(c % 2 == 0 ? 1 : -1), java.math.BigInteger.ONE.shiftLeft(100 * c).multiply(java.math.BigInteger.valueOf(3))); variable[c] = Math.sin(c + 0.7); }
 		var rates = basis.liftExact(exact, source); var divergence = source.clone();
 		for (int f = 0; f < rates.length; f++) { divergence[first[f]] = divergence[first[f]].add(rates[f]); divergence[second[f]] = divergence[second[f]].subtract(rates[f]); dual[f] = Math.cos(f + 0.3); }
 		for (int c = 0; c < 3; c++) if (divergence[c].signum() != 0) throw new AssertionError("Flux coordinates lost continuity across disparate exact rates");
@@ -70,34 +70,39 @@ final class LiquidControlVolumeValidation {
 		for (int f = 0; f < dual.length; f++) firstWork += lifted[f] * dual[f];
 		for (int c = 0; c < variable.length; c++) secondWork += variable[c] * transpose[c];
 		close(firstWork, secondWork, 1e-14, "Conservative flux gradient changed virtual work");
-		var closed = new ConservativeFluxCoordinates(2, new int[] {0}, new int[] {1}, new boolean[] {true, true}, new cc.ecisr.mmm.units.SignedDyadic[] {fixed[6]});
+		var closed = new ConservativeFluxCoordinates(2, new int[] {0}, new int[] {1}, new boolean[] {true, true}, new LiquidExactPolygon.Fraction[] {fixed[6]});
 		try {
-			closed.liftExact(new cc.ecisr.mmm.units.SignedDyadic[0], new cc.ecisr.mmm.units.SignedDyadic[] {zero, zero});
+			closed.liftExact(new LiquidExactPolygon.Fraction[0], new LiquidExactPolygon.Fraction[] {zero, zero});
 			throw new AssertionError("Closed component accepted an incompatible prescribed volume rate");
 		} catch (IllegalArgumentException expected) { }
-		var compatible = closed.liftExact(new cc.ecisr.mmm.units.SignedDyadic[0], new cc.ecisr.mmm.units.SignedDyadic[] {fixed[6], fixed[6].negate()});
+		var compatible = closed.liftExact(new LiquidExactPolygon.Fraction[0], new LiquidExactPolygon.Fraction[] {fixed[6], fixed[6].negate()});
 		if (!compatible[0].equals(fixed[6])) throw new AssertionError("Prescribed volume source changed its compatible face rate");
+		exactInventoryAllocationPreservesShares();
+	}
+
+	private static void exactInventoryAllocationPreservesShares() {
+		var zero = cc.ecisr.mmm.units.SignedDyadic.ZERO;
 		var weights = new cc.ecisr.mmm.units.SignedDyadic[] {cc.ecisr.mmm.units.SignedDyadic.of(1), cc.ecisr.mmm.units.SignedDyadic.of(2), cc.ecisr.mmm.units.SignedDyadic.of(4)};
 		var shares = ExactVolumeAllocation.allocate(cc.ecisr.mmm.units.SignedDyadic.of(1), weights, -60); var total = zero;
 		for (int i = 0; i < shares.length; i++) {
 			total = total.add(shares[i]); var units = shares[i].significand().shiftLeft(shares[i].exponent() + 60);
 			var numeratorError = units.multiply(java.math.BigInteger.valueOf(7)).subtract(java.math.BigInteger.ONE.shiftLeft(60).multiply(java.math.BigInteger.valueOf(1 << i))).abs();
-			if (numeratorError.compareTo(java.math.BigInteger.valueOf(7)) >= 0) throw new AssertionError("Gas source allocation exceeded its declared quantum");
+			if (numeratorError.compareTo(java.math.BigInteger.valueOf(7)) >= 0) throw new AssertionError("Inventory allocation exceeded its declared quantum");
 		}
-		if (!total.equals(cc.ecisr.mmm.units.SignedDyadic.of(1))) throw new AssertionError("Gas source allocation lost component displacement");
+		if (!total.equals(cc.ecisr.mmm.units.SignedDyadic.of(1))) throw new AssertionError("Inventory allocation lost exact amount");
 		var wide = new cc.ecisr.mmm.units.SignedDyadic(java.math.BigInteger.ONE.shiftLeft(56).add(java.math.BigInteger.ONE), -60);
-		var equal = ExactVolumeAllocation.allocateRate(wide, new cc.ecisr.mmm.units.SignedDyadic[] {weights[0], weights[0]}).values();
+		var equal = ExactVolumeAllocation.allocate(wide, new cc.ecisr.mmm.units.SignedDyadic[] {weights[0], weights[0]}, wide.exponent() - 1);
 		var half = new cc.ecisr.mmm.units.SignedDyadic(wide.significand(), wide.exponent() - 1);
 		if (!equal[0].equals(half) || !equal[1].equals(half)) throw new AssertionError("Rate allocation rounded a representable exact proportion");
 	}
 
-	private static cc.ecisr.mmm.units.SignedDyadic[] faceRates(LiquidControlVolumeMesh mesh, double[] traces) {
-		var rates = new cc.ecisr.mmm.units.SignedDyadic[traces.length];
-		for (int f = 0; f < rates.length; f++) rates[f] = cc.ecisr.mmm.units.SignedDyadic.of(mesh.faces.get(f).surface().area() * traces[f]);
+	private static LiquidExactPolygon.Fraction[] faceRates(LiquidControlVolumeMesh mesh, double[] traces) {
+		var rates = new LiquidExactPolygon.Fraction[traces.length];
+		for (int f = 0; f < rates.length; f++) rates[f] = LiquidExactPolygon.Fraction.of(mesh.faces.get(f).surface().area() * traces[f]);
 		return rates;
 	}
 	private static void requireExactExtensionContinuity(LiquidControlVolumeMesh mesh, LiquidInterfaceVelocityExtension.Result result) {
-		var balance = new cc.ecisr.mmm.units.SignedDyadic[mesh.cells.size()]; java.util.Arrays.fill(balance, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+		var balance = new LiquidExactPolygon.Fraction[mesh.cells.size()]; java.util.Arrays.fill(balance, LiquidExactPolygon.Fraction.ZERO);
 		for (int f = 0; f < mesh.faces.size(); f++) {
 			var face = mesh.faces.get(f); balance[face.first()] = balance[face.first()].add(result.volumeRate()[f]);
 			if (face.second() >= 0) balance[face.second()] = balance[face.second()].subtract(result.volumeRate()[f]);
@@ -108,8 +113,8 @@ final class LiquidControlVolumeValidation {
 	}
 	private static void requireSharedVelocityTriangles(LiquidControlVolumeMesh mesh, LiquidControlVolumeVelocity.Result[] velocity) {
 		var first = new ArrayList<java.util.HashSet<List<LiquidPolyhedron.Point>>>(); var second = new ArrayList<java.util.HashSet<List<LiquidPolyhedron.Point>>>();
-		var firstFlow = new ArrayList<java.util.HashMap<List<LiquidPolyhedron.Point>, cc.ecisr.mmm.units.SignedDyadic>>();
-		var secondFlow = new ArrayList<java.util.HashMap<List<LiquidPolyhedron.Point>, cc.ecisr.mmm.units.SignedDyadic>>();
+		var firstFlow = new ArrayList<java.util.HashMap<List<LiquidPolyhedron.Point>, LiquidExactPolygon.Fraction>>();
+		var secondFlow = new ArrayList<java.util.HashMap<List<LiquidPolyhedron.Point>, LiquidExactPolygon.Fraction>>();
 		for (int f = 0; f < mesh.faces.size(); f++) { first.add(new java.util.HashSet<>()); second.add(new java.util.HashSet<>()); }
 		for (int f = 0; f < mesh.faces.size(); f++) { firstFlow.add(new java.util.HashMap<>()); secondFlow.add(new java.util.HashMap<>()); }
 		for (int c = 0; c < velocity.length; c++) for (var tetra : velocity[c].tetrahedra()) {
@@ -117,7 +122,7 @@ final class LiquidControlVolumeValidation {
 					.thenComparingDouble(LiquidPolyhedron.Point::y).thenComparingDouble(LiquidPolyhedron.Point::z));
 			int f = tetra.boundaryFace(); (mesh.faces.get(f).first() == c ? first : second).get(f).add(List.copyOf(key));
 			(mesh.faces.get(f).first() == c ? firstFlow : secondFlow).get(f).put(List.copyOf(key), tetra.outwardFlux().getFirst());
-			var balance = cc.ecisr.mmm.units.SignedDyadic.ZERO; for (var rate : tetra.outwardFlux()) balance = balance.add(rate);
+			var balance = LiquidExactPolygon.Fraction.ZERO; for (var rate : tetra.outwardFlux()) balance = balance.add(rate);
 			if (balance.signum() == 0) close(tetra.isotropicGradient(), 0, 0, "Incompressible tetrahedron acquired a dilatation");
 		}
 		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() >= 0) {
@@ -126,10 +131,10 @@ final class LiquidControlVolumeValidation {
 				throw new AssertionError("Shared velocity triangle lost its exact common volume rate");
 		}
 	}
-	private static void requireVelocityRateClosure(LiquidControlVolumeMesh mesh, cc.ecisr.mmm.units.SignedDyadic[] submitted,
+	private static void requireVelocityRateClosure(LiquidControlVolumeMesh mesh, LiquidExactPolygon.Fraction[] submitted,
 			LiquidControlVolumeVelocity.Result[] velocity) {
 		for (int c = 0; c < velocity.length; c++) {
-			var faces = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; java.util.Arrays.fill(faces, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+			var faces = new LiquidExactPolygon.Fraction[mesh.faces.size()]; java.util.Arrays.fill(faces, LiquidExactPolygon.Fraction.ZERO);
 			for (var tetra : velocity[c].tetrahedra()) faces[tetra.boundaryFace()] = faces[tetra.boundaryFace()].add(tetra.outwardFlux().getFirst());
 			for (int f : mesh.cellFaces[c]) if (!faces[f].equals(mesh.faces.get(f).first() == c ? submitted[f] : submitted[f].negate()))
 				throw new AssertionError("Tetrahedral reconstruction changed a submitted control-volume rate");
@@ -153,7 +158,7 @@ final class LiquidControlVolumeValidation {
 			}
 			var projected = new LiquidControlVolumeProjection(List.of(mesh.cells.getFirst()), pressureFaces)
 					.project(new double[3], new LiquidPolyhedron.Point(speed, 0, 0), 1, 1e-11, 128);
-			var submitted = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; java.util.Arrays.fill(submitted, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+			var submitted = new LiquidExactPolygon.Fraction[mesh.faces.size()]; java.util.Arrays.fill(submitted, LiquidExactPolygon.Fraction.ZERO);
 			double[] primary = new double[3 * regions.size()]; System.arraycopy(projected.cellVelocity(), 0, primary, 0, 3);
 			for (int i = 0; i < sharedFaces.size(); i++) {
 				int f = sharedFaces.get(i); submitted[f] = liquid[mesh.faces.get(f).first()] >= 0 ? projected.volumeRate()[i] : projected.volumeRate()[i].negate();
@@ -521,8 +526,8 @@ final class LiquidControlVolumeValidation {
 			throw new AssertionError("Liquid control-volume value: actual=" + actual + " expected=" + expected);
 	}
 	private static void requireExactContinuity(int count, List<LiquidControlVolumeProjection.Face> faces, LiquidControlVolumeProjection.Result result) {
-		var rates = result.volumeRate(); var divergence = new cc.ecisr.mmm.units.SignedDyadic[count];
-		java.util.Arrays.fill(divergence, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+		var rates = result.volumeRate(); var divergence = new LiquidExactPolygon.Fraction[count];
+		java.util.Arrays.fill(divergence, LiquidExactPolygon.Fraction.ZERO);
 		if (rates.length != faces.size()) throw new AssertionError("Conservative pressure returned incomplete face rates");
 		for (int f = 0; f < rates.length; f++) {
 			var face = faces.get(f); divergence[face.first()] = divergence[face.first()].add(rates[f]);

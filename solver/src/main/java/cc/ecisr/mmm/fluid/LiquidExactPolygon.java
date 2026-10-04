@@ -34,6 +34,7 @@ final class LiquidExactPolygon {
 	}
 	private final List<Vertex> vertices;
 	record Fraction(BigInteger numerator, BigInteger denominator) {
+		static final Fraction ZERO = new Fraction(BigInteger.ZERO, BigInteger.ONE);
 		Fraction {
 			if (denominator.signum() == 0) throw new IllegalArgumentException("Singular geometric fraction");
 			var divisor = numerator.abs().gcd(denominator.abs()); if (denominator.signum() < 0) divisor = divisor.negate();
@@ -45,10 +46,15 @@ final class LiquidExactPolygon {
 		Fraction subtract(Fraction other) { return add(other.negate()); }
 		Fraction divide(Fraction other) { return new Fraction(numerator.multiply(other.denominator), denominator.multiply(other.numerator)); }
 		double rounded() { return Vertex.ratio(numerator, denominator); }
+		double toDouble() { return rounded(); }
+		int signum() { return numerator.signum(); }
+		Fraction absolute() { return signum() < 0 ? negate() : this; }
+		static Fraction of(cc.ecisr.mmm.units.SignedDyadic value) {
+			return value.exponent() >= 0 ? new Fraction(value.significand().shiftLeft(value.exponent()), BigInteger.ONE)
+					: new Fraction(value.significand(), BigInteger.ONE.shiftLeft(-value.exponent()));
+		}
 		static Fraction of(double value) {
-			var dyadic = cc.ecisr.mmm.units.SignedDyadic.of(value);
-			return dyadic.exponent() >= 0 ? new Fraction(dyadic.significand().shiftLeft(dyadic.exponent()), BigInteger.ONE)
-					: new Fraction(dyadic.significand(), BigInteger.ONE.shiftLeft(-dyadic.exponent()));
+			return of(cc.ecisr.mmm.units.SignedDyadic.of(value));
 		}
 	}
 	private final List<BigInteger> normal;

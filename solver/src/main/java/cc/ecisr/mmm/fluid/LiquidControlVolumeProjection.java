@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
-import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import java.util.Arrays;
 import java.util.List;
 
@@ -57,7 +57,7 @@ final class LiquidControlVolumeProjection {
 			double[] gasPressure, double[] gasVolumeChange, LiquidPolyhedron.Point[] pressureGradient,
 			double[] cellVelocity, double pressureDissipationJoules, double boundaryWorkJoules,
 			LiquidPolyhedron.Point boundaryImpulse, double divergenceResidual, double divergenceRoundoffBound,
-			SignedDyadic[] volumeRate, double[] gasPressureChange) { }
+			Fraction[] volumeRate, double[] gasPressureChange) { }
 	private final ConservativeControlVolumeProjection projection;
 	LiquidControlVolumeProjection(List<Cell> cells, List<Face> faces) {
 		this(cells, faces, List.of(), fixedGasFaces(faces.size()));

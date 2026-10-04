@@ -49,7 +49,7 @@ final class LiquidGeometryRemap {
 			weights[i] = SignedDyadic.of(fragment.measure().moments().volume());
 		}
 		if (!measure.same(LiquidConvexRegion.of(moved).measure())) throw new IllegalStateException("Liquid remap lost exact geometric volume or first moments");
-		var allocated = ExactVolumeAllocation.allocateRate(inventory, weights).values();
+		var allocated = ExactVolumeAllocation.allocateContinuous(inventory, weights).values();
 		var result = new ArrayList<Fragment>(fragments.size());
 		for (int i = 0; i < fragments.size(); i++) {
 			var fragment = fragments.get(i);

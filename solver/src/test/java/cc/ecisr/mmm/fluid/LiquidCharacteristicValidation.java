@@ -16,11 +16,11 @@ final class LiquidCharacteristicValidation {
 		var left = new LiquidGeometryRefinement.Cell(1, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5));
 		var right = new LiquidGeometryRefinement.Cell(1, 1, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 0.5, 0.5));
 		var mesh = new LiquidControlVolumeMesh(List.of(left, right), 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
-		var rates = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; var velocity = new double[6]; velocity[3] = 0.125;
+		var rates = new LiquidExactPolygon.Fraction[mesh.faces.size()]; var velocity = new double[6]; velocity[3] = 0.125;
 		for (int f = 0; f < rates.length; f++) {
-			var face = mesh.faces.get(f); var normal = face.surface().areaVector(); rates[f] = cc.ecisr.mmm.units.SignedDyadic.ZERO;
-			if (normal.x() > 0) rates[f] = cc.ecisr.mmm.units.SignedDyadic.of(normal.x() * 0.125);
-			else if (face.first() == 0 && normal.y() > 0) rates[f] = cc.ecisr.mmm.units.SignedDyadic.of(-0.03125);
+			var face = mesh.faces.get(f); var normal = face.surface().areaVector(); rates[f] = LiquidExactPolygon.Fraction.ZERO;
+			if (normal.x() > 0) rates[f] = LiquidExactPolygon.Fraction.of(normal.x() * 0.125);
+			else if (face.first() == 0 && normal.y() > 0) rates[f] = LiquidExactPolygon.Fraction.of(-0.03125);
 		}
 		var trajectory = new LiquidVelocityTrajectory(mesh, LiquidControlVolumeVelocity.reconstruct(mesh, rates, velocity));
 		var support = new LiquidVelocityRegions(trajectory);
@@ -31,7 +31,28 @@ final class LiquidCharacteristicValidation {
 		for (var fragment : moved) { sum = sum.add(fragment.geometry().moments()); amount = amount.add(fragment.inventory()); }
 		if (!amount.equals(inventory)) throw new AssertionError("Mixed velocity support lost exact liquid inventory");
 		close(sum.volume(), source.moments().volume(), 1e-18); close(sum.centroid(0), source.moments().centroid(0) + 0.0125, 1e-15);
-		characteristicImageRebuildsSpace(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.5, 0.5)), moved);
+		var rebuilt = characteristicImageRebuildsSpace(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.5, 0.5)), moved);
+		mesh = rebuilt.mesh(); int count = mesh.cells.size(); var density = new double[count]; var viscosity = new double[count]; var nodes = new int[count];
+		java.util.Arrays.fill(density, 1000); java.util.Arrays.fill(viscosity, 0.001); java.util.Arrays.fill(nodes, -1);
+		var primary = new double[3 * count]; var traces = new double[3 * mesh.faces.size()];
+		for (int c = 0; c < count; c++) primary[3 * c] = 0.125;
+		for (int f = 0; f < mesh.faces.size(); f++) traces[3 * f] = 0.125;
+		var mechanics = new LiquidPhaseMechanics(mesh, rebuilt.labels(), density, viscosity, List.of(), nodes, (f, c) -> 0, FluidSolverConfig.WallCondition.FREE_SLIP);
+		var next = mechanics.advance(primary, traces, new double[3 * count], 0.025, 1e-11, 1e-11, 512);
+		var nextField = new LiquidVelocityTrajectory(mesh, next.velocity()); var nextSupport = new LiquidVelocityRegions(nextField);
+		for (int c = 0; c < count; c++) {
+			if (nextSupport.cells(c).size() != 1) throw new AssertionError("Uniform motion acquired artificial velocity variation after shear");
+			var u = nextSupport.cells(c).getFirst().velocity();
+			if (!u[0].equals(LiquidExactPolygon.Fraction.of(0.125)) || u[1].signum() != 0 || u[2].signum() != 0)
+				throw new AssertionError("Transported phase geometry lost exact uniform motion");
+		}
+		var nextTransport = new LiquidCharacteristicTransport(nextField);
+		for (int c = 0; c < moved.size(); c++) {
+			var fragment = moved.get(c); var image = nextTransport.advect(c, fragment.geometry(), fragment.inventory(), 0.025, 16384, 256);
+			if (image.size() != 1 || !image.getFirst().inventory().equals(fragment.inventory())) throw new AssertionError("Uniform motion changed transported phase inventory");
+			if (!LiquidConvexRegion.of(image.getFirst().geometry()).measure().same(LiquidConvexRegion.of(fragment.geometry().translated(0.003125, 0, 0)).measure()))
+				throw new AssertionError("Uniform motion changed transported phase spatial moments");
+		}
 	}
 	private static void thinLiquidLayerPreservesSeparateGasPressureNodes() {
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
@@ -90,10 +111,10 @@ final class LiquidCharacteristicValidation {
 		var regions = LiquidPhasePartition.build(root, List.of(drop), 64); var labels = regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray();
 		var mesh = new LiquidControlVolumeMesh(regions.stream().map(LiquidPhasePartition.Region::cell).toList(), 1, 1000,
 				(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
-		var rates = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; var primary = new double[3 * regions.size()]; primary[0] = 1;
+		var rates = new LiquidExactPolygon.Fraction[mesh.faces.size()]; var primary = new double[3 * regions.size()]; primary[0] = 1;
 		for (int f = 0; f < rates.length; f++) {
 			var face = mesh.faces.get(f); rates[f] = labels[face.first()] >= 0 || face.second() >= 0 && labels[face.second()] >= 0
-					? cc.ecisr.mmm.units.SignedDyadic.of(face.surface().areaVector().x()) : cc.ecisr.mmm.units.SignedDyadic.ZERO;
+					? LiquidExactPolygon.Fraction.of(face.surface().areaVector().x()) : LiquidExactPolygon.Fraction.ZERO;
 		}
 		var extension = LiquidInterfaceVelocityExtension.extend(mesh, labels, rates, primary, 1e-11, 512);
 		var transport = new LiquidCharacteristicTransport(new LiquidVelocityTrajectory(mesh,
@@ -108,11 +129,11 @@ final class LiquidCharacteristicValidation {
 		}
 		var cells = LiquidGeometryRefinement.children(root);
 		mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
-		rates = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; primary = new double[3 * cells.size()];
+		rates = new LiquidExactPolygon.Fraction[mesh.faces.size()]; primary = new double[3 * cells.size()];
 		for (int c = 0; c < cells.size(); c++) { primary[3 * c] = mesh.cells.get(c).centroid().y(); primary[3 * c + 1] = 0.1; }
 		for (int f = 0; f < rates.length; f++) {
 			var face = mesh.faces.get(f); var area = face.surface().areaVector();
-			rates[f] = cc.ecisr.mmm.units.SignedDyadic.of(area.x() * mesh.cells.get(face.first()).centroid().y() + area.y() * 0.1);
+			rates[f] = LiquidExactPolygon.Fraction.of(area.x() * mesh.cells.get(face.first()).centroid().y() + area.y() * 0.1);
 		}
 		transport = new LiquidCharacteristicTransport(new LiquidVelocityTrajectory(mesh, LiquidControlVolumeVelocity.reconstruct(mesh, rates, primary)));
 		var source = LiquidPolyhedron.box(0.1, 0.1, 0.1, 0.3, 0.49, 0.3); var inventory = cc.ecisr.mmm.units.SignedDyadic.of(source.moments().volume());
@@ -132,7 +153,8 @@ final class LiquidCharacteristicValidation {
 		close(moments.y(), expected.y(), 1e-14); close(moments.z(), expected.z(), 1e-14);
 		characteristicImageRebuildsSpace(root, moved);
 	}
-	private static void characteristicImageRebuildsSpace(LiquidGeometryRefinement.Cell root, List<LiquidCharacteristicTransport.Fragment> moved) {
+	private record RebuiltSpace(LiquidControlVolumeMesh mesh, int[] labels) { }
+	private static RebuiltSpace characteristicImageRebuildsSpace(LiquidGeometryRefinement.Cell root, List<LiquidCharacteristicTransport.Fragment> moved) {
 		var remap = new LiquidGeometryRemap(LiquidGeometryRefinement.children(root));
 		for (var fragment : moved) {
 			var partition = remap.partition(fragment.geometry(), fragment.inventory()); var inventory = cc.ecisr.mmm.units.SignedDyadic.ZERO;
@@ -154,6 +176,7 @@ final class LiquidCharacteristicValidation {
 				new LiquidPolyhedron.Point(0, 0, 0), 0.025, 1e-11, 512);
 		for (var rate : result.volumeRate()) if (rate.signum() != 0) throw new AssertionError("Transported geometry lost zero-force equilibrium");
 		var velocity = LiquidControlVolumeVelocity.reconstruct(mesh, result.volumeRate(), result.cellVelocity()); new LiquidVelocityTrajectory(mesh, velocity);
+		return new RebuiltSpace(mesh, regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray());
 	}
 
 	private static void close(double actual, double expected, double tolerance) {
