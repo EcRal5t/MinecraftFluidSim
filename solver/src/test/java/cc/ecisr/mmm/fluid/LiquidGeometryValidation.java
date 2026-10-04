@@ -45,6 +45,7 @@ final class LiquidGeometryValidation {
 		resolvedDomainUsesCollisionOpenSpace();
 		liquidSourcesUseExactOpenGeometry();
 		inventoryCentroidUsesResolvedCollisionSupport();
+		geometricSourceBatchPreservesActualCapacity();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
 	}
 	private static void inventoryCentroidUsesResolvedCollisionSupport() {
@@ -99,6 +100,33 @@ final class LiquidGeometryValidation {
 			new LiquidGeometrySourcePlan(java.util.List.of(open), volume.add(LiquidExactPolygon.Fraction.of(1e-30)), 256);
 			throw new AssertionError("Geometric source accepted more than the exact gas capacity");
 		} catch (IllegalStateException expected) { }
+	}
+	private static void geometricSourceBatchPreservesActualCapacity() {
+		var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults(), 4096);
+		domain.setVolume(1, 1, 1, 0.125F);
+		var left = new LiquidGeometryRefinement.Cell(2, 0, 1, 1, LiquidPolyhedron.box(0.125, 0.25, 0.25, 0.1875, 0.375, 0.375));
+		var right = new LiquidGeometryRefinement.Cell(2, 1, 1, 1, LiquidPolyhedron.box(0.4375, 0.25, 0.25, 0.5, 0.375, 0.375));
+		domain.liquidGeometryState = LiquidGeometryStateMapper.capture(java.util.List.of(left, right), 4 * (double) domain.config.cellSize(), new int[]{0}, new int[]{0, 0});
+		domain.geometry.cutCells.replaceMask(domain.cellIndex(1, 1, 1), 1);
+		var room = domain.availableCellVolumes();
+		if (room[domain.cellIndex(0, 1, 1)].toDouble() != 0.9375 || room[domain.cellIndex(1, 1, 1)].toDouble() != 0.8125)
+			throw new AssertionError("Native transfer capacity was derived from inventory centroid instead of occupied support");
+		if (domain.addVolumeNearBudgeted(1, 1, 1, 0.8125F, 0).addedVolume() != 0.8125F)
+			throw new AssertionError("Geometric source failed to use actual remaining open capacity");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		if (domain.availableCellVolumes()[domain.cellIndex(1, 1, 1)].signum() != 0 || domain.totalVolumeExact() != 0.9375)
+			throw new AssertionError("Source batch changed inventory or exceeded exact cell capacity");
+		var copied = FluidDomainStateMapper.restore(FluidDomainStateMapper.capture(domain));
+		if (copied.liquidGeometryState.markerCount() != domain.particles.count()) throw new AssertionError("Source batch lost geometry during candidate handoff");
+		var unchanged = domain.exportParticleState();
+		if (domain.addVolumeNearBudgeted(1, 1, 1, Float.MIN_VALUE, 0).addedVolume() != 0
+				|| !java.util.Arrays.equals(unchanged.copyPositionVolume(), domain.exportParticleState().copyPositionVolume()))
+			throw new AssertionError("Rejected source changed its native inventory");
+		var empty = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults(), 256);
+		empty.liquidGeometryState = new LiquidGeometryState(4 * (double) empty.config.cellSize(), java.util.List.of(), new int[0]);
+		if (empty.addVolumeNearBudgeted(1, 1, 1, Float.MIN_VALUE, 0).addedVolume() != Float.MIN_VALUE)
+			throw new AssertionError("Geometric source discarded a representable positive volume tail");
+		LiquidGeometryStateMapper.requireCompatible(empty.liquidGeometryState, empty);
 	}
 	private static void resolvedDomainUsesCollisionOpenSpace() {
 		var collision = new FlipCutCellGeometry(3, 2, 2);

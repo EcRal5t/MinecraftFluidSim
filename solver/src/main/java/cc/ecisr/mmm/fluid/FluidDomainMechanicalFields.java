@@ -414,6 +414,12 @@ void spawnParticle(
  int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
  ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal
  ) {
+	spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, chemicalMixture, indicator, thermalExternal, null);
+}
+void spawnParticle(
+ int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
+ ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal, LiquidPolyhedron.Point centroid
+ ) {
 if (particles.count() >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
 if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
 if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
@@ -435,7 +441,8 @@ if (cellZ == 0 || geometry.solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.
 if (cellZ + 1 == sizeZ || geometry.solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
 coordinator.appendMarker(
 CarrierMutationPlan.append(carrierMutationRevision(), particles.count()),
-cellIndex(cellX, cellY, cellZ), (cellX + ox) * h, (cellY + oy) * h, (cellZ + oz) * h,
+cellIndex(cellX, cellY, cellZ), centroid == null ? (cellX + ox) * h : (float) centroid.x(),
+centroid == null ? (cellY + oy) * h : (float) centroid.y(), centroid == null ? (cellZ + oz) * h : (float) centroid.z(),
 amount, materialHandle, mass, chemicalMixture, indicator, thermalExternal);
  }
 
@@ -628,6 +635,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 
 	/** Exact raw carrier capacity for transfer planning. */
 	cc.ecisr.mmm.units.SignedDyadic[] availableCellVolumes() {
+		if (liquidGeometryState != null) return LiquidGeometryInventoryCapacity.available(domain());
 		var exact = new cc.ecisr.mmm.units.SignedDyadic[cellCount];
 		Arrays.fill(exact, cc.ecisr.mmm.units.SignedDyadic.ZERO);
 		float h = config.cellSize();

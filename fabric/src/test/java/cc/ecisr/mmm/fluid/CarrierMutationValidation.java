@@ -26,6 +26,7 @@ public final class CarrierMutationValidation {
 		insertionNeverRoundsCapacityUp();
 		insertionNeverRoundsTheRequestUp();
 		independentWorkFinishesBeforeRejection();
+		nativeSourceBatchMovesGeometryAndSideColumns();
 		System.out.println("Carrier mutation validation passed");
 	}
 
@@ -52,6 +53,44 @@ public final class CarrierMutationValidation {
 		java.util.Arrays.fill(visits, 0);
 		cc.ecisr.mmm.compute.CpuWorkBatch.run(visits.length, (from, until) -> { for (int index = from; index < until; index++) { visits[index]++; } });
 		for (int visit : visits) require(visit == 1, "independent work missed or repeated an index after rejection");
+	}
+
+	private static void nativeSourceBatchMovesGeometryAndSideColumns() throws Exception {
+		var domain = fullCapabilityDomain(FullCapabilityTestFixture.load());
+		domain.liquidGeometryState = new LiquidGeometryState(2, java.util.List.of(), new int[0]);
+		int oil = domain.materialRegistry.handle("mmm:oil");
+		var source = java.util.List.of(new FluidDomain.MaterialPortion(0, 0.03125, 31.25),
+				new FluidDomain.MaterialPortion(oil, 0.03125, 0.03125 * domain.materialRegistry.material(oil).referenceDensity()));
+		require(domain.tryInsertExactMixture(1, 1, 1, source, 0, true).transferred(), "native material source was refused");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		var ledger = domain.chemicalLedgerForMarkerRange(0, domain.particles.count());
+		long species = domain.totalChemicalSpeciesQuanta();
+		var beforeEnergy = domain.exactInternalEnergy(); var beforeRoundoff = domain.thermalAudit().roundoffResidual();
+		double sourceEnergy = domain.thermalState.exactLiquidEnergy(domain.particles.count()).toDouble();
+		require(domain.tryInsertExactChemical(2, 1, 1, ledger, 0, true, sourceEnergy).transferred(), "native chemical source was refused");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		require(domain.totalChemicalSpeciesQuanta() == 2 * species && domain.totalVolumeExact() == 0.125,
+				"native source changed its exact species or volume allocation");
+		require(domain.exactInternalEnergy().subtract(beforeEnergy).subtract(cc.ecisr.mmm.units.SignedDyadic.of(sourceEnergy))
+				.equals(domain.thermalAudit().roundoffResidual().subtract(beforeRoundoff)), "native source energy or roundoff ledger did not close");
+		var captured = domain.captureAuthoritativeState(); var restored = FluidDomain.restoreAuthoritativeState(captured);
+		require(restored.liquidGeometryState.markerCount() == domain.particles.count()
+				&& restored.totalChemicalSpeciesQuanta() == domain.totalChemicalSpeciesQuanta()
+				&& restored.exactInternalEnergy().equals(domain.exactInternalEnergy()), "native source side columns lost candidate identity");
+		var limited = emptyMaterialDomain(1);
+		limited.liquidGeometryState = new LiquidGeometryState(2, java.util.List.of(), new int[0]);
+		require(limited.tryInsertExactMixture(1, 1, 1, java.util.List.of(new FluidDomain.MaterialPortion(0, 0.0625, 62.5)), 0, true).transferred()
+				&& limited.liquidGeometryState.cells().size() > limited.particles.count(), "geometry subdivision depended on inventory marker count");
+		LiquidGeometryStateMapper.requireCompatible(limited.liquidGeometryState, limited);
+		var geometry = limited.liquidGeometryState; long revision = limited.carrierMutationRevision();
+		try {
+			new LiquidGeometryInsertionPlan(geometry, limited.sizeX, limited.sizeY, limited.sizeZ, limited.config.cellSize(),
+					limited.geometry.cutCells.copyMicroMasks(), java.util.List.of(new LiquidGeometryInsertionPlan.Insertion(1, 1, 1, 0.03125F)), 1);
+			throw new AssertionError("native geometry source ignored its work budget");
+		} catch (IllegalStateException expected) {
+			require(limited.particles.count() == 1 && limited.carrierMutationRevision() == revision && limited.liquidGeometryState == geometry,
+					"native geometric preflight rejection changed inventory or geometry");
+		}
 	}
 
 	private static void insertionNeverRoundsTheRequestUp() {
