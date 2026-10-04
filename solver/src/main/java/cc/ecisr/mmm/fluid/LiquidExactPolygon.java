@@ -138,6 +138,7 @@ final class LiquidExactPolygon {
 		Measure(Fraction volume, Fraction[] moment) { this.volume = volume; this.moment = moment; }
 		int signum() { return volume.numerator.signum(); }
 		Fraction volume() { return volume; }
+		Fraction firstMoment(int axis) { return moment[axis]; }
 		Measure add(Measure other) {
 			return new Measure(volume.add(other.volume), new Fraction[] {moment[0].add(other.moment[0]), moment[1].add(other.moment[1]), moment[2].add(other.moment[2])});
 		}

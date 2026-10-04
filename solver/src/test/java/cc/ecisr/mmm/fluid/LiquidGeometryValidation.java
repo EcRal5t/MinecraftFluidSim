@@ -42,7 +42,45 @@ final class LiquidGeometryValidation {
 		affineCharacteristicsPreserveResolvedGeometry();
 		multipleFragmentsAndGasSpaceShareCompleteFaces();
 		phasePartitionPreservesSolidOpenGeometry();
+		resolvedDomainUsesCollisionOpenSpace();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static void resolvedDomainUsesCollisionOpenSpace() {
+		var collision = new FlipCutCellGeometry(3, 2, 2);
+		var liquid = new LiquidGeometryRefinement.Cell(4, 9, 5, 5, LiquidPolyhedron.box(0.5625, 0.3125, 0.3125, 0.625, 0.375, 0.375));
+		var state = LiquidGeometryStateMapper.capture(java.util.List.of(liquid), 2, new int[] {0}, new int[] {0}, new double[] {0.125, 0, 0});
+		for (int mask : new int[] {0, 0x33, 0xff}) {
+			collision.replaceMask(0, mask);
+			var partition = new LiquidGeometryDomainPartition(3, 2, 2, 0.5F, collision, java.util.List.of(liquid), 1024);
+			for (boolean sealed : new boolean[] {false, true}) {
+				var input = new LiquidGeometryPhaseInput(state, partition, sealed, 2048);
+				var measured = LiquidConvexRegion.EMPTY.measure(); int fluids = 0, outlets = 0;
+				for (int c = 0; c < input.mesh.cells.size(); c++) {
+					measured = measured.add(LiquidConvexRegion.of(input.mesh.cells.get(c).geometry()).measure());
+					if (input.fragments[c] >= 0) {
+						fluids++; if (input.fragments[c] != 0 || input.cellVelocity[3 * c] != 0.125) throw new AssertionError("Collision subdivision lost incoming liquid field");
+					}
+				}
+				if (fluids != 1 || measured.volume().rounded() != 1.5 - Integer.bitCount(mask) / 64.0)
+					throw new AssertionError("Resolved domain changed collision open volume");
+				for (var face : input.mesh.faces) if (face.second() == -1) {
+					outlets++; var p = face.surface().centroid();
+					if (p.x() != 0 && p.x() != 1.5 && p.y() != 0 && p.y() != 1 && p.z() != 0 && p.z() != 1)
+						throw new AssertionError("Solid obstacle opened an ambient gas boundary");
+				}
+				if (sealed ? outlets != 0 : outlets == 0) throw new AssertionError("Resolved domain changed physical exterior conditions");
+			}
+		}
+		collision.replaceMask(0, 1);
+		var blocked = new LiquidGeometryRefinement.Cell(3, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.125, 0.125, 0.125));
+		try {
+			new LiquidGeometryDomainPartition(3, 2, 2, 0.5F, collision, java.util.List.of(blocked), 1024);
+			throw new AssertionError("Resolved liquid entered a solid collision micro cell");
+		} catch (IllegalArgumentException expected) { }
+		try {
+			new LiquidGeometryDomainPartition(3, 2, 2, 0.5F, collision, java.util.List.of(liquid), 1);
+			throw new AssertionError("Resolved collision partition ignored its resource budget");
+		} catch (IllegalStateException expected) { }
 	}
 	private static void phasePartitionPreservesSolidOpenGeometry() {
 		var open = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 2, 3, 3);
@@ -171,6 +209,12 @@ final class LiquidGeometryValidation {
 			LiquidGeometryStateMapper.requireCompatible(incompatible, domain);
 			throw new AssertionError("Liquid geometry accepted inconsistent physical units");
 		} catch (IllegalArgumentException expected) { }
+		var changedVolume = java.util.List.of(new LiquidGeometryRefinement.Cell(2, 1, 1, 1,
+				LiquidPolyhedron.box(0.25, 0.25, 0.25, Math.nextUp(0.375), 0.375, 0.375)));
+		try {
+			LiquidGeometryStateMapper.requireCompatible(LiquidGeometryStateMapper.capture(changedVolume, width, markerCells), domain);
+			throw new AssertionError("Geometric volume drift was accepted as observer rounding");
+		} catch (IllegalArgumentException expected) { }
 		// One inventory group retains disconnected geometry without requiring a new chemical quantum per fragment.
 		domain.particles.setPositionX(0, 0.375F * (float) width);
 		var split = java.util.List.of(new LiquidGeometryRefinement.Cell(2, 1, 1, 1, LiquidPolyhedron.box(0.4375, 0.25, 0.25, 0.5, 0.375, 0.375)),
@@ -191,6 +235,12 @@ final class LiquidGeometryValidation {
 		} catch (IllegalArgumentException expected) { }
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
 		var regions = LiquidPhasePartition.build(root, LiquidGeometryStateMapper.restore(grouped).stream().map(LiquidGeometryRefinement.Cell::geometry).toList(), 64);
+		var support = new LiquidGeometryDomainPartition(copied.sizeX, copied.sizeY, copied.sizeZ, copied.config.cellSize(), copied.geometry.cutCells,
+				LiquidGeometryStateMapper.restore(grouped), 4096);
+		var nativeInput = new LiquidGeometryPhaseInput(grouped, support, false, 4096); var properties = new LiquidGeometryCarrierProperties(copied, grouped, nativeInput);
+		for (int c = 0; c < nativeInput.fragments.length; c++) if (nativeInput.fragments[c] >= 0
+				&& (properties.density[c] != copied.config.density() || properties.dynamicViscosity[c] != 0 || properties.acceleration[3 * c + 1] != -copied.config.gravity()))
+			throw new AssertionError("Resolved carrier properties differ from the shared inventory mass and physical scale");
 		var mesh = new LiquidControlVolumeMesh(regions.stream().map(LiquidPhasePartition.Region::cell).toList(), width, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
 		var rates = new LiquidExactPolygon.Fraction[mesh.faces.size()]; var primary = new double[3 * mesh.cells.size()];
 		for (int c = 0; c < mesh.cells.size(); c++) primary[3 * c] = 0.125;
