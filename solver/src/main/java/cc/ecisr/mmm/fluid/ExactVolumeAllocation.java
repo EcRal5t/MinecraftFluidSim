@@ -9,7 +9,7 @@ final class ExactVolumeAllocation {
 	private ExactVolumeAllocation() { }
 	record RateShares(SignedDyadic[] values, int quantumExponent) { }
 
-	/** Signed face/source rates use a quantum finer than one binary64 ulp across all supports. */
+	/** Signed rates retain representable proportions and bound the remaining rounding by one quantum. */
 	static RateShares allocateRate(SignedDyadic amount, SignedDyadic[] weights) {
 		int supports = 0;
 		for (var weight : weights) { if (weight.signum() < 0) throw new IllegalArgumentException("Negative allocation weight"); if (weight.signum() > 0) supports++; }
@@ -18,6 +18,13 @@ final class ExactVolumeAllocation {
 		var magnitude = amount.signum() > 0 ? amount : amount.negate();
 		int exponent = Math.addExact(magnitude.exponent(), magnitude.significand().bitLength() - 1);
 		int quantum = Math.min(magnitude.exponent(), exponent - 52 - (32 - Integer.numberOfLeadingZeros(supports - 1)));
+		int weightExponent = Integer.MAX_VALUE; for (var weight : weights) if (weight.signum() > 0) weightExponent = Math.min(weightExponent, weight.exponent());
+		var integerWeights = new BigInteger[weights.length]; var total = BigInteger.ZERO;
+		for (int i = 0; i < weights.length; i++) { integerWeights[i] = units(weights[i], weightExponent); total = total.add(integerWeights[i]); }
+		for (var weight : integerWeights) if (weight.signum() > 0) {
+			var denominator = total.divide(total.gcd(magnitude.significand().multiply(weight)));
+			if (denominator.bitCount() == 1) quantum = Math.min(quantum, Math.subtractExact(magnitude.exponent(), denominator.bitLength() - 1));
+		}
 		var values = allocate(magnitude, weights, quantum);
 		if (amount.signum() < 0) for (int i = 0; i < values.length; i++) values[i] = values[i].negate();
 		return new RateShares(values, quantum);

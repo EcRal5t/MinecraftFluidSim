@@ -26,7 +26,8 @@ final class LiquidInterfaceVelocityExtension {
 		boolean[] adjacent = new boolean[count], ambient = adjacent.clone(), constrained = new boolean[count + 1];
 		Arrays.fill(constrained, 0, count, true);
 		int[] first = new int[faces], second = first.clone(); var fixed = new SignedDyadic[faces];
-		double[] contactArea = new double[count], contactVelocity = new double[3 * count], volume = new double[count + 1];
+		double[] contactArea = new double[count], contactVelocity = new double[3 * count], contactReference = new double[3 * count], volume = new double[count + 1];
+		boolean[] contactPresent = new boolean[count];
 		volume[count] = Double.POSITIVE_INFINITY; var displacement = new SignedDyadic[count]; Arrays.fill(displacement, SignedDyadic.ZERO);
 		for (int c = 0; c < count; c++) volume[c] = mesh.cells.get(c).geometry().moments().volume();
 		for (int f = 0; f < faces; f++) {
@@ -42,8 +43,9 @@ final class LiquidInterfaceVelocityExtension {
 			if (fixed[f] != null) displacement[component] = displacement[component].add(a ? fixed[f] : fixed[f].negate());
 			if (face.second() >= 0) {
 				adjacent[gas] = true; int source = a ? second[f] : first[f]; double area = face.surface().area();
+				if (!contactPresent[component]) { System.arraycopy(submittedCells, 3 * source, contactReference, 3 * component, 3); contactPresent[component] = true; }
 				contactArea[component] += area;
-				for (int axis = 0; axis < 3; axis++) contactVelocity[3 * component + axis] += area * submittedCells[3 * source + axis];
+				for (int axis = 0; axis < 3; axis++) contactVelocity[3 * component + axis] += area * (submittedCells[3 * source + axis] - contactReference[3 * component + axis]);
 			}
 		}
 		var source = new SignedDyadic[count + 1]; Arrays.fill(source, SignedDyadic.ZERO); double quantizationBound = 0;
@@ -65,8 +67,9 @@ final class LiquidInterfaceVelocityExtension {
 			}
 		}
 		double[] reference = new double[faces], referenceError = reference.clone(), resistance = reference.clone(), referenceCell = new double[3 * count];
+		var exactReference = new SignedDyadic[faces]; Arrays.fill(exactReference, SignedDyadic.ZERO);
 		for (int c = 0; c < count; c++) if (liquid[c] < 0) for (int axis = 0; axis < 3; axis++)
-			referenceCell[3 * c + axis] = contactArea[root[c]] > 0 ? contactVelocity[3 * root[c] + axis] / contactArea[root[c]] : 0;
+			referenceCell[3 * c + axis] = contactArea[root[c]] > 0 ? contactReference[3 * root[c] + axis] + contactVelocity[3 * root[c] + axis] / contactArea[root[c]] : 0;
 		for (int f = 0; f < faces; f++) {
 			var face = mesh.faces.get(f); var vector = face.surface().areaVector(); double area = face.surface().area();
 			if (fixed[f] == null) {
@@ -79,8 +82,11 @@ final class LiquidInterfaceVelocityExtension {
 			if (gas < 0) continue;
 			for (int axis = 0; axis < 3; axis++) {
 				double velocity = referenceCell[3 * gas + axis];
-				double term = velocity * vector.coordinate(axis); reference[f] += term; referenceError[f] += Math.ulp(term) + Math.ulp(reference[f]);
+				var areaValue = SignedDyadic.of(vector.coordinate(axis)); var velocityValue = SignedDyadic.of(velocity);
+				exactReference[f] = exactReference[f].add(new SignedDyadic(areaValue.significand().multiply(velocityValue.significand()),
+						Math.addExact(areaValue.exponent(), velocityValue.exponent())));
 			}
+			reference[f] = exactReference[f].toDouble(); referenceError[f] = Math.ulp(reference[f]);
 			if (!Double.isFinite(reference[f])) throw new IllegalStateException("Interface extension reference exceeds numerical range");
 		}
 		var coordinates = new ConservativeFluxCoordinates(count + 1, first, second, constrained, fixed);
@@ -106,13 +112,15 @@ final class LiquidInterfaceVelocityExtension {
 			for (int i = 0; i < variable.length; i++) next += residual[i] * residual[i] / diagonal[i];
 			for (int i = 0; i < variable.length; i++) direction[i] = residual[i] / diagonal[i] + next / rz * direction[i]; rz = next;
 		}
-		for (int i = 0; i < variable.length; i++) exact[i] = SignedDyadic.of(variable[i]);
+		for (int i = 0; i < variable.length; i++) {
+			int f = coordinates.face(i); exact[i] = exactReference[f].add(SignedDyadic.of(variable[i] - reference[f]));
+		}
 		var rates = coordinates.liftExact(exact, source); double[] flow = new double[faces], error = flow.clone();
 		for (int f = 0; f < faces; f++) { flow[f] = rates[f].toDouble(); error[f] = flow[f] == 0 ? 0 : Math.ulp(flow[f]); }
 		gradient = gradient(flow, error, resistance, reference, referenceError);
 		if (!converged(negate(coordinates.transpose(gradient.value)), coordinates.transposeError(gradient.value, gradient.error), diagonal, support, divergenceTolerance))
 			throw new IllegalStateException("Exact interface rates exceed extension solve accuracy");
-		return result(mesh, liquid, submittedCells, rates, flow, source, iterations, quantizationBound, referenceCell, reference);
+		return result(mesh, liquid, submittedCells, rates, flow, source, iterations, quantizationBound, referenceCell, exactReference);
 	}
 	private static Gradient gradient(double[] flow, double[] error, double[] resistance, double[] reference, double[] referenceError) {
 		double[] value = new double[flow.length], bound = value.clone();
@@ -123,7 +131,7 @@ final class LiquidInterfaceVelocityExtension {
 		return new Gradient(value, bound);
 	}
 	private static Result result(LiquidControlVolumeMesh mesh, int[] liquid, double[] submittedCells, SignedDyadic[] rates,
-			double[] flow, SignedDyadic[] source, int iterations, double quantizationBound, double[] referenceCell, double[] reference) {
+			double[] flow, SignedDyadic[] source, int iterations, double quantizationBound, double[] referenceCell, SignedDyadic[] reference) {
 		double[] normal = new double[rates.length], primary = submittedCells.clone(), dilatation = new double[liquid.length];
 		double error = 0, bound = 0;
 		for (int f = 0; f < rates.length; f++) normal[f] = flow[f] / mesh.faces.get(f).surface().area();
@@ -135,7 +143,7 @@ final class LiquidInterfaceVelocityExtension {
 			for (int f : mesh.cellFaces[c]) {
 				var face = mesh.faces.get(f); double sign = face.first() == c ? 1 : -1, rate = sign * face.surface().area() * normal[f];
 				balance += rate; roundoff += Math.ulp(flow[f]) + face.surface().area() * Math.ulp(normal[f]) + Math.ulp(rate) + Math.ulp(balance);
-				if (liquid[c] < 0) for (int a = 0; a < 3; a++) primary[3 * c + a] += face.surface().centroid().subtract(center).coordinate(a) * sign * (flow[f] - reference[f]) / volume;
+				if (liquid[c] < 0) for (int a = 0; a < 3; a++) primary[3 * c + a] += face.surface().centroid().subtract(center).coordinate(a) * sign * rates[f].subtract(reference[f]).toDouble() / volume;
 			}
 			if (!(Math.abs(balance) <= roundoff)) throw new IllegalStateException("Interface flux observation exceeds exact continuity representation");
 			error = Math.max(error, Math.abs(balance) / volume); bound = Math.max(bound, roundoff / volume);
