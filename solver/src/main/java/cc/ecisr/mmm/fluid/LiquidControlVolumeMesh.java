@@ -43,9 +43,10 @@ final class LiquidControlVolumeMesh {
 		for (int c = 0; c < leaves.size(); c++) {
 			var leaf = leaves.get(c);
 			var geometry = leaf.geometry().scaled(physicalWidth);
+			var exactFaces = LiquidExactPolygon.faces(geometry);
 			cells.add(new LiquidControlVolumeProjection.Cell(geometry, density));
 			for (int f = 0; f < geometry.faces().size(); f++) {
-				var exact = LiquidExactPolygon.face(geometry, f); if (!exact.hasArea()) continue;
+				var exact = exactFaces.get(f); if (!exact.hasArea()) continue;
 				var polygon = exact.rounded();
 				var surface = LiquidPolyhedron.surface(polygon);
 				if (!(surface.area() > 0)) throw new IllegalStateException("Shared face exceeds binary64 spatial resolution");

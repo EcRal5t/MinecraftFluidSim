@@ -46,6 +46,52 @@ final class LiquidExactPolygon {
 		return false;
 	}
 
+	/** Certify the existing surface incidence first; ambiguous geometry uses the complete plane arrangement. */
+	static List<LiquidExactPolygon> faces(LiquidPolyhedron geometry) {
+		var planes = geometry.planes(); var coefficients = planes.stream().map(p -> p.key().coefficients()).toList();
+		var incidence = new java.util.LinkedHashMap<LiquidPolyhedron.Point, ArrayList<Integer>>();
+		for (int f = 0; f < geometry.faces().size(); f++) for (var point : geometry.faces().get(f))
+			incidence.computeIfAbsent(point, ignored -> new ArrayList<>()).add(f);
+		var vertices = new java.util.HashMap<LiquidPolyhedron.Point, Vertex>(); var distinct = new java.util.HashSet<Vertex>();
+		for (var entry : incidence.entrySet()) {
+			var support = entry.getValue(); Vertex vertex = null;
+			for (int a = 0; a < support.size() && vertex == null; a++) for (int b = 0; b < a && vertex == null; b++) for (int c = 0; c < b && vertex == null; c++)
+				vertex = intersect(coefficients.get(support.get(a)), coefficients.get(support.get(b)), coefficients.get(support.get(c)));
+			if (vertex == null) return completeFaces(geometry);
+			for (int p = 0; p < planes.size(); p++) {
+				int sign = vertex.distance(coefficients.get(p)).signum() * (planes.get(p).positive() ? 1 : -1);
+				if (sign > 0 || sign != 0 && support.contains(p)) return completeFaces(geometry);
+			}
+			if (!distinct.add(vertex)) return completeFaces(geometry);
+			vertices.put(entry.getKey(), vertex);
+		}
+		var result = new ArrayList<LiquidExactPolygon>(); var edges = new java.util.HashMap<List<Vertex>, Integer>();
+		for (int f = 0; f < planes.size(); f++) {
+			var face = geometry.faces().get(f).stream().map(vertices::get).toList(); var n = orientedNormal(planes.get(f)); boolean area = false;
+			for (int v = 0; v < face.size(); v++) {
+				var a = face.get(v); var b = face.get((v + 1) % face.size()); var c = face.get((v + 2) % face.size());
+				var cross = cross(difference(b, a), difference(c, b)); var orientation = BigInteger.ZERO;
+				for (int axis = 0; axis < 3; axis++) orientation = orientation.add(n.get(axis).multiply(cross.get(axis)));
+				if (orientation.signum() < 0 || a.equals(b)) return completeFaces(geometry);
+				area |= orientation.signum() > 0; edges.merge(List.of(a, b), 1, Math::addExact);
+			}
+			if (!area) return completeFaces(geometry);
+			result.add(new LiquidExactPolygon(face, n));
+		}
+		for (var edge : edges.entrySet()) if (edge.getValue() != 1 || edges.getOrDefault(edge.getKey().reversed(), 0) != 1) return completeFaces(geometry);
+		return List.copyOf(result);
+	}
+	private static List<LiquidExactPolygon> completeFaces(LiquidPolyhedron geometry) {
+		var result = new ArrayList<LiquidExactPolygon>();
+		for (int f = 0; f < geometry.faces().size(); f++) result.add(face(geometry, f));
+		return List.copyOf(result);
+	}
+	private static List<BigInteger> orientedNormal(LiquidGeometryPlane plane) {
+		var normal = new ArrayList<>(plane.key().coefficients().subList(0, 3));
+		if (!plane.positive()) normal.replaceAll(BigInteger::negate);
+		return List.copyOf(normal);
+	}
+
 	static LiquidExactPolygon face(LiquidPolyhedron geometry, int face) {
 		var planes = geometry.planes(); var coefficients = planes.stream().map(p -> p.key().coefficients()).toList();
 		var points = new LinkedHashSet<Vertex>(); var selected = coefficients.get(face);
@@ -55,8 +101,7 @@ final class LiquidExactPolygon {
 			for (int p = 0; p < planes.size() && inside; p++) inside = vertex.distance(coefficients.get(p)).signum() * (planes.get(p).positive() ? 1 : -1) <= 0;
 			if (inside) points.add(vertex);
 		}
-		var normal = new ArrayList<>(selected.subList(0, 3));
-		if (!planes.get(face).positive()) normal.replaceAll(BigInteger::negate);
+		var normal = orientedNormal(planes.get(face));
 		var ordered = new ArrayList<>(points);
 		if (ordered.size() >= 3) {
 			var center = LiquidPolyhedron.Moments.ZERO;
@@ -71,11 +116,13 @@ final class LiquidExactPolygon {
 	}
 
 	LiquidExactPolygon intersection(LiquidExactPolygon cutter) {
+		if (sameSupport(cutter)) return this;
 		var result = this;
 		for (int edge = 0; edge < cutter.vertices.size() && result.hasArea(); edge++) result = result.clip(cutter.edgePlane(edge), false);
 		return result;
 	}
 	List<LiquidExactPolygon> subtract(LiquidExactPolygon cutter) {
+		if (sameSupport(cutter)) return List.of();
 		var remaining = new ArrayList<LiquidExactPolygon>(); var inside = this;
 		for (int edge = 0; edge < cutter.vertices.size() && inside.hasArea(); edge++) {
 			var plane = cutter.edgePlane(edge); var outside = inside.clip(plane, true);
@@ -83,6 +130,9 @@ final class LiquidExactPolygon {
 			inside = inside.clip(plane, false);
 		}
 		return remaining;
+	}
+	private boolean sameSupport(LiquidExactPolygon other) {
+		return vertices.size() == other.vertices.size() && vertices.containsAll(other.vertices);
 	}
 	private List<BigInteger> edgePlane(int edge) {
 		var a = vertices.get(edge); var b = vertices.get((edge + 1) % vertices.size());
