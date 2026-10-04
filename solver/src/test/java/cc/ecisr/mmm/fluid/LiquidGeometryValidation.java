@@ -162,6 +162,9 @@ final class LiquidGeometryValidation {
 		if (empty.addVolumeNearBudgeted(1, 1, 1, Float.MIN_VALUE, 0).addedVolume() != Float.MIN_VALUE)
 			throw new AssertionError("Geometric source discarded a representable positive volume tail");
 		LiquidGeometryStateMapper.requireCompatible(empty.liquidGeometryState, empty);
+		if (empty.removeVolumeNear(1, 1, 1, Float.MIN_VALUE, 0) != Float.MIN_VALUE || !empty.liquidGeometryState.cells().isEmpty())
+			throw new AssertionError("Ordinary removal discarded a positive inventory tail or retained its geometry");
+		LiquidGeometryStateMapper.requireCompatible(empty.liquidGeometryState, empty);
 	}
 	private static void resolvedDomainUsesCollisionOpenSpace() {
 		var collision = new FlipCutCellGeometry(3, 2, 2);

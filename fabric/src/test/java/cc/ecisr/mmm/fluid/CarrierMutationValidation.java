@@ -59,6 +59,12 @@ public final class CarrierMutationValidation {
 		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(restored.totalChemicalSpeciesQuanta() == domain.totalChemicalSpeciesQuanta()
 				&& restored.exactInternalEnergy().equals(domain.exactInternalEnergy()), "native extraction lost complete candidate identity");
+		species = domain.totalChemicalSpeciesQuanta(); long sink = domain.chemicalParcels.escapedSink().totalQuanta();
+		require(domain.removeVolumeNear(2, 1, 1, 0.015625F, 0) == 0.015625F
+				&& domain.totalChemicalSpeciesQuanta() + domain.chemicalParcels.escapedSink().totalQuanta() - sink == species,
+				"ordinary native removal lost its actual volume or escaped species ledger");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "ordinary native removal lost thermal settlement");
 	}
 
 	private static void independentWorkFinishesBeforeRejection() {
