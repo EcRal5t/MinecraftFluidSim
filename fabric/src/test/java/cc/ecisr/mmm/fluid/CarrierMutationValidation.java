@@ -27,7 +27,38 @@ public final class CarrierMutationValidation {
 		insertionNeverRoundsTheRequestUp();
 		independentWorkFinishesBeforeRejection();
 		nativeSourceBatchMovesGeometryAndSideColumns();
+		nativeExtractionMovesGeometryAndSideColumns();
 		System.out.println("Carrier mutation validation passed");
+	}
+	private static void nativeExtractionMovesGeometryAndSideColumns() throws Exception {
+		var domain = fullCapabilityDomain(FullCapabilityTestFixture.load());
+		domain.liquidGeometryState = new LiquidGeometryState(2, java.util.List.of(), new int[0]);
+		int oil = domain.materialRegistry.handle("mmm:oil");
+		for (int x : new int[]{1, 2}) require(domain.tryInsertExactMixture(x, 1, 1, java.util.List.of(
+				new FluidDomain.MaterialPortion(0, 0.03125, 31.25),
+				new FluidDomain.MaterialPortion(oil, 0.03125, 0.03125 * domain.materialRegistry.material(oil).referenceDensity())), 0, true).transferred(),
+				"native extraction fixture source failed");
+		var lastMixture = domain.chemicalParcels.record(3); double lastEnergy = domain.thermalState.liquidInternalEnergy(3);
+		var removed = domain.tryExtractExactVolume(1, 1, 1, 0.03125F, 0);
+		require(removed.transferred() && domain.particles.count() == 3
+				&& domain.chemicalParcels.record(0).equals(lastMixture)
+				&& domain.thermalState.liquidInternalEnergy(0) == lastEnergy, "native extraction lost swap-compacted side columns");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		var before = domain.exportMaterialParticleState(); var geometry = domain.liquidGeometryState;
+		require(!domain.tryExtractExactChemical(1, 1, 1, 0.015625F, 0, ignored -> false).transferred()
+				&& domain.liquidGeometryState == geometry
+				&& java.util.Arrays.equals(before.copyPositionVolume(), domain.exportMaterialParticleState().copyPositionVolume()),
+				"rejected native chemical ledger changed inventory geometry");
+		long species = domain.totalChemicalSpeciesQuanta(); var energy = domain.exactInternalEnergy(); var roundoff = domain.thermalAudit().roundoffResidual();
+		var chemical = domain.tryExtractExactChemical(1, 1, 1, 0.015625F, 0);
+		require(chemical.transferred() && domain.totalChemicalSpeciesQuanta() + chemical.ledger().totalQuanta() == species,
+				"native partial extraction lost species");
+		require(domain.exactInternalEnergy().subtract(energy).add(cc.ecisr.mmm.units.SignedDyadic.of(chemical.internalEnergy()))
+				.equals(domain.thermalAudit().roundoffResidual().subtract(roundoff)), "native partial extraction lost energy settlement");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.totalChemicalSpeciesQuanta() == domain.totalChemicalSpeciesQuanta()
+				&& restored.exactInternalEnergy().equals(domain.exactInternalEnergy()), "native extraction lost complete candidate identity");
 	}
 
 	private static void independentWorkFinishesBeforeRejection() {

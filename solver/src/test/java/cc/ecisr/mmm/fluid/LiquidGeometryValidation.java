@@ -46,7 +46,42 @@ final class LiquidGeometryValidation {
 		liquidSourcesUseExactOpenGeometry();
 		inventoryCentroidUsesResolvedCollisionSupport();
 		geometricSourceBatchPreservesActualCapacity();
+		geometricExtractionUsesOccupiedSupportAndVelocity();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static void geometricExtractionUsesOccupiedSupportAndVelocity() {
+		var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults()); domain.setVolume(1, 1, 1, 0.125F);
+		var left = new LiquidGeometryRefinement.Cell(2, 0, 1, 1, LiquidPolyhedron.box(0.125, 0.25, 0.25, 0.1875, 0.375, 0.375));
+		var right = new LiquidGeometryRefinement.Cell(2, 1, 1, 1, LiquidPolyhedron.box(0.4375, 0.25, 0.25, 0.5, 0.375, 0.375));
+		domain.liquidGeometryState = LiquidGeometryStateMapper.capture(java.util.List.of(left, right), 4 * (double) domain.config.cellSize(),
+				new int[]{0}, new int[]{0, 0}, new double[]{1, 0, 0, -1, 0, 0});
+		var before = domain.exportParticleState();
+		if (domain.tryExtractExactVolume(0, 1, 1, 0.125F, 0).transferred()
+				|| domain.liquidGeometryState != before.liquidGeometry() || !java.util.Arrays.equals(before.copyPositionVolume(), domain.exportParticleState().copyPositionVolume()))
+			throw new AssertionError("Extraction used the whole inventory group instead of its actual local support");
+		var transfer = domain.tryExtractExactVolume(0, 1, 1, 0.03125F, 0);
+		if (!transfer.transferred() || transfer.volume() != 0.03125 || domain.totalVolumeExact() != 0.09375
+				|| Math.abs(domain.particles.velocityX(0) + 1.0 / 3) > Math.ulp(domain.particles.velocityX(0)))
+			throw new AssertionError("Partial extraction lost occupied geometry or retained momentum");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		if (!domain.tryExtractExactVolume(0, 1, 1, 0.03125F, 0).transferred()) throw new AssertionError("Remaining local support could not be extracted");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		if (domain.particles.positionX(0) != 1.875F * domain.config.cellSize() || domain.particles.velocityX(0) != -1)
+			throw new AssertionError("Spatial extraction retained the old group centroid or velocity");
+		if (!domain.tryExtractExactVolume(1, 1, 1, 0.0625F, 0).transferred() || !domain.liquidGeometryState.cells().isEmpty())
+			throw new AssertionError("Complete extraction retained empty inventory geometry");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		var shared = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults()); shared.setVolume(1, 1, 1, 0.125F);
+		double mass = shared.particles.mass(0) / 2; float h = shared.config.cellSize();
+		shared.particles.setVolume(0, 0.0625F); shared.particles.setMass(0, mass);
+		shared.carrierMutations().appendMarker(CarrierMutationPlan.append(shared.carrierMutationRevision(), 1), shared.cellIndex(1, 1, 1),
+				1.25F * h, 1.25F * h, 1.25F * h, 0.0625F, 0, mass, null, false, false);
+		shared.liquidGeometryState = LiquidGeometryStateMapper.capture(java.util.List.of(left, right), 4 * (double) h,
+				new int[]{0, 0}, new int[]{0, 0}, new double[]{1, 0, 0, -1, 0, 0});
+		if (!shared.tryExtractExactVolume(0, 1, 1, 0.0625F, 0).transferred() || shared.particles.count() != 1
+				|| shared.particles.velocityX(0) != -1 || shared.particles.positionX(0) != 1.875F * h)
+			throw new AssertionError("Shared inventory group lost spatial ownership during marker removal");
+		LiquidGeometryStateMapper.requireCompatible(shared.liquidGeometryState, shared);
 	}
 	private static void inventoryCentroidUsesResolvedCollisionSupport() {
 		var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults()); domain.setVolume(1, 1, 1, 0.125F);
