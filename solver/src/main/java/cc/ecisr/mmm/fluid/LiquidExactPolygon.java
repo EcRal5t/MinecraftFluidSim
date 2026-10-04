@@ -46,6 +46,39 @@ final class LiquidExactPolygon {
 		return false;
 	}
 
+	/** One exact arrangement of collinear mesh edges gives both incident cells identical triangles. */
+	static List<LiquidExactPolygon> splitEdges(List<LiquidExactPolygon> polygons) {
+		var lines = new java.util.HashMap<List<BigInteger>, java.util.TreeSet<Vertex>>();
+		for (var polygon : polygons) for (int i = 0; i < polygon.vertices.size(); i++) {
+			var a = polygon.vertices.get(i); var b = polygon.vertices.get((i + 1) % polygon.vertices.size()); var key = line(a, b);
+			int axis = 0; while (key.get(axis).signum() == 0) axis++; final int coordinate = axis;
+			var points = lines.computeIfAbsent(key, ignored -> new java.util.TreeSet<>((x, y) -> compareCoordinate(x, y, coordinate)));
+			points.add(a); points.add(b);
+		}
+		var result = new ArrayList<LiquidExactPolygon>();
+		for (var polygon : polygons) {
+			var vertices = new ArrayList<Vertex>();
+			for (int i = 0; i < polygon.vertices.size(); i++) {
+				var a = polygon.vertices.get(i); var b = polygon.vertices.get((i + 1) % polygon.vertices.size()); var key = line(a, b);
+				int axis = 0; while (key.get(axis).signum() == 0) axis++;
+				var points = lines.get(key); boolean ascending = compareCoordinate(a, b, axis) < 0;
+				var segment = ascending ? points.subSet(a, true, b, false) : points.subSet(b, false, a, true).descendingSet();
+				vertices.addAll(segment);
+			}
+			result.add(new LiquidExactPolygon(vertices, polygon.normal));
+		}
+		return List.copyOf(result);
+	}
+	private static int compareCoordinate(Vertex a, Vertex b, int axis) { return a.coordinate(axis).multiply(b.w).compareTo(b.coordinate(axis).multiply(a.w)); }
+	private static List<BigInteger> line(Vertex a, Vertex b) {
+		var direction = difference(b, a); var moment = cross(List.of(a.x, a.y, a.z), List.of(b.x, b.y, b.z));
+		var values = new ArrayList<BigInteger>(direction); values.addAll(moment); BigInteger divisor = BigInteger.ZERO;
+		for (var value : values) divisor = divisor.gcd(value.abs());
+		if (divisor.signum() == 0) throw new IllegalArgumentException("Zero-length mesh edge");
+		for (var value : values) if (value.signum() != 0) { if (value.signum() < 0) divisor = divisor.negate(); break; }
+		final var scale = divisor; return values.stream().map(v -> v.divide(scale)).toList();
+	}
+
 	/** Certify the existing surface incidence first; ambiguous geometry uses the complete plane arrangement. */
 	static List<LiquidExactPolygon> faces(LiquidPolyhedron geometry) {
 		var planes = geometry.planes(); var coefficients = planes.stream().map(p -> p.key().coefficients()).toList();

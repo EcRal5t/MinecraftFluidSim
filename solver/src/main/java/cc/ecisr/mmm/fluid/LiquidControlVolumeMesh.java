@@ -63,7 +63,7 @@ final class LiquidControlVolumeMesh {
 			}
 		}
 		var faces = new ArrayList<LiquidControlVolumeProjection.Face>();
-		var polygons = new ArrayList<List<LiquidPolyhedron.Point>>();
+		var polygons = new ArrayList<LiquidExactPolygon>();
 		for (var entry : interiorPositive.entrySet()) {
 			var opposite = interiorNegative.get(entry.getKey());
 			if (opposite != null) for (var first : entry.getValue()) for (var second : opposite) connect(first, second, faces, polygons);
@@ -84,10 +84,10 @@ final class LiquidControlVolumeMesh {
 			if (!(residual.area() > 0)) throw new IllegalStateException("Shared face exceeds binary64 spatial resolution");
 			Boundary condition = boundary.at(patch.cell, residual);
 			faces.add(new LiquidControlVolumeProjection.Face(patch.cell, condition.solid ? -2 : -1, residual, condition.prescribed));
-			polygons.add(List.copyOf(polygon));
+			polygons.add(exact);
 		}
 		this.cells = List.copyOf(cells); this.faces = List.copyOf(faces);
-		this.polygons = List.copyOf(polygons);
+		this.polygons = LiquidExactPolygon.splitEdges(polygons).stream().map(LiquidExactPolygon::rounded).toList();
 		var incidence = new ArrayList<ArrayList<Integer>>(); for (int c = 0; c < cells.size(); c++) incidence.add(new ArrayList<>());
 		for (int f = 0; f < faces.size(); f++) {
 			var face = faces.get(f); incidence.get(face.first()).add(f); if (face.second() >= 0) incidence.get(face.second()).add(f);
@@ -110,7 +110,7 @@ final class LiquidControlVolumeMesh {
 	}
 
 	private static void connect(Patch first, Patch second, ArrayList<LiquidControlVolumeProjection.Face> faces,
-			ArrayList<List<LiquidPolyhedron.Point>> polygons) {
+			ArrayList<LiquidExactPolygon> polygons) {
 		var exact = first.exact.intersection(second.exact);
 		if (!exact.hasArea()) return;
 		var polygon = exact.rounded();
@@ -118,7 +118,7 @@ final class LiquidControlVolumeMesh {
 		if (!(surface.area() > 0)) throw new IllegalStateException("Shared face exceeds binary64 spatial resolution");
 		first.covered(exact); second.covered(exact);
 		faces.add(new LiquidControlVolumeProjection.Face(first.cell, second.cell, surface, 0));
-		polygons.add(List.copyOf(polygon));
+		polygons.add(exact);
 	}
 
 }

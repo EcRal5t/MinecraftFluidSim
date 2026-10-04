@@ -2,7 +2,6 @@ package cc.ecisr.mmm.fluid;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 
 /** Raviart-Thomas reconstruction with shared normal traces and uniform control-volume divergence. */
@@ -56,19 +55,19 @@ final class LiquidControlVolumeVelocity {
 		if (normalVelocity.length != mesh.faces.size()) throw new IllegalArgumentException("Invalid shared liquid velocity traces");
 		var origin = mesh.cells.get(cell).centroid();
 		var polygons = new ArrayList<List<LiquidPolyhedron.Point>>(); var velocities = new ArrayList<Double>(); var faceIds = new ArrayList<Integer>();
-		var vertices = new LinkedHashSet<LiquidPolyhedron.Point>(); double width = 0;
+		double width = 0;
 		for (int f : mesh.cellFaces[cell]) {
 			var face = mesh.faces.get(f);
 			if (!Double.isFinite(normalVelocity[f])) throw new IllegalArgumentException("Non-finite shared liquid velocity");
 			var polygon = new ArrayList<>(mesh.polygons.get(f)); boolean first = face.first() == cell;
 			if (!first) java.util.Collections.reverse(polygon);
-			polygons.add(polygon); velocities.add(first ? normalVelocity[f] : -normalVelocity[f]); faceIds.add(f); vertices.addAll(polygon);
+			polygons.add(polygon); velocities.add(first ? normalVelocity[f] : -normalVelocity[f]); faceIds.add(f);
 			for (var point : polygon) for (int a = 0; a < 3; a++) width = Math.max(width, Math.abs(point.coordinate(a) - origin.coordinate(a)));
 		}
 		if (!(width > 0)) throw new IllegalArgumentException("Empty liquid velocity geometry");
 		var tetrahedra = new ArrayList<Tetra>(); var unmatched = new HashMap<Triangle, Side>(); int unknowns = 0;
 		for (int f = 0; f < polygons.size(); f++) {
-			var polygon = splitEdges(polygons.get(f), vertices); var faceCenter = mesh.faces.get(faceIds.get(f)).surface().centroid();
+			var polygon = polygons.get(f); var faceCenter = mesh.faces.get(faceIds.get(f)).surface().centroid();
 			for (int i = 0; i < polygon.size(); i++) {
 				var a = polygon.get(i); var b = polygon.get((i + 1) % polygon.size());
 				var physical = List.of(origin, faceCenter, a, b); var normalized = new ArrayList<LiquidPolyhedron.Point>();
@@ -132,23 +131,6 @@ final class LiquidControlVolumeVelocity {
 		return new Result(List.copyOf(result), variation / totalVolume, divergenceResidual / width);
 	}
 
-	private static List<LiquidPolyhedron.Point> splitEdges(List<LiquidPolyhedron.Point> polygon, Iterable<LiquidPolyhedron.Point> candidates) {
-		var result = new ArrayList<LiquidPolyhedron.Point>();
-		for (int i = 0; i < polygon.size(); i++) {
-			var a = polygon.get(i); var b = polygon.get((i + 1) % polygon.size()); var direction = b.subtract(a); double length = direction.dot(direction);
-			var points = new ArrayList<LiquidPolyhedron.Point>(); points.add(a);
-			for (var point : candidates) if (!point.equals(a) && !point.equals(b)) {
-				var offset = point.subtract(a); double projection = direction.dot(offset); if (!(projection > 0 && projection < length)) continue;
-				var cross = direction.cross(offset); double coordinateError = 0;
-				for (int axis = 0; axis < 3; axis++) coordinateError = Math.max(coordinateError,
-						Math.max(Math.ulp(a.coordinate(axis)), Math.max(Math.ulp(b.coordinate(axis)), Math.ulp(point.coordinate(axis)))));
-				double error = 32 * coordinateError * Math.sqrt(length);
-				if (cross.dot(cross) <= error * error) points.add(point);
-			}
-			points.sort(java.util.Comparator.comparingDouble(p -> direction.dot(p.subtract(a)))); result.addAll(points);
-		}
-		return result;
-	}
 	private static double[] solve(double[][] matrix, double[] rhs) {
 		int count = rhs.length; double[][] factor = new double[count][]; for (int i = 0; i < count; i++) factor[i] = matrix[i].clone();
 		double[] value = rhs.clone(); int[] rows = new int[count]; for (int i = 0; i < count; i++) rows[i] = i;

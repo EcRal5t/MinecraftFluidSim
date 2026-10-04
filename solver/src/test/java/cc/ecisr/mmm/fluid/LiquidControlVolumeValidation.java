@@ -102,6 +102,17 @@ final class LiquidControlVolumeValidation {
 			throw new AssertionError("Interface extension lost exact control-volume continuity");
 		if (!(result.divergenceResidual() <= result.divergenceRoundoffBound())) throw new AssertionError("Observed extension exceeded roundoff bound");
 	}
+	private static void requireSharedVelocityTriangles(LiquidControlVolumeMesh mesh, LiquidControlVolumeVelocity.Result[] velocity) {
+		var first = new ArrayList<java.util.HashSet<List<LiquidPolyhedron.Point>>>(); var second = new ArrayList<java.util.HashSet<List<LiquidPolyhedron.Point>>>();
+		for (int f = 0; f < mesh.faces.size(); f++) { first.add(new java.util.HashSet<>()); second.add(new java.util.HashSet<>()); }
+		for (int c = 0; c < velocity.length; c++) for (var tetra : velocity[c].tetrahedra()) {
+			var key = new ArrayList<>(tetra.vertices().subList(1, 4)); key.sort(java.util.Comparator.comparingDouble(LiquidPolyhedron.Point::x)
+					.thenComparingDouble(LiquidPolyhedron.Point::y).thenComparingDouble(LiquidPolyhedron.Point::z));
+			int f = tetra.boundaryFace(); (mesh.faces.get(f).first() == c ? first : second).get(f).add(List.copyOf(key));
+		}
+		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() >= 0 && !first.get(f).equals(second.get(f)))
+			throw new AssertionError("Shared velocity face has different triangles on its two sides");
+	}
 	private static void interfaceExtensionPreservesLiquidTracesAndGasVolume() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);
@@ -136,6 +147,7 @@ final class LiquidControlVolumeValidation {
 			for (int c = 0; c < regions.size(); c++) for (int a = 0; a < 3; a++) close(extended.cellVelocity()[3 * c + a], a == 0 ? speed : 0,
 					1e-10, "Interface extension changed cell translation");
 			var velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extended.normalVelocity(), extended.cellVelocity());
+			requireSharedVelocityTriangles(mesh, velocity);
 			var trajectory = new LiquidVelocityTrajectory(mesh, velocity); var start = new LiquidPolyhedron.Point(0.6 * scale, 0.45 * scale, 0.4 * scale);
 			for (double duration : new double[] {0, 1e-6 * scale, 0.3 * scale}) {
 				var moved = trajectory.advance(0, start, duration, 256);
@@ -190,6 +202,7 @@ final class LiquidControlVolumeValidation {
 		close(lowerDisplacement, 0.1, 1e-10, "Lower gas displacement does not close");
 		close(upperDisplacement, -0.1, 1e-10, "Upper gas displacement does not close");
 		var velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extended.normalVelocity(), extended.cellVelocity());
+		requireSharedVelocityTriangles(mesh, velocity);
 		for (int c = 0; c < velocity.length; c++) for (var tetra : velocity[c].tetrahedra())
 			close(3 * tetra.isotropicGradient(), extended.gasDilatation()[c], 1e-9, "Extended tetrahedral velocity lost its prescribed gas dilatation");
 		var trajectory = new LiquidVelocityTrajectory(mesh, velocity);
@@ -344,7 +357,8 @@ final class LiquidControlVolumeValidation {
 			double[] traces = new double[mesh.faces.size()], cellVelocity = new double[3 * mesh.cells.size()];
 			for (int f = 0; f < traces.length; f++) traces[f] = velocity.dot(mesh.faces.get(f).surface().areaVector()) / mesh.faces.get(f).surface().area();
 			for (int c = 0; c < mesh.cells.size(); c++) for (int a = 0; a < 3; a++) cellVelocity[3 * c + a] = velocity.coordinate(a);
-			var trajectory = new LiquidVelocityTrajectory(mesh, LiquidControlVolumeVelocity.reconstruct(mesh, traces, cellVelocity));
+			var fields = LiquidControlVolumeVelocity.reconstruct(mesh, traces, cellVelocity); requireSharedVelocityTriangles(mesh, fields);
+			var trajectory = new LiquidVelocityTrajectory(mesh, fields);
 			int source = 0; for (int c = 0; c < leaves.size(); c++) if (leaves.get(c).level() == 2 && leaves.get(c).x() == 1
 					&& leaves.get(c).y() == 1 && leaves.get(c).z() == 1) source = c;
 			var initial = new LiquidPolyhedron.Point(0.35 * scale, 0.3 * scale, 0.4 * scale);
