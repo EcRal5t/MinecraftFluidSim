@@ -9,12 +9,17 @@ final class LiquidControlVolumeValidation {
 	static void validate() {
 		for (double size : new double[] {0.5, 0.125, 1.0 / 1024}) freeLiquidReceivesGravity(size);
 		for (double height : new double[] {0.5, 0.125, 1.0 / 1024}) thinHydrostaticColumn(height);
+		for (double size : new double[] {0.125, 1e-4, 1e-7}) smallHydrostaticCube(size);
 		densityJumpUsesBothLiquidDistances();
 		refinedHydrostaticColumn();
 		refinedAffinePressure();
 		refinedViscosityPreservesRigidMotionAndMomentum();
 		finiteGasPressureSharesLiquidProjection();
 		pressureAndViscosityShareMomentumAndEnergy();
+		sharedVelocityReconstructionPreservesTranslation();
+		vanishingContactAreaRemovesInteractionContinuously();
+		movingSolidPressureClosesWorkAndImpulse();
+		sharedVelocityTrajectoriesCrossRefinementContinuously();
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
 	}
 
@@ -75,6 +80,82 @@ final class LiquidControlVolumeValidation {
 		target[3 * index + 2] = mode < 2 ? 1 : 0;
 	}
 
+	private static void sharedVelocityReconstructionPreservesTranslation() {
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0,
+				LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 0.7, 0.3, 1.21));
+		var leaves = new ArrayList<>(LiquidGeometryRefinement.children(root));
+		leaves.addAll(LiquidGeometryRefinement.children(leaves.removeFirst()));
+		for (double scale : new double[] {1, 0.125, 1.0 / 1024}) {
+			var mesh = new LiquidControlVolumeMesh(leaves, scale, 1000,
+					(cell, surface) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+			var translation = new LiquidPolyhedron.Point(3, -2, 1); double[] traces = new double[mesh.faces.size()];
+			for (int f = 0; f < traces.length; f++) traces[f] = translation.dot(mesh.faces.get(f).surface().areaVector()) / mesh.faces.get(f).surface().area();
+			for (int c = 0; c < mesh.cells.size(); c++) {
+				var field = LiquidControlVolumeVelocity.reconstruct(mesh, c, traces, translation);
+				for (var tetra : field.tetrahedra()) for (int a = 0; a < 3; a++) close(tetra.velocity().coordinate(a), translation.coordinate(a), 1e-10);
+				close(field.squaredVelocityVariation(), 0, 1e-20);
+			}
+		}
+	}
+
+	private static void vanishingContactAreaRemovesInteractionContinuously() {
+		double previous = Double.POSITIVE_INFINITY;
+		for (double overlap : new double[] {0.125, 0.03125, 0.0078125, 0.001953125, 0}) {
+			var leaves = List.of(new LiquidGeometryRefinement.Cell(1, 0, 0, 0,
+					LiquidPolyhedron.box(0.25, 0, 0.125, 0.5, 0.25, 0.375)),
+					new LiquidGeometryRefinement.Cell(1, 1, 0, 0,
+							LiquidPolyhedron.box(0.5, 0.25 - overlap, 0.125, 0.75, 0.5 - overlap, 0.375)));
+			var mesh = new LiquidControlVolumeMesh(leaves, 1, 1000,
+					(cell, surface) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+			double area = 0; for (var face : mesh.faces) if (face.second() >= 0) area += face.surface().area();
+			close(area, 0.25 * overlap, 1e-14);
+			double[] incoming = {1, 0, 0, -1, 0, 0};
+			var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(incoming,
+					new LiquidPolyhedron.Point(0, 0, 0), 0.025, 1e-11, 1024);
+			double change = Math.abs(projected.cellVelocity()[0] - incoming[0]);
+			if (!(change < previous)) throw new AssertionError("Liquid contact impulse failed to vanish with its shared area");
+			previous = change;
+			if (overlap == 0) close(change, 0, 1e-12);
+			else if (!(change > 0)) throw new AssertionError("Resolved liquid contact transmitted no pressure impulse");
+			close(projected.cellVelocity()[0] + projected.cellVelocity()[3], 0, 1e-10);
+		}
+	}
+
+	private static void movingSolidPressureClosesWorkAndImpulse() {
+		var geometry = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1); var faces = new ArrayList<LiquidControlVolumeProjection.Face>();
+		for (var surface : geometry.surfaces()) faces.add(new LiquidControlVolumeProjection.Face(0,
+				surface.areaVector().x() < 0 ? -1 : -2, surface, surface.areaVector().x() < 0 ? 100_000 : surface.areaVector().x() > 0 ? 1 : 0));
+		var result = new LiquidControlVolumeProjection(List.of(new LiquidControlVolumeProjection.Cell(geometry, 1000)), faces)
+				.project(new double[3], new LiquidPolyhedron.Point(0, 0, 0), 0.025, 1e-11, 128);
+		close(result.cellVelocity()[0], 1, 1e-12); close(result.cellVelocity()[1], 0, 1e-12); close(result.cellVelocity()[2], 0, 1e-12);
+		close(result.pressure()[0], 80_000, 1e-7); close(result.boundaryImpulse().x(), 1000, 1e-7);
+		close(result.boundaryImpulse().y(), 0, 1e-10); close(result.boundaryImpulse().z(), 0, 1e-10);
+		close(result.boundaryWorkJoules(), 1000, 1e-7); close(result.pressureDissipationJoules(), 500, 1e-7);
+	}
+
+	private static void sharedVelocityTrajectoriesCrossRefinementContinuously() {
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var leaves = new ArrayList<>(LiquidGeometryRefinement.children(root));
+		leaves.addAll(LiquidGeometryRefinement.children(leaves.removeFirst()));
+		var velocity = new LiquidPolyhedron.Point(1, -0.1, 0.2);
+		for (double scale : new double[] {1, 0.125, 1.0 / 1024}) {
+			var mesh = new LiquidControlVolumeMesh(leaves, scale, 1000,
+					(cell, surface) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+			double[] traces = new double[mesh.faces.size()], cellVelocity = new double[3 * mesh.cells.size()];
+			for (int f = 0; f < traces.length; f++) traces[f] = velocity.dot(mesh.faces.get(f).surface().areaVector()) / mesh.faces.get(f).surface().area();
+			for (int c = 0; c < mesh.cells.size(); c++) for (int a = 0; a < 3; a++) cellVelocity[3 * c + a] = velocity.coordinate(a);
+			var trajectory = new LiquidVelocityTrajectory(mesh, LiquidControlVolumeVelocity.reconstruct(mesh, traces, cellVelocity));
+			int source = 0; for (int c = 0; c < leaves.size(); c++) if (leaves.get(c).level() == 2 && leaves.get(c).x() == 1
+					&& leaves.get(c).y() == 1 && leaves.get(c).z() == 1) source = c;
+			var initial = new LiquidPolyhedron.Point(0.35 * scale, 0.3 * scale, 0.4 * scale);
+			for (double duration : new double[] {0, 1e-6, 0.01, 0.3}) {
+				double dt = duration * scale; var result = trajectory.advance(source, initial, dt, 512);
+				for (int a = 0; a < 3; a++) close(result.position().coordinate(a), initial.coordinate(a) + dt * velocity.coordinate(a), 1e-11 * scale);
+				if (duration == 0.3 && !(result.faceEvents() > 0 && result.cell() != source)) throw new AssertionError("Liquid trajectory failed to cross its refined support");
+			}
+		}
+	}
+
 	private static void pressureAndViscosityShareMomentumAndEnergy() {
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0,
 				LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 0.7, 0.3, 1.21));
@@ -101,6 +182,22 @@ final class LiquidControlVolumeValidation {
 		close(before - after + projected.boundaryWorkJoules() + viscous.boundaryWorkJoules(),
 				viscous.dissipatedJoules() + viscous.temporalDissipationJoules() + projected.pressureDissipationJoules(), 1e-8);
 		if (!(projected.pressureDissipationJoules() > 0)) throw new AssertionError("Unresolved pressure modes have no dissipative energy");
+		for (int c = 0; c < mesh.cells.size(); c++) {
+			var target = new LiquidPolyhedron.Point(projected.cellVelocity()[3 * c], projected.cellVelocity()[3 * c + 1], projected.cellVelocity()[3 * c + 2]);
+			var field = LiquidControlVolumeVelocity.reconstruct(mesh, c, projected.normalVelocity(), target);
+			double volume = 0; double[] mean = new double[3];
+			for (var tetra : field.tetrahedra()) {
+				volume += tetra.volume();
+				for (int a = 0; a < 3; a++) mean[a] += tetra.volume() * tetra.velocity().coordinate(a);
+				var triangle = LiquidPolyhedron.surface(tetra.vertices().subList(1, 4));
+				var face = mesh.faces.get(tetra.boundaryFace());
+				close(tetra.sample(triangle.centroid()).dot(face.surface().areaVector()) / face.surface().area(),
+						projected.normalVelocity()[tetra.boundaryFace()], 1e-9);
+			}
+			close(volume, mesh.cells.get(c).geometry().moments().volume(), 1e-12);
+			for (int a = 0; a < 3; a++) close(mean[a] / volume, target.coordinate(a), 1e-9);
+			close(field.divergenceResidual(), 0, 1e-9);
+		}
 	}
 
 	private static void refinedHydrostaticColumn() {
@@ -151,6 +248,18 @@ final class LiquidControlVolumeValidation {
 		var result = projection.project(new double[3], GRAVITY, 0.025, 1e-12, 64);
 		close(result.pressure()[0], 1000 * 9.81 * height / 2, 1e-10);
 		for (double velocity : result.normalVelocity()) close(velocity, 0, 1e-12);
+	}
+
+	private static void smallHydrostaticCube(double size) {
+		var geometry = LiquidPolyhedron.box(0, 0, 0, size, size, size);
+		var faces = new ArrayList<LiquidControlVolumeProjection.Face>();
+		for (var surface : geometry.surfaces()) faces.add(new LiquidControlVolumeProjection.Face(0,
+				surface.areaVector().y() > 0 ? -1 : -2, surface, 0));
+		var result = new LiquidControlVolumeProjection(List.of(new LiquidControlVolumeProjection.Cell(geometry, 1000)), faces)
+				.project(new double[3], GRAVITY, 0.025, 1e-10, 128);
+		close(result.pressure()[0] / size, 1000 * 9.81 / 2, 1e-6);
+		for (double velocity : result.cellVelocity()) close(velocity, 0, 1e-10);
+		for (double velocity : result.normalVelocity()) close(velocity, 0, 1e-10);
 	}
 
 	private static void densityJumpUsesBothLiquidDistances() {

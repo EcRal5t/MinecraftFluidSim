@@ -39,6 +39,8 @@ final class LiquidControlVolumeMesh {
 	}
 	final List<LiquidControlVolumeProjection.Cell> cells;
 	final List<LiquidControlVolumeProjection.Face> faces;
+	final List<List<LiquidPolyhedron.Point>> polygons;
+	final int[][] cellFaces;
 
 	LiquidControlVolumeMesh(List<LiquidGeometryRefinement.Cell> leaves, double physicalWidth, double density, BoundaryCondition boundary) {
 		var cells = new ArrayList<LiquidControlVolumeProjection.Cell>();
@@ -60,6 +62,7 @@ final class LiquidControlVolumeMesh {
 			}
 		}
 		var faces = new ArrayList<LiquidControlVolumeProjection.Face>();
+		var polygons = new ArrayList<List<LiquidPolyhedron.Point>>();
 		for (Patch patch : patches) if (patch.tile != null) {
 			boolean plus = patch.surface.areaVector().coordinate(patch.tile.axis) > 0;
 			Map<Tile, List<Patch>> opposite = plus ? negative : positive;
@@ -67,7 +70,7 @@ final class LiquidControlVolumeMesh {
 			for (int level = plus ? patch.tile.level : patch.tile.level - 1; level >= 0; level--) {
 				var neighbors = opposite.get(patch.tile.ancestor(level));
 				if (neighbors == null) continue;
-				for (Patch other : neighbors) connect(plus ? patch : other, plus ? other : patch, faces);
+				for (Patch other : neighbors) connect(plus ? patch : other, plus ? other : patch, faces, polygons);
 			}
 		}
 		for (Patch patch : patches) for (var polygon : patch.uncovered) {
@@ -75,8 +78,15 @@ final class LiquidControlVolumeMesh {
 			if (residual.area() == 0) continue;
 			Boundary condition = boundary.at(patch.cell, residual);
 			faces.add(new LiquidControlVolumeProjection.Face(patch.cell, condition.solid ? -2 : -1, residual, condition.prescribed));
+			polygons.add(List.copyOf(polygon));
 		}
 		this.cells = List.copyOf(cells); this.faces = List.copyOf(faces);
+		this.polygons = List.copyOf(polygons);
+		var incidence = new ArrayList<ArrayList<Integer>>(); for (int c = 0; c < cells.size(); c++) incidence.add(new ArrayList<>());
+		for (int f = 0; f < faces.size(); f++) {
+			var face = faces.get(f); incidence.get(face.first()).add(f); if (face.second() >= 0) incidence.get(face.second()).add(f);
+		}
+		cellFaces = new int[cells.size()][]; for (int c = 0; c < cells.size(); c++) cellFaces[c] = incidence.get(c).stream().mapToInt(Integer::intValue).toArray();
 	}
 
 	private static Tile tile(LiquidGeometryRefinement.Cell leaf, List<LiquidPolyhedron.Point> polygon,
@@ -93,13 +103,15 @@ final class LiquidControlVolumeMesh {
 		return null;
 	}
 
-	private static void connect(Patch first, Patch second, ArrayList<LiquidControlVolumeProjection.Face> faces) {
+	private static void connect(Patch first, Patch second, ArrayList<LiquidControlVolumeProjection.Face> faces,
+			ArrayList<List<LiquidPolyhedron.Point>> polygons) {
 		var polygon = intersection(first.polygon, second.polygon, second.surface.areaVector());
 		if (polygon.size() < 3) return;
 		var surface = LiquidPolyhedron.surface(polygon);
 		if (surface.area() == 0) return;
 		first.covered(polygon, surface.areaVector()); second.covered(polygon, surface.areaVector());
 		faces.add(new LiquidControlVolumeProjection.Face(first.cell, second.cell, surface, 0));
+		polygons.add(List.copyOf(polygon));
 	}
 
 	private static List<LiquidPolyhedron.Point> intersection(List<LiquidPolyhedron.Point> first,

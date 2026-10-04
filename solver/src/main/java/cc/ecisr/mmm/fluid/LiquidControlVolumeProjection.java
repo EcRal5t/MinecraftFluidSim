@@ -10,6 +10,9 @@ final class LiquidControlVolumeProjection {
 		Cell {
 			if (geometry == null || !(geometry.moments().volume() > 0) || !(density > 0) || !Double.isFinite(density))
 				throw new IllegalArgumentException("Invalid liquid pressure control volume");
+			double mass = density * geometry.moments().volume();
+			if (!(mass > 0) || !Double.isFinite(mass) || !Double.isFinite(1 / density))
+				throw new IllegalArgumentException("Liquid control-volume inertia exceeds numerical range");
 		}
 		LiquidPolyhedron.Point centroid() {
 			var m = geometry.moments(); return new LiquidPolyhedron.Point(m.centroid(0), m.centroid(1), m.centroid(2));
@@ -31,7 +34,8 @@ final class LiquidControlVolumeProjection {
 	}
 	record Result(double[] pressure, double[] normalVelocity, int iterations, double fluxResidual,
 			double[] gasPressure, double[] gasVolumeChange, LiquidPolyhedron.Point[] pressureGradient,
-			double[] cellVelocity, double pressureDissipationJoules, double boundaryWorkJoules) { }
+			double[] cellVelocity, double pressureDissipationJoules, double boundaryWorkJoules,
+			LiquidPolyhedron.Point boundaryImpulse, double divergenceResidual, double divergenceRoundoffBound) { }
 	private final List<Cell> cells;
 	private final List<Face> faces;
 	private final Stencil[] stencils;
@@ -39,6 +43,8 @@ final class LiquidControlVolumeProjection {
 	private final int[] faceUnknown;
 	private final boolean[] anchor;
 	private final double[] reference, diagonal;
+	private final double[] residualVolume;
+	private final double[] rowNormBound, evaluationOperations;
 	private final int maximumIncidence;
 	private final List<GasNode> gasNodes;
 	private final int[] faceGasNode;
@@ -85,22 +91,41 @@ final class LiquidControlVolumeProjection {
 			anchor[c] = component == c && !prescribed[component]; reference[c] = reference[component];
 		}
 		diagonal = new double[unknowns]; stencils = new Stencil[cells.size()];
+		rowNormBound = diagonal.clone(); evaluationOperations = diagonal.clone();
+		residualVolume = new double[unknowns]; Arrays.fill(residualVolume, Double.POSITIVE_INFINITY);
+		for (int c = 0; c < cells.size(); c++) residualVolume[c] = cells.get(c).geometry().moments().volume();
+		for (int f = 0; f < faces.size(); f++) if (faceUnknown[f] >= 0) {
+			var face = faces.get(f); double volume = residualVolume[face.first];
+			if (face.second >= 0) volume = Math.min(volume, residualVolume[face.second]);
+			residualVolume[faceUnknown[f]] = Math.min(residualVolume[faceUnknown[f]], volume);
+		}
 		int maximum = 0;
 		for (int c = 0; c < cells.size(); c++) {
 			stencils[c] = new Stencil(c, incidence.get(c)); maximum = Math.max(maximum, incidence.get(c).size());
 			var stencil = stencils[c];
-			if (!anchor[c]) diagonal[c] += stencil.basisEnergy(-1);
+			var localUnknowns = new ArrayList<Integer>(); var energies = new ArrayList<Double>();
+			localUnknowns.add(c); energies.add(stencil.basisEnergy(-1));
 			for (int i = 0; i < stencil.indices.length; i++) {
 				int unknown = faceUnknown[stencil.indices[i]];
 				boolean first = true; for (int j = 0; j < i; j++) first &= stencil.unknowns[j] != unknown;
-				if (unknown >= 0 && first) diagonal[unknown] += stencil.mobility * stencil.geometry.basisEnergy(stencil.unknowns, unknown);
+				if (unknown >= 0 && first) {
+					localUnknowns.add(unknown); energies.add(stencil.mobility * stencil.geometry.basisEnergy(stencil.unknowns, unknown));
+				}
+			}
+			double rootSum = 0; for (double energy : energies) rootSum += Math.sqrt(energy);
+			for (int i = 0; i < localUnknowns.size(); i++) {
+				int unknown = localUnknowns.get(i); double energy = energies.get(i);
+				if (unknown != c || !anchor[c]) diagonal[unknown] += energy;
+				rowNormBound[unknown] += Math.sqrt(energy) * rootSum;
+				evaluationOperations[unknown] += 64 * stencil.indices.length + localUnknowns.size();
 			}
 		}
 		maximumIncidence = maximum;
 	}
 
-	Result project(double[] incoming, LiquidPolyhedron.Point gravity, double dt, double fluxTolerance, int maximumIterations) {
-		if (incoming.length != 3 * cells.size() || !(dt > 0) || !Double.isFinite(dt) || !(fluxTolerance > 0) || !Double.isFinite(fluxTolerance) || maximumIterations <= 0)
+	/** divergenceTolerance is inverse seconds; each algebraic row is normalized by its supporting liquid volume. */
+	Result project(double[] incoming, LiquidPolyhedron.Point gravity, double dt, double divergenceTolerance, int maximumIterations) {
+		if (incoming.length != 3 * cells.size() || !(dt > 0) || !Double.isFinite(dt) || !(divergenceTolerance > 0) || !Double.isFinite(divergenceTolerance) || maximumIterations <= 0)
 			throw new IllegalArgumentException("Invalid liquid control-volume projection request");
 		double[] predicted = incoming.clone(), velocity = new double[faces.size()], rhs = new double[diagonal.length], pressure = rhs.clone();
 		for (int c = 0; c < cells.size(); c++) for (int a = 0; a < 3; a++) {
@@ -134,8 +159,8 @@ final class LiquidControlVolumeProjection {
 			direction[i] = preconditioned[i]; rz += residual[i] * preconditioned[i];
 		}
 		int iterations = 0;
-		double target = fluxTolerance / (dt * (1 + maximumIncidence));
-		while (maximum(residual) > target) {
+		double target = divergenceTolerance / (dt * (1 + maximumIncidence));
+		while (!converged(residual, pressure, rhs, storage, target)) {
 			if (iterations++ >= maximumIterations || !(rz > 0) || !Double.isFinite(rz)) throw new IllegalStateException("Liquid control-volume pressure did not converge");
 			multiply(direction, product, false, storage);
 			double denominator = dot(direction, product);
@@ -167,10 +192,21 @@ final class LiquidControlVolumeProjection {
 			else if (faceGasNode[f] >= 0) gasVolumeChange[faceGasNode[f]] -= dt * face.surface.area() * velocity[f];
 		}
 		for (int c = 0; c < cells.size(); c++) physicalPressure[c] = pressure[c] + reference[c];
-		double error = maximum(flux), area = 0; for (var face : faces) area += face.surface.area();
-		if (!(error <= fluxTolerance + 32 * Math.ulp(maximum(velocity)) * area)) throw new IllegalStateException("Projected liquid face flux does not close: " + error);
+		double error = maximum(flux); double[] area = new double[cells.size()]; double velocityMagnitude = maximum(predicted);
+		for (var face : faces) { area[face.first] += face.surface.area(); if (face.second >= 0) area[face.second] += face.surface.area(); }
+		double[] backwardError = backwardError(pressure, rhs, storage);
+		double divergenceResidual = 0, divergenceRoundoffBound = 0;
+		for (int c = 0; c < cells.size(); c++) {
+			double allowance = divergenceTolerance * residualVolume[c] + 32 * Math.ulp(velocityMagnitude) * area[c] + dt * backwardError[c];
+			for (int f : stencils[c].indices) if (faces.get(f).second >= 0 || faces.get(f).second == -2)
+				allowance += dt * backwardError[faceUnknown[f]];
+			if (!(Math.abs(flux[c]) <= allowance))
+			throw new IllegalStateException("Projected liquid face flux does not close in its control volume: " + c);
+			divergenceResidual = Math.max(divergenceResidual, Math.abs(flux[c]) / residualVolume[c]);
+			divergenceRoundoffBound = Math.max(divergenceRoundoffBound, allowance / residualVolume[c] - divergenceTolerance);
+		}
 		var gradient = new LiquidPolyhedron.Point[cells.size()]; double[] projected = predicted.clone();
-		double dissipation = 0, boundaryWork = 0;
+		double dissipation = 0, boundaryWork = 0; double[] boundaryImpulse = new double[3];
 		for (int c = 0; c < cells.size(); c++) {
 			var stencil = stencils[c]; gradient[c] = stencil.gradient(pressure);
 			for (int a = 0; a < 3; a++) {
@@ -186,14 +222,17 @@ final class LiquidControlVolumeProjection {
 		for (int f = 0; f < faces.size(); f++) if (faces.get(f).second < 0) {
 			var face = faces.get(f); double boundaryPressure = faceValue(f, face.first, pressure, true) + reference[face.first];
 			boundaryWork -= dt * boundaryPressure * face.surface.area() * velocity[f];
+			for (int a = 0; a < 3; a++) boundaryImpulse[a] -= dt * boundaryPressure * face.surface.areaVector().coordinate(a);
 		}
 		for (int node = 0; node < gasPressure.length; node++) {
 			gasPressure[node] = gasNodes.get(node).pressure + pressure[gasBase + node];
 			double mismatch = gasVolumeChange[node] + gasNodes.get(node).volumeCompliance * pressure[gasBase + node];
-			if (Math.abs(mismatch) > dt * fluxTolerance + 32 * Math.ulp(Math.abs(gasVolumeChange[node])))
+			if (Math.abs(mismatch) > dt * divergenceTolerance * residualVolume[gasBase + node] + dt * dt * backwardError[gasBase + node]
+					+ 32 * Math.ulp(Math.abs(gasVolumeChange[node])))
 				throw new IllegalStateException("Gas pressure and displaced liquid volume do not close");
 		}
-		return new Result(physicalPressure, velocity, iterations, error, gasPressure, gasVolumeChange, gradient, projected, dissipation, boundaryWork);
+		return new Result(physicalPressure, velocity, iterations, error, gasPressure, gasVolumeChange, gradient, projected, dissipation, boundaryWork,
+				new LiquidPolyhedron.Point(boundaryImpulse[0], boundaryImpulse[1], boundaryImpulse[2]), divergenceResidual, divergenceRoundoffBound);
 	}
 
 	private final class Stencil {
@@ -255,7 +294,7 @@ final class LiquidControlVolumeProjection {
 		for (var stencil : stencils) {
 			var flux = stencil.flux(value, boundary);
 			for (int i = 0; i < flux.length; i++) {
-				if (!anchor[stencil.cell]) output[stencil.cell] -= flux[i];
+				if (!anchor[stencil.cell] || boundary) output[stencil.cell] -= flux[i];
 				int unknown = faceUnknown[stencil.indices[i]]; if (unknown >= 0) output[unknown] += flux[i];
 			}
 		}
@@ -264,6 +303,23 @@ final class LiquidControlVolumeProjection {
 	private static int[] fixedGasFaces(int count) { int[] result = new int[count]; Arrays.fill(result, -1); return result; }
 	private static double normalVelocity(double[] value, int cell, LiquidPolyhedron.Point normal) {
 		return value[3 * cell] * normal.x() + value[3 * cell + 1] * normal.y() + value[3 * cell + 2] * normal.z();
+	}
+	private boolean converged(double[] residual, double[] pressure, double[] rhs, double[] storage, double target) {
+		double[] error = backwardError(pressure, rhs, storage);
+		for (int i = 0; i < residual.length; i++) if (!(Math.abs(residual[i]) <= target * residualVolume[i] + error[i])) return false;
+		return true;
+	}
+	private double[] backwardError(double[] pressure, double[] rhs, double[] storage) {
+		double magnitude = maximum(pressure);
+		for (int f = 0; f < faces.size(); f++) if (faces.get(f).second == -1)
+			magnitude = Math.max(magnitude, Math.abs(faces.get(f).prescribed - reference[faces.get(f).first]));
+		double[] error = new double[pressure.length];
+		for (int i = 0; i < error.length; i++) {
+			double operations = evaluationOperations[i] + 4, epsilon = Math.scalb(operations, -53), gamma = epsilon / (1 - epsilon);
+			error[i] = gamma * (Math.abs(rhs[i]) + rowNormBound[i] * magnitude
+					+ (i >= gasBase ? storage[i - gasBase] * Math.abs(pressure[i]) : 0));
+		}
+		return error;
 	}
 	private static int find(int[] root, int cell) { while (root[cell] != cell) { root[cell] = root[root[cell]]; cell = root[cell]; } return cell; }
 	private static double dot(double[] a, double[] b) { double sum = 0; for (int c = 0; c < a.length; c++) sum += a[c] * b[c]; return sum; }

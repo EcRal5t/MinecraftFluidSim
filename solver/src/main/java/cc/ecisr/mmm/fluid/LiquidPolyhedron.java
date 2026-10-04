@@ -32,6 +32,7 @@ final class LiquidPolyhedron {
 		static Edge ordered(Point a, Point b) { return compare(a, b) < 0 ? new Edge(a, b) : new Edge(b, a); }
 	}
 	private final List<List<Point>> faces;
+	private volatile Moments integratedMoments;
 	private LiquidPolyhedron(List<List<Point>> faces) { this.faces = List.copyOf(faces); }
 	static LiquidPolyhedron restored(List<List<Point>> faces) {
 		var copy = new ArrayList<List<Point>>();
@@ -162,6 +163,10 @@ final class LiquidPolyhedron {
 	}
 
 	Moments moments() {
+		Moments cached = integratedMoments; if (cached != null) return cached;
+		return integratedMoments = integrateMoments();
+	}
+	private Moments integrateMoments() {
 		if (faces.isEmpty()) return Moments.ZERO;
 		var vertices = new LinkedHashSet<Point>(); for (var face : faces) vertices.addAll(face);
 		Point origin = mean(vertices);
