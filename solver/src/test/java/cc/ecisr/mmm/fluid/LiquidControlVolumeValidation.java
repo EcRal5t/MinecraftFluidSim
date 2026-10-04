@@ -283,6 +283,15 @@ final class LiquidControlVolumeValidation {
 			for (int f = 0; f < traces.length; f++) traces[f] = translation.dot(mesh.faces.get(f).surface().areaVector()) / mesh.faces.get(f).surface().area();
 			for (int c = 0; c < mesh.cells.size(); c++) {
 				var field = LiquidControlVolumeVelocity.reconstruct(mesh, c, traces, translation);
+				for (var tetra : field.tetrahedra()) {
+					if (!tetra.vertices().get(0).equals(mesh.cells.get(c).centroid())
+							|| !tetra.vertices().get(1).equals(mesh.faces.get(tetra.boundaryFace()).surface().centroid()))
+						throw new AssertionError("Velocity reconstruction changed submitted control-volume geometry");
+					for (var vertex : tetra.vertices().subList(2, 4)) {
+						boolean present = false; for (int f : mesh.cellFaces[c]) present |= mesh.polygons.get(f).contains(vertex);
+						if (!present) throw new AssertionError("Velocity reconstruction changed a submitted surface vertex");
+					}
+				}
 				for (var tetra : field.tetrahedra()) for (int a = 0; a < 3; a++) close(tetra.velocity().coordinate(a), translation.coordinate(a), 1e-10);
 				close(field.squaredVelocityVariation(), 0, 1e-20);
 			}
