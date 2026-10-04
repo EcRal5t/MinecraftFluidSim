@@ -70,7 +70,29 @@ final class LiquidGeometryValidation {
 				throw new AssertionError("Pressure gas membership differs from its actual phase geometry");
 			if (sealed && (!gas.volumes[1].equals(gas.volumes[2]) || gas.state.topologyKey(1) >= gas.state.topologyKey(2)))
 				throw new AssertionError("Gas chamber keys or volumes are inconsistent");
+			var refinedDomain = new LiquidGeometryDomainPartition(2, 2, 2, 0.5F, collision, LiquidGeometryRefinement.children(sheet), 256);
+			var refined = new LiquidGeometryPhaseInput(state, refinedDomain, sealed, 512);
+			var savedLabels = ResolvedGasGeometry.requireCompatible(gas.state, refined, 4096);
+			for (int c = 0; c < savedLabels.length; c++) if (refined.fragments[c] < 0) {
+				int expected = sealed ? refined.mesh.cells.get(c).geometry().centroid().y() < 0.25 ? 1 : 2 : 0;
+				if (savedLabels[c] != expected) throw new AssertionError("Refinement changed an actual gas chamber's inventory identity");
+			}
+			try {
+				ResolvedGasGeometry.requireCompatible(gas.state, refined, 0);
+				throw new AssertionError("Gas support matching ignored its exact-intersection work budget");
+			} catch (IllegalStateException expected) { }
+			if (sealed) {
+				var joined = new cc.ecisr.mmm.fluid.air.GasGeometryState(1, gas.state.cells(), new int[gas.state.cells().size()], 0);
+				try {
+					ResolvedGasGeometry.requireCompatible(joined, refined, 4096);
+					throw new AssertionError("Saved gas support joined two independent sealed chambers");
+				} catch (IllegalArgumentException expected) { }
+			}
 		}
+		var weights = ResolvedGasOverlap.weights(java.util.List.of(LiquidExactPolygon.Fraction.of(1).divide(LiquidExactPolygon.Fraction.of(3)),
+				LiquidExactPolygon.Fraction.of(1).divide(LiquidExactPolygon.Fraction.of(7))));
+		if (!weights.equals(java.util.List.of(java.math.BigInteger.valueOf(7), java.math.BigInteger.valueOf(3))))
+			throw new AssertionError("Gas overlap allocation rounded rational geometry weights");
 	}
 	private static void exactCompactionPreservesGeometryAndPhysicalFields() {
 		var a = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.125, 0.125, 0.125, 0.375, 0.375, 0.375));

@@ -44,4 +44,30 @@ final class ResolvedGasGeometry {
 				.add(LiquidConvexRegion.of(cells.get(c).geometry()).measure().volume().multiply(scale));
 		return volume;
 	}
+
+	/** Matches complete support across equivalent refinements and returns the saved node labels for this mesh. */
+	static int[] requireCompatible(GasGeometryState saved, LiquidGeometryPhaseInput input, int maximumPairs) {
+		var derived = new ResolvedGasGeometry(input);
+		if (saved.nodeCount() != derived.state.nodeCount()) throw new IllegalArgumentException("Saved gas chamber count differs from actual phase geometry");
+		var overlap = new ResolvedGasOverlap(saved, derived.state, maximumPairs);
+		requireCoverage(saved, overlap.oldCovered); requireCoverage(derived.state, overlap.newCovered);
+		int[] labels = new int[saved.nodeCount() + 1]; Arrays.fill(labels, -1); labels[0] = 0;
+		for (int old = 0; old <= saved.nodeCount(); old++) {
+			var destinations = overlap.destinations(old);
+			if (old > 0 && destinations.size() != 1) throw new IllegalArgumentException("Saved gas node differs from an actual connected chamber");
+			for (int next : destinations.keySet()) {
+				if ((old == 0) != (next == 0) || labels[next] >= 0 && labels[next] != old)
+					throw new IllegalArgumentException("Saved gas nodes disagree with actual chamber connectivity");
+				labels[next] = old;
+			}
+		}
+		var phases = derived.phaseNodes.clone(); for (int c = 0; c < phases.length; c++) if (phases[c] >= 0) phases[c] = labels[phases[c]];
+		return phases;
+	}
+	private static void requireCoverage(GasGeometryState state, Fraction[] covered) {
+		var width = Fraction.of(state.rootWidthMetres()); var scale = width.multiply(width).multiply(width);
+		var cells = LiquidGeometryStateMapper.restoreCells(state.cells());
+		for (int c = 0; c < cells.size(); c++) if (!covered[c].equals(LiquidConvexRegion.of(cells.get(c).geometry()).measure().volume().multiply(scale)))
+			throw new IllegalArgumentException("Saved gas support differs from the actual liquid and collision complement");
+	}
 }
