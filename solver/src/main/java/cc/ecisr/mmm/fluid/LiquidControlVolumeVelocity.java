@@ -8,7 +8,7 @@ import java.util.List;
 /** Raviart-Thomas reconstruction with exact tetrahedral continuity and shared triangle rates. */
 final class LiquidControlVolumeVelocity {
 	record Tetrahedron(List<LiquidPolyhedron.Point> vertices, LiquidPolyhedron.Point velocity, double volume, double isotropicGradient,
-			int boundaryFace, List<SignedDyadic> outwardFlux) {
+			int boundaryFace, List<SignedDyadic> outwardFlux, LiquidConvexRegion geometry) {
 		LiquidPolyhedron.Point sample(LiquidPolyhedron.Point point) {
 			var d = point.subtract(mean(vertices));
 			return new LiquidPolyhedron.Point(velocity.x() + isotropicGradient * d.x(), velocity.y() + isotropicGradient * d.y(), velocity.z() + isotropicGradient * d.z());
@@ -27,11 +27,13 @@ final class LiquidControlVolumeVelocity {
 	private static final class Tetra {
 		final List<LiquidPolyhedron.Point> vertices;
 		final List<LiquidPolyhedron.Point> physicalVertices;
+		final LiquidConvexRegion geometry;
 		final int[] unknown = {-1, -1, -1, -1}, sign = {1, 1, 1, 1};
 		final double volume;
 		final int boundaryFace;
 		final LiquidPolyhedron.Point center;
-		Tetra(List<LiquidPolyhedron.Point> vertices, List<LiquidPolyhedron.Point> physicalVertices, int boundaryFace) {
+		Tetra(List<LiquidPolyhedron.Point> vertices, List<LiquidPolyhedron.Point> physicalVertices, int boundaryFace, LiquidConvexRegion geometry) {
+			this.geometry = geometry;
 			this.vertices = vertices; this.physicalVertices = physicalVertices; this.boundaryFace = boundaryFace;
 			var origin = vertices.getFirst();
 			volume = vertices.get(1).subtract(origin).dot(vertices.get(2).subtract(origin).cross(vertices.get(3).subtract(origin))) / 6;
@@ -69,12 +71,13 @@ final class LiquidControlVolumeVelocity {
 		var tetrahedra = new ArrayList<Tetra>(); var unmatched = new HashMap<Triangle, Side>(); int unknowns = 0;
 		for (int f = 0; f < polygons.size(); f++) {
 			var polygon = polygons.get(f); var faceCenter = mesh.faces.get(faceIds.get(f)).surface().centroid();
+			var exact = mesh.exactPolygons.get(faceIds.get(f)); if (mesh.faces.get(faceIds.get(f)).first() != cell) exact = exact.reversed();
 			for (int i = 0; i < polygon.size(); i++) {
 				var a = polygon.get(i); var b = polygon.get((i + 1) % polygon.size());
 				var physical = List.of(origin, faceCenter, a, b); var normalized = new ArrayList<LiquidPolyhedron.Point>();
 				for (var point : physical) normalized.add(scale(point.subtract(origin), 1 / width));
 				double area = LiquidPolyhedron.surface(normalized.subList(1, 4)).area(); if (area == 0) continue;
-				var tetra = new Tetra(List.copyOf(normalized), physical, faceIds.get(f)); tetrahedra.add(tetra);
+				var tetra = new Tetra(List.copyOf(normalized), physical, faceIds.get(f), LiquidConvexRegion.ofFaces(exact.tetrahedron(origin, i))); tetrahedra.add(tetra);
 				for (int opposite = 1; opposite < 4; opposite++) {
 					var triangle = new ArrayList<LiquidPolyhedron.Point>();
 					for (int v = 0; v < 4; v++) if (v != opposite) triangle.add(physical.get(v));
@@ -142,7 +145,7 @@ final class LiquidControlVolumeVelocity {
 			for (var p : tetra.vertices) { var d = p.subtract(tetra.center); covarianceTrace += d.dot(d) / 20; }
 			double gradient = source[t].toDouble() / (3 * tetra.volume * widthCubed);
 			variation += tetra.volume * (difference.dot(difference) + gradient * gradient * widthSquared * covarianceTrace); totalVolume += tetra.volume;
-			result.add(new Tetrahedron(tetra.physicalVertices, value, tetra.volume * widthCubed, gradient, tetra.boundaryFace, List.copyOf(outwardFlux)));
+			result.add(new Tetrahedron(tetra.physicalVertices, value, tetra.volume * widthCubed, gradient, tetra.boundaryFace, List.copyOf(outwardFlux), tetra.geometry));
 		}
 		return new Result(List.copyOf(result), variation / totalVolume, totalRate.toDouble() / (totalVolume * widthCubed), traceQuantization, divergenceQuantization);
 	}

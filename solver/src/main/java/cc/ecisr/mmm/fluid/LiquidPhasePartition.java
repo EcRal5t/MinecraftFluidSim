@@ -55,17 +55,9 @@ final class LiquidPhasePartition {
 		var groups = new LinkedHashMap<Address, ArrayList<LiquidPolyhedron>>();
 		for (var cell : cells) groups.computeIfAbsent(Address.of(cell), ignored -> new ArrayList<>()).add(cell.geometry());
 		for (var group : groups.values()) for (int a = 0; a < group.size(); a++) for (int b = 0; b < a; b++) {
-			var intersection = group.get(a);
-			for (var plane : group.get(b).planes()) intersection = plane.clip(intersection);
-			double area = 0, coordinateError = 0; int operations = 0;
-			for (var face : intersection.faces()) {
-				area += LiquidPolyhedron.surface(face).area(); operations += face.size();
-				for (var point : face) for (int axis = 0; axis < 3; axis++) coordinateError = Math.max(coordinateError, Math.ulp(point.coordinate(axis)));
-			}
-			double volume = intersection.moments().volume();
-			double error = 64 * operations * Math.ulp(volume) + 16 * area * coordinateError;
-			if (volume > error) throw new IllegalArgumentException("Liquid fragments have overlapping volume: fragments=" + b + "," + a
-					+ ", overlap=" + volume + ", roundoff=" + error);
+			var intersection = LiquidConvexRegion.of(group.get(a));
+			for (var plane : group.get(b).planes()) intersection = intersection.clip(plane);
+			if (intersection.hasVolume()) throw new IllegalArgumentException("Liquid fragments have overlapping exact volume: fragments=" + b + "," + a);
 		}
 	}
 }

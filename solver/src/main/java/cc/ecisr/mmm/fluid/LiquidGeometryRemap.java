@@ -35,7 +35,7 @@ final class LiquidGeometryRemap {
 	List<Fragment> advect(LiquidPolyhedron source, SignedDyadic inventory, LiquidAffineMotion motion) {
 		return partition(motion.map(source), inventory);
 	}
-	private List<Fragment> partition(LiquidPolyhedron moved, SignedDyadic inventory) {
+	List<Fragment> partition(LiquidPolyhedron moved, SignedDyadic inventory) {
 		if (inventory.signum() <= 0 || !(moved.moments().volume() > 0)) throw new IllegalArgumentException("Empty liquid remap source");
 		for (var face : moved.faces()) for (var point : face)
 			for (int axis = 0; axis < 3; axis++) if (point.coordinate(axis) < 0 || point.coordinate(axis) > 1)
@@ -43,12 +43,18 @@ final class LiquidGeometryRemap {
 		var fragments = new ArrayList<Fragment>();
 		intersect(root, new LiquidGeometryRefinement.Cell(0, 0, 0, 0, moved), fragments);
 		var weights = new SignedDyadic[fragments.size()];
-		for (int i = 0; i < weights.length; i++) weights[i] = SignedDyadic.of(fragments.get(i).geometry.moments().volume());
-		var allocated = ExactVolumeAllocation.allocate(inventory, weights);
+		var measure = LiquidConvexRegion.EMPTY.measure();
+		for (int i = 0; i < weights.length; i++) {
+			var fragment = LiquidConvexRegion.of(fragments.get(i).geometry); measure = measure.add(fragment.measure());
+			weights[i] = SignedDyadic.of(fragment.measure().moments().volume());
+		}
+		if (!measure.same(LiquidConvexRegion.of(moved).measure())) throw new IllegalStateException("Liquid remap lost exact geometric volume or first moments");
+		var allocated = ExactVolumeAllocation.allocateRate(inventory, weights).values();
 		var result = new ArrayList<Fragment>(fragments.size());
 		for (int i = 0; i < fragments.size(); i++) {
 			var fragment = fragments.get(i);
-			if (allocated[i].signum() > 0) result.add(new Fragment(fragment.cell, fragment.geometry, allocated[i]));
+			if (allocated[i].signum() <= 0) throw new IllegalStateException("Liquid remap exceeds its fragment allocation resolution");
+			result.add(new Fragment(fragment.cell, fragment.geometry, allocated[i]));
 		}
 		return List.copyOf(result);
 	}

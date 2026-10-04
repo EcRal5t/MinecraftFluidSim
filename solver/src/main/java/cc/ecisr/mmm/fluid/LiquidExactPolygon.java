@@ -53,7 +53,8 @@ final class LiquidExactPolygon {
 	private final List<BigInteger> normal;
 	private LiquidExactPolygon(List<Vertex> vertices, List<BigInteger> normal) { this.vertices = List.copyOf(vertices); this.normal = normal; }
 	List<LiquidPolyhedron.Point> rounded() { return vertices.stream().map(Vertex::rounded).toList(); }
-	LiquidPolyhedron.Point centroid() {
+	LiquidPolyhedron.Point centroid() { return center().rounded(); }
+	private Vertex center() {
 		int axis = 0; while (normal.get(axis).signum() == 0) axis++;
 		var zero = new Fraction(BigInteger.ZERO, BigInteger.ONE); var weight = zero; Fraction[] moment = {zero, zero, zero}; var a = vertices.getFirst();
 		for (int i = 1; i + 1 < vertices.size(); i++) {
@@ -65,12 +66,41 @@ final class LiquidExactPolygon {
 			}
 		}
 		if (weight.numerator.signum() == 0) throw new IllegalArgumentException("Empty exact polygon centroid");
-		double[] result = new double[3];
+		Fraction[] result = new Fraction[3];
 		for (int coordinate = 0; coordinate < 3; coordinate++) {
 			var ratio = new Fraction(moment[coordinate].numerator.multiply(weight.denominator), moment[coordinate].denominator.multiply(weight.numerator));
-			result[coordinate] = Vertex.ratio(ratio.numerator, ratio.denominator);
+			result[coordinate] = ratio;
 		}
-		return new LiquidPolyhedron.Point(result[0], result[1], result[2]);
+		return vertex(result);
+	}
+	private static Vertex vertex(Fraction[] coordinates) {
+		var denominator = BigInteger.ONE;
+		for (var value : coordinates) denominator = denominator.multiply(value.denominator).divide(denominator.gcd(value.denominator));
+		return new Vertex(coordinates[0].numerator.multiply(denominator.divide(coordinates[0].denominator)),
+				coordinates[1].numerator.multiply(denominator.divide(coordinates[1].denominator)), coordinates[2].numerator.multiply(denominator.divide(coordinates[2].denominator)), denominator);
+	}
+	LiquidExactPolygon reversed() { return new LiquidExactPolygon(vertices.reversed(), normal.stream().map(BigInteger::negate).toList()); }
+	List<LiquidExactPolygon> tetrahedron(LiquidPolyhedron.Point apex, int edge) {
+		var points = List.of(vertex(new Fraction[] {Fraction.of(apex.x()), Fraction.of(apex.y()), Fraction.of(apex.z())}), center(), vertices.get(edge), vertices.get((edge + 1) % vertices.size()));
+		var result = new ArrayList<LiquidExactPolygon>();
+		for (int f = 0; f < 4; f++) {
+			var polygon = new ArrayList<Vertex>(); for (int i = 0; i < 4; i++) if (i != f) polygon.add(points.get(i));
+			var n = cross(difference(polygon.get(1), polygon.getFirst()), difference(polygon.get(2), polygon.getFirst()));
+			var inward = difference(points.get(f), polygon.getFirst()); var orientation = BigInteger.ZERO;
+			for (int a = 0; a < 3; a++) orientation = orientation.add(n.get(a).multiply(inward.get(a)));
+			if (orientation.signum() > 0) { java.util.Collections.reverse(polygon); n = n.stream().map(BigInteger::negate).toList(); }
+			result.add(new LiquidExactPolygon(polygon, n));
+		}
+		return List.copyOf(result);
+	}
+	Fraction[] areaVector() {
+		var result = new Fraction[] {Fraction.of(0), Fraction.of(0), Fraction.of(0)}; var origin = vertices.getFirst();
+		for (int i = 1; i + 1 < vertices.size(); i++) {
+			var b = vertices.get(i); var c = vertices.get(i + 1); var vector = cross(difference(b, origin), difference(c, origin));
+			var denominator = origin.w.multiply(origin.w).multiply(b.w).multiply(c.w).multiply(BigInteger.TWO);
+			for (int a = 0; a < 3; a++) result[a] = result[a].add(new Fraction(vector.get(a), denominator));
+		}
+		return result;
 	}
 	static LiquidPolyhedron.Point volumeCentroid(List<LiquidExactPolygon> faces) { return measure(faces).centroid(); }
 	static final class Measure {

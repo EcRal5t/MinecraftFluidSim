@@ -26,7 +26,7 @@ final class LiquidCharacteristicTransport {
 			for (var plane : piece.geometry.planes()) local = local.clip(plane);
 			if (!local.hasVolume()) continue;
 			partition = partition.add(local.measure());
-			var velocity = piece.tetra.velocity();
+			var velocity = piece.velocity();
 			queue.add(new State(local, piece, LiquidCharacteristicMap.initial(velocity, dt), Time.constant(dt), 0));
 			if (queue.size() > maximumPieces) throw new IllegalStateException("Liquid characteristic partition exceeds its work budget");
 		}
@@ -37,7 +37,7 @@ final class LiquidCharacteristicTransport {
 			if (++processed > maximumPieces) throw new IllegalStateException("Liquid characteristic transport exceeds its work budget");
 			var state = queue.removeFirst();
 			if (state.piece.tetra.isotropicGradient() != 0) throw new IllegalStateException("Liquid motion requires incompressible velocity support at finer resolution");
-			var velocity = state.piece.tetra.velocity(); var flights = new Flight[4]; var completed = state.source;
+			var velocity = state.piece.velocity(); var flights = new Flight[4]; var completed = state.source;
 			for (int f = 0; f < 4; f++) {
 				var plane = state.piece.geometry.planes().get(f); var speed = LiquidCharacteristicMap.speed(plane, velocity);
 				var residual = state.map.residual(plane);
@@ -60,7 +60,7 @@ final class LiquidCharacteristicTransport {
 				if (state.events >= maximumEvents) throw new IllegalStateException("Liquid characteristic exceeds its face-event budget");
 				var next = state.piece.neighbor[exit];
 				if (next == null) throw new IllegalStateException("Liquid geometry leaves its resolved velocity support");
-				queue.addLast(new State(outgoing, next, state.map.cross(velocity, next.tetra.velocity(), remaining), remaining, state.events + 1));
+				queue.addLast(new State(outgoing, next, state.map.cross(velocity, next.velocity(), remaining), remaining, state.events + 1));
 				if (queue.size() + moved.size() > maximumPieces) throw new IllegalStateException("Liquid characteristic fragments exceed their work budget");
 			}
 		}

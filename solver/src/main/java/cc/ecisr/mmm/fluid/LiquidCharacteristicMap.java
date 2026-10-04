@@ -25,24 +25,27 @@ final class LiquidCharacteristicMap {
 	}
 	private final List<Fraction> values;
 	private LiquidCharacteristicMap(Fraction[] values) { this.values = List.copyOf(Arrays.asList(values)); }
-	static LiquidCharacteristicMap initial(LiquidPolyhedron.Point velocity, double dt) {
+	static LiquidCharacteristicMap initial(Fraction[] velocity, double dt) {
 		var result = new Fraction[12]; Arrays.fill(result, ZERO); for (int i = 0; i < 3; i++) {
-			result[4 * i + i] = Fraction.of(1); result[4 * i + 3] = Fraction.of(velocity.coordinate(i)).multiply(Fraction.of(dt));
+			result[4 * i + i] = Fraction.of(1); result[4 * i + 3] = velocity[i].multiply(Fraction.of(dt));
 		}
 		return new LiquidCharacteristicMap(result);
 	}
 	Time residual(LiquidGeometryPlane plane) {
 		var result = new Fraction[4]; Arrays.fill(result, ZERO);
-		for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) result[j] = result[j].add(Fraction.of(plane.normal().coordinate(i)).multiply(values.get(4 * i + j)));
-		result[3] = result[3].subtract(Fraction.of(plane.offset())); return new Time(result);
+		for (int i = 0; i < 3; i++) for (int j = 0; j < 4; j++) result[j] = result[j].add(coefficient(plane, i).multiply(values.get(4 * i + j)));
+		result[3] = result[3].subtract(coefficient(plane, 3)); return new Time(result);
 	}
-	static Fraction speed(LiquidGeometryPlane plane, LiquidPolyhedron.Point velocity) {
-		var result = ZERO; for (int i = 0; i < 3; i++) result = result.add(Fraction.of(plane.normal().coordinate(i)).multiply(Fraction.of(velocity.coordinate(i)))); return result;
+	private static Fraction coefficient(LiquidGeometryPlane plane, int axis) {
+		return new Fraction(plane.positive() ? plane.key().coefficients().get(axis) : plane.key().coefficients().get(axis).negate(), java.math.BigInteger.ONE);
 	}
-	LiquidCharacteristicMap cross(LiquidPolyhedron.Point previous, LiquidPolyhedron.Point next, Time remaining) {
+	static Fraction speed(LiquidGeometryPlane plane, Fraction[] velocity) {
+		var result = ZERO; for (int i = 0; i < 3; i++) result = result.add(coefficient(plane, i).multiply(velocity[i])); return result;
+	}
+	LiquidCharacteristicMap cross(Fraction[] previous, Fraction[] next, Time remaining) {
 		var result = values.toArray(Fraction[]::new);
 		for (int i = 0; i < 3; i++) {
-			var jump = Fraction.of(next.coordinate(i)).subtract(Fraction.of(previous.coordinate(i)));
+			var jump = next[i].subtract(previous[i]);
 			for (int j = 0; j < 4; j++) result[4 * i + j] = result[4 * i + j].add(jump.multiply(remaining.coefficients[j]));
 		}
 		return new LiquidCharacteristicMap(result);

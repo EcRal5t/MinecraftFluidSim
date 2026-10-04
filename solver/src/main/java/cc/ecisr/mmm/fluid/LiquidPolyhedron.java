@@ -86,60 +86,23 @@ final class LiquidPolyhedron {
 	}
 
 	LiquidPolyhedron translated(double dx, double dy, double dz) {
-		var output = new ArrayList<List<Point>>();
-		for (var face : faces) {
-			var moved = new ArrayList<Point>();
-			for (Point point : face) moved.add(new Point(point.x + dx, point.y + dy, point.z + dz));
-			output.add(List.copyOf(moved));
-		}
-		var movedPlanes = new ArrayList<LiquidGeometryPlane>(); var displacement = new Point(dx, dy, dz);
-		for (var plane : planes) movedPlanes.add(new LiquidGeometryPlane(plane.normal(), plane.offset() + plane.normal().dot(displacement)));
-		return new LiquidPolyhedron(output, movedPlanes);
+		return transformed(new double[] {1, 0, 0, 0, 1, 0, 0, 0, 1}, new Point(0, 0, 0), new Point(dx, dy, dz));
 	}
-
 	LiquidPolyhedron transformed(double[] matrix, Point center, Point displacement) {
 		if (matrix.length != 9) throw new IllegalArgumentException("Invalid liquid characteristic matrix");
-		double determinant = matrix[0] * (matrix[4] * matrix[8] - matrix[5] * matrix[7])
-				- matrix[1] * (matrix[3] * matrix[8] - matrix[5] * matrix[6]) + matrix[2] * (matrix[3] * matrix[7] - matrix[4] * matrix[6]);
-		if (!(determinant > 0) || !Double.isFinite(determinant)) throw new IllegalStateException("Liquid characteristic reverses or collapses its geometry");
-		var vertices = new HashMap<Point, Point>(); var output = new ArrayList<List<Point>>();
-		for (var face : faces) {
-			var mapped = new ArrayList<Point>();
-			for (Point point : face) mapped.add(vertices.computeIfAbsent(point, p -> {
-				var d = p.subtract(center);
-				return new Point(center.x + displacement.x + matrix[0] * d.x + matrix[1] * d.y + matrix[2] * d.z,
-						center.y + displacement.y + matrix[3] * d.x + matrix[4] * d.y + matrix[5] * d.z,
-						center.z + displacement.z + matrix[6] * d.x + matrix[7] * d.y + matrix[8] * d.z);
-			}));
-			output.add(List.copyOf(mapped));
-		}
-		double[] inverse = {
-				(matrix[4] * matrix[8] - matrix[5] * matrix[7]) / determinant, (matrix[2] * matrix[7] - matrix[1] * matrix[8]) / determinant, (matrix[1] * matrix[5] - matrix[2] * matrix[4]) / determinant,
-				(matrix[5] * matrix[6] - matrix[3] * matrix[8]) / determinant, (matrix[0] * matrix[8] - matrix[2] * matrix[6]) / determinant, (matrix[2] * matrix[3] - matrix[0] * matrix[5]) / determinant,
-				(matrix[3] * matrix[7] - matrix[4] * matrix[6]) / determinant, (matrix[1] * matrix[6] - matrix[0] * matrix[7]) / determinant, (matrix[0] * matrix[4] - matrix[1] * matrix[3]) / determinant};
-		var mappedPlanes = new ArrayList<LiquidGeometryPlane>();
-		for (var plane : planes) {
-			var n = plane.normal(); var normal = new Point(inverse[0] * n.x + inverse[3] * n.y + inverse[6] * n.z,
-					inverse[1] * n.x + inverse[4] * n.y + inverse[7] * n.z, inverse[2] * n.x + inverse[5] * n.y + inverse[8] * n.z);
-			mappedPlanes.add(new LiquidGeometryPlane(normal, plane.offset() - n.dot(center)
-					+ normal.dot(new Point(center.x + displacement.x, center.y + displacement.y, center.z + displacement.z))));
-		}
-		return new LiquidPolyhedron(output, mappedPlanes);
-	}
-
-	static LiquidPolyhedron tetrahedron(List<Point> vertices) {
-		if (vertices.size() != 4) throw new IllegalArgumentException("Invalid tetrahedral geometry");
-		var faces = new ArrayList<List<Point>>(); var planes = new ArrayList<LiquidGeometryPlane>();
-		for (int i = 0; i < 4; i++) {
-			var polygon = new ArrayList<Point>(); for (int v = 0; v < 4; v++) if (v != i) polygon.add(vertices.get(v));
-			polygon.sort(java.util.Comparator.comparingDouble(Point::x).thenComparingDouble(Point::y).thenComparingDouble(Point::z));
-			var origin = polygon.getFirst(); var normal = surface(polygon).areaVector(); double offset = normal.dot(origin);
-			if (normal.dot(vertices.get(i).subtract(origin)) > 0) {
-				java.util.Collections.reverse(polygon); normal = new Point(-normal.x, -normal.y, -normal.z); offset = -offset;
+		if (faces.isEmpty()) return this;
+		var map = new ArrayList<LiquidExactPolygon.Fraction>();
+		for (int i = 0; i < 3; i++) {
+			var offset = LiquidExactPolygon.Fraction.of(center.coordinate(i)).add(LiquidExactPolygon.Fraction.of(displacement.coordinate(i)));
+			for (int j = 0; j < 3; j++) {
+				var coefficient = LiquidExactPolygon.Fraction.of(matrix[3 * i + j]); map.add(coefficient);
+				offset = offset.subtract(coefficient.multiply(LiquidExactPolygon.Fraction.of(center.coordinate(j))));
 			}
-			faces.add(List.copyOf(polygon)); planes.add(new LiquidGeometryPlane(normal, offset).canonical());
+			map.add(offset);
 		}
-		return new LiquidPolyhedron(faces, planes);
+		var mapped = LiquidConvexRegion.of(this).transformed(map);
+		if (!mapped.hasVolume()) throw new IllegalStateException("Liquid characteristic collapses its geometry");
+		return mapped.geometry();
 	}
 	static LiquidPolyhedron box(double x0, double y0, double z0, double x1, double y1, double z1) {
 		if (!(x1 > x0 && y1 > y0 && z1 > z0)) throw new IllegalArgumentException("Empty liquid box");

@@ -33,6 +33,7 @@ final class LiquidControlVolumeMesh {
 	final List<LiquidControlVolumeProjection.Cell> cells;
 	final List<LiquidControlVolumeProjection.Face> faces;
 	final List<List<LiquidPolyhedron.Point>> polygons;
+	final List<LiquidExactPolygon> exactPolygons;
 	final int[][] cellFaces;
 
 	LiquidControlVolumeMesh(List<LiquidGeometryRefinement.Cell> leaves, double physicalWidth, double density, BoundaryCondition boundary) {
@@ -88,7 +89,7 @@ final class LiquidControlVolumeMesh {
 			polygons.add(exact);
 		}
 		this.cells = List.copyOf(cells); this.faces = List.copyOf(faces);
-		this.polygons = LiquidExactPolygon.splitEdges(polygons).stream().map(LiquidExactPolygon::rounded).toList();
+		this.exactPolygons = LiquidExactPolygon.splitEdges(polygons); this.polygons = exactPolygons.stream().map(LiquidExactPolygon::rounded).toList();
 		var incidence = new ArrayList<ArrayList<Integer>>(); for (int c = 0; c < cells.size(); c++) incidence.add(new ArrayList<>());
 		for (int f = 0; f < faces.size(); f++) {
 			var face = faces.get(f); incidence.get(face.first()).add(f); if (face.second() >= 0) incidence.get(face.second()).add(f);

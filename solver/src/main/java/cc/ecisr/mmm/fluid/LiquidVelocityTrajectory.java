@@ -22,8 +22,13 @@ final class LiquidVelocityTrajectory {
 		final LiquidPolyhedron.Point[] faceOrigins = new LiquidPolyhedron.Point[4];
 		final Piece[] neighbor = new Piece[4];
 		final double[] normalVelocity = new double[4];
+		private LiquidExactPolygon.Fraction[] characteristicVelocity;
+		LiquidExactPolygon.Fraction[] velocity() {
+			if (characteristicVelocity == null) characteristicVelocity = LiquidCharacteristicVelocity.reconstruct(tetra.geometry(), tetra.outwardFlux());
+			return characteristicVelocity;
+		}
 		Piece(int cell, LiquidControlVolumeVelocity.Tetrahedron tetra) {
-			this.cell = cell; this.tetra = tetra; geometry = LiquidPolyhedron.tetrahedron(tetra.vertices());
+			this.cell = cell; this.tetra = tetra; geometry = tetra.geometry().geometry();
 			for (int f = 0; f < 4; f++) {
 				var polygon = polygon(tetra, f); var surface = LiquidPolyhedron.surface(polygon);
 				if (surface.areaVector().dot(tetra.vertices().get(f).subtract(polygon.getFirst())) > 0) {

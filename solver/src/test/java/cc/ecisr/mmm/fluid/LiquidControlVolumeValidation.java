@@ -65,8 +65,23 @@ final class LiquidControlVolumeValidation {
 		close(moments.volume(), 0.0156, 1e-15); close(moments.centroid(0), 0.25064102564102564, 1e-14);
 		close(moments.centroid(1), 0.315, 1e-14); close(moments.centroid(2), 0.2, 1e-14);
 		characteristicImageRebuildsSpace(root, moved);
+		var oblique = source.clip(1, 2, 3, 1.3);
+		moved = transport.advect(0, oblique, cc.ecisr.mmm.units.SignedDyadic.of(oblique.moments().volume()), 0.2, 4096, 128);
+		var expected = oblique.clip(0, 1, 0, 0.48).translated(0.05, 0.02, 0).moments().add(
+				oblique.clip(0, -1, 0, -0.48).transformed(new double[] {1, 5, 0, 0, 1, 0, 0, 0, 1},
+						new LiquidPolyhedron.Point(0, 0, 0), new LiquidPolyhedron.Point(-2.35, 0.02, 0)).moments());
+		moments = LiquidPolyhedron.Moments.ZERO; for (var fragment : moved) moments = moments.add(fragment.geometry().moments());
+		close(moments.volume(), expected.volume(), 1e-14); close(moments.x(), expected.x(), 1e-14);
+		close(moments.y(), expected.y(), 1e-14); close(moments.z(), expected.z(), 1e-14);
+		characteristicImageRebuildsSpace(root, moved);
 	}
 	private static void characteristicImageRebuildsSpace(LiquidGeometryRefinement.Cell root, List<LiquidCharacteristicTransport.Fragment> moved) {
+		var remap = new LiquidGeometryRemap(LiquidGeometryRefinement.children(root));
+		for (var fragment : moved) {
+			var partition = remap.partition(fragment.geometry(), fragment.inventory()); var inventory = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+			for (var piece : partition) inventory = inventory.add(piece.inventory());
+			if (!inventory.equals(fragment.inventory())) throw new AssertionError("Characteristic image lost exact inventory across refinement");
+		}
 		var liquids = moved.stream().map(f -> new LiquidGeometryRefinement.Cell(0, 0, 0, 0, f.geometry())).toList();
 		var state = LiquidGeometryStateMapper.capture(liquids, 1, java.util.stream.IntStream.range(0, liquids.size()).toArray());
 		var restored = LiquidGeometryStateMapper.restore(state); var restoredState = LiquidGeometryStateMapper.capture(restored, 1, state.copyMarkerCells());
