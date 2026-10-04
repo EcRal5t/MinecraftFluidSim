@@ -33,7 +33,7 @@ final class LiquidConvexRegion {
 	}
 	LiquidPolyhedron geometry() {
 		if (!hasVolume()) return LiquidPolyhedron.EMPTY;
-		return LiquidPolyhedron.restored(faces.stream().map(LiquidExactPolygon::rounded).toList(), faces.stream().map(LiquidExactPolygon::plane).toList());
+		return LiquidPolyhedron.restoredExact(faces);
 	}
 	LiquidConvexRegion joined(LiquidConvexRegion other, LiquidConvexRegion original) {
 		boolean adjacent = false;

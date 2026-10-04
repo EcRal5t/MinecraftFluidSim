@@ -50,9 +50,9 @@ final class LiquidControlVolumeMesh {
 			for (int f = 0; f < geometry.faces().size(); f++) {
 				var exact = exactFaces.get(f); if (!exact.hasArea()) continue;
 				var polygon = exact.rounded();
-				var surface = surface(exact, polygon);
+				var surface = exact.surface();
 				if (!(surface.area() > 0)) throw new IllegalStateException("Shared face exceeds binary64 spatial resolution");
-				Tile tile = tile(leaf, polygon, surface, physicalWidth);
+				Tile tile = tile(leaf, exact, physicalWidth);
 				var patch = new Patch(c, exact, polygon, surface, tile); patches.add(patch);
 				if (tile != null) {
 					boolean plus = surface.areaVector().coordinate(tile.axis) > 0;
@@ -82,10 +82,10 @@ final class LiquidControlVolumeMesh {
 		}
 		for (Patch patch : patches) for (var exact : patch.uncovered) {
 			var polygon = exact.rounded();
-			var residual = surface(exact, polygon);
+			var residual = exact.surface();
 			if (!(residual.area() > 0)) throw new IllegalStateException("Shared face exceeds binary64 spatial resolution");
 			Boundary condition = boundary.at(patch.cell, residual);
-			faces.add(new LiquidControlVolumeProjection.Face(patch.cell, condition.solid ? -2 : -1, residual, condition.prescribed));
+			faces.add(new LiquidControlVolumeProjection.Face(patch.cell, condition.solid ? -2 : -1, residual, condition.prescribed, exact));
 			polygons.add(exact);
 		}
 		this.cells = List.copyOf(cells); this.faces = List.copyOf(faces);
@@ -97,14 +97,14 @@ final class LiquidControlVolumeMesh {
 		cellFaces = new int[cells.size()][]; for (int c = 0; c < cells.size(); c++) cellFaces[c] = incidence.get(c).stream().mapToInt(Integer::intValue).toArray();
 	}
 
-	private static Tile tile(LiquidGeometryRefinement.Cell leaf, List<LiquidPolyhedron.Point> polygon,
-			LiquidPolyhedron.Surface surface, double scale) {
+	private static Tile tile(LiquidGeometryRefinement.Cell leaf, LiquidExactPolygon polygon, double scale) {
+		var coefficients = polygon.coefficients();
 		for (int axis = 0; axis < 3; axis++) {
-			if (surface.areaVector().coordinate((axis + 1) % 3) != 0 || surface.areaVector().coordinate((axis + 2) % 3) != 0) continue;
-			boolean plus = surface.areaVector().coordinate(axis) > 0;
+			if (coefficients.get(axis).signum() == 0 || coefficients.get((axis + 1) % 3).signum() != 0 || coefficients.get((axis + 2) % 3).signum() != 0) continue;
+			boolean plus = coefficients.get(axis).signum() > 0;
 			double coordinate = scale * (leaf.minimum(axis) + (plus ? leaf.width() : 0));
-			boolean coincides = true; for (var point : polygon) coincides &= point.coordinate(axis) == coordinate;
-			if (!coincides) continue;
+			var plane = new LiquidGeometryPlane(new LiquidPolyhedron.Point(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0), coordinate);
+			if (!plane.key().equals(polygon.plane().key())) continue;
 			int[] xyz = {leaf.x(), leaf.y(), leaf.z()};
 			return new Tile(axis, (xyz[axis] + (plus ? 1L : 0L)) << (30 - leaf.level()), leaf.level(), xyz[(axis + 1) % 3], xyz[(axis + 2) % 3]);
 		}
@@ -116,14 +116,11 @@ final class LiquidControlVolumeMesh {
 		var exact = first.exact.intersection(second.exact);
 		if (!exact.hasArea()) return;
 		var polygon = exact.rounded();
-		var surface = surface(exact, polygon);
+		var surface = exact.surface();
 		if (!(surface.area() > 0)) throw new IllegalStateException("Shared face exceeds binary64 spatial resolution: cells=" + first.cell + "," + second.cell + ", vertices=" + polygon);
 		first.covered(exact); second.covered(exact);
-		faces.add(new LiquidControlVolumeProjection.Face(first.cell, second.cell, surface, 0));
+		faces.add(new LiquidControlVolumeProjection.Face(first.cell, second.cell, surface, 0, exact));
 		polygons.add(exact);
-	}
-	private static LiquidPolyhedron.Surface surface(LiquidExactPolygon exact, List<LiquidPolyhedron.Point> polygon) {
-		var surface = LiquidPolyhedron.surface(polygon); return new LiquidPolyhedron.Surface(surface.area(), surface.areaVector(), exact.centroid());
 	}
 
 }

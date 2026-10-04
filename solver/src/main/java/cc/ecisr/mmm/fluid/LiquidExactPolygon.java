@@ -7,7 +7,7 @@ import java.util.List;
 
 /** Exact plane intersections and planar clipping; integration rounds each coordinate once. */
 final class LiquidExactPolygon {
-	private record Vertex(BigInteger x, BigInteger y, BigInteger z, BigInteger w) {
+	record Vertex(BigInteger x, BigInteger y, BigInteger z, BigInteger w) {
 		Vertex {
 			if (w.signum() == 0) throw new IllegalArgumentException("Singular geometric vertex");
 			BigInteger gcd = x.abs().gcd(y.abs()).gcd(z.abs()).gcd(w.abs());
@@ -19,6 +19,7 @@ final class LiquidExactPolygon {
 			return plane.get(0).multiply(x).add(plane.get(1).multiply(y)).add(plane.get(2).multiply(z)).subtract(plane.get(3).multiply(w));
 		}
 		LiquidPolyhedron.Point rounded() { return new LiquidPolyhedron.Point(ratio(x, w), ratio(y, w), ratio(z, w)); }
+		Fraction[] coordinates() { return new Fraction[] {new Fraction(x, w), new Fraction(y, w), new Fraction(z, w)}; }
 		private static double ratio(BigInteger numerator, BigInteger denominator) {
 			if (numerator.signum() == 0) return 0;
 			var magnitude = numerator.abs(); int exponent = magnitude.bitLength() - denominator.bitLength();
@@ -52,8 +53,24 @@ final class LiquidExactPolygon {
 	}
 	private final List<BigInteger> normal;
 	private LiquidExactPolygon(List<Vertex> vertices, List<BigInteger> normal) { this.vertices = List.copyOf(vertices); this.normal = normal; }
+	static LiquidExactPolygon restored(List<Vertex> vertices, List<BigInteger> coefficients) {
+		var result = new LiquidExactPolygon(vertices, coefficients.subList(0, 3));
+		if (!result.hasArea()) throw new IllegalArgumentException("Liquid geometry contains an empty face");
+		for (var vertex : vertices) if (vertex.distance(coefficients).signum() != 0) throw new IllegalArgumentException("Liquid geometry face is non-planar");
+		var area = result.areaVector(); var orientation = Fraction.of(0);
+		for (int a = 0; a < 3; a++) orientation = orientation.add(area[a].multiply(new Fraction(coefficients.get(a), BigInteger.ONE)));
+		if (orientation.numerator.signum() <= 0) throw new IllegalArgumentException("Liquid supporting plane has reversed orientation");
+		return result;
+	}
 	List<LiquidPolyhedron.Point> rounded() { return vertices.stream().map(Vertex::rounded).toList(); }
+	List<Vertex> vertices() { return vertices; }
+	List<Vertex> vertexKey() {
+		return vertices.stream().sorted(java.util.Comparator.comparing(Vertex::x).thenComparing(Vertex::y).thenComparing(Vertex::z).thenComparing(Vertex::w)).toList();
+	}
 	LiquidPolyhedron.Point centroid() { return center().rounded(); }
+	Fraction[] centroidCoordinates() {
+		var value = center(); return new Fraction[] {new Fraction(value.x, value.w), new Fraction(value.y, value.w), new Fraction(value.z, value.w)};
+	}
 	private Vertex center() {
 		int axis = 0; while (normal.get(axis).signum() == 0) axis++;
 		var zero = new Fraction(BigInteger.ZERO, BigInteger.ONE); var weight = zero; Fraction[] moment = {zero, zero, zero}; var a = vertices.getFirst();
@@ -80,8 +97,11 @@ final class LiquidExactPolygon {
 				coordinates[1].numerator.multiply(denominator.divide(coordinates[1].denominator)), coordinates[2].numerator.multiply(denominator.divide(coordinates[2].denominator)), denominator);
 	}
 	LiquidExactPolygon reversed() { return new LiquidExactPolygon(vertices.reversed(), normal.stream().map(BigInteger::negate).toList()); }
-	List<LiquidExactPolygon> tetrahedron(LiquidPolyhedron.Point apex, int edge) {
-		var points = List.of(vertex(new Fraction[] {Fraction.of(apex.x()), Fraction.of(apex.y()), Fraction.of(apex.z())}), center(), vertices.get(edge), vertices.get((edge + 1) % vertices.size()));
+	List<Vertex> tetrahedronVertices(Fraction[] apex, int edge) {
+		return List.of(vertex(apex), center(), vertices.get(edge), vertices.get((edge + 1) % vertices.size()));
+	}
+	List<LiquidExactPolygon> tetrahedron(Fraction[] apex, int edge) {
+		var points = tetrahedronVertices(apex, edge);
 		var result = new ArrayList<LiquidExactPolygon>();
 		for (int f = 0; f < 4; f++) {
 			var polygon = new ArrayList<Vertex>(); for (int i = 0; i < 4; i++) if (i != f) polygon.add(points.get(i));
@@ -102,11 +122,16 @@ final class LiquidExactPolygon {
 		}
 		return result;
 	}
+	LiquidPolyhedron.Surface surface() {
+		var vector = areaVector(); var n = new LiquidPolyhedron.Point(vector[0].rounded(), vector[1].rounded(), vector[2].rounded());
+		return new LiquidPolyhedron.Surface(Math.hypot(Math.hypot(n.x(), n.y()), n.z()), n, centroid());
+	}
 	static LiquidPolyhedron.Point volumeCentroid(List<LiquidExactPolygon> faces) { return measure(faces).centroid(); }
 	static final class Measure {
 		private final Fraction volume; private final Fraction[] moment;
 		Measure(Fraction volume, Fraction[] moment) { this.volume = volume; this.moment = moment; }
 		int signum() { return volume.numerator.signum(); }
+		Fraction volume() { return volume; }
 		Measure add(Measure other) {
 			return new Measure(volume.add(other.volume), new Fraction[] {moment[0].add(other.moment[0]), moment[1].add(other.moment[1]), moment[2].add(other.moment[2])});
 		}
@@ -118,12 +143,15 @@ final class LiquidExactPolygon {
 					Vertex.ratio(moment[1].numerator, moment[1].denominator), Vertex.ratio(moment[2].numerator, moment[2].denominator));
 		}
 		LiquidPolyhedron.Point centroid() {
-			if (signum() <= 0) throw new IllegalArgumentException("Empty exact control-volume centroid"); double[] result = new double[3];
+			var coordinates = centroidCoordinates(); return new LiquidPolyhedron.Point(coordinates[0].rounded(), coordinates[1].rounded(), coordinates[2].rounded());
+		}
+		Fraction[] centroidCoordinates() {
+			if (signum() <= 0) throw new IllegalArgumentException("Empty exact control-volume centroid"); var result = new Fraction[3];
 			for (int coordinate = 0; coordinate < 3; coordinate++) {
 				var ratio = new Fraction(moment[coordinate].numerator.multiply(volume.denominator), moment[coordinate].denominator.multiply(volume.numerator));
-				result[coordinate] = Vertex.ratio(ratio.numerator, ratio.denominator);
+				result[coordinate] = ratio;
 			}
-			return new LiquidPolyhedron.Point(result[0], result[1], result[2]);
+			return result;
 		}
 	}
 	static Measure measure(List<LiquidExactPolygon> faces) {
@@ -187,6 +215,10 @@ final class LiquidExactPolygon {
 
 	/** Certify the existing surface incidence first; ambiguous geometry uses the complete plane arrangement. */
 	static List<LiquidExactPolygon> faces(LiquidPolyhedron geometry) {
+		var value = geometry.exactFaces(); if (value != null) return value;
+		value = calculateFaces(geometry); geometry.exactFaces(value); return value;
+	}
+	private static List<LiquidExactPolygon> calculateFaces(LiquidPolyhedron geometry) {
 		var planes = geometry.planes(); var coefficients = planes.stream().map(p -> p.key().coefficients()).toList();
 		var incidence = new java.util.LinkedHashMap<LiquidPolyhedron.Point, ArrayList<Integer>>();
 		for (int f = 0; f < geometry.faces().size(); f++) for (var point : geometry.faces().get(f))
@@ -326,6 +358,9 @@ final class LiquidExactPolygon {
 		var outward = cross(difference(b, a), normal);
 		return List.of(outward.get(0).multiply(a.w), outward.get(1).multiply(a.w), outward.get(2).multiply(a.w),
 				outward.get(0).multiply(a.x).add(outward.get(1).multiply(a.y)).add(outward.get(2).multiply(a.z)));
+	}
+	List<List<BigInteger>> edgePlanes() {
+		var result = new ArrayList<List<BigInteger>>(); for (int edge = 0; edge < vertices.size(); edge++) result.add(edgePlane(edge)); return List.copyOf(result);
 	}
 	private LiquidExactPolygon clip(List<BigInteger> plane, boolean reverse) {
 		if (vertices.isEmpty()) return this;

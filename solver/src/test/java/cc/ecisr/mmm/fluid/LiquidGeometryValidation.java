@@ -163,8 +163,8 @@ final class LiquidGeometryValidation {
 		if (copied.liquidGeometryState == null || copied.liquidGeometryState.rootWidthMetres() != width || restored.size() != 1)
 			throw new AssertionError("Liquid geometry was lost across a backend candidate handoff");
 		moments(restored.getFirst().moments(), geometry.moments().volume(), geometry.moments().x(), geometry.moments().y(), geometry.moments().z());
-		var vertices = copied.liquidGeometryState.cells().getFirst().copyVertices(); vertices[0] = 0;
-		if (copied.liquidGeometryState.cells().getFirst().copyVertices()[0] != 0.25)
+		var vertices = copied.liquidGeometryState.cells().getFirst().copyVertices(); var original = vertices[0]; vertices[0] = java.math.BigInteger.ZERO;
+		if (!copied.liquidGeometryState.cells().getFirst().copyVertices()[0].equals(original))
 			throw new AssertionError("Liquid geometry snapshot exposed mutable vertices");
 		var incompatible = LiquidGeometryStateMapper.capture(cells, width / 2, markerCells);
 		try {

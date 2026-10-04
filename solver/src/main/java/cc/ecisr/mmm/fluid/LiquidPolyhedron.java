@@ -1,7 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 
 /** Convex liquid geometry with volume and first moments integrated over the same faces. */
@@ -35,7 +34,15 @@ final class LiquidPolyhedron {
 	record Surface(double area, Point areaVector, Point centroid) { }
 	private final List<List<Point>> faces;
 	private final List<LiquidGeometryPlane> planes;
+	private volatile List<LiquidExactPolygon> exactFaces;
+	List<LiquidExactPolygon> exactFaces() { return exactFaces; }
+	void exactFaces(List<LiquidExactPolygon> value) { exactFaces = value; }
 	private volatile Moments integratedMoments;
+	private volatile LiquidExactPolygon.Measure exactMeasure;
+	LiquidExactPolygon.Fraction[] centroidCoordinates() { return measure().centroidCoordinates(); }
+	private LiquidExactPolygon.Measure measure() {
+		var value = exactMeasure; if (value == null) exactMeasure = value = LiquidExactPolygon.measure(LiquidExactPolygon.faces(this)); return value;
+	}
 	private LiquidPolyhedron(List<List<Point>> faces, List<LiquidGeometryPlane> planes) {
 		if (faces.size() != planes.size()) throw new IllegalArgumentException("Liquid polygons and supporting planes differ");
 		this.faces = List.copyOf(faces); this.planes = List.copyOf(planes);
@@ -45,13 +52,17 @@ final class LiquidPolyhedron {
 		for (var face : faces) copy.add(List.copyOf(face));
 		return new LiquidPolyhedron(copy, planes);
 	}
+	static LiquidPolyhedron restoredExact(List<LiquidExactPolygon> faces) {
+		var result = new LiquidPolyhedron(faces.stream().map(LiquidExactPolygon::rounded).toList(), faces.stream().map(LiquidExactPolygon::plane).toList());
+		result.exactFaces = faces; return result;
+	}
 	List<List<Point>> faces() { return faces; }
 	List<LiquidGeometryPlane> planes() { return planes; }
 
 	List<Surface> surfaces() {
 		var result = new ArrayList<Surface>();
-		for (var face : faces) {
-			Surface surface = surface(face);
+		for (var face : LiquidExactPolygon.faces(this)) {
+			Surface surface = face.surface();
 			if (surface.area > 0) result.add(surface);
 		}
 		return List.copyOf(result);
@@ -73,15 +84,7 @@ final class LiquidPolyhedron {
 	LiquidPolyhedron scaled(double scale) {
 		if (!(scale > 0) || !Double.isFinite(scale)) throw new IllegalArgumentException("Invalid liquid geometry scale");
 		if (scale == 1) return this;
-		var output = new ArrayList<List<Point>>();
-		for (var face : faces) {
-			var transformed = new ArrayList<Point>();
-			for (Point point : face) transformed.add(new Point(point.x * scale, point.y * scale, point.z * scale));
-			output.add(List.copyOf(transformed));
-		}
-		var scaledPlanes = new ArrayList<LiquidGeometryPlane>();
-		for (var plane : planes) scaledPlanes.add(plane.scaled(scale));
-		return new LiquidPolyhedron(output, scaledPlanes);
+		return transformed(new double[] {scale, 0, 0, 0, scale, 0, 0, 0, scale}, new Point(0, 0, 0), new Point(0, 0, 0));
 	}
 
 	LiquidPolyhedron translated(double dx, double dy, double dz) {
@@ -130,26 +133,7 @@ final class LiquidPolyhedron {
 	}
 	private Moments integrateMoments() {
 		if (faces.isEmpty()) return Moments.ZERO;
-		var vertices = new LinkedHashSet<Point>(); for (var face : faces) vertices.addAll(face);
-		Point origin = mean(vertices);
-		double volume = 0, x = 0, y = 0, z = 0;
-		for (var face : faces) {
-			Point a = face.getFirst();
-			for (int i = 1; i + 1 < face.size(); i++) {
-				Point b = face.get(i), c = face.get(i + 1);
-				double v = Math.abs(a.subtract(origin).dot(b.subtract(origin).cross(c.subtract(origin)))) / 6;
-				volume += v;
-				x += v * ((a.x - origin.x) + (b.x - origin.x) + (c.x - origin.x)) / 4;
-				y += v * ((a.y - origin.y) + (b.y - origin.y) + (c.y - origin.y)) / 4;
-				z += v * ((a.z - origin.z) + (b.z - origin.z) + (c.z - origin.z)) / 4;
-			}
-		}
-		return new Moments(volume, x + volume * origin.x, y + volume * origin.y, z + volume * origin.z);
-	}
-
-	private static Point mean(Iterable<Point> points) {
-		double x = 0, y = 0, z = 0; int count = 0;
-		for (Point p : points) { x += p.x; y += p.y; z += p.z; count++; }
-		return new Point(x / count, y / count, z / count);
+		var measure = measure();
+		centroid = measure.centroid(); return measure.moments();
 	}
 }

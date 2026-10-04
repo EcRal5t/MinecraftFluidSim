@@ -25,7 +25,8 @@ final class LiquidGeometryPlane {
 			if (a < 3) { bits = Math.max(bits, coefficients.get(a).abs().bitLength()); if (!found && coefficients.get(a).signum() != 0) { positive = coefficients.get(a).signum() > 0; found = true; } }
 		}
 		if (!found) throw new IllegalArgumentException("Empty exact geometric normal");
-		double[] values = new double[4]; for (int a = 0; a < 4; a++) values[a] = new SignedDyadic(coefficients.get(a), 1 - bits).toDouble();
+		var denominator = BigInteger.ONE.shiftLeft(bits - 1); double[] values = new double[4];
+		for (int a = 0; a < 4; a++) values[a] = new LiquidExactPolygon.Fraction(coefficients.get(a), denominator).rounded();
 		var result = new LiquidGeometryPlane(new LiquidPolyhedron.Point(values[0], values[1], values[2]), values[3]);
 		if (!positive) divisor = divisor.negate(); final var scale = divisor;
 		result.identity = new Key(coefficients.stream().map(c -> c.divide(scale)).toList()); result.orientation = positive; return result;

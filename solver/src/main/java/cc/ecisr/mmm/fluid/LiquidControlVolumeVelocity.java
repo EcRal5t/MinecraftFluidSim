@@ -16,14 +16,6 @@ final class LiquidControlVolumeVelocity {
 	}
 	record Result(List<Tetrahedron> tetrahedra, double squaredVelocityVariation, double divergenceResidual,
 			double normalTraceQuantizationBound, double divergenceQuantizationBound) { }
-	private record Triangle(List<LiquidPolyhedron.Point> vertices) {
-		static Triangle key(List<LiquidPolyhedron.Point> vertices) {
-			var sorted = new ArrayList<>(vertices);
-			sorted.sort(java.util.Comparator.comparingDouble(LiquidPolyhedron.Point::x)
-					.thenComparingDouble(LiquidPolyhedron.Point::y).thenComparingDouble(LiquidPolyhedron.Point::z));
-			return new Triangle(List.copyOf(sorted));
-		}
-	}
 	private static final class Tetra {
 		final List<LiquidPolyhedron.Point> vertices;
 		final List<LiquidPolyhedron.Point> physicalVertices;
@@ -32,11 +24,11 @@ final class LiquidControlVolumeVelocity {
 		final double volume;
 		final int boundaryFace;
 		final LiquidPolyhedron.Point center;
-		Tetra(List<LiquidPolyhedron.Point> vertices, List<LiquidPolyhedron.Point> physicalVertices, int boundaryFace, LiquidConvexRegion geometry) {
+		Tetra(List<LiquidPolyhedron.Point> vertices, List<LiquidPolyhedron.Point> physicalVertices, int boundaryFace, LiquidConvexRegion geometry, double width) {
 			this.geometry = geometry;
 			this.vertices = vertices; this.physicalVertices = physicalVertices; this.boundaryFace = boundaryFace;
-			var origin = vertices.getFirst();
-			volume = vertices.get(1).subtract(origin).dot(vertices.get(2).subtract(origin).cross(vertices.get(3).subtract(origin))) / 6;
+			var scale = LiquidExactPolygon.Fraction.of(width);
+			volume = geometry.measure().volume().divide(scale.multiply(scale).multiply(scale)).rounded();
 			if (!(volume > 0)) throw new IllegalArgumentException("Velocity reconstruction has an inverted tetrahedron");
 			center = mean(vertices);
 		}
@@ -56,32 +48,32 @@ final class LiquidControlVolumeVelocity {
 
 	static Result reconstruct(LiquidControlVolumeMesh mesh, int cell, SignedDyadic[] volumeRate, LiquidPolyhedron.Point target) {
 		if (volumeRate.length != mesh.faces.size()) throw new IllegalArgumentException("Invalid shared liquid velocity traces");
-		var origin = mesh.cells.get(cell).centroid();
-		var polygons = new ArrayList<List<LiquidPolyhedron.Point>>(); var faceIds = new ArrayList<Integer>();
+		var origin = mesh.cells.get(cell).geometry().centroidCoordinates();
 		double width = 0;
 		for (int f : mesh.cellFaces[cell]) {
-			var face = mesh.faces.get(f);
 			if (volumeRate[f] == null || !Double.isFinite(volumeRate[f].toDouble())) throw new IllegalArgumentException("Non-finite shared liquid velocity");
-			var polygon = new ArrayList<>(mesh.polygons.get(f)); boolean first = face.first() == cell;
-			if (!first) java.util.Collections.reverse(polygon);
-			polygons.add(polygon); faceIds.add(f);
-			for (var point : polygon) for (int a = 0; a < 3; a++) width = Math.max(width, Math.abs(point.coordinate(a) - origin.coordinate(a)));
+			for (var vertex : mesh.exactPolygons.get(f).vertices()) {
+				var point = vertex.coordinates();
+				for (int a = 0; a < 3; a++) width = Math.max(width, Math.abs(point[a].subtract(origin[a]).rounded()));
+			}
 		}
 		if (!(width > 0)) throw new IllegalArgumentException("Empty liquid velocity geometry");
-		var tetrahedra = new ArrayList<Tetra>(); var unmatched = new HashMap<Triangle, Side>(); int unknowns = 0;
-		for (int f = 0; f < polygons.size(); f++) {
-			var polygon = polygons.get(f); var faceCenter = mesh.faces.get(faceIds.get(f)).surface().centroid();
-			var exact = mesh.exactPolygons.get(faceIds.get(f)); if (mesh.faces.get(faceIds.get(f)).first() != cell) exact = exact.reversed();
-			for (int i = 0; i < polygon.size(); i++) {
-				var a = polygon.get(i); var b = polygon.get((i + 1) % polygon.size());
-				var physical = List.of(origin, faceCenter, a, b); var normalized = new ArrayList<LiquidPolyhedron.Point>();
-				for (var point : physical) normalized.add(scale(point.subtract(origin), 1 / width));
-				double area = LiquidPolyhedron.surface(normalized.subList(1, 4)).area(); if (area == 0) continue;
-				var tetra = new Tetra(List.copyOf(normalized), physical, faceIds.get(f), LiquidConvexRegion.ofFaces(exact.tetrahedron(origin, i))); tetrahedra.add(tetra);
+		var tetrahedra = new ArrayList<Tetra>(); var unmatched = new HashMap<List<LiquidExactPolygon.Vertex>, Side>(); int unknowns = 0;
+		var exactWidth = LiquidExactPolygon.Fraction.of(width);
+		for (int f : mesh.cellFaces[cell]) {
+			var exact = mesh.exactPolygons.get(f); if (mesh.faces.get(f).first() != cell) exact = exact.reversed();
+			for (int i = 0; i < exact.vertices().size(); i++) {
+				var faces = exact.tetrahedron(origin, i);
+				if (!faces.getFirst().hasArea()) continue;
+				var geometry = LiquidConvexRegion.ofFaces(faces); var physical = new ArrayList<LiquidPolyhedron.Point>(); var normalized = new ArrayList<LiquidPolyhedron.Point>();
+				for (var vertex : exact.tetrahedronVertices(origin, i)) {
+					physical.add(vertex.rounded()); var point = vertex.coordinates(); double[] relative = new double[3];
+					for (int a = 0; a < 3; a++) relative[a] = point[a].subtract(origin[a]).divide(exactWidth).rounded();
+					normalized.add(new LiquidPolyhedron.Point(relative[0], relative[1], relative[2]));
+				}
+				var tetra = new Tetra(List.copyOf(normalized), List.copyOf(physical), f, geometry, width); tetrahedra.add(tetra);
 				for (int opposite = 1; opposite < 4; opposite++) {
-					var triangle = new ArrayList<LiquidPolyhedron.Point>();
-					for (int v = 0; v < 4; v++) if (v != opposite) triangle.add(physical.get(v));
-					var key = Triangle.key(triangle); var other = unmatched.remove(key);
+					var key = faces.get(opposite).vertexKey(); var other = unmatched.remove(key);
 					if (other == null) unmatched.put(key, new Side(tetra, opposite));
 					else {
 						tetra.unknown[opposite] = unknowns; tetra.sign[opposite] = -1;
@@ -101,16 +93,14 @@ final class LiquidControlVolumeVelocity {
 		for (int t = 0; t < tetraCount; t++) {
 			var tetra = tetrahedra.get(t); groups.computeIfAbsent(tetra.boundaryFace, ignored -> new ArrayList<>()).add(t);
 			indices[t][0] = unknowns + t; signs[t][0] = 1; first[unknowns + t] = t; second[unknowns + t] = tetraCount;
-			volumeWeights[t] = SignedDyadic.of(tetra.volume * widthCubed); double covarianceTrace = 0;
+			volumeWeights[t] = SignedDyadic.of(tetra.geometry.measure().volume().rounded()); double covarianceTrace = 0;
 			for (var point : tetra.vertices) { var d = point.subtract(tetra.center); covarianceTrace += d.dot(d) / 20; }
 			for (int i = 1; i < 4; i++) {
 				int f = tetra.unknown[i]; indices[t][i] = f; signs[t][i] = tetra.sign[i];
 				if (tetra.sign[i] > 0) first[f] = t; else second[f] = t;
 			}
 			for (int i = 0; i < 4; i++) {
-				var polygon = new ArrayList<LiquidPolyhedron.Point>();
-				for (int v = 0; v < 4; v++) if (v != i) polygon.add(tetra.physicalVertices.get(v));
-				preferred[t][i] = exactTriangleFlux(polygon, tetra.physicalVertices.get(i), target); var a = tetra.center.subtract(tetra.vertices.get(i));
+				preferred[t][i] = exactTriangleFlux(tetra.geometry.faces().get(i), target); var a = tetra.center.subtract(tetra.vertices.get(i));
 				for (int j = 0; j < 4; j++) {
 					var b = tetra.center.subtract(tetra.vertices.get(j)); mass[t][i][j] = (a.dot(b) + covarianceTrace) / (9 * tetra.volume * widthSquared * widthSquared);
 				}
@@ -118,9 +108,9 @@ final class LiquidControlVolumeVelocity {
 		}
 		double traceQuantization = 0, divergenceQuantization = 0;
 		for (var entry : groups.entrySet()) {
-			var group = entry.getValue(); group.sort((a, b) -> compareTriangles(tetrahedra.get(a).physicalVertices.subList(1, 4), tetrahedra.get(b).physicalVertices.subList(1, 4)));
+			var group = entry.getValue(); group.sort((a, b) -> compareTriangles(tetrahedra.get(a).geometry.faces().getFirst(), tetrahedra.get(b).geometry.faces().getFirst()));
 			var weights = new SignedDyadic[group.size()];
-			for (int i = 0; i < group.size(); i++) weights[i] = SignedDyadic.of(LiquidPolyhedron.surface(tetrahedra.get(group.get(i)).physicalVertices.subList(1, 4)).area());
+			for (int i = 0; i < group.size(); i++) weights[i] = SignedDyadic.of(tetrahedra.get(group.get(i)).geometry.faces().getFirst().surface().area());
 			int f = entry.getKey(); var outward = mesh.faces.get(f).first() == cell ? volumeRate[f] : volumeRate[f].negate();
 			var allocation = ExactVolumeAllocation.allocateRate(outward, weights);
 			for (int i = 0; i < group.size(); i++) {
@@ -150,31 +140,20 @@ final class LiquidControlVolumeVelocity {
 		return new Result(List.copyOf(result), variation / totalVolume, totalRate.toDouble() / (totalVolume * widthCubed), traceQuantization, divergenceQuantization);
 	}
 
-	private static int compareTriangles(List<LiquidPolyhedron.Point> a, List<LiquidPolyhedron.Point> b) {
-		var first = Triangle.key(a).vertices; var second = Triangle.key(b).vertices;
-		for (int i = 0; i < 3; i++) for (int axis = 0; axis < 3; axis++) {
-			int comparison = Double.compare(first.get(i).coordinate(axis), second.get(i).coordinate(axis)); if (comparison != 0) return comparison;
+	private static int compareTriangles(LiquidExactPolygon a, LiquidExactPolygon b) {
+		var first = a.vertexKey(); var second = b.vertexKey();
+		for (int i = 0; i < 3; i++) {
+			var x = first.get(i); var y = second.get(i);
+			for (int axis = 0; axis < 3; axis++) { int comparison = x.coordinate(axis).compareTo(y.coordinate(axis)); if (comparison != 0) return comparison; }
+			int comparison = x.w().compareTo(y.w()); if (comparison != 0) return comparison;
 		}
 		return 0;
 	}
-	private static SignedDyadic exactTriangleFlux(List<LiquidPolyhedron.Point> polygon, LiquidPolyhedron.Point opposite, LiquidPolyhedron.Point velocity) {
-		SignedDyadic[][] direction = new SignedDyadic[3][3]; var origin = polygon.getFirst();
-		for (int axis = 0; axis < 3; axis++) {
-			direction[0][axis] = SignedDyadic.of(polygon.get(1).coordinate(axis)).subtract(SignedDyadic.of(origin.coordinate(axis)));
-			direction[1][axis] = SignedDyadic.of(polygon.get(2).coordinate(axis)).subtract(SignedDyadic.of(origin.coordinate(axis)));
-			direction[2][axis] = SignedDyadic.of(opposite.coordinate(axis)).subtract(SignedDyadic.of(origin.coordinate(axis)));
-		}
-		var orientation = SignedDyadic.ZERO; var flux = SignedDyadic.ZERO;
-		for (int axis = 0; axis < 3; axis++) {
-			int a = (axis + 1) % 3, b = (axis + 2) % 3;
-			var vector = product(direction[0][a], direction[1][b]).subtract(product(direction[0][b], direction[1][a]));
-			orientation = orientation.add(product(vector, direction[2][axis])); flux = flux.add(product(vector, SignedDyadic.of(velocity.coordinate(axis))));
-		}
-		if (orientation.signum() > 0) flux = flux.negate();
-		return flux.signum() == 0 ? SignedDyadic.ZERO : new SignedDyadic(flux.significand(), Math.subtractExact(flux.exponent(), 1));
-	}
-	private static SignedDyadic product(SignedDyadic a, SignedDyadic b) {
-		return a.signum() == 0 || b.signum() == 0 ? SignedDyadic.ZERO : new SignedDyadic(a.significand().multiply(b.significand()), Math.addExact(a.exponent(), b.exponent()));
+	private static SignedDyadic exactTriangleFlux(LiquidExactPolygon polygon, LiquidPolyhedron.Point velocity) {
+		var area = polygon.areaVector(); var flux = LiquidExactPolygon.Fraction.of(0);
+		for (int axis = 0; axis < 3; axis++) flux = flux.add(area[axis].multiply(LiquidExactPolygon.Fraction.of(velocity.coordinate(axis))));
+		var denominator = flux.denominator();
+		return denominator.bitCount() == 1 ? new SignedDyadic(flux.numerator(), 1 - denominator.bitLength()) : SignedDyadic.of(flux.rounded());
 	}
 	private static double quantumPerMeasure(int quantum, double measure) {
 		int exponent = Math.getExponent(measure); return Math.scalb(1 / Math.scalb(measure, -exponent), quantum - exponent);

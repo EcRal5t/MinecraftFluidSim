@@ -9,7 +9,29 @@ final class LiquidCharacteristicValidation {
 	static void validate() {
 		repeatedGravityPreservesUniformCharacteristic();
 		wholeVolumeCharacteristicsPreserveGeometry();
+		mixedVelocitySupportSurvivesNextStep();
 		thinLiquidLayerPreservesSeparateGasPressureNodes();
+	}
+	private static void mixedVelocitySupportSurvivesNextStep() {
+		var left = new LiquidGeometryRefinement.Cell(1, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5));
+		var right = new LiquidGeometryRefinement.Cell(1, 1, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 0.5, 0.5));
+		var mesh = new LiquidControlVolumeMesh(List.of(left, right), 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		var rates = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; var velocity = new double[6]; velocity[3] = 0.125;
+		for (int f = 0; f < rates.length; f++) {
+			var face = mesh.faces.get(f); var normal = face.surface().areaVector(); rates[f] = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+			if (normal.x() > 0) rates[f] = cc.ecisr.mmm.units.SignedDyadic.of(normal.x() * 0.125);
+			else if (face.first() == 0 && normal.y() > 0) rates[f] = cc.ecisr.mmm.units.SignedDyadic.of(-0.03125);
+		}
+		var trajectory = new LiquidVelocityTrajectory(mesh, LiquidControlVolumeVelocity.reconstruct(mesh, rates, velocity));
+		var support = new LiquidVelocityRegions(trajectory);
+		if (support.cells(0).size() <= 1 || support.cells(1).size() != 1) throw new AssertionError("Exact uniform velocity support coalescing changed a nonuniform field");
+		var source = LiquidPolyhedron.box(0.49, 0.125, 0.125, 0.499, 0.375, 0.375); var inventory = cc.ecisr.mmm.units.SignedDyadic.of(source.moments().volume());
+		var moved = new LiquidCharacteristicTransport(trajectory).advect(0, source, inventory, 0.1, 16384, 256);
+		var sum = LiquidPolyhedron.Moments.ZERO; var amount = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		for (var fragment : moved) { sum = sum.add(fragment.geometry().moments()); amount = amount.add(fragment.inventory()); }
+		if (!amount.equals(inventory)) throw new AssertionError("Mixed velocity support lost exact liquid inventory");
+		close(sum.volume(), source.moments().volume(), 1e-18); close(sum.centroid(0), source.moments().centroid(0) + 0.0125, 1e-15);
+		characteristicImageRebuildsSpace(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.5, 0.5)), moved);
 	}
 	private static void thinLiquidLayerPreservesSeparateGasPressureNodes() {
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
@@ -121,15 +143,17 @@ final class LiquidCharacteristicValidation {
 		var state = LiquidGeometryStateMapper.capture(liquids, 1, java.util.stream.IntStream.range(0, liquids.size()).toArray());
 		var restored = LiquidGeometryStateMapper.restore(state); var restoredState = LiquidGeometryStateMapper.capture(restored, 1, state.copyMarkerCells());
 		for (int c = 0; c < state.cells().size(); c++) if (LiquidGeometryState.compare(state.cells().get(c), restoredState.cells().get(c)) != 0)
-			throw new AssertionError("Characteristic image lost exact planes across backend handoff");
+			throw new AssertionError("Characteristic image lost exact geometry across backend handoff");
 		var regions = LiquidPhasePartition.build(root, moved.stream().map(LiquidCharacteristicTransport.Fragment::geometry).toList(), 256);
 		var mesh = new LiquidControlVolumeMesh(regions.stream().map(LiquidPhasePartition.Region::cell).toList(), 1, 1000,
 				(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
 		var sum = LiquidPolyhedron.Moments.ZERO; for (var cell : mesh.cells) sum = sum.add(cell.geometry().moments());
-		close(sum.volume(), 1, 1e-14); close(sum.x(), 0.5, 1e-14); close(sum.y(), 0.5, 1e-14); close(sum.z(), 0.5, 1e-14);
+		var expected = root.geometry().moments(); close(sum.volume(), expected.volume(), 1e-14);
+		close(sum.x(), expected.x(), 1e-14); close(sum.y(), expected.y(), 1e-14); close(sum.z(), expected.z(), 1e-14);
 		var result = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(new double[3 * mesh.cells.size()],
 				new LiquidPolyhedron.Point(0, 0, 0), 0.025, 1e-11, 512);
 		for (var rate : result.volumeRate()) if (rate.signum() != 0) throw new AssertionError("Transported geometry lost zero-force equilibrium");
+		var velocity = LiquidControlVolumeVelocity.reconstruct(mesh, result.volumeRate(), result.cellVelocity()); new LiquidVelocityTrajectory(mesh, velocity);
 	}
 
 	private static void close(double actual, double expected, double tolerance) {

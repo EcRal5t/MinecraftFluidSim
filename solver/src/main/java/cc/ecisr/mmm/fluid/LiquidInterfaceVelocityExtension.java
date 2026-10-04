@@ -70,8 +70,8 @@ final class LiquidInterfaceVelocityExtension {
 		for (int f = 0; f < faces; f++) {
 			var face = mesh.faces.get(f); var vector = face.surface().areaVector(); double area = face.surface().area();
 			if (fixed[f] == null) {
-				double distance = vector.dot(face.surface().centroid().subtract(mesh.cells.get(first[f]).centroid())) / area;
-				if (second[f] < count) distance += vector.dot(mesh.cells.get(second[f]).centroid().subtract(face.surface().centroid())) / area;
+				double distance = face.distance(mesh.cells.get(first[f]).geometry(), 1);
+				if (second[f] < count) distance += face.distance(mesh.cells.get(second[f]).geometry(), -1);
 				resistance[f] = distance / area;
 				if (!(resistance[f] > 0) || !Double.isFinite(resistance[f])) throw new IllegalStateException("Interface extension metric exceeds numerical range");
 			}
@@ -140,7 +140,7 @@ final class LiquidInterfaceVelocityExtension {
 			for (int f : mesh.cellFaces[c]) {
 				var face = mesh.faces.get(f); double sign = face.first() == c ? 1 : -1, rate = sign * face.surface().area() * normal[f];
 				balance += rate; roundoff += Math.ulp(flow[f]) + face.surface().area() * Math.ulp(normal[f]) + Math.ulp(rate) + Math.ulp(balance);
-				if (liquid[c] < 0) for (int a = 0; a < 3; a++) primary[3 * c + a] += face.surface().centroid().subtract(center).coordinate(a) * sign * rates[f].subtract(reference[f]).toDouble() / volume;
+				if (liquid[c] < 0) for (int a = 0; a < 3; a++) primary[3 * c + a] += face.displacement(mesh.cells.get(c).geometry()).coordinate(a) * sign * rates[f].subtract(reference[f]).toDouble() / volume;
 			}
 			if (!(Math.abs(balance) <= roundoff)) throw new IllegalStateException("Interface flux observation exceeds exact continuity representation");
 			error = Math.max(error, Math.abs(balance) / volume); bound = Math.max(bound, roundoff / volume);

@@ -7,29 +7,36 @@ import java.math.BigInteger;
 public final class LiquidGeometryState {
 	public static final class ControlVolume {
 		private final int level, x, y, z;
-		private final double[] vertices;
+		private final BigInteger[] vertices;
 		private final BigInteger[] planes;
 		private final int[] faceOffsets, faceVertices;
 
-		public ControlVolume(int level, int x, int y, int z, double[] vertices, int[] faceOffsets, int[] faceVertices, BigInteger[] planes) {
+		public ControlVolume(int level, int x, int y, int z, BigInteger[] vertices, int[] faceOffsets, int[] faceVertices, BigInteger[] planes) {
 			if (level < 0 || level > 30 || x < 0 || y < 0 || z < 0
 					|| x >= 1L << level || y >= 1L << level || z >= 1L << level)
 				throw new IllegalArgumentException("Invalid liquid control-volume address");
-			if (vertices == null || vertices.length < 12 || vertices.length % 3 != 0 || faceOffsets == null
+			if (vertices == null || vertices.length < 16 || vertices.length % 4 != 0 || faceOffsets == null
 					|| faceOffsets.length < 5 || faceVertices == null || faceOffsets[0] != 0
 					|| faceOffsets[faceOffsets.length - 1] != faceVertices.length || planes == null
 					|| planes.length != 4 * (faceOffsets.length - 1))
 				throw new IllegalArgumentException("Invalid liquid control-volume faces");
-			int[] coordinate = {x, y, z}; double width = Math.scalb(1.0, -level);
-			for (int i = 0; i < vertices.length; i++) {
-				double lo = coordinate[i % 3] * width, hi = lo + width;
-				if (!Double.isFinite(vertices[i]) || vertices[i] < lo || vertices[i] > hi)
-					throw new IllegalArgumentException("Liquid vertex leaves its control volume");
+			int[] coordinate = {x, y, z};
+			for (int i = 0; i < vertices.length; i += 4) {
+				for (int a = 0; a < 4; a++) if (vertices[i + a] == null) throw new IllegalArgumentException("Missing exact liquid vertex coordinate");
+				var denominator = vertices[i + 3]; var divisor = denominator.abs();
+				if (denominator.signum() <= 0) throw new IllegalArgumentException("Invalid liquid vertex denominator");
+				for (int a = 0; a < 3; a++) {
+					divisor = divisor.gcd(vertices[i + a].abs()); var scaled = vertices[i + a].shiftLeft(level);
+					if (scaled.compareTo(denominator.multiply(BigInteger.valueOf(coordinate[a]))) < 0
+							|| scaled.compareTo(denominator.multiply(BigInteger.valueOf((long) coordinate[a] + 1))) > 0)
+						throw new IllegalArgumentException("Liquid vertex leaves its control volume");
+				}
+				if (!divisor.equals(BigInteger.ONE)) throw new IllegalArgumentException("Liquid vertex coordinates are not canonical");
 			}
 			for (int f = 1; f < faceOffsets.length; f++)
 				if (faceOffsets[f] < 0 || faceOffsets[f] - faceOffsets[f - 1] < 3 || faceOffsets[f] > faceVertices.length)
 					throw new IllegalArgumentException("Liquid face has invalid vertex support");
-			for (int vertex : faceVertices) if (vertex < 0 || vertex >= vertices.length / 3)
+			for (int vertex : faceVertices) if (vertex < 0 || vertex >= vertices.length / 4)
 				throw new IllegalArgumentException("Liquid face refers to an absent vertex");
 			for (int f = 0; f < planes.length; f += 4) {
 				BigInteger divisor = BigInteger.ZERO; boolean normal = false;
@@ -48,12 +55,13 @@ public final class LiquidGeometryState {
 		public int x() { return x; }
 		public int y() { return y; }
 		public int z() { return z; }
-		public double[] copyVertices() { return vertices.clone(); }
+		public BigInteger[] copyVertices() { return vertices.clone(); }
 		public int[] copyFaceOffsets() { return faceOffsets.clone(); }
 		public int[] copyFaceVertices() { return faceVertices.clone(); }
 		public BigInteger[] copyPlanes() { return planes.clone(); }
 		public long cpuBytes() {
-			long bytes = (long) vertices.length * Double.BYTES + (long) (faceOffsets.length + faceVertices.length) * Integer.BYTES;
+			long bytes = (long) (faceOffsets.length + faceVertices.length) * Integer.BYTES;
+			for (var coordinate : vertices) bytes = Math.addExact(bytes, 32L + (coordinate.bitLength() + 7L) / 8);
 			for (var coefficient : planes) bytes = Math.addExact(bytes, 32L + (coefficient.bitLength() + 7L) / 8);
 			return bytes;
 		}

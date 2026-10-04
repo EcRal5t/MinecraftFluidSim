@@ -11,23 +11,23 @@ import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 final class LiquidCharacteristicTransport {
 	record Fragment(LiquidPolyhedron geometry, SignedDyadic inventory) { }
 	private record Flight(Time residual, Fraction speed) { Time remaining() { return residual.scaled(Fraction.of(1).divide(speed)); } }
-	private record State(LiquidConvexRegion source, LiquidVelocityTrajectory.Piece piece, LiquidCharacteristicMap map, Time remaining, int events) { }
+	private record State(LiquidConvexRegion source, LiquidVelocityRegions.Region region, LiquidCharacteristicMap map, Time remaining, int events) { }
 	private record Moved(LiquidConvexRegion source, LiquidCharacteristicMap transform) { }
-	private final LiquidVelocityTrajectory field;
-	LiquidCharacteristicTransport(LiquidVelocityTrajectory field) { this.field = field; }
+	private final LiquidVelocityRegions field;
+	LiquidCharacteristicTransport(LiquidVelocityTrajectory field) { this.field = new LiquidVelocityRegions(field); }
 
 	List<Fragment> advect(int cell, LiquidPolyhedron source, SignedDyadic inventory, double dt, int maximumPieces, int maximumEvents) {
 		if (!(dt >= 0) || !Double.isFinite(dt) || inventory.signum() <= 0 || !(source.moments().volume() > 0) || maximumPieces <= 0 || maximumEvents <= 0)
 			throw new IllegalArgumentException("Invalid liquid characteristic transport request");
 		var queue = new ArrayDeque<State>(); var moved = new ArrayList<Moved>();
 		var original = LiquidConvexRegion.of(source); var partition = LiquidConvexRegion.EMPTY.measure();
-		for (var piece : field.pieces(cell)) {
+		for (var region : field.cells(cell)) {
 			var local = original;
-			for (var plane : piece.geometry.planes()) local = local.clip(plane);
+			for (var polygon : region.geometry.faces()) local = local.clip(polygon.plane());
 			if (!local.hasVolume()) continue;
 			partition = partition.add(local.measure());
-			var velocity = piece.velocity();
-			queue.add(new State(local, piece, LiquidCharacteristicMap.initial(velocity, dt), Time.constant(dt), 0));
+			var velocity = region.velocity();
+			queue.add(new State(local, region, LiquidCharacteristicMap.initial(velocity, dt), Time.constant(dt), 0));
 			if (queue.size() > maximumPieces) throw new IllegalStateException("Liquid characteristic partition exceeds its work budget");
 		}
 		if (!partition.same(original.measure()))
@@ -36,29 +36,30 @@ final class LiquidCharacteristicTransport {
 		while (!queue.isEmpty()) {
 			if (++processed > maximumPieces) throw new IllegalStateException("Liquid characteristic transport exceeds its work budget");
 			var state = queue.removeFirst();
-			if (state.piece.tetra.isotropicGradient() != 0) throw new IllegalStateException("Liquid motion requires incompressible velocity support at finer resolution");
-			var velocity = state.piece.velocity(); var flights = new Flight[4]; var completed = state.source;
-			for (int f = 0; f < 4; f++) {
-				var plane = state.piece.geometry.planes().get(f); var speed = LiquidCharacteristicMap.speed(plane, velocity);
+			var velocity = state.region.velocity(); int faces = state.region.faces.size(); var flights = new Flight[faces]; var completed = state.source;
+			for (int f = 0; f < faces; f++) {
+				var plane = state.region.faces.get(f).polygon().plane(); var speed = LiquidCharacteristicMap.speed(plane, velocity);
 				var residual = state.map.residual(plane);
 				completed = residual.belowZero(completed);
-				if (state.piece.tetra.outwardFlux().get(f).signum() > 0) {
-					if (speed.numerator().signum() <= 0) throw new IllegalStateException("Characteristic face velocity exceeds geometric numerical resolution");
+				if (speed.numerator().signum() > 0) {
 					flights[f] = new Flight(residual, speed);
 				}
 			}
 			if (completed.hasVolume()) {
 				moved.add(new Moved(completed, state.map));
 			}
-			for (int exit = 0; exit < 4; exit++) if (flights[exit] != null) {
+			for (int exit = 0; exit < faces; exit++) if (flights[exit] != null) {
 				var crossing = flights[exit]; var remaining = crossing.remaining();
 				var outgoing = crossing.residual.scaled(Fraction.of(-1)).belowZero(state.source);
-				for (int other = 0; other < 4; other++) if (other != exit && flights[other] != null)
+				for (int other = 0; other < faces; other++) if (other != exit && flights[other] != null)
 					outgoing = flights[other].residual.scaled(crossing.speed).subtract(crossing.residual.scaled(flights[other].speed)).belowZero(outgoing);
 				outgoing = remaining.subtract(state.remaining).belowZero(outgoing);
+				var crossingMap = state.map.cross(velocity, new Fraction[] {Fraction.of(0), Fraction.of(0), Fraction.of(0)}, remaining);
+				for (var plane : state.region.faces.get(exit).polygon().edgePlanes())
+					outgoing = crossingMap.residual(LiquidGeometryPlane.exact(plane)).belowZero(outgoing);
 				if (!outgoing.hasVolume()) continue;
 				if (state.events >= maximumEvents) throw new IllegalStateException("Liquid characteristic exceeds its face-event budget");
-				var next = state.piece.neighbor[exit];
+				var next = state.region.faces.get(exit).neighbor();
 				if (next == null) throw new IllegalStateException("Liquid geometry leaves its resolved velocity support");
 				queue.addLast(new State(outgoing, next, state.map.cross(velocity, next.velocity(), remaining), remaining, state.events + 1));
 				if (queue.size() + moved.size() > maximumPieces) throw new IllegalStateException("Liquid characteristic fragments exceed their work budget");

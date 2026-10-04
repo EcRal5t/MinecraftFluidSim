@@ -19,10 +19,31 @@ final class LiquidControlVolumeProjection {
 		}
 	}
 	/** second >= 0: liquid neighbor; -1: liquid-side interface pressure; -2: solid normal velocity. */
-	record Face(int first, int second, LiquidPolyhedron.Surface surface, double prescribed) {
+	record Face(int first, int second, LiquidPolyhedron.Surface surface, double prescribed,
+			List<LiquidExactPolygon.Fraction> areaVector, List<LiquidExactPolygon.Fraction> centroid) {
+		Face(int first, int second, LiquidPolyhedron.Surface surface, double prescribed) {
+			this(first, second, surface, prescribed, coordinates(surface.areaVector()), coordinates(surface.centroid()));
+		}
+		Face(int first, int second, LiquidPolyhedron.Surface surface, double prescribed, LiquidExactPolygon polygon) {
+			this(first, second, surface, prescribed, List.of(polygon.areaVector()), List.of(polygon.centroidCoordinates()));
+		}
 		Face {
 			if (first < 0 || second < -2 || first == second || surface == null || !(surface.area() > 0)
-					|| !Double.isFinite(surface.area()) || !Double.isFinite(prescribed)) throw new IllegalArgumentException("Invalid liquid pressure face");
+					|| !Double.isFinite(surface.area()) || !Double.isFinite(prescribed) || areaVector.size() != 3 || centroid.size() != 3) throw new IllegalArgumentException("Invalid liquid pressure face");
+			areaVector = List.copyOf(areaVector); centroid = List.copyOf(centroid);
+		}
+		LiquidPolyhedron.Point displacement(LiquidPolyhedron geometry) {
+			var center = geometry.centroidCoordinates(); double[] result = new double[3];
+			for (int a = 0; a < 3; a++) result[a] = centroid.get(a).subtract(center[a]).rounded();
+			return new LiquidPolyhedron.Point(result[0], result[1], result[2]);
+		}
+		double distance(LiquidPolyhedron geometry, int sign) {
+			var center = geometry.centroidCoordinates(); var result = LiquidExactPolygon.Fraction.of(0);
+			for (int a = 0; a < 3; a++) result = result.add(areaVector.get(a).multiply(centroid.get(a).subtract(center[a])));
+			return sign * result.rounded() / surface.area();
+		}
+		private static List<LiquidExactPolygon.Fraction> coordinates(LiquidPolyhedron.Point point) {
+			return List.of(LiquidExactPolygon.Fraction.of(point.x()), LiquidExactPolygon.Fraction.of(point.y()), LiquidExactPolygon.Fraction.of(point.z()));
 		}
 	}
 	/** Positive volume compliance is -dV/dp in m^3/Pa, evaluated by the gas equation of state. */

@@ -39,7 +39,8 @@ final class LiquidPhaseMechanics {
 				int gas = a ? face.second() : face.first(); prescribed = pressure.at(f, gas);
 				if (gas >= 0) { node = gasCellNode[gas]; if (node < -1 || node >= gasNodes.size()) throw new IllegalArgumentException("Gas cell has no pressure node"); }
 			}
-			faces.add(new LiquidControlVolumeProjection.Face(source, neighbor, surface, prescribed)); ids.add(f); signs.add(sign); nodes.add(node);
+			var vector = sign > 0 ? face.areaVector() : face.areaVector().stream().map(LiquidExactPolygon.Fraction::negate).toList();
+			faces.add(new LiquidControlVolumeProjection.Face(source, neighbor, surface, prescribed, vector, face.centroid())); ids.add(f); signs.add(sign); nodes.add(node);
 		}
 		faceIds = ids.stream().mapToInt(Integer::intValue).toArray(); faceSigns = signs.stream().mapToInt(Integer::intValue).toArray();
 		projection = new LiquidControlVolumeProjection(cells, faces, gasNodes, nodes.stream().mapToInt(Integer::intValue).toArray());
