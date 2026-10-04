@@ -21,12 +21,16 @@ final class LiquidGeometryDomainPartition {
 
 	LiquidGeometryDomainPartition(int sizeX, int sizeY, int sizeZ, float cellSize, FlipCutCellGeometry collision,
 			List<LiquidGeometryRefinement.Cell> requested, int maximumLeaves) {
+		this(sizeX, sizeY, sizeZ, cellSize, collision.copyMicroMasks(), requested, maximumLeaves);
+	}
+	LiquidGeometryDomainPartition(int sizeX, int sizeY, int sizeZ, float cellSize, byte[] collision,
+			List<LiquidGeometryRefinement.Cell> requested, int maximumLeaves) {
 		if (sizeX < 1 || sizeY < 1 || sizeZ < 1 || !(cellSize > 0) || !Float.isFinite(cellSize) || maximumLeaves < 1)
 			throw new IllegalArgumentException("Invalid geometric domain partition");
 		int extent = Math.max(sizeX, Math.max(sizeY, sizeZ)); int span = extent == 1 ? 1 : Integer.highestOneBit(extent - 1) << 1;
 		if (span <= 0) throw new IllegalArgumentException("Geometric domain exceeds dyadic address range");
 		int baseLevel = Integer.numberOfTrailingZeros(span); if (baseLevel >= 30) throw new IllegalArgumentException("Collision detail exceeds dyadic coordinate resolution");
-		size = new int[] {sizeX, sizeY, sizeZ}; masks = collision.copyMicroMasks(); microWidth = 0.5 * cellSize;
+		size = new int[] {sizeX, sizeY, sizeZ}; masks = collision.clone(); microWidth = 0.5 * cellSize;
 		if (masks.length != (long) sizeX * sizeY * sizeZ) throw new IllegalArgumentException("Collision layout differs from geometric domain");
 		rootWidthMetres = span * (double) cellSize; var tree = new Node();
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {

@@ -18,10 +18,17 @@ public final class FlipParticleState {
 	private final float[] positionVolume;
 	private final float[] particleVelocities;
 	private final byte[] collisionMicroMasks;
+	private final LiquidGeometryState liquidGeometry;
 
 	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
 	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
 	                         byte[] collisionMicroMasks) {
+		this(sizeX, sizeY, sizeZ, cellSize, particleCount, volumeLedger, positionVolume, particleVelocities, collisionMicroMasks, null);
+	}
+	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
+	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
+	                         byte[] collisionMicroMasks, LiquidGeometryState liquidGeometry) {
+		if (liquidGeometry != null && liquidGeometry.markerCount() != particleCount) throw new IllegalArgumentException("Liquid geometry inventory count differs from carrier state");
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(cellSize > 0.0F)) {
 			throw new IllegalArgumentException("Invalid particle-state grid");
 		}
@@ -66,7 +73,7 @@ public final class FlipParticleState {
 			int localY = Math.min(1, (int) Math.floor((y / cellSize - cellY) * 2.0F));
 			int localZ = Math.min(1, (int) Math.floor((z / cellSize - cellZ) * 2.0F));
 			int microBit = 1 << (localX + 2 * (localY + 2 * localZ));
-			if ((Byte.toUnsignedInt(collisionMicroMasks[cell]) & microBit) != 0) {
+			if (liquidGeometry == null && (Byte.toUnsignedInt(collisionMicroMasks[cell]) & microBit) != 0) {
 				throw new IllegalArgumentException("Particle state contains a marker inside collision geometry");
 			}
 			for (int axis = 0; axis < 3; axis++) if (!Float.isFinite(particleVelocities[velocityBase + axis])) {
@@ -92,6 +99,7 @@ public final class FlipParticleState {
 		this.positionVolume = positionVolume.clone();
 		this.particleVelocities = particleVelocities.clone();
 		this.collisionMicroMasks = collisionMicroMasks.clone();
+		this.liquidGeometry = liquidGeometry;
 	}
 
 	public int sizeX() { return sizeX; }
@@ -102,9 +110,11 @@ public final class FlipParticleState {
 	public float totalVolume() { return totalVolume; }
 	public float centerOfMassX() { return centerOfMassX; }
 	public int solidCellCount() { return solidCellCount; }
+	/** Resolved liquid geometry; its occupied volume is checked against collision masks by the solver. */
+	public LiquidGeometryState liquidGeometry() { return liquidGeometry; }
 	public long cpuBytes() {
 		return (long) positionVolume.length * Float.BYTES
-				+ (long) particleVelocities.length * Float.BYTES + collisionMicroMasks.length;
+				+ (long) particleVelocities.length * Float.BYTES + collisionMicroMasks.length + (liquidGeometry == null ? 0 : liquidGeometry.cpuBytes());
 	}
 
 	public void requireCompatible(int expectedX, int expectedY, int expectedZ, float expectedCellSize) {

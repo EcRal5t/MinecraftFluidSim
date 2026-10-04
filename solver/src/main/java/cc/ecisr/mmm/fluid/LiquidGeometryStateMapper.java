@@ -100,11 +100,17 @@ final class LiquidGeometryStateMapper {
 	}
 
 	static void requireCompatible(LiquidGeometryState state, FluidDomain domain) {
+		requireCompatible(state, LiquidGeometryInventoryView.of(domain.particles), domain.sizeX, domain.sizeY, domain.sizeZ,
+				domain.config.cellSize(), domain.geometry.cutCells.copyMicroMasks());
+	}
+	static void requireCompatible(LiquidGeometryState state, LiquidGeometryInventoryView inventory,
+			int sizeX, int sizeY, int sizeZ, float cellSize, byte[] collisionMasks) {
 		var cells = restore(state); int[] owners = state.copyMarkerCells(), fragments = state.copyFragmentOwners();
-		if (owners.length != domain.particles.count()) throw new IllegalArgumentException("Liquid geometry quadrature count differs from inventory");
-		LiquidGeometryMomentumAudit.requireCompatible(state, cells, domain);
-		int extent = Math.max(domain.sizeX, Math.max(domain.sizeY, domain.sizeZ)); int span = extent == 1 ? 1 : Integer.highestOneBit(extent - 1) << 1;
-		double width = span * (double) domain.config.cellSize();
+		if (owners.length != inventory.count()) throw new IllegalArgumentException("Liquid geometry quadrature count differs from inventory");
+		LiquidGeometryMomentumAudit.requireCompatible(state, cells, inventory);
+		LiquidGeometryCollisionAudit.requireCompatible(state, cells, sizeX, sizeY, sizeZ, cellSize, collisionMasks);
+		int extent = Math.max(sizeX, Math.max(sizeY, sizeZ)); int span = extent == 1 ? 1 : Integer.highestOneBit(extent - 1) << 1;
+		double width = span * (double) cellSize;
 		if (state.rootWidthMetres() != width) throw new IllegalArgumentException("Liquid geometry root differs from the physical domain");
 		var rootScale = LiquidExactPolygon.Fraction.of(span); rootScale = rootScale.multiply(rootScale).multiply(rootScale);
 		var rootWidth = LiquidExactPolygon.Fraction.of(width);
@@ -114,13 +120,12 @@ final class LiquidGeometryStateMapper {
 		java.util.Arrays.fill(moments, cc.ecisr.mmm.units.SignedDyadic.ZERO);
 		double[] positionErrors = new double[cells.size()];
 		for (int p = 0; p < owners.length; p++) {
-			int c = owners[p]; volumes[c] = volumes[c].add(cc.ecisr.mmm.units.SignedDyadic.of(domain.particles.volume(p)));
-			double positionError = Math.max(Math.ulp(domain.particles.positionX(p)), Math.max(Math.ulp(domain.particles.positionY(p)),
-					Math.ulp(domain.particles.positionZ(p))));
+			int c = owners[p]; volumes[c] = volumes[c].add(cc.ecisr.mmm.units.SignedDyadic.of(inventory.volume(p)));
+			double positionError = Math.max(Math.ulp((float) inventory.position(p, 0)), Math.max(Math.ulp((float) inventory.position(p, 1)),
+					Math.ulp((float) inventory.position(p, 2))));
 			positionErrors[c] = Math.max(positionErrors[c], positionError);
 			for (int a = 0; a < 3; a++) {
-				double position = a == 0 ? domain.particles.positionX(p) : a == 1 ? domain.particles.positionY(p) : domain.particles.positionZ(p);
-				moments[3 * c + a] = moments[3 * c + a].add(cc.ecisr.mmm.units.SignedDyadic.of(position * domain.particles.volume(p)));
+				moments[3 * c + a] = moments[3 * c + a].add(cc.ecisr.mmm.units.SignedDyadic.of(inventory.position(p, a) * inventory.volume(p)));
 			}
 		}
 		var measures = new LiquidExactPolygon.Measure[cells.size()]; java.util.Arrays.fill(measures, LiquidConvexRegion.EMPTY.measure());
@@ -128,7 +133,7 @@ final class LiquidGeometryStateMapper {
 			int c = fragments[fragment]; var geometry = cells.get(fragment).geometry(); measures[c] = measures[c].add(LiquidConvexRegion.of(geometry).measure());
 			for (var face : LiquidExactPolygon.faces(geometry)) {
 				for (var vertex : face.vertices()) for (int a = 0; a < 3; a++) {
-					int limit = a == 0 ? domain.sizeX : a == 1 ? domain.sizeY : domain.sizeZ;
+					int limit = a == 0 ? sizeX : a == 1 ? sizeY : sizeZ;
 					if (vertex.coordinate(a).multiply(java.math.BigInteger.valueOf(span)).compareTo(vertex.w().multiply(java.math.BigInteger.valueOf(limit))) > 0)
 						throw new IllegalArgumentException("Liquid geometry leaves the physical domain");
 				}

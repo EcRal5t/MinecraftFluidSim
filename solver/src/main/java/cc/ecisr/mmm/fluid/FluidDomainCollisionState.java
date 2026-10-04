@@ -50,7 +50,14 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 	/** Replaces this domain from one validated, immutable in-memory marker state. */
 	public void restoreParticleState(FlipParticleState state) {
 		if (materialDefinitions != null) throw new IllegalStateException("Pure restore cannot remove bound liquid material identity");
+		requireRestorableGeometry(state, null, config.density());
 		restoreParticleColumns(state);
+	}
+	private void requireRestorableGeometry(FlipParticleState state, double[] masses, double defaultDensity) {
+		if (state == null) throw new IllegalArgumentException("Particle state must not be null");
+		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize());
+		if (state.liquidGeometry() != null) LiquidGeometryStateMapper.requireCompatible(state.liquidGeometry(),
+				LiquidGeometryInventoryView.of(state, masses, defaultDensity), sizeX, sizeY, sizeZ, config.cellSize(), state.collisionMicroMasks());
 	}
 
 	private void restoreParticleColumns(FlipParticleState state) {
@@ -87,6 +94,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		pressureAnchor = -1;
 		lastPressureIterations = 0;
 		lastPressureResidual = 0.0F;
+		liquidGeometryState = state.liquidGeometry();
 		gridDirty = true;
 	}
 
@@ -104,6 +112,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		if (Math.abs(defaultDensity - config.density()) > tolerance) {
 			throw new IllegalArgumentException("Material handle 0 must match the domain default density");
 		}
+		requireRestorableGeometry(state.particles(), state.particleMass(), defaultDensity);
 		restoreParticleColumns(state.particles());
 		double[] restoredMass = state.particleMass();
 		int[] restoredMaterial = state.materialPaletteIndex();

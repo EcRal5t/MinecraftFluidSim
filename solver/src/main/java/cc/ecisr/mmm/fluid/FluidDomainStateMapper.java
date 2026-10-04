@@ -15,8 +15,6 @@ final class FluidDomainStateMapper {
 		if (domain.collisionTransactionActive()) {
 			throw new IllegalStateException("Cannot capture while a collision transaction is active");
 		}
-		if (domain.liquidGeometryState != null) LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
-		if (domain.gasState.cellNodeId != null) domain.gasTopologyCoordinator.synchronizeForPersistence();
 
 		FlipParticleState pure = null;
 		FlipMaterialParticleState materials = null;
@@ -30,6 +28,7 @@ final class FluidDomainStateMapper {
 		} else {
 			pure = domain.exportParticleState();
 		}
+		if (domain.gasState.cellNodeId != null) domain.gasTopologyCoordinator.synchronizeForPersistence();
 
 		GranularStateSnapshot granular = domain.granularState == null ? null : domain.exportGranularState();
 		String chemicalFingerprint = chemistry == null ? "" : chemistry.fingerprint();
@@ -52,7 +51,7 @@ final class FluidDomainStateMapper {
 				domain.thermalBoundaryTemperatureK,
 				domain.thermalState == null ? null : new CondensedPhasePressureField(
 						domain.pressureReference, domain.projection.pressure),
-				domain.materialDefinitions, domain.liquidGeometryState);
+				domain.materialDefinitions);
 	}
 
 	static FluidDomainState.Layout layout(FluidDomain domain) {
@@ -106,10 +105,6 @@ final class FluidDomainStateMapper {
 					domain.projection.pressure, 0, domain.cellCount);
 		}
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
-		if (state.liquidGeometry() != null) {
-			LiquidGeometryStateMapper.requireCompatible(state.liquidGeometry(), domain);
-			domain.liquidGeometryState = state.liquidGeometry();
-		}
 		return domain;
 	}
 }

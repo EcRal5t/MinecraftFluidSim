@@ -44,7 +44,37 @@ final class LiquidGeometryValidation {
 		phasePartitionPreservesSolidOpenGeometry();
 		resolvedDomainUsesCollisionOpenSpace();
 		liquidSourcesUseExactOpenGeometry();
+		inventoryCentroidUsesResolvedCollisionSupport();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static void inventoryCentroidUsesResolvedCollisionSupport() {
+		var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults()); domain.setVolume(1, 1, 1, 0.125F);
+		var left = new LiquidGeometryRefinement.Cell(2, 0, 1, 1, LiquidPolyhedron.box(0.125, 0.25, 0.25, 0.1875, 0.375, 0.375));
+		var right = new LiquidGeometryRefinement.Cell(2, 1, 1, 1, LiquidPolyhedron.box(0.4375, 0.25, 0.25, 0.5, 0.375, 0.375));
+		domain.liquidGeometryState = LiquidGeometryStateMapper.capture(java.util.List.of(left, right), 4 * (double) domain.config.cellSize(), new int[] {0}, new int[] {0, 0});
+		domain.geometry.cutCells.replaceMask(domain.cellIndex(1, 1, 1), 1);
+		var exported = domain.exportParticleState(); var restored = FluidDomainStateMapper.restore(FluidDomainStateMapper.capture(domain));
+		if (exported.liquidGeometry() != domain.liquidGeometryState || restored.liquidGeometryState == null)
+			throw new AssertionError("Inventory handoff lost actual liquid support across an occupied centroid");
+		var badPosition = exported.copyPositionVolume(); badPosition[0] += 0.125F;
+		var inconsistent = new FlipParticleState(4, 4, 4, domain.config.cellSize(), 1, 0.125F, badPosition,
+				exported.copyParticleVelocities(), exported.copyCollisionMicroMasks(), exported.liquidGeometry());
+		var before = restored.exportParticleState();
+		try {
+			restored.restoreParticleState(inconsistent);
+			throw new AssertionError("Restore accepted a geometric centroid inconsistent with the inventory carrier");
+		} catch (IllegalArgumentException expected) { }
+		if (!java.util.Arrays.equals(before.copyPositionVolume(), restored.exportParticleState().copyPositionVolume()))
+			throw new AssertionError("Failed native geometry restore changed the submitted inventory");
+		var wall = exported.copyCollisionMicroMasks(); wall[domain.cellIndex(0, 1, 1)] = (byte) 0xff;
+		var intersecting = new FlipParticleState(4, 4, 4, domain.config.cellSize(), 1, 0.125F, exported.copyPositionVolume(),
+				exported.copyParticleVelocities(), wall, exported.liquidGeometry());
+		try {
+			restored.restoreParticleState(intersecting);
+			throw new AssertionError("Restore accepted actual liquid volume inside a solid collision cell");
+		} catch (IllegalArgumentException | IllegalStateException expected) { }
+		if (!java.util.Arrays.equals(before.copyCollisionMicroMasks(), restored.exportParticleState().copyCollisionMicroMasks()))
+			throw new AssertionError("Rejected native collision support changed the committed masks");
 	}
 	private static void liquidSourcesUseExactOpenGeometry() {
 		var open = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 2, 3, 3);

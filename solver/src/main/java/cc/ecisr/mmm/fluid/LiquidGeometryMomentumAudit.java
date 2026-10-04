@@ -8,7 +8,7 @@ import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 final class LiquidGeometryMomentumAudit {
 	private LiquidGeometryMomentumAudit() { }
 
-	static void requireCompatible(LiquidGeometryState state, List<LiquidGeometryRefinement.Cell> cells, FluidDomain domain) {
+	static void requireCompatible(LiquidGeometryState state, List<LiquidGeometryRefinement.Cell> cells, LiquidGeometryInventoryView inventory) {
 		int[] markers = state.copyMarkerCells(), owners = state.copyFragmentOwners(); int count = cells.size();
 		var volume = new Fraction[count]; var mass = new Fraction[count]; var integrated = new Fraction[3 * count]; var observed = new Fraction[3 * count];
 		Arrays.fill(volume, Fraction.ZERO); Arrays.fill(mass, Fraction.ZERO); Arrays.fill(integrated, Fraction.ZERO); Arrays.fill(observed, Fraction.ZERO);
@@ -22,11 +22,10 @@ final class LiquidGeometryMomentumAudit {
 			}
 		}
 		for (int p = 0; p < markers.length; p++) {
-			int owner = markers[p]; double m = domain.particles.mass(p); var exactMass = Fraction.of(m); mass[owner] = mass[owner].add(exactMass);
-			float[] u = {domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
+			int owner = markers[p]; var exactMass = Fraction.of(inventory.mass(p)); mass[owner] = mass[owner].add(exactMass);
 			for (int a = 0; a < 3; a++) {
-				observed[3 * owner + a] = observed[3 * owner + a].add(exactMass.multiply(Fraction.of(u[a])));
-				var error = Fraction.of(Math.ulp(u[a])).add(Fraction.of(velocityErrors[3 * owner + a]).multiply(Fraction.of(8)));
+				float u = (float) inventory.velocity(p, a); observed[3 * owner + a] = observed[3 * owner + a].add(exactMass.multiply(Fraction.of(u)));
+				var error = Fraction.of(Math.ulp(u)).add(Fraction.of(velocityErrors[3 * owner + a]).multiply(Fraction.of(8)));
 				errors[3 * owner + a] = errors[3 * owner + a].add(exactMass.multiply(error));
 			}
 		}

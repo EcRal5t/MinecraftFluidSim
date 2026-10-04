@@ -45,6 +45,7 @@ public final class FluidDomainStateAssertions {
 				context + ": precipitation flag changed");
 		require(expected.maximumThermalTransportSubsteps() == actual.maximumThermalTransportSubsteps(),
 				context + ": thermal substep budget changed");
+		compareGeometry(expected.liquidGeometry(), actual.liquidGeometry(), context);
 		switch (expected.carrierKind()) {
 			case PURE -> compareParticles(expected.particles(), actual.particles(), context + " pure carrier");
 			case MATERIAL -> compareMaterials(expected.materials(), actual.materials(),
@@ -72,6 +73,15 @@ public final class FluidDomainStateAssertions {
 			compareCondensedPhasePressure(expected.condensedPhasePressure(),
 					actual.condensedPhasePressure(), context);
 		}
+	}
+	private static void compareGeometry(LiquidGeometryState expected, LiquidGeometryState actual, String context) {
+		require((expected == null) == (actual == null), context + ": liquid geometry presence changed"); if (expected == null) return;
+		require(Double.doubleToRawLongBits(expected.rootWidthMetres()) == Double.doubleToRawLongBits(actual.rootWidthMetres()), context + ": liquid geometry scale changed");
+		require(Arrays.equals(expected.copyMarkerCells(), actual.copyMarkerCells()), context + ": liquid geometry inventory changed");
+		require(Arrays.equals(expected.copyFragmentOwners(), actual.copyFragmentOwners()), context + ": liquid fragment ownership changed");
+		require(expected.cells().size() == actual.cells().size(), context + ": liquid geometry fragment count changed");
+		for (int c = 0; c < expected.cells().size(); c++) require(LiquidGeometryState.compare(expected.cells().get(c), actual.cells().get(c)) == 0,
+				context + ": exact liquid control-volume geometry or velocity changed at " + c);
 	}
 
 	private static void compareParticles(FlipParticleState expected, FlipParticleState actual, String context) {
