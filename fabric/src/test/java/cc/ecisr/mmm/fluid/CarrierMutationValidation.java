@@ -65,6 +65,12 @@ public final class CarrierMutationValidation {
 				"ordinary native removal lost its actual volume or escaped species ledger");
 		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
 		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "ordinary native removal lost thermal settlement");
+		species = domain.totalChemicalSpeciesQuanta(); sink = domain.chemicalParcels.escapedSink().totalQuanta();
+		require(domain.removeParticlesInCell(2, 1, 1, Float.POSITIVE_INFINITY) == 0.046875F
+				&& domain.totalChemicalSpeciesQuanta() + domain.chemicalParcels.escapedSink().totalQuanta() - sink == species,
+				"single-cell native removal lost side columns during the descending swap sweep");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "single-cell native removal lost thermal settlement");
 	}
 
 	private static void independentWorkFinishesBeforeRejection() {

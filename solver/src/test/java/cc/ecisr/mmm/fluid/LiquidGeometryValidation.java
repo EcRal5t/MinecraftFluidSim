@@ -95,11 +95,12 @@ final class LiquidGeometryValidation {
 				|| Math.abs(domain.particles.velocityX(0) + 1.0 / 3) > Math.ulp(domain.particles.velocityX(0)))
 			throw new AssertionError("Partial extraction lost occupied geometry or retained momentum");
 		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
-		if (!domain.tryExtractExactVolume(0, 1, 1, 0.03125F, 0).transferred()) throw new AssertionError("Remaining local support could not be extracted");
+		if (domain.removeParticlesInCell(0, 1, 1, Float.POSITIVE_INFINITY) != 0.03125F)
+			throw new AssertionError("Single-cell removal did not use the remaining actual local support");
 		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
 		if (domain.particles.positionX(0) != 1.875F * domain.config.cellSize() || domain.particles.velocityX(0) != -1)
 			throw new AssertionError("Spatial extraction retained the old group centroid or velocity");
-		if (!domain.tryExtractExactVolume(1, 1, 1, 0.0625F, 0).transferred() || !domain.liquidGeometryState.cells().isEmpty())
+		if (domain.removeParticlesInCell(1, 1, 1, Float.POSITIVE_INFINITY) != 0.0625F || !domain.liquidGeometryState.cells().isEmpty())
 			throw new AssertionError("Complete extraction retained empty inventory geometry");
 		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
 		var shared = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults()); shared.setVolume(1, 1, 1, 0.125F);
@@ -193,7 +194,7 @@ final class LiquidGeometryValidation {
 		if (empty.addVolumeNearBudgeted(1, 1, 1, Float.MIN_VALUE, 0).addedVolume() != Float.MIN_VALUE)
 			throw new AssertionError("Geometric source discarded a representable positive volume tail");
 		LiquidGeometryStateMapper.requireCompatible(empty.liquidGeometryState, empty);
-		if (empty.removeVolumeNear(1, 1, 1, Float.MIN_VALUE, 0) != Float.MIN_VALUE || !empty.liquidGeometryState.cells().isEmpty())
+		if (empty.removeParticlesInCell(1, 1, 1, Float.MIN_VALUE) != Float.MIN_VALUE || !empty.liquidGeometryState.cells().isEmpty())
 			throw new AssertionError("Ordinary removal discarded a positive inventory tail or retained its geometry");
 		LiquidGeometryStateMapper.requireCompatible(empty.liquidGeometryState, empty);
 	}
