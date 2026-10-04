@@ -41,7 +41,29 @@ final class LiquidGeometryValidation {
 		geometrySurvivesCandidateHandoff();
 		affineCharacteristicsPreserveResolvedGeometry();
 		multipleFragmentsAndGasSpaceShareCompleteFaces();
+		phasePartitionPreservesSolidOpenGeometry();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static void phasePartitionPreservesSolidOpenGeometry() {
+		var open = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 2, 3, 3);
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, open);
+		var liquid = LiquidPolyhedron.box(0.125, 0.125, 0.125, 0.375, 0.375, 0.375);
+		var phases = LiquidPhasePartition.build(root, java.util.List.of(liquid), 64); var measure = LiquidConvexRegion.EMPTY.measure();
+		for (var region : phases) measure = measure.add(LiquidConvexRegion.of(region.cell().geometry()).measure());
+		if (!measure.same(LiquidConvexRegion.of(open).measure())) throw new AssertionError("Phase partition changed solid open volume or first moments");
+		var mesh = new LiquidControlVolumeMesh(phases.stream().map(LiquidPhasePartition.Region::cell).toList(), 1, 1000,
+				(c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+		for (var face : mesh.faces) if (face.second() < 0) {
+			boolean support = false;
+			for (var plane : open.planes()) support |= Math.abs(plane.signedDistance(face.surface().centroid())) <= plane.evaluationError(face.surface().centroid());
+			if (!support) throw new AssertionError("Solid phase partition exposed an internal face");
+		}
+		try {
+			LiquidPhasePartition.build(root, java.util.List.of(LiquidPolyhedron.box(0.75, 0.75, 0.75, 1, 1, 1)), 64);
+			throw new AssertionError("Phase partition accepted liquid inside solid geometry");
+		} catch (IllegalArgumentException expected) {
+			if (!expected.getMessage().contains("open phase geometry")) throw expected;
+		}
 	}
 
 	private static void multipleFragmentsAndGasSpaceShareCompleteFaces() {

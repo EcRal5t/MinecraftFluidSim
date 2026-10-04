@@ -27,19 +27,23 @@ final class LiquidPhasePartition {
 	static List<Region> build(LiquidGeometryRefinement.Cell leaf, List<LiquidPolyhedron> liquids, int maximumRegions) {
 		if (maximumRegions < 1) throw new IllegalArgumentException("Empty phase geometry budget");
 		if (liquids.size() > maximumRegions) throw new IllegalStateException("Phase geometry exceeds its region budget");
-		var address = Address.of(leaf); double w = leaf.width();
-		var box = LiquidPolyhedron.box(leaf.minimum(0), leaf.minimum(1), leaf.minimum(2),
-				leaf.minimum(0) + w, leaf.minimum(1) + w, leaf.minimum(2) + w);
+		var address = Address.of(leaf); double w = leaf.width(); var open = LiquidConvexRegion.of(leaf.geometry());
+		if (!open.hasVolume()) throw new IllegalArgumentException("Empty open phase geometry");
+		for (var face : leaf.geometry().faces()) for (var point : face) for (int a = 0; a < 3; a++)
+			if (point.coordinate(a) < leaf.minimum(a) || point.coordinate(a) > leaf.minimum(a) + w) throw new IllegalArgumentException("Open phase geometry leaves its dyadic leaf");
 		var cells = new ArrayList<LiquidGeometryRefinement.Cell>();
 		for (var liquid : liquids) {
 			if (!(liquid.moments().volume() > 0)) throw new IllegalArgumentException("Empty phase geometry");
 			for (var face : liquid.faces()) for (var point : face) for (int a = 0; a < 3; a++)
 				if (point.coordinate(a) < leaf.minimum(a) || point.coordinate(a) > leaf.minimum(a) + w)
 					throw new IllegalArgumentException("Liquid fragment leaves its dyadic leaf");
+			var contained = LiquidConvexRegion.of(liquid);
+			for (var plane : leaf.geometry().planes()) contained = contained.clip(plane);
+			if (!contained.measure().same(LiquidConvexRegion.of(liquid).measure())) throw new IllegalArgumentException("Liquid fragment leaves its open phase geometry");
 			cells.add(address.cell(liquid));
 		}
 		requireDisjoint(cells);
-		var gas = List.of(box);
+		var gas = List.of(leaf.geometry());
 		for (var liquid : liquids) {
 			var remaining = new ArrayList<LiquidPolyhedron>();
 			for (var original : gas) {
@@ -59,6 +63,9 @@ final class LiquidPhasePartition {
 		for (int l = 0; l < cells.size(); l++) regions.add(new Region(cells.get(l), l));
 		for (var geometry : gas) regions.add(new Region(address.cell(geometry), -1));
 		if (regions.size() > maximumRegions) throw new IllegalStateException("Phase geometry exceeds its region budget");
+		var measure = LiquidConvexRegion.EMPTY.measure();
+		for (var region : regions) measure = measure.add(LiquidConvexRegion.of(region.cell.geometry()).measure());
+		if (!measure.same(open.measure())) throw new IllegalStateException("Phase geometry exceeds its spatial representation resolution");
 		return List.copyOf(regions);
 	}
 
