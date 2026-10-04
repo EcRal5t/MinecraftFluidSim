@@ -378,6 +378,13 @@ final class LiquidGeometryValidation {
 		var fieldCopy = resolved.getFirst().copyVelocity(); fieldCopy[1] = 1;
 		if (resolved.getFirst().copyVelocity()[1] != -separation) throw new AssertionError("Geometric velocity snapshot exposed mutable state");
 		shear.publish(copied); FluidDomainStateMapper.capture(copied);
+		double massKilograms = copied.unitScale.kilograms(copied.particles.mass(0));
+		double resolvedEnergy = 0.5 * massKilograms * separation * separation;
+		if (Math.abs(copied.particleKineticEnergyJoules() - resolvedEnergy) > 4 * Math.ulp(resolvedEnergy)
+				|| copied.particles.velocityY(0) != 0) throw new AssertionError("Geometric energy erased resolved velocity variance inside an inventory group");
+		double potential = massKilograms * copied.config.gravity() * 0.3125 * width;
+		if (Math.abs(copied.gravitationalPotentialEnergyJoules() - potential) > 4 * Math.ulp(potential))
+			throw new AssertionError("Geometric potential energy differs from its actual spatial moment");
 		var motion = new LiquidGeometryMotionPlan(copied.liquidGeometryState, mesh, regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray(), field,
 				LiquidGeometryRefinement.children(root), 0.1, 4096, 128);
 		if (motion.geometry.markerCount() != 1 || motion.inventoryMotion.size() != 1) throw new AssertionError("Geometric motion duplicated inventory ownership");
