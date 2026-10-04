@@ -171,6 +171,24 @@ final class LiquidGeometryValidation {
 			LiquidGeometryStateMapper.requireCompatible(incompatible, domain);
 			throw new AssertionError("Liquid geometry accepted inconsistent physical units");
 		} catch (IllegalArgumentException expected) { }
+		// One inventory group retains disconnected geometry without requiring a new chemical quantum per fragment.
+		domain.particles.setPositionX(0, 0.375F * (float) width);
+		var split = java.util.List.of(new LiquidGeometryRefinement.Cell(2, 1, 1, 1, LiquidPolyhedron.box(0.4375, 0.25, 0.25, 0.5, 0.375, 0.375)),
+				new LiquidGeometryRefinement.Cell(2, 1, 1, 1, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.3125, 0.375, 0.375)));
+		domain.liquidGeometryState = LiquidGeometryStateMapper.capture(split, width, new int[] {0}, new int[] {0, 0});
+		copied = FluidDomainStateMapper.restore(FluidDomainStateMapper.capture(domain));
+		var grouped = copied.liquidGeometryState;
+		if (grouped.cells().size() != 2 || grouped.markerCount() != 1 || !java.util.Arrays.equals(grouped.copyFragmentOwners(), new int[] {0, 0}))
+			throw new AssertionError("Convex subdivision changed the inventory group");
+		var ownership = grouped.copyFragmentOwners(); ownership[1] = 1;
+		if (grouped.copyFragmentOwners()[1] != 0) throw new AssertionError("Liquid geometry snapshot exposed mutable inventory ownership");
+		var recaptured = LiquidGeometryStateMapper.capture(LiquidGeometryStateMapper.restore(grouped), width, grouped.copyMarkerCells(), grouped.copyFragmentOwners());
+		for (int c = 0; c < grouped.cells().size(); c++) if (LiquidGeometryState.compare(grouped.cells().get(c), recaptured.cells().get(c)) != 0)
+			throw new AssertionError("Grouped geometry changed across backend handoff");
+		try {
+			new LiquidGeometryState(width, grouped.cells(), grouped.copyMarkerCells(), ownership);
+			throw new AssertionError("Geometry accepted an inventory group with no carrier");
+		} catch (IllegalArgumentException expected) { }
 	}
 
 	private static void translationAcrossRefinementPreservesMoments() {

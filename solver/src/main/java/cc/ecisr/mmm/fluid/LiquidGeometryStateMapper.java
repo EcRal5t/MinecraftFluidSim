@@ -9,19 +9,28 @@ final class LiquidGeometryStateMapper {
 	private LiquidGeometryStateMapper() { }
 
 	static LiquidGeometryState capture(List<LiquidGeometryRefinement.Cell> cells, double rootWidth, int[] markerCells) {
+		return capture(cells, rootWidth, markerCells, java.util.stream.IntStream.range(0, cells.size()).toArray());
+	}
+	static LiquidGeometryState capture(List<LiquidGeometryRefinement.Cell> cells, double rootWidth, int[] markerCells, int[] fragmentOwners) {
+		if (fragmentOwners.length != cells.size()) throw new IllegalArgumentException("Incomplete liquid fragment ownership");
 		var packed = new ArrayList<LiquidGeometryState.ControlVolume>();
 		for (var cell : cells) packed.add(pack(cell));
 		var order = new ArrayList<Integer>(); for (int c = 0; c < cells.size(); c++) order.add(c);
 		order.sort((a, b) -> LiquidGeometryState.compare(packed.get(a), packed.get(b)));
 		int[] canonical = new int[cells.size()]; for (int c = 0; c < cells.size(); c++) canonical[order.get(c)] = c;
+		var first = new java.util.HashMap<Integer, Integer>(); int[] groups = new int[cells.size()];
+		for (int ordinal : order) {
+			int owner = fragmentOwners[ordinal]; if (owner < 0 || owner >= cells.size()) throw new IllegalArgumentException("Liquid fragment has no inventory group");
+			first.putIfAbsent(owner, canonical[ordinal]); groups[canonical[ordinal]] = first.get(owner);
+		}
 		var result = new ArrayList<LiquidGeometryState.ControlVolume>();
 		for (int ordinal : order) result.add(packed.get(ordinal));
 		int[] owners = markerCells.clone();
 		for (int p = 0; p < owners.length; p++) {
 			if (owners[p] < 0 || owners[p] >= cells.size()) throw new IllegalArgumentException("Liquid quadrature has no geometry");
-			owners[p] = canonical[owners[p]];
+			owners[p] = first.get(fragmentOwners[owners[p]]);
 		}
-		return new LiquidGeometryState(rootWidth, result, owners);
+		return new LiquidGeometryState(rootWidth, result, owners, groups);
 	}
 
 	private static LiquidGeometryState.ControlVolume pack(LiquidGeometryRefinement.Cell cell) {
@@ -87,7 +96,7 @@ final class LiquidGeometryStateMapper {
 	}
 
 	static void requireCompatible(LiquidGeometryState state, FluidDomain domain) {
-		var cells = restore(state); int[] owners = state.copyMarkerCells();
+		var cells = restore(state); int[] owners = state.copyMarkerCells(), fragments = state.copyFragmentOwners();
 		if (owners.length != domain.particles.count()) throw new IllegalArgumentException("Liquid geometry quadrature count differs from inventory");
 		int span = Integer.highestOneBit(Math.max(domain.sizeX, Math.max(domain.sizeY, domain.sizeZ)) - 1) << 1;
 		double width = span * (double) domain.config.cellSize();
@@ -99,8 +108,6 @@ final class LiquidGeometryStateMapper {
 		double[] positionErrors = new double[cells.size()];
 		for (int p = 0; p < owners.length; p++) {
 			int c = owners[p]; volumes[c] = volumes[c].add(cc.ecisr.mmm.units.SignedDyadic.of(domain.particles.volume(p)));
-			var point = new LiquidPolyhedron.Point(domain.particles.positionX(p) / width,
-					domain.particles.positionY(p) / width, domain.particles.positionZ(p) / width);
 			double positionError = Math.max(Math.ulp(domain.particles.positionX(p)), Math.max(Math.ulp(domain.particles.positionY(p)),
 					Math.ulp(domain.particles.positionZ(p)))) / width;
 			positionErrors[c] = Math.max(positionErrors[c], positionError);
@@ -108,30 +115,31 @@ final class LiquidGeometryStateMapper {
 				double position = a == 0 ? domain.particles.positionX(p) : a == 1 ? domain.particles.positionY(p) : domain.particles.positionZ(p);
 				moments[3 * c + a] = moments[3 * c + a].add(cc.ecisr.mmm.units.SignedDyadic.of(position * domain.particles.volume(p)));
 			}
-			for (var face : cells.get(c).geometry().faces()) {
-				var surface = LiquidPolyhedron.surface(face);
-				double error = surface.area() * (3 * positionError + 32 * Math.ulp(1.0));
-				if (surface.areaVector().dot(point.subtract(face.getFirst())) > error)
-					throw new IllegalArgumentException("Liquid quadrature leaves its interface geometry");
+		}
+		var measures = new LiquidExactPolygon.Measure[cells.size()]; java.util.Arrays.fill(measures, LiquidConvexRegion.EMPTY.measure());
+		var coordinateErrors = new double[cells.size()]; var areas = new double[cells.size()]; var vertexCounts = new int[cells.size()];
+		for (int fragment = 0; fragment < cells.size(); fragment++) {
+			int c = fragments[fragment]; var geometry = cells.get(fragment).geometry(); measures[c] = measures[c].add(LiquidConvexRegion.of(geometry).measure());
+			for (var face : LiquidExactPolygon.faces(geometry)) {
+				areas[c] += face.surface().area(); vertexCounts[c] += face.vertices().size();
+				for (var vertex : face.vertices()) for (int a = 0; a < 3; a++) {
+					int limit = a == 0 ? domain.sizeX : a == 1 ? domain.sizeY : domain.sizeZ;
+					if (vertex.coordinate(a).multiply(java.math.BigInteger.valueOf(span)).compareTo(vertex.w().multiply(java.math.BigInteger.valueOf(limit))) > 0)
+						throw new IllegalArgumentException("Liquid geometry leaves the physical domain");
+					coordinateErrors[c] = Math.max(coordinateErrors[c], Math.ulp(vertex.rounded().coordinate(a)));
+				}
 			}
 		}
 		for (int c = 0; c < cells.size(); c++) {
-			var geometry = cells.get(c).geometry(); double coordinateError = 0, area = 0; int vertices = 0;
-			for (var face : geometry.faces()) {
-				area += LiquidPolyhedron.surface(face).area(); vertices += face.size();
-				for (var point : face) for (int a = 0; a < 3; a++) {
-					double limit = (a == 0 ? domain.sizeX : a == 1 ? domain.sizeY : domain.sizeZ) / (double) span;
-					if (point.coordinate(a) > limit) throw new IllegalArgumentException("Liquid geometry leaves the physical domain");
-					coordinateError = Math.max(coordinateError, Math.ulp(point.coordinate(a)));
-				}
-			}
-			double expected = volumes[c].toDouble() / ((double) span * span * span), actual = geometry.moments().volume();
+			if (fragments[c] != c) continue;
+			var geometric = measures[c].moments(); double coordinateError = coordinateErrors[c], area = areas[c]; int vertices = vertexCounts[c];
+			double expected = volumes[c].toDouble() / ((double) span * span * span), actual = geometric.volume();
 			double error = 64 * vertices * Math.ulp(expected) + 3 * area * coordinateError;
 			if (Math.abs(actual - expected) > error)
 				throw new IllegalArgumentException("Liquid interface volume differs from exact inventory");
 			for (int a = 0; a < 3; a++) {
 				double firstMoment = moments[3 * c + a].toDouble() / width / ((double) span * span * span);
-				double geometricMoment = actual * geometry.moments().centroid(a);
+				double geometricMoment = a == 0 ? geometric.x() : a == 1 ? geometric.y() : geometric.z();
 				if (Math.abs(firstMoment - geometricMoment) > error + expected * positionErrors[c] + 64 * vertices * Math.ulp(firstMoment))
 					throw new IllegalArgumentException("Liquid interface centroid differs from inventory quadrature");
 			}
