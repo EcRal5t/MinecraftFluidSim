@@ -9,32 +9,47 @@ final class LiquidGeometryStateMapper {
 	private LiquidGeometryStateMapper() { }
 
 	static LiquidGeometryState capture(List<LiquidGeometryRefinement.Cell> cells, double rootWidth, int[] markerCells) {
+		var packed = new ArrayList<LiquidGeometryState.ControlVolume>();
+		for (var cell : cells) packed.add(pack(cell));
 		var order = new ArrayList<Integer>(); for (int c = 0; c < cells.size(); c++) order.add(c);
-		order.sort(java.util.Comparator.<Integer>comparingInt(c -> cells.get(c).level()).thenComparingInt(c -> cells.get(c).x())
-				.thenComparingInt(c -> cells.get(c).y()).thenComparingInt(c -> cells.get(c).z()));
+		order.sort((a, b) -> LiquidGeometryState.compare(packed.get(a), packed.get(b)));
 		int[] canonical = new int[cells.size()]; for (int c = 0; c < cells.size(); c++) canonical[order.get(c)] = c;
 		var result = new ArrayList<LiquidGeometryState.ControlVolume>();
-		for (int ordinal : order) {
-			var cell = cells.get(ordinal);
-			var vertices = new LinkedHashMap<LiquidPolyhedron.Point, Integer>();
-			var faces = cell.geometry().faces();
-			int[] offsets = new int[faces.size() + 1];
-			for (int f = 0; f < faces.size(); f++) {
-				offsets[f + 1] = Math.addExact(offsets[f], faces.get(f).size());
-				for (var point : faces.get(f)) vertices.computeIfAbsent(point, ignored -> vertices.size());
-			}
-			double[] xyz = new double[3 * vertices.size()];
-			vertices.forEach((point, index) -> { xyz[3 * index] = point.x(); xyz[3 * index + 1] = point.y(); xyz[3 * index + 2] = point.z(); });
-			int[] indices = new int[offsets[offsets.length - 1]];
-			for (int f = 0; f < faces.size(); f++) for (int v = 0; v < faces.get(f).size(); v++) indices[offsets[f] + v] = vertices.get(faces.get(f).get(v));
-			result.add(new LiquidGeometryState.ControlVolume(cell.level(), cell.x(), cell.y(), cell.z(), xyz, offsets, indices));
-		}
+		for (int ordinal : order) result.add(packed.get(ordinal));
 		int[] owners = markerCells.clone();
 		for (int p = 0; p < owners.length; p++) {
 			if (owners[p] < 0 || owners[p] >= cells.size()) throw new IllegalArgumentException("Liquid quadrature has no geometry");
 			owners[p] = canonical[owners[p]];
 		}
 		return new LiquidGeometryState(rootWidth, result, owners);
+	}
+
+	private static LiquidGeometryState.ControlVolume pack(LiquidGeometryRefinement.Cell cell) {
+		var geometry = cell.geometry();
+		var points = new java.util.TreeSet<LiquidPolyhedron.Point>(java.util.Comparator.comparingDouble(LiquidPolyhedron.Point::x)
+				.thenComparingDouble(LiquidPolyhedron.Point::y).thenComparingDouble(LiquidPolyhedron.Point::z));
+		for (var face : geometry.faces()) points.addAll(face);
+		var vertices = new LinkedHashMap<LiquidPolyhedron.Point, Integer>();
+		for (var point : points) vertices.put(point, vertices.size());
+		var cycles = new ArrayList<int[]>(); var order = new ArrayList<Integer>();
+		for (var face : geometry.faces()) {
+			int start = 0; for (int v = 1; v < face.size(); v++) if (vertices.get(face.get(v)) < vertices.get(face.get(start))) start = v;
+			int[] cycle = new int[face.size()]; for (int v = 0; v < cycle.length; v++) cycle[v] = vertices.get(face.get((start + v) % cycle.length));
+			order.add(cycles.size()); cycles.add(cycle);
+		}
+		order.sort((a, b) -> java.util.Arrays.compare(cycles.get(a), cycles.get(b)));
+		double[] xyz = new double[3 * vertices.size()], planes = new double[4 * cycles.size()];
+		vertices.forEach((p, v) -> { xyz[3 * v] = p.x(); xyz[3 * v + 1] = p.y(); xyz[3 * v + 2] = p.z(); });
+		int[] offsets = new int[cycles.size() + 1];
+		for (int f = 0; f < order.size(); f++) offsets[f + 1] = Math.addExact(offsets[f], cycles.get(order.get(f)).length);
+		int[] indices = new int[offsets[offsets.length - 1]];
+		for (int f = 0; f < order.size(); f++) {
+			int original = order.get(f); System.arraycopy(cycles.get(original), 0, indices, offsets[f], offsets[f + 1] - offsets[f]);
+			var plane = geometry.planes().get(original);
+			for (int a = 0; a < 3; a++) planes[4 * f + a] = plane.normal().coordinate(a);
+			planes[4 * f + 3] = plane.offset();
+		}
+		return new LiquidGeometryState.ControlVolume(cell.level(), cell.x(), cell.y(), cell.z(), xyz, offsets, indices, planes);
 	}
 
 	static List<LiquidGeometryRefinement.Cell> restore(LiquidGeometryState state) {
@@ -45,6 +60,7 @@ final class LiquidGeometryStateMapper {
 			for (int v = 0; v < xyz.length; v += 3) vertices.add(new LiquidPolyhedron.Point(xyz[v], xyz[v + 1], xyz[v + 2]));
 			if (new java.util.HashSet<>(vertices).size() != vertices.size()) throw new IllegalArgumentException("Liquid geometry repeats a vertex");
 			var faces = new ArrayList<List<LiquidPolyhedron.Point>>();
+			var planes = new ArrayList<LiquidGeometryPlane>(); double[] coefficients = cell.copyPlanes();
 			var edges = new java.util.HashMap<Long, Integer>();
 			for (int f = 0; f + 1 < offsets.length; f++) {
 				var polygon = new ArrayList<LiquidPolyhedron.Point>();
@@ -55,31 +71,33 @@ final class LiquidGeometryStateMapper {
 				}
 				if (!(LiquidPolyhedron.surface(polygon).area() > 0)) throw new IllegalArgumentException("Liquid geometry contains an empty face");
 				faces.add(List.copyOf(polygon));
+				planes.add(new LiquidGeometryPlane(new LiquidPolyhedron.Point(coefficients[4 * f], coefficients[4 * f + 1], coefficients[4 * f + 2]), coefficients[4 * f + 3]));
 			}
 			for (var edge : edges.entrySet()) {
 				long a = edge.getKey() >>> 32, b = edge.getKey() & 0xffffffffL;
 				if (edge.getValue() != 1 || edges.getOrDefault(b << 32 | a, 0) != 1)
 					throw new IllegalArgumentException("Liquid geometry surface is open or non-manifold");
 			}
-			var geometry = LiquidPolyhedron.restored(faces);
+			var geometry = LiquidPolyhedron.restored(faces, planes);
 			var moment = geometry.moments();
 			if (!(moment.volume() > 0)) throw new IllegalArgumentException("Liquid geometry has no volume");
 			var centroid = new LiquidPolyhedron.Point(moment.centroid(0), moment.centroid(1), moment.centroid(2));
 			for (var surface : geometry.surfaces()) if (!(surface.areaVector().dot(surface.centroid().subtract(centroid)) > 0))
 				throw new IllegalArgumentException("Liquid geometry faces have inconsistent orientation");
-			for (var face : faces) {
-				var surface = LiquidPolyhedron.surface(face); var origin = face.getFirst();
-				double coordinateError = 0;
-				for (var point : vertices) for (int a = 0; a < 3; a++) coordinateError = Math.max(coordinateError, Math.ulp(point.coordinate(a)));
-				double planeError = 32 * surface.area() * coordinateError;
-				for (var point : vertices) if (surface.areaVector().dot(point.subtract(origin)) > planeError)
+			for (int f = 0; f < faces.size(); f++) {
+				var face = faces.get(f); var plane = planes.get(f); var surface = LiquidPolyhedron.surface(face);
+				if (!(plane.normal().dot(surface.areaVector()) > 0)) throw new IllegalArgumentException("Liquid supporting plane has reversed orientation");
+				for (var point : vertices) if (plane.signedDistance(point) > plane.evaluationError(point))
 					throw new IllegalArgumentException("Liquid geometry is non-convex");
-				for (var point : face) if (Math.abs(surface.areaVector().dot(point.subtract(origin))) > planeError)
+				for (var point : face) if (Math.abs(plane.signedDistance(point)) > plane.evaluationError(point))
 					throw new IllegalArgumentException("Liquid geometry face is non-planar");
 			}
 			result.add(new LiquidGeometryRefinement.Cell(cell.level(), cell.x(), cell.y(), cell.z(), geometry));
 		}
-		new LiquidGeometryRemap(result); // Validate the non-overlapping dyadic partition.
+		var leaves = new java.util.LinkedHashMap<LiquidPhasePartition.Address, LiquidGeometryRefinement.Cell>();
+		for (var cell : result) leaves.putIfAbsent(LiquidPhasePartition.Address.of(cell), cell);
+		new LiquidGeometryRemap(new ArrayList<>(leaves.values()));
+		LiquidPhasePartition.requireDisjoint(result);
 		return List.copyOf(result);
 	}
 

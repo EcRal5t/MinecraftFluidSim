@@ -8,7 +8,7 @@ import java.util.List;
 
 /** Convex liquid geometry with volume and first moments integrated over the same faces. */
 final class LiquidPolyhedron {
-	static final LiquidPolyhedron EMPTY = new LiquidPolyhedron(List.of());
+	static final LiquidPolyhedron EMPTY = new LiquidPolyhedron(List.of(), List.of());
 	record Point(double x, double y, double z) {
 		Point {
 			if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z))
@@ -32,14 +32,19 @@ final class LiquidPolyhedron {
 		static Edge ordered(Point a, Point b) { return compare(a, b) < 0 ? new Edge(a, b) : new Edge(b, a); }
 	}
 	private final List<List<Point>> faces;
+	private final List<LiquidGeometryPlane> planes;
 	private volatile Moments integratedMoments;
-	private LiquidPolyhedron(List<List<Point>> faces) { this.faces = List.copyOf(faces); }
-	static LiquidPolyhedron restored(List<List<Point>> faces) {
+	private LiquidPolyhedron(List<List<Point>> faces, List<LiquidGeometryPlane> planes) {
+		if (faces.size() != planes.size()) throw new IllegalArgumentException("Liquid polygons and supporting planes differ");
+		this.faces = List.copyOf(faces); this.planes = List.copyOf(planes);
+	}
+	static LiquidPolyhedron restored(List<List<Point>> faces, List<LiquidGeometryPlane> planes) {
 		var copy = new ArrayList<List<Point>>();
 		for (var face : faces) copy.add(List.copyOf(face));
-		return new LiquidPolyhedron(copy);
+		return new LiquidPolyhedron(copy, planes);
 	}
 	List<List<Point>> faces() { return faces; }
+	List<LiquidGeometryPlane> planes() { return planes; }
 
 	List<Surface> surfaces() {
 		var result = new ArrayList<Surface>();
@@ -71,7 +76,9 @@ final class LiquidPolyhedron {
 			for (Point point : face) transformed.add(new Point(point.x * scale, point.y * scale, point.z * scale));
 			output.add(List.copyOf(transformed));
 		}
-		return new LiquidPolyhedron(output);
+		var scaledPlanes = new ArrayList<LiquidGeometryPlane>();
+		for (var plane : planes) scaledPlanes.add(new LiquidGeometryPlane(plane.normal(), plane.offset() * scale));
+		return new LiquidPolyhedron(output, scaledPlanes);
 	}
 
 	LiquidPolyhedron translated(double dx, double dy, double dz) {
@@ -81,7 +88,9 @@ final class LiquidPolyhedron {
 			for (Point point : face) moved.add(new Point(point.x + dx, point.y + dy, point.z + dz));
 			output.add(List.copyOf(moved));
 		}
-		return new LiquidPolyhedron(output);
+		var movedPlanes = new ArrayList<LiquidGeometryPlane>(); var displacement = new Point(dx, dy, dz);
+		for (var plane : planes) movedPlanes.add(new LiquidGeometryPlane(plane.normal(), plane.offset() + plane.normal().dot(displacement)));
+		return new LiquidPolyhedron(output, movedPlanes);
 	}
 
 	LiquidPolyhedron transformed(double[] matrix, Point center, Point displacement) {
@@ -100,7 +109,18 @@ final class LiquidPolyhedron {
 			}));
 			output.add(List.copyOf(mapped));
 		}
-		return new LiquidPolyhedron(output);
+		double[] inverse = {
+				(matrix[4] * matrix[8] - matrix[5] * matrix[7]) / determinant, (matrix[2] * matrix[7] - matrix[1] * matrix[8]) / determinant, (matrix[1] * matrix[5] - matrix[2] * matrix[4]) / determinant,
+				(matrix[5] * matrix[6] - matrix[3] * matrix[8]) / determinant, (matrix[0] * matrix[8] - matrix[2] * matrix[6]) / determinant, (matrix[2] * matrix[3] - matrix[0] * matrix[5]) / determinant,
+				(matrix[3] * matrix[7] - matrix[4] * matrix[6]) / determinant, (matrix[1] * matrix[6] - matrix[0] * matrix[7]) / determinant, (matrix[0] * matrix[4] - matrix[1] * matrix[3]) / determinant};
+		var mappedPlanes = new ArrayList<LiquidGeometryPlane>();
+		for (var plane : planes) {
+			var n = plane.normal(); var normal = new Point(inverse[0] * n.x + inverse[3] * n.y + inverse[6] * n.z,
+					inverse[1] * n.x + inverse[4] * n.y + inverse[7] * n.z, inverse[2] * n.x + inverse[5] * n.y + inverse[8] * n.z);
+			mappedPlanes.add(new LiquidGeometryPlane(normal, plane.offset() - n.dot(center)
+					+ normal.dot(new Point(center.x + displacement.x, center.y + displacement.y, center.z + displacement.z))));
+		}
+		return new LiquidPolyhedron(output, mappedPlanes);
 	}
 
 	static LiquidPolyhedron box(double x0, double y0, double z0, double x1, double y1, double z1) {
@@ -109,7 +129,10 @@ final class LiquidPolyhedron {
 		for (int i = 0; i < 8; i++) p[i] = new Point((i & 1) == 0 ? x0 : x1, (i & 2) == 0 ? y0 : y1, (i & 4) == 0 ? z0 : z1);
 		return new LiquidPolyhedron(List.of(List.of(p[0], p[4], p[6], p[2]), List.of(p[1], p[3], p[7], p[5]),
 				List.of(p[0], p[1], p[5], p[4]), List.of(p[2], p[6], p[7], p[3]),
-				List.of(p[0], p[2], p[3], p[1]), List.of(p[4], p[5], p[7], p[6])));
+				List.of(p[0], p[2], p[3], p[1]), List.of(p[4], p[5], p[7], p[6])),
+				List.of(new LiquidGeometryPlane(new Point(-1, 0, 0), -x0), new LiquidGeometryPlane(new Point(1, 0, 0), x1),
+						new LiquidGeometryPlane(new Point(0, -1, 0), -y0), new LiquidGeometryPlane(new Point(0, 1, 0), y1),
+						new LiquidGeometryPlane(new Point(0, 0, -1), -z0), new LiquidGeometryPlane(new Point(0, 0, 1), z1)));
 	}
 
 	/** Intersects with n dot x <= offset. Shared original edges produce identical new vertices. */
@@ -118,6 +141,7 @@ final class LiquidPolyhedron {
 		if (!Double.isFinite(offset) || !(n.dot(n) > 0) || !Double.isFinite(n.dot(n)))
 			throw new IllegalArgumentException("Invalid liquid clipping plane");
 		var output = new ArrayList<List<Point>>();
+		var clippedPlanes = new ArrayList<LiquidGeometryPlane>(); int faceIndex = 0;
 		var cap = new LinkedHashSet<Point>();
 		var intersections = new HashMap<Edge, Point>();
 		boolean removed = false;
@@ -146,7 +170,8 @@ final class LiquidPolyhedron {
 				if (after == 0) cap.add(current);
 				previous = current; before = after;
 			}
-			if (polygon.size() >= 3 && surface(polygon).area() > 0) output.add(List.copyOf(polygon));
+			if (polygon.size() >= 3 && surface(polygon).area() > 0) { output.add(List.copyOf(polygon)); clippedPlanes.add(planes.get(faceIndex)); }
+			faceIndex++;
 		}
 		if (!removed) return this;
 		if (output.isEmpty()) return EMPTY;
@@ -157,9 +182,9 @@ final class LiquidPolyhedron {
 			Point bitangent = n.cross(tangent);
 			var polygon = new ArrayList<>(cap);
 			polygon.sort(Comparator.comparingDouble(p -> Math.atan2(p.subtract(center).dot(bitangent), p.subtract(center).dot(tangent))));
-			output.add(List.copyOf(polygon));
+			output.add(List.copyOf(polygon)); clippedPlanes.add(new LiquidGeometryPlane(n, offset));
 		}
-		return new LiquidPolyhedron(output);
+		return new LiquidPolyhedron(output, clippedPlanes);
 	}
 
 	Moments moments() {

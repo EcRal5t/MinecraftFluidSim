@@ -37,8 +37,68 @@ final class LiquidGeometryValidation {
 		translationAcrossRefinementPreservesMoments();
 		geometrySurvivesCandidateHandoff();
 		affineCharacteristicsPreserveResolvedGeometry();
+		multipleFragmentsAndGasSpaceShareCompleteFaces();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
 	}
+
+	private static void multipleFragmentsAndGasSpaceShareCompleteFaces() {
+		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);
+		var inner = LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75).clip(1, 2, 3, 3);
+		var disconnected = java.util.List.of(LiquidPolyhedron.box(0.125, 0.25, 0.25, 0.375, 0.75, 0.75),
+				LiquidPolyhedron.box(0.625, 0.25, 0.25, 0.875, 0.75, 0.75));
+		var cases = java.util.List.of(java.util.List.of(inner), disconnected,
+				java.util.List.of(cube.clip(0, 1, 0, 0.501).clip(0, -1, 0, -0.499)),
+				java.util.List.of(cube.clip(1, 2, 3, 3.01).clip(-1, -2, -3, -2.99)));
+		int[] expectedGasComponents = {1, 1, 2, 2};
+		for (int scenario = 0; scenario < cases.size(); scenario++) {
+			var regions = LiquidPhasePartition.build(root, cases.get(scenario), 256);
+			var cells = regions.stream().map(LiquidPhasePartition.Region::cell).toList();
+			var sum = LiquidPolyhedron.Moments.ZERO;
+			for (var cell : cells) sum = sum.add(cell.moments());
+			moments(sum, 1, 0.5, 0.5, 0.5); LiquidPhasePartition.requireDisjoint(cells);
+			var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, surface) ->
+					new LiquidControlVolumeMesh.Boundary(false, 100000 + 1000 * 9.81 * (0.5 - surface.centroid().y())));
+			for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() < 0) {
+				boolean exterior = false;
+				for (int a = 0; a < 3; a++) for (double coordinate : new double[] {0, 1}) {
+					boolean same = true; for (var point : mesh.polygons.get(f)) same &= point.coordinate(a) == coordinate;
+					exterior |= same;
+				}
+				if (!exterior) throw new AssertionError("Phase partition exposed an internal face as exterior: scenario=" + scenario
+						+ " cell=" + mesh.faces.get(f).first() + " surface=" + mesh.faces.get(f).surface() + " vertices=" + mesh.polygons.get(f));
+			}
+			int[] parents = java.util.stream.IntStream.range(0, cells.size()).toArray();
+			for (var face : mesh.faces) if (face.second() >= 0 && regions.get(face.first()).liquid() < 0 && regions.get(face.second()).liquid() < 0)
+				parents[ancestor(parents, face.first())] = ancestor(parents, face.second());
+			var components = new java.util.HashSet<Integer>();
+			for (int c = 0; c < cells.size(); c++) if (regions.get(c).liquid() < 0) components.add(ancestor(parents, c));
+			if (components.size() != expectedGasComponents[scenario]) throw new AssertionError("Thin liquid interface changed gas connectivity");
+			var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(new double[3 * cells.size()],
+					new LiquidPolyhedron.Point(0, -9.81, 0), 0.025, 1e-10, 2048);
+			for (double velocity : projected.cellVelocity()) if (Math.abs(velocity) > 1e-8)
+				throw new AssertionError("Subcell shared faces failed affine hydrostatic equilibrium: " + velocity);
+		}
+		var fragments = disconnected.stream().map(g -> new LiquidGeometryRefinement.Cell(0, 0, 0, 0, g)).toList();
+		var first = LiquidGeometryStateMapper.capture(fragments, 1, new int[] {0, 1});
+		var second = LiquidGeometryStateMapper.capture(fragments.reversed(), 1, new int[] {1, 0});
+		for (int c = 0; c < 2; c++) if (LiquidGeometryState.compare(first.cells().get(c), second.cells().get(c)) != 0)
+			throw new AssertionError("Same-leaf fragment order changed canonical geometry");
+		if (!java.util.Arrays.equals(first.copyMarkerCells(), second.copyMarkerCells()) || LiquidGeometryStateMapper.restore(first).size() != 2)
+			throw new AssertionError("Same-leaf fragments lost inventory ownership across handoff");
+		var plane = new LiquidGeometryPlane(new LiquidPolyhedron.Point(1, 2, 3), 0.75);
+		if (!plane.key().equals(plane.opposite().key()) || !plane.key().equals(new LiquidGeometryPlane(new LiquidPolyhedron.Point(2, 4, 6), 1.5).key()))
+			throw new AssertionError("Shared plane identity depends on normal orientation or exact scale");
+		try {
+			LiquidPhasePartition.build(root, java.util.List.of(inner, inner), 256);
+			throw new AssertionError("Overlapping liquid fragments were accepted");
+		} catch (IllegalArgumentException expected) { }
+		try {
+			LiquidPhasePartition.build(root, java.util.List.of(inner), 2);
+			throw new AssertionError("Phase partition ignored its resource budget");
+		} catch (IllegalStateException expected) { }
+	}
+	private static int ancestor(int[] parents, int c) { while (parents[c] != c) c = parents[c]; return c; }
 
 	private static void affineCharacteristicsPreserveResolvedGeometry() {
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
