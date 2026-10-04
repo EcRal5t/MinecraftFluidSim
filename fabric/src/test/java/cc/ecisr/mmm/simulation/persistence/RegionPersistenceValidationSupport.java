@@ -8,6 +8,7 @@ import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
+import cc.ecisr.mmm.fluid.LiquidGeometryState;
 import cc.ecisr.mmm.fluid.FlipThermalParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
@@ -78,6 +79,7 @@ abstract class RegionPersistenceValidationSupport {
 	}
 
 	static void assertParticleStateEquals(FlipParticleState expected, FlipParticleState actual) {
+		assertLiquidGeometryEquals(expected.liquidGeometry(), actual.liquidGeometry());
 		require(expected.particleCount() == actual.particleCount(), "marker count changed across persistence");
 		require(Arrays.equals(floatBits(expected.copyPositionVolume()), floatBits(actual.copyPositionVolume())),
 				"marker order/position/particleVolume changed across persistence");
@@ -101,6 +103,7 @@ abstract class RegionPersistenceValidationSupport {
 	}
 
 	static void assertMaterialStateEquals(FlipMaterialParticleState expected, FlipMaterialParticleState actual) {
+		assertLiquidGeometryEquals(expected.liquidGeometry(), actual.liquidGeometry());
 		require(expected.materials().equals(actual.materials()), "material palette changed across persistence");
 		require(Double.doubleToRawLongBits(expected.totalVolume()) == Double.doubleToRawLongBits(actual.totalVolume())
 				&& Double.doubleToRawLongBits(expected.totalMass()) == Double.doubleToRawLongBits(actual.totalMass()),
@@ -125,6 +128,17 @@ abstract class RegionPersistenceValidationSupport {
 				&& expected.coherentGroups().equals(actual.coherentGroups())
 				&& expected.audit().equals(actual.audit()),
 				"thermal inventory/audit changed across persistence");
+	}
+
+	private static void assertLiquidGeometryEquals(LiquidGeometryState expected, LiquidGeometryState actual) {
+		require((expected == null) == (actual == null), "resolved liquid geometry presence changed across persistence");
+		if (expected == null) return;
+		require(expected.rootWidthMetres() == actual.rootWidthMetres()
+				&& Arrays.equals(expected.copyMarkerCells(), actual.copyMarkerCells())
+				&& Arrays.equals(expected.copyFragmentOwners(), actual.copyFragmentOwners())
+				&& expected.cells().size() == actual.cells().size(), "liquid geometry inventory ownership changed across persistence");
+		for (int c = 0; c < expected.cells().size(); c++) require(LiquidGeometryState.compare(expected.cells().get(c), actual.cells().get(c)) == 0,
+				"liquid interface or resolved velocity changed across persistence");
 	}
 
 	static ThermalRegistry thermalRegistry(FluidMaterialRegistry liquids) {

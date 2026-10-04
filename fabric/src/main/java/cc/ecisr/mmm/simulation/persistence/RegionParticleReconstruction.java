@@ -1,0 +1,77 @@
+package cc.ecisr.mmm.simulation.persistence;
+
+import cc.ecisr.mmm.model.region.RegionManifest;
+import cc.ecisr.mmm.model.region.RegionSectionState;
+import java.io.IOException;
+import java.util.List;
+
+/** Restores original region ordinals for cross-column validation and immutable handoff. */
+final class RegionParticleReconstruction {
+	private RegionParticleReconstruction() { }
+	static State reconstruct(RegionManifest manifest, List<RegionSectionState> sections) throws IOException {
+		int count = manifest.totalMarkerCount();
+		float[] positions = new float[Math.multiplyExact(count, 4)];
+		float[] velocities = new float[Math.multiplyExact(count, 3)];
+		double[] markerMass = manifest.layout().hasMaterials() ? new double[count] : new double[0];
+		int[] materialPaletteIndex = manifest.layout().hasMaterials() ? new int[count] : new int[0];
+		int[] chemicalMixtureIndex = manifest.hasChemicalState() ? new int[count] : new int[0];
+		byte[] indicator = manifest.hasChemicalState() ? new byte[count] : new byte[0];
+		byte[] solids = new byte[Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ())];
+		boolean[] seenMarkers = new boolean[count];
+		boolean[] seenSolids = new boolean[solids.length];
+		for (RegionSectionState section : sections) {
+			int[] ordinals = section.markerOrdinals();
+			float[] sectionPositions = section.positionVolume();
+			float[] sectionVelocities = section.velocities();
+			double[] sectionMass = section.markerMass();
+			int[] sectionMaterials = section.materialPaletteIndex();
+			int[] sectionMixtures = section.chemicalMixtureIndex();
+			byte[] sectionIndicator = section.indicator();
+			for (int i = 0; i < ordinals.length; i++) {
+				int ordinal = ordinals[i];
+				if (ordinal < 0 || ordinal >= count || seenMarkers[ordinal]) throw new IOException("Duplicate or invalid marker ordinal");
+				seenMarkers[ordinal] = true;
+				System.arraycopy(sectionPositions, i * 4, positions, ordinal * 4, 4);
+				System.arraycopy(sectionVelocities, i * 3, velocities, ordinal * 3, 3);
+				if (manifest.layout().hasMaterials()) {
+					markerMass[ordinal] = sectionMass[i];
+					materialPaletteIndex[ordinal] = sectionMaterials[i];
+				}
+				if (manifest.hasChemicalState()) {
+					chemicalMixtureIndex[ordinal] = sectionMixtures[i];
+					indicator[ordinal] = sectionIndicator[i];
+				}
+			}
+			byte[] slice = section.solidMask();
+			int source = 0;
+			for (int z = 0; z < section.sizeZ(); z++) for (int y = 0; y < section.sizeY(); y++) for (int x = 0; x < section.sizeX(); x++) {
+				int localX = section.localStartX() + x, localY = section.localStartY() + y, localZ = section.localStartZ() + z;
+				if (localX < 0 || localX >= manifest.sizeX() || localY < 0 || localY >= manifest.sizeY()
+						|| localZ < 0 || localZ >= manifest.sizeZ()) throw new IOException("Solid slice exceeds region bounds");
+				int index = localX + manifest.sizeX() * (localY + manifest.sizeY() * localZ);
+				if (seenSolids[index]) throw new IOException("Overlapping solid slices");
+				seenSolids[index] = true;
+				solids[index] = slice[source++];
+			}
+		}
+		for (boolean seen : seenMarkers) if (!seen) throw new IOException("Missing marker ordinal");
+		for (boolean seen : seenSolids) if (!seen) throw new IOException("Incomplete solid-mask coverage");
+		double volume = sumVolumes(positions);
+		if (Double.doubleToRawLongBits(volume) != manifest.totalVolumeBits()) throw new IOException("Marker volume ledger mismatch");
+		return new State(positions, velocities, solids, markerMass, materialPaletteIndex,
+				chemicalMixtureIndex, indicator);
+	}
+
+	private static double sumVolumes(float[] values) {
+		double sum = 0; for (int p = 3; p < values.length; p += 4) sum += values[p]; return sum;
+	}
+	record State(
+			float[] positionVolume,
+			float[] velocities,
+			byte[] solidMask,
+			double[] markerMass,
+			int[] materialPaletteIndex,
+			int[] chemicalMixtureIndex,
+			byte[] indicator
+	) { }
+}

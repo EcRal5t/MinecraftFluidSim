@@ -7,6 +7,8 @@ import cc.ecisr.mmm.model.region.RegionSectionState;
 import cc.ecisr.mmm.model.region.RegionStateLayout;
 
 import cc.ecisr.mmm.fluid.FlipParticleState;
+import cc.ecisr.mmm.fluid.LiquidGeometryState;
+import cc.ecisr.mmm.fluid.LiquidGeometryStateValidation;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.fluid.FlipThermalParticleState;
@@ -46,6 +48,8 @@ final class RegionCheckpointValidator {
 	private static final String CHEMICAL_AUDIT_EXTENSION = "mmm:chemical_audit";
 	private final RegionManifest manifest;
 	private final List<RegionSectionState> sections;
+	private LiquidGeometryState liquidGeometry;
+	private RegionParticleReconstruction.State particleColumns;
 
 	RegionCheckpointValidator(RegionCheckpoint checkpoint) {
 		this.manifest = checkpoint.manifest();
@@ -84,6 +88,8 @@ final class RegionCheckpointValidator {
 		if (markerCount != manifest.totalMarkerCount() || markerCount > manifest.reservedMarkerCapacity()) {
 			throw new IOException("Manifest marker count/budget mismatch");
 		}
+		particleColumns = RegionParticleReconstruction.reconstruct(manifest, sections);
+		validateLiquidGeometry();
 		if (manifest.layout().hasMaterials()) validateMaterialLedgers();
 		if (manifest.hasChemicalState()) validateChemicalLedgers();
 		boolean gasPayload = hasExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION);
@@ -121,6 +127,26 @@ final class RegionCheckpointValidator {
 		if (gasPayload) validateGasLedgers();
 		if (hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)) validateGranularLedgers();
 		if (manifest.hasThermalState()) validateThermalLedgers();
+	}
+
+	LiquidGeometryState liquidGeometry() { return liquidGeometry; }
+	RegionParticleReconstruction.State particleColumns() { return particleColumns; }
+
+	private void validateLiquidGeometry() throws IOException {
+		for (var section : sections) if (hasExtension(section.extensions(), LiquidGeometryStateCodec.MANIFEST_EXTENSION))
+			throw new IOException("Resolved liquid geometry is manifest-only");
+		if (!hasExtension(manifest.extensions(), LiquidGeometryStateCodec.MANIFEST_EXTENSION)) return;
+		liquidGeometry = new LiquidGeometryStateCodec().decode(requiredExtension(manifest.extensions(),
+				LiquidGeometryStateCodec.MANIFEST_EXTENSION).payload());
+		try {
+			var state = new FlipParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
+					manifest.solverConfig().cellSize(), manifest.totalMarkerCount(), (float) manifest.totalVolume(),
+					particleColumns.positionVolume(), particleColumns.velocities(), particleColumns.solidMask(), liquidGeometry);
+			LiquidGeometryStateValidation.requireCompatible(state,
+					manifest.layout().hasMaterials() ? particleColumns.markerMass() : null, manifest.solverConfig().density());
+		} catch (IllegalArgumentException | IllegalStateException invalid) {
+			throw new IOException("Resolved liquid geometry disagrees with checkpoint inventory or collision: " + invalid.getMessage(), invalid);
+		}
 	}
 
 	private void validatePendingPhaseVolumeCells() throws IOException {
