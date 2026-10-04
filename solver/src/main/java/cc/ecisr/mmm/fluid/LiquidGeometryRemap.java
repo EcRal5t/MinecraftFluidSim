@@ -7,6 +7,7 @@ import java.util.List;
 /** Conservative intersection of a moved liquid geometry with a dyadic control-volume partition. */
 final class LiquidGeometryRemap {
 	record Fragment(int cell, LiquidPolyhedron geometry, SignedDyadic inventory) { }
+	record GeometryFragment(int cell, LiquidPolyhedron geometry) { }
 	private static final class Node {
 		int cell = -1;
 		Node[] children;
@@ -37,11 +38,7 @@ final class LiquidGeometryRemap {
 	}
 	List<Fragment> partition(LiquidPolyhedron moved, SignedDyadic inventory) {
 		if (inventory.signum() <= 0 || !(moved.moments().volume() > 0)) throw new IllegalArgumentException("Empty liquid remap source");
-		for (var face : moved.faces()) for (var point : face)
-			for (int axis = 0; axis < 3; axis++) if (point.coordinate(axis) < 0 || point.coordinate(axis) > 1)
-				throw new IllegalStateException("Liquid motion leaves the control-volume partition");
-		var fragments = new ArrayList<Fragment>();
-		intersect(root, new LiquidGeometryRefinement.Cell(0, 0, 0, 0, moved), fragments);
+		var fragments = partitionGeometry(moved);
 		var weights = new SignedDyadic[fragments.size()];
 		var measure = LiquidConvexRegion.EMPTY.measure();
 		for (int i = 0; i < weights.length; i++) {
@@ -58,10 +55,20 @@ final class LiquidGeometryRemap {
 		}
 		return List.copyOf(result);
 	}
+	List<GeometryFragment> partitionGeometry(LiquidPolyhedron moved) {
+		if (!LiquidConvexRegion.of(moved).hasVolume()) throw new IllegalArgumentException("Empty liquid remap source");
+		for (var face : LiquidExactPolygon.faces(moved)) for (var vertex : face.vertices())
+			for (int axis = 0; axis < 3; axis++) if (vertex.coordinate(axis).signum() < 0 || vertex.coordinate(axis).compareTo(vertex.w()) > 0)
+				throw new IllegalStateException("Liquid motion leaves the control-volume partition");
+		var fragments = new ArrayList<GeometryFragment>(); intersect(root, new LiquidGeometryRefinement.Cell(0, 0, 0, 0, moved), fragments);
+		var measure = LiquidConvexRegion.EMPTY.measure(); for (var fragment : fragments) measure = measure.add(LiquidConvexRegion.of(fragment.geometry).measure());
+		if (!measure.same(LiquidConvexRegion.of(moved).measure())) throw new IllegalStateException("Geometric remap lost exact volume or first moments");
+		return List.copyOf(fragments);
+	}
 
-	private static void intersect(Node node, LiquidGeometryRefinement.Cell occupied, ArrayList<Fragment> fragments) {
+	private static void intersect(Node node, LiquidGeometryRefinement.Cell occupied, ArrayList<GeometryFragment> fragments) {
 		if (node == null) throw new IllegalStateException("Liquid enters an uncovered control volume");
-		if (node.cell >= 0) { fragments.add(new Fragment(node.cell, occupied.geometry(), SignedDyadic.ZERO)); return; }
+		if (node.cell >= 0) { fragments.add(new GeometryFragment(node.cell, occupied.geometry())); return; }
 		if (node.children == null) throw new IllegalStateException("Liquid enters an uncovered control volume");
 		for (var child : LiquidGeometryRefinement.children(occupied)) {
 			int slot = (child.x() & 1) | (child.y() & 1) << 1 | (child.z() & 1) << 2;

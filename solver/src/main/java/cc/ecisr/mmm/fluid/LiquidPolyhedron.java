@@ -83,8 +83,16 @@ final class LiquidPolyhedron {
 
 	LiquidPolyhedron scaled(double scale) {
 		if (!(scale > 0) || !Double.isFinite(scale)) throw new IllegalArgumentException("Invalid liquid geometry scale");
-		if (scale == 1) return this;
-		return transformed(new double[] {scale, 0, 0, 0, scale, 0, 0, 0, scale}, new Point(0, 0, 0), new Point(0, 0, 0));
+		return scaled(LiquidExactPolygon.Fraction.of(scale));
+	}
+	LiquidPolyhedron scaled(LiquidExactPolygon.Fraction scale) {
+		if (scale.signum() <= 0) throw new IllegalArgumentException("Invalid liquid geometry scale");
+		if (scale.equals(LiquidExactPolygon.Fraction.of(1))) return this;
+		var map = new ArrayList<LiquidExactPolygon.Fraction>();
+		for (int a = 0; a < 3; a++) {
+			for (int b = 0; b < 3; b++) map.add(a == b ? scale : LiquidExactPolygon.Fraction.ZERO); map.add(LiquidExactPolygon.Fraction.ZERO);
+		}
+		return LiquidConvexRegion.of(this).transformed(map).geometry();
 	}
 
 	LiquidPolyhedron translated(double dx, double dy, double dz) {
