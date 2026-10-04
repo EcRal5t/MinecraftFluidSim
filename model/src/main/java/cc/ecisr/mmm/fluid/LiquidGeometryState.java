@@ -10,8 +10,14 @@ public final class LiquidGeometryState {
 		private final BigInteger[] vertices;
 		private final BigInteger[] planes;
 		private final int[] faceOffsets, faceVertices;
+		private final double[] velocity;
 
 		public ControlVolume(int level, int x, int y, int z, BigInteger[] vertices, int[] faceOffsets, int[] faceVertices, BigInteger[] planes) {
+			this(level, x, y, z, vertices, faceOffsets, faceVertices, planes, new double[3]);
+		}
+		public ControlVolume(int level, int x, int y, int z, BigInteger[] vertices, int[] faceOffsets, int[] faceVertices, BigInteger[] planes, double[] velocity) {
+			if (velocity == null || velocity.length != 3) throw new IllegalArgumentException("Incomplete liquid control-volume velocity");
+			for (double component : velocity) if (!Double.isFinite(component)) throw new IllegalArgumentException("Non-finite liquid control-volume velocity");
 			if (level < 0 || level > 30 || x < 0 || y < 0 || z < 0
 					|| x >= 1L << level || y >= 1L << level || z >= 1L << level)
 				throw new IllegalArgumentException("Invalid liquid control-volume address");
@@ -50,6 +56,7 @@ public final class LiquidGeometryState {
 			this.level = level; this.x = x; this.y = y; this.z = z;
 			this.vertices = vertices.clone(); this.faceOffsets = faceOffsets.clone(); this.faceVertices = faceVertices.clone();
 			this.planes = planes.clone();
+			this.velocity = velocity.clone();
 		}
 		public int level() { return level; }
 		public int x() { return x; }
@@ -59,8 +66,10 @@ public final class LiquidGeometryState {
 		public int[] copyFaceOffsets() { return faceOffsets.clone(); }
 		public int[] copyFaceVertices() { return faceVertices.clone(); }
 		public BigInteger[] copyPlanes() { return planes.clone(); }
+		/** Mean velocity in metres per second, transported with this geometric control volume. */
+		public double[] copyVelocity() { return velocity.clone(); }
 		public long cpuBytes() {
-			long bytes = (long) (faceOffsets.length + faceVertices.length) * Integer.BYTES;
+			long bytes = (long) (faceOffsets.length + faceVertices.length) * Integer.BYTES + 3L * Double.BYTES;
 			for (var coordinate : vertices) bytes = Math.addExact(bytes, 32L + (coordinate.bitLength() + 7L) / 8);
 			for (var coefficient : planes) bytes = Math.addExact(bytes, 32L + (coefficient.bitLength() + 7L) / 8);
 			return bytes;
@@ -81,7 +90,7 @@ public final class LiquidGeometryState {
 		if (fragmentOwners == null || fragmentOwners.length != cells.size()) throw new IllegalArgumentException("Incomplete liquid fragment ownership");
 		this.cells = List.copyOf(cells); this.markerCells = markerCells.clone();
 		this.fragmentOwners = fragmentOwners.clone();
-		for (int c = 1; c < cells.size(); c++) if (compare(cells.get(c - 1), cells.get(c)) >= 0)
+		for (int c = 1; c < cells.size(); c++) if (compareGeometry(cells.get(c - 1), cells.get(c)) >= 0)
 			throw new IllegalArgumentException("Liquid geometry fragments must be unique and canonical");
 		boolean[] supported = new boolean[cells.size()];
 		for (int c = 0; c < fragmentOwners.length; c++) {
@@ -106,6 +115,10 @@ public final class LiquidGeometryState {
 		return bytes;
 	}
 	public static int compare(ControlVolume a, ControlVolume b) {
+		int order = compareGeometry(a, b);
+		return order == 0 ? java.util.Arrays.compare(a.velocity, b.velocity) : order;
+	}
+	public static int compareGeometry(ControlVolume a, ControlVolume b) {
 		int order = Integer.compare(a.level, b.level);
 		if (order == 0) order = Integer.compare(a.x, b.x);
 		if (order == 0) order = Integer.compare(a.y, b.y);

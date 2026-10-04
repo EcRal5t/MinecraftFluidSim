@@ -196,6 +196,17 @@ final class LiquidGeometryValidation {
 		for (int c = 0; c < mesh.cells.size(); c++) primary[3 * c] = 0.125;
 		for (int f = 0; f < rates.length; f++) rates[f] = mesh.faces.get(f).areaVector().getFirst().multiply(LiquidExactPolygon.Fraction.of(0.125));
 		var field = LiquidControlVolumeVelocity.reconstruct(mesh, rates, primary);
+		for (int f = 0; f < rates.length; f++) rates[f] = mesh.faces.get(f).areaVector().get(1).multiply(mesh.faces.get(f).centroid().getFirst()
+				.subtract(LiquidExactPolygon.Fraction.of(0.375 * width))).multiply(LiquidExactPolygon.Fraction.of(0.125));
+		for (int c = 0; c < mesh.cells.size(); c++) { primary[3 * c] = 0; primary[3 * c + 1] = 0.125 * (mesh.cells.get(c).centroid().x() - 0.375 * width); }
+		var shear = new LiquidGeometryMotionPlan(grouped, mesh, regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray(),
+				LiquidControlVolumeVelocity.reconstruct(mesh, rates, primary), LiquidGeometryRefinement.children(root), 0, 4096, 128);
+		var resolved = shear.geometry.cells(); double separation = 0.125 * 0.09375 * width;
+		if (resolved.size() != 2 || resolved.getFirst().copyVelocity()[1] != -separation || resolved.getLast().copyVelocity()[1] != separation)
+			throw new AssertionError("Shared inventory erased distinct resolved control-volume velocities");
+		var fieldCopy = resolved.getFirst().copyVelocity(); fieldCopy[1] = 1;
+		if (resolved.getFirst().copyVelocity()[1] != -separation) throw new AssertionError("Geometric velocity snapshot exposed mutable state");
+		copied.liquidGeometryState = shear.geometry; FluidDomainStateMapper.capture(copied);
 		var motion = new LiquidGeometryMotionPlan(grouped, mesh, regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray(), field,
 				LiquidGeometryRefinement.children(root), 0.1, 4096, 128);
 		if (motion.geometry.markerCount() != 1 || motion.inventoryMotion.size() != 1) throw new AssertionError("Geometric motion duplicated inventory ownership");
@@ -204,6 +215,7 @@ final class LiquidGeometryValidation {
 		if (!position.velocityMetresPerSecond().equals(new LiquidPolyhedron.Point(0.125, 0, 0))) throw new AssertionError("Inventory group lost its integrated momentum");
 		copied.liquidGeometryState = motion.geometry; copied.particles.setPositionX(0, (float) position.positionMetres().x());
 		copied.particles.setPositionY(0, (float) position.positionMetres().y()); copied.particles.setPositionZ(0, (float) position.positionMetres().z());
+		copied.particles.setVelocityX(0, (float) position.velocityMetresPerSecond().x());
 		FluidDomainStateMapper.capture(copied);
 	}
 

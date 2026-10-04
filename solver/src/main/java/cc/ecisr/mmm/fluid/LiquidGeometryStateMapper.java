@@ -12,11 +12,15 @@ final class LiquidGeometryStateMapper {
 		return capture(cells, rootWidth, markerCells, java.util.stream.IntStream.range(0, cells.size()).toArray());
 	}
 	static LiquidGeometryState capture(List<LiquidGeometryRefinement.Cell> cells, double rootWidth, int[] markerCells, int[] fragmentOwners) {
+		return capture(cells, rootWidth, markerCells, fragmentOwners, new double[3 * cells.size()]);
+	}
+	static LiquidGeometryState capture(List<LiquidGeometryRefinement.Cell> cells, double rootWidth, int[] markerCells, int[] fragmentOwners, double[] velocity) {
 		if (fragmentOwners.length != cells.size()) throw new IllegalArgumentException("Incomplete liquid fragment ownership");
+		if (velocity.length != 3 * cells.size()) throw new IllegalArgumentException("Incomplete liquid geometric velocity field");
 		var packed = new ArrayList<LiquidGeometryState.ControlVolume>();
-		for (var cell : cells) packed.add(pack(cell));
+		for (int c = 0; c < cells.size(); c++) packed.add(pack(cells.get(c), java.util.Arrays.copyOfRange(velocity, 3 * c, 3 * c + 3)));
 		var order = new ArrayList<Integer>(); for (int c = 0; c < cells.size(); c++) order.add(c);
-		order.sort((a, b) -> LiquidGeometryState.compare(packed.get(a), packed.get(b)));
+		order.sort((a, b) -> LiquidGeometryState.compareGeometry(packed.get(a), packed.get(b)));
 		int[] canonical = new int[cells.size()]; for (int c = 0; c < cells.size(); c++) canonical[order.get(c)] = c;
 		var first = new java.util.HashMap<Integer, Integer>(); int[] groups = new int[cells.size()];
 		for (int ordinal : order) {
@@ -33,7 +37,7 @@ final class LiquidGeometryStateMapper {
 		return new LiquidGeometryState(rootWidth, result, owners, groups);
 	}
 
-	private static LiquidGeometryState.ControlVolume pack(LiquidGeometryRefinement.Cell cell) {
+	private static LiquidGeometryState.ControlVolume pack(LiquidGeometryRefinement.Cell cell, double[] velocity) {
 		var faces = LiquidExactPolygon.faces(cell.geometry());
 		var points = new java.util.TreeSet<LiquidExactPolygon.Vertex>(java.util.Comparator.comparing(LiquidExactPolygon.Vertex::x)
 				.thenComparing(LiquidExactPolygon.Vertex::y).thenComparing(LiquidExactPolygon.Vertex::z).thenComparing(LiquidExactPolygon.Vertex::w));
@@ -58,7 +62,7 @@ final class LiquidGeometryStateMapper {
 			int original = order.get(f); System.arraycopy(cycles.get(original), 0, indices, offsets[f], offsets[f + 1] - offsets[f]);
 			var plane = faces.get(original).coefficients(); for (int a = 0; a < 4; a++) planes[4 * f + a] = plane.get(a);
 		}
-		return new LiquidGeometryState.ControlVolume(cell.level(), cell.x(), cell.y(), cell.z(), xyz, offsets, indices, planes);
+		return new LiquidGeometryState.ControlVolume(cell.level(), cell.x(), cell.y(), cell.z(), xyz, offsets, indices, planes, velocity);
 	}
 
 	static List<LiquidGeometryRefinement.Cell> restore(LiquidGeometryState state) {
@@ -98,6 +102,7 @@ final class LiquidGeometryStateMapper {
 	static void requireCompatible(LiquidGeometryState state, FluidDomain domain) {
 		var cells = restore(state); int[] owners = state.copyMarkerCells(), fragments = state.copyFragmentOwners();
 		if (owners.length != domain.particles.count()) throw new IllegalArgumentException("Liquid geometry quadrature count differs from inventory");
+		LiquidGeometryMomentumAudit.requireCompatible(state, cells, domain);
 		int span = Integer.highestOneBit(Math.max(domain.sizeX, Math.max(domain.sizeY, domain.sizeZ)) - 1) << 1;
 		double width = span * (double) domain.config.cellSize();
 		if (state.rootWidthMetres() != width) throw new IllegalArgumentException("Liquid geometry root differs from the physical domain");

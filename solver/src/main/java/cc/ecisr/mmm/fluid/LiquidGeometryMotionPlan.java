@@ -26,19 +26,24 @@ final class LiquidGeometryMotionPlan {
 			throw new IllegalArgumentException("Mechanical geometry differs from submitted liquid geometry");
 		var transport = new LiquidCharacteristicTransport(new LiquidVelocityTrajectory(mesh, velocity)); var remap = new LiquidGeometryRemap(nextLeaves);
 		var cells = new ArrayList<LiquidGeometryRefinement.Cell>(); var ownership = new ArrayList<Integer>(); int[] previousOwners = input.copyFragmentOwners();
+		var payload = new ArrayList<Fraction[]>();
 		var integral = new Fraction[source.size()][3]; var sourceVolume = new Fraction[source.size()]; Arrays.fill(sourceVolume, Fraction.ZERO);
 		for (var vector : integral) Arrays.fill(vector, Fraction.ZERO);
 		for (int c = 0; c < fragments.length; c++) if (fragments[c] >= 0) {
-			int owner = previousOwners[fragments[c]]; sourceVolume[owner] = sourceVolume[owner].add(LiquidConvexRegion.of(mesh.cells.get(c).geometry()).measure().volume());
+			var volume = LiquidConvexRegion.of(mesh.cells.get(c).geometry()).measure().volume(); var momentum = new Fraction[] {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
+			int owner = previousOwners[fragments[c]]; sourceVolume[owner] = sourceVolume[owner].add(volume);
 			for (var tetra : velocity[c].tetrahedra()) {
 				var center = tetra.geometry().faces().getFirst().centroidCoordinates(); var rate = tetra.outwardFlux().getFirst();
-				for (int a = 0; a < 3; a++) integral[owner][a] = integral[owner][a].add(center[a].multiply(rate));
+				for (int a = 0; a < 3; a++) momentum[a] = momentum[a].add(center[a].multiply(rate));
 			}
+			for (int a = 0; a < 3; a++) integral[owner][a] = integral[owner][a].add(momentum[a]);
+			var mean = new Fraction[] {momentum[0].divide(volume), momentum[1].divide(volume), momentum[2].divide(volume)};
 			var moved = transport.advectGeometry(c, mesh.cells.get(c).geometry(), dt, maximumFragments, maximumFaceEvents);
 			for (var image : moved) for (var fragment : remap.partitionGeometry(image.scaled(inverse))) {
 				if (cells.size() == maximumFragments) throw new IllegalStateException("Liquid geometric successor exceeds its fragment budget");
 				var leaf = nextLeaves.get(fragment.cell()); cells.add(LiquidPhasePartition.Address.of(leaf).cell(fragment.geometry()));
 				ownership.add(previousOwners[fragments[c]]);
+				payload.add(mean);
 			}
 		}
 		var first = new HashMap<Integer, Integer>(); int[] groups = new int[cells.size()];
@@ -46,7 +51,9 @@ final class LiquidGeometryMotionPlan {
 		int[] markers = input.copyMarkerCells(); for (int p = 0; p < markers.length; p++) {
 			var owner = first.get(markers[p]); if (owner == null) throw new IllegalStateException("Liquid motion lost an inventory group"); markers[p] = owner;
 		}
-		geometry = LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, groups);
+		var transportedVelocity = new double[3 * cells.size()];
+		for (int f = 0; f < cells.size(); f++) for (int a = 0; a < 3; a++) transportedVelocity[3 * f + a] = payload.get(f)[a].rounded();
+		geometry = LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, groups, transportedVelocity);
 		var restored = LiquidGeometryStateMapper.restore(geometry); int[] owners = geometry.copyFragmentOwners();
 		int[] originalMarkers = input.copyMarkerCells(), nextMarkers = geometry.copyMarkerCells(), oldGroup = new int[restored.size()]; Arrays.fill(oldGroup, -1);
 		for (int p = 0; p < originalMarkers.length; p++) oldGroup[nextMarkers[p]] = originalMarkers[p];
