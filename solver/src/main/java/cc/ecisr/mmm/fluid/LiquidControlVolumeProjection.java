@@ -15,7 +15,7 @@ final class LiquidControlVolumeProjection {
 				throw new IllegalArgumentException("Liquid control-volume inertia exceeds numerical range");
 		}
 		LiquidPolyhedron.Point centroid() {
-			var m = geometry.moments(); return new LiquidPolyhedron.Point(m.centroid(0), m.centroid(1), m.centroid(2));
+			return geometry.centroid();
 		}
 	}
 	/** second >= 0: liquid neighbor; -1: liquid-side interface pressure; -2: solid normal velocity. */

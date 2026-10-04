@@ -14,15 +14,16 @@ final class LiquidVelocityTrajectory {
 			return new Triangle(List.copyOf(copy));
 		}
 	}
-	private static final class Piece {
+	static final class Piece {
 		final int cell;
 		final LiquidControlVolumeVelocity.Tetrahedron tetra;
+		final LiquidPolyhedron geometry;
 		final LiquidPolyhedron.Surface[] surfaces = new LiquidPolyhedron.Surface[4];
 		final LiquidPolyhedron.Point[] faceOrigins = new LiquidPolyhedron.Point[4];
 		final Piece[] neighbor = new Piece[4];
 		final double[] normalVelocity = new double[4];
 		Piece(int cell, LiquidControlVolumeVelocity.Tetrahedron tetra) {
-			this.cell = cell; this.tetra = tetra;
+			this.cell = cell; this.tetra = tetra; geometry = LiquidPolyhedron.tetrahedron(tetra.vertices());
 			for (int f = 0; f < 4; f++) {
 				var polygon = polygon(tetra, f); var surface = LiquidPolyhedron.surface(polygon);
 				if (surface.areaVector().dot(tetra.vertices().get(f).subtract(polygon.getFirst())) > 0) {
@@ -54,8 +55,18 @@ final class LiquidVelocityTrajectory {
 			if (!unmatched.isEmpty()) throw new IllegalArgumentException("Liquid velocity field has an open tetrahedral face");
 			cells.add(List.copyOf(pieces));
 		}
+		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() >= 0) {
+			var unmatched = new HashMap<Triangle, Piece>();
+			for (var piece : faces.get(f)) {
+				var key = Triangle.key(polygon(piece.tetra, 0)); var other = unmatched.remove(key);
+				if (other == null) unmatched.put(key, piece);
+				else { piece.neighbor[0] = other; other.neighbor[0] = piece; }
+			}
+			if (!unmatched.isEmpty()) throw new IllegalArgumentException("Shared velocity face has an incomplete triangle arrangement");
+		}
 		this.cells = List.copyOf(cells); this.boundaryFaces = List.copyOf(faces);
 	}
+	List<Piece> pieces(int cell) { return cells.get(cell); }
 
 	Result advance(int cell, LiquidPolyhedron.Point position, double dt, int maximumFaceEvents) {
 		if (!(dt >= 0) || !Double.isFinite(dt) || maximumFaceEvents <= 0) throw new IllegalArgumentException("Invalid liquid trajectory request");

@@ -64,16 +64,21 @@ final class LiquidInterfaceVelocityExtension {
 				quantizationBound = Math.max(quantizationBound, Math.scalb(1 / Math.scalb(volume[c], -exponent), quantum - exponent));
 			}
 		}
-		double[] reference = new double[faces], referenceError = reference.clone(), resistance = reference.clone();
-		for (int f = 0; f < faces; f++) if (fixed[f] == null) {
+		double[] reference = new double[faces], referenceError = reference.clone(), resistance = reference.clone(), referenceCell = new double[3 * count];
+		for (int c = 0; c < count; c++) if (liquid[c] < 0) for (int axis = 0; axis < 3; axis++)
+			referenceCell[3 * c + axis] = contactArea[root[c]] > 0 ? contactVelocity[3 * root[c] + axis] / contactArea[root[c]] : 0;
+		for (int f = 0; f < faces; f++) {
 			var face = mesh.faces.get(f); var vector = face.surface().areaVector(); double area = face.surface().area();
-			double distance = vector.dot(face.surface().centroid().subtract(mesh.cells.get(first[f]).centroid())) / area;
-			if (second[f] < count) distance += vector.dot(mesh.cells.get(second[f]).centroid().subtract(face.surface().centroid())) / area;
-			resistance[f] = distance / area;
-			if (!(resistance[f] > 0) || !Double.isFinite(resistance[f])) throw new IllegalStateException("Interface extension metric exceeds numerical range");
-			int component = root[first[f]];
+			if (fixed[f] == null) {
+				double distance = vector.dot(face.surface().centroid().subtract(mesh.cells.get(first[f]).centroid())) / area;
+				if (second[f] < count) distance += vector.dot(mesh.cells.get(second[f]).centroid().subtract(face.surface().centroid())) / area;
+				resistance[f] = distance / area;
+				if (!(resistance[f] > 0) || !Double.isFinite(resistance[f])) throw new IllegalStateException("Interface extension metric exceeds numerical range");
+			}
+			int gas = liquid[first[f]] < 0 ? first[f] : second[f] < count && liquid[second[f]] < 0 ? second[f] : -1;
+			if (gas < 0) continue;
 			for (int axis = 0; axis < 3; axis++) {
-				double velocity = contactArea[component] > 0 ? contactVelocity[3 * component + axis] / contactArea[component] : 0;
+				double velocity = referenceCell[3 * gas + axis];
 				double term = velocity * vector.coordinate(axis); reference[f] += term; referenceError[f] += Math.ulp(term) + Math.ulp(reference[f]);
 			}
 			if (!Double.isFinite(reference[f])) throw new IllegalStateException("Interface extension reference exceeds numerical range");
@@ -81,6 +86,7 @@ final class LiquidInterfaceVelocityExtension {
 		var coordinates = new ConservativeFluxCoordinates(count + 1, first, second, constrained, fixed);
 		double[] observedSource = new double[source.length]; for (int c = 0; c < source.length; c++) observedSource[c] = source[c].toDouble();
 		double[] diagonal = coordinates.cycleWeights(resistance), support = coordinates.cycleMinimum(volume), variable = new double[coordinates.size()];
+		for (int c = 0; c < variable.length; c++) variable[c] = reference[coordinates.face(c)];
 		var exact = new SignedDyadic[variable.length]; Arrays.fill(exact, SignedDyadic.ZERO); coordinates.liftExact(exact, source);
 		var gradient = gradient(coordinates.lift(variable, observedSource, true), coordinates.liftError(variable, observedSource, true), resistance, reference, referenceError);
 		double[] residual = negate(coordinates.transpose(gradient.value)), direction = residual.clone(); double rz = 0;
@@ -106,7 +112,7 @@ final class LiquidInterfaceVelocityExtension {
 		gradient = gradient(flow, error, resistance, reference, referenceError);
 		if (!converged(negate(coordinates.transpose(gradient.value)), coordinates.transposeError(gradient.value, gradient.error), diagonal, support, divergenceTolerance))
 			throw new IllegalStateException("Exact interface rates exceed extension solve accuracy");
-		return result(mesh, liquid, submittedCells, rates, flow, source, iterations, quantizationBound);
+		return result(mesh, liquid, submittedCells, rates, flow, source, iterations, quantizationBound, referenceCell, reference);
 	}
 	private static Gradient gradient(double[] flow, double[] error, double[] resistance, double[] reference, double[] referenceError) {
 		double[] value = new double[flow.length], bound = value.clone();
@@ -117,19 +123,19 @@ final class LiquidInterfaceVelocityExtension {
 		return new Gradient(value, bound);
 	}
 	private static Result result(LiquidControlVolumeMesh mesh, int[] liquid, double[] submittedCells, SignedDyadic[] rates,
-			double[] flow, SignedDyadic[] source, int iterations, double quantizationBound) {
+			double[] flow, SignedDyadic[] source, int iterations, double quantizationBound, double[] referenceCell, double[] reference) {
 		double[] normal = new double[rates.length], primary = submittedCells.clone(), dilatation = new double[liquid.length];
 		double error = 0, bound = 0;
 		for (int f = 0; f < rates.length; f++) normal[f] = flow[f] / mesh.faces.get(f).surface().area();
 		for (int c = 0; c < liquid.length; c++) {
 			double volume = mesh.cells.get(c).geometry().moments().volume(), target = source[c].toDouble();
 			dilatation[c] = target / volume; double balance = -target, roundoff = target == 0 ? 0 : Math.ulp(target);
-			if (liquid[c] < 0) Arrays.fill(primary, 3 * c, 3 * c + 3, 0);
+			if (liquid[c] < 0) System.arraycopy(referenceCell, 3 * c, primary, 3 * c, 3);
 			var center = mesh.cells.get(c).centroid();
 			for (int f : mesh.cellFaces[c]) {
 				var face = mesh.faces.get(f); double sign = face.first() == c ? 1 : -1, rate = sign * face.surface().area() * normal[f];
 				balance += rate; roundoff += Math.ulp(flow[f]) + face.surface().area() * Math.ulp(normal[f]) + Math.ulp(rate) + Math.ulp(balance);
-				if (liquid[c] < 0) for (int a = 0; a < 3; a++) primary[3 * c + a] += face.surface().centroid().subtract(center).coordinate(a) * sign * flow[f] / volume;
+				if (liquid[c] < 0) for (int a = 0; a < 3; a++) primary[3 * c + a] += face.surface().centroid().subtract(center).coordinate(a) * sign * (flow[f] - reference[f]) / volume;
 			}
 			if (!(Math.abs(balance) <= roundoff)) throw new IllegalStateException("Interface flux observation exceeds exact continuity representation");
 			error = Math.max(error, Math.abs(balance) / volume); bound = Math.max(bound, roundoff / volume);

@@ -7,6 +7,9 @@ final class LiquidGeometryValidation {
 		moments(cube.moments(), 1, 0.5, 0.5, 0.5);
 		moments(cube.clip(1, 1, 1, 1).moments(), 1.0 / 6, 1.0 / 24, 1.0 / 24, 1.0 / 24);
 		for (double[] plane : new double[][] {{1, 0, 0, 0.25}, {1, 1, 1, 1.2}, {-2, 3, 1, 0.7}, {1, 1, 0, 1}, {0, 1, 0, 0}}) {
+			var region = LiquidConvexRegion.of(cube); var cutter = new LiquidGeometryPlane(new LiquidPolyhedron.Point(plane[0], plane[1], plane[2]), plane[3]);
+			if (!region.measure().isSum(region.clip(cutter).measure(), region.clip(cutter.opposite()).measure()))
+				throw new AssertionError("Clipping lost exact volume or first moments");
 			var lower = cube.clip(plane[0], plane[1], plane[2], plane[3]).moments();
 			var upper = cube.clip(-plane[0], -plane[1], -plane[2], -plane[3]).moments();
 			moments(lower.add(upper), 1, 0.5, 0.5, 0.5);

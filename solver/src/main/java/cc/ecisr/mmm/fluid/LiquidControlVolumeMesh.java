@@ -44,11 +44,12 @@ final class LiquidControlVolumeMesh {
 			var leaf = leaves.get(c);
 			var geometry = leaf.geometry().scaled(physicalWidth);
 			var exactFaces = LiquidExactPolygon.faces(geometry);
+			geometry.centroid(exactFaces);
 			cells.add(new LiquidControlVolumeProjection.Cell(geometry, density));
 			for (int f = 0; f < geometry.faces().size(); f++) {
 				var exact = exactFaces.get(f); if (!exact.hasArea()) continue;
 				var polygon = exact.rounded();
-				var surface = LiquidPolyhedron.surface(polygon);
+				var surface = surface(exact, polygon);
 				if (!(surface.area() > 0)) throw new IllegalStateException("Shared face exceeds binary64 spatial resolution");
 				Tile tile = tile(leaf, polygon, surface, physicalWidth);
 				var patch = new Patch(c, exact, polygon, surface, tile); patches.add(patch);
@@ -80,7 +81,7 @@ final class LiquidControlVolumeMesh {
 		}
 		for (Patch patch : patches) for (var exact : patch.uncovered) {
 			var polygon = exact.rounded();
-			var residual = LiquidPolyhedron.surface(polygon);
+			var residual = surface(exact, polygon);
 			if (!(residual.area() > 0)) throw new IllegalStateException("Shared face exceeds binary64 spatial resolution");
 			Boundary condition = boundary.at(patch.cell, residual);
 			faces.add(new LiquidControlVolumeProjection.Face(patch.cell, condition.solid ? -2 : -1, residual, condition.prescribed));
@@ -114,11 +115,14 @@ final class LiquidControlVolumeMesh {
 		var exact = first.exact.intersection(second.exact);
 		if (!exact.hasArea()) return;
 		var polygon = exact.rounded();
-		var surface = LiquidPolyhedron.surface(polygon);
-		if (!(surface.area() > 0)) throw new IllegalStateException("Shared face exceeds binary64 spatial resolution");
+		var surface = surface(exact, polygon);
+		if (!(surface.area() > 0)) throw new IllegalStateException("Shared face exceeds binary64 spatial resolution: cells=" + first.cell + "," + second.cell + ", vertices=" + polygon);
 		first.covered(exact); second.covered(exact);
 		faces.add(new LiquidControlVolumeProjection.Face(first.cell, second.cell, surface, 0));
 		polygons.add(exact);
+	}
+	private static LiquidPolyhedron.Surface surface(LiquidExactPolygon exact, List<LiquidPolyhedron.Point> polygon) {
+		var surface = LiquidPolyhedron.surface(polygon); return new LiquidPolyhedron.Surface(surface.area(), surface.areaVector(), exact.centroid());
 	}
 
 }

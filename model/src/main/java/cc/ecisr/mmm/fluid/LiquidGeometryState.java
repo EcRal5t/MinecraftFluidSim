@@ -1,15 +1,17 @@
 package cc.ecisr.mmm.fluid;
 
 import java.util.List;
+import java.math.BigInteger;
 
 /** Immutable liquid interfaces and their marker quadrature, in a normalized dyadic root. */
 public final class LiquidGeometryState {
 	public static final class ControlVolume {
 		private final int level, x, y, z;
-		private final double[] vertices, planes;
+		private final double[] vertices;
+		private final BigInteger[] planes;
 		private final int[] faceOffsets, faceVertices;
 
-		public ControlVolume(int level, int x, int y, int z, double[] vertices, int[] faceOffsets, int[] faceVertices, double[] planes) {
+		public ControlVolume(int level, int x, int y, int z, double[] vertices, int[] faceOffsets, int[] faceVertices, BigInteger[] planes) {
 			if (level < 0 || level > 30 || x < 0 || y < 0 || z < 0
 					|| x >= 1L << level || y >= 1L << level || z >= 1L << level)
 				throw new IllegalArgumentException("Invalid liquid control-volume address");
@@ -30,8 +32,12 @@ public final class LiquidGeometryState {
 			for (int vertex : faceVertices) if (vertex < 0 || vertex >= vertices.length / 3)
 				throw new IllegalArgumentException("Liquid face refers to an absent vertex");
 			for (int f = 0; f < planes.length; f += 4) {
-				double norm = planes[f] * planes[f] + planes[f + 1] * planes[f + 1] + planes[f + 2] * planes[f + 2];
-				if (!(norm > 0) || !Double.isFinite(norm) || !Double.isFinite(planes[f + 3]))
+				BigInteger divisor = BigInteger.ZERO; boolean normal = false;
+				for (int a = 0; a < 4; a++) {
+					if (planes[f + a] == null) throw new IllegalArgumentException("Missing exact liquid plane coefficient");
+					divisor = divisor.gcd(planes[f + a].abs()); normal |= a < 3 && planes[f + a].signum() != 0;
+				}
+				if (!normal || !divisor.equals(BigInteger.ONE))
 					throw new IllegalArgumentException("Invalid liquid supporting plane");
 			}
 			this.level = level; this.x = x; this.y = y; this.z = z;
@@ -45,8 +51,12 @@ public final class LiquidGeometryState {
 		public double[] copyVertices() { return vertices.clone(); }
 		public int[] copyFaceOffsets() { return faceOffsets.clone(); }
 		public int[] copyFaceVertices() { return faceVertices.clone(); }
-		public double[] copyPlanes() { return planes.clone(); }
-		public long cpuBytes() { return (long) (vertices.length + planes.length) * Double.BYTES + (long) (faceOffsets.length + faceVertices.length) * Integer.BYTES; }
+		public BigInteger[] copyPlanes() { return planes.clone(); }
+		public long cpuBytes() {
+			long bytes = (long) vertices.length * Double.BYTES + (long) (faceOffsets.length + faceVertices.length) * Integer.BYTES;
+			for (var coefficient : planes) bytes = Math.addExact(bytes, 32L + (coefficient.bitLength() + 7L) / 8);
+			return bytes;
+		}
 	}
 	private final double rootWidthMetres;
 	private final List<ControlVolume> cells;

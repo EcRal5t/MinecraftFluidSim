@@ -1,7 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -9,6 +8,13 @@ import java.util.List;
 /** Convex liquid geometry with volume and first moments integrated over the same faces. */
 final class LiquidPolyhedron {
 	static final LiquidPolyhedron EMPTY = new LiquidPolyhedron(List.of(), List.of());
+	private volatile Point centroid;
+	Point centroid() {
+		var value = centroid; if (value == null) value = centroid(LiquidExactPolygon.faces(this)); return value;
+	}
+	Point centroid(List<LiquidExactPolygon> faces) {
+		var value = centroid; if (value == null) centroid = value = LiquidExactPolygon.volumeCentroid(faces); return value;
+	}
 	record Point(double x, double y, double z) {
 		Point {
 			if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z))
@@ -28,9 +34,6 @@ final class LiquidPolyhedron {
 		}
 	}
 	record Surface(double area, Point areaVector, Point centroid) { }
-	private record Edge(Point first, Point second) {
-		static Edge ordered(Point a, Point b) { return compare(a, b) < 0 ? new Edge(a, b) : new Edge(b, a); }
-	}
 	private final List<List<Point>> faces;
 	private final List<LiquidGeometryPlane> planes;
 	private volatile Moments integratedMoments;
@@ -70,6 +73,7 @@ final class LiquidPolyhedron {
 
 	LiquidPolyhedron scaled(double scale) {
 		if (!(scale > 0) || !Double.isFinite(scale)) throw new IllegalArgumentException("Invalid liquid geometry scale");
+		if (scale == 1) return this;
 		var output = new ArrayList<List<Point>>();
 		for (var face : faces) {
 			var transformed = new ArrayList<Point>();
@@ -77,7 +81,7 @@ final class LiquidPolyhedron {
 			output.add(List.copyOf(transformed));
 		}
 		var scaledPlanes = new ArrayList<LiquidGeometryPlane>();
-		for (var plane : planes) scaledPlanes.add(new LiquidGeometryPlane(plane.normal(), plane.offset() * scale));
+		for (var plane : planes) scaledPlanes.add(plane.scaled(scale));
 		return new LiquidPolyhedron(output, scaledPlanes);
 	}
 
@@ -123,6 +127,20 @@ final class LiquidPolyhedron {
 		return new LiquidPolyhedron(output, mappedPlanes);
 	}
 
+	static LiquidPolyhedron tetrahedron(List<Point> vertices) {
+		if (vertices.size() != 4) throw new IllegalArgumentException("Invalid tetrahedral geometry");
+		var faces = new ArrayList<List<Point>>(); var planes = new ArrayList<LiquidGeometryPlane>();
+		for (int i = 0; i < 4; i++) {
+			var polygon = new ArrayList<Point>(); for (int v = 0; v < 4; v++) if (v != i) polygon.add(vertices.get(v));
+			polygon.sort(java.util.Comparator.comparingDouble(Point::x).thenComparingDouble(Point::y).thenComparingDouble(Point::z));
+			var origin = polygon.getFirst(); var normal = surface(polygon).areaVector(); double offset = normal.dot(origin);
+			if (normal.dot(vertices.get(i).subtract(origin)) > 0) {
+				java.util.Collections.reverse(polygon); normal = new Point(-normal.x, -normal.y, -normal.z); offset = -offset;
+			}
+			faces.add(List.copyOf(polygon)); planes.add(new LiquidGeometryPlane(normal, offset).canonical());
+		}
+		return new LiquidPolyhedron(faces, planes);
+	}
 	static LiquidPolyhedron box(double x0, double y0, double z0, double x1, double y1, double z1) {
 		if (!(x1 > x0 && y1 > y0 && z1 > z0)) throw new IllegalArgumentException("Empty liquid box");
 		Point[] p = new Point[8];
@@ -137,56 +155,13 @@ final class LiquidPolyhedron {
 
 	/** Intersects with n dot x <= offset. Shared original edges produce identical new vertices. */
 	LiquidPolyhedron clip(double nx, double ny, double nz, double offset) {
-		Point n = new Point(nx, ny, nz);
-		if (!Double.isFinite(offset) || !(n.dot(n) > 0) || !Double.isFinite(n.dot(n)))
-			throw new IllegalArgumentException("Invalid liquid clipping plane");
-		var output = new ArrayList<List<Point>>();
-		var clippedPlanes = new ArrayList<LiquidGeometryPlane>(); int faceIndex = 0;
-		var cap = new LinkedHashSet<Point>();
-		var intersections = new HashMap<Edge, Point>();
-		boolean removed = false;
-		for (var face : faces) {
-			var polygon = new ArrayList<Point>();
-			Point previous = face.getLast(); double before = n.dot(previous) - offset;
-			for (Point current : face) {
-				double after = n.dot(current) - offset;
-				removed |= after > 0;
-				if ((before < 0 && after > 0) || (before > 0 && after < 0)) {
-					Point crossing = intersections.computeIfAbsent(Edge.ordered(previous, current), edge -> {
-						double a = n.dot(edge.first) - offset, b = n.dot(edge.second) - offset;
-						double t = a / (a - b);
-						double x = Math.fma(t, edge.second.x - edge.first.x, edge.first.x);
-						double y = Math.fma(t, edge.second.y - edge.first.y, edge.first.y);
-						double z = Math.fma(t, edge.second.z - edge.first.z, edge.first.z);
-						// Dyadic partition planes have an exact coordinate shared by both cells.
-						if (ny == 0 && nz == 0) x = offset / nx;
-						if (nx == 0 && nz == 0) y = offset / ny;
-						if (nx == 0 && ny == 0) z = offset / nz;
-						return new Point(x, y, z);
-					});
-					polygon.add(crossing); cap.add(crossing);
-				}
-				if (after <= 0) polygon.add(current);
-				if (after == 0) cap.add(current);
-				previous = current; before = after;
-			}
-			if (polygon.size() >= 3 && surface(polygon).area() > 0) { output.add(List.copyOf(polygon)); clippedPlanes.add(planes.get(faceIndex)); }
-			faceIndex++;
-		}
-		if (!removed) return this;
-		if (output.isEmpty()) return EMPTY;
-		if (cap.size() >= 3) {
-			Point center = mean(cap);
-			Point tangent = Math.abs(nx) <= Math.abs(ny) && Math.abs(nx) <= Math.abs(nz)
-					? n.cross(new Point(1, 0, 0)) : Math.abs(ny) <= Math.abs(nz) ? n.cross(new Point(0, 1, 0)) : n.cross(new Point(0, 0, 1));
-			Point bitangent = n.cross(tangent);
-			var polygon = new ArrayList<>(cap);
-			polygon.sort(Comparator.comparingDouble(p -> Math.atan2(p.subtract(center).dot(bitangent), p.subtract(center).dot(tangent))));
-			output.add(List.copyOf(polygon)); clippedPlanes.add(new LiquidGeometryPlane(n, offset));
-		}
-		return new LiquidPolyhedron(output, clippedPlanes);
+		return clip(new LiquidGeometryPlane(new Point(nx, ny, nz), offset));
 	}
-
+	LiquidPolyhedron clip(LiquidGeometryPlane plane) {
+		if (faces.isEmpty()) return this;
+		var region = LiquidConvexRegion.of(this); var clipped = region.clip(plane);
+		return clipped == region ? this : clipped.geometry();
+	}
 	Moments moments() {
 		Moments cached = integratedMoments; if (cached != null) return cached;
 		return integratedMoments = integrateMoments();
@@ -214,9 +189,5 @@ final class LiquidPolyhedron {
 		double x = 0, y = 0, z = 0; int count = 0;
 		for (Point p : points) { x += p.x; y += p.y; z += p.z; count++; }
 		return new Point(x / count, y / count, z / count);
-	}
-	private static int compare(Point a, Point b) {
-		int c = Double.compare(a.x, b.x); if (c != 0) return c;
-		c = Double.compare(a.y, b.y); return c != 0 ? c : Double.compare(a.z, b.z);
 	}
 }

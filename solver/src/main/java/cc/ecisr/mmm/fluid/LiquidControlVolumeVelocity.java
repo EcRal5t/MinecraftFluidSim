@@ -91,7 +91,7 @@ final class LiquidControlVolumeVelocity {
 		int tetraCount = tetrahedra.size(), faceCount = unknowns + tetraCount;
 		int[] first = new int[faceCount], second = first.clone(); java.util.Arrays.fill(first, -1); java.util.Arrays.fill(second, -1);
 		var fixed = new SignedDyadic[faceCount]; int[][] indices = new int[tetraCount][4], signs = new int[tetraCount][4];
-		double[][][] mass = new double[tetraCount][4][4]; double[][] preferred = new double[tetraCount][4];
+		double[][][] mass = new double[tetraCount][4][4]; var preferred = new SignedDyadic[tetraCount][4];
 		var volumeWeights = new SignedDyadic[tetraCount]; double widthSquared = width * width, widthCubed = widthSquared * width;
 		var groups = new HashMap<Integer, ArrayList<Integer>>(); SignedDyadic totalRate = SignedDyadic.ZERO;
 		for (int f : mesh.cellFaces[cell]) totalRate = totalRate.add(mesh.faces.get(f).first() == cell ? volumeRate[f] : volumeRate[f].negate());
@@ -105,7 +105,9 @@ final class LiquidControlVolumeVelocity {
 				if (tetra.sign[i] > 0) first[f] = t; else second[f] = t;
 			}
 			for (int i = 0; i < 4; i++) {
-				var a = tetra.center.subtract(tetra.vertices.get(i)); preferred[t][i] = a.dot(target) / (3 * widthSquared);
+				var polygon = new ArrayList<LiquidPolyhedron.Point>();
+				for (int v = 0; v < 4; v++) if (v != i) polygon.add(tetra.physicalVertices.get(v));
+				preferred[t][i] = exactTriangleFlux(polygon, tetra.physicalVertices.get(i), target); var a = tetra.center.subtract(tetra.vertices.get(i));
 				for (int j = 0; j < 4; j++) {
 					var b = tetra.center.subtract(tetra.vertices.get(j)); mass[t][i][j] = (a.dot(b) + covarianceTrace) / (9 * tetra.volume * widthSquared * widthSquared);
 				}
@@ -129,10 +131,10 @@ final class LiquidControlVolumeVelocity {
 		var rates = new ConservativeTetrahedralFlux(indices, signs, mass, first, second, fixed, source).solve(preferred);
 		var result = new ArrayList<Tetrahedron>(); double variation = 0, totalVolume = 0;
 		for (int t = 0; t < tetraCount; t++) {
-			var tetra = tetrahedra.get(t); double[] velocity = new double[3]; var outwardFlux = new ArrayList<SignedDyadic>(); var balance = SignedDyadic.ZERO;
+			var tetra = tetrahedra.get(t); double[] velocity = {target.x(), target.y(), target.z()}; var outwardFlux = new ArrayList<SignedDyadic>(); var balance = SignedDyadic.ZERO;
 			for (int i = 0; i < 4; i++) {
 				var rate = signs[t][i] > 0 ? rates[indices[t][i]] : rates[indices[t][i]].negate(); outwardFlux.add(rate); balance = balance.add(rate);
-				double q = rate.toDouble() / widthSquared; var a = tetra.center.subtract(tetra.vertices.get(i));
+				double q = rate.subtract(preferred[t][i]).toDouble() / widthSquared; var a = tetra.center.subtract(tetra.vertices.get(i));
 				for (int axis = 0; axis < 3; axis++) velocity[axis] += q * a.coordinate(axis) / (3 * tetra.volume);
 			}
 			if (!balance.equals(source[t])) throw new IllegalStateException("Tetrahedral velocity lost exact continuity");
@@ -152,47 +154,27 @@ final class LiquidControlVolumeVelocity {
 		}
 		return 0;
 	}
+	private static SignedDyadic exactTriangleFlux(List<LiquidPolyhedron.Point> polygon, LiquidPolyhedron.Point opposite, LiquidPolyhedron.Point velocity) {
+		SignedDyadic[][] direction = new SignedDyadic[3][3]; var origin = polygon.getFirst();
+		for (int axis = 0; axis < 3; axis++) {
+			direction[0][axis] = SignedDyadic.of(polygon.get(1).coordinate(axis)).subtract(SignedDyadic.of(origin.coordinate(axis)));
+			direction[1][axis] = SignedDyadic.of(polygon.get(2).coordinate(axis)).subtract(SignedDyadic.of(origin.coordinate(axis)));
+			direction[2][axis] = SignedDyadic.of(opposite.coordinate(axis)).subtract(SignedDyadic.of(origin.coordinate(axis)));
+		}
+		var orientation = SignedDyadic.ZERO; var flux = SignedDyadic.ZERO;
+		for (int axis = 0; axis < 3; axis++) {
+			int a = (axis + 1) % 3, b = (axis + 2) % 3;
+			var vector = product(direction[0][a], direction[1][b]).subtract(product(direction[0][b], direction[1][a]));
+			orientation = orientation.add(product(vector, direction[2][axis])); flux = flux.add(product(vector, SignedDyadic.of(velocity.coordinate(axis))));
+		}
+		if (orientation.signum() > 0) flux = flux.negate();
+		return flux.signum() == 0 ? SignedDyadic.ZERO : new SignedDyadic(flux.significand(), Math.subtractExact(flux.exponent(), 1));
+	}
+	private static SignedDyadic product(SignedDyadic a, SignedDyadic b) {
+		return a.signum() == 0 || b.signum() == 0 ? SignedDyadic.ZERO : new SignedDyadic(a.significand().multiply(b.significand()), Math.addExact(a.exponent(), b.exponent()));
+	}
 	private static double quantumPerMeasure(int quantum, double measure) {
 		int exponent = Math.getExponent(measure); return Math.scalb(1 / Math.scalb(measure, -exponent), quantum - exponent);
-	}
-	static double[] solve(double[][] matrix, double[] rhs) {
-		int count = rhs.length; double[][] factor = new double[count][]; for (int i = 0; i < count; i++) factor[i] = matrix[i].clone();
-		double[] value = rhs.clone(); int[] rows = new int[count]; for (int i = 0; i < count; i++) rows[i] = i;
-		for (int column = 0; column < count; column++) {
-			int pivot = column; for (int row = column + 1; row < count; row++) if (Math.abs(factor[row][column]) > Math.abs(factor[pivot][column])) pivot = row;
-			if (!(Math.abs(factor[pivot][column]) > 0)) throw new IllegalStateException("Singular liquid velocity reconstruction");
-			var swap = factor[pivot]; factor[pivot] = factor[column]; factor[column] = swap;
-			double scalar = value[pivot]; value[pivot] = value[column]; value[column] = scalar;
-			int rowIndex = rows[pivot]; rows[pivot] = rows[column]; rows[column] = rowIndex;
-			for (int row = column + 1; row < count; row++) {
-				double scale = factor[row][column] / factor[column][column];
-				for (int j = column + 1; j < count; j++) factor[row][j] -= scale * factor[column][j];
-				value[row] -= scale * value[column]; factor[row][column] = scale;
-			}
-		}
-		for (int row = count - 1; row >= 0; row--) {
-			for (int j = row + 1; j < count; j++) value[row] -= factor[row][j] * value[j]; value[row] /= factor[row][row];
-			if (!Double.isFinite(value[row])) throw new IllegalStateException("Liquid velocity reconstruction overflow");
-		}
-		double[] upperMagnitude = new double[count], factorMagnitude = new double[count]; double maximumValue = 0;
-		for (int row = 0; row < count; row++) {
-			maximumValue = Math.max(maximumValue, Math.abs(value[row]));
-			for (int j = row; j < count; j++) upperMagnitude[row] += Math.abs(factor[row][j]);
-		}
-		for (int row = 0; row < count; row++) {
-			double bound = upperMagnitude[row]; for (int j = 0; j < row; j++) bound += Math.abs(factor[row][j]) * upperMagnitude[j];
-			factorMagnitude[rows[row]] = bound;
-		}
-		// Partial-pivoted LU has componentwise backward error bounded by gamma_n |L||U|.
-		// Include triangular solve and residual evaluation, whose operation counts are each O(n).
-		double epsilonOperations = Math.scalb(8.0 * count, -53), gamma = epsilonOperations / (1 - epsilonOperations);
-		for (int row = 0; row < count; row++) {
-			double actual = 0, magnitude = Math.abs(rhs[row]);
-			for (int j = 0; j < count; j++) { double term = matrix[row][j] * value[j]; actual += term; magnitude += Math.abs(term); }
-			if (Math.abs(actual - rhs[row]) > gamma * (magnitude + factorMagnitude[row] * maximumValue))
-				throw new IllegalStateException("Liquid velocity reconstruction did not converge");
-		}
-		return value;
 	}
 	private static LiquidPolyhedron.Point scale(LiquidPolyhedron.Point p, double scale) { return new LiquidPolyhedron.Point(p.x() * scale, p.y() * scale, p.z() * scale); }
 	private static LiquidPolyhedron.Point mean(List<LiquidPolyhedron.Point> points) {

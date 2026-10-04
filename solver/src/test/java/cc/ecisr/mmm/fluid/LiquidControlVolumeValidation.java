@@ -24,7 +24,62 @@ final class LiquidControlVolumeValidation {
 		conservativeCoordinatesPreserveConstraintsAndVirtualWork();
 		pressureReferencePreservesSmallResolvedForces();
 		interfacePressureJumpPreservesGasPressure();
+		wholeVolumeCharacteristicsPreserveGeometry();
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
+	}
+	private static void wholeVolumeCharacteristicsPreserveGeometry() {
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var drop = LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75);
+		var regions = LiquidPhasePartition.build(root, List.of(drop), 64); var labels = regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray();
+		var mesh = new LiquidControlVolumeMesh(regions.stream().map(LiquidPhasePartition.Region::cell).toList(), 1, 1000,
+				(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		var rates = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; var primary = new double[3 * regions.size()]; primary[0] = 1;
+		for (int f = 0; f < rates.length; f++) {
+			var face = mesh.faces.get(f); rates[f] = labels[face.first()] >= 0 || face.second() >= 0 && labels[face.second()] >= 0
+					? cc.ecisr.mmm.units.SignedDyadic.of(face.surface().areaVector().x()) : cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		}
+		var extension = LiquidInterfaceVelocityExtension.extend(mesh, labels, rates, primary, 1e-11, 512);
+		var transport = new LiquidCharacteristicTransport(new LiquidVelocityTrajectory(mesh,
+				LiquidControlVolumeVelocity.reconstruct(mesh, extension.volumeRate(), extension.cellVelocity())));
+		for (double dt : new double[] {0, 0.2}) {
+			var moved = transport.advect(0, drop, cc.ecisr.mmm.units.SignedDyadic.of(0.125), dt, 4096, 128);
+			if (moved.size() != 1 || !moved.getFirst().inventory().equals(cc.ecisr.mmm.units.SignedDyadic.of(0.125)))
+				throw new AssertionError("Auxiliary velocity faces changed a uniform liquid image");
+			var moments = moved.getFirst().geometry().moments(); close(moments.volume(), 0.125, 1e-15); close(moments.centroid(0), 0.5 + dt, 1e-15);
+			if (dt == 0 && !moved.getFirst().geometry().faces().equals(drop.faces())) throw new AssertionError("Zero-time transport changed liquid geometry");
+			characteristicImageRebuildsSpace(root, moved);
+		}
+		var cells = LiquidGeometryRefinement.children(root);
+		mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		rates = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; primary = new double[3 * cells.size()];
+		for (int c = 0; c < cells.size(); c++) { primary[3 * c] = mesh.cells.get(c).centroid().y(); primary[3 * c + 1] = 0.1; }
+		for (int f = 0; f < rates.length; f++) {
+			var face = mesh.faces.get(f); var area = face.surface().areaVector();
+			rates[f] = cc.ecisr.mmm.units.SignedDyadic.of(area.x() * mesh.cells.get(face.first()).centroid().y() + area.y() * 0.1);
+		}
+		transport = new LiquidCharacteristicTransport(new LiquidVelocityTrajectory(mesh, LiquidControlVolumeVelocity.reconstruct(mesh, rates, primary)));
+		var source = LiquidPolyhedron.box(0.1, 0.1, 0.1, 0.3, 0.49, 0.3); var inventory = cc.ecisr.mmm.units.SignedDyadic.of(source.moments().volume());
+		var moved = transport.advect(0, source, inventory, 0.2, 4096, 128); var moments = LiquidPolyhedron.Moments.ZERO; var total = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		for (var fragment : moved) { moments = moments.add(fragment.geometry().moments()); total = total.add(fragment.inventory()); }
+		if (!total.equals(inventory)) throw new AssertionError("Crossing a velocity change lost exact liquid inventory");
+		close(moments.volume(), 0.0156, 1e-15); close(moments.centroid(0), 0.25064102564102564, 1e-14);
+		close(moments.centroid(1), 0.315, 1e-14); close(moments.centroid(2), 0.2, 1e-14);
+		characteristicImageRebuildsSpace(root, moved);
+	}
+	private static void characteristicImageRebuildsSpace(LiquidGeometryRefinement.Cell root, List<LiquidCharacteristicTransport.Fragment> moved) {
+		var liquids = moved.stream().map(f -> new LiquidGeometryRefinement.Cell(0, 0, 0, 0, f.geometry())).toList();
+		var state = LiquidGeometryStateMapper.capture(liquids, 1, java.util.stream.IntStream.range(0, liquids.size()).toArray());
+		var restored = LiquidGeometryStateMapper.restore(state); var restoredState = LiquidGeometryStateMapper.capture(restored, 1, state.copyMarkerCells());
+		for (int c = 0; c < state.cells().size(); c++) if (LiquidGeometryState.compare(state.cells().get(c), restoredState.cells().get(c)) != 0)
+			throw new AssertionError("Characteristic image lost exact planes across backend handoff");
+		var regions = LiquidPhasePartition.build(root, moved.stream().map(LiquidCharacteristicTransport.Fragment::geometry).toList(), 256);
+		var mesh = new LiquidControlVolumeMesh(regions.stream().map(LiquidPhasePartition.Region::cell).toList(), 1, 1000,
+				(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		var sum = LiquidPolyhedron.Moments.ZERO; for (var cell : mesh.cells) sum = sum.add(cell.geometry().moments());
+		close(sum.volume(), 1, 1e-14); close(sum.x(), 0.5, 1e-14); close(sum.y(), 0.5, 1e-14); close(sum.z(), 0.5, 1e-14);
+		var result = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(new double[3 * mesh.cells.size()],
+				new LiquidPolyhedron.Point(0, 0, 0), 0.025, 1e-11, 512);
+		for (var rate : result.volumeRate()) if (rate.signum() != 0) throw new AssertionError("Transported geometry lost zero-force equilibrium");
 	}
 
 	private static void interfacePressureJumpPreservesGasPressure() {

@@ -64,7 +64,8 @@ final class LiquidPhasePartition {
 			}
 			double volume = intersection.moments().volume();
 			double error = 64 * operations * Math.ulp(volume) + 16 * area * coordinateError;
-			if (volume > error) throw new IllegalArgumentException("Liquid fragments have overlapping volume");
+			if (volume > error) throw new IllegalArgumentException("Liquid fragments have overlapping volume: fragments=" + b + "," + a
+					+ ", overlap=" + volume + ", roundoff=" + error);
 		}
 	}
 }

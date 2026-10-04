@@ -38,7 +38,7 @@ final class LiquidGeometryStateMapper {
 			order.add(cycles.size()); cycles.add(cycle);
 		}
 		order.sort((a, b) -> java.util.Arrays.compare(cycles.get(a), cycles.get(b)));
-		double[] xyz = new double[3 * vertices.size()], planes = new double[4 * cycles.size()];
+		double[] xyz = new double[3 * vertices.size()]; var planes = new java.math.BigInteger[4 * cycles.size()];
 		vertices.forEach((p, v) -> { xyz[3 * v] = p.x(); xyz[3 * v + 1] = p.y(); xyz[3 * v + 2] = p.z(); });
 		int[] offsets = new int[cycles.size() + 1];
 		for (int f = 0; f < order.size(); f++) offsets[f + 1] = Math.addExact(offsets[f], cycles.get(order.get(f)).length);
@@ -46,8 +46,7 @@ final class LiquidGeometryStateMapper {
 		for (int f = 0; f < order.size(); f++) {
 			int original = order.get(f); System.arraycopy(cycles.get(original), 0, indices, offsets[f], offsets[f + 1] - offsets[f]);
 			var plane = geometry.planes().get(original);
-			for (int a = 0; a < 3; a++) planes[4 * f + a] = plane.normal().coordinate(a);
-			planes[4 * f + 3] = plane.offset();
+			for (int a = 0; a < 4; a++) planes[4 * f + a] = plane.positive() ? plane.key().coefficients().get(a) : plane.key().coefficients().get(a).negate();
 		}
 		return new LiquidGeometryState.ControlVolume(cell.level(), cell.x(), cell.y(), cell.z(), xyz, offsets, indices, planes);
 	}
@@ -60,7 +59,7 @@ final class LiquidGeometryStateMapper {
 			for (int v = 0; v < xyz.length; v += 3) vertices.add(new LiquidPolyhedron.Point(xyz[v], xyz[v + 1], xyz[v + 2]));
 			if (new java.util.HashSet<>(vertices).size() != vertices.size()) throw new IllegalArgumentException("Liquid geometry repeats a vertex");
 			var faces = new ArrayList<List<LiquidPolyhedron.Point>>();
-			var planes = new ArrayList<LiquidGeometryPlane>(); double[] coefficients = cell.copyPlanes();
+			var planes = new ArrayList<LiquidGeometryPlane>(); var coefficients = cell.copyPlanes();
 			var edges = new java.util.HashMap<Long, Integer>();
 			for (int f = 0; f + 1 < offsets.length; f++) {
 				var polygon = new ArrayList<LiquidPolyhedron.Point>();
@@ -71,7 +70,7 @@ final class LiquidGeometryStateMapper {
 				}
 				if (!(LiquidPolyhedron.surface(polygon).area() > 0)) throw new IllegalArgumentException("Liquid geometry contains an empty face");
 				faces.add(List.copyOf(polygon));
-				planes.add(new LiquidGeometryPlane(new LiquidPolyhedron.Point(coefficients[4 * f], coefficients[4 * f + 1], coefficients[4 * f + 2]), coefficients[4 * f + 3]));
+				planes.add(LiquidGeometryPlane.exact(List.of(coefficients[4 * f], coefficients[4 * f + 1], coefficients[4 * f + 2], coefficients[4 * f + 3])));
 			}
 			for (var edge : edges.entrySet()) {
 				long a = edge.getKey() >>> 32, b = edge.getKey() & 0xffffffffL;

@@ -17,7 +17,39 @@ final class LiquidGeometryPlane {
 	}
 	LiquidPolyhedron.Point normal() { return normal; }
 	double offset() { return offset; }
-	LiquidGeometryPlane opposite() { return new LiquidGeometryPlane(new LiquidPolyhedron.Point(-normal.x(), -normal.y(), -normal.z()), -offset); }
+	private Boolean orientation;
+	static LiquidGeometryPlane exact(List<BigInteger> coefficients) {
+		int bits = 0; boolean positive = false; boolean found = false; BigInteger divisor = BigInteger.ZERO;
+		for (int a = 0; a < 4; a++) {
+			divisor = divisor.gcd(coefficients.get(a).abs());
+			if (a < 3) { bits = Math.max(bits, coefficients.get(a).abs().bitLength()); if (!found && coefficients.get(a).signum() != 0) { positive = coefficients.get(a).signum() > 0; found = true; } }
+		}
+		if (!found) throw new IllegalArgumentException("Empty exact geometric normal");
+		double[] values = new double[4]; for (int a = 0; a < 4; a++) values[a] = new SignedDyadic(coefficients.get(a), 1 - bits).toDouble();
+		var result = new LiquidGeometryPlane(new LiquidPolyhedron.Point(values[0], values[1], values[2]), values[3]);
+		if (!positive) divisor = divisor.negate(); final var scale = divisor;
+		result.identity = new Key(coefficients.stream().map(c -> c.divide(scale)).toList()); result.orientation = positive; return result;
+	}
+	LiquidGeometryPlane opposite() {
+		var result = new LiquidGeometryPlane(new LiquidPolyhedron.Point(-normal.x(), -normal.y(), -normal.z()), -offset);
+		result.identity = key(); result.orientation = !positive(); return result;
+	}
+	LiquidGeometryPlane scaled(double scale) {
+		var factor = LiquidExactPolygon.Fraction.of(scale); var coefficients = key().coefficients();
+		var result = new java.util.ArrayList<BigInteger>(); int sign = positive() ? 1 : -1;
+		for (int a = 0; a < 3; a++) result.add(coefficients.get(a).multiply(factor.denominator()).multiply(BigInteger.valueOf(sign)));
+		result.add(coefficients.get(3).multiply(factor.numerator()).multiply(BigInteger.valueOf(sign))); return exact(result);
+	}
+	/** A shared projective plane uses one power-of-two coefficient scale for numerical evaluation. */
+	LiquidGeometryPlane canonical() {
+		var coefficients = key().coefficients(); int bits = 0;
+		for (int a = 0; a < 3; a++) bits = Math.max(bits, coefficients.get(a).abs().bitLength());
+		double[] values = new double[4];
+		for (int a = 0; a < 4; a++) values[a] = new SignedDyadic(positive() ? coefficients.get(a) : coefficients.get(a).negate(), 1 - bits).toDouble();
+		var result = new LiquidGeometryPlane(new LiquidPolyhedron.Point(values[0], values[1], values[2]), values[3]);
+		if (!result.key().equals(key())) throw new IllegalStateException("Canonical geometric plane exceeds numerical range");
+		return result;
+	}
 	double signedDistance(LiquidPolyhedron.Point point) { return normal.dot(point) - offset; }
 	/** Forward error of plane evaluation, including rounded vertex coordinates. */
 	double evaluationError(LiquidPolyhedron.Point point) {
@@ -28,7 +60,7 @@ final class LiquidGeometryPlane {
 		}
 		return 16 * Math.ulp(1.0) * magnitude + 16 * coordinates;
 	}
-	boolean positive() { return normal.x() != 0 ? normal.x() > 0 : normal.y() != 0 ? normal.y() > 0 : normal.z() > 0; }
+	boolean positive() { return orientation != null ? orientation : normal.x() != 0 ? normal.x() > 0 : normal.y() != 0 ? normal.y() > 0 : normal.z() > 0; }
 	Key key() {
 		Key cached = identity; if (cached != null) return cached;
 		double[] values = {normal.x(), normal.y(), normal.z(), offset}; SignedDyadic[] dyadic = new SignedDyadic[4];
@@ -43,5 +75,5 @@ final class LiquidGeometryPlane {
 		for (int i = 0; i < 4; i++) integer[i] = integer[i].divide(divisor);
 		return identity = new Key(List.of(integer));
 	}
-	LiquidPolyhedron clip(LiquidPolyhedron geometry) { return geometry.clip(normal.x(), normal.y(), normal.z(), offset); }
+	LiquidPolyhedron clip(LiquidPolyhedron geometry) { return geometry.clip(this); }
 }
