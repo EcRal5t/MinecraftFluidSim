@@ -56,17 +56,14 @@ final class ControlVolumeGradient {
 
 	/** Diagonal of the scalar gradient energy; selected == -1 denotes the cell unknown. */
 	double basisEnergy(int selected) {
-		return basisEnergy(null, selected);
-	}
-	double basisEnergy(int[] unknowns, int selected) {
 		double gx = 0, gy = 0, gz = 0;
 		for (int i = 0; i < indices.length; i++) {
-			double value = unknowns == null ? selected < 0 ? -1 : i == selected ? 1 : 0 : unknowns[i] == selected ? 1 : 0;
+			double value = selected < 0 ? -1 : i == selected ? 1 : 0;
 			gx += basis[i].x() * value; gy += basis[i].y() * value; gz += basis[i].z() * value;
 		}
 		double energy = volume * (gx * gx + gy * gy + gz * gz);
 		for (int i = 0; i < indices.length; i++) {
-			var d = displacement[i]; double value = unknowns == null ? selected < 0 ? -1 : i == selected ? 1 : 0 : unknowns[i] == selected ? 1 : 0;
+			var d = displacement[i]; double value = selected < 0 ? -1 : i == selected ? 1 : 0;
 			double error = value - (d.x() * gx + d.y() * gy + d.z() * gz);
 			energy += weight[i] * error * error;
 		}

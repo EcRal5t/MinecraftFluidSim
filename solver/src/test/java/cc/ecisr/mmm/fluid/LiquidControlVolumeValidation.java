@@ -21,7 +21,62 @@ final class LiquidControlVolumeValidation {
 		movingSolidPressureClosesWorkAndImpulse();
 		sharedVelocityTrajectoriesCrossRefinementContinuously();
 		interfaceExtensionPreservesLiquidTracesAndGasVolume();
+		conservativeCoordinatesPreserveConstraintsAndVirtualWork();
+		pressureReferencePreservesSmallResolvedForces();
+		interfacePressureJumpPreservesGasPressure();
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
+	}
+
+	private static void interfacePressureJumpPreservesGasPressure() {
+		var geometry = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
+		var faces = geometry.surfaces().stream().map(s -> new LiquidControlVolumeProjection.Face(0, -1, s, 102000)).toList();
+		var result = new LiquidControlVolumeProjection(List.of(new LiquidControlVolumeProjection.Cell(geometry, 1000)), faces,
+				List.of(new LiquidControlVolumeProjection.GasNode(100000, 1e-6)), new int[faces.size()])
+				.project(new double[3], new LiquidPolyhedron.Point(0, 0, 0), 0.025, 1e-11, 128);
+		close(result.pressure()[0], 102000, 1e-9); close(result.gasPressure()[0], 100000, 0);
+		close(result.gasPressureChange()[0], 0, 0); close(result.gasVolumeChange()[0], 0, 0);
+		for (double velocity : result.cellVelocity()) close(velocity, 0, 0); requireExactContinuity(1, faces, result);
+	}
+
+	private static void pressureReferencePreservesSmallResolvedForces() {
+		for (double size : new double[] {0.125, 1e-4, 1e-7, 1e-10, 1e-12}) for (double reference : new double[] {0, 100000}) {
+			var geometry = LiquidPolyhedron.box(0, 0, 0, size, size, size); var faces = new ArrayList<LiquidControlVolumeProjection.Face>();
+			for (var surface : geometry.surfaces()) faces.add(new LiquidControlVolumeProjection.Face(0,
+					surface.areaVector().y() > 0 ? -1 : -2, surface, surface.areaVector().y() > 0 ? reference : 0));
+			var result = new LiquidControlVolumeProjection(List.of(new LiquidControlVolumeProjection.Cell(geometry, 1000)), faces)
+					.project(new double[3], GRAVITY, 0.025, 1e-11, 128);
+			requireExactContinuity(1, faces, result);
+			for (double velocity : result.cellVelocity()) close(velocity, 0, 0);
+			close(result.pressureGradient()[0].y(), 1000 * GRAVITY.y(), 1e-9, "Absolute gas pressure destroyed a resolved hydrostatic gradient");
+			double expected = -1000 * geometry.moments().volume() * GRAVITY.y() * 0.025;
+			close(result.boundaryImpulse().y() / expected, 1, 1e-11, "Absolute gas pressure destroyed a small resolved pressure impulse");
+			close(result.boundaryWorkJoules(), 0, 0);
+		}
+	}
+
+	private static void conservativeCoordinatesPreserveConstraintsAndVirtualWork() {
+		var zero = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		int[] first = {0, 1, 2, 0, 0, 1, 2}, second = {1, 2, 0, 3, 4, 4, 4};
+		var fixed = new cc.ecisr.mmm.units.SignedDyadic[first.length]; fixed[6] = cc.ecisr.mmm.units.SignedDyadic.of(0.125);
+		var basis = new ConservativeFluxCoordinates(5, first, second, new boolean[] {true, true, true, false, false}, fixed);
+		var source = new cc.ecisr.mmm.units.SignedDyadic[] {zero, zero, zero, zero, zero};
+		var exact = new cc.ecisr.mmm.units.SignedDyadic[basis.size()]; double[] variable = new double[basis.size()], dual = new double[first.length];
+		for (int c = 0; c < exact.length; c++) { exact[c] = cc.ecisr.mmm.units.SignedDyadic.of(c % 2 == 0 ? 1 : -1, -100 * c); variable[c] = Math.sin(c + 0.7); }
+		var rates = basis.liftExact(exact, source); var divergence = source.clone();
+		for (int f = 0; f < rates.length; f++) { divergence[first[f]] = divergence[first[f]].add(rates[f]); divergence[second[f]] = divergence[second[f]].subtract(rates[f]); dual[f] = Math.cos(f + 0.3); }
+		for (int c = 0; c < 3; c++) if (divergence[c].signum() != 0) throw new AssertionError("Flux coordinates lost continuity across disparate exact rates");
+		if (!rates[6].equals(fixed[6])) throw new AssertionError("Flux coordinates changed a prescribed wall rate");
+		var lifted = basis.lift(variable, new double[5], false); var transpose = basis.transpose(dual); double firstWork = 0, secondWork = 0;
+		for (int f = 0; f < dual.length; f++) firstWork += lifted[f] * dual[f];
+		for (int c = 0; c < variable.length; c++) secondWork += variable[c] * transpose[c];
+		close(firstWork, secondWork, 1e-14, "Conservative flux gradient changed virtual work");
+		var closed = new ConservativeFluxCoordinates(2, new int[] {0}, new int[] {1}, new boolean[] {true, true}, new cc.ecisr.mmm.units.SignedDyadic[] {fixed[6]});
+		try {
+			closed.liftExact(new cc.ecisr.mmm.units.SignedDyadic[0], new cc.ecisr.mmm.units.SignedDyadic[] {zero, zero});
+			throw new AssertionError("Closed component accepted an incompatible prescribed volume rate");
+		} catch (IllegalArgumentException expected) { }
+		var compatible = closed.liftExact(new cc.ecisr.mmm.units.SignedDyadic[0], new cc.ecisr.mmm.units.SignedDyadic[] {fixed[6], fixed[6].negate()});
+		if (!compatible[0].equals(fixed[6])) throw new AssertionError("Prescribed volume source changed its compatible face rate");
 	}
 
 	private static void interfaceExtensionPreservesLiquidTracesAndGasVolume() {
@@ -136,6 +191,7 @@ final class LiquidControlVolumeValidation {
 		var projection = new LiquidControlVolumeProjection(List.of(new LiquidControlVolumeProjection.Cell(geometry, 1000)), faces,
 				gas, nodes.stream().mapToInt(Integer::intValue).toArray());
 		var result = projection.project(new double[3], new LiquidPolyhedron.Point(0, 0, 0), dt, 1e-11, 256);
+		requireExactContinuity(1, faces, result);
 		double velocity = dt * 20_000 / (1000 + dt * dt * 2 / compliance);
 		close(result.pressure()[0], 110_000, 1e-7);
 		close(result.gasPressure()[0], 120_000 - dt * velocity / compliance, 1e-7);
@@ -271,6 +327,7 @@ final class LiquidControlVolumeValidation {
 				FluidSolverConfig.WallCondition.FREE_SLIP).advance(incoming, new double[3 * mesh.faces.size()], 0.025, 1e-9, 2048);
 		var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(viscous.cellVelocity(),
 				new LiquidPolyhedron.Point(0, 0, 0), 0.025, 1e-11, 2048);
+		requireExactContinuity(mesh.cells.size(), mesh.faces, projected);
 		double before = 0, after = 0; double[] momentum = new double[3];
 		for (int c = 0; c < mesh.cells.size(); c++) for (int a = 0; a < 3; a++) {
 			int id = 3 * c + a; double mass = mesh.cells.get(c).density() * mesh.cells.get(c).geometry().moments().volume();
@@ -358,8 +415,8 @@ final class LiquidControlVolumeValidation {
 		var result = new LiquidControlVolumeProjection(List.of(new LiquidControlVolumeProjection.Cell(geometry, 1000)), faces)
 				.project(new double[3], GRAVITY, 0.025, 1e-10, 128);
 		close(result.pressure()[0] / size, 1000 * 9.81 / 2, 1e-6);
-		for (double velocity : result.cellVelocity()) close(velocity, 0, 1e-10);
-		for (double velocity : result.normalVelocity()) close(velocity, 0, 1e-10);
+		for (double velocity : result.cellVelocity()) close(velocity, 0, 0);
+		for (double velocity : result.normalVelocity()) close(velocity, 0, 0);
 	}
 
 	private static void densityJumpUsesBothLiquidDistances() {
@@ -380,6 +437,16 @@ final class LiquidControlVolumeValidation {
 	private static void close(double actual, double expected, double tolerance) {
 		if (!Double.isFinite(actual) || Math.abs(actual - expected) > tolerance)
 			throw new AssertionError("Liquid control-volume value: actual=" + actual + " expected=" + expected);
+	}
+	private static void requireExactContinuity(int count, List<LiquidControlVolumeProjection.Face> faces, LiquidControlVolumeProjection.Result result) {
+		var rates = result.volumeRate(); var divergence = new cc.ecisr.mmm.units.SignedDyadic[count];
+		java.util.Arrays.fill(divergence, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+		if (rates.length != faces.size()) throw new AssertionError("Conservative pressure returned incomplete face rates");
+		for (int f = 0; f < rates.length; f++) {
+			var face = faces.get(f); divergence[face.first()] = divergence[face.first()].add(rates[f]);
+			if (face.second() >= 0) divergence[face.second()] = divergence[face.second()].subtract(rates[f]);
+		}
+		for (var rate : divergence) if (rate.signum() != 0) throw new AssertionError("Pressure face rates violate exact control-volume continuity");
 	}
 	private static void close(double actual, double expected, double tolerance, String message) {
 		if (!(Math.abs(actual - expected) <= tolerance)) throw new AssertionError(message + ": actual=" + actual + " expected=" + expected);
