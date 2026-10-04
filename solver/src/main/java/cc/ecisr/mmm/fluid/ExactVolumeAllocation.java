@@ -7,6 +7,21 @@ import java.util.Arrays;
 /** Positive largest-remainder allocation over the exact binary volume lattice. */
 final class ExactVolumeAllocation {
 	private ExactVolumeAllocation() { }
+	record RateShares(SignedDyadic[] values, int quantumExponent) { }
+
+	/** Signed face/source rates use a quantum finer than one binary64 ulp across all supports. */
+	static RateShares allocateRate(SignedDyadic amount, SignedDyadic[] weights) {
+		int supports = 0;
+		for (var weight : weights) { if (weight.signum() < 0) throw new IllegalArgumentException("Negative allocation weight"); if (weight.signum() > 0) supports++; }
+		if (amount.signum() == 0) { var values = new SignedDyadic[weights.length]; Arrays.fill(values, SignedDyadic.ZERO); return new RateShares(values, 0); }
+		if (supports == 0) throw new IllegalArgumentException("Rate allocation has no positive support");
+		var magnitude = amount.signum() > 0 ? amount : amount.negate();
+		int exponent = Math.addExact(magnitude.exponent(), magnitude.significand().bitLength() - 1);
+		int quantum = Math.min(magnitude.exponent(), exponent - 52 - (32 - Integer.numberOfLeadingZeros(supports - 1)));
+		var values = allocate(magnitude, weights, quantum);
+		if (amount.signum() < 0) for (int i = 0; i < values.length; i++) values[i] = values[i].negate();
+		return new RateShares(values, quantum);
+	}
 
 	/** Explicit output quantum bounds proportional-allocation error by one binary unit per support. */
 	static SignedDyadic[] allocate(SignedDyadic amount, SignedDyadic[] weights, int unitExponent) {

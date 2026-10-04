@@ -28,7 +28,7 @@ final class LiquidVelocityTrajectory {
 				if (surface.areaVector().dot(tetra.vertices().get(f).subtract(polygon.getFirst())) > 0) {
 					java.util.Collections.reverse(polygon); surface = LiquidPolyhedron.surface(polygon);
 				}
-				surfaces[f] = surface; faceOrigins[f] = polygon.getFirst(); normalVelocity[f] = tetra.outwardFlux().get(f) / surface.area();
+				surfaces[f] = surface; faceOrigins[f] = polygon.getFirst(); normalVelocity[f] = tetra.outwardFlux().get(f).toDouble() / surface.area();
 			}
 		}
 	}

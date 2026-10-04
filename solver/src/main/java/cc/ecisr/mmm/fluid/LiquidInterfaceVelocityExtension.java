@@ -57,12 +57,9 @@ final class LiquidInterfaceVelocityExtension {
 			var indices = componentSupport.get(component); int supports = indices.size(); var weights = new SignedDyadic[supports];
 			for (int i = 0; i < supports; i++) weights[i] = SignedDyadic.of(volume[indices.get(i)]);
 			if (supports == 0) throw new IllegalStateException("Conservative interface velocity support requires finer gas geometry");
-			var amount = displacement[component].signum() > 0 ? displacement[component] : displacement[component].negate();
-			int magnitudeExponent = Math.addExact(amount.exponent(), amount.significand().bitLength() - 1);
-			int quantum = Math.min(amount.exponent(), magnitudeExponent - 52 - (32 - Integer.numberOfLeadingZeros(supports - 1)));
-			var allocated = ExactVolumeAllocation.allocate(amount, weights, quantum);
+			var allocation = ExactVolumeAllocation.allocateRate(displacement[component], weights); int quantum = allocation.quantumExponent();
 			for (int i = 0; i < supports; i++) {
-				int c = indices.get(i); source[c] = displacement[component].signum() > 0 ? allocated[i] : allocated[i].negate();
+				int c = indices.get(i); source[c] = allocation.values()[i];
 				int exponent = Math.getExponent(volume[c]);
 				quantizationBound = Math.max(quantizationBound, Math.scalb(1 / Math.scalb(volume[c], -exponent), quantum - exponent));
 			}

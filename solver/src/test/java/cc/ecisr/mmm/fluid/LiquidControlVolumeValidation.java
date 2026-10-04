@@ -104,14 +104,32 @@ final class LiquidControlVolumeValidation {
 	}
 	private static void requireSharedVelocityTriangles(LiquidControlVolumeMesh mesh, LiquidControlVolumeVelocity.Result[] velocity) {
 		var first = new ArrayList<java.util.HashSet<List<LiquidPolyhedron.Point>>>(); var second = new ArrayList<java.util.HashSet<List<LiquidPolyhedron.Point>>>();
+		var firstFlow = new ArrayList<java.util.HashMap<List<LiquidPolyhedron.Point>, cc.ecisr.mmm.units.SignedDyadic>>();
+		var secondFlow = new ArrayList<java.util.HashMap<List<LiquidPolyhedron.Point>, cc.ecisr.mmm.units.SignedDyadic>>();
 		for (int f = 0; f < mesh.faces.size(); f++) { first.add(new java.util.HashSet<>()); second.add(new java.util.HashSet<>()); }
+		for (int f = 0; f < mesh.faces.size(); f++) { firstFlow.add(new java.util.HashMap<>()); secondFlow.add(new java.util.HashMap<>()); }
 		for (int c = 0; c < velocity.length; c++) for (var tetra : velocity[c].tetrahedra()) {
 			var key = new ArrayList<>(tetra.vertices().subList(1, 4)); key.sort(java.util.Comparator.comparingDouble(LiquidPolyhedron.Point::x)
 					.thenComparingDouble(LiquidPolyhedron.Point::y).thenComparingDouble(LiquidPolyhedron.Point::z));
 			int f = tetra.boundaryFace(); (mesh.faces.get(f).first() == c ? first : second).get(f).add(List.copyOf(key));
+			(mesh.faces.get(f).first() == c ? firstFlow : secondFlow).get(f).put(List.copyOf(key), tetra.outwardFlux().getFirst());
+			var balance = cc.ecisr.mmm.units.SignedDyadic.ZERO; for (var rate : tetra.outwardFlux()) balance = balance.add(rate);
+			if (balance.signum() == 0) close(tetra.isotropicGradient(), 0, 0, "Incompressible tetrahedron acquired a dilatation");
 		}
-		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() >= 0 && !first.get(f).equals(second.get(f)))
-			throw new AssertionError("Shared velocity face has different triangles on its two sides");
+		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() >= 0) {
+			if (!first.get(f).equals(second.get(f))) throw new AssertionError("Shared velocity face has different triangles on its two sides");
+			for (var key : first.get(f)) if (!firstFlow.get(f).get(key).equals(secondFlow.get(f).get(key).negate()))
+				throw new AssertionError("Shared velocity triangle lost its exact common volume rate");
+		}
+	}
+	private static void requireVelocityRateClosure(LiquidControlVolumeMesh mesh, cc.ecisr.mmm.units.SignedDyadic[] submitted,
+			LiquidControlVolumeVelocity.Result[] velocity) {
+		for (int c = 0; c < velocity.length; c++) {
+			var faces = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; java.util.Arrays.fill(faces, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+			for (var tetra : velocity[c].tetrahedra()) faces[tetra.boundaryFace()] = faces[tetra.boundaryFace()].add(tetra.outwardFlux().getFirst());
+			for (int f : mesh.cellFaces[c]) if (!faces[f].equals(mesh.faces.get(f).first() == c ? submitted[f] : submitted[f].negate()))
+				throw new AssertionError("Tetrahedral reconstruction changed a submitted control-volume rate");
+		}
 	}
 	private static void interfaceExtensionPreservesLiquidTracesAndGasVolume() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
@@ -146,8 +164,9 @@ final class LiquidControlVolumeValidation {
 			}
 			for (int c = 0; c < regions.size(); c++) for (int a = 0; a < 3; a++) close(extended.cellVelocity()[3 * c + a], a == 0 ? speed : 0,
 					1e-10, "Interface extension changed cell translation");
-			var velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extended.normalVelocity(), extended.cellVelocity());
+			var velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extended.volumeRate(), extended.cellVelocity());
 			requireSharedVelocityTriangles(mesh, velocity);
+			requireVelocityRateClosure(mesh, extended.volumeRate(), velocity);
 			var trajectory = new LiquidVelocityTrajectory(mesh, velocity); var start = new LiquidPolyhedron.Point(0.6 * scale, 0.45 * scale, 0.4 * scale);
 			for (double duration : new double[] {0, 1e-6 * scale, 0.3 * scale}) {
 				var moved = trajectory.advance(0, start, duration, 256);
@@ -201,8 +220,9 @@ final class LiquidControlVolumeValidation {
 		close(upperMoment, 0.0374, 1e-10, "Upper gas first moment does not match interface displacement");
 		close(lowerDisplacement, 0.1, 1e-10, "Lower gas displacement does not close");
 		close(upperDisplacement, -0.1, 1e-10, "Upper gas displacement does not close");
-		var velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extended.normalVelocity(), extended.cellVelocity());
+		var velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extended.volumeRate(), extended.cellVelocity());
 		requireSharedVelocityTriangles(mesh, velocity);
+		requireVelocityRateClosure(mesh, extended.volumeRate(), velocity);
 		for (int c = 0; c < velocity.length; c++) for (var tetra : velocity[c].tetrahedra())
 			close(3 * tetra.isotropicGradient(), extended.gasDilatation()[c], 1e-9, "Extended tetrahedral velocity lost its prescribed gas dilatation");
 		var trajectory = new LiquidVelocityTrajectory(mesh, velocity);
@@ -295,7 +315,7 @@ final class LiquidControlVolumeValidation {
 			var translation = new LiquidPolyhedron.Point(3, -2, 1); double[] traces = new double[mesh.faces.size()];
 			for (int f = 0; f < traces.length; f++) traces[f] = translation.dot(mesh.faces.get(f).surface().areaVector()) / mesh.faces.get(f).surface().area();
 			for (int c = 0; c < mesh.cells.size(); c++) {
-				var field = LiquidControlVolumeVelocity.reconstruct(mesh, c, traces, translation);
+				var field = LiquidControlVolumeVelocity.reconstruct(mesh, c, faceRates(mesh, traces), translation);
 				for (var tetra : field.tetrahedra()) {
 					if (!tetra.vertices().get(0).equals(mesh.cells.get(c).centroid())
 							|| !tetra.vertices().get(1).equals(mesh.faces.get(tetra.boundaryFace()).surface().centroid()))
@@ -357,7 +377,7 @@ final class LiquidControlVolumeValidation {
 			double[] traces = new double[mesh.faces.size()], cellVelocity = new double[3 * mesh.cells.size()];
 			for (int f = 0; f < traces.length; f++) traces[f] = velocity.dot(mesh.faces.get(f).surface().areaVector()) / mesh.faces.get(f).surface().area();
 			for (int c = 0; c < mesh.cells.size(); c++) for (int a = 0; a < 3; a++) cellVelocity[3 * c + a] = velocity.coordinate(a);
-			var fields = LiquidControlVolumeVelocity.reconstruct(mesh, traces, cellVelocity); requireSharedVelocityTriangles(mesh, fields);
+			var fields = LiquidControlVolumeVelocity.reconstruct(mesh, faceRates(mesh, traces), cellVelocity); requireSharedVelocityTriangles(mesh, fields);
 			var trajectory = new LiquidVelocityTrajectory(mesh, fields);
 			int source = 0; for (int c = 0; c < leaves.size(); c++) if (leaves.get(c).level() == 2 && leaves.get(c).x() == 1
 					&& leaves.get(c).y() == 1 && leaves.get(c).z() == 1) source = c;
@@ -399,7 +419,7 @@ final class LiquidControlVolumeValidation {
 		if (!(projected.pressureDissipationJoules() > 0)) throw new AssertionError("Unresolved pressure modes have no dissipative energy");
 		for (int c = 0; c < mesh.cells.size(); c++) {
 			var target = new LiquidPolyhedron.Point(projected.cellVelocity()[3 * c], projected.cellVelocity()[3 * c + 1], projected.cellVelocity()[3 * c + 2]);
-			var field = LiquidControlVolumeVelocity.reconstruct(mesh, c, projected.normalVelocity(), target);
+			var field = LiquidControlVolumeVelocity.reconstruct(mesh, c, projected.volumeRate(), target);
 			double volume = 0; double[] mean = new double[3];
 			for (var tetra : field.tetrahedra()) {
 				volume += tetra.volume();
