@@ -33,6 +33,11 @@ final class LiquidPolyhedron {
 	}
 	private final List<List<Point>> faces;
 	private LiquidPolyhedron(List<List<Point>> faces) { this.faces = List.copyOf(faces); }
+	static LiquidPolyhedron restored(List<List<Point>> faces) {
+		var copy = new ArrayList<List<Point>>();
+		for (var face : faces) copy.add(List.copyOf(face));
+		return new LiquidPolyhedron(copy);
+	}
 	List<List<Point>> faces() { return faces; }
 
 	List<Surface> surfaces() {
@@ -45,16 +50,16 @@ final class LiquidPolyhedron {
 	}
 
 	static Surface surface(List<Point> face) {
-			Point origin = face.getFirst();
-			double area = 0, nx = 0, ny = 0, nz = 0, x = 0, y = 0, z = 0;
-			for (int i = 1; i + 1 < face.size(); i++) {
-				Point b = face.get(i).subtract(origin), c = face.get(i + 1).subtract(origin), vector = b.cross(c);
-				double triangle = 0.5 * Math.sqrt(vector.dot(vector));
-				area += triangle; nx += 0.5 * vector.x; ny += 0.5 * vector.y; nz += 0.5 * vector.z;
-				x += triangle * (b.x + c.x) / 3; y += triangle * (b.y + c.y) / 3; z += triangle * (b.z + c.z) / 3;
-			}
-			return new Surface(area, new Point(nx, ny, nz), area > 0
-					? new Point(origin.x + x / area, origin.y + y / area, origin.z + z / area) : origin);
+		Point origin = face.getFirst();
+		double area = 0, nx = 0, ny = 0, nz = 0, x = 0, y = 0, z = 0;
+		for (int i = 1; i + 1 < face.size(); i++) {
+			Point b = face.get(i).subtract(origin), c = face.get(i + 1).subtract(origin), vector = b.cross(c);
+			double triangle = 0.5 * Math.sqrt(vector.dot(vector));
+			area += triangle; nx += 0.5 * vector.x; ny += 0.5 * vector.y; nz += 0.5 * vector.z;
+			x += triangle * (b.x + c.x) / 3; y += triangle * (b.y + c.y) / 3; z += triangle * (b.z + c.z) / 3;
+		}
+		return new Surface(area, new Point(nx, ny, nz), area > 0
+				? new Point(origin.x + x / area, origin.y + y / area, origin.z + z / area) : origin);
 	}
 
 	LiquidPolyhedron scaled(double scale) {
@@ -74,6 +79,25 @@ final class LiquidPolyhedron {
 			var moved = new ArrayList<Point>();
 			for (Point point : face) moved.add(new Point(point.x + dx, point.y + dy, point.z + dz));
 			output.add(List.copyOf(moved));
+		}
+		return new LiquidPolyhedron(output);
+	}
+
+	LiquidPolyhedron transformed(double[] matrix, Point center, Point displacement) {
+		if (matrix.length != 9) throw new IllegalArgumentException("Invalid liquid characteristic matrix");
+		double determinant = matrix[0] * (matrix[4] * matrix[8] - matrix[5] * matrix[7])
+				- matrix[1] * (matrix[3] * matrix[8] - matrix[5] * matrix[6]) + matrix[2] * (matrix[3] * matrix[7] - matrix[4] * matrix[6]);
+		if (!(determinant > 0) || !Double.isFinite(determinant)) throw new IllegalStateException("Liquid characteristic reverses or collapses its geometry");
+		var vertices = new HashMap<Point, Point>(); var output = new ArrayList<List<Point>>();
+		for (var face : faces) {
+			var mapped = new ArrayList<Point>();
+			for (Point point : face) mapped.add(vertices.computeIfAbsent(point, p -> {
+				var d = p.subtract(center);
+				return new Point(center.x + displacement.x + matrix[0] * d.x + matrix[1] * d.y + matrix[2] * d.z,
+						center.y + displacement.y + matrix[3] * d.x + matrix[4] * d.y + matrix[5] * d.z,
+						center.z + displacement.z + matrix[6] * d.x + matrix[7] * d.y + matrix[8] * d.z);
+			}));
+			output.add(List.copyOf(mapped));
 		}
 		return new LiquidPolyhedron(output);
 	}
@@ -121,7 +145,7 @@ final class LiquidPolyhedron {
 				if (after == 0) cap.add(current);
 				previous = current; before = after;
 			}
-			if (polygon.size() >= 3) output.add(List.copyOf(polygon));
+			if (polygon.size() >= 3 && surface(polygon).area() > 0) output.add(List.copyOf(polygon));
 		}
 		if (!removed) return this;
 		if (output.isEmpty()) return EMPTY;

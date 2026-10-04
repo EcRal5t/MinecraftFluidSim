@@ -47,6 +47,7 @@ public final class FluidDomainState {
 	private final PendingPhaseVolumeState pendingPhaseVolume;
 	private final double[] thermalBoundaryTemperaturesK;
 	private final CondensedPhasePressureField condensedPhasePressure;
+	private final LiquidGeometryState liquidGeometry;
 
 	FluidDomainState(
 			FluidSolverConfig config, int maximumParticleCount, boolean sealedDomainBoundary,
@@ -58,9 +59,10 @@ public final class FluidDomainState {
 			ThermalRegistry thermalRegistry, FlipThermalParticleState thermal,
 			int maximumThermalTransportSubsteps, PendingPhaseVolumeState pendingPhaseVolume,
 			double[] thermalBoundaryTemperaturesK, CondensedPhasePressureField condensedPhasePressure,
-			MaterialRegistry materialDefinitions
+			MaterialRegistry materialDefinitions, LiquidGeometryState liquidGeometry
 	) {
 		this.config = Objects.requireNonNull(config, "config");
+		this.liquidGeometry = liquidGeometry;
 		if (maximumParticleCount <= 0) throw new IllegalArgumentException("Marker budget must be positive");
 		this.maximumParticleCount = maximumParticleCount;
 		this.sealedDomainBoundary = sealedDomainBoundary;
@@ -173,6 +175,10 @@ public final class FluidDomainState {
 		if (baseParticles().particleCount() > maximumParticleCount) {
 			throw new IllegalArgumentException("Carrier state exceeds marker budget");
 		}
+		if (liquidGeometry != null) {
+			if (liquidGeometry.markerCount() != baseParticles().particleCount())
+				throw new IllegalArgumentException("Liquid geometry quadrature cardinality changed");
+		}
 	}
 
 	public FluidSolverConfig config() { return config; }
@@ -207,6 +213,7 @@ public final class FluidDomainState {
 		return thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone();
 	}
 	public CondensedPhasePressureField condensedPhasePressure() { return condensedPhasePressure; }
+	public LiquidGeometryState liquidGeometry() { return liquidGeometry; }
 
 	/** Immutable feature/registry identity which a backend step is not allowed to replace. */
 	public Layout layout() {

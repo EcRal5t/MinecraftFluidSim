@@ -30,8 +30,13 @@ final class LiquidGeometryRemap {
 	}
 
 	List<Fragment> translate(LiquidPolyhedron source, SignedDyadic inventory, double dx, double dy, double dz) {
-		if (inventory.signum() <= 0 || !(source.moments().volume() > 0)) throw new IllegalArgumentException("Empty liquid remap source");
-		var moved = source.translated(dx, dy, dz);
+		return partition(source.translated(dx, dy, dz), inventory);
+	}
+	List<Fragment> advect(LiquidPolyhedron source, SignedDyadic inventory, LiquidAffineMotion motion) {
+		return partition(motion.map(source), inventory);
+	}
+	private List<Fragment> partition(LiquidPolyhedron moved, SignedDyadic inventory) {
+		if (inventory.signum() <= 0 || !(moved.moments().volume() > 0)) throw new IllegalArgumentException("Empty liquid remap source");
 		for (var face : moved.faces()) for (var point : face)
 			for (int axis = 0; axis < 3; axis++) if (point.coordinate(axis) < 0 || point.coordinate(axis) > 1)
 				throw new IllegalStateException("Liquid motion leaves the control-volume partition");

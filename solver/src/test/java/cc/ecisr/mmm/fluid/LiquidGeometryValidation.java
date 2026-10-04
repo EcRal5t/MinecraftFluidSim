@@ -26,11 +26,66 @@ final class LiquidGeometryValidation {
 				var sum = LiquidPolyhedron.Moments.ZERO;
 				for (var cell : cells) sum = sum.add(cell.moments());
 				moments(sum, original.volume(), original.x(), original.y(), original.z());
+				int[] owners = java.util.stream.IntStream.range(0, cells.size()).toArray();
+				var restored = LiquidGeometryStateMapper.restore(LiquidGeometryStateMapper.capture(cells, 1, owners));
+				var restoredSum = LiquidPolyhedron.Moments.ZERO;
+				for (var cell : restored) restoredSum = restoredSum.add(cell.moments());
+				moments(restoredSum, original.volume(), original.x(), original.y(), original.z());
 			}
 		}
 		cutCellSweepsUseTheSameGeometry();
 		translationAcrossRefinementPreservesMoments();
+		geometrySurvivesCandidateHandoff();
+		affineCharacteristicsPreserveResolvedGeometry();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+
+	private static void affineCharacteristicsPreserveResolvedGeometry() {
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var partition = new java.util.ArrayList<>(LiquidGeometryRefinement.children(root));
+		var refined = partition.removeFirst(); partition.addAll(LiquidGeometryRefinement.children(refined));
+		var remap = new LiquidGeometryRemap(partition);
+		var source = LiquidPolyhedron.box(0.375, 0.25, 0.375, 0.625, 0.5, 0.625);
+		var initial = source.moments(); var inventory = cc.ecisr.mmm.units.SignedDyadic.of(initial.volume());
+		for (double dt : new double[] {0, 1e-6, 0.025, 0.05}) {
+			double omega = 3;
+			var rotation = new LiquidAffineMotion(new LiquidPolyhedron.Point(0.5, 0.5, 0.5), new LiquidPolyhedron.Point(0, 0, 0),
+					new double[] {0, -omega, 0, omega, 0, 0, 0, 0, 0}, dt);
+			var sum = LiquidPolyhedron.Moments.ZERO; var amount = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+			for (var fragment : remap.advect(source, inventory, rotation)) {
+				sum = sum.add(fragment.geometry().moments()); amount = amount.add(fragment.inventory());
+			}
+			if (!amount.equals(inventory)) throw new AssertionError("Affine liquid motion changed exact inventory");
+			moments(sum, initial.volume(), initial.volume() * (0.5 + 0.125 * Math.sin(omega * dt)),
+					initial.volume() * (0.5 - 0.125 * Math.cos(omega * dt)), initial.z());
+			var shear = new LiquidAffineMotion(new LiquidPolyhedron.Point(0.5, 0.5, 0.5), new LiquidPolyhedron.Point(0.5, 0, 0),
+					new double[] {0, 1, 0, 0, 0, 0, 0, 0, 0}, dt);
+			var sheared = shear.map(source).moments();
+			moments(sheared, initial.volume(), initial.x() + dt * initial.y(), initial.y(), initial.z());
+		}
+	}
+
+	private static void geometrySurvivesCandidateHandoff() {
+		var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults());
+		domain.setVolume(1, 1, 1, 0.125F);
+		var geometry = LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.375, 0.375, 0.375);
+		var cells = java.util.List.of(new LiquidGeometryRefinement.Cell(3, 2, 2, 2, geometry));
+		var markerCells = new int[domain.particles.count()];
+		double width = 4 * (double) domain.config.cellSize();
+		domain.liquidGeometryState = LiquidGeometryStateMapper.capture(cells, width, markerCells);
+		var copied = FluidDomainStateMapper.restore(FluidDomainStateMapper.capture(domain));
+		var restored = LiquidGeometryStateMapper.restore(copied.liquidGeometryState);
+		if (copied.liquidGeometryState == null || copied.liquidGeometryState.rootWidthMetres() != width || restored.size() != 1)
+			throw new AssertionError("Liquid geometry was lost across a backend candidate handoff");
+		moments(restored.getFirst().moments(), geometry.moments().volume(), geometry.moments().x(), geometry.moments().y(), geometry.moments().z());
+		var vertices = copied.liquidGeometryState.cells().getFirst().copyVertices(); vertices[0] = 0;
+		if (copied.liquidGeometryState.cells().getFirst().copyVertices()[0] != 0.25)
+			throw new AssertionError("Liquid geometry snapshot exposed mutable vertices");
+		var incompatible = LiquidGeometryStateMapper.capture(cells, width / 2, markerCells);
+		try {
+			LiquidGeometryStateMapper.requireCompatible(incompatible, domain);
+			throw new AssertionError("Liquid geometry accepted inconsistent physical units");
+		} catch (IllegalArgumentException expected) { }
 	}
 
 	private static void translationAcrossRefinementPreservesMoments() {
