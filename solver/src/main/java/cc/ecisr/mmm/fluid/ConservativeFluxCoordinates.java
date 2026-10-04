@@ -124,7 +124,9 @@ final class ConservativeFluxCoordinates {
 	/** Forward error for the tree evaluation relative to the exact dyadic lift. */
 	double[] liftError(double[] coordinates, double[] source, boolean particular) {
 		double[] result = new double[first.length], balance = new double[vertices], error = new double[vertices];
-		if (particular) for (int v = 0; v < vertices; v++) if (constrained[v]) balance[v] = source[v];
+		if (particular) for (int v = 0; v < vertices; v++) if (constrained[v]) {
+			balance[v] = source[v]; error[v] = source[v] == 0 ? 0 : Math.ulp(source[v]);
+		}
 		for (int c = 0; c < independent.length; c++) result[independent[c]] = coordinates[c];
 		for (int f = 0; f < fixed.length; f++) {
 			if (particular && fixed[f] != null) result[f] = fixed[f].toDouble();
@@ -133,6 +135,8 @@ final class ConservativeFluxCoordinates {
 			error[first[f]] += conversion + Math.ulp(balance[first[f]]); error[second[f]] += conversion + Math.ulp(balance[second[f]]);
 		}
 		Arrays.fill(result, 0);
+		if (particular) for (int f = 0; f < fixed.length; f++) if (fixed[f] != null && fixed[f].signum() != 0)
+			result[f] = Math.ulp(fixed[f].toDouble());
 		for (int i = order.length - 1; i >= 0; i--) {
 			int v = order[i]; if (parentFace[v] < 0) continue;
 			result[parentFace[v]] = error[v]; balance[parent[v]] += balance[v]; error[parent[v]] += error[v] + Math.ulp(balance[parent[v]]);

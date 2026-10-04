@@ -8,6 +8,22 @@ import java.util.Arrays;
 final class ExactVolumeAllocation {
 	private ExactVolumeAllocation() { }
 
+	/** Explicit output quantum bounds proportional-allocation error by one binary unit per support. */
+	static SignedDyadic[] allocate(SignedDyadic amount, SignedDyadic[] weights, int unitExponent) {
+		if (amount.signum() < 0 || amount.signum() != 0 && unitExponent > amount.exponent())
+			throw new IllegalArgumentException("Allocation quantum cannot represent its amount");
+		int weightExponent = 0; boolean found = false;
+		for (var weight : weights) {
+			if (weight.signum() < 0) throw new IllegalArgumentException("Negative allocation weight");
+			if (weight.signum() > 0) { weightExponent = found ? Math.min(weightExponent, weight.exponent()) : weight.exponent(); found = true; }
+		}
+		BigInteger[] integerWeights = new BigInteger[weights.length];
+		for (int i = 0; i < weights.length; i++) integerWeights[i] = units(weights[i], weightExponent);
+		var shares = allocate(units(amount, unitExponent), integerWeights); var result = new SignedDyadic[shares.length];
+		for (int i = 0; i < shares.length; i++) result[i] = new SignedDyadic(shares[i], unitExponent);
+		return result;
+	}
+
 	static SignedDyadic[] allocate(SignedDyadic amount, SignedDyadic[] weights) {
 		if (weights.length == 1) {
 			if (amount.signum() < 0 || weights[0].signum() < 0

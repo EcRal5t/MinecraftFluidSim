@@ -77,8 +77,31 @@ final class LiquidControlVolumeValidation {
 		} catch (IllegalArgumentException expected) { }
 		var compatible = closed.liftExact(new cc.ecisr.mmm.units.SignedDyadic[0], new cc.ecisr.mmm.units.SignedDyadic[] {fixed[6], fixed[6].negate()});
 		if (!compatible[0].equals(fixed[6])) throw new AssertionError("Prescribed volume source changed its compatible face rate");
+		var weights = new cc.ecisr.mmm.units.SignedDyadic[] {cc.ecisr.mmm.units.SignedDyadic.of(1), cc.ecisr.mmm.units.SignedDyadic.of(2), cc.ecisr.mmm.units.SignedDyadic.of(4)};
+		var shares = ExactVolumeAllocation.allocate(cc.ecisr.mmm.units.SignedDyadic.of(1), weights, -60); var total = zero;
+		for (int i = 0; i < shares.length; i++) {
+			total = total.add(shares[i]); var units = shares[i].significand().shiftLeft(shares[i].exponent() + 60);
+			var numeratorError = units.multiply(java.math.BigInteger.valueOf(7)).subtract(java.math.BigInteger.ONE.shiftLeft(60).multiply(java.math.BigInteger.valueOf(1 << i))).abs();
+			if (numeratorError.compareTo(java.math.BigInteger.valueOf(7)) >= 0) throw new AssertionError("Gas source allocation exceeded its declared quantum");
+		}
+		if (!total.equals(cc.ecisr.mmm.units.SignedDyadic.of(1))) throw new AssertionError("Gas source allocation lost component displacement");
 	}
 
+	private static cc.ecisr.mmm.units.SignedDyadic[] faceRates(LiquidControlVolumeMesh mesh, double[] traces) {
+		var rates = new cc.ecisr.mmm.units.SignedDyadic[traces.length];
+		for (int f = 0; f < rates.length; f++) rates[f] = cc.ecisr.mmm.units.SignedDyadic.of(mesh.faces.get(f).surface().area() * traces[f]);
+		return rates;
+	}
+	private static void requireExactExtensionContinuity(LiquidControlVolumeMesh mesh, LiquidInterfaceVelocityExtension.Result result) {
+		var balance = new cc.ecisr.mmm.units.SignedDyadic[mesh.cells.size()]; java.util.Arrays.fill(balance, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+		for (int f = 0; f < mesh.faces.size(); f++) {
+			var face = mesh.faces.get(f); balance[face.first()] = balance[face.first()].add(result.volumeRate()[f]);
+			if (face.second() >= 0) balance[face.second()] = balance[face.second()].subtract(result.volumeRate()[f]);
+		}
+		for (int c = 0; c < balance.length; c++) if (!balance[c].equals(result.volumeSource()[c]))
+			throw new AssertionError("Interface extension lost exact control-volume continuity");
+		if (!(result.divergenceResidual() <= result.divergenceRoundoffBound())) throw new AssertionError("Observed extension exceeded roundoff bound");
+	}
 	private static void interfaceExtensionPreservesLiquidTracesAndGasVolume() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);
@@ -87,18 +110,28 @@ final class LiquidControlVolumeValidation {
 		for (double scale : new double[] {1, 0.125, 1.0 / 1024}) for (double speed : new double[] {0, 1}) {
 			var mesh = new LiquidControlVolumeMesh(regions.stream().map(LiquidPhasePartition.Region::cell).toList(), scale, 1000,
 					(c, surface) -> new LiquidControlVolumeMesh.Boundary(false, 0));
-			double[] traces = new double[mesh.faces.size()], primary = new double[3 * regions.size()];
-			primary[0] = speed;
-			for (int f = 0; f < traces.length; f++) {
-				var face = mesh.faces.get(f);
-				if (liquid[face.first()] >= 0 || face.second() >= 0 && liquid[face.second()] >= 0) traces[f] = speed * face.surface().areaVector().x() / face.surface().area();
+			var pressureFaces = new ArrayList<LiquidControlVolumeProjection.Face>(); var sharedFaces = new ArrayList<Integer>();
+			for (int f = 0; f < mesh.faces.size(); f++) {
+				var face = mesh.faces.get(f); boolean firstLiquid = liquid[face.first()] >= 0;
+				if (!firstLiquid && !(face.second() >= 0 && liquid[face.second()] >= 0)) continue;
+				var surface = face.surface(); var vector = surface.areaVector();
+				if (!firstLiquid) surface = new LiquidPolyhedron.Surface(surface.area(), new LiquidPolyhedron.Point(-vector.x(), -vector.y(), -vector.z()), surface.centroid());
+				pressureFaces.add(new LiquidControlVolumeProjection.Face(0, -1, surface, 100000)); sharedFaces.add(f);
 			}
-			var extended = LiquidInterfaceVelocityExtension.extend(mesh, liquid, traces, primary, 1e-11, 512);
-			for (int f = 0; f < traces.length; f++) {
+			var projected = new LiquidControlVolumeProjection(List.of(mesh.cells.getFirst()), pressureFaces)
+					.project(new double[3], new LiquidPolyhedron.Point(speed, 0, 0), 1, 1e-11, 128);
+			var submitted = new cc.ecisr.mmm.units.SignedDyadic[mesh.faces.size()]; java.util.Arrays.fill(submitted, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+			double[] primary = new double[3 * regions.size()]; System.arraycopy(projected.cellVelocity(), 0, primary, 0, 3);
+			for (int i = 0; i < sharedFaces.size(); i++) {
+				int f = sharedFaces.get(i); submitted[f] = liquid[mesh.faces.get(f).first()] >= 0 ? projected.volumeRate()[i] : projected.volumeRate()[i].negate();
+			}
+			var extended = LiquidInterfaceVelocityExtension.extend(mesh, liquid, submitted, primary, 1e-11, 512);
+			requireExactExtensionContinuity(mesh, extended);
+			for (int f = 0; f < submitted.length; f++) {
 				var face = mesh.faces.get(f); double expected = speed * face.surface().areaVector().x() / face.surface().area();
 				close(extended.normalVelocity()[f], expected, 1e-10, "Interface extension changed rigid translation");
 				if (liquid[face.first()] >= 0 || face.second() >= 0 && liquid[face.second()] >= 0)
-					if (extended.normalVelocity()[f] != traces[f]) throw new AssertionError("Interface extension changed a submitted liquid trace");
+					if (!extended.volumeRate()[f].equals(submitted[f])) throw new AssertionError("Interface extension changed a submitted pressure rate");
 			}
 			for (int c = 0; c < regions.size(); c++) for (int a = 0; a < 3; a++) close(extended.cellVelocity()[3 * c + a], a == 0 ? speed : 0,
 					1e-10, "Interface extension changed cell translation");
@@ -133,7 +166,9 @@ final class LiquidControlVolumeValidation {
 				traces[f] = primary[3 * source + 1] * face.surface().areaVector().y() / face.surface().area();
 			}
 		}
-		var extended = LiquidInterfaceVelocityExtension.extend(mesh, labels, traces, primary, 1e-11, 512);
+		var submittedSheetRates = faceRates(mesh, traces);
+		var extended = LiquidInterfaceVelocityExtension.extend(mesh, labels, submittedSheetRates, primary, 1e-11, 512);
+		requireExactExtensionContinuity(mesh, extended);
 		if (extended.iterations() == 0) throw new AssertionError("Nonuniform interface displacement did not redistribute gas extension flux");
 		double lowerMoment = 0, upperMoment = 0, lowerDisplacement = 0, upperDisplacement = 0;
 		for (int c = 0; c < sealed.size(); c++) if (labels[c] < 0) {
@@ -146,7 +181,7 @@ final class LiquidControlVolumeValidation {
 				var face = mesh.faces.get(f); int neighbor = face.first() == c ? face.second() : face.first();
 				if (neighbor >= 0 && labels[neighbor] >= 0) {
 					if (extended.gasDilatation()[c] != 0) throw new AssertionError("Gas compression entered conservative liquid velocity support");
-					if (extended.normalVelocity()[f] != traces[f]) throw new AssertionError("Gas extension changed a submitted liquid trace");
+					if (!extended.volumeRate()[f].equals(submittedSheetRates[f])) throw new AssertionError("Gas extension changed a submitted liquid trace");
 				}
 			}
 		}
@@ -173,7 +208,7 @@ final class LiquidControlVolumeValidation {
 		for (int f = 0; f < coarseTraces.length; f++) if (unresolved.faces.get(f).second() >= 0)
 			coarseTraces[f] = 0.1 * unresolved.faces.get(f).surface().areaVector().y() / unresolved.faces.get(f).surface().area();
 		try {
-			LiquidInterfaceVelocityExtension.extend(unresolved, coarse.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray(), coarseTraces, coarseVelocity, 1e-11, 512);
+			LiquidInterfaceVelocityExtension.extend(unresolved, coarse.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray(), faceRates(unresolved, coarseTraces), coarseVelocity, 1e-11, 512);
 			throw new AssertionError("Unresolved gas compression was allowed into liquid transport support");
 		} catch (IllegalStateException expected) { }
 	}

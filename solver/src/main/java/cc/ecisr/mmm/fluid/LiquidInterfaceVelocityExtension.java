@@ -1,134 +1,149 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.units.SignedDyadic;
 import java.util.Arrays;
 
-/** Minimum-norm kinematic extension of submitted liquid face fluxes through the resolved gas space. */
+/** Minimum-norm extension in exactly conservative face-rate coordinates through resolved gas geometry. */
 final class LiquidInterfaceVelocityExtension {
 	record Result(double[] normalVelocity, double[] cellVelocity, double[] gasDilatation, int iterations,
-			double divergenceResidual, double divergenceRoundoffBound) { }
+			double divergenceResidual, double divergenceRoundoffBound, SignedDyadic[] volumeRate,
+			SignedDyadic[] volumeSource, double gasSourceQuantizationBound) { }
+	private record Gradient(double[] value, double[] error) { }
 	private LiquidInterfaceVelocityExtension() { }
 
-	static Result extend(LiquidControlVolumeMesh mesh, int[] liquid, double[] submittedFaces, double[] submittedCells,
+	static Result extend(LiquidControlVolumeMesh mesh, int[] liquid, SignedDyadic[] submittedRates, double[] submittedCells,
 			double divergenceTolerance, int maximumIterations) {
-		if (liquid.length != mesh.cells.size() || submittedFaces.length != mesh.faces.size() || submittedCells.length != 3 * liquid.length
+		int count = liquid.length, faces = mesh.faces.size();
+		if (count != mesh.cells.size() || submittedRates.length != faces || submittedCells.length != 3 * count
 				|| !(divergenceTolerance > 0) || !Double.isFinite(divergenceTolerance) || maximumIterations <= 0)
 			throw new IllegalArgumentException("Invalid interface velocity extension request");
-		for (double velocity : submittedCells) if (!Double.isFinite(velocity)) throw new IllegalArgumentException("Non-finite submitted cell velocity");
-		for (double velocity : submittedFaces) if (!Double.isFinite(velocity)) throw new IllegalArgumentException("Non-finite submitted face velocity");
-		int[] gas = new int[liquid.length]; Arrays.fill(gas, -1); int count = 0;
-		for (int c = 0; c < gas.length; c++) if (liquid[c] < 0) gas[c] = count++;
-		int[] root = new int[count]; for (int g = 0; g < count; g++) root[g] = g;
-		for (var face : mesh.faces) if (face.second() >= 0 && gas[face.first()] >= 0 && gas[face.second()] >= 0)
-			root[find(root, gas[face.second()])] = find(root, gas[face.first()]);
-		for (int g = 0; g < count; g++) root[g] = find(root, g);
-		double[] volume = new double[count], sourceVolume = volume.clone(), prescribedFlux = volume.clone(); boolean[] interfaceAdjacent = new boolean[count];
-		double[] contactArea = volume.clone(), contactVelocity = new double[3 * count]; boolean[] ambient = new boolean[count];
-		for (int c = 0; c < gas.length; c++) if (gas[c] >= 0) volume[gas[c]] = mesh.cells.get(c).geometry().moments().volume();
-		for (int f = 0; f < mesh.faces.size(); f++) {
-			var face = mesh.faces.get(f); int first = gas[face.first()], second = face.second() >= 0 ? gas[face.second()] : -1;
-			if (first < 0 && second < 0) continue;
-			if (first >= 0 && second >= 0) continue;
-			int g = first >= 0 ? first : second, component = root[g]; double sign = first >= 0 ? 1 : -1, area = face.surface().area();
-			if (face.second() == -1) { ambient[component] = true; continue; }
-			double velocity = face.second() == -2 ? face.prescribed() : submittedFaces[f];
-			if (!Double.isFinite(velocity)) throw new IllegalArgumentException("Non-finite submitted interface velocity");
-			prescribedFlux[component] += sign * area * velocity;
+		for (double v : submittedCells) if (!Double.isFinite(v)) throw new IllegalArgumentException("Non-finite submitted cell velocity");
+		for (var rate : submittedRates) if (rate == null || !Double.isFinite(rate.toDouble())) throw new IllegalArgumentException("Invalid submitted face rate");
+		int[] root = new int[count]; for (int c = 0; c < count; c++) root[c] = c;
+		for (var face : mesh.faces) if (face.second() >= 0 && liquid[face.first()] < 0 && liquid[face.second()] < 0)
+			root[find(root, face.second())] = find(root, face.first());
+		for (int c = 0; c < count; c++) root[c] = find(root, c);
+		boolean[] adjacent = new boolean[count], ambient = adjacent.clone(), constrained = new boolean[count + 1];
+		Arrays.fill(constrained, 0, count, true);
+		int[] first = new int[faces], second = first.clone(); var fixed = new SignedDyadic[faces];
+		double[] contactArea = new double[count], contactVelocity = new double[3 * count], volume = new double[count + 1];
+		volume[count] = Double.POSITIVE_INFINITY; var displacement = new SignedDyadic[count]; Arrays.fill(displacement, SignedDyadic.ZERO);
+		for (int c = 0; c < count; c++) volume[c] = mesh.cells.get(c).geometry().moments().volume();
+		for (int f = 0; f < faces; f++) {
+			var face = mesh.faces.get(f); first[f] = face.first(); second[f] = face.second() >= 0 ? face.second() : count;
+			boolean a = liquid[first[f]] < 0, b = face.second() >= 0 && liquid[second[f]] < 0;
+			if (face.second() == -2) {
+				fixed[f] = SignedDyadic.of(face.surface().area() * face.prescribed());
+				if (!a && !fixed[f].equals(submittedRates[f])) throw new IllegalArgumentException("Submitted liquid wall rate differs from solid motion");
+			} else if (!(a && (b || face.second() == -1))) fixed[f] = submittedRates[f];
+			if (a && face.second() == -1) ambient[root[first[f]]] = true;
+			if (a && b || !a && !b) continue;
+			int gas = a ? first[f] : second[f], component = root[gas];
+			if (fixed[f] != null) displacement[component] = displacement[component].add(a ? fixed[f] : fixed[f].negate());
 			if (face.second() >= 0) {
-				interfaceAdjacent[g] = true;
-				int source = first >= 0 ? face.second() : face.first(); contactArea[component] += area;
-				for (int a = 0; a < 3; a++) {
-					if (!Double.isFinite(submittedCells[3 * source + a])) throw new IllegalArgumentException("Non-finite submitted liquid cell velocity");
-					contactVelocity[3 * component + a] += area * submittedCells[3 * source + a];
-				}
+				adjacent[gas] = true; int source = a ? second[f] : first[f]; double area = face.surface().area();
+				contactArea[component] += area;
+				for (int axis = 0; axis < 3; axis++) contactVelocity[3 * component + axis] += area * submittedCells[3 * source + axis];
 			}
 		}
-		// The velocity support touching liquid is incompressible. Finite gas displacement is
-		// distributed through the remaining gas volume, outside the moving-interface support.
-		for (int g = 0; g < count; g++) if (!interfaceAdjacent[g]) sourceVolume[root[g]] += volume[g];
-		for (int g = 0; g < count; g++) if (g == root[g] && !ambient[g] && prescribedFlux[g] != 0 && !(sourceVolume[g] > 0))
-			throw new IllegalStateException("Conservative interface velocity support requires finer gas geometry");
-		double[] dilatation = new double[count], reference = new double[3 * count];
-		boolean[] anchor = new boolean[count];
-		for (int g = 0; g < count; g++) {
-			int component = root[g]; dilatation[g] = ambient[component] || interfaceAdjacent[g] || sourceVolume[component] == 0 ? 0 : prescribedFlux[component] / sourceVolume[component];
-			anchor[g] = g == component && !ambient[component];
-			for (int a = 0; a < 3; a++) reference[3 * g + a] = contactArea[component] > 0 ? contactVelocity[3 * component + a] / contactArea[component] : 0;
-			if (!Double.isFinite(dilatation[g])) throw new IllegalStateException("Gas extension dilatation exceeds numerical range");
-			for (int a = 0; a < 3; a++) if (!Double.isFinite(reference[3 * g + a])) throw new IllegalStateException("Gas extension velocity exceeds numerical range");
+		var source = new SignedDyadic[count + 1]; Arrays.fill(source, SignedDyadic.ZERO); double quantizationBound = 0;
+		var componentSupport = new java.util.ArrayList<java.util.ArrayList<Integer>>();
+		for (int c = 0; c < count; c++) componentSupport.add(new java.util.ArrayList<>());
+		for (int c = 0; c < count; c++) if (liquid[c] < 0 && !adjacent[c]) componentSupport.get(root[c]).add(c);
+		// Gas compression is supported away from liquid. Exact allocation preserves component
+		// displacement, with an explicit quantum bounding the deviation from uniform dilatation.
+		for (int component = 0; component < count; component++) if (liquid[component] < 0 && root[component] == component
+				&& !ambient[component] && displacement[component].signum() != 0) {
+			var indices = componentSupport.get(component); int supports = indices.size(); var weights = new SignedDyadic[supports];
+			for (int i = 0; i < supports; i++) weights[i] = SignedDyadic.of(volume[indices.get(i)]);
+			if (supports == 0) throw new IllegalStateException("Conservative interface velocity support requires finer gas geometry");
+			var amount = displacement[component].signum() > 0 ? displacement[component] : displacement[component].negate();
+			int magnitudeExponent = Math.addExact(amount.exponent(), amount.significand().bitLength() - 1);
+			int quantum = Math.min(amount.exponent(), magnitudeExponent - 52 - (32 - Integer.numberOfLeadingZeros(supports - 1)));
+			var allocated = ExactVolumeAllocation.allocate(amount, weights, quantum);
+			for (int i = 0; i < supports; i++) {
+				int c = indices.get(i); source[c] = displacement[component].signum() > 0 ? allocated[i] : allocated[i].negate();
+				int exponent = Math.getExponent(volume[c]);
+				quantizationBound = Math.max(quantizationBound, Math.scalb(1 / Math.scalb(volume[c], -exponent), quantum - exponent));
+			}
 		}
-		double[] velocities = submittedFaces.clone(), conductance = new double[mesh.faces.size()], diagonal = new double[count], rhs = new double[count], rhsMagnitude = new double[count];
-		for (int f = 0; f < mesh.faces.size(); f++) {
-			var face = mesh.faces.get(f); int first = gas[face.first()], second = face.second() >= 0 ? gas[face.second()] : -1;
-			if (first < 0 && second < 0) continue;
-			if (first >= 0 && second >= 0 || first >= 0 && face.second() == -1) {
-				var center = mesh.cells.get(face.first()).centroid(); var normal = face.surface().areaVector(); double area = face.surface().area();
-				double distance = normal.dot(face.surface().centroid().subtract(center)) / area;
-				if (second >= 0) distance += normal.dot(mesh.cells.get(face.second()).centroid().subtract(face.surface().centroid())) / area;
-				if (!(distance > 0)) throw new IllegalArgumentException("Gas extension face has invalid centroid distance");
-				conductance[f] = area / distance;
-				if (!Double.isFinite(conductance[f])) throw new IllegalStateException("Interface extension exceeds numerical range");
-				velocities[f] = 0; for (int a = 0; a < 3; a++) velocities[f] += reference[3 * first + a] * normal.coordinate(a) / area;
-				diagonal[first] += conductance[f]; if (second >= 0) diagonal[second] += conductance[f];
-			} else if (face.second() == -2) velocities[f] = face.prescribed();
-			double flux = face.surface().area() * velocities[f];
-			if (first >= 0) { rhs[first] += flux; rhsMagnitude[first] += Math.abs(flux); }
-			if (second >= 0) { rhs[second] -= flux; rhsMagnitude[second] += Math.abs(flux); }
+		double[] reference = new double[faces], referenceError = reference.clone(), resistance = reference.clone();
+		for (int f = 0; f < faces; f++) if (fixed[f] == null) {
+			var face = mesh.faces.get(f); var vector = face.surface().areaVector(); double area = face.surface().area();
+			double distance = vector.dot(face.surface().centroid().subtract(mesh.cells.get(first[f]).centroid())) / area;
+			if (second[f] < count) distance += vector.dot(mesh.cells.get(second[f]).centroid().subtract(face.surface().centroid())) / area;
+			resistance[f] = distance / area;
+			if (!(resistance[f] > 0) || !Double.isFinite(resistance[f])) throw new IllegalStateException("Interface extension metric exceeds numerical range");
+			int component = root[first[f]];
+			for (int axis = 0; axis < 3; axis++) {
+				double velocity = contactArea[component] > 0 ? contactVelocity[3 * component + axis] / contactArea[component] : 0;
+				double term = velocity * vector.coordinate(axis); reference[f] += term; referenceError[f] += Math.ulp(term) + Math.ulp(reference[f]);
+			}
+			if (!Double.isFinite(reference[f])) throw new IllegalStateException("Interface extension reference exceeds numerical range");
 		}
-		for (int g = 0; g < count; g++) { rhs[g] -= dilatation[g] * volume[g]; rhsMagnitude[g] += Math.abs(dilatation[g] * volume[g]); }
-		double[] potential = new double[count], residual = rhs.clone(), direction = new double[count], product = new double[count];
-		double rz = 0; for (int g = 0; g < count; g++) { direction[g] = !anchor[g] && diagonal[g] > 0 ? residual[g] / diagonal[g] : 0; rz += residual[g] * direction[g]; }
+		var coordinates = new ConservativeFluxCoordinates(count + 1, first, second, constrained, fixed);
+		double[] observedSource = new double[source.length]; for (int c = 0; c < source.length; c++) observedSource[c] = source[c].toDouble();
+		double[] diagonal = coordinates.cycleWeights(resistance), support = coordinates.cycleMinimum(volume), variable = new double[coordinates.size()];
+		var exact = new SignedDyadic[variable.length]; Arrays.fill(exact, SignedDyadic.ZERO); coordinates.liftExact(exact, source);
+		var gradient = gradient(coordinates.lift(variable, observedSource, true), coordinates.liftError(variable, observedSource, true), resistance, reference, referenceError);
+		double[] residual = negate(coordinates.transpose(gradient.value)), direction = residual.clone(); double rz = 0;
+		for (int i = 0; i < variable.length; i++) {
+			if (!(diagonal[i] > 0) || !Double.isFinite(diagonal[i])) throw new IllegalStateException("Invalid interface extension cycle metric");
+			direction[i] /= diagonal[i]; rz += residual[i] * direction[i];
+		}
 		int iterations = 0;
-		while (!converged(residual, potential, rhsMagnitude, diagonal, volume, divergenceTolerance, mesh.faces.size())) {
-			if (iterations++ >= maximumIterations || !(rz > 0)) throw new IllegalStateException("Interface velocity extension did not converge");
-			multiply(mesh, gas, conductance, direction, product); double denominator = dot(direction, product);
+		while (!converged(residual, coordinates.transposeError(gradient.value, gradient.error), diagonal, support, divergenceTolerance)) {
+			if (iterations++ >= maximumIterations || !(rz > 0) || !Double.isFinite(rz)) throw new IllegalStateException("Interface velocity extension did not converge");
+			double[] lifted = coordinates.lift(direction, observedSource, false); for (int f = 0; f < faces; f++) lifted[f] *= resistance[f];
+			var product = coordinates.transpose(lifted); double denominator = dot(direction, product);
 			if (!(denominator > 0) || !Double.isFinite(denominator)) throw new IllegalStateException("Invalid interface extension search direction");
-			double alpha = rz / denominator; for (int g = 0; g < count; g++) potential[g] += alpha * direction[g];
-			multiply(mesh, gas, conductance, potential, product); double next = 0;
-			for (int g = 0; g < count; g++) { residual[g] = rhs[g] - product[g]; if (!anchor[g] && diagonal[g] > 0) next += residual[g] * residual[g] / diagonal[g]; }
-			for (int g = 0; g < count; g++) direction[g] = (!anchor[g] && diagonal[g] > 0 ? residual[g] / diagonal[g] : 0) + next / rz * direction[g];
-			rz = next;
+			double alpha = rz / denominator; for (int i = 0; i < variable.length; i++) variable[i] += alpha * direction[i];
+			gradient = gradient(coordinates.lift(variable, observedSource, true), coordinates.liftError(variable, observedSource, true), resistance, reference, referenceError);
+			residual = negate(coordinates.transpose(gradient.value)); double next = 0;
+			for (int i = 0; i < variable.length; i++) next += residual[i] * residual[i] / diagonal[i];
+			for (int i = 0; i < variable.length; i++) direction[i] = residual[i] / diagonal[i] + next / rz * direction[i]; rz = next;
 		}
-		for (int f = 0; f < mesh.faces.size(); f++) if (conductance[f] > 0) {
-			var face = mesh.faces.get(f); int first = gas[face.first()], second = face.second() >= 0 ? gas[face.second()] : -1;
-			velocities[f] -= conductance[f] * (potential[first] - (second >= 0 ? potential[second] : 0)) / face.surface().area();
+		for (int i = 0; i < variable.length; i++) exact[i] = SignedDyadic.of(variable[i]);
+		var rates = coordinates.liftExact(exact, source); double[] flow = new double[faces], error = flow.clone();
+		for (int f = 0; f < faces; f++) { flow[f] = rates[f].toDouble(); error[f] = flow[f] == 0 ? 0 : Math.ulp(flow[f]); }
+		gradient = gradient(flow, error, resistance, reference, referenceError);
+		if (!converged(negate(coordinates.transpose(gradient.value)), coordinates.transposeError(gradient.value, gradient.error), diagonal, support, divergenceTolerance))
+			throw new IllegalStateException("Exact interface rates exceed extension solve accuracy");
+		return result(mesh, liquid, submittedCells, rates, flow, source, iterations, quantizationBound);
+	}
+	private static Gradient gradient(double[] flow, double[] error, double[] resistance, double[] reference, double[] referenceError) {
+		double[] value = new double[flow.length], bound = value.clone();
+		for (int f = 0; f < flow.length; f++) if (resistance[f] > 0) {
+			double difference = flow[f] - reference[f]; value[f] = resistance[f] * difference;
+			bound[f] = resistance[f] * (error[f] + referenceError[f] + Math.ulp(difference)) + Math.ulp(value[f]);
 		}
-		double[] cellVelocity = submittedCells.clone(), gasDilatation = new double[liquid.length], fluxes = new double[count];
-		for (int c = 0; c < gas.length; c++) if (gas[c] >= 0) {
-			gasDilatation[c] = dilatation[gas[c]]; var center = mesh.cells.get(c).centroid();
-			for (int a = 0; a < 3; a++) cellVelocity[3 * c + a] = 0;
+		return new Gradient(value, bound);
+	}
+	private static Result result(LiquidControlVolumeMesh mesh, int[] liquid, double[] submittedCells, SignedDyadic[] rates,
+			double[] flow, SignedDyadic[] source, int iterations, double quantizationBound) {
+		double[] normal = new double[rates.length], primary = submittedCells.clone(), dilatation = new double[liquid.length];
+		double error = 0, bound = 0;
+		for (int f = 0; f < rates.length; f++) normal[f] = flow[f] / mesh.faces.get(f).surface().area();
+		for (int c = 0; c < liquid.length; c++) {
+			double volume = mesh.cells.get(c).geometry().moments().volume(), target = source[c].toDouble();
+			dilatation[c] = target / volume; double balance = -target, roundoff = target == 0 ? 0 : Math.ulp(target);
+			if (liquid[c] < 0) Arrays.fill(primary, 3 * c, 3 * c + 3, 0);
+			var center = mesh.cells.get(c).centroid();
 			for (int f : mesh.cellFaces[c]) {
-				var face = mesh.faces.get(f); double flux = (face.first() == c ? 1 : -1) * face.surface().area() * velocities[f];
-				fluxes[gas[c]] += flux;
-				for (int a = 0; a < 3; a++) cellVelocity[3 * c + a] += face.surface().centroid().subtract(center).coordinate(a) * flux / volume[gas[c]];
+				var face = mesh.faces.get(f); double sign = face.first() == c ? 1 : -1, rate = sign * face.surface().area() * normal[f];
+				balance += rate; roundoff += Math.ulp(flow[f]) + face.surface().area() * Math.ulp(normal[f]) + Math.ulp(rate) + Math.ulp(balance);
+				if (liquid[c] < 0) for (int a = 0; a < 3; a++) primary[3 * c + a] += face.surface().centroid().subtract(center).coordinate(a) * sign * flow[f] / volume;
 			}
+			if (!(Math.abs(balance) <= roundoff)) throw new IllegalStateException("Interface flux observation exceeds exact continuity representation");
+			error = Math.max(error, Math.abs(balance) / volume); bound = Math.max(bound, roundoff / volume);
 		}
-		double error = 0, bound = 0; double[] roundoff = roundoff(potential, rhsMagnitude, diagonal, mesh.faces.size());
-		for (int g = 0; g < count; g++) {
-			double mismatch = Math.abs(fluxes[g] - volume[g] * dilatation[g]);
-			if (!(mismatch <= divergenceTolerance * volume[g] + roundoff[g])) throw new IllegalStateException("Extended interface velocity does not close its gas control volume");
-			error = Math.max(error, mismatch / volume[g]); bound = Math.max(bound, roundoff[g] / volume[g]);
-		}
-		return new Result(velocities, cellVelocity, gasDilatation, iterations, error, bound);
+		return new Result(normal, primary, dilatation, iterations, error, bound, rates, Arrays.copyOf(source, liquid.length), quantizationBound);
 	}
-	private static void multiply(LiquidControlVolumeMesh mesh, int[] gas, double[] conductance, double[] value, double[] output) {
-		Arrays.fill(output, 0);
-		for (int f = 0; f < conductance.length; f++) if (conductance[f] > 0) {
-			var face = mesh.faces.get(f); int a = gas[face.first()], b = face.second() >= 0 ? gas[face.second()] : -1;
-			double flux = conductance[f] * (value[a] - (b >= 0 ? value[b] : 0)); output[a] += flux; if (b >= 0) output[b] -= flux;
-		}
-	}
-	private static boolean converged(double[] residual, double[] value, double[] rhs, double[] diagonal, double[] volume, double tolerance, int operations) {
-		double[] error = roundoff(value, rhs, diagonal, operations);
-		for (int g = 0; g < residual.length; g++) if (!(Math.abs(residual[g]) <= tolerance * volume[g] + error[g])) return false;
+	private static boolean converged(double[] residual, double[] error, double[] diagonal, double[] support, double tolerance) {
+		for (int i = 0; i < residual.length; i++) if (!(Math.abs(residual[i]) <= error[i] + tolerance * diagonal[i] * support[i])) return false;
 		return true;
 	}
-	private static double[] roundoff(double[] value, double[] rhs, double[] diagonal, int operations) {
-		double magnitude = 0; for (double v : value) magnitude = Math.max(magnitude, Math.abs(v));
-		double epsilon = Math.scalb(8.0 * operations + 16, -53), gamma = epsilon / (1 - epsilon);
-		double[] result = new double[value.length];
-		for (int g = 0; g < result.length; g++) result[g] = gamma * (rhs[g] + 2 * diagonal[g] * magnitude);
-		return result;
-	}
-	private static int find(int[] root, int g) { while (root[g] != g) { root[g] = root[root[g]]; g = root[g]; } return g; }
+	private static double[] negate(double[] values) { for (int i = 0; i < values.length; i++) values[i] = -values[i]; return values; }
+	private static int find(int[] root, int c) { while (root[c] != c) { root[c] = root[root[c]]; c = root[c]; } return c; }
 	private static double dot(double[] a, double[] b) { double sum = 0; for (int i = 0; i < a.length; i++) sum += a[i] * b[i]; return sum; }
 }
