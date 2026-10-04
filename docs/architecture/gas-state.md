@@ -50,6 +50,10 @@ marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 compone
 
 ## 权威数据
 
+解析几何候选使用 `GasGeometryState` 保存实际气相凸片段及各片段的气腔 ordinal。它从液体、气体共用的完整控制体面推导连通性，允许同一基础格内存在多个独立气腔；开放外表面连接环境 ordinal 0。有限气腔按首个规范片段排序，容量由精确片段体积积分得到。该空间支持沿用集总气腔物理模型；自由面生产接入仍按统一空间离散完成条件推进。
+
+几何份额分配使用任意精度整数权重进行最大余数分配，保持标准体积 nanos、组分和 species 的整数总量，并按同一实际份额携带质量与 residual。极小正交叠和大权重无需先转换为纳体积整数或 binary64 比例。
+
 - 每个密闭节点以 canonical minimum-cell key 和完整 cell membership 标识。
 - 每个气体组分保存稳定 component ID、标准体积 nanos、独立质量 kg、可选 species 和 chemical mass residual kg；气体的两个质量列都不使用凝聚相 solver mass weight。
 - source、sink、质量 roundoff 和 residual roundoff 是独立审计列。

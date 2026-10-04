@@ -339,6 +339,15 @@ public final class AirNetworkValidation {
 		check(after.components().stream().map(GasComponentAmount::componentId).toList()
 				.equals(List.of("test:alpha", "test:beta")), "component transport lost stable identities");
 		check(network.auditClosed(), "component transport did not close mass/species audit");
+		var huge = java.math.BigInteger.ONE.shiftLeft(130);
+		check(initial.partition(new long[]{1, 2, 0}).equals(initial.partition(List.of(huge, huge.shiftLeft(1), java.math.BigInteger.ZERO))),
+				"large exact geometric weights changed component, mass, species or residual allocation");
+		var small = new GasInventory(List.of(new GasComponentAmount("test:alpha", 3, 3e-9,
+				List.of(new GasComponentAmount.SpeciesAmount("test:a", 7)), 0.25e-9)));
+		var parts = small.partition(List.of(huge, huge.add(java.math.BigInteger.ONE)));
+		check(parts.get(0).standardVolumeNanos() == 1 && parts.get(1).standardVolumeNanos() == 2
+				&& parts.get(0).merge(parts.get(1)).equals(small),
+				"geometric overlap rounding erased the exact largest remainder or failed to conserve inventory");
 	}
 
 	private static void validateComponentSpeciesBoundary() {

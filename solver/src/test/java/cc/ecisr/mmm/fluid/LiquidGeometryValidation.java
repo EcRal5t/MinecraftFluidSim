@@ -43,12 +43,34 @@ final class LiquidGeometryValidation {
 		multipleFragmentsAndGasSpaceShareCompleteFaces();
 		phasePartitionPreservesSolidOpenGeometry();
 		resolvedDomainUsesCollisionOpenSpace();
+		resolvedGasSeparatesChambersInsideOneBaseCell();
 		liquidSourcesUseExactOpenGeometry();
 		inventoryCentroidUsesResolvedCollisionSupport();
 		geometricSourceBatchPreservesActualCapacity();
 		geometricExtractionUsesOccupiedSupportAndVelocity();
 		exactCompactionPreservesGeometryAndPhysicalFields();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static void resolvedGasSeparatesChambersInsideOneBaseCell() {
+		var collision = new FlipCutCellGeometry(2, 2, 2);
+		for (int c = 1; c < 8; c++) collision.replaceMask(c, 0xff);
+		var sheet = new LiquidGeometryRefinement.Cell(1, 0, 0, 0,
+				LiquidPolyhedron.box(0, 0.25 - 1.0 / 1024, 0, 0.5, 0.25 + 1.0 / 1024, 0.5));
+		var state = LiquidGeometryStateMapper.capture(java.util.List.of(sheet), 1, new int[]{0});
+		var domain = new LiquidGeometryDomainPartition(2, 2, 2, 0.5F, collision, java.util.List.of(sheet), 128);
+		for (boolean sealed : new boolean[]{false, true}) {
+			var input = new LiquidGeometryPhaseInput(state, domain, sealed, 256); var gas = new ResolvedGasGeometry(input);
+			if (gas.state.nodeCount() != (sealed ? 2 : 0)) throw new AssertionError("Gas topology lost a chamber inside one base cell");
+			var volume = LiquidExactPolygon.Fraction.ZERO; for (var v : gas.volumes) volume = volume.add(v);
+			if (!volume.add(LiquidConvexRegion.of(sheet.geometry()).measure().volume()).equals(LiquidExactPolygon.Fraction.of(0.125)))
+				throw new AssertionError("Resolved gas changed exact remaining space");
+			int[] labels = gas.state.nodeOrdinals(); if (labels.length > 0) labels[0] = -1;
+			for (int node : gas.state.nodeOrdinals()) if (node < 0) throw new AssertionError("Gas support exposed a mutable membership array");
+			for (int c = 0; c < input.fragments.length; c++) if ((input.fragments[c] >= 0) != (gas.phaseNodes[c] == -1))
+				throw new AssertionError("Pressure gas membership differs from its actual phase geometry");
+			if (sealed && (!gas.volumes[1].equals(gas.volumes[2]) || gas.state.topologyKey(1) >= gas.state.topologyKey(2)))
+				throw new AssertionError("Gas chamber keys or volumes are inconsistent");
+		}
 	}
 	private static void exactCompactionPreservesGeometryAndPhysicalFields() {
 		var a = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.125, 0.125, 0.125, 0.375, 0.375, 0.375));

@@ -37,7 +37,7 @@ final class LiquidGeometryStateMapper {
 		return new LiquidGeometryState(rootWidth, result, owners, groups);
 	}
 
-	private static LiquidGeometryState.ControlVolume pack(LiquidGeometryRefinement.Cell cell, double[] velocity) {
+	static LiquidGeometryState.ControlVolume pack(LiquidGeometryRefinement.Cell cell, double[] velocity) {
 		var faces = LiquidExactPolygon.faces(cell.geometry());
 		var points = new java.util.TreeSet<LiquidExactPolygon.Vertex>(java.util.Comparator.comparing(LiquidExactPolygon.Vertex::x)
 				.thenComparing(LiquidExactPolygon.Vertex::y).thenComparing(LiquidExactPolygon.Vertex::z).thenComparing(LiquidExactPolygon.Vertex::w));
@@ -66,8 +66,11 @@ final class LiquidGeometryStateMapper {
 	}
 
 	static List<LiquidGeometryRefinement.Cell> restore(LiquidGeometryState state) {
+		return restoreCells(state.cells());
+	}
+	static List<LiquidGeometryRefinement.Cell> restoreCells(List<LiquidGeometryState.ControlVolume> packed) {
 		var result = new ArrayList<LiquidGeometryRefinement.Cell>();
-		for (var cell : state.cells()) {
+		for (var cell : packed) {
 			var xyz = cell.copyVertices(); int[] offsets = cell.copyFaceOffsets(), indices = cell.copyFaceVertices();
 			var vertices = new ArrayList<LiquidExactPolygon.Vertex>();
 			for (int v = 0; v < xyz.length; v += 4) vertices.add(new LiquidExactPolygon.Vertex(xyz[v], xyz[v + 1], xyz[v + 2], xyz[v + 3]));

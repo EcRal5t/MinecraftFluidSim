@@ -143,18 +143,22 @@ public final class GasInventory {
 	/** Partitions every component by non-negative topology weights. */
 	public List<GasInventory> partition(long[] weights) {
 		if (weights == null || weights.length == 0) throw new IllegalArgumentException("Gas partition needs children");
-		ArrayList<ArrayList<GasComponentAmount>> children = new ArrayList<>(weights.length);
-		for (long weight : weights) {
-			if (weight < 0L) throw new IllegalArgumentException("Gas partition weight cannot be negative");
+		return partition(Arrays.stream(weights).mapToObj(BigInteger::valueOf).toList());
+	}
+
+	/** Exact geometric weights retain arbitrarily small positive chamber overlaps. */
+	public List<GasInventory> partition(List<BigInteger> weights) {
+		largestRemainder(0, weights);
+		ArrayList<ArrayList<GasComponentAmount>> children = new ArrayList<>(weights.size());
+		for (int child = 0; child < weights.size(); child++) {
 			children.add(new ArrayList<>());
 		}
 		for (GasComponentAmount component : components) {
-			long[] shares = largestRemainder(component.standardVolumeNanos(), Arrays.stream(weights)
-					.mapToObj(BigInteger::valueOf).toList());
+			long[] shares = largestRemainder(component.standardVolumeNanos(), weights);
 			GasComponentAmount[] parts = splitComponent(component, shares);
 			for (int child = 0; child < parts.length; child++) if (parts[child] != null) children.get(child).add(parts[child]);
 		}
-		ArrayList<GasInventory> result = new ArrayList<>(weights.length);
+		ArrayList<GasInventory> result = new ArrayList<>(weights.size());
 		for (List<GasComponentAmount> child : children) result.add(new GasInventory(child));
 		return List.copyOf(result);
 	}
