@@ -31,6 +31,20 @@ final class LiquidPhasePartition {
 		}
 	}
 	private LiquidPhasePartition() { }
+	/** Containment, disjointness and exact volume prove that submitted phases cover the complete open leaf. */
+	static void requireComplete(LiquidGeometryRefinement.Cell leaf, List<LiquidGeometryRefinement.Cell> phases) {
+		var planes = LiquidExactPolygon.faces(leaf.geometry()).stream().map(LiquidExactPolygon::coefficients).toList();
+		var measure = LiquidConvexRegion.EMPTY.measure();
+		for (var phase : phases) {
+			if (!Address.of(phase).equals(Address.of(leaf))) throw new IllegalArgumentException("Phase geometry has a different dyadic leaf");
+			var geometry = LiquidConvexRegion.of(phase.geometry());
+			if (!geometry.hasVolume() || planes.stream().anyMatch(p -> geometry.faces().stream().anyMatch(face -> !face.inside(p))))
+				throw new IllegalArgumentException("Phase geometry leaves its open leaf");
+			measure = measure.add(geometry.measure());
+		}
+		requireDisjoint(phases);
+		if (!measure.same(LiquidConvexRegion.of(leaf.geometry()).measure())) throw new IllegalArgumentException("Submitted phases do not cover complete open geometry");
+	}
 	static int[] gasComponents(LiquidControlVolumeMesh mesh, int[] liquid) {
 		if (liquid.length != mesh.cells.size()) throw new IllegalArgumentException("Incomplete gas phase labels");
 		int[] roots = java.util.stream.IntStream.range(0, liquid.length).toArray();

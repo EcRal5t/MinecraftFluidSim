@@ -66,6 +66,8 @@ final class ResolvedGasGeometry {
 
 	/** Matches complete support across equivalent refinements and returns the saved node labels for this mesh. */
 	static int[] requireCompatible(GasGeometryState saved, LiquidGeometryPhaseInput input, int maximumPairs) {
+		if (maximumPairs < 0) throw new IllegalArgumentException("Invalid gas matching work budget");
+		if (input.gasGeometry == saved) return requireStoredLabels(saved, input);
 		var derived = new ResolvedGasGeometry(input);
 		if (saved.sealedExterior() != input.sealedExterior || saved.nodeCount() != derived.state.nodeCount())
 			throw new IllegalArgumentException("Saved gas chamber count or exterior condition differs from actual phase geometry");
@@ -83,6 +85,22 @@ final class ResolvedGasGeometry {
 		}
 		var phases = derived.phaseNodes.clone(); for (int c = 0; c < phases.length; c++) if (phases[c] >= 0) phases[c] = labels[phases[c]];
 		return phases;
+	}
+	private static int[] requireStoredLabels(GasGeometryState saved, LiquidGeometryPhaseInput input) {
+		var roots = LiquidPhasePartition.gasComponents(input.mesh, input.fragments);
+		var ambient = new boolean[roots.length]; var parent = new int[roots.length]; Arrays.fill(parent, -1);
+		var used = new int[saved.nodeCount() + 1]; Arrays.fill(used, -1);
+		for (var face : input.mesh.faces) if (face.second() == -1 && input.fragments[face.first()] < 0) ambient[roots[face.first()]] = true;
+		for (int c = 0; c < roots.length; c++) if (input.fragments[c] < 0) {
+			int root = roots[c], node = input.storedGasNodes[c];
+			if (node < 0 || node > saved.nodeCount() || ambient[root] != (node == 0) || parent[root] >= 0 && parent[root] != node)
+				throw new IllegalArgumentException("Stored gas labels differ from actual chamber connectivity");
+			parent[root] = node;
+			if (node > 0 && used[node] >= 0 && used[node] != root) throw new IllegalArgumentException("Stored gas node spans separate chambers");
+			used[node] = root;
+		}
+		for (int node = 1; node < used.length; node++) if (used[node] < 0) throw new IllegalArgumentException("Stored gas chamber lacks actual spatial support");
+		return input.storedGasNodes.clone();
 	}
 	private static void requireCoverage(GasGeometryState state, Fraction[] covered) {
 		var width = Fraction.of(state.rootWidthMetres()); var scale = width.multiply(width).multiply(width);

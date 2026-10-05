@@ -149,6 +149,12 @@ final class LiquidGeometryValidation {
 			var refinedDomain = new LiquidGeometryDomainPartition(2, 2, 2, 0.5F, collision, LiquidGeometryRefinement.children(sheet), 256);
 			var refined = new LiquidGeometryPhaseInput(state, refinedDomain, sealed, 512);
 			var savedLabels = ResolvedGasGeometry.requireCompatible(gas.state, refined, 4096);
+			var stored = new LiquidGeometryPhaseInput(state, refinedDomain, gas.state, 512);
+			var directLabels = ResolvedGasGeometry.requireCompatible(gas.state, stored, 0);
+			for (int c = 0; c < directLabels.length; c++) if (stored.fragments[c] < 0) {
+				int expected = sealed ? stored.mesh.cells.get(c).geometry().centroid().y() < 0.25 ? 1 : 2 : 0;
+				if (directLabels[c] != expected) throw new AssertionError("Stored gas refinement changed a chamber identity");
+			}
 			for (int c = 0; c < savedLabels.length; c++) if (refined.fragments[c] < 0) {
 				int expected = sealed ? refined.mesh.cells.get(c).geometry().centroid().y() < 0.25 ? 1 : 2 : 0;
 				if (savedLabels[c] != expected) throw new AssertionError("Refinement changed an actual gas chamber's inventory identity");
@@ -367,6 +373,19 @@ final class LiquidGeometryValidation {
 		var phases = LiquidPhasePartition.build(root, java.util.List.of(liquid), 64); var measure = LiquidConvexRegion.EMPTY.measure();
 		for (var region : phases) measure = measure.add(LiquidConvexRegion.of(region.cell().geometry()).measure());
 		if (!measure.same(LiquidConvexRegion.of(open).measure())) throw new AssertionError("Phase partition changed solid open volume or first moments");
+		var complete = phases.stream().map(LiquidPhasePartition.Region::cell).toList();
+		LiquidPhasePartition.requireComplete(root, complete);
+		try {
+			LiquidPhasePartition.requireComplete(root, complete.subList(1, complete.size()));
+			throw new AssertionError("Stored phase admission accepted an uncovered liquid volume");
+		} catch (IllegalArgumentException expected) { }
+		var cube = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		try {
+			LiquidPhasePartition.requireComplete(cube, java.util.List.of(
+					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.125, 0, 0, 0.625, 1, 1)),
+					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.375, 0, 0, 0.875, 1, 1))));
+			throw new AssertionError("Stored phase admission accepted overlap with the same total volume and centroid");
+		} catch (IllegalArgumentException expected) { }
 		var mesh = new LiquidControlVolumeMesh(phases.stream().map(LiquidPhasePartition.Region::cell).toList(), 1, 1000,
 				(c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
 		for (var face : mesh.faces) if (face.second() < 0) {

@@ -23,12 +23,13 @@ final class ResolvedLiquidMechanicalStage {
 		if (domain.gasState.geometry == null) throw new GasTopologyBlockedException("Resolved liquid requires complete gas support");
 		var requested = new LinkedHashMap<LiquidPhasePartition.Address, LiquidGeometryRefinement.Cell>();
 		for (var cell : LiquidGeometryStateMapper.restore(state)) requested.putIfAbsent(LiquidPhasePartition.Address.of(cell), cell);
+		for (var cell : LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells())) requested.putIfAbsent(LiquidPhasePartition.Address.of(cell), cell);
 		var pressureBoundary = new PressureBoundaryView(domain);
 		boolean gasAdvanced = false;
 		for (;;) {
 			var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ,
 					domain.config.cellSize(), domain.geometry.cutCells, List.copyOf(requested.values()), MAXIMUM_REGIONS);
-			var input = new LiquidGeometryPhaseInput(state, partition, domain.gasState.sealedDomainBoundary, MAXIMUM_REGIONS);
+			var input = new LiquidGeometryPhaseInput(state, partition, domain.gasState.geometry, MAXIMUM_REGIONS);
 			var gasMatch = ResolvedGasGeometry.match(domain.gasState.geometry, input, MAXIMUM_PAIRS); var actualNodes = gasMatch.nodes();
 			if (!gasAdvanced) { domain.gasTopologyCoordinator.advanceEdges(dt); gasAdvanced = true; }
 			var pressureNodes = new ArrayList<LiquidControlVolumeProjection.GasNode>();
@@ -67,7 +68,7 @@ final class ResolvedLiquidMechanicalStage {
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());
 			}
-			var next = new LiquidGeometryPhaseInput(motion.geometry, partition, domain.gasState.sealedDomainBoundary, MAXIMUM_REGIONS);
+			var next = new LiquidGeometryPhaseInput(motion.geometry, partition, domain.gasState.geometry.sealedExterior(), MAXIMUM_REGIONS);
 			var gas = new ResolvedGasMotionPlan(domain, next, motion.gasInterfaces, MAXIMUM_PAIRS);
 			gas.publish(domain, motion);
 			domain.lastPressureIterations = result.pressure().iterations();

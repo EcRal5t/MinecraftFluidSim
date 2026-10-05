@@ -10,7 +10,11 @@ public final class GasGeometryStateValidation {
 	}
 	public static void requireCompatible(GasGeometryState gas, FlipParticleState particles, int maximumRegions, int maximumPairs) {
 		if (gas == null) throw new IllegalArgumentException("Resolved gas support is missing");
-		ResolvedGasGeometry.requireCompatible(gas, input(particles, gas.sealedExterior(), maximumRegions), maximumPairs);
+		if (particles == null || particles.liquidGeometry() == null) throw new IllegalArgumentException("Resolved gas requires complete liquid geometry");
+		var state = particles.liquidGeometry(); var cells = new java.util.ArrayList<>(LiquidGeometryStateMapper.restore(state));
+		cells.addAll(LiquidGeometryStateMapper.restoreCells(gas.cells()));
+		var domain = new LiquidGeometryDomainPartition(particles.sizeX(), particles.sizeY(), particles.sizeZ(), particles.cellSize(), particles.copyCollisionMicroMasks(), cells, maximumRegions);
+		ResolvedGasGeometry.requireCompatible(gas, new LiquidGeometryPhaseInput(state, domain, gas, maximumRegions), maximumPairs);
 	}
 	private static LiquidGeometryPhaseInput input(FlipParticleState particles, boolean sealedExterior, int maximumRegions) {
 		if (particles == null || particles.liquidGeometry() == null) throw new IllegalArgumentException("Resolved gas requires complete liquid geometry");
