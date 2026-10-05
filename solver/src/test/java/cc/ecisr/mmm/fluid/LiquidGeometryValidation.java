@@ -3,6 +3,7 @@ package cc.ecisr.mmm.fluid;
 /** Geometry conservation is checked separately from any liquid force or pressure solve. */
 final class LiquidGeometryValidation {
 	static void validate() {
+		canonicalGeometryProofSurvivesPacking();
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
 		moments(cube.moments(), 1, 0.5, 0.5, 0.5);
 		moments(cube.clip(1, 1, 1, 1).moments(), 1.0 / 6, 1.0 / 24, 1.0 / 24, 1.0 / 24);
@@ -69,6 +70,27 @@ final class LiquidGeometryValidation {
 		materialInterfacesUseResolvedPhaseAndWallGeometry();
 		disjointLiquidRetainsExistingGasRegions();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static void canonicalGeometryProofSurvivesPacking() {
+		var geometry = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(-2, 3, 1, 0.7);
+		var faces = LiquidExactPolygon.faces(geometry).stream().map(face -> face.cycled(face.vertices().size() - 1)).toList().reversed();
+		var cell = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.restoredExact(faces));
+		LiquidGeometryState state; LiquidGeometryRefinement.Cell warm;
+		try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
+			state = LiquidGeometryStateMapper.capture(java.util.List.of(cell), 1, new int[]{0});
+			warm = LiquidGeometryStateMapper.restore(state).getFirst();
+		}
+		var cold = LiquidGeometryStateMapper.restore(state).getFirst();
+		var warmFaces = LiquidExactPolygon.faces(warm.geometry()); var coldFaces = LiquidExactPolygon.faces(cold.geometry());
+		if (!warm.geometry().measure().same(cold.geometry().measure()) || warmFaces.size() != coldFaces.size()) throw new AssertionError("Packed geometry changed exact moments across proof reuse");
+		for (int f = 0; f < warmFaces.size(); f++) if (!warmFaces.get(f).vertices().equals(coldFaces.get(f).vertices()) || !warmFaces.get(f).coefficients().equals(coldFaces.get(f).coefficients()))
+			throw new AssertionError("Packed geometry proof changed canonical face or vertex order");
+		var points = java.util.List.of(new LiquidPolyhedron.Point(0, 0, 0), new LiquidPolyhedron.Point(1, 1, 0), new LiquidPolyhedron.Point(0, 1, 0), new LiquidPolyhedron.Point(0.75, 0, 0));
+		var crossing = points.stream().map(p -> LiquidExactPolygon.vertex(new LiquidExactPolygon.Fraction[]{LiquidExactPolygon.Fraction.of(p.x()), LiquidExactPolygon.Fraction.of(p.y()), LiquidExactPolygon.Fraction.of(p.z())})).toList();
+		try {
+			LiquidExactPolygon.restored(crossing, java.util.List.of(java.math.BigInteger.ZERO, java.math.BigInteger.ZERO, java.math.BigInteger.ONE, java.math.BigInteger.ZERO));
+			throw new AssertionError("Positive signed area admitted a self-intersecting face");
+		} catch (IllegalArgumentException expected) { }
 	}
 	private static void disjointLiquidRetainsExistingGasRegions() {
 		var leaf = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));

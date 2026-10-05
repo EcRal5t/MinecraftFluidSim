@@ -90,12 +90,26 @@ final class LiquidExactPolygon {
 	private LiquidExactPolygon(List<Vertex> vertices, List<BigInteger> normal) { this.vertices = List.copyOf(vertices); this.normal = normal; }
 	static LiquidExactPolygon restored(List<Vertex> vertices, List<BigInteger> coefficients) {
 		var result = new LiquidExactPolygon(vertices, coefficients.subList(0, 3));
-		if (!result.hasArea()) throw new IllegalArgumentException("Liquid geometry contains an empty face");
-		for (var vertex : vertices) if (vertex.distance(coefficients).signum() != 0) throw new IllegalArgumentException("Liquid geometry face is non-planar");
-		var area = result.areaVector(); var orientation = Fraction.of(0);
-		for (int a = 0; a < 3; a++) orientation = orientation.add(area[a].multiply(new Fraction(coefficients.get(a), BigInteger.ONE)));
-		if (orientation.numerator.signum() <= 0) throw new IllegalArgumentException("Liquid supporting plane has reversed orientation");
+		result.requirePlane(coefficients);
 		return result;
+	}
+	void requirePlane(List<BigInteger> coefficients) {
+		if (!hasArea()) throw new IllegalArgumentException("Liquid geometry contains an empty face");
+		for (var vertex : vertices) if (vertex.distance(coefficients).signum() != 0) throw new IllegalArgumentException("Liquid geometry face is non-planar");
+		int axis = 0; while (axis < 3 && coefficients.get(axis).signum() == 0) axis++;
+		if (axis == 3 || areaVector()[axis].signum() != coefficients.get(axis).signum()) throw new IllegalArgumentException("Liquid supporting plane has reversed orientation");
+		for (int edge = 0; edge < vertices.size(); edge++) {
+			var a = vertices.get(edge); var b = vertices.get((edge + 1) % vertices.size());
+			for (var point : vertices) if (cross(difference(b, a), difference(point, a)).get(axis).signum() * coefficients.get(axis).signum() < 0)
+				throw new IllegalArgumentException("Liquid geometry face is non-convex or self-intersecting");
+		}
+	}
+	LiquidExactPolygon cycled(int start) {
+		if (start < 0 || start >= vertices.size()) throw new IllegalArgumentException("Invalid polygon cycle start");
+		if (start == 0) return this;
+		var points = new ArrayList<Vertex>(); for (int v = 0; v < vertices.size(); v++) points.add(vertices.get((start + v) % vertices.size()));
+		var result = new LiquidExactPolygon(points, normal); result.centroidVertex = centroidVertex; result.integratedArea = integratedArea;
+		result.planeCoefficients = planeCoefficients; result.supportingPlane = supportingPlane; return result;
 	}
 	List<LiquidPolyhedron.Point> rounded() { return vertices.stream().map(Vertex::rounded).toList(); }
 	List<Vertex> vertices() { return vertices; }

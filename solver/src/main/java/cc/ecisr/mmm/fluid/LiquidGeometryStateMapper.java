@@ -8,6 +8,7 @@ import java.util.List;
 
 /** Preserves the complete interface geometry across private backend candidates. */
 final class LiquidGeometryStateMapper {
+	private record Edge(LiquidExactPolygon.Vertex first, LiquidExactPolygon.Vertex second) { }
 	private static final class ReadCache {
 		final java.util.Map<ResolvedControlVolume, LiquidGeometryRefinement.Cell> cells = new LinkedHashMap<>(16, 0.75F, true) {
 			@Override protected boolean removeEldestEntry(java.util.Map.Entry<ResolvedControlVolume, LiquidGeometryRefinement.Cell> eldest) { return size() > 65_536; }
@@ -65,18 +66,22 @@ final class LiquidGeometryStateMapper {
 
 	static ResolvedControlVolume pack(LiquidGeometryRefinement.Cell cell, double[] velocity) {
 		var faces = LiquidExactPolygon.faces(cell.geometry());
+		for (var face : faces) face.requirePlane(face.coefficients());
+		requireClosedConvex(faces);
+		if (cell.geometry().measure().signum() <= 0) throw new IllegalArgumentException("Liquid geometry has no volume");
 		var points = new java.util.TreeSet<LiquidExactPolygon.Vertex>(java.util.Comparator.comparing(LiquidExactPolygon.Vertex::x)
 				.thenComparing(LiquidExactPolygon.Vertex::y).thenComparing(LiquidExactPolygon.Vertex::z).thenComparing(LiquidExactPolygon.Vertex::w));
 		for (var face : faces) points.addAll(face.vertices());
 		var vertices = new LinkedHashMap<LiquidExactPolygon.Vertex, Integer>();
 		for (var point : points) vertices.put(point, vertices.size());
-		var cycles = new ArrayList<int[]>(); var order = new ArrayList<Integer>();
+		var cycles = new ArrayList<int[]>(); var order = new ArrayList<Integer>(); var canonicalFaces = new ArrayList<LiquidExactPolygon>();
 		for (var face : faces) {
 			var pointsOnFace = face.vertices(); int start = 0;
 			for (int v = 1; v < pointsOnFace.size(); v++) if (vertices.get(pointsOnFace.get(v)) < vertices.get(pointsOnFace.get(start))) start = v;
 			int[] cycle = new int[pointsOnFace.size()];
 			for (int v = 0; v < cycle.length; v++) cycle[v] = vertices.get(pointsOnFace.get((start + v) % cycle.length));
 			order.add(cycles.size()); cycles.add(cycle);
+			canonicalFaces.add(face.cycled(start));
 		}
 		order.sort((a, b) -> java.util.Arrays.compare(cycles.get(a), cycles.get(b)));
 		var xyz = new java.math.BigInteger[4 * vertices.size()]; var planes = new java.math.BigInteger[4 * cycles.size()];
@@ -88,7 +93,29 @@ final class LiquidGeometryStateMapper {
 			int original = order.get(f); System.arraycopy(cycles.get(original), 0, indices, offsets[f], offsets[f + 1] - offsets[f]);
 			var plane = faces.get(original).coefficients(); for (int a = 0; a < 4; a++) planes[4 * f + a] = plane.get(a);
 		}
-		return new ResolvedControlVolume(cell.level(), cell.x(), cell.y(), cell.z(), xyz, offsets, indices, planes, velocity);
+		var packed = new ResolvedControlVolume(cell.level(), cell.x(), cell.y(), cell.z(), xyz, offsets, indices, planes, velocity);
+		var cache = READ_CACHE.get();
+		if (cache != null) {
+			var canonicalGeometry = LiquidPolyhedron.restoredExact(order.stream().map(canonicalFaces::get).toList(), cell.geometry().measure());
+			cache.cells.put(packed, LiquidPhasePartition.Address.of(cell).cell(canonicalGeometry));
+		}
+		return packed;
+	}
+	private static void requireClosedConvex(List<LiquidExactPolygon> faces) {
+		var vertices = new java.util.LinkedHashSet<LiquidExactPolygon.Vertex>(); for (var face : faces) vertices.addAll(face.vertices());
+		var edges = new java.util.HashMap<Edge, Integer>();
+		for (var face : faces) {
+			var plane = face.coefficients();
+			for (var vertex : vertices) if (vertex.distance(plane).signum() > 0) throw new IllegalArgumentException("Liquid geometry is non-convex");
+			var cycle = face.vertices();
+			for (int v = 0; v < cycle.size(); v++) {
+				var edge = new Edge(cycle.get(v), cycle.get((v + 1) % cycle.size()));
+				if (edge.first.equals(edge.second)) throw new IllegalArgumentException("Liquid geometry contains an empty edge");
+				edges.merge(edge, 1, Math::addExact);
+			}
+		}
+		for (var edge : edges.entrySet()) if (edge.getValue() != 1 || edges.getOrDefault(new Edge(edge.getKey().second, edge.getKey().first), 0) != 1)
+			throw new IllegalArgumentException("Liquid geometry surface is open or non-manifold");
 	}
 
 	static List<LiquidGeometryRefinement.Cell> restore(LiquidGeometryState state) {
@@ -104,23 +131,14 @@ final class LiquidGeometryStateMapper {
 			for (int v = 0; v < xyz.length; v += 4) vertices.add(new LiquidExactPolygon.Vertex(xyz[v], xyz[v + 1], xyz[v + 2], xyz[v + 3]));
 			if (new java.util.HashSet<>(vertices).size() != vertices.size()) throw new IllegalArgumentException("Liquid geometry repeats a vertex");
 			var faces = new ArrayList<LiquidExactPolygon>(); var coefficients = cell.copyPlanes();
-			var edges = new java.util.HashMap<Long, Integer>();
 			for (int f = 0; f + 1 < offsets.length; f++) {
 				var polygon = new ArrayList<LiquidExactPolygon.Vertex>();
-				for (int v = offsets[f]; v < offsets[f + 1]; v++) {
-					int a = indices[v], b = indices[v + 1 < offsets[f + 1] ? v + 1 : offsets[f]];
-					if (a == b) throw new IllegalArgumentException("Liquid geometry contains an empty edge");
-					edges.merge(((long) a << 32) | b, 1, Math::addExact); polygon.add(vertices.get(a));
-				}
+				for (int v = offsets[f]; v < offsets[f + 1]; v++) polygon.add(vertices.get(indices[v]));
 				var plane = List.of(coefficients[4 * f], coefficients[4 * f + 1], coefficients[4 * f + 2], coefficients[4 * f + 3]);
 				faces.add(LiquidExactPolygon.restored(polygon, plane));
-				for (var vertex : vertices) if (vertex.distance(plane).signum() > 0) throw new IllegalArgumentException("Liquid geometry is non-convex");
 			}
-			for (var edge : edges.entrySet()) {
-				long a = edge.getKey() >>> 32, b = edge.getKey() & 0xffffffffL;
-				if (edge.getValue() != 1 || edges.getOrDefault(b << 32 | a, 0) != 1)
-					throw new IllegalArgumentException("Liquid geometry surface is open or non-manifold");
-			}
+			if (faces.stream().flatMap(face -> face.vertices().stream()).distinct().count() != vertices.size()) throw new IllegalArgumentException("Liquid geometry contains unused vertices");
+			requireClosedConvex(faces);
 			var geometry = LiquidPolyhedron.restoredExact(faces);
 			if (geometry.measure().signum() <= 0) throw new IllegalArgumentException("Liquid geometry has no volume");
 			var restored = new LiquidGeometryRefinement.Cell(cell.level(), cell.x(), cell.y(), cell.z(), geometry);
