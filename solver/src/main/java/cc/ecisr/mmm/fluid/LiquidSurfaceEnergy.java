@@ -26,30 +26,26 @@ final class LiquidSurfaceEnergy {
 	}
 	LiquidSurfaceEnergy(List<LiquidExactPolygon> polygons, double[] coefficient) {
 		if (coefficient.length != polygons.size()) throw new IllegalArgumentException("Incomplete surface energy coefficients");
-		var vertices = new LinkedHashMap<Vertex, Node>(); var energy = Fraction.ZERO;
+		var areaEnergy = new LiquidAreaEnergy(polygons, coefficient); var vertices = new LinkedHashMap<Vertex, Node>();
 		for (int f = 0; f < coefficient.length; f++) {
 			double sigma = coefficient[f]; if (!Double.isFinite(sigma)) throw new IllegalArgumentException("Non-finite surface energy coefficient");
 			if (sigma == 0) continue;
 			var polygon = polygons.get(f); var points = polygon.vertices(); var area = polygon.areaVector();
-			var unit = normal(polygon); var center = polygon.centroidCoordinates();
-			energy = energy.add(Fraction.of(sigma).multiply(Fraction.of(polygon.surface().area())));
-			var edgePotential = new Fraction[points.size()][]; var weights = new Fraction[points.size()];
+			var center = polygon.centroidCoordinates(); var weights = new Fraction[points.size()];
 			int axis = 0; while (area[axis].signum() == 0) axis++;
 			for (int v = 0; v < points.size(); v++) {
 				var relative = subtract(points.get(v).coordinates(), center);
-				edgePotential[v] = scale(cross(relative, unit), Fraction.of(sigma).divide(Fraction.of(-2)));
 				var before = subtract(points.get((v + points.size() - 1) % points.size()).coordinates(), center);
 				var after = subtract(points.get((v + 1) % points.size()).coordinates(), center);
 				weights[v] = cross(before, relative)[axis].add(cross(relative, after)[axis]).divide(area[axis].multiply(Fraction.of(4)));
 			}
 			for (int v = 0; v < points.size(); v++) {
 				var node = vertices.computeIfAbsent(points.get(v), ignored -> new Node());
-				var gradient = subtract(edgePotential[(v + 1) % points.size()], edgePotential[(v + points.size() - 1) % points.size()]);
-				for (int a = 0; a < 3; a++) node.force[a] = node.force[a].add(gradient[a]);
 				node.contacts.add(new Contact(f, weights[v], scale(area, weights[v])));
 			}
 		}
-		joules = energy.rounded(); if (!Double.isFinite(joules)) throw new IllegalStateException("Surface energy exceeds numerical range");
+		areaEnergy.force.forEach((point, value) -> { for (int a = 0; a < 3; a++) vertices.get(point).force[a] = value.get(a); });
+		joules = areaEnergy.joules;
 		pressureJump = new Fraction[coefficient.length]; Arrays.fill(pressureJump, Fraction.ZERO);
 		var forces = new LinkedHashMap<Vertex, List<Fraction>>(); var residuals = new LinkedHashMap<Vertex, List<Fraction>>();
 		for (var entry : vertices.entrySet()) {
@@ -75,13 +71,6 @@ final class LiquidSurfaceEnergy {
 			result.put(entry.getKey(), List.of(dual(entry.getValue(), right)));
 		}
 		return java.util.Collections.unmodifiableMap(result);
-	}
-	private static Fraction[] normal(LiquidExactPolygon polygon) {
-		var area = polygon.areaVector(); int largest = 0;
-		for (int a = 1; a < 3; a++) if (area[a].absolute().subtract(area[largest].absolute()).signum() > 0) largest = a;
-		var direction = scale(area, Fraction.of(1).divide(area[largest].absolute())); double norm = 0;
-		for (var coordinate : direction) norm = Math.hypot(norm, coordinate.rounded());
-		return scale(direction, Fraction.of(1 / norm));
 	}
 	/** Solve only the exact span of the incident normals; the remaining force is retained explicitly. */
 	private static Fraction[] dual(Node node, Fraction[] force) {

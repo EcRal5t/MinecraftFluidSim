@@ -12,6 +12,48 @@ final class LiquidConformingVelocityValidation {
 		arbitraryProjectedRatesPreserveMeansAndWalls();
 		continuousShearPreservesExteriorAreaAndWork();
 		spaceTimeSweepsPreserveVolumeAndSharedFaces();
+		capillaryLoadsShareMechanicalInertiaAndSurfaceWork();
+	}
+	private static void capillaryLoadsShareMechanicalInertiaAndSurfaceWork() {
+		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.625, 0.75)));
+		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		var zeroRate = new Fraction[mesh.faces.size()]; Arrays.fill(zeroRate, Fraction.ZERO);
+		var density = new double[cells.size()]; Arrays.fill(density, 1000);
+		var sigma = new double[mesh.faces.size()]; for (int f = 0; f < sigma.length; f++) if (mesh.faces.get(f).second() < 0) sigma[f] = 0.125;
+		var capillary = new LiquidConformingCapillarity(new LiquidConformingVelocity(mesh, zeroRate, new double[3 * cells.size()]), sigma, density);
+		// The mimetic inverse maps a constant acceleration to its exact cell-force virtual work.
+		var gradients = ControlVolumeGradient.build(mesh.cells, mesh.faces);
+		for (int c = 0; c < cells.size(); c++) {
+			var g = gradients[c]; var metric = new ControlVolumeFluxMetric(g, density[c]); var rate = new double[g.indices.length];
+			for (int i = 0; i < rate.length; i++) for (int a = 0; a < 3; a++) rate[i] += g.exactBasis[i][a].rounded() * g.volume * capillary.acceleration[3 * c + a];
+			var dual = metric.multiply(rate);
+			for (int i = 0; i < rate.length; i++) {
+				double expected = 0; for (int a = 0; a < 3; a++) expected += g.displacement[i].coordinate(a) * capillary.load.cellForce().get(3 * c + a).rounded() / g.volume;
+				if (Math.abs(dual[i] - expected) > 1e-12) throw new AssertionError("Capillary acceleration and pressure use different inertia");
+			}
+		}
+		var liquid = new int[cells.size()]; var gas = new int[cells.size()]; Arrays.fill(gas, -1);
+		double previous = Double.POSITIVE_INFINITY;
+		for (double dt : new double[]{1.0 / 128, 1.0 / 256}) {
+			var mechanics = new LiquidPhaseMechanics(mesh, liquid, density, new double[cells.size()], List.of(), gas, (f, c) -> 0,
+					FluidSolverConfig.WallCondition.FREE_SLIP, capillary.pressureJump);
+			var result = mechanics.advance(new double[3 * cells.size()], new double[3 * mesh.faces.size()], capillary.acceleration, dt, 1e-11, 1e-11, 512);
+			var field = result.conformingVelocity(); var motion = new LiquidConformingTransport(mesh, field, result.extension().volumeRate(), dt);
+			var faces = new ArrayList<LiquidExactPolygon>();
+			for (var image : motion.images) if (mesh.faces.get(image.face()).second() < 0) faces.add(image.geometry().faces().getFirst());
+			var coefficients = new double[faces.size()]; Arrays.fill(coefficients, 0.125);
+			double change = new LiquidAreaEnergy(faces, coefficients).joules - capillary.energy.joules, power = 0, kinetic = 0;
+			var momentum = new double[3];
+			for (int c = 0; c < cells.size(); c++) for (int a = 0; a < 3; a++) {
+				double u = result.extension().cellVelocity()[3 * c + a], mass = density[c] * mesh.cells.get(c).geometry().moments().volume();
+				power += capillary.load.cellForce().get(3 * c + a).rounded() * u; kinetic += 0.5 * mass * u * u; momentum[a] += mass * u;
+			}
+			for (int f = 0; f < sigma.length; f++) power += capillary.load.faceForce().get(f).rounded() * result.extension().volumeRate()[f].rounded();
+			for (double component : momentum) if (Math.abs(component) > 1e-12) throw new AssertionError("Closed capillary surface changed total momentum");
+			if (!(kinetic > 0 && change < 0 && kinetic + change < 0 && power > 0)) throw new AssertionError("Area force failed to relax a resolved free surface");
+			double error = Math.abs(change + dt * power);
+			if (!(error < previous / 3)) throw new AssertionError("Capillary surface work fails time convergence"); previous = error;
+		}
 	}
 	private static void spaceTimeSweepsPreserveVolumeAndSharedFaces() {
 		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1)));
