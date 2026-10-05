@@ -33,6 +33,7 @@ final class LiquidExactPolygon {
 		}
 	}
 	private final List<Vertex> vertices;
+	private volatile Vertex centroidVertex;
 	static final class Fraction {
 		private final BigInteger numerator, denominator;
 		static final Fraction ZERO = new Fraction(BigInteger.ZERO, BigInteger.ONE);
@@ -103,6 +104,13 @@ final class LiquidExactPolygon {
 		var value = center(); return new Fraction[] {new Fraction(value.x, value.w), new Fraction(value.y, value.w), new Fraction(value.z, value.w)};
 	}
 	private Vertex center() {
+		var cached = centroidVertex; if (cached != null) return cached;
+		if (vertices.size() == 3) {
+			var result = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
+			for (var vertex : vertices) { var x = vertex.coordinates(); for (int a = 0; a < 3; a++) result[a] = result[a].add(x[a]); }
+			for (int a = 0; a < 3; a++) result[a] = result[a].divide(Fraction.of(3));
+			return centroidVertex = vertex(result);
+		}
 		int axis = 0; while (normal.get(axis).signum() == 0) axis++;
 		var zero = new Fraction(BigInteger.ZERO, BigInteger.ONE); var weight = zero; Fraction[] moment = {zero, zero, zero}; var a = vertices.getFirst();
 		for (int i = 1; i + 1 < vertices.size(); i++) {
@@ -116,10 +124,9 @@ final class LiquidExactPolygon {
 		if (weight.numerator.signum() == 0) throw new IllegalArgumentException("Empty exact polygon centroid");
 		Fraction[] result = new Fraction[3];
 		for (int coordinate = 0; coordinate < 3; coordinate++) {
-			var ratio = new Fraction(moment[coordinate].numerator.multiply(weight.denominator), moment[coordinate].denominator.multiply(weight.numerator));
-			result[coordinate] = ratio;
+			result[coordinate] = moment[coordinate].divide(weight);
 		}
-		return vertex(result);
+		return centroidVertex = vertex(result);
 	}
 	static Vertex vertex(Fraction[] coordinates) {
 		var denominator = BigInteger.ONE;
@@ -193,8 +200,7 @@ final class LiquidExactPolygon {
 		Fraction[] centroidCoordinates() {
 			if (signum() <= 0) throw new IllegalArgumentException("Empty exact control-volume centroid"); var result = new Fraction[3];
 			for (int coordinate = 0; coordinate < 3; coordinate++) {
-				var ratio = new Fraction(moment[coordinate].numerator.multiply(volume.denominator), moment[coordinate].denominator.multiply(volume.numerator));
-				result[coordinate] = ratio;
+				result[coordinate] = moment[coordinate].divide(volume);
 			}
 			return result;
 		}
@@ -324,13 +330,19 @@ final class LiquidExactPolygon {
 	}
 	private static void order(ArrayList<Vertex> points, List<BigInteger> normal) {
 		if (points.size() < 3) return; int axis = 0; while (normal.get(axis).signum() == 0) axis++;
-		final int u = (axis + 1) % 3, v = (axis + 2) % 3, sign = normal.get(axis).signum();
-		var origin = points.stream().min((a, b) -> { int comparison = compareCoordinate(a, b, u); return comparison != 0 ? comparison : compareCoordinate(a, b, v); }).orElseThrow();
-		points.remove(origin); points.sort((a, b) -> {
-			int orientation = cross(difference(a, origin), difference(b, origin)).get((u + 2) % 3).signum();
-			if (orientation != 0) return -sign * orientation;
-			int comparison = compareCoordinate(a, b, u); return comparison != 0 ? comparison : compareCoordinate(a, b, v);
-		}); points.addFirst(origin);
+		final int u = (axis + 1) % 3, v = (axis + 2) % 3;
+		points.sort((a, b) -> { int comparison = compareCoordinate(a, b, u); return comparison != 0 ? comparison : compareCoordinate(a, b, v); });
+		var lower = new ArrayList<Vertex>(); var upper = new ArrayList<Vertex>();
+		for (var point : points) appendHull(lower, point, axis);
+		for (int i = points.size() - 1; i >= 0; i--) appendHull(upper, points.get(i), axis);
+		lower.removeLast(); upper.removeLast(); lower.addAll(upper);
+		if (normal.get(axis).signum() < 0) java.util.Collections.reverse(lower);
+		points.clear(); points.addAll(lower);
+	}
+	private static void appendHull(ArrayList<Vertex> hull, Vertex point, int axis) {
+		// Collinear edge vertices remain in cyclic order so both incident faces retain identical edges.
+		while (hull.size() >= 2 && cross(difference(hull.getLast(), hull.get(hull.size() - 2)), difference(point, hull.get(hull.size() - 2))).get(axis).signum() < 0) hull.removeLast();
+		hull.add(point);
 	}
 	static List<LiquidExactPolygon> clipVolume(List<LiquidExactPolygon> faces, LiquidGeometryPlane plane) {
 		return clipVolume(faces, plane.key().coefficients(), plane.positive() ? 1 : -1);
@@ -386,8 +398,11 @@ final class LiquidExactPolygon {
 		return result;
 	}
 	LiquidExactPolygon clippedTo(LiquidConvexRegion region) {
+		return clippedTo(region.faces());
+	}
+	LiquidExactPolygon clippedTo(List<LiquidExactPolygon> faces) {
 		var result = this;
-		for (var face : region.faces()) { result = result.clip(face.coefficients(), false); if (!result.hasArea()) break; }
+		for (var face : faces) { result = result.clip(face.coefficients(), false); if (!result.hasArea()) break; }
 		return result;
 	}
 	List<LiquidExactPolygon> subtract(LiquidExactPolygon cutter) {

@@ -13,6 +13,7 @@ import java.util.Map;
 final class LiquidConformingVelocity {
 	record Tetrahedron(int cell, int face, List<Vertex> vertices, Fraction volume) { }
 	record Load(List<Fraction> cellForce, List<Fraction> faceForce, Fraction prescribedPower) { }
+	record Position(Vertex point, Fraction roundoffSquared) { }
 	private record Fit(Fraction[] value, Map<Integer, Fraction> weights) { }
 	final LiquidControlVolumeMesh mesh;
 	final Map<Vertex, List<Fraction>> velocity;
@@ -81,6 +82,12 @@ final class LiquidConformingVelocity {
 		for (int f = 0; f < mesh.faces.size(); f++) {
 			var polygon = mesh.exactPolygons.get(f); var area = polygon.areaVector(); var center = polygon.centroidCoordinates();
 			var point = LiquidExactPolygon.vertex(center); centers.add(point); var face = mesh.faces.get(f);
+			if (face.second() == -2) {
+				var normals = new ArrayList<Fraction[]>();
+				if (wall == FluidSolverConfig.WallCondition.NO_SLIP) for (int a = 0; a < 3; a++) { var axis = zero(); axis[a] = Fraction.of(1); normals.add(axis); }
+				else normals.add(area);
+				wallNormals.put(point, List.copyOf(normals));
+			}
 			if (liquid[face.first()] < 0 && (face.second() < 0 || liquid[face.second()] < 0)) { integration.add(Map.of()); continue; }
 			int axis = 0; while (area[axis].signum() == 0) axis++;
 			var trace = zero(); var points = polygon.vertices(); var weights = new LinkedHashMap<Vertex, Fraction>();
@@ -116,6 +123,32 @@ final class LiquidConformingVelocity {
 		}
 		velocity = java.util.Collections.unmodifiableMap(nodes); tetrahedra = List.copyOf(tets); faceCenters = List.copyOf(centers); cellCenters = List.copyOf(cells);
 		cornerWeights = java.util.Collections.unmodifiableMap(fits); walls = java.util.Collections.unmodifiableMap(wallNormals); faceWeights = List.copyOf(integration);
+	}
+	/** Binary64 velocity observations preserve rigid motion; solid-plane projection bounds position roundoff. */
+	Position advectedPosition(Vertex point, Fraction dt) {
+		var origin = point.coordinates(); var rounded = zero();
+		var exact = origin.clone(); var u = velocity.get(point);
+		for (int a = 0; a < 3; a++) {
+			exact[a] = exact[a].add(u.get(a).multiply(dt));
+			rounded[a] = origin[a].add(Fraction.of(u.get(a).rounded()).multiply(dt));
+		}
+		var originalError = subtract(rounded, exact); var bound = dot(originalError, originalError);
+		var normals = walls.get(point);
+		if (normals != null) {
+			var rhs = zero(); var weights = new ArrayList<Fraction>();
+			for (var normal : normals) { weights.add(Fraction.of(1)); add(rhs, scale(normal, dot(normal, subtract(exact, rounded)))); }
+			add(rounded, dual(normals, weights, rhs));
+			for (var normal : normals) if (!dot(normal, subtract(exact, rounded)).equals(Fraction.ZERO))
+				throw new IllegalStateException("Position rounding changed prescribed solid motion");
+		}
+		var error = subtract(rounded, exact);
+		if (dot(error, error).subtract(bound).signum() > 0) throw new IllegalStateException("Solid-plane position projection increased roundoff");
+		return new Position(LiquidExactPolygon.vertex(rounded), bound);
+	}
+	Fraction[] meanPosition(int cell, Fraction dt) {
+		var result = cellCenters.get(cell).coordinates();
+		for (int a = 0; a < 3; a++) result[a] = result[a].add(Fraction.of(mean[3 * cell + a]).multiply(dt));
+		return result;
 	}
 	/** A moving material interface needs an exactly affine-complete spatial velocity trace. */
 	void requireSurfaceResolution(double[] coefficient) {

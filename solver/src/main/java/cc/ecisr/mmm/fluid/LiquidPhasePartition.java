@@ -76,27 +76,10 @@ final class LiquidPhasePartition {
 			cells.add(address.cell(liquid));
 		}
 		requireDisjoint(cells);
-		var gas = List.of(Support.of(leaf.geometry()));
-		for (var liquid : liquids) {
-			var cut = Support.of(liquid); var planes = cut.planes.stream().map(LiquidGeometryPlane::exact).toList();
-			var remaining = new ArrayList<Support>();
-			for (var original : gas) {
-				if (original.separatedBox(cut) || separated(original, cut) || separated(cut, original)) { remaining.add(original); continue; }
-				var inside = original.region.geometry();
-				for (var plane : planes) {
-					if (inside.measure().signum() <= 0) break;
-					var outside = plane.opposite().clip(inside);
-					if (outside.measure().signum() > 0) remaining.add(Support.of(outside));
-					if ((long) remaining.size() + liquids.size() > maximumRegions)
-						throw new IllegalStateException("Phase geometry exceeds its region budget");
-					inside = plane.clip(inside);
-				}
-			}
-			gas = List.copyOf(remaining);
-		}
+		var gas = LiquidGasPartition.build(leaf, cells, maximumRegions);
 		var regions = new ArrayList<Region>();
 		for (int l = 0; l < cells.size(); l++) regions.add(new Region(cells.get(l), l));
-		for (var geometry : gas) regions.add(new Region(address.cell(geometry.region.geometry()), -1));
+		for (var geometry : gas) regions.add(new Region(address.cell(geometry), -1));
 		if (regions.size() > maximumRegions) throw new IllegalStateException("Phase geometry exceeds its region budget");
 		var measure = LiquidConvexRegion.EMPTY.measure();
 		for (var region : regions) measure = measure.add(LiquidConvexRegion.of(region.cell.geometry()).measure());

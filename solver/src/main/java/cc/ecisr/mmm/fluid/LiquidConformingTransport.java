@@ -16,6 +16,7 @@ final class LiquidConformingTransport {
 	final Map<Vertex, Vertex> positions;
 	final List<Image> images;
 	final Fraction[] sweptVolume;
+	final double maximumPositionRoundoffMetres;
 
 	LiquidConformingTransport(LiquidControlVolumeMesh mesh, LiquidConformingVelocity field, Fraction[] rate, double dt) {
 		this(mesh, field, rate, dt, new int[mesh.cells.size()]);
@@ -24,10 +25,12 @@ final class LiquidConformingTransport {
 		if (field.mesh != mesh || rate.length != mesh.faces.size() || liquid.length != mesh.cells.size() || !(dt > 0) || !Double.isFinite(dt)) throw new IllegalArgumentException("Invalid continuous transport input");
 		this.mesh = mesh; this.field = field; this.liquid = liquid.clone();
 		var time = Fraction.of(dt); var moved = new LinkedHashMap<Vertex, Vertex>();
+		double roundoff = 0;
 		for (var node : field.velocity.entrySet()) {
-			var x = node.getKey().coordinates(); for (int a = 0; a < 3; a++) x[a] = x[a].add(node.getValue().get(a).multiply(time));
-			moved.put(node.getKey(), LiquidExactPolygon.vertex(x));
+			var position = field.advectedPosition(node.getKey(), time); moved.put(node.getKey(), position.point());
+			if (position.roundoffSquared().signum() != 0) roundoff = Math.max(roundoff, Math.nextUp(Math.sqrt(Math.nextUp(position.roundoffSquared().rounded()))));
 		}
+		maximumPositionRoundoffMetres = roundoff;
 		sweptVolume = new Fraction[rate.length];
 		for (int f = 0; f < rate.length; f++) {
 			if (rate[f] == null) throw new IllegalArgumentException("Absent continuous transport rate");
@@ -40,17 +43,10 @@ final class LiquidConformingTransport {
 			sweptVolume[f] = sweep(polygon.vertices(), center, moved);
 			if (!sweptVolume[f].equals(target)) throw new IllegalStateException("Continuous face sweep lost exact integrated volume");
 		}
-		// The cell center carries the remaining P1 displacement mean. Its position has no effect on the closed cell volume.
-		var initialMoment = new Fraction[mesh.cells.size()][3]; var boundaryDisplacement = new Fraction[mesh.cells.size()][3];
-		for (int c = 0; c < initialMoment.length; c++) { initialMoment[c] = zero(); boundaryDisplacement[c] = zero(); }
-		for (var tet : field.tetrahedra) if (liquid[tet.cell()] >= 0) for (int v = 0; v < 4; v++) {
-			var point = tet.vertices().get(v); add(initialMoment[tet.cell()], scale(field.velocity.get(point).toArray(Fraction[]::new), tet.volume().multiply(time)));
-			if (v > 0) add(boundaryDisplacement[tet.cell()], scale(subtract(moved.get(point).coordinates(), point.coordinates()), tet.volume()));
-		}
-		for (int c = 0; c < mesh.cells.size(); c++) if (liquid[c] >= 0) {
-			var center = field.cellCenters.get(c); var x = center.coordinates(); var volume = mesh.cells.get(c).geometry().measure().volume();
-			add(x, scale(subtract(initialMoment[c], boundaryDisplacement[c]), Fraction.of(1).divide(volume))); moved.put(center, LiquidExactPolygon.vertex(x));
-		}
+		// The endpoint fan apex is an auxiliary partition point. Closed-surface volume and moments are independent of it.
+		// Momentum is carried by the original velocity-field mean in LiquidGeometryMotionPlan.
+		for (int c = 0; c < mesh.cells.size(); c++) if (liquid[c] >= 0)
+			moved.put(field.cellCenters.get(c), LiquidExactPolygon.vertex(field.meanPosition(c, time)));
 		var result = new ArrayList<Image>(); var volume = new Fraction[mesh.cells.size()]; java.util.Arrays.fill(volume, Fraction.ZERO);
 		for (var tet : field.tetrahedra) if (liquid[tet.cell()] >= 0) {
 			var source = tet.vertices(); var target = source.stream().map(moved::get).toList();

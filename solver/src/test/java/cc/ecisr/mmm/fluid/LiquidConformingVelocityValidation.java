@@ -8,6 +8,7 @@ import java.util.List;
 /** Shared full velocity traces, exact moments and surface work under continuous shear. */
 final class LiquidConformingVelocityValidation {
 	static void validate() {
+		stationaryRationalGeometrySurvivesMotionRounding();
 		affineFieldSurvivesAdaptiveFaces();
 		arbitraryProjectedRatesPreserveMeansAndWalls();
 		continuousShearPreservesExteriorAreaAndWork();
@@ -15,6 +16,17 @@ final class LiquidConformingVelocityValidation {
 		capillaryLoadsShareMechanicalInertiaAndSurfaceWork();
 		implicitCapillarityUsesActualPhaseOrdering();
 		LiquidWetWallValidation.validate();
+	}
+	private static void stationaryRationalGeometrySurvivesMotionRounding() {
+		var shape = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 2, 3, 1);
+		var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)), 1, 1000,
+				(c, face) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+		var rates = new Fraction[mesh.faces.size()]; Arrays.fill(rates, Fraction.ZERO);
+		var field = new LiquidConformingVelocity(mesh, rates, new double[3]);
+		var motion = new LiquidConformingTransport(mesh, field, rates, 1.0 / 128);
+		for (var entry : motion.positions.entrySet()) if (!entry.getKey().equals(entry.getValue()))
+			throw new AssertionError("Binary64 increments changed stationary rational geometry");
+		if (motion.maximumPositionRoundoffMetres != 0) throw new AssertionError("Stationary geometry acquired a motion roundoff bound");
 	}
 	private static void implicitCapillarityUsesActualPhaseOrdering() {
 		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.625, 0.75)));
@@ -138,6 +150,8 @@ final class LiquidConformingVelocityValidation {
 		for (int f = 0; f < rate.length; f++) rate[f] = dot(mesh.faces.get(f).areaVector(), affine(mesh.faces.get(f).centroid().toArray(Fraction[]::new)));
 		var field = new LiquidConformingVelocity(mesh, rate, mean); var motion = new LiquidConformingTransport(mesh, field, rate, 1.0 / 128);
 		var volume = new Fraction[cells.size()]; Arrays.fill(volume, Fraction.ZERO);
+		var measures = new LiquidExactPolygon.Measure[cells.size()]; Arrays.fill(measures, LiquidConvexRegion.EMPTY.measure());
+		var boundaries = new ArrayList<ArrayList<LiquidExactPolygon>>(); for (int c = 0; c < cells.size(); c++) boundaries.add(new ArrayList<>());
 		var paired = new java.util.HashMap<List<LiquidExactPolygon.Vertex>, Integer>();
 		for (int i = 0; i < motion.images.size(); i++) {
 			var image = motion.images.get(i); var source = field.tetrahedra.get(i);
@@ -146,9 +160,12 @@ final class LiquidConformingVelocityValidation {
 					.equals(new java.util.HashSet<>(image.geometry().faces().stream().map(LiquidExactPolygon::vertexKey).toList())))
 				throw new AssertionError("Continuous affine image map differs from transported vertices");
 			volume[image.cell()] = volume[image.cell()].add(image.geometry().measure().volume());
+			measures[image.cell()] = measures[image.cell()].add(image.geometry().measure()); boundaries.get(image.cell()).add(image.geometry().faces().getFirst());
 			if (mesh.faces.get(image.face()).second() >= 0) paired.merge(image.geometry().faces().getFirst().vertexKey(), 1, Integer::sum);
 		}
 		for (var v : volume) if (!v.equals(Fraction.of(0.125))) throw new AssertionError("Finite-step incompressible transport changed cell volume");
+		for (int c = 0; c < cells.size(); c++) if (!measures[c].same(LiquidExactPolygon.measure(boundaries.get(c))))
+			throw new AssertionError("Auxiliary fan apex changed exterior volume or spatial moments");
 		for (int count : paired.values()) if (count != 2) throw new AssertionError("Finite-step shared velocity opened an internal geometric face");
 		for (int f = 0; f < rate.length; f++) if (!motion.sweptVolume[f].equals(rate[f].multiply(Fraction.of(1.0 / 128))))
 			throw new AssertionError("Swept volume does not represent pressure face flux");
@@ -189,6 +206,15 @@ final class LiquidConformingVelocityValidation {
 		var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(input, new LiquidPolyhedron.Point(0, 0, 0), 0.01, 1e-10, 512);
 		var field = new LiquidConformingVelocity(mesh, projected.volumeRate(), projected.cellVelocity());
 		requireIntegralConstraints(mesh, field, projected.volumeRate(), projected.cellVelocity());
+		var motion = new LiquidConformingTransport(mesh, field, projected.volumeRate(), 0.0001);
+		if (!(motion.maximumPositionRoundoffMetres > 0 && motion.maximumPositionRoundoffMetres < Math.ulp(0.0001)))
+			throw new AssertionError("Motion roundoff is not bounded at the binary64 increment scale");
+		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() == -2) {
+			var plane = mesh.exactPolygons.get(f).coefficients();
+			var points = new ArrayList<>(mesh.exactPolygons.get(f).vertices()); points.add(field.faceCenters.get(f));
+			for (var point : points) if (motion.positions.get(point).distance(plane).signum() != 0)
+				throw new AssertionError("Binary64 increments changed the exact solid plane constraint");
+		}
 		var forces = new java.util.LinkedHashMap<LiquidExactPolygon.Vertex, List<Fraction>>(); var power = Fraction.ZERO;
 		for (var node : field.velocity.entrySet()) {
 			var x = node.getKey().coordinates(); var force = List.of(x[0].multiply(x[0]).subtract(x[1]), x[2].add(x[0]), x[1].multiply(x[2]));

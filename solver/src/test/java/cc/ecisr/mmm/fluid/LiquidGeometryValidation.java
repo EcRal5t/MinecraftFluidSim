@@ -64,6 +64,17 @@ final class LiquidGeometryValidation {
 			if (geometry.measure().same(lower.measure()) && lower.faces().stream().allMatch(face -> geometry.faces().stream().allMatch(p -> p.inside(face.coefficients())))) retained = true;
 		}
 		if (!retained) throw new AssertionError("Disjoint liquid fragmented an unchanged gas region");
+		var shape = LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75);
+		var mesh = new LiquidControlVolumeMesh(java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)), 1, 1000,
+				(c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		var rates = new LiquidExactPolygon.Fraction[mesh.faces.size()]; java.util.Arrays.fill(rates, LiquidExactPolygon.Fraction.ZERO);
+		var tets = new LiquidConformingVelocity(mesh, rates, new double[3]).tetrahedra.stream()
+				.map(tet -> LiquidConvexRegion.ofTetrahedron(tet.vertices()).geometry()).toList();
+		var actualPlanes = new java.util.HashSet<LiquidGeometryPlane.Key>();
+		for (var geometry : java.util.List.of(leaf.geometry(), shape)) for (var plane : geometry.planes()) actualPlanes.add(plane.key());
+		for (var region : LiquidPhasePartition.build(leaf, tets, 128)) if (region.liquid() < 0)
+			for (var plane : region.cell().geometry().planes()) if (!actualPlanes.contains(plane.key()))
+				throw new AssertionError("Internal liquid tetrahedra introduced a gas partition plane");
 	}
 	private static void materialInterfacesUseResolvedPhaseAndWallGeometry() {
 		var registry = new FluidMaterialRegistry(java.util.List.of(
@@ -189,6 +200,16 @@ final class LiquidGeometryValidation {
 			for (var cell : compact.cells()) if (!java.util.Arrays.equals(cell.copyVelocity(), new double[]{1, 0, 0}))
 				throw new AssertionError("Exact compaction changed the resolved field");
 			if (budget == 64 && compact.cells().size() != 1) throw new AssertionError("Convex auxiliary cuts retained unnecessary geometric work");
+			if (budget == 64) {
+				var merged = LiquidGeometryStateMapper.restore(compact).getFirst().geometry();
+				var box = LiquidPolyhedron.box(0.125, 0.125, 0.125, 0.875, 0.375, 0.375);
+				for (double[] cut : new double[][]{{0, 0, -1, -0.25}, {1, 1, 1, 0.75}, {1, 2, 3, 1.5}, {-2, 1, 3, 0.25}}) {
+					var clipped = merged.clip(cut[0], cut[1], cut[2], cut[3]);
+					if (!clipped.measure().same(box.clip(cut[0], cut[1], cut[2], cut[3]).measure()))
+						throw new AssertionError("Clipping a subdivided convex surface changed exact volume or moments");
+					LiquidGeometryStateMapper.restore(LiquidGeometryStateMapper.capture(java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, clipped)), 1, new int[]{0}));
+				}
+			}
 		}
 		var concave = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.375, 0.125, 0.125, 0.625, 0.625, 0.375));
 		var gap = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(Math.nextUp(0.375), 0.125, 0.125, 0.625, 0.375, 0.375));
