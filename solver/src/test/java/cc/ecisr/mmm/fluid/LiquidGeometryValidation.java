@@ -609,6 +609,16 @@ final class LiquidGeometryValidation {
 		double potential = massKilograms * copied.config.gravity() * 0.3125 * width;
 		if (Math.abs(copied.gravitationalPotentialEnergyJoules() - potential) > 4 * Math.ulp(potential))
 			throw new AssertionError("Geometric potential energy differs from its actual spatial moment");
+		var coarseState = copied.liquidGeometryState; var fineCells = new java.util.ArrayList<LiquidGeometryRefinement.Cell>(); var fineVelocity = new java.util.ArrayList<double[]>();
+		var coarseCells = LiquidGeometryStateMapper.restore(coarseState);
+		for (int f = 0; f < coarseCells.size(); f++) for (var child : LiquidGeometryRefinement.children(coarseCells.get(f)))
+			for (var finer : LiquidGeometryRefinement.children(child)) { fineCells.add(finer); fineVelocity.add(coarseState.cells().get(f).copyVelocity()); }
+		var speed = new double[3 * fineCells.size()]; for (int f = 0; f < fineCells.size(); f++) System.arraycopy(fineVelocity.get(f), 0, speed, 3 * f, 3);
+		var coarseEnergy = LiquidGeometryMechanicalEnergy.measure(copied);
+		copied.liquidGeometryState = LiquidGeometryStateMapper.capture(fineCells, width, new int[]{0}, new int[fineCells.size()], speed);
+		LiquidGeometryStateMapper.requireCompatible(copied.liquidGeometryState, copied);
+		if (!LiquidGeometryMechanicalEnergy.measure(copied).equals(coarseEnergy)) throw new AssertionError("Auxiliary fragment subdivision changed exact P0 energy or momentum");
+		copied.liquidGeometryState = coarseState;
 		var motion = new LiquidGeometryMotionPlan(copied.liquidGeometryState, mesh, regions.stream().mapToInt(LiquidPhasePartition.Region::liquid).toArray(), field,
 				LiquidGeometryRefinement.children(root), 0.1, 4096, 128);
 		if (motion.geometry.markerCount() != 1 || motion.inventoryMotion.size() != 1) throw new AssertionError("Geometric motion duplicated inventory ownership");

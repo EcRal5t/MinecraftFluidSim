@@ -16,9 +16,11 @@ final class LiquidGeometryMechanicalEnergy {
 		var scale = Fraction.of(domain.unitScale.cubicMetersPerNormalizedVolume());
 		for (int p = 0; p < markers.length; p++) mass[markers[p]] = mass[markers[p]].add(Fraction.of(domain.particles.mass(p)).multiply(scale));
 		for (int f = 0; f < count; f++) {
-			int group = owners[f]; var measure = LiquidConvexRegion.of(cells.get(f).geometry()).measure(); var velocity = state.cells().get(f).copyVelocity();
-			volume[group] = volume[group].add(measure.volume()); height[group] = height[group].add(measure.firstMoment(1));
-			for (int a = 0; a < 3; a++) squared[group] = squared[group].add(measure.volume().multiply(Fraction.of(velocity[a]).multiply(Fraction.of(velocity[a]))));
+			int group = owners[f]; var measure = cells.get(f).geometry().measure(); height[group] = height[group].add(measure.firstMoment(1));
+		}
+		for (var field : LiquidGeometryMomentumAudit.volumesByVelocity(state, cells)) {
+			int group = field.owner(); volume[group] = volume[group].add(field.volume());
+			for (int a = 0; a < 3; a++) { var u = Fraction.of(field.velocity().coordinate(a)); squared[group] = squared[group].add(field.volume().multiply(u.multiply(u))); }
 		}
 		var kinetic = Fraction.ZERO; var gravitational = Fraction.ZERO;
 		var factor = Fraction.of(state.rootWidthMetres()).multiply(Fraction.of(domain.config.gravity()));
