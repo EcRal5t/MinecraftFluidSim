@@ -20,13 +20,25 @@ final class LiquidConformingVelocityValidation {
 		var zeroRate = new Fraction[mesh.faces.size()]; Arrays.fill(zeroRate, Fraction.ZERO);
 		var density = new double[cells.size()]; Arrays.fill(density, 1000);
 		var sigma = new double[mesh.faces.size()]; for (int f = 0; f < sigma.length; f++) if (mesh.faces.get(f).second() < 0) sigma[f] = 0.125;
-		var capillary = new LiquidConformingCapillarity(new LiquidConformingVelocity(mesh, zeroRate, new double[3 * cells.size()]), sigma, density);
+		var reference = new LiquidConformingVelocity(mesh, zeroRate, new double[3 * cells.size()]);
+		var capillary = new LiquidConformingCapillarity(reference, sigma, density);
+		var surface = reference.tetrahedra.stream().filter(t -> mesh.faces.get(t.face()).second() < 0).map(t -> LiquidExactPolygon.tetrahedron(t.vertices()).getFirst()).toList();
+		var coefficients = new double[surface.size()]; Arrays.fill(coefficients, 0.125); var metric = new LiquidSurfaceMetric(surface, coefficients);
+		var positions = new java.util.LinkedHashMap<LiquidExactPolygon.Vertex, List<Fraction>>();
+		reference.velocity.keySet().forEach(point -> positions.put(point, List.of(point.coordinates())));
+		if (Math.abs(metric.energy(positions).rounded() - capillary.energy.joules) > 2 * Math.ulp(capillary.energy.joules)) throw new AssertionError("Reference metric changed geometric surface energy");
+		for (var entry : metric.gradient(positions).entrySet()) for (int a = 0; a < 3; a++)
+			if (entry.getValue().get(a).add(capillary.energy.force.get(entry.getKey()).get(a)).absolute().rounded() > 1e-14)
+				throw new AssertionError("Implicit surface metric changed the initial area force");
+		var translation = new java.util.LinkedHashMap<LiquidExactPolygon.Vertex, List<Fraction>>();
+		positions.keySet().forEach(point -> translation.put(point, List.of(Fraction.of(0.125), Fraction.of(-0.25), Fraction.of(0.5))));
+		if (metric.energy(translation).signum() != 0) throw new AssertionError("Implicit surface metric damps rigid translation");
 		// The mimetic inverse maps a constant acceleration to its exact cell-force virtual work.
 		var gradients = ControlVolumeGradient.build(mesh.cells, mesh.faces);
 		for (int c = 0; c < cells.size(); c++) {
-			var g = gradients[c]; var metric = new ControlVolumeFluxMetric(g, density[c]); var rate = new double[g.indices.length];
+			var g = gradients[c]; var fluxMetric = new ControlVolumeFluxMetric(g, density[c]); var rate = new double[g.indices.length];
 			for (int i = 0; i < rate.length; i++) for (int a = 0; a < 3; a++) rate[i] += g.exactBasis[i][a].rounded() * g.volume * capillary.acceleration[3 * c + a];
-			var dual = metric.multiply(rate);
+			var dual = fluxMetric.multiply(rate);
 			for (int i = 0; i < rate.length; i++) {
 				double expected = 0; for (int a = 0; a < 3; a++) expected += g.displacement[i].coordinate(a) * capillary.load.cellForce().get(3 * c + a).rounded() / g.volume;
 				if (Math.abs(dual[i] - expected) > 1e-12) throw new AssertionError("Capillary acceleration and pressure use different inertia");
@@ -41,8 +53,11 @@ final class LiquidConformingVelocityValidation {
 			var field = result.conformingVelocity(); var motion = new LiquidConformingTransport(mesh, field, result.extension().volumeRate(), dt);
 			var faces = new ArrayList<LiquidExactPolygon>();
 			for (var image : motion.images) if (mesh.faces.get(image.face()).second() < 0) faces.add(image.geometry().faces().getFirst());
-			var coefficients = new double[faces.size()]; Arrays.fill(coefficients, 0.125);
-			double change = new LiquidAreaEnergy(faces, coefficients).joules - capillary.energy.joules, power = 0, kinetic = 0;
+			var after = new LiquidAreaEnergy(faces, coefficients);
+			var moved = new java.util.LinkedHashMap<LiquidExactPolygon.Vertex, List<Fraction>>(); motion.positions.forEach((point, next) -> moved.put(point, List.of(next.coordinates())));
+			if (metric.energy(moved).rounded() + 4 * Math.ulp(after.joules) < after.joules) throw new AssertionError("Implicit reference metric failed to bound actual transported area");
+			if (metric.energy(field.velocity).signum() < 0) throw new AssertionError("Implicit capillary operator has negative deformation energy");
+			double change = after.joules - capillary.energy.joules, power = 0, kinetic = 0;
 			var momentum = new double[3];
 			for (int c = 0; c < cells.size(); c++) for (int a = 0; a < 3; a++) {
 				double u = result.extension().cellVelocity()[3 * c + a], mass = density[c] * mesh.cells.get(c).geometry().moments().volume();
@@ -125,6 +140,10 @@ final class LiquidConformingVelocityValidation {
 		for (int i = 0; i < load.cellForce().size(); i++) actual = actual.add(load.cellForce().get(i).multiply(Fraction.of(projected.cellVelocity()[i])));
 		for (int f = 0; f < mesh.faces.size(); f++) actual = actual.add(load.faceForce().get(f).multiply(projected.volumeRate()[f]));
 		if (!actual.equals(power) || load.prescribedPower().signum() != 0) throw new AssertionError("Continuous force adjoint lost work at cell, face or wall nodes");
+		var virtualVelocity = field.rateVelocity(projected.volumeRate()); var rateLoad = field.rateLoad(forces); var nodePower = Fraction.ZERO; var ratePower = Fraction.ZERO;
+		for (var entry : forces.entrySet()) nodePower = nodePower.add(dot(entry.getValue(), virtualVelocity.get(entry.getKey()).toArray(Fraction[]::new)));
+		for (int f = 0; f < mesh.faces.size(); f++) ratePower = ratePower.add(rateLoad[f].multiply(projected.volumeRate()[f]));
+		if (!nodePower.equals(ratePower)) throw new AssertionError("Pressure-compatible capillary pullback lost exact virtual work");
 		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() == -2) {
 			var face = mesh.faces.get(f); var points = new ArrayList<>(mesh.exactPolygons.get(f).vertices()); points.add(field.faceCenters.get(f));
 			for (var point : points) if (dot(face.areaVector(), field.velocity.get(point).toArray(Fraction[]::new)).signum() != 0)

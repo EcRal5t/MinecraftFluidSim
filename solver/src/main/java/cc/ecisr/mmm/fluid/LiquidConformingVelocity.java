@@ -151,6 +151,56 @@ final class LiquidConformingVelocity {
 		for (int f = 0; f < trace.length; f++) power = power.subtract(trace[f].multiply(rates[f]));
 		return new Load(List.of(force), List.of(trace), power);
 	}
+	/** Pressure-compatible virtual velocities: exact cell means follow the face first moments. */
+	Map<Vertex, List<Fraction>> rateVelocity(Fraction[] virtualRate) {
+		if (virtualRate.length != mesh.faces.size()) throw new IllegalArgumentException("Incomplete virtual face rates");
+		var primary = new Fraction[mesh.cells.size()][3];
+		for (int c = 0; c < primary.length; c++) {
+			primary[c] = zero(); if (!velocity.containsKey(cellCenters.get(c))) continue;
+			var center = mesh.cells.get(c).geometry().centroidCoordinates(); var volume = mesh.cells.get(c).geometry().measure().volume();
+			for (int f : mesh.cellFaces[c]) {
+				if (mesh.faces.get(f).second() == -2 && virtualRate[f].signum() != 0) throw new IllegalArgumentException("Virtual velocity changes prescribed wall motion");
+				var sign = Fraction.of(mesh.faces.get(f).first() == c ? 1 : -1);
+				add(primary[c], scale(subtract(mesh.faces.get(f).centroid().toArray(Fraction[]::new), center), virtualRate[f].multiply(sign).divide(volume)));
+			}
+		}
+		var nodes = new LinkedHashMap<Vertex, Fraction[]>();
+		for (var corner : cornerWeights.entrySet()) {
+			var value = zero(); for (var weight : corner.getValue().entrySet()) add(value, scale(primary[weight.getKey()], weight.getValue()));
+			var normals = walls.get(corner.getKey());
+			if (normals != null) {
+				var rhs = zero(); var weights = new ArrayList<Fraction>();
+				for (var n : normals) { weights.add(Fraction.of(1)); add(rhs, scale(n, dot(n, value))); }
+				value = subtract(value, dual(normals, weights, rhs));
+			}
+			nodes.put(corner.getKey(), value);
+		}
+		for (int f = 0; f < mesh.faces.size(); f++) if (!faceWeights.get(f).isEmpty()) {
+			var value = zero(); for (var weight : faceWeights.get(f).entrySet()) add(value, scale(nodes.get(weight.getKey()), weight.getValue()));
+			var area = mesh.faces.get(f).areaVector().toArray(Fraction[]::new);
+			add(value, scale(area, virtualRate[f].subtract(dot(area, value)).multiply(Fraction.of(3)).divide(dot(area, area))));
+			nodes.put(faceCenters.get(f), value);
+		}
+		var moment = new Fraction[primary.length][3]; for (int c = 0; c < primary.length; c++) moment[c] = zero();
+		for (var tet : tetrahedra) for (int v = 1; v < 4; v++) add(moment[tet.cell()], scale(nodes.get(tet.vertices().get(v)), tet.volume()));
+		for (int c = 0; c < primary.length; c++) if (velocity.containsKey(cellCenters.get(c)))
+			nodes.put(cellCenters.get(c), subtract(scale(primary[c], Fraction.of(4)), scale(moment[c], Fraction.of(1).divide(mesh.cells.get(c).geometry().measure().volume()))));
+		var result = new LinkedHashMap<Vertex, List<Fraction>>(); nodes.forEach((point, value) -> result.put(point, List.of(value)));
+		return java.util.Collections.unmodifiableMap(result);
+	}
+	/** Adjoint of rateVelocity, including the pressure-compatible cell-mean dependence. */
+	Fraction[] rateLoad(Map<Vertex, List<Fraction>> forces) {
+		var load = load(forces); var result = load.faceForce().toArray(Fraction[]::new);
+		for (int c = 0; c < mesh.cells.size(); c++) if (velocity.containsKey(cellCenters.get(c))) {
+			var force = new Fraction[]{load.cellForce().get(3 * c), load.cellForce().get(3 * c + 1), load.cellForce().get(3 * c + 2)};
+			var center = mesh.cells.get(c).geometry().centroidCoordinates(); var volume = mesh.cells.get(c).geometry().measure().volume();
+			for (int f : mesh.cellFaces[c]) {
+				var value = dot(subtract(mesh.faces.get(f).centroid().toArray(Fraction[]::new), center), force).divide(volume);
+				result[f] = result[f].add(mesh.faces.get(f).first() == c ? value : value.negate());
+			}
+		}
+		return result;
+	}
 	private static Fit fit(LiquidControlVolumeMesh mesh, LinkedHashSet<Integer> patch, double[] mean, Fraction[] point) {
 		var center = zero(); var average = zero(); var total = Fraction.ZERO;
 		for (int c : patch) {
