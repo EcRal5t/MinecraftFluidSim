@@ -19,16 +19,18 @@ final class ResolvedLiquidMechanicalStage {
 			throw new IllegalStateException("Resolved mechanics requires geometric surface energy");
 		var state = domain.liquidGeometryState;
 		LiquidGeometryStateMapper.requireCompatible(state, domain);
-		domain.gasTopologyCoordinator.step(dt);
+		if (domain.gasState.geometry == null) domain.gasTopologyCoordinator.refresh();
 		if (domain.gasState.geometry == null) throw new GasTopologyBlockedException("Resolved liquid requires complete gas support");
 		var requested = new LinkedHashMap<LiquidPhasePartition.Address, LiquidGeometryRefinement.Cell>();
 		for (var cell : LiquidGeometryStateMapper.restore(state)) requested.putIfAbsent(LiquidPhasePartition.Address.of(cell), cell);
 		var pressureBoundary = new PressureBoundaryView(domain);
+		boolean gasAdvanced = false;
 		for (;;) {
 			var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ,
 					domain.config.cellSize(), domain.geometry.cutCells, List.copyOf(requested.values()), MAXIMUM_REGIONS);
 			var input = new LiquidGeometryPhaseInput(state, partition, domain.gasState.sealedDomainBoundary, MAXIMUM_REGIONS);
-			var actualNodes = ResolvedGasGeometry.requireCompatible(domain.gasState.geometry, input, MAXIMUM_PAIRS);
+			var gasMatch = ResolvedGasGeometry.match(domain.gasState.geometry, input, MAXIMUM_PAIRS); var actualNodes = gasMatch.nodes();
+			if (!gasAdvanced) { domain.gasTopologyCoordinator.advanceEdges(dt); gasAdvanced = true; }
 			var pressureNodes = new ArrayList<LiquidControlVolumeProjection.GasNode>();
 			int[] nodeRows = new int[domain.gasState.network.nodeCount() + 1]; Arrays.fill(nodeRows, LiquidPhaseMechanics.PRESCRIBED_GAS_PRESSURE); nodeRows[0] = -1;
 			for (int node = 1; node < nodeRows.length; node++) if (pressureBoundary.gasNodeHasContinuumState(node)) {
@@ -56,11 +58,12 @@ final class ResolvedLiquidMechanicalStage {
 				}
 				continue;
 			}
-			var interfaces = new ResolvedGasInterfaceMotion.Builder(input, domain.gasState.geometry, MAXIMUM_REGIONS, MAXIMUM_PAIRS);
+			var interfaces = new ResolvedGasInterfaceMotion.Builder(gasMatch, MAXIMUM_REGIONS);
 			LiquidGeometryMotionPlan motion;
 			try {
-				motion = new LiquidGeometryMotionPlan(state, input.mesh, input.fragments, result.velocity(), partition.leaves,
-						dt, MAXIMUM_REGIONS, MAXIMUM_REGIONS, interfaces);
+				var field = result.conformingVelocity();
+				var transport = new LiquidConformingTransport(input.mesh, field, result.extension().volumeRate(), dt, input.fragments);
+				motion = new LiquidGeometryMotionPlan(state, input.mesh, input.fragments, field, transport, partition.leaves, MAXIMUM_REGIONS, interfaces);
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());
 			}

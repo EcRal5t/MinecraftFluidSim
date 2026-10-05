@@ -122,6 +122,16 @@ final class LiquidExactPolygon {
 		}
 		return List.copyOf(result);
 	}
+	static Measure tetrahedronMeasure(List<Vertex> points) {
+		if (points.size() != 4) throw new IllegalArgumentException("A geometric tetrahedron needs four vertices");
+		var x = points.stream().map(Vertex::coordinates).toList(); var a = new Fraction[3]; var b = new Fraction[3]; var c = new Fraction[3];
+		for (int i = 0; i < 3; i++) { a[i] = x.get(1)[i].subtract(x.getFirst()[i]); b[i] = x.get(2)[i].subtract(x.getFirst()[i]); c[i] = x.get(3)[i].subtract(x.getFirst()[i]); }
+		var determinant = Fraction.ZERO;
+		for (int i = 0; i < 3; i++) determinant = determinant.add(a[i].multiply(b[(i + 1) % 3].multiply(c[(i + 2) % 3]).subtract(b[(i + 2) % 3].multiply(c[(i + 1) % 3]))));
+		var volume = determinant.absolute().divide(Fraction.of(6)); var moment = new Fraction[3];
+		for (int i = 0; i < 3; i++) { var sum = Fraction.ZERO; for (var p : x) sum = sum.add(p[i]); moment[i] = volume.multiply(sum).divide(Fraction.of(4)); }
+		return new Measure(volume, moment);
+	}
 	Fraction[] areaVector() {
 		var result = new Fraction[] {Fraction.of(0), Fraction.of(0), Fraction.of(0)}; var origin = vertices.getFirst();
 		for (int i = 1; i + 1 < vertices.size(); i++) {

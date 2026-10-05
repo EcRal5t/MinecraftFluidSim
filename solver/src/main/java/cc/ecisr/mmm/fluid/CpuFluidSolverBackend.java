@@ -20,7 +20,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 
 	@Override public FluidStepCandidate evaluate(FluidStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Step request is missing");
-		try {
+		try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
 			int minimumSubsteps = 1;
 			long spentSubsteps = 0L;
 			String refinementReason = "";
@@ -62,7 +62,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 
 	@Override public FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Thermal step request is missing");
-		try {
+		try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
 			FluidDomain candidate = restoreCandidate(request.state());
 			FluidDomain.ThermalAxisStats stats = candidate.stepThermalAxis(
 					request.phaseChangeEnabled(), request.maximumPhaseOperations());

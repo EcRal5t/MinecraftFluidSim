@@ -1,8 +1,9 @@
 package cc.ecisr.mmm.fluid;
 
-/** Liquid reached the compressible part of its gas extension during this time interval. */
+/** A geometric trajectory needs a shorter interval before its candidate can be accepted. */
 final class LiquidCharacteristicTimeResolutionRequired extends IllegalStateException {
 	LiquidCharacteristicTimeResolutionRequired() {
-		super("Liquid characteristic requires a shorter interval within incompressible interface support");
+		this("Liquid characteristic requires a shorter interval within incompressible interface support");
 	}
+	LiquidCharacteristicTimeResolutionRequired(String message) { super(message); }
 }

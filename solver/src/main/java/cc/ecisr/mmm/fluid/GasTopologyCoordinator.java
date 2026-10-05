@@ -697,6 +697,10 @@ final class GasTopologyCoordinator {
 	 */
 	void step(float dt) {
 		refresh();
+		advanceEdges(dt);
+	}
+	/** Advances finite-rate transport after the caller has admitted the current geometric support. */
+	void advanceEdges(float dt) {
 		if (!domain.gasState.pressureActive) return;
 		if (domain.thermalState == null || !domain.thermalState.gasModelBound()) domain.gasState.network.stepEdges(dt);
 		else domain.gasState.network.stepEdges(dt, new AirNetwork.NodeThermodynamics() {

@@ -22,12 +22,15 @@ final class LiquidSurfaceEnergy {
 
 	/** Coefficients have units J/m²; negative wet-wall energy is permitted. Zero coefficients omit the facet. */
 	LiquidSurfaceEnergy(LiquidControlVolumeMesh mesh, double[] coefficient) {
-		if (coefficient.length != mesh.faces.size()) throw new IllegalArgumentException("Incomplete surface energy coefficients");
+		this(mesh.exactPolygons, coefficient);
+	}
+	LiquidSurfaceEnergy(List<LiquidExactPolygon> polygons, double[] coefficient) {
+		if (coefficient.length != polygons.size()) throw new IllegalArgumentException("Incomplete surface energy coefficients");
 		var vertices = new LinkedHashMap<Vertex, Node>(); var energy = Fraction.ZERO;
 		for (int f = 0; f < coefficient.length; f++) {
 			double sigma = coefficient[f]; if (!Double.isFinite(sigma)) throw new IllegalArgumentException("Non-finite surface energy coefficient");
 			if (sigma == 0) continue;
-			var polygon = mesh.exactPolygons.get(f); var points = polygon.vertices(); var area = polygon.areaVector();
+			var polygon = polygons.get(f); var points = polygon.vertices(); var area = polygon.areaVector();
 			var unit = normal(polygon); var center = polygon.centroidCoordinates();
 			energy = energy.add(Fraction.of(sigma).multiply(Fraction.of(polygon.surface().area())));
 			var edgePotential = new Fraction[points.size()][]; var weights = new Fraction[points.size()];

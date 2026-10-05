@@ -16,6 +16,7 @@ final class LiquidConvexRegion {
 	}
 	static LiquidConvexRegion of(LiquidPolyhedron geometry) { return new LiquidConvexRegion(LiquidExactPolygon.faces(geometry), geometry.measure()); }
 	static LiquidConvexRegion ofFaces(List<LiquidExactPolygon> faces) { return new LiquidConvexRegion(faces); }
+	static LiquidConvexRegion ofTetrahedron(List<LiquidExactPolygon.Vertex> vertices) { return new LiquidConvexRegion(LiquidExactPolygon.tetrahedron(vertices), LiquidExactPolygon.tetrahedronMeasure(vertices)); }
 	List<LiquidExactPolygon> faces() { return faces; }
 	boolean hasVolume() { return measure.signum() > 0; }
 	LiquidExactPolygon.Measure measure() { return measure; }

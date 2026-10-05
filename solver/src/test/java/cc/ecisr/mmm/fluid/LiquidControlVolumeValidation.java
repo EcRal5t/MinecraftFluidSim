@@ -28,6 +28,7 @@ final class LiquidControlVolumeValidation {
 		polygonSurfaceEnergyPreservesGeometricInvariants();
 		obliqueSurfaceEnergyPreservesVirtualWork();
 		variableSurfaceEnergyRetainsTangentialForce();
+		LiquidConformingVelocityValidation.validate();
 		LiquidCharacteristicValidation.validate();
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
 	}

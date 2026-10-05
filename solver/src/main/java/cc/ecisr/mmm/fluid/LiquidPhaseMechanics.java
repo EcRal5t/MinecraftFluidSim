@@ -10,12 +10,34 @@ final class LiquidPhaseMechanics {
 	/** Finite gas support with a prescribed pressure and no representable compliance row. */
 	static final int PRESCRIBED_GAS_PRESSURE = -2;
 	interface InterfacePressure { double at(int face, int gasCell); }
-	record Result(LiquidControlVolumeViscosity.Result viscosity, LiquidControlVolumeProjection.Result pressure,
-			LiquidInterfaceVelocityExtension.Result extension, LiquidControlVolumeVelocity.Result[] velocity) { }
+	static final class Result {
+		private final LiquidControlVolumeViscosity.Result viscosity;
+		private final LiquidControlVolumeProjection.Result pressure;
+		private final LiquidInterfaceVelocityExtension.Result extension;
+		private final LiquidControlVolumeMesh mesh;
+		private final int[] liquid;
+		private final FluidSolverConfig.WallCondition wall;
+		private LiquidControlVolumeVelocity.Result[] velocity;
+		private LiquidConformingVelocity conforming;
+		Result(LiquidControlVolumeViscosity.Result viscosity, LiquidControlVolumeProjection.Result pressure,
+				LiquidInterfaceVelocityExtension.Result extension, LiquidControlVolumeMesh mesh, int[] liquid, FluidSolverConfig.WallCondition wall) {
+			this.viscosity = viscosity; this.pressure = pressure; this.extension = extension; this.mesh = mesh; this.liquid = liquid; this.wall = wall;
+		}
+		LiquidControlVolumeViscosity.Result viscosity() { return viscosity; }
+		LiquidControlVolumeProjection.Result pressure() { return pressure; }
+		LiquidInterfaceVelocityExtension.Result extension() { return extension; }
+		LiquidControlVolumeVelocity.Result[] velocity() {
+			if (velocity == null) velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extension.volumeRate(), extension.cellVelocity()); return velocity;
+		}
+		LiquidConformingVelocity conformingVelocity() {
+			if (conforming == null) conforming = new LiquidConformingVelocity(mesh, extension.volumeRate(), extension.cellVelocity(), liquid, wall); return conforming;
+		}
+	}
 	private final LiquidControlVolumeMesh mesh;
 	private final int[] liquid, liquidCells, faceIds, faceSigns;
 	private final LiquidControlVolumeProjection projection;
 	private final LiquidControlVolumeViscosity viscosity;
+	private final FluidSolverConfig.WallCondition wall;
 
 	LiquidPhaseMechanics(LiquidControlVolumeMesh mesh, int[] liquid, double[] density, double[] dynamicViscosity,
 			List<LiquidControlVolumeProjection.GasNode> gasNodes, int[] gasCellNode, InterfacePressure pressure,
@@ -29,6 +51,7 @@ final class LiquidPhaseMechanics {
 		if (liquid.length != count || density.length != count || dynamicViscosity.length != count || gasCellNode.length != count || pressure == null || pressureJump.length != mesh.faces.size())
 			throw new IllegalArgumentException("Incomplete phase mechanics properties");
 		this.mesh = mesh; this.liquid = liquid.clone();
+		this.wall = wall;
 		requireGasNodes(mesh, liquid, gasCellNode, gasNodes.size());
 		var cells = new ArrayList<LiquidControlVolumeProjection.Cell>(); var compact = new int[count]; Arrays.fill(compact, -1);
 		liquidCells = java.util.stream.IntStream.range(0, count).filter(c -> liquid[c] >= 0).toArray(); var coefficients = new double[liquidCells.length];
@@ -90,6 +113,6 @@ final class LiquidPhaseMechanics {
 		for (int c = 0; c < liquidCells.length; c++) System.arraycopy(projected.cellVelocity(), 3 * c, primary, 3 * liquidCells[c], 3);
 		for (int f = 0; f < faceIds.length; f++) rates[faceIds[f]] = faceSigns[f] > 0 ? projected.volumeRate()[f] : projected.volumeRate()[f].negate();
 		var extended = LiquidInterfaceVelocityExtension.extend(mesh, liquid, rates, primary, continuityTolerance, maximumIterations);
-		return new Result(viscous, projected, extended, LiquidControlVolumeVelocity.reconstruct(mesh, extended.volumeRate(), extended.cellVelocity()));
+		return new Result(viscous, projected, extended, mesh, liquid, wall);
 	}
 }

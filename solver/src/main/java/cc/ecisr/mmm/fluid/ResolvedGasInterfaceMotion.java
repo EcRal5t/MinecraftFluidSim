@@ -22,9 +22,13 @@ final class ResolvedGasInterfaceMotion {
 		private final GasGeometryState previous;
 		private final ArrayList<Patch> patches = new ArrayList<>();
 		Builder(LiquidGeometryPhaseInput input, GasGeometryState previous, int maximumPieces, int maximumPairs) {
+			this(ResolvedGasGeometry.match(previous, input, maximumPairs), maximumPieces);
+		}
+		Builder(ResolvedGasGeometry.Match match, int maximumPieces) {
+			var input = match.input(); var previous = match.saved();
 			if (previous == null || maximumPieces < 1) throw new IllegalArgumentException("Incomplete resolved gas contact labels");
 			this.input = input; this.previous = previous; this.maximumPieces = maximumPieces;
-			previousNodes = ResolvedGasGeometry.requireCompatible(previous, input, maximumPairs);
+			previousNodes = match.nodes();
 		}
 		void requireInput(LiquidControlVolumeMesh mesh, int[] fragments) {
 			if (mesh != input.mesh || !java.util.Arrays.equals(fragments, input.fragments))
@@ -42,6 +46,19 @@ final class ResolvedGasInterfaceMotion {
 			}
 		}
 		ResolvedGasInterfaceMotion finish() { return new ResolvedGasInterfaceMotion(previous, patches); }
+		void collect(LiquidConformingTransport motion) {
+			if (motion.mesh != input.mesh || !java.util.Arrays.equals(motion.liquid, input.fragments))
+				throw new IllegalArgumentException("Continuous gas transport refers to another phase input");
+			for (var image : motion.images) {
+				int c = image.cell(), f = image.face(); var face = input.mesh.faces.get(f);
+				if (input.fragments[c] < 0) throw new IllegalArgumentException("Continuous gas surface requires liquid support");
+				int neighbor = face.first() == c ? face.second() : face.first();
+				if (neighbor == -2 || neighbor >= 0 && input.fragments[neighbor] >= 0) continue;
+				int node = neighbor < 0 ? 0 : previousNodes[neighbor];
+				if (patches.size() == maximumPieces) throw new IllegalStateException("Gas interface motion exceeds its surface budget");
+				patches.add(new Patch(node, image.geometry().faces().getFirst()));
+			}
+		}
 	}
 
 	private static void collect(ArrayList<Patch> patches, int node, LiquidExactPolygon surface,

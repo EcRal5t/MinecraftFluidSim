@@ -10,6 +10,20 @@ import java.util.HashMap;
 
 /** Derives chambers from the same complete shared faces used by pressure and interface motion. */
 final class ResolvedGasGeometry {
+	/** Admission binds saved chamber labels to one exact phase input. */
+	static final class Match {
+		private final GasGeometryState saved;
+		private final LiquidGeometryPhaseInput input;
+		private final int[] nodes;
+		private Match(GasGeometryState saved, LiquidGeometryPhaseInput input, int[] nodes) { this.saved = saved; this.input = input; this.nodes = nodes.clone(); }
+		GasGeometryState saved() { return saved; }
+		LiquidGeometryPhaseInput input() { return input; }
+		int[] nodes() { return nodes.clone(); }
+	}
+	static Match match(GasGeometryState saved, LiquidGeometryPhaseInput input, int maximumPairs) {
+		if (saved == null || input == null) throw new IllegalArgumentException("Incomplete resolved gas admission");
+		return new Match(saved, input, requireCompatible(saved, input, maximumPairs));
+	}
 	final GasGeometryState state;
 	/** Liquid regions have -1; ambient gas has 0; finite gas nodes have positive ordinals. */
 	final int[] phaseNodes;
@@ -35,7 +49,10 @@ final class ResolvedGasGeometry {
 			cells.add(packed.get(original)); labels[c] = node; phaseNodes[phase] = node;
 		}
 		state = new GasGeometryState(input.rootWidthMetres, cells, labels, nodes.size(), input.sealedExterior);
-		volumes = volumes(state);
+		volumes = new Fraction[nodes.size() + 1]; Arrays.fill(volumes, Fraction.ZERO);
+		for (int c = 0; c < order.size(); c++) {
+			int phase = phases.get(order.get(c)); volumes[labels[c]] = volumes[labels[c]].add(input.mesh.cells.get(phase).geometry().measure().volume());
+		}
 	}
 
 	static Fraction[] volumes(GasGeometryState state) {

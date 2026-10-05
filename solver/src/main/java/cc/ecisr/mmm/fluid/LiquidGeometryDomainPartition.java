@@ -41,8 +41,8 @@ final class LiquidGeometryDomainPartition {
 		}
 		compact(tree);
 		for (var cell : requested) refine(tree, cell.level(), cell.x(), cell.y(), cell.z());
-		var open = LiquidPolyhedron.box(0, 0, 0, sizeX / (double) span, sizeY / (double) span, sizeZ / (double) span);
-		var result = new ArrayList<LiquidGeometryRefinement.Cell>(); collect(tree, new LiquidGeometryRefinement.Cell(0, 0, 0, 0, open), result, maximumLeaves);
+		var extentInRoot = new double[]{sizeX / (double) span, sizeY / (double) span, sizeZ / (double) span};
+		var result = new ArrayList<LiquidGeometryRefinement.Cell>(); collect(tree, 0, 0, 0, 0, extentInRoot, result, maximumLeaves);
 		leaves = List.copyOf(result);
 	}
 	LiquidControlVolumeMesh.Boundary boundary(LiquidPolyhedron.Surface surface, boolean sealed) {
@@ -83,14 +83,15 @@ final class LiquidGeometryDomainPartition {
 		for (var child : node.children) { compact(child); solid &= child.solid; }
 		if (solid) { node.solid = true; node.children = null; }
 	}
-	private static void collect(Node node, LiquidGeometryRefinement.Cell open, ArrayList<LiquidGeometryRefinement.Cell> leaves, int maximum) {
+	private static void collect(Node node, int level, int x, int y, int z, double[] extent, ArrayList<LiquidGeometryRefinement.Cell> leaves, int maximum) {
 		if (node.solid) return;
+		double width = Math.scalb(1.0, -level), x0 = x * width, y0 = y * width, z0 = z * width;
+		if (x0 >= extent[0] || y0 >= extent[1] || z0 >= extent[2]) return;
 		if (node.children == null) {
 			if (leaves.size() == maximum) throw new IllegalStateException("Open geometric domain exceeds its leaf budget");
-			leaves.add(open); return;
+			var geometry = LiquidPolyhedron.box(x0, y0, z0, Math.min(x0 + width, extent[0]), Math.min(y0 + width, extent[1]), Math.min(z0 + width, extent[2]));
+			leaves.add(new LiquidGeometryRefinement.Cell(level, x, y, z, geometry)); return;
 		}
-		for (var child : LiquidGeometryRefinement.children(open)) {
-			int s = (child.x() & 1) | (child.y() & 1) << 1 | (child.z() & 1) << 2; collect(node.children[s], child, leaves, maximum);
-		}
+		for (int s = 0; s < 8; s++) collect(node.children[s], level + 1, 2 * x + (s & 1), 2 * y + (s >>> 1 & 1), 2 * z + (s >>> 2 & 1), extent, leaves, maximum);
 	}
 }

@@ -8,6 +8,20 @@ import java.util.List;
 
 /** Preserves the complete interface geometry across private backend candidates. */
 final class LiquidGeometryStateMapper {
+	private static final ThreadLocal<java.util.Map<ResolvedControlVolume, LiquidGeometryRefinement.Cell>> READ_CACHE = new ThreadLocal<>();
+	/** Validated immutable cells are reused only while one private backend request owns this scope. */
+	static final class ReadScope implements AutoCloseable {
+		private final java.util.Map<ResolvedControlVolume, LiquidGeometryRefinement.Cell> previous = READ_CACHE.get();
+		private final java.util.Map<ResolvedControlVolume, LiquidGeometryRefinement.Cell> cache = new LinkedHashMap<>(16, 0.75F, true) {
+			@Override protected boolean removeEldestEntry(java.util.Map.Entry<ResolvedControlVolume, LiquidGeometryRefinement.Cell> eldest) { return size() > 65_536; }
+		};
+		private ReadScope() { READ_CACHE.set(cache); }
+		@Override public void close() {
+			if (READ_CACHE.get() != cache) throw new IllegalStateException("Geometric read scope closed out of order");
+			if (previous == null) READ_CACHE.remove(); else READ_CACHE.set(previous);
+		}
+	}
+	static ReadScope openReadScope() { return new ReadScope(); }
 	private LiquidGeometryStateMapper() { }
 
 	static LiquidGeometryState capture(List<LiquidGeometryRefinement.Cell> cells, double rootWidth, int[] markerCells) {
@@ -71,8 +85,9 @@ final class LiquidGeometryStateMapper {
 		return restoreCells(state.cells());
 	}
 	static List<LiquidGeometryRefinement.Cell> restoreCells(List<ResolvedControlVolume> packed) {
-		var result = new ArrayList<LiquidGeometryRefinement.Cell>();
+		var result = new ArrayList<LiquidGeometryRefinement.Cell>(); var cache = READ_CACHE.get();
 		for (var cell : packed) {
+			var cached = cache == null ? null : cache.get(cell); if (cached != null) { result.add(cached); continue; }
 			var xyz = cell.copyVertices(); int[] offsets = cell.copyFaceOffsets(), indices = cell.copyFaceVertices();
 			var vertices = new ArrayList<LiquidExactPolygon.Vertex>();
 			for (int v = 0; v < xyz.length; v += 4) vertices.add(new LiquidExactPolygon.Vertex(xyz[v], xyz[v + 1], xyz[v + 2], xyz[v + 3]));
@@ -96,8 +111,9 @@ final class LiquidGeometryStateMapper {
 					throw new IllegalArgumentException("Liquid geometry surface is open or non-manifold");
 			}
 			var geometry = LiquidPolyhedron.restoredExact(faces);
-			if (LiquidExactPolygon.measure(faces).signum() <= 0) throw new IllegalArgumentException("Liquid geometry has no volume");
-			result.add(new LiquidGeometryRefinement.Cell(cell.level(), cell.x(), cell.y(), cell.z(), geometry));
+			if (geometry.measure().signum() <= 0) throw new IllegalArgumentException("Liquid geometry has no volume");
+			var restored = new LiquidGeometryRefinement.Cell(cell.level(), cell.x(), cell.y(), cell.z(), geometry);
+			result.add(restored); if (cache != null) cache.put(cell, restored);
 		}
 		var leaves = new java.util.LinkedHashMap<LiquidPhasePartition.Address, LiquidGeometryRefinement.Cell>();
 		for (var cell : result) leaves.putIfAbsent(LiquidPhasePartition.Address.of(cell), cell);

@@ -9,11 +9,38 @@ final class LiquidCharacteristicValidation {
 	static void validate() {
 		productionGeometryPipelinePreservesGravity();
 		productionGeometryPipelineRefinesGasSupport();
+		productionGeometryPipelinePreservesContinuousShear();
 		repeatedGravityPreservesUniformCharacteristic();
 		wholeVolumeCharacteristicsPreserveGeometry();
 		mixedVelocitySupportSurvivesNextStep();
 		thinLiquidLayerPreservesSeparateGasPressureNodes();
 		movingLiquidWallTransportsItsGasContacts();
+	}
+	private static void productionGeometryPipelinePreservesContinuousShear() { productionGeometryPipelinePreservesContinuousShear(2, false); }
+	private static void productionGeometryPipelinePreservesContinuousShear(int level, boolean timing) {
+		var shape = LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75);
+		List<LiquidGeometryRefinement.Cell> cells = List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape));
+		for (int l = 0; l < level; l++) cells = cells.stream().flatMap(c -> LiquidGeometryRefinement.children(c).stream()).toList();
+		var incoming = new double[3 * cells.size()]; for (int c = 0; c < cells.size(); c++) incoming[3 * c] = 0.125 * (cells.get(c).geometry().centroid().y() - 0.5);
+		var state = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0}, new int[cells.size()], incoming);
+		var config = new FluidSolverConfig(0.5F, 1000, 0, 1.0F / 128, 512, 1e-7F, 0.45F, 0.002F, 0.8F);
+		var domain = new FluidDomain(2, 2, 2, config);
+		domain.restoreParticleState(new FlipParticleState(2, 2, 2, 0.5F, 1, 1,
+				new float[]{0.5F, 0.5F, 0.5F, 1}, new float[3], new byte[8], state)); domain.bootstrapGasState("");
+		double kinetic = domain.particleKineticEnergyJoules();
+		long started = System.nanoTime();
+		var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, domain.captureAuthoritativeState(), List.of(), false, 0, true));
+		double millis = (System.nanoTime() - started) / 1e6;
+		var restored = timing ? candidate.claimPreparedCpuDomain() : FluidDomain.restoreAuthoritativeState(candidate.state());
+		if (timing) System.out.println("resolved shear level=" + level + " inputLiquidFragments=" + cells.size() + " fullBackendMillis=" + millis + " outputLiquidFragments=" + restored.liquidGeometryState.cells().size());
+		var expected = LiquidConvexRegion.of(shape.transformed(new double[]{1, 0.125 * config.timeStep(), 0, 0, 1, 0, 0, 0, 1},
+				new LiquidPolyhedron.Point(0.5, 0.5, 0.5), new LiquidPolyhedron.Point(0, 0, 0)));
+		for (var cell : LiquidGeometryStateMapper.restore(restored.liquidGeometryState)) {
+			var actual = LiquidConvexRegion.of(cell.geometry()); var inside = actual;
+			for (var face : expected.faces()) inside = inside.clip(face.plane());
+			if (!inside.measure().isVolume(actual.measure())) throw new AssertionError("Production continuous shear created staircase exterior geometry");
+		}
+		close(restored.particleKineticEnergyJoules(), kinetic, 1e-17);
 	}
 	private static void productionGeometryPipelineRefinesGasSupport() {
 		var sheet = new LiquidGeometryRefinement.Cell(1, 0, 0, 0,
@@ -294,5 +321,11 @@ final class LiquidCharacteristicValidation {
 	private static void close(double actual, double expected, double tolerance) {
 		if (!(Math.abs(actual - expected) <= tolerance)) throw new AssertionError(actual + " differs from " + expected);
 	}
-	public static void main(String[] args) { validate(); }
+	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("conforming-timing")) {
+			productionGeometryPipelinePreservesContinuousShear(2, true);
+			productionGeometryPipelinePreservesContinuousShear(2, true);
+			productionGeometryPipelinePreservesContinuousShear(3, true);
+		} else validate();
+	}
 }
