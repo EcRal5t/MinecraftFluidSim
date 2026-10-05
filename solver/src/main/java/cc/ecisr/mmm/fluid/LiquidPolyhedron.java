@@ -8,10 +8,7 @@ final class LiquidPolyhedron {
 	static final LiquidPolyhedron EMPTY = new LiquidPolyhedron(List.of(), List.of());
 	private volatile Point centroid;
 	Point centroid() {
-		var value = centroid; if (value == null) value = centroid(LiquidExactPolygon.faces(this)); return value;
-	}
-	Point centroid(List<LiquidExactPolygon> faces) {
-		var value = centroid; if (value == null) centroid = value = LiquidExactPolygon.volumeCentroid(faces); return value;
+		var value = centroid; if (value == null) centroid = value = measure().centroid(); return value;
 	}
 	record Point(double x, double y, double z) {
 		Point {

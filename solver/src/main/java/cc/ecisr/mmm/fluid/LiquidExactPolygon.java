@@ -34,6 +34,9 @@ final class LiquidExactPolygon {
 	}
 	private final List<Vertex> vertices;
 	private volatile Vertex centroidVertex;
+	private volatile List<BigInteger> planeCoefficients;
+	private volatile List<Fraction> integratedArea;
+	private volatile LiquidGeometryPlane supportingPlane;
 	static final class Fraction {
 		private final BigInteger numerator, denominator;
 		static final Fraction ZERO = new Fraction(BigInteger.ZERO, BigInteger.ONE);
@@ -112,12 +115,12 @@ final class LiquidExactPolygon {
 			return centroidVertex = vertex(result);
 		}
 		int axis = 0; while (normal.get(axis).signum() == 0) axis++;
-		var zero = new Fraction(BigInteger.ZERO, BigInteger.ONE); var weight = zero; Fraction[] moment = {zero, zero, zero}; var a = vertices.getFirst();
+		var zero = Fraction.ZERO; var weight = zero; Fraction[] moment = {zero, zero, zero}; var a = vertices.getFirst().coordinates();
 		for (int i = 1; i + 1 < vertices.size(); i++) {
-			var b = vertices.get(i); var c = vertices.get(i + 1); var cross = cross(difference(b, a), difference(c, a));
-			var area = new Fraction(cross.get(axis), a.w.multiply(a.w).multiply(b.w).multiply(c.w)); weight = weight.add(area);
+			var b = vertices.get(i).coordinates(); var c = vertices.get(i + 1).coordinates();
+			var area = triangleCross(a, b, c)[axis]; weight = weight.add(area);
 			for (int coordinate = 0; coordinate < 3; coordinate++) {
-				var sum = new Fraction(a.coordinate(coordinate), a.w).add(new Fraction(b.coordinate(coordinate), b.w)).add(new Fraction(c.coordinate(coordinate), c.w));
+				var sum = a[coordinate].add(b[coordinate]).add(c[coordinate]);
 				moment[coordinate] = moment[coordinate].add(area.multiply(sum).multiply(new Fraction(BigInteger.ONE, BigInteger.valueOf(3))));
 			}
 		}
@@ -165,19 +168,26 @@ final class LiquidExactPolygon {
 		return new Measure(volume, moment);
 	}
 	Fraction[] areaVector() {
-		var result = new Fraction[] {Fraction.of(0), Fraction.of(0), Fraction.of(0)}; var origin = vertices.getFirst();
+		var cached = integratedArea; if (cached != null) return cached.toArray(Fraction[]::new);
+		var result = new Fraction[] {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var origin = vertices.getFirst().coordinates();
 		for (int i = 1; i + 1 < vertices.size(); i++) {
-			var b = vertices.get(i); var c = vertices.get(i + 1); var vector = cross(difference(b, origin), difference(c, origin));
-			var denominator = origin.w.multiply(origin.w).multiply(b.w).multiply(c.w).multiply(BigInteger.TWO);
-			for (int a = 0; a < 3; a++) result[a] = result[a].add(new Fraction(vector.get(a), denominator));
+			var vector = triangleCross(origin, vertices.get(i).coordinates(), vertices.get(i + 1).coordinates());
+			for (int a = 0; a < 3; a++) result[a] = result[a].add(vector[a].divide(Fraction.of(2)));
 		}
+		integratedArea = List.of(result);
+		return result;
+	}
+	private static Fraction[] triangleCross(Fraction[] origin, Fraction[] b, Fraction[] c) {
+		var u = new Fraction[3]; var v = new Fraction[3]; var result = new Fraction[3];
+		for (int a = 0; a < 3; a++) { u[a] = b[a].subtract(origin[a]); v[a] = c[a].subtract(origin[a]); }
+		// Reduce edge fractions before cross products instead of multiplying homogeneous denominators.
+		for (int a = 0; a < 3; a++) result[a] = u[(a + 1) % 3].multiply(v[(a + 2) % 3]).subtract(u[(a + 2) % 3].multiply(v[(a + 1) % 3]));
 		return result;
 	}
 	LiquidPolyhedron.Surface surface() {
 		var vector = areaVector(); var n = new LiquidPolyhedron.Point(vector[0].rounded(), vector[1].rounded(), vector[2].rounded());
 		return new LiquidPolyhedron.Surface(Math.hypot(Math.hypot(n.x(), n.y()), n.z()), n, centroid());
 	}
-	static LiquidPolyhedron.Point volumeCentroid(List<LiquidExactPolygon> faces) { return measure(faces).centroid(); }
 	static final class Measure {
 		private final Fraction volume; private final Fraction[] moment;
 		Measure(Fraction volume, Fraction[] moment) { this.volume = volume; this.moment = moment; }
@@ -206,19 +216,18 @@ final class LiquidExactPolygon {
 		}
 	}
 	static Measure measure(List<LiquidExactPolygon> faces) {
-		var zero = new Fraction(BigInteger.ZERO, BigInteger.ONE); var volume = zero; Fraction[] moment = {zero, zero, zero};
+		var volume = Fraction.ZERO; Fraction[] moment = {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
 		for (var face : faces) {
-			if (!face.hasArea()) continue; var a = face.vertices.getFirst();
-			for (int i = 1; i + 1 < face.vertices.size(); i++) {
-				var b = face.vertices.get(i); var c = face.vertices.get(i + 1); var cross = cross(List.of(b.x, b.y, b.z), List.of(c.x, c.y, c.z));
-				var determinant = a.x.multiply(cross.get(0)).add(a.y.multiply(cross.get(1))).add(a.z.multiply(cross.get(2)));
-				var tetra = new Fraction(determinant, a.w.multiply(b.w).multiply(c.w).multiply(BigInteger.valueOf(6))); volume = volume.add(tetra);
-				for (int coordinate = 0; coordinate < 3; coordinate++) {
-					var sum = new Fraction(a.coordinate(coordinate), a.w).add(new Fraction(b.coordinate(coordinate), b.w)).add(new Fraction(c.coordinate(coordinate), c.w));
-					moment[coordinate] = moment[coordinate].add(tetra.multiply(sum).multiply(new Fraction(BigInteger.ONE, BigInteger.valueOf(4))));
-				}
-			}
+			if (!face.hasArea()) continue;
+			var plane = face.coefficients(); int axis = 0; while (plane.get(axis).signum() == 0) axis++;
+			// On a planar face, r dot dA = offset / normal[axis] * dA[axis].
+			// Divergence of r is 3; divergence of x_i r is 4 x_i.
+			var contribution = face.areaVector()[axis].multiply(new Fraction(plane.get(3), plane.get(axis)));
+			if (contribution.signum() == 0) continue;
+			volume = volume.add(contribution); var center = face.centroidCoordinates();
+			for (int a = 0; a < 3; a++) moment[a] = moment[a].add(contribution.multiply(center[a]));
 		}
+		volume = volume.divide(Fraction.of(3)); for (int a = 0; a < 3; a++) moment[a] = moment[a].divide(Fraction.of(4));
 		return new Measure(volume, moment);
 	}
 	boolean hasArea() {
@@ -362,15 +371,16 @@ final class LiquidExactPolygon {
 	}
 	boolean inside(List<BigInteger> plane) { return vertices.stream().allMatch(v -> v.distance(plane).signum() <= 0); }
 	List<BigInteger> coefficients() {
+		var cached = planeCoefficients; if (cached != null) return cached;
 		var a = vertices.getFirst(); var coefficients = new ArrayList<BigInteger>();
 		for (int axis = 0; axis < 3; axis++) coefficients.add(normal.get(axis).multiply(a.w));
 		coefficients.add(normal.get(0).multiply(a.x).add(normal.get(1).multiply(a.y)).add(normal.get(2).multiply(a.z)));
 		var divisor = BigInteger.ZERO; for (var value : coefficients) divisor = divisor.gcd(value.abs());
 		for (int i = 0; i < 4; i++) coefficients.set(i, coefficients.get(i).divide(divisor));
-		return List.copyOf(coefficients);
+		return planeCoefficients = List.copyOf(coefficients);
 	}
 	LiquidGeometryPlane plane() {
-		return LiquidGeometryPlane.exact(coefficients());
+		var cached = supportingPlane; if (cached == null) supportingPlane = cached = LiquidGeometryPlane.exact(coefficients()); return cached;
 	}
 	LiquidExactPolygon transformed(List<Fraction> map) {
 		var output = new ArrayList<Vertex>();
@@ -438,7 +448,11 @@ final class LiquidExactPolygon {
 			if (after.signum() * (reverse ? -1 : 1) <= 0) output.add(current);
 			previous = current; before = after;
 		}
-		return new LiquidExactPolygon(output, normal);
+		var result = new LiquidExactPolygon(output, normal);
+		// Clipping changes the finite polygon and preserves its original supporting plane exactly.
+		result.planeCoefficients = coefficients();
+		result.supportingPlane = plane();
+		return result;
 	}
 	private static Vertex intersect(List<BigInteger> a, List<BigInteger> b, List<BigInteger> c) {
 		var bc = cross(b, c); var ca = cross(c, a); var ab = cross(a, b);

@@ -45,7 +45,7 @@ final class LiquidControlVolumeMesh {
 			var leaf = leaves.get(c);
 			var geometry = leaf.geometry().scaled(physicalWidth);
 			var exactFaces = LiquidExactPolygon.faces(geometry);
-			geometry.centroid(exactFaces);
+			geometry.centroid();
 			cells.add(new LiquidControlVolumeProjection.Cell(geometry, density));
 			for (int f = 0; f < geometry.faces().size(); f++) {
 				var exact = exactFaces.get(f); if (!exact.hasArea()) continue;

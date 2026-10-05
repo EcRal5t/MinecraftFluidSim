@@ -40,7 +40,7 @@ final class LiquidGasPartition {
 				}
 				continue;
 			}
-			var plane = current.surfaces.getFirst().plane();
+			var plane = partitionPlane(current.surfaces);
 			for (var side : List.of(plane, plane.opposite())) {
 				// Strictly retained and discarded vertices prove positive volume before any integration.
 				var piece = LiquidExactPolygon.clipVolume(current.geometry, side); if (piece.isEmpty()) continue;
@@ -52,6 +52,25 @@ final class LiquidGasPartition {
 			}
 		}
 		return List.copyOf(gas);
+	}
+	private static LiquidGeometryPlane partitionPlane(List<LiquidExactPolygon> surfaces) {
+		var planes = new java.util.LinkedHashMap<LiquidGeometryPlane.Key, LiquidGeometryPlane>();
+		for (var surface : surfaces) { var plane = surface.plane(); planes.putIfAbsent(plane.key(), plane); }
+		LiquidGeometryPlane best = null; int leastSplits = Integer.MAX_VALUE, leastSide = Integer.MAX_VALUE;
+		for (var plane : planes.values()) {
+			int splits = 0, front = 0, back = 0;
+			for (var surface : surfaces) {
+				boolean positive = false, negative = false;
+				for (var point : surface.vertices()) {
+					int sign = point.distance(plane.key().coefficients()).signum(); positive |= sign > 0; negative |= sign < 0;
+				}
+				if (positive) front++; if (negative) back++; if (positive && negative) splits++;
+				if (splits > leastSplits) break;
+			}
+			int side = Math.max(front, back);
+			if (splits < leastSplits || splits == leastSplits && side < leastSide) { best = plane; leastSplits = splits; leastSide = side; }
+		}
+		return best;
 	}
 	private static List<LiquidExactPolygon> exterior(List<LiquidGeometryRefinement.Cell> liquids) {
 		var positive = new java.util.LinkedHashMap<LiquidGeometryPlane.Key, ArrayList<Face>>();

@@ -8,13 +8,23 @@ import java.util.List;
 
 /** Preserves the complete interface geometry across private backend candidates. */
 final class LiquidGeometryStateMapper {
-	private static final ThreadLocal<java.util.Map<ResolvedControlVolume, LiquidGeometryRefinement.Cell>> READ_CACHE = new ThreadLocal<>();
-	/** Validated immutable cells are reused only while one private backend request owns this scope. */
-	static final class ReadScope implements AutoCloseable {
-		private final java.util.Map<ResolvedControlVolume, LiquidGeometryRefinement.Cell> previous = READ_CACHE.get();
-		private final java.util.Map<ResolvedControlVolume, LiquidGeometryRefinement.Cell> cache = new LinkedHashMap<>(16, 0.75F, true) {
+	private static final class ReadCache {
+		final java.util.Map<ResolvedControlVolume, LiquidGeometryRefinement.Cell> cells = new LinkedHashMap<>(16, 0.75F, true) {
 			@Override protected boolean removeEldestEntry(java.util.Map.Entry<ResolvedControlVolume, LiquidGeometryRefinement.Cell> eldest) { return size() > 65_536; }
 		};
+		final LinkedHashMap<List<ResolvedControlVolume>, List<LiquidGeometryRefinement.Cell>> validated = new LinkedHashMap<>(16, 0.75F, true);
+		int retained;
+		void remember(List<ResolvedControlVolume> packed, List<LiquidGeometryRefinement.Cell> restored) {
+			if (packed.size() > 65_536) return;
+			validated.put(List.copyOf(packed), restored); retained += packed.size();
+			while (retained > 65_536) { var oldest = validated.pollFirstEntry(); retained -= oldest.getKey().size(); }
+		}
+	}
+	private static final ThreadLocal<ReadCache> READ_CACHE = new ThreadLocal<>();
+	/** Immutable cells and complete disjointness proofs are reused within one private request. */
+	static final class ReadScope implements AutoCloseable {
+		private final ReadCache previous = READ_CACHE.get();
+		private final ReadCache cache = new ReadCache();
 		private ReadScope() { READ_CACHE.set(cache); }
 		@Override public void close() {
 			if (READ_CACHE.get() != cache) throw new IllegalStateException("Geometric read scope closed out of order");
@@ -86,8 +96,9 @@ final class LiquidGeometryStateMapper {
 	}
 	static List<LiquidGeometryRefinement.Cell> restoreCells(List<ResolvedControlVolume> packed) {
 		var result = new ArrayList<LiquidGeometryRefinement.Cell>(); var cache = READ_CACHE.get();
+		if (cache != null) { var validated = cache.validated.get(packed); if (validated != null) return validated; }
 		for (var cell : packed) {
-			var cached = cache == null ? null : cache.get(cell); if (cached != null) { result.add(cached); continue; }
+			var cached = cache == null ? null : cache.cells.get(cell); if (cached != null) { result.add(cached); continue; }
 			var xyz = cell.copyVertices(); int[] offsets = cell.copyFaceOffsets(), indices = cell.copyFaceVertices();
 			var vertices = new ArrayList<LiquidExactPolygon.Vertex>();
 			for (int v = 0; v < xyz.length; v += 4) vertices.add(new LiquidExactPolygon.Vertex(xyz[v], xyz[v + 1], xyz[v + 2], xyz[v + 3]));
@@ -113,11 +124,12 @@ final class LiquidGeometryStateMapper {
 			var geometry = LiquidPolyhedron.restoredExact(faces);
 			if (geometry.measure().signum() <= 0) throw new IllegalArgumentException("Liquid geometry has no volume");
 			var restored = new LiquidGeometryRefinement.Cell(cell.level(), cell.x(), cell.y(), cell.z(), geometry);
-			result.add(restored); if (cache != null) cache.put(cell, restored);
+			result.add(restored); if (cache != null) cache.cells.put(cell, restored);
 		}
 		var leaves = new java.util.LinkedHashMap<LiquidPhasePartition.Address, LiquidGeometryRefinement.Cell>();
 		for (var cell : result) leaves.putIfAbsent(LiquidPhasePartition.Address.of(cell), cell);
-		new LiquidGeometryRemap(new ArrayList<>(leaves.values())); LiquidPhasePartition.requireDisjoint(result); return List.copyOf(result);
+		new LiquidGeometryRemap(new ArrayList<>(leaves.values())); LiquidPhasePartition.requireDisjoint(result);
+		var validated = List.copyOf(result); if (cache != null) cache.remember(packed, validated); return validated;
 	}
 
 	static void requireCompatible(LiquidGeometryState state, FluidDomain domain) {

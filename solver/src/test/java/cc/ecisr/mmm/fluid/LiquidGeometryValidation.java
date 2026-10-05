@@ -6,6 +6,13 @@ final class LiquidGeometryValidation {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
 		moments(cube.moments(), 1, 0.5, 0.5, 0.5);
 		moments(cube.clip(1, 1, 1, 1).moments(), 1.0 / 6, 1.0 / 24, 1.0 / 24, 1.0 / 24);
+		for (double shift : new double[]{0, 0.125}) {
+			var points = java.util.List.of(new LiquidPolyhedron.Point(shift + 0.125, 0.25, 0.375), new LiquidPolyhedron.Point(shift + 0.75, 0.375, 0.25),
+					new LiquidPolyhedron.Point(shift + 0.375, 0.875, 0.25), new LiquidPolyhedron.Point(shift + 0.25, 0.5, 0.875));
+			var vertices = points.stream().map(p -> LiquidExactPolygon.vertex(new LiquidExactPolygon.Fraction[]{LiquidExactPolygon.Fraction.of(p.x()), LiquidExactPolygon.Fraction.of(p.y()), LiquidExactPolygon.Fraction.of(p.z())})).toList();
+			if (!LiquidExactPolygon.measure(LiquidExactPolygon.tetrahedron(vertices)).same(LiquidExactPolygon.tetrahedronMeasure(vertices)))
+				throw new AssertionError("Planar surface integration differs from independent tetrahedron volume and centroid");
+		}
 		for (double[] plane : new double[][] {{1, 0, 0, 0.25}, {1, 1, 1, 1.2}, {-2, 3, 1, 0.7}, {1, 1, 0, 1}, {0, 1, 0, 0}}) {
 			var region = LiquidConvexRegion.of(cube); var cutter = new LiquidGeometryPlane(new LiquidPolyhedron.Point(plane[0], plane[1], plane[2]), plane[3]);
 			if (!region.measure().isSum(region.clip(cutter).measure(), region.clip(cutter.opposite()).measure()))
@@ -27,7 +34,16 @@ final class LiquidGeometryValidation {
 				for (var cell : cells) next.addAll(LiquidGeometryRefinement.children(cell));
 				cells = java.util.List.copyOf(next);
 				var sum = LiquidPolyhedron.Moments.ZERO;
-				for (var cell : cells) sum = sum.add(cell.moments());
+				var exact = LiquidConvexRegion.EMPTY.measure();
+				for (var cell : cells) {
+					sum = sum.add(cell.moments()); exact = exact.add(cell.geometry().measure());
+					for (var face : LiquidExactPolygon.faces(cell.geometry())) for (var vertex : face.vertices()) for (int axis = 0; axis < 3; axis++) {
+						var coordinate = vertex.coordinates()[axis]; var lo = LiquidExactPolygon.Fraction.of(cell.minimum(axis));
+						if (coordinate.subtract(lo).signum() < 0 || coordinate.subtract(lo.add(LiquidExactPolygon.Fraction.of(cell.width()))).signum() > 0)
+							throw new AssertionError("Refined geometry leaves its dyadic cell");
+					}
+				}
+				if (!exact.same(liquid.measure())) throw new AssertionError("Refinement lost exact volume or first moments");
 				moments(sum, original.volume(), original.x(), original.y(), original.z());
 				int[] owners = java.util.stream.IntStream.range(0, cells.size()).toArray();
 				var restored = LiquidGeometryStateMapper.restore(LiquidGeometryStateMapper.capture(cells, 1, owners));
@@ -522,6 +538,17 @@ final class LiquidGeometryValidation {
 		var vertices = copied.liquidGeometryState.cells().getFirst().copyVertices(); var original = vertices[0]; vertices[0] = java.math.BigInteger.ZERO;
 		if (!copied.liquidGeometryState.cells().getFirst().copyVertices()[0].equals(original))
 			throw new AssertionError("Liquid geometry snapshot exposed mutable vertices");
+		try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
+			var input = new java.util.ArrayList<>(copied.liquidGeometryState.cells());
+			LiquidGeometryStateMapper.restoreCells(input);
+			input.add(input.getFirst());
+			try {
+				LiquidGeometryStateMapper.restoreCells(input);
+				throw new AssertionError("A prior geometry proof admitted newly overlapping fragments");
+			} catch (IllegalArgumentException expected) { }
+			input.removeLast();
+			moments(LiquidGeometryStateMapper.restoreCells(input).getFirst().moments(), geometry.moments().volume(), geometry.moments().x(), geometry.moments().y(), geometry.moments().z());
+		}
 		var incompatible = LiquidGeometryStateMapper.capture(cells, width / 2, markerCells);
 		try {
 			LiquidGeometryStateMapper.requireCompatible(incompatible, domain);
