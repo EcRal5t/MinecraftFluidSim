@@ -24,8 +24,104 @@ final class LiquidControlVolumeValidation {
 		conservativeCoordinatesPreserveConstraintsAndVirtualWork();
 		pressureReferencePreservesSmallResolvedForces();
 		interfacePressureJumpPreservesGasPressure();
+		internalInterfacePressureJumpPreservesEquilibriumAndWork();
+		polygonSurfaceEnergyPreservesGeometricInvariants();
+		obliqueSurfaceEnergyPreservesVirtualWork();
+		variableSurfaceEnergyRetainsTangentialForce();
 		LiquidCharacteristicValidation.validate();
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
+	}
+	private static void variableSurfaceEnergyRetainsTangentialForce() {
+		var cells = List.of(new LiquidGeometryRefinement.Cell(1, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5)),
+				new LiquidGeometryRefinement.Cell(1, 1, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 0.5, 0.5)));
+		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		double[] sigma = new double[mesh.faces.size()];
+		for (int f = 0; f < sigma.length; f++) if (mesh.faces.get(f).surface().areaVector().y() > 0) sigma[f] = mesh.faces.get(f).first() == 0 ? 0.125 : 0.25;
+		var energy = new LiquidSurfaceEnergy(mesh, sigma); boolean sharedForce = false;
+		for (var node : energy.tangentialForce.entrySet()) {
+			var position = node.getKey().rounded();
+			if (position.x() == 0.5 && position.y() == 0.5) {
+				if (!(node.getValue().getFirst().signum() > 0)) throw new AssertionError("Surface coefficient gradient reversed its tangential force");
+				sharedForce = true;
+			}
+		}
+		if (!sharedForce) throw new AssertionError("Surface coefficient gradient omitted its shared vertices");
+		for (var jump : energy.pressureJump) if (jump.signum() != 0) throw new AssertionError("Planar tangential stress became curvature pressure");
+	}
+	private static void obliqueSurfaceEnergyPreservesVirtualWork() {
+		var origin = new LiquidPolyhedron.Point(0.5, 0.5, 0.5);
+		var geometry = LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75)
+				.transformed(new double[]{1, 0.25, 0, 0, 1, 0.125, 0, 0, 1}, origin, new LiquidPolyhedron.Point(0, 0, 0));
+		var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, geometry)), 1, 1000,
+				(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		double[] sigma = new double[mesh.faces.size()]; java.util.Arrays.fill(sigma, 0.125); var energy = new LiquidSurfaceEnergy(mesh, sigma);
+		var rates = new LiquidExactPolygon.Fraction[mesh.faces.size()];
+		for (int f = 0; f < rates.length; f++) rates[f] = LiquidExactPolygon.Fraction.of(Math.sin(f + 0.5));
+		var velocity = energy.vertexVelocity(rates); var pointWork = LiquidExactPolygon.Fraction.ZERO; var faceWork = pointWork;
+		for (var node : energy.force.entrySet()) for (int a = 0; a < 3; a++) pointWork = pointWork.add(node.getValue().get(a).multiply(velocity.get(node.getKey()).get(a)));
+		for (int f = 0; f < rates.length; f++) faceWork = faceWork.subtract(energy.pressureJump[f].multiply(rates[f]));
+		if (!pointWork.equals(faceWork)) throw new AssertionError("Oblique surface pressure lost exact virtual work");
+		double derivative = 0;
+		for (var node : energy.force.entrySet()) for (int a = 0; a < 3; a++)
+			derivative -= node.getValue().get(a).rounded() * (node.getKey().rounded().coordinate(a) - 0.5) * new double[]{0.125, -0.0625, -0.0625}[a];
+		double previous = Double.POSITIVE_INFINITY;
+		for (double epsilon : new double[]{1.0 / 128, 1.0 / 256}) {
+			double[] diagonal = {0.125, -0.0625, -0.0625}; double[] areas = new double[2];
+			for (int side = 0; side < 2; side++) {
+				double sign = side == 0 ? -1 : 1;
+				var transformed = geometry.transformed(new double[]{1 + sign * epsilon * diagonal[0], 0, 0, 0, 1 + sign * epsilon * diagonal[1], 0, 0, 0, 1 + sign * epsilon * diagonal[2]}, origin, new LiquidPolyhedron.Point(0, 0, 0));
+				for (var surface : transformed.surfaces()) areas[side] += 0.125 * surface.area();
+			}
+			double error = Math.abs((areas[1] - areas[0]) / (2 * epsilon) - derivative);
+			if (!(error < previous / 3)) throw new AssertionError("Area-gradient force does not converge to the geometric energy derivative");
+			previous = error;
+		}
+	}
+	private static void internalInterfacePressureJumpPreservesEquilibriumAndWork() {
+		var cells = List.of(new LiquidGeometryRefinement.Cell(1, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5)),
+				new LiquidGeometryRefinement.Cell(1, 1, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 0.5, 0.5)));
+		for (double reference : new double[]{0, 100000}) for (boolean equilibrium : new boolean[]{true, false}) {
+			var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(s.areaVector().x() == 0,
+					s.areaVector().x() == 0 ? 0 : reference + (equilibrium && c == 0 ? 64 : 0)));
+			var faces = mesh.faces.stream().map(f -> new LiquidControlVolumeProjection.Face(f.first(), f.second(), f.surface(),
+					f.second() >= 0 ? 64 : f.prescribed(), f.areaVector(), f.centroid())).toList();
+			var result = new LiquidControlVolumeProjection(mesh.cells, faces).project(new double[6], new LiquidPolyhedron.Point(0, 0, 0), 0.025, 1e-11, 128);
+			requireExactContinuity(2, faces, result);
+			if (equilibrium) {
+				close(result.pressure()[0], reference + 64, 1e-9); close(result.pressure()[1], reference, 1e-9);
+				for (var rate : result.volumeRate()) if (rate.signum() != 0) throw new AssertionError("Internal equilibrium pressure jump created flow");
+			} else {
+				double kinetic = 0, momentum = 0;
+				for (int c = 0; c < 2; c++) for (int a = 0; a < 3; a++) {
+					double mass = 1000 * mesh.cells.get(c).geometry().moments().volume(), velocity = result.cellVelocity()[3 * c + a];
+					kinetic += 0.5 * mass * velocity * velocity; if (a == 0) momentum += mass * velocity;
+				}
+				close(kinetic, result.boundaryWorkJoules() + result.internalInterfaceWorkJoules() - result.pressureDissipationJoules(), 1e-12);
+				close(momentum, result.boundaryImpulse().x() + result.internalInterfaceImpulse().x(), 1e-12);
+			}
+		}
+	}
+	private static void polygonSurfaceEnergyPreservesGeometricInvariants() {
+		var cell = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75));
+		var mesh = new LiquidControlVolumeMesh(List.of(cell), 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		double[] coefficients = new double[mesh.faces.size()]; java.util.Arrays.fill(coefficients, 0.125);
+		var energy = new LiquidSurfaceEnergy(mesh, coefficients); close(energy.joules, 0.1875, 0);
+		for (var jump : energy.pressureJump) close(jump.rounded(), 1, 0);
+		var resultant = new LiquidExactPolygon.Fraction[]{LiquidExactPolygon.Fraction.ZERO, LiquidExactPolygon.Fraction.ZERO, LiquidExactPolygon.Fraction.ZERO};
+		var torque = resultant.clone();
+		for (var node : energy.force.entrySet()) {
+			var x = node.getKey().coordinates(); var force = node.getValue();
+			for (int a = 0; a < 3; a++) {
+				resultant[a] = resultant[a].add(force.get(a));
+				torque[a] = torque[a].add(x[(a + 1) % 3].multiply(force.get((a + 2) % 3)).subtract(x[(a + 2) % 3].multiply(force.get((a + 1) % 3))));
+			}
+		}
+		for (int a = 0; a < 3; a++) if (resultant[a].signum() != 0 || torque[a].signum() != 0) throw new AssertionError("Area-gradient force lost translation or rotation invariance");
+		for (var force : energy.tangentialForce.values()) for (var component : force) if (component.signum() != 0) throw new AssertionError("Uniform surface energy acquired tangential residual");
+		var faces = new ArrayList<LiquidControlVolumeProjection.Face>();
+		for (int f = 0; f < mesh.faces.size(); f++) { var face = mesh.faces.get(f); faces.add(new LiquidControlVolumeProjection.Face(face.first(), face.second(), face.surface(), energy.pressureJump[f].rounded(), face.areaVector(), face.centroid())); }
+		var result = new LiquidControlVolumeProjection(mesh.cells, faces).project(new double[3], new LiquidPolyhedron.Point(0, 0, 0), 0.025, 1e-11, 128);
+		for (var rate : result.volumeRate()) if (rate.signum() != 0) throw new AssertionError("Constant discrete surface pressure created parasitic flow");
 	}
 	private static void interfacePressureJumpPreservesGasPressure() {
 		var geometry = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
@@ -538,5 +634,13 @@ final class LiquidControlVolumeValidation {
 	private static void close(double actual, double expected, double tolerance, String message) {
 		if (!(Math.abs(actual - expected) <= tolerance)) throw new AssertionError(message + ": actual=" + actual + " expected=" + expected);
 	}
-	public static void main(String[] args) { validate(); }
+	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("surface-energy")) {
+			internalInterfacePressureJumpPreservesEquilibriumAndWork();
+			polygonSurfaceEnergyPreservesGeometricInvariants();
+			obliqueSurfaceEnergyPreservesVirtualWork();
+			variableSurfaceEnergyRetainsTangentialForce();
+			System.out.println("Geometric surface energy and internal pressure jump validation passed");
+		} else validate();
+	}
 }

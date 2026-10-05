@@ -18,7 +18,7 @@ final class LiquidControlVolumeProjection {
 			return geometry.centroid();
 		}
 	}
-	/** second >= 0: liquid neighbor; -1: liquid-side interface pressure; -2: solid normal velocity. */
+	/** second >= 0: liquid neighbor and prescribed p_first-p_second; -1: interface pressure; -2: solid normal velocity. */
 	record Face(int first, int second, LiquidPolyhedron.Surface surface, double prescribed,
 			List<LiquidExactPolygon.Fraction> areaVector, List<LiquidExactPolygon.Fraction> centroid) {
 		Face(int first, int second, LiquidPolyhedron.Surface surface, double prescribed) {
@@ -57,7 +57,8 @@ final class LiquidControlVolumeProjection {
 			double[] gasPressure, double[] gasVolumeChange, LiquidPolyhedron.Point[] pressureGradient,
 			double[] cellVelocity, double pressureDissipationJoules, double boundaryWorkJoules,
 			LiquidPolyhedron.Point boundaryImpulse, double divergenceResidual, double divergenceRoundoffBound,
-			Fraction[] volumeRate, double[] gasPressureChange) { }
+			Fraction[] volumeRate, double[] gasPressureChange, double internalInterfaceWorkJoules,
+			LiquidPolyhedron.Point internalInterfaceImpulse) { }
 	private final ConservativeControlVolumeProjection projection;
 	LiquidControlVolumeProjection(List<Cell> cells, List<Face> faces) {
 		this(cells, faces, List.of(), fixedGasFaces(faces.size()));

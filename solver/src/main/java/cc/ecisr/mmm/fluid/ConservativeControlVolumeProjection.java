@@ -137,6 +137,10 @@ final class ConservativeControlVolumeProjection {
 				double term = dt * (face.prescribed() - reference[face.first()]); gradient[f] += term;
 				if (flowError != null) error[f] += Math.ulp(term) + Math.ulp(gradient[f]);
 			}
+			if (dt > 0 && face.second() >= 0) {
+				double term = dt * face.prescribed(); gradient[f] += term;
+				if (flowError != null) error[f] += Math.ulp(term) + Math.ulp(gradient[f]);
+			}
 		}
 		return new Evaluation(gradient, error, dual);
 	}
@@ -171,12 +175,16 @@ final class ConservativeControlVolumeProjection {
 				dissipation += metric.mobility * g.weight[i] * residual * residual;
 			}
 		}
-		double boundaryWork = 0; double[] impulse = new double[3], closure = new double[cells.size()], closureBound = closure.clone();
+		double boundaryWork = 0, internalWork = 0; double[] impulse = new double[3], internalImpulse = impulse.clone(), closure = new double[cells.size()], closureBound = closure.clone();
 		for (int f = 0; f < faces.size(); f++) {
 			var face = faces.get(f); normal[f] = flow[f] / face.surface().area(); double converted = face.surface().area() * normal[f];
 			double bound = conversionError[f] + Math.ulp(converted) + face.surface().area() * Math.ulp(normal[f]);
 			closure[face.first()] += converted; closureBound[face.first()] += bound + Math.ulp(closure[face.first()]);
-			if (face.second() >= 0) { closure[face.second()] -= converted; closureBound[face.second()] += bound + Math.ulp(closure[face.second()]); }
+			if (face.second() >= 0) {
+				closure[face.second()] -= converted; closureBound[face.second()] += bound + Math.ulp(closure[face.second()]);
+				internalWork -= dt * face.prescribed() * flow[f];
+				for (int a = 0; a < 3; a++) internalImpulse[a] -= dt * face.prescribed() * face.surface().areaVector().coordinate(a);
+			}
 			else {
 				if (face.second() == -1) boundaryPressure[f] = face.prescribed() - reference[face.first()] + (faceNode[f] >= 0 ? pressureChange[faceNode[f]] : 0);
 				// Constant pressure contributes zero work and resultant on each closed liquid component.
@@ -192,7 +200,8 @@ final class ConservativeControlVolumeProjection {
 			if (!(Math.abs(closure[c]) <= closureBound[c] + tolerance * vertexVolume[c])) throw new IllegalStateException("Floating flux observation exceeds its exact continuity representation");
 		}
 		return new LiquidControlVolumeProjection.Result(pressure, normal, iterations, fluxResidual, gasPressure, gasChange, gradients, primary,
-				dissipation, boundaryWork, new LiquidPolyhedron.Point(impulse[0], impulse[1], impulse[2]), divergenceResidual, divergenceBound, rates, pressureChange);
+				dissipation, boundaryWork, new LiquidPolyhedron.Point(impulse[0], impulse[1], impulse[2]), divergenceResidual, divergenceBound, rates, pressureChange,
+				internalWork, new LiquidPolyhedron.Point(internalImpulse[0], internalImpulse[1], internalImpulse[2]));
 	}
 	private static boolean converged(double[] residual, double[] error, double[] diagonal, double[] volume, double tolerance) {
 		for (int i = 0; i < residual.length; i++) if (!(Math.abs(residual[i]) <= error[i] + tolerance * diagonal[i] * volume[i])) return false;

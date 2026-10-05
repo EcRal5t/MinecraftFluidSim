@@ -20,8 +20,13 @@ final class LiquidPhaseMechanics {
 	LiquidPhaseMechanics(LiquidControlVolumeMesh mesh, int[] liquid, double[] density, double[] dynamicViscosity,
 			List<LiquidControlVolumeProjection.GasNode> gasNodes, int[] gasCellNode, InterfacePressure pressure,
 			FluidSolverConfig.WallCondition wall) {
+		this(mesh, liquid, density, dynamicViscosity, gasNodes, gasCellNode, pressure, wall, new double[mesh.faces.size()]);
+	}
+	LiquidPhaseMechanics(LiquidControlVolumeMesh mesh, int[] liquid, double[] density, double[] dynamicViscosity,
+			List<LiquidControlVolumeProjection.GasNode> gasNodes, int[] gasCellNode, InterfacePressure pressure,
+			FluidSolverConfig.WallCondition wall, double[] pressureJump) {
 		int count = mesh.cells.size();
-		if (liquid.length != count || density.length != count || dynamicViscosity.length != count || gasCellNode.length != count || pressure == null)
+		if (liquid.length != count || density.length != count || dynamicViscosity.length != count || gasCellNode.length != count || pressure == null || pressureJump.length != mesh.faces.size())
 			throw new IllegalArgumentException("Incomplete phase mechanics properties");
 		this.mesh = mesh; this.liquid = liquid.clone();
 		requireGasNodes(mesh, liquid, gasCellNode, gasNodes.size());
@@ -37,8 +42,9 @@ final class LiquidPhaseMechanics {
 			int sign = a ? 1 : -1, source = a ? first : second; var surface = face.surface();
 			if (sign < 0) { var n = surface.areaVector(); surface = new LiquidPolyhedron.Surface(surface.area(), new LiquidPolyhedron.Point(-n.x(), -n.y(), -n.z()), surface.centroid()); }
 			int neighbor = a && b ? second : face.second() == -2 ? -2 : -1; int node = -1; double prescribed = face.prescribed();
+			if (neighbor >= 0) prescribed = sign * pressureJump[f];
 			if (neighbor == -1) {
-				int gas = a ? face.second() : face.first(); prescribed = pressure.at(f, gas);
+				int gas = a ? face.second() : face.first(); prescribed = pressure.at(f, gas) + sign * pressureJump[f];
 				if (gas >= 0) {
 					node = gasCellNode[gas];
 					if (node < PRESCRIBED_GAS_PRESSURE || node >= gasNodes.size()) throw new IllegalArgumentException("Gas cell has no pressure node");
