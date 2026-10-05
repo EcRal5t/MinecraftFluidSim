@@ -27,7 +27,7 @@ EVENT = re.compile(r"^jdk\.(?:ExecutionSample|NativeMethodSample)\s\{$")
 
 def collect(jfr_tool: str, recording: Path) -> list[list[str]]:
     text = subprocess.run(
-        [jfr_tool, "print", "--events", "ExecutionSample,NativeMethodSample", str(recording)],
+        [jfr_tool, "print", "--events", "jdk.ExecutionSample,jdk.NativeMethodSample", "--stack-depth", "64", str(recording)],
         check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
     ).stdout
     stacks: list[list[str]] = []
