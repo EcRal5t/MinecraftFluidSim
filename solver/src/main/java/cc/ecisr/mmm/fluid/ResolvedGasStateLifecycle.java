@@ -55,7 +55,7 @@ final class ResolvedGasStateLifecycle {
 				|| incoming != null && !incoming.coherentGroups().isEmpty())
 			throw new IllegalArgumentException("Resolved gas requires spatial support for all solid inventories");
 	}
-	private static double[] available(GasGeometryState geometry) {
+	static double[] available(GasGeometryState geometry) {
 		var exact = ResolvedGasGeometry.volumes(geometry); var result = new double[geometry.nodeCount()];
 		for (int node = 1; node < exact.length; node++) {
 			result[node - 1] = exact[node].rounded();
@@ -66,7 +66,7 @@ final class ResolvedGasStateLifecycle {
 	private static FlipParticleState particles(FluidDomain domain) {
 		return domain.materialRegistry == null ? domain.exportParticleState() : domain.exportMaterialParticleState().particles();
 	}
-	private static void publish(FluidDomain domain, GasGeometryState geometry) {
+	static void publish(FluidDomain domain, GasGeometryState geometry) {
 		domain.gasState.geometry = geometry; domain.gasState.cellNodeId = new int[domain.cellCount];
 		domain.gasState.cellLineageNodeId = new int[domain.cellCount]; Arrays.fill(domain.gasState.cellLineageNodeId, -1);
 		domain.gasState.previousSealedNodeCount = geometry.nodeCount(); domain.gasState.pressureActive = geometry.nodeCount() > 0;

@@ -10,6 +10,7 @@ import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 /** Convex preimages of face events transport volume and first moments through one shared velocity field. */
 final class LiquidCharacteristicTransport {
 	record Fragment(LiquidPolyhedron geometry, SignedDyadic inventory) { }
+	record Image(LiquidConvexRegion source, LiquidCharacteristicMap transform, LiquidPolyhedron geometry) { }
 	private record Flight(Time residual, Fraction speed) { Time remaining() { return residual.scaled(Fraction.of(1).divide(speed)); } }
 	private record State(LiquidConvexRegion source, LiquidVelocityRegions.Region region, LiquidCharacteristicMap map, Time remaining, int events) { }
 	private record Moved(LiquidConvexRegion source, LiquidCharacteristicMap transform) { }
@@ -29,6 +30,11 @@ final class LiquidCharacteristicTransport {
 	}
 
 	List<LiquidPolyhedron> advectGeometry(int cell, LiquidPolyhedron source, double dt, int maximumPieces, int maximumEvents) {
+		return images(cell, source, dt, maximumPieces, maximumEvents).stream().map(Image::geometry).toList();
+	}
+
+	/** The same event preimages carry material surface labels and volume geometry. */
+	List<Image> images(int cell, LiquidPolyhedron source, double dt, int maximumPieces, int maximumEvents) {
 		if (!(dt >= 0) || !Double.isFinite(dt) || !(source.moments().volume() > 0) || maximumPieces <= 0 || maximumEvents <= 0)
 			throw new IllegalArgumentException("Invalid liquid characteristic transport request");
 		var queue = new ArrayDeque<State>(); var moved = new ArrayList<Moved>();
@@ -86,7 +92,7 @@ final class LiquidCharacteristicTransport {
 		if (transforms.size() == 1) {
 			var geometry = transforms.getFirst().apply(source);
 			if (!LiquidConvexRegion.of(geometry).measure().isVolume(original.measure())) throw new IllegalStateException("Composed liquid characteristic changed exact volume");
-			return List.of(geometry);
+			return List.of(new Image(original, transforms.getFirst(), geometry));
 		}
 		var groups = new java.util.LinkedHashMap<LiquidCharacteristicMap, ArrayList<LiquidConvexRegion>>();
 		for (var fragment : moved) groups.computeIfAbsent(fragment.transform, ignored -> new ArrayList<>()).add(fragment.source);
@@ -106,9 +112,9 @@ final class LiquidCharacteristicTransport {
 				moved.set(i, new Moved(union, a.transform)); moved.remove(j); joined = true; break outer;
 			}
 		} while (joined);
-		var geometries = new ArrayList<LiquidPolyhedron>(); var measure = LiquidConvexRegion.EMPTY.measure();
+		var geometries = new ArrayList<Image>(); var measure = LiquidConvexRegion.EMPTY.measure();
 		for (var fragment : moved) {
-			var geometry = fragment.transform.apply(fragment.source); geometries.add(geometry); measure = measure.add(LiquidConvexRegion.of(geometry).measure());
+			var geometry = fragment.transform.apply(fragment.source); geometries.add(new Image(fragment.source, fragment.transform, geometry)); measure = measure.add(LiquidConvexRegion.of(geometry).measure());
 		}
 		if (!measure.isVolume(original.measure())) throw new IllegalStateException("Liquid characteristic image changed exact volume");
 		return List.copyOf(geometries);

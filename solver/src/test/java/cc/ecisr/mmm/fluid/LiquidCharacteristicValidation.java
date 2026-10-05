@@ -11,6 +11,67 @@ final class LiquidCharacteristicValidation {
 		wholeVolumeCharacteristicsPreserveGeometry();
 		mixedVelocitySupportSurvivesNextStep();
 		thinLiquidLayerPreservesSeparateGasPressureNodes();
+		movingLiquidWallTransportsItsGasContacts();
+	}
+	private static void movingLiquidWallTransportsItsGasContacts() { movingLiquidWallTransportsItsGasContacts(ignored -> { }); }
+	static void movingLiquidWallTransportsItsGasContacts(java.util.function.Consumer<FluidDomain> initialize) {
+		var sheet = new LiquidGeometryRefinement.Cell(1, 0, 0, 0,
+				LiquidPolyhedron.box(0, 0.25 - 1.0 / 1024, 0, 0.5, 0.25 + 1.0 / 1024, 0.5));
+		var cells = LiquidGeometryRefinement.children(sheet).stream().flatMap(c -> LiquidGeometryRefinement.children(c).stream()).toList();
+		double speed = 0.125, dt = 0.0625;
+		var incoming = new double[3 * cells.size()]; for (int c = 0; c < cells.size(); c++) incoming[3 * c + 1] = speed;
+		var state = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0}, new int[cells.size()], incoming);
+		byte[] collision = new byte[8]; java.util.Arrays.fill(collision, (byte) 0xff); collision[0] = 0;
+		var domain = new LiquidGeometryDomainPartition(2, 2, 2, 0.5F, collision, cells, 4096);
+		var input = new LiquidGeometryPhaseInput(state, domain, true, 4096); var previous = new ResolvedGasGeometry(input);
+		var rates = new LiquidExactPolygon.Fraction[input.mesh.faces.size()]; java.util.Arrays.fill(rates, LiquidExactPolygon.Fraction.ZERO);
+		for (int f = 0; f < rates.length; f++) {
+			var face = input.mesh.faces.get(f);
+			if (input.fragments[face.first()] >= 0 || face.second() >= 0 && input.fragments[face.second()] >= 0)
+				rates[f] = face.areaVector().get(1).multiply(LiquidExactPolygon.Fraction.of(speed));
+		}
+		var extension = LiquidInterfaceVelocityExtension.extend(input.mesh, input.fragments, rates, input.cellVelocity, 1e-11, 512);
+		var velocity = LiquidControlVolumeVelocity.reconstruct(input.mesh, extension.volumeRate(), extension.cellVelocity());
+		var config = new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F);
+		var live = new FluidDomain(2, 2, 2, config);
+		live.restoreParticleState(new FlipParticleState(2, 2, 2, 0.5F, 1, 1.0F / 256,
+				new float[]{0.25F, 0.25F, 0.25F, 1.0F / 256}, new float[]{0, (float) speed, 0}, collision, state));
+		live.sealDomainBoundary(); initialize.accept(live);
+		String fingerprint = live.chemicalParcels == null ? "" : live.chemicalParcels.registry().fingerprint();
+		var gasBefore = live.gasState.geometry == null ? live.bootstrapGasState(fingerprint) : live.exportGasState(fingerprint);
+		double temperature = live.gasNodeTemperatureK(1);
+		var motion = new LiquidGeometryMotionPlan(state, input.mesh, input.fragments, velocity, domain.leaves, dt, 4096, 128,
+				new ResolvedGasInterfaceMotion.Builder(input, gasBefore.geometry(), 4096, 4096));
+		var surfaces = motion.gasInterfaces;
+		var next = new LiquidGeometryPhaseInput(motion.geometry, domain, true, 4096); var successor = new ResolvedGasGeometry(next);
+		var contacts = surfaces.contacts(next, successor.phaseNodes, successor.state.nodeCount(), 4096);
+		for (int c = 0; c < next.fragments.length; c++) if (next.fragments[c] < 0) {
+			int expected = next.mesh.cells.get(c).centroid().y() < 0.25 + speed * dt ? 1 : 2;
+			if (!contacts.get(successor.phaseNodes[c]).equals(java.util.Set.of(expected)))
+				throw new AssertionError("Moving liquid wall mixed its two gas contact identities");
+		}
+		var overlap = new ResolvedGasOverlap(previous.state, successor.state, 4096);
+		if (overlap.destinations(2).size() != 2) throw new AssertionError("Moving-wall fixture did not expose Eulerian gas lineage leakage");
+		var gasMotion = new ResolvedGasMotionPlan(live, next, surfaces, 4096); gasMotion.publish(live, motion);
+		var gasAfter = live.exportGasState(fingerprint);
+		if (!gasBefore.nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()
+				.equals(gasAfter.nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList())
+				|| !gasBefore.externalSource().equals(gasAfter.externalSource()) || !gasBefore.escapedSink().equals(gasAfter.escapedSink()))
+			throw new AssertionError("Moving liquid wall transferred gas stock between its chambers");
+		if (!(live.gasNodeGaugePressurePa(1) < 0 && live.gasNodeGaugePressurePa(2) > 0))
+			throw new AssertionError("Gas EOS did not use the actual moved wall capacities");
+		if (live.thermalState != null && (!(live.gasNodeTemperatureK(1) < temperature && live.gasNodeTemperatureK(2) > temperature)
+				|| !live.exactInternalEnergy().equals(live.thermalAudit().expectedInventory())))
+			throw new AssertionError("Gas motion lost adiabatic response or its exact energy ledger");
+		var restored = FluidDomain.restoreAuthoritativeState(live.captureAuthoritativeState());
+		if (!restored.exportGasState(fingerprint).nodes().equals(gasAfter.nodes()) || !restored.exactInternalEnergy().equals(live.exactInternalEnergy()))
+			throw new AssertionError("Gas motion successor did not survive full candidate restore");
+		try {
+			surfaces.contacts(next, successor.phaseNodes, successor.state.nodeCount(), 0);
+			throw new AssertionError("Gas contact matching exceeded its work budget");
+		} catch (IllegalStateException expected) {
+			if (!expected.getMessage().contains("pair budget")) throw expected;
+		}
 	}
 	private static void mixedVelocitySupportSurvivesNextStep() {
 		var left = new LiquidGeometryRefinement.Cell(1, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5));

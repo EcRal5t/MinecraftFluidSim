@@ -350,6 +350,11 @@ final class LiquidExactPolygon {
 		for (int edge = 0; edge < cutter.vertices.size() && result.hasArea(); edge++) result = result.clip(cutter.edgePlane(edge), false);
 		return result;
 	}
+	LiquidExactPolygon clippedTo(LiquidConvexRegion region) {
+		var result = this;
+		for (var face : region.faces()) { result = result.clip(face.coefficients(), false); if (!result.hasArea()) break; }
+		return result;
+	}
 	List<LiquidExactPolygon> subtract(LiquidExactPolygon cutter) {
 		if (sameSupport(cutter)) return List.of();
 		var remaining = new ArrayList<LiquidExactPolygon>(); var inside = this;

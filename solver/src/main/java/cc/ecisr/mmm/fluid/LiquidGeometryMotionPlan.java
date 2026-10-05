@@ -11,12 +11,19 @@ final class LiquidGeometryMotionPlan {
 	record InventoryMotion(int owner, LiquidPolyhedron.Point positionMetres, LiquidPolyhedron.Point velocityMetresPerSecond) { }
 	final LiquidGeometryState geometry;
 	final List<InventoryMotion> inventoryMotion;
+	final ResolvedGasInterfaceMotion gasInterfaces;
 	private final LiquidGeometryState input;
 
 	LiquidGeometryMotionPlan(LiquidGeometryState input, LiquidControlVolumeMesh mesh, int[] fragments,
 			LiquidControlVolumeVelocity.Result[] velocity, List<LiquidGeometryRefinement.Cell> nextLeaves,
 			double dt, int maximumFragments, int maximumFaceEvents) {
+		this(input, mesh, fragments, velocity, nextLeaves, dt, maximumFragments, maximumFaceEvents, null);
+	}
+	LiquidGeometryMotionPlan(LiquidGeometryState input, LiquidControlVolumeMesh mesh, int[] fragments,
+			LiquidControlVolumeVelocity.Result[] velocity, List<LiquidGeometryRefinement.Cell> nextLeaves,
+			double dt, int maximumFragments, int maximumFaceEvents, ResolvedGasInterfaceMotion.Builder interfaces) {
 		if (fragments.length != mesh.cells.size() || maximumFragments <= 0 || maximumFragments < input.cells().size()) throw new IllegalArgumentException("Invalid geometric motion support");
+		if (interfaces != null) interfaces.requireInput(mesh, fragments);
 		this.input = input;
 		var source = LiquidGeometryStateMapper.restore(input); var width = Fraction.of(input.rootWidthMetres()); var inverse = Fraction.of(1).divide(width);
 		var coverage = new LiquidExactPolygon.Measure[source.size()]; Arrays.fill(coverage, LiquidConvexRegion.EMPTY.measure());
@@ -40,8 +47,9 @@ final class LiquidGeometryMotionPlan {
 			}
 			for (int a = 0; a < 3; a++) integral[owner][a] = integral[owner][a].add(momentum[a]);
 			var mean = new Fraction[] {momentum[0].divide(volume), momentum[1].divide(volume), momentum[2].divide(volume)};
-			var moved = transport.advectGeometry(c, mesh.cells.get(c).geometry(), dt, maximumFragments, maximumFaceEvents);
-			for (var image : moved) for (var fragment : remap.partitionGeometry(image.scaled(inverse))) {
+			var moved = transport.images(c, mesh.cells.get(c).geometry(), dt, maximumFragments, maximumFaceEvents);
+			if (interfaces != null) interfaces.collect(c, moved);
+			for (var image : moved) for (var fragment : remap.partitionGeometry(image.geometry().scaled(inverse))) {
 				if (cells.size() == maximumFragments) throw new IllegalStateException("Liquid geometric successor exceeds its fragment budget");
 				var leaf = nextLeaves.get(fragment.cell()); cells.add(LiquidPhasePartition.Address.of(leaf).cell(fragment.geometry()));
 				ownership.add(previousOwners[fragments[c]]);
@@ -69,6 +77,7 @@ final class LiquidGeometryMotionPlan {
 					new LiquidPolyhedron.Point(integral[oldOwner][0].divide(sourceVolume[oldOwner]).rounded(), integral[oldOwner][1].divide(sourceVolume[oldOwner]).rounded(), integral[oldOwner][2].divide(sourceVolume[oldOwner]).rounded())));
 		}
 		inventoryMotion = List.copyOf(positions);
+		gasInterfaces = interfaces == null ? null : interfaces.finish();
 	}
 
 	/** Publishes observations and actual geometry only after the complete successor passes inventory and collision checks. */

@@ -28,7 +28,18 @@ public final class CarrierMutationValidation {
 		independentWorkFinishesBeforeRejection();
 		nativeSourceBatchMovesGeometryAndSideColumns();
 		nativeExtractionMovesGeometryAndSideColumns();
+		nativeGasMotionCarriesEnergy();
 		System.out.println("Carrier mutation validation passed");
+	}
+	private static void nativeGasMotionCarriesEnergy() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		LiquidCharacteristicValidation.movingLiquidWallTransportsItsGasContacts(domain -> {
+			var liquid = domain.exportParticleState();
+			domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 1, 1.0 / 256, 1000.0 / 256,
+					registries.liquids().materials(), liquid.copyPositionVolume(), liquid.copyParticleVelocities(), liquid.copyCollisionMicroMasks(),
+					new double[]{1000.0 / 256}, new int[]{0}, liquid.liquidGeometry()));
+			FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		});
 	}
 	private static void nativeExtractionMovesGeometryAndSideColumns() throws Exception {
 		var domain = fullCapabilityDomain(FullCapabilityTestFixture.load());

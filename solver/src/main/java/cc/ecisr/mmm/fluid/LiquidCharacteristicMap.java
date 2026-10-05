@@ -53,6 +53,7 @@ final class LiquidCharacteristicMap {
 	LiquidPolyhedron apply(LiquidPolyhedron source) {
 		return apply(LiquidConvexRegion.of(source));
 	}
+	LiquidExactPolygon apply(LiquidExactPolygon source) { return source.transformed(values); }
 	LiquidPolyhedron apply(LiquidConvexRegion source) {
 		var mapped = source.transformed(values);
 		if (!mapped.measure().isVolume(source.measure())) throw new IllegalStateException("Liquid characteristic map changes exact volume");
