@@ -270,6 +270,11 @@ final class LiquidGeometryValidation {
 		if (empty.addVolumeNearBudgeted(1, 1, 1, Float.MIN_VALUE, 0).addedVolume() != Float.MIN_VALUE)
 			throw new AssertionError("Geometric source discarded a representable positive volume tail");
 		LiquidGeometryStateMapper.requireCompatible(empty.liquidGeometryState, empty);
+		var single = new LiquidGeometryInsertionPlan(new LiquidGeometryState(0.5, java.util.List.of(), new int[0]), 1, 1, 1, 0.5F,
+				new byte[1], java.util.List.of(new LiquidGeometryInsertionPlan.Insertion(0, 0, 0, 0.5F)), 64);
+		var singleVolume = LiquidExactPolygon.Fraction.ZERO;
+		for (var cell : LiquidGeometryStateMapper.restore(single.geometry)) singleVolume = singleVolume.add(cell.geometry().measure().volume());
+		if (!singleVolume.equals(LiquidExactPolygon.Fraction.of(0.5))) throw new AssertionError("Single-cell geometric source failed its dyadic root");
 		if (empty.removeParticlesInCell(1, 1, 1, Float.MIN_VALUE) != Float.MIN_VALUE || !empty.liquidGeometryState.cells().isEmpty())
 			throw new AssertionError("Ordinary removal discarded a positive inventory tail or retained its geometry");
 		LiquidGeometryStateMapper.requireCompatible(empty.liquidGeometryState, empty);

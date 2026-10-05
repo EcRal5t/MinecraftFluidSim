@@ -9,7 +9,7 @@ final class LiquidGeometryInventoryCapacity {
 	private LiquidGeometryInventoryCapacity() { }
 	static SignedDyadic[] available(FluidDomain domain) {
 		var occupied = new Fraction[domain.cellCount]; Arrays.fill(occupied, Fraction.ZERO);
-		int span = Integer.highestOneBit(Math.max(domain.sizeX, Math.max(domain.sizeY, domain.sizeZ)) - 1) << 1;
+		int span = LiquidGeometryDomainPartition.rootSpan(domain.sizeX, domain.sizeY, domain.sizeZ);
 		int level = Integer.numberOfTrailingZeros(span); var scale = Fraction.of(span); scale = scale.multiply(scale).multiply(scale);
 		for (var cell : LiquidGeometryStateMapper.restore(domain.liquidGeometryState)) accumulate(cell, level, domain, scale, occupied);
 		var room = new SignedDyadic[occupied.length];

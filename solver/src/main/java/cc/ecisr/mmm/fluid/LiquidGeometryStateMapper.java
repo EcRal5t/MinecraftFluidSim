@@ -130,7 +130,7 @@ final class LiquidGeometryStateMapper {
 		if (owners.length != inventory.count()) throw new IllegalArgumentException("Liquid geometry quadrature count differs from inventory");
 		LiquidGeometryMomentumAudit.requireCompatible(state, cells, inventory);
 		LiquidGeometryCollisionAudit.requireCompatible(state, cells, sizeX, sizeY, sizeZ, cellSize, collisionMasks);
-		int extent = Math.max(sizeX, Math.max(sizeY, sizeZ)); int span = extent == 1 ? 1 : Integer.highestOneBit(extent - 1) << 1;
+		int span = LiquidGeometryDomainPartition.rootSpan(sizeX, sizeY, sizeZ);
 		double width = span * (double) cellSize;
 		if (state.rootWidthMetres() != width) throw new IllegalArgumentException("Liquid geometry root differs from the physical domain");
 		var rootScale = LiquidExactPolygon.Fraction.of(span); rootScale = rootScale.multiply(rootScale).multiply(rootScale);

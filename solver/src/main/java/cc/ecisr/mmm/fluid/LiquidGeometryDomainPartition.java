@@ -18,6 +18,12 @@ final class LiquidGeometryDomainPartition {
 	private final int[] size;
 	private final byte[] masks;
 	private final double microWidth;
+	static int rootSpan(int sizeX, int sizeY, int sizeZ) {
+		if (sizeX < 1 || sizeY < 1 || sizeZ < 1) throw new IllegalArgumentException("Empty geometric domain");
+		int extent = Math.max(sizeX, Math.max(sizeY, sizeZ)); int span = extent == 1 ? 1 : Integer.highestOneBit(extent - 1) << 1;
+		if (span <= 0) throw new IllegalArgumentException("Geometric domain exceeds dyadic address range");
+		return span;
+	}
 
 	LiquidGeometryDomainPartition(int sizeX, int sizeY, int sizeZ, float cellSize, FlipCutCellGeometry collision,
 			List<LiquidGeometryRefinement.Cell> requested, int maximumLeaves) {
@@ -27,8 +33,7 @@ final class LiquidGeometryDomainPartition {
 			List<LiquidGeometryRefinement.Cell> requested, int maximumLeaves) {
 		if (sizeX < 1 || sizeY < 1 || sizeZ < 1 || !(cellSize > 0) || !Float.isFinite(cellSize) || maximumLeaves < 1)
 			throw new IllegalArgumentException("Invalid geometric domain partition");
-		int extent = Math.max(sizeX, Math.max(sizeY, sizeZ)); int span = extent == 1 ? 1 : Integer.highestOneBit(extent - 1) << 1;
-		if (span <= 0) throw new IllegalArgumentException("Geometric domain exceeds dyadic address range");
+		int span = rootSpan(sizeX, sizeY, sizeZ);
 		int baseLevel = Integer.numberOfTrailingZeros(span); if (baseLevel >= 30) throw new IllegalArgumentException("Collision detail exceeds dyadic coordinate resolution");
 		size = new int[] {sizeX, sizeY, sizeZ}; masks = collision.clone(); microWidth = 0.5 * cellSize;
 		if (masks.length != (long) sizeX * sizeY * sizeZ) throw new IllegalArgumentException("Collision layout differs from geometric domain");

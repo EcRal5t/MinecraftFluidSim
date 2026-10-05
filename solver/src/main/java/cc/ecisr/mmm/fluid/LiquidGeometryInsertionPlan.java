@@ -15,7 +15,7 @@ final class LiquidGeometryInsertionPlan {
 
 	LiquidGeometryInsertionPlan(LiquidGeometryState input, int sizeX, int sizeY, int sizeZ, float cellSize,
 			byte[] collision, List<Insertion> insertions, int maximumRegions) {
-		int span = Integer.highestOneBit(Math.max(sizeX, Math.max(sizeY, sizeZ)) - 1) << 1;
+		int span = LiquidGeometryDomainPartition.rootSpan(sizeX, sizeY, sizeZ);
 		int level = Integer.numberOfTrailingZeros(span); double h = 1.0 / span;
 		var source = LiquidGeometryStateMapper.restore(input); var requested = new ArrayList<>(source);
 		for (var insertion : insertions) {
