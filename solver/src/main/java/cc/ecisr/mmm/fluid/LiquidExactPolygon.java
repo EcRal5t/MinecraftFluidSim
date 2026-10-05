@@ -33,18 +33,43 @@ final class LiquidExactPolygon {
 		}
 	}
 	private final List<Vertex> vertices;
-	record Fraction(BigInteger numerator, BigInteger denominator) {
+	static final class Fraction {
+		private final BigInteger numerator, denominator;
 		static final Fraction ZERO = new Fraction(BigInteger.ZERO, BigInteger.ONE);
-		Fraction {
+		Fraction(BigInteger numerator, BigInteger denominator) {
 			if (denominator.signum() == 0) throw new IllegalArgumentException("Singular geometric fraction");
 			var divisor = numerator.abs().gcd(denominator.abs()); if (denominator.signum() < 0) divisor = divisor.negate();
-			numerator = numerator.divide(divisor); denominator = denominator.divide(divisor);
+			this.numerator = numerator.divide(divisor); this.denominator = denominator.divide(divisor);
 		}
-		Fraction add(Fraction other) { return new Fraction(numerator.multiply(other.denominator).add(other.numerator.multiply(denominator)), denominator.multiply(other.denominator)); }
-		Fraction multiply(Fraction other) { return new Fraction(numerator.multiply(other.numerator), denominator.multiply(other.denominator)); }
-		Fraction negate() { return new Fraction(numerator.negate(), denominator); }
+		/** Arithmetic below proves these operands coprime before constructing the result. */
+		private Fraction(BigInteger numerator, BigInteger denominator, boolean reduced) {
+			this.numerator = denominator.signum() < 0 ? numerator.negate() : numerator;
+			this.denominator = denominator.abs();
+		}
+		BigInteger numerator() { return numerator; }
+		BigInteger denominator() { return denominator; }
+		@Override public boolean equals(Object other) { return other instanceof Fraction value && numerator.equals(value.numerator) && denominator.equals(value.denominator); }
+		@Override public int hashCode() { return 31 * numerator.hashCode() + denominator.hashCode(); }
+		@Override public String toString() { return numerator + "/" + denominator; }
+		Fraction add(Fraction other) {
+			if (signum() == 0) return other; if (other.signum() == 0) return this;
+			var common = denominator.gcd(other.denominator); var first = denominator.divide(common); var second = other.denominator.divide(common);
+			var sum = numerator.multiply(second).add(other.numerator.multiply(first)); if (sum.signum() == 0) return ZERO;
+			var cancellation = sum.abs().gcd(common);
+			return new Fraction(sum.divide(cancellation), first.multiply(other.denominator.divide(cancellation)), true);
+		}
+		Fraction multiply(Fraction other) {
+			if (signum() == 0 || other.signum() == 0) return ZERO;
+			var first = numerator.abs().gcd(other.denominator); var second = other.numerator.abs().gcd(denominator);
+			return new Fraction(numerator.divide(first).multiply(other.numerator.divide(second)), denominator.divide(second).multiply(other.denominator.divide(first)), true);
+		}
+		Fraction negate() { return signum() == 0 ? this : new Fraction(numerator.negate(), denominator, true); }
 		Fraction subtract(Fraction other) { return add(other.negate()); }
-		Fraction divide(Fraction other) { return new Fraction(numerator.multiply(other.denominator), denominator.multiply(other.numerator)); }
+		Fraction divide(Fraction other) {
+			if (other.signum() == 0) throw new IllegalArgumentException("Singular geometric fraction"); if (signum() == 0) return ZERO;
+			var first = numerator.abs().gcd(other.numerator.abs()); var second = denominator.gcd(other.denominator);
+			return new Fraction(numerator.divide(first).multiply(other.denominator.divide(second)), denominator.divide(second).multiply(other.numerator.divide(first)), true);
+		}
 		double rounded() { return Vertex.ratio(numerator, denominator); }
 		double toDouble() { return rounded(); }
 		int signum() { return numerator.signum(); }
