@@ -8,10 +8,13 @@ final class LiquidConvexRegion {
 	private final List<LiquidExactPolygon> faces;
 	private final LiquidExactPolygon.Measure measure;
 	private LiquidConvexRegion(List<LiquidExactPolygon> faces) {
-		this.faces = faces; measure = LiquidExactPolygon.measure(faces);
+		this(faces, LiquidExactPolygon.measure(faces));
+	}
+	private LiquidConvexRegion(List<LiquidExactPolygon> faces, LiquidExactPolygon.Measure measure) {
+		this.faces = faces; this.measure = measure;
 		if (measure.signum() < 0) throw new IllegalArgumentException("Inverted exact convex region");
 	}
-	static LiquidConvexRegion of(LiquidPolyhedron geometry) { return new LiquidConvexRegion(LiquidExactPolygon.faces(geometry)); }
+	static LiquidConvexRegion of(LiquidPolyhedron geometry) { return new LiquidConvexRegion(LiquidExactPolygon.faces(geometry), geometry.measure()); }
 	static LiquidConvexRegion ofFaces(List<LiquidExactPolygon> faces) { return new LiquidConvexRegion(faces); }
 	List<LiquidExactPolygon> faces() { return faces; }
 	boolean hasVolume() { return measure.signum() > 0; }
@@ -33,7 +36,7 @@ final class LiquidConvexRegion {
 	}
 	LiquidPolyhedron geometry() {
 		if (!hasVolume()) return LiquidPolyhedron.EMPTY;
-		return LiquidPolyhedron.restoredExact(faces);
+		return LiquidPolyhedron.restoredExact(faces, measure);
 	}
 	LiquidConvexRegion joined(LiquidConvexRegion other, LiquidConvexRegion original) {
 		boolean adjacent = false;

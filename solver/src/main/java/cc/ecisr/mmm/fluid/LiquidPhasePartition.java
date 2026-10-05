@@ -33,7 +33,7 @@ final class LiquidPhasePartition {
 			if (point.coordinate(a) < leaf.minimum(a) || point.coordinate(a) > leaf.minimum(a) + w) throw new IllegalArgumentException("Open phase geometry leaves its dyadic leaf");
 		var cells = new ArrayList<LiquidGeometryRefinement.Cell>();
 		for (var liquid : liquids) {
-			if (!(liquid.moments().volume() > 0)) throw new IllegalArgumentException("Empty phase geometry");
+			if (liquid.measure().signum() <= 0) throw new IllegalArgumentException("Empty phase geometry");
 			for (var face : liquid.faces()) for (var point : face) for (int a = 0; a < 3; a++)
 				if (point.coordinate(a) < leaf.minimum(a) || point.coordinate(a) > leaf.minimum(a) + w)
 					throw new IllegalArgumentException("Liquid fragment leaves its dyadic leaf");
@@ -49,9 +49,9 @@ final class LiquidPhasePartition {
 			for (var original : gas) {
 				var inside = original;
 				for (var plane : liquid.planes()) {
-					if (!(inside.moments().volume() > 0)) break;
+					if (inside.measure().signum() <= 0) break;
 					var outside = plane.opposite().clip(inside);
-					if (outside.moments().volume() > 0) remaining.add(outside);
+					if (outside.measure().signum() > 0) remaining.add(outside);
 					if ((long) remaining.size() + liquids.size() > maximumRegions)
 						throw new IllegalStateException("Phase geometry exceeds its region budget");
 					inside = plane.clip(inside);
@@ -70,12 +70,22 @@ final class LiquidPhasePartition {
 	}
 
 	static void requireDisjoint(List<LiquidGeometryRefinement.Cell> cells) {
-		var groups = new LinkedHashMap<Address, ArrayList<LiquidPolyhedron>>();
-		for (var cell : cells) groups.computeIfAbsent(Address.of(cell), ignored -> new ArrayList<>()).add(cell.geometry());
+		var groups = new LinkedHashMap<Address, ArrayList<LiquidConvexRegion>>();
+		for (var cell : cells) groups.computeIfAbsent(Address.of(cell), ignored -> new ArrayList<>()).add(LiquidConvexRegion.of(cell.geometry()));
 		for (var group : groups.values()) for (int a = 0; a < group.size(); a++) for (int b = 0; b < a; b++) {
-			var intersection = LiquidConvexRegion.of(group.get(a));
-			for (var plane : group.get(b).planes()) intersection = intersection.clip(plane);
+			var first = group.get(a); var second = group.get(b);
+			if (separated(first, second) || separated(second, first)) continue;
+			var intersection = first;
+			for (var face : second.faces()) intersection = intersection.clip(face.plane());
 			if (intersection.hasVolume()) throw new IllegalArgumentException("Liquid fragments have overlapping exact volume: fragments=" + b + "," + a);
 		}
+	}
+	private static boolean separated(LiquidConvexRegion first, LiquidConvexRegion second) {
+		for (var face : second.faces()) {
+			var plane = face.coefficients(); boolean outside = true;
+			search: for (var polygon : first.faces()) for (var vertex : polygon.vertices()) if (vertex.distance(plane).signum() < 0) { outside = false; break search; }
+			if (outside) return true;
+		}
+		return false;
 	}
 }

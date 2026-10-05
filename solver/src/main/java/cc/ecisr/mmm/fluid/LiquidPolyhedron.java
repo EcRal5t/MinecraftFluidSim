@@ -40,7 +40,7 @@ final class LiquidPolyhedron {
 	private volatile Moments integratedMoments;
 	private volatile LiquidExactPolygon.Measure exactMeasure;
 	LiquidExactPolygon.Fraction[] centroidCoordinates() { return measure().centroidCoordinates(); }
-	private LiquidExactPolygon.Measure measure() {
+	LiquidExactPolygon.Measure measure() {
 		var value = exactMeasure; if (value == null) exactMeasure = value = LiquidExactPolygon.measure(LiquidExactPolygon.faces(this)); return value;
 	}
 	private LiquidPolyhedron(List<List<Point>> faces, List<LiquidGeometryPlane> planes) {
@@ -55,6 +55,9 @@ final class LiquidPolyhedron {
 	static LiquidPolyhedron restoredExact(List<LiquidExactPolygon> faces) {
 		var result = new LiquidPolyhedron(faces.stream().map(LiquidExactPolygon::rounded).toList(), faces.stream().map(LiquidExactPolygon::plane).toList());
 		result.exactFaces = faces; return result;
+	}
+	static LiquidPolyhedron restoredExact(List<LiquidExactPolygon> faces, LiquidExactPolygon.Measure measure) {
+		var result = restoredExact(faces); result.exactMeasure = measure; return result;
 	}
 	List<List<Point>> faces() { return faces; }
 	List<LiquidGeometryPlane> planes() { return planes; }
