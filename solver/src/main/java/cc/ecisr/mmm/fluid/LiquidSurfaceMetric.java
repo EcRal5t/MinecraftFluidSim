@@ -9,7 +9,7 @@ import java.util.Map;
 
 /** Reference-surface Dirichlet energy for implicit capillary work on the same triangular interface. */
 final class LiquidSurfaceMetric {
-	private record Triangle(List<Vertex> nodes, Fraction[][] matrix) { }
+	private record Triangle(List<Vertex> nodes, Fraction[][] matrix, Fraction[][] basis, Fraction weight) { }
 	private final List<Triangle> triangles;
 	LiquidSurfaceMetric(List<LiquidExactPolygon> polygons, double[] coefficient) {
 		if (coefficient.length != polygons.size()) throw new IllegalArgumentException("Incomplete surface metric coefficients");
@@ -30,9 +30,24 @@ final class LiquidSurfaceMetric {
 			}
 			var weight = Fraction.of(sigma).multiply(Fraction.of(polygon.surface().area())); var matrix = new Fraction[3][3];
 			for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) matrix[i][j] = weight.multiply(dot(gradient[i], gradient[j]));
-			result.add(new Triangle(points, matrix));
+			result.add(new Triangle(points, matrix, gradient, weight));
 		}
 		triangles = List.copyOf(result);
+	}
+	/** Sparse Gram rows preserve the surface metric's positive energy after the pressure pullback. */
+	List<LiquidPressureFaceEnergy.Row> pressureRows(LiquidConformingVelocity field) {
+		var result = new ArrayList<LiquidPressureFaceEnergy.Row>();
+		for (var triangle : triangles) for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
+			var forces = new LinkedHashMap<Vertex, List<Fraction>>();
+			for (int i = 0; i < 3; i++) { var value = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; value[a] = triangle.basis[i][b]; forces.put(triangle.nodes.get(i), List.of(value)); }
+			var load = field.rateLoad(forces); var ids = new ArrayList<Integer>(); var values = new ArrayList<Double>();
+			double weight = Math.sqrt(triangle.weight.rounded());
+			for (int f = 0; f < load.length; f++) if (load[f].signum() != 0 && field.mesh.faces.get(f).second() != -2) {
+				ids.add(f); values.add(weight * load[f].rounded());
+			}
+			if (!ids.isEmpty()) result.add(new LiquidPressureFaceEnergy.Row(ids.stream().mapToInt(Integer::intValue).toArray(), values.stream().mapToDouble(Double::doubleValue).toArray()));
+		}
+		return List.copyOf(result);
 	}
 	/** Matrix action is the surface-energy gradient; an implicit force uses its negative. */
 	Map<Vertex, List<Fraction>> gradient(Map<Vertex, List<Fraction>> values) {

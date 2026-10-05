@@ -58,7 +58,7 @@ final class LiquidControlVolumeProjection {
 			double[] cellVelocity, double pressureDissipationJoules, double boundaryWorkJoules,
 			LiquidPolyhedron.Point boundaryImpulse, double divergenceResidual, double divergenceRoundoffBound,
 			Fraction[] volumeRate, double[] gasPressureChange, double internalInterfaceWorkJoules,
-			LiquidPolyhedron.Point internalInterfaceImpulse) { }
+			LiquidPolyhedron.Point internalInterfaceImpulse, LiquidPolyhedron.Point momentumStationarityBound) { }
 	private final ConservativeControlVolumeProjection projection;
 	LiquidControlVolumeProjection(List<Cell> cells, List<Face> faces) {
 		this(cells, faces, List.of(), fixedGasFaces(faces.size()));
@@ -69,6 +69,9 @@ final class LiquidControlVolumeProjection {
 	/** tolerance (1/s) bounds the variational stationarity error, normalized by supporting volume. */
 	Result project(double[] incoming, LiquidPolyhedron.Point gravity, double dt, double tolerance, int maximumIterations) {
 		return projection.project(incoming, gravity, dt, tolerance, maximumIterations);
+	}
+	Result project(double[] incoming, LiquidPolyhedron.Point gravity, double dt, double tolerance, int maximumIterations, LiquidPressureFaceEnergy surface) {
+		return projection.project(incoming, gravity, dt, tolerance, maximumIterations, surface);
 	}
 	private static int[] fixedGasFaces(int count) { int[] result = new int[count]; Arrays.fill(result, -1); return result; }
 }

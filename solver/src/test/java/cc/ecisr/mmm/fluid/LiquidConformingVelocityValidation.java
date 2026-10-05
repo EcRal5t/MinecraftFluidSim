@@ -13,6 +13,46 @@ final class LiquidConformingVelocityValidation {
 		continuousShearPreservesExteriorAreaAndWork();
 		spaceTimeSweepsPreserveVolumeAndSharedFaces();
 		capillaryLoadsShareMechanicalInertiaAndSurfaceWork();
+		implicitCapillarityUsesActualPhaseOrdering();
+	}
+	private static void implicitCapillarityUsesActualPhaseOrdering() {
+		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.625, 0.75)));
+		var state = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0}, new int[cells.size()]);
+		var domain = new LiquidGeometryDomainPartition(2, 2, 2, 0.5F, new byte[8], cells, 256);
+		var input = new LiquidGeometryPhaseInput(state, domain, false, 256);
+		var order = java.util.stream.IntStream.range(0, input.regions.size()).boxed().sorted(java.util.Comparator.comparingInt(c -> input.fragments[c] >= 0 ? 1 : 0)).toList();
+		var regions = order.stream().map(input.regions::get).toList(); var liquid = order.stream().mapToInt(c -> input.fragments[c]).toArray();
+		var mesh = new LiquidControlVolumeMesh(regions, 1, 1000, (c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		var density = new double[liquid.length]; Arrays.fill(density, 1000); var nodes = new int[liquid.length]; Arrays.fill(nodes, -1);
+		var sigma = new double[mesh.faces.size()];
+		for (int f = 0; f < sigma.length; f++) {
+			var face = mesh.faces.get(f); if (face.second() >= 0 && (liquid[face.first()] >= 0) != (liquid[face.second()] >= 0)) sigma[f] = 0.125;
+		}
+		var rate = new Fraction[sigma.length]; Arrays.fill(rate, Fraction.ZERO);
+		var reference = new LiquidConformingVelocity(mesh, rate, new double[3 * liquid.length], liquid);
+		var capillary = new LiquidConformingCapillarity(reference, sigma, density);
+		var surfaces = reference.tetrahedra.stream().filter(t -> sigma[t.face()] > 0).map(t -> LiquidExactPolygon.tetrahedron(t.vertices()).getFirst()).toList();
+		var coefficients = new double[surfaces.size()]; Arrays.fill(coefficients, 0.125);
+		var surface = new LiquidPressureFaceEnergy(reference, capillary.energy, new LiquidSurfaceMetric(surfaces, coefficients));
+		var mechanics = new LiquidPhaseMechanics(mesh, liquid, density, new double[liquid.length], List.of(), nodes, (f, gas) -> 0, FluidSolverConfig.WallCondition.FREE_SLIP);
+		var result = mechanics.advance(new double[3 * liquid.length], new double[3 * mesh.faces.size()], new double[3 * liquid.length],
+				1.0 / 128, 1e-11, 1e-11, 512, surface);
+		var motion = new LiquidConformingTransport(mesh, result.conformingVelocity(), result.extension().volumeRate(), 1.0 / 128, liquid);
+		var after = motion.images.stream().filter(i -> sigma[i.face()] > 0).map(i -> i.geometry().faces().getFirst()).toList();
+		double kinetic = 0; var momentum = new double[3]; var volume = Fraction.ZERO;
+		for (var image : motion.images) volume = volume.add(image.geometry().measure().volume());
+		for (int c = 0; c < liquid.length; c++) if (liquid[c] >= 0) for (int a = 0; a < 3; a++) {
+			double mass = density[c] * mesh.cells.get(c).geometry().moments().volume(), u = result.extension().cellVelocity()[3 * c + a];
+			kinetic += 0.5 * mass * u * u; momentum[a] += mass * u;
+		}
+		if (!(kinetic > 0 && kinetic + new LiquidAreaEnergy(after, coefficients).joules < capillary.energy.joules)
+				|| !volume.equals(Fraction.of(0.09375))) throw new AssertionError("Implicit capillarity lost phase geometry, inertia or energy");
+		for (int a = 0; a < 3; a++) {
+			double impulse = result.pressure().boundaryImpulse().coordinate(a) + result.pressure().internalInterfaceImpulse().coordinate(a);
+			if (Math.abs(momentum[a] - impulse) > result.pressure().momentumStationarityBound().coordinate(a))
+				throw new AssertionError("Gas-first capillary momentum exceeds the pressure stationarity error: " + Arrays.toString(momentum));
+			if (Math.abs(impulse) > 1e-14) throw new AssertionError("Closed capillary forces have nonzero resultant");
+		}
 	}
 	private static void capillaryLoadsShareMechanicalInertiaAndSurfaceWork() {
 		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.625, 0.75)));
@@ -33,6 +73,23 @@ final class LiquidConformingVelocityValidation {
 		var translation = new java.util.LinkedHashMap<LiquidExactPolygon.Vertex, List<Fraction>>();
 		positions.keySet().forEach(point -> translation.put(point, List.of(Fraction.of(0.125), Fraction.of(-0.25), Fraction.of(0.5))));
 		if (metric.energy(translation).signum() != 0) throw new AssertionError("Implicit surface metric damps rigid translation");
+		var implicit = new LiquidPressureFaceEnergy(reference, capillary.energy, metric);
+		for (double dt : new double[]{1.0 / 128, 4}) {
+			var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(new double[3 * cells.size()],
+					new LiquidPolyhedron.Point(0, 0, 0), dt, 1e-11, 512, implicit);
+			var field = new LiquidConformingVelocity(mesh, projected.volumeRate(), projected.cellVelocity());
+			var motion = new LiquidConformingTransport(mesh, field, projected.volumeRate(), dt);
+			var boundary = motion.images.stream().filter(i -> mesh.faces.get(i.face()).second() < 0).map(i -> i.geometry().faces().getFirst()).toList();
+			double after = new LiquidAreaEnergy(boundary, coefficients).joules, kinetic = 0; var momentum = new double[3];
+			for (int c = 0; c < cells.size(); c++) for (int a = 0; a < 3; a++) {
+				double mass = density[c] * mesh.cells.get(c).geometry().moments().volume(), u = projected.cellVelocity()[3 * c + a];
+				kinetic += 0.5 * mass * u * u; momentum[a] += mass * u;
+			}
+			if (!(kinetic > 0 && kinetic + after <= capillary.energy.joules)) throw new AssertionError("Implicit capillary pressure injected mechanical energy");
+			for (double component : momentum) if (Math.abs(component) > 1e-10) throw new AssertionError("Implicit capillary pressure changed total momentum");
+			double accounted = projected.boundaryWorkJoules() + projected.internalInterfaceWorkJoules() - projected.pressureDissipationJoules();
+			if (Math.abs(kinetic - accounted) > 1e-10) throw new AssertionError("Implicit capillary pressure lost its mechanical work");
+		}
 		// The mimetic inverse maps a constant acceleration to its exact cell-force virtual work.
 		var gradients = ControlVolumeGradient.build(mesh.cells, mesh.faces);
 		for (int c = 0; c < cells.size(); c++) {

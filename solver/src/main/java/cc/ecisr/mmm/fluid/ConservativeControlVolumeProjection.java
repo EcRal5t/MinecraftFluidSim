@@ -45,6 +45,9 @@ final class ConservativeControlVolumeProjection {
 	}
 
 	LiquidControlVolumeProjection.Result project(double[] incoming, LiquidPolyhedron.Point gravity, double dt, double tolerance, int maximumIterations) {
+		return project(incoming, gravity, dt, tolerance, maximumIterations, null);
+	}
+	LiquidControlVolumeProjection.Result project(double[] incoming, LiquidPolyhedron.Point gravity, double dt, double tolerance, int maximumIterations, LiquidPressureFaceEnergy surface) {
 		if (incoming.length != 3 * cells.size() || !(dt > 0) || !Double.isFinite(dt) || !(tolerance > 0) || !Double.isFinite(tolerance) || maximumIterations <= 0)
 			throw new IllegalArgumentException("Invalid conservative pressure request");
 		double[] predicted = incoming.clone();
@@ -67,9 +70,13 @@ final class ConservativeControlVolumeProjection {
 		}
 		for (var metric : metrics) for (int i = 0; i < metric.geometry.indices.length; i++) faceWeight[metric.geometry.indices[i]] += metric.matrix[i][i];
 		for (int f = 0; f < faceWeight.length; f++) if (faceNode[f] >= 0) faceWeight[f] += storage[faceNode[f]];
+		if (surface != null) {
+			if (surface.gradient.length != faces.size()) throw new IllegalArgumentException("Surface energy differs from the pressure faces");
+			var extra = surface.diagonal(dt); for (int f = 0; f < faceWeight.length; f++) faceWeight[f] += extra[f];
+		}
 		double[] diagonal = coordinates.cycleWeights(faceWeight), support = coordinates.cycleMinimum(vertexVolume), variable = new double[coordinates.size()];
 		Fraction[] initial = new Fraction[variable.length]; Arrays.fill(initial, Fraction.ZERO); var offset = new ConservativeFluxOffset(coordinates, initial, exactZeroSource);
-		var evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt);
+		var evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt, surface, dt);
 		double[] residual = negate(coordinates.transpose(evaluation.gradient));
 		var primaryReference = new double[predicted.length];
 		// Choose a feasible kinetic predictor when the zero-rate state has a resolved variational force.
@@ -78,7 +85,7 @@ final class ConservativeControlVolumeProjection {
 			System.arraycopy(predicted, 0, primaryReference, 0, predicted.length);
 			for (int i = 0; i < variable.length; i++) { var face = faces.get(coordinates.face(i)); initial[i] = faceRate(face, predicted, face.first()); }
 			offset = new ConservativeFluxOffset(coordinates, initial, exactZeroSource);
-			evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt);
+			evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt, surface, dt);
 			residual = negate(coordinates.transpose(evaluation.gradient));
 		}
 		double[] direction = residual.clone(); double rz = 0;
@@ -89,20 +96,24 @@ final class ConservativeControlVolumeProjection {
 		int iterations = 0;
 		while (!converged(residual, coordinates.transposeError(evaluation.gradient, evaluation.error), diagonal, support, tolerance)) {
 			if (iterations++ >= maximumIterations || !(rz > 0) || !Double.isFinite(rz)) throw new IllegalStateException("Conservative pressure solve did not converge");
-			var product = coordinates.transpose(evaluate(coordinates.lift(direction, zeroSource, false), null, null, null, storage, 0).gradient);
+			var product = coordinates.transpose(evaluate(coordinates.lift(direction, zeroSource, false), null, null, null, storage, 0, surface, dt).gradient);
 			double denominator = dot(direction, product); if (!(denominator > 0) || !Double.isFinite(denominator)) throw new IllegalStateException("Invalid conservative pressure search direction");
 			double alpha = rz / denominator; for (int i = 0; i < variable.length; i++) variable[i] += alpha * direction[i];
-			evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt);
+			evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt, surface, dt);
 			residual = negate(coordinates.transpose(evaluation.gradient)); double next = 0;
 			for (int i = 0; i < residual.length; i++) next += residual[i] * residual[i] / diagonal[i];
 			for (int i = 0; i < direction.length; i++) direction[i] = residual[i] / diagonal[i] + next / rz * direction[i]; rz = next;
 		}
 		var rates = offset.exact(variable); double[] flow = new double[rates.length], conversionError = flow.clone();
 		for (int f = 0; f < flow.length; f++) { flow[f] = rates[f].toDouble(); conversionError[f] = flow[f] == 0 ? 0 : Math.ulp(flow[f]); }
-		evaluation = evaluate(flow, conversionError, predictor, predictorError, storage, dt);
+		evaluation = evaluate(flow, conversionError, predictor, predictorError, storage, dt, surface, dt);
 		if (!converged(negate(coordinates.transpose(evaluation.gradient)), coordinates.transposeError(evaluation.gradient, evaluation.error), diagonal, support, tolerance))
 			throw new IllegalStateException("Exact conservative rates exceed pressure solve accuracy");
-		return result(predicted, primaryReference, rates, flow, conversionError, evaluation, dt, iterations, tolerance);
+		var stationarityError = coordinates.transposeError(evaluation.gradient, evaluation.error); var momentumBound = new double[3];
+		for (int i = 0; i < diagonal.length; i++) for (int a = 0; a < 3; a++)
+			momentumBound[a] += Math.abs(faces.get(coordinates.face(i)).areaVector().get(a).rounded()) * (stationarityError[i] + tolerance * diagonal[i] * support[i]);
+		return result(predicted, primaryReference, rates, flow, conversionError, evaluation, dt, iterations, tolerance,
+				surface == null ? new double[faces.size()] : surface.pressure(flow, dt), new LiquidPolyhedron.Point(momentumBound[0], momentumBound[1], momentumBound[2]));
 	}
 
 	private static Fraction faceRate(LiquidControlVolumeProjection.Face face, double[] velocity, int cell) {
@@ -110,7 +121,7 @@ final class ConservativeControlVolumeProjection {
 		for (int a = 0; a < 3; a++) rate = rate.add(face.areaVector().get(a).multiply(Fraction.of(velocity[3 * cell + a]))); return rate;
 	}
 
-	private Evaluation evaluate(double[] flow, double[] flowError, double[][] predictor, double[][] predictorError, double[] storage, double dt) {
+	private Evaluation evaluate(double[] flow, double[] flowError, double[][] predictor, double[][] predictorError, double[] storage, double dt, LiquidPressureFaceEnergy surface, double surfaceDt) {
 		double[] gradient = new double[faces.size()], error = gradient.clone(); double[][] dual = new double[cells.size()][];
 		for (int c = 0; c < cells.size(); c++) {
 			var metric = metrics[c]; var g = metric.geometry; double[] local = new double[g.indices.length], localError = local.clone();
@@ -142,11 +153,12 @@ final class ConservativeControlVolumeProjection {
 				if (flowError != null) error[f] += Math.ulp(term) + Math.ulp(gradient[f]);
 			}
 		}
+		if (surface != null) surface.add(flow, flowError, surfaceDt, dt > 0, gradient, error);
 		return new Evaluation(gradient, error, dual);
 	}
 
 	private LiquidControlVolumeProjection.Result result(double[] predicted, double[] primaryReference, Fraction[] rates, double[] flow, double[] conversionError,
-			Evaluation evaluation, double dt, int iterations, double tolerance) {
+			Evaluation evaluation, double dt, int iterations, double tolerance, double[] surfacePressure, LiquidPolyhedron.Point momentumBound) {
 		double[] pressure = new double[cells.size()], primary = primaryReference.clone(), normal = new double[faces.size()];
 		double[] gasPressure = new double[nodes.size()], gasChange = gasPressure.clone(), pressureChange = gasPressure.clone(), boundaryPressure = normal.clone();
 		Fraction[] gasRate = new Fraction[nodes.size()]; Arrays.fill(gasRate, Fraction.ZERO);
@@ -182,11 +194,11 @@ final class ConservativeControlVolumeProjection {
 			closure[face.first()] += converted; closureBound[face.first()] += bound + Math.ulp(closure[face.first()]);
 			if (face.second() >= 0) {
 				closure[face.second()] -= converted; closureBound[face.second()] += bound + Math.ulp(closure[face.second()]);
-				internalWork -= dt * face.prescribed() * flow[f];
-				for (int a = 0; a < 3; a++) internalImpulse[a] -= dt * face.prescribed() * face.surface().areaVector().coordinate(a);
+				internalWork -= dt * (face.prescribed() + surfacePressure[f]) * flow[f];
+				for (int a = 0; a < 3; a++) internalImpulse[a] -= dt * (face.prescribed() + surfacePressure[f]) * face.surface().areaVector().coordinate(a);
 			}
 			else {
-				if (face.second() == -1) boundaryPressure[f] = face.prescribed() - reference[face.first()] + (faceNode[f] >= 0 ? pressureChange[faceNode[f]] : 0);
+				if (face.second() == -1) boundaryPressure[f] = face.prescribed() - reference[face.first()] + surfacePressure[f] + (faceNode[f] >= 0 ? pressureChange[faceNode[f]] : 0);
 				// Constant pressure contributes zero work and resultant on each closed liquid component.
 				// Evaluate the relative traction directly so a small resolved gradient survives a large absolute pressure.
 				boundaryWork -= dt * boundaryPressure[f] * flow[f];
@@ -201,7 +213,7 @@ final class ConservativeControlVolumeProjection {
 		}
 		return new LiquidControlVolumeProjection.Result(pressure, normal, iterations, fluxResidual, gasPressure, gasChange, gradients, primary,
 				dissipation, boundaryWork, new LiquidPolyhedron.Point(impulse[0], impulse[1], impulse[2]), divergenceResidual, divergenceBound, rates, pressureChange,
-				internalWork, new LiquidPolyhedron.Point(internalImpulse[0], internalImpulse[1], internalImpulse[2]));
+				internalWork, new LiquidPolyhedron.Point(internalImpulse[0], internalImpulse[1], internalImpulse[2]), momentumBound);
 	}
 	private static boolean converged(double[] residual, double[] error, double[] diagonal, double[] volume, double tolerance) {
 		for (int i = 0; i < residual.length; i++) if (!(Math.abs(residual[i]) <= error[i] + tolerance * diagonal[i] * volume[i])) return false;

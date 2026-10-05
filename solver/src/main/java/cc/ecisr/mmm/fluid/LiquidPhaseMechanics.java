@@ -101,6 +101,11 @@ final class LiquidPhaseMechanics {
 
 	Result advance(double[] cellVelocity, double[] faceVelocity, double[] acceleration, double dt,
 			double momentumTolerance, double continuityTolerance, int maximumIterations) {
+		return advance(cellVelocity, faceVelocity, acceleration, dt, momentumTolerance, continuityTolerance, maximumIterations, null);
+	}
+	Result advance(double[] cellVelocity, double[] faceVelocity, double[] acceleration, double dt,
+			double momentumTolerance, double continuityTolerance, int maximumIterations, LiquidPressureFaceEnergy surface) {
+		if (surface != null && surface.mesh != mesh) throw new IllegalArgumentException("Surface energy belongs to different phase geometry");
 		if (cellVelocity.length != 3 * liquid.length || acceleration.length != cellVelocity.length || faceVelocity.length != 3 * mesh.faces.size())
 			throw new IllegalArgumentException("Incomplete phase mechanics velocity field");
 		var incoming = new double[3 * liquidCells.length]; var traces = new double[3 * faceIds.length];
@@ -108,7 +113,8 @@ final class LiquidPhaseMechanics {
 		for (int f = 0; f < faceIds.length; f++) System.arraycopy(faceVelocity, 3 * faceIds[f], traces, 3 * f, 3);
 		var viscous = viscosity.advance(incoming, traces, dt, momentumTolerance, maximumIterations); var predictor = viscous.cellVelocity().clone();
 		for (int c = 0; c < liquidCells.length; c++) for (int a = 0; a < 3; a++) predictor[3 * c + a] += dt * acceleration[3 * liquidCells[c] + a];
-		var projected = projection.project(predictor, new LiquidPolyhedron.Point(0, 0, 0), dt, continuityTolerance, maximumIterations);
+		var projected = projection.project(predictor, new LiquidPolyhedron.Point(0, 0, 0), dt, continuityTolerance, maximumIterations,
+				surface == null ? null : surface.select(faceIds, faceSigns));
 		var rates = new Fraction[mesh.faces.size()]; Arrays.fill(rates, Fraction.ZERO); var primary = cellVelocity.clone();
 		for (int c = 0; c < liquidCells.length; c++) System.arraycopy(projected.cellVelocity(), 3 * c, primary, 3 * liquidCells[c], 3);
 		for (int f = 0; f < faceIds.length; f++) rates[faceIds[f]] = faceSigns[f] > 0 ? projected.volumeRate()[f] : projected.volumeRate()[f].negate();
