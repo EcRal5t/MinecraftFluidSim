@@ -1,12 +1,14 @@
 package cc.ecisr.mmm.fluid.air;
 
-import cc.ecisr.mmm.fluid.LiquidGeometryState;
+import cc.ecisr.mmm.geometry.ResolvedControlVolume;
+
+
 import java.util.Arrays;
 import java.util.List;
 
 /** Immutable exact gas support; several chambers may occupy parts of the same base cell. */
-public record GasGeometryState(double rootWidthMetres, List<LiquidGeometryState.ControlVolume> cells,
-		int[] nodeOrdinals, int nodeCount) {
+public record GasGeometryState(double rootWidthMetres, List<ResolvedControlVolume> cells,
+		int[] nodeOrdinals, int nodeCount, boolean sealedExterior) {
 	public GasGeometryState {
 		if (!(rootWidthMetres > 0) || !Double.isFinite(rootWidthMetres) || cells == null || nodeOrdinals == null
 				|| cells.size() != nodeOrdinals.length || nodeCount < 0 || nodeCount > GasLimits.MAX_NODES_PER_REGION)
@@ -14,7 +16,7 @@ public record GasGeometryState(double rootWidthMetres, List<LiquidGeometryState.
 		cells = List.copyOf(cells); nodeOrdinals = nodeOrdinals.clone();
 		int[] first = new int[nodeCount + 1]; Arrays.fill(first, -1);
 		for (int c = 0; c < cells.size(); c++) {
-			if (c > 0 && LiquidGeometryState.compareGeometry(cells.get(c - 1), cells.get(c)) >= 0)
+			if (c > 0 && ResolvedControlVolume.compareGeometry(cells.get(c - 1), cells.get(c)) >= 0)
 				throw new IllegalArgumentException("Gas geometry must be unique and canonical");
 			for (double velocity : cells.get(c).copyVelocity()) if (velocity != 0)
 				throw new IllegalArgumentException("Lumped gas support cannot carry a spatial momentum field");

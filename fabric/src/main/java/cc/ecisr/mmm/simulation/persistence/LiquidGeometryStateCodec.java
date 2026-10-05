@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.simulation.persistence;
 
+import cc.ecisr.mmm.geometry.ResolvedControlVolume;
+
 import cc.ecisr.mmm.fluid.LiquidGeometryState;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -17,25 +19,13 @@ final class LiquidGeometryStateCodec {
 	private static final int MAX_BYTES = 16 * 1_048_576;
 
 	byte[] encode(LiquidGeometryState state) throws IOException {
-		long bytes = 24L + 4L * state.markerCount() + 4L * state.cells().size();
-		for (var cell : state.cells()) {
-			bytes += 56L + 4L * (cell.copyFaceOffsets().length + cell.copyFaceVertices().length);
-			for (var value : cell.copyVertices()) bytes += 4L + Math.max(1L, (value.bitLength() + 8L) / 8);
-			for (var value : cell.copyPlanes()) bytes += 4L + Math.max(1L, (value.bitLength() + 8L) / 8);
-			if (bytes > MAX_BYTES) throw new IOException("Liquid geometry exceeds checkpoint payload budget");
-		}
+		long bytes = 20L + 4L * state.markerCount() + 4L * state.cells().size() + cellBytes(state.cells());
 		if (bytes > MAX_BYTES) throw new IOException("Liquid geometry exceeds checkpoint payload budget");
 		var buffer = new ByteArrayOutputStream((int) bytes);
 		try (var out = new DataOutputStream(buffer)) {
 			out.writeInt(MAGIC); out.writeDouble(state.rootWidthMetres());
 			writeInts(out, state.copyMarkerCells()); writeInts(out, state.copyFragmentOwners());
-			out.writeInt(state.cells().size());
-			for (var cell : state.cells()) {
-				out.writeInt(cell.level()); out.writeInt(cell.x()); out.writeInt(cell.y()); out.writeInt(cell.z());
-				writeBigInts(out, cell.copyVertices()); writeInts(out, cell.copyFaceOffsets());
-				writeInts(out, cell.copyFaceVertices()); writeBigInts(out, cell.copyPlanes());
-				for (double velocity : cell.copyVelocity()) out.writeDouble(velocity);
-			}
+			writeCells(out, state.cells());
 		}
 		if (buffer.size() != bytes) throw new IllegalStateException("Liquid geometry wire size differs from its admission estimate");
 		return buffer.toByteArray();
@@ -47,17 +37,8 @@ final class LiquidGeometryStateCodec {
 			if (in.readInt() != MAGIC) throw new IOException("Unknown liquid geometry encoding");
 			double width = in.readDouble();
 			int[] markers = readInts(in), owners = readInts(in);
-			int count = readCount(in, 284);
-			if (owners.length != count) throw new IOException("Liquid geometry fragment count differs from ownership");
-			var cells = new ArrayList<LiquidGeometryState.ControlVolume>(count);
-			for (int c = 0; c < count; c++) {
-				int level = in.readInt(), x = in.readInt(), y = in.readInt(), z = in.readInt();
-				BigInteger[] vertices = readBigInts(in);
-				int[] offsets = readInts(in), indices = readInts(in);
-				BigInteger[] planes = readBigInts(in);
-				double[] velocity = {in.readDouble(), in.readDouble(), in.readDouble()};
-				cells.add(new LiquidGeometryState.ControlVolume(level, x, y, z, vertices, offsets, indices, planes, velocity));
-			}
+			var cells = readCells(in);
+			if (owners.length != cells.size()) throw new IOException("Liquid geometry fragment count differs from ownership");
 			if (in.available() != 0) throw new IOException("Trailing liquid geometry bytes");
 			return new LiquidGeometryState(width, cells, markers, owners);
 		} catch (IllegalArgumentException | ArithmeticException invalid) {
@@ -65,10 +46,41 @@ final class LiquidGeometryStateCodec {
 		}
 	}
 
-	private static void writeInts(DataOutputStream out, int[] values) throws IOException {
+	static long cellBytes(java.util.List<ResolvedControlVolume> cells) throws IOException {
+		long bytes = 4;
+		for (var cell : cells) {
+			bytes += 56L + 4L * (cell.copyFaceOffsets().length + cell.copyFaceVertices().length);
+			for (var value : cell.copyVertices()) bytes += 4L + Math.max(1L, (value.bitLength() + 8L) / 8);
+			for (var value : cell.copyPlanes()) bytes += 4L + Math.max(1L, (value.bitLength() + 8L) / 8);
+			if (bytes > MAX_BYTES) throw new IOException("Convex geometry exceeds checkpoint payload budget");
+		}
+		return bytes;
+	}
+	static void writeCells(DataOutputStream out, java.util.List<ResolvedControlVolume> cells) throws IOException {
+		out.writeInt(cells.size());
+		for (var cell : cells) {
+			out.writeInt(cell.level()); out.writeInt(cell.x()); out.writeInt(cell.y()); out.writeInt(cell.z());
+			writeBigInts(out, cell.copyVertices()); writeInts(out, cell.copyFaceOffsets());
+			writeInts(out, cell.copyFaceVertices()); writeBigInts(out, cell.copyPlanes());
+			for (double velocity : cell.copyVelocity()) out.writeDouble(velocity);
+		}
+	}
+	static java.util.List<ResolvedControlVolume> readCells(DataInputStream in) throws IOException {
+		int count = readCount(in, 284); var cells = new ArrayList<ResolvedControlVolume>(count);
+		for (int c = 0; c < count; c++) {
+			int level = in.readInt(), x = in.readInt(), y = in.readInt(), z = in.readInt();
+			BigInteger[] vertices = readBigInts(in);
+			int[] offsets = readInts(in), indices = readInts(in);
+			BigInteger[] planes = readBigInts(in);
+			double[] velocity = {in.readDouble(), in.readDouble(), in.readDouble()};
+			cells.add(new ResolvedControlVolume(level, x, y, z, vertices, offsets, indices, planes, velocity));
+		}
+		return java.util.List.copyOf(cells);
+	}
+	static void writeInts(DataOutputStream out, int[] values) throws IOException {
 		out.writeInt(values.length); for (int value : values) out.writeInt(value);
 	}
-	private static int[] readInts(DataInputStream in) throws IOException {
+	static int[] readInts(DataInputStream in) throws IOException {
 		int[] values = new int[readCount(in, 4)];
 		for (int i = 0; i < values.length; i++) values[i] = in.readInt();
 		return values;

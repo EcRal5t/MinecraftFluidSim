@@ -8,12 +8,14 @@ final class LiquidGeometryPhaseInput {
 	final LiquidControlVolumeMesh mesh;
 	final List<LiquidGeometryRefinement.Cell> regions;
 	final double rootWidthMetres;
+	final boolean sealedExterior;
 	final int[] fragments;
 	final double[] cellVelocity, faceVelocity;
 
 	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions) {
 		if (state.rootWidthMetres() != domain.rootWidthMetres || maximumRegions < 1) throw new IllegalArgumentException("Invalid geometric phase input");
 		rootWidthMetres = domain.rootWidthMetres;
+		sealedExterior = sealed;
 		var source = LiquidGeometryStateMapper.restore(state); var remap = new LiquidGeometryRemap(domain.leaves);
 		var byLeaf = new ArrayList<ArrayList<LiquidPolyhedron>>(); var ids = new ArrayList<ArrayList<Integer>>();
 		for (int c = 0; c < domain.leaves.size(); c++) { byLeaf.add(new ArrayList<>()); ids.add(new ArrayList<>()); }

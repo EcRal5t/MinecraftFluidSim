@@ -54,6 +54,8 @@ marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 compone
 
 几何份额分配使用任意精度整数权重进行最大余数分配，保持标准体积 nanos、组分和 species 的整数总量，并按同一实际份额携带质量与 residual。极小正交叠和大权重无需先转换为纳体积整数或 binary64 比例。
 
+解析几何域通过 `ResolvedGasStateLifecycle` 初始化与恢复库存，完整候选携带气腔空间支持、库存和审计列。初次有限气腔按实际容量建立环境库存并记录 source；恢复从已保存库存与实际容量重建状态方程。现有解析气腔接入要求颗粒和连续固相库存为空。几何发生运动后的库存交接仍待接入，当前空间一致性校验拒绝缺少完整后继的候选。
+
 - 每个密闭节点以 canonical minimum-cell key 和完整 cell membership 标识。
 - 每个气体组分保存稳定 component ID、标准体积 nanos、独立质量 kg、可选 species 和 chemical mass residual kg；气体的两个质量列都不使用凝聚相 solver mass weight。
 - source、sink、质量 roundoff 和 residual roundoff 是独立审计列。

@@ -325,6 +325,8 @@ public final class RegionCheckpointAssembler {
 				ChemicalAuditLedgerCodec.encode(particles.externalSource(), particles.escapedSink())));
 		if (gas != null) manifestExtensions.add(new RegionExtension(GasRegionStateCodec.MANIFEST_EXTENSION,
 				new GasRegionStateCodec().encodeManifest(gasManifest(gas, sectionStates, particles.hasChemicalState()))));
+		if (gas != null && gas.geometry() != null) manifestExtensions.add(new RegionExtension(
+				GasGeometryStateCodec.MANIFEST_EXTENSION, new GasGeometryStateCodec().encode(gas.geometry())));
 		if (granular != null) manifestExtensions.add(new RegionExtension(GranularRegionStateCodec.MANIFEST_EXTENSION,
 				new GranularRegionStateCodec().encodeManifest(granularManifest(granular, sectionStates,
 						particles.hasChemicalState()))));

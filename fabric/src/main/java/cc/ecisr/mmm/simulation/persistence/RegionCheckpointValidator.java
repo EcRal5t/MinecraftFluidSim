@@ -49,6 +49,7 @@ final class RegionCheckpointValidator {
 	private final RegionManifest manifest;
 	private final List<RegionSectionState> sections;
 	private LiquidGeometryState liquidGeometry;
+	private cc.ecisr.mmm.fluid.air.GasGeometryState gasGeometry;
 	private RegionParticleReconstruction.State particleColumns;
 
 	RegionCheckpointValidator(RegionCheckpoint checkpoint) {
@@ -93,6 +94,7 @@ final class RegionCheckpointValidator {
 		if (manifest.layout().hasMaterials()) validateMaterialLedgers();
 		if (manifest.hasChemicalState()) validateChemicalLedgers();
 		boolean gasPayload = hasExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION);
+		validateGasGeometry(gasPayload);
 		boolean pendingPhaseVolumePayload = hasExtension(manifest.extensions(),
 				PendingPhaseVolumeCodec.MANIFEST_EXTENSION);
 		boolean thermalBuoyancyPayload = hasExtension(manifest.extensions(),
@@ -130,6 +132,7 @@ final class RegionCheckpointValidator {
 	}
 
 	LiquidGeometryState liquidGeometry() { return liquidGeometry; }
+	cc.ecisr.mmm.fluid.air.GasGeometryState gasGeometry() { return gasGeometry; }
 	RegionParticleReconstruction.State particleColumns() { return particleColumns; }
 
 	private void validateLiquidGeometry() throws IOException {
@@ -146,6 +149,35 @@ final class RegionCheckpointValidator {
 					manifest.layout().hasMaterials() ? particleColumns.markerMass() : null, manifest.solverConfig().density());
 		} catch (IllegalArgumentException | IllegalStateException invalid) {
 			throw new IOException("Resolved liquid geometry disagrees with checkpoint inventory or collision: " + invalid.getMessage(), invalid);
+		}
+	}
+
+	private void validateGasGeometry(boolean gasPayload) throws IOException {
+		for (var section : sections) if (hasExtension(section.extensions(), GasGeometryStateCodec.MANIFEST_EXTENSION))
+			throw new IOException("Resolved gas geometry is manifest-only");
+		if (!hasExtension(manifest.extensions(), GasGeometryStateCodec.MANIFEST_EXTENSION)) return;
+		if (!gasPayload || liquidGeometry == null) throw new IOException("Resolved gas requires complete liquid geometry and gas inventory");
+		if (hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)) {
+			var solids = new GranularRegionStateCodec().decodeManifest(requiredExtension(manifest.extensions(),
+					GranularRegionStateCodec.MANIFEST_EXTENSION).payload());
+			if (solids.activeSvq() > 0 || solids.depositSvq() > 0)
+				throw new IOException("Resolved gas requires spatial support for granular inventory");
+		}
+		if (hasExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION)) {
+			var thermal = new ThermalRegionStateCodec().decodeManifest(requiredExtension(manifest.extensions(),
+						ThermalRegionStateCodec.MANIFEST_EXTENSION).payload());
+			if (thermal.coherentGroupCount() > 0)
+				throw new IOException("Resolved gas requires spatial support for coherent solid inventory");
+		}
+		gasGeometry = new GasGeometryStateCodec().decode(requiredExtension(manifest.extensions(), GasGeometryStateCodec.MANIFEST_EXTENSION).payload());
+		if (!gasGeometry.sealedExterior()) throw new IOException("Controller checkpoint requires a sealed exterior");
+		try {
+			var state = new FlipParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
+					manifest.totalMarkerCount(), (float) manifest.totalVolume(), particleColumns.positionVolume(), particleColumns.velocities(),
+					particleColumns.solidMask(), liquidGeometry);
+			cc.ecisr.mmm.fluid.GasGeometryStateValidation.requireCompatible(gasGeometry, state, 65_536, 4_194_304);
+		} catch (IllegalArgumentException | IllegalStateException invalid) {
+			throw new IOException("Resolved gas geometry disagrees with checkpoint phases or collision: " + invalid.getMessage(), invalid);
 		}
 	}
 
@@ -196,7 +228,7 @@ final class RegionCheckpointValidator {
 	}
 
 	private void validateGasLedgers() throws IOException {
-		new RegionCheckpointRestorer(new RegionCheckpoint(manifest, sections)).validateGasLedgers();
+		new RegionCheckpointRestorer(new RegionCheckpoint(manifest, sections)).validateGasLedgers(gasGeometry);
 	}
 
 	private void validateThermalLedgers() throws IOException {

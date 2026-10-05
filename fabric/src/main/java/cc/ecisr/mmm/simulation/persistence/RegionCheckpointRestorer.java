@@ -48,6 +48,7 @@ public final class RegionCheckpointRestorer {
 	private final List<RegionSectionState> sections;
 	private boolean validated;
 	private cc.ecisr.mmm.fluid.LiquidGeometryState liquidGeometry;
+	private cc.ecisr.mmm.fluid.air.GasGeometryState gasGeometry;
 	private RegionParticleReconstruction.State particleColumns;
 
 	public RegionCheckpointRestorer(RegionCheckpoint checkpoint) {
@@ -82,7 +83,7 @@ public final class RegionCheckpointRestorer {
 		if (!manifest.hasGasState()) throw new IOException("This region-state has no gas state");
 		if (registry == null) throw new IOException("Authoritative gas registry is unavailable");
 		validateCheckpoint();
-		return reconstructGasPayload(registry, chemicalRegistry);
+		return reconstructGasPayload(registry, chemicalRegistry, gasGeometry);
 	}
 
 	public FlipThermalParticleState reconstructThermal(ThermalRegistry registry) throws IOException {
@@ -308,7 +309,8 @@ public final class RegionCheckpointRestorer {
 		return particleColumns;
 	}
 
-	private GasStateSnapshot reconstructGasPayload(GasRegistry registry, ChemicalRegistry chemicalRegistry) throws IOException {
+	private GasStateSnapshot reconstructGasPayload(GasRegistry registry, ChemicalRegistry chemicalRegistry,
+			cc.ecisr.mmm.fluid.air.GasGeometryState geometry) throws IOException {
 		GasRegionStateCodec codec = new GasRegionStateCodec();
 		GasRegionStateCodec.ManifestData data = codec.decodeManifest(
 				requiredExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION).payload());
@@ -352,7 +354,7 @@ public final class RegionCheckpointRestorer {
 			snapshot = new GasStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
 					data.registryFingerprint(), data.chemicalRegistryFingerprint(), nodes, memberships, lineages,
 					data.externalSource(), data.escapedSink(),
-					data.massRoundoff(), data.residualRoundoff());
+					data.massRoundoff(), data.residualRoundoff(), geometry);
 			AirNetwork audit = new AirNetwork(registry == null
 					? cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions.createRegistry() : registry);
 			double[] available = new double[nodes.size()]; java.util.Arrays.fill(available, 1.0);
@@ -380,13 +382,14 @@ public final class RegionCheckpointRestorer {
 		return snapshot;
 	}
 
-	void validateGasLedgers() throws IOException { reconstructGasPayload(null, null); }
+	void validateGasLedgers(cc.ecisr.mmm.fluid.air.GasGeometryState geometry) throws IOException { reconstructGasPayload(null, null, geometry); }
 
 	private void validateCheckpoint() throws IOException {
 		if (validated) return;
 		var validator = new RegionCheckpointValidator(new RegionCheckpoint(manifest, sections));
 		validator.validate();
 		liquidGeometry = validator.liquidGeometry();
+		gasGeometry = validator.gasGeometry();
 		particleColumns = validator.particleColumns();
 		validated = true;
 	}

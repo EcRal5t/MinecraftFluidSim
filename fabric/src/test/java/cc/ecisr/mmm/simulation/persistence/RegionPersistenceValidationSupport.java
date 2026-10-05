@@ -89,6 +89,15 @@ abstract class RegionPersistenceValidationSupport {
 	}
 
 	static void assertGasStateEquals(GasStateSnapshot expected, GasStateSnapshot actual) {
+		require((expected.geometry() == null) == (actual.geometry() == null), "resolved gas support presence changed across persistence");
+		if (expected.geometry() != null) {
+			var a = expected.geometry(); var b = actual.geometry();
+			require(a.rootWidthMetres() == b.rootWidthMetres() && a.sealedExterior() == b.sealedExterior()
+					&& a.nodeCount() == b.nodeCount() && Arrays.equals(a.nodeOrdinals(), b.nodeOrdinals()) && a.cells().size() == b.cells().size(),
+					"resolved gas support or chamber membership changed across persistence");
+			for (int c = 0; c < a.cells().size(); c++) require(LiquidGeometryState.compare(a.cells().get(c), b.cells().get(c)) == 0,
+					"resolved gas fragment changed across persistence");
+		}
 		require(expected.sizeX() == actual.sizeX() && expected.sizeY() == actual.sizeY() && expected.sizeZ() == actual.sizeZ()
 				&& expected.registryFingerprint().equals(actual.registryFingerprint())
 				&& expected.chemicalRegistryFingerprint().equals(actual.chemicalRegistryFingerprint())

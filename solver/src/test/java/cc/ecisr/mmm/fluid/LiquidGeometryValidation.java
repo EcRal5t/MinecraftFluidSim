@@ -44,12 +44,44 @@ final class LiquidGeometryValidation {
 		phasePartitionPreservesSolidOpenGeometry();
 		resolvedDomainUsesCollisionOpenSpace();
 		resolvedGasSeparatesChambersInsideOneBaseCell();
+		resolvedGasSurvivesCompleteCandidate();
 		liquidSourcesUseExactOpenGeometry();
 		inventoryCentroidUsesResolvedCollisionSupport();
 		geometricSourceBatchPreservesActualCapacity();
 		geometricExtractionUsesOccupiedSupportAndVelocity();
 		exactCompactionPreservesGeometryAndPhysicalFields();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static void resolvedGasSurvivesCompleteCandidate() {
+		var config = FluidSolverConfig.prototypeDefaults(); float h = config.cellSize();
+		byte[] collision = new byte[8]; java.util.Arrays.fill(collision, (byte) 0xff); collision[0] = 0;
+		var sheet = new LiquidGeometryRefinement.Cell(1, 0, 0, 0,
+				LiquidPolyhedron.box(0, 0.25 - 1.0 / 1024, 0, 0.5, 0.25 + 1.0 / 1024, 0.5));
+		var geometry = LiquidGeometryStateMapper.capture(java.util.List.of(sheet), 2 * (double) h, new int[]{0});
+		var liquid = new FlipParticleState(2, 2, 2, h, 1, 1.0F / 256,
+				new float[]{0.5F * h, 0.5F * h, 0.5F * h, 1.0F / 256}, new float[3], collision, geometry);
+		var domain = new FluidDomain(2, 2, 2, config); domain.restoreParticleState(liquid); domain.sealDomainBoundary();
+		var gas = domain.bootstrapGasState("");
+		if (gas.geometry() == null || gas.nodes().size() != 2 || !domain.gasState.network.auditClosed())
+			throw new AssertionError("Resolved gas bootstrap did not initialize two actual finite chambers");
+		var input = domain.captureAuthoritativeState(); var restored = FluidDomain.restoreAuthoritativeState(input);
+		var after = restored.exportGasState("");
+		if (after.geometry() != gas.geometry() || !after.nodes().equals(gas.nodes())
+				|| !after.externalSource().equals(gas.externalSource()) || !after.escapedSink().equals(gas.escapedSink())
+				|| !restored.gasState.network.auditClosed()) throw new AssertionError("Complete candidate lost resolved gas support or component inventory");
+		for (int n = 1; n <= 2; n++) if (restored.gasNodeGaugePressurePa(n) != domain.gasNodeGaugePressurePa(n)
+				|| restored.gasState.network.availableVolume(n) != domain.gasState.network.availableVolume(n))
+			throw new AssertionError("Restored gas EOS used a coarse cell capacity");
+		var rejected = new FluidDomain(2, 2, 2, config); rejected.restoreParticleState(liquid); rejected.sealDomainBoundary();
+		var joined = new cc.ecisr.mmm.fluid.air.GasGeometryState(geometry.rootWidthMetres(), gas.geometry().cells(),
+				new int[gas.geometry().cells().size()], 0, true);
+		var invalid = cc.ecisr.mmm.fluid.air.GasStateSnapshot.captureResolved(2, 2, 2, joined,
+				new cc.ecisr.mmm.fluid.air.AirNetwork(), "");
+		try { rejected.restoreGasState(invalid, domain.gasState.network.registry()); throw new AssertionError("Gas restore accepted inconsistent chamber support"); }
+		catch (IllegalArgumentException expected) {
+			if (rejected.gasState.cellNodeId != null || rejected.gasState.geometry != null || rejected.gasState.network.nodeCount() != 0)
+				throw new AssertionError("Rejected gas restore changed the live topology");
+		}
 	}
 	private static void resolvedGasSeparatesChambersInsideOneBaseCell() {
 		var collision = new FlipCutCellGeometry(2, 2, 2);
@@ -82,7 +114,7 @@ final class LiquidGeometryValidation {
 				throw new AssertionError("Gas support matching ignored its exact-intersection work budget");
 			} catch (IllegalStateException expected) { }
 			if (sealed) {
-				var joined = new cc.ecisr.mmm.fluid.air.GasGeometryState(1, gas.state.cells(), new int[gas.state.cells().size()], 0);
+				var joined = new cc.ecisr.mmm.fluid.air.GasGeometryState(1, gas.state.cells(), new int[gas.state.cells().size()], 0, true);
 				try {
 					ResolvedGasGeometry.requireCompatible(joined, refined, 4096);
 					throw new AssertionError("Saved gas support joined two independent sealed chambers");

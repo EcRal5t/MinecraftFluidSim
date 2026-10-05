@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.geometry.ResolvedControlVolume;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,7 +19,7 @@ final class LiquidGeometryStateMapper {
 	static LiquidGeometryState capture(List<LiquidGeometryRefinement.Cell> cells, double rootWidth, int[] markerCells, int[] fragmentOwners, double[] velocity) {
 		if (fragmentOwners.length != cells.size()) throw new IllegalArgumentException("Incomplete liquid fragment ownership");
 		if (velocity.length != 3 * cells.size()) throw new IllegalArgumentException("Incomplete liquid geometric velocity field");
-		var packed = new ArrayList<LiquidGeometryState.ControlVolume>();
+		var packed = new ArrayList<ResolvedControlVolume>();
 		for (int c = 0; c < cells.size(); c++) packed.add(pack(cells.get(c), java.util.Arrays.copyOfRange(velocity, 3 * c, 3 * c + 3)));
 		var order = new ArrayList<Integer>(); for (int c = 0; c < cells.size(); c++) order.add(c);
 		order.sort((a, b) -> LiquidGeometryState.compareGeometry(packed.get(a), packed.get(b)));
@@ -27,7 +29,7 @@ final class LiquidGeometryStateMapper {
 			int owner = fragmentOwners[ordinal]; if (owner < 0 || owner >= cells.size()) throw new IllegalArgumentException("Liquid fragment has no inventory group");
 			first.putIfAbsent(owner, canonical[ordinal]); groups[canonical[ordinal]] = first.get(owner);
 		}
-		var result = new ArrayList<LiquidGeometryState.ControlVolume>();
+		var result = new ArrayList<ResolvedControlVolume>();
 		for (int ordinal : order) result.add(packed.get(ordinal));
 		int[] owners = markerCells.clone();
 		for (int p = 0; p < owners.length; p++) {
@@ -37,7 +39,7 @@ final class LiquidGeometryStateMapper {
 		return new LiquidGeometryState(rootWidth, result, owners, groups);
 	}
 
-	static LiquidGeometryState.ControlVolume pack(LiquidGeometryRefinement.Cell cell, double[] velocity) {
+	static ResolvedControlVolume pack(LiquidGeometryRefinement.Cell cell, double[] velocity) {
 		var faces = LiquidExactPolygon.faces(cell.geometry());
 		var points = new java.util.TreeSet<LiquidExactPolygon.Vertex>(java.util.Comparator.comparing(LiquidExactPolygon.Vertex::x)
 				.thenComparing(LiquidExactPolygon.Vertex::y).thenComparing(LiquidExactPolygon.Vertex::z).thenComparing(LiquidExactPolygon.Vertex::w));
@@ -62,13 +64,13 @@ final class LiquidGeometryStateMapper {
 			int original = order.get(f); System.arraycopy(cycles.get(original), 0, indices, offsets[f], offsets[f + 1] - offsets[f]);
 			var plane = faces.get(original).coefficients(); for (int a = 0; a < 4; a++) planes[4 * f + a] = plane.get(a);
 		}
-		return new LiquidGeometryState.ControlVolume(cell.level(), cell.x(), cell.y(), cell.z(), xyz, offsets, indices, planes, velocity);
+		return new ResolvedControlVolume(cell.level(), cell.x(), cell.y(), cell.z(), xyz, offsets, indices, planes, velocity);
 	}
 
 	static List<LiquidGeometryRefinement.Cell> restore(LiquidGeometryState state) {
 		return restoreCells(state.cells());
 	}
-	static List<LiquidGeometryRefinement.Cell> restoreCells(List<LiquidGeometryState.ControlVolume> packed) {
+	static List<LiquidGeometryRefinement.Cell> restoreCells(List<ResolvedControlVolume> packed) {
 		var result = new ArrayList<LiquidGeometryRefinement.Cell>();
 		for (var cell : packed) {
 			var xyz = cell.copyVertices(); int[] offsets = cell.copyFaceOffsets(), indices = cell.copyFaceVertices();

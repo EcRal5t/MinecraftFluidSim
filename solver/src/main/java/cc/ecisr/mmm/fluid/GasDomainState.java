@@ -16,4 +16,5 @@ final class GasDomainState {
 	int[] cellNodeId;
 	int[] cellLineageNodeId;
 	boolean pressureActive;
+	cc.ecisr.mmm.fluid.air.GasGeometryState geometry;
 }

@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.geometry.ResolvedControlVolume;
+
 import cc.ecisr.mmm.fluid.air.GasGeometryState;
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import java.util.ArrayList;
@@ -19,20 +21,20 @@ final class ResolvedGasGeometry {
 		var ambient = new boolean[roots.length];
 		for (var face : input.mesh.faces) if (face.second() == -1 && input.fragments[face.first()] < 0)
 			ambient[roots[face.first()]] = true;
-		var packed = new ArrayList<LiquidGeometryState.ControlVolume>(); var phases = new ArrayList<Integer>();
+		var packed = new ArrayList<ResolvedControlVolume>(); var phases = new ArrayList<Integer>();
 		for (int c = 0; c < input.fragments.length; c++) if (input.fragments[c] < 0) {
 			packed.add(LiquidGeometryStateMapper.pack(input.regions.get(c), new double[3])); phases.add(c);
 		}
 		var order = new ArrayList<Integer>(); for (int c = 0; c < packed.size(); c++) order.add(c);
 		order.sort((a, b) -> LiquidGeometryState.compareGeometry(packed.get(a), packed.get(b)));
-		var nodes = new HashMap<Integer, Integer>(); var cells = new ArrayList<LiquidGeometryState.ControlVolume>();
+		var nodes = new HashMap<Integer, Integer>(); var cells = new ArrayList<ResolvedControlVolume>();
 		int[] labels = new int[order.size()]; phaseNodes = new int[input.fragments.length]; Arrays.fill(phaseNodes, -1);
 		for (int c = 0; c < order.size(); c++) {
 			int original = order.get(c), phase = phases.get(original), root = roots[phase];
 			int node = ambient[root] ? 0 : nodes.computeIfAbsent(root, ignored -> nodes.size() + 1);
 			cells.add(packed.get(original)); labels[c] = node; phaseNodes[phase] = node;
 		}
-		state = new GasGeometryState(input.rootWidthMetres, cells, labels, nodes.size());
+		state = new GasGeometryState(input.rootWidthMetres, cells, labels, nodes.size(), input.sealedExterior);
 		volumes = volumes(state);
 	}
 
@@ -48,7 +50,8 @@ final class ResolvedGasGeometry {
 	/** Matches complete support across equivalent refinements and returns the saved node labels for this mesh. */
 	static int[] requireCompatible(GasGeometryState saved, LiquidGeometryPhaseInput input, int maximumPairs) {
 		var derived = new ResolvedGasGeometry(input);
-		if (saved.nodeCount() != derived.state.nodeCount()) throw new IllegalArgumentException("Saved gas chamber count differs from actual phase geometry");
+		if (saved.sealedExterior() != input.sealedExterior || saved.nodeCount() != derived.state.nodeCount())
+			throw new IllegalArgumentException("Saved gas chamber count or exterior condition differs from actual phase geometry");
 		var overlap = new ResolvedGasOverlap(saved, derived.state, maximumPairs);
 		requireCoverage(saved, overlap.oldCovered); requireCoverage(derived.state, overlap.newCovered);
 		int[] labels = new int[saved.nodeCount() + 1]; Arrays.fill(labels, -1); labels[0] = 0;
