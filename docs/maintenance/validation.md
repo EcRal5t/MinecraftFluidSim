@@ -59,6 +59,8 @@
 
 表中是定位场景的入口，完整调用列表以 `CpuValidationSuite` 为准。长场景的注液坐标、循环步数和逐步断言留在测试代码中维护。
 
+完整 `surface-tension` 追加解析液气几何的材料润湿步：60° 与 120° 接触角均经 CPU 后端生成候选、冷恢复，再核对表面能与动能、液体质量体积及密闭气体库存。短模式保留已有表面力校验。单独定位这两个完整步时，可调用 `LiquidCharacteristicValidation` 的 `material-surface` 参数，追加角度可选取其中一个算例。
+
 自然对流增长率随 `thermal` 选择器常驻校验：两级网格、临界 Ra 两侧、两倍线性振幅，以及体积、材料质量、species、壁面 source/sink、舍入与载体内能闭合。单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[线性对流有效域](../architecture/thermal-state.md#自然对流的线性有效域)。
 
 粒子分布研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。默认输出固壁法向轮廓、正反向平流、满液体与自由面解析保面积映射、重播种二阶矩和 5,000 步溃坝的空间误差，并对照封闭满液体约束前后的压力体积；用 `--args="analytic transport"` 可只运行指定对照。`--args="free-analytic"` 从逆解析映射独立积分液体覆盖率，报告两级参考积分的差异，并检查积分点及网格细化后 L1 误差递减和整体体积闭合。默认构建的完整 `free-surface` 同时运行 5,000 步溃坝，逐步检查精确单元容量、共享压力库存、满格积分点分布及累计质量舍入界。`free-surface` 守护分量隔离、精确满液体判定及微小真实缺口，`reseeding` 守护旋转协方差、秩损失拒绝、线性速度场和体积推导的拆分空间矩误差界。空间验收见[单元有限体积输运](../architecture/fluid-solver.md#单元有限体积输运)，完整步的成本要求见[生产资格](../roadmap/performance-and-backends.md#有限体积输运的生产资格)。

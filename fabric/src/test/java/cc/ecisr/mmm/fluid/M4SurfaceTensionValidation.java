@@ -15,6 +15,7 @@ public static void main(String[] args) {
 	validateMergeBreakupConservation();
 	validateContactAngleSpreading();
 	validateLiquidPairPressureJump();
+	if (args.length == 0 || !args[0].equals("--fast")) LiquidCharacteristicValidation.validateMaterialSurfaceEnergy();
 	System.out.println("M4 surface-tension solver gate passed: static droplet Laplace jump, "
 			+ "contact-angle spreading, liquid-pair pressure jump, no sustained parasitic flow and exact marker conservation");
 }

@@ -15,8 +15,6 @@ final class ResolvedLiquidMechanicalStage {
 		if (domain.hasPendingPhaseVolumeWork() || domain.hasGranularInventory()
 				|| domain.thermalState != null && domain.thermalState.coherentPhases().groupCount() != 0)
 			throw new IllegalStateException("Resolved mechanics requires complete phase and solid geometry");
-		if (domain.hasAnySurfaceTension() || domain.hasAnyLiquidPairTension())
-			throw new IllegalStateException("Resolved mechanics requires geometric surface energy");
 		var state = domain.liquidGeometryState;
 		LiquidGeometryStateMapper.requireCompatible(state, domain);
 		if (domain.gasState.geometry == null) domain.gasTopologyCoordinator.refresh();
@@ -45,8 +43,16 @@ final class ResolvedLiquidMechanicalStage {
 					pressureNodes, rows, (face, gas) -> gas < 0 ? 0 : pressureBoundary.gasPressureOfNode(actualNodes[gas]), domain.config.viscousWallCondition());
 			LiquidPhaseMechanics.Result result;
 			try {
+				LiquidPressureFaceEnergy surface = null;
+				if (Arrays.stream(properties.surfaceCoefficient).anyMatch(value -> value != 0)) {
+					var rates = new LiquidExactPolygon.Fraction[input.mesh.faces.size()]; Arrays.fill(rates, LiquidExactPolygon.Fraction.ZERO);
+					var reference = new LiquidConformingVelocity(input.mesh, rates, input.cellVelocity, input.fragments, domain.config.viscousWallCondition());
+					surface = new LiquidGeometricSurfaceEnergy(reference, properties.surfaceCoefficient).pressure;
+				}
 				result = mechanics.advance(input.cellVelocity, input.faceVelocity, properties.acceleration, dt,
-						domain.config.pressureTolerance(), domain.config.pressureTolerance(), domain.config.maxPressureIterations());
+						domain.config.pressureTolerance(), domain.config.pressureTolerance(), domain.config.maxPressureIterations(), surface);
+			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
+				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());
 			} catch (LiquidInterfaceResolutionRequired finer) {
 				for (int c : finer.cells()) {
 					var children = LiquidGeometryRefinement.children(input.regions.get(c));
