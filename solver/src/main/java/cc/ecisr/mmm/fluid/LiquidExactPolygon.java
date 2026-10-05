@@ -34,9 +34,11 @@ final class LiquidExactPolygon {
 	}
 	private final List<Vertex> vertices;
 	private volatile Vertex centroidVertex;
+	private volatile List<Fraction> integratedCentroid;
 	private volatile List<BigInteger> planeCoefficients;
 	private volatile List<Fraction> integratedArea;
 	private volatile LiquidGeometryPlane supportingPlane;
+	private volatile List<Vertex> integrationCorners;
 	static final class Fraction {
 		private final BigInteger numerator, denominator;
 		static final Fraction ZERO = new Fraction(BigInteger.ZERO, BigInteger.ONE);
@@ -108,7 +110,7 @@ final class LiquidExactPolygon {
 		if (start < 0 || start >= vertices.size()) throw new IllegalArgumentException("Invalid polygon cycle start");
 		if (start == 0) return this;
 		var points = new ArrayList<Vertex>(); for (int v = 0; v < vertices.size(); v++) points.add(vertices.get((start + v) % vertices.size()));
-		var result = new LiquidExactPolygon(points, normal); result.centroidVertex = centroidVertex; result.integratedArea = integratedArea;
+		var result = new LiquidExactPolygon(points, normal); result.centroidVertex = centroidVertex; result.integratedCentroid = integratedCentroid; result.integratedArea = integratedArea;
 		result.planeCoefficients = planeCoefficients; result.supportingPlane = supportingPlane; return result;
 	}
 	List<LiquidPolyhedron.Point> rounded() { return vertices.stream().map(Vertex::rounded).toList(); }
@@ -118,20 +120,21 @@ final class LiquidExactPolygon {
 	}
 	LiquidPolyhedron.Point centroid() { return center().rounded(); }
 	Fraction[] centroidCoordinates() {
-		var value = center(); return new Fraction[] {new Fraction(value.x, value.w), new Fraction(value.y, value.w), new Fraction(value.z, value.w)};
+		center(); return integratedCentroid.toArray(Fraction[]::new);
 	}
 	private Vertex center() {
 		var cached = centroidVertex; if (cached != null) return cached;
-		if (vertices.size() == 3) {
+		var corners = integrationCorners();
+		if (corners.size() == 3) {
 			var result = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
-			for (var vertex : vertices) { var x = vertex.coordinates(); for (int a = 0; a < 3; a++) result[a] = result[a].add(x[a]); }
+			for (var vertex : corners) { var x = vertex.coordinates(); for (int a = 0; a < 3; a++) result[a] = result[a].add(x[a]); }
 			for (int a = 0; a < 3; a++) result[a] = result[a].divide(Fraction.of(3));
-			return centroidVertex = vertex(result);
+			return cacheCenter(result);
 		}
 		int axis = 0; while (normal.get(axis).signum() == 0) axis++;
-		var zero = Fraction.ZERO; var weight = zero; Fraction[] moment = {zero, zero, zero}; var a = vertices.getFirst().coordinates();
-		for (int i = 1; i + 1 < vertices.size(); i++) {
-			var b = vertices.get(i).coordinates(); var c = vertices.get(i + 1).coordinates();
+		var zero = Fraction.ZERO; var weight = zero; Fraction[] moment = {zero, zero, zero}; var a = corners.getFirst().coordinates();
+		for (int i = 1; i + 1 < corners.size(); i++) {
+			var b = corners.get(i).coordinates(); var c = corners.get(i + 1).coordinates();
 			var area = triangleCross(a, b, c)[axis]; weight = weight.add(area);
 			for (int coordinate = 0; coordinate < 3; coordinate++) {
 				var sum = a[coordinate].add(b[coordinate]).add(c[coordinate]);
@@ -143,7 +146,10 @@ final class LiquidExactPolygon {
 		for (int coordinate = 0; coordinate < 3; coordinate++) {
 			result[coordinate] = moment[coordinate].divide(weight);
 		}
-		return centroidVertex = vertex(result);
+		return cacheCenter(result);
+	}
+	private Vertex cacheCenter(Fraction[] coordinates) {
+		var point = vertex(coordinates); integratedCentroid = List.of(coordinates); return centroidVertex = point;
 	}
 	static Vertex vertex(Fraction[] coordinates) {
 		var denominator = BigInteger.ONE;
@@ -183,13 +189,32 @@ final class LiquidExactPolygon {
 	}
 	Fraction[] areaVector() {
 		var cached = integratedArea; if (cached != null) return cached.toArray(Fraction[]::new);
-		var result = new Fraction[] {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var origin = vertices.getFirst().coordinates();
-		for (int i = 1; i + 1 < vertices.size(); i++) {
-			var vector = triangleCross(origin, vertices.get(i).coordinates(), vertices.get(i + 1).coordinates());
+		var corners = integrationCorners();
+		var result = new Fraction[] {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var origin = corners.getFirst().coordinates();
+		for (int i = 1; i + 1 < corners.size(); i++) {
+			var vector = triangleCross(origin, corners.get(i).coordinates(), corners.get(i + 1).coordinates());
 			for (int a = 0; a < 3; a++) result[a] = result[a].add(vector[a].divide(Fraction.of(2)));
 		}
 		integratedArea = List.of(result);
 		return result;
+	}
+	/** Collinear edge subdivisions carry no additional area or first moment. Mesh incidence retains every vertex. */
+	private List<Vertex> integrationCorners() {
+		var cached = integrationCorners; if (cached != null) return cached;
+		var corners = new ArrayList<Vertex>();
+		for (var vertex : vertices) {
+			while (corners.size() >= 2 && collinear(corners.get(corners.size() - 2), corners.getLast(), vertex)) corners.removeLast();
+			corners.add(vertex);
+		}
+		while (corners.size() > 2) {
+			if (collinear(corners.get(corners.size() - 2), corners.getLast(), corners.getFirst())) corners.removeLast();
+			else if (collinear(corners.getLast(), corners.getFirst(), corners.get(1))) corners.removeFirst();
+			else break;
+		}
+		return integrationCorners = List.copyOf(corners);
+	}
+	private static boolean collinear(Vertex a, Vertex b, Vertex c) {
+		return cross(difference(b, a), difference(c, a)).stream().allMatch(value -> value.signum() == 0);
 	}
 	private static Fraction[] triangleCross(Fraction[] origin, Fraction[] b, Fraction[] c) {
 		var u = new Fraction[3]; var v = new Fraction[3]; var result = new Fraction[3];

@@ -20,6 +20,10 @@ final class LiquidCharacteristicValidation {
 		productionGeometryPipelineUsesMaterialSurfaceEnergy(new double[]{60, 120});
 	}
 	private static void productionGeometryPipelineUsesMaterialSurfaceEnergy(double[] angles) {
+		productionGeometryPipelineUsesMaterialSurfaceEnergy(angles, 1);
+	}
+	private static void productionGeometryPipelineUsesMaterialSurfaceEnergy(double[] angles, int steps) {
+		if (steps < 1) throw new IllegalArgumentException("Material surface requires a positive step count");
 		for (double angle : angles) {
 			long started = System.nanoTime();
 			System.out.println("material surface angle=" + angle + " start");
@@ -32,22 +36,28 @@ final class LiquidCharacteristicValidation {
 			var registry = new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension("mmm:resolved", 1000, "mmm:resolved", 0.125, angle)));
 			domain.setMarkerMaterial(0, registry, 0); domain.sealDomainBoundary(); domain.bootstrapGasState("");
 			double before = surfaceEnergy(domain), mass = domain.totalMass(); var gas = domain.exportGasState("");
-			var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, domain.captureAuthoritativeState(), List.of(), false, 0, true));
-			System.out.println("material surface angle=" + angle + " evaluated millis=" + (System.nanoTime() - started) / 1e6);
-			try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
-				var output = candidate.state().liquidGeometry();
-				System.out.println("material surface liquid=" + output.cells().size() + " gas=" + candidate.state().gas().geometry().cells().size()
-						+ " maxBits=" + output.cells().stream().flatMap(cell -> java.util.Arrays.stream(cell.copyVertices())).mapToInt(java.math.BigInteger::bitLength).max().orElse(0));
-				var next = FluidDomain.restoreAuthoritativeState(candidate.state());
-				System.out.println("material surface angle=" + angle + " restored millis=" + (System.nanoTime() - started) / 1e6);
-				double kinetic = next.particleKineticEnergyJoules();
-				if (!(kinetic > 0 && kinetic + surfaceEnergy(next) < before) || next.cellLiquidVolumeTransport != null
-						|| next.totalMass() != mass || next.totalVolume() != 1.25F || next.particles.count() != 1)
-					throw new AssertionError("Production material surface energy lost geometry, inertia or inventory");
-				if (!gas.nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()
-						.equals(next.exportGasState("").nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()))
-					throw new AssertionError("Production wetting changed sealed gas inventory");
-				System.out.println("material surface angle=" + angle + " verified millis=" + (System.nanoTime() - started) / 1e6);
+			for (int step = 1; step <= steps; step++) {
+				System.out.println("material surface step=" + step + " start millis=" + (System.nanoTime() - started) / 1e6);
+				long stepStarted = System.nanoTime();
+				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step - 1, domain.captureAuthoritativeState(), List.of(), false, 0, true));
+				System.out.println("material surface angle=" + angle + " step=" + step + " fullBackendMillis=" + (System.nanoTime() - stepStarted) / 1e6);
+				try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
+					var next = steps == 1 ? FluidDomain.restoreAuthoritativeState(candidate.state()) : candidate.claimPreparedCpuDomain();
+					var output = next.liquidGeometryState;
+					System.out.println("material surface liquid=" + output.cells().size() + " gas=" + next.gasState.geometry.cells().size()
+							+ " maxBits=" + output.cells().stream().flatMap(cell -> java.util.Arrays.stream(cell.copyVertices())).mapToInt(java.math.BigInteger::bitLength).max().orElse(0));
+					System.out.println("material surface angle=" + angle + " restored millis=" + (System.nanoTime() - started) / 1e6);
+					double kinetic = next.particleKineticEnergyJoules();
+					double after = kinetic + surfaceEnergy(next);
+					if (!(kinetic > 0 && after < before) || next.cellLiquidVolumeTransport != null
+							|| next.totalMass() != mass || next.totalVolume() != 1.25F || next.particles.count() != 1)
+						throw new AssertionError("Production material surface energy lost geometry, inertia or inventory");
+					if (!gas.nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()
+							.equals(next.exportGasState("").nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()))
+						throw new AssertionError("Production wetting changed sealed gas inventory");
+					System.out.println("material surface angle=" + angle + " verified millis=" + (System.nanoTime() - started) / 1e6);
+					domain = next; before = after;
+				}
 			}
 		}
 	}
@@ -366,7 +376,7 @@ final class LiquidCharacteristicValidation {
 	}
 	public static void main(String[] args) {
 		if (args.length >= 1 && args[0].equals("material-surface")) {
-			productionGeometryPipelineUsesMaterialSurfaceEnergy(args.length == 1 ? new double[]{60, 120} : new double[]{Double.parseDouble(args[1])});
+			productionGeometryPipelineUsesMaterialSurfaceEnergy(args.length == 1 ? new double[]{60, 120} : new double[]{Double.parseDouble(args[1])}, args.length > 2 ? Integer.parseInt(args[2]) : 1);
 			System.out.println("Resolved material surface energy full backend validation passed");
 		} else if (args.length == 1 && args[0].equals("conforming-timing")) {
 			productionGeometryPipelinePreservesContinuousShear(2, true);

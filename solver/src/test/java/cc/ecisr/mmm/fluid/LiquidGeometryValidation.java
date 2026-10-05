@@ -5,6 +5,21 @@ final class LiquidGeometryValidation {
 	static void validate() {
 		canonicalGeometryProofSurvivesPacking();
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
+		for (var face : LiquidExactPolygon.faces(cube)) {
+			var vertices = new java.util.ArrayList<LiquidExactPolygon.Vertex>();
+			for (int e = 0; e < face.vertices().size(); e++) {
+				var a = face.vertices().get(e).coordinates(); var b = face.vertices().get((e + 1) % face.vertices().size()).coordinates();
+				vertices.add(face.vertices().get(e));
+				for (int divisor : new int[]{3, 7, 101}) {
+					var point = a.clone();
+					for (int axis = 0; axis < 3; axis++) point[axis] = a[axis].add(b[axis].subtract(a[axis]).multiply(LiquidExactPolygon.Fraction.of(1).subtract(LiquidExactPolygon.Fraction.of(1).divide(LiquidExactPolygon.Fraction.of(divisor)))));
+					vertices.add(LiquidExactPolygon.vertex(point));
+				}
+			}
+			var subdivided = LiquidExactPolygon.restored(vertices, face.coefficients());
+			if (!java.util.Arrays.equals(face.areaVector(), subdivided.areaVector()) || !java.util.Arrays.equals(face.centroidCoordinates(), subdivided.centroidCoordinates())
+					|| subdivided.vertices().size() != vertices.size()) throw new AssertionError("Collinear subdivision changed area, first moment or mesh incidence");
+		}
 		moments(cube.moments(), 1, 0.5, 0.5, 0.5);
 		moments(cube.clip(1, 1, 1, 1).moments(), 1.0 / 6, 1.0 / 24, 1.0 / 24, 1.0 / 24);
 		for (double shift : new double[]{0, 0.125}) {
