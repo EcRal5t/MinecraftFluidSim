@@ -54,7 +54,11 @@ final class LiquidInterfaceVelocityExtension {
 				&& !ambient[component] && displacement[component].signum() != 0) {
 			var indices = componentSupport.get(component); int supports = indices.size(); var weights = new Fraction[supports];
 			for (int i = 0; i < supports; i++) weights[i] = LiquidConvexRegion.of(mesh.cells.get(indices.get(i)).geometry()).measure().volume();
-			if (supports == 0) throw new IllegalStateException("Conservative interface velocity support requires finer gas geometry");
+			if (supports == 0) {
+				int target = component;
+				throw new LiquidInterfaceResolutionRequired(java.util.stream.IntStream.range(0, count)
+						.filter(c -> liquid[c] < 0 && root[c] == target).toArray());
+			}
 			var allocation = LiquidFluxAllocation.proportional(displacement[component], weights);
 			for (int i = 0; i < supports; i++) {
 				int c = indices.get(i); source[c] = allocation[i];

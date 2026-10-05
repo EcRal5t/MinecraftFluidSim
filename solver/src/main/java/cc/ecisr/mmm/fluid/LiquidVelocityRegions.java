@@ -16,7 +16,7 @@ final class LiquidVelocityRegions {
 		private final Fraction[] velocity;
 		Region(LiquidConvexRegion geometry, Fraction[] velocity) { this.geometry = geometry; this.velocity = velocity; }
 		Fraction[] velocity() {
-			if (velocity == null) throw new IllegalStateException("Liquid motion requires incompressible velocity support at finer resolution"); return velocity;
+			if (velocity == null) throw new LiquidCharacteristicTimeResolutionRequired(); return velocity;
 		}
 	}
 	private final List<List<Region>> cells;

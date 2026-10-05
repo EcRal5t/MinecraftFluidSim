@@ -7,11 +7,54 @@ import java.util.List;
 final class LiquidCharacteristicValidation {
 	private static final LiquidPolyhedron.Point GRAVITY = new LiquidPolyhedron.Point(0, -9.81, 0);
 	static void validate() {
+		productionGeometryPipelinePreservesGravity();
+		productionGeometryPipelineRefinesGasSupport();
 		repeatedGravityPreservesUniformCharacteristic();
 		wholeVolumeCharacteristicsPreserveGeometry();
 		mixedVelocitySupportSurvivesNextStep();
 		thinLiquidLayerPreservesSeparateGasPressureNodes();
 		movingLiquidWallTransportsItsGasContacts();
+	}
+	private static void productionGeometryPipelineRefinesGasSupport() {
+		var sheet = new LiquidGeometryRefinement.Cell(1, 0, 0, 0,
+				LiquidPolyhedron.box(0, 0.25 - 1.0 / 1024, 0, 0.5, 0.25 + 1.0 / 1024, 0.5));
+		var state = LiquidGeometryStateMapper.capture(List.of(sheet), 1, new int[]{0}, new int[]{0}, new double[]{0, 0.125, 0});
+		byte[] collision = new byte[8]; java.util.Arrays.fill(collision, (byte) 0xff); collision[0] = 0;
+		var config = new FluidSolverConfig(0.5F, 1000, 0, 0.01F, 512, 1e-5F, 0.45F, 0.002F, 0.8F);
+		var domain = new FluidDomain(2, 2, 2, config);
+		domain.restoreParticleState(new FlipParticleState(2, 2, 2, 0.5F, 1, 1.0F / 256,
+				new float[]{0.25F, 0.25F, 0.25F, 1.0F / 256}, new float[]{0, 0.125F, 0}, collision, state));
+		domain.sealDomainBoundary(); var gasBefore = domain.bootstrapGasState("");
+		var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, domain.captureAuthoritativeState(), List.of(), false, 0, true));
+		var next = FluidDomain.restoreAuthoritativeState(candidate.state()); var gasAfter = next.exportGasState("");
+		if (gasAfter.geometry().cells().stream().noneMatch(c -> c.level() > 1)
+				|| !gasBefore.nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()
+					.equals(gasAfter.nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()))
+			throw new AssertionError("Production refinement changed finite gas stock or omitted finer support");
+		if (!(next.gasNodeGaugePressurePa(1) < 0 && next.gasNodeGaugePressurePa(2) > 0))
+			throw new AssertionError("Production gas projection did not use the moving sheet capacities");
+	}
+	private static void productionGeometryPipelinePreservesGravity() {
+		var liquid = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.4375, 0.6875, 0.4375, 0.5625, 0.8125, 0.5625));
+		var state = LiquidGeometryStateMapper.capture(List.of(liquid), 1, new int[]{0});
+		var config = new FluidSolverConfig(0.5F, 1000, 9.81F, 0.01F, 512, 1e-5F, 0.45F, 0.002F, 0.8F);
+		var domain = new FluidDomain(2, 2, 2, config);
+		domain.restoreParticleState(new FlipParticleState(2, 2, 2, 0.5F, 1, 1.0F / 64,
+				new float[]{0.5F, 0.75F, 0.5F, 1.0F / 64}, new float[3], new byte[8], state));
+		domain.bootstrapGasState("");
+		for (int step = 1; step <= 5; step++) {
+			var before = domain.captureAuthoritativeState();
+			var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step, before, List.of(), false, 0, true));
+			domain = FluidDomain.restoreAuthoritativeState(candidate.state());
+			var moments = LiquidGeometryStateMapper.restore(domain.liquidGeometryState).stream().map(LiquidGeometryRefinement.Cell::moments)
+					.reduce(LiquidPolyhedron.Moments.ZERO, LiquidPolyhedron.Moments::add);
+			double expectedSpeed = -(double) config.gravity() * config.timeStep() * step;
+			close(moments.volume(), 1.0 / 512, 1e-17);
+			close(moments.centroid(1), 0.75 - (double) config.gravity() * config.timeStep() * config.timeStep() * step * (step + 1) / 2, 1e-14);
+			for (var cell : domain.liquidGeometryState.cells()) close(cell.copyVelocity()[1], expectedSpeed, 1e-14);
+			if (domain.cellLiquidVolumeTransport != null || domain.particles.count() != 1)
+				throw new AssertionError("Geometric production step entered legacy transport or changed inventory groups");
+		}
 	}
 	private static void movingLiquidWallTransportsItsGasContacts() { movingLiquidWallTransportsItsGasContacts(ignored -> { }); }
 	static void movingLiquidWallTransportsItsGasContacts(java.util.function.Consumer<FluidDomain> initialize) {
@@ -131,6 +174,14 @@ final class LiquidCharacteristicValidation {
 		for (double pressure : result.pressure().gasPressure()) close(pressure, 100000, 0);
 		for (var cell : result.velocity()) for (var tetra : cell.tetrahedra()) for (var rate : tetra.outwardFlux())
 			if (rate.signum() != 0) throw new AssertionError("Balanced thin layer acquired artificial gas or liquid motion");
+		var vacuumNodes = nodes.clone();
+		for (int c = 0; c < vacuumNodes.length; c++) if (labels[c] < 0) vacuumNodes[c] = LiquidPhaseMechanics.PRESCRIBED_GAS_PRESSURE;
+		var vacuum = new LiquidPhaseMechanics(mesh, labels, density, viscosity, List.of(), vacuumNodes,
+				(f, c) -> -cc.ecisr.mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE, FluidSolverConfig.WallCondition.FREE_SLIP)
+				.advance(new double[3 * regions.size()], new double[3 * mesh.faces.size()], new double[3 * regions.size()], 0.01, 1e-11, 1e-11, 512);
+		if (vacuum.pressure().gasPressure().length != 0) throw new AssertionError("Vacuum support acquired a finite compliance row");
+		for (var cell : vacuum.velocity()) for (var tetra : cell.tetrahedra()) for (var rate : tetra.outwardFlux())
+			if (rate.signum() != 0) throw new AssertionError("Balanced finite vacuum chambers acquired artificial motion");
 		for (int c = 0; c < nodes.length; c++) if (labels[c] < 0) nodes[c] = 0;
 		try {
 			new LiquidPhaseMechanics(mesh, labels, density, viscosity, gas, nodes, (f, c) -> 100000, FluidSolverConfig.WallCondition.FREE_SLIP);

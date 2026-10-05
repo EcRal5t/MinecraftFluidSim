@@ -7,6 +7,8 @@ import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 
 /** Pressure, viscous stress and interface motion share the same complete phase geometry. */
 final class LiquidPhaseMechanics {
+	/** Finite gas support with a prescribed pressure and no representable compliance row. */
+	static final int PRESCRIBED_GAS_PRESSURE = -2;
 	interface InterfacePressure { double at(int face, int gasCell); }
 	record Result(LiquidControlVolumeViscosity.Result viscosity, LiquidControlVolumeProjection.Result pressure,
 			LiquidInterfaceVelocityExtension.Result extension, LiquidControlVolumeVelocity.Result[] velocity) { }
@@ -37,7 +39,11 @@ final class LiquidPhaseMechanics {
 			int neighbor = a && b ? second : face.second() == -2 ? -2 : -1; int node = -1; double prescribed = face.prescribed();
 			if (neighbor == -1) {
 				int gas = a ? face.second() : face.first(); prescribed = pressure.at(f, gas);
-				if (gas >= 0) { node = gasCellNode[gas]; if (node < -1 || node >= gasNodes.size()) throw new IllegalArgumentException("Gas cell has no pressure node"); }
+				if (gas >= 0) {
+					node = gasCellNode[gas];
+					if (node < PRESCRIBED_GAS_PRESSURE || node >= gasNodes.size()) throw new IllegalArgumentException("Gas cell has no pressure node");
+					if (node == PRESCRIBED_GAS_PRESSURE) node = -1;
+				}
 			}
 			var vector = sign > 0 ? face.areaVector() : face.areaVector().stream().map(LiquidExactPolygon.Fraction::negate).toList();
 			faces.add(new LiquidControlVolumeProjection.Face(source, neighbor, surface, prescribed, vector, face.centroid())); ids.add(f); signs.add(sign); nodes.add(node);
@@ -55,7 +61,7 @@ final class LiquidPhaseMechanics {
 		}
 		var support = new int[count]; Arrays.fill(support, -1);
 		for (int c = 0; c < liquid.length; c++) if (liquid[c] < 0) {
-			int node = nodes[c]; if (node < -1 || node >= count || ambient[roots[c]] != (node == -1))
+			int node = nodes[c]; if (node < PRESCRIBED_GAS_PRESSURE || node >= count || ambient[roots[c]] != (node == -1))
 				throw new IllegalArgumentException("Gas pressure node differs from its resolved chamber");
 			if (node >= 0) {
 				if (support[node] >= 0 && support[node] != roots[c]) throw new IllegalArgumentException("Separate gas chambers share one pressure node");

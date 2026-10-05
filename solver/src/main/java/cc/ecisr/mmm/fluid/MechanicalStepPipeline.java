@@ -21,6 +21,7 @@ final class MechanicalStepPipeline {
 	) { }
 
 	interface Access {
+		SubstepOutcome advanceResolvedGeometry(float dt, boolean captureAudit, MechanicalAuditAccumulator audit);
 		void ensureGrid();
 		void prepareCarrierProperties();
 		double projectedCourant(float dt);
@@ -59,6 +60,8 @@ final class MechanicalStepPipeline {
 	                      boolean pendingWorkConsumed, FluidDomain.ViscousStepStats viscosity) { }
 
 	SubstepOutcome substep(float dt, int substep, boolean captureAudit, MechanicalAuditAccumulator audit) {
+		var resolved = access.advanceResolvedGeometry(dt, captureAudit, audit);
+		if (resolved != null) return resolved;
 		access.ensureGrid();
 		double stageKineticEnergy = captureAudit ? access.gridKineticEnergyJoules() : 0.0;
 		if (captureAudit) audit.particleToGridTransferJoules +=

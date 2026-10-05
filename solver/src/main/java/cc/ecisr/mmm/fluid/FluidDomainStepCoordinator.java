@@ -47,6 +47,8 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
 		carrierPropertiesWorkspace.beginStep();
+		if (liquidGeometryState != null && thermochemistryEnabled && (thermalState != null || chemicalParcels != null))
+			throw new IllegalStateException("Resolved thermochemistry requires complete geometric contacts");
 		float before = domain().totalVolume();
 		double massBefore = domain().totalMass();
 		MechanicalAuditAccumulator mechanicalAudit = captureMechanicalAudit
@@ -600,6 +602,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	int calculateSubsteps(float dt) {
+		if (liquidGeometryState != null) return minimumMechanicalSubsteps;
 		if (CellLiquidVolumeTransport.enabled()) return calculateVolumeTransportSubsteps(dt);
 		float maximum = 0.0F;
 		for (int i = 0; i < particles.count(); i++) {
