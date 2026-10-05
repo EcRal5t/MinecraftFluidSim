@@ -11,6 +11,25 @@ final class LiquidPhasePartition {
 		LiquidGeometryRefinement.Cell cell(LiquidPolyhedron geometry) { return new LiquidGeometryRefinement.Cell(level, x, y, z, geometry); }
 	}
 	record Region(LiquidGeometryRefinement.Cell cell, int liquid) { }
+	private record Support(LiquidConvexRegion region, List<LiquidExactPolygon.Vertex> vertices,
+			List<List<java.math.BigInteger>> planes, double[] minimum, double[] maximum) {
+		static Support of(LiquidPolyhedron geometry) {
+			var region = LiquidConvexRegion.of(geometry); var vertices = new java.util.LinkedHashSet<LiquidExactPolygon.Vertex>();
+			for (var face : region.faces()) vertices.addAll(face.vertices());
+			var minimum = new double[]{Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY};
+			var maximum = new double[]{Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY};
+			for (var vertex : vertices) {
+				var point = vertex.rounded(); for (int a = 0; a < 3; a++) {
+					minimum[a] = Math.min(minimum[a], Math.nextDown(point.coordinate(a))); maximum[a] = Math.max(maximum[a], Math.nextUp(point.coordinate(a)));
+				}
+			}
+			return new Support(region, List.copyOf(vertices), region.faces().stream().map(LiquidExactPolygon::coefficients).distinct().toList(), minimum, maximum);
+		}
+		boolean separatedBox(Support other) {
+			for (int a = 0; a < 3; a++) if (maximum[a] <= other.minimum[a] || other.maximum[a] <= minimum[a]) return true;
+			return false;
+		}
+	}
 	private LiquidPhasePartition() { }
 	static int[] gasComponents(LiquidControlVolumeMesh mesh, int[] liquid) {
 		if (liquid.length != mesh.cells.size()) throw new IllegalArgumentException("Incomplete gas phase labels");
@@ -43,15 +62,17 @@ final class LiquidPhasePartition {
 			cells.add(address.cell(liquid));
 		}
 		requireDisjoint(cells);
-		var gas = List.of(leaf.geometry());
+		var gas = List.of(Support.of(leaf.geometry()));
 		for (var liquid : liquids) {
-			var remaining = new ArrayList<LiquidPolyhedron>();
+			var cut = Support.of(liquid); var planes = cut.planes.stream().map(LiquidGeometryPlane::exact).toList();
+			var remaining = new ArrayList<Support>();
 			for (var original : gas) {
-				var inside = original;
-				for (var plane : liquid.planes()) {
+				if (original.separatedBox(cut) || separated(original, cut) || separated(cut, original)) { remaining.add(original); continue; }
+				var inside = original.region.geometry();
+				for (var plane : planes) {
 					if (inside.measure().signum() <= 0) break;
 					var outside = plane.opposite().clip(inside);
-					if (outside.measure().signum() > 0) remaining.add(outside);
+					if (outside.measure().signum() > 0) remaining.add(Support.of(outside));
 					if ((long) remaining.size() + liquids.size() > maximumRegions)
 						throw new IllegalStateException("Phase geometry exceeds its region budget");
 					inside = plane.clip(inside);
@@ -61,7 +82,7 @@ final class LiquidPhasePartition {
 		}
 		var regions = new ArrayList<Region>();
 		for (int l = 0; l < cells.size(); l++) regions.add(new Region(cells.get(l), l));
-		for (var geometry : gas) regions.add(new Region(address.cell(geometry), -1));
+		for (var geometry : gas) regions.add(new Region(address.cell(geometry.region.geometry()), -1));
 		if (regions.size() > maximumRegions) throw new IllegalStateException("Phase geometry exceeds its region budget");
 		var measure = LiquidConvexRegion.EMPTY.measure();
 		for (var region : regions) measure = measure.add(LiquidConvexRegion.of(region.cell.geometry()).measure());
@@ -70,20 +91,20 @@ final class LiquidPhasePartition {
 	}
 
 	static void requireDisjoint(List<LiquidGeometryRefinement.Cell> cells) {
-		var groups = new LinkedHashMap<Address, ArrayList<LiquidConvexRegion>>();
-		for (var cell : cells) groups.computeIfAbsent(Address.of(cell), ignored -> new ArrayList<>()).add(LiquidConvexRegion.of(cell.geometry()));
+		var groups = new LinkedHashMap<Address, ArrayList<Support>>();
+		for (var cell : cells) groups.computeIfAbsent(Address.of(cell), ignored -> new ArrayList<>()).add(Support.of(cell.geometry()));
 		for (var group : groups.values()) for (int a = 0; a < group.size(); a++) for (int b = 0; b < a; b++) {
 			var first = group.get(a); var second = group.get(b);
-			if (separated(first, second) || separated(second, first)) continue;
-			var intersection = first;
-			for (var face : second.faces()) intersection = intersection.clip(face.plane());
+			if (first.separatedBox(second) || separated(first, second) || separated(second, first)) continue;
+			var intersection = first.region;
+			for (var face : second.region.faces()) intersection = intersection.clip(face.plane());
 			if (intersection.hasVolume()) throw new IllegalArgumentException("Liquid fragments have overlapping exact volume: fragments=" + b + "," + a);
 		}
 	}
-	private static boolean separated(LiquidConvexRegion first, LiquidConvexRegion second) {
-		for (var face : second.faces()) {
-			var plane = face.coefficients(); boolean outside = true;
-			search: for (var polygon : first.faces()) for (var vertex : polygon.vertices()) if (vertex.distance(plane).signum() < 0) { outside = false; break search; }
+	private static boolean separated(Support first, Support second) {
+		for (var plane : second.planes) {
+			boolean outside = true;
+			for (var vertex : first.vertices) if (vertex.distance(plane).signum() < 0) { outside = false; break; }
 			if (outside) return true;
 		}
 		return false;

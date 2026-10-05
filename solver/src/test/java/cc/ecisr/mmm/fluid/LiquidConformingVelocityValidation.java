@@ -14,6 +14,7 @@ final class LiquidConformingVelocityValidation {
 		spaceTimeSweepsPreserveVolumeAndSharedFaces();
 		capillaryLoadsShareMechanicalInertiaAndSurfaceWork();
 		implicitCapillarityUsesActualPhaseOrdering();
+		LiquidWetWallValidation.validate();
 	}
 	private static void implicitCapillarityUsesActualPhaseOrdering() {
 		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.625, 0.75)));

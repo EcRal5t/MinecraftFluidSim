@@ -50,7 +50,51 @@ final class LiquidGeometryValidation {
 		geometricSourceBatchPreservesActualCapacity();
 		geometricExtractionUsesOccupiedSupportAndVelocity();
 		exactCompactionPreservesGeometryAndPhysicalFields();
+		materialInterfacesUseResolvedPhaseAndWallGeometry();
+		disjointLiquidRetainsExistingGasRegions();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static void disjointLiquidRetainsExistingGasRegions() {
+		var leaf = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var liquids = java.util.List.of(LiquidPolyhedron.box(0, 0, 0.25, 1, 1, 0.5), LiquidPolyhedron.box(0.25, 0.25, 0.75, 0.75, 0.75, 1));
+		var regions = LiquidPhasePartition.build(leaf, liquids, 128); var lower = LiquidConvexRegion.of(LiquidPolyhedron.box(0, 0, 0, 1, 1, 0.25));
+		boolean retained = false;
+		for (var region : regions) if (region.liquid() < 0) {
+			var geometry = LiquidConvexRegion.of(region.cell().geometry());
+			if (geometry.measure().same(lower.measure()) && lower.faces().stream().allMatch(face -> geometry.faces().stream().allMatch(p -> p.inside(face.coefficients())))) retained = true;
+		}
+		if (!retained) throw new AssertionError("Disjoint liquid fragmented an unchanged gas region");
+	}
+	private static void materialInterfacesUseResolvedPhaseAndWallGeometry() {
+		var registry = new FluidMaterialRegistry(java.util.List.of(
+				FluidMaterial.withSurfaceTension("mmm:first", 1000, "mmm:first", 0.125, 60),
+				FluidMaterial.withSurfaceTension("mmm:second", 900, "mmm:second", 0.25, 120)),
+				java.util.List.of(new FluidMaterialRegistry.LiquidPairTension(0, 1, 0.375)));
+		var domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
+		domain.setVolume(0, 0, 0, 1); domain.setVolume(1, 0, 0, 1); domain.setMaterialInCell(1, 0, 0, registry, 1);
+		var cells = java.util.List.of(new LiquidGeometryRefinement.Cell(1, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5)),
+				new LiquidGeometryRefinement.Cell(1, 1, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 0.5, 0.5)));
+		var markers = new int[domain.particles.count()]; for (int p = 8; p < markers.length; p++) markers[p] = 1;
+		var state = LiquidGeometryStateMapper.capture(cells, 2 * (double) domain.config.cellSize(), markers);
+		var partition = new LiquidGeometryDomainPartition(2, 2, 2, domain.config.cellSize(), domain.geometry.cutCells, cells, 128);
+		var input = new LiquidGeometryPhaseInput(state, partition, true, 128); var properties = new LiquidGeometryCarrierProperties(domain, state, input);
+		boolean pair = false, gas = false, wet = false, nonwet = false;
+		for (int f = 0; f < input.mesh.faces.size(); f++) {
+			var face = input.mesh.faces.get(f); double coefficient = properties.surfaceCoefficient[f];
+			if (face.second() >= 0 && input.fragments[face.first()] >= 0 && input.fragments[face.second()] >= 0) {
+				if (coefficient != 0.375) throw new AssertionError("Liquid pair energy lost its actual shared interface"); pair = true;
+			} else if (face.second() == -2 && input.fragments[face.first()] >= 0) {
+				wet |= coefficient < 0; nonwet |= coefficient > 0;
+			} else if (coefficient > 0) {
+				if (coefficient != 0.125 && coefficient != 0.25) throw new AssertionError("Liquid-gas energy lost its material phase"); gas = true;
+			}
+		}
+		if (!(pair && gas && wet && nonwet)) throw new AssertionError("Resolved material properties omitted an interface or wall energy");
+		try {
+			var merged = LiquidGeometryStateMapper.capture(cells, state.rootWidthMetres(), new int[markers.length], new int[]{0, 0});
+			new LiquidGeometryCarrierProperties(domain, merged, new LiquidGeometryPhaseInput(merged, partition, true, 128));
+			throw new AssertionError("Immiscible inventory was accepted without its phase interface");
+		} catch (IllegalArgumentException expected) { }
 	}
 	private static void resolvedGasSurvivesCompleteCandidate() {
 		var config = FluidSolverConfig.prototypeDefaults(); float h = config.cellSize();

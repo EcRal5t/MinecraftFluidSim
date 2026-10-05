@@ -1,11 +1,14 @@
 package cc.ecisr.mmm.fluid;
 
-/** The conservative interface extension identifies the actual gas support needing subdivision. */
+/** The shared interface operators identify actual control volumes needing subdivision. */
 final class LiquidInterfaceResolutionRequired extends IllegalStateException {
 	private final int[] cells;
 	LiquidInterfaceResolutionRequired(int[] cells) {
-		super("Conservative interface velocity support requires finer gas geometry");
-		if (cells == null || cells.length == 0) throw new IllegalArgumentException("Missing gas resolution support");
+		this(cells, "Conservative interface velocity support requires finer gas geometry");
+	}
+	LiquidInterfaceResolutionRequired(int[] cells, String reason) {
+		super(reason);
+		if (cells == null || cells.length == 0) throw new IllegalArgumentException("Missing interface resolution support");
 		this.cells = cells.clone();
 	}
 	int[] cells() { return cells.clone(); }

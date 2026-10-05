@@ -117,6 +117,18 @@ final class LiquidConformingVelocity {
 		velocity = java.util.Collections.unmodifiableMap(nodes); tetrahedra = List.copyOf(tets); faceCenters = List.copyOf(centers); cellCenters = List.copyOf(cells);
 		cornerWeights = java.util.Collections.unmodifiableMap(fits); walls = java.util.Collections.unmodifiableMap(wallNormals); faceWeights = List.copyOf(integration);
 	}
+	/** A moving material interface needs an exactly affine-complete spatial velocity trace. */
+	void requireSurfaceResolution(double[] coefficient) {
+		if (coefficient.length != mesh.faces.size()) throw new IllegalArgumentException("Incomplete interface coefficients");
+		var points = new LinkedHashSet<Vertex>(); var finer = new LinkedHashSet<Integer>();
+		for (int f = 0; f < coefficient.length; f++) if (coefficient[f] != 0) points.addAll(mesh.exactPolygons.get(f).vertices());
+		for (var point : points) {
+			var weights = cornerWeights.get(point); if (weights == null) throw new IllegalArgumentException("Material interface has no liquid velocity support");
+			var center = zero(); for (var entry : weights.entrySet()) add(center, scale(mesh.cells.get(entry.getKey()).geometry().centroidCoordinates(), entry.getValue()));
+			if (!Arrays.equals(center, point.coordinates())) finer.addAll(weights.keySet());
+		}
+		if (!finer.isEmpty()) throw new LiquidInterfaceResolutionRequired(finer.stream().mapToInt(Integer::intValue).toArray(), "Material interface requires affine-complete liquid velocity support");
+	}
 	/** Adjoint loads act on the same cell means and face rates that move the surface nodes. */
 	Load load(Map<Vertex, List<Fraction>> forces) {
 		var nodes = new LinkedHashMap<Vertex, Fraction[]>(); for (var p : velocity.keySet()) nodes.put(p, zero());

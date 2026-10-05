@@ -50,6 +50,11 @@ final class ConservativeControlVolumeProjection {
 	LiquidControlVolumeProjection.Result project(double[] incoming, LiquidPolyhedron.Point gravity, double dt, double tolerance, int maximumIterations, LiquidPressureFaceEnergy surface) {
 		if (incoming.length != 3 * cells.size() || !(dt > 0) || !Double.isFinite(dt) || !(tolerance > 0) || !Double.isFinite(tolerance) || maximumIterations <= 0)
 			throw new IllegalArgumentException("Invalid conservative pressure request");
+		if (surface != null && surface.hasSignedMetric()) {
+			double inertia = Double.POSITIVE_INFINITY; for (var metric : metrics) inertia = Math.min(inertia, metric.minimumEigenvalue());
+			if (Math.nextUp(Math.nextUp(dt * dt) * surface.negativeCurvatureBound()) >= inertia)
+				throw new LiquidCharacteristicTimeResolutionRequired("Wet-wall curvature requires a shorter positive-inertia time step");
+		}
 		double[] predicted = incoming.clone();
 		for (int c = 0; c < cells.size(); c++) for (int a = 0; a < 3; a++) {
 			predicted[3 * c + a] += dt * gravity.coordinate(a);

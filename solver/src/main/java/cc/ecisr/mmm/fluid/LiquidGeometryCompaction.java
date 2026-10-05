@@ -52,16 +52,23 @@ final class LiquidGeometryCompaction {
 		return LiquidGeometryStateMapper.capture(retained, input.rootWidthMetres(), markers, fragments, speeds);
 	}
 	private static LiquidPolyhedron union(LiquidGeometryRefinement.Cell a, LiquidGeometryRefinement.Cell b) {
-		var polygons = new ArrayList<>(LiquidExactPolygon.faces(a.geometry())); polygons.addAll(LiquidExactPolygon.faces(b.geometry()));
-		var planes = new ArrayList<LiquidGeometryPlane>();
-		for (var face : polygons) {
-			var coefficients = face.coefficients();
-			if (polygons.stream().allMatch(p -> p.inside(coefficients))) planes.add(face.plane());
-		}
-		double width = a.width(); var hull = LiquidPolyhedron.box(a.minimum(0), a.minimum(1), a.minimum(2),
-				a.minimum(0) + width, a.minimum(1) + width, a.minimum(2) + width);
-		for (var plane : planes) hull = plane.clip(hull);
+		var first = LiquidExactPolygon.faces(a.geometry()); var second = LiquidExactPolygon.faces(b.geometry());
+		var exterior = new ArrayList<LiquidExactPolygon>();
+		// A convex union retains supporting faces and removes faces entirely covered by the other region.
+		// Partial coverage of a nonsupporting face proves a concavity; no auxiliary hull is needed.
+		if (!exterior(first, second, exterior) || !exterior(second, first, exterior)) return null;
 		var original = LiquidConvexRegion.of(a.geometry()).measure().add(LiquidConvexRegion.of(b.geometry()).measure());
-		return LiquidConvexRegion.of(hull).measure().same(original) ? hull : null;
+		var sharedEdges = LiquidExactPolygon.splitEdges(exterior);
+		// Complementary interior faces cancel algebraically, preserving volume and every spatial moment.
+		return LiquidPolyhedron.restoredExact(sharedEdges, original);
+	}
+	private static boolean exterior(java.util.List<LiquidExactPolygon> source, java.util.List<LiquidExactPolygon> other, ArrayList<LiquidExactPolygon> result) {
+		var planes = other.stream().map(LiquidExactPolygon::coefficients).toList();
+		for (var face : source) {
+			var plane = face.coefficients();
+			if (other.stream().allMatch(p -> p.inside(plane))) result.add(face);
+			else if (planes.stream().anyMatch(p -> !face.inside(p))) return false;
+		}
+		return true;
 	}
 }
