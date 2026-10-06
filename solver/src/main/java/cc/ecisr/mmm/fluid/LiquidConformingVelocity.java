@@ -31,6 +31,7 @@ final class LiquidConformingVelocity {
 	private final FluidSolverConfig.WallCondition wall;
 	private final Map<List<Integer>, LiquidAffineFit> interpolation;
 	private final IntegralWeights integrals;
+	private LiquidConformingRateAdjoint observedAdjoint;
 
 	LiquidConformingVelocity(LiquidControlVolumeMesh mesh, Fraction[] rate, double[] mean) {
 		this(mesh, rate, mean, new int[mesh.cells.size()]);
@@ -278,6 +279,12 @@ final class LiquidConformingVelocity {
 			}
 		}
 		return result;
+	}
+	/** Bounded evaluation of rateLoad for numerical operator assembly. */
+	LiquidBoundedArithmetic.Value[] observedRateLoad(Map<Vertex, List<Fraction>> forces) {
+		if (observedAdjoint == null) observedAdjoint = new LiquidConformingRateAdjoint(this, cornerWeights, faceWeights, walls,
+				integrals.tetrahedronMeanWeights(), integrals::meanRateBasis);
+		return observedAdjoint.apply(forces);
 	}
 	/** Exact geometry coefficients are assembled lazily and shared only by reconstructions of this mesh. */
 	private static final class IntegralWeights {

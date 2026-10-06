@@ -201,6 +201,11 @@ final class LiquidConformingVelocityValidation {
 			var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
 			requireAffineField(mesh, point -> new Fraction[]{point[0].add(point[1].multiply(Fraction.of(0.25))).add(point[2].multiply(Fraction.of(0.5))).multiply(Fraction.of(0.125)),
 					span == 2 ? point[1].subtract(point[2].multiply(Fraction.of(0.25))).multiply(Fraction.of(0.125)) : Fraction.ZERO, Fraction.of(0.25)});
+			var sealed = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+			var rates = new Fraction[sealed.faces.size()]; Arrays.fill(rates, Fraction.ZERO);
+			var fixed = new LiquidConformingVelocity(sealed, rates, new double[3 * cells.size()]);
+			var forces = new java.util.LinkedHashMap<LiquidExactPolygon.Vertex, List<Fraction>>();
+			fixed.velocity.keySet().forEach(point -> forces.put(point, List.of(point.coordinates()))); requireObservedRateLoad(fixed, forces);
 		}
 	}
 	private static void requireAffineField(LiquidControlVolumeMesh mesh, java.util.function.Function<Fraction[], Fraction[]> affine) {
@@ -210,6 +215,7 @@ final class LiquidConformingVelocityValidation {
 		}
 		for (int f = 0; f < rates.length; f++) rates[f] = dot(mesh.faces.get(f).areaVector(), affine.apply(mesh.faces.get(f).centroid().toArray(Fraction[]::new)));
 		var field = new LiquidConformingVelocity(mesh, rates, mean);
+		requireObservedRateLoad(field, field.velocity);
 		for (var node : field.velocity.entrySet()) if (!node.getValue().equals(List.of(affine.apply(node.getKey().coordinates()))))
 			throw new AssertionError("Continuous velocity lost affine completeness at " + node.getKey());
 		requireIntegralConstraints(mesh, field, rates, mean);
@@ -303,6 +309,7 @@ final class LiquidConformingVelocityValidation {
 		if (!actual.equals(power) || load.prescribedPower().signum() != 0) throw new AssertionError("Continuous force adjoint lost work at cell, face or wall nodes");
 		var virtualVelocity = field.rateVelocity(projected.volumeRate()); var rateLoad = field.rateLoad(forces); var nodePower = Fraction.ZERO; var ratePower = Fraction.ZERO;
 		if (!Arrays.equals(rateLoad, reference.rateLoad(forces))) throw new AssertionError("Surface virtual-work operator depends on the reference velocity values");
+		requireObservedRateLoad(field, forces);
 		for (var entry : forces.entrySet()) nodePower = nodePower.add(dot(entry.getValue(), virtualVelocity.get(entry.getKey()).toArray(Fraction[]::new)));
 		for (int f = 0; f < mesh.faces.size(); f++) ratePower = ratePower.add(rateLoad[f].multiply(projected.volumeRate()[f]));
 		if (!nodePower.equals(ratePower)) throw new AssertionError("Pressure-compatible capillary pullback lost exact virtual work");
@@ -314,6 +321,7 @@ final class LiquidConformingVelocityValidation {
 		var noSlip = new LiquidConformingVelocity(mesh, zeroRate, input, liquid, FluidSolverConfig.WallCondition.NO_SLIP)
 				.reconstruct(projected.volumeRate(), projected.cellVelocity(), liquid, FluidSolverConfig.WallCondition.NO_SLIP);
 		requireIntegralConstraints(mesh, noSlip, projected.volumeRate(), projected.cellVelocity());
+		requireObservedRateLoad(noSlip, forces);
 		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() == -2) {
 			var points = new ArrayList<>(mesh.exactPolygons.get(f).vertices()); points.add(noSlip.faceCenters.get(f));
 			for (var point : points) for (var value : noSlip.velocity.get(point)) if (value.signum() != 0) throw new AssertionError("No-slip continuous wall retained tangential motion");
@@ -323,6 +331,15 @@ final class LiquidConformingVelocityValidation {
 		catch (IllegalArgumentException expected) { }
 		try { reference.reconstruct(projected.volumeRate(), projected.cellVelocity(), liquid, FluidSolverConfig.WallCondition.NO_SLIP); throw new AssertionError("Interpolation reused different wall constraints"); }
 		catch (IllegalArgumentException expected) { }
+	}
+	private static void requireObservedRateLoad(LiquidConformingVelocity field, java.util.Map<LiquidExactPolygon.Vertex, List<Fraction>> forces) {
+		var exact = field.rateLoad(forces); var observed = field.observedRateLoad(forces); double scale = 1;
+		for (var value : exact) scale = Math.max(scale, Math.abs(value.rounded()));
+		for (int f = 0; f < exact.length; f++) {
+			if (Fraction.of(observed[f].value()).subtract(exact[f]).absolute().subtract(Fraction.of(observed[f].error())).signum() > 0)
+				throw new AssertionError("Numerical surface transpose escaped its exact coefficient/error certificate");
+			if (!(observed[f].error() < Math.ulp((float) scale))) throw new AssertionError("Surface transpose certificate lost existing mechanical observation precision");
+		}
 	}
 	private static void separatedLiquidsKeepIndependentVelocityTraces() {
 		var cells = List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.25, 1, 1)),
@@ -336,6 +353,7 @@ final class LiquidConformingVelocityValidation {
 			rate[f] = Fraction.ZERO; if (c >= 0) for (int a = 0; a < 3; a++) rate[f] = rate[f].add(face.areaVector().get(a).multiply(Fraction.of(mean[3 * c + a])));
 		}
 		var field = new LiquidConformingVelocity(mesh, rate, mean, liquid);
+		requireObservedRateLoad(field, field.velocity);
 		for (var tet : field.tetrahedra) for (var point : tet.vertices()) for (int a = 0; a < 3; a++)
 			if (!field.velocity.get(point).get(a).equals(Fraction.of(mean[3 * tet.cell() + a])))
 				throw new AssertionError("Gas geometry coupled the velocity traces of independent liquid regions");
@@ -379,6 +397,7 @@ final class LiquidConformingVelocityValidation {
 		}
 		var field = new LiquidConformingVelocity(mesh, rates, mean); requireIntegralConstraints(mesh, field, rates, mean);
 		var initial = exterior(mesh, field, 0); var power = Fraction.ZERO;
+		requireObservedRateLoad(field, initial.force);
 		for (var node : initial.force.entrySet()) for (int a = 0; a < 3; a++) power = power.subtract(node.getValue().get(a).multiply(field.velocity.get(node.getKey()).get(a)));
 		if (power.signum() != 0) throw new AssertionError("Initial smooth shear has spurious surface work");
 		double previous = Double.POSITIVE_INFINITY;
