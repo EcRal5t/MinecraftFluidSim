@@ -182,23 +182,24 @@ final class LiquidConformingVelocity {
 	}
 	/** Binary64 velocity observations preserve rigid motion; solid-plane projection bounds position roundoff. */
 	Position advectedPosition(Vertex point, Fraction dt) {
-		var origin = point.coordinates(); var rounded = zero();
-		var exact = origin.clone(); var u = velocity.get(point);
+		var origin = point.coordinates(); var rounded = zero(); var discrepancy = zero(); var bound = Fraction.ZERO;
+		var u = velocity.get(point);
 		for (int a = 0; a < 3; a++) {
-			exact[a] = exact[a].add(u.get(a).multiply(dt));
-			rounded[a] = origin[a].add(Fraction.of(u.get(a).rounded()).multiply(dt));
+			var observed = Fraction.of(u.get(a).rounded());
+			rounded[a] = origin[a].add(observed.multiply(dt)); discrepancy[a] = u.get(a).subtract(observed).multiply(dt);
+			// A dyadic upper bound avoids joining unrelated exact velocity denominators just to observe their norm.
+			var upper = discrepancy[a].signum() == 0 ? Fraction.ZERO : Fraction.of(Math.nextUp(discrepancy[a].absolute().rounded()));
+			bound = bound.add(upper.multiply(upper));
 		}
-		var originalError = subtract(rounded, exact); var bound = dot(originalError, originalError);
 		var normals = walls.get(point);
 		if (normals != null) {
 			var rhs = zero(); var weights = new ArrayList<Fraction>();
-			for (var normal : normals) { weights.add(Fraction.of(1)); add(rhs, scale(normal, dot(normal, subtract(exact, rounded)))); }
-			add(rounded, dual(normals, weights, rhs));
-			for (var normal : normals) if (!dot(normal, subtract(exact, rounded)).equals(Fraction.ZERO))
+			for (var normal : normals) { weights.add(Fraction.of(1)); add(rhs, scale(normal, dot(normal, discrepancy))); }
+			var correction = dual(normals, weights, rhs); add(rounded, correction);
+			for (var normal : normals) if (!dot(normal, subtract(discrepancy, correction)).equals(Fraction.ZERO))
 				throw new IllegalStateException("Position rounding changed prescribed solid motion");
 		}
-		var error = subtract(rounded, exact);
-		if (dot(error, error).subtract(bound).signum() > 0) throw new IllegalStateException("Solid-plane position projection increased roundoff");
+		// Exact orthogonal projection onto the supported wall-normal span can only reduce this error norm.
 		return new Position(LiquidExactPolygon.vertex(rounded), bound);
 	}
 	Fraction[] meanPosition(int cell, Fraction dt) {

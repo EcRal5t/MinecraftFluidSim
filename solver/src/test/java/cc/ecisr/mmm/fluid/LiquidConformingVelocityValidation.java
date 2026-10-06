@@ -285,7 +285,12 @@ final class LiquidConformingVelocityValidation {
 		return result;
 	}
 	private static void arbitraryProjectedRatesPreserveMeansAndWalls() {
-		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1)));
+		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
+		arbitraryProjectedRatesPreserveMeansAndWalls(cube);
+		arbitraryProjectedRatesPreserveMeansAndWalls(cube.clip(1, 2, 3, 3.2));
+	}
+	private static void arbitraryProjectedRatesPreserveMeansAndWalls(LiquidPolyhedron shape) {
+		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape));
 		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
 		var input = new double[3 * cells.size()]; for (int i = 0; i < input.length; i++) input[i] = Math.sin(i + 0.5);
 		var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(input, new LiquidPolyhedron.Point(0, 0, 0), 0.01, 1e-10, 512);
@@ -296,6 +301,16 @@ final class LiquidConformingVelocityValidation {
 		if (!field.velocity.equals(fresh.velocity) || Double.doubleToLongBits(field.maximumFittingVelocityErrorMetresPerSecond)
 				!= Double.doubleToLongBits(fresh.maximumFittingVelocityErrorMetresPerSecond)) throw new AssertionError("Geometry reuse changed nodal velocity or its fitting certificate");
 		requireIntegralConstraints(mesh, field, projected.volumeRate(), projected.cellVelocity());
+		var time = Fraction.of(0.0001);
+		for (var node : field.velocity.entrySet()) {
+			var observedPosition = field.advectedPosition(node.getKey(), time); var errorSquared = Fraction.ZERO;
+			for (int a = 0; a < 3; a++) {
+				var exactPosition = node.getKey().coordinates()[a].add(node.getValue().get(a).multiply(time));
+				var error = observedPosition.point().coordinates()[a].subtract(exactPosition); errorSquared = errorSquared.add(error.multiply(error));
+			}
+			if (errorSquared.subtract(observedPosition.roundoffSquared()).signum() > 0)
+				throw new AssertionError("Motion observation certificate lost the actual exact velocity increment or wall projection");
+		}
 		var motion = new LiquidConformingTransport(mesh, field, projected.volumeRate(), 0.0001);
 		if (!(motion.maximumPositionRoundoffMetres > 0 && motion.maximumPositionRoundoffMetres < Math.ulp(0.0001)))
 			throw new AssertionError("Motion roundoff is not bounded at the binary64 increment scale");
