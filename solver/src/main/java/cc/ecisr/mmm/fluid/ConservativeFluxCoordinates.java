@@ -13,15 +13,28 @@ final class ConservativeFluxCoordinates {
 
 	/** A null fixed entry denotes a free face. Unconstrained vertices carry prescribed-pressure or compliant gas nodes. */
 	ConservativeFluxCoordinates(int vertices, int[] first, int[] second, boolean[] constrained, Fraction[] fixed) {
+		this(vertices, first, second, constrained, fixed, unitWeights(first.length));
+	}
+	ConservativeFluxCoordinates(int vertices, int[] first, int[] second, boolean[] constrained, Fraction[] fixed, double[] weights) {
 		if (vertices < 1 || first.length != second.length || first.length != fixed.length || constrained.length != vertices)
 			throw new IllegalArgumentException("Invalid conservative flux graph");
+		if (weights.length != first.length) throw new IllegalArgumentException("Incomplete conservative flux metric");
 		this.vertices = vertices; this.first = first.clone(); this.second = second.clone();
 		this.constrained = constrained.clone(); this.fixed = fixed.clone();
 		var incidence = new ArrayList<ArrayList<Integer>>(); for (int v = 0; v < vertices; v++) incidence.add(new ArrayList<>());
+		var roots = java.util.stream.IntStream.range(0, vertices).toArray(); int open = -1;
+		// Prescribed-pressure roots remain independent; their virtual identification prevents a tree joining two roots.
+		for (int v = 0; v < vertices; v++) if (!constrained[v]) { if (open < 0) open = v; else roots[v] = open; }
 		for (int f = 0; f < first.length; f++) {
 			if (first[f] < 0 || first[f] >= vertices || second[f] < 0 || second[f] >= vertices || first[f] == second[f])
 				throw new IllegalArgumentException("Flux face has invalid support");
-			if (fixed[f] == null) { incidence.get(first[f]).add(f); incidence.get(second[f]).add(f); }
+			if (fixed[f] == null && (!(weights[f] > 0) || !Double.isFinite(weights[f]))) throw new IllegalArgumentException("Free flux face requires a positive finite metric");
+		}
+		var sorted = java.util.stream.IntStream.range(0, first.length).filter(f -> fixed[f] == null).boxed()
+				.sorted(java.util.Comparator.<Integer>comparingDouble(f -> weights[f]).thenComparingInt(f -> f)).toList();
+		for (int f : sorted) {
+			int a = root(roots, first[f]), b = root(roots, second[f]); if (a == b) continue;
+			roots[b] = a; incidence.get(first[f]).add(f); incidence.get(second[f]).add(f);
 		}
 		parent = new int[vertices]; parentFace = new int[vertices]; order = new int[vertices];
 		Arrays.fill(parent, -1); Arrays.fill(parentFace, -1); boolean[] visited = new boolean[vertices]; int tail = 0, head = 0;
@@ -40,6 +53,13 @@ final class ConservativeFluxCoordinates {
 		}
 		boolean[] tree = new boolean[first.length]; for (int f : parentFace) if (f >= 0) tree[f] = true;
 		independent = java.util.stream.IntStream.range(0, first.length).filter(f -> fixed[f] == null && !tree[f]).toArray();
+	}
+	/** Low-energy tree edges avoid placing small-area face stiffness in every fundamental cycle. */
+	ConservativeFluxCoordinates weighted(double[] weights) { return new ConservativeFluxCoordinates(vertices, first, second, constrained, fixed, weights); }
+	private static double[] unitWeights(int count) { var weights = new double[count]; Arrays.fill(weights, 1); return weights; }
+	private static int root(int[] roots, int vertex) {
+		int result = vertex; while (roots[result] != result) result = roots[result];
+		while (roots[vertex] != vertex) { int next = roots[vertex]; roots[vertex] = result; vertex = next; } return result;
 	}
 	int size() { return independent.length; }
 	int face(int coordinate) { return independent[coordinate]; }

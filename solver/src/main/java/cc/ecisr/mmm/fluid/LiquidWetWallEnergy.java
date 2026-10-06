@@ -2,6 +2,8 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Vertex;
+import cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.Value;
+import static cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.ZERO;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -11,6 +13,7 @@ import java.util.Map;
 final class LiquidWetWallEnergy {
 	private record Face(List<Vertex> nodes, Fraction[] normal, Fraction half) { }
 	private final List<Face> faces;
+	private List<Value[]> observedNormal;
 	LiquidWetWallEnergy(List<LiquidExactPolygon> polygons, double[] coefficient) {
 		if (coefficient.length != polygons.size()) throw new IllegalArgumentException("Incomplete wet-wall energy coefficients");
 		var result = new ArrayList<Face>();
@@ -19,6 +22,21 @@ final class LiquidWetWallEnergy {
 			if (coefficient[f] != 0) result.add(new Face(polygons.get(f).vertices(), LiquidAreaEnergy.normal(polygons.get(f)), Fraction.of(coefficient[f]).divide(Fraction.of(2))));
 		}
 		faces = List.copyOf(result);
+	}
+	Map<Vertex, Value[]> observedGradient(Map<Vertex, Value[]> values) {
+		if (observedNormal == null) observedNormal = faces.stream().map(face -> java.util.Arrays.stream(face.normal).map(normal -> Value.of(face.half.multiply(normal))).toArray(Value[]::new)).toList();
+		var result = new LinkedHashMap<Vertex, Value[]>();
+		for (int f = 0; f < faces.size(); f++) {
+			var face = faces.get(f); var normal = observedNormal.get(f);
+			for (int i = 0; i < face.nodes.size(); i++) {
+				var before = values.get(face.nodes.get((i + face.nodes.size() - 1) % face.nodes.size())); var after = values.get(face.nodes.get((i + 1) % face.nodes.size()));
+				var force = result.computeIfAbsent(face.nodes.get(i), ignored -> new Value[]{ZERO, ZERO, ZERO});
+				for (int a = 0; a < 3; a++) { int b = (a + 1) % 3, c = (a + 2) % 3;
+					force[a] = force[a].add(after[b].subtract(before[b]).multiply(normal[c]).subtract(after[c].subtract(before[c]).multiply(normal[b])));
+				}
+			}
+		}
+		return result;
 	}
 	Map<Vertex, List<Fraction>> gradient(Map<Vertex, List<Fraction>> values) {
 		var result = new LinkedHashMap<Vertex, Fraction[]>();

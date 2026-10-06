@@ -85,7 +85,7 @@ final class LiquidInterfaceVelocityExtension {
 			reference[f] = exactReference[f].toDouble(); referenceError[f] = Math.ulp(reference[f]);
 			if (!Double.isFinite(reference[f])) throw new IllegalStateException("Interface extension reference exceeds numerical range");
 		}
-		var coordinates = new ConservativeFluxCoordinates(count + 1, first, second, constrained, fixed);
+		var coordinates = new ConservativeFluxCoordinates(count + 1, first, second, constrained, fixed, resistance);
 		double[] observedSource = new double[source.length]; for (int c = 0; c < source.length; c++) observedSource[c] = source[c].toDouble();
 		double[] diagonal = coordinates.cycleWeights(resistance), support = coordinates.cycleMinimum(volume), variable = new double[coordinates.size()];
 		var exact = new Fraction[variable.length];

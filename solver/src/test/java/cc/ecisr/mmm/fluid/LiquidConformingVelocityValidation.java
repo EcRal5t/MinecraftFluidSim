@@ -315,6 +315,12 @@ final class LiquidConformingVelocityValidation {
 		for (int f = 0; f < mesh.faces.size(); f++) actual = actual.add(load.faceForce().get(f).multiply(projected.volumeRate()[f]));
 		if (!actual.equals(power) || load.prescribedPower().signum() != 0) throw new AssertionError("Continuous force adjoint lost work at cell, face or wall nodes");
 		var virtualVelocity = field.rateVelocity(projected.volumeRate()); var rateLoad = field.rateLoad(forces); var nodePower = Fraction.ZERO; var ratePower = Fraction.ZERO;
+		var observedVelocity = field.rateOperator().velocity(Arrays.stream(projected.volumeRate()).map(LiquidBoundedArithmetic.Value::of).toArray(LiquidBoundedArithmetic.Value[]::new));
+		for (var entry : virtualVelocity.entrySet()) for (int a = 0; a < 3; a++) {
+			var observed = observedVelocity.get(entry.getKey())[a]; var expected = entry.getValue().get(a);
+			if (Fraction.of(observed.value()).subtract(expected).absolute().subtract(Fraction.of(observed.error())).signum() > 0)
+				throw new AssertionError("Forward pressure velocity escaped its exact geometry/error certificate");
+		}
 		if (!Arrays.equals(rateLoad, reference.rateLoad(forces))) throw new AssertionError("Surface virtual-work operator depends on the reference velocity values");
 		requireObservedRateLoad(field, forces);
 		for (var entry : forces.entrySet()) nodePower = nodePower.add(dot(entry.getValue(), virtualVelocity.get(entry.getKey()).toArray(Fraction[]::new)));

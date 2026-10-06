@@ -11,8 +11,8 @@ import java.util.Map;
 import java.util.function.IntFunction;
 import static cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.*;
 
-/** The same exact continuous-velocity transpose, evaluated with certified coefficient and arithmetic errors. */
-final class LiquidConformingRateAdjoint {
+/** Continuous pressure-rate velocity and its transpose, with shared certified geometry coefficients. */
+final class LiquidConformingRateOperator {
 	private record Face(Value[] rate, Value[][] corner) { }
 	private final LiquidConformingVelocity field;
 	private final Map<Vertex, Map<Integer, Value>> corners;
@@ -23,7 +23,7 @@ final class LiquidConformingRateAdjoint {
 	private final Map<Integer, Value[][]> meanBasis = new java.util.HashMap<>();
 	private final Map<Integer, Face> faces = new java.util.HashMap<>();
 
-	LiquidConformingRateAdjoint(LiquidConformingVelocity field, Map<Vertex, Map<Integer, Fraction>> corners,
+	LiquidConformingRateOperator(LiquidConformingVelocity field, Map<Vertex, Map<Integer, Fraction>> corners,
 			List<Map<Vertex, Fraction>> faceWeights, Map<Vertex, List<Fraction[]>> walls,
 			List<Fraction> meanWeights, IntFunction<Fraction[][]> exactMeanBasis) {
 		this.field = field; this.exactMeanBasis = exactMeanBasis;
@@ -35,10 +35,14 @@ final class LiquidConformingRateAdjoint {
 		this.meanWeights = meanWeights.stream().map(Value::of).toList();
 	}
 	Value[] apply(Map<Vertex, List<Fraction>> forces) {
+		var observed = new LinkedHashMap<Vertex, Value[]>(); forces.forEach((point, force) -> observed.put(point, force.stream().map(Value::of).toArray(Value[]::new)));
+		return applyObserved(observed);
+	}
+	Value[] applyObserved(Map<Vertex, Value[]> forces) {
 		var nodes = new LinkedHashMap<Vertex, Value[]>(); for (var point : field.velocity.keySet()) nodes.put(point, zero());
 		for (var entry : forces.entrySet()) {
-			if (!nodes.containsKey(entry.getKey()) || entry.getValue().size() != 3) throw new IllegalArgumentException("Force has no continuous velocity support");
-			for (int a = 0; a < 3; a++) nodes.get(entry.getKey())[a] = nodes.get(entry.getKey())[a].add(Value.of(entry.getValue().get(a)));
+			if (!nodes.containsKey(entry.getKey()) || entry.getValue().length != 3) throw new IllegalArgumentException("Force has no continuous velocity support");
+			add(nodes.get(entry.getKey()), entry.getValue());
 		}
 		var primary = new Value[field.mesh.cells.size()][3]; for (int c = 0; c < primary.length; c++) {
 			primary[c] = zero(); var force = nodes.get(field.cellCenters.get(c));
@@ -61,13 +65,43 @@ final class LiquidConformingRateAdjoint {
 			for (var weight : corner.getValue().entrySet()) add(primary[weight.getKey()], scale(force, weight.getValue()));
 		}
 		for (int c = 0; c < primary.length; c++) if (nodes.containsKey(field.cellCenters.get(c))) {
-			var basis = meanBasis.computeIfAbsent(c, cell -> {
-				var exact = exactMeanBasis.apply(cell); var observed = new Value[exact.length][3];
-				for (int i = 0; i < exact.length; i++) for (int a = 0; a < 3; a++) observed[i][a] = Value.of(exact[i][a]); return observed;
-			});
+			var basis = meanBasis(c);
 			for (int i = 0; i < basis.length; i++) { int f = field.mesh.cellFaces[c][i]; result[f] = result[f].add(dot(basis[i], primary[c])); }
 		}
 		return result;
+	}
+	/** Forward and transpose share every observed geometry coefficient. */
+	Map<Vertex, Value[]> velocity(Value[] rate) {
+		if (rate.length != field.mesh.faces.size()) throw new IllegalArgumentException("Incomplete virtual face rates");
+		var primary = new Value[field.mesh.cells.size()][3];
+		for (int c = 0; c < primary.length; c++) {
+			primary[c] = zero(); if (!field.velocity.containsKey(field.cellCenters.get(c))) continue;
+			var basis = meanBasis(c);
+			for (int i = 0; i < basis.length; i++) add(primary[c], scale(basis[i], rate[field.mesh.cellFaces[c][i]]));
+		}
+		var nodes = new LinkedHashMap<Vertex, Value[]>();
+		for (var corner : corners.entrySet()) {
+			var value = zero(); for (var weight : corner.getValue().entrySet()) add(value, scale(primary[weight.getKey()], weight.getValue()));
+			var projection = walls.get(corner.getKey()); nodes.put(corner.getKey(), projection == null ? value : multiply(projection, value));
+		}
+		for (int f = 0; f < rate.length; f++) if (!faceWeights.get(f).isEmpty()) {
+			var preferred = zero(); for (var weight : faceWeights.get(f).entrySet()) add(preferred, scale(nodes.get(weight.getKey()), weight.getValue()));
+			var face = faces.computeIfAbsent(f, this::face); var value = multiply(face.corner, preferred); add(value, scale(face.rate, rate[f]));
+			nodes.put(field.faceCenters.get(f), value);
+		}
+		var apex = new Value[primary.length][]; for (int c = 0; c < apex.length; c++) apex[c] = scale(primary[c], new Value(4, 0));
+		for (int i = 0; i < field.tetrahedra.size(); i++) {
+			var tet = field.tetrahedra.get(i);
+			for (int v = 1; v < 4; v++) add(apex[tet.cell()], scale(nodes.get(tet.vertices().get(v)), meanWeights.get(i)));
+		}
+		for (int c = 0; c < primary.length; c++) if (field.velocity.containsKey(field.cellCenters.get(c))) nodes.put(field.cellCenters.get(c), apex[c]);
+		return java.util.Collections.unmodifiableMap(nodes);
+	}
+	private Value[][] meanBasis(int cell) {
+		return meanBasis.computeIfAbsent(cell, c -> {
+			var exact = exactMeanBasis.apply(c); var observed = new Value[exact.length][3];
+			for (int i = 0; i < exact.length; i++) for (int a = 0; a < 3; a++) observed[i][a] = Value.of(exact[i][a]); return observed;
+		});
 	}
 	private Face face(int face) {
 		var polygon = field.mesh.exactPolygons.get(face); var plane = polygon.coefficients();

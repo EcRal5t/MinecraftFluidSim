@@ -23,11 +23,16 @@ final class LiquidPressureFaceEnergy {
 	final LiquidConformingVelocity reference;
 	private final List<Row> rows;
 	private final List<Cross> crosses;
+	private final LiquidSurfaceMetric metric;
+	private final LiquidWetWallEnergy wall;
+	private final int[] projectionFaces, projectionSigns;
 	LiquidPressureFaceEnergy(LiquidConformingVelocity field, LiquidAreaEnergy energy, LiquidSurfaceMetric metric) {
 		this(field, energy, metric, null);
 	}
 	LiquidPressureFaceEnergy(LiquidConformingVelocity field, LiquidAreaEnergy energy, LiquidSurfaceMetric metric, LiquidWetWallEnergy wall) {
+		this.metric = metric; this.wall = wall;
 		mesh = field.mesh; reference = field; gradient = new double[field.mesh.faces.size()]; gradientError = gradient.clone(); var load = field.observedRateLoad(energy.force);
+		projectionFaces = java.util.stream.IntStream.range(0, gradient.length).toArray(); projectionSigns = new int[gradient.length]; Arrays.fill(projectionSigns, 1);
 		for (int f = 0; f < gradient.length; f++) {
 			if (field.mesh.faces.get(f).second() == -2 && field.mesh.faces.get(f).prescribed() != 0)
 				throw new IllegalArgumentException("Capillary rate energy requires stationary prescribed walls");
@@ -35,8 +40,10 @@ final class LiquidPressureFaceEnergy {
 		}
 		var map = new LiquidSurfaceRateMap(field); rows = metric.pressureRows(map); crosses = wall == null ? List.of() : wall.pressureCrosses(map);
 	}
-	private LiquidPressureFaceEnergy(LiquidControlVolumeMesh mesh, double[] gradient, double[] gradientError, List<Row> rows, List<Cross> crosses, LiquidConformingVelocity reference) {
+	private LiquidPressureFaceEnergy(LiquidControlVolumeMesh mesh, double[] gradient, double[] gradientError, List<Row> rows, List<Cross> crosses, LiquidConformingVelocity reference,
+			LiquidSurfaceMetric metric, LiquidWetWallEnergy wall, int[] projectionFaces, int[] projectionSigns) {
 		this.mesh = mesh; this.reference = reference; this.gradient = gradient; this.gradientError = gradientError; this.rows = List.copyOf(rows); this.crosses = List.copyOf(crosses);
+		this.metric = metric; this.wall = wall; this.projectionFaces = projectionFaces; this.projectionSigns = projectionSigns;
 	}
 	boolean hasSignedMetric() { return !crosses.isEmpty(); }
 	/** Row-sum bound on the signed wall Hessian's negative curvature. */
@@ -54,10 +61,12 @@ final class LiquidPressureFaceEnergy {
 	/** Retains the phase projection's actual face ordering and orientation. */
 	LiquidPressureFaceEnergy select(int[] faces, int[] signs) {
 		var selected = new double[faces.length]; var selectedError = selected.clone(); var inverse = new int[gradient.length]; Arrays.fill(inverse, -1);
+		var originalFaces = new int[faces.length]; var originalSigns = originalFaces.clone();
 		for (int i = 0; i < faces.length; i++) { selected[i] = signs[i] * gradient[faces[i]]; selectedError[i] = gradientError[faces[i]]; inverse[faces[i]] = i; }
+		for (int i = 0; i < faces.length; i++) { originalFaces[i] = projectionFaces[faces[i]]; originalSigns[i] = signs[i] * projectionSigns[faces[i]]; }
 		var result = rows.stream().map(row -> select(row, inverse, signs)).toList();
 		var pairs = crosses.stream().map(cross -> new Cross(select(cross.first, inverse, signs), select(cross.second, inverse, signs), cross.weight)).toList();
-		return new LiquidPressureFaceEnergy(mesh, selected, selectedError, result, pairs, reference);
+		return new LiquidPressureFaceEnergy(mesh, selected, selectedError, result, pairs, reference, metric, wall, originalFaces, originalSigns);
 	}
 	private static Row select(Row row, int[] inverse, int[] signs) {
 		var values = new java.util.TreeMap<Integer, Value>();
@@ -83,31 +92,18 @@ final class LiquidPressureFaceEnergy {
 	}
 	void add(double[] flow, double[] flowError, double dt, boolean includeForce, double[] target, double[] error) {
 		var time = new Value(dt, 0); var square = time.multiply(time); var bounds = flowError == null ? null : error;
-		for (var row : rows) {
-			add(row, dot(row, flow, flowError), square, target, bounds);
-		}
-		for (var cross : crosses) {
-			var scale = square.multiply(cross.weight);
-			add(cross.first, dot(cross.second, flow, flowError), scale, target, bounds);
-			add(cross.second, dot(cross.first, flow, flowError), scale, target, bounds);
-		}
-		if (includeForce) for (int f = 0; f < gradient.length; f++) {
-			accumulate(f, time.multiply(new Value(gradient[f], gradientError[f])), target, bounds);
-		}
-	}
-	private static Value dot(Row row, double[] flow, double[] error) {
-		if (error == null) {
-			double value = 0; for (int i = 0; i < row.faces.length; i++) value += row.values[i] * flow[row.faces[i]];
-			return new Value(value, 0);
-		}
-		var result = ZERO;
-		for (int i = 0; i < row.faces.length; i++) { int face = row.faces[i]; result = result.add(row.coefficient(i).multiply(new Value(flow[face], error[face]))); }
-		return result;
-	}
-	private static void add(Row row, Value value, Value scale, double[] target, double[] error) {
-		for (int i = 0; i < row.faces.length; i++) {
-			if (error == null) target[row.faces[i]] += scale.value() * row.values[i] * value.value();
-			else accumulate(row.faces[i], scale.multiply(row.coefficient(i)).multiply(value), target, error);
+		var rate = new Value[mesh.faces.size()]; Arrays.fill(rate, ZERO);
+		for (int i = 0; i < flow.length; i++) rate[projectionFaces[i]] = new Value(projectionSigns[i] * flow[i], flowError == null ? 0 : flowError[i]);
+		var operator = reference.rateOperator(); var velocity = operator.velocity(rate); var forces = metric.observedGradient(velocity);
+		if (wall != null) wall.observedGradient(velocity).forEach((point, force) -> {
+			var combined = forces.computeIfAbsent(point, ignored -> new Value[]{ZERO, ZERO, ZERO});
+			for (int a = 0; a < 3; a++) combined[a] = combined[a].add(force[a]);
+		});
+		var load = operator.applyObserved(forces);
+		for (int i = 0; i < flow.length; i++) {
+			var value = load[projectionFaces[i]]; if (projectionSigns[i] < 0) value = value.negate();
+			accumulate(i, square.multiply(value), target, bounds);
+			if (includeForce) accumulate(i, time.multiply(new Value(gradient[i], gradientError[i])), target, bounds);
 		}
 	}
 	private static void accumulate(int face, Value term, double[] target, double[] error) {

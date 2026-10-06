@@ -2,6 +2,8 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Vertex;
+import cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.Value;
+import static cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.ZERO;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -11,6 +13,8 @@ import java.util.Map;
 final class LiquidSurfaceMetric {
 	private record Triangle(List<Vertex> nodes, Fraction[][] matrix, Fraction[][] basis, Fraction weight) { }
 	private final List<Triangle> triangles;
+	private record ObservedTriangle(List<Vertex> nodes, Value[][] basis) { }
+	private List<ObservedTriangle> observed;
 	LiquidSurfaceMetric(List<LiquidExactPolygon> polygons, double[] coefficient) {
 		if (coefficient.length != polygons.size()) throw new IllegalArgumentException("Incomplete surface metric coefficients");
 		var result = new ArrayList<Triangle>();
@@ -43,6 +47,24 @@ final class LiquidSurfaceMetric {
 			var row = map.row(forces, LiquidBoundedArithmetic.Value.of(triangle.weight).sqrt()); if (row.faces().length != 0) result.add(row);
 		}
 		return List.copyOf(result);
+	}
+	/** Applies the nodal Gram factorization without expanding it into pressure-face rows. */
+	Map<Vertex, Value[]> observedGradient(Map<Vertex, Value[]> values) {
+		if (observed == null) observed = triangles.stream().map(triangle -> {
+			var weight = Value.of(triangle.weight).sqrt(); var basis = new Value[3][3];
+			for (int i = 0; i < 3; i++) for (int b = 0; b < 3; b++) basis[i][b] = weight.multiply(Value.of(triangle.basis[i][b]));
+			return new ObservedTriangle(triangle.nodes, basis);
+		}).toList();
+		var result = new LinkedHashMap<Vertex, Value[]>();
+		for (var triangle : observed) for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
+			var gradient = ZERO;
+			for (int i = 0; i < 3; i++) gradient = gradient.add(triangle.basis[i][b].multiply(values.get(triangle.nodes.get(i))[a]));
+			for (int i = 0; i < 3; i++) {
+				var force = result.computeIfAbsent(triangle.nodes.get(i), ignored -> new Value[]{ZERO, ZERO, ZERO});
+				force[a] = force[a].add(triangle.basis[i][b].multiply(gradient));
+			}
+		}
+		return result;
 	}
 	/** Matrix action is the surface-energy gradient; an implicit force uses its negative. */
 	Map<Vertex, List<Fraction>> gradient(Map<Vertex, List<Fraction>> values) {

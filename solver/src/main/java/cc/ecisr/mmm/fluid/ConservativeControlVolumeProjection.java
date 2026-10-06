@@ -79,6 +79,7 @@ final class ConservativeControlVolumeProjection {
 			if (surface.gradient.length != faces.size()) throw new IllegalArgumentException("Surface energy differs from the pressure faces");
 			var extra = surface.diagonal(dt); for (int f = 0; f < faceWeight.length; f++) faceWeight[f] += extra[f];
 		}
+		var coordinates = this.coordinates.weighted(faceWeight);
 		double[] diagonal = coordinates.cycleWeights(faceWeight), support = coordinates.cycleMinimum(vertexVolume), variable = new double[coordinates.size()];
 		Fraction[] initial = new Fraction[variable.length]; Arrays.fill(initial, Fraction.ZERO); var offset = new ConservativeFluxOffset(coordinates, initial, exactZeroSource);
 		var evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt, surface, dt);
@@ -100,7 +101,11 @@ final class ConservativeControlVolumeProjection {
 		}
 		int iterations = 0;
 		while (!converged(residual, coordinates.transposeError(evaluation.gradient, evaluation.error), diagonal, support, tolerance)) {
-			if (iterations++ >= maximumIterations || !(rz > 0) || !Double.isFinite(rz)) throw new IllegalStateException("Conservative pressure solve did not converge");
+			if (iterations++ >= maximumIterations || !(rz > 0) || !Double.isFinite(rz)) {
+				var error = coordinates.transposeError(evaluation.gradient, evaluation.error); double unresolved = 0;
+				for (int i = 0; i < residual.length; i++) unresolved = Math.max(unresolved, Math.max(0, Math.abs(residual[i]) - error[i]) / diagonal[i] / support[i]);
+				throw new IllegalStateException("Conservative pressure solve did not converge: iterations=" + iterations + " coordinates=" + variable.length + " unresolvedRateResidual=" + unresolved + " tolerance=" + tolerance);
+			}
 			var product = coordinates.transpose(evaluate(coordinates.lift(direction, zeroSource, false), null, null, null, storage, 0, surface, dt).gradient);
 			double denominator = dot(direction, product); if (!(denominator > 0) || !Double.isFinite(denominator)) throw new IllegalStateException("Invalid conservative pressure search direction");
 			double alpha = rz / denominator; for (int i = 0; i < variable.length; i++) variable[i] += alpha * direction[i];
@@ -117,7 +122,7 @@ final class ConservativeControlVolumeProjection {
 		var stationarityError = coordinates.transposeError(evaluation.gradient, evaluation.error); var momentumBound = new double[3];
 		for (int i = 0; i < diagonal.length; i++) for (int a = 0; a < 3; a++)
 			momentumBound[a] += Math.abs(faces.get(coordinates.face(i)).areaVector().get(a).rounded()) * (stationarityError[i] + tolerance * diagonal[i] * support[i]);
-		return result(predicted, primaryReference, rates, flow, conversionError, evaluation, dt, iterations, tolerance,
+		return result(coordinates, predicted, primaryReference, rates, flow, conversionError, evaluation, dt, iterations, tolerance,
 				surface == null ? new double[faces.size()] : surface.pressure(flow, dt), new LiquidPolyhedron.Point(momentumBound[0], momentumBound[1], momentumBound[2]));
 	}
 
@@ -162,7 +167,7 @@ final class ConservativeControlVolumeProjection {
 		return new Evaluation(gradient, error, dual);
 	}
 
-	private LiquidControlVolumeProjection.Result result(double[] predicted, double[] primaryReference, Fraction[] rates, double[] flow, double[] conversionError,
+	private LiquidControlVolumeProjection.Result result(ConservativeFluxCoordinates coordinates, double[] predicted, double[] primaryReference, Fraction[] rates, double[] flow, double[] conversionError,
 			Evaluation evaluation, double dt, int iterations, double tolerance, double[] surfacePressure, LiquidPolyhedron.Point momentumBound) {
 		double[] pressure = new double[cells.size()], primary = primaryReference.clone(), normal = new double[faces.size()];
 		double[] gasPressure = new double[nodes.size()], gasChange = gasPressure.clone(), pressureChange = gasPressure.clone(), boundaryPressure = normal.clone();

@@ -211,7 +211,13 @@ final class LiquidControlVolumeValidation {
 		var zero = LiquidExactPolygon.Fraction.ZERO;
 		int[] first = {0, 1, 2, 0, 0, 1, 2}, second = {1, 2, 0, 3, 4, 4, 4};
 		var fixed = new LiquidExactPolygon.Fraction[first.length]; fixed[6] = LiquidExactPolygon.Fraction.of(0.125);
-		var basis = new ConservativeFluxCoordinates(5, first, second, new boolean[] {true, true, true, false, false}, fixed);
+		var metric = new double[first.length]; java.util.Arrays.fill(metric, 1); metric[3] = 1e24;
+		var basis = new ConservativeFluxCoordinates(5, first, second, new boolean[] {true, true, true, false, false}, fixed, metric);
+		var cycleWeights = basis.cycleWeights(metric); int stiff = 0;
+		for (int i = 0; i < cycleWeights.length; i++) {
+			if (basis.face(i) == 3) stiff++; else if (!(cycleWeights[i] < 10)) throw new AssertionError("Flux tree spread one small-face stiffness into unrelated cycles");
+		}
+		if (stiff != 1) throw new AssertionError("Flux tree eliminated the actual stiff face degree of freedom");
 		var source = new LiquidExactPolygon.Fraction[] {zero, zero, zero, zero, zero};
 		var exact = new LiquidExactPolygon.Fraction[basis.size()]; double[] variable = new double[basis.size()], dual = new double[first.length];
 		for (int c = 0; c < exact.length; c++) { exact[c] = new LiquidExactPolygon.Fraction(java.math.BigInteger.valueOf(c % 2 == 0 ? 1 : -1), java.math.BigInteger.ONE.shiftLeft(100 * c).multiply(java.math.BigInteger.valueOf(3))); variable[c] = Math.sin(c + 0.7); }
