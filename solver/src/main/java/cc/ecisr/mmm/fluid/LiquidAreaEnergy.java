@@ -31,10 +31,10 @@ final class LiquidAreaEnergy {
 		force = java.util.Collections.unmodifiableMap(result);
 	}
 	static Fraction[] normal(LiquidExactPolygon polygon) {
-		var area = polygon.areaVector(); int largest = 0;
-		for (int a = 1; a < 3; a++) if (area[a].absolute().subtract(area[largest].absolute()).signum() > 0) largest = a;
+		var plane = polygon.coefficients(); int largest = 0;
+		for (int a = 1; a < 3; a++) if (plane.get(a).abs().compareTo(plane.get(largest).abs()) > 0) largest = a;
 		var direction = new Fraction[3]; double norm = 0;
-		for (int a = 0; a < 3; a++) { direction[a] = area[a].divide(area[largest].absolute()); norm = Math.hypot(norm, direction[a].rounded()); }
+		for (int a = 0; a < 3; a++) { direction[a] = new Fraction(plane.get(a), plane.get(largest).abs()); norm = Math.hypot(norm, direction[a].rounded()); }
 		for (int a = 0; a < 3; a++) direction[a] = direction[a].multiply(Fraction.of(1 / norm));
 		return direction;
 	}

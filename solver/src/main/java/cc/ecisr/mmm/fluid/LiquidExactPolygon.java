@@ -141,7 +141,7 @@ final class LiquidExactPolygon {
 		var zero = Fraction.ZERO; var weight = zero; Fraction[] moment = {zero, zero, zero}; var a = corners.getFirst().coordinates();
 		for (int i = 1; i + 1 < corners.size(); i++) {
 			var b = corners.get(i).coordinates(); var c = corners.get(i + 1).coordinates();
-			var area = triangleCross(a, b, c)[axis]; weight = weight.add(area);
+			var area = triangleCross(corners.getFirst(), corners.get(i), corners.get(i + 1))[axis]; weight = weight.add(area);
 			for (int coordinate = 0; coordinate < 3; coordinate++) {
 				var sum = a[coordinate].add(b[coordinate]).add(c[coordinate]);
 				moment[coordinate] = moment[coordinate].add(area.multiply(sum).multiply(new Fraction(BigInteger.ONE, BigInteger.valueOf(3))));
@@ -211,9 +211,9 @@ final class LiquidExactPolygon {
 	Fraction[] areaVector() {
 		var cached = integratedArea; if (cached != null) return cached.toArray(Fraction[]::new);
 		var corners = integrationCorners();
-		var result = new Fraction[] {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var origin = corners.getFirst().coordinates();
+		var result = new Fraction[] {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var origin = corners.getFirst();
 		for (int i = 1; i + 1 < corners.size(); i++) {
-			var vector = triangleCross(origin, corners.get(i).coordinates(), corners.get(i + 1).coordinates());
+			var vector = triangleCross(origin, corners.get(i), corners.get(i + 1));
 			for (int a = 0; a < 3; a++) result[a] = result[a].add(vector[a].divide(Fraction.of(2)));
 		}
 		integratedArea = List.of(result);
@@ -237,11 +237,15 @@ final class LiquidExactPolygon {
 	private static boolean collinear(Vertex a, Vertex b, Vertex c) {
 		return cross(difference(b, a), difference(c, a)).stream().allMatch(value -> value.signum() == 0);
 	}
-	private static Fraction[] triangleCross(Fraction[] origin, Fraction[] b, Fraction[] c) {
-		var u = new Fraction[3]; var v = new Fraction[3]; var result = new Fraction[3];
-		for (int a = 0; a < 3; a++) { u[a] = b[a].subtract(origin[a]); v[a] = c[a].subtract(origin[a]); }
-		// Reduce edge fractions before cross products instead of multiplying homogeneous denominators.
-		for (int a = 0; a < 3; a++) result[a] = u[(a + 1) % 3].multiply(v[(a + 2) % 3]).subtract(u[(a + 2) % 3].multiply(v[(a + 1) % 3]));
+	private static Fraction[] triangleCross(Vertex a, Vertex b, Vertex c) {
+		var result = new Fraction[3]; var denominator = a.w().multiply(b.w()).multiply(c.w());
+		for (int i = 0; i < 3; i++) {
+			int j = (i + 1) % 3, k = (i + 2) % 3;
+			var numerator = a.w().multiply(b.coordinate(j).multiply(c.coordinate(k)).subtract(b.coordinate(k).multiply(c.coordinate(j))))
+					.add(b.w().multiply(c.coordinate(j).multiply(a.coordinate(k)).subtract(c.coordinate(k).multiply(a.coordinate(j)))))
+					.add(c.w().multiply(a.coordinate(j).multiply(b.coordinate(k)).subtract(a.coordinate(k).multiply(b.coordinate(j)))));
+			result[i] = new Fraction(numerator, denominator);
+		}
 		return result;
 	}
 	LiquidPolyhedron.Surface surface() {
