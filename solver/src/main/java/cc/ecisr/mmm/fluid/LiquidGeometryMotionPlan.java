@@ -129,12 +129,9 @@ final class LiquidGeometryMotionPlan {
 		if (interfaces != null) interfaces.collect(motion);
 		var images = new HashMap<Integer, ArrayList<LiquidConformingTransport.Image>>();
 		for (var image : motion.images) images.computeIfAbsent(image.cell(), ignored -> new ArrayList<>()).add(image);
-		var mean = new Fraction[mesh.cells.size()][3]; for (var row : mean) Arrays.fill(row, Fraction.ZERO);
-		for (var tet : field.tetrahedra) if (images.containsKey(tet.cell())) for (var point : tet.vertices()) for (int a = 0; a < 3; a++)
-			mean[tet.cell()][a] = mean[tet.cell()][a].add(field.velocity.get(point).get(a).multiply(tet.volume()).divide(Fraction.of(4)));
 		return new MotionField() {
 			public Fraction[] mean(int c) {
-				var value = mean[c].clone(); for (int a = 0; a < 3; a++) value[a] = value[a].divide(mesh.cells.get(c).geometry().measure().volume()); return value;
+				return field.meanVelocity(c);
 			}
 			public List<LiquidPolyhedron> images(int c) {
 				var local = images.get(c); if (local == null) throw new IllegalArgumentException("Continuous transport has no liquid cell support");

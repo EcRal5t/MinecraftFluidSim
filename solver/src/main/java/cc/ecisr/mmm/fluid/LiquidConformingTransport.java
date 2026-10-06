@@ -25,8 +25,10 @@ final class LiquidConformingTransport {
 		if (field.mesh != mesh || rate.length != mesh.faces.size() || liquid.length != mesh.cells.size() || !(dt > 0) || !Double.isFinite(dt)) throw new IllegalArgumentException("Invalid continuous transport input");
 		this.mesh = mesh; this.field = field; this.liquid = liquid.clone();
 		var time = Fraction.of(dt); var moved = new LinkedHashMap<Vertex, Vertex>();
+		var interior = new java.util.HashSet<>(field.cellCenters);
 		double roundoff = 0;
 		for (var node : field.velocity.entrySet()) {
+			if (interior.contains(node.getKey())) continue;
 			var position = field.advectedPosition(node.getKey(), time); moved.put(node.getKey(), position.point());
 			if (position.roundoffSquared().signum() != 0) roundoff = Math.max(roundoff, Math.nextUp(Math.sqrt(Math.nextUp(position.roundoffSquared().rounded()))));
 		}

@@ -409,9 +409,11 @@ final class LiquidConformingVelocityValidation {
 			}
 		}
 		if (!Arrays.equals(flux, rates)) throw new AssertionError("Continuous velocity changed integrated shared face rates");
-		for (int c = 0; c < mesh.cells.size(); c++) for (int a = 0; a < 3; a++)
-			if (!momentum[c][a].equals(mesh.cells.get(c).geometry().measure().volume().multiply(Fraction.of(mean[3 * c + a]))))
+		for (int c = 0; c < mesh.cells.size(); c++) for (int a = 0; a < 3; a++) {
+			if (!field.meanVelocity(c)[a].equals(Fraction.of(mean[3 * c + a]))
+					|| !momentum[c][a].equals(mesh.cells.get(c).geometry().measure().volume().multiply(field.meanVelocity(c)[a])))
 				throw new AssertionError("Continuous velocity changed cell mean momentum");
+		}
 	}
 	private static void continuousShearPreservesExteriorAreaAndWork() {
 		List<LiquidGeometryRefinement.Cell> cells = List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75)));

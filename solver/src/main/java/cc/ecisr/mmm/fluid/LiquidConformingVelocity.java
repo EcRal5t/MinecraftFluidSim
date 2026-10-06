@@ -129,21 +129,19 @@ final class LiquidConformingVelocity {
 		}
 		var cells = new ArrayList<Vertex>(); var tets = new ArrayList<Tetrahedron>();
 		for (int c = 0; c < mesh.cells.size(); c++) {
-			var center = mesh.cells.get(c).geometry().centroidCoordinates(); var moment = zero(); var volume = Fraction.ZERO;
+			var center = mesh.cells.get(c).geometry().centroidCoordinates(); var volume = Fraction.ZERO; int start = tets.size();
 			var point = LiquidExactPolygon.vertex(center); cells.add(point); if (liquid[c] < 0) continue;
 			for (int f : mesh.cellFaces[c]) {
 				var polygon = mesh.exactPolygons.get(f); if (mesh.faces.get(f).first() != c) polygon = polygon.reversed();
 				for (int e = 0; e < polygon.vertices().size(); e++) {
 					var vertices = polygon.tetrahedronVertices(center, e);
 					var measure = LiquidExactPolygon.tetrahedronVolume(vertices); if (measure.signum() == 0) continue;
-					var sum = zero(); for (int v = 1; v < 4; v++) add(sum, nodes.get(vertices.get(v)).toArray(Fraction[]::new));
-					add(moment, scale(sum, measure)); volume = volume.add(measure);
+					volume = volume.add(measure);
 					tets.add(new Tetrahedron(c, f, vertices, measure));
 				}
 			}
 			if (!volume.equals(mesh.cells.get(c).geometry().measure().volume())) throw new IllegalStateException("Continuous velocity fan lost cell volume");
-			var u = zero(); for (int a = 0; a < 3; a++) u[a] = Fraction.of(mean[3 * c + a]).multiply(Fraction.of(4)).subtract(moment[a].divide(volume));
-			nodes.put(point, List.of(u));
+			nodes.put(point, cellVelocity(Arrays.copyOfRange(mean, 3 * c, 3 * c + 3), nodes, List.copyOf(tets.subList(start, tets.size())), volume));
 		}
 		velocity = java.util.Collections.unmodifiableMap(nodes); tetrahedra = List.copyOf(tets); faceCenters = List.copyOf(centers); cellCenters = List.copyOf(cells);
 		cornerWeights = java.util.Collections.unmodifiableMap(fits); walls = java.util.Collections.unmodifiableMap(wallNormals); faceWeights = List.copyOf(integration);
@@ -153,6 +151,29 @@ final class LiquidConformingVelocity {
 		// Face-normal correction has norm at most 2; the positive cell fan sums three face-node errors.
 		maximumFittingVelocityErrorMetresPerSecond = fittingError == 0 ? 0 : Math.nextUp(6 * fittingError);
 		if (!Double.isFinite(maximumFittingVelocityErrorMetresPerSecond)) throw new IllegalStateException("Continuous velocity has no finite fitting error bound");
+	}
+	/** The fan-apex coefficient enforces its prescribed mean; surface transport only needs that mean and the traces. */
+	private static List<Fraction> cellVelocity(double[] mean, Map<Vertex, List<Fraction>> nodes, List<Tetrahedron> fan, Fraction volume) {
+		return new java.util.AbstractList<>() {
+			private final Fraction[] values = new Fraction[3];
+			@Override public int size() { return 3; }
+			@Override public Fraction get(int axis) {
+				java.util.Objects.checkIndex(axis, 3);
+				if (values[axis] == null) {
+					var moment = Fraction.ZERO;
+					for (var tet : fan) {
+						var sum = Fraction.ZERO; for (int v = 1; v < 4; v++) sum = sum.add(nodes.get(tet.vertices().get(v)).get(axis));
+						moment = moment.add(sum.multiply(tet.volume()));
+					}
+					values[axis] = Fraction.of(mean[axis]).multiply(Fraction.of(4)).subtract(moment.divide(volume));
+				}
+				return values[axis];
+			}
+		};
+	}
+	Fraction[] meanVelocity(int cell) {
+		if (liquid[cell] < 0) throw new IllegalArgumentException("Continuous velocity mean requires liquid support");
+		return new Fraction[]{Fraction.of(mean[3 * cell]), Fraction.of(mean[3 * cell + 1]), Fraction.of(mean[3 * cell + 2])};
 	}
 	/** The same physical geometry reuses its interpolation coefficients and exact nodal weights. */
 	LiquidConformingVelocity reconstruct(Fraction[] rate, double[] mean, int[] liquid, FluidSolverConfig.WallCondition wall) {
