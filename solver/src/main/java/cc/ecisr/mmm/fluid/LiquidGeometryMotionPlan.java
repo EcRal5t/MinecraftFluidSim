@@ -48,6 +48,7 @@ final class LiquidGeometryMotionPlan {
 			throw new IllegalArgumentException("Mechanical geometry differs from submitted liquid geometry");
 		var remap = new LiquidGeometryRemap(nextLeaves);
 		var cells = new ArrayList<LiquidGeometryRefinement.Cell>(); var ownership = new ArrayList<Integer>(); int[] previousOwners = input.copyFragmentOwners();
+		var controls = new ArrayList<Integer>();
 		var payload = new ArrayList<Fraction[]>();
 		var integral = new Fraction[source.size()][3]; var sourceVolume = new Fraction[source.size()]; Arrays.fill(sourceVolume, Fraction.ZERO);
 		for (var vector : integral) Arrays.fill(vector, Fraction.ZERO);
@@ -59,6 +60,7 @@ final class LiquidGeometryMotionPlan {
 				if (cells.size() == maximumFragments) throw new IllegalStateException("Liquid geometric successor exceeds its fragment budget");
 				var leaf = nextLeaves.get(fragment.cell()); cells.add(LiquidPhasePartition.Address.of(leaf).cell(fragment.geometry()));
 				ownership.add(previousOwners[fragments[c]]);
+				controls.add(c);
 				payload.add(mean);
 			}
 		}
@@ -69,7 +71,9 @@ final class LiquidGeometryMotionPlan {
 		}
 		var transportedVelocity = new double[3 * cells.size()];
 		for (int f = 0; f < cells.size(); f++) for (int a = 0; a < 3; a++) transportedVelocity[3 * f + a] = payload.get(f)[a].rounded();
-		geometry = LiquidGeometryCompaction.compact(LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, groups, transportedVelocity), maximumFragments);
+		var firstControl = new HashMap<Integer, Integer>(); int[] controlCells = new int[cells.size()];
+		for (int f = 0; f < cells.size(); f++) { firstControl.putIfAbsent(controls.get(f), f); controlCells[f] = firstControl.get(controls.get(f)); }
+		geometry = LiquidGeometryCompaction.compact(LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, groups, transportedVelocity, controlCells), maximumFragments);
 		var restored = LiquidGeometryStateMapper.restore(geometry); int[] owners = geometry.copyFragmentOwners();
 		int[] originalMarkers = input.copyMarkerCells(), nextMarkers = geometry.copyMarkerCells(), oldGroup = new int[restored.size()]; Arrays.fill(oldGroup, -1);
 		for (int p = 0; p < originalMarkers.length; p++) oldGroup[nextMarkers[p]] = originalMarkers[p];

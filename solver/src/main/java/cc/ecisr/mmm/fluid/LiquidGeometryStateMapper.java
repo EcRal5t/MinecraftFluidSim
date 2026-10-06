@@ -42,17 +42,24 @@ final class LiquidGeometryStateMapper {
 		return capture(cells, rootWidth, markerCells, fragmentOwners, new double[3 * cells.size()]);
 	}
 	static LiquidGeometryState capture(List<LiquidGeometryRefinement.Cell> cells, double rootWidth, int[] markerCells, int[] fragmentOwners, double[] velocity) {
+		return capture(cells, rootWidth, markerCells, fragmentOwners, velocity, java.util.stream.IntStream.range(0, cells.size()).toArray());
+	}
+	static LiquidGeometryState capture(List<LiquidGeometryRefinement.Cell> cells, double rootWidth, int[] markerCells, int[] fragmentOwners, double[] velocity, int[] controlCells) {
 		if (fragmentOwners.length != cells.size()) throw new IllegalArgumentException("Incomplete liquid fragment ownership");
 		if (velocity.length != 3 * cells.size()) throw new IllegalArgumentException("Incomplete liquid geometric velocity field");
+		if (controlCells.length != cells.size()) throw new IllegalArgumentException("Incomplete liquid control-cell support");
 		var packed = new ArrayList<ResolvedControlVolume>();
 		for (int c = 0; c < cells.size(); c++) packed.add(pack(cells.get(c), java.util.Arrays.copyOfRange(velocity, 3 * c, 3 * c + 3)));
 		var order = new ArrayList<Integer>(); for (int c = 0; c < cells.size(); c++) order.add(c);
 		order.sort((a, b) -> LiquidGeometryState.compareGeometry(packed.get(a), packed.get(b)));
 		int[] canonical = new int[cells.size()]; for (int c = 0; c < cells.size(); c++) canonical[order.get(c)] = c;
 		var first = new java.util.HashMap<Integer, Integer>(); int[] groups = new int[cells.size()];
+		var firstControl = new java.util.HashMap<Integer, Integer>(); int[] controls = new int[cells.size()];
 		for (int ordinal : order) {
 			int owner = fragmentOwners[ordinal]; if (owner < 0 || owner >= cells.size()) throw new IllegalArgumentException("Liquid fragment has no inventory group");
 			first.putIfAbsent(owner, canonical[ordinal]); groups[canonical[ordinal]] = first.get(owner);
+			int control = controlCells[ordinal]; if (control < 0 || control >= cells.size()) throw new IllegalArgumentException("Liquid fragment has no control cell");
+			firstControl.putIfAbsent(control, canonical[ordinal]); controls[canonical[ordinal]] = firstControl.get(control);
 		}
 		var result = new ArrayList<ResolvedControlVolume>();
 		for (int ordinal : order) result.add(packed.get(ordinal));
@@ -61,7 +68,7 @@ final class LiquidGeometryStateMapper {
 			if (owners[p] < 0 || owners[p] >= cells.size()) throw new IllegalArgumentException("Liquid quadrature has no geometry");
 			owners[p] = first.get(fragmentOwners[owners[p]]);
 		}
-		return new LiquidGeometryState(rootWidth, result, owners, groups);
+		return new LiquidGeometryState(rootWidth, result, owners, groups, controls);
 	}
 
 	static ResolvedControlVolume pack(LiquidGeometryRefinement.Cell cell, double[] velocity) {

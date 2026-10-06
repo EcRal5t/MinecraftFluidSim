@@ -145,6 +145,7 @@ abstract class RegionPersistenceValidationSupport {
 		require(expected.rootWidthMetres() == actual.rootWidthMetres()
 				&& Arrays.equals(expected.copyMarkerCells(), actual.copyMarkerCells())
 				&& Arrays.equals(expected.copyFragmentOwners(), actual.copyFragmentOwners())
+				&& Arrays.equals(expected.copyControlCells(), actual.copyControlCells())
 				&& expected.cells().size() == actual.cells().size(), "liquid geometry inventory ownership changed across persistence");
 		for (int c = 0; c < expected.cells().size(); c++) require(LiquidGeometryState.compare(expected.cells().get(c), actual.cells().get(c)) == 0,
 				"liquid interface or resolved velocity changed across persistence");

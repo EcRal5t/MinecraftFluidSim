@@ -97,12 +97,15 @@ final class LiquidGeometryExtractionPlan {
 		for (int f = 0; f < source.size(); f++) cuts.add(removed[f].signum() == 0 ? List.of()
 				: new LiquidGeometrySourcePlan(available.get(f), removed[f], LiquidGeometryInsertionPlan.MAXIMUM_SOURCE_REGIONS).geometry);
 		var cells = new ArrayList<LiquidGeometryRefinement.Cell>(); var groups = new ArrayList<Integer>(); var field = new ArrayList<double[]>();
+		var controls = new ArrayList<Integer>(); int[] previousControls = input.copyControlCells(); var firstControl = new java.util.HashMap<Integer, Integer>();
 		for (int f = 0; f < source.size(); f++) {
+			int start = cells.size();
 			var original = source.get(f); int owner = oldOwners[f]; var intersections = new ArrayList<LiquidPolyhedron>();
 			for (var cut : cuts.get(owner)) { var clipped = intersection(original.geometry(), cut); if (LiquidConvexRegion.of(clipped).hasVolume()) intersections.add(clipped); }
 			if (intersections.isEmpty()) add(cells, groups, field, original, owner, input.cells().get(f).copyVelocity());
 			else for (var piece : LiquidPhasePartition.build(original, intersections, LiquidGeometryInsertionPlan.MAXIMUM_SOURCE_REGIONS))
 				if (piece.liquid() < 0) add(cells, groups, field, piece.cell(), owner, input.cells().get(f).copyVelocity());
+			for (int part = start; part < cells.size(); part++) { firstControl.putIfAbsent(previousControls[f], part); controls.add(firstControl.get(previousControls[f])); }
 		}
 		var first = new java.util.HashMap<Integer, Integer>(); for (int f = 0; f < cells.size(); f++) first.putIfAbsent(groups.get(f), f);
 		// The same descending swap-removal order is used by the inventory and its side columns.
@@ -112,7 +115,7 @@ final class LiquidGeometryExtractionPlan {
 		var velocity = new double[3 * cells.size()]; for (int f = 0; f < cells.size(); f++) System.arraycopy(field.get(f), 0, velocity, 3 * f, 3);
 		// Canonical packing uses a live fragment ordinal as each temporary group representative.
 		int[] owners = new int[cells.size()]; for (int f = 0; f < cells.size(); f++) owners[f] = first.get(groups.get(f));
-		successor = LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, owners, velocity);
+		successor = LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, owners, velocity, controls.stream().mapToInt(Integer::intValue).toArray());
 		var measure = new LiquidExactPolygon.Measure[source.size()]; Arrays.fill(measure, LiquidConvexRegion.EMPTY.measure());
 		var momentum = new Fraction[3 * source.size()]; Arrays.fill(momentum, Fraction.ZERO);
 		for (int f = 0; f < cells.size(); f++) {

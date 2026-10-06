@@ -18,6 +18,7 @@ import java.util.UUID;
 final class RegionLiquidGeometryValidationScenarios extends RegionPersistenceValidationSupport {
 	public static void main(String[] args) throws Exception { validate(); System.out.println("Resolved liquid geometry persistence passed"); }
 	static void validate() throws Exception {
+		validateControlCellPersistence();
 		validateGasGeometryPersistence();
 		var region = populatedRegion(new UUID(811, 812));
 		byte[] masks = new byte[region.sizeX() * region.sizeY() * region.sizeZ()];
@@ -63,6 +64,20 @@ final class RegionLiquidGeometryValidationScenarios extends RegionPersistenceVal
 		var materials = RegionCheckpointFixtures.captureMaterial(region, 2);
 		materials.validate();
 		assertMaterialStateEquals(material, restorer(materials).reconstructMaterial());
+	}
+	private static void validateControlCellPersistence() throws Exception {
+		var region = populatedRegion(new UUID(815, 816));
+		var geometry = new LiquidGeometryState(4, List.of(box(7, 8, 1, 0), box(8, 9, 2, 0)), new int[]{0}, new int[]{0, 0}, new int[]{0, 0});
+		var before = new FlipParticleState(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG.cellSize(), 1, 0.125F,
+				new float[]{1, 0.625F, 0.625F, 0.125F}, new float[3], new byte[region.sizeX() * region.sizeY() * region.sizeZ()], geometry);
+		region.domain().restoreParticleState(before);
+		var captured = RegionCheckpointFixtures.capture(region, 1); captured.validate();
+		var files = new RegionGenerationStore(Files.createTempDirectory("mmm-resolved-control-")); files.publish(captured);
+		assertParticleStateEquals(before, restorer(files.read(region.id())).reconstruct());
+		var codec = new LiquidGeometryStateCodec(); byte[] encoded = codec.encode(geometry); int[] restored = codec.decode(encoded).copyControlCells();
+		require(Arrays.equals(restored, new int[]{0, 0}), "auxiliary fragments became separate control cells across persistence");
+		byte[] invalid = encoded.clone(); Arrays.fill(invalid, 36, 40, (byte) 0x7f);
+		expectIOException(() -> codec.decode(invalid), "non-canonical liquid control cell was accepted");
 	}
 	private static void validateGasGeometryPersistence() throws Exception {
 		var region = emptyRegion(new UUID(813, 814)); var registries = cc.ecisr.mmm.simulation.FullCapabilityTestFixture.load();

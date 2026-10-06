@@ -28,12 +28,14 @@ final class LiquidGeometryInsertionPlan {
 		if (input.rootWidthMetres() != domain.rootWidthMetres) throw new IllegalArgumentException("Liquid source geometry uses a different root");
 		var remap = new LiquidGeometryRemap(domain.leaves); var cells = new ArrayList<LiquidGeometryRefinement.Cell>();
 		var owners = new ArrayList<Integer>(); var velocities = new ArrayList<double[]>(); var first = new HashMap<Integer, Integer>();
+		var controlCells = new ArrayList<Integer>(); var firstControl = new HashMap<Integer, Integer>(); int[] previousControl = input.copyControlCells();
 		var liquids = new ArrayList<ArrayList<LiquidPolyhedron>>();
 		for (var leaf : domain.leaves) liquids.add(new ArrayList<>());
 		int[] previousOwners = input.copyFragmentOwners();
 		for (int f = 0; f < source.size(); f++) for (var piece : remap.partitionGeometry(source.get(f).geometry())) {
 			first.putIfAbsent(previousOwners[f], cells.size());
 			add(cells, owners, velocities, liquids, domain, piece, previousOwners[f], input.cells().get(f).copyVelocity(), maximumRegions);
+			firstControl.putIfAbsent(previousControl[f], cells.size() - 1); controlCells.add(firstControl.get(previousControl[f]));
 		}
 		var observations = new ArrayList<LiquidPolyhedron.Point>();
 		var rootVolume = Fraction.of(span); rootVolume = rootVolume.multiply(rootVolume).multiply(rootVolume);
@@ -50,7 +52,10 @@ final class LiquidGeometryInsertionPlan {
 			var measure = LiquidConvexRegion.EMPTY.measure();
 			for (var piece : selected.geometry) {
 				measure = measure.add(LiquidConvexRegion.of(piece).measure());
-				for (var part : remap.partitionGeometry(piece)) add(cells, owners, velocities, liquids, domain, part, owner, new double[3], maximumRegions);
+				int control = cells.size();
+				for (var part : remap.partitionGeometry(piece)) {
+					add(cells, owners, velocities, liquids, domain, part, owner, new double[3], maximumRegions); controlCells.add(control);
+				}
 			}
 			var center = measure.centroidCoordinates(); var width = Fraction.of(input.rootWidthMetres());
 			// Inventory centroids are binary32 observations; actual interfaces retain exact coordinates.
@@ -62,7 +67,7 @@ final class LiquidGeometryInsertionPlan {
 		for (int p = 0; p < insertions.size(); p++) markers[input.markerCount() + p] = first.get(source.size() + p);
 		var velocity = new double[3 * cells.size()];
 		for (int f = 0; f < cells.size(); f++) System.arraycopy(velocities.get(f), 0, velocity, 3 * f, 3);
-		geometry = LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, owners.stream().mapToInt(Integer::intValue).toArray(), velocity);
+		geometry = LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, owners.stream().mapToInt(Integer::intValue).toArray(), velocity, controlCells.stream().mapToInt(Integer::intValue).toArray());
 		positions = List.copyOf(observations);
 	}
 	private static float observe(Fraction position, int size, float h) { return Math.min((float) position.rounded(), Math.nextDown(size * h)); }

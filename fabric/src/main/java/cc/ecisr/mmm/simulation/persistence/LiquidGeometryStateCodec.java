@@ -19,12 +19,12 @@ final class LiquidGeometryStateCodec {
 	private static final int MAX_BYTES = 16 * 1_048_576;
 
 	byte[] encode(LiquidGeometryState state) throws IOException {
-		long bytes = 20L + 4L * state.markerCount() + 4L * state.cells().size() + cellBytes(state.cells());
+		long bytes = 24L + 4L * state.markerCount() + 8L * state.cells().size() + cellBytes(state.cells());
 		if (bytes > MAX_BYTES) throw new IOException("Liquid geometry exceeds checkpoint payload budget");
 		var buffer = new ByteArrayOutputStream((int) bytes);
 		try (var out = new DataOutputStream(buffer)) {
 			out.writeInt(MAGIC); out.writeDouble(state.rootWidthMetres());
-			writeInts(out, state.copyMarkerCells()); writeInts(out, state.copyFragmentOwners());
+			writeInts(out, state.copyMarkerCells()); writeInts(out, state.copyFragmentOwners()); writeInts(out, state.copyControlCells());
 			writeCells(out, state.cells());
 		}
 		if (buffer.size() != bytes) throw new IllegalStateException("Liquid geometry wire size differs from its admission estimate");
@@ -36,11 +36,11 @@ final class LiquidGeometryStateCodec {
 		try (var in = new DataInputStream(new ByteArrayInputStream(payload))) {
 			if (in.readInt() != MAGIC) throw new IOException("Unknown liquid geometry encoding");
 			double width = in.readDouble();
-			int[] markers = readInts(in), owners = readInts(in);
+			int[] markers = readInts(in), owners = readInts(in), controls = readInts(in);
 			var cells = readCells(in);
 			if (owners.length != cells.size()) throw new IOException("Liquid geometry fragment count differs from ownership");
 			if (in.available() != 0) throw new IOException("Trailing liquid geometry bytes");
-			return new LiquidGeometryState(width, cells, markers, owners);
+			return new LiquidGeometryState(width, cells, markers, owners, controls);
 		} catch (IllegalArgumentException | ArithmeticException invalid) {
 			throw new IOException("Invalid liquid geometry: " + invalid.getMessage(), invalid);
 		}
