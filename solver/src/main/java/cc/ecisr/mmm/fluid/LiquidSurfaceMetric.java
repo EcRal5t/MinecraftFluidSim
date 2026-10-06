@@ -40,7 +40,7 @@ final class LiquidSurfaceMetric {
 		for (var triangle : triangles) for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
 			var forces = new LinkedHashMap<Vertex, List<Fraction>>();
 			for (int i = 0; i < 3; i++) { var value = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; value[a] = triangle.basis[i][b]; forces.put(triangle.nodes.get(i), List.of(value)); }
-			var row = map.row(forces, Math.sqrt(triangle.weight.rounded())); if (row.faces().length != 0) result.add(row);
+			var row = map.row(forces, LiquidBoundedArithmetic.Value.of(triangle.weight).sqrt()); if (row.faces().length != 0) result.add(row);
 		}
 		return List.copyOf(result);
 	}

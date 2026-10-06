@@ -34,6 +34,14 @@ final class LiquidBoundedArithmetic {
 			double residual = up(up(error + up(Math.abs(result) * other.error)) + up(Math.ulp(result) * Math.abs(other.value)));
 			return new Value(result, up(residual / denominator));
 		}
+		Value sqrt() {
+			if (value == 0 && error == 0) return ZERO;
+			double lower = Math.nextDown(value - error), upper = up(value + error);
+			if (!(lower > 0)) throw new IllegalStateException("Surface metric square root has unresolved numerical sign");
+			double result = Math.sqrt(value);
+			double below = Math.nextDown(Math.sqrt(lower)), above = up(Math.sqrt(upper));
+			return new Value(result, up(Math.max(up(result - below), up(above - result))));
+		}
 		double magnitude() { return up(Math.abs(value) + error); }
 	}
 	static double up(double value) { return Math.nextUp(value); }

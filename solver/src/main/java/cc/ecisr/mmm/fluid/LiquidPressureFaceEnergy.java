@@ -2,21 +2,23 @@ package cc.ecisr.mmm.fluid;
 
 import java.util.Arrays;
 import java.util.List;
+import cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.Value;
+import static cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.*;
 
 /** Sparse surface-energy Gram rows acting on conservative pressure volume rates. */
 final class LiquidPressureFaceEnergy {
-	record Row(int[] faces, double[] values) {
+	record Row(int[] faces, double[] values, double[] errors) {
 		Row {
-			faces = faces.clone(); values = values.clone();
-			if (faces.length != values.length) throw new IllegalArgumentException("Incomplete capillary energy row");
+			faces = faces.clone(); values = values.clone(); errors = errors.clone();
+			if (faces.length != values.length || faces.length != errors.length) throw new IllegalArgumentException("Incomplete capillary energy row");
 			for (int i = 0; i < faces.length; i++) if (faces[i] < 0 || i > 0 && faces[i] <= faces[i - 1]) throw new IllegalArgumentException("Capillary row faces must be unique and ordered");
-			for (double value : values) if (!Double.isFinite(value)) throw new IllegalStateException("Capillary energy row exceeds numerical range");
+			for (int i = 0; i < values.length; i++) new Value(values[i], errors[i]);
 		}
+		Value coefficient(int i) { return new Value(values[i], errors[i]); }
 	}
-	record Cross(Row first, Row second, double weight) {
-		Cross { if (!Double.isFinite(weight)) throw new IllegalStateException("Wet-wall metric exceeds numerical range"); }
-	}
+	record Cross(Row first, Row second, Value weight) { }
 	final double[] gradient;
+	final double[] gradientError;
 	final LiquidControlVolumeMesh mesh;
 	final LiquidConformingVelocity reference;
 	private final List<Row> rows;
@@ -25,16 +27,16 @@ final class LiquidPressureFaceEnergy {
 		this(field, energy, metric, null);
 	}
 	LiquidPressureFaceEnergy(LiquidConformingVelocity field, LiquidAreaEnergy energy, LiquidSurfaceMetric metric, LiquidWetWallEnergy wall) {
-		mesh = field.mesh; reference = field; gradient = new double[field.mesh.faces.size()]; var load = field.rateLoad(energy.force);
+		mesh = field.mesh; reference = field; gradient = new double[field.mesh.faces.size()]; gradientError = gradient.clone(); var load = field.observedRateLoad(energy.force);
 		for (int f = 0; f < gradient.length; f++) {
 			if (field.mesh.faces.get(f).second() == -2 && field.mesh.faces.get(f).prescribed() != 0)
 				throw new IllegalArgumentException("Capillary rate energy requires stationary prescribed walls");
-			gradient[f] = -load[f].rounded(); if (!Double.isFinite(gradient[f])) throw new IllegalStateException("Capillary pressure energy exceeds numerical range");
+			gradient[f] = -load[f].value(); gradientError[f] = load[f].error();
 		}
 		var map = new LiquidSurfaceRateMap(field); rows = metric.pressureRows(map); crosses = wall == null ? List.of() : wall.pressureCrosses(map);
 	}
-	private LiquidPressureFaceEnergy(LiquidControlVolumeMesh mesh, double[] gradient, List<Row> rows, List<Cross> crosses, LiquidConformingVelocity reference) {
-		this.mesh = mesh; this.reference = reference; this.gradient = gradient; this.rows = List.copyOf(rows); this.crosses = List.copyOf(crosses);
+	private LiquidPressureFaceEnergy(LiquidControlVolumeMesh mesh, double[] gradient, double[] gradientError, List<Row> rows, List<Cross> crosses, LiquidConformingVelocity reference) {
+		this.mesh = mesh; this.reference = reference; this.gradient = gradient; this.gradientError = gradientError; this.rows = List.copyOf(rows); this.crosses = List.copyOf(crosses);
 	}
 	boolean hasSignedMetric() { return !crosses.isEmpty(); }
 	/** Row-sum bound on the signed wall Hessian's negative curvature. */
@@ -42,28 +44,28 @@ final class LiquidPressureFaceEnergy {
 		var bound = new double[gradient.length];
 		for (var cross : crosses) {
 			double firstNorm = 0, secondNorm = 0;
-			for (double value : cross.first.values) firstNorm = Math.nextUp(firstNorm + Math.abs(value));
-			for (double value : cross.second.values) secondNorm = Math.nextUp(secondNorm + Math.abs(value));
-			for (int i = 0; i < cross.first.faces.length; i++) bound[cross.first.faces[i]] = Math.nextUp(bound[cross.first.faces[i]] + Math.nextUp(Math.nextUp(Math.abs(cross.weight * cross.first.values[i])) * secondNorm));
-			for (int i = 0; i < cross.second.faces.length; i++) bound[cross.second.faces[i]] = Math.nextUp(bound[cross.second.faces[i]] + Math.nextUp(Math.nextUp(Math.abs(cross.weight * cross.second.values[i])) * firstNorm));
+			for (int i = 0; i < cross.first.values.length; i++) firstNorm = up(firstNorm + cross.first.coefficient(i).magnitude());
+			for (int i = 0; i < cross.second.values.length; i++) secondNorm = up(secondNorm + cross.second.coefficient(i).magnitude());
+			for (int i = 0; i < cross.first.faces.length; i++) bound[cross.first.faces[i]] = up(bound[cross.first.faces[i]] + up(up(cross.weight.magnitude() * cross.first.coefficient(i).magnitude()) * secondNorm));
+			for (int i = 0; i < cross.second.faces.length; i++) bound[cross.second.faces[i]] = up(bound[cross.second.faces[i]] + up(up(cross.weight.magnitude() * cross.second.coefficient(i).magnitude()) * firstNorm));
 		}
 		return Arrays.stream(bound).max().orElse(0);
 	}
 	/** Retains the phase projection's actual face ordering and orientation. */
 	LiquidPressureFaceEnergy select(int[] faces, int[] signs) {
-		var selected = new double[faces.length]; var inverse = new int[gradient.length]; Arrays.fill(inverse, -1);
-		for (int i = 0; i < faces.length; i++) { selected[i] = signs[i] * gradient[faces[i]]; inverse[faces[i]] = i; }
+		var selected = new double[faces.length]; var selectedError = selected.clone(); var inverse = new int[gradient.length]; Arrays.fill(inverse, -1);
+		for (int i = 0; i < faces.length; i++) { selected[i] = signs[i] * gradient[faces[i]]; selectedError[i] = gradientError[faces[i]]; inverse[faces[i]] = i; }
 		var result = rows.stream().map(row -> select(row, inverse, signs)).toList();
 		var pairs = crosses.stream().map(cross -> new Cross(select(cross.first, inverse, signs), select(cross.second, inverse, signs), cross.weight)).toList();
-		return new LiquidPressureFaceEnergy(mesh, selected, result, pairs, reference);
+		return new LiquidPressureFaceEnergy(mesh, selected, selectedError, result, pairs, reference);
 	}
 	private static Row select(Row row, int[] inverse, int[] signs) {
-		var values = new java.util.TreeMap<Integer, Double>();
+		var values = new java.util.TreeMap<Integer, Value>();
 		for (int i = 0; i < row.faces.length; i++) {
 			int face = inverse[row.faces[i]]; if (face < 0) throw new IllegalArgumentException("Capillary force has no liquid pressure face");
-			values.put(face, signs[face] * row.values[i]);
+			values.put(face, new Value(signs[face] * row.values[i], row.errors[i]));
 		}
-		return new Row(values.keySet().stream().mapToInt(Integer::intValue).toArray(), values.values().stream().mapToDouble(Double::doubleValue).toArray());
+		return new Row(values.keySet().stream().mapToInt(Integer::intValue).toArray(), values.values().stream().mapToDouble(Value::value).toArray(), values.values().stream().mapToDouble(Value::error).toArray());
 	}
 	double[] diagonal(double dt) {
 		var result = new double[gradient.length];
@@ -72,7 +74,7 @@ final class LiquidPressureFaceEnergy {
 			int i = 0, j = 0;
 			while (i < cross.first.faces.length && j < cross.second.faces.length) {
 				int first = cross.first.faces[i], second = cross.second.faces[j];
-				if (first == second) result[first] += 2 * dt * dt * cross.weight * cross.first.values[i] * cross.second.values[j];
+				if (first == second) result[first] += 2 * dt * dt * cross.weight.value() * cross.first.values[i] * cross.second.values[j];
 				if (first <= second) i++; if (second <= first) j++;
 			}
 		}
@@ -80,33 +82,37 @@ final class LiquidPressureFaceEnergy {
 		return result;
 	}
 	void add(double[] flow, double[] flowError, double dt, boolean includeForce, double[] target, double[] error) {
+		var time = new Value(dt, 0); var square = time.multiply(time); var bounds = flowError == null ? null : error;
 		for (var row : rows) {
-			add(row, dot(row, flow, flowError), dt * dt, target, flowError == null ? null : error);
+			add(row, dot(row, flow, flowError), square, target, bounds);
 		}
 		for (var cross : crosses) {
-			add(cross.first, dot(cross.second, flow, flowError), dt * dt * cross.weight, target, flowError == null ? null : error);
-			add(cross.second, dot(cross.first, flow, flowError), dt * dt * cross.weight, target, flowError == null ? null : error);
+			var scale = square.multiply(cross.weight);
+			add(cross.first, dot(cross.second, flow, flowError), scale, target, bounds);
+			add(cross.second, dot(cross.first, flow, flowError), scale, target, bounds);
 		}
 		if (includeForce) for (int f = 0; f < gradient.length; f++) {
-			double term = dt * gradient[f]; target[f] += term;
-			if (flowError != null) error[f] += Math.ulp(term) + Math.ulp(target[f]);
+			accumulate(f, time.multiply(new Value(gradient[f], gradientError[f])), target, bounds);
 		}
 	}
-	private record Dot(double value, double error) { }
-	private static Dot dot(Row row, double[] flow, double[] error) {
-		double value = 0, magnitude = 0, bound = 0;
-		for (int i = 0; i < row.faces.length; i++) {
-			double term = row.values[i] * flow[row.faces[i]]; value += term; magnitude += Math.abs(term);
-			if (error != null) bound += Math.abs(row.values[i]) * error[row.faces[i]];
+	private static Value dot(Row row, double[] flow, double[] error) {
+		if (error == null) {
+			double value = 0; for (int i = 0; i < row.faces.length; i++) value += row.values[i] * flow[row.faces[i]];
+			return new Value(value, 0);
 		}
-		double epsilon = Math.scalb(2.0 * row.faces.length, -53);
-		return new Dot(value, bound + epsilon / (1 - epsilon) * magnitude);
+		var result = ZERO;
+		for (int i = 0; i < row.faces.length; i++) { int face = row.faces[i]; result = result.add(row.coefficient(i).multiply(new Value(flow[face], error[face]))); }
+		return result;
 	}
-	private static void add(Row row, Dot value, double scale, double[] target, double[] error) {
+	private static void add(Row row, Value value, Value scale, double[] target, double[] error) {
 		for (int i = 0; i < row.faces.length; i++) {
-			int face = row.faces[i]; double coefficient = scale * row.values[i], term = coefficient * value.value; target[face] += term;
-			if (error != null) error[face] += Math.abs(coefficient) * value.error + 4 * Math.ulp(term) + Math.ulp(target[face]);
+			if (error == null) target[row.faces[i]] += scale.value() * row.values[i] * value.value();
+			else accumulate(row.faces[i], scale.multiply(row.coefficient(i)).multiply(value), target, error);
 		}
+	}
+	private static void accumulate(int face, Value term, double[] target, double[] error) {
+		if (error == null) target[face] += term.value();
+		else { var result = new Value(target[face], error[face]).add(term); target[face] = result.value(); error[face] = result.error(); }
 	}
 	double[] pressure(double[] flow, double dt) {
 		var result = new double[gradient.length]; add(flow, null, dt, true, result, null);

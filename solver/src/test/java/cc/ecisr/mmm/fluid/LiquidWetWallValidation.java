@@ -41,6 +41,7 @@ final class LiquidWetWallValidation {
 		for (int f = 0; f < q.length; f++) { rq += r[f] * hq[f]; qr += q[f] * hr[f]; energy += 0.5 * q[f] * hq[f]; }
 		close(rq, qr, 1e-12, "Signed wall pullback lost symmetry");
 		var exactQ = Arrays.stream(q).mapToObj(Fraction::of).toArray(Fraction[]::new);
+		LiquidConformingVelocityValidation.requireSurfaceActionCertificate(signed, field.rateLoad(wall.gradient(field.rateVelocity(exactQ))), rate, q);
 		close(energy, wall.energy(field.rateVelocity(exactQ)).rounded(), 1e-12, "Signed wall pressure metric changed nodal work");
 		var sigma = new double[rate.length]; for (int f = 0; f < sigma.length; f++) if (mesh.faces.get(f).second() < 0) sigma[f] = mesh.faces.get(f).second() == -2 ? wallCoefficient : 0.125;
 		field.requireSurfaceResolution(sigma);

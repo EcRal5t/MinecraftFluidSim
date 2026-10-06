@@ -90,6 +90,9 @@ final class LiquidConformingVelocityValidation {
 		positions.keySet().forEach(point -> translation.put(point, List.of(Fraction.of(0.125), Fraction.of(-0.25), Fraction.of(0.5))));
 		if (metric.energy(translation).signum() != 0) throw new AssertionError("Implicit surface metric damps rigid translation");
 		var implicit = new LiquidPressureFaceEnergy(reference, capillary.energy, metric);
+		var trial = new double[zeroRate.length]; for (int f = 0; f < trial.length; f++) trial[f] = (f % 7 - 3) * 0.03125;
+		var trialExact = Arrays.stream(trial).mapToObj(Fraction::of).toArray(Fraction[]::new);
+		requireSurfaceActionCertificate(implicit, reference.rateLoad(metric.gradient(reference.rateVelocity(trialExact))), reference.rateLoad(capillary.energy.force), trial);
 		for (double dt : new double[]{1.0 / 128, 4}) {
 			var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(new double[3 * cells.size()],
 					new LiquidPolyhedron.Point(0, 0, 0), dt, 1e-11, 512, implicit);
@@ -331,6 +334,20 @@ final class LiquidConformingVelocityValidation {
 		catch (IllegalArgumentException expected) { }
 		try { reference.reconstruct(projected.volumeRate(), projected.cellVelocity(), liquid, FluidSolverConfig.WallCondition.NO_SLIP); throw new AssertionError("Interpolation reused different wall constraints"); }
 		catch (IllegalArgumentException expected) { }
+	}
+	static void requireSurfaceActionCertificate(LiquidPressureFaceEnergy surface, Fraction[] exactAction, Fraction[] exactForce, double[] flow) {
+		double dt = 0.3; var time = Fraction.of(dt);
+		for (boolean includeForce : new boolean[]{false, true}) {
+			var target = new double[flow.length]; var error = target.clone();
+			surface.add(flow, new double[flow.length], dt, includeForce, target, error);
+			for (int f = 0; f < flow.length; f++) {
+				var expected = exactAction[f].multiply(time).multiply(time);
+				if (includeForce) expected = expected.subtract(exactForce[f].multiply(time));
+				if (Fraction.of(target[f]).subtract(expected).absolute().subtract(Fraction.of(error[f])).signum() > 0)
+					throw new AssertionError("Surface operator action escaped its exact reference/error certificate at face " + f);
+				if (!(error[f] < Math.ulp((float) Math.max(1, Math.abs(expected.rounded()))))) throw new AssertionError("Surface action certificate lost mechanical observation precision");
+			}
+		}
 	}
 	private static void requireObservedRateLoad(LiquidConformingVelocity field, java.util.Map<LiquidExactPolygon.Vertex, List<Fraction>> forces) {
 		var exact = field.rateLoad(forces); var observed = field.observedRateLoad(forces); double scale = 1;

@@ -43,7 +43,7 @@ final class LiquidWetWallEnergy {
 			int b = (a + (sign > 0 ? 1 : 2)) % 3, c = 3 - a - b;
 			var weight = face.half.multiply(face.normal[c]).multiply(Fraction.of(sign)); if (weight.signum() == 0) continue;
 			var first = map.axis(face.nodes.get(i), a); var second = map.axis(face.nodes.get((i + 1) % face.nodes.size()), b);
-			if (first.faces().length != 0 && second.faces().length != 0) result.add(new LiquidPressureFaceEnergy.Cross(first, second, weight.rounded()));
+			if (first.faces().length != 0 && second.faces().length != 0) result.add(new LiquidPressureFaceEnergy.Cross(first, second, LiquidBoundedArithmetic.Value.of(weight)));
 		}
 		return List.copyOf(result);
 	}
