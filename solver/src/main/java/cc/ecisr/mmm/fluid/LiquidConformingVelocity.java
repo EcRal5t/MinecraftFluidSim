@@ -2,6 +2,7 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Vertex;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -43,6 +44,7 @@ final class LiquidConformingVelocity {
 		}
 		var nodes = new LinkedHashMap<Vertex, List<Fraction>>();
 		var fits = new LinkedHashMap<Vertex, Map<Integer, Fraction>>(); var wallNormals = new LinkedHashMap<Vertex, List<Fraction[]>>();
+		var stencils = new java.util.HashMap<List<Integer>, FitStencil>();
 		for (var entry : incidence.entrySet()) {
 			if (entry.getValue().stream().noneMatch(c -> liquid[c] >= 0)) continue;
 			var patch = new LinkedHashSet<>(entry.getValue());
@@ -51,7 +53,9 @@ final class LiquidConformingVelocity {
 			}
 			// Gas extension carries no spatial momentum in this phase model. Liquid traces use physical liquid observations.
 			patch.removeIf(c -> liquid[c] < 0);
-			var fit = fit(mesh, patch, mean, entry.getKey().coordinates()); nodes.put(entry.getKey(), List.of(fit.value())); fits.put(entry.getKey(), fit.weights());
+			var key = patch.stream().sorted().toList();
+			var stencil = stencils.computeIfAbsent(key, cells -> new FitStencil(mesh, cells, mean));
+			var fit = stencil.fit(entry.getKey()); nodes.put(entry.getKey(), List.of(fit.value())); fits.put(entry.getKey(), fit.weights());
 		}
 		// The same point obeys every incident wall constraint, including edges and corners.
 		for (var entry : incidence.entrySet()) {
@@ -246,50 +250,137 @@ final class LiquidConformingVelocity {
 		}
 		return result;
 	}
-	private static Fit fit(LiquidControlVolumeMesh mesh, LinkedHashSet<Integer> patch, double[] mean, Fraction[] point) {
-		var center = zero(); var average = zero(); var total = Fraction.ZERO;
-		for (int c : patch) {
-			var volume = mesh.cells.get(c).geometry().measure().volume(); total = total.add(volume);
-			add(center, scale(mesh.cells.get(c).geometry().centroidCoordinates(), volume));
+	private static final class FitStencil {
+		private final List<Integer> patch;
+		private final List<AffineFunctional> shape = new ArrayList<>();
+		private final AffineFunctional[] velocity = new AffineFunctional[3];
+		FitStencil(LiquidControlVolumeMesh mesh, List<Integer> patch, double[] mean) {
+			this.patch = patch; var total = Fraction.ZERO; var center = zero();
+			for (int c : patch) {
+				var local = mesh.cells.get(c).geometry().measure().volume(); total = total.add(local);
+				add(center, scale(mesh.cells.get(c).geometry().centroidCoordinates(), local));
+			}
+			for (int a = 0; a < 3; a++) center[a] = center[a].divide(total);
+			var direction = new ArrayList<Fraction[]>(); var weights = new ArrayList<Fraction>();
+			for (int c : patch) {
+				direction.add(subtract(mesh.cells.get(c).geometry().centroidCoordinates(), center)); weights.add(mesh.cells.get(c).geometry().measure().volume());
+			}
+			var metric = new Dual(direction, weights); var coefficients = new Fraction[3][4];
+			for (var row : coefficients) Arrays.fill(row, Fraction.ZERO);
+			for (int i = 0; i < patch.size(); i++) {
+				var gradient = scale(metric.solve(direction.get(i)), weights.get(i));
+				var row = new Fraction[]{gradient[0], gradient[1], gradient[2], weights.get(i).divide(total).subtract(dot(gradient, center))};
+				shape.add(new AffineFunctional(row));
+				for (int a = 0; a < 3; a++) for (int b = 0; b < 4; b++) coefficients[a][b] = coefficients[a][b].add(row[b].multiply(Fraction.of(mean[3 * patch.get(i) + a])));
+			}
+			for (int a = 0; a < 3; a++) velocity[a] = new AffineFunctional(coefficients[a]);
 		}
-		for (int a = 0; a < 3; a++) center[a] = center[a].divide(total);
-		var direction = new ArrayList<Fraction[]>(); var weights = new ArrayList<Fraction>();
-		for (int c : patch) {
-			var d = subtract(mesh.cells.get(c).geometry().centroidCoordinates(), center); var w = mesh.cells.get(c).geometry().measure().volume();
-			direction.add(d); weights.add(w);
+		Fit fit(Vertex point) {
+			var coefficients = new LinkedHashMap<Integer, Fraction>(); var average = zero();
+			for (int i = 0; i < patch.size(); i++) coefficients.put(patch.get(i), shape.get(i).evaluate(point));
+			for (int a = 0; a < 3; a++) average[a] = velocity[a].evaluate(point);
+			return new Fit(average, java.util.Collections.unmodifiableMap(coefficients));
 		}
-		var dual = dual(direction, weights, subtract(point, center)); var coefficients = new LinkedHashMap<Integer, Fraction>(); int i = 0;
-		Arrays.fill(average, Fraction.ZERO);
-		for (int c : patch) {
-			var coefficient = weights.get(i).divide(total).add(weights.get(i).multiply(dot(direction.get(i), dual))); coefficients.put(c, coefficient); i++;
-			for (int a = 0; a < 3; a++) average[a] = average[a].add(coefficient.multiply(Fraction.of(mean[3 * c + a])));
+	}
+	/** Evaluate the same rational affine form with one final reduction at a homogeneous point. */
+	private static final class AffineFunctional {
+		private final BigInteger[] numerator = new BigInteger[4];
+		private final BigInteger denominator;
+		AffineFunctional(Fraction[] coefficients) {
+			var common = BigInteger.ONE; for (var value : coefficients) common = lcm(common, value.denominator()); denominator = common;
+			for (int a = 0; a < 4; a++) numerator[a] = coefficients[a].numerator().multiply(common.divide(coefficients[a].denominator()));
 		}
-		return new Fit(average, java.util.Collections.unmodifiableMap(coefficients));
+		Fraction evaluate(Vertex point) {
+			var value = numerator[3].multiply(point.w()); for (int a = 0; a < 3; a++) value = value.add(numerator[a].multiply(point.coordinate(a)));
+			return new Fraction(value, denominator.multiply(point.w()));
+		}
 	}
 	/** Solve the exactly supported span, retaining zero slope in unobserved directions. */
 	private static Fraction[] dual(List<Fraction[]> vectors, List<Fraction> weight, Fraction[] rhs) {
-		var basis = new ArrayList<Fraction[]>();
-		for (var n : vectors) {
-			if (dot(n, n).signum() == 0) continue;
-			boolean independent = basis.isEmpty() || basis.size() == 1 && dot(cross(basis.getFirst(), n), cross(basis.getFirst(), n)).signum() != 0
-					|| basis.size() == 2 && dot(cross(basis.getFirst(), basis.get(1)), n).signum() != 0;
-			if (independent) basis.add(n); if (basis.size() == 3) break;
-		}
-		int rank = basis.size(); var matrix = new Fraction[rank][rank + 1];
-		for (int i = 0; i < rank; i++) {
-			Arrays.fill(matrix[i], Fraction.ZERO); matrix[i][rank] = dot(basis.get(i), rhs);
-			for (int j = 0; j < rank; j++) for (int v = 0; v < vectors.size(); v++)
-				matrix[i][j] = matrix[i][j].add(weight.get(v).multiply(dot(basis.get(i), vectors.get(v))).multiply(dot(basis.get(j), vectors.get(v))));
-		}
-		for (int i = 0; i < rank; i++) {
-			var divisor = matrix[i][i]; if (divisor.signum() <= 0) throw new IllegalStateException("Invalid continuous velocity metric");
-			for (int j = i; j <= rank; j++) matrix[i][j] = matrix[i][j].divide(divisor);
-			for (int r = 0; r < rank; r++) if (r != i) {
-				var factor = matrix[r][i]; for (int j = i; j <= rank; j++) matrix[r][j] = matrix[r][j].subtract(factor.multiply(matrix[i][j]));
-			}
-		}
-		var result = zero(); for (int i = 0; i < rank; i++) add(result, scale(basis.get(i), matrix[i][rank])); return result;
+		return new Dual(vectors, weight).solve(rhs);
 	}
+	private static final class Dual {
+		private final List<Fraction[]> basis = new ArrayList<>();
+		private final Fraction[][] inverse;
+		Dual(List<Fraction[]> vectors, List<Fraction> weight) {
+			var independent = new ArrayList<BigInteger[]>();
+			for (var n : vectors) {
+				var integer = integerDirection(n); if (Arrays.stream(integer).allMatch(value -> value.signum() == 0)) continue;
+				boolean addsDirection = independent.isEmpty();
+				if (independent.size() == 1) addsDirection = Arrays.stream(integerCross(independent.getFirst(), integer)).anyMatch(value -> value.signum() != 0);
+				if (independent.size() == 2) addsDirection = integerDot(integerCross(independent.getFirst(), independent.get(1)), integer).signum() != 0;
+				if (addsDirection) { independent.add(integer); basis.add(Arrays.stream(integer).map(value -> new Fraction(value, BigInteger.ONE)).toArray(Fraction[]::new)); }
+				if (basis.size() == 3) break;
+			}
+			if (basis.size() == 3) {
+				// The supported span is all of R^3. Cartesian axes avoid redundant rational basis factors.
+				basis.clear();
+				for (int a = 0; a < 3; a++) { var axis = zero(); axis[a] = Fraction.of(1); basis.add(axis); }
+			}
+			int rank = basis.size(); var matrix = new Fraction[rank][rank];
+			var observed = new Fraction[vectors.size()][rank];
+			for (int v = 0; v < vectors.size(); v++) for (int i = 0; i < rank; i++) observed[v][i] = dot(basis.get(i), vectors.get(v));
+			for (int i = 0; i < rank; i++) for (int j = 0; j <= i; j++) {
+				var value = Fraction.ZERO;
+				for (int v = 0; v < vectors.size(); v++) value = value.add(weight.get(v).multiply(observed[v][i]).multiply(observed[v][j]));
+				matrix[i][j] = matrix[j][i] = value;
+			}
+			inverse = inverseMetric(matrix);
+		}
+		Fraction[] solve(Fraction[] rhs) {
+			var result = zero();
+			for (int i = 0; i < basis.size(); i++) {
+				var coefficient = Fraction.ZERO;
+				for (int j = 0; j < basis.size(); j++) coefficient = coefficient.add(inverse[i][j].multiply(dot(basis.get(j), rhs)));
+				add(result, scale(basis.get(i), coefficient));
+			}
+			return result;
+		}
+		/** Common-denominator integer cofactors avoid intermediate rational elimination. */
+		private static Fraction[][] inverseMetric(Fraction[][] matrix) {
+			int rank = matrix.length; var denominator = BigInteger.ONE;
+			for (var row : matrix) for (var value : row) denominator = lcm(denominator, value.denominator());
+			var integer = new BigInteger[rank][rank];
+			for (int i = 0; i < rank; i++) for (int j = 0; j < rank; j++) integer[i][j] = matrix[i][j].numerator().multiply(denominator.divide(matrix[i][j].denominator()));
+			for (int size = 1; size <= rank; size++) {
+				var leading = new BigInteger[size][size]; for (int i = 0; i < size; i++) System.arraycopy(integer[i], 0, leading[i], 0, size);
+				if (determinant(leading).signum() <= 0) throw new IllegalStateException("Invalid continuous velocity metric");
+			}
+			var divisor = determinant(integer); var result = new Fraction[rank][rank];
+			for (int i = 0; i < rank; i++) for (int j = 0; j <= i; j++) {
+				var minor = new BigInteger[rank - 1][rank - 1];
+				for (int r = 0, out = 0; r < rank; r++) if (r != i) {
+					for (int c = 0, column = 0; c < rank; c++) if (c != j) minor[out][column++] = integer[r][c]; out++;
+				}
+				var cofactor = determinant(minor); if ((i + j) % 2 != 0) cofactor = cofactor.negate();
+				result[i][j] = result[j][i] = new Fraction(denominator.multiply(cofactor), divisor);
+			}
+			return result;
+		}
+		private static BigInteger determinant(BigInteger[][] matrix) {
+			return switch (matrix.length) {
+				case 0 -> BigInteger.ONE;
+				case 1 -> matrix[0][0];
+				case 2 -> matrix[0][0].multiply(matrix[1][1]).subtract(matrix[0][1].multiply(matrix[1][0]));
+				case 3 -> integerDot(matrix[0], integerCross(matrix[1], matrix[2]));
+				default -> throw new IllegalArgumentException("Spatial metric exceeds three dimensions");
+			};
+		}
+		private static BigInteger[] integerDirection(Fraction[] direction) {
+			var denominator = BigInteger.ONE; for (var value : direction) denominator = lcm(denominator, value.denominator());
+			var result = new BigInteger[3]; var common = BigInteger.ZERO;
+			for (int a = 0; a < 3; a++) { result[a] = direction[a].numerator().multiply(denominator.divide(direction[a].denominator())); common = common.gcd(result[a].abs()); }
+			if (common.signum() != 0) for (int a = 0; a < 3; a++) result[a] = result[a].divide(common);
+			return result;
+		}
+		private static BigInteger integerDot(BigInteger[] first, BigInteger[] second) {
+			var result = BigInteger.ZERO; for (int a = 0; a < 3; a++) result = result.add(first[a].multiply(second[a])); return result;
+		}
+		private static BigInteger[] integerCross(BigInteger[] first, BigInteger[] second) {
+			return new BigInteger[]{first[1].multiply(second[2]).subtract(first[2].multiply(second[1])), first[2].multiply(second[0]).subtract(first[0].multiply(second[2])), first[0].multiply(second[1]).subtract(first[1].multiply(second[0]))};
+		}
+	}
+	private static BigInteger lcm(BigInteger first, BigInteger second) { return first.divide(first.gcd(second)).multiply(second); }
 	private static Fraction[] zero() { return new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; }
 	private static void add(Fraction[] a, Fraction[] b) { for (int i = 0; i < 3; i++) a[i] = a[i].add(b[i]); }
 	private static Fraction[] subtract(Fraction[] a, Fraction[] b) { return new Fraction[]{a[0].subtract(b[0]), a[1].subtract(b[1]), a[2].subtract(b[2])}; }

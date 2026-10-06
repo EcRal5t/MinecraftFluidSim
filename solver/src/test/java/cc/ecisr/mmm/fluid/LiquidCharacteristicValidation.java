@@ -56,10 +56,25 @@ final class LiquidCharacteristicValidation {
 							.equals(next.exportGasState("").nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()))
 						throw new AssertionError("Production wetting changed sealed gas inventory");
 					System.out.println("material surface angle=" + angle + " verified millis=" + (System.nanoTime() - started) / 1e6);
+					System.out.println("material surface maxControlCentroidBits=" + maximumControlCentroidBits(output));
 					domain = next; before = after;
 				}
 			}
 		}
+	}
+	private static int maximumControlCentroidBits(LiquidGeometryState state) {
+		var cells = LiquidGeometryStateMapper.restore(state); var controls = state.copyControlCells();
+		var volume = new LiquidExactPolygon.Fraction[cells.size()]; var moment = new LiquidExactPolygon.Fraction[cells.size()][3];
+		java.util.Arrays.fill(volume, LiquidExactPolygon.Fraction.ZERO); for (var row : moment) java.util.Arrays.fill(row, LiquidExactPolygon.Fraction.ZERO);
+		for (int c = 0; c < cells.size(); c++) {
+			var measure = cells.get(c).geometry().measure(); int control = controls[c]; volume[control] = volume[control].add(measure.volume());
+			for (int a = 0; a < 3; a++) moment[control][a] = moment[control][a].add(measure.firstMoment(a));
+		}
+		int bits = 0;
+		for (int c = 0; c < cells.size(); c++) if (volume[c].signum() != 0) for (int a = 0; a < 3; a++) {
+			var coordinate = moment[c][a].divide(volume[c]); bits = Math.max(bits, Math.max(coordinate.numerator().bitLength(), coordinate.denominator().bitLength()));
+		}
+		return bits;
 	}
 	private static double surfaceEnergy(FluidDomain domain) {
 		var state = domain.liquidGeometryState; var cells = new ArrayList<>(LiquidGeometryStateMapper.restore(state));

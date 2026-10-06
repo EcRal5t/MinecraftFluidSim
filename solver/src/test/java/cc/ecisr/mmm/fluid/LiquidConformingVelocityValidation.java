@@ -10,6 +10,7 @@ final class LiquidConformingVelocityValidation {
 	static void validate() {
 		stationaryRationalGeometrySurvivesMotionRounding();
 		affineFieldSurvivesAdaptiveFaces();
+		supportedAffineFieldsSurviveObliqueCells();
 		arbitraryProjectedRatesPreserveMeansAndWalls();
 		continuousShearPreservesExteriorAreaAndWork();
 		spaceTimeSweepsPreserveVolumeAndSharedFaces();
@@ -184,13 +185,30 @@ final class LiquidConformingVelocityValidation {
 		var cells = new ArrayList<>(LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1))));
 		cells.addAll(LiquidGeometryRefinement.children(cells.removeFirst()));
 		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
-		var mean = new double[3 * cells.size()]; var rates = new Fraction[mesh.faces.size()];
-		for (int c = 0; c < cells.size(); c++) {
-			var u = affine(mesh.cells.get(c).geometry().centroidCoordinates()); for (int a = 0; a < 3; a++) mean[3 * c + a] = u[a].rounded();
+		requireAffineField(mesh, LiquidConformingVelocityValidation::affine);
+	}
+	private static void supportedAffineFieldsSurviveObliqueCells() {
+		for (int rank = 1; rank <= 2; rank++) {
+			var cells = new ArrayList<LiquidGeometryRefinement.Cell>();
+			for (int x = 0; x < 2; x++) for (int y = 0; y < rank; y++) {
+				var box = LiquidPolyhedron.box(0.5 * x, 0.5 * y, 0, 0.5 * (x + 1), 0.5 * (y + 1), 0.5);
+				var shape = box.transformed(new double[]{1, 0, 0, 0.25, 1, 0, 0.5, -0.25, 1}, new LiquidPolyhedron.Point(0, 0, 0), new LiquidPolyhedron.Point(0, 0, 0));
+				cells.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape));
+			}
+			int span = rank;
+			var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+			requireAffineField(mesh, point -> new Fraction[]{point[0].add(point[1].multiply(Fraction.of(0.25))).add(point[2].multiply(Fraction.of(0.5))).multiply(Fraction.of(0.125)),
+					span == 2 ? point[1].subtract(point[2].multiply(Fraction.of(0.25))).multiply(Fraction.of(0.125)) : Fraction.ZERO, Fraction.of(0.25)});
 		}
-		for (int f = 0; f < rates.length; f++) rates[f] = dot(mesh.faces.get(f).areaVector(), affine(mesh.faces.get(f).centroid().toArray(Fraction[]::new)));
+	}
+	private static void requireAffineField(LiquidControlVolumeMesh mesh, java.util.function.Function<Fraction[], Fraction[]> affine) {
+		var mean = new double[3 * mesh.cells.size()]; var rates = new Fraction[mesh.faces.size()];
+		for (int c = 0; c < mesh.cells.size(); c++) {
+			var u = affine.apply(mesh.cells.get(c).geometry().centroidCoordinates()); for (int a = 0; a < 3; a++) mean[3 * c + a] = u[a].rounded();
+		}
+		for (int f = 0; f < rates.length; f++) rates[f] = dot(mesh.faces.get(f).areaVector(), affine.apply(mesh.faces.get(f).centroid().toArray(Fraction[]::new)));
 		var field = new LiquidConformingVelocity(mesh, rates, mean);
-		for (var node : field.velocity.entrySet()) if (!node.getValue().equals(List.of(affine(node.getKey().coordinates()))))
+		for (var node : field.velocity.entrySet()) if (!node.getValue().equals(List.of(affine.apply(node.getKey().coordinates()))))
 			throw new AssertionError("Continuous velocity lost affine completeness at " + node.getKey());
 		requireIntegralConstraints(mesh, field, rates, mean);
 	}
