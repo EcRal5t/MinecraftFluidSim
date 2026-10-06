@@ -2,7 +2,29 @@ package cc.ecisr.mmm.fluid;
 
 /** Geometry conservation is checked separately from any liquid force or pressure solve. */
 final class LiquidGeometryValidation {
+	private static void integerNormalizationPreservesExactRationals() {
+		var random = new java.util.Random(0x73411);
+		for (int bits : new int[]{8192, 16384, 32768, 65536}) for (int sample = 0; sample < 8; sample++) {
+			var factor = new java.math.BigInteger(257, random).add(java.math.BigInteger.ONE);
+			var first = new java.math.BigInteger(bits, random).multiply(factor);
+			var second = new java.math.BigInteger(bits, random).multiply(factor);
+			var expected = first.gcd(second);
+			if (!LiquidIntegerArithmetic.gcd(first.negate(), second).equals(expected)) throw new AssertionError("Batched reduction changed the integer GCD");
+			var fraction = new LiquidExactPolygon.Fraction(first, second.negate());
+			if (!fraction.numerator().equals(first.divide(expected).negate()) || !fraction.denominator().equals(second.divide(expected)))
+				throw new AssertionError("Large exact rational normalization changed its canonical representation");
+		}
+		var power = java.math.BigInteger.ONE.shiftLeft(65536);
+		for (var pair : java.util.List.of(new java.math.BigInteger[]{power, power}, new java.math.BigInteger[]{power, java.math.BigInteger.ZERO},
+				new java.math.BigInteger[]{java.math.BigInteger.ZERO, power}, new java.math.BigInteger[]{power.multiply(power), power},
+				new java.math.BigInteger[]{power.add(java.math.BigInteger.ONE), power}, new java.math.BigInteger[]{power.subtract(java.math.BigInteger.ONE), power}))
+			if (!LiquidIntegerArithmetic.gcd(pair[0], pair[1]).equals(pair[0].gcd(pair[1]))) throw new AssertionError("Exact reduction failed at a leading-word limit");
+		var first = java.math.BigInteger.ONE; var second = first;
+		while (second.bitLength() < 16384) { var next = first.add(second); first = second; second = next; }
+		if (!LiquidIntegerArithmetic.gcd(first, second).equals(java.math.BigInteger.ONE)) throw new AssertionError("Consecutive Fibonacci integers lost their coprimality");
+	}
 	static void validate() {
+		integerNormalizationPreservesExactRationals();
 		canonicalGeometryProofSurvivesPacking();
 		controlCellsPreserveChosenMechanicalResolution();
 		mechanicalCellsCancelAuxiliaryCuts();

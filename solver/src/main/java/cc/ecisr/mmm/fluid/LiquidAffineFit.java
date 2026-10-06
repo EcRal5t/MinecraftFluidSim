@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import static cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.*;
+import static cc.ecisr.mmm.fluid.LiquidIntegerArithmetic.gcd;
 
 /** Certified weighted least squares, completed to exact affine moments on an independent simplex. */
 final class LiquidAffineFit {
@@ -92,14 +93,14 @@ final class LiquidAffineFit {
 		private final BigInteger denominator;
 		Form(Fraction[] coefficients) {
 			this.coefficients = coefficients.clone(); var common = BigInteger.ONE;
-			for (var value : coefficients) common = common.divide(common.gcd(value.denominator())).multiply(value.denominator()); denominator = common;
+			for (var value : coefficients) common = common.divide(gcd(common, value.denominator())).multiply(value.denominator()); denominator = common;
 			for (int a = 0; a < 4; a++) numerator[a] = coefficients[a].numerator().multiply(common.divide(coefficients[a].denominator()));
 		}
 		static Form combine(Form[] forms, Fraction[] weights) {
 			if (forms.length != weights.length) throw new IllegalArgumentException("Incomplete affine combination");
 			var common = BigInteger.ONE; var local = new BigInteger[forms.length];
 			for (int i = 0; i < forms.length; i++) if (weights[i].signum() != 0) {
-				local[i] = forms[i].denominator.multiply(weights[i].denominator()); common = common.divide(common.gcd(local[i])).multiply(local[i]);
+				local[i] = forms[i].denominator.multiply(weights[i].denominator()); common = common.divide(gcd(common, local[i])).multiply(local[i]);
 			}
 			var numerator = new BigInteger[4]; Arrays.fill(numerator, BigInteger.ZERO);
 			for (int i = 0; i < forms.length; i++) if (weights[i].signum() != 0) {

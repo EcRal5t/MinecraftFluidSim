@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import static cc.ecisr.mmm.fluid.LiquidIntegerArithmetic.gcd;
 
 /** Exact plane intersections and planar clipping; integration rounds each coordinate once. */
 final class LiquidExactPolygon {
@@ -15,7 +16,7 @@ final class LiquidExactPolygon {
 	record Vertex(BigInteger x, BigInteger y, BigInteger z, BigInteger w) {
 		Vertex {
 			if (w.signum() == 0) throw new IllegalArgumentException("Singular geometric vertex");
-			BigInteger gcd = x.abs().gcd(y.abs()).gcd(z.abs()).gcd(w.abs());
+			BigInteger gcd = gcd(gcd(gcd(x, y), z), w);
 			if (w.signum() < 0) gcd = gcd.negate();
 			x = x.divide(gcd); y = y.divide(gcd); z = z.divide(gcd); w = w.divide(gcd);
 		}
@@ -49,7 +50,7 @@ final class LiquidExactPolygon {
 		static final Fraction ZERO = new Fraction(BigInteger.ZERO, BigInteger.ONE);
 		Fraction(BigInteger numerator, BigInteger denominator) {
 			if (denominator.signum() == 0) throw new IllegalArgumentException("Singular geometric fraction");
-			var divisor = numerator.abs().gcd(denominator.abs()); if (denominator.signum() < 0) divisor = divisor.negate();
+			var divisor = gcd(numerator, denominator); if (denominator.signum() < 0) divisor = divisor.negate();
 			this.numerator = numerator.divide(divisor); this.denominator = denominator.divide(divisor);
 		}
 		/** Arithmetic below proves these operands coprime before constructing the result. */
@@ -64,21 +65,21 @@ final class LiquidExactPolygon {
 		@Override public String toString() { return numerator + "/" + denominator; }
 		Fraction add(Fraction other) {
 			if (signum() == 0) return other; if (other.signum() == 0) return this;
-			var common = denominator.gcd(other.denominator); var first = denominator.divide(common); var second = other.denominator.divide(common);
+			var common = gcd(denominator, other.denominator); var first = denominator.divide(common); var second = other.denominator.divide(common);
 			var sum = numerator.multiply(second).add(other.numerator.multiply(first)); if (sum.signum() == 0) return ZERO;
-			var cancellation = sum.abs().gcd(common);
+			var cancellation = gcd(sum, common);
 			return new Fraction(sum.divide(cancellation), first.multiply(other.denominator.divide(cancellation)), true);
 		}
 		Fraction multiply(Fraction other) {
 			if (signum() == 0 || other.signum() == 0) return ZERO;
-			var first = numerator.abs().gcd(other.denominator); var second = other.numerator.abs().gcd(denominator);
+			var first = gcd(numerator, other.denominator); var second = gcd(other.numerator, denominator);
 			return new Fraction(numerator.divide(first).multiply(other.numerator.divide(second)), denominator.divide(second).multiply(other.denominator.divide(first)), true);
 		}
 		Fraction negate() { return signum() == 0 ? this : new Fraction(numerator.negate(), denominator, true); }
 		Fraction subtract(Fraction other) { return add(other.negate()); }
 		Fraction divide(Fraction other) {
 			if (other.signum() == 0) throw new IllegalArgumentException("Singular geometric fraction"); if (signum() == 0) return ZERO;
-			var first = numerator.abs().gcd(other.numerator.abs()); var second = denominator.gcd(other.denominator);
+			var first = gcd(numerator, other.numerator); var second = gcd(denominator, other.denominator);
 			return new Fraction(numerator.divide(first).multiply(other.denominator.divide(second)), denominator.divide(second).multiply(other.numerator.divide(first)), true);
 		}
 		double rounded() { return Vertex.ratio(numerator, denominator); }
