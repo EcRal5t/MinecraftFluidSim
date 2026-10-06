@@ -84,19 +84,27 @@ final class ConservativeFluxCoordinates {
 
 	/** Every constrained vertex satisfies sum(outgoing volume rates) == source exactly. */
 	Fraction[] liftExact(Fraction[] coordinates, Fraction[] source) {
+		return liftExact(coordinates, source, true);
+	}
+	Fraction[] liftExactHomogeneous(double[] coordinates) {
+		var exact = new Fraction[coordinates.length]; for (int i = 0; i < exact.length; i++) exact[i] = Fraction.of(coordinates[i]);
+		var source = new Fraction[vertices]; Arrays.fill(source, Fraction.ZERO);
+		return liftExact(exact, source, false);
+	}
+	private Fraction[] liftExact(Fraction[] coordinates, Fraction[] source, boolean particular) {
 		if (coordinates.length != size() || source.length != vertices) throw new IllegalArgumentException("Invalid exact flux coordinates");
 		Fraction[] result = new Fraction[first.length], balance = new Fraction[vertices];
 		Arrays.fill(result, Fraction.ZERO);
 		for (int v = 0; v < vertices; v++) {
 			if (source[v] == null) throw new IllegalArgumentException("Absent flux volume source");
-			balance[v] = constrained[v] ? source[v] : Fraction.ZERO;
+			balance[v] = particular && constrained[v] ? source[v] : Fraction.ZERO;
 		}
 		for (int c = 0; c < independent.length; c++) {
 			if (coordinates[c] == null) throw new IllegalArgumentException("Absent flux coordinate");
 			result[independent[c]] = coordinates[c];
 		}
 		for (int f = 0; f < fixed.length; f++) {
-			if (fixed[f] != null) result[f] = fixed[f];
+			if (particular && fixed[f] != null) result[f] = fixed[f];
 			balance[first[f]] = balance[first[f]].subtract(result[f]); balance[second[f]] = balance[second[f]].add(result[f]);
 		}
 		for (int i = order.length - 1; i >= 0; i--) {

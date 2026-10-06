@@ -90,19 +90,21 @@ final class LiquidInterfaceVelocityExtension {
 		var exact = new Fraction[variable.length];
 		for (int i = 0; i < exact.length; i++) exact[i] = exactReference[coordinates.face(i)];
 		var offset = new ConservativeFluxOffset(coordinates, exact, source).relativeTo(exactReference);
-		var gradient = gradient(offset.values(variable), offset.error(variable), resistance);
+		var observation = offset.observe(variable); var gradient = gradient(observation.values(), observation.error(), resistance);
 		double[] residual = negate(coordinates.transpose(gradient.value)); var directions = new ConservativeConjugateDirections(diagonal);
+		var residualError = coordinates.transposeError(gradient.value, gradient.error);
 		int iterations = 0;
-		while (!converged(residual, coordinates.transposeError(gradient.value, gradient.error), diagonal, support, divergenceTolerance)) {
+		while (!converged(residual, residualError, diagonal, support, divergenceTolerance)) {
 			if (iterations >= maximumIterations) throw new IllegalStateException("Interface velocity extension did not converge: iterations=" + iterations + " coordinates=" + variable.length);
-			iterations++; var direction = directions.direction(residual);
+			iterations++; var direction = directions.direction(residual, residualError);
 			double[] lifted = coordinates.lift(direction, observedSource, false); for (int f = 0; f < faces; f++) lifted[f] *= resistance[f];
 			var product = coordinates.transpose(lifted); double denominator = dot(direction, product);
 			if (!(denominator > 0) || !Double.isFinite(denominator)) throw new IllegalStateException("Invalid interface extension search direction");
 			directions.remember(direction, product);
 			double alpha = dot(residual, direction) / denominator; for (int i = 0; i < variable.length; i++) variable[i] += alpha * direction[i];
-			gradient = gradient(offset.values(variable), offset.error(variable), resistance);
+			observation = offset.observe(variable); gradient = gradient(observation.values(), observation.error(), resistance);
 			residual = negate(coordinates.transpose(gradient.value));
+			residualError = coordinates.transposeError(gradient.value, gradient.error);
 		}
 		var rates = offset.exact(variable); double[] flow = new double[faces], difference = flow.clone(), error = flow.clone();
 		for (int f = 0; f < faces; f++) {

@@ -52,13 +52,19 @@ final class LiquidControlVolumeValidation {
 	}
 	/** Known orthogonal eigenmodes, with face-coordinate scales spanning the native sliver range. */
 	private static void conjugateDirectionsResolveAnisotropicEnergy() {
-		for (double force : new double[]{1e-200, 1e200}) {
-			var scalar = new ConservativeConjugateDirections(new double[]{1});
+		var certified = new ConservativeConjugateDirections(new double[]{1, 1});
+		var remaining = certified.direction(new double[]{1e-16, 1e-80}, new double[]{1e-16, 0});
+		double resolvedForce = ConservativeConjugateDirections.dot(new double[]{1e-16, 1e-80}, remaining);
+		double resolvedInertia = ConservativeConjugateDirections.dot(remaining, remaining);
+		if (remaining[0] != 0 || resolvedForce / resolvedInertia * remaining[1] != 1e-80)
+			throw new AssertionError("Resolved gradient observation obscured a smaller representable physical force");
+		for (double magnitude : new double[]{1e-200, 1e200}) {
+			var scalar = new ConservativeConjugateDirections(new double[]{1, 1});
 			for (int correction = 0; correction < 2; correction++) {
-				var direction = scalar.direction(new double[]{force}); scalar.remember(direction, direction);
-				double solved = ConservativeConjugateDirections.dot(new double[]{force}, direction)
+				var direction = scalar.direction(new double[]{magnitude, 0}); scalar.remember(direction, direction);
+				double solved = ConservativeConjugateDirections.dot(new double[]{magnitude, 0}, direction)
 						/ ConservativeConjugateDirections.dot(direction, direction) * direction[0];
-				if (solved != force) throw new AssertionError("Conjugate correction lost a representable force after exhausting its basis");
+				if (solved != magnitude) throw new AssertionError("Conjugate correction lost a representable force within its evaluated basis");
 			}
 		}
 		int n = 32; var matrix = new double[n][n]; var diagonal = new double[n]; var expected = new double[n];
@@ -279,6 +285,15 @@ final class LiquidControlVolumeValidation {
 		if (LiquidExactPolygon.Fraction.of(observed[0]).add(small).absolute().subtract(LiquidExactPolygon.Fraction.of(relative.error(new double[1])[0])).signum() > 0 || observed[0] == 0)
 			throw new AssertionError("Flux reference subtraction lost a small exact rate difference");
 		if (!java.util.Arrays.equals(offset.exact(new double[1]), relative.exact(new double[1]))) throw new AssertionError("Reference subtraction changed actual conservative rates");
+		var cancellation = new ConservativeFluxOffset(free, new LiquidExactPolygon.Fraction[]{large.add(small)}, new LiquidExactPolygon.Fraction[]{zero, zero})
+				.observe(new double[]{-1e100});
+		if (cancellation.values()[0] == 0 || LiquidExactPolygon.Fraction.of(cancellation.values()[0]).subtract(small).absolute()
+				.subtract(LiquidExactPolygon.Fraction.of(cancellation.error()[0])).signum() > 0)
+			throw new AssertionError("Lifted rate observation lost the exact remainder of a cancelling increment");
+		var shifted = new ConservativeFluxOffset(basis, exact, source); var observedField = shifted.observe(variable); var actualField = shifted.exact(variable);
+		for (int f = 0; f < actualField.length; f++) if (LiquidExactPolygon.Fraction.of(observedField.values()[f]).subtract(actualField[f]).absolute()
+				.subtract(LiquidExactPolygon.Fraction.of(observedField.error()[f])).signum() > 0)
+			throw new AssertionError("Lifted rate observation certificate differs from actual prescribed-wall and conservative rates");
 		exactInventoryAllocationPreservesShares();
 	}
 

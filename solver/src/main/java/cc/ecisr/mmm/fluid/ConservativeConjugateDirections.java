@@ -15,17 +15,32 @@ final class ConservativeConjugateDirections {
 			scale[i] = Math.sqrt(diagonal[i]);
 		}
 	}
-	double[] direction(double[] residual) {
-		if (residual.length != scale.length) throw new IllegalArgumentException("Incomplete conjugate residual");
+	double[] direction(double[] residual) { return direction(residual, new double[residual.length]); }
+	double[] direction(double[] residual, double[] error) {
+		if (residual.length != scale.length || error.length != scale.length) throw new IllegalArgumentException("Incomplete conjugate residual");
 		// A full basis exhausts this correction space. Rebuild it from the freshly evaluated residual.
 		if (previous.size() == scale.length) previous.clear();
-		var result = new double[scale.length]; for (int i = 0; i < result.length; i++) result[i] = residual[i] / scale[i];
+		var result = new double[scale.length];
+		for (int i = 0; i < result.length; i++) {
+			if (!(error[i] >= 0) || !Double.isFinite(error[i])) throw new IllegalArgumentException("Invalid conjugate residual certificate");
+			// The unresolved part of the certified gradient drives the search. Its full value still determines the line minimizer.
+			result[i] = Math.copySign(Math.max(0, Math.abs(residual[i]) - error[i]), residual[i]) / scale[i];
+		}
 		normalize(result);
+		var observed = new LiquidBoundedArithmetic.Value[result.length];
+		for (int i = 0; i < result.length; i++) observed[i] = new LiquidBoundedArithmetic.Value(result[i], 0);
 		// Two modified Gram-Schmidt passes restore conjugacy lost by the three-term recurrence.
 		for (int pass = 0; pass < 2; pass++) for (var direction : previous) {
-			double coefficient = dot(result, direction.action) / direction.energy;
-			for (int i = 0; i < result.length; i++) result[i] -= coefficient * direction.value[i];
+			var coefficient = LiquidBoundedArithmetic.ZERO;
+			for (int i = 0; i < result.length; i++) coefficient = coefficient.add(observed[i].multiply(new LiquidBoundedArithmetic.Value(direction.action[i], 0)));
+			coefficient = coefficient.divide(new LiquidBoundedArithmetic.Value(direction.energy, 0));
+			for (int i = 0; i < result.length; i++) observed[i] = observed[i].subtract(coefficient.multiply(new LiquidBoundedArithmetic.Value(direction.value[i], 0)));
 		}
+		// An orthogonal component hidden by its own evaluation error cannot supply a new search direction.
+		boolean independent = false;
+		for (int i = 0; i < result.length; i++) { independent |= Math.abs(observed[i].value()) > observed[i].error(); }
+		if (!independent) previous.clear();
+		else for (int i = 0; i < result.length; i++) result[i] = observed[i].value();
 		normalize(result);
 		for (int i = 0; i < result.length; i++) result[i] /= scale[i]; return result;
 	}
