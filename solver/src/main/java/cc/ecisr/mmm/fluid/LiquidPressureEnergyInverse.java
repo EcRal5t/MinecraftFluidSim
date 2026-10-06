@@ -5,7 +5,7 @@ import static cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.*;
 
 /** The same block inverse of V B'B + (I-DB)'W(I-DB), with certified numerical coefficients. */
 final class LiquidPressureEnergyInverse {
-	record Result(double[][] matrix, double[][] error, double pressureEnergyTraceUpper) { }
+	record Result(double[][] matrix, double[][] error, double normalizedEnergyTraceUpper, double[] weightUpper) { }
 	private LiquidPressureEnergyInverse() { }
 	static Result build(ControlVolumeGradient geometry, double density) {
 		int n = geometry.indices.length;
@@ -49,14 +49,15 @@ final class LiquidPressureEnergyInverse {
 		}
 		var trace = ZERO;
 		for (int i = 0; i < n; i++) {
-			for (int a = 0; a < 3; a++) trace = trace.add(volume.multiply(basis[i][a].multiply(basis[i][a])));
+			for (int a = 0; a < 3; a++) trace = trace.add(volume.multiply(basis[i][a].multiply(basis[i][a])).divide(weight[i]));
 			for (int j = 0; j < n; j++) {
 				var residual = i == j ? ONE : ZERO;
 				for (int a = 0; a < 3; a++) residual = residual.subtract(displacement[i][a].multiply(basis[j][a]));
-				trace = trace.add(weight[i].multiply(residual.multiply(residual)));
+				trace = trace.add(weight[i].multiply(residual.multiply(residual)).divide(weight[j]));
 			}
 		}
-		return new Result(result, error, trace.magnitude());
+		var weightUpper = new double[n]; for (int i = 0; i < n; i++) weightUpper[i] = weight[i].magnitude();
+		return new Result(result, error, trace.magnitude(), weightUpper);
 	}
 	private static Value[][] multiply(Value[][] first, Value[][] second) {
 		var result = new Value[first.length][second[0].length];

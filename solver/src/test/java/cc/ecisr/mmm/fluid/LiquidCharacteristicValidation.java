@@ -44,7 +44,7 @@ final class LiquidCharacteristicValidation {
 				try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
 					var next = steps == 1 ? FluidDomain.restoreAuthoritativeState(candidate.state()) : candidate.claimPreparedCpuDomain();
 					var output = next.liquidGeometryState;
-					System.out.println("material surface liquid=" + output.cells().size() + " gas=" + next.gasState.geometry.cells().size()
+					System.out.println("material surface liquid=" + output.cells().size() + " controls=" + java.util.Arrays.stream(output.copyControlCells()).distinct().count() + " gas=" + next.gasState.geometry.cells().size()
 							+ " maxBits=" + output.cells().stream().flatMap(cell -> java.util.Arrays.stream(cell.copyVertices())).mapToInt(java.math.BigInteger::bitLength).max().orElse(0));
 					System.out.println("material surface angle=" + angle + " restored millis=" + (System.nanoTime() - started) / 1e6);
 					double kinetic = next.particleKineticEnergyJoules();

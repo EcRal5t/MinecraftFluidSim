@@ -9,6 +9,7 @@ final class LiquidControlVolumeValidation {
 	static void validate() {
 		boundedArithmeticContainsExactEndpointValues();
 		pressureMetricCertificatesContainExactCoefficients();
+		pressureInertiaSurvivesTinyAuxiliaryFaceAreas();
 		for (double size : new double[] {0.5, 0.125, 1.0 / 1024}) freeLiquidReceivesGravity(size);
 		for (double height : new double[] {0.5, 0.125, 1.0 / 1024}) thinHydrostaticColumn(height);
 		for (double size : new double[] {0.125, 1e-4, 1e-7}) smallHydrostaticCube(size);
@@ -33,6 +34,20 @@ final class LiquidControlVolumeValidation {
 		LiquidConformingVelocityValidation.validate();
 		LiquidCharacteristicValidation.validate();
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
+	}
+	private static void pressureInertiaSurvivesTinyAuxiliaryFaceAreas() {
+		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
+		var split = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(1, 0, 0, Math.scalb(1.0, -60))),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(-1, 0, 0, -Math.scalb(1.0, -60))));
+		var geometry = LiquidPolyhedron.restoredExact(LiquidExactPolygon.splitEdges(LiquidExteriorGeometry.of(split)), cube.measure());
+		var mesh = new LiquidControlVolumeMesh(java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, geometry)), 1, 1000,
+				(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		for (var gradient : ControlVolumeGradient.build(mesh.cells, mesh.faces)) {
+			var metric = new ControlVolumeFluxMetric(gradient, 1000);
+			if (!(metric.minimumEigenvalue() > 0)) throw new AssertionError("Auxiliary face area defeated a resolved positive pressure inertia");
+		}
+		var result = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(new double[3], GRAVITY, 0.01, 1e-10, 512);
+		close(result.cellVelocity()[1], -0.0981, 1e-12);
 	}
 	private static void boundedArithmeticContainsExactEndpointValues() {
 		var samples = List.of(LiquidBoundedArithmetic.Value.of(LiquidExactPolygon.Fraction.of(1).divide(LiquidExactPolygon.Fraction.of(7))),

@@ -16,6 +16,7 @@ final class ResolvedLiquidMechanicalStage {
 				|| domain.thermalState != null && domain.thermalState.coherentPhases().groupCount() != 0)
 			throw new IllegalStateException("Resolved mechanics requires complete phase and solid geometry");
 		var state = domain.liquidGeometryState;
+		int[] controlCells = state.copyControlCells();
 		LiquidGeometryStateMapper.requireCompatible(state, domain);
 		if (domain.gasState.geometry == null) domain.gasTopologyCoordinator.refresh();
 		if (domain.gasState.geometry == null) throw new GasTopologyBlockedException("Resolved liquid requires complete gas support");
@@ -24,10 +25,11 @@ final class ResolvedLiquidMechanicalStage {
 		for (var cell : LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells())) requested.putIfAbsent(LiquidPhasePartition.Address.of(cell), cell);
 		var pressureBoundary = new PressureBoundaryView(domain);
 		boolean gasAdvanced = false;
+		var refinedControls = new java.util.LinkedHashSet<Integer>();
 		for (;;) {
 			var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ,
 					domain.config.cellSize(), domain.geometry.cutCells, List.copyOf(requested.values()), MAXIMUM_REGIONS);
-			var input = new LiquidGeometryPhaseInput(state, partition, domain.gasState.geometry, MAXIMUM_REGIONS);
+			var input = new LiquidGeometryPhaseInput(state, partition, domain.gasState.geometry, MAXIMUM_REGIONS, refinedControls);
 			var gasMatch = ResolvedGasGeometry.match(domain.gasState.geometry, input, MAXIMUM_PAIRS); var actualNodes = gasMatch.nodes();
 			if (!gasAdvanced) { domain.gasTopologyCoordinator.advanceEdges(dt); gasAdvanced = true; }
 			var pressureNodes = new ArrayList<LiquidControlVolumeProjection.GasNode>();
@@ -55,7 +57,8 @@ final class ResolvedLiquidMechanicalStage {
 				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());
 			} catch (LiquidInterfaceResolutionRequired finer) {
 				for (int c : finer.cells()) {
-					var children = LiquidGeometryRefinement.children(input.regions.get(c));
+					if (input.fragments[c] >= 0) refinedControls.add(controlCells[input.fragments[c]]);
+					var children = input.mechanicalSupport.get(c).stream().flatMap(cell -> LiquidGeometryRefinement.children(cell).stream()).toList();
 					for (var child : children) {
 						var address = LiquidPhasePartition.Address.of(child);
 						if (requested.size() == MAXIMUM_REGIONS && !requested.containsKey(address))
@@ -70,7 +73,7 @@ final class ResolvedLiquidMechanicalStage {
 			try {
 				var field = result.conformingVelocity();
 				var transport = new LiquidConformingTransport(input.mesh, field, result.extension().volumeRate(), dt, input.fragments);
-				motion = new LiquidGeometryMotionPlan(state, input.mesh, input.fragments, field, transport, partition.leaves, MAXIMUM_REGIONS, interfaces);
+				motion = new LiquidGeometryMotionPlan(input, field, transport, partition.leaves, MAXIMUM_REGIONS, interfaces);
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());
 			}

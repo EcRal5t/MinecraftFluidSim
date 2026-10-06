@@ -33,18 +33,33 @@ final class LiquidGeometryMotionPlan {
 			int maximumFragments, ResolvedGasInterfaceMotion.Builder interfaces) {
 		this(input, mesh, fragments, nextLeaves, maximumFragments, interfaces, conforming(mesh, fragments, field, motion, interfaces));
 	}
+	LiquidGeometryMotionPlan(LiquidGeometryPhaseInput input, LiquidConformingVelocity field, LiquidConformingTransport motion,
+			List<LiquidGeometryRefinement.Cell> nextLeaves, int maximumFragments, ResolvedGasInterfaceMotion.Builder interfaces) {
+		this(input.liquidGeometry, input.mesh, input.fragments, nextLeaves, maximumFragments, interfaces,
+				conforming(input.mesh, input.fragments, field, motion, interfaces), input.liquidGeometry.copyControlCells());
+		if (input.mechanicalSupport == null) throw new IllegalArgumentException("Mechanical motion requires bound control-cell support");
+	}
 	private LiquidGeometryMotionPlan(LiquidGeometryState input, LiquidControlVolumeMesh mesh, int[] fragments,
 			List<LiquidGeometryRefinement.Cell> nextLeaves, int maximumFragments, ResolvedGasInterfaceMotion.Builder interfaces, MotionField field) {
+		this(input, mesh, fragments, nextLeaves, maximumFragments, interfaces, field, null);
+	}
+	private LiquidGeometryMotionPlan(LiquidGeometryState input, LiquidControlVolumeMesh mesh, int[] fragments,
+			List<LiquidGeometryRefinement.Cell> nextLeaves, int maximumFragments, ResolvedGasInterfaceMotion.Builder interfaces, MotionField field, int[] sourceControls) {
 		if (fragments.length != mesh.cells.size() || maximumFragments <= 0 || maximumFragments < input.cells().size()) throw new IllegalArgumentException("Invalid geometric motion support");
 		if (interfaces != null) interfaces.requireInput(mesh, fragments);
 		this.input = input;
 		var source = LiquidGeometryStateMapper.restore(input); var width = Fraction.of(input.rootWidthMetres()); var inverse = Fraction.of(1).divide(width);
 		var coverage = new LiquidExactPolygon.Measure[source.size()]; Arrays.fill(coverage, LiquidConvexRegion.EMPTY.measure());
+		var expectedSupport = new LiquidExactPolygon.Measure[source.size()]; Arrays.fill(expectedSupport, LiquidConvexRegion.EMPTY.measure());
+		for (int f = 0; f < source.size(); f++) {
+			int support = sourceControls == null ? f : sourceControls[f];
+			expectedSupport[support] = expectedSupport[support].add(source.get(f).geometry().scaled(width).measure());
+		}
 		for (int c = 0; c < fragments.length; c++) {
 			int f = fragments[c]; if (f < -1 || f >= source.size()) throw new IllegalArgumentException("Phase cell has no liquid fragment");
-			if (f >= 0) coverage[f] = coverage[f].add(LiquidConvexRegion.of(mesh.cells.get(c).geometry()).measure());
+			if (f >= 0) { int support = sourceControls == null ? f : sourceControls[f]; coverage[support] = coverage[support].add(mesh.cells.get(c).geometry().measure()); }
 		}
-		for (int f = 0; f < source.size(); f++) if (!coverage[f].same(LiquidConvexRegion.of(source.get(f).geometry().scaled(width)).measure()))
+		for (int f = 0; f < source.size(); f++) if (!coverage[f].same(expectedSupport[f]))
 			throw new IllegalArgumentException("Mechanical geometry differs from submitted liquid geometry");
 		var remap = new LiquidGeometryRemap(nextLeaves);
 		var cells = new ArrayList<LiquidGeometryRefinement.Cell>(); var ownership = new ArrayList<Integer>(); int[] previousOwners = input.copyFragmentOwners();
@@ -124,7 +139,10 @@ final class LiquidGeometryMotionPlan {
 			public List<LiquidPolyhedron> images(int c) {
 				var local = images.get(c); if (local == null) throw new IllegalArgumentException("Continuous transport has no liquid cell support");
 				var map = local.getFirst().affineMap();
-				if (local.stream().allMatch(image -> image.affineMap().equals(map)))
+				var geometry = mesh.cells.get(c).geometry();
+				var faces = LiquidExactPolygon.faces(geometry); var vertices = faces.stream().flatMap(face -> face.vertices().stream()).distinct().toList();
+				boolean convex = faces.stream().allMatch(face -> vertices.stream().allMatch(vertex -> vertex.distance(face.coefficients()).signum() <= 0));
+				if (convex && local.stream().allMatch(image -> image.affineMap().equals(map)))
 					return List.of(LiquidConvexRegion.of(mesh.cells.get(c).geometry()).transformed(map).geometry());
 				return local.stream().map(image -> image.geometry().geometry()).toList();
 			}

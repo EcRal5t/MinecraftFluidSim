@@ -15,6 +15,7 @@ final class LiquidGeometryPhaseInput {
 	final int[] storedGasNodes;
 	final int[] fragments;
 	final double[] cellVelocity, faceVelocity;
+	final List<List<LiquidGeometryRefinement.Cell>> mechanicalSupport;
 
 	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions) {
 		this(state, domain, sealed, maximumRegions, null);
@@ -22,7 +23,13 @@ final class LiquidGeometryPhaseInput {
 	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, GasGeometryState gas, int maximumRegions) {
 		this(state, domain, java.util.Objects.requireNonNull(gas).sealedExterior(), maximumRegions, gas);
 	}
+	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, GasGeometryState gas, int maximumRegions, java.util.Set<Integer> refined) {
+		this(state, domain, java.util.Objects.requireNonNull(gas).sealedExterior(), maximumRegions, gas, java.util.Set.copyOf(refined));
+	}
 	private LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions, GasGeometryState gas) {
+		this(state, domain, sealed, maximumRegions, gas, null);
+	}
+	private LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions, GasGeometryState gas, java.util.Set<Integer> refined) {
 		if (state.rootWidthMetres() != domain.rootWidthMetres || maximumRegions < 1) throw new IllegalArgumentException("Invalid geometric phase input");
 		if (gas != null && gas.rootWidthMetres() != domain.rootWidthMetres) throw new IllegalArgumentException("Gas geometry has a different physical root");
 		rootWidthMetres = domain.rootWidthMetres;
@@ -56,10 +63,16 @@ final class LiquidGeometryPhaseInput {
 				LiquidPhasePartition.requireComplete(domain.leaves.get(c), cells.subList(start, cells.size()));
 			}
 		}
-		regions = List.copyOf(cells);
-		storedGasNodes = labels.stream().mapToInt(Integer::intValue).toArray();
-		mesh = new LiquidControlVolumeMesh(regions, domain.rootWidthMetres, 1, (c, surface) -> domain.boundary(surface, sealed));
-		fragments = mapping.stream().mapToInt(Integer::intValue).toArray(); cellVelocity = new double[3 * cells.size()]; faceVelocity = new double[3 * mesh.faces.size()];
+		if (refined == null) {
+			regions = List.copyOf(cells); mechanicalSupport = null;
+			storedGasNodes = labels.stream().mapToInt(Integer::intValue).toArray(); fragments = mapping.stream().mapToInt(Integer::intValue).toArray();
+		} else {
+			var controls = new LiquidMechanicalControlCells(state, cells, mapping, labels, refined);
+			regions = controls.regions; mechanicalSupport = controls.support; storedGasNodes = controls.gasNodes; fragments = controls.fragments;
+		}
+		var meshSupport = refined == null ? regions : regions.stream().map(cell -> new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cell.geometry())).toList();
+		mesh = new LiquidControlVolumeMesh(meshSupport, domain.rootWidthMetres, 1, (c, surface) -> domain.boundary(surface, sealed));
+		cellVelocity = new double[3 * regions.size()]; faceVelocity = new double[3 * mesh.faces.size()];
 		for (int c = 0; c < fragments.length; c++) if (fragments[c] >= 0) System.arraycopy(state.cells().get(fragments[c]).copyVelocity(), 0, cellVelocity, 3 * c, 3);
 		for (int f = 0; f < mesh.faces.size(); f++) {
 			var face = mesh.faces.get(f); int a = face.first(), b = face.second(); boolean liquidA = fragments[a] >= 0, liquidB = b >= 0 && fragments[b] >= 0;

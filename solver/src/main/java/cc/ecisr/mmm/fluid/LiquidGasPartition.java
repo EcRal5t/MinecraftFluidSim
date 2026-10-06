@@ -7,23 +7,13 @@ import java.util.List;
 /** Exact gas partition from actual liquid exterior faces, independent of internal material cuts. */
 final class LiquidGasPartition {
 	private record Pending(List<LiquidExactPolygon> geometry, List<LiquidExactPolygon> surfaces) { }
-	private static final class Face {
-		final LiquidExactPolygon polygon;
-		List<LiquidExactPolygon> remaining;
-		Face(LiquidExactPolygon polygon) { this.polygon = polygon; remaining = List.of(polygon); }
-		void remove(LiquidExactPolygon covered) {
-			var result = new ArrayList<LiquidExactPolygon>();
-			for (var part : remaining) result.addAll(part.subtract(covered));
-			remaining = result;
-		}
-	}
 	private LiquidGasPartition() { }
 	static List<LiquidPolyhedron> build(LiquidGeometryRefinement.Cell leaf,
 			List<LiquidGeometryRefinement.Cell> liquids, int maximumRegions) {
 		var open = LiquidConvexRegion.of(leaf.geometry());
 		if (liquids.isEmpty()) return List.of(leaf.geometry());
 		var wallPlanes = open.faces().stream().map(face -> face.plane().key()).collect(java.util.stream.Collectors.toSet());
-		var exterior = exterior(liquids).stream().filter(face -> !wallPlanes.contains(face.plane().key())).toList();
+		var exterior = LiquidExteriorGeometry.of(liquids).stream().filter(face -> !wallPlanes.contains(face.plane().key())).toList();
 		var occupancy = liquids.stream().map(cell -> LiquidExactPolygon.faces(cell.geometry()).stream().map(LiquidExactPolygon::coefficients).distinct().toList()).toList();
 		var pending = new ArrayDeque<Pending>(); pending.add(new Pending(open.faces(), exterior));
 		var gas = new ArrayList<LiquidPolyhedron>(); long work = 0;
@@ -71,24 +61,6 @@ final class LiquidGasPartition {
 			if (splits < leastSplits || splits == leastSplits && side < leastSide) { best = plane; leastSplits = splits; leastSide = side; }
 		}
 		return best;
-	}
-	private static List<LiquidExactPolygon> exterior(List<LiquidGeometryRefinement.Cell> liquids) {
-		var positive = new java.util.LinkedHashMap<LiquidGeometryPlane.Key, ArrayList<Face>>();
-		var negative = new java.util.LinkedHashMap<LiquidGeometryPlane.Key, ArrayList<Face>>();
-		var all = new ArrayList<Face>();
-		for (var cell : liquids) for (var polygon : LiquidExactPolygon.faces(cell.geometry())) {
-			var face = new Face(polygon); all.add(face); var plane = polygon.plane();
-			(plane.positive() ? positive : negative).computeIfAbsent(plane.key(), ignored -> new ArrayList<>()).add(face);
-		}
-		for (var entry : positive.entrySet()) {
-			var other = negative.get(entry.getKey()); if (other == null) continue;
-			for (var a : entry.getValue()) for (var b : other) {
-				if (a.remaining.isEmpty() || b.remaining.isEmpty()) continue;
-				if (a.polygon.vertexKey().equals(b.polygon.vertexKey())) { a.remaining = List.of(); b.remaining = List.of(); continue; }
-				var shared = a.polygon.intersection(b.polygon); if (shared.hasArea()) { a.remove(shared); b.remove(shared); }
-			}
-		}
-		return all.stream().flatMap(face -> face.remaining.stream()).toList();
 	}
 	private static LiquidExactPolygon.Vertex interiorPoint(List<LiquidExactPolygon> faces) {
 		var base = faces.getFirst(); var plane = base.coefficients();
