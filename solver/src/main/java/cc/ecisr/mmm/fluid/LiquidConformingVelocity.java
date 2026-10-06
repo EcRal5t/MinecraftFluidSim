@@ -232,16 +232,22 @@ final class LiquidConformingVelocity {
 		var meanWeights = integrals.tetrahedronMeanWeights();
 		for (int i = 0; i < tetrahedra.size(); i++) {
 			var tet = tetrahedra.get(i); var weight = meanWeights.get(i);
-			var f = scale(nodes.get(cellCenters.get(tet.cell())), weight); for (int v = 1; v < 4; v++) add(nodes.get(tet.vertices().get(v)), f);
+			var input = nodes.get(cellCenters.get(tet.cell())); if (isZero(input)) continue;
+			var f = scale(input, weight); for (int v = 1; v < 4; v++) add(nodes.get(tet.vertices().get(v)), f);
 		}
 		for (int f = 0; f < mesh.faces.size(); f++) {
 			if (!nodes.containsKey(faceCenters.get(f))) continue;
-			var area = mesh.faces.get(f).areaVector().toArray(Fraction[]::new); var input = nodes.get(faceCenters.get(f));
-			trace[f] = dot(area, input).multiply(Fraction.of(3)).divide(dot(area, area)); var preferred = subtract(input, scale(area, trace[f]));
+			var input = nodes.get(faceCenters.get(f)); if (isZero(input)) continue;
+			var plane = mesh.exactPolygons.get(f).coefficients(); var normal = new Fraction[3];
+			for (int a = 0; a < 3; a++) normal[a] = new Fraction(plane.get(a), BigInteger.ONE);
+			var correction = dot(normal, input).multiply(Fraction.of(3)).divide(dot(normal, normal));
+			int axis = 0; while (normal[axis].signum() == 0) axis++;
+			trace[f] = correction.multiply(normal[axis]).divide(mesh.faces.get(f).areaVector().get(axis));
+			var preferred = subtract(input, scale(normal, correction));
 			for (var weight : faceWeights.get(f).entrySet()) add(nodes.get(weight.getKey()), scale(preferred, weight.getValue()));
 		}
 		for (var corner : cornerWeights.entrySet()) {
-			var f = nodes.get(corner.getKey()); var normals = walls.get(corner.getKey());
+			var f = nodes.get(corner.getKey()); if (isZero(f)) continue; var normals = walls.get(corner.getKey());
 			if (normals != null) {
 				var rhs = zero(); var weights = new ArrayList<Fraction>();
 				for (var n : normals) { weights.add(Fraction.of(1)); add(rhs, scale(n, dot(n, f))); }
@@ -295,6 +301,7 @@ final class LiquidConformingVelocity {
 		var load = load(forces); var result = load.faceForce().toArray(Fraction[]::new);
 		for (int c = 0; c < mesh.cells.size(); c++) if (velocity.containsKey(cellCenters.get(c))) {
 			var force = new Fraction[]{load.cellForce().get(3 * c), load.cellForce().get(3 * c + 1), load.cellForce().get(3 * c + 2)};
+			if (isZero(force)) continue;
 			var basis = integrals.meanRateBasis(c);
 			for (int i = 0; i < mesh.cellFaces[c].length; i++) {
 				int f = mesh.cellFaces[c][i]; result[f] = result[f].add(dot(basis[i], force));
@@ -453,6 +460,7 @@ final class LiquidConformingVelocity {
 	}
 	private static BigInteger lcm(BigInteger first, BigInteger second) { return first.divide(first.gcd(second)).multiply(second); }
 	private static Fraction[] zero() { return new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; }
+	private static boolean isZero(Fraction[] value) { return value[0].signum() == 0 && value[1].signum() == 0 && value[2].signum() == 0; }
 	private static void add(Fraction[] a, Fraction[] b) { for (int i = 0; i < 3; i++) a[i] = a[i].add(b[i]); }
 	private static Fraction[] subtract(Fraction[] a, Fraction[] b) { return new Fraction[]{a[0].subtract(b[0]), a[1].subtract(b[1]), a[2].subtract(b[2])}; }
 	private static Fraction[] scale(Fraction[] a, Fraction b) { return new Fraction[]{a[0].multiply(b), a[1].multiply(b), a[2].multiply(b)}; }

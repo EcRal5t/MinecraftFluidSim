@@ -82,7 +82,8 @@ final class ConservativeControlVolumeProjection {
 		var coordinates = this.coordinates.weighted(faceWeight);
 		double[] diagonal = coordinates.cycleWeights(faceWeight), support = coordinates.cycleMinimum(vertexVolume), variable = new double[coordinates.size()];
 		Fraction[] initial = new Fraction[variable.length]; Arrays.fill(initial, Fraction.ZERO); var offset = new ConservativeFluxOffset(coordinates, initial, exactZeroSource);
-		var evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt, surface, dt);
+		var observation = offset.observe(variable);
+		var evaluation = evaluate(observation.values(), observation.error(), predictor, predictorError, storage, dt, surface, dt);
 		double[] residual = negate(coordinates.transpose(evaluation.gradient));
 		var primaryReference = new double[predicted.length];
 		// Choose a feasible kinetic predictor when the zero-rate state has a resolved variational force.
@@ -91,7 +92,8 @@ final class ConservativeControlVolumeProjection {
 			System.arraycopy(predicted, 0, primaryReference, 0, predicted.length);
 			for (int i = 0; i < variable.length; i++) { var face = faces.get(coordinates.face(i)); initial[i] = faceRate(face, predicted, face.first()); }
 			offset = new ConservativeFluxOffset(coordinates, initial, exactZeroSource);
-			evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt, surface, dt);
+			observation = offset.observe(variable);
+			evaluation = evaluate(observation.values(), observation.error(), predictor, predictorError, storage, dt, surface, dt);
 			residual = negate(coordinates.transpose(evaluation.gradient));
 		}
 		var directions = new ConservativeConjugateDirections(diagonal);
@@ -108,7 +110,8 @@ final class ConservativeControlVolumeProjection {
 			double denominator = dot(direction, product); if (!(denominator > 0) || !Double.isFinite(denominator)) throw new IllegalStateException("Invalid conservative pressure search direction");
 			directions.remember(direction, product);
 			double alpha = dot(residual, direction) / denominator; for (int i = 0; i < variable.length; i++) variable[i] += alpha * direction[i];
-			evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt, surface, dt);
+			observation = offset.observe(variable);
+			evaluation = evaluate(observation.values(), observation.error(), predictor, predictorError, storage, dt, surface, dt);
 			residual = negate(coordinates.transpose(evaluation.gradient));
 			residualError = coordinates.transposeError(evaluation.gradient, evaluation.error);
 		}
