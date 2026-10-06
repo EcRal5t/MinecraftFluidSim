@@ -43,6 +43,7 @@ final class LiquidControlVolumeValidation {
 		var geometry = LiquidPolyhedron.restoredExact(LiquidExactPolygon.splitEdges(LiquidExteriorGeometry.of(split)), cube.measure());
 		var mesh = new LiquidControlVolumeMesh(java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, geometry)), 1, 1000,
 				(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		if (mesh.faces.size() != 6) throw new AssertionError("Auxiliary coplanar fragments became independent pressure faces");
 		for (var gradient : ControlVolumeGradient.build(mesh.cells, mesh.faces)) {
 			var metric = new ControlVolumeFluxMetric(gradient, 1000);
 			if (!(metric.minimumEigenvalue() > 0)) throw new AssertionError("Auxiliary face area defeated a resolved positive pressure inertia");

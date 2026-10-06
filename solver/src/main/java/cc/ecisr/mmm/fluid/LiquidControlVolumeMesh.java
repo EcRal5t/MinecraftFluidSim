@@ -88,6 +88,8 @@ final class LiquidControlVolumeMesh {
 			faces.add(new LiquidControlVolumeProjection.Face(patch.cell, condition.solid ? -2 : -1, residual, condition.prescribed, exact));
 			polygons.add(exact);
 		}
+		var combined = LiquidCoplanarFaceUnion.build(faces, polygons);
+		faces = new ArrayList<>(combined.faces()); polygons = new ArrayList<>(combined.polygons());
 		this.cells = List.copyOf(cells); this.faces = List.copyOf(faces);
 		this.exactPolygons = LiquidExactPolygon.splitEdges(polygons); this.polygons = exactPolygons.stream().map(LiquidExactPolygon::rounded).toList();
 		var incidence = new ArrayList<ArrayList<Integer>>(); for (int c = 0; c < cells.size(); c++) incidence.add(new ArrayList<>());
