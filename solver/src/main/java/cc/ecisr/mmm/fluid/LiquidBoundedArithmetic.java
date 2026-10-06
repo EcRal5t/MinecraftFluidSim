@@ -1,0 +1,41 @@
+package cc.ecisr.mmm.fluid;
+
+/** Binary64 values with outward-rounded absolute bounds on all input and arithmetic errors. */
+final class LiquidBoundedArithmetic {
+	static final Value ZERO = new Value(0, 0), ONE = new Value(1, 0);
+	record Value(double value, double error) {
+		Value {
+			if (!Double.isFinite(value) || !(error >= 0) || !Double.isFinite(error))
+				throw new IllegalStateException("Pressure metric exceeds representable arithmetic range");
+		}
+		static Value of(LiquidExactPolygon.Fraction exact) {
+			if (exact.signum() == 0) return ZERO;
+			double value = exact.rounded(); return new Value(value, Math.ulp(value));
+		}
+		Value add(Value other) {
+			if (value == 0 && error == 0) return other;
+			if (other.value == 0 && other.error == 0) return this;
+			double result = value + other.value;
+			return new Value(result, up(up(error + other.error) + Math.ulp(result)));
+		}
+		Value negate() { return new Value(-value, error); }
+		Value subtract(Value other) { return add(other.negate()); }
+		Value multiply(Value other) {
+			if (value == 0 && error == 0 || other.value == 0 && other.error == 0) return ZERO;
+			double result = value * other.value;
+			double bound = up(up(Math.abs(value) * other.error) + up(Math.abs(other.value) * error));
+			return new Value(result, up(up(bound + up(error * other.error)) + Math.ulp(result)));
+		}
+		Value divide(Value other) {
+			double denominator = Math.nextDown(Math.abs(other.value) - other.error);
+			if (!(denominator > 0)) throw new IllegalStateException("Pressure metric denominator has unresolved numerical sign");
+			if (value == 0 && error == 0) return ZERO;
+			double result = value / other.value;
+			double residual = up(up(error + up(Math.abs(result) * other.error)) + up(Math.ulp(result) * Math.abs(other.value)));
+			return new Value(result, up(residual / denominator));
+		}
+		double magnitude() { return up(Math.abs(value) + error); }
+	}
+	static double up(double value) { return Math.nextUp(value); }
+	private LiquidBoundedArithmetic() { }
+}

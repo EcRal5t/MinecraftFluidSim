@@ -7,6 +7,8 @@ import java.util.List;
 final class LiquidControlVolumeValidation {
 	private static final LiquidPolyhedron.Point GRAVITY = new LiquidPolyhedron.Point(0, -9.81, 0);
 	static void validate() {
+		boundedArithmeticContainsExactEndpointValues();
+		pressureMetricCertificatesContainExactCoefficients();
 		for (double size : new double[] {0.5, 0.125, 1.0 / 1024}) freeLiquidReceivesGravity(size);
 		for (double height : new double[] {0.5, 0.125, 1.0 / 1024}) thinHydrostaticColumn(height);
 		for (double size : new double[] {0.125, 1e-4, 1e-7}) smallHydrostaticCube(size);
@@ -31,6 +33,45 @@ final class LiquidControlVolumeValidation {
 		LiquidConformingVelocityValidation.validate();
 		LiquidCharacteristicValidation.validate();
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
+	}
+	private static void boundedArithmeticContainsExactEndpointValues() {
+		var samples = List.of(LiquidBoundedArithmetic.Value.of(LiquidExactPolygon.Fraction.of(1).divide(LiquidExactPolygon.Fraction.of(7))),
+				LiquidBoundedArithmetic.Value.of(LiquidExactPolygon.Fraction.of(-1).divide(LiquidExactPolygon.Fraction.of(3))),
+				new LiquidBoundedArithmetic.Value(1.3, 0.6), new LiquidBoundedArithmetic.Value(3, 2.9),
+				new LiquidBoundedArithmetic.Value(1e-200, Math.ulp(1e-200)), new LiquidBoundedArithmetic.Value(-1e-200, Math.ulp(1e-200)));
+		for (var a : samples) for (var b : samples) for (int operation = 0; operation < 3; operation++) {
+			var result = operation == 0 ? a.add(b) : operation == 1 ? a.multiply(b) : a.divide(b);
+			for (int first : new int[]{-1, 1}) for (int second : new int[]{-1, 1}) {
+				var x = LiquidExactPolygon.Fraction.of(a.value()).add(LiquidExactPolygon.Fraction.of(a.error()).multiply(LiquidExactPolygon.Fraction.of(first)));
+				var y = LiquidExactPolygon.Fraction.of(b.value()).add(LiquidExactPolygon.Fraction.of(b.error()).multiply(LiquidExactPolygon.Fraction.of(second)));
+				var exact = operation == 0 ? x.add(y) : operation == 1 ? x.multiply(y) : x.divide(y);
+				if (exact.subtract(LiquidExactPolygon.Fraction.of(result.value())).absolute().subtract(LiquidExactPolygon.Fraction.of(result.error())).signum() > 0)
+					throw new AssertionError("Bounded arithmetic lost an exact interval endpoint, operation=" + operation);
+			}
+		}
+	}
+	private static void pressureMetricCertificatesContainExactCoefficients() {
+		for (var shape : List.of(LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5),
+				LiquidPolyhedron.box(0, 0, 0, 0.5, 1.0 / 1024, 0.5),
+				LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5).clip(-2, 3, 1, 0.7))) {
+			var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)), 1, 1000,
+					(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+			for (var gradient : ControlVolumeGradient.build(mesh.cells, mesh.faces)) {
+				var observed = LiquidPressureEnergyInverse.build(gradient, 1000); var exact = LiquidPressureEnergyInverseOracle.build(gradient, 1000);
+				for (int i = 0; i < exact.length; i++) for (int j = 0; j < exact.length; j++) {
+					if (!(Math.abs(observed.matrix()[i][j] - exact[i][j]) <= observed.error()[i][j] + Math.ulp(exact[i][j])))
+						throw new AssertionError("Pressure metric coefficient escaped its exact-reference error certificate");
+				}
+				var metric = new ControlVolumeFluxMetric(gradient, 1000); var input = new double[exact.length];
+				for (int i = 0; i < input.length; i++) input[i] = Math.sin(i + 0.25);
+				var actual = metric.multiply(input); var error = metric.evaluationError(input, new double[input.length]);
+				for (int i = 0; i < exact.length; i++) {
+					double reference = 0, rounding = 0;
+					for (int j = 0; j < exact.length; j++) { reference += exact[i][j] * input[j]; rounding += Math.ulp(exact[i][j] * input[j]) + Math.ulp(reference); }
+					if (!(Math.abs(actual[i] - reference) <= error[i] + rounding)) throw new AssertionError("Pressure action escaped its propagated coefficient error");
+				}
+			}
+		}
 	}
 	private static void variableSurfaceEnergyRetainsTangentialForce() {
 		var cells = List.of(new LiquidGeometryRefinement.Cell(1, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5)),
