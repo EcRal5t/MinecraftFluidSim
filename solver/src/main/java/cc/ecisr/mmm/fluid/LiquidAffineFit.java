@@ -128,16 +128,21 @@ final class LiquidAffineFit {
 		Basis(List<Fraction[]> centers) {
 			reference = LiquidExactPolygon.vertex(centers.getFirst());
 			var chosen = new ArrayList<Integer>(); chosen.add(0); var vectors = new ArrayList<Fraction[]>(); var integer = directions;
-			for (int i = 1; i < centers.size() && vectors.size() < 3; i++) {
-				var vector = new Fraction[3]; for (int a = 0; a < 3; a++) vector[a] = centers.get(i)[a].subtract(centers.getFirst()[a]);
-				var direction = LiquidExactPolygon.vertex(vector); boolean independent = false;
-				if (vectors.isEmpty()) independent = direction.x().signum() != 0 || direction.y().signum() != 0 || direction.z().signum() != 0;
-				else {
-					var first = integer.getFirst(); var second = integer.size() == 1 ? direction : integer.get(1);
-					var normal = List.of(first.y().multiply(second.z()).subtract(first.z().multiply(second.y())), first.z().multiply(second.x()).subtract(first.x().multiply(second.z())), first.x().multiply(second.y()).subtract(first.y().multiply(second.x())), BigInteger.ZERO);
-					independent = integer.size() == 1 ? normal.stream().anyMatch(value -> value.signum() != 0) : direction.distance(normal).signum() != 0;
+			var candidates = new ArrayList<Vertex>();
+			for (var center : centers) {
+				var point = LiquidExactPolygon.vertex(center); var displacement = new BigInteger[3];
+				for (int a = 0; a < 3; a++) displacement[a] = point.coordinate(a).multiply(reference.w()).subtract(reference.coordinate(a).multiply(point.w()));
+				candidates.add(new Vertex(displacement[0], displacement[1], displacement[2], point.w().multiply(reference.w())));
+			}
+			// Exact column pivoting maximizes distance to the current span, retaining thin supported directions.
+			while (vectors.size() < 3) {
+				int selected = -1; var maximum = BigInteger.ZERO; var divisor = BigInteger.ONE;
+				for (int i = 1; i < candidates.size(); i++) {
+					var candidate = candidates.get(i); var score = residualSquared(candidate, integer); var denominator = candidate.w().multiply(candidate.w());
+					if (score.multiply(divisor).compareTo(maximum.multiply(denominator)) > 0) { selected = i; maximum = score; divisor = denominator; }
 				}
-				if (independent) { chosen.add(i); vectors.add(vector); integer.add(direction); }
+				if (selected < 0) break;
+				var direction = candidates.get(selected); chosen.add(selected); vectors.add(direction.coordinates()); integer.add(direction);
 			}
 			anchor = chosen.stream().mapToInt(Integer::intValue).toArray(); int rank = vectors.size();
 			var gradient = new Fraction[rank][];
@@ -157,6 +162,19 @@ final class LiquidAffineFit {
 				coordinate[a] = shape[a + 1] = new Form(row); add(first, row, Fraction.of(-1));
 			}
 			shape[0] = new Form(first);
+		}
+		/** Common factors from the existing span cancel when comparing rational residual distances. */
+		private static BigInteger residualSquared(Vertex point, List<Vertex> span) {
+			if (span.size() == 2) {
+				var normal = normal(span.getFirst(), span.get(1)); var distance = BigInteger.ZERO;
+				for (int a = 0; a < 3; a++) distance = distance.add(normal[a].multiply(point.coordinate(a))); return distance.multiply(distance);
+			}
+			var vector = span.isEmpty() ? new BigInteger[]{point.x(), point.y(), point.z()} : normal(span.getFirst(), point);
+			var squared = BigInteger.ZERO; for (var value : vector) squared = squared.add(value.multiply(value)); return squared;
+		}
+		private static BigInteger[] normal(Vertex first, Vertex second) {
+			return new BigInteger[]{first.y().multiply(second.z()).subtract(first.z().multiply(second.y())),
+					first.z().multiply(second.x()).subtract(first.x().multiply(second.z())), first.x().multiply(second.y()).subtract(first.y().multiply(second.x()))};
 		}
 		boolean contains(Vertex point) {
 			if (directions.size() == 3) return true;

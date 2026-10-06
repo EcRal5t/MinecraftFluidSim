@@ -229,14 +229,18 @@ final class LiquidConformingVelocityValidation {
 				x[2].multiply(Fraction.of(-0.125)).add(Fraction.of(0.125))};
 	}
 	private static void certifiedAffineFitsContainExactLeastSquares() {
-		for (int rank = 0; rank <= 3; rank++) {
+		for (int pattern = 0; pattern < 6; pattern++) {
+			int rank = Math.min(pattern, 3); var small = new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.ONE.shiftLeft(80));
 			var samples = new Fraction[8][rank]; var target = new Fraction[rank];
 			var centers = new ArrayList<Fraction[]>(); var weights = new ArrayList<Fraction>();
 			for (int a = 0; a < rank; a++) target[a] = rational(1, 2 * a + 7);
 			for (int i = 0; i < samples.length; i++) {
 				for (int a = 0; a < rank; a++) samples[i][a] = rank == 1 ? rational(i, 21) : rational(i >>> a & 1, 2 * a + 3);
+				if (pattern == 4 && i > 1 && i < 4) samples[i] = new Fraction[]{rational(1, 3), small, i == 3 ? small : Fraction.ZERO};
+				if (pattern == 5) samples[i][2] = samples[i][2].multiply(small);
 				centers.add(obliqueCoordinates(samples[i])); weights.add(rational(i + 1, i + 7));
 			}
+			if (pattern == 5) target[2] = target[2].multiply(small);
 			var point = LiquidExactPolygon.vertex(obliqueCoordinates(target)); var fit = new LiquidAffineFit(centers, weights);
 			var exact = leastSquaresWeights(samples, weights, target); var sum = Fraction.ZERO; var moment = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var errors = fit.weightErrors(point);
 			for (int i = 0; i < samples.length; i++) {
