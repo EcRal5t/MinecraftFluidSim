@@ -11,6 +11,8 @@ final class LiquidConformingVelocityValidation {
 		stationaryRationalGeometrySurvivesMotionRounding();
 		affineFieldSurvivesAdaptiveFaces();
 		supportedAffineFieldsSurviveObliqueCells();
+		certifiedAffineFitsContainExactLeastSquares();
+		separatedLiquidsKeepIndependentVelocityTraces();
 		arbitraryProjectedRatesPreserveMeansAndWalls();
 		continuousShearPreservesExteriorAreaAndWork();
 		spaceTimeSweepsPreserveVolumeAndSharedFaces();
@@ -217,6 +219,58 @@ final class LiquidConformingVelocityValidation {
 				x[0].multiply(Fraction.of(-0.25)).add(x[2].multiply(Fraction.of(0.125))).subtract(Fraction.of(0.25)),
 				x[2].multiply(Fraction.of(-0.125)).add(Fraction.of(0.125))};
 	}
+	private static void certifiedAffineFitsContainExactLeastSquares() {
+		for (int rank = 0; rank <= 3; rank++) {
+			var samples = new Fraction[8][rank]; var target = new Fraction[rank];
+			var centers = new ArrayList<Fraction[]>(); var weights = new ArrayList<Fraction>();
+			for (int a = 0; a < rank; a++) target[a] = rational(1, 2 * a + 7);
+			for (int i = 0; i < samples.length; i++) {
+				for (int a = 0; a < rank; a++) samples[i][a] = rank == 1 ? rational(i, 21) : rational(i >>> a & 1, 2 * a + 3);
+				centers.add(obliqueCoordinates(samples[i])); weights.add(rational(i + 1, i + 7));
+			}
+			var point = LiquidExactPolygon.vertex(obliqueCoordinates(target)); var fit = new LiquidAffineFit(centers, weights);
+			var exact = leastSquaresWeights(samples, weights, target); var sum = Fraction.ZERO; var moment = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var errors = fit.weightErrors(point);
+			for (int i = 0; i < samples.length; i++) {
+				var weight = fit.shape[i].evaluate(point); double error = errors[i];
+				if (weight.subtract(exact[i]).absolute().subtract(Fraction.of(error)).signum() > 0 || !(error < Math.ulp((float) exact[i].rounded())))
+					throw new AssertionError("Certified affine fit lost its exact least-squares reference or observation precision, rank=" + rank);
+				sum = sum.add(weight); for (int a = 0; a < 3; a++) moment[a] = moment[a].add(weight.multiply(centers.get(i)[a]));
+			}
+			if (!sum.equals(Fraction.of(1)) || !Arrays.equals(moment, point.coordinates())) throw new AssertionError("Certified affine completion lost exact coordinate moments");
+			if (!fit.contains(point)) throw new AssertionError("Affine support certificate rejected an exact supported point");
+			var outside = point.coordinates(); outside[2] = outside[2].add(Fraction.of(0.125));
+			if (fit.contains(LiquidExactPolygon.vertex(outside)) != (rank == 3)) throw new AssertionError("Affine support certificate changed the exact spatial span");
+		}
+		var common = java.math.BigInteger.ONE.shiftLeft(8192);
+		for (var value : List.of(rational(1, 3), rational(-1, 7), Fraction.of(Double.MIN_VALUE), new Fraction(java.math.BigInteger.ONE.negate(), java.math.BigInteger.ONE.shiftLeft(1075))))
+			if (Double.doubleToRawLongBits(value.rounded()) != Double.doubleToRawLongBits(LiquidExactPolygon.roundedRatio(value.numerator().multiply(common), value.denominator().multiply(common))))
+				throw new AssertionError("Unreduced affine observation changed rational rounding");
+	}
+	private static Fraction rational(long numerator, long denominator) { return new Fraction(java.math.BigInteger.valueOf(numerator), java.math.BigInteger.valueOf(denominator)); }
+	private static Fraction[] obliqueCoordinates(Fraction[] sample) {
+		var point = new Fraction[]{rational(1, 3), rational(2, 7), rational(1, 5)};
+		if (sample.length > 0) { point[0] = point[0].add(sample[0]); point[1] = point[1].add(sample[0].multiply(Fraction.of(0.25))); point[2] = point[2].add(sample[0].multiply(Fraction.of(0.5))); }
+		if (sample.length > 1) { point[1] = point[1].add(sample[1]); point[2] = point[2].subtract(sample[1].multiply(Fraction.of(0.25))); }
+		if (sample.length > 2) point[2] = point[2].add(sample[2]); return point;
+	}
+	/** Independent exact normal-equation reference in known affine sample coordinates. */
+	private static Fraction[] leastSquaresWeights(Fraction[][] sample, List<Fraction> weights, Fraction[] target) {
+		int rank = target.length; var total = Fraction.ZERO; var mean = new Fraction[rank]; Arrays.fill(mean, Fraction.ZERO);
+		for (int i = 0; i < sample.length; i++) { total = total.add(weights.get(i)); for (int a = 0; a < rank; a++) mean[a] = mean[a].add(weights.get(i).multiply(sample[i][a])); }
+		for (int a = 0; a < rank; a++) mean[a] = mean[a].divide(total);
+		var matrix = new Fraction[rank][rank + 1];
+		for (int a = 0; a < rank; a++) {
+			Arrays.fill(matrix[a], Fraction.ZERO); matrix[a][rank] = target[a].subtract(mean[a]);
+			for (int b = 0; b < rank; b++) for (int i = 0; i < sample.length; i++) matrix[a][b] = matrix[a][b].add(weights.get(i).multiply(sample[i][a].subtract(mean[a])).multiply(sample[i][b].subtract(mean[b])));
+		}
+		for (int a = 0; a < rank; a++) {
+			var divisor = matrix[a][a]; for (int b = a; b <= rank; b++) matrix[a][b] = matrix[a][b].divide(divisor);
+			for (int i = 0; i < rank; i++) if (i != a) { var factor = matrix[i][a]; for (int b = a; b <= rank; b++) matrix[i][b] = matrix[i][b].subtract(factor.multiply(matrix[a][b])); }
+		}
+		var result = new Fraction[sample.length];
+		for (int i = 0; i < sample.length; i++) { result[i] = weights.get(i).divide(total); for (int a = 0; a < rank; a++) result[i] = result[i].add(weights.get(i).multiply(sample[i][a].subtract(mean[a])).multiply(matrix[a][rank])); }
+		return result;
+	}
 	private static void arbitraryProjectedRatesPreserveMeansAndWalls() {
 		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1)));
 		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
@@ -256,6 +310,31 @@ final class LiquidConformingVelocityValidation {
 		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() == -2) {
 			var points = new ArrayList<>(mesh.exactPolygons.get(f).vertices()); points.add(noSlip.faceCenters.get(f));
 			for (var point : points) for (var value : noSlip.velocity.get(point)) if (value.signum() != 0) throw new AssertionError("No-slip continuous wall retained tangential motion");
+		}
+	}
+	private static void separatedLiquidsKeepIndependentVelocityTraces() {
+		var cells = List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.25, 1, 1)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.75, 0, 0, 1, 1, 1)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0, 0, 0.75, 1, 1)));
+		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		int[] liquid = {0, 1, -1}; double[] mean = {0.125, 0.03125, -0.0625, -0.0625, -0.125, 0.03125, 0, 0, 0};
+		var rate = new Fraction[mesh.faces.size()];
+		for (int f = 0; f < rate.length; f++) {
+			var face = mesh.faces.get(f); int c = liquid[face.first()] >= 0 ? face.first() : face.second() >= 0 && liquid[face.second()] >= 0 ? face.second() : -1;
+			rate[f] = Fraction.ZERO; if (c >= 0) for (int a = 0; a < 3; a++) rate[f] = rate[f].add(face.areaVector().get(a).multiply(Fraction.of(mean[3 * c + a])));
+		}
+		var field = new LiquidConformingVelocity(mesh, rate, mean, liquid);
+		for (var tet : field.tetrahedra) for (var point : tet.vertices()) for (int a = 0; a < 3; a++)
+			if (!field.velocity.get(point).get(a).equals(Fraction.of(mean[3 * tet.cell() + a])))
+				throw new AssertionError("Gas geometry coupled the velocity traces of independent liquid regions");
+		var motion = new LiquidConformingTransport(mesh, field, rate, 1.0 / 128, liquid);
+		for (int i = 0; i < field.tetrahedra.size(); i++) {
+			var tet = field.tetrahedra.get(i); var image = motion.images.get(i);
+			for (var point : tet.vertices()) {
+				var expected = point.coordinates(); for (int a = 0; a < 3; a++) expected[a] = expected[a].add(Fraction.of(mean[3 * tet.cell() + a]).multiply(Fraction.of(1.0 / 128)));
+				if (!image.geometry().faces().stream().flatMap(polygon -> polygon.vertices().stream()).toList().contains(LiquidExactPolygon.vertex(expected)))
+					throw new AssertionError("Independent liquid translation changed its shape");
+			}
 		}
 	}
 	private static void requireIntegralConstraints(LiquidControlVolumeMesh mesh, LiquidConformingVelocity field, Fraction[] rates, double[] mean) {

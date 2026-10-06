@@ -41,6 +41,7 @@ final class LiquidCharacteristicValidation {
 				long stepStarted = System.nanoTime();
 				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step - 1, domain.captureAuthoritativeState(), List.of(), false, 0, true));
 				System.out.println("material surface angle=" + angle + " step=" + step + " fullBackendMillis=" + (System.nanoTime() - stepStarted) / 1e6);
+				System.out.println("material surface observations=" + candidate.stats().geometry());
 				try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
 					var next = steps == 1 ? FluidDomain.restoreAuthoritativeState(candidate.state()) : candidate.claimPreparedCpuDomain();
 					var output = next.liquidGeometryState;

@@ -57,7 +57,7 @@ final class MechanicalStepPipeline {
 	}
 
 	record SubstepOutcome(int pressureIterations, GranularMechanics.StepStats granularMechanics,
-	                      boolean pendingWorkConsumed, FluidDomain.ViscousStepStats viscosity) { }
+	                      boolean pendingWorkConsumed, FluidDomain.ViscousStepStats viscosity, FluidDomain.GeometryStepStats geometry) { }
 
 	SubstepOutcome substep(float dt, int substep, boolean captureAudit, MechanicalAuditAccumulator audit) {
 		var resolved = access.advanceResolvedGeometry(dt, captureAudit, audit);
@@ -172,7 +172,7 @@ final class MechanicalStepPipeline {
 			else audit.particleCollisionWorkJoules += transfer;
 		}
 		granularMechanicalStage.commitCollision();
-		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending, viscosity);
+		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending, viscosity, FluidDomain.GeometryStepStats.INACTIVE);
 	}
 
 	/** Pressure can accelerate a resting liquid beyond the initial marker-based step estimate. */

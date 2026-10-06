@@ -97,6 +97,21 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 		}
 	}
 
+	/** Successful resolved substeps and their reconstruction/velocity-observation error bounds. */
+	public record GeometryStepStats(int resolvedSubsteps, double velocityFittingErrorMetresPerSecond,
+			double velocityObservationDisplacementErrorMetres) {
+		static final GeometryStepStats INACTIVE = new GeometryStepStats(0, 0, 0);
+		public GeometryStepStats {
+			if (resolvedSubsteps < 0 || !(velocityFittingErrorMetresPerSecond >= 0) || !Double.isFinite(velocityFittingErrorMetresPerSecond)
+					|| !(velocityObservationDisplacementErrorMetres >= 0) || !Double.isFinite(velocityObservationDisplacementErrorMetres))
+				throw new IllegalArgumentException("Geometric observation bounds must be finite and non-negative");
+		}
+		GeometryStepStats plus(GeometryStepStats other) {
+			return new GeometryStepStats(Math.addExact(resolvedSubsteps, other.resolvedSubsteps),
+					Math.max(velocityFittingErrorMetresPerSecond, other.velocityFittingErrorMetresPerSecond),
+					Math.max(velocityObservationDisplacementErrorMetres, other.velocityObservationDisplacementErrorMetres));
+		}
+	}
 	public record StepStats(
 			int substeps,
 			int pressureIterations,
@@ -121,13 +136,15 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 			FluidDomain.ThermalAxisStats thermalAxis,
 			GranularDepositDynamics.Stats granularTransition,
 			CarrierViscosityStats carrierViscosity,
-			ViscousStepStats viscosity
+			ViscousStepStats viscosity,
+			GeometryStepStats geometry
 	) {
 		public StepStats {
 			java.util.Objects.requireNonNull(thermalAxis, "thermalAxis");
 			java.util.Objects.requireNonNull(granularTransition, "granularTransition");
 			java.util.Objects.requireNonNull(carrierViscosity, "carrierViscosity");
 			java.util.Objects.requireNonNull(viscosity, "viscosity");
+			java.util.Objects.requireNonNull(geometry, "geometry");
 		}
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
 		public double relativeMassError() { return massBefore == 0.0 ? 0.0 : Math.abs(massAfter - massBefore) / massBefore; }

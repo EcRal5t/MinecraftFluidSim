@@ -15,12 +15,14 @@ final class LiquidConformingVelocity {
 	record Tetrahedron(int cell, int face, List<Vertex> vertices, Fraction volume) { }
 	record Load(List<Fraction> cellForce, List<Fraction> faceForce, Fraction prescribedPower) { }
 	record Position(Vertex point, Fraction roundoffSquared) { }
-	private record Fit(Fraction[] value, Map<Integer, Fraction> weights) { }
+	private record Fit(Fraction[] value, Map<Integer, Fraction> weights, double velocityError, boolean affineComplete) { }
 	final LiquidControlVolumeMesh mesh;
 	final Map<Vertex, List<Fraction>> velocity;
 	final List<Tetrahedron> tetrahedra;
 	final List<Vertex> faceCenters, cellCenters;
+	final double maximumFittingVelocityErrorMetresPerSecond;
 	private final Map<Vertex, Map<Integer, Fraction>> cornerWeights;
+	private final java.util.Set<Vertex> affineCompleteCorners;
 	private final Map<Vertex, List<Fraction[]>> walls;
 	private final List<Map<Vertex, Fraction>> faceWeights;
 	private final double[] mean;
@@ -45,10 +47,12 @@ final class LiquidConformingVelocity {
 		var nodes = new LinkedHashMap<Vertex, List<Fraction>>();
 		var fits = new LinkedHashMap<Vertex, Map<Integer, Fraction>>(); var wallNormals = new LinkedHashMap<Vertex, List<Fraction[]>>();
 		var stencils = new java.util.HashMap<List<Integer>, FitStencil>();
+		var complete = new LinkedHashSet<Vertex>();
+		double fittingError = 0;
 		for (var entry : incidence.entrySet()) {
 			if (entry.getValue().stream().noneMatch(c -> liquid[c] >= 0)) continue;
 			var patch = new LinkedHashSet<>(entry.getValue());
-			for (int c : entry.getValue()) for (int f : mesh.cellFaces[c]) {
+			for (int c : entry.getValue()) if (liquid[c] >= 0) for (int f : mesh.cellFaces[c]) {
 				var face = mesh.faces.get(f); patch.add(face.first()); if (face.second() >= 0) patch.add(face.second());
 			}
 			// Gas extension carries no spatial momentum in this phase model. Liquid traces use physical liquid observations.
@@ -56,6 +60,8 @@ final class LiquidConformingVelocity {
 			var key = patch.stream().sorted().toList();
 			var stencil = stencils.computeIfAbsent(key, cells -> new FitStencil(mesh, cells, mean));
 			var fit = stencil.fit(entry.getKey()); nodes.put(entry.getKey(), List.of(fit.value())); fits.put(entry.getKey(), fit.weights());
+			fittingError = Math.max(fittingError, fit.velocityError());
+			if (fit.affineComplete()) complete.add(entry.getKey());
 		}
 		// The same point obeys every incident wall constraint, including edges and corners.
 		for (var entry : incidence.entrySet()) {
@@ -127,6 +133,10 @@ final class LiquidConformingVelocity {
 		}
 		velocity = java.util.Collections.unmodifiableMap(nodes); tetrahedra = List.copyOf(tets); faceCenters = List.copyOf(centers); cellCenters = List.copyOf(cells);
 		cornerWeights = java.util.Collections.unmodifiableMap(fits); walls = java.util.Collections.unmodifiableMap(wallNormals); faceWeights = List.copyOf(integration);
+		affineCompleteCorners = java.util.Set.copyOf(complete);
+		// Face-normal correction has norm at most 2; the positive cell fan sums three face-node errors.
+		maximumFittingVelocityErrorMetresPerSecond = fittingError == 0 ? 0 : Math.nextUp(6 * fittingError);
+		if (!Double.isFinite(maximumFittingVelocityErrorMetresPerSecond)) throw new IllegalStateException("Continuous velocity has no finite fitting error bound");
 	}
 	/** Binary64 velocity observations preserve rigid motion; solid-plane projection bounds position roundoff. */
 	Position advectedPosition(Vertex point, Fraction dt) {
@@ -161,8 +171,7 @@ final class LiquidConformingVelocity {
 		for (int f = 0; f < coefficient.length; f++) if (coefficient[f] != 0) points.addAll(mesh.exactPolygons.get(f).vertices());
 		for (var point : points) {
 			var weights = cornerWeights.get(point); if (weights == null) throw new IllegalArgumentException("Material interface has no liquid velocity support");
-			var center = zero(); for (var entry : weights.entrySet()) add(center, scale(mesh.cells.get(entry.getKey()).geometry().centroidCoordinates(), entry.getValue()));
-			if (!Arrays.equals(center, point.coordinates())) finer.addAll(weights.keySet());
+			if (!affineCompleteCorners.contains(point)) finer.addAll(weights.keySet());
 		}
 		if (!finer.isEmpty()) throw new LiquidInterfaceResolutionRequired(finer.stream().mapToInt(Integer::intValue).toArray(), "Material interface requires affine-complete liquid velocity support");
 	}
@@ -252,47 +261,31 @@ final class LiquidConformingVelocity {
 	}
 	private static final class FitStencil {
 		private final List<Integer> patch;
-		private final List<AffineFunctional> shape = new ArrayList<>();
-		private final AffineFunctional[] velocity = new AffineFunctional[3];
+		private final LiquidAffineFit affine;
+		private final LiquidAffineFit.Form[] velocity = new LiquidAffineFit.Form[3];
+		private final double[] meanMagnitude;
 		FitStencil(LiquidControlVolumeMesh mesh, List<Integer> patch, double[] mean) {
-			this.patch = patch; var total = Fraction.ZERO; var center = zero();
+			this.patch = patch; var centers = new ArrayList<Fraction[]>(); var weights = new ArrayList<Fraction>();
 			for (int c : patch) {
-				var local = mesh.cells.get(c).geometry().measure().volume(); total = total.add(local);
-				add(center, scale(mesh.cells.get(c).geometry().centroidCoordinates(), local));
+				centers.add(mesh.cells.get(c).geometry().centroidCoordinates()); weights.add(mesh.cells.get(c).geometry().measure().volume());
 			}
-			for (int a = 0; a < 3; a++) center[a] = center[a].divide(total);
-			var direction = new ArrayList<Fraction[]>(); var weights = new ArrayList<Fraction>();
-			for (int c : patch) {
-				direction.add(subtract(mesh.cells.get(c).geometry().centroidCoordinates(), center)); weights.add(mesh.cells.get(c).geometry().measure().volume());
-			}
-			var metric = new Dual(direction, weights); var coefficients = new Fraction[3][4];
-			for (var row : coefficients) Arrays.fill(row, Fraction.ZERO);
+			affine = new LiquidAffineFit(centers, weights); meanMagnitude = new double[patch.size()];
 			for (int i = 0; i < patch.size(); i++) {
-				var gradient = scale(metric.solve(direction.get(i)), weights.get(i));
-				var row = new Fraction[]{gradient[0], gradient[1], gradient[2], weights.get(i).divide(total).subtract(dot(gradient, center))};
-				shape.add(new AffineFunctional(row));
-				for (int a = 0; a < 3; a++) for (int b = 0; b < 4; b++) coefficients[a][b] = coefficients[a][b].add(row[b].multiply(Fraction.of(mean[3 * patch.get(i) + a])));
+				for (int a = 0; a < 3; a++) if (mean[3 * patch.get(i) + a] != 0) meanMagnitude[i] = Math.nextUp(meanMagnitude[i] + Math.abs(mean[3 * patch.get(i) + a]));
 			}
-			for (int a = 0; a < 3; a++) velocity[a] = new AffineFunctional(coefficients[a]);
+			for (int a = 0; a < 3; a++) {
+				var component = new Fraction[patch.size()]; for (int i = 0; i < patch.size(); i++) component[i] = Fraction.of(mean[3 * patch.get(i) + a]);
+				velocity[a] = LiquidAffineFit.Form.combine(affine.shape, component);
+			}
 		}
 		Fit fit(Vertex point) {
-			var coefficients = new LinkedHashMap<Integer, Fraction>(); var average = zero();
-			for (int i = 0; i < patch.size(); i++) coefficients.put(patch.get(i), shape.get(i).evaluate(point));
+			var coefficients = new LinkedHashMap<Integer, Fraction>(); var average = zero(); double error = 0; var errors = affine.weightErrors(point);
+			for (int i = 0; i < patch.size(); i++) {
+				coefficients.put(patch.get(i), affine.shape[i].evaluate(point));
+				if (meanMagnitude[i] != 0 && errors[i] != 0) error = Math.nextUp(error + Math.nextUp(errors[i] * meanMagnitude[i]));
+			}
 			for (int a = 0; a < 3; a++) average[a] = velocity[a].evaluate(point);
-			return new Fit(average, java.util.Collections.unmodifiableMap(coefficients));
-		}
-	}
-	/** Evaluate the same rational affine form with one final reduction at a homogeneous point. */
-	private static final class AffineFunctional {
-		private final BigInteger[] numerator = new BigInteger[4];
-		private final BigInteger denominator;
-		AffineFunctional(Fraction[] coefficients) {
-			var common = BigInteger.ONE; for (var value : coefficients) common = lcm(common, value.denominator()); denominator = common;
-			for (int a = 0; a < 4; a++) numerator[a] = coefficients[a].numerator().multiply(common.divide(coefficients[a].denominator()));
-		}
-		Fraction evaluate(Vertex point) {
-			var value = numerator[3].multiply(point.w()); for (int a = 0; a < 3; a++) value = value.add(numerator[a].multiply(point.coordinate(a)));
-			return new Fraction(value, denominator.multiply(point.w()));
+			return new Fit(average, java.util.Collections.unmodifiableMap(coefficients), error, affine.contains(point));
 		}
 	}
 	/** Solve the exactly supported span, retaining zero slope in unobserved directions. */

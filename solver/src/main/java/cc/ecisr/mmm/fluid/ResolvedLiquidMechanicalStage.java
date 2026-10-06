@@ -70,9 +70,11 @@ final class ResolvedLiquidMechanicalStage {
 			}
 			var interfaces = new ResolvedGasInterfaceMotion.Builder(gasMatch, MAXIMUM_REGIONS);
 			LiquidGeometryMotionPlan motion;
+			FluidDomain.GeometryStepStats observations;
 			try {
 				var field = result.conformingVelocity();
 				var transport = new LiquidConformingTransport(input.mesh, field, result.extension().volumeRate(), dt, input.fragments);
+				observations = new FluidDomain.GeometryStepStats(1, field.maximumFittingVelocityErrorMetresPerSecond, transport.maximumPositionRoundoffMetres);
 				motion = new LiquidGeometryMotionPlan(input, field, transport, partition.leaves, MAXIMUM_REGIONS, interfaces);
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());
@@ -98,7 +100,7 @@ final class ResolvedLiquidMechanicalStage {
 			}
 			var viscous = result.viscosity(); var impulse = viscous.boundaryImpulse();
 			return new MechanicalStepPipeline.SubstepOutcome(result.pressure().iterations(), null, false,
-					new FluidDomain.ViscousStepStats(0, 0, impulse.x(), impulse.y(), impulse.z(), viscous.dissipatedJoules(), 0, 0, 0));
+					new FluidDomain.ViscousStepStats(0, 0, impulse.x(), impulse.y(), impulse.z(), viscous.dissipatedJoules(), 0, 0, 0), observations);
 		}
 	}
 	private static double kinetic(LiquidGeometryPhaseInput input, LiquidGeometryCarrierProperties properties, double[] velocity) {

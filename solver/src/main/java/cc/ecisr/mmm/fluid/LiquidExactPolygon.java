@@ -7,6 +7,11 @@ import java.util.List;
 
 /** Exact plane intersections and planar clipping; integration rounds each coordinate once. */
 final class LiquidExactPolygon {
+	/** A binary64 observation needs the exact ratio, independently of its integer reduction. */
+	static double roundedRatio(BigInteger numerator, BigInteger denominator) {
+		if (denominator.signum() <= 0) throw new IllegalArgumentException("Rational observation requires a positive denominator");
+		return Vertex.ratio(numerator, denominator);
+	}
 	record Vertex(BigInteger x, BigInteger y, BigInteger z, BigInteger w) {
 		Vertex {
 			if (w.signum() == 0) throw new IllegalArgumentException("Singular geometric vertex");
