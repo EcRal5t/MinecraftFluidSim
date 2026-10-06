@@ -19,9 +19,11 @@ final class LiquidPhaseMechanics {
 		private final FluidSolverConfig.WallCondition wall;
 		private LiquidControlVolumeVelocity.Result[] velocity;
 		private LiquidConformingVelocity conforming;
+		private final LiquidConformingVelocity reference;
 		Result(LiquidControlVolumeViscosity.Result viscosity, LiquidControlVolumeProjection.Result pressure,
-				LiquidInterfaceVelocityExtension.Result extension, LiquidControlVolumeMesh mesh, int[] liquid, FluidSolverConfig.WallCondition wall) {
+				LiquidInterfaceVelocityExtension.Result extension, LiquidControlVolumeMesh mesh, int[] liquid, FluidSolverConfig.WallCondition wall, LiquidConformingVelocity reference) {
 			this.viscosity = viscosity; this.pressure = pressure; this.extension = extension; this.mesh = mesh; this.liquid = liquid; this.wall = wall;
+			this.reference = reference;
 		}
 		LiquidControlVolumeViscosity.Result viscosity() { return viscosity; }
 		LiquidControlVolumeProjection.Result pressure() { return pressure; }
@@ -30,7 +32,10 @@ final class LiquidPhaseMechanics {
 			if (velocity == null) velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extension.volumeRate(), extension.cellVelocity()); return velocity;
 		}
 		LiquidConformingVelocity conformingVelocity() {
-			if (conforming == null) conforming = new LiquidConformingVelocity(mesh, extension.volumeRate(), extension.cellVelocity(), liquid, wall); return conforming;
+			if (conforming == null) conforming = reference == null
+					? new LiquidConformingVelocity(mesh, extension.volumeRate(), extension.cellVelocity(), liquid, wall)
+					: reference.reconstruct(extension.volumeRate(), extension.cellVelocity(), liquid, wall);
+			return conforming;
 		}
 	}
 	private final LiquidControlVolumeMesh mesh;
@@ -119,6 +124,6 @@ final class LiquidPhaseMechanics {
 		for (int c = 0; c < liquidCells.length; c++) System.arraycopy(projected.cellVelocity(), 3 * c, primary, 3 * liquidCells[c], 3);
 		for (int f = 0; f < faceIds.length; f++) rates[faceIds[f]] = faceSigns[f] > 0 ? projected.volumeRate()[f] : projected.volumeRate()[f].negate();
 		var extended = LiquidInterfaceVelocityExtension.extend(mesh, liquid, rates, primary, continuityTolerance, maximumIterations);
-		return new Result(viscous, projected, extended, mesh, liquid, wall);
+		return new Result(viscous, projected, extended, mesh, liquid, wall, surface == null ? null : surface.reference);
 	}
 }

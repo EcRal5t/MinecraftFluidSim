@@ -183,13 +183,28 @@ final class LiquidExactPolygon {
 		}
 		return List.copyOf(result);
 	}
-	static Measure tetrahedronMeasure(List<Vertex> points) {
+	/** Signed spatial determinant scaled by the positive product of homogeneous denominators. */
+	static BigInteger homogeneousTetrahedronDeterminant(List<Vertex> points) {
 		if (points.size() != 4) throw new IllegalArgumentException("A geometric tetrahedron needs four vertices");
-		var x = points.stream().map(Vertex::coordinates).toList(); var a = new Fraction[3]; var b = new Fraction[3]; var c = new Fraction[3];
-		for (int i = 0; i < 3; i++) { a[i] = x.get(1)[i].subtract(x.getFirst()[i]); b[i] = x.get(2)[i].subtract(x.getFirst()[i]); c[i] = x.get(3)[i].subtract(x.getFirst()[i]); }
-		var determinant = Fraction.ZERO;
-		for (int i = 0; i < 3; i++) determinant = determinant.add(a[i].multiply(b[(i + 1) % 3].multiply(c[(i + 2) % 3]).subtract(b[(i + 2) % 3].multiply(c[(i + 1) % 3]))));
-		var volume = determinant.absolute().divide(Fraction.of(6)); var moment = new Fraction[3];
+		var determinant = BigInteger.ZERO;
+		for (int omitted = 0; omitted < 4; omitted++) {
+			var minor = new Vertex[3]; for (int i = 0, out = 0; i < 4; i++) if (i != omitted) minor[out++] = points.get(i);
+			var a = minor[0]; var b = minor[1]; var c = minor[2];
+			var triple = a.x().multiply(b.y().multiply(c.z()).subtract(b.z().multiply(c.y())))
+					.add(a.y().multiply(b.z().multiply(c.x()).subtract(b.x().multiply(c.z()))))
+					.add(a.z().multiply(b.x().multiply(c.y()).subtract(b.y().multiply(c.x()))));
+			var contribution = points.get(omitted).w().multiply(triple);
+			determinant = omitted % 2 == 0 ? determinant.add(contribution) : determinant.subtract(contribution);
+		}
+		return determinant;
+	}
+	static Fraction tetrahedronVolume(List<Vertex> points) {
+		var determinant = homogeneousTetrahedronDeterminant(points); var denominator = BigInteger.valueOf(6);
+		for (var point : points) denominator = denominator.multiply(point.w());
+		return new Fraction(determinant.abs(), denominator);
+	}
+	static Measure tetrahedronMeasure(List<Vertex> points) {
+		var volume = tetrahedronVolume(points); var x = points.stream().map(Vertex::coordinates).toList(); var moment = new Fraction[3];
 		for (int i = 0; i < 3; i++) { var sum = Fraction.ZERO; for (var p : x) sum = sum.add(p[i]); moment[i] = volume.multiply(sum).divide(Fraction.of(4)); }
 		return new Measure(volume, moment);
 	}

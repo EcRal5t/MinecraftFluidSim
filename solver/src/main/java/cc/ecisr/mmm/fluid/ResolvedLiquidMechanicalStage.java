@@ -48,7 +48,7 @@ final class ResolvedLiquidMechanicalStage {
 				LiquidPressureFaceEnergy surface = null;
 				if (Arrays.stream(properties.surfaceCoefficient).anyMatch(value -> value != 0)) {
 					var rates = new LiquidExactPolygon.Fraction[input.mesh.faces.size()]; Arrays.fill(rates, LiquidExactPolygon.Fraction.ZERO);
-					var reference = new LiquidConformingVelocity(input.mesh, rates, input.cellVelocity, input.fragments, domain.config.viscousWallCondition());
+					var reference = new LiquidConformingVelocity(input.mesh, rates, new double[input.cellVelocity.length], input.fragments, domain.config.viscousWallCondition());
 					surface = new LiquidGeometricSurfaceEnergy(reference, properties.surfaceCoefficient).pressure;
 				}
 				result = mechanics.advance(input.cellVelocity, input.faceVelocity, properties.acceleration, dt,

@@ -276,7 +276,12 @@ final class LiquidConformingVelocityValidation {
 		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
 		var input = new double[3 * cells.size()]; for (int i = 0; i < input.length; i++) input[i] = Math.sin(i + 0.5);
 		var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(input, new LiquidPolyhedron.Point(0, 0, 0), 0.01, 1e-10, 512);
-		var field = new LiquidConformingVelocity(mesh, projected.volumeRate(), projected.cellVelocity());
+		var fresh = new LiquidConformingVelocity(mesh, projected.volumeRate(), projected.cellVelocity());
+		var zeroRate = new Fraction[mesh.faces.size()]; Arrays.fill(zeroRate, Fraction.ZERO); var liquid = new int[cells.size()];
+		var reference = new LiquidConformingVelocity(mesh, zeroRate, input);
+		var field = reference.reconstruct(projected.volumeRate(), projected.cellVelocity(), liquid, FluidSolverConfig.WallCondition.FREE_SLIP);
+		if (!field.velocity.equals(fresh.velocity) || Double.doubleToLongBits(field.maximumFittingVelocityErrorMetresPerSecond)
+				!= Double.doubleToLongBits(fresh.maximumFittingVelocityErrorMetresPerSecond)) throw new AssertionError("Geometry reuse changed nodal velocity or its fitting certificate");
 		requireIntegralConstraints(mesh, field, projected.volumeRate(), projected.cellVelocity());
 		var motion = new LiquidConformingTransport(mesh, field, projected.volumeRate(), 0.0001);
 		if (!(motion.maximumPositionRoundoffMetres > 0 && motion.maximumPositionRoundoffMetres < Math.ulp(0.0001)))
@@ -297,6 +302,7 @@ final class LiquidConformingVelocityValidation {
 		for (int f = 0; f < mesh.faces.size(); f++) actual = actual.add(load.faceForce().get(f).multiply(projected.volumeRate()[f]));
 		if (!actual.equals(power) || load.prescribedPower().signum() != 0) throw new AssertionError("Continuous force adjoint lost work at cell, face or wall nodes");
 		var virtualVelocity = field.rateVelocity(projected.volumeRate()); var rateLoad = field.rateLoad(forces); var nodePower = Fraction.ZERO; var ratePower = Fraction.ZERO;
+		if (!Arrays.equals(rateLoad, reference.rateLoad(forces))) throw new AssertionError("Surface virtual-work operator depends on the reference velocity values");
 		for (var entry : forces.entrySet()) nodePower = nodePower.add(dot(entry.getValue(), virtualVelocity.get(entry.getKey()).toArray(Fraction[]::new)));
 		for (int f = 0; f < mesh.faces.size(); f++) ratePower = ratePower.add(rateLoad[f].multiply(projected.volumeRate()[f]));
 		if (!nodePower.equals(ratePower)) throw new AssertionError("Pressure-compatible capillary pullback lost exact virtual work");
@@ -305,12 +311,18 @@ final class LiquidConformingVelocityValidation {
 			for (var point : points) if (dot(face.areaVector(), field.velocity.get(point).toArray(Fraction[]::new)).signum() != 0)
 				throw new AssertionError("Continuous velocity penetrates a fixed wall");
 		}
-		var noSlip = new LiquidConformingVelocity(mesh, projected.volumeRate(), projected.cellVelocity(), new int[cells.size()], FluidSolverConfig.WallCondition.NO_SLIP);
+		var noSlip = new LiquidConformingVelocity(mesh, zeroRate, input, liquid, FluidSolverConfig.WallCondition.NO_SLIP)
+				.reconstruct(projected.volumeRate(), projected.cellVelocity(), liquid, FluidSolverConfig.WallCondition.NO_SLIP);
 		requireIntegralConstraints(mesh, noSlip, projected.volumeRate(), projected.cellVelocity());
 		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() == -2) {
 			var points = new ArrayList<>(mesh.exactPolygons.get(f).vertices()); points.add(noSlip.faceCenters.get(f));
 			for (var point : points) for (var value : noSlip.velocity.get(point)) if (value.signum() != 0) throw new AssertionError("No-slip continuous wall retained tangential motion");
 		}
+		var changedPhase = liquid.clone(); changedPhase[0] = -1;
+		try { reference.reconstruct(projected.volumeRate(), projected.cellVelocity(), changedPhase, FluidSolverConfig.WallCondition.FREE_SLIP); throw new AssertionError("Interpolation reused obsolete phase support"); }
+		catch (IllegalArgumentException expected) { }
+		try { reference.reconstruct(projected.volumeRate(), projected.cellVelocity(), liquid, FluidSolverConfig.WallCondition.NO_SLIP); throw new AssertionError("Interpolation reused different wall constraints"); }
+		catch (IllegalArgumentException expected) { }
 	}
 	private static void separatedLiquidsKeepIndependentVelocityTraces() {
 		var cells = List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.25, 1, 1)),

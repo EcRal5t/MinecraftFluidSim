@@ -50,7 +50,7 @@ final class LiquidConformingTransport {
 		var result = new ArrayList<Image>(); var volume = new Fraction[mesh.cells.size()]; java.util.Arrays.fill(volume, Fraction.ZERO);
 		for (var tet : field.tetrahedra) if (liquid[tet.cell()] >= 0) {
 			var source = tet.vertices(); var target = source.stream().map(moved::get).toList();
-			var oldDet = determinant(source); var newDet = determinant(target);
+			var oldDet = LiquidExactPolygon.homogeneousTetrahedronDeterminant(source); var newDet = LiquidExactPolygon.homogeneousTetrahedronDeterminant(target);
 			if (newDet.signum() != oldDet.signum()) throw new LiquidCharacteristicTimeResolutionRequired("Continuous transport inverted a tetrahedron");
 			var geometry = LiquidConvexRegion.ofTetrahedron(target);
 			volume[tet.cell()] = volume[tet.cell()].add(geometry.measure().volume()); result.add(new Image(tet.cell(), tet.face(), geometry, affine(source, target)));
@@ -82,9 +82,6 @@ final class LiquidConformingTransport {
 	private static Fraction[] area(List<Vertex> points) {
 		var value = zero(); for (int i = 0; i < points.size(); i++) add(value, cross(points.get(i).coordinates(), points.get((i + 1) % points.size()).coordinates()));
 		return scale(value, Fraction.of(0.5));
-	}
-	private static Fraction determinant(List<Vertex> points) {
-		var origin = points.getFirst().coordinates(); return dot(subtract(points.get(1).coordinates(), origin), cross(subtract(points.get(2).coordinates(), origin), subtract(points.get(3).coordinates(), origin)));
 	}
 	private static List<Fraction> affine(List<Vertex> source, List<Vertex> target) {
 		var origin = source.getFirst().coordinates(); var next = target.getFirst().coordinates();

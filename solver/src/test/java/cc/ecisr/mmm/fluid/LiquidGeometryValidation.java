@@ -52,6 +52,10 @@ final class LiquidGeometryValidation {
 			var vertices = points.stream().map(p -> LiquidExactPolygon.vertex(new LiquidExactPolygon.Fraction[]{LiquidExactPolygon.Fraction.of(p.x()), LiquidExactPolygon.Fraction.of(p.y()), LiquidExactPolygon.Fraction.of(p.z())})).toList();
 			if (!LiquidExactPolygon.measure(LiquidExactPolygon.tetrahedron(vertices)).same(LiquidExactPolygon.tetrahedronMeasure(vertices)))
 				throw new AssertionError("Planar surface integration differs from independent tetrahedron volume and centroid");
+			var reversed = new java.util.ArrayList<>(vertices); java.util.Collections.swap(reversed, 1, 2);
+			if (!LiquidExactPolygon.tetrahedronVolume(vertices).equals(LiquidExactPolygon.tetrahedronVolume(reversed))
+					|| !LiquidExactPolygon.homogeneousTetrahedronDeterminant(vertices).equals(LiquidExactPolygon.homogeneousTetrahedronDeterminant(reversed).negate()))
+				throw new AssertionError("Homogeneous tetrahedron determinant lost orientation or unsigned volume");
 		}
 		for (double[] plane : new double[][] {{1, 0, 0, 0.25}, {1, 1, 1, 1.2}, {-2, 3, 1, 0.7}, {1, 1, 0, 1}, {0, 1, 0, 0}}) {
 			var region = LiquidConvexRegion.of(cube); var cutter = new LiquidGeometryPlane(new LiquidPolyhedron.Point(plane[0], plane[1], plane[2]), plane[3]);

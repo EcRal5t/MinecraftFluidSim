@@ -27,6 +27,10 @@ final class LiquidConformingVelocity {
 	private final List<Map<Vertex, Fraction>> faceWeights;
 	private final double[] mean;
 	private final Fraction[] rates;
+	private final int[] liquid;
+	private final FluidSolverConfig.WallCondition wall;
+	private final Map<List<Integer>, LiquidAffineFit> interpolation;
+	private final IntegralWeights integrals;
 
 	LiquidConformingVelocity(LiquidControlVolumeMesh mesh, Fraction[] rate, double[] mean) {
 		this(mesh, rate, mean, new int[mesh.cells.size()]);
@@ -35,8 +39,15 @@ final class LiquidConformingVelocity {
 		this(mesh, rate, mean, liquid, FluidSolverConfig.WallCondition.FREE_SLIP);
 	}
 	LiquidConformingVelocity(LiquidControlVolumeMesh mesh, Fraction[] rate, double[] mean, int[] liquid, FluidSolverConfig.WallCondition wall) {
+		this(mesh, rate, mean, liquid, wall, null);
+	}
+	private LiquidConformingVelocity(LiquidControlVolumeMesh mesh, Fraction[] rate, double[] mean, int[] liquid,
+			FluidSolverConfig.WallCondition wall, LiquidConformingVelocity reference) {
 		if (wall == null || rate.length != mesh.faces.size() || mean.length != 3 * mesh.cells.size() || liquid.length != mesh.cells.size()) throw new IllegalArgumentException("Incomplete continuous velocity input");
 		this.mesh = mesh; this.mean = mean.clone(); rates = rate.clone();
+		this.liquid = liquid.clone(); this.wall = wall;
+		var fittingGeometry = new java.util.HashMap<List<Integer>, LiquidAffineFit>();
+		if (reference != null) fittingGeometry.putAll(reference.interpolation);
 		for (double u : mean) if (!Double.isFinite(u)) throw new IllegalArgumentException("Non-finite continuous velocity input");
 		for (var q : rate) if (q == null) throw new IllegalArgumentException("Absent continuous face rate");
 		var incidence = new LinkedHashMap<Vertex, LinkedHashSet<Integer>>();
@@ -58,8 +69,10 @@ final class LiquidConformingVelocity {
 			// Gas extension carries no spatial momentum in this phase model. Liquid traces use physical liquid observations.
 			patch.removeIf(c -> liquid[c] < 0);
 			var key = patch.stream().sorted().toList();
-			var stencil = stencils.computeIfAbsent(key, cells -> new FitStencil(mesh, cells, mean));
-			var fit = stencil.fit(entry.getKey()); nodes.put(entry.getKey(), List.of(fit.value())); fits.put(entry.getKey(), fit.weights());
+			var stencil = stencils.computeIfAbsent(key, cells -> new FitStencil(fittingGeometry.computeIfAbsent(cells,
+					support -> fitGeometry(mesh, support)), cells, mean));
+			var fit = stencil.fit(entry.getKey(), reference == null ? null : reference.cornerWeights.get(entry.getKey()));
+			nodes.put(entry.getKey(), List.of(fit.value())); fits.put(entry.getKey(), fit.weights());
 			fittingError = Math.max(fittingError, fit.velocityError());
 			if (fit.affineComplete()) complete.add(entry.getKey());
 		}
@@ -121,10 +134,10 @@ final class LiquidConformingVelocity {
 				var polygon = mesh.exactPolygons.get(f); if (mesh.faces.get(f).first() != c) polygon = polygon.reversed();
 				for (int e = 0; e < polygon.vertices().size(); e++) {
 					var vertices = polygon.tetrahedronVertices(center, e);
-					var measure = LiquidExactPolygon.tetrahedronMeasure(vertices); if (measure.signum() == 0) continue;
+					var measure = LiquidExactPolygon.tetrahedronVolume(vertices); if (measure.signum() == 0) continue;
 					var sum = zero(); for (int v = 1; v < 4; v++) add(sum, nodes.get(vertices.get(v)).toArray(Fraction[]::new));
-					add(moment, scale(sum, measure.volume())); volume = volume.add(measure.volume());
-					tets.add(new Tetrahedron(c, f, vertices, measure.volume()));
+					add(moment, scale(sum, measure)); volume = volume.add(measure);
+					tets.add(new Tetrahedron(c, f, vertices, measure));
 				}
 			}
 			if (!volume.equals(mesh.cells.get(c).geometry().measure().volume())) throw new IllegalStateException("Continuous velocity fan lost cell volume");
@@ -134,9 +147,16 @@ final class LiquidConformingVelocity {
 		velocity = java.util.Collections.unmodifiableMap(nodes); tetrahedra = List.copyOf(tets); faceCenters = List.copyOf(centers); cellCenters = List.copyOf(cells);
 		cornerWeights = java.util.Collections.unmodifiableMap(fits); walls = java.util.Collections.unmodifiableMap(wallNormals); faceWeights = List.copyOf(integration);
 		affineCompleteCorners = java.util.Set.copyOf(complete);
+		interpolation = Map.copyOf(fittingGeometry);
+		integrals = reference == null ? new IntegralWeights(mesh, tetrahedra) : reference.integrals;
 		// Face-normal correction has norm at most 2; the positive cell fan sums three face-node errors.
 		maximumFittingVelocityErrorMetresPerSecond = fittingError == 0 ? 0 : Math.nextUp(6 * fittingError);
 		if (!Double.isFinite(maximumFittingVelocityErrorMetresPerSecond)) throw new IllegalStateException("Continuous velocity has no finite fitting error bound");
+	}
+	/** The same physical geometry reuses its interpolation coefficients and exact nodal weights. */
+	LiquidConformingVelocity reconstruct(Fraction[] rate, double[] mean, int[] liquid, FluidSolverConfig.WallCondition wall) {
+		if (!Arrays.equals(this.liquid, liquid) || this.wall != wall) throw new IllegalArgumentException("Velocity reconstruction changed phase or wall support");
+		return new LiquidConformingVelocity(mesh, rate, mean, liquid, wall, this);
 	}
 	/** Binary64 velocity observations preserve rigid motion; solid-plane projection bounds position roundoff. */
 	Position advectedPosition(Vertex point, Fraction dt) {
@@ -186,8 +206,9 @@ final class LiquidConformingVelocity {
 			power = power.add(dot(velocity.get(entry.getKey()).toArray(Fraction[]::new), entry.getValue().toArray(Fraction[]::new)));
 		}
 		for (int c = 0; c < mesh.cells.size(); c++) if (nodes.containsKey(cellCenters.get(c))) for (int a = 0; a < 3; a++) force[3 * c + a] = nodes.get(cellCenters.get(c))[a].multiply(Fraction.of(4));
-		for (var tet : tetrahedra) {
-			var weight = tet.volume().divide(mesh.cells.get(tet.cell()).geometry().measure().volume()).negate();
+		var meanWeights = integrals.tetrahedronMeanWeights();
+		for (int i = 0; i < tetrahedra.size(); i++) {
+			var tet = tetrahedra.get(i); var weight = meanWeights.get(i);
 			var f = scale(nodes.get(cellCenters.get(tet.cell())), weight); for (int v = 1; v < 4; v++) add(nodes.get(tet.vertices().get(v)), f);
 		}
 		for (int f = 0; f < mesh.faces.size(); f++) {
@@ -215,11 +236,11 @@ final class LiquidConformingVelocity {
 		var primary = new Fraction[mesh.cells.size()][3];
 		for (int c = 0; c < primary.length; c++) {
 			primary[c] = zero(); if (!velocity.containsKey(cellCenters.get(c))) continue;
-			var center = mesh.cells.get(c).geometry().centroidCoordinates(); var volume = mesh.cells.get(c).geometry().measure().volume();
-			for (int f : mesh.cellFaces[c]) {
+			var basis = integrals.meanRateBasis(c);
+			for (int i = 0; i < mesh.cellFaces[c].length; i++) {
+				int f = mesh.cellFaces[c][i];
 				if (mesh.faces.get(f).second() == -2 && virtualRate[f].signum() != 0) throw new IllegalArgumentException("Virtual velocity changes prescribed wall motion");
-				var sign = Fraction.of(mesh.faces.get(f).first() == c ? 1 : -1);
-				add(primary[c], scale(subtract(mesh.faces.get(f).centroid().toArray(Fraction[]::new), center), virtualRate[f].multiply(sign).divide(volume)));
+				add(primary[c], scale(basis[i], virtualRate[f]));
 			}
 		}
 		var nodes = new LinkedHashMap<Vertex, Fraction[]>();
@@ -251,25 +272,44 @@ final class LiquidConformingVelocity {
 		var load = load(forces); var result = load.faceForce().toArray(Fraction[]::new);
 		for (int c = 0; c < mesh.cells.size(); c++) if (velocity.containsKey(cellCenters.get(c))) {
 			var force = new Fraction[]{load.cellForce().get(3 * c), load.cellForce().get(3 * c + 1), load.cellForce().get(3 * c + 2)};
-			var center = mesh.cells.get(c).geometry().centroidCoordinates(); var volume = mesh.cells.get(c).geometry().measure().volume();
-			for (int f : mesh.cellFaces[c]) {
-				var value = dot(subtract(mesh.faces.get(f).centroid().toArray(Fraction[]::new), center), force).divide(volume);
-				result[f] = result[f].add(mesh.faces.get(f).first() == c ? value : value.negate());
+			var basis = integrals.meanRateBasis(c);
+			for (int i = 0; i < mesh.cellFaces[c].length; i++) {
+				int f = mesh.cellFaces[c][i]; result[f] = result[f].add(dot(basis[i], force));
 			}
 		}
 		return result;
+	}
+	/** Exact geometry coefficients are assembled lazily and shared only by reconstructions of this mesh. */
+	private static final class IntegralWeights {
+		private final LiquidControlVolumeMesh mesh;
+		private final List<Tetrahedron> tetrahedra;
+		private List<Fraction> tetrahedronMeanWeights;
+		private final Map<Integer, Fraction[][]> meanRateBasis = new java.util.HashMap<>();
+		IntegralWeights(LiquidControlVolumeMesh mesh, List<Tetrahedron> tetrahedra) { this.mesh = mesh; this.tetrahedra = tetrahedra; }
+		List<Fraction> tetrahedronMeanWeights() {
+			if (tetrahedronMeanWeights == null) tetrahedronMeanWeights = tetrahedra.stream()
+					.map(tet -> tet.volume().divide(mesh.cells.get(tet.cell()).geometry().measure().volume()).negate()).toList();
+			return tetrahedronMeanWeights;
+		}
+		Fraction[][] meanRateBasis(int cell) {
+			return meanRateBasis.computeIfAbsent(cell, c -> {
+				var result = new Fraction[mesh.cellFaces[c].length][];
+				var center = mesh.cells.get(c).geometry().centroidCoordinates(); var volume = mesh.cells.get(c).geometry().measure().volume();
+				for (int i = 0; i < result.length; i++) {
+					int f = mesh.cellFaces[c][i]; var sign = Fraction.of(mesh.faces.get(f).first() == c ? 1 : -1);
+					result[i] = scale(subtract(mesh.faces.get(f).centroid().toArray(Fraction[]::new), center), sign.divide(volume));
+				}
+				return result;
+			});
+		}
 	}
 	private static final class FitStencil {
 		private final List<Integer> patch;
 		private final LiquidAffineFit affine;
 		private final LiquidAffineFit.Form[] velocity = new LiquidAffineFit.Form[3];
 		private final double[] meanMagnitude;
-		FitStencil(LiquidControlVolumeMesh mesh, List<Integer> patch, double[] mean) {
-			this.patch = patch; var centers = new ArrayList<Fraction[]>(); var weights = new ArrayList<Fraction>();
-			for (int c : patch) {
-				centers.add(mesh.cells.get(c).geometry().centroidCoordinates()); weights.add(mesh.cells.get(c).geometry().measure().volume());
-			}
-			affine = new LiquidAffineFit(centers, weights); meanMagnitude = new double[patch.size()];
+		FitStencil(LiquidAffineFit affine, List<Integer> patch, double[] mean) {
+			this.patch = patch; this.affine = affine; meanMagnitude = new double[patch.size()];
 			for (int i = 0; i < patch.size(); i++) {
 				for (int a = 0; a < 3; a++) if (mean[3 * patch.get(i) + a] != 0) meanMagnitude[i] = Math.nextUp(meanMagnitude[i] + Math.abs(mean[3 * patch.get(i) + a]));
 			}
@@ -278,15 +318,21 @@ final class LiquidConformingVelocity {
 				velocity[a] = LiquidAffineFit.Form.combine(affine.shape, component);
 			}
 		}
-		Fit fit(Vertex point) {
-			var coefficients = new LinkedHashMap<Integer, Fraction>(); var average = zero(); double error = 0; var errors = affine.weightErrors(point);
+		Fit fit(Vertex point, Map<Integer, Fraction> knownWeights) {
+			var coefficients = knownWeights == null ? new LinkedHashMap<Integer, Fraction>() : knownWeights;
+			var average = zero(); double error = 0; var errors = affine.weightErrors(point);
 			for (int i = 0; i < patch.size(); i++) {
-				coefficients.put(patch.get(i), affine.shape[i].evaluate(point));
+				if (knownWeights == null) coefficients.put(patch.get(i), affine.shape[i].evaluate(point));
 				if (meanMagnitude[i] != 0 && errors[i] != 0) error = Math.nextUp(error + Math.nextUp(errors[i] * meanMagnitude[i]));
 			}
 			for (int a = 0; a < 3; a++) average[a] = velocity[a].evaluate(point);
 			return new Fit(average, java.util.Collections.unmodifiableMap(coefficients), error, affine.contains(point));
 		}
+	}
+	private static LiquidAffineFit fitGeometry(LiquidControlVolumeMesh mesh, List<Integer> patch) {
+		var centers = new ArrayList<Fraction[]>(); var weights = new ArrayList<Fraction>();
+		for (int c : patch) { centers.add(mesh.cells.get(c).geometry().centroidCoordinates()); weights.add(mesh.cells.get(c).geometry().measure().volume()); }
+		return new LiquidAffineFit(centers, weights);
 	}
 	/** Solve the exactly supported span, retaining zero slope in unobserved directions. */
 	private static Fraction[] dual(List<Fraction[]> vectors, List<Fraction> weight, Fraction[] rhs) {

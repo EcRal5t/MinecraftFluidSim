@@ -18,13 +18,14 @@ final class LiquidPressureFaceEnergy {
 	}
 	final double[] gradient;
 	final LiquidControlVolumeMesh mesh;
+	final LiquidConformingVelocity reference;
 	private final List<Row> rows;
 	private final List<Cross> crosses;
 	LiquidPressureFaceEnergy(LiquidConformingVelocity field, LiquidAreaEnergy energy, LiquidSurfaceMetric metric) {
 		this(field, energy, metric, null);
 	}
 	LiquidPressureFaceEnergy(LiquidConformingVelocity field, LiquidAreaEnergy energy, LiquidSurfaceMetric metric, LiquidWetWallEnergy wall) {
-		mesh = field.mesh; gradient = new double[field.mesh.faces.size()]; var load = field.rateLoad(energy.force);
+		mesh = field.mesh; reference = field; gradient = new double[field.mesh.faces.size()]; var load = field.rateLoad(energy.force);
 		for (int f = 0; f < gradient.length; f++) {
 			if (field.mesh.faces.get(f).second() == -2 && field.mesh.faces.get(f).prescribed() != 0)
 				throw new IllegalArgumentException("Capillary rate energy requires stationary prescribed walls");
@@ -32,8 +33,8 @@ final class LiquidPressureFaceEnergy {
 		}
 		var map = new LiquidSurfaceRateMap(field); rows = metric.pressureRows(map); crosses = wall == null ? List.of() : wall.pressureCrosses(map);
 	}
-	private LiquidPressureFaceEnergy(LiquidControlVolumeMesh mesh, double[] gradient, List<Row> rows, List<Cross> crosses) {
-		this.mesh = mesh; this.gradient = gradient; this.rows = List.copyOf(rows); this.crosses = List.copyOf(crosses);
+	private LiquidPressureFaceEnergy(LiquidControlVolumeMesh mesh, double[] gradient, List<Row> rows, List<Cross> crosses, LiquidConformingVelocity reference) {
+		this.mesh = mesh; this.reference = reference; this.gradient = gradient; this.rows = List.copyOf(rows); this.crosses = List.copyOf(crosses);
 	}
 	boolean hasSignedMetric() { return !crosses.isEmpty(); }
 	/** Row-sum bound on the signed wall Hessian's negative curvature. */
@@ -54,7 +55,7 @@ final class LiquidPressureFaceEnergy {
 		for (int i = 0; i < faces.length; i++) { selected[i] = signs[i] * gradient[faces[i]]; inverse[faces[i]] = i; }
 		var result = rows.stream().map(row -> select(row, inverse, signs)).toList();
 		var pairs = crosses.stream().map(cross -> new Cross(select(cross.first, inverse, signs), select(cross.second, inverse, signs), cross.weight)).toList();
-		return new LiquidPressureFaceEnergy(mesh, selected, result, pairs);
+		return new LiquidPressureFaceEnergy(mesh, selected, result, pairs, reference);
 	}
 	private static Row select(Row row, int[] inverse, int[] signs) {
 		var values = new java.util.TreeMap<Integer, Double>();
