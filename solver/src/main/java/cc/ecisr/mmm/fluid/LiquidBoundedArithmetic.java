@@ -9,8 +9,14 @@ final class LiquidBoundedArithmetic {
 				throw new IllegalStateException("Pressure metric exceeds representable arithmetic range");
 		}
 		static Value of(LiquidExactPolygon.Fraction exact) {
-			if (exact.signum() == 0) return ZERO;
-			double value = exact.rounded(); return new Value(value, Math.ulp(value));
+			return ratio(exact.numerator(), exact.denominator());
+		}
+		/** Observation needs the exact integer ratio, independently of its common factors. */
+		static Value ratio(java.math.BigInteger numerator, java.math.BigInteger denominator) {
+			if (denominator.signum() == 0) throw new ArithmeticException("Zero observation denominator");
+			if (numerator.signum() == 0) return ZERO;
+			if (denominator.signum() < 0) { numerator = numerator.negate(); denominator = denominator.negate(); }
+			double value = LiquidExactPolygon.roundedRatio(numerator, denominator); return new Value(value, Math.ulp(value));
 		}
 		Value add(Value other) {
 			if (value == 0 && error == 0) return other;

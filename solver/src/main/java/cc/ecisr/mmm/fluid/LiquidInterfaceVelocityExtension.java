@@ -64,7 +64,7 @@ final class LiquidInterfaceVelocityExtension {
 				int c = indices.get(i); source[c] = allocation[i];
 			}
 		}
-		double[] reference = new double[faces], referenceError = reference.clone(), resistance = reference.clone(), referenceCell = new double[3 * count];
+		double[] resistance = new double[faces], referenceCell = new double[3 * count];
 		var exactReference = new Fraction[faces]; Arrays.fill(exactReference, Fraction.ZERO);
 		for (int c = 0; c < count; c++) if (liquid[c] < 0) for (int axis = 0; axis < 3; axis++)
 			referenceCell[3 * c + axis] = contactArea[root[c]] > 0 ? contactReference[3 * root[c] + axis] + contactVelocity[3 * root[c] + axis] / contactArea[root[c]] : 0;
@@ -82,45 +82,43 @@ final class LiquidInterfaceVelocityExtension {
 				double velocity = referenceCell[3 * gas + axis];
 				exactReference[f] = exactReference[f].add(face.areaVector().get(axis).multiply(Fraction.of(velocity)));
 			}
-			reference[f] = exactReference[f].toDouble(); referenceError[f] = Math.ulp(reference[f]);
-			if (!Double.isFinite(reference[f])) throw new IllegalStateException("Interface extension reference exceeds numerical range");
+			if (!Double.isFinite(exactReference[f].rounded())) throw new IllegalStateException("Interface extension reference exceeds numerical range");
 		}
 		var coordinates = new ConservativeFluxCoordinates(count + 1, first, second, constrained, fixed, resistance);
 		double[] observedSource = new double[source.length]; for (int c = 0; c < source.length; c++) observedSource[c] = source[c].toDouble();
 		double[] diagonal = coordinates.cycleWeights(resistance), support = coordinates.cycleMinimum(volume), variable = new double[coordinates.size()];
 		var exact = new Fraction[variable.length];
 		for (int i = 0; i < exact.length; i++) exact[i] = exactReference[coordinates.face(i)];
-		var offset = new ConservativeFluxOffset(coordinates, exact, source);
-		var gradient = gradient(offset.values(variable), offset.error(variable), resistance, reference, referenceError);
-		double[] residual = negate(coordinates.transpose(gradient.value)), direction = residual.clone(); double rz = 0;
-		for (int i = 0; i < variable.length; i++) {
-			if (!(diagonal[i] > 0) || !Double.isFinite(diagonal[i])) throw new IllegalStateException("Invalid interface extension cycle metric");
-			direction[i] /= diagonal[i]; rz += residual[i] * direction[i];
-		}
+		var offset = new ConservativeFluxOffset(coordinates, exact, source).relativeTo(exactReference);
+		var gradient = gradient(offset.values(variable), offset.error(variable), resistance);
+		double[] residual = negate(coordinates.transpose(gradient.value)); var directions = new ConservativeConjugateDirections(diagonal);
 		int iterations = 0;
 		while (!converged(residual, coordinates.transposeError(gradient.value, gradient.error), diagonal, support, divergenceTolerance)) {
-			if (iterations++ >= maximumIterations || !(rz > 0) || !Double.isFinite(rz)) throw new IllegalStateException("Interface velocity extension did not converge");
+			if (iterations >= maximumIterations) throw new IllegalStateException("Interface velocity extension did not converge: iterations=" + iterations + " coordinates=" + variable.length);
+			iterations++; var direction = directions.direction(residual);
 			double[] lifted = coordinates.lift(direction, observedSource, false); for (int f = 0; f < faces; f++) lifted[f] *= resistance[f];
 			var product = coordinates.transpose(lifted); double denominator = dot(direction, product);
 			if (!(denominator > 0) || !Double.isFinite(denominator)) throw new IllegalStateException("Invalid interface extension search direction");
-			double alpha = rz / denominator; for (int i = 0; i < variable.length; i++) variable[i] += alpha * direction[i];
-			gradient = gradient(offset.values(variable), offset.error(variable), resistance, reference, referenceError);
-			residual = negate(coordinates.transpose(gradient.value)); double next = 0;
-			for (int i = 0; i < variable.length; i++) next += residual[i] * residual[i] / diagonal[i];
-			for (int i = 0; i < variable.length; i++) direction[i] = residual[i] / diagonal[i] + next / rz * direction[i]; rz = next;
+			directions.remember(direction, product);
+			double alpha = dot(residual, direction) / denominator; for (int i = 0; i < variable.length; i++) variable[i] += alpha * direction[i];
+			gradient = gradient(offset.values(variable), offset.error(variable), resistance);
+			residual = negate(coordinates.transpose(gradient.value));
 		}
-		var rates = offset.exact(variable); double[] flow = new double[faces], error = flow.clone();
-		for (int f = 0; f < faces; f++) { flow[f] = rates[f].toDouble(); error[f] = flow[f] == 0 ? 0 : Math.ulp(flow[f]); }
-		gradient = gradient(flow, error, resistance, reference, referenceError);
+		var rates = offset.exact(variable); double[] flow = new double[faces], difference = flow.clone(), error = flow.clone();
+		for (int f = 0; f < faces; f++) {
+			flow[f] = rates[f].toDouble(); var observed = LiquidBoundedArithmetic.Value.of(rates[f].subtract(exactReference[f]));
+			difference[f] = observed.value(); error[f] = observed.error();
+		}
+		gradient = gradient(difference, error, resistance);
 		if (!converged(negate(coordinates.transpose(gradient.value)), coordinates.transposeError(gradient.value, gradient.error), diagonal, support, divergenceTolerance))
 			throw new IllegalStateException("Exact interface rates exceed extension solve accuracy");
 		return result(mesh, liquid, submittedCells, rates, flow, source, iterations, referenceCell, exactReference);
 	}
-	private static Gradient gradient(double[] flow, double[] error, double[] resistance, double[] reference, double[] referenceError) {
-		double[] value = new double[flow.length], bound = value.clone();
-		for (int f = 0; f < flow.length; f++) if (resistance[f] > 0) {
-			double difference = flow[f] - reference[f]; value[f] = resistance[f] * difference;
-			bound[f] = resistance[f] * (error[f] + referenceError[f] + Math.ulp(difference)) + Math.ulp(value[f]);
+	private static Gradient gradient(double[] difference, double[] error, double[] resistance) {
+		double[] value = new double[difference.length], bound = value.clone();
+		for (int f = 0; f < difference.length; f++) if (resistance[f] > 0) {
+			value[f] = resistance[f] * difference[f];
+			bound[f] = Math.nextUp(Math.nextUp(resistance[f] * error[f]) + Math.ulp(value[f]));
 		}
 		return new Gradient(value, bound);
 	}
@@ -148,5 +146,5 @@ final class LiquidInterfaceVelocityExtension {
 		return true;
 	}
 	private static double[] negate(double[] values) { for (int i = 0; i < values.length; i++) values[i] = -values[i]; return values; }
-	private static double dot(double[] a, double[] b) { double sum = 0; for (int i = 0; i < a.length; i++) sum += a[i] * b[i]; return sum; }
+	private static double dot(double[] a, double[] b) { return ConservativeConjugateDirections.dot(a, b); }
 }

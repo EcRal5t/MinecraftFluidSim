@@ -109,10 +109,10 @@ final class LiquidConformingRateOperator {
 		int axis = 0; while (normal[axis].signum() == 0) axis++;
 		var area = polygon.areaVector()[axis]; var rate = new Value[3]; var corner = new Value[3][3];
 		for (int a = 0; a < 3; a++) {
-			rate[a] = Value.of(new Fraction(BigInteger.valueOf(3).multiply(normal[a]).multiply(normal[axis]).multiply(area.denominator()), norm.multiply(area.numerator())));
+			rate[a] = Value.ratio(BigInteger.valueOf(3).multiply(normal[a]).multiply(normal[axis]).multiply(area.denominator()), norm.multiply(area.numerator()));
 			for (int b = 0; b < 3; b++) {
-				var projected = new Fraction(BigInteger.valueOf(3).multiply(normal[a]).multiply(normal[b]), norm);
-				corner[a][b] = Value.of(Fraction.of(a == b ? 1 : 0).subtract(projected));
+				var numerator = (a == b ? norm : BigInteger.ZERO).subtract(BigInteger.valueOf(3).multiply(normal[a]).multiply(normal[b]));
+				corner[a][b] = Value.ratio(numerator, norm);
 			}
 		}
 		return new Face(rate, corner);

@@ -36,6 +36,7 @@ final class LiquidControlVolumeValidation {
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
 	}
 	private static void pressureInertiaSurvivesTinyAuxiliaryFaceAreas() {
+		conjugateDirectionsResolveAnisotropicEnergy();
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
 		var split = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(1, 0, 0, Math.scalb(1.0, -60))),
 				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(-1, 0, 0, -Math.scalb(1.0, -60))));
@@ -48,6 +49,41 @@ final class LiquidControlVolumeValidation {
 		}
 		var result = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(new double[3], GRAVITY, 0.01, 1e-10, 512);
 		close(result.cellVelocity()[1], -0.0981, 1e-12);
+	}
+	/** Known orthogonal eigenmodes, with face-coordinate scales spanning the native sliver range. */
+	private static void conjugateDirectionsResolveAnisotropicEnergy() {
+		for (double force : new double[]{1e-200, 1e200}) {
+			var scalar = new ConservativeConjugateDirections(new double[]{1});
+			for (int correction = 0; correction < 2; correction++) {
+				var direction = scalar.direction(new double[]{force}); scalar.remember(direction, direction);
+				double solved = ConservativeConjugateDirections.dot(new double[]{force}, direction)
+						/ ConservativeConjugateDirections.dot(direction, direction) * direction[0];
+				if (solved != force) throw new AssertionError("Conjugate correction lost a representable force after exhausting its basis");
+			}
+		}
+		int n = 32; var matrix = new double[n][n]; var diagonal = new double[n]; var expected = new double[n];
+		for (int i = 0; i < n; i++) { diagonal[i] = Math.scalb(1.0, 16 * i); expected[i] = (i % 5 - 2) / Math.sqrt(diagonal[i]); }
+		for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) {
+			double first = Math.scalb(1.0, -i), second = Math.scalb(1.0, -j), total = 2 - Math.scalb(1.0, 1 - n);
+			matrix[i][j] = ((i == j ? first : 0) - (first + second) / 16 + total / 256) * Math.sqrt(diagonal[i]) * Math.sqrt(diagonal[j]);
+		}
+		var rhs = conjugateAction(matrix, expected); var solution = new double[n]; var directions = new ConservativeConjugateDirections(diagonal);
+		for (int iteration = 0; iteration <= n; iteration++) {
+			var evaluated = conjugateAction(matrix, solution); var residual = rhs.clone(); boolean resolved = true;
+			for (int i = 0; i < n; i++) {
+				residual[i] -= evaluated[i]; double magnitude = Math.abs(rhs[i]);
+				for (int j = 0; j < n; j++) magnitude += Math.abs(matrix[i][j] * solution[j]);
+				resolved &= Math.abs(residual[i]) <= 2 * n * Math.ulp(magnitude);
+			}
+			if (resolved) return;
+			if (iteration == n) throw new AssertionError("Conjugate directions lost resolved anisotropic energy modes");
+			var direction = directions.direction(residual); var action = conjugateAction(matrix, direction); double force = 0, inertia = 0;
+			for (int i = 0; i < n; i++) { force += residual[i] * direction[i]; inertia += direction[i] * action[i]; }
+			directions.remember(direction, action); for (int i = 0; i < n; i++) solution[i] += force / inertia * direction[i];
+		}
+	}
+	private static double[] conjugateAction(double[][] matrix, double[] value) {
+		var result = new double[value.length]; for (int i = 0; i < result.length; i++) for (int j = 0; j < result.length; j++) result[i] += matrix[i][j] * value[j]; return result;
 	}
 	private static void boundedArithmeticContainsExactEndpointValues() {
 		var samples = List.of(LiquidBoundedArithmetic.Value.of(LiquidExactPolygon.Fraction.of(1).divide(LiquidExactPolygon.Fraction.of(7))),
@@ -236,6 +272,13 @@ final class LiquidControlVolumeValidation {
 		} catch (IllegalArgumentException expected) { }
 		var compatible = closed.liftExact(new LiquidExactPolygon.Fraction[0], new LiquidExactPolygon.Fraction[] {fixed[6], fixed[6].negate()});
 		if (!compatible[0].equals(fixed[6])) throw new AssertionError("Prescribed volume source changed its compatible face rate");
+		var free = new ConservativeFluxCoordinates(2, new int[]{0}, new int[]{1}, new boolean[2], new LiquidExactPolygon.Fraction[1]);
+		var large = LiquidExactPolygon.Fraction.of(1e100); var small = LiquidExactPolygon.Fraction.of(1).divide(LiquidExactPolygon.Fraction.of(7));
+		var offset = new ConservativeFluxOffset(free, new LiquidExactPolygon.Fraction[]{large}, new LiquidExactPolygon.Fraction[]{zero, zero});
+		var relative = offset.relativeTo(new LiquidExactPolygon.Fraction[]{large.add(small)}); var observed = relative.values(new double[1]);
+		if (LiquidExactPolygon.Fraction.of(observed[0]).add(small).absolute().subtract(LiquidExactPolygon.Fraction.of(relative.error(new double[1])[0])).signum() > 0 || observed[0] == 0)
+			throw new AssertionError("Flux reference subtraction lost a small exact rate difference");
+		if (!java.util.Arrays.equals(offset.exact(new double[1]), relative.exact(new double[1]))) throw new AssertionError("Reference subtraction changed actual conservative rates");
 		exactInventoryAllocationPreservesShares();
 	}
 

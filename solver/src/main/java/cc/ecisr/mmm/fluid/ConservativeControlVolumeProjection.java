@@ -94,25 +94,21 @@ final class ConservativeControlVolumeProjection {
 			evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt, surface, dt);
 			residual = negate(coordinates.transpose(evaluation.gradient));
 		}
-		double[] direction = residual.clone(); double rz = 0;
-		for (int i = 0; i < residual.length; i++) {
-			if (!(diagonal[i] > 0) || !Double.isFinite(diagonal[i])) throw new IllegalStateException("Invalid conservative pressure metric");
-			direction[i] /= diagonal[i]; rz += residual[i] * direction[i];
-		}
+		var directions = new ConservativeConjugateDirections(diagonal);
 		int iterations = 0;
 		while (!converged(residual, coordinates.transposeError(evaluation.gradient, evaluation.error), diagonal, support, tolerance)) {
-			if (iterations++ >= maximumIterations || !(rz > 0) || !Double.isFinite(rz)) {
+			if (iterations >= maximumIterations) {
 				var error = coordinates.transposeError(evaluation.gradient, evaluation.error); double unresolved = 0;
 				for (int i = 0; i < residual.length; i++) unresolved = Math.max(unresolved, Math.max(0, Math.abs(residual[i]) - error[i]) / diagonal[i] / support[i]);
 				throw new IllegalStateException("Conservative pressure solve did not converge: iterations=" + iterations + " coordinates=" + variable.length + " unresolvedRateResidual=" + unresolved + " tolerance=" + tolerance);
 			}
+			iterations++; var direction = directions.direction(residual);
 			var product = coordinates.transpose(evaluate(coordinates.lift(direction, zeroSource, false), null, null, null, storage, 0, surface, dt).gradient);
 			double denominator = dot(direction, product); if (!(denominator > 0) || !Double.isFinite(denominator)) throw new IllegalStateException("Invalid conservative pressure search direction");
-			double alpha = rz / denominator; for (int i = 0; i < variable.length; i++) variable[i] += alpha * direction[i];
+			directions.remember(direction, product);
+			double alpha = dot(residual, direction) / denominator; for (int i = 0; i < variable.length; i++) variable[i] += alpha * direction[i];
 			evaluation = evaluate(offset.values(variable), offset.error(variable), predictor, predictorError, storage, dt, surface, dt);
-			residual = negate(coordinates.transpose(evaluation.gradient)); double next = 0;
-			for (int i = 0; i < residual.length; i++) next += residual[i] * residual[i] / diagonal[i];
-			for (int i = 0; i < direction.length; i++) direction[i] = residual[i] / diagonal[i] + next / rz * direction[i]; rz = next;
+			residual = negate(coordinates.transpose(evaluation.gradient));
 		}
 		var rates = offset.exact(variable); double[] flow = new double[rates.length], conversionError = flow.clone();
 		for (int f = 0; f < flow.length; f++) { flow[f] = rates[f].toDouble(); conversionError[f] = flow[f] == 0 ? 0 : Math.ulp(flow[f]); }
@@ -230,6 +226,6 @@ final class ConservativeControlVolumeProjection {
 		return true;
 	}
 	private static double[] negate(double[] value) { for (int i = 0; i < value.length; i++) value[i] = -value[i]; return value; }
-	private static double dot(double[] a, double[] b) { double value = 0; for (int i = 0; i < a.length; i++) value += a[i] * b[i]; return value; }
+	private static double dot(double[] a, double[] b) { return ConservativeConjugateDirections.dot(a, b); }
 	private static int find(int[] root, int c) { while (root[c] != c) { root[c] = root[root[c]]; c = root[c]; } return c; }
 }

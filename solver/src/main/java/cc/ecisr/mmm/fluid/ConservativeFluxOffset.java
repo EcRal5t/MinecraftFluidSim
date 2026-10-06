@@ -6,12 +6,20 @@ import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 final class ConservativeFluxOffset {
 	private final ConservativeFluxCoordinates coordinates;
 	private final Fraction[] reference, source;
+	private final Fraction[] origin;
 	private final double[] baseline, zeroSource;
 	ConservativeFluxOffset(ConservativeFluxCoordinates coordinates, Fraction[] reference, Fraction[] source) {
 		this.coordinates = coordinates; this.reference = reference.clone(); this.source = source.clone(); zeroSource = new double[source.length];
-		var rates = coordinates.liftExact(reference, source); baseline = new double[rates.length];
-		for (int f = 0; f < rates.length; f++) baseline[f] = rates[f].rounded();
+		origin = coordinates.liftExact(reference, source); baseline = new double[origin.length];
+		for (int f = 0; f < origin.length; f++) baseline[f] = origin[f].rounded();
 	}
+	private ConservativeFluxOffset(ConservativeFluxOffset offset, Fraction[] faceReference) {
+		if (faceReference.length != offset.origin.length) throw new IllegalArgumentException("Incomplete flux reference field");
+		coordinates = offset.coordinates; reference = offset.reference; source = offset.source; origin = offset.origin; zeroSource = offset.zeroSource;
+		baseline = new double[origin.length]; for (int f = 0; f < baseline.length; f++) baseline[f] = origin[f].subtract(faceReference[f]).rounded();
+	}
+	/** Observes the exact reference difference while retaining the same actual conservative rate field. */
+	ConservativeFluxOffset relativeTo(Fraction[] faceReference) { return new ConservativeFluxOffset(this, faceReference); }
 	double[] values(double[] increment) {
 		var result = coordinates.lift(increment, zeroSource, false);
 		for (int f = 0; f < result.length; f++) result[f] += baseline[f]; return result;
