@@ -131,11 +131,12 @@ final class LiquidVolumeInterfaceValidation {
 		for (var leaf : result.leaves()) {
 			coverage = coverage.add(leaf.open().geometry().measure()); cells.add(leaf.open());
 			var original = LiquidConvexRegion.of(shape); for (var plane : leaf.open().geometry().planes()) original = original.clip(plane);
-			var represented = single(leaf).measure();
-			if (!represented.volume().equals(original.measure().volume())) throw new AssertionError("Adaptive reconstruction changed an exact leaf inventory");
+			var pieces = leaf.phases().isEmpty() ? List.<LiquidPolyhedron>of() : leaf.phases().getFirst().pieces();
+			var represented = LiquidVolumeInterface.measure(pieces);
 			if (!original.hasVolume()) continue;
-			var overlap = original; for (var plane : single(leaf).planes()) overlap = overlap.clip(plane);
-			var difference = original.measure().volume().subtract(overlap.measure().volume()).multiply(Fraction.of(2));
+			var overlap = Fraction.ZERO;
+			for (var piece : pieces) { var common = original; for (var plane : piece.planes()) common = common.clip(plane); overlap = overlap.add(common.measure().volume()); }
+			var difference = original.measure().volume().add(represented.volume()).subtract(overlap.multiply(Fraction.of(2)));
 			if (difference.multiply(Fraction.of(leaf.open().width())).divide(original.measure().volume()).subtract(Fraction.of(tolerance.occupancyErrorLength())).signum() > 0)
 				throw new AssertionError("Adaptive reconstruction accepted an unresolved occupancy defect");
 			differences = differences.add(difference);

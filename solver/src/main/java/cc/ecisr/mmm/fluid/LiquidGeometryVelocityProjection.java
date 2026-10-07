@@ -10,7 +10,7 @@ import java.util.Map;
 /** Conservative P0 projection onto spatial leaves, independent of the previous pressure cells. */
 final class LiquidGeometryVelocityProjection {
 	record Source(int owner, LiquidPolyhedron geometry, LiquidPolyhedron.Point velocity) { }
-	record Value(Fraction volume, double[] velocity, double rmsError, Fraction kineticLoss,
+	record Value(Fraction volume, List<Fraction> momentum, Fraction originalKinetic, double[] velocity, double rmsError, Fraction kineticLoss,
 			Fraction kineticRoundingChange, List<Fraction> momentumRoundingBounds) { }
 	private record Address(int level, int x, int y, int z) { }
 	private record Key(int owner, LiquidPolyhedron.Point velocity) { }
@@ -49,11 +49,16 @@ final class LiquidGeometryVelocityProjection {
 					before = before.add(v.multiply(u).multiply(u).divide(Fraction.of(2)));
 				}
 			}
+			result.put(group.getKey(), observe(volume, List.of(momentum), before));
+		}
+		return Map.copyOf(result);
+	}
+	static Value observe(Fraction volume, List<Fraction> momentum, Fraction before) {
 			var velocity = new double[3]; var projected = Fraction.ZERO; var stored = Fraction.ZERO; var bounds = new ArrayList<Fraction>();
 			for (int a = 0; a < 3; a++) {
-				var mean = momentum[a].divide(volume); velocity[a] = mean.rounded(); var rounded = Fraction.of(velocity[a]);
+				var mean = momentum.get(a).divide(volume); velocity[a] = mean.rounded(); var rounded = Fraction.of(velocity[a]);
 				var bound = volume.multiply(Fraction.of(Math.ulp(velocity[a]))).divide(Fraction.of(2)); bounds.add(bound);
-				if (volume.multiply(rounded).subtract(momentum[a]).absolute().subtract(bound).signum() > 0)
+				if (volume.multiply(rounded).subtract(momentum.get(a)).absolute().subtract(bound).signum() > 0)
 					throw new IllegalStateException("P0 projection exceeds its binary64 momentum rounding bound");
 				projected = projected.add(volume.multiply(mean).multiply(mean).divide(Fraction.of(2)));
 				stored = stored.add(volume.multiply(rounded).multiply(rounded).divide(Fraction.of(2)));
@@ -62,8 +67,6 @@ final class LiquidGeometryVelocityProjection {
 			if (loss.signum() < 0) throw new IllegalStateException("Conservative P0 projection increased exact kinetic energy");
 			var squaredError = loss.multiply(Fraction.of(2)).divide(volume);
 			double error = squaredError.signum() == 0 ? 0 : Math.nextUp(Math.sqrt(Math.nextUp(squaredError.rounded())));
-			result.put(group.getKey(), new Value(volume, velocity, error, loss, stored.subtract(projected), List.copyOf(bounds)));
-		}
-		return Map.copyOf(result);
+			return new Value(volume, List.copyOf(momentum), before, velocity, error, loss, stored.subtract(projected), List.copyOf(bounds));
 	}
 }

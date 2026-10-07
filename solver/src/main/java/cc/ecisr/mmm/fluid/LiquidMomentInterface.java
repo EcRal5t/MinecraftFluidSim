@@ -23,8 +23,16 @@ final class LiquidMomentInterface {
 	}
 	static Result planar(java.util.List<LiquidPolyhedron> open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
 			int coordinateBits, double centroidTolerance, Work work) { return reconstruct(open, target, initialNormal, coordinateBits, centroidTolerance, work, false); }
+	static Result planar(java.util.List<LiquidPolyhedron> open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
+			int coordinateBits, double centroidTolerance, Work work, java.util.function.Predicate<LiquidVolumeInterface> occupancyResolved) {
+		return reconstruct(open, target, initialNormal, coordinateBits, centroidTolerance, work, false, occupancyResolved);
+	}
 	private static Result reconstruct(java.util.List<LiquidPolyhedron> open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
 			int coordinateBits, double centroidTolerance, Work work, boolean exactVolume) {
+		return reconstruct(open, target, initialNormal, coordinateBits, centroidTolerance, work, exactVolume, ignored -> true);
+	}
+	private static Result reconstruct(java.util.List<LiquidPolyhedron> open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
+			int coordinateBits, double centroidTolerance, Work work, boolean exactVolume, java.util.function.Predicate<LiquidVolumeInterface> occupancyResolved) {
 		if (target == null || target.signum() <= 0 || !(centroidTolerance > 0) || !Double.isFinite(centroidTolerance) || work == null || work.evaluations != 0)
 			throw new IllegalArgumentException("Invalid moment-of-fluid reconstruction request");
 		var capacityMeasure = LiquidVolumeInterface.measure(open); var normal = unit(initialNormal);
@@ -32,25 +40,30 @@ final class LiquidMomentInterface {
 		if (normal.dot(direction) < 0) normal = new LiquidPolyhedron.Point(-normal.x(), -normal.y(), -normal.z());
 		var current = representation(open, target, normal, coordinateBits, exactVolume, work); var capacity = capacityMeasure.volume();
 		double error = current.centroidDistance(target);
-		while (error > centroidTolerance && work.evaluations < work.maximum) {
+		while ((!occupancyResolved.test(current) || error > centroidTolerance) && work.evaluations < work.maximum) {
 			if (target.volume().equals(capacity)) break;
 			var a = tangent(normal); var b = normal.cross(a); var derivative = current.centroidDerivative();
-			double[] ja = new double[3], jb = ja.clone(), rhs = ja.clone();
-			var centroid = current.measure.centroidCoordinates(); var desired = target.centroidCoordinates(); double scale = 0;
+			var ja = new LiquidExactPolygon.Fraction[3]; var jb = ja.clone(); var rhs = ja.clone();
+			var centroid = current.measure.centroidCoordinates(); var desired = target.centroidCoordinates();
 			for (int i = 0; i < 3; i++) {
-				rhs[i] = desired[i].subtract(centroid[i]).rounded();
-				for (int j = 0; j < 3; j++) { double value = derivative[i][j].rounded(); ja[i] += value * a.coordinate(j); jb[i] += value * b.coordinate(j); }
-				scale = Math.max(scale, Math.max(Math.abs(ja[i]), Math.abs(jb[i])));
+				rhs[i] = desired[i].subtract(centroid[i]); ja[i] = jb[i] = LiquidExactPolygon.Fraction.ZERO;
+				for (int j = 0; j < 3; j++) {
+					ja[i] = ja[i].add(derivative[i][j].multiply(LiquidExactPolygon.Fraction.of(a.coordinate(j))));
+					jb[i] = jb[i].add(derivative[i][j].multiply(LiquidExactPolygon.Fraction.of(b.coordinate(j))));
+				}
 			}
-			if (!(scale > 0) || !Double.isFinite(scale)) break;
-			double aa = 0, ab = 0, bb = 0, ar = 0, br = 0;
+			var aa = LiquidExactPolygon.Fraction.ZERO; var ab = aa; var bb = aa; var ar = aa; var br = aa;
 			for (int i = 0; i < 3; i++) {
-				ja[i] /= scale; jb[i] /= scale; rhs[i] /= scale;
-				aa += ja[i] * ja[i]; ab += ja[i] * jb[i]; bb += jb[i] * jb[i]; ar += ja[i] * rhs[i]; br += jb[i] * rhs[i];
+				aa = aa.add(ja[i].multiply(ja[i])); ab = ab.add(ja[i].multiply(jb[i])); bb = bb.add(jb[i].multiply(jb[i]));
+				ar = ar.add(ja[i].multiply(rhs[i])); br = br.add(jb[i].multiply(rhs[i]));
 			}
-			double det = aa * bb - ab * ab;
-			if (!(det > 32 * Math.ulp(Math.max(aa * bb, ab * ab)))) break;
-			double x = (bb * ar - ab * br) / det, y = (aa * br - ab * ar) / det, length = Math.hypot(x, y);
+			var det = aa.multiply(bb).subtract(ab.multiply(ab));
+			if (det.signum() == 0) break;
+			if (det.signum() < 0) throw new IllegalStateException("Moment fit has an indefinite exact centroid metric");
+			var dx = bb.multiply(ar).subtract(ab.multiply(br)).divide(det); var dy = aa.multiply(br).subtract(ab.multiply(ar)).divide(det);
+			var magnitude = dx.absolute().subtract(dy.absolute()).signum() > 0 ? dx.absolute() : dy.absolute();
+			if (magnitude.subtract(LiquidExactPolygon.Fraction.of(1)).signum() > 0) { dx = dx.divide(magnitude); dy = dy.divide(magnitude); }
+			double x = dx.rounded(), y = dy.rounded(), length = Math.hypot(x, y);
 			if (!(length > 0) || !Double.isFinite(length)) break;
 			// A unit angular trust interval and monotone line search bound each orientation update.
 			if (length > 1) { x /= length; y /= length; }

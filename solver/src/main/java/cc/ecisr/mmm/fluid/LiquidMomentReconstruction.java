@@ -23,6 +23,9 @@ final class LiquidMomentReconstruction {
 	record Source(int control, List<LiquidPolyhedron> pieces, LiquidPolyhedron.Point normal) {
 		Source { if (control < 0 || normal == null) throw new IllegalArgumentException("Invalid reconstruction control"); pieces = List.copyOf(pieces); }
 	}
+	record Support(LiquidGeometryRefinement.Cell open, List<Source> sources) {
+		Support { sources = List.copyOf(sources); }
+	}
 	record Phase(int control, List<LiquidPolyhedron> pieces) {
 		Phase { pieces = List.copyOf(pieces); }
 	}
@@ -52,79 +55,105 @@ final class LiquidMomentReconstruction {
 	}
 	static Result reconstruct(LiquidGeometryRefinement.Cell open, List<Source> sources, Tolerance tolerance, Budget budget,
 			java.util.function.Predicate<LiquidGeometryRefinement.Cell> velocityResolved) {
-		if (open == null || sources == null || tolerance == null || budget == null || velocityResolved == null || open.geometry().measure().signum() <= 0)
-			throw new IllegalArgumentException("Incomplete local interface reconstruction");
+		return reconstruct(List.of(new Support(open, sources)), tolerance, budget, velocityResolved);
+	}
+	static Result reconstruct(List<Support> supports, Tolerance tolerance, Budget budget,
+			java.util.function.Predicate<LiquidGeometryRefinement.Cell> velocityResolved) {
+		if (supports == null || tolerance == null || budget == null || velocityResolved == null || supports.size() > budget.maximumLeaves)
+			throw new IllegalArgumentException("Incomplete interface reconstruction support");
+		new LiquidGeometryRemap(supports.stream().map(Support::open).toList());
+		var totals = new java.util.LinkedHashMap<Integer, Totals>(); var pending = new java.util.ArrayDeque<Pending>();
+		var capacity = Fraction.ZERO;
+		for (var support : supports) {
+		var open = support.open; var sources = support.sources;
+		if (open == null || open.geometry().measure().signum() <= 0) throw new IllegalArgumentException("Empty interface reconstruction support");
+		capacity = capacity.add(open.geometry().measure().volume());
 		for (var face : LiquidExactPolygon.faces(open.geometry())) for (var vertex : face.vertices()) for (int axis = 0; axis < 3; axis++) {
 			var coordinate = vertex.coordinates()[axis]; var lo = Fraction.of(open.minimum(axis));
 			if (coordinate.subtract(lo).signum() < 0 || coordinate.subtract(lo.add(Fraction.of(open.width()))).signum() > 0)
 				throw new IllegalArgumentException("Open interface geometry leaves its dyadic cell");
 		}
-		var totals = new java.util.LinkedHashMap<Integer, Totals>(); var address = LiquidPhasePartition.Address.of(open);
+		var address = LiquidPhasePartition.Address.of(open); var identifiers = new java.util.HashSet<Integer>();
 		var pieces = new ArrayList<LiquidGeometryRefinement.Cell>();
 		for (var source : sources) {
-			if (totals.putIfAbsent(source.control, new Totals(LiquidVolumeInterface.measure(source.pieces))) != null)
+			if (!identifiers.add(source.control))
 				throw new IllegalArgumentException("Repeated reconstruction control");
+			var measured = LiquidVolumeInterface.measure(source.pieces);
+			totals.merge(source.control, new Totals(measured), (a, b) -> new Totals(a.source.add(b.source)));
 			for (var geometry : source.pieces) {
 				if (geometry.measure().signum() <= 0) throw new IllegalArgumentException("Empty interface source fragment");
-				var contained = LiquidConvexRegion.of(geometry); for (var plane : open.geometry().planes()) contained = contained.clip(plane);
-				if (!contained.measure().same(geometry.measure())) throw new IllegalArgumentException("Interface source leaves its open cell");
+				var contained = LiquidExactPolygon.faces(geometry); for (var plane : LiquidExactPolygon.faces(open.geometry())) contained = LiquidExactPolygon.clipVolume(contained, plane.coefficients(), 1);
+				if (!LiquidExactPolygon.volume(contained).equals(geometry.measure().volume())) throw new IllegalArgumentException("Interface source leaves its open cell");
 				pieces.add(address.cell(geometry));
 			}
 		}
 		LiquidPhasePartition.requireDisjoint(pieces);
-		var pending = new java.util.ArrayDeque<Pending>(); pending.add(new Pending(open, List.copyOf(sources), tolerance.coordinateBits));
+		pending.add(new Pending(open, List.copyOf(sources), tolerance.coordinateBits));
+		}
+		int complement = totals.keySet().stream().mapToInt(Integer::intValue).max().orElse(-1) + 1;
+		var targets = new java.util.LinkedHashMap<Integer, Fraction>(); totals.forEach((control, sum) -> targets.put(control, sum.source.volume()));
+		var empty = capacity.subtract(targets.values().stream().reduce(Fraction.ZERO, Fraction::add));
+		if (empty.signum() < 0) throw new IllegalArgumentException("Interface sources exceed their open capacity");
+		if (empty.signum() > 0) targets.put(complement, empty);
+		var originals = new ArrayList<Support>(); var planarStatistics = new ArrayList<List<PhaseStats>>();
 		var leaves = new ArrayList<Leaf>(); int evaluations = 0, retainedRegions = 0;
 		while (!pending.isEmpty()) {
 			var cell = pending.removeLast(); var available = List.of(cell.open.geometry());
 			var assigned = new ArrayList<LiquidGeometryRefinement.Cell>(); var phases = new ArrayList<Phase>();
-			var volumes = new ArrayList<Fraction>();
 			var statistics = new ArrayList<PhaseStats>(); var hints = new java.util.HashMap<Integer, LiquidPolyhedron.Point>();
-			var order = cell.sources.stream().filter(source -> !source.pieces.isEmpty()).sorted((a, b) -> compare(a, b, cell.open)).toList();
+			var order = new ArrayList<>(cell.sources.stream().filter(source -> !source.pieces.isEmpty()).sorted((a, b) -> compare(a, b, cell.open)).toList());
 			var total = Fraction.ZERO; for (var source : order) total = total.add(LiquidVolumeInterface.measure(source.pieces).volume());
 			boolean complete = total.equals(cell.open.geometry().measure().volume());
 			boolean accepted = velocityResolved.test(cell.open);
-			List<Phase> planar = List.of(); List<Fraction> correction = List.of();
+			List<Phase> planar = List.of();
 			try {
 			if (accepted) {
 			for (int p = 0; p < order.size(); p++) {
-				var source = order.get(p); var original = LiquidVolumeInterface.measure(source.pieces);
-				if (evaluations == budget.maximumEvaluations) throw new IllegalStateException("Interface reconstruction exceeds its evaluation budget");
-				var target = original;
-				if (complete && p + 1 == order.size()) {
-					var capacity = LiquidVolumeInterface.measure(available).volume(); var moments = new Fraction[3];
-					for (int a = 0; a < 3; a++) moments[a] = original.firstMoment(a).multiply(capacity).divide(original.volume());
-					target = new LiquidExactPolygon.Measure(capacity, moments);
+				if (!complete || p + 1 < order.size()) {
+					boolean found = false; var availableVolume = LiquidVolumeInterface.measure(available).volume();
+					for (int candidate = p; candidate < order.size(); candidate++) {
+						var source = order.get(candidate); var original = LiquidVolumeInterface.measure(source.pieces);
+						if (evaluations >= budget.maximumEvaluations) throw new IllegalStateException("Interface reconstruction exceeds its evaluation budget");
+						var remainingVolume = availableVolume.subtract(original.volume());
+						var scale = remainingVolume.signum() > 0 && remainingVolume.subtract(original.volume()).signum() < 0 ? remainingVolume : original.volume();
+						var allowed = scale.multiply(Fraction.of(tolerance.occupancyErrorLength)).divide(Fraction.of(cell.open.width()));
+						var work = new LiquidMomentInterface.Work(Math.min(budget.maximumFitEvaluations, budget.maximumEvaluations - evaluations));
+						LiquidMomentInterface.Result fit;
+						try { fit = LiquidMomentInterface.planar(available, fittingTarget(original, cell.coordinateBits), source.normal, cell.coordinateBits, tolerance.centroidDistance, work, representation -> {
+							if (original.volume().subtract(representation.measure.volume()).absolute().subtract(allowed).signum() > 0)
+								throw new LiquidCoordinateResolutionRequired("Joint cut volume error exceeds the remaining phase's spatial tolerance");
+							return occupiedDifference(source.pieces, representation.pieces).subtract(allowed).signum() <= 0;
+						}); }
+						finally { evaluations += work.evaluations; }
+						hints.put(source.control, fit.normal());
+						var geometry = fit.interfaceGeometry().pieces; var represented = fit.interfaceGeometry().measure;
+						if (original.volume().subtract(represented.volume()).absolute().subtract(allowed).signum() > 0)
+							throw new LiquidCoordinateResolutionRequired("Joint cut volume error exceeds the remaining phase's spatial tolerance");
+						var difference = occupiedDifference(source.pieces, geometry);
+						if (difference.subtract(allowed).signum() > 0 || fit.interfaceGeometry().centroidDistance(original) > tolerance.centroidDistance) continue;
+						java.util.Collections.swap(order, p, candidate); phases.add(new Phase(source.control, geometry));
+						for (var part : geometry) assigned.add(LiquidPhasePartition.Address.of(cell.open).cell(part));
+						available = LiquidGasPartition.build(cell.open, assigned, budget.maximumRegions); found = true; break;
+					}
+					if (!found) { accepted = false; break; }
+					continue;
 				}
-				var work = new LiquidMomentInterface.Work(Math.min(budget.maximumFitEvaluations, budget.maximumEvaluations - evaluations));
-				LiquidMomentInterface.Result fit;
-				try { fit = LiquidMomentInterface.planar(available, target, source.normal, cell.coordinateBits, tolerance.centroidDistance, work); }
-				finally { evaluations += work.evaluations; }
-				var geometry = fit.interfaceGeometry().pieces; hints.put(source.control, fit.normal());
-				phases.add(new Phase(source.control, geometry)); volumes.add(original.volume());
-				for (var part : geometry) assigned.add(LiquidPhasePartition.Address.of(cell.open).cell(part));
-				if (p + 1 < order.size() || !complete) available = LiquidGasPartition.build(cell.open, assigned, budget.maximumRegions);
+				var source = order.get(p); phases.add(new Phase(source.control, available));
+				for (var part : available) assigned.add(LiquidPhasePartition.Address.of(cell.open).cell(part));
 			}
-			if (!order.isEmpty()) {
-				if (!complete) { phases.add(new Phase(0, available)); volumes.add(cell.open.geometry().measure().volume().subtract(total)); }
+			if (accepted && !order.isEmpty()) {
+				if (!complete) phases.add(new Phase(complement, available));
 				planar = List.copyOf(phases);
-				var projection = LiquidJointInterfaceVolume.project(cell.open, phases, volumes, budget.maximumRegions - retainedRegions);
-				correction = projection.symmetricDifferenceBounds(); phases = new ArrayList<>(projection.phases().subList(0, order.size()));
 				assigned.clear();
+			} else if (accepted && !complete) {
+				phases.add(new Phase(complement, available)); planar = List.copyOf(phases);
 			}
-			for (int p = 0; p < order.size(); p++) {
+			for (int p = 0; accepted && p < order.size(); p++) {
 				var source = order.get(p); var original = LiquidVolumeInterface.measure(source.pieces); var geometry = phases.get(p).pieces;
 				var represented = LiquidVolumeInterface.measure(geometry); var center = represented.centroidCoordinates(); var desired = original.centroidCoordinates();
 				var squared = Fraction.ZERO; for (int a = 0; a < 3; a++) { var delta = center[a].subtract(desired[a]); squared = squared.add(delta.multiply(delta)); }
 				double centroidError = squared.signum() == 0 ? 0 : Math.nextUp(Math.sqrt(Math.nextUp(squared.rounded())));
-				var overlap = Fraction.ZERO;
-				for (var old : source.pieces) for (var next : planar.get(p).pieces) {
-					var common = LiquidExactPolygon.faces(old);
-					for (var plane : LiquidExactPolygon.faces(next).stream().map(LiquidExactPolygon::coefficients).distinct().toList()) {
-						common = LiquidExactPolygon.clipVolume(common, plane, 1); if (common.isEmpty()) break;
-					}
-					overlap = overlap.add(LiquidExactPolygon.volume(common));
-				}
-				var difference = original.volume().add(LiquidVolumeInterface.measure(planar.get(p).pieces).volume()).subtract(overlap.multiply(Fraction.of(2))).add(correction.get(p));
+				var difference = occupiedDifference(source.pieces, planar.get(p).pieces);
 				if (difference.signum() < 0) throw new IllegalStateException("Interface reconstruction overlap exceeds source occupancy");
 				var length = difference.multiply(Fraction.of(cell.open.width())).divide(original.volume());
 				double occupancy = length.signum() == 0 ? 0 : Math.nextUp(length.rounded());
@@ -134,14 +163,10 @@ final class LiquidMomentReconstruction {
 			}
 			}
 			if (accepted) {
-				if (retainedRegions + assigned.size() > budget.maximumRegions) throw new IllegalStateException("Interface reconstruction exceeds its region budget");
-				retainedRegions += assigned.size(); leaves.add(new Leaf(cell.open, phases));
-				for (var observation : statistics) {
-					var sum = totals.get(observation.control); sum.represented = sum.represented.add(observation.representedMeasure);
-					sum.difference = sum.difference.add(observation.symmetricDifferenceVolumeBound);
-					sum.centroidError = Math.max(sum.centroidError, observation.maximumCentroidError);
-					sum.occupancyError = Math.max(sum.occupancyError, observation.maximumOccupancyErrorLength);
-				}
+				int count = phases.stream().mapToInt(phase -> phase.pieces.size()).sum();
+				if (retainedRegions + count > budget.maximumRegions) throw new IllegalStateException("Interface reconstruction exceeds its region budget");
+				retainedRegions += count; leaves.add(new Leaf(cell.open, phases));
+				originals.add(new Support(cell.open, cell.sources)); planarStatistics.add(List.copyOf(statistics));
 				continue;
 			}
 			var children = LiquidGeometryRefinement.children(cell.open);
@@ -150,11 +175,7 @@ final class LiquidMomentReconstruction {
 			for (var child : children) {
 				var clippedSources = new ArrayList<Source>();
 				for (var source : cell.sources) {
-					var occupied = new ArrayList<LiquidPolyhedron>();
-					for (var part : source.pieces) {
-						var clipped = LiquidConvexRegion.of(part); for (var plane : child.geometry().planes()) clipped = clipped.clip(plane);
-						if (clipped.hasVolume()) occupied.add(clipped.geometry());
-					}
+					var occupied = clipped(source.pieces, child.geometry());
 					clippedSources.add(new Source(source.control, occupied, hints.getOrDefault(source.control, source.normal)));
 				}
 				pending.add(new Pending(child, List.copyOf(clippedSources), cell.coordinateBits));
@@ -164,12 +185,81 @@ final class LiquidMomentReconstruction {
 				pending.add(new Pending(cell.open, cell.sources, Math.min(1074, 2 * cell.coordinateBits)));
 			}
 		}
+		LiquidJointInterfaceVolume.PartitionResult corrected;
+		try { corrected = LiquidJointInterfaceVolume.project(leaves, targets, budget.maximumRegions); }
+		catch (LiquidCoordinateResolutionRequired finer) {
+			if (tolerance.coordinateBits == 1074) throw finer;
+			return retry(supports, new Tolerance(tolerance.centroidDistance, tolerance.occupancyErrorLength, Math.min(1074, 2 * tolerance.coordinateBits)), budget, velocityResolved, evaluations);
+		}
+		var refined = new ArrayList<Support>(); boolean accepted = true;
+		for (int l = 0; l < corrected.leaves().size(); l++) {
+			var leaf = corrected.leaves().get(l); boolean resolved = true;
+			var byControl = new java.util.HashMap<Integer, PhaseStats>(); for (var observation : planarStatistics.get(l)) byControl.put(observation.control, observation);
+			for (int p = 0; p < leaf.phases.size(); p++) {
+				var phase = leaf.phases.get(p); if (phase.control == complement && empty.signum() > 0) continue;
+				var original = byControl.get(phase.control); var represented = LiquidVolumeInterface.measure(phase.pieces);
+				var center = represented.centroidCoordinates(); var desired = original.sourceMeasure.centroidCoordinates(); var squared = Fraction.ZERO;
+				for (int a = 0; a < 3; a++) { var delta = center[a].subtract(desired[a]); squared = squared.add(delta.multiply(delta)); }
+				double centroid = squared.signum() == 0 ? 0 : Math.nextUp(Math.sqrt(Math.nextUp(squared.rounded())));
+				var difference = original.symmetricDifferenceVolumeBound.add(corrected.symmetricDifferenceBounds().get(l).get(p));
+				var length = difference.multiply(Fraction.of(leaf.open.width())).divide(original.sourceMeasure.volume());
+				double occupancy = length.signum() == 0 ? 0 : Math.nextUp(length.rounded());
+				resolved &= centroid <= tolerance.centroidDistance && occupancy <= tolerance.occupancyErrorLength;
+				var sum = totals.get(phase.control); sum.represented = sum.represented.add(represented); sum.difference = sum.difference.add(difference);
+				sum.centroidError = Math.max(sum.centroidError, centroid); sum.occupancyError = Math.max(sum.occupancyError, occupancy);
+			}
+			if (resolved) refined.add(originals.get(l));
+			else {
+				accepted = false; var original = originals.get(l);
+				for (var child : LiquidGeometryRefinement.children(original.open)) {
+					var sources = new ArrayList<Source>(); for (var source : original.sources) sources.add(new Source(source.control, clipped(source.pieces, child.geometry()), source.normal));
+					refined.add(new Support(child, sources));
+				}
+			}
+		}
+		if (!accepted) return retry(refined, tolerance, budget, velocityResolved, evaluations);
 		var statistics = new ArrayList<PhaseStats>();
 		totals.forEach((control, sum) -> {
 			if (!sum.source.volume().equals(sum.represented.volume())) throw new IllegalStateException("Local reconstruction lost exact control volume");
 			statistics.add(new PhaseStats(control, sum.source, sum.represented, sum.difference, sum.centroidError, sum.occupancyError));
 		});
-		return new Result(leaves, statistics, evaluations);
+		var visible = new ArrayList<Leaf>();
+		for (var leaf : corrected.leaves()) visible.add(new Leaf(leaf.open, leaf.phases.stream().filter(phase -> phase.control != complement || empty.signum() == 0).toList()));
+		return new Result(visible, statistics, evaluations);
+	}
+	private static Result retry(List<Support> supports, Tolerance tolerance, Budget budget, java.util.function.Predicate<LiquidGeometryRefinement.Cell> velocityResolved, int evaluations) {
+		if (supports.size() > budget.maximumLeaves) throw new IllegalStateException("Interface reconstruction exceeds its spatial leaf budget");
+		if (evaluations >= budget.maximumEvaluations) throw new IllegalStateException("Interface reconstruction exceeds its evaluation budget");
+		var result = reconstruct(supports, tolerance, new Budget(budget.maximumLeaves, budget.maximumEvaluations - evaluations, budget.maximumFitEvaluations, budget.maximumRegions), velocityResolved);
+		return new Result(result.leaves, result.phases, evaluations + result.evaluations);
+	}
+	/** A lower dyadic fitting volume cannot consume the next phase; final errors still use the original exact measure. */
+	private static LiquidExactPolygon.Measure fittingTarget(LiquidExactPolygon.Measure original, int bits) {
+		var volume = dyadicLower(original.volume(), bits); var center = original.centroidCoordinates(); var moment = new Fraction[3];
+		for (int a = 0; a < 3; a++) moment[a] = volume.multiply(dyadicLower(center[a], bits));
+		return new LiquidExactPolygon.Measure(volume, moment);
+	}
+	private static Fraction dyadicLower(Fraction v, int bits) {
+		if (v.signum() == 0) return Fraction.ZERO;
+		if (v.signum() < 0) throw new IllegalArgumentException("Negative normalized reconstruction coordinate");
+		int exponent = v.numerator().bitLength() - v.denominator().bitLength();
+		if ((exponent >= 0 ? v.numerator().compareTo(v.denominator().shiftLeft(exponent)) : v.numerator().shiftLeft(-exponent).compareTo(v.denominator())) < 0) exponent--;
+		int shift = bits - 1 - exponent;
+		var dividend = shift >= 0 ? v.numerator().shiftLeft(shift) : v.numerator();
+		var divisor = shift >= 0 ? v.denominator() : v.denominator().shiftLeft(-shift);
+		var significand = dividend.divide(divisor);
+		return shift >= 0 ? new Fraction(significand, java.math.BigInteger.ONE.shiftLeft(shift)) : new Fraction(significand.shiftLeft(-shift), java.math.BigInteger.ONE);
+	}
+	private static Fraction occupiedDifference(List<LiquidPolyhedron> original, List<LiquidPolyhedron> represented) {
+		var overlap = Fraction.ZERO;
+		for (var old : original) for (var next : represented) {
+			var common = LiquidExactPolygon.faces(old);
+			for (var plane : LiquidExactPolygon.faces(next).stream().map(LiquidExactPolygon::coefficients).distinct().toList()) {
+				common = LiquidExactPolygon.clipVolume(common, plane, 1); if (common.isEmpty()) break;
+			}
+			overlap = overlap.add(LiquidExactPolygon.volume(common));
+		}
+		return LiquidVolumeInterface.measure(original).volume().add(LiquidVolumeInterface.measure(represented).volume()).subtract(overlap.multiply(Fraction.of(2)));
 	}
 	/** Geometric ordering keeps material/control identifiers out of the reconstruction decision. */
 	private static int compare(Source a, Source b, LiquidGeometryRefinement.Cell open) {
@@ -196,8 +286,8 @@ final class LiquidMomentReconstruction {
 	private static List<LiquidPolyhedron> clipped(List<LiquidPolyhedron> pieces, LiquidPolyhedron open) {
 		var result = new ArrayList<LiquidPolyhedron>();
 		for (var piece : pieces) {
-			var region = LiquidConvexRegion.of(piece); for (var plane : open.planes()) region = region.clip(plane);
-			if (region.hasVolume()) result.add(region.geometry());
+			var faces = LiquidExactPolygon.faces(piece); for (var plane : LiquidExactPolygon.faces(open)) { faces = LiquidExactPolygon.clipVolume(faces, plane.coefficients(), 1); if (faces.isEmpty()) break; }
+			if (!faces.isEmpty()) result.add(faces == LiquidExactPolygon.faces(piece) ? piece : LiquidPolyhedron.restoredExact(faces));
 		}
 		return result;
 	}

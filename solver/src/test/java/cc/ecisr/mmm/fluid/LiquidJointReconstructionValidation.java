@@ -8,12 +8,76 @@ final class LiquidJointReconstructionValidation {
 	static void validate() {
 		compositeCutsUseOneVolumeConstraint();
 		sharedVolumeCorrectionBoundsItsOccupiedSpaceChange();
+		globalVolumeCorrectionKeepsSharedLeafCoverage();
+		jointCutsRetainSmallRemainingPhases();
 		jointControlsRetainIndependentVolumeAndIdentity();
 		equalMomentControlsKeepGeometricOrder();
 		reconstructionPlanKeepsInventoriesAndMomentum();
 		velocityProjectionRefinesSpatialError();
+		volumeRedistributionCarriesConservativeMoments();
 		resolvedLeavesCarryIndependentControls();
 		jointGasReconstructionPreservesMaterialChambers();
+	}
+	private static void jointCutsRetainSmallRemainingPhases() {
+		var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		double width = Math.scalb(1.0, -100); var small = open.geometry().clip(1, 0, 0, width); var large = open.geometry().clip(-1, 0, 0, -width);
+		var tolerance = new LiquidMomentReconstruction.Tolerance(1e-8, 1e-7, 32); var budget = new LiquidMomentReconstruction.Budget(1, 64, 8, 4096);
+		var result = LiquidMomentReconstruction.reconstruct(open, List.of(new LiquidMomentReconstruction.Source(13, List.of(large), new LiquidPolyhedron.Point(0, 1, 0)),
+				new LiquidMomentReconstruction.Source(4, List.of(small), new LiquidPolyhedron.Point(1, 0, 0))), tolerance, budget);
+		if (result.leaves().size() != 1 || result.phases().size() != 2) throw new AssertionError("A resolved minority phase requested unnecessary spatial refinement");
+		for (var phase : result.phases()) if (!phase.sourceMeasure().same(phase.representedMeasure()) || phase.symmetricDifferenceVolumeBound().signum() != 0)
+			throw new AssertionError("Majority centroid rounding displaced a resolved remaining phase");
+		var angled = open.geometry().clip(1, 2, 3, 3); var remainder = open.geometry().clip(-1, -2, -3, -3);
+		var occupiedTolerance = new LiquidMomentReconstruction.Tolerance(0.5, 1e-4, 48);
+		var fitted = LiquidMomentReconstruction.reconstruct(open, List.of(new LiquidMomentReconstruction.Source(13, List.of(angled), new LiquidPolyhedron.Point(1, 0, 0)),
+				new LiquidMomentReconstruction.Source(4, List.of(remainder), new LiquidPolyhedron.Point(1, 0, 0))), occupiedTolerance, new LiquidMomentReconstruction.Budget(1, 128, 24, 4096));
+		if (fitted.leaves().size() != 1 || fitted.evaluations() <= 1 || fitted.phases().stream().anyMatch(phase -> phase.maximumOccupancyErrorLength() > occupiedTolerance.occupancyErrorLength()))
+			throw new AssertionError("Moment fitting stopped at its centroid tolerance while occupied-space accuracy remained unresolved");
+	}
+	private static void globalVolumeCorrectionKeepsSharedLeafCoverage() {
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var leaves = new java.util.ArrayList<LiquidMomentReconstruction.Leaf>(); var targets = new java.util.LinkedHashMap<Integer, Fraction>();
+		var delta = Fraction.of(Math.scalb(1.0, -18)); targets.put(11, Fraction.of(0.5).add(delta)); targets.put(29, Fraction.of(0.5).subtract(delta));
+		for (var cell : LiquidGeometryRefinement.children(root)) {
+			double level = cell.minimum(1) + cell.width() * 0.5;
+			leaves.add(new LiquidMomentReconstruction.Leaf(cell, List.of(new LiquidMomentReconstruction.Phase(11, List.of(cell.geometry().clip(0, 1, 0, level))),
+					new LiquidMomentReconstruction.Phase(29, List.of(cell.geometry().clip(0, -1, 0, -level))))));
+		}
+		var corrected = LiquidJointInterfaceVolume.project(leaves, targets, 4096); var volumes = new java.util.HashMap<Integer, Fraction>();
+		for (int l = 0; l < leaves.size(); l++) {
+			var leaf = corrected.leaves().get(l); var address = LiquidPhasePartition.Address.of(leaf.open());
+			LiquidPhasePartition.requireComplete(leaf.open(), leaf.phases().stream().flatMap(phase -> phase.pieces().stream()).map(address::cell).toList());
+			for (int p = 0; p < leaf.phases().size(); p++) {
+				var phase = leaf.phases().get(p); var measured = LiquidVolumeInterface.measure(phase.pieces()); volumes.merge(phase.control(), measured.volume(), Fraction::add);
+				var original = LiquidVolumeInterface.measure(leaves.get(l).phases().get(p).pieces());
+				var actualDifference = original.volume().add(measured.volume()).subtract(overlap(leaves.get(l).phases().get(p).pieces(), phase.pieces()).multiply(Fraction.of(2)));
+				if (actualDifference.subtract(corrected.symmetricDifferenceBounds().get(l).get(p)).signum() > 0) throw new AssertionError("Global volume correction understated a leaf's occupied-space error");
+			}
+		}
+		if (!volumes.equals(targets)) throw new AssertionError("Global shared-face correction lost material volume");
+	}
+	private static void volumeRedistributionCarriesConservativeMoments() {
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var children = LiquidGeometryRefinement.children(root); var leaves = List.of(children.get(0), children.get(1));
+		var delta = Fraction.of(Math.scalb(1.0, -10)); var firstVolume = Fraction.of(0.0625).add(delta); var secondVolume = Fraction.of(0.03125).subtract(delta);
+		var first = LiquidGeometryVelocityProjection.observe(firstVolume, List.of(Fraction.ZERO, Fraction.ZERO, Fraction.ZERO), Fraction.ZERO);
+		var second = LiquidGeometryVelocityProjection.observe(secondVolume, List.of(secondVolume, Fraction.ZERO, Fraction.ZERO), secondVolume.divide(Fraction.of(2)));
+		var sources = List.of(new LiquidConservativeVolumeRedistribution.Source(0, 7, first), new LiquidConservativeVolumeRedistribution.Source(1, 7, second));
+		var targets = List.of(new LiquidConservativeVolumeRedistribution.Target(0, 7, Fraction.of(0.0625)), new LiquidConservativeVolumeRedistribution.Target(1, 7, Fraction.of(0.03125)));
+		var result = LiquidConservativeVolumeRedistribution.project(leaves, sources, targets);
+		var a = result.fields().get(0).get(7); var b = result.fields().get(1).get(7);
+		if (a.velocity()[0] != 0 || b.velocity()[0] != 31.0 / 32 || !a.momentum().getFirst().add(b.momentum().getFirst()).equals(secondVolume)
+				|| !a.originalKinetic().add(b.originalKinetic()).equals(secondVolume.divide(Fraction.of(2)))
+				|| !a.kineticLoss().add(b.kineticLoss()).equals(Fraction.of(31.0 / 65536)) || !result.movedVolume().equals(delta)
+				|| !result.squaredDisplacementVolumeBound().equals(delta.multiply(Fraction.of(1.5))))
+			throw new AssertionError("Positive volume redistribution lost momentum, its kinetic audit or spatial displacement bound");
+		var reordered = LiquidConservativeVolumeRedistribution.project(leaves, List.of(sources.get(1), sources.get(0)), List.of(targets.get(1), targets.get(0)));
+		if (!java.util.Arrays.equals(reordered.fields().get(1).get(7).velocity(), b.velocity()) || !reordered.movedVolume().equals(result.movedVolume()))
+			throw new AssertionError("Conservative volume redistribution depends on source submission order");
+		try {
+			LiquidConservativeVolumeRedistribution.project(leaves, sources, List.of(targets.getFirst()));
+			throw new AssertionError("Unequal inventory volumes accepted a conservative redistribution");
+		} catch (IllegalStateException expected) { if (!expected.getMessage().contains("unequal source and target volumes")) throw expected; }
 	}
 	private static Fraction overlap(List<LiquidPolyhedron> a, List<LiquidPolyhedron> b) {
 		var result = Fraction.ZERO;
@@ -50,6 +114,10 @@ final class LiquidJointReconstructionValidation {
 		var plateau = LiquidVolumeInterface.reconstruct(separated, Fraction.of(0.25), new LiquidPolyhedron.Point(1, 0, 0), 48);
 		if (!plateau.measure.same(separated.getFirst().measure()) || plateau.pieces.size() != 1)
 			throw new AssertionError("An exact common-cut volume plateau changed its component geometry");
+		var thin = LiquidPolyhedron.box(0, 0, 0, 1, 1, Math.scalb(1.0, -40)); var requested = thin.clip(1, 2, 0, 1.5).measure();
+		var fit = LiquidMomentInterface.reconstruct(thin, requested, new LiquidPolyhedron.Point(1, 0, 0), 48, 1e-9, 24);
+		if (fit.centroidError() > 1e-9 || fit.evaluations() <= 1 || !fit.interfaceGeometry().measure.volume().equals(requested.volume()))
+			throw new AssertionError("An anisotropic positive-area cap was discarded as a rank-deficient moment fit");
 	}
 	private static void jointControlsRetainIndependentVolumeAndIdentity() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1); var remainder = cube.clip(-1, -2, -3, -3);
