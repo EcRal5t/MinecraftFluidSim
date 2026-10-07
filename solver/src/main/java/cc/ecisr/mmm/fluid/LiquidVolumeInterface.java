@@ -42,15 +42,15 @@ final class LiquidVolumeInterface {
 		var n = new Fraction[]{Fraction.of(normal.x()), Fraction.of(normal.y()), Fraction.of(normal.z())};
 		var norm = dot(n, n); if (norm.signum() == 0) throw new IllegalArgumentException("Absent interface normal");
 		var originals = open.stream().map(LiquidConvexRegion::of).toList(); var capacity = measure(open).volume();
-		if (originals.stream().anyMatch(region -> !region.hasVolume()) || volume.signum() < 0 || volume.subtract(capacity).signum() > 0)
+		if (originals.stream().anyMatch(region -> !region.hasVolume()) || volume.signum() < 0 || volume.compareTo(capacity) > 0)
 			throw new IllegalArgumentException("Interface volume exceeds its positive open region");
 		if (volume.signum() == 0) return new LiquidVolumeInterface(List.of(), Fraction.ZERO, 0, List.of(), n, 0);
 		if (volume.equals(capacity)) return new LiquidVolumeInterface(open, Fraction.ZERO, 0, List.of(), n, 0);
 		Fraction lo = null, hi = null;
 		for (var original : originals) for (var face : original.faces()) for (var p : face.vertices()) {
 			var value = dot(n, p.coordinates());
-			if (lo == null || value.subtract(lo).signum() < 0) lo = value;
-			if (hi == null || value.subtract(hi).signum() > 0) hi = value;
+			if (lo == null || value.compareTo(lo) < 0) lo = value;
+			if (hi == null || value.compareTo(hi) > 0) hi = value;
 		}
 		if (!exactVolume) { lo = dyadic(lo, bits, false); hi = dyadic(hi, bits, true); }
 		var tolerance = hi.subtract(lo).divide(new Fraction(java.math.BigInteger.ONE.shiftLeft(bits), java.math.BigInteger.ONE));
@@ -58,32 +58,32 @@ final class LiquidVolumeInterface {
 		int evaluations = 0;
 		var first = lo.add(hi).divide(Fraction.of(2)); var second = first;
 		for (int i = 0; i < bits; i++) {
-			Cut nearest = null; Fraction nearestOffset = null;
+			Cut nearest = null; Fraction nearestOffset = null, nearestDistance = null;
 			for (var offset : first.equals(second) ? List.of(first) : List.of(first, second)) {
-				if (offset.subtract(lo).signum() <= 0 || hi.subtract(offset).signum() <= 0) continue;
+				if (offset.compareTo(lo) <= 0 || hi.compareTo(offset) <= 0) continue;
 				var trial = cut(originals, n, offset); evaluations++;
-				int side = trial.volume.subtract(volume).signum();
+				var distance = trial.volume.subtract(volume); int side = distance.signum();
 				if (side == 0) return new LiquidVolumeInterface(trial.parts.stream().map(Part::geometry).toList(), Fraction.ZERO, 0, caps(trial), n, evaluations);
 				if (side < 0) { lo = offset; lower = trial; } else hi = offset;
-				if (nearest == null || trial.volume.subtract(volume).absolute().subtract(nearest.volume.subtract(volume).absolute()).signum() < 0) {
-					nearest = trial; nearestOffset = offset;
+				if (nearest == null || distance.absolute().compareTo(nearestDistance) < 0) {
+					nearest = trial; nearestOffset = offset; nearestDistance = distance.absolute();
 				}
 			}
-			if (hi.subtract(lo).subtract(tolerance).signum() <= 0) break;
+			if (hi.subtract(lo).compareTo(tolerance) <= 0) break;
 			first = lo.add(hi).divide(Fraction.of(2)); second = first;
 			if (nearest == null) continue;
 			var derivative = Fraction.ZERO;
 			for (var cap : caps(nearest)) derivative = derivative.add(dot(cap.areaVector(), n).divide(norm));
 			if (derivative.signum() <= 0) continue;
 			var proposed = nearestOffset.add(volume.subtract(nearest.volume).divide(derivative));
-			if (proposed.subtract(lo).signum() <= 0 || hi.subtract(proposed).signum() <= 0) continue;
+			if (proposed.compareTo(lo) <= 0 || hi.compareTo(proposed) <= 0) continue;
 			// The neighbouring dyadic offsets can certify a narrow bracket without importing Newton denominators.
 			first = dyadic(proposed, 2 * bits, false); second = dyadic(proposed, 2 * bits, true);
 		}
 		// Bisection certifies the original interval bound even when the derivative vanishes or Newton stalls.
-		for (int i = 0; i < bits && hi.subtract(lo).subtract(tolerance).signum() > 0; i++) {
+		for (int i = 0; i < bits && hi.subtract(lo).compareTo(tolerance) > 0; i++) {
 			var mid = lo.add(hi).divide(Fraction.of(2)); var trial = cut(originals, n, mid); evaluations++;
-			int side = trial.volume.subtract(volume).signum();
+			int side = trial.volume.compareTo(volume);
 			if (side == 0) return new LiquidVolumeInterface(trial.parts.stream().map(Part::geometry).toList(), Fraction.ZERO, 0, caps(trial), n, evaluations);
 			if (side < 0) { lo = mid; lower = trial; } else hi = mid;
 		}
@@ -95,7 +95,7 @@ final class LiquidVolumeInterface {
 		Part selected = null; var largest = Fraction.ZERO;
 		for (var part : lower.parts) if (part.cap != null) {
 			var squared = dot(part.cap.areaVector(), part.cap.areaVector());
-			if (squared.subtract(largest).signum() > 0) { selected = part; largest = squared; }
+			if (squared.compareTo(largest) > 0) { selected = part; largest = squared; }
 		}
 		if (selected == null) throw new LiquidCoordinateResolutionRequired("Interface offset has no partial cap at its coordinate precision");
 		var difference = volume.subtract(lower.volume); var area = selected.cap.areaVector();

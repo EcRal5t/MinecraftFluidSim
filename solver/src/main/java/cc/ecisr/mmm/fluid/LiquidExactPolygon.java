@@ -64,6 +64,11 @@ final class LiquidExactPolygon {
 		@Override public boolean equals(Object other) { return other instanceof Fraction value && numerator.equals(value.numerator) && denominator.equals(value.denominator); }
 		@Override public int hashCode() { return 31 * numerator.hashCode() + denominator.hashCode(); }
 		@Override public String toString() { return numerator + "/" + denominator; }
+		int compareTo(Fraction other) {
+			int signs = Integer.compare(signum(), other.signum()); if (signs != 0) return signs;
+			if (denominator.equals(other.denominator)) return numerator.compareTo(other.numerator);
+			return numerator.multiply(other.denominator).compareTo(other.numerator.multiply(denominator));
+		}
 		Fraction add(Fraction other) {
 			if (signum() == 0) return other; if (other.signum() == 0) return this;
 			var common = gcd(denominator, other.denominator); var first = denominator.divide(common); var second = other.denominator.divide(common);
@@ -191,13 +196,15 @@ final class LiquidExactPolygon {
 		for (int omitted = 0; omitted < 4; omitted++) {
 			var minor = new Vertex[3]; for (int i = 0, out = 0; i < 4; i++) if (i != omitted) minor[out++] = points.get(i);
 			var a = minor[0]; var b = minor[1]; var c = minor[2];
-			var triple = a.x().multiply(b.y().multiply(c.z()).subtract(b.z().multiply(c.y())))
-					.add(a.y().multiply(b.z().multiply(c.x()).subtract(b.x().multiply(c.z()))))
-					.add(a.z().multiply(b.x().multiply(c.y()).subtract(b.y().multiply(c.x()))));
-			var contribution = points.get(omitted).w().multiply(triple);
+			var contribution = points.get(omitted).w().multiply(spatialTriple(a, b, c));
 			determinant = omitted % 2 == 0 ? determinant.add(contribution) : determinant.subtract(contribution);
 		}
 		return determinant;
+	}
+	private static BigInteger spatialTriple(Vertex a, Vertex b, Vertex c) {
+		return a.x().multiply(b.y().multiply(c.z()).subtract(b.z().multiply(c.y())))
+				.add(a.y().multiply(b.z().multiply(c.x()).subtract(b.x().multiply(c.z()))))
+				.add(a.z().multiply(b.x().multiply(c.y()).subtract(b.y().multiply(c.x()))));
 	}
 	static Fraction tetrahedronVolume(List<Vertex> points) {
 		var determinant = homogeneousTetrahedronDeterminant(points); var denominator = BigInteger.valueOf(6);
@@ -299,11 +306,14 @@ final class LiquidExactPolygon {
 	static Fraction volume(List<LiquidExactPolygon> faces) {
 		var volume = Fraction.ZERO;
 		for (var face : faces) {
-			if (!face.hasArea()) continue;
-			var plane = face.coefficients(); int axis = 0; while (plane.get(axis).signum() == 0) axis++;
-			volume = volume.add(face.areaVector()[axis].multiply(new Fraction(plane.get(3), plane.get(axis))));
+			var corners = face.integrationCorners(); if (corners.size() < 3) continue;
+			var a = corners.getFirst();
+			for (int i = 1; i + 1 < corners.size(); i++) {
+				var b = corners.get(i); var c = corners.get(i + 1); var numerator = spatialTriple(a, b, c);
+				if (numerator.signum() != 0) volume = volume.add(new Fraction(numerator, a.w().multiply(b.w()).multiply(c.w())));
+			}
 		}
-		return volume.divide(Fraction.of(3));
+		return volume.divide(Fraction.of(6));
 	}
 	boolean hasArea() {
 		if (vertices.size() < 3) return false;

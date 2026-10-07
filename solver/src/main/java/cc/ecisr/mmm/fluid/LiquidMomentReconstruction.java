@@ -70,7 +70,7 @@ final class LiquidMomentReconstruction {
 		capacity = capacity.add(open.geometry().measure().volume());
 		for (var face : LiquidExactPolygon.faces(open.geometry())) for (var vertex : face.vertices()) for (int axis = 0; axis < 3; axis++) {
 			var coordinate = vertex.coordinates()[axis]; var lo = Fraction.of(open.minimum(axis));
-			if (coordinate.subtract(lo).signum() < 0 || coordinate.subtract(lo.add(Fraction.of(open.width()))).signum() > 0)
+			if (coordinate.compareTo(lo) < 0 || coordinate.compareTo(lo.add(Fraction.of(open.width()))) > 0)
 				throw new IllegalArgumentException("Open interface geometry leaves its dyadic cell");
 		}
 		var address = LiquidPhasePartition.Address.of(open); var identifiers = new java.util.HashSet<Integer>();
@@ -115,22 +115,22 @@ final class LiquidMomentReconstruction {
 						var source = order.get(candidate); var original = LiquidVolumeInterface.measure(source.pieces);
 						if (evaluations >= budget.maximumEvaluations) throw new IllegalStateException("Interface reconstruction exceeds its evaluation budget");
 						var remainingVolume = availableVolume.subtract(original.volume());
-						var scale = remainingVolume.signum() > 0 && remainingVolume.subtract(original.volume()).signum() < 0 ? remainingVolume : original.volume();
+						var scale = remainingVolume.signum() > 0 && remainingVolume.compareTo(original.volume()) < 0 ? remainingVolume : original.volume();
 						var allowed = scale.multiply(Fraction.of(tolerance.occupancyErrorLength)).divide(Fraction.of(cell.open.width()));
 						var work = new LiquidMomentInterface.Work(Math.min(budget.maximumFitEvaluations, budget.maximumEvaluations - evaluations));
 						LiquidMomentInterface.Result fit;
 						try { fit = LiquidMomentInterface.planar(available, fittingTarget(original, cell.coordinateBits), source.normal, cell.coordinateBits, tolerance.centroidDistance, work, representation -> {
-							if (original.volume().subtract(representation.measure.volume()).absolute().subtract(allowed).signum() > 0)
+							if (original.volume().subtract(representation.measure.volume()).absolute().compareTo(allowed) > 0)
 								throw new LiquidCoordinateResolutionRequired("Joint cut volume error exceeds the remaining phase's spatial tolerance");
-							return occupiedDifference(source.pieces, representation.pieces).subtract(allowed).signum() <= 0;
+							return occupiedDifference(source.pieces, representation.pieces).compareTo(allowed) <= 0;
 						}); }
 						finally { evaluations += work.evaluations; }
 						hints.put(source.control, fit.normal());
 						var geometry = fit.interfaceGeometry().pieces; var represented = fit.interfaceGeometry().measure;
-						if (original.volume().subtract(represented.volume()).absolute().subtract(allowed).signum() > 0)
+						if (original.volume().subtract(represented.volume()).absolute().compareTo(allowed) > 0)
 							throw new LiquidCoordinateResolutionRequired("Joint cut volume error exceeds the remaining phase's spatial tolerance");
 						var difference = occupiedDifference(source.pieces, geometry);
-						if (difference.subtract(allowed).signum() > 0 || fit.interfaceGeometry().centroidDistance(original) > tolerance.centroidDistance) continue;
+						if (difference.compareTo(allowed) > 0 || fit.interfaceGeometry().centroidDistance(original) > tolerance.centroidDistance) continue;
 						java.util.Collections.swap(order, p, candidate); phases.add(new Phase(source.control, geometry));
 						for (var part : geometry) assigned.add(LiquidPhasePartition.Address.of(cell.open).cell(part));
 						available = LiquidGasPartition.build(cell.open, assigned, budget.maximumRegions); found = true; break;
@@ -265,9 +265,9 @@ final class LiquidMomentReconstruction {
 	private static int compare(Source a, Source b, LiquidGeometryRefinement.Cell open) {
 		if (a == b) return 0;
 		var first = LiquidVolumeInterface.measure(a.pieces); var second = LiquidVolumeInterface.measure(b.pieces);
-		int result = second.volume().subtract(first.volume()).signum(); if (result != 0) return result;
+		int result = second.volume().compareTo(first.volume()); if (result != 0) return result;
 		var x = first.centroidCoordinates(); var y = second.centroidCoordinates();
-		for (int i = 0; i < 3; i++) { result = x[i].subtract(y[i]).signum(); if (result != 0) return result; }
+		for (int i = 0; i < 3; i++) { result = x[i].compareTo(y[i]); if (result != 0) return result; }
 		return compareOccupancy(a.pieces, b.pieces, open);
 	}
 	/** Equal volume and centroid still describe distinct controls; dyadic occupancy resolves their geometric order. */
@@ -277,7 +277,7 @@ final class LiquidMomentReconstruction {
 		for (var child : LiquidGeometryRefinement.children(open)) {
 			var x = clipped(a, child.geometry()); var y = clipped(b, child.geometry());
 			var v = LiquidVolumeInterface.measure(x).volume(); var w = LiquidVolumeInterface.measure(y).volume();
-			int comparison = w.subtract(v).signum(); if (comparison != 0) return comparison;
+			int comparison = w.compareTo(v); if (comparison != 0) return comparison;
 			if (shared == null && v.signum() > 0) { shared = child; first = x; second = y; }
 		}
 		if (shared == null) throw new IllegalStateException("Positive equal-moment phases lost their dyadic support");

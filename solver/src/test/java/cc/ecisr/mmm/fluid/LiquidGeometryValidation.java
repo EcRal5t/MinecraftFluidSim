@@ -15,6 +15,12 @@ final class LiquidGeometryValidation {
 				throw new AssertionError("Large exact rational normalization changed its canonical representation");
 		}
 		var power = java.math.BigInteger.ONE.shiftLeft(65536);
+		var below = new LiquidExactPolygon.Fraction(power.subtract(java.math.BigInteger.ONE), power);
+		var above = new LiquidExactPolygon.Fraction(power.add(java.math.BigInteger.ONE), power);
+		var one = LiquidExactPolygon.Fraction.of(1);
+		if (below.rounded() != above.rounded() || below.compareTo(one) >= 0 || above.compareTo(one) <= 0 || below.compareTo(above) >= 0
+				|| below.negate().compareTo(above.negate()) <= 0 || below.compareTo(below) != 0 || below.negate().compareTo(LiquidExactPolygon.Fraction.ZERO) >= 0)
+			throw new AssertionError("Exact fraction ordering lost a sub-observation difference or its sign");
 		for (var pair : java.util.List.of(new java.math.BigInteger[]{power, power}, new java.math.BigInteger[]{power, java.math.BigInteger.ZERO},
 				new java.math.BigInteger[]{java.math.BigInteger.ZERO, power}, new java.math.BigInteger[]{power.multiply(power), power},
 				new java.math.BigInteger[]{power.add(java.math.BigInteger.ONE), power}, new java.math.BigInteger[]{power.subtract(java.math.BigInteger.ONE), power}))
@@ -52,7 +58,8 @@ final class LiquidGeometryValidation {
 			var points = java.util.List.of(new LiquidPolyhedron.Point(shift + 0.125, 0.25, 0.375), new LiquidPolyhedron.Point(shift + 0.75, 0.375, 0.25),
 					new LiquidPolyhedron.Point(shift + 0.375, 0.875, 0.25), new LiquidPolyhedron.Point(shift + 0.25, 0.5, 0.875));
 			var vertices = points.stream().map(p -> LiquidExactPolygon.vertex(new LiquidExactPolygon.Fraction[]{LiquidExactPolygon.Fraction.of(p.x()), LiquidExactPolygon.Fraction.of(p.y()), LiquidExactPolygon.Fraction.of(p.z())})).toList();
-			if (!LiquidExactPolygon.measure(LiquidExactPolygon.tetrahedron(vertices)).same(LiquidExactPolygon.tetrahedronMeasure(vertices)))
+			var surface = LiquidExactPolygon.tetrahedron(vertices); var measured = LiquidExactPolygon.measure(surface);
+			if (!measured.same(LiquidExactPolygon.tetrahedronMeasure(vertices)) || !LiquidExactPolygon.volume(surface).equals(measured.volume()))
 				throw new AssertionError("Planar surface integration differs from independent tetrahedron volume and centroid");
 			var reversed = new java.util.ArrayList<>(vertices); java.util.Collections.swap(reversed, 1, 2);
 			if (!LiquidExactPolygon.tetrahedronVolume(vertices).equals(LiquidExactPolygon.tetrahedronVolume(reversed))

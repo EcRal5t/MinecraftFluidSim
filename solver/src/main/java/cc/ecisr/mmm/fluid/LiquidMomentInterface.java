@@ -61,8 +61,8 @@ final class LiquidMomentInterface {
 			if (det.signum() == 0) break;
 			if (det.signum() < 0) throw new IllegalStateException("Moment fit has an indefinite exact centroid metric");
 			var dx = bb.multiply(ar).subtract(ab.multiply(br)).divide(det); var dy = aa.multiply(br).subtract(ab.multiply(ar)).divide(det);
-			var magnitude = dx.absolute().subtract(dy.absolute()).signum() > 0 ? dx.absolute() : dy.absolute();
-			if (magnitude.subtract(LiquidExactPolygon.Fraction.of(1)).signum() > 0) { dx = dx.divide(magnitude); dy = dy.divide(magnitude); }
+			var magnitude = dx.absolute().compareTo(dy.absolute()) > 0 ? dx.absolute() : dy.absolute();
+			if (magnitude.compareTo(LiquidExactPolygon.Fraction.of(1)) > 0) { dx = dx.divide(magnitude); dy = dy.divide(magnitude); }
 			double x = dx.rounded(), y = dy.rounded(), length = Math.hypot(x, y);
 			if (!(length > 0) || !Double.isFinite(length)) break;
 			// A unit angular trust interval and monotone line search bound each orientation update.
