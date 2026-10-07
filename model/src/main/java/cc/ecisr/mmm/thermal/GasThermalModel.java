@@ -77,6 +77,27 @@ public final class GasThermalModel {
 		return stateFunction.stateForInventory(portions(inventory), internalEnergy);
 	}
 
+	/** A complete finite chamber has one caloric unknown throughout a conduction solve. */
+	public ThermalContactExchange.Body caloricBody(GasInventory inventory, double internalEnergy) {
+		var portions = portions(inventory);
+		var initial = stateFunction.stateForInventory(portions, internalEnergy);
+		return new ThermalContactExchange.Body() {
+			@Override public double temperatureK() { return initial.temperatureK(); }
+			@Override public double heatCapacityEuPerK() { return initial.heatCapacityEuPerK(); }
+			@Override public double energyChangeToTemperature(double target) {
+				double change = 0;
+				for (var portion : portions) change += portion.massMu() * thermalRegistry.material(portion.materialHandle())
+						.sensibleSpecificEnergyBetween(initial.temperatureK(), target);
+				if (!Double.isFinite(change)) throw new IllegalArgumentException("Gas caloric change is not finite");
+				return change;
+			}
+			@Override public ThermalStateFunction.State stateAfterEnergyChange(double change) {
+				if (!Double.isFinite(change)) throw new IllegalArgumentException("Gas caloric change is not finite");
+				return stateFunction.stateForInventory(portions, internalEnergy + change);
+			}
+		};
+	}
+
 	/** Validates the complete authoritative inventory/U pair, including explicit vacuum. */
 	public void requireInventoryEnergy(GasInventory inventory, double internalEnergy) {
 		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");

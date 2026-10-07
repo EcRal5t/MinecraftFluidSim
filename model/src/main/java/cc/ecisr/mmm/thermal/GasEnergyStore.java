@@ -91,6 +91,11 @@ public final class GasEnergyStore {
 		return gasModel.absolutePressure(inventory, network.availableVolume(nodeId), energy);
 	}
 
+	public ThermalContactExchange.Body caloricBody(int nodeId, AirNetwork network) {
+		requireNodeState(nodeId, network.inventory(nodeId), nodeEnergy(nodeId, network), network);
+		return gasModel.caloricBody(network.inventory(nodeId), nodeEnergy[nodeId - 1]);
+	}
+
 	void commitNodeEnergy(int nodeId, double energy) {
 		if (nodeId <= 0 || nodeId > nodeEnergy.length || !Double.isFinite(energy)) {
 			throw new IllegalArgumentException("Gas phase energy commit is invalid");

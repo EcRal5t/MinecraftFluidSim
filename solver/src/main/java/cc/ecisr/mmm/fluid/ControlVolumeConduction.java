@@ -74,7 +74,8 @@ final class ControlVolumeConduction {
 					trial[i] = value[i] + scale * correction[i]; changed |= trial[i] != value[i];
 					valid &= Double.isFinite(trial[i]) && (i >= inventories || reference + trial[i] >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
 				}
-				if (!changed) throw new IllegalStateException("Resolved conduction correction is below its temperature precision");
+				if (!changed) throw new IllegalStateException("Resolved conduction correction is below its temperature precision: residual="
+						+ error + ", requested=" + energyTolerance);
 				if (valid) {
 					evaluate(bodies, reference, trial, dt, trialResidual, trialCapacity); mask(trialResidual, free);
 					if (maximum(trialResidual) < error) { System.arraycopy(trial, 0, value, 0, value.length); break; }

@@ -184,6 +184,16 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		GasThermalModel piecewise = new GasThermalModel(new ThermalRegistry(List.of(piecewiseAir)), gas);
 		double piecewiseInitial = piecewise.internalEnergyAtTemperature(
 				inventory, GasRegistry.STANDARD_TEMPERATURE_K);
+		var caloric = piecewise.caloricBody(inventory, piecewiseInitial);
+		for (double target : new double[]{100, GasRegistry.STANDARD_TEMPERATURE_K, 400, 700, 2000}) {
+			double change = caloric.energyChangeToTemperature(target);
+			var state = caloric.stateAfterEnergyChange(change);
+			require(close(state.temperatureK(), target) && close(state.heatCapacityEuPerK(), inventory.totalMass() * piecewiseAir.specificHeatAt(target))
+					&& close(change, piecewise.internalEnergyAtTemperature(inventory, target) - piecewiseInitial),
+					"finite gas caloric body failed the complete inventory state function across heat-capacity segments");
+		}
+		require(caloric.energyChangeToTemperature(caloric.temperatureK()) == 0, "unchanged gas temperature created sensible heat");
+		expectFailure(() -> piecewise.caloricBody(GasInventory.EMPTY, 0), "vacuum conduction heat capacity");
 		GasThermalModel.Compression acrossSegment = piecewise.compressAdiabatically(
 				inventory, piecewiseInitial, 1.0, 0.1);
 		double entropyToBoundary = inventory.totalMass() * 718.0

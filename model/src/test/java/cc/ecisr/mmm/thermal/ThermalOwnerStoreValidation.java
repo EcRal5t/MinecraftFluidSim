@@ -176,7 +176,7 @@ public final class ThermalOwnerStoreValidation {
 		for (var full : List.of(SignedDyadic.of(1), midpoint)) {
 			markers.completeMass = full; double physical = domainScale.kilograms(full).toDouble();
 			domain.resetMarkerTemperature(0, 330, markers, domain.exactEnergy(1));
-			var body = domain.prepareLiquidConduction(markers).bodies().getFirst();
+			var body = domain.prepareConduction(markers, null).liquidBodies().getFirst();
 			require(body.massKilograms() == physical && body.baseEnergyEu() == function.baseEnergy(0, physical, Map.of())
 					&& domain.carrierAccess(markers).mass(0) == physical && domain.temperature(0, markers) == body.temperatureK(),
 					"Conduction and spatial caloric observations used different physical mass");
