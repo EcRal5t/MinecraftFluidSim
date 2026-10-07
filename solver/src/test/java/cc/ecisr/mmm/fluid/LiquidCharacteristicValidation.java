@@ -81,7 +81,7 @@ final class LiquidCharacteristicValidation {
 		var state = domain.liquidGeometryState; var cells = new ArrayList<>(LiquidGeometryStateMapper.restore(state));
 		cells.addAll(LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells()));
 		var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, cells, 4096);
-		var input = new LiquidGeometryPhaseInput(state, partition, domain.gasState.geometry, 4096);
+		var input = new LiquidGeometryPhaseInput(state, partition, domain.gasState.geometry, 4096, java.util.Set.of());
 		var properties = new LiquidGeometryCarrierProperties(domain, state, input);
 		return new LiquidAreaEnergy(input.mesh.exactPolygons, properties.surfaceCoefficient).joules;
 	}

@@ -18,7 +18,10 @@ final class LiquidGeometryPhaseInput {
 	final List<List<LiquidGeometryRefinement.Cell>> mechanicalSupport;
 
 	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions) {
-		this(state, domain, sealed, maximumRegions, null);
+		this(state, domain, sealed, maximumRegions, null, null);
+	}
+	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions, java.util.Set<Integer> refined) {
+		this(state, domain, sealed, maximumRegions, null, java.util.Set.copyOf(refined));
 	}
 	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, GasGeometryState gas, int maximumRegions) {
 		this(state, domain, java.util.Objects.requireNonNull(gas).sealedExterior(), maximumRegions, gas);
