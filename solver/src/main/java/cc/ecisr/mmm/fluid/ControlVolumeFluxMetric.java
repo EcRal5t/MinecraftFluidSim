@@ -35,6 +35,21 @@ final class ControlVolumeFluxMetric {
 		if (value.length != matrix.length) throw new IllegalArgumentException("Invalid local volume rates");
 		return exactAction.multiply(value);
 	}
+	/** For M = rho A^-1, this certifies l' M^-1 l using the original geometric pressure energy. */
+	LiquidBoundedArithmetic.Value dualEnergy(LiquidBoundedArithmetic.Value[] value) {
+		if (value.length != geometry.indices.length) throw new IllegalArgumentException("Incomplete dual pressure support");
+		var gradient = new LiquidBoundedArithmetic.Value[]{LiquidBoundedArithmetic.ZERO, LiquidBoundedArithmetic.ZERO, LiquidBoundedArithmetic.ZERO};
+		for (int i = 0; i < value.length; i++) for (int a = 0; a < 3; a++)
+			gradient[a] = gradient[a].add(LiquidBoundedArithmetic.Value.of(geometry.exactBasis[i][a]).multiply(value[i]));
+		var energy = LiquidBoundedArithmetic.ZERO;
+		for (int a = 0; a < 3; a++) energy = energy.add(LiquidBoundedArithmetic.Value.of(geometry.exactVolume).multiply(gradient[a].multiply(gradient[a])));
+		for (int i = 0; i < value.length; i++) {
+			var residual = value[i];
+			for (int a = 0; a < 3; a++) residual = residual.subtract(LiquidBoundedArithmetic.Value.of(geometry.exactDisplacement[i][a]).multiply(gradient[a]));
+			energy = energy.add(LiquidBoundedArithmetic.Value.of(geometry.exactWeight[i]).multiply(residual.multiply(residual)));
+		}
+		return energy.divide(new LiquidBoundedArithmetic.Value(density, 0));
+	}
 	/** Propagates input uncertainty and the final observation error of an already evaluated exact action. */
 	double[] evaluationError(double[] action, double[] inputError) {
 		int n = matrix.length; if (action.length != n || inputError.length != n) throw new IllegalArgumentException("Incomplete pressure action error support");

@@ -18,8 +18,11 @@ final class LiquidAffineFit {
 	private final Basis basis;
 
 	LiquidAffineFit(List<Fraction[]> centers, List<Fraction> weights) {
+		this(centers, weights, new Basis(centers));
+	}
+	LiquidAffineFit(List<Fraction[]> centers, List<Fraction> weights, Basis support) {
 		if (centers.isEmpty() || weights.size() != centers.size()) throw new IllegalArgumentException("Incomplete affine observations");
-		basis = new Basis(centers); coordinates = basis.coordinate;
+		basis = support; coordinates = basis.coordinate;
 		int n = centers.size(), rank = coordinates.length;
 		shape = new Form[n]; coefficientError = new double[n][rank + 1];
 		for (var weight : weights) if (weight.signum() <= 0) throw new IllegalArgumentException("Affine observations require positive volumes");
@@ -122,12 +125,13 @@ final class LiquidAffineFit {
 			var value = numerator[3].multiply(point.w()); for (int a = 0; a < 3; a++) value = value.add(numerator[a].multiply(point.coordinate(a))); return value;
 		}
 	}
-	private static final class Basis {
+	static final class Basis {
 		final int[] anchor;
 		final Form[] shape, coordinate;
 		private final Vertex reference;
 		private final List<Vertex> directions = new ArrayList<>();
 		Basis(List<Fraction[]> centers) {
+			if (centers.isEmpty()) throw new IllegalArgumentException("Empty affine support");
 			reference = LiquidExactPolygon.vertex(centers.getFirst());
 			var chosen = new ArrayList<Integer>(); chosen.add(0); var vectors = new ArrayList<Fraction[]>(); var integer = directions;
 			var candidates = new ArrayList<Vertex>();

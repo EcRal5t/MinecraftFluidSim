@@ -46,11 +46,36 @@ final class LiquidWetWallValidation {
 		var sigma = new double[rate.length]; for (int f = 0; f < sigma.length; f++) if (mesh.faces.get(f).second() < 0) sigma[f] = mesh.faces.get(f).second() == -2 ? wallCoefficient : 0.125;
 		field.requireSurfaceResolution(sigma);
 		var surface = new LiquidGeometricSurfaceEnergy(field, sigma); var projection = new LiquidControlVolumeProjection(mesh.cells, mesh.faces);
-		var gradients = ControlVolumeGradient.build(mesh.cells, mesh.faces); double inertia = Double.POSITIVE_INFINITY;
-		for (var gradient : gradients) inertia = Math.min(inertia, new ControlVolumeFluxMetric(gradient, 1000).minimumEigenvalue());
-		double excessiveDt = 2 * Math.sqrt(inertia / surface.pressure.negativeCurvatureBound());
+		var gradients = ControlVolumeGradient.build(mesh.cells, mesh.faces);
+		var metrics = java.util.Arrays.stream(gradients).map(gradient -> new ControlVolumeFluxMetric(gradient, 1000)).toArray(ControlVolumeFluxMetric[]::new);
+		double relative = surface.pressure.relativeCurvatureBound(metrics);
+		var physicalWalls = java.util.stream.IntStream.range(0, mesh.faces.size()).filter(f -> mesh.faces.get(f).second() == -2).mapToObj(mesh.exactPolygons::get).toList();
+		var physicalValues = new double[physicalWalls.size()]; Arrays.fill(physicalValues, wallCoefficient);
+		var uncutWall = new LiquidWetWallEnergy(physicalWalls, physicalValues);
+		var uncut = new LiquidPressureFaceEnergy(field, new LiquidAreaEnergy(List.of(), new double[0]), new LiquidSurfaceMetric(List.of(), new double[0]), uncutWall);
+		if (uncut.relativeCurvatureBound(metrics) != signed.relativeCurvatureBound(metrics)) throw new AssertionError("Auxiliary wall triangles changed the curvature certificate");
+		var rateEnergy = Fraction.ZERO; var observation = Fraction.ZERO;
+		for (var metric : metrics) {
+			var local = new double[metric.geometry.indices.length];
+			for (int i = 0; i < local.length; i++) local[i] = metric.geometry.sign[i] * q[metric.geometry.indices[i]];
+			var action = metric.multiply(local); var errors = metric.evaluationError(action, new double[local.length]);
+			for (int i = 0; i < local.length; i++) {
+				rateEnergy = rateEnergy.add(Fraction.of(local[i]).multiply(Fraction.of(action[i])));
+				observation = observation.add(Fraction.of(Math.abs(local[i])).multiply(Fraction.of(errors[i])));
+			}
+		}
+		if (Fraction.of(Math.abs(2 * energy)).compareTo(Fraction.of(signed.relativeCurvatureBound(metrics)).multiply(rateEnergy.subtract(observation))) > 0)
+			throw new AssertionError("Signed wall energy escaped its relative physical inertia bound");
+		double excessiveDt = 2 / Math.sqrt(relative);
 		try { projection.project(new double[3 * cells.size()], new LiquidPolyhedron.Point(0, 0, 0), excessiveDt, 1e-11, 512, surface.pressure); throw new AssertionError("Indefinite wet-wall step was admitted"); }
-		catch (LiquidCharacteristicTimeResolutionRequired expected) { }
+		catch (LiquidCharacteristicTimeResolutionRequired expected) {
+			int required = expected.minimumSubsteps(excessiveDt, excessiveDt);
+			var interval = Fraction.of(excessiveDt / required);
+			if (required < 2 || interval.multiply(interval).multiply(Fraction.of(relative)).compareTo(Fraction.of(1)) >= 0)
+				throw new AssertionError("Certified wet-wall interval did not request sufficient time resolution");
+			if (new LiquidCharacteristicTimeResolutionRequired("Unrepresentable work count", 1e-300).minimumSubsteps(1, 1) != Integer.MAX_VALUE)
+				throw new AssertionError("Geometric time resolution overflowed its finite work count");
+		}
 		for (double dt : new double[]{1.0 / 128, 1.0 / 64}) {
 			var result = projection.project(new double[3 * cells.size()], new LiquidPolyhedron.Point(0, 0, 0), dt, 1e-11, 512, surface.pressure);
 			var motionField = new LiquidConformingVelocity(mesh, result.volumeRate(), result.cellVelocity());

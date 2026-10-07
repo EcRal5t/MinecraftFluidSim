@@ -25,6 +25,9 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 			long spentSubsteps = 0L;
 			String refinementReason = "";
 			for (int refinement = 0; ; refinement++) {
+				if (minimumSubsteps > MAXIMUM_CUMULATIVE_SUBSTEPS - spentSubsteps)
+					throw new FluidSolverBackend.MechanicalWorkBudgetExceededException("Mechanical candidate requires at least " + minimumSubsteps
+							+ " substeps after " + refinement + " time refinement(s), exceeding the remaining work budget: " + refinementReason);
 				FluidDomain candidate = restoreCandidate(request.state());
 				candidate.minimumMechanicalSubsteps = minimumSubsteps;
 				MovingBodyFluidCoupling.Result movingBodyCoupling = candidate.applyMovingBodyCouplings(request.movingBodies());

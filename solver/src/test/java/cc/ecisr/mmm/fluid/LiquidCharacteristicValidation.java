@@ -425,7 +425,7 @@ final class LiquidCharacteristicValidation {
 		if (args.length >= 1 && args[0].equals("material-surface")) {
 			if (args.length > 3 && args.length != 6) throw new IllegalArgumentException("Expected material-surface angle steps centroidTolerance occupancyTolerance rmsVelocityTolerance");
 			productionGeometryPipelineUsesMaterialSurfaceEnergy(args.length == 1 ? new double[]{60, 120} : new double[]{Double.parseDouble(args[1])}, args.length > 2 ? Integer.parseInt(args[2]) : 1,
-					args.length > 3 ? new LiquidMomentReconstruction.Tolerance(Double.parseDouble(args[3]), Double.parseDouble(args[4]), 48) : null,
+					args.length > 3 ? new LiquidMomentReconstruction.Tolerance(Double.parseDouble(args[3]), Double.parseDouble(args[4])) : null,
 					args.length > 3 ? Double.parseDouble(args[5]) : 0);
 			System.out.println("Resolved material surface energy full backend validation passed");
 		} else if (args.length == 1 && args[0].equals("conforming-timing")) {

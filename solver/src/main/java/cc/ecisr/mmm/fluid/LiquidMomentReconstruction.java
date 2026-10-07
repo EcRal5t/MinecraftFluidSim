@@ -8,6 +8,8 @@ import java.util.List;
 final class LiquidMomentReconstruction {
 	/** Distances use input coordinates; occupancy length is cell width times symmetric difference / control volume. */
 	record Tolerance(double centroidDistance, double occupancyErrorLength, int coordinateBits) {
+		/** Coordinate precision grows from its minimum until the measured spatial error is certified. */
+		Tolerance(double centroidDistance, double occupancyErrorLength) { this(centroidDistance, occupancyErrorLength, 1); }
 		Tolerance {
 			if (!(centroidDistance > 0) || !Double.isFinite(centroidDistance) || !(occupancyErrorLength > 0)
 					|| !Double.isFinite(occupancyErrorLength) || coordinateBits < 1 || coordinateBits > 1074)

@@ -46,17 +46,34 @@ final class LiquidPressureFaceEnergy {
 		this.metric = metric; this.wall = wall; this.projectionFaces = projectionFaces; this.projectionSigns = projectionSigns;
 	}
 	boolean hasSignedMetric() { return !crosses.isEmpty(); }
-	/** Row-sum bound on the signed wall Hessian's negative curvature. */
-	double negativeCurvatureBound() {
-		var bound = new double[gradient.length];
+	/** Cauchy in the assembled physical inertia: |q' Hwall q| <= bound * q' M q. */
+	double relativeCurvatureBound(ControlVolumeFluxMetric[] metrics) {
+		var counts = new int[gradient.length]; for (var metric : metrics) for (int f : metric.geometry.indices) counts[f]++;
+		var energies = new java.util.IdentityHashMap<Row, Double>(); double bound = 0;
 		for (var cross : crosses) {
-			double firstNorm = 0, secondNorm = 0;
-			for (int i = 0; i < cross.first.values.length; i++) firstNorm = up(firstNorm + cross.first.coefficient(i).magnitude());
-			for (int i = 0; i < cross.second.values.length; i++) secondNorm = up(secondNorm + cross.second.coefficient(i).magnitude());
-			for (int i = 0; i < cross.first.faces.length; i++) bound[cross.first.faces[i]] = up(bound[cross.first.faces[i]] + up(up(cross.weight.magnitude() * cross.first.coefficient(i).magnitude()) * secondNorm));
-			for (int i = 0; i < cross.second.faces.length; i++) bound[cross.second.faces[i]] = up(bound[cross.second.faces[i]] + up(up(cross.weight.magnitude() * cross.second.coefficient(i).magnitude()) * firstNorm));
+			double first = energies.computeIfAbsent(cross.first, row -> dualEnergy(row, metrics, counts));
+			double second = energies.computeIfAbsent(cross.second, row -> dualEnergy(row, metrics, counts));
+			double product = up(up(Math.sqrt(first)) * up(Math.sqrt(second)));
+			bound = up(bound + up(up(2 * cross.weight.magnitude()) * product));
 		}
-		return Arrays.stream(bound).max().orElse(0);
+		return bound;
+	}
+	private double dualEnergy(Row row, ControlVolumeFluxMetric[] metrics, int[] counts) {
+		var values = new Value[gradient.length]; Arrays.fill(values, ZERO);
+		for (int i = 0; i < row.faces.length; i++) {
+			int f = row.faces[i]; if (counts[f] == 0) throw new IllegalArgumentException("Surface derivative has no physical pressure inertia");
+			values[f] = row.coefficient(i).divide(new Value(counts[f], 0));
+		}
+		double energy = 0;
+		for (var metric : metrics) {
+			var local = new Value[metric.geometry.indices.length]; boolean present = false;
+			for (int i = 0; i < local.length; i++) {
+				local[i] = values[metric.geometry.indices[i]]; if (metric.geometry.sign[i] < 0) local[i] = local[i].negate();
+				present |= local[i].value() != 0 || local[i].error() != 0;
+			}
+			if (present) energy = up(energy + metric.dualEnergy(local).magnitude());
+		}
+		return energy;
 	}
 	/** Retains the phase projection's actual face ordering and orientation. */
 	LiquidPressureFaceEnergy select(int[] faces, int[] signs) {

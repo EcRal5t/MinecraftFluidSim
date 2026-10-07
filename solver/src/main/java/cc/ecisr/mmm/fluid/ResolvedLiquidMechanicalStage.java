@@ -57,7 +57,7 @@ final class ResolvedLiquidMechanicalStage {
 				result = mechanics.advance(velocity, physical.faceVelocity(velocity), acceleration, dt,
 						domain.config.pressureTolerance(), domain.config.pressureTolerance(), domain.config.maxPressureIterations(), surface);
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
-				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());
+				throw new MechanicalTimeRefinement(shorter.minimumSubsteps(domain.config.timeStep(), dt), shorter.getMessage());
 			} catch (LiquidInterfaceResolutionRequired finer) {
 				for (int resolved : finer.cells()) {
 					int c = physical.phaseCells[resolved];
@@ -95,7 +95,7 @@ final class ResolvedLiquidMechanicalStage {
 						transport.maximumCoordinateErrorMetres, transport.maximumRateRepresentationErrorPerSecond);
 				motion = new LiquidGeometryMotionPlan(input, physical, field, transport, partition.leaves, MAXIMUM_REGIONS, interfaces);
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
-				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());
+				throw new MechanicalTimeRefinement(shorter.minimumSubsteps(domain.config.timeStep(), dt), shorter.getMessage());
 			}
 			var next = new LiquidGeometryPhaseInput(motion.geometry, partition, domain.gasState.geometry.sealedExterior(), MAXIMUM_REGIONS, java.util.Set.of());
 			var gas = new ResolvedGasMotionPlan(domain, next, motion.gasInterfaces, MAXIMUM_PAIRS);

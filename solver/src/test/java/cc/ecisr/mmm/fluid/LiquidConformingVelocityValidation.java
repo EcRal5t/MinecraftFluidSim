@@ -194,6 +194,13 @@ final class LiquidConformingVelocityValidation {
 		cells.addAll(LiquidGeometryRefinement.children(cells.removeFirst()));
 		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
 		requireAffineField(mesh, LiquidConformingVelocityValidation::affine);
+		var chain = new ArrayList<LiquidGeometryRefinement.Cell>();
+		for (int[] at : new int[][]{{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {1, 1, 1}})
+			chain.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25 * at[0], 0.25 * at[1], 0.25 * at[2],
+					0.25 * (at[0] + 1), 0.25 * (at[1] + 1), 0.25 * (at[2] + 1))));
+		// Its first one-ring patch is one-dimensional; the connected component supplies exact three-dimensional support.
+		requireAffineField(new LiquidControlVolumeMesh(chain, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0)),
+				LiquidConformingVelocityValidation::affine);
 	}
 	private static void supportedAffineFieldsSurviveObliqueCells() {
 		for (int rank = 1; rank <= 2; rank++) {

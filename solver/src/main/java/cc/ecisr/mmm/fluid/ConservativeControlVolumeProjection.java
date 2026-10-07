@@ -51,9 +51,13 @@ final class ConservativeControlVolumeProjection {
 		if (incoming.length != 3 * cells.size() || !(dt > 0) || !Double.isFinite(dt) || !(tolerance > 0) || !Double.isFinite(tolerance) || maximumIterations <= 0)
 			throw new IllegalArgumentException("Invalid conservative pressure request");
 		if (surface != null && surface.hasSignedMetric()) {
-			double inertia = Double.POSITIVE_INFINITY; for (var metric : metrics) inertia = Math.min(inertia, metric.minimumEigenvalue());
-			if (Math.nextUp(Math.nextUp(dt * dt) * surface.negativeCurvatureBound()) >= inertia)
-				throw new LiquidCharacteristicTimeResolutionRequired("Wet-wall curvature requires a shorter positive-inertia time step");
+			double curvature = surface.relativeCurvatureBound(metrics);
+			if (!Double.isFinite(curvature)) throw new IllegalStateException("Wet-wall curvature has no finite numerical bound");
+			if (Fraction.of(dt).multiply(Fraction.of(dt)).multiply(Fraction.of(curvature)).compareTo(Fraction.of(1)) >= 0) {
+				double interval = Math.nextDown(1 / Math.nextUp(Math.sqrt(curvature)));
+				throw new LiquidCharacteristicTimeResolutionRequired("Wet-wall curvature requires a shorter positive-inertia time step: maximumSeconds="
+						+ interval + ", relativeCurvatureUpper=" + curvature, interval);
+			}
 		}
 		double[] predicted = incoming.clone();
 		for (int c = 0; c < cells.size(); c++) for (int a = 0; a < 3; a++) {

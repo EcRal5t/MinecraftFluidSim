@@ -59,19 +59,14 @@ final class LiquidConformingVelocity {
 		var nodes = new LinkedHashMap<Vertex, List<Fraction>>();
 		var fits = new LinkedHashMap<Vertex, Map<Integer, Fraction>>(); var wallNormals = new LinkedHashMap<Vertex, List<Fraction[]>>();
 		var stencils = new java.util.HashMap<List<Integer>, FitStencil>();
+		var spans = new java.util.HashMap<List<Integer>, LiquidAffineFit.Basis>();
 		var complete = new LinkedHashSet<Vertex>();
 		double fittingError = 0;
 		for (var entry : incidence.entrySet()) {
 			if (entry.getValue().stream().noneMatch(c -> liquid[c] >= 0)) continue;
-			var patch = new LinkedHashSet<>(entry.getValue());
-			for (int c : entry.getValue()) if (liquid[c] >= 0) for (int f : mesh.cellFaces[c]) {
-				var face = mesh.faces.get(f); patch.add(face.first()); if (face.second() >= 0) patch.add(face.second());
-			}
-			// Gas extension carries no spatial momentum in this phase model. Liquid traces use physical liquid observations.
-			patch.removeIf(c -> liquid[c] < 0);
-			var key = patch.stream().sorted().toList();
+			var key = interpolationPatch(mesh, entry.getValue(), liquid, entry.getKey(), fittingGeometry, spans);
 			var stencil = stencils.computeIfAbsent(key, cells -> new FitStencil(fittingGeometry.computeIfAbsent(cells,
-					support -> fitGeometry(mesh, support)), cells, mean));
+					support -> fitGeometry(mesh, support, spans.get(support))), cells, mean));
 			var fit = stencil.fit(entry.getKey(), reference == null ? null : reference.cornerWeights.get(entry.getKey()));
 			nodes.put(entry.getKey(), List.of(fit.value())); fits.put(entry.getKey(), fit.weights());
 			fittingError = Math.max(fittingError, fit.velocityError());
@@ -388,10 +383,27 @@ final class LiquidConformingVelocity {
 			return new Fit(average, java.util.Collections.unmodifiableMap(coefficients), error, affine.contains(point));
 		}
 	}
-	private static LiquidAffineFit fitGeometry(LiquidControlVolumeMesh mesh, List<Integer> patch) {
+	/** Breadth-first liquid neighborhoods stop at exact affine support or at the complete connected component. */
+	private static List<Integer> interpolationPatch(LiquidControlVolumeMesh mesh, java.util.Set<Integer> incident, int[] liquid, Vertex point,
+			Map<List<Integer>, LiquidAffineFit> fits, Map<List<Integer>, LiquidAffineFit.Basis> spans) {
+		var patch = new LinkedHashSet<Integer>(); for (int c : incident) if (liquid[c] >= 0) patch.add(c);
+		for (;;) {
+			var next = new LinkedHashSet<>(patch);
+			for (int c : patch) for (int f : mesh.cellFaces[c]) {
+				var face = mesh.faces.get(f); if (liquid[face.first()] >= 0) next.add(face.first());
+				if (face.second() >= 0 && liquid[face.second()] >= 0) next.add(face.second());
+			}
+			var key = next.stream().sorted().toList(); var fit = fits.get(key);
+			boolean supported = fit != null ? fit.contains(point) : spans.computeIfAbsent(key,
+					cells -> new LiquidAffineFit.Basis(cells.stream().map(c -> mesh.cells.get(c).geometry().centroidCoordinates()).toList())).contains(point);
+			if (supported || next.size() == patch.size()) return key;
+			patch = next;
+		}
+	}
+	private static LiquidAffineFit fitGeometry(LiquidControlVolumeMesh mesh, List<Integer> patch, LiquidAffineFit.Basis support) {
 		var centers = new ArrayList<Fraction[]>(); var weights = new ArrayList<Fraction>();
 		for (int c : patch) { centers.add(mesh.cells.get(c).geometry().centroidCoordinates()); weights.add(mesh.cells.get(c).geometry().measure().volume()); }
-		return new LiquidAffineFit(centers, weights);
+		return new LiquidAffineFit(centers, weights, support);
 	}
 	/** Solve the exactly supported span, retaining zero slope in unobserved directions. */
 	private static Fraction[] dual(List<Fraction[]> vectors, List<Fraction> weight, Fraction[] rhs) {
