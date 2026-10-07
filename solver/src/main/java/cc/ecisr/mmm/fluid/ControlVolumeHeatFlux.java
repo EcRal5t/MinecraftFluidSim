@@ -55,7 +55,7 @@ final class ControlVolumeHeatFlux {
 			previousNorm = norm; restart = maximum(residual) <= fluxTolerance;
 		}
 		double energy = metric.apply(temperature, face, null, residual);
-		var heating = metric.heating(prescribed, residual);
+		var heating = metric.heating(prescribed);
 		for (int f = 0; f < face.length; f++) {
 			if (free[f] && Math.abs(residual[f]) > fluxTolerance) throw new IllegalStateException("Heat flux publication exceeds its residual tolerance");
 			face[f] += reference;

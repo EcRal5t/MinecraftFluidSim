@@ -1,107 +1,160 @@
 package cc.ecisr.mmm.fluid;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import cc.ecisr.mmm.units.SignedDyadic;
 
-/** Symmetric diffusion action and conservative heating on a fixed cell/face mesh. */
+/** Symmetric diffusion action and conservative heating on fixed caloric support. */
 final class ControlVolumeThermalMetric {
+	/** Conductivity includes this inventory's occupied fraction in the geometric control volume. */
+	record Portion(int cell, int inventory, double conductivity) {
+		Portion {
+			if (cell < 0 || inventory < 0 || !(Double.isFinite(conductivity) && conductivity >= 0))
+				throw new IllegalArgumentException("Invalid caloric support portion");
+		}
+	}
+	private record Contribution(int portion, int local) { }
 	record Heating(double[] inventoryRates, double reservoir, SignedDyadic[] quantities, SignedDyadic reservoirQuantity, double maximumFluxCorrection) { }
 	final LiquidControlVolumeMesh mesh;
 	final double[] inventoryDiagonal, faceDiagonal;
-	private final int[] inventoryByCell;
+	private final List<Portion> portions;
+	private final List<List<Contribution>> contributions;
+	private final SignedDyadic[][] balanceWeights;
+	private final double[] initialWeights, gradient = new double[3];
 	private final ControlVolumeGradient[] geometry;
 	private final ControlVolumeDiffusion[] diffusion;
-	private final double[] conductivity, gradient = new double[3];
 	private final double[][] differences, flux;
 
 	ControlVolumeThermalMetric(LiquidControlVolumeMesh mesh, double[] conductivity) {
 		this(mesh, identity(mesh), mesh.cells.size(), conductivity);
 	}
-	/** A complete caloric owner can occupy several geometric cells while retaining one finite heat capacity. */
 	ControlVolumeThermalMetric(LiquidControlVolumeMesh mesh, int[] inventoryByCell, int inventoryCount, double[] conductivity) {
-		if (mesh == null || conductivity.length != mesh.cells.size()) throw new IllegalArgumentException("Incomplete heat flux geometry");
-		if (inventoryByCell == null || inventoryByCell.length != mesh.cells.size() || inventoryCount < 0)
-			throw new IllegalArgumentException("Incomplete caloric control-volume mapping");
-		this.mesh = mesh; this.conductivity = conductivity.clone(); this.inventoryByCell = inventoryByCell.clone();
-		var represented = new boolean[inventoryCount];
-		for (int owner : this.inventoryByCell) {
-			if (owner < 0 || owner >= inventoryCount) throw new IllegalArgumentException("Unknown control-volume caloric owner");
-			represented[owner] = true;
+		this(mesh, inventoryCount, mapped(mesh, inventoryByCell, conductivity));
+	}
+	/** Each caloric owner keeps one finite heat capacity over all of its geometric portions. */
+	ControlVolumeThermalMetric(LiquidControlVolumeMesh mesh, int inventoryCount, List<Portion> portions) {
+		if (mesh == null || inventoryCount < 0 || portions == null) throw new IllegalArgumentException("Incomplete caloric support");
+		this.mesh = mesh; this.portions = List.copyOf(portions);
+		var represented = new boolean[inventoryCount]; var occupied = new boolean[mesh.cells.size()];
+		var maximum = new double[occupied.length]; var normalization = maximum.clone();
+		for (var portion : this.portions) {
+			if (portion.cell() >= occupied.length || portion.inventory() >= inventoryCount)
+				throw new IllegalArgumentException("Unknown geometric or caloric support ordinal");
+			represented[portion.inventory()] = true; occupied[portion.cell()] = true;
+			maximum[portion.cell()] = Math.max(maximum[portion.cell()], portion.conductivity());
 		}
 		for (boolean present : represented) if (!present) throw new IllegalArgumentException("Caloric owner has no geometric support");
+		for (boolean present : occupied) if (!present) throw new IllegalArgumentException("Geometric control volume has no caloric support");
+		initialWeights = new double[this.portions.size()];
+		for (int p = 0; p < initialWeights.length; p++) {
+			var portion = this.portions.get(p); double largest = maximum[portion.cell()];
+			initialWeights[p] = largest == 0 ? 1 : portion.conductivity() / largest;
+			normalization[portion.cell()] += initialWeights[p];
+		}
+		for (int p = 0; p < initialWeights.length; p++) initialWeights[p] /= normalization[this.portions.get(p).cell()];
 		geometry = ControlVolumeGradient.build(mesh.cells, mesh.faces);
 		diffusion = Arrays.stream(geometry).map(ControlVolumeDiffusion::new).toArray(ControlVolumeDiffusion[]::new);
-		differences = new double[geometry.length][]; flux = differences.clone();
-		inventoryDiagonal = new double[inventoryCount]; faceDiagonal = new double[mesh.faces.size()];
+		var cellBasisEnergy = new double[geometry.length]; var faceBasisEnergy = new double[geometry.length][];
 		for (int c = 0; c < geometry.length; c++) {
-			if (!(Double.isFinite(conductivity[c]) && conductivity[c] >= 0)) throw new IllegalArgumentException("Invalid control-volume conductivity");
-			var g = geometry[c]; differences[c] = new double[g.indices.length]; flux[c] = differences[c].clone();
-			inventoryDiagonal[this.inventoryByCell[c]] += conductivity[c] * g.basisEnergy(-1);
-			for (int i = 0; i < g.indices.length; i++) faceDiagonal[g.indices[i]] += conductivity[c] * g.basisEnergy(i);
+			cellBasisEnergy[c] = geometry[c].basisEnergy(-1); faceBasisEnergy[c] = new double[geometry[c].indices.length];
+			for (int i = 0; i < faceBasisEnergy[c].length; i++) faceBasisEnergy[c][i] = geometry[c].basisEnergy(i);
+		}
+		differences = new double[this.portions.size()][]; flux = differences.clone();
+		inventoryDiagonal = new double[inventoryCount]; faceDiagonal = new double[mesh.faces.size()];
+		var incidence = new ArrayList<ArrayList<Contribution>>();
+		for (int f = 0; f < faceDiagonal.length; f++) incidence.add(new ArrayList<>());
+		for (int p = 0; p < this.portions.size(); p++) {
+			var portion = this.portions.get(p); var g = geometry[portion.cell()]; double k = portion.conductivity();
+			differences[p] = new double[g.indices.length]; flux[p] = differences[p].clone();
+			inventoryDiagonal[portion.inventory()] += k * cellBasisEnergy[portion.cell()];
+			for (int i = 0; i < g.indices.length; i++) {
+				faceDiagonal[g.indices[i]] += k * faceBasisEnergy[portion.cell()][i]; incidence.get(g.indices[i]).add(new Contribution(p, i));
+			}
 		}
 		for (var values : new double[][]{inventoryDiagonal, faceDiagonal}) for (double value : values)
 			if (!(Double.isFinite(value) && value >= 0)) throw new IllegalArgumentException("Heat flux preconditioning overflow");
+		contributions = incidence.stream().map(List::copyOf).toList(); balanceWeights = new SignedDyadic[faceDiagonal.length][];
+		for (int f = 0; f < faceDiagonal.length; f++) {
+			balanceWeights[f] = new SignedDyadic[contributions.get(f).size()];
+			for (int q = 0; q < balanceWeights[f].length; q++) {
+				var contribution = contributions.get(f).get(q); var portion = this.portions.get(contribution.portion());
+				balanceWeights[f][q] = SignedDyadic.of(portion.conductivity())
+						.multiply(SignedDyadic.of(faceBasisEnergy[portion.cell()][contribution.local()]));
+			}
+		}
 	}
 
-	/** Computes the derivative of half the diffusion energy in each caloric inventory and face unknown. */
+	/** Derivative of half the sum of each occupied portion's diffusion energy. */
 	double apply(double[] temperature, double[] face, double[] inventoryForce, double[] faceForce) {
 		if (temperature.length != inventoryDiagonal.length || face.length != faceDiagonal.length
-				|| inventoryForce != null && inventoryForce.length != inventoryDiagonal.length || faceForce.length != face.length)
+				|| inventoryForce != null && inventoryForce.length != temperature.length || faceForce.length != face.length)
 			throw new IllegalArgumentException("Incomplete thermal diffusion field");
 		Arrays.fill(faceForce, 0); if (inventoryForce != null) Arrays.fill(inventoryForce, 0); double energy = 0;
-		for (int c = 0; c < geometry.length; c++) {
-			if (conductivity[c] == 0) continue;
-			var g = geometry[c];
-			for (int i = 0; i < g.indices.length; i++) differences[c][i] = face[g.indices[i]] - temperature[inventoryByCell[c]];
-			energy += conductivity[c] * diffusion[c].apply(differences[c], flux[c], 1, 0, gradient);
+		for (int p = 0; p < portions.size(); p++) {
+			var portion = portions.get(p); double k = portion.conductivity(); if (k == 0) continue;
+			var g = geometry[portion.cell()];
+			for (int i = 0; i < g.indices.length; i++) differences[p][i] = face[g.indices[i]] - temperature[portion.inventory()];
+			energy += k * diffusion[portion.cell()].apply(differences[p], flux[p], 1, 0, gradient);
 			for (int i = 0; i < g.indices.length; i++) {
-				double rate = conductivity[c] * flux[c][i]; faceForce[g.indices[i]] += rate;
-				if (inventoryForce != null) inventoryForce[inventoryByCell[c]] -= rate;
+				double rate = k * flux[p][i]; faceForce[g.indices[i]] += rate;
+				if (inventoryForce != null) inventoryForce[portion.inventory()] -= rate;
 			}
 		}
 		if (!Double.isFinite(energy)) throw new IllegalStateException("Total heat flux diffusion energy overflow");
 		return energy;
 	}
-	int inventory(int cell) { return inventoryByCell[cell]; }
-	private static int[] identity(LiquidControlVolumeMesh mesh) {
-		if (mesh == null) throw new IllegalArgumentException("Incomplete heat flux geometry");
-		return java.util.stream.IntStream.range(0, mesh.cells.size()).toArray();
+	double[] initialTemperatures(double[] inventories) {
+		if (inventories.length != inventoryDiagonal.length) throw new IllegalArgumentException("Incomplete caloric initial temperatures");
+		var values = new double[geometry.length];
+		for (int p = 0; p < portions.size(); p++) values[portions.get(p).cell()] += initialWeights[p] * inventories[portions.get(p).inventory()];
+		return values;
 	}
 
-	/** Uses the last action; internal faces publish one antisymmetric flux, exterior faces use their physical condition. */
-	Heating heating(double[] prescribed, double[] residual) {
-		if (prescribed.length != faceDiagonal.length || residual.length != prescribed.length)
+	/** Projects the last action's free-face residual using the same positive face-energy coefficients. */
+	Heating heating(double[] prescribed) {
+		if (prescribed.length != faceDiagonal.length)
 			throw new IllegalArgumentException("Incomplete heat flux publication");
-		var heating = new double[inventoryDiagonal.length]; var firstRate = new double[prescribed.length]; var secondRate = firstRate.clone();
 		var quantities = new SignedDyadic[inventoryDiagonal.length]; Arrays.fill(quantities, SignedDyadic.ZERO);
-		for (int c = 0; c < geometry.length; c++) for (int i = 0; i < geometry[c].indices.length; i++) {
-			int f = geometry[c].indices[i];
-			(mesh.faces.get(f).first() == c ? firstRate : secondRate)[f] = conductivity[c] * flux[c][i];
-		}
 		var reservoirQuantity = SignedDyadic.ZERO; double correction = 0;
 		for (int f = 0; f < prescribed.length; f++) {
-			var patch = mesh.faces.get(f);
-			if (patch.second() >= 0) {
-				var first = SignedDyadic.of(firstRate[f]); var second = SignedDyadic.of(secondRate[f]);
-				var quantity = first.subtract(second).multiply(SignedDyadic.of(0.5));
-				int a = inventoryByCell[patch.first()], b = inventoryByCell[patch.second()];
-				quantities[a] = quantities[a].add(quantity); quantities[b] = quantities[b].subtract(quantity);
-				var difference = quantity.subtract(first); double observed = Math.abs(difference.toDouble());
-				correction = Math.max(correction, difference.signum() == 0 ? 0 : Math.nextUp(observed));
-			} else if (!Double.isNaN(prescribed[f])) {
-				var quantity = SignedDyadic.of(firstRate[f]);
-				int owner = inventoryByCell[patch.first()]; quantities[owner] = quantities[owner].add(quantity); reservoirQuantity = reservoirQuantity.add(quantity);
+			var support = contributions.get(f); var rates = new SignedDyadic[support.size()]; var total = SignedDyadic.ZERO;
+			for (int q = 0; q < rates.length; q++) {
+				var contribution = support.get(q); var portion = portions.get(contribution.portion());
+				rates[q] = SignedDyadic.of(portion.conductivity() * flux[contribution.portion()][contribution.local()]); total = total.add(rates[q]);
 			}
-			else correction = Math.max(correction, Math.abs(residual[f]));
+			boolean reservoir = mesh.faces.get(f).second() < 0 && !Double.isNaN(prescribed[f]);
+			if (reservoir) reservoirQuantity = reservoirQuantity.add(total);
+			else if (total.signum() != 0) {
+				var shares = ExactVolumeAllocation.allocateContinuous(total.signum() < 0 ? total.negate() : total, balanceWeights[f]).values();
+				for (int q = 0; q < rates.length; q++) {
+					var delta = total.signum() > 0 ? shares[q].negate() : shares[q]; rates[q] = rates[q].add(delta);
+					if (delta.signum() != 0) correction = Math.max(correction, Math.nextUp(Math.abs(delta.toDouble())));
+				}
+			}
+			for (int q = 0; q < rates.length; q++) {
+				int owner = portions.get(support.get(q).portion()).inventory(); quantities[owner] = quantities[owner].add(rates[q]);
+			}
 		}
-		var total = SignedDyadic.ZERO;
-		for (int c = 0; c < heating.length; c++) {
-			heating[c] = quantities[c].toDouble(); total = total.add(quantities[c]);
-			if (!Double.isFinite(heating[c])) throw new IllegalStateException("Conservative heating overflow");
+		var heating = new double[quantities.length]; var total = SignedDyadic.ZERO;
+		for (int owner = 0; owner < heating.length; owner++) {
+			heating[owner] = quantities[owner].toDouble(); total = total.add(quantities[owner]);
+			if (!Double.isFinite(heating[owner])) throw new IllegalStateException("Conservative heating overflow");
 		}
 		if (!total.equals(reservoirQuantity)) throw new IllegalStateException("Shared heat flux lost extensive closure");
 		double reservoir = reservoirQuantity.toDouble();
 		if (!Double.isFinite(reservoir) || !Double.isFinite(correction)) throw new IllegalStateException("Reservoir or heat flux correction overflow");
 		return new Heating(heating, reservoir, quantities, reservoirQuantity, correction);
+	}
+	private static int[] identity(LiquidControlVolumeMesh mesh) {
+		if (mesh == null) throw new IllegalArgumentException("Incomplete heat flux geometry");
+		return java.util.stream.IntStream.range(0, mesh.cells.size()).toArray();
+	}
+	private static List<Portion> mapped(LiquidControlVolumeMesh mesh, int[] inventories, double[] conductivity) {
+		if (mesh == null || inventories == null || conductivity == null || inventories.length != mesh.cells.size() || conductivity.length != inventories.length)
+			throw new IllegalArgumentException("Incomplete caloric control-volume mapping");
+		var portions = new ArrayList<Portion>();
+		for (int c = 0; c < inventories.length; c++) portions.add(new Portion(c, inventories[c], conductivity[c]));
+		return portions;
 	}
 }

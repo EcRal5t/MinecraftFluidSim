@@ -48,8 +48,58 @@ final class ControlVolumeConductionValidation {
 		Arrays.fill(prescribed, Double.NaN);
 		result = new ControlVolumeConduction(mesh, new double[]{0, 0}).advance(bodies, prescribed, 1, 1e-10, 256);
 		if (result.iterations() != 0 || result.energyChange()[0] != 0 || result.energyChange()[1] != 0) throw new AssertionError("Insulating caloric cells gained heat");
+		result = new ControlVolumeConduction(mesh, new double[]{0, 6}).advance(bodies, prescribed, 1, 1e-10, 256);
+		if (result.energyChange()[0] != 0 || result.energyChange()[1] != 0)
+			throw new AssertionError("Face residual correction exchanged heat with an insulating neighbour");
+		cooccupiedCaloricInventories();
 		obliqueCaloricInterfacePreservesSteadyFlux();
 		temporalAndSpatialFourierRefinement();
+	}
+	private static void cooccupiedCaloricInventories() {
+		var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1))),
+				1, 1, (c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+		var cold = material("test:thermal/mixed_cold", 12, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 400, 2)));
+		var hot = material("test:thermal/mixed_hot", 8, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 400, 3)));
+		var bodies = List.of(carrier(cold, 280), carrier(hot, 320));
+		var prescribed = new double[mesh.faces.size()]; Arrays.fill(prescribed, Double.NaN);
+		// Occupied fractions 1/4 and 3/4 give conductivity portions 3 and 6.
+		var portions = List.of(new ControlVolumeThermalMetric.Portion(0, 0, 3), new ControlVolumeThermalMetric.Portion(0, 1, 6));
+		var operator = new ControlVolumeConduction(mesh, 2, portions);
+		var result = operator.advance(bodies, prescribed, 1, 1e-10, 512);
+		// Six unit-area faces at centre distance 1/2 give 12 * (3*6)/(3+6) = 24 W/K.
+		double q = 24 * 40 / (1 + 24 * (0.5 + 1.0 / 3));
+		close(result.energyChange()[0], q, 1e-9); close(result.energyChange()[1], -q, 1e-9); closure(result);
+		double previous = Double.POSITIVE_INFINITY;
+		for (int steps : new int[]{1, 2, 4, 8}) {
+			var current = new java.util.ArrayList<>(bodies);
+			for (int step = 0; step < steps; step++) {
+				result = operator.advance(current, prescribed, 0.02 / steps, 1e-10, 512); closure(result);
+				for (int p = 0; p < current.size(); p++) {
+					var old = current.get(p); current.set(p, new ThermalContactExchange.Carrier(old.material(), old.massKilograms(), old.baseEnergyEu(), old.internalEnergyEu() + result.energyChange()[p]));
+				}
+			}
+			double difference = current.get(1).temperatureK() - current.get(0).temperatureK();
+			double error = Math.abs(difference - 40 * Math.exp(-20 * 0.02));
+			if (error >= previous * 0.65) throw new AssertionError("Cooccupied caloric inventories failed time refinement"); previous = error;
+		}
+		for (double scale : new double[]{0, 1e-6, 1e-5}) {
+			result = new ControlVolumeConduction(mesh, 2, List.of(new ControlVolumeThermalMetric.Portion(0, 0, 3 * scale),
+					new ControlVolumeThermalMetric.Portion(0, 1, 6 * scale))).advance(bodies, prescribed, 1, 1e-10, 512);
+			close(result.energyChange()[0], 24 * scale * 40 / (1 + 20 * scale), 1e-9); closure(result);
+			if (scale == 0 && (result.energyChange()[0] != 0 || result.energyChange()[1] != 0))
+				throw new AssertionError("Zero conductivity erased independent cooccupied temperatures");
+		}
+		Arrays.fill(prescribed, 350);
+		var whole = carrier(cold, 280);
+		var fractionBodies = List.of(new ThermalContactExchange.Carrier(cold, 0.25, 256, whole.internalEnergyEu() * 0.25),
+				new ThermalContactExchange.Carrier(cold, 0.75, 768, whole.internalEnergyEu() * 0.75));
+		// This comparison uses identical material properties in both constituent stocks.
+		var sameMaterial = new ControlVolumeConduction(mesh, 2, List.of(new ControlVolumeThermalMetric.Portion(0, 0, 3),
+				new ControlVolumeThermalMetric.Portion(0, 1, 9))).advance(fractionBodies, prescribed, 0.2, 1e-10, 512);
+		var aggregate = new ControlVolumeConduction(mesh, new double[]{12}).advance(List.of(whole), prescribed, 0.2, 1e-10, 512);
+		close(sameMaterial.energyChange()[0] + sameMaterial.energyChange()[1], aggregate.energyChange()[0], 1e-9);
+		for (double temperature : sameMaterial.temperature()) close(temperature, aggregate.temperature()[0], 1e-9);
+		closure(sameMaterial); closure(aggregate);
 	}
 	private static void sharedCaloricOwnerRetainsOneCapacity(LiquidControlVolumeMesh mesh, ThermalMaterialDefinition material) {
 		var prescribed = new double[mesh.faces.size()]; Arrays.fill(prescribed, Double.NaN);
@@ -105,7 +155,19 @@ final class ControlVolumeConductionValidation {
 			var operator = new ControlVolumeConduction(mesh, k); double eigenvalue = 4 / (h * h) * Math.pow(Math.sin(Math.PI * h / 2), 2);
 			var result = operator.advance(bodies, prescribed, 0.01, 1e-11, 1024);
 			for (int c = 0; c < n; c++) close(result.temperature()[c], 300 + Math.cos(Math.PI * (c + 0.5) * h) / (1 + 0.01 * eigenvalue), 1e-8);
-			closure(result); double error = Math.abs(eigenvalue - Math.PI * Math.PI);
+			closure(result);
+			var mixtureBodies = new java.util.ArrayList<ThermalContactExchange.Carrier>();
+			var portions = new java.util.ArrayList<ControlVolumeThermalMetric.Portion>();
+			for (int c = 0; c < n; c++) for (double fraction : new double[]{0.25, 0.75}) {
+				var old = bodies.get(c); portions.add(new ControlVolumeThermalMetric.Portion(c, mixtureBodies.size(), fraction));
+				mixtureBodies.add(new ThermalContactExchange.Carrier(constant, old.massKilograms() * fraction, old.baseEnergyEu() * fraction, old.internalEnergyEu() * fraction));
+			}
+			var mixed = new ControlVolumeConduction(mesh, mixtureBodies.size(), portions).advance(mixtureBodies, prescribed, 0.01, 1e-11, 1024);
+			for (int c = 0; c < n; c++) {
+				close(mixed.energyChange()[2 * c] + mixed.energyChange()[2 * c + 1], result.energyChange()[c], 1e-10);
+				close(mixed.temperature()[2 * c], result.temperature()[c], 1e-8); close(mixed.temperature()[2 * c + 1], result.temperature()[c], 1e-8);
+			}
+			closure(mixed); double error = Math.abs(eigenvalue - Math.PI * Math.PI);
 			if (error >= previous * 0.3) throw new AssertionError("Caloric conduction failed spatial Fourier refinement"); previous = error;
 			if (n == 4) {
 				double previousTimeError = Double.POSITIVE_INFINITY;

@@ -20,6 +20,9 @@ final class ControlVolumeConduction {
 	ControlVolumeConduction(LiquidControlVolumeMesh mesh, int[] inventoryByCell, int inventoryCount, double[] conductivity) {
 		this(new ControlVolumeThermalMetric(mesh, inventoryByCell, inventoryCount, conductivity));
 	}
+	ControlVolumeConduction(LiquidControlVolumeMesh mesh, int inventoryCount, List<ControlVolumeThermalMetric.Portion> portions) {
+		this(new ControlVolumeThermalMetric(mesh, inventoryCount, portions));
+	}
 	private ControlVolumeConduction(ControlVolumeThermalMetric metric) {
 		this.metric = metric; inventories = metric.inventoryDiagonal.length; faces = metric.faceDiagonal.length;
 		inventoryValue = new double[inventories]; faceValue = new double[faces]; inventoryForce = inventoryValue.clone(); faceForce = faceValue.clone();
@@ -40,14 +43,15 @@ final class ControlVolumeConduction {
 				throw new IllegalArgumentException("Invalid initial caloric temperature");
 			value[c] = temperature - reference; free[c] = true;
 		}
+		var initial = metric.initialTemperatures(java.util.Arrays.copyOf(value, inventories));
 		for (int f = 0; f < faces; f++) {
 			var face = metric.mesh.faces.get(f); boolean fixed = !Double.isNaN(prescribed[f]);
 			if (fixed) {
 				if (face.second() >= 0) throw new IllegalArgumentException("Thermal reservoir requires an exterior face");
 				new ThermalContactExchange.Reservoir(prescribed[f]);
 				value[inventories + f] = prescribed[f] - reference;
-			} else value[inventories + f] = face.second() < 0 ? value[metric.inventory(face.first())]
-					: 0.5 * value[metric.inventory(face.first())] + 0.5 * value[metric.inventory(face.second())];
+			} else value[inventories + f] = face.second() < 0 ? initial[face.first()]
+					: 0.5 * initial[face.first()] + 0.5 * initial[face.second()];
 			free[inventories + f] = !fixed && metric.faceDiagonal[f] > 0;
 			diagonal[inventories + f] = dt * metric.faceDiagonal[f];
 			if (free[inventories + f] && !(Double.isFinite(diagonal[inventories + f]) && diagonal[inventories + f] > 0))
@@ -78,7 +82,7 @@ final class ControlVolumeConduction {
 				scale *= 0.5;
 			}
 		}
-		var heating = metric.heating(prescribed, faceForce); var changes = heating.inventoryRates(); var temperatures = new double[inventories];
+		var heating = metric.heating(prescribed); var changes = heating.inventoryRates(); var temperatures = new double[inventories];
 		var time = SignedDyadic.of(dt); var observationBound = SignedDyadic.ZERO;
 		double caloricResidual = 0;
 		for (int c = 0; c < inventories; c++) {
