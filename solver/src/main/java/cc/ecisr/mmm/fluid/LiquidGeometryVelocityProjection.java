@@ -12,30 +12,50 @@ final class LiquidGeometryVelocityProjection {
 	record Source(int owner, LiquidPolyhedron geometry, LiquidPolyhedron.Point velocity) { }
 	record Value(Fraction volume, List<Fraction> momentum, Fraction originalKinetic, double[] velocity, double rmsError, Fraction kineticLoss,
 			Fraction kineticRoundingChange, List<Fraction> momentumRoundingBounds) { }
-	private record Address(int level, int x, int y, int z) { }
+	private record Address(int level, int x, int y, int z) {
+		Address parent() { return new Address(level - 1, x >>> 1, y >>> 1, z >>> 1); }
+		int coordinate(int axis) { return axis == 0 ? x : axis == 1 ? y : z; }
+	}
 	private record Key(int owner, LiquidPolyhedron.Point velocity) { }
-	private final List<Source> sources;
-	private final Map<Address, Map<Integer, Value>> cache = new HashMap<>();
-	LiquidGeometryVelocityProjection(List<Source> sources) { this.sources = List.copyOf(sources); }
+	private record Part(Key field, List<LiquidExactPolygon> faces, Fraction volume) { }
+	private record Projection(List<Part> parts, Map<Integer, Value> values) { }
+	private final Address root;
+	private final List<Part> sources;
+	private final Map<Address, Projection> cache = new HashMap<>();
+	LiquidGeometryVelocityProjection(LiquidGeometryRefinement.Cell root, List<Source> sources) {
+		this.root = new Address(root.level(), root.x(), root.y(), root.z());
+		this.sources = sources.stream().map(source -> new Part(new Key(source.owner, source.velocity), LiquidExactPolygon.faces(source.geometry), source.geometry.measure().volume())).toList();
+	}
 	boolean accepts(LiquidGeometryRefinement.Cell cell, double maximumRmsError) {
 		return values(cell).values().stream().allMatch(value -> value.rmsError <= maximumRmsError);
 	}
 	Map<Integer, Value> values(LiquidGeometryRefinement.Cell cell) {
 		var key = new Address(cell.level(), cell.x(), cell.y(), cell.z());
-		return cache.computeIfAbsent(key, ignored -> project(cell));
+		int levels = key.level - root.level;
+		if (levels < 0 || key.x >>> levels != root.x || key.y >>> levels != root.y || key.z >>> levels != root.z)
+			throw new IllegalArgumentException("Velocity projection leaf lies outside its initial support");
+		return projection(key).values;
 	}
-	private Map<Integer, Value> project(LiquidGeometryRefinement.Cell cell) {
+	private Projection projection(Address cell) {
+		var found = cache.get(cell); if (found != null) return found;
+		boolean initial = cell.equals(root);
+		var input = initial ? sources : projection(cell.parent()).parts;
+		var planes = new ArrayList<LiquidGeometryPlane>(); double width = Math.scalb(1.0, -cell.level);
+		for (int axis = 0; axis < 3; axis++) {
+			double lo = cell.coordinate(axis) * width, hi = lo + width;
+			if (initial || (cell.coordinate(axis) & 1) == 0) planes.add(new LiquidGeometryPlane(new LiquidPolyhedron.Point(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0), hi));
+			if (initial || (cell.coordinate(axis) & 1) == 1) planes.add(new LiquidGeometryPlane(new LiquidPolyhedron.Point(axis == 0 ? -1 : 0, axis == 1 ? -1 : 0, axis == 2 ? -1 : 0), -lo));
+		}
+		var retained = new ArrayList<Part>();
 		var volumes = new LinkedHashMap<Key, Fraction>();
-		for (var source : sources) {
-			var faces = LiquidExactPolygon.faces(source.geometry);
-			for (int axis = 0; axis < 3; axis++) {
-				double lo = cell.minimum(axis), hi = lo + cell.width();
-				faces = LiquidExactPolygon.clipVolume(faces, new LiquidGeometryPlane(new LiquidPolyhedron.Point(axis == 0 ? 1 : 0, axis == 1 ? 1 : 0, axis == 2 ? 1 : 0), hi));
-				faces = LiquidExactPolygon.clipVolume(faces, new LiquidGeometryPlane(new LiquidPolyhedron.Point(axis == 0 ? -1 : 0, axis == 1 ? -1 : 0, axis == 2 ? -1 : 0), -lo));
+		for (var source : input) {
+			var faces = source.faces;
+			for (var plane : planes) {
+				faces = LiquidExactPolygon.clipVolume(faces, plane);
 				if (faces.isEmpty()) break;
 			}
-			var volume = LiquidExactPolygon.volume(faces);
-			if (volume.signum() > 0) volumes.merge(new Key(source.owner, source.velocity), volume, Fraction::add);
+			var volume = faces == source.faces ? source.volume : LiquidExactPolygon.volume(faces);
+			if (volume.signum() > 0) { retained.add(new Part(source.field, faces, volume)); volumes.merge(source.field, volume, Fraction::add); }
 		}
 		var grouped = new LinkedHashMap<Integer, ArrayList<Map.Entry<Key, Fraction>>>();
 		for (var entry : volumes.entrySet()) grouped.computeIfAbsent(entry.getKey().owner, ignored -> new ArrayList<>()).add(entry);
@@ -51,7 +71,7 @@ final class LiquidGeometryVelocityProjection {
 			}
 			result.put(group.getKey(), observe(volume, List.of(momentum), before));
 		}
-		return Map.copyOf(result);
+		var value = new Projection(List.copyOf(retained), Map.copyOf(result)); cache.put(cell, value); return value;
 	}
 	static Value observe(Fraction volume, List<Fraction> momentum, Fraction before) {
 			var velocity = new double[3]; var projected = Fraction.ZERO; var stored = Fraction.ZERO; var bounds = new ArrayList<Fraction>();

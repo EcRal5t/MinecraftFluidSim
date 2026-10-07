@@ -77,7 +77,7 @@ final class LiquidGeometryReconstructionPlan {
 				sources.add(new LiquidMomentReconstruction.Source(group.getKey(), group.getValue(), normal));
 			}
 			var support = new LiquidMomentReconstruction.Support(open.get(c), sources); supports.add(support);
-			var address = LiquidPhasePartition.Address.of(open.get(c)); originalSupports.put(address, support); projections.put(address, new LiquidGeometryVelocityProjection(fields.get(c)));
+			var address = LiquidPhasePartition.Address.of(open.get(c)); originalSupports.put(address, support); projections.put(address, new LiquidGeometryVelocityProjection(open.get(c), fields.get(c)));
 		}
 		LiquidMomentReconstruction.Result result; LiquidConservativeVolumeRedistribution.Result balanced; int work = 0;
 		while (true) {

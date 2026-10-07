@@ -230,7 +230,14 @@ final class LiquidJointReconstructionValidation {
 		var fields = new java.util.ArrayList<LiquidGeometryVelocityProjection.Source>();
 		fields.add(new LiquidGeometryVelocityProjection.Source(0, tetrahedron, new LiquidPolyhedron.Point(1, 0, 0)));
 		for (var piece : complement) fields.add(new LiquidGeometryVelocityProjection.Source(0, piece, new LiquidPolyhedron.Point(0, 0, 0)));
-		var projected = new LiquidGeometryVelocityProjection(fields).values(open).get(0);
+		var projection = new LiquidGeometryVelocityProjection(open, fields); var projected = projection.values(open).get(0);
+		var childVolume = Fraction.ZERO; var childMomentum = Fraction.ZERO; var childKinetic = Fraction.ZERO;
+		for (var child : LiquidGeometryRefinement.children(open)) for (var grandchild : LiquidGeometryRefinement.children(child)) {
+			var value = projection.values(grandchild).get(0);
+			childVolume = childVolume.add(value.volume()); childMomentum = childMomentum.add(value.momentum().getFirst()); childKinetic = childKinetic.add(value.originalKinetic());
+		}
+		if (!childVolume.equals(projected.volume()) || !childMomentum.equals(projected.momentum().getFirst()) || !childKinetic.equals(projected.originalKinetic()))
+			throw new AssertionError("Nested spatial velocity projection lost volume, momentum or its original kinetic moment");
 		var exact = new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(6));
 		var defect = Fraction.of(projected.velocity()[0]).subtract(exact).absolute();
 		if (defect.signum() <= 0 || defect.subtract(projected.momentumRoundingBounds().getFirst()).signum() > 0
