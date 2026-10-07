@@ -35,7 +35,81 @@ public final class CarrierMutationValidation {
 		nativeThermalObservationUsesOccupiedGeometry();
 		nativeLocalInventoryCarriesMaterialAndEnergy();
 		nativeLocalInventoryUsesMechanicalBackend();
+		nativePhysicalPhaseReconstructionCarriesInventories();
+		nativePhysicalReconstructionPreservesGasOnlyState();
 		System.out.println("Carrier mutation validation passed");
+	}
+	private static void nativePhysicalReconstructionPreservesGasOnlyState() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), 16);
+		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+		domain.liquidGeometryState = new LiquidGeometryState(1, java.util.List.of(), new int[0]); domain.sealDomainBoundary();
+		FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		var gas = domain.exportGasState(registries.chemical().fingerprint()); var energy = domain.exactInternalEnergy();
+		var plan = new LiquidGeometryReconstructionPlan(domain, java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1))),
+				new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40), 0, new LiquidMomentReconstruction.Budget(1, 32, 4096));
+		new ResolvedGasMotionPlan(domain, plan, 4096, 65536).publish(domain, plan);
+		require(domain.particles.count() == 0 && domain.liquidGeometryState.cells().isEmpty() && domain.totalMass() == 0 && domain.totalVolumeExact() == 0
+				&& domain.exactInternalEnergy().equals(energy) && domain.thermalAudit().expectedInventory().equals(energy)
+				&& domain.exportGasState(registries.chemical().fingerprint()).nodes().equals(gas.nodes()), "gas-only physical regrid changed its extensive state");
+		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.particles.count() == 0 && restored.exactInternalEnergy().equals(energy), "gas-only physical regrid lost its cold restored state");
+	}
+	private static void nativePhysicalPhaseReconstructionCarriesInventories() throws Exception {
+		nativePhysicalPhaseReconstructionCarriesInventories("mmm:water", 1, -375);
+		nativePhysicalPhaseReconstructionCarriesInventories("mmm:oil", 2, 0);
+	}
+	private static void nativePhysicalPhaseReconstructionCarriesInventories(String secondMaterial, int expectedControls, double expectedKineticChange) throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		int material = registries.liquids().handle(secondMaterial);
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), 16);
+		var cells = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 1, 0.5)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 1, 0.5)));
+		var original = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0, 1}, new int[]{0, 1}, new double[]{1, 0, 0, -1, 0, 0});
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 2, 4, 8000, registries.liquids().materials(),
+				new float[]{0.25F, 0.5F, 0.25F, 2, 0.75F, 0.5F, 0.25F, 2}, new float[]{1, 0, 0, -1, 0, 0}, new byte[8],
+				new double[]{2000, 6000}, new int[]{0, material}, original));
+		domain.sealDomainBoundary();
+		FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		domain.thermalState.resetMarkerTemperature(0, 270, domain.thermalMarkers, domain.exactInternalEnergy());
+		domain.thermalState.resetMarkerTemperature(1, 350, domain.thermalMarkers, domain.exactInternalEnergy());
+		var sourceEnergy = domain.exactInternalEnergy(); var audit = domain.thermalAudit(); var species = domain.chemicalLedgerForMarkerRange(0, 2);
+		var gas = domain.exportGasState(registries.chemical().fingerprint()); var kinetic = Fraction.of(domain.particleKineticEnergyJoules());
+		var open = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1)));
+		var plan = new LiquidGeometryReconstructionPlan(domain, open, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40), 1,
+				new LiquidMomentReconstruction.Budget(1, 32, 4096));
+		require(plan.leaves.size() == 1 && java.util.Arrays.stream(plan.geometry.copyControlCells()).distinct().count() == expectedControls
+				&& plan.inventory.markers.size() == 2 && plan.inventory.kineticChange.equals(Fraction.of(expectedKineticChange)),
+				"physical reconstruction retained an inventory interface or lost its mass-weighted projection defect");
+		var gasPlan = new ResolvedGasMotionPlan(domain, plan, 4096, 65536); gasPlan.publish(domain, plan);
+		require(domain.totalVolumeExact() == 4 && domain.totalMass() == 8000
+				&& Fraction.of(domain.particleKineticEnergyJoules()).subtract(kinetic).equals(plan.inventory.kineticChange)
+				&& species.groups().getFirst().speciesQuanta().equals(domain.chemicalLedgerForMarkerRange(0, 2).groups().getFirst().speciesQuanta()),
+				"physical phase regrid changed mass, species, momentum or its measured kinetic change");
+		require(domain.exactInternalEnergy().subtract(sourceEnergy).equals(plan.inventory.energyRoundoff)
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+				&& audit.externalSource().equals(domain.thermalAudit().externalSource()) && audit.externalSink().equals(domain.thermalAudit().externalSink())
+				&& gas.nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()
+						.equals(domain.exportGasState(registries.chemical().fingerprint()).nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()),
+				"physical phase regrid changed caloric or gas inventory accounting");
+		for (int p = 0; p < domain.particles.count(); p++) {
+			int source = plan.inventory.markers.get(p).source(); float velocity = expectedControls == 1 ? -0.5F : source == 0 ? 1 : -1;
+			require(domain.particles.velocityX(p) == velocity && domain.particles.mass(p) == (source == 0 ? 2000 : 6000)
+					&& domain.particles.materialHandle(p) == (source == 0 ? 0 : material)
+					&& Math.abs(domain.thermalState.temperature(p, domain.thermalMarkers) - (source == 0 ? 270 : 350)) <= plan.inventory.maximumTemperatureChange,
+					"physical phase regrid lost the transported material, mass, velocity or temperature");
+		}
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy()) && restored.totalChemicalSpeciesQuanta() == domain.totalChemicalSpeciesQuanta()
+				&& restored.particleKineticEnergyJoules() == domain.particleKineticEnergyJoules(), "physical regrid lost its cold restored extensive state");
+		var stale = new LiquidGeometryReconstructionPlan(domain, open, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40), 1,
+				new LiquidMomentReconstruction.Budget(1, 32, 4096));
+		var obsolete = new ResolvedGasMotionPlan(domain, stale, 4096, 65536); var unchanged = domain.liquidGeometryState; var energy = domain.exactInternalEnergy();
+		domain.chemicalParcels.assign(0, domain.chemicalParcels.record(0), !domain.chemicalParcels.indicator(0));
+		try { obsolete.publish(domain, stale); throw new AssertionError("physical regrid accepted revised species input"); }
+		catch (IllegalStateException expected) { require(domain.liquidGeometryState == unchanged && domain.particles.count() == 2 && domain.exactInternalEnergy().equals(energy),
+				"obsolete scalar regrid partially published liquid or caloric state"); }
 	}
 	private static void nativeLocalInventoryUsesMechanicalBackend() throws Exception {
 		var domain = localInventoryFixture(64); var energy = domain.exactInternalEnergy(); var ledger = domain.thermalAudit();

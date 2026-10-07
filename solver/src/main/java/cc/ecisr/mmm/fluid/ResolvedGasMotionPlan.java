@@ -89,7 +89,9 @@ final class ResolvedGasMotionPlan {
 	}
 	void publish(FluidDomain domain, LiquidGeometryReconstructionPlan reconstruction) {
 		requirePublication(domain, reconstruction.geometry);
-		LiquidGeometryPublication.publish(domain, reconstruction.input, reconstruction.geometry, reconstruction.inventoryObservations); commit(domain);
+		if (reconstruction.inventory == null) LiquidGeometryPublication.publish(domain, reconstruction.input, reconstruction.geometry, reconstruction.inventoryObservations);
+		else domain.carrierMutations().publishGeometricRepartition(reconstruction.inventory);
+		commit(domain);
 	}
 	private void requirePublication(FluidDomain domain, LiquidGeometryState liquid) {
 		if (domain.gasState.geometry != previous || domain.gasState.network != network || domain.thermalState != thermal || liquid != nextLiquid)

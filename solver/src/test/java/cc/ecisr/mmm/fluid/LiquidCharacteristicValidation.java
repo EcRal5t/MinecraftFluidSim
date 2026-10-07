@@ -46,11 +46,11 @@ final class LiquidCharacteristicValidation {
 					long remeshStarted = System.nanoTime(); double previousSurface = surfaceEnergy(domain), kinetic = domain.particleKineticEnergyJoules();
 					var support = new ArrayList<>(LiquidGeometryStateMapper.restore(domain.liquidGeometryState)); support.addAll(LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells()));
 					var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, support, 65536);
-					var plan = new LiquidGeometryReconstructionPlan(domain.liquidGeometryState, domain.gasState.geometry, partition.leaves, reconstruction, rmsVelocityError,
+					var plan = new LiquidGeometryReconstructionPlan(domain, partition.leaves, reconstruction, rmsVelocityError,
 							new LiquidMomentReconstruction.Budget(65536, 65536, 65536));
 					new ResolvedGasMotionPlan(domain, plan, 65536, 4194304).publish(domain, plan);
 					double nextKinetic = domain.particleKineticEnergyJoules(), kineticChange = nextKinetic - kinetic;
-					var expectedChange = reconstructionKineticChange(domain, plan);
+					var expectedChange = plan.inventory.kineticChange;
 					var energyError = LiquidExactPolygon.Fraction.of(Math.ulp(kinetic)).add(LiquidExactPolygon.Fraction.of(Math.ulp(nextKinetic))).divide(LiquidExactPolygon.Fraction.of(2));
 					if (LiquidExactPolygon.Fraction.of(kinetic).add(expectedChange).subtract(LiquidExactPolygon.Fraction.of(nextKinetic)).absolute().subtract(energyError).signum() > 0)
 						throw new AssertionError("Wetting regrid kinetic change differs from its conservative P0 projection audit");
@@ -87,14 +87,6 @@ final class LiquidCharacteristicValidation {
 				}
 			}
 		}
-	}
-	private static LiquidExactPolygon.Fraction reconstructionKineticChange(FluidDomain domain, LiquidGeometryReconstructionPlan plan) {
-		var zero = LiquidExactPolygon.Fraction.ZERO; var result = zero;
-		var masses = new LiquidExactPolygon.Fraction[plan.geometry.cells().size()]; java.util.Arrays.fill(masses, zero);
-		var markers = plan.geometry.copyMarkerCells(); var scale = LiquidExactPolygon.Fraction.of(domain.unitScale.cubicMetersPerNormalizedVolume());
-		for (int p = 0; p < markers.length; p++) masses[markers[p]] = masses[markers[p]].add(LiquidExactPolygon.Fraction.of(domain.particles.mass(p)).multiply(scale));
-		for (var error : plan.velocityErrors) result = result.add(masses[error.owner()].divide(error.volume()).multiply(error.kineticRoundingChange().subtract(error.kineticLoss())));
-		return result;
 	}
 	private static int maximumControlCentroidBits(LiquidGeometryState state) {
 		var cells = LiquidGeometryStateMapper.restore(state); var controls = state.copyControlCells();

@@ -19,6 +19,7 @@ final class LiquidJointReconstructionValidation {
 		reconstructionPlanKeepsInventoriesAndMomentum();
 		velocityProjectionRefinesSpatialError();
 		volumeRedistributionCarriesConservativeMoments();
+		variableDensityProjectionCarriesLocalInventories();
 		resolvedLeavesCarryIndependentControls();
 		jointGasReconstructionPreservesMaterialChambers();
 	}
@@ -149,8 +150,8 @@ final class LiquidJointReconstructionValidation {
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
 		var children = LiquidGeometryRefinement.children(root); var leaves = List.of(children.get(0), children.get(1));
 		var delta = Fraction.of(Math.scalb(1.0, -10)); var firstVolume = Fraction.of(0.0625).add(delta); var secondVolume = Fraction.of(0.03125).subtract(delta);
-		var first = LiquidGeometryVelocityProjection.observe(firstVolume, List.of(Fraction.ZERO, Fraction.ZERO, Fraction.ZERO), Fraction.ZERO);
-		var second = LiquidGeometryVelocityProjection.observe(secondVolume, List.of(secondVolume, Fraction.ZERO, Fraction.ZERO), secondVolume.divide(Fraction.of(2)));
+		var first = LiquidGeometryVelocityProjection.observe(firstVolume, firstVolume, java.util.Map.of(11, firstVolume), List.of(Fraction.ZERO, Fraction.ZERO, Fraction.ZERO), Fraction.ZERO);
+		var second = LiquidGeometryVelocityProjection.observe(secondVolume, secondVolume, java.util.Map.of(29, secondVolume), List.of(secondVolume, Fraction.ZERO, Fraction.ZERO), secondVolume.divide(Fraction.of(2)));
 		var sources = List.of(new LiquidConservativeVolumeRedistribution.Source(0, 7, first), new LiquidConservativeVolumeRedistribution.Source(1, 7, second));
 		var targets = List.of(new LiquidConservativeVolumeRedistribution.Target(0, 7, Fraction.of(0.0625)), new LiquidConservativeVolumeRedistribution.Target(1, 7, Fraction.of(0.03125)));
 		var result = LiquidConservativeVolumeRedistribution.project(leaves, sources, targets);
@@ -163,10 +164,52 @@ final class LiquidJointReconstructionValidation {
 		var reordered = LiquidConservativeVolumeRedistribution.project(leaves, List.of(sources.get(1), sources.get(0)), List.of(targets.get(1), targets.get(0)));
 		if (!java.util.Arrays.equals(reordered.fields().get(1).get(7).velocity(), b.velocity()) || !reordered.movedVolume().equals(result.movedVolume()))
 			throw new AssertionError("Conservative volume redistribution depends on source submission order");
+		if (!a.inventoryVolumes().equals(java.util.Map.of(11, targets.getFirst().volume()))
+				|| !b.inventoryVolumes().equals(java.util.Map.of(11, delta, 29, secondVolume)))
+			throw new AssertionError("Conservative regrid inventory shares differ from the mechanical spatial weights");
 		try {
 			LiquidConservativeVolumeRedistribution.project(leaves, sources, List.of(targets.getFirst()));
 			throw new AssertionError("Unequal inventory volumes accepted a conservative redistribution");
 		} catch (IllegalStateException expected) { if (!expected.getMessage().contains("unequal source and target volumes")) throw expected; }
+	}
+	private static void variableDensityProjectionCarriesLocalInventories() {
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var sources = List.of(new LiquidGeometryVelocityProjection.Source(7, 11, Fraction.of(1), root.geometry().clip(1, 0, 0, 0.5), new LiquidPolyhedron.Point(1, 0, 0)),
+				new LiquidGeometryVelocityProjection.Source(7, 29, Fraction.of(3), root.geometry().clip(-1, 0, 0, -0.5), new LiquidPolyhedron.Point(-1, 0, 0)));
+		var projection = new LiquidGeometryVelocityProjection(root, sources); var whole = projection.values(root);
+		if (whole.size() != 1) throw new AssertionError("Local inventory identities created internal physical phases");
+		var value = whole.get(7);
+		if (!value.mass().equals(Fraction.of(2)) || !value.momentum().getFirst().equals(Fraction.of(-1)) || value.velocity()[0] != -0.5
+				|| !value.originalKinetic().equals(Fraction.of(1)) || !value.kineticLoss().equals(Fraction.of(0.75))
+				|| !value.inventoryVolumes().equals(java.util.Map.of(11, Fraction.of(0.5), 29, Fraction.of(0.5))))
+			throw new AssertionError("Variable density projection changed extensive inventory or used a volume mean velocity");
+		var mass = Fraction.ZERO; var momentum = Fraction.ZERO; var kinetic = Fraction.ZERO; var loss = Fraction.ZERO;
+		var inventories = new java.util.TreeMap<Integer, Fraction>();
+		for (var child : LiquidGeometryRefinement.children(root)) {
+			var local = projection.values(child).get(7); mass = mass.add(local.mass()); momentum = momentum.add(local.momentum().getFirst());
+			kinetic = kinetic.add(local.originalKinetic()); loss = loss.add(local.kineticLoss());
+			local.inventoryVolumes().forEach((owner, volume) -> inventories.merge(owner, volume, Fraction::add));
+		}
+		if (!mass.equals(value.mass()) || !momentum.equals(value.momentum().getFirst()) || !kinetic.equals(value.originalKinetic())
+				|| loss.signum() != 0 || !inventories.equals(value.inventoryVolumes()))
+			throw new AssertionError("Spatial refinement lost scalar inventory or retained a resolved velocity defect");
+		var delta = Fraction.of(1.0 / 1024); var firstVolume = Fraction.of(0.0625).add(delta); var secondVolume = Fraction.of(0.03125).subtract(delta);
+		var first = LiquidGeometryVelocityProjection.observe(firstVolume, firstVolume.multiply(Fraction.of(2)), java.util.Map.of(11, firstVolume),
+				List.of(Fraction.ZERO, Fraction.ZERO, Fraction.ZERO), Fraction.ZERO);
+		var secondMass = secondVolume.multiply(Fraction.of(6));
+		var second = LiquidGeometryVelocityProjection.observe(secondVolume, secondMass, java.util.Map.of(29, secondVolume),
+				List.of(secondMass, Fraction.ZERO, Fraction.ZERO), secondMass.divide(Fraction.of(2)));
+		var leaves = LiquidGeometryRefinement.children(root).subList(0, 2);
+		var output = LiquidConservativeVolumeRedistribution.project(leaves,
+				List.of(new LiquidConservativeVolumeRedistribution.Source(0, 7, first), new LiquidConservativeVolumeRedistribution.Source(1, 7, second)),
+				List.of(new LiquidConservativeVolumeRedistribution.Target(0, 7, Fraction.of(0.0625)), new LiquidConservativeVolumeRedistribution.Target(1, 7, Fraction.of(0.03125))));
+		var a = output.fields().getFirst().get(7); var b = output.fields().get(1).get(7);
+		var expectedMass = secondMass.add(delta.multiply(Fraction.of(2))); var expectedVelocity = secondMass.divide(expectedMass);
+		if (!a.mass().add(b.mass()).equals(first.mass().add(second.mass())) || !b.mass().equals(expectedMass)
+				|| !b.inventoryVolumes().equals(java.util.Map.of(11, delta, 29, secondVolume)) || b.velocity()[0] != expectedVelocity.rounded()
+				|| !a.momentum().getFirst().add(b.momentum().getFirst()).equals(secondMass)
+				|| !a.originalKinetic().add(b.originalKinetic()).equals(second.originalKinetic()))
+			throw new AssertionError("Variable density redistribution lost the common scalar and mechanical transfer weights");
 	}
 	private static Fraction overlap(List<LiquidPolyhedron> a, List<LiquidPolyhedron> b) {
 		var result = Fraction.ZERO;

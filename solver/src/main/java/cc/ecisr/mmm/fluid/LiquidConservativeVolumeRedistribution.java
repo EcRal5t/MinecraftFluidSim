@@ -9,33 +9,36 @@ import java.util.Map;
 
 /** Positive conservative volume weights carry momentum and its second moment through spatial regridding. */
 final class LiquidConservativeVolumeRedistribution {
-	record Source(int leaf, int owner, LiquidGeometryVelocityProjection.Value field) {
-		Source { if (leaf < 0 || owner < 0 || field == null || field.volume().signum() <= 0) throw new IllegalArgumentException("Invalid conservative regrid source"); }
+	record Source(int leaf, int phase, LiquidGeometryVelocityProjection.Value field) {
+		Source { if (leaf < 0 || phase < 0 || field == null || field.volume().signum() <= 0) throw new IllegalArgumentException("Invalid conservative regrid source"); }
 	}
-	record Target(int leaf, int owner, Fraction volume) {
-		Target { if (leaf < 0 || owner < 0 || volume == null || volume.signum() <= 0) throw new IllegalArgumentException("Invalid conservative regrid target"); }
+	record Target(int leaf, int phase, Fraction volume) {
+		Target { if (leaf < 0 || phase < 0 || volume == null || volume.signum() <= 0) throw new IllegalArgumentException("Invalid conservative regrid target"); }
 	}
 	record Result(List<Map<Integer, LiquidGeometryVelocityProjection.Value>> fields, Fraction movedVolume, Fraction squaredDisplacementVolumeBound) { }
 	private static final class Received {
-		Fraction volume = Fraction.ZERO, kinetic = Fraction.ZERO;
+		Fraction volume = Fraction.ZERO, mass = Fraction.ZERO, kinetic = Fraction.ZERO;
+		final Map<Integer, Fraction> inventories = new java.util.TreeMap<>();
 		final Fraction[] momentum = {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
 		void add(Source source, Fraction volume) {
 			this.volume = this.volume.add(volume); var weight = volume.divide(source.field.volume());
+			mass = mass.add(weight.multiply(source.field.mass()));
 			kinetic = kinetic.add(weight.multiply(source.field.originalKinetic()));
 			for (int a = 0; a < 3; a++) momentum[a] = momentum[a].add(weight.multiply(source.field.momentum().get(a)));
+			for (var entry : source.field.inventoryVolumes().entrySet()) inventories.merge(entry.getKey(), weight.multiply(entry.getValue()), Fraction::add);
 		}
 	}
 	private LiquidConservativeVolumeRedistribution() { }
 	static Result project(List<LiquidGeometryRefinement.Cell> leaves, List<Source> sources, List<Target> targets) {
-		var byOwner = new LinkedHashMap<Integer, ArrayList<Source>>(); var sinks = new LinkedHashMap<Integer, ArrayList<Target>>();
-		for (var source : sources) byOwner.computeIfAbsent(source.owner, ignored -> new ArrayList<>()).add(source);
-		for (var target : targets) sinks.computeIfAbsent(target.owner, ignored -> new ArrayList<>()).add(target);
-		if (!byOwner.keySet().equals(sinks.keySet())) throw new IllegalStateException("Conservative regrid lost an inventory group");
+		var byPhase = new LinkedHashMap<Integer, ArrayList<Source>>(); var sinks = new LinkedHashMap<Integer, ArrayList<Target>>();
+		for (var source : sources) byPhase.computeIfAbsent(source.phase, ignored -> new ArrayList<>()).add(source);
+		for (var target : targets) sinks.computeIfAbsent(target.phase, ignored -> new ArrayList<>()).add(target);
+		if (!byPhase.keySet().equals(sinks.keySet())) throw new IllegalStateException("Conservative regrid lost a physical phase");
 		var output = new ArrayList<Map<Integer, LiquidGeometryVelocityProjection.Value>>(); for (var leaf : leaves) output.add(new LinkedHashMap<>());
 		var moved = Fraction.ZERO; var displacement = Fraction.ZERO;
 		Comparator<Integer> order = Comparator.comparingDouble((Integer l) -> leaves.get(l).minimum(0)).thenComparingDouble(l -> leaves.get(l).minimum(1)).thenComparingDouble(l -> leaves.get(l).minimum(2));
-		for (var group : byOwner.entrySet()) {
-			int owner = group.getKey(); var supply = group.getValue(); var demand = sinks.get(owner);
+		for (var group : byPhase.entrySet()) {
+			int phase = group.getKey(); var supply = group.getValue(); var demand = sinks.get(phase);
 			supply.sort(Comparator.comparing(Source::leaf, order)); demand.sort(Comparator.comparing(Target::leaf, order));
 			var supplyVolume = supply.stream().map(source -> source.field.volume()).reduce(Fraction.ZERO, Fraction::add);
 			var demandVolume = demand.stream().map(Target::volume).reduce(Fraction.ZERO, Fraction::add);
@@ -69,7 +72,8 @@ final class LiquidConservativeVolumeRedistribution {
 			for (int i = 0; i < remaining.length; i++) if (remaining[i].signum() != 0) throw new IllegalStateException("Conservative regrid retained source volume");
 			for (int i = 0; i < required.length; i++) {
 				if (required[i].signum() != 0 || !received[i].volume.equals(demand.get(i).volume)) throw new IllegalStateException("Conservative regrid left target capacity unfilled");
-				output.get(demand.get(i).leaf).put(owner, LiquidGeometryVelocityProjection.observe(received[i].volume, List.of(received[i].momentum), received[i].kinetic));
+				output.get(demand.get(i).leaf).put(phase, LiquidGeometryVelocityProjection.observe(received[i].volume, received[i].mass,
+						received[i].inventories, List.of(received[i].momentum), received[i].kinetic));
 			}
 		}
 		return new Result(output.stream().map(Map::copyOf).toList(), moved, displacement);

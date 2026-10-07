@@ -8,11 +8,11 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 
-/** Private inventory geometry and conservative P0 regrid with observed spatial and velocity errors. */
+/** Private physical-phase geometry and extensive P0 regrid with observed spatial and velocity errors. */
 final class LiquidGeometryReconstructionPlan {
 	record Observation(int owner, LiquidPolyhedron.Point positionMetres, LiquidPolyhedron.Point velocityMetresPerSecond) implements LiquidGeometryPublication.Observation { }
-	/** Kinetic terms and momentum bounds use normalized geometric volume; multiply by the inventory mass / volume. */
-	record VelocityError(int owner, Fraction volume, double maximumRmsError, Fraction kineticLoss, Fraction kineticRoundingChange, List<Fraction> momentumRoundingBounds) { }
+	/** Extensive terms use the supplied mass measure; geometric-only inputs supply unit density. */
+	record VelocityError(int owner, Fraction volume, Fraction mass, double maximumRmsError, Fraction kineticLoss, Fraction kineticRoundingChange, List<Fraction> momentumRoundingBounds) { }
 	private static final class VelocityTotals {
 		double rmsError;
 		Fraction loss = Fraction.ZERO, rounding = Fraction.ZERO;
@@ -25,6 +25,8 @@ final class LiquidGeometryReconstructionPlan {
 	final LiquidGeometryState input;
 	final GasGeometryState previousGasGeometry;
 	final LiquidGeometryState geometry;
+	/** Complete extensive successor for a material-domain reconstruction. */
+	final LiquidInventoryRepartitionPlan inventory;
 	final GasGeometryState gasGeometry;
 	/** Successor node ordinal to the original material chamber; ambient stays zero. */
 	final int[] previousGasNodes;
@@ -42,6 +44,14 @@ final class LiquidGeometryReconstructionPlan {
 	}
 	LiquidGeometryReconstructionPlan(LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
 			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget) {
+		this(null, input, gas, open, tolerance, maximumRmsVelocityError, budget);
+	}
+	LiquidGeometryReconstructionPlan(FluidDomain domain, List<LiquidGeometryRefinement.Cell> open,
+			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget) {
+		this(domain, domain.liquidGeometryState, domain.gasState.geometry, open, tolerance, maximumRmsVelocityError, budget);
+	}
+	private LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
+			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget) {
 		if (input == null || open == null || tolerance == null || budget == null || open.size() > budget.maximumLeaves()
 				|| !(maximumRmsVelocityError >= 0) || !Double.isFinite(maximumRmsVelocityError))
 			throw new IllegalArgumentException("Invalid geometric reconstruction support");
@@ -49,13 +59,16 @@ final class LiquidGeometryReconstructionPlan {
 		this.input = input; previousGasGeometry = gas;
 		var source = LiquidGeometryStateMapper.restore(input); var remap = new LiquidGeometryRemap(open);
 		int[] owners = input.copyFragmentOwners();
+		var stock = domain == null ? null : new LiquidReconstructionInventories(domain);
+		int[] phaseOwners = new int[owners.length]; var densities = new Fraction[owners.length];
+		for (int f = 0; f < owners.length; f++) { phaseOwners[f] = stock == null ? owners[f] : stock.phases[owners[f]]; densities[f] = stock == null ? Fraction.of(1) : stock.densities[owners[f]]; }
 		var local = new ArrayList<LinkedHashMap<Integer, ArrayList<LiquidPolyhedron>>>();
 		var fields = new ArrayList<ArrayList<LiquidGeometryVelocityProjection.Source>>();
 		for (int c = 0; c < open.size(); c++) { local.add(new LinkedHashMap<>()); fields.add(new ArrayList<>()); }
 		for (int f = 0; f < source.size(); f++) for (var part : remap.partitionGeometry(source.get(f).geometry())) {
-			local.get(part.cell()).computeIfAbsent(owners[f], ignored -> new ArrayList<>()).add(part.geometry());
+			local.get(part.cell()).computeIfAbsent(phaseOwners[f], ignored -> new ArrayList<>()).add(part.geometry());
 			var u = input.cells().get(f).copyVelocity();
-			fields.get(part.cell()).add(new LiquidGeometryVelocityProjection.Source(owners[f], part.geometry(), new LiquidPolyhedron.Point(u[0], u[1], u[2])));
+			fields.get(part.cell()).add(new LiquidGeometryVelocityProjection.Source(phaseOwners[f], owners[f], densities[f], part.geometry(), new LiquidPolyhedron.Point(u[0], u[1], u[2])));
 		}
 		if (gas != null) {
 			var gasCells = LiquidGeometryStateMapper.restoreCells(gas.cells()); var nodes = gas.nodeOrdinals();
@@ -113,6 +126,7 @@ final class LiquidGeometryReconstructionPlan {
 		var gasCells = new ArrayList<LiquidGeometryRefinement.Cell>(); var gasOwners = new ArrayList<Integer>();
 		var speeds = new ArrayList<double[]>(); var representatives = new ArrayList<Integer>(); var selected = new ArrayList<LiquidGeometryRefinement.Cell>();
 		var velocityTotals = new HashMap<Integer, VelocityTotals>();
+		var controlStarts = new ArrayList<Integer>(); var controlFields = new ArrayList<LiquidGeometryVelocityProjection.Value>();
 		double centroidError = 0, occupancyError = 0; var difference = Fraction.ZERO;
 		for (var observation : result.phases()) {
 			centroidError = Math.max(centroidError, observation.maximumCentroidError()); occupancyError = Math.max(occupancyError, observation.maximumOccupancyErrorLength()); difference = difference.add(observation.symmetricDifferenceVolumeBound());
@@ -126,6 +140,7 @@ final class LiquidGeometryReconstructionPlan {
 						continue;
 					}
 					int first = cells.size(); var value = balanced.fields().get(l).get(phase.control());
+					controlStarts.add(first); controlFields.add(value);
 					if (!value.volume().equals(LiquidVolumeInterface.measure(phase.pieces()).volume()))
 						throw new IllegalStateException("Reconstructed inventory and projected momentum have different local volumes");
 					var velocity = value.velocity(); velocityTotals.computeIfAbsent(phase.control(), ignored -> new VelocityTotals()).add(value);
@@ -140,9 +155,9 @@ final class LiquidGeometryReconstructionPlan {
 			first.putIfAbsent(previousOwner.get(f), f); groups[f] = first.get(previousOwner.get(f)); System.arraycopy(speeds.get(f), 0, velocity, 3 * f, 3);
 		}
 		var markers = input.copyMarkerCells(); for (int p = 0; p < markers.length; p++) {
-			var owner = first.get(markers[p]); if (owner == null) throw new IllegalStateException("Geometry reconstruction lost an inventory group"); markers[p] = owner;
+			var owner = first.get(phaseOwners[markers[p]]); if (owner == null) throw new IllegalStateException("Geometry reconstruction lost a physical phase"); markers[p] = owner;
 		}
-		geometry = LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, groups, velocity, representatives.stream().mapToInt(Integer::intValue).toArray());
+		var reconstructed = LiquidGeometryStateMapper.capture(cells, input.rootWidthMetres(), markers, groups, velocity, representatives.stream().mapToInt(Integer::intValue).toArray());
 		if (gas == null) { gasGeometry = null; previousGasNodes = new int[0]; }
 		else {
 			var order = new ArrayList<Integer>(); for (int c = 0; c < gasCells.size(); c++) order.add(c);
@@ -159,11 +174,26 @@ final class LiquidGeometryReconstructionPlan {
 				throw new IllegalStateException("Reconstruction changed exact material gas volume");
 		}
 		leaves = List.copyOf(selected); evaluations = work; maximumCentroidError = centroidError; maximumOccupancyErrorLength = occupancyError; symmetricDifferenceVolumeBound = difference;
-		var restored = LiquidGeometryStateMapper.restore(geometry); int[] nextOwners = geometry.copyFragmentOwners(), nextMarkers = geometry.copyMarkerCells();
+		var restored = LiquidGeometryStateMapper.restore(reconstructed); int[] nextOwners = reconstructed.copyFragmentOwners(), nextMarkers = reconstructed.copyMarkerCells();
 		var originalMarkers = input.copyMarkerCells(); var inherited = new HashMap<Integer, Integer>();
-		for (int p = 0; p < nextMarkers.length; p++) inherited.put(nextMarkers[p], originalMarkers[p]);
-		var oldMeasure = measures(source, owners); var nextMeasure = measures(restored, nextOwners);
-		var beforeMomentum = integratedField(input, source); var afterMomentum = integratedField(geometry, restored);
+		for (int p = 0; p < nextMarkers.length; p++) inherited.put(nextMarkers[p], phaseOwners[originalMarkers[p]]);
+		var oldMeasure = measures(source, phaseOwners); var nextMeasure = measures(restored, nextOwners);
+		var beforeMomentum = integratedField(input, source, phaseOwners, densities);
+		var afterMomentum = new Fraction[restored.size()][4]; for (var row : afterMomentum) Arrays.fill(row, Fraction.ZERO);
+		var massTotals = new Fraction[restored.size()]; Arrays.fill(massTotals, Fraction.ZERO);
+		var localFields = new java.util.TreeMap<Integer, LiquidGeometryVelocityProjection.Value>(); var nextControls = reconstructed.copyControlCells();
+		for (int i = 0; i < controlStarts.size(); i++) {
+			int original = controlStarts.get(i); var field = controlFields.get(i);
+			int ordinal = java.util.Collections.binarySearch(reconstructed.cells(), LiquidGeometryStateMapper.pack(cells.get(original), field.velocity()), LiquidGeometryState::compareGeometry);
+			if (ordinal < 0) throw new IllegalStateException("Reconstruction lost a canonical control");
+			int control = nextControls[ordinal], owner = nextOwners[ordinal];
+			if (localFields.put(control, field) != null) throw new IllegalStateException("Reconstruction repeated a mechanical control");
+			massTotals[owner] = massTotals[owner].add(field.mass());
+			for (int a = 0; a < 3; a++) {
+				var u = Fraction.of(field.velocity()[a]); afterMomentum[owner][a] = afterMomentum[owner][a].add(field.mass().multiply(u));
+				afterMomentum[owner][3] = afterMomentum[owner][3].add(field.mass().multiply(u).multiply(u).divide(Fraction.of(2)));
+			}
+		}
 		var observations = new ArrayList<Observation>(); var width = Fraction.of(input.rootWidthMetres());
 		var errors = new ArrayList<VelocityError>();
 		for (var entry : inherited.entrySet()) {
@@ -174,14 +204,16 @@ final class LiquidGeometryReconstructionPlan {
 				throw new IllegalStateException("Geometry reconstruction exceeds its momentum rounding bound");
 			if (!beforeMomentum[old][3].subtract(afterMomentum[next][3]).equals(error.loss.subtract(error.rounding)))
 				throw new IllegalStateException("Geometry reconstruction kinetic change differs from its measured projection defect");
-			errors.add(new VelocityError(next, nextMeasure[next].volume(), error.rmsError, error.loss, error.rounding, List.of(error.bounds)));
+			errors.add(new VelocityError(next, nextMeasure[next].volume(), massTotals[next], error.rmsError, error.loss, error.rounding, List.of(error.bounds)));
 			var center = nextMeasure[next].centroidCoordinates(); var mean = new Fraction[3];
-			for (int a = 0; a < 3; a++) mean[a] = afterMomentum[next][a].divide(nextMeasure[next].volume());
+			for (int a = 0; a < 3; a++) mean[a] = afterMomentum[next][a].divide(massTotals[next]);
 			observations.add(new Observation(next, new LiquidPolyhedron.Point(center[0].multiply(width).rounded(), center[1].multiply(width).rounded(), center[2].multiply(width).rounded()),
 					new LiquidPolyhedron.Point(mean[0].rounded(), mean[1].rounded(), mean[2].rounded())));
 		}
 		inventoryObservations = List.copyOf(observations);
 		velocityErrors = List.copyOf(errors);
+		if (stock == null) { inventory = null; geometry = reconstructed; }
+		else { stock.requireSource(domain); inventory = new LiquidInventoryRepartitionPlan(domain, reconstructed, localFields); geometry = inventory.geometry; }
 	}
 	private static <T> T ancestor(java.util.Map<LiquidPhasePartition.Address, T> roots, LiquidGeometryRefinement.Cell cell) {
 		for (int level = cell.level(); level >= 0; level--) {
@@ -194,13 +226,13 @@ final class LiquidGeometryReconstructionPlan {
 		var result = new LiquidExactPolygon.Measure[cells.size()]; Arrays.fill(result, LiquidConvexRegion.EMPTY.measure());
 		for (int f = 0; f < cells.size(); f++) result[owners[f]] = result[owners[f]].add(cells.get(f).geometry().measure()); return result;
 	}
-	private static Fraction[][] integratedField(LiquidGeometryState state, List<LiquidGeometryRefinement.Cell> cells) {
+	private static Fraction[][] integratedField(LiquidGeometryState state, List<LiquidGeometryRefinement.Cell> cells, int[] phases, Fraction[] densities) {
 		var result = new Fraction[cells.size()][4]; for (var row : result) Arrays.fill(row, Fraction.ZERO);
-		for (var field : LiquidGeometryMomentumAudit.volumesByVelocity(state, cells)) {
-			int owner = field.owner(); var volume = field.volume();
+		for (int f = 0; f < cells.size(); f++) {
+			int owner = phases[f]; var mass = cells.get(f).geometry().measure().volume().multiply(densities[f]); var velocity = state.cells().get(f).copyVelocity();
 			for (int a = 0; a < 3; a++) {
-				var velocity = Fraction.of(field.velocity().coordinate(a)); result[owner][a] = result[owner][a].add(volume.multiply(velocity));
-				result[owner][3] = result[owner][3].add(volume.multiply(velocity).multiply(velocity).divide(Fraction.of(2)));
+				var u = Fraction.of(velocity[a]); result[owner][a] = result[owner][a].add(mass.multiply(u));
+				result[owner][3] = result[owner][3].add(mass.multiply(u).multiply(u).divide(Fraction.of(2)));
 			}
 		}
 		return result;
