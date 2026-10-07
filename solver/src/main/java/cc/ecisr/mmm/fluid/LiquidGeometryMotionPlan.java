@@ -12,7 +12,7 @@ final class LiquidGeometryMotionPlan {
 		Fraction[] mean(int cell);
 		List<LiquidPolyhedron> images(int cell);
 	}
-	record InventoryMotion(int owner, LiquidPolyhedron.Point positionMetres, LiquidPolyhedron.Point velocityMetresPerSecond) { }
+	record InventoryMotion(int owner, LiquidPolyhedron.Point positionMetres, LiquidPolyhedron.Point velocityMetresPerSecond) implements LiquidGeometryPublication.Observation { }
 	final LiquidGeometryState geometry;
 	final List<InventoryMotion> inventoryMotion;
 	final ResolvedGasInterfaceMotion gasInterfaces;
@@ -154,30 +154,6 @@ final class LiquidGeometryMotionPlan {
 
 	/** Publishes observations and actual geometry only after the complete successor passes inventory and collision checks. */
 	void publish(FluidDomain domain) {
-		if (domain.liquidGeometryState != input) throw new IllegalStateException("Geometric motion refers to an obsolete liquid input");
-		LiquidGeometryStateMapper.requireCompatible(input, domain);
-		int count = domain.particles.count(); int[] markers = geometry.copyMarkerCells();
-		var motion = new InventoryMotion[geometry.cells().size()]; for (var group : inventoryMotion) motion[group.owner()] = group;
-		float[] positions = new float[3 * count], velocities = new float[3 * count];
-		for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++) {
-			int extent = a == 0 ? domain.sizeX : a == 1 ? domain.sizeY : domain.sizeZ; var group = motion[markers[p]];
-			positions[3 * p + a] = Math.min((float) group.positionMetres().coordinate(a), Math.nextDown(extent * domain.config.cellSize()));
-			velocities[3 * p + a] = (float) group.velocityMetresPerSecond().coordinate(a);
-		}
-		var previous = LiquidGeometryInventoryView.of(domain.particles);
-		LiquidGeometryStateMapper.requireCompatible(geometry, new LiquidGeometryInventoryView() {
-			public int count() { return count; }
-			public double volume(int p) { return previous.volume(p); }
-			public double mass(int p) { return previous.mass(p); }
-			public double position(int p, int a) { return positions[3 * p + a]; }
-			public double velocity(int p, int a) { return velocities[3 * p + a]; }
-		}, domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells.copyMicroMasks());
-		for (int p = 0; p < count; p++) {
-			if (domain.chemicalParcels != null) domain.chemicalParcels.markDirtyCell(domain.particleCellIndex(p));
-			domain.particles.setPositionX(p, positions[3 * p]); domain.particles.setPositionY(p, positions[3 * p + 1]); domain.particles.setPositionZ(p, positions[3 * p + 2]);
-			domain.particles.setVelocityX(p, velocities[3 * p]); domain.particles.setVelocityY(p, velocities[3 * p + 1]); domain.particles.setVelocityZ(p, velocities[3 * p + 2]);
-			if (domain.chemicalParcels != null) domain.chemicalParcels.markDirtyCell(domain.particleCellIndex(p));
-		}
-		domain.liquidGeometryState = geometry; domain.gridDirty = true; domain.velocityGridDirty = true;
+		LiquidGeometryPublication.publish(domain, input, geometry, inventoryMotion);
 	}
 }

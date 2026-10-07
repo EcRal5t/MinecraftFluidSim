@@ -23,6 +23,9 @@ final class LiquidCharacteristicValidation {
 		productionGeometryPipelineUsesMaterialSurfaceEnergy(angles, 1);
 	}
 	private static void productionGeometryPipelineUsesMaterialSurfaceEnergy(double[] angles, int steps) {
+		productionGeometryPipelineUsesMaterialSurfaceEnergy(angles, steps, null);
+	}
+	private static void productionGeometryPipelineUsesMaterialSurfaceEnergy(double[] angles, int steps, LiquidMomentReconstruction.Tolerance reconstruction) {
 		if (steps < 1) throw new IllegalArgumentException("Material surface requires a positive step count");
 		for (double angle : angles) {
 			long started = System.nanoTime();
@@ -38,9 +41,25 @@ final class LiquidCharacteristicValidation {
 			double before = surfaceEnergy(domain), mass = domain.totalMass(); var gas = domain.exportGasState("");
 			for (int step = 1; step <= steps; step++) {
 				System.out.println("material surface step=" + step + " start millis=" + (System.nanoTime() - started) / 1e6);
+				double remeshMillis = 0;
+				if (step > 1 && reconstruction != null) {
+					long remeshStarted = System.nanoTime(); double previousSurface = surfaceEnergy(domain), kinetic = domain.particleKineticEnergyJoules();
+					var support = new ArrayList<>(LiquidGeometryStateMapper.restore(domain.liquidGeometryState)); support.addAll(LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells()));
+					var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, support, 65536);
+					var plan = new LiquidGeometryReconstructionPlan(domain.liquidGeometryState, domain.gasState.geometry, partition.leaves, reconstruction,
+							new LiquidMomentReconstruction.Budget(65536, 65536, 12, 65536));
+					new ResolvedGasMotionPlan(domain, plan, 65536, 4194304).publish(domain, plan);
+					if (domain.particleKineticEnergyJoules() != kinetic) throw new AssertionError("Wetting reconstruction changed resolved P0 kinetic energy");
+					double surfaceChange = surfaceEnergy(domain) - previousSurface; before += surfaceChange;
+					remeshMillis = (System.nanoTime() - remeshStarted) / 1e6;
+					System.out.println("material surface reconstructionMillis=" + remeshMillis + " surfaceChangeJoules=" + surfaceChange + " leaves=" + plan.leaves.size()
+							+ " liquid=" + plan.geometry.cells().size() + " gas=" + plan.gasGeometry.cells().size() + " evaluations=" + plan.evaluations
+							+ " centroidError=" + plan.maximumCentroidError + " occupancyError=" + plan.maximumOccupancyErrorLength);
+				}
 				long stepStarted = System.nanoTime();
 				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step - 1, domain.captureAuthoritativeState(), List.of(), false, 0, true));
 				System.out.println("material surface angle=" + angle + " step=" + step + " fullBackendMillis=" + (System.nanoTime() - stepStarted) / 1e6);
+				if (remeshMillis > 0) System.out.println("material surface fullWithReconstructionMillis=" + (remeshMillis + (System.nanoTime() - stepStarted) / 1e6));
 				System.out.println("material surface observations=" + candidate.stats().geometry());
 				try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
 					var next = steps == 1 ? FluidDomain.restoreAuthoritativeState(candidate.state()) : candidate.claimPreparedCpuDomain();
@@ -392,7 +411,8 @@ final class LiquidCharacteristicValidation {
 	}
 	public static void main(String[] args) {
 		if (args.length >= 1 && args[0].equals("material-surface")) {
-			productionGeometryPipelineUsesMaterialSurfaceEnergy(args.length == 1 ? new double[]{60, 120} : new double[]{Double.parseDouble(args[1])}, args.length > 2 ? Integer.parseInt(args[2]) : 1);
+			productionGeometryPipelineUsesMaterialSurfaceEnergy(args.length == 1 ? new double[]{60, 120} : new double[]{Double.parseDouble(args[1])}, args.length > 2 ? Integer.parseInt(args[2]) : 1,
+					args.length > 3 ? new LiquidMomentReconstruction.Tolerance(Double.parseDouble(args[3]), Double.parseDouble(args[4]), 48) : null);
 			System.out.println("Resolved material surface energy full backend validation passed");
 		} else if (args.length == 1 && args[0].equals("conforming-timing")) {
 			productionGeometryPipelinePreservesContinuousShear(2, true);

@@ -29,6 +29,7 @@ public final class CarrierMutationValidation {
 		nativeSourceBatchMovesGeometryAndSideColumns();
 		nativeExtractionMovesGeometryAndSideColumns();
 		nativeGasMotionCarriesEnergy();
+		nativePhaseReconstructionKeepsEnergy();
 		System.out.println("Carrier mutation validation passed");
 	}
 	private static void nativeGasMotionCarriesEnergy() throws Exception {
@@ -38,6 +39,16 @@ public final class CarrierMutationValidation {
 			domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 1, 1.0 / 256, 1000.0 / 256,
 					registries.liquids().materials(), liquid.copyPositionVolume(), liquid.copyParticleVelocities(), liquid.copyCollisionMicroMasks(),
 					new double[]{1000.0 / 256}, new int[]{0}, liquid.liquidGeometry()));
+			FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		});
+	}
+	private static void nativePhaseReconstructionKeepsEnergy() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		LiquidJointReconstructionValidation.jointGasReconstructionPreservesMaterialChambers(domain -> {
+			var liquid = domain.exportParticleState(); double mass = domain.totalMass();
+			domain.restoreMaterialParticleState(new FlipMaterialParticleState(domain.sizeX(), domain.sizeY(), domain.sizeZ(), domain.config().cellSize(), 1,
+					liquid.totalVolume(), mass, registries.liquids().materials(), liquid.copyPositionVolume(), liquid.copyParticleVelocities(), liquid.copyCollisionMicroMasks(),
+					new double[]{mass}, new int[]{0}, liquid.liquidGeometry()));
 			FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		});
 	}

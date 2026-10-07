@@ -3,6 +3,11 @@ package cc.ecisr.mmm.fluid;
 /** Moment-of-fluid orientation fit; unresolved centroid defects request spatial refinement. */
 final class LiquidMomentInterface {
 	record Result(LiquidVolumeInterface interfaceGeometry, LiquidPolyhedron.Point normal, double centroidError, int evaluations) { }
+	static final class Work {
+		final int maximum;
+		int evaluations;
+		Work(int maximum) { if (maximum < 1) throw new IllegalArgumentException("Missing moment fit evaluation budget"); this.maximum = maximum; }
+	}
 	private LiquidMomentInterface() { }
 	static Result reconstruct(LiquidPolyhedron open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
 			int coordinateBits, double centroidTolerance, int maximumEvaluations) {
@@ -10,14 +15,24 @@ final class LiquidMomentInterface {
 	}
 	static Result reconstruct(java.util.List<LiquidPolyhedron> open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
 			int coordinateBits, double centroidTolerance, int maximumEvaluations) {
-		if (target == null || target.signum() <= 0 || !(centroidTolerance > 0) || !Double.isFinite(centroidTolerance) || maximumEvaluations < 1)
+		return reconstruct(open, target, initialNormal, coordinateBits, centroidTolerance, new Work(maximumEvaluations), true);
+	}
+	static Result planar(java.util.List<LiquidPolyhedron> open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
+			int coordinateBits, double centroidTolerance, int maximumEvaluations) {
+		return planar(open, target, initialNormal, coordinateBits, centroidTolerance, new Work(maximumEvaluations));
+	}
+	static Result planar(java.util.List<LiquidPolyhedron> open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
+			int coordinateBits, double centroidTolerance, Work work) { return reconstruct(open, target, initialNormal, coordinateBits, centroidTolerance, work, false); }
+	private static Result reconstruct(java.util.List<LiquidPolyhedron> open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
+			int coordinateBits, double centroidTolerance, Work work, boolean exactVolume) {
+		if (target == null || target.signum() <= 0 || !(centroidTolerance > 0) || !Double.isFinite(centroidTolerance) || work == null || work.evaluations != 0)
 			throw new IllegalArgumentException("Invalid moment-of-fluid reconstruction request");
 		var capacityMeasure = LiquidVolumeInterface.measure(open); var normal = unit(initialNormal);
 		var direction = capacityMeasure.centroid().subtract(target.centroid());
 		if (normal.dot(direction) < 0) normal = new LiquidPolyhedron.Point(-normal.x(), -normal.y(), -normal.z());
-		var current = LiquidVolumeInterface.reconstruct(open, target.volume(), normal, coordinateBits); var capacity = capacityMeasure.volume();
-		double error = current.centroidError(target); int evaluations = 1;
-		while (error > centroidTolerance && evaluations < maximumEvaluations) {
+		var current = representation(open, target, normal, coordinateBits, exactVolume, work); var capacity = capacityMeasure.volume();
+		double error = current.centroidDistance(target);
+		while (error > centroidTolerance && work.evaluations < work.maximum) {
 			if (target.volume().equals(capacity)) break;
 			var a = tangent(normal); var b = normal.cross(a); var derivative = current.centroidDerivative();
 			double[] ja = new double[3], jb = ja.clone(), rhs = ja.clone();
@@ -40,18 +55,23 @@ final class LiquidMomentInterface {
 			// A unit angular trust interval and monotone line search bound each orientation update.
 			if (length > 1) { x /= length; y /= length; }
 			boolean improved = false;
-			for (double step = 1; step > 0 && evaluations < maximumEvaluations; step *= 0.5) {
+			for (double step = 1; step > 0 && work.evaluations < work.maximum; step *= 0.5) {
 				var candidate = unit(new LiquidPolyhedron.Point(normal.x() + step * (x * a.x() + y * b.x()),
 						normal.y() + step * (x * a.y() + y * b.y()), normal.z() + step * (x * a.z() + y * b.z())));
 				if (candidate.equals(normal)) break;
-				evaluations++;
-				var representation = LiquidVolumeInterface.reconstruct(open, target.volume(), candidate, coordinateBits);
-				double nextError = representation.centroidError(target);
+				var representation = representation(open, target, candidate, coordinateBits, exactVolume, work);
+				double nextError = representation.centroidDistance(target);
 				if (nextError < error) { current = representation; normal = candidate; error = nextError; improved = true; break; }
 			}
 			if (!improved) break;
 		}
-		return new Result(current, normal, error, evaluations);
+		return new Result(current, normal, error, work.evaluations);
+	}
+	private static LiquidVolumeInterface representation(java.util.List<LiquidPolyhedron> open, LiquidExactPolygon.Measure target,
+			LiquidPolyhedron.Point normal, int bits, boolean exactVolume, Work work) {
+		if (work.evaluations == work.maximum) throw new IllegalStateException("Moment reconstruction exceeds its evaluation budget");
+		work.evaluations++;
+		return exactVolume ? LiquidVolumeInterface.reconstruct(open, target.volume(), normal, bits) : LiquidVolumeInterface.planar(open, target.volume(), normal, bits);
 	}
 	private static LiquidPolyhedron.Point tangent(LiquidPolyhedron.Point normal) {
 		int axis = 0; for (int i = 1; i < 3; i++) if (Math.abs(normal.coordinate(i)) < Math.abs(normal.coordinate(axis))) axis = i;

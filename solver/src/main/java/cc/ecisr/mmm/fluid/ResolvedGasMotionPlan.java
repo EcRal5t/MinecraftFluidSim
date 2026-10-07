@@ -49,6 +49,26 @@ final class ResolvedGasMotionPlan {
 		}
 		for (int old = 1; old < used.length; old++) if (!used[old])
 			throw new GasTopologyBlockedException("Gas inventory lacks a preserved material chamber");
+		var remap = remap(domain, geometry, parents); inventory = remap.inventory; energy = remap.energy;
+	}
+
+	/** A spatial reconstruction preserves each chamber volume and transfers only its canonical ordinal. */
+	ResolvedGasMotionPlan(FluidDomain domain, LiquidGeometryReconstructionPlan reconstruction, int maximumRegions, int maximumPairs) {
+		previous = domain.gasState.geometry; network = domain.gasState.network; nextLiquid = reconstruction.geometry; thermal = domain.thermalState;
+		geometry = reconstruction.gasGeometry;
+		if (previous == null || reconstruction.previousGasGeometry != previous || reconstruction.input != domain.liquidGeometryState || geometry == null)
+			throw new IllegalArgumentException("Incomplete joint phase reconstruction input");
+		var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, reconstruction.leaves, maximumRegions);
+		var next = new LiquidGeometryPhaseInput(nextLiquid, partition, geometry, maximumRegions);
+		ResolvedGasGeometry.match(geometry, next, maximumPairs);
+		var oldVolume = ResolvedGasGeometry.volumes(previous); var nextVolume = ResolvedGasGeometry.volumes(geometry);
+		for (int node = 0; node < nextVolume.length; node++) if (!nextVolume[node].equals(oldVolume[reconstruction.previousGasNodes[node]]))
+			throw new IllegalArgumentException("Spatial reconstruction changes material gas volume");
+		var remap = remap(domain, geometry, reconstruction.previousGasNodes); inventory = remap.inventory; energy = remap.energy;
+	}
+	private record Remap(AirNetwork.RemapPlan inventory, GasEnergyStore.GasRemapPlan energy) { }
+	private static Remap remap(FluidDomain domain, GasGeometryState geometry, int[] parents) {
+		var network = domain.gasState.network; var thermal = domain.thermalState;
 		var available = ResolvedGasStateLifecycle.available(geometry); var inherited = new double[available.length];
 		var inventories = new ArrayList<GasInventory>();
 		boolean hasEnergy = thermal != null && thermal.gasModelBound();
@@ -57,17 +77,27 @@ final class ResolvedGasMotionPlan {
 			int old = parents[node]; inventories.add(network.inventory(old)); inherited[node - 1] = network.availableVolume(old);
 			if (hasEnergy) energies[node - 1] = thermal.gasNodeEnergy(old, network);
 		}
-		inventory = network.planRemapNodes(available, inventories, GasInventory.EMPTY, GasInventory.EMPTY, List.of());
-		energy = hasEnergy ? thermal.planGasRemap(network, inventories, available, energies, inherited, 0, 0) : null;
+		var inventory = network.planRemapNodes(available, inventories, GasInventory.EMPTY, GasInventory.EMPTY, List.of());
+		var energy = hasEnergy ? thermal.planGasRemap(network, inventories, available, energies, inherited, 0, 0) : null;
+		return new Remap(inventory, energy);
 	}
 
 	/** Both owners preflight before the liquid writes; liquid publication preserves their revisions. */
 	void publish(FluidDomain domain, LiquidGeometryMotionPlan motion) {
-		if (domain.gasState.geometry != previous || domain.gasState.network != network || domain.thermalState != thermal || motion.geometry != nextLiquid)
+		requirePublication(domain, motion.geometry);
+		motion.publish(domain); commit(domain);
+	}
+	void publish(FluidDomain domain, LiquidGeometryReconstructionPlan reconstruction) {
+		requirePublication(domain, reconstruction.geometry);
+		LiquidGeometryPublication.publish(domain, reconstruction.input, reconstruction.geometry, reconstruction.inventoryObservations); commit(domain);
+	}
+	private void requirePublication(FluidDomain domain, LiquidGeometryState liquid) {
+		if (domain.gasState.geometry != previous || domain.gasState.network != network || domain.thermalState != thermal || liquid != nextLiquid)
 			throw new IllegalStateException("Resolved gas motion input changed after planning");
 		network.requireCanCommitRemap(inventory);
 		if (energy != null) thermal.requireCanCommitGasRemap(energy);
-		motion.publish(domain);
+	}
+	private void commit(FluidDomain domain) {
 		if (energy != null) thermal.commitGasRemap(energy);
 		network.commitRemapNodes(inventory); ResolvedGasStateLifecycle.publish(domain, geometry);
 	}

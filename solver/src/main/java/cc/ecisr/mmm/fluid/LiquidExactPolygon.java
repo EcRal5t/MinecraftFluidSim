@@ -295,6 +295,16 @@ final class LiquidExactPolygon {
 		volume = volume.divide(Fraction.of(3)); for (int a = 0; a < 3; a++) moment[a] = moment[a].divide(Fraction.of(4));
 		return new Measure(volume, moment);
 	}
+	/** Occupancy intersections need only the closed-surface volume integral. */
+	static Fraction volume(List<LiquidExactPolygon> faces) {
+		var volume = Fraction.ZERO;
+		for (var face : faces) {
+			if (!face.hasArea()) continue;
+			var plane = face.coefficients(); int axis = 0; while (plane.get(axis).signum() == 0) axis++;
+			volume = volume.add(face.areaVector()[axis].multiply(new Fraction(plane.get(3), plane.get(axis))));
+		}
+		return volume.divide(Fraction.of(3));
+	}
 	boolean hasArea() {
 		if (vertices.size() < 3) return false;
 		var a = vertices.getFirst();

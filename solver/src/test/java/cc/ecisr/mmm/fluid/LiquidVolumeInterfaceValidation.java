@@ -124,7 +124,7 @@ final class LiquidVolumeInterfaceValidation {
 		var subdivided = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)).stream().map(LiquidGeometryRefinement.Cell::geometry).toList();
 		var equivalent = LiquidMomentReconstruction.reconstruct(open, subdivided, new LiquidPolyhedron.Point(0, 1, 0), tolerance, budget);
 		if (result.leaves().size() != equivalent.leaves().size() || !result.phases().getFirst().representedMeasure().same(equivalent.phases().getFirst().representedMeasure())
-				|| !result.phases().getFirst().symmetricDifferenceVolume().equals(equivalent.phases().getFirst().symmetricDifferenceVolume()) || result.evaluations() != equivalent.evaluations())
+				|| !result.phases().getFirst().symmetricDifferenceVolumeBound().equals(equivalent.phases().getFirst().symmetricDifferenceVolumeBound()) || result.evaluations() != equivalent.evaluations())
 			throw new AssertionError("Auxiliary source partitions changed the reconstructed interface or refinement decisions");
 		var coverage = LiquidConvexRegion.EMPTY.measure(); var differences = Fraction.ZERO;
 		var cells = new java.util.ArrayList<LiquidGeometryRefinement.Cell>();
@@ -141,7 +141,7 @@ final class LiquidVolumeInterfaceValidation {
 			differences = differences.add(difference);
 		}
 		LiquidPhasePartition.requireDisjoint(cells);
-		if (!coverage.same(cube.measure()) || !differences.equals(result.phases().getFirst().symmetricDifferenceVolume())) throw new AssertionError("Adaptive leaves lost complete open-space coverage or understated occupied-space error");
+		if (!coverage.same(cube.measure()) || differences.subtract(result.phases().getFirst().symmetricDifferenceVolumeBound()).signum() > 0) throw new AssertionError("Adaptive leaves lost complete open-space coverage or understated occupied-space error");
 		for (var exhausted : List.of(new LiquidMomentReconstruction.Budget(1, 4096, 8, 16384), new LiquidMomentReconstruction.Budget(1024, 1, 1, 16384))) {
 			try {
 				LiquidMomentReconstruction.reconstruct(open, List.of(shape), new LiquidPolyhedron.Point(0, 1, 0), tolerance, exhausted);

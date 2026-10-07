@@ -62,6 +62,8 @@ marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 compone
 
 气腔身份保持时，`ResolvedGasMotionPlan` 携带完整库存、内能和既有容量，按后继实际容量计算状态方程与绝热功。气体与热学 owner 在液体写入前共同接受原输入和 revision，随后一次发布液体、气体几何与库存。没有液气接触的静止气腔通过精确空间相等证明归属。分裂、合并和环境交换还需要完整的物质体积交接；现有计划遇到这些变化时拒绝候选。
 
+空间表示重建通过 `LiquidGeometryReconstructionPlan` 联合约束液体控制体与各气腔的占据体积，逐腔精确保留原容量。`ResolvedGasMotionPlan` 校验重建后的实际连通关系和完整空间覆盖，按保存的腔体对应关系携带库存及内能；该交接保持原压力和内能。过期的气体 revision 在液体位置、速度与几何写入前拒绝整份候选。
+
 - 每个密闭节点以 canonical minimum-cell key 和完整 cell membership 标识。
 - 每个气体组分保存稳定 component ID、标准体积 nanos、独立质量 kg、可选 species 和 chemical mass residual kg；气体的两个质量列都不使用凝聚相 solver mass weight。
 - source、sink、质量 roundoff 和 residual roundoff 是独立审计列。
