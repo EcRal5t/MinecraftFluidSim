@@ -218,9 +218,14 @@ public final class LiquidEnergyColumn {
 	public void requireReactionState(
 			int marker, ChemicalMixtureRecord candidateMixture, double candidateMass, ThermalCarrierContext markers
 	) {
+		requireReactionState(marker, candidateMixture, SignedDyadic.of(candidateMass), markers);
+	}
+	public void requireReactionState(
+			int marker, ChemicalMixtureRecord candidateMixture, SignedDyadic candidateMass, ThermalCarrierContext markers
+	) {
 		ThermalMaterialDefinition material = material(marker, markers);
 		int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
-		double physicalMass = unitScale.kilograms(candidateMass);
+		double physicalMass = physicalMass(candidateMass);
 		double base = baseEnergy(
 				thermalHandle, physicalMass, candidateMixture, markers.chemicalRegistry());
 		double sensible = (internalEnergy[marker] - base) / physicalMass;

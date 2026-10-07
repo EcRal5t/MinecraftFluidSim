@@ -7,6 +7,7 @@ import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 /** Applies the established same-cell chemical reaction pass after thermal transport. */
 final class ChemicalReactionStage {
@@ -54,6 +55,11 @@ final class ChemicalReactionStage {
 	static void requireThermalCandidate(ThermalDomainState thermal, int marker,
 	                                   ChemicalMixtureRecord mixture,
 	                                   double mass, ThermalCarrierContext markers) {
+		requireThermalCandidate(thermal, marker, mixture, SignedDyadic.of(mass), markers);
+	}
+	static void requireThermalCandidate(ThermalDomainState thermal, int marker,
+	                                   ChemicalMixtureRecord mixture,
+	                                   SignedDyadic mass, ThermalCarrierContext markers) {
 		try {
 			thermal.requireReactionState(marker, mixture, mass, markers);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException unavailable) {

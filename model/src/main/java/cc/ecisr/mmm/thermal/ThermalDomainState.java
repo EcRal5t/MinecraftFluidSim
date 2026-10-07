@@ -228,6 +228,11 @@ public final class ThermalDomainState {
 	) {
 		liquidEnergy.requireReactionState(marker, candidateMixture, candidateMass, markers);
 	}
+	public void requireReactionState(
+			int marker, ChemicalMixtureRecord candidateMixture, SignedDyadic candidateMass, ThermalCarrierContext markers
+	) {
+		liquidEnergy.requireReactionState(marker, candidateMixture, candidateMass, markers);
+	}
 
 	public void addExternalMarker(int marker, ThermalCarrierContext markers) {
 		liquidEnergy.addExternalMarker(marker, markers);

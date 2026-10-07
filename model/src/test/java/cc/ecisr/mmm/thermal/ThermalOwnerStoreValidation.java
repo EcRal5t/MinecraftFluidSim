@@ -171,11 +171,28 @@ public final class ThermalOwnerStoreValidation {
 					== function.internalEnergyAtTemperature(0, scale.kilograms(kept).toDouble(), Map.of(), 330),
 					"Native extraction dropped the remaining mass tail in caloric preflight");
 		}
+		markers.completeMass = midpoint;
+		complete.setEnergy(0, Math.nextDown(-1180 * scale.kilograms(markers.mass)));
+		long reactionEnergyBits = Double.doubleToRawLongBits(complete.energy(0)), reactionRevision = complete.revision();
+		complete.requireReactionState(0, null, midpoint, markers);
+		require(complete.temperatureForInventory(0, midpoint, null, complete.energy(0), chemistry) >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K,
+				"Complete reaction candidate disagrees with its prospective caloric inversion");
+		try {
+			complete.requireReactionState(0, null, markers.mass, markers);
+			throw new AssertionError("Reaction precision fixture did not distinguish the rounded mass candidate");
+		} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
+		try {
+			complete.requireReactionState(0, null, SignedDyadic.ZERO, markers);
+			throw new AssertionError("Reaction candidate accepted zero caloric mass");
+		} catch (IllegalArgumentException expected) { }
+		require(Double.doubleToRawLongBits(complete.energy(0)) == reactionEnergyBits && complete.revision() == reactionRevision,
+				"Reaction caloric validation wrote the energy inventory");
 		var domainScale = cc.ecisr.mmm.units.SolverUnitScale.forCellSize(1.1F);
 		var domain = new ThermalDomainState(registry, new int[]{0}, new int[0], 330, 1, 1, 1, 1, 1.1F, markers, null, 8);
 		for (var full : List.of(SignedDyadic.of(1), midpoint)) {
 			markers.completeMass = full; double physical = domainScale.kilograms(full).toDouble();
 			domain.resetMarkerTemperature(0, 330, markers, domain.exactEnergy(1));
+			domain.requireReactionState(0, null, full, markers);
 			var body = domain.prepareConduction(markers, null).liquidBodies().getFirst();
 			require(body.massKilograms() == physical && body.baseEnergyEu() == function.baseEnergy(0, physical, Map.of())
 					&& domain.carrierAccess(markers).mass(0) == physical && domain.temperature(0, markers) == body.temperatureK(),
