@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
 
-/** One shared-face coordinate solve imposes all phase volumes after planar joint reconstruction. */
+/** Shared-face coordinate solves impose the finite local phase volumes in a common partition. */
 final class LiquidJointInterfaceVolume {
 	record Result(List<LiquidMomentReconstruction.Phase> phases, List<Fraction> symmetricDifferenceBounds) { }
 	record PartitionResult(List<LiquidMomentReconstruction.Leaf> leaves, List<List<Fraction>> symmetricDifferenceBounds) { }
@@ -18,27 +18,32 @@ final class LiquidJointInterfaceVolume {
 		if (phases.size() != volume.size()) throw new IllegalArgumentException("Incomplete joint volume constraints");
 		var indexed = new ArrayList<LiquidMomentReconstruction.Phase>(); var targets = new LinkedHashMap<Integer, Fraction>();
 		for (int p = 0; p < phases.size(); p++) { indexed.add(new LiquidMomentReconstruction.Phase(p, phases.get(p).pieces())); targets.put(p, volume.get(p)); }
-		var result = project(List.of(new LiquidMomentReconstruction.Leaf(open, indexed)), targets, maximumRegions);
+		var result = project(List.of(new LiquidMomentReconstruction.Leaf(open, indexed)), targets, List.of(targets), maximumRegions);
 		var restored = new ArrayList<LiquidMomentReconstruction.Phase>();
 		for (int p = 0; p < phases.size(); p++) restored.add(new LiquidMomentReconstruction.Phase(phases.get(p).control(), result.leaves.getFirst().phases().get(p).pieces()));
 		return new Result(List.copyOf(restored), result.symmetricDifferenceBounds.getFirst());
 	}
-	static PartitionResult project(List<LiquidMomentReconstruction.Leaf> leaves, Map<Integer, Fraction> volume, int maximumRegions) {
+	static PartitionResult project(List<LiquidMomentReconstruction.Leaf> leaves, Map<Integer, Fraction> volume,
+			List<Map<Integer, Fraction>> localVolumes, int maximumRegions) {
+		if (localVolumes.size() != leaves.size()) throw new IllegalArgumentException("Incomplete local phase volume constraints");
 		var cells = new ArrayList<LiquidGeometryRefinement.Cell>(); var groups = new ArrayList<Integer>();
-		var owners = new ArrayList<Integer>(); var localPhases = new ArrayList<Integer>(); var ordinals = new LinkedHashMap<Integer, Integer>();
+		var owners = new ArrayList<Integer>(); var localPhases = new ArrayList<Integer>(); var localTargets = new ArrayList<Fraction>();
+		var targetTotals = new LinkedHashMap<Integer, Fraction>();
 		for (int l = 0; l < leaves.size(); l++) {
 			var leaf = leaves.get(l); var address = LiquidPhasePartition.Address.of(leaf.open());
 			for (int p = 0; p < leaf.phases().size(); p++) {
-				var phase = leaf.phases().get(p); int group = ordinals.computeIfAbsent(phase.control(), ignored -> ordinals.size());
+				var phase = leaf.phases().get(p); int group = localTargets.size(); var target = localVolumes.get(l).get(phase.control());
+				if (target == null || target.signum() <= 0) throw new IllegalArgumentException("Missing positive local phase volume");
+				localTargets.add(target); targetTotals.merge(phase.control(), target, Fraction::add);
 				for (var piece : phase.pieces()) { cells.add(address.cell(piece)); groups.add(group); owners.add(l); localPhases.add(p); }
 			}
 		}
 		if (cells.size() > maximumRegions) throw new IllegalStateException("Joint phase correction exceeds its region budget");
-		if (!ordinals.keySet().equals(volume.keySet())) throw new IllegalArgumentException("Incomplete material volume constraints");
-		var represented = new Fraction[ordinals.size()]; Arrays.fill(represented, Fraction.ZERO);
+		if (!targetTotals.equals(volume)) throw new IllegalArgumentException("Local phase constraints disagree with material volumes");
+		var represented = new Fraction[localTargets.size()]; Arrays.fill(represented, Fraction.ZERO);
 		for (int c = 0; c < cells.size(); c++) represented[groups.get(c)] = represented[groups.get(c)].add(cells.get(c).geometry().measure().volume());
-		var source = new Fraction[ordinals.size()]; var constrained = new boolean[source.length]; Arrays.fill(constrained, true);
-		ordinals.forEach((phase, group) -> source[group] = volume.get(phase).subtract(represented[group]));
+		var source = new Fraction[localTargets.size()]; var constrained = new boolean[source.length]; Arrays.fill(constrained, true);
+		for (int group = 0; group < source.length; group++) source[group] = localTargets.get(group).subtract(represented[group]);
 		var difference = new ArrayList<Fraction[]>();
 		for (var leaf : leaves) { var values = new Fraction[leaf.phases().size()]; Arrays.fill(values, Fraction.ZERO); difference.add(values); }
 		if (Arrays.stream(source).allMatch(value -> value.signum() == 0)) return new PartitionResult(List.copyOf(leaves), difference.stream().map(List::of).toList());
@@ -55,7 +60,7 @@ final class LiquidJointInterfaceVolume {
 			var area = face.areaVector().toArray(Fraction[]::new); weights[e] = 1 / dot(area, area).rounded();
 			if (!(weights[e] > 0) || !Double.isFinite(weights[e])) throw new LiquidCoordinateResolutionRequired("Joint phase face metric exceeds its coordinate support");
 		}
-		var coordinates = new ConservativeFluxCoordinates(ordinals.size(), first, second, constrained, fixed, weights);
+		var coordinates = new ConservativeFluxCoordinates(localTargets.size(), first, second, constrained, fixed, weights);
 		var independent = new Fraction[coordinates.size()]; Arrays.fill(independent, Fraction.ZERO); var transfer = coordinates.liftExact(independent, source);
 		var centers = new ArrayList<Vertex>(); var changed = new boolean[mesh.cells.size()];
 		for (var polygon : mesh.exactPolygons) centers.add(LiquidExactPolygon.vertex(polygon.centroidCoordinates()));
@@ -69,7 +74,7 @@ final class LiquidJointInterfaceVolume {
 			for (int a = 0; a < 3; a++) point[a] = point[a].add(area[a].multiply(factor));
 			var vertex = LiquidExactPolygon.vertex(point);
 			for (var plane : LiquidExactPolygon.faces(leaves.get(owners.get(face.first())).open().geometry())) if (vertex.distance(plane.coefficients()).signum() > 0)
-				throw new LiquidCoordinateResolutionRequired("Joint phase correction leaves its open cell");
+				throw new LiquidInterfaceResolutionRequired(new int[]{owners.get(face.first())}, "Joint phase correction leaves its open cell");
 			centers.set(f, vertex); changed[face.first()] = changed[face.second()] = true;
 		}
 		var output = new ArrayList<ArrayList<ArrayList<LiquidPolyhedron>>>();
@@ -80,36 +85,46 @@ final class LiquidJointInterfaceVolume {
 			if (!changed[c]) { result.add(cells.get(c).geometry()); regions++; }
 			else {
 				var center = LiquidExactPolygon.vertex(cells.get(c).geometry().measure().centroidCoordinates());
-				var surfaces = new ArrayList<LiquidExactPolygon>(); var fan = new ArrayList<LiquidPolyhedron>();
+				var surfaces = new ArrayList<LiquidExactPolygon>();
 				for (int f : mesh.cellFaces[c]) {
 					var polygon = mesh.faces.get(f).first() == c ? mesh.exactPolygons.get(f) : mesh.exactPolygons.get(f).reversed();
 					var original = LiquidExactPolygon.vertex(polygon.centroidCoordinates()); var next = centers.get(f);
+					if (original.equals(next)) { surfaces.add(polygon); continue; }
 					for (int e = 0; e < polygon.vertices().size(); e++) {
 						var a = polygon.vertices().get(e); var b = polygon.vertices().get((e + 1) % polygon.vertices().size());
 						var old = List.of(center, original, a, b); var moved = List.of(center, next, a, b);
 						if (LiquidExactPolygon.homogeneousTetrahedronDeterminant(old).signum() != LiquidExactPolygon.homogeneousTetrahedronDeterminant(moved).signum())
-							throw new LiquidCoordinateResolutionRequired("Joint phase correction inverted a shared tetrahedron");
-						var tetrahedron = LiquidConvexRegion.ofTetrahedron(moved); fan.add(tetrahedron.geometry()); surfaces.add(tetrahedron.faces().getFirst());
+							throw new LiquidInterfaceResolutionRequired(new int[]{owners.get(c)}, "Joint phase correction exceeds its positive spatial support");
+						surfaces.add(LiquidExactPolygon.triangle(next, a, b));
 					}
 				}
 				var vertices = surfaces.stream().flatMap(face -> face.vertices().stream()).distinct().toList();
 				boolean convex = surfaces.stream().allMatch(face -> vertices.stream().allMatch(vertex -> vertex.distance(face.coefficients()).signum() <= 0));
 				if (convex) { result.add(LiquidPolyhedron.restoredExact(surfaces)); regions++; }
-				else { result.addAll(fan); regions += fan.size(); }
+				else {
+					var originalFaces = new ArrayList<LiquidExactPolygon>(); var movedCenters = new ArrayList<Vertex>();
+					for (int f : mesh.cellFaces[c]) {
+						var polygon = mesh.faces.get(f).first() == c ? mesh.exactPolygons.get(f) : mesh.exactPolygons.get(f).reversed();
+						originalFaces.add(polygon); movedCenters.add(centers.get(f));
+					}
+					var partition = LiquidSharedFaceVolumeGeometry.partition(cells.get(c).geometry(), originalFaces, movedCenters, maximumRegions - regions);
+					result.addAll(partition); regions += partition.size();
+				}
 			}
 			if (regions > maximumRegions) throw new IllegalStateException("Joint phase correction exceeds its region budget");
 		}
-		var result = new ArrayList<LiquidMomentReconstruction.Leaf>(); Arrays.fill(represented, Fraction.ZERO);
+		var result = new ArrayList<LiquidMomentReconstruction.Leaf>(); var finalVolumes = new LinkedHashMap<Integer, Fraction>();
 		for (int l = 0; l < leaves.size(); l++) {
 			var leaf = leaves.get(l); var phases = new ArrayList<LiquidMomentReconstruction.Phase>();
 			for (int p = 0; p < leaf.phases().size(); p++) {
-				int phase = leaf.phases().get(p).control(), group = ordinals.get(phase); var pieces = output.get(l).get(p);
-				represented[group] = represented[group].add(LiquidVolumeInterface.measure(pieces).volume());
+				int phase = leaf.phases().get(p).control(); var pieces = output.get(l).get(p); var measured = LiquidVolumeInterface.measure(pieces).volume();
+				if (!measured.equals(localVolumes.get(l).get(phase))) throw new IllegalStateException("Joint phase correction lost a local volume constraint");
+				finalVolumes.merge(phase, measured, Fraction::add);
 				phases.add(new LiquidMomentReconstruction.Phase(phase, pieces));
 			}
 			result.add(new LiquidMomentReconstruction.Leaf(leaf.open(), phases));
 		}
-		ordinals.forEach((phase, group) -> { if (!represented[group].equals(volume.get(phase))) throw new IllegalStateException("Joint phase correction lost an exact material volume constraint"); });
+		if (!finalVolumes.equals(volume)) throw new IllegalStateException("Joint phase correction lost an exact material volume constraint");
 		// Each shifted planar face bounds one pyramid of volume |transfer|. Their union bounds the occupied-space change.
 		return new PartitionResult(List.copyOf(result), difference.stream().map(List::of).toList());
 	}

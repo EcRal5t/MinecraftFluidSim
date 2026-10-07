@@ -47,7 +47,7 @@ final class LiquidCharacteristicValidation {
 					var support = new ArrayList<>(LiquidGeometryStateMapper.restore(domain.liquidGeometryState)); support.addAll(LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells()));
 					var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, support, 65536);
 					var plan = new LiquidGeometryReconstructionPlan(domain.liquidGeometryState, domain.gasState.geometry, partition.leaves, reconstruction, rmsVelocityError,
-							new LiquidMomentReconstruction.Budget(65536, 65536, 12, 65536));
+							new LiquidMomentReconstruction.Budget(65536, 65536, 65536));
 					new ResolvedGasMotionPlan(domain, plan, 65536, 4194304).publish(domain, plan);
 					double nextKinetic = domain.particleKineticEnergyJoules(), kineticChange = nextKinetic - kinetic;
 					var expectedChange = reconstructionKineticChange(domain, plan);

@@ -72,9 +72,7 @@ final class LiquidGeometryReconstructionPlan {
 			}
 			var sources = new ArrayList<LiquidMomentReconstruction.Source>();
 			for (var group : local.get(c).entrySet()) {
-				var normal = open.get(c).geometry().centroid().subtract(LiquidVolumeInterface.measure(group.getValue()).centroid());
-				if (normal.dot(normal) == 0) normal = new LiquidPolyhedron.Point(1, 0, 0);
-				sources.add(new LiquidMomentReconstruction.Source(group.getKey(), group.getValue(), normal));
+				sources.add(new LiquidMomentReconstruction.Source(group.getKey(), group.getValue()));
 			}
 			var support = new LiquidMomentReconstruction.Support(open.get(c), sources); supports.add(support);
 			var address = LiquidPhasePartition.Address.of(open.get(c)); originalSupports.put(address, support); projections.put(address, new LiquidGeometryVelocityProjection(open.get(c), fields.get(c)));
@@ -82,7 +80,7 @@ final class LiquidGeometryReconstructionPlan {
 		LiquidMomentReconstruction.Result result; LiquidConservativeVolumeRedistribution.Result balanced; int work = 0;
 		while (true) {
 			if (work >= budget.maximumEvaluations()) throw new IllegalStateException("Geometry reconstruction exceeds its evaluation budget");
-			var remaining = new LiquidMomentReconstruction.Budget(budget.maximumLeaves(), budget.maximumEvaluations() - work, budget.maximumFitEvaluations(), budget.maximumRegions());
+			var remaining = new LiquidMomentReconstruction.Budget(budget.maximumLeaves(), budget.maximumEvaluations() - work, budget.maximumRegions());
 			result = LiquidMomentReconstruction.reconstruct(supports, tolerance, remaining, leaf -> ancestor(projections, leaf).accepts(leaf, maximumRmsVelocityError));
 			work += result.evaluations();
 			var sources = new ArrayList<LiquidConservativeVolumeRedistribution.Source>(); var targets = new ArrayList<LiquidConservativeVolumeRedistribution.Target>();
@@ -103,7 +101,7 @@ final class LiquidGeometryReconstructionPlan {
 							var faces = LiquidExactPolygon.faces(piece); for (var plane : LiquidExactPolygon.faces(cell.geometry())) { faces = LiquidExactPolygon.clipVolume(faces, plane.coefficients(), 1); if (faces.isEmpty()) break; }
 							if (!faces.isEmpty()) pieces.add(LiquidPolyhedron.restoredExact(faces));
 						}
-						clipped.add(new LiquidMomentReconstruction.Source(group.control(), pieces, group.normal()));
+						clipped.add(new LiquidMomentReconstruction.Source(group.control(), pieces));
 					}
 					retry.add(new LiquidMomentReconstruction.Support(cell, clipped));
 				}

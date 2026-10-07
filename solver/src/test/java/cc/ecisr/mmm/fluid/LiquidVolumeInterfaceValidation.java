@@ -118,14 +118,14 @@ final class LiquidVolumeInterfaceValidation {
 	private static void adaptiveReconstructionEnforcesItsSpatialError(LiquidPolyhedron cube) {
 		var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);
 		var shape = LiquidPolyhedron.box(0.4, 0.4, 0.4, 0.6, 0.6, 0.6);
-		var budget = new LiquidMomentReconstruction.Budget(1024, 4096, 8, 16384);
+		var budget = new LiquidMomentReconstruction.Budget(1024, 4096, 16384);
 		var tolerance = new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40);
-		var result = LiquidMomentReconstruction.reconstruct(open, List.of(shape), new LiquidPolyhedron.Point(0, 1, 0), tolerance, budget);
-		if (result.leaves().size() <= 1 || result.leaves().size() > budget.maximumLeaves() || result.evaluations() > budget.maximumEvaluations()
+		var result = LiquidMomentReconstruction.reconstruct(open, List.of(new LiquidMomentReconstruction.Source(0, List.of(shape))), tolerance, budget);
+		if (result.leaves().size() != 1 || result.evaluations() > budget.maximumEvaluations()
 				|| !result.phases().getFirst().sourceMeasure().same(shape.measure()) || !result.phases().getFirst().representedMeasure().volume().equals(shape.measure().volume())
 				|| result.phases().getFirst().maximumCentroidError() > tolerance.centroidDistance()) throw new AssertionError("Adaptive interface reconstruction lost its declared geometry or work limits");
 		var subdivided = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)).stream().map(LiquidGeometryRefinement.Cell::geometry).toList();
-		var equivalent = LiquidMomentReconstruction.reconstruct(open, subdivided, new LiquidPolyhedron.Point(0, 1, 0), tolerance, budget);
+		var equivalent = LiquidMomentReconstruction.reconstruct(open, List.of(new LiquidMomentReconstruction.Source(0, subdivided)), tolerance, budget);
 		if (result.leaves().size() != equivalent.leaves().size() || !result.phases().getFirst().representedMeasure().same(equivalent.phases().getFirst().representedMeasure())
 				|| !result.phases().getFirst().symmetricDifferenceVolumeBound().equals(equivalent.phases().getFirst().symmetricDifferenceVolumeBound()) || result.evaluations() != equivalent.evaluations())
 			throw new AssertionError("Auxiliary source partitions changed the reconstructed interface or refinement decisions");
@@ -146,9 +146,9 @@ final class LiquidVolumeInterfaceValidation {
 		}
 		LiquidPhasePartition.requireDisjoint(cells);
 		if (!coverage.same(cube.measure()) || differences.subtract(result.phases().getFirst().symmetricDifferenceVolumeBound()).signum() > 0) throw new AssertionError("Adaptive leaves lost complete open-space coverage or understated occupied-space error");
-		for (var exhausted : List.of(new LiquidMomentReconstruction.Budget(1, 4096, 8, 16384), new LiquidMomentReconstruction.Budget(1024, 1, 1, 16384))) {
+		for (var exhausted : List.of(new LiquidMomentReconstruction.Budget(1, 4096, 16384), new LiquidMomentReconstruction.Budget(1024, 1, 16384))) {
 			try {
-				LiquidMomentReconstruction.reconstruct(open, List.of(shape), new LiquidPolyhedron.Point(0, 1, 0), tolerance, exhausted);
+				LiquidMomentReconstruction.reconstruct(open, List.of(new LiquidMomentReconstruction.Source(0, List.of(shape, LiquidPolyhedron.box(0.7, 0.4, 0.4, 0.9, 0.6, 0.6)))), tolerance, exhausted);
 				throw new AssertionError("An exhausted reconstruction budget returned unresolved geometry");
 			} catch (IllegalStateException expected) {
 				var reason = exhausted.maximumLeaves() == 1 ? "spatial leaf budget" : "evaluation budget";

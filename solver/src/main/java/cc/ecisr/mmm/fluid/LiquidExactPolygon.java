@@ -176,6 +176,9 @@ final class LiquidExactPolygon {
 	List<LiquidExactPolygon> tetrahedron(Fraction[] apex, int edge) {
 		return tetrahedron(tetrahedronVertices(apex, edge));
 	}
+	static LiquidExactPolygon triangle(Vertex a, Vertex b, Vertex c) {
+		return new LiquidExactPolygon(List.of(a, b, c), cross(difference(b, a), difference(c, a)));
+	}
 	static List<LiquidExactPolygon> tetrahedron(List<Vertex> points) {
 		if (points.size() != 4) throw new IllegalArgumentException("A geometric tetrahedron needs four vertices");
 		var result = new ArrayList<LiquidExactPolygon>();
