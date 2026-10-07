@@ -65,6 +65,11 @@ public final class CarrierMutationValidation {
 				new double[]{m.toDouble(), m.toDouble()}, new int[2], geometry, quantities);
 		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), 64); domain.restoreMaterialParticleState(state);
 		domain.ensureParticleCapacity(32);
+		var successor = new LiquidGeometryState(geometry.rootWidthMetres(), geometry.cells(), geometry.copyMarkerCells(), geometry.copyFragmentOwners(), geometry.copyControlCells());
+		LiquidGeometryPublication.publish(domain, geometry, successor, java.util.List.of(new LiquidGeometryMotionPlan.InventoryMotion(0,
+				new LiquidPolyhedron.Point(positions[0], positions[1], positions[2]), new LiquidPolyhedron.Point(1, 0, 0))));
+		require(domain.liquidGeometryState == successor && domain.particles.exactVolume(0).equals(v) && domain.particles.exactMass(1).equals(m),
+				"geometric observation publication rounded independent extensive quantities");
 		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		var actual = restored.exportMaterialParticleState().inventory();
 		require(actual.totalVolume().equals(quantities.totalVolume()) && actual.totalMass().equals(quantities.totalMass())
@@ -186,9 +191,9 @@ public final class CarrierMutationValidation {
 		FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		var initial = domain.particles.inventory(); var species = domain.chemicalLedgerForMarkerRange(0, 1).groups().getFirst().speciesQuanta();
 		var audit = domain.thermalAudit();
-		for (int step = 0; step < 2; step++) {
+		for (int step = 0; step < 3; step++) {
 			domain = new CpuFluidSolverBackend().evaluate(FluidStepRequest.pendingPhaseSettlement(step, domain.captureAuthoritativeState())).claimPreparedCpuDomain();
-			if (step == 0) try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
+			if (step < 2) try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
 				var support = new java.util.ArrayList<>(LiquidGeometryStateMapper.restore(domain.liquidGeometryState));
 				support.addAll(LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells()));
 				var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, support, 65536);

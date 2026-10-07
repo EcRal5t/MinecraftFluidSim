@@ -200,7 +200,7 @@ final class LiquidMomentReconstruction {
 			referenceVolumes.add(ordered); quantum.add(localQuantum);
 		}
 		try {
-			var localVolumes = LiquidPhaseVolumeRounding.round(referenceVolumes, targets, tolerance.coordinateBits, quantum);
+			var localVolumes = LiquidPhaseVolumeRounding.round(referenceVolumes, targets, Math.max(53, tolerance.coordinateBits), quantum);
 			corrected = LiquidJointInterfaceVolume.project(leaves, targets, localVolumes, budget.maximumRegions);
 		}
 		catch (LiquidInterfaceResolutionRequired finer) {

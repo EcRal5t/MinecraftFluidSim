@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.units.SignedDyadic;
 import java.util.List;
 
 /** Publishes geometry and carrier observations against unchanged inventory columns. */
@@ -31,6 +32,8 @@ final class LiquidGeometryPublication {
 			public int count() { return count; }
 			public double volume(int p) { return previous.volume(p); }
 			public double mass(int p) { return previous.mass(p); }
+			public SignedDyadic exactVolume(int p) { return previous.exactVolume(p); }
+			public SignedDyadic exactMass(int p) { return previous.exactMass(p); }
 			public double position(int p, int a) { return positions[3 * p + a]; }
 			public double velocity(int p, int a) { return velocities[3 * p + a]; }
 		}, domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells.copyMicroMasks());

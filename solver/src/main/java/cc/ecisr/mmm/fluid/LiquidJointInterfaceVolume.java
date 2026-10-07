@@ -42,7 +42,7 @@ final class LiquidJointInterfaceVolume {
 		if (!targetTotals.equals(volume)) throw new IllegalArgumentException("Local phase constraints disagree with material volumes");
 		var represented = new Fraction[localTargets.size()]; Arrays.fill(represented, Fraction.ZERO);
 		for (int c = 0; c < cells.size(); c++) represented[groups.get(c)] = represented[groups.get(c)].add(cells.get(c).geometry().measure().volume());
-		var source = new Fraction[localTargets.size()]; var constrained = new boolean[source.length]; Arrays.fill(constrained, true);
+		var source = new Fraction[localTargets.size()];
 		for (int group = 0; group < source.length; group++) source[group] = localTargets.get(group).subtract(represented[group]);
 		var difference = new ArrayList<Fraction[]>();
 		for (var leaf : leaves) { var values = new Fraction[leaf.phases().size()]; Arrays.fill(values, Fraction.ZERO); difference.add(values); }
@@ -54,16 +54,9 @@ final class LiquidJointInterfaceVolume {
 			if (face.second() >= 0 && owners.get(face.first()).equals(owners.get(face.second()))
 					&& !groups.get(face.first()).equals(groups.get(face.second()))) selected.add(f);
 		}
-		var first = new int[selected.size()]; var second = first.clone(); var fixed = new Fraction[first.length]; var weights = new double[first.length];
-		for (int e = 0; e < selected.size(); e++) {
-			var face = mesh.faces.get(selected.get(e)); first[e] = groups.get(face.first()); second[e] = groups.get(face.second());
-			var area = face.areaVector().toArray(Fraction[]::new); weights[e] = 1 / dot(area, area).rounded();
-			if (!(weights[e] > 0) || !Double.isFinite(weights[e])) throw new LiquidCoordinateResolutionRequired("Joint phase face metric exceeds its coordinate support");
-		}
-		var coordinates = new ConservativeFluxCoordinates(localTargets.size(), first, second, constrained, fixed, weights);
-		var independent = new Fraction[coordinates.size()]; Arrays.fill(independent, Fraction.ZERO); var transfer = coordinates.liftExact(independent, source);
 		var centers = new ArrayList<Vertex>(); var changed = new boolean[mesh.cells.size()];
 		for (var polygon : mesh.exactPolygons) centers.add(LiquidExactPolygon.interiorVertex(polygon.vertices()));
+		var transfer = LiquidJointVolumeFlux.solve(mesh, cells, owners, groups, leaves, selected, source, centers);
 		for (int e = 0; e < selected.size(); e++) if (transfer[e].signum() != 0) {
 			var magnitude = transfer[e].signum() > 0 ? transfer[e] : transfer[e].negate();
 			int f = selected.get(e); var face = mesh.faces.get(f); var area = face.areaVector().toArray(Fraction[]::new);

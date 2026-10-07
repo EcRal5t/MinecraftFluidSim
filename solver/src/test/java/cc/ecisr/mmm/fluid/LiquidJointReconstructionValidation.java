@@ -8,6 +8,7 @@ final class LiquidJointReconstructionValidation {
 	static void validate() {
 		compositeCutsUseOneVolumeConstraint();
 		sharedVolumeCorrectionBoundsItsOccupiedSpaceChange();
+		sharedVolumeCorrectionRespectsFragmentCapacity();
 		globalVolumeCorrectionKeepsSharedLeafCoverage();
 		finiteVolumeRoundingPreservesBothMargins();
 		supportingPlanesCertifyTheirCoordinateEnclosure();
@@ -52,6 +53,24 @@ final class LiquidJointReconstructionValidation {
 		var address = new LiquidPhasePartition.Address(0, 0, 0, 0); LiquidPhasePartition.requireDisjoint(result.stream().map(address::cell).toList());
 		if (result.size() >= fan.size() || !measured.same(expected) || !overlap(result, fan).equals(expected.volume()))
 			throw new AssertionError("Shared face pyramid differences changed exact occupied space or moments");
+	}
+	private static void sharedVolumeCorrectionRespectsFragmentCapacity() {
+		var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var liquid = List.of(LiquidPolyhedron.box(0, 0, 0, 0.5, 1, 1)); double cut = 0.5 + Math.scalb(1.0, -30);
+		var gas = List.of(LiquidPolyhedron.box(0.5, 0, 0, cut, 1, 0.75), LiquidPolyhedron.box(cut, 0, 0, 1, 1, 0.75),
+				LiquidPolyhedron.box(0.5, 0, 0.75, 1, 1, 1));
+		var targets = List.of(Fraction.of(0.5 + 1.0 / 1024), Fraction.of(0.5 - 1.0 / 1024));
+		var phases = List.of(new LiquidMomentReconstruction.Phase(11, liquid), new LiquidMomentReconstruction.Phase(29, gas));
+		var corrected = LiquidJointInterfaceVolume.project(open, phases, targets, 128);
+		var address = LiquidPhasePartition.Address.of(open);
+		LiquidPhasePartition.requireComplete(open, corrected.phases().stream().flatMap(phase -> phase.pieces().stream()).map(address::cell).toList());
+		for (int p = 0; p < phases.size(); p++) {
+			var output = corrected.phases().get(p).pieces(); var volume = LiquidVolumeInterface.measure(output).volume();
+			var difference = LiquidVolumeInterface.measure(phases.get(p).pieces()).volume().add(volume)
+					.subtract(overlap(phases.get(p).pieces(), output).multiply(Fraction.of(2)));
+			if (!volume.equals(targets.get(p)) || difference.compareTo(corrected.symmetricDifferenceBounds().get(p)) > 0)
+				throw new AssertionError("Shared correction collapsed a thin auxiliary fragment or lost its exact volume certificate");
+		}
 	}
 	private static void supportingPlanesCertifyTheirCoordinateEnclosure() {
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
