@@ -19,6 +19,8 @@ public interface ThermalCarrierContext {
 	interface SupportConsumer { void accept(int cell, double weight); }
 	/** Prepares current carrier geometry once per observation batch. */
 	default void prepareObservationSupport() { }
+	/** Maximum positive portions emitted for this marker within the prepared observation batch. */
+	default int observationSupportSize(int marker) { return 8; }
 	/** Positive partition of unity for spatial observations; inventory membership remains {@link #cell}. */
 	default void observationSupport(int marker, SupportConsumer consumer) { consumer.accept(cell(marker), 1.0); }
 	/** Ascending marker ordinals in one cell; callers start with after = -1. */

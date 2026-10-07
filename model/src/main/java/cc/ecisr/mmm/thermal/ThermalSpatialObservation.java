@@ -11,7 +11,12 @@ final class ThermalSpatialObservation implements ThermalCellGrid.CarrierAccess {
 	void prepare(ThermalCellGrid.CarrierAccess source, ThermalCarrierContext markers) {
 		count = 0;
 		int carriers = source.carrierCount();
-		int capacity = Math.addExact(Math.multiplyExact(markers.markerCount(), 8), carriers - markers.markerCount());
+		int capacity = carriers - markers.markerCount();
+		for (int p = 0; p < markers.markerCount(); p++) {
+			int size = markers.observationSupportSize(p);
+			if (size < 1) throw new IllegalArgumentException("Thermal observation has no support capacity");
+			capacity = Math.addExact(capacity, size);
+		}
 		if (capacity > owner.length) {
 			owner = new int[capacity]; cell = new int[capacity]; weight = new double[capacity];
 		}
@@ -33,9 +38,9 @@ final class ThermalSpatialObservation implements ThermalCellGrid.CarrierAccess {
 			if (ordinal < markers.markerCount()) {
 				int original = ordinal, start = count;
 				markers.observationSupport(ordinal, (target, contribution) -> append(original, target, contribution));
-				double sum = 0.0;
-				for (int part = start; part < count; part++) sum += weight[part];
-				if (count == start || count - start > 8 || Math.abs(sum - 1.0) > 1e-12)
+				var sum = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+				for (int part = start; part < count; part++) sum = sum.add(cc.ecisr.mmm.units.SignedDyadic.of(weight[part]));
+				if (count == start || count - start > markers.observationSupportSize(ordinal) || Math.abs(sum.subtract(cc.ecisr.mmm.units.SignedDyadic.of(1)).toDouble()) > 1e-12)
 					throw new IllegalArgumentException("Thermal observation weights do not form a partition of unity");
 			} else append(ordinal, source.cell(ordinal), 1.0);
 		}

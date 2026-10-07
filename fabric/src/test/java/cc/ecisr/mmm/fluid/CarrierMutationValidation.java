@@ -30,7 +30,55 @@ public final class CarrierMutationValidation {
 		nativeExtractionMovesGeometryAndSideColumns();
 		nativeGasMotionCarriesEnergy();
 		nativePhaseReconstructionKeepsEnergy();
+		nativeThermalObservationUsesOccupiedGeometry();
 		System.out.println("Carrier mutation validation passed");
+	}
+	private static void nativeThermalObservationUsesOccupiedGeometry() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		var domain = new FluidDomain(4, 3, 2, new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), 16);
+		var cells = java.util.List.of(
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.875, 0.75, 0.5)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.875, 0, 0, 1, 0.75, 0.5)));
+		var geometry = LiquidGeometryStateMapper.capture(cells, 2, new int[]{0, 1});
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(4, 3, 2, 0.5F, 2, 24, 24000,
+				registries.liquids().materials(), new float[]{0.875F, 0.75F, 0.5F, 21, 1.875F, 0.75F, 0.5F, 3}, new float[6], new byte[24],
+				new double[]{21000, 3000}, new int[]{0, 0}, geometry));
+		FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		domain.thermalState.resetMarkerTemperature(0, 270, domain.thermalMarkers, domain.exactInternalEnergy());
+		domain.thermalState.resetMarkerTemperature(1, 350, domain.thermalMarkers, domain.exactInternalEnergy());
+		var before = domain.captureAuthoritativeState();
+		assertGeometricThermalObservation(domain);
+		var restored = FluidDomain.restoreAuthoritativeState(before);
+		assertGeometricThermalObservation(restored);
+		require(domain.liquidGeometryState == geometry && domain.totalVolumeExact() == 24 && domain.totalMass() == 24000
+				&& domain.exactInternalEnergy().equals(restored.exactInternalEnergy())
+				&& domain.totalChemicalSpeciesQuanta() == restored.totalChemicalSpeciesQuanta()
+				&& domain.thermalAudit().equals(restored.thermalAudit()), "geometric thermal observation changed inventory or the energy ledger");
+		// Auxiliary fragment subdivision retains exactly the same occupied caloric support.
+		var fragments = new java.util.ArrayList<LiquidGeometryRefinement.Cell>(); var owners = new java.util.ArrayList<Integer>();
+		for (int c = 0; c < cells.size(); c++) for (var child : LiquidGeometryRefinement.children(cells.get(c))) { fragments.add(child); owners.add(c); }
+		int second = owners.indexOf(1);
+		domain.liquidGeometryState = LiquidGeometryStateMapper.capture(fragments, 2, new int[]{0, second}, owners.stream().mapToInt(Integer::intValue).toArray());
+		assertGeometricThermalObservation(domain);
+	}
+	private static void assertGeometricThermalObservation(FluidDomain domain) {
+		var energy = domain.exactInternalEnergy(); var audit = domain.thermalAudit();
+		domain.thermalState.prepareSpatialObservation(domain.thermalMarkers);
+		require(domain.thermalMarkers.observationSupportSize(0) == 24, "resolved caloric support retained the eight-point observation limit");
+		for (int p = 0; p < 2; p++) {
+			int marker = p; var weights = new double[24];
+			domain.thermalMarkers.observationSupport(p, (cell, weight) -> weights[cell] += weight);
+			for (int c = 0; c < weights.length; c++) {
+				double expected = marker == 0 ? (c % 4 < 3 ? 1.0 / 21 : 0.5 / 21) : (c % 4 == 3 ? 1.0 / 6 : 0);
+				require(weights[c] == expected, "caloric support differs from exact occupied-cell volume");
+			}
+		}
+		for (int c = 0; c < 24; c++) {
+			double temperature = domain.thermalState.spatialTemperatureInCell(c);
+			double expected = c % 4 < 3 ? 270 : 310;
+			require(Math.abs(temperature - expected) < 1e-10, "resolved caloric observation lost its occupied position or shared-cell mixing");
+		}
+		require(energy.equals(domain.exactInternalEnergy()) && audit.equals(domain.thermalAudit()), "read-only caloric support changed internal energy");
 	}
 	private static void nativeGasMotionCarriesEnergy() throws Exception {
 		var registries = FullCapabilityTestFixture.load();
@@ -144,8 +192,11 @@ public final class CarrierMutationValidation {
 				&& restored.exactInternalEnergy().equals(domain.exactInternalEnergy()), "native source side columns lost candidate identity");
 		var limited = emptyMaterialDomain(1);
 		limited.liquidGeometryState = new LiquidGeometryState(2, java.util.List.of(), new int[0]);
-		require(limited.tryInsertExactMixture(1, 1, 1, java.util.List.of(new FluidDomain.MaterialPortion(0, 0.0625, 62.5)), 0, true).transferred()
-				&& limited.liquidGeometryState.cells().size() > limited.particles.count(), "geometry subdivision depended on inventory marker count");
+		require(limited.tryInsertExactMixture(1, 1, 1, java.util.List.of(new FluidDomain.MaterialPortion(0, 0.0625, 62.5)), 0, true).transferred(),
+				"native source at its one-marker capacity was refused");
+		var refined = LiquidGeometryStateMapper.restore(limited.liquidGeometryState).stream().flatMap(cell -> LiquidGeometryRefinement.children(cell).stream()).toList();
+		limited.liquidGeometryState = LiquidGeometryStateMapper.capture(refined, 2, new int[]{0}, new int[refined.size()]);
+		require(limited.liquidGeometryState.cells().size() > limited.particles.count(), "geometry subdivision depended on inventory marker count");
 		LiquidGeometryStateMapper.requireCompatible(limited.liquidGeometryState, limited);
 		var geometry = limited.liquidGeometryState; long revision = limited.carrierMutationRevision();
 		try {

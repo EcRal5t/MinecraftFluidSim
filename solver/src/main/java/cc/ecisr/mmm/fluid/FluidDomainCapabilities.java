@@ -559,11 +559,18 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 
 	ThermalCarrierContext createThermalMarkerContext() {
 		return new ThermalCarrierContext() {
+			private final LiquidGeometryThermalSupport geometricSupport = new LiquidGeometryThermalSupport();
 			@Override public int markerCount() { return particles.count(); }
 			@Override public int cell(int marker) { return particleCellIndex(marker); }
-			@Override public void prepareObservationSupport() { ensureInventoryGrid(); }
+			@Override public void prepareObservationSupport() { ensureInventoryGrid(); geometricSupport.prepare(FluidDomainCapabilities.this); }
+			@Override public int observationSupportSize(int marker) {
+				geometricSupport.prepare(FluidDomainCapabilities.this);
+				return liquidGeometryState == null ? 8 : geometricSupport.size(marker);
+			}
 			@Override public void observationSupport(int marker, SupportConsumer consumer) {
-				LiquidThermalSupport.observe(FluidDomainCapabilities.this, marker, consumer);
+				geometricSupport.prepare(FluidDomainCapabilities.this);
+				if (liquidGeometryState == null) LiquidThermalSupport.observe(FluidDomainCapabilities.this, marker, consumer);
+				else geometricSupport.observe(marker, consumer);
 			}
 			@Override public int nextMarkerInCell(int cell, int after) { return cellInventory.nextMarkerInCell(cell, after); }
 			@Override public int fluidMaterialHandle(int marker) { return particles.materialHandle(marker); }
