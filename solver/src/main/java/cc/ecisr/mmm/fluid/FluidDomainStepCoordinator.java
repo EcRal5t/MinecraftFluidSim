@@ -222,13 +222,15 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
 		requireGeometricThermochemistry(phaseChangeEnabled);
+		if (liquidGeometryState != null && chemicalParcels != null) try { ResolvedLiquidReactionPlan.requireGeometry(domain()); }
+		catch (IllegalArgumentException | IllegalStateException invalid) { throw new FluidDomain.ThermalTransportBlockedException(invalid.getMessage(), invalid); }
 		ThermalAxisStats result = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
 		gridDirty = true;
 		rebuildGridFromParticles();
 		return result;
 	}
 	private void requireGeometricThermochemistry(boolean phaseChangeEnabled) {
-		if (liquidGeometryState != null && (chemicalParcels != null || phaseChangeEnabled || domain().hasGranularInventory()
+		if (liquidGeometryState != null && (precipitationEnabled || phaseChangeEnabled || domain().hasGranularInventory()
 				|| thermalState != null && thermalState.coherentPhases().groupCount() != 0 || domain().hasPendingPhaseVolumeWork()))
 			throw new FluidDomain.ThermalTransportBlockedException("Resolved thermochemistry requires complete reaction and phase geometry", null);
 	}

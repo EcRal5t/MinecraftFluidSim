@@ -31,12 +31,12 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 				domain().chemicalParcels().registry(), stableAmounts, 0.0);
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
 				chemicalParcels.registry(), stableAmounts,
-				unitScale.kilograms(particles.mass(marker))
+				unitScale.kilograms(particles.exactMass(marker)).toDouble()
 						- zeroResidual.exactSpeciesMassKilograms(chemicalParcels.registry()).toDouble());
 		chemicalParcels.requireCompatible(record,
 				materialRegistry.material(particles.materialHandle(marker)).id(), indicator);
 		if (thermalState != null) thermalState.requireReactionState(
-				marker, record, particles.mass(marker), domain().thermalMarkerContext());
+				marker, record, particles.exactMass(marker), domain().thermalMarkerContext());
 		chemicalParcels.assign(marker, record, indicator);
 		chemicalParcels.markDirtyCell(particleCellIndex(marker));
 	}

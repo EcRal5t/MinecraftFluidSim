@@ -3,7 +3,7 @@ package cc.ecisr.mmm.chemistry;
 import java.math.BigInteger;
 import java.util.Arrays;
 
-/** Largest-remainder allocation using exact dyadic values of positive volume or mass weights. */
+/** Largest-remainder allocation using positive binary quantities or exact registry species masses. */
 public final class BinaryVolumeAllocator {
 	private BinaryVolumeAllocator() { }
 
@@ -49,6 +49,30 @@ public final class BinaryVolumeAllocator {
 			return remainder != 0 ? remainder : Integer.compare(markerOrdinals[left], markerOrdinals[right]);
 		});
 		for (int i = 0; i < remaining; i++) result[order[i]]++;
+		return result;
+	}
+
+	/** Species mass weights retain their exact registry-defined rational values. */
+	public static long[] allocate(long total, ExactRational[] weights, int[] markerOrdinals) {
+		if (total < 0 || weights == null || markerOrdinals == null || weights.length == 0 || weights.length != markerOrdinals.length)
+			throw new IllegalArgumentException("Invalid rational-mass allocation");
+		var sum = ExactRational.ZERO;
+		for (var weight : weights) {
+			if (weight == null || weight.signum() <= 0) throw new IllegalArgumentException("Allocation mass must be positive");
+			sum = sum.add(weight);
+		}
+		var result = new long[weights.length]; var remainder = new BigInteger[weights.length]; var divisor = remainder.clone();
+		long assigned = 0; var order = new Integer[weights.length];
+		for (int i = 0; i < weights.length; i++) {
+			divisor[i] = weights[i].denominator().multiply(sum.numerator());
+			var quotient = weights[i].numerator().multiply(sum.denominator()).multiply(BigInteger.valueOf(total)).divideAndRemainder(divisor[i]);
+			result[i] = quotient[0].longValueExact(); remainder[i] = quotient[1]; assigned = Math.addExact(assigned, result[i]); order[i] = i;
+		}
+		Arrays.sort(order, (left, right) -> {
+			int comparison = remainder[right].multiply(divisor[left]).compareTo(remainder[left].multiply(divisor[right]));
+			return comparison != 0 ? comparison : Integer.compare(markerOrdinals[left], markerOrdinals[right]);
+		});
+		for (int i = 0, remaining = Math.toIntExact(total - assigned); i < remaining; i++) result[order[i]]++;
 		return result;
 	}
 

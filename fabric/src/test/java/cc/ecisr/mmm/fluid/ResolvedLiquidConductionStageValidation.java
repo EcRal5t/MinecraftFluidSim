@@ -42,9 +42,14 @@ final class ResolvedLiquidConductionStageValidation {
 		catch (FluidDomain.ThermalTransportBlockedException expected) { }
 		FluidDomainStateAssertions.assertSameState(before, limited.captureAuthoritativeState(), "resolved conduction work rejection");
 		before = source.captureAuthoritativeState();
-		try { source.stepThermalAxis(false, 0); throw new AssertionError("Unmapped native chemistry entered the old thermal axis"); }
+		try { source.stepThermalAxis(false, 0); throw new AssertionError("Unmapped native granular reactions entered the thermal axis"); }
 		catch (FluidDomain.ThermalTransportBlockedException expected) { }
-		FluidDomainStateAssertions.assertSameState(before, source.captureAuthoritativeState(), "unmapped resolved chemistry");
+		FluidDomainStateAssertions.assertSameState(before, source.captureAuthoritativeState(), "unmapped resolved condensed reactions");
+		var nonlocal = FluidDomain.restoreAuthoritativeState(source.captureAuthoritativeState()); nonlocal.setPrecipitationEnabled(false);
+		before = nonlocal.captureAuthoritativeState();
+		try { nonlocal.stepThermalAxis(false, 0); throw new AssertionError("Nonlocal reaction inventories reached conduction publication"); }
+		catch (FluidDomain.ThermalTransportBlockedException expected) { }
+		FluidDomainStateAssertions.assertSameState(before, nonlocal.captureAuthoritativeState(), "nonlocal resolved reaction preflight");
 	}
 	private static void ambientWallExchange(FluidDomain source) {
 		var domain = new FluidDomain(source.sizeX, source.sizeY, source.sizeZ, source.config, 16);

@@ -38,6 +38,7 @@ public final class M7ChemicalTransportValidation {
 		validateMissingPhaseRejectedBeforeBinding();
 		validateExternalSourceBoundary();
 		validateSameCellReaction();
+		ResolvedLiquidReactionValidation.validate();
 		validateReactionKeepsTinyParcels();
 		validateExactNoOpReactionPreservesParcels();
 		validateAdjacentCellsDoNotReact();
@@ -101,6 +102,9 @@ public final class M7ChemicalTransportValidation {
 		check(Arrays.equals(equal, new long[]{2L, 3L}), "largest remainder did not use marker ordinal tie-break");
 		long[] unequal = BinaryVolumeAllocator.allocate(10L, new float[]{0.1F, 0.2F, 0.3F}, new int[]{0, 1, 2});
 		check(Arrays.stream(unequal).sum() == 10L, "binary volume allocation did not close");
+		var larger = ExactRational.ONE.add(new ExactRational(java.math.BigInteger.ONE, java.math.BigInteger.TEN.pow(100)));
+		check(larger.toDouble() == 1 && Arrays.equals(BinaryVolumeAllocator.allocate(1, new ExactRational[]{larger, ExactRational.ONE}, new int[]{1, 0}), new long[]{1, 0}),
+				"Species mass allocation discarded a registry-defined quantity hidden by the same floating observation");
 	}
 
 	private static void validateInternalTransferLedgerDiversity() {

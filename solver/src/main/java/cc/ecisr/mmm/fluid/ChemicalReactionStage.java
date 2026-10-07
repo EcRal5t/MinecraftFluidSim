@@ -9,7 +9,7 @@ import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.units.SignedDyadic;
 
-/** Applies the established same-cell chemical reaction pass after thermal transport. */
+/** Applies local-control chemical reactions after thermal transport. */
 final class ChemicalReactionStage {
 	record Workspace(
 			int sizeX, int sizeY, int sizeZ, float cellSize,
@@ -17,6 +17,7 @@ final class ChemicalReactionStage {
 	) { }
 
 	interface Access {
+		ResolvedLiquidReactionPlan resolvedReaction();
 		ChemicalParcelStore chemicalParcels();
 		FluidMaterialRegistry materialRegistry();
 		ThermalDomainState thermalState();
@@ -39,6 +40,7 @@ final class ChemicalReactionStage {
 	ChemicalParcelStore.ReactionStats step() {
 		ChemicalParcelStore chemistry = access.chemicalParcels();
 		if (chemistry == null) return new ChemicalParcelStore.ReactionStats(0, 0, 0);
+		var resolved = access.resolvedReaction(); if (resolved != null) return resolved.publish();
 		LiquidParticleStore.DirectArrays arrays = state.particles().directArrays();
 		ThermalDomainState thermal = access.thermalState();
 		var result = chemistry.reactDirtyCells(

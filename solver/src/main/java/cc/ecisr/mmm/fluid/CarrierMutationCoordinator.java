@@ -162,6 +162,18 @@ final class CarrierMutationCoordinator {
 		domain.gridDirty = true; domain.velocityGridDirty = true;
 	}
 
+	/** Publishes complete-control reaction products and conservative mass shares with unchanged U. */
+	void publishGeometricReaction(ResolvedLiquidReactionPlan candidate) {
+		verify(candidate.intent, CarrierMutationPlan.Kind.WHOLESALE_COUNT); candidate.requireSource(domain);
+		var dirty = candidate.copyDirtyCells();
+		if (candidate.chemical != null) {
+			domain.chemicalParcels.commitMarkerRemap(candidate.chemical);
+			for (int p = 0; p < candidate.markerCount(); p++) domain.particles.setQuantities(p, candidate.volume(p), candidate.mass(p));
+			domain.bumpCarrierMutationRevision(); domain.gridDirty = true; domain.velocityGridDirty = true;
+		}
+		domain.chemicalParcels.restoreDirtyCells(dirty); domain.chemicalParcels.restoreReactionCursor(candidate.cursor);
+	}
+
 	/** Clears the liquid marker column together with its chemistry column after a validated plan. */
 	void clearLiquidMarkers(CarrierMutationPlan plan) {
 		verify(plan, CarrierMutationPlan.Kind.WHOLESALE_COUNT);

@@ -45,6 +45,9 @@ final class ThermochemistryStageAssembly {
 						domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
 						domain.particles, domain.thermalMarkerContext()),
 				new ChemicalReactionStage.Access() {
+					@Override public ResolvedLiquidReactionPlan resolvedReaction() {
+						return domain.liquidGeometryState == null ? null : new ResolvedLiquidReactionPlan(domain);
+					}
 					@Override public void markGridDirty() { domain.gridDirty = true; }
 					@Override public cc.ecisr.mmm.chemistry.ChemicalParcelStore chemicalParcels() {
 						return domain.chemicalParcels;

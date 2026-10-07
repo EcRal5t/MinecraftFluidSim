@@ -9,6 +9,37 @@ final class ExactVolumeAllocation {
 	private ExactVolumeAllocation() { }
 	record InventoryShares(SignedDyadic[] values, int quantumExponent) { }
 
+	/** Rounds positive rational shares on one binary lattice while preserving their complete sum. */
+	static InventoryShares round(SignedDyadic total, java.util.List<LiquidExactPolygon.Fraction> reference) {
+		var sum = LiquidExactPolygon.Fraction.ZERO; int quantum = total.exponent();
+		for (var value : reference) {
+			if (value.signum() <= 0 || !(Double.isFinite(value.rounded()) && value.rounded() > 0))
+				throw new IllegalArgumentException("Inventory share exceeds positive numerical support");
+			sum = sum.add(value); int exponent = value.numerator().bitLength() - value.denominator().bitLength();
+			if ((exponent >= 0 ? value.numerator().compareTo(value.denominator().shiftLeft(exponent)) : value.numerator().shiftLeft(-exponent).compareTo(value.denominator())) < 0) exponent--;
+			quantum = Math.min(quantum, exponent - 53);
+		}
+		if (!sum.equals(LiquidExactPolygon.Fraction.of(total))) throw new IllegalArgumentException("Inventory shares changed their total");
+		var unit = LiquidExactPolygon.Fraction.of(SignedDyadic.of(1, quantum)); var shares = new BigInteger[reference.size()];
+		var remainders = new LiquidExactPolygon.Fraction[shares.length]; var order = new Integer[shares.length]; var assigned = BigInteger.ZERO;
+		for (int i = 0; i < shares.length; i++) {
+			var ratio = reference.get(i).divide(unit); shares[i] = ratio.numerator().divide(ratio.denominator());
+			remainders[i] = new LiquidExactPolygon.Fraction(ratio.numerator().remainder(ratio.denominator()), ratio.denominator());
+			assigned = assigned.add(shares[i]); order[i] = i;
+		}
+		Arrays.sort(order, (left, right) -> { int comparison = remainders[right].compareTo(remainders[left]); return comparison != 0 ? comparison : Integer.compare(left, right); });
+		int remaining = units(total, quantum).subtract(assigned).intValueExact();
+		if (remaining < 0 || remaining >= shares.length && remaining != 0) throw new IllegalStateException("Inventory rounding lost its remainder certificate");
+		for (int i = 0; i < remaining; i++) shares[order[i]] = shares[order[i]].add(BigInteger.ONE);
+		var values = new SignedDyadic[shares.length];
+		for (int i = 0; i < values.length; i++) {
+			values[i] = new SignedDyadic(shares[i], quantum);
+			if (values[i].signum() <= 0 || LiquidExactPolygon.Fraction.of(values[i]).subtract(reference.get(i)).absolute().compareTo(unit) >= 0)
+				throw new IllegalStateException("Inventory rounding exceeded its binary quantum");
+		}
+		return new InventoryShares(values, quantum);
+	}
+
 	/** Continuous binary inventory uses a quantum that retains every exactly representable share. */
 	static InventoryShares allocateContinuous(SignedDyadic amount, SignedDyadic[] weights) {
 		if (amount.signum() < 0) throw new IllegalArgumentException("Negative allocation inventory");
