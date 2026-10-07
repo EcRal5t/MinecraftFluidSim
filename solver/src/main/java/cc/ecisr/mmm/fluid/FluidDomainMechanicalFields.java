@@ -618,7 +618,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 
 	/** Exact raw carrier capacity for transfer planning. */
 	cc.ecisr.mmm.units.SignedDyadic[] availableCellVolumes() {
-		if (liquidGeometryState != null) return LiquidGeometryInventoryCapacity.available(domain());
+		if (liquidGeometryState != null) return LiquidGeometryInventorySupport.available(domain());
 		var exact = new cc.ecisr.mmm.units.SignedDyadic[cellCount];
 		Arrays.fill(exact, cc.ecisr.mmm.units.SignedDyadic.ZERO);
 		float h = config.cellSize();

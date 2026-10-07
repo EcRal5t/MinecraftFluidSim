@@ -3,6 +3,7 @@ package cc.ecisr.mmm.fluid;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.thermal.ThermalTransport;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.simulation.FullCapabilityTestFixture;
 
 /**
@@ -60,6 +61,19 @@ public final class CarrierMutationValidation {
 		int second = owners.indexOf(1);
 		domain.liquidGeometryState = LiquidGeometryStateMapper.capture(fragments, 2, new int[]{0, second}, owners.stream().mapToInt(Integer::intValue).toArray());
 		assertGeometricThermalObservation(domain);
+		for (var room : domain.availableCellVolumes()) require(room.signum() == 0, "resolved transfer capacity differs from occupied caloric geometry");
+		require(domain.particleCellIndex(0) != domain.cellIndex(0, 0, 0), "remote geometric extraction fixture retained its marker centre");
+		var extracted = domain.tryExtractExactVolume(0, 0, 0, 0.0625F, 0);
+		require(extracted.transferred() && domain.totalVolumeExact() == 23.9375 && domain.totalMass() == 23937.5,
+				"geometric extraction followed the marker centre instead of its actual occupied cell");
+		var capacity = domain.availableCellVolumes();
+		for (int c = 0; c < capacity.length; c++) require(capacity[c].equals(SignedDyadic.of(c == 0 ? 0.0625 : 0)),
+				"remote extraction changed occupied volume outside its selected cell");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		domain.thermalState.prepareSpatialObservation(domain.thermalMarkers);
+		for (int c = 0; c < 24; c++) require(Math.abs(domain.thermalState.spatialTemperatureInCell(c) - (c % 4 < 3 ? 270 : 310)) < 1e-10,
+				"local extraction changed the remaining caloric distribution");
+		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "remote geometric extraction lost its energy sink");
 	}
 	private static void assertGeometricThermalObservation(FluidDomain domain) {
 		var energy = domain.exactInternalEnergy(); var audit = domain.thermalAudit();
