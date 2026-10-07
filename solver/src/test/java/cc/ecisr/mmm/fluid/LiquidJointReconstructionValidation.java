@@ -29,10 +29,17 @@ final class LiquidJointReconstructionValidation {
 			throw new AssertionError("Majority centroid rounding displaced a resolved remaining phase");
 		var angled = open.geometry().clip(1, 2, 3, 3); var remainder = open.geometry().clip(-1, -2, -3, -3);
 		var occupiedTolerance = new LiquidMomentReconstruction.Tolerance(0.5, 1e-4, 48);
-		var fitted = LiquidMomentReconstruction.reconstruct(open, List.of(new LiquidMomentReconstruction.Source(13, List.of(angled), new LiquidPolyhedron.Point(1, 0, 0)),
-				new LiquidMomentReconstruction.Source(4, List.of(remainder), new LiquidPolyhedron.Point(1, 0, 0))), occupiedTolerance, new LiquidMomentReconstruction.Budget(1, 128, 24, 4096));
-		if (fitted.leaves().size() != 1 || fitted.evaluations() <= 1 || fitted.phases().stream().anyMatch(phase -> phase.maximumOccupancyErrorLength() > occupiedTolerance.occupancyErrorLength()))
+		var allowed = angled.measure().volume().multiply(Fraction.of(occupiedTolerance.occupancyErrorLength()));
+		var work = new LiquidMomentInterface.Work(24);
+		var direct = LiquidMomentInterface.planar(List.of(open.geometry()), angled.measure(), new LiquidPolyhedron.Point(1, 0, 0), 48, 0.5, work,
+				candidate -> angled.measure().volume().add(candidate.measure.volume()).subtract(overlap(List.of(angled), candidate.pieces).multiply(Fraction.of(2))).compareTo(allowed) <= 0);
+		if (work.evaluations <= 1 || angled.measure().volume().add(direct.interfaceGeometry().measure.volume())
+				.subtract(overlap(List.of(angled), direct.interfaceGeometry().pieces).multiply(Fraction.of(2))).compareTo(allowed) > 0)
 			throw new AssertionError("Moment fitting stopped at its centroid tolerance while occupied-space accuracy remained unresolved");
+		var fitted = LiquidMomentReconstruction.reconstruct(open, List.of(new LiquidMomentReconstruction.Source(13, List.of(angled), new LiquidPolyhedron.Point(1, 0, 0)),
+				new LiquidMomentReconstruction.Source(4, List.of(remainder), new LiquidPolyhedron.Point(1, 0, 0))), occupiedTolerance, new LiquidMomentReconstruction.Budget(1, 1, 1, 4096));
+		if (fitted.leaves().size() != 1 || fitted.phases().stream().anyMatch(phase -> phase.maximumOccupancyErrorLength() > occupiedTolerance.occupancyErrorLength()))
+			throw new AssertionError("Resolved planar reconstruction did not retain its geometric interface normal");
 	}
 	private static void globalVolumeCorrectionKeepsSharedLeafCoverage() {
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));

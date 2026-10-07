@@ -113,13 +113,14 @@ final class LiquidMomentReconstruction {
 					boolean found = false; var availableVolume = LiquidVolumeInterface.measure(available).volume();
 					for (int candidate = p; candidate < order.size(); candidate++) {
 						var source = order.get(candidate); var original = LiquidVolumeInterface.measure(source.pieces);
-						if (evaluations >= budget.maximumEvaluations) throw new IllegalStateException("Interface reconstruction exceeds its evaluation budget");
+						if (evaluations >= budget.maximumEvaluations) throw new IllegalStateException("Interface reconstruction exceeds its evaluation budget: evaluations="
+								+ evaluations + ", acceptedLeaves=" + leaves.size() + ", pendingLeaves=" + pending.size() + ", level=" + cell.open.level());
 						var remainingVolume = availableVolume.subtract(original.volume());
 						var scale = remainingVolume.signum() > 0 && remainingVolume.compareTo(original.volume()) < 0 ? remainingVolume : original.volume();
 						var allowed = scale.multiply(Fraction.of(tolerance.occupancyErrorLength)).divide(Fraction.of(cell.open.width()));
 						var work = new LiquidMomentInterface.Work(Math.min(budget.maximumFitEvaluations, budget.maximumEvaluations - evaluations));
 						LiquidMomentInterface.Result fit;
-						try { fit = LiquidMomentInterface.planar(available, fittingTarget(original, cell.coordinateBits), source.normal, cell.coordinateBits, tolerance.centroidDistance, work, representation -> {
+						try { fit = LiquidMomentInterface.planar(available, fittingTarget(original, cell.coordinateBits), interfaceNormal(cell.open.geometry(), source), cell.coordinateBits, tolerance.centroidDistance, work, representation -> {
 							if (original.volume().subtract(representation.measure.volume()).absolute().compareTo(allowed) > 0)
 								throw new LiquidCoordinateResolutionRequired("Joint cut volume error exceeds the remaining phase's spatial tolerance");
 							return occupiedDifference(source.pieces, representation.pieces).compareTo(allowed) <= 0;
@@ -234,6 +235,19 @@ final class LiquidMomentReconstruction {
 		return new Result(result.leaves, result.phases, evaluations + result.evaluations);
 	}
 	/** A lower dyadic fitting volume cannot consume the next phase; final errors still use the original exact measure. */
+	private static LiquidPolyhedron.Point interfaceNormal(LiquidPolyhedron open, Source source) {
+		var walls = new java.util.HashSet<List<java.math.BigInteger>>();
+		for (var face : LiquidExactPolygon.faces(open)) walls.add(face.coefficients());
+		var sum = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
+		for (var piece : source.pieces) for (var face : LiquidExactPolygon.faces(piece)) {
+			// The closed surface integral of its area vector is zero; open-wall faces give the opposite interface sum.
+			if (!walls.contains(face.coefficients())) continue;
+			var area = face.areaVector(); for (int axis = 0; axis < 3; axis++) sum[axis] = sum[axis].subtract(area[axis]);
+		}
+		var scale = Fraction.ZERO; for (var component : sum) if (component.absolute().compareTo(scale) > 0) scale = component.absolute();
+		if (scale.signum() == 0) return source.normal;
+		return new LiquidPolyhedron.Point(sum[0].divide(scale).rounded(), sum[1].divide(scale).rounded(), sum[2].divide(scale).rounded());
+	}
 	private static LiquidExactPolygon.Measure fittingTarget(LiquidExactPolygon.Measure original, int bits) {
 		var volume = dyadicLower(original.volume(), bits); var center = original.centroidCoordinates(); var moment = new Fraction[3];
 		for (int a = 0; a < 3; a++) moment[a] = volume.multiply(dyadicLower(center[a], bits));
