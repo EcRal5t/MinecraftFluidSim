@@ -309,15 +309,16 @@ final class MaterialTransferPlanner {
 			var quantities = LiquidGeometryExtractionPlan.Remainder.plan(domain, marker, newVolume, newMass, take);
 			if (quantities == null) continue;
 			var removedVolume = domain.particles.exactVolume(marker).subtract(quantities.volume());
+			var removedMassQuantity = domain.particles.exactMass(marker).subtract(quantities.mass());
 			actual = removedVolume.toDouble();
 			newVolume = quantities.observedVolume(); newMass = quantities.observedMass();
-			double removedMass = domain.particles.exactMass(marker).subtract(quantities.mass()).toDouble();
+			double removedMass = removedMassQuantity.toDouble();
 			if (!(removedMass > 0.0)) continue;
 			ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels.tryPlanTruncate(
 					marker, newVolume, removedVolume.toFloat(), newMass, removedMass);
 			if (chemicalPlan == null) continue;
 			ledger.add(domain.materialRegistry.material(domain.particles.materialHandle(marker)).id(), domain.chemicalParcels.indicator(marker),
-					actual, domain.unitScale.kilograms(removedMass), chemicalPlan.removed());
+					removedVolume, domain.unitScale.kilograms(removedMassQuantity), chemicalPlan.removed());
 			LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(marker, newMass,
 					chemicalPlan.kept(), domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(marker));
 			plan.add(new ExtractionAllocation(quantities, chemicalPlan, thermalPlan));
@@ -492,6 +493,9 @@ final class MaterialTransferPlanner {
 		List<ChemicalInsertPiece> pieces = new ArrayList<>();
 		try {
 		for (ChemicalTransferLedger.Group group : ledger.groups()) {
+			if (!group.volumeQuantity().equals(SignedDyadic.of(group.volume()))
+					|| !group.massKilogramsQuantity().equals(SignedDyadic.of(group.massKilograms())))
+				return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 			int material = domain.materialRegistry.handle(group.materialId());
 			double remaining = group.volume();
 			List<ChemicalPieceDraft> groupPieces = new ArrayList<>();

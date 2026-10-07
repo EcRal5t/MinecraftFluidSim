@@ -23,6 +23,12 @@ public record SolverUnitScale(double cubicMetersPerNormalizedVolume) {
 		}
 		return result;
 	}
+	public SignedDyadic kilograms(SignedDyadic solverMass) {
+		if (solverMass == null || solverMass.signum() < 0) throw new IllegalArgumentException("Physical mass is invalid");
+		var result = solverMass.multiply(SignedDyadic.of(cubicMetersPerNormalizedVolume));
+		if (!Double.isFinite(result.toDouble())) throw new IllegalArgumentException("Physical mass is invalid");
+		return result;
+	}
 
 	public double signedKilograms(double solverMass) {
 		double result = solverMass * cubicMetersPerNormalizedVolume;

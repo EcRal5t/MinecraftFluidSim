@@ -37,14 +37,16 @@ public final class ChemicalTransferLedger {
 
 	public List<Group> groups() { return groups; }
 	public boolean isEmpty() { return groups.isEmpty(); }
-	public double totalVolume() {
-		double result = 0.0;
-		for (Group group : groups) result += group.volume();
+	public double totalVolume() { return volumeQuantity().toDouble(); }
+	public double totalMass() { return massKilogramsQuantity().toDouble(); }
+	public SignedDyadic volumeQuantity() {
+		var result = SignedDyadic.ZERO;
+		for (Group group : groups) result = result.add(group.volumeQuantity());
 		return result;
 	}
-	public double totalMass() {
-		double result = 0.0;
-		for (Group group : groups) result += group.massKilograms();
+	public SignedDyadic massKilogramsQuantity() {
+		var result = SignedDyadic.ZERO;
+		for (Group group : groups) result = result.add(group.massKilogramsQuantity());
 		return result;
 	}
 	public long totalQuanta() {
@@ -69,14 +71,28 @@ public final class ChemicalTransferLedger {
 			double volume,
 			double massKilograms,
 			long massResidualKilogramsBits,
-			Map<String, Long> speciesQuanta
+			Map<String, Long> speciesQuanta,
+			SignedDyadic volumeQuantity, SignedDyadic massKilogramsQuantity
 	) {
+		public Group(String materialId, boolean indicator, double volume, double massKilograms,
+				long massResidualKilogramsBits, Map<String, Long> speciesQuanta) {
+			this(materialId, indicator, volume, massKilograms, massResidualKilogramsBits, speciesQuanta,
+					SignedDyadic.of(volume), SignedDyadic.of(massKilograms));
+		}
+		public Group(String materialId, boolean indicator, SignedDyadic volume, SignedDyadic massKilograms,
+				long massResidualKilogramsBits, Map<String, Long> speciesQuanta) {
+			this(materialId, indicator, volume.toDouble(), massKilograms.toDouble(), massResidualKilogramsBits, speciesQuanta, volume, massKilograms);
+		}
 		public Group {
 			ChemicalIds.requireId(materialId, "chemical ledger material id");
 			if (!(Double.isFinite(volume) && volume > 0.0)
 					|| !(Double.isFinite(massKilograms) && massKilograms > 0.0)) {
 				throw new IllegalArgumentException("Chemical transfer volume and mass must be finite and positive");
 			}
+			if (volumeQuantity == null || massKilogramsQuantity == null || volumeQuantity.signum() <= 0 || massKilogramsQuantity.signum() <= 0
+					|| Double.doubleToRawLongBits(volume) != Double.doubleToRawLongBits(volumeQuantity.toDouble())
+					|| Double.doubleToRawLongBits(massKilograms) != Double.doubleToRawLongBits(massKilogramsQuantity.toDouble()))
+				throw new IllegalArgumentException("Chemical transfer observations differ from complete quantities");
 			if (!Double.isFinite(Double.longBitsToDouble(massResidualKilogramsBits))) {
 				throw new IllegalArgumentException("Chemical transfer residual must be finite");
 			}
@@ -109,6 +125,12 @@ public final class ChemicalTransferLedger {
 				String materialId, boolean indicator, double volume, double massKilograms,
 				ChemicalMixtureRecord mixture
 		) {
+			if (mixture == null) throw new IllegalArgumentException("Chemical transfer mixture is missing");
+			return add(new Group(materialId, indicator, volume, massKilograms,
+					mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry)));
+		}
+		public Builder add(String materialId, boolean indicator, SignedDyadic volume, SignedDyadic massKilograms,
+				ChemicalMixtureRecord mixture) {
 			if (mixture == null) throw new IllegalArgumentException("Chemical transfer mixture is missing");
 			return add(new Group(materialId, indicator, volume, massKilograms,
 					mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry)));
@@ -153,8 +175,8 @@ public final class ChemicalTransferLedger {
 			this.indicator = indicator;
 		}
 		private void add(Group group) {
-			volume = volume.add(SignedDyadic.of(group.volume()));
-			massKilograms = massKilograms.add(SignedDyadic.of(group.massKilograms()));
+			volume = volume.add(group.volumeQuantity());
+			massKilograms = massKilograms.add(group.massKilogramsQuantity());
 			residual = residual.add(SignedDyadic.of(group.massResidualKilograms()));
 			if (!(Double.isFinite(volume.toDouble()) && Double.isFinite(massKilograms.toDouble())
 					&& Double.isFinite(residual.toDouble()))) {
@@ -163,7 +185,7 @@ public final class ChemicalTransferLedger {
 			group.speciesQuanta().forEach((id, amount) -> species.merge(id, amount, Math::addExact));
 		}
 		private Group freeze() {
-			return new Group(materialId, indicator, volume.toDouble(), massKilograms.toDouble(),
+			return new Group(materialId, indicator, volume, massKilograms,
 					Double.doubleToRawLongBits(residual.toDouble()), species);
 		}
 	}

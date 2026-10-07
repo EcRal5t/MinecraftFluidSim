@@ -140,12 +140,27 @@ public final class M7ChemistryValidation {
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry,
 				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU), 856.0);
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				"mmm:water", true, 1.0, 1_000.0,
+				"mmm:water", true, cc.ecisr.mmm.units.SignedDyadic.of(1).add(cc.ecisr.mmm.units.SignedDyadic.of(1, -81)),
+				cc.ecisr.mmm.units.SignedDyadic.of(1000).add(cc.ecisr.mmm.units.SignedDyadic.of(1, -101)),
 				mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry))));
 		byte[] encoded = ChemicalAuditLedgerCodec.encode(ledger, ChemicalTransferLedger.EMPTY);
 		ChemicalAuditLedgerCodec.AuditLedgers decoded = ChemicalAuditLedgerCodec.decode(encoded);
 		check(decoded.externalSource().groups().equals(ledger.groups()) && decoded.escapedSink().isEmpty(),
 				"chemical audit ledger did not round-trip canonically");
+		var accumulated = ledger.plus(ledger).plus(ledger);
+		var roundTrip = ChemicalAuditLedgerCodec.decode(ChemicalAuditLedgerCodec.encode(ChemicalTransferLedger.EMPTY, accumulated)).escapedSink();
+		check(roundTrip.volumeQuantity().equals(ledger.volumeQuantity().add(ledger.volumeQuantity()).add(ledger.volumeQuantity()))
+				&& roundTrip.massKilogramsQuantity().equals(ledger.massKilogramsQuantity().add(ledger.massKilogramsQuantity()).add(ledger.massKilogramsQuantity()))
+				&& roundTrip.totalQuanta() == 3 * ledger.totalQuanta(), "audit aggregation or persistence lost complete quantities");
+		byte[] nonCanonical = encoded.clone();
+		var input = new java.io.DataInputStream(new java.io.ByteArrayInputStream(encoded));
+		input.readInt(); input.readInt(); input.readInt(); input.readUTF(); input.readBoolean(); input.readInt();
+		int significandLength = input.readInt();
+		nonCanonical[encoded.length - input.available() + significandLength - 1] &= (byte) 0xfe;
+		try {
+			ChemicalAuditLedgerCodec.decode(nonCanonical);
+			throw new AssertionError("Non-canonical chemical audit quantity was accepted");
+		} catch (java.io.IOException expected) { }
 		byte[] truncated = java.util.Arrays.copyOf(encoded, encoded.length - 1);
 		try {
 			ChemicalAuditLedgerCodec.decode(truncated);

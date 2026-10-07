@@ -58,7 +58,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		ChemicalTransferLedger.Builder result = ChemicalTransferLedger.builder(chemicalParcels.registry());
 		for (int marker = fromInclusive; marker < toExclusive; marker++) {
 			result.add(materialRegistry.material(particles.materialHandle(marker)).id(), chemicalParcels.indicator(marker),
-					particles.volume(marker), unitScale.kilograms(particles.mass(marker)), chemicalParcels.record(marker));
+					particles.exactVolume(marker), unitScale.kilograms(particles.exactMass(marker)), chemicalParcels.record(marker));
 		}
 		return result.build();
 	}

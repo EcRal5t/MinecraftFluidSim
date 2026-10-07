@@ -77,6 +77,16 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 	}
 	@Override public int hashCode() { return 31 * significand().hashCode() + exponent; }
 	@Override public String toString() { return "SignedDyadic[significand=" + significand() + ", exponent=" + exponent + "]"; }
+	public SignedDyadic multiply(SignedDyadic other) {
+		Objects.requireNonNull(other, "other");
+		if (sign == 0 || other.sign == 0) return ZERO;
+		int resultExponent = Math.addExact(exponent, other.exponent);
+		if (magnitudeBits < Long.SIZE && other.magnitudeBits < Long.SIZE) {
+			try { return new SignedDyadic(Math.multiplyExact(compact, other.compact), resultExponent); }
+			catch (ArithmeticException overflow) { }
+		}
+		return new SignedDyadic(significand().multiply(other.significand()), resultExponent);
+	}
 
 	public static SignedDyadic of(double value) {
 		if (!Double.isFinite(value)) throw new IllegalArgumentException("Thermal audit value must be finite");

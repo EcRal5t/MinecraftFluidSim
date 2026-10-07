@@ -824,6 +824,20 @@ public final class M7ChemicalTransportValidation {
 	private static void validateTransferResolutionIsAtomic() throws Exception {
 		FluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
 		FluidDomainState coarseState = domain.captureAuthoritativeState();
+		var stock = domain.chemicalLedgerForMarkerRange(0, domain.particleCount()).groups().getFirst();
+		for (boolean volumeTail : new boolean[]{false, true}) {
+			var complete = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(stock.materialId(), stock.indicator(),
+					stock.volumeQuantity().add(volumeTail ? SignedDyadic.of(1, -81) : SignedDyadic.ZERO),
+					stock.massKilogramsQuantity().add(volumeTail ? SignedDyadic.ZERO : SignedDyadic.of(1, -101)),
+					stock.massResidualKilogramsBits(), stock.speciesQuanta())));
+			check(!domain.tryInsertExactChemical(1, 1, 1, complete, 0).transferred(), "chemical insertion silently rounded complete quantities");
+			FluidDomainStateAssertions.assertSameState(coarseState, domain.captureAuthoritativeState(), "complete quantity insertion refusal");
+			try {
+				ChemicalContents.fromLedger(complete, CHEMISTRY, 125_000_000L);
+				throw new AssertionError("chemical bucket silently rounded complete quantities");
+			} catch (IllegalArgumentException expected) { }
+		}
+
 		float belowMarkerResolution = 0.75F * (0.125F - Math.nextDown(0.125F));
 		check(!domain.tryExtractExactChemical(1, 1, 1, belowMarkerResolution, 0).transferred(),
 				"sub-resolution chemical extraction reported empty success");

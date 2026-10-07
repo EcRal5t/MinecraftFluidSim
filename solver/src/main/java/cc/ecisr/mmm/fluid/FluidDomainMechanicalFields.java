@@ -529,7 +529,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			var thermal = domain().planThermalTruncate(marker, newMass, chemical == null ? null : chemical.kept(),
 					thermalState == null ? Double.NaN : domain().thermalMarkerTemperature(marker));
 			if (removedChemistry != null) removedChemistry.add(materialRegistry.material(particles.materialHandle(marker)).id(),
-					chemicalParcels.indicator(marker), delta.toDouble(), unitScale.kilograms(removedMass.toDouble()), chemical.removed());
+					chemicalParcels.indicator(marker), delta, unitScale.kilograms(removedMass), chemical.removed());
 			if (removedMaterials != null) removedMaterials.add(particles.materialHandle(marker), delta.toDouble(), removedMass.toDouble());
 			if (removedThermal != null && thermal != null) removedThermal.add(thermal.removedEnergy());
 			planned.add(new MarkerTruncation(quantities, chemical, thermal));

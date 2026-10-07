@@ -147,21 +147,14 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 
 	/** Commits a previously validated liquid clear; no new ledger candidate is constructed here. */
 	public void commitRemoveAllWaterExact(WaterClearPlan plan) {
-		if (plan == null || particles.count() != plan.markerCount()
-				|| carrierMutationRevision() != plan.mutationRevision()
-				|| (chemicalParcels == null ? 0L : chemicalParcels.mutationRevision()) != plan.chemicalRevision()
-				|| Double.doubleToRawLongBits(domain().totalVolumeExact()) != plan.totalVolumeBits()
-				|| Double.doubleToRawLongBits(domain().totalMass()) != plan.totalMassBits()
-				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()))
-				.equals(plan.internalEnergy())) {
-			throw new IllegalStateException("Liquid inventory changed after clear planning");
-		}
+		requireLiquidClear(plan);
 		if (chemicalParcels != null) {
 			chemicalParcels.recordEscapedSink(plan.drained());
 		}
 		if (thermalState != null) thermalState.recordExternalSink(plan.internalEnergy());
 		coordinator.clearLiquidMarkers(
 				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()));
+		if (plan.gasExpansion() != null) plan.gasExpansion().publish(domain());
 		gridDirty = true;
 	}
 
@@ -183,14 +176,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 				|| (chemicalParcels == null ? 0L : chemicalParcels.mutationRevision()) != plan.chemicalRevision()) {
 			throw new IllegalStateException("Liquid inventory changed after condensed clear planning");
 		}
-		WaterClearPlan liquid = plan.liquid();
-		if (particles.count() != liquid.markerCount()
-				|| Double.doubleToRawLongBits(domain().totalVolumeExact()) != liquid.totalVolumeBits()
-				|| Double.doubleToRawLongBits(domain().totalMass()) != liquid.totalMassBits()
-				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()))
-				.equals(liquid.internalEnergy())) {
-			throw new IllegalStateException("Liquid inventory changed after condensed clear planning");
-		}
+		requireLiquidClear(plan.liquid());
 		List<CoherentPhaseStore.Group> currentGroups = thermalState == null
 				? List.of() : thermalState.coherentPhases().snapshot();
 		if (!currentGroups.equals(plan.coherentGroups())
@@ -202,6 +188,10 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 				: thermalState.coherentPhases().totalMass()) != plan.coherentMassBits()) {
 			throw new IllegalStateException("Coherent phase inventory changed after condensed clear planning");
 		}
+		if (chemicalParcels != null) chemicalParcels.requireCanRecordEscapedSink(plan.drained());
+		if (thermalState != null) thermalState.requireCanCommitOperatorClear(thermalState.thermalRevision(),
+				plan.liquid().internalEnergy(), plan.coherentEnergy(), SignedDyadic.ZERO,
+				plan.liquid().gasExpansion() == null ? null : plan.liquid().gasExpansion().energy);
 	}
 
 	/** Publishes an already preflighted condensed clear; the mutation phase has no rejections. */
@@ -216,6 +206,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 		coordinator.clearLiquidMarkers(
 				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()));
 		domain().refreshCoherentOccupancy();
+		if (plan.liquid().gasExpansion() != null) plan.liquid().gasExpansion().publish(domain());
 		gridDirty = true;
 		return new CondensedClear(plan.coherentVolumeSvq(),
 				Double.longBitsToDouble(plan.coherentMassBits()), plan.coherentGroups().size());
@@ -241,7 +232,8 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 		}
 		if (thermalState != null) thermalState.requireCanCommitOperatorClear(
 				plan.thermalRevision, plan.condensed.liquid().internalEnergy(), plan.condensed.coherentEnergy(),
-				plan.granular.internalEnergy(), plan.gasTopology == null ? null : plan.gasTopology.thermalPlan());
+				plan.granular.internalEnergy(), plan.condensed.liquid().gasExpansion() == null
+				? plan.gasTopology == null ? null : plan.gasTopology.thermalPlan() : plan.condensed.liquid().gasExpansion().energy);
 		if (plan.gasTopology != null) gasTopologyCoordinator.preflight(plan.gasTopology);
 		CondensedClear condensed = applyCondensedClear(plan.condensed());
 		FluidDomain.GranularClear granular = ((FluidDomain) this).applyGranularClear(plan.granular());
@@ -260,9 +252,25 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 	}
 
 	public record WaterClearPlan(
-			int markerCount, long totalVolumeBits, long totalMassBits, ChemicalTransferLedger drained,
-			SignedDyadic internalEnergy, long mutationRevision, long chemicalRevision
-	) { }
+			LiquidInventoryState inventory, ChemicalTransferLedger drained,
+			SignedDyadic internalEnergy, long mutationRevision, long chemicalRevision, ResolvedGasExpansionPlan gasExpansion
+	) {
+		public int markerCount() { return inventory.count(); }
+	}
+	private void requireLiquidClear(WaterClearPlan plan) {
+		if (plan == null || particles.count() != plan.markerCount() || carrierMutationRevision() != plan.mutationRevision()
+				|| (chemicalParcels == null ? 0L : chemicalParcels.mutationRevision()) != plan.chemicalRevision()
+				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count())).equals(plan.internalEnergy()))
+			throw new IllegalStateException("Liquid inventory changed after clear planning");
+		for (int p = 0; p < particles.count(); p++) if (!particles.exactVolume(p).equals(plan.inventory().volume(p))
+				|| !particles.exactMass(p).equals(plan.inventory().mass(p)))
+			throw new IllegalStateException("Liquid quantity changed after clear planning");
+		if (plan.gasExpansion() != null) plan.gasExpansion().requireSource(domain());
+		if (chemicalParcels != null) chemicalParcels.requireCanRecordEscapedSink(plan.drained());
+		if (thermalState != null) thermalState.requireCanCommitOperatorClear(thermalState.thermalRevision(),
+				plan.internalEnergy(), SignedDyadic.ZERO, SignedDyadic.ZERO,
+				plan.gasExpansion() == null ? null : plan.gasExpansion().energy);
+	}
 	public record CondensedClear(long coherentVolumeSvq, double coherentMass, int coherentGroups) { }
 	public record CondensedClearPlan(
 			WaterClearPlan liquid, List<CoherentPhaseStore.Group> coherentGroups,

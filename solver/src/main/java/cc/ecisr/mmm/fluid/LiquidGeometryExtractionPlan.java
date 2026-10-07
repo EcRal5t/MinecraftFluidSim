@@ -31,6 +31,7 @@ final class LiquidGeometryExtractionPlan {
 	private final int[] markerOwners;
 	final List<Integer> markers;
 	private LiquidGeometryState successor;
+	private ResolvedGasExpansionPlan gasExpansion;
 	private float[] positions, velocities;
 
 	LiquidGeometryExtractionPlan(FluidDomain domain, List<FluidDomain.CellCandidate> cells) {
@@ -160,6 +161,7 @@ final class LiquidGeometryExtractionPlan {
 			public double position(int p, int a) { return positions[3 * p + a]; }
 			public double velocity(int p, int a) { return velocities[3 * p + a]; }
 		}, domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells.copyMicroMasks());
+		if (domain.gasState.geometry != null) gasExpansion = new ResolvedGasExpansionPlan(domain, successor);
 	}
 	void publish() {
 		if (input == null) return;
@@ -169,7 +171,9 @@ final class LiquidGeometryExtractionPlan {
 			domain.particles.setVelocityX(p, velocities[3 * p]); domain.particles.setVelocityY(p, velocities[3 * p + 1]); domain.particles.setVelocityZ(p, velocities[3 * p + 2]);
 			if (domain.chemicalParcels != null) domain.chemicalParcels.markDirtyCell(domain.particleCellIndex(p));
 		}
-		domain.liquidGeometryState = successor; domain.gridDirty = true; domain.velocityGridDirty = true;
+		domain.liquidGeometryState = successor;
+		if (gasExpansion != null) gasExpansion.publish(domain);
+		domain.gridDirty = true; domain.velocityGridDirty = true;
 	}
 	private static LiquidPolyhedron intersection(LiquidPolyhedron original, LiquidPolyhedron clip) {
 		var result = original; for (var plane : clip.planes()) { result = plane.clip(result); if (!LiquidConvexRegion.of(result).hasVolume()) break; } return result;

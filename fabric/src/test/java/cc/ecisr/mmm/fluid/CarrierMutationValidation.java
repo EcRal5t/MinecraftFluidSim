@@ -105,6 +105,36 @@ public final class CarrierMutationValidation {
 						.equals(restored.thermalAudit().roundoffResidual().subtract(roundoff)),
 				"native chemical extraction lost quantities, species or thermal settlement");
 		LiquidGeometryStateMapper.requireCompatible(restored.liquidGeometryState, restored);
+		var clear = restored.planRemoveAllWaterExact(); var condensedClear = restored.planRemoveAllCondensedExact();
+		var clearVolume = restored.particles.inventory().totalVolume(); var clearMass = restored.particles.inventory().totalMass();
+		var sourceLedger = restored.chemicalLedgerForMarkerRange(0, restored.particles.count());
+		require(sourceLedger.volumeQuantity().equals(clearVolume) && clear.drained().volumeQuantity().equals(clearVolume)
+				&& sourceLedger.massKilogramsQuantity().equals(restored.unitScale.kilograms(clearMass))
+				&& clear.drained().massKilogramsQuantity().equals(sourceLedger.massKilogramsQuantity()), "clear audit omitted native quantity tails");
+		var beforeSink = restored.chemicalParcels().escapedSink(); var beforeThermalSink = restored.thermalAudit().externalSink();
+		var sourceMass = restored.particles.exactMass(0); var sourceVolume = restored.particles.exactVolume(0);
+		restored.particles.setQuantities(0, sourceVolume, sourceMass.add(SignedDyadic.of(1, -102)));
+		try { restored.commitRemoveAllWaterExact(clear); throw new AssertionError("liquid clear accepted a hidden exact quantity change"); }
+		catch (IllegalStateException expected) { }
+		try { restored.commitRemoveAllCondensedExact(condensedClear); throw new AssertionError("condensed clear accepted a hidden exact quantity change"); }
+		catch (IllegalStateException expected) { }
+		require(restored.particles.count() == 2 && restored.chemicalParcels().escapedSink() == beforeSink
+				&& restored.thermalAudit().externalSink().equals(beforeThermalSink), "stale clear changed inventory or audit ledgers");
+		restored.particles.setQuantities(0, sourceVolume, sourceMass);
+		var clearing = FluidDomain.restoreAuthoritativeState(restored.captureAuthoritativeState());
+		var drainedEnergy = clearing.planRemoveAllWaterExact().internalEnergy(); var clearEnergy = clearing.exactInternalEnergy();
+		clearing.removeAllWaterExact();
+		var actualSink = clearing.chemicalParcels().escapedSink();
+		require(clearing.particles.count() == 0 && actualSink.volumeQuantity().subtract(beforeSink.volumeQuantity()).equals(clearVolume)
+				&& actualSink.massKilogramsQuantity().subtract(beforeSink.massKilogramsQuantity()).equals(restored.unitScale.kilograms(clearMass))
+				&& actualSink.totalQuanta() - beforeSink.totalQuanta() == restored.totalChemicalSpeciesQuanta()
+				&& clearing.exactInternalEnergy().add(drainedEnergy).equals(clearEnergy), "complete clear lost quantities, species or energy");
+		var clearedRestore = FluidDomain.restoreAuthoritativeState(clearing.captureAuthoritativeState());
+		require(clearedRestore.particles.count() == 0 && clearedRestore.chemicalParcels().escapedSink().groups().equals(actualSink.groups())
+				&& clearedRestore.exactInternalEnergy().equals(clearing.exactInternalEnergy()), "native clear lost its complete cold checkpoint");
+		var savedAudit = cc.ecisr.mmm.chemistry.ChemicalAuditLedgerCodec.decode(cc.ecisr.mmm.chemistry.ChemicalAuditLedgerCodec.encode(
+				clearing.chemicalParcels().externalSource(), actualSink));
+		require(savedAudit.escapedSink().groups().equals(actualSink.groups()), "complete clear quantities were lost in the audit checkpoint");
 		var captured = new LiquidReconstructionInventories(restored);
 		restored.particles.setQuantities(0, v, m.add(SignedDyadic.of(1, -102)));
 		try { captured.requireSource(restored); throw new AssertionError("reconstruction accepted changed exact mass hidden by the same observation"); }
@@ -406,13 +436,49 @@ public final class CarrierMutationValidation {
 	}
 	private static void nativeGasMotionCarriesEnergy() throws Exception {
 		var registries = FullCapabilityTestFixture.load();
+		var movedDomain = new FluidDomain[1];
 		LiquidCharacteristicValidation.movingLiquidWallTransportsItsGasContacts(domain -> {
 			var liquid = domain.exportParticleState();
 			domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 1, 1.0 / 256, 1000.0 / 256,
 					registries.liquids().materials(), liquid.copyPositionVolume(), liquid.copyParticleVelocities(), liquid.copyCollisionMicroMasks(),
 					new double[]{1000.0 / 256}, new int[]{0}, liquid.liquidGeometry()));
 			FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+			movedDomain[0] = domain;
 		});
+		var snapshot = movedDomain[0].captureAuthoritativeState();
+		for (int mode = 0; mode < 3; mode++) {
+			var clear = FluidDomain.restoreAuthoritativeState(snapshot);
+			var before = clear.exportGasState(registries.chemical().fingerprint());
+			require(before.nodes().size() == 2, "gas expansion fixture needs separate chambers");
+			var expected = before.nodes().get(0).inventory().merge(before.nodes().get(1).inventory());
+			var energy = clear.exactInternalEnergy(); var roundoff = clear.thermalAudit().roundoffResidual();
+			var removed = clear.planRemoveAllWaterExact().internalEnergy();
+			if (mode == 0) clear.removeAllWaterExact();
+			else if (mode == 1) clear.commitRemoveAllCondensedExact(clear.planRemoveAllCondensedExact());
+			else clear.commitOperatorClear(clear.planOperatorClear());
+			var after = clear.exportGasState(registries.chemical().fingerprint());
+			require(after.nodes().size() == 1 && after.nodes().getFirst().inventory().equals(expected)
+					&& after.externalSource().equals(before.externalSource()) && after.escapedSink().equals(before.escapedSink())
+					&& clear.exactInternalEnergy().add(removed).subtract(energy).equals(clear.thermalAudit().roundoffResidual().subtract(roundoff))
+					&& clear.exactInternalEnergy().equals(clear.thermalAudit().expectedInventory()), "liquid clear changed merged gas stock or free-expansion energy");
+			var restored = FluidDomain.restoreAuthoritativeState(clear.captureAuthoritativeState());
+			require(restored.exportGasState(registries.chemical().fingerprint()).nodes().equals(after.nodes()), "merged gas clear lost its cold geometry");
+		}
+		var stale = FluidDomain.restoreAuthoritativeState(snapshot); var plan = stale.planRemoveAllWaterExact();
+		stale.commitOperatorVentSealedGas(stale.planOperatorVentSealedGas());
+		var energy = stale.exactInternalEnergy(); var sink = stale.chemicalParcels().escapedSink();
+		try { stale.commitRemoveAllWaterExact(plan); throw new AssertionError("liquid clear accepted changed gas input"); }
+		catch (IllegalStateException expected) { }
+		require(stale.particles.count() == 1 && stale.exactInternalEnergy().equals(energy)
+				&& stale.chemicalParcels().escapedSink() == sink, "obsolete gas plan partially cleared liquid stock");
+		var edited = FluidDomain.restoreAuthoritativeState(snapshot); var obsolete = edited.planOperatorClear(); var retainedEnergy = edited.exactInternalEnergy();
+		edited.geometry.cutCells.replaceMask(0, FlipCutCellGeometry.FULL_MASK);
+		edited.geometry.solid[0] = true;
+		try { edited.commitOperatorClear(obsolete); throw new AssertionError("gas expansion accepted changed collision support"); }
+		catch (IllegalStateException expected) { }
+		require(edited.particles.count() == 1 && edited.exactInternalEnergy().equals(retainedEnergy),
+				"obsolete collision support partially cleared inventory");
+
 	}
 	private static void nativePhaseReconstructionKeepsEnergy() throws Exception {
 		var registries = FullCapabilityTestFixture.load();

@@ -30,18 +30,18 @@ final class CondensedInventoryClearPlanner {
 			for (int marker = 0; marker < domain.particles.count(); marker++) builder.add(
 					domain.materialRegistry.material(domain.particles.materialHandle(marker)).id(),
 					domain.chemicalParcels.indicator(marker),
-					domain.particles.volume(marker), domain.unitScale.kilograms(domain.particles.mass(marker)),
+					domain.particles.exactVolume(marker), domain.unitScale.kilograms(domain.particles.exactMass(marker)),
 					domain.chemicalParcels.record(marker));
 			drained = builder.build();
 			domain.chemicalParcels.requireCanRecordEscapedSink(drained);
 		}
-		return new FluidDomain.WaterClearPlan(domain.particles.count(),
-				Double.doubleToRawLongBits(domain.totalVolumeExact()),
-				Double.doubleToRawLongBits(domain.totalMass()), drained,
+		return new FluidDomain.WaterClearPlan(domain.particles.inventory(), drained,
 				domain.thermalState == null ? SignedDyadic.ZERO
 						: domain.thermalState.exactLiquidEnergy(domain.particles.count()),
 				domain.carrierMutationRevision(),
-				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision());
+				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision(),
+				domain.gasState.geometry == null ? null : new ResolvedGasExpansionPlan(domain,
+						new LiquidGeometryState(domain.liquidGeometryState.rootWidthMetres(), List.of(), new int[0])));
 	}
 
 	/** Plans one operator clear across liquid markers and every coherent condensed phase. */
