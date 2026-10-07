@@ -21,7 +21,7 @@ final class LiquidGeometryPlane {
 	static LiquidGeometryPlane exact(List<BigInteger> coefficients) {
 		int bits = 0; boolean positive = false; boolean found = false; BigInteger divisor = BigInteger.ZERO;
 		for (int a = 0; a < 4; a++) {
-			divisor = divisor.gcd(coefficients.get(a).abs());
+			divisor = LiquidIntegerArithmetic.gcd(divisor, coefficients.get(a));
 			if (a < 3) { bits = Math.max(bits, coefficients.get(a).abs().bitLength()); if (!found && coefficients.get(a).signum() != 0) { positive = coefficients.get(a).signum() > 0; found = true; } }
 		}
 		if (!found) throw new IllegalArgumentException("Empty exact geometric normal");
@@ -60,7 +60,7 @@ final class LiquidGeometryPlane {
 		BigInteger[] integer = new BigInteger[4]; BigInteger divisor = BigInteger.ZERO;
 		for (int i = 0; i < 4; i++) {
 			integer[i] = dyadic[i].signum() == 0 ? BigInteger.ZERO : dyadic[i].significand().shiftLeft(dyadic[i].exponent() - exponent);
-			divisor = divisor.gcd(integer[i].abs());
+			divisor = LiquidIntegerArithmetic.gcd(divisor, integer[i]);
 		}
 		if (!positive()) divisor = divisor.negate();
 		for (int i = 0; i < 4; i++) integer[i] = integer[i].divide(divisor);

@@ -447,7 +447,7 @@ final class LiquidConformingVelocity {
 		private static BigInteger[] integerDirection(Fraction[] direction) {
 			var denominator = BigInteger.ONE; for (var value : direction) denominator = lcm(denominator, value.denominator());
 			var result = new BigInteger[3]; var common = BigInteger.ZERO;
-			for (int a = 0; a < 3; a++) { result[a] = direction[a].numerator().multiply(denominator.divide(direction[a].denominator())); common = common.gcd(result[a].abs()); }
+			for (int a = 0; a < 3; a++) { result[a] = direction[a].numerator().multiply(denominator.divide(direction[a].denominator())); common = LiquidIntegerArithmetic.gcd(common, result[a]); }
 			if (common.signum() != 0) for (int a = 0; a < 3; a++) result[a] = result[a].divide(common);
 			return result;
 		}
@@ -458,7 +458,7 @@ final class LiquidConformingVelocity {
 			return new BigInteger[]{first[1].multiply(second[2]).subtract(first[2].multiply(second[1])), first[2].multiply(second[0]).subtract(first[0].multiply(second[2])), first[0].multiply(second[1]).subtract(first[1].multiply(second[0]))};
 		}
 	}
-	private static BigInteger lcm(BigInteger first, BigInteger second) { return first.divide(first.gcd(second)).multiply(second); }
+	private static BigInteger lcm(BigInteger first, BigInteger second) { return first.divide(LiquidIntegerArithmetic.gcd(first, second)).multiply(second); }
 	private static Fraction[] zero() { return new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; }
 	private static boolean isZero(Fraction[] value) { return value[0].signum() == 0 && value[1].signum() == 0 && value[2].signum() == 0; }
 	private static void add(Fraction[] a, Fraction[] b) { for (int i = 0; i < 3; i++) a[i] = a[i].add(b[i]); }

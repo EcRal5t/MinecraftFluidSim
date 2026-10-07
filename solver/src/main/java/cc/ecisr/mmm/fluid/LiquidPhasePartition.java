@@ -93,9 +93,13 @@ final class LiquidPhasePartition {
 		for (var group : groups.values()) for (int a = 0; a < group.size(); a++) for (int b = 0; b < a; b++) {
 			var first = group.get(a); var second = group.get(b);
 			if (first.separatedBox(second) || separated(first, second) || separated(second, first)) continue;
-			var intersection = first.region;
-			for (var face : second.region.faces()) intersection = intersection.clip(face.plane());
-			if (intersection.hasVolume()) throw new IllegalArgumentException("Liquid fragments have overlapping exact volume: fragments=" + b + "," + a);
+			var intersection = first.region.faces();
+			for (var face : second.region.faces()) {
+				intersection = LiquidExactPolygon.clipVolume(intersection, face.plane());
+				if (intersection.isEmpty()) break;
+			}
+			// Exact clipping retains a full-dimensional convex intersection or returns an empty face set.
+			if (!intersection.isEmpty()) throw new IllegalArgumentException("Liquid fragments have overlapping exact volume: fragments=" + b + "," + a);
 		}
 	}
 	private static boolean separated(Support first, Support second) {

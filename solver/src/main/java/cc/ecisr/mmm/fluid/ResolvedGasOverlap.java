@@ -61,7 +61,7 @@ final class ResolvedGasOverlap {
 		var denominator = BigInteger.ONE;
 		for (var volume : volumes) {
 			if (volume.signum() < 0) throw new IllegalArgumentException("Negative gas overlap weight");
-			denominator = denominator.divide(denominator.gcd(volume.denominator())).multiply(volume.denominator());
+			denominator = denominator.divide(LiquidIntegerArithmetic.gcd(denominator, volume.denominator())).multiply(volume.denominator());
 		}
 		var result = new ArrayList<BigInteger>(volumes.size());
 		for (var volume : volumes) result.add(volume.numerator().multiply(denominator.divide(volume.denominator())));

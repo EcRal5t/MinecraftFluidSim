@@ -23,7 +23,7 @@ final class LiquidGeometryRefinement {
 		double width = 0.5 * parent.width();
 		for (int slot = 0; slot < 8; slot++) {
 			int x = 2 * parent.x + (slot & 1), y = 2 * parent.y + (slot >>> 1 & 1), z = 2 * parent.z + (slot >>> 2 & 1);
-			var faces = LiquidExactPolygon.faces(parent.geometry);
+			var original = LiquidExactPolygon.faces(parent.geometry); var faces = original;
 			int[] coordinate = {x, y, z};
 			for (int axis = 0; axis < 3; axis++) {
 				double lo = coordinate[axis] * width, hi = (coordinate[axis] + 1.0) * width;
@@ -32,7 +32,7 @@ final class LiquidGeometryRefinement {
 				if (faces.isEmpty()) break;
 			}
 			// Exact clipping proves strict positive volume; integrate only retained leaves when needed.
-			if (!faces.isEmpty()) result.add(new Cell(parent.level + 1, x, y, z, LiquidPolyhedron.restoredExact(faces)));
+			if (!faces.isEmpty()) result.add(new Cell(parent.level + 1, x, y, z, faces == original ? parent.geometry : LiquidPolyhedron.restoredExact(faces)));
 		}
 		return List.copyOf(result);
 	}

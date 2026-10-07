@@ -26,7 +26,7 @@ final class LiquidConvexRegion {
 	}
 	LiquidConvexRegion clip(LiquidExactPolygon.Fraction[] coefficients) {
 		var denominator = java.math.BigInteger.ONE;
-		for (var coefficient : coefficients) denominator = denominator.multiply(coefficient.denominator()).divide(denominator.gcd(coefficient.denominator()));
+		for (var coefficient : coefficients) denominator = denominator.divide(LiquidIntegerArithmetic.gcd(denominator, coefficient.denominator())).multiply(coefficient.denominator());
 		var integers = new java.util.ArrayList<java.math.BigInteger>();
 		for (var coefficient : coefficients) integers.add(coefficient.numerator().multiply(denominator.divide(coefficient.denominator())));
 		return clipped(LiquidExactPolygon.clipVolume(faces, integers, 1));

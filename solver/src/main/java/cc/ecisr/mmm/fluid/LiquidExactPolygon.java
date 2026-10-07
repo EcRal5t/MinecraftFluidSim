@@ -159,7 +159,7 @@ final class LiquidExactPolygon {
 	}
 	static Vertex vertex(Fraction[] coordinates) {
 		var denominator = BigInteger.ONE;
-		for (var value : coordinates) denominator = denominator.multiply(value.denominator).divide(denominator.gcd(value.denominator));
+		for (var value : coordinates) denominator = denominator.divide(gcd(denominator, value.denominator)).multiply(value.denominator);
 		return new Vertex(coordinates[0].numerator.multiply(denominator.divide(coordinates[0].denominator)),
 				coordinates[1].numerator.multiply(denominator.divide(coordinates[1].denominator)), coordinates[2].numerator.multiply(denominator.divide(coordinates[2].denominator)), denominator);
 	}
@@ -331,7 +331,7 @@ final class LiquidExactPolygon {
 	private static List<BigInteger> line(Vertex a, Vertex b) {
 		var direction = difference(b, a); var moment = cross(List.of(a.x, a.y, a.z), List.of(b.x, b.y, b.z));
 		var values = new ArrayList<BigInteger>(direction); values.addAll(moment); BigInteger divisor = BigInteger.ZERO;
-		for (var value : values) divisor = divisor.gcd(value.abs());
+		for (var value : values) divisor = gcd(divisor, value);
 		if (divisor.signum() == 0) throw new IllegalArgumentException("Zero-length mesh edge");
 		for (var value : values) if (value.signum() != 0) { if (value.signum() < 0) divisor = divisor.negate(); break; }
 		final var scale = divisor; return values.stream().map(v -> v.divide(scale)).toList();
@@ -439,7 +439,7 @@ final class LiquidExactPolygon {
 		var a = vertices.getFirst(); var coefficients = new ArrayList<BigInteger>();
 		for (int axis = 0; axis < 3; axis++) coefficients.add(normal.get(axis).multiply(a.w));
 		coefficients.add(normal.get(0).multiply(a.x).add(normal.get(1).multiply(a.y)).add(normal.get(2).multiply(a.z)));
-		var divisor = BigInteger.ZERO; for (var value : coefficients) divisor = divisor.gcd(value.abs());
+		var divisor = BigInteger.ZERO; for (var value : coefficients) divisor = gcd(divisor, value);
 		for (int i = 0; i < 4; i++) coefficients.set(i, coefficients.get(i).divide(divisor));
 		return planeCoefficients = List.copyOf(coefficients);
 	}
@@ -453,7 +453,7 @@ final class LiquidExactPolygon {
 			for (int i = 0; i < 3; i++) {
 				var value = map.get(4 * i + 3);
 				for (int j = 0; j < 3; j++) value = value.add(map.get(4 * i + j).multiply(new Fraction(vertex.coordinate(j), vertex.w)));
-				coordinates[i] = value; denominator = denominator.multiply(value.denominator).divide(denominator.gcd(value.denominator));
+				coordinates[i] = value; denominator = denominator.divide(gcd(denominator, value.denominator)).multiply(value.denominator);
 			}
 			output.add(new Vertex(coordinates[0].numerator.multiply(denominator.divide(coordinates[0].denominator)),
 					coordinates[1].numerator.multiply(denominator.divide(coordinates[1].denominator)), coordinates[2].numerator.multiply(denominator.divide(coordinates[2].denominator)), denominator));

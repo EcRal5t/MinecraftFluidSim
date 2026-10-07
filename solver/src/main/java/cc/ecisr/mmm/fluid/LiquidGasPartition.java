@@ -65,10 +65,10 @@ final class LiquidGasPartition {
 	private static LiquidExactPolygon.Vertex interiorPoint(List<LiquidExactPolygon> faces) {
 		var base = faces.getFirst(); var plane = base.coefficients();
 		var point = faces.stream().flatMap(face -> face.vertices().stream()).filter(vertex -> vertex.distance(plane).signum() != 0).findFirst().orElseThrow();
-		var center = new LiquidExactPolygon.Fraction[]{LiquidExactPolygon.Fraction.ZERO, LiquidExactPolygon.Fraction.ZERO, LiquidExactPolygon.Fraction.ZERO};
-		for (var vertex : base.vertices()) { var x = vertex.coordinates(); for (int a = 0; a < 3; a++) center[a] = center[a].add(x[a]); }
-		var count = LiquidExactPolygon.Fraction.of(base.vertices().size()); var other = point.coordinates();
-		for (int a = 0; a < 3; a++) center[a] = center[a].divide(count).add(other[a]).multiply(LiquidExactPolygon.Fraction.of(0.5));
-		return LiquidExactPolygon.vertex(center);
+		var x = point.x(); var y = point.y(); var z = point.z(); var w = point.w();
+		for (var vertex : base.vertices()) { x = x.add(vertex.x()); y = y.add(vertex.y()); z = z.add(vertex.z()); w = w.add(vertex.w()); }
+		// Positive homogeneous denominators give strictly positive convex weights. The full face
+		// and an off-plane vertex span an interior point without expanding a common denominator.
+		return new LiquidExactPolygon.Vertex(x, y, z, w);
 	}
 }

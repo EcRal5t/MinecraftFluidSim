@@ -9,7 +9,7 @@ final class LiquidIntegerArithmetic {
 		var a = first.abs(); var b = second.abs();
 		if (a.compareTo(b) < 0) { var swap = a; a = b; b = swap; }
 		// The JDK's binary GCD is efficient for small operands; batching reduces whole-integer operations.
-		while (b.bitLength() > 8192) {
+		while (b.bitLength() > 128) {
 			int shift = a.bitLength() - 62;
 			long x = a.shiftRight(shift).longValue(), y = b.shiftRight(shift).longValue();
 			long aa = 1, ab = 0, ba = 0, bb = 1;

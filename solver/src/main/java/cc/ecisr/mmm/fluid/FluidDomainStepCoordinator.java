@@ -123,7 +123,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	double particleKineticEnergyJoules() {
-		if (liquidGeometryState != null) return LiquidGeometryMechanicalEnergy.measure(domain()).kineticJoules();
+		if (liquidGeometryState != null) return LiquidGeometryMechanicalEnergy.kinetic(domain());
 		double energy = 0.0;
 		for (int marker = 0; marker < particles.count(); marker++) {
 			double speedSquared = particles.velocityX(marker) * (double) particles.velocityX(marker)
@@ -138,7 +138,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	double gravitationalPotentialEnergyJoules() {
-		if (liquidGeometryState != null) return LiquidGeometryMechanicalEnergy.measure(domain()).gravitationalJoules();
+		if (liquidGeometryState != null) return LiquidGeometryMechanicalEnergy.gravitational(domain());
 		double energy = 0.0;
 		for (int marker = 0; marker < particles.count(); marker++) {
 			energy += unitScale.kilograms(particles.mass(marker)) * config.gravity() * particles.positionY(marker);
