@@ -716,7 +716,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	}
 
 	LiquidEnergyColumn.Truncation planThermalTruncate(
-			int marker, double newMass, ChemicalMixtureRecord keptMixture, double previousTemperatureK
+			int marker, SignedDyadic newMass, ChemicalMixtureRecord keptMixture, double previousTemperatureK
 	) {
 		return thermalState == null ? null : thermalState.planTruncate(
 				marker, newMass, keptMixture, previousTemperatureK, thermalMarkerContext());

@@ -319,7 +319,7 @@ final class MaterialTransferPlanner {
 			if (chemicalPlan == null) continue;
 			ledger.add(domain.materialRegistry.material(domain.particles.materialHandle(marker)).id(), domain.chemicalParcels.indicator(marker),
 					removedVolume, domain.unitScale.kilograms(removedMassQuantity), chemicalPlan.removed());
-			LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(marker, newMass,
+			LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(marker, quantities.mass(),
 					chemicalPlan.kept(), domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(marker));
 			plan.add(new ExtractionAllocation(quantities, chemicalPlan, thermalPlan));
 			geometric.reserve(quantities);
@@ -400,7 +400,7 @@ final class MaterialTransferPlanner {
 					: domain.chemicalParcels.tryPlanTruncate(i, newVolume, removedVolume.toFloat(),
 					newMass, removedMass.toDouble());
 			if (domain.chemicalParcels != null && chemicalPlan == null) continue;
-			LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(i, newMass,
+			LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(i, quantities.mass(),
 					chemicalPlan == null ? null : chemicalPlan.kept(),
 					domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(i));
 			plan.add(new ExtractionAllocation(quantities, chemicalPlan, thermalPlan));

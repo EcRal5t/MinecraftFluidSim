@@ -20,7 +20,7 @@ final class LiquidInventoryThermalShares {
 	static double temperatureChange(FluidDomain domain, LiquidInventoryStock stock, LiquidInventoryRepartitionPlan.Marker marker) {
 		if (domain.thermalState == null) return 0;
 		var chemistry = domain.chemicalParcels == null ? null : domain.chemicalParcels.registry();
-		double temperature = domain.thermalState.liquid().temperatureForInventory(marker.material(), marker.mass().toDouble(), marker.mixture(), marker.energy(), chemistry);
+		double temperature = domain.thermalState.liquid().temperatureForInventory(marker.material(), marker.mass(), marker.mixture(), marker.energy(), chemistry);
 		return Math.max(Math.abs(temperature - stock.minimumTemperature), Math.abs(temperature - stock.maximumTemperature));
 	}
 }

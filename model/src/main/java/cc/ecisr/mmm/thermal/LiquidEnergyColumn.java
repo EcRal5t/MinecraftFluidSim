@@ -26,6 +26,8 @@ public final class LiquidEnergyColumn {
 	private double[] internalEnergy;
 	private double[] cachedBaseEnergy;
 	private long[] cachedMassBits;
+	private SignedDyadic[] cachedNormalizedMass;
+	private double[] cachedPhysicalMass;
 	private int[] cachedMaterial;
 	private ChemicalMixtureRecord[] cachedMixture;
 	private ChemicalRegistry cachedChemistry;
@@ -54,6 +56,7 @@ public final class LiquidEnergyColumn {
 		this.internalEnergy = new double[initialCapacity];
 		cachedBaseEnergy = new double[initialCapacity]; Arrays.fill(cachedBaseEnergy, Double.NaN);
 		cachedMassBits = new long[initialCapacity]; cachedMaterial = new int[initialCapacity];
+		cachedNormalizedMass = new SignedDyadic[initialCapacity]; cachedPhysicalMass = new double[initialCapacity];
 		cachedMixture = new ChemicalMixtureRecord[initialCapacity];
 		if (restoredEnergy != null) {
 			if (restoredEnergy.length != markers.markerCount()) {
@@ -64,7 +67,7 @@ public final class LiquidEnergyColumn {
 		}
 		for (int marker = 0; marker < markers.markerCount(); marker++) {
 			int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
-			double physicalMass = unitScale.kilograms(markers.mass(marker));
+			double physicalMass = physicalMass(markers.exactMass(marker));
 			ChemicalMixtureRecord mixture = markers.mixture(marker);
 			double base = baseEnergy(thermalHandle, physicalMass, mixture, markers.chemicalRegistry());
 			internalEnergy[marker] = base + physicalMass
@@ -128,6 +131,8 @@ public final class LiquidEnergyColumn {
 		cachedBaseEnergy = Arrays.copyOf(cachedBaseEnergy, capacity);
 		Arrays.fill(cachedBaseEnergy, previous, capacity, Double.NaN);
 		cachedMassBits = Arrays.copyOf(cachedMassBits, capacity);
+		cachedNormalizedMass = Arrays.copyOf(cachedNormalizedMass, capacity);
+		cachedPhysicalMass = Arrays.copyOf(cachedPhysicalMass, capacity);
 		cachedMaterial = Arrays.copyOf(cachedMaterial, capacity);
 		cachedMixture = Arrays.copyOf(cachedMixture, capacity);
 	}
@@ -145,18 +150,19 @@ public final class LiquidEnergyColumn {
 	public double temperature(int marker, ThermalCarrierContext markers) {
 		ThermalMaterialDefinition material = material(marker, markers);
 		double sensible = (internalEnergy[marker] - baseEnergy(marker, markers))
-				/ unitScale.kilograms(markers.mass(marker));
+				/ physicalMass(marker, markers);
 		return material.temperatureForSensibleSpecificEnergy(sensible);
 	}
 
 	/** Prepares immutable caloric data for a prospective conservative liquid inventory. */
 	public CaloricInventory caloricInventory(int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture,
 			ChemicalRegistry chemistry) {
+		return caloricInventory(fluidMaterialHandle, SignedDyadic.of(mass), mixture, chemistry);
+	}
+	public CaloricInventory caloricInventory(int fluidMaterialHandle, SignedDyadic mass, ChemicalMixtureRecord mixture,
+			ChemicalRegistry chemistry) {
 		int handle = thermalMaterialHandleForFluid(fluidMaterialHandle);
-		double physicalMass = unitScale.kilograms(mass);
-		if (!(Double.isFinite(physicalMass) && physicalMass > 0))
-			throw new IllegalArgumentException("Prospective liquid mass is invalid");
-		return new CaloricInventory(handle, physicalMass, mixture, chemistry);
+		return new CaloricInventory(handle, physicalMass(mass), mixture, chemistry);
 	}
 
 	/** Immutable prospective inventory: repeated caloric evaluations share one reference-energy calculation. */
@@ -192,27 +198,21 @@ public final class LiquidEnergyColumn {
 	/** Pure inversion for a prospective conservative liquid inventory. */
 	public double temperatureForInventory(int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture,
 			double energy, ChemicalRegistry chemistry) {
-		int handle = thermalMaterialHandleForFluid(fluidMaterialHandle);
-		double physicalMass = unitScale.kilograms(mass);
-		if (!(Double.isFinite(physicalMass) && physicalMass > 0 && Double.isFinite(energy)))
-			throw new IllegalArgumentException("Prospective liquid energy or mass is invalid");
-		return registry.material(handle).temperatureForSensibleSpecificEnergy(
-				(energy - baseEnergy(handle, physicalMass, mixture, chemistry)) / physicalMass);
+		return temperatureForInventory(fluidMaterialHandle, SignedDyadic.of(mass), mixture, energy, chemistry);
+	}
+	public double temperatureForInventory(int fluidMaterialHandle, SignedDyadic mass, ChemicalMixtureRecord mixture,
+			double energy, ChemicalRegistry chemistry) {
+		return caloricInventory(fluidMaterialHandle, mass, mixture, chemistry).temperature(energy);
 	}
 
 	/** Roundoff in a prospective caloric evaluation, including temperature and mass storage. */
 	public double modeledEnergyRoundoff(int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture,
 			double temperature, ChemicalRegistry chemistry) {
-		int handle = thermalMaterialHandleForFluid(fluidMaterialHandle);
-		double physicalMass = unitScale.kilograms(mass);
-		var material = registry.material(handle);
-		double sensible = material.sensibleSpecificEnergyAt(temperature), term = physicalMass * sensible;
-		double base = baseEnergy(handle, physicalMass, mixture, chemistry);
-		return stateFunction.baseEnergyRoundoff(handle, physicalMass, mixture, chemistry)
-				+ material.caloricSegments().size() * physicalMass * Math.ulp(sensible)
-				+ Math.ulp(term) + Math.ulp(base + term)
-				+ Math.ulp(physicalMass) * Math.abs(material.referenceSpecificEnergyEuPerMu() + sensible)
-				+ physicalMass * material.specificHeatAt(temperature) * Math.ulp(temperature);
+		return modeledEnergyRoundoff(fluidMaterialHandle, SignedDyadic.of(mass), mixture, temperature, chemistry);
+	}
+	public double modeledEnergyRoundoff(int fluidMaterialHandle, SignedDyadic mass, ChemicalMixtureRecord mixture,
+			double temperature, ChemicalRegistry chemistry) {
+		return caloricInventory(fluidMaterialHandle, mass, mixture, chemistry).roundoff(temperature);
 	}
 
 	public void requireReactionState(
@@ -232,7 +232,7 @@ public final class LiquidEnergyColumn {
 
 	void addExternalMarker(int marker, ThermalCarrierContext markers) {
 		ensureCapacity(marker + 1);
-		internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker),
+		internalEnergy[marker] = modeledEnergy(marker, markers.exactMass(marker), markers.mixture(marker),
 				insertionTemperatureK, markers);
 		audit.update(ledger -> ledger.withExternalSourceEnergy(SignedDyadic.of(internalEnergy[marker])));
 		revision++;
@@ -311,8 +311,14 @@ public final class LiquidEnergyColumn {
 			int marker, double newMass, ChemicalMixtureRecord keptMixture,
 			double previousTemperatureK, ThermalCarrierContext markers
 	) {
+		return planTruncate(marker, SignedDyadic.of(newMass), keptMixture, previousTemperatureK, markers);
+	}
+	public Truncation planTruncate(
+			int marker, SignedDyadic newMass, ChemicalMixtureRecord keptMixture,
+			double previousTemperatureK, ThermalCarrierContext markers
+	) {
 		double previousEnergy = internalEnergy[marker];
-		double newEnergy = newMass == 0.0 ? 0.0
+		double newEnergy = newMass.signum() == 0 ? 0.0
 				: modeledEnergy(marker, newMass, keptMixture, previousTemperatureK, markers);
 		return new Truncation(newEnergy, previousEnergy - newEnergy);
 	}
@@ -333,12 +339,17 @@ public final class LiquidEnergyColumn {
 	}
 
 	void resetMarkerTemperature(int marker, double temperatureK, ThermalCarrierContext markers) {
-		internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker), temperatureK, markers);
+		internalEnergy[marker] = modeledEnergy(marker, markers.exactMass(marker), markers.mixture(marker), temperatureK, markers);
 		revision++;
 	}
 
 	public double modeledEnergy(
 			int marker, double mass, ChemicalMixtureRecord mixture, double temperatureK, ThermalCarrierContext markers
+	) {
+		return modeledEnergy(marker, SignedDyadic.of(mass), mixture, temperatureK, markers);
+	}
+	public double modeledEnergy(
+			int marker, SignedDyadic mass, ChemicalMixtureRecord mixture, double temperatureK, ThermalCarrierContext markers
 	) {
 		return modeledEnergy(markers.fluidMaterialHandle(marker), mass, mixture, temperatureK,
 				markers.chemicalRegistry());
@@ -348,9 +359,15 @@ public final class LiquidEnergyColumn {
 			int fluidMaterialHandle, double mass, ChemicalMixtureRecord mixture, double temperatureK,
 			ChemicalRegistry chemicalRegistry
 	) {
+		return modeledEnergy(fluidMaterialHandle, SignedDyadic.of(mass), mixture, temperatureK, chemicalRegistry);
+	}
+	public double modeledEnergy(
+			int fluidMaterialHandle, SignedDyadic mass, ChemicalMixtureRecord mixture, double temperatureK,
+			ChemicalRegistry chemicalRegistry
+	) {
 		int thermalHandle = materialByFluidHandle[fluidMaterialHandle];
 		ThermalMaterialDefinition material = registry.material(thermalHandle);
-		double physicalMass = unitScale.kilograms(mass);
+		double physicalMass = physicalMass(mass);
 		double base = baseEnergy(thermalHandle, physicalMass, mixture, chemicalRegistry);
 		double energy = base + physicalMass * material.sensibleSpecificEnergyAt(temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
@@ -359,7 +376,7 @@ public final class LiquidEnergyColumn {
 
 	double baseEnergy(int marker, ThermalCarrierContext markers) {
 		int material = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
-		double mass = unitScale.kilograms(markers.mass(marker));
+		double mass = physicalMass(marker, markers);
 		ChemicalMixtureRecord mixture = markers.mixture(marker);
 		ChemicalRegistry chemistry = markers.chemicalRegistry();
 		if (cachedChemistry != chemistry) {
@@ -377,6 +394,18 @@ public final class LiquidEnergyColumn {
 
 	private double baseEnergy(int material, double mass, ChemicalMixtureRecord mixture, ChemicalRegistry chemistry) {
 		return stateFunction.baseEnergy(material, mass, mixture, chemistry);
+	}
+	private double physicalMass(SignedDyadic mass) {
+		double observed = unitScale.kilograms(mass).toDouble();
+		if (!(Double.isFinite(observed) && observed > 0)) throw new IllegalArgumentException("Liquid caloric mass is outside observation support");
+		return observed;
+	}
+	double physicalMass(int marker, ThermalCarrierContext markers) {
+		var mass = markers.exactMass(marker);
+		if (mass != null && mass.equals(cachedNormalizedMass[marker])) return cachedPhysicalMass[marker];
+		double observed = physicalMass(mass);
+		cachedNormalizedMass[marker] = mass; cachedPhysicalMass[marker] = observed;
+		return observed;
 	}
 
 	private ThermalMaterialDefinition material(int marker, ThermalCarrierContext markers) {

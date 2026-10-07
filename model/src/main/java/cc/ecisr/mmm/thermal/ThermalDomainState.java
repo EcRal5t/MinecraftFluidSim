@@ -254,6 +254,12 @@ public final class ThermalDomainState {
 	) {
 		return liquidEnergy.planTruncate(marker, newMass, keptMixture, previousTemperatureK, markers);
 	}
+	public LiquidEnergyColumn.Truncation planTruncate(
+			int marker, SignedDyadic newMass, ChemicalMixtureRecord keptMixture,
+			double previousTemperatureK, ThermalCarrierContext markers
+	) {
+		return liquidEnergy.planTruncate(marker, newMass, keptMixture, previousTemperatureK, markers);
+	}
 
 	public void commitTruncate(int marker, LiquidEnergyColumn.Truncation plan) { liquidEnergy.commitTruncate(marker, plan); }
 	public void commitInternalTruncate(int marker, LiquidEnergyColumn.Truncation plan) {

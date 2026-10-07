@@ -21,7 +21,7 @@ final class LiquidInventorySpeciesShares {
 		var handles = stock.species.keySet().stream().mapToInt(Integer::intValue).toArray();
 		var amounts = stock.species.values().stream().mapToLong(Long::longValue).toArray();
 		var mixture = new ChemicalMixtureRecord(handles, amounts, 0);
-		return mixture.withMassResidualKilograms(domain.unitScale.kilograms(stock.mass.toDouble())
+		return mixture.withMassResidualKilograms(domain.unitScale.kilograms(stock.mass).toDouble()
 				- mixture.exactSpeciesMassKilograms(domain.chemicalParcels.registry()).toDouble());
 	}
 }

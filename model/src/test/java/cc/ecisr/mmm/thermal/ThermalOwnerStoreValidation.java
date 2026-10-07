@@ -90,12 +90,14 @@ public final class ThermalOwnerStoreValidation {
 		var function = new ThermalStateFunction(registry);
 		class Markers implements ThermalCarrierContext {
 			double mass = 2;
+			SignedDyadic completeMass;
 			ChemicalMixtureRecord composition;
 			ChemicalRegistry currentChemistry = chemistry;
 			public int markerCount() { return 1; }
 			public int cell(int marker) { return 0; }
 			public int fluidMaterialHandle(int marker) { return 0; }
 			public double mass(int marker) { return mass; }
+			public SignedDyadic exactMass(int marker) { return completeMass == null ? SignedDyadic.of(mass) : completeMass; }
 			public double volume(int marker) { return 1; }
 			public ChemicalMixtureRecord mixture(int marker) { return composition; }
 			public ChemicalRegistry chemicalRegistry() { return currentChemistry; }
@@ -139,6 +141,45 @@ public final class ThermalOwnerStoreValidation {
 					"liquid reference memo retained handles from another chemical registry");
 			column.setEnergy(0, function.internalEnergyAtTemperature(0, markers.mass, markers.composition, current, 340));
 			require(close(column.temperature(0, markers), 340), "registry replacement left a stale caloric reference");
+		}
+		markers.currentChemistry = chemistry; markers.composition = null; markers.mass = 1;
+		var scale = new cc.ecisr.mmm.units.SolverUnitScale(1.5);
+		var midpoint = SignedDyadic.of(1).add(SignedDyadic.of(1, -53));
+		require(midpoint.toDouble() == markers.mass && scale.kilograms(midpoint).toDouble() != scale.kilograms(markers.mass),
+				"Caloric quantity fixture does not expose double rounding during SI conversion");
+		markers.completeMass = midpoint;
+		var complete = new LiquidEnergyColumn(registry, function, scale, new int[]{0}, 315,
+				new ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO)), 1, markers);
+		require(complete.energy(0) == function.internalEnergyAtTemperature(0, scale.kilograms(midpoint).toDouble(), Map.of(), 315),
+				"Liquid initialization rounded complete mass before SI conversion");
+		for (var full : List.of(SignedDyadic.of(1), midpoint, SignedDyadic.of(1), midpoint.add(SignedDyadic.of(1, -2000)))) {
+			markers.completeMass = full; double physical = scale.kilograms(full).toDouble();
+			double expectedBase = function.baseEnergy(0, physical, Map.of());
+			require(complete.baseEnergy(0, markers) == expectedBase, "Caloric mass memo hid a native quantity tail");
+			complete.resetMarkerTemperature(0, 330, markers);
+			double expectedEnergy = function.internalEnergyAtTemperature(0, physical, Map.of(), 330);
+			require(complete.energy(0) == expectedEnergy && complete.modeledEnergy(0, full, null, 330, chemistry) == expectedEnergy,
+					"Liquid temperature reset observed normalized mass before physical units");
+			var caloric = complete.caloricInventory(0, full, null, chemistry);
+			double expectedTemperature = material.temperatureForSensibleSpecificEnergy((expectedEnergy - expectedBase) / physical);
+			require(complete.temperature(0, markers) == expectedTemperature && caloric.temperature(expectedEnergy) == expectedTemperature
+					&& complete.temperatureForInventory(0, full, null, expectedEnergy, chemistry) == expectedTemperature
+					&& caloric.energy(330) == expectedEnergy && caloric.roundoff(330) == complete.modeledEnergyRoundoff(0, full, null, 330, chemistry),
+					"Current and prospective caloric states disagree on full physical mass");
+			var kept = full.multiply(SignedDyadic.of(0.5));
+			require(complete.planTruncate(0, kept, null, 330, markers).newEnergy()
+					== function.internalEnergyAtTemperature(0, scale.kilograms(kept).toDouble(), Map.of(), 330),
+					"Native extraction dropped the remaining mass tail in caloric preflight");
+		}
+		var domainScale = cc.ecisr.mmm.units.SolverUnitScale.forCellSize(1.1F);
+		var domain = new ThermalDomainState(registry, new int[]{0}, new int[0], 330, 1, 1, 1, 1, 1.1F, markers, null, 8);
+		for (var full : List.of(SignedDyadic.of(1), midpoint)) {
+			markers.completeMass = full; double physical = domainScale.kilograms(full).toDouble();
+			domain.resetMarkerTemperature(0, 330, markers, domain.exactEnergy(1));
+			var body = domain.prepareLiquidConduction(markers).bodies().getFirst();
+			require(body.massKilograms() == physical && body.baseEnergyEu() == function.baseEnergy(0, physical, Map.of())
+					&& domain.carrierAccess(markers).mass(0) == physical && domain.temperature(0, markers) == body.temperatureK(),
+					"Conduction and spatial caloric observations used different physical mass");
 		}
 	}
 
