@@ -11,11 +11,12 @@ final class LiquidControlVolumeViscosity {
 	private final List<LiquidControlVolumeProjection.Cell> cells;
 	private final List<LiquidControlVolumeProjection.Face> faces;
 	private final ControlVolumeGradient[] geometry;
+	private final ControlVolumeDiffusion[] diffusion;
 	private final double[] viscosity, mass, diagonal, physical;
 	private final LiquidPolyhedron.Point[] normal;
 	private final FluidSolverConfig.WallCondition wall;
 	private final double[][] difference, residual;
-	private final double[] gradient = new double[9], consistency = new double[9];
+	private final double[] gradient = new double[9];
 	private final int faceBase;
 
 	LiquidControlVolumeViscosity(List<LiquidControlVolumeProjection.Cell> cells,
@@ -23,6 +24,7 @@ final class LiquidControlVolumeViscosity {
 		if (viscosity.length != cells.size() || wall == null) throw new IllegalArgumentException("Invalid viscous control-volume properties");
 		this.cells = List.copyOf(cells); this.faces = List.copyOf(faces); this.viscosity = viscosity.clone(); this.wall = wall;
 		geometry = ControlVolumeGradient.build(cells, faces); faceBase = 3 * cells.size();
+		diffusion = Arrays.stream(geometry).map(ControlVolumeDiffusion::new).toArray(ControlVolumeDiffusion[]::new);
 		mass = new double[faceBase + 3 * faces.size()]; diagonal = mass.clone(); physical = mass.clone();
 		normal = new LiquidPolyhedron.Point[faces.size()]; difference = new double[cells.size()][]; residual = difference.clone();
 		for (int f = 0; f < faces.size(); f++) {
@@ -107,25 +109,21 @@ final class LiquidControlVolumeViscosity {
 	private double stress(double[] value, double[] output) {
 		double dissipation = 0;
 		for (int c = 0; c < cells.size(); c++) {
-			var g = geometry[c]; Arrays.fill(gradient, 0);
+			var g = geometry[c];
 			for (int i = 0; i < g.indices.length; i++) for (int a = 0; a < 3; a++) {
 				double delta = value[faceBase + 3 * g.indices[i] + a] - value[3 * c + a]; difference[c][3 * i + a] = delta;
-				for (int b = 0; b < 3; b++) gradient[3 * a + b] += delta * g.basis[i].coordinate(b);
+			}
+			for (int a = 0; a < 3; a++) {
+				diffusion[c].apply(difference[c], residual[c], 3, a, gradient);
+				dissipation += viscosity[c] * diffusion[c].stabilizationEnergy();
 			}
 			for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
 				double strain = 0.5 * (gradient[3 * a + b] + gradient[3 * b + a]);
-				consistency[3 * a + b] = 2 * g.volume * strain; dissipation += 2 * viscosity[c] * g.volume * strain * strain;
+				dissipation += 2 * viscosity[c] * g.volume * strain * strain;
 			}
 			for (int i = 0; i < g.indices.length; i++) for (int a = 0; a < 3; a++) {
-				double strainError = difference[c][3 * i + a];
-				for (int b = 0; b < 3; b++) strainError -= gradient[3 * a + b] * g.displacement[i].coordinate(b);
-				residual[c][3 * i + a] = strainError;
-				dissipation += viscosity[c] * g.weight[i] * strainError * strainError;
-				for (int b = 0; b < 3; b++) consistency[3 * a + b] -= g.weight[i] * strainError * g.displacement[i].coordinate(b);
-			}
-			for (int i = 0; i < g.indices.length; i++) for (int a = 0; a < 3; a++) {
-				double force = g.weight[i] * residual[c][3 * i + a];
-				for (int b = 0; b < 3; b++) force += g.basis[i].coordinate(b) * consistency[3 * a + b];
+				double force = residual[c][3 * i + a];
+				for (int b = 0; b < 3; b++) force += g.basis[i].coordinate(b) * g.volume * gradient[3 * b + a];
 				force *= viscosity[c]; output[3 * c + a] -= force; output[faceBase + 3 * g.indices[i] + a] += force;
 			}
 		}

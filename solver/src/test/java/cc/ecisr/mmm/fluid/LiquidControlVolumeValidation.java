@@ -16,6 +16,8 @@ final class LiquidControlVolumeValidation {
 		densityJumpUsesBothLiquidDistances();
 		refinedHydrostaticColumn();
 		refinedAffinePressure();
+		scalarDiffusionPreservesAffineFluxAndRefinement();
+		sharedFaceHeatFluxClosesOnObliqueAndRefinedCells();
 		refinedViscosityPreservesRigidMotionAndMomentum();
 		finiteGasPressureSharesLiquidProjection();
 		pressureAndViscosityShareMomentumAndEnergy();
@@ -34,6 +36,120 @@ final class LiquidControlVolumeValidation {
 		LiquidConformingVelocityValidation.validate();
 		LiquidCharacteristicValidation.validate();
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
+	}
+	private static void scalarDiffusionPreservesAffineFluxAndRefinement() {
+		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
+		var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(1, 1, 0, 1)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(-1, -1, 0, -1))), 1, 1,
+				(c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+		var metrics = ControlVolumeGradient.build(mesh.cells, mesh.faces);
+		var shared = new double[mesh.faces.size()];
+		for (int c = 0; c < metrics.length; c++) {
+			var g = metrics[c]; var operator = new ControlVolumeDiffusion(g);
+			double k = c == 0 ? 3 : 6;
+			// T is continuous at x+y=1; k grad(T).n is identical on both sides.
+			double[] slope = {1 + 12 / k, -1 + 12 / k, 2};
+			var delta = new double[g.indices.length]; var flux = delta.clone(); var gradient = new double[3];
+			for (int i = 0; i < delta.length; i++) for (int a = 0; a < 3; a++) delta[i] += slope[a] * g.displacement[i].coordinate(a);
+			double energy = operator.apply(delta, flux, 1, 0, gradient);
+			close(energy, g.volume * (slope[0] * slope[0] + slope[1] * slope[1] + slope[2] * slope[2]), 1e-12);
+			for (int a = 0; a < 3; a++) close(gradient[a], slope[a], 1e-12);
+			double cell = 0;
+			for (int i = 0; i < delta.length; i++) {
+				int f = g.indices[i]; var area = mesh.faces.get(f).surface().areaVector();
+				double exact = g.sign[i] * (area.x() * slope[0] + area.y() * slope[1] + area.z() * slope[2]);
+				close(flux[i], exact, 1e-12); cell -= k * flux[i]; shared[f] += k * flux[i];
+			}
+			close(cell, 0, 1e-12);
+			var first = delta.clone(); var second = delta.clone(); var aFlux = flux.clone(); var bFlux = flux.clone();
+			for (int i = 0; i < delta.length; i++) { first[i] = Math.sin(i + 1); second[i] = Math.cos(2 * i + 1); }
+			double positive = operator.apply(first, aFlux, 1, 0, gradient);
+			operator.apply(second, bFlux, 1, 0, gradient);
+			double work = 0, ab = 0, ba = 0;
+			for (int i = 0; i < delta.length; i++) { work += first[i] * aFlux[i]; ab += first[i] * bFlux[i]; ba += second[i] * aFlux[i]; }
+			if (!(positive > 0)) throw new AssertionError("Scalar diffusion has non-positive energy");
+			close(work, positive, 1e-12); close(ab, ba, 1e-12);
+			java.util.Arrays.fill(delta, 0);
+			if (operator.apply(delta, flux, 1, 0, gradient) != 0) throw new AssertionError("Uniform scalar field diffuses");
+		}
+		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() >= 0) close(shared[f], 0, 1e-12);
+		double previousError = Double.POSITIVE_INFINITY;
+		for (int n : new int[]{2, 4, 8}) {
+			double h = 1.0 / n; int level = Integer.numberOfTrailingZeros(n);
+			var leaves = new ArrayList<LiquidGeometryRefinement.Cell>();
+			for (int x = 0; x < n; x++) leaves.add(new LiquidGeometryRefinement.Cell(level, x, 0, 0, LiquidPolyhedron.box(x * h, 0, 0, (x + 1) * h, h, h)));
+			var strip = new LiquidControlVolumeMesh(leaves, 1, 1, (c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+			var field = new double[n]; for (int c = 0; c < n; c++) field[c] = Math.cos(Math.PI * strip.cells.get(c).geometry().centroid().x());
+			var faceField = new double[strip.faces.size()];
+			for (int f = 0; f < faceField.length; f++) { var face = strip.faces.get(f); faceField[f] = face.second() < 0 ? field[face.first()] : 0.5 * (field[face.first()] + field[face.second()]); }
+			var incidence = ControlVolumeGradient.build(strip.cells, strip.faces); double sum = 0;
+			double eigenvalue = 4 / (h * h) * Math.pow(Math.sin(Math.PI * h / 2), 2);
+			for (int c = 0; c < n; c++) {
+				var g = incidence[c]; var delta = new double[g.indices.length]; var flux = delta.clone();
+				for (int i = 0; i < delta.length; i++) delta[i] = faceField[g.indices[i]] - field[c];
+				new ControlVolumeDiffusion(g).apply(delta, flux, 1, 0, new double[3]);
+				double loss = 0; for (double value : flux) loss -= value;
+				close(loss / g.volume, eigenvalue * field[c], 1e-10); sum += loss;
+			}
+			close(sum, 0, 1e-12);
+			double error = Math.abs(eigenvalue - Math.PI * Math.PI);
+			if (error >= previousError * 0.3) throw new AssertionError("Resolved scalar diffusion fails second-order Fourier refinement");
+			previousError = error;
+		}
+	}
+	private static void sharedFaceHeatFluxClosesOnObliqueAndRefinedCells() {
+		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
+		var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(1, 1, 0, 1)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(-1, -1, 0, -1))), 1, 1,
+				(c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+		double[] k = {3, 6}; var temperature = new double[2]; var prescribed = new double[mesh.faces.size()]; java.util.Arrays.fill(prescribed, Double.NaN);
+		for (int c = 0; c < 2; c++) {
+			var p = mesh.cells.get(c).geometry().centroid(); temperature[c] = 300 + p.x() - p.y() + 2 * p.z() + 12 / k[c] * (p.x() + p.y() - 1);
+		}
+		for (int f = 0; f < prescribed.length; f++) {
+			var face = mesh.faces.get(f); if (face.second() >= 0) continue;
+			var p = face.surface().centroid(); prescribed[f] = 300 + p.x() - p.y() + 2 * p.z() + 12 / k[face.first()] * (p.x() + p.y() - 1);
+		}
+		var operator = new ControlVolumeHeatFlux(mesh, k);
+		var result = operator.solve(temperature, prescribed, 1e-11, 256);
+		for (int f = 0; f < prescribed.length; f++) if (mesh.faces.get(f).second() >= 0) {
+			var p = mesh.faces.get(f).surface().centroid(); close(result.faceTemperature()[f], 300 + p.x() - p.y() + 2 * p.z(), 1e-11);
+			close(result.faceResidual()[f], 0, 1e-11);
+		}
+		for (double rate : result.cellHeating()) close(rate, 0, 1e-11);
+		close(result.reservoirHeating(), 0, 1e-11);
+		java.util.Arrays.fill(prescribed, Double.NaN);
+		result = operator.solve(new double[]{290, 310}, prescribed, 1e-10, 256);
+		if (!(result.cellHeating()[0] > 0 && result.cellHeating()[1] < 0 && result.diffusionEnergy() > 0))
+			throw new AssertionError("Shared oblique thermal flux reversed the temperature difference");
+		close(result.cellHeating()[0] + result.cellHeating()[1], 0, 1e-9);
+		close(result.reservoirHeating(), 0, 0);
+		for (double residual : result.faceResidual()) close(residual, 0, 1e-10);
+		var shifted = operator.solve(new double[]{290 + 1e10, 310 + 1e10}, prescribed, 1e-10, 256);
+		if (!java.util.Arrays.equals(result.cellHeating(), shifted.cellHeating()))
+			throw new AssertionError("Absolute temperature reference obscured a resolved heat flux");
+		for (int f = 0; f < prescribed.length; f++) if (mesh.faces.get(f).second() < 0) prescribed[f] = 330;
+		var reservoir = operator.solve(new double[]{290, 310}, prescribed, 1e-10, 256);
+		if (!(reservoir.cellHeating()[0] > 0 && reservoir.cellHeating()[1] > 0 && reservoir.reservoirHeating() > 0))
+			throw new AssertionError("Fixed-temperature walls failed to heat finite controls");
+		close(reservoir.cellHeating()[0] + reservoir.cellHeating()[1], reservoir.reservoirHeating(), 1e-10);
+		java.util.Arrays.fill(prescribed, Double.NaN);
+		result = new ControlVolumeHeatFlux(mesh, new double[]{3, 0}).solve(new double[]{290, 310}, prescribed, 1e-10, 256);
+		for (double rate : result.cellHeating()) close(rate, 0, 1e-9);
+		result = new ControlVolumeHeatFlux(mesh, new double[]{0, 0}).solve(temperature, prescribed, 1e-10, 256);
+		if (result.iterations() != 0 || result.diffusionEnergy() != 0) throw new AssertionError("Insulating controls retained diffusion work");
+		var leaves = new ArrayList<LiquidGeometryRefinement.Cell>();
+		leaves.add(new LiquidGeometryRefinement.Cell(1, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5)));
+		leaves.addAll(LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(1, 1, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 0.5, 0.5))));
+		var refined = new LiquidControlVolumeMesh(leaves, 1, 1, (c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+		var conductivities = new double[leaves.size()]; java.util.Arrays.fill(conductivities, 5);
+		temperature = new double[leaves.size()]; prescribed = new double[refined.faces.size()];
+		for (int c = 0; c < temperature.length; c++) { var p = refined.cells.get(c).geometry().centroid(); temperature[c] = 300 + p.x() + 2 * p.y() - 3 * p.z(); }
+		for (int f = 0; f < prescribed.length; f++) { var face = refined.faces.get(f); var p = face.surface().centroid(); prescribed[f] = face.second() >= 0 ? Double.NaN : 300 + p.x() + 2 * p.y() - 3 * p.z(); }
+		result = new ControlVolumeHeatFlux(refined, conductivities).solve(temperature, prescribed, 1e-10, 256);
+		for (int f = 0; f < prescribed.length; f++) { var p = refined.faces.get(f).surface().centroid(); close(result.faceTemperature()[f], 300 + p.x() + 2 * p.y() - 3 * p.z(), 1e-10); }
+		for (double rate : result.cellHeating()) close(rate, 0, 1e-9);
+		if (result.iterations() == 0) throw new AssertionError("Coarse/fine face test skipped its non-orthogonal temperature solve");
 	}
 	private static void pressureInertiaSurvivesTinyAuxiliaryFaceAreas() {
 		conjugateDirectionsResolveAnisotropicEnergy();
