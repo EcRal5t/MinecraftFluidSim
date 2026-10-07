@@ -6,7 +6,8 @@ import java.util.List;
 
 /** Native caloric publication preserves complete liquid stocks, geometry, gas and cold handoff. */
 final class ResolvedLiquidConductionValidation {
-	static void validate(FluidDomain source) {
+	static void validate(FluidDomain source) throws Exception {
+		ambientPublication(source);
 		jointGasPublication(source);
 		cooccupiedInventoryPublication(source);
 		var domain = FluidDomain.restoreAuthoritativeState(source.captureAuthoritativeState());
@@ -63,20 +64,20 @@ final class ResolvedLiquidConductionValidation {
 		domain.carrierMutations().publishGeometricRepartition(new LiquidInventoryRepartitionPlan(domain));
 		var geometry = domain.liquidGeometryState; var support = LiquidGeometryStateMapper.restore(geometry);
 		var mesh = new LiquidControlVolumeMesh(support, geometry.rootWidthMetres(), 1, (c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
-		int n = domain.particles.count(); int[] markers = geometry.copyMarkerCells(), owners = geometry.copyFragmentOwners();
+		int n = domain.particles.count();
 		if (n != 4 || mesh.cells.size() != 2) throw new AssertionError("Native cooccupied fixture lost its independent stocks");
-		var totals = new java.util.TreeMap<Integer, SignedDyadic>(); var before = new double[n];
+		var before = new double[n];
 		var volumes = new SignedDyadic[n]; var masses = volumes.clone(); var mixtures = new cc.ecisr.mmm.chemistry.ChemicalMixtureRecord[n]; var indicators = new boolean[n];
 		for (int p = 0; p < n; p++) {
 			volumes[p] = domain.particles.exactVolume(p); masses[p] = domain.particles.exactMass(p); mixtures[p] = domain.chemicalParcels.record(p); indicators[p] = domain.chemicalParcels.indicator(p);
-			totals.merge(markers[p], volumes[p], SignedDyadic::add); before[p] = domain.thermalState.temperature(p, domain.thermalMarkers);
+			before[p] = domain.thermalState.temperature(p, domain.thermalMarkers);
 		}
 		var captured = domain.thermalState.prepareConduction(domain.thermalMarkers, domain.gasState.network); var portions = new java.util.ArrayList<ControlVolumeThermalMetric.Portion>();
-		for (int c = 0; c < owners.length; c++) for (int p = 0; p < n; p++) if (markers[p] == owners[c]) {
-			double k = LiquidExactPolygon.Fraction.of(volumes[p]).divide(LiquidExactPolygon.Fraction.of(totals.get(markers[p])))
-					.multiply(LiquidExactPolygon.Fraction.of(captured.liquidBodies().get(p).material().conductivityEuPerSecondMeterK())).rounded();
-			portions.add(new ControlVolumeThermalMetric.Portion(c, p, k));
-		}
+		var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, support, 128);
+		var phase = new LiquidGeometryPhaseInput(geometry, partition, domain.gasState.geometry, 128);
+		var mapped = LiquidGeometryConductionSupport.map(phase, captured, domain.thermalMarkers, domain.thermalState.registry(), domain.gasState.network, domain.thermalState.gas().ambientTemperatureK());
+		for (var part : mapped.portions()) if (phase.fragments[part.cell()] >= 0)
+			portions.add(new ControlVolumeThermalMetric.Portion(phase.fragments[part.cell()], part.inventory(), part.conductivity()));
 		var prescribed = new double[mesh.faces.size()]; Arrays.fill(prescribed, Double.NaN);
 		var result = new ControlVolumeConduction(mesh, n, portions).advance(captured.liquidBodies(), prescribed, 10, 1e-8, 512);
 		var gasEnergy = domain.thermalState.exactGasEnergy(); var gasGeometry = domain.gasState.geometry;
@@ -109,23 +110,15 @@ final class ResolvedLiquidConductionValidation {
 		requests.add(new LiquidGeometryRefinement.Cell(1, 0, 0, 1, LiquidPolyhedron.box(0, 0, .5, .5, .5, 1)));
 		var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, requests, 128);
 		var phase = new LiquidGeometryPhaseInput(geometry, partition, gasGeometry, 128);
-		int[] owner = geometry.copyFragmentOwners(), markers = geometry.copyMarkerCells();
-		var portions = new java.util.ArrayList<ControlVolumeThermalMetric.Portion>(); int gasCells = 0;
-		for (int c = 0; c < phase.fragments.length; c++) {
-			if (phase.fragments[c] < 0) {
-				int ordinal = captured.gasOrdinal(phase.storedGasNodes[c]);
-				if (ordinal < 0) throw new AssertionError("Joint conduction fixture has a prescribed or vacuum gas cell");
-				portions.add(new ControlVolumeThermalMetric.Portion(c, ordinal, 1)); gasCells++;
-			} else for (int p = 0; p < markers.length; p++) if (markers[p] == owner[phase.fragments[c]])
-				portions.add(new ControlVolumeThermalMetric.Portion(c, p, captured.liquidBodies().get(p).material().conductivityEuPerSecondMeterK()));
-		}
+		var materialSupport = LiquidGeometryConductionSupport.map(phase, captured, domain.thermalMarkers, domain.thermalState.registry(), network, domain.thermalState.gas().ambientTemperatureK());
+		int gasCells = 0; for (int fragment : phase.fragments) if (fragment < 0) gasCells++;
 		if (gasCells <= network.nodeCount() || captured.bodies().size() != domain.particleCount() + network.nodeCount())
 			throw new AssertionError("Joint conduction duplicated a chamber heat capacity or omitted geometric support");
 		var prescribed = new double[phase.mesh.faces.size()]; Arrays.fill(prescribed, Double.NaN);
 		double temperatureObservation = captured.bodies().stream().mapToDouble(body ->
 				body.heatCapacityEuPerK() * Math.ulp(body.temperatureK()) * .5).sum();
-		var result = new ControlVolumeConduction(phase.mesh, captured.bodies().size(), portions)
-				.advance(captured.bodies(), prescribed, 1, Math.max(1e-8, temperatureObservation), 1024);
+		var result = new ControlVolumeConduction(phase.mesh, materialSupport.bodies().size(), materialSupport.portions())
+				.advance(materialSupport.bodies(), prescribed, 1, Math.max(1e-8, temperatureObservation), 1024);
 		domain.thermalState.commitConduction(captured.plan(result.energyChange(), result.reservoirEnergy(), result.roundoffBound()), domain.thermalMarkers, network);
 		for (int p = 0; p < domain.particleCount(); p++) if (!(domain.thermalState.temperature(p, domain.thermalMarkers) < 350))
 			throw new AssertionError("Joint conduction failed to cool the hotter liquid inventory");
@@ -159,8 +152,40 @@ final class ResolvedLiquidConductionValidation {
 			throw new AssertionError("Vacuum or ambient acquired a finite conduction heat capacity");
 		for (int n = 1; n <= network.nodeCount(); n++) if (captured.gasOrdinal(n) != -1)
 			throw new AssertionError("Vacuum chamber acquired a finite caloric unknown");
-		domain.thermalState.commitConduction(captured.plan(new double[captured.bodies().size()], SignedDyadic.ZERO, SignedDyadic.ZERO), domain.thermalMarkers, network);
+		materialSupport = LiquidGeometryConductionSupport.map(phase, captured, domain.thermalMarkers, domain.thermalState.registry(), network, domain.thermalState.gas().ambientTemperatureK());
+		result = new ControlVolumeConduction(phase.mesh, materialSupport.bodies().size(), materialSupport.portions())
+				.advance(materialSupport.bodies(), prescribed, 1, Math.max(1e-8, temperatureObservation), 1024);
+		domain.thermalState.commitConduction(captured.plan(result.energyChange(), result.reservoirEnergy(), result.roundoffBound()), domain.thermalMarkers, network);
 		if (domain.thermalState.exactGasEnergy().signum() != 0 || !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()))
 			throw new AssertionError("Vacuum conduction publication created internal energy");
+	}
+	private static void ambientPublication(FluidDomain source) throws Exception {
+		var domain = new FluidDomain(source.sizeX, source.sizeY, source.sizeZ, source.config, 16);
+		domain.restoreMaterialParticleState(source.exportMaterialParticleState());
+		cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindFull(domain, cc.ecisr.mmm.simulation.FullCapabilityTestFixture.load(),
+				cc.ecisr.mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K, cc.ecisr.mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		domain.carrierMutations().publishGeometricRepartition(new LiquidInventoryRepartitionPlan(domain));
+		for (int p = 0; p < domain.particleCount(); p++) domain.thermalState.resetMarkerTemperature(p, 270, domain.thermalMarkers, domain.exactInternalEnergy());
+		var geometry = domain.liquidGeometryState; var network = domain.gasState.network;
+		var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells,
+				LiquidGeometryStateMapper.restore(geometry), 128);
+		var phase = new LiquidGeometryPhaseInput(geometry, partition, domain.gasState.geometry, 128);
+		var captured = domain.thermalState.prepareConduction(domain.thermalMarkers, network);
+		var support = LiquidGeometryConductionSupport.map(phase, captured, domain.thermalMarkers, domain.thermalState.registry(), network, domain.thermalState.gas().ambientTemperatureK());
+		if (network.nodeCount() != 0 || support.bodies().size() != captured.bodies().size() + 1 || support.bodies().getLast().finite())
+			throw new AssertionError("Ambient conduction geometry acquired finite chamber inventory");
+		var prescribed = new double[phase.mesh.faces.size()]; Arrays.fill(prescribed, Double.NaN);
+		double precision = captured.bodies().stream().mapToDouble(body -> body.heatCapacityEuPerK() * Math.ulp(body.temperatureK()) * .5).sum();
+		var result = new ControlVolumeConduction(phase.mesh, support.bodies().size(), support.portions()).advance(support.bodies(), prescribed, 1, Math.max(1e-8, precision), 1024);
+		var ledger = domain.thermalAudit();
+		domain.thermalState.commitConduction(captured.plan(Arrays.copyOf(result.energyChange(), support.finiteInventories()), result.reservoirEnergy(), result.roundoffBound()), domain.thermalMarkers, network);
+		if (result.reservoirEnergy().signum() <= 0
+				|| !domain.thermalAudit().externalSource().subtract(ledger.externalSource()).equals(result.reservoirEnergy())
+				|| !domain.thermalAudit().externalSink().equals(ledger.externalSink())
+				|| !domain.thermalAudit().mechanicalWork().equals(ledger.mechanicalWork())
+				|| !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()) || domain.thermalState.exactGasEnergy().signum() != 0)
+			throw new AssertionError("Ambient conduction failed to account for prescribed-reservoir heat");
+		for (int p = 0; p < domain.particleCount(); p++) if (!(domain.thermalState.temperature(p, domain.thermalMarkers) > 270))
+			throw new AssertionError("Ambient conduction failed to heat the colder liquid");
 	}
 }

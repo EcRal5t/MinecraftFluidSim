@@ -37,11 +37,10 @@ final class ControlVolumeConduction {
 		var value = new double[inventories + faces]; var free = new boolean[value.length]; var diagonal = value.clone();
 		double reference = inventories == 0 ? 0 : bodies.getFirst().temperatureK();
 		for (int c = 0; c < inventories; c++) {
-			if (!bodies.get(c).finite()) throw new IllegalArgumentException("Control-volume conduction requires finite caloric inventories");
 			double temperature = bodies.get(c).temperatureK();
 			if (!(Double.isFinite(temperature) && temperature >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K))
 				throw new IllegalArgumentException("Invalid initial caloric temperature");
-			value[c] = temperature - reference; free[c] = true;
+			value[c] = temperature - reference; free[c] = bodies.get(c).finite();
 		}
 		var initial = metric.initialTemperatures(java.util.Arrays.copyOf(value, inventories));
 		for (int f = 0; f < faces; f++) {
@@ -85,8 +84,13 @@ final class ControlVolumeConduction {
 		}
 		var heating = metric.heating(prescribed); var changes = heating.inventoryRates(); var temperatures = new double[inventories];
 		var time = SignedDyadic.of(dt); var observationBound = SignedDyadic.ZERO;
+		var reservoir = heating.reservoirQuantity().multiply(time);
 		double caloricResidual = 0;
 		for (int c = 0; c < inventories; c++) {
+			if (!bodies.get(c).finite()) {
+				reservoir = reservoir.subtract(heating.quantities()[c].multiply(time));
+				changes[c] = 0; temperatures[c] = bodies.get(c).temperatureK(); continue;
+			}
 			var exactCorrection = heating.quantities()[c].add(SignedDyadic.of(inventoryForce[c])).multiply(time);
 			double correction = exactCorrection.signum() == 0 ? 0 : Math.nextUp(Math.abs(exactCorrection.toDouble()));
 			changes[c] = heating.quantities()[c].multiply(time).toDouble();
@@ -100,11 +104,11 @@ final class ControlVolumeConduction {
 			if (error > energyTolerance + correction + roundoffBound) throw new IllegalStateException("Conservative heat flux exceeds its caloric residual certificate");
 		}
 		// The measured face correction is accounted separately from caloric solve tolerance.
-		var reservoir = heating.reservoirQuantity().multiply(time);
 		var roundoff = SignedDyadic.sum(changes).subtract(reservoir);
 		if (roundoff.compareTo(observationBound) > 0 || roundoff.compareTo(observationBound.negate()) < 0)
 			throw new IllegalStateException("Resolved conduction energy exceeds its single-rounding certificate");
 		for (int f = 0; f < faces; f++) {
+			if (!metric.faceHasInventory(f) && Double.isNaN(prescribed[f])) { faceValue[f] = Double.NaN; continue; }
 			faceValue[f] = reference + value[inventories + f];
 			if (!(Double.isFinite(faceValue[f]) && faceValue[f] >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K))
 				throw new IllegalStateException("Resolved conduction face requires finer temperature support");
@@ -117,6 +121,7 @@ final class ControlVolumeConduction {
 			double dt, double[] residual, double[] capacity) {
 		action(value, residual, dt);
 		for (int c = 0; c < inventories; c++) {
+			if (!bodies.get(c).finite()) { capacity[c] = 0; continue; }
 			double temperature = reference + value[c];
 			double change = bodies.get(c).energyChangeToTemperature(temperature);
 			capacity[c] = bodies.get(c).stateAfterEnergyChange(change).heatCapacityEuPerK();

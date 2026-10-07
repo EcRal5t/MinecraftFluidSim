@@ -40,6 +40,7 @@ public final class GasEnergyStore {
 
 	public boolean hasGasEnergy(int nodeCount) { return gasModel != null && nodeEnergy.length == nodeCount; }
 	public boolean gasModelBound() { return gasModel != null; }
+	public double ambientTemperatureK() { return insertionTemperatureK; }
 
 	/** Read-only snapshot of the node energies; callers can never observe later in-place commits. */
 	public double[] nodeEnergies() { return nodeEnergy.clone(); }

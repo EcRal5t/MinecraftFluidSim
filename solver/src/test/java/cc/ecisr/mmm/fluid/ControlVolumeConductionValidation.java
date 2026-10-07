@@ -16,6 +16,7 @@ final class ControlVolumeConductionValidation {
 		var first = material("test:thermal/first", 3, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 400, 2)));
 		var second = material("test:thermal/second", 6, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 400, 3)));
 		var bodies = List.of(carrier(first, 280), carrier(second, 320));
+		prescribedInventoryAndVacuum(mesh, first, prescribed);
 		var operator = new ControlVolumeConduction(mesh, new double[]{3, 6});
 		var result = operator.advance(bodies, prescribed, 1, 1e-10, 256);
 		// Harmonic conductivity 4, area 1/4, centre distance 1/2: G = 2.
@@ -53,7 +54,30 @@ final class ControlVolumeConductionValidation {
 			throw new AssertionError("Face residual correction exchanged heat with an insulating neighbour");
 		cooccupiedCaloricInventories();
 		obliqueCaloricInterfacePreservesSteadyFlux();
-		temporalAndSpatialFourierRefinement();
+		 temporalAndSpatialFourierRefinement();
+	}
+	private static void prescribedInventoryAndVacuum(LiquidControlVolumeMesh mesh, ThermalMaterialDefinition first, double[] prescribed) {
+		var result = new ControlVolumeConduction(mesh, new double[]{3, 6})
+				.advance(List.of(carrier(first, 280), new ThermalContactExchange.Reservoir(320)), prescribed, 1, 1e-10, 256);
+		// G = 2 W/K and the finite capacity is 2 J/K; the reservoir remains at 320 K.
+		close(result.energyChange()[0], 40, 1e-9); close(result.energyChange()[1], 0, 0);
+		close(result.temperature()[0], 300, 1e-9); close(result.temperature()[1], 320, 0);
+		close(result.reservoirEnergy().toDouble(), 40, 1e-9); closure(result);
+		result = new ControlVolumeConduction(mesh, new int[]{0, -1}, 1, new double[]{3, 0})
+				.advance(List.of(carrier(first, 280)), prescribed, 1, 1e-10, 256);
+		if (result.energyChange()[0] != 0 || result.temperature()[0] != 280)
+			throw new AssertionError("Conduction exchanged heat with a vacuum without a material heat capacity");
+		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).first() == 1 && mesh.faces.get(f).second() < 0
+				&& !Double.isNaN(result.faceTemperature()[f])) throw new AssertionError("Vacuum surface acquired a material temperature");
+		closure(result);
+		result = new ControlVolumeConduction(mesh, new int[]{-1, -1}, 0, new double[]{0, 0})
+				.advance(List.of(), prescribed, 1, 1e-10, 256);
+		if (result.energyChange().length != 0 || result.iterations() != 0
+				|| Arrays.stream(result.faceTemperature()).anyMatch(Double::isFinite))
+			throw new AssertionError("Pure vacuum acquired finite caloric unknowns or surface temperatures");
+		closure(result);
+		try { new ControlVolumeThermalMetric.Portion(0, -1, 1); throw new AssertionError("Vacuum acquired material conductivity"); }
+		catch (IllegalArgumentException expected) { }
 	}
 	private static void cooccupiedCaloricInventories() {
 		var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1))),

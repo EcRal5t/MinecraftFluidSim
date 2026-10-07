@@ -7,10 +7,10 @@ import cc.ecisr.mmm.units.SignedDyadic;
 
 /** Symmetric diffusion action and conservative heating on fixed caloric support. */
 final class ControlVolumeThermalMetric {
-	/** Conductivity includes this inventory's occupied fraction in the geometric control volume. */
+	/** Conductivity includes the occupied fraction; ordinal -1 explicitly represents a vacuum with zero conductivity. */
 	record Portion(int cell, int inventory, double conductivity) {
 		Portion {
-			if (cell < 0 || inventory < 0 || !(Double.isFinite(conductivity) && conductivity >= 0))
+			if (cell < 0 || inventory < -1 || inventory == -1 && conductivity != 0 || !(Double.isFinite(conductivity) && conductivity >= 0))
 				throw new IllegalArgumentException("Invalid caloric support portion");
 		}
 	}
@@ -41,7 +41,8 @@ final class ControlVolumeThermalMetric {
 		for (var portion : this.portions) {
 			if (portion.cell() >= occupied.length || portion.inventory() >= inventoryCount)
 				throw new IllegalArgumentException("Unknown geometric or caloric support ordinal");
-			represented[portion.inventory()] = true; occupied[portion.cell()] = true;
+			if (portion.inventory() >= 0) represented[portion.inventory()] = true;
+			occupied[portion.cell()] = true;
 			maximum[portion.cell()] = Math.max(maximum[portion.cell()], portion.conductivity());
 		}
 		for (boolean present : represented) if (!present) throw new IllegalArgumentException("Caloric owner has no geometric support");
@@ -67,7 +68,7 @@ final class ControlVolumeThermalMetric {
 		for (int p = 0; p < this.portions.size(); p++) {
 			var portion = this.portions.get(p); var g = geometry[portion.cell()]; double k = portion.conductivity();
 			differences[p] = new double[g.indices.length]; flux[p] = differences[p].clone();
-			inventoryDiagonal[portion.inventory()] += k * cellBasisEnergy[portion.cell()];
+			if (portion.inventory() >= 0) inventoryDiagonal[portion.inventory()] += k * cellBasisEnergy[portion.cell()];
 			for (int i = 0; i < g.indices.length; i++) {
 				faceDiagonal[g.indices[i]] += k * faceBasisEnergy[portion.cell()][i]; incidence.get(g.indices[i]).add(new Contribution(p, i));
 			}
@@ -107,8 +108,13 @@ final class ControlVolumeThermalMetric {
 	double[] initialTemperatures(double[] inventories) {
 		if (inventories.length != inventoryDiagonal.length) throw new IllegalArgumentException("Incomplete caloric initial temperatures");
 		var values = new double[geometry.length];
-		for (int p = 0; p < portions.size(); p++) values[portions.get(p).cell()] += initialWeights[p] * inventories[portions.get(p).inventory()];
+		for (int p = 0; p < portions.size(); p++) if (portions.get(p).inventory() >= 0)
+			values[portions.get(p).cell()] += initialWeights[p] * inventories[portions.get(p).inventory()];
 		return values;
+	}
+	boolean faceHasInventory(int face) {
+		for (var contribution : contributions.get(face)) if (portions.get(contribution.portion()).inventory() >= 0) return true;
+		return false;
 	}
 
 	/** Projects the last action's free-face residual using the same positive face-energy coefficients. */
@@ -133,7 +139,8 @@ final class ControlVolumeThermalMetric {
 				}
 			}
 			for (int q = 0; q < rates.length; q++) {
-				int owner = portions.get(support.get(q).portion()).inventory(); quantities[owner] = quantities[owner].add(rates[q]);
+				int owner = portions.get(support.get(q).portion()).inventory();
+				if (owner >= 0) quantities[owner] = quantities[owner].add(rates[q]);
 			}
 		}
 		var heating = new double[quantities.length]; var total = SignedDyadic.ZERO;
