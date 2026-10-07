@@ -46,6 +46,9 @@ final class LiquidVolumeInterfaceValidation {
 		if (LiquidVolumeInterface.reconstruct(cube, Fraction.ZERO, new LiquidPolyhedron.Point(1, 0, 0), 8).singleGeometry().measure().signum() != 0
 				|| LiquidVolumeInterface.reconstruct(cube, cube.measure().volume(), new LiquidPolyhedron.Point(1, 0, 0), 8).singleGeometry() != cube)
 			throw new AssertionError("Empty or full interface reconstruction changed its occupancy");
+		var linear = LiquidVolumeInterface.reconstruct(cube, new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(3)), new LiquidPolyhedron.Point(1, 0, 0), 48);
+		if (linear.volumeEvaluations > 3 || !linear.measure.volume().equals(new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(3))))
+			throw new AssertionError("A linear volume law retained bisection work after its certified Newton step");
 		momentOrientationUsesTheSameVolume(cube);
 		spatialRefinementResolvesClosedInterfaces(cube);
 		adaptiveReconstructionEnforcesItsSpatialError(cube);

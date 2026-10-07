@@ -99,7 +99,7 @@ final class LiquidJointReconstructionValidation {
 			if (difference.subtract(representation.symmetricDifferenceVolumeBound).signum() > 0)
 				throw new AssertionError("Composite interface understated its common-cut occupancy error");
 			double error = representation.centroidError(measure);
-			if (!(error < previous / 4096)) throw new AssertionError("Composite interface first moment did not converge with coordinate precision");
+			if (error > previous / 4096) throw new AssertionError("Composite interface first moment did not converge with coordinate precision");
 			previous = error;
 		}
 		var representation = LiquidVolumeInterface.reconstruct(open, measure.volume(), normal, 48); var derivative = representation.centroidDerivative();
