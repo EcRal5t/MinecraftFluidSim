@@ -157,6 +157,14 @@ public final class ThermalDomainState {
 
 	public void restoreLiquidEnergies(double[] restored) { liquidEnergy.adoptRestored(restored); }
 
+	public LiquidConductionInventory prepareLiquidConduction(ThermalCarrierContext markers) {
+		return new LiquidConductionInventory(this, markers);
+	}
+	public void commitLiquidConduction(LiquidConductionInventory.Plan plan, ThermalCarrierContext markers) {
+		if (plan == null) throw new IllegalArgumentException("Liquid conduction plan is missing");
+		plan.commit(this, markers); spatialObservationPrepared = false;
+	}
+
 	public void restoreGasEnergies(AirNetwork network, double[] restored) {
 		gasState.validateRestoredNodeEnergies(network, restored);
 		gasState.replaceNodeEnergies(restored);

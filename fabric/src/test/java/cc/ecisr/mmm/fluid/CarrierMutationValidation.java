@@ -34,6 +34,7 @@ public final class CarrierMutationValidation {
 		nativeGasMotionCarriesEnergy();
 		nativePhaseReconstructionKeepsEnergy();
 		nativeThermalObservationUsesOccupiedGeometry();
+		nativeConductionPublishesCaloricInventory();
 		nativeLocalInventoryCarriesMaterialAndEnergy();
 		nativeLocalInventoryUsesMechanicalBackend();
 		nativeMechanicalRegridCarriesChemicalInventory();
@@ -373,6 +374,9 @@ public final class CarrierMutationValidation {
 		domain.thermalState.resetMarkerTemperature(0, 270, domain.thermalMarkers, domain.exactInternalEnergy());
 		domain.thermalState.resetMarkerTemperature(1, 350, domain.thermalMarkers, domain.exactInternalEnergy());
 		return domain;
+	}
+	private static void nativeConductionPublishesCaloricInventory() throws Exception {
+		ResolvedLiquidConductionValidation.validate(localInventoryFixture(16));
 	}
 	private static void nativeThermalObservationUsesOccupiedGeometry() throws Exception {
 		var registries = FullCapabilityTestFixture.load();
