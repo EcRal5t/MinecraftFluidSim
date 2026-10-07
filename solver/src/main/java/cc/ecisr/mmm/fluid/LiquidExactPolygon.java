@@ -45,6 +45,7 @@ final class LiquidExactPolygon {
 	private volatile List<Fraction> integratedArea;
 	private volatile LiquidGeometryPlane supportingPlane;
 	private volatile List<Vertex> integrationCorners;
+	private volatile List<List<BigInteger>> edgeLines;
 	static final class Fraction {
 		private final BigInteger numerator, denominator;
 		static final Fraction ZERO = new Fraction(BigInteger.ZERO, BigInteger.ONE);
@@ -316,7 +317,7 @@ final class LiquidExactPolygon {
 	static List<LiquidExactPolygon> splitEdges(List<LiquidExactPolygon> polygons) {
 		var lines = new java.util.HashMap<List<BigInteger>, java.util.TreeSet<Vertex>>();
 		for (var polygon : polygons) for (int i = 0; i < polygon.vertices.size(); i++) {
-			var a = polygon.vertices.get(i); var b = polygon.vertices.get((i + 1) % polygon.vertices.size()); var key = line(a, b);
+			var a = polygon.vertices.get(i); var b = polygon.vertices.get((i + 1) % polygon.vertices.size()); var key = polygon.edgeLines().get(i);
 			int axis = 0; while (key.get(axis).signum() == 0) axis++; final int coordinate = axis;
 			var points = lines.computeIfAbsent(key, ignored -> new java.util.TreeSet<>((x, y) -> compareCoordinate(x, y, coordinate)));
 			points.add(a); points.add(b);
@@ -325,15 +326,29 @@ final class LiquidExactPolygon {
 		for (var polygon : polygons) {
 			var vertices = new ArrayList<Vertex>();
 			for (int i = 0; i < polygon.vertices.size(); i++) {
-				var a = polygon.vertices.get(i); var b = polygon.vertices.get((i + 1) % polygon.vertices.size()); var key = line(a, b);
+				var a = polygon.vertices.get(i); var b = polygon.vertices.get((i + 1) % polygon.vertices.size()); var key = polygon.edgeLines().get(i);
 				int axis = 0; while (key.get(axis).signum() == 0) axis++;
 				var points = lines.get(key); boolean ascending = compareCoordinate(a, b, axis) < 0;
 				var segment = ascending ? points.subSet(a, true, b, false) : points.subSet(b, false, a, true).descendingSet();
 				vertices.addAll(segment);
 			}
-			result.add(new LiquidExactPolygon(vertices, polygon.normal));
+			if (vertices.equals(polygon.vertices)) result.add(polygon);
+			else {
+				// Exact collinear insertions preserve the face's plane, area and integral centroid.
+				var divided = new LiquidExactPolygon(vertices, polygon.normal);
+				divided.planeCoefficients = polygon.planeCoefficients; divided.supportingPlane = polygon.supportingPlane;
+				divided.integratedArea = polygon.integratedArea; divided.centroidVertex = polygon.centroidVertex;
+				divided.integratedCentroid = polygon.integratedCentroid; divided.integrationCorners = polygon.integrationCorners;
+				result.add(divided);
+			}
 		}
 		return List.copyOf(result);
+	}
+	private List<List<BigInteger>> edgeLines() {
+		var cached = edgeLines; if (cached != null) return cached;
+		var keys = new ArrayList<List<BigInteger>>();
+		for (int i = 0; i < vertices.size(); i++) keys.add(line(vertices.get(i), vertices.get((i + 1) % vertices.size())));
+		return edgeLines = List.copyOf(keys);
 	}
 	private static int compareCoordinate(Vertex a, Vertex b, int axis) { return a.coordinate(axis).multiply(b.w).compareTo(b.coordinate(axis).multiply(a.w)); }
 	private static List<BigInteger> line(Vertex a, Vertex b) {
