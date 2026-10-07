@@ -1,13 +1,27 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
+import cc.ecisr.mmm.units.SignedDyadic;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 /** Extracts inventory from its actual spatial support and preflights the complete successor. */
 final class LiquidGeometryExtractionPlan {
-	record Remainder(int marker, float volume, double mass) { }
+	record Remainder(int marker, SignedDyadic volume, SignedDyadic mass) {
+		static Remainder plan(FluidDomain domain, int marker, float volume, double mass, double maximum) {
+			// Subtract the accepted observation deltas from the complete quantities, retaining their precision remainder.
+			var keptVolume = domain.particles.exactVolume(marker).subtract(SignedDyadic.of(domain.particles.volume(marker)).subtract(SignedDyadic.of(volume)));
+			var keptMass = domain.particles.exactMass(marker).subtract(SignedDyadic.of(domain.particles.mass(marker)).subtract(SignedDyadic.of(mass)));
+			if (domain.particles.exactVolume(marker).subtract(keptVolume).compareTo(SignedDyadic.of(maximum)) > 0) return null;
+			if (keptVolume.signum() < 0 || keptMass.signum() < 0 || (keptVolume.signum() == 0) != (keptMass.signum() == 0)) return null;
+			if (volume == 0 && keptVolume.signum() != 0) return null;
+			if (keptVolume.signum() > 0 && (!(keptVolume.toFloat() > 0) || !(keptMass.toDouble() > 0))) return null;
+			return new Remainder(marker, keptVolume, keptMass);
+		}
+		float observedVolume() { return volume.toFloat(); }
+		double observedMass() { return mass.toDouble(); }
+	}
 	private final FluidDomain domain;
 	private final LiquidGeometryState input;
 	private final List<LiquidGeometryRefinement.Cell> source;
@@ -58,10 +72,10 @@ final class LiquidGeometryExtractionPlan {
 	boolean hasVolume(float requested, java.util.function.IntPredicate eligible) {
 		var quantity = Fraction.ZERO;
 		if (input == null) {
-			for (int p : markers) if (eligible.test(p)) quantity = quantity.add(Fraction.of(domain.particles.volume(p)));
+			for (int p : markers) if (eligible.test(p)) quantity = quantity.add(Fraction.of(domain.particles.exactVolume(p)));
 		} else {
 			var stocks = new Fraction[source.size()]; Arrays.fill(stocks, Fraction.ZERO);
-			for (int p : markers) if (eligible.test(p)) stocks[markerOwners[p]] = stocks[markerOwners[p]].add(Fraction.of(domain.particles.volume(p)));
+			for (int p : markers) if (eligible.test(p)) stocks[markerOwners[p]] = stocks[markerOwners[p]].add(Fraction.of(domain.particles.exactVolume(p)));
 			for (int f = 0; f < stocks.length; f++) {
 				var space = remaining[f].multiply(scale);
 				quantity = quantity.add(stocks[f].subtract(space).signum() > 0 ? space : stocks[f]);
@@ -71,15 +85,17 @@ final class LiquidGeometryExtractionPlan {
 	}
 
 	double volume(int marker) {
-		if (input == null) return domain.particles.volume(marker);
-		var amount = remaining[markerOwners[marker]].multiply(scale);
+		var stock = Fraction.of(domain.particles.exactVolume(marker));
+		var amount = input == null ? stock : remaining[markerOwners[marker]].multiply(scale);
+		if (stock.compareTo(amount) < 0) amount = stock;
 		double observed = amount.rounded(); if (Fraction.of(observed).subtract(amount).signum() > 0) observed = Math.nextDown(observed);
-		return Math.min(domain.particles.volume(marker), observed);
+		return observed;
 	}
-	void reserve(int marker, float newVolume) {
+	void reserve(Remainder remainder) {
 		if (input == null) return;
+		int marker = remainder.marker;
 		int owner = markerOwners[marker];
-		remaining[owner] = remaining[owner].subtract(Fraction.of(domain.particles.volume(marker)).subtract(Fraction.of(newVolume)).divide(scale));
+		remaining[owner] = remaining[owner].subtract(Fraction.of(domain.particles.exactVolume(marker).subtract(remainder.volume)).divide(scale));
 		if (remaining[owner].signum() < 0) throw new IllegalStateException("Liquid extraction exceeds its actual occupied support");
 	}
 
@@ -87,10 +103,10 @@ final class LiquidGeometryExtractionPlan {
 		if (input == null) return;
 		int[] oldMarkers = input.copyMarkerCells(), oldOwners = input.copyFragmentOwners();
 		var removed = new Fraction[source.size()]; Arrays.fill(removed, Fraction.ZERO);
-		float[] volume = new float[domain.particles.count()]; double[] mass = new double[volume.length];
-		for (int p = 0; p < volume.length; p++) { volume[p] = domain.particles.volume(p); mass[p] = domain.particles.mass(p); }
+		var volume = new SignedDyadic[domain.particles.count()]; var mass = new SignedDyadic[volume.length];
+		for (int p = 0; p < volume.length; p++) { volume[p] = domain.particles.exactVolume(p); mass[p] = domain.particles.exactMass(p); }
 		for (var remainder : remainders) {
-			removed[oldMarkers[remainder.marker]] = removed[oldMarkers[remainder.marker]].add(Fraction.of(volume[remainder.marker]).subtract(Fraction.of(remainder.volume)).divide(scale));
+			removed[oldMarkers[remainder.marker]] = removed[oldMarkers[remainder.marker]].add(Fraction.of(volume[remainder.marker].subtract(remainder.volume)).divide(scale));
 			volume[remainder.marker] = remainder.volume; mass[remainder.marker] = remainder.mass;
 		}
 		var cuts = new ArrayList<List<LiquidPolyhedron>>();
@@ -110,7 +126,7 @@ final class LiquidGeometryExtractionPlan {
 		var first = new java.util.HashMap<Integer, Integer>(); for (int f = 0; f < cells.size(); f++) first.putIfAbsent(groups.get(f), f);
 		// The same descending swap-removal order is used by the inventory and its side columns.
 		int[] ordinals = java.util.stream.IntStream.range(0, volume.length).toArray(); int count = volume.length;
-		for (int p = volume.length - 1; p >= 0; p--) if (volume[p] == 0) ordinals[p] = ordinals[--count];
+		for (int p = volume.length - 1; p >= 0; p--) if (volume[p].signum() == 0) ordinals[p] = ordinals[--count];
 		int[] markers = new int[count]; for (int p = 0; p < count; p++) markers[p] = first.get(oldMarkers[ordinals[p]]);
 		var velocity = new double[3 * cells.size()]; for (int f = 0; f < cells.size(); f++) System.arraycopy(field.get(f), 0, velocity, 3 * f, 3);
 		// Canonical packing uses a live fragment ordinal as each temporary group representative.
@@ -137,8 +153,10 @@ final class LiquidGeometryExtractionPlan {
 		final int size = count;
 		LiquidGeometryStateMapper.requireCompatible(successor, new LiquidGeometryInventoryView() {
 			public int count() { return size; }
-			public double volume(int p) { return volume[ordinals[p]]; }
-			public double mass(int p) { return mass[ordinals[p]]; }
+			public double volume(int p) { return volume[ordinals[p]].toDouble(); }
+			public double mass(int p) { return mass[ordinals[p]].toDouble(); }
+			public SignedDyadic exactVolume(int p) { return volume[ordinals[p]]; }
+			public SignedDyadic exactMass(int p) { return mass[ordinals[p]]; }
 			public double position(int p, int a) { return positions[3 * p + a]; }
 			public double velocity(int p, int a) { return velocities[3 * p + a]; }
 		}, domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells.copyMicroMasks());

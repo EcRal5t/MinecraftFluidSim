@@ -41,7 +41,7 @@ public final class CarrierMutationValidation {
 		nativePhysicalReconstructionPreservesGasOnlyState();
 		System.out.println("Carrier mutation validation passed");
 	}
-	private static void nativeExtensiveQuantitiesSurviveHandoff() {
+	private static void nativeExtensiveQuantitiesSurviveHandoff() throws Exception {
 		var midpoint = SignedDyadic.of(1).add(SignedDyadic.of(1, -24)).add(SignedDyadic.of(1, -2000));
 		var single = new LiquidInventoryState(new SignedDyadic[]{midpoint}, new SignedDyadic[]{SignedDyadic.of(1000)});
 		var observed = new FlipMaterialParticleState(2, 2, 2, 0.5F, 1, single.totalVolume().toDouble(), 1000,
@@ -74,6 +74,37 @@ public final class CarrierMutationValidation {
 		var actual = restored.exportMaterialParticleState().inventory();
 		require(actual.totalVolume().equals(quantities.totalVolume()) && actual.totalMass().equals(quantities.totalMass())
 				&& actual.volume(0).equals(v) && actual.mass(1).equals(m), "exact volume or mass remainder was lost across growth and cold handoff");
+		var beforeVolume = domain.particles.inventory().totalVolume(); var beforeMass = domain.particles.inventory().totalMass();
+		var transfer = domain.tryExtractExactVolume(0, 1, 1, 0.125F, 0);
+		require(transfer.transferred() && domain.particles.exactVolume(0).equals(v) && domain.particles.exactMass(0).equals(m)
+				&& domain.particles.exactVolume(1).equals(v.subtract(SignedDyadic.of(transfer.volume())))
+				&& domain.particles.exactMass(1).equals(m.subtract(SignedDyadic.of(transfer.mass())))
+				&& domain.particles.inventory().totalVolume().add(SignedDyadic.of(transfer.volume())).equals(beforeVolume)
+				&& domain.particles.inventory().totalMass().add(SignedDyadic.of(transfer.mass())).equals(beforeMass),
+				"partial extraction rounded an edited or untouched native quantity");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		beforeVolume = domain.particles.inventory().totalVolume(); beforeMass = domain.particles.inventory().totalMass();
+		float removed = domain.removeVolumeNear(0, 0, 0, 0.0625F, 0);
+		require(removed == 0.0625F && domain.particles.inventory().totalVolume().add(SignedDyadic.of(removed)).equals(beforeVolume)
+				&& domain.particles.inventory().totalMass().add(SignedDyadic.of(62.5)).equals(beforeMass),
+				"ordinary partial removal rounded native volume or mass precision remainders");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		var retainedGeometry = domain.liquidGeometryState; var retainedInventory = domain.particles.inventory();
+		require(!domain.tryExtractExactVolume(0, 0, 0, 0.3125F, 2).transferred() && domain.liquidGeometryState == retainedGeometry
+				&& domain.particles.inventory().totalVolume().equals(retainedInventory.totalVolume())
+				&& domain.particles.inventory().totalMass().equals(retainedInventory.totalMass()),
+				"unrepresentable complete extraction modified native precision remainders");
+		FullCapabilityTestFixture.bindFull(restored, FullCapabilityTestFixture.load(), 320, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		var initialSpecies = restored.totalChemicalSpeciesQuanta(); var initialEnergy = restored.exactInternalEnergy();
+		var roundoff = restored.thermalAudit().roundoffResidual();
+		var chemical = restored.tryExtractExactChemical(0, 1, 1, 0.125F, 0);
+		require(chemical.transferred() && restored.particles.inventory().totalVolume().add(SignedDyadic.of(chemical.ledger().totalVolume())).equals(quantities.totalVolume())
+				&& restored.particles.inventory().totalMass().add(SignedDyadic.of(125)).equals(quantities.totalMass())
+				&& restored.totalChemicalSpeciesQuanta() + chemical.ledger().totalQuanta() == initialSpecies
+				&& restored.exactInternalEnergy().subtract(initialEnergy).add(SignedDyadic.of(chemical.internalEnergy()))
+						.equals(restored.thermalAudit().roundoffResidual().subtract(roundoff)),
+				"native chemical extraction lost quantities, species or thermal settlement");
+		LiquidGeometryStateMapper.requireCompatible(restored.liquidGeometryState, restored);
 		var captured = new LiquidReconstructionInventories(restored);
 		restored.particles.setQuantities(0, v, m.add(SignedDyadic.of(1, -102)));
 		try { captured.requireSource(restored); throw new AssertionError("reconstruction accepted changed exact mass hidden by the same observation"); }

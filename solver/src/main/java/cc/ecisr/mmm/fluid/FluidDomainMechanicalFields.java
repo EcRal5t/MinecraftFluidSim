@@ -456,9 +456,9 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 
 	/** Planned per-marker truncation for one cell, applied later without re-deciding anything. */
 	record MarkerTruncation(
-			int marker, float newVolume, double newMass,
+			LiquidGeometryExtractionPlan.Remainder quantities,
 			ChemicalParcelStore.SplitPlan chemicalPlan, LiquidEnergyColumn.Truncation thermalPlan
-	) { }
+	) { int marker() { return quantities.marker(); } }
 
 	record CellRemovalPlan(float removedVolume, List<MarkerTruncation> markers, LiquidGeometryExtractionPlan geometry) { }
 
@@ -476,13 +476,12 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			int i = entry.marker();
 			if (chemicalParcels != null) {
 				chemicalParcels.markDirtyCell(domain().particleCellIndex(i));
-				if (entry.newVolume() > 0.0F) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
+				if (entry.quantities().volume().signum() > 0) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
 			}
-			particles.setVolume(i, entry.newVolume());
-			particles.setMass(i, entry.newMass());
+			particles.setQuantities(i, entry.quantities().volume(), entry.quantities().mass());
 			domain().commitThermalTruncate(i, entry.thermalPlan());
 		}
-		for (int i = particles.count() - 1; i >= 0; i--) if (particles.volume(i) == 0.0F) removeParticle(i);
+		for (int i = particles.count() - 1; i >= 0; i--) if (particles.exactVolume(i).signum() == 0) removeParticle(i);
 		plan.geometry().publish();
 	}
 
@@ -519,21 +518,25 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 			if (actual > take) { newVolume = Math.nextUp(newVolume); actual = (double) previousVolume - newVolume; }
 			if (!(actual > 0)) continue;
 			double previousMass = particles.mass(marker), newMass = newVolume == 0 ? 0 : previousMass * newVolume / previousVolume;
-			if (!(previousMass - newMass > 0)) continue;
-			var chemical = chemicalParcels == null ? null : chemicalParcels.tryPlanTruncate(marker, newVolume, previousVolume - newVolume, newMass, previousMass - newMass);
+			var quantities = LiquidGeometryExtractionPlan.Remainder.plan(domain(), marker, newVolume, newMass, take);
+			if (quantities == null) continue;
+			newVolume = quantities.observedVolume(); newMass = quantities.observedMass();
+			var delta = particles.exactVolume(marker).subtract(quantities.volume());
+			var removedMass = particles.exactMass(marker).subtract(quantities.mass());
+			if (!(removedMass.toDouble() > 0)) continue;
+			var chemical = chemicalParcels == null ? null : chemicalParcels.tryPlanTruncate(marker, newVolume, delta.toFloat(), newMass, removedMass.toDouble());
 			if (chemicalParcels != null && chemical == null) continue;
 			var thermal = domain().planThermalTruncate(marker, newMass, chemical == null ? null : chemical.kept(),
 					thermalState == null ? Double.NaN : domain().thermalMarkerTemperature(marker));
 			if (removedChemistry != null) removedChemistry.add(materialRegistry.material(particles.materialHandle(marker)).id(),
-					chemicalParcels.indicator(marker), actual, unitScale.kilograms(previousMass - newMass), chemical.removed());
-			if (removedMaterials != null) removedMaterials.add(particles.materialHandle(marker), actual, previousMass - newMass);
+					chemicalParcels.indicator(marker), delta.toDouble(), unitScale.kilograms(removedMass.toDouble()), chemical.removed());
+			if (removedMaterials != null) removedMaterials.add(particles.materialHandle(marker), delta.toDouble(), removedMass.toDouble());
 			if (removedThermal != null && thermal != null) removedThermal.add(thermal.removedEnergy());
-			planned.add(new MarkerTruncation(marker, newVolume, newMass, chemical, thermal));
-			geometric.reserve(marker, newVolume);
-			var delta = SignedDyadic.of(previousVolume).subtract(SignedDyadic.of(newVolume));
+			planned.add(new MarkerTruncation(quantities, chemical, thermal));
+			geometric.reserve(quantities);
 			removed = removed.add(delta); if (remaining != null) remaining = remaining.subtract(delta);
 		}
-		geometric.finish(planned.stream().map(p -> new LiquidGeometryExtractionPlan.Remainder(p.marker(), p.newVolume(), p.newMass())).toList());
+		geometric.finish(planned.stream().map(MarkerTruncation::quantities).toList());
 		return new CellRemovalPlan((float) removed.toDouble(), List.copyOf(planned), geometric);
 	}
 

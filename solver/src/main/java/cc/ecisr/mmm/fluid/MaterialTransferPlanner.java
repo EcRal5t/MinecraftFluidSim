@@ -289,13 +289,13 @@ final class MaterialTransferPlanner {
 		var geometric = new LiquidGeometryExtractionPlan(domain, cells);
 		if (!geometric.hasVolume(volume, ignored -> true)) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 
-		double remaining = volume, settlementTolerance = Math.ulp(volume);
+		var remaining = SignedDyadic.of(volume); double settlementTolerance = Math.ulp(volume);
 		List<ExtractionAllocation> plan = new ArrayList<>();
 		ChemicalTransferLedger.Builder ledger = ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
 		for (int marker : geometric.markers) {
-			if (remaining <= 0.0) break;
+			if (remaining.signum() == 0) break;
 			float previousVolume = domain.particles.volume(marker);
-			double take = Math.min(geometric.volume(marker), remaining);
+			double take = Math.min(geometric.volume(marker), observedSpace(remaining));
 			float newVolume = (float) (previousVolume - take);
 			double actual = (double) previousVolume - newVolume;
 			double markerTolerance = Math.ulp(volume);
@@ -306,21 +306,26 @@ final class MaterialTransferPlanner {
 			if (actual <= 0.0) continue;
 			double previousMass = domain.particles.mass(marker);
 			double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
-			double removedMass = previousMass - newMass;
+			var quantities = LiquidGeometryExtractionPlan.Remainder.plan(domain, marker, newVolume, newMass, take);
+			if (quantities == null) continue;
+			var removedVolume = domain.particles.exactVolume(marker).subtract(quantities.volume());
+			actual = removedVolume.toDouble();
+			newVolume = quantities.observedVolume(); newMass = quantities.observedMass();
+			double removedMass = domain.particles.exactMass(marker).subtract(quantities.mass()).toDouble();
 			if (!(removedMass > 0.0)) continue;
 			ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels.tryPlanTruncate(
-					marker, newVolume, previousVolume - newVolume, newMass, removedMass);
+					marker, newVolume, removedVolume.toFloat(), newMass, removedMass);
 			if (chemicalPlan == null) continue;
 			ledger.add(domain.materialRegistry.material(domain.particles.materialHandle(marker)).id(), domain.chemicalParcels.indicator(marker),
 					actual, domain.unitScale.kilograms(removedMass), chemicalPlan.removed());
 			LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(marker, newMass,
 					chemicalPlan.kept(), domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(marker));
-			plan.add(new ExtractionAllocation(marker, newVolume, newMass, chemicalPlan, thermalPlan));
-			geometric.reserve(marker, newVolume);
+			plan.add(new ExtractionAllocation(quantities, chemicalPlan, thermalPlan));
+			geometric.reserve(quantities);
 			settlementTolerance = Math.max(settlementTolerance, markerTolerance);
-			remaining -= actual;
+			remaining = remaining.subtract(removedVolume);
 		}
-		if (plan.isEmpty() || remaining > settlementTolerance) {
+		if (plan.isEmpty() || remaining.compareTo(SignedDyadic.of(settlementTolerance)) > 0) {
 			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
 		ChemicalTransferLedger removed = ledger.build();
@@ -328,17 +333,16 @@ final class MaterialTransferPlanner {
 			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
 		if (!acceptsLedger.test(removed)) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-		geometric.finish(plan.stream().map(p -> new LiquidGeometryExtractionPlan.Remainder(p.particle(), p.newVolume(), p.newMass())).toList());
+		geometric.finish(plan.stream().map(ExtractionAllocation::quantities).toList());
 		SignedDyadic extractionEnergy = exactExtractionEnergy(plan);
 		for (ExtractionAllocation allocation : plan) {
 			if (allocation.chemicalPlan().kept() != null) {
 				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
 			}
-			domain.particles.setVolume(allocation.particle(), allocation.newVolume());
-			domain.particles.setMass(allocation.particle(), allocation.newMass());
+			domain.particles.setQuantities(allocation.particle(), allocation.quantities().volume(), allocation.quantities().mass());
 			domain.commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
 		}
-		for (int marker = domain.particles.count() - 1; marker >= 0; marker--) if (domain.particles.volume(marker) == 0.0F) domain.removeParticle(marker);
+		for (int marker = domain.particles.count() - 1; marker >= 0; marker--) if (domain.particles.exactVolume(marker).signum() == 0) domain.removeParticle(marker);
 		geometric.publish();
 		domain.gridDirty = true;
 		double removedEnergy = extractionEnergy.toDouble();
@@ -355,7 +359,7 @@ final class MaterialTransferPlanner {
 		var geometric = new LiquidGeometryExtractionPlan(domain, cells);
 		if (!geometric.hasVolume(volume, p -> matchesMaterialExtraction(p, requiredMaterialHandle))) return new FluidDomain.ExactMixtureTransfer(false, List.of());
 
-		double remaining = volume;
+		var remaining = SignedDyadic.of(volume);
 		double settlementTolerance = Math.ulp(volume);
 		java.util.List<ExtractionAllocation> plan = new java.util.ArrayList<>();
 		int ledgerSize = domain.materialRegistry == null ? 1 : domain.materialRegistry.size();
@@ -365,10 +369,10 @@ final class MaterialTransferPlanner {
 		java.util.Arrays.fill(removedMasses, SignedDyadic.ZERO);
 		java.util.Set<Integer> changedHandles = new java.util.TreeSet<>();
 		for (int i : geometric.markers) {
-			if (remaining <= 0.0) break;
+			if (remaining.signum() == 0) break;
 			if (!matchesMaterialExtraction(i, requiredMaterialHandle)) continue;
 			float previousVolume = domain.particles.volume(i);
-			double take = Math.min(geometric.volume(i), remaining);
+			double take = Math.min(geometric.volume(i), observedSpace(remaining));
 			float newVolume = (float) (previousVolume - take);
 			double actual = (double) previousVolume - newVolume;
 			double markerTolerance = Math.ulp(volume);
@@ -383,26 +387,30 @@ final class MaterialTransferPlanner {
 			if (actual <= 0.0) continue;
 			double previousMass = domain.particles.mass(i);
 			double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
-			if (!(previousMass - newMass > 0.0)) continue;
+			var quantities = LiquidGeometryExtractionPlan.Remainder.plan(domain, i, newVolume, newMass, take);
+			if (quantities == null) continue;
+			newVolume = quantities.observedVolume(); newMass = quantities.observedMass();
+			var removedVolume = domain.particles.exactVolume(i).subtract(quantities.volume());
+			var removedMass = domain.particles.exactMass(i).subtract(quantities.mass());
+			actual = removedVolume.toDouble();
+			if (!(removedMass.toDouble() > 0.0)) continue;
 			int handle = domain.particles.materialHandle(i);
 			ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels == null ? null
-					: domain.chemicalParcels.tryPlanTruncate(i, newVolume, previousVolume - newVolume,
-					newMass, previousMass - newMass);
+					: domain.chemicalParcels.tryPlanTruncate(i, newVolume, removedVolume.toFloat(),
+					newMass, removedMass.toDouble());
 			if (domain.chemicalParcels != null && chemicalPlan == null) continue;
 			LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(i, newMass,
 					chemicalPlan == null ? null : chemicalPlan.kept(),
 					domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(i));
-			plan.add(new ExtractionAllocation(i, newVolume, newMass, chemicalPlan, thermalPlan));
-			geometric.reserve(i, newVolume);
+			plan.add(new ExtractionAllocation(quantities, chemicalPlan, thermalPlan));
+			geometric.reserve(quantities);
 			changedHandles.add(handle);
-			removedVolumes[handle] = removedVolumes[handle].add(SignedDyadic.of(previousVolume)
-					.subtract(SignedDyadic.of(newVolume)));
-			removedMasses[handle] = removedMasses[handle].add(SignedDyadic.of(previousMass)
-					.subtract(SignedDyadic.of(newMass)));
+			removedVolumes[handle] = removedVolumes[handle].add(removedVolume);
+			removedMasses[handle] = removedMasses[handle].add(removedMass);
 			settlementTolerance = Math.max(settlementTolerance, markerTolerance);
-			remaining -= actual;
+			remaining = remaining.subtract(removedVolume);
 		}
-		if (plan.isEmpty() || remaining > settlementTolerance) return new FluidDomain.ExactMixtureTransfer(false, List.of());
+		if (plan.isEmpty() || remaining.compareTo(SignedDyadic.of(settlementTolerance)) > 0) return new FluidDomain.ExactMixtureTransfer(false, List.of());
 		// Derive settlement from planned carrier deltas before committing. Subtracting rounded
 		// whole-domain totals can erase a small extraction or include unrelated summation drift.
 		List<FluidDomain.MaterialPortion> result = new ArrayList<>(changedHandles.size());
@@ -415,20 +423,19 @@ final class MaterialTransferPlanner {
 			}
 			result.add(new FluidDomain.MaterialPortion(handle, removedVolume, removedMass));
 		}
-		geometric.finish(plan.stream().map(p -> new LiquidGeometryExtractionPlan.Remainder(p.particle(), p.newVolume(), p.newMass())).toList());
+		geometric.finish(plan.stream().map(ExtractionAllocation::quantities).toList());
 		SignedDyadic extractionEnergy = exactExtractionEnergy(plan);
 		for (ExtractionAllocation allocation : plan) {
 			if (domain.chemicalParcels != null && allocation.chemicalPlan().kept() != null) {
 				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
 			}
-			domain.particles.setVolume(allocation.particle(), allocation.newVolume());
-			domain.particles.setMass(allocation.particle(), allocation.newMass());
+			domain.particles.setQuantities(allocation.particle(), allocation.quantities().volume(), allocation.quantities().mass());
 			domain.commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
 		}
 		// Do not compact during indexed writes: removeParticle swaps the last marker into the current
 		// index and could invalidate a later planned ordinal. Compact only after every ledger edit.
 		for (int particle = domain.particles.count() - 1; particle >= 0; particle--) {
-			if (domain.particles.volume(particle) == 0.0F) domain.removeParticle(particle);
+			if (domain.particles.exactVolume(particle).signum() == 0) domain.removeParticle(particle);
 		}
 		geometric.publish();
 		domain.gridDirty = true;
@@ -578,9 +585,9 @@ final class MaterialTransferPlanner {
 	}
 
 	private record ExtractionAllocation(
-			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan,
+			LiquidGeometryExtractionPlan.Remainder quantities, ChemicalParcelStore.SplitPlan chemicalPlan,
 			LiquidEnergyColumn.Truncation thermalPlan
-	) { }
+	) { int particle() { return quantities.marker(); } }
 
 	private LiquidGeometryInsertionPlan planGeometry(List<LiquidGeometryInsertionPlan.Insertion> insertions) {
 		if (domain.liquidGeometryState == null || insertions.isEmpty()) return null;

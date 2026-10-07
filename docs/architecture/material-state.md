@@ -100,6 +100,8 @@ pressure face 的 `1/rho` 系数按界面距离加权。面密度比、迁移率
 
 `FluidMixture` 最多保存 64 个按 stable ID 排序的 component；每项包含 `volumeNanos` 和 raw kg mass bits。构造时拒绝重复 ID、非正体积/质量和超过一桶的总量。物品中单材料可以使用紧凑 component 表示，多材料使用 canonical mixture 文本；进入 WAL 时两者都规范化为完整 mixture truth，reader 不现场合成缺失 component。
 
+提取计划保留所有库存的完整 dyadic 体积和质量。已接受的 binary32 体积差与 binary64 质量差从完整数量扣除，后继观察由保留数量一次舍入，原有精度尾数继续随库存保存；几何切割与后继校验读取同一份精确体积差。完整搬出要求库存数量及导出格式同时能够表示该结果，整份候选在发布前完成校验。
+
 抽取先以 double 精确量预检，再按整 marker 与必要尾拆分生成实际 settlement；物品必须能表示实际 volume、每材料 mass 和所有附加化学/热侧列。请求量与实际可表示量不一致时，WAL 记录实际量，不用请求量伪造闭合。
 
 正请求必须规划出非空、具有正体积和质量增量的转移；小于现有 marker 可拆分分辨率时，在修改库存前拒绝，并继续允许从其他可表示的 marker 抽取。尾差容差只由已接受的拆分决定。逐材料返回量在提交前对计划中的原始体积、质量差精确求和，最后转为 double；不能用已舍入的全域总量相减计算微量转移。无材料参数的体积抽取选择默认载体（handle 0），混合抽取使用独立的 `tryExtractExactMixture`。
