@@ -11,6 +11,7 @@ final class LiquidJointReconstructionValidation {
 		jointControlsRetainIndependentVolumeAndIdentity();
 		equalMomentControlsKeepGeometricOrder();
 		reconstructionPlanKeepsInventoriesAndMomentum();
+		velocityProjectionRefinesSpatialError();
 		resolvedLeavesCarryIndependentControls();
 		jointGasReconstructionPreservesMaterialChambers();
 	}
@@ -114,13 +115,20 @@ final class LiquidJointReconstructionValidation {
 			var original = LiquidGeometryStateMapper.capture(cells, 1, shared ? new int[]{0} : new int[]{0, 1},
 					shared ? new int[]{0, 0} : new int[]{0, 1}, velocity, new int[]{0, 1});
 			var input = observation(original, null); LiquidGeometryStateMapper.requireCompatible(original, input, 4, 4, 4, 0.25F, new byte[64]);
-			var plan = new LiquidGeometryReconstructionPlan(original, List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube)), tolerance, budget);
+			var plan = new LiquidGeometryReconstructionPlan(original, List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube)), tolerance, 2, budget);
 			var represented = observation(plan.geometry, plan.inventoryObservations);
 			var observed = retainedInventory(input, represented);
 			LiquidGeometryStateMapper.requireCompatible(plan.geometry, observed, 4, 4, 4, 0.25F, new byte[64]);
+			var before = integrated(original, input); var after = integrated(plan.geometry, observed);
 			if (plan.inventoryObservations.size() != original.markerCount() || plan.leaves.size() != 1 || plan.maximumCentroidError > tolerance.centroidDistance()
-					|| plan.maximumOccupancyErrorLength > tolerance.occupancyErrorLength() || !java.util.Arrays.equals(integrated(original, input), integrated(plan.geometry, observed)))
-				throw new AssertionError("Reconstruction candidate changed inventory, momentum, kinetic energy or its measured spatial limits");
+					|| plan.maximumOccupancyErrorLength > tolerance.occupancyErrorLength() || !java.util.Arrays.equals(java.util.Arrays.copyOf(before, 3), java.util.Arrays.copyOf(after, 3)))
+				throw new AssertionError("Reconstruction candidate changed inventory, momentum or its measured spatial limits");
+			if (shared) {
+				var error = plan.velocityErrors.getFirst();
+				if (plan.geometry.cells().size() != 1 || java.util.Arrays.stream(plan.geometry.copyControlCells()).distinct().count() != 1
+						|| error.kineticLoss().signum() <= 0 || !before[3].subtract(after[3]).equals(error.kineticLoss().multiply(Fraction.of(500))))
+					throw new AssertionError("Inventory regrid retained a numerical interface or hid its kinetic projection loss");
+			} else if (!before[3].equals(after[3])) throw new AssertionError("Separate inventory reconstruction changed kinetic energy");
 			for (int p = 0; p < input.count(); p++) if (input.volume(p) != observed.volume(p) || input.mass(p) != observed.mass(p))
 				throw new AssertionError("Reconstruction changed an independent inventory carrier");
 			var controls = plan.geometry.copyControlCells(); var owners = plan.geometry.copyFragmentOwners();
@@ -128,6 +136,48 @@ final class LiquidJointReconstructionValidation {
 					|| !java.util.Arrays.equals(plan.geometry.cells().get(f).copyVelocity(), plan.geometry.cells().get(controls[f]).copyVelocity()))
 				throw new AssertionError("Canonical reconstruction control lost its owner or P0 field");
 		}
+	}
+	private static void velocityProjectionRefinesSpatialError() {
+		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1); var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);
+		var cells = List.of(LiquidPhasePartition.Address.of(open).cell(cube.clip(1, 0, 0, 0.375)), LiquidPhasePartition.Address.of(open).cell(cube.clip(-1, 0, 0, -0.375)));
+		var source = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0}, new int[]{0, 0}, new double[]{0, 0, 0, 1, 0, 0}, new int[]{0, 1});
+		var inventory = observation(source, null); var before = integrated(source, inventory);
+		var tolerance = new LiquidMomentReconstruction.Tolerance(1e-8, 1e-7, 40); var budget = new LiquidMomentReconstruction.Budget(512, 4096, 8, 4096);
+		var previousLoss = Fraction.of(1); int previousCells = 0;
+		for (double accuracy : new double[]{1, 0.45, 0}) {
+			var plan = new LiquidGeometryReconstructionPlan(source, List.of(open), tolerance, accuracy, budget);
+			var error = plan.velocityErrors.getFirst(); var actual = integrated(plan.geometry, retainedInventory(inventory, observation(plan.geometry, plan.inventoryObservations)));
+			if (error.maximumRmsError() > accuracy || error.kineticLoss().subtract(previousLoss).signum() >= 0 || plan.geometry.cells().size() <= previousCells
+					|| !java.util.Arrays.equals(java.util.Arrays.copyOf(before, 3), java.util.Arrays.copyOf(actual, 3))
+					|| !before[3].subtract(actual[3]).equals(error.kineticLoss().multiply(Fraction.of(500))))
+				throw new AssertionError("Velocity refinement lost conservative momentum, error control or decreasing kinetic projection loss");
+			previousLoss = error.kineticLoss(); previousCells = plan.geometry.cells().size();
+		}
+		if (previousLoss.signum() != 0) throw new AssertionError("Resolved velocity discontinuity retained an unresolved kinetic defect");
+		try {
+			new LiquidGeometryReconstructionPlan(source, List.of(open), tolerance, 0, new LiquidMomentReconstruction.Budget(1, 32, 8, 4096));
+			throw new AssertionError("Insufficient velocity refinement budget published a candidate");
+		} catch (IllegalStateException expected) { if (!expected.getMessage().contains("spatial leaf budget")) throw expected; }
+		var tetrahedron = cube.clip(1, 1, 1, 1); var complement = LiquidGasPartition.build(open, List.of(LiquidPhasePartition.Address.of(open).cell(tetrahedron)), 32);
+		var fields = new java.util.ArrayList<LiquidGeometryVelocityProjection.Source>();
+		fields.add(new LiquidGeometryVelocityProjection.Source(0, tetrahedron, new LiquidPolyhedron.Point(1, 0, 0)));
+		for (var piece : complement) fields.add(new LiquidGeometryVelocityProjection.Source(0, piece, new LiquidPolyhedron.Point(0, 0, 0)));
+		var projected = new LiquidGeometryVelocityProjection(fields).values(open).get(0);
+		var exact = new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(6));
+		var defect = Fraction.of(projected.velocity()[0]).subtract(exact).absolute();
+		if (defect.signum() <= 0 || defect.subtract(projected.momentumRoundingBounds().getFirst()).signum() > 0
+				|| projected.kineticRoundingChange().signum() == 0 || !projected.volume().equals(Fraction.of(1)))
+			throw new AssertionError("Non-dyadic P0 mean lacks an observed and bounded rounding defect");
+		var fragments = fields.stream().map(field -> LiquidPhasePartition.Address.of(open).cell(field.geometry())).toList();
+		var speeds = new double[3 * fragments.size()]; speeds[0] = 1;
+		var original = LiquidGeometryStateMapper.capture(fragments, 1, new int[]{0}, new int[fragments.size()], speeds,
+				java.util.stream.IntStream.range(0, fragments.size()).toArray());
+		var plan = new LiquidGeometryReconstructionPlan(original, List.of(open), tolerance, 1, budget);
+		var saved = integrated(plan.geometry, retainedInventory(observation(original, null), observation(plan.geometry, plan.inventoryObservations)));
+		var error = plan.velocityErrors.getFirst();
+		if (plan.geometry.cells().size() != 1 || saved[0].subtract(exact.multiply(Fraction.of(500))).absolute().subtract(error.momentumRoundingBounds().getFirst().multiply(Fraction.of(500))).signum() > 0
+				|| !Fraction.of(500).divide(Fraction.of(12)).subtract(saved[3]).equals(error.kineticLoss().subtract(error.kineticRoundingChange()).multiply(Fraction.of(500))))
+			throw new AssertionError("Saved regrid changed non-dyadic momentum or its independently integrated kinetic audit");
 	}
 	private static void equalMomentControlsKeepGeometricOrder() {
 		var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
@@ -149,7 +199,7 @@ final class LiquidJointReconstructionValidation {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1); var shape = LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75);
 		var source = LiquidGeometryStateMapper.capture(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)), 1, new int[]{0}, new int[]{0}, new double[]{2, -1, 0.5});
 		var original = observation(source, null); var plan = new LiquidGeometryReconstructionPlan(source,
-				List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube)), new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40),
+				List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube)), new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40), 0,
 				new LiquidMomentReconstruction.Budget(512, 4096, 8, 4096));
 		var observed = retainedInventory(original, observation(plan.geometry, plan.inventoryObservations));
 		LiquidGeometryStateMapper.requireCompatible(plan.geometry, observed, 4, 4, 4, 0.25F, new byte[64]);
@@ -188,7 +238,7 @@ final class LiquidJointReconstructionValidation {
 		source = live.liquidGeometryState; var gas = live.gasState.geometry;
 		if (gas.nodeCount() != 2) throw new AssertionError("Bent liquid sheet lacks its two original gas chambers");
 		var tolerance = new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40);
-		var plan = new LiquidGeometryReconstructionPlan(source, gas, List.of(open), tolerance, new LiquidMomentReconstruction.Budget(512, 4096, 12, 4096));
+		var plan = new LiquidGeometryReconstructionPlan(source, gas, List.of(open), tolerance, 0, new LiquidMomentReconstruction.Budget(512, 4096, 12, 4096));
 		var represented = retainedInventory(original, observation(plan.geometry, plan.inventoryObservations));
 		LiquidGeometryStateMapper.requireCompatible(plan.geometry, represented, 4, 4, 4, 0.5F, new byte[64]);
 		var partition = new LiquidGeometryDomainPartition(4, 4, 4, 0.5F, new byte[64], plan.leaves, 4096);

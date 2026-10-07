@@ -48,7 +48,11 @@ final class LiquidMomentReconstruction {
 		return reconstruct(open, List.of(new Source(0, source, normal)), tolerance, budget);
 	}
 	static Result reconstruct(LiquidGeometryRefinement.Cell open, List<Source> sources, Tolerance tolerance, Budget budget) {
-		if (open == null || sources == null || tolerance == null || budget == null || open.geometry().measure().signum() <= 0)
+		return reconstruct(open, sources, tolerance, budget, ignored -> true);
+	}
+	static Result reconstruct(LiquidGeometryRefinement.Cell open, List<Source> sources, Tolerance tolerance, Budget budget,
+			java.util.function.Predicate<LiquidGeometryRefinement.Cell> velocityResolved) {
+		if (open == null || sources == null || tolerance == null || budget == null || velocityResolved == null || open.geometry().measure().signum() <= 0)
 			throw new IllegalArgumentException("Incomplete local interface reconstruction");
 		for (var face : LiquidExactPolygon.faces(open.geometry())) for (var vertex : face.vertices()) for (int axis = 0; axis < 3; axis++) {
 			var coordinate = vertex.coordinates()[axis]; var lo = Fraction.of(open.minimum(axis));
@@ -78,9 +82,10 @@ final class LiquidMomentReconstruction {
 			var order = cell.sources.stream().filter(source -> !source.pieces.isEmpty()).sorted((a, b) -> compare(a, b, cell.open)).toList();
 			var total = Fraction.ZERO; for (var source : order) total = total.add(LiquidVolumeInterface.measure(source.pieces).volume());
 			boolean complete = total.equals(cell.open.geometry().measure().volume());
-			boolean accepted = true;
+			boolean accepted = velocityResolved.test(cell.open);
 			List<Phase> planar = List.of(); List<Fraction> correction = List.of();
 			try {
+			if (accepted) {
 			for (int p = 0; p < order.size(); p++) {
 				var source = order.get(p); var original = LiquidVolumeInterface.measure(source.pieces);
 				if (evaluations == budget.maximumEvaluations) throw new IllegalStateException("Interface reconstruction exceeds its evaluation budget");
@@ -126,6 +131,7 @@ final class LiquidMomentReconstruction {
 				if (centroidError > tolerance.centroidDistance || occupancy > tolerance.occupancyErrorLength) { accepted = false; break; }
 				statistics.add(new PhaseStats(source.control, original, represented, difference, centroidError, occupancy));
 				for (var part : geometry) assigned.add(LiquidPhasePartition.Address.of(cell.open).cell(part));
+			}
 			}
 			if (accepted) {
 				if (retainedRegions + assigned.size() > budget.maximumRegions) throw new IllegalStateException("Interface reconstruction exceeds its region budget");

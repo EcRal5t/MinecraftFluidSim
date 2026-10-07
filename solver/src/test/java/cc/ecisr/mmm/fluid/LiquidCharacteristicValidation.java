@@ -23,9 +23,9 @@ final class LiquidCharacteristicValidation {
 		productionGeometryPipelineUsesMaterialSurfaceEnergy(angles, 1);
 	}
 	private static void productionGeometryPipelineUsesMaterialSurfaceEnergy(double[] angles, int steps) {
-		productionGeometryPipelineUsesMaterialSurfaceEnergy(angles, steps, null);
+		productionGeometryPipelineUsesMaterialSurfaceEnergy(angles, steps, null, 0);
 	}
-	private static void productionGeometryPipelineUsesMaterialSurfaceEnergy(double[] angles, int steps, LiquidMomentReconstruction.Tolerance reconstruction) {
+	private static void productionGeometryPipelineUsesMaterialSurfaceEnergy(double[] angles, int steps, LiquidMomentReconstruction.Tolerance reconstruction, double rmsVelocityError) {
 		if (steps < 1) throw new IllegalArgumentException("Material surface requires a positive step count");
 		for (double angle : angles) {
 			long started = System.nanoTime();
@@ -46,13 +46,17 @@ final class LiquidCharacteristicValidation {
 					long remeshStarted = System.nanoTime(); double previousSurface = surfaceEnergy(domain), kinetic = domain.particleKineticEnergyJoules();
 					var support = new ArrayList<>(LiquidGeometryStateMapper.restore(domain.liquidGeometryState)); support.addAll(LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells()));
 					var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, support, 65536);
-					var plan = new LiquidGeometryReconstructionPlan(domain.liquidGeometryState, domain.gasState.geometry, partition.leaves, reconstruction,
+					var plan = new LiquidGeometryReconstructionPlan(domain.liquidGeometryState, domain.gasState.geometry, partition.leaves, reconstruction, rmsVelocityError,
 							new LiquidMomentReconstruction.Budget(65536, 65536, 12, 65536));
 					new ResolvedGasMotionPlan(domain, plan, 65536, 4194304).publish(domain, plan);
-					if (domain.particleKineticEnergyJoules() != kinetic) throw new AssertionError("Wetting reconstruction changed resolved P0 kinetic energy");
-					double surfaceChange = surfaceEnergy(domain) - previousSurface; before += surfaceChange;
+					double nextKinetic = domain.particleKineticEnergyJoules(), kineticChange = nextKinetic - kinetic;
+					var expectedChange = reconstructionKineticChange(domain, plan);
+					var energyError = LiquidExactPolygon.Fraction.of(Math.ulp(kinetic)).add(LiquidExactPolygon.Fraction.of(Math.ulp(nextKinetic))).divide(LiquidExactPolygon.Fraction.of(2));
+					if (LiquidExactPolygon.Fraction.of(kinetic).add(expectedChange).subtract(LiquidExactPolygon.Fraction.of(nextKinetic)).absolute().subtract(energyError).signum() > 0)
+						throw new AssertionError("Wetting regrid kinetic change differs from its conservative P0 projection audit");
+					double surfaceChange = surfaceEnergy(domain) - previousSurface; before += surfaceChange + kineticChange;
 					remeshMillis = (System.nanoTime() - remeshStarted) / 1e6;
-					System.out.println("material surface reconstructionMillis=" + remeshMillis + " surfaceChangeJoules=" + surfaceChange + " leaves=" + plan.leaves.size()
+					System.out.println("material surface reconstructionMillis=" + remeshMillis + " surfaceChangeJoules=" + surfaceChange + " kineticChangeJoules=" + kineticChange + " leaves=" + plan.leaves.size()
 							+ " liquid=" + plan.geometry.cells().size() + " gas=" + plan.gasGeometry.cells().size() + " evaluations=" + plan.evaluations
 							+ " centroidError=" + plan.maximumCentroidError + " occupancyError=" + plan.maximumOccupancyErrorLength);
 				}
@@ -81,6 +85,14 @@ final class LiquidCharacteristicValidation {
 				}
 			}
 		}
+	}
+	private static LiquidExactPolygon.Fraction reconstructionKineticChange(FluidDomain domain, LiquidGeometryReconstructionPlan plan) {
+		var zero = LiquidExactPolygon.Fraction.ZERO; var result = zero;
+		var masses = new LiquidExactPolygon.Fraction[plan.geometry.cells().size()]; java.util.Arrays.fill(masses, zero);
+		var markers = plan.geometry.copyMarkerCells(); var scale = LiquidExactPolygon.Fraction.of(domain.unitScale.cubicMetersPerNormalizedVolume());
+		for (int p = 0; p < markers.length; p++) masses[markers[p]] = masses[markers[p]].add(LiquidExactPolygon.Fraction.of(domain.particles.mass(p)).multiply(scale));
+		for (var error : plan.velocityErrors) result = result.add(masses[error.owner()].divide(error.volume()).multiply(error.kineticRoundingChange().subtract(error.kineticLoss())));
+		return result;
 	}
 	private static int maximumControlCentroidBits(LiquidGeometryState state) {
 		var cells = LiquidGeometryStateMapper.restore(state); var controls = state.copyControlCells();
@@ -411,8 +423,10 @@ final class LiquidCharacteristicValidation {
 	}
 	public static void main(String[] args) {
 		if (args.length >= 1 && args[0].equals("material-surface")) {
+			if (args.length > 3 && args.length != 6) throw new IllegalArgumentException("Expected material-surface angle steps centroidTolerance occupancyTolerance rmsVelocityTolerance");
 			productionGeometryPipelineUsesMaterialSurfaceEnergy(args.length == 1 ? new double[]{60, 120} : new double[]{Double.parseDouble(args[1])}, args.length > 2 ? Integer.parseInt(args[2]) : 1,
-					args.length > 3 ? new LiquidMomentReconstruction.Tolerance(Double.parseDouble(args[3]), Double.parseDouble(args[4]), 48) : null);
+					args.length > 3 ? new LiquidMomentReconstruction.Tolerance(Double.parseDouble(args[3]), Double.parseDouble(args[4]), 48) : null,
+					args.length > 3 ? Double.parseDouble(args[5]) : 0);
 			System.out.println("Resolved material surface energy full backend validation passed");
 		} else if (args.length == 1 && args[0].equals("conforming-timing")) {
 			productionGeometryPipelinePreservesContinuousShear(2, true);
