@@ -56,7 +56,7 @@ public final class GasPressureBoundary {
 
 	/** Thermal-aware node pressure source; standard-temperature fallback before the gas model binds. */
 	public double nodeGaugePressurePa(int node) {
-		return domain.thermalState == null || !domain.thermalState.gasModelBound()
+		return node == 0 || domain.thermalState == null || !domain.thermalState.gasModelBound()
 				? domain.gasState.network.gaugePressure(node)
 				: domain.thermalState.gasGaugePressure(node, domain.gasState.network);
 	}

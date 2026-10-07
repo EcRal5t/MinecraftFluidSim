@@ -15,6 +15,12 @@ final class ResolvedLiquidMechanicalStage {
 		if (domain.hasPendingPhaseVolumeWork() || domain.hasGranularInventory()
 				|| domain.thermalState != null && domain.thermalState.coherentPhases().groupCount() != 0)
 			throw new IllegalStateException("Resolved mechanics requires complete phase and solid geometry");
+		var localInventory = new LiquidInventoryRepartitionPlan(domain);
+		domain.carrierMutations().publishGeometricRepartition(localInventory);
+		var inventoryStats = localInventory.changed() ? new FluidDomain.InventoryRepartitionStats(1, localInventory.maximumRelativeMassError,
+				localInventory.maximumTemperatureChange, localInventory.momentumChange[0].rounded(), localInventory.momentumChange[1].rounded(),
+				localInventory.momentumChange[2].rounded(), localInventory.kineticChange.rounded()) : FluidDomain.InventoryRepartitionStats.INACTIVE;
+		if (captureAudit) audit.carrierInventoryTransferJoules += localInventory.kineticChange.rounded();
 		var state = domain.liquidGeometryState;
 		int[] controlCells = state.copyControlCells();
 		LiquidGeometryStateMapper.requireCompatible(state, domain);
@@ -92,7 +98,7 @@ final class ResolvedLiquidMechanicalStage {
 					}
 				}
 				observations = new FluidDomain.GeometryStepStats(1, Math.max(velocityError, field.maximumFittingVelocityErrorMetresPerSecond), transport.maximumPositionRoundoffMetres,
-						transport.maximumCoordinateErrorMetres, transport.maximumRateRepresentationErrorPerSecond);
+						transport.maximumCoordinateErrorMetres, transport.maximumRateRepresentationErrorPerSecond, inventoryStats);
 				motion = new LiquidGeometryMotionPlan(input, physical, field, transport, partition.leaves, MAXIMUM_REGIONS, interfaces);
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement(shorter.minimumSubsteps(domain.config.timeStep(), dt), shorter.getMessage());

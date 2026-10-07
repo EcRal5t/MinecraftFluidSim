@@ -144,7 +144,9 @@ final class LiquidMomentReconstruction {
 			}
 			for (int p = 0; accepted && p < order.size(); p++) {
 				var source = order.get(p); var original = LiquidVolumeInterface.measure(source.pieces); var geometry = phases.get(p).pieces;
-				var represented = LiquidVolumeInterface.measure(geometry); var center = represented.centroidCoordinates(); var desired = original.centroidCoordinates();
+				var represented = LiquidVolumeInterface.measure(geometry);
+				if (represented.signum() <= 0) throw new LiquidCoordinateResolutionRequired("Joint interface coordinates lost a positive phase remainder");
+				var center = represented.centroidCoordinates(); var desired = original.centroidCoordinates();
 				var squared = Fraction.ZERO; for (int a = 0; a < 3; a++) { var delta = center[a].subtract(desired[a]); squared = squared.add(delta.multiply(delta)); }
 				double centroidError = squared.signum() == 0 ? 0 : Math.nextUp(Math.sqrt(Math.nextUp(squared.rounded())));
 				var difference = occupiedDifference(source.pieces, candidateGeometry.get(p).pieces);

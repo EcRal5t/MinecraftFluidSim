@@ -74,8 +74,10 @@ final class LiquidCharacteristicValidation {
 					double kinetic = next.particleKineticEnergyJoules();
 					double after = kinetic + surfaceEnergy(next);
 					if (!(kinetic > 0 && after < before) || next.cellLiquidVolumeTransport != null
-							|| next.totalMass() != mass || next.totalVolume() != 1.25F || next.particles.count() != 1)
+							|| next.totalMass() != mass || next.totalVolume() != 1.25F || next.particles.count() != output.markerCount())
 						throw new AssertionError("Production material surface energy lost geometry, inertia or inventory");
+					if (step == 1 && candidate.stats().geometry().inventory().repartitions() != 1)
+						throw new AssertionError("Production resolved controls retained their shared nonlocal inventory");
 					if (!gas.nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()
 							.equals(next.exportGasState("").nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()))
 						throw new AssertionError("Production wetting changed sealed gas inventory");
