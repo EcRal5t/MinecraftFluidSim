@@ -3,21 +3,25 @@ package cc.ecisr.mmm.fluid;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.units.SignedDyadic;
 
-/** Integer species allocation observes the same volume shares as local mass and caloric state. */
+/** Integer species share the positive volume map and aggregate before creating chemical carriers. */
 final class LiquidInventorySpeciesShares {
 	private LiquidInventorySpeciesShares() { }
-	static ChemicalMixtureRecord[] allocate(FluidDomain domain, int marker, SignedDyadic[] weights) {
-		if (domain.chemicalParcels == null) return null;
-		var source = domain.chemicalParcels.record(marker); var shares = new long[source.entryCount()][];
-		for (int e = 0; e < shares.length; e++) shares[e] = ExactVolumeAllocation.allocate(source.amountAt(e), weights);
-		var result = new ChemicalMixtureRecord[weights.length];
-		for (int q = 0; q < result.length; q++) {
-			int count = 0; for (var row : shares) if (row[q] > 0) count++;
-			if (count == 0) throw new IllegalStateException("Local liquid inventory exceeds integer species resolution");
-			var handles = new int[count]; var amounts = new long[count]; int entry = 0;
-			for (int e = 0; e < shares.length; e++) if (shares[e][q] > 0) { handles[entry] = source.speciesHandle(e); amounts[entry++] = shares[e][q]; }
-			result[q] = new ChemicalMixtureRecord(handles, amounts, 0);
+	static void accumulate(FluidDomain domain, int marker, SignedDyadic[] weights, LiquidInventoryStock[] targets) {
+		if (domain.chemicalParcels == null) return;
+		var source = domain.chemicalParcels.record(marker);
+		for (int e = 0; e < source.entryCount(); e++) {
+			var amounts = ExactVolumeAllocation.allocate(source.amountAt(e), weights);
+			for (int q = 0; q < amounts.length; q++) if (amounts[q] > 0)
+				targets[q].species.merge(source.speciesHandle(e), amounts[q], Math::addExact);
 		}
-		return result;
+	}
+	static ChemicalMixtureRecord mixture(FluidDomain domain, LiquidInventoryStock stock) {
+		if (domain.chemicalParcels == null) return null;
+		if (stock.species.isEmpty()) throw new IllegalStateException("Resolved chemical inventory exceeds species quantum resolution");
+		var handles = stock.species.keySet().stream().mapToInt(Integer::intValue).toArray();
+		var amounts = stock.species.values().stream().mapToLong(Long::longValue).toArray();
+		var mixture = new ChemicalMixtureRecord(handles, amounts, 0);
+		return mixture.withMassResidualKilograms(domain.unitScale.kilograms(stock.mass.toDouble())
+				- mixture.exactSpeciesMassKilograms(domain.chemicalParcels.registry()).toDouble());
 	}
 }

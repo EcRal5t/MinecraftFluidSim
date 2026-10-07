@@ -150,7 +150,7 @@ final class CarrierMutationCoordinator {
 			var marker = candidate.markers.get(p);
 			domain.particles.setPositionX(p, marker.x()); domain.particles.setPositionY(p, marker.y()); domain.particles.setPositionZ(p, marker.z());
 			domain.particles.setVelocityX(p, marker.vx()); domain.particles.setVelocityY(p, marker.vy()); domain.particles.setVelocityZ(p, marker.vz());
-			domain.particles.setVolume(p, marker.volume()); domain.particles.setMass(p, marker.mass()); domain.particles.setMaterialHandle(p, marker.material());
+			domain.particles.setQuantities(p, marker.volume(), marker.mass()); domain.particles.setMaterialHandle(p, marker.material());
 			domain.particles.setPhaseLabel(p, domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(marker.material()));
 		}
 		if (chemical != null) {

@@ -36,6 +36,7 @@ public final class CarrierMutationValidation {
 		nativeThermalObservationUsesOccupiedGeometry();
 		nativeLocalInventoryCarriesMaterialAndEnergy();
 		nativeLocalInventoryUsesMechanicalBackend();
+		nativeMechanicalRegridCarriesChemicalInventory();
 		nativePhysicalPhaseReconstructionCarriesInventories();
 		nativePhysicalReconstructionPreservesGasOnlyState();
 		System.out.println("Carrier mutation validation passed");
@@ -121,12 +122,12 @@ public final class CarrierMutationValidation {
 		var plan = new LiquidGeometryReconstructionPlan(domain, open, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40), 1,
 				new LiquidMomentReconstruction.Budget(1, 32, 4096));
 		require(plan.leaves.size() == 1 && java.util.Arrays.stream(plan.geometry.copyControlCells()).distinct().count() == expectedControls
-				&& plan.inventory.markers.size() == 2 && plan.inventory.kineticChange.equals(Fraction.of(expectedKineticChange)),
+				&& plan.inventory.markers.size() == expectedControls && plan.inventory.kineticChange.equals(Fraction.of(expectedKineticChange)),
 				"physical reconstruction retained an inventory interface or lost its mass-weighted projection defect");
 		var gasPlan = new ResolvedGasMotionPlan(domain, plan, 4096, 65536); gasPlan.publish(domain, plan);
 		require(domain.totalVolumeExact() == 4 && domain.totalMass() == 8000
 				&& Fraction.of(domain.particleKineticEnergyJoules()).subtract(kinetic).equals(plan.inventory.kineticChange)
-				&& species.groups().getFirst().speciesQuanta().equals(domain.chemicalLedgerForMarkerRange(0, 2).groups().getFirst().speciesQuanta()),
+				&& species.groups().getFirst().speciesQuanta().equals(domain.chemicalLedgerForMarkerRange(0, domain.particles.count()).groups().getFirst().speciesQuanta()),
 				"physical phase regrid changed mass, species, momentum or its measured kinetic change");
 		require(domain.exactInternalEnergy().subtract(sourceEnergy).equals(plan.inventory.energyRoundoff)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
@@ -135,10 +136,12 @@ public final class CarrierMutationValidation {
 						.equals(domain.exportGasState(registries.chemical().fingerprint()).nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()),
 				"physical phase regrid changed caloric or gas inventory accounting");
 		for (int p = 0; p < domain.particles.count(); p++) {
-			int source = plan.inventory.markers.get(p).source(); float velocity = expectedControls == 1 ? -0.5F : source == 0 ? 1 : -1;
-			require(domain.particles.velocityX(p) == velocity && domain.particles.mass(p) == (source == 0 ? 2000 : 6000)
-					&& domain.particles.materialHandle(p) == (source == 0 ? 0 : material)
-					&& Math.abs(domain.thermalState.temperature(p, domain.thermalMarkers) - (source == 0 ? 270 : 350)) <= plan.inventory.maximumTemperatureChange,
+			boolean water = domain.particles.materialHandle(p) == 0;
+			float velocity = expectedControls == 1 ? -0.5F : water ? 1 : -1;
+			double temperature = expectedControls == 1 ? 330 : water ? 270 : 350;
+			require(domain.particles.velocityX(p) == velocity && domain.particles.mass(p) == (expectedControls == 1 ? 8000 : water ? 2000 : 6000)
+					&& domain.particles.materialHandle(p) == (water ? 0 : material)
+					&& Math.abs(domain.thermalState.temperature(p, domain.thermalMarkers) - temperature) <= 8 * Math.ulp(temperature),
 					"physical phase regrid lost the transported material, mass, velocity or temperature");
 		}
 		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
@@ -150,7 +153,7 @@ public final class CarrierMutationValidation {
 		var obsolete = new ResolvedGasMotionPlan(domain, stale, 4096, 65536); var unchanged = domain.liquidGeometryState; var energy = domain.exactInternalEnergy();
 		domain.chemicalParcels.assign(0, domain.chemicalParcels.record(0), !domain.chemicalParcels.indicator(0));
 		try { obsolete.publish(domain, stale); throw new AssertionError("physical regrid accepted revised species input"); }
-		catch (IllegalStateException expected) { require(domain.liquidGeometryState == unchanged && domain.particles.count() == 2 && domain.exactInternalEnergy().equals(energy),
+		catch (IllegalStateException expected) { require(domain.liquidGeometryState == unchanged && domain.particles.count() == expectedControls && domain.exactInternalEnergy().equals(energy),
 				"obsolete scalar regrid partially published liquid or caloric state"); }
 	}
 	private static void nativeLocalInventoryUsesMechanicalBackend() throws Exception {
@@ -167,31 +170,93 @@ public final class CarrierMutationValidation {
 				"mechanical local inventory candidate changed external energy or its committed input");
 		LiquidGeometryStateMapper.requireCompatible(result.liquidGeometryState, result);
 	}
+	private static void nativeMechanicalRegridCarriesChemicalInventory() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		var liquids = new FluidMaterialRegistry(registries.liquids().materials().stream().map(material -> material.id().equals("mmm:water")
+				? FluidMaterial.withSurfaceTension(material.id(), material.referenceDensity(), material.miscibilityGroup(), 0.125, 60) : material).toList());
+		var definitions = new MaterialRegistry(registries.materials().entries().stream().map(entry -> entry.material().id().equals("mmm:water")
+				? new MaterialRegistry.MaterialEntry(liquids.material(0), entry.viscosity()) : entry).toList(), registries.materials().pairTensions());
+		registries = new FullCapabilityTestFixture.Registries(liquids, registries.chemical(), registries.granular(), registries.gas(), registries.thermal(), definitions);
+		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0, 0.25, 0.75, 0.625, 0.75)));
+		var geometry = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0}, new int[cells.size()]);
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 1.0F / 128, 512, 1e-7F, 0.45F, 0.002F, 0.8F));
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 1, 1.25, 1250, liquids.materials(),
+				new float[]{0.5F, 0.3125F, 0.5F, 1.25F}, new float[3], new byte[8], new double[]{1250}, new int[]{0}, geometry));
+		domain.sealDomainBoundary();
+		FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		var initial = domain.particles.inventory(); var species = domain.chemicalLedgerForMarkerRange(0, 1).groups().getFirst().speciesQuanta();
+		var audit = domain.thermalAudit();
+		for (int step = 0; step < 2; step++) {
+			domain = new CpuFluidSolverBackend().evaluate(FluidStepRequest.pendingPhaseSettlement(step, domain.captureAuthoritativeState())).claimPreparedCpuDomain();
+			if (step == 0) try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
+				var support = new java.util.ArrayList<>(LiquidGeometryStateMapper.restore(domain.liquidGeometryState));
+				support.addAll(LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells()));
+				var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, support, 65536);
+				var plan = new LiquidGeometryReconstructionPlan(domain, partition.leaves, new LiquidMomentReconstruction.Tolerance(0.01, 0.03), 0.001,
+						new LiquidMomentReconstruction.Budget(65536, 65536, 65536));
+				new ResolvedGasMotionPlan(domain, plan, 65536, 65536).publish(domain, plan);
+			}
+			require(initial.totalVolume().equals(domain.particles.inventory().totalVolume()) && initial.totalMass().equals(domain.particles.inventory().totalMass())
+					&& species.equals(domain.chemicalLedgerForMarkerRange(0, domain.particles.count()).groups().getFirst().speciesQuanta())
+					&& domain.particles.count() == java.util.Arrays.stream(domain.liquidGeometryState.copyControlCells()).distinct().count(),
+					"moving chemical regrid lost exact quantities or created numerical-tail inventories");
+			require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()) && audit.externalSource().equals(domain.thermalAudit().externalSource())
+					&& audit.externalSink().equals(domain.thermalAudit().externalSink()), "moving chemical regrid changed its energy accounting");
+			LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		}
+	}
 	private static void nativeLocalInventoryCarriesMaterialAndEnergy() throws Exception {
 		var domain = localInventoryFixture(16); var energy = domain.exactInternalEnergy(); var ledger = domain.thermalAudit();
+		double sourceReferenceEnergy = 0;
+		for (int p = 0; p < 2; p++) sourceReferenceEnergy += domain.thermalState.liquid().caloricInventory(0, domain.particles.mass(p),
+				domain.chemicalParcels.record(p), domain.chemicalParcels.registry()).energy(293.15);
 		var species = domain.chemicalLedgerForMarkerRange(0, 2); var plan = new LiquidInventoryRepartitionPlan(domain);
-		require(plan.changed() && plan.markers.size() == 4 && plan.kineticChange.signum() == 0,
+		require(plan.changed() && plan.markers.size() == 2 && plan.kineticChange.signum() == 0,
 				"local inventory did not retain its mechanical field or independent control volumes");
 		for (var delta : plan.momentumChange) require(delta.signum() == 0, "local inventory changed exact resolved momentum");
 		domain.carrierMutations().publishGeometricRepartition(plan);
-		require(domain.particles.count() == 4 && domain.totalVolumeExact() == 4 && domain.totalMass() == 4200
-				&& species.groups().getFirst().speciesQuanta().equals(domain.chemicalLedgerForMarkerRange(0, 4).groups().getFirst().speciesQuanta()),
+		require(domain.particles.count() == 2 && domain.totalVolumeExact() == 4 && domain.totalMass() == 4200
+				&& species.groups().getFirst().speciesQuanta().equals(domain.chemicalLedgerForMarkerRange(0, 2).groups().getFirst().speciesQuanta()),
 				"local inventory changed material or integer species totals");
 		require(domain.exactInternalEnergy().subtract(energy).equals(plan.energyRoundoff)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
 				&& ledger.externalSource().equals(domain.thermalAudit().externalSource()) && ledger.externalSink().equals(domain.thermalAudit().externalSink()),
 				"local inventory created heat or changed the external energy ledger");
-		for (int p = 0; p < 4; p++) {
-			var marker = plan.markers.get(p);
-			require(Math.abs(domain.thermalState.temperature(p, domain.thermalMarkers) - (marker.source() == 0 ? 270 : 350)) <= plan.maximumTemperatureChange,
-					"local inventory lost the transported carrier temperature");
+		double expectedTemperature = (3000.0 * 270 + 1200.0 * 350) / 4200;
+		double maximumTemperatureChange = 0;
+		for (int p = 0; p < 2; p++) {
+			var caloric = domain.thermalState.liquid().caloricInventory(0, domain.particles.mass(p), domain.chemicalParcels.record(p), domain.chemicalParcels.registry());
+			// Integer allocation shifts formation energy between controls by a fraction of one species quantum.
+			double temperature = expectedTemperature + (sourceReferenceEnergy / 2 - caloric.energy(293.15))
+					/ (domain.unitScale.kilograms(domain.particles.mass(p)) * 4184);
+			require(Math.abs(domain.thermalState.temperature(p, domain.thermalMarkers) - temperature) <= 8 * Math.ulp(temperature),
+					"local inventory lost its caloric average or species formation-energy correction");
+			maximumTemperatureChange = Math.max(maximumTemperatureChange, 350 - temperature);
 		}
+		require(Math.abs(plan.maximumTemperatureChange - maximumTemperatureChange) <= 8 * Math.ulp(expectedTemperature),
+				"local inventory failed to report caloric coarsening error");
 		require(java.util.Arrays.equals(domain.liquidGeometryState.copyFragmentOwners(), domain.liquidGeometryState.copyControlCells()),
 				"mechanical controls still shared a nonlocal extensive inventory");
 		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy()) && restored.totalChemicalSpeciesQuanta() == domain.totalChemicalSpeciesQuanta()
 				&& !new LiquidInventoryRepartitionPlan(restored).changed(), "local inventory lost identity across a cold handoff");
-		var limited = localInventoryFixture(2); var original = limited.liquidGeometryState; var originalEnergy = limited.exactInternalEnergy();
+		var tagged = localInventoryFixture(16);
+		tagged.chemicalParcels.assign(1, tagged.chemicalParcels.record(1), true);
+		var taggedVolume = tagged.particles.exactVolume(1); var taggedMass = tagged.particles.exactMass(1);
+		tagged.carrierMutations().publishGeometricRepartition(new LiquidInventoryRepartitionPlan(tagged));
+		var taggedOutputVolume = SignedDyadic.ZERO; var taggedOutputMass = SignedDyadic.ZERO;
+		for (int p = 0; p < tagged.particles.count(); p++) if (tagged.chemicalParcels.indicator(p)) {
+			taggedOutputVolume = taggedOutputVolume.add(tagged.particles.exactVolume(p)); taggedOutputMass = taggedOutputMass.add(tagged.particles.exactMass(p));
+		}
+		require(tagged.particles.count() == 4 && taggedVolume.equals(taggedOutputVolume) && taggedMass.equals(taggedOutputMass),
+				"local stock aggregation lost indicator provenance or its exact quantities");
+		var limited = localInventoryFixture(2);
+		limited.liquidGeometryState = LiquidGeometryStateMapper.capture(java.util.List.of(
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.25, 1, 0.5)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0, 0, 0.5, 1, 0.5)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 1, 0.5))),
+				1, new int[]{0, 0}, new int[]{0, 0, 0}, new double[]{0.25, 0, 0, 0.25, 0, 0, 0.75, 0, 0});
+		var original = limited.liquidGeometryState; var originalEnergy = limited.exactInternalEnergy();
 		try { new LiquidInventoryRepartitionPlan(limited); throw new AssertionError("local inventory ignored its marker budget"); }
 		catch (IllegalStateException expected) { require(limited.liquidGeometryState == original && limited.particles.count() == 2
 				&& originalEnergy.equals(limited.exactInternalEnergy()), "local inventory budget rejection changed its input"); }
@@ -202,7 +267,7 @@ public final class CarrierMutationValidation {
 		catch (IllegalStateException expected) { require(limited.liquidGeometryState == stale.input && limited.particles.count() == 2
 				&& changedEnergy.equals(limited.exactInternalEnergy()), "stale local inventory changed its input"); }
 		var uneven = localInventoryFixture(16, true);
-		var originalMass = SignedDyadic.ZERO; for (int p = 0; p < 2; p++) originalMass = originalMass.add(SignedDyadic.of(uneven.particles.mass(p)));
+		var originalMass = SignedDyadic.ZERO; for (int p = 0; p < 2; p++) originalMass = originalMass.add(uneven.particles.exactMass(p));
 		var quantity = Fraction.of(originalMass);
 		var kg = Fraction.of(uneven.unitScale.cubicMetersPerNormalizedVolume());
 		var share = Fraction.of(7.0 / 16);
@@ -213,13 +278,13 @@ public final class CarrierMutationValidation {
 		var rounded = new LiquidInventoryRepartitionPlan(uneven); uneven.carrierMutations().publishGeometricRepartition(rounded);
 		var afterMass = SignedDyadic.ZERO; var afterMomentum = Fraction.ZERO; var afterKinetic = afterMomentum;
 		for (int p = 0; p < uneven.particles.count(); p++) {
-			double velocity = uneven.particles.velocityX(p); afterMass = afterMass.add(SignedDyadic.of(uneven.particles.mass(p)));
-			var mass = Fraction.of(uneven.particles.mass(p)).multiply(kg);
+			double velocity = uneven.particles.velocityX(p); afterMass = afterMass.add(uneven.particles.exactMass(p));
+			var mass = Fraction.of(uneven.particles.exactMass(p)).multiply(kg);
 			afterMomentum = afterMomentum.add(mass.multiply(Fraction.of(velocity)));
 			afterKinetic = afterKinetic.add(mass.multiply(Fraction.of(velocity * velocity / 2)));
 		}
 		require(originalMass.equals(afterMass) && rounded.momentumChange[0].equals(afterMomentum.subtract(beforeMomentum))
-				&& rounded.kineticChange.equals(afterKinetic.subtract(beforeKinetic)) && rounded.momentumChange[0].signum() != 0,
+				&& rounded.kineticChange.equals(afterKinetic.subtract(beforeKinetic)),
 				"local mass allocation lost exact inventory or its independently integrated mechanical roundoff");
 		require(rounded.momentumChange[0].absolute().compareTo(rounded.momentumBounds[0]) <= 0 && rounded.kineticChange.absolute().compareTo(rounded.kineticBound) <= 0
 				&& uneven.exactInternalEnergy().equals(uneven.thermalAudit().expectedInventory()), "local inventory exceeded its physical-inertia or caloric roundoff certificate");

@@ -14,9 +14,8 @@ import java.util.TreeMap;
 
 /** Binds independent extensive inventories to the submitted mechanical control volumes. */
 final class LiquidInventoryRepartitionPlan {
-	record Marker(int control, int source, int material, float volume, double mass, ChemicalMixtureRecord mixture,
+	record Marker(int control, int material, SignedDyadic volume, SignedDyadic mass, ChemicalMixtureRecord mixture,
 			boolean indicator, float x, float y, float z, float vx, float vy, float vz, double energy) {
-		Marker withEnergy(double value) { return new Marker(control, source, material, volume, mass, mixture, indicator, x, y, z, vx, vy, vz, value); }
 	}
 	final LiquidGeometryState input, geometry;
 	final CarrierMutationPlan intent;
@@ -103,38 +102,49 @@ final class LiquidInventoryRepartitionPlan {
 			reference.add(row); quantum.add(volume.multiply(Fraction.of(Math.scalb(1.0, -53))));
 		}
 		var shares = LiquidPhaseVolumeRounding.round(reference, columns, 53, quantum);
+		var localStocks = new TreeMap<LiquidInventoryStock.Key, LiquidInventoryStock>();
 		for (int p = 0; p < originalVolume.length; p++) {
-			var destinations = new ArrayList<Integer>(); var volumes = new ArrayList<Float>();
+			var destinations = new ArrayList<LiquidInventoryStock>(); var volumes = new ArrayList<SignedDyadic>();
 			for (int r = 0; r < shares.size(); r++) {
 				var share = shares.get(r).get(p); if (share == null) continue;
-				for (float v : LiquidCellQuadrature.volumes(dyadic(share.multiply(scale)), 1)) { destinations.add(destinationsByRow.get(r)); volumes.add(v); }
+				var key = new LiquidInventoryStock.Key(destinationsByRow.get(r), originalMaterial[p], chemistry != null && chemistry.indicator(p));
+				destinations.add(localStocks.computeIfAbsent(key, LiquidInventoryStock::new)); volumes.add(dyadic(share.multiply(scale)));
 			}
-			if ((long) out.size() + volumes.size() > domain.maximumParticleCount) throw new IllegalStateException("Local liquid inventory exceeds its marker budget");
-			var weights = volumes.stream().map(SignedDyadic::of).toArray(SignedDyadic[]::new);
-			var mass = allocateMass(originalMass[p], weights);
-			var species = LiquidInventorySpeciesShares.allocate(domain, p, weights);
+			if (localStocks.size() > domain.maximumParticleCount) throw new IllegalStateException("Local liquid inventory exceeds its marker budget");
+			var weights = volumes.toArray(SignedDyadic[]::new); var targets = destinations.toArray(LiquidInventoryStock[]::new);
+			var mass = allocateMass(originalMass[p], weights); var massQuantum = Fraction.of(SignedDyadic.of(1, mass.quantumExponent()));
+			LiquidInventorySpeciesShares.accumulate(domain, p, weights, targets); LiquidInventoryThermalShares.accumulate(domain, p, weights, targets);
 			for (int q = 0; q < volumes.size(); q++) {
-				double m = mass[q].toDouble();
-				if (!(m > 0) || !SignedDyadic.of(m).equals(mass[q])) throw new IllegalStateException("Local liquid mass exceeds binary64 inventory precision");
-				var mixture = species == null ? null : species[q].withMassResidualKilograms(domain.unitScale.kilograms(m) - species[q].exactSpeciesMassKilograms(domain.chemicalParcels.registry()).toDouble());
-				int c = destinations.get(q); var center = measures.get(c).centroidCoordinates(); var u = fields.get(c).velocity();
-				out.add(new Marker(c, p, originalMaterial[p], volumes.get(q), m, mixture, domain.chemicalParcels != null && domain.chemicalParcels.indicator(p),
-						position(center[0].multiply(width), domain.sizeX, domain.config.cellSize()), position(center[1].multiply(width), domain.sizeY, domain.config.cellSize()),
-						position(center[2].multiply(width), domain.sizeZ, domain.config.cellSize()), (float) u[0], (float) u[1], (float) u[2], 0));
-				massBounds.merge(c, Fraction.of(Math.ulp(originalMass[p].toDouble())), Fraction::add);
+				var stock = targets[q]; stock.volume = stock.volume.add(weights[q]); stock.mass = stock.mass.add(mass.values()[q]);
+				massBounds.merge(stock.key.control(), massQuantum, Fraction::add);
 			}
 			for (int r = 0; r < shares.size(); r++) if (shares.get(r).containsKey(p))
 				massBounds.merge(destinationsByRow.get(r), Fraction.of(originalMass[p]).multiply(quantum.get(r)).divide(columns.get(p)), Fraction::add);
 		}
-		maximumTemperatureChange = LiquidInventoryThermalShares.prepare(domain, out);
+		double temperatureChange = 0; var exactEnergy = Fraction.ZERO; var energyBound = Fraction.ZERO;
+		for (var stock : localStocks.values()) {
+			int c = stock.key.control(); var center = measures.get(c).centroidCoordinates(); var u = fields.get(c).velocity();
+			double energy = stock.energy.rounded(); if (!Double.isFinite(energy)) throw new IllegalStateException("Local liquid energy exceeds observation range");
+			var marker = new Marker(c, stock.key.material(), stock.volume, stock.mass, LiquidInventorySpeciesShares.mixture(domain, stock), stock.key.indicator(),
+					position(center[0].multiply(width), domain.sizeX, domain.config.cellSize()), position(center[1].multiply(width), domain.sizeY, domain.config.cellSize()),
+					position(center[2].multiply(width), domain.sizeZ, domain.config.cellSize()), (float) u[0], (float) u[1], (float) u[2], energy);
+			out.add(marker); temperatureChange = Math.max(temperatureChange, LiquidInventoryThermalShares.temperatureChange(domain, stock, marker));
+			exactEnergy = exactEnergy.add(stock.energy); energyBound = energyBound.add(Fraction.of(Math.ulp(energy)).divide(Fraction.of(2)));
+		}
+		maximumTemperatureChange = temperatureChange;
+		new LiquidInventoryState(out.stream().map(Marker::volume).toArray(SignedDyadic[]::new), out.stream().map(Marker::mass).toArray(SignedDyadic[]::new));
 		var energy = SignedDyadic.ZERO; for (var marker : out) energy = energy.add(SignedDyadic.of(marker.energy));
 		energyRoundoff = domain.thermalState == null ? SignedDyadic.ZERO : energy.subtract(domain.thermalState.exactLiquidEnergy(originalMass.length));
+		if (!exactEnergy.equals(Fraction.of(domain.thermalState == null ? SignedDyadic.ZERO : domain.thermalState.exactLiquidEnergy(originalMass.length)))
+				|| Fraction.of(energyRoundoff).absolute().compareTo(energyBound) > 0) throw new IllegalStateException("Local liquid energy exceeds conservative observation certificate");
 		markers = List.copyOf(out);
 		geometry = new LiquidGeometryState(target.rootWidthMetres(), target.cells(), markers.stream().mapToInt(Marker::control).toArray(), controls, controls);
 		LiquidGeometryStateMapper.requireCompatible(geometry, new LiquidGeometryInventoryView() {
 			public int count() { return markers.size(); }
-			public double volume(int p) { return markers.get(p).volume; }
-			public double mass(int p) { return markers.get(p).mass; }
+			public double volume(int p) { return markers.get(p).volume.toDouble(); }
+			public double mass(int p) { return markers.get(p).mass.toDouble(); }
+			public SignedDyadic exactVolume(int p) { return markers.get(p).volume; }
+			public SignedDyadic exactMass(int p) { return markers.get(p).mass; }
 			public double position(int p, int a) { var m = markers.get(p); return a == 0 ? m.x : a == 1 ? m.y : m.z; }
 			public double velocity(int p, int a) { var m = markers.get(p); return a == 0 ? m.vx : a == 1 ? m.vy : m.vz; }
 		}, domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells.copyMicroMasks());
@@ -173,18 +183,16 @@ final class LiquidInventoryRepartitionPlan {
 		if (value.denominator().bitCount() != 1) throw new LiquidCoordinateResolutionRequired("Local inventory requires dyadic reconstructed control volumes");
 		return new SignedDyadic(value.numerator(), -value.denominator().getLowestSetBit());
 	}
-	private static SignedDyadic[] allocateMass(SignedDyadic total, SignedDyadic[] volumes) {
-		int quantum = Math.min(total.exponent(), SignedDyadic.of(Math.ulp(total.toDouble())).exponent());
-		var shares = ExactVolumeAllocation.allocate(total, volumes, quantum);
-		boolean positive = true; for (var share : shares) positive &= share.compareTo(SignedDyadic.ZERO) > 0;
-		if (positive) return shares;
+	private static ExactVolumeAllocation.InventoryShares allocateMass(SignedDyadic total, SignedDyadic[] volumes) {
+		var allocation = ExactVolumeAllocation.allocateContinuous(total, volumes); int quantum = allocation.quantumExponent();
 		var volume = SignedDyadic.ZERO; for (var part : volumes) volume = volume.add(part);
 		for (var part : volumes) {
-			double ideal = Fraction.of(total).multiply(Fraction.of(part)).divide(Fraction.of(volume)).rounded();
-			if (!(ideal > 0)) throw new IllegalStateException("Positive local liquid mass exceeds binary64 inventory support");
-			quantum = Math.min(quantum, SignedDyadic.of(Math.ulp(ideal)).exponent());
+			var ideal = Fraction.of(total).multiply(Fraction.of(part)).divide(Fraction.of(volume));
+			int exponent = ideal.numerator().bitLength() - ideal.denominator().bitLength();
+			if ((exponent >= 0 ? ideal.numerator().compareTo(ideal.denominator().shiftLeft(exponent)) : ideal.numerator().shiftLeft(-exponent).compareTo(ideal.denominator())) < 0) exponent--;
+			quantum = Math.min(quantum, exponent - 52);
 		}
-		return ExactVolumeAllocation.allocate(total, volumes, quantum);
+		return quantum == allocation.quantumExponent() ? allocation : new ExactVolumeAllocation.InventoryShares(ExactVolumeAllocation.allocate(total, volumes, quantum), quantum);
 	}
 	private static float position(Fraction value, int extent, float cellSize) { return Math.min((float) value.rounded(), Math.nextDown(extent * cellSize)); }
 }
