@@ -77,8 +77,22 @@ final class ResolvedLiquidMechanicalStage {
 			FluidDomain.GeometryStepStats observations;
 			try {
 				var field = result.conformingVelocity();
-				var transport = new LiquidConformingTransport(physical.mesh, field, result.extension().volumeRate(), dt, physical.fragments);
-				observations = new FluidDomain.GeometryStepStats(1, field.maximumFittingVelocityErrorMetresPerSecond, transport.maximumPositionRoundoffMetres);
+				double velocityError = field.maximumFittingVelocityErrorMetresPerSecond;
+				var reference = new LiquidConformingTransport(physical.mesh, field, result.extension().volumeRate(), dt, physical.fragments);
+				int precision = LiquidCoordinateProjection.fractionalBits(physical.mesh);
+				LiquidConformingTransport transport;
+				for (;;) {
+					try {
+						transport = reference.representCoordinates(precision);
+						result = result.observeRates(transport.volumeRate());
+						field = result.conformingVelocity(); transport = transport.withField(field); break;
+					} catch (LiquidCoordinateResolutionRequired finer) {
+						if (precision >= 1074) throw finer;
+						precision = Math.min(1074, Math.max(precision + 1, 2 * precision));
+					}
+				}
+				observations = new FluidDomain.GeometryStepStats(1, Math.max(velocityError, field.maximumFittingVelocityErrorMetresPerSecond), transport.maximumPositionRoundoffMetres,
+						transport.maximumCoordinateErrorMetres, transport.maximumRateRepresentationErrorPerSecond);
 				motion = new LiquidGeometryMotionPlan(input, physical, field, transport, partition.leaves, MAXIMUM_REGIONS, interfaces);
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());

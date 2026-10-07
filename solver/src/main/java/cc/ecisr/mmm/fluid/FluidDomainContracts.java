@@ -99,17 +99,22 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 
 	/** Successful resolved substeps and their reconstruction/velocity-observation error bounds. */
 	public record GeometryStepStats(int resolvedSubsteps, double velocityFittingErrorMetresPerSecond,
-			double velocityObservationDisplacementErrorMetres) {
-		static final GeometryStepStats INACTIVE = new GeometryStepStats(0, 0, 0);
+			double velocityObservationDisplacementErrorMetres, double coordinateRepresentationDisplacementErrorMetres,
+			double rateRepresentationErrorPerSecond) {
+		static final GeometryStepStats INACTIVE = new GeometryStepStats(0, 0, 0, 0, 0);
 		public GeometryStepStats {
 			if (resolvedSubsteps < 0 || !(velocityFittingErrorMetresPerSecond >= 0) || !Double.isFinite(velocityFittingErrorMetresPerSecond)
-					|| !(velocityObservationDisplacementErrorMetres >= 0) || !Double.isFinite(velocityObservationDisplacementErrorMetres))
+					|| !(velocityObservationDisplacementErrorMetres >= 0) || !Double.isFinite(velocityObservationDisplacementErrorMetres)
+					|| !(coordinateRepresentationDisplacementErrorMetres >= 0) || !Double.isFinite(coordinateRepresentationDisplacementErrorMetres)
+					|| !(rateRepresentationErrorPerSecond >= 0) || !Double.isFinite(rateRepresentationErrorPerSecond))
 				throw new IllegalArgumentException("Geometric observation bounds must be finite and non-negative");
 		}
 		GeometryStepStats plus(GeometryStepStats other) {
 			return new GeometryStepStats(Math.addExact(resolvedSubsteps, other.resolvedSubsteps),
 					Math.max(velocityFittingErrorMetresPerSecond, other.velocityFittingErrorMetresPerSecond),
-					Math.max(velocityObservationDisplacementErrorMetres, other.velocityObservationDisplacementErrorMetres));
+					Math.max(velocityObservationDisplacementErrorMetres, other.velocityObservationDisplacementErrorMetres),
+					Math.max(coordinateRepresentationDisplacementErrorMetres, other.coordinateRepresentationDisplacementErrorMetres),
+					Math.max(rateRepresentationErrorPerSecond, other.rateRepresentationErrorPerSecond));
 		}
 	}
 	public record StepStats(

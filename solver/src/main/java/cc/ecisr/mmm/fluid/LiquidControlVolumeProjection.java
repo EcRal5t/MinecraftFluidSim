@@ -53,12 +53,17 @@ final class LiquidControlVolumeProjection {
 				throw new IllegalArgumentException("Invalid compliant gas pressure node");
 		}
 	}
+	interface RateRepresentation { Result observe(Fraction[] rates); }
 	record Result(double[] pressure, double[] normalVelocity, int iterations, double fluxResidual,
 			double[] gasPressure, double[] gasVolumeChange, LiquidPolyhedron.Point[] pressureGradient,
 			double[] cellVelocity, double pressureDissipationJoules, double boundaryWorkJoules,
 			LiquidPolyhedron.Point boundaryImpulse, double divergenceResidual, double divergenceRoundoffBound,
 			Fraction[] volumeRate, double[] gasPressureChange, double internalInterfaceWorkJoules,
-			LiquidPolyhedron.Point internalInterfaceImpulse, LiquidPolyhedron.Point momentumStationarityBound) { }
+			LiquidPolyhedron.Point internalInterfaceImpulse, LiquidPolyhedron.Point momentumStationarityBound,
+			RateRepresentation representation) {
+		/** A geometric representation must satisfy the original variational solve and exact continuity. */
+		Result observeRates(Fraction[] rates) { return representation.observe(rates.clone()); }
+	}
 	private final ConservativeControlVolumeProjection projection;
 	LiquidControlVolumeProjection(List<Cell> cells, List<Face> faces) {
 		this(cells, faces, List.of(), fixedGasFaces(faces.size()));

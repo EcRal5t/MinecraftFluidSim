@@ -7,7 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Space-time face sweeps realize the prescribed integrated flux with shared continuous geometry. */
+/** Shared space-time sweeps preserve geometric conservation under certified coordinate representation. */
 final class LiquidConformingTransport {
 	record Image(int cell, int face, LiquidConvexRegion geometry, List<Fraction> affineMap) { }
 	final LiquidControlVolumeMesh mesh;
@@ -17,6 +17,8 @@ final class LiquidConformingTransport {
 	final List<Image> images;
 	final Fraction[] sweptVolume;
 	final double maximumPositionRoundoffMetres;
+	final double maximumCoordinateErrorMetres, maximumRateRepresentationErrorPerSecond;
+	private final Fraction time;
 
 	LiquidConformingTransport(LiquidControlVolumeMesh mesh, LiquidConformingVelocity field, Fraction[] rate, double dt) {
 		this(mesh, field, rate, dt, new int[mesh.cells.size()]);
@@ -24,7 +26,7 @@ final class LiquidConformingTransport {
 	LiquidConformingTransport(LiquidControlVolumeMesh mesh, LiquidConformingVelocity field, Fraction[] rate, double dt, int[] liquid) {
 		if (field.mesh != mesh || rate.length != mesh.faces.size() || liquid.length != mesh.cells.size() || !(dt > 0) || !Double.isFinite(dt)) throw new IllegalArgumentException("Invalid continuous transport input");
 		this.mesh = mesh; this.field = field; this.liquid = liquid.clone();
-		var time = Fraction.of(dt); var moved = new LinkedHashMap<Vertex, Vertex>();
+		time = Fraction.of(dt); var moved = new LinkedHashMap<Vertex, Vertex>();
 		var interior = new java.util.HashSet<>(field.cellCenters);
 		double roundoff = 0;
 		for (var node : field.velocity.entrySet()) {
@@ -33,6 +35,7 @@ final class LiquidConformingTransport {
 			if (position.roundoffSquared().signum() != 0) roundoff = Math.max(roundoff, Math.nextUp(Math.sqrt(Math.nextUp(position.roundoffSquared().rounded()))));
 		}
 		maximumPositionRoundoffMetres = roundoff;
+		maximumCoordinateErrorMetres = 0; maximumRateRepresentationErrorPerSecond = 0;
 		sweptVolume = new Fraction[rate.length];
 		for (int f = 0; f < rate.length; f++) {
 			if (rate[f] == null) throw new IllegalArgumentException("Absent continuous transport rate");
@@ -49,6 +52,51 @@ final class LiquidConformingTransport {
 		// Momentum is carried by the original velocity-field mean in LiquidGeometryMotionPlan.
 		for (int c = 0; c < mesh.cells.size(); c++) if (liquid[c] >= 0)
 			moved.put(field.cellCenters.get(c), LiquidExactPolygon.vertex(field.meanPosition(c, time)));
+		positions = java.util.Collections.unmodifiableMap(moved); images = images(moved);
+	}
+	/** Coordinate rounding is constrained by exact cell volumes; actual rates are certified by the original pressure operator. */
+	LiquidConformingTransport representCoordinates(int fractionalBits) { return new LiquidConformingTransport(this, fractionalBits); }
+	private LiquidConformingTransport(LiquidConformingTransport reference, int fractionalBits) {
+		mesh = reference.mesh; field = reference.field; liquid = reference.liquid.clone(); time = reference.time;
+		var volume = new Fraction[mesh.cells.size()];
+		for (int c = 0; c < volume.length; c++) if (liquid[c] >= 0) {
+			volume[c] = mesh.cells.get(c).geometry().measure().volume();
+			for (int f : mesh.cellFaces[c]) volume[c] = volume[c].add(mesh.faces.get(f).first() == c ? reference.sweptVolume[f] : reference.sweptVolume[f].negate());
+		}
+		var representation = new LiquidCoordinateProjection(mesh, field, reference.positions, volume, fractionalBits);
+		positions = representation.positions; maximumCoordinateErrorMetres = representation.maximumPositionErrorMetres;
+		maximumPositionRoundoffMetres = reference.maximumPositionRoundoffMetres;
+		sweptVolume = new Fraction[reference.sweptVolume.length];
+		for (int f = 0; f < sweptVolume.length; f++) {
+			var face = mesh.faces.get(f);
+			sweptVolume[f] = liquid[face.first()] < 0 && (face.second() < 0 || liquid[face.second()] < 0) ? Fraction.ZERO
+					: sweep(mesh.exactPolygons.get(f).vertices(), field.faceCenters.get(f), positions);
+		}
+		double error = 0;
+		for (int c = 0; c < volume.length; c++) if (liquid[c] >= 0) {
+			var total = Fraction.ZERO;
+			for (int f : mesh.cellFaces[c]) total = total.add(sweptVolume[f].subtract(reference.sweptVolume[f]).absolute());
+			if (total.signum() != 0) error = Math.max(error, Math.nextUp(total.divide(time).divide(volume[c]).rounded()));
+		}
+		if (!Double.isFinite(error)) throw new LiquidCoordinateResolutionRequired("Coordinate representation has no finite rate error bound");
+		maximumRateRepresentationErrorPerSecond = error; images = images(positions);
+	}
+	Fraction[] volumeRate() {
+		var rates = new Fraction[sweptVolume.length]; for (int f = 0; f < rates.length; f++) rates[f] = sweptVolume[f].divide(time); return rates;
+	}
+	/** The certified rates supply the transported mean momentum on the same source fan. */
+	LiquidConformingTransport withField(LiquidConformingVelocity represented) { return new LiquidConformingTransport(this, represented); }
+	private LiquidConformingTransport(LiquidConformingTransport source, LiquidConformingVelocity represented) {
+		represented.requireTransportSupport(source.field, source.volumeRate());
+		if (represented.mesh != source.mesh || !represented.tetrahedra.equals(source.field.tetrahedra))
+			throw new IllegalArgumentException("Represented velocity changed the source transport fan");
+		mesh = source.mesh; field = represented; liquid = source.liquid.clone(); time = source.time;
+		positions = source.positions; sweptVolume = source.sweptVolume.clone(); images = source.images;
+		maximumPositionRoundoffMetres = source.maximumPositionRoundoffMetres;
+		maximumCoordinateErrorMetres = source.maximumCoordinateErrorMetres;
+		maximumRateRepresentationErrorPerSecond = source.maximumRateRepresentationErrorPerSecond;
+	}
+	private List<Image> images(Map<Vertex, Vertex> moved) {
 		var result = new ArrayList<Image>(); var volume = new Fraction[mesh.cells.size()]; java.util.Arrays.fill(volume, Fraction.ZERO);
 		for (var tet : field.tetrahedra) if (liquid[tet.cell()] >= 0) {
 			var source = tet.vertices(); var target = source.stream().map(moved::get).toList();
@@ -62,7 +110,7 @@ final class LiquidConformingTransport {
 			for (int f : mesh.cellFaces[c]) expected = expected.add(mesh.faces.get(f).first() == c ? sweptVolume[f] : sweptVolume[f].negate());
 			if (!volume[c].equals(expected)) throw new IllegalStateException("Continuous transport lost cell geometric conservation");
 		}
-		positions = java.util.Collections.unmodifiableMap(moved); images = List.copyOf(result);
+		return List.copyOf(result);
 	}
 	private static Fraction sweep(List<Vertex> points, Vertex center, Map<Vertex, Vertex> moved) {
 		var value = Fraction.ZERO; var oldCenter = center.coordinates(); var newCenter = moved.get(center).coordinates();

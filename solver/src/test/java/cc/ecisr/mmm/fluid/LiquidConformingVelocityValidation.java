@@ -30,6 +30,9 @@ final class LiquidConformingVelocityValidation {
 		for (var entry : motion.positions.entrySet()) if (!entry.getKey().equals(entry.getValue()))
 			throw new AssertionError("Binary64 increments changed stationary rational geometry");
 		if (motion.maximumPositionRoundoffMetres != 0) throw new AssertionError("Stationary geometry acquired a motion roundoff bound");
+		var represented = new LiquidCoordinateProjection(mesh, field, motion.positions, new Fraction[]{shape.measure().volume()}, 20);
+		if (!represented.positions.equals(motion.positions) || represented.maximumPositionErrorMetres != 0)
+			throw new AssertionError("Finite coordinate representation changed a stationary rational surface");
 	}
 	private static void implicitCapillarityUsesActualPhaseOrdering() {
 		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.625, 0.75)));
@@ -294,6 +297,13 @@ final class LiquidConformingVelocityValidation {
 		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
 		var input = new double[3 * cells.size()]; for (int i = 0; i < input.length; i++) input[i] = Math.sin(i + 0.5);
 		var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(input, new LiquidPolyhedron.Point(0, 0, 0), 0.01, 1e-10, 512);
+		var same = projected.observeRates(projected.volumeRate());
+		if (!Arrays.equals(projected.cellVelocity(), same.cellVelocity()) || !Arrays.equals(projected.pressure(), same.pressure())
+				|| Double.doubleToLongBits(projected.boundaryWorkJoules()) != Double.doubleToLongBits(same.boundaryWorkJoules()))
+			throw new AssertionError("Rate certification changed an identical pressure result");
+		var invalid = projected.volumeRate().clone(); invalid[0] = invalid[0].add(Fraction.of(0.125));
+		try { projected.observeRates(invalid); throw new AssertionError("Pressure representation accepted a new volume source"); }
+		catch (IllegalArgumentException expected) { }
 		var fresh = new LiquidConformingVelocity(mesh, projected.volumeRate(), projected.cellVelocity());
 		var zeroRate = new Fraction[mesh.faces.size()]; Arrays.fill(zeroRate, Fraction.ZERO); var liquid = new int[cells.size()];
 		var reference = new LiquidConformingVelocity(mesh, zeroRate, input);
@@ -312,6 +322,17 @@ final class LiquidConformingVelocityValidation {
 				throw new AssertionError("Motion observation certificate lost the actual exact velocity increment or wall projection");
 		}
 		var motion = new LiquidConformingTransport(mesh, field, projected.volumeRate(), 0.0001);
+		requireFiniteCoordinateConstraints(mesh, field, motion);
+		var represented = motion.representCoordinates(64);
+		try { projected.observeRates(motion.representCoordinates(20).volumeRate()); throw new AssertionError("Coarse coordinates bypassed pressure stationarity"); }
+		catch (LiquidCoordinateResolutionRequired expected) { }
+		var certified = projected.observeRates(represented.volumeRate());
+		try { represented.withField(field); throw new AssertionError("Transport accepted the rates from an earlier geometric representation"); }
+		catch (IllegalArgumentException expected) { }
+		var transported = represented.withField(field.reconstruct(certified.volumeRate(), certified.cellVelocity(), liquid, FluidSolverConfig.WallCondition.FREE_SLIP));
+		if (!(transported.maximumCoordinateErrorMetres > 0 && transported.maximumRateRepresentationErrorPerSecond > 0)
+				|| transported.field == field || !Arrays.equals(transported.volumeRate(), certified.volumeRate()))
+			throw new AssertionError("Coordinate transport lost the actual certified rates or transported mean field");
 		if (!(motion.maximumPositionRoundoffMetres > 0 && motion.maximumPositionRoundoffMetres < Math.ulp(0.0001)))
 			throw new AssertionError("Motion roundoff is not bounded at the binary64 increment scale");
 		for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() == -2) {
@@ -359,6 +380,38 @@ final class LiquidConformingVelocityValidation {
 		catch (IllegalArgumentException expected) { }
 		try { reference.reconstruct(projected.volumeRate(), projected.cellVelocity(), liquid, FluidSolverConfig.WallCondition.NO_SLIP); throw new AssertionError("Interpolation reused different wall constraints"); }
 		catch (IllegalArgumentException expected) { }
+	}
+	private static void requireFiniteCoordinateConstraints(LiquidControlVolumeMesh mesh, LiquidConformingVelocity field, LiquidConformingTransport motion) {
+		var volume = mesh.cells.stream().map(c -> c.geometry().measure().volume()).toArray(Fraction[]::new);
+		var reference = transportedMeasures(field, motion.positions);
+		double previousMomentError = Double.POSITIVE_INFINITY, previousPositionError = Double.POSITIVE_INFINITY;
+		for (int bits : new int[]{20, 32, 44}) {
+			var represented = new LiquidCoordinateProjection(mesh, field, motion.positions, volume, bits);
+			var actual = transportedMeasures(field, represented.positions); double momentError = 0;
+			for (int c = 0; c < volume.length; c++) {
+				if (!actual[c].volume().equals(volume[c])) throw new AssertionError("Finite coordinates changed liquid volume");
+				for (int a = 0; a < 3; a++) momentError = Math.max(momentError, actual[c].firstMoment(a).subtract(reference[c].firstMoment(a)).absolute().rounded());
+			}
+			for (int f = 0; f < mesh.faces.size(); f++) if (mesh.faces.get(f).second() == -2) {
+				var points = new ArrayList<>(mesh.exactPolygons.get(f).vertices()); points.add(field.faceCenters.get(f));
+				for (var point : points) if (represented.positions.get(point).distance(mesh.exactPolygons.get(f).coefficients()).signum() != 0)
+					throw new AssertionError("Finite coordinate representation crossed a solid plane");
+			}
+			for (var entry : represented.positions.entrySet()) {
+				var x = entry.getValue().coordinates(); var y = motion.positions.get(entry.getKey()).coordinates(); var squared = Fraction.ZERO;
+				for (int a = 0; a < 3; a++) { var delta = x[a].subtract(y[a]); squared = squared.add(delta.multiply(delta)); }
+				var bound = Fraction.of(represented.maximumPositionErrorMetres);
+				if (squared.subtract(bound.multiply(bound)).signum() > 0) throw new AssertionError("Finite coordinate displacement escaped its measured bound");
+			}
+			if (!(momentError < previousMomentError / 1024 && represented.maximumPositionErrorMetres < previousPositionError / 1024))
+				throw new AssertionError("Coordinate and first-moment errors failed precision convergence");
+			previousMomentError = momentError; previousPositionError = represented.maximumPositionErrorMetres;
+		}
+	}
+	private static LiquidExactPolygon.Measure[] transportedMeasures(LiquidConformingVelocity field, java.util.Map<LiquidExactPolygon.Vertex, LiquidExactPolygon.Vertex> positions) {
+		var result = new LiquidExactPolygon.Measure[field.mesh.cells.size()]; Arrays.fill(result, LiquidConvexRegion.EMPTY.measure());
+		for (var tet : field.tetrahedra) result[tet.cell()] = result[tet.cell()].add(LiquidExactPolygon.tetrahedronMeasure(tet.vertices().stream().map(positions::get).toList()));
+		return result;
 	}
 	static void requireSurfaceActionCertificate(LiquidPressureFaceEnergy surface, Fraction[] exactAction, Fraction[] exactForce, double[] flow) {
 		double dt = 0.3; var time = Fraction.of(dt);

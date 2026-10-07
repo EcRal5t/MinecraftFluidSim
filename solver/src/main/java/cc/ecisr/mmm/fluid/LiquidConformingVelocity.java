@@ -180,6 +180,15 @@ final class LiquidConformingVelocity {
 		if (!Arrays.equals(this.liquid, liquid) || this.wall != wall) throw new IllegalArgumentException("Velocity reconstruction changed phase or wall support");
 		return new LiquidConformingVelocity(mesh, rate, mean, liquid, wall, this);
 	}
+	void requireTransportSupport(LiquidConformingVelocity reference, Fraction[] volumeRate) {
+		if (mesh != reference.mesh || wall != reference.wall || !Arrays.equals(liquid, reference.liquid) || volumeRate.length != rates.length)
+			throw new IllegalArgumentException("Transport velocity changed its phase, wall or actual face rates");
+		for (int f = 0; f < rates.length; f++) {
+			var face = mesh.faces.get(f);
+			if ((liquid[face.first()] >= 0 || face.second() >= 0 && liquid[face.second()] >= 0) && !rates[f].equals(volumeRate[f]))
+				throw new IllegalArgumentException("Transport velocity differs from actual liquid face rates");
+		}
+	}
 	/** Binary64 velocity observations preserve rigid motion; solid-plane projection bounds position roundoff. */
 	Position advectedPosition(Vertex point, Fraction dt) {
 		var origin = point.coordinates(); var rounded = zero(); var discrepancy = zero(); var bound = Fraction.ZERO;
@@ -206,6 +215,17 @@ final class LiquidConformingVelocity {
 		var result = cellCenters.get(cell).coordinates();
 		for (int a = 0; a < 3; a++) result[a] = result[a].add(Fraction.of(mean[3 * cell + a]).multiply(dt));
 		return result;
+	}
+	/** Coordinate representation preserves every incident prescribed solid-plane constraint. */
+	Vertex constrainedPosition(Vertex point, Vertex represented, Vertex desired) {
+		var normals = walls.get(point); if (normals == null) return represented;
+		var x = represented.coordinates(); var target = desired.coordinates(); var discrepancy = subtract(target, x);
+		var rhs = zero(); var weights = new ArrayList<Fraction>();
+		for (var normal : normals) { weights.add(Fraction.of(1)); add(rhs, scale(normal, dot(normal, discrepancy))); }
+		add(x, dual(normals, weights, rhs));
+		for (var normal : normals) if (dot(normal, subtract(target, x)).signum() != 0)
+			throw new IllegalStateException("Coordinate representation changed prescribed solid motion");
+		return LiquidExactPolygon.vertex(x);
 	}
 	/** A moving material interface needs an exactly affine-complete spatial velocity trace. */
 	void requireSurfaceResolution(double[] coefficient) {

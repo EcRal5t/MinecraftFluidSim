@@ -20,14 +20,18 @@ final class LiquidPhaseMechanics {
 		private LiquidControlVolumeVelocity.Result[] velocity;
 		private LiquidConformingVelocity conforming;
 		private final LiquidConformingVelocity reference;
+		private final java.util.function.Function<Fraction[], Result> representation;
 		Result(LiquidControlVolumeViscosity.Result viscosity, LiquidControlVolumeProjection.Result pressure,
-				LiquidInterfaceVelocityExtension.Result extension, LiquidControlVolumeMesh mesh, int[] liquid, FluidSolverConfig.WallCondition wall, LiquidConformingVelocity reference) {
+				LiquidInterfaceVelocityExtension.Result extension, LiquidControlVolumeMesh mesh, int[] liquid, FluidSolverConfig.WallCondition wall, LiquidConformingVelocity reference,
+				java.util.function.Function<Fraction[], Result> representation) {
 			this.viscosity = viscosity; this.pressure = pressure; this.extension = extension; this.mesh = mesh; this.liquid = liquid; this.wall = wall;
 			this.reference = reference;
+			this.representation = representation;
 		}
 		LiquidControlVolumeViscosity.Result viscosity() { return viscosity; }
 		LiquidControlVolumeProjection.Result pressure() { return pressure; }
 		LiquidInterfaceVelocityExtension.Result extension() { return extension; }
+		Result observeRates(Fraction[] rates) { return representation.apply(rates.clone()); }
 		LiquidControlVolumeVelocity.Result[] velocity() {
 			if (velocity == null) velocity = LiquidControlVolumeVelocity.reconstruct(mesh, extension.volumeRate(), extension.cellVelocity()); return velocity;
 		}
@@ -133,10 +137,19 @@ final class LiquidPhaseMechanics {
 		for (int c = 0; c < liquidCells.length; c++) for (int a = 0; a < 3; a++) predictor[3 * c + a] += dt * acceleration[3 * liquidCells[c] + a];
 		var projected = projection.project(predictor, new LiquidPolyhedron.Point(0, 0, 0), dt, continuityTolerance, maximumIterations,
 				surface == null ? null : surface.select(faceIds, faceSigns));
+		return result(viscous, projected, cellVelocity.clone(), continuityTolerance, maximumIterations, surface == null ? null : surface.reference);
+	}
+	private Result result(LiquidControlVolumeViscosity.Result viscous, LiquidControlVolumeProjection.Result projected,
+			double[] cellVelocity, double continuityTolerance, int maximumIterations, LiquidConformingVelocity reference) {
 		var rates = new Fraction[mesh.faces.size()]; Arrays.fill(rates, Fraction.ZERO); var primary = cellVelocity.clone();
 		for (int c = 0; c < liquidCells.length; c++) System.arraycopy(projected.cellVelocity(), 3 * c, primary, 3 * liquidCells[c], 3);
 		for (int f = 0; f < faceIds.length; f++) rates[faceIds[f]] = faceSigns[f] > 0 ? projected.volumeRate()[f] : projected.volumeRate()[f].negate();
 		var extended = LiquidInterfaceVelocityExtension.extend(mesh, liquid, rates, primary, continuityTolerance, maximumIterations);
-		return new Result(viscous, projected, extended, mesh, liquid, wall, surface == null ? null : surface.reference);
+		return new Result(viscous, projected, extended, mesh, liquid, wall, reference, represented -> {
+			if (represented.length != mesh.faces.size()) throw new IllegalArgumentException("Represented rates differ from the phase mesh");
+			var compact = new Fraction[faceIds.length];
+			for (int f = 0; f < compact.length; f++) compact[f] = faceSigns[f] > 0 ? represented[faceIds[f]] : represented[faceIds[f]].negate();
+			return result(viscous, projected.observeRates(compact), cellVelocity, continuityTolerance, maximumIterations, reference);
+		});
 	}
 }
