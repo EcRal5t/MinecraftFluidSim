@@ -23,6 +23,11 @@ final class ControlVolumeConductionValidation {
 		close(result.energyChange()[0], q, 1e-9); close(result.energyChange()[1], -q, 1e-9);
 		close(result.temperature()[0], 280 + q / 2, 1e-9); close(result.temperature()[1], 320 - q / 3, 1e-9);
 		closure(result);
+		var permuted = new ControlVolumeConduction(mesh, new int[]{1, 0}, 2, new double[]{3, 6})
+				.advance(List.of(bodies.get(1), bodies.get(0)), prescribed, 1, 1e-10, 256);
+		close(permuted.energyChange()[1], result.energyChange()[0], 1e-9);
+		close(permuted.energyChange()[0], result.energyChange()[1], 1e-9); closure(permuted);
+		sharedCaloricOwnerRetainsOneCapacity(mesh, first);
 		try { operator.advance(bodies, prescribed, 1, 1e-10, 1); throw new AssertionError("Insufficient conduction budget committed a partial solve"); }
 		catch (IllegalStateException expected) { }
 		var retried = operator.advance(bodies, prescribed, 1, 1e-10, 256);
@@ -45,6 +50,27 @@ final class ControlVolumeConductionValidation {
 		if (result.iterations() != 0 || result.energyChange()[0] != 0 || result.energyChange()[1] != 0) throw new AssertionError("Insulating caloric cells gained heat");
 		obliqueCaloricInterfacePreservesSteadyFlux();
 		temporalAndSpatialFourierRefinement();
+	}
+	private static void sharedCaloricOwnerRetainsOneCapacity(LiquidControlVolumeMesh mesh, ThermalMaterialDefinition material) {
+		var prescribed = new double[mesh.faces.size()]; Arrays.fill(prescribed, Double.NaN);
+		for (int f = 0; f < prescribed.length; f++) if (mesh.faces.get(f).second() < 0) prescribed[f] = 350;
+		var owner = carrier(material, 280);
+		var half = new ThermalContactExchange.Carrier(material, 0.5, owner.baseEnergyEu() / 2, owner.internalEnergyEu() / 2);
+		var independent = new ControlVolumeConduction(mesh, new double[]{3, 3})
+				.advance(List.of(half, half), prescribed, 0.2, 1e-10, 256);
+		int[] support = {0, 0}; var jointOperator = new ControlVolumeConduction(mesh, support, 1, new double[]{3, 3});
+		Arrays.fill(support, 17);
+		var joint = jointOperator.advance(List.of(owner), prescribed, 0.2, 1e-10, 256);
+		if (joint.energyChange().length != 1) throw new AssertionError("One caloric inventory acquired multiple heat capacities");
+		close(joint.energyChange()[0], independent.energyChange()[0] + independent.energyChange()[1], 1e-9);
+		close(joint.temperature()[0], independent.temperature()[0], 1e-9);
+		close(joint.temperature()[0], independent.temperature()[1], 1e-9); closure(joint); closure(independent);
+		Arrays.fill(prescribed, Double.NaN);
+		joint = jointOperator.advance(List.of(owner), prescribed, 10, 1e-10, 256);
+		if (joint.energyChange()[0] != 0 || joint.iterations() != 0 || joint.reservoirEnergy().signum() != 0)
+			throw new AssertionError("Auxiliary support exchanged heat inside a uniform caloric owner");
+		try { new ControlVolumeConduction(mesh, new int[]{0, 0}, 2, new double[]{3, 3}); throw new AssertionError("Caloric inventory lost all geometric support"); }
+		catch (IllegalArgumentException expected) { }
 	}
 	private static void obliqueCaloricInterfacePreservesSteadyFlux() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);

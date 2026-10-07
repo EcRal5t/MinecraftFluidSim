@@ -62,7 +62,7 @@ final class ControlVolumeHeatFlux {
 			if (!Double.isFinite(face[f])) throw new IllegalStateException("Heat flux face temperature overflow");
 		}
 		maximum(residual);
-		return new Result(face, heating.cells(), residual, iterations, energy, heating.reservoir());
+		return new Result(face, heating.inventoryRates(), residual, iterations, energy, heating.reservoir());
 	}
 	private static double maximum(double[] values) {
 		double result = 0;

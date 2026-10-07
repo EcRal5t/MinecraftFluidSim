@@ -11,24 +11,30 @@ final class ControlVolumeConduction {
 			int iterations, SignedDyadic reservoirEnergy, SignedDyadic roundoff,
 			SignedDyadic roundoffBound, double maximumCaloricResidual, double maximumFluxCorrection) { }
 	private final ControlVolumeThermalMetric metric;
-	private final int cells, faces;
-	private final double[] cellValue, faceValue, cellForce, faceForce;
+	private final int inventories, faces;
+	private final double[] inventoryValue, faceValue, inventoryForce, faceForce;
 
 	ControlVolumeConduction(LiquidControlVolumeMesh mesh, double[] conductivity) {
-		metric = new ControlVolumeThermalMetric(mesh, conductivity); cells = mesh.cells.size(); faces = mesh.faces.size();
-		cellValue = new double[cells]; faceValue = new double[faces]; cellForce = cellValue.clone(); faceForce = faceValue.clone();
+		this(new ControlVolumeThermalMetric(mesh, conductivity));
+	}
+	ControlVolumeConduction(LiquidControlVolumeMesh mesh, int[] inventoryByCell, int inventoryCount, double[] conductivity) {
+		this(new ControlVolumeThermalMetric(mesh, inventoryByCell, inventoryCount, conductivity));
+	}
+	private ControlVolumeConduction(ControlVolumeThermalMetric metric) {
+		this.metric = metric; inventories = metric.inventoryDiagonal.length; faces = metric.faceDiagonal.length;
+		inventoryValue = new double[inventories]; faceValue = new double[faces]; inventoryForce = inventoryValue.clone(); faceForce = faceValue.clone();
 	}
 
 	Result advance(List<? extends ThermalContactExchange.Body> source, double[] prescribed,
 			double dt, double energyTolerance, int maximumIterations) {
 		var bodies = List.copyOf(source);
-		if (bodies.size() != cells || prescribed.length != faces || !(Double.isFinite(dt) && dt > 0)
+		if (bodies.size() != inventories || prescribed.length != faces || !(Double.isFinite(dt) && dt > 0)
 				|| !(Double.isFinite(energyTolerance) && energyTolerance > 0) || maximumIterations < 1)
 			throw new IllegalArgumentException("Invalid resolved conduction input");
-		var value = new double[cells + faces]; var free = new boolean[value.length]; var diagonal = value.clone();
-		double reference = cells == 0 ? 0 : bodies.getFirst().temperatureK();
-		for (int c = 0; c < cells; c++) {
-			if (!bodies.get(c).finite()) throw new IllegalArgumentException("Control-volume conduction requires finite caloric cells");
+		var value = new double[inventories + faces]; var free = new boolean[value.length]; var diagonal = value.clone();
+		double reference = inventories == 0 ? 0 : bodies.getFirst().temperatureK();
+		for (int c = 0; c < inventories; c++) {
+			if (!bodies.get(c).finite()) throw new IllegalArgumentException("Control-volume conduction requires finite caloric inventories");
 			double temperature = bodies.get(c).temperatureK();
 			if (!(Double.isFinite(temperature) && temperature >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K))
 				throw new IllegalArgumentException("Invalid initial caloric temperature");
@@ -39,21 +45,22 @@ final class ControlVolumeConduction {
 			if (fixed) {
 				if (face.second() >= 0) throw new IllegalArgumentException("Thermal reservoir requires an exterior face");
 				new ThermalContactExchange.Reservoir(prescribed[f]);
-				value[cells + f] = prescribed[f] - reference;
-			} else value[cells + f] = face.second() < 0 ? value[face.first()] : 0.5 * value[face.first()] + 0.5 * value[face.second()];
-			free[cells + f] = !fixed && metric.faceDiagonal[f] > 0;
-			diagonal[cells + f] = dt * metric.faceDiagonal[f];
-			if (free[cells + f] && !(Double.isFinite(diagonal[cells + f]) && diagonal[cells + f] > 0))
+				value[inventories + f] = prescribed[f] - reference;
+			} else value[inventories + f] = face.second() < 0 ? value[metric.inventory(face.first())]
+					: 0.5 * value[metric.inventory(face.first())] + 0.5 * value[metric.inventory(face.second())];
+			free[inventories + f] = !fixed && metric.faceDiagonal[f] > 0;
+			diagonal[inventories + f] = dt * metric.faceDiagonal[f];
+			if (free[inventories + f] && !(Double.isFinite(diagonal[inventories + f]) && diagonal[inventories + f] > 0))
 				throw new IllegalStateException("Conduction face exceeds its temporal numerical support");
 		}
-		var residual = value.clone(); var capacity = new double[cells];
+		var residual = value.clone(); var capacity = new double[inventories];
 		var trial = value.clone(); var trialResidual = value.clone(); var trialCapacity = capacity.clone();
 		int[] work = {0};
 		while (true) {
 			evaluate(bodies, reference, value, dt, residual, capacity);
 			mask(residual, free); double error = maximum(residual);
 			if (error <= energyTolerance) break;
-			for (int c = 0; c < cells; c++) diagonal[c] = capacity[c] + dt * metric.cellDiagonal[c];
+			for (int c = 0; c < inventories; c++) diagonal[c] = capacity[c] + dt * metric.inventoryDiagonal[c];
 			var correction = solve(residual, capacity, free, diagonal, dt, energyTolerance, maximumIterations, work);
 			double scale = 1;
 			while (true) {
@@ -61,7 +68,7 @@ final class ControlVolumeConduction {
 				boolean valid = true, changed = false;
 				for (int i = 0; i < value.length; i++) {
 					trial[i] = value[i] + scale * correction[i]; changed |= trial[i] != value[i];
-					valid &= Double.isFinite(trial[i]) && (i >= cells || reference + trial[i] >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+					valid &= Double.isFinite(trial[i]) && (i >= inventories || reference + trial[i] >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
 				}
 				if (!changed) throw new IllegalStateException("Resolved conduction correction is below its temperature precision");
 				if (valid) {
@@ -71,11 +78,11 @@ final class ControlVolumeConduction {
 				scale *= 0.5;
 			}
 		}
-		var heating = metric.heating(prescribed, faceForce); var changes = heating.cells(); var temperatures = new double[cells];
+		var heating = metric.heating(prescribed, faceForce); var changes = heating.inventoryRates(); var temperatures = new double[inventories];
 		var time = SignedDyadic.of(dt); var observationBound = SignedDyadic.ZERO;
 		double caloricResidual = 0;
-		for (int c = 0; c < cells; c++) {
-			var exactCorrection = heating.quantities()[c].add(SignedDyadic.of(cellForce[c])).multiply(time);
+		for (int c = 0; c < inventories; c++) {
+			var exactCorrection = heating.quantities()[c].add(SignedDyadic.of(inventoryForce[c])).multiply(time);
 			double correction = exactCorrection.signum() == 0 ? 0 : Math.nextUp(Math.abs(exactCorrection.toDouble()));
 			changes[c] = heating.quantities()[c].multiply(time).toDouble();
 			var state = bodies.get(c).stateAfterEnergyChange(changes[c]); temperatures[c] = state.temperatureK();
@@ -84,7 +91,7 @@ final class ControlVolumeConduction {
 			if (!Double.isFinite(changes[c]) || !(Double.isFinite(temperatures[c]) && temperatures[c] >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K))
 				throw new IllegalStateException("Resolved conduction caloric publication exceeds its positive-temperature support");
 			observationBound = observationBound.add(SignedDyadic.of(Math.ulp(changes[c])).multiply(SignedDyadic.of(0.5)));
-			double roundoffBound = Math.ulp(expected) + Math.ulp(changes[c]) + Math.ulp(dt * cellForce[c]) + Math.ulp(correction);
+			double roundoffBound = Math.ulp(expected) + Math.ulp(changes[c]) + Math.ulp(dt * inventoryForce[c]) + Math.ulp(correction);
 			if (error > energyTolerance + correction + roundoffBound) throw new IllegalStateException("Conservative heat flux exceeds its caloric residual certificate");
 		}
 		// The measured face correction is accounted separately from caloric solve tolerance.
@@ -93,7 +100,7 @@ final class ControlVolumeConduction {
 		if (roundoff.compareTo(observationBound) > 0 || roundoff.compareTo(observationBound.negate()) < 0)
 			throw new IllegalStateException("Resolved conduction energy exceeds its single-rounding certificate");
 		for (int f = 0; f < faces; f++) {
-			faceValue[f] = reference + value[cells + f];
+			faceValue[f] = reference + value[inventories + f];
 			if (!(Double.isFinite(faceValue[f]) && faceValue[f] >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K))
 				throw new IllegalStateException("Resolved conduction face requires finer temperature support");
 		}
@@ -104,7 +111,7 @@ final class ControlVolumeConduction {
 	private void evaluate(List<? extends ThermalContactExchange.Body> bodies, double reference, double[] value,
 			double dt, double[] residual, double[] capacity) {
 		action(value, residual, dt);
-		for (int c = 0; c < cells; c++) {
+		for (int c = 0; c < inventories; c++) {
 			double temperature = reference + value[c];
 			double change = bodies.get(c).energyChangeToTemperature(temperature);
 			capacity[c] = bodies.get(c).stateAfterEnergyChange(change).heatCapacityEuPerK();
@@ -113,10 +120,10 @@ final class ControlVolumeConduction {
 		}
 	}
 	private void action(double[] value, double[] result, double dt) {
-		System.arraycopy(value, 0, cellValue, 0, cells); System.arraycopy(value, cells, faceValue, 0, faces);
-		metric.apply(cellValue, faceValue, cellForce, faceForce);
-		for (int c = 0; c < cells; c++) result[c] = dt * cellForce[c];
-		for (int f = 0; f < faces; f++) result[cells + f] = dt * faceForce[f];
+		System.arraycopy(value, 0, inventoryValue, 0, inventories); System.arraycopy(value, inventories, faceValue, 0, faces);
+		metric.apply(inventoryValue, faceValue, inventoryForce, faceForce);
+		for (int c = 0; c < inventories; c++) result[c] = dt * inventoryForce[c];
+		for (int f = 0; f < faces; f++) result[inventories + f] = dt * faceForce[f];
 	}
 	private double[] solve(double[] rhs, double[] capacity, boolean[] free, double[] diagonal, double dt,
 			double tolerance, int maximumIterations, int[] work) {
@@ -132,14 +139,14 @@ final class ControlVolumeConduction {
 			if (!(Double.isFinite(norm) && norm > 0)) throw new IllegalStateException("Conduction residual exceeds numerical support");
 			double beta = restart ? 0 : norm / previous;
 			for (int i = 0; i < rhs.length; i++) direction[i] = free[i] ? residual[i] / diagonal[i] + beta * direction[i] : 0;
-			action(direction, product, dt); for (int c = 0; c < cells; c++) product[c] += capacity[c] * direction[c];
+			action(direction, product, dt); for (int c = 0; c < inventories; c++) product[c] += capacity[c] * direction[c];
 			double inertia = ConservativeConjugateDirections.dot(direction, product);
 			if (!(Double.isFinite(inertia) && inertia > 0)) throw new IllegalStateException("Conduction correction has no positive energy");
 			double alpha = norm / inertia;
 			for (int i = 0; i < rhs.length; i++) if (free[i]) { result[i] += alpha * direction[i]; residual[i] -= alpha * product[i]; }
 			mask(residual, free); previous = norm; restart = false;
 			if (maximum(residual) <= tolerance) {
-				action(result, product, dt); for (int c = 0; c < cells; c++) product[c] += capacity[c] * result[c];
+				action(result, product, dt); for (int c = 0; c < inventories; c++) product[c] += capacity[c] * result[c];
 				for (int i = 0; i < rhs.length; i++) residual[i] = free[i] ? -rhs[i] - product[i] : 0;
 				restart = true;
 			}
