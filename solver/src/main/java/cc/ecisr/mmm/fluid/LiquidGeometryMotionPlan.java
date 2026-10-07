@@ -39,6 +39,12 @@ final class LiquidGeometryMotionPlan {
 				conforming(input.mesh, input.fragments, field, motion, interfaces), input.liquidGeometry.copyControlCells());
 		if (input.mechanicalSupport == null) throw new IllegalArgumentException("Mechanical motion requires bound control-cell support");
 	}
+	LiquidGeometryMotionPlan(LiquidGeometryPhaseInput input, LiquidMechanicalFaceInput mechanical, LiquidConformingVelocity field,
+			LiquidConformingTransport motion, List<LiquidGeometryRefinement.Cell> nextLeaves, int maximumFragments, ResolvedGasInterfaceMotion.Builder interfaces) {
+		this(input.liquidGeometry, mechanical.mesh, mechanical.fragments, nextLeaves, maximumFragments, interfaces,
+				conforming(mechanical.mesh, mechanical.fragments, field, motion, interfaces), input.liquidGeometry.copyControlCells());
+		if (input.mechanicalSupport == null) throw new IllegalArgumentException("Mechanical motion requires bound control-cell support");
+	}
 	private LiquidGeometryMotionPlan(LiquidGeometryState input, LiquidControlVolumeMesh mesh, int[] fragments,
 			List<LiquidGeometryRefinement.Cell> nextLeaves, int maximumFragments, ResolvedGasInterfaceMotion.Builder interfaces, MotionField field) {
 		this(input, mesh, fragments, nextLeaves, maximumFragments, interfaces, field, null);

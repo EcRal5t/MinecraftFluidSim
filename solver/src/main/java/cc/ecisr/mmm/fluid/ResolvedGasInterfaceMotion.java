@@ -16,8 +16,10 @@ final class ResolvedGasInterfaceMotion {
 
 	private ResolvedGasInterfaceMotion(GasGeometryState previous, List<Patch> patches) { this.previous = previous; this.patches = List.copyOf(patches); }
 	static final class Builder {
-		private final LiquidGeometryPhaseInput input;
 		private final int[] previousNodes;
+		private final LiquidControlVolumeMesh mesh;
+		private final int[] fragments;
+		private final int[] contactNodes;
 		private final int maximumPieces;
 		private final GasGeometryState previous;
 		private final ArrayList<Patch> patches = new ArrayList<>();
@@ -25,36 +27,42 @@ final class ResolvedGasInterfaceMotion {
 			this(ResolvedGasGeometry.match(previous, input, maximumPairs), maximumPieces);
 		}
 		Builder(ResolvedGasGeometry.Match match, int maximumPieces) {
+			this(match, null, maximumPieces);
+		}
+		Builder(ResolvedGasGeometry.Match match, LiquidMechanicalFaceInput mechanical, int maximumPieces) {
 			var input = match.input(); var previous = match.saved();
 			if (previous == null || maximumPieces < 1) throw new IllegalArgumentException("Incomplete resolved gas contact labels");
-			this.input = input; this.previous = previous; this.maximumPieces = maximumPieces;
+			this.previous = previous; this.maximumPieces = maximumPieces;
 			previousNodes = match.nodes();
+			mesh = mechanical == null ? input.mesh : mechanical.mesh;
+			fragments = mechanical == null ? input.fragments : mechanical.fragments;
+			contactNodes = mechanical == null ? null : mechanical.contactNodes;
 		}
 		void requireInput(LiquidControlVolumeMesh mesh, int[] fragments) {
-			if (mesh != input.mesh || !java.util.Arrays.equals(fragments, input.fragments))
+			if (mesh != this.mesh || !java.util.Arrays.equals(fragments, this.fragments))
 				throw new IllegalArgumentException("Gas surface transport refers to another phase input");
 		}
 		void collect(int c, List<LiquidCharacteristicTransport.Image> images) {
-			if (input.fragments[c] < 0) throw new IllegalArgumentException("Gas contact transport requires liquid support");
-			for (int f : input.mesh.cellFaces[c]) {
-				var face = input.mesh.faces.get(f); int neighbor = face.first() == c ? face.second() : face.first();
-				if (neighbor == -2 || neighbor >= 0 && input.fragments[neighbor] >= 0) continue;
-				int node = neighbor < 0 ? 0 : previousNodes[neighbor];
+			if (fragments[c] < 0) throw new IllegalArgumentException("Gas contact transport requires liquid support");
+			for (int f : mesh.cellFaces[c]) {
+				var face = mesh.faces.get(f); int neighbor = face.first() == c ? face.second() : face.first();
+				if (neighbor == -2 || neighbor >= 0 && fragments[neighbor] >= 0) continue;
+				int node = contactNodes == null ? neighbor < 0 ? 0 : previousNodes[neighbor] : contactNodes[f];
 				if (node < 0) throw new IllegalArgumentException("Gas contact has no chamber label");
-				var surface = input.mesh.exactPolygons.get(f); if (face.first() != c) surface = surface.reversed();
+				var surface = mesh.exactPolygons.get(f); if (face.first() != c) surface = surface.reversed();
 				ResolvedGasInterfaceMotion.collect(patches, node, surface, images, maximumPieces);
 			}
 		}
 		ResolvedGasInterfaceMotion finish() { return new ResolvedGasInterfaceMotion(previous, patches); }
 		void collect(LiquidConformingTransport motion) {
-			if (motion.mesh != input.mesh || !java.util.Arrays.equals(motion.liquid, input.fragments))
+			if (motion.mesh != mesh || !java.util.Arrays.equals(motion.liquid, fragments))
 				throw new IllegalArgumentException("Continuous gas transport refers to another phase input");
 			for (var image : motion.images) {
-				int c = image.cell(), f = image.face(); var face = input.mesh.faces.get(f);
-				if (input.fragments[c] < 0) throw new IllegalArgumentException("Continuous gas surface requires liquid support");
+				int c = image.cell(), f = image.face(); var face = mesh.faces.get(f);
+				if (fragments[c] < 0) throw new IllegalArgumentException("Continuous gas surface requires liquid support");
 				int neighbor = face.first() == c ? face.second() : face.first();
-				if (neighbor == -2 || neighbor >= 0 && input.fragments[neighbor] >= 0) continue;
-				int node = neighbor < 0 ? 0 : previousNodes[neighbor];
+				if (neighbor == -2 || neighbor >= 0 && fragments[neighbor] >= 0) continue;
+				int node = contactNodes == null ? neighbor < 0 ? 0 : previousNodes[neighbor] : contactNodes[f];
 				if (patches.size() == maximumPieces) throw new IllegalStateException("Gas interface motion exceeds its surface budget");
 				patches.add(new Patch(node, image.geometry().faces().getFirst()));
 			}

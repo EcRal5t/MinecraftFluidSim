@@ -41,22 +41,26 @@ final class ResolvedLiquidMechanicalStage {
 			var rows = actualNodes.clone(); for (int c = 0; c < rows.length; c++) if (input.fragments[c] < 0) rows[c] = nodeRows[actualNodes[c]];
 			var properties = new LiquidGeometryCarrierProperties(domain, state, input);
 			double initialKinetic = captureAudit ? domain.particleKineticEnergyJoules() : 0;
-			var mechanics = new LiquidPhaseMechanics(input.mesh, input.fragments, properties.density, properties.dynamicViscosity,
-					pressureNodes, rows, (face, gas) -> gas < 0 ? 0 : pressureBoundary.gasPressureOfNode(actualNodes[gas]), domain.config.viscousWallCondition());
+			var physical = new LiquidMechanicalFaceInput(input.mesh, input.fragments, actualNodes, rows, properties.surfaceCoefficient,
+					(face, gas) -> gas < 0 ? 0 : pressureBoundary.gasPressureOfNode(actualNodes[gas]));
+			var density = select(properties.density, physical.phaseCells); var viscosity = select(properties.dynamicViscosity, physical.phaseCells);
+			var velocity = vectors(input.cellVelocity, physical.phaseCells); var acceleration = vectors(properties.acceleration, physical.phaseCells);
+			var mechanics = new LiquidPhaseMechanics(physical, density, viscosity, pressureNodes, domain.config.viscousWallCondition());
 			LiquidPhaseMechanics.Result result;
 			try {
 				LiquidPressureFaceEnergy surface = null;
-				if (Arrays.stream(properties.surfaceCoefficient).anyMatch(value -> value != 0)) {
-					var rates = new LiquidExactPolygon.Fraction[input.mesh.faces.size()]; Arrays.fill(rates, LiquidExactPolygon.Fraction.ZERO);
-					var reference = new LiquidConformingVelocity(input.mesh, rates, new double[input.cellVelocity.length], input.fragments, domain.config.viscousWallCondition());
-					surface = new LiquidGeometricSurfaceEnergy(reference, properties.surfaceCoefficient).pressure;
+				if (Arrays.stream(physical.surfaceCoefficient).anyMatch(value -> value != 0)) {
+					var rates = new LiquidExactPolygon.Fraction[physical.mesh.faces.size()]; Arrays.fill(rates, LiquidExactPolygon.Fraction.ZERO);
+					var reference = new LiquidConformingVelocity(physical.mesh, rates, new double[velocity.length], physical.fragments, domain.config.viscousWallCondition());
+					surface = new LiquidGeometricSurfaceEnergy(reference, physical.surfaceCoefficient).pressure;
 				}
-				result = mechanics.advance(input.cellVelocity, input.faceVelocity, properties.acceleration, dt,
+				result = mechanics.advance(velocity, physical.faceVelocity(velocity), acceleration, dt,
 						domain.config.pressureTolerance(), domain.config.pressureTolerance(), domain.config.maxPressureIterations(), surface);
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());
 			} catch (LiquidInterfaceResolutionRequired finer) {
-				for (int c : finer.cells()) {
+				for (int resolved : finer.cells()) {
+					int c = physical.phaseCells[resolved];
 					if (input.fragments[c] >= 0) refinedControls.add(controlCells[input.fragments[c]]);
 					var children = input.mechanicalSupport.get(c).stream().flatMap(cell -> LiquidGeometryRefinement.children(cell).stream()).toList();
 					for (var child : children) {
@@ -68,14 +72,14 @@ final class ResolvedLiquidMechanicalStage {
 				}
 				continue;
 			}
-			var interfaces = new ResolvedGasInterfaceMotion.Builder(gasMatch, MAXIMUM_REGIONS);
+			var interfaces = new ResolvedGasInterfaceMotion.Builder(gasMatch, physical, MAXIMUM_REGIONS);
 			LiquidGeometryMotionPlan motion;
 			FluidDomain.GeometryStepStats observations;
 			try {
 				var field = result.conformingVelocity();
-				var transport = new LiquidConformingTransport(input.mesh, field, result.extension().volumeRate(), dt, input.fragments);
+				var transport = new LiquidConformingTransport(physical.mesh, field, result.extension().volumeRate(), dt, physical.fragments);
 				observations = new FluidDomain.GeometryStepStats(1, field.maximumFittingVelocityErrorMetresPerSecond, transport.maximumPositionRoundoffMetres);
-				motion = new LiquidGeometryMotionPlan(input, field, transport, partition.leaves, MAXIMUM_REGIONS, interfaces);
+				motion = new LiquidGeometryMotionPlan(input, physical, field, transport, partition.leaves, MAXIMUM_REGIONS, interfaces);
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement((int) Math.ceil(2.0 * domain.config.timeStep() / dt), shorter.getMessage());
 			}
@@ -102,6 +106,12 @@ final class ResolvedLiquidMechanicalStage {
 			return new MechanicalStepPipeline.SubstepOutcome(result.pressure().iterations(), null, false,
 					new FluidDomain.ViscousStepStats(0, 0, impulse.x(), impulse.y(), impulse.z(), viscous.dissipatedJoules(), 0, 0, 0), observations);
 		}
+	}
+	private static double[] select(double[] values, int[] cells) {
+		var result = new double[cells.length]; for (int c = 0; c < result.length; c++) result[c] = values[cells[c]]; return result;
+	}
+	private static double[] vectors(double[] values, int[] cells) {
+		var result = new double[3 * cells.length]; for (int c = 0; c < cells.length; c++) System.arraycopy(values, 3 * cells[c], result, 3 * c, 3); return result;
 	}
 	private static double kinetic(LiquidGeometryPhaseInput input, LiquidGeometryCarrierProperties properties, double[] velocity) {
 		double result = 0; int local = 0;

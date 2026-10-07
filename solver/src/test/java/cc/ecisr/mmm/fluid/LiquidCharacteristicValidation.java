@@ -8,7 +8,7 @@ final class LiquidCharacteristicValidation {
 	private static final LiquidPolyhedron.Point GRAVITY = new LiquidPolyhedron.Point(0, -9.81, 0);
 	static void validate() {
 		productionGeometryPipelinePreservesGravity();
-		productionGeometryPipelineRefinesGasSupport();
+		productionGeometryPipelinePreservesMovingGasChambers();
 		productionGeometryPipelinePreservesContinuousShear();
 		repeatedGravityPreservesUniformCharacteristic();
 		wholeVolumeCharacteristicsPreserveGeometry();
@@ -111,7 +111,7 @@ final class LiquidCharacteristicValidation {
 		}
 		close(restored.particleKineticEnergyJoules(), kinetic, 1e-17);
 	}
-	private static void productionGeometryPipelineRefinesGasSupport() {
+	private static void productionGeometryPipelinePreservesMovingGasChambers() {
 		var sheet = new LiquidGeometryRefinement.Cell(1, 0, 0, 0,
 				LiquidPolyhedron.box(0, 0.25 - 1.0 / 1024, 0, 0.5, 0.25 + 1.0 / 1024, 0.5));
 		var state = LiquidGeometryStateMapper.capture(List.of(sheet), 1, new int[]{0}, new int[]{0}, new double[]{0, 0.125, 0});
@@ -123,10 +123,10 @@ final class LiquidCharacteristicValidation {
 		domain.sealDomainBoundary(); var gasBefore = domain.bootstrapGasState("");
 		var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, domain.captureAuthoritativeState(), List.of(), false, 0, true));
 		var next = FluidDomain.restoreAuthoritativeState(candidate.state()); var gasAfter = next.exportGasState("");
-		if (gasAfter.geometry().cells().stream().noneMatch(c -> c.level() > 1)
+		if (gasAfter.nodes().size() != gasBefore.nodes().size()
 				|| !gasBefore.nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()
 					.equals(gasAfter.nodes().stream().map(cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node::inventory).toList()))
-			throw new AssertionError("Production refinement changed finite gas stock or omitted finer support");
+			throw new AssertionError("Moving liquid sheet changed the separate gas chambers or finite gas stock");
 		if (!(next.gasNodeGaugePressurePa(1) < 0 && next.gasNodeGaugePressurePa(2) > 0))
 			throw new AssertionError("Production gas projection did not use the moving sheet capacities");
 	}

@@ -4,7 +4,7 @@ package cc.ecisr.mmm.fluid;
 final class LiquidGeometryValidation {
 	private static void integerNormalizationPreservesExactRationals() {
 		var random = new java.util.Random(0x73411);
-		for (int bits : new int[]{8192, 16384, 32768, 65536}) for (int sample = 0; sample < 8; sample++) {
+		for (int bits : new int[]{64, 128, 256, 1024, 4096, 8192, 16384, 32768, 65536}) for (int sample = 0; sample < 8; sample++) {
 			var factor = new java.math.BigInteger(257, random).add(java.math.BigInteger.ONE);
 			var first = new java.math.BigInteger(bits, random).multiply(factor);
 			var second = new java.math.BigInteger(bits, random).multiply(factor);
@@ -28,6 +28,7 @@ final class LiquidGeometryValidation {
 		canonicalGeometryProofSurvivesPacking();
 		controlCellsPreserveChosenMechanicalResolution();
 		mechanicalCellsCancelAuxiliaryCuts();
+		mechanicalFacetsIgnoreAuxiliaryGasCuts();
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
 		for (var face : LiquidExactPolygon.faces(cube)) {
 			var vertices = new java.util.ArrayList<LiquidExactPolygon.Vertex>();
@@ -152,6 +153,41 @@ final class LiquidGeometryValidation {
 		var sum = LiquidConvexRegion.EMPTY.measure(); for (var image : motion.images) sum = sum.add(image.geometry().measure());
 		var expected = LiquidExactPolygon.measure(LiquidExactPolygon.faces(controls.regions.getFirst().geometry().translated(mean[0] / 128, mean[1] / 128, mean[2] / 128)));
 		if (!sum.same(expected)) throw new AssertionError("Non-convex pressure-cell fan lost exact rigid transport geometry");
+	}
+	private static void mechanicalFacetsIgnoreAuxiliaryGasCuts() {
+		var body = LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75);
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var regions = LiquidPhasePartition.build(root, java.util.List.of(body), 64);
+		for (boolean finer : new boolean[]{false, true}) {
+			var cells = new java.util.ArrayList<LiquidGeometryRefinement.Cell>(); cells.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, body));
+			for (var region : regions) if (region.liquid() < 0) {
+				var gas = finer ? LiquidGeometryRefinement.children(region.cell()) : java.util.List.of(region.cell());
+				for (var part : gas) cells.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, part.geometry()));
+			}
+			LiquidPhasePartition.requireComplete(root, cells);
+			var phase = new LiquidControlVolumeMesh(cells, 1, 1000, (c, surface) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+			var liquid = new int[cells.size()]; java.util.Arrays.fill(liquid, -1); liquid[0] = 0;
+			var rows = new int[cells.size()]; java.util.Arrays.fill(rows, -1); var contacts = new int[cells.size()]; contacts[0] = -1;
+			var coefficient = new double[phase.faces.size()];
+			for (int f = 0; f < coefficient.length; f++) {
+				var face = phase.faces.get(f);
+				if (liquid[face.first()] >= 0 || face.second() >= 0 && liquid[face.second()] >= 0) coefficient[f] = 0.125;
+			}
+			var physical = new LiquidMechanicalFaceInput(phase, liquid, contacts, rows, coefficient, (f, gas) -> 0);
+			if (physical.mesh.faces.size() != 6 || physical.mesh.exactPolygons.stream().anyMatch(p -> p.vertices().size() != 4))
+				throw new AssertionError("Auxiliary gas cuts changed physical pressure facets or interface velocity nodes");
+			for (int f = 0; f < physical.mesh.faces.size(); f++) {
+				if (physical.contactNodes[f] != 0 || physical.pressureNodes[f] != -1 || physical.surfaceCoefficient[f] != 0.125)
+					throw new AssertionError("Facet union changed gas contact, pressure support or surface coefficient");
+				var polygon = physical.mesh.exactPolygons.get(f); var original = LiquidExactPolygon.faces(body).stream().filter(p -> p.plane().key().equals(polygon.plane().key())).findFirst().orElseThrow();
+				if (!original.vertexKey().equals(polygon.vertexKey())) throw new AssertionError("Physical facet union changed the occupied interface");
+			}
+			var mean = new double[]{0.125, -0.25, 0.5};
+			var projected = new LiquidControlVolumeProjection(physical.mesh.cells, physical.mesh.faces).project(mean, new LiquidPolyhedron.Point(0, 0, 0), 0.01, 1e-10, 512);
+			var field = new LiquidConformingVelocity(physical.mesh, projected.volumeRate(), projected.cellVelocity());
+			for (var velocity : field.velocity.values()) for (int a = 0; a < 3; a++)
+				if (!velocity.get(a).equals(LiquidExactPolygon.Fraction.of(mean[a]))) throw new AssertionError("Auxiliary gas geometry changed rigid liquid motion");
+		}
 	}
 	private static void controlCellsPreserveChosenMechanicalResolution() {
 		var a = new LiquidGeometryRefinement.Cell(1, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.125, 0.125, 0.5, 0.375, 0.375));

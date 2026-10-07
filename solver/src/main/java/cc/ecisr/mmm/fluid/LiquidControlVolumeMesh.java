@@ -7,6 +7,7 @@ import java.util.Map;
 
 /** Builds each shared polygon once, including a coarse face meeting several refined faces. */
 final class LiquidControlVolumeMesh {
+	record Assembly(LiquidControlVolumeMesh mesh, int[] sources) { }
 	record Boundary(boolean solid, double prescribed) { }
 	interface BoundaryCondition { Boundary at(int cell, LiquidPolyhedron.Surface surface); }
 	private record Tile(int axis, long plane, int level, int u, int v) {
@@ -35,6 +36,17 @@ final class LiquidControlVolumeMesh {
 	final List<List<LiquidPolyhedron.Point>> polygons;
 	final List<LiquidExactPolygon> exactPolygons;
 	final int[][] cellFaces;
+
+	static Assembly assemble(List<LiquidControlVolumeProjection.Cell> cells, List<LiquidControlVolumeProjection.Face> faces,
+			List<LiquidExactPolygon> polygons, int[] labels) {
+		var combined = LiquidCoplanarFaceUnion.build(faces, polygons, labels);
+		return new Assembly(new LiquidControlVolumeMesh(cells, combined), combined.sources());
+	}
+	private LiquidControlVolumeMesh(List<LiquidControlVolumeProjection.Cell> cells, LiquidCoplanarFaceUnion.Result combined) {
+		this.cells = List.copyOf(cells); faces = combined.faces();
+		exactPolygons = LiquidExactPolygon.splitEdges(combined.polygons()); polygons = exactPolygons.stream().map(LiquidExactPolygon::rounded).toList();
+		cellFaces = incidence(cells.size(), faces);
+	}
 
 	LiquidControlVolumeMesh(List<LiquidGeometryRefinement.Cell> leaves, double physicalWidth, double density, BoundaryCondition boundary) {
 		var cells = new ArrayList<LiquidControlVolumeProjection.Cell>();
@@ -92,11 +104,14 @@ final class LiquidControlVolumeMesh {
 		faces = new ArrayList<>(combined.faces()); polygons = new ArrayList<>(combined.polygons());
 		this.cells = List.copyOf(cells); this.faces = List.copyOf(faces);
 		this.exactPolygons = LiquidExactPolygon.splitEdges(polygons); this.polygons = exactPolygons.stream().map(LiquidExactPolygon::rounded).toList();
-		var incidence = new ArrayList<ArrayList<Integer>>(); for (int c = 0; c < cells.size(); c++) incidence.add(new ArrayList<>());
+		cellFaces = incidence(cells.size(), faces);
+	}
+	private static int[][] incidence(int cells, List<LiquidControlVolumeProjection.Face> faces) {
+		var incidence = new ArrayList<ArrayList<Integer>>(); for (int c = 0; c < cells; c++) incidence.add(new ArrayList<>());
 		for (int f = 0; f < faces.size(); f++) {
 			var face = faces.get(f); incidence.get(face.first()).add(f); if (face.second() >= 0) incidence.get(face.second()).add(f);
 		}
-		cellFaces = new int[cells.size()][]; for (int c = 0; c < cells.size(); c++) cellFaces[c] = incidence.get(c).stream().mapToInt(Integer::intValue).toArray();
+		return incidence.stream().map(list -> list.stream().mapToInt(Integer::intValue).toArray()).toArray(int[][]::new);
 	}
 
 	private static Tile tile(LiquidGeometryRefinement.Cell leaf, LiquidExactPolygon polygon, double scale) {

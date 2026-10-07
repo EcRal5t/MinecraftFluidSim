@@ -44,6 +44,19 @@ final class LiquidPhaseMechanics {
 	private final LiquidControlVolumeViscosity viscosity;
 	private final FluidSolverConfig.WallCondition wall;
 
+	LiquidPhaseMechanics(LiquidMechanicalFaceInput input, double[] density, double[] dynamicViscosity,
+			List<LiquidControlVolumeProjection.GasNode> nodes, FluidSolverConfig.WallCondition wall) {
+		if (density.length != input.phaseCells.length || dynamicViscosity.length != density.length || wall == null)
+			throw new IllegalArgumentException("Incomplete physical liquid properties");
+		mesh = input.mesh; liquid = input.fragments.clone(); this.wall = wall;
+		liquidCells = java.util.stream.IntStream.range(0, liquid.length).toArray();
+		faceIds = java.util.stream.IntStream.range(0, mesh.faces.size()).toArray(); faceSigns = new int[faceIds.length]; Arrays.fill(faceSigns, 1);
+		var cells = new ArrayList<LiquidControlVolumeProjection.Cell>();
+		for (int c = 0; c < density.length; c++) cells.add(new LiquidControlVolumeProjection.Cell(mesh.cells.get(c).geometry(), density[c]));
+		projection = new LiquidControlVolumeProjection(cells, mesh.faces, nodes, input.pressureNodes);
+		viscosity = new LiquidControlVolumeViscosity(cells, mesh.faces, dynamicViscosity, wall);
+	}
+
 	LiquidPhaseMechanics(LiquidControlVolumeMesh mesh, int[] liquid, double[] density, double[] dynamicViscosity,
 			List<LiquidControlVolumeProjection.GasNode> gasNodes, int[] gasCellNode, InterfacePressure pressure,
 			FluidSolverConfig.WallCondition wall) {
