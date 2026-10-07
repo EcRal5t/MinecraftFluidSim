@@ -26,7 +26,7 @@
 
 - 每个 marker 独立保存体积、质量和稳定材料身份。
 - 区域总量与逐材料体积/质量账本必须由 marker 精确和闭合。
-- 全域液体体积、质量观察与材料 handoff 按指数分桶精确汇总原始 binary32 体积和 binary64 质量，在 binary64 接口处统一舍入一次，保持大小不同的载体与 ordinal 排列变化下的总量一致。
+- `LiquidParticleStore` 保存精确二进制体积和质量；float 体积与 double 质量列是供现有计算和展示读取的观察值。`LiquidInventoryState` 将完整数量随 pure/material/chemical 候选交接，恢复保留观察值无法表示的尾差。普通 binary32/binary64 数量沿指数分桶精确求和，扩展数量的余项继续精确累加；全域与逐材料总量在接口处舍入一次。
 - 注液计划从逐格原始体积的精确和扣除开放容量，计划内各材料共同抵扣这份精确剩余空间。请求剩余量也按实际片段精确扣减，保证跨格注入量不超过请求。转成 binary64 观察量及 binary32 注入片段时向下舍入；操作回执将实际接受量在 binary32 接口处舍入一次。化学量子不足以表示的片段留在请求剩余量中。
 - `FluidMaterialRegistry` 是运行时材料定义入口；持久化和容器使用稳定 ID，不保存运行时 handle。
 - 当前机械定义包含 stable ID、参考密度、miscibility group、液气表面张力和接触角；液液张力由 registry 的 phase 无序对表给出。

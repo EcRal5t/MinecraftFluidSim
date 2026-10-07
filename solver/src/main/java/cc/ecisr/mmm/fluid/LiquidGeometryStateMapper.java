@@ -174,16 +174,16 @@ final class LiquidGeometryStateMapper {
 		var rootWidth = LiquidExactPolygon.Fraction.of(width);
 		var volumes = new cc.ecisr.mmm.units.SignedDyadic[cells.size()];
 		java.util.Arrays.fill(volumes, cc.ecisr.mmm.units.SignedDyadic.ZERO);
-		var moments = new cc.ecisr.mmm.units.SignedDyadic[3 * cells.size()];
-		java.util.Arrays.fill(moments, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+		var moments = new LiquidExactPolygon.Fraction[3 * cells.size()];
+		java.util.Arrays.fill(moments, LiquidExactPolygon.Fraction.ZERO);
 		double[] positionErrors = new double[cells.size()];
 		for (int p = 0; p < owners.length; p++) {
-			int c = owners[p]; volumes[c] = volumes[c].add(cc.ecisr.mmm.units.SignedDyadic.of(inventory.volume(p)));
+			int c = owners[p]; volumes[c] = volumes[c].add(inventory.exactVolume(p));
 			double positionError = Math.max(Math.ulp((float) inventory.position(p, 0)), Math.max(Math.ulp((float) inventory.position(p, 1)),
 					Math.ulp((float) inventory.position(p, 2))));
 			positionErrors[c] = Math.max(positionErrors[c], positionError);
 			for (int a = 0; a < 3; a++) {
-				moments[3 * c + a] = moments[3 * c + a].add(cc.ecisr.mmm.units.SignedDyadic.of(inventory.position(p, a) * inventory.volume(p)));
+				moments[3 * c + a] = moments[3 * c + a].add(LiquidExactPolygon.Fraction.of(inventory.position(p, a)).multiply(LiquidExactPolygon.Fraction.of(inventory.exactVolume(p))));
 			}
 		}
 		var measures = new LiquidExactPolygon.Measure[cells.size()]; java.util.Arrays.fill(measures, LiquidConvexRegion.EMPTY.measure());
@@ -203,7 +203,7 @@ final class LiquidGeometryStateMapper {
 			if (!measures[c].volume().equals(expectedVolume))
 				throw new IllegalArgumentException("Liquid interface volume differs from exact inventory");
 			for (int a = 0; a < 3; a++) {
-				var firstMoment = LiquidExactPolygon.Fraction.of(moments[3 * c + a]).divide(rootWidth).divide(rootScale);
+				var firstMoment = moments[3 * c + a].divide(rootWidth).divide(rootScale);
 				var error = expectedVolume.multiply(LiquidExactPolygon.Fraction.of(positionErrors[c])).divide(rootWidth);
 				if (firstMoment.subtract(measures[c].firstMoment(a)).absolute().subtract(error).signum() > 0)
 					throw new IllegalArgumentException("Liquid interface centroid differs from inventory quadrature");

@@ -24,6 +24,42 @@ public final class ThermalOwnerStoreValidation {
 		granularColumnTransactionsConserveEnergy();
 		liquidTemperatureTracksMutableInventory();
 		referenceTermsKeepCanonicalRationalRounding();
+		exactBinaryObservationsRoundOnce();
+	}
+
+	private static void exactBinaryObservationsRoundOnce() {
+		var one = SignedDyadic.of(1);
+		var tiny = SignedDyadic.of(1, -2000);
+		require(one.add(tiny).toDouble() == 1 && one.add(tiny).negate().toDouble() == -1,
+				"A wide finite inventory overflowed before exponent scaling");
+		var aboveDoubleTie = one.add(SignedDyadic.of(1, -53)).add(tiny);
+		require(aboveDoubleTie.toDouble() == Math.nextUp(1.0), "Wide binary64 midpoint rounded twice");
+		var aboveFloatTie = one.add(SignedDyadic.of(1, -24)).add(tiny);
+		require(aboveFloatTie.toFloat() == Math.nextUp(1.0F), "Binary32 observation rounded through binary64");
+		var minimumTie = SignedDyadic.of(1, -1075);
+		require(Double.doubleToRawLongBits(minimumTie.toDouble()) == 0
+				&& Double.doubleToRawLongBits(minimumTie.negate().toDouble()) == Long.MIN_VALUE
+				&& minimumTie.add(tiny).toDouble() == Double.MIN_VALUE,
+				"Subnormal binary64 midpoint lost its sign or remainder");
+		require(SignedDyadic.of(1, -150).toFloat() == 0
+				&& SignedDyadic.of(1, -150).add(tiny).toFloat() == Float.MIN_VALUE,
+				"Subnormal binary32 midpoint lost its remainder");
+		require(SignedDyadic.of(Double.MAX_VALUE).add(SignedDyadic.of(1, 970)).toDouble() == Double.POSITIVE_INFINITY
+				&& SignedDyadic.of(Float.MAX_VALUE).add(SignedDyadic.of(1, 103)).toFloat() == Float.POSITIVE_INFINITY,
+				"Overflow midpoint did not round to the adjacent power of two");
+		var random = new java.util.Random(710381L);
+		for (int i = 0; i < 512; i++) {
+			var significand = new java.math.BigInteger(256, random);
+			if (random.nextBoolean()) significand = significand.negate();
+			int exponent = random.nextInt(2300) - 1400;
+			var exact = new SignedDyadic(significand, exponent);
+			var decimal = new java.math.BigDecimal(significand);
+			var scale = new java.math.BigDecimal(java.math.BigInteger.ONE.shiftLeft(Math.abs(exponent)));
+			decimal = exponent < 0 ? decimal.divide(scale) : decimal.multiply(scale);
+			require(Double.doubleToRawLongBits(exact.toDouble()) == Double.doubleToRawLongBits(decimal.doubleValue())
+					&& Float.floatToRawIntBits(exact.toFloat()) == Float.floatToRawIntBits(decimal.floatValue()),
+					"Exact binary observation differs from independent terminating-decimal rounding");
+		}
 	}
 
 	private static void referenceTermsKeepCanonicalRationalRounding() {

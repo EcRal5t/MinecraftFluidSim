@@ -16,7 +16,7 @@ final class LiquidGeometryCarrierProperties {
 		var scale = Fraction.of(domain.unitScale.cubicMetersPerNormalizedVolume());
 		for (int f = 0; f < count; f++) volume[owners[f]] = volume[owners[f]].add(LiquidConvexRegion.of(restored.get(f).geometry()).measure().volume().multiply(rootVolume));
 		for (int p = 0; p < markers.length; p++) {
-			int group = markers[p]; var m = Fraction.of(domain.particles.mass(p)); var v = Fraction.of(domain.particles.volume(p));
+			int group = markers[p]; var m = Fraction.of(domain.particles.exactMass(p)); var v = Fraction.of(domain.particles.exactVolume(p));
 			mass[group] = mass[group].add(m.multiply(scale)); rawVolume[group] = rawVolume[group].add(v);
 			int materialPhase = domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(domain.particles.materialHandle(p));
 			if (phase[group] >= 0 && phase[group] != materialPhase) throw new IllegalArgumentException("Immiscible liquid inventory requires distinct phase geometry");

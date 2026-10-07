@@ -10,6 +10,7 @@ import cc.ecisr.mmm.model.region.RegionSectionState;
 import cc.ecisr.mmm.model.region.RegionStateLayout;
 import cc.ecisr.mmm.fluid.FlipParticleState;
 import cc.ecisr.mmm.fluid.LiquidGeometryState;
+import cc.ecisr.mmm.fluid.LiquidInventoryState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.fluid.FlipThermalParticleState;
@@ -41,7 +42,7 @@ public final class RegionCheckpointAssembler {
 		return capture(source, checkpointGeneration, new CapturedParticles(RegionStateLayout.PURE, List.of(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), new double[0], new int[0],
 				"", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
-				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY, particles.liquidGeometry()), null, null, null);
+				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY, particles.liquidGeometry(), particles.inventory()), null, null, null);
 	}
 
 	/** Captures an explicitly material-bound CPU domain without routing it through the pure-water handoff. */
@@ -51,7 +52,7 @@ public final class RegionCheckpointAssembler {
 		return capture(source, checkpointGeneration, new CapturedParticles(RegionStateLayout.MATERIAL, particles.materials(), particles.copyPositionVolume(),
 				particles.copyParticleVelocities(), particles.copySolidMask(), particles.copyParticleMass(),
 				particles.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
-				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY, particles.liquidGeometry()), null, null, null);
+				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY, particles.liquidGeometry(), particles.inventory()), null, null, null);
 	}
 
 	public static RegionCheckpoint captureChemical(RegionCheckpointSource source, long checkpointGeneration) throws IOException {
@@ -63,7 +64,7 @@ public final class RegionCheckpointAssembler {
 				materials.copyParticleMass(), materials.copyMaterialPaletteIndex(), particles.registryFingerprint(),
 				particles.speciesPalette(), particles.mixtures(), particles.copyMarkerMixtureIndex(),
 				particles.copyIndicator(), particles.copySpeciesTotals(), particles.residualLedgerBits(),
-				particles.externalSource(), particles.escapedSink(), materials.liquidGeometry()), null, null, null);
+				particles.externalSource(), particles.escapedSink(), materials.liquidGeometry(), materials.inventory()), null, null, null);
 	}
 
 	public static RegionCheckpoint captureGranular(RegionCheckpointSource source, long checkpointGeneration) throws IOException {
@@ -80,13 +81,13 @@ public final class RegionCheckpointAssembler {
 					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
 					materials.copyMaterialPaletteIndex(), chemical.registryFingerprint(), chemical.speciesPalette(),
 					chemical.mixtures(), chemical.copyMarkerMixtureIndex(), chemical.copyIndicator(),
-					chemical.copySpeciesTotals(), chemical.residualLedgerBits(), chemical.externalSource(), chemical.escapedSink(), materials.liquidGeometry());
+					chemical.copySpeciesTotals(), chemical.residualLedgerBits(), chemical.externalSource(), chemical.escapedSink(), materials.liquidGeometry(), materials.inventory());
 		} else {
 			FlipMaterialParticleState materials = source.materialParticles();
 			particles = new CapturedParticles(RegionStateLayout.GRANULAR, materials.materials(), materials.copyPositionVolume(),
 					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
 					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
-					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY, materials.liquidGeometry());
+					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY, materials.liquidGeometry(), materials.inventory());
 		}
 		return capture(source, checkpointGeneration, particles, granular, null, null);
 	}
@@ -109,14 +110,14 @@ public final class RegionCheckpointAssembler {
 					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
 					materials.copyMaterialPaletteIndex(), chemical.registryFingerprint(), chemical.speciesPalette(),
 					chemical.mixtures(), chemical.copyMarkerMixtureIndex(), chemical.copyIndicator(),
-					chemical.copySpeciesTotals(), chemical.residualLedgerBits(), chemical.externalSource(), chemical.escapedSink(), materials.liquidGeometry());
+					chemical.copySpeciesTotals(), chemical.residualLedgerBits(), chemical.externalSource(), chemical.escapedSink(), materials.liquidGeometry(), materials.inventory());
 		} else {
 			chemicalFingerprint = "";
 			FlipMaterialParticleState materials = source.materialParticles();
 			particles = new CapturedParticles(RegionStateLayout.THERMAL, materials.materials(), materials.copyPositionVolume(),
 					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMass(),
 					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
-					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY, materials.liquidGeometry());
+					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY, materials.liquidGeometry(), materials.inventory());
 		}
 		GasStateSnapshot gas;
 		try { gas = source.gasState(chemicalFingerprint); }
@@ -136,6 +137,7 @@ public final class RegionCheckpointAssembler {
 	) throws IOException {
 		requireCaptureable(source, checkpointGeneration);
 		RegionIdentity identity = source.identity(checkpointGeneration);
+		if (particles.inventory() == null) throw new IOException("Complete liquid inventory is missing from checkpoint source");
 		RegionGeometry geometry = source.geometry();
 		int cellsPerBlock = Math.round(1.0F / geometry.solverConfig().cellSize());
 		if (cellsPerBlock <= 0 || Math.abs(cellsPerBlock * geometry.solverConfig().cellSize() - 1.0F) > 1.0E-6F
@@ -314,11 +316,13 @@ public final class RegionCheckpointAssembler {
 		List<RegionManifest.SectionDescriptor> descriptors = new ArrayList<>(sectionStates.size());
 		for (RegionSectionState section : sectionStates) {
 			descriptors.add(new RegionManifest.SectionDescriptor(section.sectionX(), section.sectionY(), section.sectionZ(),
-					section.markerCount(), Double.doubleToRawLongBits(sumVolumes(section.positionVolume())),
-					section.layout().hasMaterials() ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L, section.checksum()));
+					section.markerCount(), Double.doubleToRawLongBits(RegionParticleReconstruction.sectionQuantity(section, particles.inventory(), false).toDouble()),
+					section.layout().hasMaterials() ? Double.doubleToRawLongBits(RegionParticleReconstruction.sectionQuantity(section, particles.inventory(), true).toDouble()) : 0L, section.checksum()));
 		}
 		List<RegionManifest.MaterialLedger> materialLedgers = materialLedgers(particles);
 		List<RegionExtension> manifestExtensions = new ArrayList<>();
+		manifestExtensions.add(new RegionExtension(
+				LiquidInventoryStateCodec.MANIFEST_EXTENSION, new LiquidInventoryStateCodec().encode(particles.inventory())));
 		if (particles.liquidGeometry() != null) manifestExtensions.add(new RegionExtension(
 				LiquidGeometryStateCodec.MANIFEST_EXTENSION, new LiquidGeometryStateCodec().encode(particles.liquidGeometry())));
 		if (particles.hasChemicalState()) manifestExtensions.add(new RegionExtension(CHEMICAL_AUDIT_EXTENSION,
@@ -382,8 +386,8 @@ public final class RegionCheckpointAssembler {
 		RegionManifest unsigned = new RegionManifest(particles.layout(), identity.regionId(), identity.dimensionId(), checkpointGeneration,
 				identity.networkGeneration(), geometry.origin(), geometry.sizeX(), geometry.sizeY(), geometry.sizeZ(), geometry.solverConfig(),
 				geometry.reservedMarkerCapacity(), source.runtimeIntent(), geometry.footprint(), particles.particleCount(),
-				Double.doubleToRawLongBits(sumVolumes(positionVolume)), particles.materialPalette(),
-				particles.layout().hasMaterials() ? Double.doubleToRawLongBits(sum(particles.markerMass())) : 0L,
+				Double.doubleToRawLongBits(particles.inventory().totalVolume().toDouble()), particles.materialPalette(),
+				particles.layout().hasMaterials() ? Double.doubleToRawLongBits(particles.inventory().totalMass().toDouble()) : 0L,
 				materialLedgers, descriptors, List.copyOf(manifestExtensions), particles.registryFingerprint(),
 				particles.hasChemicalState() ? cc.ecisr.mmm.chemistry.ChemicalLimits.QUANTA_PER_AU : 0L,
 				particles.speciesPalette(), particles.chemicalMixtures(), particles.chemicalSpeciesTotals(),
@@ -417,16 +421,7 @@ public final class RegionCheckpointAssembler {
 
 	private static List<RegionManifest.MaterialLedger> materialLedgers(CapturedParticles particles) {
 		if (!particles.layout().hasMaterials()) return List.of();
-		return RegionParticleReconstruction.materialLedgers(particles.positionVolume(), particles.markerMass(),
-				particles.materialPaletteIndex(), particles.materialPalette().size());
-	}
-
-	private static double sumVolumes(float[] positionVolume) {
-		return RegionParticleReconstruction.sumVolumes(positionVolume);
-	}
-
-	private static double sum(double[] values) {
-		return SignedDyadic.sum(values).toDouble();
+		return RegionParticleReconstruction.materialLedgers(particles.materialPaletteIndex(), particles.materialPalette().size(), particles.inventory());
 	}
 
 	private static double[] toDoubles(long[] bits) {
@@ -581,7 +576,8 @@ public final class RegionCheckpointAssembler {
 			long chemicalResidualLedgerBits,
 			ChemicalTransferLedger externalSource,
 			ChemicalTransferLedger escapedSink,
-			LiquidGeometryState liquidGeometry
+			LiquidGeometryState liquidGeometry,
+			LiquidInventoryState inventory
 	) {
 		int particleCount() { return positionVolume.length / 4; }
 		boolean hasChemicalState() { return !registryFingerprint.isEmpty(); }

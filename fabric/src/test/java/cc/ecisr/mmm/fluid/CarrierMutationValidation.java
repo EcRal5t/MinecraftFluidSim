@@ -25,6 +25,7 @@ public final class CarrierMutationValidation {
 		chemicalRemapPublishesTheFinalBudget();
 		readOnlyCellQueriesFollowCarrierEdits();
 		volumeObservationRoundsTheExactInventoryOnce();
+		nativeExtensiveQuantitiesSurviveHandoff();
 		insertionNeverRoundsCapacityUp();
 		insertionNeverRoundsTheRequestUp();
 		independentWorkFinishesBeforeRejection();
@@ -38,6 +39,47 @@ public final class CarrierMutationValidation {
 		nativePhysicalPhaseReconstructionCarriesInventories();
 		nativePhysicalReconstructionPreservesGasOnlyState();
 		System.out.println("Carrier mutation validation passed");
+	}
+	private static void nativeExtensiveQuantitiesSurviveHandoff() {
+		var midpoint = SignedDyadic.of(1).add(SignedDyadic.of(1, -24)).add(SignedDyadic.of(1, -2000));
+		var single = new LiquidInventoryState(new SignedDyadic[]{midpoint}, new SignedDyadic[]{SignedDyadic.of(1000)});
+		var observed = new FlipMaterialParticleState(2, 2, 2, 0.5F, 1, single.totalVolume().toDouble(), 1000,
+				java.util.List.of(BuiltinFluidMaterials.WATER), new float[]{0.25F, 0.25F, 0.25F, midpoint.toFloat()}, new float[3],
+				new byte[8], new double[]{1000}, new int[1], null, single);
+		require(observed.particles().totalVolume() == Math.nextUp(1.0F), "handoff rounded its extensive volume through binary64");
+		var v = SignedDyadic.of(0.25).add(SignedDyadic.of(1, -81));
+		var m = SignedDyadic.of(250).add(SignedDyadic.of(1, -101));
+		var columns = new SignedDyadic[]{v, v}; var quantities = new LiquidInventoryState(columns, new SignedDyadic[]{m, m});
+		columns[0] = SignedDyadic.of(1);
+		require(quantities.volume(0).equals(v), "extensive inventory retained mutable source columns");
+		var extent = Fraction.of(v.add(v)).divide(Fraction.of(8));
+		var occupied = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(LiquidGeometryPlane.exact(java.util.List.of(
+				extent.denominator(), java.math.BigInteger.ZERO, java.math.BigInteger.ZERO, extent.numerator())));
+		var geometry = LiquidGeometryStateMapper.capture(java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, occupied)), 1, new int[]{0, 0},
+				new int[]{0}, new double[]{1, 0, 0});
+		var positions = new float[]{(float) extent.divide(Fraction.of(2)).rounded(), 0.5F, 0.5F, v.toFloat(),
+				(float) extent.divide(Fraction.of(2)).rounded(), 0.5F, 0.5F, v.toFloat()};
+		var state = new FlipMaterialParticleState(2, 2, 2, 0.5F, 2, quantities.totalVolume().toDouble(), quantities.totalMass().toDouble(),
+				java.util.List.of(BuiltinFluidMaterials.WATER), positions, new float[]{1, 0, 0, 1, 0, 0}, new byte[8],
+				new double[]{m.toDouble(), m.toDouble()}, new int[2], geometry, quantities);
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), 64); domain.restoreMaterialParticleState(state);
+		domain.ensureParticleCapacity(32);
+		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		var actual = restored.exportMaterialParticleState().inventory();
+		require(actual.totalVolume().equals(quantities.totalVolume()) && actual.totalMass().equals(quantities.totalMass())
+				&& actual.volume(0).equals(v) && actual.mass(1).equals(m), "exact volume or mass remainder was lost across growth and cold handoff");
+		var captured = new LiquidReconstructionInventories(restored);
+		restored.particles.setQuantities(0, v, m.add(SignedDyadic.of(1, -102)));
+		try { captured.requireSource(restored); throw new AssertionError("reconstruction accepted changed exact mass hidden by the same observation"); }
+		catch (IllegalStateException expected) { }
+		try { new FlipMaterialParticleState(2, 2, 2, 0.5F, 2, quantities.totalVolume().toDouble(), quantities.totalMass().toDouble(),
+				java.util.List.of(BuiltinFluidMaterials.WATER), positions, new float[]{1, 0, 0, 1, 0, 0}, new byte[8],
+				new double[]{Math.nextUp(m.toDouble()), m.toDouble()}, new int[2], geometry, quantities);
+			throw new AssertionError("mismatched extensive mass observation was accepted");
+		} catch (IllegalArgumentException expected) { }
+		var store = new LiquidParticleStore(64); store.setQuantities(0, v, m); store.setQuantities(1, v.add(v), m.add(m)); store.setCount(2);
+		store.ensureCapacity(32); store.swapRemove(0);
+		require(store.count() == 1 && store.exactVolume(0).equals(v.add(v)) && store.exactMass(0).equals(m.add(m)), "swap-remove separated exact quantity columns");
 	}
 	private static void nativePhysicalReconstructionPreservesGasOnlyState() throws Exception {
 		var registries = FullCapabilityTestFixture.load();

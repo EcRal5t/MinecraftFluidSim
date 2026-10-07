@@ -18,6 +18,7 @@ import java.util.UUID;
 final class RegionLiquidGeometryValidationScenarios extends RegionPersistenceValidationSupport {
 	public static void main(String[] args) throws Exception { validate(); System.out.println("Resolved liquid geometry persistence passed"); }
 	static void validate() throws Exception {
+		validateExtensiveInventoryPersistence();
 		validateControlCellPersistence();
 		validateGasGeometryPersistence();
 		var region = populatedRegion(new UUID(811, 812));
@@ -43,12 +44,14 @@ final class RegionLiquidGeometryValidationScenarios extends RegionPersistenceVal
 				new LiquidGeometryState(4, List.of(box(3, 4, 0, 0.25), box(15, 16, 3, -0.25)), new int[]{0}, new int[]{0, 0}),
 				new LiquidGeometryState(4, List.of(box(2, 3, 0, 0.5), box(15, 16, 3, -0.25)), new int[]{0}, new int[]{0, 0}),
 				new LiquidGeometryState(4, List.of(box(8, 9, 2, 0.25), box(15, 16, 3, -0.25)), new int[]{0}, new int[]{0, 0}))) {
-			var changed = new RegionState(manifestWithExtensions(captured.manifest(), List.of(
-					new RegionExtension(LiquidGeometryStateCodec.MANIFEST_EXTENSION, binary.encode(invalid)))), captured.sections());
+			byte[] wrongGeometry = binary.encode(invalid);
+			var changed = new RegionState(manifestWithExtensions(captured.manifest(), captured.manifest().extensions().stream().map(e ->
+					LiquidGeometryStateCodec.MANIFEST_EXTENSION.equals(e.type()) ? new RegionExtension(e.type(), wrongGeometry) : e).toList()), captured.sections());
 			expectIOException(changed::validate, "geometry centroid, momentum or collision mismatch was accepted");
 		}
-		var duplicates = new RegionState(manifestWithExtensions(captured.manifest(), List.of(
-				captured.manifest().extensions().getFirst(), captured.manifest().extensions().getFirst())), captured.sections());
+		var duplicateGeometry = new java.util.ArrayList<>(captured.manifest().extensions());
+		duplicateGeometry.add(new RegionExtension(LiquidGeometryStateCodec.MANIFEST_EXTENSION, encoded));
+		var duplicates = new RegionState(manifestWithExtensions(captured.manifest(), duplicateGeometry), captured.sections());
 		expectIOException(duplicates::validate, "duplicate liquid geometry was accepted");
 		var files = new RegionGenerationStore(Files.createTempDirectory("mmm-resolved-liquid-"));
 		files.publish(captured);
@@ -64,6 +67,50 @@ final class RegionLiquidGeometryValidationScenarios extends RegionPersistenceVal
 		var materials = RegionCheckpointFixtures.captureMaterial(region, 2);
 		materials.validate();
 		assertMaterialStateEquals(material, restorer(materials).reconstructMaterial());
+	}
+	private static void validateExtensiveInventoryPersistence() throws Exception {
+		var region = populatedRegion(new UUID(817, 818));
+		var tiny = cc.ecisr.mmm.units.SignedDyadic.of(1, -2000);
+		var v = cc.ecisr.mmm.units.SignedDyadic.of(0.5).add(tiny);
+		var m = cc.ecisr.mmm.units.SignedDyadic.of(500).add(tiny);
+		var inventory = new cc.ecisr.mmm.fluid.LiquidInventoryState(new cc.ecisr.mmm.units.SignedDyadic[]{v, v},
+				new cc.ecisr.mmm.units.SignedDyadic[]{m, m});
+		var positions = new float[]{0.25F, 0.625F, 1.25F, 0.5F, 1.25F, 0.625F, 1.25F, 0.5F};
+		var state = new FlipParticleState(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG.cellSize(), 2, inventory.totalVolume().toFloat(),
+				positions, new float[6], region.domain().exportParticleState().copySolidMask(), null, inventory);
+		region.domain().restoreParticleState(state);
+		var checkpoint = RegionCheckpointFixtures.capture(region, 1); checkpoint.validate();
+		var files = new RegionGenerationStore(Files.createTempDirectory("mmm-extensive-liquid-")); files.publish(checkpoint);
+		var pure = restorer(files.read(region.id())).reconstruct(); assertParticleStateEquals(state, pure);
+		region.domain().restoreParticleState(pure);
+		require(region.domain().exportParticleState().inventory().totalMass().equals(inventory.totalMass()), "pure restoration replaced extensive mass by reference density");
+		var material = new FlipMaterialParticleState(state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(), 2,
+				inventory.totalVolume().toDouble(), inventory.totalMass().toDouble(), List.of(BuiltinFluidMaterials.WATER), positions,
+				new float[6], state.copySolidMask(), new double[]{m.toDouble(), m.toDouble()}, new int[2], null, inventory);
+		region.domain().restoreMaterialParticleState(material);
+		var materials = RegionCheckpointFixtures.captureMaterial(region, 2); files.publish(materials);
+		assertMaterialStateEquals(material, restorer(files.read(region.id())).reconstructMaterial());
+		var missing = materials.manifest().extensions().stream().filter(e -> !LiquidInventoryStateCodec.MANIFEST_EXTENSION.equals(e.type())).toList();
+		expectIOException(new RegionState(manifestWithExtensions(materials.manifest(), missing), materials.sections())::validate,
+				"checkpoint accepted missing extensive quantities whose tails are invisible in its observations");
+		var codec = new LiquidInventoryStateCodec(); byte[] encoded = codec.encode(inventory);
+		require(Arrays.equals(encoded, codec.encode(codec.decode(encoded, 2))), "extensive inventory codec changed exact quantities");
+		for (byte[] malformed : List.of(Arrays.copyOf(encoded, encoded.length - 1), Arrays.copyOf(encoded, encoded.length + 1)))
+			expectIOException(() -> codec.decode(malformed, 2), "truncated or trailing extensive inventory was accepted");
+		expectIOException(() -> codec.decode(encoded, 1), "extensive inventory with the wrong carrier count was accepted");
+		byte[] unbounded = encoded.clone(); Arrays.fill(unbounded, 12, 16, (byte) 0x7f);
+		expectIOException(() -> codec.decode(unbounded, 2), "unbounded extensive inventory allocation was accepted");
+		var extensions = new java.util.ArrayList<>(materials.manifest().extensions());
+		extensions.add(new RegionExtension(LiquidInventoryStateCodec.MANIFEST_EXTENSION, encoded));
+		expectIOException(new RegionState(manifestWithExtensions(materials.manifest(), extensions), materials.sections())::validate,
+				"duplicate extensive inventory was accepted");
+		var wrong = new cc.ecisr.mmm.fluid.LiquidInventoryState(new cc.ecisr.mmm.units.SignedDyadic[]{v, v},
+				new cc.ecisr.mmm.units.SignedDyadic[]{m.add(cc.ecisr.mmm.units.SignedDyadic.of(1)), m});
+		byte[] wrongPayload = codec.encode(wrong);
+		var changed = materials.manifest().extensions().stream().map(e -> LiquidInventoryStateCodec.MANIFEST_EXTENSION.equals(e.type())
+					? new RegionExtension(e.type(), wrongPayload) : e).toList();
+		expectIOException(new RegionState(manifestWithExtensions(materials.manifest(), changed), materials.sections())::validate,
+				"extensive inventory disagreed with material observations without rejection");
 	}
 	private static void validateControlCellPersistence() throws Exception {
 		var region = populatedRegion(new UUID(815, 816));

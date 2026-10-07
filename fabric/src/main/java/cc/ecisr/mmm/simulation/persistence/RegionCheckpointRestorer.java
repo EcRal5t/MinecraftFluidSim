@@ -61,9 +61,9 @@ public final class RegionCheckpointRestorer {
 			throw new IOException("Material region state cannot use the pure-water reconstruction path");
 		}
 		RegionParticleReconstruction.State particles = reconstructParticles();
-		double volume = sumVolumes(particles.positionVolume());
+		float volume = particles.inventory().totalVolume().toFloat();
 		return new FlipParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
-				manifest.totalMarkerCount(), (float) volume, particles.positionVolume(), particles.velocities(), particles.solidMask(), liquidGeometry);
+				manifest.totalMarkerCount(), volume, particles.positionVolume(), particles.velocities(), particles.solidMask(), liquidGeometry, particles.inventory());
 	}
 
 	public FlipMaterialParticleState reconstructMaterial() throws IOException {
@@ -76,7 +76,7 @@ public final class RegionCheckpointRestorer {
 		return new FlipMaterialParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
 				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMass(), manifest.materialPalette(),
 				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMass(),
-				particles.materialPaletteIndex(), liquidGeometry);
+				particles.materialPaletteIndex(), liquidGeometry, particles.inventory());
 	}
 
 	public GasStateSnapshot reconstructGas(GasRegistry registry, ChemicalRegistry chemicalRegistry) throws IOException {
@@ -221,7 +221,7 @@ public final class RegionCheckpointRestorer {
 				manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
 				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMass(), manifest.materialPalette(),
 				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMass(),
-				particles.materialPaletteIndex(), liquidGeometry);
+				particles.materialPaletteIndex(), liquidGeometry, particles.inventory());
 		ChemicalAuditLedgerCodec.AuditLedgers audit = decodeChemicalAuditExtension();
 		return new FlipChemicalParticleState(materials, registry, manifest.chemicalMixtures(),
 				particles.chemicalMixtureIndex(), particles.indicator(), manifest.chemicalSpeciesTotals(),
@@ -437,10 +437,6 @@ public final class RegionCheckpointRestorer {
 		for (GasComponentAmount.SpeciesAmount amount : species) if (!registry.hasSpecies(amount.speciesId())) {
 			throw new IOException("Unknown gas species " + amount.speciesId());
 		}
-	}
-
-	private static double sumVolumes(float[] positionVolume) {
-		return RegionParticleReconstruction.sumVolumes(positionVolume);
 	}
 
 	private static double[] toDoubles(long[] bits) {

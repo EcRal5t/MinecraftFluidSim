@@ -33,8 +33,7 @@ final class LiquidInventoryRepartitionPlan {
 	private final FluidMaterialRegistry materials;
 	private final ChemicalParcelStore chemistry;
 	private final ThermalDomainState thermal;
-	private final double[] originalMass;
-	private final float[] originalVolume;
+	private final SignedDyadic[] originalMass, originalVolume;
 	private final int[] originalMaterial;
 
 	LiquidInventoryRepartitionPlan(FluidDomain domain) {
@@ -48,8 +47,8 @@ final class LiquidInventoryRepartitionPlan {
 		intent = CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), domain.particles.count());
 		chemicalRevision = domain.chemicalParcels == null ? -1 : domain.chemicalParcels.mutationRevision();
 		liquidEnergyRevision = domain.thermalState == null ? -1 : domain.thermalState.thermalRevision().liquid();
-		originalMass = new double[domain.particles.count()]; originalVolume = new float[originalMass.length]; originalMaterial = new int[originalMass.length];
-		for (int p = 0; p < originalMass.length; p++) { originalMass[p] = domain.particles.mass(p); originalVolume[p] = domain.particles.volume(p); originalMaterial[p] = domain.particles.materialHandle(p); }
+		originalMass = new SignedDyadic[domain.particles.count()]; originalVolume = new SignedDyadic[originalMass.length]; originalMaterial = new int[originalMass.length];
+		for (int p = 0; p < originalMass.length; p++) { originalMass[p] = domain.particles.exactMass(p); originalVolume[p] = domain.particles.exactVolume(p); originalMaterial[p] = domain.particles.materialHandle(p); }
 		int[] owners = input.copyFragmentOwners(), controls = target.copyControlCells(), oldMarkers = input.copyMarkerCells();
 		momentumChange = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
 		momentumBounds = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
@@ -122,7 +121,7 @@ final class LiquidInventoryRepartitionPlan {
 				out.add(new Marker(c, p, originalMaterial[p], volumes.get(q), m, mixture, domain.chemicalParcels != null && domain.chemicalParcels.indicator(p),
 						position(center[0].multiply(width), domain.sizeX, domain.config.cellSize()), position(center[1].multiply(width), domain.sizeY, domain.config.cellSize()),
 						position(center[2].multiply(width), domain.sizeZ, domain.config.cellSize()), (float) u[0], (float) u[1], (float) u[2], 0));
-				massBounds.merge(c, Fraction.of(Math.ulp(originalMass[p])), Fraction::add);
+				massBounds.merge(c, Fraction.of(Math.ulp(originalMass[p].toDouble())), Fraction::add);
 			}
 			for (int r = 0; r < shares.size(); r++) if (shares.get(r).containsKey(p))
 				massBounds.merge(destinationsByRow.get(r), Fraction.of(originalMass[p]).multiply(quantum.get(r)).divide(columns.get(p)), Fraction::add);
@@ -166,7 +165,7 @@ final class LiquidInventoryRepartitionPlan {
 				|| chemicalRevision != (domain.chemicalParcels == null ? -1 : domain.chemicalParcels.mutationRevision())
 				|| liquidEnergyRevision != (domain.thermalState == null ? -1 : domain.thermalState.thermalRevision().liquid()))
 			throw new IllegalStateException("Local liquid inventory refers to an obsolete input");
-		for (int p = 0; p < originalMass.length; p++) if (domain.particles.mass(p) != originalMass[p] || domain.particles.volume(p) != originalVolume[p] || domain.particles.materialHandle(p) != originalMaterial[p])
+		for (int p = 0; p < originalMass.length; p++) if (!domain.particles.exactMass(p).equals(originalMass[p]) || !domain.particles.exactVolume(p).equals(originalVolume[p]) || domain.particles.materialHandle(p) != originalMaterial[p])
 			throw new IllegalStateException("Local liquid inventory stock changed after planning");
 		LiquidGeometryStateMapper.requireCompatible(input, domain);
 	}
@@ -174,9 +173,9 @@ final class LiquidInventoryRepartitionPlan {
 		if (value.denominator().bitCount() != 1) throw new LiquidCoordinateResolutionRequired("Local inventory requires dyadic reconstructed control volumes");
 		return new SignedDyadic(value.numerator(), -value.denominator().getLowestSetBit());
 	}
-	private static SignedDyadic[] allocateMass(double total, SignedDyadic[] volumes) {
-		int quantum = SignedDyadic.of(Math.ulp(total)).exponent();
-		var shares = ExactVolumeAllocation.allocate(SignedDyadic.of(total), volumes, quantum);
+	private static SignedDyadic[] allocateMass(SignedDyadic total, SignedDyadic[] volumes) {
+		int quantum = Math.min(total.exponent(), SignedDyadic.of(Math.ulp(total.toDouble())).exponent());
+		var shares = ExactVolumeAllocation.allocate(total, volumes, quantum);
 		boolean positive = true; for (var share : shares) positive &= share.compareTo(SignedDyadic.ZERO) > 0;
 		if (positive) return shares;
 		var volume = SignedDyadic.ZERO; for (var part : volumes) volume = volume.add(part);
@@ -185,7 +184,7 @@ final class LiquidInventoryRepartitionPlan {
 			if (!(ideal > 0)) throw new IllegalStateException("Positive local liquid mass exceeds binary64 inventory support");
 			quantum = Math.min(quantum, SignedDyadic.of(Math.ulp(ideal)).exponent());
 		}
-		return ExactVolumeAllocation.allocate(SignedDyadic.of(total), volumes, quantum);
+		return ExactVolumeAllocation.allocate(total, volumes, quantum);
 	}
 	private static float position(Fraction value, int extent, float cellSize) { return Math.min((float) value.rounded(), Math.nextDown(extent * cellSize)); }
 }

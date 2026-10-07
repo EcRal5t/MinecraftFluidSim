@@ -540,8 +540,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		region.domain().restoreMaterialParticleState(expected);
 		RegionState state = RegionCheckpointFixtures.captureMaterial(region, 1L);
 		List<Long> sectionChecksums = state.sections().stream().map(RegionSectionState::checksum).toList();
-		// Manifest config includes the explicit viscous wall condition; marker sections are unchanged.
-		require(state.manifest().checksum() == 2_824_632_206L
+		// The manifest binds the extensive inventory in addition to the explicit viscous wall condition.
+		require(state.manifest().checksum() == 1_117_585_068L
 				&& sectionChecksums.equals(List.of(
 				1_197_279_484L, 3_443_687_331L, 3_791_385_648L, 3_117_281_787L)),
 				"material region canonical bytes changed: manifest=" + state.manifest().checksum()
@@ -593,7 +593,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		RegionState pureState = RegionCheckpointFixtures.capture(populatedRegion(new UUID(17L, 18L)), 1L);
 		RegionManifest pureManifest = pureState.manifest();
 		List<Long> pureSectionChecksums = pureState.sections().stream().map(RegionSectionState::checksum).toList();
-		require(pureManifest.checksum() == 1_511_261_536L
+		require(pureManifest.checksum() == 333_560_353L
 				&& pureSectionChecksums.equals(List.of(
 				857_091_072L, 3_709_730_368L, 2_608_476_652L, 3_235_751_298L)),
 				"pure region canonical bytes changed: manifest=" + pureManifest.checksum()

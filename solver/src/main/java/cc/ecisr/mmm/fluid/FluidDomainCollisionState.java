@@ -81,6 +81,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 			particles.setVelocityY(particle, particleVelocities[velocityBase + 1]);
 			particles.setVelocityZ(particle, particleVelocities[velocityBase + 2]);
 			setDefaultMaterialState(particle);
+			if (state.inventory() != null) particles.setQuantities(particle, state.inventory().volume(particle), state.inventory().mass(particle));
 		}
 		coordinator.adoptWholesaleCount(
 				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()), restoredCount);
@@ -117,7 +118,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		double[] restoredMass = state.particleMass();
 		int[] restoredMaterial = state.materialPaletteIndex();
 		for (int particle = 0; particle < particles.count(); particle++) {
-			particles.setMass(particle, restoredMass[particle]);
+			if (state.inventory() == null) particles.setMass(particle, restoredMass[particle]);
 			particles.setMaterialHandle(particle, restoredMaterial[particle]);
 			particles.setPhaseLabel(particle, registry.phaseHandle(restoredMaterial[particle]));
 		}

@@ -27,7 +27,7 @@ final class LiquidGeometryMechanicalEnergy {
 			volume = new Fraction[count]; mass = new Fraction[count];
 			Arrays.fill(volume, Fraction.ZERO); Arrays.fill(mass, Fraction.ZERO);
 			var scale = Fraction.of(domain.unitScale.cubicMetersPerNormalizedVolume());
-			for (int p = 0; p < markers.length; p++) mass[markers[p]] = mass[markers[p]].add(Fraction.of(domain.particles.mass(p)).multiply(scale));
+			for (int p = 0; p < markers.length; p++) mass[markers[p]] = mass[markers[p]].add(Fraction.of(domain.particles.exactMass(p)).multiply(scale));
 			fields = LiquidGeometryMomentumAudit.volumesByVelocity(state, cells);
 			for (var field : fields) volume[field.owner()] = volume[field.owner()].add(field.volume());
 		}

@@ -1,8 +1,8 @@
 package cc.ecisr.mmm.fluid;
 
 /**
- * Immutable in-memory marker state for CPU handoff. It is neither a save format nor a rendering payload.
- * Marker volume in {@code positionVolume.w} remains the physical liquid-volume truth.
+ * Immutable in-memory marker state for CPU handoff. Extensive inventory retains exact quantities;
+ * {@code positionVolume.w} supplies their binary32 observations.
  */
 public final class FlipParticleState {
 	private static final float VOLUME_TOLERANCE = 1.0E-4F;
@@ -19,6 +19,7 @@ public final class FlipParticleState {
 	private final float[] particleVelocities;
 	private final byte[] collisionMicroMasks;
 	private final LiquidGeometryState liquidGeometry;
+	private final LiquidInventoryState inventory;
 
 	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
 	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
@@ -28,6 +29,15 @@ public final class FlipParticleState {
 	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
 	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
 	                         byte[] collisionMicroMasks, LiquidGeometryState liquidGeometry) {
+		this(sizeX, sizeY, sizeZ, cellSize, particleCount, volumeLedger, positionVolume, particleVelocities, collisionMicroMasks, liquidGeometry, null);
+	}
+	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
+	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
+	                         byte[] collisionMicroMasks, LiquidGeometryState liquidGeometry, LiquidInventoryState inventory) {
+		if (inventory != null) {
+			if (inventory.count() != particleCount) throw new IllegalArgumentException("Liquid inventory count differs from carrier state");
+			inventory.requireObservations(positionVolume, null);
+		}
 		if (liquidGeometry != null && liquidGeometry.markerCount() != particleCount) throw new IllegalArgumentException("Liquid geometry inventory count differs from carrier state");
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(cellSize > 0.0F)) {
 			throw new IllegalArgumentException("Invalid particle-state grid");
@@ -60,7 +70,7 @@ public final class FlipParticleState {
 			float x = positionVolume[positionBase], y = positionVolume[positionBase + 1];
 			float z = positionVolume[positionBase + 2], amount = positionVolume[positionBase + 3];
 			if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z)
-					|| !Float.isFinite(amount) || !(amount > 0.0F)) {
+					|| !Float.isFinite(amount) || (inventory == null ? !(amount > 0.0F) : amount < 0)) {
 				throw new IllegalArgumentException("Particle state contains non-finite or empty marker data");
 			}
 			if (!(x >= 0.0F && x < maximumX && y >= 0.0F && y < maximumY && z >= 0.0F && z < maximumZ)) {
@@ -79,12 +89,14 @@ public final class FlipParticleState {
 			for (int axis = 0; axis < 3; axis++) if (!Float.isFinite(particleVelocities[velocityBase + axis])) {
 				throw new IllegalArgumentException("Particle state contains non-finite marker velocity");
 			}
-			volume += amount;
-			weightedX += x / cellSize * amount;
+			double quantity = inventory == null ? amount : inventory.volume(particle).toDouble();
+			volume += quantity;
+			weightedX += x / cellSize * quantity;
 		}
-		float summedVolume = (float) volume;
+		float summedVolume = inventory == null ? (float) volume : inventory.totalVolume().toFloat();
 		float allowedError = Math.max(VOLUME_TOLERANCE, volumeLedger * 1.0E-6F);
-		if (Math.abs(summedVolume - volumeLedger) > allowedError) {
+		if (inventory == null ? Math.abs(summedVolume - volumeLedger) > allowedError
+				: Float.floatToRawIntBits(summedVolume) != Float.floatToRawIntBits(volumeLedger)) {
 			throw new IllegalArgumentException("Marker volume does not match the supplied particle ledger");
 		}
 
@@ -94,12 +106,13 @@ public final class FlipParticleState {
 		this.cellSize = cellSize;
 		this.particleCount = particleCount;
 		this.totalVolume = summedVolume;
-		this.centerOfMassX = summedVolume == 0.0F ? Float.NaN : (float) (weightedX / volume);
+		this.centerOfMassX = volume == 0 ? Float.NaN : (float) (weightedX / volume);
 		this.solidCellCount = solids;
 		this.positionVolume = positionVolume.clone();
 		this.particleVelocities = particleVelocities.clone();
 		this.collisionMicroMasks = collisionMicroMasks.clone();
 		this.liquidGeometry = liquidGeometry;
+		this.inventory = inventory;
 	}
 
 	public int sizeX() { return sizeX; }
@@ -112,9 +125,11 @@ public final class FlipParticleState {
 	public int solidCellCount() { return solidCellCount; }
 	/** Resolved liquid geometry; its occupied volume is checked against collision masks by the solver. */
 	public LiquidGeometryState liquidGeometry() { return liquidGeometry; }
+	public LiquidInventoryState inventory() { return inventory; }
 	public long cpuBytes() {
 		return (long) positionVolume.length * Float.BYTES
-				+ (long) particleVelocities.length * Float.BYTES + collisionMicroMasks.length + (liquidGeometry == null ? 0 : liquidGeometry.cpuBytes());
+				+ (long) particleVelocities.length * Float.BYTES + collisionMicroMasks.length + (liquidGeometry == null ? 0 : liquidGeometry.cpuBytes())
+				+ (inventory == null ? 0 : inventory.cpuBytes());
 	}
 
 	public void requireCompatible(int expectedX, int expectedY, int expectedZ, float expectedCellSize) {

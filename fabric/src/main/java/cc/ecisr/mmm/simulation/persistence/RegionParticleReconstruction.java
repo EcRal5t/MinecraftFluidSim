@@ -3,13 +3,14 @@ package cc.ecisr.mmm.simulation.persistence;
 import cc.ecisr.mmm.model.region.RegionManifest;
 import cc.ecisr.mmm.model.region.RegionSectionState;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.fluid.LiquidInventoryState;
 import java.io.IOException;
 import java.util.List;
 
 /** Restores original region ordinals for cross-column validation and immutable handoff. */
 final class RegionParticleReconstruction {
 	private RegionParticleReconstruction() { }
-	static State reconstruct(RegionManifest manifest, List<RegionSectionState> sections) throws IOException {
+	static State reconstruct(RegionManifest manifest, List<RegionSectionState> sections, LiquidInventoryState inventory) throws IOException {
 		int count = manifest.totalMarkerCount();
 		float[] positions = new float[Math.multiplyExact(count, 4)];
 		float[] velocities = new float[Math.multiplyExact(count, 3)];
@@ -57,24 +58,30 @@ final class RegionParticleReconstruction {
 		}
 		for (boolean seen : seenMarkers) if (!seen) throw new IOException("Missing marker ordinal");
 		for (boolean seen : seenSolids) if (!seen) throw new IOException("Incomplete solid-mask coverage");
-		double volume = sumVolumes(positions);
+		try { inventory.requireObservations(positions, manifest.layout().hasMaterials() ? markerMass : null); }
+		catch (IllegalArgumentException invalid) { throw new IOException("Liquid inventory observations disagree with checkpoint", invalid); }
+		double volume = inventory.totalVolume().toDouble();
 		if (Double.doubleToRawLongBits(volume) != manifest.totalVolumeBits()) throw new IOException("Marker volume ledger mismatch");
 		return new State(positions, velocities, solids, markerMass, materialPaletteIndex,
-				chemicalMixtureIndex, indicator);
+				chemicalMixtureIndex, indicator, inventory);
 	}
 
-	static double sumVolumes(float[] values) {
+	static SignedDyadic sectionQuantity(RegionSectionState section, LiquidInventoryState inventory, boolean mass) {
 		var sum = SignedDyadic.ZERO;
-		for (int p = 3; p < values.length; p += 4) sum = sum.add(SignedDyadic.of(values[p]));
-		return sum.toDouble();
+		for (int p : section.markerOrdinals()) {
+			if (p < 0 || p >= inventory.count()) throw new IllegalArgumentException("Liquid section inventory ordinal is invalid");
+			sum = sum.add(mass ? inventory.mass(p) : inventory.volume(p));
+		}
+		return sum;
 	}
-	static List<RegionManifest.MaterialLedger> materialLedgers(float[] positions, double[] mass, int[] materials, int paletteSize) {
+
+	static List<RegionManifest.MaterialLedger> materialLedgers(int[] materials, int paletteSize, LiquidInventoryState inventory) {
 		int[] count = new int[paletteSize]; var volumes = new SignedDyadic[paletteSize]; var masses = new SignedDyadic[paletteSize];
 		java.util.Arrays.fill(volumes, SignedDyadic.ZERO); java.util.Arrays.fill(masses, SignedDyadic.ZERO);
 		for (int p = 0; p < materials.length; p++) {
 			int material = materials[p]; if (material < 0 || material >= paletteSize) throw new IllegalArgumentException("Material palette index out of range");
-			count[material]++; volumes[material] = volumes[material].add(SignedDyadic.of(positions[4 * p + 3]));
-			masses[material] = masses[material].add(SignedDyadic.of(mass[p]));
+			count[material]++; volumes[material] = volumes[material].add(inventory.volume(p));
+			masses[material] = masses[material].add(inventory.mass(p));
 		}
 		var ledgers = new java.util.ArrayList<RegionManifest.MaterialLedger>();
 		for (int m = 0; m < paletteSize; m++) ledgers.add(new RegionManifest.MaterialLedger(count[m],
@@ -88,6 +95,7 @@ final class RegionParticleReconstruction {
 			double[] markerMass,
 			int[] materialPaletteIndex,
 			int[] chemicalMixtureIndex,
-			byte[] indicator
+			byte[] indicator,
+			LiquidInventoryState inventory
 	) { }
 }

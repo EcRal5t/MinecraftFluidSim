@@ -33,7 +33,7 @@ final class LiquidGeometryMomentumAudit {
 			}
 		}
 		for (int p = 0; p < markers.length; p++) {
-			int owner = markers[p]; var exactMass = Fraction.of(inventory.mass(p)); mass[owner] = mass[owner].add(exactMass);
+			int owner = markers[p]; var exactMass = Fraction.of(inventory.exactMass(p)); mass[owner] = mass[owner].add(exactMass);
 			for (int a = 0; a < 3; a++) {
 				float u = (float) inventory.velocity(p, a); observed[3 * owner + a] = observed[3 * owner + a].add(exactMass.multiply(Fraction.of(u)));
 				var error = Fraction.of(Math.ulp(u)).add(Fraction.of(velocityErrors[3 * owner + a]).multiply(Fraction.of(8)));

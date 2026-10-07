@@ -79,6 +79,7 @@ abstract class RegionPersistenceValidationSupport {
 	}
 
 	static void assertParticleStateEquals(FlipParticleState expected, FlipParticleState actual) {
+		assertInventoryEquals(expected.inventory(), actual.inventory());
 		assertLiquidGeometryEquals(expected.liquidGeometry(), actual.liquidGeometry());
 		require(expected.particleCount() == actual.particleCount(), "marker count changed across persistence");
 		require(Arrays.equals(floatBits(expected.copyPositionVolume()), floatBits(actual.copyPositionVolume())),
@@ -112,6 +113,7 @@ abstract class RegionPersistenceValidationSupport {
 	}
 
 	static void assertMaterialStateEquals(FlipMaterialParticleState expected, FlipMaterialParticleState actual) {
+		assertInventoryEquals(expected.inventory(), actual.inventory());
 		assertLiquidGeometryEquals(expected.liquidGeometry(), actual.liquidGeometry());
 		require(expected.materials().equals(actual.materials()), "material palette changed across persistence");
 		require(Double.doubleToRawLongBits(expected.totalVolume()) == Double.doubleToRawLongBits(actual.totalVolume())
@@ -149,6 +151,12 @@ abstract class RegionPersistenceValidationSupport {
 				&& expected.cells().size() == actual.cells().size(), "liquid geometry inventory ownership changed across persistence");
 		for (int c = 0; c < expected.cells().size(); c++) require(LiquidGeometryState.compare(expected.cells().get(c), actual.cells().get(c)) == 0,
 				"liquid interface or resolved velocity changed across persistence");
+	}
+	private static void assertInventoryEquals(cc.ecisr.mmm.fluid.LiquidInventoryState expected, cc.ecisr.mmm.fluid.LiquidInventoryState actual) {
+		if (expected == null) return;
+		require(actual != null && expected.count() == actual.count(), "extensive liquid inventory disappeared across persistence");
+		for (int p = 0; p < expected.count(); p++) require(expected.volume(p).equals(actual.volume(p)) && expected.mass(p).equals(actual.mass(p)),
+				"extensive volume or mass remainder changed across persistence");
 	}
 
 	static ThermalRegistry thermalRegistry(FluidMaterialRegistry liquids) {

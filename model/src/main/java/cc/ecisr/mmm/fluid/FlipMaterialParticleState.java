@@ -29,6 +29,15 @@ public final class FlipMaterialParticleState {
 			float[] positionVolume, float[] particleVelocities, byte[] solidMask,
 			double[] particleMass, int[] materialPaletteIndex, LiquidGeometryState liquidGeometry
 	) {
+		this(sizeX, sizeY, sizeZ, cellSize, particleCount, volumeLedger, massLedger, materials, positionVolume, particleVelocities,
+				solidMask, particleMass, materialPaletteIndex, liquidGeometry, null);
+	}
+	public FlipMaterialParticleState(
+			int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
+			double volumeLedger, double massLedger, List<FluidMaterial> materials,
+			float[] positionVolume, float[] particleVelocities, byte[] solidMask,
+			double[] particleMass, int[] materialPaletteIndex, LiquidGeometryState liquidGeometry, LiquidInventoryState inventory
+	) {
 		if (!(Double.isFinite(volumeLedger) && volumeLedger >= 0.0)
 				|| !(Double.isFinite(massLedger) && massLedger >= 0.0)) {
 			throw new IllegalArgumentException("Material particle ledgers must be finite and non-negative");
@@ -50,8 +59,12 @@ public final class FlipMaterialParticleState {
 			registry.material(materialPaletteIndex[particle]);
 			volumes[particle] = amount;
 		}
-		double mass = SignedDyadic.sum(particleMass).toDouble();
-		double volume = SignedDyadic.sum(volumes, particleCount).toDouble();
+		if (inventory != null) {
+			if (inventory.count() != particleCount) throw new IllegalArgumentException("Material inventory count differs from carrier state");
+			inventory.requireObservations(positionVolume, particleMass);
+		}
+		double mass = inventory == null ? SignedDyadic.sum(particleMass).toDouble() : inventory.totalMass().toDouble();
+		double volume = inventory == null ? SignedDyadic.sum(volumes, particleCount).toDouble() : inventory.totalVolume().toDouble();
 		if (Double.doubleToRawLongBits(volume) != Double.doubleToRawLongBits(volumeLedger)) {
 			throw new IllegalArgumentException("Material marker volume ledger mismatch");
 		}
@@ -59,8 +72,8 @@ public final class FlipMaterialParticleState {
 			throw new IllegalArgumentException("Material marker mass ledger mismatch");
 		}
 		particles = new FlipParticleState(
-				sizeX, sizeY, sizeZ, cellSize, particleCount, (float) volume,
-				positionVolume, particleVelocities, solidMask, liquidGeometry
+				sizeX, sizeY, sizeZ, cellSize, particleCount, inventory == null ? (float) volume : inventory.totalVolume().toFloat(),
+				positionVolume, particleVelocities, solidMask, liquidGeometry, inventory
 		);
 		totalVolume = volume;
 		totalMass = mass;
@@ -77,6 +90,7 @@ public final class FlipMaterialParticleState {
 	public double totalMass() { return totalMass; }
 	public List<FluidMaterial> materials() { return materials; }
 	public LiquidGeometryState liquidGeometry() { return particles.liquidGeometry(); }
+	public LiquidInventoryState inventory() { return particles.inventory(); }
 	public float[] copyPositionVolume() { return particles.copyPositionVolume(); }
 	public float[] copyParticleVelocities() { return particles.copyParticleVelocities(); }
 	public byte[] copySolidMask() { return particles.copySolidMask(); }
