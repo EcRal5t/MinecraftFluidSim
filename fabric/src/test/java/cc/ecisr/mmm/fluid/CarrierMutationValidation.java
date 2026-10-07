@@ -491,8 +491,10 @@ public final class CarrierMutationValidation {
 		});
 	}
 	private static void nativeExtractionMovesGeometryAndSideColumns() throws Exception {
-		var domain = fullCapabilityDomain(FullCapabilityTestFixture.load());
+		var domain = emptyMaterialDomain(4096);
 		domain.liquidGeometryState = new LiquidGeometryState(2, java.util.List.of(), new int[0]);
+		FullCapabilityTestFixture.bindFull(domain, FullCapabilityTestFixture.load(),
+				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		int oil = domain.materialRegistry.handle("mmm:oil");
 		for (int x : new int[]{1, 2}) require(domain.tryInsertExactMixture(x, 1, 1, java.util.List.of(
 				new FluidDomain.MaterialPortion(0, 0.03125, 31.25),
@@ -559,8 +561,10 @@ public final class CarrierMutationValidation {
 	}
 
 	private static void nativeSourceBatchMovesGeometryAndSideColumns() throws Exception {
-		var domain = fullCapabilityDomain(FullCapabilityTestFixture.load());
+		var domain = emptyMaterialDomain(4096);
 		domain.liquidGeometryState = new LiquidGeometryState(2, java.util.List.of(), new int[0]);
+		FullCapabilityTestFixture.bindFull(domain, FullCapabilityTestFixture.load(),
+				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		int oil = domain.materialRegistry.handle("mmm:oil");
 		var source = java.util.List.of(new FluidDomain.MaterialPortion(0, 0.03125, 31.25),
 				new FluidDomain.MaterialPortion(oil, 0.03125, 0.03125 * domain.materialRegistry.material(oil).referenceDensity()));
@@ -569,13 +573,20 @@ public final class CarrierMutationValidation {
 		var ledger = domain.chemicalLedgerForMarkerRange(0, domain.particles.count());
 		long species = domain.totalChemicalSpeciesQuanta();
 		var beforeEnergy = domain.exactInternalEnergy(); var beforeRoundoff = domain.thermalAudit().roundoffResidual();
+		var beforeWork = domain.thermalAudit().mechanicalWork(); var gasBefore = domain.exportGasState("");
 		double sourceEnergy = domain.thermalState.exactLiquidEnergy(domain.particles.count()).toDouble();
 		require(domain.tryInsertExactChemical(2, 1, 1, ledger, 0, true, sourceEnergy).transferred(), "native chemical source was refused");
 		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
 		require(domain.totalChemicalSpeciesQuanta() == 2 * species && domain.totalVolumeExact() == 0.125,
 				"native source changed its exact species or volume allocation");
 		require(domain.exactInternalEnergy().subtract(beforeEnergy).subtract(cc.ecisr.mmm.units.SignedDyadic.of(sourceEnergy))
-				.equals(domain.thermalAudit().roundoffResidual().subtract(beforeRoundoff)), "native source energy or roundoff ledger did not close");
+				.subtract(domain.thermalAudit().mechanicalWork().subtract(beforeWork)).equals(domain.thermalAudit().roundoffResidual().subtract(beforeRoundoff)), "native source energy or roundoff ledger did not close");
+		var gasAfter = domain.exportGasState("");
+		require(gasAfter.geometry() != null && gasBefore.nodes().getFirst().inventory().equals(gasAfter.nodes().getFirst().inventory())
+				&& gasBefore.externalSource().equals(gasAfter.externalSource()) && gasBefore.escapedSink().equals(gasAfter.escapedSink())
+				&& domain.thermalAudit().mechanicalWork().subtract(beforeWork).signum() > 0
+				&& domain.gasNodeGaugePressurePa(1) > 0 && domain.gasNodeTemperatureK(1) > GasRegistry.STANDARD_TEMPERATURE_K,
+				"resolved injection lost gas stock or its adiabatic response");
 		var captured = domain.captureAuthoritativeState(); var restored = FluidDomain.restoreAuthoritativeState(captured);
 		require(restored.liquidGeometryState.markerCount() == domain.particles.count()
 				&& restored.totalChemicalSpeciesQuanta() == domain.totalChemicalSpeciesQuanta()
@@ -597,12 +608,79 @@ public final class CarrierMutationValidation {
 			require(limited.particles.count() == 1 && limited.carrierMutationRevision() == revision && limited.liquidGeometryState == geometry,
 					"native geometric preflight rejection changed inventory or geometry");
 		}
+		var beforeAtMost = domain.particles.inventory().totalVolume();
+		var added = domain.addVolumeNearBudgeted(3, 1, 1, 0.03125F, 0);
+		require(added.addedVolume() == 0.03125F && domain.particles.inventory().totalVolume().subtract(beforeAtMost).equals(SignedDyadic.of(0.03125))
+				&& domain.exportGasState("").nodes().getFirst().inventory().equals(gasAfter.nodes().getFirst().inventory())
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "at-most injection changed gas or liquid extensive quantities");
+		FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		domain.removeAllWaterExact();
 		require(domain.liquidGeometryState != null && domain.liquidGeometryState.cells().isEmpty()
 				&& domain.liquidGeometryState.markerCount() == 0 && domain.totalChemicalSpeciesQuanta() == 0,
 				"liquid clear retained native occupied geometry or side inventory");
 		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
 		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "native liquid clear lost its thermal sink");
+		nativeInjectionSplitsGasAndRejectsZeroCapacity();
+	}
+
+	private static void nativeInjectionSplitsGasAndRejectsZeroCapacity() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		var domain = new FluidDomain(2, 3, 2, config(), 64);
+		var masks = new byte[12]; java.util.Arrays.fill(masks, (byte) FlipCutCellGeometry.FULL_MASK);
+		masks[0] = masks[2] = masks[4] = 0;
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 3, 2, 0.5F, 0, 0, 0, registries.liquids().materials(),
+				new float[0], new float[0], masks, new double[0], new int[0]));
+		domain.liquidGeometryState = new LiquidGeometryState(2, java.util.List.of(), new int[0]); domain.sealDomainBoundary();
+		FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		var oldGas = domain.exportGasState("");
+		require(domain.tryInsertExactVolume(0, 1, 0, 1, 0, 0, true).transferred(), "gas split injection was refused");
+		var gas = domain.exportGasState("");
+		require(gas.nodes().size() == 2 && gas.nodes().get(0).inventory().merge(gas.nodes().get(1).inventory()).equals(oldGas.nodes().getFirst().inventory())
+				&& gas.externalSource().equals(oldGas.externalSource()) && gas.escapedSink().equals(oldGas.escapedSink())
+				&& domain.gasNodeGaugePressurePa(1) > 0 && domain.gasNodeGaugePressurePa(2) > 0
+				&& domain.thermalAudit().mechanicalWork().signum() > 0 && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"geometric gas split lost stock, compression work or caloric accounting");
+		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.exportGasState("").nodes().equals(gas.nodes()), "gas split injection lost its cold spatial support");
+		var input = domain.captureAuthoritativeState(); var blocked = FluidDomain.restoreAuthoritativeState(input);
+		var geometry = blocked.liquidGeometryState; int markers = blocked.particles.count(); var chemicalSource = blocked.chemicalParcels().externalSource();
+		try { blocked.tryInsertExactVolume(0, 0, 0, 1, 0, 0, true); throw new AssertionError("finite gas was injected into zero available volume"); }
+		catch (GasTopologyBlockedException expected) { }
+		require(blocked.liquidGeometryState == geometry && blocked.particles.count() == markers
+				&& blocked.chemicalParcels().externalSource() == chemicalSource, "zero-capacity gas rejection changed liquid or chemical stock");
+		FluidDomainStateAssertions.assertSameState(input, blocked.captureAuthoritativeState(), "zero gas capacity injection");
+		var open = new FluidDomain(3, 4, 3, config(), 64);
+		var collision = new byte[36]; java.util.Arrays.fill(collision, (byte) FlipCutCellGeometry.FULL_MASK);
+		for (int y = 0; y < 3; y++) collision[open.cellIndex(1, y, 1)] = 0;
+		open.restoreMaterialParticleState(new FlipMaterialParticleState(3, 4, 3, 0.5F, 0, 0, 0, registries.liquids().materials(),
+				new float[0], new float[0], collision, new double[0], new int[0]));
+		open.liquidGeometryState = new LiquidGeometryState(2, java.util.List.of(), new int[0]);
+		FullCapabilityTestFixture.bindFull(open, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		require(open.exportGasState("").nodes().isEmpty(), "ambient capture fixture initialized a finite chamber");
+		require(open.tryInsertExactVolume(1, 1, 1, 1, 0, 0, true).transferred(), "ambient capture injection was refused");
+		var captured = open.exportGasState("");
+		require(captured.nodes().size() == 1 && cc.ecisr.mmm.fluid.air.GasAuditLedger.of(captured.nodes().getFirst().inventory()).equals(captured.externalSource())
+				&& captured.externalSource().standardVolumeNanos() == 125_000_000L && captured.escapedSink().entries().isEmpty()
+				&& Math.abs(open.gasNodeGaugePressurePa(1)) < 1e-9
+				&& open.exactInternalEnergy().equals(open.thermalAudit().expectedInventory()), "ambient capture lost actual capacity, source or energy accounting");
+		var cold = FluidDomain.restoreAuthoritativeState(open.captureAuthoritativeState());
+		require(cold.exportGasState("").nodes().equals(captured.nodes()), "ambient capture lost its cold finite chamber");
+		cold.removeAllWaterExact();
+		var vented = cold.exportGasState("");
+		require(vented.nodes().isEmpty() && vented.escapedSink().equals(captured.externalSource())
+				&& vented.externalSource().equals(captured.externalSource()) && cold.exactInternalEnergy().equals(SignedDyadic.ZERO)
+				&& cold.thermalAudit().expectedInventory().equals(SignedDyadic.ZERO), "opening a captured chamber lost its gas or energy sink");
+		FluidDomain.restoreAuthoritativeState(cold.captureAuthoritativeState());
+		var vacuum = FluidDomain.restoreAuthoritativeState(input);
+		vacuum.commitOperatorVentSealedGas(vacuum.planOperatorVentSealedGas());
+		require(vacuum.tryInsertExactVolume(0, 0, 0, 2, 3, 0, true).transferred()
+				&& vacuum.exportGasState("").nodes().isEmpty() && vacuum.exactInternalEnergy().equals(vacuum.thermalAudit().expectedInventory()),
+				"injection into explicit vacuum recreated gas or charged fictitious work");
+		var filled = FluidDomain.restoreAuthoritativeState(vacuum.captureAuthoritativeState()); filled.removeAllWaterExact();
+		require(filled.exportGasState("").nodes().size() == 1 && filled.exportGasState("").nodes().getFirst().inventory().isEmpty()
+				&& filled.exactInternalEnergy().equals(SignedDyadic.ZERO), "removing vacuum-filled liquid recreated ambient stock");
+
+
 	}
 
 	private static void insertionNeverRoundsTheRequestUp() {

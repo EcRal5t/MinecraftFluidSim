@@ -56,7 +56,10 @@ final class ResolvedGasStateLifecycle {
 			throw new IllegalArgumentException("Resolved gas requires spatial support for all solid inventories");
 	}
 	static double[] available(GasGeometryState geometry) {
-		var exact = ResolvedGasGeometry.volumes(geometry); var result = new double[geometry.nodeCount()];
+		return available(ResolvedGasGeometry.volumes(geometry));
+	}
+	static double[] available(LiquidExactPolygon.Fraction[] exact) {
+		var result = new double[exact.length - 1];
 		for (int node = 1; node < exact.length; node++) {
 			result[node - 1] = exact[node].rounded();
 			if (!(result[node - 1] > 0) || !Double.isFinite(result[node - 1])) throw new IllegalArgumentException("Resolved gas capacity exceeds binary64 representation");

@@ -253,7 +253,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 
 	public record WaterClearPlan(
 			LiquidInventoryState inventory, ChemicalTransferLedger drained,
-			SignedDyadic internalEnergy, long mutationRevision, long chemicalRevision, ResolvedGasExpansionPlan gasExpansion
+			SignedDyadic internalEnergy, long mutationRevision, long chemicalRevision, ResolvedGasVolumeEditPlan gasExpansion
 	) {
 		public int markerCount() { return inventory.count(); }
 	}

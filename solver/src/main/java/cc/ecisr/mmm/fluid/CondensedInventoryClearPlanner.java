@@ -40,7 +40,7 @@ final class CondensedInventoryClearPlanner {
 						: domain.thermalState.exactLiquidEnergy(domain.particles.count()),
 				domain.carrierMutationRevision(),
 				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision(),
-				domain.gasState.geometry == null ? null : new ResolvedGasExpansionPlan(domain,
+				domain.gasState.geometry == null ? null : new ResolvedGasVolumeEditPlan(domain,
 						new LiquidGeometryState(domain.liquidGeometryState.rootWidthMetres(), List.of(), new int[0])));
 	}
 

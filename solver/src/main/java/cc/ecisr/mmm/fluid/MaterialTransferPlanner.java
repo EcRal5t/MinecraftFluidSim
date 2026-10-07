@@ -156,9 +156,9 @@ final class MaterialTransferPlanner {
 		int firstInsertedOrdinal = domain.particles.count(); int insertion = 0;
 		for (MaterialInsertPiece piece : insertPieces) {
 			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.chemical(), false, thermalPlan == null, geometric == null ? null : geometric.positions.get(insertion++));
+					piece.materialHandle(), piece.mass(), piece.chemical(), false, thermalPlan == null, geometric == null ? null : geometric.liquid().positions.get(insertion++));
 		}
-		if (geometric != null) domain.liquidGeometryState = geometric.geometry;
+		if (geometric != null) geometric.publish(domain);
 		if (thermalPlan != null) domain.thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
 		if (!externalAddition.isEmpty()) domain.chemicalParcels.recordExternalSource(externalAddition);
 		domain.gridDirty = true;
@@ -260,9 +260,9 @@ final class MaterialTransferPlanner {
 		int insertion = 0;
 		for (MaterialInsertPiece piece : insertPieces) {
 			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.chemical(), false, true, geometric == null ? null : geometric.positions.get(insertion++));
+					piece.materialHandle(), piece.mass(), piece.chemical(), false, true, geometric == null ? null : geometric.liquid().positions.get(insertion++));
 		}
-		if (geometric != null) domain.liquidGeometryState = geometric.geometry;
+		if (geometric != null) geometric.publish(domain);
 		if (!externalAddition.isEmpty()) domain.chemicalParcels.recordExternalSource(externalAddition);
 		domain.gridDirty = true;
 		return new FluidDomain.VolumeAddition((float) SignedDyadic.of(capacity).subtract(remaining).toDouble(), markerBudgetLimited);
@@ -579,9 +579,9 @@ final class MaterialTransferPlanner {
 			int slot = domain.firstOpenSlot(domain.cellIndex(piece.cellX(), piece.cellY(), piece.cellZ()), 0);
 			if (slot < 0) throw new IllegalStateException("Chemical insertion lost its planned open slot");
 			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), slot, piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator(), thermalPlan == null, geometric == null ? null : geometric.positions.get(insertion++));
+					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator(), thermalPlan == null, geometric == null ? null : geometric.liquid().positions.get(insertion++));
 		}
-		if (geometric != null) domain.liquidGeometryState = geometric.geometry;
+		if (geometric != null) geometric.publish(domain);
 		if (thermalPlan != null) domain.thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
 		if (externalSource) domain.chemicalParcels.recordExternalSource(ledger);
 		domain.gridDirty = true;
@@ -593,11 +593,19 @@ final class MaterialTransferPlanner {
 			LiquidEnergyColumn.Truncation thermalPlan
 	) { int particle() { return quantities.marker(); } }
 
-	private LiquidGeometryInsertionPlan planGeometry(List<LiquidGeometryInsertionPlan.Insertion> insertions) {
+	private InsertionGeometryPlan planGeometry(List<LiquidGeometryInsertionPlan.Insertion> insertions) {
 		if (domain.liquidGeometryState == null || insertions.isEmpty()) return null;
 		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
-		return new LiquidGeometryInsertionPlan(domain.liquidGeometryState, domain.sizeX, domain.sizeY, domain.sizeZ,
+		var liquid = new LiquidGeometryInsertionPlan(domain.liquidGeometryState, domain.sizeX, domain.sizeY, domain.sizeZ,
 				domain.config.cellSize(), domain.geometry.cutCells.copyMicroMasks(), insertions, LiquidGeometryInsertionPlan.MAXIMUM_SOURCE_REGIONS);
+		return new InsertionGeometryPlan(liquid, domain.gasState.geometry == null ? null : new ResolvedGasVolumeEditPlan(domain, liquid.geometry));
+	}
+
+	private record InsertionGeometryPlan(LiquidGeometryInsertionPlan liquid, ResolvedGasVolumeEditPlan gas) {
+		void publish(FluidDomain domain) {
+			if (gas == null) domain.liquidGeometryState = liquid.geometry;
+			else gas.publish(domain);
+		}
 	}
 
 	private record ChemicalPieceDraft(int cellX, int cellY, int cellZ, float volume, int materialHandle) { }
