@@ -179,6 +179,18 @@ final class LiquidExactPolygon {
 	static LiquidExactPolygon triangle(Vertex a, Vertex b, Vertex c) {
 		return new LiquidExactPolygon(List.of(a, b, c), cross(difference(b, a), difference(c, a)));
 	}
+	/** Positive convex weights within a factor of two of uniform weights keep exact auxiliary points compact. */
+	static Vertex interiorVertex(List<Vertex> points) {
+		if (points.isEmpty()) throw new IllegalArgumentException("Missing convex interior support");
+		var scale = points.stream().map(Vertex::w).max(BigInteger::compareTo).orElseThrow();
+		var x = BigInteger.ZERO; var y = x; var z = x; var w = x;
+		for (var point : points) {
+			var weight = scale.divide(point.w());
+			x = x.add(point.x().multiply(weight)); y = y.add(point.y().multiply(weight));
+			z = z.add(point.z().multiply(weight)); w = w.add(point.w().multiply(weight));
+		}
+		return new Vertex(x, y, z, w);
+	}
 	static List<LiquidExactPolygon> tetrahedron(List<Vertex> points) {
 		if (points.size() != 4) throw new IllegalArgumentException("A geometric tetrahedron needs four vertices");
 		var result = new ArrayList<LiquidExactPolygon>();

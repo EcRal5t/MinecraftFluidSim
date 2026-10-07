@@ -63,7 +63,7 @@ final class LiquidJointInterfaceVolume {
 		var coordinates = new ConservativeFluxCoordinates(localTargets.size(), first, second, constrained, fixed, weights);
 		var independent = new Fraction[coordinates.size()]; Arrays.fill(independent, Fraction.ZERO); var transfer = coordinates.liftExact(independent, source);
 		var centers = new ArrayList<Vertex>(); var changed = new boolean[mesh.cells.size()];
-		for (var polygon : mesh.exactPolygons) centers.add(LiquidExactPolygon.vertex(polygon.centroidCoordinates()));
+		for (var polygon : mesh.exactPolygons) centers.add(LiquidExactPolygon.interiorVertex(polygon.vertices()));
 		for (int e = 0; e < selected.size(); e++) if (transfer[e].signum() != 0) {
 			var magnitude = transfer[e].signum() > 0 ? transfer[e] : transfer[e].negate();
 			int f = selected.get(e); var face = mesh.faces.get(f); var area = face.areaVector().toArray(Fraction[]::new);
@@ -84,11 +84,11 @@ final class LiquidJointInterfaceVolume {
 			var result = output.get(owners.get(c)).get(localPhases.get(c));
 			if (!changed[c]) { result.add(cells.get(c).geometry()); regions++; }
 			else {
-				var center = LiquidExactPolygon.vertex(cells.get(c).geometry().measure().centroidCoordinates());
+				var center = LiquidExactPolygon.interiorVertex(LiquidExactPolygon.faces(cells.get(c).geometry()).stream().flatMap(face -> face.vertices().stream()).distinct().toList());
 				var surfaces = new ArrayList<LiquidExactPolygon>();
 				for (int f : mesh.cellFaces[c]) {
 					var polygon = mesh.faces.get(f).first() == c ? mesh.exactPolygons.get(f) : mesh.exactPolygons.get(f).reversed();
-					var original = LiquidExactPolygon.vertex(polygon.centroidCoordinates()); var next = centers.get(f);
+					var original = LiquidExactPolygon.interiorVertex(polygon.vertices()); var next = centers.get(f);
 					if (original.equals(next)) { surfaces.add(polygon); continue; }
 					for (int e = 0; e < polygon.vertices().size(); e++) {
 						var a = polygon.vertices().get(e); var b = polygon.vertices().get((e + 1) % polygon.vertices().size());

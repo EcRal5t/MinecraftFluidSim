@@ -12,6 +12,7 @@ final class LiquidJointReconstructionValidation {
 		finiteVolumeRoundingPreservesBothMargins();
 		supportingPlanesCertifyTheirCoordinateEnclosure();
 		sharedFacePyramidsRetainTheExactStarRegion();
+		auxiliaryInteriorPointsKeepPositiveCompactCoordinates();
 		jointCutsRetainSmallRemainingPhases();
 		jointControlsRetainIndependentVolumeAndIdentity();
 		equalMomentControlsKeepGeometricOrder();
@@ -20,6 +21,19 @@ final class LiquidJointReconstructionValidation {
 		volumeRedistributionCarriesConservativeMoments();
 		resolvedLeavesCarryIndependentControls();
 		jointGasReconstructionPreservesMaterialChambers();
+	}
+	private static void auxiliaryInteriorPointsKeepPositiveCompactCoordinates() {
+		var one = java.math.BigInteger.ONE; var first = one.shiftLeft(900).add(one); var second = first.add(java.math.BigInteger.TWO);
+		var vertices = List.of(new LiquidExactPolygon.Vertex(java.math.BigInteger.ZERO, java.math.BigInteger.ZERO, java.math.BigInteger.ZERO, one),
+				new LiquidExactPolygon.Vertex(one, java.math.BigInteger.ZERO, java.math.BigInteger.ZERO, first),
+				new LiquidExactPolygon.Vertex(java.math.BigInteger.ZERO, one, java.math.BigInteger.ZERO, second));
+		var point = LiquidExactPolygon.interiorVertex(vertices); var coordinates = point.coordinates();
+		var barycentric = coordinates[0].multiply(new Fraction(first, one)).add(coordinates[1].multiply(new Fraction(second, one)));
+		if (coordinates[0].signum() <= 0 || coordinates[1].signum() <= 0 || barycentric.compareTo(Fraction.of(1)) >= 0
+				|| point.w().bitLength() > second.bitLength() + 2 || point.distance(LiquidExactPolygon.triangle(vertices.get(0), vertices.get(1), vertices.get(2)).coefficients()).signum() != 0)
+			throw new AssertionError("Auxiliary interior weights lost strict support or expanded a common denominator");
+		var reversed = new java.util.ArrayList<>(vertices); java.util.Collections.reverse(reversed);
+		if (!point.equals(LiquidExactPolygon.interiorVertex(reversed))) throw new AssertionError("Auxiliary point depends on shared face orientation");
 	}
 	private static void sharedFacePyramidsRetainTheExactStarRegion() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1); var faces = LiquidExactPolygon.faces(cube);
