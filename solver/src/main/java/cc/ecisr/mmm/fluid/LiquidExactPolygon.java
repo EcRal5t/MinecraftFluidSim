@@ -147,7 +147,7 @@ final class LiquidExactPolygon {
 		var zero = Fraction.ZERO; var weight = zero; Fraction[] moment = {zero, zero, zero}; var a = corners.getFirst().coordinates();
 		for (int i = 1; i + 1 < corners.size(); i++) {
 			var b = corners.get(i).coordinates(); var c = corners.get(i + 1).coordinates();
-			var area = triangleCross(corners.getFirst(), corners.get(i), corners.get(i + 1))[axis]; weight = weight.add(area);
+			var area = triangleCross(corners.getFirst(), corners.get(i), corners.get(i + 1), axis); weight = weight.add(area);
 			for (int coordinate = 0; coordinate < 3; coordinate++) {
 				var sum = a[coordinate].add(b[coordinate]).add(c[coordinate]);
 				moment[coordinate] = moment[coordinate].add(area.multiply(sum).multiply(new Fraction(BigInteger.ONE, BigInteger.valueOf(3))));
@@ -261,15 +261,15 @@ final class LiquidExactPolygon {
 		return cross(difference(b, a), difference(c, a)).stream().allMatch(value -> value.signum() == 0);
 	}
 	private static Fraction[] triangleCross(Vertex a, Vertex b, Vertex c) {
-		var result = new Fraction[3]; var denominator = a.w().multiply(b.w()).multiply(c.w());
-		for (int i = 0; i < 3; i++) {
-			int j = (i + 1) % 3, k = (i + 2) % 3;
-			var numerator = a.w().multiply(b.coordinate(j).multiply(c.coordinate(k)).subtract(b.coordinate(k).multiply(c.coordinate(j))))
-					.add(b.w().multiply(c.coordinate(j).multiply(a.coordinate(k)).subtract(c.coordinate(k).multiply(a.coordinate(j)))))
-					.add(c.w().multiply(a.coordinate(j).multiply(b.coordinate(k)).subtract(a.coordinate(k).multiply(b.coordinate(j)))));
-			result[i] = new Fraction(numerator, denominator);
-		}
+		var result = new Fraction[3]; for (int i = 0; i < 3; i++) result[i] = triangleCross(a, b, c, i);
 		return result;
+	}
+	private static Fraction triangleCross(Vertex a, Vertex b, Vertex c, int axis) {
+		int j = (axis + 1) % 3, k = (axis + 2) % 3;
+		var numerator = a.w().multiply(b.coordinate(j).multiply(c.coordinate(k)).subtract(b.coordinate(k).multiply(c.coordinate(j))))
+				.add(b.w().multiply(c.coordinate(j).multiply(a.coordinate(k)).subtract(c.coordinate(k).multiply(a.coordinate(j)))))
+				.add(c.w().multiply(a.coordinate(j).multiply(b.coordinate(k)).subtract(a.coordinate(k).multiply(b.coordinate(j)))));
+		return new Fraction(numerator, a.w().multiply(b.w()).multiply(c.w()));
 	}
 	LiquidPolyhedron.Surface surface() {
 		var vector = areaVector(); var n = new LiquidPolyhedron.Point(vector[0].rounded(), vector[1].rounded(), vector[2].rounded());
@@ -305,16 +305,21 @@ final class LiquidExactPolygon {
 	static Measure measure(List<LiquidExactPolygon> faces) {
 		var volume = Fraction.ZERO; Fraction[] moment = {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
 		for (var face : faces) {
-			if (!face.hasArea()) continue;
-			var plane = face.coefficients(); int axis = 0; while (plane.get(axis).signum() == 0) axis++;
-			// On a planar face, r dot dA = offset / normal[axis] * dA[axis].
-			// Divergence of r is 3; divergence of x_i r is 4 x_i.
-			var contribution = face.areaVector()[axis].multiply(new Fraction(plane.get(3), plane.get(axis)));
-			if (contribution.signum() == 0) continue;
-			volume = volume.add(contribution); var center = face.centroidCoordinates();
-			for (int a = 0; a < 3; a++) moment[a] = moment[a].add(contribution.multiply(center[a]));
+			var corners = face.integrationCorners(); if (corners.size() < 3) continue; var a = corners.getFirst();
+			for (int i = 1; i + 1 < corners.size(); i++) {
+				var b = corners.get(i); var c = corners.get(i + 1); var determinant = spatialTriple(a, b, c);
+				if (determinant.signum() == 0) continue;
+				var bc = b.w().multiply(c.w()); var ca = c.w().multiply(a.w()); var ab = a.w().multiply(b.w());
+				var denominator = a.w().multiply(bc); volume = volume.add(new Fraction(determinant, denominator));
+				var squared = denominator.multiply(denominator);
+				// The signed tetrahedron (0,a,b,c) has centroid (a+b+c)/4; its volume is det(a,b,c)/6.
+				for (int axis = 0; axis < 3; axis++) {
+					var coordinateSum = a.coordinate(axis).multiply(bc).add(b.coordinate(axis).multiply(ca)).add(c.coordinate(axis).multiply(ab));
+					moment[axis] = moment[axis].add(new Fraction(determinant.multiply(coordinateSum), squared));
+				}
+			}
 		}
-		volume = volume.divide(Fraction.of(3)); for (int a = 0; a < 3; a++) moment[a] = moment[a].divide(Fraction.of(4));
+		volume = volume.divide(Fraction.of(6)); for (int a = 0; a < 3; a++) moment[a] = moment[a].divide(Fraction.of(24));
 		return new Measure(volume, moment);
 	}
 	/** Occupancy intersections need only the closed-surface volume integral. */

@@ -37,6 +37,7 @@ final class LiquidControlVolumeValidation {
 	}
 	private static void pressureInertiaSurvivesTinyAuxiliaryFaceAreas() {
 		conjugateDirectionsResolveAnisotropicEnergy();
+		pressureInertiaKeepsNearKernelAffineEnergy();
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
 		var split = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(1, 0, 0, Math.scalb(1.0, -60))),
 				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(-1, 0, 0, -Math.scalb(1.0, -60))));
@@ -50,6 +51,28 @@ final class LiquidControlVolumeValidation {
 		}
 		var result = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(new double[3], GRAVITY, 0.01, 1e-10, 512);
 		close(result.cellVelocity()[1], -0.0981, 1e-12);
+	}
+	private static void pressureInertiaKeepsNearKernelAffineEnergy() {
+		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1); var surfaces = new ArrayList<LiquidExactPolygon>();
+		var apex = LiquidExactPolygon.vertex(new LiquidExactPolygon.Fraction[]{LiquidExactPolygon.Fraction.of(0.5), LiquidExactPolygon.Fraction.of(0.5),
+				LiquidExactPolygon.Fraction.of(Math.nextUp(Math.sqrt(2) - 1))});
+		for (var face : LiquidExactPolygon.faces(cube)) {
+			if (face.areaVector()[2].signum() <= 0) surfaces.add(face);
+			else for (int e = 0; e < face.vertices().size(); e++) surfaces.add(LiquidExactPolygon.triangle(apex, face.vertices().get(e), face.vertices().get((e + 1) % face.vertices().size())));
+		}
+		var shape = LiquidPolyhedron.restoredExact(surfaces); var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)),
+				1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		var gradient = ControlVolumeGradient.build(mesh.cells, mesh.faces)[0]; var metric = new ControlVolumeFluxMetric(gradient, 1000);
+		var rate = new double[gradient.indices.length]; for (int i = 0; i < rate.length; i++) rate[i] = gradient.exactBasis[i][2].multiply(gradient.exactVolume).rounded();
+		var action = metric.multiply(rate); var error = metric.evaluationError(action, new double[rate.length]);
+		var energy = LiquidExactPolygon.Fraction.ZERO; var bound = energy;
+		for (int i = 0; i < rate.length; i++) {
+			var flow = LiquidExactPolygon.Fraction.of(rate[i]); energy = energy.add(flow.multiply(LiquidExactPolygon.Fraction.of(action[i])));
+			bound = bound.add(flow.absolute().multiply(LiquidExactPolygon.Fraction.of(error[i])));
+		}
+		if (!(metric.minimumEigenvalue() > 0) || energy.signum() <= 0
+				|| energy.subtract(gradient.exactVolume.multiply(LiquidExactPolygon.Fraction.of(1000))).absolute().compareTo(bound) > 0)
+			throw new AssertionError("Near-kernel surface lost positive affine kinetic energy in pressure matrix cancellation");
 	}
 	/** Known orthogonal eigenmodes, with face-coordinate scales spanning the native sliver range. */
 	private static void conjugateDirectionsResolveAnisotropicEnergy() {
@@ -111,6 +134,7 @@ final class LiquidControlVolumeValidation {
 	private static void pressureMetricCertificatesContainExactCoefficients() {
 		for (var shape : List.of(LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5),
 				LiquidPolyhedron.box(0, 0, 0, 0.5, 1.0 / 1024, 0.5),
+				LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 2, 3, 3).clip(-1, -2, -3, -3 + Math.scalb(1.0, -24)),
 				LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5).clip(-2, 3, 1, 0.7))) {
 			var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)), 1, 1000,
 					(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
@@ -120,13 +144,15 @@ final class LiquidControlVolumeValidation {
 					if (!(Math.abs(observed.matrix()[i][j] - exact[i][j]) <= observed.error()[i][j] + Math.ulp(exact[i][j])))
 						throw new AssertionError("Pressure metric coefficient escaped its exact-reference error certificate");
 				}
-				var metric = new ControlVolumeFluxMetric(gradient, 1000); var input = new double[exact.length];
-				for (int i = 0; i < input.length; i++) input[i] = Math.sin(i + 0.25);
-				var actual = metric.multiply(input); var error = metric.evaluationError(input, new double[input.length]);
-				for (int i = 0; i < exact.length; i++) {
-					double reference = 0, rounding = 0;
-					for (int j = 0; j < exact.length; j++) { reference += exact[i][j] * input[j]; rounding += Math.ulp(exact[i][j] * input[j]) + Math.ulp(reference); }
-					if (!(Math.abs(actual[i] - reference) <= error[i] + rounding)) throw new AssertionError("Pressure action escaped its propagated coefficient error");
+				var metric = new ControlVolumeFluxMetric(gradient, 1000);
+				for (double scale : new double[]{1, Double.MIN_VALUE, Math.scalb(1.0, -600), Math.scalb(1.0, 600)}) {
+					var input = new double[exact.length]; for (int i = 0; i < input.length; i++) input[i] = scale * Math.sin(i + 0.25);
+					var actual = metric.multiply(input); var error = metric.evaluationError(actual, new double[input.length]);
+					for (int i = 0; i < exact.length; i++) {
+						double reference = 0, rounding = 0;
+						for (int j = 0; j < exact.length; j++) { reference += exact[i][j] * input[j]; rounding += Math.ulp(exact[i][j] * input[j]) + Math.ulp(reference); }
+						if (!(Math.abs(actual[i] - reference) <= error[i] + rounding)) throw new AssertionError("Pressure action escaped its propagated coefficient error");
+					}
 				}
 			}
 		}

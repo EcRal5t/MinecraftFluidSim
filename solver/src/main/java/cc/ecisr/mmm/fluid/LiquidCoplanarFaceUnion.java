@@ -36,6 +36,7 @@ final class LiquidCoplanarFaceUnion {
 		return new Result(List.copyOf(result), List.copyOf(geometry), sources.stream().mapToInt(Integer::intValue).toArray());
 	}
 	private static LiquidExactPolygon union(List<LiquidExactPolygon> parts) {
+		if (parts.size() == 1) return parts.getFirst();
 		var plane = parts.getFirst().coefficients(); int axis = 0; while (plane.get(axis).signum() == 0) axis++;
 		int first = (axis + 1) % 3, second = (axis + 2) % 3;
 		var points = parts.stream().flatMap(part -> part.vertices().stream()).distinct().sorted((a, b) -> {
@@ -52,7 +53,6 @@ final class LiquidCoplanarFaceUnion {
 			var sum = LiquidExactPolygon.Fraction.ZERO; for (var part : parts) sum = sum.add(part.areaVector()[a]);
 			if (!sum.equals(area[a])) return null;
 		}
-		if (parts.size() == 1) return hull;
 		// Coverage plus equal area proves that the convex union adds no gap and removes no overlap.
 		var remaining = List.of(hull);
 		for (var part : parts) {

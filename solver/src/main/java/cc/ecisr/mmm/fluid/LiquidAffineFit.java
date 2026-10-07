@@ -41,8 +41,10 @@ final class LiquidAffineFit {
 			gram[a][b] = ZERO; for (int i = 0; i < n; i++) gram[a][b] = gram[a][b].add(volume[i].multiply(direction[i][a]).multiply(direction[i][b]));
 		}
 		var inverse = rank == 0 ? new Value[0][0] : LiquidBoundedMatrix.inverse(gram);
-		var anchorRows = new Fraction[basis.anchor.length][];
-		for (int j = 0; j < anchorRows.length; j++) anchorRows[j] = basis.shape[j].coefficients.clone();
+		var completion = new Fraction[basis.anchor.length][n];
+		for (int j = 0; j < completion.length; j++) {
+			Arrays.fill(completion[j], Fraction.ZERO); completion[j][basis.anchor[j]] = Fraction.of(1); shape[basis.anchor[j]] = basis.shape[j];
+		}
 		for (int i = 0; i < n; i++) {
 			boolean anchor = false; for (int selected : basis.anchor) anchor |= selected == i; if (anchor) continue;
 			var local = new Value[rank + 1]; local[rank] = volume[i].divide(total);
@@ -57,12 +59,12 @@ final class LiquidAffineFit {
 			for (int a = 0; a <= rank; a++) coefficientError[i][a] = local[a].error();
 			var point = LiquidExactPolygon.vertex(centers.get(i));
 			for (int j = 0; j < basis.anchor.length; j++) {
-				var barycentric = basis.shape[j].evaluate(point); add(anchorRows[j], row, barycentric.negate());
+				var barycentric = basis.shape[j].evaluate(point); completion[j][i] = barycentric.negate();
 				double magnitude = magnitude(barycentric);
 				for (int a = 0; a <= rank; a++) coefficientError[basis.anchor[j]][a] = up(coefficientError[basis.anchor[j]][a] + up(magnitude * local[a].error()));
 			}
 		}
-		for (int j = 0; j < basis.anchor.length; j++) shape[basis.anchor[j]] = new Form(anchorRows[j]);
+		for (int j = 0; j < basis.anchor.length; j++) shape[basis.anchor[j]] = Form.combine(shape, completion[j]);
 	}
 	/** Exact affine completion reproduces every point in the actual observation span. */
 	boolean contains(Vertex point) { return basis.contains(point); }

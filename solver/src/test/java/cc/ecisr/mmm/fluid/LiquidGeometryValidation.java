@@ -73,6 +73,8 @@ final class LiquidGeometryValidation {
 			var lower = cube.clip(plane[0], plane[1], plane[2], plane[3]).moments();
 			var upper = cube.clip(-plane[0], -plane[1], -plane[2], -plane[3]).moments();
 			moments(lower.add(upper), 1, 0.5, 0.5, 0.5);
+			for (var piece : java.util.List.of(region.clip(cutter), region.clip(cutter.opposite())))
+				if (!piece.measure().same(surfaceIntegralMeasure(piece.faces()))) throw new AssertionError("Homogeneous spatial moments differ from independent surface divergence integrals");
 		}
 		for (var liquid : new LiquidPolyhedron[] {cube.clip(1, 1, 1, 1.2), LiquidPolyhedron.box(0.125, 0.25, 0.375, 0.375, 0.5, 0.625)}) {
 			var original = liquid.moments();
@@ -122,6 +124,18 @@ final class LiquidGeometryValidation {
 		materialInterfacesUseResolvedPhaseAndWallGeometry();
 		disjointLiquidRetainsExistingGasRegions();
 		System.out.println("Liquid geometry volume, centroid and local subdivision validation passed");
+	}
+	private static LiquidExactPolygon.Measure surfaceIntegralMeasure(java.util.List<LiquidExactPolygon> faces) {
+		var volume = LiquidExactPolygon.Fraction.ZERO;
+		var moment = new LiquidExactPolygon.Fraction[]{volume, volume, volume};
+		for (var face : faces) {
+			var area = face.areaVector(); var center = face.centroidCoordinates(); var contribution = LiquidExactPolygon.Fraction.ZERO;
+			for (int axis = 0; axis < 3; axis++) contribution = contribution.add(area[axis].multiply(center[axis]));
+			volume = volume.add(contribution);
+			for (int axis = 0; axis < 3; axis++) moment[axis] = moment[axis].add(contribution.multiply(center[axis]));
+		}
+		for (int axis = 0; axis < 3; axis++) moment[axis] = moment[axis].divide(LiquidExactPolygon.Fraction.of(4));
+		return new LiquidExactPolygon.Measure(volume.divide(LiquidExactPolygon.Fraction.of(3)), moment);
 	}
 	private static void mechanicalCellsCancelAuxiliaryCuts() {
 		var cube = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75));

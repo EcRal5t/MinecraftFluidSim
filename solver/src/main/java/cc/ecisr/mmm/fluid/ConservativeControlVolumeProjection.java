@@ -154,7 +154,7 @@ final class ConservativeControlVolumeProjection {
 				int f = g.indices[i]; local[i] = g.sign[i] * flow[f] - (predictor == null ? 0 : predictor[c][i]);
 				if (flowError != null) localError[i] = flowError[f] + (predictorError == null ? 0 : predictorError[c][i]) + Math.ulp(local[i]);
 			}
-			dual[c] = metric.multiply(local); var localBound = flowError == null ? localError : metric.evaluationError(local, localError);
+			dual[c] = metric.multiply(local); var localBound = flowError == null ? localError : metric.evaluationError(dual[c], localError);
 			for (int i = 0; i < local.length; i++) {
 				int f = g.indices[i]; gradient[f] += g.sign[i] * dual[c][i]; if (flowError != null) error[f] += localBound[i] + Math.ulp(gradient[f]);
 			}
