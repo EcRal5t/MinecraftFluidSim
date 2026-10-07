@@ -282,16 +282,24 @@ final class LiquidExactPolygon {
 	static Measure measure(List<LiquidExactPolygon> faces) {
 		var volume = Fraction.ZERO; Fraction[] moment = {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
 		for (var face : faces) {
-			if (!face.hasArea()) continue;
-			var plane = face.coefficients(); int axis = 0; while (plane.get(axis).signum() == 0) axis++;
-			// On a planar face, r dot dA = offset / normal[axis] * dA[axis].
-			// Divergence of r is 3; divergence of x_i r is 4 x_i.
-			var contribution = face.areaVector()[axis].multiply(new Fraction(plane.get(3), plane.get(axis)));
-			if (contribution.signum() == 0) continue;
-			volume = volume.add(contribution); var center = face.centroidCoordinates();
-			for (int a = 0; a < 3; a++) moment[a] = moment[a].add(contribution.multiply(center[a]));
+			var points = face.integrationCorners();
+			for (int i = 1; i + 1 < points.size(); i++) {
+				var a = points.getFirst(); var b = points.get(i); var c = points.get(i + 1);
+				var determinant = a.x().multiply(b.y().multiply(c.z()).subtract(b.z().multiply(c.y())))
+						.add(a.y().multiply(b.z().multiply(c.x()).subtract(b.x().multiply(c.z()))))
+						.add(a.z().multiply(b.x().multiply(c.y()).subtract(b.y().multiply(c.x()))));
+				if (determinant.signum() == 0) continue;
+				var wa = b.w().multiply(c.w()); var wb = a.w().multiply(c.w()); var wc = a.w().multiply(b.w()); var w = a.w().multiply(wa);
+				// Oriented cones from the origin integrate the same closed surface. Triangle first
+				// moments use its three vertices directly, avoiding division by a polygon's area.
+				var contribution = new Fraction(determinant, w.multiply(BigInteger.valueOf(6))); volume = volume.add(contribution);
+				var denominator = contribution.denominator.multiply(w).shiftLeft(2);
+				for (int axis = 0; axis < 3; axis++) {
+					var sum = a.coordinate(axis).multiply(wa).add(b.coordinate(axis).multiply(wb)).add(c.coordinate(axis).multiply(wc));
+					moment[axis] = moment[axis].add(new Fraction(contribution.numerator.multiply(sum), denominator));
+				}
+			}
 		}
-		volume = volume.divide(Fraction.of(3)); for (int a = 0; a < 3; a++) moment[a] = moment[a].divide(Fraction.of(4));
 		return new Measure(volume, moment);
 	}
 	boolean hasArea() {
