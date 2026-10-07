@@ -51,6 +51,16 @@ final class LiquidGeometryValidation {
 			var subdivided = LiquidExactPolygon.restored(vertices, face.coefficients());
 			if (!java.util.Arrays.equals(face.areaVector(), subdivided.areaVector()) || !java.util.Arrays.equals(face.centroidCoordinates(), subdivided.centroidCoordinates())
 					|| subdivided.vertices().size() != vertices.size()) throw new AssertionError("Collinear subdivision changed area, first moment or mesh incidence");
+			var surface = subdivided.surface();
+			for (var equivalent : java.util.List.of(subdivided.cycled(1), subdivided.clippedTo(java.util.List.of(face)), subdivided.reversed().reversed()))
+				if (!java.util.Arrays.equals(equivalent.areaVector(), face.areaVector()) || !java.util.Arrays.equals(equivalent.centroidCoordinates(), face.centroidCoordinates())
+						|| !equivalent.surface().equals(surface)) throw new AssertionError("Polygon ordering or retained clipping changed its exact integrals or observations");
+			var reversed = subdivided.reversed(); var reverseArea = reversed.areaVector(); var forwardArea = subdivided.areaVector();
+			for (int axis = 0; axis < 3; axis++) if (!reverseArea[axis].equals(forwardArea[axis].negate()))
+				throw new AssertionError("Reversing a warmed polygon changed its oriented area");
+			if (!java.util.Arrays.equals(reversed.centroidCoordinates(), face.centroidCoordinates()) || !reversed.plane().key().equals(face.plane().key())
+					|| reversed.plane().positive() == face.plane().positive())
+				throw new AssertionError("Reversing a warmed polygon changed its centroid or supporting plane");
 		}
 		moments(cube.moments(), 1, 0.5, 0.5, 0.5);
 		moments(cube.clip(1, 1, 1, 1).moments(), 1.0 / 6, 1.0 / 24, 1.0 / 24, 1.0 / 24);
@@ -66,6 +76,17 @@ final class LiquidGeometryValidation {
 					|| !LiquidExactPolygon.homogeneousTetrahedronDeterminant(vertices).equals(LiquidExactPolygon.homogeneousTetrahedronDeterminant(reversed).negate()))
 				throw new AssertionError("Homogeneous tetrahedron determinant lost orientation or unsigned volume");
 		}
+		var rationalPoints = new java.util.ArrayList<LiquidExactPolygon.Vertex>();
+		for (int point = 0; point < 4; point++) {
+			var denominator = java.math.BigInteger.ONE.shiftLeft(80 + point).add(java.math.BigInteger.valueOf(2 * point + 1));
+			var coordinates = new LiquidExactPolygon.Fraction[3];
+			for (int axis = 0; axis < 3; axis++) coordinates[axis] = new LiquidExactPolygon.Fraction(
+					point == axis + 1 ? denominator : java.math.BigInteger.valueOf(point + axis + 1), denominator);
+			rationalPoints.add(LiquidExactPolygon.vertex(coordinates));
+		}
+		var rationalFaces = LiquidExactPolygon.tetrahedron(rationalPoints); var rationalMeasure = LiquidExactPolygon.measure(rationalFaces);
+		if (!rationalMeasure.same(LiquidExactPolygon.tetrahedronMeasure(rationalPoints)) || !rationalMeasure.same(surfaceIntegralMeasure(rationalFaces)))
+			throw new AssertionError("Common-denominator integration changed volume or first moments for independent rational vertices");
 		for (double[] plane : new double[][] {{1, 0, 0, 0.25}, {1, 1, 1, 1.2}, {-2, 3, 1, 0.7}, {1, 1, 0, 1}, {0, 1, 0, 0}}) {
 			var region = LiquidConvexRegion.of(cube); var cutter = new LiquidGeometryPlane(new LiquidPolyhedron.Point(plane[0], plane[1], plane[2]), plane[3]);
 			if (!region.measure().isSum(region.clip(cutter).measure(), region.clip(cutter.opposite()).measure()))

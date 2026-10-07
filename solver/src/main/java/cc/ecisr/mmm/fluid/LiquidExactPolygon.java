@@ -46,6 +46,8 @@ final class LiquidExactPolygon {
 	private volatile LiquidGeometryPlane supportingPlane;
 	private volatile List<Vertex> integrationCorners;
 	private volatile List<List<BigInteger>> edgeLines;
+	private volatile LiquidPolyhedron.Surface observedSurface;
+	private volatile int areaStatus;
 	static final class Fraction {
 		private final BigInteger numerator, denominator;
 		static final Fraction ZERO = new Fraction(BigInteger.ZERO, BigInteger.ONE);
@@ -123,7 +125,8 @@ final class LiquidExactPolygon {
 		if (start == 0) return this;
 		var points = new ArrayList<Vertex>(); for (int v = 0; v < vertices.size(); v++) points.add(vertices.get((start + v) % vertices.size()));
 		var result = new LiquidExactPolygon(points, normal); result.centroidVertex = centroidVertex; result.integratedCentroid = integratedCentroid; result.integratedArea = integratedArea;
-		result.planeCoefficients = planeCoefficients; result.supportingPlane = supportingPlane; return result;
+		result.planeCoefficients = planeCoefficients; result.supportingPlane = supportingPlane;
+		result.observedSurface = observedSurface; result.areaStatus = areaStatus; return result;
 	}
 	List<LiquidPolyhedron.Point> rounded() { return vertices.stream().map(Vertex::rounded).toList(); }
 	List<Vertex> vertices() { return vertices; }
@@ -137,28 +140,8 @@ final class LiquidExactPolygon {
 	private Vertex center() {
 		var cached = centroidVertex; if (cached != null) return cached;
 		var corners = integrationCorners();
-		if (corners.size() == 3) {
-			var result = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
-			for (var vertex : corners) { var x = vertex.coordinates(); for (int a = 0; a < 3; a++) result[a] = result[a].add(x[a]); }
-			for (int a = 0; a < 3; a++) result[a] = result[a].divide(Fraction.of(3));
-			return cacheCenter(result);
-		}
 		int axis = 0; while (normal.get(axis).signum() == 0) axis++;
-		var zero = Fraction.ZERO; var weight = zero; Fraction[] moment = {zero, zero, zero}; var a = corners.getFirst().coordinates();
-		for (int i = 1; i + 1 < corners.size(); i++) {
-			var b = corners.get(i).coordinates(); var c = corners.get(i + 1).coordinates();
-			var area = triangleCross(corners.getFirst(), corners.get(i), corners.get(i + 1), axis); weight = weight.add(area);
-			for (int coordinate = 0; coordinate < 3; coordinate++) {
-				var sum = a[coordinate].add(b[coordinate]).add(c[coordinate]);
-				moment[coordinate] = moment[coordinate].add(area.multiply(sum).multiply(new Fraction(BigInteger.ONE, BigInteger.valueOf(3))));
-			}
-		}
-		if (weight.numerator.signum() == 0) throw new IllegalArgumentException("Empty exact polygon centroid");
-		Fraction[] result = new Fraction[3];
-		for (int coordinate = 0; coordinate < 3; coordinate++) {
-			result[coordinate] = moment[coordinate].divide(weight);
-		}
-		return cacheCenter(result);
+		return cacheCenter(LiquidHomogeneousIntegration.centroid(corners, axis));
 	}
 	private Vertex cacheCenter(Fraction[] coordinates) {
 		var point = vertex(coordinates); integratedCentroid = List.of(coordinates); return centroidVertex = point;
@@ -169,7 +152,15 @@ final class LiquidExactPolygon {
 		return new Vertex(coordinates[0].numerator.multiply(denominator.divide(coordinates[0].denominator)),
 				coordinates[1].numerator.multiply(denominator.divide(coordinates[1].denominator)), coordinates[2].numerator.multiply(denominator.divide(coordinates[2].denominator)), denominator);
 	}
-	LiquidExactPolygon reversed() { return new LiquidExactPolygon(vertices.reversed(), normal.stream().map(BigInteger::negate).toList()); }
+	LiquidExactPolygon reversed() {
+		var result = new LiquidExactPolygon(vertices.reversed(), normal.stream().map(BigInteger::negate).toList());
+		result.centroidVertex = centroidVertex; result.integratedCentroid = integratedCentroid; result.areaStatus = areaStatus;
+		var area = integratedArea; if (area != null) result.integratedArea = area.stream().map(Fraction::negate).toList();
+		var plane = planeCoefficients; if (plane != null) result.planeCoefficients = plane.stream().map(BigInteger::negate).toList();
+		var support = supportingPlane; if (support != null) result.supportingPlane = support.opposite();
+		var corners = integrationCorners; if (corners != null) result.integrationCorners = corners.reversed();
+		return result;
+	}
 	List<Vertex> tetrahedronVertices(Fraction[] apex, int edge) {
 		return List.of(vertex(apex), center(), vertices.get(edge), vertices.get((edge + 1) % vertices.size()));
 	}
@@ -233,12 +224,7 @@ final class LiquidExactPolygon {
 	}
 	Fraction[] areaVector() {
 		var cached = integratedArea; if (cached != null) return cached.toArray(Fraction[]::new);
-		var corners = integrationCorners();
-		var result = new Fraction[] {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var origin = corners.getFirst();
-		for (int i = 1; i + 1 < corners.size(); i++) {
-			var vector = triangleCross(origin, corners.get(i), corners.get(i + 1));
-			for (int a = 0; a < 3; a++) result[a] = result[a].add(vector[a].divide(Fraction.of(2)));
-		}
+		var result = LiquidHomogeneousIntegration.area(integrationCorners());
 		integratedArea = List.of(result);
 		return result;
 	}
@@ -260,20 +246,10 @@ final class LiquidExactPolygon {
 	private static boolean collinear(Vertex a, Vertex b, Vertex c) {
 		return cross(difference(b, a), difference(c, a)).stream().allMatch(value -> value.signum() == 0);
 	}
-	private static Fraction[] triangleCross(Vertex a, Vertex b, Vertex c) {
-		var result = new Fraction[3]; for (int i = 0; i < 3; i++) result[i] = triangleCross(a, b, c, i);
-		return result;
-	}
-	private static Fraction triangleCross(Vertex a, Vertex b, Vertex c, int axis) {
-		int j = (axis + 1) % 3, k = (axis + 2) % 3;
-		var numerator = a.w().multiply(b.coordinate(j).multiply(c.coordinate(k)).subtract(b.coordinate(k).multiply(c.coordinate(j))))
-				.add(b.w().multiply(c.coordinate(j).multiply(a.coordinate(k)).subtract(c.coordinate(k).multiply(a.coordinate(j)))))
-				.add(c.w().multiply(a.coordinate(j).multiply(b.coordinate(k)).subtract(a.coordinate(k).multiply(b.coordinate(j)))));
-		return new Fraction(numerator, a.w().multiply(b.w()).multiply(c.w()));
-	}
 	LiquidPolyhedron.Surface surface() {
+		var cached = observedSurface; if (cached != null) return cached;
 		var vector = areaVector(); var n = new LiquidPolyhedron.Point(vector[0].rounded(), vector[1].rounded(), vector[2].rounded());
-		return new LiquidPolyhedron.Surface(Math.hypot(Math.hypot(n.x(), n.y()), n.z()), n, centroid());
+		return observedSurface = new LiquidPolyhedron.Surface(Math.hypot(Math.hypot(n.x(), n.y()), n.z()), n, centroid());
 	}
 	static final class Measure {
 		private final Fraction volume; private final Fraction[] moment;
@@ -303,46 +279,21 @@ final class LiquidExactPolygon {
 		}
 	}
 	static Measure measure(List<LiquidExactPolygon> faces) {
-		var volume = Fraction.ZERO; Fraction[] moment = {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
-		for (var face : faces) {
-			var corners = face.integrationCorners(); if (corners.size() < 3) continue; var a = corners.getFirst();
-			for (int i = 1; i + 1 < corners.size(); i++) {
-				var b = corners.get(i); var c = corners.get(i + 1); var determinant = spatialTriple(a, b, c);
-				if (determinant.signum() == 0) continue;
-				var bc = b.w().multiply(c.w()); var ca = c.w().multiply(a.w()); var ab = a.w().multiply(b.w());
-				var denominator = a.w().multiply(bc); volume = volume.add(new Fraction(determinant, denominator));
-				var squared = denominator.multiply(denominator);
-				// The signed tetrahedron (0,a,b,c) has centroid (a+b+c)/4; its volume is det(a,b,c)/6.
-				for (int axis = 0; axis < 3; axis++) {
-					var coordinateSum = a.coordinate(axis).multiply(bc).add(b.coordinate(axis).multiply(ca)).add(c.coordinate(axis).multiply(ab));
-					moment[axis] = moment[axis].add(new Fraction(determinant.multiply(coordinateSum), squared));
-				}
-			}
-		}
-		volume = volume.divide(Fraction.of(6)); for (int a = 0; a < 3; a++) moment[a] = moment[a].divide(Fraction.of(24));
-		return new Measure(volume, moment);
+		return LiquidHomogeneousIntegration.measure(faces.stream().map(LiquidExactPolygon::integrationCorners).toList());
 	}
 	/** Occupancy intersections need only the closed-surface volume integral. */
 	static Fraction volume(List<LiquidExactPolygon> faces) {
-		var volume = Fraction.ZERO;
-		for (var face : faces) {
-			var corners = face.integrationCorners(); if (corners.size() < 3) continue;
-			var a = corners.getFirst();
-			for (int i = 1; i + 1 < corners.size(); i++) {
-				var b = corners.get(i); var c = corners.get(i + 1); var numerator = spatialTriple(a, b, c);
-				if (numerator.signum() != 0) volume = volume.add(new Fraction(numerator, a.w().multiply(b.w()).multiply(c.w())));
-			}
-		}
-		return volume.divide(Fraction.of(6));
+		return LiquidHomogeneousIntegration.volume(faces.stream().map(LiquidExactPolygon::integrationCorners).toList());
 	}
 	boolean hasArea() {
-		if (vertices.size() < 3) return false;
+		int cached = areaStatus; if (cached != 0) return cached > 0;
+		if (vertices.size() < 3) { areaStatus = -1; return false; }
 		var a = vertices.getFirst();
 		for (int i = 1; i + 1 < vertices.size(); i++) {
 			var b = difference(vertices.get(i), a); var c = difference(vertices.get(i + 1), a);
-			for (var value : cross(b, c)) if (value.signum() != 0) return true;
+			for (var value : cross(b, c)) if (value.signum() != 0) { areaStatus = 1; return true; }
 		}
-		return false;
+		areaStatus = -1; return false;
 	}
 
 	/** One exact arrangement of collinear mesh edges gives both incident cells identical triangles. */
@@ -371,6 +322,7 @@ final class LiquidExactPolygon {
 				divided.planeCoefficients = polygon.planeCoefficients; divided.supportingPlane = polygon.supportingPlane;
 				divided.integratedArea = polygon.integratedArea; divided.centroidVertex = polygon.centroidVertex;
 				divided.integratedCentroid = polygon.integratedCentroid; divided.integrationCorners = polygon.integrationCorners;
+				divided.observedSurface = polygon.observedSurface; divided.areaStatus = polygon.areaStatus;
 				result.add(divided);
 			}
 		}
@@ -567,6 +519,7 @@ final class LiquidExactPolygon {
 			if (after.signum() * (reverse ? -1 : 1) <= 0) output.add(current);
 			previous = current; before = after;
 		}
+		if (output.equals(vertices)) return this;
 		var result = new LiquidExactPolygon(output, normal);
 		// Clipping changes the finite polygon and preserves its original supporting plane exactly.
 		result.planeCoefficients = coefficients();
