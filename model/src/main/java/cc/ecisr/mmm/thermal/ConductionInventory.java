@@ -90,7 +90,7 @@ public final class ConductionInventory {
 		var ledger = owner.auditLedger().withHeatExchange(reservoirEnergy).withRoundoff(roundoff);
 		var expected = owner.exactEnergy(energy.length).add(actualDelta);
 		if (!ledger.expectedInventory().equals(expected)) throw new IllegalStateException("Conduction source audit is inconsistent");
-		return new Plan(this, next, nextGas, ledger, bound);
+		return new Plan(this, next, nextGas, ledger, roundoff, bound);
 	}
 	private void requireSource(ThermalDomainState current, ThermalCarrierContext markers, AirNetwork currentNetwork) {
 		if (current != owner || markers != context || !revision.equals(owner.thermalRevision())
@@ -113,9 +113,11 @@ public final class ConductionInventory {
 		private final double[] energies, gasEnergies;
 		private final ThermalAuditLedger ledger;
 		private final SignedDyadic roundoffBound;
-		private Plan(ConductionInventory source, double[] energies, double[] gasEnergies, ThermalAuditLedger ledger, SignedDyadic roundoffBound) {
-			this.source = source; this.energies = energies; this.gasEnergies = gasEnergies; this.ledger = ledger; this.roundoffBound = roundoffBound;
+		private final SignedDyadic roundoff;
+		private Plan(ConductionInventory source, double[] energies, double[] gasEnergies, ThermalAuditLedger ledger, SignedDyadic roundoff, SignedDyadic roundoffBound) {
+			this.source = source; this.energies = energies; this.gasEnergies = gasEnergies; this.ledger = ledger; this.roundoff = roundoff; this.roundoffBound = roundoffBound;
 		}
+		public SignedDyadic roundoffResidual() { return roundoff; }
 		public SignedDyadic roundoffBound() { return roundoffBound; }
 		void commit(ThermalDomainState owner, ThermalCarrierContext markers, AirNetwork network) {
 			source.requireSource(owner, markers, network);

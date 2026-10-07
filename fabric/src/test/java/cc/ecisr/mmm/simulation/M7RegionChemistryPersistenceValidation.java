@@ -67,7 +67,7 @@ public final class M7RegionChemistryPersistenceValidation {
 				new cc.ecisr.mmm.simulation.persistence.WorldCapabilityBundleStore.QuarantineAdmission(64, 64L << 20));
 		var committed = store.openOrPublish(definitions).bundle();
 		FluidSolverConfig noSlip = new FluidSolverConfig(CONFIG.cellSize(), CONFIG.density(), CONFIG.gravity(),
-				CONFIG.timeStep(), CONFIG.maxPressureIterations(), CONFIG.pressureTolerance(), CONFIG.maxCourantNumber(),
+				CONFIG.timeStep(), CONFIG.maxSolverIterations(), CONFIG.pressureTolerance(), CONFIG.maxCourantNumber(),
 				CONFIG.fluidEpsilon(), CONFIG.interfaceCompression(), FluidSolverConfig.WallCondition.NO_SLIP);
 		FluidRegion source = populatedRegion(UUID.randomUUID(), noSlip);
 		bindDefaultMaterials(source);

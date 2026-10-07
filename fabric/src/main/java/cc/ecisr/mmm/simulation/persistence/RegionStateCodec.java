@@ -359,7 +359,7 @@ final class RegionStateCodec {
 		CompoundTag tag = new CompoundTag();
 		tag.putInt("CellSize", Float.floatToRawIntBits(config.cellSize())); tag.putInt("Density", Float.floatToRawIntBits(config.density()));
 		tag.putInt("Gravity", Float.floatToRawIntBits(config.gravity())); tag.putInt("TimeStep", Float.floatToRawIntBits(config.timeStep()));
-		tag.putInt("PressureIterations", config.maxPressureIterations()); tag.putInt("PressureTolerance", Float.floatToRawIntBits(config.pressureTolerance()));
+		tag.putInt("PressureIterations", config.maxSolverIterations()); tag.putInt("PressureTolerance", Float.floatToRawIntBits(config.pressureTolerance()));
 		tag.putInt("Courant", Float.floatToRawIntBits(config.maxCourantNumber())); tag.putInt("FluidEpsilon", Float.floatToRawIntBits(config.fluidEpsilon()));
 		tag.putInt("InterfaceCompression", Float.floatToRawIntBits(config.interfaceCompression()));
 		tag.putString("ViscousWallCondition", config.viscousWallCondition().name());

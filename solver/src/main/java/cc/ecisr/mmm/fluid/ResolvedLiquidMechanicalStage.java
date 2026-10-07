@@ -61,7 +61,7 @@ final class ResolvedLiquidMechanicalStage {
 					surface = new LiquidGeometricSurfaceEnergy(reference, physical.surfaceCoefficient).pressure;
 				}
 				result = mechanics.advance(velocity, physical.faceVelocity(velocity), acceleration, dt,
-						domain.config.pressureTolerance(), domain.config.pressureTolerance(), domain.config.maxPressureIterations(), surface);
+						domain.config.pressureTolerance(), domain.config.pressureTolerance(), domain.config.maxSolverIterations(), surface);
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement(shorter.minimumSubsteps(domain.config.timeStep(), dt), shorter.getMessage());
 			} catch (LiquidInterfaceResolutionRequired finer) {

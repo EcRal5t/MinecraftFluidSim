@@ -47,8 +47,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
 		carrierPropertiesWorkspace.beginStep();
-		if (liquidGeometryState != null && thermochemistryEnabled && (thermalState != null || chemicalParcels != null))
-			throw new IllegalStateException("Resolved thermochemistry requires complete geometric contacts");
+		if (thermochemistryEnabled) requireGeometricThermochemistry(phaseChangeEnabled);
 		float before = domain().totalVolume();
 		double massBefore = domain().totalMass();
 		MechanicalAuditAccumulator mechanicalAudit = captureMechanicalAudit
@@ -222,10 +221,16 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
+		requireGeometricThermochemistry(phaseChangeEnabled);
 		ThermalAxisStats result = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
 		gridDirty = true;
 		rebuildGridFromParticles();
 		return result;
+	}
+	private void requireGeometricThermochemistry(boolean phaseChangeEnabled) {
+		if (liquidGeometryState != null && (chemicalParcels != null || phaseChangeEnabled || domain().hasGranularInventory()
+				|| thermalState != null && thermalState.coherentPhases().groupCount() != 0 || domain().hasPendingPhaseVolumeWork()))
+			throw new FluidDomain.ThermalTransportBlockedException("Resolved thermochemistry requires complete reaction and phase geometry", null);
 	}
 
 	ThermalAxisStats runThermalReactionPhaseAxis(boolean phaseChangeEnabled, int maximumPhaseOperations) {

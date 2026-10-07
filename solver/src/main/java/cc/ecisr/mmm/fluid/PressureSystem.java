@@ -78,7 +78,7 @@ final class PressureSystem {
 		double rz = dot(domain.projection.residual, domain.projection.gasResidual,
 				domain.projection.preconditioned, domain.projection.gasPreconditioned);
 		int iterations = 0;
-		for (int iteration = 0; !converged && iteration < domain.config.maxPressureIterations(); iteration++) {
+		for (int iteration = 0; !converged && iteration < domain.config.maxSolverIterations(); iteration++) {
 			applyPressureMatrix(domain.projection.direction, domain.projection.gasDirection,
 					domain.projection.matrixDirection, domain.projection.gasMatrixDirection);
 			double denominator = dot(domain.projection.direction, domain.projection.gasDirection,

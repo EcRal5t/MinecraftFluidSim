@@ -5,14 +5,15 @@ package cc.ecisr.mmm.fluid;
  *
  * <p>The solver uses Minecraft's positive Y direction as "up" and stores
  * pressure as gauge pressure, so atmospheric pressure is zero. Pressure tolerance is the
- * absolute RMS algebraic residual accepted from the projection.</p>
+ * absolute RMS algebraic residual accepted from the projection. The solver iteration limit
+ * bounds each pressure or resolved-conduction solve.</p>
  */
 public record FluidSolverConfig(
 		float cellSize,
 		float density,
 		float gravity,
 		float timeStep,
-		int maxPressureIterations,
+		int maxSolverIterations,
 		float pressureTolerance,
 		float maxCourantNumber,
 		float fluidEpsilon,
@@ -22,9 +23,9 @@ public record FluidSolverConfig(
 	public enum WallCondition { FREE_SLIP, NO_SLIP }
 
 	public FluidSolverConfig(float cellSize, float density, float gravity, float timeStep,
-			int maxPressureIterations, float pressureTolerance, float maxCourantNumber,
+			int maxSolverIterations, float pressureTolerance, float maxCourantNumber,
 			float fluidEpsilon, float interfaceCompression) {
-		this(cellSize, density, gravity, timeStep, maxPressureIterations, pressureTolerance,
+		this(cellSize, density, gravity, timeStep, maxSolverIterations, pressureTolerance,
 				maxCourantNumber, fluidEpsilon, interfaceCompression, WallCondition.FREE_SLIP);
 	}
 
@@ -34,7 +35,7 @@ public record FluidSolverConfig(
 		if (!(density > 0.0F)) throw new IllegalArgumentException("density must be positive");
 		if (!(gravity >= 0.0F)) throw new IllegalArgumentException("gravity cannot be negative");
 		if (!(timeStep > 0.0F)) throw new IllegalArgumentException("timeStep must be positive");
-		if (maxPressureIterations < 1) throw new IllegalArgumentException("maxPressureIterations must be positive");
+		if (maxSolverIterations < 1) throw new IllegalArgumentException("maxSolverIterations must be positive");
 		if (!(pressureTolerance > 0.0F)) throw new IllegalArgumentException("pressureTolerance must be positive");
 		if (!(maxCourantNumber > 0.0F && maxCourantNumber <= 1.0F)) {
 			throw new IllegalArgumentException("maxCourantNumber must be in (0, 1]");

@@ -7,6 +7,7 @@ import java.util.List;
 /** Native caloric publication preserves complete liquid stocks, geometry, gas and cold handoff. */
 final class ResolvedLiquidConductionValidation {
 	static void validate(FluidDomain source) throws Exception {
+		ResolvedLiquidConductionStageValidation.validate(source);
 		ambientPublication(source);
 		jointGasPublication(source);
 		cooccupiedInventoryPublication(source);

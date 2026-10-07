@@ -94,7 +94,7 @@ final class PressureProjectionStage {
 		if (!result.converged()) {
 			throw new FluidDomain.PressureSolveBlockedException("Pressure projection did not converge: residual="
 					+ residual + ", tolerance=" + target + ", total iterations=" + result.iterations()
-					+ ", linear iteration limit=" + state.config.maxPressureIterations());
+					+ ", linear iteration limit=" + state.config.maxSolverIterations());
 		}
 	}
 

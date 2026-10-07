@@ -17,6 +17,7 @@ final class ControlVolumeConductionValidation {
 		var second = material("test:thermal/second", 6, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 400, 3)));
 		var bodies = List.of(carrier(first, 280), carrier(second, 320));
 		prescribedInventoryAndVacuum(mesh, first, prescribed);
+		independentCaloricPrecision(first, second);
 		var operator = new ControlVolumeConduction(mesh, new double[]{3, 6});
 		var result = operator.advance(bodies, prescribed, 1, 1e-10, 256);
 		// Harmonic conductivity 4, area 1/4, centre distance 1/2: G = 2.
@@ -55,6 +56,21 @@ final class ControlVolumeConductionValidation {
 		cooccupiedCaloricInventories();
 		obliqueCaloricInterfacePreservesSteadyFlux();
 		 temporalAndSpatialFourierRefinement();
+	}
+	private static void independentCaloricPrecision(ThermalMaterialDefinition first, ThermalMaterialDefinition second) {
+		var regions = List.of(new LiquidGeometryRefinement.Cell(2, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, .25, .25, .25)),
+				new LiquidGeometryRefinement.Cell(2, 1, 0, 0, LiquidPolyhedron.box(.25, 0, 0, .5, .25, .25)),
+				new LiquidGeometryRefinement.Cell(2, 3, 0, 0, LiquidPolyhedron.box(.75, 0, 0, 1, .25, .25)));
+		var mesh = new LiquidControlVolumeMesh(regions, 2, 1, (c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+		var insulated = material("test:thermal/large_insulated", 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 400, 1e20)));
+		var bodies = List.of(carrier(first, 280), carrier(second, 320), carrier(insulated, 300));
+		var prescribed = new double[mesh.faces.size()]; Arrays.fill(prescribed, Double.NaN);
+		var result = new ControlVolumeConduction(mesh, new double[]{3, 6, 0})
+				.advanceInventories(bodies, prescribed, 1, new double[]{1e-10, 1e-10, 1e8}, 512);
+		double q = 80 / (1 + 2 * (.5 + 1.0 / 3));
+		close(result.energyChange()[0], q, 1e-9); close(result.energyChange()[1], -q, 1e-9);
+		if (result.energyChange()[2] != 0) throw new AssertionError("Insulated large inventory weakened another inventory's caloric precision");
+		closure(result);
 	}
 	private static void prescribedInventoryAndVacuum(LiquidControlVolumeMesh mesh, ThermalMaterialDefinition first, double[] prescribed) {
 		var result = new ControlVolumeConduction(mesh, new double[]{3, 6})
