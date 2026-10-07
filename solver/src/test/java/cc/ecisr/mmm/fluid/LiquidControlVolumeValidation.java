@@ -18,6 +18,7 @@ final class LiquidControlVolumeValidation {
 		refinedAffinePressure();
 		scalarDiffusionPreservesAffineFluxAndRefinement();
 		sharedFaceHeatFluxClosesOnObliqueAndRefinedCells();
+		ControlVolumeConductionValidation.validate();
 		refinedViscosityPreservesRigidMotionAndMomentum();
 		finiteGasPressureSharesLiquidProjection();
 		pressureAndViscosityShareMomentumAndEnergy();

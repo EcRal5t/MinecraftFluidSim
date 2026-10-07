@@ -2,7 +2,7 @@ package cc.ecisr.mmm.fluid;
 
 import java.util.Arrays;
 
-/** Scalar cell/face diffusion energy with affine consistency on convex control volumes. */
+/** Scalar cell/face diffusion energy with affine consistency on resolved control volumes. */
 final class ControlVolumeDiffusion {
 	private final ControlVolumeGradient geometry;
 	private final double[] error;
