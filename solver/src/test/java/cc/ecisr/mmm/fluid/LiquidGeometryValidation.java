@@ -25,6 +25,7 @@ final class LiquidGeometryValidation {
 	}
 	static void validate() {
 		integerNormalizationPreservesExactRationals();
+		LiquidVolumeInterfaceValidation.validate();
 		canonicalGeometryProofSurvivesPacking();
 		controlCellsPreserveChosenMechanicalResolution();
 		mechanicalCellsCancelAuxiliaryCuts();

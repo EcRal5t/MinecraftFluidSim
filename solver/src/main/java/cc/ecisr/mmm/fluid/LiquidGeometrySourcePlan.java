@@ -16,18 +16,15 @@ final class LiquidGeometrySourcePlan {
 			var volume = LiquidConvexRegion.of(open).measure().volume();
 			if (volume.signum() <= 0) throw new IllegalArgumentException("Liquid source has empty open space");
 			if (remaining.subtract(volume).signum() >= 0) { add(selected, open, maximumFragments); remaining = remaining.subtract(volume); continue; }
-			var apex = open.centroidCoordinates();
-			for (var face : LiquidExactPolygon.faces(open)) for (int edge = 0; edge < face.vertices().size() && remaining.signum() > 0; edge++) {
-				var points = face.tetrahedronVertices(apex, edge); var tetra = LiquidPolyhedron.restoredExact(LiquidExactPolygon.tetrahedron(points));
-				var v = LiquidConvexRegion.of(tetra).measure().volume();
-				if (remaining.subtract(v).signum() < 0) {
-					// Moving one tetrahedral vertex along its edge varies volume linearly and remains inside the source space.
-					var ratio = remaining.divide(v); var moved = points.getFirst().coordinates(); var anchor = points.get(1).coordinates();
-					for (int a = 0; a < 3; a++) moved[a] = anchor[a].add(moved[a].subtract(anchor[a]).multiply(ratio));
-					var tail = new ArrayList<>(points); tail.set(0, LiquidExactPolygon.vertex(moved));
-					tetra = LiquidPolyhedron.restoredExact(LiquidExactPolygon.tetrahedron(tail)); v = remaining;
+			int precision = 52;
+			while (true) {
+				try {
+					var interfaceGeometry = LiquidVolumeInterface.reconstruct(open, remaining, new LiquidPolyhedron.Point(0, 1, 0), precision);
+					add(selected, interfaceGeometry.geometry, maximumFragments); remaining = Fraction.ZERO; break;
+				} catch (LiquidCoordinateResolutionRequired unresolved) {
+					if (precision == 1074) throw unresolved;
+					precision = Math.min(1074, 2 * precision);
 				}
-				add(selected, tetra, maximumFragments); remaining = remaining.subtract(v);
 			}
 		}
 		if (remaining.signum() != 0) throw new IllegalStateException("Liquid source exceeds exact open geometric capacity");
