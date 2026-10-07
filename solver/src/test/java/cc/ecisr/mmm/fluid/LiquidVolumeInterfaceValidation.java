@@ -5,6 +5,9 @@ import java.util.List;
 
 /** Interface representation preserves inventory and measures its geometric approximation. */
 final class LiquidVolumeInterfaceValidation {
+	private static LiquidPolyhedron single(LiquidMomentReconstruction.Leaf leaf) {
+		return leaf.phases().isEmpty() ? LiquidPolyhedron.EMPTY : leaf.phases().getFirst().pieces().getFirst();
+	}
 	static void validate() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
 		for (var open : List.of(cube, cube.clip(1, 2, 3, 3))) for (double[] cut : new double[][]{
@@ -15,7 +18,7 @@ final class LiquidVolumeInterfaceValidation {
 			double previous = Double.POSITIVE_INFINITY;
 			for (int bits : new int[]{12, 24, 48}) {
 				var reconstruction = LiquidVolumeInterface.reconstruct(open, target.volume(), normal, bits);
-				var geometry = reconstruction.geometry; var overlap = LiquidConvexRegion.of(geometry);
+				var geometry = reconstruction.singleGeometry(); var overlap = LiquidConvexRegion.of(geometry);
 				for (var plane : open.planes()) overlap = overlap.clip(plane);
 				if (!overlap.measure().same(geometry.measure())) throw new AssertionError("Finite interface left its exact open space");
 				if (!geometry.measure().volume().equals(target.volume())) throw new AssertionError("Finite interface lost exact inventory volume");
@@ -40,12 +43,13 @@ final class LiquidVolumeInterfaceValidation {
 			if (source.geometry.size() != 1 || !source.geometry.getFirst().measure().volume().equals(quantity))
 				throw new AssertionError("Source interface created auxiliary volume fragments");
 		}
-		if (LiquidVolumeInterface.reconstruct(cube, Fraction.ZERO, new LiquidPolyhedron.Point(1, 0, 0), 8).geometry.measure().signum() != 0
-				|| LiquidVolumeInterface.reconstruct(cube, cube.measure().volume(), new LiquidPolyhedron.Point(1, 0, 0), 8).geometry != cube)
+		if (LiquidVolumeInterface.reconstruct(cube, Fraction.ZERO, new LiquidPolyhedron.Point(1, 0, 0), 8).singleGeometry().measure().signum() != 0
+				|| LiquidVolumeInterface.reconstruct(cube, cube.measure().volume(), new LiquidPolyhedron.Point(1, 0, 0), 8).singleGeometry() != cube)
 			throw new AssertionError("Empty or full interface reconstruction changed its occupancy");
 		momentOrientationUsesTheSameVolume(cube);
 		spatialRefinementResolvesClosedInterfaces(cube);
 		adaptiveReconstructionEnforcesItsSpatialError(cube);
+		LiquidJointReconstructionValidation.validate();
 	}
 	private static void momentOrientationUsesTheSameVolume(LiquidPolyhedron cube) {
 		var normal = new LiquidPolyhedron.Point(1, 2, 3); var planar = cube.clip(1, 2, 3, 2.3); var target = planar.measure();
@@ -58,19 +62,19 @@ final class LiquidVolumeInterfaceValidation {
 		}
 		for (int axis = 0; axis < 3; axis++) {
 			double h = Math.scalb(1.0, -16); double[] plus = {1, 2, 3}, minus = plus.clone(); plus[axis] += h; minus[axis] -= h;
-			var a = LiquidVolumeInterface.reconstruct(cube, target.volume(), new LiquidPolyhedron.Point(plus[0], plus[1], plus[2]), 48).geometry.centroidCoordinates();
-			var b = LiquidVolumeInterface.reconstruct(cube, target.volume(), new LiquidPolyhedron.Point(minus[0], minus[1], minus[2]), 48).geometry.centroidCoordinates();
+			var a = LiquidVolumeInterface.reconstruct(cube, target.volume(), new LiquidPolyhedron.Point(plus[0], plus[1], plus[2]), 48).singleGeometry().centroidCoordinates();
+			var b = LiquidVolumeInterface.reconstruct(cube, target.volume(), new LiquidPolyhedron.Point(minus[0], minus[1], minus[2]), 48).singleGeometry().centroidCoordinates();
 			for (int i = 0; i < 3; i++) if (Math.abs(a[i].subtract(b[i]).divide(Fraction.of(2 * h)).rounded() - derivative[i][axis].rounded()) > 1e-9)
 				throw new AssertionError("Analytic fixed-volume centroid derivative differs from planar cuts");
 		}
-		for (var initial : List.of(new LiquidPolyhedron.Point(1, 0, 0), new LiquidPolyhedron.Point(0, 0, 1), new LiquidPolyhedron.Point(3, 2, 1))) {
+		for (var initial : List.of(new LiquidPolyhedron.Point(1, 0, 0), new LiquidPolyhedron.Point(0, 0, 1), new LiquidPolyhedron.Point(3, 2, 1), new LiquidPolyhedron.Point(-1, -2, -3))) {
 			var fitted = LiquidMomentInterface.reconstruct(cube, target, initial, 48, 1e-9, 24);
-			if (fitted.centroidError() > 1e-9 || !fitted.interfaceGeometry().geometry.measure().volume().equals(target.volume()) || fitted.evaluations() > 24)
+			if (fitted.centroidError() > 1e-9 || !fitted.interfaceGeometry().singleGeometry().measure().volume().equals(target.volume()) || fitted.evaluations() > 24)
 				throw new AssertionError("Moment-of-fluid did not recover a planar interface within its bounded work budget: " + fitted);
 		}
 		var droplet = LiquidPolyhedron.box(0.4, 0.4, 0.4, 0.6, 0.6, 0.6);
 		var unresolved = LiquidMomentInterface.reconstruct(cube, droplet.measure(), new LiquidPolyhedron.Point(0, 1, 0), 48, 1e-6, 8);
-		if (!(unresolved.centroidError() > 1e-6) || unresolved.evaluations() > 8 || !unresolved.interfaceGeometry().geometry.measure().volume().equals(droplet.measure().volume()))
+		if (!(unresolved.centroidError() > 1e-6) || unresolved.evaluations() > 8 || !unresolved.interfaceGeometry().singleGeometry().measure().volume().equals(droplet.measure().volume()))
 			throw new AssertionError("A subcell interface hid its unresolved centroid or lost inventory");
 	}
 	private record Leaf(LiquidGeometryRefinement.Cell open, LiquidPolyhedron liquid) { }
@@ -85,9 +89,9 @@ final class LiquidVolumeInterfaceValidation {
 				var target = leaf.liquid.measure(); var displacement = leaf.open.geometry().centroid().subtract(leaf.liquid.centroid());
 				if (displacement.dot(displacement) == 0) displacement = new LiquidPolyhedron.Point(0, 1, 0);
 				var result = LiquidMomentInterface.reconstruct(leaf.open.geometry(), target, displacement, 40, 1e-9, 16);
-				exactVolume = exactVolume.add(result.interfaceGeometry().geometry.measure().volume());
+				exactVolume = exactVolume.add(result.interfaceGeometry().singleGeometry().measure().volume());
 				moment += target.volume().rounded() * result.centroidError();
-				var overlap = LiquidConvexRegion.of(result.interfaceGeometry().geometry);
+				var overlap = LiquidConvexRegion.of(result.interfaceGeometry().singleGeometry());
 				for (var plane : leaf.liquid.planes()) overlap = overlap.clip(plane);
 				difference = difference.add(target.volume().subtract(overlap.measure().volume()).multiply(Fraction.of(2)));
 			}
@@ -111,34 +115,34 @@ final class LiquidVolumeInterfaceValidation {
 	private static void adaptiveReconstructionEnforcesItsSpatialError(LiquidPolyhedron cube) {
 		var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);
 		var shape = LiquidPolyhedron.box(0.4, 0.4, 0.4, 0.6, 0.6, 0.6);
-		var budget = new LiquidMomentReconstruction.Budget(1024, 4096, 8);
+		var budget = new LiquidMomentReconstruction.Budget(1024, 4096, 8, 16384);
 		var tolerance = new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40);
 		var result = LiquidMomentReconstruction.reconstruct(open, List.of(shape), new LiquidPolyhedron.Point(0, 1, 0), tolerance, budget);
 		if (result.leaves().size() <= 1 || result.leaves().size() > budget.maximumLeaves() || result.evaluations() > budget.maximumEvaluations()
-				|| !result.sourceMeasure().same(shape.measure()) || !result.representedMeasure().volume().equals(shape.measure().volume())
-				|| result.maximumCentroidError() > tolerance.centroidDistance()) throw new AssertionError("Adaptive interface reconstruction lost its declared geometry or work limits");
+				|| !result.phases().getFirst().sourceMeasure().same(shape.measure()) || !result.phases().getFirst().representedMeasure().volume().equals(shape.measure().volume())
+				|| result.phases().getFirst().maximumCentroidError() > tolerance.centroidDistance()) throw new AssertionError("Adaptive interface reconstruction lost its declared geometry or work limits");
 		var subdivided = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)).stream().map(LiquidGeometryRefinement.Cell::geometry).toList();
 		var equivalent = LiquidMomentReconstruction.reconstruct(open, subdivided, new LiquidPolyhedron.Point(0, 1, 0), tolerance, budget);
-		if (result.leaves().size() != equivalent.leaves().size() || !result.representedMeasure().same(equivalent.representedMeasure())
-				|| !result.symmetricDifferenceVolume().equals(equivalent.symmetricDifferenceVolume()) || result.evaluations() != equivalent.evaluations())
+		if (result.leaves().size() != equivalent.leaves().size() || !result.phases().getFirst().representedMeasure().same(equivalent.phases().getFirst().representedMeasure())
+				|| !result.phases().getFirst().symmetricDifferenceVolume().equals(equivalent.phases().getFirst().symmetricDifferenceVolume()) || result.evaluations() != equivalent.evaluations())
 			throw new AssertionError("Auxiliary source partitions changed the reconstructed interface or refinement decisions");
 		var coverage = LiquidConvexRegion.EMPTY.measure(); var differences = Fraction.ZERO;
 		var cells = new java.util.ArrayList<LiquidGeometryRefinement.Cell>();
 		for (var leaf : result.leaves()) {
 			coverage = coverage.add(leaf.open().geometry().measure()); cells.add(leaf.open());
 			var original = LiquidConvexRegion.of(shape); for (var plane : leaf.open().geometry().planes()) original = original.clip(plane);
-			var represented = leaf.liquid().measure();
+			var represented = single(leaf).measure();
 			if (!represented.volume().equals(original.measure().volume())) throw new AssertionError("Adaptive reconstruction changed an exact leaf inventory");
 			if (!original.hasVolume()) continue;
-			var overlap = original; for (var plane : leaf.liquid().planes()) overlap = overlap.clip(plane);
+			var overlap = original; for (var plane : single(leaf).planes()) overlap = overlap.clip(plane);
 			var difference = original.measure().volume().subtract(overlap.measure().volume()).multiply(Fraction.of(2));
 			if (difference.multiply(Fraction.of(leaf.open().width())).divide(original.measure().volume()).subtract(Fraction.of(tolerance.occupancyErrorLength())).signum() > 0)
 				throw new AssertionError("Adaptive reconstruction accepted an unresolved occupancy defect");
 			differences = differences.add(difference);
 		}
 		LiquidPhasePartition.requireDisjoint(cells);
-		if (!coverage.same(cube.measure()) || !differences.equals(result.symmetricDifferenceVolume())) throw new AssertionError("Adaptive leaves lost complete open-space coverage or understated occupied-space error");
-		for (var exhausted : List.of(new LiquidMomentReconstruction.Budget(1, 4096, 8), new LiquidMomentReconstruction.Budget(1024, 1, 1))) {
+		if (!coverage.same(cube.measure()) || !differences.equals(result.phases().getFirst().symmetricDifferenceVolume())) throw new AssertionError("Adaptive leaves lost complete open-space coverage or understated occupied-space error");
+		for (var exhausted : List.of(new LiquidMomentReconstruction.Budget(1, 4096, 8, 16384), new LiquidMomentReconstruction.Budget(1024, 1, 1, 16384))) {
 			try {
 				LiquidMomentReconstruction.reconstruct(open, List.of(shape), new LiquidPolyhedron.Point(0, 1, 0), tolerance, exhausted);
 				throw new AssertionError("An exhausted reconstruction budget returned unresolved geometry");

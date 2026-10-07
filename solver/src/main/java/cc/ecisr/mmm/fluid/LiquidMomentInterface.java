@@ -6,15 +6,22 @@ final class LiquidMomentInterface {
 	private LiquidMomentInterface() { }
 	static Result reconstruct(LiquidPolyhedron open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
 			int coordinateBits, double centroidTolerance, int maximumEvaluations) {
-		if (target == null || !(centroidTolerance > 0) || !Double.isFinite(centroidTolerance) || maximumEvaluations < 1)
+		return reconstruct(java.util.List.of(open), target, initialNormal, coordinateBits, centroidTolerance, maximumEvaluations);
+	}
+	static Result reconstruct(java.util.List<LiquidPolyhedron> open, LiquidExactPolygon.Measure target, LiquidPolyhedron.Point initialNormal,
+			int coordinateBits, double centroidTolerance, int maximumEvaluations) {
+		if (target == null || target.signum() <= 0 || !(centroidTolerance > 0) || !Double.isFinite(centroidTolerance) || maximumEvaluations < 1)
 			throw new IllegalArgumentException("Invalid moment-of-fluid reconstruction request");
-		var normal = unit(initialNormal); var current = LiquidVolumeInterface.reconstruct(open, target.volume(), normal, coordinateBits);
+		var capacityMeasure = LiquidVolumeInterface.measure(open); var normal = unit(initialNormal);
+		var direction = capacityMeasure.centroid().subtract(target.centroid());
+		if (normal.dot(direction) < 0) normal = new LiquidPolyhedron.Point(-normal.x(), -normal.y(), -normal.z());
+		var current = LiquidVolumeInterface.reconstruct(open, target.volume(), normal, coordinateBits); var capacity = capacityMeasure.volume();
 		double error = current.centroidError(target); int evaluations = 1;
 		while (error > centroidTolerance && evaluations < maximumEvaluations) {
-			if (target.volume().equals(open.measure().volume())) break;
+			if (target.volume().equals(capacity)) break;
 			var a = tangent(normal); var b = normal.cross(a); var derivative = current.centroidDerivative();
 			double[] ja = new double[3], jb = ja.clone(), rhs = ja.clone();
-			var centroid = current.geometry.centroidCoordinates(); var desired = target.centroidCoordinates(); double scale = 0;
+			var centroid = current.measure.centroidCoordinates(); var desired = target.centroidCoordinates(); double scale = 0;
 			for (int i = 0; i < 3; i++) {
 				rhs[i] = desired[i].subtract(centroid[i]).rounded();
 				for (int j = 0; j < 3; j++) { double value = derivative[i][j].rounded(); ja[i] += value * a.coordinate(j); jb[i] += value * b.coordinate(j); }

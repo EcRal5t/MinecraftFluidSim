@@ -20,7 +20,7 @@ final class LiquidGeometrySourcePlan {
 			while (true) {
 				try {
 					var interfaceGeometry = LiquidVolumeInterface.reconstruct(open, remaining, new LiquidPolyhedron.Point(0, 1, 0), precision);
-					add(selected, interfaceGeometry.geometry, maximumFragments); remaining = Fraction.ZERO; break;
+					add(selected, interfaceGeometry.singleGeometry(), maximumFragments); remaining = Fraction.ZERO; break;
 				} catch (LiquidCoordinateResolutionRequired unresolved) {
 					if (precision == 1074) throw unresolved;
 					precision = Math.min(1074, 2 * precision);

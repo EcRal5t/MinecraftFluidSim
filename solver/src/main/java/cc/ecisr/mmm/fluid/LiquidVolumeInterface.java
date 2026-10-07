@@ -4,107 +4,130 @@ import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Finite planar-interface representation with exact volume and a bounded cap displacement. */
+/** Common planar cut of disjoint convex open pieces, with exact volume and bounded cap displacement. */
 final class LiquidVolumeInterface {
-	final LiquidPolyhedron geometry;
+	private record Part(LiquidConvexRegion open, LiquidConvexRegion cut, LiquidExactPolygon cap) { }
+	private record Cut(List<Part> parts, LiquidExactPolygon.Measure measure) { }
+	final List<LiquidPolyhedron> pieces;
+	final LiquidExactPolygon.Measure measure;
 	final Fraction symmetricDifferenceVolumeBound;
 	final double normalPositionError;
-	private final LiquidExactPolygon cap;
+	private final List<LiquidExactPolygon> caps;
 	private final Fraction[] normal;
-	private LiquidVolumeInterface(LiquidPolyhedron geometry, Fraction difference, double position) {
-		this(geometry, difference, position, null, null);
+	private LiquidVolumeInterface(List<LiquidPolyhedron> pieces, Fraction difference, double position, List<LiquidExactPolygon> caps, Fraction[] normal) {
+		this.pieces = List.copyOf(pieces); measure = measure(pieces); symmetricDifferenceVolumeBound = difference; normalPositionError = position;
+		this.caps = List.copyOf(caps); this.normal = normal.clone();
 	}
-	private LiquidVolumeInterface(LiquidPolyhedron geometry, Fraction difference, double position, LiquidExactPolygon cap, Fraction[] normal) {
-		this.geometry = geometry; symmetricDifferenceVolumeBound = difference; normalPositionError = position;
-		this.cap = cap; this.normal = normal == null ? null : normal.clone();
+	LiquidPolyhedron singleGeometry() {
+		if (pieces.size() > 1) throw new IllegalStateException("Interface spans multiple open pieces");
+		return pieces.isEmpty() ? LiquidPolyhedron.EMPTY : pieces.getFirst();
 	}
-	/** The normal fixes the retained side. Precision bounds its offset interval relative to the open region. */
 	static LiquidVolumeInterface reconstruct(LiquidPolyhedron open, Fraction volume, LiquidPolyhedron.Point normal, int bits) {
-		if (open == null || volume == null || normal == null || bits < 1 || bits > 1074)
+		return reconstruct(List.of(open), volume, normal, bits);
+	}
+	/** Open pieces share a coordinate frame and must be disjoint. The normal fixes the retained side. */
+	static LiquidVolumeInterface reconstruct(List<LiquidPolyhedron> open, Fraction volume, LiquidPolyhedron.Point normal, int bits) {
+		if (open == null || open.isEmpty() || volume == null || normal == null || bits < 1 || bits > 1074)
 			throw new IllegalArgumentException("Invalid finite interface reconstruction");
 		var n = new Fraction[]{Fraction.of(normal.x()), Fraction.of(normal.y()), Fraction.of(normal.z())};
 		var norm = dot(n, n); if (norm.signum() == 0) throw new IllegalArgumentException("Absent interface normal");
-		var original = LiquidConvexRegion.of(open); var capacity = original.measure().volume();
-		if (capacity.signum() <= 0 || volume.signum() < 0 || volume.subtract(capacity).signum() > 0)
+		var originals = open.stream().map(LiquidConvexRegion::of).toList(); var capacity = measure(open).volume();
+		if (originals.stream().anyMatch(region -> !region.hasVolume()) || volume.signum() < 0 || volume.subtract(capacity).signum() > 0)
 			throw new IllegalArgumentException("Interface volume exceeds its positive open region");
-		if (volume.signum() == 0) return new LiquidVolumeInterface(LiquidPolyhedron.EMPTY, Fraction.ZERO, 0);
-		if (volume.equals(capacity)) return new LiquidVolumeInterface(open, Fraction.ZERO, 0);
+		if (volume.signum() == 0) return new LiquidVolumeInterface(List.of(), Fraction.ZERO, 0, List.of(), n);
+		if (volume.equals(capacity)) return new LiquidVolumeInterface(open, Fraction.ZERO, 0, List.of(), n);
 		Fraction lo = null, hi = null;
-		for (var face : original.faces()) for (var p : face.vertices()) {
+		for (var original : originals) for (var face : original.faces()) for (var p : face.vertices()) {
 			var value = dot(n, p.coordinates());
 			if (lo == null || value.subtract(lo).signum() < 0) lo = value;
 			if (hi == null || value.subtract(hi).signum() > 0) hi = value;
 		}
-		var lower = LiquidConvexRegion.EMPTY;
+		var lower = new Cut(List.of(), LiquidConvexRegion.EMPTY.measure());
 		for (int i = 0; i < bits; i++) {
-			var mid = lo.add(hi).divide(Fraction.of(2)); var region = clip(original, n, mid);
-			int comparison = region.measure().volume().subtract(volume).signum();
-			if (comparison == 0) return new LiquidVolumeInterface(region.geometry(), Fraction.ZERO, 0, cap(region, n, mid), n);
-			if (comparison < 0) { lo = mid; lower = region; } else hi = mid;
+			var mid = lo.add(hi).divide(Fraction.of(2)); var cut = cut(originals, n, mid);
+			int comparison = cut.measure.volume().subtract(volume).signum();
+			if (comparison == 0) return new LiquidVolumeInterface(cut.parts.stream().map(part -> part.cut.geometry()).toList(), Fraction.ZERO, 0, caps(cut), n);
+			if (comparison < 0) { lo = mid; lower = cut; } else hi = mid;
 		}
-		if (!lower.hasVolume()) throw new LiquidCoordinateResolutionRequired("Interface offset needs finer coordinates for its positive volume");
-		var cap = cap(lower, n, lo);
-		var difference = volume.subtract(lower.measure().volume()); var area = cap.areaVector();
-		var delta = difference.multiply(Fraction.of(3)).divide(dot(area, area));
-		var x = cap.centroidCoordinates(); var displacement = new Fraction[3];
+		if (lower.measure.signum() == 0) throw new LiquidCoordinateResolutionRequired("Interface offset needs finer coordinates for its positive volume");
+		Part selected = null; var largest = Fraction.ZERO;
+		for (var part : lower.parts) if (part.cap != null) {
+			var squared = dot(part.cap.areaVector(), part.cap.areaVector());
+			if (squared.subtract(largest).signum() > 0) { selected = part; largest = squared; }
+		}
+		if (selected == null) throw new LiquidCoordinateResolutionRequired("Interface offset has no partial cap at its coordinate precision");
+		var difference = volume.subtract(lower.measure.volume()); var area = selected.cap.areaVector();
+		var delta = difference.multiply(Fraction.of(3)).divide(largest);
+		var x = selected.cap.centroidCoordinates(); var displacement = new Fraction[3];
 		for (int a = 0; a < 3; a++) { displacement[a] = area[a].multiply(delta); x[a] = x[a].add(displacement[a]); }
 		var point = LiquidExactPolygon.vertex(x);
-		for (var face : original.faces()) if (point.distance(face.coefficients()).signum() > 0)
+		for (var face : selected.open.faces()) if (point.distance(face.coefficients()).signum() > 0)
 			throw new LiquidCoordinateResolutionRequired("Finite interface cap exceeds its open space");
 		var faces = new ArrayList<LiquidExactPolygon>();
-		for (var face : lower.faces()) if (face != cap) faces.add(face);
-		var center = LiquidExactPolygon.vertex(lower.measure().centroidCoordinates());
-		for (int e = 0; e < cap.vertices().size(); e++) faces.add(LiquidExactPolygon.tetrahedron(List.of(center, point,
-				cap.vertices().get(e), cap.vertices().get((e + 1) % cap.vertices().size()))).getFirst());
-		// A supporting-face proof makes this one convex body, including at oblique cut-cell corners.
+		for (var face : selected.cut.faces()) if (face != selected.cap) faces.add(face);
+		var center = LiquidExactPolygon.vertex(selected.cut.measure().centroidCoordinates());
+		for (int e = 0; e < selected.cap.vertices().size(); e++) faces.add(LiquidExactPolygon.tetrahedron(List.of(center, point,
+				selected.cap.vertices().get(e), selected.cap.vertices().get((e + 1) % selected.cap.vertices().size()))).getFirst());
 		for (var face : faces) for (var other : faces) for (var vertex : other.vertices())
-			if (vertex.distance(face.coefficients()).signum() > 0)
-				throw new LiquidCoordinateResolutionRequired("Finite interface cap needs finer convex support");
-		var represented = LiquidPolyhedron.restoredExact(List.copyOf(faces));
-		if (!represented.measure().volume().equals(volume)) throw new IllegalStateException("Finite interface representation lost exact volume");
+			if (vertex.distance(face.coefficients()).signum() > 0) throw new LiquidCoordinateResolutionRequired("Finite interface cap needs finer convex support");
+		var geometry = new ArrayList<LiquidPolyhedron>();
+		for (var part : lower.parts) geometry.add(part == selected ? LiquidPolyhedron.restoredExact(List.copyOf(faces)) : part.cut.geometry());
+		if (!measure(geometry).volume().equals(volume)) throw new IllegalStateException("Finite interface representation lost exact volume");
 		var interval = hi.subtract(lo); var offsetSquared = interval.multiply(interval).divide(norm);
 		double error = upperNorm(dot(displacement, displacement)) + upperNorm(offsetSquared);
 		if (!Double.isFinite(error)) throw new LiquidCoordinateResolutionRequired("Finite interface has no normal-position error bound");
-		// Both the exact planar cut and this body contain the lower cut and have the same volume.
-		return new LiquidVolumeInterface(represented, difference.multiply(Fraction.of(2)), Math.nextUp(error), cap, n);
+		// Both the exact planar cut and this union contain the lower cut and have the same volume.
+		return new LiquidVolumeInterface(geometry, difference.multiply(Fraction.of(2)), Math.nextUp(error), caps(lower), n);
 	}
-	/** First-moment defect is an observation for spatial refinement, independent of exact volume closure. */
 	double centroidError(LiquidExactPolygon.Measure requested) {
-		if (!requested.volume().equals(geometry.measure().volume()) || requested.signum() <= 0)
+		if (!requested.volume().equals(measure.volume()) || requested.signum() <= 0)
 			throw new IllegalArgumentException("Centroid comparison requires the same positive volume");
-		var a = requested.centroidCoordinates(); var b = geometry.centroidCoordinates(); var squared = Fraction.ZERO;
+		var a = requested.centroidCoordinates(); var b = measure.centroidCoordinates(); var squared = Fraction.ZERO;
 		for (int i = 0; i < 3; i++) { var delta = a[i].subtract(b[i]); squared = squared.add(delta.multiply(delta)); }
 		return upperNorm(squared);
 	}
-	/** Fixed-volume planar centroid derivative: minus the cap covariance integral divided by liquid volume. */
+	/** Fixed-volume centroid derivative uses the covariance of all cap sections about their common centroid. */
 	Fraction[][] centroidDerivative() {
-		if (cap == null) throw new IllegalStateException("A partial interface is required for its orientation derivative");
 		var result = new Fraction[3][3]; for (var row : result) java.util.Arrays.fill(row, Fraction.ZERO);
-		var center = cap.centroidCoordinates(); var norm = dot(normal, normal);
-		for (int e = 0; e < cap.vertices().size(); e++) {
-			var a = cap.vertices().get(e).coordinates(); var b = cap.vertices().get((e + 1) % cap.vertices().size()).coordinates();
-			for (int i = 0; i < 3; i++) { a[i] = a[i].subtract(center[i]); b[i] = b[i].subtract(center[i]); }
-			var cross = new Fraction[]{a[1].multiply(b[2]).subtract(a[2].multiply(b[1])),
-					a[2].multiply(b[0]).subtract(a[0].multiply(b[2])), a[0].multiply(b[1]).subtract(a[1].multiply(b[0]))};
-			var weight = dot(cross, normal).divide(norm).divide(Fraction.of(24)).divide(geometry.measure().volume()).negate();
+		if (caps.isEmpty()) return result;
+		var center = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var sum = Fraction.ZERO; var norm = dot(normal, normal);
+		for (var cap : caps) {
+			var weight = dot(cap.areaVector(), normal).divide(norm); sum = sum.add(weight); var x = cap.centroidCoordinates();
+			for (int i = 0; i < 3; i++) center[i] = center[i].add(x[i].multiply(weight));
+		}
+		for (int i = 0; i < 3; i++) center[i] = center[i].divide(sum);
+		for (var cap : caps) for (int e = 0; e < cap.vertices().size(); e++) {
+			var c = cap.centroidCoordinates(); var a = cap.vertices().get(e).coordinates(); var b = cap.vertices().get((e + 1) % cap.vertices().size()).coordinates();
+			var edgeA = new Fraction[3]; var edgeB = new Fraction[3];
+			for (int i = 0; i < 3; i++) { edgeA[i] = a[i].subtract(c[i]); edgeB[i] = b[i].subtract(c[i]); a[i] = a[i].subtract(center[i]); b[i] = b[i].subtract(center[i]); c[i] = c[i].subtract(center[i]); }
+			var weight = dot(cross(edgeA, edgeB), normal).divide(norm).divide(Fraction.of(24)).divide(measure.volume()).negate();
 			for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
-				var covariance = a[i].add(b[i]).multiply(a[j].add(b[j])).add(a[i].multiply(a[j])).add(b[i].multiply(b[j]));
+				var covariance = a[i].add(b[i]).add(c[i]).multiply(a[j].add(b[j]).add(c[j]))
+						.add(a[i].multiply(a[j])).add(b[i].multiply(b[j])).add(c[i].multiply(c[j]));
 				result[i][j] = result[i][j].add(weight.multiply(covariance));
 			}
 		}
 		return result;
 	}
-	private static LiquidExactPolygon cap(LiquidConvexRegion region, Fraction[] normal, Fraction offset) {
-		for (var face : region.faces()) if (face.vertices().stream().allMatch(p -> dot(normal, p.coordinates()).equals(offset))) return face;
-		throw new IllegalStateException("Clipped interface has no retained cap");
+	static LiquidExactPolygon.Measure measure(List<LiquidPolyhedron> geometry) {
+		var result = LiquidConvexRegion.EMPTY.measure(); for (var part : geometry) result = result.add(part.measure()); return result;
 	}
-	private static LiquidConvexRegion clip(LiquidConvexRegion region, Fraction[] n, Fraction offset) {
-		return region.clip(new Fraction[]{n[0], n[1], n[2], offset});
+	private static Cut cut(List<LiquidConvexRegion> originals, Fraction[] normal, Fraction offset) {
+		var parts = new ArrayList<Part>(); var measure = LiquidConvexRegion.EMPTY.measure();
+		for (var original : originals) {
+			var region = original.clip(new Fraction[]{normal[0], normal[1], normal[2], offset}); if (!region.hasVolume()) continue;
+			LiquidExactPolygon cap = null;
+			if (region != original) for (var face : region.faces()) if (face.vertices().stream().allMatch(p -> dot(normal, p.coordinates()).equals(offset))) { cap = face; break; }
+			parts.add(new Part(original, region, cap)); measure = measure.add(region.measure());
+		}
+		return new Cut(List.copyOf(parts), measure);
+	}
+	private static List<LiquidExactPolygon> caps(Cut cut) { return cut.parts.stream().map(Part::cap).filter(java.util.Objects::nonNull).toList(); }
+	private static Fraction[] cross(Fraction[] a, Fraction[] b) {
+		return new Fraction[]{a[1].multiply(b[2]).subtract(a[2].multiply(b[1])), a[2].multiply(b[0]).subtract(a[0].multiply(b[2])), a[0].multiply(b[1]).subtract(a[1].multiply(b[0]))};
 	}
 	private static Fraction dot(Fraction[] a, Fraction[] b) {
 		var result = Fraction.ZERO; for (int i = 0; i < 3; i++) result = result.add(a[i].multiply(b[i])); return result;
 	}
-	private static double upperNorm(Fraction squared) {
-		return squared.signum() == 0 ? 0 : Math.nextUp(Math.sqrt(Math.nextUp(squared.rounded())));
-	}
+	private static double upperNorm(Fraction squared) { return squared.signum() == 0 ? 0 : Math.nextUp(Math.sqrt(Math.nextUp(squared.rounded()))); }
 }
