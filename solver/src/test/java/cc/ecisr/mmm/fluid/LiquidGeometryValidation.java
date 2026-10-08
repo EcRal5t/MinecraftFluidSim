@@ -204,6 +204,7 @@ final class LiquidGeometryValidation {
 				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.75, 0.25, 0, 1, 1, 1)));
 		if (LiquidPolyhedron.restoredExact(LiquidExteriorGeometry.of(cavity)).kernelPoint() != null)
 			throw new AssertionError("A non-star-shaped cavity acquired a fictitious positive fan kernel");
+		nonStarControlsCancelAuxiliaryCuts(cavity);
 		for (double height : new double[]{1, 1.0 / 1024}) {
 			var pieces = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.25, height)),
 					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0.25, 0, 0.25, 1, height)));
@@ -245,6 +246,39 @@ final class LiquidGeometryValidation {
 			for (var image : motion.images) measured = measured.add(image.geometry().measure());
 			if (!measured.same(shape.translated(slope[0] / 128, slope[1] / 128, slope[2] / 128).measure()))
 				throw new AssertionError("Auxiliary kernel changed rigid transport volume or first moments");
+		}
+	}
+	private static void nonStarControlsCancelAuxiliaryCuts(java.util.List<LiquidGeometryRefinement.Cell> cavity) {
+		var expected = LiquidVolumeInterface.measure(cavity.stream().map(LiquidGeometryRefinement.Cell::geometry).toList());
+		for (boolean fine : new boolean[]{false, true}) {
+			var pieces = fine ? cavity.stream().flatMap(cell -> LiquidGeometryRefinement.children(cell).stream()).toList() : cavity;
+			var state = LiquidGeometryStateMapper.capture(pieces, 1, new int[]{0}, new int[pieces.size()], new double[3 * pieces.size()], new int[pieces.size()]);
+			var actual = LiquidGeometryStateMapper.restore(state); var ids = java.util.stream.IntStream.range(0, actual.size()).boxed().toList();
+			var controls = new LiquidMechanicalControlCells(state, actual, ids, java.util.Collections.nCopies(actual.size(), -1), java.util.Set.of());
+			if (controls.regions.size() != 2) throw new AssertionError("Non-star material retained its auxiliary convex pressure partition: " + controls.regions.size());
+			var measure = LiquidConvexRegion.EMPTY.measure(); var retained = new java.util.HashSet<LiquidGeometryRefinement.Cell>();
+			for (int c = 0; c < controls.regions.size(); c++) {
+				var geometry = controls.regions.get(c).geometry(); var kernel = geometry.kernelPoint();
+				if (kernel == null || LiquidExactPolygon.faces(geometry).stream().anyMatch(face -> kernel.distance(face.coefficients()).signum() >= 0))
+					throw new AssertionError("Agglomerated control has no exact positive fan support");
+				measure = measure.add(geometry.measure());
+				for (var piece : controls.support.get(c)) if (!retained.add(piece)) throw new AssertionError("Agglomerated control duplicated positive material support");
+			}
+			if (!measure.same(expected) || retained.size() != actual.size() || !retained.containsAll(actual))
+				throw new AssertionError("Agglomeration changed exact occupancy, volume or first moments");
+			var mesh = new LiquidControlVolumeMesh(controls.regions, 1, 1000, (c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+			if (mesh.faces.stream().noneMatch(face -> face.second() >= 0)) throw new AssertionError("Agglomerated connected material lost its shared mechanical face");
+			var mean = new double[3 * mesh.cells.size()]; var u = new double[]{0.125, -0.25, 0.0625};
+			for (int c = 0; c < mesh.cells.size(); c++) System.arraycopy(u, 0, mean, 3 * c, 3);
+			var rates = new LiquidExactPolygon.Fraction[mesh.faces.size()];
+			for (int f = 0; f < rates.length; f++) {
+				rates[f] = LiquidExactPolygon.Fraction.ZERO;
+				for (int a = 0; a < 3; a++) rates[f] = rates[f].add(mesh.faces.get(f).areaVector().get(a).multiply(LiquidExactPolygon.Fraction.of(u[a])));
+			}
+			var field = new LiquidConformingVelocity(mesh, rates, mean); var motion = new LiquidConformingTransport(mesh, field, rates, 1.0 / 128);
+			var imageMeasure = LiquidConvexRegion.EMPTY.measure(); for (var image : motion.images) imageMeasure = imageMeasure.add(image.geometry().measure());
+			var target = LiquidConvexRegion.EMPTY.measure(); for (var piece : cavity) target = target.add(piece.geometry().translated(u[0] / 128, u[1] / 128, u[2] / 128).measure());
+			if (!imageMeasure.same(target)) throw new AssertionError("Non-star agglomeration changed exact rigid transport");
 		}
 	}
 	private static void mechanicalFacetsIgnoreAuxiliaryGasCuts() {

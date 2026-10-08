@@ -22,12 +22,14 @@ final class LiquidMechanicalControlCells {
 		}
 		var result = new ArrayList<LiquidGeometryRefinement.Cell>(); var represented = new ArrayList<List<LiquidGeometryRefinement.Cell>>();
 		var ids = new ArrayList<Integer>(); var labels = new ArrayList<Integer>();
+		var work = new LiquidStarControlPartition.Work();
 		for (var group : groups.values()) {
-			var pieces = group.stream().map(primitive::get).toList(); var geometry = assemble(pieces);
-			if (geometry == null) for (int c : group) {
-				result.add(primitive.get(c)); represented.add(List.of(primitive.get(c))); ids.add(source.get(c)); labels.add(-1);
-			} else {
-				result.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, geometry)); represented.add(pieces); ids.add(source.get(group.getFirst())); labels.add(-1);
+			var pieces = group.stream().map(primitive::get).toList(); var geometry = LiquidStarControlPartition.assemble(pieces);
+			var partition = geometry.kernelPoint() == null ? LiquidStarControlPartition.build(pieces, work)
+					: List.of(new LiquidStarControlPartition.Region(geometry, java.util.stream.IntStream.range(0, pieces.size()).boxed().toList()));
+			for (var region : partition) {
+				result.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, region.geometry()));
+				represented.add(region.pieces().stream().map(pieces::get).toList()); ids.add(source.get(group.get(region.pieces().getFirst()))); labels.add(-1);
 			}
 		}
 		for (int c = 0; c < primitive.size(); c++) if (source.get(c) < 0) {
@@ -35,12 +37,5 @@ final class LiquidMechanicalControlCells {
 		}
 		regions = List.copyOf(result); support = List.copyOf(represented);
 		fragments = ids.stream().mapToInt(Integer::intValue).toArray(); gasNodes = labels.stream().mapToInt(Integer::intValue).toArray();
-	}
-	private static LiquidPolyhedron assemble(List<LiquidGeometryRefinement.Cell> pieces) {
-		if (pieces.size() == 1) return pieces.getFirst().geometry();
-		var measure = LiquidConvexRegion.EMPTY.measure(); for (var piece : pieces) measure = measure.add(piece.geometry().measure());
-		var faces = LiquidExactPolygon.splitEdges(LiquidExteriorGeometry.of(pieces));
-		var geometry = LiquidPolyhedron.restoredExact(faces, measure);
-		return geometry.kernelPoint() == null ? null : geometry;
 	}
 }
