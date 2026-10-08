@@ -10,6 +10,17 @@ final class LiquidCoplanarFaceUnion {
 	record Result(List<LiquidControlVolumeProjection.Face> faces, List<LiquidExactPolygon> polygons, int[] sources, int[] targets) { }
 	private record Support(int first, int second, double prescribed, LiquidGeometryPlane.Key plane, boolean positive, int label) { }
 	private LiquidCoplanarFaceUnion() { }
+	/** Convex fragment unions retain one polygon per supporting plane wherever coverage is complete. */
+	static List<LiquidExactPolygon> compact(List<LiquidExactPolygon> polygons) {
+		var groups = new LinkedHashMap<List<java.math.BigInteger>, ArrayList<LiquidExactPolygon>>();
+		for (var polygon : polygons) groups.computeIfAbsent(polygon.coefficients(), ignored -> new ArrayList<>()).add(polygon);
+		var result = new ArrayList<LiquidExactPolygon>();
+		for (var group : groups.values()) {
+			var merged = union(group);
+			if (merged == null) result.addAll(group); else result.add(merged);
+		}
+		return List.copyOf(result);
+	}
 	static Result build(List<LiquidControlVolumeProjection.Face> faces, List<LiquidExactPolygon> polygons) {
 		return build(faces, polygons, new int[faces.size()]);
 	}

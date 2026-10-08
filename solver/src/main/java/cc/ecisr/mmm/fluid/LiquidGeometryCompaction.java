@@ -62,7 +62,7 @@ final class LiquidGeometryCompaction {
 		// Partial coverage of a nonsupporting face proves a concavity; no auxiliary hull is needed.
 		if (!exterior(first, second, exterior) || !exterior(second, first, exterior)) return null;
 		var original = LiquidConvexRegion.of(a.geometry()).measure().add(LiquidConvexRegion.of(b.geometry()).measure());
-		var sharedEdges = LiquidExactPolygon.splitEdges(exterior);
+		var sharedEdges = LiquidExactPolygon.splitEdges(LiquidCoplanarFaceUnion.compact(exterior));
 		// Complementary interior faces cancel algebraically, preserving volume and every spatial moment.
 		return LiquidPolyhedron.restoredExact(sharedEdges, original);
 	}

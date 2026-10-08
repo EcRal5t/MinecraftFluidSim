@@ -578,6 +578,9 @@ final class LiquidGeometryValidation {
 			if (budget == 64 && compact.cells().size() != 1) throw new AssertionError("Convex auxiliary cuts retained unnecessary geometric work");
 			if (budget == 64) {
 				var merged = LiquidGeometryStateMapper.restore(compact).getFirst().geometry();
+				if (LiquidExactPolygon.faces(merged).size() != 6
+						|| LiquidExactPolygon.faces(merged).stream().anyMatch(face -> face.vertices().size() != 4))
+					throw new AssertionError("Convex compaction retained auxiliary coplanar faces or collinear vertices");
 				var box = LiquidPolyhedron.box(0.125, 0.125, 0.125, 0.875, 0.375, 0.375);
 				for (double[] cut : new double[][]{{0, 0, -1, -0.25}, {1, 1, 1, 0.75}, {1, 2, 3, 1.5}, {-2, 1, 3, 0.25}}) {
 					var clipped = merged.clip(cut[0], cut[1], cut[2], cut[3]);
@@ -588,6 +591,13 @@ final class LiquidGeometryValidation {
 			}
 		}
 		var concave = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.375, 0.125, 0.125, 0.625, 0.625, 0.375));
+		var strips = new java.util.ArrayList<LiquidGeometryRefinement.Cell>();
+		for (int i = 0; i < 32; i++) strips.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0,
+				LiquidPolyhedron.box(i / 32.0, 0.125, 0.125, (i + 1) / 32.0, 0.375, 0.375)));
+		var stripState = LiquidGeometryStateMapper.capture(strips, 1, new int[]{0}, new int[32], new double[96], new int[32]);
+		var stripUnion = LiquidGeometryCompaction.compact(stripState, 4096);
+		if (stripUnion.cells().size() != 1 || LiquidGeometryStateMapper.restore(stripUnion).getFirst().geometry().faces().size() != 6)
+			throw new AssertionError("Repeated convex unions grew their stored surface with auxiliary cuts");
 		var gap = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(Math.nextUp(0.375), 0.125, 0.125, 0.625, 0.375, 0.375));
 		for (var neighbor : java.util.List.of(concave, gap)) {
 			var shape = LiquidGeometryStateMapper.capture(java.util.List.of(a, neighbor), 1, new int[]{0}, new int[]{0, 0}, new double[6], new int[]{0, 0});
