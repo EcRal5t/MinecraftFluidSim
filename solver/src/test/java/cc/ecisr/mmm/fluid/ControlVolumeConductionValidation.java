@@ -55,7 +55,51 @@ final class ControlVolumeConductionValidation {
 			throw new AssertionError("Face residual correction exchanged heat with an insulating neighbour");
 		cooccupiedCaloricInventories();
 		obliqueCaloricInterfacePreservesSteadyFlux();
+		enclosedMaterialRegionPreservesAffineFluxAndHeatCapacity();
 		 temporalAndSpatialFourierRefinement();
+	}
+	private static void enclosedMaterialRegionPreservesAffineFluxAndHeatCapacity() {
+		var pieces = List.of(LiquidPolyhedron.box(0, 0, 0, .25, 1, 1), LiquidPolyhedron.box(.75, 0, 0, 1, 1, 1),
+				LiquidPolyhedron.box(.25, 0, 0, .75, .25, 1), LiquidPolyhedron.box(.25, .75, 0, .75, 1, 1),
+				LiquidPolyhedron.box(.25, .25, 0, .75, .75, .25), LiquidPolyhedron.box(.25, .25, .75, .75, .75, 1));
+		var shell = LiquidStarControlPartition.assemble(pieces.stream().map(piece -> new LiquidGeometryRefinement.Cell(0, 0, 0, 0, piece)).toList());
+		if (shell.kernelPoint() != null) throw new AssertionError("Enclosed cavity unexpectedly has a star fan");
+		var liquid = LiquidPolyhedron.box(.25, .25, .25, .75, .75, .75);
+		var state = LiquidGeometryStateMapper.capture(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, liquid)), 1, new int[]{0});
+		for (boolean refineAuxiliary : new boolean[]{false, true}) {
+			var primitive = new java.util.ArrayList<LiquidGeometryRefinement.Cell>(); var source = new java.util.ArrayList<Integer>(); var labels = new java.util.ArrayList<Integer>();
+			for (int p = 0; p <= pieces.size(); p++) {
+				var piece = p == pieces.size() ? liquid : pieces.get(p);
+				for (var part : refineAuxiliary ? List.of(piece.clip(1, 0, 0, .5), piece.clip(-1, 0, 0, -.5)) : List.of(piece)) if (part.measure().volume().signum() > 0) {
+					primitive.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, part)); source.add(p == pieces.size() ? 0 : -1); labels.add(p == pieces.size() ? -1 : 1);
+				}
+			}
+			var controls = new LiquidCaloricControlCells(state, primitive, source, labels);
+			if (controls.regions.size() != 2 || !controls.regions.getFirst().geometry().measure().same(shell.measure())
+					|| controls.fragments[0] != -1 || controls.gasNodes[0] != 1 || controls.fragments[1] != 0)
+				throw new AssertionError("Auxiliary cuts changed caloric geometry, labels or resolution");
+			var mesh = new LiquidControlVolumeMesh(controls.regions, 1, 1,
+					(c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+			var material = material("test:thermal/enclosed", 3, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 400, 2)));
+			var bodies = new java.util.ArrayList<ThermalContactExchange.Carrier>();
+			for (var cell : mesh.cells) { double mass = cell.geometry().measure().volume().rounded(); bodies.add(new ThermalContactExchange.Carrier(material, mass, 0, mass * material.sensibleSpecificEnergyAt(300))); }
+			var prescribed = new double[mesh.faces.size()]; Arrays.fill(prescribed, Double.NaN);
+			for (int f = 0; f < prescribed.length; f++) if (mesh.faces.get(f).second() < 0) prescribed[f] = enclosedAffineTemperature(mesh.faces.get(f).surface().centroid());
+			var operator = new ControlVolumeConduction(mesh, new double[]{3, 3});
+			var result = operator.advance(bodies, prescribed, .125, 1e-10, 512);
+			for (int c = 0; c < bodies.size(); c++) close(result.energyChange()[c], 0, 1e-9);
+			for (int f = 0; f < prescribed.length; f++) close(result.faceTemperature()[f], enclosedAffineTemperature(mesh.faces.get(f).surface().centroid()), 1e-9);
+			closure(result);
+			Arrays.fill(prescribed, Double.NaN);
+			bodies.set(0, new ThermalContactExchange.Carrier(material, .875, 0, .875 * material.sensibleSpecificEnergyAt(280)));
+			bodies.set(1, new ThermalContactExchange.Carrier(material, .125, 0, .125 * material.sensibleSpecificEnergyAt(330)));
+			result = operator.advance(bodies, prescribed, .125, 1e-10, 512);
+			double q = 6 * 50 * .125 / (1 + 6 * .125 * (1 / 1.75 + 1 / .25));
+			close(result.energyChange()[0], q, 1e-9); close(result.energyChange()[1], -q, 1e-9); closure(result);
+		}
+	}
+	private static double enclosedAffineTemperature(LiquidPolyhedron.Point point) {
+		return 300 + point.x() - .5 + 2 * (point.y() - .5) - .75 * (point.z() - .5);
 	}
 	private static void independentCaloricPrecision(ThermalMaterialDefinition first, ThermalMaterialDefinition second) {
 		var regions = List.of(new LiquidGeometryRefinement.Cell(2, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, .25, .25, .25)),

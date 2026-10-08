@@ -48,7 +48,7 @@ final class ResolvedLiquidConductionPlan {
 			}
 		}
 		var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), collision, List.copyOf(requests.values()), MAXIMUM_REGIONS);
-		var phase = new LiquidGeometryPhaseInput(liquid, partition, gas, MAXIMUM_REGIONS);
+		var phase = LiquidGeometryPhaseInput.caloric(liquid, partition, gas, MAXIMUM_REGIONS);
 		var captured = thermal.prepareConduction(domain.thermalMarkers, network);
 		var support = LiquidGeometryConductionSupport.map(phase, captured, domain.thermalMarkers, thermal.registry(), network, thermal.gas().ambientTemperatureK());
 		var prescribed = new double[phase.mesh.faces.size()]; Arrays.fill(prescribed, Double.NaN);

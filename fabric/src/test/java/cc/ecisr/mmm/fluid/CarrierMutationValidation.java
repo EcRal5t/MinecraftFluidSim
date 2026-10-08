@@ -262,10 +262,12 @@ public final class CarrierMutationValidation {
 				new float[]{(float) center.x(), (float) center.y(), (float) center.z(), 5.0F / 256}, new float[3], new byte[8], new double[]{5000.0 / 256}, new int[]{0}, geometry));
 		domain.sealDomainBoundary(); FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		domain.setPrecipitationEnabled(false);
+		domain.thermalState.resetMarkerTemperature(0, 280, domain.thermalMarkers, domain.exactInternalEnergy());
 		var inventory = domain.particles.inventory(); var species = domain.chemicalLedgerForMarkerRange(0, 1).groups().getFirst().speciesQuanta();
-		var candidate = new CpuFluidSolverBackend().evaluate(FluidStepRequest.pendingPhaseSettlement(0, domain.captureAuthoritativeState()));
+		var input = domain.captureAuthoritativeState();
+		var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, input, java.util.List.of(), false, 0, true));
 		var next = FluidDomain.restoreAuthoritativeState(candidate.state());
-		new ResolvedLiquidReactionPlan(next).publish();
+		FluidDomainStateAssertions.assertSameState(input, domain.captureAuthoritativeState(), "refined mechanical and thermal backend input");
 		require(domain.particles.count() == 1 && domain.liquidGeometryState == geometry && domain.particles.inventory().totalVolume().equals(inventory.totalVolume()),
 				"refined backend candidate mutated its committed input");
 		require(next.particles.count() == 8 && candidate.stats().geometry().inventory().repartitions() == 1
@@ -273,7 +275,9 @@ public final class CarrierMutationValidation {
 				&& next.particles.inventory().totalVolume().equals(inventory.totalVolume()) && next.particles.inventory().totalMass().equals(inventory.totalMass())
 				&& next.chemicalLedgerForMarkerRange(0, 8).groups().getFirst().speciesQuanta().equals(species)
 				&& java.util.stream.IntStream.range(0, 8).anyMatch(p -> next.particles.exactVolume(p).denominator().bitCount() != 1)
-				&& next.exactInternalEnergy().equals(next.thermalAudit().expectedInventory()), "refined mechanical and reaction publication lost independent rational stocks or conservation");
+				&& candidate.stats().thermalAxis().transport().substeps() == 1 && candidate.stats().thermalAxis().transport().maximumAbsoluteTransferEu() > 0
+				&& next.thermalState.exactLiquidEnergy(8).compareTo(domain.thermalState.exactLiquidEnergy(1)) > 0
+				&& next.exactInternalEnergy().equals(next.thermalAudit().expectedInventory()), "refined complete backend lost rational stocks, finite heat exchange or conservation");
 	}
 	private static void nativeMechanicalRegridCarriesChemicalInventory() throws Exception {
 		var registries = capillaryRegistries(); var liquids = registries.liquids();

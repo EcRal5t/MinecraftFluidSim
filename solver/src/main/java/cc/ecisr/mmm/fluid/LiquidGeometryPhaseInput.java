@@ -16,6 +16,9 @@ final class LiquidGeometryPhaseInput {
 	final int[] fragments;
 	final double[] cellVelocity, faceVelocity;
 	final List<List<LiquidGeometryRefinement.Cell>> mechanicalSupport;
+	static LiquidGeometryPhaseInput caloric(LiquidGeometryState state, LiquidGeometryDomainPartition domain, GasGeometryState gas, int maximumRegions) {
+		return new LiquidGeometryPhaseInput(state, domain, java.util.Objects.requireNonNull(gas).sealedExterior(), maximumRegions, gas, null, true);
+	}
 
 	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions) {
 		this(state, domain, sealed, maximumRegions, null, null);
@@ -33,6 +36,9 @@ final class LiquidGeometryPhaseInput {
 		this(state, domain, sealed, maximumRegions, gas, null);
 	}
 	private LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions, GasGeometryState gas, java.util.Map<Integer, Integer> refined) {
+		this(state, domain, sealed, maximumRegions, gas, refined, false);
+	}
+	private LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions, GasGeometryState gas, java.util.Map<Integer, Integer> refined, boolean caloric) {
 		if (state.rootWidthMetres() != domain.rootWidthMetres || maximumRegions < 1) throw new IllegalArgumentException("Invalid geometric phase input");
 		if (gas != null && gas.rootWidthMetres() != domain.rootWidthMetres) throw new IllegalArgumentException("Gas geometry has a different physical root");
 		rootWidthMetres = domain.rootWidthMetres;
@@ -66,7 +72,10 @@ final class LiquidGeometryPhaseInput {
 				LiquidPhasePartition.requireComplete(domain.leaves.get(c), cells.subList(start, cells.size()));
 			}
 		}
-		if (refined == null) {
+		if (caloric) {
+			var controls = new LiquidCaloricControlCells(state, cells, mapping, labels);
+			regions = controls.regions; mechanicalSupport = null; storedGasNodes = controls.gasNodes; fragments = controls.fragments;
+		} else if (refined == null) {
 			regions = List.copyOf(cells); mechanicalSupport = null;
 			storedGasNodes = labels.stream().mapToInt(Integer::intValue).toArray(); fragments = mapping.stream().mapToInt(Integer::intValue).toArray();
 		} else {
