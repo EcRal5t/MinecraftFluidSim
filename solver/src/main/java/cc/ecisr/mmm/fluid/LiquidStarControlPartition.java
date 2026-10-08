@@ -53,7 +53,7 @@ final class LiquidStarControlPartition {
 	}
 	static LiquidPolyhedron assemble(List<LiquidGeometryRefinement.Cell> pieces) {
 		if (pieces.size() == 1) return pieces.getFirst().geometry();
-		var measure = LiquidConvexRegion.EMPTY.measure(); for (var piece : pieces) measure = measure.add(piece.geometry().measure());
-		return LiquidPolyhedron.restoredExact(LiquidExactPolygon.splitEdges(LiquidExteriorGeometry.of(pieces)), measure);
+		var exterior = LiquidExteriorGeometry.of(pieces);
+		return LiquidPolyhedron.restoredExact(LiquidExactPolygon.splitEdges(exterior), LiquidExactPolygon.measure(exterior));
 	}
 }

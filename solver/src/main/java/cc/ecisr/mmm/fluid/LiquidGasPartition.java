@@ -41,9 +41,9 @@ final class LiquidGasPartition {
 				pending.addLast(new Pending(piece, surfaces));
 			}
 		}
-		var complete = LiquidConvexRegion.EMPTY.measure();
-		for (var liquid : liquids) complete = complete.add(liquid.geometry().measure());
-		for (var piece : gas) complete = complete.add(piece.measure());
+		var phases = new ArrayList<>(liquids); var address = LiquidPhasePartition.Address.of(leaf);
+		for (var piece : gas) phases.add(address.cell(piece));
+		var complete = LiquidExactPolygon.measure(LiquidExteriorGeometry.of(phases));
 		if (!complete.same(leaf.geometry().measure())) throw new IllegalStateException("Gas complement lost exact occupied volume or first moments");
 		return List.copyOf(gas);
 	}

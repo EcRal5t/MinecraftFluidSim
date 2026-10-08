@@ -37,6 +37,17 @@ final class LiquidGeometryValidation {
 		mechanicalCellsCancelAuxiliaryCuts();
 		mechanicalFacetsIgnoreAuxiliaryGasCuts();
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
+		var rationalFans = new java.util.ArrayList<LiquidExactPolygon>(); int fan = 0;
+		for (int x = 0; x < 4; x++) for (var face : LiquidExactPolygon.faces(LiquidPolyhedron.box(x / 4.0, 0, 0, (x + 1) / 4.0, 1, 1))) {
+			var denominator = java.math.BigInteger.ONE.shiftLeft(1024).add(java.math.BigInteger.valueOf(2 * ++fan + 1));
+			var fraction = new LiquidExactPolygon.Fraction(java.math.BigInteger.ONE, denominator);
+			var center = face.centroidCoordinates(); var corner = face.vertices().getFirst().coordinates();
+			for (int axis = 0; axis < 3; axis++) center[axis] = center[axis].add(corner[axis].subtract(center[axis]).multiply(fraction));
+			var point = LiquidExactPolygon.vertex(center);
+			for (int edge = 0; edge < face.vertices().size(); edge++) rationalFans.add(LiquidExactPolygon.triangle(point, face.vertices().get(edge), face.vertices().get((edge + 1) % face.vertices().size())));
+		}
+		if (!LiquidExactPolygon.measure(rationalFans).same(cube.measure()) || !LiquidExactPolygon.volume(rationalFans).equals(cube.measure().volume()))
+			throw new AssertionError("Independent rational face fans changed exact volume or first moments");
 		for (var face : LiquidExactPolygon.faces(cube)) {
 			var vertices = new java.util.ArrayList<LiquidExactPolygon.Vertex>();
 			for (int e = 0; e < face.vertices().size(); e++) {
@@ -478,6 +489,10 @@ final class LiquidGeometryValidation {
 		var domain = new LiquidGeometryDomainPartition(2, 2, 2, 0.5F, collision, java.util.List.of(sheet), 128);
 		for (boolean sealed : new boolean[]{false, true}) {
 			var input = new LiquidGeometryPhaseInput(state, domain, sealed, 256); var gas = new ResolvedGasGeometry(input);
+			var primitive = new LiquidExactPolygon.Fraction[gas.volumes.length]; java.util.Arrays.fill(primitive, LiquidExactPolygon.Fraction.ZERO);
+			for (int c = 0; c < gas.phaseNodes.length; c++) if (gas.phaseNodes[c] >= 0) primitive[gas.phaseNodes[c]] = primitive[gas.phaseNodes[c]].add(input.mesh.cells.get(c).geometry().measure().volume());
+			if (!java.util.Arrays.equals(gas.volumes, primitive) || !java.util.Arrays.equals(gas.volumes, ResolvedGasGeometry.volumes(gas.state)))
+				throw new AssertionError("Gas exterior and primitive capacity integrals disagree");
 			if (gas.state.nodeCount() != (sealed ? 2 : 0)) throw new AssertionError("Gas topology lost a chamber inside one base cell");
 			var volume = LiquidExactPolygon.Fraction.ZERO; for (var v : gas.volumes) volume = volume.add(v);
 			if (!volume.add(LiquidConvexRegion.of(sheet.geometry()).measure().volume()).equals(LiquidExactPolygon.Fraction.of(0.125)))

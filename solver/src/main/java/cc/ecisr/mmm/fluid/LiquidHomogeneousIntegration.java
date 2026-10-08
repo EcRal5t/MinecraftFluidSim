@@ -1,15 +1,12 @@
 package cc.ecisr.mmm.fluid;
 
 import java.math.BigInteger;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
-/** Polynomial surface integrals on one common homogeneous denominator; each result is reduced once. */
+/** Exact polygon integrals and oriented surface tetrahedra on local homogeneous coordinates. */
 final class LiquidHomogeneousIntegration {
 	private record Coordinates(BigInteger x, BigInteger y, BigInteger z) {
 		BigInteger at(int axis) { return axis == 0 ? x : axis == 1 ? y : z; }
-		Coordinates subtract(Coordinates other) { return new Coordinates(x.subtract(other.x), y.subtract(other.y), z.subtract(other.z)); }
 		BigInteger cross(Coordinates other, int axis) {
 			int j = (axis + 1) % 3, k = (axis + 2) % 3;
 			return at(j).multiply(other.at(k)).subtract(at(k).multiply(other.at(j)));
@@ -18,67 +15,58 @@ final class LiquidHomogeneousIntegration {
 			return x.multiply(b.cross(c, 0)).add(y.multiply(b.cross(c, 1))).add(z.multiply(b.cross(c, 2)));
 		}
 	}
-	private final BigInteger denominator;
-	private final Map<LiquidExactPolygon.Vertex, Coordinates> coordinates;
-	private LiquidHomogeneousIntegration(List<LiquidExactPolygon.Vertex> points) {
-		var unique = new java.util.LinkedHashSet<>(points); var common = BigInteger.ONE;
-		for (var point : unique) common = common.divide(LiquidIntegerArithmetic.gcd(common, point.w())).multiply(point.w());
-		denominator = common; coordinates = new LinkedHashMap<>();
-		for (var point : unique) {
-			var scale = common.divide(point.w());
-			coordinates.put(point, new Coordinates(point.x().multiply(scale), point.y().multiply(scale), point.z().multiply(scale)));
-		}
-	}
 	static LiquidExactPolygon.Fraction[] area(List<LiquidExactPolygon.Vertex> points) {
-		var integral = new LiquidHomogeneousIntegration(points); var area = new BigInteger[]{BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO};
+		var area = new LiquidExactPolygon.Fraction[]{LiquidExactPolygon.Fraction.ZERO, LiquidExactPolygon.Fraction.ZERO, LiquidExactPolygon.Fraction.ZERO};
 		for (int i = 0; i < points.size(); i++) {
-			var a = integral.coordinates.get(points.get(i)); var b = integral.coordinates.get(points.get((i + 1) % points.size()));
-			for (int axis = 0; axis < 3; axis++) area[axis] = area[axis].add(a.cross(b, axis));
+			var a = points.get(i); var b = points.get((i + 1) % points.size());
+			var x = coordinates(a); var y = coordinates(b); var denominator = a.w().multiply(b.w()).shiftLeft(1);
+			for (int axis = 0; axis < 3; axis++) area[axis] = area[axis].add(new LiquidExactPolygon.Fraction(x.cross(y, axis), denominator));
 		}
-		var divisor = integral.denominator.pow(2).shiftLeft(1);
-		return fractions(area, divisor);
+		return area;
 	}
 	static LiquidExactPolygon.Fraction[] centroid(List<LiquidExactPolygon.Vertex> points, int axis) {
-		var integral = new LiquidHomogeneousIntegration(points); var a = integral.coordinates.get(points.getFirst());
-		var weight = BigInteger.ZERO; var moment = new BigInteger[]{weight, weight, weight};
+		var a = points.getFirst(); var x = coordinates(a); var position = a.coordinates();
+		var weight = LiquidExactPolygon.Fraction.ZERO; var moment = new LiquidExactPolygon.Fraction[]{weight, weight, weight};
 		for (int i = 1; i + 1 < points.size(); i++) {
-			var b = integral.coordinates.get(points.get(i)); var c = integral.coordinates.get(points.get(i + 1));
-			var area = b.subtract(a).cross(c.subtract(a), axis); weight = weight.add(area);
-			for (int coordinate = 0; coordinate < 3; coordinate++)
-				moment[coordinate] = moment[coordinate].add(area.multiply(a.at(coordinate).add(b.at(coordinate)).add(c.at(coordinate))));
+			var b = points.get(i); var c = points.get(i + 1); var y = coordinates(b); var z = coordinates(c);
+			var determinant = a.w().multiply(y.cross(z, axis)).subtract(b.w().multiply(x.cross(z, axis))).add(c.w().multiply(x.cross(y, axis)));
+			var area = new LiquidExactPolygon.Fraction(determinant, a.w().multiply(b.w()).multiply(c.w())); weight = weight.add(area);
+			var second = b.coordinates(); var third = c.coordinates();
+			for (int coordinate = 0; coordinate < 3; coordinate++) moment[coordinate] = moment[coordinate]
+					.add(area.multiply(position[coordinate].add(second[coordinate]).add(third[coordinate])));
 		}
 		if (weight.signum() == 0) throw new IllegalArgumentException("Empty exact polygon centroid");
 		// Projected oriented areas supply the same planar weights; each triangle's centroid is (a+b+c)/3.
-		return fractions(moment, weight.multiply(integral.denominator).multiply(BigInteger.valueOf(3)));
+		var divisor = weight.multiply(LiquidExactPolygon.Fraction.of(3));
+		for (int coordinate = 0; coordinate < 3; coordinate++) moment[coordinate] = moment[coordinate].divide(divisor);
+		return moment;
 	}
 	static LiquidExactPolygon.Measure measure(List<List<LiquidExactPolygon.Vertex>> faces) {
-		var integral = new LiquidHomogeneousIntegration(faces.stream().flatMap(List::stream).toList());
-		var volume = BigInteger.ZERO; var moment = new BigInteger[]{volume, volume, volume};
+		var volume = LiquidExactPolygon.Fraction.ZERO; var moment = new LiquidExactPolygon.Fraction[]{volume, volume, volume};
 		for (var face : faces) {
-			if (face.size() < 3) continue; var a = integral.coordinates.get(face.getFirst());
+			if (face.size() < 3) continue; var a = face.getFirst(); var x = a.coordinates();
 			for (int i = 1; i + 1 < face.size(); i++) {
-				var b = integral.coordinates.get(face.get(i)); var c = integral.coordinates.get(face.get(i + 1));
-				var determinant = a.triple(b, c); volume = volume.add(determinant);
-				for (int axis = 0; axis < 3; axis++)
-					moment[axis] = moment[axis].add(determinant.multiply(a.at(axis).add(b.at(axis)).add(c.at(axis))));
+				var b = face.get(i); var c = face.get(i + 1); var contribution = cone(a, b, c); volume = volume.add(contribution);
+				var y = b.coordinates(); var z = c.coordinates();
+				for (int axis = 0; axis < 3; axis++) moment[axis] = moment[axis]
+						.add(contribution.multiply(x[axis].add(y[axis]).add(z[axis])).divide(LiquidExactPolygon.Fraction.of(4)));
 			}
 		}
 		// The signed tetrahedron (0,a,b,c) has volume det(a,b,c)/6 and centroid (a+b+c)/4.
-		return new LiquidExactPolygon.Measure(new LiquidExactPolygon.Fraction(volume, integral.denominator.pow(3).multiply(BigInteger.valueOf(6))),
-				fractions(moment, integral.denominator.pow(4).multiply(BigInteger.valueOf(24))));
+		return new LiquidExactPolygon.Measure(volume, moment);
 	}
 	static LiquidExactPolygon.Fraction volume(List<List<LiquidExactPolygon.Vertex>> faces) {
-		var integral = new LiquidHomogeneousIntegration(faces.stream().flatMap(List::stream).toList()); var volume = BigInteger.ZERO;
+		var volume = LiquidExactPolygon.Fraction.ZERO;
 		for (var face : faces) {
-			if (face.size() < 3) continue; var a = integral.coordinates.get(face.getFirst());
+			if (face.size() < 3) continue; var a = face.getFirst();
 			for (int i = 1; i + 1 < face.size(); i++)
-				volume = volume.add(a.triple(integral.coordinates.get(face.get(i)), integral.coordinates.get(face.get(i + 1))));
+				volume = volume.add(cone(a, face.get(i), face.get(i + 1)));
 		}
-		return new LiquidExactPolygon.Fraction(volume, integral.denominator.pow(3).multiply(BigInteger.valueOf(6)));
+		return volume;
 	}
-	private static LiquidExactPolygon.Fraction[] fractions(BigInteger[] numerators, BigInteger denominator) {
-		var result = new LiquidExactPolygon.Fraction[3];
-		for (int axis = 0; axis < 3; axis++) result[axis] = new LiquidExactPolygon.Fraction(numerators[axis], denominator);
-		return result;
+	private static LiquidExactPolygon.Fraction cone(LiquidExactPolygon.Vertex a, LiquidExactPolygon.Vertex b, LiquidExactPolygon.Vertex c) {
+		var x = coordinates(a); var y = coordinates(b); var z = coordinates(c);
+		return new LiquidExactPolygon.Fraction(x.triple(y, z), a.w().multiply(b.w()).multiply(c.w()).multiply(BigInteger.valueOf(6)));
 	}
+	private static Coordinates coordinates(LiquidExactPolygon.Vertex point) { return new Coordinates(point.x(), point.y(), point.z()); }
 }

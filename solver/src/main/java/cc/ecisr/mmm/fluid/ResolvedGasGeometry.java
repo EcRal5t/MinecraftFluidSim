@@ -49,18 +49,26 @@ final class ResolvedGasGeometry {
 			cells.add(packed.get(original)); labels[c] = node; phaseNodes[phase] = node;
 		}
 		state = new GasGeometryState(input.rootWidthMetres, cells, labels, nodes.size(), input.sealedExterior);
-		volumes = new Fraction[nodes.size() + 1]; Arrays.fill(volumes, Fraction.ZERO);
-		for (int c = 0; c < order.size(); c++) {
-			int phase = phases.get(order.get(c)); volumes[labels[c]] = volumes[labels[c]].add(input.mesh.cells.get(phase).geometry().measure().volume());
+		var exterior = new ArrayList<ArrayList<LiquidExactPolygon>>();
+		for (int node = 0; node <= nodes.size(); node++) exterior.add(new ArrayList<>());
+		for (int f = 0; f < input.mesh.faces.size(); f++) {
+			var face = input.mesh.faces.get(f); int first = phaseNodes[face.first()], second = face.second() < 0 ? -1 : phaseNodes[face.second()];
+			if (first == second) continue;
+			var polygon = input.mesh.exactPolygons.get(f);
+			if (first >= 0) exterior.get(first).add(polygon);
+			if (second >= 0) exterior.get(second).add(polygon.reversed());
 		}
+		volumes = exterior.stream().map(LiquidExactPolygon::volume).toArray(Fraction[]::new);
 	}
 
 	static Fraction[] volumes(GasGeometryState state) {
-		var volume = new Fraction[state.nodeCount() + 1]; Arrays.fill(volume, Fraction.ZERO);
+		var volume = new Fraction[state.nodeCount() + 1];
 		var width = Fraction.of(state.rootWidthMetres()); var scale = width.multiply(width).multiply(width);
 		int[] nodes = state.nodeOrdinals(); var cells = LiquidGeometryStateMapper.restoreCells(state.cells());
-		for (int c = 0; c < cells.size(); c++) volume[nodes[c]] = volume[nodes[c]]
-				.add(LiquidConvexRegion.of(cells.get(c).geometry()).measure().volume().multiply(scale));
+		var pieces = new ArrayList<ArrayList<LiquidGeometryRefinement.Cell>>();
+		for (int node = 0; node < volume.length; node++) pieces.add(new ArrayList<>());
+		for (int c = 0; c < cells.size(); c++) pieces.get(nodes[c]).add(cells.get(c));
+		for (int node = 0; node < volume.length; node++) volume[node] = LiquidExactPolygon.volume(LiquidExteriorGeometry.of(pieces.get(node))).multiply(scale);
 		return volume;
 	}
 

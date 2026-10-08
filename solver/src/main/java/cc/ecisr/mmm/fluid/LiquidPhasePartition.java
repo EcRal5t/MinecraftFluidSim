@@ -34,15 +34,14 @@ final class LiquidPhasePartition {
 	/** Containment, disjointness and exact volume prove that submitted phases cover the complete open leaf. */
 	static void requireComplete(LiquidGeometryRefinement.Cell leaf, List<LiquidGeometryRefinement.Cell> phases) {
 		var planes = LiquidExactPolygon.faces(leaf.geometry()).stream().map(LiquidExactPolygon::coefficients).toList();
-		var measure = LiquidConvexRegion.EMPTY.measure();
 		for (var phase : phases) {
 			if (!Address.of(phase).equals(Address.of(leaf))) throw new IllegalArgumentException("Phase geometry has a different dyadic leaf");
 			var geometry = LiquidConvexRegion.of(phase.geometry());
 			if (!geometry.hasVolume() || planes.stream().anyMatch(p -> geometry.faces().stream().anyMatch(face -> !face.inside(p))))
 				throw new IllegalArgumentException("Phase geometry leaves its open leaf");
-			measure = measure.add(geometry.measure());
 		}
 		requireDisjoint(phases);
+		var measure = LiquidExactPolygon.measure(LiquidExteriorGeometry.of(phases));
 		if (!measure.same(LiquidConvexRegion.of(leaf.geometry()).measure())) throw new IllegalArgumentException("Submitted phases do not cover complete open geometry");
 	}
 	static int[] gasComponents(LiquidControlVolumeMesh mesh, int[] liquid) {
@@ -81,9 +80,6 @@ final class LiquidPhasePartition {
 		for (int l = 0; l < cells.size(); l++) regions.add(new Region(cells.get(l), l));
 		for (var geometry : gas) regions.add(new Region(address.cell(geometry), -1));
 		if (regions.size() > maximumRegions) throw new IllegalStateException("Phase geometry exceeds its region budget");
-		var measure = LiquidConvexRegion.EMPTY.measure();
-		for (var region : regions) measure = measure.add(LiquidConvexRegion.of(region.cell.geometry()).measure());
-		if (!measure.same(open.measure())) throw new IllegalStateException("Phase geometry exceeds its spatial representation resolution");
 		return List.copyOf(regions);
 	}
 
