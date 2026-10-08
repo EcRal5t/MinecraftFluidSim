@@ -12,6 +12,7 @@ final class LiquidJointReconstructionValidation {
 		globalVolumeCorrectionKeepsSharedLeafCoverage();
 		finiteVolumeRoundingPreservesBothMargins();
 		supportingPlanesCertifyTheirCoordinateEnclosure();
+		supportingVolumeFitKeepsWallsAndConverges();
 		sharedFacePyramidsRetainTheExactStarRegion();
 		auxiliaryInteriorPointsKeepPositiveCompactCoordinates();
 		jointCutsRetainSmallRemainingPhases();
@@ -90,6 +91,36 @@ final class LiquidJointReconstructionValidation {
 		var resolved = LiquidSupportInterface.reconstruct(narrow, List.of(narrow.geometry()), List.of(half), 8);
 		if (resolved.coordinateDifferenceVolumeBound().signum() != 0 || !LiquidVolumeInterface.measure(resolved.pieces()).same(half.measure()))
 			throw new AssertionError("Fixed open walls imposed unrelated phase coordinate precision");
+	}
+	private static void supportingVolumeFitKeepsWallsAndConverges() {
+		var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var source = List.of(LiquidPolyhedron.box(0, 0, 0, 0.75, 0.75, 0.75));
+		var support = LiquidSupportInterface.reconstruct(open, List.of(open.geometry()), source, 8);
+		var exact = LiquidSupportVolumeFit.fit(open, List.of(open.geometry()), support, Fraction.of(0.125), new LiquidSupportVolumeFit.Work(64));
+		if (!LiquidVolumeInterface.measure(exact.pieces()).same(LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5).measure())
+				|| exact.volumeErrorBound().signum() != 0)
+			throw new AssertionError("Common supporting offsets changed the fixed open walls or lost exact volume");
+		var target = new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(3)); var previous = Fraction.of(1);
+		for (int bits : new int[]{8, 16, 32}) {
+			var envelope = LiquidSupportInterface.reconstruct(open, List.of(open.geometry()), source, bits);
+			var fit = LiquidSupportVolumeFit.fit(open, List.of(open.geometry()), envelope, target, new LiquidSupportVolumeFit.Work(128));
+			var measured = LiquidVolumeInterface.measure(fit.pieces());
+			if (measured.volume().subtract(target).absolute().compareTo(fit.volumeErrorBound()) > 0
+					|| fit.volumeErrorBound().compareTo(previous) >= 0)
+				throw new AssertionError("Supporting volume root lost its exact enclosure or coordinate convergence");
+			for (int a = 0; a < 3; a++) if (measured.centroidCoordinates()[a].subtract(Fraction.of(Math.cbrt(1.0 / 3) / 2)).absolute().compareTo(fit.volumeErrorBound()) > 0)
+				throw new AssertionError("Supporting offsets failed the independent symmetric cube moment");
+			previous = fit.volumeErrorBound();
+		}
+		var expanded = LiquidSupportVolumeFit.fit(open, List.of(open.geometry()), support, Fraction.of(0.5), new LiquidSupportVolumeFit.Work(64));
+		if (LiquidVolumeInterface.measure(expanded.pieces()).volume().subtract(Fraction.of(0.5)).absolute().compareTo(expanded.volumeErrorBound()) > 0)
+			throw new AssertionError("Supporting root failed to expand within available open capacity");
+		var insufficient = LiquidSupportVolumeFit.fit(open, List.of(open.geometry()), support, Fraction.of(1.25), new LiquidSupportVolumeFit.Work(64));
+		if (!insufficient.pieces().isEmpty()) throw new AssertionError("Supporting fit invented unavailable source capacity");
+		var work = new LiquidSupportVolumeFit.Work(1); boolean refused = false;
+		try { LiquidSupportVolumeFit.fit(open, List.of(open.geometry()), support, target, work); }
+		catch (IllegalStateException exhausted) { refused = exhausted.getMessage().contains("evaluation budget"); }
+		if (!refused || work.evaluations != 1) throw new AssertionError("Supporting root escaped its shared work budget");
 	}
 	private static void finiteVolumeRoundingPreservesBothMargins() {
 		var sixth = new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(24));

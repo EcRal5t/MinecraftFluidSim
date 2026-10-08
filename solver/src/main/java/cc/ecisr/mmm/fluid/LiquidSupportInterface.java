@@ -10,7 +10,8 @@ import java.util.List;
 
 /** Finite supporting half-spaces of the actual phase surface, intersected with available open pieces. */
 final class LiquidSupportInterface {
-	record Result(List<LiquidPolyhedron> pieces, Fraction coordinateDifferenceVolumeBound) { }
+	record Plane(List<BigInteger> normal, BigInteger offset) { }
+	record Result(List<LiquidPolyhedron> pieces, Fraction coordinateDifferenceVolumeBound, List<Plane> planes) { }
 	private record Bounds(BigInteger inner, BigInteger outer) { }
 	private LiquidSupportInterface() { }
 	static Result reconstruct(LiquidGeometryRefinement.Cell cell, List<LiquidPolyhedron> available, List<LiquidPolyhedron> source, int bits) {
@@ -59,7 +60,7 @@ final class LiquidSupportInterface {
 			}
 		}
 		if (difference.signum() < 0) throw new IllegalStateException("Supporting plane coordinate enclosures inverted their volume bounds");
-		return new Result(List.copyOf(result), difference);
+		return new Result(List.copyOf(result), difference, normals.stream().map(normal -> new Plane(normal, bounds.get(normal).outer)).toList());
 	}
 	private static List<BigInteger> unoriented(List<BigInteger> plane) {
 		int axis = 0; while (plane.get(axis).signum() == 0) axis++;

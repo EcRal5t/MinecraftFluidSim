@@ -94,7 +94,7 @@ final class LiquidMomentReconstruction {
 		if (empty.signum() < 0) throw new IllegalArgumentException("Interface sources exceed their open capacity");
 		if (empty.signum() > 0) targets.put(complement, empty);
 		var originals = new ArrayList<Support>(); var candidateStatistics = new ArrayList<List<PhaseStats>>();
-		var leaves = new ArrayList<Leaf>(); int evaluations = 0, retainedRegions = 0;
+		var leaves = new ArrayList<Leaf>(); var work = new LiquidSupportVolumeFit.Work(budget.maximumEvaluations); int retainedRegions = 0;
 		while (!pending.isEmpty()) {
 			var cell = pending.removeLast(); var available = List.of(cell.open.geometry());
 			var assigned = new ArrayList<LiquidGeometryRefinement.Cell>(); var phases = new ArrayList<Phase>();
@@ -111,16 +111,18 @@ final class LiquidMomentReconstruction {
 					boolean found = false; var availableVolume = LiquidVolumeInterface.measure(available).volume();
 					for (int candidate = p; candidate < order.size(); candidate++) {
 						var source = order.get(candidate); var original = LiquidVolumeInterface.measure(source.pieces);
-						if (evaluations >= budget.maximumEvaluations) throw new IllegalStateException("Interface reconstruction exceeds its evaluation budget: evaluations="
-								+ evaluations + ", acceptedLeaves=" + leaves.size() + ", pendingLeaves=" + pending.size() + ", level=" + cell.open.level());
+						work.context = ", acceptedLeaves=" + leaves.size() + ", pendingLeaves=" + pending.size() + ", level=" + cell.open.level();
 						var remainingVolume = availableVolume.subtract(original.volume());
 						var scale = remainingVolume.signum() > 0 && remainingVolume.compareTo(original.volume()) < 0 ? remainingVolume : original.volume();
 						var allowed = scale.multiply(Fraction.of(tolerance.occupancyErrorLength)).divide(Fraction.of(cell.open.width()));
-						evaluations++;
+						work.charge();
 						var support = LiquidSupportInterface.reconstruct(cell.open, available, source.pieces, cell.coordinateBits);
 						if (support.coordinateDifferenceVolumeBound().compareTo(allowed) > 0)
 							throw new LiquidCoordinateResolutionRequired("Supporting plane coordinate error exceeds its spatial tolerance");
-						var geometry = support.pieces(); var represented = LiquidVolumeInterface.measure(geometry);
+						var fitted = LiquidSupportVolumeFit.fit(cell.open, available, support, original.volume(), work);
+						if (fitted.volumeErrorBound().compareTo(allowed) > 0)
+							throw new LiquidCoordinateResolutionRequired("Supporting volume offset error exceeds its spatial tolerance");
+						var geometry = fitted.pieces(); var represented = LiquidVolumeInterface.measure(geometry);
 						if (represented.signum() == 0) continue;
 						// Every intermediate allocation has another positive phase or complement left to represent.
 						if (represented.volume().compareTo(availableVolume) >= 0) continue;
@@ -216,11 +218,11 @@ final class LiquidMomentReconstruction {
 					refined.add(new Support(child, sources));
 				}
 			}
-			return retry(refined, tolerance, budget, velocityResolved, evaluations);
+			return retry(refined, tolerance, budget, velocityResolved, work.evaluations);
 		}
 		catch (LiquidCoordinateResolutionRequired finer) {
 			if (tolerance.coordinateBits == 1074) throw finer;
-			return retry(supports, new Tolerance(tolerance.centroidDistance, tolerance.occupancyErrorLength, Math.min(1074, 2 * tolerance.coordinateBits)), budget, velocityResolved, evaluations);
+			return retry(supports, new Tolerance(tolerance.centroidDistance, tolerance.occupancyErrorLength, Math.min(1074, 2 * tolerance.coordinateBits)), budget, velocityResolved, work.evaluations);
 		}
 		var refined = new ArrayList<Support>(); boolean accepted = true;
 		for (int l = 0; l < corrected.leaves().size(); l++) {
@@ -248,7 +250,7 @@ final class LiquidMomentReconstruction {
 				}
 			}
 		}
-		if (!accepted) return retry(refined, tolerance, budget, velocityResolved, evaluations);
+		if (!accepted) return retry(refined, tolerance, budget, velocityResolved, work.evaluations);
 		var statistics = new ArrayList<PhaseStats>();
 		totals.forEach((control, sum) -> {
 			if (!sum.source.volume().equals(sum.represented.volume())) throw new IllegalStateException("Local reconstruction lost exact control volume");
@@ -256,7 +258,7 @@ final class LiquidMomentReconstruction {
 		});
 		var visible = new ArrayList<Leaf>();
 		for (var leaf : corrected.leaves()) visible.add(new Leaf(leaf.open, leaf.phases.stream().filter(phase -> phase.control != complement || empty.signum() == 0).toList()));
-		return new Result(visible, statistics, evaluations);
+		return new Result(visible, statistics, work.evaluations);
 	}
 	private static Result retry(List<Support> supports, Tolerance tolerance, Budget budget, java.util.function.Predicate<LiquidGeometryRefinement.Cell> velocityResolved, int evaluations) {
 		if (supports.size() > budget.maximumLeaves) throw new IllegalStateException("Interface reconstruction exceeds its spatial leaf budget");
