@@ -122,7 +122,8 @@ final class LiquidMomentReconstruction {
 							throw new LiquidCoordinateResolutionRequired("Supporting plane coordinate error exceeds its spatial tolerance");
 						var geometry = support.pieces(); var represented = LiquidVolumeInterface.measure(geometry);
 						if (represented.signum() == 0) continue;
-						if (remainingVolume.signum() > 0 && represented.volume().compareTo(availableVolume) >= 0) continue;
+						// Every intermediate allocation has another positive phase or complement left to represent.
+						if (represented.volume().compareTo(availableVolume) >= 0) continue;
 						var difference = occupiedDifference(source.pieces, geometry);
 						if (difference.compareTo(allowed) > 0 || centroidDistance(represented, original) > tolerance.centroidDistance) continue;
 						java.util.Collections.swap(order, p, candidate); phases.add(new Phase(source.control, geometry));
@@ -200,7 +201,8 @@ final class LiquidMomentReconstruction {
 			referenceVolumes.add(ordered); quantum.add(localQuantum);
 		}
 		try {
-			var localVolumes = LiquidPhaseVolumeRounding.round(referenceVolumes, targets, Math.max(53, tolerance.coordinateBits), quantum);
+			// Local volume coordinates have their own measured spatial quantum; global capacities remain exact.
+			var localVolumes = LiquidPhaseVolumeRounding.round(referenceVolumes, targets, 1, quantum);
 			corrected = LiquidJointInterfaceVolume.project(leaves, targets, localVolumes, budget.maximumRegions);
 		}
 		catch (LiquidInterfaceResolutionRequired finer) {

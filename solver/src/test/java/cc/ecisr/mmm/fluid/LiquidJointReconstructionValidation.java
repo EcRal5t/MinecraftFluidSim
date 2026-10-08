@@ -15,6 +15,7 @@ final class LiquidJointReconstructionValidation {
 		sharedFacePyramidsRetainTheExactStarRegion();
 		auxiliaryInteriorPointsKeepPositiveCompactCoordinates();
 		jointCutsRetainSmallRemainingPhases();
+		sequentialCutsKeepUnallocatedPositivePhases();
 		jointControlsRetainIndependentVolumeAndIdentity();
 		equalMomentControlsKeepGeometricOrder();
 		reconstructionPlanKeepsInventoriesAndMomentum();
@@ -117,6 +118,24 @@ final class LiquidJointReconstructionValidation {
 			if (entry.getValue().denominator().bitLength() > 14 || entry.getValue().subtract(difficult.get(r).get(entry.getKey())).absolute().compareTo(Fraction.of(1.0 / 2048)) >= 0)
 				throw new AssertionError("Finite volume coordinates retained the source's arbitrary rational denominator");
 		}
+		var supports = new java.util.ArrayList<LiquidMomentReconstruction.Support>();
+		var shift = new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(1009));
+		for (int cell = 0; cell < 2; cell++) {
+			var open = new LiquidGeometryRefinement.Cell(1, cell, 0, 0, LiquidPolyhedron.box(cell * 0.5, 0, 0, (cell + 1) * 0.5, 0.5, 0.5));
+			var offset = Fraction.of(cell * 0.5 + 0.25).add(cell == 0 ? shift : shift.negate());
+			var plane = List.of(offset.denominator(), java.math.BigInteger.ZERO, java.math.BigInteger.ZERO, offset.numerator());
+			var first = LiquidPolyhedron.restoredExact(LiquidExactPolygon.clipVolume(LiquidExactPolygon.faces(open.geometry()), plane, 1));
+			var second = LiquidPolyhedron.restoredExact(LiquidExactPolygon.clipVolume(LiquidExactPolygon.faces(open.geometry()), plane, -1));
+			supports.add(new LiquidMomentReconstruction.Support(open, List.of(new LiquidMomentReconstruction.Source(11, List.of(first)), new LiquidMomentReconstruction.Source(29, List.of(second)))));
+		}
+		var represented = LiquidMomentReconstruction.reconstruct(supports, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 48),
+				new LiquidMomentReconstruction.Budget(2, 128, 4096), ignored -> true);
+		for (var phase : represented.phases()) if (!phase.sourceMeasure().volume().equals(phase.representedMeasure().volume())
+				|| phase.maximumCentroidError() > 0.01 || phase.maximumOccupancyErrorLength() > 0.03)
+			throw new AssertionError("Spatial volume precision lost exact inventory or its geometry error certificate");
+		for (var leaf : represented.leaves()) for (var phase : leaf.phases())
+			if (LiquidVolumeInterface.measure(phase.pieces()).volume().denominator().bitLength() >= 48)
+				throw new AssertionError("Local volume precision follows supporting-plane bits instead of its declared spatial error");
 	}
 	private static void jointCutsRetainSmallRemainingPhases() {
 		var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
@@ -140,6 +159,27 @@ final class LiquidJointReconstructionValidation {
 				new LiquidMomentReconstruction.Source(4, List.of(remainder))), occupiedTolerance, new LiquidMomentReconstruction.Budget(1, 1, 4096));
 		if (fitted.leaves().size() != 1 || fitted.phases().stream().anyMatch(phase -> phase.maximumOccupancyErrorLength() > occupiedTolerance.occupancyErrorLength()))
 			throw new AssertionError("Resolved planar reconstruction did not retain its geometric interface normal");
+	}
+	private static void sequentialCutsKeepUnallocatedPositivePhases() {
+		var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var first = List.of(LiquidPolyhedron.box(0, 0, 0, 0.5, 1, 1), LiquidPolyhedron.box(0.5, 0, 0, 1, 0.5, 1));
+		var second = List.of(LiquidPolyhedron.box(0.5, 0.5, 0, 0.625, 1, 1), LiquidPolyhedron.box(0.875, 0.5, 0, 1, 1, 1),
+				LiquidPolyhedron.box(0.625, 0.5, 0, 0.875, 0.625, 1), LiquidPolyhedron.box(0.625, 0.875, 0, 0.875, 1, 1));
+		var third = List.of(LiquidPolyhedron.box(0.625, 0.625, 0, 0.875, 0.875, 1));
+		var sources = List.of(new LiquidMomentReconstruction.Source(1, first), new LiquidMomentReconstruction.Source(2, second), new LiquidMomentReconstruction.Source(3, third));
+		// The first convex hull leaves less capacity than the next source volume; its hull would exhaust that capacity.
+		var result = LiquidMomentReconstruction.reconstruct(open, sources, new LiquidMomentReconstruction.Tolerance(0.5, 2, 16),
+				new LiquidMomentReconstruction.Budget(512, 4096, 4096));
+		if (result.phases().size() != sources.size()) throw new AssertionError("Sequential reconstruction lost an unallocated phase");
+		for (var source : sources) {
+			var phase = result.phases().stream().filter(p -> p.control() == source.control()).findFirst().orElseThrow();
+			if (phase.representedMeasure().signum() <= 0 || !phase.representedMeasure().volume().equals(LiquidVolumeInterface.measure(source.pieces()).volume()))
+				throw new AssertionError("Sequential reconstruction lost exact positive phase volume");
+		}
+		for (var leaf : result.leaves()) {
+			var cells = leaf.phases().stream().flatMap(phase -> phase.pieces().stream()).map(LiquidPhasePartition.Address.of(leaf.open())::cell).toList();
+			LiquidPhasePartition.requireComplete(leaf.open(), cells);
+		}
 	}
 	private static void globalVolumeCorrectionKeepsSharedLeafCoverage() {
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
