@@ -101,7 +101,9 @@ final class LiquidConformingTransport {
 		for (var tet : field.tetrahedra) if (liquid[tet.cell()] >= 0) {
 			var source = tet.vertices(); var target = source.stream().map(moved::get).toList();
 			var oldDet = LiquidExactPolygon.homogeneousTetrahedronDeterminant(source); var newDet = LiquidExactPolygon.homogeneousTetrahedronDeterminant(target);
-			if (newDet.signum() != oldDet.signum()) throw new LiquidCharacteristicTimeResolutionRequired("Continuous transport inverted a tetrahedron");
+			if (newDet.signum() != oldDet.signum()) throw new LiquidCharacteristicTimeResolutionRequired("Continuous transport inverted a tetrahedron: cell="
+					+ tet.cell() + ", face=" + tet.face() + ", dt=" + time.rounded() + ", initialVolumeFraction="
+					+ tet.volume().divide(mesh.cells.get(tet.cell()).geometry().measure().volume()).rounded());
 			var geometry = LiquidConvexRegion.ofTetrahedron(target);
 			volume[tet.cell()] = volume[tet.cell()].add(geometry.measure().volume()); result.add(new Image(tet.cell(), tet.face(), geometry, affine(source, target)));
 		}

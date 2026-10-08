@@ -5,7 +5,7 @@ import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 /** Exact rational reference coefficients for the production numerical error certificates. */
 final class LiquidPressureEnergyInverseOracle {
 	private LiquidPressureEnergyInverseOracle() { }
-	static double[][] build(ControlVolumeGradient geometry, double density) {
+	static Fraction[][] coefficients(ControlVolumeGradient geometry, double density) {
 		int n = geometry.indices.length; var zero = Fraction.of(0); var one = Fraction.of(1);
 		var gram = new Fraction[3][3]; var remainder = new Fraction[3][3];
 		for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
@@ -29,14 +29,14 @@ final class LiquidPressureEnergyInverseOracle {
 			spatial[a][b] = a == b ? geometry.exactVolume : zero;
 			for (int k = 0; k < 3; k++) spatial[a][b] = spatial[a][b].add(remainder[k][a].multiply(correction[k][b]));
 		}
-		var dualLifting = multiply(lifting, inverse(spatial)); var inertia = Fraction.of(density); var result = new double[n][n];
+		var dualLifting = multiply(lifting, inverse(spatial)); var inertia = Fraction.of(density); var result = new Fraction[n][n];
 		for (int i = 0; i < n; i++) for (int j = 0; j <= i; j++) {
 			var value = i == j ? one.divide(geometry.exactWeight[i]) : zero;
 			for (int a = 0; a < 3; a++) value = value.subtract(coupling[i][a].multiply(geometry.exactBasis[j][a]).divide(geometry.exactWeight[j]))
 					.add(dualLifting[i][a].multiply(lifting[j][a]));
-			double observed = value.multiply(inertia).rounded();
+			var coefficient = value.multiply(inertia); double observed = coefficient.rounded();
 			if (!Double.isFinite(observed) || i == j && !(observed > 0)) throw new IllegalStateException("Control-volume inverse flux metric exceeds numerical range");
-			result[i][j] = result[j][i] = observed;
+			result[i][j] = result[j][i] = coefficient;
 		}
 		return result;
 	}

@@ -20,7 +20,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 
 	@Override public FluidStepCandidate evaluate(FluidStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Step request is missing");
-		try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
+		try (var ignored = LiquidGeometryStateMapper.openReadScope(); var pressure = LiquidPressureEnergyInverse.openScope()) {
 			int minimumSubsteps = 1;
 			long spentSubsteps = 0L;
 			String refinementReason = "";

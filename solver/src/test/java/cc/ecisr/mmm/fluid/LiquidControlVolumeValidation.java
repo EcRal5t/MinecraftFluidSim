@@ -249,15 +249,27 @@ final class LiquidControlVolumeValidation {
 		}
 	}
 	private static void pressureMetricCertificatesContainExactCoefficients() {
+		try (var reuse = LiquidPressureEnergyInverse.openScope()) { pressureMetricCoefficientsAndActionsMatchExactReference(); }
+	}
+	private static void pressureMetricCoefficientsAndActionsMatchExactReference() {
+		var homogeneous = java.math.BigInteger.ONE.shiftLeft(512);
 		for (var shape : List.of(LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5),
 				LiquidPolyhedron.box(0, 0, 0, 0.5, 1.0 / 1024, 0.5),
 				LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 2, 3, 3).clip(-1, -2, -3, -3 + Math.scalb(1.0, -24)),
-				LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5).clip(-2, 3, 1, 0.7))) {
+				LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5).clip(-2, 3, 1, 0.7),
+				LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5).clip(LiquidGeometryPlane.exact(List.of(homogeneous,
+						homogeneous.add(java.math.BigInteger.ONE), homogeneous.add(java.math.BigInteger.valueOf(3)), homogeneous.shiftRight(1)))),
+				LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5).clip(LiquidGeometryPlane.exact(List.of(homogeneous,
+						homogeneous.add(java.math.BigInteger.TWO), homogeneous.add(java.math.BigInteger.valueOf(3)), homogeneous.shiftRight(1)))))) {
 			var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)), 1, 1000,
 					(c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
 			for (var gradient : ControlVolumeGradient.build(mesh.cells, mesh.faces)) {
-				var observed = LiquidPressureEnergyInverse.build(gradient, 1000); var exact = LiquidPressureEnergyInverseOracle.build(gradient, 1000);
+				var observed = LiquidPressureEnergyInverse.build(gradient, 1000);
+				var coefficients = LiquidPressureEnergyInverseOracle.coefficients(gradient, 1000);
+				var exact = java.util.Arrays.stream(coefficients).map(row -> java.util.Arrays.stream(row).mapToDouble(value -> value.rounded()).toArray()).toArray(double[][]::new);
 				for (int i = 0; i < exact.length; i++) for (int j = 0; j < exact.length; j++) {
+					if (!observed.factors().coefficient(i, j).equals(coefficients[i][j]))
+						throw new AssertionError("Pressure geometry reuse changed the complete rational energy coefficient");
 					if (!(Math.abs(observed.matrix()[i][j] - exact[i][j]) <= observed.error()[i][j] + Math.ulp(exact[i][j])))
 						throw new AssertionError("Pressure metric coefficient escaped its exact-reference error certificate");
 				}

@@ -14,7 +14,7 @@ final class ControlVolumeFluxMetric {
 	ControlVolumeFluxMetric(ControlVolumeGradient geometry, double density) {
 		this.geometry = geometry; this.density = density; mobility = 1 / density;
 		var inverse = LiquidPressureEnergyInverse.build(geometry, density);
-		exactAction = new LiquidExactPressureMetric.Action(inverse.factors()); matrix = inverse.matrix(); coefficientError = inverse.error();
+		exactAction = inverse.action(); matrix = inverse.matrix(); coefficientError = inverse.error();
 		normalizedEnergyTraceUpper = inverse.normalizedEnergyTraceUpper(); weightUpper = inverse.weightUpper();
 		minimumEigenvalue();
 	}

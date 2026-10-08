@@ -1,13 +1,56 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.Value;
+import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import static cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.*;
 
 /** The same block inverse of V B'B + (I-DB)'W(I-DB), with certified numerical coefficients. */
 final class LiquidPressureEnergyInverse {
-	record Result(double[][] matrix, double[][] error, LiquidExactPressureMetric.Factors factors, double normalizedEnergyTraceUpper, double[] weightUpper) { }
+	record Result(double[][] matrix, double[][] error, LiquidExactPressureMetric.Factors factors, LiquidExactPressureMetric.Action action,
+			double normalizedEnergyTraceUpper, double[] weightUpper) { }
+	private record Key(double density, List<Fraction> geometry) {
+		Key(ControlVolumeGradient geometry, double density) { this(density, coordinates(geometry)); }
+		private static List<Fraction> coordinates(ControlVolumeGradient geometry) {
+			var values = new ArrayList<Fraction>(); values.add(geometry.exactVolume);
+			for (int i = 0; i < geometry.indices.length; i++) {
+				values.add(geometry.exactWeight[i]); values.addAll(List.of(geometry.exactBasis[i])); values.addAll(List.of(geometry.exactDisplacement[i]));
+			}
+			return List.copyOf(values);
+		}
+	}
+	private static final ThreadLocal<Scope> CACHE = new ThreadLocal<>();
+	/** Bounded private-request reuse; each key contains full geometry and density. */
+	static final class Scope implements AutoCloseable {
+		private static final long MAXIMUM_COORDINATES = 65_536;
+		private final Scope previous = CACHE.get();
+		private final LinkedHashMap<Key, Result> values = new LinkedHashMap<>(16, 0.75F, true);
+		private long retained;
+		private Scope() { CACHE.set(this); }
+		private Result get(ControlVolumeGradient geometry, double density) {
+			var key = new Key(geometry, density); var result = values.get(key);
+			if (result != null) return result;
+			result = compute(geometry, density); long count = size(key);
+			if (count <= MAXIMUM_COORDINATES) {
+				while (retained > MAXIMUM_COORDINATES - count) retained -= size(values.pollFirstEntry().getKey());
+				values.put(key, result); retained += count;
+			}
+			return result;
+		}
+		private static long size(Key key) { long faces = (key.geometry.size() - 1) / 7; return key.geometry.size() + 2 * faces * faces + 28 * faces + 8; }
+		@Override public void close() {
+			if (CACHE.get() != this) throw new IllegalStateException("Pressure geometry scope closed out of order");
+			if (previous == null) CACHE.remove(); else CACHE.set(previous);
+		}
+	}
+	static Scope openScope() { return new Scope(); }
 	private LiquidPressureEnergyInverse() { }
 	static Result build(ControlVolumeGradient geometry, double density) {
+		var scope = CACHE.get(); return scope == null ? compute(geometry, density) : scope.get(geometry, density);
+	}
+	private static Result compute(ControlVolumeGradient geometry, double density) {
 		int n = geometry.indices.length;
 		var basis = new Value[n][3]; var displacement = new Value[n][3]; var weight = new Value[n];
 		for (int i = 0; i < n; i++) {
@@ -38,7 +81,7 @@ final class LiquidPressureEnergyInverse {
 			}
 		}
 		var weightUpper = new double[n]; for (int i = 0; i < n; i++) weightUpper[i] = weight[i].magnitude();
-		return new Result(result, error, exact, trace.magnitude(), weightUpper);
+		return new Result(result, error, exact, new LiquidExactPressureMetric.Action(exact), trace.magnitude(), weightUpper);
 	}
 	private static Value[][] observed(LiquidExactPolygon.Fraction[][] exact) {
 		var result = new Value[exact.length][3];
