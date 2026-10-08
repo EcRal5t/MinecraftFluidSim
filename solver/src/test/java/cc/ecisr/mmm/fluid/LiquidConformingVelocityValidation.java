@@ -270,6 +270,25 @@ final class LiquidConformingVelocityValidation {
 	}
 	private static void signedPartitionsPreserveNonStarShapedVolumes() {
 		for (double height : new double[]{1, Math.scalb(1.0, -80)}) {
+			var source = List.of(LiquidExactPolygon.vertex(new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}),
+					LiquidExactPolygon.vertex(new Fraction[]{Fraction.of(1), Fraction.ZERO, Fraction.ZERO}),
+					LiquidExactPolygon.vertex(new Fraction[]{Fraction.ZERO, Fraction.of(1), Fraction.ZERO}),
+					LiquidExactPolygon.vertex(new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.of(height)}));
+			var moved = new java.util.LinkedHashMap<LiquidExactPolygon.Vertex, LiquidExactPolygon.Vertex>();
+			for (var p : source) { var x = p.coordinates(); x[0] = x[0].negate(); moved.put(p, LiquidExactPolygon.vertex(x)); }
+			var tet = new LiquidConformingVelocity.Tetrahedron(0, 0, source, LiquidExactPolygon.tetrahedronVolume(source));
+			var witness = LiquidExactPolygon.vertex(new Fraction[]{Fraction.of(-0.125), Fraction.of(0.125), Fraction.of(height / 8)});
+			if (!LiquidConformingTransport.negativeWinding(List.of(tet), 0, moved, witness)
+					|| LiquidConformingTransport.negativeWinding(List.of(tet), 0, moved, source.getFirst())
+					|| LiquidConformingTransport.negativeWinding(List.of(tet), 1, moved, witness))
+				throw new AssertionError("Reference winding certificate lost a negative interior or accepted a surface or different cell");
+			var target = source.stream().map(moved::get).toList(); for (var p : target) moved.put(p, p);
+			var covering = new LiquidConformingVelocity.Tetrahedron(0, 1, target, LiquidExactPolygon.tetrahedronVolume(target));
+			if (LiquidConformingTransport.negativeWinding(List.of(tet, covering), 0, moved, witness))
+				throw new AssertionError("Reference winding certificate ignored its positive covering volume");
+			moved.put(source.get(1), source.getFirst());
+			if (LiquidConformingTransport.negativeWinding(List.of(tet), 0, moved, witness))
+				throw new AssertionError("Degenerate reference supplied a strict negative-winding certificate");
 			var cells = List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.25, 1, height)),
 					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.75, 0, 0, 1, 1, height)),
 					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0, 0, 0.75, 0.25, height)));
@@ -296,7 +315,13 @@ final class LiquidConformingVelocityValidation {
 		var region = LiquidConvexRegion.of(LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
 		var uncovered = LiquidConvexRegion.of(LiquidPolyhedron.box(0.75, 0.75, 0.75, 1.5, 1.5, 1.5));
 		try { LiquidSignedVolumePartition.cancel(List.of(region), List.of(uncovered), 16, 6); throw new AssertionError("Uncovered negative interior was accepted"); }
-		catch (LiquidCharacteristicTimeResolutionRequired expected) { }
+		catch (LiquidCharacteristicTimeResolutionRequired expected) { if (expected.negativeWinding == null) throw new AssertionError("Negative winding rejection lost its exact interior witness"); }
+		var partiallyCovered = LiquidConvexRegion.of(LiquidPolyhedron.box(0.5, 0.5, 0.5, 1.25, 1.25, 1.25));
+		try { LiquidSignedVolumePartition.cancel(List.of(region), List.of(partiallyCovered), 64); throw new AssertionError("Partially uncovered negative volume was accepted"); }
+		catch (LiquidCharacteristicTimeResolutionRequired expected) {
+			if (expected.negativeWinding == null || region.faces().stream().noneMatch(face -> expected.negativeWinding.point().distance(face.coefficients()).signum() > 0))
+				throw new AssertionError("Residual negative volume lacks an exact uncovered interior witness");
+		}
 		try { LiquidSignedVolumePartition.cancel(List.of(region), List.of(region), 16, 1); throw new AssertionError("Unbounded signed partition work was accepted"); }
 		catch (IllegalStateException expected) { }
 		try { LiquidSignedVolumePartition.cancel(List.of(region, region), List.of(), 16); throw new AssertionError("Double material winding was accepted"); }

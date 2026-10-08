@@ -2,15 +2,20 @@ package cc.ecisr.mmm.fluid;
 
 /** A geometric trajectory needs a shorter interval before its candidate can be accepted. */
 final class LiquidCharacteristicTimeResolutionRequired extends IllegalStateException {
+	record NegativeWinding(int cell, LiquidExactPolygon.Vertex point) { }
+	final NegativeWinding negativeWinding;
 	private final double maximumTimeStep;
 	LiquidCharacteristicTimeResolutionRequired() {
 		this("Liquid characteristic requires a shorter interval within incompressible interface support");
 	}
-	LiquidCharacteristicTimeResolutionRequired(String message) { super(message); maximumTimeStep = Double.NaN; }
+	LiquidCharacteristicTimeResolutionRequired(String message) { this(message, (NegativeWinding) null); }
+	LiquidCharacteristicTimeResolutionRequired(String message, NegativeWinding negativeWinding) {
+		super(message); maximumTimeStep = Double.NaN; this.negativeWinding = negativeWinding;
+	}
 	LiquidCharacteristicTimeResolutionRequired(String message, double maximumTimeStep) {
 		super(message);
 		if (!(maximumTimeStep > 0) || !Double.isFinite(maximumTimeStep)) throw new IllegalArgumentException("Invalid certified geometric time interval");
-		this.maximumTimeStep = maximumTimeStep;
+		this.maximumTimeStep = maximumTimeStep; negativeWinding = null;
 	}
 	int minimumSubsteps(double logicalStep, double attemptedStep) {
 		double interval = attemptedStep / 2;

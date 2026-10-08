@@ -107,6 +107,8 @@ final class LiquidConformingTransport {
 		maximumRateRepresentationErrorPerSecond = error;
 		try { var partition = images(positions); images = partition.images; surfaces = partition.surfaces; }
 		catch (LiquidCharacteristicTimeResolutionRequired invalid) {
+			var witness = invalid.negativeWinding;
+			if (witness != null && negativeWinding(field.tetrahedra, witness.cell(), reference.positions, witness.point())) throw invalid;
 			reference.images.size(); // An invalid reference propagates its time-refinement request; a valid reference needs finer coordinates.
 			throw new LiquidCoordinateResolutionRequired(invalid.getMessage());
 		}
@@ -144,8 +146,15 @@ final class LiquidConformingTransport {
 		for (int c = 0; c < mesh.cells.size(); c++) if (liquid[c] >= 0) {
 			int cell = c;
 			var original = positive.getOrDefault(c, new ArrayList<>()); var removals = negative.getOrDefault(c, new ArrayList<>());
-			var parts = removals.isEmpty() ? original : LiquidSignedVolumePartition.cancel(original.stream().map(Image::geometry).toList(), removals, MAXIMUM_REGIONS)
-					.stream().map(geometry -> new Image(cell, -1, geometry, List.<Fraction>of())).toList();
+			List<Image> parts;
+			try {
+				parts = removals.isEmpty() ? original : LiquidSignedVolumePartition.cancel(original.stream().map(Image::geometry).toList(), removals, MAXIMUM_REGIONS)
+						.stream().map(geometry -> new Image(cell, -1, geometry, List.<Fraction>of())).toList();
+			} catch (LiquidCharacteristicTimeResolutionRequired invalid) {
+				if (invalid.negativeWinding == null) throw invalid;
+				throw new LiquidCharacteristicTimeResolutionRequired(invalid.getMessage(),
+						new LiquidCharacteristicTimeResolutionRequired.NegativeWinding(c, invalid.negativeWinding.point()));
+			}
 			var measured = LiquidConvexRegion.EMPTY.measure(); for (var part : parts) measured = measured.add(part.geometry.measure());
 			var exterior = boundary.get(c); if (exterior == null) throw new LiquidCharacteristicTimeResolutionRequired("Continuous transport lost a material surface");
 			if (!measured.same(LiquidExactPolygon.measure(exterior.stream().map(Surface::geometry).toList())))
@@ -157,6 +166,26 @@ final class LiquidConformingTransport {
 			result.addAll(parts); surfaces.addAll(exterior);
 		}
 		return new Partition(List.copyOf(result), List.copyOf(surfaces));
+	}
+	/** Exact determinant signs certify a negative indicator sum without constructing reference intersections. */
+	static boolean negativeWinding(List<LiquidConformingVelocity.Tetrahedron> fan, int cell, Map<Vertex, Vertex> moved, Vertex point) {
+		int winding = 0;
+		for (var tet : fan) if (tet.cell() == cell) {
+			var target = new ArrayList<>(tet.vertices().stream().map(moved::get).toList());
+			int orientation = LiquidExactPolygon.homogeneousTetrahedronDeterminant(target).signum();
+			if (orientation == 0) return false;
+			boolean inside = true, boundary = false;
+			for (int v = 0; v < 4; v++) {
+				var original = target.set(v, point); int sign = LiquidExactPolygon.homogeneousTetrahedronDeterminant(target).signum(); target.set(v, original);
+				if (sign != 0 && sign != orientation) { inside = false; break; }
+				boundary |= sign == 0;
+			}
+			if (inside) {
+				if (boundary) return false;
+				winding += orientation * LiquidExactPolygon.homogeneousTetrahedronDeterminant(tet.vertices()).signum();
+			}
+		}
+		return winding < 0;
 	}
 	private static Fraction sweep(List<Vertex> points, Vertex center, Map<Vertex, Vertex> moved) {
 		var value = Fraction.ZERO; var oldCenter = center.coordinates(); var newCenter = moved.get(center).coordinates();

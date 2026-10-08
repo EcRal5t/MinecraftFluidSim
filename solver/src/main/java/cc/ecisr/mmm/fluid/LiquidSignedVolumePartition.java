@@ -34,7 +34,7 @@ final class LiquidSignedVolumePartition {
 				}
 				if (inside) { covered = true; break; }
 			}
-			if (!covered) throw new LiquidCharacteristicTimeResolutionRequired("Transported surface has negative material winding");
+			if (!covered) throw negativeWinding(point);
 		}
 		var expected = LiquidConvexRegion.EMPTY.measure();
 		for (var region : positive) expected = expected.add(region.measure());
@@ -63,7 +63,8 @@ final class LiquidSignedVolumePartition {
 				if ((long) retained.size() + remaining.size() > maximumRegions)
 					throw new IllegalStateException("Signed volume partition exceeds its region budget");
 			}
-			if (!remaining.isEmpty()) throw new LiquidCharacteristicTimeResolutionRequired("Transported surface has negative material winding");
+			if (!remaining.isEmpty()) throw negativeWinding(LiquidExactPolygon.interiorVertex(remaining.getFirst().faces().stream()
+					.flatMap(face -> face.vertices().stream()).distinct().toList()));
 			result = List.copyOf(retained);
 		}
 		if (expected.signum() <= 0) throw new LiquidCharacteristicTimeResolutionRequired("Transported surface has no positive material volume");
@@ -74,6 +75,10 @@ final class LiquidSignedVolumePartition {
 		try { LiquidPhasePartition.requireDisjoint(cells); }
 		catch (IllegalArgumentException overlap) { throw new LiquidCharacteristicTimeResolutionRequired("Transported surface has overlapping material winding"); }
 		return result;
+	}
+	private static LiquidCharacteristicTimeResolutionRequired negativeWinding(LiquidExactPolygon.Vertex point) {
+		return new LiquidCharacteristicTimeResolutionRequired("Transported surface has negative material winding",
+				new LiquidCharacteristicTimeResolutionRequired.NegativeWinding(-1, point));
 	}
 	private static Difference difference(LiquidConvexRegion region, LiquidConvexRegion cutter, Work work) {
 		var overlap = region.faces();
