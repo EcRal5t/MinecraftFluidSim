@@ -17,6 +17,9 @@ final class LiquidExteriorGeometry {
 	}
 	private LiquidExteriorGeometry() { }
 	static List<LiquidExactPolygon> of(List<LiquidGeometryRefinement.Cell> liquids) {
+		return of(liquids, null);
+	}
+	static List<LiquidExactPolygon> of(List<LiquidGeometryRefinement.Cell> liquids, LiquidSupportVolumeFit.Work work) {
 		var positive = new java.util.LinkedHashMap<LiquidGeometryPlane.Key, ArrayList<Face>>();
 		var negative = new java.util.LinkedHashMap<LiquidGeometryPlane.Key, ArrayList<Face>>();
 		var all = new ArrayList<Face>();
@@ -28,6 +31,7 @@ final class LiquidExteriorGeometry {
 			var other = negative.get(entry.getKey()); if (other == null) continue;
 			for (var a : entry.getValue()) for (var b : other) {
 				if (a.remaining.isEmpty() || b.remaining.isEmpty()) continue;
+				if (work != null) work.charge();
 				if (a.polygon.vertexKey().equals(b.polygon.vertexKey())) { a.remaining = List.of(); b.remaining = List.of(); continue; }
 				var shared = a.polygon.intersection(b.polygon); if (shared.hasArea()) { a.remove(shared); b.remove(shared); }
 			}

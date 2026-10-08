@@ -13,7 +13,12 @@ final class LiquidPhaseVolumeRounding {
 	private LiquidPhaseVolumeRounding() { }
 	static List<Map<Integer, Fraction>> round(List<Map<Integer, Fraction>> reference, Map<Integer, Fraction> totals,
 			int coordinateBits, List<Fraction> maximumQuantum) {
+		return round(reference, totals, coordinateBits, maximumQuantum, null);
+	}
+	static List<Map<Integer, Fraction>> round(List<Map<Integer, Fraction>> reference, Map<Integer, Fraction> totals,
+			int coordinateBits, List<Fraction> maximumQuantum, Fraction relativeQuantum) {
 		if (maximumQuantum.size() != reference.size() || maximumQuantum.stream().anyMatch(value -> value.signum() <= 0)
+				|| relativeQuantum != null && relativeQuantum.signum() <= 0
 				|| coordinateBits < 1 || coordinateBits > 1074) throw new IllegalArgumentException("Invalid phase volume coordinate support");
 		var columns = new LinkedHashMap<Integer, Integer>();
 		for (var row : reference) for (int phase : row.keySet()) columns.computeIfAbsent(phase, ignored -> columns.size());
@@ -39,8 +44,11 @@ final class LiquidPhaseVolumeRounding {
 			var independent = new Fraction[coordinates.size()];
 			for (int e = 0; e < independent.length; e++) independent[e] = lower(values.get(coordinates.face(e)), bits);
 			var rounded = coordinates.liftExact(independent, source); boolean accepted = true;
-			for (int e = 0; e < rounded.length; e++) accepted &= rounded[e].signum() > 0
-					&& rounded[e].subtract(values.get(e)).absolute().compareTo(maximumQuantum.get(first.get(e))) <= 0;
+			for (int e = 0; e < rounded.length; e++) {
+				var error = rounded[e].subtract(values.get(e)).absolute();
+				accepted &= rounded[e].signum() > 0 && error.compareTo(maximumQuantum.get(first.get(e))) <= 0
+						&& (relativeQuantum == null || error.compareTo(values.get(e).multiply(relativeQuantum)) <= 0);
+			}
 			if (accepted) {
 				var result = new ArrayList<Map<Integer, Fraction>>();
 				for (int r = 0; r < reference.size(); r++) result.add(new LinkedHashMap<>());

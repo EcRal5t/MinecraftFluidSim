@@ -13,14 +13,15 @@ final class LiquidGeometryReconstructionPlan {
 	record Observation(int owner, LiquidPolyhedron.Point positionMetres, LiquidPolyhedron.Point velocityMetresPerSecond) implements LiquidGeometryPublication.Observation { }
 	/** Extensive terms use the supplied mass measure; geometric-only inputs supply unit density. */
 	record VelocityError(int owner, Fraction volume, Fraction mass, double maximumRmsError, Fraction kineticLoss, Fraction kineticRoundingChange,
-			List<Fraction> momentumRoundingBounds, Fraction phaseRmsSquaredLimit) { }
+			List<Fraction> momentumRoundingBounds, Fraction phaseRmsSquaredLimit, Fraction mappingKineticErrorBound) { }
 	private static final class VelocityTotals {
 		double rmsError;
-		Fraction loss = Fraction.ZERO, rounding = Fraction.ZERO;
+		Fraction loss = Fraction.ZERO, rounding = Fraction.ZERO, mappingBound = Fraction.ZERO;
 		final Fraction[] bounds = {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
 		void add(LiquidGeometryVelocityProjection.Value value) {
 			rmsError = Math.max(rmsError, value.rmsError()); loss = loss.add(value.kineticLoss()); rounding = rounding.add(value.kineticRoundingChange());
 			for (int a = 0; a < 3; a++) bounds[a] = bounds[a].add(value.momentumRoundingBounds().get(a));
+			mappingBound = mappingBound.add(value.mappingKineticErrorBound());
 		}
 	}
 	final LiquidGeometryState input;
@@ -38,6 +39,7 @@ final class LiquidGeometryReconstructionPlan {
 	final double maximumCentroidError, maximumOccupancyErrorLength;
 	final Fraction symmetricDifferenceVolumeBound;
 	final Fraction redistributedVolume, redistributionSquaredDisplacementVolumeBound;
+	final Fraction weightRoundingVolumeBound, weightRoundingSquaredDisplacementVolumeBound;
 	/** Physical-phase regrid bounds integrated RMS loss relative to the original mass-weighted velocity fluctuations. */
 	static LiquidGeometryReconstructionPlan relativeVelocity(FluidDomain domain, LiquidMomentReconstruction.Tolerance tolerance,
 			double relativePhaseFluctuation, LiquidMomentReconstruction.Budget budget) {
@@ -126,6 +128,7 @@ final class LiquidGeometryReconstructionPlan {
 			centroidError = Math.max(centroidError, observation.maximumCentroidError()); occupancyError = Math.max(occupancyError, observation.maximumOccupancyErrorLength()); difference = difference.add(observation.symmetricDifferenceVolumeBound());
 		}
 		redistributedVolume = mechanical.redistributedVolume; redistributionSquaredDisplacementVolumeBound = mechanical.redistributionSquaredDisplacementVolumeBound;
+		weightRoundingVolumeBound = mechanical.weightRoundingVolumeBound; weightRoundingSquaredDisplacementVolumeBound = mechanical.weightRoundingSquaredDisplacementVolumeBound;
 		for (var leaf : result.leaves()) {
 			selected.add(leaf.open());
 			for (var phase : leaf.phases()) if (phase.control() >= source.size()) {
@@ -196,9 +199,9 @@ final class LiquidGeometryReconstructionPlan {
 			if (!beforeMomentum[old][3].subtract(afterMomentum[next][3]).equals(error.loss.subtract(error.rounding)))
 				throw new IllegalStateException("Geometry reconstruction kinetic change differs from its measured projection defect");
 			var allowedRmsSquared = velocityLimits.getOrDefault(old, velocityLimits.get(-1));
-			if (error.loss.multiply(Fraction.of(2)).compareTo(massTotals[next].multiply(allowedRmsSquared)) > 0)
+			if (error.loss.add(error.mappingBound).multiply(Fraction.of(2)).compareTo(massTotals[next].multiply(allowedRmsSquared)) > 0)
 				throw new IllegalStateException("Reconstructed physical phase exceeds its complete velocity projection error budget");
-			errors.add(new VelocityError(next, nextMeasure[next].volume(), massTotals[next], error.rmsError, error.loss, error.rounding, List.of(error.bounds), allowedRmsSquared));
+			errors.add(new VelocityError(next, nextMeasure[next].volume(), massTotals[next], error.rmsError, error.loss, error.rounding, List.of(error.bounds), allowedRmsSquared, error.mappingBound));
 			var center = nextMeasure[next].centroidCoordinates(); var mean = new Fraction[3];
 			for (int a = 0; a < 3; a++) mean[a] = afterMomentum[next][a].divide(massTotals[next]);
 			observations.add(new Observation(next, new LiquidPolyhedron.Point(center[0].multiply(width).rounded(), center[1].multiply(width).rounded(), center[2].multiply(width).rounded()),

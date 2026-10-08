@@ -12,13 +12,14 @@ final class LiquidPhysicalReconstructionControls {
 	record Control(int leaf, int phase, List<LiquidPolyhedron> pieces, LiquidGeometryVelocityProjection.Value field) { }
 	private record Reference(int support, LiquidGeometryVelocityProjection.Source source) { }
 	private record Node(int leaf, int phase, LiquidGeometryRefinement.Cell box, List<LiquidPolyhedron> pieces,
-			List<Reference> sources, LiquidGeometryVelocityProjection.Value reference, Fraction volume) {
+			List<Reference> sources, Map<LiquidGeometryVelocityProjection.Key, Fraction> reference, Fraction volume) {
 		Node(int leaf, int phase, LiquidGeometryRefinement.Cell box, List<LiquidPolyhedron> pieces, List<Reference> sources) {
-			this(leaf, phase, box, pieces, sources, LiquidGeometryVelocityProjection.summarize(sources.stream().map(Reference::source).toList()).get(phase), LiquidVolumeInterface.measure(pieces).volume());
+			this(leaf, phase, box, pieces, sources, LiquidGeometryVelocityProjection.volumes(sources.stream().map(Reference::source).toList()), LiquidVolumeInterface.measure(pieces).volume());
 		}
 	}
 	final List<Control> controls;
 	final Fraction redistributedVolume, redistributionSquaredDisplacementVolumeBound;
+	final Fraction weightRoundingVolumeBound, weightRoundingSquaredDisplacementVolumeBound;
 	final int evaluations;
 
 	LiquidPhysicalReconstructionControls(List<LiquidMomentReconstruction.Leaf> geometry,
@@ -49,17 +50,20 @@ final class LiquidPhysicalReconstructionControls {
 			balanced = balance(nodes); var unresolved = tolerance.unresolvedLeaves(limits, balanced.fields()); if (unresolved.isEmpty()) break;
 			if (nodes.size() >= budget.maximumLeaves()) throw new IllegalStateException("Physical velocity reconstruction exceeds its control budget");
 			int selected = -1; var largest = Fraction.ZERO;
-			for (int n : unresolved) for (var field : balanced.fields().get(n).values()) if (selected < 0 || field.kineticLoss().compareTo(largest) > 0
-					|| field.kineticLoss().equals(largest) && n < selected) {
-				selected = n; largest = field.kineticLoss();
+			for (int n : unresolved) for (var field : balanced.fields().get(n).values()) if (selected < 0 || field.errorEnergy().compareTo(largest) > 0
+					|| field.errorEnergy().equals(largest) && n < selected) {
+				selected = n; largest = field.errorEnergy();
 			}
 			var least = loss(balanced); ArrayList<Node> accepted = null;
-			for (int axis = 0; axis < 3; axis++) {
-				var candidate = new ArrayList<>(nodes); var children = refine(nodes.get(selected), axis, work);
+			var parent = nodes.get(selected);
+			for (var plane : LiquidMechanicalRefinementPlanes.of(parent.box(), parent.pieces(), parent.sources().stream().map(Reference::source).toList(), work)) {
+				var candidate = new ArrayList<>(nodes); var children = refine(parent, plane, work);
 				candidate.remove(selected); candidate.addAll(selected, children);
 				if (candidate.size() > budget.maximumLeaves() || regions(candidate) > budget.maximumRegions()) continue;
 				work.charge();
-				var defect = loss(balance(candidate)); if (LiquidRationalSum.compare(defect, least) < 0) { least = defect; accepted = candidate; }
+				var projected = balance(candidate); var defect = loss(projected); boolean resolved = tolerance.unresolvedLeaves(limits, projected.fields()).isEmpty();
+				if (resolved || LiquidRationalSum.compare(defect, least) < 0) { least = defect; accepted = candidate; }
+				if (resolved) break;
 			}
 			if (accepted == null) {
 				// Tensor refinement resolves variations whose conditional mean cancels on every single-axis split.
@@ -79,22 +83,26 @@ final class LiquidPhysicalReconstructionControls {
 		}
 		controls = List.copyOf(result); evaluations = work.evaluations;
 		redistributedVolume = balanced.movedVolume(); redistributionSquaredDisplacementVolumeBound = balanced.squaredDisplacementVolumeBound();
+		weightRoundingVolumeBound = balanced.weightRoundingVolumeBound(); weightRoundingSquaredDisplacementVolumeBound = balanced.weightRoundingSquaredDisplacementVolumeBound();
 	}
 	private static LiquidConservativeVolumeRedistribution.Result balance(List<Node> nodes) {
 		var sources = new ArrayList<LiquidConservativeVolumeRedistribution.Source>(); var targets = new ArrayList<LiquidConservativeVolumeRedistribution.Target>();
 		for (int n = 0; n < nodes.size(); n++) {
 			var node = nodes.get(n); var field = node.reference();
-			if (field != null) sources.add(new LiquidConservativeVolumeRedistribution.Source(n, node.phase(), field));
+			if (!field.isEmpty()) sources.add(new LiquidConservativeVolumeRedistribution.Source(n, node.phase(), field));
 			if (!node.pieces().isEmpty()) targets.add(new LiquidConservativeVolumeRedistribution.Target(n, node.phase(), node.volume()));
 		}
 		return LiquidConservativeVolumeRedistribution.project(nodes.stream().map(Node::box).toList(), sources, targets);
 	}
 	private static List<Fraction> loss(LiquidConservativeVolumeRedistribution.Result result) {
-		var values = new ArrayList<Fraction>(); for (var fields : result.fields()) for (var field : fields.values()) values.add(field.kineticLoss()); return List.copyOf(values);
+		var values = new ArrayList<Fraction>(); for (var fields : result.fields()) for (var field : fields.values()) values.add(field.errorEnergy()); return List.copyOf(values);
 	}
 	private static List<Node> refine(Node parent, int axis, LiquidSupportVolumeFit.Work work) {
 		var extent = bounds(List.of(parent.box().geometry())); var middle = extent[0][axis].add(extent[1][axis]).divide(Fraction.of(2));
-		var next = new ArrayList<Node>(); var plane = plane(axis, middle, 1);
+		return refine(parent, plane(axis, middle, 1), work);
+	}
+	private static List<Node> refine(Node parent, List<BigInteger> plane, LiquidSupportVolumeFit.Work work) {
+		var next = new ArrayList<Node>();
 		for (int side : new int[]{1, -1}) {
 			var address = LiquidPhasePartition.Address.of(parent.box()); var pieces = new ArrayList<LiquidPhysicalControlRefinement.Piece>();
 			for (int p = 0; p < parent.pieces().size(); p++) {

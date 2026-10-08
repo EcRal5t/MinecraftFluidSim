@@ -11,6 +11,7 @@ final class LiquidJointReconstructionValidation {
 		sharedVolumeCorrectionRespectsFragmentCapacity();
 		globalVolumeCorrectionKeepsSharedLeafCoverage();
 		finiteVolumeRoundingPreservesBothMargins();
+		finiteVelocityWeightsPreserveCapacitiesAndExtensiveMoments();
 		rationalErrorComparisonsRetainThresholdDecisions();
 		supportingPlanesCertifyTheirCoordinateEnclosure();
 		supportingVolumeFitKeepsWallsAndConverges();
@@ -23,11 +24,32 @@ final class LiquidJointReconstructionValidation {
 		reconstructionPlanKeepsInventoriesAndMomentum();
 		velocityProjectionRefinesSpatialError();
 		physicalVelocityControlsKeepPhaseGeometry();
+		obliqueVelocityInterfacesResolveWithoutAxisStaircases();
 		volumeRedistributionCarriesConservativeMoments();
 		variableDensityProjectionCarriesLocalInventories();
 		relativeVelocityAccuracyPreservesFramesAndSmallFlows();
 		resolvedLeavesCarryIndependentControls();
 		jointGasReconstructionPreservesMaterialChambers();
+	}
+	private static void obliqueVelocityInterfacesResolveWithoutAxisStaircases() {
+		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1); var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);
+		var plane = new LiquidGeometryPlane(new LiquidPolyhedron.Point(1, 1, 0), 1);
+		var sources = List.of(new LiquidGeometryVelocityProjection.Source(0, 11, Fraction.of(1), cube.clip(plane), new LiquidPolyhedron.Point(1, 0, 0)),
+				new LiquidGeometryVelocityProjection.Source(0, 29, Fraction.of(2), cube.clip(plane.opposite()), new LiquidPolyhedron.Point(-1, 0, 0)));
+		var tolerance = new LiquidGeometryVelocityProjection.RmsTolerance(0, 0);
+		var controls = new LiquidPhysicalReconstructionControls(List.of(new LiquidMomentReconstruction.Leaf(root, List.of(new LiquidMomentReconstruction.Phase(0, List.of(cube))))),
+				ignored -> sources, tolerance, tolerance.squaredLimits(sources), 1, new LiquidMomentReconstruction.Budget(2, 256, 64));
+		if (controls.controls.size() != 2 || controls.redistributedVolume.signum() != 0 || controls.weightRoundingVolumeBound.signum() != 0)
+			throw new AssertionError("Oblique field resolution changed phase occupancy or required axis staircases");
+		var measure = LiquidConvexRegion.EMPTY.measure();
+		for (var control : controls.controls) {
+			var field = control.field(); for (var piece : control.pieces()) measure = measure.add(piece.measure());
+			boolean first = field.inventoryVolumes().containsKey(11);
+			if (field.inventoryVolumes().size() != 1 || field.errorEnergy().signum() != 0 || field.velocity()[0] != (first ? 1 : -1)
+					|| !field.mass().equals(Fraction.of(first ? 0.5 : 1)))
+				throw new AssertionError("Oblique field cut mixed independent inventories or velocity moments");
+		}
+		if (!measure.same(cube.measure())) throw new AssertionError("Oblique mechanical refinement changed occupied space or its first moment");
 	}
 	private static void rationalErrorComparisonsRetainThresholdDecisions() {
 		var one = java.math.BigInteger.ONE;
@@ -41,6 +63,44 @@ final class LiquidJointReconstructionValidation {
 				|| LiquidRationalSum.compare(List.of(third, third, third), List.of(Fraction.of(1))) != 0
 				|| LiquidRationalSum.compare(List.of(Fraction.of(0.25), Fraction.of(0.25)), List.of(third)) <= 0)
 			throw new AssertionError("Certified sum comparison changed an exact velocity error threshold");
+	}
+	private static void finiteVelocityWeightsPreserveCapacitiesAndExtensiveMoments() {
+		var one = Fraction.of(1); var tiny = new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.ONE.shiftLeft(900).add(java.math.BigInteger.ONE));
+		var a = new LiquidGeometryVelocityProjection.Key(7, 11, one, new LiquidPolyhedron.Point(1, 0, 0));
+		var b = new LiquidGeometryVelocityProjection.Key(7, 29, Fraction.of(2), new LiquidPolyhedron.Point(-1, 0, 0));
+		var amount = one.divide(Fraction.of(3)).add(tiny);
+		var reference = List.of(java.util.Map.of(a, amount, b, one.subtract(amount)), java.util.Map.of(a, one.subtract(amount), b, amount));
+		var finite = LiquidFiniteRegridWeights.project(reference);
+		var changed = Fraction.ZERO; var mass = Fraction.ZERO; var momentum = Fraction.ZERO; var kinetic = Fraction.ZERO;
+		var quantum = Fraction.of(Math.ulp(1.0) / 2);
+		for (int r = 0; r < reference.size(); r++) {
+			var row = finite.rows().get(r); var field = LiquidGeometryVelocityProjection.moments(row).get(7)
+					.withMappingError(finite.kineticErrorBounds().get(r), finite.massErrorBounds().get(r));
+			if (!field.volume().equals(one) || !row.keySet().equals(reference.get(r).keySet())) throw new AssertionError("Finite velocity weights changed a target capacity or its supported inventories");
+			for (var entry : row.entrySet()) {
+				var delta = entry.getValue().subtract(reference.get(r).get(entry.getKey())).absolute(); changed = changed.add(delta);
+				if (entry.getValue().signum() <= 0 || delta.compareTo(quantum) > 0
+						|| delta.compareTo(reference.get(r).get(entry.getKey()).multiply(quantum)) > 0)
+					throw new AssertionError("Finite velocity weights exceed their numerical volume support");
+			}
+			mass = mass.add(field.mass()); momentum = momentum.add(field.momentum().getFirst()); kinetic = kinetic.add(field.originalKinetic());
+			var mean = field.momentum().getFirst().divide(field.mass()); var actualError = Fraction.ZERO;
+			for (var entry : reference.get(r).entrySet()) {
+				var difference = Fraction.of(entry.getKey().velocity().x()).subtract(mean);
+				actualError = actualError.add(entry.getValue().multiply(entry.getKey().density()).multiply(difference).multiply(difference).divide(Fraction.of(2)));
+			}
+			if (actualError.compareTo(field.errorEnergy()) > 0 || field.squaredErrorMass().signum() <= 0)
+				throw new AssertionError("Finite weight certificate understates the error about the original spatial field");
+		}
+		if (!finite.rows().get(0).get(a).add(finite.rows().get(1).get(a)).equals(one)
+				|| !finite.rows().get(0).get(b).add(finite.rows().get(1).get(b)).equals(one)
+				|| !mass.equals(Fraction.of(3)) || !momentum.equals(Fraction.of(-1)) || !kinetic.equals(Fraction.of(1.5))
+				|| finite.movedVolumeBound().signum() <= 0 || finite.movedVolumeBound().compareTo(changed.divide(Fraction.of(2))) < 0)
+			throw new AssertionError("Finite velocity weights changed complete source mass, momentum, energy or their mapping certificate");
+		var sparse = List.of(java.util.Map.of(a, tiny), java.util.Map.of(a, one.subtract(tiny), b, one));
+		var retained = LiquidFiniteRegridWeights.project(sparse);
+		if (!retained.rows().equals(sparse) || retained.movedVolumeBound().signum() != 0)
+			throw new AssertionError("Finite velocity coordinates lost a positive inventory fixed by sparse capacity constraints");
 	}
 	private static void auxiliaryInteriorPointsKeepPositiveCompactCoordinates() {
 		var one = java.math.BigInteger.ONE; var first = one.shiftLeft(900).add(one); var second = first.add(java.math.BigInteger.TWO);
@@ -288,9 +348,10 @@ final class LiquidJointReconstructionValidation {
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
 		var children = LiquidGeometryRefinement.children(root); var leaves = List.of(children.get(0), children.get(1));
 		var delta = Fraction.of(Math.scalb(1.0, -10)); var firstVolume = Fraction.of(0.0625).add(delta); var secondVolume = Fraction.of(0.03125).subtract(delta);
-		var first = LiquidGeometryVelocityProjection.observe(firstVolume, firstVolume, java.util.Map.of(11, firstVolume), List.of(Fraction.ZERO, Fraction.ZERO, Fraction.ZERO), Fraction.ZERO);
-		var second = LiquidGeometryVelocityProjection.observe(secondVolume, secondVolume, java.util.Map.of(29, secondVolume), List.of(secondVolume, Fraction.ZERO, Fraction.ZERO), secondVolume.divide(Fraction.of(2)));
-		var sources = List.of(new LiquidConservativeVolumeRedistribution.Source(0, 7, first), new LiquidConservativeVolumeRedistribution.Source(1, 7, second));
+		var sources = List.of(new LiquidConservativeVolumeRedistribution.Source(0, 7, java.util.Map.of(
+				new LiquidGeometryVelocityProjection.Key(7, 11, Fraction.of(1), new LiquidPolyhedron.Point(0, 0, 0)), firstVolume)),
+				new LiquidConservativeVolumeRedistribution.Source(1, 7, java.util.Map.of(
+						new LiquidGeometryVelocityProjection.Key(7, 29, Fraction.of(1), new LiquidPolyhedron.Point(1, 0, 0)), secondVolume)));
 		var targets = List.of(new LiquidConservativeVolumeRedistribution.Target(0, 7, Fraction.of(0.0625)), new LiquidConservativeVolumeRedistribution.Target(1, 7, Fraction.of(0.03125)));
 		var result = LiquidConservativeVolumeRedistribution.project(leaves, sources, targets);
 		var a = result.fields().get(0).get(7); var b = result.fields().get(1).get(7);
@@ -345,7 +406,10 @@ final class LiquidJointReconstructionValidation {
 				List.of(secondMass, Fraction.ZERO, Fraction.ZERO), secondMass.divide(Fraction.of(2)));
 		var leaves = LiquidGeometryRefinement.children(root).subList(0, 2);
 		var output = LiquidConservativeVolumeRedistribution.project(leaves,
-				List.of(new LiquidConservativeVolumeRedistribution.Source(0, 7, first), new LiquidConservativeVolumeRedistribution.Source(1, 7, second)),
+				List.of(new LiquidConservativeVolumeRedistribution.Source(0, 7, java.util.Map.of(
+						new LiquidGeometryVelocityProjection.Key(7, 11, Fraction.of(2), new LiquidPolyhedron.Point(0, 0, 0)), firstVolume)),
+						new LiquidConservativeVolumeRedistribution.Source(1, 7, java.util.Map.of(
+								new LiquidGeometryVelocityProjection.Key(7, 29, Fraction.of(6), new LiquidPolyhedron.Point(1, 0, 0)), secondVolume))),
 				List.of(new LiquidConservativeVolumeRedistribution.Target(0, 7, Fraction.of(0.0625)), new LiquidConservativeVolumeRedistribution.Target(1, 7, Fraction.of(0.03125))));
 		var a = output.fields().getFirst().get(7); var b = output.fields().get(1).get(7);
 		var expectedMass = secondMass.add(delta.multiply(Fraction.of(2))); var expectedVelocity = secondMass.divide(expectedMass);
@@ -611,15 +675,16 @@ final class LiquidJointReconstructionValidation {
 		var source = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0}, new int[]{0, 0}, new double[]{0, 0, 0, 1, 0, 0}, new int[]{0, 1});
 		var inventory = observation(source, null); var before = integrated(source, inventory);
 		var tolerance = new LiquidMomentReconstruction.Tolerance(1e-8, 1e-7, 40); var budget = new LiquidMomentReconstruction.Budget(512, 4096, 4096);
-		var previousLoss = Fraction.of(1); int previousCells = 0;
+		var previousLoss = Fraction.of(1);
 		for (double accuracy : new double[]{1, 0.45, 0}) {
 			var plan = new LiquidGeometryReconstructionPlan(source, List.of(open), tolerance, accuracy, budget);
 			var error = plan.velocityErrors.getFirst(); var actual = integrated(plan.geometry, retainedInventory(inventory, observation(plan.geometry, plan.inventoryObservations)));
-			if (error.maximumRmsError() > accuracy || error.kineticLoss().subtract(previousLoss).signum() >= 0 || plan.geometry.cells().size() <= previousCells
+			if (error.maximumRmsError() > accuracy || error.kineticLoss().compareTo(previousLoss) > 0
+					|| previousLoss.signum() > 0 && error.kineticLoss().equals(previousLoss)
 					|| !java.util.Arrays.equals(java.util.Arrays.copyOf(before, 3), java.util.Arrays.copyOf(actual, 3))
 					|| !before[3].subtract(actual[3]).equals(error.kineticLoss().multiply(Fraction.of(500))))
 				throw new AssertionError("Velocity refinement lost conservative momentum, error control or decreasing kinetic projection loss");
-			previousLoss = error.kineticLoss(); previousCells = plan.geometry.cells().size();
+			previousLoss = error.kineticLoss();
 		}
 		if (previousLoss.signum() != 0) throw new AssertionError("Resolved velocity discontinuity retained an unresolved kinetic defect");
 		try {

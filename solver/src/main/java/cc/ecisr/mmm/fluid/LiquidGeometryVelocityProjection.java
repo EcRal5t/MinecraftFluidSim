@@ -18,12 +18,28 @@ final class LiquidGeometryVelocityProjection {
 	}
 	/** Extensive moments retain their mass measure; inventory volumes use the same spatial weights. */
 	record Value(Fraction volume, Fraction mass, Map<Integer, Fraction> inventoryVolumes, List<Fraction> momentum, Fraction originalKinetic, double[] velocity, double rmsError, Fraction kineticLoss,
-			Fraction kineticRoundingChange, List<Fraction> momentumRoundingBounds) { }
+			Fraction kineticRoundingChange, List<Fraction> momentumRoundingBounds, Fraction mappingKineticErrorBound, Fraction mappingMassErrorBound) {
+		Value withMappingError(Fraction kineticBound, Fraction massBound) {
+			var lowerMass = mass.subtract(massBound);
+			if (kineticBound.signum() < 0 || massBound.signum() < 0 || lowerMass.signum() <= 0)
+				throw new LiquidCoordinateResolutionRequired("Finite inventory weights cannot certify their positive mass support");
+			return new Value(volume, mass, inventoryVolumes, momentum, originalKinetic, velocity,
+					squareRootUpper(kineticLoss.add(kineticBound).multiply(Fraction.of(2)).divide(lowerMass)), kineticLoss,
+					kineticRoundingChange, momentumRoundingBounds, kineticBound, massBound);
+		}
+		Fraction squaredErrorMass() { return mass.subtract(mappingMassErrorBound); }
+		Fraction errorEnergy() { return kineticLoss.add(mappingKineticErrorBound); }
+	}
 	private record Address(int level, int x, int y, int z) {
 		Address parent() { return new Address(level - 1, x >>> 1, y >>> 1, z >>> 1); }
 		int coordinate(int axis) { return axis == 0 ? x : axis == 1 ? y : z; }
 	}
-	private record Key(int phase, int inventory, Fraction density, LiquidPolyhedron.Point velocity) { }
+	record Key(int phase, int inventory, Fraction density, LiquidPolyhedron.Point velocity) {
+		Key {
+			if (phase < 0 || inventory < 0 || density == null || density.signum() <= 0 || velocity == null)
+				throw new IllegalArgumentException("Invalid conservative spatial field identity");
+		}
+	}
 	record RmsTolerance(double absoluteMetresPerSecond, double relativePhaseFluctuation) {
 		RmsTolerance {
 			if (!(absoluteMetresPerSecond >= 0) || !Double.isFinite(absoluteMetresPerSecond)
@@ -43,7 +59,7 @@ final class LiquidGeometryVelocityProjection {
 		boolean accepts(Map<Integer, Fraction> limits, int phase, Value field) {
 			var limit = limits.getOrDefault(phase, limits.get(-1));
 			if (limit == null) throw new IllegalArgumentException("Reconstruction field has no source phase accuracy");
-			return field.kineticLoss.multiply(Fraction.of(2)).compareTo(field.mass.multiply(limit)) <= 0;
+			return field.errorEnergy().multiply(Fraction.of(2)).compareTo(field.squaredErrorMass().multiply(limit)) <= 0;
 		}
 		/** Mark the largest integrated defects until the unmarked loss fits each phase's complete budget. */
 		java.util.Set<Integer> unresolvedLeaves(Map<Integer, Fraction> limits, List<Map<Integer, Value>> fields) {
@@ -58,16 +74,16 @@ final class LiquidGeometryVelocityProjection {
 				for (int l = 0; l < fields.size(); l++) {
 					var field = fields.get(l).get(phase.getKey()); if (field == null) continue;
 					mass = mass.add(field.mass);
-					if (field.kineticLoss.signum() > 0) candidates.add(l);
+					if (field.errorEnergy().signum() > 0) candidates.add(l);
 				}
 				var allowed = List.of(mass.multiply(phase.getValue()).divide(Fraction.of(2)));
-				var losses = new ArrayList<Fraction>(); for (int leaf : candidates) losses.add(fields.get(leaf).get(phase.getKey()).kineticLoss);
+				var losses = new ArrayList<Fraction>(); for (int leaf : candidates) losses.add(fields.get(leaf).get(phase.getKey()).errorEnergy());
 				if (LiquidRationalSum.compare(losses, allowed) <= 0) continue;
 				candidates.sort((a, b) -> {
-					int order = fields.get(b).get(phase.getKey()).kineticLoss.compareTo(fields.get(a).get(phase.getKey()).kineticLoss);
+					int order = fields.get(b).get(phase.getKey()).errorEnergy().compareTo(fields.get(a).get(phase.getKey()).errorEnergy());
 					return order == 0 ? Integer.compare(a, b) : order;
 				});
-				losses.clear(); for (int leaf : candidates) losses.add(fields.get(leaf).get(phase.getKey()).kineticLoss);
+				losses.clear(); for (int leaf : candidates) losses.add(fields.get(leaf).get(phase.getKey()).errorEnergy());
 				for (int i = 0; i < candidates.size(); i++) {
 					selected.add(candidates.get(i));
 					if (LiquidRationalSum.compare(losses.subList(i + 1, losses.size()), allowed) <= 0) break;
@@ -78,9 +94,12 @@ final class LiquidGeometryVelocityProjection {
 	}
 	private record Part(Key field, List<LiquidExactPolygon> faces, Fraction volume) { }
 	static Map<Integer, Value> summarize(List<Source> sources) {
+		return moments(volumes(sources));
+	}
+	static Map<Key, Fraction> volumes(List<Source> sources) {
 		var volumes = new LinkedHashMap<Key, Fraction>();
 		for (var source : sources) volumes.merge(new Key(source.phase, source.inventory, source.density, source.velocity), source.geometry.volume(), Fraction::add);
-		return moments(volumes);
+		return java.util.Collections.unmodifiableMap(volumes);
 	}
 	private record Projection(List<Part> parts, Map<Integer, Value> values) { }
 	private final Address root;
@@ -123,7 +142,7 @@ final class LiquidGeometryVelocityProjection {
 		}
 		var value = new Projection(List.copyOf(retained), moments(volumes)); cache.put(cell, value); return value;
 	}
-	private static Map<Integer, Value> moments(Map<Key, Fraction> volumes) {
+	static Map<Integer, Value> moments(Map<Key, Fraction> volumes) {
 		var grouped = new LinkedHashMap<Integer, ArrayList<Map.Entry<Key, Fraction>>>();
 		for (var entry : volumes.entrySet()) grouped.computeIfAbsent(entry.getKey().phase, ignored -> new ArrayList<>()).add(entry);
 		var result = new LinkedHashMap<Integer, Value>();
@@ -167,7 +186,7 @@ final class LiquidGeometryVelocityProjection {
 			if (loss.signum() < 0) throw new IllegalStateException("Conservative P0 projection increased exact kinetic energy");
 			var squaredError = loss.multiply(Fraction.of(2)).divide(mass);
 			double error = squareRootUpper(squaredError);
-			return new Value(volume, mass, Map.copyOf(inventories), List.copyOf(momentum), before, velocity, error, loss, stored.subtract(projected), List.copyOf(bounds));
+			return new Value(volume, mass, Map.copyOf(inventories), List.copyOf(momentum), before, velocity, error, loss, stored.subtract(projected), List.copyOf(bounds), Fraction.ZERO, Fraction.ZERO);
 	}
 	/** Scale the squared quantity before binary64 observation, retaining subnormal velocity errors. */
 	private static double squareRootUpper(Fraction squared) {
