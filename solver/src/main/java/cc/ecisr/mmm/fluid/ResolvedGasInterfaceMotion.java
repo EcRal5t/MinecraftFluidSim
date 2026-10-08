@@ -58,7 +58,7 @@ final class ResolvedGasInterfaceMotion {
 			if (motion.mesh != mesh || !java.util.Arrays.equals(motion.liquid, fragments))
 				throw new IllegalArgumentException("Continuous gas transport refers to another phase input");
 			for (var surface : motion.surfaces) {
-				int c = surface.cell(), f = surface.face(); var face = mesh.faces.get(f);
+				int c = surface.cell(), f = surface.face(); if (f < 0) continue; var face = mesh.faces.get(f);
 				if (fragments[c] < 0) throw new IllegalArgumentException("Continuous gas surface requires liquid support");
 				int neighbor = face.first() == c ? face.second() : face.first();
 				if (neighbor == -2 || neighbor >= 0 && fragments[neighbor] >= 0) continue;

@@ -19,6 +19,9 @@ final class LiquidConformingVelocity {
 	final Map<Vertex, List<Fraction>> velocity;
 	final List<Tetrahedron> tetrahedra;
 	final List<Vertex> faceCenters, cellCenters;
+	final List<List<Vertex>> cellApexes;
+	final Map<Vertex, Fraction> apexWeights;
+	private final Map<Vertex, List<Fraction>> partitionVelocity;
 	final double maximumFittingVelocityErrorMetresPerSecond;
 	private final Map<Vertex, Map<Integer, Fraction>> cornerWeights;
 	private final java.util.Set<Vertex> affineCompleteCorners;
@@ -53,6 +56,9 @@ final class LiquidConformingVelocity {
 			var cells = incidence.computeIfAbsent(p, ignored -> new LinkedHashSet<>()); var face = mesh.faces.get(f);
 			cells.add(face.first()); if (face.second() >= 0) cells.add(face.second());
 		}
+		if (mesh.subdivision != null) for (var fan : mesh.subdivision) if (liquid[fan.cell()] >= 0)
+			for (var polygon : fan.polygons()) for (var p : polygon.vertices())
+				incidence.computeIfAbsent(p, ignored -> new LinkedHashSet<>()).add(fan.cell());
 		var nodes = new LinkedHashMap<Vertex, List<Fraction>>();
 		var fits = new LinkedHashMap<Vertex, Map<Integer, Fraction>>(); var wallNormals = new LinkedHashMap<Vertex, List<Fraction[]>>();
 		var interpolationNodes = new LinkedHashMap<Vertex, LiquidVelocityInterpolation.Node>();
@@ -123,33 +129,67 @@ final class LiquidConformingVelocity {
 			nodes.put(point, List.of(trace)); integration.add(java.util.Collections.unmodifiableMap(weights));
 		}
 		var cells = new ArrayList<Vertex>(); var tets = new ArrayList<Tetrahedron>();
+		var apexes = new ArrayList<List<Vertex>>(); var shares = new LinkedHashMap<Vertex, Fraction>();
+		var partitionSpeeds = new LinkedHashMap<Vertex, List<Fraction>>();
 		for (int c = 0; c < mesh.cells.size(); c++) {
 			var geometry = mesh.cells.get(c).geometry();
-			var center = liquid[c] < 0 ? geometry.centroidCoordinates() : geometry.fanCoordinates(); var volume = Fraction.ZERO; int start = tets.size();
-			var point = LiquidExactPolygon.vertex(center); cells.add(point); if (liquid[c] < 0) continue;
-			for (int f : mesh.cellFaces[c]) {
-				var polygon = mesh.exactPolygons.get(f); if (mesh.faces.get(f).first() != c) polygon = polygon.reversed();
-				for (int e = 0; e < polygon.vertices().size(); e++) {
-					var vertices = polygon.tetrahedronVertices(center, e);
-					var measure = LiquidExactPolygon.tetrahedronVolume(vertices); if (measure.signum() == 0) continue;
-					volume = volume.add(measure);
-					tets.add(new Tetrahedron(c, f, vertices, measure));
+			if (liquid[c] < 0) { cells.add(LiquidExactPolygon.vertex(geometry.centroidCoordinates())); apexes.add(List.of()); continue; }
+			var fans = new ArrayList<LiquidControlVolumeSubdivision.Fan>();
+			if (mesh.subdivision == null) {
+				var polygons = new ArrayList<LiquidExactPolygon>(); for (int f : mesh.cellFaces[c])
+					polygons.add(mesh.faces.get(f).first() == c ? mesh.exactPolygons.get(f) : mesh.exactPolygons.get(f).reversed());
+				fans.add(new LiquidControlVolumeSubdivision.Fan(c, geometry, mesh.cellFaces[c], List.copyOf(polygons)));
+			} else for (var fan : mesh.subdivision) if (fan.cell() == c) fans.add(fan);
+			var points = new ArrayList<Vertex>(); var volume = Fraction.ZERO; int start = tets.size();
+			for (var fan : fans) {
+				var center = fan.geometry().fanCoordinates(); var point = LiquidExactPolygon.vertex(center); points.add(point);
+				if (mesh.subdivision != null) {
+					var node = reference == null ? fittingGeometry.at(point, c) : reference.interpolation.get(point);
+					interpolationNodes.put(point, node); nodes.put(point, List.of(node.velocity(observedMean))); fits.put(point, node.weights);
+					fittingError = Math.max(fittingError, node.error(magnitude));
+				} else nodes.put(point, List.of(Fraction.of(mean[3 * c]), Fraction.of(mean[3 * c + 1]), Fraction.of(mean[3 * c + 2])));
+				partitionSpeeds.put(point, nodes.get(point));
+				var fanVolume = Fraction.ZERO;
+				for (int i = 0; i < fan.faces().length; i++) {
+					int f = fan.faces()[i]; var polygon = fan.polygons().get(i); var faceCenter = LiquidExactPolygon.vertex(polygon.centroidCoordinates());
+					if (f < 0 && !nodes.containsKey(faceCenter)) {
+						var node = reference == null ? fittingGeometry.at(faceCenter, c) : reference.interpolation.get(faceCenter);
+						interpolationNodes.put(faceCenter, node); nodes.put(faceCenter, List.of(node.velocity(observedMean))); fits.put(faceCenter, node.weights);
+						fittingError = Math.max(fittingError, node.error(magnitude));
+					}
+					for (int e = 0; e < polygon.vertices().size(); e++) {
+						var vertices = polygon.tetrahedronVertices(center, e); var measure = LiquidExactPolygon.tetrahedronVolume(vertices);
+						if (measure.signum() < 0) throw new IllegalArgumentException("Auxiliary velocity fan has negative volume");
+						if (measure.signum() == 0) continue;
+						fanVolume = fanVolume.add(measure); tets.add(new Tetrahedron(c, f, vertices, measure));
+					}
 				}
+				if (!fanVolume.equals(fan.geometry().measure().volume())) throw new IllegalStateException("Auxiliary velocity fan changed its support volume");
+				shares.put(point, fanVolume.divide(geometry.measure().volume())); volume = volume.add(fanVolume);
 			}
 			if (!volume.equals(mesh.cells.get(c).geometry().measure().volume())) throw new IllegalStateException("Continuous velocity fan lost cell volume");
-			nodes.put(point, cellVelocity(Arrays.copyOfRange(mean, 3 * c, 3 * c + 3), nodes, List.copyOf(tets.subList(start, tets.size())), volume));
+			var correction = meanCorrection(Arrays.copyOfRange(mean, 3 * c, 3 * c + 3), nodes, List.copyOf(tets.subList(start, tets.size())), volume);
+			for (var point : points) { var base = nodes.get(point); nodes.put(point, new java.util.AbstractList<>() {
+				@Override public int size() { return 3; }
+				@Override public Fraction get(int axis) { return base.get(axis).add(correction.get(axis)); }
+			}); }
+			cells.add(points.getFirst()); apexes.add(List.copyOf(points));
 		}
 		velocity = java.util.Collections.unmodifiableMap(nodes); tetrahedra = List.copyOf(tets); faceCenters = List.copyOf(centers); cellCenters = List.copyOf(cells);
+		cellApexes = List.copyOf(apexes); apexWeights = Map.copyOf(shares);
+		partitionVelocity = Map.copyOf(partitionSpeeds);
 		cornerWeights = java.util.Collections.unmodifiableMap(fits); walls = java.util.Collections.unmodifiableMap(wallNormals); faceWeights = List.copyOf(integration);
 		affineCompleteCorners = java.util.Set.copyOf(complete);
 		interpolation = Map.copyOf(interpolationNodes);
 		integrals = reference == null ? new IntegralWeights(mesh, tetrahedra) : reference.integrals;
-		// Face-normal correction has norm at most 2; the positive cell fan sums three face-node errors.
-		maximumFittingVelocityErrorMetresPerSecond = fittingError == 0 ? 0 : Math.nextUp(6 * fittingError);
+		// Face correction has norm at most 2. Each interior bubble adds its baseline error and the four-node mean error.
+		maximumFittingVelocityErrorMetresPerSecond = fittingError == 0 ? 0 : Math.nextUp(8 * fittingError);
 		if (!Double.isFinite(maximumFittingVelocityErrorMetresPerSecond)) throw new IllegalStateException("Continuous velocity has no finite fitting error bound");
 	}
-	/** The fan-apex coefficient enforces its prescribed mean; surface transport only needs that mean and the traces. */
-	private static List<Fraction> cellVelocity(double[] mean, Map<Vertex, List<Fraction>> nodes, List<Tetrahedron> fan, Fraction volume) {
+	/** One common interior bubble enforces the complete physical mean across every positive integration region. */
+	private static List<Fraction> meanCorrection(double[] mean, Map<Vertex, List<Fraction>> nodes, List<Tetrahedron> fan, Fraction volume) {
+		var base = new LinkedHashMap<Vertex, List<Fraction>>();
+		for (var tet : fan) for (var point : tet.vertices()) base.putIfAbsent(point, nodes.get(point));
 		return new java.util.AbstractList<>() {
 			private final Fraction[] values = new Fraction[3];
 			@Override public int size() { return 3; }
@@ -158,7 +198,7 @@ final class LiquidConformingVelocity {
 				if (values[axis] == null) {
 					var moment = Fraction.ZERO;
 					for (var tet : fan) {
-						var sum = Fraction.ZERO; for (int v = 1; v < 4; v++) sum = sum.add(nodes.get(tet.vertices().get(v)).get(axis));
+						var sum = Fraction.ZERO; for (int v = 0; v < 4; v++) sum = sum.add(base.get(tet.vertices().get(v)).get(axis));
 						moment = moment.add(sum.multiply(tet.volume()));
 					}
 					values[axis] = Fraction.of(mean[axis]).multiply(Fraction.of(4)).subtract(moment.divide(volume));
@@ -207,9 +247,10 @@ final class LiquidConformingVelocity {
 		// Exact orthogonal projection onto the supported wall-normal span can only reduce this error norm.
 		return new Position(LiquidExactPolygon.vertex(rounded), bound);
 	}
-	Fraction[] meanPosition(int cell, Fraction dt) {
-		var result = cellCenters.get(cell).coordinates();
-		for (int a = 0; a < 3; a++) result[a] = result[a].add(Fraction.of(mean[3 * cell + a]).multiply(dt));
+	Fraction[] partitionPosition(int cell, Vertex apex, Fraction dt) {
+		if (!cellApexes.get(cell).contains(apex)) throw new IllegalArgumentException("Auxiliary endpoint has a different physical control");
+		var result = apex.coordinates();
+		for (int a = 0; a < 3; a++) result[a] = result[a].add(partitionVelocity.get(apex).get(a).multiply(dt));
 		return result;
 	}
 	/** Coordinate representation preserves every incident prescribed solid-plane constraint. */
@@ -244,13 +285,19 @@ final class LiquidConformingVelocity {
 			add(nodes.get(entry.getKey()), entry.getValue().toArray(Fraction[]::new));
 			power = power.add(dot(velocity.get(entry.getKey()).toArray(Fraction[]::new), entry.getValue().toArray(Fraction[]::new)));
 		}
-		for (int c = 0; c < mesh.cells.size(); c++) if (nodes.containsKey(cellCenters.get(c))) for (int a = 0; a < 3; a++) force[3 * c + a] = nodes.get(cellCenters.get(c))[a].multiply(Fraction.of(4));
+		var apexForce = new Fraction[mesh.cells.size()][];
+		for (int c = 0; c < apexForce.length; c++) {
+			apexForce[c] = zero(); for (var point : cellApexes.get(c)) add(apexForce[c], nodes.get(point));
+			for (int a = 0; a < 3; a++) force[3 * c + a] = apexForce[c][a].multiply(Fraction.of(4));
+		}
 		var meanWeights = integrals.tetrahedronMeanWeights();
 		for (int i = 0; i < tetrahedra.size(); i++) {
 			var tet = tetrahedra.get(i); var weight = meanWeights.get(i);
-			var input = nodes.get(cellCenters.get(tet.cell())); if (isZero(input)) continue;
+			var input = apexForce[tet.cell()]; if (isZero(input)) continue;
 			var f = scale(input, weight); for (int v = 1; v < 4; v++) add(nodes.get(tet.vertices().get(v)), f);
 		}
+		for (int c = 0; c < cellApexes.size(); c++) for (var point : cellApexes.get(c))
+			nodes.put(point, subtract(nodes.get(point), scale(apexForce[c], apexWeights.get(point))));
 		for (int f = 0; f < mesh.faces.size(); f++) {
 			if (!nodes.containsKey(faceCenters.get(f))) continue;
 			var input = nodes.get(faceCenters.get(f)); if (isZero(input)) continue;
@@ -305,10 +352,13 @@ final class LiquidConformingVelocity {
 			add(value, scale(area, virtualRate[f].subtract(dot(area, value)).multiply(Fraction.of(3)).divide(dot(area, area))));
 			nodes.put(faceCenters.get(f), value);
 		}
+		for (int c = 0; c < primary.length; c++) for (var point : cellApexes.get(c)) nodes.putIfAbsent(point, primary[c].clone());
 		var moment = new Fraction[primary.length][3]; for (int c = 0; c < primary.length; c++) moment[c] = zero();
-		for (var tet : tetrahedra) for (int v = 1; v < 4; v++) add(moment[tet.cell()], scale(nodes.get(tet.vertices().get(v)), tet.volume()));
-		for (int c = 0; c < primary.length; c++) if (velocity.containsKey(cellCenters.get(c)))
-			nodes.put(cellCenters.get(c), subtract(scale(primary[c], Fraction.of(4)), scale(moment[c], Fraction.of(1).divide(mesh.cells.get(c).geometry().measure().volume()))));
+		for (var tet : tetrahedra) for (int v = 0; v < 4; v++) add(moment[tet.cell()], scale(nodes.get(tet.vertices().get(v)), tet.volume()));
+		for (int c = 0; c < primary.length; c++) if (!cellApexes.get(c).isEmpty()) {
+			var correction = subtract(scale(primary[c], Fraction.of(4)), scale(moment[c], Fraction.of(1).divide(mesh.cells.get(c).geometry().measure().volume())));
+			for (var point : cellApexes.get(c)) add(nodes.get(point), correction);
+		}
 		var result = new LinkedHashMap<Vertex, List<Fraction>>(); nodes.forEach((point, value) -> result.put(point, List.of(value)));
 		return java.util.Collections.unmodifiableMap(result);
 	}

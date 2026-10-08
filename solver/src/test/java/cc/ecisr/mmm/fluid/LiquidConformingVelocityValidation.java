@@ -8,6 +8,7 @@ import java.util.List;
 /** Shared full velocity traces, exact moments and surface work under continuous shear. */
 final class LiquidConformingVelocityValidation {
 	static void validate() {
+		nonStarControlRetainsOneMechanicalMean();
 		integerPlaneCoordinatesPreserveConstraintAndClosestDistance();
 		stationaryRationalGeometrySurvivesMotionRounding();
 		affineFieldSurvivesAdaptiveFaces();
@@ -23,6 +24,68 @@ final class LiquidConformingVelocityValidation {
 		capillaryLoadsShareMechanicalInertiaAndSurfaceWork();
 		implicitCapillarityUsesActualPhaseOrdering();
 		LiquidWetWallValidation.validate();
+	}
+	private static void nonStarControlRetainsOneMechanicalMean() {
+		var support = List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.25, 0.25)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0.25, 0, 0.25, 1, 0.25)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.75, 0.25, 0, 1, 1, 0.25)));
+		var shape = LiquidStarControlPartition.assemble(support);
+		if (shape.kernelPoint() != null) throw new AssertionError("Concave fixture unexpectedly admits one positive fan");
+		var transform = List.of(Fraction.of(-1), Fraction.ZERO, Fraction.ZERO, Fraction.of(1),
+				Fraction.ZERO, Fraction.of(-1), Fraction.ZERO, shape.centroidCoordinates()[1].multiply(Fraction.of(2)),
+				Fraction.ZERO, Fraction.ZERO, Fraction.of(1), Fraction.ZERO);
+		var reversed = LiquidConvexRegion.of(shape).transformed(transform).geometry();
+		if (!shape.measure().same(reversed.measure())) throw new AssertionError("Invalid-support fixture changed its extensive moments");
+		try {
+			new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, reversed)), List.of(support), 1, 1000,
+					(c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+			throw new AssertionError("Equal volume and first moments concealed a different occupied region");
+		} catch (IllegalArgumentException expected) { }
+		var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)), List.of(support), 1, 1000,
+				(c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		if (mesh.cells.size() != 1 || mesh.subdivision.size() < 2 || mesh.faces.stream().anyMatch(face -> face.second() >= 0))
+			throw new AssertionError("Positive auxiliary cuts acquired independent mechanical cells or rates");
+		double[] mean = {0.125, -0.0625, 0.03125}; var rates = new Fraction[mesh.faces.size()];
+		for (int f = 0; f < rates.length; f++) { rates[f] = Fraction.ZERO;
+			for (int a = 0; a < 3; a++) rates[f] = rates[f].add(mesh.faces.get(f).areaVector().get(a).multiply(Fraction.of(mean[a])));
+		}
+		var field = new LiquidConformingVelocity(mesh, rates, mean); requireIntegralConstraints(mesh, field, rates, mean);
+		if (field.cellApexes.getFirst().size() != mesh.subdivision.size()) throw new AssertionError("Auxiliary positive support was lost");
+		for (var value : field.velocity.values()) for (int a = 0; a < 3; a++)
+			if (!value.get(a).equals(Fraction.of(mean[a]))) throw new AssertionError("Multi-fan reconstruction changed a rigid translation");
+		var forces = new java.util.LinkedHashMap<LiquidExactPolygon.Vertex, List<Fraction>>(); int ordinal = 1;
+		for (var point : field.velocity.keySet()) { forces.put(point, List.of(Fraction.of(ordinal), Fraction.of(-ordinal * 2), Fraction.of(ordinal % 3))); ordinal++; }
+		requireObservedRateLoad(field, forces);
+		var virtual = rates.clone(); for (int f = 0; f < virtual.length; f++) virtual[f] = Fraction.of((f % 7 - 3) * 0.125);
+		var nodes = field.rateVelocity(virtual); var load = field.rateLoad(forces); var power = Fraction.ZERO;
+		for (var entry : forces.entrySet()) for (int a = 0; a < 3; a++) power = power.add(entry.getValue().get(a).multiply(nodes.get(entry.getKey()).get(a)));
+		for (int f = 0; f < virtual.length; f++) power = power.subtract(load[f].multiply(virtual[f]));
+		if (power.signum() != 0) throw new AssertionError("Multi-fan rate velocity and force transpose lost exact virtual work");
+		var observed = field.rateOperator().velocity(Arrays.stream(virtual).map(LiquidBoundedArithmetic.Value::of).toArray(LiquidBoundedArithmetic.Value[]::new));
+		for (var entry : nodes.entrySet()) for (int a = 0; a < 3; a++) {
+			var value = observed.get(entry.getKey())[a];
+			if (Fraction.of(value.value()).subtract(entry.getValue().get(a)).absolute().compareTo(Fraction.of(value.error())) > 0)
+				throw new AssertionError("Multi-fan numerical velocity escaped its exact reference certificate");
+		}
+		var motion = new LiquidConformingTransport(mesh, field, rates, 1.0 / 128); var volume = Fraction.ZERO;
+		for (var image : motion.images) volume = volume.add(image.geometry().measure().volume());
+		if (!volume.equals(shape.measure().volume())) throw new AssertionError("Concave transport changed exact volume");
+		var sigma = new double[rates.length]; Arrays.fill(sigma, 0.125);
+		var surface = new LiquidConformingCapillarity(field, sigma, new double[]{1000});
+		var expected = new LiquidAreaEnergy(mesh.exactPolygons, sigma);
+		if (Math.abs(surface.energy.joules - expected.joules) > 4 * Math.ulp(expected.joules))
+			throw new AssertionError("Auxiliary internal faces acquired physical surface energy");
+		var controls = new ArrayList<LiquidGeometryRefinement.Cell>(); controls.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape));
+		var subdivision = new ArrayList<List<LiquidGeometryRefinement.Cell>>(); subdivision.add(support);
+		for (var box : List.of(LiquidPolyhedron.box(0.25, 0.25, 0, 0.75, 1, 0.25), LiquidPolyhedron.box(0, 0, 0.25, 1, 1, 0.5),
+				LiquidPolyhedron.box(1, 0, 0, 1.5, 1, 0.5))) {
+			var cell = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, box); controls.add(cell); subdivision.add(List.of(cell));
+		}
+		controls.replaceAll(cell -> new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cell.geometry().scaled(0.5)));
+		subdivision.replaceAll(group -> group.stream().map(cell -> new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cell.geometry().scaled(0.5))).toList());
+		var connected = new LiquidControlVolumeMesh(controls, subdivision, 1, 1000, (c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		requireAffineField(connected, point -> new Fraction[]{point[2].multiply(Fraction.of(0.125)), point[0].multiply(Fraction.of(0.0625)),
+				point[0].multiply(Fraction.of(-0.125))});
 	}
 	private static void integerPlaneCoordinatesPreserveConstraintAndClosestDistance() {
 		for (int[] normal : new int[][]{{1, 0, 0}, {0, -1, 0}, {0, 0, 3}, {2, 4, 6}, {3, -5, 7}, {-3, 2, -4}, {6, 10, 15}, {3, 3, 3}})
@@ -434,7 +497,12 @@ final class LiquidConformingVelocityValidation {
 		var field = new LiquidConformingVelocity(mesh, rates, mean);
 		requireObservedRateLoad(field, field.velocity);
 		for (var node : field.velocity.entrySet()) if (!node.getValue().equals(List.of(affine.apply(node.getKey().coordinates()))))
-			throw new AssertionError("Continuous velocity lost affine completeness at " + node.getKey());
+			throw new AssertionError("Continuous velocity lost affine completeness at " + node.getKey() + ": " + node.getValue() + " / " + List.of(affine.apply(node.getKey().coordinates())));
+		if (mesh.subdivision != null) for (int c = 0; c < field.cellApexes.size(); c++) for (var point : field.cellApexes.get(c)) {
+			var moved = field.partitionPosition(c, point, Fraction.of(0.125)); var velocity = affine.apply(point.coordinates());
+			for (int a = 0; a < 3; a++) if (!moved[a].equals(point.coordinates()[a].add(velocity[a].multiply(Fraction.of(0.125)))))
+				throw new AssertionError("Auxiliary positive subdivision lost affine endpoint motion");
+		}
 		requireIntegralConstraints(mesh, field, rates, mean);
 	}
 	private static Fraction[] affine(Fraction[] x) {
@@ -697,7 +765,7 @@ final class LiquidConformingVelocityValidation {
 			var u = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
 			for (var point : tet.vertices()) for (int a = 0; a < 3; a++) u[a] = u[a].add(field.velocity.get(point).get(a));
 			for (int a = 0; a < 3; a++) momentum[tet.cell()][a] = momentum[tet.cell()][a].add(u[a].multiply(tet.volume()).divide(Fraction.of(4)));
-			if (mesh.faces.get(tet.face()).first() == tet.cell()) {
+			if (tet.face() >= 0 && mesh.faces.get(tet.face()).first() == tet.cell()) {
 				var polygon = LiquidExactPolygon.tetrahedron(tet.vertices()).getFirst();
 				var trace = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
 				for (int v = 1; v < 4; v++) for (int a = 0; a < 3; a++) trace[a] = trace[a].add(field.velocity.get(tet.vertices().get(v)).get(a));

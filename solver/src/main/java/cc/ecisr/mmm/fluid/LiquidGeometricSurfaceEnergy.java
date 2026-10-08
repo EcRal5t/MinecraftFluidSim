@@ -15,7 +15,7 @@ final class LiquidGeometricSurfaceEnergy {
 		var walls = new ArrayList<LiquidExactPolygon>(); var wallValues = new ArrayList<Double>();
 		var incident = new int[coefficient.length]; Arrays.fill(incident, -1);
 		for (var tet : field.tetrahedra) {
-			int face = tet.face(); double value = coefficient[face];
+			int face = tet.face(); if (face < 0) continue; double value = coefficient[face];
 			if (!Double.isFinite(value)) throw new IllegalArgumentException("Non-finite geometric surface coefficient");
 			if (value == 0) continue;
 			if (incident[face] < 0) incident[face] = tet.cell();

@@ -38,7 +38,7 @@ final class LiquidConformingTransport {
 		if (field.mesh != mesh || rate.length != mesh.faces.size() || liquid.length != mesh.cells.size() || !(dt > 0) || !Double.isFinite(dt)) throw new IllegalArgumentException("Invalid continuous transport input");
 		this.mesh = mesh; this.field = field; this.liquid = liquid.clone();
 		time = Fraction.of(dt); var moved = new LinkedHashMap<Vertex, Vertex>();
-		var interior = new java.util.HashSet<>(field.cellCenters);
+		var interior = new java.util.HashSet<>(field.apexWeights.keySet());
 		double roundoff = 0;
 		for (var node : field.velocity.entrySet()) {
 			if (interior.contains(node.getKey())) continue;
@@ -60,9 +60,9 @@ final class LiquidConformingTransport {
 			if (!sweptVolume[f].equals(target)) throw new IllegalStateException("Continuous face sweep lost exact integrated volume");
 		}
 		// The endpoint fan apex is an auxiliary partition point. Closed-surface volume and moments are independent of it.
-		// Momentum is carried by the original velocity-field mean in LiquidGeometryMotionPlan.
-		for (int c = 0; c < mesh.cells.size(); c++) if (liquid[c] >= 0)
-			moved.put(field.cellCenters.get(c), LiquidExactPolygon.vertex(field.meanPosition(c, time)));
+		// Spatial interpolation moves auxiliary points; LiquidGeometryMotionPlan carries the physical mean momentum.
+		for (int c = 0; c < mesh.cells.size(); c++) if (liquid[c] >= 0) for (var point : field.cellApexes.get(c))
+			moved.put(point, LiquidExactPolygon.vertex(field.partitionPosition(c, point, time)));
 		positions = java.util.Collections.unmodifiableMap(moved);
 		if (partitionRequired) { var partition = images(moved); images = partition.images; surfaces = partition.surfaces; }
 		else {

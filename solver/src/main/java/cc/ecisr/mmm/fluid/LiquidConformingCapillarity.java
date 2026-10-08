@@ -14,6 +14,7 @@ final class LiquidConformingCapillarity {
 		var polygons = new ArrayList<LiquidExactPolygon>(); var coefficients = new ArrayList<Double>();
 		var incident = new int[coefficient.length]; java.util.Arrays.fill(incident, -1);
 		for (var tet : field.tetrahedra) {
+			if (tet.face() < 0) continue;
 			// A shared interface contributes its material energy once.
 			if (incident[tet.face()] < 0) incident[tet.face()] = tet.cell();
 			if (incident[tet.face()] != tet.cell()) continue;

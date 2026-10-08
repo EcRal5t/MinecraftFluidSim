@@ -36,6 +36,15 @@ final class LiquidControlVolumeMesh {
 	final List<List<LiquidPolyhedron.Point>> polygons;
 	final List<LiquidExactPolygon> exactPolygons;
 	final int[][] cellFaces;
+	final List<LiquidControlVolumeSubdivision.Fan> subdivision;
+
+	LiquidControlVolumeMesh(List<LiquidGeometryRefinement.Cell> controls, List<List<LiquidGeometryRefinement.Cell>> support,
+			double physicalWidth, double density, BoundaryCondition boundary) {
+		var partition = new LiquidControlVolumeSubdivision(controls, support, physicalWidth, density, boundary);
+		cells = partition.cells; faces = partition.faces; exactPolygons = partition.polygons;
+		polygons = exactPolygons.stream().map(LiquidExactPolygon::rounded).toList();
+		cellFaces = incidence(cells.size(), faces); subdivision = partition.fans;
+	}
 
 	static Assembly assemble(List<LiquidControlVolumeProjection.Cell> cells, List<LiquidControlVolumeProjection.Face> faces,
 			List<LiquidExactPolygon> polygons, int[] labels) {
@@ -43,12 +52,14 @@ final class LiquidControlVolumeMesh {
 		return new Assembly(new LiquidControlVolumeMesh(cells, combined), combined.sources());
 	}
 	private LiquidControlVolumeMesh(List<LiquidControlVolumeProjection.Cell> cells, LiquidCoplanarFaceUnion.Result combined) {
+		subdivision = null;
 		this.cells = List.copyOf(cells); faces = combined.faces();
 		exactPolygons = LiquidExactPolygon.splitEdges(combined.polygons()); polygons = exactPolygons.stream().map(LiquidExactPolygon::rounded).toList();
 		cellFaces = incidence(cells.size(), faces);
 	}
 
 	LiquidControlVolumeMesh(List<LiquidGeometryRefinement.Cell> leaves, double physicalWidth, double density, BoundaryCondition boundary) {
+		subdivision = null;
 		var cells = new ArrayList<LiquidControlVolumeProjection.Cell>();
 		var patches = new ArrayList<Patch>();
 		Map<Tile, List<Patch>> positive = new HashMap<>(), negative = new HashMap<>();

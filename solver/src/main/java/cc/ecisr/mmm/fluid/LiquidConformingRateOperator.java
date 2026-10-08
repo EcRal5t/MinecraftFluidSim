@@ -45,13 +45,16 @@ final class LiquidConformingRateOperator {
 			add(nodes.get(entry.getKey()), entry.getValue());
 		}
 		var primary = new Value[field.mesh.cells.size()][3]; for (int c = 0; c < primary.length; c++) {
-			primary[c] = zero(); var force = nodes.get(field.cellCenters.get(c));
-			if (force != null) for (int a = 0; a < 3; a++) primary[c][a] = force[a].multiply(new Value(4, 0));
+			primary[c] = zero(); for (var point : field.cellApexes.get(c)) add(primary[c], nodes.get(point));
 		}
+		var apexForce = java.util.Arrays.stream(primary).map(Value[]::clone).toArray(Value[][]::new);
+		for (int c = 0; c < primary.length; c++) primary[c] = scale(primary[c], new Value(4, 0));
 		for (int i = 0; i < field.tetrahedra.size(); i++) {
-			var tet = field.tetrahedra.get(i); var force = scale(nodes.get(field.cellCenters.get(tet.cell())), meanWeights.get(i));
+			var tet = field.tetrahedra.get(i); var force = scale(apexForce[tet.cell()], meanWeights.get(i));
 			for (int v = 1; v < 4; v++) add(nodes.get(tet.vertices().get(v)), force);
 		}
+		for (int c = 0; c < primary.length; c++) for (var point : field.cellApexes.get(c))
+			add(nodes.get(point), scale(apexForce[c], Value.of(field.apexWeights.get(point)).negate()));
 		var result = new Value[field.mesh.faces.size()]; java.util.Arrays.fill(result, ZERO);
 		for (int f = 0; f < result.length; f++) {
 			var input = nodes.get(field.faceCenters.get(f)); if (input == null) continue;
@@ -89,12 +92,13 @@ final class LiquidConformingRateOperator {
 			var face = faces.computeIfAbsent(f, this::face); var value = multiply(face.corner, preferred); add(value, scale(face.rate, rate[f]));
 			nodes.put(field.faceCenters.get(f), value);
 		}
+		for (int c = 0; c < primary.length; c++) for (var point : field.cellApexes.get(c)) nodes.putIfAbsent(point, primary[c].clone());
 		var apex = new Value[primary.length][]; for (int c = 0; c < apex.length; c++) apex[c] = scale(primary[c], new Value(4, 0));
 		for (int i = 0; i < field.tetrahedra.size(); i++) {
 			var tet = field.tetrahedra.get(i);
-			for (int v = 1; v < 4; v++) add(apex[tet.cell()], scale(nodes.get(tet.vertices().get(v)), meanWeights.get(i)));
+			for (int v = 0; v < 4; v++) add(apex[tet.cell()], scale(nodes.get(tet.vertices().get(v)), meanWeights.get(i)));
 		}
-		for (int c = 0; c < primary.length; c++) if (field.velocity.containsKey(field.cellCenters.get(c))) nodes.put(field.cellCenters.get(c), apex[c]);
+		for (int c = 0; c < primary.length; c++) for (var point : field.cellApexes.get(c)) add(nodes.get(point), apex[c]);
 		return java.util.Collections.unmodifiableMap(nodes);
 	}
 	private Value[][] meanBasis(int cell) {
