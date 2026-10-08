@@ -15,7 +15,7 @@ final class LiquidAffineFit {
 	final Form[] shape;
 	private final Form[] coordinates;
 	private final double[][] coefficientError;
-	private final Basis basis;
+	final Basis basis;
 
 	LiquidAffineFit(List<Fraction[]> centers, List<Fraction> weights) {
 		this(centers, weights, new Basis(centers));
@@ -116,6 +116,12 @@ final class LiquidAffineFit {
 		}
 		Fraction evaluate(Vertex point) {
 			return new Fraction(numeratorAt(point), denominator.multiply(point.w()));
+		}
+		Fraction evaluate(BigInteger[] homogeneous, BigInteger divisor) {
+			if (homogeneous.length != 4 || divisor.signum() <= 0) throw new IllegalArgumentException("Incomplete affine moment coordinates");
+			var value = BigInteger.ZERO;
+			for (int a = 0; a < 4; a++) value = value.add(numerator[a].multiply(homogeneous[a]));
+			return new Fraction(value, denominator.multiply(divisor));
 		}
 		double magnitude(Vertex point) {
 			var value = numeratorAt(point); if (value.signum() == 0) return 0;

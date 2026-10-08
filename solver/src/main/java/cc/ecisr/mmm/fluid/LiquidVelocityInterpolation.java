@@ -48,10 +48,21 @@ final class LiquidVelocityInterpolation {
 			return result;
 		}
 	}
-	private record Support(int cell, int component, List<Integer> patch, LiquidAffineFit fit, Fraction[] center, Fraction radiusSquared) { }
+	private record Support(int cell, int component, List<Integer> patch, LiquidAffineFit fit, Vertex center, Fraction radiusSquared) { }
+	private record Distance(BigInteger numerator, BigInteger denominator) {
+		Fraction fraction() { return new Fraction(numerator, denominator); }
+		Value interiorWeight(Fraction radius) {
+			var total = radius.numerator().multiply(denominator);
+			var remaining = total.subtract(numerator.multiply(radius.denominator()));
+			if (remaining.signum() <= 0) return null;
+			var base = Value.ratio(remaining, total); var square = base.multiply(base); return square.multiply(square);
+		}
+	}
 	private final Index index;
 	private final int[] components;
+	private final List<Vertex> centers;
 	LiquidVelocityInterpolation(LiquidControlVolumeMesh mesh, int[] liquid) {
+		centers = mesh.cells.stream().map(cell -> LiquidExactPolygon.vertex(cell.geometry().centroidCoordinates())).toList();
 		components = components(mesh, liquid); var ranks = ranks(mesh, components); var supports = new ArrayList<Support>();
 		var fits = new java.util.HashMap<List<Integer>, LiquidAffineFit>();
 		var spans = new java.util.HashMap<List<Integer>, LiquidAffineFit.Basis>();
@@ -59,9 +70,9 @@ final class LiquidVelocityInterpolation {
 			var patch = patch(mesh, liquid, c, ranks.get(components[c]), spans);
 			var fit = fits.computeIfAbsent(patch, cells -> new LiquidAffineFit(cells.stream().map(k -> mesh.cells.get(k).geometry().centroidCoordinates()).toList(),
 					cells.stream().map(k -> mesh.cells.get(k).geometry().measure().volume()).toList(), spans.get(cells)));
-			var center = mesh.cells.get(c).geometry().centroidCoordinates(); var radius = Fraction.ZERO;
+			var center = centers.get(c); var radius = Fraction.ZERO;
 			for (int f : mesh.cellFaces[c]) for (var point : mesh.exactPolygons.get(f).vertices()) {
-				var square = distanceSquared(point, center); if (square.compareTo(radius) > 0) radius = square;
+				var square = distanceSquared(point, center).fraction(); if (square.compareTo(radius) > 0) radius = square;
 			}
 			// Twice the enclosing radius gives every incident node strictly positive support.
 			supports.add(new Support(c, components[c], patch, fit, center, radius.multiply(Fraction.of(4))));
@@ -74,25 +85,26 @@ final class LiquidVelocityInterpolation {
 		var active = new ArrayList<Support>(); var raw = new ArrayList<Value>(); var represented = new ArrayList<Fraction>();
 		var total = ZERO; var representedTotal = Fraction.ZERO;
 		for (var support : nearby) if (support.component == components[incidentCell]) {
-			var distance = distanceSquared(point, support.center); if (distance.compareTo(support.radiusSquared) >= 0) continue;
-			var base = Fraction.of(1).subtract(distance.divide(support.radiusSquared)); var square = base.multiply(base);
-			var weight = Value.of(square.multiply(square)); var observed = Fraction.of(weight.value());
+			var weight = distanceSquared(point, support.center).interiorWeight(support.radiusSquared); if (weight == null) continue;
+			var observed = Fraction.of(weight.value());
 			active.add(support); raw.add(weight); represented.add(observed); total = total.add(weight); representedTotal = representedTotal.add(observed);
 		}
 		if (representedTotal.signum() <= 0) throw new IllegalStateException("Continuous interpolation lost its incident spatial support");
-		var weights = new LinkedHashMap<Integer, Fraction>(); var errors = new LinkedHashMap<Integer, Double>(); boolean complete = true;
+		var observed = new LinkedHashMap<Integer, Value>(); boolean complete = true;
 		for (int k = 0; k < active.size(); k++) {
 			var support = active.get(k); var blend = represented.get(k).divide(representedTotal); var observedBlend = Value.of(blend);
 			double blendError = observedBlend.subtract(raw.get(k).divide(total)).magnitude();
 			var localError = support.fit.weightErrors(point); complete &= support.fit.contains(point);
 			for (int i = 0; i < support.patch.size(); i++) {
 				int c = support.patch.get(i); var coefficient = support.fit.shape[i].evaluate(point);
-				weights.merge(c, coefficient.multiply(blend), Fraction::add);
-				double error = up(up(observedBlend.magnitude() + blendError) * localError[i]) + up(blendError * Value.of(coefficient).magnitude());
-				if (error != 0) errors.merge(c, up(error), (a, b) -> up(a + b));
+				var local = Value.of(coefficient); local = new Value(local.value(), up(local.error() + localError[i]));
+				var contribution = local.multiply(new Value(observedBlend.value(), up(observedBlend.error() + blendError)));
+				observed.merge(c, contribution, Value::add);
 			}
 		}
-		return new Node(weights, errors, complete);
+		var anchor = active.getFirst();
+		var coordinates = LiquidAffineWeightCoordinates.complete(point, anchor.fit.basis, anchor.patch, centers, observed);
+		return new Node(coordinates.weights(), coordinates.errors(), complete);
 	}
 	private static List<Integer> patch(LiquidControlVolumeMesh mesh, int[] liquid, int cell, int rank, Map<List<Integer>, LiquidAffineFit.Basis> spans) {
 		var patch = new LinkedHashSet<Integer>(); patch.add(cell);
@@ -129,10 +141,13 @@ final class LiquidVelocityInterpolation {
 		}
 		return result;
 	}
-	private static Fraction distanceSquared(Vertex point, Fraction[] center) {
-		var coordinates = point.coordinates(); var result = Fraction.ZERO;
-		for (int a = 0; a < 3; a++) { var d = coordinates[a].subtract(center[a]); result = result.add(d.multiply(d)); }
-		return result;
+	private static Distance distanceSquared(Vertex point, Vertex center) {
+		var numerator = BigInteger.ZERO; var denominator = point.w().multiply(center.w());
+		for (int a = 0; a < 3; a++) {
+			var difference = point.coordinate(a).multiply(center.w()).subtract(center.coordinate(a).multiply(point.w()));
+			numerator = numerator.add(difference.multiply(difference));
+		}
+		return new Distance(numerator, denominator.multiply(denominator));
 	}
 	/** Outward-rounded sphere boxes only select candidates; exact distances decide support. */
 	private static final class Index {
@@ -142,15 +157,16 @@ final class LiquidVelocityInterpolation {
 		Index(Support support, Index left, Index right) {
 			this.support = support; this.left = left; this.right = right;
 			double radius = up(Math.sqrt(up(support.radiusSquared.rounded())));
+			var center = support.center.rounded();
 			for (int a = 0; a < 3; a++) {
-				double x = support.center[a].rounded(), extent = up(radius + Math.ulp(x));
+				double x = center.coordinate(a), extent = up(radius + Math.ulp(x));
 				lower[a] = Math.nextDown(x - extent); upper[a] = up(x + extent);
 				for (var child : new Index[]{left, right}) if (child != null) { lower[a] = Math.min(lower[a], child.lower[a]); upper[a] = Math.max(upper[a], child.upper[a]); }
 			}
 		}
 		static Index of(List<Support> values, int axis) {
 			if (values.isEmpty()) return null;
-			var sorted = new ArrayList<>(values); sorted.sort(java.util.Comparator.comparingDouble(s -> s.center[axis].rounded())); int middle = sorted.size() / 2;
+			var sorted = new ArrayList<>(values); sorted.sort(java.util.Comparator.comparingDouble(s -> s.center.rounded().coordinate(axis))); int middle = sorted.size() / 2;
 			return new Index(sorted.get(middle), of(sorted.subList(0, middle), (axis + 1) % 3), of(sorted.subList(middle + 1, sorted.size()), (axis + 1) % 3));
 		}
 		static void collect(Index node, double[] point, List<Support> result) {

@@ -11,6 +11,7 @@ final class LiquidConformingVelocityValidation {
 		stationaryRationalGeometrySurvivesMotionRounding();
 		affineFieldSurvivesAdaptiveFaces();
 		continuousFitPreservesMomentsAndItsExactReference();
+		finiteAffineWeightsPreserveMomentsAndErrorBounds();
 		supportedAffineFieldsSurviveObliqueCells();
 		certifiedAffineFitsContainExactLeastSquares();
 		separatedLiquidsKeepIndependentVelocityTraces();
@@ -35,6 +36,41 @@ final class LiquidConformingVelocityValidation {
 		var represented = new LiquidCoordinateProjection(mesh, field, motion.positions, new Fraction[]{shape.measure().volume()}, 20);
 		if (!represented.positions.equals(motion.positions) || represented.maximumPositionErrorMetres != 0)
 			throw new AssertionError("Finite coordinate representation changed a stationary rational surface");
+	}
+	private static void finiteAffineWeightsPreserveMomentsAndErrorBounds() {
+		for (double height : new double[]{1, Math.scalb(1.0, -80)}) {
+			var centers = new ArrayList<LiquidExactPolygon.Vertex>(); var coordinates = new ArrayList<Fraction[]>();
+			for (int c = 0; c < 8; c++) {
+				var denominator = java.math.BigInteger.ONE.shiftLeft(220).add(java.math.BigInteger.valueOf(2 * c + 1));
+				var point = new Fraction[]{Fraction.of((c & 1) == 0 ? 0.25 : 0.75).add(new Fraction(java.math.BigInteger.ONE, denominator)),
+						Fraction.of((c & 2) == 0 ? 0.25 : 0.75), Fraction.of(((c & 4) == 0 ? 0.25 : 0.75) * height)};
+				coordinates.add(point); centers.add(LiquidExactPolygon.vertex(point));
+			}
+			var basis = new LiquidAffineFit.Basis(coordinates); var target = LiquidExactPolygon.vertex(new Fraction[]{Fraction.of(0.375), Fraction.of(0.625), Fraction.of(0.375 * height)});
+			var observed = new java.util.LinkedHashMap<Integer, LiquidBoundedArithmetic.Value>(); var exact = new java.util.LinkedHashMap<Integer, Fraction>();
+			for (int c = 0; c < centers.size(); c++) {
+				var value = new Fraction(java.math.BigInteger.ONE.shiftLeft(200).add(java.math.BigInteger.valueOf(c + 1)), java.math.BigInteger.ONE.shiftLeft(204).add(java.math.BigInteger.valueOf(2 * c + 3)));
+				exact.put(c, value); observed.put(c, LiquidBoundedArithmetic.Value.of(value));
+			}
+			var patch = java.util.stream.IntStream.range(0, centers.size()).boxed().toList();
+			var result = LiquidAffineWeightCoordinates.complete(target, basis, patch, centers, observed);
+			var anchors = new java.util.HashSet<Integer>(); for (int a : basis.anchor) anchors.add(a);
+			for (int a = 0; a < basis.anchor.length; a++) {
+				var value = basis.shape[a].evaluate(target);
+				for (var entry : exact.entrySet()) if (!anchors.contains(entry.getKey())) value = value.subtract(entry.getValue().multiply(basis.shape[a].evaluate(centers.get(entry.getKey()))));
+				exact.put(basis.anchor[a], value);
+			}
+			var sum = Fraction.ZERO; var moment = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
+			for (var entry : result.weights().entrySet()) {
+				int c = entry.getKey(); var value = entry.getValue(); sum = sum.add(value);
+				for (int a = 0; a < 3; a++) moment[a] = moment[a].add(value.multiply(coordinates.get(c)[a]));
+				if (value.subtract(exact.get(c)).absolute().compareTo(Fraction.of(result.errors().get(c))) > 0
+						|| !anchors.contains(c) && value.denominator().bitCount() != 1)
+					throw new AssertionError("Finite interpolation lost its independent binary coordinates or actual error certificate");
+			}
+			if (!sum.equals(Fraction.of(1)) || !Arrays.equals(moment, target.coordinates()))
+				throw new AssertionError("Finite interpolation displaced constant or affine moments in thin rational support");
+		}
 	}
 	private static void implicitCapillarityUsesActualPhaseOrdering() {
 		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.625, 0.75)));
@@ -241,14 +277,28 @@ final class LiquidConformingVelocityValidation {
 				LiquidConformingVelocityValidation::affine);
 	}
 	private static void continuousFitPreservesMomentsAndItsExactReference() {
-		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1)));
+		continuousFitPreservesMomentsAndItsExactReference(Fraction.ZERO);
+		continuousFitPreservesMomentsAndItsExactReference(new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.ONE.shiftLeft(220).add(java.math.BigInteger.valueOf(7))));
+	}
+	private static void continuousFitPreservesMomentsAndItsExactReference(Fraction shift) {
+		var original = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1)));
+		var cells = original.stream().map(cell -> {
+			var faces = new ArrayList<LiquidExactPolygon>();
+			for (var face : LiquidExactPolygon.faces(cell.geometry())) {
+				var vertices = face.vertices().stream().map(point -> {
+					var coordinates = point.coordinates(); coordinates[0] = coordinates[0].add(shift); return LiquidExactPolygon.vertex(coordinates);
+				}).toList();
+				faces.add(LiquidExactPolygon.restored(vertices, LiquidExactPolygon.triangle(vertices.get(0), vertices.get(1), vertices.get(2)).coefficients()));
+			}
+			return new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.restoredExact(faces));
+		}).toList();
 		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
 		var interpolation = new LiquidVelocityInterpolation(mesh, new int[cells.size()]); var center = Fraction.of(0.5);
-		var baseline = LiquidExactPolygon.vertex(new Fraction[]{center, center, center});
+		var baseline = LiquidExactPolygon.vertex(new Fraction[]{center.add(shift), center, center});
 		var initial = interpolation.at(baseline, 0); var reference = partitionReference(mesh, baseline);
 		Fraction firstChange = null;
 		for (int bits : new int[]{16, 32, 48}) {
-			var spacing = Fraction.of(Math.scalb(1.0, -bits)); var point = LiquidExactPolygon.vertex(new Fraction[]{center.add(spacing), center, center});
+			var spacing = Fraction.of(Math.scalb(1.0, -bits)); var point = LiquidExactPolygon.vertex(new Fraction[]{center.add(shift).add(spacing), center, center});
 			var actual = interpolation.at(point, 0); var otherIncidence = interpolation.at(point, 7); var exact = partitionReference(mesh, point);
 			if (!actual.weights.equals(otherIncidence.weights)) throw new AssertionError("Continuous fitting changed at an incident-cell transition");
 			var sum = Fraction.ZERO; var moment = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
