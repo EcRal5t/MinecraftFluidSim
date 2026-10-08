@@ -37,7 +37,20 @@ final class LiquidMechanicalFaceInput {
 			sourceFaces.add(f); rows.add(row); contacts.add(contact);
 			labels.add(interfaces.computeIfAbsent(new Interface(contact, coefficient[f]), ignored -> interfaces.size()));
 		}
-		var assembled = LiquidControlVolumeMesh.assemble(cells, faces, polygons, labels.stream().mapToInt(Integer::intValue).toArray()); mesh = assembled.mesh();
+		LiquidControlVolumeMesh.Assembly assembled;
+		if (phase.subdivision == null) assembled = LiquidControlVolumeMesh.assemble(cells, faces, polygons, labels.stream().mapToInt(Integer::intValue).toArray());
+		else {
+			var faceIds = new int[phase.faces.size()]; Arrays.fill(faceIds, -1); for (int f = 0; f < sourceFaces.size(); f++) faceIds[sourceFaces.get(f)] = f;
+			var fans = new ArrayList<LiquidControlVolumeSubdivision.Fan>();
+			for (var fan : phase.subdivision) if (compact[fan.cell()] >= 0) {
+				var ids = fan.faces().clone(); for (int i = 0; i < ids.length; i++) if (ids[i] >= 0) {
+					ids[i] = faceIds[ids[i]]; if (ids[i] < 0) throw new IllegalStateException("Liquid integration lost a physical exterior face");
+				}
+				fans.add(new LiquidControlVolumeSubdivision.Fan(compact[fan.cell()], fan.geometry(), ids, fan.polygons()));
+			}
+			assembled = LiquidControlVolumeMesh.assemble(cells, faces, polygons, labels.stream().mapToInt(Integer::intValue).toArray(), fans);
+		}
+		mesh = assembled.mesh();
 		pressureNodes = new int[mesh.faces.size()]; contactNodes = pressureNodes.clone(); surfaceCoefficient = new double[mesh.faces.size()];
 		for (int f = 0; f < mesh.faces.size(); f++) {
 			int source = assembled.sources()[f]; pressureNodes[f] = rows.get(source); contactNodes[f] = contacts.get(source);

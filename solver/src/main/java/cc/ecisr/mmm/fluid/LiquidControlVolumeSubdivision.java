@@ -26,8 +26,8 @@ final class LiquidControlVolumeSubdivision {
 			var exterior = LiquidExteriorGeometry.of(support.get(c));
 			requireCovered(LiquidExactPolygon.faces(geometry), exterior, work); requireCovered(exterior, LiquidExactPolygon.faces(geometry), work);
 			physical.add(new LiquidControlVolumeProjection.Cell(geometry.scaled(width), density));
-			var partition = LiquidStarControlPartition.build(support.get(c), work);
-			for (var region : partition) { pieces.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, region.geometry())); owners.add(c); }
+			if (geometry.kernelPoint() != null) { pieces.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, geometry)); owners.add(c); }
+			else for (var region : support.get(c)) { pieces.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, region.geometry())); owners.add(c); }
 		}
 		var auxiliary = new LiquidControlVolumeMesh(pieces, width, density, (c, face) -> boundary.at(owners.get(c), face));
 		var retained = new ArrayList<LiquidControlVolumeProjection.Face>(); var surfaces = new ArrayList<LiquidExactPolygon>();

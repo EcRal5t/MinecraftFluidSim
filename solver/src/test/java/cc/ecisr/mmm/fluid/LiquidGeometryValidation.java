@@ -296,19 +296,19 @@ final class LiquidGeometryValidation {
 			var state = LiquidGeometryStateMapper.capture(pieces, 1, new int[]{0}, new int[pieces.size()], new double[3 * pieces.size()], new int[pieces.size()]);
 			var actual = LiquidGeometryStateMapper.restore(state); var ids = java.util.stream.IntStream.range(0, actual.size()).boxed().toList();
 			var controls = new LiquidMechanicalControlCells(state, actual, ids, java.util.Collections.nCopies(actual.size(), -1), java.util.Map.of(), 4096);
-			if (controls.regions.size() != 2) throw new AssertionError("Non-star material retained its auxiliary convex pressure partition: " + controls.regions.size());
+			if (controls.regions.size() != 1) throw new AssertionError("Auxiliary positive subdivision changed the physical control count: " + controls.regions.size());
 			var measure = LiquidConvexRegion.EMPTY.measure(); var retained = new java.util.HashSet<LiquidGeometryRefinement.Cell>();
 			for (int c = 0; c < controls.regions.size(); c++) {
-				var geometry = controls.regions.get(c).geometry(); var kernel = geometry.kernelPoint();
-				if (kernel == null || LiquidExactPolygon.faces(geometry).stream().anyMatch(face -> kernel.distance(face.coefficients()).signum() >= 0))
-					throw new AssertionError("Agglomerated control has no exact positive fan support");
+				var geometry = controls.regions.get(c).geometry();
+				if (geometry.kernelPoint() != null) throw new AssertionError("Concave material lost its complete physical geometry");
 				measure = measure.add(geometry.measure());
 				for (var piece : controls.support.get(c)) if (!retained.add(piece)) throw new AssertionError("Agglomerated control duplicated positive material support");
 			}
 			if (!measure.same(expected) || retained.size() != actual.size() || !retained.containsAll(actual))
 				throw new AssertionError("Agglomeration changed exact occupancy, volume or first moments");
-			var mesh = new LiquidControlVolumeMesh(controls.regions, 1, 1000, (c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
-			if (mesh.faces.stream().noneMatch(face -> face.second() >= 0)) throw new AssertionError("Agglomerated connected material lost its shared mechanical face");
+			var mesh = new LiquidControlVolumeMesh(controls.regions, controls.support, 1, 1000, (c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+			if (mesh.faces.stream().anyMatch(face -> face.second() >= 0) || mesh.subdivision.size() < 2)
+				throw new AssertionError("Auxiliary faces acquired independent mechanical rates");
 			var mean = new double[3 * mesh.cells.size()]; var u = new double[]{0.125, -0.25, 0.0625};
 			for (int c = 0; c < mesh.cells.size(); c++) System.arraycopy(u, 0, mean, 3 * c, 3);
 			var rates = new LiquidExactPolygon.Fraction[mesh.faces.size()];
@@ -316,6 +316,16 @@ final class LiquidGeometryValidation {
 				rates[f] = LiquidExactPolygon.Fraction.ZERO;
 				for (int a = 0; a < 3; a++) rates[f] = rates[f].add(mesh.faces.get(f).areaVector().get(a).multiply(LiquidExactPolygon.Fraction.of(u[a])));
 			}
+			var gravity = new LiquidPolyhedron.Point(0, -9.81, 0); double dt = 1.0 / 128;
+			var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(mean, gravity, dt, 1e-10, 512);
+			for (int a = 0; a < 3; a++) if (Math.abs(projected.cellVelocity()[a] - u[a] - dt * gravity.coordinate(a)) > 1e-13)
+				throw new AssertionError("A concave control changed its complete gravitational inertia");
+			var faceVelocity = new double[3 * mesh.faces.size()]; for (int f = 0; f < mesh.faces.size(); f++) System.arraycopy(u, 0, faceVelocity, 3 * f, 3);
+			var viscous = new LiquidControlVolumeViscosity(mesh.cells, mesh.faces, new double[]{1}, FluidSolverConfig.WallCondition.FREE_SLIP)
+					.advance(mean, faceVelocity, dt, 1e-10, 512);
+			if (!java.util.Arrays.equals(viscous.cellVelocity(), mean) || !java.util.Arrays.equals(viscous.faceVelocity(), faceVelocity)
+					|| viscous.dissipatedJoules() != 0 || viscous.temporalDissipationJoules() != 0)
+				throw new AssertionError("A concave control acquired viscous stress under rigid translation");
 			var field = new LiquidConformingVelocity(mesh, rates, mean); var motion = new LiquidConformingTransport(mesh, field, rates, 1.0 / 128);
 			var imageMeasure = LiquidConvexRegion.EMPTY.measure(); for (var image : motion.images) imageMeasure = imageMeasure.add(image.geometry().measure());
 			var target = LiquidConvexRegion.EMPTY.measure(); for (var piece : cavity) target = target.add(piece.geometry().translated(u[0] / 128, u[1] / 128, u[2] / 128).measure());
@@ -326,14 +336,15 @@ final class LiquidGeometryValidation {
 		var body = LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75);
 		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
 		var regions = LiquidPhasePartition.build(root, java.util.List.of(body), 64);
-		for (boolean finer : new boolean[]{false, true}) {
+		for (boolean finer : new boolean[]{false, true}) for (boolean subdivided : new boolean[]{false, true}) {
 			var cells = new java.util.ArrayList<LiquidGeometryRefinement.Cell>(); cells.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, body));
 			for (var region : regions) if (region.liquid() < 0) {
 				var gas = finer ? LiquidGeometryRefinement.children(region.cell()) : java.util.List.of(region.cell());
 				for (var part : gas) cells.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, part.geometry()));
 			}
 			LiquidPhasePartition.requireComplete(root, cells);
-			var phase = new LiquidControlVolumeMesh(cells, 1, 1000, (c, surface) -> new LiquidControlVolumeMesh.Boundary(true, 0));
+			var phase = subdivided ? new LiquidControlVolumeMesh(cells, cells.stream().map(java.util.List::of).toList(), 1, 1000, (c, surface) -> new LiquidControlVolumeMesh.Boundary(true, 0))
+					: new LiquidControlVolumeMesh(cells, 1, 1000, (c, surface) -> new LiquidControlVolumeMesh.Boundary(true, 0));
 			var liquid = new int[cells.size()]; java.util.Arrays.fill(liquid, -1); liquid[0] = 0;
 			var rows = new int[cells.size()]; java.util.Arrays.fill(rows, -1); var contacts = new int[cells.size()]; contacts[0] = -1;
 			var coefficient = new double[phase.faces.size()];

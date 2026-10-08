@@ -48,6 +48,20 @@ final class LiquidPolyhedron {
 	private volatile Moments integratedMoments;
 	private volatile LiquidExactPolygon.Measure exactMeasure;
 	LiquidExactPolygon.Fraction[] centroidCoordinates() { return measure().centroidCoordinates(); }
+	/** Half of the complete support's projected width; translation and rotation preserve this physical length. */
+	LiquidExactPolygon.Fraction projectedHalfWidth(List<LiquidExactPolygon.Fraction> direction) {
+		if (direction.size() != 3) throw new IllegalArgumentException("Incomplete geometric direction");
+		var normal = LiquidExactPolygon.vertex(direction.toArray(LiquidExactPolygon.Fraction[]::new));
+		var minimum = (LiquidExactPolygon.Fraction) null; var maximum = minimum;
+		for (var face : LiquidExactPolygon.faces(this)) for (var point : face.vertices()) {
+			var numerator = normal.x().multiply(point.x()).add(normal.y().multiply(point.y())).add(normal.z().multiply(point.z()));
+			var value = new LiquidExactPolygon.Fraction(numerator, point.w());
+			if (minimum == null || value.compareTo(minimum) < 0) minimum = value;
+			if (maximum == null || value.compareTo(maximum) > 0) maximum = value;
+		}
+		if (minimum == null || maximum.compareTo(minimum) <= 0) throw new IllegalArgumentException("Control volume has no positive projected width");
+		return maximum.subtract(minimum).divide(new LiquidExactPolygon.Fraction(normal.w().shiftLeft(1), java.math.BigInteger.ONE));
+	}
 	LiquidExactPolygon.Measure measure() {
 		var value = exactMeasure; if (value == null) exactMeasure = value = LiquidExactPolygon.measure(LiquidExactPolygon.faces(this)); return value;
 	}

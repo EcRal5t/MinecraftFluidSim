@@ -14,12 +14,6 @@ final class ControlVolumeGradient {
 	final LiquidExactPolygon.Fraction[] exactWeight;
 
 	static ControlVolumeGradient[] build(List<LiquidControlVolumeProjection.Cell> cells, List<LiquidControlVolumeProjection.Face> faces) {
-		return build(cells, faces, false);
-	}
-	static ControlVolumeGradient[] caloric(List<LiquidControlVolumeProjection.Cell> cells, List<LiquidControlVolumeProjection.Face> faces) {
-		return build(cells, faces, true);
-	}
-	private static ControlVolumeGradient[] build(List<LiquidControlVolumeProjection.Cell> cells, List<LiquidControlVolumeProjection.Face> faces, boolean generalPolyhedra) {
 		var incidence = new ArrayList<ArrayList<Integer>>();
 		for (int c = 0; c < cells.size(); c++) incidence.add(new ArrayList<>());
 		for (int f = 0; f < faces.size(); f++) {
@@ -27,34 +21,26 @@ final class ControlVolumeGradient {
 			if (face.second() >= 0) incidence.get(face.second()).add(f);
 		}
 		var result = new ControlVolumeGradient[cells.size()];
-		for (int c = 0; c < result.length; c++) result[c] = new ControlVolumeGradient(c, cells, faces, incidence.get(c), generalPolyhedra);
+		for (int c = 0; c < result.length; c++) result[c] = new ControlVolumeGradient(c, cells, faces, incidence.get(c));
 		return result;
 	}
 
 	ControlVolumeGradient(int cell, List<LiquidControlVolumeProjection.Cell> cells,
 			List<LiquidControlVolumeProjection.Face> faces, List<Integer> incidence) {
-		this(cell, cells, faces, incidence, false);
-	}
-	private ControlVolumeGradient(int cell, List<LiquidControlVolumeProjection.Cell> cells,
-			List<LiquidControlVolumeProjection.Face> faces, List<Integer> incidence, boolean generalPolyhedra) {
 		indices = incidence.stream().mapToInt(Integer::intValue).toArray(); sign = new int[indices.length];
 		basis = new LiquidPolyhedron.Point[indices.length]; displacement = basis.clone(); weight = new double[indices.length];
 		var geometry = cells.get(cell).geometry(); var center = geometry.centroidCoordinates();
-		var fan = generalPolyhedra ? null : geometry.fanCoordinates();
-		var span = generalPolyhedra ? extents(geometry) : null;
 		exactVolume = LiquidConvexRegion.of(geometry).measure().volume(); volume = exactVolume.rounded();
 		exactBasis = new LiquidExactPolygon.Fraction[indices.length][3]; exactDisplacement = new LiquidExactPolygon.Fraction[indices.length][3];
 		exactWeight = new LiquidExactPolygon.Fraction[indices.length];
 		double[] closure = new double[3], moment = new double[9], closureMagnitude = new double[3], momentMagnitude = new double[9];
 		for (int i = 0; i < indices.length; i++) {
 			var face = faces.get(indices[i]); var vector = face.surface().areaVector(); sign[i] = face.first() == cell ? 1 : -1;
-			var areaSquared = LiquidExactPolygon.Fraction.of(0); var areaDistance = areaSquared;
+			var areaSquared = LiquidExactPolygon.Fraction.of(0); var areaDistance = geometry.projectedHalfWidth(face.areaVector());
 			for (int a = 0; a < 3; a++) {
 				var area = sign[i] > 0 ? face.areaVector().get(a) : face.areaVector().get(a).negate();
 				exactBasis[i][a] = area.divide(exactVolume); exactDisplacement[i][a] = face.centroid().get(a).subtract(center[a]);
 				areaSquared = areaSquared.add(area.multiply(area));
-				areaDistance = areaDistance.add(generalPolyhedra ? area.absolute().multiply(span[a]).divide(LiquidExactPolygon.Fraction.of(2))
-						: area.multiply(face.centroid().get(a).subtract(fan[a])));
 			}
 			if (areaDistance.numerator().signum() <= 0) throw new IllegalArgumentException("Control-volume diffusion requires a positive geometric length");
 			displacement[i] = observed(exactDisplacement[i]); basis[i] = observed(exactBasis[i]);
@@ -79,18 +65,6 @@ final class ControlVolumeGradient {
 	}
 	private static LiquidPolyhedron.Point observed(LiquidExactPolygon.Fraction[] point) {
 		return new LiquidPolyhedron.Point(point[0].rounded(), point[1].rounded(), point[2].rounded());
-	}
-	/** Positive directional lengths of the material support, independent of auxiliary face planes. */
-	private static LiquidExactPolygon.Fraction[] extents(LiquidPolyhedron geometry) {
-		var low = new LiquidExactPolygon.Fraction[3]; var high = low.clone();
-		for (var face : LiquidExactPolygon.faces(geometry)) for (var vertex : face.vertices()) {
-			var point = vertex.coordinates();
-			for (int a = 0; a < 3; a++) {
-				if (low[a] == null || point[a].compareTo(low[a]) < 0) low[a] = point[a];
-				if (high[a] == null || point[a].compareTo(high[a]) > 0) high[a] = point[a];
-			}
-		}
-		for (int a = 0; a < 3; a++) high[a] = high[a].subtract(low[a]); return high;
 	}
 
 	/** Diagonal of the scalar gradient energy; selected == -1 denotes the cell unknown. */

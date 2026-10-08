@@ -54,7 +54,7 @@ final class ControlVolumeThermalMetric {
 			normalization[portion.cell()] += initialWeights[p];
 		}
 		for (int p = 0; p < initialWeights.length; p++) initialWeights[p] /= normalization[this.portions.get(p).cell()];
-		geometry = ControlVolumeGradient.caloric(mesh.cells, mesh.faces);
+		geometry = ControlVolumeGradient.build(mesh.cells, mesh.faces);
 		diffusion = Arrays.stream(geometry).map(ControlVolumeDiffusion::new).toArray(ControlVolumeDiffusion[]::new);
 		var cellBasisEnergy = new double[geometry.length]; var faceBasisEnergy = new double[geometry.length][];
 		for (int c = 0; c < geometry.length; c++) {

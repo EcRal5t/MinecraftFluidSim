@@ -38,9 +38,8 @@ final class LiquidControlVolumeProjection {
 			return new LiquidPolyhedron.Point(result[0], result[1], result[2]);
 		}
 		double distance(LiquidPolyhedron geometry, int sign) {
-			var center = geometry.fanCoordinates(); var result = LiquidExactPolygon.Fraction.of(0);
-			for (int a = 0; a < 3; a++) result = result.add(areaVector.get(a).multiply(centroid.get(a).subtract(center[a])));
-			return sign * result.rounded() / surface.area();
+			if (sign != 1 && sign != -1) throw new IllegalArgumentException("Invalid face incidence");
+			return geometry.projectedHalfWidth(areaVector).rounded() / surface.area();
 		}
 		private static List<LiquidExactPolygon.Fraction> coordinates(LiquidPolyhedron.Point point) {
 			return List.of(LiquidExactPolygon.Fraction.of(point.x()), LiquidExactPolygon.Fraction.of(point.y()), LiquidExactPolygon.Fraction.of(point.z()));

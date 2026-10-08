@@ -7,6 +7,7 @@ import java.util.List;
 final class LiquidControlVolumeValidation {
 	private static final LiquidPolyhedron.Point GRAVITY = new LiquidPolyhedron.Point(0, -9.81, 0);
 	static void validate() {
+		normalSupportMetricPreservesObliqueThinLengths();
 		boundedArithmeticContainsExactEndpointValues();
 		pressureMetricCertificatesContainExactCoefficients();
 		pressureInertiaSurvivesTinyAuxiliaryFaceAreas();
@@ -37,6 +38,26 @@ final class LiquidControlVolumeValidation {
 		LiquidConformingVelocityValidation.validate();
 		LiquidCharacteristicValidation.validate();
 		System.out.println("Liquid control-volume pressure and viscosity validation passed");
+	}
+	private static void normalSupportMetricPreservesObliqueThinLengths() {
+		var fifth = new LiquidExactPolygon.Fraction(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(5));
+		var three = fifth.multiply(LiquidExactPolygon.Fraction.of(3)); var four = fifth.multiply(LiquidExactPolygon.Fraction.of(4));
+		var map = List.of(three, four.negate(), LiquidExactPolygon.Fraction.ZERO, LiquidExactPolygon.Fraction.of(0.5),
+				four, three, LiquidExactPolygon.Fraction.ZERO, LiquidExactPolygon.Fraction.of(0.25),
+				LiquidExactPolygon.Fraction.ZERO, LiquidExactPolygon.Fraction.ZERO, LiquidExactPolygon.Fraction.of(1), LiquidExactPolygon.Fraction.of(0.5));
+		for (double height : new double[]{0.125, Math.scalb(1, -40)}) {
+			var original = LiquidPolyhedron.box(0, 0, 0, 1, height, 0.25);
+			var rotated = LiquidConvexRegion.of(original).transformed(map).geometry();
+			var before = LiquidExactPolygon.faces(original); var after = LiquidExactPolygon.faces(rotated);
+			for (int f = 0; f < before.size(); f++) {
+				var span = original.projectedHalfWidth(List.of(before.get(f).areaVector()));
+				if (!span.equals(rotated.projectedHalfWidth(List.of(after.get(f).areaVector()))))
+					throw new AssertionError("Directional stabilization lost rotational or translational invariance on a thin control");
+				var squared = LiquidExactPolygon.Fraction.ZERO; for (var area : before.get(f).areaVector()) squared = squared.add(area.multiply(area));
+				var weight = squared.divide(span);
+				if (weight.signum() <= 0) throw new AssertionError("Physical support produced non-positive stabilization");
+			}
+		}
 	}
 	private static void scalarDiffusionPreservesAffineFluxAndRefinement() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);

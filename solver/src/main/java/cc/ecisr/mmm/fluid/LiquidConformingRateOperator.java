@@ -17,6 +17,7 @@ final class LiquidConformingRateOperator {
 	private final LiquidConformingVelocity field;
 	private final Map<Vertex, Map<Integer, Value>> corners;
 	private final List<Map<Vertex, Value>> faceWeights;
+	private final Map<Vertex, Map<Vertex, Value>> surfaceWeights;
 	private final Map<Vertex, Value[][]> walls;
 	private final List<Value> meanWeights;
 	private final IntFunction<Fraction[][]> exactMeanBasis;
@@ -31,6 +32,9 @@ final class LiquidConformingRateOperator {
 		corners.forEach((point, weights) -> { var observed = new LinkedHashMap<Integer, Value>(); weights.forEach((cell, weight) -> observed.put(cell, Value.of(weight))); observedCorners.put(point, java.util.Collections.unmodifiableMap(observed)); });
 		this.corners = java.util.Collections.unmodifiableMap(observedCorners);
 		this.faceWeights = faceWeights.stream().map(weights -> { var observed = new LinkedHashMap<Vertex, Value>(); weights.forEach((point, weight) -> observed.put(point, Value.of(weight))); return java.util.Collections.unmodifiableMap(observed); }).toList();
+		var restrictions = new LinkedHashMap<Vertex, Map<Vertex, Value>>();
+		field.surfaceWeights.forEach((point, weights) -> { var observed = new LinkedHashMap<Vertex, Value>(); weights.forEach((parent, weight) -> observed.put(parent, Value.of(weight))); restrictions.put(point, java.util.Collections.unmodifiableMap(observed)); });
+		surfaceWeights = java.util.Collections.unmodifiableMap(restrictions);
 		var projections = new LinkedHashMap<Vertex, Value[][]>(); walls.forEach((point, normals) -> projections.put(point, wallProjection(normals))); this.walls = java.util.Collections.unmodifiableMap(projections);
 		this.meanWeights = meanWeights.stream().map(Value::of).toList();
 	}
@@ -55,6 +59,10 @@ final class LiquidConformingRateOperator {
 		}
 		for (int c = 0; c < primary.length; c++) for (var point : field.cellApexes.get(c))
 			add(nodes.get(point), scale(apexForce[c], Value.of(field.apexWeights.get(point)).negate()));
+		for (var entry : surfaceWeights.entrySet()) {
+			var input = nodes.get(entry.getKey()); if (input == null) continue;
+			for (var weight : entry.getValue().entrySet()) add(nodes.get(weight.getKey()), scale(input, weight.getValue()));
+		}
 		var result = new Value[field.mesh.faces.size()]; java.util.Arrays.fill(result, ZERO);
 		for (int f = 0; f < result.length; f++) {
 			var input = nodes.get(field.faceCenters.get(f)); if (input == null) continue;
@@ -91,6 +99,10 @@ final class LiquidConformingRateOperator {
 			var preferred = zero(); for (var weight : faceWeights.get(f).entrySet()) add(preferred, scale(nodes.get(weight.getKey()), weight.getValue()));
 			var face = faces.computeIfAbsent(f, this::face); var value = multiply(face.corner, preferred); add(value, scale(face.rate, rate[f]));
 			nodes.put(field.faceCenters.get(f), value);
+		}
+		for (var entry : surfaceWeights.entrySet()) if (field.velocity.containsKey(entry.getKey())) {
+			var value = zero(); for (var weight : entry.getValue().entrySet()) add(value, scale(nodes.get(weight.getKey()), weight.getValue()));
+			nodes.put(entry.getKey(), value);
 		}
 		for (int c = 0; c < primary.length; c++) for (var point : field.cellApexes.get(c)) nodes.putIfAbsent(point, primary[c].clone());
 		var apex = new Value[primary.length][]; for (int c = 0; c < apex.length; c++) apex[c] = scale(primary[c], new Value(4, 0));

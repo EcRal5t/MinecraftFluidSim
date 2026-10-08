@@ -7,7 +7,7 @@ import java.util.List;
 
 /** Exact convex unions remove auxiliary subdivisions of the same shared physical face. */
 final class LiquidCoplanarFaceUnion {
-	record Result(List<LiquidControlVolumeProjection.Face> faces, List<LiquidExactPolygon> polygons, int[] sources) { }
+	record Result(List<LiquidControlVolumeProjection.Face> faces, List<LiquidExactPolygon> polygons, int[] sources, int[] targets) { }
 	private record Support(int first, int second, double prescribed, LiquidGeometryPlane.Key plane, boolean positive, int label) { }
 	private LiquidCoplanarFaceUnion() { }
 	static Result build(List<LiquidControlVolumeProjection.Face> faces, List<LiquidExactPolygon> polygons) {
@@ -23,17 +23,19 @@ final class LiquidCoplanarFaceUnion {
 					ignored -> new ArrayList<>()).add(f);
 		}
 		var result = new ArrayList<LiquidControlVolumeProjection.Face>(); var geometry = new ArrayList<LiquidExactPolygon>(); var sources = new ArrayList<Integer>();
+		var targets = new int[faces.size()];
 		for (var group : groups.values()) {
 			var parts = group.stream().map(polygons::get).toList(); var union = union(parts);
-			if (union == null) for (int f : group) { result.add(faces.get(f)); geometry.add(polygons.get(f)); sources.add(f); }
+			if (union == null) for (int f : group) { targets[f] = result.size(); result.add(faces.get(f)); geometry.add(polygons.get(f)); sources.add(f); }
 			else {
+				for (int f : group) targets[f] = result.size();
 				var original = faces.get(group.getFirst());
 				result.add(new LiquidControlVolumeProjection.Face(original.first(), original.second(), union.surface(), original.prescribed(), union));
 				geometry.add(union);
 				sources.add(group.getFirst());
 			}
 		}
-		return new Result(List.copyOf(result), List.copyOf(geometry), sources.stream().mapToInt(Integer::intValue).toArray());
+		return new Result(List.copyOf(result), List.copyOf(geometry), sources.stream().mapToInt(Integer::intValue).toArray(), targets);
 	}
 	private static LiquidExactPolygon union(List<LiquidExactPolygon> parts) {
 		if (parts.size() == 1) return parts.getFirst();

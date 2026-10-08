@@ -83,7 +83,8 @@ final class LiquidGeometryPhaseInput {
 			regions = controls.regions; mechanicalSupport = controls.support; storedGasNodes = controls.gasNodes; fragments = controls.fragments;
 		}
 		var meshSupport = refined == null ? regions : regions.stream().map(cell -> new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cell.geometry())).toList();
-		mesh = new LiquidControlVolumeMesh(meshSupport, domain.rootWidthMetres, 1, (c, surface) -> domain.boundary(surface, sealed));
+		mesh = mechanicalSupport == null ? new LiquidControlVolumeMesh(meshSupport, domain.rootWidthMetres, 1, (c, surface) -> domain.boundary(surface, sealed))
+				: new LiquidControlVolumeMesh(meshSupport, mechanicalSupport, domain.rootWidthMetres, 1, (c, surface) -> domain.boundary(surface, sealed));
 		cellVelocity = new double[3 * regions.size()]; faceVelocity = new double[3 * mesh.faces.size()];
 		for (int c = 0; c < fragments.length; c++) if (fragments[c] >= 0) System.arraycopy(state.cells().get(fragments[c]).copyVelocity(), 0, cellVelocity, 3 * c, 3);
 		for (int f = 0; f < mesh.faces.size(); f++) {

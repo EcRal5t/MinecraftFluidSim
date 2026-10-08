@@ -78,6 +78,7 @@ final class LiquidCoordinateProjection {
 		current = volumes(mesh, field, moved, volume);
 		for (int c = 0; c < count; c++) if (volume[c] != null && !volume[c].equals(current[c]))
 			throw new IllegalStateException("Finite coordinates lost a control-volume constraint");
+		field.completeSurfacePositions(moved);
 		double error = 0;
 		for (var entry : moved.entrySet()) {
 			var actual = entry.getValue().coordinates(); var desired = reference.get(entry.getKey()).coordinates(); var squared = Fraction.ZERO;

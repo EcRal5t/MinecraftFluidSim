@@ -50,6 +50,7 @@ final class LiquidConformingVelocityValidation {
 			for (int a = 0; a < 3; a++) rates[f] = rates[f].add(mesh.faces.get(f).areaVector().get(a).multiply(Fraction.of(mean[a])));
 		}
 		var field = new LiquidConformingVelocity(mesh, rates, mean); requireIntegralConstraints(mesh, field, rates, mean);
+		if (field.surfaceWeights.isEmpty()) throw new AssertionError("Concave fixture did not exercise restrictions across merged physical faces");
 		if (field.cellApexes.getFirst().size() != mesh.subdivision.size()) throw new AssertionError("Auxiliary positive support was lost");
 		for (var value : field.velocity.values()) for (int a = 0; a < 3; a++)
 			if (!value.get(a).equals(Fraction.of(mean[a]))) throw new AssertionError("Multi-fan reconstruction changed a rigid translation");
@@ -70,6 +71,12 @@ final class LiquidConformingVelocityValidation {
 		var motion = new LiquidConformingTransport(mesh, field, rates, 1.0 / 128); var volume = Fraction.ZERO;
 		for (var image : motion.images) volume = volume.add(image.geometry().measure().volume());
 		if (!volume.equals(shape.measure().volume())) throw new AssertionError("Concave transport changed exact volume");
+		var deformed = field.reconstruct(virtual, mean, new int[]{0}, FluidSolverConfig.WallCondition.FREE_SLIP);
+		requireIntegralConstraints(mesh, deformed, virtual, mean);
+		var deformation = new LiquidConformingTransport(mesh, deformed, virtual, 1.0 / 4096).representCoordinates(28);
+		var expectedVolume = shape.measure().volume(); for (var swept : deformation.sweptVolume) expectedVolume = expectedVolume.add(swept);
+		var actualVolume = Fraction.ZERO; for (var image : deformation.images) actualVolume = actualVolume.add(image.geometry().measure().volume());
+		if (!actualVolume.equals(expectedVolume)) throw new AssertionError("Restricted auxiliary traces disagreed with physical face volume constraints");
 		var sigma = new double[rates.length]; Arrays.fill(sigma, 0.125);
 		var surface = new LiquidConformingCapillarity(field, sigma, new double[]{1000});
 		var expected = new LiquidAreaEnergy(mesh.exactPolygons, sigma);

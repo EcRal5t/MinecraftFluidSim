@@ -41,7 +41,7 @@ final class LiquidConformingTransport {
 		var interior = new java.util.HashSet<>(field.apexWeights.keySet());
 		double roundoff = 0;
 		for (var node : field.velocity.entrySet()) {
-			if (interior.contains(node.getKey())) continue;
+			if (interior.contains(node.getKey()) || field.surfaceWeights.containsKey(node.getKey())) continue;
 			var position = field.advectedPosition(node.getKey(), time); moved.put(node.getKey(), position.point());
 			if (position.roundoffSquared().signum() != 0) roundoff = Math.max(roundoff, Math.nextUp(Math.sqrt(Math.nextUp(position.roundoffSquared().rounded()))));
 		}
@@ -59,6 +59,7 @@ final class LiquidConformingTransport {
 			sweptVolume[f] = sweep(polygon.vertices(), center, moved);
 			if (!sweptVolume[f].equals(target)) throw new IllegalStateException("Continuous face sweep lost exact integrated volume");
 		}
+		field.completeSurfacePositions(moved);
 		// The endpoint fan apex is an auxiliary partition point. Closed-surface volume and moments are independent of it.
 		// Spatial interpolation moves auxiliary points; LiquidGeometryMotionPlan carries the physical mean momentum.
 		for (int c = 0; c < mesh.cells.size(); c++) if (liquid[c] >= 0) for (var point : field.cellApexes.get(c))
