@@ -10,11 +10,10 @@ import java.util.List;
 import static cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.*;
 import static cc.ecisr.mmm.fluid.LiquidIntegerArithmetic.gcd;
 
-/** Certified weighted least squares, completed to exact affine moments on an independent simplex. */
+/** Certified weighted least squares; shared nodes complete the affine constraints once. */
 final class LiquidAffineFit {
-	final Form[] shape;
+	private final Value[][] coefficients;
 	private final Form[] coordinates;
-	private final double[][] coefficientError;
 	final Basis basis;
 
 	LiquidAffineFit(List<Fraction[]> centers, List<Fraction> weights) {
@@ -24,12 +23,10 @@ final class LiquidAffineFit {
 		if (centers.isEmpty() || weights.size() != centers.size()) throw new IllegalArgumentException("Incomplete affine observations");
 		basis = support; coordinates = basis.coordinate;
 		int n = centers.size(), rank = coordinates.length;
-		shape = new Form[n]; coefficientError = new double[n][rank + 1];
+		coefficients = new Value[n][];
 		for (var weight : weights) if (weight.signum() <= 0) throw new IllegalArgumentException("Affine observations require positive volumes");
-		// A determined affine interpolant already minimizes every positive weighted residual exactly.
-		if (n == basis.anchor.length) {
-			for (int j = 0; j < basis.anchor.length; j++) shape[basis.anchor[j]] = basis.shape[j]; return;
-		}
+		// A determined interpolant has the exact barycentric shape functions.
+		if (n == basis.anchor.length) return;
 		var position = new Value[n][rank]; var volume = new Value[n]; var total = ZERO;
 		var mean = new Value[rank]; Arrays.fill(mean, ZERO);
 		for (int i = 0; i < n; i++) {
@@ -44,45 +41,32 @@ final class LiquidAffineFit {
 			gram[a][b] = ZERO; for (int i = 0; i < n; i++) gram[a][b] = gram[a][b].add(volume[i].multiply(direction[i][a]).multiply(direction[i][b]));
 		}
 		var inverse = rank == 0 ? new Value[0][0] : LiquidBoundedMatrix.inverse(gram);
-		var completion = new Fraction[basis.anchor.length][n];
-		for (int j = 0; j < completion.length; j++) {
-			Arrays.fill(completion[j], Fraction.ZERO); completion[j][basis.anchor[j]] = Fraction.of(1); shape[basis.anchor[j]] = basis.shape[j];
-		}
 		for (int i = 0; i < n; i++) {
-			boolean anchor = false; for (int selected : basis.anchor) anchor |= selected == i; if (anchor) continue;
-			var local = new Value[rank + 1]; local[rank] = volume[i].divide(total);
-			var row = zeroRow();
+			var row = new Value[rank + 1]; row[rank] = volume[i].divide(total);
 			for (int a = 0; a < rank; a++) {
-				local[a] = ZERO;
-				for (int b = 0; b < rank; b++) local[a] = local[a].add(volume[i].multiply(inverse[a][b]).multiply(direction[i][b]));
-				local[rank] = local[rank].subtract(local[a].multiply(mean[a]));
-				add(row, coordinates[a].coefficients, Fraction.of(local[a].value()));
+				row[a] = ZERO;
+				for (int b = 0; b < rank; b++) row[a] = row[a].add(volume[i].multiply(inverse[a][b]).multiply(direction[i][b]));
+				row[rank] = row[rank].subtract(row[a].multiply(mean[a]));
 			}
-			row[3] = row[3].add(Fraction.of(local[rank].value())); shape[i] = new Form(row);
-			for (int a = 0; a <= rank; a++) coefficientError[i][a] = local[a].error();
-			var point = LiquidExactPolygon.vertex(centers.get(i));
-			for (int j = 0; j < basis.anchor.length; j++) {
-				var barycentric = basis.shape[j].evaluate(point); completion[j][i] = barycentric.negate();
-				double magnitude = magnitude(barycentric);
-				for (int a = 0; a <= rank; a++) coefficientError[basis.anchor[j]][a] = up(coefficientError[basis.anchor[j]][a] + up(magnitude * local[a].error()));
-			}
+			coefficients[i] = row;
 		}
-		for (int j = 0; j < basis.anchor.length; j++) shape[basis.anchor[j]] = Form.combine(shape, completion[j]);
 	}
-	/** Exact affine completion reproduces every point in the actual observation span. */
-	boolean contains(Vertex point) { return basis.contains(point); }
-
-	double[] weightErrors(Vertex point) {
-		int rank = coordinates.length; var magnitude = new double[rank]; var result = new double[shape.length];
-		for (int a = 0; a < rank; a++) magnitude[a] = coordinates[a].magnitude(point);
-		for (int i = 0; i < shape.length; i++) {
-			result[i] = coefficientError[i][rank];
-			for (int a = 0; a < rank; a++) if (coefficientError[i][a] != 0 && magnitude[a] != 0) result[i] = up(result[i] + up(coefficientError[i][a] * magnitude[a]));
-			if (!Double.isFinite(result[i])) throw new IllegalStateException("Affine interpolation has no finite observation error bound");
+	/** Each value encloses the original volume-weighted least-squares coefficient at this point. */
+	Value[] weights(Vertex point) {
+		var result = new Value[coefficients.length];
+		if (coefficients[0] == null) {
+			for (int j = 0; j < basis.anchor.length; j++) result[basis.anchor[j]] = Value.of(basis.shape[j].evaluate(point));
+			return result;
+		}
+		int rank = coordinates.length; var position = new Value[rank];
+		for (int a = 0; a < rank; a++) position[a] = Value.of(coordinates[a].evaluate(point));
+		for (int i = 0; i < result.length; i++) {
+			result[i] = coefficients[i][rank];
+			for (int a = 0; a < rank; a++) result[i] = result[i].add(coefficients[i][a].multiply(position[a]));
 		}
 		return result;
 	}
-	private static double magnitude(Fraction value) { double observed = value.rounded(); return value.signum() == 0 ? 0 : up(Math.abs(observed) + Math.ulp(observed)); }
+	boolean contains(Vertex point) { return basis.contains(point); }
 	private static Fraction[] zeroRow() { return new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; }
 	private static void add(Fraction[] target, Fraction[] row, Fraction factor) { for (int a = 0; a < 4; a++) target[a] = target[a].add(row[a].multiply(factor)); }
 	private static Fraction dot(Fraction[] first, Fraction[] second) { var result = Fraction.ZERO; for (int a = 0; a < 3; a++) result = result.add(first[a].multiply(second[a])); return result; }
@@ -93,26 +77,12 @@ final class LiquidAffineFit {
 
 	/** Same rational affine form; homogeneous evaluation performs one final reduction. */
 	static final class Form {
-		final Fraction[] coefficients;
 		private final BigInteger[] numerator = new BigInteger[4];
 		private final BigInteger denominator;
 		Form(Fraction[] coefficients) {
-			this.coefficients = coefficients.clone(); var common = BigInteger.ONE;
+			var common = BigInteger.ONE;
 			for (var value : coefficients) common = common.divide(gcd(common, value.denominator())).multiply(value.denominator()); denominator = common;
 			for (int a = 0; a < 4; a++) numerator[a] = coefficients[a].numerator().multiply(common.divide(coefficients[a].denominator()));
-		}
-		static Form combine(Form[] forms, Fraction[] weights) {
-			if (forms.length != weights.length) throw new IllegalArgumentException("Incomplete affine combination");
-			var common = BigInteger.ONE; var local = new BigInteger[forms.length];
-			for (int i = 0; i < forms.length; i++) if (weights[i].signum() != 0) {
-				local[i] = forms[i].denominator.multiply(weights[i].denominator()); common = common.divide(gcd(common, local[i])).multiply(local[i]);
-			}
-			var numerator = new BigInteger[4]; Arrays.fill(numerator, BigInteger.ZERO);
-			for (int i = 0; i < forms.length; i++) if (weights[i].signum() != 0) {
-				var factor = weights[i].numerator().multiply(common.divide(local[i]));
-				for (int a = 0; a < 4; a++) numerator[a] = numerator[a].add(forms[i].numerator[a].multiply(factor));
-			}
-			var coefficients = new Fraction[4]; for (int a = 0; a < 4; a++) coefficients[a] = new Fraction(numerator[a], common); return new Form(coefficients);
 		}
 		Fraction evaluate(Vertex point) {
 			return new Fraction(numeratorAt(point), denominator.multiply(point.w()));

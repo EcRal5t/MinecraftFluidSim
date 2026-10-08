@@ -418,7 +418,7 @@ final class LiquidConformingVelocityValidation {
 				x[2].multiply(Fraction.of(-0.125)).add(Fraction.of(0.125))};
 	}
 	private static void certifiedAffineFitsContainExactLeastSquares() {
-		for (int pattern = 0; pattern < 6; pattern++) {
+		for (int pattern = 0; pattern < 8; pattern++) {
 			int rank = Math.min(pattern, 3); var small = new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.ONE.shiftLeft(80));
 			var samples = new Fraction[8][rank]; var target = new Fraction[rank];
 			var centers = new ArrayList<Fraction[]>(); var weights = new ArrayList<Fraction>();
@@ -426,14 +426,24 @@ final class LiquidConformingVelocityValidation {
 			for (int i = 0; i < samples.length; i++) {
 				for (int a = 0; a < rank; a++) samples[i][a] = rank == 1 ? rational(i, 21) : rational(i >>> a & 1, 2 * a + 3);
 				if (pattern == 4 && i > 1 && i < 4) samples[i] = new Fraction[]{rational(1, 3), small, i == 3 ? small : Fraction.ZERO};
-				if (pattern == 5) samples[i][2] = samples[i][2].multiply(small);
+				if (pattern >= 6) samples[i][0] = samples[i][0].add(new Fraction(java.math.BigInteger.ONE,
+						java.math.BigInteger.ONE.shiftLeft(220).add(java.math.BigInteger.valueOf(2 * i + 1))));
+				if (pattern == 5 || pattern == 7) samples[i][2] = samples[i][2].multiply(small);
 				centers.add(obliqueCoordinates(samples[i])); weights.add(rational(i + 1, i + 7));
 			}
-			if (pattern == 5) target[2] = target[2].multiply(small);
+			if (pattern == 5 || pattern == 7) target[2] = target[2].multiply(small);
 			var point = LiquidExactPolygon.vertex(obliqueCoordinates(target)); var fit = new LiquidAffineFit(centers, weights);
-			var exact = leastSquaresWeights(samples, weights, target); var sum = Fraction.ZERO; var moment = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var errors = fit.weightErrors(point);
+			var exact = leastSquaresWeights(samples, weights, target); var sum = Fraction.ZERO; var moment = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
+			var observed = new java.util.LinkedHashMap<Integer, LiquidBoundedArithmetic.Value>(); var local = fit.weights(point);
+			for (int i = 0; i < local.length; i++) {
+				observed.put(i, local[i]);
+				if (Fraction.of(local[i].value()).subtract(exact[i]).absolute().compareTo(Fraction.of(local[i].error())) > 0)
+					throw new AssertionError("Bounded local fit lost its original least-squares reference");
+			}
+			var completed = LiquidAffineWeightCoordinates.complete(point, fit.basis, java.util.stream.IntStream.range(0, samples.length).boxed().toList(),
+					centers.stream().map(LiquidExactPolygon::vertex).toList(), observed);
 			for (int i = 0; i < samples.length; i++) {
-				var weight = fit.shape[i].evaluate(point); double error = errors[i];
+				var weight = completed.weights().get(i); double error = completed.errors().get(i);
 				if (weight.subtract(exact[i]).absolute().subtract(Fraction.of(error)).signum() > 0 || !(error < Math.ulp((float) exact[i].rounded())))
 					throw new AssertionError("Certified affine fit lost its exact least-squares reference or observation precision, rank=" + rank);
 				sum = sum.add(weight); for (int a = 0; a < 3; a++) moment[a] = moment[a].add(weight.multiply(centers.get(i)[a]));

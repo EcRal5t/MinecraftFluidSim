@@ -94,10 +94,9 @@ final class LiquidVelocityInterpolation {
 		for (int k = 0; k < active.size(); k++) {
 			var support = active.get(k); var blend = represented.get(k).divide(representedTotal); var observedBlend = Value.of(blend);
 			double blendError = observedBlend.subtract(raw.get(k).divide(total)).magnitude();
-			var localError = support.fit.weightErrors(point); complete &= support.fit.contains(point);
+			var localWeights = support.fit.weights(point); complete &= support.fit.contains(point);
 			for (int i = 0; i < support.patch.size(); i++) {
-				int c = support.patch.get(i); var coefficient = support.fit.shape[i].evaluate(point);
-				var local = Value.of(coefficient); local = new Value(local.value(), up(local.error() + localError[i]));
+				int c = support.patch.get(i); var local = localWeights[i];
 				var contribution = local.multiply(new Value(observedBlend.value(), up(observedBlend.error() + blendError)));
 				observed.merge(c, contribution, Value::add);
 			}
