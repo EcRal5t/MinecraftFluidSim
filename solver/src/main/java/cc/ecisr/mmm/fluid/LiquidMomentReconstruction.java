@@ -203,9 +203,7 @@ final class LiquidMomentReconstruction {
 			referenceVolumes.add(ordered); quantum.add(localQuantum);
 		}
 		try {
-			// Local volume coordinates have their own measured spatial quantum; global capacities remain exact.
-			var localVolumes = LiquidPhaseVolumeRounding.round(referenceVolumes, targets, 1, quantum);
-			corrected = LiquidJointInterfaceVolume.project(leaves, targets, localVolumes, budget.maximumRegions);
+			corrected = LiquidFinitePhaseVolumeProjection.project(leaves, targets, referenceVolumes, quantum, budget.maximumRegions, work);
 		}
 		catch (LiquidInterfaceResolutionRequired finer) {
 			var selected = new java.util.HashSet<Integer>(); for (int cell : finer.cells()) selected.add(cell);

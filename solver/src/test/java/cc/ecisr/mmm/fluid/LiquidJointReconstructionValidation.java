@@ -168,6 +168,38 @@ final class LiquidJointReconstructionValidation {
 		for (var leaf : represented.leaves()) for (var phase : leaf.phases())
 			if (LiquidVolumeInterface.measure(phase.pieces()).volume().denominator().bitLength() >= 48)
 				throw new AssertionError("Local volume precision follows supporting-plane bits instead of its declared spatial error");
+		var thinLeaves = new java.util.ArrayList<LiquidMomentReconstruction.Leaf>();
+		var thinReference = new java.util.ArrayList<java.util.Map<Integer, Fraction>>();
+		var thinTotals = new java.util.LinkedHashMap<Integer, Fraction>();
+		for (int cell = 0; cell < 2; cell++) {
+			var open = new LiquidGeometryRefinement.Cell(1, cell, 0, 0, LiquidPolyhedron.box(cell * 0.5, 0, 0, (cell + 1) * 0.5, 0.5, 0.5));
+			double cut = (cell + 1) * 0.5 - Math.scalb(cell == 0 ? 7.0 : 9.0, -22);
+			var phases = List.of(new LiquidMomentReconstruction.Phase(11, List.of(open.geometry().clip(1, 0, 0, cut))),
+					new LiquidMomentReconstruction.Phase(29, List.of(open.geometry().clip(-1, 0, 0, -cut))));
+			var row = new java.util.LinkedHashMap<Integer, Fraction>();
+			for (var phase : phases) {
+				var volume = LiquidVolumeInterface.measure(phase.pieces()).volume(); row.put(phase.control(), volume); thinTotals.merge(phase.control(), volume, Fraction::add);
+			}
+			thinReference.add(row); thinLeaves.add(new LiquidMomentReconstruction.Leaf(open, phases));
+		}
+		var thinQuantum = java.util.Collections.nCopies(2, Fraction.of(1.0 / 32)); boolean coarseRefused = false;
+		try { LiquidJointInterfaceVolume.project(thinLeaves, thinTotals, LiquidPhaseVolumeRounding.round(thinReference, thinTotals, 1, thinQuantum), 4096); }
+		catch (LiquidInterfaceResolutionRequired expected) { coarseRefused = true; }
+		var work = new LiquidSupportVolumeFit.Work(16);
+		var corrected = LiquidFinitePhaseVolumeProjection.project(thinLeaves, thinTotals, thinReference, thinQuantum, 4096, work);
+		if (!coarseRefused || work.evaluations == 0 || corrected.leaves().size() != 2)
+			throw new AssertionError("Quantity rounding refined resolved thin geometry instead of its finite volume coordinates");
+		var actualTotals = new java.util.LinkedHashMap<Integer, Fraction>();
+		for (var leaf : corrected.leaves()) {
+			LiquidPhasePartition.requireComplete(leaf.open(), leaf.phases().stream().flatMap(phase -> phase.pieces().stream()).map(LiquidPhasePartition.Address.of(leaf.open())::cell).toList());
+			for (var phase : leaf.phases()) actualTotals.merge(phase.control(), LiquidVolumeInterface.measure(phase.pieces()).volume(), Fraction::add);
+		}
+		if (!actualTotals.equals(thinTotals)) throw new AssertionError("Finite phase correction lost exact phase totals");
+		var exhausted = new LiquidSupportVolumeFit.Work(1); boolean budgetRefused = false;
+		try { LiquidFinitePhaseVolumeProjection.project(thinLeaves, thinTotals, thinReference, thinQuantum, 4096, exhausted); }
+		catch (IllegalStateException expected) { budgetRefused = true; }
+		if (!budgetRefused || exhausted.evaluations != 1)
+			throw new AssertionError("Finite quantity retries escaped the shared reconstruction evaluation budget");
 	}
 	private static void jointCutsRetainSmallRemainingPhases() {
 		var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
