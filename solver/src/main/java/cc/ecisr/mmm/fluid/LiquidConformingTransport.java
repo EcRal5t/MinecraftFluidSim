@@ -28,6 +28,13 @@ final class LiquidConformingTransport {
 		this(mesh, field, rate, dt, new int[mesh.cells.size()]);
 	}
 	LiquidConformingTransport(LiquidControlVolumeMesh mesh, LiquidConformingVelocity field, Fraction[] rate, double dt, int[] liquid) {
+		this(mesh, field, rate, dt, liquid, true);
+	}
+	/** The final finite-coordinate partition is certified before any unneeded reference-volume integration. */
+	static LiquidConformingTransport prepareReference(LiquidControlVolumeMesh mesh, LiquidConformingVelocity field, Fraction[] rate, double dt, int[] liquid) {
+		return new LiquidConformingTransport(mesh, field, rate, dt, liquid, false);
+	}
+	private LiquidConformingTransport(LiquidControlVolumeMesh mesh, LiquidConformingVelocity field, Fraction[] rate, double dt, int[] liquid, boolean partitionRequired) {
 		if (field.mesh != mesh || rate.length != mesh.faces.size() || liquid.length != mesh.cells.size() || !(dt > 0) || !Double.isFinite(dt)) throw new IllegalArgumentException("Invalid continuous transport input");
 		this.mesh = mesh; this.field = field; this.liquid = liquid.clone();
 		time = Fraction.of(dt); var moved = new LinkedHashMap<Vertex, Vertex>();
@@ -56,7 +63,21 @@ final class LiquidConformingTransport {
 		// Momentum is carried by the original velocity-field mean in LiquidGeometryMotionPlan.
 		for (int c = 0; c < mesh.cells.size(); c++) if (liquid[c] >= 0)
 			moved.put(field.cellCenters.get(c), LiquidExactPolygon.vertex(field.meanPosition(c, time)));
-		positions = java.util.Collections.unmodifiableMap(moved); var partition = images(moved); images = partition.images; surfaces = partition.surfaces;
+		positions = java.util.Collections.unmodifiableMap(moved);
+		if (partitionRequired) { var partition = images(moved); images = partition.images; surfaces = partition.surfaces; }
+		else {
+			var reference = new java.util.function.Supplier<Partition>() {
+				private Partition partition;
+				@Override public Partition get() { if (partition == null) partition = images(moved); return partition; }
+			};
+			images = delayed(() -> reference.get().images); surfaces = delayed(() -> reference.get().surfaces);
+		}
+	}
+	private static <T> List<T> delayed(java.util.function.Supplier<List<T>> values) {
+		return new java.util.AbstractList<>() {
+			@Override public int size() { return values.get().size(); }
+			@Override public T get(int index) { return values.get().get(index); }
+		};
 	}
 	/** Coordinate rounding is constrained by exact cell volumes; actual rates are certified by the original pressure operator. */
 	LiquidConformingTransport representCoordinates(int fractionalBits) { return new LiquidConformingTransport(this, fractionalBits); }
@@ -85,7 +106,10 @@ final class LiquidConformingTransport {
 		if (!Double.isFinite(error)) throw new LiquidCoordinateResolutionRequired("Coordinate representation has no finite rate error bound");
 		maximumRateRepresentationErrorPerSecond = error;
 		try { var partition = images(positions); images = partition.images; surfaces = partition.surfaces; }
-		catch (LiquidCharacteristicTimeResolutionRequired invalid) { throw new LiquidCoordinateResolutionRequired(invalid.getMessage()); }
+		catch (LiquidCharacteristicTimeResolutionRequired invalid) {
+			reference.images.size(); // An invalid reference propagates its time-refinement request; a valid reference needs finer coordinates.
+			throw new LiquidCoordinateResolutionRequired(invalid.getMessage());
+		}
 	}
 	Fraction[] volumeRate() {
 		var rates = new Fraction[sweptVolume.length]; for (int f = 0; f < rates.length; f++) rates[f] = sweptVolume[f].divide(time); return rates;

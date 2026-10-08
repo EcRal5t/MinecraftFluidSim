@@ -84,7 +84,7 @@ final class ResolvedLiquidMechanicalStage {
 			try {
 				var field = result.conformingVelocity();
 				double velocityError = field.maximumFittingVelocityErrorMetresPerSecond;
-				var reference = new LiquidConformingTransport(physical.mesh, field, result.extension().volumeRate(), dt, physical.fragments);
+				var reference = LiquidConformingTransport.prepareReference(physical.mesh, field, result.extension().volumeRate(), dt, physical.fragments);
 				int precision = LiquidCoordinateProjection.fractionalBits(physical.mesh, dt, domain.config.pressureTolerance());
 				LiquidConformingTransport transport;
 				for (;;) {

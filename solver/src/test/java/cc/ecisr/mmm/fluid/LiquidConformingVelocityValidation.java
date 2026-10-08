@@ -196,6 +196,13 @@ final class LiquidConformingVelocityValidation {
 		}
 		for (int f = 0; f < rate.length; f++) rate[f] = dot(mesh.faces.get(f).areaVector(), affine(mesh.faces.get(f).centroid().toArray(Fraction[]::new)));
 		var field = new LiquidConformingVelocity(mesh, rate, mean); var motion = new LiquidConformingTransport(mesh, field, rate, 1.0 / 128);
+		var reference = LiquidConformingTransport.prepareReference(mesh, field, rate, 1.0 / 128, new int[mesh.cells.size()]);
+		var represented = reference.representCoordinates(64); var eager = motion.representCoordinates(64);
+		if (!reference.positions.equals(motion.positions) || !java.util.Arrays.equals(reference.sweptVolume, motion.sweptVolume)
+				|| !represented.positions.equals(eager.positions) || !java.util.Arrays.equals(represented.sweptVolume, eager.sweptVolume)
+				|| !reference.surfaces.stream().map(surface -> surface.geometry().vertexKey()).toList()
+						.equals(motion.surfaces.stream().map(surface -> surface.geometry().vertexKey()).toList()) || reference.images.size() != motion.images.size())
+			throw new AssertionError("Deferred reference changed exact sweeps, surfaces or represented transport");
 		var volume = new Fraction[cells.size()]; Arrays.fill(volume, Fraction.ZERO);
 		var measures = new LiquidExactPolygon.Measure[cells.size()]; Arrays.fill(measures, LiquidConvexRegion.EMPTY.measure());
 		var boundaries = new ArrayList<ArrayList<LiquidExactPolygon>>(); for (int c = 0; c < cells.size(); c++) boundaries.add(new ArrayList<>());
@@ -225,6 +232,10 @@ final class LiquidConformingVelocityValidation {
 		try {
 			new LiquidConformingTransport(mesh, field, rate, 64);
 			throw new AssertionError("An inverted continuous candidate was accepted");
+		} catch (LiquidCharacteristicTimeResolutionRequired expected) { }
+		try {
+			LiquidConformingTransport.prepareReference(mesh, field, rate, 64, new int[mesh.cells.size()]).representCoordinates(64);
+			throw new AssertionError("An inverted reference bypassed the actual time-refinement request");
 		} catch (LiquidCharacteristicTimeResolutionRequired expected) { }
 	}
 	private static void signedPartitionsPreserveNonStarShapedVolumes() {

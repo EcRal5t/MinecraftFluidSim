@@ -258,12 +258,11 @@ public final class CarrierMutationValidation {
 		var audit = domain.thermalAudit();
 		for (int step = 0; step < 3; step++) {
 			domain = new CpuFluidSolverBackend().evaluate(FluidStepRequest.pendingPhaseSettlement(step, domain.captureAuthoritativeState())).claimPreparedCpuDomain();
-			if (step < 2) try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
-				var support = new java.util.ArrayList<>(LiquidGeometryStateMapper.restore(domain.liquidGeometryState));
-				support.addAll(LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells()));
-				var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, support, 65536);
-				var plan = new LiquidGeometryReconstructionPlan(domain, partition.leaves, new LiquidMomentReconstruction.Tolerance(0.01, 0.03), 0.001,
+			try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
+				var plan = new LiquidGeometryReconstructionPlan(domain, new LiquidMomentReconstruction.Tolerance(0.01, 0.03), 0.001,
 						new LiquidMomentReconstruction.Budget(65536, 65536, 65536));
+				require(plan.leaves.size() == 1 && plan.maximumCentroidError <= 0.01 && plan.maximumOccupancyErrorLength <= 0.03
+						&& plan.velocityErrors.stream().allMatch(error -> error.maximumRmsError() <= 0.001), "moving regrid retained auxiliary refinement despite resolved spatial and velocity errors");
 				new ResolvedGasMotionPlan(domain, plan, 65536, 65536).publish(domain, plan);
 			}
 			require(initial.totalVolume().equals(domain.particles.inventory().totalVolume()) && initial.totalMass().equals(domain.particles.inventory().totalMass())

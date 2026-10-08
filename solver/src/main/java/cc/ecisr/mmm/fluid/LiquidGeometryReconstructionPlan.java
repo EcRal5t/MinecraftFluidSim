@@ -50,6 +50,12 @@ final class LiquidGeometryReconstructionPlan {
 			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget) {
 		this(domain, domain.liquidGeometryState, domain.gasState.geometry, open, tolerance, maximumRmsVelocityError, budget);
 	}
+	/** Re-selects spatial leaves from collision space; previous auxiliary refinement may coarsen within the same error certificates. */
+	LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidMomentReconstruction.Tolerance tolerance,
+			double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget) {
+		this(domain, new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
+				domain.geometry.cutCells, List.of(), budget.maximumLeaves()).leaves, tolerance, maximumRmsVelocityError, budget);
+	}
 	private LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
 			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget) {
 		if (input == null || open == null || tolerance == null || budget == null || open.size() > budget.maximumLeaves()
