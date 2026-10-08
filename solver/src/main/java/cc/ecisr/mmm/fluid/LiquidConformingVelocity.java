@@ -124,7 +124,8 @@ final class LiquidConformingVelocity {
 		}
 		var cells = new ArrayList<Vertex>(); var tets = new ArrayList<Tetrahedron>();
 		for (int c = 0; c < mesh.cells.size(); c++) {
-			var center = mesh.cells.get(c).geometry().centroidCoordinates(); var volume = Fraction.ZERO; int start = tets.size();
+			var geometry = mesh.cells.get(c).geometry();
+			var center = liquid[c] < 0 ? geometry.centroidCoordinates() : geometry.fanCoordinates(); var volume = Fraction.ZERO; int start = tets.size();
 			var point = LiquidExactPolygon.vertex(center); cells.add(point); if (liquid[c] < 0) continue;
 			for (int f : mesh.cellFaces[c]) {
 				var polygon = mesh.exactPolygons.get(f); if (mesh.faces.get(f).first() != c) polygon = polygon.reversed();

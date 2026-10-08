@@ -3,10 +3,21 @@ package cc.ecisr.mmm.fluid;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Convex liquid geometry with volume and first moments integrated over the same faces. */
+/** Closed liquid geometry with volume and first moments integrated over the same faces. */
 final class LiquidPolyhedron {
 	static final LiquidPolyhedron EMPTY = new LiquidPolyhedron(List.of(), List.of());
 	private volatile Point centroid;
+	private volatile java.util.Optional<LiquidExactPolygon.Vertex> starKernel;
+	LiquidExactPolygon.Vertex kernelPoint() {
+		var value = starKernel;
+		if (value == null) starKernel = value = java.util.Optional.ofNullable(LiquidStarKernel.find(this));
+		return value.orElse(null);
+	}
+	LiquidExactPolygon.Fraction[] fanCoordinates() {
+		var point = kernelPoint();
+		if (point == null) throw new IllegalArgumentException("Control-volume geometry requires positive fan subdivision");
+		return point.coordinates();
+	}
 	Point centroid() {
 		var value = centroid; if (value == null) centroid = value = measure().centroid(); return value;
 	}

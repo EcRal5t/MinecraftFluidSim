@@ -38,7 +38,7 @@ final class LiquidControlVolumeProjection {
 			return new LiquidPolyhedron.Point(result[0], result[1], result[2]);
 		}
 		double distance(LiquidPolyhedron geometry, int sign) {
-			var center = geometry.centroidCoordinates(); var result = LiquidExactPolygon.Fraction.of(0);
+			var center = geometry.fanCoordinates(); var result = LiquidExactPolygon.Fraction.of(0);
 			for (int a = 0; a < 3; a++) result = result.add(areaVector.get(a).multiply(centroid.get(a).subtract(center[a])));
 			return sign * result.rounded() / surface.area();
 		}

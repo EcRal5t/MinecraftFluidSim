@@ -40,10 +40,7 @@ final class LiquidMechanicalControlCells {
 		if (pieces.size() == 1) return pieces.getFirst().geometry();
 		var measure = LiquidConvexRegion.EMPTY.measure(); for (var piece : pieces) measure = measure.add(piece.geometry().measure());
 		var faces = LiquidExactPolygon.splitEdges(LiquidExteriorGeometry.of(pieces));
-		var center = LiquidExactPolygon.vertex(measure.centroidCoordinates());
-		// A strict interior kernel point makes every actual surface triangle a positive-volume fan tetrahedron.
-		// Disconnected or non-star-shaped support retains its existing positive-volume spatial subdivision.
-		if (faces.stream().anyMatch(face -> center.distance(face.coefficients()).signum() >= 0)) return null;
-		return LiquidPolyhedron.restoredExact(faces, measure);
+		var geometry = LiquidPolyhedron.restoredExact(faces, measure);
+		return geometry.kernelPoint() == null ? null : geometry;
 	}
 }

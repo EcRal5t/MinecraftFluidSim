@@ -159,6 +159,7 @@ final class LiquidGeometryValidation {
 		return new LiquidExactPolygon.Measure(volume.divide(LiquidExactPolygon.Fraction.of(3)), moment);
 	}
 	private static void mechanicalCellsCancelAuxiliaryCuts() {
+		starKernelKeepsMeansAndAffineWork();
 		var cube = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75));
 		var pieces = LiquidGeometryRefinement.children(cube);
 		var unified = LiquidGeometryStateMapper.capture(pieces, 1, new int[]{0}, new int[pieces.size()], new double[3 * pieces.size()], new int[pieces.size()]);
@@ -196,6 +197,55 @@ final class LiquidGeometryValidation {
 		var sum = LiquidConvexRegion.EMPTY.measure(); for (var image : motion.images) sum = sum.add(image.geometry().measure());
 		var expected = LiquidExactPolygon.measure(LiquidExactPolygon.faces(controls.regions.getFirst().geometry().translated(mean[0] / 128, mean[1] / 128, mean[2] / 128)));
 		if (!sum.same(expected)) throw new AssertionError("Non-convex pressure-cell fan lost exact rigid transport geometry");
+	}
+	private static void starKernelKeepsMeansAndAffineWork() {
+		var cavity = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.25, 1)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0.25, 0, 0.25, 1, 1)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.75, 0.25, 0, 1, 1, 1)));
+		if (LiquidPolyhedron.restoredExact(LiquidExteriorGeometry.of(cavity)).kernelPoint() != null)
+			throw new AssertionError("A non-star-shaped cavity acquired a fictitious positive fan kernel");
+		for (double height : new double[]{1, 1.0 / 1024}) {
+			var pieces = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.25, height)),
+					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0.25, 0, 0.25, 1, height)));
+			var state = LiquidGeometryStateMapper.capture(pieces, 1, new int[]{0}, new int[2], new double[6], new int[2]);
+			var controls = new LiquidMechanicalControlCells(state, pieces, java.util.List.of(0, 1), java.util.List.of(-1, -1), java.util.Set.of());
+			if (controls.regions.size() != 1) throw new AssertionError("A star-shaped control with an exterior centroid gained auxiliary pressure cells");
+			var shape = controls.regions.getFirst().geometry(); var center = LiquidExactPolygon.vertex(shape.centroidCoordinates());
+			var faces = LiquidExactPolygon.faces(shape); var kernel = shape.kernelPoint();
+			if (faces.stream().noneMatch(face -> center.distance(face.coefficients()).signum() > 0)
+					|| faces.stream().anyMatch(face -> kernel.distance(face.coefficients()).signum() >= 0))
+				throw new AssertionError("The auxiliary fan point did not independently satisfy the actual surface half-spaces");
+			var expected = LiquidVolumeInterface.measure(pieces.stream().map(LiquidGeometryRefinement.Cell::geometry).toList());
+			if (!shape.measure().same(expected)) throw new AssertionError("Kernel selection changed volume or material first moments");
+			var mesh = new LiquidControlVolumeMesh(controls.regions, 1, 1000, (c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+			var gradient = ControlVolumeGradient.build(mesh.cells, mesh.faces)[0];
+			for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
+				var identity = LiquidExactPolygon.Fraction.ZERO;
+				for (int f = 0; f < gradient.indices.length; f++) identity = identity.add(gradient.exactBasis[f][a].multiply(gradient.exactDisplacement[f][b]));
+				if (!identity.equals(LiquidExactPolygon.Fraction.of(a == b ? 1 : 0))) throw new AssertionError("Auxiliary support changed the affine gradient of cell means");
+			}
+			for (var weight : gradient.exactWeight) if (weight.signum() <= 0) throw new AssertionError("Auxiliary fan supplied a non-positive stabilization metric");
+			var slope = new double[]{0.125, -0.25, 0.0625};
+			var projected = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(slope, new LiquidPolyhedron.Point(0, 0, 0), 1.0 / 128, 1e-10, 512);
+			for (int a = 0; a < 3; a++) if (Math.abs(projected.cellVelocity()[a] - slope[a]) > 1e-13)
+				throw new AssertionError("Auxiliary support changed uniform physical momentum");
+			var rates = new LiquidExactPolygon.Fraction[mesh.faces.size()];
+			for (int f = 0; f < rates.length; f++) {
+				rates[f] = LiquidExactPolygon.Fraction.ZERO;
+				for (int a = 0; a < 3; a++) rates[f] = rates[f].add(mesh.faces.get(f).areaVector().get(a).multiply(LiquidExactPolygon.Fraction.of(slope[a])));
+			}
+			var field = new LiquidConformingVelocity(mesh, rates, slope); var moment = new LiquidExactPolygon.Fraction[3]; java.util.Arrays.fill(moment, LiquidExactPolygon.Fraction.ZERO);
+			for (var tet : field.tetrahedra) {
+				if (tet.volume().signum() <= 0) throw new AssertionError("Kernel fan has a non-positive integral weight");
+				for (var point : tet.vertices()) for (int a = 0; a < 3; a++) moment[a] = moment[a].add(tet.volume().multiply(field.velocity.get(point).get(a)).divide(LiquidExactPolygon.Fraction.of(4)));
+			}
+			for (int a = 0; a < 3; a++) if (!moment[a].equals(expected.volume().multiply(LiquidExactPolygon.Fraction.of(slope[a]))))
+				throw new AssertionError("Auxiliary fan changed the exact prescribed mean momentum");
+			var motion = new LiquidConformingTransport(mesh, field, rates, 1.0 / 128); var measured = LiquidConvexRegion.EMPTY.measure();
+			for (var image : motion.images) measured = measured.add(image.geometry().measure());
+			if (!measured.same(shape.translated(slope[0] / 128, slope[1] / 128, slope[2] / 128).measure()))
+				throw new AssertionError("Auxiliary kernel changed rigid transport volume or first moments");
+		}
 	}
 	private static void mechanicalFacetsIgnoreAuxiliaryGasCuts() {
 		var body = LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75);

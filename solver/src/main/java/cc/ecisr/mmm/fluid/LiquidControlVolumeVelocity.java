@@ -47,7 +47,7 @@ final class LiquidControlVolumeVelocity {
 
 	static Result reconstruct(LiquidControlVolumeMesh mesh, int cell, Fraction[] volumeRate, LiquidPolyhedron.Point target) {
 		if (volumeRate.length != mesh.faces.size()) throw new IllegalArgumentException("Invalid shared liquid velocity traces");
-		var origin = mesh.cells.get(cell).geometry().centroidCoordinates();
+		var origin = mesh.cells.get(cell).geometry().fanCoordinates();
 		double width = 0;
 		for (int f : mesh.cellFaces[cell]) {
 			if (volumeRate[f] == null || !Double.isFinite(volumeRate[f].toDouble())) throw new IllegalArgumentException("Non-finite shared liquid velocity");

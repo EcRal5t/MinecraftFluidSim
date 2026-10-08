@@ -30,6 +30,7 @@ final class ControlVolumeGradient {
 		indices = incidence.stream().mapToInt(Integer::intValue).toArray(); sign = new int[indices.length];
 		basis = new LiquidPolyhedron.Point[indices.length]; displacement = basis.clone(); weight = new double[indices.length];
 		var geometry = cells.get(cell).geometry(); var center = geometry.centroidCoordinates();
+		var fan = geometry.fanCoordinates();
 		exactVolume = LiquidConvexRegion.of(geometry).measure().volume(); volume = exactVolume.rounded();
 		exactBasis = new LiquidExactPolygon.Fraction[indices.length][3]; exactDisplacement = new LiquidExactPolygon.Fraction[indices.length][3];
 		exactWeight = new LiquidExactPolygon.Fraction[indices.length];
@@ -40,9 +41,9 @@ final class ControlVolumeGradient {
 			for (int a = 0; a < 3; a++) {
 				var area = sign[i] > 0 ? face.areaVector().get(a) : face.areaVector().get(a).negate();
 				exactBasis[i][a] = area.divide(exactVolume); exactDisplacement[i][a] = face.centroid().get(a).subtract(center[a]);
-				areaSquared = areaSquared.add(area.multiply(area)); areaDistance = areaDistance.add(area.multiply(exactDisplacement[i][a]));
+				areaSquared = areaSquared.add(area.multiply(area)); areaDistance = areaDistance.add(area.multiply(face.centroid().get(a).subtract(fan[a])));
 			}
-			if (areaDistance.numerator().signum() <= 0) throw new IllegalArgumentException("Control-volume centroid must lie inside its face");
+			if (areaDistance.numerator().signum() <= 0) throw new IllegalArgumentException("Control-volume fan point must lie inside its face");
 			displacement[i] = observed(exactDisplacement[i]); basis[i] = observed(exactBasis[i]);
 			exactWeight[i] = areaSquared.divide(areaDistance); weight[i] = exactWeight[i].rounded();
 			for (int a = 0; a < 3; a++) {

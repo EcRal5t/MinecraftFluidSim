@@ -156,6 +156,18 @@ final class LiquidConformingTransport {
 		return scale(value, Fraction.of(0.5));
 	}
 	private static List<Fraction> affine(List<Vertex> source, List<Vertex> target) {
+		// Clipping uses the endpoint vertices. The affine map is only needed for an intact-cell image.
+		return new java.util.AbstractList<>() {
+			private List<Fraction> coordinates;
+			@Override public int size() { return 12; }
+			@Override public Fraction get(int index) {
+				java.util.Objects.checkIndex(index, 12);
+				if (coordinates == null) coordinates = affineCoordinates(source, target);
+				return coordinates.get(index);
+			}
+		};
+	}
+	private static List<Fraction> affineCoordinates(List<Vertex> source, List<Vertex> target) {
 		var origin = source.getFirst().coordinates(); var next = target.getFirst().coordinates();
 		var columns = new Fraction[3][]; var moved = new Fraction[3][];
 		for (int i = 0; i < 3; i++) { columns[i] = subtract(source.get(i + 1).coordinates(), origin); moved[i] = subtract(target.get(i + 1).coordinates(), next); }
