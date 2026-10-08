@@ -11,7 +11,11 @@ import java.util.function.Function;
 final class LiquidPhysicalReconstructionControls {
 	record Control(int leaf, int phase, List<LiquidPolyhedron> pieces, LiquidGeometryVelocityProjection.Value field) { }
 	private record Node(int leaf, int phase, LiquidGeometryRefinement.Cell box, List<LiquidPolyhedron> pieces,
-			List<LiquidGeometryVelocityProjection.Source> sources) { }
+			List<LiquidGeometryVelocityProjection.Source> sources, LiquidGeometryVelocityProjection.Value reference, Fraction volume) {
+		Node(int leaf, int phase, LiquidGeometryRefinement.Cell box, List<LiquidPolyhedron> pieces, List<LiquidGeometryVelocityProjection.Source> sources) {
+			this(leaf, phase, box, pieces, sources, LiquidGeometryVelocityProjection.summarize(sources).get(phase), LiquidVolumeInterface.measure(pieces).volume());
+		}
+	}
 	final List<Control> controls;
 	final Fraction redistributedVolume, redistributionSquaredDisplacementVolumeBound;
 	final int evaluations;
@@ -80,9 +84,9 @@ final class LiquidPhysicalReconstructionControls {
 	private static LiquidConservativeVolumeRedistribution.Result balance(List<Node> nodes) {
 		var sources = new ArrayList<LiquidConservativeVolumeRedistribution.Source>(); var targets = new ArrayList<LiquidConservativeVolumeRedistribution.Target>();
 		for (int n = 0; n < nodes.size(); n++) {
-			var node = nodes.get(n); var field = LiquidGeometryVelocityProjection.summarize(node.sources()).get(node.phase());
+			var node = nodes.get(n); var field = node.reference();
 			if (field != null) sources.add(new LiquidConservativeVolumeRedistribution.Source(n, node.phase(), field));
-			if (!node.pieces().isEmpty()) targets.add(new LiquidConservativeVolumeRedistribution.Target(n, node.phase(), LiquidVolumeInterface.measure(node.pieces()).volume()));
+			if (!node.pieces().isEmpty()) targets.add(new LiquidConservativeVolumeRedistribution.Target(n, node.phase(), node.volume()));
 		}
 		return LiquidConservativeVolumeRedistribution.project(nodes.stream().map(Node::box).toList(), sources, targets);
 	}

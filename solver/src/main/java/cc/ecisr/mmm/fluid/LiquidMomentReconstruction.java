@@ -22,8 +22,16 @@ final class LiquidMomentReconstruction {
 				throw new IllegalArgumentException("Invalid interface reconstruction budget");
 		}
 	}
-	record Source(int control, List<LiquidPolyhedron> pieces) {
-		Source { if (control < 0) throw new IllegalArgumentException("Invalid reconstruction control"); pieces = List.copyOf(pieces); }
+	static final class Source {
+		private final int control;
+		private final List<LiquidPolyhedron> pieces;
+		private final LiquidExactPolygon.Measure measure;
+		Source(int control, List<LiquidPolyhedron> pieces) {
+			if (control < 0) throw new IllegalArgumentException("Invalid reconstruction control");
+			this.control = control; this.pieces = List.copyOf(pieces); measure = LiquidVolumeInterface.measure(this.pieces);
+		}
+		int control() { return control; }
+		List<LiquidPolyhedron> pieces() { return pieces; }
 	}
 	record Support(LiquidGeometryRefinement.Cell open, List<Source> sources) {
 		Support { sources = List.copyOf(sources); }
@@ -76,7 +84,7 @@ final class LiquidMomentReconstruction {
 		for (var source : sources) {
 			if (!identifiers.add(source.control))
 				throw new IllegalArgumentException("Repeated reconstruction control");
-			var measured = LiquidVolumeInterface.measure(source.pieces);
+			var measured = source.measure;
 			totals.merge(source.control, new Totals(measured), (a, b) -> new Totals(a.source.add(b.source)));
 			for (var geometry : source.pieces) {
 				if (geometry.measure().signum() <= 0) throw new IllegalArgumentException("Empty interface source fragment");
@@ -100,7 +108,7 @@ final class LiquidMomentReconstruction {
 			var assigned = new ArrayList<LiquidGeometryRefinement.Cell>(); var phases = new ArrayList<Phase>();
 			var statistics = new ArrayList<PhaseStats>();
 			var order = new ArrayList<>(cell.sources.stream().filter(source -> !source.pieces.isEmpty()).sorted((a, b) -> compare(a, b, cell.open)).toList());
-			var total = Fraction.ZERO; for (var source : order) total = total.add(LiquidVolumeInterface.measure(source.pieces).volume());
+			var total = Fraction.ZERO; for (var source : order) total = total.add(source.measure.volume());
 			boolean complete = total.equals(cell.open.geometry().measure().volume());
 			boolean accepted = velocityResolved.test(cell.open);
 			List<Phase> candidateGeometry = List.of();
@@ -110,7 +118,7 @@ final class LiquidMomentReconstruction {
 				if (!complete || p + 1 < order.size()) {
 					boolean found = false; var availableVolume = LiquidVolumeInterface.measure(available).volume();
 					for (int candidate = p; candidate < order.size(); candidate++) {
-						var source = order.get(candidate); var original = LiquidVolumeInterface.measure(source.pieces);
+						var source = order.get(candidate); var original = source.measure;
 						work.context = ", acceptedLeaves=" + leaves.size() + ", pendingLeaves=" + pending.size() + ", level=" + cell.open.level();
 						var remainingVolume = availableVolume.subtract(original.volume());
 						var scale = remainingVolume.signum() > 0 && remainingVolume.compareTo(original.volume()) < 0 ? remainingVolume : original.volume();
@@ -146,7 +154,7 @@ final class LiquidMomentReconstruction {
 				phases.add(new Phase(complement, available)); candidateGeometry = List.copyOf(phases);
 			}
 			for (int p = 0; accepted && p < order.size(); p++) {
-				var source = order.get(p); var original = LiquidVolumeInterface.measure(source.pieces); var geometry = phases.get(p).pieces;
+				var source = order.get(p); var original = source.measure; var geometry = phases.get(p).pieces;
 				var represented = LiquidVolumeInterface.measure(geometry);
 				if (represented.signum() <= 0) throw new LiquidCoordinateResolutionRequired("Joint interface coordinates lost a positive phase remainder");
 				var center = represented.centroidCoordinates(); var desired = original.centroidCoordinates();
@@ -189,7 +197,7 @@ final class LiquidMomentReconstruction {
 		for (int l = 0; l < leaves.size(); l++) {
 			var reference = new java.util.LinkedHashMap<Integer, Fraction>(); var occupied = Fraction.ZERO;
 			for (var source : originals.get(l).sources) {
-				var value = LiquidVolumeInterface.measure(source.pieces).volume(); if (value.signum() == 0) continue;
+				var value = source.measure.volume(); if (value.signum() == 0) continue;
 				reference.put(source.control, value); occupied = occupied.add(value);
 			}
 			var remaining = leaves.get(l).open.geometry().measure().volume().subtract(occupied);
@@ -284,7 +292,7 @@ final class LiquidMomentReconstruction {
 	/** Geometric ordering keeps material/control identifiers out of the reconstruction decision. */
 	private static int compare(Source a, Source b, LiquidGeometryRefinement.Cell open) {
 		if (a == b) return 0;
-		var first = LiquidVolumeInterface.measure(a.pieces); var second = LiquidVolumeInterface.measure(b.pieces);
+		var first = a.measure; var second = b.measure;
 		int result = second.volume().compareTo(first.volume()); if (result != 0) return result;
 		var x = first.centroidCoordinates(); var y = second.centroidCoordinates();
 		for (int i = 0; i < 3; i++) { result = x[i].compareTo(y[i]); if (result != 0) return result; }
