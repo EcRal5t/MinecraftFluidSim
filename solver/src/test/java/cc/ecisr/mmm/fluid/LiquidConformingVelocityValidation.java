@@ -9,6 +9,7 @@ import java.util.List;
 final class LiquidConformingVelocityValidation {
 	static void validate() {
 		nonStarControlRetainsOneMechanicalMean();
+		auxiliarySurfaceRoundingRequestsCoordinatePrecision();
 		integerPlaneCoordinatesPreserveConstraintAndClosestDistance();
 		stationaryRationalGeometrySurvivesMotionRounding();
 		affineFieldSurvivesAdaptiveFaces();
@@ -93,6 +94,36 @@ final class LiquidConformingVelocityValidation {
 		var connected = new LiquidControlVolumeMesh(controls, subdivision, 1, 1000, (c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
 		requireAffineField(connected, point -> new Fraction[]{point[2].multiply(Fraction.of(0.125)), point[0].multiply(Fraction.of(0.0625)),
 				point[0].multiply(Fraction.of(-0.125))});
+	}
+	private static void auxiliarySurfaceRoundingRequestsCoordinatePrecision() {
+		var support = new ArrayList<LiquidGeometryRefinement.Cell>(); double[] shell = {0, 0.25, 0.75, 1};
+		for (int x = 0; x < 3; x++) for (int y = 0; y < 3; y++) for (int z = 0; z < 3; z++) {
+			if (x == 1 && y == 1 && z == 1) continue;
+			if (x == 0 && y == 0 && z == 0) {
+				double[] divided = {0, 0.125, 0.125 + Math.scalb(1.0, -40), 0.25};
+				for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) for (int c = 0; c < 3; c++)
+					support.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(divided[a], divided[b], divided[c], divided[a + 1], divided[b + 1], divided[c + 1])));
+			} else support.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(shell[x], shell[y], shell[z], shell[x + 1], shell[y + 1], shell[z + 1])));
+		}
+		var geometry = LiquidStarControlPartition.assemble(support);
+		var mesh = new LiquidControlVolumeMesh(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, geometry)), List.of(support), 1, 1000,
+				(c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		if (mesh.faces.size() != 12) throw new AssertionError("Auxiliary interior cuts changed the hollow control's physical faces");
+		var rates = new Fraction[mesh.faces.size()]; Arrays.fill(rates, Fraction.ZERO);
+		for (int f = 0; f < rates.length; f++) {
+			var x = mesh.faces.get(f).centroid().getFirst();
+			if (x.equals(Fraction.ZERO)) rates[f] = Fraction.of(1.0 / 4096);
+			if (x.equals(Fraction.of(1))) rates[f] = Fraction.of(-1.0 / 4096);
+		}
+		var field = new LiquidConformingVelocity(mesh, rates, new double[3]);
+		var reference = LiquidConformingTransport.prepareReference(mesh, field, rates, 1.0 / 1024, new int[]{0});
+		try { reference.representCoordinates(28); throw new AssertionError("Finite coordinates collapsed an auxiliary surface without requesting spatial precision"); }
+		catch (LiquidCoordinateResolutionRequired expected) {
+			if (!expected.getMessage().contains("collapsed a material surface")) throw expected;
+		}
+		var resolved = reference.representCoordinates(80); var measured = Fraction.ZERO;
+		for (var image : resolved.images) measured = measured.add(image.geometry().measure().volume());
+		if (!measured.equals(geometry.measure().volume())) throw new AssertionError("Coordinate refinement changed the hollow control's exact volume");
 	}
 	private static void integerPlaneCoordinatesPreserveConstraintAndClosestDistance() {
 		for (int[] normal : new int[][]{{1, 0, 0}, {0, -1, 0}, {0, 0, 3}, {2, 4, 6}, {3, -5, 7}, {-3, 2, -4}, {6, 10, 15}, {3, 3, 3}})

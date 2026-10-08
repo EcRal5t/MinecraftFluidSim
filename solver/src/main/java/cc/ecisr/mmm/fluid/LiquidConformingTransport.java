@@ -108,6 +108,11 @@ final class LiquidConformingTransport {
 		maximumRateRepresentationErrorPerSecond = error;
 		try { var partition = images(positions); images = partition.images; surfaces = partition.surfaces; }
 		catch (LiquidCharacteristicTimeResolutionRequired invalid) {
+			if (invalid.collapsedSurface != null) {
+				var original = invalid.collapsedSurface.stream().map(reference.positions::get).toList();
+				if (!LiquidExactPolygon.triangle(original.get(0), original.get(1), original.get(2)).hasArea()) throw invalid;
+				throw new LiquidCoordinateResolutionRequired(invalid.getMessage());
+			}
 			var witness = invalid.negativeWinding;
 			if (witness != null && negativeWinding(field.tetrahedra, witness.cell(), reference.positions, witness.point())) throw invalid;
 			reference.images.size(); // An invalid reference propagates its time-refinement request; a valid reference needs finer coordinates.
@@ -136,7 +141,7 @@ final class LiquidConformingTransport {
 			var source = tet.vertices(); var target = source.stream().map(moved::get).toList();
 			var oldDet = LiquidExactPolygon.homogeneousTetrahedronDeterminant(source); var newDet = LiquidExactPolygon.homogeneousTetrahedronDeterminant(target);
 			var surface = LiquidExactPolygon.triangle(target.get(1), target.get(2), target.get(3));
-			if (!surface.hasArea()) throw new LiquidCharacteristicTimeResolutionRequired("Continuous transport collapsed a material surface");
+			if (!surface.hasArea()) throw new LiquidCharacteristicTimeResolutionRequired("Continuous transport collapsed a material surface", source.subList(1, 4));
 			boundary.computeIfAbsent(tet.cell(), ignored -> new ArrayList<>()).add(new Surface(tet.cell(), tet.face(), surface));
 			if (newDet.signum() == 0) continue;
 			var geometry = LiquidConvexRegion.ofTetrahedron(target);
