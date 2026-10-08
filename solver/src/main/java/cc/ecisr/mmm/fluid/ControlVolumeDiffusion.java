@@ -52,4 +52,29 @@ final class ControlVolumeDiffusion {
 	}
 
 	double stabilizationEnergy() { return stabilizationEnergy; }
+
+	/** Propagates face-minus-cell observation error through every term of the diffusion action. */
+	double[] observationError(double differenceError) {
+		if (!(Double.isFinite(differenceError) && differenceError > 0)) throw new IllegalArgumentException("Invalid diffusion observation precision");
+		var gradientError = new double[3];
+		for (var basis : geometry.basis) for (int a = 0; a < 3; a++)
+			gradientError[a] = upperAdd(gradientError[a], upperMultiply(Math.abs(basis.coordinate(a)), differenceError));
+		var errorBound = new double[geometry.indices.length]; var correctionError = new double[3];
+		for (int a = 0; a < 3; a++) correctionError[a] = upperMultiply(geometry.volume, gradientError[a]);
+		for (int i = 0; i < errorBound.length; i++) {
+			errorBound[i] = differenceError;
+			for (int a = 0; a < 3; a++) errorBound[i] = upperAdd(errorBound[i],
+					upperMultiply(Math.abs(geometry.displacement[i].coordinate(a)), gradientError[a]));
+			for (int a = 0; a < 3; a++) correctionError[a] = upperAdd(correctionError[a],
+					upperMultiply(upperMultiply(geometry.weight[i], errorBound[i]), Math.abs(geometry.displacement[i].coordinate(a))));
+		}
+		for (int i = 0; i < errorBound.length; i++) {
+			errorBound[i] = upperMultiply(geometry.weight[i], errorBound[i]);
+			for (int a = 0; a < 3; a++) errorBound[i] = upperAdd(errorBound[i],
+					upperMultiply(Math.abs(geometry.basis[i].coordinate(a)), correctionError[a]));
+		}
+		return errorBound;
+	}
+	private static double upperAdd(double first, double second) { return Math.nextUp(first + second); }
+	private static double upperMultiply(double first, double second) { return Math.nextUp(first * second); }
 }

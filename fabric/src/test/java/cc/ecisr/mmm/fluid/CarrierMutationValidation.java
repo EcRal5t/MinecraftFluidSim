@@ -278,6 +278,14 @@ public final class CarrierMutationValidation {
 				&& candidate.stats().thermalAxis().transport().substeps() == 1 && candidate.stats().thermalAxis().transport().maximumAbsoluteTransferEu() > 0
 				&& next.thermalState.exactLiquidEnergy(8).compareTo(domain.thermalState.exactLiquidEnergy(1)) > 0
 				&& next.exactInternalEnergy().equals(next.thermalAudit().expectedInventory()), "refined complete backend lost rational stocks, finite heat exchange or conservation");
+		var secondInput = next.captureAuthoritativeState();
+		var second = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(1, secondInput, java.util.List.of(), false, 0, true)).claimPreparedCpuDomain();
+		FluidDomainStateAssertions.assertSameState(secondInput, next.captureAuthoritativeState(), "second refined complete backend input");
+		require(second.particles.count() == 8 && second.particles.inventory().totalVolume().equals(inventory.totalVolume())
+				&& second.particles.inventory().totalMass().equals(inventory.totalMass())
+				&& second.chemicalLedgerForMarkerRange(0, 8).groups().getFirst().speciesQuanta().equals(species)
+				&& second.exactInternalEnergy().equals(second.thermalAudit().expectedInventory()),
+				"second refined complete backend lost stocks or caloric closure on transported faces");
 	}
 	private static void nativeMechanicalRegridCarriesChemicalInventory() throws Exception {
 		var registries = capillaryRegistries(); var liquids = registries.liquids();

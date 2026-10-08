@@ -116,6 +116,19 @@ final class ControlVolumeThermalMetric {
 		for (var contribution : contributions.get(face)) if (portions.get(contribution.portion()).inventory() >= 0) return true;
 		return false;
 	}
+	/** Half an ULP in each absolute temperature gives one ULP in a face-minus-cell difference. */
+	double[] faceObservationPrecision(double temperaturePrecision, double dt) {
+		var bounds = new double[faceDiagonal.length];
+		var local = Arrays.stream(diffusion).map(operator -> operator.observationError(temperaturePrecision)).toList();
+		for (var portion : portions) {
+			if (portion.conductivity() == 0) continue;
+			var g = geometry[portion.cell()]; var error = local.get(portion.cell());
+			for (int i = 0; i < g.indices.length; i++) bounds[g.indices[i]] = Math.nextUp(bounds[g.indices[i]]
+					+ Math.nextUp(Math.nextUp(dt * portion.conductivity()) * error[i]));
+		}
+		for (int f = 0; f < bounds.length; f++) bounds[f] = Math.nextUp(bounds[f]);
+		return bounds;
+	}
 
 	/** Projects the last action's free-face residual using the same positive face-energy coefficients. */
 	Heating heating(double[] prescribed) {

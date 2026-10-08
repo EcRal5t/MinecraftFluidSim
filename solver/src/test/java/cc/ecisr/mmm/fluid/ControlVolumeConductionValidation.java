@@ -117,6 +117,12 @@ final class ControlVolumeConductionValidation {
 		closure(result);
 	}
 	private static void prescribedInventoryAndVacuum(LiquidControlVolumeMesh mesh, ThermalMaterialDefinition first, double[] prescribed) {
+		var small = new ControlVolumeConduction(mesh, new double[]{3, 6})
+				.advance(List.of(carrier(first, 280), carrier(first, 320)), prescribed, 1e-18, 1e-28, 256);
+		close(small.energyChange()[0], 80e-18, 1e-28); close(small.energyChange()[1], -80e-18, 1e-28);
+		if (small.temperature()[0] != 280 || small.temperature()[1] != 320)
+			throw new AssertionError("Sub-ULP heat changed the represented caloric temperature");
+		closure(small);
 		var result = new ControlVolumeConduction(mesh, new double[]{3, 6})
 				.advance(List.of(carrier(first, 280), new ThermalContactExchange.Reservoir(320)), prescribed, 1, 1e-10, 256);
 		// G = 2 W/K and the finite capacity is 2 J/K; the reservoir remains at 320 K.
@@ -212,6 +218,13 @@ final class ControlVolumeConductionValidation {
 				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube.clip(-1, -1, 0, -1))), 1, 1,
 				(c, s) -> new LiquidControlVolumeMesh.Boundary(true, 0));
 		var k = new double[]{3, 6}; var bodies = new java.util.ArrayList<ThermalContactExchange.Carrier>();
+		var metric = new ControlVolumeThermalMetric(mesh, k); double precision = Math.ulp(300);
+		var perturbation = new double[mesh.faces.size()]; var force = perturbation.clone();
+		for (int f = 0; f < perturbation.length; f++) perturbation[f] = (f % 2 == 0 ? .5 : -.5) * precision;
+		metric.apply(new double[]{-.5 * precision, .5 * precision}, perturbation, new double[2], force);
+		var bound = metric.faceObservationPrecision(precision, .5);
+		for (int f = 0; f < force.length; f++) if (Math.abs(.5 * force[f]) > bound[f])
+			throw new AssertionError("Face flux observation certificate omitted coupled gradient terms");
 		for (int c = 0; c < k.length; c++) {
 			var p = mesh.cells.get(c).geometry().centroid();
 			double temperature = 300 + p.x() - p.y() + 2 * p.z() + 12 / k[c] * (p.x() + p.y() - 1);
