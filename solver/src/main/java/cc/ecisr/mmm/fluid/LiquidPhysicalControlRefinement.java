@@ -8,11 +8,13 @@ import java.util.List;
 /** Bisects actual material support along its independent coordinate extents, preserving collision leaf addresses. */
 final class LiquidPhysicalControlRefinement {
 	record Piece(LiquidGeometryRefinement.Cell cell, int source) { }
+	private record Facet(int piece, LiquidExactPolygon face) { }
 	private LiquidPhysicalControlRefinement() { }
 	static List<List<Piece>> partition(List<Piece> source, int depth, int maximumPieces) {
 		if (depth < 0) throw new IllegalArgumentException("Invalid physical control refinement depth");
 		if (maximumPieces < source.size()) throw new IllegalStateException("Physical control refinement exceeds its positive-region budget");
-		List<List<Piece>> groups = List.of(List.copyOf(source));
+		var work = new LiquidSupportVolumeFit.Work(4_194_304); work.context = ", physicalControlSharedFaces";
+		List<List<Piece>> groups = components(source, work);
 		for (int level = 0; level < depth; level++) {
 			var next = new ArrayList<List<Piece>>(); int retained = 0;
 			for (var group : groups) {
@@ -31,7 +33,7 @@ final class LiquidPhysicalControlRefinement {
 							count += low.size() + high.size() - before;
 							if (count > maximumPieces) throw new IllegalStateException("Physical control refinement exceeds its positive-region budget");
 						}
-						if (!low.isEmpty()) split.add(List.copyOf(low)); if (!high.isEmpty()) split.add(List.copyOf(high));
+						split.addAll(components(low, work)); split.addAll(components(high, work));
 					}
 					children = split;
 				}
@@ -40,6 +42,26 @@ final class LiquidPhysicalControlRefinement {
 			groups = List.copyOf(next);
 		}
 		return groups;
+	}
+	/** Every pressure unknown has connected positive-volume support; a point or edge supplies no fluid passage. */
+	private static List<List<Piece>> components(List<Piece> pieces, LiquidSupportVolumeFit.Work work) {
+		var positive = new java.util.HashMap<LiquidGeometryPlane.Key, ArrayList<Facet>>();
+		var negative = new java.util.HashMap<LiquidGeometryPlane.Key, ArrayList<Facet>>();
+		int[] roots = java.util.stream.IntStream.range(0, pieces.size()).toArray();
+		for (int p = 0; p < pieces.size(); p++) for (var face : LiquidExactPolygon.faces(pieces.get(p).cell().geometry())) {
+			var plane = face.plane(); var opposite = (plane.positive() ? negative : positive).get(plane.key());
+			if (opposite != null) for (var other : opposite) {
+				int first = root(roots, p), second = root(roots, other.piece()); if (first == second) continue;
+				work.charge(); if (face.intersection(other.face()).hasArea()) roots[Math.max(first, second)] = Math.min(first, second);
+			}
+			(plane.positive() ? positive : negative).computeIfAbsent(plane.key(), ignored -> new ArrayList<>()).add(new Facet(p, face));
+		}
+		var groups = new java.util.LinkedHashMap<Integer, ArrayList<Piece>>();
+		for (int p = 0; p < pieces.size(); p++) groups.computeIfAbsent(root(roots, p), ignored -> new ArrayList<>()).add(pieces.get(p));
+		return groups.values().stream().map(List::copyOf).toList();
+	}
+	private static int root(int[] roots, int p) {
+		while (roots[p] != p) { roots[p] = roots[roots[p]]; p = roots[p]; } return p;
 	}
 	private static Fraction[] midpoints(List<Piece> group) {
 		var low = new Fraction[3]; var high = new Fraction[3];

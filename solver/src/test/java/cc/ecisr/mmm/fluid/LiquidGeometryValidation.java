@@ -35,6 +35,7 @@ final class LiquidGeometryValidation {
 		canonicalGeometryProofSurvivesPacking();
 		controlCellsPreserveChosenMechanicalResolution();
 		mechanicalCellsCancelAuxiliaryCuts();
+		separatePressureSupportsPreserveIndependentVolumes();
 		mechanicalFacetsIgnoreAuxiliaryGasCuts();
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1);
 		var rationalFans = new java.util.ArrayList<LiquidExactPolygon>(); int fan = 0;
@@ -330,6 +331,24 @@ final class LiquidGeometryValidation {
 			var imageMeasure = LiquidConvexRegion.EMPTY.measure(); for (var image : motion.images) imageMeasure = imageMeasure.add(image.geometry().measure());
 			var target = LiquidConvexRegion.EMPTY.measure(); for (var piece : cavity) target = target.add(piece.geometry().translated(u[0] / 128, u[1] / 128, u[2] / 128).measure());
 			if (!imageMeasure.same(target)) throw new AssertionError("Non-star agglomeration changed exact rigid transport");
+		}
+	}
+	private static void separatePressureSupportsPreserveIndependentVolumes() {
+		var first = LiquidPolyhedron.box(0, 0, 0, 0.25, 0.25, 0.25);
+		for (int contact = 0; contact < 3; contact++) {
+			var second = contact == 0 ? LiquidPolyhedron.box(0.75, 0, 0, 1, 0.25, 0.25)
+					: contact == 1 ? LiquidPolyhedron.box(0.25, 0.25, 0, 0.5, 0.5, 0.25) : LiquidPolyhedron.box(0.25, 0.125, 0, 0.5, 0.375, 0.25);
+			var pieces = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, first), new LiquidGeometryRefinement.Cell(0, 0, 0, 0, second));
+			var state = LiquidGeometryStateMapper.capture(pieces, 1, new int[]{0}, new int[2], new double[6], new int[2]);
+			var controls = new LiquidMechanicalControlCells(state, pieces, java.util.List.of(0, 1), java.util.List.of(-1, -1), java.util.Map.of(), 64);
+			if (controls.regions.size() != (contact == 2 ? 1 : 2)) throw new AssertionError("Pressure support crossed a zero-area contact or split a positive-area passage");
+			if (contact != 0) continue;
+			var mesh = new LiquidControlVolumeMesh(controls.regions, controls.support, 1, 1,
+					(c, face) -> new LiquidControlVolumeMesh.Boundary(false, face.centroid().x() < 0.5 ? 1 : 2));
+			var result = new LiquidControlVolumeProjection(mesh.cells, mesh.faces).project(new double[6], new LiquidPolyhedron.Point(0, 0, 0), 0.01, 1e-12, 128);
+			for (var rate : result.volumeRate()) if (Math.abs(rate.rounded()) > 1e-12)
+				throw new AssertionError("Disconnected pressure supports exchanged volume despite separate constant equilibrium pressures");
+			for (var speed : result.cellVelocity()) if (Math.abs(speed) > 1e-12) throw new AssertionError("Independent static pressure generated liquid momentum");
 		}
 	}
 	private static void mechanicalFacetsIgnoreAuxiliaryGasCuts() {
