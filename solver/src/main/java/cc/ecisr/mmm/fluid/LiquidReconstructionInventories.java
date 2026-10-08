@@ -17,12 +17,17 @@ final class LiquidReconstructionInventories {
 	private final int[] markerMaterials;
 	private final ExactVolume[] volumes; private final SignedDyadic[] masses;
 	LiquidReconstructionInventories(FluidDomain domain) {
+		this(domain, false);
+	}
+	LiquidReconstructionInventories(FluidDomain domain, boolean retainControls) {
 		this.domain = domain; input = domain.liquidGeometryState; materials = domain.materialRegistry; revision = domain.carrierMutationRevision();
 		LiquidGeometryStateMapper.requireCompatible(input, domain);
 		phases = new int[input.cells().size()]; Arrays.fill(phases, -1); densities = new Fraction[phases.length];
 		markerMaterials = new int[domain.particles.count()]; volumes = new ExactVolume[markerMaterials.length]; masses = new SignedDyadic[markerMaterials.length];
 		var ownerPhases = new TreeMap<Integer, Integer>(); var ownerMass = new TreeMap<Integer, Fraction>(); var ownerVolume = new TreeMap<Integer, Fraction>();
 		var markers = input.copyMarkerCells(); var owners = input.copyFragmentOwners(); var cells = LiquidGeometryStateMapper.restore(input);
+		if (retainControls && !Arrays.equals(owners, input.copyControlCells()))
+			throw new IllegalArgumentException("Mechanical reconstruction requires independent control inventories");
 		for (int f = 0; f < cells.size(); f++) ownerVolume.merge(owners[f], cells.get(f).geometry().measure().volume(), Fraction::add);
 		for (int p = 0; p < markers.length; p++) {
 			int material = domain.particles.materialHandle(p), phase = materials == null ? 0 : materials.phaseHandle(material);
@@ -33,7 +38,7 @@ final class LiquidReconstructionInventories {
 		}
 		var identities = new TreeMap<Integer, Integer>();
 		for (var entry : ownerPhases.entrySet()) {
-			int owner = entry.getKey(); phases[owner] = identities.computeIfAbsent(entry.getValue(), ignored -> owner);
+			int owner = entry.getKey(); phases[owner] = retainControls ? owner : identities.computeIfAbsent(entry.getValue(), ignored -> owner);
 			densities[owner] = ownerMass.get(owner).divide(ownerVolume.get(owner));
 		}
 	}

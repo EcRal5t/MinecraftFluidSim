@@ -37,6 +37,13 @@ final class LiquidGeometryReconstructionPlan {
 	final double maximumCentroidError, maximumOccupancyErrorLength;
 	final Fraction symmetricDifferenceVolumeBound;
 	final Fraction redistributedVolume, redistributionSquaredDisplacementVolumeBound;
+	/** Rebuilds auxiliary fragments while retaining every independent P0 mechanical field. */
+	static LiquidGeometryReconstructionPlan mechanicalControls(FluidDomain domain, LiquidMomentReconstruction.Tolerance tolerance,
+			LiquidMomentReconstruction.Budget budget) {
+		var open = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
+				domain.geometry.cutCells, List.of(), budget.maximumLeaves()).leaves;
+		return new LiquidGeometryReconstructionPlan(domain, domain.liquidGeometryState, domain.gasState.geometry, open, tolerance, 0, budget, true);
+	}
 
 	LiquidGeometryReconstructionPlan(LiquidGeometryState input, List<LiquidGeometryRefinement.Cell> open,
 			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget) {
@@ -58,6 +65,10 @@ final class LiquidGeometryReconstructionPlan {
 	}
 	private LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
 			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget) {
+		this(domain, input, gas, open, tolerance, maximumRmsVelocityError, budget, false);
+	}
+	private LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
+			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget, boolean retainControls) {
 		if (input == null || open == null || tolerance == null || budget == null || open.size() > budget.maximumLeaves()
 				|| !(maximumRmsVelocityError >= 0) || !Double.isFinite(maximumRmsVelocityError))
 			throw new IllegalArgumentException("Invalid geometric reconstruction support");
@@ -65,7 +76,7 @@ final class LiquidGeometryReconstructionPlan {
 		this.input = input; previousGasGeometry = gas;
 		var source = LiquidGeometryStateMapper.restore(input); var remap = new LiquidGeometryRemap(open);
 		int[] owners = input.copyFragmentOwners();
-		var stock = domain == null ? null : new LiquidReconstructionInventories(domain);
+		var stock = domain == null ? null : new LiquidReconstructionInventories(domain, retainControls);
 		int[] phaseOwners = new int[owners.length]; var densities = new Fraction[owners.length];
 		for (int f = 0; f < owners.length; f++) { phaseOwners[f] = stock == null ? owners[f] : stock.phases[owners[f]]; densities[f] = stock == null ? Fraction.of(1) : stock.densities[owners[f]]; }
 		var local = new ArrayList<LinkedHashMap<Integer, ArrayList<LiquidPolyhedron>>>();

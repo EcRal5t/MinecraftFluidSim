@@ -172,18 +172,20 @@ public final class CarrierMutationValidation {
 		require(restored.particles.count() == 0 && restored.exactInternalEnergy().equals(energy), "gas-only physical regrid lost its cold restored state");
 	}
 	private static void nativePhysicalPhaseReconstructionCarriesInventories() throws Exception {
-		nativePhysicalPhaseReconstructionCarriesInventories("mmm:water", 1, -375);
-		nativePhysicalPhaseReconstructionCarriesInventories("mmm:oil", 2, 0);
+		nativePhysicalPhaseReconstructionCarriesInventories("mmm:water", 1, -375, 1);
+		nativePhysicalPhaseReconstructionCarriesInventories("mmm:oil", 2, 0, 1);
+		double speed = Math.scalb(1.0, -30);
+		nativePhysicalPhaseReconstructionCarriesInventories("mmm:water", 1, -375 * speed * speed, speed);
 	}
-	private static void nativePhysicalPhaseReconstructionCarriesInventories(String secondMaterial, int expectedControls, double expectedKineticChange) throws Exception {
+	private static void nativePhysicalPhaseReconstructionCarriesInventories(String secondMaterial, int expectedControls, double expectedKineticChange, double speed) throws Exception {
 		var registries = FullCapabilityTestFixture.load();
 		int material = registries.liquids().handle(secondMaterial);
 		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), 16);
 		var cells = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 1, 0.5)),
 				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 1, 0.5)));
-		var original = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0, 1}, new int[]{0, 1}, new double[]{1, 0, 0, -1, 0, 0});
+		var original = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0, 1}, new int[]{0, 1}, new double[]{speed, 0, 0, -speed, 0, 0});
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 2, 4, 8000, registries.liquids().materials(),
-				new float[]{0.25F, 0.5F, 0.25F, 2, 0.75F, 0.5F, 0.25F, 2}, new float[]{1, 0, 0, -1, 0, 0}, new byte[8],
+				new float[]{0.25F, 0.5F, 0.25F, 2, 0.75F, 0.5F, 0.25F, 2}, new float[]{(float) speed, 0, 0, (float) -speed, 0, 0}, new byte[8],
 				new double[]{2000, 6000}, new int[]{0, material}, original));
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
@@ -191,6 +193,7 @@ public final class CarrierMutationValidation {
 		domain.thermalState.resetMarkerTemperature(1, 350, domain.thermalMarkers, domain.exactInternalEnergy());
 		var sourceEnergy = domain.exactInternalEnergy(); var audit = domain.thermalAudit(); var species = domain.chemicalLedgerForMarkerRange(0, 2);
 		var gas = domain.exportGasState(registries.chemical().fingerprint()); var kinetic = Fraction.of(domain.particleKineticEnergyJoules());
+		mechanicalReconstructionRetainsIndependentFields(domain, speed);
 		var open = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1)));
 		var plan = new LiquidGeometryReconstructionPlan(domain, open, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40), 1,
 				new LiquidMomentReconstruction.Budget(1, 32, 4096));
@@ -210,7 +213,7 @@ public final class CarrierMutationValidation {
 				"physical phase regrid changed caloric or gas inventory accounting");
 		for (int p = 0; p < domain.particles.count(); p++) {
 			boolean water = domain.particles.materialHandle(p) == 0;
-			float velocity = expectedControls == 1 ? -0.5F : water ? 1 : -1;
+			float velocity = (float) (speed * (expectedControls == 1 ? -0.5 : water ? 1 : -1));
 			double temperature = expectedControls == 1 ? 330 : water ? 270 : 350;
 			require(domain.particles.velocityX(p) == velocity && domain.particles.mass(p) == (expectedControls == 1 ? 8000 : water ? 2000 : 6000)
 					&& domain.particles.materialHandle(p) == (water ? 0 : material)
@@ -228,6 +231,31 @@ public final class CarrierMutationValidation {
 		try { obsolete.publish(domain, stale); throw new AssertionError("physical regrid accepted revised species input"); }
 		catch (IllegalStateException expected) { require(domain.liquidGeometryState == unchanged && domain.particles.count() == expectedControls && domain.exactInternalEnergy().equals(energy),
 				"obsolete scalar regrid partially published liquid or caloric state"); }
+	}
+	private static void mechanicalReconstructionRetainsIndependentFields(FluidDomain input, double speed) {
+		var source = input.captureAuthoritativeState(); var domain = FluidDomain.restoreAuthoritativeState(source);
+		var plan = LiquidGeometryReconstructionPlan.mechanicalControls(domain, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40),
+				new LiquidMomentReconstruction.Budget(1, 32, 4096));
+		require(java.util.Arrays.stream(plan.geometry.copyControlCells()).distinct().count() == 2 && plan.inventory.markers.size() == 2
+				&& plan.inventory.kineticChange.signum() == 0 && plan.velocityErrors.stream().allMatch(error -> error.maximumRmsError() == 0
+						&& error.kineticLoss().signum() == 0 && error.kineticRoundingChange().signum() == 0),
+				"mechanical reconstruction merged independent velocity fields or dissipated their kinetic energy");
+		new ResolvedGasMotionPlan(domain, plan, 4096, 65536).publish(domain, plan);
+		require(domain.particles.count() == 2 && domain.particleKineticEnergyJoules() == input.particleKineticEnergyJoules()
+				&& domain.particles.inventory().totalVolume().equals(input.particles.inventory().totalVolume())
+				&& domain.particles.inventory().totalMass().equals(input.particles.inventory().totalMass())
+				&& domain.exactInternalEnergy().equals(input.exactInternalEnergy())
+				&& domain.totalChemicalSpeciesQuanta() == input.totalChemicalSpeciesQuanta(), "mechanical reconstruction changed extensive inventories");
+		for (int p = 0; p < domain.particles.count(); p++) {
+			boolean left = domain.particles.positionX(p) < 0.5;
+			require(domain.particles.velocityX(p) == (float) (left ? speed : -speed)
+					&& domain.particles.mass(p) == (left ? 2000 : 6000)
+					&& Math.abs(domain.thermalState.temperature(p, domain.thermalMarkers) - (left ? 270 : 350)) <= 8 * Math.ulp(left ? 270.0 : 350.0),
+					"mechanical reconstruction mixed the local velocity, density or caloric field");
+		}
+		FluidDomainStateAssertions.assertSameState(source, input.captureAuthoritativeState(), "mechanical reconstruction committed input");
+		var published = domain.captureAuthoritativeState();
+		FluidDomainStateAssertions.assertSameState(published, FluidDomain.restoreAuthoritativeState(published).captureAuthoritativeState(), "mechanical reconstruction cold restore");
 	}
 	private static void nativeLocalInventoryUsesMechanicalBackend() throws Exception {
 		var domain = localInventoryFixture(64); var energy = domain.exactInternalEnergy(); var ledger = domain.thermalAudit();
