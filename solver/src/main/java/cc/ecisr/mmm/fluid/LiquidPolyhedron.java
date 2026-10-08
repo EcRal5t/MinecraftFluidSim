@@ -47,6 +47,12 @@ final class LiquidPolyhedron {
 	void exactFaces(List<LiquidExactPolygon> value) { exactFaces = value; }
 	private volatile Moments integratedMoments;
 	private volatile LiquidExactPolygon.Measure exactMeasure;
+	private volatile LiquidExactPolygon.Fraction exactVolume;
+	/** P0 field moments need occupied volume; positional moments remain available independently. */
+	LiquidExactPolygon.Fraction volume() {
+		var measured = exactMeasure; if (measured != null) return measured.volume();
+		var value = exactVolume; if (value == null) exactVolume = value = LiquidExactPolygon.volume(LiquidExactPolygon.faces(this)); return value;
+	}
 	LiquidExactPolygon.Fraction[] centroidCoordinates() { return measure().centroidCoordinates(); }
 	LiquidExactPolygon.Fraction[][] coordinateBounds() {
 		var low = new LiquidExactPolygon.Fraction[3]; var high = new LiquidExactPolygon.Fraction[3];

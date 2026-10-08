@@ -77,7 +77,7 @@ final class LiquidGeometryVelocityProjection {
 	private record Part(Key field, List<LiquidExactPolygon> faces, Fraction volume) { }
 	static Map<Integer, Value> summarize(List<Source> sources) {
 		var volumes = new LinkedHashMap<Key, Fraction>();
-		for (var source : sources) volumes.merge(new Key(source.phase, source.inventory, source.density, source.velocity), source.geometry.measure().volume(), Fraction::add);
+		for (var source : sources) volumes.merge(new Key(source.phase, source.inventory, source.density, source.velocity), source.geometry.volume(), Fraction::add);
 		return moments(volumes);
 	}
 	private record Projection(List<Part> parts, Map<Integer, Value> values) { }
@@ -86,7 +86,7 @@ final class LiquidGeometryVelocityProjection {
 	private final Map<Address, Projection> cache = new HashMap<>();
 	LiquidGeometryVelocityProjection(LiquidGeometryRefinement.Cell root, List<Source> sources) {
 		this.root = new Address(root.level(), root.x(), root.y(), root.z());
-		this.sources = sources.stream().map(source -> new Part(new Key(source.phase, source.inventory, source.density, source.velocity), LiquidExactPolygon.faces(source.geometry), source.geometry.measure().volume())).toList();
+		this.sources = sources.stream().map(source -> new Part(new Key(source.phase, source.inventory, source.density, source.velocity), LiquidExactPolygon.faces(source.geometry), source.geometry.volume())).toList();
 	}
 	boolean accepts(LiquidGeometryRefinement.Cell cell, double maximumRmsError) {
 		return values(cell).values().stream().allMatch(value -> value.rmsError <= maximumRmsError);
