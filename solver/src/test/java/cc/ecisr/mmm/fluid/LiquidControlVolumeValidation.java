@@ -193,6 +193,7 @@ final class LiquidControlVolumeValidation {
 	}
 	/** Known orthogonal eigenmodes, with face-coordinate scales spanning the native sliver range. */
 	private static void conjugateDirectionsResolveAnisotropicEnergy() {
+		conjugateDirectionsRetainResolvedCorrectionSpace();
 		var certified = new ConservativeConjugateDirections(new double[]{1, 1});
 		var remaining = certified.direction(new double[]{1e-16, 1e-80}, new double[]{1e-16, 0});
 		double resolvedForce = ConservativeConjugateDirections.dot(new double[]{1e-16, 1e-80}, remaining);
@@ -227,6 +228,29 @@ final class LiquidControlVolumeValidation {
 			var direction = directions.direction(residual); var action = conjugateAction(matrix, direction); double force = 0, inertia = 0;
 			for (int i = 0; i < n; i++) { force += residual[i] * direction[i]; inertia += direction[i] * action[i]; }
 			directions.remember(direction, action); for (int i = 0; i < n; i++) solution[i] += force / inertia * direction[i];
+		}
+	}
+	private static void conjugateDirectionsRetainResolvedCorrectionSpace() {
+		// A Householder reflection supplies independent positive eigenmodes across six decades.
+		int n = 64; var eigenvalues = new double[n]; double total = 0;
+		var matrix = new double[n][n]; var diagonal = new double[n]; var expected = new double[n];
+		for (int i = 0; i < n; i++) {
+			eigenvalues[i] = Math.scalb(1 + 0.5 * Math.cos(i), -20 * i / (n - 1)); total += eigenvalues[i];
+			expected[i] = Math.sin(i + 1);
+		}
+		for (int i = 0; i < n; i++) for (int j = 0; j < n; j++) {
+			matrix[i][j] = (i == j ? eigenvalues[i] : 0) - 2.0 / n * (eigenvalues[i] + eigenvalues[j]) + 4.0 / (n * n) * total;
+			if (i == j) diagonal[i] = matrix[i][j];
+		}
+		var rhs = conjugateAction(matrix, expected); var solution = new double[n]; var directions = new ConservativeConjugateDirections(diagonal);
+		for (int iteration = 0; iteration <= 2 * n; iteration++) {
+			var residual = rhs.clone(); var evaluated = conjugateAction(matrix, solution); boolean resolved = true;
+			for (int i = 0; i < n; i++) { residual[i] -= evaluated[i]; resolved &= Math.abs(residual[i]) <= 1e-10 * diagonal[i]; }
+			if (resolved) return;
+			if (iteration == 2 * n) throw new AssertionError("Conjugate orthogonalization repeatedly discarded a resolved positive correction space");
+			var direction = directions.direction(residual); var action = conjugateAction(matrix, direction);
+			var alpha = ConservativeConjugateDirections.dot(residual, direction) / ConservativeConjugateDirections.dot(direction, action);
+			directions.remember(direction, action); for (int i = 0; i < n; i++) solution[i] += alpha * direction[i];
 		}
 	}
 	private static double[] conjugateAction(double[][] matrix, double[] value) {

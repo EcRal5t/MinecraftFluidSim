@@ -27,20 +27,16 @@ final class ConservativeConjugateDirections {
 			result[i] = Math.copySign(Math.max(0, Math.abs(residual[i]) - error[i]), residual[i]) / scale[i];
 		}
 		normalize(result);
-		var observed = new LiquidBoundedArithmetic.Value[result.length];
-		for (int i = 0; i < result.length; i++) observed[i] = new LiquidBoundedArithmetic.Value(result[i], 0);
+		var unprojected = result.clone();
 		// Two modified Gram-Schmidt passes restore conjugacy lost by the three-term recurrence.
 		for (int pass = 0; pass < 2; pass++) for (var direction : previous) {
-			var coefficient = LiquidBoundedArithmetic.ZERO;
-			for (int i = 0; i < result.length; i++) coefficient = coefficient.add(observed[i].multiply(new LiquidBoundedArithmetic.Value(direction.action[i], 0)));
-			coefficient = coefficient.divide(new LiquidBoundedArithmetic.Value(direction.energy, 0));
-			for (int i = 0; i < result.length; i++) observed[i] = observed[i].subtract(coefficient.multiply(new LiquidBoundedArithmetic.Value(direction.value[i], 0)));
+			var coefficient = dot(result, direction.action) / direction.energy;
+			for (int i = 0; i < result.length; i++) result[i] = Math.fma(-coefficient, direction.value[i], result[i]);
 		}
-		// An orthogonal component hidden by its own evaluation error cannot supply a new search direction.
+		// Retain every represented correction; the actual operator certifies stationarity after the update.
 		boolean independent = false;
-		for (int i = 0; i < result.length; i++) { independent |= Math.abs(observed[i].value()) > observed[i].error(); }
-		if (!independent) previous.clear();
-		else for (int i = 0; i < result.length; i++) result[i] = observed[i].value();
+		for (double component : result) independent |= component != 0;
+		if (!independent) { previous.clear(); result = unprojected; }
 		normalize(result);
 		for (int i = 0; i < result.length; i++) result[i] /= scale[i]; return result;
 	}
