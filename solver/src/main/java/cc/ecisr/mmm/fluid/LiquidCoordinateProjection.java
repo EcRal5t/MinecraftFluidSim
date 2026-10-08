@@ -71,9 +71,8 @@ final class LiquidCoordinateProjection {
 		var independent = new Fraction[coordinates.size()]; Arrays.fill(independent, Fraction.ZERO);
 		var displacementVolume = coordinates.liftExact(independent, source);
 		for (int f = 0; f < faces; f++) if (displacementVolume[f].signum() != 0) {
-			var factor = displacementVolume[f].multiply(Fraction.of(3)).divide(dot(area[f], area[f]));
-			var center = field.faceCenters.get(f); var next = moved.get(center).coordinates();
-			for (int a = 0; a < 3; a++) next[a] = next[a].add(area[f][a].multiply(factor));
+			var center = field.faceCenters.get(f);
+			var next = LiquidIntegerPlaneProjection.correct(moved.get(center).coordinates(), area[f], displacementVolume[f], fractionalBits);
 			moved.put(center, LiquidExactPolygon.vertex(next));
 		}
 		current = volumes(mesh, field, moved, volume);

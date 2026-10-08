@@ -8,6 +8,7 @@ import java.util.List;
 /** Shared full velocity traces, exact moments and surface work under continuous shear. */
 final class LiquidConformingVelocityValidation {
 	static void validate() {
+		integerPlaneCoordinatesPreserveConstraintAndClosestDistance();
 		stationaryRationalGeometrySurvivesMotionRounding();
 		affineFieldSurvivesAdaptiveFaces();
 		continuousFitPreservesMomentsAndItsExactReference();
@@ -22,6 +23,35 @@ final class LiquidConformingVelocityValidation {
 		capillaryLoadsShareMechanicalInertiaAndSurfaceWork();
 		implicitCapillarityUsesActualPhaseOrdering();
 		LiquidWetWallValidation.validate();
+	}
+	private static void integerPlaneCoordinatesPreserveConstraintAndClosestDistance() {
+		for (int[] normal : new int[][]{{1, 0, 0}, {0, -1, 0}, {0, 0, 3}, {2, 4, 6}, {3, -5, 7}, {-3, 2, -4}, {6, 10, 15}, {3, 3, 3}})
+			for (int target = -2; target <= 2; target++) {
+				var area = Arrays.stream(normal).mapToObj(Fraction::of).toArray(Fraction[]::new); var center = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
+				var represented = LiquidIntegerPlaneProjection.correct(center, area, Fraction.of(target).divide(Fraction.of(3)), 0);
+				if (!dot(List.of(area), represented).equals(Fraction.of(target))) throw new AssertionError("Integer plane correction lost exact swept volume");
+				var denominator = java.math.BigInteger.ONE;
+				for (var value : represented) denominator = denominator.multiply(value.denominator()).divide(denominator.gcd(value.denominator()));
+				var distance = dot(List.of(represented), represented).multiply(new Fraction(denominator.multiply(denominator), java.math.BigInteger.ONE));
+				for (int x = -8; x <= 8; x++) for (int y = -8; y <= 8; y++) for (int z = -8; z <= 8; z++)
+					if (normal[0] * x + normal[1] * y + normal[2] * z == target * denominator.intValueExact()
+							&& distance.compareTo(Fraction.of(x * x + y * y + z * z)) > 0)
+						throw new AssertionError("Integer plane correction missed a closer feasible lattice point");
+			}
+		var large = java.math.BigInteger.ONE.shiftLeft(160).add(java.math.BigInteger.valueOf(3));
+		var area = new Fraction[]{Fraction.of(1), new Fraction(large, java.math.BigInteger.ONE), new Fraction(large.add(java.math.BigInteger.ONE), java.math.BigInteger.ONE)};
+		var center = new Fraction[]{Fraction.of(0.375), Fraction.of(0.25), Fraction.of(0.4375)}; var swept = Fraction.of(Math.scalb(1.0, -40)).divide(Fraction.of(3));
+		var represented = LiquidIntegerPlaneProjection.correct(center, area, swept, 128); var norm = dot(List.of(area), area);
+		var error = Fraction.ZERO;
+		for (int a = 0; a < 3; a++) {
+			if (represented[a].denominator().bitCount() != 1 || represented[a].denominator().bitLength() > 128 + large.bitLength() + 3)
+				throw new AssertionError("Integer coordinate projection introduced an independent normal-square denominator");
+			var ideal = center[a].add(area[a].multiply(swept).multiply(Fraction.of(3)).divide(norm)); var delta = represented[a].subtract(ideal);
+			error = error.add(delta.multiply(delta));
+		}
+		var bound = new Fraction(java.math.BigInteger.ONE, java.math.BigInteger.ONE.shiftLeft(258));
+		if (!dot(List.of(area), represented).subtract(dot(List.of(area), center)).equals(swept.multiply(Fraction.of(3))) || error.compareTo(bound) > 0)
+			throw new AssertionError("Integer plane correction lost volume or its finite-grid covering-radius bound");
 	}
 	private static void stationaryRationalGeometrySurvivesMotionRounding() {
 		var shape = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 2, 3, 1);
