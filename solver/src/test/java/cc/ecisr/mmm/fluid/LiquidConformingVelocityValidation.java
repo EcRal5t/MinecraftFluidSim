@@ -415,10 +415,17 @@ final class LiquidConformingVelocityValidation {
 		}
 		var motion = new LiquidConformingTransport(mesh, field, projected.volumeRate(), 0.0001);
 		requireFiniteCoordinateConstraints(mesh, field, motion);
-		var represented = motion.representCoordinates(64);
 		try { projected.observeRates(motion.representCoordinates(20).volumeRate()); throw new AssertionError("Coarse coordinates bypassed pressure stationarity"); }
 		catch (LiquidCoordinateResolutionRequired expected) { }
-		var certified = projected.observeRates(represented.volumeRate());
+		int precision = LiquidCoordinateProjection.fractionalBits(mesh, 0.0001, 1e-10);
+		if (LiquidCoordinateProjection.fractionalBits(mesh, 0.0001 / 16, 1e-10) != precision + 4
+				|| LiquidCoordinateProjection.fractionalBits(mesh, 0.0001, 1e-10 / 2) != precision + 1)
+			throw new AssertionError("Coordinate spacing lost its time and rate dimensions");
+		LiquidConformingTransport represented; LiquidControlVolumeProjection.Result certified;
+		for (;;) {
+			try { represented = motion.representCoordinates(precision); certified = projected.observeRates(represented.volumeRate()); break; }
+			catch (LiquidCoordinateResolutionRequired finer) { if (precision >= 1074) throw finer; precision = Math.min(1074, 2 * precision); }
+		}
 		try { represented.withField(field); throw new AssertionError("Transport accepted the rates from an earlier geometric representation"); }
 		catch (IllegalArgumentException expected) { }
 		var transported = represented.withField(field.reconstruct(certified.volumeRate(), certified.cellVelocity(), liquid, FluidSolverConfig.WallCondition.FREE_SLIP));

@@ -12,8 +12,10 @@ import java.util.Map;
 final class LiquidCoordinateProjection {
 	final Map<Vertex, Vertex> positions;
 	final double maximumPositionErrorMetres;
-	/** Coordinate spacing follows binary64 precision at the smallest resolved centroid-to-face length. */
-	static int fractionalBits(LiquidControlVolumeMesh mesh) {
+	/** Initial spacing follows the pressure rate tolerance (1/s); actual represented rates still require certification. */
+	static int fractionalBits(LiquidControlVolumeMesh mesh, double dt, double rateTolerance) {
+		if (!(dt > 0) || !Double.isFinite(dt) || !(rateTolerance > 0) || !Double.isFinite(rateTolerance))
+			throw new IllegalArgumentException("Invalid coordinate rate scale");
 		double length = Double.POSITIVE_INFINITY;
 		for (var face : mesh.faces) {
 			length = Math.min(length, face.distance(mesh.cells.get(face.first()).geometry(), 1));
@@ -21,7 +23,10 @@ final class LiquidCoordinateProjection {
 		}
 		if (length == Double.POSITIVE_INFINITY) return 0;
 		if (!(length > 0) || !Double.isFinite(length)) throw new LiquidCoordinateResolutionRequired("Resolved geometry has no positive coordinate scale");
-		return Math.min(1074, Math.max(0, 52 - Math.getExponent(length)));
+		var spacing = Fraction.of(length).multiply(Fraction.of(dt)).multiply(Fraction.of(rateTolerance));
+		int bits = Math.min(1074, Math.max(0, spacing.denominator().bitLength() - spacing.numerator().bitLength()));
+		if (bits < 1074 && new Fraction(BigInteger.ONE, BigInteger.ONE.shiftLeft(bits)).compareTo(spacing) > 0) bits++;
+		return bits;
 	}
 
 	LiquidCoordinateProjection(LiquidControlVolumeMesh mesh, LiquidConformingVelocity field,
