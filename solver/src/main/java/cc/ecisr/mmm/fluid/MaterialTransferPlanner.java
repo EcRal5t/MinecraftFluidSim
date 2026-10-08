@@ -7,6 +7,7 @@ import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -31,6 +32,10 @@ final class MaterialTransferPlanner {
 	private static double observedSpace(SignedDyadic room) {
 		double value = room.toDouble();
 		return SignedDyadic.of(value).compareTo(room) > 0 ? Math.nextDown(value) : value;
+	}
+	private static double observedSpace(ExactVolume room) {
+		double value = room.toDouble();
+		return ExactVolume.of(value).compareTo(room) > 0 ? Math.nextDown(value) : value;
 	}
 
 	FluidDomain.ExactMixtureTransfer insertMixture(
@@ -289,7 +294,7 @@ final class MaterialTransferPlanner {
 		var geometric = new LiquidGeometryExtractionPlan(domain, cells);
 		if (!geometric.hasVolume(volume, ignored -> true)) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 
-		var remaining = SignedDyadic.of(volume); double settlementTolerance = Math.ulp(volume);
+		var remaining = ExactVolume.of(volume); double settlementTolerance = Math.ulp(volume);
 		List<ExtractionAllocation> plan = new ArrayList<>();
 		ChemicalTransferLedger.Builder ledger = ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
 		for (int marker : geometric.markers) {
@@ -360,13 +365,13 @@ final class MaterialTransferPlanner {
 		var geometric = new LiquidGeometryExtractionPlan(domain, cells);
 		if (!geometric.hasVolume(volume, p -> matchesMaterialExtraction(p, requiredMaterialHandle))) return new FluidDomain.ExactMixtureTransfer(false, List.of());
 
-		var remaining = SignedDyadic.of(volume);
+		var remaining = ExactVolume.of(volume);
 		double settlementTolerance = Math.ulp(volume);
 		java.util.List<ExtractionAllocation> plan = new java.util.ArrayList<>();
 		int ledgerSize = domain.materialRegistry == null ? 1 : domain.materialRegistry.size();
-		SignedDyadic[] removedVolumes = new SignedDyadic[ledgerSize];
+		ExactVolume[] removedVolumes = new ExactVolume[ledgerSize];
 		SignedDyadic[] removedMasses = new SignedDyadic[ledgerSize];
-		java.util.Arrays.fill(removedVolumes, SignedDyadic.ZERO);
+		java.util.Arrays.fill(removedVolumes, ExactVolume.ZERO);
 		java.util.Arrays.fill(removedMasses, SignedDyadic.ZERO);
 		java.util.Set<Integer> changedHandles = new java.util.TreeSet<>();
 		for (int i : geometric.markers) {
@@ -493,7 +498,7 @@ final class MaterialTransferPlanner {
 		List<ChemicalInsertPiece> pieces = new ArrayList<>();
 		try {
 		for (ChemicalTransferLedger.Group group : ledger.groups()) {
-			if (!group.volumeQuantity().equals(SignedDyadic.of(group.volume()))
+			if (!group.volumeQuantity().equals(ExactVolume.of(group.volume()))
 					|| !group.massKilogramsQuantity().equals(SignedDyadic.of(group.massKilograms())))
 				return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 			int material = domain.materialRegistry.handle(group.materialId());

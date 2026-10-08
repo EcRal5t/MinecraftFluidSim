@@ -98,6 +98,7 @@ final class LiquidExactPolygon {
 			return value.exponent() >= 0 ? new Fraction(value.significand().shiftLeft(value.exponent()), BigInteger.ONE)
 					: new Fraction(value.significand(), BigInteger.ONE.shiftLeft(-value.exponent()));
 		}
+		static Fraction of(cc.ecisr.mmm.units.ExactVolume value) { return new Fraction(value.numerator(), value.denominator()); }
 		static Fraction of(double value) {
 			return of(cc.ecisr.mmm.units.SignedDyadic.of(value));
 		}

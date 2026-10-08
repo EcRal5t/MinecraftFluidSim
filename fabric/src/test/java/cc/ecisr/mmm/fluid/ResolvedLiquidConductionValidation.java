@@ -25,14 +25,14 @@ final class ResolvedLiquidConductionValidation {
 		var result = new ControlVolumeConduction(mesh, coefficients).advance(captured.liquidBodies(), prescribed, 10, 1e-8, 512);
 		var changes = Arrays.copyOf(result.energyChange(), captured.bodies().size());
 		var plan = captured.plan(changes, result.reservoirEnergy(), result.roundoffBound()); Arrays.fill(changes, Double.NaN);
-		var quantities = new SignedDyadic[]{domain.particles.exactVolume(0), domain.particles.exactVolume(1), domain.particles.exactMass(0), domain.particles.exactMass(1)};
+		var quantities = List.of(domain.particles.exactVolume(0), domain.particles.exactVolume(1), domain.particles.exactMass(0), domain.particles.exactMass(1));
 		var species = List.of(domain.chemicalParcels.record(0), domain.chemicalParcels.record(1));
 		domain.thermalState.commitConduction(plan, domain.thermalMarkers, domain.gasState.network);
 		if (!(domain.thermalState.temperature(0, domain.thermalMarkers) > 270 && domain.thermalState.temperature(1, domain.thermalMarkers) < 350)
 				|| !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()) || domain.liquidGeometryState != geometry
 				|| !before.gas().nodes().equals(domain.captureAuthoritativeState().gas().nodes())
 				|| before.gas().geometry() != domain.gasState.geometry || !gasEnergy.equals(domain.thermalState.exactGasEnergy())
-				|| !Arrays.equals(quantities, new SignedDyadic[]{domain.particles.exactVolume(0), domain.particles.exactVolume(1), domain.particles.exactMass(0), domain.particles.exactMass(1)})
+				|| !quantities.equals(List.of(domain.particles.exactVolume(0), domain.particles.exactVolume(1), domain.particles.exactMass(0), domain.particles.exactMass(1)))
 				|| !species.equals(List.of(domain.chemicalParcels.record(0), domain.chemicalParcels.record(1))))
 			throw new AssertionError("Resolved conduction publication changed an extensive stock or its caloric/gas audit");
 		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
@@ -68,7 +68,7 @@ final class ResolvedLiquidConductionValidation {
 		int n = domain.particles.count();
 		if (n != 4 || mesh.cells.size() != 2) throw new AssertionError("Native cooccupied fixture lost its independent stocks");
 		var before = new double[n];
-		var volumes = new SignedDyadic[n]; var masses = volumes.clone(); var mixtures = new cc.ecisr.mmm.chemistry.ChemicalMixtureRecord[n]; var indicators = new boolean[n];
+		var volumes = new cc.ecisr.mmm.units.ExactVolume[n]; var masses = new SignedDyadic[n]; var mixtures = new cc.ecisr.mmm.chemistry.ChemicalMixtureRecord[n]; var indicators = new boolean[n];
 		for (int p = 0; p < n; p++) {
 			volumes[p] = domain.particles.exactVolume(p); masses[p] = domain.particles.exactMass(p); mixtures[p] = domain.chemicalParcels.record(p); indicators[p] = domain.chemicalParcels.indicator(p);
 			before[p] = domain.thermalState.temperature(p, domain.thermalMarkers);

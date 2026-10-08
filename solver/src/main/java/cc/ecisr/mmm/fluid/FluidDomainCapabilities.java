@@ -577,7 +577,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			@Override public double mass(int marker) { return particles.mass(marker); }
 			@Override public double volume(int marker) { return particles.volume(marker); }
 			@Override public SignedDyadic exactMass(int marker) { return particles.exactMass(marker); }
-			@Override public SignedDyadic exactVolume(int marker) { return particles.exactVolume(marker); }
+			@Override public cc.ecisr.mmm.units.ExactVolume exactVolume(int marker) { return particles.exactVolume(marker); }
 			@Override public ChemicalMixtureRecord mixture(int marker) {
 				return chemicalParcels == null ? null : chemicalParcels.record(marker);
 			}

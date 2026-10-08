@@ -2,13 +2,14 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 /** Extracts inventory from its actual spatial support and preflights the complete successor. */
 final class LiquidGeometryExtractionPlan {
-	record Remainder(int marker, SignedDyadic volume, SignedDyadic mass) {
+	record Remainder(int marker, ExactVolume volume, SignedDyadic mass) {
 		static Remainder plan(FluidDomain domain, int marker, float volume, double mass, double maximum) {
 			// Subtract the accepted observation deltas from the complete quantities, retaining their precision remainder.
 			var keptVolume = domain.particles.exactVolume(marker).subtract(SignedDyadic.of(domain.particles.volume(marker)).subtract(SignedDyadic.of(volume)));
@@ -104,7 +105,7 @@ final class LiquidGeometryExtractionPlan {
 		if (input == null) return;
 		int[] oldMarkers = input.copyMarkerCells(), oldOwners = input.copyFragmentOwners();
 		var removed = new Fraction[source.size()]; Arrays.fill(removed, Fraction.ZERO);
-		var volume = new SignedDyadic[domain.particles.count()]; var mass = new SignedDyadic[volume.length];
+		var volume = new ExactVolume[domain.particles.count()]; var mass = new SignedDyadic[volume.length];
 		for (int p = 0; p < volume.length; p++) { volume[p] = domain.particles.exactVolume(p); mass[p] = domain.particles.exactMass(p); }
 		for (var remainder : remainders) {
 			removed[oldMarkers[remainder.marker]] = removed[oldMarkers[remainder.marker]].add(Fraction.of(volume[remainder.marker].subtract(remainder.volume)).divide(scale));
@@ -156,7 +157,7 @@ final class LiquidGeometryExtractionPlan {
 			public int count() { return size; }
 			public double volume(int p) { return volume[ordinals[p]].toDouble(); }
 			public double mass(int p) { return mass[ordinals[p]].toDouble(); }
-			public SignedDyadic exactVolume(int p) { return volume[ordinals[p]]; }
+			public ExactVolume exactVolume(int p) { return volume[ordinals[p]]; }
 			public SignedDyadic exactMass(int p) { return mass[ordinals[p]]; }
 			public double position(int p, int a) { return positions[3 * p + a]; }
 			public double velocity(int p, int a) { return velocities[3 * p + a]; }

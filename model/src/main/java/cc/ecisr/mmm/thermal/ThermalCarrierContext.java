@@ -32,7 +32,7 @@ public interface ThermalCarrierContext {
 	double mass(int marker);
 	double volume(int marker);
 	default cc.ecisr.mmm.units.SignedDyadic exactMass(int marker) { return cc.ecisr.mmm.units.SignedDyadic.of(mass(marker)); }
-	default cc.ecisr.mmm.units.SignedDyadic exactVolume(int marker) { return cc.ecisr.mmm.units.SignedDyadic.of(volume(marker)); }
+	default cc.ecisr.mmm.units.ExactVolume exactVolume(int marker) { return cc.ecisr.mmm.units.ExactVolume.of(volume(marker)); }
 	ChemicalMixtureRecord mixture(int marker);
 	ChemicalRegistry chemicalRegistry();
 	default int granularMaterialCount() { return 0; }

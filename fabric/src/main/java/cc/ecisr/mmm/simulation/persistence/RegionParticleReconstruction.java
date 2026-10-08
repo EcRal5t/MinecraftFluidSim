@@ -3,6 +3,7 @@ package cc.ecisr.mmm.simulation.persistence;
 import cc.ecisr.mmm.model.region.RegionManifest;
 import cc.ecisr.mmm.model.region.RegionSectionState;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 import cc.ecisr.mmm.fluid.LiquidInventoryState;
 import java.io.IOException;
 import java.util.List;
@@ -66,18 +67,26 @@ final class RegionParticleReconstruction {
 				chemicalMixtureIndex, indicator, inventory);
 	}
 
-	static SignedDyadic sectionQuantity(RegionSectionState section, LiquidInventoryState inventory, boolean mass) {
+	static ExactVolume sectionVolume(RegionSectionState section, LiquidInventoryState inventory) {
+		var sum = ExactVolume.ZERO;
+		for (int p : section.markerOrdinals()) {
+			if (p < 0 || p >= inventory.count()) throw new IllegalArgumentException("Liquid section inventory ordinal is invalid");
+			sum = sum.add(inventory.volume(p));
+		}
+		return sum;
+	}
+	static SignedDyadic sectionMass(RegionSectionState section, LiquidInventoryState inventory) {
 		var sum = SignedDyadic.ZERO;
 		for (int p : section.markerOrdinals()) {
 			if (p < 0 || p >= inventory.count()) throw new IllegalArgumentException("Liquid section inventory ordinal is invalid");
-			sum = sum.add(mass ? inventory.mass(p) : inventory.volume(p));
+			sum = sum.add(inventory.mass(p));
 		}
 		return sum;
 	}
 
 	static List<RegionManifest.MaterialLedger> materialLedgers(int[] materials, int paletteSize, LiquidInventoryState inventory) {
-		int[] count = new int[paletteSize]; var volumes = new SignedDyadic[paletteSize]; var masses = new SignedDyadic[paletteSize];
-		java.util.Arrays.fill(volumes, SignedDyadic.ZERO); java.util.Arrays.fill(masses, SignedDyadic.ZERO);
+		int[] count = new int[paletteSize]; var volumes = new ExactVolume[paletteSize]; var masses = new SignedDyadic[paletteSize];
+		java.util.Arrays.fill(volumes, ExactVolume.ZERO); java.util.Arrays.fill(masses, SignedDyadic.ZERO);
 		for (int p = 0; p < materials.length; p++) {
 			int material = materials[p]; if (material < 0 || material >= paletteSize) throw new IllegalArgumentException("Material palette index out of range");
 			count[material]++; volumes[material] = volumes[material].add(inventory.volume(p));

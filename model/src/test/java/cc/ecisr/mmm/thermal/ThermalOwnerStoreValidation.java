@@ -25,6 +25,29 @@ public final class ThermalOwnerStoreValidation {
 		liquidTemperatureTracksMutableInventory();
 		referenceTermsKeepCanonicalRationalRounding();
 		exactBinaryObservationsRoundOnce();
+		exactVolumeObservationsRoundOnce();
+	}
+	private static void exactVolumeObservationsRoundOnce() {
+		var one = cc.ecisr.mmm.units.ExactVolume.of(1);
+		var tiny = new cc.ecisr.mmm.units.ExactVolume(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(3).shiftLeft(2000));
+		var floatTie = one.add(SignedDyadic.of(1, -24)); var doubleTie = one.add(SignedDyadic.of(1, -53));
+		require(floatTie.add(tiny).toFloat() == Math.nextUp(1.0F) && (float) floatTie.add(tiny).toDouble() == 1
+				&& floatTie.subtract(tiny).toFloat() == 1 && floatTie.toFloat() == 1, "Rational binary32 observation rounded through binary64 or lost its tie");
+		require(doubleTie.add(tiny).toDouble() == Math.nextUp(1.0) && doubleTie.subtract(tiny).toDouble() == 1 && doubleTie.toDouble() == 1,
+				"Rational binary64 observation lost its exact midpoint");
+		var third = new cc.ecisr.mmm.units.ExactVolume(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(3));
+		require(third.add(third).add(third).equals(one) && third.multiply(one.subtract(third)).divide(third).equals(one.subtract(third)), "Rational volume arithmetic changed a complete quantity");
+		var minimumDouble = third.multiply(SignedDyadic.of(1, -1074)); var minimumFloat = third.multiply(SignedDyadic.of(1, -149));
+		require(minimumDouble.toDouble() == 0 && minimumDouble.add(minimumDouble).toDouble() == Double.MIN_VALUE
+				&& Double.doubleToRawLongBits(minimumDouble.negate().toDouble()) == Long.MIN_VALUE
+				&& minimumFloat.toFloat() == 0 && minimumFloat.add(minimumFloat).toFloat() == Float.MIN_VALUE, "Rational subnormal observations lost rounding or signed zero");
+		var nearLimit = new cc.ecisr.mmm.units.ExactVolume(java.math.BigInteger.ONE.shiftLeft(32767).subtract(java.math.BigInteger.ONE),
+				java.math.BigInteger.ONE.shiftLeft(32766).add(java.math.BigInteger.ONE));
+		require(nearLimit.toDouble() == 2, "A bounded wide volume overflowed before ratio scaling");
+		var wideDyadic = new SignedDyadic(java.math.BigInteger.ONE.shiftLeft(32766).add(java.math.BigInteger.ONE), -32766);
+		require(cc.ecisr.mmm.units.ExactVolume.of(wideDyadic).equals(one.add(SignedDyadic.of(1, -32766))), "Dyadic conversion counted the numerator and denominator against one component budget");
+		try { new cc.ecisr.mmm.units.ExactVolume(java.math.BigInteger.ONE.shiftLeft(32768), java.math.BigInteger.valueOf(3)); throw new AssertionError("Volume quantity budget was ignored"); }
+		catch (IllegalArgumentException expected) { }
 	}
 
 	private static void exactBinaryObservationsRoundOnce() {

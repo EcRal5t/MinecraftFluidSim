@@ -71,9 +71,9 @@ final class RegionLiquidGeometryValidationScenarios extends RegionPersistenceVal
 	private static void validateExtensiveInventoryPersistence() throws Exception {
 		var region = populatedRegion(new UUID(817, 818));
 		var tiny = cc.ecisr.mmm.units.SignedDyadic.of(1, -2000);
-		var v = cc.ecisr.mmm.units.SignedDyadic.of(0.5).add(tiny);
+		var v = cc.ecisr.mmm.units.ExactVolume.of(0.5).add(new cc.ecisr.mmm.units.ExactVolume(BigInteger.ONE, BigInteger.valueOf(3).shiftLeft(2000)));
 		var m = cc.ecisr.mmm.units.SignedDyadic.of(500).add(tiny);
-		var inventory = new cc.ecisr.mmm.fluid.LiquidInventoryState(new cc.ecisr.mmm.units.SignedDyadic[]{v, v},
+		var inventory = new cc.ecisr.mmm.fluid.LiquidInventoryState(new cc.ecisr.mmm.units.ExactVolume[]{v, v},
 				new cc.ecisr.mmm.units.SignedDyadic[]{m, m});
 		var positions = new float[]{0.25F, 0.625F, 1.25F, 0.5F, 1.25F, 0.625F, 1.25F, 0.5F};
 		var state = new FlipParticleState(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG.cellSize(), 2, inventory.totalVolume().toFloat(),
@@ -98,13 +98,20 @@ final class RegionLiquidGeometryValidationScenarios extends RegionPersistenceVal
 		for (byte[] malformed : List.of(Arrays.copyOf(encoded, encoded.length - 1), Arrays.copyOf(encoded, encoded.length + 1)))
 			expectIOException(() -> codec.decode(malformed, 2), "truncated or trailing extensive inventory was accepted");
 		expectIOException(() -> codec.decode(encoded, 1), "extensive inventory with the wrong carrier count was accepted");
-		byte[] unbounded = encoded.clone(); Arrays.fill(unbounded, 12, 16, (byte) 0x7f);
+		byte[] unbounded = encoded.clone(); Arrays.fill(unbounded, 8, 12, (byte) 0x7f);
 		expectIOException(() -> codec.decode(unbounded, 2), "unbounded extensive inventory allocation was accepted");
+		var third = new cc.ecisr.mmm.units.ExactVolume(BigInteger.ONE, BigInteger.valueOf(3));
+		var rational = new cc.ecisr.mmm.fluid.LiquidInventoryState(new cc.ecisr.mmm.units.ExactVolume[]{third},
+				new cc.ecisr.mmm.units.SignedDyadic[]{cc.ecisr.mmm.units.SignedDyadic.of(1)});
+		var canonical = codec.encode(rational); var notReduced = canonical.clone(); notReduced[12] = 2; notReduced[17] = 6;
+		expectIOException(() -> codec.decode(notReduced, 1), "unreduced inventory volume was accepted");
+		var singular = canonical.clone(); singular[17] = 0;
+		expectIOException(() -> codec.decode(singular, 1), "zero inventory denominator was accepted");
 		var extensions = new java.util.ArrayList<>(materials.manifest().extensions());
 		extensions.add(new RegionExtension(LiquidInventoryStateCodec.MANIFEST_EXTENSION, encoded));
 		expectIOException(new RegionState(manifestWithExtensions(materials.manifest(), extensions), materials.sections())::validate,
 				"duplicate extensive inventory was accepted");
-		var wrong = new cc.ecisr.mmm.fluid.LiquidInventoryState(new cc.ecisr.mmm.units.SignedDyadic[]{v, v},
+		var wrong = new cc.ecisr.mmm.fluid.LiquidInventoryState(new cc.ecisr.mmm.units.ExactVolume[]{v, v},
 				new cc.ecisr.mmm.units.SignedDyadic[]{m.add(cc.ecisr.mmm.units.SignedDyadic.of(1)), m});
 		byte[] wrongPayload = codec.encode(wrong);
 		var changed = materials.manifest().extensions().stream().map(e -> LiquidInventoryStateCodec.MANIFEST_EXTENSION.equals(e.type())

@@ -17,9 +17,7 @@ final class ResolvedLiquidMechanicalStage {
 			throw new IllegalStateException("Resolved mechanics requires complete phase and solid geometry");
 		var localInventory = new LiquidInventoryRepartitionPlan(domain);
 		domain.carrierMutations().publishGeometricRepartition(localInventory);
-		var inventoryStats = localInventory.changed() ? new FluidDomain.InventoryRepartitionStats(1, localInventory.maximumRelativeMassError,
-				localInventory.maximumTemperatureChange, localInventory.momentumChange[0].rounded(), localInventory.momentumChange[1].rounded(),
-				localInventory.momentumChange[2].rounded(), localInventory.kineticChange.rounded()) : FluidDomain.InventoryRepartitionStats.INACTIVE;
+		var inventoryStats = inventoryStats(localInventory);
 		if (captureAudit) audit.carrierInventoryTransferJoules += localInventory.kineticChange.rounded();
 		var state = domain.liquidGeometryState;
 		int[] controlCells = state.copyControlCells();
@@ -102,9 +100,17 @@ final class ResolvedLiquidMechanicalStage {
 			var next = new LiquidGeometryPhaseInput(motion.geometry, partition, domain.gasState.geometry.sealedExterior(), MAXIMUM_REGIONS, java.util.Map.of());
 			var gas = new ResolvedGasMotionPlan(domain, next, motion.gasInterfaces, MAXIMUM_PAIRS);
 			gas.publish(domain, motion);
+			double transportedKinetic = captureAudit ? domain.particleKineticEnergyJoules() : 0;
+			var finalInventory = new LiquidInventoryRepartitionPlan(domain);
+			domain.carrierMutations().publishGeometricRepartition(finalInventory);
+			inventoryStats = inventoryStats.plus(inventoryStats(finalInventory));
+			observations = new FluidDomain.GeometryStepStats(observations.resolvedSubsteps(), observations.velocityFittingErrorMetresPerSecond(),
+					observations.velocityObservationDisplacementErrorMetres(), observations.coordinateRepresentationDisplacementErrorMetres(),
+					observations.rateRepresentationErrorPerSecond(), inventoryStats);
 			domain.lastPressureIterations = result.pressure().iterations();
 			domain.lastPressureResidual = (float) result.pressure().fluxResidual();
 			if (captureAudit) {
+				audit.carrierInventoryTransferJoules += finalInventory.kineticChange.rounded();
 				var predictor = result.viscosity().cellVelocity().clone();
 				double viscousKinetic = kinetic(input, properties, predictor);
 				int local = 0;
@@ -116,12 +122,17 @@ final class ResolvedLiquidMechanicalStage {
 				audit.gravityWorkJoules += gravityKinetic - viscousKinetic;
 				audit.thermalBuoyancyWorkJoules += predictedKinetic - gravityKinetic;
 				audit.pressureProjectionWorkJoules += projectedKinetic - predictedKinetic;
-				audit.volumeTransportTransferJoules += domain.particleKineticEnergyJoules() - projectedKinetic;
+				audit.volumeTransportTransferJoules += transportedKinetic - projectedKinetic;
 			}
 			var viscous = result.viscosity(); var impulse = viscous.boundaryImpulse();
 			return new MechanicalStepPipeline.SubstepOutcome(result.pressure().iterations(), null, false,
 					new FluidDomain.ViscousStepStats(0, 0, impulse.x(), impulse.y(), impulse.z(), viscous.dissipatedJoules(), 0, 0, 0), observations);
 		}
+	}
+	private static FluidDomain.InventoryRepartitionStats inventoryStats(LiquidInventoryRepartitionPlan plan) {
+		return plan.changed() ? new FluidDomain.InventoryRepartitionStats(1, plan.maximumRelativeMassError, plan.maximumTemperatureChange,
+				plan.momentumChange[0].rounded(), plan.momentumChange[1].rounded(), plan.momentumChange[2].rounded(), plan.kineticChange.rounded())
+				: FluidDomain.InventoryRepartitionStats.INACTIVE;
 	}
 	private static double[] select(double[] values, int[] cells) {
 		var result = new double[cells.length]; for (int c = 0; c < result.length; c++) result[c] = values[cells[c]]; return result;

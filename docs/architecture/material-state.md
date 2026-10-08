@@ -26,7 +26,7 @@
 
 - 每个 marker 独立保存体积、质量和稳定材料身份。
 - 区域总量与逐材料体积/质量账本必须由 marker 精确和闭合。
-- `LiquidParticleStore` 保存精确二进制体积和质量；float 体积与 double 质量列是供现有计算和展示读取的观察值。`LiquidInventoryState` 将完整数量随 pure/material/chemical 候选交接，恢复保留观察值无法表示的尾差。普通 binary32/binary64 数量沿指数分桶精确求和，扩展数量的余项继续精确累加；全域与逐材料总量在接口处舍入一次。
+- `LiquidParticleStore` 通过 `ExactVolume` 保存精确有理数体积，质量保存精确二进制有理数；float 体积与 double 质量列是供现有计算和展示读取的观察值。`LiquidInventoryState` 将完整数量随 pure/material/chemical 候选交接，恢复保留观察值无法表示的尾差。普通 binary32/binary64 数量沿指数分桶精确求和，扩展体积按规范有理数累加，质量余项继续精确累加；全域与逐材料总量在接口处舍入一次。
 - 注液计划从逐格原始体积的精确和扣除开放容量，计划内各材料共同抵扣这份精确剩余空间。请求剩余量也按实际片段精确扣减，保证跨格注入量不超过请求。转成 binary64 观察量及 binary32 注入片段时向下舍入；操作回执将实际接受量在 binary32 接口处舍入一次。化学量子不足以表示的片段留在请求剩余量中。
 - `FluidMaterialRegistry` 是运行时材料定义入口；持久化和容器使用稳定 ID，不保存运行时 handle。
 - 当前机械定义包含 stable ID、参考密度、miscibility group、液气表面张力和接触角；液液张力由 registry 的 phase 无序对表给出。
@@ -100,7 +100,7 @@ pressure face 的 `1/rho` 系数按界面距离加权。面密度比、迁移率
 
 `FluidMixture` 最多保存 64 个按 stable ID 排序的 component；每项包含 `volumeNanos` 和 raw kg mass bits。构造时拒绝重复 ID、非正体积/质量和超过一桶的总量。物品中单材料可以使用紧凑 component 表示，多材料使用 canonical mixture 文本；进入 WAL 时两者都规范化为完整 mixture truth，reader 不现场合成缺失 component。
 
-提取计划保留所有库存的完整 dyadic 体积和质量。已接受的 binary32 体积差与 binary64 质量差从完整数量扣除，后继观察由保留数量一次舍入，原有精度尾数继续随库存保存；几何切割与后继校验读取同一份精确体积差。完整搬出要求库存数量及导出格式同时能够表示该结果，整份候选在发布前完成校验。
+提取计划保留所有库存的完整有理数体积与 dyadic 质量。已接受的 binary32 体积差与 binary64 质量差从完整数量扣除，后继观察由保留数量一次舍入，原有精度尾数继续随库存保存；几何切割与后继校验读取同一份精确体积差。完整搬出要求库存数量及导出格式同时能够表示该结果，整份候选在发布前完成校验。
 
 抽取先以 double 精确量预检，再按整 marker 与必要尾拆分生成实际 settlement；物品必须能表示实际 volume、每材料 mass 和所有附加化学/热侧列。请求量与实际可表示量不一致时，WAL 记录实际量，不用请求量伪造闭合。
 

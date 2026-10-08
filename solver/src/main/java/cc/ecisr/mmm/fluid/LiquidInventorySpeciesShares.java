@@ -1,12 +1,12 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
-import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 
 /** Integer species share the positive volume map and aggregate before creating chemical carriers. */
 final class LiquidInventorySpeciesShares {
 	private LiquidInventorySpeciesShares() { }
-	static void accumulate(FluidDomain domain, int marker, SignedDyadic[] weights, LiquidInventoryStock[] targets) {
+	static void accumulate(FluidDomain domain, int marker, ExactVolume[] weights, LiquidInventoryStock[] targets) {
 		if (domain.chemicalParcels == null) return;
 		var source = domain.chemicalParcels.record(marker);
 		for (int e = 0; e < source.entryCount(); e++) {

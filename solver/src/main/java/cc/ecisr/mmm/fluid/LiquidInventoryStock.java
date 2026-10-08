@@ -2,6 +2,7 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 import java.util.TreeMap;
 
 /** Scratch P0 inventory for one mechanical control, material and indicator provenance. */
@@ -13,7 +14,7 @@ final class LiquidInventoryStock {
 		}
 	}
 	final Key key;
-	SignedDyadic volume = SignedDyadic.ZERO, mass = SignedDyadic.ZERO;
+	ExactVolume volume = ExactVolume.ZERO; SignedDyadic mass = SignedDyadic.ZERO;
 	Fraction energy = Fraction.ZERO;
 	final TreeMap<Integer, Long> species = new TreeMap<>();
 	double minimumTemperature = Double.POSITIVE_INFINITY, maximumTemperature = Double.NEGATIVE_INFINITY;

@@ -8,6 +8,7 @@ import cc.ecisr.mmm.thermal.ThermalContactExchange;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
@@ -25,12 +26,12 @@ record LiquidGeometryConductionSupport(List<ThermalContactExchange.Body> bodies,
 		var labels = ResolvedGasGeometry.requireCompatible(phase.gasGeometry, phase, 0);
 		int[] markerOwners = phase.liquidGeometry.copyMarkerCells(), fragmentOwners = phase.liquidGeometry.copyFragmentOwners();
 		if (markerOwners.length != markers.markerCount()) throw new IllegalArgumentException("Conduction marker geometry is incomplete");
-		var inventories = new TreeMap<Integer, ArrayList<Integer>>(); var volumes = new TreeMap<Integer, SignedDyadic>();
+		var inventories = new TreeMap<Integer, ArrayList<Integer>>(); var volumes = new TreeMap<Integer, ExactVolume>();
 		for (int p = 0; p < markerOwners.length; p++) {
 			var volume = markers.exactVolume(p);
 			if (volume == null || volume.signum() <= 0) throw new IllegalArgumentException("Conduction material volume is invalid");
 			inventories.computeIfAbsent(markerOwners[p], ignored -> new ArrayList<>()).add(p);
-			volumes.merge(markerOwners[p], volume, SignedDyadic::add);
+			volumes.merge(markerOwners[p], volume, ExactVolume::add);
 		}
 		var bodies = new ArrayList<>(captured.bodies()); var portions = new ArrayList<ControlVolumeThermalMetric.Portion>();
 		int ambient = -1;

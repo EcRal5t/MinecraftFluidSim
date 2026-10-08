@@ -2,6 +2,7 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 import java.util.Arrays;
 import java.util.TreeMap;
 
@@ -14,12 +15,12 @@ final class LiquidReconstructionInventories {
 	private final FluidMaterialRegistry materials;
 	private final long revision;
 	private final int[] markerMaterials;
-	private final SignedDyadic[] volumes, masses;
+	private final ExactVolume[] volumes; private final SignedDyadic[] masses;
 	LiquidReconstructionInventories(FluidDomain domain) {
 		this.domain = domain; input = domain.liquidGeometryState; materials = domain.materialRegistry; revision = domain.carrierMutationRevision();
 		LiquidGeometryStateMapper.requireCompatible(input, domain);
 		phases = new int[input.cells().size()]; Arrays.fill(phases, -1); densities = new Fraction[phases.length];
-		markerMaterials = new int[domain.particles.count()]; volumes = new SignedDyadic[markerMaterials.length]; masses = new SignedDyadic[markerMaterials.length];
+		markerMaterials = new int[domain.particles.count()]; volumes = new ExactVolume[markerMaterials.length]; masses = new SignedDyadic[markerMaterials.length];
 		var ownerPhases = new TreeMap<Integer, Integer>(); var ownerMass = new TreeMap<Integer, Fraction>(); var ownerVolume = new TreeMap<Integer, Fraction>();
 		var markers = input.copyMarkerCells(); var owners = input.copyFragmentOwners(); var cells = LiquidGeometryStateMapper.restore(input);
 		for (int f = 0; f < cells.size(); f++) ownerVolume.merge(owners[f], cells.get(f).geometry().measure().volume(), Fraction::add);

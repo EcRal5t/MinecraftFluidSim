@@ -10,7 +10,7 @@ import java.util.List;
 
 /** Complete liquid and finite-gas caloric inventories with joint conservative publication. */
 public final class ConductionInventory {
-	private record Stock(int cell, int material, SignedDyadic mass, SignedDyadic volume,
+	private record Stock(int cell, int material, SignedDyadic mass, cc.ecisr.mmm.units.ExactVolume volume,
 			double massObservation, double volumeObservation, ChemicalMixtureRecord mixture) { }
 	private final ThermalDomainState owner;
 	private final ThermalCarrierContext context;

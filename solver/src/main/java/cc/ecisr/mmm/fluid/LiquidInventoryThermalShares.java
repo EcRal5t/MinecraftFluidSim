@@ -1,12 +1,13 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 
 /** Transports extensive internal energy; caloric inversion observes each complete local stock. */
 final class LiquidInventoryThermalShares {
 	private LiquidInventoryThermalShares() { }
-	static void accumulate(FluidDomain domain, int marker, SignedDyadic[] weights, LiquidInventoryStock[] targets) {
+	static void accumulate(FluidDomain domain, int marker, ExactVolume[] weights, LiquidInventoryStock[] targets) {
 		if (domain.thermalState == null) return;
 		var volume = Fraction.of(domain.particles.exactVolume(marker));
 		var energy = Fraction.of(domain.thermalState.liquidInternalEnergy(marker));

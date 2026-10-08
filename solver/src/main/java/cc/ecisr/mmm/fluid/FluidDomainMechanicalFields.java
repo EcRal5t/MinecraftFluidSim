@@ -508,11 +508,11 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		if (Float.isNaN(amount) || amount < 0) throw new IllegalArgumentException("Removal volume must be non-negative");
 		var geometric = new LiquidGeometryExtractionPlan(domain(), candidates);
 		List<MarkerTruncation> planned = new ArrayList<>();
-		var remaining = Float.isInfinite(amount) ? null : SignedDyadic.of(amount); var removed = SignedDyadic.ZERO;
+		var remaining = Float.isInfinite(amount) ? null : cc.ecisr.mmm.units.ExactVolume.of(amount); var removed = cc.ecisr.mmm.units.ExactVolume.ZERO;
 		for (int marker : geometric.markers) {
 			if (remaining != null && remaining.signum() == 0) break;
 			double cap = remaining == null ? Double.POSITIVE_INFINITY : remaining.toDouble();
-			if (remaining != null && SignedDyadic.of(cap).compareTo(remaining) > 0) cap = Math.nextDown(cap);
+			if (remaining != null && cc.ecisr.mmm.units.ExactVolume.of(cap).compareTo(remaining) > 0) cap = Math.nextDown(cap);
 			float previousVolume = particles.volume(marker); double take = Math.min(geometric.volume(marker), cap);
 			float newVolume = (float) (previousVolume - take); double actual = (double) previousVolume - newVolume;
 			if (actual > take) { newVolume = Math.nextUp(newVolume); actual = (double) previousVolume - newVolume; }

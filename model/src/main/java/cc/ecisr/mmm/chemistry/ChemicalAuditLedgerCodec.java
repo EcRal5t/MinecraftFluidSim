@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.chemistry;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolumeCodec;
 import java.math.BigInteger;
 
 import java.io.ByteArrayInputStream;
@@ -18,7 +19,7 @@ import java.util.TreeMap;
 /** Canonical bounded binary payload for cumulative external-source and escaped-sink audit truth. */
 public final class ChemicalAuditLedgerCodec {
 	private static final int MAGIC = 0x52574341; // RWCA
-	private static final int VERSION = 2;
+	private static final int VERSION = 3;
 	public static final int MAX_BYTES = 16 * 1_048_576;
 
 	private ChemicalAuditLedgerCodec() { }
@@ -65,7 +66,7 @@ public final class ChemicalAuditLedgerCodec {
 		for (ChemicalTransferLedger.Group group : ledger.groups()) {
 			output.writeUTF(group.materialId());
 			output.writeBoolean(group.indicator());
-			writeQuantity(output, group.volumeQuantity());
+			ExactVolumeCodec.write(output, group.volumeQuantity());
 			writeQuantity(output, group.massKilogramsQuantity());
 			output.writeLong(group.massResidualKilogramsBits());
 			output.writeInt(group.speciesQuanta().size());
@@ -83,7 +84,7 @@ public final class ChemicalAuditLedgerCodec {
 		for (int group = 0; group < groups; group++) {
 			String material = input.readUTF();
 			boolean indicator = input.readBoolean();
-			var volume = readQuantity(input);
+			var volume = ExactVolumeCodec.read(input);
 			var mass = readQuantity(input);
 			long residualBits = input.readLong();
 			int entries = input.readInt();

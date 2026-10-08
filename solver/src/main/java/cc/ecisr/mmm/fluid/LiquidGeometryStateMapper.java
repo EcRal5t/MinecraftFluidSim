@@ -172,8 +172,8 @@ final class LiquidGeometryStateMapper {
 		if (state.rootWidthMetres() != width) throw new IllegalArgumentException("Liquid geometry root differs from the physical domain");
 		var rootScale = LiquidExactPolygon.Fraction.of(span); rootScale = rootScale.multiply(rootScale).multiply(rootScale);
 		var rootWidth = LiquidExactPolygon.Fraction.of(width);
-		var volumes = new cc.ecisr.mmm.units.SignedDyadic[cells.size()];
-		java.util.Arrays.fill(volumes, cc.ecisr.mmm.units.SignedDyadic.ZERO);
+		var volumes = new cc.ecisr.mmm.units.ExactVolume[cells.size()];
+		java.util.Arrays.fill(volumes, cc.ecisr.mmm.units.ExactVolume.ZERO);
 		var moments = new LiquidExactPolygon.Fraction[3 * cells.size()];
 		java.util.Arrays.fill(moments, LiquidExactPolygon.Fraction.ZERO);
 		double[] positionErrors = new double[cells.size()];

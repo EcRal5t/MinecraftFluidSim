@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 import java.math.BigInteger;
 import java.util.Arrays;
 
@@ -8,6 +9,35 @@ import java.util.Arrays;
 final class ExactVolumeAllocation {
 	private ExactVolumeAllocation() { }
 	record InventoryShares(SignedDyadic[] values, int quantumExponent) { }
+	static InventoryShares allocateContinuous(SignedDyadic amount, ExactVolume[] weights) {
+		if (amount.signum() < 0) throw new IllegalArgumentException("Negative allocation inventory");
+		if (amount.signum() == 0) { var values = new SignedDyadic[weights.length]; Arrays.fill(values, SignedDyadic.ZERO); return new InventoryShares(values, 0); }
+		var total = ExactVolume.ZERO; for (var weight : weights) {
+			if (weight.signum() <= 0) throw new IllegalArgumentException("Inventory allocation requires positive support");
+			total = total.add(weight);
+		}
+		var sum = LiquidExactPolygon.Fraction.of(total); var inventory = LiquidExactPolygon.Fraction.of(amount);
+		return round(amount, Arrays.stream(weights).map(weight -> inventory.multiply(LiquidExactPolygon.Fraction.of(weight)).divide(sum)).toList());
+	}
+	static long[] allocate(long amount, ExactVolume[] weights) {
+		if (amount < 0) throw new IllegalArgumentException("Negative allocation amount");
+		var total = ExactVolume.ZERO; for (var weight : weights) {
+			if (weight.signum() < 0) throw new IllegalArgumentException("Negative allocation weight"); total = total.add(weight);
+		}
+		if (total.signum() <= 0) throw new IllegalArgumentException("Volume allocation has no positive support");
+		var sum = LiquidExactPolygon.Fraction.of(total); var inventory = LiquidExactPolygon.Fraction.of(SignedDyadic.of(amount, 0));
+		var result = new long[weights.length]; var remainder = new LiquidExactPolygon.Fraction[weights.length]; var order = new Integer[weights.length]; long assigned = 0;
+		for (int i = 0; i < weights.length; i++) {
+			var ideal = inventory.multiply(LiquidExactPolygon.Fraction.of(weights[i])).divide(sum);
+			result[i] = ideal.numerator().divide(ideal.denominator()).longValueExact(); assigned = Math.addExact(assigned, result[i]);
+			remainder[i] = ideal.subtract(LiquidExactPolygon.Fraction.of(SignedDyadic.of(result[i], 0))); order[i] = i;
+		}
+		Arrays.sort(order, (a, b) -> { int comparison = remainder[b].compareTo(remainder[a]); return comparison != 0 ? comparison : Integer.compare(a, b); });
+		int remaining = Math.toIntExact(amount - assigned);
+		if (remaining < 0 || remaining >= weights.length && remaining != 0) throw new IllegalStateException("Integer allocation lost its remainder certificate");
+		for (int i = 0; i < remaining; i++) result[order[i]]++;
+		return result;
+	}
 
 	/** Rounds positive rational shares on one binary lattice while preserving their complete sum. */
 	static InventoryShares round(SignedDyadic total, java.util.List<LiquidExactPolygon.Fraction> reference) {

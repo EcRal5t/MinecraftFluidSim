@@ -148,7 +148,7 @@ REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine
 
 液体体积与材料质量总账从原始载体列精确求和，最后一次舍入为 binary64；区域总量、逐材料总量和 section 描述分别遵守同一规则。section 的已舍入小计用于核对该片载荷，区域总量仍由完整原始列推导。
 
-manifest 必须保存 `mmm:liquid_inventory` 扩展，按原始 marker ordinal 保存精确二进制体积和质量。section 内的 float 体积与 double 质量是这些数量的观察值；恢复要求二者与精确数量的一次舍入结果一致。区域、逐材料和 section 的总账均由完整数量推导，pure 布局也保留独立质量。编码限制数量、整数位数和总字节数，拒绝重复、缺失、非规范或截断的库存载荷；扩展字节纳入 manifest 校验和。
+manifest 必须保存 `mmm:liquid_inventory` 扩展，按原始 marker ordinal 保存规范有理数体积和 dyadic 质量，体积编码包含约分后的分子和正分母。section 内的 float 体积与 double 质量是这些数量的观察值；恢复要求二者与精确数量的一次舍入结果一致。区域、逐材料和 section 的总账均由完整数量推导，pure 布局也保留独立质量。编码限制数量、整数位数和总字节数，拒绝重复、缺失、非规范或截断的库存载荷；扩展字节纳入 manifest 校验和。
 
 解析液体几何随库存载体保存为 manifest 扩展 `mmm:liquid_geometry`。它包含归一化根宽、控制体地址、精确整数顶点与支撑平面、面连接、片段平均速度，以及片段和原始 marker ordinal 的库存组关联。凸片段另保存所属力学控制体的规范首片段索引，同一控制体要求库存组与速度一致，跨叶格的辅助切割保持这一关联。一个库存组可跨 section，占据多个互不相连的片段；section 仍按库存组质心归档点列，完整区域代次统一保存实际液体几何。
 

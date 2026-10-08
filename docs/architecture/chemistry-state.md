@@ -116,7 +116,7 @@ pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指
 
 `ChemicalContents` 使用 canonical group 表，每组绑定 mechanical material、indicator、nanovolume、kg mass/residual 和排序 species 列。物品总量必须与各组 exact sum 一致；部分抽取按体积分配 quanta 和 residual，并把确定性 remainder 留给一侧。容器无法表示完整结果时，在 solver 修改前拒绝。
 
-区域 source/sink 的 group 保存完整 dyadic 体积与 mechanical kg mass；聚合与 checkpoint 编码保留全部数量，`double` 接口在读取时舍入一次。SI 质量由完整 solver mass 与声明的单位比例精确相乘。chemical kg residual 继续对输入二进制值精确求和，在 group 提交时舍入一次；三列独立结算。容器编码和现有 binary64 注入接口在规划阶段校验完整数量可表示性。
+区域 source/sink 的 group 保存完整有理数体积与 dyadic mechanical kg mass；聚合与 checkpoint 编码保留全部数量，`double` 接口在读取时舍入一次。SI 质量由完整 solver mass 与声明的单位比例精确相乘。chemical kg residual 继续对输入二进制值精确求和，在 group 提交时舍入一次；三列独立结算。容器编码和现有 binary64 注入接口在规划阶段校验完整数量可表示性。
 
 区域 source/sink 不只是 species 总量：每个 transfer group 同时保存 material/indicator identity、volume、mass、residual 和 species。collision escape、`empty`、创造放出和创造装取分别走同一 ledger，不允许“只记总质量”后丢失组成证据。
 

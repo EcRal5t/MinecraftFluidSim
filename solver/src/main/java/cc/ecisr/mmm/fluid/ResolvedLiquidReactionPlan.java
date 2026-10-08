@@ -4,6 +4,7 @@ import cc.ecisr.mmm.chemistry.*;
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import cc.ecisr.mmm.thermal.ThermalDomainState;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -17,7 +18,7 @@ final class ResolvedLiquidReactionPlan {
 		public int compareTo(Group other) { int order = Integer.compare(control, other.control); return order != 0 ? order : Integer.compare(phase, other.phase); }
 	}
 	final CarrierMutationPlan intent;
-	private final SignedDyadic[] volumes, masses;
+	private final ExactVolume[] volumes; private final SignedDyadic[] masses;
 	final ChemicalParcelStore.MarkerRemap chemical;
 	private final int[] dirty;
 	final int cursor;
@@ -44,7 +45,7 @@ final class ResolvedLiquidReactionPlan {
 		intent = CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), domain.particles.count());
 		thermalRevision = thermal == null ? null : thermal.thermalRevision(); chemicalRevision = store.mutationRevision();
 		originalDirty = store.dirtyCells(); originalCursor = store.reactionCursor(); source = store.externalSource(); sink = store.escapedSink();
-		int count = intent.expectedCount(); volumes = new SignedDyadic[count]; originalMass = new SignedDyadic[count]; originalMaterial = new int[count];
+		int count = intent.expectedCount(); volumes = new ExactVolume[count]; originalMass = new SignedDyadic[count]; originalMaterial = new int[count];
 		var records = new ChemicalMixtureRecord[count]; var indicators = new boolean[count];
 		for (int p = 0; p < count; p++) {
 			volumes[p] = domain.particles.exactVolume(p); originalMass[p] = domain.particles.exactMass(p); originalMaterial[p] = domain.particles.materialHandle(p);
@@ -112,7 +113,7 @@ final class ResolvedLiquidReactionPlan {
 	}
 	ChemicalParcelStore.ReactionStats publish() { owner.carrierMutations().publishGeometricReaction(this); return stats; }
 	int markerCount() { return masses.length; }
-	SignedDyadic volume(int marker) { return volumes[marker]; }
+	ExactVolume volume(int marker) { return volumes[marker]; }
 	SignedDyadic mass(int marker) { return masses[marker]; }
 	int[] copyDirtyCells() { return dirty.clone(); }
 	static void requireGeometry(FluidDomain domain) {

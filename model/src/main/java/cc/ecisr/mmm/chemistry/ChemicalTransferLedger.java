@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.chemistry;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -39,8 +40,8 @@ public final class ChemicalTransferLedger {
 	public boolean isEmpty() { return groups.isEmpty(); }
 	public double totalVolume() { return volumeQuantity().toDouble(); }
 	public double totalMass() { return massKilogramsQuantity().toDouble(); }
-	public SignedDyadic volumeQuantity() {
-		var result = SignedDyadic.ZERO;
+	public ExactVolume volumeQuantity() {
+		var result = ExactVolume.ZERO;
 		for (Group group : groups) result = result.add(group.volumeQuantity());
 		return result;
 	}
@@ -72,16 +73,20 @@ public final class ChemicalTransferLedger {
 			double massKilograms,
 			long massResidualKilogramsBits,
 			Map<String, Long> speciesQuanta,
-			SignedDyadic volumeQuantity, SignedDyadic massKilogramsQuantity
+			ExactVolume volumeQuantity, SignedDyadic massKilogramsQuantity
 	) {
 		public Group(String materialId, boolean indicator, double volume, double massKilograms,
 				long massResidualKilogramsBits, Map<String, Long> speciesQuanta) {
 			this(materialId, indicator, volume, massKilograms, massResidualKilogramsBits, speciesQuanta,
-					SignedDyadic.of(volume), SignedDyadic.of(massKilograms));
+					ExactVolume.of(volume), SignedDyadic.of(massKilograms));
+		}
+		public Group(String materialId, boolean indicator, ExactVolume volume, SignedDyadic massKilograms,
+				long massResidualKilogramsBits, Map<String, Long> speciesQuanta) {
+			this(materialId, indicator, volume.toDouble(), massKilograms.toDouble(), massResidualKilogramsBits, speciesQuanta, volume, massKilograms);
 		}
 		public Group(String materialId, boolean indicator, SignedDyadic volume, SignedDyadic massKilograms,
 				long massResidualKilogramsBits, Map<String, Long> speciesQuanta) {
-			this(materialId, indicator, volume.toDouble(), massKilograms.toDouble(), massResidualKilogramsBits, speciesQuanta, volume, massKilograms);
+			this(materialId, indicator, ExactVolume.of(volume), massKilograms, massResidualKilogramsBits, speciesQuanta);
 		}
 		public Group {
 			ChemicalIds.requireId(materialId, "chemical ledger material id");
@@ -129,12 +134,14 @@ public final class ChemicalTransferLedger {
 			return add(new Group(materialId, indicator, volume, massKilograms,
 					mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry)));
 		}
-		public Builder add(String materialId, boolean indicator, SignedDyadic volume, SignedDyadic massKilograms,
+		public Builder add(String materialId, boolean indicator, ExactVolume volume, SignedDyadic massKilograms,
 				ChemicalMixtureRecord mixture) {
 			if (mixture == null) throw new IllegalArgumentException("Chemical transfer mixture is missing");
 			return add(new Group(materialId, indicator, volume, massKilograms,
 					mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry)));
 		}
+		public Builder add(String materialId, boolean indicator, SignedDyadic volume, SignedDyadic massKilograms,
+				ChemicalMixtureRecord mixture) { return add(materialId, indicator, ExactVolume.of(volume), massKilograms, mixture); }
 
 		public Builder add(Group group) {
 			groups.computeIfAbsent(new Key(group.materialId(), group.indicator()),
@@ -165,7 +172,7 @@ public final class ChemicalTransferLedger {
 		private final boolean indicator;
 		// These are independent truth columns. Aggregate their binary values exactly and round once;
 		// ordinary += accumulates enough drift in a full demo region to falsify a closed mass ledger.
-		private SignedDyadic volume = SignedDyadic.ZERO;
+		private ExactVolume volume = ExactVolume.ZERO;
 		private SignedDyadic massKilograms = SignedDyadic.ZERO;
 		private SignedDyadic residual = SignedDyadic.ZERO;
 		private final TreeMap<String, Long> species = new TreeMap<>();

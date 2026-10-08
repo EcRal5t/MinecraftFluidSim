@@ -81,8 +81,8 @@ final class RegionCheckpointValidator {
 			RegionManifest.SectionDescriptor descriptor = expected.get(section.key());
 			long volumeBits, massBits;
 			try {
-				volumeBits = Double.doubleToRawLongBits(RegionParticleReconstruction.sectionQuantity(section, inventory, false).toDouble());
-				massBits = manifest.layout().hasMaterials() ? Double.doubleToRawLongBits(RegionParticleReconstruction.sectionQuantity(section, inventory, true).toDouble()) : 0L;
+				volumeBits = Double.doubleToRawLongBits(RegionParticleReconstruction.sectionVolume(section, inventory).toDouble());
+				massBits = manifest.layout().hasMaterials() ? Double.doubleToRawLongBits(RegionParticleReconstruction.sectionMass(section, inventory).toDouble()) : 0L;
 			} catch (IllegalArgumentException invalid) { throw new IOException("Invalid section inventory", invalid); }
 			if (descriptor == null || descriptor.markerCount() != section.markerCount()
 					|| descriptor.volumeBits() != volumeBits || descriptor.massBits() != massBits

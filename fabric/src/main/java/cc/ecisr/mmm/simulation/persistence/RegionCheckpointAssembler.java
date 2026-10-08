@@ -316,8 +316,8 @@ public final class RegionCheckpointAssembler {
 		List<RegionManifest.SectionDescriptor> descriptors = new ArrayList<>(sectionStates.size());
 		for (RegionSectionState section : sectionStates) {
 			descriptors.add(new RegionManifest.SectionDescriptor(section.sectionX(), section.sectionY(), section.sectionZ(),
-					section.markerCount(), Double.doubleToRawLongBits(RegionParticleReconstruction.sectionQuantity(section, particles.inventory(), false).toDouble()),
-					section.layout().hasMaterials() ? Double.doubleToRawLongBits(RegionParticleReconstruction.sectionQuantity(section, particles.inventory(), true).toDouble()) : 0L, section.checksum()));
+					section.markerCount(), Double.doubleToRawLongBits(RegionParticleReconstruction.sectionVolume(section, particles.inventory()).toDouble()),
+					section.layout().hasMaterials() ? Double.doubleToRawLongBits(RegionParticleReconstruction.sectionMass(section, particles.inventory()).toDouble()) : 0L, section.checksum()));
 		}
 		List<RegionManifest.MaterialLedger> materialLedgers = materialLedgers(particles);
 		List<RegionExtension> manifestExtensions = new ArrayList<>();

@@ -1,18 +1,24 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 
 /** Immutable extensive liquid quantities; floating-point carrier columns are their observations. */
 public final class LiquidInventoryState {
-	private final SignedDyadic[] volume, mass;
-	private final SignedDyadic totalVolume, totalMass;
+	private final ExactVolume[] volume;
+	private final SignedDyadic[] mass;
+	private final ExactVolume totalVolume;
+	private final SignedDyadic totalMass;
 	private final long cpuBytes;
 
 	public LiquidInventoryState(SignedDyadic[] volume, SignedDyadic[] mass) {
+		this(volume == null ? null : java.util.Arrays.stream(volume).map(ExactVolume::of).toArray(ExactVolume[]::new), mass);
+	}
+	public LiquidInventoryState(ExactVolume[] volume, SignedDyadic[] mass) {
 		if (volume == null || mass == null || volume.length != mass.length)
 			throw new IllegalArgumentException("Liquid inventory columns disagree");
 		this.volume = volume.clone(); this.mass = mass.clone();
-		var v = SignedDyadic.ZERO; var m = SignedDyadic.ZERO; long bytes = 0;
+		var v = ExactVolume.ZERO; var m = SignedDyadic.ZERO; long bytes = 0;
 		for (int p = 0; p < volume.length; p++) {
 			bytes = Math.addExact(bytes, quantityBytes(this.volume[p]) + quantityBytes(this.mass[p]));
 			if (!Float.isFinite(this.volume[p].toFloat())) throw new IllegalArgumentException("Liquid volume exceeds carrier observation range");
@@ -24,11 +30,16 @@ public final class LiquidInventoryState {
 	}
 
 	public int count() { return volume.length; }
-	public SignedDyadic volume(int marker) { return volume[marker]; }
+	public ExactVolume volume(int marker) { return volume[marker]; }
 	public SignedDyadic mass(int marker) { return mass[marker]; }
-	public SignedDyadic totalVolume() { return totalVolume; }
+	public ExactVolume totalVolume() { return totalVolume; }
 	public SignedDyadic totalMass() { return totalMass; }
 	public long cpuBytes() { return cpuBytes; }
+	private static long quantityBytes(ExactVolume value) {
+		double observed = value == null ? Double.NaN : value.toDouble();
+		if (!(observed > 0) || !Double.isFinite(observed)) throw new IllegalArgumentException("Liquid volume has no positive finite observation");
+		return 64L + (value.numerator().abs().bitLength() + value.denominator().bitLength() + 7L) / 8;
+	}
 	private static long quantityBytes(SignedDyadic value) {
 		double observed = value == null ? Double.NaN : value.toDouble();
 		if (!(observed > 0) || !Double.isFinite(observed)) throw new IllegalArgumentException("Liquid inventory quantity has no positive finite observation");

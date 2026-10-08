@@ -7,6 +7,7 @@ import cc.ecisr.mmm.fluid.air.GasComponentAmount;
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 import cc.ecisr.mmm.simulation.FullCapabilityTestFixture;
 
 /**
@@ -39,6 +40,8 @@ public final class CarrierMutationValidation {
 		nativeThermalObservationUsesOccupiedGeometry();
 		nativeConductionPublishesCaloricInventory();
 		nativeLocalInventoryCarriesMaterialAndEnergy();
+		nativeRationalVolumesCarryInventories();
+		nativeRefinedMechanicsCarriesChemicalInventory();
 		nativeLocalInventoryUsesMechanicalBackend();
 		nativeMechanicalRegridCarriesChemicalInventory();
 		nativePhysicalPhaseReconstructionCarriesInventories();
@@ -52,10 +55,10 @@ public final class CarrierMutationValidation {
 				java.util.List.of(BuiltinFluidMaterials.WATER), new float[]{0.25F, 0.25F, 0.25F, midpoint.toFloat()}, new float[3],
 				new byte[8], new double[]{1000}, new int[1], null, single);
 		require(observed.particles().totalVolume() == Math.nextUp(1.0F), "handoff rounded its extensive volume through binary64");
-		var v = SignedDyadic.of(0.25).add(SignedDyadic.of(1, -81));
+		var v = ExactVolume.of(SignedDyadic.of(0.25).add(SignedDyadic.of(1, -81)));
 		var m = SignedDyadic.of(250).add(SignedDyadic.of(1, -101));
-		var columns = new SignedDyadic[]{v, v}; var quantities = new LiquidInventoryState(columns, new SignedDyadic[]{m, m});
-		columns[0] = SignedDyadic.of(1);
+		var columns = new ExactVolume[]{v, v}; var quantities = new LiquidInventoryState(columns, new SignedDyadic[]{m, m});
+		columns[0] = ExactVolume.of(1);
 		require(quantities.volume(0).equals(v), "extensive inventory retained mutable source columns");
 		var extent = Fraction.of(v.add(v)).divide(Fraction.of(8));
 		var occupied = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(LiquidGeometryPlane.exact(java.util.List.of(
@@ -240,13 +243,40 @@ public final class CarrierMutationValidation {
 				"mechanical local inventory candidate changed external energy or its committed input");
 		LiquidGeometryStateMapper.requireCompatible(result.liquidGeometryState, result);
 	}
-	private static void nativeMechanicalRegridCarriesChemicalInventory() throws Exception {
+	private static FullCapabilityTestFixture.Registries capillaryRegistries() throws Exception {
 		var registries = FullCapabilityTestFixture.load();
 		var liquids = new FluidMaterialRegistry(registries.liquids().materials().stream().map(material -> material.id().equals("mmm:water")
 				? FluidMaterial.withSurfaceTension(material.id(), material.referenceDensity(), material.miscibilityGroup(), 0.125, 60) : material).toList());
 		var definitions = new MaterialRegistry(registries.materials().entries().stream().map(entry -> entry.material().id().equals("mmm:water")
 				? new MaterialRegistry.MaterialEntry(liquids.material(0), entry.viscosity()) : entry).toList(), registries.materials().pairTensions());
-		registries = new FullCapabilityTestFixture.Registries(liquids, registries.chemical(), registries.granular(), registries.gas(), registries.thermal(), definitions);
+		return new FullCapabilityTestFixture.Registries(liquids, registries.chemical(), registries.granular(), registries.gas(), registries.thermal(), definitions);
+	}
+	private static void nativeRefinedMechanicsCarriesChemicalInventory() throws Exception {
+		var registries = capillaryRegistries(); var zero = java.math.BigInteger.ZERO;
+		var shape = LiquidPolyhedron.box(0.25, 0, 0.25, 0.75, 1.0 / 64, 0.75).clip(LiquidGeometryPlane.exact(java.util.List.of(
+				java.math.BigInteger.valueOf(8), java.math.BigInteger.valueOf(192), zero, java.math.BigInteger.valueOf(6))));
+		var geometry = LiquidGeometryStateMapper.capture(java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)), 1, new int[]{0});
+		var center = shape.centroid(); var config = new FluidSolverConfig(0.5F, 1000, 0, 1.0F / 65536, 512, 1e-7F, 0.45F, 0.002F, 0.8F);
+		var domain = new FluidDomain(2, 2, 2, config);
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 1, 5.0 / 256, 5000.0 / 256, registries.liquids().materials(),
+				new float[]{(float) center.x(), (float) center.y(), (float) center.z(), 5.0F / 256}, new float[3], new byte[8], new double[]{5000.0 / 256}, new int[]{0}, geometry));
+		domain.sealDomainBoundary(); FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		domain.setPrecipitationEnabled(false);
+		var inventory = domain.particles.inventory(); var species = domain.chemicalLedgerForMarkerRange(0, 1).groups().getFirst().speciesQuanta();
+		var candidate = new CpuFluidSolverBackend().evaluate(FluidStepRequest.pendingPhaseSettlement(0, domain.captureAuthoritativeState()));
+		var next = FluidDomain.restoreAuthoritativeState(candidate.state());
+		new ResolvedLiquidReactionPlan(next).publish();
+		require(domain.particles.count() == 1 && domain.liquidGeometryState == geometry && domain.particles.inventory().totalVolume().equals(inventory.totalVolume()),
+				"refined backend candidate mutated its committed input");
+		require(next.particles.count() == 8 && candidate.stats().geometry().inventory().repartitions() == 1
+				&& java.util.Arrays.equals(next.liquidGeometryState.copyControlCells(), next.liquidGeometryState.copyFragmentOwners())
+				&& next.particles.inventory().totalVolume().equals(inventory.totalVolume()) && next.particles.inventory().totalMass().equals(inventory.totalMass())
+				&& next.chemicalLedgerForMarkerRange(0, 8).groups().getFirst().speciesQuanta().equals(species)
+				&& java.util.stream.IntStream.range(0, 8).anyMatch(p -> next.particles.exactVolume(p).denominator().bitCount() != 1)
+				&& next.exactInternalEnergy().equals(next.thermalAudit().expectedInventory()), "refined mechanical and reaction publication lost independent rational stocks or conservation");
+	}
+	private static void nativeMechanicalRegridCarriesChemicalInventory() throws Exception {
+		var registries = capillaryRegistries(); var liquids = registries.liquids();
 		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0, 0.25, 0.75, 0.625, 0.75)));
 		var geometry = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0}, new int[cells.size()]);
 		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 1.0F / 128, 512, 1e-7F, 0.45F, 0.002F, 0.8F));
@@ -313,7 +343,7 @@ public final class CarrierMutationValidation {
 		tagged.chemicalParcels.assign(1, tagged.chemicalParcels.record(1), true);
 		var taggedVolume = tagged.particles.exactVolume(1); var taggedMass = tagged.particles.exactMass(1);
 		tagged.carrierMutations().publishGeometricRepartition(new LiquidInventoryRepartitionPlan(tagged));
-		var taggedOutputVolume = SignedDyadic.ZERO; var taggedOutputMass = SignedDyadic.ZERO;
+		var taggedOutputVolume = ExactVolume.ZERO; var taggedOutputMass = SignedDyadic.ZERO;
 		for (int p = 0; p < tagged.particles.count(); p++) if (tagged.chemicalParcels.indicator(p)) {
 			taggedOutputVolume = taggedOutputVolume.add(tagged.particles.exactVolume(p)); taggedOutputMass = taggedOutputMass.add(tagged.particles.exactMass(p));
 		}
@@ -360,6 +390,32 @@ public final class CarrierMutationValidation {
 	}
 	private static FluidDomain localInventoryFixture(int capacity) throws Exception {
 		return localInventoryFixture(capacity, false);
+	}
+	private static void nativeRationalVolumesCarryInventories() throws Exception {
+		var domain = localInventoryFixture(16); var input = domain.liquidGeometryState;
+		var box = LiquidPolyhedron.box(0, 0, 0, 1, 1, 0.5); var zero = java.math.BigInteger.ZERO;
+		var plane = java.util.List.of(java.math.BigInteger.valueOf(3), zero, zero, java.math.BigInteger.ONE);
+		var cells = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, box.clip(LiquidGeometryPlane.exact(plane))),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, box.clip(LiquidGeometryPlane.exact(plane.stream().map(java.math.BigInteger::negate).toList()))));
+		domain.liquidGeometryState = LiquidGeometryStateMapper.capture(cells, 1, input.copyMarkerCells(), input.copyFragmentOwners(),
+				new double[]{0.25, 0, 0, 0.75, 0, 0});
+		for (int p = 0; p < 2; p++) domain.particles.setVelocityX(p, 7.0F / 12);
+		var original = domain.particles.inventory(); var energy = domain.exactInternalEnergy(); var audit = domain.thermalAudit();
+		var species = domain.chemicalLedgerForMarkerRange(0, 2).groups().getFirst().speciesQuanta();
+		var plan = new LiquidInventoryRepartitionPlan(domain); domain.carrierMutations().publishGeometricRepartition(plan);
+		var third = new ExactVolume(java.math.BigInteger.valueOf(4), java.math.BigInteger.valueOf(3));
+		require(domain.particles.exactVolume(0).equals(third) && domain.particles.exactVolume(1).equals(third.add(third))
+				&& domain.particles.inventory().totalVolume().equals(original.totalVolume()) && domain.particles.inventory().totalMass().equals(original.totalMass())
+				&& domain.chemicalLedgerForMarkerRange(0, 2).groups().getFirst().speciesQuanta().equals(species), "rational controls changed their exact geometry, material mass or species");
+		require(domain.exactInternalEnergy().subtract(energy).equals(plan.energyRoundoff) && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+				&& audit.externalSource().equals(domain.thermalAudit().externalSource()) && audit.externalSink().equals(domain.thermalAudit().externalSink()), "rational control allocation changed its caloric accounting");
+		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.particles.exactVolume(0).equals(third) && !new LiquidInventoryRepartitionPlan(restored).changed(), "cold handoff rounded a rational control volume");
+		new ResolvedLiquidReactionPlan(restored).publish(); LiquidGeometryStateMapper.requireCompatible(restored.liquidGeometryState, restored);
+		var clear = restored.planRemoveAllWaterExact(); restored.commitRemoveAllWaterExact(clear);
+		var encoded = cc.ecisr.mmm.chemistry.ChemicalAuditLedgerCodec.encode(restored.chemicalParcels.externalSource(), restored.chemicalParcels.escapedSink());
+		var decoded = cc.ecisr.mmm.chemistry.ChemicalAuditLedgerCodec.decode(encoded);
+		require(decoded.escapedSink().volumeQuantity().equals(original.totalVolume()) && restored.particles.count() == 0, "rational inventory clear lost its exact audit checkpoint");
 	}
 	private static FluidDomain localInventoryFixture(int capacity, boolean uneven) throws Exception {
 		var registries = FullCapabilityTestFixture.load();
@@ -654,7 +710,7 @@ public final class CarrierMutationValidation {
 		}
 		var beforeAtMost = domain.particles.inventory().totalVolume();
 		var added = domain.addVolumeNearBudgeted(3, 1, 1, 0.03125F, 0);
-		require(added.addedVolume() == 0.03125F && domain.particles.inventory().totalVolume().subtract(beforeAtMost).equals(SignedDyadic.of(0.03125))
+		require(added.addedVolume() == 0.03125F && domain.particles.inventory().totalVolume().subtract(beforeAtMost).equals(ExactVolume.of(0.03125))
 				&& domain.exportGasState("").nodes().getFirst().inventory().equals(gasAfter.nodes().getFirst().inventory())
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "at-most injection changed gas or liquid extensive quantities");
 		FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());

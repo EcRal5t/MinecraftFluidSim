@@ -2,6 +2,7 @@ package cc.ecisr.mmm.fluid;
 
 import java.util.Arrays;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ExactVolume;
 
 /**
  * Unique owner of the authoritative liquid marker columns: position, velocity, volume, solver
@@ -20,7 +21,7 @@ final class LiquidParticleStore {
 	private float[] velocityZ;
 	private float[] volume;
 	private double[] mass;
-	private SignedDyadic[] exactVolume, exactMass;
+	private ExactVolume[] exactVolume; private SignedDyadic[] exactMass;
 	private int[] materialHandle;
 	private int[] phaseLabel;
 
@@ -36,7 +37,7 @@ final class LiquidParticleStore {
 		this.velocityZ = new float[initialCapacity];
 		this.volume = new float[initialCapacity];
 		this.mass = new double[initialCapacity];
-		this.exactVolume = new SignedDyadic[initialCapacity];
+		this.exactVolume = new ExactVolume[initialCapacity];
 		this.exactMass = new SignedDyadic[initialCapacity];
 		this.materialHandle = new int[initialCapacity];
 		this.phaseLabel = new int[initialCapacity];
@@ -80,20 +81,21 @@ final class LiquidParticleStore {
 
 	void setMass(int index, double value) { mass[index] = value; exactMass[index] = null; }
 
-	SignedDyadic exactVolume(int index) { return exactVolume[index] == null ? SignedDyadic.of(volume[index]) : exactVolume[index]; }
+	ExactVolume exactVolume(int index) { return exactVolume[index] == null ? ExactVolume.of(volume[index]) : exactVolume[index]; }
 	SignedDyadic exactMass(int index) { return exactMass[index] == null ? SignedDyadic.of(mass[index]) : exactMass[index]; }
-	void setQuantities(int index, SignedDyadic v, SignedDyadic m) {
+	void setQuantities(int index, SignedDyadic v, SignedDyadic m) { setQuantities(index, ExactVolume.of(v), m); }
+	void setQuantities(int index, ExactVolume v, SignedDyadic m) {
 		volume[index] = v.toFloat(); mass[index] = m.toDouble();
-		exactVolume[index] = v.equals(SignedDyadic.of(volume[index])) ? null : v;
+		exactVolume[index] = v.equals(ExactVolume.of(volume[index])) ? null : v;
 		exactMass[index] = m.equals(SignedDyadic.of(mass[index])) ? null : m;
 	}
 	LiquidInventoryState inventory() {
-		var v = new SignedDyadic[count]; var m = new SignedDyadic[count];
+		var v = new ExactVolume[count]; var m = new SignedDyadic[count];
 		for (int p = 0; p < count; p++) { v[p] = exactVolume(p); m[p] = exactMass(p); }
 		return new LiquidInventoryState(v, m);
 	}
-	SignedDyadic totalVolume() {
-		var total = SignedDyadic.sum(volume, count);
+	ExactVolume totalVolume() {
+		var total = ExactVolume.of(SignedDyadic.sum(volume, count));
 		for (int p = 0; p < count; p++) if (exactVolume[p] != null) total = total.add(exactVolume[p].subtract(SignedDyadic.of(volume[p])));
 		return total;
 	}
