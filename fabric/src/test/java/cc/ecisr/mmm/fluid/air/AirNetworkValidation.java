@@ -18,6 +18,7 @@ public final class AirNetworkValidation {
 		validateSplitMergeVentLedger();
 		validateAmbientInteraction();
 		validateComponentTransport();
+		validateCompleteInventorySum();
 		validateComponentSpeciesBoundary();
 		validatePhaseColumnTake();
 		validateGuards();
@@ -348,6 +349,27 @@ public final class AirNetworkValidation {
 		check(parts.get(0).standardVolumeNanos() == 1 && parts.get(1).standardVolumeNanos() == 2
 				&& parts.get(0).merge(parts.get(1)).equals(small),
 				"geometric overlap rounding erased the exact largest remainder or failed to conserve inventory");
+	}
+
+	private static void validateCompleteInventorySum() {
+		var signedZero = new GasInventory(List.of(new GasComponentAmount("test:alpha", 1, 1, List.of(), -0.0)));
+		check(GasInventory.sum(List.of(GasInventory.EMPTY, signedZero)).equals(signedZero), "single gas contribution changed raw residual bits");
+		var contributions = new java.util.ArrayList<GasInventory>();
+		for (double mass : new double[]{1, 0x1.0p-53, 0x1.0p-53}) contributions.add(new GasInventory(List.of(
+				new GasComponentAmount("test:alpha", 7, mass, List.of(new GasComponentAmount.SpeciesAmount("test:a", 3)), mass))));
+		var expected = new GasInventory(List.of(new GasComponentAmount("test:alpha", 21, Math.nextUp(1.0),
+				List.of(new GasComponentAmount.SpeciesAmount("test:a", 9)), Math.nextUp(1.0))));
+		check(!contributions.get(0).merge(contributions.get(1)).merge(contributions.get(2)).equals(expected),
+				"inventory sum fixture did not expose repeated binary rounding");
+		for (int first = 0; first < 3; first++) for (int second = 0; second < 3; second++) if (first != second)
+			check(GasInventory.sum(List.of(GasInventory.EMPTY, contributions.get(first), contributions.get(second),
+						contributions.get(3 - first - second))).equals(expected), "gas stock sum depends on traversal order");
+		var cancellation = new java.util.ArrayList<GasInventory>();
+		for (double residual : new double[]{Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE}) cancellation.add(
+				new GasInventory(List.of(new GasComponentAmount("test:beta", 1, 1, List.of(), residual))));
+		check(GasInventory.sum(cancellation).component("test:beta").massResidual() == Double.MAX_VALUE,
+				"finite complete residual sum overflowed an intermediate observation");
+		expectThrow(() -> GasInventory.sum(List.of(cancellation.get(0), cancellation.get(1))), "unrepresentable complete residual sum");
 	}
 
 	private static void validateComponentSpeciesBoundary() {

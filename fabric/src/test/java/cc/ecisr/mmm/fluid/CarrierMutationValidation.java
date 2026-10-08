@@ -2,6 +2,8 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
+import cc.ecisr.mmm.fluid.air.GasInventory;
+import cc.ecisr.mmm.fluid.air.GasComponentAmount;
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 import cc.ecisr.mmm.units.SignedDyadic;
@@ -32,6 +34,7 @@ public final class CarrierMutationValidation {
 		nativeSourceBatchMovesGeometryAndSideColumns();
 		nativeExtractionMovesGeometryAndSideColumns();
 		nativeGasMotionCarriesEnergy();
+		nativeGasMergeRoundsCompleteMassOnce();
 		nativePhaseReconstructionKeepsEnergy();
 		nativeThermalObservationUsesOccupiedGeometry();
 		nativeConductionPublishesCaloricInventory();
@@ -494,6 +497,44 @@ public final class CarrierMutationValidation {
 			FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		});
 	}
+	private static void nativeGasMergeRoundsCompleteMassOnce() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		var domain = new FluidDomain(2, 2, 2, config(), 16);
+		var cells = new java.util.ArrayList<LiquidGeometryRefinement.Cell>();
+		for (double y : new double[]{0.25, 0.75}) cells.add(new LiquidGeometryRefinement.Cell(0, 0, 0, 0,
+				LiquidPolyhedron.box(0, y - 1.0 / 1024, 0, 1, y + 1.0 / 1024, 1)));
+		var geometry = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0, 1});
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 2, 1.0 / 32, 1000.0 / 32,
+				registries.liquids().materials(), new float[]{0.5F, 0.25F, 0.5F, 1.0F / 64, 0.5F, 0.75F, 0.5F, 1.0F / 64},
+				new float[6], new byte[8], new double[]{1000.0 / 64, 1000.0 / 64}, new int[2], geometry));
+		domain.sealDomainBoundary(); domain.bindChemistry(registries.chemical());
+		domain.bindGasRegistry(registries.gas()); domain.bootstrapGasState(registries.chemical().fingerprint());
+		require(domain.gasState.network.nodeCount() == 3, "complete gas mass fixture needs three chambers");
+		var stocks = new java.util.ArrayList<GasInventory>(); var capacities = new double[3];
+		for (int node = 1; node <= 3; node++) {
+			var components = new java.util.ArrayList<>(domain.gasState.network.inventory(node).components());
+			var old = components.getFirst(); double mass = node == 1 ? 1 : 0x1.0p-53;
+			components.set(0, new GasComponentAmount(old.componentId(), old.standardVolumeNanos(), mass, old.species(), mass));
+			stocks.add(new GasInventory(components)); capacities[node - 1] = domain.gasState.network.availableVolume(node);
+		}
+		domain.gasState.network.remapNodes(capacities, stocks, GasInventory.EMPTY, GasInventory.EMPTY);
+		domain.bindThermal(registries.thermal(), domain.materialRegistry(), GasRegistry.STANDARD_TEMPERATURE_K);
+		var before = domain.exportGasState(registries.chemical().fingerprint()); var energy = domain.exactInternalEnergy();
+		var roundoff = domain.thermalAudit().roundoffResidual(); var work = domain.thermalAudit().mechanicalWork();
+		var plan = domain.planRemoveAllWaterExact(); var removed = plan.internalEnergy(); domain.commitRemoveAllWaterExact(plan);
+		var after = domain.exportGasState(registries.chemical().fingerprint());
+		var expected = GasInventory.sum(stocks);
+		require(after.nodes().size() == 1 && after.nodes().getFirst().inventory().equals(expected)
+				&& expected.components().getFirst().mass() == Math.nextUp(1.0) && expected.components().getFirst().massResidual() == Math.nextUp(1.0),
+				"joint geometry publication rounded gas masses before all three chamber contributions were available");
+		require(before.externalSource().equals(after.externalSource()) && before.escapedSink().equals(after.escapedSink())
+				&& domain.thermalAudit().mechanicalWork().equals(work) && domain.exactInternalEnergy().add(removed).subtract(energy)
+				.equals(domain.thermalAudit().roundoffResidual().subtract(roundoff)) && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"gas merge invented material source, sink or reversible expansion work");
+		var saved = domain.captureAuthoritativeState(); var cold = FluidDomain.restoreAuthoritativeState(saved);
+		FluidDomainStateAssertions.assertSameState(saved, cold.captureAuthoritativeState(), "complete gas merge cold restore");
+	}
+
 	private static void nativeExtractionMovesGeometryAndSideColumns() throws Exception {
 		var domain = emptyMaterialDomain(4096);
 		domain.liquidGeometryState = new LiquidGeometryState(2, java.util.List.of(), new int[0]);

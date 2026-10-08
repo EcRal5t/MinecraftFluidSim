@@ -36,14 +36,14 @@ final class ResolvedGasVolumeEditPlan {
 		var overlap = new ResolvedGasOverlap(previous, geometry, 4_194_304);
 		var volumes = ResolvedGasGeometry.volumes(previous);
 		var capacities = ResolvedGasStateLifecycle.available(derived.volumes);
-		var quantities = new ArrayList<GasInventory>();
-		for (int n = 0; n < capacities.length; n++) quantities.add(GasInventory.EMPTY);
+		var contributions = new ArrayList<ArrayList<GasInventory>>();
+		for (int n = 0; n < capacities.length; n++) contributions.add(new ArrayList<>());
 		boolean hasEnergy = thermal != null && thermal.gasModelBound();
 		var energies = new SignedDyadic[capacities.length]; Arrays.fill(energies, SignedDyadic.ZERO);
 		var inherited = new Fraction[capacities.length]; Arrays.fill(inherited, Fraction.ZERO);
 		var covered = new Fraction[geometry.nodeCount() + 1]; Arrays.fill(covered, Fraction.ZERO);
 		var nextVolumes = derived.volumes;
-		var source = GasInventory.EMPTY; var sink = GasInventory.EMPTY;
+		var sources = new ArrayList<GasInventory>(); var sinks = new ArrayList<GasInventory>();
 		var sourceEnergy = SignedDyadic.ZERO; var sinkEnergy = SignedDyadic.ZERO;
 		for (int old = 0; old < volumes.length; old++) {
 			var destinations = overlap.destinations(old); var retained = Fraction.ZERO;
@@ -55,7 +55,7 @@ final class ResolvedGasVolumeEditPlan {
 				for (var entry : destinations.entrySet()) if (entry.getKey() > 0) {
 					int node = entry.getKey() - 1; var volume = entry.getValue();
 					var ambient = network.ambientInventory(AirNetwork.nanos(volume.rounded()));
-					quantities.set(node, quantities.get(node).merge(ambient)); source = source.merge(ambient);
+					contributions.get(node).add(ambient); sources.add(ambient);
 					inherited[node] = inherited[node].add(volume);
 					if (hasEnergy) { var u = SignedDyadic.of(thermal.ambientGasEnergy(ambient)); energies[node] = energies[node].add(u); sourceEnergy = sourceEnergy.add(u); }
 				}
@@ -71,9 +71,9 @@ final class ResolvedGasVolumeEditPlan {
 			int part = 0;
 			for (var entry : destinations.entrySet()) {
 				int node = entry.getKey(); var u = SignedDyadic.of(partEnergy[part]);
-				if (node == 0) { sink = sink.merge(parts.get(part)); sinkEnergy = sinkEnergy.add(u); }
+				if (node == 0) { sinks.add(parts.get(part)); sinkEnergy = sinkEnergy.add(u); }
 				else {
-					quantities.set(node - 1, quantities.get(node - 1).merge(parts.get(part))); energies[node - 1] = energies[node - 1].add(u);
+					contributions.get(node - 1).add(parts.get(part)); energies[node - 1] = energies[node - 1].add(u);
 					inherited[node - 1] = inherited[node - 1].add(volumes[old].multiply(entry.getValue()).divide(retained));
 				}
 				part++;
@@ -86,6 +86,8 @@ final class ResolvedGasVolumeEditPlan {
 			inherited[node - 1] = inherited[node - 1].add(vacuum);
 		}
 		var mixed = hasEnergy ? Arrays.stream(energies).mapToDouble(SignedDyadic::toDouble).toArray() : null;
+		var quantities = contributions.stream().map(GasInventory::sum).toList();
+		var source = GasInventory.sum(sources); var sink = GasInventory.sum(sinks);
 		var inheritedVolumes = Arrays.stream(inherited).mapToDouble(Fraction::rounded).toArray();
 		energy = hasEnergy ? thermal.planGasRemap(network, quantities, capacities, mixed, inheritedVolumes, sourceEnergy.toDouble(), sinkEnergy.toDouble()) : null;
 		inventory = network.planRemapNodes(capacities, quantities, source, sink, List.of());
