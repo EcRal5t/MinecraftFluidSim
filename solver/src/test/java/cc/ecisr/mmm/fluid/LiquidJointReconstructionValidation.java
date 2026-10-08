@@ -23,6 +23,7 @@ final class LiquidJointReconstructionValidation {
 		velocityProjectionRefinesSpatialError();
 		volumeRedistributionCarriesConservativeMoments();
 		variableDensityProjectionCarriesLocalInventories();
+		relativeVelocityAccuracyPreservesFramesAndSmallFlows();
 		resolvedLeavesCarryIndependentControls();
 		jointGasReconstructionPreservesMaterialChambers();
 	}
@@ -426,6 +427,57 @@ final class LiquidJointReconstructionValidation {
 					|| !java.util.Arrays.equals(plan.geometry.cells().get(f).copyVelocity(), plan.geometry.cells().get(controls[f]).copyVelocity()))
 				throw new AssertionError("Canonical reconstruction control lost its owner or P0 field");
 		}
+	}
+	private static void relativeVelocityAccuracyPreservesFramesAndSmallFlows() {
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var relative = new LiquidGeometryVelocityProjection.RmsTolerance(0, 0.75);
+		for (double scale : new double[]{1, Math.scalb(1.0, -30), Math.scalb(1.0, -600), Double.MIN_VALUE, Math.scalb(1.0, 600)})
+			for (double frame : new double[]{0, 4, 32}) {
+				var sources = List.of(new LiquidGeometryVelocityProjection.Source(7, 11, Fraction.of(1), root.geometry().clip(1, 0, 0, 0.25), new LiquidPolyhedron.Point((frame + 1) * scale, 0, 0)),
+						new LiquidGeometryVelocityProjection.Source(7, 29, Fraction.of(3), root.geometry().clip(-1, 0, 0, -0.25), new LiquidPolyhedron.Point((frame - 1) * scale, 0, 0)));
+				var limits = relative.squaredLimits(sources); var projection = new LiquidGeometryVelocityProjection(root, sources);
+				var expected = Fraction.of(scale).multiply(Fraction.of(scale)).multiply(new Fraction(java.math.BigInteger.valueOf(81), java.math.BigInteger.valueOf(400)));
+				var whole = projection.values(root).get(7); var observed = Fraction.of(whole.rmsError());
+				var actual = Fraction.of(scale).multiply(new Fraction(java.math.BigInteger.valueOf(3), java.math.BigInteger.valueOf(5)));
+				if (!limits.get(7).equals(expected) || relative.accepts(limits, 7, whole)
+						|| !relative.unresolvedLeaves(limits, List.of(java.util.Map.of(7, whole))).equals(java.util.Set.of(0))
+						|| observed.compareTo(actual) < 0 || observed.subtract(actual).compareTo(Fraction.of(Math.ulp(whole.rmsError())).multiply(Fraction.of(2))) > 0)
+					throw new AssertionError("Relative velocity accuracy lost its frame invariance, scale or bounded subnormal RMS observation");
+				for (var child : LiquidGeometryRefinement.children(root)) for (var grandchild : LiquidGeometryRefinement.children(child)) {
+					var field = projection.values(grandchild).get(7);
+					if (!relative.accepts(limits, 7, field) || field.kineticLoss().signum() != 0)
+						throw new AssertionError("Resolved velocity fields retained a relative projection defect");
+				}
+				var uniform = sources.stream().map(source -> new LiquidGeometryVelocityProjection.Source(source.phase(), source.inventory(), source.density(), source.geometry(), new LiquidPolyhedron.Point(frame * scale, 0, 0))).toList();
+				var uniformLimits = relative.squaredLimits(uniform); var uniformField = new LiquidGeometryVelocityProjection(root, uniform).values(root).get(7);
+				if (uniformLimits.get(7).signum() != 0 || !relative.accepts(uniformLimits, 7, uniformField))
+					throw new AssertionError("Uniform motion acquired a fluctuating velocity error budget");
+			}
+		var sources = new java.util.ArrayList<LiquidGeometryVelocityProjection.Source>();
+		var children = LiquidGeometryRefinement.children(root);
+		for (var child : children) {
+			if (child.minimum(0) == 0.5 && child.minimum(1) == 0 && child.minimum(2) == 0) {
+				sources.add(new LiquidGeometryVelocityProjection.Source(7, child.geometry().clip(1, 0, 0, 0.5 + 1.0 / 128), new LiquidPolyhedron.Point(1, 0, 0)));
+				sources.add(new LiquidGeometryVelocityProjection.Source(7, child.geometry().clip(-1, 0, 0, -0.5 - 1.0 / 128), new LiquidPolyhedron.Point(-1, 0, 0)));
+			} else sources.add(new LiquidGeometryVelocityProjection.Source(7, child.geometry(), new LiquidPolyhedron.Point(child.minimum(0) == 0 ? 1 : -1, 0, 0)));
+		}
+		var integrated = new LiquidGeometryVelocityProjection.RmsTolerance(0, 0.125);
+		var limits = integrated.squaredLimits(sources); var projection = new LiquidGeometryVelocityProjection(root, sources);
+		var fields = children.stream().map(projection::values).toList();
+		var loss = fields.stream().map(field -> field.get(7).kineticLoss()).reduce(Fraction.ZERO, Fraction::add);
+		if (!loss.equals(new Fraction(java.math.BigInteger.valueOf(63), java.math.BigInteger.valueOf(16384)))
+				|| fields.stream().allMatch(field -> integrated.accepts(limits, 7, field.get(7)))
+				|| !integrated.unresolvedLeaves(limits, fields).isEmpty()
+				|| integrated.unresolvedLeaves(limits, List.of(projection.values(root))).isEmpty())
+			throw new AssertionError("Integrated phase accuracy over-refined a small-mass defect or erased the complete fluctuating field");
+		var defects = new java.util.ArrayList<java.util.Map<Integer, LiquidGeometryVelocityProjection.Value>>();
+		for (double defect : new double[]{1.0 / 32, 1.0 / 4, 1.0 / 16}) {
+			var value = LiquidGeometryVelocityProjection.observe(Fraction.of(1), Fraction.of(1), java.util.Map.of(0, Fraction.of(1)),
+					List.of(Fraction.ZERO, Fraction.ZERO, Fraction.ZERO), Fraction.of(defect));
+			defects.add(java.util.Map.of(7, value));
+		}
+		if (!integrated.unresolvedLeaves(java.util.Map.of(7, Fraction.of(1.0 / 8)), defects).equals(java.util.Set.of(1)))
+			throw new AssertionError("Integrated defect marking ignored the largest unresolved kinetic contribution");
 	}
 	private static void velocityProjectionRefinesSpatialError() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1); var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);

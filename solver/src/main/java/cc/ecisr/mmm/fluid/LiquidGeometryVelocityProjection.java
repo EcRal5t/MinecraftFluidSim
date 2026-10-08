@@ -24,6 +24,58 @@ final class LiquidGeometryVelocityProjection {
 		int coordinate(int axis) { return axis == 0 ? x : axis == 1 ? y : z; }
 	}
 	private record Key(int phase, int inventory, Fraction density, LiquidPolyhedron.Point velocity) { }
+	record RmsTolerance(double absoluteMetresPerSecond, double relativePhaseFluctuation) {
+		RmsTolerance {
+			if (!(absoluteMetresPerSecond >= 0) || !Double.isFinite(absoluteMetresPerSecond)
+					|| !(relativePhaseFluctuation >= 0 && relativePhaseFluctuation < 1)
+					|| absoluteMetresPerSecond != 0 && relativePhaseFluctuation != 0)
+				throw new IllegalArgumentException("Invalid reconstruction velocity accuracy");
+		}
+		Map<Integer, Fraction> squaredLimits(List<Source> sources) {
+			var absolute = Fraction.of(absoluteMetresPerSecond);
+			if (relativePhaseFluctuation == 0) return Map.of(-1, absolute.multiply(absolute));
+			var volumes = new LinkedHashMap<Key, Fraction>();
+			for (var source : sources) volumes.merge(new Key(source.phase, source.inventory, source.density, source.velocity), source.geometry.measure().volume(), Fraction::add);
+			var limits = new LinkedHashMap<Integer, Fraction>(); var relative = Fraction.of(relativePhaseFluctuation);
+			for (var entry : moments(volumes).entrySet()) {
+				var field = entry.getValue(); limits.put(entry.getKey(), relative.multiply(relative).multiply(field.kineticLoss).multiply(Fraction.of(2)).divide(field.mass));
+			}
+			return Map.copyOf(limits);
+		}
+		boolean accepts(Map<Integer, Fraction> limits, int phase, Value field) {
+			var limit = limits.getOrDefault(phase, limits.get(-1));
+			if (limit == null) throw new IllegalArgumentException("Reconstruction field has no source phase accuracy");
+			return field.kineticLoss.multiply(Fraction.of(2)).compareTo(field.mass.multiply(limit)) <= 0;
+		}
+		/** Mark the largest integrated defects until the unmarked loss fits each phase's complete budget. */
+		java.util.Set<Integer> unresolvedLeaves(Map<Integer, Fraction> limits, List<Map<Integer, Value>> fields) {
+			var selected = new java.util.HashSet<Integer>();
+			if (relativePhaseFluctuation == 0) {
+				for (int l = 0; l < fields.size(); l++) for (var entry : fields.get(l).entrySet())
+					if (!accepts(limits, entry.getKey(), entry.getValue())) selected.add(l);
+				return java.util.Set.copyOf(selected);
+			}
+			for (var phase : limits.entrySet()) {
+				var mass = Fraction.ZERO; var loss = Fraction.ZERO; var candidates = new ArrayList<Integer>();
+				for (int l = 0; l < fields.size(); l++) {
+					var field = fields.get(l).get(phase.getKey()); if (field == null) continue;
+					mass = mass.add(field.mass); loss = loss.add(field.kineticLoss);
+					if (field.kineticLoss.signum() > 0) candidates.add(l);
+				}
+				var excess = loss.subtract(mass.multiply(phase.getValue()).divide(Fraction.of(2)));
+				if (excess.signum() <= 0) continue;
+				candidates.sort((a, b) -> {
+					int order = fields.get(b).get(phase.getKey()).kineticLoss.compareTo(fields.get(a).get(phase.getKey()).kineticLoss);
+					return order == 0 ? Integer.compare(a, b) : order;
+				});
+				for (int leaf : candidates) {
+					selected.add(leaf); excess = excess.subtract(fields.get(leaf).get(phase.getKey()).kineticLoss);
+					if (excess.signum() <= 0) break;
+				}
+			}
+			return java.util.Set.copyOf(selected);
+		}
+	}
 	private record Part(Key field, List<LiquidExactPolygon> faces, Fraction volume) { }
 	private record Projection(List<Part> parts, Map<Integer, Value> values) { }
 	private final Address root;
@@ -64,6 +116,9 @@ final class LiquidGeometryVelocityProjection {
 			var volume = faces == source.faces ? source.volume : LiquidExactPolygon.volume(faces);
 			if (volume.signum() > 0) { retained.add(new Part(source.field, faces, volume)); volumes.merge(source.field, volume, Fraction::add); }
 		}
+		var value = new Projection(List.copyOf(retained), moments(volumes)); cache.put(cell, value); return value;
+	}
+	private static Map<Integer, Value> moments(Map<Key, Fraction> volumes) {
 		var grouped = new LinkedHashMap<Integer, ArrayList<Map.Entry<Key, Fraction>>>();
 		for (var entry : volumes.entrySet()) grouped.computeIfAbsent(entry.getKey().phase, ignored -> new ArrayList<>()).add(entry);
 		var result = new LinkedHashMap<Integer, Value>();
@@ -80,7 +135,7 @@ final class LiquidGeometryVelocityProjection {
 			}
 			result.put(group.getKey(), observe(volume, mass, inventories, List.of(momentum), before));
 		}
-		var value = new Projection(List.copyOf(retained), Map.copyOf(result)); cache.put(cell, value); return value;
+		return Map.copyOf(result);
 	}
 	static Value observe(Fraction volume, Fraction mass, Map<Integer, Fraction> inventories, List<Fraction> momentum, Fraction before) {
 			if (volume == null || volume.signum() <= 0 || mass == null || mass.signum() <= 0 || inventories == null || inventories.isEmpty()
@@ -104,7 +159,24 @@ final class LiquidGeometryVelocityProjection {
 			var loss = before.subtract(projected);
 			if (loss.signum() < 0) throw new IllegalStateException("Conservative P0 projection increased exact kinetic energy");
 			var squaredError = loss.multiply(Fraction.of(2)).divide(mass);
-			double error = squaredError.signum() == 0 ? 0 : Math.nextUp(Math.sqrt(Math.nextUp(squaredError.rounded())));
+			double error = squareRootUpper(squaredError);
 			return new Value(volume, mass, Map.copyOf(inventories), List.copyOf(momentum), before, velocity, error, loss, stored.subtract(projected), List.copyOf(bounds));
+	}
+	/** Scale the squared quantity before binary64 observation, retaining subnormal velocity errors. */
+	private static double squareRootUpper(Fraction squared) {
+		if (squared.signum() == 0) return 0;
+		int exponent = squared.numerator().bitLength() - squared.denominator().bitLength();
+		if ((exponent >= 0 ? squared.numerator().compareTo(squared.denominator().shiftLeft(exponent))
+				: squared.numerator().shiftLeft(-exponent).compareTo(squared.denominator())) < 0) exponent--;
+		exponent = 2 * Math.floorDiv(exponent, 2);
+		var scaled = exponent >= 0 ? new Fraction(squared.numerator(), squared.denominator().shiftLeft(exponent))
+				: new Fraction(squared.numerator().shiftLeft(-exponent), squared.denominator());
+		double result = Math.scalb(Math.sqrt(scaled.rounded()), exponent / 2);
+		for (;;) {
+			if (!Double.isFinite(result)) throw new IllegalStateException("Spatial velocity error exceeds its numerical range");
+			var represented = Fraction.of(result);
+			if (represented.multiply(represented).compareTo(squared) >= 0) return result;
+			result = Math.nextUp(result);
+		}
 	}
 }

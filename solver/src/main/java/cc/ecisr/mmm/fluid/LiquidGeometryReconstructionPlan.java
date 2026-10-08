@@ -12,7 +12,8 @@ import java.util.List;
 final class LiquidGeometryReconstructionPlan {
 	record Observation(int owner, LiquidPolyhedron.Point positionMetres, LiquidPolyhedron.Point velocityMetresPerSecond) implements LiquidGeometryPublication.Observation { }
 	/** Extensive terms use the supplied mass measure; geometric-only inputs supply unit density. */
-	record VelocityError(int owner, Fraction volume, Fraction mass, double maximumRmsError, Fraction kineticLoss, Fraction kineticRoundingChange, List<Fraction> momentumRoundingBounds) { }
+	record VelocityError(int owner, Fraction volume, Fraction mass, double maximumRmsError, Fraction kineticLoss, Fraction kineticRoundingChange,
+			List<Fraction> momentumRoundingBounds, Fraction phaseRmsSquaredLimit) { }
 	private static final class VelocityTotals {
 		double rmsError;
 		Fraction loss = Fraction.ZERO, rounding = Fraction.ZERO;
@@ -44,6 +45,14 @@ final class LiquidGeometryReconstructionPlan {
 				domain.geometry.cutCells, List.of(), budget.maximumLeaves()).leaves;
 		return new LiquidGeometryReconstructionPlan(domain, domain.liquidGeometryState, domain.gasState.geometry, open, tolerance, 0, budget, true);
 	}
+	/** Physical-phase regrid bounds integrated RMS loss relative to the original mass-weighted velocity fluctuations. */
+	static LiquidGeometryReconstructionPlan relativeVelocity(FluidDomain domain, LiquidMomentReconstruction.Tolerance tolerance,
+			double relativePhaseFluctuation, LiquidMomentReconstruction.Budget budget) {
+		var open = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
+				domain.geometry.cutCells, List.of(), budget.maximumLeaves()).leaves;
+		return new LiquidGeometryReconstructionPlan(domain, domain.liquidGeometryState, domain.gasState.geometry, open, tolerance,
+				new LiquidGeometryVelocityProjection.RmsTolerance(0, relativePhaseFluctuation), budget, false);
+	}
 
 	LiquidGeometryReconstructionPlan(LiquidGeometryState input, List<LiquidGeometryRefinement.Cell> open,
 			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget) {
@@ -69,8 +78,13 @@ final class LiquidGeometryReconstructionPlan {
 	}
 	private LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
 			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget, boolean retainControls) {
+		this(domain, input, gas, open, tolerance, new LiquidGeometryVelocityProjection.RmsTolerance(maximumRmsVelocityError, 0), budget, retainControls);
+	}
+	private LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
+			LiquidMomentReconstruction.Tolerance tolerance, LiquidGeometryVelocityProjection.RmsTolerance velocityTolerance,
+			LiquidMomentReconstruction.Budget budget, boolean retainControls) {
 		if (input == null || open == null || tolerance == null || budget == null || open.size() > budget.maximumLeaves()
-				|| !(maximumRmsVelocityError >= 0) || !Double.isFinite(maximumRmsVelocityError))
+				|| velocityTolerance == null)
 			throw new IllegalArgumentException("Invalid geometric reconstruction support");
 		if (gas != null && gas.rootWidthMetres() != input.rootWidthMetres()) throw new IllegalArgumentException("Reconstruction phases have different physical roots");
 		this.input = input; previousGasGeometry = gas;
@@ -87,6 +101,7 @@ final class LiquidGeometryReconstructionPlan {
 			var u = input.cells().get(f).copyVelocity();
 			fields.get(part.cell()).add(new LiquidGeometryVelocityProjection.Source(phaseOwners[f], owners[f], densities[f], part.geometry(), new LiquidPolyhedron.Point(u[0], u[1], u[2])));
 		}
+		var velocityLimits = velocityTolerance.squaredLimits(fields.stream().flatMap(List::stream).toList());
 		if (gas != null) {
 			var gasCells = LiquidGeometryStateMapper.restoreCells(gas.cells()); var nodes = gas.nodeOrdinals();
 			for (int f = 0; f < gasCells.size(); f++) for (var part : remap.partitionGeometry(gasCells.get(f).geometry()))
@@ -111,7 +126,9 @@ final class LiquidGeometryReconstructionPlan {
 		while (true) {
 			if (work >= budget.maximumEvaluations()) throw new IllegalStateException("Geometry reconstruction exceeds its evaluation budget");
 			var remaining = new LiquidMomentReconstruction.Budget(budget.maximumLeaves(), budget.maximumEvaluations() - work, budget.maximumRegions());
-			result = LiquidMomentReconstruction.reconstruct(supports, tolerance, remaining, leaf -> ancestor(projections, leaf).accepts(leaf, maximumRmsVelocityError));
+			result = LiquidMomentReconstruction.reconstruct(supports, tolerance, remaining,
+					leaf -> velocityTolerance.relativePhaseFluctuation() > 0 || ancestor(projections, leaf).values(leaf).entrySet().stream()
+							.allMatch(entry -> velocityTolerance.accepts(velocityLimits, entry.getKey(), entry.getValue())));
 			work += result.evaluations();
 			var sources = new ArrayList<LiquidConservativeVolumeRedistribution.Source>(); var targets = new ArrayList<LiquidConservativeVolumeRedistribution.Target>();
 			for (int l = 0; l < result.leaves().size(); l++) {
@@ -120,11 +137,12 @@ final class LiquidGeometryReconstructionPlan {
 				for (var phase : leaf.phases()) if (phase.control() < source.size()) targets.add(new LiquidConservativeVolumeRedistribution.Target(l, phase.control(), LiquidVolumeInterface.measure(phase.pieces()).volume()));
 			}
 			balanced = LiquidConservativeVolumeRedistribution.project(result.leaves().stream().map(LiquidMomentReconstruction.Leaf::open).toList(), sources, targets);
-			if (balanced.fields().stream().flatMap(values -> values.values().stream()).allMatch(value -> value.rmsError() <= maximumRmsVelocityError)) break;
+			var unresolved = velocityTolerance.unresolvedLeaves(velocityLimits, balanced.fields());
+			if (unresolved.isEmpty()) break;
 			var retry = new ArrayList<LiquidMomentReconstruction.Support>();
 			for (int l = 0; l < result.leaves().size(); l++) {
-				var leaf = result.leaves().get(l).open(); boolean resolved = balanced.fields().get(l).values().stream().allMatch(value -> value.rmsError() <= maximumRmsVelocityError);
-				for (var cell : resolved ? List.of(leaf) : LiquidGeometryRefinement.children(leaf)) {
+				var leaf = result.leaves().get(l).open();
+				for (var cell : unresolved.contains(l) ? LiquidGeometryRefinement.children(leaf) : List.of(leaf)) {
 					var original = ancestor(originalSupports, cell); var clipped = new ArrayList<LiquidMomentReconstruction.Source>();
 					for (var group : original.sources()) {
 						var pieces = new ArrayList<LiquidPolyhedron>(); for (var piece : group.pieces()) {
@@ -221,7 +239,10 @@ final class LiquidGeometryReconstructionPlan {
 				throw new IllegalStateException("Geometry reconstruction exceeds its momentum rounding bound");
 			if (!beforeMomentum[old][3].subtract(afterMomentum[next][3]).equals(error.loss.subtract(error.rounding)))
 				throw new IllegalStateException("Geometry reconstruction kinetic change differs from its measured projection defect");
-			errors.add(new VelocityError(next, nextMeasure[next].volume(), massTotals[next], error.rmsError, error.loss, error.rounding, List.of(error.bounds)));
+			var allowedRmsSquared = velocityLimits.getOrDefault(old, velocityLimits.get(-1));
+			if (error.loss.multiply(Fraction.of(2)).compareTo(massTotals[next].multiply(allowedRmsSquared)) > 0)
+				throw new IllegalStateException("Reconstructed physical phase exceeds its complete velocity projection error budget");
+			errors.add(new VelocityError(next, nextMeasure[next].volume(), massTotals[next], error.rmsError, error.loss, error.rounding, List.of(error.bounds), allowedRmsSquared));
 			var center = nextMeasure[next].centroidCoordinates(); var mean = new Fraction[3];
 			for (int a = 0; a < 3; a++) mean[a] = afterMomentum[next][a].divide(massTotals[next]);
 			observations.add(new Observation(next, new LiquidPolyhedron.Point(center[0].multiply(width).rounded(), center[1].multiply(width).rounded(), center[2].multiply(width).rounded()),

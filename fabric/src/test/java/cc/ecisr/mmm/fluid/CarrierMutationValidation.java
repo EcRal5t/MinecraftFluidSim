@@ -194,6 +194,7 @@ public final class CarrierMutationValidation {
 		var sourceEnergy = domain.exactInternalEnergy(); var audit = domain.thermalAudit(); var species = domain.chemicalLedgerForMarkerRange(0, 2);
 		var gas = domain.exportGasState(registries.chemical().fingerprint()); var kinetic = Fraction.of(domain.particleKineticEnergyJoules());
 		mechanicalReconstructionRetainsIndependentFields(domain, speed);
+		relativeReconstructionRetainsSmallPhysicalFlows(domain);
 		var open = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1)));
 		var plan = new LiquidGeometryReconstructionPlan(domain, open, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40), 1,
 				new LiquidMomentReconstruction.Budget(1, 32, 4096));
@@ -231,6 +232,25 @@ public final class CarrierMutationValidation {
 		try { obsolete.publish(domain, stale); throw new AssertionError("physical regrid accepted revised species input"); }
 		catch (IllegalStateException expected) { require(domain.liquidGeometryState == unchanged && domain.particles.count() == expectedControls && domain.exactInternalEnergy().equals(energy),
 				"obsolete scalar regrid partially published liquid or caloric state"); }
+	}
+	private static void relativeReconstructionRetainsSmallPhysicalFlows(FluidDomain input) {
+		var source = input.captureAuthoritativeState(); var domain = FluidDomain.restoreAuthoritativeState(source);
+		var plan = LiquidGeometryReconstructionPlan.relativeVelocity(domain, new LiquidMomentReconstruction.Tolerance(0.01, 0.03), 0.25,
+				new LiquidMomentReconstruction.Budget(64, 256, 4096));
+		require(plan.velocityErrors.stream().allMatch(error -> error.kineticLoss().signum() == 0 && error.maximumRmsError() == 0),
+				"relative physical regrid erased a finite velocity field");
+		new ResolvedGasMotionPlan(domain, plan, 4096, 65536).publish(domain, plan);
+		require(domain.particles.count() >= 2 && domain.particleKineticEnergyJoules() == input.particleKineticEnergyJoules()
+				&& domain.particles.inventory().totalMass().equals(input.particles.inventory().totalMass())
+				&& domain.particles.inventory().totalVolume().equals(input.particles.inventory().totalVolume())
+				&& domain.exactInternalEnergy().equals(input.exactInternalEnergy())
+				&& domain.totalChemicalSpeciesQuanta() == input.totalChemicalSpeciesQuanta(),
+				"relative physical regrid lost kinetic energy or its exact material, caloric and chemical inventories");
+		LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
+		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.particleKineticEnergyJoules() == domain.particleKineticEnergyJoules() && restored.exactInternalEnergy().equals(domain.exactInternalEnergy()),
+				"relative physical regrid lost its cold restored energy field");
+		FluidDomainStateAssertions.assertSameState(source, input.captureAuthoritativeState(), "relative regrid input");
 	}
 	private static void mechanicalReconstructionRetainsIndependentFields(FluidDomain input, double speed) {
 		var source = input.captureAuthoritativeState(); var domain = FluidDomain.restoreAuthoritativeState(source);
