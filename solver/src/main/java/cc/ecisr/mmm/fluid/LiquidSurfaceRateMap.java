@@ -37,9 +37,9 @@ final class LiquidSurfaceRateMap {
 	private List<Map<Integer, Value>> derive(Vertex node) {
 		var result = new java.util.ArrayList<Map<Integer, Value>>();
 		for (int a = 0; a < 3; a++) {
-			var force = new Fraction[3]; Arrays.fill(force, Fraction.ZERO); force[a] = Fraction.of(1);
-			var load = field.observedRateLoad(Map.of(node, List.of(force))); var sparse = new LinkedHashMap<Integer, Value>();
-			for (int f = 0; f < load.length; f++) if ((load[f].value() != 0 || load[f].error() != 0) && field.mesh.faces.get(f).second() != -2) sparse.put(f, load[f]);
+			var force = new Value[3]; Arrays.fill(force, LiquidBoundedArithmetic.ZERO); force[a] = Value.of(Fraction.of(1));
+			var load = field.rateOperator().applySparse(Map.of(node, force)); var sparse = new LinkedHashMap<Integer, Value>();
+			for (var entry : load.entrySet()) if (field.mesh.faces.get(entry.getKey()).second() != -2) sparse.put(entry.getKey(), entry.getValue());
 			result.add(java.util.Collections.unmodifiableMap(sparse));
 		}
 		return List.copyOf(result);

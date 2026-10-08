@@ -23,6 +23,10 @@ final class LiquidConformingRateOperator {
 	private final IntFunction<Fraction[][]> exactMeanBasis;
 	private final Map<Integer, Value[][]> meanBasis = new java.util.HashMap<>();
 	private final Map<Integer, Face> faces = new java.util.HashMap<>();
+	private final Map<Vertex, List<Integer>> apexCells = new LinkedHashMap<>(), centerFaces = new LinkedHashMap<>();
+	private final Map<Integer, List<Integer>> cellTetrahedra = new LinkedHashMap<>();
+	private final List<Vertex> surfaceNodes, cornerNodes;
+	private final Map<Vertex, Integer> surfaceOrder = new LinkedHashMap<>(), cornerOrder = new LinkedHashMap<>();
 
 	LiquidConformingRateOperator(LiquidConformingVelocity field, Map<Vertex, Map<Integer, Fraction>> corners,
 			List<Map<Vertex, Fraction>> faceWeights, Map<Vertex, List<Fraction[]>> walls,
@@ -37,48 +41,73 @@ final class LiquidConformingRateOperator {
 		surfaceWeights = java.util.Collections.unmodifiableMap(restrictions);
 		var projections = new LinkedHashMap<Vertex, Value[][]>(); walls.forEach((point, normals) -> projections.put(point, wallProjection(normals))); this.walls = java.util.Collections.unmodifiableMap(projections);
 		this.meanWeights = meanWeights.stream().map(Value::of).toList();
+		for (int c = 0; c < field.cellApexes.size(); c++) for (var point : field.cellApexes.get(c)) apexCells.computeIfAbsent(point, ignored -> new ArrayList<>()).add(c);
+		for (int f = 0; f < field.faceCenters.size(); f++) centerFaces.computeIfAbsent(field.faceCenters.get(f), ignored -> new ArrayList<>()).add(f);
+		for (int i = 0; i < field.tetrahedra.size(); i++) cellTetrahedra.computeIfAbsent(field.tetrahedra.get(i).cell(), ignored -> new ArrayList<>()).add(i);
+		surfaceNodes = List.copyOf(surfaceWeights.keySet()); cornerNodes = List.copyOf(this.corners.keySet());
+		for (int i = 0; i < surfaceNodes.size(); i++) surfaceOrder.put(surfaceNodes.get(i), i);
+		for (int i = 0; i < cornerNodes.size(); i++) cornerOrder.put(cornerNodes.get(i), i);
+	}
+	/** Visits active transpose dependencies in the forward operator's original reduction order. */
+	Map<Integer, Value> applySparse(Map<Vertex, Value[]> forces) {
+		var nodes = new LinkedHashMap<Vertex, Value[]>(); var primary = new java.util.TreeMap<Integer, Value[]>();
+		for (var entry : forces.entrySet()) {
+			if (!field.velocity.containsKey(entry.getKey()) || entry.getValue().length != 3) throw new IllegalArgumentException("Force has no continuous velocity support");
+			nodes.put(entry.getKey(), entry.getValue().clone());
+			for (int c : apexCells.getOrDefault(entry.getKey(), List.of())) primary.putIfAbsent(c, zero());
+		}
+		var apexForce = new java.util.TreeMap<Integer, Value[]>(); var tetrahedra = new java.util.TreeSet<Integer>();
+		for (var entry : primary.entrySet()) {
+			int c = entry.getKey(); var value = entry.getValue();
+			for (var point : field.cellApexes.get(c)) if (nodes.containsKey(point)) add(value, nodes.get(point));
+			apexForce.put(c, value.clone()); entry.setValue(scale(value, new Value(4, 0)));
+			tetrahedra.addAll(cellTetrahedra.getOrDefault(c, List.of()));
+		}
+		for (int i : tetrahedra) {
+			var tet = field.tetrahedra.get(i); var force = scale(apexForce.get(tet.cell()), meanWeights.get(i));
+			for (int v = 1; v < 4; v++) add(nodes.computeIfAbsent(tet.vertices().get(v), ignored -> zero()), force);
+		}
+		for (var entry : apexForce.entrySet()) for (var point : field.cellApexes.get(entry.getKey()))
+			add(nodes.computeIfAbsent(point, ignored -> zero()), scale(entry.getValue(), Value.of(field.apexWeights.get(point)).negate()));
+		var pending = new java.util.TreeSet<Integer>();
+		for (var point : nodes.keySet()) if (surfaceOrder.containsKey(point)) pending.add(surfaceOrder.get(point));
+		while (!pending.isEmpty()) {
+			int index = pending.pollFirst(); var point = surfaceNodes.get(index); var input = nodes.get(point);
+			for (var weight : surfaceWeights.get(point).entrySet()) {
+				add(nodes.computeIfAbsent(weight.getKey(), ignored -> zero()), scale(input, weight.getValue()));
+				var next = surfaceOrder.get(weight.getKey()); if (next != null && next > index) pending.add(next);
+			}
+		}
+		for (var point : nodes.keySet()) pending.addAll(centerFaces.getOrDefault(point, List.of()));
+		var result = new java.util.TreeMap<Integer, Value>();
+		while (!pending.isEmpty()) {
+			int f = pending.pollFirst(); var input = nodes.get(field.faceCenters.get(f)); var face = faces.computeIfAbsent(f, this::face);
+			result.put(f, dot(face.rate, input)); var preferred = multiply(face.corner, input);
+			for (var weight : faceWeights.get(f).entrySet()) {
+				add(nodes.computeIfAbsent(weight.getKey(), ignored -> zero()), scale(preferred, weight.getValue()));
+				for (int next : centerFaces.getOrDefault(weight.getKey(), List.of())) if (next > f) pending.add(next);
+			}
+		}
+		for (var point : nodes.keySet()) if (cornerOrder.containsKey(point)) pending.add(cornerOrder.get(point));
+		while (!pending.isEmpty()) {
+			var point = cornerNodes.get(pending.pollFirst()); var force = nodes.get(point); var projection = walls.get(point);
+			if (projection != null) force = multiply(projection, force);
+			for (var weight : corners.get(point).entrySet()) add(primary.computeIfAbsent(weight.getKey(), ignored -> zero()), scale(force, weight.getValue()));
+		}
+		for (var entry : primary.entrySet()) if (field.velocity.containsKey(field.cellCenters.get(entry.getKey()))) {
+			int c = entry.getKey(); var basis = meanBasis(c);
+			for (int i = 0; i < basis.length; i++) result.merge(field.mesh.cellFaces[c][i], dot(basis[i], entry.getValue()), Value::add);
+		}
+		result.entrySet().removeIf(entry -> entry.getValue().value() == 0 && entry.getValue().error() == 0);
+		return result;
 	}
 	Value[] apply(Map<Vertex, List<Fraction>> forces) {
 		var observed = new LinkedHashMap<Vertex, Value[]>(); forces.forEach((point, force) -> observed.put(point, force.stream().map(Value::of).toArray(Value[]::new)));
 		return applyObserved(observed);
 	}
 	Value[] applyObserved(Map<Vertex, Value[]> forces) {
-		var nodes = new LinkedHashMap<Vertex, Value[]>(); for (var point : field.velocity.keySet()) nodes.put(point, zero());
-		for (var entry : forces.entrySet()) {
-			if (!nodes.containsKey(entry.getKey()) || entry.getValue().length != 3) throw new IllegalArgumentException("Force has no continuous velocity support");
-			add(nodes.get(entry.getKey()), entry.getValue());
-		}
-		var primary = new Value[field.mesh.cells.size()][3]; for (int c = 0; c < primary.length; c++) {
-			primary[c] = zero(); for (var point : field.cellApexes.get(c)) add(primary[c], nodes.get(point));
-		}
-		var apexForce = java.util.Arrays.stream(primary).map(Value[]::clone).toArray(Value[][]::new);
-		for (int c = 0; c < primary.length; c++) primary[c] = scale(primary[c], new Value(4, 0));
-		for (int i = 0; i < field.tetrahedra.size(); i++) {
-			var tet = field.tetrahedra.get(i); var force = scale(apexForce[tet.cell()], meanWeights.get(i));
-			for (int v = 1; v < 4; v++) add(nodes.get(tet.vertices().get(v)), force);
-		}
-		for (int c = 0; c < primary.length; c++) for (var point : field.cellApexes.get(c))
-			add(nodes.get(point), scale(apexForce[c], Value.of(field.apexWeights.get(point)).negate()));
-		for (var entry : surfaceWeights.entrySet()) {
-			var input = nodes.get(entry.getKey()); if (input == null) continue;
-			for (var weight : entry.getValue().entrySet()) add(nodes.get(weight.getKey()), scale(input, weight.getValue()));
-		}
 		var result = new Value[field.mesh.faces.size()]; java.util.Arrays.fill(result, ZERO);
-		for (int f = 0; f < result.length; f++) {
-			var input = nodes.get(field.faceCenters.get(f)); if (input == null) continue;
-			var face = faces.computeIfAbsent(f, this::face);
-			result[f] = dot(face.rate, input); var preferred = multiply(face.corner, input);
-			for (var weight : faceWeights.get(f).entrySet()) add(nodes.get(weight.getKey()), scale(preferred, weight.getValue()));
-		}
-		for (var corner : corners.entrySet()) {
-			var force = nodes.get(corner.getKey()); var projection = walls.get(corner.getKey());
-			if (projection != null) force = multiply(projection, force);
-			for (var weight : corner.getValue().entrySet()) add(primary[weight.getKey()], scale(force, weight.getValue()));
-		}
-		for (int c = 0; c < primary.length; c++) if (nodes.containsKey(field.cellCenters.get(c))) {
-			var basis = meanBasis(c);
-			for (int i = 0; i < basis.length; i++) { int f = field.mesh.cellFaces[c][i]; result[f] = result[f].add(dot(basis[i], primary[c])); }
-		}
+		applySparse(forces).forEach((face, value) -> result[face] = value);
 		return result;
 	}
 	/** Forward and transpose share every observed geometry coefficient. */
