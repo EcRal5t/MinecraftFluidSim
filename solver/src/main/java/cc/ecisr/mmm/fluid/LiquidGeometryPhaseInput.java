@@ -20,19 +20,19 @@ final class LiquidGeometryPhaseInput {
 	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions) {
 		this(state, domain, sealed, maximumRegions, null, null);
 	}
-	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions, java.util.Set<Integer> refined) {
-		this(state, domain, sealed, maximumRegions, null, java.util.Set.copyOf(refined));
+	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions, java.util.Map<Integer, Integer> refined) {
+		this(state, domain, sealed, maximumRegions, null, java.util.Map.copyOf(refined));
 	}
 	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, GasGeometryState gas, int maximumRegions) {
 		this(state, domain, java.util.Objects.requireNonNull(gas).sealedExterior(), maximumRegions, gas);
 	}
-	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, GasGeometryState gas, int maximumRegions, java.util.Set<Integer> refined) {
-		this(state, domain, java.util.Objects.requireNonNull(gas).sealedExterior(), maximumRegions, gas, java.util.Set.copyOf(refined));
+	LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, GasGeometryState gas, int maximumRegions, java.util.Map<Integer, Integer> refined) {
+		this(state, domain, java.util.Objects.requireNonNull(gas).sealedExterior(), maximumRegions, gas, java.util.Map.copyOf(refined));
 	}
 	private LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions, GasGeometryState gas) {
 		this(state, domain, sealed, maximumRegions, gas, null);
 	}
-	private LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions, GasGeometryState gas, java.util.Set<Integer> refined) {
+	private LiquidGeometryPhaseInput(LiquidGeometryState state, LiquidGeometryDomainPartition domain, boolean sealed, int maximumRegions, GasGeometryState gas, java.util.Map<Integer, Integer> refined) {
 		if (state.rootWidthMetres() != domain.rootWidthMetres || maximumRegions < 1) throw new IllegalArgumentException("Invalid geometric phase input");
 		if (gas != null && gas.rootWidthMetres() != domain.rootWidthMetres) throw new IllegalArgumentException("Gas geometry has a different physical root");
 		rootWidthMetres = domain.rootWidthMetres;
@@ -70,7 +70,7 @@ final class LiquidGeometryPhaseInput {
 			regions = List.copyOf(cells); mechanicalSupport = null;
 			storedGasNodes = labels.stream().mapToInt(Integer::intValue).toArray(); fragments = mapping.stream().mapToInt(Integer::intValue).toArray();
 		} else {
-			var controls = new LiquidMechanicalControlCells(state, cells, mapping, labels, refined);
+			var controls = new LiquidMechanicalControlCells(state, cells, mapping, labels, refined, maximumRegions);
 			regions = controls.regions; mechanicalSupport = controls.support; storedGasNodes = controls.gasNodes; fragments = controls.fragments;
 		}
 		var meshSupport = refined == null ? regions : regions.stream().map(cell -> new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cell.geometry())).toList();

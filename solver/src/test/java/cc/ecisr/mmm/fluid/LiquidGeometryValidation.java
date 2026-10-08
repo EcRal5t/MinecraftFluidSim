@@ -160,19 +160,20 @@ final class LiquidGeometryValidation {
 	}
 	private static void mechanicalCellsCancelAuxiliaryCuts() {
 		starKernelKeepsMeansAndAffineWork();
+		physicalRefinementResolvesIndependentExtents();
 		var cube = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0.25, 0.25, 0.75, 0.75, 0.75));
 		var pieces = LiquidGeometryRefinement.children(cube);
 		var unified = LiquidGeometryStateMapper.capture(pieces, 1, new int[]{0}, new int[pieces.size()], new double[3 * pieces.size()], new int[pieces.size()]);
 		var independent = LiquidGeometryStateMapper.capture(pieces, 1, new int[]{0}, new int[pieces.size()]);
 		for (var state : java.util.List.of(unified, independent)) {
 			var cells = LiquidGeometryStateMapper.restore(state); var indices = java.util.stream.IntStream.range(0, cells.size()).boxed().toList();
-			var controls = new LiquidMechanicalControlCells(state, cells, indices, java.util.Collections.nCopies(cells.size(), -1), java.util.Set.of());
+			var controls = new LiquidMechanicalControlCells(state, cells, indices, java.util.Collections.nCopies(cells.size(), -1), java.util.Map.of(), 4096);
 			if (controls.regions.size() != (state == unified ? 1 : 8)) throw new AssertionError("Auxiliary cuts and chosen mechanical resolution were conflated");
 			var measure = LiquidConvexRegion.EMPTY.measure();
 			for (var control : controls.regions) measure = measure.add(LiquidExactPolygon.measure(LiquidExactPolygon.faces(control.geometry())));
 			if (!measure.same(cube.geometry().measure())) throw new AssertionError("Mechanical assembly changed exact volume or first moments");
 			if (state == unified) {
-				var refined = new LiquidMechanicalControlCells(state, cells, indices, java.util.Collections.nCopies(cells.size(), -1), java.util.Set.of(0));
+				var refined = new LiquidMechanicalControlCells(state, cells, indices, java.util.Collections.nCopies(cells.size(), -1), java.util.Map.of(0, 1), 4096);
 				if (refined.regions.size() != 8) throw new AssertionError("Explicit spatial refinement retained an unresolved control cell");
 			}
 		}
@@ -185,7 +186,7 @@ final class LiquidGeometryValidation {
 		}
 		var state = LiquidGeometryStateMapper.capture(star, 1, new int[]{0}, new int[star.size()], new double[3 * star.size()], new int[star.size()]);
 		var actual = LiquidGeometryStateMapper.restore(state); var ids = java.util.stream.IntStream.range(0, actual.size()).boxed().toList();
-		var controls = new LiquidMechanicalControlCells(state, actual, ids, java.util.Collections.nCopies(actual.size(), -1), java.util.Set.of());
+		var controls = new LiquidMechanicalControlCells(state, actual, ids, java.util.Collections.nCopies(actual.size(), -1), java.util.Map.of(), 4096);
 		if (controls.regions.size() != 1) throw new AssertionError("Star-shaped control cell retained auxiliary convex pressure unknowns");
 		var mesh = new LiquidControlVolumeMesh(controls.regions, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
 		var mean = new double[]{0.125, -0.25, 0.0625}; var rates = new LiquidExactPolygon.Fraction[mesh.faces.size()];
@@ -198,6 +199,35 @@ final class LiquidGeometryValidation {
 		var expected = LiquidExactPolygon.measure(LiquidExactPolygon.faces(controls.regions.getFirst().geometry().translated(mean[0] / 128, mean[1] / 128, mean[2] / 128)));
 		if (!sum.same(expected)) throw new AssertionError("Non-convex pressure-cell fan lost exact rigid transport geometry");
 	}
+	private static void physicalRefinementResolvesIndependentExtents() {
+		for (double height : new double[]{1, Math.scalb(1.0, -20), Math.scalb(1.0, -80)}) {
+			var cell = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.125, 0, 0.25, 0.875, height, 0.75));
+			var state = LiquidGeometryStateMapper.capture(java.util.List.of(cell), 1, new int[]{0}, new int[]{0});
+			for (int depth : new int[]{1, 2}) {
+				var refined = new LiquidMechanicalControlCells(state, java.util.List.of(cell), java.util.List.of(0), java.util.List.of(-1), java.util.Map.of(0, depth), 128);
+				int count = depth == 1 ? 8 : 64;
+				if (refined.regions.size() != count) throw new AssertionError("Physical refinement coupled the thin direction to collision-grid spacing");
+				var measured = LiquidConvexRegion.EMPTY.measure(); var volume = cell.geometry().measure().volume().divide(LiquidExactPolygon.Fraction.of(count));
+				for (int c = 0; c < count; c++) {
+					var geometry = refined.regions.get(c).geometry(); measured = measured.add(geometry.measure());
+					if (!geometry.measure().volume().equals(volume) || refined.fragments[c] != 0
+							|| refined.support.get(c).stream().anyMatch(piece -> !LiquidPhasePartition.Address.of(piece).equals(LiquidPhasePartition.Address.of(cell))))
+						throw new AssertionError("Physical refinement changed material ownership, positive volume or collision support");
+				}
+				if (!measured.same(cell.geometry().measure())) throw new AssertionError("Physical refinement changed exact occupancy volume or first moments");
+				if (depth == 1) {
+					var mesh = new LiquidControlVolumeMesh(refined.regions, 1, 1000, (c, face) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+					var rates = new LiquidExactPolygon.Fraction[mesh.faces.size()]; java.util.Arrays.fill(rates, LiquidExactPolygon.Fraction.ZERO);
+					var field = new LiquidConformingVelocity(mesh, rates, new double[3 * count]);
+					var coefficient = new double[rates.length]; java.util.Arrays.fill(coefficient, 1); field.requireSurfaceResolution(coefficient);
+				}
+			}
+			try {
+				new LiquidMechanicalControlCells(state, java.util.List.of(cell), java.util.List.of(0), java.util.List.of(-1), java.util.Map.of(0, 1), 7);
+				throw new AssertionError("Physical refinement bypassed its positive-region budget");
+			} catch (IllegalStateException expected) { if (!expected.getMessage().contains("positive-region budget")) throw expected; }
+		}
+	}
 	private static void starKernelKeepsMeansAndAffineWork() {
 		var cavity = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.25, 1)),
 				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0.25, 0, 0.25, 1, 1)),
@@ -209,7 +239,7 @@ final class LiquidGeometryValidation {
 			var pieces = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.25, height)),
 					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0.25, 0, 0.25, 1, height)));
 			var state = LiquidGeometryStateMapper.capture(pieces, 1, new int[]{0}, new int[2], new double[6], new int[2]);
-			var controls = new LiquidMechanicalControlCells(state, pieces, java.util.List.of(0, 1), java.util.List.of(-1, -1), java.util.Set.of());
+			var controls = new LiquidMechanicalControlCells(state, pieces, java.util.List.of(0, 1), java.util.List.of(-1, -1), java.util.Map.of(), 4096);
 			if (controls.regions.size() != 1) throw new AssertionError("A star-shaped control with an exterior centroid gained auxiliary pressure cells");
 			var shape = controls.regions.getFirst().geometry(); var center = LiquidExactPolygon.vertex(shape.centroidCoordinates());
 			var faces = LiquidExactPolygon.faces(shape); var kernel = shape.kernelPoint();
@@ -254,7 +284,7 @@ final class LiquidGeometryValidation {
 			var pieces = fine ? cavity.stream().flatMap(cell -> LiquidGeometryRefinement.children(cell).stream()).toList() : cavity;
 			var state = LiquidGeometryStateMapper.capture(pieces, 1, new int[]{0}, new int[pieces.size()], new double[3 * pieces.size()], new int[pieces.size()]);
 			var actual = LiquidGeometryStateMapper.restore(state); var ids = java.util.stream.IntStream.range(0, actual.size()).boxed().toList();
-			var controls = new LiquidMechanicalControlCells(state, actual, ids, java.util.Collections.nCopies(actual.size(), -1), java.util.Set.of());
+			var controls = new LiquidMechanicalControlCells(state, actual, ids, java.util.Collections.nCopies(actual.size(), -1), java.util.Map.of(), 4096);
 			if (controls.regions.size() != 2) throw new AssertionError("Non-star material retained its auxiliary convex pressure partition: " + controls.regions.size());
 			var measure = LiquidConvexRegion.EMPTY.measure(); var retained = new java.util.HashSet<LiquidGeometryRefinement.Cell>();
 			for (int c = 0; c < controls.regions.size(); c++) {

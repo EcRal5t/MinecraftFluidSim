@@ -31,7 +31,7 @@ final class ResolvedLiquidMechanicalStage {
 		for (var cell : LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells())) requested.putIfAbsent(LiquidPhasePartition.Address.of(cell), cell);
 		var pressureBoundary = new PressureBoundaryView(domain);
 		boolean gasAdvanced = false;
-		var refinedControls = new java.util.LinkedHashSet<Integer>();
+		var refinedControls = new LinkedHashMap<Integer, Integer>();
 		for (;;) {
 			var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ,
 					domain.config.cellSize(), domain.geometry.cutCells, List.copyOf(requested.values()), MAXIMUM_REGIONS);
@@ -65,17 +65,13 @@ final class ResolvedLiquidMechanicalStage {
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement(shorter.minimumSubsteps(domain.config.timeStep(), dt), shorter.getMessage());
 			} catch (LiquidInterfaceResolutionRequired finer) {
+				var selected = new java.util.LinkedHashSet<Integer>();
 				for (int resolved : finer.cells()) {
 					int c = physical.phaseCells[resolved];
-					if (input.fragments[c] >= 0) refinedControls.add(controlCells[input.fragments[c]]);
-					var children = input.mechanicalSupport.get(c).stream().flatMap(cell -> LiquidGeometryRefinement.children(cell).stream()).toList();
-					for (var child : children) {
-						var address = LiquidPhasePartition.Address.of(child);
-						if (requested.size() == MAXIMUM_REGIONS && !requested.containsKey(address))
-							throw new IllegalStateException("Resolved mechanics exceeds its refinement budget", finer);
-						requested.putIfAbsent(address, child);
-					}
+					if (input.fragments[c] >= 0) selected.add(controlCells[input.fragments[c]]);
 				}
+				if (selected.isEmpty()) throw new IllegalStateException("Interface resolution request has no liquid control", finer);
+				for (int control : selected) refinedControls.merge(control, 1, Math::addExact);
 				continue;
 			}
 			var interfaces = new ResolvedGasInterfaceMotion.Builder(gasMatch, physical, MAXIMUM_REGIONS);
@@ -103,7 +99,7 @@ final class ResolvedLiquidMechanicalStage {
 			} catch (LiquidCharacteristicTimeResolutionRequired shorter) {
 				throw new MechanicalTimeRefinement(shorter.minimumSubsteps(domain.config.timeStep(), dt), shorter.getMessage());
 			}
-			var next = new LiquidGeometryPhaseInput(motion.geometry, partition, domain.gasState.geometry.sealedExterior(), MAXIMUM_REGIONS, java.util.Set.of());
+			var next = new LiquidGeometryPhaseInput(motion.geometry, partition, domain.gasState.geometry.sealedExterior(), MAXIMUM_REGIONS, java.util.Map.of());
 			var gas = new ResolvedGasMotionPlan(domain, next, motion.gasInterfaces, MAXIMUM_PAIRS);
 			gas.publish(domain, motion);
 			domain.lastPressureIterations = result.pressure().iterations();

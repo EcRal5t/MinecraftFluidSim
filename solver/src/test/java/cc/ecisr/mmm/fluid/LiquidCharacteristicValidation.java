@@ -18,6 +18,26 @@ final class LiquidCharacteristicValidation {
 	}
 	static void validateMaterialSurfaceEnergy() {
 		productionGeometryPipelineUsesMaterialSurfaceEnergy(new double[]{60, 120});
+		productionGeometryPipelineRefinesMaterialSupport();
+	}
+	private static void productionGeometryPipelineRefinesMaterialSupport() {
+		var shape = LiquidPolyhedron.box(0.25, 0, 0.25, 0.75, 1.0 / 64, 0.75);
+		var state = LiquidGeometryStateMapper.capture(List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, shape)), 1, new int[]{0}, new int[]{0});
+		var config = new FluidSolverConfig(0.5F, 1000, 0, 1.0F / 65536, 512, 1e-7F, 0.45F, 0.002F, 0.8F);
+		var domain = new FluidDomain(2, 2, 2, config);
+		domain.restoreParticleState(new FlipParticleState(2, 2, 2, 0.5F, 1, 1.0F / 32,
+				new float[]{0.5F, 1.0F / 128, 0.5F, 1.0F / 32}, new float[3], new byte[8], state));
+		var registry = new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension("mmm:resolved", 1000, "mmm:resolved", 0.125, 60)));
+		domain.setMarkerMaterial(0, registry, 0); domain.sealDomainBoundary(); domain.bootstrapGasState("");
+		double energy = surfaceEnergy(domain), mass = domain.totalMass(); var inventory = domain.particles.inventory();
+		var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, domain.captureAuthoritativeState(), List.of(), false, 0, true));
+		var next = FluidDomain.restoreAuthoritativeState(candidate.state()); var output = next.liquidGeometryState;
+		if (java.util.Arrays.stream(output.copyControlCells()).distinct().count() != 8
+				|| output.cells().stream().anyMatch(cell -> cell.level() > 1)
+				|| !next.particles.inventory().totalVolume().equals(inventory.totalVolume()) || next.totalMass() != mass
+				|| !(next.particleKineticEnergyJoules() > 0 && next.particleKineticEnergyJoules() + surfaceEnergy(next) < energy)
+				|| next.cellLiquidVolumeTransport != null)
+			throw new AssertionError("Thin material support lost independent physical refinement, surface mechanics or inventory");
 	}
 	private static void productionGeometryPipelineUsesMaterialSurfaceEnergy(double[] angles) {
 		productionGeometryPipelineUsesMaterialSurfaceEnergy(angles, 1);
@@ -106,7 +126,7 @@ final class LiquidCharacteristicValidation {
 		var state = domain.liquidGeometryState; var cells = new ArrayList<>(LiquidGeometryStateMapper.restore(state));
 		cells.addAll(LiquidGeometryStateMapper.restoreCells(domain.gasState.geometry.cells()));
 		var partition = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, cells, 4096);
-		var input = new LiquidGeometryPhaseInput(state, partition, domain.gasState.geometry, 4096, java.util.Set.of());
+		var input = new LiquidGeometryPhaseInput(state, partition, domain.gasState.geometry, 4096, java.util.Map.of());
 		var properties = new LiquidGeometryCarrierProperties(domain, state, input);
 		return new LiquidAreaEnergy(input.mesh.exactPolygons, properties.surfaceCoefficient).joules;
 	}
