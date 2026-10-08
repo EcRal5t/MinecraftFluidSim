@@ -11,6 +11,7 @@ final class LiquidJointReconstructionValidation {
 		sharedVolumeCorrectionRespectsFragmentCapacity();
 		globalVolumeCorrectionKeepsSharedLeafCoverage();
 		finiteVolumeRoundingPreservesBothMargins();
+		rationalErrorComparisonsRetainThresholdDecisions();
 		supportingPlanesCertifyTheirCoordinateEnclosure();
 		supportingVolumeFitKeepsWallsAndConverges();
 		sharedFacePyramidsRetainTheExactStarRegion();
@@ -27,6 +28,19 @@ final class LiquidJointReconstructionValidation {
 		relativeVelocityAccuracyPreservesFramesAndSmallFlows();
 		resolvedLeavesCarryIndependentControls();
 		jointGasReconstructionPreservesMaterialChambers();
+	}
+	private static void rationalErrorComparisonsRetainThresholdDecisions() {
+		var one = java.math.BigInteger.ONE;
+		var third = new Fraction(one, java.math.BigInteger.valueOf(3));
+		var tiny = new Fraction(one, one.shiftLeft(220));
+		var first = List.of(Fraction.of(1), third, tiny);
+		var second = List.of(third, Fraction.of(1));
+		if (LiquidRationalSum.compare(first, second) <= 0 || LiquidRationalSum.compare(second, first) >= 0
+				|| LiquidRationalSum.compare(first, List.of(tiny, third, Fraction.of(1))) != 0
+				|| LiquidRationalSum.compare(List.of(third.add(tiny)), List.of(third)) <= 0
+				|| LiquidRationalSum.compare(List.of(third, third, third), List.of(Fraction.of(1))) != 0
+				|| LiquidRationalSum.compare(List.of(Fraction.of(0.25), Fraction.of(0.25)), List.of(third)) <= 0)
+			throw new AssertionError("Certified sum comparison changed an exact velocity error threshold");
 	}
 	private static void auxiliaryInteriorPointsKeepPositiveCompactCoordinates() {
 		var one = java.math.BigInteger.ONE; var first = one.shiftLeft(900).add(one); var second = first.add(java.math.BigInteger.TWO);

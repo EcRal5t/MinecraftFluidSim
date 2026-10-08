@@ -59,7 +59,7 @@ final class LiquidPhysicalReconstructionControls {
 				candidate.remove(selected); candidate.addAll(selected, children);
 				if (candidate.size() > budget.maximumLeaves() || regions(candidate) > budget.maximumRegions()) continue;
 				work.charge();
-				var defect = loss(balance(candidate)); if (defect.compareTo(least) < 0) { least = defect; accepted = candidate; }
+				var defect = loss(balance(candidate)); if (LiquidRationalSum.compare(defect, least) < 0) { least = defect; accepted = candidate; }
 			}
 			if (accepted == null) {
 				// Tensor refinement resolves variations whose conditional mean cancels on every single-axis split.
@@ -89,8 +89,8 @@ final class LiquidPhysicalReconstructionControls {
 		}
 		return LiquidConservativeVolumeRedistribution.project(nodes.stream().map(Node::box).toList(), sources, targets);
 	}
-	private static Fraction loss(LiquidConservativeVolumeRedistribution.Result result) {
-		var value = Fraction.ZERO; for (var fields : result.fields()) for (var field : fields.values()) value = value.add(field.kineticLoss()); return value;
+	private static List<Fraction> loss(LiquidConservativeVolumeRedistribution.Result result) {
+		var values = new ArrayList<Fraction>(); for (var fields : result.fields()) for (var field : fields.values()) values.add(field.kineticLoss()); return List.copyOf(values);
 	}
 	private static List<Node> refine(Node parent, int axis, LiquidSupportVolumeFit.Work work) {
 		var extent = bounds(List.of(parent.box().geometry())); var middle = extent[0][axis].add(extent[1][axis]).divide(Fraction.of(2));

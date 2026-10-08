@@ -18,9 +18,11 @@ final class LiquidConservativeVolumeRedistribution {
 	record Result(List<Map<Integer, LiquidGeometryVelocityProjection.Value>> fields, Fraction movedVolume, Fraction squaredDisplacementVolumeBound) { }
 	private static final class Received {
 		Fraction volume = Fraction.ZERO, mass = Fraction.ZERO, kinetic = Fraction.ZERO;
+		LiquidGeometryVelocityProjection.Value unchanged;
 		final Map<Integer, Fraction> inventories = new java.util.TreeMap<>();
 		final Fraction[] momentum = {Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
 		void add(Source source, Fraction volume) {
+			unchanged = this.volume.signum() == 0 && volume.equals(source.field.volume()) ? source.field : null;
 			this.volume = this.volume.add(volume); var weight = volume.divide(source.field.volume());
 			mass = mass.add(weight.multiply(source.field.mass()));
 			kinetic = kinetic.add(weight.multiply(source.field.originalKinetic()));
@@ -79,8 +81,9 @@ final class LiquidConservativeVolumeRedistribution {
 			for (int i = 0; i < remaining.length; i++) if (remaining[i].signum() != 0) throw new IllegalStateException("Conservative regrid retained source volume");
 			for (int i = 0; i < required.length; i++) {
 				if (required[i].signum() != 0 || !received[i].volume.equals(demand.get(i).volume)) throw new IllegalStateException("Conservative regrid left target capacity unfilled");
-				output.get(demand.get(i).leaf).put(phase, LiquidGeometryVelocityProjection.observe(received[i].volume, received[i].mass,
-						received[i].inventories, List.of(received[i].momentum), received[i].kinetic));
+				output.get(demand.get(i).leaf).put(phase, received[i].unchanged != null ? received[i].unchanged
+						: LiquidGeometryVelocityProjection.observe(received[i].volume, received[i].mass,
+							received[i].inventories, List.of(received[i].momentum), received[i].kinetic));
 			}
 		}
 		return new Result(output.stream().map(Map::copyOf).toList(), moved, displacement);

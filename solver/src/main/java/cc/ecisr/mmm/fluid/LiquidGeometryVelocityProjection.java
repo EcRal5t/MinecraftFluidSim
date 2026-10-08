@@ -54,21 +54,23 @@ final class LiquidGeometryVelocityProjection {
 				return java.util.Set.copyOf(selected);
 			}
 			for (var phase : limits.entrySet()) {
-				var mass = Fraction.ZERO; var loss = Fraction.ZERO; var candidates = new ArrayList<Integer>();
+				var mass = Fraction.ZERO; var candidates = new ArrayList<Integer>();
 				for (int l = 0; l < fields.size(); l++) {
 					var field = fields.get(l).get(phase.getKey()); if (field == null) continue;
-					mass = mass.add(field.mass); loss = loss.add(field.kineticLoss);
+					mass = mass.add(field.mass);
 					if (field.kineticLoss.signum() > 0) candidates.add(l);
 				}
-				var excess = loss.subtract(mass.multiply(phase.getValue()).divide(Fraction.of(2)));
-				if (excess.signum() <= 0) continue;
+				var allowed = List.of(mass.multiply(phase.getValue()).divide(Fraction.of(2)));
+				var losses = new ArrayList<Fraction>(); for (int leaf : candidates) losses.add(fields.get(leaf).get(phase.getKey()).kineticLoss);
+				if (LiquidRationalSum.compare(losses, allowed) <= 0) continue;
 				candidates.sort((a, b) -> {
 					int order = fields.get(b).get(phase.getKey()).kineticLoss.compareTo(fields.get(a).get(phase.getKey()).kineticLoss);
 					return order == 0 ? Integer.compare(a, b) : order;
 				});
-				for (int leaf : candidates) {
-					selected.add(leaf); excess = excess.subtract(fields.get(leaf).get(phase.getKey()).kineticLoss);
-					if (excess.signum() <= 0) break;
+				losses.clear(); for (int leaf : candidates) losses.add(fields.get(leaf).get(phase.getKey()).kineticLoss);
+				for (int i = 0; i < candidates.size(); i++) {
+					selected.add(candidates.get(i));
+					if (LiquidRationalSum.compare(losses.subList(i + 1, losses.size()), allowed) <= 0) break;
 				}
 			}
 			return java.util.Set.copyOf(selected);
@@ -150,15 +152,17 @@ final class LiquidGeometryVelocityProjection {
 				occupied = occupied.add(entry.getValue());
 			}
 			if (!occupied.equals(volume)) throw new IllegalArgumentException("Spatial inventory shares differ from occupied volume");
-			var velocity = new double[3]; var projected = Fraction.ZERO; var stored = Fraction.ZERO; var bounds = new ArrayList<Fraction>();
+			var velocity = new double[3]; var squaredMomentum = Fraction.ZERO; var squaredVelocity = Fraction.ZERO; var bounds = new ArrayList<Fraction>();
 			for (int a = 0; a < 3; a++) {
 				var mean = momentum.get(a).divide(mass); velocity[a] = mean.rounded(); var rounded = Fraction.of(velocity[a]);
 				var bound = mass.multiply(Fraction.of(Math.ulp(velocity[a]))).divide(Fraction.of(2)); bounds.add(bound);
 				if (mass.multiply(rounded).subtract(momentum.get(a)).absolute().subtract(bound).signum() > 0)
 					throw new IllegalStateException("P0 projection exceeds its binary64 momentum rounding bound");
-				projected = projected.add(mass.multiply(mean).multiply(mean).divide(Fraction.of(2)));
-				stored = stored.add(mass.multiply(rounded).multiply(rounded).divide(Fraction.of(2)));
+				squaredMomentum = squaredMomentum.add(momentum.get(a).multiply(momentum.get(a)));
+				squaredVelocity = squaredVelocity.add(rounded.multiply(rounded));
 			}
+			var projected = squaredMomentum.divide(mass.multiply(Fraction.of(2)));
+			var stored = mass.multiply(squaredVelocity).divide(Fraction.of(2));
 			var loss = before.subtract(projected);
 			if (loss.signum() < 0) throw new IllegalStateException("Conservative P0 projection increased exact kinetic energy");
 			var squaredError = loss.multiply(Fraction.of(2)).divide(mass);
