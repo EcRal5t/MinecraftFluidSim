@@ -10,6 +10,7 @@ final class LiquidConformingVelocityValidation {
 	static void validate() {
 		stationaryRationalGeometrySurvivesMotionRounding();
 		affineFieldSurvivesAdaptiveFaces();
+		continuousFitPreservesMomentsAndItsExactReference();
 		supportedAffineFieldsSurviveObliqueCells();
 		certifiedAffineFitsContainExactLeastSquares();
 		separatedLiquidsKeepIndependentVelocityTraces();
@@ -201,6 +202,56 @@ final class LiquidConformingVelocityValidation {
 		// Its first one-ring patch is one-dimensional; the connected component supplies exact three-dimensional support.
 		requireAffineField(new LiquidControlVolumeMesh(chain, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0)),
 				LiquidConformingVelocityValidation::affine);
+	}
+	private static void continuousFitPreservesMomentsAndItsExactReference() {
+		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1)));
+		var mesh = new LiquidControlVolumeMesh(cells, 1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
+		var interpolation = new LiquidVelocityInterpolation(mesh, new int[cells.size()]); var center = Fraction.of(0.5);
+		var baseline = LiquidExactPolygon.vertex(new Fraction[]{center, center, center});
+		var initial = interpolation.at(baseline, 0); var reference = partitionReference(mesh, baseline);
+		Fraction firstChange = null;
+		for (int bits : new int[]{16, 32, 48}) {
+			var spacing = Fraction.of(Math.scalb(1.0, -bits)); var point = LiquidExactPolygon.vertex(new Fraction[]{center.add(spacing), center, center});
+			var actual = interpolation.at(point, 0); var otherIncidence = interpolation.at(point, 7); var exact = partitionReference(mesh, point);
+			if (!actual.weights.equals(otherIncidence.weights)) throw new AssertionError("Continuous fitting changed at an incident-cell transition");
+			var sum = Fraction.ZERO; var moment = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO};
+			for (int c = 0; c < cells.size(); c++) {
+				var magnitude = new double[cells.size()]; magnitude[c] = 1;
+				if (actual.weights.get(c).subtract(exact[c]).absolute().compareTo(Fraction.of(actual.error(magnitude))) > 0)
+					throw new AssertionError("Continuous fitting escaped its independent exact partition-of-unity coefficient");
+				var weight = actual.weights.get(c); sum = sum.add(weight);
+				for (int a = 0; a < 3; a++) moment[a] = moment[a].add(weight.multiply(cells.get(c).geometry().centroidCoordinates()[a]));
+			}
+			if (!sum.equals(Fraction.of(1)) || !Arrays.equals(moment, point.coordinates()) || !actual.affineComplete)
+				throw new AssertionError("Continuous fitting lost exact affine moments");
+			if (bits == 16) firstChange = exact[0].subtract(reference[0]).absolute();
+			var magnitude = new double[cells.size()]; magnitude[0] = 1;
+			var error = Fraction.of(actual.error(magnitude)).add(Fraction.of(initial.error(magnitude)));
+			var limit = firstChange.multiply(Fraction.of(Math.scalb(2.0, 16 - bits))).add(error);
+			if (actual.weights.get(0).subtract(initial.weights.get(0)).absolute().compareTo(limit) > 0)
+				throw new AssertionError("Adjacent-node fitting retained a finite jump as spacing decreased");
+		}
+	}
+	/** Independent exact local normal equations and exact polynomial kernels on the eight-cell cube. */
+	private static Fraction[] partitionReference(LiquidControlVolumeMesh mesh, LiquidExactPolygon.Vertex point) {
+		int n = mesh.cells.size(); var kernel = new Fraction[n]; var total = Fraction.ZERO; var local = new Fraction[n][];
+		var patches = new ArrayList<List<Integer>>();
+		for (int c = 0; c < n; c++) {
+			var patch = new java.util.TreeSet<Integer>(); patch.add(c);
+			for (int f : mesh.cellFaces[c]) { var face = mesh.faces.get(f); patch.add(face.first()); if (face.second() >= 0) patch.add(face.second()); }
+			var cells = List.copyOf(patch); patches.add(cells);
+			var centers = cells.stream().map(k -> mesh.cells.get(k).geometry().centroidCoordinates()).toArray(Fraction[][]::new);
+			local[c] = leastSquaresWeights(centers, cells.stream().map(k -> Fraction.of(0.125)).toList(), point.coordinates());
+			var d = new Fraction[3]; var center = mesh.cells.get(c).geometry().centroidCoordinates();
+			for (int a = 0; a < 3; a++) d[a] = point.coordinates()[a].subtract(center[a]);
+			var base = Fraction.of(1).subtract(dot(List.of(d), d).divide(Fraction.of(0.75))); var square = base.multiply(base);
+			kernel[c] = base.signum() > 0 ? square.multiply(square) : Fraction.ZERO; total = total.add(kernel[c]);
+		}
+		var result = new Fraction[n]; Arrays.fill(result, Fraction.ZERO);
+		for (int c = 0; c < n; c++) for (int i = 0; i < patches.get(c).size(); i++) {
+			int cell = patches.get(c).get(i); result[cell] = result[cell].add(local[c][i].multiply(kernel[c]).divide(total));
+		}
+		return result;
 	}
 	private static void supportedAffineFieldsSurviveObliqueCells() {
 		for (int rank = 1; rank <= 2; rank++) {
