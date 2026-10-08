@@ -34,10 +34,8 @@ final class LiquidGeometryVelocityProjection {
 		Map<Integer, Fraction> squaredLimits(List<Source> sources) {
 			var absolute = Fraction.of(absoluteMetresPerSecond);
 			if (relativePhaseFluctuation == 0) return Map.of(-1, absolute.multiply(absolute));
-			var volumes = new LinkedHashMap<Key, Fraction>();
-			for (var source : sources) volumes.merge(new Key(source.phase, source.inventory, source.density, source.velocity), source.geometry.measure().volume(), Fraction::add);
 			var limits = new LinkedHashMap<Integer, Fraction>(); var relative = Fraction.of(relativePhaseFluctuation);
-			for (var entry : moments(volumes).entrySet()) {
+			for (var entry : summarize(sources).entrySet()) {
 				var field = entry.getValue(); limits.put(entry.getKey(), relative.multiply(relative).multiply(field.kineticLoss).multiply(Fraction.of(2)).divide(field.mass));
 			}
 			return Map.copyOf(limits);
@@ -77,6 +75,11 @@ final class LiquidGeometryVelocityProjection {
 		}
 	}
 	private record Part(Key field, List<LiquidExactPolygon> faces, Fraction volume) { }
+	static Map<Integer, Value> summarize(List<Source> sources) {
+		var volumes = new LinkedHashMap<Key, Fraction>();
+		for (var source : sources) volumes.merge(new Key(source.phase, source.inventory, source.density, source.velocity), source.geometry.measure().volume(), Fraction::add);
+		return moments(volumes);
+	}
 	private record Projection(List<Part> parts, Map<Integer, Value> values) { }
 	private final Address root;
 	private final List<Part> sources;

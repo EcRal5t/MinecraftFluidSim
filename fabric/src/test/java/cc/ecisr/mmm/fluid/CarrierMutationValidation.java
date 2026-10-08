@@ -172,10 +172,45 @@ public final class CarrierMutationValidation {
 		require(restored.particles.count() == 0 && restored.exactInternalEnergy().equals(energy), "gas-only physical regrid lost its cold restored state");
 	}
 	private static void nativePhysicalPhaseReconstructionCarriesInventories() throws Exception {
+		mechanicalRegroupingPreservesIntegratedAccuracy();
 		nativePhysicalPhaseReconstructionCarriesInventories("mmm:water", 1, -375, 1);
 		nativePhysicalPhaseReconstructionCarriesInventories("mmm:oil", 2, 0, 1);
 		double speed = Math.scalb(1.0, -30);
 		nativePhysicalPhaseReconstructionCarriesInventories("mmm:water", 1, -375 * speed * speed, speed);
+	}
+	private static void mechanicalRegroupingPreservesIntegratedAccuracy() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		for (double scale : new double[]{1, Math.scalb(1.0, -30)}) for (double frame : new double[]{0, 8}) {
+			var cells = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.25, 0.125, 0.5)),
+					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0, 0, 0.5, 0.125, 0.5)),
+					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 0.125, 0.5)));
+			var speed = new double[]{(frame + 1) * scale, 0, 0, (frame + 1.125) * scale, 0, 0, (frame - 1) * scale, 0, 0};
+			var geometry = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0, 1, 2}, new int[]{0, 1, 2}, speed);
+			var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), 16);
+			domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 3, 0.5, 1000, registries.liquids().materials(),
+					new float[]{0.125F, 0.0625F, 0.25F, 0.125F, 0.375F, 0.0625F, 0.25F, 0.125F, 0.75F, 0.0625F, 0.25F, 0.25F},
+					new float[]{(float) speed[0], 0, 0, (float) speed[3], 0, 0, (float) speed[6], 0, 0}, new byte[8], new double[]{125, 125, 750}, new int[3], geometry));
+			domain.sealDomainBoundary(); FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+			var before = domain.captureAuthoritativeState(); var volume = domain.particles.inventory().totalVolume(); var mass = domain.particles.inventory().totalMass();
+			var internal = domain.exactInternalEnergy(); long species = domain.totalChemicalSpeciesQuanta();
+			var budget = new LiquidMomentReconstruction.Budget(1, 256, 4096);
+			var groups = new LiquidMechanicalReconstructionGroups(domain, 0.25, budget);
+			var markers = geometry.copyMarkerCells();
+			require(groups.owners[markers[0]] == groups.owners[markers[1]] && groups.owners[markers[0]] != groups.owners[markers[2]],
+					"mechanical regrouping lost its spatial, frame or velocity-scale decision");
+			var plan = LiquidGeometryReconstructionPlan.relativeVelocity(domain, new LiquidMomentReconstruction.Tolerance(0.01, 0.03), 0.25, budget);
+			var expected = Fraction.of(scale).multiply(Fraction.of(scale)).multiply(Fraction.of(-0.06103515625));
+			require(plan.leaves.size() == 1 && plan.inventory.markers.size() == 2 && plan.inventory.kineticChange.equals(expected),
+					"mechanical regrouping lost its bounded mass-weighted projection defect or refined the thin physical support");
+			FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(), "mechanical regrouping private input");
+			new ResolvedGasMotionPlan(domain, plan, 4096, 65536).publish(domain, plan);
+			require(domain.particles.inventory().totalMass().equals(mass) && domain.particles.inventory().totalVolume().equals(volume)
+					&& domain.totalChemicalSpeciesQuanta() == species && domain.exactInternalEnergy().subtract(internal).equals(plan.inventory.energyRoundoff)
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "mechanical regrouping lost its complete conserved inventory");
+			var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy()) && restored.particleKineticEnergyJoules() == domain.particleKineticEnergyJoules(),
+					"mechanical regrouping changed its complete cold handoff");
+		}
 	}
 	private static void nativePhysicalPhaseReconstructionCarriesInventories(String secondMaterial, int expectedControls, double expectedKineticChange, double speed) throws Exception {
 		var registries = FullCapabilityTestFixture.load();
