@@ -257,6 +257,7 @@ final class LiquidControlVolumeValidation {
 		var result = new double[value.length]; for (int i = 0; i < result.length; i++) for (int j = 0; j < result.length; j++) result[i] += matrix[i][j] * value[j]; return result;
 	}
 	private static void boundedArithmeticContainsExactEndpointValues() {
+		integerDotObservationsMatchExactRatios();
 		var samples = List.of(LiquidBoundedArithmetic.Value.of(LiquidExactPolygon.Fraction.of(1).divide(LiquidExactPolygon.Fraction.of(7))),
 				LiquidBoundedArithmetic.Value.of(LiquidExactPolygon.Fraction.of(-1).divide(LiquidExactPolygon.Fraction.of(3))),
 				new LiquidBoundedArithmetic.Value(1.3, 0.6), new LiquidBoundedArithmetic.Value(3, 2.9),
@@ -270,6 +271,40 @@ final class LiquidControlVolumeValidation {
 				if (exact.subtract(LiquidExactPolygon.Fraction.of(result.value())).absolute().subtract(LiquidExactPolygon.Fraction.of(result.error())).signum() > 0)
 					throw new AssertionError("Bounded arithmetic lost an exact interval endpoint, operation=" + operation);
 			}
+		}
+	}
+	private static void integerDotObservationsMatchExactRatios() {
+		var random = new java.util.Random(0x564cd);
+		for (int bits : new int[]{64, 512, 4096}) for (int sample = 0; sample < 8; sample++) {
+			var coefficient = new java.math.BigInteger[7]; var value = coefficient.clone(); var total = java.math.BigInteger.ZERO;
+			for (int i = 0; i < value.length; i++) {
+				coefficient[i] = new java.math.BigInteger(bits, random); value[i] = new java.math.BigInteger(bits + i, random);
+				if (random.nextBoolean()) coefficient[i] = coefficient[i].negate(); if (random.nextBoolean()) value[i] = value[i].negate();
+				total = total.add(coefficient[i].multiply(value[i]));
+			}
+			var denominator = java.math.BigInteger.ONE.shiftLeft(2 * bits).add(java.math.BigInteger.valueOf(17));
+			for (int shift : new int[]{0, -1023, 1074}) {
+				var divisor = shift >= 0 ? denominator.shiftLeft(shift) : denominator;
+				var scaled = shift >= 0 ? value : java.util.Arrays.stream(value).map(v -> v.shiftLeft(-shift)).toArray(java.math.BigInteger[]::new);
+				var numerator = shift >= 0 ? total : total.shiftLeft(-shift);
+				if (Double.doubleToRawLongBits(LiquidIntegerDotObservation.rounded(coefficient, scaled, divisor))
+						!= Double.doubleToRawLongBits(LiquidExactPolygon.roundedRatio(numerator, divisor)))
+					throw new AssertionError("Certified pressure dot observation changed exact rounding");
+			}
+		}
+		var large = java.math.BigInteger.ONE.shiftLeft(4096); var one = java.math.BigInteger.ONE;
+		for (var remainder : java.util.List.of(java.math.BigInteger.ZERO, one, one.negate(), large.shiftRight(1075))) {
+			var coefficient = new java.math.BigInteger[]{large.add(remainder), large.negate()}; var value = new java.math.BigInteger[]{one, one};
+			if (Double.doubleToRawLongBits(LiquidIntegerDotObservation.rounded(coefficient, value, large))
+					!= Double.doubleToRawLongBits(LiquidExactPolygon.roundedRatio(remainder, large)))
+				throw new AssertionError("Certified integer intervals lost cancellation, signed zero or subnormal rounding");
+		}
+		var midpoint = one.shiftLeft(53).add(one);
+		for (int offset : new int[]{-1, 0, 1}) {
+			var numerator = midpoint.add(java.math.BigInteger.valueOf(offset)); var denominator = one.shiftLeft(53);
+			if (Double.doubleToRawLongBits(LiquidIntegerDotObservation.rounded(new java.math.BigInteger[]{numerator}, new java.math.BigInteger[]{one}, denominator))
+					!= Double.doubleToRawLongBits(LiquidExactPolygon.roundedRatio(numerator, denominator)))
+				throw new AssertionError("Certified dot ratio changed midpoint rounding");
 		}
 	}
 	private static void pressureMetricCertificatesContainExactCoefficients() {

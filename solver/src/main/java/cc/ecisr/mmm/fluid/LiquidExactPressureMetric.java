@@ -95,7 +95,7 @@ final class LiquidExactPressureMetric {
 			var result = new double[value.length];
 			for (int i = 0; i < result.length; i++) {
 				row[0] = scaled[i].multiply(inputScale);
-				result[i] = LiquidExactPolygon.roundedRatio(output[i].sum(row), output[i].denominator.multiply(denominator));
+				result[i] = LiquidIntegerDotObservation.rounded(output[i].numerator, row, output[i].denominator.multiply(denominator));
 				if (!Double.isFinite(result[i])) throw new IllegalStateException("Exact pressure action exceeds its numerical observation range");
 			}
 			return result;
