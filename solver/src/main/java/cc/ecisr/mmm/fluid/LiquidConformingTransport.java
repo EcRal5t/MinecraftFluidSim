@@ -10,11 +10,15 @@ import java.util.Map;
 /** Shared space-time sweeps preserve geometric conservation under certified coordinate representation. */
 final class LiquidConformingTransport {
 	record Image(int cell, int face, LiquidConvexRegion geometry, List<Fraction> affineMap) { }
+	record Surface(int cell, int face, LiquidExactPolygon geometry) { }
+	private record Partition(List<Image> images, List<Surface> surfaces) { }
+	private static final int MAXIMUM_REGIONS = 65_536;
 	final LiquidControlVolumeMesh mesh;
 	final LiquidConformingVelocity field;
 	final int[] liquid;
 	final Map<Vertex, Vertex> positions;
 	final List<Image> images;
+	final List<Surface> surfaces;
 	final Fraction[] sweptVolume;
 	final double maximumPositionRoundoffMetres;
 	final double maximumCoordinateErrorMetres, maximumRateRepresentationErrorPerSecond;
@@ -52,7 +56,7 @@ final class LiquidConformingTransport {
 		// Momentum is carried by the original velocity-field mean in LiquidGeometryMotionPlan.
 		for (int c = 0; c < mesh.cells.size(); c++) if (liquid[c] >= 0)
 			moved.put(field.cellCenters.get(c), LiquidExactPolygon.vertex(field.meanPosition(c, time)));
-		positions = java.util.Collections.unmodifiableMap(moved); images = images(moved);
+		positions = java.util.Collections.unmodifiableMap(moved); var partition = images(moved); images = partition.images; surfaces = partition.surfaces;
 	}
 	/** Coordinate rounding is constrained by exact cell volumes; actual rates are certified by the original pressure operator. */
 	LiquidConformingTransport representCoordinates(int fractionalBits) { return new LiquidConformingTransport(this, fractionalBits); }
@@ -79,7 +83,9 @@ final class LiquidConformingTransport {
 			if (total.signum() != 0) error = Math.max(error, Math.nextUp(total.divide(time).divide(volume[c]).rounded()));
 		}
 		if (!Double.isFinite(error)) throw new LiquidCoordinateResolutionRequired("Coordinate representation has no finite rate error bound");
-		maximumRateRepresentationErrorPerSecond = error; images = images(positions);
+		maximumRateRepresentationErrorPerSecond = error;
+		try { var partition = images(positions); images = partition.images; surfaces = partition.surfaces; }
+		catch (LiquidCharacteristicTimeResolutionRequired invalid) { throw new LiquidCoordinateResolutionRequired(invalid.getMessage()); }
 	}
 	Fraction[] volumeRate() {
 		var rates = new Fraction[sweptVolume.length]; for (int f = 0; f < rates.length; f++) rates[f] = sweptVolume[f].divide(time); return rates;
@@ -91,28 +97,42 @@ final class LiquidConformingTransport {
 		if (represented.mesh != source.mesh || !represented.tetrahedra.equals(source.field.tetrahedra))
 			throw new IllegalArgumentException("Represented velocity changed the source transport fan");
 		mesh = source.mesh; field = represented; liquid = source.liquid.clone(); time = source.time;
-		positions = source.positions; sweptVolume = source.sweptVolume.clone(); images = source.images;
+		positions = source.positions; sweptVolume = source.sweptVolume.clone(); images = source.images; surfaces = source.surfaces;
 		maximumPositionRoundoffMetres = source.maximumPositionRoundoffMetres;
 		maximumCoordinateErrorMetres = source.maximumCoordinateErrorMetres;
 		maximumRateRepresentationErrorPerSecond = source.maximumRateRepresentationErrorPerSecond;
 	}
-	private List<Image> images(Map<Vertex, Vertex> moved) {
-		var result = new ArrayList<Image>(); var volume = new Fraction[mesh.cells.size()]; java.util.Arrays.fill(volume, Fraction.ZERO);
+	private Partition images(Map<Vertex, Vertex> moved) {
+		var positive = new LinkedHashMap<Integer, ArrayList<Image>>(); var negative = new LinkedHashMap<Integer, ArrayList<LiquidConvexRegion>>();
+		var boundary = new LinkedHashMap<Integer, ArrayList<Surface>>();
 		for (var tet : field.tetrahedra) if (liquid[tet.cell()] >= 0) {
 			var source = tet.vertices(); var target = source.stream().map(moved::get).toList();
 			var oldDet = LiquidExactPolygon.homogeneousTetrahedronDeterminant(source); var newDet = LiquidExactPolygon.homogeneousTetrahedronDeterminant(target);
-			if (newDet.signum() != oldDet.signum()) throw new LiquidCharacteristicTimeResolutionRequired("Continuous transport inverted a tetrahedron: cell="
-					+ tet.cell() + ", face=" + tet.face() + ", dt=" + time.rounded() + ", initialVolumeFraction="
-					+ tet.volume().divide(mesh.cells.get(tet.cell()).geometry().measure().volume()).rounded());
+			var surface = LiquidExactPolygon.triangle(target.get(1), target.get(2), target.get(3));
+			if (!surface.hasArea()) throw new LiquidCharacteristicTimeResolutionRequired("Continuous transport collapsed a material surface");
+			boundary.computeIfAbsent(tet.cell(), ignored -> new ArrayList<>()).add(new Surface(tet.cell(), tet.face(), surface));
+			if (newDet.signum() == 0) continue;
 			var geometry = LiquidConvexRegion.ofTetrahedron(target);
-			volume[tet.cell()] = volume[tet.cell()].add(geometry.measure().volume()); result.add(new Image(tet.cell(), tet.face(), geometry, affine(source, target)));
+			if (newDet.signum() == oldDet.signum()) positive.computeIfAbsent(tet.cell(), ignored -> new ArrayList<>()).add(new Image(tet.cell(), tet.face(), geometry, affine(source, target)));
+			else negative.computeIfAbsent(tet.cell(), ignored -> new ArrayList<>()).add(geometry);
 		}
-		for (int c = 0; c < volume.length; c++) if (liquid[c] >= 0) {
+		var result = new ArrayList<Image>(); var surfaces = new ArrayList<Surface>();
+		for (int c = 0; c < mesh.cells.size(); c++) if (liquid[c] >= 0) {
+			int cell = c;
+			var original = positive.getOrDefault(c, new ArrayList<>()); var removals = negative.getOrDefault(c, new ArrayList<>());
+			var parts = removals.isEmpty() ? original : LiquidSignedVolumePartition.cancel(original.stream().map(Image::geometry).toList(), removals, MAXIMUM_REGIONS)
+					.stream().map(geometry -> new Image(cell, -1, geometry, List.<Fraction>of())).toList();
+			var measured = LiquidConvexRegion.EMPTY.measure(); for (var part : parts) measured = measured.add(part.geometry.measure());
+			var exterior = boundary.get(c); if (exterior == null) throw new LiquidCharacteristicTimeResolutionRequired("Continuous transport lost a material surface");
+			if (!measured.same(LiquidExactPolygon.measure(exterior.stream().map(Surface::geometry).toList())))
+				throw new IllegalStateException("Continuous partition differs from its actual surface volume or first moments");
 			var expected = mesh.cells.get(c).geometry().measure().volume();
 			for (int f : mesh.cellFaces[c]) expected = expected.add(mesh.faces.get(f).first() == c ? sweptVolume[f] : sweptVolume[f].negate());
-			if (!volume[c].equals(expected)) throw new IllegalStateException("Continuous transport lost cell geometric conservation");
+			if (!measured.volume().equals(expected)) throw new IllegalStateException("Continuous transport lost cell geometric conservation");
+			if ((long) result.size() + parts.size() > MAXIMUM_REGIONS) throw new IllegalStateException("Continuous partition exceeds its region budget");
+			result.addAll(parts); surfaces.addAll(exterior);
 		}
-		return List.copyOf(result);
+		return new Partition(List.copyOf(result), List.copyOf(surfaces));
 	}
 	private static Fraction sweep(List<Vertex> points, Vertex center, Map<Vertex, Vertex> moved) {
 		var value = Fraction.ZERO; var oldCenter = center.coordinates(); var newCenter = moved.get(center).coordinates();

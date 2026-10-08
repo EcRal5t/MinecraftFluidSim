@@ -74,12 +74,6 @@ final class LiquidCoordinateProjection {
 		current = volumes(mesh, field, moved, volume);
 		for (int c = 0; c < count; c++) if (volume[c] != null && !volume[c].equals(current[c]))
 			throw new IllegalStateException("Finite coordinates lost a control-volume constraint");
-		for (var tet : field.tetrahedra) if (volume[tet.cell()] != null) {
-			var target = tet.vertices().stream().map(moved::get).toList();
-			if (LiquidExactPolygon.homogeneousTetrahedronDeterminant(target).signum()
-					!= LiquidExactPolygon.homogeneousTetrahedronDeterminant(tet.vertices()).signum())
-				throw new LiquidCoordinateResolutionRequired("Coordinate precision inverted a liquid tetrahedron");
-		}
 		double error = 0;
 		for (var entry : moved.entrySet()) {
 			var actual = entry.getValue().coordinates(); var desired = reference.get(entry.getKey()).coordinates(); var squared = Fraction.ZERO;

@@ -145,7 +145,7 @@ final class LiquidGeometryMotionPlan {
 				var geometry = mesh.cells.get(c).geometry();
 				var faces = LiquidExactPolygon.faces(geometry); var vertices = faces.stream().flatMap(face -> face.vertices().stream()).distinct().toList();
 				boolean convex = faces.stream().allMatch(face -> vertices.stream().allMatch(vertex -> vertex.distance(face.coefficients()).signum() <= 0));
-				if (convex && local.stream().allMatch(image -> image.affineMap().equals(map)))
+				if (convex && map.size() == 12 && local.stream().allMatch(image -> image.affineMap().equals(map)))
 					return List.of(LiquidConvexRegion.of(mesh.cells.get(c).geometry()).transformed(map).geometry());
 				return local.stream().map(image -> image.geometry().geometry()).toList();
 			}

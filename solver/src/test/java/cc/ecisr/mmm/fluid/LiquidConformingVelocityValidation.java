@@ -17,6 +17,7 @@ final class LiquidConformingVelocityValidation {
 		arbitraryProjectedRatesPreserveMeansAndWalls();
 		continuousShearPreservesExteriorAreaAndWork();
 		spaceTimeSweepsPreserveVolumeAndSharedFaces();
+		signedPartitionsPreserveNonStarShapedVolumes();
 		capillaryLoadsShareMechanicalInertiaAndSurfaceWork();
 		implicitCapillarityUsesActualPhaseOrdering();
 		LiquidWetWallValidation.validate();
@@ -189,6 +190,39 @@ final class LiquidConformingVelocityValidation {
 			new LiquidConformingTransport(mesh, field, rate, 64);
 			throw new AssertionError("An inverted continuous candidate was accepted");
 		} catch (LiquidCharacteristicTimeResolutionRequired expected) { }
+	}
+	private static void signedPartitionsPreserveNonStarShapedVolumes() {
+		for (double height : new double[]{1, Math.scalb(1.0, -80)}) {
+			var cells = List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.25, 1, height)),
+					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.75, 0, 0, 1, 1, height)),
+					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0, 0, 0.75, 0.25, height)));
+			var faces = LiquidExteriorGeometry.of(cells); var expected = LiquidConvexRegion.EMPTY.measure();
+			for (var cell : cells) expected = expected.add(cell.geometry().measure());
+			var point = new Fraction[]{Fraction.of(0.5), Fraction.of(0.5), Fraction.of(height / 2)};
+			var apex = LiquidExactPolygon.vertex(point); var positive = new ArrayList<LiquidConvexRegion>(); var negative = new ArrayList<LiquidConvexRegion>();
+			for (var face : faces) for (int e = 0; e < face.vertices().size(); e++) {
+				var region = LiquidConvexRegion.ofTetrahedron(face.tetrahedronVertices(point, e));
+				if (!region.hasVolume()) continue;
+				(apex.distance(face.coefficients()).signum() < 0 ? positive : negative).add(region);
+			}
+			if (negative.isEmpty()) throw new AssertionError("Non-star-shaped surface lost its signed auxiliary volumes");
+			var partition = LiquidSignedVolumePartition.cancel(positive, negative, 4096); var actual = LiquidConvexRegion.EMPTY.measure();
+			for (var region : partition) {
+				actual = actual.add(region.measure());
+				var retained = region.faces();
+				for (var plane : LiquidExactPolygon.faces(LiquidPolyhedron.box(0.25, 0.25, 0, 0.75, 1, height))) retained = LiquidExactPolygon.clipVolume(retained, plane.coefficients(), 1);
+				if (!retained.isEmpty()) throw new AssertionError("Signed partition filled the non-star-shaped cavity");
+			}
+			if (!actual.same(expected) || !actual.same(LiquidExactPolygon.measure(faces)))
+				throw new AssertionError("Signed partition changed exact volume or first moments");
+		}
+		var region = LiquidConvexRegion.of(LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		try { LiquidSignedVolumePartition.cancel(List.of(region), List.of(region), 16, 1); throw new AssertionError("Unbounded signed partition work was accepted"); }
+		catch (IllegalStateException expected) { }
+		try { LiquidSignedVolumePartition.cancel(List.of(region, region), List.of(), 16); throw new AssertionError("Double material winding was accepted"); }
+		catch (LiquidCharacteristicTimeResolutionRequired expected) { }
+		try { LiquidSignedVolumePartition.cancel(List.of(region), List.of(region, region), 16); throw new AssertionError("Negative material winding was accepted"); }
+		catch (LiquidCharacteristicTimeResolutionRequired expected) { }
 	}
 	private static void affineFieldSurvivesAdaptiveFaces() {
 		var cells = new ArrayList<>(LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1))));

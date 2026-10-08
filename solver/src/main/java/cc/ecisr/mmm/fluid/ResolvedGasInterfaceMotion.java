@@ -57,14 +57,14 @@ final class ResolvedGasInterfaceMotion {
 		void collect(LiquidConformingTransport motion) {
 			if (motion.mesh != mesh || !java.util.Arrays.equals(motion.liquid, fragments))
 				throw new IllegalArgumentException("Continuous gas transport refers to another phase input");
-			for (var image : motion.images) {
-				int c = image.cell(), f = image.face(); var face = mesh.faces.get(f);
+			for (var surface : motion.surfaces) {
+				int c = surface.cell(), f = surface.face(); var face = mesh.faces.get(f);
 				if (fragments[c] < 0) throw new IllegalArgumentException("Continuous gas surface requires liquid support");
 				int neighbor = face.first() == c ? face.second() : face.first();
 				if (neighbor == -2 || neighbor >= 0 && fragments[neighbor] >= 0) continue;
 				int node = contactNodes == null ? neighbor < 0 ? 0 : previousNodes[neighbor] : contactNodes[f];
 				if (patches.size() == maximumPieces) throw new IllegalStateException("Gas interface motion exceeds its surface budget");
-				patches.add(new Patch(node, image.geometry().faces().getFirst()));
+				patches.add(new Patch(node, surface.geometry()));
 			}
 		}
 	}
