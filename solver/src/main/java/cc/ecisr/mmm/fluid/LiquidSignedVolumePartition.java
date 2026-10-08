@@ -23,6 +23,19 @@ final class LiquidSignedVolumePartition {
 		if (maximumRegions < 1 || (long) positive.size() + negative.size() > maximumRegions
 				|| positive.stream().anyMatch(r -> !r.hasVolume()) || negative.stream().anyMatch(r -> !r.hasVolume()))
 			throw new IllegalArgumentException("Incomplete signed volume partition");
+		// An interior negative point outside every positive region certifies negative material winding.
+		for (var removal : negative) {
+			var point = LiquidExactPolygon.vertex(removal.measure().centroidCoordinates()); boolean covered = false;
+			for (var region : positive) {
+				boolean inside = true;
+				for (var face : region.faces()) {
+					work.spend(1);
+					if (point.distance(face.coefficients()).signum() > 0) { inside = false; break; }
+				}
+				if (inside) { covered = true; break; }
+			}
+			if (!covered) throw new LiquidCharacteristicTimeResolutionRequired("Transported surface has negative material winding");
+		}
 		var expected = LiquidConvexRegion.EMPTY.measure();
 		for (var region : positive) expected = expected.add(region.measure());
 		for (var region : negative) {

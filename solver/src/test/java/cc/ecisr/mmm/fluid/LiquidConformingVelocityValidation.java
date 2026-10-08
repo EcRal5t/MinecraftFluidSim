@@ -217,6 +217,9 @@ final class LiquidConformingVelocityValidation {
 				throw new AssertionError("Signed partition changed exact volume or first moments");
 		}
 		var region = LiquidConvexRegion.of(LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var uncovered = LiquidConvexRegion.of(LiquidPolyhedron.box(0.75, 0.75, 0.75, 1.5, 1.5, 1.5));
+		try { LiquidSignedVolumePartition.cancel(List.of(region), List.of(uncovered), 16, 6); throw new AssertionError("Uncovered negative interior was accepted"); }
+		catch (LiquidCharacteristicTimeResolutionRequired expected) { }
 		try { LiquidSignedVolumePartition.cancel(List.of(region), List.of(region), 16, 1); throw new AssertionError("Unbounded signed partition work was accepted"); }
 		catch (IllegalStateException expected) { }
 		try { LiquidSignedVolumePartition.cancel(List.of(region, region), List.of(), 16); throw new AssertionError("Double material winding was accepted"); }
