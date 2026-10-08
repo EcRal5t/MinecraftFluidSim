@@ -35,13 +35,11 @@ final class LiquidMechanicalReconstructionGroups {
 		if (!Arrays.equals(previous, state.copyControlCells())) throw new IllegalArgumentException("Mechanical regrouping requires independent control inventories");
 		var cells = LiquidGeometryStateMapper.restore(state); var physical = new ArrayList<LiquidGeometryVelocityProjection.Source>();
 		if (cells.size() > budget.maximumRegions()) throw new IllegalStateException("Mechanical regrouping exceeds its positive-region budget");
-		var support = new HashMap<Integer, List<LiquidGeometryRefinement.Cell>>();
 		var mechanical = new ArrayList<LiquidGeometryVelocityProjection.Source>();
 		for (int f = 0; f < cells.size(); f++) {
 			int owner = previous[f]; var u = state.cells().get(f).copyVelocity(); var velocity = new LiquidPolyhedron.Point(u[0], u[1], u[2]);
 			physical.add(new LiquidGeometryVelocityProjection.Source(stock.phases[owner], owner, stock.densities[owner], cells.get(f).geometry(), velocity));
 			mechanical.add(new LiquidGeometryVelocityProjection.Source(owner, owner, stock.densities[owner], cells.get(f).geometry(), velocity));
-			support.computeIfAbsent(owner, ignored -> new ArrayList<>()).add(cells.get(f));
 		}
 		var physicalFields = LiquidGeometryVelocityProjection.summarize(physical); var limits = tolerance.squaredLimits(physical);
 		var remaining = new HashMap<Integer, Fraction>();
@@ -50,7 +48,7 @@ final class LiquidMechanicalReconstructionGroups {
 		owners = new int[cells.size()]; for (int f = 0; f < owners.length; f++) owners[f] = f;
 		var work = new LiquidSupportVolumeFit.Work(budget.maximumEvaluations()); var edges = adjacent(cells, previous, stock.phases, work);
 		for (;;) {
-			Edge selected = null; Moments merged = null; Fraction least = null; List<LiquidGeometryRefinement.Cell> mergedSupport = null;
+			Edge selected = null; Moments merged = null; Fraction least = null;
 			var active = new TreeSet<Edge>(); for (var edge : edges) { int a = root(edge.first), b = root(edge.second); if (a != b) active.add(Edge.of(a, b)); }
 			for (var edge : active) {
 				work.context = ", mechanicalGroups=" + moments.size(); work.charge();
@@ -59,14 +57,11 @@ final class LiquidMechanicalReconstructionGroups {
 				if (defect.signum() < 0) throw new IllegalStateException("Mechanical agglomeration increased its exact resolved kinetic energy");
 				if (defect.compareTo(remaining.get(stock.phases[edge.first])) > 0) continue;
 				if (least != null && defect.compareTo(least) >= 0) continue;
-				var combined = new ArrayList<>(support.get(edge.first)); combined.addAll(support.get(edge.second));
-				if (LiquidStarControlPartition.assemble(combined).kernelPoint() == null) continue;
-				selected = edge; merged = candidate; least = defect; mergedSupport = List.copyOf(combined);
+				selected = edge; merged = candidate; least = defect;
 			}
 			if (selected == null) break;
 			int phase = stock.phases[selected.first]; remaining.put(phase, remaining.get(phase).subtract(least));
 			owners[selected.second] = selected.first; moments.put(selected.first, merged); moments.remove(selected.second);
-			support.put(selected.first, mergedSupport); support.remove(selected.second);
 		}
 		var squared = new LinkedHashMap<Integer, Fraction>();
 		for (var entry : moments.entrySet()) squared.put(entry.getKey(), entry.getValue().loss().multiply(Fraction.of(2)).divide(entry.getValue().mass));

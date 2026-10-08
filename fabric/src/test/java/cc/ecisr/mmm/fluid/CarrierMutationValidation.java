@@ -372,6 +372,17 @@ public final class CarrierMutationValidation {
 	}
 	private static void nativeMechanicalRegridCarriesChemicalInventory() throws Exception {
 		var registries = capillaryRegistries(); var liquids = registries.liquids();
+		var concave = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.25, 1)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0.25, 0, 0.25, 1, 1)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.75, 0.25, 0, 1, 1, 1)));
+		var concaveState = LiquidGeometryStateMapper.capture(concave, 1, new int[]{0, 1, 2}, new int[]{0, 1, 2});
+		var concaveDomain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 1.0F / 128, 512, 1e-7F, 0.45F, 0.002F, 0.8F));
+		concaveDomain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 3, 5, 5000, liquids.materials(),
+				new float[]{0.5F, 0.125F, 0.5F, 2, 0.125F, 0.625F, 0.5F, 1.5F, 0.875F, 0.625F, 0.5F, 1.5F}, new float[9], new byte[8],
+				new double[]{2000, 1500, 1500}, new int[3], concaveState));
+		var grouped = new LiquidMechanicalReconstructionGroups(concaveDomain, 0.125, new LiquidMomentReconstruction.Budget(256, 256, 1024));
+		require(java.util.Arrays.stream(grouped.owners).distinct().count() == 1 && grouped.squaredLimits.values().stream().allMatch(v -> v.signum() == 0),
+				"concave mechanical coarsening retained auxiliary inertia despite identical physical velocity");
 		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0, 0.25, 0.75, 0.625, 0.75)));
 		var geometry = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0}, new int[cells.size()]);
 		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 1.0F / 128, 512, 1e-7F, 0.45F, 0.002F, 0.8F));
