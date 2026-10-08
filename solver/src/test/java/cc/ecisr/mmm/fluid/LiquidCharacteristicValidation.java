@@ -142,19 +142,27 @@ final class LiquidCharacteristicValidation {
 		domain.restoreParticleState(new FlipParticleState(2, 2, 2, 0.5F, 1, 1,
 				new float[]{0.5F, 0.5F, 0.5F, 1}, new float[3], new byte[8], state)); domain.bootstrapGasState("");
 		double kinetic = domain.particleKineticEnergyJoules();
-		long started = System.nanoTime();
-		var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, domain.captureAuthoritativeState(), List.of(), false, 0, true));
-		double millis = (System.nanoTime() - started) / 1e6;
-		var restored = timing ? candidate.claimPreparedCpuDomain() : FluidDomain.restoreAuthoritativeState(candidate.state());
-		if (timing) System.out.println("resolved shear level=" + level + " inputLiquidFragments=" + cells.size() + " fullBackendMillis=" + millis + " outputLiquidFragments=" + restored.liquidGeometryState.cells().size());
-		var expected = LiquidConvexRegion.of(shape.transformed(new double[]{1, 0.125 * config.timeStep(), 0, 0, 1, 0, 0, 0, 1},
-				new LiquidPolyhedron.Point(0.5, 0.5, 0.5), new LiquidPolyhedron.Point(0, 0, 0)));
-		for (var cell : LiquidGeometryStateMapper.restore(restored.liquidGeometryState)) {
-			var actual = LiquidConvexRegion.of(cell.geometry()); var inside = actual;
-			for (var face : expected.faces()) inside = inside.clip(face.plane());
-			if (!inside.measure().isVolume(actual.measure())) throw new AssertionError("Production continuous shear created staircase exterior geometry");
+		var inventory = domain.particles.inventory();
+		for (int step = 1; step <= (timing ? 1 : 20); step++) {
+			long started = System.nanoTime();
+			var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(), List.of(), false, 0, true));
+			double millis = (System.nanoTime() - started) / 1e6;
+			domain = candidate.claimPreparedCpuDomain();
+			if (timing) System.out.println("resolved shear level=" + level + " inputLiquidFragments=" + cells.size() + " fullBackendMillis=" + millis + " outputLiquidFragments=" + domain.liquidGeometryState.cells().size());
+			var expected = LiquidConvexRegion.of(shape.transformed(new double[]{1, step * 0.125 * config.timeStep(), 0, 0, 1, 0, 0, 0, 1},
+					new LiquidPolyhedron.Point(0.5, 0.5, 0.5), new LiquidPolyhedron.Point(0, 0, 0)));
+			for (var cell : LiquidGeometryStateMapper.restore(domain.liquidGeometryState)) {
+				var actual = LiquidConvexRegion.of(cell.geometry()); var inside = actual;
+				for (var face : expected.faces()) inside = inside.clip(face.plane());
+				if (!inside.measure().isVolume(actual.measure())) throw new AssertionError("Production continuous shear created staircase exterior geometry");
+			}
+			if (!inventory.totalVolume().equals(domain.particles.inventory().totalVolume()) || !inventory.totalMass().equals(domain.particles.inventory().totalMass()))
+				throw new AssertionError("Continuous shear changed extensive inventory");
+			// Each sheared control crosses at most one additional dyadic x plane in this trajectory.
+			if (domain.liquidGeometryState.cells().size() > 2 * cells.size() || domain.particles.count() > cells.size() || maximumControlCentroidBits(domain.liquidGeometryState) > 64)
+				throw new AssertionError("Continuous affine motion retained growing geometric support: step=" + step + ", fragments=" + domain.liquidGeometryState.cells().size() + ", controls=" + domain.particles.count() + ", centroidBits=" + maximumControlCentroidBits(domain.liquidGeometryState));
+			close(domain.particleKineticEnergyJoules(), kinetic, 1e-17);
 		}
-		close(restored.particleKineticEnergyJoules(), kinetic, 1e-17);
 	}
 	private static void productionGeometryPipelinePreservesMovingGasChambers() {
 		var sheet = new LiquidGeometryRefinement.Cell(1, 0, 0, 0,
