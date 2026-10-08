@@ -10,7 +10,7 @@ import static cc.ecisr.mmm.fluid.LiquidBoundedArithmetic.*;
 /** The same block inverse of V B'B + (I-DB)'W(I-DB), with certified numerical coefficients. */
 final class LiquidPressureEnergyInverse {
 	record Result(double[][] matrix, double[][] error, LiquidExactPressureMetric.Factors factors, LiquidExactPressureMetric.Action action,
-			double normalizedEnergyTraceUpper, double[] weightUpper) { }
+			double normalizedEnergyTraceUpper, double[] weightUpper, double[][] representationError, double normalizedPerturbationUpper) { }
 	private record Key(double density, List<Fraction> geometry) {
 		Key(ControlVolumeGradient geometry, double density) { this(density, coordinates(geometry)); }
 		private static List<Fraction> coordinates(ControlVolumeGradient geometry) {
@@ -39,7 +39,7 @@ final class LiquidPressureEnergyInverse {
 			}
 			return result;
 		}
-		private static long size(Key key) { long faces = (key.geometry.size() - 1) / 7; return key.geometry.size() + 2 * faces * faces + 29 * faces + 8; }
+		private static long size(Key key) { long faces = (key.geometry.size() - 1) / 7; return key.geometry.size() + 3 * faces * faces + 29 * faces + 8; }
 		@Override public void close() {
 			if (CACHE.get() != this) throw new IllegalStateException("Pressure geometry scope closed out of order");
 			if (previous == null) CACHE.remove(); else CACHE.set(previous);
@@ -57,19 +57,6 @@ final class LiquidPressureEnergyInverse {
 			weight[i] = Value.of(geometry.exactWeight[i]);
 			for (int a = 0; a < 3; a++) { basis[i][a] = Value.of(geometry.exactBasis[i][a]); displacement[i][a] = Value.of(geometry.exactDisplacement[i][a]); }
 		}
-		var exact = LiquidExactPressureMetric.build(geometry, density);
-		var result = new double[n][n]; var error = new double[n][n];
-		var dual = observed(exact.dual()); var coupling = observed(exact.coupling());
-		var lifting = observed(exact.lifting()); var spatialDual = observed(exact.spatialDual());
-		for (int i = 0; i < n; i++) for (int j = 0; j <= i; j++) {
-			if (i == j) { result[i][j] = exact.coefficient(i, j).rounded(); error[i][j] = Math.ulp(result[i][j]); }
-			else {
-				var value = ZERO;
-				for (int a = 0; a < 3; a++) value = value.subtract(coupling[i][a].multiply(dual[j][a])).add(spatialDual[i][a].multiply(lifting[j][a]));
-				value = value.multiply(new Value(density, 0)); result[i][j] = result[j][i] = value.value(); error[i][j] = error[j][i] = value.error();
-			}
-			if (!Double.isFinite(result[i][j]) || i == j && !(result[i][j] > 0)) throw new IllegalStateException("Pressure metric exceeds its coefficient observation range");
-		}
 		var volume = Value.of(geometry.exactVolume);
 		var trace = ZERO;
 		for (int i = 0; i < n; i++) {
@@ -81,11 +68,13 @@ final class LiquidPressureEnergyInverse {
 			}
 		}
 		var weightUpper = new double[n]; for (int i = 0; i < n; i++) weightUpper[i] = weight[i].magnitude();
-		return new Result(result, error, exact, new LiquidExactPressureMetric.Action(exact), trace.magnitude(), weightUpper);
-	}
-	private static Value[][] observed(LiquidExactPolygon.Fraction[][] exact) {
-		var result = new Value[exact.length][3];
-		for (int i = 0; i < result.length; i++) for (int a = 0; a < 3; a++) result[i][a] = Value.of(exact[i][a]);
-		return result;
+		var certified = LiquidCertifiedPressureMetric.build(geometry, density, weightUpper, Math.nextDown(1 / trace.magnitude()));
+		var exact = certified.factors(); var result = new double[n][n]; var error = new double[n][n];
+		for (int i = 0; i < n; i++) for (int j = 0; j <= i; j++) {
+			result[i][j] = result[j][i] = exact.coefficient(i, j).rounded();
+			error[i][j] = error[j][i] = Math.nextUp(certified.error()[i][j] + Math.ulp(result[i][j]));
+			if (!Double.isFinite(result[i][j]) || i == j && !(result[i][j] > 0)) throw new IllegalStateException("Pressure metric exceeds its coefficient observation range");
+		}
+		return new Result(result, error, exact, new LiquidExactPressureMetric.Action(exact), trace.magnitude(), weightUpper, certified.error(), certified.normalizedPerturbationUpper());
 	}
 }

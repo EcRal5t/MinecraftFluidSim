@@ -58,7 +58,7 @@ final class LiquidWetWallValidation {
 		for (var metric : metrics) {
 			var local = new double[metric.geometry.indices.length];
 			for (int i = 0; i < local.length; i++) local[i] = metric.geometry.sign[i] * q[metric.geometry.indices[i]];
-			var action = metric.multiply(local); var errors = metric.evaluationError(action, new double[local.length]);
+			var action = metric.multiply(local); var errors = metric.evaluationError(local, action, new double[local.length]);
 			for (int i = 0; i < local.length; i++) {
 				rateEnergy = rateEnergy.add(Fraction.of(local[i]).multiply(Fraction.of(action[i])));
 				observation = observation.add(Fraction.of(Math.abs(local[i])).multiply(Fraction.of(errors[i])));

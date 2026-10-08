@@ -181,7 +181,7 @@ final class LiquidControlVolumeValidation {
 				1, 1000, (c, s) -> new LiquidControlVolumeMesh.Boundary(false, 0));
 		var gradient = ControlVolumeGradient.build(mesh.cells, mesh.faces)[0]; var metric = new ControlVolumeFluxMetric(gradient, 1000);
 		var rate = new double[gradient.indices.length]; for (int i = 0; i < rate.length; i++) rate[i] = gradient.exactBasis[i][2].multiply(gradient.exactVolume).rounded();
-		var action = metric.multiply(rate); var error = metric.evaluationError(action, new double[rate.length]);
+		var action = metric.multiply(rate); var error = metric.evaluationError(rate, action, new double[rate.length]);
 		var energy = LiquidExactPolygon.Fraction.ZERO; var bound = energy;
 		for (int i = 0; i < rate.length; i++) {
 			var flow = LiquidExactPolygon.Fraction.of(rate[i]); energy = energy.add(flow.multiply(LiquidExactPolygon.Fraction.of(action[i])));
@@ -258,6 +258,22 @@ final class LiquidControlVolumeValidation {
 	}
 	private static void boundedArithmeticContainsExactEndpointValues() {
 		integerDotObservationsMatchExactRatios();
+		for (int precision : new int[]{16, 64, 128}) {
+			var rationals = List.of(LiquidExactPolygon.Fraction.of(1).divide(LiquidExactPolygon.Fraction.of(7)),
+					LiquidExactPolygon.Fraction.of(-1).divide(LiquidExactPolygon.Fraction.of(3)), LiquidExactPolygon.Fraction.ZERO,
+					new LiquidExactPolygon.Fraction(java.math.BigInteger.ONE, java.math.BigInteger.ONE.shiftLeft(1100)),
+					new LiquidExactPolygon.Fraction(java.math.BigInteger.ONE.shiftLeft(1100), java.math.BigInteger.ONE));
+			for (var first : rationals) for (var second : rationals) for (int operation = 0; operation < 3; operation++) {
+				if (operation == 2 && second.signum() == 0) continue;
+				var a = LiquidDyadicInterval.of(first, precision); var b = LiquidDyadicInterval.of(second, precision);
+				var result = operation == 0 ? a.add(b) : operation == 1 ? a.multiply(b) : a.divide(b);
+				for (var x : List.of(a.low(), a.high())) for (var y : List.of(b.low(), b.high())) {
+					var exact = operation == 0 ? x.add(y) : operation == 1 ? x.multiply(y) : x.divide(y);
+					if (exact.compareTo(result.low()) < 0 || exact.compareTo(result.high()) > 0)
+						throw new AssertionError("Finite dyadic arithmetic excluded an exact interval endpoint");
+				}
+			}
+		}
 		var samples = List.of(LiquidBoundedArithmetic.Value.of(LiquidExactPolygon.Fraction.of(1).divide(LiquidExactPolygon.Fraction.of(7))),
 				LiquidBoundedArithmetic.Value.of(LiquidExactPolygon.Fraction.of(-1).divide(LiquidExactPolygon.Fraction.of(3))),
 				new LiquidBoundedArithmetic.Value(1.3, 0.6), new LiquidBoundedArithmetic.Value(3, 2.9),
@@ -312,9 +328,13 @@ final class LiquidControlVolumeValidation {
 	}
 	private static void pressureMetricCoefficientsAndActionsMatchExactReference() {
 		var homogeneous = java.math.BigInteger.ONE.shiftLeft(512);
+		var thin = java.math.BigInteger.ONE.shiftLeft(80);
 		for (var shape : List.of(LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5),
 				LiquidPolyhedron.box(0, 0, 0, 0.5, 1.0 / 1024, 0.5),
 				LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 2, 3, 3).clip(-1, -2, -3, -3 + Math.scalb(1.0, -24)),
+				LiquidPolyhedron.box(0, 0, 0, 1, 1, 1).clip(1, 2, 3, 3).clip(LiquidGeometryPlane.exact(List.of(thin.negate(),
+						thin.multiply(java.math.BigInteger.valueOf(-2)), thin.multiply(java.math.BigInteger.valueOf(-3)),
+						thin.multiply(java.math.BigInteger.valueOf(-3)).add(java.math.BigInteger.ONE)))),
 				LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5).clip(-2, 3, 1, 0.7),
 				LiquidPolyhedron.box(0, 0, 0, 0.5, 0.5, 0.5).clip(LiquidGeometryPlane.exact(List.of(homogeneous,
 						homogeneous.add(java.math.BigInteger.ONE), homogeneous.add(java.math.BigInteger.valueOf(3)), homogeneous.shiftRight(1)))),
@@ -327,20 +347,28 @@ final class LiquidControlVolumeValidation {
 				var coefficients = LiquidPressureEnergyInverseOracle.coefficients(gradient, 1000);
 				var exact = java.util.Arrays.stream(coefficients).map(row -> java.util.Arrays.stream(row).mapToDouble(value -> value.rounded()).toArray()).toArray(double[][]::new);
 				for (int i = 0; i < exact.length; i++) for (int j = 0; j < exact.length; j++) {
-					if (!observed.factors().coefficient(i, j).equals(coefficients[i][j]))
-						throw new AssertionError("Pressure geometry reuse changed the complete rational energy coefficient");
+					var represented = observed.factors().coefficient(i, j);
+					if (!represented.equals(observed.factors().coefficient(j, i)) || represented.denominator().bitCount() != 1)
+						throw new AssertionError("Finite pressure factors lost exact symmetry or dyadic support");
+					if (represented.subtract(coefficients[i][j]).absolute().compareTo(LiquidExactPolygon.Fraction.of(observed.representationError()[i][j])) > 0)
+						throw new AssertionError("Finite pressure coefficient escaped its original-energy certificate");
 					if (!(Math.abs(observed.matrix()[i][j] - exact[i][j]) <= observed.error()[i][j] + Math.ulp(exact[i][j])))
 						throw new AssertionError("Pressure metric coefficient escaped its exact-reference error certificate");
 				}
 				var metric = new ControlVolumeFluxMetric(gradient, 1000);
 				for (double scale : new double[]{1, Double.MIN_VALUE, Math.scalb(1.0, -600), Math.scalb(1.0, 600)}) {
 					var input = new double[exact.length]; for (int i = 0; i < input.length; i++) input[i] = scale * Math.sin(i + 0.25);
-					var actual = metric.multiply(input); var error = metric.evaluationError(actual, new double[input.length]);
+					var actual = metric.multiply(input); var error = metric.evaluationError(input, actual, new double[input.length]);
 					for (int i = 0; i < exact.length; i++) {
-						var complete = LiquidExactPolygon.Fraction.ZERO;
-						for (int j = 0; j < input.length; j++) complete = complete.add(coefficients[i][j].multiply(LiquidExactPolygon.Fraction.of(input[j])));
+						var complete = LiquidExactPolygon.Fraction.ZERO; var original = complete;
+						for (int j = 0; j < input.length; j++) {
+							var value = LiquidExactPolygon.Fraction.of(input[j]);
+							complete = complete.add(observed.factors().coefficient(i, j).multiply(value)); original = original.add(coefficients[i][j].multiply(value));
+						}
 						if (Double.doubleToRawLongBits(actual[i]) != Double.doubleToRawLongBits(complete.rounded()))
 							throw new AssertionError("Compiled pressure action changed exact final rounding");
+						if (original.subtract(LiquidExactPolygon.Fraction.of(actual[i])).absolute().compareTo(LiquidExactPolygon.Fraction.of(error[i])) > 0)
+							throw new AssertionError("Finite pressure action escaped its original-energy certificate");
 						double reference = 0, rounding = 0;
 						for (int j = 0; j < exact.length; j++) { reference += exact[i][j] * input[j]; rounding += Math.ulp(exact[i][j] * input[j]) + Math.ulp(reference); }
 						if (!(Math.abs(actual[i] - reference) <= error[i] + rounding)) throw new AssertionError("Pressure action escaped its propagated coefficient error");

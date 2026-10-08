@@ -2,61 +2,15 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.fluid.LiquidExactPolygon.Fraction;
 
-/** Exact block inverse of the affine-consistent pressure energy; actions round after the complete dot product. */
+/** Exact actions of the certified dyadic pressure factors; each complete dot product rounds once. */
 final class LiquidExactPressureMetric {
 	private LiquidExactPressureMetric() { }
-	static Factors build(ControlVolumeGradient geometry, double density) {
-		int n = geometry.indices.length; var gram = new Fraction[3][3]; var remainder = new Fraction[3][3]; var dual = new Fraction[n][3];
-		for (int i = 0; i < n; i++) for (int a = 0; a < 3; a++) dual[i][a] = geometry.exactBasis[i][a].divide(geometry.exactWeight[i]);
-		for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
-			gram[a][b] = Fraction.ZERO; var affine = Fraction.ZERO;
-			for (int i = 0; i < n; i++) {
-				gram[a][b] = gram[a][b].add(geometry.exactBasis[i][a].multiply(dual[i][b]));
-				affine = affine.add(geometry.exactBasis[i][a].multiply(geometry.exactDisplacement[i][b]));
-			}
-			remainder[a][b] = Fraction.of(a == b ? 1 : 0).subtract(affine);
-		}
-		var inverse = inverse(gram); var coupling = new Fraction[n][3];
-		for (int i = 0; i < n; i++) for (int a = 0; a < 3; a++) {
-			coupling[i][a] = Fraction.ZERO;
-			for (int b = 0; b < 3; b++) coupling[i][a] = coupling[i][a].add(dual[i][b].multiply(inverse[b][a]));
-		}
-		var lifting = new Fraction[n][3]; var spatial = new Fraction[3][3];
-		for (int i = 0; i < n; i++) for (int a = 0; a < 3; a++) {
-			lifting[i][a] = geometry.exactDisplacement[i][a];
-			for (int b = 0; b < 3; b++) lifting[i][a] = lifting[i][a].add(coupling[i][b].multiply(remainder[b][a]));
-		}
-		for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
-			spatial[a][b] = a == b ? geometry.exactVolume : Fraction.ZERO;
-			for (int j = 0; j < 3; j++) for (int k = 0; k < 3; k++)
-				spatial[a][b] = spatial[a][b].add(remainder[j][a].multiply(inverse[j][k]).multiply(remainder[k][b]));
-		}
-		var spatialInverse = inverse(spatial); var spatialDual = new Fraction[n][3];
-		for (int i = 0; i < n; i++) for (int a = 0; a < 3; a++) {
-			spatialDual[i][a] = Fraction.ZERO;
-			for (int b = 0; b < 3; b++) spatialDual[i][a] = spatialDual[i][a].add(lifting[i][b].multiply(spatialInverse[b][a]));
-		}
-		var diagonal = new Fraction[n]; for (int i = 0; i < n; i++) diagonal[i] = Fraction.of(1).divide(geometry.exactWeight[i]);
-		return new Factors(diagonal, dual, coupling, lifting, spatialDual, Fraction.of(density));
-	}
 	record Factors(Fraction[] diagonal, Fraction[][] dual, Fraction[][] coupling, Fraction[][] lifting, Fraction[][] spatialDual, Fraction density) {
 		Fraction coefficient(int i, int j) {
 			var value = i == j ? diagonal[i] : Fraction.ZERO;
 			for (int a = 0; a < 3; a++) value = value.subtract(coupling[i][a].multiply(dual[j][a])).add(spatialDual[i][a].multiply(lifting[j][a]));
 			return value.multiply(density);
 		}
-	}
-	private static Fraction[][] inverse(Fraction[][] matrix) {
-		var cofactors = new Fraction[3][3];
-		for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
-			int a = (i + 1) % 3, b = (i + 2) % 3, c = (j + 1) % 3, d = (j + 2) % 3;
-			cofactors[i][j] = matrix[a][c].multiply(matrix[b][d]).subtract(matrix[a][d].multiply(matrix[b][c]));
-		}
-		var determinant = Fraction.ZERO; for (int j = 0; j < 3; j++) determinant = determinant.add(matrix[0][j].multiply(cofactors[0][j]));
-		if (determinant.signum() <= 0) throw new IllegalArgumentException("Pressure metric has no positive three-dimensional geometric support");
-		var result = new Fraction[3][3];
-		for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) result[i][j] = cofactors[j][i].divide(determinant);
-		return result;
 	}
 	/** Common integer coordinates are compiled once; each action observes its final rows without intermediate reductions. */
 	static final class Action {

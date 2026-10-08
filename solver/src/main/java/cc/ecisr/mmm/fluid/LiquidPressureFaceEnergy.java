@@ -71,7 +71,7 @@ final class LiquidPressureFaceEnergy {
 				local[i] = values[metric.geometry.indices[i]]; if (metric.geometry.sign[i] < 0) local[i] = local[i].negate();
 				present |= local[i].value() != 0 || local[i].error() != 0;
 			}
-			if (present) energy = up(energy + metric.dualEnergy(local).magnitude());
+			if (present) energy = up(energy + metric.dualEnergyUpper(local));
 		}
 		return energy;
 	}
