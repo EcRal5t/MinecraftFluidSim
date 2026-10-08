@@ -39,7 +39,7 @@ final class LiquidPressureEnergyInverse {
 			}
 			return result;
 		}
-		private static long size(Key key) { long faces = (key.geometry.size() - 1) / 7; return key.geometry.size() + 2 * faces * faces + 28 * faces + 8; }
+		private static long size(Key key) { long faces = (key.geometry.size() - 1) / 7; return key.geometry.size() + 2 * faces * faces + 29 * faces + 8; }
 		@Override public void close() {
 			if (CACHE.get() != this) throw new IllegalStateException("Pressure geometry scope closed out of order");
 			if (previous == null) CACHE.remove(); else CACHE.set(previous);

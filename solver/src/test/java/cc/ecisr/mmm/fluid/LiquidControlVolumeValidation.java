@@ -337,6 +337,10 @@ final class LiquidControlVolumeValidation {
 					var input = new double[exact.length]; for (int i = 0; i < input.length; i++) input[i] = scale * Math.sin(i + 0.25);
 					var actual = metric.multiply(input); var error = metric.evaluationError(actual, new double[input.length]);
 					for (int i = 0; i < exact.length; i++) {
+						var complete = LiquidExactPolygon.Fraction.ZERO;
+						for (int j = 0; j < input.length; j++) complete = complete.add(coefficients[i][j].multiply(LiquidExactPolygon.Fraction.of(input[j])));
+						if (Double.doubleToRawLongBits(actual[i]) != Double.doubleToRawLongBits(complete.rounded()))
+							throw new AssertionError("Compiled pressure action changed exact final rounding");
 						double reference = 0, rounding = 0;
 						for (int j = 0; j < exact.length; j++) { reference += exact[i][j] * input[j]; rounding += Math.ulp(exact[i][j] * input[j]) + Math.ulp(reference); }
 						if (!(Math.abs(actual[i] - reference) <= error[i] + rounding)) throw new AssertionError("Pressure action escaped its propagated coefficient error");

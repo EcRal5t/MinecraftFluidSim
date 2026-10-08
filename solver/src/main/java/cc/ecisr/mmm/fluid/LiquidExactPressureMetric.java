@@ -58,9 +58,10 @@ final class LiquidExactPressureMetric {
 		for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) result[i][j] = cofactors[j][i].divide(determinant);
 		return result;
 	}
-	/** The two rank-three reductions and final rows use common integer coordinates; only six intermediate ratios are normalized. */
+	/** Common integer coordinates are compiled once; each action observes its final rows without intermediate reductions. */
 	static final class Action {
 		private final LinearForm[] reduction, output;
+		private final java.math.BigInteger[] denominator;
 		Action(Factors factors) {
 			int n = factors.diagonal.length; reduction = new LinearForm[6]; output = new LinearForm[n];
 			for (int a = 0; a < 6; a++) {
@@ -68,13 +69,22 @@ final class LiquidExactPressureMetric {
 				for (int i = 0; i < n; i++) row[i] = a < 3 ? factors.dual[i][a] : factors.lifting[i][a - 3];
 				reduction[a] = new LinearForm(row);
 			}
+			var divisor = java.math.BigInteger.ONE; for (var row : reduction) divisor = common(divisor, row.denominator);
+			for (int a = 0; a < reduction.length; a++) {
+				var scale = divisor.divide(reduction[a].denominator); var coefficients = reduction[a].numerator.clone();
+				for (int i = 0; i < n; i++) coefficients[i] = coefficients[i].multiply(scale);
+				reduction[a] = new LinearForm(coefficients, divisor);
+			}
+			denominator = new java.math.BigInteger[n];
+			var scale = new Fraction(divisor, java.math.BigInteger.ONE);
 			for (int i = 0; i < n; i++) {
-				var row = new Fraction[7]; row[0] = factors.diagonal[i].multiply(factors.density);
+				var row = new Fraction[7]; row[0] = factors.diagonal[i].multiply(factors.density).multiply(scale);
 				for (int a = 0; a < 3; a++) {
 					row[1 + a] = factors.coupling[i][a].negate().multiply(factors.density);
 					row[4 + a] = factors.spatialDual[i][a].multiply(factors.density);
 				}
 				output[i] = new LinearForm(row);
+				denominator[i] = output[i].denominator.multiply(divisor);
 			}
 		}
 		double[] multiply(double[] value) {
@@ -83,19 +93,13 @@ final class LiquidExactPressureMetric {
 			for (int i = 0; i < input.length; i++) {
 				input[i] = cc.ecisr.mmm.units.SignedDyadic.of(value[i]); if (input[i].signum() != 0) exponent = Math.min(exponent, input[i].exponent());
 			}
-			var scaled = new java.math.BigInteger[input.length]; var inputDenominator = java.math.BigInteger.ONE.shiftLeft(-exponent);
+			var scaled = new java.math.BigInteger[input.length];
 			for (int i = 0; i < input.length; i++) scaled[i] = input[i].significand().shiftLeft(input[i].exponent() - exponent);
-			var intermediate = new Fraction[6]; var denominator = inputDenominator;
-			for (int a = 0; a < 6; a++) {
-				intermediate[a] = new Fraction(reduction[a].sum(scaled), reduction[a].denominator.multiply(inputDenominator));
-				denominator = common(denominator, intermediate[a].denominator());
-			}
-			var row = new java.math.BigInteger[7]; var inputScale = denominator.divide(inputDenominator);
-			for (int a = 0; a < 6; a++) row[a + 1] = intermediate[a].numerator().multiply(denominator.divide(intermediate[a].denominator()));
+			var row = new java.math.BigInteger[7]; for (int a = 0; a < 6; a++) row[a + 1] = reduction[a].sum(scaled);
 			var result = new double[value.length];
 			for (int i = 0; i < result.length; i++) {
-				row[0] = scaled[i].multiply(inputScale);
-				result[i] = LiquidIntegerDotObservation.rounded(output[i].numerator, row, output[i].denominator.multiply(denominator));
+				row[0] = scaled[i];
+				result[i] = LiquidIntegerDotObservation.rounded(output[i].numerator, row, denominator[i].shiftLeft(-exponent));
 				if (!Double.isFinite(result[i])) throw new IllegalStateException("Exact pressure action exceeds its numerical observation range");
 			}
 			return result;
@@ -103,6 +107,7 @@ final class LiquidExactPressureMetric {
 	}
 	private static final class LinearForm {
 		final java.math.BigInteger[] numerator; final java.math.BigInteger denominator;
+		LinearForm(java.math.BigInteger[] numerator, java.math.BigInteger denominator) { this.numerator = numerator; this.denominator = denominator; }
 		LinearForm(Fraction[] coefficients) {
 			var divisor = java.math.BigInteger.ONE; for (var value : coefficients) divisor = common(divisor, value.denominator());
 			denominator = divisor; numerator = new java.math.BigInteger[coefficients.length];
