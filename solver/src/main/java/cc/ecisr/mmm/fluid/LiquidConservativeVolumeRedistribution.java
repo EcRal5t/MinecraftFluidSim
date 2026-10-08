@@ -36,7 +36,14 @@ final class LiquidConservativeVolumeRedistribution {
 		if (!byPhase.keySet().equals(sinks.keySet())) throw new IllegalStateException("Conservative regrid lost a physical phase");
 		var output = new ArrayList<Map<Integer, LiquidGeometryVelocityProjection.Value>>(); for (var leaf : leaves) output.add(new LinkedHashMap<>());
 		var moved = Fraction.ZERO; var displacement = Fraction.ZERO;
-		Comparator<Integer> order = Comparator.comparingDouble((Integer l) -> leaves.get(l).minimum(0)).thenComparingDouble(l -> leaves.get(l).minimum(1)).thenComparingDouble(l -> leaves.get(l).minimum(2));
+		var bounds = leaves.stream().map(leaf -> leaf.geometry().coordinateBounds()).toList();
+		Comparator<Integer> order = (first, second) -> {
+			for (int side = 0; side < 2; side++) for (int axis = 0; axis < 3; axis++) {
+				int comparison = bounds.get(first)[side][axis].compareTo(bounds.get(second)[side][axis]);
+				if (comparison != 0) return comparison;
+			}
+			return Integer.compare(first, second);
+		};
 		for (var group : byPhase.entrySet()) {
 			int phase = group.getKey(); var supply = group.getValue(); var demand = sinks.get(phase);
 			supply.sort(Comparator.comparing(Source::leaf, order)); demand.sort(Comparator.comparing(Target::leaf, order));
@@ -61,10 +68,10 @@ final class LiquidConservativeVolumeRedistribution {
 				if (remaining[s].signum() == 0) { s++; continue; } if (required[t].signum() == 0) { t++; continue; }
 				var amount = remaining[s].subtract(required[t]).signum() < 0 ? remaining[s] : required[t];
 				received[t].add(supply.get(s), amount); moved = moved.add(amount);
-				var first = leaves.get(supply.get(s).leaf); var second = leaves.get(demand.get(t).leaf); var squared = Fraction.ZERO;
+				var first = bounds.get(supply.get(s).leaf); var second = bounds.get(demand.get(t).leaf); var squared = Fraction.ZERO;
 				for (int a = 0; a < 3; a++) {
-					var lo = Fraction.of(first.minimum(a)).subtract(Fraction.of(second.minimum(a) + second.width())).absolute();
-					var hi = Fraction.of(first.minimum(a) + first.width()).subtract(Fraction.of(second.minimum(a))).absolute();
+					var lo = first[0][a].subtract(second[1][a]).absolute();
+					var hi = first[1][a].subtract(second[0][a]).absolute();
 					var distance = lo.subtract(hi).signum() > 0 ? lo : hi; squared = squared.add(distance.multiply(distance));
 				}
 				displacement = displacement.add(amount.multiply(squared)); remaining[s] = remaining[s].subtract(amount); required[t] = required[t].subtract(amount);

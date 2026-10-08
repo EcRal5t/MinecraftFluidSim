@@ -38,21 +38,13 @@ final class LiquidGeometryReconstructionPlan {
 	final double maximumCentroidError, maximumOccupancyErrorLength;
 	final Fraction symmetricDifferenceVolumeBound;
 	final Fraction redistributedVolume, redistributionSquaredDisplacementVolumeBound;
-	/** Rebuilds auxiliary fragments while retaining every independent P0 mechanical field. */
-	static LiquidGeometryReconstructionPlan mechanicalControls(FluidDomain domain, LiquidMomentReconstruction.Tolerance tolerance,
-			LiquidMomentReconstruction.Budget budget) {
-		var open = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
-				domain.geometry.cutCells, List.of(), budget.maximumLeaves()).leaves;
-		return new LiquidGeometryReconstructionPlan(domain, domain.liquidGeometryState, domain.gasState.geometry, open, tolerance, 0, budget, true);
-	}
 	/** Physical-phase regrid bounds integrated RMS loss relative to the original mass-weighted velocity fluctuations. */
 	static LiquidGeometryReconstructionPlan relativeVelocity(FluidDomain domain, LiquidMomentReconstruction.Tolerance tolerance,
 			double relativePhaseFluctuation, LiquidMomentReconstruction.Budget budget) {
-		var groups = new LiquidMechanicalReconstructionGroups(domain, relativePhaseFluctuation, budget);
 		var open = new LiquidGeometryDomainPartition(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
 				domain.geometry.cutCells, List.of(), budget.maximumLeaves()).leaves;
 		return new LiquidGeometryReconstructionPlan(domain, domain.liquidGeometryState, domain.gasState.geometry, open, tolerance,
-				new LiquidGeometryVelocityProjection.RmsTolerance(0, relativePhaseFluctuation), budget, true, groups);
+				new LiquidGeometryVelocityProjection.RmsTolerance(0, relativePhaseFluctuation), budget);
 	}
 
 	LiquidGeometryReconstructionPlan(LiquidGeometryState input, List<LiquidGeometryRefinement.Cell> open,
@@ -75,20 +67,11 @@ final class LiquidGeometryReconstructionPlan {
 	}
 	private LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
 			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget) {
-		this(domain, input, gas, open, tolerance, maximumRmsVelocityError, budget, false);
-	}
-	private LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
-			LiquidMomentReconstruction.Tolerance tolerance, double maximumRmsVelocityError, LiquidMomentReconstruction.Budget budget, boolean retainControls) {
-		this(domain, input, gas, open, tolerance, new LiquidGeometryVelocityProjection.RmsTolerance(maximumRmsVelocityError, 0), budget, retainControls);
+		this(domain, input, gas, open, tolerance, new LiquidGeometryVelocityProjection.RmsTolerance(maximumRmsVelocityError, 0), budget);
 	}
 	private LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
 			LiquidMomentReconstruction.Tolerance tolerance, LiquidGeometryVelocityProjection.RmsTolerance velocityTolerance,
-			LiquidMomentReconstruction.Budget budget, boolean retainControls) {
-		this(domain, input, gas, open, tolerance, velocityTolerance, budget, retainControls, null);
-	}
-	private LiquidGeometryReconstructionPlan(FluidDomain domain, LiquidGeometryState input, GasGeometryState gas, List<LiquidGeometryRefinement.Cell> open,
-			LiquidMomentReconstruction.Tolerance tolerance, LiquidGeometryVelocityProjection.RmsTolerance velocityTolerance,
-			LiquidMomentReconstruction.Budget budget, boolean retainControls, LiquidMechanicalReconstructionGroups regroup) {
+			LiquidMomentReconstruction.Budget budget) {
 		if (input == null || open == null || tolerance == null || budget == null || open.size() > budget.maximumLeaves()
 				|| velocityTolerance == null)
 			throw new IllegalArgumentException("Invalid geometric reconstruction support");
@@ -96,8 +79,7 @@ final class LiquidGeometryReconstructionPlan {
 		this.input = input; previousGasGeometry = gas;
 		var source = LiquidGeometryStateMapper.restore(input); var remap = new LiquidGeometryRemap(open);
 		int[] owners = input.copyFragmentOwners();
-		var stock = domain == null ? null : new LiquidReconstructionInventories(domain, retainControls);
-		if (regroup != null) for (int owner : owners) stock.phases[owner] = regroup.owners[owner];
+		var stock = domain == null ? null : new LiquidReconstructionInventories(domain);
 		int[] phaseOwners = new int[owners.length]; var densities = new Fraction[owners.length];
 		for (int f = 0; f < owners.length; f++) { phaseOwners[f] = stock == null ? owners[f] : stock.phases[owners[f]]; densities[f] = stock == null ? Fraction.of(1) : stock.densities[owners[f]]; }
 		var local = new ArrayList<LinkedHashMap<Integer, ArrayList<LiquidPolyhedron>>>();
@@ -108,15 +90,14 @@ final class LiquidGeometryReconstructionPlan {
 			var u = input.cells().get(f).copyVelocity();
 			fields.get(part.cell()).add(new LiquidGeometryVelocityProjection.Source(phaseOwners[f], owners[f], densities[f], part.geometry(), new LiquidPolyhedron.Point(u[0], u[1], u[2])));
 		}
-		var velocityLimits = regroup == null ? velocityTolerance.squaredLimits(fields.stream().flatMap(List::stream).toList()) : regroup.squaredLimits;
+		var velocityLimits = velocityTolerance.squaredLimits(fields.stream().flatMap(List::stream).toList());
 		if (gas != null) {
 			var gasCells = LiquidGeometryStateMapper.restoreCells(gas.cells()); var nodes = gas.nodeOrdinals();
 			for (int f = 0; f < gasCells.size(); f++) for (var part : remap.partitionGeometry(gasCells.get(f).geometry()))
 				local.get(part.cell()).computeIfAbsent(source.size() + nodes[f], ignored -> new ArrayList<>()).add(part.geometry());
 		}
 		var supports = new ArrayList<LiquidMomentReconstruction.Support>();
-		var originalSupports = new HashMap<LiquidPhasePartition.Address, LiquidMomentReconstruction.Support>();
-		var projections = new HashMap<LiquidPhasePartition.Address, LiquidGeometryVelocityProjection>();
+		var originalFields = new HashMap<LiquidPhasePartition.Address, List<LiquidGeometryVelocityProjection.Source>>();
 		for (int c = 0; c < open.size(); c++) {
 			if (gas != null) {
 				var address = LiquidPhasePartition.Address.of(open.get(c));
@@ -127,43 +108,14 @@ final class LiquidGeometryReconstructionPlan {
 				sources.add(new LiquidMomentReconstruction.Source(group.getKey(), group.getValue()));
 			}
 			var support = new LiquidMomentReconstruction.Support(open.get(c), sources); supports.add(support);
-			var address = LiquidPhasePartition.Address.of(open.get(c)); originalSupports.put(address, support); projections.put(address, new LiquidGeometryVelocityProjection(open.get(c), fields.get(c)));
+			originalFields.put(LiquidPhasePartition.Address.of(open.get(c)), List.copyOf(fields.get(c)));
 		}
-		LiquidMomentReconstruction.Result result; LiquidConservativeVolumeRedistribution.Result balanced; int work = regroup == null ? 0 : regroup.evaluations;
-		while (true) {
-			if (work >= budget.maximumEvaluations()) throw new IllegalStateException("Geometry reconstruction exceeds its evaluation budget");
-			var remaining = new LiquidMomentReconstruction.Budget(budget.maximumLeaves(), budget.maximumEvaluations() - work, budget.maximumRegions());
-			result = LiquidMomentReconstruction.reconstruct(supports, tolerance, remaining,
-					leaf -> velocityTolerance.relativePhaseFluctuation() > 0 || ancestor(projections, leaf).values(leaf).entrySet().stream()
-							.allMatch(entry -> velocityTolerance.accepts(velocityLimits, entry.getKey(), entry.getValue())));
-			work += result.evaluations();
-			var sources = new ArrayList<LiquidConservativeVolumeRedistribution.Source>(); var targets = new ArrayList<LiquidConservativeVolumeRedistribution.Target>();
-			for (int l = 0; l < result.leaves().size(); l++) {
-				var leaf = result.leaves().get(l); var projected = ancestor(projections, leaf.open()).values(leaf.open());
-				for (var entry : projected.entrySet()) sources.add(new LiquidConservativeVolumeRedistribution.Source(l, entry.getKey(), entry.getValue()));
-				for (var phase : leaf.phases()) if (phase.control() < source.size()) targets.add(new LiquidConservativeVolumeRedistribution.Target(l, phase.control(), LiquidVolumeInterface.measure(phase.pieces()).volume()));
-			}
-			balanced = LiquidConservativeVolumeRedistribution.project(result.leaves().stream().map(LiquidMomentReconstruction.Leaf::open).toList(), sources, targets);
-			var unresolved = velocityTolerance.unresolvedLeaves(velocityLimits, balanced.fields());
-			if (unresolved.isEmpty()) break;
-			var retry = new ArrayList<LiquidMomentReconstruction.Support>();
-			for (int l = 0; l < result.leaves().size(); l++) {
-				var leaf = result.leaves().get(l).open();
-				for (var cell : unresolved.contains(l) ? LiquidGeometryRefinement.children(leaf) : List.of(leaf)) {
-					var original = ancestor(originalSupports, cell); var clipped = new ArrayList<LiquidMomentReconstruction.Source>();
-					for (var group : original.sources()) {
-						var pieces = new ArrayList<LiquidPolyhedron>(); for (var piece : group.pieces()) {
-							var faces = LiquidExactPolygon.faces(piece); for (var plane : LiquidExactPolygon.faces(cell.geometry())) { faces = LiquidExactPolygon.clipVolume(faces, plane.coefficients(), 1); if (faces.isEmpty()) break; }
-							if (!faces.isEmpty()) pieces.add(LiquidPolyhedron.restoredExact(faces));
-						}
-						clipped.add(new LiquidMomentReconstruction.Source(group.control(), pieces));
-					}
-					retry.add(new LiquidMomentReconstruction.Support(cell, clipped));
-				}
-			}
-			if (retry.size() > budget.maximumLeaves()) throw new IllegalStateException("Geometry reconstruction exceeds its spatial leaf budget");
-			supports = retry;
-		}
+		var result = LiquidMomentReconstruction.reconstruct(supports, tolerance, budget, ignored -> true);
+		if (result.evaluations() >= budget.maximumEvaluations()) throw new IllegalStateException("Geometry reconstruction exceeds its evaluation budget");
+		var remaining = new LiquidMomentReconstruction.Budget(budget.maximumLeaves(), budget.maximumEvaluations() - result.evaluations(), budget.maximumRegions());
+		var mechanical = new LiquidPhysicalReconstructionControls(result.leaves(), leaf -> ancestor(originalFields, leaf),
+				velocityTolerance, velocityLimits, source.size(), remaining);
+		int work = result.evaluations() + mechanical.evaluations;
 		var cells = new ArrayList<LiquidGeometryRefinement.Cell>(); var previousOwner = new ArrayList<Integer>();
 		var gasCells = new ArrayList<LiquidGeometryRefinement.Cell>(); var gasOwners = new ArrayList<Integer>();
 		var speeds = new ArrayList<double[]>(); var representatives = new ArrayList<Integer>(); var selected = new ArrayList<LiquidGeometryRefinement.Cell>();
@@ -173,23 +125,20 @@ final class LiquidGeometryReconstructionPlan {
 		for (var observation : result.phases()) {
 			centroidError = Math.max(centroidError, observation.maximumCentroidError()); occupancyError = Math.max(occupancyError, observation.maximumOccupancyErrorLength()); difference = difference.add(observation.symmetricDifferenceVolumeBound());
 		}
-		redistributedVolume = balanced.movedVolume(); redistributionSquaredDisplacementVolumeBound = balanced.squaredDisplacementVolumeBound();
-		for (int l = 0; l < result.leaves().size(); l++) {
-			var leaf = result.leaves().get(l); selected.add(leaf.open());
-			for (var phase : leaf.phases()) {
-					if (phase.control() >= source.size()) {
-						for (var piece : phase.pieces()) { gasCells.add(LiquidPhasePartition.Address.of(leaf.open()).cell(piece)); gasOwners.add(phase.control() - source.size()); }
-						continue;
-					}
-					int first = cells.size(); var value = balanced.fields().get(l).get(phase.control());
-					controlStarts.add(first); controlFields.add(value);
-					if (!value.volume().equals(LiquidVolumeInterface.measure(phase.pieces()).volume()))
-						throw new IllegalStateException("Reconstructed inventory and projected momentum have different local volumes");
-					var velocity = value.velocity(); velocityTotals.computeIfAbsent(phase.control(), ignored -> new VelocityTotals()).add(value);
-					for (var piece : phase.pieces()) {
-						cells.add(LiquidPhasePartition.Address.of(leaf.open()).cell(piece)); previousOwner.add(phase.control());
-						speeds.add(velocity); representatives.add(first);
-					}
+		redistributedVolume = mechanical.redistributedVolume; redistributionSquaredDisplacementVolumeBound = mechanical.redistributionSquaredDisplacementVolumeBound;
+		for (var leaf : result.leaves()) {
+			selected.add(leaf.open());
+			for (var phase : leaf.phases()) if (phase.control() >= source.size()) {
+				for (var piece : phase.pieces()) { gasCells.add(LiquidPhasePartition.Address.of(leaf.open()).cell(piece)); gasOwners.add(phase.control() - source.size()); }
+			}
+		}
+		for (var control : mechanical.controls) {
+			var leaf = result.leaves().get(control.leaf()); int first = cells.size(); var value = control.field();
+			controlStarts.add(first); controlFields.add(value);
+			var velocity = value.velocity(); velocityTotals.computeIfAbsent(control.phase(), ignored -> new VelocityTotals()).add(value);
+			for (var piece : control.pieces()) {
+				cells.add(LiquidPhasePartition.Address.of(leaf.open()).cell(piece)); previousOwner.add(control.phase());
+				speeds.add(velocity); representatives.add(first);
 			}
 		}
 		var first = new HashMap<Integer, Integer>(); var groups = new int[cells.size()]; var velocity = new double[3 * cells.size()];

@@ -48,6 +48,18 @@ final class LiquidPolyhedron {
 	private volatile Moments integratedMoments;
 	private volatile LiquidExactPolygon.Measure exactMeasure;
 	LiquidExactPolygon.Fraction[] centroidCoordinates() { return measure().centroidCoordinates(); }
+	LiquidExactPolygon.Fraction[][] coordinateBounds() {
+		var low = new LiquidExactPolygon.Fraction[3]; var high = new LiquidExactPolygon.Fraction[3];
+		for (var face : LiquidExactPolygon.faces(this)) for (var point : face.vertices()) {
+			var x = point.coordinates(); for (int a = 0; a < 3; a++) {
+				if (low[a] == null || x[a].compareTo(low[a]) < 0) low[a] = x[a];
+				if (high[a] == null || x[a].compareTo(high[a]) > 0) high[a] = x[a];
+			}
+		}
+		for (int a = 0; a < 3; a++) if (low[a] == null || high[a].compareTo(low[a]) <= 0)
+			throw new IllegalArgumentException("Geometry has no positive spatial extent");
+		return new LiquidExactPolygon.Fraction[][]{low, high};
+	}
 	/** Half of the complete support's projected width; translation and rotation preserve this physical length. */
 	LiquidExactPolygon.Fraction projectedHalfWidth(List<LiquidExactPolygon.Fraction> direction) {
 		if (direction.size() != 3) throw new IllegalArgumentException("Incomplete geometric direction");

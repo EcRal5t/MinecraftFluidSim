@@ -172,13 +172,13 @@ public final class CarrierMutationValidation {
 		require(restored.particles.count() == 0 && restored.exactInternalEnergy().equals(energy), "gas-only physical regrid lost its cold restored state");
 	}
 	private static void nativePhysicalPhaseReconstructionCarriesInventories() throws Exception {
-		mechanicalRegroupingPreservesIntegratedAccuracy();
+		physicalMechanicalResolutionPreservesIntegratedAccuracy();
 		nativePhysicalPhaseReconstructionCarriesInventories("mmm:water", 1, -375, 1);
 		nativePhysicalPhaseReconstructionCarriesInventories("mmm:oil", 2, 0, 1);
 		double speed = Math.scalb(1.0, -30);
 		nativePhysicalPhaseReconstructionCarriesInventories("mmm:water", 1, -375 * speed * speed, speed);
 	}
-	private static void mechanicalRegroupingPreservesIntegratedAccuracy() throws Exception {
+	private static void physicalMechanicalResolutionPreservesIntegratedAccuracy() throws Exception {
 		var registries = FullCapabilityTestFixture.load();
 		for (double scale : new double[]{1, Math.scalb(1.0, -30)}) for (double frame : new double[]{0, 8}) {
 			var cells = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.25, 0.125, 0.5)),
@@ -193,23 +193,19 @@ public final class CarrierMutationValidation {
 			domain.sealDomainBoundary(); FullCapabilityTestFixture.bindFull(domain, registries, GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 			var before = domain.captureAuthoritativeState(); var volume = domain.particles.inventory().totalVolume(); var mass = domain.particles.inventory().totalMass();
 			var internal = domain.exactInternalEnergy(); long species = domain.totalChemicalSpeciesQuanta();
-			var budget = new LiquidMomentReconstruction.Budget(1, 256, 4096);
-			var groups = new LiquidMechanicalReconstructionGroups(domain, 0.25, budget);
-			var markers = geometry.copyMarkerCells();
-			require(groups.owners[markers[0]] == groups.owners[markers[1]] && groups.owners[markers[0]] != groups.owners[markers[2]],
-					"mechanical regrouping lost its spatial, frame or velocity-scale decision");
+			var budget = new LiquidMomentReconstruction.Budget(64, 256, 4096);
 			var plan = LiquidGeometryReconstructionPlan.relativeVelocity(domain, new LiquidMomentReconstruction.Tolerance(0.01, 0.03), 0.25, budget);
 			var expected = Fraction.of(scale).multiply(Fraction.of(scale)).multiply(Fraction.of(-0.06103515625));
 			require(plan.leaves.size() == 1 && plan.inventory.markers.size() == 2 && plan.inventory.kineticChange.equals(expected),
-					"mechanical regrouping lost its bounded mass-weighted projection defect or refined the thin physical support");
-			FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(), "mechanical regrouping private input");
+					"physical mechanical resolution lost its bounded mass-weighted projection defect or refined the thin physical support");
+			FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(), "physical mechanical resolution private input");
 			new ResolvedGasMotionPlan(domain, plan, 4096, 65536).publish(domain, plan);
 			require(domain.particles.inventory().totalMass().equals(mass) && domain.particles.inventory().totalVolume().equals(volume)
 					&& domain.totalChemicalSpeciesQuanta() == species && domain.exactInternalEnergy().subtract(internal).equals(plan.inventory.energyRoundoff)
-					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "mechanical regrouping lost its complete conserved inventory");
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "physical mechanical resolution lost its complete conserved inventory");
 			var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 			require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy()) && restored.particleKineticEnergyJoules() == domain.particleKineticEnergyJoules(),
-					"mechanical regrouping changed its complete cold handoff");
+					"physical mechanical resolution changed its complete cold handoff");
 		}
 	}
 	private static void nativePhysicalPhaseReconstructionCarriesInventories(String secondMaterial, int expectedControls, double expectedKineticChange, double speed) throws Exception {
@@ -232,7 +228,7 @@ public final class CarrierMutationValidation {
 		relativeReconstructionRetainsSmallPhysicalFlows(domain);
 		var open = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1)));
 		var plan = new LiquidGeometryReconstructionPlan(domain, open, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40), 1,
-				new LiquidMomentReconstruction.Budget(1, 32, 4096));
+				new LiquidMomentReconstruction.Budget(2, 32, 4096));
 		require(plan.leaves.size() == 1 && java.util.Arrays.stream(plan.geometry.copyControlCells()).distinct().count() == expectedControls
 				&& plan.inventory.markers.size() == expectedControls && plan.inventory.kineticChange.equals(Fraction.of(expectedKineticChange)),
 				"physical reconstruction retained an inventory interface or lost its mass-weighted projection defect");
@@ -261,7 +257,7 @@ public final class CarrierMutationValidation {
 		require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy()) && restored.totalChemicalSpeciesQuanta() == domain.totalChemicalSpeciesQuanta()
 				&& restored.particleKineticEnergyJoules() == domain.particleKineticEnergyJoules(), "physical regrid lost its cold restored extensive state");
 		var stale = new LiquidGeometryReconstructionPlan(domain, open, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40), 1,
-				new LiquidMomentReconstruction.Budget(1, 32, 4096));
+				new LiquidMomentReconstruction.Budget(2, 32, 4096));
 		var obsolete = new ResolvedGasMotionPlan(domain, stale, 4096, 65536); var unchanged = domain.liquidGeometryState; var energy = domain.exactInternalEnergy();
 		domain.chemicalParcels.assign(0, domain.chemicalParcels.record(0), !domain.chemicalParcels.indicator(0));
 		try { obsolete.publish(domain, stale); throw new AssertionError("physical regrid accepted revised species input"); }
@@ -289,8 +285,8 @@ public final class CarrierMutationValidation {
 	}
 	private static void mechanicalReconstructionRetainsIndependentFields(FluidDomain input, double speed) {
 		var source = input.captureAuthoritativeState(); var domain = FluidDomain.restoreAuthoritativeState(source);
-		var plan = LiquidGeometryReconstructionPlan.mechanicalControls(domain, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40),
-				new LiquidMomentReconstruction.Budget(1, 32, 4096));
+		var plan = new LiquidGeometryReconstructionPlan(domain, new LiquidMomentReconstruction.Tolerance(0.01, 0.03, 40), 0,
+				new LiquidMomentReconstruction.Budget(2, 32, 4096));
 		require(java.util.Arrays.stream(plan.geometry.copyControlCells()).distinct().count() == 2 && plan.inventory.markers.size() == 2
 				&& plan.inventory.kineticChange.signum() == 0 && plan.velocityErrors.stream().allMatch(error -> error.maximumRmsError() == 0
 						&& error.kineticLoss().signum() == 0 && error.kineticRoundingChange().signum() == 0),
@@ -372,17 +368,6 @@ public final class CarrierMutationValidation {
 	}
 	private static void nativeMechanicalRegridCarriesChemicalInventory() throws Exception {
 		var registries = capillaryRegistries(); var liquids = registries.liquids();
-		var concave = java.util.List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 0.25, 1)),
-				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0.25, 0, 0.25, 1, 1)),
-				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.75, 0.25, 0, 1, 1, 1)));
-		var concaveState = LiquidGeometryStateMapper.capture(concave, 1, new int[]{0, 1, 2}, new int[]{0, 1, 2});
-		var concaveDomain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 1.0F / 128, 512, 1e-7F, 0.45F, 0.002F, 0.8F));
-		concaveDomain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, 0.5F, 3, 5, 5000, liquids.materials(),
-				new float[]{0.5F, 0.125F, 0.5F, 2, 0.125F, 0.625F, 0.5F, 1.5F, 0.875F, 0.625F, 0.5F, 1.5F}, new float[9], new byte[8],
-				new double[]{2000, 1500, 1500}, new int[3], concaveState));
-		var grouped = new LiquidMechanicalReconstructionGroups(concaveDomain, 0.125, new LiquidMomentReconstruction.Budget(256, 256, 1024));
-		require(java.util.Arrays.stream(grouped.owners).distinct().count() == 1 && grouped.squaredLimits.values().stream().allMatch(v -> v.signum() == 0),
-				"concave mechanical coarsening retained auxiliary inertia despite identical physical velocity");
 		var cells = LiquidGeometryRefinement.children(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.25, 0, 0.25, 0.75, 0.625, 0.75)));
 		var geometry = LiquidGeometryStateMapper.capture(cells, 1, new int[]{0}, new int[cells.size()]);
 		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(0.5F, 1000, 0, 1.0F / 128, 512, 1e-7F, 0.45F, 0.002F, 0.8F));

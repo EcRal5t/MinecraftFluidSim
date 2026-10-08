@@ -21,6 +21,7 @@ final class LiquidJointReconstructionValidation {
 		equalMomentControlsKeepGeometricOrder();
 		reconstructionPlanKeepsInventoriesAndMomentum();
 		velocityProjectionRefinesSpatialError();
+		physicalVelocityControlsKeepPhaseGeometry();
 		volumeRedistributionCarriesConservativeMoments();
 		variableDensityProjectionCarriesLocalInventories();
 		relativeVelocityAccuracyPreservesFramesAndSmallFlows();
@@ -290,6 +291,12 @@ final class LiquidJointReconstructionValidation {
 		if (!a.inventoryVolumes().equals(java.util.Map.of(11, targets.getFirst().volume()))
 				|| !b.inventoryVolumes().equals(java.util.Map.of(11, delta, 29, secondVolume)))
 			throw new AssertionError("Conservative regrid inventory shares differ from the mechanical spatial weights");
+		var thinSupports = List.of(new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 0.5, 0.125, 0.5)),
+				new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0.5, 0, 0, 1, 0.125, 0.5)));
+		var thin = LiquidConservativeVolumeRedistribution.project(thinSupports, sources, targets);
+		if (!thin.fields().get(1).get(7).momentum().equals(b.momentum()) || !thin.fields().get(1).get(7).inventoryVolumes().equals(b.inventoryVolumes())
+				|| !thin.squaredDisplacementVolumeBound().equals(delta.multiply(Fraction.of(81.0 / 64))))
+			throw new AssertionError("Conservative redistribution used collision-grid width for independent thin mechanical supports");
 		try {
 			LiquidConservativeVolumeRedistribution.project(leaves, sources, List.of(targets.getFirst()));
 			throw new AssertionError("Unequal inventory volumes accepted a conservative redistribution");
@@ -511,6 +518,54 @@ final class LiquidJointReconstructionValidation {
 		if (!integrated.unresolvedLeaves(java.util.Map.of(7, Fraction.of(1.0 / 8)), defects).equals(java.util.Set.of(1)))
 			throw new AssertionError("Integrated defect marking ignored the largest unresolved kinetic contribution");
 	}
+	private static void physicalVelocityControlsKeepPhaseGeometry() {
+		for (double height : new double[]{0.125, Math.scalb(1.0, -80)}) for (int pattern = 0; pattern < 3; pattern++) {
+			boolean uniform = pattern == 0;
+			var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+			var body = LiquidPolyhedron.box(0.125, 0, 0.25, 0.875, height, 0.75);
+			var parts = LiquidPhysicalControlRefinement.partition(java.util.List.of(new LiquidPhysicalControlRefinement.Piece(
+					new LiquidGeometryRefinement.Cell(0, 0, 0, 0, body), 0)), 1, 64);
+			var sources = new java.util.ArrayList<LiquidGeometryVelocityProjection.Source>(); int ordinal = 0;
+			for (var part : parts) {
+				var shape = part.getFirst().cell().geometry(); var center = shape.centroidCoordinates();
+				var u = uniform ? new LiquidPolyhedron.Point(0.25, -0.5, 0.75) : pattern == 1
+						? new LiquidPolyhedron.Point(center[0].rounded(), center[1].divide(Fraction.of(height)).rounded(), center[2].rounded())
+						: new LiquidPolyhedron.Point((center[0].compareTo(Fraction.of(0.5)) < 0 ? -1 : 1)
+								* (center[1].compareTo(Fraction.of(height).divide(Fraction.of(2))) < 0 ? -1 : 1)
+								* (center[2].compareTo(Fraction.of(0.5)) < 0 ? -1 : 1), 0, 0);
+				sources.add(new LiquidGeometryVelocityProjection.Source(7, 11 + ordinal, Fraction.of(pattern == 2 ? 1 : 1 + ordinal), shape, u)); ordinal++;
+			}
+			var tolerance = new LiquidGeometryVelocityProjection.RmsTolerance(0, 0); var before = LiquidGeometryVelocityProjection.summarize(sources).get(7);
+			var plan = new LiquidPhysicalReconstructionControls(java.util.List.of(new LiquidMomentReconstruction.Leaf(root,
+					java.util.List.of(new LiquidMomentReconstruction.Phase(7, java.util.List.of(body))))), ignored -> sources,
+					tolerance, tolerance.squaredLimits(sources), 8, new LiquidMomentReconstruction.Budget(64, 1024, 1024));
+			if (plan.controls.size() != (uniform ? 1 : 8) || plan.redistributedVolume.signum() != 0)
+				throw new AssertionError("Mechanical resolution depends on collision spacing or auxiliary source inventories");
+			var measure = LiquidConvexRegion.EMPTY.measure(); var mass = Fraction.ZERO; var kinetic = Fraction.ZERO;
+			var momentum = new Fraction[]{Fraction.ZERO, Fraction.ZERO, Fraction.ZERO}; var inventories = new java.util.TreeMap<Integer, Fraction>();
+			for (var control : plan.controls) {
+				for (var piece : control.pieces()) measure = measure.add(piece.measure()); var value = control.field();
+				mass = mass.add(value.mass()); kinetic = kinetic.add(value.originalKinetic());
+				for (int a = 0; a < 3; a++) momentum[a] = momentum[a].add(value.momentum().get(a));
+				value.inventoryVolumes().forEach((owner, volume) -> inventories.merge(owner, volume, Fraction::add));
+				if (control.phase() != 7 || value.kineticLoss().signum() != 0 || control.pieces().size() != 1)
+					throw new AssertionError("Resolved mechanical partition introduced a material interface or hidden kinetic loss");
+			}
+			if (!measure.same(body.measure()) || !mass.equals(before.mass()) || !java.util.List.of(momentum).equals(before.momentum())
+					|| !kinetic.equals(before.originalKinetic()) || !inventories.equals(before.inventoryVolumes()))
+				throw new AssertionError("Independent mechanical refinement changed phase occupancy, mass, momentum or local inventories");
+		}
+		var root = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, LiquidPolyhedron.box(0, 0, 0, 1, 1, 1));
+		var concave = List.of(LiquidPolyhedron.box(0, 0, 0, 1, 0.25, 1), LiquidPolyhedron.box(0, 0.25, 0, 0.25, 1, 1),
+				LiquidPolyhedron.box(0.75, 0.25, 0, 1, 1, 1));
+		var sources = new java.util.ArrayList<LiquidGeometryVelocityProjection.Source>();
+		for (int p = 0; p < concave.size(); p++) sources.add(new LiquidGeometryVelocityProjection.Source(0, p, Fraction.of(1), concave.get(p), new LiquidPolyhedron.Point(1, 2, 3)));
+		var tolerance = new LiquidGeometryVelocityProjection.RmsTolerance(0, 0.125);
+		var controls = new LiquidPhysicalReconstructionControls(List.of(new LiquidMomentReconstruction.Leaf(root, List.of(new LiquidMomentReconstruction.Phase(0, concave)))),
+				ignored -> sources, tolerance, tolerance.squaredLimits(sources), 1, new LiquidMomentReconstruction.Budget(1, 64, 16));
+		if (controls.controls.size() != 1 || controls.controls.getFirst().pieces().size() != 3 || controls.controls.getFirst().field().kineticLoss().signum() != 0)
+			throw new AssertionError("Concave phase geometry imposed auxiliary mechanical inertia on a uniform field");
+	}
 	private static void velocityProjectionRefinesSpatialError() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1); var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);
 		var cells = List.of(LiquidPhasePartition.Address.of(open).cell(cube.clip(1, 0, 0, 0.375)), LiquidPhasePartition.Address.of(open).cell(cube.clip(-1, 0, 0, -0.375)));
@@ -531,7 +586,7 @@ final class LiquidJointReconstructionValidation {
 		try {
 			new LiquidGeometryReconstructionPlan(source, List.of(open), tolerance, 0, new LiquidMomentReconstruction.Budget(1, 32, 4096));
 			throw new AssertionError("Insufficient velocity refinement budget published a candidate");
-		} catch (IllegalStateException expected) { if (!expected.getMessage().contains("spatial leaf budget")) throw expected; }
+		} catch (IllegalStateException expected) { if (!expected.getMessage().contains("control budget")) throw expected; }
 		var tetrahedron = cube.clip(1, 1, 1, 1); var complement = LiquidGasPartition.build(open, List.of(LiquidPhasePartition.Address.of(open).cell(tetrahedron)), 32);
 		var fields = new java.util.ArrayList<LiquidGeometryVelocityProjection.Source>();
 		fields.add(new LiquidGeometryVelocityProjection.Source(0, tetrahedron, new LiquidPolyhedron.Point(1, 0, 0)));
