@@ -14,12 +14,16 @@ final class LiquidSurfaceRateMap {
 	private final Map<Vertex, List<Map<Integer, Value>>> nodes = new LinkedHashMap<>();
 	LiquidSurfaceRateMap(LiquidConformingVelocity field) { this.field = field; }
 	LiquidPressureFaceEnergy.Row row(Map<Vertex, List<Fraction>> forces, Value scale) {
+		var observed = new LinkedHashMap<Vertex, Value[]>();
+		forces.forEach((point, force) -> observed.put(point, force.stream().map(Value::of).toArray(Value[]::new)));
+		return observedRow(observed, scale);
+	}
+	LiquidPressureFaceEnergy.Row observedRow(Map<Vertex, Value[]> forces, Value scale) {
 		var result = new java.util.TreeMap<Integer, Value>();
 		for (var entry : forces.entrySet()) for (int a = 0; a < 3; a++) {
-			var value = entry.getValue().get(a); if (value.signum() == 0) continue;
+			var value = entry.getValue()[a]; if (value.value() == 0 && value.error() == 0) continue;
 			var derivatives = nodes.computeIfAbsent(entry.getKey(), this::derive).get(a);
-			var observed = Value.of(value);
-			for (var term : derivatives.entrySet()) result.merge(term.getKey(), term.getValue().multiply(observed), Value::add);
+			for (var term : derivatives.entrySet()) result.merge(term.getKey(), term.getValue().multiply(value), Value::add);
 		}
 		result.replaceAll((face, value) -> scale.multiply(value));
 		result.entrySet().removeIf(entry -> entry.getValue().value() == 0 && entry.getValue().error() == 0);
