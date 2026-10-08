@@ -14,7 +14,7 @@ final class LiquidPhysicalControlRefinement {
 		if (depth < 0) throw new IllegalArgumentException("Invalid physical control refinement depth");
 		if (maximumPieces < source.size()) throw new IllegalStateException("Physical control refinement exceeds its positive-region budget");
 		var work = new LiquidSupportVolumeFit.Work(4_194_304); work.context = ", physicalControlSharedFaces";
-		List<List<Piece>> groups = components(source, work);
+		List<List<Piece>> groups = connected(source, work);
 		for (int level = 0; level < depth; level++) {
 			var next = new ArrayList<List<Piece>>(); int retained = 0;
 			for (var group : groups) {
@@ -33,7 +33,7 @@ final class LiquidPhysicalControlRefinement {
 							count += low.size() + high.size() - before;
 							if (count > maximumPieces) throw new IllegalStateException("Physical control refinement exceeds its positive-region budget");
 						}
-						split.addAll(components(low, work)); split.addAll(components(high, work));
+						split.addAll(connected(low, work)); split.addAll(connected(high, work));
 					}
 					children = split;
 				}
@@ -44,7 +44,7 @@ final class LiquidPhysicalControlRefinement {
 		return groups;
 	}
 	/** Every pressure unknown has connected positive-volume support; a point or edge supplies no fluid passage. */
-	private static List<List<Piece>> components(List<Piece> pieces, LiquidSupportVolumeFit.Work work) {
+	static List<List<Piece>> connected(List<Piece> pieces, LiquidSupportVolumeFit.Work work) {
 		var positive = new java.util.HashMap<LiquidGeometryPlane.Key, ArrayList<Facet>>();
 		var negative = new java.util.HashMap<LiquidGeometryPlane.Key, ArrayList<Facet>>();
 		int[] roots = java.util.stream.IntStream.range(0, pieces.size()).toArray();

@@ -10,10 +10,11 @@ import java.util.function.Function;
 /** Physical phase occupancy stays fixed while conservative velocity error selects its mechanical partition. */
 final class LiquidPhysicalReconstructionControls {
 	record Control(int leaf, int phase, List<LiquidPolyhedron> pieces, LiquidGeometryVelocityProjection.Value field) { }
+	private record Reference(int support, LiquidGeometryVelocityProjection.Source source) { }
 	private record Node(int leaf, int phase, LiquidGeometryRefinement.Cell box, List<LiquidPolyhedron> pieces,
-			List<LiquidGeometryVelocityProjection.Source> sources, LiquidGeometryVelocityProjection.Value reference, Fraction volume) {
-		Node(int leaf, int phase, LiquidGeometryRefinement.Cell box, List<LiquidPolyhedron> pieces, List<LiquidGeometryVelocityProjection.Source> sources) {
-			this(leaf, phase, box, pieces, sources, LiquidGeometryVelocityProjection.summarize(sources).get(phase), LiquidVolumeInterface.measure(pieces).volume());
+			List<Reference> sources, LiquidGeometryVelocityProjection.Value reference, Fraction volume) {
+		Node(int leaf, int phase, LiquidGeometryRefinement.Cell box, List<LiquidPolyhedron> pieces, List<Reference> sources) {
+			this(leaf, phase, box, pieces, sources, LiquidGeometryVelocityProjection.summarize(sources.stream().map(Reference::source).toList()).get(phase), LiquidVolumeInterface.measure(pieces).volume());
 		}
 	}
 	final List<Control> controls;
@@ -39,9 +40,7 @@ final class LiquidPhysicalReconstructionControls {
 			var labels = new java.util.TreeSet<>(piecesByPhase.keySet()); labels.addAll(fieldsByPhase.keySet());
 			for (int phase : labels) {
 				var pieces = piecesByPhase.getOrDefault(phase, List.of()); var fields = fieldsByPhase.getOrDefault(phase, List.of());
-				var shapes = new ArrayList<>(pieces); fields.forEach(field -> shapes.add(field.geometry()));
-				var bounds = bounds(shapes); var box = LiquidPhasePartition.Address.of(leaf.open()).cell(box(bounds[0], bounds[1]));
-				nodes.add(new Node(l, phase, box, pieces, List.copyOf(fields)));
+				nodes.addAll(partition(l, phase, LiquidPhasePartition.Address.of(leaf.open()), pieces, fields, work));
 			}
 		}
 		LiquidConservativeVolumeRedistribution.Result balanced;
@@ -97,15 +96,65 @@ final class LiquidPhysicalReconstructionControls {
 		var extent = bounds(List.of(parent.box().geometry())); var middle = extent[0][axis].add(extent[1][axis]).divide(Fraction.of(2));
 		var next = new ArrayList<Node>(); var plane = plane(axis, middle, 1);
 		for (int side : new int[]{1, -1}) {
-			var pieces = new ArrayList<LiquidPolyhedron>(); for (var piece : parent.pieces()) { var shape = clip(piece, plane, side, work); if (shape != null) pieces.add(shape); }
-			var sources = new ArrayList<LiquidGeometryVelocityProjection.Source>(); for (var source : parent.sources()) {
-				var shape = clip(source.geometry(), plane, side, work); if (shape != null) sources.add(withGeometry(source, shape));
+			var address = LiquidPhasePartition.Address.of(parent.box()); var pieces = new ArrayList<LiquidPhysicalControlRefinement.Piece>();
+			for (int p = 0; p < parent.pieces().size(); p++) {
+				var shape = clip(parent.pieces().get(p), plane, side, work); if (shape != null) pieces.add(new LiquidPhysicalControlRefinement.Piece(address.cell(shape), p));
 			}
-			if (pieces.isEmpty() && sources.isEmpty()) continue;
-			var shape = clip(parent.box().geometry(), plane, side, work);
-			next.add(new Node(parent.leaf(), parent.phase(), LiquidPhasePartition.Address.of(parent.box()).cell(shape), List.copyOf(pieces), List.copyOf(sources)));
+			var sources = new ArrayList<Reference>(); for (var reference : parent.sources()) {
+				var shape = clip(reference.source().geometry(), plane, side, work);
+				if (shape != null) sources.add(new Reference(reference.support(), withGeometry(reference.source(), shape)));
+			}
+			for (var component : LiquidPhysicalControlRefinement.connected(pieces, work)) {
+				var indices = new java.util.HashMap<Integer, Integer>(); for (int p = 0; p < component.size(); p++) indices.put(component.get(p).source(), p);
+				var occupied = component.stream().map(piece -> piece.cell().geometry()).toList(); var local = new ArrayList<Reference>();
+				// Clipping the reference and its containing target by the same plane preserves their exact inclusion.
+				for (var reference : sources) if (indices.containsKey(reference.support())) local.add(new Reference(indices.get(reference.support()), reference.source()));
+				var extentChild = bounds(occupied);
+				next.add(new Node(parent.leaf(), parent.phase(), address.cell(box(extentChild[0], extentChild[1])), occupied, List.copyOf(local)));
+			}
 		}
 		return List.copyOf(next);
+	}
+	/** Exact overlap keeps inventory local; uncovered old material supplies only the remaining new capacity. */
+	private static List<Node> partition(int leaf, int phase, LiquidPhasePartition.Address address, List<LiquidPolyhedron> pieces,
+			List<LiquidGeometryVelocityProjection.Source> references, LiquidSupportVolumeFit.Work work) {
+		var positive = new ArrayList<LiquidPhysicalControlRefinement.Piece>();
+		for (int p = 0; p < pieces.size(); p++) positive.add(new LiquidPhysicalControlRefinement.Piece(address.cell(pieces.get(p)), p));
+		var result = new ArrayList<Node>(); var remaining = references;
+		for (var component : LiquidPhysicalControlRefinement.connected(positive, work)) {
+			var occupied = component.stream().map(piece -> piece.cell().geometry()).toList();
+			var local = new ArrayList<Reference>(); var outside = new ArrayList<LiquidGeometryVelocityProjection.Source>();
+			for (var reference : remaining) {
+				List<LiquidPolyhedron> residual = List.of(reference.geometry());
+				for (int support = 0; support < occupied.size(); support++) {
+					var target = occupied.get(support);
+					var next = new ArrayList<LiquidPolyhedron>();
+					for (var original : residual) {
+						if (separateBounds(original, target)) { next.add(original); continue; }
+						var common = original;
+						for (var face : LiquidExactPolygon.faces(target)) {
+							var removed = clip(common, face.coefficients(), -1, work); if (removed != null) next.add(removed);
+							common = clip(common, face.coefficients(), 1, work); if (common == null) break;
+						}
+						if (common != null) local.add(new Reference(support, withGeometry(reference, common)));
+					}
+					residual = List.copyOf(next); if (residual.isEmpty()) break;
+				}
+				for (var shape : residual) outside.add(withGeometry(reference, shape));
+			}
+			var extent = bounds(occupied);
+			result.add(new Node(leaf, phase, address.cell(box(extent[0], extent[1])), occupied, List.copyOf(local))); remaining = List.copyOf(outside);
+		}
+		for (var reference : remaining) {
+			var extent = reference.geometry().coordinateBounds();
+			result.add(new Node(leaf, phase, address.cell(box(extent[0], extent[1])), List.of(), List.of(new Reference(-1, reference))));
+		}
+		return List.copyOf(result);
+	}
+	private static boolean separateBounds(LiquidPolyhedron first, LiquidPolyhedron second) {
+		var a = first.coordinateBounds(); var b = second.coordinateBounds();
+		for (int axis = 0; axis < 3; axis++) if (a[1][axis].compareTo(b[0][axis]) <= 0 || b[1][axis].compareTo(a[0][axis]) <= 0) return true;
+		return false;
 	}
 	private static void requireBudget(List<Node> nodes, LiquidMomentReconstruction.Budget budget) {
 		if (nodes.size() > budget.maximumLeaves()) throw new IllegalStateException("Physical velocity reconstruction exceeds its control budget");

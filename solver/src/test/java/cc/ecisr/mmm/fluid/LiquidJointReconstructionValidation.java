@@ -565,6 +565,31 @@ final class LiquidJointReconstructionValidation {
 				ignored -> sources, tolerance, tolerance.squaredLimits(sources), 1, new LiquidMomentReconstruction.Budget(1, 64, 16));
 		if (controls.controls.size() != 1 || controls.controls.getFirst().pieces().size() != 3 || controls.controls.getFirst().field().kineticLoss().signum() != 0)
 			throw new AssertionError("Concave phase geometry imposed auxiliary mechanical inertia on a uniform field");
+		var isolated = LiquidPolyhedron.box(0.375, 0.5, 0.25, 0.625, 0.75, 0.75);
+		var occupied = new java.util.ArrayList<>(concave); occupied.add(isolated);
+		sources.clear();
+		for (var piece : concave) sources.add(new LiquidGeometryVelocityProjection.Source(0, 11, Fraction.of(1), piece, new LiquidPolyhedron.Point(1, 2, 3)));
+		sources.add(new LiquidGeometryVelocityProjection.Source(0, 29, Fraction.of(3), isolated, new LiquidPolyhedron.Point(1, 2, 3)));
+		var separated = new LiquidPhysicalReconstructionControls(List.of(new LiquidMomentReconstruction.Leaf(root, List.of(new LiquidMomentReconstruction.Phase(0, occupied)))),
+				ignored -> sources, tolerance, tolerance.squaredLimits(sources), 1, new LiquidMomentReconstruction.Budget(2, 256, 32));
+		if (separated.controls.size() != 2 || separated.redistributedVolume.signum() != 0)
+			throw new AssertionError("Reconstruction merged separate liquid supports whose bounding boxes overlap");
+		for (var control : separated.controls) {
+			boolean inner = control.pieces().size() == 1; var expectedVolume = inner ? isolated.volume() : LiquidVolumeInterface.measure(concave).volume();
+			var field = control.field();
+			if (!field.volume().equals(expectedVolume) || !field.mass().equals(expectedVolume.multiply(Fraction.of(inner ? 3 : 1)))
+					|| !field.inventoryVolumes().equals(java.util.Map.of(inner ? 29 : 11, expectedVolume)) || field.kineticLoss().signum() != 0)
+				throw new AssertionError("Zero-motion reconstruction exchanged mass or inventory between separate physical supports");
+		}
+		var original = LiquidPolyhedron.box(0.125, 0.25, 0.25, 0.375, 0.75, 0.75); double shift = 1.0 / 64;
+		var moved = original.translated(shift, 0, 0);
+		var field = List.of(new LiquidGeometryVelocityProjection.Source(0, 11, Fraction.of(1), original, new LiquidPolyhedron.Point(1, 2, 3)));
+		var translated = new LiquidPhysicalReconstructionControls(List.of(new LiquidMomentReconstruction.Leaf(root, List.of(new LiquidMomentReconstruction.Phase(0, List.of(moved))))),
+				ignored -> field, tolerance, tolerance.squaredLimits(field), 1, new LiquidMomentReconstruction.Budget(16, 256, 64));
+		if (translated.controls.size() != 1 || !translated.redistributedVolume.equals(Fraction.of(shift / 4))
+				|| translated.redistributionSquaredDisplacementVolumeBound.signum() <= 0
+				|| !translated.controls.getFirst().field().inventoryVolumes().equals(java.util.Map.of(11, original.volume())))
+			throw new AssertionError("Occupied-space reconstruction hid displaced inventory inside a common bounding box");
 	}
 	private static void velocityProjectionRefinesSpatialError() {
 		var cube = LiquidPolyhedron.box(0, 0, 0, 1, 1, 1); var open = new LiquidGeometryRefinement.Cell(0, 0, 0, 0, cube);

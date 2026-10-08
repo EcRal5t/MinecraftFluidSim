@@ -48,6 +48,7 @@ final class LiquidPolyhedron {
 	private volatile Moments integratedMoments;
 	private volatile LiquidExactPolygon.Measure exactMeasure;
 	private volatile LiquidExactPolygon.Fraction exactVolume;
+	private volatile LiquidExactPolygon.Fraction[][] exactBounds;
 	/** P0 field moments need occupied volume; positional moments remain available independently. */
 	LiquidExactPolygon.Fraction volume() {
 		var measured = exactMeasure; if (measured != null) return measured.volume();
@@ -55,6 +56,7 @@ final class LiquidPolyhedron {
 	}
 	LiquidExactPolygon.Fraction[] centroidCoordinates() { return measure().centroidCoordinates(); }
 	LiquidExactPolygon.Fraction[][] coordinateBounds() {
+		var cached = exactBounds; if (cached != null) return new LiquidExactPolygon.Fraction[][]{cached[0].clone(), cached[1].clone()};
 		var low = new LiquidExactPolygon.Fraction[3]; var high = new LiquidExactPolygon.Fraction[3];
 		for (var face : LiquidExactPolygon.faces(this)) for (var point : face.vertices()) {
 			var x = point.coordinates(); for (int a = 0; a < 3; a++) {
@@ -64,7 +66,8 @@ final class LiquidPolyhedron {
 		}
 		for (int a = 0; a < 3; a++) if (low[a] == null || high[a].compareTo(low[a]) <= 0)
 			throw new IllegalArgumentException("Geometry has no positive spatial extent");
-		return new LiquidExactPolygon.Fraction[][]{low, high};
+		exactBounds = new LiquidExactPolygon.Fraction[][]{low, high};
+		return new LiquidExactPolygon.Fraction[][]{low.clone(), high.clone()};
 	}
 	/** Half of the complete support's projected width; translation and rotation preserve this physical length. */
 	LiquidExactPolygon.Fraction projectedHalfWidth(List<LiquidExactPolygon.Fraction> direction) {
