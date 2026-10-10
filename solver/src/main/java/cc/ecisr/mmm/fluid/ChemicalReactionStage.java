@@ -37,7 +37,7 @@ final class ChemicalReactionStage {
 
 	ChemicalParcelStore.ReactionStats step() {
 		ChemicalParcelStore chemistry = access.chemicalParcels();
-		if (chemistry == null) return new ChemicalParcelStore.ReactionStats(0, 0, 0);
+		if (chemistry == null || !chemistry.hasDirtyCells()) return new ChemicalParcelStore.ReactionStats(0, 0, 0);
 		LiquidParticleStore.DirectArrays arrays = state.particles().directArrays();
 		ThermalDomainState thermal = access.thermalState();
 		var result = chemistry.reactDirtyCells(

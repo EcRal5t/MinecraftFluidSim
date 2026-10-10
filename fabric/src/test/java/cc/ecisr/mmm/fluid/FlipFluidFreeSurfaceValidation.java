@@ -18,6 +18,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		resolvedTransferRequiresExactAvailableCapacity();
 		transferScratchTracksPressureSpaceChanges();
 		finiteGasPressureConnectsTransferSupport();
+		zeroResolvedInputKeepsUnresolvedVelocity();
 		if (java.util.Arrays.asList(args).contains("--transfer")) {
 			System.out.println("Free-surface transfer support validation passed");
 			return;
@@ -183,6 +184,34 @@ public final class FlipFluidFreeSurfaceValidation {
 			var field = GridToParticleStage.class.getDeclaredField("componentBudget"); field.setAccessible(true);
 			return (MarkerTransferBudget) field.get(domain.gridToParticleStage);
 		} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+	}
+
+	private static void zeroResolvedInputKeepsUnresolvedVelocity() {
+		var domain = closedTransferFixture(1);
+		transferCurrentGrid(domain);
+		var support = transferBudget(domain);
+		var projection = new ResolvedMarkerVelocity(domain.sizeX, domain.sizeY, domain.sizeZ,
+				domain.config.cellSize(), domain.geometry.cutCells);
+		float[] velocity = new float[domain.particleCount()];
+		int resolved = 0, unresolved = 0;
+		for (int p = 0; p < velocity.length; p++) {
+			if (support.resolved(p)) { resolved++; velocity[p] = -0.0F; }
+			else { unresolved++; velocity[p] = (p & 1) == 0 ? 2 : Float.intBitsToFloat(0x7fc01234); }
+		}
+		check(resolved > 0 && unresolved > 0, "Zero-input fixture must contain both transfer spaces");
+		float[] initial = velocity.clone();
+		for (int pass = 0; pass < 3; pass++) {
+			for (int p = 0; p < velocity.length; p++) if (support.resolved(p)) velocity[p] = pass == 1 ? Float.MIN_NORMAL : -0.0F;
+			projection.project(domain.particles, 0, domain.mac.velocityValidX, velocity, support);
+			boolean nonzero = false;
+			for (int p = 0; p < velocity.length; p++) {
+				if (!support.resolved(p)) check(Float.floatToRawIntBits(velocity[p]) == Float.floatToRawIntBits(initial[p]),
+						"Resolved projection changed an unresolved velocity or NaN payload");
+				else if (pass != 1) check(Float.floatToRawIntBits(velocity[p]) == 0, "Zero projection did not produce positive zero");
+				else { check(Float.isFinite(velocity[p]), "Small nonzero projection became nonfinite"); nonzero |= velocity[p] != 0; }
+			}
+			if (pass == 1) check(nonzero, "Small nonzero resolved input was treated as zero");
+		}
 	}
 
 	private static void transferScratchTracksPressureSpaceChanges() {

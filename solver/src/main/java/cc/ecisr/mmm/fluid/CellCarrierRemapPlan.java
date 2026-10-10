@@ -543,7 +543,6 @@ final class CellCarrierRemapPlan {
 		double[][] fieldValues = evaluateQuadrature(group, offsets, volumes, fieldMean, !moved && mask == 0 && count == 8 && volumes.size() == 8);
 		double scale = velocityScale(group, volumes, mean, fieldMean, fieldValues);
 		double temperatureScale = domain.thermalState == null ? 1 : temperatureScale(group, fieldMean[3], fieldValues[3]);
-		SignedDyadic energyRemaining = group.energy;
 		int start = group.sampleStart;
 		var caloric = domain.thermalState == null ? null
 				: new cc.ecisr.mmm.thermal.LiquidEnergyColumn.CaloricInventory[volumes.size()];
@@ -567,12 +566,14 @@ final class CellCarrierRemapPlan {
 				if (caloric[p] == null) caloric[p] = domain.thermalState.liquid().caloricInventory(group.material, m, mixture,
 						domain.chemicalParcels == null ? null : domain.chemicalParcels.registry());
 				energy = caloric[p].energy(t);
-				energyRemaining = energyRemaining.subtract(SignedDyadic.of(energy));
+				// Completed temperature samples become the private energy-reduction workspace.
+				fieldValues[3][p] = energy;
 			}
 			markers.set(start + p, new Marker(group.cell, group.material, group.indicator, volumes.get(p), m,
 					delta[0], delta[1], delta[2], vx, vy, vz, mixture, energy));
 		}
 		if (domain.thermalState != null) {
+			SignedDyadic energyRemaining = group.energy.subtract(SignedDyadic.sum(fieldValues[3], volumes.size()));
 			CellRemapHeatBalance.complete(markers, start, caloric, group.minimumTemperature, group.maximumTemperature, energyRemaining, group.energyRounding);
 		}
 	}

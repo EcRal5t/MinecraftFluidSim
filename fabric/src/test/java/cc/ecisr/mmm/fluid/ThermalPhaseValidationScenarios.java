@@ -629,6 +629,22 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		require(SignedDyadic.sum(varied, 4_096).equals(
 				SignedDyadic.sum(java.util.Arrays.copyOf(varied, 4_096))),
 				"bounded exact dyadic sum consumed values outside its range");
+		double[] overflowBins = new double[2_051];
+		java.util.Arrays.fill(overflowBins, 0, 1_025, Double.MAX_VALUE);
+		java.util.Arrays.fill(overflowBins, 1_025, 2_050, -Double.MAX_VALUE);
+		overflowBins[2_050] = Double.MIN_VALUE;
+		for (double[] values : new double[][] {overflowBins, {0.0, -0.0},
+				{Double.MAX_VALUE, Double.MIN_VALUE, -Double.MAX_VALUE},
+				{Float.MAX_VALUE, Float.MIN_VALUE, -Float.MAX_VALUE},
+				{Math.scalb(1.0, 300), 3.25, -Math.scalb(1.0, 300), -1.0, Double.MIN_NORMAL}}) {
+			SignedDyadic total = SignedDyadic.ZERO, remainder = SignedDyadic.of(Math.PI);
+			for (double value : values) { total = total.add(SignedDyadic.of(value)); remainder = remainder.subtract(SignedDyadic.of(value)); }
+			require(SignedDyadic.sum(values).equals(total)
+					&& SignedDyadic.of(Math.PI).subtract(SignedDyadic.sum(values)).equals(remainder),
+					"occupied exponent bins changed exact sum or emitted-energy remainder");
+		}
+		for (double invalid : new double[] {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY})
+			expectFailure(() -> SignedDyadic.sum(new double[] {0.0, invalid}), "dyadic sum accepted a non-finite value");
 		for (double value : new double[]{0.0, -0.0, Double.MIN_VALUE, -17.25, Double.MAX_VALUE}) {
 			require(Double.doubleToRawLongBits(SignedDyadic.of(value).toDouble())
 					== Double.doubleToRawLongBits(value == 0.0 ? 0.0 : value),

@@ -110,6 +110,25 @@ public final class CarrierMutationValidation {
 		}
 		require(cc.ecisr.mmm.units.SignedDyadic.sum(varied, varied.length).equals(oracle),
 				"binary32 inventory bins missed cancellation, subnormal or extreme finite values");
+		float[] parcels = {0.125F, 0.125F, 0.125F, 0.125F, 0.125F, 0.125F, 0.125F, 0.125F, Float.MIN_VALUE, 0.125F, Float.MIN_VALUE, 0, -0.0F};
+		int[] heads = {0, -1, 8, 9}, next = {1, 2, 3, 4, 5, 6, 7, -1, -1, 10, -1, -1, -1};
+		require(ExactCellVolumeSums.cellUnitExponent(parcels, heads[0], next) == -3
+				&& ExactCellVolumeSums.cellUnitExponent(parcels, heads[2], next) == -149,
+				"a distant subnormal parcel widened another cell's integer lattice");
+		var cells = ExactCellVolumeSums.sum(parcels, parcels.length, heads, next);
+		for (int cell = 0; cell < heads.length; cell++) {
+			var expected = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+			for (int p = heads[cell]; p >= 0; p = next[p]) expected = expected.add(cc.ecisr.mmm.units.SignedDyadic.of(parcels[p]));
+			require(cells[cell].equals(expected), "cell-local integer lattice changed the independent exact volume oracle");
+		}
+		for (float invalid : new float[] {-1, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY}) {
+			parcels[12] = invalid;
+			ExactCellVolumeSums.sum(parcels, 12, heads, next); // Unused backing capacity is outside the valid count.
+			try {
+				ExactCellVolumeSums.sum(parcels, 13, heads, next);
+				throw new AssertionError("an unindexed active parcel escaped volume validation");
+			} catch (IllegalArgumentException expected) { }
+		}
 	}
 
 	private static void readOnlyCellQueriesFollowCarrierEdits() {

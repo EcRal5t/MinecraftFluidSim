@@ -11,7 +11,6 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 	public static final SignedDyadic ZERO = new SignedDyadic(BigInteger.ZERO, 0);
 	private static final int MIN_DOUBLE_EXPONENT = -1074;
 	private static final int MAX_DOUBLE_EXPONENT = 971;
-	private static final int DOUBLE_EXPONENT_BINS = MAX_DOUBLE_EXPONENT - MIN_DOUBLE_EXPONENT + 1;
 
 	/** Significand bit budget that keeps exact sums inside a bounded storage and codec envelope. */
 	public static final int MAX_SIGNIFICAND_BITS = 32_768;
@@ -128,7 +127,7 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 
 	/**
 	 * Exact finite sum without constructing and normalizing one {@link BigInteger} per value.
-	 * IEEE-754 binary64 has only 2,046 possible dyadic exponents. Each exponent bin is accumulated
+	 * Two passes restrict storage to the occupied span of binary64's 2,046 dyadic exponents. Each bin is accumulated
 	 * in signed two's-complement 128-bit words (enough for every value in a Java array), then the
 	 * occupied bins are combined once. The result is bit-for-bit identical to repeated exact add.
 	 */
@@ -137,13 +136,22 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 			throw new IllegalArgumentException("Thermal audit sum range is invalid");
 		}
 		if (length == 0) return ZERO;
-		long[] low = new long[DOUBLE_EXPONENT_BINS];
-		long[] high = new long[DOUBLE_EXPONENT_BINS];
-		int minimumBin = DOUBLE_EXPONENT_BINS;
-		int maximumBin = -1;
+		int minimumExponent = MAX_DOUBLE_EXPONENT + 1, maximumExponent = MIN_DOUBLE_EXPONENT - 1;
 		for (int index = 0; index < length; index++) {
 			double value = values[index];
 			if (!Double.isFinite(value)) throw new IllegalArgumentException("Thermal audit value must be finite");
+			long bits = Double.doubleToRawLongBits(value);
+			if ((bits & Long.MAX_VALUE) == 0) continue;
+			int rawExponent = (int) (bits >>> 52 & 0x7ffL);
+			int exponent = rawExponent == 0 ? MIN_DOUBLE_EXPONENT : rawExponent - 1075;
+			minimumExponent = Math.min(minimumExponent, exponent);
+			maximumExponent = Math.max(maximumExponent, exponent);
+		}
+		if (maximumExponent < minimumExponent) return ZERO;
+		long[] low = new long[maximumExponent - minimumExponent + 1];
+		long[] high = new long[low.length];
+		for (int index = 0; index < length; index++) {
+			double value = values[index];
 			long bits = Double.doubleToRawLongBits(value);
 			long fraction = bits & 0x000f_ffff_ffff_ffffL;
 			int rawExponent = (int) (bits >>> 52 & 0x7ffL);
@@ -151,25 +159,22 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 			long significand = rawExponent == 0 ? fraction : fraction | 0x0010_0000_0000_0000L;
 			int exponent = rawExponent == 0 ? MIN_DOUBLE_EXPONENT : rawExponent - 1075;
 			if ((bits & Long.MIN_VALUE) != 0L) significand = -significand;
-			int bin = exponent - MIN_DOUBLE_EXPONENT;
+			int bin = exponent - minimumExponent;
 			long previousLow = low[bin];
 			long nextLow = previousLow + significand;
 			low[bin] = nextLow;
 			high[bin] += (significand < 0L ? -1L : 0L)
 					+ (Long.compareUnsigned(nextLow, previousLow) < 0 ? 1L : 0L);
-			minimumBin = Math.min(minimumBin, bin);
-			maximumBin = Math.max(maximumBin, bin);
 		}
-		if (maximumBin < 0) return ZERO;
 		BigInteger significand = BigInteger.ZERO;
-		for (int bin = minimumBin; bin <= maximumBin; bin++) {
+		for (int bin = 0; bin < low.length; bin++) {
 			if (high[bin] == 0L && low[bin] == 0L) continue;
 			BigInteger lower = BigInteger.valueOf(low[bin] & Long.MAX_VALUE);
 			if (low[bin] < 0L) lower = lower.setBit(Long.SIZE - 1);
 			BigInteger binValue = BigInteger.valueOf(high[bin]).shiftLeft(Long.SIZE).add(lower);
-			significand = significand.add(binValue.shiftLeft(bin - minimumBin));
+			significand = significand.add(binValue.shiftLeft(bin));
 		}
-		return new SignedDyadic(significand, MIN_DOUBLE_EXPONENT + minimumBin);
+		return new SignedDyadic(significand, minimumExponent);
 	}
 
 	public SignedDyadic add(SignedDyadic other) { return combine(other, false); }

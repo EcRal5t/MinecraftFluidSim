@@ -23,6 +23,15 @@ final class ResolvedMarkerVelocity {
 
 	void project(LiquidParticleStore particles, int axis, boolean[] valid, float[] velocity, MarkerTransferBudget support) {
 		int count = particles.count(), faces = valid.length;
+		boolean zero = true;
+		for (int marker = 0; marker < count; marker++)
+			if ((support == null || support.resolved(marker)) && velocity[marker] != 0) { zero = false; break; }
+		if (zero) {
+			// A homogeneous linear projection maps zero to positive zero, with no Gram assembly.
+			for (int marker = 0; marker < count; marker++)
+				if (support == null || support.resolved(marker)) velocity[marker] = 0;
+			return;
+		}
 		if (indices.length < count * 8) { indices = new int[count * 8]; weights = new double[count * 8]; }
 		if (x.length < faces) {
 			diagonal = new double[faces]; x = new double[faces]; r = new double[faces]; p = new double[faces]; ap = new double[faces];
