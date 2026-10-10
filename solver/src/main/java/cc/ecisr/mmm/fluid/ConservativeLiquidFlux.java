@@ -11,7 +11,8 @@ final class ConservativeLiquidFlux {
 	final double[] velocity, flux;
 	final SignedDyadic[] exactFlux;
 	private final double[] low, positive, negative, rPositive, rNegative, outgoing;
-	private final float[] normalX, normalY, normalZ, offset;
+	private final float[] normalX, normalY, normalZ;
+	private final double[] offset;
 	private final int[] incomingHead, incomingNext, predecessor, queue;
 	private final SignedDyadic[] after;
 	private final double[] capacity, aperture, donorFlux;
@@ -30,7 +31,7 @@ final class ConservativeLiquidFlux {
 		velocity = new double[faces]; flux = velocity.clone(); exactFlux = new SignedDyadic[faces];
 		low = new double[cellCount]; positive = low.clone(); negative = low.clone();
 		rPositive = low.clone(); rNegative = low.clone(); outgoing = low.clone();
-		normalX = new float[cellCount]; normalY = normalX.clone(); normalZ = normalX.clone(); offset = normalX.clone();
+		normalX = new float[cellCount]; normalY = normalX.clone(); normalZ = normalX.clone(); offset = new double[cellCount];
 		incomingHead = new int[cellCount]; incomingNext = new int[faces]; predecessor = incomingHead.clone(); queue = incomingHead.clone();
 		after = new SignedDyadic[cellCount];
 		capacity = new double[cellCount]; aperture = new double[faces]; donorFlux = new double[faces];
@@ -94,7 +95,7 @@ final class ConservativeLiquidFlux {
 				normalY[c] = (float) (sample(volume, solid, x, y - 1, z, c) - sample(volume, solid, x, y + 1, z, c));
 				normalZ[c] = (float) (sample(volume, solid, x, y, z - 1, c) - sample(volume, solid, x, y, z + 1, c));
 				if (normalX[c] == 0 && normalY[c] == 0 && normalZ[c] == 0) normalY[c] = 1;
-				offset[c] = geometry == null ? FlipFreeSurfaceGeometry.solvePlaneOffset(normalX[c], normalY[c], normalZ[c], (float) volume[c])
+				offset[c] = geometry == null ? FlipFreeSurfaceGeometry.solvePlaneOffset((double) normalX[c], normalY[c], normalZ[c], volume[c])
 						: geometry.offset(c, normalX[c], normalY[c], normalZ[c], volume[c]);
 			}
 		});
@@ -108,7 +109,7 @@ final class ConservativeLiquidFlux {
 				double courant = velocity[f] * dtOverH;
 				int donor = courant >= 0 ? left[f] : right[f];
 				if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) { flux[f] = 0; continue; }
-				float width = (float) Math.abs(courant), nx = normalX[donor], ny = normalY[donor], nz = normalZ[donor], off = offset[donor];
+				double width = Math.abs(courant), nx = normalX[donor], ny = normalY[donor], nz = normalZ[donor], off = offset[donor];
 				if (courant > 0) off -= (axis[f] == 0 ? nx : axis[f] == 1 ? ny : nz) * (1 - width);
 				if (axis[f] == 0) nx *= width; else if (axis[f] == 1) ny *= width; else nz *= width;
 				donorFlux[f] = capacity[donor] == 0 ? 0 : courant * aperture[f] * volume[donor] / capacity[donor];

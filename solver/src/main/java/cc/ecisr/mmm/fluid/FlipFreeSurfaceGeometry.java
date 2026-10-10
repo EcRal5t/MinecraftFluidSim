@@ -155,86 +155,76 @@ final class FlipFreeSurfaceGeometry {
 		return !solid[index] && markerCount[index] == 0;
 	}
 
-	static float solvePlaneOffset(float normalX, float normalY, float normalZ, float fraction) {
-		float clampedFraction = clamp(fraction, 0.0F, 1.0F);
-		float minimum = Math.min(0.0F, normalX) + Math.min(0.0F, normalY) + Math.min(0.0F, normalZ);
-		float maximum = Math.max(0.0F, normalX) + Math.max(0.0F, normalY) + Math.max(0.0F, normalZ);
-		if (clampedFraction <= 0.0F) return minimum;
-		if (clampedFraction >= 1.0F) return maximum;
+	static float solvePlaneOffset(float nx, float ny, float nz, float fraction) {
+		return (float) solvePlaneOffset((double) nx, ny, nz, fraction);
+	}
+
+	static double solvePlaneOffset(double normalX, double normalY, double normalZ, double fraction) {
+		double clampedFraction = clamp(fraction, 0, 1);
+		double minimum = Math.min(0, normalX) + Math.min(0, normalY) + Math.min(0, normalZ);
+		double maximum = Math.max(0, normalX) + Math.max(0, normalY) + Math.max(0, normalZ);
+		if (clampedFraction <= 0) return minimum;
+		if (clampedFraction >= 1) return maximum;
 		double a = Math.abs(normalX), b = Math.abs(normalY), c = Math.abs(normalZ);
-		double tail = Math.min(clampedFraction, 1.0 - clampedFraction), root, firstInterval;
-		if (a > 1.0E-10 && b > 1.0E-10 && c > 1.0E-10) {
+		double tail = Math.min(clampedFraction, 1 - clampedFraction), root, firstInterval;
+		if (a > 0 && b > 0 && c > 0) {
 			root = Math.cbrt(6 * a * b * c * tail); firstInterval = Math.min(a, Math.min(b, c));
-		} else if (a > 1.0E-10 && b > 1.0E-10) {
+		} else if (a > 0 && b > 0) {
 			root = rectanglePlaneOffset(a, b, tail); firstInterval = Double.POSITIVE_INFINITY;
-		} else if (a > 1.0E-10 && c > 1.0E-10) {
+		} else if (a > 0 && c > 0) {
 			root = rectanglePlaneOffset(a, c, tail); firstInterval = Double.POSITIVE_INFINITY;
-		} else if (b > 1.0E-10 && c > 1.0E-10) {
+		} else if (b > 0 && c > 0) {
 			root = rectanglePlaneOffset(b, c, tail); firstInterval = Double.POSITIVE_INFINITY;
 		} else {
 			root = tail * Math.max(a, Math.max(b, c)); firstInterval = Double.POSITIVE_INFINITY;
 		}
-		// The first vertex interval is a simplex. Its reflected complement has the
-		// same measure, so both near-empty and near-full planes have a direct inverse.
-		if (root <= firstInterval) return (float) (minimum + (clampedFraction <= 0.5 ? root : a + b + c - root));
-		float lower = minimum;
-		float upper = maximum;
-		for (int iteration = 0; iteration < 32; iteration++) {
-			float middle = 0.5F * (lower + upper);
+		if (root <= firstInterval) return minimum + (clampedFraction <= 0.5 ? root : a + b + c - root);
+		double lower = minimum, upper = maximum;
+		for (int iteration = 0; iteration < 64; iteration++) {
+			double middle = 0.5 * (lower + upper);
 			if (middle == lower || middle == upper) break;
 			if (unitCubeLiquidFraction(normalX, normalY, normalZ, middle) < clampedFraction) lower = middle;
 			else upper = middle;
 		}
-		return 0.5F * (lower + upper);
+		return 0.5 * (lower + upper);
 	}
 
-	/** The lower half of a rectangle is a triangle followed by a constant-width strip. */
 	private static double rectanglePlaneOffset(double a, double b, double fraction) {
 		double small = Math.min(a, b), large = Math.max(a, b);
 		return fraction <= small / (2 * large) ? Math.sqrt(2 * a * b * fraction) : large * fraction + 0.5 * small;
 	}
 
-	static float unitCubeLiquidFraction(float normalX, float normalY, float normalZ, float offset) {
-		double a = Math.abs(normalX), b = Math.abs(normalY), c = Math.abs(normalZ);
-		double transformedOffset = offset;
-		if (normalX < 0.0F) transformedOffset += a;
-		if (normalY < 0.0F) transformedOffset += b;
-		if (normalZ < 0.0F) transformedOffset += c;
-		if (a + b + c == 0) return transformedOffset >= 0 ? 1 : 0;
-		if (transformedOffset <= 0) return 0;
-		if (transformedOffset >= a + b + c) return 1;
-		boolean complement = transformedOffset > 0.5 * (a + b + c);
-		if (complement) transformedOffset = a + b + c - transformedOffset;
+	static float unitCubeLiquidFraction(float nx, float ny, float nz, float offset) {
+		return (float) unitCubeLiquidFraction((double) nx, ny, nz, offset);
+	}
+
+	/** Scale-invariant CDF, evaluated as an integrated rectangle to avoid cancelling nearly equal powers. */
+	static double unitCubeLiquidFraction(double nx, double ny, double nz, double offset) {
+		double a = Math.abs(nx), b = Math.abs(ny), c = Math.abs(nz);
+		double t = offset + (nx < 0 ? a : 0) + (ny < 0 ? b : 0) + (nz < 0 ? c : 0);
+		double sum = a + b + c;
+		if (sum == 0) return t >= 0 ? 1 : 0;
+		if (t <= 0) return 0;
+		if (t >= sum) return 1;
+		boolean complement = t > 0.5 * sum;
+		if (complement) t = sum - t;
+		if (a > b) { double swap = a; a = b; b = swap; }
+		if (b > c) { double swap = b; b = c; c = swap; }
+		if (a > b) { double swap = a; a = b; b = swap; }
 		double result;
-		if (a > 1.0E-10 && b > 1.0E-10 && c > 1.0E-10) {
-			result = (cube(transformedOffset)
-					- cube(transformedOffset - a) - cube(transformedOffset - b) - cube(transformedOffset - c)
-					+ cube(transformedOffset - a - b) + cube(transformedOffset - a - c) + cube(transformedOffset - b - c)
-					- cube(transformedOffset - a - b - c)) / (6.0 * a * b * c);
-		} else if (a > 1.0E-10 && b > 1.0E-10) {
-			result = (square(transformedOffset) - square(transformedOffset - a) - square(transformedOffset - b)
-					+ square(transformedOffset - a - b)) / (2.0 * a * b);
-		} else if (a > 1.0E-10 && c > 1.0E-10) {
-			result = (square(transformedOffset) - square(transformedOffset - a) - square(transformedOffset - c)
-					+ square(transformedOffset - a - c)) / (2.0 * a * c);
-		} else if (b > 1.0E-10 && c > 1.0E-10) {
-			result = (square(transformedOffset) - square(transformedOffset - b) - square(transformedOffset - c)
-					+ square(transformedOffset - b - c)) / (2.0 * b * c);
-		} else {
-			double length = Math.max(a, Math.max(b, c));
-			result = length <= 1.0E-10 ? (transformedOffset >= 0.0 ? 1.0 : 0.0) : transformedOffset / length;
-		}
-		return (float) clamp(complement ? 1 - result : result, 0.0, 1.0);
+		if (a > 0) result = (rectangleIntegral(a, b, t) - rectangleIntegral(a, b, t - c)) / c;
+		else if (b > 0) result = t <= b ? t * t / (2 * b * c) : (t - 0.5 * b) / c;
+		else result = t / c;
+		return clamp(complement ? 1 - result : result, 0, 1);
 	}
 
-	private static double square(double value) {
-		double positive = Math.max(0.0, value);
-		return positive * positive;
-	}
-
-	private static double cube(double value) {
-		double positive = Math.max(0.0, value);
-		return positive * positive * positive;
+	/** Integral of the CDF of a*x+b*y, with 0<a<=b and x,y in [0,1]. */
+	private static double rectangleIntegral(double a, double b, double t) {
+		if (t <= 0) return 0;
+		if (t <= a) return t * t * t / (6 * a * b);
+		if (t <= b) return (t * (t - a) / 2 + a * a / 6) / b;
+		if (t < a + b) { double remaining = a + b - t; return t - 0.5 * (a + b) + remaining * remaining * remaining / (6 * a * b); }
+		return t - 0.5 * (a + b);
 	}
 
 	private boolean inside(int x, int y, int z) {

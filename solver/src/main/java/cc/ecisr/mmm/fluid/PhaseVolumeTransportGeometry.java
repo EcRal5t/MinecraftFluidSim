@@ -4,14 +4,15 @@ package cc.ecisr.mmm.fluid;
 final class PhaseVolumeTransportGeometry {
 	private final FluidDomain domain;
 	private final double[][] volumes;
-	private final float[][] nx, ny, nz, offsets;
+	private final float[][] nx, ny, nz;
+	private final double[][] offsets;
 	private final LiquidFluxGeometry geometry;
 
 	PhaseVolumeTransportGeometry(FluidDomain domain, double[][] volumes) {
 		this.domain = domain; this.volumes = volumes;
 		geometry = new LiquidFluxGeometry(domain);
 		nx = new float[volumes.length][domain.cellCount]; ny = new float[volumes.length][domain.cellCount];
-		nz = new float[volumes.length][domain.cellCount]; offsets = new float[volumes.length][domain.cellCount];
+		nz = new float[volumes.length][domain.cellCount]; offsets = new double[volumes.length][domain.cellCount];
 		for (int phase = 0; phase < volumes.length; phase++) for (int cell = 0; cell < domain.cellCount; cell++) {
 			double fraction = volumes[phase][cell];
 			if (!(fraction > 0 && fraction < geometry.capacity(cell))) continue;
@@ -31,7 +32,8 @@ final class PhaseVolumeTransportGeometry {
 		double fraction = volumes[phase][cell];
 		if (!(fraction > 0)) return 0;
 		if (fraction >= geometry.capacity(cell)) return width * geometry.aperture(positive ? cell : neighbor, positive ? neighbor : cell, axis);
-		float a = nx[phase][cell], b = ny[phase][cell], c = nz[phase][cell], off = offsets[phase][cell];
+		float a = nx[phase][cell], b = ny[phase][cell], c = nz[phase][cell];
+		double off = offsets[phase][cell];
 		if (a == 0 && b == 0 && c == 0) return width * fraction / geometry.capacity(cell)
 				* geometry.aperture(positive ? cell : neighbor, positive ? neighbor : cell, axis);
 		return geometry.swept(cell, neighbor, axis, width, positive, a, b, c, off);

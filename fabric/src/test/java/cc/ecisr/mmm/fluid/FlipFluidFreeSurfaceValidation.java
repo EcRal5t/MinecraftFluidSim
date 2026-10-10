@@ -5,6 +5,10 @@ public final class FlipFluidFreeSurfaceValidation {
 	private FlipFluidFreeSurfaceValidation() { }
 
 	public static void main(String[] args) {
+		if (java.util.Arrays.asList(args).contains("--geometry")) {
+			planeVolumeInversionIsAccurate(); liquidPlaneRetainsSmallInventoryGeometry();
+			System.out.println("Liquid-plane geometry validation passed"); return;
+		}
 		freeSurfaceTransferSeparatesIndependentSupport();
 		closedTransferSeparatesIndependentSupport();
 		resolvedTransferRequiresExactAvailableCapacity();
@@ -16,6 +20,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		}
 		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		planeVolumeInversionIsAccurate();
+		liquidPlaneRetainsSmallInventoryGeometry();
 		LiquidVolumeTransportValidation.main(new String[0]);
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pressurePhaseUsesConservativeFootprintVolume();
@@ -371,6 +376,27 @@ public final class FlipFluidFreeSurfaceValidation {
 			);
 			check(Math.abs(reconstructed - fraction) < 2.0E-6F,
 					"PLIC inversion drifted: expected=" + fraction + ", reconstructed=" + reconstructed);
+		}
+	}
+
+	private static void liquidPlaneRetainsSmallInventoryGeometry() {
+		for (double scale : new double[] {1, 1e-7, 1e-11, 1e-30}) {
+			// A vertex tetrahedron has exact volume offset^3/(6*nx*ny*nz).
+			double fraction = 1e-7, distance = Math.cbrt(6 * fraction);
+			double offset = FlipFreeSurfaceGeometry.solvePlaneOffset(scale, scale, scale, fraction);
+			check(Math.abs(offset / scale - distance) <= 8 * Math.ulp(distance), "Plane inversion changed with normal scale");
+			double recovered = FlipFreeSurfaceGeometry.unitCubeLiquidFraction(scale, scale, scale, scale * distance);
+			check(Math.abs(recovered - fraction) <= 16 * Math.ulp(fraction), "Tetrahedron volume changed with normal scale");
+			float stored = FlipFreeSurfaceGeometry.unitCubeLiquidFraction((float) scale, (float) scale, (float) scale, (float) (scale * distance));
+			check(Math.abs(stored - fraction) <= 8 * Math.ulp((float) fraction), "Float plane used an absolute normal cutoff");
+		}
+		for (double transverse : new double[] {0, 1e-8, 1e-12}) {
+			double volume = Math.scalb(1.0, -25);
+			double off = FlipFreeSurfaceGeometry.solvePlaneOffset(-1.0, -transverse, 0.0, volume);
+			double recovered = FlipFreeSurfaceGeometry.unitCubeLiquidFraction(-1.0, -transverse, 0.0, off);
+			double swept = 0.015625 * FlipFreeSurfaceGeometry.unitCubeLiquidFraction(-0.015625, -transverse, 0.0, off + 1 - 0.015625);
+			check(Math.abs(recovered - volume) <= 8 * Math.ulp(1.0), "Small liquid inventory was lost in plane offset storage");
+			check(Math.abs(swept - volume) <= 8 * Math.ulp(1.0), "A containing face sweep changed the small liquid inventory");
 		}
 	}
 
