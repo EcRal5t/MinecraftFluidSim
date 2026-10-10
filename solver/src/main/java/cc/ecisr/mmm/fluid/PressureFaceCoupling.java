@@ -13,6 +13,7 @@ package cc.ecisr.mmm.fluid;
  * regularization belongs here.</p>
  */
 final class PressureFaceCoupling {
+	private static final PressureFaceCoupling CENTERED_UNIT = new PressureFaceCoupling(1.0, 0.0F);
 	private final double mobilityScale;
 	private final float pressureJumpFirstMinusSecond;
 
@@ -28,7 +29,7 @@ final class PressureFaceCoupling {
 	}
 
 	static PressureFaceCoupling centered(double densityScale) {
-		return new PressureFaceCoupling(densityScale, 0.0F);
+		return densityScale == 1.0 ? CENTERED_UNIT : new PressureFaceCoupling(densityScale, 0.0F);
 	}
 
 	static PressureFaceCoupling oneSided(
