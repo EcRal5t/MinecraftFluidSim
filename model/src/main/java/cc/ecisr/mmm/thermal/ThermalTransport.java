@@ -80,7 +80,6 @@ public final class ThermalTransport {
 			if (conductivity[p] > 0) conductingCarriers[owners.cell(p)]++;
 		}
 		int[] starts = contactOffsets(grid, conductingCarriers), ends = new int[cellCount];
-		var contacts = new ThermalCarrierContacts(starts[cellCount]);
 		double[][] areas = new double[3][cellCount];
 		FixedBoundary[][] boundaries = new FixedBoundary[6][cellCount];
 		// Geometry callbacks run in their original order before independent numerical work.
@@ -100,7 +99,12 @@ public final class ThermalTransport {
 				if (boundary != null) validateArea(boundary.contactAreaSquareMeters());
 			}
 		}
-		CpuWorkBatch.run(cellCount, (from, until) -> {
+		double commonTemperature = uniformCarrierTemperature(owners);
+		for (var direction : boundaries) for (var boundary : direction)
+			if (boundary != null && boundary.surfaceTemperatureK() != commonTemperature) commonTemperature = Double.NaN;
+		double[] noFluxDegree = Double.isNaN(commonTemperature) ? null : new double[count];
+		var contacts = new ThermalCarrierContacts(starts[cellCount], noFluxDegree);
+		CpuWorkBatch.RangeWork buildContacts = (from, until) -> {
 			for (int cell = from; cell < until; cell++) {
 				int cursor = starts[cell];
 				if (!grid.occupied(cell)) { ends[cell] = cursor; continue; }
@@ -138,8 +142,17 @@ public final class ThermalTransport {
 				if (cursor > starts[cell + 1]) throw new IllegalStateException("Thermal contact range exceeded its capacity");
 				ends[cell] = cursor;
 			}
-		});
+		};
+		if (noFluxDegree == null) CpuWorkBatch.run(cellCount, buildContacts);
+		else buildContacts.run(0, cellCount); // Matches the original compact contact order for degree accumulation.
 		contacts.compact(starts, ends);
+		if (noFluxDegree != null) {
+			if (!(Double.isFinite(dt) && dt > 0)) throw new IllegalArgumentException("Invalid carrier conduction input");
+			for (double degree : noFluxDegree) if (!Double.isFinite(degree))
+				throw new IllegalArgumentException("Non-finite conduction degree");
+			if (prepared) grid.refreshCarrierEnergy(); else grid.rebuild(owners);
+			return new Stats(1, contacts.size(), 0, 0, SignedDyadic.ZERO, SignedDyadic.ZERO);
+		}
 		double[] snapshot = grid.copyCarrierInternalEnergy();
 		try {
 			Stats result = ThermalCarrierTransport.step(owners, contacts, dt, maximumSubsteps);
@@ -149,6 +162,17 @@ public final class ThermalTransport {
 			grid.restoreCarrierInternalEnergy(snapshot);
 			throw failure;
 		}
+	}
+
+	private static double uniformCarrierTemperature(ThermalCellGrid.CarrierAccess owners) {
+		double common = Double.NaN;
+		for (int p = 0; p < owners.carrierCount(); p++) {
+			double temperature = new ThermalContactExchange.Carrier(owners.material(p), owners.mass(p),
+					owners.baseEnergy(p), owners.internalEnergy(p)).temperatureK();
+			if (p == 0) common = temperature;
+			else if (temperature != common) return Double.NaN;
+		}
+		return common;
 	}
 
 	/** Topological upper bound; closed/adiabatic faces can leave unused slots. */

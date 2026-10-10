@@ -221,6 +221,32 @@ public final class ThermalContactValidation {
 					&& zero.maximumTemperatureChangeK() == 0 && zero.maximumAbsoluteTransferEu() == 0
 					&& zero.reservoirExchange().equals(SignedDyadic.ZERO)
 					&& zero.roundoffResidual().equals(SignedDyadic.ZERO), "isothermal contacts changed caloric inventory");
+			var grid = new ThermalCellGrid(1); grid.rebuild(owners);
+			var spatial = new ThermalTransport(1, 1, 1, 1, 8);
+			var spatialZero = spatial.step(grid, (x, y, z, axis) -> 1,
+					(x, y, z, direction) -> new ThermalTransport.FixedBoundary(1, 300), 1000);
+			require(spatialZero.evaluatedContacts() == 21 && spatialZero.equals(new ThermalTransport.Stats(
+					1, 21, 0, 0, SignedDyadic.ZERO, SignedDyadic.ZERO)) && Arrays.equals(energy, isothermal),
+					"strict zero-flux preflight changed contact count or caloric inventory");
+			var tinyExchange = spatial.step(grid, (x, y, z, axis) -> 1,
+					(x, y, z, direction) -> new ThermalTransport.FixedBoundary(1, Math.nextUp(300.0)), 0.01);
+			require(tinyExchange.maximumAbsoluteTransferEu() > 0, "zero-flux preflight discarded a one-ulp reservoir difference");
+			System.arraycopy(isothermal, 0, energy, 0, energy.length);
+			mass[1] = 0;
+			boolean invalidMass = false;
+			try { spatial.step(grid, (x, y, z, axis) -> 1, 1); }
+			catch (IllegalArgumentException expected) { invalidMass = true; }
+			mass[1] = 3;
+			require(invalidMass && Arrays.equals(energy, isothermal), "zero-flux preflight concealed invalid owner mass");
+			var savedMaterials = materials.clone();
+			for (int p = 0; p < materials.length; p++) materials[p] = new ThermalMaterialDefinition(
+					savedMaterials[p].id(), savedMaterials[p].carrierKind(), savedMaterials[p].carrierId(), 300, 0,
+					Double.MAX_VALUE, savedMaterials[p].caloricSegments());
+			boolean invalidDegree = false;
+			try { spatial.step(grid, (x, y, z, axis) -> 1, 1); }
+			catch (IllegalArgumentException expected) { invalidDegree = true; }
+			System.arraycopy(savedMaterials, 0, materials, 0, materials.length);
+			require(invalidDegree && Arrays.equals(energy, isothermal), "zero-flux preflight concealed an overflowing conduction degree");
 			double[] unchanged = energy.clone();
 			boolean rejected = false;
 			try { ThermalCarrierTransport.step(owners, List.of(new ThermalCarrierTransport.Contact(0, 3, g, Double.NaN)), 1, 8); }
