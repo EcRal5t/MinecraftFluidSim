@@ -31,7 +31,7 @@
 
 ## 历史资料
 
-[版本历史](progress/version-history.md)记录各次发布的变化。[归档目录](archive/README.md)保存旧提案、审查记录和已完成的实施报告。查找当前代码时使用上面的专题。
+[自由面探索索引](archive/free-surface-unification-research.md)整理可复用成果、数值反例和离线对照入口。[版本历史](progress/version-history.md)记录各次发布的变化。[归档目录](archive/README.md)保存旧提案、审查记录和已完成的实施报告。查找当前代码时使用上面的专题。
 
 ## 维护这些文档
 

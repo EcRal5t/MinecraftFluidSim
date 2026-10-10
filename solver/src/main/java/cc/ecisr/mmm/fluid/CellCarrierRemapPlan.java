@@ -27,6 +27,8 @@ final class CellCarrierRemapPlan {
 	private final FluidDomain domain;
 	private final ArrayList<Group>[] input, output;
 	private final int[] outgoingHead, outgoingNext;
+	private final boolean[] remappedCells;
+	private final ArrayList<Marker> retainedMarkers = new ArrayList<>();
 	private final PhaseVolumeTransportGeometry phaseGeometry;
 	private final float dt;
 	private final boolean geometryRemap;
@@ -47,20 +49,28 @@ final class CellCarrierRemapPlan {
 		input = (ArrayList<Group>[]) new ArrayList<?>[domain.cellCount];
 		output = (ArrayList<Group>[]) new ArrayList<?>[domain.cellCount];
 		outgoingHead = new int[domain.cellCount]; outgoingNext = new int[flux.flux.length]; Arrays.fill(outgoingHead, -1);
+		remappedCells = new boolean[domain.cellCount];
+		if (geometryRemap) Arrays.fill(remappedCells, true);
+		else {
+			for (int f = 0; f < flux.exactFlux.length; f++) if (flux.exactFlux[f].signum() > 0) {
+				remappedCells[flux.left[f]] = true; remappedCells[flux.right[f]] = true;
+			}
+			retainUnchangedCells();
+		}
 		gatherInput();
 		phaseGeometry = phaseGeometry();
 		for (int f = flux.flux.length - 1; f >= 0; f--) if (flux.exactFlux[f].signum() > 0) {
 			int c = flux.donor(f); outgoingNext[f] = outgoingHead[c]; outgoingHead[c] = f;
 		}
 		if (domain.thermalState == null && domain.chemicalParcels == null) {
-			for (int cell = 0; cell < domain.cellCount; cell++) if (input[cell] != null) {
+			for (int cell = 0; cell < domain.cellCount; cell++) if (remappedCells[cell] && input[cell] != null) {
 				distribute(cell, flux);
 				for (Group group : input[cell]) if (group.shares != null) mergeShares(group.shares);
 			}
 		} else {
-			CpuWorkBatch.run(domain.cellCount, (from, until) -> { for (int cell = from; cell < until; cell++) { if (input[cell] != null) distribute(cell, flux); } });
+			CpuWorkBatch.run(domain.cellCount, (from, until) -> { for (int cell = from; cell < until; cell++) { if (remappedCells[cell] && input[cell] != null) distribute(cell, flux); } });
 			var incoming = (ArrayList<Share>[]) new ArrayList<?>[domain.cellCount];
-			for (ArrayList<Group> groups : input) if (groups != null) for (Group group : groups)
+			for (ArrayList<Group> groups : input) if (groups != null) for (Group group : groups) if (group.shares != null)
 				for (Share share : group.shares) {
 					if (incoming[share.destination] == null) incoming[share.destination] = new ArrayList<>();
 					incoming[share.destination].add(share);
@@ -79,7 +89,7 @@ final class CellCarrierRemapPlan {
 			group.sampleVolumes = quadratureVolumes(group);
 			sampledCount = Math.addExact(sampledCount, group.sampleVolumes.size());
 		}
-		if ((long) sampledCount + ballistic.markers.size() > domain.maximumParticleCount)
+		if ((long) sampledCount + retainedMarkers.size() + ballistic.markers.size() > domain.maximumParticleCount)
 			throw new IllegalStateException("Cell carrier remap exceeds the marker budget");
 		markers.addAll(java.util.Collections.nCopies(sampledCount, null));
 		CpuWorkBatch.run(domain.cellCount, (from, until) -> {
@@ -87,8 +97,27 @@ final class CellCarrierRemapPlan {
 				if (output[cell] != null) for (Group group : output[cell]) sample(group);
 			}
 		});
+		markers.addAll(retainedMarkers);
 		markers.addAll(ballistic.markers);
 		energyRoundoff = validateInventories(flux, ballistic);
+	}
+
+	/** A cell without any shared transfer keeps its existing spatial integration rule. */
+	private void retainUnchangedCells() {
+		double h = domain.config.cellSize();
+		for (int p = 0; p < domain.particles.count(); p++) {
+			int cell = domain.particleCellIndex(p);
+			if (remappedCells[cell] || !domain.gridToParticleStage.advectionCells()[cell]) continue;
+			var chemical = domain.chemicalParcels;
+			retainedMarkers.add(new Marker(cell, domain.particles.materialHandle(p), chemical != null && chemical.indicator(p),
+					domain.particles.volume(p), domain.particles.mass(p),
+					domain.particles.positionX(p) / h - cell % domain.sizeX - 0.5,
+					domain.particles.positionY(p) / h - cell / domain.sizeX % domain.sizeY - 0.5,
+					domain.particles.positionZ(p) / h - cell / (domain.sizeX * domain.sizeY) - 0.5,
+					domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p),
+					chemical == null ? null : chemical.record(p),
+					domain.thermalState == null ? 0 : domain.thermalState.liquidInternalEnergy(p)));
+		}
 	}
 
 	private void gatherInput() {
@@ -476,7 +505,7 @@ final class CellCarrierRemapPlan {
 			for (ArrayList<Group> groups : output) if (groups != null) for (Group group : groups)
 				domain.chemicalParcels.requireCompatible(speciesRecord(group), domain.materialRegistry.material(group.material).id(), group.indicator);
 			@SuppressWarnings("unchecked") var isolated = (TreeMap<Integer, Long>[]) new TreeMap<?, ?>[domain.cellCount];
-			for (Marker marker : ballistic.markers) {
+			for (var preserved : java.util.List.of(ballistic.markers, retainedMarkers)) for (Marker marker : preserved) {
 				if (isolated[marker.cell] == null) isolated[marker.cell] = new TreeMap<>();
 				add(isolated[marker.cell], marker.mixture);
 			}
