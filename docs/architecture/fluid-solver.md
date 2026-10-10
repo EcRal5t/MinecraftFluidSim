@@ -8,7 +8,7 @@
 |---|---|---|
 | 计算顺序与状态捕获 | [FluidDomainStepCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStepCoordinator.java)、[MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)、[FluidDomainStateMapper](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStateMapper.java) | `lifecycle` |
 | 压力和自由面 | [PressureProjectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionStage.java)、[PressureSystem](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureSystem.java)、[PressureFaceCoupling](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureFaceCoupling.java) | `free-surface,gas-liquid` |
-| 速度传递与平流 | [GridToParticleStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GridToParticleStage.java)、[ResolvedMarkerVelocity](../../solver/src/main/java/cc/ecisr/mmm/fluid/ResolvedMarkerVelocity.java)、[DivergenceFreeVelocityExtension](../../solver/src/main/java/cc/ecisr/mmm/fluid/DivergenceFreeVelocityExtension.java)、[ParticleAdvectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ParticleAdvectionStage.java) | `free-surface,thermal,reseeding` |
+| 速度传递与平流 | [GridToParticleStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GridToParticleStage.java)、[MarkerTransferBudget](../../solver/src/main/java/cc/ecisr/mmm/fluid/MarkerTransferBudget.java)、[ResolvedMarkerVelocity](../../solver/src/main/java/cc/ecisr/mmm/fluid/ResolvedMarkerVelocity.java)、[DivergenceFreeVelocityExtension](../../solver/src/main/java/cc/ecisr/mmm/fluid/DivergenceFreeVelocityExtension.java)、[ParticleAdvectionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ParticleAdvectionStage.java) | `free-surface,thermal,reseeding` |
 | 局部形状碰撞 | [FlipCutCellGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipCutCellGeometry.java)、[FlipParticleCollision](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipParticleCollision.java) | `cut-cell` |
 | 粒子拆分和合并 | [FlipParticleReseeder](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipParticleReseeder.java)、[CarrierMutationCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/CarrierMutationCoordinator.java) | `reseeding` |
 | 后端结果提交 | [FluidSolverBackend](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidSolverBackend.java)、[RegionApplicationService](../../application/src/main/java/cc/ecisr/mmm/application/RegionApplicationService.java)、[FluidRegionRepository](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidRegionRepository.java) | `lifecycle` |
@@ -93,7 +93,7 @@ CPU 在私有对象上按阶段执行计算。`CpuWorkBatch` 的并行度取可�
 - 每个 marker 的 raw float `particleVolume` 是液体体积原始数据，物理总量是这些二进制有理数的精确和；逐格 marker sum 只由该原始数据正向汇总。顺序相关的 float/double reduction 只能作带解析舍入界的诊断，不能替代 exact ledger。
 - `volume[]` 是面向观察和表面几何的 binary32 单元体积分数，默认由同格 marker 精确体积和一次舍入生成；pressure、PLIC 与气腔容量共用精确单元库存。粒子平流对照路径以固定核生成平滑体积分数与守恒压力支撑。
 - P2G/G2P 使用共享的 valid face；均匀密度时 face 分子/分母按 marker 体积散射，变密度时按 marker 质量散射，并在归一化前保留同一份 P2G face weight 供动能度量。MAC 空气外推从开放压力面播种，G2P 不采未定义空气零值。三轴 face splat 直接写入固定 SoA，不为每个 marker/axis 创建 callback；上一 logical step 末已完整发布且 `gridDirty == false && velocityGridDirty == false` 的派生网格可供下一步首个 substep 直接使用，particle advection 与任何 carrier edit 都会重新置 dirty，后续 substep 不能跳过重建。
-- 满液体压力空间要求每个非固体单元均属于 liquid pressure phase。该空间的 G2P 先以 marker 质量内积将已有速度投影到 MAC 插值空间，丢弃该采样空间无法解析的分量，再写成 `v(alpha) = v_pic + alpha * (v_resolved - v_p2g)`。能量预算为 `E_resolved + min(E_predicted_grid, E_projected_grid) - E_p2g_grid`，保留可解析流动的 P2G 方差，使光滑流动的衰减由 Newtonian 黏性应力控制。含自由面的离散沿用原 marker FLIP 增量，并采用预测与投影网格动能的较小值作为预算；其额外数值耗散单列诊断。两者以 PIC 动能作为可行下限，解析选择 `[0,1]` 内满足预算的最大 `alpha`。质量正交投影使用矩阵无关 PCG 求解 `B^T M B q = B^T M v`，返回 `Bq`；残差精度对应 binary32 插值精度。
+- 满液体压力空间要求每个非固体单元均属于 liquid pressure phase。该空间的 G2P 先以 marker 质量内积将已有速度投影到 MAC 插值空间，丢弃该采样空间无法解析的分量，再写成 `v(alpha) = v_pic + alpha * (v_resolved - v_p2g)`。能量预算为 `E_resolved + min(E_predicted_grid, E_projected_grid) - E_p2g_grid`，保留可解析流动的 P2G 方差，使光滑流动的衰减由 Newtonian 黏性应力控制。含自由面的离散沿用原 marker FLIP 增量，并采用预测与投影网格动能的较小值作为预算；其额外数值耗散单列诊断。自由面按实际数值依赖分量分别计算预算：正权 P2G、有效 G2P、压力行、有限气体未知量、颗粒压力和阻力因子，以及空气延拓的联立变量共同确定支撑；空气外推从实际使用的面沿有向来源追溯。每个分量使用本分量预测和投影动能，只有一个含液分量时保留原求根结果。临时数组规模由当前面、格、载体和颗粒数量决定，每个面最多进入一次追溯队列。两者以 PIC 动能作为可行下限，解析选择 `[0,1]` 内满足预算的最大 `alpha`。质量正交投影使用矩阵无关 PCG 求解 `B^T M B q = B^T M v`，返回 `Bq`；残差精度对应 binary32 插值精度。
 - reseed 以标准 `2×2×2` marker quadrature 的单 marker 体积决定逐格目标数；split 保持体积、质量、动量和质心。merge 按相同 material、phase、密度、温度、指示剂和逐 species 浓度分组，先选择分散的代表点，再构造保持质心与完整空间协方差的正权重积分规则。体积之和须可精确表示；raw float 体积的双向减法同时检查细小尾数。可行方案耗尽时保留原积分点并报告拒绝原因。GPU 的相同判定须使用精确求值。
 - 生成使用标准四分之一格积分点，reseed 的对称拆分保持质心与可放置留距。运动中的 marker 按积分点处理，外壳与整格固体的接触余量取域尺度的一个 float 位置 ULP；切割微单元执行扫掠点碰撞。法向接触保留切向速度。
 
@@ -174,7 +174,9 @@ dt <= 2/L
 
 `CellCarrierRemapPlan` 按单元、材料、指示剂和有界 species 并集分组，同一体积通量搬运材料质量、动量、组成和内能。species 使用整数最大余数分配；质量与内能的可表示余数分配到有容量的份额，提交前检查逐材料质量的 binary64 舍入界、精确 species、精确逐格体积、内能和动量收支。热量重建复用实际质量与组成的 caloric 数据，在相邻输入温度范围内保持正温，并保留完整能量审计。
 
-提交后的 marker 是单元空间积分点：满格采用八个四分之一格点，保留完整三维协方差与可解析仿射速度场；较少 chemical quanta 使用完整的 1、2 或 4 点规则，partial cut-cell 使用开放 micro box。binary32 表示需要的正体积尾数保留为额外积分点。速度场以单元张量多项式重建，偏差动能受输入动能约束。所有基础列、chemistry 与 thermal side column 在完整预检后由 `CarrierMutationCoordinator` 一次发布；本步随后复用已发布积分点。
+共享面精确通量大于零的供给格与接收格重建 marker，进出通量抵消时仍属于重建格。其余有限体积格保留原积分点的位置、速度与全部库存列，由共同计划与独立粒子结果一起预检提交。固体表示改变的几何重映射仍按新开放空间重建。
+
+重建后的 marker 是单元空间积分点：满格采用八个四分之一格点，保留完整三维协方差与可解析仿射速度场；较少 chemical quanta 使用完整的 1、2 或 4 点规则，partial cut-cell 使用开放 micro box。binary32 表示需要的正体积尾数保留为额外积分点。速度场以单元张量多项式重建，偏差动能受输入动能约束。所有基础列、chemistry 与 thermal side column 在完整预检后由 `CarrierMutationCoordinator` 一次发布；本步随后复用已发布积分点。
 
 `CellRemapInventoryAudit` 在发布前分别校验精确体积、逐材料质量、液体内能、动量和动能。发布逐值写入已检查的内能列，并登记这次预检的精确液体能量舍入差额；气体、颗粒与固体内能在该操作中保持原值。完整标准八点规则用张量逆变换批量求值，切割与细小库存尾数沿各自实际积分位置求值。
 
@@ -182,12 +184,18 @@ dt <= 2/L
 
 完整 `free-surface` 对有限体积路径运行 `12×8×6` 网格的 5,000 步溃坝（`h=0.5 m`、`dt=0.025 s`）。每步检查原始积分点体积精确和未超过开放容量、压力体积与同格库存相等，以及满格八个积分点保留独立的四分之一格位置。全程总体积保持 216 个单元体积，最终质量差为零，累计 binary64 质量舍入上界约 `2.46×10^-7` 个求解器质量单位。
 
+### 当前自由面的空间解析限制
+
+默认输运按 `DivergenceFreeVelocityExtension.advectionCells` 选择路径：压力液体格及经开放面连通的含液格进入共享面通量；其余粒子由 `BallisticLiquidRemap` 按当前粒子速度推进并执行 CCD，目标格预留对应库存容量。压力分类要求重建体积分数大于半格，并且 PLIC 覆盖格中心；`LiquidViscosityStage` 的参与单元还须属于这个压力分类。
+
+面通量重建保存单元库存与物性场，使用固定单元积分位置。该表示未保存局部液体的空间一阶矩，无法保持任意格内液滴的实际质心。单个 PLIC 平面也无法表示完全位于格内、四周被气体包围的闭合液滴。现有独立粒子路径保留这部分位置数据，但缺少对应的连续压力和黏性控制体。零共享通量保留已有位置；有通量的重建仍未保存完整空间一阶矩。分离、连接和格内平移的交接误差，以及亚格压力与黏性作用，需要按解析度分别评估；任务与完成条件见[产品路线](../roadmap/product-roadmap.md#自由面双路径交接与解析精度)。
+
 ## Logical step
 
 1. 读取当前 geometry、cut-cell、carrier occupancy 和边界条件。
 2. 体积/质量加权 P2G，推进颗粒与多孔阻力，校验固定面法向速度，再按完整 Newtonian 黏性应力扩散已有流动；以实际离散矩阵检查显式步长。
 3. 施加重力、热浮力、张力和气压等派生作用，再构造物理目标散度并求解 pressure projection；该解是本步对外 pressure/机械功原始数据。
-4. 延拓自由面附近的不可压速度，按压力空间对应的能量预算约束 G2P 的最大 FLIP 增量；连通液体按共享面的有限体积通量搬运库存并重建单元积分点，独立液滴沿与 MAC 离散散度一致的二阶 `H(div)` 场以 RK4 推进并执行 CCD；切割几何共同约束开放通量与碰撞。
+4. 延拓自由面附近的不可压速度，按压力空间对应的能量预算约束 G2P 的最大 FLIP 增量；连通液体按共享面的有限体积通量搬运库存并重建单元积分点，其余液体按当前粒子速度推进并执行 CCD。独立粒子平流对照路径在完整面支撑中使用二阶 `H(div)` 场与 RK4；切割几何共同约束开放通量与碰撞。
 5. 在传导前冻结颗粒反应 dirty cell，随后依次执行有限体积传导、液相反应、颗粒析出/溶解、凝聚相变和气液相变；两类相变共享同一操作预算。
 6. 执行 active/deposit compaction、沉积与局部唤醒。
 7. 经 `CarrierMutationCoordinator` 执行 reseed，同时搬运 chemistry/thermal side column。

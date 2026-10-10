@@ -38,7 +38,7 @@ final class MechanicalStageAssembly {
 				new GridToParticleStage.Workspace(
 						domain.geometry, domain.markerGrid, domain.mac, domain.projection.pressureFluid, domain.particles, domain.velocityExtrapolator,
 						domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize()),
-				gridToParticleAccess(domain));
+				gridToParticleAccess(domain, pressureSystem));
 		ParticleAdvectionStage advection = new ParticleAdvectionStage(
 				new ParticleAdvectionStage.Workspace(
 						domain.particles, domain.particleCollision, domain.mac, domain.geometry,
@@ -151,7 +151,7 @@ final class MechanicalStageAssembly {
 		};
 	}
 
-	private static GridToParticleStage.Access gridToParticleAccess(FluidDomain domain) {
+	private static GridToParticleStage.Access gridToParticleAccess(FluidDomain domain, PressureSystem pressureSystem) {
 		return new GridToParticleStage.Access() {
 			@Override public void samplePair(int axis, float[] field, float[] previous, float x, float y, float z, float[] result) {
 				float h = domain.config.cellSize();
@@ -162,6 +162,8 @@ final class MechanicalStageAssembly {
 			}
 			@Override public boolean variableDensityActive() { return domain.variableDensityActive; }
 			@Override public float referenceDensity() { return domain.config.density(); }
+			@Override public int granularParcelCount() { return domain.granularParcelCount(); }
+			@Override public void connectTransferSupport(MarkerTransferBudget budget) { pressureSystem.connectTransferSupport(budget); }
 		};
 	}
 

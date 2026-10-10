@@ -61,7 +61,7 @@
 
 自然对流增长率随 `thermal` 选择器常驻校验：两级网格、临界 Ra 两侧、两倍线性振幅，以及体积、材料质量、species、壁面 source/sink、舍入与载体内能闭合。单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[线性对流有效域](../architecture/thermal-state.md#自然对流的线性有效域)。
 
-粒子分布研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。默认输出固壁法向轮廓、正反向平流、满液体与自由面解析保面积映射、重播种二阶矩和 5,000 步溃坝的空间误差，并对照封闭满液体约束前后的压力体积；用 `--args="analytic transport"` 可只运行指定对照。`--args="free-analytic"` 从逆解析映射独立积分液体覆盖率，报告两级参考积分的差异，并检查积分点及网格细化后 L1 误差递减和整体体积闭合。默认构建的完整 `free-surface` 同时运行 5,000 步溃坝，逐步检查精确单元容量、共享压力库存、满格积分点分布及累计质量舍入界。`free-surface` 守护分量隔离、精确满液体判定及微小真实缺口，`reseeding` 守护旋转协方差、秩损失拒绝、线性速度场和体积推导的拆分空间矩误差界。空间验收见[单元有限体积输运](../architecture/fluid-solver.md#单元有限体积输运)，完整步的成本要求见[生产资格](../roadmap/performance-and-backends.md#有限体积输运的生产资格)。
+粒子分布研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。默认输出固壁法向轮廓、正反向平流、满液体与自由面解析保面积映射、重播种二阶矩和 5,000 步溃坝的空间误差，并对照封闭满液体约束前后的压力体积；用 `--args="analytic transport"` 可只运行指定对照。`--args="free-analytic"` 从逆解析映射独立积分液体覆盖率，报告两级参考积分的差异，并检查积分点及网格细化后 L1 误差递减和整体体积闭合。默认构建的完整 `free-surface` 同时运行 5,000 步溃坝，逐步检查精确单元容量、共享压力库存、满格积分点分布及累计质量舍入界。`free-surface` 守护 G2P 数值依赖分量隔离、未使用外推面的隔离、有限气体耦合、满液体/自由面切换的工作区更新，以及精确满液体判定和微小真实缺口，`reseeding` 守护旋转协方差、秩损失拒绝、线性速度场和体积推导的拆分空间矩误差界。空间验收见[单元有限体积输运](../architecture/fluid-solver.md#单元有限体积输运)，完整步的成本要求见[生产资格](../roadmap/performance-and-backends.md#有限体积输运的生产资格)。
 
 ### 什么时候追加测试
 
@@ -81,7 +81,7 @@
 
 快速离线测量使用 `./gradlew.bat :fabric:runStepBenchmark --offline`。
 [ProductionStepBenchmark](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionStepBenchmark.java)
-测量控制器半满场景与大型 demo，各预热 20 步、采样 20 步，报告分阶段耗时和内存分配量，并检查物质与能量收支。
+测量控制器半满场景与大型 demo，各预热 20 步、采样 20 步，分别报告捕获、计算、提交和完整步的均值、中位数、p95 与最大值，以及调用线程的内存分配量，并检查物质与能量收支。
 测量范围是 CPU 计算流程，适合同机同配置的优化对比；评估耗时收益时应结合多次测量的波动。
 
 组合过程使用 [CompositeStepBenchmark](../../fabric/src/test/java/cc/ecisr/mmm/simulation/CompositeStepBenchmark.java)，例如：

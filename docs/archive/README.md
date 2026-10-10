@@ -4,6 +4,7 @@
 
 | 资料 | 用途 |
 |---|---|
+| [自由面统一算法探索](free-surface-unification-research.md) | 各路线的有效成果、失败限制、保存位置与现行双路径修复的离线对照 |
 | [代码架构重整实施记录](progress/code-architecture-restructuring-implement.md) | 按 S00–S21 切片和提交号追溯结构变化 |
 | [架构重整基线](maintenance/architecture-baseline.md) | 查看重整完成时的源码规模与本机性能数据 |
 | [CPU 状态交接与参考能优化](maintenance/cpu-hotspot-optimization-2026-09-23.md) | 2026-09-23 分阶段性能、缓存命中、状态摘要及长跑对照 |

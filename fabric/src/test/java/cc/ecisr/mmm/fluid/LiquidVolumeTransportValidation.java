@@ -38,6 +38,12 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	public static void main(String[] args) {
+		zeroFluxPreservesCarrierColumns();
+		balancedPositiveFluxStillReconstructs();
+		if (args.length == 1 && args[0].equals("handoff")) {
+			System.out.println("Liquid transport handoff validation passed");
+			return;
+		}
 		courantUsesOccupiedDonors();
 		allocationMatchesIntegerOracle();
 		quadratureAndMassKeepSmallShares();
@@ -70,6 +76,88 @@ public final class LiquidVolumeTransportValidation {
 						duration, n, normalizedError, normalizedReferenceError, peak, (System.nanoTime() - start) / 1e6);
 			}
 		}
+	}
+
+	private static void zeroFluxPreservesCarrierColumns() {
+		cc.ecisr.mmm.simulation.FullCapabilityTestFixture.Registries registries;
+		try { registries = cc.ecisr.mmm.simulation.FullCapabilityTestFixture.load(); }
+		catch (Exception failure) { throw new IllegalStateException("Could not load carrier handoff definitions", failure); }
+		for (float amount : new float[] {0.01F, 0.25F}) for (float dt : new float[] {0.05F, 0.00001F}) {
+			var config = new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F);
+			var domain = new FluidDomain(9, 4, 4, config, 512);
+			cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+			domain.setVolume(1, 1, 1, 1); domain.setVolume(2, 1, 1, amount); domain.setVolume(7, 1, 1, 0.01F);
+			cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindFull(domain, registries, 310,
+					cc.ecisr.mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+			int target = domain.cellIndex(2, 1, 1), remote = domain.cellIndex(7, 1, 1), slot = 0;
+			for (int p = 0; p < domain.particles.count(); p++) {
+				if (domain.particleCellIndex(p) == target) {
+					domain.particles.setPositionX(p, (2.8F - 0.35F * slot) * config.cellSize());
+					domain.particles.setPositionY(p, (1.2F + 0.2F * slot) * config.cellSize());
+					domain.particles.setPositionZ(p, (1.7F - 0.15F * slot) * config.cellSize());
+					domain.particles.setVelocityY(p, (slot + 1) * 0.03F);
+					slot++;
+				} else if (domain.particleCellIndex(p) == remote) domain.particles.setVelocityX(p, 0.2F);
+			}
+			domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+			if (!domain.gridToParticleStage.advectionCells()[target] || domain.gridToParticleStage.advectionCells()[remote])
+				throw new AssertionError("Handoff fixture must contain connected and isolated carriers");
+			for (float[] field : new float[][] {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ})
+				java.util.Arrays.fill(field, 0);
+			var before = carrierColumns(domain, target);
+			var volumeBefore = SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count());
+			double remoteBefore = 0;
+			for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == remote) remoteBefore = domain.particles.positionX(p);
+			new CellLiquidVolumeTransport(domain).advect(dt);
+			if (!before.equals(carrierColumns(domain, target)))
+				throw new AssertionError("Zero shared flux changed carrier position, velocity, material, species or U: amount=" + amount + " dt=" + dt);
+			if (!volumeBefore.equals(SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count())))
+				throw new AssertionError("Two-path publication changed exact volume");
+			boolean remoteMoved = false;
+			for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == remote)
+				remoteMoved |= domain.particles.positionX(p) > remoteBefore;
+			if (!remoteMoved) throw new AssertionError("Remote ballistic motion did not trigger common publication");
+		}
+	}
+
+	private static java.util.List<java.util.List<Object>> carrierColumns(FluidDomain domain, int cell) {
+		var result = new java.util.ArrayList<java.util.List<Object>>();
+		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == cell) {
+			result.add(java.util.List.of(Float.floatToRawIntBits(domain.particles.positionX(p)),
+					Float.floatToRawIntBits(domain.particles.positionY(p)), Float.floatToRawIntBits(domain.particles.positionZ(p)),
+					Float.floatToRawIntBits(domain.particles.velocityX(p)), Float.floatToRawIntBits(domain.particles.velocityY(p)),
+					Float.floatToRawIntBits(domain.particles.velocityZ(p)), Float.floatToRawIntBits(domain.particles.volume(p)),
+					Double.doubleToRawLongBits(domain.particles.mass(p)), domain.particles.materialHandle(p), domain.particles.phaseLabel(p),
+					domain.chemicalParcels.record(p), domain.chemicalParcels.indicator(p),
+					Double.doubleToRawLongBits(domain.thermalState.liquidInternalEnergy(p))));
+		}
+		result.sort(java.util.Comparator.comparingInt(row -> (Integer) row.getFirst()));
+		return result;
+	}
+
+	private static void balancedPositiveFluxStillReconstructs() {
+		var domain = new FluidDomain(6, 4, 4,
+				new FluidSolverConfig(1, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 256);
+		domain.setVolume(1, 1, 1, 1); domain.setVolume(2, 1, 1, 1); domain.setVolume(3, 1, 1, 0.5F);
+		int target = domain.cellIndex(2, 1, 1);
+		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == target)
+			domain.particles.setPositionX(p, domain.particles.positionX(p) + 0.04F);
+		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+		for (float[] field : new float[][] {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ}) java.util.Arrays.fill(field, 0);
+		domain.mac.velocityX[domain.xFaceIndex(2, 1, 1)] = 0.1F;
+		domain.mac.velocityX[domain.xFaceIndex(3, 1, 1)] = 0.1F;
+		var volumeBefore = domain.markerGrid.exactCellVolumeInventory[target];
+		new CellLiquidVolumeTransport(domain).advect(0.01F);
+		domain.ensureInventoryGrid();
+		if (!volumeBefore.equals(domain.markerGrid.exactCellVolumeInventory[target]))
+			throw new AssertionError("Balanced positive flux changed the target cell inventory");
+		int count = 0;
+		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == target) {
+			float x = domain.particles.positionX(p) - 2;
+			if (x != 0.25F && x != 0.75F) throw new AssertionError("Net-zero positive shared flux incorrectly preserved old quadrature");
+			count++;
+		}
+		if (count != 8) throw new AssertionError("Balanced positive flux lost the full-cell quadrature");
 	}
 
 	private static double referenceFraction(int x, int y, double h, double time, int samples) {

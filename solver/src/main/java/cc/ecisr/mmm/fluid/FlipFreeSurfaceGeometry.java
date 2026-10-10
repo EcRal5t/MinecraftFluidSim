@@ -9,8 +9,9 @@ import java.util.Arrays;
  *
  * <p>The exact marker-volume sum in a cell supplies only the plane's volume fraction;
  * it never replaces the marker ledger. A centered fraction gradient supplies the
- * orientation. Pressure still uses {@code markerCount > 0} for phase classification,
- * Runtime cut-cell open volume normalizes the local liquid fraction; shared solid-face aperture is applied separately by the
+ * orientation. Pressure classification is reconstructed separately by
+ * {@link FlipPressurePhaseGeometry}. Runtime cut-cell open volume normalizes the
+ * local liquid fraction; shared solid-face aperture is applied separately by the
  * pressure operator.</p>
  */
 final class FlipFreeSurfaceGeometry {
