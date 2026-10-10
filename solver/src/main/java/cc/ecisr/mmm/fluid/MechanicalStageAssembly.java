@@ -164,6 +164,7 @@ final class MechanicalStageAssembly {
 			@Override public float referenceDensity() { return domain.config.density(); }
 			@Override public int granularParcelCount() { return domain.granularParcelCount(); }
 			@Override public void connectTransferSupport(MarkerTransferBudget budget) { pressureSystem.connectTransferSupport(budget); }
+			@Override public boolean completelyFilled(int cell) { return domain.closedLiquidVolume.completelyFilled(cell); }
 		};
 	}
 
@@ -183,6 +184,9 @@ final class MechanicalStageAssembly {
 				return true;
 			}
 			@Override public double conservativeCollisionWorkJoules() { return domain.cellLiquidVolumeTransport.collisionWorkJoules; }
+			@Override public FluidDomain.LiquidTransportStats conservativeTransportStats() {
+				return domain.cellLiquidVolumeTransport.momentAudit.stats();
+			}
 			@Override public ChemicalParcelStore chemicalParcels() { return domain.chemicalParcels; }
 			@Override public int[] chemicalPreviousCells() { return domain.chemicalPreviousCells; }
 			@Override public int[] chemicalMovingMarkers() { return domain.chemicalMovingMarkers; }

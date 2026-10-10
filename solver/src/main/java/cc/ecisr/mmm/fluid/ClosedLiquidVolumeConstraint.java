@@ -11,6 +11,7 @@ final class ClosedLiquidVolumeConstraint {
 	private final byte[] masks;
 	private final float[] capacities;
 	private final double[] volumes;
+	private final boolean[] exactFull;
 	private final long[] bins = new long[255];
 	private int components;
 	private boolean prepared;
@@ -19,6 +20,7 @@ final class ClosedLiquidVolumeConstraint {
 		this.nx = nx; this.ny = ny; this.nz = nz; this.geometry = geometry;
 		int count = nx * ny * nz;
 		labels = new int[count]; ordered = new int[count]; starts = new int[count]; ends = new int[count];
+		exactFull = new boolean[count];
 		masks = new byte[count]; capacities = new float[count]; volumes = new double[count];
 	}
 
@@ -26,7 +28,7 @@ final class ClosedLiquidVolumeConstraint {
 		boolean changed = !prepared;
 		for (int cell = 0; cell < labels.length; cell++) changed |= Byte.toUnsignedInt(masks[cell]) != geometry.mask(cell);
 		if (!changed) return;
-		Arrays.fill(labels, -1); components = 0; int appended = 0;
+		Arrays.fill(exactFull, false); Arrays.fill(labels, -1); components = 0; int appended = 0;
 		for (int cell = 0; cell < labels.length; cell++) masks[cell] = (byte) geometry.mask(cell);
 		for (int seed = 0; seed < labels.length; seed++) {
 			if (labels[seed] >= 0 || geometry.fullySolid(seed)) continue;
@@ -51,9 +53,10 @@ final class ClosedLiquidVolumeConstraint {
 	}
 
 	int component(int cell) { if (!prepared) prepare(); return labels[cell]; }
+	boolean completelyFilled(int cell) { int component = component(cell); return component >= 0 && exactFull[component]; }
 
 	void apply(double[] pressureVolume, LiquidParticleStore particles, GranularCouplingFields granular, MarkerGridIndex grid) {
-		prepare(); Arrays.fill(volumes, 0, components, 0);
+		prepare(); Arrays.fill(volumes, 0, components, 0); Arrays.fill(exactFull, false);
 		for (int cell = 0; cell < labels.length; cell++) {
 			if (labels[cell] < 0) {
 				if (grid.markerCount[cell] != 0) throw new IllegalStateException("Liquid marker is inside a closed solid cell");
@@ -76,6 +79,7 @@ final class ClosedLiquidVolumeConstraint {
 			for (int index = starts[component]; index < ends[component]; index++)
 				for (int p = grid.cellMarkerHead[ordered[index]]; p >= 0; p = grid.particleCellNext[p]) add(particles.volume(p), 1);
 			if (!exactZero()) continue;
+			exactFull[component] = true;
 			for (int index = starts[component]; index < ends[component]; index++) {
 				int cell = ordered[index]; pressureVolume[cell] = capacities[cell];
 			}

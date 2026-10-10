@@ -3,7 +3,7 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.units.SignedDyadic;
 
-/** Analytic incompressible swirl: exact inventory, local capacity and independent mesh convergence. */
+/** Exact inventory, default-path handoff continuity and independent transport convergence. */
 public final class LiquidVolumeTransportValidation {
 	private final int n;
 	private final double h;
@@ -38,6 +38,10 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("continuity")) {
+			LiquidHandoffContinuityValidation.main(new String[0]);
+			return;
+		}
 		zeroFluxPreservesCarrierColumns();
 		balancedPositiveFluxStillReconstructs();
 		positiveFluxPreservesFeasibleMoments();
@@ -45,6 +49,7 @@ public final class LiquidVolumeTransportValidation {
 		boundedMomentProjectionIsObservable();
 		CellRemapMomentsValidation.main(new String[0]);
 		CellPolynomialFieldValidation.main(new String[0]);
+		LiquidHandoffContinuityValidation.main(new String[0]);
 		if (args.length == 1 && args[0].equals("handoff")) {
 			System.out.println("Liquid transport handoff validation passed");
 			return;

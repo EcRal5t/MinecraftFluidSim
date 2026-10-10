@@ -28,7 +28,7 @@ public final class ThermalCarrierTransport {
 		int n = owners.carrierCount();
 		var materials = new ThermalMaterialDefinition[n];
 		double[] mass = new double[n], base = new double[n], energy = new double[n];
-		double[] initialT = new double[n], temperature = new double[n], degree = new double[n];
+		double[] initialT = new double[n], degree = new double[n];
 		CpuWorkBatch.run(n, (from, until) -> {
 			for (int p = from; p < until; p++) {
 				materials[p] = owners.material(p); mass[p] = owners.mass(p); base[p] = owners.baseEnergy(p);
@@ -36,7 +36,6 @@ public final class ThermalCarrierTransport {
 				initialT[p] = new ThermalContactExchange.Carrier(materials[p], mass[p], base[p], energy[p]).temperatureK();
 			}
 		});
-		SignedDyadic before = SignedDyadic.sum(energy);
 		boolean exchangeRequired = false;
 		for (int i = 0; i < graph.size(); i++) {
 			int first = graph.first[i], second = graph.second[i]; double g = graph.conductance[i];
@@ -54,7 +53,11 @@ public final class ThermalCarrierTransport {
 				minCv = Math.min(minCv, segments.get(segment).specificHeatEuPerMuK());
 			stableDt = Math.min(stableDt, 0.5 * mass[p] * minCv / degree[p]);
 		}
-		double required = exchangeRequired ? Math.ceil(dt / stableDt) : 1;
+		if (!exchangeRequired) return new ThermalTransport.Stats(1, contacts.size(), 0, 0,
+				SignedDyadic.ZERO, SignedDyadic.ZERO);
+		SignedDyadic before = SignedDyadic.sum(energy);
+		double[] temperature = new double[n];
+		double required = Math.ceil(dt / stableDt);
 		boolean implicit = required > maximumSubsteps;
 		int substeps = implicit ? 1 : Math.max(1, (int) required);
 		SignedDyadic reservoir = SignedDyadic.ZERO;

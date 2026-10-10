@@ -17,6 +17,7 @@ final class ParticleAdvectionStage {
 	interface Access {
 		default boolean advectConservativeVolume(float dt) { return false; }
 		default double conservativeCollisionWorkJoules() { return 0; }
+		default FluidDomain.LiquidTransportStats conservativeTransportStats() { return FluidDomain.LiquidTransportStats.INACTIVE; }
 		ChemicalParcelStore chemicalParcels();
 		int[] chemicalPreviousCells();
 		int[] chemicalMovingMarkers();
@@ -124,6 +125,9 @@ final class ParticleAdvectionStage {
 
 	boolean usedConservativeVolume() { return conservativeVolume; }
 	double conservativeCollisionWorkJoules() { return access.conservativeCollisionWorkJoules(); }
+	FluidDomain.LiquidTransportStats transportStats() {
+		return conservativeVolume ? access.conservativeTransportStats() : FluidDomain.LiquidTransportStats.INACTIVE;
+	}
 
 	private boolean supportsDivergenceConformingField(float x, float y, float z) {
 		int cellX = Math.clamp((int) Math.floor(x / state.cellSize), 0, state.sizeX - 1);

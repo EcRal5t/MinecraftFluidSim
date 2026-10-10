@@ -416,6 +416,15 @@ final class CellCarrierRemapPlan {
 	}
 
 	private void fitFields(Group group, float dt) {
+		if (!remappedCells[group.cell]) {
+			// Retained carriers need their thermal range for adjacent transfers, but no reconstructed field.
+			if (domain.thermalState != null) for (int p : group.original) {
+				double temperature = domain.thermalState.temperature(p, domain.thermalMarkerContext());
+				group.localMinimum = Math.min(group.localMinimum, temperature);
+				group.localMaximum = Math.max(group.localMaximum, temperature);
+			}
+			return;
+		}
 		CellPolynomialField.Workspace fitting = FITTING.get();
 		int count = group.original.size(); fitting.ensureCapacity(count);
 		double[][] positions = fitting.positions, values = fitting.values; double[] weights = fitting.weights;
@@ -614,12 +623,14 @@ final class CellCarrierRemapPlan {
 	}
 
 	private CellRemapMoments.Audit momentAudit() {
-		double[] projection = new double[3], storage = new double[3], volume = new double[3], unadvanced = new double[3];
-		double maximum = 0, h = domain.config.cellSize(); int projected = 0;
+		double[] projection = new double[3], storage = new double[3], volume = new double[3], unadvanced = new double[3], signed = new double[3];
+		double maximum = 0, h = domain.config.cellSize(); int projected = 0, reconstructed = 0;
 		for (ArrayList<Group> groups : output) if (groups != null) for (Group group : groups) {
+			reconstructed++;
 			double worst = 0;
 			for (int a = 0; a < 3; a++) {
 				projection[a] += domain.unitScale.kilograms(h * Math.abs(group.projection[a])); storage[a] += domain.unitScale.kilograms(h * Math.abs(group.storage[a]));
+				signed[a] += domain.unitScale.signedKilograms(h * (group.projection[a] + group.storage[a]));
 				volume[a] += h * Math.abs(group.volumeResidual[a]); worst = Math.max(worst, h * Math.abs(group.projection[a]) / group.mass);
 			}
 			maximum = Math.max(maximum, worst); if (worst > 0) projected++;
@@ -629,13 +640,17 @@ final class CellCarrierRemapPlan {
 			for (int a = 0; a < 3; a++) {
 				if (group.discardedMoment) {
 					projection[a] += domain.unitScale.kilograms(h * Math.abs(group.massMoment[a])); volume[a] += h * Math.abs(group.volumeMoment[a]);
+					signed[a] -= domain.unitScale.signedKilograms(h * group.massMoment[a]);
 					worst = Math.max(worst, h * Math.abs(group.massMoment[a]) / group.mass);
 				}
-				if (!remappedCells[group.cell]) unadvanced[a] += domain.unitScale.kilograms(Math.abs(dt * group.momentum[a]));
+				if (!remappedCells[group.cell]) {
+					unadvanced[a] += domain.unitScale.kilograms(Math.abs(dt * group.momentum[a]));
+					signed[a] -= domain.unitScale.signedKilograms(dt * group.momentum[a]);
+				}
 			}
 			maximum = Math.max(maximum, worst); if (worst > 0) projected++;
 		}
-		return new CellRemapMoments.Audit(projection, storage, volume, maximum, projected, unadvanced);
+		return new CellRemapMoments.Audit(projection, storage, volume, maximum, projected, unadvanced, signed, reconstructed);
 	}
 
 	private static Map<Integer, Long> cellSpecies(ArrayList<Group> groups) {

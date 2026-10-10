@@ -6,6 +6,8 @@ public final class FlipFluidFreeSurfaceValidation {
 
 	public static void main(String[] args) {
 		freeSurfaceTransferSeparatesIndependentSupport();
+		closedTransferSeparatesIndependentSupport();
+		resolvedTransferRequiresExactAvailableCapacity();
 		transferScratchTracksPressureSpaceChanges();
 		finiteGasPressureConnectsTransferSupport();
 		if (java.util.Arrays.asList(args).contains("--transfer")) {
@@ -50,6 +52,81 @@ public final class FlipFluidFreeSurfaceValidation {
 				"An unused extrapolated output coupled its independent sources");
 		// Adjacent carriers share interpolation/extrapolation dependencies and retain the joint budget.
 		disconnectedTransfer(true, 5, false, true);
+	}
+
+	private static void closedTransferSeparatesIndependentSupport() {
+		var alone = closedTransferFixture(0);
+		int targetCount = alone.particleCount();
+		transferCurrentGrid(alone);
+		for (int remoteMode : new int[] {1, 2}) {
+			var joint = closedTransferFixture(remoteMode);
+			transferCurrentGrid(joint);
+			for (int p = 0; p < targetCount; p++) check(alone.particles.velocityX(p) == joint.particles.velocityX(p)
+					&& alone.particles.velocityY(p) == joint.particles.velocityY(p)
+					&& alone.particles.velocityZ(p) == joint.particles.velocityZ(p),
+					"Remote free/full liquid changed a closed support's resolved velocity: " + remoteMode + ", marker " + p);
+		}
+	}
+
+	private static FluidDomain closedTransferFixture(int remoteMode) {
+		var domain = new FluidDomain(9, 4, 2,
+				new FluidSolverConfig(1, 1000, 0, 0.005F, 200, 1e-5F, 0.4F, 0.002F, 0.8F), 576);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 4; x < 9; x++)
+			if (x == 4 || remoteMode == 0) domain.setSolid(x, y, z, true);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) domain.setVolume(x, y, z, 1);
+		if (remoteMode == 1) domain.setVolume(7, 1, 0, 0.01F);
+		if (remoteMode == 2) for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 5; x < 9; x++) domain.setVolume(x, y, z, 1);
+		for (int p = 0; p < domain.particleCount(); p++) {
+			if (domain.particles.positionX(p) < 4) {
+				double x = Math.PI * domain.particles.positionX(p) / 4, y = Math.PI * domain.particles.positionY(p) / 4;
+				domain.particles.setVelocityX(p, (float) (0.02 * Math.sin(x) * Math.cos(y)));
+				domain.particles.setVelocityY(p, (float) (-0.02 * Math.cos(x) * Math.sin(y)));
+			} else {
+				// A different amplitude and unresolved noise require separate Gram iterations and budgets.
+				domain.particles.setVelocityX(p, ((p * 7) % 11 - 5) * 0.13F);
+				domain.particles.setVelocityZ(p, ((p * 3) % 7 - 3) * 0.17F);
+			}
+		}
+		return domain;
+	}
+
+	private static void resolvedTransferRequiresExactAvailableCapacity() {
+		for (boolean occupied : new boolean[] {false, true}) {
+			float fill = occupied ? 0.75F : 1;
+			var domain = new FluidDomain(2, 2, 2,
+					new FluidSolverConfig(1, 1000, 0, 0.005F, 200, 1e-5F, 0.4F, 0.002F, 0.8F), 128);
+			for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) domain.setVolume(x, y, z, fill);
+			var coupling = new cc.ecisr.mmm.granular.GranularCouplingFields(2, 2, 2, 1);
+			long[] solid = new long[8];
+			if (occupied) java.util.Arrays.fill(solid, cc.ecisr.mmm.granular.SolidVolume.SVQ_PER_CELL / 4);
+			coupling.setFixedCellSvq(solid);
+			for (boolean deficit : new boolean[] {false, true}) {
+				if (deficit) {
+					// The true gap is smaller than a double ULP of the component capacity.
+					var snapshot = domain.exportParticleState(); int count = snapshot.particleCount() + 1;
+					float[] positions = java.util.Arrays.copyOf(snapshot.copyPositionVolume(), count * 4);
+					float original = positions[3]; positions[3] = Math.nextDown(original);
+					System.arraycopy(positions, 0, positions, 4 * (count - 1), 3);
+					positions[4 * (count - 1) + 3] = Math.nextDown(original - positions[3]);
+					domain.restoreParticleState(new FlipParticleState(2, 2, 2, 1, count, 8 * fill, positions, new float[count * 3], new byte[8]));
+				}
+				domain.rebuildGridFromParticles();
+				// Exercise the same pressure refresh used by previewed granular occupancy.
+				domain.pressureGranularCoupling = occupied ? coupling : null;
+				domain.particleToGridStage.rebuildPressureGeometry();
+				for (boolean classified : domain.projection.pressureFluid) check(classified, "Tiny-gap fixture lost its complete pressure classification");
+				domain.gridToParticleStage.capturePreProjectionEnergy(); domain.gridToParticleStage.extrapolateAndTransfer();
+				check(transferBudget(domain).anyResolved() == !deficit,
+						"Resolved velocity ignored exact available capacity or a real sub-ULP deficit: occupied=" + occupied);
+			}
+		}
+	}
+
+	private static MarkerTransferBudget transferBudget(FluidDomain domain) {
+		try {
+			var field = GridToParticleStage.class.getDeclaredField("componentBudget"); field.setAccessible(true);
+			return (MarkerTransferBudget) field.get(domain.gridToParticleStage);
+		} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
 	}
 
 	private static void transferScratchTracksPressureSpaceChanges() {

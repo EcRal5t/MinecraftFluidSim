@@ -14,6 +14,7 @@ public final class CellRemapMomentsValidation {
 		wholeCellUpperEndpointUsesActualClassifier();
 		unchangedTensorReportsAllStorageAxes();
 		cutMicroBoxUpperEndpointUsesActualClassifier();
+		logicalStepRetainsAllSubstepMoments();
 		System.out.println("Cell remap moment publication validation passed");
 	}
 
@@ -95,10 +96,13 @@ public final class CellRemapMomentsValidation {
 	/** Representation changes supply their own final pore capacity, independently of domain previews. */
 	private static void geometryRemapUsesPlannedCapacity() {
 		var domain = new FluidDomain(2, 2, 2,
-				new FluidSolverConfig(1, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 64);
+				new FluidSolverConfig(1, 1000, 9.81F, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 64);
 		domain.setVolume(0, 0, 0, 0.5F);
-		for (int p = 0; p < domain.particleCount(); p++)
+		for (int p = 0; p < domain.particleCount(); p++) {
 			domain.particles.setPositionX(p, domain.particles.positionX(p) + 0.2F);
+			domain.particles.setPositionY(p, domain.particles.positionY(p) + 0.2F);
+		}
+		double beforePotential = domain.gravitationalPotentialEnergyJoules();
 		domain.rebuildGridFromParticles();
 		var flux = new ConservativeLiquidFlux(2, 2, 2);
 		java.util.Arrays.fill(flux.exactFlux, cc.ecisr.mmm.units.SignedDyadic.ZERO);
@@ -111,6 +115,33 @@ public final class CellRemapMomentsValidation {
 		for (var marker : remap.markers) moment += marker.volume() * marker.offsetX();
 		check(moment == 0 && remap.momentAudit.projectedGroups() == 1,
 				"Saturated representation remap used a different final capacity from its flux plan");
+		double afterPotential = 0;
+		for (var marker : remap.markers) afterPotential += domain.unitScale.kilograms(marker.mass())
+				* domain.config.gravity() * (0.5 + marker.offsetY());
+		var diagnostic = remap.momentAudit.stats();
+		check(diagnostic.signedMassResidual().y() < 0, "Moment projection lost its potential-energy sign");
+		close(diagnostic.gravitationalPotentialErrorJoules(domain.config.gravity()), afterPotential - beforePotential,
+				"Geometric potential error");
+	}
+
+	/** Candidate statistics sum every substep and retain an immutable observation after later steps. */
+	private static void logicalStepRetainsAllSubstepMoments() {
+		var domain = new FluidDomain(9, 4, 4,
+				new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 512);
+		domain.setVolume(1, 1, 1, 0.75F); domain.setVolume(2, 1, 1, 0.25F);
+		for (int p = 0; p < domain.particleCount(); p++) domain.particles.setVelocityX(p, 0.2F);
+		domain.minimumMechanicalSubsteps = 3;
+		var step = domain.step().liquidTransport();
+		int lastGroups = domain.cellLiquidVolumeTransport.momentAudit.reconstructedGroups();
+		check(lastGroups > 0 && step.reconstructedGroups() > lastGroups,
+				"Logical transport statistics retained only their last substep");
+		double signed = step.signedMassResidual().x();
+		domain.step();
+		check(step.signedMassResidual().x() == signed, "Later transport mutated a published moment diagnostic");
+		for (int p = 0; p < domain.particleCount(); p++) domain.particles.setVelocityX(p, 0);
+		domain.gridDirty = true;
+		check(domain.step().liquidTransport().reconstructedGroups() == 0,
+				"A stationary step reused an earlier remap diagnostic");
 	}
 
 	private static void wholeCellUpperEndpointUsesActualClassifier() {

@@ -8,8 +8,16 @@ final class CellRemapMoments {
 
 	/** Mass errors use SI kg*m; volume errors use raw cell fraction*m. */
 	record Audit(double[] massProjection, double[] massStorage, double[] volumeResidual,
-			double maximumCentroidProjection, int projectedGroups, double[] unadvancedMassMoment) {
-		static Audit empty() { return new Audit(new double[3], new double[3], new double[3], 0, 0, new double[3]); }
+			double maximumCentroidProjection, int projectedGroups, double[] unadvancedMassMoment,
+			double[] signedMassResidual, int reconstructedGroups) {
+		static Audit empty() { return new Audit(new double[3], new double[3], new double[3], 0, 0, new double[3], new double[3], 0); }
+		FluidDomain.LiquidTransportStats stats() {
+			if (reconstructedGroups == 0 && unadvancedMassMoment[0] == 0 && unadvancedMassMoment[1] == 0 && unadvancedMassMoment[2] == 0)
+				return FluidDomain.LiquidTransportStats.INACTIVE;
+			return new FluidDomain.LiquidTransportStats(moment(massProjection), moment(massStorage), moment(volumeResidual),
+					moment(unadvancedMassMoment), moment(signedMassResidual), maximumCentroidProjection, projectedGroups, reconstructedGroups);
+		}
+		private static FluidDomain.Moment3 moment(double[] a) { return new FluidDomain.Moment3(a[0], a[1], a[2]); }
 	}
 
 	/** Returns the common open face centroid, relative to the donor cell center. */
@@ -42,6 +50,7 @@ final class CellRemapMoments {
 		if (micro != null) for (int p = 0; p < masses.length; p++) for (int a = 0; a < 3; a++)
 			if (offsets.get(p)[a] >= 0) micro[p] |= 1 << a;
 		boolean moved = false;
+		double[] lower = new double[2], upper = new double[2];
 		for (int axis = 0; axis < 3; axis++) {
 			if (!Double.isFinite(target[axis])) throw new IllegalStateException("Liquid first moment is not finite");
 			projection[axis] = 0;
@@ -54,9 +63,9 @@ final class CellRemapMoments {
 			// Saturated support retains its canonical rule; unreachable moments remain visible.
 			if (maximumTranslation == 0) { projection[axis] = current - target[axis]; continue; }
 			double minimumShift = -maximumTranslation, maximumShift = maximumTranslation, mass = 0;
-			for (int p = 0; p < masses.length; p++) {
-				double q = offsets.get(p)[axis], l = -0.5, u = 0.5;
-				if (mask != 0) { l = q < 0 ? -0.5 : 0; u = q < 0 ? 0 : 0.5; }
+			// Every node on an axis shares one whole-cell interval or one of two micro intervals.
+			for (int half = 0; half < (mask == 0 ? 1 : 2); half++) {
+				double l = mask == 0 || half == 0 ? -0.5 : 0, u = mask == 0 || half == 1 ? 0.5 : 0;
 				double physicalLower = (coordinate[axis] + 0.5 + l) * h;
 				double physicalUpper = (coordinate[axis] + 0.5 + u) * h;
 				float lf = (float) physicalLower, uf = (float) physicalUpper;
@@ -64,15 +73,18 @@ final class CellRemapMoments {
 				if (uf >= physicalUpper) uf = Math.nextDown(uf);
 				// Cell and micro-cell classifiers divide binary32 coordinates in binary32.
 				float spacing = mask == 0 ? (float) h : (float) h / 2;
-				int expected = mask == 0 ? coordinate[axis] : 2 * coordinate[axis] + (micro[p] >>> axis & 1);
+				int expected = mask == 0 ? coordinate[axis] : 2 * coordinate[axis] + half;
 				while (Math.floor(lf / spacing) < expected) lf = Math.nextUp(lf);
 				while (Math.floor(uf / spacing) > expected) uf = Math.nextDown(uf);
 				if (!Float.isFinite(lf) || !Float.isFinite(uf) || lf > uf
 						|| Math.floor(lf / spacing) != expected || Math.floor(uf / spacing) != expected)
 					throw new IllegalStateException("Open liquid support has no binary32 position in its assigned cell");
-				double lower = lf / h - coordinate[axis] - 0.5;
-				double upper = uf / h - coordinate[axis] - 0.5;
-				minimumShift = Math.max(minimumShift, lower - q); maximumShift = Math.min(maximumShift, upper - q);
+				lower[half] = lf / h - coordinate[axis] - 0.5;
+				upper[half] = uf / h - coordinate[axis] - 0.5;
+			}
+			for (int p = 0; p < masses.length; p++) {
+				double q = offsets.get(p)[axis]; int half = mask == 0 || q < 0 ? 0 : 1;
+				minimumShift = Math.max(minimumShift, lower[half] - q); maximumShift = Math.min(maximumShift, upper[half] - q);
 				mass += masses[p];
 			}
 			if (minimumShift > maximumShift) throw new IllegalStateException("Open liquid support has no common binary32 translation");

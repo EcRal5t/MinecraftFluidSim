@@ -576,7 +576,7 @@ public final class ThermalDomainState {
 		cellGrid.rebuild(carrierAccess(markers));
 		double[] snapshot = cellGrid.copyCarrierInternalEnergy();
 		try {
-			var result = transport.step(cellGrid, faceArea, boundaryFace, dtSeconds);
+			var result = transport.stepPrepared(cellGrid, faceArea, boundaryFace, dtSeconds);
 			SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
 			var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange())
 					.withRoundoff(physicalDelta.subtract(result.reservoirExchange()));
@@ -599,7 +599,7 @@ public final class ThermalDomainState {
 		double[] snapshot = cellGrid.copyCarrierInternalEnergy();
 		try {
 			var result = ThermalCarrierTransport.step(owners, contacts, dtSeconds, transport.maximumSubsteps());
-			cellGrid.rebuild(owners);
+			cellGrid.refreshCarrierEnergy();
 			SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
 			var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange())
 					.withRoundoff(physicalDelta.subtract(result.reservoirExchange()));

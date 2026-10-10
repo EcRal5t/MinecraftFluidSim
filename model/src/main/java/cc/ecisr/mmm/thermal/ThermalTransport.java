@@ -60,6 +60,15 @@ public final class ThermalTransport {
 	}
 
 	public Stats step(ThermalCellGrid grid, FaceArea faceArea, BoundaryFace boundaryFace, double dt) {
+		return step(grid, faceArea, boundaryFace, dt, false);
+	}
+
+	/** The caller has rebuilt this grid immediately before the contact solve. */
+	Stats stepPrepared(ThermalCellGrid grid, FaceArea faceArea, BoundaryFace boundaryFace, double dt) {
+		return step(grid, faceArea, boundaryFace, dt, true);
+	}
+
+	private Stats step(ThermalCellGrid grid, FaceArea faceArea, BoundaryFace boundaryFace, double dt, boolean prepared) {
 		if (grid == null || grid.cellCount() != cellCount || faceArea == null || boundaryFace == null)
 			throw new IllegalArgumentException("Thermal transport grid/geometry is incompatible");
 		var owners = grid.carrierAccess();
@@ -134,7 +143,7 @@ public final class ThermalTransport {
 		double[] snapshot = grid.copyCarrierInternalEnergy();
 		try {
 			Stats result = ThermalCarrierTransport.step(owners, contacts, dt, maximumSubsteps);
-			grid.rebuild(owners);
+			if (prepared) grid.refreshCarrierEnergy(); else grid.rebuild(owners);
 			return result;
 		} catch (RuntimeException failure) {
 			grid.restoreCarrierInternalEnergy(snapshot);

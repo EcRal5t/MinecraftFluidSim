@@ -35,6 +35,30 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 	public record VolumeAddition(float addedVolume, boolean markerBudgetLimited) { }
 	public record VolumeDistribution(int activeCells, int visibleCells, int denseCells) { }
 	public record SolidDistribution(int partialCells, int fullCells) { }
+	/** Three spatial components; the enclosing diagnostic declares their units. */
+	public record Moment3(double x, double y, double z) {
+		static final Moment3 ZERO = new Moment3(0, 0, 0);
+		Moment3 plus(Moment3 other) { return new Moment3(x + other.x, y + other.y, z + other.z); }
+	}
+	/** Per logical step: mass moments in kg*m, volume moments in cell fraction*m, centroid distance in m. */
+	public record LiquidTransportStats(Moment3 massProjection, Moment3 massStorage, Moment3 volumeResidual,
+			Moment3 unadvancedMassMoment, Moment3 signedMassResidual, double maximumCentroidProjection,
+			int projectedGroups, int reconstructedGroups) {
+		static final LiquidTransportStats INACTIVE = new LiquidTransportStats(Moment3.ZERO, Moment3.ZERO, Moment3.ZERO,
+				Moment3.ZERO, Moment3.ZERO, 0, 0, 0);
+		LiquidTransportStats plus(LiquidTransportStats other) {
+			if (other == INACTIVE) return this;
+			if (this == INACTIVE) return other;
+			return new LiquidTransportStats(massProjection.plus(other.massProjection), massStorage.plus(other.massStorage),
+					volumeResidual.plus(other.volumeResidual), unadvancedMassMoment.plus(other.unadvancedMassMoment),
+					signedMassResidual.plus(other.signedMassResidual), Math.max(maximumCentroidProjection, other.maximumCentroidProjection),
+					Math.addExact(projectedGroups, other.projectedGroups), Math.addExact(reconstructedGroups, other.reconstructedGroups));
+		}
+		/** Potential error from remap geometry relative to its trapezoidal momentum displacement. */
+		public double gravitationalPotentialErrorJoules(double gravityMetresPerSecondSquared) {
+			return gravityMetresPerSecondSquared * signedMassResidual.y;
+		}
+	}
 	public record MechanicalStepAudit(
 			boolean captured,
 			double initialParticleKineticEnergyJoules,
@@ -121,13 +145,15 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 			FluidDomain.ThermalAxisStats thermalAxis,
 			GranularDepositDynamics.Stats granularTransition,
 			CarrierViscosityStats carrierViscosity,
-			ViscousStepStats viscosity
+			ViscousStepStats viscosity,
+			LiquidTransportStats liquidTransport
 	) {
 		public StepStats {
 			java.util.Objects.requireNonNull(thermalAxis, "thermalAxis");
 			java.util.Objects.requireNonNull(granularTransition, "granularTransition");
 			java.util.Objects.requireNonNull(carrierViscosity, "carrierViscosity");
 			java.util.Objects.requireNonNull(viscosity, "viscosity");
+			java.util.Objects.requireNonNull(liquidTransport, "liquidTransport");
 		}
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
 		public double relativeMassError() { return massBefore == 0.0 ? 0.0 : Math.abs(massAfter - massBefore) / massBefore; }

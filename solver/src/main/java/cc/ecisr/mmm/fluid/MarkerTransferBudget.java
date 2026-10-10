@@ -17,7 +17,8 @@ final class MarkerTransferBudget {
 	private int dependencyCount;
 	private double[][] sums = new double[0][];
 	private int parcelStart, markerStart, size;
-	private boolean singleComponent;
+	private boolean singleComponent, anyResolved;
+	private boolean[] resolvedRoots = new boolean[0];
 
 	MarkerTransferBudget(int nx, int ny, int nz, float h, MacVelocityGrid mac, FlipCutCellGeometry geometry) {
 		this.nx = nx; this.ny = ny; this.nz = nz; this.h = h; this.mac = mac; this.geometry = geometry; cells = nx * ny * nz;
@@ -29,8 +30,9 @@ final class MarkerTransferBudget {
 
 	void capture(double densityScale) {
 		float[][] velocity = velocities(), weights = weights();
-		for (int a = 0; a < 3; a++) for (int f = 0; f < velocity[a].length; f++)
+		for (int a = 0; a < 3; a++) for (int f = 0; f < velocity[a].length; f++) {
 			predicted[a][f] = 0.5 * densityScale * weights[a][f] * velocity[a][f] * (double) velocity[a][f];
+		}
 	}
 
 	boolean begin(LiquidParticleStore particles, int parcels) {
@@ -113,22 +115,34 @@ final class MarkerTransferBudget {
 		}
 	}
 
-	void prepare(LiquidParticleStore particles, float[] picX, float[] picY, float[] picZ,
-			float[] deltaX, float[] deltaY, float[] deltaZ, double densityScale) {
-		connectMarkers(particles, true);
-		connectRequiredExtrapolation(particles);
+	/** Finalizes the actual support before choosing its interpolation space or projecting velocity. */
+	void prepareSupport(LiquidParticleStore particles, boolean[] fullCells) {
+		if (!singleComponent) { connectMarkers(particles, true); connectRequiredExtrapolation(particles); }
 		if (markerRoots.length < particles.count()) markerRoots = new int[particles.count()];
+		if (resolvedRoots.length < size) resolvedRoots = new boolean[size];
+		Arrays.fill(resolvedRoots, 0, size, true);
 		singleComponent = true;
 		for (int p = 0; p < particles.count(); p++) {
-			markerRoots[p] = root(markerStart + p);
-			if (p > 0 && markerRoots[p] != markerRoots[0]) singleComponent = false;
+			int r = markerRoots[p] = root(markerStart + p);
+			if (p > 0 && r != markerRoots[0]) singleComponent = false;
+			int cx = Math.clamp((int) (particles.positionX(p) / h), 0, nx - 1);
+			int cy = Math.clamp((int) (particles.positionY(p) / h), 0, ny - 1);
+			int cz = Math.clamp((int) (particles.positionZ(p) / h), 0, nz - 1);
+			resolvedRoots[r] &= fullCells[(cz * ny + cy) * nx + cx];
 		}
+		anyResolved = false;
+		for (int p = 0; p < particles.count(); p++) anyResolved |= resolved(p);
+	}
+
+	void prepare(LiquidParticleStore particles, float[] picX, float[] picY, float[] picZ,
+			float[] deltaX, float[] deltaY, float[] deltaZ, double[] incomingEnergy, double densityScale) {
 		if (singleComponent) return;
-		if (sums.length == 0 || sums[0].length < size) sums = new double[6][size];
+		if (sums.length == 0 || sums[0].length < size || anyResolved && sums.length < 8) sums = new double[anyResolved ? 8 : 6][size];
 		else for (double[] values : sums) Arrays.fill(values, 0, size, 0);
 		float[][] pic = {picX, picY, picZ}, delta = {deltaX, deltaY, deltaZ};
 		for (int p = 0; p < particles.count(); p++) {
 			int r = markerRoots[p]; double mass = particles.mass(p);
+			if (anyResolved && resolvedRoots[r]) sums[6][r] += incomingEnergy[p];
 			for (int a = 0; a < 3; a++) {
 				sums[0][r] += 0.5 * mass * delta[a][p] * (double) delta[a][p];
 				sums[1][r] += mass * pic[a][p] * (double) delta[a][p];
@@ -136,17 +150,23 @@ final class MarkerTransferBudget {
 			}
 		}
 		float[][] velocity = velocities(), weights = weights();
+		float[][] previous = {mac.p2gVelocityX, mac.p2gVelocityY, mac.p2gVelocityZ};
 		for (int a = 0; a < 3; a++) for (int f = 0; f < velocity[a].length; f++) {
 			int r = root(face(a, f));
 			sums[3][r] += predicted[a][f];
+			if (anyResolved && resolvedRoots[r]) sums[7][r] += 0.5 * densityScale * weights[a][f] * previous[a][f] * (double) previous[a][f];
 			sums[4][r] += 0.5 * densityScale * weights[a][f] * velocity[a][f] * (double) velocity[a][f];
 		}
 		for (int i = 0; i < size; i++) if (parent[i] == i)
 			sums[5][i] = FlipTransferScheme.maximumEnergyStableTransfer(sums[0][i], sums[1][i], sums[2][i],
-					Math.max(sums[2][i], Math.min(sums[3][i], sums[4][i])));
+					Math.max(sums[2][i], Math.min(sums[3][i], sums[4][i]) + (anyResolved && resolvedRoots[i] ? sums[6][i] - sums[7][i] : 0)));
 	}
 	double transfer(int marker) { return sums[5][markerRoots[marker]]; }
 	boolean singleComponent() { return singleComponent; }
+	boolean anyResolved() { return anyResolved; }
+	boolean resolved(int marker) { return resolvedRoots[markerRoots[marker]]; }
+	int component(int axis, int face) { return root(face(axis, face)); }
+	int componentCapacity() { return size; }
 	private float[][] velocities() { return new float[][] {mac.velocityX, mac.velocityY, mac.velocityZ}; }
 	private float[][] weights() { return new float[][] {mac.p2gWeightX, mac.p2gWeightY, mac.p2gWeightZ}; }
 }

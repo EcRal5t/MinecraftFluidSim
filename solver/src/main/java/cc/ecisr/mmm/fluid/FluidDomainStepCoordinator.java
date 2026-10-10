@@ -42,6 +42,15 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			boolean phaseChangeEnabled, int maximumPhaseOperations, boolean captureMechanicalAudit,
 			boolean thermochemistryEnabled
 	) {
+		return step(phaseChangeEnabled, maximumPhaseOperations, captureMechanicalAudit, thermochemistryEnabled, 0);
+	}
+
+	/** Reuses the CFL estimate already charged to this private backend attempt. */
+	StepStats step(
+			boolean phaseChangeEnabled, int maximumPhaseOperations, boolean captureMechanicalAudit,
+			boolean thermochemistryEnabled, int preparedSubsteps
+	) {
+		if (preparedSubsteps < 0) throw new IllegalArgumentException("Prepared mechanical substeps are invalid");
 		if (phaseChangeEnabled && (maximumPhaseOperations <= 0
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
@@ -57,16 +66,18 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		lastGranularBoundaryImpulseX = 0.0;
 		lastGranularBoundaryImpulseY = 0.0;
 		lastGranularBoundaryImpulseZ = 0.0;
-		int substeps = calculateSubsteps(config.timeStep());
+		int substeps = preparedSubsteps > 0 ? preparedSubsteps : calculateSubsteps(config.timeStep());
 		float dt = config.timeStep() / substeps;
 		int granularParcelCountBeforeAdvection = precipitationEnabled ? captureReactiveGranularCells() : 0;
 		int pressureIterations = 0;
 		ViscousStepStats viscosity = ViscousStepStats.INACTIVE;
+		LiquidTransportStats liquidTransport = LiquidTransportStats.INACTIVE;
 		for (int substep = 0; substep < substeps; substep++) {
 			MechanicalStepPipeline.SubstepOutcome outcome = mechanicalPipeline.substep(
 					dt, substep, captureMechanicalAudit, mechanicalAudit);
 			pressureIterations += outcome.pressureIterations();
 			viscosity = viscosity.plus(outcome.viscosity());
+			liquidTransport = liquidTransport.plus(outcome.liquidTransport());
 			if (outcome.granularMechanics() != null) {
 				lastGranularBoundaryImpulseX += outcome.granularMechanics().boundaryImpulseX();
 				lastGranularBoundaryImpulseY += outcome.granularMechanics().boundaryImpulseY();
@@ -105,7 +116,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 						finalParticleKineticEnergy, gravitationalPotentialEnergyJoules(),
 						(thermalState == null ? SignedDyadic.ZERO : thermalState.auditLedger().mechanicalWork())
 								.subtract(thermalMechanicalWorkBefore)) : MechanicalStepAudit.notCaptured(),
-				thermalAxis, lastGranularDepositStats, carrierPropertiesWorkspace.finishStep(), viscosity
+				thermalAxis, lastGranularDepositStats, carrierPropertiesWorkspace.finishStep(), viscosity, liquidTransport
 		);
 	}
 

@@ -68,7 +68,17 @@ public final class ThermalContactValidation {
 				};
 				var grid = new ThermalCellGrid(2); grid.rebuild(owners);
 				var before = SignedDyadic.sum(energy); double[] raw = energy.clone();
-				var result = new ThermalTransport(2, 1, 1, 0.5, 8).step(grid, (x, y, z, axis) -> 0.125, 1);
+				var result = new ThermalTransport(2, 1, 1, 0.5, 8).stepPrepared(
+						grid, (x, y, z, axis) -> 0.125, (x, y, z, direction) -> null, 1);
+				var rebuilt = new ThermalCellGrid(2); rebuilt.rebuild(owners);
+				for (int cell = 0; cell < 2; cell++) require(
+						grid.internalEnergy(cell) == rebuilt.internalEnergy(cell)
+						&& grid.temperature(cell) == rebuilt.temperature(cell)
+						&& grid.heatCapacity(cell) == rebuilt.heatCapacity(cell)
+						&& grid.conductivity(cell) == rebuilt.conductivity(cell)
+						&& grid.minimumTemperature(cell) == rebuilt.minimumTemperature(cell)
+						&& grid.maximumTemperature(cell) == rebuilt.maximumTemperature(cell),
+						"contact energy refresh differs from a complete caloric rebuild");
 				double change = material.temperatureForSensibleSpecificEnergy(energy[0] - base[0]) - 270;
 				if (k == 0) require(Arrays.equals(raw, energy), "insulating condensed geometry edited U");
 				else if (k < 1) {
@@ -82,6 +92,13 @@ public final class ThermalContactValidation {
 				}
 				require(SignedDyadic.sum(energy).subtract(before).equals(result.roundoffResidual())
 						&& result.reservoirExchange().equals(SignedDyadic.ZERO), "condensed transport failed energy closure");
+				for (int p = 0; p < 4; p++) {
+					base[p] += 17;
+					energy[p] = base[p] + material.sensibleSpecificEnergyAt(310);
+				}
+				var isothermal = new ThermalTransport(2, 1, 1, 0.5, 8).step(grid, (x, y, z, axis) -> 0.125, 1);
+				require(isothermal.maximumAbsoluteTransferEu() == 0 && grid.temperature(0) == 310
+						&& grid.temperature(1) == 310, "public contact solve retained stale caloric inventory");
 			}
 		}
 	}
@@ -195,6 +212,15 @@ public final class ThermalContactValidation {
 			require(entropy >= -1e-10 && energy[2] == isolated
 					&& SignedDyadic.sum(energy).subtract(before).equals(stats.roundoffResidual())
 					&& stats.reservoirExchange().equals(SignedDyadic.ZERO), "carrier graph lost entropy, isolated energy or conservative closure");
+			for (int p = 0; p < 3; p++) energy[p] = carrier(materials[p], mass[p], base[p], 300).internalEnergyEu();
+			double[] isothermal = energy.clone();
+			var zero = ThermalCarrierTransport.step(owners, List.of(
+					new ThermalCarrierTransport.Contact(0, 1, g, Double.NaN),
+					new ThermalCarrierTransport.Contact(2, -1, g, 300)), 1000, 8);
+			require(Arrays.equals(energy, isothermal) && zero.substeps() == 1
+					&& zero.maximumTemperatureChangeK() == 0 && zero.maximumAbsoluteTransferEu() == 0
+					&& zero.reservoirExchange().equals(SignedDyadic.ZERO)
+					&& zero.roundoffResidual().equals(SignedDyadic.ZERO), "isothermal contacts changed caloric inventory");
 			double[] unchanged = energy.clone();
 			boolean rejected = false;
 			try { ThermalCarrierTransport.step(owners, List.of(new ThermalCarrierTransport.Contact(0, 3, g, Double.NaN)), 1, 8); }

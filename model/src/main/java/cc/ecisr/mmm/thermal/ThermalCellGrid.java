@@ -75,6 +75,27 @@ public final class ThermalCellGrid {
 		updateObservedTemperatureRange();
 	}
 
+	/** Refreshes U after a contact solve with unchanged carrier topology and caloric inventory. */
+	void refreshCarrierEnergy() {
+		if (carriers == null || carriers.carrierCount() != topologyCarrierCount)
+			throw new IllegalStateException("Thermal contact solve changed carrier topology");
+		Arrays.fill(internalEnergy, 0.0);
+		for (int carrier = topologyCarrierCount - 1; carrier >= 0; carrier--) {
+			double energy = carriers.internalEnergy(carrier);
+			if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal carrier energy is not finite");
+			internalEnergy[carriers.cell(carrier)] += energy;
+		}
+		CpuWorkBatch.run(topologyCarrierCount, (from, until) -> {
+			for (int carrier = from; carrier < until; carrier++)
+				validateCarrierEnergy(carrier, carriers.internalEnergy(carrier));
+		});
+		CpuWorkBatch.run(cellCount, (from, until) -> {
+			for (int cell = from; cell < until; cell++) if (carrierCount[cell] > 0)
+				solveCell(cell, internalEnergy[cell]);
+		});
+		updateObservedTemperatureRange();
+	}
+
 	/** Rebuilds changed carrier topology while solving one cell against its pre-commit conserved U. */
 	public void rebuildWithCellEnergy(CarrierAccess carrierAccess, int targetCell, double targetEnergy) {
 		if (targetCell < 0 || targetCell >= cellCount || !Double.isFinite(targetEnergy)) {
