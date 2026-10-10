@@ -675,8 +675,16 @@ public final class M7ChemicalTransportValidation {
 		}
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		boolean refined = false;
+		// Choose the body speed from its actual grid response so this fixture exercises CFL
+		// subdivision even when velocity interpolation becomes more accurate.
+		FluidDomain couplingProbe = FluidDomain.restoreAuthoritativeState(source.captureAuthoritativeState());
+		couplingProbe.applyMovingBodyCoupling(new cc.ecisr.mmm.world.MovingBodyFluidCoupling.Request(
+				1.0F, 1.0F, 2.0F, 1.0, 0.0, 0.0, 0.125));
+		couplingProbe.calculateSubsteps(config.timeStep());
+		double couplingRate = new CellLiquidVolumeTransport(couplingProbe).courantRate(0.0);
+		check(couplingRate > 0.0, "moving-body fixture must produce grid outflow");
 		var impulse = new cc.ecisr.mmm.world.MovingBodyFluidCoupling.Request(
-				1.0F, 1.0F, 2.0F, 30.0, 0.0, 0.0, 0.125);
+				1.0F, 1.0F, 2.0F, 2.0 / (config.timeStep() * couplingRate), 0.0, 0.0, 0.125);
 		for (int step = 0; step < 40; step++) {
 			int predictedSubsteps = source.calculateSubsteps(config.timeStep());
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
