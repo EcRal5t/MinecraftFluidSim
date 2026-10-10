@@ -118,7 +118,15 @@ public final class MarkerDistributionExperiment {
 				if (Math.abs(domain.totalMass() - mass) > massRoundoff)
 					throw new AssertionError("Sustained liquid transport exceeded its accumulated mass roundoff");
 			}
-			if (s == 100 || s == 500 || s == 1000 || s == 5000) measure(domain, "dam step=" + s);
+			if (s == 100 || s == 500 || s == 1000 || s == 5000) {
+				measure(domain, "dam step=" + s);
+				if (conservative && domain.cellLiquidVolumeTransport != null) {
+					var moment = domain.cellLiquidVolumeTransport.momentAudit;
+					System.out.printf("  last remap: projectedGroups=%d maxCentroidProjection=%g m massProjection=%s kg*m massStorage=%s kg*m volumeResidual=%s fraction*m unadvancedMassMoment=%s kg*m%n",
+							moment.projectedGroups(), moment.maximumCentroidProjection(), java.util.Arrays.toString(moment.massProjection()),
+							java.util.Arrays.toString(moment.massStorage()), java.util.Arrays.toString(moment.volumeResidual()), java.util.Arrays.toString(moment.unadvancedMassMoment()));
+				}
+			}
 		}
 		if (conservative) System.out.printf("  conservative dam: 5000 steps, exact cell capacities and pressure inventory matched; massError=%g bound=%g%n",
 				domain.totalMass() - mass, massRoundoff);
@@ -136,13 +144,20 @@ public final class MarkerDistributionExperiment {
 			if (domain.markerGrid.markerCount[cell] != 8)
 				throw new AssertionError("Full liquid cell lost its spatial integration rule");
 			int slots = 0;
+			double[] minimum = {Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY};
+			double[] maximum = {Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY};
+			for (int p = domain.markerGrid.cellMarkerHead[cell]; p >= 0; p = domain.markerGrid.particleCellNext[p]) for (int axis = 0; axis < 3; axis++) {
+				double position = switch (axis) { case 0 -> domain.particles.positionX(p); case 1 -> domain.particles.positionY(p); default -> domain.particles.positionZ(p); };
+				minimum[axis] = Math.min(minimum[axis], position); maximum[axis] = Math.max(maximum[axis], position);
+			}
+			for (int axis = 0; axis < 3; axis++) if (Math.abs(maximum[axis] - minimum[axis] - 0.5 * domain.config.cellSize()) > 4 * Math.ulp((float) maximum[axis]))
+				throw new AssertionError("Full-cell integration points lost their separation");
 			for (int p = domain.markerGrid.cellMarkerHead[cell]; p >= 0; p = domain.markerGrid.particleCellNext[p]) {
 				int slot = 0;
 				for (int axis = 0; axis < 3; axis++) {
 					double position = switch (axis) { case 0 -> domain.particles.positionX(p); case 1 -> domain.particles.positionY(p); default -> domain.particles.positionZ(p); };
-					double offset = position / domain.config.cellSize() - Math.floor(position / domain.config.cellSize()) - 0.5;
-					if (Math.abs(offset) != 0.25) throw new AssertionError("Full-cell integration points clustered");
-					if (offset > 0) slot |= 1 << axis;
+					if (position == maximum[axis]) slot |= 1 << axis;
+					else if (position != minimum[axis]) throw new AssertionError("Full-cell integration points lost their tensor rule");
 				}
 				if ((slots & 1 << slot) != 0) throw new AssertionError("Full-cell integration point was duplicated");
 				slots |= 1 << slot;

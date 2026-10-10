@@ -52,6 +52,8 @@ final class CellPolynomialField {
 				}
 				return result;
 			}
+			double[][] tensor = fitTensor(positions, values, constant);
+			if (tensor != null) return tensor;
 		}
 		double[][] matrix = new double[8][8], right = new double[values.length][8]; double total = 0;
 		for (int p = 0; p < count; p++) total += weights[p];
@@ -83,6 +85,54 @@ final class CellPolynomialField {
 		double[][] result = new double[values.length][8];
 		for (int field = 0; field < values.length; field++) for (int row = 0; row < rank; row++) result[field][pivotColumns[row]] = right[field][row];
 		for (int field = 0; field < values.length; field++) if (constant[field]) result[field][0] = values[field][0];
+		return result;
+	}
+
+	/** Complete two-node-per-axis rules determine a multilinear field independently of positive masses. */
+	private static double[][] fitTensor(double[][] positions, double[][] values, boolean[] constant) {
+		double[] lower = new double[3], upper = new double[3];
+		for (int axis = 0; axis < 3; axis++) {
+			lower[axis] = upper[axis] = positions[axis][0];
+			for (int p = 0; p < 8; p++) {
+				double q = positions[axis][p]; if (!Double.isFinite(q)) return null;
+				lower[axis] = Math.min(lower[axis], q); upper[axis] = Math.max(upper[axis], q);
+			}
+			if (lower[axis] == upper[axis]) return null;
+		}
+		int[] slots = new int[8]; java.util.Arrays.fill(slots, -1);
+		for (int p = 0; p < 8; p++) {
+			int slot = 0;
+			for (int axis = 0; axis < 3; axis++) {
+				double q = positions[axis][p];
+				if (q == upper[axis]) slot |= 1 << axis;
+				else if (q != lower[axis]) return null;
+			}
+			if (slots[slot] >= 0) return null; slots[slot] = p;
+		}
+		// Preserve the existing rank threshold when a centered tensor variation is unresolved.
+		double minimumPivot = 1, scale = 1;
+		for (int axis = 0; axis < 3; axis++) {
+			double span = 4 * (upper[axis] - lower[axis]); minimumPivot *= Math.min(1, span * span / 4);
+			scale *= Math.max(1, 8 * (lower[axis] * lower[axis] + upper[axis] * upper[axis]));
+		}
+		if (minimumPivot <= 64 * Math.ulp(scale)) return null;
+		double[][] result = new double[values.length][8]; int[] masks = {0, 1, 2, 4, 3, 5, 6, 7};
+		for (int field = 0; field < values.length; field++) {
+			if (constant[field]) { result[field][0] = values[field][0]; continue; }
+			double[] transform = new double[8];
+			for (int slot = 0; slot < 8; slot++) transform[slot] = values[field][slots[slot]];
+			for (int axis = 0; axis < 3; axis++) {
+				int width = 1 << axis; double origin = 4 * lower[axis], span = 4 * (upper[axis] - lower[axis]);
+				for (int slot = 0; slot < 8; slot++) if ((slot & width) == 0) {
+					double slope = (transform[slot + width] - transform[slot]) / span;
+					transform[slot] = Math.fma(-origin, slope, transform[slot]); transform[slot + width] = slope;
+				}
+			}
+			for (int coefficient = 0; coefficient < 8; coefficient++) {
+				double value = transform[masks[coefficient]]; if (!Double.isFinite(value)) return null;
+				result[field][coefficient] = value;
+			}
+		}
 		return result;
 	}
 

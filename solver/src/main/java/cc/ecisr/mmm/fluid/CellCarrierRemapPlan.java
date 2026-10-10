@@ -24,6 +24,7 @@ final class CellCarrierRemapPlan {
 	final ArrayList<Marker> markers = new ArrayList<>();
 	final SignedDyadic energyRoundoff;
 	final boolean[] changedSpeciesCells;
+	final CellRemapMoments.Audit momentAudit;
 	private final FluidDomain domain;
 	private final ArrayList<Group>[] input, output;
 	private final int[] outgoingHead, outgoingNext;
@@ -100,6 +101,7 @@ final class CellCarrierRemapPlan {
 		markers.addAll(retainedMarkers);
 		markers.addAll(ballistic.markers);
 		energyRoundoff = validateInventories(flux, ballistic);
+		momentAudit = momentAudit();
 	}
 
 	/** A cell without any shared transfer keeps its existing spatial integration rule. */
@@ -137,6 +139,15 @@ final class CellCarrierRemapPlan {
 					group.momentum[0] += domain.particles.mass(p) * domain.particles.velocityX(p);
 					group.momentum[1] += domain.particles.mass(p) * domain.particles.velocityY(p);
 					group.momentum[2] += domain.particles.mass(p) * domain.particles.velocityZ(p);
+					for (int a = 0; a < 3; a++) {
+						int coordinate = a == 0 ? cell % domain.sizeX : a == 1 ? cell / domain.sizeX % domain.sizeY : cell / (domain.sizeX * domain.sizeY);
+						double position = a == 0 ? domain.particles.positionX(p) : a == 1 ? domain.particles.positionY(p) : domain.particles.positionZ(p);
+						double velocity = a == 0 ? domain.particles.velocityX(p) : a == 1 ? domain.particles.velocityY(p) : domain.particles.velocityZ(p);
+						double offset = position / domain.config.cellSize() - coordinate - 0.5;
+						group.massMoment[a] += domain.particles.mass(p) * offset;
+						group.volumeMoment[a] += domain.particles.volume(p) * offset;
+						group.volumeMotion[a] += domain.particles.volume(p) * velocity;
+					}
 					if (mixture != null) group.species.add(mixture);
 					if (domain.thermalState != null) {
 						double energy = domain.thermalState.liquidInternalEnergy(p);
@@ -209,6 +220,7 @@ final class CellCarrierRemapPlan {
 		}
 		for (int g = 0; g < groups.size(); g++) {
 			Group source = groups.get(g); ChemicalMixtureRecord[] species = allocateSpecies(source.species, pieces[g]);
+			prepareMoments(source);
 			source.shares = new ArrayList<>(shares);
 			double[] masses = CellRemapMassAllocation.allocate(source.mass, source.volume, pieces[g]);
 			int pivot = CellRemapMassAllocation.largest(pieces[g]);
@@ -231,9 +243,14 @@ final class CellCarrierRemapPlan {
 					double p = d == pivot ? remainingMomentum[a] : source.momentum[a] * fraction;
 					momentum[a] = p; remainingMomentum[a] -= p;
 				}
-				source.shares.add(new Share(source, destinations[d], pieces[g][d], m, k, energy, species[d], rounding, momentum));
+				double[] facePoint = faces[d] < 0 ? null : CellRemapMoments.face(domain, flux, faces[d]);
+				if (facePoint != null) subtractFaceMoment(source, m, pieces[g][d].toDouble(), facePoint);
+				source.shares.add(new Share(source, destinations[d], pieces[g][d], m, k, energy, species[d], rounding, momentum, facePoint));
 				remainingKinetic -= k;
 			}
+			// The retained share can precede outgoing shares in residual-pivot order.
+			// Its moment is read only after all outgoing face contributions have been subtracted.
+			if (pieces[g][shares - 1].signum() == 0) source.discardedMoment = true;
 		}
 	}
 
@@ -248,12 +265,14 @@ final class CellCarrierRemapPlan {
 			target.energy = target.energy.add(share.energy); target.energyRounding += share.rounding;
 			if (share.species != null) target.species.add(share.species);
 			for (int a = 0; a < 3; a++) target.momentum[a] += share.momentum[a];
+			addMoments(target, source, share.mass, share.volume.toDouble(), share.facePoint);
 			target.addFields(source, share.mass, 4);
 		}
 	}
 
 	/** A homogeneous cold cell needs no chemical or phase allocation. */
 	private void distributeHomogeneous(Group source, ConservativeLiquidFlux flux) {
+		prepareMoments(source);
 		SignedDyadic remainingVolume = source.volume; double remainingMass = source.mass, remainingKinetic = source.kinetic;
 		double[] remainingMomentum = source.momentum.clone();
 		for (int f = outgoingHead[source.cell]; f >= 0; f = outgoingNext[f]) {
@@ -263,6 +282,9 @@ final class CellCarrierRemapPlan {
 			double mass = last ? remainingMass : source.mass * fraction;
 			double kinetic = last ? remainingKinetic : source.kinetic * fraction;
 			Group target = find(output, flux.receiver(f), source.material, source.indicator, (ChemicalMixtureRecord) null);
+			double[] facePoint = CellRemapMoments.face(domain, flux, f);
+			subtractFaceMoment(source, mass, amount.toDouble(), facePoint);
+			addMoments(target, source, mass, amount.toDouble(), facePoint);
 			target.volume = target.volume.add(amount); target.mass += mass; target.kinetic += kinetic;
 			for (int a = 0; a < 3; a++) {
 				double momentum = last ? remainingMomentum[a] : source.momentum[a] * fraction;
@@ -273,11 +295,37 @@ final class CellCarrierRemapPlan {
 		}
 		if (remainingVolume.signum() > 0) {
 			Group target = find(output, source.cell, source.material, source.indicator, (ChemicalMixtureRecord) null);
+			addMoments(target, source, remainingMass, remainingVolume.toDouble(), null);
 			target.volume = target.volume.add(remainingVolume); target.mass += remainingMass; target.kinetic += remainingKinetic;
 			for (int a = 0; a < 3; a++) {
 				target.momentum[a] += remainingMomentum[a];
 			}
 			target.addFields(source, remainingMass, 3);
+		} else source.discardedMoment = true;
+	}
+
+	private void prepareMoments(Group source) {
+		for (int a = 0; a < 3; a++) {
+			source.massMoment[a] += 0.5 * dt / domain.config.cellSize() * source.momentum[a];
+			source.volumeMoment[a] += 0.5 * dt / domain.config.cellSize() * source.volumeMotion[a];
+		}
+	}
+
+	private static void subtractFaceMoment(Group source, double mass, double volume, double[] facePoint) {
+		for (int a = 0; a < 3; a++) { source.massMoment[a] -= mass * facePoint[a]; source.volumeMoment[a] -= volume * facePoint[a]; }
+	}
+
+	private void addMoments(Group target, Group source, double mass, double volume, double[] facePoint) {
+		for (int a = 0; a < 3; a++) {
+			if (facePoint == null) {
+				target.massMoment[a] += source.massMoment[a]; target.volumeMoment[a] += source.volumeMoment[a];
+			} else {
+				int stride = a == 0 ? 1 : a == 1 ? domain.sizeX : domain.sizeX * domain.sizeY;
+				double point = facePoint[a] - (a == 0 ? target.cell % domain.sizeX - source.cell % domain.sizeX
+						: a == 1 ? target.cell / stride % domain.sizeY - source.cell / stride % domain.sizeY : target.cell / stride - source.cell / stride);
+				target.massMoment[a] += mass * point; target.volumeMoment[a] += volume * point;
+			}
+			target.volumeMotion[a] += volume / source.volume.toDouble() * source.volumeMotion[a];
 		}
 	}
 
@@ -397,10 +445,25 @@ final class CellCarrierRemapPlan {
 		SignedDyadic[] weights = new SignedDyadic[volumes.size()];
 		for (int p = 0; p < weights.length; p++) weights[p] = SignedDyadic.of(volumes.get(p));
 		double[] masses = CellRemapMassAllocation.allocate(group.mass, group.volume, weights);
+		for (int a = 0; a < 3; a++) {
+			group.massMoment[a] += 0.5 * dt / domain.config.cellSize() * group.momentum[a];
+			group.volumeMoment[a] += 0.5 * dt / domain.config.cellSize() * group.volumeMotion[a];
+		}
+		boolean moved = CellRemapMoments.fit(domain, group.cell, offsets, masses, group.massMoment, group.projection, group.storage);
+		for (int a = 0; a < 3; a++) {
+			double volumeMoment = 0;
+			int coordinate = a == 0 ? group.cell % domain.sizeX : a == 1 ? group.cell / domain.sizeX % domain.sizeY : group.cell / (domain.sizeX * domain.sizeY);
+			double h = domain.config.cellSize();
+			for (int p = 0; p < volumes.size(); p++) {
+				float stored = (float) ((coordinate + 0.5 + offsets.get(p)[a]) * h);
+				volumeMoment += volumes.get(p) * (stored / h - coordinate - 0.5);
+			}
+			group.volumeResidual[a] = volumeMoment - group.volumeMoment[a];
+		}
 		ChemicalMixtureRecord[] species = domain.chemicalParcels == null ? null : allocateSpecies(group.species, weights);
 		double[] mean = new double[3], fieldMean = new double[4];
 		for (int a = 0; a < 3; a++) mean[a] = group.momentum[a] / group.mass;
-		double[][] fieldValues = evaluateQuadrature(group, offsets, volumes, fieldMean, mask == 0 && count == 8 && volumes.size() == 8);
+		double[][] fieldValues = evaluateQuadrature(group, offsets, volumes, fieldMean, !moved && mask == 0 && count == 8 && volumes.size() == 8);
 		double scale = velocityScale(group, volumes, mean, fieldMean, fieldValues);
 		double temperatureScale = domain.thermalState == null ? 1 : temperatureScale(group, fieldMean[3], fieldValues[3]);
 		SignedDyadic energyRemaining = group.energy;
@@ -528,6 +591,31 @@ final class CellCarrierRemapPlan {
 		return energyRoundoff;
 	}
 
+	private CellRemapMoments.Audit momentAudit() {
+		double[] projection = new double[3], storage = new double[3], volume = new double[3], unadvanced = new double[3];
+		double maximum = 0, h = domain.config.cellSize(); int projected = 0;
+		for (ArrayList<Group> groups : output) if (groups != null) for (Group group : groups) {
+			double worst = 0;
+			for (int a = 0; a < 3; a++) {
+				projection[a] += domain.unitScale.kilograms(h * Math.abs(group.projection[a])); storage[a] += domain.unitScale.kilograms(h * Math.abs(group.storage[a]));
+				volume[a] += h * Math.abs(group.volumeResidual[a]); worst = Math.max(worst, h * Math.abs(group.projection[a]) / group.mass);
+			}
+			maximum = Math.max(maximum, worst); if (worst > 0) projected++;
+		}
+		for (ArrayList<Group> groups : input) if (groups != null) for (Group group : groups) {
+			double worst = 0;
+			for (int a = 0; a < 3; a++) {
+				if (group.discardedMoment) {
+					projection[a] += domain.unitScale.kilograms(h * Math.abs(group.massMoment[a])); volume[a] += h * Math.abs(group.volumeMoment[a]);
+					worst = Math.max(worst, h * Math.abs(group.massMoment[a]) / group.mass);
+				}
+				if (!remappedCells[group.cell]) unadvanced[a] += domain.unitScale.kilograms(Math.abs(dt * group.momentum[a]));
+			}
+			maximum = Math.max(maximum, worst); if (worst > 0) projected++;
+		}
+		return new CellRemapMoments.Audit(projection, storage, volume, maximum, projected, unadvanced);
+	}
+
 	private static Map<Integer, Long> cellSpecies(ArrayList<Group> groups) {
 		if (groups == null) return Map.of();
 		var result = new TreeMap<Integer, Long>();
@@ -636,7 +724,7 @@ final class CellCarrierRemapPlan {
 		Marker withEnergy(double value) { return new Marker(cell, material, indicator, volume, mass, offsetX, offsetY, offsetZ, velocityX, velocityY, velocityZ, mixture, value); }
 	}
 	private record Share(Group source, int destination, SignedDyadic volume, double mass, double kinetic,
-			SignedDyadic energy, ChemicalMixtureRecord species, double rounding, double[] momentum) { }
+			SignedDyadic energy, ChemicalMixtureRecord species, double rounding, double[] momentum, double[] facePoint) { }
 	private static final class Group {
 		final int cell, material; final boolean indicator;
 		int sampleStart, quadratureCount; ArrayList<Float> sampleVolumes;
@@ -645,6 +733,8 @@ final class CellCarrierRemapPlan {
 		SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO;
 		cc.ecisr.mmm.thermal.LiquidEnergyColumn.CaloricInventory caloric;
 		double mass, kinetic, temperature, energyRounding; double[] transportTemperature; final double[] momentum = new double[3]; double[][] field;
+		final double[] massMoment = new double[3], volumeMoment = new double[3], volumeMotion = new double[3];
+		final double[] projection = new double[3], storage = new double[3], volumeResidual = new double[3]; boolean discardedMoment;
 		double localMinimum = Double.POSITIVE_INFINITY, localMaximum = Double.NEGATIVE_INFINITY;
 		double minimumTemperature = Double.POSITIVE_INFINITY, maximumTemperature = Double.NEGATIVE_INFINITY;
 		Group(int cell, int material, boolean indicator) { this.cell = cell; this.material = material; this.indicator = indicator; }

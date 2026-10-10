@@ -40,6 +40,11 @@ public final class LiquidVolumeTransportValidation {
 	public static void main(String[] args) {
 		zeroFluxPreservesCarrierColumns();
 		balancedPositiveFluxStillReconstructs();
+		positiveFluxPreservesFeasibleMoments();
+		ballisticArrivalKeepsItsMomentAtHandoff();
+		boundedMomentProjectionIsObservable();
+		CellRemapMomentsValidation.main(new String[0]);
+		CellPolynomialFieldValidation.main(new String[0]);
 		if (args.length == 1 && args[0].equals("handoff")) {
 			System.out.println("Liquid transport handoff validation passed");
 			return;
@@ -154,10 +159,99 @@ public final class LiquidVolumeTransportValidation {
 		int count = 0;
 		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == target) {
 			float x = domain.particles.positionX(p) - 2;
-			if (x != 0.25F && x != 0.75F) throw new AssertionError("Net-zero positive shared flux incorrectly preserved old quadrature");
+			if (Math.min(Math.abs(x - 0.289F), Math.abs(x - 0.789F)) > 2 * Math.ulp(2.5F))
+				throw new AssertionError("Balanced positive flux lost the transported first moment: " + x);
 			count++;
 		}
 		if (count != 8) throw new AssertionError("Balanced positive flux lost the full-cell quadrature");
+	}
+
+	private static void positiveFluxPreservesFeasibleMoments() {
+		for (boolean thermal : new boolean[] {false, true}) for (float dt : new float[] {0.05F, 0.025F}) {
+			var domain = new FluidDomain(8, 4, 4,
+					new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 2048);
+			if (thermal) {
+				try {
+					var registries = cc.ecisr.mmm.simulation.FullCapabilityTestFixture.load();
+					cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+					domain.setVolume(2, 1, 1, 1); domain.setVolume(3, 1, 1, 0.5F);
+					cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindFull(domain, registries, 310,
+							cc.ecisr.mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+				} catch (Exception failure) { throw new IllegalStateException(failure); }
+			} else { domain.setVolume(2, 1, 1, 1); domain.setVolume(3, 1, 1, 0.5F); }
+			for (int p = 0; p < domain.particles.count(); p++) {
+				domain.particles.setPositionX(p, domain.particles.positionX(p) + 0.04F);
+				domain.particles.setVelocityX(p, 0.2F);
+			}
+			double mass = 0, initial = 0;
+			for (int p = 0; p < domain.particles.count(); p++) { mass += domain.particles.mass(p); initial += domain.particles.mass(p) * domain.particles.positionX(p); }
+			var inventory = SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count());
+			var transport = new CellLiquidVolumeTransport(domain); int peak = 0;
+			for (int step = 1; step <= Math.round(0.5F / dt); step++) {
+				domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+				java.util.Arrays.fill(domain.mac.velocityX, 0.2F);
+				java.util.Arrays.fill(domain.mac.velocityY, 0); java.util.Arrays.fill(domain.mac.velocityZ, 0);
+				transport.advect(dt); peak = Math.max(peak, domain.particles.count());
+				double actual = 0;
+				for (int p = 0; p < domain.particles.count(); p++) actual += domain.particles.mass(p) * domain.particles.positionX(p);
+				double error = Math.abs((actual - initial) / mass - step * (double) dt * 0.2F);
+				if (error > step * 2 * Math.ulp(4.0F)) throw new AssertionError("Feasible uniform transport centroid drift: " + error);
+				if (transport.momentAudit.projectedGroups() != 0 || transport.momentAudit.maximumCentroidProjection() != 0)
+					throw new AssertionError("Feasible uniform transport unexpectedly projected its moment");
+				if (!inventory.equals(SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count())))
+					throw new AssertionError("Moment reconstruction changed exact volume");
+			}
+			System.out.printf("positive flux moment thermal=%s dt=%g centroid advances=%g peakMarkers=%d%n", thermal, dt, 0.1, peak);
+		}
+	}
+
+	private static void boundedMomentProjectionIsObservable() {
+		var domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
+		var offsets = new java.util.ArrayList<double[]>(); offsets.add(new double[] {-0.25, 0, 0}); offsets.add(new double[] {0.25, 0, 0});
+		double[] projection = new double[3], storage = new double[3];
+		CellRemapMoments.fit(domain, 0, offsets, new double[] {0.25, 0.75}, new double[] {0.25, 0, 0}, projection, storage);
+		double moment = 0.25 * offsets.get(0)[0] + 0.75 * offsets.get(1)[0];
+		if (Math.abs(moment - 0.25) > Math.ulp(1.0F) || projection[0] != 0)
+			throw new AssertionError("Variable-mass feasible first moment was lost");
+		CellRemapMoments.fit(domain, 0, offsets, new double[] {0.25, 0.75}, new double[] {1, 0, 0}, projection, storage);
+		moment = 0.25 * offsets.get(0)[0] + 0.75 * offsets.get(1)[0];
+		if (!(projection[0] < -0.5) || Math.abs(moment - 1 - projection[0] - storage[0]) > 8 * Math.ulp(1.0))
+			throw new AssertionError("Unreachable first moment was hidden");
+		for (double[] offset : offsets) if (offset[0] < -0.5 || offset[0] >= 0.5)
+			throw new AssertionError("Projected marker left its assigned cell");
+	}
+
+	private static void ballisticArrivalKeepsItsMomentAtHandoff() {
+		var domain = new FluidDomain(10, 4, 4,
+				new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 2048);
+		domain.setVolume(1, 1, 1, 0.01F); domain.setVolume(4, 1, 1, 1); domain.setVolume(5, 1, 1, 0.5F);
+		int start = domain.cellIndex(1, 1, 1), arrival = domain.cellIndex(3, 1, 1);
+		for (int p = 0; p < domain.particles.count(); p++) {
+			boolean drop = domain.particleCellIndex(p) == start;
+			if (drop) domain.particles.setPositionX(p, 0.995F);
+			domain.particles.setVelocityX(p, drop ? 2 : 0.2F);
+		}
+		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+		if (domain.gridToParticleStage.advectionCells()[start]) throw new AssertionError("Arrival fixture must begin on the ballistic path");
+		java.util.Arrays.fill(domain.mac.velocityX, 0.2F);
+		var inventory = SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count());
+		var transport = new CellLiquidVolumeTransport(domain); transport.advect(0.5F);
+		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+		if (!domain.gridToParticleStage.advectionCells()[arrival] || domain.markerGrid.markerCount[arrival] != 1)
+			throw new AssertionError("Ballistic drop did not join the finite-volume support");
+		double mass = 0, before = 0;
+		for (int p = 0; p < domain.particles.count(); p++) {
+			domain.particles.setVelocityX(p, 0.2F);
+			mass += domain.particles.mass(p); before += domain.particles.mass(p) * domain.particles.positionX(p);
+		}
+		transport.advect(0.05F);
+		double after = 0;
+		for (int p = 0; p < domain.particles.count(); p++) after += domain.particles.mass(p) * domain.particles.positionX(p);
+		double drift = Math.abs((after - before) / mass - 0.05F * (double) 0.2F);
+		if (drift > 4 * Math.ulp(3.0F)) throw new AssertionError("Ballistic-to-volume handoff introduced centroid drift: " + drift);
+		if (!inventory.equals(SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count())))
+			throw new AssertionError("Ballistic-to-volume handoff changed exact inventory");
+		System.out.printf("ballistic-to-volume handoff centroidError=%g m%n", drift);
 	}
 
 	private static double referenceFraction(int x, int y, double h, double time, int samples) {
@@ -236,11 +330,13 @@ public final class LiquidVolumeTransportValidation {
 			if (candidate.markers.size() != Integer.highestOneBit(quanta))
 				throw new AssertionError("Chemical quantum count broke the complete orthogonal quadrature");
 			var points = new java.util.HashSet<java.util.List<Double>>(); double[] centroid = new double[3];
+			double[] expected = {coarse.particles.positionX(0) / coarse.config.cellSize() - 0.5,
+					coarse.particles.positionY(0) / coarse.config.cellSize() - 0.5, coarse.particles.positionZ(0) / coarse.config.cellSize() - 0.5};
 			for (var marker : candidate.markers) {
 				points.add(java.util.List.of(marker.offset(0), marker.offset(1), marker.offset(2)));
 				for (int axis = 0; axis < 3; axis++) centroid[axis] += marker.volume() * marker.offset(axis);
 			}
-			if (points.size() != candidate.markers.size() || centroid[0] != 0 || centroid[1] != 0 || centroid[2] != 0)
+			if (points.size() != candidate.markers.size() || centroid[0] != expected[0] || centroid[1] != expected[1] || centroid[2] != expected[2])
 				throw new AssertionError("Coarse chemical remap duplicated a quadrature point or displaced the cell centroid");
 		}
 

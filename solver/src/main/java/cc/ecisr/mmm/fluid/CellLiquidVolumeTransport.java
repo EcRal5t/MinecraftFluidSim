@@ -16,6 +16,7 @@ final class CellLiquidVolumeTransport {
 	private final double[] outgoing;
 	double collisionWorkJoules;
 	boolean publishedQuadrature;
+	CellRemapMoments.Audit momentAudit = CellRemapMoments.Audit.empty();
 
 	CellLiquidVolumeTransport(FluidDomain domain) {
 		this.domain = domain;
@@ -67,6 +68,7 @@ final class CellLiquidVolumeTransport {
 	void advect(float dt) {
 		collisionWorkJoules = 0;
 		publishedQuadrature = false;
+		momentAudit = CellRemapMoments.Audit.empty();
 		if (stationary()) return;
 		var ballistic = new BallisticLiquidRemap(domain, dt);
 		collisionWorkJoules = ballistic.collisionWorkJoules;
@@ -88,6 +90,7 @@ final class CellLiquidVolumeTransport {
 		var candidate = new CellCarrierRemapPlan(domain, transport, dt, ballistic);
 		domain.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), particles.count()), candidate);
 		publishedQuadrature = true;
+		momentAudit = candidate.momentAudit;
 	}
 
 	private boolean stationary() {
