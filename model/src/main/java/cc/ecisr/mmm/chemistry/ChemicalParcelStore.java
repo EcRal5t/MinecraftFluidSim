@@ -24,6 +24,9 @@ public final class ChemicalParcelStore {
 	private long totalQuanta;
 	private long mutationRevision;
 	private int reactionCursor;
+	private volatile DefaultParcel defaultParcel;
+	private record DefaultParcel(String materialId, int volumeBits, int cellSizeBits, long massBits,
+			boolean indicator, ChemicalMixtureRecord mixture) { }
 	public int reactionCursor() { return reactionCursor; }
 	public void restoreReactionCursor(int cell) {
 		if (cell < 0 || cell >>> 6 >= dirtyCellWords.length) throw new IllegalArgumentException("Reaction cursor is outside the grid");
@@ -191,6 +194,15 @@ public final class ChemicalParcelStore {
 		int phaseHandle = registry.phaseHandleForMaterial(materialId);
 		ChemicalPhaseDefinition phase = registry.phase(phaseHandle);
 		if (indicator && !phase.acceptsIndicator()) throw new IllegalArgumentException("Chemical phase rejects indicator");
+		DefaultParcel previous = defaultParcel;
+		if (previous != null && previous.materialId.equals(materialId)
+				&& previous.volumeBits == Float.floatToRawIntBits(cellVolume)
+				&& previous.cellSizeBits == Float.floatToRawIntBits(cellSize)
+				&& previous.massBits == Double.doubleToRawLongBits(markerMass) && previous.indicator == indicator) {
+			unitScale.kilograms(markerMass);
+			requireCompatible(previous.mixture, materialId, indicator);
+			return previous.mixture;
+		}
 		ExactRational blockVolume = ExactRational.ofFloat(cellVolume)
 				.multiply(ExactRational.ofFloat(cellSize))
 				.multiply(ExactRational.ofFloat(cellSize))
@@ -206,6 +218,8 @@ public final class ChemicalParcelStore {
 		double residual = unitScale.kilograms(markerMass) - withoutResidual.exactSpeciesMassKilograms(registry).toDouble();
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, residual);
 		requireCompatible(record, materialId, indicator);
+		if (previous == null) defaultParcel = new DefaultParcel(materialId, Float.floatToRawIntBits(cellVolume),
+				Float.floatToRawIntBits(cellSize), Double.doubleToRawLongBits(markerMass), indicator, record);
 		return record;
 	}
 

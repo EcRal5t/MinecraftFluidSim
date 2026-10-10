@@ -14,6 +14,7 @@ public final class M7ChemistryValidation {
 		boolean fast = args.length > 0 && args[0].equals("--fast");
 		validateRationalsAndCodec();
 		validateCanonicalRegistry();
+		validateDefaultParcels();
 		validateBundledDataDefinitions();
 		validateAuditLedgerCodec();
 		validateRegistrySnapshot();
@@ -25,6 +26,44 @@ public final class M7ChemistryValidation {
 				BuiltinChemicalDefinitions.REGISTRY.fingerprint(), fast ? 1_000 : 10_000,
 				BuiltinChemicalDefinitions.REGISTRY.species().size(),
 				BuiltinChemicalDefinitions.REGISTRY.reactions().size());
+	}
+
+	private static void validateDefaultParcels() {
+		var registry = BuiltinChemicalDefinitions.REGISTRY;
+		var scale = cc.ecisr.mmm.units.SolverUnitScale.forCellSize(1.0F);
+		var store = new ChemicalParcelStore(registry, scale, 2, 1);
+		var original = store.defaultRecord("mmm:water", 0.125F, 1.0F, 125.0, false);
+		check(original == store.defaultRecord(new String("mmm:water"), 0.125F, 1.0F, 125.0, false),
+				"identical default inputs did not reuse immutable inventory");
+		String[] materials = {"mmm:water", "mmm:water", "mmm:water", "mmm:water", "mmm:oil", "mmm:mercury"};
+		for (int index = 0; index < materials.length; index++) {
+			float volume = index == 0 ? Math.nextUp(0.125F) : 0.125F;
+			float size = index == 1 ? Math.nextUp(1.0F) : 1.0F;
+			double mass = index == 2 ? Math.nextUp(125.0) : 125.0;
+			boolean indicator = index == 3;
+			var actual = store.defaultRecord(materials[index], volume, size, mass, indicator);
+			var fresh = new ChemicalParcelStore(registry, scale, 1, 1)
+					.defaultRecord(materials[index], volume, size, mass, indicator);
+			check(actual.equals(fresh), "default reuse mixed an input field at index " + index);
+		}
+		check(store.tryDefaultRecord("mmm:water", Float.MIN_VALUE, 1.0F, Double.MIN_VALUE, false) == null
+				&& store.tryDefaultRecord("mmm:water", 0.125F, Float.MIN_VALUE, 125.0, false) == null,
+				"subnormal default volume acquired a species quantum");
+		check(store.defaultRecord("mmm:water", 0.125F, 1.0F, Double.MIN_VALUE, false)
+				.equals(new ChemicalParcelStore(registry, scale, 1, 1)
+						.defaultRecord("mmm:water", 0.125F, 1.0F, Double.MIN_VALUE, false)),
+				"subnormal mass reused a different default residual");
+		expectFailure(() -> store.defaultRecord("mmm:oil", 0.125F, 1.0F, 125.0, true), "default reuse accepted a rejected indicator");
+		expectFailure(() -> store.defaultRecord("mmm:missing", 0.125F, 1.0F, 125.0, false), "default reuse accepted an unknown material");
+		expectFailure(() -> store.defaultRecord("mmm:water", Float.NaN, 1.0F, 125.0, false), "default reuse accepted non-finite volume");
+		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, Float.POSITIVE_INFINITY, 125.0, false), "default reuse accepted non-finite cell size");
+		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, 1.0F, Double.NaN, false), "default reuse accepted non-finite mass");
+		store.assignDefault(0, "mmm:water", 20_000.0F, 1.0F, 20_000_000.0, false);
+		long inventory = store.totalQuanta(), revision = store.mutationRevision();
+		expectFailure(() -> store.assignDefault(1, "mmm:water", 20_000.0F, 1.0F, 20_000_000.0, false),
+				"default reuse bypassed the region inventory limit");
+		check(store.totalQuanta() == inventory && store.mutationRevision() == revision && !store.isAssigned(1),
+				"rejected default assignment changed inventory ownership");
 	}
 
 	private static void validateRationalsAndCodec() {
