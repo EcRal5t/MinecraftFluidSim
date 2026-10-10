@@ -21,7 +21,7 @@ final class CellCarrierRemapPlan {
 			}
 		}
 	}
-	final ArrayList<Marker> markers = new ArrayList<>();
+	final CellRemapMarkerColumns markers;
 	final SignedDyadic energyRoundoff;
 	final boolean[] changedSpeciesCells;
 	final CellRemapMoments.Audit momentAudit;
@@ -46,7 +46,6 @@ final class CellCarrierRemapPlan {
 		this.dt = dt;
 		this.geometryRemap = geometryRemap;
 		changedSpeciesCells = new boolean[domain.cellCount];
-		markers.ensureCapacity(domain.particles.count());
 		input = (ArrayList<Group>[]) new ArrayList<?>[domain.cellCount];
 		output = (ArrayList<Group>[]) new ArrayList<?>[domain.cellCount];
 		outgoingHead = new int[domain.cellCount]; outgoingNext = new int[flux.flux.length]; Arrays.fill(outgoingHead, -1);
@@ -102,14 +101,14 @@ final class CellCarrierRemapPlan {
 		}
 		if ((long) sampledCount + retainedMarkers.size() + ballistic.markers.size() > domain.maximumParticleCount)
 			throw new IllegalStateException("Cell carrier remap exceeds the marker budget");
-		markers.addAll(java.util.Collections.nCopies(sampledCount, null));
+		markers = new CellRemapMarkerColumns(sampledCount + retainedMarkers.size() + ballistic.markers.size());
 		CpuWorkBatch.run(domain.cellCount, (from, until) -> {
 			for (int cell = from; cell < until; cell++) {
 				if (output[cell] != null) for (Group group : output[cell]) sample(group);
 			}
 		});
-		markers.addAll(retainedMarkers);
-		markers.addAll(ballistic.markers);
+		markers.copyFrom(retainedMarkers, sampledCount);
+		markers.copyFrom(ballistic.markers, sampledCount + retainedMarkers.size());
 		energyRoundoff = validateInventories(flux, ballistic);
 		momentAudit = momentAudit();
 	}
@@ -566,9 +565,9 @@ final class CellCarrierRemapPlan {
 				double t = group.temperature + temperatureScale * (fieldValues[3][p] - fieldMean[3]);
 				t = Math.max(group.minimumTemperature, Math.min(group.maximumTemperature, t));
 				for (int earlier = 0; earlier < p; earlier++) {
-					var previous = markers.get(start + earlier);
-					if (Double.doubleToRawLongBits(previous.mass()) == Double.doubleToRawLongBits(m)
-							&& java.util.Objects.equals(previous.mixture(), mixture)) { caloric[p] = caloric[earlier]; break; }
+					int previous = start + earlier;
+					if (Double.doubleToRawLongBits(markers.mass[previous]) == Double.doubleToRawLongBits(m)
+							&& java.util.Objects.equals(markers.mixture[previous], mixture)) { caloric[p] = caloric[earlier]; break; }
 				}
 				if (caloric[p] == null) caloric[p] = domain.thermalState.liquid().caloricInventory(group.material, m, mixture,
 						domain.chemicalParcels == null ? null : domain.chemicalParcels.registry());
@@ -576,8 +575,8 @@ final class CellCarrierRemapPlan {
 				// Completed temperature samples become the private energy-reduction workspace.
 				fieldValues[3][p] = energy;
 			}
-			markers.set(start + p, new Marker(group.cell, group.material, group.indicator, volumes.get(p), m,
-					delta[0], delta[1], delta[2], vx, vy, vz, mixture, energy));
+			markers.set(start + p, group.cell, group.material, group.indicator, volumes.get(p), m,
+					delta[0], delta[1], delta[2], vx, vy, vz, mixture, energy);
 		}
 		if (domain.thermalState != null) {
 			SignedDyadic energyRemaining = group.energy.subtract(SignedDyadic.sum(fieldValues[3], volumes.size()));
@@ -647,7 +646,7 @@ final class CellCarrierRemapPlan {
 		long[] before = new long[speciesCount], after = new long[speciesCount];
 		for (ArrayList<Group> groups : input) if (groups != null) for (Group group : groups) add(before, group.species);
 		for (Marker marker : ballistic.markers) if (marker.mixture != null) add(before, marker.mixture);
-		for (Marker marker : markers) if (marker.mixture != null) add(after, marker.mixture);
+		for (int p = 0; p < markers.size(); p++) if (markers.mixture[p] != null) add(after, markers.mixture[p]);
 		if (!Arrays.equals(before, after)) throw new IllegalStateException("Cell remap changed exact species inventory");
 		if (domain.chemicalParcels != null) {
 			for (ArrayList<Group> groups : output) if (groups != null) for (Group group : groups)
@@ -812,7 +811,6 @@ final class CellCarrierRemapPlan {
 			ChemicalMixtureRecord mixture, double energy) {
 		double offset(int axis) { return switch (axis) { case 0 -> offsetX; case 1 -> offsetY; case 2 -> offsetZ; default -> throw new IllegalArgumentException("Unknown axis"); }; }
 		double velocity(int axis) { return switch (axis) { case 0 -> velocityX; case 1 -> velocityY; case 2 -> velocityZ; default -> throw new IllegalArgumentException("Unknown axis"); }; }
-		Marker withEnergy(double value) { return new Marker(cell, material, indicator, volume, mass, offsetX, offsetY, offsetZ, velocityX, velocityY, velocityZ, mixture, value); }
 	}
 	private record Share(Group source, int destination, SignedDyadic volume, double mass, double kinetic,
 			SignedDyadic energy, ChemicalMixtureRecord species, double rounding, double[] momentum, double[] facePoint) { }

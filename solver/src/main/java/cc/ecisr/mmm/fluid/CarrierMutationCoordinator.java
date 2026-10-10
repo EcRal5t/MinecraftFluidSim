@@ -101,26 +101,25 @@ final class CarrierMutationCoordinator {
 		if (domain.chemicalParcels != null) {
 			ChemicalMixtureRecord[] records = new ChemicalMixtureRecord[count]; boolean[] indicators = new boolean[count];
 			for (int ordinal = 0; ordinal < count; ordinal++) {
-				var marker = candidate.markers.get(ordinal); records[ordinal] = marker.mixture(); indicators[ordinal] = marker.indicator();
+				records[ordinal] = candidate.markers.mixture[ordinal]; indicators[ordinal] = candidate.markers.indicator[ordinal];
 			}
 			chemistry = domain.chemicalParcels.planMarkerRemap(domain.particles.count(), records, indicators);
 		}
-		double[] energies = domain.thermalState == null ? null : new double[count];
+		double[] energies = domain.thermalState == null ? null : candidate.markers.energy;
 		float h = domain.config.cellSize();
 		cc.ecisr.mmm.compute.CpuWorkBatch.run(count, (from, until) -> {
 			for (int ordinal = from; ordinal < until; ordinal++) {
-				var marker = candidate.markers.get(ordinal);
-				int x = marker.cell() % domain.sizeX, y = marker.cell() / domain.sizeX % domain.sizeY, z = marker.cell() / (domain.sizeX * domain.sizeY);
-				domain.particles.setPositionX(ordinal, (float) ((x + 0.5 + marker.offsetX()) * h));
-				domain.particles.setPositionY(ordinal, (float) ((y + 0.5 + marker.offsetY()) * h));
-				domain.particles.setPositionZ(ordinal, (float) ((z + 0.5 + marker.offsetZ()) * h));
-				domain.particles.setVolume(ordinal, marker.volume()); domain.particles.setMass(ordinal, marker.mass());
-				domain.particles.setVelocityX(ordinal, (float) marker.velocityX());
-				domain.particles.setVelocityY(ordinal, (float) marker.velocityY());
-				domain.particles.setVelocityZ(ordinal, (float) marker.velocityZ());
-				domain.particles.setMaterialHandle(ordinal, marker.material());
-				domain.particles.setPhaseLabel(ordinal, domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(marker.material()));
-				if (energies != null) energies[ordinal] = marker.energy();
+				var markers = candidate.markers;
+				int x = markers.cell[ordinal] % domain.sizeX, y = markers.cell[ordinal] / domain.sizeX % domain.sizeY, z = markers.cell[ordinal] / (domain.sizeX * domain.sizeY);
+				domain.particles.setPositionX(ordinal, (float) ((x + 0.5 + markers.offset[0][ordinal]) * h));
+				domain.particles.setPositionY(ordinal, (float) ((y + 0.5 + markers.offset[1][ordinal]) * h));
+				domain.particles.setPositionZ(ordinal, (float) ((z + 0.5 + markers.offset[2][ordinal]) * h));
+				domain.particles.setVolume(ordinal, markers.volume[ordinal]); domain.particles.setMass(ordinal, markers.mass[ordinal]);
+				domain.particles.setVelocityX(ordinal, (float) markers.velocity[0][ordinal]);
+				domain.particles.setVelocityY(ordinal, (float) markers.velocity[1][ordinal]);
+				domain.particles.setVelocityZ(ordinal, (float) markers.velocity[2][ordinal]);
+				domain.particles.setMaterialHandle(ordinal, markers.material[ordinal]);
+				domain.particles.setPhaseLabel(ordinal, domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(markers.material[ordinal]));
 			}
 		});
 		if (domain.chemicalParcels != null) {

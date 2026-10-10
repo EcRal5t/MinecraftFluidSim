@@ -2,14 +2,13 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.compute.CpuWorkBatch;
-import java.util.ArrayList;
 import java.util.Arrays;
 
 /** Checks the prospective carrier columns against the untouched source before publication. */
 final class CellRemapInventoryAudit {
 	private CellRemapInventoryAudit() { }
 
-	static SignedDyadic validate(FluidDomain domain, ArrayList<CellCarrierRemapPlan.Marker> markers,
+	static SignedDyadic validate(FluidDomain domain, CellRemapMarkerColumns markers,
 			ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
 		if (markers.size() > domain.maximumParticleCount) throw new IllegalStateException("Cell remap exceeds its marker budget");
 		SignedDyadic[] energyRoundoff = new SignedDyadic[1];
@@ -26,26 +25,24 @@ final class CellRemapInventoryAudit {
 		return energyRoundoff[0];
 	}
 
-	private static void volume(FluidDomain domain, ArrayList<CellCarrierRemapPlan.Marker> markers,
+	private static void volume(FluidDomain domain, CellRemapMarkerColumns markers,
 			ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
 		int[] heads = new int[domain.cellCount], next = new int[markers.size()]; Arrays.fill(heads, -1);
-		float[] raw = new float[markers.size()];
 		for (int p = 0; p < markers.size(); p++) {
-			var marker = markers.get(p);
-			next[p] = heads[marker.cell()]; heads[marker.cell()] = p; raw[p] = marker.volume();
+			next[p] = heads[markers.cell[p]]; heads[markers.cell[p]] = p;
 		}
-		SignedDyadic[] volume = ExactCellVolumeSums.sum(raw, raw.length, heads, next);
+		SignedDyadic[] volume = ExactCellVolumeSums.sum(markers.volume, markers.size(), heads, next);
 		for (int c = 0; c < volume.length; c++) if (!volume[c].equals(flux.resultingVolumes()[c].add(ballistic.reserved[c])))
 			throw new IllegalStateException("Cell remap changed its shared volume flux");
 	}
 
-	private static SignedDyadic massAndEnergy(FluidDomain domain, ArrayList<CellCarrierRemapPlan.Marker> markers) {
+	private static SignedDyadic massAndEnergy(FluidDomain domain, CellRemapMarkerColumns markers) {
 		int materialCount = domain.materialRegistry == null ? 1 : domain.materialRegistry.materials().size();
 		double[][] before = new double[materialCount][], after = new double[materialCount][];
 		int[] beforeCount = new int[materialCount], afterCount = new int[materialCount];
 		double[] rounding = new double[materialCount];
 		double[] energyBefore = domain.thermalState == null ? null : new double[domain.particles.count()];
-		double[] energyAfter = domain.thermalState == null ? null : new double[markers.size()];
+		double[] energyAfter = domain.thermalState == null ? null : markers.energy;
 		double energyRounding = 0;
 		for (int p = 0; p < domain.particles.count(); p++) {
 			int material = domain.particles.materialHandle(p); double mass = domain.particles.mass(p);
@@ -54,10 +51,10 @@ final class CellRemapInventoryAudit {
 			if (energyBefore != null) energyBefore[p] = domain.thermalState.liquidInternalEnergy(p);
 		}
 		for (int p = 0; p < markers.size(); p++) {
-			var marker = markers.get(p); int material = marker.material();
+			int material = markers.material[p];
 			if (after[material] == null) after[material] = new double[markers.size()];
-			after[material][afterCount[material]++] = marker.mass(); rounding[material] += Math.ulp(marker.mass());
-			if (energyAfter != null) { energyAfter[p] = marker.energy(); energyRounding += Math.ulp(marker.energy()); }
+			after[material][afterCount[material]++] = markers.mass[p]; rounding[material] += Math.ulp(markers.mass[p]);
+			if (energyAfter != null) energyRounding += Math.ulp(markers.energy[p]);
 		}
 		for (int material = 0; material < materialCount; material++) {
 			if ((before[material] == null) != (after[material] == null)) throw new IllegalStateException("Cell remap changed its material inventory");
@@ -73,7 +70,7 @@ final class CellRemapInventoryAudit {
 		return difference;
 	}
 
-	private static void momentumAndKineticEnergy(FluidDomain domain, ArrayList<CellCarrierRemapPlan.Marker> markers,
+	private static void momentumAndKineticEnergy(FluidDomain domain, CellRemapMarkerColumns markers,
 			BallisticLiquidRemap ballistic) {
 		double[] before = new double[3], after = new double[3], rounding = new double[3];
 		double kineticBefore = 0, kineticAfter = 0, kineticRounding = 0;
@@ -85,15 +82,15 @@ final class CellRemapInventoryAudit {
 				kineticBefore += 0.5 * domain.unitScale.kilograms(mass) * v * v;
 			}
 		}
-		for (var marker : markers) {
-			if (!(Double.isFinite(marker.velocityX()) && Double.isFinite(marker.velocityY()) && Double.isFinite(marker.velocityZ())))
+		for (int p = 0; p < markers.size(); p++) {
+			if (!(Double.isFinite(markers.velocity[0][p]) && Double.isFinite(markers.velocity[1][p]) && Double.isFinite(markers.velocity[2][p])))
 				throw new IllegalStateException("Invalid remapped velocity");
 			for (int a = 0; a < 3; a++) {
-				double v = (float) marker.velocity(a), ulp = Math.ulp((float) marker.velocity(a));
-				after[a] += marker.mass() * v;
-				rounding[a] += marker.mass() * ulp + Math.ulp(marker.mass() * v) + Math.ulp(marker.mass()) * Math.abs(v);
-				kineticAfter += 0.5 * domain.unitScale.kilograms(marker.mass()) * v * v;
-				kineticRounding += domain.unitScale.kilograms(marker.mass()) * (Math.abs(v) * ulp + ulp * ulp);
+				double v = (float) markers.velocity[a][p], ulp = Math.ulp((float) markers.velocity[a][p]);
+				after[a] += markers.mass[p] * v;
+				rounding[a] += markers.mass[p] * ulp + Math.ulp(markers.mass[p] * v) + Math.ulp(markers.mass[p]) * Math.abs(v);
+				kineticAfter += 0.5 * domain.unitScale.kilograms(markers.mass[p]) * v * v;
+				kineticRounding += domain.unitScale.kilograms(markers.mass[p]) * (Math.abs(v) * ulp + ulp * ulp);
 			}
 		}
 		for (int a = 0; a < 3; a++) if (Math.abs(after[a] - before[a] - ballistic.collisionMomentum[a])
