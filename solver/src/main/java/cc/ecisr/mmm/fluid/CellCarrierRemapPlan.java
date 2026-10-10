@@ -276,7 +276,7 @@ final class CellCarrierRemapPlan {
 			if (share.species != null) target.species.add(share.species);
 			for (int a = 0; a < 3; a++) target.momentum[a] += share.momentum[a];
 			addMoments(target, source, share.mass, share.volume.toDouble(), share.facePoint);
-			target.addFields(source, share.mass, 4);
+			addFields(target, source, share.mass, 4);
 		}
 	}
 
@@ -300,7 +300,7 @@ final class CellCarrierRemapPlan {
 				double momentum = last ? remainingMomentum[a] : source.momentum[a] * fraction;
 				target.momentum[a] += momentum; remainingMomentum[a] -= momentum;
 			}
-			target.addFields(source, mass, 3);
+			addFields(target, source, mass, 3);
 			remainingMass -= mass; remainingKinetic -= kinetic;
 		}
 		if (remainingVolume.signum() > 0) {
@@ -310,8 +310,20 @@ final class CellCarrierRemapPlan {
 			for (int a = 0; a < 3; a++) {
 				target.momentum[a] += remainingMomentum[a];
 			}
-			target.addFields(source, remainingMass, 3);
+			addFields(target, source, remainingMass, 3);
 		} else source.discardedMoment = true;
+	}
+
+	private void addFields(Group target, Group source, double weight, int count) {
+		if (target.field == null) target.field = new double[4][8];
+		for (int a = 0; a < count; a++) {
+			double[] coefficients = source.field[a];
+			if (a == 3 && target.cell != source.cell) coefficients = CellPolynomialField.translate(coefficients,
+					target.cell % domain.sizeX - source.cell % domain.sizeX,
+					target.cell / domain.sizeX % domain.sizeY - source.cell / domain.sizeX % domain.sizeY,
+					target.cell / (domain.sizeX * domain.sizeY) - source.cell / (domain.sizeX * domain.sizeY));
+			for (int b = 0; b < 8; b++) target.field[a][b] += weight * coefficients[b];
+		}
 	}
 
 	private void prepareMoments(Group source) {
@@ -748,9 +760,5 @@ final class CellCarrierRemapPlan {
 		double localMinimum = Double.POSITIVE_INFINITY, localMaximum = Double.NEGATIVE_INFINITY;
 		double minimumTemperature = Double.POSITIVE_INFINITY, maximumTemperature = Double.NEGATIVE_INFINITY;
 		Group(int cell, int material, boolean indicator) { this.cell = cell; this.material = material; this.indicator = indicator; }
-		void addFields(Group source, double weight, int count) {
-			if (field == null) field = new double[4][8];
-			for (int a = 0; a < count; a++) for (int b = 0; b < 8; b++) field[a][b] += weight * source.field[a][b];
-		}
 	}
 }

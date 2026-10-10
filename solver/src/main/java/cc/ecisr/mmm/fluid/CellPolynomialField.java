@@ -153,27 +153,38 @@ final class CellPolynomialField {
 		return result;
 	}
 
-	/** Evolves intrinsic temperature variation under cell-relative deformation. */
+	/** Expresses a donor field about a new cell center, including mixed-term contributions. */
+	static double[] translate(double[] c, double x, double y, double z) {
+		if (c[1] == 0 && c[2] == 0 && c[3] == 0 && c[4] == 0 && c[5] == 0 && c[6] == 0 && c[7] == 0) return c;
+		x *= 4; y *= 4; z *= 4;
+		return new double[] {
+				c[0] + x * c[1] + y * c[2] + z * c[3] + x * y * c[4] + x * z * c[5] + y * z * c[6] + x * y * z * c[7],
+				c[1] + y * c[4] + z * c[5] + y * z * c[7],
+				c[2] + x * c[4] + z * c[6] + x * z * c[7],
+				c[3] + x * c[5] + y * c[6] + x * y * c[7],
+				c[4] + z * c[7], c[5] + y * c[7], c[6] + x * c[7], c[7]};
+	}
+
+	/** Backtraces temperature variation in the donor cell's fixed coordinates. */
 	static double[] deform(double[] coefficients, FluidDomain domain, int cell, float dt) {
 		boolean constant = true;
 		for (int a = 1; a < coefficients.length; a++) if (coefficients[a] != 0) constant = false;
 		if (constant || dt == 0) return coefficients;
 		int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY, z = cell / (domain.sizeX * domain.sizeY);
-		var sample = new DivergenceConformingVelocityField.Sample(); double[][] velocities = new double[3][8]; double[] mean = new double[3];
+		var sample = new DivergenceConformingVelocityField.Sample(); double[][] velocities = new double[3][8];
 		float h = domain.config.cellSize();
 		for (int slot = 0; slot < 8; slot++) {
 			DivergenceConformingVelocityField.sample(domain.mac, domain.geometry.cutCells, domain.sizeX, domain.sizeY, domain.sizeZ, h,
 					(x + 0.25F + 0.5F * (slot & 1)) * h, (y + 0.25F + 0.5F * (slot >>> 1 & 1)) * h,
 					(z + 0.25F + 0.5F * (slot >>> 2 & 1)) * h, sample);
 			velocities[0][slot] = sample.x; velocities[1][slot] = sample.y; velocities[2][slot] = sample.z;
-			for (int a = 0; a < 3; a++) mean[a] += velocities[a][slot] / 8;
 		}
 		double[][] positions = new double[3][8], values = new double[1][8]; double[] weights = new double[8];
 		for (int slot = 0; slot < 8; slot++) {
 			double[] moved = new double[3];
 			for (int a = 0; a < 3; a++) {
 				positions[a][slot] = ((slot >>> a & 1) == 0 ? -0.25 : 0.25);
-				moved[a] = positions[a][slot] - dt / h * (velocities[a][slot] - mean[a]);
+				moved[a] = positions[a][slot] - dt / h * velocities[a][slot];
 			}
 			values[0][slot] = evaluate(coefficients, moved[0], moved[1], moved[2]); weights[slot] = 1;
 		}

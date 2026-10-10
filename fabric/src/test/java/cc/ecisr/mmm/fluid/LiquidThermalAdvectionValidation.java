@@ -20,6 +20,7 @@ import java.util.Map;
 /** Continuous read-only heat observations and the zero-conductivity Lagrangian transport limit. */
 final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	public static void main(String[] args) {
+		crossCellTensorTemperatureFrame();
 		subcellAdvection();
 		boundedAdvection();
 		caloricAndSpeciesObservation();
@@ -30,6 +31,65 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		particleDiffusionConverges();
 		conductingLinearWallProfileIsStationary();
 	}
+
+	/** Uniform advection carries one global tensor temperature through unequal-mass source shares. */
+	static void crossCellTensorTemperatureFrame() {
+		if (!CellLiquidVolumeTransport.enabled()) return;
+		for (boolean xyz : new boolean[] {false, true}) for (double densityRatio : new double[] {1, 3}) {
+			var domain = new FluidDomain(8, 8, 8,
+					new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), 8192);
+			for (int z = 1; z <= 5; z++) for (int y = 1; y <= 5; y++) for (int x = 1; x <= 5; x++) domain.setVolume(x, y, z, 1);
+			var caloric = new ThermalMaterialDefinition("test:thermal/frame", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"mmm:water", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 600, 4000)));
+			domain.bindThermal(new ThermalRegistry(List.of(caloric)), new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 300);
+			double minimum = Double.POSITIVE_INFINITY, maximum = Double.NEGATIVE_INFINITY;
+			for (int p = 0; p < domain.particleCount(); p++) {
+				if (domain.particleCellIndex(p) % domain.sizeX == 2) domain.particles.setMass(p, domain.particles.mass(p) * densityRatio);
+				domain.particles.setVelocityX(p, 0.125F); domain.particles.setVelocityY(p, 0.0625F); domain.particles.setVelocityZ(p, 0.09375F);
+				double temperature = tensorTemperature(xyz, domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p));
+				minimum = Math.min(minimum, temperature); maximum = Math.max(maximum, temperature);
+				domain.thermalState.resetMarkerTemperature(p, temperature,
+						domain.thermalMarkerContext(), domain.exactInternalEnergy());
+			}
+			domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+			Arrays.fill(domain.mac.velocityX, 0.125F); Arrays.fill(domain.mac.velocityY, 0.0625F); Arrays.fill(domain.mac.velocityZ, 0.09375F);
+			var flux = new ConservativeLiquidFlux(domain.sizeX, domain.sizeY, domain.sizeZ); flux.geometry(new LiquidFluxGeometry(domain));
+			for (int f = 0; f < flux.velocity.length; f++) flux.velocity[f] = flux.axis[f] == 0 ? 0.125 : flux.axis[f] == 1 ? 0.0625 : 0.09375;
+			float dt = 0.125F;
+			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, dt / domain.config.cellSize(), domain.markerGrid.exactCellVolumeInventory);
+			var plan = new CellCarrierRemapPlan(domain, flux, dt, new BallisticLiquidRemap(domain.cellCount));
+			// Construction runs the common exact-volume, material-mass, momentum and marker-budget audits.
+			SignedDyadic energy = SignedDyadic.ZERO;
+			for (var marker : plan.markers) {
+				energy = energy.add(SignedDyadic.of(marker.energy()));
+				double temperature = domain.thermalState.liquid().caloricInventory(marker.material(), marker.mass(), marker.mixture(), null).temperature(marker.energy());
+				require(temperature >= minimum - 8 * Math.ulp(minimum) && temperature <= maximum + 8 * Math.ulp(maximum),
+						"Tensor temperature remap introduced a new extremum");
+			}
+			require(energy.equals(domain.exactInternalEnergy()), "Tensor temperature remap changed its exact heat inventory");
+			// x=1 isolates retained liquid; x=3 mixes the x=2 donor with receiver liquid.
+			for (int x : new int[] {1, 3}) {
+				int cell = domain.cellIndex(x, 3, 3), count = 0;
+				for (var marker : plan.markers) if (marker.cell() == cell) count++;
+				require(count == 8, "Tensor temperature fixture lost its resolved integration rule");
+				double[][] positions = new double[3][count], values = new double[2][count]; double[] weights = new double[count]; int p = 0;
+				for (var marker : plan.markers) if (marker.cell() == cell) {
+					for (int a = 0; a < 3; a++) positions[a][p] = marker.offset(a);
+					values[0][p] = domain.thermalState.liquid().caloricInventory(marker.material(), marker.mass(), marker.mixture(), null).temperature(marker.energy());
+					values[1][p] = tensorTemperature(xyz, (x + 0.5 + marker.offsetX()) * 0.5 - dt * 0.125,
+							(3.5 + marker.offsetY()) * 0.5 - dt * 0.0625, (3.5 + marker.offsetZ()) * 0.5 - dt * 0.09375);
+					weights[p++] = marker.mass();
+				}
+				var field = CellPolynomialField.fit(positions, weights, values, count);
+				// The energy ledger supplies the mean; analytic translation determines every spatial coefficient.
+				for (int c = 1; c < 8; c++) require(close(field[0][c], field[1][c]),
+						"Thermal remap mixed incompatible reference frames: XYZ=" + xyz + " densityRatio=" + densityRatio + " cellX=" + x
+								+ " coefficient=" + c + " actual=" + field[0][c] + " expected=" + field[1][c]);
+			}
+		}
+	}
+
+	private static double tensorTemperature(boolean xyz, double x, double y, double z) { return 300 + x * z * (xyz ? y : 1); }
 
 	private static void boundedAdvection() {
 		for (boolean segmented : new boolean[] {false, true}) boundedAdvection(segmented);
