@@ -17,6 +17,7 @@ final class SurfaceTensionCurvatureExperiment {
 
 	/** Actual curvature dispatch and one production step on accurately integrated sphere inventories. */
 	static void validateResolvedGeometry() {
+		validatePartialHeightEndpoints();
 		validateQuarterCylinderWalls();
 		FluidSolverConfig cfg = new FluidSolverConfig(1, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F);
 		for (double[] n : new double[][] {{1, 2, 0}, {1, 2, 3}, {1, 1, 1}}) for (double phase : new double[] {.25, .75})
@@ -98,6 +99,63 @@ final class SurfaceTensionCurvatureExperiment {
 	}
 
 	private record SphereError(double curvature, double pressure, double momentum, double angularMomentum) { }
+
+	/** Two partial cells share an entirely wet section; the height retains each cell's actual inventory. */
+	private static void validatePartialHeightEndpoints() {
+		for (boolean reverse : new boolean[] {false, true}) for (boolean wall : new boolean[] {false, true}) {
+			FluidDomain d = partialHeightSlab(reverse, wall, true);
+			int endpoint = wall ? 0 : 4, target = endpoint + 1;
+			if (reverse) { endpoint = 11 - endpoint; target = 11 - target; }
+			int cell = d.cellIndex(endpoint, 5, 5);
+			check(d.projection.pressureVolume[cell] == .25 && d.tension.surfaceTensionColor[cell] == .25,
+					"partial endpoint inventory and colour disagree");
+			check(d.pressurePhaseGeometry.planeNormal(cell, 0) == (reverse ? -1 : 1),
+					"partial endpoint did not reconstruct its actual slab normal");
+			if (!wall) check(d.pressurePhaseGeometry.sharedLiquidFaceArea(
+					reverse ? cell : cell - 1, reverse ? cell + 1 : cell, 0, d.geometry.cutCells) == 1,
+					"partial liquid neighbours lost their complete wet section");
+			check(Math.abs(HeightFunctionCurvature.compute(d, target, 5, 5) + .125) < 1e-14,
+					"partial endpoint volume was replaced by a full-cell height or reflection changed orientation");
+			check(d.tension.columnHeights[4] == endpoint + (reverse ? .75 : .25),
+					"height integral omitted the partial endpoint inventory");
+			d.projection.pressureVolume[cell] += .125;
+			check(!Double.isFinite(HeightFunctionCurvature.compute(d, target, 5, 5)),
+					"stale pressure inventory supplied a partial wet endpoint");
+			d.projection.pressureVolume[cell] -= .125;
+			d.geometry.cutCells.replaceMask(cell, 1);
+			check(!Double.isFinite(HeightFunctionCurvature.compute(d, target, 5, 5)),
+					"cut cell supplied an open height column");
+		}
+		FluidDomain isolated = partialHeightSlab(false, false, false);
+		int endpoint = isolated.cellIndex(4, 5, 5);
+		check(isolated.pressurePhaseGeometry.planeNormal(endpoint, 0) == 1
+				&& isolated.pressurePhaseGeometry.planeOffset(endpoint) == .25,
+				"isolated endpoint must retain a real completely wet low face");
+		check(!Double.isFinite(HeightFunctionCurvature.compute(isolated, 5, 5, 5)),
+				"gas across a wet candidate face formed a second interface inside the height column");
+	}
+
+	private static FluidDomain partialHeightSlab(boolean reverse, boolean wall, boolean joint) {
+		FluidDomain d = new FluidDomain(12, 12, 12,
+				new FluidSolverConfig(1, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F), 4096);
+		List<float[]> points = new ArrayList<>(); float total = 0;
+		for (int z = 0; z < 12; z++) for (int y = 0; y < 12; y++) {
+			float q = .25F + .0625F * Math.min(4, (y - 5) * (y - 5));
+			float x = (wall ? 0 : 4) + q / 2;
+			points.add(new float[] {reverse ? 12 - x : x, y + .5F, z + .5F, q}); total += q;
+			if (!wall && joint) {
+				points.add(new float[] {reverse ? 8.375F : 3.625F, y + .5F, z + .5F, .75F}); total += .75F;
+			}
+		}
+		float[] pv = new float[4 * points.size()];
+		for (int p = 0; p < points.size(); p++) System.arraycopy(points.get(p), 0, pv, 4 * p, 4);
+		d.restoreParticleState(new FlipParticleState(12, 12, 12, 1, points.size(), total,
+				pv, new float[3 * points.size()], new byte[d.cellCount]));
+		var registry = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:height", 1000, "mmm:height", .0728, Math.PI / 2)));
+		for (int p = 0; p < d.particleCount(); p++) d.setMarkerMaterial(p, registry, 0);
+		d.particleToGridStage.rebuildInventory();
+		return d;
+	}
 
 	/** A circular cylinder meeting exterior free-slip walls orthogonally has kappa=1/R at ends and mirrors. */
 	private static void validateQuarterCylinderWalls() {

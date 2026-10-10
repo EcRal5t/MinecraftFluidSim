@@ -1,6 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
-/** Height graph from nine complete, consistently oriented open-cell columns. */
+/** Height graph from nine consistently oriented open-cell columns with an entirely wet integration base. */
 final class HeightFunctionCurvature {
     // A dominant-axis plane crosses this 3x3 tangent stencil within 4.5 cells.
     private static final int COLUMN_REACH = 5;
@@ -51,29 +51,54 @@ final class HeightFunctionCurvature {
     }
 
     private static double column(FluidDomain d, double[] color, int x, int y, int z, int axis, int sign, int target) {
-        int gas = 0, full = 0; boolean gasFound = false, fullFound = false;
+        int gas = 0, base = 0; boolean gasFound = false, baseFound = false;
         for (int distance = 0; distance <= COLUMN_REACH; distance++) {
             if (!gasFound) {
                 double c = sample(d, color, x, y, z, axis, sign * distance, target);
                 if (!Double.isFinite(c)) return Double.NaN;
                 if (c == 0) { gas = sign * distance; gasFound = true; }
             }
-            if (!fullFound) {
+            if (!baseFound) {
                 double c = sample(d, color, x, y, z, axis, -sign * distance, target);
                 if (!Double.isFinite(c)) return Double.NaN;
-                if (c == 1) { full = -sign * distance; fullFound = true; }
+                int endpoint = -sign * distance, side = sign > 0 ? 0 : 1;
+                if (c == 1 || c > 0 && wetFace(d, color, x, y, z, axis, endpoint, side, sign, target)
+                        && wetFace(d, color, x, y, z, axis, endpoint - sign, 1 - side, 0, target)) {
+                    base = endpoint; baseFound = true;
+                }
             }
-            if (gasFound && fullFound) break;
+            if (gasFound && baseFound) break;
         }
-        if (!gasFound || !fullFound || sign * (gas - full) <= 0) return Double.NaN;
+        if (!gasFound || !baseFound || sign * (gas - base) <= 0) return Double.NaN;
+        boolean partial = sample(d, color, x, y, z, axis, base, target) < 1;
         double sum = 0, previous = 1;
-        for (int offset = full + sign; offset != gas; offset += sign) {
+        for (int offset = base + (partial ? 0 : sign); offset != gas; offset += sign) {
             double c = sample(d, color, x, y, z, axis, offset, target);
             if (!Double.isFinite(c) || c > previous) return Double.NaN;
             sum += c; previous = c;
         }
         int coordinate = axis == 0 ? x : axis == 1 ? y : z;
-        return coordinate + full + (sign > 0 ? 1 : 0) + sign * sum;
+        return coordinate + base + (partial ? (sign > 0 ? 0 : 1) : (sign > 0 ? 1 : 0)) + sign * sum;
+    }
+
+    /** A common entirely wet section supplies a liquid neighbourhood on both sides.
+     * Partial end cells contribute their actual volume to the height integral. */
+    private static boolean wetFace(FluidDomain d, double[] color, int x, int y, int z,
+                                   int axis, int offset, int side, int orientation, int target) {
+        double c = sample(d, color, x, y, z, axis, offset, target);
+        if (!(c > 0)) return false;
+        if (c == 1) return true;
+        x += axis == 0 ? offset : 0; y += axis == 1 ? offset : 0; z += axis == 2 ? offset : 0;
+        int coordinate = axis == 0 ? x : axis == 1 ? y : z, size = axis == 0 ? d.sizeX : axis == 1 ? d.sizeY : d.sizeZ;
+        if (Math.floorMod(coordinate, 2 * size) >= size) { side = 1 - side; orientation = -orientation; }
+        int cell = d.cellIndex(reflect(x, d.sizeX), reflect(y, d.sizeY), reflect(z, d.sizeZ));
+        if (d.projection.pressureVolume[cell] != c) return false;
+        var plane = d.pressurePhaseGeometry;
+        double normal = plane.planeNormal(cell, axis);
+        if (orientation != 0 && !(normal * orientation > 0)) return false;
+        double maximum = normal * side + Math.max(plane.planeNormal(cell, (axis + 1) % 3), 0)
+                + Math.max(plane.planeNormal(cell, (axis + 2) % 3), 0);
+        return maximum <= plane.planeOffset(cell);
     }
 
     private static double sample(FluidDomain d, double[] color, int x, int y, int z, int axis, int offset, int target) {

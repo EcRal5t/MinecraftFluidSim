@@ -10,6 +10,7 @@ public static void main(String[] args) {
 	validateCurvatureGeometry();
 	SurfaceTensionCurvatureExperiment.validateResolvedGeometry();
 	if (args.length == 1 && args[0].equals("--curvature")) return;
+	CapillaryNeckValidation.validate();
 	validateSigmaZeroDegeneration();
 	validateActiveSingleCellPressureJump();
 	validateStaticDropletPressureJump();
