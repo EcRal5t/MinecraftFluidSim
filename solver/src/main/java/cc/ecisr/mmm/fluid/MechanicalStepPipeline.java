@@ -135,6 +135,7 @@ final class MechanicalStepPipeline {
 		int pressureIterations = access.lastPressureIterations();
 		boolean phaseGeometryPending = substep == 0 && access.hasPendingPhaseVolumeWork();
 		pressureStage.projectVelocities(dt);
+		if (CellLiquidVolumeTransport.enabled()) gridToParticleStage.prepareAdvectionCells();
 		validateProjectedCourant(dt);
 		granularMechanicalStage.previewCollision(dt);
 		granularMechanicalStage.validateVelocities();
@@ -155,6 +156,7 @@ final class MechanicalStepPipeline {
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		gridToParticleStage.extrapolateAndTransfer();
+		// The extension has already classified this unchanged geometry; recheck its new velocities.
 		validateProjectedCourant(dt);
 		double particleKineticEnergy = captureAudit ? access.particleKineticEnergyJoules() : 0.0;
 		if (captureAudit) audit.gridToParticleTransferJoules +=

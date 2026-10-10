@@ -241,7 +241,6 @@ final class MechanicalStageAssembly {
 						* dt / (domain.config.cellSize() * domain.config.maxCourantNumber());
 				}
 				if (domain.cellLiquidVolumeTransport == null) domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
-				domain.gridToParticleStage.prepareAdvectionCells();
 				double courant = domain.cellLiquidVolumeTransport.courantRate(0) * dt;
 				for (int p = 0; p < domain.particles.count(); p++) {
 					int c = domain.particleCellIndex(p);
