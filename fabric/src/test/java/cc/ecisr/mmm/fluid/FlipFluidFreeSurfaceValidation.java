@@ -5,6 +5,13 @@ public final class FlipFluidFreeSurfaceValidation {
 	private FlipFluidFreeSurfaceValidation() { }
 
 	public static void main(String[] args) {
+		freeSurfaceTransferSeparatesIndependentSupport();
+		transferScratchTracksPressureSpaceChanges();
+		finiteGasPressureConnectsTransferSupport();
+		if (java.util.Arrays.asList(args).contains("--transfer")) {
+			System.out.println("Free-surface transfer support validation passed");
+			return;
+		}
 		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		planeVolumeInversionIsAccurate();
 		LiquidVolumeTransportValidation.main(new String[0]);
@@ -29,6 +36,131 @@ public final class FlipFluidFreeSurfaceValidation {
 		}
 		waterDescendsAStairSlope();
 		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; 5,000-step soak skipped)" : ""));
+	}
+
+	private static void freeSurfaceTransferSeparatesIndependentSupport() {
+		for (boolean wall : new boolean[] {false, true}) {
+			double[] alone = disconnectedTransfer(false, wall ? 6 : 10, wall, false);
+			double[] accompanied = disconnectedTransfer(true, wall ? 6 : 10, wall, false);
+			check(java.util.Arrays.equals(alone, accompanied),
+					"A disconnected carrier changed another component's energy-admissible velocity");
+		}
+		// The intervening extrapolated output has no weight and is sampled by neither carrier.
+		check(java.util.Arrays.equals(disconnectedTransfer(false, 7, false, false), disconnectedTransfer(true, 7, false, false)),
+				"An unused extrapolated output coupled its independent sources");
+		// Adjacent carriers share interpolation/extrapolation dependencies and retain the joint budget.
+		disconnectedTransfer(true, 5, false, true);
+	}
+
+	private static void transferScratchTracksPressureSpaceChanges() {
+		var domain = new FluidDomain(4, 3, 3,
+				new FluidSolverConfig(1, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 512);
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++) domain.setVolume(x, y, z, 1);
+		for (int pass = 0; pass < 4; pass++) {
+			domain.setVolume(1, 1, 1, pass % 2 == 0 ? 1 : 0.25F);
+			for (int p = 0; p < domain.particleCount(); p++) {
+				domain.particles.setVelocityX(p, ((p * 7 + pass) % 11 - 5) * 0.01F);
+				domain.particles.setVelocityY(p, ((p * 3 + pass) % 7 - 3) * 0.02F);
+			}
+			var fresh = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			transferCurrentGrid(domain); transferCurrentGrid(fresh);
+			try {
+				var field = GridToParticleStage.class.getDeclaredField("completePressureSpace"); field.setAccessible(true);
+				check(field.getBoolean(domain.gridToParticleStage) == (pass % 2 == 0), "Scratch fixture did not change pressure space");
+			} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+			for (int p = 0; p < domain.particleCount(); p++) check(domain.particles.velocityX(p) == fresh.particles.velocityX(p)
+					&& domain.particles.velocityY(p) == fresh.particles.velocityY(p) && domain.particles.velocityZ(p) == fresh.particles.velocityZ(p),
+					"Reused transfer scratch differed from fresh state after a pressure-space change");
+		}
+	}
+
+	private static void finiteGasPressureConnectsTransferSupport() {
+		for (boolean sealed : new boolean[] {false, true}) {
+			var domain = new FluidDomain(14, 5, 5,
+					new FluidSolverConfig(1, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 512);
+			domain.setVolume(4, 2, 2, 1); domain.setVolume(10, 2, 2, 1);
+			if (sealed) { domain.sealDomainBoundary(); domain.bootstrapGasState(null); }
+			domain.ensureGrid(); domain.gridToParticleStage.capturePreProjectionEnergy();
+			domain.pressureStage.solve(domain.config.timeStep()); domain.pressureStage.projectVelocities(domain.config.timeStep());
+			domain.gridToParticleStage.extrapolateAndTransfer();
+			check((domain.projection.gasUnknownCount > 0) == sealed, "Finite-gas support fixture did not assemble its gas row");
+			try {
+				var field = GridToParticleStage.class.getDeclaredField("componentBudget"); field.setAccessible(true);
+				check(((MarkerTransferBudget) field.get(domain.gridToParticleStage)).singleComponent() == sealed,
+						"Transfer support did not follow the actual finite-gas pressure coupling");
+			} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+		}
+	}
+
+	private static void transferCurrentGrid(FluidDomain domain) {
+		domain.rebuildGridFromParticles();
+		float[][] fields = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
+		float[][] previous = {domain.mac.p2gVelocityX, domain.mac.p2gVelocityY, domain.mac.p2gVelocityZ};
+		for (int a = 0; a < 3; a++) System.arraycopy(fields[a], 0, previous[a], 0, fields[a].length);
+		domain.gridToParticleStage.capturePreProjectionEnergy(); domain.gridToParticleStage.extrapolateAndTransfer();
+	}
+
+	private static double[] disconnectedTransfer(boolean remote, int remoteX, boolean wall, boolean checkJointBudget) {
+		var domain = new FluidDomain(14, 5, 5,
+				new FluidSolverConfig(1, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 512);
+		if (wall) for (int y = 0; y < 5; y++) for (int z = 0; z < 5; z++) domain.setSolid(5, y, z, true);
+		domain.setVolume(4, 2, 2, 0.25F);
+		if (remote) domain.setVolume(remoteX, 2, 2, 0.25F);
+		int[] target = new int[2]; int count = 0;
+		for (int p = 0; p < domain.particles.count(); p++) {
+			if (domain.particleCellIndex(p) == domain.cellIndex(4, 2, 2)) {
+				target[count] = p;
+				domain.particles.setPositionX(p, 4.25F + 0.5F * count);
+				domain.particles.setVelocityX(p, count++ == 0 ? 1 : -1);
+			} else domain.particles.setVelocityY(p, p % 2 == 0 ? 1 : -1);
+			domain.particles.setPositionY(p, 2.5F); domain.particles.setPositionZ(p, 2.5F);
+		}
+		check(count == 2, "Transfer isolation fixture needs two target points");
+		domain.rebuildGridFromParticles();
+		float[][] fields = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
+		float[][] previous = {domain.mac.p2gVelocityX, domain.mac.p2gVelocityY, domain.mac.p2gVelocityZ};
+		for (int a = 0; a < 3; a++) System.arraycopy(fields[a], 0, previous[a], 0, fields[a].length);
+		domain.gridToParticleStage.capturePreProjectionEnergy();
+		float[][] expected = checkJointBudget ? originalJointTransfer(domain) : null;
+		domain.gridToParticleStage.extrapolateAndTransfer();
+		if (expected != null) for (int p = 0; p < domain.particles.count(); p++) {
+			check(domain.particles.velocityX(p) == expected[0][p] && domain.particles.velocityY(p) == expected[1][p]
+					&& domain.particles.velocityZ(p) == expected[2][p], "One support component changed the established transfer budget");
+		}
+		return new double[] {domain.particles.velocityX(target[0]), domain.particles.velocityX(target[1])};
+	}
+
+	/** Independent evaluation of the established one-component energy polynomial. */
+	private static float[][] originalJointTransfer(FluidDomain domain) {
+		domain.gridToParticleStage.extrapolateVelocityIntoAir();
+		float[][] values = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
+		float[][] old = {domain.mac.p2gVelocityX, domain.mac.p2gVelocityY, domain.mac.p2gVelocityZ};
+		boolean[][] valid = {domain.mac.velocityValidX, domain.mac.velocityValidY, domain.mac.velocityValidZ};
+		float[][] weights = {domain.mac.p2gWeightX, domain.mac.p2gWeightY, domain.mac.p2gWeightZ};
+		int n = domain.particles.count(); float[][] pic = new float[3][n], delta = new float[3][n];
+		double quadratic = 0, linear = 0, constant = 0, budget = 0;
+		for (int a = 0; a < 3; a++) {
+			double faceEnergy = 0;
+			for (int f = 0; f < values[a].length; f++) faceEnergy += 0.5 * domain.config.density() * weights[a][f] * values[a][f] * (double) values[a][f];
+			budget += faceEnergy;
+		}
+		float[] sample = new float[2];
+		for (int p = 0; p < n; p++) {
+			float[] incoming = {domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
+			for (int a = 0; a < 3; a++) {
+				FluidDomainMechanicalFields.trilinearValidPair(values[a], old[a], valid[a], 14 + (a == 0 ? 1 : 0),
+						5 + (a == 1 ? 1 : 0), 5 + (a == 2 ? 1 : 0), domain.particles.positionX(p) - (a == 0 ? 0 : 0.5F),
+						domain.particles.positionY(p) - (a == 1 ? 0 : 0.5F), domain.particles.positionZ(p) - (a == 2 ? 0 : 0.5F), sample);
+				pic[a][p] = sample[0]; delta[a][p] = incoming[a] - sample[1];
+			}
+			double m = domain.particles.mass(p);
+			quadratic += 0.5 * m * (delta[0][p] * (double) delta[0][p] + delta[1][p] * (double) delta[1][p] + delta[2][p] * (double) delta[2][p]);
+			linear += m * (pic[0][p] * (double) delta[0][p] + pic[1][p] * (double) delta[1][p] + pic[2][p] * (double) delta[2][p]);
+			constant += 0.5 * m * (pic[0][p] * (double) pic[0][p] + pic[1][p] * (double) pic[1][p] + pic[2][p] * (double) pic[2][p]);
+		}
+		double alpha = FlipTransferScheme.maximumEnergyStableTransfer(quadratic, linear, constant, Math.max(constant, budget));
+		for (int p = 0; p < n; p++) for (int a = 0; a < 3; a++) pic[a][p] = (float) (pic[a][p] + alpha * delta[a][p]);
+		return pic;
 	}
 
 	private static void bodyOverlapResolvesContinuousSubmergence() {

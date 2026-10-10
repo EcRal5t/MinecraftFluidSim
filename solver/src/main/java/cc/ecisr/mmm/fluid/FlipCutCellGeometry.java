@@ -99,6 +99,15 @@ final class FlipCutCellGeometry {
 		return openFaceZ[zFaceIndex(x, y, z)];
 	}
 
+	/** Current face apertures for a read-only numerical stage; geometry stays fixed during that stage. */
+	float[] openFaceField(int axis) {
+		ensureFaces();
+		return switch (axis) {
+			case 0 -> openFaceX; case 1 -> openFaceY; case 2 -> openFaceZ;
+			default -> throw new IllegalArgumentException("Face axis must be 0, 1 or 2");
+		};
+	}
+
 	/** Dimensionless solid-wall area owned by an open cell, grouped by wall-normal axis. */
 	float solidWallArea(int cell, int axis) {
 		ensureFaces();

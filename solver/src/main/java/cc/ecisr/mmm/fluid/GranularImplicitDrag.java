@@ -323,6 +323,20 @@ final class GranularImplicitDrag {
 	}
 
 	boolean active() { return contacts > 0; }
+	void connectTransferSupport(MarkerTransferBudget budget) {
+		for (int face = 0; face < faceCount; face++) if (mass[face] > 0 && divergence[face] != 0) {
+			if (firstRow[face] != Integer.MAX_VALUE) budget.connect(face, budget.pressureRow(firstRow[face]));
+			if (secondRow[face] != Integer.MAX_VALUE) budget.connect(face, budget.pressureRow(secondRow[face]));
+		}
+		for (int contact = 0; contact < contacts; contact++) if (strength[contact] > 0) {
+			int coordinate = particle[contact] - faceCount, parcel = coordinate / 3, axis = coordinate % 3;
+			int vertex = budget.parcel(parcel, axis);
+			// The Reynolds resistance depends on the norm of the parcel's three-axis slip.
+			for (int a = 0; a < 3; a++) budget.connect(vertex, budget.parcel(parcel, a));
+			for (int slot = contact * 8; slot < contact * 8 + counts[contact]; slot++)
+				if (weights[slot] != 0) budget.connect(vertex, indices[slot]);
+		}
+	}
 	double parcelInertiaRatio(int parcel) {
 		if (contacts == 0 || !active[parcel]) return 1;
 		double parcelMass = mass[faceCount + 3 * parcel];

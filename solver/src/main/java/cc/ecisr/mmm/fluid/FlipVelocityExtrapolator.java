@@ -22,10 +22,17 @@ final class FlipVelocityExtrapolator {
 			boolean[] validX, boolean[] validY, boolean[] validZ,
 			float[] scratchX, float[] scratchY, float[] scratchZ
 	) {
+		rebuildAndExtrapolate(solid, markerCount, pressureFluid, completePressureSpace,
+				velocityX, velocityY, velocityZ, validX, validY, validZ, scratchX, scratchY, scratchZ, null);
+	}
+
+	void rebuildAndExtrapolate(boolean[] solid, int[] markerCount, boolean[] pressureFluid, boolean completePressureSpace,
+			float[] velocityX, float[] velocityY, float[] velocityZ, boolean[] validX, boolean[] validY, boolean[] validZ,
+			float[] scratchX, float[] scratchY, float[] scratchZ, MarkerTransferBudget dependencies) {
 		seedPressureFaces(solid, markerCount, pressureFluid, validX, validY, validZ);
-		extrapolateFaceField(velocityX, validX, scratchX, 0, sizeX + 1, sizeY, sizeZ);
-		extrapolateFaceField(velocityY, validY, scratchY, 1, sizeX, sizeY + 1, sizeZ);
-		extrapolateFaceField(velocityZ, validZ, scratchZ, 2, sizeX, sizeY, sizeZ + 1);
+		extrapolateFaceField(velocityX, validX, scratchX, 0, sizeX + 1, sizeY, sizeZ, dependencies);
+		extrapolateFaceField(velocityY, validY, scratchY, 1, sizeX, sizeY + 1, sizeZ, dependencies);
+		extrapolateFaceField(velocityZ, validZ, scratchZ, 2, sizeX, sizeY, sizeZ + 1, dependencies);
 		if (!completePressureSpace) return;
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x <= sizeX; x++)
 			if (cutCells.xFaceOpen(x, y, z) == 0) validX[xFaceIndex(x, y, z)] = true;
@@ -63,7 +70,7 @@ final class FlipVelocityExtrapolator {
 
 	private void extrapolateFaceField(
 			float[] field, boolean[] valid, float[] addedThisLayer,
-			int axis, int nx, int ny, int nz
+			int axis, int nx, int ny, int nz, MarkerTransferBudget dependencies
 	) {
 		int zStride = nx * ny;
 		for (int layer = 0; layer < FlipTransferScheme.VELOCITY_EXTRAPOLATION_LAYERS; layer++) {
@@ -81,6 +88,14 @@ final class FlipVelocityExtrapolator {
 				if (z > 0 && valid[index - zStride]) { sum += field[index - zStride]; count++; }
 				if (z + 1 < nz && valid[index + zStride]) { sum += field[index + zStride]; count++; }
 				if (count == 0) continue;
+				if (dependencies != null) {
+					if (x > 0 && valid[index - 1]) dependencies.recordExtrapolationInput(axis, index, index - 1);
+					if (x + 1 < nx && valid[index + 1]) dependencies.recordExtrapolationInput(axis, index, index + 1);
+					if (y > 0 && valid[index - nx]) dependencies.recordExtrapolationInput(axis, index, index - nx);
+					if (y + 1 < ny && valid[index + nx]) dependencies.recordExtrapolationInput(axis, index, index + nx);
+					if (z > 0 && valid[index - zStride]) dependencies.recordExtrapolationInput(axis, index, index - zStride);
+					if (z + 1 < nz && valid[index + zStride]) dependencies.recordExtrapolationInput(axis, index, index + zStride);
+				}
 				field[index] = sum / count;
 				addedThisLayer[index] = 1.0F;
 				added++;

@@ -20,6 +20,8 @@ final class GridToParticleStage {
 		void samplePair(int axis, float[] field, float[] previous, float x, float y, float z, float[] result);
 		boolean variableDensityActive();
 		float referenceDensity();
+		int granularParcelCount();
+		void connectTransferSupport(MarkerTransferBudget budget);
 	}
 
 	private final Workspace state;
@@ -31,10 +33,12 @@ final class GridToParticleStage {
 	private boolean completePressureSpace;
 	private final ResolvedMarkerVelocity resolvedVelocity;
 	private final DivergenceFreeVelocityExtension velocityExtension;
+	private final MarkerTransferBudget componentBudget;
 
 	GridToParticleStage(Workspace state, Access access) {
 		this.state = state;
 		this.access = access;
+		componentBudget = new MarkerTransferBudget(state.sizeX, state.sizeY, state.sizeZ, state.cellSize, state.mac, state.geometry.cutCells);
 		velocityExtension = new DivergenceFreeVelocityExtension(state.sizeX, state.sizeY, state.sizeZ, state.geometry.cutCells);
 		resolvedVelocity = new ResolvedMarkerVelocity(state.sizeX, state.sizeY, state.sizeZ,
 				state.cellSize, state.geometry.cutCells);
@@ -42,8 +46,11 @@ final class GridToParticleStage {
 
 	/** Extrapolates grid velocities into air and transfers their change to marker velocities. */
 	void extrapolateAndTransfer() {
-		extrapolateVelocityIntoAir();
-		velocityExtension.extend(state.mac, state.pressureFluid, state.geometry.solid, state.markerGrid.markerCount);
+		MarkerTransferBudget dependencies = completePressureSpace ? null : componentBudget;
+		if (dependencies != null && !dependencies.begin(state.particles, access.granularParcelCount())) dependencies = null;
+		if (dependencies != null) access.connectTransferSupport(dependencies);
+		extrapolateVelocityIntoAir(dependencies);
+		velocityExtension.extend(state.mac, state.pressureFluid, state.geometry.solid, state.markerGrid.markerCount, dependencies);
 		gridToParticles();
 	}
 
@@ -54,6 +61,10 @@ final class GridToParticleStage {
 	}
 
 	void extrapolateVelocityIntoAir() {
+		extrapolateVelocityIntoAir(null);
+	}
+
+	private void extrapolateVelocityIntoAir(MarkerTransferBudget dependencies) {
 		MacVelocityGrid mac = state.mac;
 		completePressureSpace = true;
 		for (int cell = 0; cell < state.pressureFluid.length; cell++)
@@ -63,13 +74,14 @@ final class GridToParticleStage {
 				state.geometry.solid, state.markerGrid.markerCount, state.pressureFluid, completePressureSpace,
 				mac.velocityX, mac.velocityY, mac.velocityZ,
 				mac.velocityValidX, mac.velocityValidY, mac.velocityValidZ,
-				mac.velocityWeightX, mac.velocityWeightY, mac.velocityWeightZ
+				mac.velocityWeightX, mac.velocityWeightY, mac.velocityWeightZ, dependencies
 		);
 	}
 
 	/** Captures predicted energy so pressure redistribution supplies no additional transfer budget. */
 	void capturePreProjectionEnergy() {
 		preProjectionEnergy = transferGridKineticEnergy();
+		if (!completePressureSpace) componentBudget.capture(access.variableDensityActive() ? 1.0 : access.referenceDensity());
 	}
 
 	private void gridToParticles() {
@@ -123,10 +135,13 @@ final class GridToParticleStage {
 		preProjectionEnergy = Double.NaN;
 		double transfer = FlipTransferScheme.maximumEnergyStableTransfer(
 				quadratic, linear, picEnergy, Math.max(picEnergy, transferBudget));
+		if (!completePressureSpace && !componentBudget.singleComponent()) componentBudget.prepare(particles, picX, picY, picZ,
+				flipDeltaX, flipDeltaY, flipDeltaZ, access.variableDensityActive() ? 1.0 : access.referenceDensity());
 		for (int i = 0; i < particles.count(); i++) {
-			particles.setVelocityX(i, (float) (picX[i] + transfer * flipDeltaX[i]));
-			particles.setVelocityY(i, (float) (picY[i] + transfer * flipDeltaY[i]));
-			particles.setVelocityZ(i, (float) (picZ[i] + transfer * flipDeltaZ[i]));
+			double alpha = completePressureSpace || componentBudget.singleComponent() ? transfer : componentBudget.transfer(i);
+			particles.setVelocityX(i, (float) (picX[i] + alpha * flipDeltaX[i]));
+			particles.setVelocityY(i, (float) (picY[i] + alpha * flipDeltaY[i]));
+			particles.setVelocityZ(i, (float) (picZ[i] + alpha * flipDeltaZ[i]));
 		}
 	}
 

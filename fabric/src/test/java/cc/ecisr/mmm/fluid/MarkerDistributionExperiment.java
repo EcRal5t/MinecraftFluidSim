@@ -16,9 +16,102 @@ public final class MarkerDistributionExperiment {
 				case "reseed" -> reseedMoment();
 				case "analytic" -> { analyticDeformation(12, 2); analyticDeformation(24, 2); analyticDeformation(12, 4); }
 				case "free-analytic" -> freeSurfaceConvergence();
+				case "handoff" -> handoffTransport();
 				default -> throw new IllegalArgumentException("Unknown marker experiment: " + scenario);
 			}
 		}
+	}
+
+	/** Prescribed transport/reconstruction only; pressure and physical forces are excluded. */
+	private static void handoffTransport() {
+		float duration = 2.5F;
+		float[] speed = {0.2F, 0.1F, 0.15F};
+		for (String shape : new String[] {"drop", "thin", "pool"}) for (float dt : new float[] {0.05F, 0.025F}) {
+			var domain = new FluidDomain(12, 12, 12, config(0.5F, 0, dt), 12 * 12 * 12 * 8);
+			if (shape.equals("drop")) domain.setVolume(4, 4, 4, 0.01F);
+			else for (int z = 3; z <= 5; z++) for (int x = 3; x <= 5; x++) {
+				if (shape.equals("thin")) domain.setVolume(x, 4, z, 0.25F);
+				else {
+					for (int y = 3; y <= 4; y++) domain.setVolume(x, y, z, 1);
+					domain.setVolume(x, 5, z, 0.25F);
+				}
+			}
+			// Offset the standard rule within its cells so reconstruction can expose positional loss.
+			for (int p = 0; p < domain.particleCount(); p++) {
+				domain.particles.setPositionX(p, domain.particles.positionX(p) + 0.125F * domain.config.cellSize());
+				domain.particles.setPositionY(p, domain.particles.positionY(p) + 0.125F * domain.config.cellSize());
+				domain.particles.setPositionZ(p, domain.particles.positionZ(p) + 0.125F * domain.config.cellSize());
+				domain.particles.setVelocityX(p, speed[0]); domain.particles.setVelocityY(p, speed[1]); domain.particles.setVelocityZ(p, speed[2]);
+			}
+			domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+			var initial = handoffMoments(domain); int changes = 0, steps = Math.round(duration / dt);
+			double maximumVolumeCenterError = 0, maximumMassCenterError = 0, maximumVolumeCovarianceChange = 0, maximumMassCovarianceChange = 0;
+			double maximumImpulseError = 0, maximumFirstMomentResidual = 0;
+			System.out.printf(java.util.Locale.ROOT,"handoff initial shape=%s dt=%g exactVCellUnits=%s massKg=%g fv/ballistic=%d/%d%n",
+					shape, dt, initial.exactVolume, initial.mass, initial.finiteVolume, initial.ballistic);
+			long elapsed = 0;
+			for (int step = 1; step <= steps; step++) {
+				var before = handoffMoments(domain);
+				boolean[] previous = domain.gridToParticleStage.advectionCells().clone();
+				int[] occupied = domain.markerGrid.markerCount.clone();
+				Arrays.fill(domain.mac.velocityX, speed[0]); Arrays.fill(domain.mac.velocityY, speed[1]); Arrays.fill(domain.mac.velocityZ, speed[2]);
+				long begin = System.nanoTime();
+				domain.particleAdvectionStage.advect(dt);
+				domain.ensureGrid(); domain.gridToParticleStage.prepareAdvectionCells();
+				elapsed += System.nanoTime() - begin;
+				var after = handoffMoments(domain); double time = step * (double) dt;
+				for (int c = 0; c < domain.cellCount; c++) if ((occupied[c] > 0 || domain.markerGrid.markerCount[c] > 0)
+						&& previous[c] != domain.gridToParticleStage.advectionCells()[c]) changes++;
+				double volumeCenterError = 0, massCenterError = 0, impulseError = 0, firstMomentResidual = 0;
+				for (int a = 0; a < 3; a++) {
+					volumeCenterError = Math.max(volumeCenterError, Math.abs(after.volumeCenter[a] - initial.volumeCenter[a] - speed[a] * time));
+					massCenterError = Math.max(massCenterError, Math.abs(after.massCenter[a] - initial.massCenter[a] - speed[a] * time));
+					impulseError = Math.max(impulseError, Math.abs(after.momentum[a] - initial.momentum[a]));
+					firstMomentResidual = Math.max(firstMomentResidual, Math.abs(after.mass * after.massCenter[a]
+							- before.mass * before.massCenter[a] - dt * before.momentum[a]));
+				}
+				maximumVolumeCenterError = Math.max(maximumVolumeCenterError, volumeCenterError); maximumMassCenterError = Math.max(maximumMassCenterError, massCenterError);
+				maximumImpulseError = Math.max(maximumImpulseError, impulseError); maximumFirstMomentResidual = Math.max(maximumFirstMomentResidual, firstMomentResidual);
+				for (int k = 0; k < 6; k++) {
+					maximumVolumeCovarianceChange = Math.max(maximumVolumeCovarianceChange, Math.abs(after.volumeCovariance[k] - initial.volumeCovariance[k]));
+					maximumMassCovarianceChange = Math.max(maximumMassCovarianceChange, Math.abs(after.massCovariance[k] - initial.massCovariance[k]));
+				}
+				if (step <= 3 || step == steps / 2 || step == steps) System.out.printf(java.util.Locale.ROOT,
+						"handoff shape=%s dt=%g time=%g exactVUnchanged=%s massDeltaKg=%g centerV/MErrorM=%g/%g massM1StepResidualKgM=%g impulseErrorKgMS=%g covarianceV/MChangeM2=%g/%g fv/ballistic=%d/%d changedOccupiedClassification=%d%n",
+						shape, dt, time, after.exactVolume.equals(initial.exactVolume), after.mass - initial.mass, volumeCenterError, massCenterError,
+						firstMomentResidual, impulseError, maximumVolumeCovarianceChange, maximumMassCovarianceChange, after.finiteVolume, after.ballistic, changes);
+			}
+			System.out.printf(java.util.Locale.ROOT,"handoff complete shape=%s dt=%g duration=%g steps=%d maxCenterV/MErrorM=%g/%g maxCovarianceV/MChangeM2=%g/%g maxM1StepResidualKgM=%g maxImpulseErrorKgMS=%g meanTransportAndRebuildMs=%g%n",
+					shape, dt, duration, steps, maximumVolumeCenterError, maximumMassCenterError, maximumVolumeCovarianceChange, maximumMassCovarianceChange,
+					maximumFirstMomentResidual, maximumImpulseError, elapsed / 1e6 / steps);
+		}
+	}
+
+	private record HandoffMoments(cc.ecisr.mmm.units.SignedDyadic exactVolume, double mass, double[] volumeCenter,
+			double[] massCenter, double[] volumeCovariance, double[] massCovariance, double[] momentum, int finiteVolume, int ballistic) { }
+
+	private static HandoffMoments handoffMoments(FluidDomain domain) {
+		var exact = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		double volume = 0, mass = 0; int finiteVolume = 0, ballistic = 0;
+		double[] vc = new double[3], mc = new double[3], momentum = new double[3], vCov = new double[6], mCov = new double[6];
+		for (int p = 0; p < domain.particleCount(); p++) {
+			double v = domain.particles.volume(p), m = domain.unitScale.kilograms(domain.particles.mass(p)); volume += v; mass += m;
+			exact = exact.add(cc.ecisr.mmm.units.SignedDyadic.of(domain.particles.volume(p)));
+			double[] x = {domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
+			double[] u = {domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
+			for (int a = 0; a < 3; a++) { vc[a] += v * x[a]; mc[a] += m * x[a]; momentum[a] += m * u[a]; }
+			if (domain.gridToParticleStage.advectionCells()[domain.particleCellIndex(p)]) finiteVolume++; else ballistic++;
+		}
+		for (int a = 0; a < 3; a++) { vc[a] /= volume; mc[a] /= mass; }
+		for (int p = 0; p < domain.particleCount(); p++) {
+			double v = domain.particles.volume(p), m = domain.unitScale.kilograms(domain.particles.mass(p));
+			double[] x = {domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
+			for (int a = 0, k = 0; a < 3; a++) for (int b = a; b < 3; b++, k++) {
+				vCov[k] += v * (x[a] - vc[a]) * (x[b] - vc[b]) / volume;
+				mCov[k] += m * (x[a] - mc[a]) * (x[b] - mc[b]) / mass;
+			}
+		}
+		return new HandoffMoments(exact, mass, vc, mc, vCov, mCov, momentum, finiteVolume, ballistic);
 	}
 
 	private static void wallNormalProfile() {

@@ -30,7 +30,7 @@ public final class ProductionStepBenchmark {
 				initial, initial.maximumParticleCount());
 		var backend = new CpuFluidSolverBackend();
 		int warmup = 20, samples = 20;
-		double[][] times = new double[3][samples];
+		double[][] times = new double[4][samples];
 		var threadBean = ManagementFactory.getThreadMXBean();
 		var allocations = threadBean instanceof com.sun.management.ThreadMXBean extended
 				&& extended.isThreadAllocatedMemorySupported() ? extended : null;
@@ -54,6 +54,7 @@ public final class ProductionStepBenchmark {
 				times[0][index] = (captured - start) / 1e6;
 				times[1][index] = (evaluated - captured) / 1e6;
 				times[2][index] = (adopted - evaluated) / 1e6;
+				times[3][index] = (adopted - start) / 1e6;
 				if (allocations != null) allocated += allocations.getThreadAllocatedBytes(
 						Thread.currentThread().threadId()) - bytes;
 			}
@@ -62,12 +63,12 @@ public final class ProductionStepBenchmark {
 				throw new AssertionError("Benchmark step did not close inventory audit");
 			}
 		}
-		String[] stages = {"capture", "evaluate", "adopt"};
+		String[] stages = {"capture", "evaluate", "adopt", "complete"};
 		for (int stage = 0; stage < times.length; stage++) {
 			Arrays.sort(times[stage]);
-			System.out.printf("%s %s mean=%.3f p50=%.3f p95=%.3f ms%n", name, stages[stage],
+			System.out.printf("%s %s mean=%.3f p50=%.3f p95=%.3f max=%.3f ms%n", name, stages[stage],
 					Arrays.stream(times[stage]).average().orElseThrow(), times[stage][samples / 2],
-					times[stage][samples - 2]);
+					times[stage][samples - 2], times[stage][samples - 1]);
 		}
 		System.out.printf("%s callerAllocated=%s MiB/step markers=%d%n", name,
 				allocations == null ? "unavailable" : String.format(java.util.Locale.ROOT, "%.2f",

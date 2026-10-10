@@ -121,7 +121,7 @@
 
 ## 推进次序
 
-C01（1a–1c）在声明的小振幅线性对流有效域内已完成，现行契约见[材料状态](../architecture/material-state.md)、[流体求解器](../architecture/fluid-solver.md)和[热浮力](../architecture/thermal-state.md#热浮力)。默认单元有限体积输运已通过现有长期场景，完整步成本受 CPU 生产预算约束。自由面保留共享面有限体积与独立粒子两条输运路径。当前先加固分类、速度和库存交接，并量化亚格液滴、薄层及跨格运动的解析误差，再推进阶段 3。探索成果与离线对照见[归档索引](../archive/free-surface-unification-research.md)。
+C01（1a–1c）在声明的小振幅线性对流有效域内已完成，现行契约见[材料状态](../architecture/material-state.md)、[流体求解器](../architecture/fluid-solver.md)和[热浮力](../architecture/thermal-state.md#热浮力)。自由面保留共享面有限体积与独立粒子两条输运路径，继续使用现有精确库存和容量审计。完整步成本与长场景空间误差分别验收。当前先加固分类、速度和库存交接，并量化亚格液滴、薄层及跨格运动的解析误差，再推进阶段 3。探索成果与离线对照见[归档索引](../archive/free-surface-unification-research.md)。
 
 | 顺序 | 产品阶段 | 前置依赖 | 完成时必须证明 |
 |---|---|---|---|

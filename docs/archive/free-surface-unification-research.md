@@ -15,6 +15,7 @@
 | 最终结论 | 主目录 `build/free-surface-audit/final-verdict-20261010.md`；`continued-research-checkpoint.md` 保存后期证据，结论以其最后一节为准 |
 | 较早实验归档 | 主目录 `build/free-surface-audit-20261010-evidence.zip` |
 | 后期最终归档 | 主目录 `build/free-surface-final-20261010.zip` 及同名 `.sha256`；含独立源码、数值基表、类文件、驱动、日志和失败快照 |
+| 现行双路径交接修复对照 | 主目录 `build/dual-path-audit/` 与 `build/dual-path-audit-20261010.zip`、同名 `.sha256`；保存原始/修复回归、三轴规定输运的空间矩、解析覆盖率和慢支撑对照、完整生产步及热点采样。最终结论见其中 `dual-path-repair-results.md`。 |
 | 原生 VOF 对照 | 主目录 `build/free-surface-audit/reference-vof/`，其中 `reference-native-repro.tar.gz` 保存原生复现资产 |
 
 `build/` 文件受 Git 忽略，迁移机器时须保留归档。较早实验与后期实验分处两个目录；主目录的报告不表示所有后期源码已在主目录。读取旧快照时使用 `git show 717e9b0:<仓库内路径>`，按现行架构重新实现所需改动。旧生产框架保持归档，不整体合并、复制或 cherry-pick。

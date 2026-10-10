@@ -13,6 +13,7 @@ final class DivergenceFreeVelocityExtension {
 	private final int[] queue;
 	private final boolean[] visited;
 	private int edges;
+	private MarkerTransferBudget dependencies;
 
 	DivergenceFreeVelocityExtension(int nx, int ny, int nz, FlipCutCellGeometry geometry) {
 		this.nx = nx; this.ny = ny; this.nz = nz; this.geometry = geometry;
@@ -26,8 +27,14 @@ final class DivergenceFreeVelocityExtension {
 	}
 
 	void extend(MacVelocityGrid mac, boolean[] fluid, boolean[] solid, int[] markerCount) {
+		extend(mac, fluid, solid, markerCount, null);
+	}
+
+	void extend(MacVelocityGrid mac, boolean[] fluid, boolean[] solid, int[] markerCount, MarkerTransferBudget dependencies) {
+		this.dependencies = dependencies;
 		prepareAdvectionCells(fluid, solid, markerCount);
 		projectFringe(mac, fluid, solid);
+		this.dependencies = null;
 	}
 
 	/** Classifies connected finite-volume carriers without changing any velocity. */
@@ -99,6 +106,10 @@ final class DivergenceFreeVelocityExtension {
 
 	private void add(int a, int b, int f, int component, float aperture, boolean[] fluid, float[] velocity) {
 		if (aperture != 1 || !active[a] && !active[b]) return;
+		if (dependencies != null) {
+			if (active[a]) dependencies.connect(dependencies.airPotential(a), dependencies.face(component, f));
+			if (active[b]) dependencies.connect(dependencies.airPotential(b), dependencies.face(component, f));
+		}
 		if (active[a]) residual[a] -= velocity[f];
 		if (active[b]) residual[b] += velocity[f];
 		if (fluid[a] || fluid[b]) return;

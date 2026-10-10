@@ -20,6 +20,31 @@ final class PressureSystem {
 		this.drag = new GranularImplicitDrag(domain, granular);
 	}
 	void prepareGranular(float dt) { substepDuration = dt; granular.prepare(dt); drag.prepare(dt); }
+	/** Connects the nonzero factors of the already prepared joint pressure/velocity operator. */
+	void connectTransferSupport(MarkerTransferBudget budget) {
+		if (drag.active()) drag.connectTransferSupport(budget);
+		else {
+			PressureProjectionWorkspace p = domain.projection;
+			double[][] coefficients = {p.matrixNegativeX, p.matrixPositiveX, p.matrixNegativeY, p.matrixPositiveY, p.matrixNegativeZ, p.matrixPositiveZ};
+			int[] stride = {1, domain.sizeX, domain.sizeX * domain.sizeY};
+			for (int i = 0; i < p.fluidUnknownCount; i++) {
+				int c = p.fluidUnknownCells[i], x = c % domain.sizeX, y = c / domain.sizeX % domain.sizeY, z = c / (domain.sizeX * domain.sizeY);
+				for (int d = 0; d < 6; d++) if (coefficients[d][c] > 0) {
+					int axis = d / 2, sign = d % 2 == 0 ? -1 : 1, neighbor = c + sign * stride[axis];
+					int f = axis == 0 ? domain.xFaceIndex(x + (sign > 0 ? 1 : 0), y, z)
+							: axis == 1 ? domain.yFaceIndex(x, y + (sign > 0 ? 1 : 0), z) : domain.zFaceIndex(x, y, z + (sign > 0 ? 1 : 0));
+					budget.connect(budget.face(axis, f), budget.pressureRow(c));
+					if (domain.isFluid(neighbor) && neighbor != domain.pressureAnchor)
+						budget.connect(budget.face(axis, f), budget.pressureRow(neighbor));
+					else {
+						int node = gasUnknownOfAirCell(neighbor);
+						if (node > 0) budget.connect(budget.face(axis, f), budget.pressureRow(-node));
+					}
+				}
+			}
+		}
+		granular.connectTransferSupport(budget);
+	}
 	void forEachGranularGasNode(float dt, java.util.function.IntConsumer accept) { granular.forEachGasNode(dt, accept); }
 	double liquidPressure(int cell) { return liquidPressure[cell]; }
 	double gasPressure(int node) { return gasPressure[node]; }

@@ -76,6 +76,15 @@ final class GranularPressureCoupling {
 		}
 	}
 
+	void connectTransferSupport(MarkerTransferBudget budget) {
+		for (int parcel = 0; parcel < count; parcel++) for (int index = parcel * SUPPORT; index < (parcel + 1) * SUPPORT; index++) {
+			int row = rows[index]; if (row == Integer.MAX_VALUE) continue;
+			if (gx[index] != 0) budget.connect(budget.pressureRow(row), budget.parcel(parcel, 0));
+			if (gy[index] != 0) budget.connect(budget.pressureRow(row), budget.parcel(parcel, 1));
+			if (gz[index] != 0) budget.connect(budget.pressureRow(row), budget.parcel(parcel, 2));
+		}
+	}
+
 	void rebuildDiagonal() {
 		rebuildDiagonal(parcel -> 1);
 	}
