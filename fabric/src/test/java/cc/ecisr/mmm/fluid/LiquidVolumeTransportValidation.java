@@ -159,8 +159,8 @@ public final class LiquidVolumeTransportValidation {
 		int count = 0;
 		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == target) {
 			float x = domain.particles.positionX(p) - 2;
-			if (Math.min(Math.abs(x - 0.289F), Math.abs(x - 0.789F)) > 2 * Math.ulp(2.5F))
-				throw new AssertionError("Balanced positive flux lost the transported first moment: " + x);
+			if (Math.min(Math.abs(x - 0.25F), Math.abs(x - 0.75F)) > 2 * Math.ulp(2.5F))
+				throw new AssertionError("Balanced full-cell flux displaced saturated quadrature: " + x);
 			count++;
 		}
 		if (count != 8) throw new AssertionError("Balanced positive flux lost the full-cell quadrature");
@@ -174,11 +174,11 @@ public final class LiquidVolumeTransportValidation {
 				try {
 					var registries = cc.ecisr.mmm.simulation.FullCapabilityTestFixture.load();
 					cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
-					domain.setVolume(2, 1, 1, 1); domain.setVolume(3, 1, 1, 0.5F);
+					domain.setVolume(2, 1, 1, 0.75F); domain.setVolume(3, 1, 1, 0.25F);
 					cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindFull(domain, registries, 310,
 							cc.ecisr.mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 				} catch (Exception failure) { throw new IllegalStateException(failure); }
-			} else { domain.setVolume(2, 1, 1, 1); domain.setVolume(3, 1, 1, 0.5F); }
+			} else { domain.setVolume(2, 1, 1, 0.75F); domain.setVolume(3, 1, 1, 0.25F); }
 			for (int p = 0; p < domain.particles.count(); p++) {
 				domain.particles.setPositionX(p, domain.particles.positionX(p) + 0.04F);
 				domain.particles.setVelocityX(p, 0.2F);
@@ -209,11 +209,11 @@ public final class LiquidVolumeTransportValidation {
 		var domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
 		var offsets = new java.util.ArrayList<double[]>(); offsets.add(new double[] {-0.25, 0, 0}); offsets.add(new double[] {0.25, 0, 0});
 		double[] projection = new double[3], storage = new double[3];
-		CellRemapMoments.fit(domain, 0, offsets, new double[] {0.25, 0.75}, new double[] {0.25, 0, 0}, projection, storage);
+		CellRemapMoments.fit(domain, 0, offsets, new double[] {0.25, 0.75}, new double[] {0.25, 0, 0}, projection, storage, 0.25);
 		double moment = 0.25 * offsets.get(0)[0] + 0.75 * offsets.get(1)[0];
 		if (Math.abs(moment - 0.25) > Math.ulp(1.0F) || projection[0] != 0)
 			throw new AssertionError("Variable-mass feasible first moment was lost");
-		CellRemapMoments.fit(domain, 0, offsets, new double[] {0.25, 0.75}, new double[] {1, 0, 0}, projection, storage);
+		CellRemapMoments.fit(domain, 0, offsets, new double[] {0.25, 0.75}, new double[] {1, 0, 0}, projection, storage, 0.25);
 		moment = 0.25 * offsets.get(0)[0] + 0.75 * offsets.get(1)[0];
 		if (!(projection[0] < -0.5) || Math.abs(moment - 1 - projection[0] - storage[0]) > 8 * Math.ulp(1.0))
 			throw new AssertionError("Unreachable first moment was hidden");
@@ -330,13 +330,11 @@ public final class LiquidVolumeTransportValidation {
 			if (candidate.markers.size() != Integer.highestOneBit(quanta))
 				throw new AssertionError("Chemical quantum count broke the complete orthogonal quadrature");
 			var points = new java.util.HashSet<java.util.List<Double>>(); double[] centroid = new double[3];
-			double[] expected = {coarse.particles.positionX(0) / coarse.config.cellSize() - 0.5,
-					coarse.particles.positionY(0) / coarse.config.cellSize() - 0.5, coarse.particles.positionZ(0) / coarse.config.cellSize() - 0.5};
 			for (var marker : candidate.markers) {
 				points.add(java.util.List.of(marker.offset(0), marker.offset(1), marker.offset(2)));
 				for (int axis = 0; axis < 3; axis++) centroid[axis] += marker.volume() * marker.offset(axis);
 			}
-			if (points.size() != candidate.markers.size() || centroid[0] != expected[0] || centroid[1] != expected[1] || centroid[2] != expected[2])
+			if (points.size() != candidate.markers.size() || centroid[0] != 0 || centroid[1] != 0 || centroid[2] != 0)
 				throw new AssertionError("Coarse chemical remap duplicated a quadrature point or displaced the cell centroid");
 		}
 

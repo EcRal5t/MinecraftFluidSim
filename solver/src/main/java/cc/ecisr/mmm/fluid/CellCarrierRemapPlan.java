@@ -85,10 +85,20 @@ final class CellCarrierRemapPlan {
 		}
 
 		int sampledCount = 0;
-		for (int cell = 0; cell < domain.cellCount; cell++) if (output[cell] != null) for (Group group : output[cell]) {
-			group.sampleStart = sampledCount;
-			group.sampleVolumes = quadratureVolumes(group);
-			sampledCount = Math.addExact(sampledCount, group.sampleVolumes.size());
+		for (int cell = 0; cell < domain.cellCount; cell++) if (output[cell] != null) {
+			SignedDyadic occupied = ballistic.reserved[cell];
+			for (Group group : output[cell]) occupied = occupied.add(group.volume);
+			SignedDyadic capacity = flux.finalCapacity(cell);
+			if (capacity.signum() <= 0 || occupied.compareTo(capacity) > 0)
+				throw new IllegalStateException("Liquid quadrature exceeds its final open capacity");
+			// Shared capacity includes every material group and independently arriving liquid.
+			double translation = 0.5 * capacity.subtract(occupied).toDouble() / capacity.toDouble();
+			for (Group group : output[cell]) {
+				group.maximumTranslation = translation;
+				group.sampleStart = sampledCount;
+				group.sampleVolumes = quadratureVolumes(group);
+				sampledCount = Math.addExact(sampledCount, group.sampleVolumes.size());
+			}
 		}
 		if ((long) sampledCount + retainedMarkers.size() + ballistic.markers.size() > domain.maximumParticleCount)
 			throw new IllegalStateException("Cell carrier remap exceeds the marker budget");
@@ -449,7 +459,7 @@ final class CellCarrierRemapPlan {
 			group.massMoment[a] += 0.5 * dt / domain.config.cellSize() * group.momentum[a];
 			group.volumeMoment[a] += 0.5 * dt / domain.config.cellSize() * group.volumeMotion[a];
 		}
-		boolean moved = CellRemapMoments.fit(domain, group.cell, offsets, masses, group.massMoment, group.projection, group.storage);
+		boolean moved = CellRemapMoments.fit(domain, group.cell, offsets, masses, group.massMoment, group.projection, group.storage, group.maximumTranslation);
 		for (int a = 0; a < 3; a++) {
 			double volumeMoment = 0;
 			int coordinate = a == 0 ? group.cell % domain.sizeX : a == 1 ? group.cell / domain.sizeX % domain.sizeY : group.cell / (domain.sizeX * domain.sizeY);
@@ -732,7 +742,7 @@ final class CellCarrierRemapPlan {
 		final ArrayList<Integer> original = new ArrayList<>(); final CellSpeciesInventory species = new CellSpeciesInventory();
 		SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO;
 		cc.ecisr.mmm.thermal.LiquidEnergyColumn.CaloricInventory caloric;
-		double mass, kinetic, temperature, energyRounding; double[] transportTemperature; final double[] momentum = new double[3]; double[][] field;
+		double mass, kinetic, temperature, energyRounding, maximumTranslation; double[] transportTemperature; final double[] momentum = new double[3]; double[][] field;
 		final double[] massMoment = new double[3], volumeMoment = new double[3], volumeMotion = new double[3];
 		final double[] projection = new double[3], storage = new double[3], volumeResidual = new double[3]; boolean discardedMoment;
 		double localMinimum = Double.POSITIVE_INFINITY, localMaximum = Double.NEGATIVE_INFINITY;

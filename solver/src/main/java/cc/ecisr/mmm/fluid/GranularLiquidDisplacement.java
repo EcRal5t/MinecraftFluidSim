@@ -72,7 +72,7 @@ final class GranularLiquidDisplacement {
 		for (int c = 0; c < volume.length; c++) if (volume[c].compareTo(capacity[c]) > 0)
 			throw new IllegalStateException("Solid representation remap exceeds final joint capacity at cell " + c);
 		if (!changed) return;
-		flux.geometricResult(volume);
+		flux.geometricResult(volume, capacity);
 		var candidate = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true);
 		domain.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), domain.particles.count()), candidate);
 		if (domain.cellLiquidVolumeTransport == null) domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);

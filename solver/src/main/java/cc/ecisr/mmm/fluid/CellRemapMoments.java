@@ -33,7 +33,9 @@ final class CellRemapMoments {
 
 	/** Projection and storage errors are separate; a common translation retains spacing and covariance in the original open support. */
 	static boolean fit(FluidDomain domain, int cell, ArrayList<double[]> offsets, double[] masses,
-			double[] target, double[] projection, double[] storage) {
+			double[] target, double[] projection, double[] storage, double maximumTranslation) {
+		if (!(Double.isFinite(maximumTranslation) && maximumTranslation >= 0))
+			throw new IllegalArgumentException("Liquid quadrature translation requires finite available capacity");
 		double h = domain.config.cellSize(); int mask = domain.geometry.cutCells.mask(cell);
 		int[] coordinate = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
 		int[] micro = mask == 0 ? null : new int[masses.length];
@@ -49,7 +51,9 @@ final class CellRemapMoments {
 			}
 			// Keep the exact standard tensor rule when its moment already agrees to reduction precision.
 			if (Math.abs(target[axis] - current) <= 8 * Math.ulp(magnitude)) continue;
-			double minimumShift = Double.NEGATIVE_INFINITY, maximumShift = Double.POSITIVE_INFINITY, mass = 0;
+			// Saturated support retains its canonical rule; unreachable moments remain visible.
+			if (maximumTranslation == 0) { projection[axis] = current - target[axis]; continue; }
+			double minimumShift = -maximumTranslation, maximumShift = maximumTranslation, mass = 0;
 			for (int p = 0; p < masses.length; p++) {
 				double q = offsets.get(p)[axis], l = -0.5, u = 0.5;
 				if (mask != 0) { l = q < 0 ? -0.5 : 0; u = q < 0 ? 0 : 0.5; }

@@ -266,7 +266,14 @@ final class ConservativeLiquidFlux {
 	int donor(int f) { return velocity[f] >= 0 ? left[f] : right[f]; }
 	int receiver(int f) { return velocity[f] >= 0 ? right[f] : left[f]; }
 	SignedDyadic[] resultingVolumes() { return after; }
-	void geometricResult(SignedDyadic[] result) { System.arraycopy(result, 0, after, 0, cellCount); }
+	/** Final joint liquid capacity, including any capacity reserved for independent arrivals. */
+	SignedDyadic finalCapacity(int cell) {
+		return reserved == null ? exactCapacity[cell] : exactCapacity[cell].add(reserved[cell]);
+	}
+	void geometricResult(SignedDyadic[] result, SignedDyadic[] capacities) {
+		System.arraycopy(result, 0, after, 0, cellCount);
+		System.arraycopy(capacities, 0, exactCapacity, 0, cellCount);
+	}
 	private int index(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
 	private int[] adjacent(int c) {
 		int x = c % sizeX, y = c / sizeX % sizeY, z = c / (sizeX * sizeY);

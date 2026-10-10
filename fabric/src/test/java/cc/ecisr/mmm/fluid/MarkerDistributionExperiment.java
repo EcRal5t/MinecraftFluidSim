@@ -144,20 +144,13 @@ public final class MarkerDistributionExperiment {
 			if (domain.markerGrid.markerCount[cell] != 8)
 				throw new AssertionError("Full liquid cell lost its spatial integration rule");
 			int slots = 0;
-			double[] minimum = {Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY};
-			double[] maximum = {Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY};
-			for (int p = domain.markerGrid.cellMarkerHead[cell]; p >= 0; p = domain.markerGrid.particleCellNext[p]) for (int axis = 0; axis < 3; axis++) {
-				double position = switch (axis) { case 0 -> domain.particles.positionX(p); case 1 -> domain.particles.positionY(p); default -> domain.particles.positionZ(p); };
-				minimum[axis] = Math.min(minimum[axis], position); maximum[axis] = Math.max(maximum[axis], position);
-			}
-			for (int axis = 0; axis < 3; axis++) if (Math.abs(maximum[axis] - minimum[axis] - 0.5 * domain.config.cellSize()) > 4 * Math.ulp((float) maximum[axis]))
-				throw new AssertionError("Full-cell integration points lost their separation");
 			for (int p = domain.markerGrid.cellMarkerHead[cell]; p >= 0; p = domain.markerGrid.particleCellNext[p]) {
 				int slot = 0;
 				for (int axis = 0; axis < 3; axis++) {
 					double position = switch (axis) { case 0 -> domain.particles.positionX(p); case 1 -> domain.particles.positionY(p); default -> domain.particles.positionZ(p); };
-					if (position == maximum[axis]) slot |= 1 << axis;
-					else if (position != minimum[axis]) throw new AssertionError("Full-cell integration points lost their tensor rule");
+					double offset = position / domain.config.cellSize() - Math.floor(position / domain.config.cellSize()) - 0.5;
+					if (Math.abs(offset) != 0.25) throw new AssertionError("Saturated-cell quadrature left its geometric rule");
+					if (offset > 0) slot |= 1 << axis;
 				}
 				if ((slots & 1 << slot) != 0) throw new AssertionError("Full-cell integration point was duplicated");
 				slots |= 1 << slot;
