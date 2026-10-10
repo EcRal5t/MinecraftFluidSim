@@ -148,6 +148,22 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 			maximumExponent = Math.max(maximumExponent, exponent);
 		}
 		if (maximumExponent < minimumExponent) return ZERO;
+		// Bound every aligned partial sum, including cancellation, before using one signed word.
+		int countBits = Integer.SIZE - Integer.numberOfLeadingZeros(length - 1);
+		if (53 + maximumExponent - minimumExponent + countBits <= 63) {
+			long total = 0;
+			for (int index = 0; index < length; index++) {
+				long bits = Double.doubleToRawLongBits(values[index]);
+				long fraction = bits & 0x000f_ffff_ffff_ffffL;
+				int rawExponent = (int) (bits >>> 52 & 0x7ffL);
+				if (rawExponent == 0 && fraction == 0) continue;
+				long significand = rawExponent == 0 ? fraction : fraction | 0x0010_0000_0000_0000L;
+				int exponent = rawExponent == 0 ? MIN_DOUBLE_EXPONENT : rawExponent - 1075;
+				long aligned = significand << (exponent - minimumExponent);
+				total += bits < 0 ? -aligned : aligned;
+			}
+			return total == 0 ? ZERO : new SignedDyadic(total, minimumExponent);
+		}
 		long[] low = new long[maximumExponent - minimumExponent + 1];
 		long[] high = new long[low.length];
 		for (int index = 0; index < length; index++) {

@@ -629,11 +629,26 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		require(SignedDyadic.sum(varied, 4_096).equals(
 				SignedDyadic.sum(java.util.Arrays.copyOf(varied, 4_096))),
 				"bounded exact dyadic sum consumed values outside its range");
+		for (int length : new int[] {1, 2, 3, 8, 17, 1024}) for (int span : new int[] {0, 7, 8, 10, 11}) for (int signs = 0; signs < 3; signs++) {
+			double[] values = new double[length + 1];
+			SignedDyadic total = SignedDyadic.ZERO;
+			for (int p = 0; p < length; p++) {
+				values[p] = Math.scalb(Math.nextDown(2.0), p % (span + 1) - 540);
+				if (signs == 1 || signs == 2 && p % 3 == 0) values[p] = -values[p];
+				total = total.add(SignedDyadic.of(values[p]));
+			}
+			values[length] = Double.NaN;
+			require(SignedDyadic.sum(values, length).equals(total),
+					"signed-word sum changed exact inventory across its width or count limit");
+		}
 		double[] overflowBins = new double[2_051];
 		java.util.Arrays.fill(overflowBins, 0, 1_025, Double.MAX_VALUE);
 		java.util.Arrays.fill(overflowBins, 1_025, 2_050, -Double.MAX_VALUE);
 		overflowBins[2_050] = Double.MIN_VALUE;
 		for (double[] values : new double[][] {overflowBins, {0.0, -0.0},
+				{Double.MIN_VALUE, Double.MIN_VALUE, -Double.MIN_VALUE},
+				{Double.MIN_NORMAL, Math.nextDown(Double.MIN_NORMAL), -Double.MIN_NORMAL},
+				{Double.MAX_VALUE, Double.MAX_VALUE},
 				{Double.MAX_VALUE, Double.MIN_VALUE, -Double.MAX_VALUE},
 				{Float.MAX_VALUE, Float.MIN_VALUE, -Float.MAX_VALUE},
 				{Math.scalb(1.0, 300), 3.25, -Math.scalb(1.0, 300), -1.0, Double.MIN_NORMAL}}) {
