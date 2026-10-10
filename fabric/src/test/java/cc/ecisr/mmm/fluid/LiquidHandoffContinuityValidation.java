@@ -2,14 +2,159 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.units.SignedDyadic;
 import java.util.Arrays;
+import java.util.List;
 
 /** Prescribed translation through the default transport and freshly rebuilt classification. */
 public final class LiquidHandoffContinuityValidation {
 	private static final float[] VELOCITY = {0.5F, 0.375F, 0.25F};
 	private LiquidHandoffContinuityValidation() { }
 
+	/** Two one-metre water cubes; their two-metre gap closes nominally at t=2 s. */
+	private static void opposingWaterCubesJoin() {
+		JoinResult coarse = runJoin(0.5F, 0.025F), timeFine = runJoin(0.5F, 0.0125F);
+		JoinResult spaceFine = runJoin(0.25F, 0.025F), bothFine = runJoin(0.25F, 0.0125F);
+		joinDifference("time", coarse, timeFine); joinDifference("time", spaceFine, bothFine);
+		joinDifference("space", coarse, spaceFine); joinDifference("space", timeFine, bothFine);
+	}
+
+	private static FluidDomain joiningWater(float h, float dt) {
+		int nx = Math.round(12 / h), ny = Math.round(6 / h), count = 16 * Math.round(1 / (h * h * h));
+		var domain = new FluidDomain(nx, ny, ny,
+				new FluidSolverConfig(h, 1000, 0, dt, 500, 1e-6F, 0.45F, 0.002F, 0.8F), nx * ny * ny * 8);
+		float[] points = new float[4 * count], velocities = new float[3 * count]; int p = 0;
+		// Aligned boxes preserve the probe's z/y/x/slot order and exact dyadic coordinates.
+		for (int z = Math.round(2.5F / h); z < Math.round(3.5F / h); z++)
+			for (int y = Math.round(2.5F / h); y < Math.round(3.5F / h); y++)
+				for (int x = Math.round(3 / h); x < Math.round(7 / h); x++) {
+					if (x >= Math.round(4 / h) && x < Math.round(6 / h)) continue;
+					for (int slot = 0; slot < 8; slot++, p++) {
+						points[4 * p] = (x + 0.25F + 0.5F * (slot & 1)) * h;
+						points[4 * p + 1] = (y + 0.25F + 0.5F * (slot >>> 1 & 1)) * h;
+						points[4 * p + 2] = (z + 0.25F + 0.5F * (slot >>> 2 & 1)) * h;
+						points[4 * p + 3] = 0.125F; velocities[3 * p] = x * h < 5 ? 0.5F : -0.5F;
+					}
+				}
+		check(p == count, "Aligned join fixture changed its marker count");
+		domain.restoreParticleState(new FlipParticleState(nx, ny, ny, h, count, count * 0.125F,
+				points, velocities, new byte[domain.cellCount]));
+		FluidMaterial builtin = BuiltinFluidMaterials.WATER;
+		var water = new FluidMaterial(builtin.id(), builtin.referenceDensity(), builtin.miscibilityGroup(), 0.0728, Math.PI / 2);
+		var liquids = new FluidMaterialRegistry(List.of(water));
+		for (p = 0; p < count; p++) domain.setMarkerMaterial(p, liquids, 0);
+		MaterialRegistry base = BuiltinFluidMaterials.createRegistry();
+		var definitions = new MaterialRegistry(base.entries().stream().map(entry -> entry.material().id().equals(water.id())
+				? new MaterialRegistry.MaterialEntry(water, entry.viscosity(), entry.thermalExpansion()) : entry).toList(), base.pairTensions());
+		domain.bindMaterialDefinitions(definitions);
+		check(definitions.dynamicViscosityAt(water.id(), 293.15) == 0.001002, "Water join viscosity differs from its definition");
+		System.out.printf("default join fixture h=%g dt=%g duration=2.5 s rho=%g mu=%g declaredWaterSigma=%g propertyTemperature=293.15 K thermalBound=false%n",
+				h, dt, water.referenceDensity(), definitions.dynamicViscosityAt(water.id(), 293.15), water.surfaceTension());
+		return domain;
+	}
+
+	private static JoinResult runJoin(float h, float dt) {
+		FluidDomain domain = joiningWater(h, dt); var topology = new JoinTopology(domain);
+		SignedDyadic initialV = SignedDyadic.sum(domain.particles.directArrays().volume, domain.particleCount());
+		SignedDyadic initialM = SignedDyadic.sum(domain.particles.directArrays().mass, domain.particleCount());
+		check(domain.unitScale.cubicMeters(initialV.toDouble()) == 2 && domain.unitScale.kilograms(initialM.toDouble()) == 2000,
+				"Two water cubes changed their analytic inventory");
+		int steps = Math.round(2.5F / dt), peak = domain.particleCount(), separations = 0, finalJoinStep = steps + 1;
+		double firstJoin = Double.NaN, finalJoin = Double.NaN, massBound = 0, massUpper = 2 * initialM.toDouble();
+		double minimumLargestV = Double.POSITIVE_INFINITY, maximumTailV = 0;
+		boolean previous = false, exactMass = true; JoinObservation observed = null; SignedDyadic massDelta = SignedDyadic.ZERO;
+		long stepNanos = 0;
+		for (int step = 0; step <= steps; step++) {
+			check(initialV.equals(SignedDyadic.sum(domain.particles.directArrays().volume, domain.particleCount())), "Joining water changed exact volume at step " + step);
+			massDelta = SignedDyadic.sum(domain.particles.directArrays().mass, domain.particleCount()).subtract(initialM);
+			exactMass &= massDelta.signum() == 0;
+			check(Math.abs(massDelta.toDouble()) <= massBound, "Joining water exceeded its accumulated mass storage bound");
+			check(domain.particleCount() <= domain.maximumParticleCount, "Joining water exceeded its hard carrier budget");
+			domain.ensureInventoryGrid(); observed = topology.observe(); peak = Math.max(peak, domain.particleCount());
+			// Observe the existing complete logical-step endpoints from nominal contact through the final sample.
+			if (step >= Math.round(2 / dt)) { minimumLargestV = Math.min(minimumLargestV, observed.largestV); maximumTailV = Math.max(maximumTailV, observed.tailV); }
+			if (step == 0) check(!observed.connected && observed.components >= 2, "Water cubes started connected");
+			if (observed.connected && !previous) {
+				finalJoinStep = step;
+				finalJoin = step * (double) dt;
+				if (Double.isNaN(firstJoin)) firstJoin = finalJoin;
+			}
+			if (previous && !observed.connected) separations++;
+			if (previous != observed.connected) System.out.printf("default join event h=%g dt=%g t=%g connected=%s centerWetArea=%g m2 largestV=%g m3 secondV=%g m3%n",
+					h, dt, step * (double) dt, observed.connected, observed.centerArea, observed.largestV, observed.secondV);
+			previous = observed.connected;
+			if (step == steps) break;
+			long start = System.nanoTime(); var stats = domain.step(); stepNanos += System.nanoTime() - start;
+			// The remap input/output storage bounds and final reseed reduction use the actual hard budget.
+			massBound += (stats.substeps() + 1.0) * 2 * domain.maximumParticleCount * Math.ulp(massUpper);
+			check(massBound < initialM.toDouble(), "Join mass bound exhausted its total-mass premise");
+		}
+		check(observed.connected && finalJoinStep <= Math.round(2 / dt), "Major water components did not remain connected from nominal contact through 2.5 seconds");
+		Moments end = moments(domain); double scale = h * h * h;
+		check(Double.isFinite(end.kinetic + Arrays.stream(end.momentum).sum() + Arrays.stream(end.massCentroid).sum()), "Nonfinite water join mechanics");
+		System.out.printf("default join result h=%g dt=%g firstJoin=%g s sustainedFinalJoin=%g s temporaryBridgeEpisodes=%d separationEvents=%d finalMajorConnected=%s largestV=%g m3 secondV=%g m3 tailCount=%d tailV=%g m3 centerWetArea=%g m2 window=2..2.5s logicalStepEnds=true minimumLargestV=%g m3 maximumTailV=%g m3 exactMassAllSteps=%s deltaM=%g kg massStorageBound=%g kg P=%s kg*m/s CM=%s m K=%g J markers=%d peak=%d meanStepMs=%g%n",
+				h, dt, firstJoin, finalJoin, separations, separations, observed.connected, observed.largestV, observed.secondV, observed.tails, observed.tailV, observed.centerArea,
+				minimumLargestV, maximumTailV, exactMass, domain.unitScale.signedKilograms(massDelta.toDouble()), domain.unitScale.kilograms(massBound),
+				Arrays.toString(Arrays.stream(end.momentum).map(value -> value * scale).toArray()), Arrays.toString(end.massCentroid), end.kinetic * scale,
+				domain.particleCount(), peak, stepNanos / 1e6 / steps);
+		return new JoinResult(h, dt, firstJoin, finalJoin, observed, end, domain.particleCount());
+	}
+
+	private static final class JoinTopology {
+		private final FluidDomain domain;
+		private final int[] component, queue;
+		private final double[] volume, leftVolume, rightVolume;
+		JoinTopology(FluidDomain domain) {
+			this.domain = domain; component = new int[domain.cellCount]; queue = new int[domain.cellCount];
+			volume = new double[domain.cellCount]; leftVolume = new double[domain.cellCount]; rightVolume = new double[domain.cellCount];
+		}
+		JoinObservation observe() {
+			Arrays.fill(component, -1); Arrays.fill(volume, 0); Arrays.fill(leftVolume, 0); Arrays.fill(rightVolume, 0);
+			int count = 0; double centerArea = 0, h = domain.config.cellSize();
+			for (int p = 0; p < domain.particleCount(); p++) {
+				int seed = domain.particleCellIndex(p); if (component[seed] >= 0) continue;
+				int head = 0, tail = 0; queue[tail++] = seed; component[seed] = count;
+				while (head < tail) {
+					int cell = queue[head++], x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY, z = cell / (domain.sizeX * domain.sizeY);
+					check(domain.markerGrid.exactCellVolumeInventory[cell].compareTo(SignedDyadic.of(1)) <= 0, "Joining water exceeded cell capacity");
+					double v = domain.unitScale.cubicMeters(domain.markerGrid.exactCellMarkerVolume[cell]); volume[count] += v;
+					if ((x + 0.5) * h < 5) leftVolume[count] += v; else rightVolume[count] += v;
+					for (int axis = 0; axis < 3; axis++) for (int sign = -1; sign <= 1; sign += 2) {
+						int xx = x + (axis == 0 ? sign : 0), yy = y + (axis == 1 ? sign : 0), zz = z + (axis == 2 ? sign : 0);
+						if (!domain.inside(xx, yy, zz)) continue;
+						int other = domain.cellIndex(xx, yy, zz); if (domain.markerGrid.exactCellVolumeInventory[other].signum() <= 0) continue;
+						double area = domain.pressurePhaseGeometry.sharedLiquidFaceArea(sign > 0 ? cell : other, sign > 0 ? other : cell, axis, domain.geometry.cutCells);
+						if (axis == 0 && sign > 0 && (x + 1) * h == 5) centerArea += area * h * h;
+						if (area > 0 && component[other] < 0) { component[other] = count; queue[tail++] = other; }
+					}
+				}
+				count++;
+			}
+			int left = -1, right = -1, tails = 0; double largest = 0, second = 0, tailV = 0;
+			for (int c = 0; c < count; c++) {
+				if (leftVolume[c] > 0 && (left < 0 || leftVolume[c] > leftVolume[left])) left = c;
+				if (rightVolume[c] > 0 && (right < 0 || rightVolume[c] > rightVolume[right])) right = c;
+				if (volume[c] > largest) { second = largest; largest = volume[c]; } else if (volume[c] > second) second = volume[c];
+			}
+			for (int c = 0; c < count; c++) if (c != left && c != right) { tails++; tailV += volume[c]; }
+			return new JoinObservation(count, left >= 0 && left == right, largest, second, tails, tailV, centerArea);
+		}
+	}
+	private record JoinObservation(int components, boolean connected, double largestV, double secondV, int tails, double tailV, double centerArea) { }
+	private record JoinResult(float h, float dt, double firstJoin, double finalJoin, JoinObservation topology, Moments moments, int markers) { }
+	private static void joinDifference(String kind, JoinResult a, JoinResult b) {
+		double[] momentum = new double[3], centroid = new double[3]; double av = a.h * a.h * a.h, bv = b.h * b.h * b.h;
+		for (int axis = 0; axis < 3; axis++) { momentum[axis] = b.moments.momentum[axis] * bv - a.moments.momentum[axis] * av; centroid[axis] = b.moments.massCentroid[axis] - a.moments.massCentroid[axis]; }
+		System.out.printf("default join difference kind=%s a=[h=%g,dt=%g] b=[h=%g,dt=%g] firstJoin=%g s sustainedFinalJoin=%g s P=%s kg*m/s CM=%s m K=%g J largestV=%g m3 tailV=%g m3 tailCount=%d markers=%d%n",
+				kind, a.h, a.dt, b.h, b.dt, b.firstJoin - a.firstJoin, b.finalJoin - a.finalJoin, Arrays.toString(momentum), Arrays.toString(centroid),
+				b.moments.kinetic * bv - a.moments.kinetic * av, b.topology.largestV - a.topology.largestV, b.topology.tailV - a.topology.tailV, b.topology.tails - a.topology.tails, b.markers - a.markers);
+	}
+
 	public static void main(String[] args) {
 		if (!CellLiquidVolumeTransport.enabled()) return;
+		opposingWaterCubesJoin();
+		if (Arrays.asList(args).contains("--join")) {
+			System.out.println("Default-path liquid joining validation passed");
+			return;
+		}
 		for (String shape : new String[] {"drop", "thin", "pool"}) {
 			Result coarse = run(shape, 0.5F, 0.03125F, 1), timeFine = run(shape, 0.5F, 0.015625F, 1);
 			Result spaceFine = run(shape, 0.25F, 0.03125F, 1), bothFine = run(shape, 0.25F, 0.015625F, 1);
