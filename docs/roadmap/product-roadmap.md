@@ -125,10 +125,10 @@ C01（1a–1c）在声明的小振幅线性对流有效域内已完成，现行�
 
 | 顺序 | 产品阶段 | 前置依赖 | 完成时必须证明 |
 |---|---|---|---|
-| 3 | 展示几何契约与重建 | snapshot identity/sequence、材料 palette | 服务端已提交状态足以唯一重建液面；客户端不再用体积阈值和增厚修补 |
+| 3 | 展示几何契约与重建 | snapshot identity/sequence、材料 palette、已解析几何与未解析载体输入 | 服务端已提交状态确定规范展示几何；客户端不再用体积阈值和增厚修补 |
 | 4 | gas 创造端口与气液 species 交换 | 顺序 3 的观察入口、现有 exact gas inventory | 玩家可从创造入口建立 sealed CO2 场景；两侧 inventory/组成/`U` 联合提交 |
 | 5 | 实体双向边界 | 顺序 1 的黏性面应力 | 排水、压力面积分与液体/实体冲量在同一事务内闭合 |
-| 6 | 跨域恢复判定器与可放置的有限换热器 | 现有 container/ownership 恢复状态 | 判定器只有一份；设备 kg/`U` 只存于 region HEAD，两流体零物质交换 |
+| 6 | 跨域恢复判定器与可放置的有限换热器 | 现有 container/ownership 恢复状态；有限换热器另依赖热机械收支工作包 | 判定器只有一份；设备 kg/`U` 只存于 region HEAD，两流体零物质交换 |
 | 7 | 公共转移 API 与原版行为 | 顺序 4 的 typed payload、顺序 6 的恢复判定器 | 外部 actor 可 crash-safe 收敛；原版行为逐项有库存/能量账本 |
 | 8 | section 生命周期与显式端口 | profile、事务与网络 API | 跨 section/region 仍只有完整代次，不依赖永久 chunk ticket |
 | 9 | 有界范围扩张 | 高休眠率、恢复/性能基准 | 天然小水体在硬预算内可接管、释放和异常恢复 |
@@ -137,14 +137,29 @@ C01（1a–1c）在声明的小振幅线性对流有效域内已完成，现行�
 
 阶段编号只表达依赖，不绑定发布版本；各阶段应拆成 routing 可选择的小增量。
 
+### 物理缺口的依赖安排
+
+现有自由面前置验收覆盖当前双路径的运行范围。后续工作按所需物理量补充证明，空间解析限制继续由[求解器契约](../architecture/fluid-solver.md#当前自由面的空间解析限制)维护。
+
+| 缺口或待补证明 | 执行时点 | 完成条件 |
+|---|---|---|
+| 展示输入遗漏格内位置与闭合液滴 | D01 首个增量，先于完整 mesher | 同格、同库存而位置不同的液体可区分；已解析几何与未解析载体均有有界输入、表示规则和量化误差 |
+| 液气交换面积与气腔归属的近似 | C05 首个增量，先于传质集成 | 对已解析界面、薄层和格内闭合滴分别校验服务端面积、唯一气腔归属及空间误差；声明实际可用的传质范围 |
+| 实体湿表面与压力支撑不一致 | C02 首个增量，先于压力面积分 | 湿表面采样与服务端液体几何一致；无压力自由度区域的贡献单独量化，浮力误差符合该切片验收 |
+| 物理耗散尚未转为载体内能 | 默认阶段 5 后、阶段 6 前；C05 温度误差超限时提前 | 已解析黏性与阻力耗散按局部作用提交内能；封闭衰减与外部驱动分别闭合能量及外部功 |
+| 亚格压力、黏性与薄膜动力学 | 扩展小尺度物理支持前独立评审 | 新空间表示同时通过守恒、连续交接、机械解析对照、规模和完整步预算；当前主线继续使用已声明解析范围 |
+| 断裂时间全面收敛、无墙增长率、长时尾部及更大区域成本 | 对应物理或范围扩展之前 | 复用现有连接、液颈和长输运场景，按新增支持范围补空间/时间对照及成本；默认 20 Hz 与扩大区域单独验收 |
+
+表示信息不足、面积归属含混或库存审计失败时，先修复当前小增量，再推进依赖它的集成。精细对照超出实时预算时保留离线用途，实时支持范围按实测成本确定。
+
 ## 阶段 3：展示几何契约与重建
 
 工作包 D01–D03。当前客户端 `FluidSurfaceGeometry` 用 `SURFACE_THRESHOLD = 8` 的体积阈值决定是否出液面，并用固定厚度盒体补足薄体；`MaterialSurfaceGeometry` 负责液液界面。这些是展示启发式，不是服务端几何。
 
-- D01：把 snapshot 扩展为有界、按 interface cell 与 shared face 稀疏编码的展示输入：cell 坐标、cut-cell aperture 摘要、总 liquid fraction、服务端 PLIC plane 的规范化 normal/offset 及其固定点量化、每个不可互溶 phase pair 的 plane/fraction/label side 与唯一 owner、shared face 的 canonical identity。量化误差只影响展示位置，服务端 nanos 不变。
+- D01：首个增量先证明输入完整性。已解析单元提供 cell 坐标、cut-cell aperture 摘要、总 liquid fraction、服务端 PLIC plane 的规范化 normal/offset 及其固定点量化、每个不可互溶 phase pair 的 plane/fraction/label side 与唯一 owner、shared face 的 canonical identity。未解析液体另提供有界的载体位置、正体积、材料/相身份及表示种类，声明规范展示形状的近似规则。输入按已提交代次生成，使用 interface cell、shared face 与载体的稀疏编码；服务端维护空间表示有效性，客户端量化数据用于展示。量化误差只影响展示位置，服务端 nanos 不变。
 - D02：mesher 拆成纯数据阶段（decode/validate → labeled clipped polyhedra → 每 shared face 一次 canonical planar arrangement → 抵消同 label 覆盖 → 三角化 → normal/attribute）。共享界面只生成一次并有稳定属主与法向；三相接触线由同一 face arrangement 交点生成 canonical junction key。不得用 `INTERFACE_INSET` 类偏移错开外表面与内部界面。
 - D03：validator 对每类 surface 计算 label partition 覆盖/重叠、index bounds、finite、面积、重复三角形、有向边关联、boundary loop、winding 与 bounds；frame key 固定为 `(dimension, region UUID, network generation, sequence)`，迟到包装不进当前 frame。
-- 完成条件：同一已提交状态重复构建得到相同 canonical digest；稀薄液体、斜 cut-cell 和多材料界面不再依赖体积阈值与增厚；`protocol` 承载 snapshot identity 与 tombstone 覆盖，`materials` 承载 mesher fixture。
+- 完成条件：同一已提交状态重复构建得到相同 canonical digest；格内闭合液滴、薄层、斜 cut-cell 和多材料界面均有展示输入，位置、体积与形状近似误差分开报告，客户端不再依赖体积阈值与增厚。复用既有交接轨迹验证两种表示之间的显示连续性，记录微小尾部造成的记录数、字节数和重建成本。`protocol` 承载 snapshot identity、量化及 tombstone 覆盖，`materials` 承载 mesher fixture；快照生成/编码和客户端重建分别计时，服务端完整步预算继续使用原条件。
 
 ## 阶段 4：gas 创造端口与气液 species 交换
 
@@ -160,6 +175,8 @@ C01（1a–1c）在声明的小振幅线性对流有效域内已完成，现行�
 
 ### 4b 气液 species 交换
 
+- 首个增量验证服务端界面面积与 gas node 归属。使用当前服务端数值几何及其表示有效性，对平面、薄层、闭合格内滴和表示交接分别作解析面积或离线积分对照，报告空间细化误差；每份面积只归属于一个实际接触节点。按结果声明传质近似的适用范围，客户端展示网格与量化平面保持观察用途。
+- 温度依赖速率的对照同时量化未结算机械耗散造成的温度误差；超过该场景声明的温度或速率误差限时，先执行热机械收支工作包，再验收对应传质范围。
 - 从 PLIC/cut face 得到有限界面面积与所属 gas node；从 gas inventory 派生 component 分压，从 liquid exact species/volume 派生浓度；在 registry 声明的 P/T/concentration 有效域内求平衡驱动力。
 - 用串联膜阻力求有限速率通量（`delta/D` 与映射后的 gas 阻力同为 `s/m`），连续 `n_extent` 只用于决定向零量化多少完整 exact batch，提交仍只搬运 exact truth；不足一个 batch 时留在原库存等待后续驱动力。
 - 一次 batch 联合更新 gas standard nanos/kg/species/residual、liquid species/marker mass residual、两侧总 `U` 与 node/chemical ledger；任一侧容量、温度反演、lineage、预算或审计失败时整个 interface 不修改。多个 interface 按 canonical cell/pair 顺序处理，预算耗尽的剩余 interface 保持 dirty。
@@ -169,6 +186,8 @@ C01（1a–1c）在声明的小振幅线性对流有效域内已完成，现行�
 ## 阶段 5：实体双向边界
 
 工作包 C02。当前 `MinecraftRegionInputs` 以 AABB 湿体积比例和固定参数（`FULL_SUBMERGENCE_DRAG = 0.20`、`NEUTRAL_SUBMERGENCE = 0.72`）修改实体速度，同时向 core 提交 moving-body marker 动量；实体力和液体冲量不是同一离散边界的镜像，实体占位也未进入容量。
+
+首个增量先核对湿表面和压力支撑：读取服务端液体几何及其表示有效性，分别量化已解析液池、薄层和格内液滴的湿面积、排水体积与压力贡献。压力面积分的有效范围与误差限由这些对照确定，展示几何继续专职呈现快照。
 
 按依赖拆成可独立关闭的切片，前一步都应能单独退化回当前行为：
 
@@ -182,6 +201,14 @@ C01（1a–1c）在声明的小振幅线性对流有效域内已完成，现行�
 受支持实体的质量来自数据定义（entity type/tag → kg、coupling mode、几何 provider、物性有效域）；无定义的实体按 `KINEMATIC_EXTERNAL` 处理，施加排水与外部边界作用。
 
 最近门随切片选择 `entity-fluid`、`free-surface`、`shape`、`lifecycle`。
+
+### 热机械收支工作包
+
+默认在阶段 5 后、阶段 6 的有限换热器集成前执行；C05 温度或速率误差超限时提前完成所需的已解析黏性/阻力热结算，实体做功结算随 C02 完成。复用现有 Newtonian 应力、阻力、机械诊断与内能事务。首个增量在已解析剪切和封闭衰减场景中将未结算耗散换算成等效温升，按已有温度与相变精度要求评估影响；持续外部驱动的功单独计入。
+
+随后由局部应力与相对运动的功确定物理耗散及受热载体，与外部运动约束做功分别结算，在同一私有候选中预检并提交 `U`。P2G/G2P、压力投影、空间重建与 reseed 的数值能量变化继续单列诊断；重力势能和界面能的离散误差单独评价。
+
+完成条件：无外部做功的已解析黏性/阻力衰减将机械损失转成对应载体内能，固定和运动约束的外部功有明确归属；逐材料质量、species、体积、正温与能量收支联合通过，失败候选和重试保持一次提交。当前亚格流动限制沿用原契约，测试选择 `thermal` 与所涉及的 `granular`、`entity-fluid`。
 
 ## 阶段 6：跨域恢复判定器与有限换热器
 
