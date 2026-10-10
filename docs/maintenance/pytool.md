@@ -10,6 +10,7 @@
 | [compare_step_profiles.py](../../pytool/compare_step_profiles.py) | 合并完整步 CSV 的独立重复测量，对比耗时、分配量和逐步粒子/子步/PCG 记录 | `uv run pytool/compare_step_profiles.py --before "build/hotspot-optimization/demo-before*.csv" --after "build/hotspot-optimization/demo-identity[12].csv" --check-trajectory` |
 | [test_jfr_hotspots.py](../../pytool/test_jfr_hotspots.py) | 校验采样归属与调用方向 | `uv run python -m unittest pytool.test_jfr_hotspots` |
 | [water_melting_curve.py](../../pytool/water_melting_curve.py) | 按 IAPWS 熔化压力公式更新内置水冰相图，并核对公式表列值 | `uv run pytool/water_melting_curve.py` |
+| [stokes_macro_basis.py](../../pytool/stokes_macro_basis.py) | 生成四面体重心细分上的修改面泡函数参考表，精确校验各子四面体内的常散度 | `uv run pytool/stokes_macro_basis.py build/free-surface-audit/stokes-macro-basis.json` |
 
 `arch_baseline.py` 的输出反映运行时的源码。架构重整完成时的数字保存在 [历史基线](../archive/maintenance/architecture-baseline.md)。`unused_imports.py` 的结果供人工核对，Java 编译仍负责检查类型和依赖。
 
