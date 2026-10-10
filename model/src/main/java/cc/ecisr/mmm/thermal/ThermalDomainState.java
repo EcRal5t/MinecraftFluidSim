@@ -141,6 +141,13 @@ public final class ThermalDomainState {
 				liquidEnergy.revision(), granularState.revision(), gasState.revision(), auditState.revision());
 	}
 
+	/** Tests the complete owner revision tuple without allocating an observation snapshot. */
+	public boolean matchesThermalRevision(Revision revision) {
+		return revision != null && revision.liquid() == liquidEnergy.revision()
+				&& revision.granular() == granularState.revision()
+				&& revision.gas() == gasState.revision() && revision.audit() == auditState.revision();
+	}
+
 	public ThermalRegistry registry() { return registry; }
 	public ThermalAuditState audit() { return auditState; }
 	public ThermalAuditLedger auditLedger() { return auditState.ledger(); }

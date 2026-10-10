@@ -189,8 +189,10 @@ final class GridToParticleStage {
 
 	private void ensureCandidateCapacity(int count) {
 		if (picX.length >= count) return;
-		picX = new float[count]; picY = new float[count]; picZ = new float[count];
-		incomingMarkerEnergy = new double[count];
-		flipDeltaX = new float[count]; flipDeltaY = new float[count]; flipDeltaZ = new float[count];
+		int capacity = (int) Math.min(state.particles.maximumParticleCount(),
+				Math.max((long) count, picX.length + (long) picX.length / 2));
+		picX = new float[capacity]; picY = new float[capacity]; picZ = new float[capacity];
+		incomingMarkerEnergy = new double[capacity];
+		flipDeltaX = new float[capacity]; flipDeltaY = new float[capacity]; flipDeltaZ = new float[capacity];
 	}
 }

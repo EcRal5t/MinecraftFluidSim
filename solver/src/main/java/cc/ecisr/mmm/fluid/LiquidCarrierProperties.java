@@ -120,8 +120,9 @@ final class LiquidCarrierProperties {
 	 * isothermal computation convention from {@link MaterialRegistry#STANDARD_TEMPERATURE_K}.
 	 */
 	void refresh(FluidDomainStorage domain, ThermalCarrierContext markers, FluidMaterialRegistry materials,
-			MaterialRegistry definitions, GranularDomainState granular, ThermalDomainState thermal, Revision revision) {
-		if (revision.equals(built)) return;
+			MaterialRegistry definitions, GranularDomainState granular, ThermalDomainState thermal, long carrierMutation) {
+		if (built != null && built.carrierMutation() == carrierMutation
+				&& (thermal == null ? built.thermal() == null : thermal.matchesThermalRevision(built.thermal()))) return;
 		MarkerGridIndex grid = domain.markerGrid;
 		if (definitions != null && thermal != null) thermal.preparePhaseScan(markers);
 		buoyancyPrepared = false;
@@ -180,7 +181,7 @@ final class LiquidCarrierProperties {
 				}
 			}
 		}
-		built = revision;
+		built = new Revision(carrierMutation, thermal == null ? null : thermal.thermalRevision());
 		if (recording) {
 			stepExtrapolatedCells = Math.addExact(stepExtrapolatedCells, extrapolatedCells);
 			if (stepSample == null) stepSample = extrapolatedSample();

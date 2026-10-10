@@ -38,9 +38,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	LiquidCarrierProperties derivedCarrierState() {
 		ensureInventoryGrid();
 		carrierPropertiesWorkspace.refresh(this, thermalMarkerContext(), materialRegistry, materialDefinitions,
-				granularState, thermalState,
-				new LiquidCarrierProperties.Revision(carrierMutationRevision,
-						thermalState == null ? null : thermalState.thermalRevision()));
+				granularState, thermalState, carrierMutationRevision);
 		return carrierPropertiesWorkspace;
 	}
 
