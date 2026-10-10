@@ -5,7 +5,6 @@ import cc.ecisr.mmm.thermal.LiquidEnergyColumn;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
-import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -415,12 +414,6 @@ void spawnParticle(
  int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
  ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal
  ) {
-	spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, chemicalMixture, indicator, thermalExternal, null);
-}
-void spawnParticle(
- int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
- ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal, LiquidPolyhedron.Point centroid
- ) {
 if (particles.count() >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
 if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
 if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
@@ -442,8 +435,7 @@ if (cellZ == 0 || geometry.solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.
 if (cellZ + 1 == sizeZ || geometry.solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
 coordinator.appendMarker(
 CarrierMutationPlan.append(carrierMutationRevision(), particles.count()),
-cellIndex(cellX, cellY, cellZ), centroid == null ? (cellX + ox) * h : (float) centroid.x(),
-centroid == null ? (cellY + oy) * h : (float) centroid.y(), centroid == null ? (cellZ + oz) * h : (float) centroid.z(),
+cellIndex(cellX, cellY, cellZ), (cellX + ox) * h, (cellY + oy) * h, (cellZ + oz) * h,
 amount, materialHandle, mass, chemicalMixture, indicator, thermalExternal);
  }
 
@@ -456,33 +448,62 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 
 	/** Planned per-marker truncation for one cell, applied later without re-deciding anything. */
 	record MarkerTruncation(
-			LiquidGeometryExtractionPlan.Remainder quantities,
+			int marker, float take, float newVolume, double newMass,
 			ChemicalParcelStore.SplitPlan chemicalPlan, LiquidEnergyColumn.Truncation thermalPlan
-	) { int marker() { return quantities.marker(); } }
+	) { }
 
-	record CellRemovalPlan(float removedVolume, List<MarkerTruncation> markers, LiquidGeometryExtractionPlan geometry) { }
+	record CellRemovalPlan(float removedVolume, List<MarkerTruncation> markers) { }
 
 	CellRemovalPlan planRemoveParticlesInCell(
 			int cellX, int cellY, int cellZ, float maximum,
 			ChemicalTransferLedger.Builder removedChemistry,
 			FluidDomain.RemovedMaterialLedger removedMaterials, FluidDomain.RemovedThermalEnergy removedThermal
 	) {
-		return planRemoveVolumeAcrossCells(List.of(new CellCandidate(cellIndexChecked(cellX, cellY, cellZ), 0)),
-				maximum, removedChemistry, removedMaterials, removedThermal);
+		float h = config.cellSize(), removed = 0.0F;
+		List<MarkerTruncation> plan = new ArrayList<>();
+		for (int i = particles.count() - 1; i >= 0 && removed < maximum; i--) {
+			if ((int) Math.floor(particles.positionX(i) / h) != cellX || (int) Math.floor(particles.positionY(i) / h) != cellY || (int) Math.floor(particles.positionZ(i) / h) != cellZ) continue;
+			float previousVolume = particles.volume(i);
+			float take = Math.min(previousVolume, maximum - removed);
+			double previousMass = particles.mass(i);
+			double previousTemperature = thermalState == null ? Double.NaN : domain().thermalMarkerTemperature(i);
+			float newVolume = previousVolume - take;
+			if (newVolume <= 1.0E-6F) {
+				take = previousVolume;
+				newVolume = 0.0F;
+			}
+			double newMass = previousMass * newVolume / previousVolume;
+			ChemicalParcelStore.SplitPlan chemicalPlan = null;
+			if (chemicalParcels != null) {
+				chemicalPlan = chemicalParcels.planTruncate(
+						i, newVolume, take, newMass, previousMass - newMass);
+				if (removedChemistry != null) removedChemistry.add(
+						materialRegistry.material(particles.materialHandle(i)).id(), chemicalParcels.indicator(i),
+						take, unitScale.kilograms(previousMass - newMass), chemicalPlan.removed());
+			}
+			LiquidEnergyColumn.Truncation thermalPlan = domain().planThermalTruncate(i, newMass,
+					chemicalPlan == null ? null : chemicalPlan.kept(), previousTemperature);
+			if (removedMaterials != null) removedMaterials.add(
+					particles.materialHandle(i), take, previousMass - newMass);
+			if (removedThermal != null && thermalPlan != null) removedThermal.add(thermalPlan.removedEnergy());
+			plan.add(new MarkerTruncation(i, take, newVolume, newMass, chemicalPlan, thermalPlan));
+			removed += take;
+		}
+		return new CellRemovalPlan(removed, List.copyOf(plan));
 	}
 
-	private void commitLiquidRemoval(CellRemovalPlan plan) {
+	void commitRemoveParticlesInCell(int cellX, int cellY, int cellZ, CellRemovalPlan plan) {
 		for (MarkerTruncation entry : plan.markers()) {
 			int i = entry.marker();
 			if (chemicalParcels != null) {
-				chemicalParcels.markDirtyCell(domain().particleCellIndex(i));
-				if (entry.quantities().volume().signum() > 0) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
+				chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
+				if (entry.newVolume() > 0.0F) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
 			}
-			particles.setQuantities(i, entry.quantities().volume(), entry.quantities().mass());
+			particles.setVolume(i, entry.newVolume());
+			particles.setMass(i, entry.newMass());
 			domain().commitThermalTruncate(i, entry.thermalPlan());
+			if (particles.volume(i) <= 1.0E-6F) removeParticle(i);
 		}
-		for (int i = particles.count() - 1; i >= 0; i--) if (particles.exactVolume(i).signum() == 0) removeParticle(i);
-		plan.geometry().publish();
 	}
 
 	/**
@@ -494,50 +515,36 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	float removeVolumeAcrossCells(java.util.List<CellCandidate> candidates, float amount) {
 		ChemicalTransferLedger.Builder removedChemistry = chemicalParcels == null ? null
 				: ChemicalTransferLedger.builder(chemicalParcels.registry());
-		var plan = planRemoveVolumeAcrossCells(candidates, amount, removedChemistry, null, null);
-		var sink = removedChemistry == null ? null : removedChemistry.build();
-		if (sink != null) chemicalParcels.requireCanRecordEscapedSink(sink);
-		commitLiquidRemoval(plan);
-		if (sink != null) chemicalParcels.recordEscapedSink(sink);
-		return plan.removedVolume();
-	}
-
-	private CellRemovalPlan planRemoveVolumeAcrossCells(List<CellCandidate> candidates, float amount,
-			ChemicalTransferLedger.Builder removedChemistry, FluidDomain.RemovedMaterialLedger removedMaterials,
-			FluidDomain.RemovedThermalEnergy removedThermal) {
-		if (Float.isNaN(amount) || amount < 0) throw new IllegalArgumentException("Removal volume must be non-negative");
-		var geometric = new LiquidGeometryExtractionPlan(domain(), candidates);
-		List<MarkerTruncation> planned = new ArrayList<>();
-		var remaining = Float.isInfinite(amount) ? null : cc.ecisr.mmm.units.ExactVolume.of(amount); var removed = cc.ecisr.mmm.units.ExactVolume.ZERO;
-		for (int marker : geometric.markers) {
-			if (remaining != null && remaining.signum() == 0) break;
-			double cap = remaining == null ? Double.POSITIVE_INFINITY : remaining.toDouble();
-			if (remaining != null && cc.ecisr.mmm.units.ExactVolume.of(cap).compareTo(remaining) > 0) cap = Math.nextDown(cap);
-			float previousVolume = particles.volume(marker); double take = Math.min(geometric.volume(marker), cap);
-			float newVolume = (float) (previousVolume - take); double actual = (double) previousVolume - newVolume;
-			if (actual > take) { newVolume = Math.nextUp(newVolume); actual = (double) previousVolume - newVolume; }
-			if (!(actual > 0)) continue;
-			double previousMass = particles.mass(marker), newMass = newVolume == 0 ? 0 : previousMass * newVolume / previousVolume;
-			var quantities = LiquidGeometryExtractionPlan.Remainder.plan(domain(), marker, newVolume, newMass, take);
-			if (quantities == null) continue;
-			newVolume = quantities.observedVolume(); newMass = quantities.observedMass();
-			var delta = particles.exactVolume(marker).subtract(quantities.volume());
-			var removedMass = particles.exactMass(marker).subtract(quantities.mass());
-			if (!(removedMass.toDouble() > 0)) continue;
-			var chemical = chemicalParcels == null ? null : chemicalParcels.tryPlanTruncate(marker, newVolume, delta.toFloat(), newMass, removedMass.toDouble());
-			if (chemicalParcels != null && chemical == null) continue;
-			var thermal = domain().planThermalTruncate(marker, quantities.mass(), chemical == null ? null : chemical.kept(),
-					thermalState == null ? Double.NaN : domain().thermalMarkerTemperature(marker));
-			if (removedChemistry != null) removedChemistry.add(materialRegistry.material(particles.materialHandle(marker)).id(),
-					chemicalParcels.indicator(marker), delta, unitScale.kilograms(removedMass), chemical.removed());
-			if (removedMaterials != null) removedMaterials.add(particles.materialHandle(marker), delta.toDouble(), removedMass.toDouble());
-			if (removedThermal != null && thermal != null) removedThermal.add(thermal.removedEnergy());
-			planned.add(new MarkerTruncation(quantities, chemical, thermal));
-			geometric.reserve(quantities);
-			removed = removed.add(delta); if (remaining != null) remaining = remaining.subtract(delta);
+		record PlannedCell(int x, int y, int z, CellRemovalPlan plan) { }
+		List<PlannedCell> planned = new ArrayList<>();
+		float remaining = amount;
+		for (CellCandidate candidate : candidates) {
+			int index = candidate.index();
+			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
+			CellRemovalPlan plan = planRemoveParticlesInCell(x, y, z, remaining, removedChemistry, null, null);
+			if (!plan.markers().isEmpty()) planned.add(new PlannedCell(x, y, z, plan));
+			remaining -= plan.removedVolume();
+			if (remaining <= 1.0E-6F) break;
 		}
-		geometric.finish(planned.stream().map(MarkerTruncation::quantities).toList());
-		return new CellRemovalPlan((float) removed.toDouble(), List.copyOf(planned), geometric);
+		if (removedChemistry != null) chemicalParcels.requireCanRecordEscapedSink(removedChemistry.build());
+		for (PlannedCell cell : planned) {
+			int dirtyCell = cellIndex(cell.x(), cell.y(), cell.z());
+			for (MarkerTruncation entry : cell.plan().markers()) {
+				int i = entry.marker();
+				if (chemicalParcels != null) {
+					chemicalParcels.markDirtyCell(dirtyCell);
+					if (entry.newVolume() > 0.0F) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
+				}
+				particles.setVolume(i, entry.newVolume());
+				particles.setMass(i, entry.newMass());
+				domain().commitThermalTruncate(i, entry.thermalPlan());
+			}
+		}
+		for (int marker = particles.count() - 1; marker >= 0; marker--) {
+			if (particles.volume(marker) == 0.0F) removeParticle(marker);
+		}
+		if (removedChemistry != null) chemicalParcels.recordEscapedSink(removedChemistry.build());
+		return amount - remaining;
 	}
 
 	/**
@@ -549,7 +556,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 				: ChemicalTransferLedger.builder(chemicalParcels.registry());
 		CellRemovalPlan plan = planRemoveParticlesInCell(cellX, cellY, cellZ, maximum, removedChemistry, null, null);
 		if (removedChemistry != null) chemicalParcels.requireCanRecordEscapedSink(removedChemistry.build());
-		commitLiquidRemoval(plan);
+		commitRemoveParticlesInCell(cellX, cellY, cellZ, plan);
 		if (removedChemistry != null) chemicalParcels.recordEscapedSink(removedChemistry.build());
 		return plan.removedVolume();
 	}
@@ -561,7 +568,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 	) {
 		CellRemovalPlan plan = planRemoveParticlesInCell(cellX, cellY, cellZ, maximum,
 				removedChemistry, removedMaterials, removedThermal);
-		commitLiquidRemoval(plan);
+		commitRemoveParticlesInCell(cellX, cellY, cellZ, plan);
 		return plan.removedVolume();
 	}
 
@@ -621,7 +628,6 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 
 	/** Exact raw carrier capacity for transfer planning. */
 	cc.ecisr.mmm.units.SignedDyadic[] availableCellVolumes() {
-		if (liquidGeometryState != null) return LiquidGeometryInventorySupport.available(domain());
 		var exact = new cc.ecisr.mmm.units.SignedDyadic[cellCount];
 		Arrays.fill(exact, cc.ecisr.mmm.units.SignedDyadic.ZERO);
 		float h = config.cellSize();

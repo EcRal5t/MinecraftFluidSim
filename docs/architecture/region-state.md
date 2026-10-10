@@ -146,16 +146,6 @@ REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine
 
 所有 required payload 必须属于同一 region、dimension 和 generation。runtime handle、平滑 density、pressure、mesh 和 UI 读数不持久化。
 
-液体体积与材料质量总账从原始载体列精确求和，最后一次舍入为 binary64；区域总量、逐材料总量和 section 描述分别遵守同一规则。section 的已舍入小计用于核对该片载荷，区域总量仍由完整原始列推导。
-
-manifest 必须保存 `mmm:liquid_inventory` 扩展，按原始 marker ordinal 保存规范有理数体积和 dyadic 质量，体积编码包含约分后的分子和正分母。section 内的 float 体积与 double 质量是这些数量的观察值；恢复要求二者与精确数量的一次舍入结果一致。区域、逐材料和 section 的总账均由完整数量推导，pure 布局也保留独立质量。编码限制数量、整数位数和总字节数，拒绝重复、缺失、非规范或截断的库存载荷；扩展字节纳入 manifest 校验和。
-
-解析液体几何随库存载体保存为 manifest 扩展 `mmm:liquid_geometry`。它包含归一化根宽、控制体地址、精确整数顶点与支撑平面、面连接、片段平均速度，以及片段和原始 marker ordinal 的库存组关联。凸片段另保存所属力学控制体的规范首片段索引，同一控制体要求库存组与速度一致，跨叶格的辅助切割保持这一关联。一个库存组可跨 section，占据多个互不相连的片段；section 仍按库存组质心归档点列，完整区域代次统一保存实际液体几何。
-
-几何扩展使用有长度上限的规范二进制编码，纳入 manifest 校验和。读取时先按原始 ordinal 组装载体列，再校验几何封闭性、正体积、片段互不重叠、实际碰撞开放空间、精确库存体积、空间一阶矩和质量加权动量。质心与 marker 速度的 binary32 舍入误差分别核对。几何与库存不一致时，恢复在激活求解器前失败。
-
-解析气腔的空间支持保存在 manifest 扩展 `mmm:gas_geometry`，与气体库存一起恢复。它包含同一精确凸片段编码、片段所属气腔和外部空间封闭性；节点容量从实际片段积分得到。同一基础格可保存多个独立气腔，格级 membership 列在这种表示下为空。读取时要求气相完整覆盖液体与碰撞几何的剩余开放空间，并与其真实连通性一一对应。控制器存档要求封闭外部空间。当前解析气腔接入要求颗粒和连续固相库存为空，直到它们具备共同空间支持。
-
 ### Manifest
 
 求解配置包含 `ViscousWallCondition`（`FREE_SLIP` / `NO_SLIP`），编码与 manifest checksum 同时覆盖它。恢复材料域时由已提交能力包重新绑定黏度定义，黏性矩阵与物性派生数组在候选内重建。

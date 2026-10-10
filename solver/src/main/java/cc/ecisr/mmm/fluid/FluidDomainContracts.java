@@ -97,45 +97,6 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 		}
 	}
 
-	/** Local extensive inventory allocation and its observed arithmetic changes. */
-	public record InventoryRepartitionStats(int repartitions, double maximumRelativeMassError, double maximumTemperatureObservationChangeK,
-			double momentumRoundoffX, double momentumRoundoffY, double momentumRoundoffZ, double kineticRoundoffChangeJoules) {
-		static final InventoryRepartitionStats INACTIVE = new InventoryRepartitionStats(0, 0, 0, 0, 0, 0, 0);
-		public InventoryRepartitionStats {
-			if (repartitions < 0 || !(maximumRelativeMassError >= 0) || !Double.isFinite(maximumRelativeMassError)
-					|| !(maximumTemperatureObservationChangeK >= 0) || !Double.isFinite(maximumTemperatureObservationChangeK)
-					|| !Double.isFinite(momentumRoundoffX) || !Double.isFinite(momentumRoundoffY) || !Double.isFinite(momentumRoundoffZ) || !Double.isFinite(kineticRoundoffChangeJoules))
-				throw new IllegalArgumentException("Local inventory observations must be finite");
-		}
-		InventoryRepartitionStats plus(InventoryRepartitionStats other) {
-			return new InventoryRepartitionStats(Math.addExact(repartitions, other.repartitions), Math.max(maximumRelativeMassError, other.maximumRelativeMassError),
-					Math.max(maximumTemperatureObservationChangeK, other.maximumTemperatureObservationChangeK), momentumRoundoffX + other.momentumRoundoffX,
-					momentumRoundoffY + other.momentumRoundoffY, momentumRoundoffZ + other.momentumRoundoffZ, kineticRoundoffChangeJoules + other.kineticRoundoffChangeJoules);
-		}
-	}
-	/** Successful resolved substeps and their reconstruction/velocity-observation error bounds. */
-	public record GeometryStepStats(int resolvedSubsteps, double velocityFittingErrorMetresPerSecond,
-			double velocityObservationDisplacementErrorMetres, double coordinateRepresentationDisplacementErrorMetres,
-			double rateRepresentationErrorPerSecond, InventoryRepartitionStats inventory) {
-		GeometryStepStats(int substeps, double velocityError, double positionError, double coordinateError, double rateError) {
-			this(substeps, velocityError, positionError, coordinateError, rateError, InventoryRepartitionStats.INACTIVE);
-		}
-		static final GeometryStepStats INACTIVE = new GeometryStepStats(0, 0, 0, 0, 0);
-		public GeometryStepStats {
-			if (resolvedSubsteps < 0 || !(velocityFittingErrorMetresPerSecond >= 0) || !Double.isFinite(velocityFittingErrorMetresPerSecond)
-					|| !(velocityObservationDisplacementErrorMetres >= 0) || !Double.isFinite(velocityObservationDisplacementErrorMetres)
-					|| !(coordinateRepresentationDisplacementErrorMetres >= 0) || !Double.isFinite(coordinateRepresentationDisplacementErrorMetres)
-					|| !(rateRepresentationErrorPerSecond >= 0) || !Double.isFinite(rateRepresentationErrorPerSecond) || inventory == null)
-				throw new IllegalArgumentException("Geometric observation bounds must be finite and non-negative");
-		}
-		GeometryStepStats plus(GeometryStepStats other) {
-			return new GeometryStepStats(Math.addExact(resolvedSubsteps, other.resolvedSubsteps),
-					Math.max(velocityFittingErrorMetresPerSecond, other.velocityFittingErrorMetresPerSecond),
-					Math.max(velocityObservationDisplacementErrorMetres, other.velocityObservationDisplacementErrorMetres),
-					Math.max(coordinateRepresentationDisplacementErrorMetres, other.coordinateRepresentationDisplacementErrorMetres),
-					Math.max(rateRepresentationErrorPerSecond, other.rateRepresentationErrorPerSecond), inventory.plus(other.inventory));
-		}
-	}
 	public record StepStats(
 			int substeps,
 			int pressureIterations,
@@ -160,15 +121,13 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 			FluidDomain.ThermalAxisStats thermalAxis,
 			GranularDepositDynamics.Stats granularTransition,
 			CarrierViscosityStats carrierViscosity,
-			ViscousStepStats viscosity,
-			GeometryStepStats geometry
+			ViscousStepStats viscosity
 	) {
 		public StepStats {
 			java.util.Objects.requireNonNull(thermalAxis, "thermalAxis");
 			java.util.Objects.requireNonNull(granularTransition, "granularTransition");
 			java.util.Objects.requireNonNull(carrierViscosity, "carrierViscosity");
 			java.util.Objects.requireNonNull(viscosity, "viscosity");
-			java.util.Objects.requireNonNull(geometry, "geometry");
 		}
 		public float relativeVolumeError() { return volumeBefore == 0.0F ? 0.0F : Math.abs(volumeAfter - volumeBefore) / volumeBefore; }
 		public double relativeMassError() { return massBefore == 0.0 ? 0.0 : Math.abs(massAfter - massBefore) / massBefore; }

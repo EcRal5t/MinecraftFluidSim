@@ -221,11 +221,7 @@ final class MechanicalStageAssembly {
 	}
 
 	private static MechanicalStepPipeline.Access pipelineAccess(FluidDomain domain) {
-		var resolved = new ResolvedLiquidMechanicalStage(domain);
 		return new MechanicalStepPipeline.Access() {
-			@Override public MechanicalStepPipeline.SubstepOutcome advanceResolvedGeometry(float dt, boolean captureAudit, MechanicalAuditAccumulator audit) {
-				return domain.liquidGeometryState == null ? null : resolved.advance(dt, captureAudit, audit);
-			}
 			@Override public double projectedCourant(float dt) {
 				if (!CellLiquidVolumeTransport.enabled()) {
 					double[] maximum = new double[3];

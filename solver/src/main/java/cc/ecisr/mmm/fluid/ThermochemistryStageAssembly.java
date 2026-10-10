@@ -26,9 +26,6 @@ final class ThermochemistryStageAssembly {
 				new ThermalTransportStage.Workspace(domain.thermalMarkerContext()),
 				new ThermalTransportStage.Access() {
 					@Override public void ensureGrid() { domain.ensureInventoryGrid(); }
-					@Override public ResolvedLiquidConductionPlan resolvedConduction(double dtSeconds) {
-						return domain.liquidGeometryState == null ? null : new ResolvedLiquidConductionPlan(domain, dtSeconds);
-					}
 					@Override public java.util.List<cc.ecisr.mmm.thermal.ThermalCarrierTransport.Contact> carrierContacts() {
 						return LiquidThermalConduction.contacts(domain);
 					}
@@ -45,9 +42,6 @@ final class ThermochemistryStageAssembly {
 						domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
 						domain.particles, domain.thermalMarkerContext()),
 				new ChemicalReactionStage.Access() {
-					@Override public ResolvedLiquidReactionPlan resolvedReaction() {
-						return domain.liquidGeometryState == null ? null : new ResolvedLiquidReactionPlan(domain);
-					}
 					@Override public void markGridDirty() { domain.gridDirty = true; }
 					@Override public cc.ecisr.mmm.chemistry.ChemicalParcelStore chemicalParcels() {
 						return domain.chemicalParcels;

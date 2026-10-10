@@ -53,7 +53,7 @@ final class GranularCoupledPressureSolver {
 		double rz = dot(residual, direction);
 		double rms = norm(residual);
 		int iterations = 0;
-		for (; rms > target && iterations < domain.config.maxSolverIterations(); iterations++) {
+		for (; rms > target && iterations < domain.config.maxPressureIterations(); iterations++) {
 			drag.applyMatrix(direction, product);
 			double denominator = dot(direction, product);
 			if (!(denominator > 0 && Double.isFinite(denominator) && rz > 0 && Double.isFinite(rz))) break;

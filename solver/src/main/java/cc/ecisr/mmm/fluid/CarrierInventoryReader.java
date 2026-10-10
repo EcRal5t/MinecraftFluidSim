@@ -21,7 +21,6 @@ final class CarrierInventoryReader {
 	}
 
 	FlipParticleState exportParticleState() {
-		if (domain.liquidGeometryState != null) LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
 		if (domain.hasNonDefaultMaterialState()) {
 			throw new IllegalStateException("Multi-material markers cannot use the pure-water particle handoff");
 		}
@@ -42,13 +41,12 @@ final class CarrierInventoryReader {
 		}
 		return new FlipParticleState(
 				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), particleCount,
-				domain.totalVolume(), positionVolume, velocities, solidMask, domain.liquidGeometryState, domain.particles.inventory()
+				domain.totalVolume(), positionVolume, velocities, solidMask
 		);
 	}
 
 	/** Exports exact multi-material marker state; runtime handles are replaced by the stable ordered palette. */
 	FlipMaterialParticleState exportMaterialParticleState() {
-		if (domain.liquidGeometryState != null) LiquidGeometryStateMapper.requireCompatible(domain.liquidGeometryState, domain);
 		if (domain.materialRegistry == null) {
 			throw new IllegalStateException("Material particle handoff requires a bound registry");
 		}
@@ -70,7 +68,7 @@ final class CarrierInventoryReader {
 				domain.totalVolumeExact(), domain.totalMass(), domain.materialRegistry.materials(),
 				positionVolume, velocities, domain.geometry.cutCells.copyMicroMasks(),
 				domain.particles.copyMass(),
-				domain.particles.copyMaterialHandles(), domain.liquidGeometryState, domain.particles.inventory()
+				domain.particles.copyMaterialHandles()
 		);
 	}
 

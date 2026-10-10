@@ -21,7 +21,6 @@ final class MechanicalStepPipeline {
 	) { }
 
 	interface Access {
-		SubstepOutcome advanceResolvedGeometry(float dt, boolean captureAudit, MechanicalAuditAccumulator audit);
 		void ensureGrid();
 		void prepareCarrierProperties();
 		double projectedCourant(float dt);
@@ -57,11 +56,9 @@ final class MechanicalStepPipeline {
 	}
 
 	record SubstepOutcome(int pressureIterations, GranularMechanics.StepStats granularMechanics,
-	                      boolean pendingWorkConsumed, FluidDomain.ViscousStepStats viscosity, FluidDomain.GeometryStepStats geometry) { }
+	                      boolean pendingWorkConsumed, FluidDomain.ViscousStepStats viscosity) { }
 
 	SubstepOutcome substep(float dt, int substep, boolean captureAudit, MechanicalAuditAccumulator audit) {
-		var resolved = access.advanceResolvedGeometry(dt, captureAudit, audit);
-		if (resolved != null) return resolved;
 		access.ensureGrid();
 		double stageKineticEnergy = captureAudit ? access.gridKineticEnergyJoules() : 0.0;
 		if (captureAudit) audit.particleToGridTransferJoules +=
@@ -172,7 +169,7 @@ final class MechanicalStepPipeline {
 			else audit.particleCollisionWorkJoules += transfer;
 		}
 		granularMechanicalStage.commitCollision();
-		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending, viscosity, FluidDomain.GeometryStepStats.INACTIVE);
+		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending, viscosity);
 	}
 
 	/** Pressure can accelerate a resting liquid beyond the initial marker-based step estimate. */

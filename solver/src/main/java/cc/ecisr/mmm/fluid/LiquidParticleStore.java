@@ -1,14 +1,13 @@
 package cc.ecisr.mmm.fluid;
 
 import java.util.Arrays;
-import cc.ecisr.mmm.units.SignedDyadic;
-import cc.ecisr.mmm.units.ExactVolume;
 
 /**
  * Unique owner of the authoritative liquid marker columns: position, velocity, volume, solver
  * mass, material handle and pressure-phase label, plus the live count and array capacity.
- * Exact extensive quantities retain any remainder beyond their float/double observations.
- * The carrier mutation coordinator aligns structural edits with chemistry and thermal columns.
+ * Growth, wholesale count transitions and main-column swap-remove happen only here. Chemistry
+ * and thermal side columns are not owned by this store; the domain coordinates them until the
+ * carrier mutation coordinator exists. S12 moves this class to the solver domain package.
  */
 final class LiquidParticleStore {
 	private final int maximumParticleCount;
@@ -21,7 +20,6 @@ final class LiquidParticleStore {
 	private float[] velocityZ;
 	private float[] volume;
 	private double[] mass;
-	private ExactVolume[] exactVolume; private SignedDyadic[] exactMass;
 	private int[] materialHandle;
 	private int[] phaseLabel;
 
@@ -37,8 +35,6 @@ final class LiquidParticleStore {
 		this.velocityZ = new float[initialCapacity];
 		this.volume = new float[initialCapacity];
 		this.mass = new double[initialCapacity];
-		this.exactVolume = new ExactVolume[initialCapacity];
-		this.exactMass = new SignedDyadic[initialCapacity];
 		this.materialHandle = new int[initialCapacity];
 		this.phaseLabel = new int[initialCapacity];
 	}
@@ -75,35 +71,11 @@ final class LiquidParticleStore {
 
 	float volume(int index) { return volume[index]; }
 
-	void setVolume(int index, float value) { volume[index] = value; exactVolume[index] = null; }
+	void setVolume(int index, float value) { volume[index] = value; }
 
 	double mass(int index) { return mass[index]; }
 
-	void setMass(int index, double value) { mass[index] = value; exactMass[index] = null; }
-
-	ExactVolume exactVolume(int index) { return exactVolume[index] == null ? ExactVolume.of(volume[index]) : exactVolume[index]; }
-	SignedDyadic exactMass(int index) { return exactMass[index] == null ? SignedDyadic.of(mass[index]) : exactMass[index]; }
-	void setQuantities(int index, SignedDyadic v, SignedDyadic m) { setQuantities(index, ExactVolume.of(v), m); }
-	void setQuantities(int index, ExactVolume v, SignedDyadic m) {
-		volume[index] = v.toFloat(); mass[index] = m.toDouble();
-		exactVolume[index] = v.equals(ExactVolume.of(volume[index])) ? null : v;
-		exactMass[index] = m.equals(SignedDyadic.of(mass[index])) ? null : m;
-	}
-	LiquidInventoryState inventory() {
-		var v = new ExactVolume[count]; var m = new SignedDyadic[count];
-		for (int p = 0; p < count; p++) { v[p] = exactVolume(p); m[p] = exactMass(p); }
-		return new LiquidInventoryState(v, m);
-	}
-	ExactVolume totalVolume() {
-		var total = ExactVolume.of(SignedDyadic.sum(volume, count));
-		for (int p = 0; p < count; p++) if (exactVolume[p] != null) total = total.add(exactVolume[p].subtract(SignedDyadic.of(volume[p])));
-		return total;
-	}
-	SignedDyadic totalMass() {
-		var total = SignedDyadic.sum(mass, count);
-		for (int p = 0; p < count; p++) if (exactMass[p] != null) total = total.add(exactMass[p].subtract(SignedDyadic.of(mass[p])));
-		return total;
-	}
+	void setMass(int index, double value) { mass[index] = value; }
 
 	int materialHandle(int index) { return materialHandle[index]; }
 
@@ -114,10 +86,7 @@ final class LiquidParticleStore {
 	void setPhaseLabel(int index, int value) { phaseLabel[index] = value; }
 
 	/** Wholesale count transition for restore, clear and reseed; marker-level edits go through spawn/swapRemove. */
-	void setCount(int value) {
-		if (value < count) { Arrays.fill(exactVolume, value, count, null); Arrays.fill(exactMass, value, count, null); }
-		this.count = value;
-	}
+	void setCount(int value) { this.count = value; }
 
 	void incrementCount() { this.count = count + 1; }
 
@@ -127,8 +96,6 @@ final class LiquidParticleStore {
 	 */
 	void swapRemove(int index) {
 		count--;
-		var lastVolume = exactVolume[count]; var lastMass = exactMass[count];
-		exactVolume[count] = null; exactMass[count] = null;
 		if (index == count) return;
 		positionX[index] = positionX[count];
 		positionY[index] = positionY[count];
@@ -138,7 +105,6 @@ final class LiquidParticleStore {
 		velocityZ[index] = velocityZ[count];
 		volume[index] = volume[count];
 		mass[index] = mass[count];
-		exactVolume[index] = lastVolume; exactMass[index] = lastMass;
 		materialHandle[index] = materialHandle[count];
 		phaseLabel[index] = phaseLabel[count];
 	}
@@ -158,7 +124,6 @@ final class LiquidParticleStore {
 		velocityZ = Arrays.copyOf(velocityZ, capacity);
 		volume = Arrays.copyOf(volume, capacity);
 		mass = Arrays.copyOf(mass, capacity);
-		exactVolume = Arrays.copyOf(exactVolume, capacity); exactMass = Arrays.copyOf(exactMass, capacity);
 		materialHandle = Arrays.copyOf(materialHandle, capacity);
 		phaseLabel = Arrays.copyOf(phaseLabel, capacity);
 		return capacity;

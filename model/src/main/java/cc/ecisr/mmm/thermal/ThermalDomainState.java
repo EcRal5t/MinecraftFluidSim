@@ -157,14 +157,6 @@ public final class ThermalDomainState {
 
 	public void restoreLiquidEnergies(double[] restored) { liquidEnergy.adoptRestored(restored); }
 
-	public ConductionInventory prepareConduction(ThermalCarrierContext markers, AirNetwork network) {
-		return new ConductionInventory(this, markers, network);
-	}
-	public void commitConduction(ConductionInventory.Plan plan, ThermalCarrierContext markers, AirNetwork network) {
-		if (plan == null) throw new IllegalArgumentException("Conduction plan is missing");
-		plan.commit(this, markers, network); spatialObservationPrepared = false;
-	}
-
 	public void restoreGasEnergies(AirNetwork network, double[] restored) {
 		gasState.validateRestoredNodeEnergies(network, restored);
 		gasState.replaceNodeEnergies(restored);
@@ -228,11 +220,6 @@ public final class ThermalDomainState {
 	) {
 		liquidEnergy.requireReactionState(marker, candidateMixture, candidateMass, markers);
 	}
-	public void requireReactionState(
-			int marker, ChemicalMixtureRecord candidateMixture, SignedDyadic candidateMass, ThermalCarrierContext markers
-	) {
-		liquidEnergy.requireReactionState(marker, candidateMixture, candidateMass, markers);
-	}
 
 	public void addExternalMarker(int marker, ThermalCarrierContext markers) {
 		liquidEnergy.addExternalMarker(marker, markers);
@@ -255,12 +242,6 @@ public final class ThermalDomainState {
 
 	public LiquidEnergyColumn.Truncation planTruncate(
 			int marker, double newMass, ChemicalMixtureRecord keptMixture,
-			double previousTemperatureK, ThermalCarrierContext markers
-	) {
-		return liquidEnergy.planTruncate(marker, newMass, keptMixture, previousTemperatureK, markers);
-	}
-	public LiquidEnergyColumn.Truncation planTruncate(
-			int marker, SignedDyadic newMass, ChemicalMixtureRecord keptMixture,
 			double previousTemperatureK, ThermalCarrierContext markers
 	) {
 		return liquidEnergy.planTruncate(marker, newMass, keptMixture, previousTemperatureK, markers);

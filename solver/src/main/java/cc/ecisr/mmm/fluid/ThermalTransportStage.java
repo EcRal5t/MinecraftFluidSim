@@ -12,7 +12,6 @@ final class ThermalTransportStage {
 	interface Access {
 		void ensureGrid();
 		ThermalDomainState thermalState();
-		ResolvedLiquidConductionPlan resolvedConduction(double dtSeconds);
 		double faceArea(int x, int y, int z, int direction);
 		ThermalTransport.FixedBoundary fixedBoundary(int x, int y, int z, int direction);
 		java.util.List<cc.ecisr.mmm.thermal.ThermalCarrierTransport.Contact> carrierContacts();
@@ -29,12 +28,6 @@ final class ThermalTransportStage {
 	ThermalTransport.Stats step(double dtSeconds) {
 		ThermalDomainState thermal = access.thermalState();
 		if (thermal == null) throw new IllegalStateException("Thermal state is not bound");
-		try {
-			var resolved = access.resolvedConduction(dtSeconds);
-			if (resolved != null) return resolved.publish();
-		} catch (IllegalArgumentException | IllegalStateException | ArithmeticException invalid) {
-			throw new FluidDomain.ThermalTransportBlockedException(invalid.getMessage(), invalid);
-		}
 		access.ensureGrid();
 		var contacts = access.carrierContacts();
 		if (contacts != null) return thermal.stepCarrierConduction(state.markers(), contacts, dtSeconds);

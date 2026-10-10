@@ -25,7 +25,7 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 				significand = significand.shiftRight(trailing);
 				exponent = Math.addExact(exponent, trailing);
 			}
-			if (significand.abs().bitLength() > MAX_SIGNIFICAND_BITS) {
+			if (significand.bitLength() > MAX_SIGNIFICAND_BITS) {
 				throw new IllegalArgumentException("Thermal dyadic significand is over budget");
 			}
 		}
@@ -77,16 +77,6 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 	}
 	@Override public int hashCode() { return 31 * significand().hashCode() + exponent; }
 	@Override public String toString() { return "SignedDyadic[significand=" + significand() + ", exponent=" + exponent + "]"; }
-	public SignedDyadic multiply(SignedDyadic other) {
-		Objects.requireNonNull(other, "other");
-		if (sign == 0 || other.sign == 0) return ZERO;
-		int resultExponent = Math.addExact(exponent, other.exponent);
-		if (magnitudeBits < Long.SIZE && other.magnitudeBits < Long.SIZE) {
-			try { return new SignedDyadic(Math.multiplyExact(compact, other.compact), resultExponent); }
-			catch (ArithmeticException overflow) { }
-		}
-		return new SignedDyadic(significand().multiply(other.significand()), resultExponent);
-	}
 
 	public static SignedDyadic of(double value) {
 		if (!Double.isFinite(value)) throw new IllegalArgumentException("Thermal audit value must be finite");
@@ -209,30 +199,7 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 		return sign == 0 ? ZERO : magnitudeBits < Long.SIZE ? new SignedDyadic(-compact, exponent) : new SignedDyadic(significand().negate(), exponent);
 	}
 
-	/** Round the exact value once, including subnormal and overflowing observations. */
-	public double toDouble() { return roundedObservation(52, -1074, 1023); }
-	public float toFloat() { return (float) roundedObservation(23, -149, 127); }
-
-	private double roundedObservation(int fractionBits, int minimumUnitExponent, int maximumExponent) {
-		if (sign == 0) return 0;
-		long leadingExponent = (long) exponent + magnitudeBits - 1;
-		if (leadingExponent > maximumExponent) return Math.copySign(Double.POSITIVE_INFINITY, sign);
-		if (leadingExponent < (long) minimumUnitExponent - 1) return Math.copySign(0.0, sign);
-		if (magnitudeBits <= fractionBits + 1 && exponent >= minimumUnitExponent)
-			return Math.scalb((double) compact, exponent);
-		int unitExponent = (int) Math.max(leadingExponent - fractionBits, minimumUnitExponent);
-		BigInteger magnitude = significand().abs();
-		int cut = Math.subtractExact(unitExponent, exponent);
-		BigInteger units;
-		if (cut <= 0) units = magnitude.shiftLeft(-cut);
-		else {
-			units = magnitude.shiftRight(cut);
-			boolean half = magnitude.testBit(cut - 1);
-			if (half && (magnitude.getLowestSetBit() < cut - 1 || units.testBit(0)))
-				units = units.add(BigInteger.ONE);
-		}
-		return Math.copySign(Math.scalb((double) units.longValueExact(), unitExponent), sign);
-	}
+	public double toDouble() { return Math.scalb(magnitudeBits < Long.SIZE ? (double) compact : significand().doubleValue(), exponent); }
 
 	@Override
 	public int compareTo(SignedDyadic other) {

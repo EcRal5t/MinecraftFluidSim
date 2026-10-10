@@ -132,56 +132,11 @@ final class CarrierMutationCoordinator {
 		if (energies != null) domain.thermalState.recordRoundoff(candidate.energyRoundoff);
 	}
 
-	/** Publishes independent geometric control inventories and their preflighted caloric ledger. */
-	void publishGeometricRepartition(LiquidInventoryRepartitionPlan candidate) {
-		verify(candidate.intent, CarrierMutationPlan.Kind.WHOLESALE_COUNT);
-		candidate.requireSource(domain);
-		if (!candidate.changed()) return;
-		int count = candidate.markers.size(); domain.ensureParticleCapacity(count);
-		ChemicalMixtureRecord[] records = new ChemicalMixtureRecord[count]; boolean[] indicators = new boolean[count];
-		double[] energy = domain.thermalState == null ? null : new double[count];
-		for (int p = 0; p < count; p++) {
-			var marker = candidate.markers.get(p); records[p] = marker.mixture(); indicators[p] = marker.indicator();
-			if (energy != null) energy[p] = marker.energy();
-		}
-		var chemical = domain.chemicalParcels == null ? null : domain.chemicalParcels.planMarkerRemap(domain.particles.count(), records, indicators);
-		var ledger = domain.thermalState == null ? null : domain.thermalState.auditLedger().withRoundoff(candidate.energyRoundoff);
-		for (int p = 0; p < count; p++) {
-			var marker = candidate.markers.get(p);
-			domain.particles.setPositionX(p, marker.x()); domain.particles.setPositionY(p, marker.y()); domain.particles.setPositionZ(p, marker.z());
-			domain.particles.setVelocityX(p, marker.vx()); domain.particles.setVelocityY(p, marker.vy()); domain.particles.setVelocityZ(p, marker.vz());
-			domain.particles.setQuantities(p, marker.volume(), marker.mass()); domain.particles.setMaterialHandle(p, marker.material());
-			domain.particles.setPhaseLabel(p, domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(marker.material()));
-		}
-		if (chemical != null) {
-			domain.chemicalParcels.commitMarkerRemap(chemical);
-			for (int c = 0; c < domain.cellCount; c++) domain.chemicalParcels.markDirtyCell(c);
-		}
-		if (energy != null) { domain.thermalState.restoreLiquidEnergies(energy); domain.thermalState.restoreAuditLedger(ledger); }
-		domain.particles.setCount(count); domain.bumpCarrierMutationRevision(); domain.liquidGeometryState = candidate.geometry;
-		domain.gridDirty = true; domain.velocityGridDirty = true;
-	}
-
-	/** Publishes complete-control reaction products and conservative mass shares with unchanged U. */
-	void publishGeometricReaction(ResolvedLiquidReactionPlan candidate) {
-		verify(candidate.intent, CarrierMutationPlan.Kind.WHOLESALE_COUNT); candidate.requireSource(domain);
-		var dirty = candidate.copyDirtyCells();
-		if (candidate.chemical != null) {
-			domain.chemicalParcels.commitMarkerRemap(candidate.chemical);
-			for (int p = 0; p < candidate.markerCount(); p++) domain.particles.setQuantities(p, candidate.volume(p), candidate.mass(p));
-			domain.bumpCarrierMutationRevision(); domain.gridDirty = true; domain.velocityGridDirty = true;
-		}
-		domain.chemicalParcels.restoreDirtyCells(dirty); domain.chemicalParcels.restoreReactionCursor(candidate.cursor);
-	}
-
 	/** Clears the liquid marker column together with its chemistry column after a validated plan. */
 	void clearLiquidMarkers(CarrierMutationPlan plan) {
 		verify(plan, CarrierMutationPlan.Kind.WHOLESALE_COUNT);
-		var emptyGeometry = domain.liquidGeometryState == null ? null
-				: new LiquidGeometryState(domain.liquidGeometryState.rootWidthMetres(), java.util.List.of(), new int[0]);
 		if (domain.chemicalParcels != null) domain.chemicalParcels.clear(domain.particles.count());
 		domain.particles.setCount(0);
-		domain.liquidGeometryState = emptyGeometry;
 		domain.bumpCarrierMutationRevision();
 		domain.gridDirty = true;
 	}

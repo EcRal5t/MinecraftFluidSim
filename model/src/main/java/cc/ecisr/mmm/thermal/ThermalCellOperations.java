@@ -75,7 +75,7 @@ final class ThermalCellOperations {
 				return registry.material(materialByGranularHandle[material]);
 			}
 			@Override public double mass(int carrier) {
-				if (carrier < liquidCount) return liquid.physicalMass(carrier, markers);
+				if (carrier < liquidCount) return unitScale.kilograms(markers.mass(carrier));
 				if (carrier < activeStart) return granular.coherentPhases().group(carrier - coherentStart).mass();
 				return carrier < depositStart
 						? markers.activeParcelMass(carrier - activeStart)
@@ -146,10 +146,10 @@ final class ThermalCellOperations {
 		ArrayList<ThermalStateFunction.InventoryPortion> finalInventory = new ArrayList<>();
 		for (int marker = 0; marker < markers.markerCount(); marker++) if (markers.cell(marker) == cell) {
 			GranularEnergyState.ReactionMarker replacement = replacements.remove(marker);
-			double mass = replacement == null ? liquid.physicalMass(marker, markers) : unitScale.kilograms(replacement.mass());
+			double mass = replacement == null ? markers.mass(marker) : replacement.mass();
 			ChemicalMixtureRecord mixture = replacement == null ? markers.mixture(marker) : replacement.mixture();
 			finalInventory.add(new ThermalStateFunction.InventoryPortion(
-					materialByFluidHandle[markers.fluidMaterialHandle(marker)], mass,
+					materialByFluidHandle[markers.fluidMaterialHandle(marker)], unitScale.kilograms(mass),
 					ThermalStateFunction.stableAmounts(mixture, markers.chemicalRegistry())));
 		}
 		if (!replacements.isEmpty()) throw new IllegalArgumentException("Thermal reaction names a missing liquid marker");
@@ -231,7 +231,7 @@ final class ThermalCellOperations {
 		for (int marker = markers.nextMarkerInCell(cell, -1); marker >= 0; marker = markers.nextMarkerInCell(cell, marker)) {
 			inventory.add(new ThermalStateFunction.InventoryPortion(
 					materialByFluidHandle[markers.fluidMaterialHandle(marker)],
-					liquid.physicalMass(marker, markers),
+					unitScale.kilograms(markers.mass(marker)),
 					ThermalStateFunction.stableAmounts(markers.mixture(marker), markers.chemicalRegistry())));
 			energy = energy.add(SignedDyadic.of(liquid.energy(marker)));
 		}
@@ -453,7 +453,7 @@ final class ThermalCellOperations {
 		double total = 0.0;
 		for (int marker = 0; marker < markers.markerCount(); marker++) if (markers.cell(marker) == cell) {
 			total += liquid.modeledEnergy(
-					marker, markers.exactMass(marker), markers.mixture(marker), temperatureK, markers);
+					marker, markers.mass(marker), markers.mixture(marker), temperatureK, markers);
 		}
 		for (CoherentPhaseStore.Group group : granular.coherentPhases().snapshot()) if (group.cell() == cell) {
 			int material = registry.materialHandle(group.phaseId());
@@ -486,7 +486,7 @@ final class ThermalCellOperations {
 
 	private double liquidBaseEnergy(int marker, ThermalCarrierContext markers) {
 		return stateFunction.baseEnergy(materialByFluidHandle[markers.fluidMaterialHandle(marker)],
-				liquid.physicalMass(marker, markers),
+				unitScale.kilograms(markers.mass(marker)),
 				markers.mixture(marker), markers.chemicalRegistry());
 	}
 }

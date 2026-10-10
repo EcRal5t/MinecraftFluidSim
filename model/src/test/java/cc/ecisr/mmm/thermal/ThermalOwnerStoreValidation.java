@@ -24,65 +24,6 @@ public final class ThermalOwnerStoreValidation {
 		granularColumnTransactionsConserveEnergy();
 		liquidTemperatureTracksMutableInventory();
 		referenceTermsKeepCanonicalRationalRounding();
-		exactBinaryObservationsRoundOnce();
-		exactVolumeObservationsRoundOnce();
-	}
-	private static void exactVolumeObservationsRoundOnce() {
-		var one = cc.ecisr.mmm.units.ExactVolume.of(1);
-		var tiny = new cc.ecisr.mmm.units.ExactVolume(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(3).shiftLeft(2000));
-		var floatTie = one.add(SignedDyadic.of(1, -24)); var doubleTie = one.add(SignedDyadic.of(1, -53));
-		require(floatTie.add(tiny).toFloat() == Math.nextUp(1.0F) && (float) floatTie.add(tiny).toDouble() == 1
-				&& floatTie.subtract(tiny).toFloat() == 1 && floatTie.toFloat() == 1, "Rational binary32 observation rounded through binary64 or lost its tie");
-		require(doubleTie.add(tiny).toDouble() == Math.nextUp(1.0) && doubleTie.subtract(tiny).toDouble() == 1 && doubleTie.toDouble() == 1,
-				"Rational binary64 observation lost its exact midpoint");
-		var third = new cc.ecisr.mmm.units.ExactVolume(java.math.BigInteger.ONE, java.math.BigInteger.valueOf(3));
-		require(third.add(third).add(third).equals(one) && third.multiply(one.subtract(third)).divide(third).equals(one.subtract(third)), "Rational volume arithmetic changed a complete quantity");
-		var minimumDouble = third.multiply(SignedDyadic.of(1, -1074)); var minimumFloat = third.multiply(SignedDyadic.of(1, -149));
-		require(minimumDouble.toDouble() == 0 && minimumDouble.add(minimumDouble).toDouble() == Double.MIN_VALUE
-				&& Double.doubleToRawLongBits(minimumDouble.negate().toDouble()) == Long.MIN_VALUE
-				&& minimumFloat.toFloat() == 0 && minimumFloat.add(minimumFloat).toFloat() == Float.MIN_VALUE, "Rational subnormal observations lost rounding or signed zero");
-		var nearLimit = new cc.ecisr.mmm.units.ExactVolume(java.math.BigInteger.ONE.shiftLeft(32767).subtract(java.math.BigInteger.ONE),
-				java.math.BigInteger.ONE.shiftLeft(32766).add(java.math.BigInteger.ONE));
-		require(nearLimit.toDouble() == 2, "A bounded wide volume overflowed before ratio scaling");
-		var wideDyadic = new SignedDyadic(java.math.BigInteger.ONE.shiftLeft(32766).add(java.math.BigInteger.ONE), -32766);
-		require(cc.ecisr.mmm.units.ExactVolume.of(wideDyadic).equals(one.add(SignedDyadic.of(1, -32766))), "Dyadic conversion counted the numerator and denominator against one component budget");
-		try { new cc.ecisr.mmm.units.ExactVolume(java.math.BigInteger.ONE.shiftLeft(32768), java.math.BigInteger.valueOf(3)); throw new AssertionError("Volume quantity budget was ignored"); }
-		catch (IllegalArgumentException expected) { }
-	}
-
-	private static void exactBinaryObservationsRoundOnce() {
-		var one = SignedDyadic.of(1);
-		var tiny = SignedDyadic.of(1, -2000);
-		require(one.add(tiny).toDouble() == 1 && one.add(tiny).negate().toDouble() == -1,
-				"A wide finite inventory overflowed before exponent scaling");
-		var aboveDoubleTie = one.add(SignedDyadic.of(1, -53)).add(tiny);
-		require(aboveDoubleTie.toDouble() == Math.nextUp(1.0), "Wide binary64 midpoint rounded twice");
-		var aboveFloatTie = one.add(SignedDyadic.of(1, -24)).add(tiny);
-		require(aboveFloatTie.toFloat() == Math.nextUp(1.0F), "Binary32 observation rounded through binary64");
-		var minimumTie = SignedDyadic.of(1, -1075);
-		require(Double.doubleToRawLongBits(minimumTie.toDouble()) == 0
-				&& Double.doubleToRawLongBits(minimumTie.negate().toDouble()) == Long.MIN_VALUE
-				&& minimumTie.add(tiny).toDouble() == Double.MIN_VALUE,
-				"Subnormal binary64 midpoint lost its sign or remainder");
-		require(SignedDyadic.of(1, -150).toFloat() == 0
-				&& SignedDyadic.of(1, -150).add(tiny).toFloat() == Float.MIN_VALUE,
-				"Subnormal binary32 midpoint lost its remainder");
-		require(SignedDyadic.of(Double.MAX_VALUE).add(SignedDyadic.of(1, 970)).toDouble() == Double.POSITIVE_INFINITY
-				&& SignedDyadic.of(Float.MAX_VALUE).add(SignedDyadic.of(1, 103)).toFloat() == Float.POSITIVE_INFINITY,
-				"Overflow midpoint did not round to the adjacent power of two");
-		var random = new java.util.Random(710381L);
-		for (int i = 0; i < 512; i++) {
-			var significand = new java.math.BigInteger(256, random);
-			if (random.nextBoolean()) significand = significand.negate();
-			int exponent = random.nextInt(2300) - 1400;
-			var exact = new SignedDyadic(significand, exponent);
-			var decimal = new java.math.BigDecimal(significand);
-			var scale = new java.math.BigDecimal(java.math.BigInteger.ONE.shiftLeft(Math.abs(exponent)));
-			decimal = exponent < 0 ? decimal.divide(scale) : decimal.multiply(scale);
-			require(Double.doubleToRawLongBits(exact.toDouble()) == Double.doubleToRawLongBits(decimal.doubleValue())
-					&& Float.floatToRawIntBits(exact.toFloat()) == Float.floatToRawIntBits(decimal.floatValue()),
-					"Exact binary observation differs from independent terminating-decimal rounding");
-		}
 	}
 
 	private static void referenceTermsKeepCanonicalRationalRounding() {
@@ -113,14 +54,12 @@ public final class ThermalOwnerStoreValidation {
 		var function = new ThermalStateFunction(registry);
 		class Markers implements ThermalCarrierContext {
 			double mass = 2;
-			SignedDyadic completeMass;
 			ChemicalMixtureRecord composition;
 			ChemicalRegistry currentChemistry = chemistry;
 			public int markerCount() { return 1; }
 			public int cell(int marker) { return 0; }
 			public int fluidMaterialHandle(int marker) { return 0; }
 			public double mass(int marker) { return mass; }
-			public SignedDyadic exactMass(int marker) { return completeMass == null ? SignedDyadic.of(mass) : completeMass; }
 			public double volume(int marker) { return 1; }
 			public ChemicalMixtureRecord mixture(int marker) { return composition; }
 			public ChemicalRegistry chemicalRegistry() { return currentChemistry; }
@@ -164,62 +103,6 @@ public final class ThermalOwnerStoreValidation {
 					"liquid reference memo retained handles from another chemical registry");
 			column.setEnergy(0, function.internalEnergyAtTemperature(0, markers.mass, markers.composition, current, 340));
 			require(close(column.temperature(0, markers), 340), "registry replacement left a stale caloric reference");
-		}
-		markers.currentChemistry = chemistry; markers.composition = null; markers.mass = 1;
-		var scale = new cc.ecisr.mmm.units.SolverUnitScale(1.5);
-		var midpoint = SignedDyadic.of(1).add(SignedDyadic.of(1, -53));
-		require(midpoint.toDouble() == markers.mass && scale.kilograms(midpoint).toDouble() != scale.kilograms(markers.mass),
-				"Caloric quantity fixture does not expose double rounding during SI conversion");
-		markers.completeMass = midpoint;
-		var complete = new LiquidEnergyColumn(registry, function, scale, new int[]{0}, 315,
-				new ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO)), 1, markers);
-		require(complete.energy(0) == function.internalEnergyAtTemperature(0, scale.kilograms(midpoint).toDouble(), Map.of(), 315),
-				"Liquid initialization rounded complete mass before SI conversion");
-		for (var full : List.of(SignedDyadic.of(1), midpoint, SignedDyadic.of(1), midpoint.add(SignedDyadic.of(1, -2000)))) {
-			markers.completeMass = full; double physical = scale.kilograms(full).toDouble();
-			double expectedBase = function.baseEnergy(0, physical, Map.of());
-			require(complete.baseEnergy(0, markers) == expectedBase, "Caloric mass memo hid a native quantity tail");
-			complete.resetMarkerTemperature(0, 330, markers);
-			double expectedEnergy = function.internalEnergyAtTemperature(0, physical, Map.of(), 330);
-			require(complete.energy(0) == expectedEnergy && complete.modeledEnergy(0, full, null, 330, chemistry) == expectedEnergy,
-					"Liquid temperature reset observed normalized mass before physical units");
-			var caloric = complete.caloricInventory(0, full, null, chemistry);
-			double expectedTemperature = material.temperatureForSensibleSpecificEnergy((expectedEnergy - expectedBase) / physical);
-			require(complete.temperature(0, markers) == expectedTemperature && caloric.temperature(expectedEnergy) == expectedTemperature
-					&& complete.temperatureForInventory(0, full, null, expectedEnergy, chemistry) == expectedTemperature
-					&& caloric.energy(330) == expectedEnergy && caloric.roundoff(330) == complete.modeledEnergyRoundoff(0, full, null, 330, chemistry),
-					"Current and prospective caloric states disagree on full physical mass");
-			var kept = full.multiply(SignedDyadic.of(0.5));
-			require(complete.planTruncate(0, kept, null, 330, markers).newEnergy()
-					== function.internalEnergyAtTemperature(0, scale.kilograms(kept).toDouble(), Map.of(), 330),
-					"Native extraction dropped the remaining mass tail in caloric preflight");
-		}
-		markers.completeMass = midpoint;
-		complete.setEnergy(0, Math.nextDown(-1180 * scale.kilograms(markers.mass)));
-		long reactionEnergyBits = Double.doubleToRawLongBits(complete.energy(0)), reactionRevision = complete.revision();
-		complete.requireReactionState(0, null, midpoint, markers);
-		require(complete.temperatureForInventory(0, midpoint, null, complete.energy(0), chemistry) >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K,
-				"Complete reaction candidate disagrees with its prospective caloric inversion");
-		try {
-			complete.requireReactionState(0, null, markers.mass, markers);
-			throw new AssertionError("Reaction precision fixture did not distinguish the rounded mass candidate");
-		} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
-		try {
-			complete.requireReactionState(0, null, SignedDyadic.ZERO, markers);
-			throw new AssertionError("Reaction candidate accepted zero caloric mass");
-		} catch (IllegalArgumentException expected) { }
-		require(Double.doubleToRawLongBits(complete.energy(0)) == reactionEnergyBits && complete.revision() == reactionRevision,
-				"Reaction caloric validation wrote the energy inventory");
-		var domainScale = cc.ecisr.mmm.units.SolverUnitScale.forCellSize(1.1F);
-		var domain = new ThermalDomainState(registry, new int[]{0}, new int[0], 330, 1, 1, 1, 1, 1.1F, markers, null, 8);
-		for (var full : List.of(SignedDyadic.of(1), midpoint)) {
-			markers.completeMass = full; double physical = domainScale.kilograms(full).toDouble();
-			domain.resetMarkerTemperature(0, 330, markers, domain.exactEnergy(1));
-			domain.requireReactionState(0, null, full, markers);
-			var body = domain.prepareConduction(markers, null).liquidBodies().getFirst();
-			require(body.massKilograms() == physical && body.baseEnergyEu() == function.baseEnergy(0, physical, Map.of())
-					&& domain.carrierAccess(markers).mass(0) == physical && domain.temperature(0, markers) == body.temperatureK(),
-					"Conduction and spatial caloric observations used different physical mass");
 		}
 	}
 

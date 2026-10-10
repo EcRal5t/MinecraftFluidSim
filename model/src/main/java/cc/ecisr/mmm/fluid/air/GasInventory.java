@@ -1,7 +1,5 @@
 package cc.ecisr.mmm.fluid.air;
 
-import cc.ecisr.mmm.units.SignedDyadic;
-
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -62,44 +60,6 @@ public final class GasInventory {
 			merged.put(right.componentId(), left == null ? right : merge(left, right));
 		}
 		return new GasInventory(List.copyOf(merged.values()));
-	}
-
-	/** Combines complete inventories, rounding each independent mass column once. */
-	public static GasInventory sum(List<GasInventory> inventories) {
-		if (inventories == null) throw new IllegalArgumentException("Gas inventory sum is missing");
-		var components = new TreeMap<String, ComponentSum>();
-		for (var inventory : inventories) {
-			if (inventory == null) throw new IllegalArgumentException("Gas inventory sum contains null");
-			for (var component : inventory.components) {
-				components.computeIfAbsent(component.componentId(), ignored -> new ComponentSum()).add(component);
-				if (components.size() > GasLimits.MAX_COMPONENTS_PER_NODE) throw new IllegalArgumentException("Gas inventory sum exceeds component capacity");
-			}
-		}
-		var result = new ArrayList<GasComponentAmount>(components.size());
-		for (var entry : components.entrySet()) result.add(entry.getValue().finish(entry.getKey()));
-		return result.isEmpty() ? EMPTY : new GasInventory(result);
-	}
-
-	private static final class ComponentSum {
-		private long nanos;
-		private GasComponentAmount first;
-		private int contributions;
-		private SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
-		private final TreeMap<String, Long> species = new TreeMap<>();
-		void add(GasComponentAmount component) {
-			if (contributions++ == 0) first = component;
-			nanos = Math.addExact(nanos, component.standardVolumeNanos());
-			mass = mass.add(SignedDyadic.of(component.mass())); residual = residual.add(SignedDyadic.of(component.massResidual()));
-			for (var amount : component.species()) {
-				species.merge(amount.speciesId(), amount.amountQuanta(), Math::addExact);
-				if (species.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) throw new IllegalArgumentException("Gas inventory sum exceeds species capacity");
-			}
-		}
-		GasComponentAmount finish(String id) {
-			if (contributions == 1) return first;
-			return new GasComponentAmount(id, nanos, mass.toDouble(), species.entrySet().stream()
-					.map(entry -> new GasComponentAmount.SpeciesAmount(entry.getKey(), entry.getValue())).toList(), residual.toDouble());
-		}
 	}
 
 	/** Splits an exact total-nanos portion from this mixture without creating or deleting any integer column. */
@@ -183,22 +143,18 @@ public final class GasInventory {
 	/** Partitions every component by non-negative topology weights. */
 	public List<GasInventory> partition(long[] weights) {
 		if (weights == null || weights.length == 0) throw new IllegalArgumentException("Gas partition needs children");
-		return partition(Arrays.stream(weights).mapToObj(BigInteger::valueOf).toList());
-	}
-
-	/** Exact geometric weights retain arbitrarily small positive chamber overlaps. */
-	public List<GasInventory> partition(List<BigInteger> weights) {
-		largestRemainder(0, weights);
-		ArrayList<ArrayList<GasComponentAmount>> children = new ArrayList<>(weights.size());
-		for (int child = 0; child < weights.size(); child++) {
+		ArrayList<ArrayList<GasComponentAmount>> children = new ArrayList<>(weights.length);
+		for (long weight : weights) {
+			if (weight < 0L) throw new IllegalArgumentException("Gas partition weight cannot be negative");
 			children.add(new ArrayList<>());
 		}
 		for (GasComponentAmount component : components) {
-			long[] shares = largestRemainder(component.standardVolumeNanos(), weights);
+			long[] shares = largestRemainder(component.standardVolumeNanos(), Arrays.stream(weights)
+					.mapToObj(BigInteger::valueOf).toList());
 			GasComponentAmount[] parts = splitComponent(component, shares);
 			for (int child = 0; child < parts.length; child++) if (parts[child] != null) children.get(child).add(parts[child]);
 		}
-		ArrayList<GasInventory> result = new ArrayList<>(weights.size());
+		ArrayList<GasInventory> result = new ArrayList<>(weights.length);
 		for (List<GasComponentAmount> child : children) result.add(new GasInventory(child));
 		return List.copyOf(result);
 	}

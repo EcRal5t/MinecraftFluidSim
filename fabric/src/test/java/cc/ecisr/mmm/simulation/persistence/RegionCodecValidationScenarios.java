@@ -50,25 +50,6 @@ import java.util.List;
 import java.util.UUID;
 
 abstract class RegionCodecValidationScenarios extends RegionPersistenceValidationSupport {
-	private static void validateWideRangeLiquidLedgers() throws Exception {
-		var region = populatedRegion(new UUID(151, 161)); int count = 258;
-		float[] volumes = new float[count], positions = new float[4 * count]; double[] masses = new double[count];
-		for (int p = 0; p < count; p++) {
-			volumes[p] = p == 0 ? 0.5F : Math.scalb(1.0F, -61);
-			positions[4 * p] = 1.25F; positions[4 * p + 1] = 0.625F; positions[4 * p + 2] = 1.25F; positions[4 * p + 3] = volumes[p];
-			masses[p] = volumes[p] * (double) CONFIG.density();
-		}
-		var expected = new FlipMaterialParticleState(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG.cellSize(), count,
-				SignedDyadic.sum(volumes, count).toDouble(), SignedDyadic.sum(masses).toDouble(), List.of(BuiltinFluidMaterials.WATER),
-				positions, new float[3 * count], new byte[region.sizeX() * region.sizeY() * region.sizeZ()], masses, new int[count]);
-		require(expected.totalVolume() > 0.5 && expected.totalMass() > 500, "wide-range ledger fixture lost its small positive tails");
-		region.domain().restoreMaterialParticleState(expected);
-		var checkpoint = RegionCheckpointFixtures.captureMaterial(region, 1); checkpoint.validate();
-		assertMaterialStateEquals(expected, restorer(checkpoint).reconstructMaterial());
-		var ledger = checkpoint.manifest().materialLedgers().getFirst();
-		require(ledger.volumeBits() == Double.doubleToRawLongBits(expected.totalVolume())
-				&& ledger.massBits() == Double.doubleToRawLongBits(expected.totalMass()), "material ledger rounded before completing the exact inventory sum");
-	}
 	static void validateThermalCodec() throws Exception {
 		validateGasLineageCodec();
 		FluidRegion region = populatedRegion(new UUID(27L, 28L));
@@ -517,7 +498,6 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 	}
 
 	static void validateMaterialCodec() throws Exception {
-		validateWideRangeLiquidLedgers();
 		FluidRegion region = populatedRegion(new UUID(15L, 16L));
 		List<FluidMaterial> palette = List.of(
 				new FluidMaterial("mmm:water", 1_000.0, "mmm:water", 0.0, Math.PI / 2.0),
@@ -540,8 +520,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		region.domain().restoreMaterialParticleState(expected);
 		RegionState state = RegionCheckpointFixtures.captureMaterial(region, 1L);
 		List<Long> sectionChecksums = state.sections().stream().map(RegionSectionState::checksum).toList();
-		// The manifest binds the extensive inventory in addition to the explicit viscous wall condition.
-		require(state.manifest().checksum() == 1_117_585_068L
+		// Manifest config includes the explicit viscous wall condition; marker sections are unchanged.
+		require(state.manifest().checksum() == 2_824_632_206L
 				&& sectionChecksums.equals(List.of(
 				1_197_279_484L, 3_443_687_331L, 3_791_385_648L, 3_117_281_787L)),
 				"material region canonical bytes changed: manifest=" + state.manifest().checksum()
@@ -593,7 +573,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		RegionState pureState = RegionCheckpointFixtures.capture(populatedRegion(new UUID(17L, 18L)), 1L);
 		RegionManifest pureManifest = pureState.manifest();
 		List<Long> pureSectionChecksums = pureState.sections().stream().map(RegionSectionState::checksum).toList();
-		require(pureManifest.checksum() == 333_560_353L
+		require(pureManifest.checksum() == 1_511_261_536L
 				&& pureSectionChecksums.equals(List.of(
 				857_091_072L, 3_709_730_368L, 2_608_476_652L, 3_235_751_298L)),
 				"pure region canonical bytes changed: manifest=" + pureManifest.checksum()

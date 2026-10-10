@@ -47,7 +47,6 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
 		carrierPropertiesWorkspace.beginStep();
-		if (thermochemistryEnabled) requireGeometricThermochemistry(phaseChangeEnabled);
 		float before = domain().totalVolume();
 		double massBefore = domain().totalMass();
 		MechanicalAuditAccumulator mechanicalAudit = captureMechanicalAudit
@@ -63,13 +62,11 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		int granularParcelCountBeforeAdvection = precipitationEnabled ? captureReactiveGranularCells() : 0;
 		int pressureIterations = 0;
 		ViscousStepStats viscosity = ViscousStepStats.INACTIVE;
-		GeometryStepStats geometryStats = GeometryStepStats.INACTIVE;
 		for (int substep = 0; substep < substeps; substep++) {
 			MechanicalStepPipeline.SubstepOutcome outcome = mechanicalPipeline.substep(
 					dt, substep, captureMechanicalAudit, mechanicalAudit);
 			pressureIterations += outcome.pressureIterations();
 			viscosity = viscosity.plus(outcome.viscosity());
-			geometryStats = geometryStats.plus(outcome.geometry());
 			if (outcome.granularMechanics() != null) {
 				lastGranularBoundaryImpulseX += outcome.granularMechanics().boundaryImpulseX();
 				lastGranularBoundaryImpulseY += outcome.granularMechanics().boundaryImpulseY();
@@ -108,7 +105,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 						finalParticleKineticEnergy, gravitationalPotentialEnergyJoules(),
 						(thermalState == null ? SignedDyadic.ZERO : thermalState.auditLedger().mechanicalWork())
 								.subtract(thermalMechanicalWorkBefore)) : MechanicalStepAudit.notCaptured(),
-				thermalAxis, lastGranularDepositStats, carrierPropertiesWorkspace.finishStep(), viscosity, geometryStats
+				thermalAxis, lastGranularDepositStats, carrierPropertiesWorkspace.finishStep(), viscosity
 		);
 	}
 
@@ -122,7 +119,6 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	double particleKineticEnergyJoules() {
-		if (liquidGeometryState != null) return LiquidGeometryMechanicalEnergy.kinetic(domain());
 		double energy = 0.0;
 		for (int marker = 0; marker < particles.count(); marker++) {
 			double speedSquared = particles.velocityX(marker) * (double) particles.velocityX(marker)
@@ -137,7 +133,6 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	double gravitationalPotentialEnergyJoules() {
-		if (liquidGeometryState != null) return LiquidGeometryMechanicalEnergy.gravitational(domain());
 		double energy = 0.0;
 		for (int marker = 0; marker < particles.count(); marker++) {
 			energy += unitScale.kilograms(particles.mass(marker)) * config.gravity() * particles.positionY(marker);
@@ -221,18 +216,10 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
-		requireGeometricThermochemistry(phaseChangeEnabled);
-		if (liquidGeometryState != null && chemicalParcels != null) try { ResolvedLiquidReactionPlan.requireGeometry(domain()); }
-		catch (IllegalArgumentException | IllegalStateException invalid) { throw new FluidDomain.ThermalTransportBlockedException(invalid.getMessage(), invalid); }
 		ThermalAxisStats result = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
 		gridDirty = true;
 		rebuildGridFromParticles();
 		return result;
-	}
-	private void requireGeometricThermochemistry(boolean phaseChangeEnabled) {
-		if (liquidGeometryState != null && (precipitationEnabled || phaseChangeEnabled || domain().hasGranularInventory()
-				|| thermalState != null && thermalState.coherentPhases().groupCount() != 0 || domain().hasPendingPhaseVolumeWork()))
-			throw new FluidDomain.ThermalTransportBlockedException("Resolved thermochemistry requires complete reaction and phase geometry", null);
 	}
 
 	ThermalAxisStats runThermalReactionPhaseAxis(boolean phaseChangeEnabled, int maximumPhaseOperations) {
@@ -611,7 +598,6 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	int calculateSubsteps(float dt) {
-		if (liquidGeometryState != null) return minimumMechanicalSubsteps;
 		if (CellLiquidVolumeTransport.enabled()) return calculateVolumeTransportSubsteps(dt);
 		float maximum = 0.0F;
 		for (int i = 0; i < particles.count(); i++) {

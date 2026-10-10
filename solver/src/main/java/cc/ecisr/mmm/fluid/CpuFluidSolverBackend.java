@@ -20,14 +20,11 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 
 	@Override public FluidStepCandidate evaluate(FluidStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Step request is missing");
-		try (var ignored = LiquidGeometryStateMapper.openReadScope(); var pressure = LiquidPressureEnergyInverse.openScope()) {
+		try {
 			int minimumSubsteps = 1;
 			long spentSubsteps = 0L;
 			String refinementReason = "";
 			for (int refinement = 0; ; refinement++) {
-				if (minimumSubsteps > MAXIMUM_CUMULATIVE_SUBSTEPS - spentSubsteps)
-					throw new FluidSolverBackend.MechanicalWorkBudgetExceededException("Mechanical candidate requires at least " + minimumSubsteps
-							+ " substeps after " + refinement + " time refinement(s), exceeding the remaining work budget: " + refinementReason);
 				FluidDomain candidate = restoreCandidate(request.state());
 				candidate.minimumMechanicalSubsteps = minimumSubsteps;
 				MovingBodyFluidCoupling.Result movingBodyCoupling = candidate.applyMovingBodyCouplings(request.movingBodies());
@@ -65,7 +62,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 
 	@Override public FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Thermal step request is missing");
-		try (var ignored = LiquidGeometryStateMapper.openReadScope()) {
+		try {
 			FluidDomain candidate = restoreCandidate(request.state());
 			FluidDomain.ThermalAxisStats stats = candidate.stepThermalAxis(
 					request.phaseChangeEnabled(), request.maximumPhaseOperations());

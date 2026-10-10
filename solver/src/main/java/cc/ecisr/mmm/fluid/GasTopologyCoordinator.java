@@ -34,9 +34,6 @@ final class GasTopologyCoordinator {
 
 	/** Initializes gas topology from current carrier geometry and books sealed ambient source once. */
 	GasStateSnapshot bootstrap(String chemicalRegistryFingerprint) {
-		if (domain.liquidGeometryState != null && domain.gasState.cellNodeId == null) {
-			ResolvedGasStateLifecycle.bootstrap(domain); return export(chemicalRegistryFingerprint);
-		}
 		domain.ensureInventoryGrid();
 		refresh();
 		return export(chemicalRegistryFingerprint);
@@ -47,8 +44,6 @@ final class GasTopologyCoordinator {
 			throw new IllegalStateException("Gas topology has not been explicitly initialized");
 		}
 		if (!domain.gasState.network.auditClosed()) throw new IllegalStateException("Gas component audit does not close");
-		if (domain.gasState.geometry != null) return GasStateSnapshot.captureResolved(domain.sizeX, domain.sizeY, domain.sizeZ,
-				domain.gasState.geometry, domain.gasState.network, chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint);
 		return GasStateSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.gasState.cellNodeId,
 				domain.gasState.cellLineageNodeId, domain.gasState.network,
 				chemicalRegistryFingerprint == null ? "" : chemicalRegistryFingerprint);
@@ -68,7 +63,6 @@ final class GasTopologyCoordinator {
 		if (domain.gasState.cellNodeId != null || domain.gasState.network.nodeCount() != 0) {
 			throw new IllegalStateException("Gas restore requires an uninitialized topology");
 		}
-		if (state.geometry() != null) { ResolvedGasStateLifecycle.restore(domain, state, registry, thermal); return; }
 		domain.ensureInventoryGrid();
 		var occupancy = domain.pressureGranularCoupling;
 		if (thermal != null && !thermal.coherentGroups().isEmpty()) {
@@ -121,8 +115,6 @@ final class GasTopologyCoordinator {
 	}
 
 	void refresh() {
-		if (domain.liquidGeometryState != null && domain.gasState.cellNodeId == null) { ResolvedGasStateLifecycle.bootstrap(domain); return; }
-		if (domain.gasState.geometry != null) { ResolvedGasStateLifecycle.requireCompatible(domain); return; }
 		AirCavityScanner.Result result = domain.gasState.sealedDomainBoundary && domain.gasState.cellLineageNodeId != null
 				? scanner.scanRetainingClosedLineages(domain.geometry.solid, domain.markerGrid.markerCount,
 						domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
@@ -697,10 +689,6 @@ final class GasTopologyCoordinator {
 	 */
 	void step(float dt) {
 		refresh();
-		advanceEdges(dt);
-	}
-	/** Advances finite-rate transport after the caller has admitted the current geometric support. */
-	void advanceEdges(float dt) {
 		if (!domain.gasState.pressureActive) return;
 		if (domain.thermalState == null || !domain.thermalState.gasModelBound()) domain.gasState.network.stepEdges(dt);
 		else domain.gasState.network.stepEdges(dt, new AirNetwork.NodeThermodynamics() {

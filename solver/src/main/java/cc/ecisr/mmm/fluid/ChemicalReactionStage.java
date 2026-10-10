@@ -7,9 +7,8 @@ import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalReactionEngine;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
-import cc.ecisr.mmm.units.SignedDyadic;
 
-/** Applies local-control chemical reactions after thermal transport. */
+/** Applies the established same-cell chemical reaction pass after thermal transport. */
 final class ChemicalReactionStage {
 	record Workspace(
 			int sizeX, int sizeY, int sizeZ, float cellSize,
@@ -17,7 +16,6 @@ final class ChemicalReactionStage {
 	) { }
 
 	interface Access {
-		ResolvedLiquidReactionPlan resolvedReaction();
 		ChemicalParcelStore chemicalParcels();
 		FluidMaterialRegistry materialRegistry();
 		ThermalDomainState thermalState();
@@ -40,7 +38,6 @@ final class ChemicalReactionStage {
 	ChemicalParcelStore.ReactionStats step() {
 		ChemicalParcelStore chemistry = access.chemicalParcels();
 		if (chemistry == null) return new ChemicalParcelStore.ReactionStats(0, 0, 0);
-		var resolved = access.resolvedReaction(); if (resolved != null) return resolved.publish();
 		LiquidParticleStore.DirectArrays arrays = state.particles().directArrays();
 		ThermalDomainState thermal = access.thermalState();
 		var result = chemistry.reactDirtyCells(
@@ -57,11 +54,6 @@ final class ChemicalReactionStage {
 	static void requireThermalCandidate(ThermalDomainState thermal, int marker,
 	                                   ChemicalMixtureRecord mixture,
 	                                   double mass, ThermalCarrierContext markers) {
-		requireThermalCandidate(thermal, marker, mixture, SignedDyadic.of(mass), markers);
-	}
-	static void requireThermalCandidate(ThermalDomainState thermal, int marker,
-	                                   ChemicalMixtureRecord mixture,
-	                                   SignedDyadic mass, ThermalCarrierContext markers) {
 		try {
 			thermal.requireReactionState(marker, mixture, mass, markers);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException unavailable) {

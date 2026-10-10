@@ -78,21 +78,11 @@ particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 
 反应调度保存 dirty 集与轮转起点，backend handoff 完整传递两者。每步预算按完整 cell 分配；额度用尽后保留余下任务，下一步从该 cell 继续。region HEAD 冷恢复从 committed marker 位置标记所有占用格，后续按精确 dirty 集增量求值。
 
-反应后的格总库存按各 marker 的完整有理数 species 质量，以最大余数法确定性分配；余数相同时按 marker ordinal 排序。分配计划验证每个载体的物种槽位、正质量、区域总量与候选温度，再统一提交。载体数、容量或可用内能限制当前候选时，原库存与质量逐位保留，所属 cell 保持 dirty，其他可提交的 cell 继续推进。表示条件改变后沿同一入口重试。
+反应后的格总库存按各 marker 的 exact species mass 转成 binary64 权重，以最大余数法确定性分配；余数相同时按 marker ordinal 排序。分配计划验证每个载体的物种槽位、正质量、区域总量与候选温度，再统一提交。载体数、容量或可用内能限制当前候选时，原库存与质量逐位保留，所属 cell 保持 dirty，其他可提交的 cell 继续推进。表示条件改变后沿同一入口重试。
 
 若求值后的逐 species integer inventory 与输入逐位相同，该组只占用求值预算并清除 dirty 状态，不进入分配、热候选验证或 parcel 覆写，marker 的组成、残差、质量和 indicator 原样保留。
 
 当前反应是瞬时同格模型，不应用 Arrhenius 速率、平衡常数或跨格搜索。
-
-### 解析控制体反应
-
-`ResolvedLiquidReactionPlan` 在实际机械控制体内按 chemical phase 汇总整数 species。同一基础网格格中的不同控制体各自反应；辅助凸片共用所属控制体的完整库存。控制体内采用均匀组成与瞬时计量反应近似，空间解析度决定局部混合范围。机械步在反应前提交局部库存分配；热学单独步先核对每个控制体已有独立库存。
-
-dirty 调度仍保存基础网格格索引，反应计划以控制体实际占据的格筛选待处理组。求值数量在修改库存前按完整控制体组检查；当前单步上限为 131072 次。槽位、区域 quanta 容量或正温内能不足时保留该组的原组成与完整质量，并保留其实际支撑格的待处理状态；其他可提交的控制体继续推进。
-
-产物分配保留各 marker 的 kg residual 与 indicator。候选质量由原完整质量加 species 质量变化推导：`M_candidate = M_before + (m_species_after - m_species_before) / cellSize³`。同一 chemical phase 绑定同一机械材料；species 总质量守恒使每组候选质量之和精确等于原库存。正有理数候选在共同二进制单位上作最大余数分配，总质量精确保持，每份分配误差严格小于一个单位；该单位同时保留原总量的完整位数与每份候选至少 53 位的相对精度。
-
-反应保留每个载体原始 `U`，按产物组成和完整候选质量验证正温状态。species 形成能的变化进入派生温度，外部能量账本保持原样。同控制体的共同速度、完整材料质量和占据体积保持其动量、动能与空间质量矩。候选绑定几何、完整质量/体积、材料、化学记录与代次、热学代次及 dirty/cursor；发布前再次核对，随后通过载体协调器提交质量观察与组成。CPU 热学单独步和联合机械步均使用该路径，冷恢复保留完整库存与调度状态。
 
 ### Indicator 与 pH
 
@@ -102,7 +92,7 @@ pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指
 
 ## 求解顺序
 
-每个 logical step 中，机械 advection 完成后按当前空间控制体和 chemical phase 分组反应；反应后的温度由新组成的形成能、完整质量和原内能推导。化学反应保持外部能量账本，密度、压力与客户端颜色随库存和状态函数更新。
+每个 logical step 中，机械 advection 完成后按当前 cell 和 chemical phase 分组反应；反应热随后通过热状态的同 cell source/sink 提交。化学反应不得直接修改平滑 density、pressure 或客户端颜色场。
 
 热学开启时，reaction plan 先证明 species/质量闭合，再把定义的状态函数能差提交给参与载体；该能差是内部重排，不重复记 external source。颗粒 precipitation 使用同一 liquid chemical ledger，但必须在 granular/thermal 联合 plan 中另行验证 solid composition、SVQ、容量和 U。
 
@@ -116,7 +106,7 @@ pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指
 
 `ChemicalContents` 使用 canonical group 表，每组绑定 mechanical material、indicator、nanovolume、kg mass/residual 和排序 species 列。物品总量必须与各组 exact sum 一致；部分抽取按体积分配 quanta 和 residual，并把确定性 remainder 留给一侧。容器无法表示完整结果时，在 solver 修改前拒绝。
 
-区域 source/sink 的 group 保存完整有理数体积与 dyadic mechanical kg mass；聚合与 checkpoint 编码保留全部数量，`double` 接口在读取时舍入一次。SI 质量由完整 solver mass 与声明的单位比例精确相乘。chemical kg residual 继续对输入二进制值精确求和，在 group 提交时舍入一次；三列独立结算。容器编码和现有 binary64 注入接口在规划阶段校验完整数量可表示性。
+区域 source/sink 的 group 聚合对 volume、mechanical kg mass 与 chemical kg residual 三列分别按输入 `double` 的精确二进制值求和，最后各自只舍入一次；不能用顺序相关的逐 marker 浮点累加制造 species/mass 审计差额，也不能由 species 质量反算 mechanical mass 或 residual。
 
 区域 source/sink 不只是 species 总量：每个 transfer group 同时保存 material/indicator identity、volume、mass、residual 和 species。collision escape、`empty`、创造放出和创造装取分别走同一 ledger，不允许“只记总质量”后丢失组成证据。
 

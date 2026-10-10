@@ -7,8 +7,6 @@ import cc.ecisr.mmm.model.region.RegionSectionState;
 import cc.ecisr.mmm.model.region.RegionStateLayout;
 
 import cc.ecisr.mmm.fluid.FlipParticleState;
-import cc.ecisr.mmm.fluid.LiquidGeometryState;
-import cc.ecisr.mmm.fluid.LiquidGeometryStateValidation;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.fluid.FlipThermalParticleState;
@@ -48,10 +46,6 @@ final class RegionCheckpointValidator {
 	private static final String CHEMICAL_AUDIT_EXTENSION = "mmm:chemical_audit";
 	private final RegionManifest manifest;
 	private final List<RegionSectionState> sections;
-	private LiquidGeometryState liquidGeometry;
-	private cc.ecisr.mmm.fluid.air.GasGeometryState gasGeometry;
-	private RegionParticleReconstruction.State particleColumns;
-	private cc.ecisr.mmm.fluid.LiquidInventoryState inventory;
 
 	RegionCheckpointValidator(RegionCheckpoint checkpoint) {
 		this.manifest = checkpoint.manifest();
@@ -69,7 +63,6 @@ final class RegionCheckpointValidator {
 			previous = descriptor;
 		}
 		Set<RegionSectionState.SectionKey> actual = new HashSet<>();
-		inventory = LiquidInventoryStateCodec.readManifest(manifest, sections);
 		int markerCount = 0;
 		for (RegionSectionState section : sections) {
 			if (!actual.add(section.key())) throw new IOException("Duplicate section payload");
@@ -79,11 +72,8 @@ final class RegionCheckpointValidator {
 			if (RegionStateIntegrity.sectionChecksum(section) != section.checksum()) throw new IOException("Section checksum mismatch");
 			validateSectionOwnership(section);
 			RegionManifest.SectionDescriptor descriptor = expected.get(section.key());
-			long volumeBits, massBits;
-			try {
-				volumeBits = Double.doubleToRawLongBits(RegionParticleReconstruction.sectionVolume(section, inventory).toDouble());
-				massBits = manifest.layout().hasMaterials() ? Double.doubleToRawLongBits(RegionParticleReconstruction.sectionMass(section, inventory).toDouble()) : 0L;
-			} catch (IllegalArgumentException invalid) { throw new IOException("Invalid section inventory", invalid); }
+			long volumeBits = Double.doubleToRawLongBits(sumVolumes(section.positionVolume()));
+			long massBits = manifest.layout().hasMaterials() ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L;
 			if (descriptor == null || descriptor.markerCount() != section.markerCount()
 					|| descriptor.volumeBits() != volumeBits || descriptor.massBits() != massBits
 					|| descriptor.checksum() != section.checksum()) {
@@ -94,12 +84,9 @@ final class RegionCheckpointValidator {
 		if (markerCount != manifest.totalMarkerCount() || markerCount > manifest.reservedMarkerCapacity()) {
 			throw new IOException("Manifest marker count/budget mismatch");
 		}
-		particleColumns = RegionParticleReconstruction.reconstruct(manifest, sections, inventory);
-		validateLiquidGeometry();
 		if (manifest.layout().hasMaterials()) validateMaterialLedgers();
 		if (manifest.hasChemicalState()) validateChemicalLedgers();
 		boolean gasPayload = hasExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION);
-		validateGasGeometry(gasPayload);
 		boolean pendingPhaseVolumePayload = hasExtension(manifest.extensions(),
 				PendingPhaseVolumeCodec.MANIFEST_EXTENSION);
 		boolean thermalBuoyancyPayload = hasExtension(manifest.extensions(),
@@ -134,56 +121,6 @@ final class RegionCheckpointValidator {
 		if (gasPayload) validateGasLedgers();
 		if (hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)) validateGranularLedgers();
 		if (manifest.hasThermalState()) validateThermalLedgers();
-	}
-
-	LiquidGeometryState liquidGeometry() { return liquidGeometry; }
-	cc.ecisr.mmm.fluid.air.GasGeometryState gasGeometry() { return gasGeometry; }
-	RegionParticleReconstruction.State particleColumns() { return particleColumns; }
-
-	private void validateLiquidGeometry() throws IOException {
-		for (var section : sections) if (hasExtension(section.extensions(), LiquidGeometryStateCodec.MANIFEST_EXTENSION))
-			throw new IOException("Resolved liquid geometry is manifest-only");
-		if (!hasExtension(manifest.extensions(), LiquidGeometryStateCodec.MANIFEST_EXTENSION)) return;
-		liquidGeometry = new LiquidGeometryStateCodec().decode(requiredExtension(manifest.extensions(),
-				LiquidGeometryStateCodec.MANIFEST_EXTENSION).payload());
-		try {
-			var state = new FlipParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
-					manifest.solverConfig().cellSize(), manifest.totalMarkerCount(), inventory.totalVolume().toFloat(),
-					particleColumns.positionVolume(), particleColumns.velocities(), particleColumns.solidMask(), liquidGeometry, inventory);
-			LiquidGeometryStateValidation.requireCompatible(state,
-					manifest.layout().hasMaterials() ? particleColumns.markerMass() : null, manifest.solverConfig().density());
-		} catch (IllegalArgumentException | IllegalStateException invalid) {
-			throw new IOException("Resolved liquid geometry disagrees with checkpoint inventory or collision: " + invalid.getMessage(), invalid);
-		}
-	}
-
-	private void validateGasGeometry(boolean gasPayload) throws IOException {
-		for (var section : sections) if (hasExtension(section.extensions(), GasGeometryStateCodec.MANIFEST_EXTENSION))
-			throw new IOException("Resolved gas geometry is manifest-only");
-		if (!hasExtension(manifest.extensions(), GasGeometryStateCodec.MANIFEST_EXTENSION)) return;
-		if (!gasPayload || liquidGeometry == null) throw new IOException("Resolved gas requires complete liquid geometry and gas inventory");
-		if (hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)) {
-			var solids = new GranularRegionStateCodec().decodeManifest(requiredExtension(manifest.extensions(),
-					GranularRegionStateCodec.MANIFEST_EXTENSION).payload());
-			if (solids.activeSvq() > 0 || solids.depositSvq() > 0)
-				throw new IOException("Resolved gas requires spatial support for granular inventory");
-		}
-		if (hasExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION)) {
-			var thermal = new ThermalRegionStateCodec().decodeManifest(requiredExtension(manifest.extensions(),
-						ThermalRegionStateCodec.MANIFEST_EXTENSION).payload());
-			if (thermal.coherentGroupCount() > 0)
-				throw new IOException("Resolved gas requires spatial support for coherent solid inventory");
-		}
-		gasGeometry = new GasGeometryStateCodec().decode(requiredExtension(manifest.extensions(), GasGeometryStateCodec.MANIFEST_EXTENSION).payload());
-		if (!gasGeometry.sealedExterior()) throw new IOException("Controller checkpoint requires a sealed exterior");
-		try {
-			var state = new FlipParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
-					manifest.totalMarkerCount(), inventory.totalVolume().toFloat(), particleColumns.positionVolume(), particleColumns.velocities(),
-					particleColumns.solidMask(), liquidGeometry, inventory);
-			cc.ecisr.mmm.fluid.GasGeometryStateValidation.requireCompatible(gasGeometry, state, 65_536, 4_194_304);
-		} catch (IllegalArgumentException | IllegalStateException invalid) {
-			throw new IOException("Resolved gas geometry disagrees with checkpoint phases or collision: " + invalid.getMessage(), invalid);
-		}
 	}
 
 	private void validatePendingPhaseVolumeCells() throws IOException {
@@ -233,7 +170,7 @@ final class RegionCheckpointValidator {
 	}
 
 	private void validateGasLedgers() throws IOException {
-		new RegionCheckpointRestorer(new RegionCheckpoint(manifest, sections)).validateGasLedgers(gasGeometry);
+		new RegionCheckpointRestorer(new RegionCheckpoint(manifest, sections)).validateGasLedgers();
 	}
 
 	private void validateThermalLedgers() throws IOException {
@@ -486,14 +423,47 @@ final class RegionCheckpointValidator {
 	}
 
 	private void validateMaterialLedgers() throws IOException {
-		if (Double.doubleToRawLongBits(inventory.totalMass().toDouble()) != manifest.totalMassBits()) {
+		int count = manifest.totalMarkerCount(), paletteSize = manifest.materialPalette().size();
+		double[] volumesByOrdinal = new double[count], massByOrdinal = new double[count];
+		int[] materialByOrdinal = new int[count];
+		boolean[] seen = new boolean[count];
+		for (RegionSectionState section : sections) {
+			int[] ordinals = section.markerOrdinals(), materials = section.materialPaletteIndex();
+			float[] positionVolume = section.positionVolume();
+			double[] mass = section.markerMass();
+			for (int marker = 0; marker < ordinals.length; marker++) {
+				int ordinal = ordinals[marker], material = materials[marker];
+				if (ordinal < 0 || ordinal >= count || seen[ordinal]) throw new IOException("Duplicate or invalid marker ordinal");
+				if (material < 0 || material >= paletteSize) throw new IOException("Material palette index out of range");
+				seen[ordinal] = true;
+				volumesByOrdinal[ordinal] = positionVolume[marker * 4 + 3];
+				massByOrdinal[ordinal] = mass[marker];
+				materialByOrdinal[ordinal] = material;
+			}
+		}
+		int[] markerCounts = new int[paletteSize];
+		double[] volumes = new double[paletteSize], masses = new double[paletteSize];
+		double totalVolume = 0.0, totalMass = 0.0;
+		for (int ordinal = 0; ordinal < count; ordinal++) {
+			if (!seen[ordinal]) throw new IOException("Missing marker ordinal");
+			int material = materialByOrdinal[ordinal];
+			markerCounts[material]++;
+			volumes[material] += volumesByOrdinal[ordinal];
+			masses[material] += massByOrdinal[ordinal];
+			totalVolume += volumesByOrdinal[ordinal];
+			totalMass += massByOrdinal[ordinal];
+		}
+		if (Double.doubleToRawLongBits(totalVolume) != manifest.totalVolumeBits()
+				|| Double.doubleToRawLongBits(totalMass) != manifest.totalMassBits()) {
 			throw new IOException("Material manifest total ledger mismatch");
 		}
-		try {
-			var actual = RegionParticleReconstruction.materialLedgers(particleColumns.materialPaletteIndex(), manifest.materialPalette().size(), inventory);
-			if (!actual.equals(manifest.materialLedgers())) throw new IOException("Material marker ledger mismatch");
-		} catch (IllegalArgumentException invalid) {
-			throw new IOException("Invalid material marker ledger", invalid);
+		for (int material = 0; material < paletteSize; material++) {
+			RegionManifest.MaterialLedger expected = manifest.materialLedgers().get(material);
+			if (expected.markerCount() != markerCounts[material]
+					|| expected.volumeBits() != Double.doubleToRawLongBits(volumes[material])
+					|| expected.massBits() != Double.doubleToRawLongBits(masses[material])) {
+				throw new IOException("Material marker ledger mismatch at palette index " + material);
+			}
 		}
 	}
 
@@ -565,6 +535,18 @@ final class RegionCheckpointValidator {
 	private static boolean hasExtension(List<RegionExtension> extensions, String type) {
 		for (RegionExtension extension : extensions) if (type.equals(extension.type())) return true;
 		return false;
+	}
+
+	private static double sumVolumes(float[] positionVolume) {
+		double result = 0.0;
+		for (int index = 3; index < positionVolume.length; index += 4) result += positionVolume[index];
+		return result;
+	}
+
+	private static double sum(double[] values) {
+		double result = 0.0;
+		for (double value : values) result += value;
+		return result;
 	}
 
 	private static double[] toDoubles(long[] bits) {

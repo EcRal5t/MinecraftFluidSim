@@ -31,12 +31,12 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 				domain().chemicalParcels().registry(), stableAmounts, 0.0);
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
 				chemicalParcels.registry(), stableAmounts,
-				unitScale.kilograms(particles.exactMass(marker)).toDouble()
+				unitScale.kilograms(particles.mass(marker))
 						- zeroResidual.exactSpeciesMassKilograms(chemicalParcels.registry()).toDouble());
 		chemicalParcels.requireCompatible(record,
 				materialRegistry.material(particles.materialHandle(marker)).id(), indicator);
 		if (thermalState != null) thermalState.requireReactionState(
-				marker, record, particles.exactMass(marker), domain().thermalMarkerContext());
+				marker, record, particles.mass(marker), domain().thermalMarkerContext());
 		chemicalParcels.assign(marker, record, indicator);
 		chemicalParcels.markDirtyCell(particleCellIndex(marker));
 	}
@@ -50,14 +50,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 	/** Replaces this domain from one validated, immutable in-memory marker state. */
 	public void restoreParticleState(FlipParticleState state) {
 		if (materialDefinitions != null) throw new IllegalStateException("Pure restore cannot remove bound liquid material identity");
-		requireRestorableGeometry(state, null, config.density());
 		restoreParticleColumns(state);
-	}
-	private void requireRestorableGeometry(FlipParticleState state, double[] masses, double defaultDensity) {
-		if (state == null) throw new IllegalArgumentException("Particle state must not be null");
-		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize());
-		if (state.liquidGeometry() != null) LiquidGeometryStateMapper.requireCompatible(state.liquidGeometry(),
-				LiquidGeometryInventoryView.of(state, masses, defaultDensity), sizeX, sizeY, sizeZ, config.cellSize(), state.collisionMicroMasks());
 	}
 
 	private void restoreParticleColumns(FlipParticleState state) {
@@ -81,7 +74,6 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 			particles.setVelocityY(particle, particleVelocities[velocityBase + 1]);
 			particles.setVelocityZ(particle, particleVelocities[velocityBase + 2]);
 			setDefaultMaterialState(particle);
-			if (state.inventory() != null) particles.setQuantities(particle, state.inventory().volume(particle), state.inventory().mass(particle));
 		}
 		coordinator.adoptWholesaleCount(
 				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()), restoredCount);
@@ -95,7 +87,6 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		pressureAnchor = -1;
 		lastPressureIterations = 0;
 		lastPressureResidual = 0.0F;
-		liquidGeometryState = state.liquidGeometry();
 		gridDirty = true;
 	}
 
@@ -113,12 +104,11 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		if (Math.abs(defaultDensity - config.density()) > tolerance) {
 			throw new IllegalArgumentException("Material handle 0 must match the domain default density");
 		}
-		requireRestorableGeometry(state.particles(), state.particleMass(), defaultDensity);
 		restoreParticleColumns(state.particles());
 		double[] restoredMass = state.particleMass();
 		int[] restoredMaterial = state.materialPaletteIndex();
 		for (int particle = 0; particle < particles.count(); particle++) {
-			if (state.inventory() == null) particles.setMass(particle, restoredMass[particle]);
+			particles.setMass(particle, restoredMass[particle]);
 			particles.setMaterialHandle(particle, restoredMaterial[particle]);
 			particles.setPhaseLabel(particle, registry.phaseHandle(restoredMaterial[particle]));
 		}

@@ -40,7 +40,6 @@ public final class GasEnergyStore {
 
 	public boolean hasGasEnergy(int nodeCount) { return gasModel != null && nodeEnergy.length == nodeCount; }
 	public boolean gasModelBound() { return gasModel != null; }
-	public double ambientTemperatureK() { return insertionTemperatureK; }
 
 	/** Read-only snapshot of the node energies; callers can never observe later in-place commits. */
 	public double[] nodeEnergies() { return nodeEnergy.clone(); }
@@ -90,11 +89,6 @@ public final class GasEnergyStore {
 	public double requireNodeState(int nodeId, GasInventory inventory, double energy, AirNetwork network) {
 		requireGasNode(nodeId, network);
 		return gasModel.absolutePressure(inventory, network.availableVolume(nodeId), energy);
-	}
-
-	public ThermalContactExchange.Body caloricBody(int nodeId, AirNetwork network) {
-		requireNodeState(nodeId, network.inventory(nodeId), nodeEnergy(nodeId, network), network);
-		return gasModel.caloricBody(network.inventory(nodeId), nodeEnergy[nodeId - 1]);
 	}
 
 	void commitNodeEnergy(int nodeId, double energy) {

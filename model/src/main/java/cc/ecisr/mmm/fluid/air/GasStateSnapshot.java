@@ -19,8 +19,7 @@ public record GasStateSnapshot(
 		GasAuditLedger externalSource,
 		GasAuditLedger escapedSink,
 		SignedDyadic massRoundoff,
-		SignedDyadic residualRoundoff,
-		GasGeometryState geometry
+		SignedDyadic residualRoundoff
 ) {
 	public record Node(int topologyKey, GasInventory inventory) {
 		public Node {
@@ -60,14 +59,10 @@ public record GasStateSnapshot(
 			}
 			if (ordinal < 0 || ordinal > nodes.size()) throw new IllegalArgumentException("Gas cell node ordinal is invalid");
 			if (ordinal > 0) minimumCell[ordinal - 1] = Math.min(minimumCell[ordinal - 1], cell);
-			if (geometry != null && (ordinal != 0 || lineage != -1))
-				throw new IllegalArgumentException("Resolved gas membership must be carried by its complete spatial support");
 		}
-		if (geometry != null && geometry.nodeCount() != nodes.size()) throw new IllegalArgumentException("Resolved gas node cardinality mismatch");
 		for (int ordinal = 0; ordinal < nodes.size(); ordinal++) {
-			int key = geometry == null ? minimumCell[ordinal] : geometry.topologyKey(ordinal + 1);
-			if (key != nodes.get(ordinal).topologyKey()) {
-				throw new IllegalArgumentException("Gas node topology key does not match complete spatial membership");
+			if (minimumCell[ordinal] != nodes.get(ordinal).topologyKey()) {
+				throw new IllegalArgumentException("Gas node topology key does not match complete cell membership");
 			}
 		}
 		boolean species = nodes.stream().flatMap(node -> node.inventory().components().stream())
@@ -80,28 +75,9 @@ public record GasStateSnapshot(
 		cellNodeOrdinal = cellNodeOrdinal.clone();
 		cellLineageOrdinal = cellLineageOrdinal.clone();
 	}
-	public GasStateSnapshot(int sizeX, int sizeY, int sizeZ, String registryFingerprint, String chemicalRegistryFingerprint,
-			List<Node> nodes, int[] cellNodeOrdinal, int[] cellLineageOrdinal, GasAuditLedger externalSource,
-			GasAuditLedger escapedSink, SignedDyadic massRoundoff, SignedDyadic residualRoundoff) {
-		this(sizeX, sizeY, sizeZ, registryFingerprint, chemicalRegistryFingerprint, nodes, cellNodeOrdinal, cellLineageOrdinal,
-				externalSource, escapedSink, massRoundoff, residualRoundoff, null);
-	}
 
 	@Override public int[] cellNodeOrdinal() { return cellNodeOrdinal.clone(); }
 	@Override public int[] cellLineageOrdinal() { return cellLineageOrdinal.clone(); }
-
-	/** Runtime node ordinals follow the resolved geometry's canonical chamber order. */
-	public static GasStateSnapshot captureResolved(int sizeX, int sizeY, int sizeZ, GasGeometryState geometry,
-			AirNetwork network, String chemicalRegistryFingerprint) {
-		if (geometry == null || network == null || geometry.nodeCount() != network.nodeCount())
-			throw new IllegalArgumentException("Resolved gas topology and network disagree");
-		var nodes = new ArrayList<Node>();
-		for (int node = 1; node <= geometry.nodeCount(); node++) nodes.add(new Node(geometry.topologyKey(node), network.inventory(node)));
-		int[] members = new int[Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)], lineages = new int[members.length];
-		java.util.Arrays.fill(lineages, -1);
-		return new GasStateSnapshot(sizeX, sizeY, sizeZ, network.registry().fingerprint(), chemicalRegistryFingerprint,
-				nodes, members, lineages, network.externalSource(), network.escapedSink(), network.massRoundoff(), network.residualRoundoff(), geometry);
-	}
 
 	/** Captures runtime node ids into canonical minimum-cell topology order. */
 	public static GasStateSnapshot capture(int sizeX, int sizeY, int sizeZ, int[] runtimeCellNodeId,

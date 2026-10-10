@@ -125,9 +125,6 @@ public final class FluidDomainState {
 		if (gas != null && !gas.registryFingerprint().equals(gasRegistry.fingerprint())) {
 			throw new IllegalArgumentException("Gas state/registry identity mismatch");
 		}
-		if (gas != null && (gas.sizeX() != sizeX() || gas.sizeY() != sizeY() || gas.sizeZ() != sizeZ()
-				|| gas.geometry() != null && (baseParticles().liquidGeometry() == null || gas.geometry().sealedExterior() != sealedDomainBoundary)))
-			throw new IllegalArgumentException("Gas spatial layout disagrees with complete domain state");
 		String expectedChemical = chemicalRegistry == null ? "" : chemicalRegistry.fingerprint();
 		if (gas != null && !gas.chemicalRegistryFingerprint().isEmpty()
 				&& !gas.chemicalRegistryFingerprint().equals(expectedChemical)) {
@@ -210,7 +207,6 @@ public final class FluidDomainState {
 		return thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone();
 	}
 	public CondensedPhasePressureField condensedPhasePressure() { return condensedPhasePressure; }
-	public LiquidGeometryState liquidGeometry() { return baseParticles().liquidGeometry(); }
 
 	/** Immutable feature/registry identity which a backend step is not allowed to replace. */
 	public Layout layout() {

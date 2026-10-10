@@ -69,9 +69,6 @@ public record ChemicalContents(String registryFingerprint, long auScale, List<Gr
 		ArrayList<Group> groups = new ArrayList<>(ledger.groups().size());
 		for (int index = 0; index < ledger.groups().size(); index++) {
 			ChemicalTransferLedger.Group source = ledger.groups().get(index);
-			if (!source.volumeQuantity().equals(cc.ecisr.mmm.units.ExactVolume.of(source.volume()))
-					|| !source.massKilogramsQuantity().equals(cc.ecisr.mmm.units.SignedDyadic.of(source.massKilograms())))
-				throw new IllegalArgumentException("Chemical contents cannot represent complete transfer quantities");
 			long nanos = nanosByGroup[index];
 			if (nanos <= 0L) throw new IllegalArgumentException("Chemical group is below bucket nanovolume resolution");
 			List<SpeciesAmount> species = source.speciesQuanta().entrySet().stream()

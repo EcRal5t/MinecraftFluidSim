@@ -8,7 +8,6 @@ import cc.ecisr.mmm.fluid.FluidDomain;
 import cc.ecisr.mmm.fluid.FlipChemicalParticleState;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
-import cc.ecisr.mmm.fluid.LiquidGeometryState;
 import cc.ecisr.mmm.fluid.FlipThermalParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterialRegistry;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
@@ -79,8 +78,6 @@ abstract class RegionPersistenceValidationSupport {
 	}
 
 	static void assertParticleStateEquals(FlipParticleState expected, FlipParticleState actual) {
-		assertInventoryEquals(expected.inventory(), actual.inventory());
-		assertLiquidGeometryEquals(expected.liquidGeometry(), actual.liquidGeometry());
 		require(expected.particleCount() == actual.particleCount(), "marker count changed across persistence");
 		require(Arrays.equals(floatBits(expected.copyPositionVolume()), floatBits(actual.copyPositionVolume())),
 				"marker order/position/particleVolume changed across persistence");
@@ -90,15 +87,6 @@ abstract class RegionPersistenceValidationSupport {
 	}
 
 	static void assertGasStateEquals(GasStateSnapshot expected, GasStateSnapshot actual) {
-		require((expected.geometry() == null) == (actual.geometry() == null), "resolved gas support presence changed across persistence");
-		if (expected.geometry() != null) {
-			var a = expected.geometry(); var b = actual.geometry();
-			require(a.rootWidthMetres() == b.rootWidthMetres() && a.sealedExterior() == b.sealedExterior()
-					&& a.nodeCount() == b.nodeCount() && Arrays.equals(a.nodeOrdinals(), b.nodeOrdinals()) && a.cells().size() == b.cells().size(),
-					"resolved gas support or chamber membership changed across persistence");
-			for (int c = 0; c < a.cells().size(); c++) require(LiquidGeometryState.compare(a.cells().get(c), b.cells().get(c)) == 0,
-					"resolved gas fragment changed across persistence");
-		}
 		require(expected.sizeX() == actual.sizeX() && expected.sizeY() == actual.sizeY() && expected.sizeZ() == actual.sizeZ()
 				&& expected.registryFingerprint().equals(actual.registryFingerprint())
 				&& expected.chemicalRegistryFingerprint().equals(actual.chemicalRegistryFingerprint())
@@ -113,8 +101,6 @@ abstract class RegionPersistenceValidationSupport {
 	}
 
 	static void assertMaterialStateEquals(FlipMaterialParticleState expected, FlipMaterialParticleState actual) {
-		assertInventoryEquals(expected.inventory(), actual.inventory());
-		assertLiquidGeometryEquals(expected.liquidGeometry(), actual.liquidGeometry());
 		require(expected.materials().equals(actual.materials()), "material palette changed across persistence");
 		require(Double.doubleToRawLongBits(expected.totalVolume()) == Double.doubleToRawLongBits(actual.totalVolume())
 				&& Double.doubleToRawLongBits(expected.totalMass()) == Double.doubleToRawLongBits(actual.totalMass()),
@@ -139,24 +125,6 @@ abstract class RegionPersistenceValidationSupport {
 				&& expected.coherentGroups().equals(actual.coherentGroups())
 				&& expected.audit().equals(actual.audit()),
 				"thermal inventory/audit changed across persistence");
-	}
-
-	private static void assertLiquidGeometryEquals(LiquidGeometryState expected, LiquidGeometryState actual) {
-		require((expected == null) == (actual == null), "resolved liquid geometry presence changed across persistence");
-		if (expected == null) return;
-		require(expected.rootWidthMetres() == actual.rootWidthMetres()
-				&& Arrays.equals(expected.copyMarkerCells(), actual.copyMarkerCells())
-				&& Arrays.equals(expected.copyFragmentOwners(), actual.copyFragmentOwners())
-				&& Arrays.equals(expected.copyControlCells(), actual.copyControlCells())
-				&& expected.cells().size() == actual.cells().size(), "liquid geometry inventory ownership changed across persistence");
-		for (int c = 0; c < expected.cells().size(); c++) require(LiquidGeometryState.compare(expected.cells().get(c), actual.cells().get(c)) == 0,
-				"liquid interface or resolved velocity changed across persistence");
-	}
-	private static void assertInventoryEquals(cc.ecisr.mmm.fluid.LiquidInventoryState expected, cc.ecisr.mmm.fluid.LiquidInventoryState actual) {
-		if (expected == null) return;
-		require(actual != null && expected.count() == actual.count(), "extensive liquid inventory disappeared across persistence");
-		for (int p = 0; p < expected.count(); p++) require(expected.volume(p).equals(actual.volume(p)) && expected.mass(p).equals(actual.mass(p)),
-				"extensive volume or mass remainder changed across persistence");
 	}
 
 	static ThermalRegistry thermalRegistry(FluidMaterialRegistry liquids) {

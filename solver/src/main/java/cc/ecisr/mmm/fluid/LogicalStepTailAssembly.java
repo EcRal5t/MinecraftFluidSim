@@ -46,7 +46,6 @@ final class LogicalStepTailAssembly {
 		ParticleReseedStage reseed = new ParticleReseedStage(
 				new ParticleReseedStage.Workspace(domain.geometry, domain.particles, domain.particleReseeder),
 				new ParticleReseedStage.Access() {
-					@Override public boolean hasResolvedGeometry() { return domain.liquidGeometryState != null; }
 					@Override public boolean hasConservativeCellQuadrature() {
 						return CellLiquidVolumeTransport.enabled() && domain.cellLiquidVolumeTransport != null
 								&& domain.cellLiquidVolumeTransport.publishedQuadrature;

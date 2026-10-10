@@ -16,12 +16,12 @@ final class DomainMetrics {
 	}
 
 	float totalVolume() {
-		return domain.particles.totalVolume().toFloat();
+		return (float) totalVolumeExact();
 	}
 
-	/** Exact extensive inventory, rounded once at the binary64 observation interface. */
+	/** Exact raw binary32 inventory, rounded once at the binary64 observation boundary. */
 	double totalVolumeExact() {
-		return domain.particles.totalVolume().toDouble();
+		return SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count()).toDouble();
 	}
 
 	/** Total open cell volume across the domain; global capacity for exact bucket insertion. */
@@ -38,7 +38,7 @@ final class DomainMetrics {
 
 	/** Exact marker-mass inventory; reconstructed grid density is never used for this ledger. */
 	double totalMass() {
-		return domain.particles.totalMass().toDouble();
+		return SignedDyadic.sum(domain.particles.directArrays().mass, domain.particles.count()).toDouble();
 	}
 
 	float maximumParticleSpeed() {

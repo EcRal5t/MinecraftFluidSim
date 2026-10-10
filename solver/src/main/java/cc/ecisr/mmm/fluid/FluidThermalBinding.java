@@ -155,7 +155,7 @@ final class FluidThermalBinding {
 						state.liquidInternalEnergy(source), state.temperature(source, markers));
 			}
 			@Override public void afterSplit(FlipParticleReseeder.ThermalSplit split, int source, int destination) {
-				double sourceModeled = state.liquid().modeledEnergy(source, markers.exactMass(source),
+				double sourceModeled = state.liquid().modeledEnergy(source, markers.mass(source),
 						markers.mixture(source), split.temperatureK(), markers);
 				state.assignReseededLiquidEnergies(source, sourceModeled, destination,
 						split.parentEnergy() - sourceModeled);

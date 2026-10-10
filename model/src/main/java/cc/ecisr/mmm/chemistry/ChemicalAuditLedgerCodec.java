@@ -1,9 +1,5 @@
 package cc.ecisr.mmm.chemistry;
 
-import cc.ecisr.mmm.units.SignedDyadic;
-import cc.ecisr.mmm.units.ExactVolumeCodec;
-import java.math.BigInteger;
-
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -19,7 +15,7 @@ import java.util.TreeMap;
 /** Canonical bounded binary payload for cumulative external-source and escaped-sink audit truth. */
 public final class ChemicalAuditLedgerCodec {
 	private static final int MAGIC = 0x52574341; // RWCA
-	private static final int VERSION = 3;
+	private static final int VERSION = 1;
 	public static final int MAX_BYTES = 16 * 1_048_576;
 
 	private ChemicalAuditLedgerCodec() { }
@@ -66,8 +62,8 @@ public final class ChemicalAuditLedgerCodec {
 		for (ChemicalTransferLedger.Group group : ledger.groups()) {
 			output.writeUTF(group.materialId());
 			output.writeBoolean(group.indicator());
-			ExactVolumeCodec.write(output, group.volumeQuantity());
-			writeQuantity(output, group.massKilogramsQuantity());
+			output.writeLong(Double.doubleToRawLongBits(group.volume()));
+			output.writeLong(Double.doubleToRawLongBits(group.massKilograms()));
 			output.writeLong(group.massResidualKilogramsBits());
 			output.writeInt(group.speciesQuanta().size());
 			for (Map.Entry<String, Long> species : new TreeMap<>(group.speciesQuanta()).entrySet()) {
@@ -84,8 +80,8 @@ public final class ChemicalAuditLedgerCodec {
 		for (int group = 0; group < groups; group++) {
 			String material = input.readUTF();
 			boolean indicator = input.readBoolean();
-			var volume = ExactVolumeCodec.read(input);
-			var mass = readQuantity(input);
+			double volume = Double.longBitsToDouble(input.readLong());
+			double mass = Double.longBitsToDouble(input.readLong());
 			long residualBits = input.readLong();
 			int entries = input.readInt();
 			if (entries <= 0 || entries > ChemicalLimits.MAX_TRANSFER_SPECIES_PER_GROUP) {
@@ -98,19 +94,6 @@ public final class ChemicalAuditLedgerCodec {
 			result.add(new ChemicalTransferLedger.Group(material, indicator, volume, mass, residualBits, species));
 		}
 		return result.isEmpty() ? ChemicalTransferLedger.EMPTY : new ChemicalTransferLedger(result);
-	}
-	private static void writeQuantity(DataOutputStream output, SignedDyadic quantity) throws IOException {
-		var bytes = quantity.significand().toByteArray();
-		output.writeInt(quantity.exponent()); output.writeInt(bytes.length); output.write(bytes);
-	}
-	private static SignedDyadic readQuantity(DataInputStream input) throws IOException {
-		int exponent = input.readInt(), length = input.readInt();
-		if (length < 1 || length > SignedDyadic.MAX_SIGNIFICAND_BITS / 8 + 1 || length > input.available())
-			throw new IOException("Invalid chemical audit quantity size");
-		var bytes = input.readNBytes(length); var quantity = new SignedDyadic(new BigInteger(bytes), exponent);
-		if (quantity.signum() <= 0 || quantity.exponent() != exponent || !Arrays.equals(bytes, quantity.significand().toByteArray()))
-			throw new IOException("Non-canonical chemical audit quantity");
-		return quantity;
 	}
 
 	public record AuditLedgers(ChemicalTransferLedger externalSource, ChemicalTransferLedger escapedSink) {

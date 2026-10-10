@@ -123,7 +123,7 @@ public final class CpuValidationSuite {
 		gate(gates, "thermal", () -> M9ThermalValidation.main(NONE));
 		gate(gates, "thermal-extremes", () -> cc.ecisr.mmm.fluid.ExtremeThermalValidation.main(NONE));
 		gate(gates, "materials", () -> M3ConnectedVesselValidation.main(NONE));
-		gate(gates, "surface-tension", () -> M4SurfaceTensionValidation.main(NONE), () -> M4SurfaceTensionValidation.main(FAST));
+		gate(gates, "surface-tension", () -> M4SurfaceTensionValidation.main(NONE));
 		gate(gates, "air-network", () -> AirNetworkValidation.main(NONE));
 		gate(gates, "air-cavity", () -> AirCavityScannerValidation.main(NONE));
 		gate(gates, "gas-liquid", () -> M5GasLiquidCouplingValidation.main(NONE),

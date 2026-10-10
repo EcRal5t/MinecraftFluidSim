@@ -121,7 +121,7 @@
 
 ## 推进次序
 
-C01（1a–1c）在声明的小振幅线性对流有效域内已完成，现行契约见[材料状态](../architecture/material-state.md)、[流体求解器](../architecture/fluid-solver.md)和[热浮力](../architecture/thermal-state.md#热浮力)。默认单元有限体积输运已通过现有长期场景与 CPU 生产预算。自由面仍存在按连通性切换的输运及缺失的亚格控制体；下一步先完成统一空间离散，再推进阶段 3。
+C01（1a–1c）在声明的小振幅线性对流有效域内已完成，现行契约见[材料状态](../architecture/material-state.md)、[流体求解器](../architecture/fluid-solver.md)和[热浮力](../architecture/thermal-state.md#热浮力)。默认单元有限体积输运已通过现有长期场景，完整步成本受 CPU 生产预算约束。自由面仍存在按连通性切换的输运及缺失的亚格控制体；下一步先完成统一空间离散，再推进阶段 3。
 
 | 顺序 | 产品阶段 | 前置依赖 | 完成时必须证明 |
 |---|---|---|---|

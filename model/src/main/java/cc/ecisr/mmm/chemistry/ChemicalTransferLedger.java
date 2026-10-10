@@ -1,7 +1,6 @@
 package cc.ecisr.mmm.chemistry;
 
 import cc.ecisr.mmm.units.SignedDyadic;
-import cc.ecisr.mmm.units.ExactVolume;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,16 +37,14 @@ public final class ChemicalTransferLedger {
 
 	public List<Group> groups() { return groups; }
 	public boolean isEmpty() { return groups.isEmpty(); }
-	public double totalVolume() { return volumeQuantity().toDouble(); }
-	public double totalMass() { return massKilogramsQuantity().toDouble(); }
-	public ExactVolume volumeQuantity() {
-		var result = ExactVolume.ZERO;
-		for (Group group : groups) result = result.add(group.volumeQuantity());
+	public double totalVolume() {
+		double result = 0.0;
+		for (Group group : groups) result += group.volume();
 		return result;
 	}
-	public SignedDyadic massKilogramsQuantity() {
-		var result = SignedDyadic.ZERO;
-		for (Group group : groups) result = result.add(group.massKilogramsQuantity());
+	public double totalMass() {
+		double result = 0.0;
+		for (Group group : groups) result += group.massKilograms();
 		return result;
 	}
 	public long totalQuanta() {
@@ -72,32 +69,14 @@ public final class ChemicalTransferLedger {
 			double volume,
 			double massKilograms,
 			long massResidualKilogramsBits,
-			Map<String, Long> speciesQuanta,
-			ExactVolume volumeQuantity, SignedDyadic massKilogramsQuantity
+			Map<String, Long> speciesQuanta
 	) {
-		public Group(String materialId, boolean indicator, double volume, double massKilograms,
-				long massResidualKilogramsBits, Map<String, Long> speciesQuanta) {
-			this(materialId, indicator, volume, massKilograms, massResidualKilogramsBits, speciesQuanta,
-					ExactVolume.of(volume), SignedDyadic.of(massKilograms));
-		}
-		public Group(String materialId, boolean indicator, ExactVolume volume, SignedDyadic massKilograms,
-				long massResidualKilogramsBits, Map<String, Long> speciesQuanta) {
-			this(materialId, indicator, volume.toDouble(), massKilograms.toDouble(), massResidualKilogramsBits, speciesQuanta, volume, massKilograms);
-		}
-		public Group(String materialId, boolean indicator, SignedDyadic volume, SignedDyadic massKilograms,
-				long massResidualKilogramsBits, Map<String, Long> speciesQuanta) {
-			this(materialId, indicator, ExactVolume.of(volume), massKilograms, massResidualKilogramsBits, speciesQuanta);
-		}
 		public Group {
 			ChemicalIds.requireId(materialId, "chemical ledger material id");
 			if (!(Double.isFinite(volume) && volume > 0.0)
 					|| !(Double.isFinite(massKilograms) && massKilograms > 0.0)) {
 				throw new IllegalArgumentException("Chemical transfer volume and mass must be finite and positive");
 			}
-			if (volumeQuantity == null || massKilogramsQuantity == null || volumeQuantity.signum() <= 0 || massKilogramsQuantity.signum() <= 0
-					|| Double.doubleToRawLongBits(volume) != Double.doubleToRawLongBits(volumeQuantity.toDouble())
-					|| Double.doubleToRawLongBits(massKilograms) != Double.doubleToRawLongBits(massKilogramsQuantity.toDouble()))
-				throw new IllegalArgumentException("Chemical transfer observations differ from complete quantities");
 			if (!Double.isFinite(Double.longBitsToDouble(massResidualKilogramsBits))) {
 				throw new IllegalArgumentException("Chemical transfer residual must be finite");
 			}
@@ -134,14 +113,6 @@ public final class ChemicalTransferLedger {
 			return add(new Group(materialId, indicator, volume, massKilograms,
 					mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry)));
 		}
-		public Builder add(String materialId, boolean indicator, ExactVolume volume, SignedDyadic massKilograms,
-				ChemicalMixtureRecord mixture) {
-			if (mixture == null) throw new IllegalArgumentException("Chemical transfer mixture is missing");
-			return add(new Group(materialId, indicator, volume, massKilograms,
-					mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry)));
-		}
-		public Builder add(String materialId, boolean indicator, SignedDyadic volume, SignedDyadic massKilograms,
-				ChemicalMixtureRecord mixture) { return add(materialId, indicator, ExactVolume.of(volume), massKilograms, mixture); }
 
 		public Builder add(Group group) {
 			groups.computeIfAbsent(new Key(group.materialId(), group.indicator()),
@@ -172,7 +143,7 @@ public final class ChemicalTransferLedger {
 		private final boolean indicator;
 		// These are independent truth columns. Aggregate their binary values exactly and round once;
 		// ordinary += accumulates enough drift in a full demo region to falsify a closed mass ledger.
-		private ExactVolume volume = ExactVolume.ZERO;
+		private SignedDyadic volume = SignedDyadic.ZERO;
 		private SignedDyadic massKilograms = SignedDyadic.ZERO;
 		private SignedDyadic residual = SignedDyadic.ZERO;
 		private final TreeMap<String, Long> species = new TreeMap<>();
@@ -182,8 +153,8 @@ public final class ChemicalTransferLedger {
 			this.indicator = indicator;
 		}
 		private void add(Group group) {
-			volume = volume.add(group.volumeQuantity());
-			massKilograms = massKilograms.add(group.massKilogramsQuantity());
+			volume = volume.add(SignedDyadic.of(group.volume()));
+			massKilograms = massKilograms.add(SignedDyadic.of(group.massKilograms()));
 			residual = residual.add(SignedDyadic.of(group.massResidualKilograms()));
 			if (!(Double.isFinite(volume.toDouble()) && Double.isFinite(massKilograms.toDouble())
 					&& Double.isFinite(residual.toDouble()))) {
@@ -192,7 +163,7 @@ public final class ChemicalTransferLedger {
 			group.speciesQuanta().forEach((id, amount) -> species.merge(id, amount, Math::addExact));
 		}
 		private Group freeze() {
-			return new Group(materialId, indicator, volume, massKilograms,
+			return new Group(materialId, indicator, volume.toDouble(), massKilograms.toDouble(),
 					Double.doubleToRawLongBits(residual.toDouble()), species);
 		}
 	}

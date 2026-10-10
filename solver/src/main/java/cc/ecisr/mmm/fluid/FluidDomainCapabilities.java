@@ -58,7 +58,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		ChemicalTransferLedger.Builder result = ChemicalTransferLedger.builder(chemicalParcels.registry());
 		for (int marker = fromInclusive; marker < toExclusive; marker++) {
 			result.add(materialRegistry.material(particles.materialHandle(marker)).id(), chemicalParcels.indicator(marker),
-					particles.exactVolume(marker), unitScale.kilograms(particles.exactMass(marker)), chemicalParcels.record(marker));
+					particles.volume(marker), unitScale.kilograms(particles.mass(marker)), chemicalParcels.record(marker));
 		}
 		return result.build();
 	}
@@ -559,25 +559,16 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 
 	ThermalCarrierContext createThermalMarkerContext() {
 		return new ThermalCarrierContext() {
-			private final LiquidGeometryThermalSupport geometricSupport = new LiquidGeometryThermalSupport();
 			@Override public int markerCount() { return particles.count(); }
 			@Override public int cell(int marker) { return particleCellIndex(marker); }
-			@Override public void prepareObservationSupport() { ensureInventoryGrid(); geometricSupport.prepare(FluidDomainCapabilities.this); }
-			@Override public int observationSupportSize(int marker) {
-				geometricSupport.prepare(FluidDomainCapabilities.this);
-				return liquidGeometryState == null ? 8 : geometricSupport.size(marker);
-			}
+			@Override public void prepareObservationSupport() { ensureInventoryGrid(); }
 			@Override public void observationSupport(int marker, SupportConsumer consumer) {
-				geometricSupport.prepare(FluidDomainCapabilities.this);
-				if (liquidGeometryState == null) LiquidThermalSupport.observe(FluidDomainCapabilities.this, marker, consumer);
-				else geometricSupport.observe(marker, consumer);
+				LiquidThermalSupport.observe(FluidDomainCapabilities.this, marker, consumer);
 			}
 			@Override public int nextMarkerInCell(int cell, int after) { return cellInventory.nextMarkerInCell(cell, after); }
 			@Override public int fluidMaterialHandle(int marker) { return particles.materialHandle(marker); }
 			@Override public double mass(int marker) { return particles.mass(marker); }
 			@Override public double volume(int marker) { return particles.volume(marker); }
-			@Override public SignedDyadic exactMass(int marker) { return particles.exactMass(marker); }
-			@Override public cc.ecisr.mmm.units.ExactVolume exactVolume(int marker) { return particles.exactVolume(marker); }
 			@Override public ChemicalMixtureRecord mixture(int marker) {
 				return chemicalParcels == null ? null : chemicalParcels.record(marker);
 			}
@@ -716,7 +707,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	}
 
 	LiquidEnergyColumn.Truncation planThermalTruncate(
-			int marker, SignedDyadic newMass, ChemicalMixtureRecord keptMixture, double previousTemperatureK
+			int marker, double newMass, ChemicalMixtureRecord keptMixture, double previousTemperatureK
 	) {
 		return thermalState == null ? null : thermalState.planTruncate(
 				marker, newMass, keptMixture, previousTemperatureK, thermalMarkerContext());

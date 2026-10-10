@@ -1,108 +1,12 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.units.SignedDyadic;
-import cc.ecisr.mmm.units.ExactVolume;
 import java.math.BigInteger;
 import java.util.Arrays;
 
 /** Positive largest-remainder allocation over the exact binary volume lattice. */
 final class ExactVolumeAllocation {
 	private ExactVolumeAllocation() { }
-	record InventoryShares(SignedDyadic[] values, int quantumExponent) { }
-	static InventoryShares allocateContinuous(SignedDyadic amount, ExactVolume[] weights) {
-		if (amount.signum() < 0) throw new IllegalArgumentException("Negative allocation inventory");
-		if (amount.signum() == 0) { var values = new SignedDyadic[weights.length]; Arrays.fill(values, SignedDyadic.ZERO); return new InventoryShares(values, 0); }
-		var total = ExactVolume.ZERO; for (var weight : weights) {
-			if (weight.signum() <= 0) throw new IllegalArgumentException("Inventory allocation requires positive support");
-			total = total.add(weight);
-		}
-		var sum = LiquidExactPolygon.Fraction.of(total); var inventory = LiquidExactPolygon.Fraction.of(amount);
-		return round(amount, Arrays.stream(weights).map(weight -> inventory.multiply(LiquidExactPolygon.Fraction.of(weight)).divide(sum)).toList());
-	}
-	static long[] allocate(long amount, ExactVolume[] weights) {
-		if (amount < 0) throw new IllegalArgumentException("Negative allocation amount");
-		var total = ExactVolume.ZERO; for (var weight : weights) {
-			if (weight.signum() < 0) throw new IllegalArgumentException("Negative allocation weight"); total = total.add(weight);
-		}
-		if (total.signum() <= 0) throw new IllegalArgumentException("Volume allocation has no positive support");
-		var sum = LiquidExactPolygon.Fraction.of(total); var inventory = LiquidExactPolygon.Fraction.of(SignedDyadic.of(amount, 0));
-		var result = new long[weights.length]; var remainder = new LiquidExactPolygon.Fraction[weights.length]; var order = new Integer[weights.length]; long assigned = 0;
-		for (int i = 0; i < weights.length; i++) {
-			var ideal = inventory.multiply(LiquidExactPolygon.Fraction.of(weights[i])).divide(sum);
-			result[i] = ideal.numerator().divide(ideal.denominator()).longValueExact(); assigned = Math.addExact(assigned, result[i]);
-			remainder[i] = ideal.subtract(LiquidExactPolygon.Fraction.of(SignedDyadic.of(result[i], 0))); order[i] = i;
-		}
-		Arrays.sort(order, (a, b) -> { int comparison = remainder[b].compareTo(remainder[a]); return comparison != 0 ? comparison : Integer.compare(a, b); });
-		int remaining = Math.toIntExact(amount - assigned);
-		if (remaining < 0 || remaining >= weights.length && remaining != 0) throw new IllegalStateException("Integer allocation lost its remainder certificate");
-		for (int i = 0; i < remaining; i++) result[order[i]]++;
-		return result;
-	}
-
-	/** Rounds positive rational shares on one binary lattice while preserving their complete sum. */
-	static InventoryShares round(SignedDyadic total, java.util.List<LiquidExactPolygon.Fraction> reference) {
-		var sum = LiquidExactPolygon.Fraction.ZERO; int quantum = total.exponent();
-		for (var value : reference) {
-			if (value.signum() <= 0 || !(Double.isFinite(value.rounded()) && value.rounded() > 0))
-				throw new IllegalArgumentException("Inventory share exceeds positive numerical support");
-			sum = sum.add(value); int exponent = value.numerator().bitLength() - value.denominator().bitLength();
-			if ((exponent >= 0 ? value.numerator().compareTo(value.denominator().shiftLeft(exponent)) : value.numerator().shiftLeft(-exponent).compareTo(value.denominator())) < 0) exponent--;
-			quantum = Math.min(quantum, exponent - 53);
-		}
-		if (!sum.equals(LiquidExactPolygon.Fraction.of(total))) throw new IllegalArgumentException("Inventory shares changed their total");
-		var unit = LiquidExactPolygon.Fraction.of(SignedDyadic.of(1, quantum)); var shares = new BigInteger[reference.size()];
-		var remainders = new LiquidExactPolygon.Fraction[shares.length]; var order = new Integer[shares.length]; var assigned = BigInteger.ZERO;
-		for (int i = 0; i < shares.length; i++) {
-			var ratio = reference.get(i).divide(unit); shares[i] = ratio.numerator().divide(ratio.denominator());
-			remainders[i] = new LiquidExactPolygon.Fraction(ratio.numerator().remainder(ratio.denominator()), ratio.denominator());
-			assigned = assigned.add(shares[i]); order[i] = i;
-		}
-		Arrays.sort(order, (left, right) -> { int comparison = remainders[right].compareTo(remainders[left]); return comparison != 0 ? comparison : Integer.compare(left, right); });
-		int remaining = units(total, quantum).subtract(assigned).intValueExact();
-		if (remaining < 0 || remaining >= shares.length && remaining != 0) throw new IllegalStateException("Inventory rounding lost its remainder certificate");
-		for (int i = 0; i < remaining; i++) shares[order[i]] = shares[order[i]].add(BigInteger.ONE);
-		var values = new SignedDyadic[shares.length];
-		for (int i = 0; i < values.length; i++) {
-			values[i] = new SignedDyadic(shares[i], quantum);
-			if (values[i].signum() <= 0 || LiquidExactPolygon.Fraction.of(values[i]).subtract(reference.get(i)).absolute().compareTo(unit) >= 0)
-				throw new IllegalStateException("Inventory rounding exceeded its binary quantum");
-		}
-		return new InventoryShares(values, quantum);
-	}
-
-	/** Continuous binary inventory uses a quantum that retains every exactly representable share. */
-	static InventoryShares allocateContinuous(SignedDyadic amount, SignedDyadic[] weights) {
-		if (amount.signum() < 0) throw new IllegalArgumentException("Negative allocation inventory");
-		int supports = 0;
-		for (var weight : weights) { if (weight.signum() < 0) throw new IllegalArgumentException("Negative allocation weight"); if (weight.signum() > 0) supports++; }
-		if (amount.signum() == 0) { var values = new SignedDyadic[weights.length]; Arrays.fill(values, SignedDyadic.ZERO); return new InventoryShares(values, 0); }
-		if (supports == 0) throw new IllegalArgumentException("Inventory allocation has no positive support");
-		int exponent = Math.addExact(amount.exponent(), amount.significand().bitLength() - 1);
-		int quantum = Math.min(amount.exponent(), exponent - 52 - (32 - Integer.numberOfLeadingZeros(supports - 1)));
-		int weightExponent = Integer.MAX_VALUE; for (var weight : weights) if (weight.signum() > 0) weightExponent = Math.min(weightExponent, weight.exponent());
-		var integerWeights = new BigInteger[weights.length]; var total = BigInteger.ZERO;
-		for (int i = 0; i < weights.length; i++) { integerWeights[i] = units(weights[i], weightExponent); total = total.add(integerWeights[i]); }
-		for (var weight : integerWeights) if (weight.signum() > 0) {
-			var denominator = total.divide(total.gcd(amount.significand().multiply(weight)));
-			if (denominator.bitCount() == 1) quantum = Math.min(quantum, Math.subtractExact(amount.exponent(), denominator.bitLength() - 1));
-		}
-		return new InventoryShares(allocate(amount, weights, quantum), quantum);
-	}
-	/** Explicit output quantum bounds proportional-allocation error by one binary unit per support. */
-	static SignedDyadic[] allocate(SignedDyadic amount, SignedDyadic[] weights, int unitExponent) {
-		if (amount.signum() < 0 || amount.signum() != 0 && unitExponent > amount.exponent())
-			throw new IllegalArgumentException("Allocation quantum cannot represent its amount");
-		int weightExponent = 0; boolean found = false;
-		for (var weight : weights) {
-			if (weight.signum() < 0) throw new IllegalArgumentException("Negative allocation weight");
-			if (weight.signum() > 0) { weightExponent = found ? Math.min(weightExponent, weight.exponent()) : weight.exponent(); found = true; }
-		}
-		BigInteger[] integerWeights = new BigInteger[weights.length];
-		for (int i = 0; i < weights.length; i++) integerWeights[i] = units(weights[i], weightExponent);
-		var shares = allocate(units(amount, unitExponent), integerWeights); var result = new SignedDyadic[shares.length];
-		for (int i = 0; i < shares.length; i++) result[i] = new SignedDyadic(shares[i], unitExponent);
-		return result;
-	}
 
 	static SignedDyadic[] allocate(SignedDyadic amount, SignedDyadic[] weights) {
 		if (weights.length == 1) {

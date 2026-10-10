@@ -74,30 +74,6 @@ final class LiquidFluxGeometry {
 		return sum;
 	}
 
-	/** Integrates position with volume, including the actual swept micro boxes. */
-	LiquidPolyhedron.Moments moments(int cell, double nx, double ny, double nz, double offset,
-			int axis, double width, boolean positive, int neighbor) {
-		var result = LiquidPolyhedron.Moments.ZERO;
-		for (int slot = 0; slot < 8; slot++) {
-			int[] micro = {slot & 1, slot >>> 1 & 1, slot >>> 2 & 1};
-			if (!cut.microCellOpen(cell, micro[0], micro[1], micro[2])) continue;
-			if (axis >= 0 && neighbor >= 0) {
-				int old = micro[axis]; micro[axis] = positive ? 0 : 1;
-				boolean open = cut.microCellOpen(neighbor, micro[0], micro[1], micro[2]); micro[axis] = old;
-				if (!open) continue;
-			}
-			double[] lo = {0.5 * micro[0], 0.5 * micro[1], 0.5 * micro[2]}, hi = {lo[0] + 0.5, lo[1] + 0.5, lo[2] + 0.5};
-			if (axis >= 0) {
-				lo[axis] = Math.max(lo[axis], positive ? 1 - width : 0);
-				hi[axis] = Math.min(hi[axis], positive ? 1 : width);
-				if (hi[axis] <= lo[axis]) continue;
-			}
-			result = result.add(LiquidPolyhedron.box(lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]).clip(nx, ny, nz, offset).moments());
-		}
-		double pore = neighbor < 0 ? poreScale(cell) : Math.min(poreScale(cell), poreScale(neighbor));
-		return new LiquidPolyhedron.Moments(pore * result.volume(), pore * result.x(), pore * result.y(), pore * result.z());
-	}
-
 	private boolean openFace(int left, int right, int axis, int a, int b) {
 		return switch (axis) {
 			case 0 -> cut.microCellOpen(left, 1, a, b) && cut.microCellOpen(right, 0, a, b);
