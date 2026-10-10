@@ -161,7 +161,7 @@ final class CellCarrierRemapPlan {
 					if (mixture != null) group.species.add(mixture);
 					if (domain.thermalState != null) {
 						double energy = domain.thermalState.liquidInternalEnergy(p);
-						group.energy = group.energy.add(SignedDyadic.of(energy)); group.energyRounding += Math.ulp(energy);
+						group.energyRounding += Math.ulp(energy);
 					}
 				}
 				ArrayList<Group> groups = input[cell];
@@ -170,6 +170,12 @@ final class CellCarrierRemapPlan {
 					else for (int p : group.original) group.volume = group.volume.add(SignedDyadic.of(domain.particles.volume(p)));
 					group.mass = CellRemapMassAllocation.inventory(domain, group.original);
 					group.density = CellRemapMassAllocation.density(domain, group.original, group.volume, group.mass);
+					if (domain.thermalState != null) {
+						var fitting = FITTING.get(); fitting.ensureCapacity(group.original.size());
+						for (int p = 0; p < group.original.size(); p++)
+							fitting.values[3][p] = domain.thermalState.liquidInternalEnergy(group.original.get(p));
+						group.energy = SignedDyadic.sum(fitting.values[3], group.original.size());
+					}
 					fitFields(group, dt);
 				}
 			}
@@ -410,15 +416,15 @@ final class CellCarrierRemapPlan {
 		double[] correction = flat ? null : new double[volumes.length];
 		double[] lower = flat ? null : new double[volumes.length], upper = flat ? null : new double[volumes.length];
 		source.energyRounding += caloric(source).roundoff(meanTemperature);
-		SignedDyadic remainingEnergy = source.energy;
+		var fitting = FITTING.get(); fitting.ensureCapacity(volumes.length);
+		double[] rawEnergy = fitting.values[3]; Arrays.fill(rawEnergy, 0, volumes.length, 0);
 		for (int d = 0; d <= last; d++) {
 			if (volumes[d].signum() == 0) continue;
 			double mass = masses[d];
 			ChemicalMixtureRecord composition = species[d];
 			var caloric = domain.thermalState.liquid().caloricInventory(source.material, mass, composition,
 					domain.chemicalParcels == null ? null : domain.chemicalParcels.registry());
-			baseline[d] = SignedDyadic.of(caloric.energy(meanTemperature));
-			remainingEnergy = remainingEnergy.subtract(baseline[d]);
+			baseline[d] = SignedDyadic.of(rawEnergy[d] = caloric.energy(meanTemperature));
 			if (flat) continue;
 			lower[d] = caloric.energy(source.minimumTemperature);
 			upper[d] = caloric.energy(source.maximumTemperature);
@@ -432,6 +438,7 @@ final class CellCarrierRemapPlan {
 				correctionSum += correction[d];
 			}
 		}
+		SignedDyadic remainingEnergy = source.energy.subtract(SignedDyadic.sum(rawEnergy, volumes.length));
 		baseline[pivot] = baseline[pivot].add(remainingEnergy);
 		if (flat) return baseline;
 		double scale = 1;
