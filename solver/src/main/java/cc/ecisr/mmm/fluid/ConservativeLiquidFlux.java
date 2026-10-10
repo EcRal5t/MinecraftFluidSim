@@ -19,6 +19,8 @@ final class ConservativeLiquidFlux {
 	private final SignedDyadic[] exactCapacity;
 	private final SignedDyadic[] upperFlux, remainingSupply;
 	private final double[] finalCapacity;
+	private final double[] geometricBlend;
+	private double dtOverH;
 	private LiquidFluxGeometry geometry;
 	private SignedDyadic[] reserved;
 	private int[] carrierShares;
@@ -37,6 +39,7 @@ final class ConservativeLiquidFlux {
 		capacity = new double[cellCount]; aperture = new double[faces]; donorFlux = new double[faces];
 		exactCapacity = new SignedDyadic[cellCount];
 		upperFlux = new SignedDyadic[faces]; remainingSupply = new SignedDyadic[cellCount]; finalCapacity = new double[cellCount];
+		geometricBlend = new double[faces];
 		int f = 0;
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			left[f] = index(x - 1, y, z); right[f] = left[f] + 1; axis[f++] = 0;
@@ -55,6 +58,7 @@ final class ConservativeLiquidFlux {
 
 	/** Volumes and capacities are in this grid's cell-volume units; velocities are m/s. */
 	void plan(double[] volume, boolean[] solid, double dtOverH, SignedDyadic[] exactVolume) {
+		this.dtOverH = dtOverH;
 		prepareGeometry(solid, dtOverH, volume);
 		reconstructPlanes(volume, solid, exactVolume);
 		provisionalFluxes(volume, dtOverH);
@@ -91,6 +95,11 @@ final class ConservativeLiquidFlux {
 				if (exactVolume[c].compareTo(SignedDyadic.ZERO) < 0 || exactVolume[c].compareTo(SignedDyadic.of(capacity[c])) > 0)
 					throw new IllegalStateException("Liquid integration cell " + c + " exceeds its geometric capacity: volume="
 							+ volume[c] + ", beginningCapacity=" + capacity[c] + ", finalCapacity=" + finalCapacity[c]);
+				FlipPressurePhaseGeometry plane = geometry == null ? null : geometry.transportPlane();
+				if (plane != null) {
+					normalX[c] = plane.planeNormal(c, 0); normalY[c] = plane.planeNormal(c, 1); normalZ[c] = plane.planeNormal(c, 2);
+					offset[c] = plane.planeOffset(c); continue;
+				}
 				normalX[c] = (float) (sample(volume, solid, x - 1, y, z, c) - sample(volume, solid, x + 1, y, z, c));
 				normalY[c] = (float) (sample(volume, solid, x, y - 1, z, c) - sample(volume, solid, x, y + 1, z, c));
 				normalZ[c] = (float) (sample(volume, solid, x, y, z - 1, c) - sample(volume, solid, x, y, z + 1, c));
@@ -141,6 +150,7 @@ final class ConservativeLiquidFlux {
 			double limiter = a >= 0 ? Math.min(rNegative[left[f]], rPositive[right[f]]) : Math.min(rPositive[left[f]], rNegative[right[f]]);
 			int donor = velocity[f] >= 0 ? left[f] : right[f];
 			flux[f] = (capacity[donor] == 0 ? 0 : velocity[f] * dtOverH * aperture[f] * volume[donor] / capacity[donor]) + a * limiter;
+			geometricBlend[f] = flux[f] == 0 ? 0 : Math.max(0, Math.min(1, limiter * (donorFlux[f] + a) / flux[f]));
 			outgoing[donor] += Math.abs(flux[f]);
 		}
 	}
@@ -183,23 +193,7 @@ final class ConservativeLiquidFlux {
 
 	/** Adjusts shared transfers before commit. Cell inventories and positions remain untouched. */
 	private void repairSharedFluxes(SignedDyadic[] volume, boolean[] solid) {
-		Arrays.fill(after, SignedDyadic.ZERO);
-		for (int f = 0; f < flux.length; f++) after[donor(f)] = after[donor(f)].add(exactFlux[f]);
-		for (int f = flux.length - 1; f >= 0; f--) {
-			int donor = donor(f);
-			SignedDyadic excess = after[donor].subtract(volume[donor]);
-			if (excess.signum() > 0) {
-				SignedDyadic reduce = min(excess, exactFlux[f]);
-				exactFlux[f] = exactFlux[f].subtract(reduce); after[donor] = after[donor].subtract(reduce);
-			}
-		}
-		for (int c = 0; c < cellCount; c++) remainingSupply[c] = volume[c].subtract(after[c]);
-		System.arraycopy(volume, 0, after, 0, cellCount); Arrays.fill(incomingHead, -1);
-		for (int f = 0; f < flux.length; f++) if (exactFlux[f].signum() > 0) {
-			int donor = donor(f), receiver = receiver(f);
-			after[donor] = after[donor].subtract(exactFlux[f]); after[receiver] = after[receiver].add(exactFlux[f]);
-			incomingNext[f] = incomingHead[receiver]; incomingHead[receiver] = f;
-		}
+		initializeSharedFluxes(volume);
 		for (int c = 0; c < cellCount; c++) {
 			SignedDyadic localCapacity = exactCapacity[c];
 			if (after[c].signum() < 0) throw new IllegalStateException("Shared liquid flux overdrew its donor");
@@ -233,6 +227,26 @@ final class ConservativeLiquidFlux {
 		}
 	}
 
+	private void initializeSharedFluxes(SignedDyadic[] volume) {
+		Arrays.fill(after, SignedDyadic.ZERO);
+		for (int f = 0; f < flux.length; f++) after[donor(f)] = after[donor(f)].add(exactFlux[f]);
+		for (int f = flux.length - 1; f >= 0; f--) {
+			int donor = donor(f);
+			SignedDyadic excess = after[donor].subtract(volume[donor]);
+			if (excess.signum() > 0) {
+				SignedDyadic reduce = min(excess, exactFlux[f]);
+				exactFlux[f] = exactFlux[f].subtract(reduce); after[donor] = after[donor].subtract(reduce);
+			}
+		}
+		for (int c = 0; c < cellCount; c++) remainingSupply[c] = volume[c].subtract(after[c]);
+		System.arraycopy(volume, 0, after, 0, cellCount); Arrays.fill(incomingHead, -1);
+		for (int f = 0; f < flux.length; f++) if (exactFlux[f].signum() > 0) {
+			int donor = donor(f), receiver = receiver(f);
+			after[donor] = after[donor].subtract(exactFlux[f]); after[receiver] = after[receiver].add(exactFlux[f]);
+			incomingNext[f] = incomingHead[receiver]; incomingHead[receiver] = f;
+		}
+	}
+
 	/** A moving solid changes the control-volume capacity. Complete its finite shared
 	 * displacement with available outward face flux, using beginning-of-step liquid supply. */
 	private boolean augmentOutgoing(int source) {
@@ -257,7 +271,9 @@ final class ConservativeLiquidFlux {
 			if (exactFlux[f].signum() == 0) {
 				incomingNext[f] = incomingHead[receiver(f)]; incomingHead[receiver(f)] = f;
 			}
-			exactFlux[f] = exactFlux[f].add(amount);
+			SignedDyadic previous = exactFlux[f];
+			exactFlux[f] = previous.add(amount);
+			geometricBlend[f] *= previous.toDouble() / exactFlux[f].toDouble();
 			remainingSupply[donor(f)] = remainingSupply[donor(f)].subtract(amount);
 		}
 		after[source] = after[source].subtract(amount); after[destination] = after[destination].add(amount);
@@ -265,6 +281,25 @@ final class ConservativeLiquidFlux {
 	}
 
 	int donor(int f) { return velocity[f] >= 0 ? left[f] : right[f]; }
+	/** Fraction of the final face transfer assigned to the limited geometric sweep. */
+	double geometricBlend(int face) { return geometricBlend[face]; }
+	void sweptMoments(int face, double[] result) {
+		int donor = donor(face), neighbor = receiver(face), a = axis[face];
+		double width = Math.abs(velocity[face]) * dtOverH;
+		boolean positive = velocity[face] >= 0;
+		if (geometry != null) {
+			geometry.sweptMoments(donor, neighbor, a, width, positive,
+					normalX[donor], normalY[donor], normalZ[donor], offset[donor], result); return;
+		}
+		double nx = normalX[donor], ny = normalY[donor], nz = normalZ[donor], off = offset[donor];
+		if (positive) off -= (a == 0 ? nx : a == 1 ? ny : nz) * (1 - width);
+		LiquidFluxGeometry.unitCubeMoments(a == 0 ? nx * width : nx, a == 1 ? ny * width : ny,
+				a == 2 ? nz * width : nz, off, result);
+		double volume = result[0];
+		for (int i = 0; i < 3; i++) result[i + 1] = width * ((i == a ? (positive ? 1 - width : 0) * volume
+				+ width * result[i + 1] : result[i + 1]) - .5 * volume);
+		result[0] *= width;
+	}
 	int receiver(int f) { return velocity[f] >= 0 ? right[f] : left[f]; }
 	SignedDyadic[] resultingVolumes() { return after; }
 	/** Final joint liquid capacity, including any capacity reserved for independent arrivals. */

@@ -219,7 +219,7 @@ final class FlipFreeSurfaceGeometry {
 	}
 
 	/** Integral of the CDF of a*x+b*y, with 0<a<=b and x,y in [0,1]. */
-	private static double rectangleIntegral(double a, double b, double t) {
+	static double rectangleIntegral(double a, double b, double t) {
 		if (t <= 0) return 0;
 		if (t <= a) return t * t * t / (6 * a * b);
 		if (t <= b) return (t * (t - a) / 2 + a * a / 6) / b;

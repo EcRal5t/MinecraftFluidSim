@@ -79,7 +79,7 @@ public final class LiquidThermalExpansion {
 			ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 			try (DataOutputStream output = new DataOutputStream(bytes)) {
 				output.writeUTF(MODEL_ID);
-				output.writeUTF("beta*(T_carrier-T_ref);connected_single_phase_trilinear_mass_volume;pressure_face_density_segments;closed_carrier_relative_density_domain");
+				output.writeUTF("beta*(T_carrier-T_ref);connected_single_phase_trilinear_mass_volume;pressure_face_density_segments;positive_p2g_fringe_mass_average;closed_carrier_relative_density_domain");
 			}
 			return bytes.toByteArray();
 		} catch (IOException impossible) {

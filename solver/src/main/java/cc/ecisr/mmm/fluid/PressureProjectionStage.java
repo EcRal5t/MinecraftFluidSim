@@ -107,7 +107,7 @@ final class PressureProjectionStage {
 			if (faceActive(left, right, openArea)) {
 				double difference = coupled ? 0 : pressureDifference(left, right, 1, 0, 0);
 				state.mac.velocityX[face] -= scale * difference;
-			} else if (!access.carrierFaceActive(left, right, openArea)) state.mac.velocityX[face] = 0.0F;
+			} else if (!(openArea > 0) || (state.mac.p2gWeightX[face] <= 0 && !access.carrierFaceActive(left, right, openArea))) state.mac.velocityX[face] = 0.0F;
 		}
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z), face = access.yFaceIndex(x, y, z);
@@ -115,7 +115,7 @@ final class PressureProjectionStage {
 			if (faceActive(below, above, openArea)) {
 				double difference = coupled ? 0 : pressureDifference(below, above, 0, 1, 0);
 				state.mac.velocityY[face] -= scale * difference;
-			} else if (!access.carrierFaceActive(below, above, openArea)) state.mac.velocityY[face] = 0.0F;
+			} else if (!(openArea > 0) || (state.mac.p2gWeightY[face] <= 0 && !access.carrierFaceActive(below, above, openArea))) state.mac.velocityY[face] = 0.0F;
 		}
 		for (int z = 1; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int back = access.cellIndex(x, y, z - 1), front = access.cellIndex(x, y, z), face = access.zFaceIndex(x, y, z);
@@ -123,7 +123,7 @@ final class PressureProjectionStage {
 			if (faceActive(back, front, openArea)) {
 				double difference = coupled ? 0 : pressureDifference(back, front, 0, 0, 1);
 				state.mac.velocityZ[face] -= scale * difference;
-			} else if (!access.carrierFaceActive(back, front, openArea)) state.mac.velocityZ[face] = 0.0F;
+			} else if (!(openArea > 0) || (state.mac.p2gWeightZ[face] <= 0 && !access.carrierFaceActive(back, front, openArea))) state.mac.velocityZ[face] = 0.0F;
 		}
 	}
 

@@ -6,7 +6,9 @@ import java.util.Arrays;
 final class DivergenceFreeVelocityExtension {
 	private final int nx, ny, nz, cells;
 	private final FlipCutCellGeometry geometry;
+	private final FlipPressurePhaseGeometry liquid;
 	final boolean[] advectionCells;
+	private final boolean[] fringeCells;
 	private final boolean[] active;
 	private final double[] potential, residual, direction, product, diagonal;
 	private final int[] first, second, face, axis;
@@ -15,10 +17,10 @@ final class DivergenceFreeVelocityExtension {
 	private int edges;
 	private MarkerTransferBudget dependencies;
 
-	DivergenceFreeVelocityExtension(int nx, int ny, int nz, FlipCutCellGeometry geometry) {
-		this.nx = nx; this.ny = ny; this.nz = nz; this.geometry = geometry;
+	DivergenceFreeVelocityExtension(int nx, int ny, int nz, FlipCutCellGeometry geometry, FlipPressurePhaseGeometry liquid) {
+		this.nx = nx; this.ny = ny; this.nz = nz; this.geometry = geometry; this.liquid = liquid;
 		cells = nx * ny * nz;
-		advectionCells = new boolean[cells]; active = new boolean[cells];
+		advectionCells = new boolean[cells]; fringeCells = new boolean[cells]; active = new boolean[cells];
 		potential = new double[cells]; residual = new double[cells]; direction = new double[cells];
 		product = new double[cells]; diagonal = new double[cells];
 		first = new int[3 * cells]; second = new int[3 * cells];
@@ -33,13 +35,18 @@ final class DivergenceFreeVelocityExtension {
 	void extend(MacVelocityGrid mac, boolean[] fluid, boolean[] solid, int[] markerCount, MarkerTransferBudget dependencies) {
 		this.dependencies = dependencies;
 		prepareAdvectionCells(fluid, solid, markerCount);
+		prepareConnectedCells(fringeCells, fluid, solid, markerCount, false);
 		projectFringe(mac, fluid, solid);
 		this.dependencies = null;
 	}
 
 	/** Classifies connected finite-volume carriers without changing any velocity. */
 	void prepareAdvectionCells(boolean[] fluid, boolean[] solid, int[] markerCount) {
-		System.arraycopy(fluid, 0, advectionCells, 0, cells);
+		prepareConnectedCells(advectionCells, fluid, solid, markerCount, true);
+	}
+
+	private void prepareConnectedCells(boolean[] connected, boolean[] fluid, boolean[] solid, int[] markerCount, boolean requireWetFace) {
+		System.arraycopy(fluid, 0, connected, 0, cells);
 		int head = 0, tail = 0;
 		for (int c = 0; c < cells; c++) if (fluid[c]) queue[tail++] = c;
 		while (head < tail) {
@@ -50,28 +57,31 @@ final class DivergenceFreeVelocityExtension {
 				int az = z + (d == 4 ? -1 : d == 5 ? 1 : 0);
 				if (ax < 0 || ax >= nx || ay < 0 || ay >= ny || az < 0 || az >= nz) continue;
 				int neighbor = cell(ax, ay, az);
-				if (solid[neighbor] || advectionCells[neighbor] || markerCount[neighbor] == 0) continue;
+				if (solid[neighbor] || connected[neighbor] || markerCount[neighbor] == 0) continue;
 				float aperture = d < 2 ? geometry.xFaceOpen(Math.max(x, ax), y, z)
 						: d < 4 ? geometry.yFaceOpen(x, Math.max(y, ay), z) : geometry.zFaceOpen(x, y, Math.max(z, az));
-				if (aperture > 0) { advectionCells[neighbor] = true; queue[tail++] = neighbor; }
+				if (aperture > 0 && (!requireWetFace || liquid.sharedLiquidFaceArea(
+						Math.min(c, neighbor), Math.max(c, neighbor), d / 2, geometry) > 0)) {
+					connected[neighbor] = true; queue[tail++] = neighbor;
+				}
 			}
 		}
 	}
 
 	private void projectFringe(MacVelocityGrid mac, boolean[] fluid, boolean[] solid) {
 		Arrays.fill(potential, 0); Arrays.fill(residual, 0); Arrays.fill(diagonal, 0);
-		for (int c = 0; c < cells; c++) active[c] = advectionCells[c] && !fluid[c];
+		for (int c = 0; c < cells; c++) active[c] = fringeCells[c] && !fluid[c];
 		edges = 0;
 		for (int z = 0; z < nz; z++) for (int y = 0; y < ny; y++) for (int x = 1; x < nx; x++)
 			add(cell(x - 1, y, z), cell(x, y, z), (z * ny + y) * (nx + 1) + x,
-					0, geometry.xFaceOpen(x, y, z), fluid, mac.velocityX);
+					0, geometry.xFaceOpen(x, y, z), fluid, mac.velocityX, mac.p2gWeightX);
 		for (int z = 0; z < nz; z++) for (int y = 1; y < ny; y++) for (int x = 0; x < nx; x++)
 			add(cell(x, y - 1, z), cell(x, y, z), (z * (ny + 1) + y) * nx + x,
-					1, geometry.yFaceOpen(x, y, z), fluid, mac.velocityY);
+					1, geometry.yFaceOpen(x, y, z), fluid, mac.velocityY, mac.p2gWeightY);
 		for (int z = 1; z < nz; z++) for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++)
 			add(cell(x, y, z - 1), cell(x, y, z), (z * ny + y) * nx + x,
-					2, geometry.zFaceOpen(x, y, z), fluid, mac.velocityZ);
-		prepareClosedComponents(fluid, solid);
+					2, geometry.zFaceOpen(x, y, z), fluid, mac.velocityZ, mac.p2gWeightZ);
+		prepareClosedComponents(mac, fluid, solid);
 		double initial = 0, rr = 0;
 		for (int c = 0; c < cells; c++) {
 			direction[c] = diagonal[c] > 0 ? residual[c] / diagonal[c] : 0;
@@ -104,7 +114,7 @@ final class DivergenceFreeVelocityExtension {
 		}
 	}
 
-	private void add(int a, int b, int f, int component, float aperture, boolean[] fluid, float[] velocity) {
+	private void add(int a, int b, int f, int component, float aperture, boolean[] fluid, float[] velocity, float[] massWeight) {
 		if (aperture != 1 || !active[a] && !active[b]) return;
 		if (dependencies != null) {
 			if (active[a]) dependencies.connect(dependencies.airPotential(a), dependencies.face(component, f));
@@ -112,7 +122,9 @@ final class DivergenceFreeVelocityExtension {
 		}
 		if (active[a]) residual[a] -= velocity[f];
 		if (active[b]) residual[b] += velocity[f];
-		if (fluid[a] || fluid[b]) return;
+		// Carrier-supported values have already received their physical impulses.
+		// Only massless extrapolation values belong to this auxiliary solve.
+		if (fluid[a] || fluid[b] || massWeight[f] > 0) return;
 		first[edges] = a; second[edges] = b; face[edges] = f; axis[edges++] = component;
 		if (active[a]) diagonal[a]++;
 		if (active[b]) diagonal[b]++;
@@ -120,7 +132,7 @@ final class DivergenceFreeVelocityExtension {
 
 	private int cell(int x, int y, int z) { return (z * ny + y) * nx + x; }
 
-	private void prepareClosedComponents(boolean[] fluid, boolean[] solid) {
+	private void prepareClosedComponents(MacVelocityGrid mac, boolean[] fluid, boolean[] solid) {
 		Arrays.fill(visited, false);
 		for (int start = 0; start < cells; start++) {
 			if (!active[start] || visited[start]) continue;
@@ -137,6 +149,10 @@ final class DivergenceFreeVelocityExtension {
 					float aperture = d < 2 ? geometry.xFaceOpen(Math.max(x, ax), y, z)
 							: d < 4 ? geometry.yFaceOpen(x, Math.max(y, ay), z) : geometry.zFaceOpen(x, y, Math.max(z, az));
 					if (aperture != 1 || fluid[neighbor] || solid[neighbor]) continue;
+					float massWeight = d < 2 ? mac.p2gWeightX[(z * ny + y) * (nx + 1) + Math.max(x, ax)]
+							: d < 4 ? mac.p2gWeightY[(z * (ny + 1) + Math.max(y, ay)) * nx + x]
+							: mac.p2gWeightZ[(Math.max(z, az) * ny + y) * nx + x];
+					if (massWeight > 0) continue;
 					if (!active[neighbor]) open = true;
 					else if (!visited[neighbor]) { visited[neighbor] = true; queue[tail++] = neighbor; }
 				}

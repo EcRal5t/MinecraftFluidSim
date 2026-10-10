@@ -16,7 +16,7 @@ final class ParticleToGridStage {
 			float[] volume, PressureProjectionWorkspace projection,
 			FlipFreeSurfaceGeometry freeSurfaceGeometry, MacVelocityGrid mac,
 			DomainGeometry geometry, MarkerGridIndex markerGrid,
-			FlipPressurePhaseGeometry pressurePhaseGeometry
+			FlipPressurePhaseGeometry pressurePhaseGeometry, LiquidParticleStore particles, float cellSize
 	) { }
 
 	interface Access {
@@ -112,7 +112,8 @@ final class ParticleToGridStage {
 		access.constrainClosedLiquidVolume();
 		state.pressurePhaseGeometry.rebuild(
 				state.geometry.solid, state.projection.pressureVolume, state.geometry.cutCells,
-				access.pressureGranularCoupling(), state.projection.pressureFluid);
+				access.pressureGranularCoupling(), state.projection.pressureFluid,
+				state.markerGrid, state.particles, state.cellSize);
 		access.rebuildPressureBoundaryLineage();
 		access.rebuildSurfaceTensionPressure();
 	}

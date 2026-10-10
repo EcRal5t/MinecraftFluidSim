@@ -28,6 +28,7 @@ final class LiquidStratificationValidation {
 	}
 
 	static void validityAndCommittedDefinitions() {
+		isolatedSupportReceivesUniformBuoyancy();
 		var bounded = new LiquidThermalExpansion.Definition("test:bounded", 300, 0.001, 0.05);
 		check(bounded.relativeBuoyancy(350) == 0.05 && bounded.relativeBuoyancy(250) == -0.05,
 				"Boussinesq closed validity interval rejected an endpoint");
@@ -74,6 +75,33 @@ final class LiquidStratificationValidation {
 			fixture(0, false, false, 0, missing).thermalBuoyancyProperties();
 			throw new AssertionError("missing committed expansion silently used built-in data");
 		} catch (LiquidThermalExpansion.ValidityExceededException expectedMissing) { }
+	}
+
+	private static void isolatedSupportReceivesUniformBuoyancy() {
+		var config = new FluidSolverConfig(0.5F, 1000, 9.81F, 0.05F, 200, 1e-6F, 0.4F, 0.002F, 0);
+		var domain = new FluidDomain(6, 6, 6, config);
+		domain.setVolume(3, 3, 3, 0.125F);
+		domain.setMarkerMaterial(0, LIQUIDS, 0);
+		domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
+		var caloric = new ThermalMaterialDefinition("test:thermal/isolated_buoyancy", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"mmm:water", T_REF, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, 4184)));
+		domain.bindThermal(new ThermalRegistry(List.of(caloric)), LIQUIDS, T_REF + 20);
+		var energy = domain.exactInternalEnergy();
+		domain.ensureGrid();
+		domain.bodyForceStage.applyGravity(config.timeStep());
+		domain.bodyForceStage.applyThermalBuoyancy(config.timeStep());
+		double relative = domain.materialDefinitions.entry("mmm:water").thermalExpansion().relativeBuoyancy(T_REF + 20);
+		float expected = -config.gravity() * config.timeStep() + (float) ((double) config.gravity() * config.timeStep() * relative);
+		int fringe = 0;
+		for (int z = 0; z < 6; z++) for (int y = 1; y < 6; y++) for (int x = 0; x < 6; x++) {
+			int face = domain.yFaceIndex(x, y, z);
+			if (!(domain.mac.p2gWeightY[face] > 0)) continue;
+			check(Math.abs(domain.mac.velocityY[face] - expected) <= Math.ulp(expected),
+					"uniform thermal acceleration was diluted on a P2G support face: " + domain.mac.velocityY[face]);
+			if (!domain.carrierFaceActive(domain.cellIndex(x, y - 1, z), domain.cellIndex(x, y, z), 1)) fringe++;
+		}
+		check(fringe > 0, "isolated buoyancy fixture has no P2G fringe support");
+		check(energy.equals(domain.exactInternalEnergy()), "thermal body force changed carrier U");
 	}
 
 	static void stableLayers() {

@@ -17,12 +17,12 @@ final class FlipVelocityExtrapolator {
 	}
 
 	void rebuildAndExtrapolate(boolean[] solid, int[] markerCount, boolean[] pressureFluid, boolean completePressureSpace,
-			float[] velocityX, float[] velocityY, float[] velocityZ, boolean[] validX, boolean[] validY, boolean[] validZ,
-			float[] scratchX, float[] scratchY, float[] scratchZ, MarkerTransferBudget dependencies) {
-		seedPressureFaces(solid, markerCount, pressureFluid, validX, validY, validZ);
-		extrapolateFaceField(velocityX, validX, scratchX, 0, sizeX + 1, sizeY, sizeZ, dependencies);
-		extrapolateFaceField(velocityY, validY, scratchY, 1, sizeX, sizeY + 1, sizeZ, dependencies);
-		extrapolateFaceField(velocityZ, validZ, scratchZ, 2, sizeX, sizeY, sizeZ + 1, dependencies);
+			MacVelocityGrid mac, MarkerTransferBudget dependencies) {
+		boolean[] validX = mac.velocityValidX, validY = mac.velocityValidY, validZ = mac.velocityValidZ;
+		seedPressureFaces(solid, markerCount, pressureFluid, mac);
+		extrapolateFaceField(mac.velocityX, validX, mac.velocityWeightX, 0, sizeX + 1, sizeY, sizeZ, dependencies);
+		extrapolateFaceField(mac.velocityY, validY, mac.velocityWeightY, 1, sizeX, sizeY + 1, sizeZ, dependencies);
+		extrapolateFaceField(mac.velocityZ, validZ, mac.velocityWeightZ, 2, sizeX, sizeY, sizeZ + 1, dependencies);
 		if (!completePressureSpace) return;
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x <= sizeX; x++)
 			if (cutCells.xFaceOpen(x, y, z) == 0) validX[xFaceIndex(x, y, z)] = true;
@@ -33,26 +33,30 @@ final class FlipVelocityExtrapolator {
 	}
 
 	private void seedPressureFaces(
-			boolean[] solid, int[] markerCount, boolean[] pressureFluid, boolean[] validX, boolean[] validY, boolean[] validZ
+			boolean[] solid, int[] markerCount, boolean[] pressureFluid, MacVelocityGrid mac
 	) {
+		boolean[] validX = mac.velocityValidX, validY = mac.velocityValidY, validZ = mac.velocityValidZ;
 		Arrays.fill(validX, false);
 		Arrays.fill(validY, false);
 		Arrays.fill(validZ, false);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z);
-			validX[xFaceIndex(x, y, z)] = faceActive(
+			int face = xFaceIndex(x, y, z);
+			validX[face] = mac.p2gWeightX[face] > 0 || faceActive(
 					solid, markerCount, pressureFluid, left, right, cutCells.xFaceOpen(x, y, z)
 			);
 		}
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
-			validY[yFaceIndex(x, y, z)] = faceActive(
+			int face = yFaceIndex(x, y, z);
+			validY[face] = mac.p2gWeightY[face] > 0 || faceActive(
 					solid, markerCount, pressureFluid, below, above, cutCells.yFaceOpen(x, y, z)
 			);
 		}
 		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z);
-			validZ[zFaceIndex(x, y, z)] = faceActive(
+			int face = zFaceIndex(x, y, z);
+			validZ[face] = mac.p2gWeightZ[face] > 0 || faceActive(
 					solid, markerCount, pressureFluid, back, front, cutCells.zFaceOpen(x, y, z)
 			);
 		}

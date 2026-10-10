@@ -69,19 +69,24 @@ final class LiquidCarrierProperties {
 		if (buoyancyPrepared) return;
 		Arrays.fill(relativeBuoyancy, 0.0);
 		for (int marker = 0; marker < markers.markerCount(); marker++) {
-			String id = materials.material(markers.fluidMaterialHandle(marker)).id();
-			LiquidThermalExpansion.Definition expansion = definitions == null
-					? LiquidThermalExpansion.require(id) : definitions.entry(id).thermalExpansion();
-			if (expansion == null) throw new LiquidThermalExpansion.ValidityExceededException(
-					"Liquid " + id + " has no committed Boussinesq definition at marker " + marker);
 			// Validate before averaging: an invalid carrier must not disappear into a valid cell mean.
-			double correctionMass = markers.mass(marker) * expansion.relativeBuoyancy(thermal.temperature(marker, markers));
+			double correctionMass = markers.mass(marker) * markerRelativeBuoyancy(markers, materials, definitions, thermal, marker);
 			markers.observationSupport(marker, (cell, weight) -> relativeBuoyancy[cell] += weight * correctionMass);
 		}
 		for (int cell = 0; cell < cellCount; cell++) {
 			if (observationMass[cell] > 0) relativeBuoyancy[cell] /= observationMass[cell];
 		}
 		buoyancyPrepared = true;
+	}
+
+	static double markerRelativeBuoyancy(ThermalCarrierContext markers, FluidMaterialRegistry materials,
+			MaterialRegistry definitions, ThermalDomainState thermal, int marker) {
+		String id = materials.material(markers.fluidMaterialHandle(marker)).id();
+		LiquidThermalExpansion.Definition expansion = definitions == null
+				? LiquidThermalExpansion.require(id) : definitions.entry(id).thermalExpansion();
+		if (expansion == null) throw new LiquidThermalExpansion.ValidityExceededException(
+				"Liquid " + id + " has no committed Boussinesq definition at marker " + marker);
+		return expansion.relativeBuoyancy(thermal.temperature(marker, markers));
 	}
 
 	/** Cells whose temperature left the material's declared viscosity domain in the last build. */

@@ -15,11 +15,24 @@ public final class LiquidHandoffContinuityValidation {
 			Result spaceFine = run(shape, 0.25F, 0.03125F, 1), bothFine = run(shape, 0.25F, 0.015625F, 1);
 			check(coarse.volume == timeFine.volume && coarse.volume == spaceFine.volume && coarse.volume == bothFine.volume,
 					"Translation refinement changed its physical liquid inventory");
-			double rounding = coarse.positionBound + spaceFine.positionBound;
-			check(spaceFine.finalCentroidError <= coarse.finalCentroidError + rounding
-					&& bothFine.finalCentroidError <= timeFine.finalCentroidError + timeFine.positionBound + bothFine.positionBound,
-					"Grid refinement increased the default-path translation centroid error: " + shape);
+			if (shape.equals("pool")) {
+				check(spaceFine.spatialErrorSquared < coarse.spatialErrorSquared && bothFine.spatialErrorSquared < timeFine.spatialErrorSquared,
+						"Grid refinement did not reduce the translated cube's centroid/covariance error");
+				check(spaceFine.volumeFieldL1 < coarse.volumeFieldL1 && bothFine.volumeFieldL1 < timeFine.volumeFieldL1,
+						"Grid refinement did not reduce the translated cube's cell-volume error");
+			} else {
+				double rounding = coarse.positionBound + spaceFine.positionBound;
+				check(spaceFine.finalCentroidError <= coarse.finalCentroidError + rounding
+						&& bothFine.finalCentroidError <= timeFine.finalCentroidError + timeFine.positionBound + bothFine.positionBound,
+						"Grid refinement increased the default-path translation centroid error: " + shape);
+			}
 		}
+		Result longCoarse = run("pool", 0.5F, 0.03125F, 8), longFine = run("pool", 0.25F, 0.03125F, 8);
+		check(longCoarse.volume == longFine.volume, "Long cube translation refinement changed its physical inventory");
+		check(longFine.weightedTailDistance < longCoarse.weightedTailDistance,
+				"Grid refinement did not reduce volume-weighted distance outside the translated cube over eight seconds");
+		check(longFine.farTailVolumeRatio < longCoarse.farTailVolumeRatio,
+				"Grid refinement did not reduce liquid volume more than half a metre outside the translated cube over eight seconds");
 		Result switching = run("classification", 0.5F, 0.03125F, 3);
 		check(switching.fvToBallistic > 0 && switching.ballisticToFv > 0,
 				"Continuous translation did not exercise both directions of the transport handoff");
@@ -63,7 +76,8 @@ public final class LiquidHandoffContinuityValidation {
 		}
 	}
 
-	private record Result(double volume, double finalCentroidError, double positionBound, int fvToBallistic, int ballisticToFv) { }
+	private record Result(double volume, double finalCentroidError, double positionBound, int fvToBallistic, int ballisticToFv,
+			double spatialErrorSquared, double volumeFieldL1, double weightedTailDistance, double outsideVolumeRatio, double farTailVolumeRatio) { }
 	private record Moments(SignedDyadic volume, SignedDyadic mass, double[] centroid, double[] massCentroid, double[] covariance, double[] momentum, double kinetic) { }
 
 	private static Result run(String shape, float h, float dt, float duration) {
@@ -91,8 +105,9 @@ public final class LiquidHandoffContinuityValidation {
 		}
 		Moments initial = moments(domain); double massRounding = 0, maximumCentroid = 0, finalCentroid = 0, covarianceError = 0, kineticRounding = 0;
 		double[] maximumAxis = new double[3], maximumMassAxis = new double[3], momentumRounding = new double[3], finalMomentum = new double[3];
-		double finalKinetic = 0;
+		double finalKinetic = 0, finalMassError = 0;
 		int initialCount = domain.particleCount(), peak = initialCount, minFv = Integer.MAX_VALUE, maxFv = 0, minBallistic = Integer.MAX_VALUE, maxBallistic = 0;
+		int occupiedCount = 0, peakOccupied = 0, maximumPerCell = 0;
 		boolean previousFv = false; int fvToBallistic = 0, ballisticToFv = 0, occupiedChanges = 0; boolean[] previousOccupied = null;
 		int[] initialMin = {n, n, n}, initialMax = {-1, -1, -1}; boolean[] crossedAxis = new boolean[3];
 		long start = System.nanoTime();
@@ -122,17 +137,19 @@ public final class LiquidHandoffContinuityValidation {
 			previousFv = fv > 0;
 			if (previousOccupied != null) for (int c = 0; c < occupied.length; c++) if (occupied[c] != previousOccupied[c]) occupiedChanges++;
 			previousOccupied = occupied; peak = Math.max(peak, domain.particleCount());
-			int occupiedCount = 0;
+			occupiedCount = 0;
 			for (int cell = 0; cell < occupied.length; cell++) if (occupied[cell]) {
 				occupiedCount++;
+				maximumPerCell = Math.max(maximumPerCell, domain.markerGrid.markerCount[cell]);
 				check(domain.markerGrid.exactCellVolumeInventory[cell].compareTo(SignedDyadic.of(1)) <= 0, "Continuous liquid transport exceeded cell capacity");
 			}
-			check(domain.particleCount() <= occupiedCount * ConservativeMarkerSampling.NOMINAL_MARKERS_PER_FULL_CELL,
-					"Single-phase default transport grew beyond its eight-point cell representation");
+			peakOccupied = Math.max(peakOccupied, occupiedCount);
+			check(domain.particleCount() <= domain.maximumParticleCount, "Continuous liquid transport exceeded its hard carrier budget");
 			Moments current = moments(domain);
 			check(current.volume.equals(initial.volume), "Continuous default transport changed exact volume");
 			check(Math.abs(current.mass.subtract(initial.mass).toDouble()) <= 2 * massRounding,
 					"Continuous default transport changed mass beyond accumulated storage roundoff");
+			finalMassError = current.mass.subtract(initial.mass).toDouble() * h * h * h;
 			finalCentroid = 0;
 			for (int a = 0; a < 3; a++) {
 				double error = Math.abs(current.centroid[a] - initial.centroid[a] - step * (double) dt * VELOCITY[a]);
@@ -159,10 +176,54 @@ public final class LiquidHandoffContinuityValidation {
 				"Isolated liquid translation exceeded position storage roundoff");
 		check(occupiedChanges > 0, "Three-axis fixture did not cross integration cells");
 		for (boolean crossed : crossedAxis) check(crossed, "Prescribed translation did not cross cells on every axis");
-		System.out.printf("default continuity shape=%s h=%g dt=%g steps=%d physicalV=%g maxVolumeCM=%s m maxMassCM=%s m finalCM=%g m covarianceError=%g m2 deltaP=%s kg*m/s deltaK=%g J markers=%d->%d peak=%d FV=%d..%d ballistic=%d..%d FV->ballistic=%d ballistic->FV=%d occupiedChanges=%d transportRebuildMs=%g%n",
-				shape, h, dt, steps, physicalVolume, Arrays.toString(maximumAxis), Arrays.toString(maximumMassAxis), finalCentroid, covarianceError, Arrays.toString(finalMomentum), finalKinetic, initialCount, domain.particleCount(), peak,
+		System.out.printf("default continuity shape=%s h=%g dt=%g steps=%d physicalV=%g deltaM=%g kg massStorageBound=%g kg maxVolumeCM=%s m maxMassCM=%s m finalCM=%g m covarianceError=%g m2 deltaP=%s kg*m/s deltaK=%g J markers=%d->%d peak=%d cells=%d peakCells=%d maxPerCell=%d FV=%d..%d ballistic=%d..%d FV->ballistic=%d ballistic->FV=%d occupiedChanges=%d transportRebuildMs=%g%n",
+				shape, h, dt, steps, physicalVolume, finalMassError, 2 * massRounding * h * h * h, Arrays.toString(maximumAxis), Arrays.toString(maximumMassAxis), finalCentroid, covarianceError, Arrays.toString(finalMomentum), finalKinetic, initialCount, domain.particleCount(), peak, occupiedCount, peakOccupied, maximumPerCell,
 				minFv, maxFv, minBallistic, maxBallistic, fvToBallistic, ballisticToFv, occupiedChanges, (System.nanoTime() - start) / 1e6);
-		return new Result(physicalVolume, finalCentroid, positionBound, fvToBallistic, ballisticToFv);
+		double[] spatial = shape.equals("pool") ? translatedCubeError(domain, h, duration, physicalVolume) : new double[5];
+		return new Result(physicalVolume, finalCentroid, positionBound, fvToBallistic, ballisticToFv, spatial[0], spatial[1], spatial[2], spatial[3], spatial[4]);
+	}
+
+	/** Continuous one-metre cube: E^2=|CM-CMref|^2+||Cov-Covref||F^2/L^2 with L=1 metre. */
+	private static double[] translatedCubeError(FluidDomain domain, float h, float duration, double physicalVolume) {
+		Moments current = moments(domain); double squared = 0, fieldL1 = 0, weightedTailDistance = 0;
+		SignedDyadic outsideVolume = SignedDyadic.ZERO, farTailVolume = SignedDyadic.ZERO;
+		double[] covarianceError = current.covariance.clone();
+		double[] lower = new double[3];
+		for (int a = 0; a < 3; a++) {
+			lower[a] = 1 + VELOCITY[a] * (double) duration;
+			double error = current.centroid[a] - (1.5 + VELOCITY[a] * (double) duration); squared += error * error;
+		}
+		int component = 0;
+		for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++) {
+			covarianceError[component] -= a == b ? 1.0 / 12 : 0;
+			squared += (a == b ? 1 : 2) * covarianceError[component] * covarianceError[component]; component++;
+		}
+		for (int cell = 0; cell < domain.cellCount; cell++) {
+			int[] coordinates = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
+			double analytic = 1;
+			for (int a = 0; a < 3; a++) {
+				analytic *= Math.max(0, Math.min((coordinates[a] + 1) * (double) h, lower[a] + 1)
+						- Math.max(coordinates[a] * (double) h, lower[a])) / h;
+			}
+			fieldL1 += Math.abs(domain.markerGrid.exactCellMarkerVolume[cell] - analytic) * h * h * h;
+		}
+		for (int p = 0; p < domain.particleCount(); p++) {
+			double[] point = {domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
+			double distanceSquared = 0;
+			for (int a = 0; a < 3; a++) {
+				double distance = Math.max(0, Math.max(lower[a] - point[a], point[a] - lower[a] - 1));
+				distanceSquared += distance * distance;
+			}
+			double distance = Math.sqrt(distanceSquared), volume = domain.particles.volume(p);
+			weightedTailDistance += volume * distance;
+			if (distance > 0) outsideVolume = outsideVolume.add(SignedDyadic.of(volume));
+			if (distance > 0.5) farTailVolume = farTailVolume.add(SignedDyadic.of(volume));
+		}
+		weightedTailDistance /= current.volume.toDouble();
+		double outsideRatio = outsideVolume.toDouble() / current.volume.toDouble(), farTailRatio = farTailVolume.toDouble() / current.volume.toDouble();
+		System.out.printf("default pool spatial h=%g duration=%g s E=%g m E2=%g m2 covarianceError(xx,xy,xz,yy,yz,zz)=%s m2 volumeFieldL1/V=%g weightedTailDistance=%g m outsideVolume/V=%g beyondHalfMetreVolume/V=%g%n",
+				h, duration, Math.sqrt(squared), squared, Arrays.toString(covarianceError), fieldL1 / physicalVolume, weightedTailDistance, outsideRatio, farTailRatio);
+		return new double[] {squared, fieldL1 / physicalVolume, weightedTailDistance, outsideRatio, farTailRatio};
 	}
 
 	private static Moments moments(FluidDomain domain) {

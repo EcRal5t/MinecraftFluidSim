@@ -38,6 +38,10 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	public static void main(String[] args) {
+		uniformDensityMassAllocation();
+		if (args.length == 1 && args[0].equals("mass")) {
+			System.out.println("Liquid mass allocation validation passed"); return;
+		}
 		if (args.length == 1 && args[0].equals("continuity")) {
 			LiquidHandoffContinuityValidation.main(new String[0]);
 			return;
@@ -102,7 +106,8 @@ public final class LiquidVolumeTransportValidation {
 			int target = domain.cellIndex(2, 1, 1), remote = domain.cellIndex(7, 1, 1), slot = 0;
 			for (int p = 0; p < domain.particles.count(); p++) {
 				if (domain.particleCellIndex(p) == target) {
-					domain.particles.setPositionX(p, (2.8F - 0.35F * slot) * config.cellSize());
+					// The retained rule touches the full cell through its actual left-face liquid slab.
+					domain.particles.setPositionX(p, (2.0F + 0.5F * amount) * config.cellSize());
 					domain.particles.setPositionY(p, (1.2F + 0.2F * slot) * config.cellSize());
 					domain.particles.setPositionZ(p, (1.7F - 0.15F * slot) * config.cellSize());
 					domain.particles.setVelocityY(p, (slot + 1) * 0.03F);
@@ -230,7 +235,7 @@ public final class LiquidVolumeTransportValidation {
 		var domain = new FluidDomain(10, 4, 4,
 				new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 2048);
 		domain.setVolume(1, 1, 1, 0.01F); domain.setVolume(4, 1, 1, 1); domain.setVolume(5, 1, 1, 0.5F);
-		int start = domain.cellIndex(1, 1, 1), arrival = domain.cellIndex(3, 1, 1);
+		int start = domain.cellIndex(1, 1, 1), arrival = domain.cellIndex(4, 1, 1);
 		for (int p = 0; p < domain.particles.count(); p++) {
 			boolean drop = domain.particleCellIndex(p) == start;
 			if (drop) domain.particles.setPositionX(p, 0.995F);
@@ -240,9 +245,9 @@ public final class LiquidVolumeTransportValidation {
 		if (domain.gridToParticleStage.advectionCells()[start]) throw new AssertionError("Arrival fixture must begin on the ballistic path");
 		java.util.Arrays.fill(domain.mac.velocityX, 0.2F);
 		var inventory = SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count());
-		var transport = new CellLiquidVolumeTransport(domain); transport.advect(0.5F);
+		var transport = new CellLiquidVolumeTransport(domain); transport.advect(0.6F);
 		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
-		if (!domain.gridToParticleStage.advectionCells()[arrival] || domain.markerGrid.markerCount[arrival] != 1)
+		if (!domain.gridToParticleStage.advectionCells()[arrival] || domain.markerGrid.markerCount[arrival] <= 1)
 			throw new AssertionError("Ballistic drop did not join the finite-volume support");
 		double mass = 0, before = 0;
 		for (int p = 0; p < domain.particles.count(); p++) {
@@ -343,6 +348,36 @@ public final class LiquidVolumeTransportValidation {
 				throw new AssertionError("Coarse chemical remap duplicated a quadrature point or displaced the cell centroid");
 		}
 
+	}
+
+	private static void uniformDensityMassAllocation() {
+		if (CellRemapMassAllocation.exactMass(Double.MIN_VALUE, SignedDyadic.of(1.0)) != Double.MIN_VALUE
+				|| !Double.isNaN(CellRemapMassAllocation.exactMass(Double.MIN_VALUE, SignedDyadic.of(0.5)))
+				|| CellRemapMassAllocation.exactMass(Double.MAX_VALUE, SignedDyadic.of(1.0)) != Double.MAX_VALUE
+				|| !Double.isNaN(CellRemapMassAllocation.exactMass(Double.MAX_VALUE, SignedDyadic.of(2.0)))
+				|| !Double.isNaN(CellRemapMassAllocation.exactMass(1, SignedDyadic.of((1L << 53) + 1, 0))))
+			throw new AssertionError("Exact density product crossed the binary64 precision or exponent range");
+		for (double density : new double[] {1000, 2.5}) {
+			SignedDyadic[] weights = {SignedDyadic.of(0.1234567F), SignedDyadic.of(0.2345678F), SignedDyadic.of(0.3456789F)};
+			SignedDyadic volume = SignedDyadic.ZERO;
+			for (SignedDyadic weight : weights) volume = volume.add(weight);
+			double mass = CellRemapMassAllocation.exactMass(density, volume);
+			double[] parts = CellRemapMassAllocation.allocate(mass, volume, weights, density);
+			if (!SignedDyadic.sum(parts).equals(SignedDyadic.of(mass))) throw new AssertionError("Representable density changed exact mass");
+			for (int i = 0; i < parts.length; i++) if (parts[i] != density * weights[i].toDouble())
+				throw new AssertionError("Representable density changed a mass/volume ratio");
+		}
+		var domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
+		domain.setVolume(0, 0, 0, 1); domain.rebuildGridFromParticles();
+		var ordinals = new java.util.ArrayList<Integer>();
+		for (int p = 0; p < domain.particleCount(); p++) ordinals.add(p);
+		var volume = domain.markerGrid.exactCellVolumeInventory[0];
+		double mass = CellRemapMassAllocation.inventory(domain, ordinals);
+		if (!Double.isFinite(CellRemapMassAllocation.density(domain, ordinals, volume, mass)))
+			throw new AssertionError("Exact uniform source density was rejected");
+		domain.particles.setMass(0, Math.nextUp(domain.particles.mass(0)));
+		if (Double.isFinite(CellRemapMassAllocation.density(domain, ordinals, volume, CellRemapMassAllocation.inventory(domain, ordinals))))
+			throw new AssertionError("Unequal source density was accepted");
 	}
 
 	private static void quadratureAndMassKeepSmallShares() {

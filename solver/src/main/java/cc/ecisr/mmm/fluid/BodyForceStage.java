@@ -33,6 +33,7 @@ final class BodyForceStage {
 		boolean thermalActive();
 		LiquidCarrierProperties thermalBuoyancyProperties();
 		double thermalFaceRelativeBuoyancy(int first, int second, LiquidCarrierProperties properties);
+		double thermalMarkerRelativeBuoyancy(int marker);
 		FluidMaterialRegistry materialRegistry();
 		boolean liquidGasTensionActive();
 		boolean liquidPairTensionActive();
@@ -113,8 +114,10 @@ final class BodyForceStage {
 		float impulse = state.config.gravity() * dt;
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
-			if (access.carrierFaceActive(below, above, access.pressureYFaceOpen(x, y, z))) {
-				state.mac.velocityY[access.yFaceIndex(x, y, z)] -= impulse;
+			int face = access.yFaceIndex(x, y, z);
+			float open = access.pressureYFaceOpen(x, y, z);
+			if (open > 0 && (state.mac.p2gWeightY[face] > 0 || access.carrierFaceActive(below, above, open))) {
+				state.mac.velocityY[face] -= impulse;
 			}
 		}
 	}
@@ -126,10 +129,42 @@ final class BodyForceStage {
 		double scale = state.config.gravity() * dt;
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
-			if (!access.carrierFaceActive(below, above, access.pressureYFaceOpen(x, y, z))) continue;
-			double relative = access.thermalFaceRelativeBuoyancy(below, above, properties);
-			state.mac.velocityY[access.yFaceIndex(x, y, z)] += (float) (scale * relative);
+			int face = access.yFaceIndex(x, y, z);
+			float open = access.pressureYFaceOpen(x, y, z);
+			if (!(open > 0)) continue;
+			double relative;
+			if (access.carrierFaceActive(below, above, open)) relative = access.thermalFaceRelativeBuoyancy(below, above, properties);
+			else if (state.mac.p2gWeightY[face] > 0) relative = fringeRelativeBuoyancy(x, y, z);
+			else continue;
+			state.mac.velocityY[face] += (float) (scale * relative);
 		}
+	}
+
+	/** Mass average on the same trilinear P2G support for faces beyond the cell-centred carrier footprint. */
+	private double fringeRelativeBuoyancy(int x, int y, int z) {
+		double mass = 0, correction = 0;
+		float h = state.config.cellSize();
+		for (int cz = Math.max(0, z - 1); cz <= Math.min(state.sizeZ - 1, z + 1); cz++)
+			for (int cy = y - 1; cy <= y; cy++)
+				for (int cx = Math.max(0, x - 1); cx <= Math.min(state.sizeX - 1, x + 1); cx++) {
+					int cell = access.cellIndex(cx, cy, cz);
+					for (int p = state.markerGrid.cellMarkerHead[cell]; p >= 0; p = state.markerGrid.particleCellNext[p]) {
+						float gx = Math.clamp(state.particles.positionX(p) / h - 0.5F, 0, state.sizeX - 1);
+						float gy = Math.clamp(state.particles.positionY(p) / h, 0, state.sizeY);
+						float gz = Math.clamp(state.particles.positionZ(p) / h - 0.5F, 0, state.sizeZ - 1);
+						int bx = (int) Math.floor(gx), by = (int) Math.floor(gy), bz = (int) Math.floor(gz);
+						int ox = x - bx, oy = y - by, oz = z - bz;
+						if (ox < 0 || ox > 1 || oy < 0 || oy > 1 || oz < 0 || oz > 1) continue;
+						float weight = FluidDomainStepCoordinator.trilinearWeight(ox, oy, oz, gx - bx, gy - by, gz - bz);
+						if (!(weight > 0)) continue;
+						double contribution = weight * state.particles.mass(p);
+						mass += contribution;
+						correction += contribution * access.thermalMarkerRelativeBuoyancy(p);
+					}
+				}
+		if (!(mass > 0 && Double.isFinite(mass) && Double.isFinite(correction)))
+			throw new IllegalStateException("Thermal P2G face has invalid carrier mass/correction");
+		return correction / mass;
 	}
 
 	/**

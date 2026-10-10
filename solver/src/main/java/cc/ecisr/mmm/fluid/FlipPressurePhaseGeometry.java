@@ -2,19 +2,19 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.granular.GranularCouplingFields;
 
-/** Pressure-only PLIC reconstructed from conservative marker-footprint volume. */
+/** PLIC reconstructed from current liquid inventory, shared by pressure and cell transport. */
 final class FlipPressurePhaseGeometry {
-	private static final float FRACTION_EPSILON = 1.0E-6F;
-	private static final float NORMAL_EPSILON_SQUARED = 1.0E-10F;
 
 	private final int sizeX;
 	private final int sizeY;
 	private final int sizeZ;
-	private final float[] fraction;
+	private final double[] fraction;
 	private final float[] normalX;
 	private final float[] normalY;
 	private final float[] normalZ;
-	private final float[] planeOffset;
+	private final double[] planeOffset;
+	private final double[] faceX = new double[8], faceY = new double[8];
+	private final double[] clippedX = new double[8], clippedY = new double[8];
 
 	FlipPressurePhaseGeometry(int sizeX, int sizeY, int sizeZ) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) {
@@ -24,16 +24,24 @@ final class FlipPressurePhaseGeometry {
 		this.sizeY = sizeY;
 		this.sizeZ = sizeZ;
 		int cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
-		this.fraction = new float[cellCount];
+		this.fraction = new double[cellCount];
 		this.normalX = new float[cellCount];
 		this.normalY = new float[cellCount];
 		this.normalZ = new float[cellCount];
-		this.planeOffset = new float[cellCount];
+		this.planeOffset = new double[cellCount];
 	}
 
 	void rebuild(
 			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
 			GranularCouplingFields granular, boolean[] pressureFluid
+	) {
+		rebuild(solid, reconstructedVolume, cutCells, granular, pressureFluid, null, null, 0);
+	}
+
+	void rebuild(
+			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
+			GranularCouplingFields granular, boolean[] pressureFluid,
+			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize
 	) {
 		if (solid.length != fraction.length || reconstructedVolume.length != fraction.length
 				|| pressureFluid.length != fraction.length) {
@@ -44,57 +52,155 @@ final class FlipPressurePhaseGeometry {
 			float openVolume = granular == null ? geometricOpen
 					: granular.effectiveOpenCellVolume(cell, geometricOpen);
 			fraction[cell] = solid[cell] || openVolume <= 0.0F ? 0.0F
-					: (float) clamp(reconstructedVolume[cell] / openVolume, 0.0, 1.0);
+					: clamp(reconstructedVolume[cell] / openVolume, 0.0, 1.0);
 			pressureFluid[cell] = false;
-			normalX[cell] = normalY[cell] = normalZ[cell] = planeOffset[cell] = 0.0F;
+			normalX[cell] = normalY[cell] = normalZ[cell] = 0.0F; planeOffset[cell] = 0;
 		}
+		var integration = new LiquidFluxGeometry(cutCells);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int cell = cellIndex(x, y, z);
-			if (solid[cell] || !(fraction[cell] > 0.0F) || fraction[cell] >= 1.0F - FRACTION_EPSILON) continue;
-			float center = fraction[cell];
-			float nx = -(sampleFraction(x + 1, y, z, center, solid)
+			if (solid[cell] || !(fraction[cell] > 0.0F) || fraction[cell] >= 1) continue;
+			double center = fraction[cell];
+			float nx = (float) -(sampleFraction(x + 1, y, z, center, solid)
 					- sampleFraction(x - 1, y, z, center, solid));
-			float ny = -(sampleFraction(x, y + 1, z, center, solid)
+			float ny = (float) -(sampleFraction(x, y + 1, z, center, solid)
 					- sampleFraction(x, y - 1, z, center, solid));
-			float nz = -(sampleFraction(x, y, z + 1, center, solid)
+			float nz = (float) -(sampleFraction(x, y, z + 1, center, solid)
 					- sampleFraction(x, y, z - 1, center, solid));
-			float lengthSquared = nx * nx + ny * ny + nz * nz;
-			if (lengthSquared <= NORMAL_EPSILON_SQUARED) {
+			if (markers != null && momentNormal(cell, x, y, z, cutCells, markers, particles, cellSize)) {
+				nx = normalX[cell]; ny = normalY[cell]; nz = normalZ[cell];
+			}
+			double lengthSquared = (double) nx * nx + (double) ny * ny + (double) nz * nz;
+			if (lengthSquared == 0) {
 				nx = airDirection(x + 1, y, z, solid) - airDirection(x - 1, y, z, solid);
 				ny = airDirection(x, y + 1, z, solid) - airDirection(x, y - 1, z, solid);
 				nz = airDirection(x, y, z + 1, solid) - airDirection(x, y, z - 1, solid);
-				lengthSquared = nx * nx + ny * ny + nz * nz;
+				lengthSquared = (double) nx * nx + (double) ny * ny + (double) nz * nz;
 			}
-			if (lengthSquared <= NORMAL_EPSILON_SQUARED) ny = 1.0F;
+			if (lengthSquared == 0) ny = 1.0F;
 			else {
-				float inverseLength = (float) (1.0 / Math.sqrt(lengthSquared));
-				nx *= inverseLength;
-				ny *= inverseLength;
-				nz *= inverseLength;
+				double inverseLength = 1.0 / Math.sqrt(lengthSquared);
+				nx = (float) (nx * inverseLength);
+				ny = (float) (ny * inverseLength);
+				nz = (float) (nz * inverseLength);
 			}
 			normalX[cell] = nx;
 			normalY[cell] = ny;
 			normalZ[cell] = nz;
-			planeOffset[cell] = FlipFreeSurfaceGeometry.solvePlaneOffset(nx, ny, nz, center);
+			planeOffset[cell] = integration.offset(cell, nx, ny, nz, center * cutCells.openCellVolume(cell));
 		}
 		for (int cell = 0; cell < fraction.length; cell++) {
 			if (solid[cell] || !(fraction[cell] > 0.5F)) continue;
-			if (fraction[cell] >= 1.0F - FRACTION_EPSILON) pressureFluid[cell] = true;
+			if (fraction[cell] >= 1) pressureFluid[cell] = true;
 			else pressureFluid[cell] = planeOffset[cell]
-					> 0.5F * (normalX[cell] + normalY[cell] + normalZ[cell]);
+					> 0.5 * ((double) normalX[cell] + normalY[cell] + normalZ[cell]);
 		}
 	}
 
-	float liquidFraction(int cell) { return fraction[cell]; }
+	/** Monotone moment estimate: a centred phase retains the fraction-gradient direction. */
+	private boolean momentNormal(
+			int cell, int x, int y, int z, FlipCutCellGeometry cut,
+			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize
+	) {
+		double volume = markers.exactCellMarkerVolume[cell];
+		if (!(volume > 0)) return false;
+		double mx = 0, my = 0, mz = 0;
+		for (int p = markers.cellMarkerHead[cell]; p >= 0; p = markers.particleCellNext[p]) {
+			double weight = particles.volume(p);
+			mx += weight * ((double) particles.positionX(p) / cellSize - x - .5);
+			my += weight * ((double) particles.positionY(p) / cellSize - y - .5);
+			mz += weight * ((double) particles.positionZ(p) / cellSize - z - .5);
+		}
+		int count = 8, lowX = 4, lowY = 4, lowZ = 4;
+		if (cut.mask(cell) != 0) {
+			count = lowX = lowY = lowZ = 0;
+			for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) for (int c = 0; c < 2; c++) {
+				if (!cut.microCellOpen(cell, a, b, c)) continue;
+				count++; lowX += 1 - a; lowY += 1 - b; lowZ += 1 - c;
+			}
+		}
+		if (count == 0) return false;
+		double nx = momentDirection(mx / volume, lowX, count);
+		double ny = momentDirection(my / volume, lowY, count);
+		double nz = momentDirection(mz / volume, lowZ, count);
+		double scale = Math.max(Math.abs(nx), Math.max(Math.abs(ny), Math.abs(nz)));
+		if (scale == 0) return false;
+		if (Double.isInfinite(scale)) {
+			nx = Double.isInfinite(nx) ? Math.signum(nx) : 0;
+			ny = Double.isInfinite(ny) ? Math.signum(ny) : 0;
+			nz = Double.isInfinite(nz) ? Math.signum(nz) : 0;
+		} else { nx /= scale; ny /= scale; nz /= scale; }
+		normalX[cell] = (float) nx; normalY[cell] = (float) ny; normalZ[cell] = (float) nz;
+		return true;
+	}
+
+	private static double momentDirection(double centre, int lowCount, int openCount) {
+		double lower = lowCount == 0 ? 0 : -.5, upper = lowCount == openCount ? 0 : .5;
+		double openCentre = .25 * (openCount - 2.0 * lowCount) / openCount;
+		if (centre <= lower) return Double.POSITIVE_INFINITY;
+		if (centre >= upper) return Double.NEGATIVE_INFINITY;
+		return (openCentre - centre) / ((upper - centre) * (centre - lower));
+	}
+
+	float liquidFraction(int cell) { return (float) fraction[cell]; }
+	float planeNormal(int cell, int axis) { return axis == 0 ? normalX[cell] : axis == 1 ? normalY[cell] : normalZ[cell]; }
+	double planeOffset(int cell) { return planeOffset[cell]; }
+
+	/** Area occupied by both PLICs on their shared open face; left is the negative-axis cell. */
+	double sharedLiquidFaceArea(int left, int right, int axis, FlipCutCellGeometry cut) {
+		if (!(fraction[left] > 0) || !(fraction[right] > 0)) return 0;
+		if (cut.mask(left) == 0 && cut.mask(right) == 0) return wetRectangle(left, right, axis, 0, 0, 1);
+		double area = 0;
+		for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) {
+			boolean open = switch (axis) {
+				case 0 -> cut.microCellOpen(left, 1, a, b) && cut.microCellOpen(right, 0, a, b);
+				case 1 -> cut.microCellOpen(left, b, 1, a) && cut.microCellOpen(right, b, 0, a);
+				default -> cut.microCellOpen(left, a, b, 1) && cut.microCellOpen(right, a, b, 0);
+			};
+			if (open) area += wetRectangle(left, right, axis, .5 * a, .5 * b, .5);
+		}
+		return area;
+	}
+
+	private double wetRectangle(int left, int right, int axis, double x, double y, double span) {
+		faceX[0] = faceX[3] = x; faceX[1] = faceX[2] = x + span;
+		faceY[0] = faceY[1] = y; faceY[2] = faceY[3] = y + span;
+		int tangent = (axis + 1) % 3, other = (axis + 2) % 3;
+		int count = clipFace(4, planeNormal(left, tangent), planeNormal(left, other),
+				planeOffset[left] - planeNormal(left, axis));
+		count = clipFace(count, planeNormal(right, tangent), planeNormal(right, other), planeOffset[right]);
+		double twiceArea = 0;
+		for (int i = 1; i + 1 < count; i++) twiceArea += (faceX[i] - faceX[0]) * (faceY[i + 1] - faceY[0])
+				- (faceY[i] - faceY[0]) * (faceX[i + 1] - faceX[0]);
+		return .5 * Math.abs(twiceArea);
+	}
+
+	private int clipFace(int count, double nx, double ny, double offset) {
+		if (count == 0) return 0;
+		int next = 0, previous = count - 1;
+		double previousDistance = nx * faceX[previous] + ny * faceY[previous] - offset;
+		for (int current = 0; current < count; current++) {
+			double distance = nx * faceX[current] + ny * faceY[current] - offset;
+			if ((distance <= 0) != (previousDistance <= 0)) {
+				double t = previousDistance / (previousDistance - distance);
+				clippedX[next] = faceX[previous] + t * (faceX[current] - faceX[previous]);
+				clippedY[next++] = faceY[previous] + t * (faceY[current] - faceY[previous]);
+			}
+			if (distance <= 0) { clippedX[next] = faceX[current]; clippedY[next++] = faceY[current]; }
+			previous = current; previousDistance = distance;
+		}
+		System.arraycopy(clippedX, 0, faceX, 0, next); System.arraycopy(clippedY, 0, faceY, 0, next);
+		return next;
+	}
 
 	float interfaceTheta(int fluid, int directionX, int directionY, int directionZ) {
-		float distance;
-		if (fraction[fluid] >= 1.0F - FRACTION_EPSILON) distance = 0.5F;
+		double distance;
+		if (fraction[fluid] >= 1) distance = 0.5;
 		else {
 			float outward = normalX[fluid] * directionX + normalY[fluid] * directionY
 					+ normalZ[fluid] * directionZ;
 			if (!(outward > 0.0F)) return 1.0F;
-			float centerProjection = 0.5F * (normalX[fluid] + normalY[fluid] + normalZ[fluid]);
+			double centerProjection = 0.5 * ((double) normalX[fluid] + normalY[fluid] + normalZ[fluid]);
 			distance = (planeOffset[fluid] - centerProjection) / outward;
 		}
 		int x = fluid % sizeX;
@@ -106,10 +212,10 @@ final class FlipPressurePhaseGeometry {
 		if (!(distance > 0.0F)) {
 			throw new IllegalStateException("Pressure-cell centre does not lie inside its reconstructed liquid phase");
 		}
-		return Math.min(distance, 1.0F);
+		return (float) Math.min(distance, 1);
 	}
 
-	private float sampleFraction(int x, int y, int z, float fallback, boolean[] solid) {
+	private double sampleFraction(int x, int y, int z, double fallback, boolean[] solid) {
 		if (!inside(x, y, z)) return fallback;
 		int cell = cellIndex(x, y, z);
 		return solid[cell] ? fallback : fraction[cell];
@@ -127,10 +233,6 @@ final class FlipPressurePhaseGeometry {
 
 	private int cellIndex(int x, int y, int z) {
 		return (z * sizeY + y) * sizeX + x;
-	}
-
-	private static float clamp(float value, float minimum, float maximum) {
-		return Math.max(minimum, Math.min(maximum, value));
 	}
 
 	private static double clamp(double value, double minimum, double maximum) {

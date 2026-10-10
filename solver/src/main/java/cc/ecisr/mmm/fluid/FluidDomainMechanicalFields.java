@@ -61,7 +61,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 			}
 			double openVolume = domain().effectiveOpenCellVolume(index);
 			tension.surfaceTensionColor[index] = openVolume > 0.0
-					? clamp((float) (markerGrid.exactCellMarkerVolume[index] / openVolume), 0.0F, 1.0F)
+					? Math.clamp(markerGrid.exactCellMarkerVolume[index] / openVolume, 0.0, 1.0)
 					: 0.0;
 		}
 		smoothSurfaceTensionColor();
@@ -71,7 +71,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 			if (geometry.solid[index] || markerGrid.markerCount[index] == 0) continue;
 			double sigma = surfaceTensionAtCell(index);
 			if (sigma <= 0.0) continue;
-			double kappa = surfaceTensionMeanCurvature(x, y, z);
+			double kappa = liquidGasMeanCurvature(x, y, z);
 			tension.surfaceTensionPressure[index] = (float) (sigma * kappa);
 			tension.wallSurfaceEnergyDensity[index] = -sigma
 					* Math.cos(surfaceTensionContactAngleAtCell(index)) / config.cellSize();
@@ -147,27 +147,51 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		return Math.PI / 2.0;
 	}
 
-	/** Mean curvature {@code kappa = -div(n)}; positive for a liquid sphere surrounded by gas. */
+	/** Liquid-gas curvature from complete volume columns, with smoothed normals for unresolved geometry. */
+	double liquidGasMeanCurvature(int x, int y, int z) {
+		double heightCurvature = HeightFunctionCurvature.compute(domain(), x, y, z);
+		if (Double.isFinite(heightCurvature)) return heightCurvature;
+		return smoothedSurfaceTensionCurvature(x, y, z, true);
+	}
+
+	/** Curvature of the smoothed colour support used by liquid-pair CSF forces. */
 	double surfaceTensionMeanCurvature(int x, int y, int z) {
+		return smoothedSurfaceTensionCurvature(x, y, z, false);
+	}
+
+	private double smoothedSurfaceTensionCurvature(int x, int y, int z, boolean liquidGasReflection) {
 		double inverseTwoCell = 0.5 / config.cellSize();
-		double nxPlus = surfaceTensionNeighborNormal(x, y, z, 1, 0, 0, 0);
-		double nxMinus = surfaceTensionNeighborNormal(x, y, z, -1, 0, 0, 0);
-		double nyPlus = surfaceTensionNeighborNormal(x, y, z, 0, 1, 0, 1);
-		double nyMinus = surfaceTensionNeighborNormal(x, y, z, 0, -1, 0, 1);
-		double nzPlus = surfaceTensionNeighborNormal(x, y, z, 0, 0, 1, 2);
-		double nzMinus = surfaceTensionNeighborNormal(x, y, z, 0, 0, -1, 2);
+		double nxPlus = surfaceTensionNeighborNormal(x, y, z, 1, 0, 0, 0, liquidGasReflection);
+		double nxMinus = surfaceTensionNeighborNormal(x, y, z, -1, 0, 0, 0, liquidGasReflection);
+		double nyPlus = surfaceTensionNeighborNormal(x, y, z, 0, 1, 0, 1, liquidGasReflection);
+		double nyMinus = surfaceTensionNeighborNormal(x, y, z, 0, -1, 0, 1, liquidGasReflection);
+		double nzPlus = surfaceTensionNeighborNormal(x, y, z, 0, 0, 1, 2, liquidGasReflection);
+		double nzMinus = surfaceTensionNeighborNormal(x, y, z, 0, 0, -1, 2, liquidGasReflection);
 		return -((nxPlus - nxMinus) + (nyPlus - nyMinus) + (nzPlus - nzMinus)) * inverseTwoCell;
 	}
 
 	/** Neighbor normal used in the divergence; a solid neighbour extends the liquid-gas normal constantly. */
 	double surfaceTensionNeighborNormal(int x, int y, int z, int dx, int dy, int dz, int component) {
+		return surfaceTensionNeighborNormal(x, y, z, dx, dy, dz, component, false);
+	}
+
+	private double surfaceTensionNeighborNormal(int x, int y, int z, int dx, int dy, int dz, int component,
+			boolean liquidGasReflection) {
 		int nx = x + dx, ny = y + dy, nz = z + dz;
 		if (inside(nx, ny, nz) && geometry.solid[cellIndex(nx, ny, nz)]) {
 			return cachedSurfaceTensionNormal(cellIndex(x, y, z), component);
 		}
-		return cachedSurfaceTensionNormal(cellIndex(Math.min(sizeX - 1, Math.max(0, nx)),
-				Math.min(sizeY - 1, Math.max(0, ny)),
-				Math.min(sizeZ - 1, Math.max(0, nz))), component);
+		int target = cellIndex(x, y, z), sample = cellIndex(Math.min(sizeX - 1, Math.max(0, nx)),
+				Math.min(sizeY - 1, Math.max(0, ny)), Math.min(sizeZ - 1, Math.max(0, nz)));
+		double value = cachedSurfaceTensionNormal(sample, component);
+		if (liquidGasReflection && !inside(nx, ny, nz) && surfaceTensionContactAngleAtCell(target) == Math.PI / 2
+				&& (tension.surfaceTensionColor[sample] == 0 || surfaceTensionContactAngleAtCell(sample) == Math.PI / 2)
+				&& geometry.cutCells.mask(target) == 0 && geometry.cutCells.mask(sample) == 0
+				&& domain().effectiveOpenCellVolume(target) == 1 && domain().effectiveOpenCellVolume(sample) == 1) {
+			if (component == 0 && (nx < 0 || nx >= sizeX) || component == 1 && (ny < 0 || ny >= sizeY)
+					|| component == 2 && (nz < 0 || nz >= sizeZ)) value = -value;
+		}
+		return value;
 	}
 
 	double cachedSurfaceTensionNormal(int cell, int component) {
@@ -371,7 +395,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		}
 		float remaining = amount;
 		int slot = firstOpenSlot(cellIndex(x, y, z), 0);
-		while (remaining > 1.0E-6F) {
+		while (remaining > 0) {
 			if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
 			float piece = Math.min(PARTICLE_VOLUME, remaining);
 			spawnParticle(x, y, z, slot, piece);
@@ -815,8 +839,7 @@ spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, 
 		}
 	}
 	static int particlesRequired(float amount) {
-		if (amount <= 1.0E-6F) return 0;
-		return (int) Math.ceil((amount - 1.0E-6F) / PARTICLE_VOLUME);
+		return ConservativeMarkerSampling.targetMarkers(amount);
 	}
 	static float clamp01(float value) { return clamp(value, 0.0F, 1.0F); }
 	static float clamp(float value, float min, float max) { return Math.max(min, Math.min(max, value)); }

@@ -5,8 +5,12 @@ public final class FlipFluidFreeSurfaceValidation {
 	private FlipFluidFreeSurfaceValidation() { }
 
 	public static void main(String[] args) {
+		if (java.util.Arrays.asList(args).contains("--extension")) {
+			airExtensionRetainsLiquidFacesAndResolvesMarkerFringe();
+			System.out.println("Massless velocity extension validation passed"); return;
+		}
 		if (java.util.Arrays.asList(args).contains("--geometry")) {
-			planeVolumeInversionIsAccurate(); liquidPlaneRetainsSmallInventoryGeometry();
+			planeVolumeInversionIsAccurate(); liquidPlaneRetainsSmallInventoryGeometry(); sharedWetFacesControlTransportOnly(); momentNormalMatchesAnalyticShapes();
 			System.out.println("Liquid-plane geometry validation passed"); return;
 		}
 		freeSurfaceTransferSeparatesIndependentSupport();
@@ -21,6 +25,8 @@ public final class FlipFluidFreeSurfaceValidation {
 		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		planeVolumeInversionIsAccurate();
 		liquidPlaneRetainsSmallInventoryGeometry();
+		sharedWetFacesControlTransportOnly();
+		momentNormalMatchesAnalyticShapes();
 		LiquidVolumeTransportValidation.main(new String[0]);
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pressurePhaseUsesConservativeFootprintVolume();
@@ -43,6 +49,51 @@ public final class FlipFluidFreeSurfaceValidation {
 		}
 		waterDescendsAStairSlope();
 		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; 5,000-step soak skipped)" : ""));
+	}
+
+	private static void momentNormalMatchesAnalyticShapes() {
+		for (boolean cutBox : new boolean[] {false, true}) {
+			for (int corner : new int[] {0, 7}) for (int axis = -1; axis < 3; axis++) {
+				var cut = new FlipCutCellGeometry(3, 3, 3); int cell = 13;
+				if (cutBox) cut.replaceMask(cell, 255 ^ (1 << corner));
+				double side = cutBox ? .5 : 1, height = side / 4;
+				double volume = axis < 0 ? height * height * height / 6 : height * side * side;
+				double[] centre = new double[3];
+				for (int a = 0; a < 3; a++) {
+					boolean high = (corner & 1 << a) != 0;
+					double lower = cutBox && high ? .5 : 0, upper = cutBox && !high ? .5 : 1;
+					centre[a] = axis < 0 ? (high ? upper - height / 4 : lower + height / 4)
+							: axis == a ? (high ? upper - height / 2 : lower + height / 2) : (lower + upper) / 2;
+				}
+				var markers = new MarkerGridIndex(27, 1); var particles = new LiquidParticleStore(1);
+				java.util.Arrays.fill(markers.cellMarkerHead, -1); markers.cellMarkerHead[cell] = 0; markers.particleCellNext[0] = -1;
+				particles.setCount(1); particles.setVolume(0, (float) volume);
+				particles.setPositionX(0, (float) (1 + centre[0])); particles.setPositionY(0, (float) (1 + centre[1]));
+				particles.setPositionZ(0, (float) (1 + centre[2])); markers.exactCellMarkerVolume[cell] = particles.volume(0);
+				double[] volumes = new double[27]; volumes[cell] = particles.volume(0);
+				var phase = new FlipPressurePhaseGeometry(3, 3, 3);
+				phase.rebuild(new boolean[27], volumes, cut, null, new boolean[27], markers, particles, 1);
+				double[] integral = new double[4];
+				new LiquidFluxGeometry(cut).sweptMoments(cell, 14, 0, 1, true, phase.planeNormal(cell, 0),
+						phase.planeNormal(cell, 1), phase.planeNormal(cell, 2), phase.planeOffset(cell), integral);
+				check(Math.abs(integral[0] - volumes[cell]) <= 2e-14, "Moment-normal reconstruction changed its retained volume");
+				for (int a = 0; a < 3; a++) check(Math.abs(integral[a + 1] / integral[0] - (centre[a] - .5)) <= 2e-7,
+						"Axis slab or corner tetrahedron did not retain its analytic centroid");
+			}
+			var cut = new FlipCutCellGeometry(3, 3, 3); int cell = 13;
+			if (cutBox) cut.replaceMask(cell, 254);
+			var markers = new MarkerGridIndex(27, 1); var particles = new LiquidParticleStore(1);
+			java.util.Arrays.fill(markers.cellMarkerHead, -1); markers.cellMarkerHead[cell] = 0; markers.particleCellNext[0] = -1;
+			particles.setCount(1); particles.setVolume(0, .0625F); markers.exactCellMarkerVolume[cell] = .0625;
+			float centre = cutBox ? 1.25F : 1.5F;
+			particles.setPositionX(0, centre); particles.setPositionY(0, centre); particles.setPositionZ(0, centre);
+			double[] volumes = new double[27]; volumes[cell] = .0625;
+			var gradient = new FlipPressurePhaseGeometry(3, 3, 3); var moment = new FlipPressurePhaseGeometry(3, 3, 3);
+			gradient.rebuild(new boolean[27], volumes, cut, null, new boolean[27]);
+			moment.rebuild(new boolean[27], volumes, cut, null, new boolean[27], markers, particles, 1);
+			for (int a = 0; a < 3; a++) check(gradient.planeNormal(cell, a) == moment.planeNormal(cell, a),
+					"Zero eccentricity changed the existing fraction-gradient fallback");
+		}
 	}
 
 	private static void freeSurfaceTransferSeparatesIndependentSupport() {
@@ -322,11 +373,34 @@ public final class FlipFluidFreeSurfaceValidation {
 		}
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 1; x < 6; x++)
 			domain.mac.velocityX[domain.xFaceIndex(x, y, z)] = 0.125F;
-		for (int z = 0; z < 2; z++) for (int y = 1; y < 4; y++)
-			domain.mac.velocityY[domain.yFaceIndex(3, y, z)] = 0.1F * y;
+		for (int z = 0; z < 2; z++) for (int y = 1; y < 4; y++) {
+			int face = domain.yFaceIndex(3, y, z);
+			domain.mac.velocityY[face] = 0.1F * y;
+			domain.mac.p2gWeightY[face] = 2;
+		}
+		// A tensor stencil reaches a face whose two adjacent cells contain no marker centre.
+		int remoteMassFace = domain.yFaceIndex(5, 1, 0);
+		domain.mac.velocityY[remoteMassFace] = -0.375F;
+		domain.mac.p2gWeightY[remoteMassFace] = 3;
 		float[] original = domain.mac.velocityX.clone();
-		var extension = new DivergenceFreeVelocityExtension(6, 4, 2, domain.geometry.cutCells);
+		float[] originalY = domain.mac.velocityY.clone();
+		domain.pressureStage.projectVelocities(domain.config.timeStep());
+		for (int f = 0; f < originalY.length; f++) if (domain.mac.p2gWeightY[f] > 0)
+			check(Float.floatToRawIntBits(domain.mac.velocityY[f]) == Float.floatToRawIntBits(originalY[f]),
+					"pressure projection cleared a positive-mass face outside its pressure support");
+		System.arraycopy(original, 0, domain.mac.velocityX, 0, original.length);
+		domain.velocityExtrapolator.rebuildAndExtrapolate(domain.geometry.solid, markers, fluid, false, domain.mac, null);
+		for (int f = 0; f < originalY.length; f++) if (domain.mac.p2gWeightY[f] > 0)
+			check(Float.floatToRawIntBits(domain.mac.velocityY[f]) == Float.floatToRawIntBits(originalY[f])
+					&& domain.mac.velocityValidY[f], "velocity extrapolation replaced a positive-mass stencil face");
+		double[] volume = new double[domain.cellCount];
+		for (int c = 0; c < volume.length; c++) volume[c] = fluid[c] ? 1 : markers[c] > 0 ? .25 : 0;
+		domain.pressurePhaseGeometry.rebuild(domain.geometry.solid, volume, domain.geometry.cutCells, null, new boolean[domain.cellCount]);
+		var extension = new DivergenceFreeVelocityExtension(6, 4, 2, domain.geometry.cutCells, domain.pressurePhaseGeometry);
 		extension.extend(domain.mac, fluid, domain.geometry.solid, markers);
+		for (int f = 0; f < originalY.length; f++) if (domain.mac.p2gWeightY[f] > 0)
+			check(Float.floatToRawIntBits(domain.mac.velocityY[f]) == Float.floatToRawIntBits(originalY[f]),
+					"air extension changed a positive-mass face, its momentum and kinetic energy");
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) {
 			for (int x = 1; x <= 3; x++) check(domain.mac.velocityX[domain.xFaceIndex(x, y, z)] == original[domain.xFaceIndex(x, y, z)],
 					"air extension changed a prescribed liquid face");
@@ -380,6 +454,23 @@ public final class FlipFluidFreeSurfaceValidation {
 	}
 
 	private static void liquidPlaneRetainsSmallInventoryGeometry() {
+		for (float amount : new float[] {Float.MIN_VALUE, Math.scalb(1.0F, -25), Math.nextUp(.125F), Math.nextDown(1.0F)}) {
+			var domain = new FluidDomain(2, 2, 2, strictConfig());
+			domain.setVolume(0, 0, 0, amount);
+			check(domain.particleCount() == ConservativeMarkerSampling.targetMarkers(amount), "Positive initial inventory lost its carrier");
+			check(cc.ecisr.mmm.units.SignedDyadic.of(amount).equals(cc.ecisr.mmm.units.SignedDyadic.sum(
+					domain.particles.directArrays().volume, domain.particleCount())), "Cell initialization discarded positive inventory");
+			check(domain.totalMass() == (double) amount * domain.config.density(), "Cell initialization changed inventory density");
+			if (amount >= Float.MIN_NORMAL) {
+				for (int p = 0; p < domain.particleCount(); p++) domain.particles.setVelocityY(p, -.5F);
+				domain.rebuildGridFromParticles();
+				for (int f = 0; f < domain.mac.p2gWeightY.length; f++)
+					if (f / domain.sizeX % (domain.sizeY + 1) > 0 && f / domain.sizeX % (domain.sizeY + 1) < domain.sizeY
+							&& domain.mac.p2gWeightY[f] > 0 && domain.geometry.cutCells.openFaceField(1)[f] > 0)
+						check(Math.abs(domain.mac.velocityY[f] + .5F) <= 2 * Math.ulp(.5F),
+								"Positive low-weight P2G support diluted a uniform carrier velocity");
+			}
+		}
 		for (double scale : new double[] {1, 1e-7, 1e-11, 1e-30}) {
 			// A vertex tetrahedron has exact volume offset^3/(6*nx*ny*nz).
 			double fraction = 1e-7, distance = Math.cbrt(6 * fraction);
@@ -398,6 +489,53 @@ public final class FlipFluidFreeSurfaceValidation {
 			check(Math.abs(recovered - volume) <= 8 * Math.ulp(1.0), "Small liquid inventory was lost in plane offset storage");
 			check(Math.abs(swept - volume) <= 8 * Math.ulp(1.0), "A containing face sweep changed the small liquid inventory");
 		}
+	}
+
+	private static void sharedWetFacesControlTransportOnly() {
+		var domain = new FluidDomain(4, 4, 2, FluidSolverConfig.prototypeDefaults());
+		double[] volume = new double[domain.cellCount];
+		int[] markers = new int[domain.cellCount];
+		boolean[] fluid = new boolean[domain.cellCount];
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 3; x++) {
+			int c = domain.cellIndex(x, y, z); volume[c] = x == 0 ? 1 : x == 1 ? .25 : Math.scalb(1.0, -25); markers[c] = 1;
+		}
+		domain.pressurePhaseGeometry.rebuild(domain.geometry.solid, volume, domain.geometry.cutCells, null, fluid);
+		var extension = new DivergenceFreeVelocityExtension(4, 4, 2, domain.geometry.cutCells, domain.pressurePhaseGeometry);
+		extension.prepareAdvectionCells(fluid, domain.geometry.solid, markers);
+		int bulk = domain.cellIndex(0, 1, 0), attached = bulk + 1, separate = bulk + 2;
+		check(extension.advectionCells[attached] && !extension.advectionCells[separate], "Dry shared face admitted a disconnected carrier to cell transport");
+		check(domain.pressurePhaseGeometry.sharedLiquidFaceArea(attached, separate, 0, domain.geometry.cutCells) == 0,
+				"Disjoint PLICs were connected by face aperture alone");
+		// Both sides wet part of a face, but their occupied intervals may be disjoint.
+		for (double fill : new double[] {.25, .75}) {
+			java.util.Arrays.fill(volume, 0);
+			for (int z = 0; z < 2; z++) {
+				for (int x = 0; x < 4; x++) volume[domain.cellIndex(x, 1, z)] = fill;
+				volume[domain.cellIndex(1, 0, z)] = 1; volume[domain.cellIndex(2, 2, z)] = 1;
+			}
+			domain.pressurePhaseGeometry.rebuild(domain.geometry.solid, volume, domain.geometry.cutCells, null, fluid);
+			double intersection = domain.pressurePhaseGeometry.sharedLiquidFaceArea(domain.cellIndex(1, 1, 0), domain.cellIndex(2, 1, 0), 0, domain.geometry.cutCells);
+			check(Math.abs(intersection - Math.max(0, 2 * fill - 1)) <= 8 * Math.ulp(1.0),
+					"Common wet face used separate face areas instead of their intersection: " + intersection);
+		}
+		// A continuous layer of arbitrarily small positive thickness has a positive common face.
+		java.util.Arrays.fill(volume, 0);
+		double thickness = Math.scalb(1.0, -25);
+		for (int z = 0; z < 2; z++) for (int x = 0; x < 4; x++) volume[domain.cellIndex(x, 0, z)] = thickness;
+		domain.pressurePhaseGeometry.rebuild(domain.geometry.solid, volume, domain.geometry.cutCells, null, fluid);
+		double area = domain.pressurePhaseGeometry.sharedLiquidFaceArea(domain.cellIndex(1, 0, 0), domain.cellIndex(2, 0, 0), 0, domain.geometry.cutCells);
+		check(Math.abs(area - thickness) <= 8 * Math.ulp(thickness), "Thin continuous layer lost its positive shared face: " + area);
+		java.util.Arrays.fill(markers, 0);
+		for (int z = 0; z < 2; z++) for (int x = 0; x < 4; x++) markers[domain.cellIndex(x, 0, z)] = 1;
+		// The pressure seed is prescribed here to isolate connectivity at the smallest positive thickness.
+		fluid[domain.cellIndex(0, 0, 0)] = true;
+		extension.prepareAdvectionCells(fluid, domain.geometry.solid, markers);
+		check(extension.advectionCells[domain.cellIndex(3, 0, 0)], "Wet transport connectivity truncated a positive thin layer");
+		// Cut faces use the same open micro rectangles as their volume reconstruction.
+		domain.geometry.cutCells.replaceMask(domain.cellIndex(1, 0, 0), 0xCC);
+		domain.pressurePhaseGeometry.rebuild(domain.geometry.solid, volume, domain.geometry.cutCells, null, fluid);
+		area = domain.pressurePhaseGeometry.sharedLiquidFaceArea(domain.cellIndex(1, 0, 0), domain.cellIndex(2, 0, 0), 0, domain.geometry.cutCells);
+		check(Math.abs(area - thickness) <= 128 * Math.ulp(thickness), "Open cut face lost a continuous thin layer: " + area);
 	}
 
 	private static void axisAlignedInterfaceDistanceUsesExactCellLedger() {
@@ -634,11 +772,21 @@ public final class FlipFluidFreeSurfaceValidation {
 		for (float surfaceFraction : new float[] {0.60F, 0.75F, 1.0F}) {
 			FluidSolverConfig config = strictConfig();
 			FluidDomain domain = new FluidDomain(2, 5, 2, config);
-			for (int z = 0; z < 2; z++) for (int x = 0; x < 2; x++) {
-				domain.setVolume(x, 0, z, 1.0F);
-				domain.setVolume(x, 1, z, 1.0F);
-				domain.setVolume(x, 2, z, surfaceFraction);
+			// Integrate the actual horizontal slabs, including the partial cell's spatial moment.
+			int count = 2 * 3 * 2 * 8, particle = 0;
+			float[] positions = new float[count * 4];
+			for (int z = 0; z < 2; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 2; x++) {
+				float fill = y == 2 ? surfaceFraction : 1;
+				for (int slot = 0; slot < 8; slot++) {
+					int base = 4 * particle++;
+					positions[base] = (x + .25F + .5F * (slot & 1)) * config.cellSize();
+					positions[base + 1] = (y + fill * (.25F + .5F * (slot >>> 1 & 1))) * config.cellSize();
+					positions[base + 2] = (z + .25F + .5F * (slot >>> 2 & 1)) * config.cellSize();
+					positions[base + 3] = fill / 8;
+				}
 			}
+			domain.restoreParticleState(new FlipParticleState(2, 5, 2, config.cellSize(), count,
+					4 * (2 + surfaceFraction), positions, new float[count * 3], new byte[20]));
 			float exactVolume = domain.totalVolume();
 			for (int step = 0; step < 200; step++) domain.step();
 			float theta = surfaceFraction >= 1.0F - 1.0E-6F ? 0.5F : surfaceFraction - 0.5F;

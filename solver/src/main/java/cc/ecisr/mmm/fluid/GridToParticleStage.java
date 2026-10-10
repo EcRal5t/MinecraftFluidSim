@@ -12,7 +12,7 @@ import cc.ecisr.mmm.compute.CpuWorkBatch;
 final class GridToParticleStage {
 	record Workspace(
 			DomainGeometry geometry, MarkerGridIndex markerGrid, MacVelocityGrid mac, boolean[] pressureFluid,
-			LiquidParticleStore particles, FlipVelocityExtrapolator velocityExtrapolator,
+			LiquidParticleStore particles, FlipVelocityExtrapolator velocityExtrapolator, FlipPressurePhaseGeometry liquidGeometry,
 			int sizeX, int sizeY, int sizeZ, float cellSize
 	) { }
 
@@ -45,7 +45,7 @@ final class GridToParticleStage {
 		fullCells = new boolean[state.pressureFluid.length];
 		resolvedValid = new boolean[][] {new boolean[state.mac.velocityX.length], new boolean[state.mac.velocityY.length], new boolean[state.mac.velocityZ.length]};
 		componentBudget = new MarkerTransferBudget(state.sizeX, state.sizeY, state.sizeZ, state.cellSize, state.mac, state.geometry.cutCells);
-		velocityExtension = new DivergenceFreeVelocityExtension(state.sizeX, state.sizeY, state.sizeZ, state.geometry.cutCells);
+		velocityExtension = new DivergenceFreeVelocityExtension(state.sizeX, state.sizeY, state.sizeZ, state.geometry.cutCells, state.liquidGeometry);
 		resolvedVelocity = new ResolvedMarkerVelocity(state.sizeX, state.sizeY, state.sizeZ,
 				state.cellSize, state.geometry.cutCells);
 	}
@@ -80,9 +80,7 @@ final class GridToParticleStage {
 		System.arraycopy(state.pressureFluid, 0, velocityExtension.advectionCells, 0, state.pressureFluid.length);
 		state.velocityExtrapolator.rebuildAndExtrapolate(
 				state.geometry.solid, state.markerGrid.markerCount, state.pressureFluid, completePressureSpace,
-				mac.velocityX, mac.velocityY, mac.velocityZ,
-				mac.velocityValidX, mac.velocityValidY, mac.velocityValidZ,
-				mac.velocityWeightX, mac.velocityWeightY, mac.velocityWeightZ, dependencies
+				mac, dependencies
 		);
 	}
 

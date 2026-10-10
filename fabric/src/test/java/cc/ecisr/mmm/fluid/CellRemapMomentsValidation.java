@@ -2,20 +2,97 @@ package cc.ecisr.mmm.fluid;
 
 import java.util.ArrayList;
 
-/** Binary32 publication and support checks for the bounded common-translation rule. */
+/** Binary32 publication and support checks for fill-constrained first-moment rules. */
 public final class CellRemapMomentsValidation {
 	private CellRemapMomentsValidation() { }
 
 	public static void main(String[] args) {
+		sweptLiquidMomentsKeepThinTangentialCentroids();
+		limitedFluxMixesTheSamePositiveMomentWeights();
+		thinSlabRemapRetainsItsTangentialMoment();
+		if (args.length == 1 && args[0].equals("sweep-only")) return;
 		fullHomogeneousReconstructionKeepsMacPatch(false);
 		fullHomogeneousReconstructionKeepsMacPatch(true);
 		geometryRemapUsesPlannedCapacity();
+		partialLayerContractsOnlyItsConstrainedAxis();
 		if (args.length == 1 && args[0].equals("footprint-only")) return;
 		wholeCellUpperEndpointUsesActualClassifier();
 		unchangedTensorReportsAllStorageAxes();
 		cutMicroBoxUpperEndpointUsesActualClassifier();
 		logicalStepRetainsAllSubstepMoments();
 		System.out.println("Cell remap moment publication validation passed");
+	}
+
+	private static void sweptLiquidMomentsKeepThinTangentialCentroids() {
+		var cut = new FlipCutCellGeometry(2, 2, 2);
+		var geometry = new LiquidFluxGeometry(cut);
+		double[] moments = new double[4];
+		for (int axis = 0; axis < 3; axis++) for (boolean positive : new boolean[] {false, true}) {
+			geometry.sweptMoments(0, 1, axis, .125, positive, 0, 0, 0, 0, moments);
+			precise(moments[0], .125, "Whole-box swept volume");
+			for (int a = 0; a < 3; a++) precise(moments[a + 1], a == axis ? (positive ? .4375 : -.4375) * .125 : 0,
+					"Whole-box swept moment");
+		}
+		for (double scale : new double[] {1, 1e-7, 1e-30}) {
+			LiquidFluxGeometry.unitCubeMoments(.5 * scale, scale, 2 * scale, .1 * scale, moments);
+			precise(moments[0], .001 / 6, "Tetrahedral swept volume");
+			for (int a = 0; a < 3; a++) precise(moments[a + 1], moments[0] * (.05 / (1 << a)), "Tetrahedral moment");
+		}
+		geometry.sweptMoments(0, 1, 1, .125, true, 1, 0, 0, .1, moments);
+		precise(moments[0], .0125, "Thin slab swept volume");
+		precise(moments[1] / moments[0], -.45, "Thin slab tangential centroid");
+		cut.replaceMask(0, 0xAA); cut.replaceMask(1, 0xAA);
+		geometry.sweptMoments(0, 1, 1, .125, true, 0, 0, 0, 0, moments);
+		precise(moments[0], .0625, "Cut swept volume");
+		precise(moments[1] / moments[0], -.25, "Cut tangential centroid");
+	}
+
+	private static void limitedFluxMixesTheSamePositiveMomentWeights() {
+		var flux = new ConservativeLiquidFlux(1, 2, 1);
+		double[] volume = {.25, .95};
+		var exact = new cc.ecisr.mmm.units.SignedDyadic[] {
+				cc.ecisr.mmm.units.SignedDyadic.of(volume[0]), cc.ecisr.mmm.units.SignedDyadic.of(volume[1])};
+		flux.velocity[0] = .1;
+		flux.plan(volume, new boolean[2], 1, exact);
+		// B=.025, G=.1, lambda=(1-.975)/.075=1/3: geometric transfer fraction is 2/3.
+		precise(flux.geometricBlend(0), 2.0 / 3, "FCT geometric moment weight");
+		double[] moments = new double[4]; flux.sweptMoments(0, moments);
+		precise(moments[0], .1, "FCT geometric sweep");
+		check(flux.exactFlux[0].signum() > 0 && flux.resultingVolumes()[1].compareTo(cc.ecisr.mmm.units.SignedDyadic.of(1)) <= 0,
+				"FCT moment mixture changed capacity-constrained inventory");
+	}
+
+	private static void precise(double actual, double expected, String label) {
+		check(Math.abs(actual - expected) <= 3e-13 * Math.max(1, Math.abs(expected)),
+				label + ": expected=" + expected + " actual=" + actual);
+	}
+
+	private static void thinSlabRemapRetainsItsTangentialMoment() {
+		var domain = new FluidDomain(5, 5, 5,
+				new FluidSolverConfig(1, 1000, 0, .125F, 200, 1e-5F, .45F, .002F, .8F), 128);
+		domain.setVolume(1, 2, 2, .2F); domain.setVolume(2, 2, 2, .1F);
+		int donor = domain.cellIndex(2, 2, 2), receiver = domain.cellIndex(2, 3, 2);
+		for (int p = 0; p < domain.particleCount(); p++) {
+			if (domain.particleCellIndex(p) == donor)
+				domain.particles.setPositionX(p, 2.05F);
+			domain.particles.setVelocityY(p, 1);
+		}
+		domain.rebuildGridFromParticles();
+		var flux = new ConservativeLiquidFlux(5, 5, 5);
+		flux.geometry(new LiquidFluxGeometry(domain.geometry.cutCells));
+		for (int f = 0; f < flux.velocity.length; f++) if (flux.axis[f] == 1) flux.velocity[f] = 1;
+		flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, .125, domain.markerGrid.exactCellVolumeInventory);
+		java.util.Arrays.fill(domain.gridToParticleStage.advectionCells(), true);
+		var remap = new CellCarrierRemapPlan(domain, flux, .125F, new BallisticLiquidRemap(domain.cellCount));
+		double mass = 0, moment = 0, receivedMass = 0, receivedMoment = 0;
+		for (var marker : remap.markers) if (marker.cell() == donor || marker.cell() == receiver) {
+			mass += marker.mass(); moment += marker.mass() * marker.offsetX();
+			if (marker.cell() == receiver) { receivedMass += marker.mass(); receivedMoment += marker.mass() * marker.offsetX(); }
+		}
+		System.out.printf("thin slab mass=%g CM=%g received=%g CM=%g%n",mass,moment/mass,receivedMass,receivedMoment/receivedMass);
+		check(receivedMass > 0, "Thin slab has no positive face transfer");
+		close(moment / mass, -.45, "Thin slab total tangential centroid");
+		close(receivedMoment / receivedMass, -.45, "Thin slab receiving tangential centroid");
 	}
 
 	private static FluidDomain domain() {
@@ -93,6 +170,34 @@ public final class CellRemapMomentsValidation {
 		check(Math.abs(actual - expected) <= roundoff, label + ": expected=" + expected + " actual=" + actual);
 	}
 
+	private static void partialLayerContractsOnlyItsConstrainedAxis() {
+		var domain = domain(); int cell = domain.cellIndex(3, 3, 3);
+		var offsets = new ArrayList<double[]>(); double[] masses = new double[8];
+		for (int p = 0; p < 8; p++) {
+			offsets.add(new double[] {(p & 1) == 0 ? -.25 : .25, (p & 2) == 0 ? -.25 : .25, (p & 4) == 0 ? -.25 : .25});
+			masses[p] = .125;
+		}
+		var original = new ArrayList<>(offsets);
+		double[] target = {.45, 0, .1}, projection = new double[3], storage = new double[3];
+		check(CellRemapMoments.fit(domain, cell, offsets, masses, target, projection, storage, .45), "Feasible thin-layer rule did not move");
+		double[] mean = new double[3], variance = new double[3];
+		for (int p = 0; p < 8; p++) for (int a = 0; a < 3; a++) {
+			mean[a] += masses[p] * offsets.get(p)[a]; variance[a] += masses[p] * Math.pow(offsets.get(p)[a] - target[a], 2);
+			check(Math.abs(original.get(p)[a]) == .25, "Partial reconstruction mutated shared tensor offsets");
+		}
+		for (int a = 0; a < 3; a++) {
+			check(Math.abs(mean[a] - target[a]) <= 8 * Math.ulp(1.0), "Feasible partial centroid was projected");
+			check(projection[a] == 0, "Feasible partial rule reported a projected first moment");
+		}
+		check(variance[0] > 0 && variance[0] < .002501, "Normal span did not follow its available open interval");
+		check(variance[1] == .0625 && Math.abs(variance[2] - .0625) <= Math.ulp(1.0), "Normal contraction changed tangential covariance");
+		checkPublished(domain, cell, offsets, masses, target, projection, storage);
+		// Saturated capacity keeps the original rule even when its target is unreachable.
+		CellRemapMoments.fit(domain, cell, original, masses, target, projection, storage, 0);
+		for (double[] point : original) for (double coordinate : point) check(Math.abs(coordinate) == .25, "Full capacity contracted its canonical rule");
+		check(projection[0] == -.45 && projection[2] == -.1, "Full capacity hid its unreachable moment");
+	}
+
 	/** Representation changes supply their own final pore capacity, independently of domain previews. */
 	private static void geometryRemapUsesPlannedCapacity() {
 		var domain = new FluidDomain(2, 2, 2,
@@ -151,7 +256,8 @@ public final class CellRemapMomentsValidation {
 		double[] masses = {0.5, 0.5}, target = {1, 0, 0}, projection = new double[3], storage = new double[3];
 		check(CellRemapMoments.fit(domain, cell, offsets, masses, target, projection, storage, 0.25), "Projected rule did not translate");
 		check(first[0] == -0.25 && second[0] == 0.25, "Translation mutated shared input offsets");
-		check(offsets.get(1)[0] - offsets.get(0)[0] == 0.5, "Common translation changed point spacing");
+		check(Math.abs(offsets.get(1)[0] - offsets.get(0)[0] - 0.5) <= 8 * Math.ulp(1.0F),
+				"Classifier endpoint contracted the rule beyond binary32 publication slack");
 		check(projection[0] < 0, "Unreachable upper target was not reported");
 		checkPublished(domain, cell, offsets, masses, target, projection, storage);
 	}

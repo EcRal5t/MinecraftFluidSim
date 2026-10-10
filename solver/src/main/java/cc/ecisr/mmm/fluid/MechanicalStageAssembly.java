@@ -36,7 +36,7 @@ final class MechanicalStageAssembly {
 				bodyForceAccess(domain));
 		GridToParticleStage gridToParticle = new GridToParticleStage(
 				new GridToParticleStage.Workspace(
-						domain.geometry, domain.markerGrid, domain.mac, domain.projection.pressureFluid, domain.particles, domain.velocityExtrapolator,
+						domain.geometry, domain.markerGrid, domain.mac, domain.projection.pressureFluid, domain.particles, domain.velocityExtrapolator, domain.pressurePhaseGeometry,
 						domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize()),
 				gridToParticleAccess(domain, pressureSystem));
 		ParticleAdvectionStage advection = new ParticleAdvectionStage(
@@ -47,7 +47,7 @@ final class MechanicalStageAssembly {
 		ParticleToGridStage particleToGrid = new ParticleToGridStage(
 				new ParticleToGridStage.Workspace(
 						domain.volume, domain.projection, domain.freeSurfaceGeometry, domain.mac,
-						domain.geometry, domain.markerGrid, domain.pressurePhaseGeometry),
+						domain.geometry, domain.markerGrid, domain.pressurePhaseGeometry, domain.particles, domain.config.cellSize()),
 				particleToGridAccess(domain), bodyForce, gridToParticle);
 		MechanicalStepPipeline pipeline = new MechanicalStepPipeline(
 				new MechanicalStepPipeline.Workspace(
@@ -130,6 +130,10 @@ final class MechanicalStageAssembly {
 			@Override public LiquidCarrierProperties thermalBuoyancyProperties() { return domain.thermalBuoyancyProperties(); }
 			@Override public double thermalFaceRelativeBuoyancy(int first, int second, LiquidCarrierProperties properties) {
 				return domain.thermalFaceRelativeBuoyancy(first, second, properties);
+			}
+			@Override public double thermalMarkerRelativeBuoyancy(int marker) {
+				return LiquidCarrierProperties.markerRelativeBuoyancy(domain.thermalMarkerContext(),
+						domain.materialRegistry, domain.materialDefinitions, domain.thermalState, marker);
 			}
 			@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
 			@Override public boolean liquidGasTensionActive() { return domain.surfaceTensionActive; }

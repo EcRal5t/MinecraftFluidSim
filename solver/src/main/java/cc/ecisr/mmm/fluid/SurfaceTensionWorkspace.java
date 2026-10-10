@@ -6,6 +6,7 @@ package cc.ecisr.mmm.fluid;
  * active; never checkpoint truth. Solver-internal package-private access only.
  */
 final class SurfaceTensionWorkspace {
+	final double[] columnHeights = new double[9];
 	final float[] surfaceTensionPressure;
 	final double[] wallSurfaceEnergyDensity;
 	final double[] surfaceTensionColor;

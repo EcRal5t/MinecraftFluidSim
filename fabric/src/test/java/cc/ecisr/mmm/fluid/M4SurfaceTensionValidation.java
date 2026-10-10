@@ -8,6 +8,8 @@ private M4SurfaceTensionValidation() { }
 
 public static void main(String[] args) {
 	validateCurvatureGeometry();
+	SurfaceTensionCurvatureExperiment.validateResolvedGeometry();
+	if (args.length == 1 && args[0].equals("--curvature")) return;
 	validateSigmaZeroDegeneration();
 	validateActiveSingleCellPressureJump();
 	validateStaticDropletPressureJump();

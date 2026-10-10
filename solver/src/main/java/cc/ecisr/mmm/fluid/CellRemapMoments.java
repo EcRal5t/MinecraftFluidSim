@@ -20,26 +20,7 @@ final class CellRemapMoments {
 		private static FluidDomain.Moment3 moment(double[] a) { return new FluidDomain.Moment3(a[0], a[1], a[2]); }
 	}
 
-	/** Returns the common open face centroid, relative to the donor cell center. */
-	static double[] face(FluidDomain domain, ConservativeLiquidFlux flux, int face) {
-		int axis = flux.axis[face], donor = flux.donor(face), receiver = flux.receiver(face);
-		boolean positive = receiver > donor;
-		double[] point = new double[3]; point[axis] = positive ? 0.5 : -0.5;
-		int donorMask = domain.geometry.cutCells.mask(donor), receiverMask = domain.geometry.cutCells.mask(receiver);
-		if ((donorMask | receiverMask) == 0) return point;
-		int count = 0;
-		for (int slot = 0; slot < 8; slot++) {
-			if (((slot >>> axis & 1) != 0) != positive) continue;
-			if ((donorMask & 1 << slot) != 0 || (receiverMask & 1 << (slot ^ 1 << axis)) != 0) continue;
-			count++;
-			for (int a = 0; a < 3; a++) if (a != axis) point[a] += (slot >>> a & 1) == 0 ? -0.25 : 0.25;
-		}
-		if (count == 0) throw new IllegalStateException("Positive liquid flux has no common open micro face");
-		for (int a = 0; a < 3; a++) if (a != axis) point[a] /= count;
-		return point;
-	}
-
-	/** Projection and storage errors are separate; a common translation retains spacing and covariance in the original open support. */
+	/** Projects the centroid into its fill-constrained support, contracting only axes that cannot retain their original span. */
 	static boolean fit(FluidDomain domain, int cell, ArrayList<double[]> offsets, double[] masses,
 			double[] target, double[] projection, double[] storage, double maximumTranslation) {
 		if (!(Double.isFinite(maximumTranslation) && maximumTranslation >= 0))
@@ -54,15 +35,15 @@ final class CellRemapMoments {
 		for (int axis = 0; axis < 3; axis++) {
 			if (!Double.isFinite(target[axis])) throw new IllegalStateException("Liquid first moment is not finite");
 			projection[axis] = 0;
-			double current = 0, magnitude = 0;
+			double current = 0, magnitude = 0, mass = 0;
 			for (int p = 0; p < masses.length; p++) {
-				double moment = masses[p] * offsets.get(p)[axis]; current += moment; magnitude += Math.abs(moment);
+				double moment = masses[p] * offsets.get(p)[axis]; current += moment; magnitude += Math.abs(moment); mass += masses[p];
 			}
 			// Keep the exact standard tensor rule when its moment already agrees to reduction precision.
 			if (Math.abs(target[axis] - current) <= 8 * Math.ulp(magnitude)) continue;
 			// Saturated support retains its canonical rule; unreachable moments remain visible.
 			if (maximumTranslation == 0) { projection[axis] = current - target[axis]; continue; }
-			double minimumShift = -maximumTranslation, maximumShift = maximumTranslation, mass = 0;
+			double minimumShift = -maximumTranslation, maximumShift = maximumTranslation;
 			// Every node on an axis shares one whole-cell interval or one of two micro intervals.
 			for (int half = 0; half < (mask == 0 ? 1 : 2); half++) {
 				double l = mask == 0 || half == 0 ? -0.5 : 0, u = mask == 0 || half == 1 ? 0.5 : 0;
@@ -82,22 +63,40 @@ final class CellRemapMoments {
 				lower[half] = lf / h - coordinate[axis] - 0.5;
 				upper[half] = uf / h - coordinate[axis] - 0.5;
 			}
+			int commonHalf = mask == 0 || offsets.getFirst()[axis] < 0 ? 0 : 1;
+			boolean commonInterval = true;
 			for (int p = 0; p < masses.length; p++) {
 				double q = offsets.get(p)[axis]; int half = mask == 0 || q < 0 ? 0 : 1;
 				minimumShift = Math.max(minimumShift, lower[half] - q); maximumShift = Math.min(maximumShift, upper[half] - q);
-				mass += masses[p];
+				if (half != commonHalf) commonInterval = false;
 			}
 			if (minimumShift > maximumShift) throw new IllegalStateException("Open liquid support has no common binary32 translation");
 			double desiredShift = (target[axis] - current) / mass;
 			double shift = Math.max(minimumShift, Math.min(maximumShift, desiredShift));
+			double scale = 1, center = current / mass;
+			boolean projected = desiredShift < minimumShift || desiredShift > maximumShift;
+			if (commonInterval && (desiredShift < minimumShift || desiredShift > maximumShift)) {
+				// Largest positive affine rule at the feasible centroid. Tangential spans remain unchanged.
+				shift = Math.max(-maximumTranslation, Math.min(maximumTranslation, desiredShift));
+				double centroid = Math.max(lower[commonHalf], Math.min(upper[commonHalf], center + shift));
+				projected = desiredShift < -maximumTranslation || desiredShift > maximumTranslation
+						|| center + desiredShift < lower[commonHalf] || center + desiredShift > upper[commonHalf];
+				shift = centroid - center;
+				for (double[] offset : offsets) {
+					double r = offset[axis] - center;
+					if (r > 0) scale = Math.min(scale, (upper[commonHalf] - centroid) / r);
+					else if (r < 0) scale = Math.min(scale, (centroid - lower[commonHalf]) / -r);
+				}
+			}
 			double feasible = current + mass * shift;
-			projection[axis] = desiredShift < minimumShift || desiredShift > maximumShift ? feasible - target[axis] : 0;
-			if (shift != 0) {
+			projection[axis] = projected ? feasible - target[axis] : 0;
+			if (shift != 0 || scale != 1) {
 				if (!moved) {
 					for (int p = 0; p < offsets.size(); p++) offsets.set(p, offsets.get(p).clone());
 					moved = true;
 				}
-				for (double[] offset : offsets) offset[axis] += shift;
+				for (double[] offset : offsets) offset[axis] = scale == 1 ? offset[axis] + shift
+						: center + shift + scale * (offset[axis] - center);
 			}
 		}
 		double[] stored = new double[3]; float[] point = new float[3];

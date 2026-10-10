@@ -1,14 +1,177 @@
 package cc.ecisr.mmm.fluid;
 
+import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.TreeSet;
+import java.util.function.DoubleUnaryOperator;
+
 /**
- * Test-only M4 surface-tension experiment. It builds a colour function on a uniform cell grid, smooths it once to
- * make the interface gradient well-defined, then estimates the interface normal and mean curvature and validates
- * the Laplace pressure jump in isolation. It deliberately does not run inside the active Minecraft solver yet.
+ * Test-side analytic interface geometry: smoothed-normal reference, exact planar fractions and integrated sphere
+ * fractions. Resolved geometry also runs through the production curvature, pressure and inventory transport stages.
  */
 final class SurfaceTensionCurvatureExperiment {
 	private static final int SUB_SAMPLES = 4;
 
 	private SurfaceTensionCurvatureExperiment() { }
+
+	/** Actual curvature dispatch and one production step on accurately integrated sphere inventories. */
+	static void validateResolvedGeometry() {
+		validateQuarterCylinderWalls();
+		FluidSolverConfig cfg = new FluidSolverConfig(1, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F);
+		for (double[] n : new double[][] {{1, 2, 0}, {1, 2, 3}, {1, 1, 1}}) for (double phase : new double[] {.25, .75})
+				for (boolean reverse : new boolean[] {false, true}) {
+			FluidDomain d = new FluidDomain(20, 20, 20, cfg, 64);
+			double offset = 10 * (n[0] + n[1] + n[2]) + phase, maximum = 0;
+			for (int z = 0; z < 20; z++) for (int y = 0; y < 20; y++) for (int x = 0; x < 20; x++) {
+				double fraction = planeFraction(n, offset - n[0] * x - n[1] * y - n[2] * z);
+				d.tension.surfaceTensionColor[d.cellIndex(x, y, z)] = reverse ? 1 - fraction : fraction;
+			}
+			d.smoothSurfaceTensionColor(); d.rebuildSurfaceTensionNormals();
+			for (int z = 6; z < 14; z++) for (int y = 6; y < 14; y++) for (int x = 6; x < 14; x++) {
+				double c = d.tension.surfaceTensionColor[d.cellIndex(x, y, z)];
+				if (!(c > 0 && c < 1)) continue;
+				double k = HeightFunctionCurvature.compute(d, x, y, z);
+				check(Double.isFinite(k), "complete plane height column rejected");
+				maximum = Math.max(maximum, Math.abs(d.liquidGasMeanCurvature(x, y, z)));
+			}
+			check(maximum <= 1e-12, "analytic inclined plane gained curvature " + maximum);
+		}
+		SphereError coarse = resolvedSphere(.25F), fine = resolvedSphere(.125F);
+		check(fine.curvature < coarse.curvature, "sphere height curvature did not refine");
+		check(coarse.pressure <= .06 && fine.pressure < coarse.pressure, "sphere Laplace pressure did not refine");
+		check(fine.momentum < coarse.momentum && fine.angularMomentum < coarse.angularMomentum,
+				"closed-sphere capillary impulse approximation did not refine");
+	}
+
+	private static SphereError resolvedSphere(float h) {
+		int size = Math.round(4 / h);
+		double[] center = {2.037, 1.947, 2.071};
+		double[] colour = accurateSphereColour(size, h, center, 1);
+		double integratedVolume = Arrays.stream(colour).sum() * h * h * h;
+		check(Math.abs(integratedVolume - 4 * Math.PI / 3) < 1e-9, "sphere volume integration failed");
+		FluidSolverConfig cfg = new FluidSolverConfig(h, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F);
+		FluidDomain d = new FluidDomain(size, size, size, cfg, size * size * size * 8);
+		List<float[]> points = new ArrayList<>(); double total = 0;
+		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+			float fraction = (float) colour[index(size, x, y, z)]; if (fraction <= 0) continue;
+			for (int slot = 0; slot < 8; slot++) {
+				float volume = fraction / 8;
+				points.add(new float[] {(x + .25F + .5F * (slot & 1)) * h, (y + .25F + .5F * (slot >> 1 & 1)) * h,
+						(z + .25F + .5F * (slot >> 2 & 1)) * h, volume}); total += volume;
+			}
+		}
+		float[] pv = new float[points.size() * 4];
+		for (int i = 0; i < points.size(); i++) System.arraycopy(points.get(i), 0, pv, 4 * i, 4);
+		d.restoreParticleState(new FlipParticleState(size, size, size, h, points.size(), (float) total,
+				pv, new float[points.size() * 3], new byte[size * size * size]));
+		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:test", 1000, "mmm:test", .0728, Math.PI / 2)));
+		for (int p = 0; p < d.particleCount(); p++) d.setMarkerMaterial(p, registry, 0);
+		d.particleToGridStage.rebuild();
+		double error = 0; int valid = 0, fallback = 0;
+		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+			double c = d.tension.surfaceTensionColor[d.cellIndex(x, y, z)]; if (!(c > 0 && c < 1)) continue;
+			double k = HeightFunctionCurvature.compute(d, x, y, z);
+			if (Double.isFinite(k)) { error += Math.abs(k - 2); valid++; } else fallback++;
+		}
+		check(valid > 0, "sphere has no resolved height columns");
+		check(HeightFunctionCurvature.compute(d, size / 2, size / 2, size / 2) == 0, "deep liquid curvature must vanish");
+		double volume = d.totalVolumeExact(), mass = d.totalMass();
+		d.step();
+		check(d.totalVolumeExact() == volume && d.totalMass() == mass, "resolved sphere changed exact inventories");
+		check(d.particleCount() <= d.cellCount * 8, "resolved sphere carrier scale grew beyond cell quadrature");
+		double pressure = 0; int cells = 0;
+		for (int c = 0; c < d.cellCount; c++) if (d.projection.pressureFluid[c]) { pressure += d.projection.pressure[c]; cells++; }
+		double[] linear = new double[3], angular = new double[3];
+		for (int p = 0; p < d.particleCount(); p++) {
+			double m = d.unitScale.kilograms(d.particles.mass(p));
+			double qx = m * d.particles.velocityX(p), qy = m * d.particles.velocityY(p), qz = m * d.particles.velocityZ(p);
+			double x = d.particles.positionX(p) - center[0], y = d.particles.positionY(p) - center[1], z = d.particles.positionZ(p) - center[2];
+			linear[0] += qx; linear[1] += qy; linear[2] += qz;
+			angular[0] += y * qz - z * qy; angular[1] += z * qx - x * qz; angular[2] += x * qy - y * qx;
+		}
+		double pressureError = Math.abs(pressure / cells - .1456) / .1456;
+		double net = Math.sqrt(Arrays.stream(linear).map(v -> v * v).sum()), torque = Math.sqrt(Arrays.stream(angular).map(v -> v * v).sum());
+		System.out.printf("  resolved sphere h=%g HF=%d fallback=%d meanAbsKappaError=%g pressure=%g pressureError=%g netP=%g kg*m/s netL=%g kg*m^2/s markers=%d%n",
+				h, valid, fallback, error / valid, pressure / cells, pressureError, net, torque, d.particleCount());
+		return new SphereError(error / valid, pressureError, net, torque);
+	}
+
+	private record SphereError(double curvature, double pressure, double momentum, double angularMomentum) { }
+
+	/** A circular cylinder meeting exterior free-slip walls orthogonally has kappa=1/R at ends and mirrors. */
+	private static void validateQuarterCylinderWalls() {
+		double[] coarse = quarterCylinder(.25F, false, Math.PI / 2);
+		double[] fine = quarterCylinder(.125F, false, Math.PI / 2);
+		double[] upper = quarterCylinder(.125F, true, Math.PI / 2);
+		for (int region = 0; region < 3; region++) {
+			check(fine[region] < coarse[region], "wall cylinder curvature did not refine in region " + region);
+			check(Math.abs(upper[region] - fine[region]) < 1e-10, "upper/lower cylinder reflection differs");
+		}
+		quarterCylinder(.125F, false, Math.PI / 6);
+		quarterCylinder(.125F, false, 2 * Math.PI / 3);
+		FluidDomain d = new FluidDomain(12, 12, 12,
+				new FluidSolverConfig(.25F, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F), 64);
+		Arrays.fill(d.tension.surfaceTensionColor, .5);
+		for (boolean high : new boolean[] {false, true}) {
+			for (int c = 0; c < d.cellCount; c++) {
+				double nx = ((c % d.sizeX) + .5 - (high ? d.sizeX : 0)) / (2 * d.sizeX);
+				d.tension.surfaceTensionNormalX[c] = nx;
+				d.tension.surfaceTensionNormalY[c] = Math.sqrt(1 - nx * nx);
+			}
+			int x = high ? d.sizeX - 1 : 0;
+			check(Math.abs(d.liquidGasMeanCurvature(x, 6, 6) + 1.0 / 6) < 1e-14,
+					"fallback normal reflection lost its normal derivative");
+			check(Math.abs(d.surfaceTensionMeanCurvature(x, 6, 6) + 1.0 / 12) < 1e-14,
+					"liquid-pair smoothed curvature stencil changed");
+		}
+	}
+
+	private static double[] quarterCylinder(float h, boolean upper, double angle) {
+		int size = Math.round(3 / h);
+		FluidDomain d = new FluidDomain(size, size, size,
+				new FluidSolverConfig(h, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F), size * size * size * 8);
+		double[] colour = new double[d.cellCount]; List<float[]> points = new ArrayList<>(); double total = 0;
+		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+			double a = (upper ? size - 1 - y : y) * (double) h, b = (upper ? size - 1 - z : z) * (double) h;
+			double f = a * a + b * b >= 1 ? 0 : (a + h) * (a + h) + (b + h) * (b + h) <= 1 ? 1
+					: Math.clamp((circlePrimitive(a + h, b + h, 1) - circlePrimitive(a, b + h, 1)
+					- circlePrimitive(a + h, b, 1) + circlePrimitive(a, b, 1)) / (h * h), 0, 1);
+			colour[d.cellIndex(x, y, z)] = f;
+			if (f > 0) for (int slot = 0; slot < 8; slot++) {
+				float v = (float) f / 8; total += v;
+				points.add(new float[] {(x + .25F + .5F * (slot & 1)) * h,
+						(y + .25F + .5F * (slot >> 1 & 1)) * h, (z + .25F + .5F * (slot >> 2 & 1)) * h, v});
+			}
+		}
+		float[] pv = new float[4 * points.size()];
+		for (int p = 0; p < points.size(); p++) System.arraycopy(points.get(p), 0, pv, 4 * p, 4);
+		d.restoreParticleState(new FlipParticleState(size, size, size, h, points.size(), (float) total,
+				pv, new float[3 * points.size()], new byte[d.cellCount]));
+		var registry = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:wall", 1000, "mmm:wall", .0728, angle)));
+		for (int p = 0; p < d.particleCount(); p++) d.setMarkerMaterial(p, registry, 0);
+		d.particleToGridStage.rebuild();
+		System.arraycopy(colour, 0, d.tension.surfaceTensionColor, 0, colour.length);
+		d.smoothSurfaceTensionColor(); d.rebuildSurfaceTensionNormals();
+		double[] errors = new double[3]; int[] counts = new int[3], heights = new int[3];
+		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+			double f = colour[d.cellIndex(x, y, z)]; if (!(f > 0 && f < 1)) continue;
+			int my = upper ? size - 1 - y : y, mz = upper ? size - 1 - z : z;
+			int region = x < 2 || x >= size - 2 ? 1 : my < 2 || mz < 2 ? 2 : 0;
+			counts[region]++; if (Double.isFinite(HeightFunctionCurvature.compute(d, x, y, z))) heights[region]++;
+			errors[region] += Math.abs(d.liquidGasMeanCurvature(x, y, z) - 1);
+			if (angle != Math.PI / 2 && (x == 0 || x == size - 1))
+				check(!Double.isFinite(HeightFunctionCurvature.compute(d, x, y, z)), "non-90 wall accepted even height reflection");
+		}
+		for (int region = 0; region < 3; region++) {
+			check(counts[region] > 0, "cylinder region is empty"); errors[region] /= counts[region];
+			if (angle == Math.PI / 2 && h == .125F) check(heights[region] == counts[region], "resolved cylinder height rejected");
+		}
+		System.out.printf("  quarter cylinder h=%g upper=%s angle=%g partial=%s HF=%s core/end/mirror meanAbsKappaError=%s%n",
+				h, upper, angle, Arrays.toString(counts), Arrays.toString(heights), Arrays.toString(errors));
+		return errors;
+	}
+	private static void check(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
 
 	/** Smooths the colour function once with a 3x3x3 box kernel so the interface gradient is non-degenerate. */
 	static double[] smooth(double[] colour, int size) {
@@ -73,6 +236,86 @@ final class SurfaceTensionCurvatureExperiment {
 			colour[index(size, x, y, z)] = fraction(x, y, z, cellSize, (sx, sy, sz) -> sz < interfaceZ);
 		}
 		return colour;
+	}
+
+	/** Exact half-space/box fraction, by the distribution of weighted unit intervals. */
+	static double planeFraction(double[] normal, double offset) {
+		double[] n = Arrays.stream(normal).filter(v -> v != 0).toArray();
+		double sum = 0, denominator = 1;
+		for (double v : n) denominator *= v;
+		for (int k = 2; k <= n.length; k++) denominator *= k;
+		for (int mask = 0; mask < (1 << n.length); mask++) {
+			double t = offset;
+			for (int k = 0; k < n.length; k++) if ((mask & (1 << k)) != 0) t -= n[k];
+			sum += (Integer.bitCount(mask) % 2 == 0 ? 1 : -1) * Math.pow(Math.max(0, t), n.length);
+		}
+		return Math.clamp(sum / denominator, 0, 1);
+	}
+
+	/** Sphere fractions from analytic circle/rectangle sections and adaptive one-dimensional integration. */
+	static double[] accurateSphereColour(int size, double h, double[] center, double radius) {
+		double[] colour = new double[size * size * size];
+		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+			double[] lo = {x * h - center[0], y * h - center[1], z * h - center[2]};
+			double min = 0, max = 0;
+			for (double a : lo) {
+				double b = a + h, near = a > 0 ? a : b < 0 ? b : 0;
+				min += near * near; max += Math.max(a * a, b * b);
+			}
+			double volume = min >= radius * radius ? 0 : max <= radius * radius ? h * h * h
+					: sphereCellVolume(lo, h, radius, 1e-10 * h * h * h);
+			colour[index(size, x, y, z)] = Math.clamp(volume / (h * h * h), 0, 1);
+		}
+		return colour;
+	}
+
+	private static double sphereCellVolume(double[] lo, double h, double radius, double tolerance) {
+		double a = Math.max(-radius, lo[0]), b = Math.min(radius, lo[0] + h);
+		if (a >= b) return 0;
+		DoubleUnaryOperator section = x -> {
+			double r = Math.sqrt(Math.max(0, radius * radius - x * x));
+			return Math.max(0, circlePrimitive(lo[1] + h, lo[2] + h, r)
+					- circlePrimitive(lo[1], lo[2] + h, r)
+					- circlePrimitive(lo[1] + h, lo[2], r) + circlePrimitive(lo[1], lo[2], r));
+		};
+		TreeSet<Double> splits = new TreeSet<>(); splits.add(a); splits.add(b);
+		for (double y : new double[] {0, lo[1], lo[1] + h}) for (double z : new double[] {0, lo[2], lo[2] + h}) {
+			double q = radius * radius - y * y - z * z;
+			if (q <= 0) continue;
+			double v = Math.sqrt(q);
+			if (v > a && v < b) splits.add(v);
+			if (-v > a && -v < b) splits.add(-v);
+		}
+		double sum = 0, last = a;
+		for (double next : splits) if (next > last) {
+			double fa = section.applyAsDouble(last), fm = section.applyAsDouble(.5 * (last + next)), fb = section.applyAsDouble(next);
+			sum += integrateSection(section, last, next, fa, fm, fb, (next - last) * (fa + 4 * fm + fb) / 6,
+					tolerance / (splits.size() - 1), 24);
+			last = next;
+		}
+		return Math.clamp(sum, 0, h * h * h);
+	}
+
+	private static double integrateSection(DoubleUnaryOperator f, double a, double b, double fa, double fm,
+	                                      double fb, double whole, double tolerance, int depth) {
+		double m = .5 * (a + b), fl = f.applyAsDouble(.5 * (a + m)), fr = f.applyAsDouble(.5 * (m + b));
+		double left = (m - a) * (fa + 4 * fl + fm) / 6, right = (b - m) * (fm + 4 * fr + fb) / 6;
+		double delta = left + right - whole;
+		if (depth == 0 || Math.abs(delta) <= 15 * tolerance) return left + right + delta / 15;
+		return integrateSection(f, a, m, fa, fl, fm, left, tolerance / 2, depth - 1)
+				+ integrateSection(f, m, b, fm, fr, fb, right, tolerance / 2, depth - 1);
+	}
+
+	private static double circlePrimitive(double y, double z, double r) {
+		if (r == 0) return 0;
+		double a = Math.min(Math.abs(y), r), b = Math.min(Math.abs(z), r);
+		double t = Math.sqrt(Math.max(0, r * r - b * b));
+		double q = a <= t ? a * b : b * t + circleArc(a, r) - circleArc(t, r);
+		return Math.signum(y) * Math.signum(z) * q;
+	}
+
+	private static double circleArc(double a, double r) {
+		return .5 * (a * Math.sqrt(Math.max(0, r * r - a * a)) + r * r * Math.asin(Math.clamp(a / r, -1, 1)));
 	}
 
 	/** Curvature averaged over the interface band where the smoothed colour is between 0.25 and 0.75. */
