@@ -10,6 +10,7 @@ public final class MarkerVelocityTransferValidation {
 		sparseGeometryAndAdjoint();
 		actualMassAndClosedFaces();
 		productionP2GPreservesFiniteMassWeightedVelocities();
+		productionTransferBudgetsUsePhysicalEnergy();
 		captureAndPublicationAreAtomic();
 	}
 
@@ -101,6 +102,20 @@ public final class MarkerVelocityTransferValidation {
 			for (float[] axis : new float[][] {d.mac.velocityX, d.mac.velocityY, d.mac.velocityZ})
 				for (float value : axis) if (!Float.isFinite(value)) throw new AssertionError("Finite marker mean polluted a MAC face");
 		}
+	}
+
+	private static void productionTransferBudgetsUsePhysicalEnergy() {
+		var d = restoredMassDomain(new double[] {8e307}, new float[] {3, 0, 0}, 1, .5F, .75F, .75F);
+		d.sampleVelocity(.5F, .75F, .75F);
+		double expected = 4.5e307;
+		near(d.particleKineticEnergyJoules(), expected, Math.ulp(expected), "Finite physical marker energy");
+		near(d.gridKineticEnergyJoules(), expected, 2 * Math.ulp(expected), "Finite physical grid energy");
+		if (!Double.isInfinite(d.gridKineticEnergySolverUnits())) throw new AssertionError("Energy fixture missed the solver-unit overflow");
+		// Exercise the real handoff without a pressure solve: zero previous MAC gives a nonzero FLIP candidate.
+		d.gridToParticleStage.capturePreProjectionEnergy();
+		d.gridToParticleStage.extrapolateAndTransfer();
+		near(d.particles.velocityX(0), 3, 0, "Physical-energy transfer changed constant velocity");
+		near(d.particleKineticEnergyJoules(), expected, Math.ulp(expected), "Physical-energy transfer lost the finite marker budget");
 	}
 
 	private static FluidDomain restoredMassDomain(double[] masses, float[] velocities, float volume, float x, float y, float z) {

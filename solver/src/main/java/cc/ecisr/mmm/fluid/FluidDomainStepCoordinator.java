@@ -158,14 +158,26 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	double gridKineticEnergyJoules() {
-		double energy = unitScale.kilograms(gridKineticEnergySolverUnits());
+		double densityScale = variableDensityActive ? 1.0 : config.density();
+		double energy = faceKineticEnergyJoules(mac.velocityX, mac.p2gWeightX, densityScale)
+				+ faceKineticEnergyJoules(mac.velocityY, mac.p2gWeightY, densityScale)
+				+ faceKineticEnergyJoules(mac.velocityZ, mac.p2gWeightZ, densityScale);
 		if (!(Double.isFinite(energy) && energy >= 0.0)) {
 			throw new ArithmeticException("Grid kinetic-energy audit is invalid");
 		}
 		return energy;
 	}
 
-	/** Kinetic energy in solver mass units for the pressure projection's variational face metric. */
+	private double faceKineticEnergyJoules(float[] velocity, double[] weight, double densityScale) {
+		double energy = 0;
+		for (int face = 0; face < velocity.length; face++) {
+			double kilograms = unitScale.kilograms(weight[face] * densityScale);
+			energy += 0.5 * kilograms * velocity[face] * (double) velocity[face];
+		}
+		return energy;
+	}
+
+	/** Explicit solver-unit diagnostic of the variational face metric; physical audits use joules. */
 	double gridKineticEnergySolverUnits() {
 		double densityScale = variableDensityActive ? 1.0 : config.density();
 		double energy = faceKineticEnergy(mac.velocityX, mac.p2gWeightX, densityScale)

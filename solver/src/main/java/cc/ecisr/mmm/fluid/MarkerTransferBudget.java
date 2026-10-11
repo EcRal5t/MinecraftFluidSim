@@ -1,11 +1,13 @@
 package cc.ecisr.mmm.fluid;
 
 import java.util.Arrays;
+import cc.ecisr.mmm.units.SolverUnitScale;
 
-/** Energy-admissible FLIP transfer on connected dependencies of the current numerical operators. */
+/** Energy-admissible FLIP transfer in joules on connected dependencies of the current numerical operators. */
 final class MarkerTransferBudget {
 	private final int nx, ny, nz, cells, faces;
 	private final float h;
+	private final SolverUnitScale unitScale;
 	private final MacVelocityGrid mac;
 	private final FlipCutCellGeometry geometry;
 	private final int[] offsets;
@@ -21,6 +23,7 @@ final class MarkerTransferBudget {
 	private boolean[] resolvedRoots = new boolean[0];
 
 	MarkerTransferBudget(int nx, int ny, int nz, float h, MacVelocityGrid mac, FlipCutCellGeometry geometry) {
+		unitScale = SolverUnitScale.forCellSize(h);
 		this.nx = nx; this.ny = ny; this.nz = nz; this.h = h; this.mac = mac; this.geometry = geometry; cells = nx * ny * nz;
 		offsets = new int[] {0, mac.velocityX.length, mac.velocityX.length + mac.velocityY.length};
 		faces = offsets[2] + mac.velocityZ.length;
@@ -31,7 +34,7 @@ final class MarkerTransferBudget {
 	void capture(double densityScale) {
 		float[][] velocity = velocities(); double[][] weights = weights();
 		for (int a = 0; a < 3; a++) for (int f = 0; f < velocity[a].length; f++) {
-			predicted[a][f] = 0.5 * densityScale * weights[a][f] * velocity[a][f] * (double) velocity[a][f];
+			predicted[a][f] = 0.5 * unitScale.kilograms(weights[a][f] * densityScale) * velocity[a][f] * (double) velocity[a][f];
 		}
 	}
 
@@ -141,7 +144,7 @@ final class MarkerTransferBudget {
 		else for (double[] values : sums) Arrays.fill(values, 0, size, 0);
 		float[][] pic = {picX, picY, picZ}, delta = {deltaX, deltaY, deltaZ};
 		for (int p = 0; p < particles.count(); p++) {
-			int r = markerRoots[p]; double mass = particles.mass(p);
+			int r = markerRoots[p]; double mass = unitScale.kilograms(particles.mass(p));
 			if (anyResolved && resolvedRoots[r]) sums[6][r] += incomingEnergy[p];
 			for (int a = 0; a < 3; a++) {
 				sums[0][r] += 0.5 * mass * delta[a][p] * (double) delta[a][p];
@@ -154,8 +157,8 @@ final class MarkerTransferBudget {
 		for (int a = 0; a < 3; a++) for (int f = 0; f < velocity[a].length; f++) {
 			int r = root(face(a, f));
 			sums[3][r] += predicted[a][f];
-			if (anyResolved && resolvedRoots[r]) sums[7][r] += 0.5 * densityScale * weights[a][f] * previous[a][f] * (double) previous[a][f];
-			sums[4][r] += 0.5 * densityScale * weights[a][f] * velocity[a][f] * (double) velocity[a][f];
+			if (anyResolved && resolvedRoots[r]) sums[7][r] += 0.5 * unitScale.kilograms(weights[a][f] * densityScale) * previous[a][f] * (double) previous[a][f];
+			sums[4][r] += 0.5 * unitScale.kilograms(weights[a][f] * densityScale) * velocity[a][f] * (double) velocity[a][f];
 		}
 		for (int i = 0; i < size; i++) if (parent[i] == i)
 			sums[5][i] = FlipTransferScheme.maximumEnergyStableTransfer(sums[0][i], sums[1][i], sums[2][i],

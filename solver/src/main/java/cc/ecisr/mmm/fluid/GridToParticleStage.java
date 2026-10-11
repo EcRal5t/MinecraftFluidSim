@@ -1,13 +1,15 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.compute.CpuWorkBatch;
+import cc.ecisr.mmm.units.SolverUnitScale;
 
 /**
  * The grid-to-particle handoff: air-cell velocity extrapolation into the boundary fringe
  * followed by the largest energy-admissible FLIP increment into marker momentum.
  * In a complete liquid pressure space, a mass-orthogonal projection removes velocities
  * invisible to MAC sampling and the budget retains resolved energy plus actual grid work.
- * Free surfaces retain the grid energy budget. Newtonian diffusion has its own momentum stage.
+ * Free surfaces retain the grid energy budget. All transfer coefficients and budgets are in joules.
+ * Newtonian diffusion has its own momentum stage.
  */
 final class GridToParticleStage {
 	record Workspace(
@@ -27,6 +29,7 @@ final class GridToParticleStage {
 
 	private final Workspace state;
 	private final Access access;
+	private final SolverUnitScale unitScale;
 	private float[] picX = new float[0], picY = new float[0], picZ = new float[0];
 	private float[] flipDeltaX = new float[0], flipDeltaY = new float[0], flipDeltaZ = new float[0];
 	private double preProjectionEnergy = Double.NaN;
@@ -42,6 +45,7 @@ final class GridToParticleStage {
 	GridToParticleStage(Workspace state, Access access) {
 		this.state = state;
 		this.access = access;
+		unitScale = SolverUnitScale.forCellSize(state.cellSize);
 		fullCells = new boolean[state.pressureFluid.length];
 		resolvedValid = new boolean[][] {new boolean[state.mac.velocityX.length], new boolean[state.mac.velocityY.length], new boolean[state.mac.velocityZ.length]};
 		componentBudget = new MarkerTransferBudget(state.sizeX, state.sizeY, state.sizeZ, state.cellSize, state.mac, state.geometry.cutCells);
@@ -84,7 +88,7 @@ final class GridToParticleStage {
 		);
 	}
 
-	/** Captures predicted energy so pressure redistribution supplies no additional transfer budget. */
+	/** Captures predicted joules so pressure redistribution supplies no additional transfer budget. */
 	void capturePreProjectionEnergy() {
 		preProjectionEnergy = transferGridKineticEnergy();
 		componentBudget.capture(access.variableDensityActive() ? 1.0 : access.referenceDensity());
@@ -109,7 +113,7 @@ final class GridToParticleStage {
 		}
 		double quadratic = 0.0, linear = 0.0, picEnergy = 0.0, incomingEnergy = 0.0;
 		for (int i = 0; i < particles.count(); i++) {
-			double mass = particles.mass(i);
+			double mass = unitScale.kilograms(particles.mass(i));
 			incomingEnergy += incomingMarkerEnergy[i] = 0.5 * mass * (flipDeltaX[i] * (double) flipDeltaX[i]
 					+ flipDeltaY[i] * (double) flipDeltaY[i] + flipDeltaZ[i] * (double) flipDeltaZ[i]);
 		}
@@ -126,7 +130,7 @@ final class GridToParticleStage {
 			}
 		});
 		for (int i = 0; i < particles.count(); i++) {
-			double mass = particles.mass(i);
+			double mass = unitScale.kilograms(particles.mass(i));
 			double picSquared = picX[i] * (double) picX[i] + picY[i] * (double) picY[i]
 					+ picZ[i] * (double) picZ[i];
 			double deltaSquared = flipDeltaX[i] * (double) flipDeltaX[i]
@@ -177,10 +181,11 @@ final class GridToParticleStage {
 				+ faceEnergy(z, mac.p2gWeightZ, densityScale);
 	}
 
-	private static double faceEnergy(float[] velocity, double[] weight, double densityScale) {
+	private double faceEnergy(float[] velocity, double[] weight, double densityScale) {
 		double energy = 0.0;
 		for (int face = 0; face < velocity.length; face++) {
-			energy += 0.5 * densityScale * weight[face] * velocity[face] * (double) velocity[face];
+			double kilograms = unitScale.kilograms(weight[face] * densityScale);
+			energy += 0.5 * kilograms * velocity[face] * (double) velocity[face];
 		}
 		return energy;
 	}
