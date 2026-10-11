@@ -393,6 +393,8 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 
 固液反应在分配新固体组成 handle 前，预检完整候选热库存；预检失败时保持物质库存、内能与组成池不变。
 
+析出、溶解与析出合并复用相变的逐载体内能规划：完整未来液体、coherent、活动颗粒和沉积库存共同求解拟存储的原始 `U`，并预先构造舍入审计。反应计划绑定热域与准备时 revision，首次物质修改前核对，随后按实际载体提交已验证的值。不可表示的候选保留原库存与 dirty 调度。
+
 species reference offset 是组成携带的能量原始数据。reaction extent 改变 species 时，反应热表现为同一总 `U` 下 base energy 的改变，随后 LTE 温度自然变化；外部热浴或命令注热才进入 external source/sink。禁止既修改 species offset 又额外重复加一份反应热。
 
 ## Logical step 顺序

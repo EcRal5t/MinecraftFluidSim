@@ -25,7 +25,14 @@ public final class ThermalDomainState {
 	}
 	/** Exact generation token for the four independently mutable thermal truth owners. */
 	public record Revision(long liquid, long granular, long gas, long audit) { }
-	public record ReactionPlan(int cell, SignedDyadic cellEnergy, SignedDyadic inventoryBefore, double equilibriumTemperatureK) { }
+	public static final class ReactionPlan {
+		private final ThermalDomainState owner;
+		private final Revision revision;
+		private final ThermalCellOperations.PhaseCellAssignment assignment;
+		private ReactionPlan(ThermalDomainState owner, Revision revision, ThermalCellOperations.PhaseCellAssignment assignment) {
+			this.owner = owner; this.revision = revision; this.assignment = assignment;
+		}
+	}
 	public static final class PhaseCandidateCell {
 		private final ThermalDomainState owner;
 		private final Revision revision;
@@ -548,11 +555,21 @@ public final class ThermalDomainState {
 			GranularEnergyState.GranularReactionEdit granularEdit,
 			ThermalCarrierContext markers
 	) {
-		return cellOperations.requireGranularReaction(cell, markerReplacements, granularEdit, markers);
+		try { return new ReactionPlan(this, thermalRevision(),
+				cellOperations.requireGranularReaction(cell, markerReplacements, granularEdit, markers)); }
+		catch (ThermalCellEnergyAssignment.UnavailableException unavailable) {
+			throw new PhaseCellEnergyUnavailableException(unavailable);
+		}
+	}
+
+	public void requireGranularReactionCurrent(ReactionPlan plan) {
+		if (plan == null || plan.owner != this || !matchesThermalRevision(plan.revision))
+			throw new IllegalStateException("Thermal reaction plan is stale or belongs to another domain");
 	}
 
 	public void commitGranularReaction(ReactionPlan plan, ThermalCarrierContext markers) {
-		cellOperations.commitGranularReaction(plan, markers);
+		if (plan == null || plan.owner != this) throw new IllegalStateException("Thermal reaction plan belongs to another domain");
+		cellOperations.commitPhaseCellEnergy(plan.assignment, markers);
 	}
 
 	// ---- pending phase mechanical work ----

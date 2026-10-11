@@ -129,7 +129,7 @@ final class ThermalCellOperations {
 		};
 	}
 
-	ThermalDomainState.ReactionPlan requireGranularReaction(
+	PhaseCellAssignment requireGranularReaction(
 			int cell, List<GranularEnergyState.ReactionMarker> markerReplacements,
 			GranularEnergyState.GranularReactionEdit granularEdit, ThermalCarrierContext markers
 	) {
@@ -167,6 +167,11 @@ final class ThermalCellOperations {
 			} else granular.addGranularPortion(finalInventory, markers.activeParcelMaterial(active),
 					markers.activeParcelMass(active), markers.solidComposition(markers.activeParcelComposition(active)));
 		}
+		if (granularEdit.kind() == GranularEnergyState.GranularReactionKind.ADD_ACTIVE) {
+			granular.addGranularPortion(finalInventory, granularEdit.materialHandle(), granularEdit.finalMass(),
+					granularEdit.finalComposition());
+			granular.column().requireAddActive(0.0);
+		}
 		for (GranularEnergyColumn.DepositKey key : markers.depositKeys(cell)) {
 			if (key.equals(granularEdit.depositKey())) {
 				matchedGranular = true;
@@ -176,21 +181,7 @@ final class ThermalCellOperations {
 					markers.solidComposition(key.compositionHandle()));
 		}
 		if (!matchedGranular) throw new IllegalArgumentException("Thermal reaction names a missing granular carrier");
-		if (granularEdit.kind() == GranularEnergyState.GranularReactionKind.ADD_ACTIVE) {
-			granular.addGranularPortion(finalInventory, granularEdit.materialHandle(), granularEdit.finalMass(),
-					granularEdit.finalComposition());
-			granular.column().requireAddActive(0.0);
-		}
-		ThermalStateFunction.State state = stateFunction.stateForInventory(finalInventory, cellEnergy);
-		return new ThermalDomainState.ReactionPlan(
-				cell, cellEnergy, exactEnergy(markers.markerCount()), state.temperatureK());
-	}
-
-	void commitGranularReaction(ThermalDomainState.ReactionPlan plan, ThermalCarrierContext markers) {
-		if (plan == null) throw new IllegalArgumentException("Thermal granular reaction plan is missing");
-		cellGrid.rebuildWithCellEnergy(carrierAccess(markers), plan.cell(), plan.cellEnergy());
-		cellGrid.setCellInternalEnergy(plan.cell(), plan.cellEnergy());
-		audit.update(ledger -> ledger.withRoundoff(exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore())));
+		return prepareRawCellEnergy(cell, finalInventory, cellEnergy);
 	}
 
 	void requirePendingPhaseCells(SignedDyadic[] pendingCellVolume, ThermalCarrierContext markers) {
@@ -347,6 +338,11 @@ final class ThermalCellOperations {
 		for (var solid : current.unchangedSolids()) if (!replaceCoherent
 				|| registry.material(solid.materialHandle()).carrierKind() == ThermalMaterialDefinition.CarrierKind.GRANULAR) portions.add(solid);
 		SignedDyadic requested = current.cellEnergy().add(SignedDyadic.of(gasEnergyBefore)).subtract(SignedDyadic.of(gasEnergyAfter));
+		return prepareRawCellEnergy(current.cell(), portions, requested);
+	}
+
+	private PhaseCellAssignment prepareRawCellEnergy(int cell,
+			List<ThermalStateFunction.InventoryPortion> portions, SignedDyadic requested) {
 		if (portions.isEmpty() && !requested.equals(SignedDyadic.ZERO)) throw new ThermalDomainState.EmptyPhaseCandidateEnergyException();
 		double requestedTemperature = portions.isEmpty() ? Double.NaN : stateFunction.stateForInventory(portions, requested).temperatureK();
 		ThermalMaterialDefinition[] materials = new ThermalMaterialDefinition[portions.size()];
@@ -374,7 +370,7 @@ final class ThermalCellOperations {
 			throw new ThermalCellEnergyAssignment.UnavailableException("Thermal phase roundoff ledger is not representable",
 					new IllegalArgumentException(unavailable));
 		}
-		return new PhaseCellAssignment(current.cell(), raw, before, after);
+		return new PhaseCellAssignment(cell, raw, before, after);
 	}
 
 	private record CaloricOwner(ThermalMaterialDefinition material, double mass, double base) { }

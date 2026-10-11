@@ -18,6 +18,7 @@ public final class GranularReactionCandidateValidation {
 		phaseTransferPreservesMomentum();
 		precipitationPreservesAvailableMassMoment();
 		precipitationUsesCompleteThermalInventory();
+		precipitationPreflightsRawThermalAssignment();
 		precipitationMergePreservesMassMoment();
 		precipitationMergeRetainsRotationalMotion();
 		phaseTransferFitsLiquidAndSolidKernel();
@@ -55,6 +56,69 @@ public final class GranularReactionCandidateValidation {
 			var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 			require(restored.particles.mass(0) == originalMass && restored.chemicalParcels.record(0).equals(original),
 					"deferred mass transfer preserves a valid, restorable inventory");
+		}
+	}
+
+	private static void precipitationPreflightsRawThermalAssignment() {
+		for (boolean unavailable : new boolean[]{true, false}) {
+			var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+			var granular = BuiltinGranularDefinitions.createRegistry();
+			var domain = new FluidDomain(3, 3, 3,
+					new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
+			domain.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 3, .375,
+					cc.ecisr.mmm.units.SignedDyadic.sum(new double[]{.8, .8, .8}).toDouble(), liquids.materials(),
+					new float[]{.75F, .75F, .75F, .125F, .75F, .75F, .75F, .125F, .75F, .75F, .75F, .125F},
+					new float[9], new byte[27], new double[]{.8, .8, .8}, new int[]{0, 1, 2}));
+			liquids = domain.materialRegistry();
+			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+			domain.setPrecipitationEnabled(true);
+			domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
+					BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), false);
+			var base = ThermochemistryValidationScenarios.reactiveGranularThermalRegistry(liquids, granular);
+			var materials = new java.util.ArrayList<cc.ecisr.mmm.thermal.ThermalMaterialDefinition>();
+			for (var material : base.materials()) {
+				double reference = 0, cv = 1;
+				if (material.carrierKind() == cc.ecisr.mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID) {
+					if (unavailable) reference = material.carrierId().equals("mmm:water") ? 1280
+							: material.carrierId().equals("mmm:oil") ? 1E19 : -1E19;
+					cv = material.carrierId().equals("mmm:water") ? 1 : 10;
+				} else if (unavailable && material.carrierId().equals(BuiltinGranularDefinitions.PRECIPITATE))
+					reference = 257 / .084488832;
+				materials.add(new cc.ecisr.mmm.thermal.ThermalMaterialDefinition(material.id(), material.carrierKind(),
+						material.carrierId(), 300, reference, 0, List.of(
+						new cc.ecisr.mmm.thermal.ThermalMaterialDefinition.CaloricSegment(150, 800, cv))));
+			}
+			var offsets = base.speciesOffsets().stream().map(offset -> new cc.ecisr.mmm.thermal.ThermalSpeciesOffset(
+					offset.id(), offset.speciesId(), offset.hostThermalMaterialId(), ExactRational.ZERO)).toList();
+			domain.bindThermal(new cc.ecisr.mmm.thermal.ThermalRegistry(materials, offsets, List.of(),
+					base.chemicalRegistryFingerprint(), base.granularRegistryFingerprint()), liquids, 300);
+			FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			var energy = domain.exactInternalEnergy();
+			var audit = domain.thermalAudit();
+			var original = domain.chemicalParcels.record(0);
+			var revision = domain.thermalState.thermalRevision();
+			var stats = domain.stepThermalAxis(false, 0);
+			if (unavailable) {
+				require(stats.granularPhase().precipitations() == 0 && domain.granularState.parcels.count() == 0
+						&& domain.granularState.compositions.liveCount() == 0 && domain.particles.mass(0) == .8
+						&& domain.particles.volume(0) == .125F && domain.chemicalParcels.record(0).equals(original)
+						&& domain.exactInternalEnergy().equals(energy) && domain.thermalAudit().equals(audit)
+						&& domain.thermalState.thermalRevision().liquid() == revision.liquid()
+						&& domain.thermalState.thermalRevision().granular() == revision.granular()
+						&& Arrays.equals(domain.chemicalParcels.dirtyCells(), new int[]{13}),
+						"unrepresentable raw LTE assignment must defer before species, solid handles or mass are written");
+			} else require(stats.granularPhase().precipitations() == 1 && domain.granularState.parcels.count() == 1,
+					"representable raw thermal assignment must preserve the normal precipitation path");
+			require(domain.exactInternalEnergy().subtract(energy).equals(
+					domain.thermalAudit().roundoffResidual().subtract(audit.roundoffResidual()))
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"reaction raw-energy assignment must publish its prepared roundoff exactly");
+			var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
+					&& restored.thermalAudit().equals(domain.thermalAudit())
+					&& restored.chemicalParcels.record(0).equals(domain.chemicalParcels.record(0)),
+					"reaction thermal preflight preserves a valid capture/restore handoff");
 		}
 	}
 

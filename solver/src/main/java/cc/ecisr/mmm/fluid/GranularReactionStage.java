@@ -283,6 +283,7 @@ final class GranularReactionStage {
 							material, merge.parcel().mass(),
 							merge.composition().stableAmounts(chemistry.registry())));
 			if (thermal != null && thermalPlan == null) return false;
+			if (thermalPlan != null) thermal.requireGranularReactionCurrent(thermalPlan);
 			chemistry.commitPlannedReplacements(markers, mixtures);
 			applyMarkerUpdates(plan, momentum);
 			granular.compositions.overwrite(merge.compositionHandle(), merge.composition());
@@ -301,6 +302,7 @@ final class GranularReactionStage {
 						GranularEnergyState.GranularReactionKind.ADD_ACTIVE, -1, null, material, plan.signedSolidMass(),
 						plan.transferredComposition().stableAmounts(chemistry.registry())));
 		if (thermal != null && thermalPlan == null) return false;
+		if (thermalPlan != null) thermal.requireGranularReactionCurrent(thermalPlan);
 		int composition = granular.compositions.create(plan.transferredComposition());
 		GranularParcelStore.Parcel parcel;
 		try {
@@ -458,6 +460,7 @@ final class GranularReactionStage {
 		if (thermal != null) {
 			if (solid.deposit()) thermal.previewDepositTake(thermalDepositKey, removedSvq, solid.solidSvq());
 			else thermal.previewActiveTake(solid.index(), removedSvq, solid.solidSvq());
+			thermal.requireGranularReactionCurrent(thermalPlan);
 		}
 		chemistry.commitPlannedReplacements(markers, mixtures);
 		applyMarkerUpdates(plan, momentum);
@@ -504,7 +507,9 @@ final class GranularReactionStage {
 			List<GranularEnergyState.ReactionMarker> replacements, GranularEnergyState.GranularReactionEdit edit) {
 		try {
 			return access.thermalState().requireGranularReaction(cell, replacements, edit, state.thermalMarkers());
-		} catch (ThermalStateFunction.EnergyOutsideValidityException unavailable) {
+		} catch (ThermalStateFunction.EnergyOutsideValidityException
+				| ThermalStateFunction.EnergyRepresentationException
+				| ThermalDomainState.PhaseCellEnergyUnavailableException unavailable) {
 			return null;
 		}
 	}
