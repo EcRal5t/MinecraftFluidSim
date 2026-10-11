@@ -24,6 +24,35 @@ public final class ThermalOwnerStoreValidation {
 		granularColumnTransactionsConserveEnergy();
 		liquidTemperatureTracksMutableInventory();
 		referenceTermsKeepCanonicalRationalRounding();
+		referenceEnergyUsesCanonicalSpeciesOrder();
+	}
+
+	private static void referenceEnergyUsesCanonicalSpeciesOrder() {
+		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var material = new ThermalMaterialDefinition("test:ordered", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:liquid", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 4)));
+		var offsets = new java.util.ArrayList<ThermalSpeciesOffset>();
+		String[] ids = new String[3];
+		long[] energies = {10_000_000_000_000_000L, -10_000_000_000_000_000L, 1L};
+		for (int i = 0; i < ids.length; i++) {
+			ids[i] = chemistry.species().get(i).id();
+			offsets.add(new ThermalSpeciesOffset("test:offset/" + i, ids[i], material.id(), ExactRational.of(energies[i])));
+		}
+		var function = new ThermalStateFunction(new ThermalRegistry(List.of(material), offsets, List.of(),
+				chemistry.fingerprint(), ""));
+		var canonical = new java.util.TreeMap<String, Long>();
+		for (String id : ids) canonical.put(id, ChemicalLimits.QUANTA_PER_AU);
+		var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry, canonical, 0);
+		long expected = Double.doubleToRawLongBits(function.baseEnergy(0, 1, mixture, chemistry));
+		for (int[] order : new int[][]{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}) {
+			var map = new java.util.LinkedHashMap<String, Long>();
+			for (int i : order) map.put(ids[i], ChemicalLimits.QUANTA_PER_AU);
+			require(Double.doubleToRawLongBits(function.baseEnergy(0, 1, map)) == expected,
+					"Reference energy changed with map iteration order or chemical representation");
+			require(Double.doubleToRawLongBits(function.internalEnergyAtTemperature(0, 1, map, 320))
+					== Double.doubleToRawLongBits(function.internalEnergyAtTemperature(0, 1, mixture, chemistry, 320)),
+					"Caloric state depends on species map iteration order");
+		}
 	}
 
 	private static void referenceTermsKeepCanonicalRationalRounding() {

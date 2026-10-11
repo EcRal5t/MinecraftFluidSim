@@ -152,16 +152,18 @@ public final class ThermalStateFunction {
 		}
 		ThermalMaterialDefinition material = registry.material(materialHandle);
 		double total = massMu * material.referenceSpecificEnergyEuPerMu();
-		if (speciesQuanta != null) for (Map.Entry<String, Long> entry : speciesQuanta.entrySet()) {
-			String species = entry.getKey();
-			Long quanta = entry.getValue();
-			if (species == null || quanta == null || quanta < 0L) {
-				throw new IllegalArgumentException("Thermal species inventory is invalid");
+		if (speciesQuanta != null && !speciesQuanta.isEmpty()) {
+			for (Map.Entry<String, Long> entry : speciesQuanta.entrySet()) {
+				if (entry.getKey() == null || entry.getValue() == null || entry.getValue() < 0L) {
+					throw new IllegalArgumentException("Thermal species inventory is invalid");
+				}
 			}
-			if (quanta == 0L) continue;
-			ThermalSpeciesOffset offset = registry.speciesOffset(materialHandle, species);
-			double contribution = referenceEnergy(offset, quanta);
-			total += contribution;
+			for (Map.Entry<String, Long> entry : new java.util.TreeMap<>(speciesQuanta).entrySet()) {
+				long quanta = entry.getValue();
+				if (quanta == 0L) continue;
+				ThermalSpeciesOffset offset = registry.speciesOffset(materialHandle, entry.getKey());
+				total += referenceEnergy(offset, quanta);
+			}
 		}
 		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal base energy is not finite");
 		return total;
