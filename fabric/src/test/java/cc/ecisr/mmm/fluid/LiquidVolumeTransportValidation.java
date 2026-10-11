@@ -61,9 +61,14 @@ public final class LiquidVolumeTransportValidation {
 		if (domain.granularCollision.previewPosition(0, parcel).x() != parcel.x())
 			throw new AssertionError("Sub-ULP fixture moved its stored float endpoint");
 		var budget = GranularQuantizationError.budget(domain, .001F);
-		if (!budget[domain.cellIndex(1, 1, 1)].equals(SignedDyadic.of(1, -24))
-				|| !budget[domain.cellIndex(2, 1, 1)].equals(SignedDyadic.ZERO))
-			throw new AssertionError("Lost sub-ULP receding motion did not retain its exact positive capacity error");
+		// N=2^18 SVQ, h=.5, v=2^-20: normalized kernel error in cell volume is dt*2^-25.
+		var time = SignedDyadic.of(.001F);
+		var expected = new SignedDyadic(time.significand(), time.exponent() - 25);
+		SignedDyadic total = SignedDyadic.ZERO;
+		for (var error : budget) total = total.add(error);
+		if (!budget[domain.cellIndex(1, 1, 1)].equals(expected)
+				|| !budget[domain.cellIndex(2, 1, 1)].equals(expected.negate()) || !total.equals(SignedDyadic.ZERO))
+			throw new AssertionError("Lost sub-ULP motion did not retain its exact signed, conservative kernel error");
 	}
 
 	private static void representationRepairReusesOriginalDonorSupply() {
@@ -159,7 +164,7 @@ public final class LiquidVolumeTransportValidation {
 		domain.granularCollision.preview(domain.granularState.parcels, registry, .0015F);
 		domain.granularNextCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits, domain.granularCollision::previewPosition);
 		int source = domain.cellIndex(127, 1, 1);
-		if (!GranularQuantizationError.budget(domain, .0015F)[source].equals(SignedDyadic.of(-1, -24)))
+		if (GranularQuantizationError.budget(domain, .0015F)[source].compareTo(SignedDyadic.of(-1, -24)) > 0)
 			throw new AssertionError("Negative kernel residual was clipped before face-error cancellation");
 		var flux = new ConservativeLiquidFlux(130, 3, 3); flux.geometry(new LiquidFluxGeometry(domain));
 		try {
@@ -173,6 +178,30 @@ public final class LiquidVolumeTransportValidation {
 		} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
 	}
 
+	private static void jointErrorRoundsOnlyOnce() {
+		SignedDyadic unit = SignedDyadic.of(1, -24);
+		for (int bits : new int[] {4, 8, 16, 24, 40, 80}) {
+			SignedDyadic epsilon = SignedDyadic.of(1, -24 - bits);
+			SignedDyadic kernel = unit.subtract(epsilon), face = epsilon.negate();
+			SignedDyadic oldBudget = unit.add(face), actualExcess = unit;
+			SignedDyadic budget = ConservativeLiquidFlux.representationBudget(kernel, face);
+			SignedDyadic completeError = kernel.add(face), envelope = budget.subtract(completeError);
+			if (oldBudget.compareTo(actualExcess) >= 0 || !budget.equals(actualExcess)
+					|| envelope.signum() < 0 || envelope.compareTo(unit) >= 0)
+				throw new AssertionError("An arbitrarily small incoming floor loss rejected an integer joint capacity correction");
+		}
+		for (int kernelUnits = -40; kernelUnits <= 40; kernelUnits++) for (int faceUnits : new int[] {-7, -1, 0, 1, 7}) {
+			SignedDyadic kernel = SignedDyadic.of(kernelUnits, -28), face = SignedDyadic.of(faceUnits, -28);
+			SignedDyadic error = kernel.add(face), budget = ConservativeLiquidFlux.representationBudget(kernel, face);
+			if (error.signum() <= 0) {
+				if (!budget.equals(SignedDyadic.ZERO)) throw new AssertionError("A non-positive joint error authorized representation motion");
+			} else if (kernelUnits == 0) {
+				if (!budget.equals(face)) throw new AssertionError("Pure liquid floor error gained an SVQ envelope");
+			} else if (budget.compareTo(error) < 0 || budget.subtract(error).compareTo(unit) >= 0 || !budget.fitsLongUnits(-24))
+				throw new AssertionError("Joint representation envelope exceeds one SVQ or misses its complete error");
+		}
+	}
+
 	public static void main(String[] args) {
 		uniformDensityMassAllocation();
 		if (args.length == 1 && args[0].equals("mass")) {
@@ -182,6 +211,7 @@ public final class LiquidVolumeTransportValidation {
 		representationRepairReusesOriginalDonorSupply();
 		liquidFaceFloorHasExactBudget();
 		negativeKernelErrorCancelsFaceFloor();
+		jointErrorRoundsOnlyOnce();
 		if (args.length == 1 && args[0].equals("quantization")) {
 			System.out.println("Liquid/granular quantization handoff validation passed"); return;
 		}

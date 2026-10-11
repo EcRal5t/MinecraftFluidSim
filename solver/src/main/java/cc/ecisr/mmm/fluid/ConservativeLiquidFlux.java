@@ -341,18 +341,27 @@ final class ConservativeLiquidFlux {
 	}
 
 	private void initializeQuantizationBudget() {
-		quantizationBudget = geometry == null ? null : geometry.quantizationBudget(dtOverH);
-		if (quantizationBudget == null) {
-			quantizationBudget = new SignedDyadic[cellCount]; Arrays.fill(quantizationBudget, SignedDyadic.ZERO);
-		}
+		SignedDyadic[] kernelError = geometry == null ? null : geometry.quantizationBudget(dtOverH);
+		quantizationBudget = new SignedDyadic[cellCount]; Arrays.fill(quantizationBudget, SignedDyadic.ZERO);
 		// Keep both signed errors until their sum: incoming floor loss can cancel solid or outgoing error.
 		for (int face = 0; face < flux.length; face++) if (faceFloorLoss[face] != null) {
 			int donor = donor(face), receiver = receiver(face);
 			quantizationBudget[donor] = quantizationBudget[donor].add(faceFloorLoss[face]);
 			quantizationBudget[receiver] = quantizationBudget[receiver].subtract(faceFloorLoss[face]);
 		}
-		for (int cell = 0; cell < cellCount; cell++) if (quantizationBudget[cell].signum() < 0)
-			quantizationBudget[cell] = SignedDyadic.ZERO;
+		for (int cell = 0; cell < cellCount; cell++) quantizationBudget[cell] = representationBudget(
+				kernelError == null ? SignedDyadic.ZERO : kernelError[cell], quantizationBudget[cell]);
+	}
+
+	/** Round the combined error once, on the solid-capacity lattice, with less than one SVQ of envelope. */
+	static SignedDyadic representationBudget(SignedDyadic kernelError, SignedDyadic faceError) {
+		SignedDyadic error = kernelError.add(faceError);
+		if (error.signum() <= 0) return SignedDyadic.ZERO;
+		if (kernelError.signum() == 0) return error;
+		int exponent = error.exponent() + 24;
+		var ceiling = exponent >= 0 ? error.significand().shiftLeft(exponent)
+				: error.significand().negate().shiftRight(-exponent).negate();
+		return new SignedDyadic(ceiling, -24);
 	}
 
 	private SignedDyadic representationAllowance(int current, int face) {

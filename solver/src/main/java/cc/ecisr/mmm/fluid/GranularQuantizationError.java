@@ -8,7 +8,7 @@ import java.util.Arrays;
 final class GranularQuantizationError {
 	private GranularQuantizationError() { }
 
-	/** Signed kernel error envelope; liquid face rounding is combined before taking its positive part. */
+	/** Exact signed kernel error in cell-volume units; the joint representation budget rounds once. */
 	static SignedDyadic[] budget(FluidDomain domain, float dt) {
 		SignedDyadic[] result = new SignedDyadic[domain.cellCount];
 		Arrays.fill(result, SignedDyadic.ZERO);
@@ -29,9 +29,7 @@ final class GranularQuantizationError {
 			long actual = domain.granularNextCoupling.solidSvq(cell) - domain.granularCoupling.solidSvq(cell);
 			totalDelta = Math.addExact(totalDelta, actual); referenceTotal = referenceTotal.add(delta[cell]);
 			SignedDyadic residual = SignedDyadic.of(actual, 0).subtract(delta[cell]);
-			BigInteger ceiling = residual.exponent() >= 0 ? residual.significand().shiftLeft(residual.exponent())
-					: residual.significand().negate().shiftRight(-residual.exponent()).negate();
-			result[cell] = SignedDyadic.of(ceiling.longValueExact(), -24);
+			result[cell] = new SignedDyadic(residual.significand(), residual.exponent() - 24);
 		}
 		if (totalDelta != 0 || !referenceTotal.equals(SignedDyadic.ZERO)) {
 			throw new IllegalStateException("Granular motion changed total skeleton occupancy");
