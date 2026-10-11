@@ -125,8 +125,10 @@ public final class ThermalDomainState {
 		if (!supportsGas && airNetwork != null && airNetwork.nodeCount() > 0) {
 			throw new IllegalArgumentException("Sealed gas inventory requires complete gas thermal definitions");
 		}
-		this.gasState = new GasEnergyStore(supportsGas ? new GasThermalModel(registry, airNetwork.registry()) : null,
-				initialTemperatureK, auditState, airNetwork);
+		GasThermalModel gasModel = supportsGas ? new GasThermalModel(registry, airNetwork.registry()) : null;
+		this.gasState = restoredLiquidEnergy == null
+				? new GasEnergyStore(gasModel, initialTemperatureK, auditState, airNetwork)
+				: GasEnergyStore.restoreTarget(gasModel, initialTemperatureK, auditState, airNetwork);
 		this.cellOperations = new ThermalCellOperations(
 				registry, stateFunction, unitScale, materialByFluidHandle, materialByGranularHandle,
 				cellGrid, auditState, liquidEnergy, granularState, gasState);

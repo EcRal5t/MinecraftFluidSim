@@ -125,6 +125,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void gasStateCompressionAndCarrierEnergy() {
+		gasInitializationAndRestoreValidateActualInventory();
 		gasTransferBoundsScaleBeforeOverflow();
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		ThermalMaterialDefinition air = new ThermalMaterialDefinition("mmm:thermal/air",
@@ -266,6 +267,56 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		require(Math.abs(partitioned - initial) <= Math.ulp(initial) * 4.0
 				&& model.enthalpy(children.getFirst(), GasRegistry.STANDARD_TEMPERATURE_K) > energies[0],
 				"gas topology/orifice carrier energy did not close");
+	}
+
+	static void gasInitializationAndRestoreValidateActualInventory() {
+		var gas = new GasRegistry(List.of(new cc.ecisr.mmm.fluid.air.GasComponentDefinition(
+				"test:restore_gas", 1, 1, List.of(), List.of())),
+				List.of(new GasRegistry.AmbientFraction("test:restore_gas", ExactRational.ONE)));
+		var liquids = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2)));
+		var water = new ThermalMaterialDefinition("test:thermal/restore_water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"mmm:water", 500, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 600, 4180)));
+		var material = new ThermalMaterialDefinition("test:thermal/restore_gas", ThermalMaterialDefinition.CarrierKind.GAS,
+				"test:restore_gas", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 400, 750),
+				new ThermalMaterialDefinition.CaloricSegment(400, 600, 1e308)));
+		var registry = new ThermalRegistry(List.of(water, material));
+		var config = new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, .8F);
+		var source = new FluidDomain(2, 2, 2, config, 256);
+		source.sealDomainBoundary(); source.bindGasRegistry(gas); source.bindThermal(registry, liquids, 300);
+		var snapshot = source.captureAuthoritativeState(); var inventory = snapshot.gas().nodes().getFirst().inventory();
+		var model = new GasThermalModel(registry, gas);
+		var state = model.hydrodynamicState(inventory, 1, snapshot.thermal().copyGasNodeEnergy()[0]);
+		require(inventory.standardVolumeNanos() == 1_000_000_000L && inventory.totalMass() == 1
+				&& state.temperatureK() == 300 && state.heatCapacityEuPerK() == 750 && state.isentropicExponent() > 1
+				&& snapshot.thermal().copyGasNodeEnergy()[0] == 0 && snapshot.thermal().audit().expectedInventory().equals(SignedDyadic.ZERO),
+				"gas restore fixture does not have a valid captured caloric and hydrodynamic state");
+		boolean disposableOverflow = false;
+		try { model.internalEnergyAtTemperature(inventory, water.referenceTemperatureK()); }
+		catch (IllegalArgumentException expected) { disposableOverflow = true; }
+		require(disposableOverflow, "gas restore fixture does not expose disposable default-temperature energy overflow");
+		var restored = FluidDomain.restoreAuthoritativeState(snapshot);
+		var recaptured = restored.captureAuthoritativeState();
+		require(restored.gasNodeTemperatureK(1) == 300 && restored.gasNodeGaugePressurePa(1) == source.gasNodeGaugePressurePa(1)
+				&& recaptured.gas().nodes().getFirst().inventory().equals(inventory)
+				&& Arrays.equals(recaptured.thermal().copyGasNodeEnergy(), snapshot.thermal().copyGasNodeEnergy())
+				&& recaptured.thermal().audit().equals(snapshot.thermal().audit()),
+				"gas restore modeled disposable default-temperature energy or changed authoritative gas truth");
+		var rounded = new ThermalMaterialDefinition("test:thermal/rounded_initial_gas", ThermalMaterialDefinition.CarrierKind.GAS,
+				"test:restore_gas", 350, 1e18, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 600, 1)));
+		var roundedRegistry = new ThermalRegistry(List.of(water, rounded)); var roundedModel = new GasThermalModel(roundedRegistry, gas);
+		double invalidEnergy = roundedModel.internalEnergyAtTemperature(inventory, 1);
+		require(invalidEnergy - 1e18 == -384, "gas initialization fixture does not expose a rounded negative-temperature state");
+		var network = new AirNetwork(gas); network.addNode(1, 0); network.commitPhaseSource(1, inventory);
+		var audit = new cc.ecisr.mmm.thermal.ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO));
+		var before = audit.ledger(); boolean rejected = false;
+		try { new GasEnergyStore(roundedModel, 1, audit, network); }
+		catch (ThermalStateFunction.EnergyOutsideValidityException expected) { rejected = true; }
+		require(rejected && audit.ledger().equals(before) && network.inventory(1).equals(inventory),
+				"gas constructor admitted an invalid rounded U or changed its source before rejecting it");
+		var invalid = new FluidDomain(2, 2, 2, config, 256); invalid.sealDomainBoundary(); invalid.bindGasRegistry(gas); rejected = false;
+		try { invalid.bindThermal(roundedRegistry, liquids, 1); }
+		catch (ThermalStateFunction.EnergyOutsideValidityException expected) { rejected = true; }
+		require(rejected && invalid.thermalState == null, "public gas binding published an invalid caloric owner");
 	}
 
 	static void gasTransferBoundsScaleBeforeOverflow() {

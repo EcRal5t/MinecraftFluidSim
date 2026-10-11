@@ -27,14 +27,29 @@ public final class GasEnergyStore {
 	public GasEnergyStore(
 			GasThermalModel gasModel, double insertionTemperatureK, ThermalAuditState audit, AirNetwork airNetwork
 	) {
+		this(gasModel, insertionTemperatureK, audit, airNetwork, true);
+	}
+
+	/** Allocates restored ordinals; their authoritative energies are validated before adoption. */
+	static GasEnergyStore restoreTarget(
+			GasThermalModel gasModel, double insertionTemperatureK, ThermalAuditState audit, AirNetwork airNetwork
+	) {
+		return new GasEnergyStore(gasModel, insertionTemperatureK, audit, airNetwork, false);
+	}
+
+	private GasEnergyStore(
+			GasThermalModel gasModel, double insertionTemperatureK, ThermalAuditState audit, AirNetwork airNetwork,
+			boolean initializeEnergy
+	) {
 		this.gasModel = gasModel;
 		this.insertionTemperatureK = insertionTemperatureK;
 		this.audit = audit;
 		if (gasModel != null) {
 			this.nodeEnergy = new double[airNetwork.nodeCount()];
-			for (int node = 1; node <= airNetwork.nodeCount(); node++) {
+			for (int node = 1; initializeEnergy && node <= airNetwork.nodeCount(); node++) {
 				nodeEnergy[node - 1] = gasModel.internalEnergyAtTemperature(
 						airNetwork.inventory(node), insertionTemperatureK);
+				gasModel.absolutePressure(airNetwork.inventory(node), airNetwork.availableVolume(node), nodeEnergy[node - 1]);
 			}
 		} else {
 			this.nodeEnergy = new double[0];
