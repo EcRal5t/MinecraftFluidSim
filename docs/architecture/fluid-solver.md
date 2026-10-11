@@ -288,7 +288,7 @@ u[n+1] = u* - dt * (1/rho) * grad(p[n+1])
 
 液液张力使用 phase 无序对定义，以 balanced-force CSF 接入同一 pressure 路径。每对使用两相平滑分数的 `alpha_A*grad(alpha_B) - alpha_B*grad(alpha_A)` 构造法向、曲率与面力；二相占满液体时退化为 `grad(alpha_B)`，第三相中的 pair 份额减小时作用连续减小，任一相缺失时作用归零。液气曲率法向始终只来自液气几何；润湿由 Young 表面能 `sigma_sl - sigma_sg = -sigma cos(theta)` 的切向离散梯度产生，固壁面积取自同一 `2×2×2` cut-cell microgeometry（含域边界），不旋转曲率法向，也不使用浅水吸墙、墙角偏置或材料 ID 特判。
 
-当前 `gpu-probe-kernel` 只覆盖单一常密度不可压 carrier 的 pressure 几何、P2G/G2P、散度一致平流、碰撞和守恒 reseed。它尚未承载材料质量列、变密度、液气/液液表面张力与 Young 壁能、gas boundary、热化学或完整 immutable candidate，因此这些 CPU 能力不能被记作 GPU 已实现；probe 继续不具备生产资格。
+当前 `gpu-probe-kernel` 覆盖单一常密度不可压 carrier 的 pressure 几何、P2G/G2P、散度一致平流、碰撞和总库存守恒 reseed。粒子中心平流尚未通过共享面库存输运与逐格容量约束交接，局部库存可能超过可用格体积。CPU 可读 checkpoint 忠实保存粒子位置、数量和碰撞标记；恢复出的状态仍须满足 CPU 容量与完整步校验，当前 probe 尚不能保证任意计算代次可继续 CPU 计算。它尚未承载材料质量列、变密度、液气/液液表面张力与 Young 壁能、gas boundary、热化学或完整 immutable candidate；probe 继续不具备生产资格。
 
 不可互溶相共享单一宏观速度场，求解静水压力、密度分层与界面张力。切向滑移、乳化与液滴破碎不在当前求解范围。
 
