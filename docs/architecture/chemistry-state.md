@@ -65,7 +65,7 @@ marker 保存 mixture handle 与 indicator bit；handle 指向 `ChemicalMixtureP
 particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 ```
 
-`ChemicalSpecies.massKilogramsPerAu` 与 parcel residual 都使用 kg；`SolverUnitScale` 是它们与 liquid marker solver mass 之间的唯一换算。reaction 只改变 species 列；residual、marker 体积、速度、机械材料和 phase 不因反应被重算。split/merge/transfer 按同一物质权重搬运 residual，raw-bit checkpoint 后仍须闭合允许的 ULP 预算。
+`ChemicalSpecies.massKilogramsPerAu` 与 parcel residual 都使用 kg；`SolverUnitScale` 是它们与 liquid marker solver mass 之间的唯一换算。reaction 改变 species 列；residual、marker 体积、机械材料和 phase 保持原值。逐载体质量随实际 species 分配改变时，速度通过同格质量转移的动量计划更新。split/merge/transfer 按同一物质权重搬运 residual，raw-bit checkpoint 后仍须闭合允许的 ULP 预算。
 
 ## 反应模型
 
@@ -78,7 +78,7 @@ particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 
 反应调度保存 dirty 集与轮转起点，backend handoff 完整传递两者。每步预算按完整 cell 分配；额度用尽后保留余下任务，下一步从该 cell 继续。region HEAD 冷恢复从 committed marker 位置标记所有占用格，后续按精确 dirty 集增量求值。
 
-反应后的格总库存按各 marker 的 exact species mass 转成 binary64 权重，以最大余数法确定性分配；余数相同时按 marker ordinal 排序。分配计划验证每个载体的物种槽位、正质量、区域总量与候选温度，再统一提交。载体数、容量或可用内能限制当前候选时，原库存与质量逐位保留，所属 cell 保持 dirty，其他可提交的 cell 继续推进。表示条件改变后沿同一入口重试。
+反应后的格总库存按各 marker 的 exact species mass 转成 binary64 权重，以最大余数法确定性分配；余数相同时按 marker ordinal 排序。分配计划验证每个载体的物种槽位、正质量、区域总量与候选温度，再统一提交。同格、同 chemical phase 内移出的实际质量携带原速度，接收质量按输入动量与保留质量混合；动量误差受 binary32 速度舍入限制，质量混合保持动能不增。完整速度计划在提交前验证，与组成和质量一起生效。混合耗散的热结算沿用热机械收支的适用范围。载体数、容量或可用内能限制当前候选时，原库存、质量与速度逐位保留，所属 cell 保持 dirty，其他可提交的 cell 继续推进。表示条件改变后沿同一入口重试。
 
 若求值后的逐 species integer inventory 与输入逐位相同，该组只占用求值预算并清除 dirty 状态，不进入分配、热候选验证或 parcel 覆写，marker 的组成、残差、质量和 indicator 原样保留。
 

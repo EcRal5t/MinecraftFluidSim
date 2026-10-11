@@ -14,6 +14,7 @@ final class ChemicalReactionCandidateValidation {
 	private ChemicalReactionCandidateValidation() { }
 
 	static void validate() {
+		reactionMassTransfersMomentum();
 		evaluationBudgetRotates();
 		ChemicalRegistry builtin = BuiltinChemicalDefinitions.REGISTRY;
 		checkDeferred(builtin, List.of(
@@ -41,6 +42,61 @@ final class ChemicalReactionCandidateValidation {
 		region.mass[1] = region.store.record(1).massKilograms(builtin);
 		require(region.step().changedMarkers() == 1 && !region.store.hasDirtyCells(),
 				"region capacity retry commits after capacity becomes available");
+	}
+
+	private static void reactionMassTransfersMomentum() {
+		var random = new java.util.Random(0x4d415353L);
+		for (float cellSize : new float[]{0.25F, 0.5F, 1.0F}) for (int sample = 0; sample < 64; sample++) {
+			long acid = sample == 0 ? 2L : 2L + random.nextLong(10_000_000_000L);
+			long base = sample == 0 ? 2L : 2L + random.nextLong(10_000_000_000L);
+			float[][] velocity = {{10, -3, 2}, {0, 1, -4}};
+			if (sample != 0) for (float[] v : velocity) for (int axis = 0; axis < 3; axis++) {
+				v[axis] = (random.nextFloat() - 0.5F) * 2_000;
+			}
+			for (boolean reverse : new boolean[]{false, true}) {
+				var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(
+						cellSize, 1_000, 0, 0.05F, 100, 1e-5F, 0.45F, 0.002F, 0.8F), 216);
+				domain.setVolume(1, 1, 1, 0.25F);
+				domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+				domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+				require(domain.particleCount() == 2, "reaction momentum fixture requires two carriers");
+				for (int marker = 0; marker < 2; marker++) {
+					int source = reverse ? 1 - marker : marker;
+					var record = mixture(BuiltinChemicalDefinitions.REGISTRY,
+							source == 0 ? BuiltinChemicalDefinitions.H_PLUS : BuiltinChemicalDefinitions.OH_MINUS,
+							source == 0 ? acid : base, sample % 2 == 0 ? 0 : source * 0.001);
+					domain.chemicalParcels.assign(marker, record, false);
+					domain.particles.setMass(marker, domain.unitScale.solverMass(record.massKilograms(BuiltinChemicalDefinitions.REGISTRY)));
+					domain.particles.setVelocityX(marker, velocity[source][0]);
+					domain.particles.setVelocityY(marker, velocity[source][1]);
+					domain.particles.setVelocityZ(marker, velocity[source][2]);
+				}
+				domain.chemicalParcels.markDirtyCell(13);
+				double[] before = momentumEnergyAndScale(domain);
+				require(domain.runThermalReactionPhaseAxis(false, 0).chemistry().changedMarkers() == 2,
+						"momentum fixture must commit the reaction allocation");
+				double[] after = momentumEnergyAndScale(domain);
+				for (int axis = 0; axis < 3; axis++) require(Math.abs(after[axis] - before[axis])
+						<= 8 * Math.ulp((float) Math.max(before[4], after[4])),
+						"reaction mass allocation preserves momentum at cellSize " + cellSize + " sample " + sample);
+				require(after[3] <= before[3] + 8 * Math.ulp((float) before[3]),
+						"reaction mass mixing cannot increase kinetic energy");
+			}
+		}
+	}
+
+	private static double[] momentumEnergyAndScale(FluidDomain domain) {
+		double[] result = new double[5];
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			double mass = domain.unitScale.kilograms(domain.particles.mass(marker));
+			double[] v = {domain.particles.velocityX(marker), domain.particles.velocityY(marker), domain.particles.velocityZ(marker)};
+			for (int axis = 0; axis < 3; axis++) {
+				result[axis] += mass * v[axis];
+				result[3] += mass * v[axis] * v[axis] / 2;
+				result[4] += Math.abs(mass * v[axis]);
+			}
+		}
+		return result;
 	}
 
 	private static void evaluationBudgetRotates() {

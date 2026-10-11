@@ -40,13 +40,22 @@ final class ChemicalReactionStage {
 		if (chemistry == null || !chemistry.hasDirtyCells()) return new ChemicalParcelStore.ReactionStats(0, 0, 0);
 		LiquidParticleStore.DirectArrays arrays = state.particles().directArrays();
 		ThermalDomainState thermal = access.thermalState();
+		var momentum = new java.util.ArrayList<CarrierMassMomentum.Plan>();
 		var result = chemistry.reactDirtyCells(
 				state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(),
 				arrays.positionX, arrays.positionY, arrays.positionZ,
 				arrays.mass, arrays.materialHandle,
 				handle -> access.materialRegistry().material(handle).id(), state.particles().count(),
 				thermal == null ? (marker, mixture, mass) -> { }
-						: (marker, mixture, mass) -> requireThermalCandidate(thermal, marker, mixture, mass, state.thermalMarkers()));
+						: (marker, mixture, mass) -> requireThermalCandidate(thermal, marker, mixture, mass, state.thermalMarkers()),
+				(markers, masses) -> {
+					try {
+						momentum.add(CarrierMassMomentum.plan(state.particles(), markers, masses, 0, 0, 0, 0));
+					} catch (IllegalArgumentException unavailable) {
+						throw new ChemicalReactionEngine.BudgetExceededException(unavailable.getMessage());
+					}
+				});
+		for (var plan : momentum) plan.apply(state.particles());
 		if (result.changedMarkers() != 0) access.markGridDirty();
 		return result;
 	}

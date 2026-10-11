@@ -550,7 +550,18 @@ public final class ChemicalParcelStore {
 			int[] materialHandle, IntFunction<String> stableMaterialId, int particleCount,
 			ReactionValidator validator
 	) {
+		return reactDirtyCells(sizeX, sizeY, sizeZ, cellSize, x, y, z, markerMass,
+				materialHandle, stableMaterialId, particleCount, validator, (markers, masses) -> { });
+	}
+
+	public ReactionStats reactDirtyCells(
+			int sizeX, int sizeY, int sizeZ, float cellSize,
+			float[] x, float[] y, float[] z, double[] markerMass,
+			int[] materialHandle, IntFunction<String> stableMaterialId, int particleCount,
+			ReactionValidator validator, ReactionGroupValidator groupValidator
+	) {
 		if (validator == null) throw new IllegalArgumentException("Reaction validator is missing");
+		if (groupValidator == null) throw new IllegalArgumentException("Reaction group validator is missing");
 		if (!hasDirtyCells()) return new ReactionStats(0, 0, 0);
 		if (particleCount < 0 || particleCount > markerHandles.length) throw new IllegalArgumentException("Invalid marker count");
 		@SuppressWarnings("unchecked")
@@ -606,6 +617,7 @@ public final class ChemicalParcelStore {
 					}
 					for (int i = 0; i < plan.markers().length; i++) validator.validate(
 							plan.markers()[i], plan.mixtures()[i], plan.masses()[i]);
+					groupValidator.validate(plan.markers(), plan.masses());
 					plans.add(plan);
 					candidateTotal = nextTotal;
 					changed += plan.changed();
@@ -696,6 +708,11 @@ public final class ChemicalParcelStore {
 	public interface ReactionValidator {
 		/** Called for every candidate after the whole reaction plan closes and before any store mutation. */
 		void validate(int marker, ChemicalMixtureRecord mixture, double markerMass);
+	}
+	@FunctionalInterface
+	public interface ReactionGroupValidator {
+		/** Checks the complete same-cell phase allocation before any marker is modified. */
+		void validate(int[] markers, double[] markerMasses);
 	}
 	public record SplitPlan(ChemicalMixtureRecord kept, ChemicalMixtureRecord removed) {
 		public SplitPlan {
