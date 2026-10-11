@@ -67,13 +67,14 @@ public final class GasThermalModel {
 			return 0.0;
 		}
 		List<ThermalStateFunction.InventoryPortion> portions = portions(inventory);
-		double energy = 0.0;
+		SignedDyadic energy = SignedDyadic.ZERO;
 		for (ThermalStateFunction.InventoryPortion portion : portions) {
-			energy += stateFunction.internalEnergyAtTemperature(
-					portion.materialHandle(), portion.massMu(), portion.speciesQuanta(), temperatureK);
+			energy = energy.add(SignedDyadic.of(stateFunction.internalEnergyAtTemperature(
+					portion.materialHandle(), portion.massMu(), portion.speciesQuanta(), temperatureK)));
 		}
-		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Gas internal energy is not finite");
-		return energy;
+		double rounded = energy.toDouble();
+		if (!Double.isFinite(rounded)) throw new IllegalArgumentException("Gas internal energy is not finite");
+		return rounded;
 	}
 
 	public ThermalStateFunction.State state(GasInventory inventory, double internalEnergy) {

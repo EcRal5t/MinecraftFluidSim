@@ -267,6 +267,37 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		require(Math.abs(partitioned - initial) <= Math.ulp(initial) * 4.0
 				&& model.enthalpy(children.getFirst(), GasRegistry.STANDARD_TEMPERATURE_K) > energies[0],
 				"gas topology/orifice carrier energy did not close");
+		mixedGasEnergyPartitionsRetainCommonTemperature();
+	}
+
+	private static void mixedGasEnergyPartitionsRetainCommonTemperature() {
+		List<String> ids = List.of("test:partition_a", "test:partition_b", "test:partition_c");
+		GasRegistry gas = new GasRegistry(ids.stream().map(id -> new cc.ecisr.mmm.fluid.air.GasComponentDefinition(
+				id, 8, 8, List.of(), List.of())).toList(),
+				List.of(new GasRegistry.AmbientFraction(ids.getFirst(), ExactRational.ONE)));
+		for (double[] references : new double[][] {{1e18, 200, -1e18}, {1e18, -1e18, 200}, {100, 200, -100}}) {
+			java.util.ArrayList<ThermalMaterialDefinition> materials = new java.util.ArrayList<>();
+			java.util.ArrayList<GasComponentAmount> components = new java.util.ArrayList<>();
+			for (int component = 0; component < ids.size(); component++) {
+				materials.add(new ThermalMaterialDefinition("test:thermal/partition_" + component,
+						ThermalMaterialDefinition.CarrierKind.GAS, ids.get(component), 300, references[component], 0,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(1, 900, 1))));
+				components.add(new GasComponentAmount(ids.get(component), 125_000_000L, 1, List.of(), 1));
+			}
+			GasThermalModel model = new GasThermalModel(new ThermalRegistry(materials), gas);
+			GasInventory source = new GasInventory(components);
+			double sourceEnergy = model.internalEnergyAtTemperature(source, 300);
+			List<GasInventory> children = source.partition(new long[] {1, 1});
+			double[] energies = model.partitionEnergy(source, sourceEnergy, children);
+			require(sourceEnergy == 200 && model.state(source, sourceEnergy).temperatureK() == 300
+					&& Arrays.equals(energies, new double[] {100, 100})
+					&& model.state(children.get(0), energies[0]).temperatureK() == 300
+					&& model.state(children.get(1), energies[1]).temperatureK() == 300
+					&& SignedDyadic.sum(energies).equals(SignedDyadic.of(sourceEnergy)),
+					"gas component reduction changed a common-temperature exact split");
+			require(model.internalEnergyAtTemperature(source, 300) == sourceEnergy,
+					"gas partition changed its source inventory or energy");
+		}
 	}
 
 	static void gasInitializationAndRestoreValidateActualInventory() {
