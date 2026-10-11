@@ -14,6 +14,7 @@ public final class MarkerPressureValidation {
 		finiteGasStorage();
 		tinyMassPressureDiagonal();
 		largePressureDifferences();
+		pressureResponseAvoidsIntermediateOverflow();
 	}
 
 	private static Layout layout(boolean full) {
@@ -197,5 +198,21 @@ public final class MarkerPressureValidation {
 		}
 		double[] response=new double[2];c.apply(new double[]{Double.MAX_VALUE,-Double.MAX_VALUE},response);
 		if(!(Double.isFinite(response[0])&&response[0]>0&&response[1]==-response[0]))throw new AssertionError("Representable high-pressure Gram response overflowed");
+	}
+
+	private static void pressureResponseAvoidsIntermediateOverflow() {
+		var d=new FluidDomain(4,4,4,new FluidSolverConfig(.5F,1000,0,.001F,400,1e-5F,.45F,.002F,.8F),2048);
+		d.restoreMaterialParticleState(new FlipMaterialParticleState(4,4,4,.5F,1,.125,1.25e-201,
+				java.util.List.of(new FluidMaterial("mmm:water",1000,"mmm:water",0,Math.PI/2),new FluidMaterial("mmm:tiny",1e-200,"mmm:tiny",0,Math.PI/2)),
+				new float[]{.75F,.75F,.75F,.125F},new float[3],new byte[64],new double[]{1.25e-201},new int[]{1}));
+		var j=new MarkerVelocityTransfer();j.capture(d);int[][] first=new int[3][],second=new int[3][];var area=faces(j);
+		for(int a=0;a<3;a++){first[a]=new int[j.faceCount(a)];second[a]=new int[j.faceCount(a)];Arrays.fill(first[a],-1);Arrays.fill(second[a],-1);}
+		int face=d.xFaceIndex(2,1,1);first[0][face]=0;second[0][face]=1;area[0][face]=.25;
+		var c=new MarkerPressureOperator(j,2,first,second,area,new double[]{0,0});double[] response=new double[2];
+		c.apply(new double[]{2e107,0},response);
+		// The acceleration overflows, whereas C M^-1 C^T p remains finite.
+		double expected=(.0625/j.massKilograms(0))*2e107;
+		near(response[0],expected,4*Math.ulp(expected),"Representable pressure response");
+		near(response[1],-expected,4*Math.ulp(expected),"Opposite shared pressure response");
 	}
 }

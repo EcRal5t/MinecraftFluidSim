@@ -118,8 +118,12 @@ final class MarkerPressureOperator {
 		for (int row = 0; row < rowCount; row++) result[row] = storage[row] * pressure[row];
 		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < markerCount; marker++) {
 			int start = marker * 16;
-			double acceleration = pressureForce(axis, marker, pressure) * inverseMass[marker];
-			for (int slot = 0; slot < counts[axis][marker]; slot++) result[rows[axis][start + slot]] += coefficients[axis][start + slot] * acceleration;
+			double force = pressureForce(axis, marker, pressure), acceleration = force * inverseMass[marker];
+			boolean rescale = Double.isFinite(force) && (!Double.isFinite(acceleration) || acceleration == 0 && force != 0);
+			for (int slot = 0; slot < counts[axis][marker]; slot++) {
+				double coefficient = coefficients[axis][start + slot];
+				result[rows[axis][start + slot]] += rescale ? (coefficient * inverseMass[marker]) * force : coefficient * acceleration;
+			}
 		}
 	}
 
