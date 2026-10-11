@@ -278,7 +278,8 @@ final class ThermalCellOperations {
 		return phaseCandidateState(cell, phaseInventory, cellEnergy, markers).temperatureK();
 	}
 
-	ThermalDomainState.PhaseCandidateCell preparePhaseCandidateCell(int cell, ThermalCarrierContext markers) {
+	ThermalDomainState.PhaseCandidateCell preparePhaseCandidateCell(int cell, ThermalCarrierContext markers,
+			ThermalDomainState owner, ThermalDomainState.Revision revision) {
 		if (cell < 0 || cell >= cellGrid.cellCount() || markers == null) {
 			throw new IllegalArgumentException("Thermal phase candidate cell is invalid");
 		}
@@ -298,7 +299,7 @@ final class ThermalCellOperations {
 			granular.addGranularPortion(unchangedSolids, key.materialHandle(), markers.depositMass(key),
 					markers.solidComposition(key.compositionHandle()));
 		}
-		return new ThermalDomainState.PhaseCandidateCell(cell, cellEnergy, List.copyOf(unchangedSolids));
+		return new ThermalDomainState.PhaseCandidateCell(owner, revision, cell, cellEnergy, unchangedSolids);
 	}
 
 	double requirePhaseCandidateState(

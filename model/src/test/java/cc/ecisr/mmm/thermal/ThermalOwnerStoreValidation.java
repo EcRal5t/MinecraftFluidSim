@@ -37,6 +37,8 @@ public final class ThermalOwnerStoreValidation {
 
 	private static void exactAggregateEnergySurvivesCaloricHandoffs() {
 		alternateRemainderKeepsEveryOwnerPositive();
+		overflowModeledCarrierUsesConservationRemainder();
+		phaseSnapshotsKeepOriginalOwnerRevision();
 		finiteCellExchangeRetainsExactBaseline();
 		cellEnergyPreflightPreservesDerivedState();
 		for (double reference : new double[] {1e18, -1e18}) for (double smallCv : new double[] {1, 1.0001})
@@ -140,6 +142,71 @@ public final class ThermalOwnerStoreValidation {
 		require(SignedDyadic.sum(energy).equals(target) && grid.temperature(0) > ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K
 				&& grid.carriersMatchSolvedTemperature(),
 				"A failed preferred remainder prevented an alternate positive raw-owner assignment");
+	}
+
+	private static void overflowModeledCarrierUsesConservationRemainder() {
+		for (int count : new int[] {2, 4}) {
+			double cv = 1e308 / count, maximum = Double.MAX_VALUE;
+			var positive = new ThermalMaterialDefinition("test:overflow/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"test:overflow/a", 1, maximum, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2, cv)));
+			var negative = new ThermalMaterialDefinition("test:overflow/b", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"test:overflow/b", 1, -maximum, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2, cv)));
+			double[] energy = new double[count];
+			for (int item = 0; item < count; item++) energy[item] = item < count / 2 ? maximum : Math.nextUp(-maximum);
+			double[] before = energy.clone(); SignedDyadic target = SignedDyadic.sum(energy);
+			var grid = new ThermalCellGrid(1);
+			grid.rebuild(new ThermalCellGrid.CarrierAccess() {
+				public int carrierCount() { return count; } public int cell(int item) { return 0; }
+				public ThermalMaterialDefinition material(int item) { return item < count / 2 ? positive : negative; }
+				public double mass(int item) { return 1; } public double volume(int item) { return 1.0 / count; }
+				public double baseEnergy(int item) { return item < count / 2 ? maximum : -maximum; }
+				public double internalEnergy(int item) { return energy[item]; }
+				public void setInternalEnergy(int item, double value) { energy[item] = value; }
+			});
+			double temperature = grid.temperature(0);
+			if (count == 2) {
+				grid.setCellInternalEnergy(0, target);
+				require(SignedDyadic.sum(energy).equals(target) && java.util.Arrays.equals(energy, before)
+						&& grid.temperature(0) == temperature && Double.isFinite(grid.heatCapacity(0)),
+						"A single unrepresentable modeled owner prevented a valid conservation remainder");
+			} else {
+				try { grid.setCellInternalEnergy(0, target); throw new AssertionError("Two unrepresentable modeled owners accepted"); }
+				catch (IllegalArgumentException expected) {
+					require(java.util.Arrays.equals(energy, before) && grid.temperature(0) == temperature,
+							"A multiple-overflow assignment wrote an owner or its derived temperature");
+				}
+			}
+		}
+	}
+
+	private static void phaseSnapshotsKeepOriginalOwnerRevision() {
+		var first = new ThermalMaterialDefinition("test:snapshot/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:snapshot/a", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(100, 500, 1)));
+		var second = new ThermalMaterialDefinition("test:snapshot/b", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:snapshot/b", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(100, 500, 1)));
+		var registry = new ThermalRegistry(List.of(first, second)); var context = thermalHandoffContext();
+		var state = new ThermalDomainState(registry, new int[] {0, 1}, new int[0], 300, 2, 1, 1, 1, .5F, context, null, 1);
+		var foreign = new ThermalDomainState(registry, new int[] {0, 1}, new int[0], 300, 2, 1, 1, 1, .5F, context, null, 1);
+		state.preparePhaseScan(context); foreign.preparePhaseScan(context);
+		var stale = state.preparePhaseCandidateCell(0, context); var other = foreign.preparePhaseCandidateCell(0, context);
+		state.setTemperatureInCell(0, 301, context);
+		SignedDyadic energy = state.exactEnergy(2); var audit = state.auditLedger(); var revision = state.thermalRevision();
+		var inventory = List.of(new ThermalStateFunction.InventoryPortion(0, 1, Map.of()),
+				new ThermalStateFunction.InventoryPortion(1, 1, Map.of()));
+		for (var snapshot : List.of(stale, other)) for (Runnable request : new Runnable[] {
+				() -> state.planPhaseCellEnergy(snapshot, inventory),
+				() -> state.planPhaseCellEnergy(snapshot, inventory, 0, 0),
+				() -> state.requirePhaseCandidateState(snapshot, inventory, 0, 0)}) {
+			try { request.run(); throw new AssertionError("A stale or foreign phase-cell snapshot accepted"); }
+			catch (IllegalStateException expected) {
+				require(state.exactEnergy(2).equals(energy) && state.auditLedger().equals(audit)
+						&& state.thermalRevision().equals(revision) && state.observeTemperatureInCell(0, context) == 301,
+						"Rejected phase-cell snapshot changed its current owner energy or audit");
+			}
+		}
+		var current = state.preparePhaseCandidateCell(0, context);
+		state.requirePhaseCellEnergyCurrent(state.planPhaseCellEnergy(current, inventory));
+		state.requirePhaseCellEnergyCurrent(state.planPhaseCellEnergy(current, inventory, 0, 0));
 	}
 
 	private static void finiteCellExchangeRetainsExactBaseline() {
