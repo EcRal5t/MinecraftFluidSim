@@ -7,6 +7,7 @@ import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.units.SolverUnitScale;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -321,6 +322,81 @@ final class ThermalCellOperations {
 			return Double.NaN;
 		}
 		return stateFunction.stateForInventory(finalInventory, energy).temperatureK();
+	}
+
+	record PhaseCellAssignment(int cell, ThermalCellEnergyAssignment.Plan raw,
+			ThermalAuditLedger beforeAudit, ThermalAuditLedger afterAudit) { }
+
+	PhaseCellAssignment preparePhaseCellEnergy(ThermalDomainState.PhaseCandidateCell current,
+			List<ThermalStateFunction.InventoryPortion> liquidInventory, double gasEnergyBefore, double gasEnergyAfter) {
+		return preparePhaseCellEnergy(current, liquidInventory, gasEnergyBefore, gasEnergyAfter, false);
+	}
+
+	PhaseCellAssignment preparePhaseCellEnergy(ThermalDomainState.PhaseCandidateCell current,
+			List<ThermalStateFunction.InventoryPortion> liquidAndCoherentInventory) {
+		return preparePhaseCellEnergy(current, liquidAndCoherentInventory, 0.0, 0.0, true);
+	}
+
+	private PhaseCellAssignment preparePhaseCellEnergy(ThermalDomainState.PhaseCandidateCell current,
+			List<ThermalStateFunction.InventoryPortion> prospectiveInventory,
+			double gasEnergyBefore, double gasEnergyAfter, boolean replaceCoherent) {
+		if (current == null || prospectiveInventory == null || !Double.isFinite(gasEnergyBefore) || !Double.isFinite(gasEnergyAfter))
+			throw new IllegalArgumentException("Thermal phase candidate is invalid");
+		ArrayList<ThermalStateFunction.InventoryPortion> portions = new ArrayList<>(prospectiveInventory);
+		for (var solid : current.unchangedSolids()) if (!replaceCoherent
+				|| registry.material(solid.materialHandle()).carrierKind() == ThermalMaterialDefinition.CarrierKind.GRANULAR) portions.add(solid);
+		SignedDyadic requested = current.cellEnergy().add(SignedDyadic.of(gasEnergyBefore)).subtract(SignedDyadic.of(gasEnergyAfter));
+		if (portions.isEmpty() && !requested.equals(SignedDyadic.ZERO)) throw new ThermalDomainState.EmptyPhaseCandidateEnergyException();
+		double requestedTemperature = portions.isEmpty() ? Double.NaN : stateFunction.stateForInventory(portions, requested).temperatureK();
+		ThermalMaterialDefinition[] materials = new ThermalMaterialDefinition[portions.size()];
+		double[] mass = new double[portions.size()], base = new double[portions.size()];
+		for (int index = 0; index < portions.size(); index++) {
+			var portion = portions.get(index);
+			materials[index] = registry.material(portion.materialHandle());
+			mass[index] = portion.massMu();
+			base[index] = stateFunction.baseEnergy(portion.materialHandle(), mass[index], portion.speciesQuanta());
+		}
+		ThermalCellEnergyAssignment.Plan raw;
+		if (portions.isEmpty()) raw = new ThermalCellEnergyAssignment.Plan(List.of(), SignedDyadic.ZERO, null);
+		else raw = ThermalCellEnergyAssignment.prepare(new ThermalCellEnergyAssignment.Inventory() {
+			public int first() { return 0; }
+			public int next(int item) { return item + 1 < portions.size() ? item + 1 : -1; }
+			public ThermalMaterialDefinition material(int item) { return materials[item]; }
+			public double mass(int item) { return mass[item]; }
+			public double baseEnergy(int item) { return base[item]; }
+		}, requested, requestedTemperature);
+		ThermalAuditLedger before = audit.ledger(), after;
+		try {
+			after = before.withRoundoff(raw.actualEnergy().subtract(requested));
+			after.expectedInventory();
+		} catch (IllegalArgumentException | ArithmeticException unavailable) {
+			throw new ThermalCellEnergyAssignment.UnavailableException("Thermal phase roundoff ledger is not representable",
+					new IllegalArgumentException(unavailable));
+		}
+		return new PhaseCellAssignment(current.cell(), raw, before, after);
+	}
+
+	private record CaloricOwner(ThermalMaterialDefinition material, double mass, double base) { }
+
+	void commitPhaseCellEnergy(PhaseCellAssignment plan, ThermalCarrierContext markers) {
+		if (audit.ledger() != plan.beforeAudit()) throw new IllegalStateException("Thermal phase audit plan is stale");
+		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
+		HashMap<CaloricOwner, ArrayDeque<ThermalCellEnergyAssignment.Entry>> byOwner = new HashMap<>();
+		for (var entry : plan.raw().entries()) byOwner.computeIfAbsent(
+				new CaloricOwner(entry.material(), entry.mass(), entry.base()), key -> new ArrayDeque<>()).add(entry);
+		ArrayList<Integer> ordinals = new ArrayList<>();
+		ArrayList<Double> energies = new ArrayList<>();
+		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == plan.cell()) {
+			var key = new CaloricOwner(current.material(carrier), current.mass(carrier), current.baseEnergy(carrier));
+			var matches = byOwner.get(key);
+			if (matches == null || matches.isEmpty()) throw new IllegalStateException("Thermal phase owner differs from its prepared inventory");
+			ordinals.add(carrier); energies.add(matches.removeFirst().energy());
+		}
+		for (var matches : byOwner.values()) if (!matches.isEmpty())
+			throw new IllegalStateException("Thermal phase plan retains a missing owner");
+		for (int index = 0; index < ordinals.size(); index++) current.setInternalEnergy(ordinals.get(index), energies.get(index));
+		cellGrid.rebuildAssignedPhaseCell(current, plan.cell(), plan.raw().actualEnergy(), plan.raw().actualState());
+		audit.replace(plan.afterAudit());
 	}
 
 	void setTemperatureInCell(int cell, double temperatureK, ThermalCarrierContext markers) {

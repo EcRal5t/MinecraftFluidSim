@@ -36,6 +36,7 @@ public final class ThermalOwnerStoreValidation {
 	}
 
 	private static void exactAggregateEnergySurvivesCaloricHandoffs() {
+		alternateRemainderKeepsEveryOwnerPositive();
 		finiteCellExchangeRetainsExactBaseline();
 		cellEnergyPreflightPreservesDerivedState();
 		for (double reference : new double[] {1e18, -1e18}) for (double smallCv : new double[] {1, 1.0001})
@@ -114,6 +115,31 @@ public final class ThermalOwnerStoreValidation {
 			public double volume(int marker) { return .5; } public ChemicalMixtureRecord mixture(int marker) { return null; }
 			public ChemicalRegistry chemicalRegistry() { return null; }
 		};
+	}
+
+	private static void alternateRemainderKeepsEveryOwnerPositive() {
+		double cv = 1e12 + 5;
+		var a = new ThermalMaterialDefinition("test:pivot/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:pivot/a", 400, 1e18, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(
+						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 500, cv)));
+		var b = new ThermalMaterialDefinition("test:pivot/b", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:pivot/b", 1e-12, -2e18, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(
+						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 500, 10 * cv)));
+		double[] energy = {Math.nextUp(1e18 - 400 * cv), -2e18};
+		SignedDyadic target = SignedDyadic.sum(energy);
+		var grid = new ThermalCellGrid(1);
+		grid.rebuild(new ThermalCellGrid.CarrierAccess() {
+			public int carrierCount() { return 2; } public int cell(int item) { return 0; }
+			public ThermalMaterialDefinition material(int item) { return item == 0 ? a : b; }
+			public double mass(int item) { return 1; } public double volume(int item) { return 1; }
+			public double baseEnergy(int item) { return item == 0 ? 1e18 : -2e18; }
+			public double internalEnergy(int item) { return energy[item]; }
+			public void setInternalEnergy(int item, double value) { energy[item] = value; }
+		});
+		grid.setCellInternalEnergy(0, target);
+		require(SignedDyadic.sum(energy).equals(target) && grid.temperature(0) > ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K
+				&& grid.carriersMatchSolvedTemperature(),
+				"A failed preferred remainder prevented an alternate positive raw-owner assignment");
 	}
 
 	private static void finiteCellExchangeRetainsExactBaseline() {

@@ -143,9 +143,10 @@ final class GasBoilingBatchBounds {
 		double gasLower = Math.nextDown(oldGasEnergy + batchLower);
 		double gasUpper = Math.nextUp(oldGasEnergy + batchUpper);
 		if (!Double.isFinite(gasLower) || !Double.isFinite(gasUpper)) return false;
+		SignedDyadic cellLower = SignedDyadic.sum(beforeCell.cellEnergy(), SignedDyadic.of(oldGasEnergy), SignedDyadic.of(gasUpper).negate());
 		SignedDyadic cellUpper = SignedDyadic.sum(beforeCell.cellEnergy(), SignedDyadic.of(oldGasEnergy), SignedDyadic.of(gasLower).negate());
 		List<ThermalCaloricBounds.PortionRange> gas = gasPortions(batch);
-		double liquidUpper = caloric.temperatureBound(remaining, cellUpper, true, liquidTemperature);
+		double liquidUpper = caloric.assignedTemperatureBound(remaining, cellLower, cellUpper, true, liquidTemperature);
 		if (!Double.isFinite(liquidUpper)) return false;
 		double gasTemperatureLower = caloric.temperatureBound(gas, gasLower, false, liquidTemperature);
 		return pressureExcludes(low, high, liquidUpper, gasTemperatureLower);

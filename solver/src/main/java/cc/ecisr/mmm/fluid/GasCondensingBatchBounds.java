@@ -123,7 +123,9 @@ final class GasCondensingBatchBounds {
 			if (!Double.isFinite(gasUpperTemperature)) return false;
 			SignedDyadic cellLower = SignedDyadic.sum(beforeCell.cellEnergy(), SignedDyadic.of(oldGasEnergy),
 					SignedDyadic.of(gasUpper).negate());
-			double liquidLower = liquidLowerTemperature(batch, cellLower);
+			SignedDyadic cellUpper = SignedDyadic.sum(beforeCell.cellEnergy(), SignedDyadic.of(oldGasEnergy),
+					SignedDyadic.of(gasLower).negate());
+			double liquidLower = liquidLowerTemperature(batch, cellLower, cellUpper);
 			double saturationLower = phase.saturationPressureBound(transition, liquidLower, false);
 			long totalLow = oldGas.standardVolumeNanos() - lastNanos;
 			long totalHigh = oldGas.standardVolumeNanos() - firstNanos;
@@ -141,17 +143,17 @@ final class GasCondensingBatchBounds {
 		}
 	}
 
-	private double liquidLowerTemperature(ThermalCaloricBounds.PortionRange batch, SignedDyadic energy) {
+	private double liquidLowerTemperature(ThermalCaloricBounds.PortionRange batch, SignedDyadic low, SignedDyadic high) {
 		if (receiverCount <= MAX_SEPARATE_RECEIVERS) {
 			// Separate alternatives keep the usual few-marker interval tight; unavailable alternatives only widen it.
-			double lower = caloric.temperatureBound(liquidPortions(batch, -1, false), energy, false, liquidTemperature);
+			double lower = caloric.assignedTemperatureBound(liquidPortions(batch, -1, false), low, high, false, liquidTemperature);
 			for (int target = 0; target < liquids.size(); target++) if (liquids.get(target).receiver()) {
-				lower = Math.min(lower, caloric.temperatureBound(liquidPortions(batch, target, false), energy, false, liquidTemperature));
+				lower = Math.min(lower, caloric.assignedTemperatureBound(liquidPortions(batch, target, false), low, high, false, liquidTemperature));
 			}
 			return lower;
 		}
 		// More receivers use one relaxed box: each may receive zero to the entire incoming column.
-		return caloric.temperatureBound(liquidPortions(batch, -1, true), energy, false, liquidTemperature);
+		return caloric.assignedTemperatureBound(liquidPortions(batch, -1, true), low, high, false, liquidTemperature);
 	}
 
 	private List<ThermalCaloricBounds.PortionRange> liquidPortions(

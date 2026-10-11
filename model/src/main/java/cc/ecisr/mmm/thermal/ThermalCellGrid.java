@@ -204,7 +204,33 @@ public final class ThermalCellGrid {
 		updateObservedTemperatureRange();
 	}
 
+	/** Publishes derived state for an already prevalidated phase assignment; remote LTE states are retained. */
+	void rebuildAssignedPhaseCell(CarrierAccess carrierAccess, int targetCell,
+			SignedDyadic actualEnergy, ThermalStateFunction.State actualState) {
+		double[] oldTemperature = temperature.clone(), oldCapacity = heatCapacity.clone();
+		double[] oldMinimum = minimumTemperature.clone(), oldMaximum = maximumTemperature.clone();
+		rebuildTopology(carrierAccess, targetCell, false);
+		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
+			conductivity[cell] /= totalVolume[cell];
+			if (cell == targetCell) {
+				internalEnergy[cell] = actualEnergy.toDouble();
+				temperature[cell] = actualState.temperatureK();
+				heatCapacity[cell] = actualState.heatCapacityEuPerK();
+				updateLinearTemperatureInterval(cell);
+			} else {
+				internalEnergy[cell] = exactCarrierEnergyInCell(cell).toDouble();
+				temperature[cell] = oldTemperature[cell]; heatCapacity[cell] = oldCapacity[cell];
+				minimumTemperature[cell] = oldMinimum[cell]; maximumTemperature[cell] = oldMaximum[cell];
+			}
+		}
+		updateObservedTemperatureRange();
+	}
+
 	private void rebuildTopology(CarrierAccess carrierAccess, int prospectiveCell) {
+		rebuildTopology(carrierAccess, prospectiveCell, true);
+	}
+
+	private void rebuildTopology(CarrierAccess carrierAccess, int prospectiveCell, boolean validateUntouched) {
 		if (carrierAccess == null) throw new IllegalArgumentException("Thermal carrier access is missing");
 		this.carriers = carrierAccess;
 		topologyCarrierCount = carrierAccess.carrierCount();
@@ -246,7 +272,7 @@ public final class ThermalCellGrid {
 		}
 		// Bind derived reference caches before independent carrier validation.
 		if (topologyCarrierCount > 0) carrierAccess.baseEnergy(0);
-		CpuWorkBatch.run(topologyCarrierCount, (from, until) -> {
+		if (validateUntouched) CpuWorkBatch.run(topologyCarrierCount, (from, until) -> {
 			for (int carrier = from; carrier < until; carrier++) if (carrierAccess.cell(carrier) != prospectiveCell)
 				validateCarrierEnergy(carrier, carrierAccess.exactInternalEnergy(carrier));
 		});
@@ -287,79 +313,28 @@ public final class ThermalCellGrid {
 	private void assignSolvedCellEnergy(int cell, double requested) { assignSolvedCellEnergy(cell, SignedDyadic.of(requested)); }
 
 	private void assignSolvedCellEnergy(int cell, SignedDyadic requested) {
-		CellEnergyAssignment assignment = prepareSolvedCellEnergy(cell, requested);
-		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			double value = carrier == assignment.remainderCarrier() ? assignment.remainder()
-					: modeledEnergy(carrier, temperature[cell]);
-			carriers.setInternalEnergy(carrier, value);
-		}
-		// The actual binary64 owner assignment is authoritative, including its booked roundoff.
-		solveCarrierCell(cell);
+		ThermalCellEnergyAssignment.Plan plan = prepareSolvedCellEnergy(cell, requested);
+		for (ThermalCellEnergyAssignment.Entry entry : plan.entries()) carriers.setInternalEnergy(entry.item(), entry.energy());
+		internalEnergy[cell] = plan.actualEnergy().toDouble();
+		temperature[cell] = plan.actualState().temperatureK();
+		heatCapacity[cell] = plan.actualState().heatCapacityEuPerK();
+		updateLinearTemperatureInterval(cell);
 	}
 
-	private record CellEnergyAssignment(int remainderCarrier, double remainder) { }
-
-	private CellEnergyAssignment prepareSolvedCellEnergy(int cell, double requested) { return prepareSolvedCellEnergy(cell, SignedDyadic.of(requested)); }
-
-	private CellEnergyAssignment prepareSolvedCellEnergy(int cell, SignedDyadic requested) {
-		CellEnergyAssignment assignment = prepareCellRemainder(cell, requested);
-		SignedDyadic actual = SignedDyadic.ZERO;
-		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			double value = carrier == assignment.remainderCarrier() ? assignment.remainder()
-					: modeledEnergy(carrier, temperature[cell]);
-			validateCarrierEnergy(carrier, value);
-			actual = actual.add(SignedDyadic.of(value));
-		}
-		if (!Double.isFinite(actual.toDouble())) throw new IllegalArgumentException("Thermal assigned cell energy is not finite");
-		double oldTemperature = temperature[cell], oldCapacity = heatCapacity[cell];
-		double oldMinimum = minimumTemperature[cell], oldMaximum = maximumTemperature[cell];
-		try { solveCell(cell, actual); }
-		finally {
-			temperature[cell] = oldTemperature; heatCapacity[cell] = oldCapacity;
-			minimumTemperature[cell] = oldMinimum; maximumTemperature[cell] = oldMaximum;
-		}
-		return assignment;
+	private ThermalCellEnergyAssignment.Plan prepareSolvedCellEnergy(int cell, double requested) {
+		return prepareSolvedCellEnergy(cell, SignedDyadic.of(requested));
 	}
 
-	private CellEnergyAssignment prepareCellRemainder(int cell, SignedDyadic requested) {
-		int remainderCarrier = -1;
-		double largestHeatCapacity = Double.NEGATIVE_INFINITY;
-		SignedDyadic modeled = SignedDyadic.ZERO;
-		// Put the exact floating-point conservation remainder on the best-conditioned carrier. Phase commits
-		// append very small coherent batches after much larger liquid parcels; assigning the remainder to that
-		// list tail amplifies an unavoidable cell-sum roundoff into a measurable temperature mismatch.
-		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			double capacity = carrierMass[carrier] * carrierMaterial[carrier].specificHeatAt(temperature[cell]);
-			if (capacity > largestHeatCapacity) {
-				largestHeatCapacity = capacity;
-				remainderCarrier = carrier;
-			}
-			modeled = modeled.add(SignedDyadic.of(modeledEnergy(carrier, temperature[cell])));
-		}
-		CarrierRemainderUnavailableException failure;
-		try { return prepareCarrierRemainder(cell, requested, modeled, remainderCarrier); }
-		catch (CarrierRemainderUnavailableException unavailable) { failure = unavailable; }
-		// Reference-energy rounding may leave a different carrier's caloric bin able to hold
-		// the same conserved remainder. All modeled contributions were validated before this search.
-		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			if (carrier == remainderCarrier) continue;
-			try { return prepareCarrierRemainder(cell, requested, modeled, carrier); }
-			catch (CarrierRemainderUnavailableException unavailable) { failure = unavailable; }
-		}
-		throw failure;
-	}
-
-	private CellEnergyAssignment prepareCarrierRemainder(int cell, SignedDyadic requested, SignedDyadic modeled, int carrier) {
-		SignedDyadic others = modeled.subtract(SignedDyadic.of(modeledEnergy(carrier, temperature[cell])));
-		double remainder = requested.subtract(others).toDouble();
-		if (!Double.isFinite(remainder)) throw new CarrierRemainderUnavailableException("Thermal carrier energy remainder is invalid", null);
-		try { validateCarrierAtCellTemperature(carrier, remainder, temperature[cell]); }
-		catch (IllegalArgumentException invalid) { throw new CarrierRemainderUnavailableException(invalid.getMessage(), invalid); }
-		return new CellEnergyAssignment(carrier, remainder);
-	}
-
-	private static final class CarrierRemainderUnavailableException extends IllegalArgumentException {
-		CarrierRemainderUnavailableException(String message, IllegalArgumentException cause) { super(message, cause); }
+	private ThermalCellEnergyAssignment.Plan prepareSolvedCellEnergy(int cell, SignedDyadic requested) {
+		return ThermalCellEnergyAssignment.prepare(new ThermalCellEnergyAssignment.Inventory() {
+			public int first() { return cellHead[cell]; }
+			public int next(int carrier) { return carrierNext[carrier]; }
+			public ThermalMaterialDefinition material(int carrier) { return carrierMaterial[carrier]; }
+			public double mass(int carrier) { return carrierMass[carrier]; }
+			public SignedDyadic exactMass(int carrier) { return carriers.exactMass(carrier); }
+			public double baseEnergy(int carrier) { return cachedBaseEnergy(carrier); }
+			public SignedDyadic exactBaseEnergy(int carrier) { return carriers.exactBaseEnergy(carrier); }
+		}, requested, temperature[cell]);
 	}
 
 	/** Preflights one exact LTE target while preserving carriers and the current derived cell state. */
@@ -509,20 +484,6 @@ public final class ThermalCellGrid {
 		double value = ThermalCaloricInversion.energyAt(material, carrierMass[carrier], cachedBaseEnergy(carrier), temperatureK);
 		if (!Double.isFinite(value)) throw new IllegalArgumentException("Thermal carrier modeled energy is invalid");
 		return value;
-	}
-
-	private void validateCarrierAtCellTemperature(int carrier, double energy, double cellTemperature) {
-		if (energy == modeledEnergy(carrier, cellTemperature)) return;
-		ThermalMaterialDefinition material = carrierMaterial[carrier];
-		double restored = ThermalCaloricInversion.owner(material, carrierMass[carrier], energy, cachedBaseEnergy(carrier)).temperatureK();
-		double tolerance = Math.max(1.0E-9, Math.max(Math.ulp(restored), Math.ulp(cellTemperature)) * 16.0);
-		if (Math.abs(restored - cellTemperature) > tolerance) {
-			double residual = energy - modeledEnergy(carrier, cellTemperature);
-			throw new IllegalArgumentException("Thermal carrier remainder left local equilibrium"
-					+ " (carrier=" + carrier + ", cellTemperature=" + cellTemperature
-					+ ", restoredTemperature=" + restored + ", energyResidual=" + residual
-					+ ", mass=" + carrierMass[carrier] + ")");
-		}
 	}
 
 	private double cachedBaseEnergy(int carrier) {

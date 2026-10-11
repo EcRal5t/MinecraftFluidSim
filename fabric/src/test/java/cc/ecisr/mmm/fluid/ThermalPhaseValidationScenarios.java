@@ -126,6 +126,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 
 	static void coherentPhaseInventoryAndExactBatchPlanning() {
 		condensedIntegerCarrierSearch();
+		condensedCandidatesPreserveActualThermalOwners();
 		condensedPhaseUsesActualRegionalCarrierBudget();
 		coherentExternalMergeIsPreflightedAndAudited();
 		ThermalMaterialDefinition lower = new ThermalMaterialDefinition("test:thermal/lower",
@@ -335,6 +336,53 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		require(SolidVolume.cellVolumeSvqAtMost(tailedMarkerVolume) == markerSvq
 				&& SolidVolume.cellVolumeSvqAtLeast(tailedMarkerVolume) == markerSvq + 1L,
 				"phase SVQ bounds quantized away an authoritative float marker-volume tail");
+	}
+
+	static void condensedCandidatesPreserveActualThermalOwners() {
+		var fluids = new FluidMaterialRegistry(List.of(
+				FluidMaterial.withSurfaceTension("test:owner/water", 64, "test:owner/miscible", 0, 90),
+				FluidMaterial.withSurfaceTension("test:owner/bath", 64, "test:owner/miscible", 0, 90)));
+		var segments = List.of(new ThermalMaterialDefinition.CaloricSegment(200, 400, 1.0E307));
+		var water = new ThermalMaterialDefinition("test:owner/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:owner/water", 300, 1.0E308, 0, segments);
+		var bath = new ThermalMaterialDefinition("test:owner/bath", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:owner/bath", 300, -1.0E308, 0, segments);
+		var ice = new ThermalMaterialDefinition("test:owner/ice", ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID,
+				"test:owner/ice", 301, 1.0E308, 0, segments);
+		long batchSvq = SolidVolume.SVQ_PER_CELL / 64;
+		var transition = new ThermalPhaseTransition("test:owner/freeze", ice.id(), water.id(), 301,
+				batchSvq, batchSvq, ExactRational.parse("1/8"),
+				ThermalPhaseTransition.InterfaceRequirement.NONE, 10000, 3000000);
+		var registry = new ThermalRegistry(List.of(water, bath, ice), List.of(), List.of(transition), "", "");
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1.0E-5F, .45F, .002F, 0), 64);
+		domain.setVolume(1, 1, 1, .5F);
+		for (int marker = 0; marker < domain.particleCount(); marker++)
+			domain.setMarkerMaterial(marker, fluids, marker < 2 ? 0 : 1);
+		domain.bindThermal(registry, fluids, 300);
+		var before = domain.exactInternalEnergy();
+		var audit = domain.thermalAudit();
+		var stats = domain.stepInertPhaseChangeOnly(1);
+		require(stats.operations() == 1 && stats.frozenCells() == 1
+				&& domain.particleCount() == 4 && domain.totalCoherentSolidVolumeSvq() == batchSvq
+				&& domain.totalCoherentMass() == .125
+				&& domain.unitScale.kilograms(domain.totalMass()) + domain.totalCoherentMass() == 4
+				&& domain.thermalTemperatureInCell(1, 1, 1) == 300.03125
+				&& domain.exactInternalEnergy().subtract(before).equals(
+						domain.thermalAudit().roundoffResidual().subtract(audit.roundoffResidual()))
+				&& domain.thermalAudit().externalSource().equals(audit.externalSource())
+				&& domain.thermalAudit().externalSink().equals(audit.externalSink())
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"condensed candidate merged independent raw reference-energy owners");
+		for (int marker = 0; marker < domain.particleCount(); marker++)
+			require(Double.isFinite(domain.thermalMarkerTemperature(marker))
+					&& domain.thermalMarkerTemperature(marker) > 0, "freeze published invalid liquid energy");
+		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
+				&& restored.thermalAudit().equals(domain.thermalAudit())
+				&& restored.thermalState.coherentPhases().snapshot().equals(domain.thermalState.coherentPhases().snapshot())
+				&& restored.thermalTemperatureInCell(1, 1, 1) == 300.03125,
+				"actual-owner condensed state did not survive capture/restore");
 	}
 
 	static void condensedIntegerCarrierSearch() {

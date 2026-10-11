@@ -1152,7 +1152,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.bindGasRegistry(gas);
 		domain.bootstrapGasState("");
 		domain.bindThermal(thermal, liquids, 300.0);
-		GasInventory gasBefore = domain.gasBoundary().sealedInventory();
+		var gasBefore = domain.gasBoundary().sealedInventory();
 		SignedDyadic energyBefore = domain.exactGasInternalEnergy();
 		int nodesBefore = domain.gasBoundary().nodeCount();
 
@@ -1170,7 +1170,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"stale gas vent partially committed its thermal owner");
 		FluidDomain.OperatorGasVentPlan thermallyStale = domain.planOperatorVentSealedGas();
 		domain.setThermalTemperatureInCell(1, 1, 1, 301.0);
-		GasInventory gasAfterHeating = domain.gasBoundary().sealedInventory();
+		var gasAfterHeating = domain.gasBoundary().sealedInventory();
 		SignedDyadic gasEnergyAfterHeating = domain.exactGasInternalEnergy();
 		var auditAfterHeating = domain.thermalAudit();
 		staleRejected = false;
@@ -1715,6 +1715,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void phaseGasCapacityIsAtomicAndRetainsSmallerBatch() {
+		phaseRawCarrierAssignmentIsAtomic();
 		phaseGasEnergyRepresentationRetainsSmallerBatch();
 		FluidDomain history = phaseGasCapacityDomain(true);
 		var before = history.captureAuthoritativeState();
@@ -1767,6 +1768,78 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& limited.exactInternalEnergy().equals(limited.thermalAudit().expectedInventory())
 				&& limited.gasBoundary().auditClosed(),
 				"an overflowing largest gas phase batch prevented its smaller complete batch");
+	}
+
+	private static void phaseRawCarrierAssignmentIsAtomic() {
+		FluidDomain blocked = phaseRawAssignmentDomain(257.0);
+		var beforeMaterial = blocked.exportMaterialParticleState();
+		var beforeThermal = blocked.exportThermalParticleState();
+		var beforeEnergy = blocked.exactInternalEnergy();
+		var beforeAudit = blocked.thermalAudit();
+		var beforeGas = blocked.gasBoundary().inventory(1);
+		var beforeSource = blocked.gasState.network.externalSource();
+		var beforeSink = blocked.gasState.network.escapedSink();
+		var candidate = blocked.stepGasPhaseChangeOnly(1);
+		var afterMaterial = blocked.exportMaterialParticleState();
+		var afterThermal = blocked.exportThermalParticleState();
+		require(candidate.operations() == 0 && blocked.particleCount() == 3
+				&& Arrays.equals(beforeMaterial.copyPositionVolume(), afterMaterial.copyPositionVolume())
+				&& Arrays.equals(beforeMaterial.copyParticleVelocities(), afterMaterial.copyParticleVelocities())
+				&& Arrays.equals(beforeMaterial.copyParticleMass(), afterMaterial.copyParticleMass())
+				&& Arrays.equals(beforeThermal.copyInternalEnergy(), afterThermal.copyInternalEnergy())
+				&& Arrays.equals(beforeThermal.copyGasNodeEnergy(), afterThermal.copyGasNodeEnergy())
+				&& blocked.gasBoundary().inventory(1).equals(beforeGas)
+				&& blocked.gasState.network.externalSource().equals(beforeSource)
+				&& blocked.gasState.network.escapedSink().equals(beforeSink)
+				&& blocked.exactInternalEnergy().equals(beforeEnergy) && blocked.thermalAudit().equals(beforeAudit),
+				"continuous phase LTE admission published inventories before rejecting its raw carrier assignment");
+		var restored = FluidDomain.restoreAuthoritativeState(blocked.captureAuthoritativeState());
+		require(restored.exactInternalEnergy().equals(beforeEnergy) && restored.thermalAudit().equals(beforeAudit),
+				"deferred raw phase assignment damaged capture/restore closure");
+		FluidDomain accepted = phaseRawAssignmentDomain(384.0);
+		var initialEnergy = accepted.exactInternalEnergy();
+		require(accepted.stepGasPhaseChangeOnly(1).operations() == 1 && accepted.particleCount() == 2
+				&& accepted.totalVolumeExact() == .25 && accepted.unitScale.kilograms(accepted.totalMass()) == 2.0
+				&& accepted.gasBoundary().inventory(1).totalMass() == 1.0
+				&& accepted.exactInternalEnergy().equals(initialEnergy)
+				&& accepted.exactInternalEnergy().equals(accepted.thermalAudit().expectedInventory())
+				&& accepted.thermalState.phaseScanTemperatureInCell(13) == 172.0
+				&& accepted.gasBoundary().auditClosed(),
+				"a representable opposite-reference phase assignment failed its prepared inventory and energy commit");
+		require(FluidDomain.restoreAuthoritativeState(accepted.captureAuthoritativeState()).exactInternalEnergy().equals(initialEnergy),
+				"prepared raw phase assignment did not retain its closed actual energies through restore");
+	}
+
+	private static FluidDomain phaseRawAssignmentDomain(double gasReferenceEnergy) {
+		var liquids = new FluidMaterialRegistry(List.of(
+				FluidMaterial.withSurfaceTension("test:raw_water", 64, "test:miscible", 0, 90),
+				FluidMaterial.withSurfaceTension("test:raw_plus", 64, "test:miscible", 0, 90),
+				FluidMaterial.withSurfaceTension("test:raw_minus", 64, "test:miscible", 0, 90)));
+		var water = phaseRawAssignmentMaterial("test:raw_water", ThermalMaterialDefinition.CarrierKind.LIQUID, "test:raw_water", 128, 1);
+		var plus = phaseRawAssignmentMaterial("test:raw_plus", ThermalMaterialDefinition.CarrierKind.LIQUID, "test:raw_plus", 1e18, 1);
+		var minus = phaseRawAssignmentMaterial("test:raw_minus", ThermalMaterialDefinition.CarrierKind.LIQUID, "test:raw_minus", -1e18, 1);
+		var air = phaseRawAssignmentMaterial("test:raw_air", ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR, 0, 718);
+		var vapor = phaseRawAssignmentMaterial("test:raw_vapor", ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.WATER_VAPOR, gasReferenceEnergy, 1);
+		var transition = new ThermalPhaseTransition("test:raw_boil", water.id(), vapor.id(), 300,
+				SolidVolume.SVQ_PER_CELL / 8, SolidVolume.SVQ_PER_BV / 32, ExactRational.ONE,
+				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
+		var registry = new ThermalRegistry(List.of(water, plus, minus, air, vapor), List.of(), List.of(transition), "", "");
+		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
+		domain.sealDomainBoundary();
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
+			if (y != 1 || z != 1 || x == 0) domain.setSolid(x, y, z, true);
+		domain.setVolume(1, 1, 1, .375F);
+		for (int marker = 0; marker < domain.particleCount(); marker++) domain.setMarkerMaterial(marker, liquids, marker);
+		domain.bindGasRegistry(BuiltinGasDefinitions.createRegistry()); domain.bootstrapGasState("");
+		domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
+		domain.bindThermal(registry, liquids, 300); domain.captureAuthoritativeState();
+		return domain;
+	}
+
+	private static ThermalMaterialDefinition phaseRawAssignmentMaterial(String id,
+			ThermalMaterialDefinition.CarrierKind kind, String carrier, double reference, double cv) {
+		return new ThermalMaterialDefinition(id, kind, carrier, 300, reference, 0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(100, 400, cv)));
 	}
 
 	private static FluidDomain phaseGasCapacityDomain(boolean history) {

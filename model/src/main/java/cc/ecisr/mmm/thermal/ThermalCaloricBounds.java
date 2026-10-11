@@ -109,6 +109,40 @@ public final class ThermalCaloricBounds {
 		return boundedTemperature(portions, Objects.requireNonNull(targetEnergy), upper, initialBracket);
 	}
 
+	/** Bounds the LTE temperature after the assignment's single rounded pivot remainder. */
+	public double assignedTemperatureBound(List<PortionRange> portions, SignedDyadic requestedLow,
+	                                       SignedDyadic requestedHigh, boolean upper, double initialBracket) {
+		if (requestedLow.compareTo(requestedHigh) > 0) throw new IllegalArgumentException("Reversed thermal energy interval");
+		try {
+			double lowerTemperature = temperatureBound(portions, requestedLow, false, initialBracket);
+			double upperTemperature = temperatureBound(portions, requestedHigh, true, initialBracket);
+			if (!Double.isFinite(lowerTemperature) || !Double.isFinite(upperTemperature)) return unboundedTemperature(upper);
+			SignedDyadic[] lows = new SignedDyadic[portions.size()], highs = new SignedDyadic[portions.size()];
+			SignedDyadic totalLow = SignedDyadic.ZERO, totalHigh = SignedDyadic.ZERO;
+			for (int index = 0; index < portions.size(); index++) {
+				// Keep separate owners: each has its own rounded reference and modeled forward energy.
+				List<PortionRange> owner = List.of(portions.get(index));
+				double low = energyAtTemperature(owner, lowerTemperature, false);
+				double high = energyAtTemperature(owner, upperTemperature, true);
+				if (!Double.isFinite(low) || !Double.isFinite(high)) return unboundedTemperature(upper);
+				lows[index] = SignedDyadic.of(low); highs[index] = SignedDyadic.of(high);
+				totalLow = totalLow.add(lows[index]); totalHigh = totalHigh.add(highs[index]);
+			}
+			double error = 0;
+			for (int pivot = 0; pivot < portions.size(); pivot++) {
+				SignedDyadic low = SignedDyadic.sum(requestedLow, totalHigh.negate(), highs[pivot]);
+				SignedDyadic high = SignedDyadic.sum(requestedHigh, totalLow.negate(), lows[pivot]);
+				double magnitude = Math.nextUp(Math.max(Math.abs(low.toDouble()), Math.abs(high.toDouble())));
+				if (!Double.isFinite(magnitude)) return unboundedTemperature(upper);
+				// RN error is at most half an ULP; a whole outward ULP also covers exponent seams/subnormals.
+				error = Math.max(error, Math.ulp(magnitude));
+			}
+			SignedDyadic target = upper ? requestedHigh.add(SignedDyadic.of(error))
+					: requestedLow.subtract(SignedDyadic.of(error));
+			return temperatureBound(portions, target, upper, initialBracket);
+		} catch (IllegalArgumentException | ArithmeticException unresolved) { return unboundedTemperature(upper); }
+	}
+
 	private double boundedTemperature(List<PortionRange> portions, SignedDyadic targetEnergy, boolean upper,
 	                                  double initialBracket) {
 		if (portions.isEmpty() || !Double.isFinite(initialBracket)) return unboundedTemperature(upper);

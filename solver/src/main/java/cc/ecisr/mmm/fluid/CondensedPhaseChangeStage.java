@@ -16,6 +16,8 @@ import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.HashMap;
+import java.util.TreeMap;
 import java.util.List;
 
 import static cc.ecisr.mmm.fluid.PhaseChangeStageSupport.PhaseCandidateUnavailableException;
@@ -53,9 +55,14 @@ final class CondensedPhaseChangeStage {
 			if (lower.carrierKind() != ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID
 					|| upper.carrierKind() != ThermalMaterialDefinition.CarrierKind.LIQUID) continue;
 			int liquidHandle = support.fluidMaterialHandle(upper.carrierId());
+			boolean[] targetLiquidCells = new boolean[support.state().cellCount()];
+			for (int marker = 0; marker < support.state().particles().count(); marker++) {
+				if (support.state().particles().materialHandle(marker) == liquidHandle)
+					targetLiquidCells[support.particleCell(marker)] = true;
+			}
 			for (int cell = 0; cell < support.state().cellCount() && operations < maximumOperations; cell++) {
 				int coherentGroup = thermal.coherentPhases().find(cell, lower.id());
-				boolean targetLiquidPresent = targetLiquidPresent(cell, liquidHandle);
+				boolean targetLiquidPresent = targetLiquidCells[cell];
 				if (!targetLiquidPresent && coherentGroup < 0) continue;
 				double absolutePressure = AirNetwork.REFERENCE_PRESSURE + support.pressureReference()
 						+ support.state().projection().pressure[cell];
@@ -83,14 +90,6 @@ final class CondensedPhaseChangeStage {
 			}
 		}
 		return new FluidDomain.ThermalPhaseStats(operations, frozen, melted, signedBatches);
-	}
-
-	private boolean targetLiquidPresent(int cell, int liquidHandle) {
-		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
-				marker = support.state().markerGrid().particleCellNext[marker]) {
-			if (support.state().particles().materialHandle(marker) == liquidHandle) return true;
-		}
-		return false;
 	}
 
 	private CondensedCellInventory phaseCellInventory(int cell, int liquidHandle, String coherentPhaseId) {
@@ -188,6 +187,7 @@ final class CondensedPhaseChangeStage {
 		if (high < minimumBatches) return null;
 		boolean capacityForced = occupied > capacity;
 		JointPhasePlan best = null;
+		var thermalCell = support.thermal().preparePhaseCandidateCell(cell, support.state().thermalMarkers());
 		var bounds = new CondensedPhaseBatchBounds(support, cell, liquidHandle, transition,
 				before, inventory.unchanged(), freezing, temperature);
 		var intervals = new ArrayDeque<BatchInterval>();
@@ -208,8 +208,10 @@ final class CondensedPhaseChangeStage {
 			long batches = interval.low();
 			JointPhasePlan candidate;
 			try {
-				candidate = candidate(cell, liquidHandle, transition, inventory, freezing, batches);
+				candidate = candidate(cell, liquidHandle, transition, inventory, freezing, batches, thermalCell);
 			} catch (ThermalStateFunction.EnergyOutsideValidityException
+					| ThermalStateFunction.EnergyRepresentationException
+					| ThermalDomainState.PhaseCellEnergyUnavailableException
 					| PhaseCandidateUnavailableException unavailable) {
 				continue;
 			}
@@ -249,7 +251,8 @@ final class CondensedPhaseChangeStage {
 
 	private JointPhasePlan candidate(
 			int cell, int liquidHandle, ThermalPhaseTransition transition,
-			CondensedCellInventory inventory, boolean freezing, long batches
+			CondensedCellInventory inventory, boolean freezing, long batches,
+			ThermalDomainState.PhaseCandidateCell thermalCell
 	) {
 		PhaseCellInventory before = inventory.target();
 		ThermalDomainState thermal = support.thermal();
@@ -266,10 +269,8 @@ final class CondensedPhaseChangeStage {
 					"Condensed phase extent mass is not representable");
 		}
 		long finalLowerSvq, finalUpperSvq;
-		double finalLowerMass, finalUpperMass;
-		PhaseComposition finalLowerComposition, finalUpperComposition;
 		PhaseRemovalPlan removal = null;
-		CoherentPhaseStore.Group coherentTransfer;
+		CoherentPhaseStore.Group coherentTransfer, coherentFinal;
 		ChemicalMixtureRecord meltedMixture = null;
 		int meltSlot = -1;
 		if (freezing) {
@@ -281,16 +282,11 @@ final class CondensedPhaseChangeStage {
 			removal = planLiquidRemoval(cell, liquidHandle, upperDelta, requestedMass);
 			finalLowerSvq = Math.addExact(before.lowerVolumeSvq(), lowerDelta);
 			finalUpperSvq = before.upperVolumeSvq() - upperDelta;
-			finalLowerMass = before.lowerMass() + requestedMass;
-			finalUpperMass = before.upperMass() - requestedMass;
-			if (finalUpperMass < 0.0 && finalUpperMass >= -massTolerance(before.upperMass())) finalUpperMass = 0.0;
-			finalLowerComposition = before.lowerComposition().plus(removal.movedComposition());
-			finalUpperComposition = before.upperComposition().minus(removal.movedComposition());
 			coherentTransfer = new CoherentPhaseStore.Group(
 					cell, transition.lowerEnergyMaterialId(), lowerDelta, requestedMass,
 					removal.movedComposition().toCoherent(), removal.movedEnergy());
 			try {
-				thermal.coherentPhases().previewAdd(coherentTransfer);
+				coherentFinal = thermal.coherentPhases().previewAdd(coherentTransfer);
 			} catch (IllegalArgumentException | IllegalStateException | ArithmeticException unavailable) {
 				throw new PhaseCandidateUnavailableException(
 						"Freeze cannot represent another coherent carrier group", unavailable);
@@ -301,11 +297,10 @@ final class CondensedPhaseChangeStage {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Melt extent exceeds coherent inventory");
 			}
-			CoherentPhaseStore.Group coherentRemaining;
 			try {
 				coherentTransfer = thermal.coherentPhases().previewTake(
 						cell, transition.lowerEnergyMaterialId(), lowerDelta, chemistry == null ? null : chemistry.registry());
-				coherentRemaining = thermal.coherentPhases().previewRemaining(
+				coherentFinal = thermal.coherentPhases().previewRemaining(
 						cell, transition.lowerEnergyMaterialId(), lowerDelta, chemistry == null ? null : chemistry.registry());
 			} catch (IllegalArgumentException | ArithmeticException unavailable) {
 				throw new PhaseCandidateUnavailableException(
@@ -318,11 +313,6 @@ final class CondensedPhaseChangeStage {
 			PhaseComposition moved = PhaseComposition.fromCoherent(coherentTransfer.composition());
 			finalLowerSvq = before.lowerVolumeSvq() - lowerDelta;
 			finalUpperSvq = Math.addExact(before.upperVolumeSvq(), upperDelta);
-			finalLowerMass = coherentRemaining == null ? 0.0 : coherentRemaining.mass();
-			finalUpperMass = before.upperMass() + coherentTransfer.mass();
-			if (finalLowerMass < 0.0 && finalLowerMass >= -massTolerance(before.lowerMass())) finalLowerMass = 0.0;
-			finalLowerComposition = PhaseComposition.fromCoherent(coherentRemaining == null ? null : coherentRemaining.composition());
-			finalUpperComposition = before.upperComposition().plus(moved);
 			if (chemistry != null) {
 				meltedMixture = moved.toMixture(chemistry.registry());
 				chemistry.requireCompatible(
@@ -349,21 +339,67 @@ final class CondensedPhaseChangeStage {
 				support.state().geometry().cutCells.openCellVolume(cell));
 		if (occupied > capacity) throw new FluidDomain.ThermalPhaseBlockedException(
 				"Condensed phase extent exceeds joint cell capacity");
-		ArrayList<ThermalStateFunction.InventoryPortion> phaseInventory = new ArrayList<>(
-				2 + inventory.unchanged().size());
-		if (finalLowerMass > 0.0) phaseInventory.add(new ThermalStateFunction.InventoryPortion(
-				thermal.registry().materialHandle(transition.lowerEnergyMaterialId()),
-				finalLowerMass, finalLowerComposition.amounts()));
-		if (finalUpperMass > 0.0) phaseInventory.add(new ThermalStateFunction.InventoryPortion(
-				thermal.thermalMaterialHandleForFluid(liquidHandle),
-				finalUpperMass, finalUpperComposition.amounts()));
-		phaseInventory.addAll(inventory.unchanged());
-		double candidateTemperature = thermal.phaseCandidateTemperature(
-				cell, phaseInventory, support.state().thermalMarkers());
+		var phaseInventory = condensedInventoryAfter(cell, liquidHandle, transition.lowerEnergyMaterialId(),
+				removal, coherentFinal, freezing ? null : coherentTransfer, meltedMixture);
+		var thermalPlan = thermal.planPhaseCellEnergy(thermalCell, phaseInventory);
 		long signedVolumeSvq = freezing ? lowerDelta - upperDelta : upperDelta - lowerDelta;
 		return new JointPhasePlan(
 				batches, freezing, removal, coherentTransfer, meltedMixture,
-				meltSlot, candidateTemperature, signedVolumeSvq);
+				meltSlot, thermalPlan, signedVolumeSvq);
+	}
+
+	/** Mirrors remove-swap ordinals and each final raw owner's rounded mass/composition. */
+	private List<ThermalStateFunction.InventoryPortion> condensedInventoryAfter(
+			int cell, int liquidHandle, String phaseId, PhaseRemovalPlan removal,
+			CoherentPhaseStore.Group coherentFinal, CoherentPhaseStore.Group melted,
+			ChemicalMixtureRecord meltedMixture
+	) {
+		var thermal = support.thermal();
+		var particles = support.state().particles();
+		var chemistry = support.chemistry();
+		var allocations = new HashMap<Integer, PhaseMarkerAllocation>();
+		if (removal != null) for (var allocation : removal.allocations()) allocations.put(allocation.marker(), allocation);
+		var ordinals = new TreeMap<Integer, ThermalStateFunction.InventoryPortion>();
+		for (int marker = 0; marker < particles.count(); marker++) {
+			if (support.particleCell(marker) != cell) continue;
+			var allocation = allocations.get(marker);
+			if (allocation != null && allocation.fullRemoval()) continue;
+			double mass = allocation == null ? particles.mass(marker) : allocation.newMass();
+			var mixture = chemistry == null ? null : allocation == null
+					? chemistry.record(marker) : allocation.chemicalPlan().kept();
+			ordinals.put(marker, liquidPortion(particles.materialHandle(marker), mass, mixture));
+		}
+		int count = particles.count();
+		if (removal != null) for (var allocation : removal.allocations()) if (allocation.fullRemoval()) {
+			int last = --count;
+			if (allocation.marker() != last) {
+				var swapped = ordinals.remove(last);
+				if (swapped != null) ordinals.put(allocation.marker(), swapped);
+			}
+		}
+		var result = new ArrayList<ThermalStateFunction.InventoryPortion>(ordinals.values());
+		if (melted != null) result.add(liquidPortion(liquidHandle,
+				support.state().unitScale().solverMass(melted.mass()), meltedMixture));
+		boolean targetFound = false;
+		for (var group : thermal.coherentPhases().snapshot()) if (group.cell() == cell) {
+			if (group.phaseId().equals(phaseId)) { group = coherentFinal; targetFound = true; }
+			if (group != null) result.add(coherentPortion(group));
+		}
+		if (!targetFound && coherentFinal != null) result.add(coherentPortion(coherentFinal));
+		return List.copyOf(result);
+	}
+
+	private ThermalStateFunction.InventoryPortion liquidPortion(
+			int materialHandle, double solverMass, ChemicalMixtureRecord mixture
+	) {
+		return new ThermalStateFunction.InventoryPortion(support.thermal().thermalMaterialHandleForFluid(materialHandle),
+				support.state().unitScale().kilograms(solverMass), mixture == null ? java.util.Map.of()
+					: ThermalStateFunction.stableAmounts(mixture, support.chemistry().registry()));
+	}
+
+	private ThermalStateFunction.InventoryPortion coherentPortion(CoherentPhaseStore.Group group) {
+		return new ThermalStateFunction.InventoryPortion(support.thermal().registry().materialHandle(group.phaseId()),
+				group.mass(), group.composition() == null ? java.util.Map.of() : group.composition().stableAmounts());
 	}
 
 	private record CondensedCellInventory(
@@ -436,14 +472,13 @@ final class CondensedPhaseChangeStage {
 	}
 
 	private void commitFreeze(int cell, JointPhasePlan plan) {
-		SignedDyadic inventoryBefore = support.exactInternalEnergy();
+		support.thermal().requirePhaseCellEnergyCurrent(plan.thermalPlan());
 		support.commitLiquidRemoval(cell, plan.removal());
 		support.thermal().addCoherentInternal(plan.coherentTransfer());
 		support.commitPendingVolume(cell, plan.signedVolumeSvq());
 		support.refreshCoherentOccupancy();
 		support.markGridDirty();
-		support.thermal().repartitionCellEnergyConserving(
-				cell, support.state().thermalMarkers(), inventoryBefore);
+		support.thermal().commitPhaseCellEnergy(plan.thermalPlan(), support.state().thermalMarkers());
 	}
 
 	private void commitMelt(
@@ -451,7 +486,7 @@ final class CondensedPhaseChangeStage {
 	) {
 		long removedSvq = plan.coherentTransfer().occupiedVolumeSvq();
 		long addedSvq = Math.multiplyExact(plan.batches(), transition.upperVolumeSvqPerBatch());
-		SignedDyadic inventoryBefore = support.exactInternalEnergy();
+		support.thermal().requirePhaseCellEnergyCurrent(plan.thermalPlan());
 		CoherentPhaseStore.Group removed = support.thermal().takeCoherentInternal(
 				cell, transition.lowerEnergyMaterialId(), removedSvq,
 				support.chemistry() == null ? null : support.chemistry().registry());
@@ -463,13 +498,14 @@ final class CondensedPhaseChangeStage {
 		support.commitPendingVolume(cell, plan.signedVolumeSvq());
 		support.refreshCoherentOccupancy();
 		support.markGridDirty();
-		support.thermal().repartitionCellEnergyConserving(
-				cell, support.state().thermalMarkers(), inventoryBefore);
+		support.thermal().commitPhaseCellEnergy(plan.thermalPlan(), support.state().thermalMarkers());
 	}
 
 	private record JointPhasePlan(
 			long batches, boolean freezing, PhaseRemovalPlan removal,
 			CoherentPhaseStore.Group coherentTransfer, ChemicalMixtureRecord meltedMixture,
-			int meltSlot, double temperatureAfterK, long signedVolumeSvq
-	) { }
+			int meltSlot, ThermalDomainState.PhaseCellEnergyPlan thermalPlan, long signedVolumeSvq
+	) {
+		double temperatureAfterK() { return thermalPlan.temperatureK(); }
+	}
 }

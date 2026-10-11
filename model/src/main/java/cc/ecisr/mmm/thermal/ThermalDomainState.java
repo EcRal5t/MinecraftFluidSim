@@ -607,7 +607,49 @@ public final class ThermalDomainState {
 		return cellOperations.preparePhaseCandidateCell(cell, markers);
 	}
 
-	/** Validates one prospective liquid inventory against a frozen same-cell energy/solid context. */
+	/** A cell-local raw-energy assignment and its complete audit, prepared before either phase writes. */
+	public static final class PhaseCellEnergyPlan {
+		private final ThermalDomainState owner;
+		private final Revision revision;
+		private final ThermalCellOperations.PhaseCellAssignment assignment;
+		private PhaseCellEnergyPlan(ThermalDomainState owner, Revision revision, ThermalCellOperations.PhaseCellAssignment assignment) {
+			this.owner = owner; this.revision = revision; this.assignment = assignment;
+		}
+		public double temperatureK() { return assignment.raw().actualState() == null ? Double.NaN
+				: assignment.raw().actualState().temperatureK(); }
+	}
+
+	public static final class PhaseCellEnergyUnavailableException extends IllegalArgumentException {
+		private PhaseCellEnergyUnavailableException(ThermalCellEnergyAssignment.UnavailableException cause) { super(cause.getMessage(), cause); }
+	}
+
+	public PhaseCellEnergyPlan planPhaseCellEnergy(PhaseCandidateCell current,
+			List<ThermalStateFunction.InventoryPortion> liquidInventory, double gasEnergyBefore, double gasEnergyAfter) {
+		try { return new PhaseCellEnergyPlan(this, thermalRevision(),
+				cellOperations.preparePhaseCellEnergy(current, liquidInventory, gasEnergyBefore, gasEnergyAfter)); }
+		catch (ThermalCellEnergyAssignment.UnavailableException unavailable) { throw new PhaseCellEnergyUnavailableException(unavailable); }
+	}
+
+	/** Plans complete future liquid/coherent owners at the current cell energy, retaining its granular heat baths. */
+	public PhaseCellEnergyPlan planPhaseCellEnergy(PhaseCandidateCell current,
+			List<ThermalStateFunction.InventoryPortion> liquidAndCoherentInventory) {
+		try { return new PhaseCellEnergyPlan(this, thermalRevision(),
+				cellOperations.preparePhaseCellEnergy(current, liquidAndCoherentInventory)); }
+		catch (ThermalCellEnergyAssignment.UnavailableException unavailable) { throw new PhaseCellEnergyUnavailableException(unavailable); }
+	}
+
+	public void requirePhaseCellEnergyCurrent(PhaseCellEnergyPlan plan) {
+		if (plan == null || plan.owner != this || !matchesThermalRevision(plan.revision))
+			throw new IllegalStateException("Thermal phase energy plan is stale or belongs to another domain");
+	}
+
+	/** Called after the prechecked phase inventory edits, with their exact prepared caloric owner set. */
+	public void commitPhaseCellEnergy(PhaseCellEnergyPlan plan, ThermalCarrierContext markers) {
+		if (plan == null || plan.owner != this) throw new IllegalStateException("Thermal phase energy plan belongs to another domain");
+		cellOperations.commitPhaseCellEnergy(plan.assignment, markers);
+	}
+
+	/** Validates one prospective liquid inventory against a saved same-cell energy/solid context. */
 	public double requirePhaseCandidateState(
 			PhaseCandidateCell current, List<ThermalStateFunction.InventoryPortion> liquidInventory,
 			double gasEnergyBefore, double gasEnergyAfter
