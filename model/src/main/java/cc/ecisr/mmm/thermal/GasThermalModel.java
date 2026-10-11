@@ -57,6 +57,8 @@ public final class GasThermalModel {
 		this.stateFunction = new ThermalStateFunction(thermalRegistry);
 	}
 
+	ThermalRegistry thermalRegistry() { return thermalRegistry; }
+
 	public double internalEnergyAtTemperature(GasInventory inventory, double temperatureK) {
 		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
 		if (inventory.isEmpty()) {

@@ -8,6 +8,7 @@
 |---|---|---|
 | 气腔扫描和归属 | [AirCavityScanner](../../solver/src/main/java/cc/ecisr/mmm/fluid/AirCavityScanner.java) | `air-cavity` |
 | 气体库存与孔流 | [AirNetwork](../../model/src/main/java/cc/ecisr/mmm/fluid/air/AirNetwork.java) | `air-network` |
+| 热孔流整数均压 | [GasEnergyStore](../../model/src/main/java/cc/ecisr/mmm/thermal/GasEnergyStore.java)、[GasTransferSearch](../../model/src/main/java/cc/ecisr/mmm/thermal/GasTransferSearch.java)、[GasTransferValidation](../../fabric/src/test/java/cc/ecisr/mmm/thermal/GasTransferValidation.java) | `thermal` |
 | 温度、压力和声学状态 | [GasThermalModel](../../model/src/main/java/cc/ecisr/mmm/thermal/GasThermalModel.java) | `thermal` |
 | 气液压力耦合 | [PressureBoundaryView](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureBoundaryView.java)、[PressureProjectionWorkspace](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionWorkspace.java) | `gas-liquid` |
 | 定义与存档 | [GasRegistryCodec](../../fabric/src/main/java/cc/ecisr/mmm/fluid/air/GasRegistryCodec.java) | `region-state` |
@@ -176,7 +177,9 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 
 实际孔流量通过源库存的 `Vstd/Vavailable` 换成标准体积流量；无限环境使用 `T0/Tambient`，密度也按环境温度推导。一个 step 的 transfer 由完整候选的均压条件限制：热状态搬运源侧焓 `h = u + p*v`，用候选两侧库存与 `U` 重新推导压力，在整数 nanos 上寻找保持源压不低于目标压力的最大可表示份额。ambient 流入记 source，流出记 sink；节点间转移不记外部源汇。
 
-休眠观察复用这项整数均压限制，读取当前热力学压力而不修改库存。全部 edge 的均压可转移量为零时，气体允许休眠；存在浮点压差但已达到整数均压状态的节点无需反复执行空步骤。仍有均压余量的细小孔保持活动，判断与孔面积、单步时长无关，避免把低流率误认为平衡。`air-network` 同时验证均压后连续空步骤、环境流入/流出，以及微小孔的非平衡状态。
+整数混合物按 largest remainder 分配组分与 species；不同热容和温度下，可执行份额在整数轴上允许出现间断。`GasTransferSearch` 按每组分 `floor(a*w/W)..ceil(b*w/W)` 的数量范围构造焓、分段热容与压力的上下界，优先搜索较大的份额；只有能够证明全区间源压低于目标压力时才跳过该区间。每次搜索最多展开 4096 个区间。极端量化或能量基准使压力范围无法在预算内确定时，以 `TransferSearchBudgetExceededException` 拒绝私有候选并保留原状态，区域进入数值暂停。
+
+休眠观察复用这项整数均压限制，在可用库存和目标数量容量内搜索当前热力学状态可执行的份额；观察搜索预算不足时保守保持活动，由真实转移候选报告数值暂停。全部 edge 的均压可转移量为零时，气体允许休眠；存在浮点压差但已达到整数均压状态的节点无需反复执行空步骤。仍有均压余量的细小孔保持活动，判断与孔面积、单步时长无关，避免把低流率误认为平衡。`air-network` 同时验证均压后连续空步骤、环境流入/流出，以及微小孔的非平衡状态。
 
 ## 持久化
 

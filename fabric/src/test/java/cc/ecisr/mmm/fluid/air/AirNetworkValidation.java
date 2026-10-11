@@ -178,6 +178,14 @@ public final class AirNetworkValidation {
 		for (int step = 0; step < 200; step++) network.stepEdges(0.05);
 		check(network.revision() == settledRevision,
 				"sleep observation hid an executable equilibrium transfer");
+		AirNetwork extreme = new AirNetwork();
+		int tinyCavity = extreme.addNode(1.0E-303, 1.0);
+		extreme.addOrMergeEdge(tinyCavity, AirNetwork.AMBIENT_NODE, 0.1, 0.65);
+		long before = extreme.standardVolumeNanos(tinyCavity);
+		extreme.stepEdges(1.0E-309);
+		check(before - extreme.standardVolumeNanos(tinyCavity) == 26_668L,
+				"finite orifice velocity overflowed when doubling an extreme pressure difference");
+		checkLedger(extreme, "extreme finite orifice flow");
 		System.out.printf("  two-cavity equalization converged in %d steps to deltaP=%.3g Pa%n", steps, previousDelta);
 	}
 

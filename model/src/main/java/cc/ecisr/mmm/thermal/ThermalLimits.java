@@ -16,6 +16,7 @@ public final class ThermalLimits {
 	public static final int MAX_THERMAL_CARRIERS_PER_CELL = 256;
 	public static final int MAX_PHASE_OPERATIONS_PER_STEP = 4_096;
 	public static final int MAX_GAS_NODES_PER_REGION = 65_536;
+	public static final int MAX_GAS_TRANSFER_SEARCH_INTERVALS = 4_096;
 	public static final int MAX_FINITE_DEVICE_CONTACTS = 16;
 	public static final int MAX_FINITE_DEVICES_PER_REGION = 1_024;
 	public static final int MAX_DEVICE_OBJECT_ID_LENGTH = 256;

@@ -13,6 +13,11 @@ import java.util.List;
  * their audit booking, and the gas revision token. Gas node ordinals change only here.
  */
 public final class GasEnergyStore {
+	public static final class TransferSearchBudgetExceededException extends IllegalArgumentException {
+		public TransferSearchBudgetExceededException() {
+			super("Gas mixture transfer search exceeded its caloric interval budget");
+		}
+	}
 	private final GasThermalModel gasModel;
 	private final double insertionTemperatureK;
 	private final ThermalAuditState audit;
@@ -104,42 +109,43 @@ public final class GasEnergyStore {
 			@Override public long limitTransferNanos(int source, int target, long requested) {
 				return maximumTransfer(source, target, requested, network);
 			}
+			@Override public long activityTransferNanos(int source, int target, long available) {
+				try { return maximumTransfer(source, target, available, network); }
+				catch (TransferSearchBudgetExceededException unresolvedActivity) { return 1L; }
+			}
 		};
 	}
 
-	/** Finds the last exact portion before enthalpy transport reverses the pressure difference. */
+	/** Finds the greatest thermodynamically executable exact portion within the requested amount. */
 	private long maximumTransfer(int source, int target, long requested, AirNetwork network) {
 		if (requested <= 0L) return 0L;
-		long low = 0L, high = requested;
+		if (source != AirNetwork.AMBIENT_NODE) requested = Math.min(requested, network.standardVolumeNanos(source));
+		if (target != AirNetwork.AMBIENT_NODE) requested = Math.min(requested, Long.MAX_VALUE - network.standardVolumeNanos(target));
 		double sourceTemperature = source == AirNetwork.AMBIENT_NODE
 				? insertionTemperatureK : temperature(source, network);
-		if (permitsTransfer(source, target, requested, sourceTemperature, network)) return requested;
-		high--;
-		while (low < high) {
-			long amount = low + (high - low) / 2 + (high - low) % 2;
-			if (permitsTransfer(source, target, amount, sourceTemperature, network)) low = amount;
-			else high = amount - 1;
-		}
-		return low;
+		return new GasTransferSearch(gasModel.thermalRegistry(), network, source, target, sourceTemperature,
+				source == AirNetwork.AMBIENT_NODE ? 0.0 : nodeEnergy[source - 1],
+				target == AirNetwork.AMBIENT_NODE ? 0.0 : nodeEnergy[target - 1],
+				amount -> permitsTransfer(source, target, amount, sourceTemperature, network)).maximum(requested);
 	}
 
 	private boolean permitsTransfer(int source, int target, long amount, double sourceTemperature, AirNetwork network) {
-		GasInventory moved, sourceAfter;
-		if (source == AirNetwork.AMBIENT_NODE) {
-			moved = network.ambientInventory(amount); sourceAfter = GasInventory.EMPTY;
-		} else {
-			GasInventory.Split split = network.inventory(source).splitTotal(amount);
-			moved = split.first(); sourceAfter = split.second();
-		}
-		GasInventory targetAfter = target == AirNetwork.AMBIENT_NODE ? GasInventory.EMPTY : network.inventory(target).merge(moved);
-		double carried = gasModel.enthalpy(moved, sourceTemperature);
 		try {
+			GasInventory moved, sourceAfter;
+			if (source == AirNetwork.AMBIENT_NODE) {
+				moved = network.ambientInventory(amount); sourceAfter = GasInventory.EMPTY;
+			} else {
+				GasInventory.Split split = network.inventory(source).splitTotal(amount);
+				moved = split.first(); sourceAfter = split.second();
+			}
+			GasInventory targetAfter = target == AirNetwork.AMBIENT_NODE ? GasInventory.EMPTY : network.inventory(target).merge(moved);
+			double carried = gasModel.enthalpy(moved, sourceTemperature);
 			double sourcePressure = source == AirNetwork.AMBIENT_NODE ? GasRegistry.STANDARD_PRESSURE_PA
 					: gasModel.absolutePressure(sourceAfter, network.availableVolume(source), nodeEnergy[source - 1] - carried);
 			double targetPressure = target == AirNetwork.AMBIENT_NODE ? GasRegistry.STANDARD_PRESSURE_PA
 					: gasModel.absolutePressure(targetAfter, network.availableVolume(target), nodeEnergy[target - 1] + carried);
 			return sourcePressure >= targetPressure;
-		} catch (IllegalArgumentException invalidCaloricState) {
+		} catch (IllegalArgumentException | ArithmeticException invalidCaloricState) {
 			return false;
 		}
 	}

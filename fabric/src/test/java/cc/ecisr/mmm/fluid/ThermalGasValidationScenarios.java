@@ -569,6 +569,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void gasRuntimeTransfersEnergyAndWork() {
+		cc.ecisr.mmm.thermal.GasTransferValidation.validate();
 		GasRegistry gasRegistry = BuiltinGasDefinitions.createRegistry();
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension(
 				"test:gas_host", 1_000.0, "test:miscible", 0.0, 90.0);

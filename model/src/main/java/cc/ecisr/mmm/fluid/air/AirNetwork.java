@@ -33,6 +33,10 @@ public final class AirNetwork {
 		}
 		/** Returns an energy-aware exact limit, or -1 to use the isothermal equilibrium. */
 		default long limitTransferNanos(int source, int target, long requested) { return -1L; }
+		/** Read-only evidence of remaining transfer activity, or -1 for the isothermal fallback. */
+		default long activityTransferNanos(int source, int target, long available) {
+			return limitTransferNanos(source, target, available);
+		}
 	}
 
 	@FunctionalInterface
@@ -123,7 +127,9 @@ public final class AirNetwork {
 			if (first == second) continue;
 			int source = first > second ? edge.firstNode() : edge.secondNode();
 			int target = first > second ? edge.secondNode() : edge.firstNode();
-			long thermalLimit = thermodynamics == null ? -1L : thermodynamics.limitTransferNanos(source, target, 1L);
+			long available = source == AMBIENT_NODE ? Long.MAX_VALUE : standardVolumeNanos(source);
+			if (target != AMBIENT_NODE) available = Math.min(available, Long.MAX_VALUE - standardVolumeNanos(target));
+			long thermalLimit = thermodynamics == null ? -1L : thermodynamics.activityTransferNanos(source, target, available);
 			if (thermalLimit >= 0L) {
 				if (thermalLimit > 0L) return true;
 				continue;
@@ -323,7 +329,7 @@ public final class AirNetwork {
 				throw new IllegalArgumentException("Gas orifice source density is invalid");
 			}
 			double flow = edge.dischargeCoefficient() * edge.areaSquareMeters()
-					* Math.sqrt(2.0 * delta / density);
+					* (Math.sqrt(delta) / Math.sqrt(density)) * Math.sqrt(2.0);
 			double transferCubicMeters = flow * dt * thermodynamics.standardVolumeRatio(source);
 			double maximumVolume = source == AMBIENT_NODE ? cubicMeters(Long.MAX_VALUE) : standardVolume(source);
 			long requested = transferCubicMeters >= maximumVolume
