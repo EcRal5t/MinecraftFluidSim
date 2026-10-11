@@ -32,6 +32,7 @@ import java.util.Map;
 
 abstract class ThermalTransportValidationScenarios extends ThermalValidationSupport {
 	static void containerTransferCarriesAuthoritativeEnergy() {
+		liquidInitializationValidatesStoredEnergy();
 		thermalHandoffPreservesInsertionTemperature();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("mmm:thermal/container_water",
@@ -75,6 +76,45 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(relocated.transferred() && close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"collision relocation did not restore material U without a guessed temperature");
+	}
+
+	private static void liquidInitializationValidatesStoredEnergy() {
+		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		var water = new ThermalMaterialDefinition("test:initial/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.WATER.id(), 1900, Math.scalb(1.0, 63), 0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 1)));
+		var registry = new ThermalRegistry(List.of(water));
+		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F);
+		var domain = new FluidDomain(4, 4, 4, config, 512);
+		domain.setVolume(2, 2, 2, .0625F);
+		int count = domain.particleCount(); double mass = domain.particles.mass(0);
+		double physicalMass = SolverUnitScale.forCellSize(config.cellSize()).kilograms(mass);
+		double base = physicalMass * water.referenceSpecificEnergyEuPerMu();
+		double modeled = base + physicalMass * (300 - water.referenceTemperatureK());
+		require(physicalMass == 7.8125 && water.referenceTemperatureK() + (modeled - base) / physicalMass < 0,
+				"liquid initialization regression no longer exercises an invalid stored temperature");
+		try {
+			domain.bindThermal(registry, liquids, 300);
+			throw new AssertionError("liquid initialization published an owner with nonpositive stored temperature");
+		} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
+		require(domain.thermalState == null && domain.particleCount() == count && domain.particles.mass(0) == mass,
+				"rejected liquid initialization changed the carrier or published a thermal binding");
+		domain.bindThermal(registry, liquids, 1900);
+		require(domain.thermalState.temperature(0, domain.thermalMarkerContext()) == 1900
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"valid stored-energy initialization failed after the rejected binding");
+		var snapshot = domain.exportThermalParticleState();
+		var atOtherSourceTemperature = new FlipThermalParticleState(4, 4, 4, .5F, snapshot.particleCount(),
+				registry.fingerprint(), 300, snapshot.copyInternalEnergy(), snapshot.copyActiveParcelEnergy(),
+				snapshot.copyDepositEnergy(), snapshot.coherentGroups(), snapshot.copyGasNodeEnergy(), snapshot.audit());
+		var restored = new FluidDomain(4, 4, 4, config, 512);
+		restored.restoreMaterialParticleState(domain.exportMaterialParticleState());
+		restored.restoreThermalParticleState(atOtherSourceTemperature, registry);
+		require(restored.thermalState.insertionTemperatureK() == 300
+				&& restored.thermalState.temperature(0, restored.thermalMarkerContext()) == 1900
+				&& restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
+				&& restored.thermalAudit().equals(domain.thermalAudit()),
+				"liquid restore modeled the configured source temperature instead of loading valid snapshot U");
 	}
 
 	private static void thermalHandoffPreservesInsertionTemperature() {

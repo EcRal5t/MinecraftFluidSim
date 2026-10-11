@@ -71,6 +71,8 @@ public final class LiquidEnergyColumn {
 			if (!Double.isFinite(internalEnergy[marker])) {
 				throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
 			}
+			ThermalCaloricInversion.owner(registry.material(thermalHandle), physicalMass,
+					internalEnergy[marker], base);
 		}
 	}
 
