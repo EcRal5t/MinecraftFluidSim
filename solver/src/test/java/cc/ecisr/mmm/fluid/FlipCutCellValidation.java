@@ -8,16 +8,35 @@ public final class FlipCutCellValidation {
 	private FlipCutCellValidation() { }
 
 	public static void main(String[] args) {
+		solverConfigRejectsNonfiniteCoefficients();
 		LiquidViscosityValidation.validate();
 		volumeAndSharedFaceFractionsAreConsistent();
 		wallAreasFollowMicroGeometry();
 		bodyOverlapExcludesOccupiedMicroCells();
 		cutCellSweepStopsOnlyTheContactNormal();
+		straightSweepResolvesDiagonalContacts();
+		contactPositionsFollowFloatMicroGeometry();
 		exactMarkerDisplacementUsesMicroOccupancy();
 		cutCellCapacityDisplacesMergedMarkerVolume();
 		checkpointPreservesCutCellGeometry();
 		partialObstacleFlowRemainsFiniteAndConservative();
 		System.out.println("FlipFluid cut-cell validation passed");
+	}
+
+	private static void solverConfigRejectsNonfiniteCoefficients() {
+		for (float invalid : new float[] {Float.NaN, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY}) {
+			for (int field = 0; field < 5; field++) {
+				float[] values = {.5F, 1000, 9.81F, .05F, 5E-5F}; values[field] = invalid;
+				boolean rejected = false;
+				try {
+					new FluidSolverConfig(values[0], values[1], values[2], values[3],
+							160, values[4], .4F, .002F, .8F);
+				} catch (IllegalArgumentException expected) { rejected = true; }
+				check(rejected, "solver config accepted nonfinite coefficient at field " + field + ": " + invalid);
+			}
+		}
+		new FluidSolverConfig(.5F, 1000, 0, .05F, 160, 5E-5F, 1, .002F, 0);
+		new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 160, 5E-5F, .4F, .002F, 1);
 	}
 
 	private static void bodyOverlapExcludesOccupiedMicroCells() {
@@ -63,18 +82,82 @@ public final class FlipCutCellValidation {
 
 	private static void cutCellSweepStopsOnlyTheContactNormal() {
 		int size = 3;
-		boolean[] fullySolid = new boolean[size * size * size];
 		FlipCutCellGeometry geometry = new FlipCutCellGeometry(size, size, size);
 		geometry.replaceMask(index(size, size, 1, 1, 1), NEGATIVE_X_HALF);
-		FlipParticleCollision collision = new FlipParticleCollision(size, size, size, 1.0F, fullySolid, geometry);
-		float[] x = {1.75F}, y = {1.50F}, z = {1.50F};
+		FlipParticleCollision collision = new FlipParticleCollision(size, size, size, 1.0F, geometry);
+		float[] x = {1.73F}, y = {1.50F}, z = {1.50F};
 		float[] velocityX = {-10.0F}, velocityY = {0.0F}, velocityZ = {2.0F};
 		collision.advect(x, y, z, velocityX, velocityY, velocityZ,
 				velocityX, velocityY, velocityZ, 1, 0.10F);
 		check(x[0] >= 1.5F, "swept marker crossed a cut-cell wall");
+		checkClose(x[0], 1.5F, Math.ulp(1.5F), "cut-cell contact left a step-sized wall gap");
 		checkClose(velocityX[0], 0.0F, 0.0F, "cut-cell contact normal velocity");
 		checkClose(z[0], 1.70F, 1.0E-6F, "cut-cell tangential displacement");
 		checkClose(velocityZ[0], 2.0F, 0.0F, "cut-cell tangential velocity");
+		x[0] = 1.75F; y[0] = 1.25F; z[0] = 1.25F;
+		velocityX[0] = -.5F; velocityY[0] = .5F; velocityZ[0] = 0;
+		collision.advect(x, y, z, velocityX, velocityY, velocityZ,
+				velocityX, velocityY, velocityZ, 1, 1);
+		checkClose(x[0], 1.5F, Math.ulp(1.5F), "simultaneous tangent grid crossing contact");
+		checkClose(y[0], 1.75F, 0, "tangent micro-grid crossing became a collision normal");
+		checkClose(velocityY[0], .5F, 0, "tangent micro-grid crossing removed tangent velocity");
+	}
+
+	private static void straightSweepResolvesDiagonalContacts() {
+		int size = 3;
+		FlipCutCellGeometry geometry = new FlipCutCellGeometry(size, size, size);
+		geometry.replaceMask(index(size, size, 1, 1, 1), 1);
+		FlipParticleCollision collision = new FlipParticleCollision(size, size, size, 1, geometry);
+		float[] x = {.75F}, y = {.95F}, z = {1.25F};
+		float[] vx = {1}, vy = {.4F}, vz = {0};
+		collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
+		checkClose(x[0], 1, Math.ulp(1F), "diagonal segment bypassed a solid micro box");
+		check(x[0] < 1, "positive contact rounded into the solid micro box");
+		checkClose(y[0], 1.35F, Math.ulp(1.35F), "diagonal contact lost remaining tangent motion");
+		checkClose(vx[0], 0, 0, "diagonal contact normal velocity");
+		checkClose(vy[0], .4F, 0, "diagonal contact tangent velocity");
+
+		// This straight path clears the obstacle before entering its X interval.
+		x[0] = .75F; y[0] = 1.4F; vx[0] = vy[0] = 1;
+		collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
+		checkClose(x[0], 1.75F, 0, "axis order introduced a false diagonal contact");
+		checkClose(y[0], 2.4F, 0, "clear diagonal segment changed tangent motion");
+
+		// A simultaneous corner entry constrains both normals and retains the third axis.
+		x[0] = y[0] = .75F; z[0] = 1.25F; vx[0] = vy[0] = .5F; vz[0] = .1F;
+		collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
+		check(x[0] < 1 && y[0] < 1, "corner contact entered solid geometry");
+		checkClose(x[0], 1, Math.ulp(1F), "corner X contact gap");
+		checkClose(y[0], 1, Math.ulp(1F), "corner Y contact gap");
+		checkClose(z[0], 1.35F, Math.ulp(1.35F), "corner contact lost tangent displacement");
+		checkClose(vx[0], 0, 0, "corner X normal velocity");
+		checkClose(vy[0], 0, 0, "corner Y normal velocity");
+		checkClose(vz[0], .1F, 0, "corner tangent velocity");
+	}
+
+	private static void contactPositionsFollowFloatMicroGeometry() {
+		int size = 4;
+		for (float h : new float[] {.3F, .1F, .07F, .5F}) {
+			FlipCutCellGeometry geometry = new FlipCutCellGeometry(size, size, size);
+			geometry.replaceMask(index(size, size, 1, 1, 1), NEGATIVE_X_HALF);
+			FlipParticleCollision collision = new FlipParticleCollision(size, size, size, h, geometry);
+			float[] x = {1.73F * h}, y = {1.25F * h}, z = {1.25F * h};
+			float[] vx = {-h}, vy = {0}, vz = {0};
+			collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
+			checkClose(x[0], 1.5F * h, 3 * Math.ulp(1.5F * h), "nonbinary grid negative contact");
+			check(!collision.centerInSolid(x[0], y[0], z[0]), "negative contact float entered solid");
+			x[0] = .73F * h; vx[0] = h;
+			collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
+			checkClose(x[0], h, 3 * Math.ulp(h), "nonbinary grid positive contact");
+			check(!collision.centerInSolid(x[0], y[0], z[0]), "positive contact float entered solid");
+			x[0] = 3.73F * h; vx[0] = h;
+			collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
+			check(x[0] < size * h, "domain contact rounded outside the grid");
+			checkClose(x[0], size * h, 3 * Math.ulp(size * h), "domain wall contact gap");
+			x[0] = .23F * h; vx[0] = -h;
+			collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
+			checkClose(x[0], 0, 0, "lower domain wall contact");
+		}
 	}
 
 	private static void exactMarkerDisplacementUsesMicroOccupancy() {

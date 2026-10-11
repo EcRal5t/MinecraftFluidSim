@@ -96,7 +96,7 @@ CPU 在私有对象上按阶段执行计算。`CpuWorkBatch` 的并行度取可�
 - G2P 按实际数值依赖分量分别计算预算：正权 P2G、有效 G2P、压力行、有限气体未知量、颗粒压力和阻力因子，以及空气延拓的联立变量共同确定支撑；空气外推从实际使用的面沿有向来源追溯。封闭几何分量的液体精确库存与实际可用容量相等，且数值分量的全部载体属于该满液压力支撑时，使用质量正交投影。容量包含颗粒占据量，真实微小缺口保持自由面规则。
 - 满液支撑的 G2P 先以 marker 质量内积将已有速度投影到 MAC 插值空间，丢弃该采样空间无法解析的分量，再写成 `v(alpha) = v_pic + alpha * (v_resolved - v_p2g)`。能量预算为 `E_resolved + min(E_predicted_grid, E_projected_grid) - E_p2g_grid`，保留可解析流动的 P2G 方差。质量正交投影使用矩阵无关 PCG 求解 `B^T M B q = B^T M v`，返回 `Bq`；各独立分量分别归约内积与判定收敛，残差精度对应 binary32 插值精度。含自由面的支撑沿用原 marker FLIP 增量，并采用预测与投影网格动能的较小值作为预算；其额外数值耗散单列诊断。两者以 PIC 动能作为可行下限，解析选择 `[0,1]` 内满足预算的最大 `alpha`。只有一个含液分量时保留直接求根；临时数组规模由当前面、格、载体和颗粒数量决定，每个面最多进入一次追溯队列。远处独立自由面或满液池保持目标分量的速度响应。
 - reseed 以标准 `2×2×2` marker quadrature 的单 marker 体积决定逐格目标数；split 保持体积、质量、动量和质心。merge 按相同 material、phase、密度、温度、指示剂和逐 species 浓度分组，先选择分散的代表点，再构造保持质心与完整空间协方差的正权重积分规则。体积之和须可精确表示；raw float 体积的双向减法同时检查细小尾数。可行方案耗尽时保留原积分点并报告拒绝原因。GPU 的相同判定须使用精确求值。
-- 生成使用标准四分之一格积分点，reseed 的对称拆分保持质心与可放置留距。运动中的 marker 按积分点处理，外壳与整格固体的接触余量取域尺度的一个 float 位置 ULP；切割微单元执行扫掠点碰撞。法向接触保留切向速度。
+- 生成使用标准四分之一格积分点，reseed 的对称拆分保持质心与可放置留距。运动中的 marker 按积分点处理，碰撞按实际直线轨迹依次遍历切割微单元，并在接触后推进剩余切向位移。接触位置取属于原开放微单元的最近 float 表示，外壳、整格固体与切割固体沿用同一规则；同刻跨越切向网格线保持切向速度。
 
 空气外推以实际 pressure phase 面与正 P2G 权重面的并集播种，保留这些面已经获得的物理速度。张量插值可在两侧均无 marker 中心的面上产生正权重，该面同样保持有效。满液体压力空间的闭合固体面是已知零法向速度，参与 G2P 插值的完整权重；自由面沿用开放 valid face 的归一化插值，该传递近似与网格能量预算共同验收。P2G 与 G2P 在域外壳附近使用相同的截断坐标。
 
@@ -286,7 +286,7 @@ u[n+1] = u* - dt * (1/rho) * grad(p[n+1])
 
 液气曲率优先由原始液体体积分数的九列高度函数计算。各列须位于完整开放单元中，沿同一方向单调积分至空单元；液端采用满格，或两侧 PLIC 共同覆盖的完整湿截面。部分端格按实际库存纳入高度积分，其 PLIC 对应的压力体积须与当前体积分数相等，端格法向须朝向该列气侧。主轴按体积分数梯度选择。外壳的实际接触角为 90°、目标和采样单元完全开放时，体积分数作偶反射，散度中的墙法向分量作奇反射。切割、颗粒占据、其他接触角、未解析或多重界面沿用平滑法向的散度近似。`HeightFunctionCurvature` 与准确体积分数初始化的平面、部分格液层、球面、接触外壳的圆柱及完整压力步对照；闭合自由面的合力、力矩和寄生速度仍须随解析度观察。液液 CSF 保留与其平滑相分数梯度配套的曲率。
 
-液液张力使用 phase 无序对定义，以 balanced-force CSF 接入同一 pressure 路径。液气曲率法向始终只来自液气几何；润湿由 Young 表面能 `sigma_sl - sigma_sg = -sigma cos(theta)` 的切向离散梯度产生，固壁面积取自同一 `2×2×2` cut-cell microgeometry（含域边界），不旋转曲率法向，也不使用浅水吸墙、墙角偏置或材料 ID 特判。
+液液张力使用 phase 无序对定义，以 balanced-force CSF 接入同一 pressure 路径。每对使用两相平滑分数的 `alpha_A*grad(alpha_B) - alpha_B*grad(alpha_A)` 构造法向、曲率与面力；二相占满液体时退化为 `grad(alpha_B)`，第三相中的 pair 份额减小时作用连续减小，任一相缺失时作用归零。液气曲率法向始终只来自液气几何；润湿由 Young 表面能 `sigma_sl - sigma_sg = -sigma cos(theta)` 的切向离散梯度产生，固壁面积取自同一 `2×2×2` cut-cell microgeometry（含域边界），不旋转曲率法向，也不使用浅水吸墙、墙角偏置或材料 ID 特判。
 
 当前 `gpu-probe-kernel` 只覆盖单一常密度不可压 carrier 的 pressure 几何、P2G/G2P、散度一致平流、碰撞和守恒 reseed。它尚未承载材料质量列、变密度、液气/液液表面张力与 Young 壁能、gas boundary、热化学或完整 immutable candidate，因此这些 CPU 能力不能被记作 GPU 已实现；probe 继续不具备生产资格。
 
@@ -299,7 +299,7 @@ u[n+1] = u* - dt * (1/rho) * grad(p[n+1])
 - 世界碰撞变化挤出的液体必须从 marker 账本得到实际量；不能用格密度推断 escaped volume。
 - granular、deposit 和 coherent solid occupancy 与 liquid 共享容量和压力排水路径。
 
-`FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 对 marker 轨迹做连续碰撞检测，避免只在步末投影位置造成穿薄墙；碰撞只去除命中法向速度，切向分量保持。
+`FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 按微单元平面的相交时刻遍历 marker 直线轨迹，取首个固体接触，随后沿墙面推进剩余切向位移。角落的同时接触按实际阻挡微单元确定法向；碰撞去除指向固体的法向速度，切向分量保持。
 
 实体交互由 Fabric 每个 Minecraft tick 冻结有界 AABB、原版更新后的实体响应速度、本 tick 实际位姿差和流体观察。core 将 AABB 与当前派生的水平液层逐格求交；每格液层按开放 `2×2×2` micro layer 自下而上分配，所以浸没体积和湿区质心随子格位移连续变化，并排除 `VoxelShape` 已占据的 micro volume。
 

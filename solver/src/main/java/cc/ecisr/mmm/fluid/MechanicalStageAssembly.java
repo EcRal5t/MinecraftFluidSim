@@ -140,7 +140,6 @@ final class MechanicalStageAssembly {
 			@Override public boolean liquidPairTensionActive() { return domain.liquidPairTensionActive; }
 			@Override public double phaseFraction(int cell, int phase) { return domain.phaseFraction(cell, phase); }
 			@Override public void smoothSurfaceTensionColor() { domain.smoothSurfaceTensionColor(); }
-			@Override public void rebuildSurfaceTensionNormals() { domain.rebuildSurfaceTensionNormals(); }
 			@Override public double surfaceTensionMeanCurvature(int x, int y, int z) {
 				return domain.surfaceTensionMeanCurvature(x, y, z);
 			}

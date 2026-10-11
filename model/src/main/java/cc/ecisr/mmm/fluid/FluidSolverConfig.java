@@ -30,12 +30,12 @@ public record FluidSolverConfig(
 
 	public FluidSolverConfig {
 		java.util.Objects.requireNonNull(viscousWallCondition, "viscousWallCondition");
-		if (!(cellSize > 0.0F)) throw new IllegalArgumentException("cellSize must be positive");
-		if (!(density > 0.0F)) throw new IllegalArgumentException("density must be positive");
-		if (!(gravity >= 0.0F)) throw new IllegalArgumentException("gravity cannot be negative");
-		if (!(timeStep > 0.0F)) throw new IllegalArgumentException("timeStep must be positive");
+		if (!(Float.isFinite(cellSize) && cellSize > 0.0F)) throw new IllegalArgumentException("cellSize must be finite and positive");
+		if (!(Float.isFinite(density) && density > 0.0F)) throw new IllegalArgumentException("density must be finite and positive");
+		if (!(Float.isFinite(gravity) && gravity >= 0.0F)) throw new IllegalArgumentException("gravity must be finite and non-negative");
+		if (!(Float.isFinite(timeStep) && timeStep > 0.0F)) throw new IllegalArgumentException("timeStep must be finite and positive");
 		if (maxPressureIterations < 1) throw new IllegalArgumentException("maxPressureIterations must be positive");
-		if (!(pressureTolerance > 0.0F)) throw new IllegalArgumentException("pressureTolerance must be positive");
+		if (!(Float.isFinite(pressureTolerance) && pressureTolerance > 0.0F)) throw new IllegalArgumentException("pressureTolerance must be finite and positive");
 		if (!(maxCourantNumber > 0.0F && maxCourantNumber <= 1.0F)) {
 			throw new IllegalArgumentException("maxCourantNumber must be in (0, 1]");
 		}

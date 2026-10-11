@@ -138,7 +138,7 @@ abstract class FluidDomainStorage {
 		this.closedLiquidVolume = new ClosedLiquidVolumeConstraint(sizeX, sizeY, sizeZ, geometry.cutCells);
 		this.freeSurfaceGeometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
 		this.particleReseeder = new FlipParticleReseeder(sizeX, sizeY, sizeZ, config.cellSize(), maximumParticleCount);
-		this.particleCollision = new FlipParticleCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.solid, geometry.cutCells);
+		this.particleCollision = new FlipParticleCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.cutCells);
 		this.velocityExtrapolator = new FlipVelocityExtrapolator(sizeX, sizeY, sizeZ, geometry.cutCells);
 		this.volume = new float[cellCount];
 		this.mac = new MacVelocityGrid(sizeX, sizeY, sizeZ);

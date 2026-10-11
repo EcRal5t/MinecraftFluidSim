@@ -39,7 +39,6 @@ final class BodyForceStage {
 		boolean liquidPairTensionActive();
 		double phaseFraction(int cell, int phase);
 		void smoothSurfaceTensionColor();
-		void rebuildSurfaceTensionNormals();
 		double surfaceTensionMeanCurvature(int x, int y, int z);
 		boolean isFluid(int cell);
 		boolean variableDensityActive();
@@ -255,12 +254,16 @@ final class BodyForceStage {
 		float scale = dt / (state.config.density() * state.config.cellSize());
 		for (Map.Entry<Long, Double> entry : access.materialRegistry().liquidPairTensions().entrySet()) {
 			if (entry.getValue() <= 0.0) continue;
-			int secondPhase = (int) (entry.getKey() & 0xffffffffL);
-			applyLiquidPairSurfaceTensionPair(secondPhase, entry.getValue(), scale);
+			int firstPhase = (int) (entry.getKey() >>> 32), secondPhase = (int) (entry.getKey() & 0xffffffffL);
+			applyLiquidPairSurfaceTensionPair(firstPhase, secondPhase, entry.getValue(), scale);
 		}
 	}
 
-	private void applyLiquidPairSurfaceTensionPair(int phaseB, double tensionScale, float scale) {
+	private void applyLiquidPairSurfaceTensionPair(int phaseA, int phaseB, double tensionScale, float scale) {
+		for (int index = 0; index < state.cellCount; index++)
+			state.tension.surfaceTensionColor[index] = state.geometry.solid[index] ? 0 : access.phaseFraction(index, phaseA);
+		access.smoothSurfaceTensionColor();
+		System.arraycopy(state.tension.surfaceTensionSmoothed, 0, state.tension.surfaceTensionPairFirstSupport, 0, state.cellCount);
 		for (int index = 0; index < state.cellCount; index++) {
 			if (state.geometry.solid[index]) {
 				state.tension.surfaceTensionColor[index] = 0.0;
@@ -269,37 +272,60 @@ final class BodyForceStage {
 			state.tension.surfaceTensionColor[index] = access.phaseFraction(index, phaseB);
 		}
 		access.smoothSurfaceTensionColor();
-		access.rebuildSurfaceTensionNormals();
+		rebuildLiquidPairNormals();
 		java.util.Arrays.fill(state.tension.surfaceTensionPairCurvature, 0.0);
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int index = access.cellIndex(x, y, z);
 			if (state.geometry.solid[index] || state.markerGrid.markerCount[index] == 0) continue;
 			state.tension.surfaceTensionPairCurvature[index] = access.surfaceTensionMeanCurvature(x, y, z);
 		}
-		float inverseCell = 1.0F / state.config.cellSize();
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
 			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z), face = access.xFaceIndex(x, y, z);
-			applyLiquidPairFaceForce(left, right, face, tensionScale, scale, inverseCell, access.pressureXFaceOpen(x, y, z), state.mac.velocityX);
+			applyLiquidPairFaceForce(left, right, face, tensionScale, scale, access.pressureXFaceOpen(x, y, z), state.mac.velocityX);
 		}
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z), face = access.yFaceIndex(x, y, z);
-			applyLiquidPairFaceForce(below, above, face, tensionScale, scale, inverseCell, access.pressureYFaceOpen(x, y, z), state.mac.velocityY);
+			applyLiquidPairFaceForce(below, above, face, tensionScale, scale, access.pressureYFaceOpen(x, y, z), state.mac.velocityY);
 		}
 		for (int z = 1; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int back = access.cellIndex(x, y, z - 1), front = access.cellIndex(x, y, z), face = access.zFaceIndex(x, y, z);
-			applyLiquidPairFaceForce(back, front, face, tensionScale, scale, inverseCell, access.pressureZFaceOpen(x, y, z), state.mac.velocityZ);
+			applyLiquidPairFaceForce(back, front, face, tensionScale, scale, access.pressureZFaceOpen(x, y, z), state.mac.velocityZ);
 		}
 	}
 
-	private void applyLiquidPairFaceForce(int first, int second, int face, double tensionScale, float scale,
-	                                      float inverseCell, float openArea, float[] velocity) {
+	private void applyLiquidPairFaceForce(int first, int second, int face,
+	                                      double tensionScale, float scale, float openArea, float[] velocity) {
 		if (openArea <= 0.0F || !access.isFluid(first) || !access.isFluid(second)) return;
-		double delta = state.tension.surfaceTensionSmoothed[second] - state.tension.surfaceTensionSmoothed[first];
+		double delta = liquidPairGradient(first, second);
 		if (delta == 0.0) return;
 		float densityScale = access.variableDensityActive() ? access.pressureDensityScale(first, second) : 1.0F;
 		double kappa = 0.5 * (state.tension.surfaceTensionPairCurvature[first] + state.tension.surfaceTensionPairCurvature[second]);
 		float forceDifference = (float) (tensionScale * kappa * delta);
 		velocity[face] += scale * densityScale * forceDifference;
+	}
+
+	/** Multiphase CSF gradient alpha_A grad(alpha_B) - alpha_B grad(alpha_A). */
+	private double liquidPairGradient(int first, int second) {
+		return state.tension.surfaceTensionPairFirstSupport[first] * state.tension.surfaceTensionSmoothed[second]
+				- state.tension.surfaceTensionPairFirstSupport[second] * state.tension.surfaceTensionSmoothed[first];
+	}
+
+	private void rebuildLiquidPairNormals() {
+		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
+			int cell = access.cellIndex(x, y, z);
+			double gx = liquidPairGradient(access.cellIndex(Math.max(0, x - 1), y, z), access.cellIndex(Math.min(state.sizeX - 1, x + 1), y, z));
+			double gy = liquidPairGradient(access.cellIndex(x, Math.max(0, y - 1), z), access.cellIndex(x, Math.min(state.sizeY - 1, y + 1), z));
+			double gz = liquidPairGradient(access.cellIndex(x, y, Math.max(0, z - 1)), access.cellIndex(x, y, Math.min(state.sizeZ - 1, z + 1)));
+			double length = Math.sqrt(gx * gx + gy * gy + gz * gz);
+			if (state.geometry.solid[cell] || !(length > 0)) {
+				state.tension.surfaceTensionNormalX[cell] = state.tension.surfaceTensionNormalY[cell] = 0;
+				state.tension.surfaceTensionNormalZ[cell] = 1;
+			} else {
+				state.tension.surfaceTensionNormalX[cell] = gx / length;
+				state.tension.surfaceTensionNormalY[cell] = gy / length;
+				state.tension.surfaceTensionNormalZ[cell] = gz / length;
+			}
+		}
 	}
 
 	void enforceSolidFaceVelocities() {

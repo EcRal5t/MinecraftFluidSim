@@ -18,6 +18,7 @@ public static void main(String[] args) {
 	validateMergeBreakupConservation();
 	validateContactAngleSpreading();
 	validateLiquidPairPressureJump();
+	validateLiquidPairIdentity();
 	System.out.println("M4 surface-tension solver gate passed: static droplet Laplace jump, "
 			+ "contact-angle spreading, liquid-pair pressure jump, no sustained parasitic flow and exact marker conservation");
 }
@@ -235,7 +236,35 @@ private record DropletMetrics(double varianceX, float maximumSpeed) { }
 		}
 	}
 
+	private static void validateLiquidPairIdentity() {
+		FluidSolverConfig config = new FluidSolverConfig(.5F, 1000, 0, .025F, 800, 1E-6F, .45F, .002F, .8F);
+		FluidDomain domain = liquidPairDroplet(8, config, 1, .0728, true);
+		domain.step();
+		check(domain.maximumPressure() == 0, "a liquid pair acted on an interface with its first phase absent");
+		check(domain.maximumParticleSpeed() == 0, "an unrelated liquid pair created liquid motion");
+		FluidDomain separated = liquidPairDroplet(12, config, .5, .0728, true);
+		for (int p = 0; p < 8; p++) separated.setMarkerMaterial(p, separated.materialRegistry, 1);
+		separated.step();
+		check(separated.maximumPressure() == 0, "a remote phase changed an unrelated liquid interface");
+		check(separated.maximumParticleSpeed() == 0, "disjoint liquid-pair supports created motion");
+		FluidDomain full = liquidPairDroplet(8, config, 1, .0728, true);
+		FluidDomain diluted = liquidPairDroplet(8, config, 1, .0728, true);
+		for (int p = 0; p < full.particleCount(); p++) if (full.particles.materialHandle(p) == 0) {
+			full.setMarkerMaterial(p, full.materialRegistry, 1);
+			if (p % 8 == 0) diluted.setMarkerMaterial(p, diluted.materialRegistry, 1);
+		}
+		full.step(); diluted.step();
+		check(full.maximumPressure() > 0, "active pair failed to create a capillary pressure");
+		check(Math.abs(diluted.maximumPressure() / full.maximumPressure() - .125) < .002,
+				"pair force did not decay continuously with its first phase's local fraction");
+	}
+
 	private static FluidDomain liquidPairDroplet(int size, FluidSolverConfig config, double radius, double sigma12) {
+		return liquidPairDroplet(size, config, radius, sigma12, false);
+	}
+
+	private static FluidDomain liquidPairDroplet(int size, FluidSolverConfig config, double radius, double sigma12,
+			boolean absentFirstPhase) {
 		FluidDomain domain = new FluidDomain(size, size, size, config, size * size * size * 8);
 		int particleCount = size * size * size * 8;
 		float[] positionVolume = new float[particleCount * 4];
@@ -258,14 +287,16 @@ private record DropletMetrics(double varianceX, float maximumSpeed) { }
 				totalVolume, positionVolume, velocities, domain.copyCollisionMicroMasks()));
 		FluidMaterial a = new FluidMaterial("mmm:a", config.density(), "mmm:a", 0.0, Math.PI / 2.0);
 		FluidMaterial b = new FluidMaterial("mmm:b", config.density(), "mmm:b", 0.0, Math.PI / 2.0);
-		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(a, b),
-				List.of(new FluidMaterialRegistry.LiquidPairTension(0, 1, sigma12)));
+		FluidMaterial c = new FluidMaterial("mmm:c", config.density(), "mmm:c", 0, Math.PI / 2);
+		FluidMaterialRegistry registry = absentFirstPhase
+				? new FluidMaterialRegistry(List.of(a, b, c), List.of(new FluidMaterialRegistry.LiquidPairTension(1, 2, sigma12)))
+				: new FluidMaterialRegistry(List.of(a, b), List.of(new FluidMaterialRegistry.LiquidPairTension(0, 1, sigma12)));
 		double[] colour = SurfaceTensionCurvatureExperiment.sphereColour(size, radius, h);
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			int x = Math.min(size - 1, (int) Math.floor(positionVolume[marker * 4] / h));
 			int y = Math.min(size - 1, (int) Math.floor(positionVolume[marker * 4 + 1] / h));
 			int z = Math.min(size - 1, (int) Math.floor(positionVolume[marker * 4 + 2] / h));
-			int materialHandle = colour[(z * size + y) * size + x] >= 0.5 ? 1 : 0;
+			int materialHandle = colour[(z * size + y) * size + x] >= 0.5 ? (absentFirstPhase ? 2 : 1) : 0;
 			domain.setMarkerMaterial(marker, registry, materialHandle);
 		}
 		return domain;

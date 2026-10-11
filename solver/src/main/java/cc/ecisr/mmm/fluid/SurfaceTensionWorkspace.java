@@ -12,6 +12,7 @@ final class SurfaceTensionWorkspace {
 	final double[] surfaceTensionColor;
 	final double[] surfaceTensionSmoothed;
 	final double[] surfaceTensionPairCurvature;
+	final double[] surfaceTensionPairFirstSupport;
 	final double[] surfaceTensionNormalX;
 	final double[] surfaceTensionNormalY;
 	final double[] surfaceTensionNormalZ;
@@ -22,6 +23,7 @@ final class SurfaceTensionWorkspace {
 		this.surfaceTensionColor = new double[cellCount];
 		this.surfaceTensionSmoothed = new double[cellCount];
 		this.surfaceTensionPairCurvature = new double[cellCount];
+		this.surfaceTensionPairFirstSupport = new double[cellCount];
 		this.surfaceTensionNormalX = new double[cellCount];
 		this.surfaceTensionNormalY = new double[cellCount];
 		this.surfaceTensionNormalZ = new double[cellCount];

@@ -1,166 +1,103 @@
 package cc.ecisr.mmm.fluid;
 
-/** Runtime marker advection and normal-only contact against binary and cut-cell solids. */
+/** Continuous marker motion with normal-only contact against the cut-cell micro boxes. */
 final class FlipParticleCollision {
-	private final int sizeX;
-	private final int sizeY;
-	private final int sizeZ;
-	private final float cellSize;
-	private final boolean[] fullySolid;
+	private final int[] sizes;
+	private final float microSize;
 	private final FlipCutCellGeometry cutCells;
 
-	FlipParticleCollision(
-			int sizeX,
-			int sizeY,
-			int sizeZ,
-			float cellSize,
-			boolean[] fullySolid,
-			FlipCutCellGeometry cutCells
-	) {
-		this.sizeX = sizeX;
-		this.sizeY = sizeY;
-		this.sizeZ = sizeZ;
-		this.cellSize = cellSize;
-		this.fullySolid = fullySolid;
+	FlipParticleCollision(int sizeX, int sizeY, int sizeZ, float cellSize, FlipCutCellGeometry cutCells) {
+		this.sizes = new int[] {sizeX * 2, sizeY * 2, sizeZ * 2};
+		this.microSize = cellSize / FlipCutCellGeometry.MICRO_CELLS_PER_AXIS;
 		this.cutCells = cutCells;
 	}
 
-	void advect(
-			float[] particleX,
-			float[] particleY,
-			float[] particleZ,
-			float[] motionX,
-			float[] motionY,
-			float[] motionZ,
-			float[] velocityX,
-			float[] velocityY,
-			float[] velocityZ,
-			int particleCount,
-			float dt
-	) {
-		float radius = Math.ulp(Math.max(sizeX, Math.max(sizeY, sizeZ)) * cellSize);
-		float maximumX = sizeX * cellSize - radius;
-		float maximumY = sizeY * cellSize - radius;
-		float maximumZ = sizeZ * cellSize - radius;
+	void advect(float[] particleX, float[] particleY, float[] particleZ,
+			float[] motionX, float[] motionY, float[] motionZ,
+			float[] velocityX, float[] velocityY, float[] velocityZ, int particleCount, float dt) {
+		float[][] positions = {particleX, particleY, particleZ}, motion = {motionX, motionY, motionZ};
+		float[][] velocity = {velocityX, velocityY, velocityZ};
+		double[] point = new double[3], displacement = new double[3], crossing = new double[3];
+		int[] cell = new int[3];
 		for (int particle = 0; particle < particleCount; particle++) {
-			float proposedX = particleX[particle] + motionX[particle] * dt;
-			float targetX = clamp(proposedX, radius, maximumX);
-			if (proposedX < radius) velocityX[particle] = Math.max(0.0F, velocityX[particle]);
-			else if (proposedX > maximumX) velocityX[particle] = Math.min(0.0F, velocityX[particle]);
-			particleX[particle] = sweepAxis(
-					particleX[particle], targetX, particleY[particle], particleZ[particle],
-					0, particle, velocityX, velocityY, velocityZ
-			);
-			float proposedY = particleY[particle] + motionY[particle] * dt;
-			float targetY = clamp(proposedY, radius, maximumY);
-			if (proposedY < radius) velocityY[particle] = Math.max(0.0F, velocityY[particle]);
-			else if (proposedY > maximumY) velocityY[particle] = Math.min(0.0F, velocityY[particle]);
-			particleY[particle] = sweepAxis(
-					particleY[particle], targetY, particleX[particle], particleZ[particle],
-					1, particle, velocityX, velocityY, velocityZ
-			);
-			float proposedZ = particleZ[particle] + motionZ[particle] * dt;
-			float targetZ = clamp(proposedZ, radius, maximumZ);
-			if (proposedZ < radius) velocityZ[particle] = Math.max(0.0F, velocityZ[particle]);
-			else if (proposedZ > maximumZ) velocityZ[particle] = Math.min(0.0F, velocityZ[particle]);
-			particleZ[particle] = sweepAxis(
-					particleZ[particle], targetZ, particleX[particle], particleY[particle],
-					2, particle, velocityX, velocityY, velocityZ
-			);
-			constrainToFullSolidFaces(
-					particle, radius, particleX, particleY, particleZ, velocityX, velocityY, velocityZ
-			);
+			for (int a = 0; a < 3; a++) {
+				point[a] = positions[a][particle];
+				displacement[a] = (double) (float) (point[a] + (double) motion[a][particle] * dt) - point[a];
+			}
+			// Every contact removes at least one moving axis. The remaining motion follows
+			// the wall tangent for the rest of the step, so three contacts suffice in 3D.
+			for (int contact = 0; contact < 3; contact++) {
+				int normal = firstContact(point, displacement, cell, crossing);
+				if (normal == 0) {
+					for (int a = 0; a < 3; a++) point[a] += displacement[a];
+					break;
+				}
+				double time = crossing[0];
+				for (int a = 0; a < 3; a++) {
+					double endpoint = point[a] + displacement[a];
+					point[a] += time * displacement[a];
+					if ((normal & 1 << a) != 0) {
+						boolean positive = displacement[a] > 0;
+						// Choose the closest binary32 point owned by the last open micro box.
+						float stored = (float) ((cell[a] + (positive ? 1.0 : 0.0)) * microSize);
+						while (microCoordinate(stored) != cell[a])
+							stored = Math.nextAfter(stored, positive ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY);
+						point[a] = stored;
+						displacement[a] = 0;
+						velocity[a][particle] = positive ? Math.min(0, velocity[a][particle]) : Math.max(0, velocity[a][particle]);
+					} else {
+						point[a] = (float) point[a];
+						displacement[a] = (double) (float) endpoint - point[a];
+					}
+				}
+			}
+			for (int a = 0; a < 3; a++) positions[a][particle] = (float) point[a];
+			if (centerInSolid(particleX[particle], particleY[particle], particleZ[particle]))
+				throw new IllegalStateException("Collision placed a marker inside solid micro geometry");
 		}
 	}
 
 	boolean centerInSolid(float x, float y, float z) {
-		return cutCells.pointInsideSolid(x, y, z, cellSize);
+		return cutCells.pointInsideSolid(x, y, z, microSize * 2);
 	}
 
-	/** Axis-separated swept point collision at one quarter of a cut microcell. */
-	private float sweepAxis(
-			float start,
-			float target,
-			float otherFirst,
-			float otherSecond,
-			int axis,
-			int particle,
-			float[] velocityX,
-			float[] velocityY,
-			float[] velocityZ
-	) {
-		float distance = target - start;
-		if (distance == 0.0F) return start;
-		float maximumIncrement = cellSize / (FlipCutCellGeometry.MICRO_CELLS_PER_AXIS * 4.0F);
-		int increments = Math.max(1, (int) Math.ceil(Math.abs(distance) / maximumIncrement));
-		float accepted = start;
-		for (int increment = 1; increment <= increments; increment++) {
-			float candidate = start + distance * increment / increments;
-			float x = axis == 0 ? candidate : otherFirst;
-			float y = axis == 1 ? candidate : axis == 0 ? otherFirst : otherSecond;
-			float z = axis == 2 ? candidate : otherSecond;
-			if (centerInSolid(x, y, z)) {
-				if (axis == 0) velocityX[particle] = 0.0F;
-				else if (axis == 1) velocityY[particle] = 0.0F;
-				else velocityZ[particle] = 0.0F;
-				break;
+	/** Visits each micro box intersected by the actual straight segment in time order. */
+	private int firstContact(double[] point, double[] displacement, int[] cell, double[] crossing) {
+		for (int a = 0; a < 3; a++) cell[a] = microCoordinate((float) point[a]);
+		while (true) {
+			double time = Double.POSITIVE_INFINITY;
+			for (int a = 0; a < 3; a++) {
+				crossing[a] = displacement[a] == 0 ? Double.POSITIVE_INFINITY
+						: Math.max(0, ((cell[a] + (displacement[a] > 0 ? 1.0 : 0.0)) * microSize - point[a]) / displacement[a]);
+				time = Math.min(time, crossing[a]);
 			}
-			accepted = candidate;
-		}
-		return accepted;
-	}
-
-	/** Quadrature points meet the physical wall and preserve tangential motion. */
-	private void constrainToFullSolidFaces(
-			int particle,
-			float radius,
-			float[] particleX,
-			float[] particleY,
-			float[] particleZ,
-			float[] velocityX,
-			float[] velocityY,
-			float[] velocityZ
-	) {
-		int x = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(particleX[particle] / cellSize)));
-		int y = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(particleY[particle] / cellSize)));
-		int z = Math.min(sizeZ - 1, Math.max(0, (int) Math.floor(particleZ[particle] / cellSize)));
-		float localX = particleX[particle] - x * cellSize;
-		float localY = particleY[particle] - y * cellSize;
-		float localZ = particleZ[particle] - z * cellSize;
-		float contactMinimum = radius;
-		float contactMaximum = cellSize - contactMinimum;
-
-		if (x > 0 && localX < radius && fullySolid[cellIndex(x - 1, y, z)]) {
-			particleX[particle] = x * cellSize + contactMinimum;
-			velocityX[particle] = Math.max(0.0F, velocityX[particle]);
-		}
-		if (x + 1 < sizeX && localX > cellSize - radius && fullySolid[cellIndex(x + 1, y, z)]) {
-			particleX[particle] = x * cellSize + contactMaximum;
-			velocityX[particle] = Math.min(0.0F, velocityX[particle]);
-		}
-		if (y > 0 && localY < radius && fullySolid[cellIndex(x, y - 1, z)]) {
-			particleY[particle] = y * cellSize + contactMinimum;
-			velocityY[particle] = Math.max(0.0F, velocityY[particle]);
-		}
-		if (y + 1 < sizeY && localY > cellSize - radius && fullySolid[cellIndex(x, y + 1, z)]) {
-			particleY[particle] = y * cellSize + contactMaximum;
-			velocityY[particle] = Math.min(0.0F, velocityY[particle]);
-		}
-		if (z > 0 && localZ < radius && fullySolid[cellIndex(x, y, z - 1)]) {
-			particleZ[particle] = z * cellSize + contactMinimum;
-			velocityZ[particle] = Math.max(0.0F, velocityZ[particle]);
-		}
-		if (z + 1 < sizeZ && localZ > cellSize - radius && fullySolid[cellIndex(x, y, z + 1)]) {
-			particleZ[particle] = z * cellSize + contactMaximum;
-			velocityZ[particle] = Math.min(0.0F, velocityZ[particle]);
+			if (time > 1) return 0;
+			int normal = 0;
+			for (int a = 0; a < 3; a++) if (crossing[a] == time) {
+				normal |= 1 << a; cell[a] += displacement[a] > 0 ? 1 : -1;
+			}
+			if (solid(cell)) {
+				int crossed = normal;
+				// Crossing a tangent micro-grid plane at the same instant as a wall
+				// contact does not turn that tangent into another contact normal.
+				normal = 0;
+				for (int subset = 1; subset < 8; subset++) if ((subset & crossed) == subset && (subset & normal) == 0) {
+					for (int a = 0; a < 3; a++) if ((crossed & ~subset & 1 << a) != 0) cell[a] -= displacement[a] > 0 ? 1 : -1;
+					if (solid(cell)) normal |= subset;
+					for (int a = 0; a < 3; a++) if ((crossed & ~subset & 1 << a) != 0) cell[a] += displacement[a] > 0 ? 1 : -1;
+				}
+				for (int a = 0; a < 3; a++) if ((normal & 1 << a) != 0) cell[a] -= displacement[a] > 0 ? 1 : -1;
+				crossing[0] = time;
+				return normal;
+			}
 		}
 	}
 
-	private int cellIndex(int x, int y, int z) {
-		return (z * sizeY + y) * sizeX + x;
+	private boolean solid(int[] cell) {
+		for (int a = 0; a < 3; a++) if (cell[a] < 0 || cell[a] >= sizes[a]) return true;
+		int index = ((cell[2] / 2) * (sizes[1] / 2) + cell[1] / 2) * (sizes[0] / 2) + cell[0] / 2;
+		return !cutCells.microCellOpen(index, cell[0] & 1, cell[1] & 1, cell[2] & 1);
 	}
 
-	private static float clamp(float value, float minimum, float maximum) {
-		return Math.max(minimum, Math.min(maximum, value));
-	}
+	private int microCoordinate(float coordinate) { return (int) Math.floor(coordinate / microSize); }
 }
