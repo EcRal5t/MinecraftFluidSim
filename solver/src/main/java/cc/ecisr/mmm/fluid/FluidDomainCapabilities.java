@@ -299,14 +299,12 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 
 	GranularInventory.EnergyAdapter thermalGranularAdapter() {
 		return new GranularInventory.EnergyAdapter() {
+			@Override public GranularInventory.EnergyPlan planActiveToDeposits(
+					java.util.List<GranularInventory.DepositTransfer> transfers) {
+				return thermalState.planActiveToDeposits(transfers);
+			}
 			GranularEnergyColumn.DepositKey key(int cell, int material, int composition) {
 				return new GranularEnergyColumn.DepositKey(cell, material, composition);
-			}
-			@Override public void requireActiveToDeposit(int active, int cell, int material, int composition) {
-				thermalState.requireActiveToDeposit(active, key(cell, material, composition));
-			}
-			@Override public void commitActiveToDeposit(int active, int cell, int material, int composition) {
-				thermalState.commitActiveToDeposit(active, key(cell, material, composition));
 			}
 			@Override public void requireActiveMerge(int first, int second) {
 				thermalState.requireActiveMerge(first, second);

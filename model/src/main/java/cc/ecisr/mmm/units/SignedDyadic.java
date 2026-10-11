@@ -220,7 +220,28 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 		return sign == 0 ? ZERO : magnitudeBits < Long.SIZE ? new SignedDyadic(-compact, exponent) : new SignedDyadic(significand().negate(), exponent);
 	}
 
-	public double toDouble() { return Math.scalb(magnitudeBits < Long.SIZE ? (double) compact : significand().doubleValue(), exponent); }
+	/** One ties-to-even rounding in the final binary64 unit, including subnormal values. */
+	public double toDouble() {
+		if (sign == 0) return 0.0;
+		if (magnitudeBits <= 53 && exponent >= -1074) return Math.scalb((double) compact, exponent);
+		long highestExponent = (long) exponent + magnitudeBits - 1;
+		if (highestExponent > 1023) return sign < 0 ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+		if (highestExponent < -1075) return sign < 0 ? -0.0 : 0.0;
+		int unitExponent = (int) Math.max(-1074, highestExponent - 52);
+		BigInteger magnitude = significand().abs();
+		int discardedBits = Math.subtractExact(unitExponent, exponent);
+		BigInteger rounded;
+		if (discardedBits <= 0) rounded = magnitude.shiftLeft(-discardedBits);
+		else {
+			rounded = magnitude.shiftRight(discardedBits);
+			boolean halfwayBit = magnitude.testBit(discardedBits - 1);
+			boolean lowerBits = magnitude.getLowestSetBit() < discardedBits - 1;
+			if (halfwayBit && (lowerBits || rounded.testBit(0))) rounded = rounded.add(BigInteger.ONE);
+		}
+		// Rounded is at most 53 bits, or the exact power 2^53 after a carry.
+		double value = Math.scalb(rounded.doubleValue(), unitExponent);
+		return sign < 0 ? -value : value;
+	}
 
 	@Override
 	public int compareTo(SignedDyadic other) {

@@ -5,6 +5,7 @@ import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.granular.GranularCarrier;
 import cc.ecisr.mmm.granular.GranularCouplingFields;
 import cc.ecisr.mmm.granular.GranularDepositDynamics;
+import cc.ecisr.mmm.granular.GranularInventory;
 import cc.ecisr.mmm.granular.GranularParcelStore;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.units.SignedDyadic;
@@ -390,18 +391,20 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				lastGranularBoundaryImpulseZ += z;
 			}
 
-			@Override public boolean planSettlement(GranularParcelStore.Parcel parcel, int cell) {
-				GranularCouplingFields.Position position = parcelPosition(parcel);
-				granularCoupling.removePlannedParcel(plannedSolid, position, parcel.solidVolumeSvq());
-				if (granularCoupling.tryPlanCell(plannedSolid, cell, parcel.solidVolumeSvq(),
-						((FluidDomain) FluidDomainStepCoordinator.this)::granularGeometricOpenSvq)) return true;
-				restorePlannedParcel(plannedSolid, position, parcel.solidVolumeSvq(), "settlement");
-				return false;
+			@Override public boolean planSettlement(GranularInventory.SettlementPlan plan) {
+				long[] candidate = plannedSolid.clone();
+				for (var parcel : plan.parcels()) granularCoupling.removePlannedParcel(candidate,
+						parcelPosition(parcel), parcel.solidVolumeSvq());
+				if (!granularCoupling.tryPlanCell(candidate, plan.cell(), plan.totalSolidVolumeSvq(),
+						((FluidDomain) FluidDomainStepCoordinator.this)::granularGeometricOpenSvq)) return false;
+				System.arraycopy(candidate, 0, plannedSolid, 0, candidate.length);
+				return true;
 			}
 
-			@Override public void cancelSettlement(GranularParcelStore.Parcel parcel, int cell) {
-				granularCoupling.removePlannedCell(plannedSolid, cell, parcel.solidVolumeSvq());
-				restorePlannedParcel(plannedSolid, parcelPosition(parcel), parcel.solidVolumeSvq(), "settlement rollback");
+			@Override public void cancelSettlement(GranularInventory.SettlementPlan plan) {
+				granularCoupling.removePlannedCell(plannedSolid, plan.cell(), plan.totalSolidVolumeSvq());
+				for (var parcel : plan.parcels()) restorePlannedParcel(plannedSolid, parcelPosition(parcel),
+						parcel.solidVolumeSvq(), "joint settlement rollback");
 			}
 
 			@Override public boolean planRelaxation(int fromCell, int toCell, long solidSvq) {

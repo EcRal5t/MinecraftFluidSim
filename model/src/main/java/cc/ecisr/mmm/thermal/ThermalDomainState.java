@@ -375,6 +375,11 @@ public final class ThermalDomainState {
 	public void commitActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
 		granularState.commitActiveToDeposit(active, target);
 	}
+	public cc.ecisr.mmm.granular.GranularInventory.EnergyPlan planActiveToDeposits(
+			List<cc.ecisr.mmm.granular.GranularInventory.DepositTransfer> transfers
+	) {
+		return granularState.planActiveToDeposits(transfers);
+	}
 	public void requireActiveMerge(int first, int second) { granularState.requireActiveMerge(first, second); }
 	public void commitActiveMerge(int first, int second) { granularState.commitActiveMerge(first, second); }
 	public void requireDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {

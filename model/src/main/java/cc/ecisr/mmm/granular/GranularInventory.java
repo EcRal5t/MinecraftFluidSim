@@ -4,7 +4,15 @@ import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.math.BigInteger;
+import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import java.util.function.IntUnaryOperator;
+import java.util.function.IntPredicate;
 import java.util.function.Predicate;
 
 /** Atomic inventory-only parcel/deposit transitions. Mechanics and scheduling are layered above this class. */
@@ -46,38 +54,214 @@ public final class GranularInventory {
 	}
 
 	public boolean depositParcel(int parcelIndex, int cell, long geometricOpenSvq) {
-		GranularParcelStore.Parcel parcel = parcels.parcel(parcelIndex);
-		if (parcel.solidCompositionHandle() != 0) {
-			if (compositions == null) throw new IllegalStateException("Reactive deposit requires a solid composition pool");
-			SolidCompositionRecord incoming = compositions.record(parcel.solidCompositionHandle());
-			GranularDepositStore.Group compatible = deposits.matchingGroup(cell, parcel.materialHandle(), group ->
-					incoming.proportionalTo(compositions.record(group.solidCompositionHandle()),
-							parcel.solidVolumeSvq(), group.solidVolumeSvq()));
-			if (compatible != null) {
-				SolidCompositionRecord combined = compositions.record(compatible.solidCompositionHandle()).plus(incoming);
-				GranularDepositStore.SolidPortion merged = new GranularDepositStore.SolidPortion(
-						parcel.materialHandle(), compatible.solidCompositionHandle(),
-						parcel.solidVolumeSvq(), parcel.mass());
-				if (thermalEnergy != null) thermalEnergy.requireActiveToDeposit(parcelIndex, cell,
-						parcel.materialHandle(), compatible.solidCompositionHandle());
-				if (!deposits.tryAdd(cell, merged, geometricOpenSvq)) return false;
-				if (thermalEnergy != null) thermalEnergy.commitActiveToDeposit(parcelIndex, cell,
-						parcel.materialHandle(), compatible.solidCompositionHandle());
-				compositions.overwrite(compatible.solidCompositionHandle(), combined);
-				compositions.release(parcel.solidCompositionHandle());
-				parcels.removeSwap(parcelIndex);
-				return true;
+		SettlementPlan plan = planSettlement(new int[] {parcelIndex}, cell, geometricOpenSvq);
+		if (plan == null) return false;
+		commitSettlement(plan);
+		return true;
+	}
+
+	/** Whole-parcel, same-cell conversion with one complete inventory and energy preflight. */
+	public static final class SettlementPlan {
+		private final GranularInventory owner;
+		private final long parcelRevision;
+		private final int cell;
+		private final int[] indices;
+		private final List<GranularParcelStore.Parcel> parcels;
+		private final long totalSvq;
+		private final GranularDepositStore.AdditionsPlan additions;
+		private final SolidCompositionPool pool;
+		private final Map<Integer, SolidCompositionRecord> before, after;
+		private final int[] released;
+		private final EnergyAdapter adapter;
+		private final EnergyPlan energy;
+		private SettlementPlan(GranularInventory owner, int cell, int[] indices,
+		                       List<GranularParcelStore.Parcel> parcels, long totalSvq,
+		                       GranularDepositStore.AdditionsPlan additions,
+		                       Map<Integer, SolidCompositionRecord> before, Map<Integer, SolidCompositionRecord> after,
+		                       int[] released, EnergyPlan energy) {
+			this.owner = owner; this.parcelRevision = owner.parcels.mutationRevision();
+			this.cell = cell; this.indices = indices; this.parcels = List.copyOf(parcels); this.totalSvq = totalSvq;
+			this.additions = additions; this.pool = owner.compositions;
+			this.before = Map.copyOf(before); this.after = Map.copyOf(after); this.released = released;
+			this.adapter = owner.thermalEnergy; this.energy = energy;
+		}
+		public int cell() { return cell; }
+		public int[] parcelIndices() { return indices.clone(); }
+		/** Source snapshots align with the descending original ordinals. */
+		public List<GranularParcelStore.Parcel> parcels() { return parcels; }
+		public long totalSolidVolumeSvq() { return totalSvq; }
+		public long bulkVolumeSvq() { return additions.bulkVolumeSvq(); }
+		public SignedDyadic massStorageDelta() { return additions.massStorageDelta(); }
+		public SignedDyadic massStorageBound() { return additions.massStorageBound(); }
+	}
+
+	private static final class SettlementComposition {
+		final int material;
+		final boolean existing;
+		final SolidCompositionRecord prototype;
+		final long prototypeVolume;
+		int retained;
+		final List<Integer> sourceSlots = new ArrayList<>();
+		final List<SolidCompositionRecord> records = new ArrayList<>();
+		SettlementComposition(int material, int retained, boolean existing, SolidCompositionRecord record, long volume) {
+			this.material = material; this.retained = retained; this.existing = existing;
+			this.prototype = record; this.prototypeVolume = volume;
+			if (existing) records.add(record);
+		}
+	}
+
+	/** Returns null for a jointly unrepresentable cohort; planning never reserves or releases handles. */
+	public SettlementPlan planSettlement(int[] parcelIndices, int cell, long geometricOpenSvq) {
+		return planSettlement(parcelIndices, cell, geometricOpenSvq, ignored -> true);
+	}
+
+	/** The shared logical budget includes selected-source reads and reactive ownership scans. */
+	public SettlementPlan planSettlement(int[] parcelIndices, int cell, long geometricOpenSvq, IntPredicate workBudget) {
+		if (parcelIndices == null || parcelIndices.length == 0 || parcelIndices.length > parcels.count()) {
+			throw new IllegalArgumentException("Settlement parcel selection is invalid");
+		}
+		if (workBudget == null) throw new IllegalArgumentException("Settlement planning budget is missing");
+		int[] indices = parcelIndices.clone(); Arrays.sort(indices);
+		if (indices[0] < 0 || indices[indices.length - 1] >= parcels.count()) {
+			throw new IllegalArgumentException("Settlement source ordinal is invalid");
+		}
+		for (int index = 1; index < indices.length; index++) if (indices[index] == indices[index - 1]) {
+			throw new IllegalArgumentException("Settlement contains a duplicate parcel");
+		}
+		for (int low = 0, high = indices.length - 1; low < high; low++, high--) {
+			int saved = indices[low]; indices[low] = indices[high]; indices[high] = saved;
+		}
+		if (!workBudget.test(indices.length)) return null;
+		ArrayList<GranularParcelStore.Parcel> sources = new ArrayList<>(indices.length);
+		TreeMap<Integer, SolidCompositionRecord> before = new TreeMap<>(), after = new TreeMap<>();
+		TreeSet<Integer> released = new TreeSet<>();
+		HashSet<Integer> selectedHandles = new HashSet<>();
+		long totalSvq = 0;
+		for (int index : indices) {
+			GranularParcelStore.Parcel parcel = parcels.parcel(index); sources.add(parcel);
+			totalSvq = Math.addExact(totalSvq, parcel.solidVolumeSvq());
+			if (parcel.solidCompositionHandle() != 0) {
+				if (compositions == null || !selectedHandles.add(parcel.solidCompositionHandle())) {
+					throw new IllegalStateException("Settlement has missing or shared composition ownership");
+				}
+				before.put(parcel.solidCompositionHandle(), compositions.record(parcel.solidCompositionHandle()));
+				requireCompositionMass(before.get(parcel.solidCompositionHandle()), parcel.mass());
 			}
 		}
-		GranularDepositStore.SolidPortion portion = new GranularDepositStore.SolidPortion(
-				parcel.materialHandle(), parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.mass());
-		if (thermalEnergy != null) thermalEnergy.requireActiveToDeposit(parcelIndex, cell,
-				parcel.materialHandle(), parcel.solidCompositionHandle());
-		if (!deposits.tryAdd(cell, portion, geometricOpenSvq)) return false;
-		if (thermalEnergy != null) thermalEnergy.commitActiveToDeposit(parcelIndex, cell,
-				parcel.materialHandle(), parcel.solidCompositionHandle());
-		parcels.removeSwap(parcelIndex);
-		return true;
+		if (!selectedHandles.isEmpty()) {
+			long ownershipWork = parcels.count() + (long) deposits.groupCount() + compositions.liveCount()
+					+ (deposits.groupCount() == 0 ? 0 : deposits.cellCount());
+			if (ownershipWork > Integer.MAX_VALUE || !workBudget.test((int) ownershipWork)) return null;
+			requireCanClear();
+		}
+		int[] targetHandle = new int[indices.length];
+		ArrayList<SettlementComposition> grouped = new ArrayList<>();
+		for (int slot = 0; slot < sources.size(); slot++) {
+			GranularParcelStore.Parcel parcel = sources.get(slot);
+			if (parcel.solidCompositionHandle() == 0) continue;
+			SolidCompositionRecord record = before.get(parcel.solidCompositionHandle());
+			SettlementComposition match = null;
+			for (SettlementComposition group : grouped) if (group.material == parcel.materialHandle()
+					&& record.proportionalTo(group.prototype, parcel.solidVolumeSvq(), group.prototypeVolume)) {
+				match = group; break;
+			}
+			if (match == null) {
+				GranularDepositStore.Group existing = deposits.matchingGroup(cell, parcel.materialHandle(), group ->
+						group.solidCompositionHandle() != 0 && record.proportionalTo(
+								compositions.record(group.solidCompositionHandle()), parcel.solidVolumeSvq(), group.solidVolumeSvq()));
+				int retained = existing == null ? parcel.solidCompositionHandle() : existing.solidCompositionHandle();
+				if (existing != null && selectedHandles.contains(retained)) {
+					throw new IllegalStateException("Settlement shares an active and deposit composition handle");
+				}
+				SolidCompositionRecord prototype = existing == null ? record : compositions.record(retained);
+				if (existing != null) requireCompositionMass(prototype, existing.mass());
+				match = new SettlementComposition(parcel.materialHandle(), retained, existing != null, prototype,
+						existing == null ? parcel.solidVolumeSvq() : existing.solidVolumeSvq());
+				grouped.add(match); if (existing != null) before.put(retained, prototype);
+				if (grouped.size() > GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL) return null;
+			} else if (!match.existing) match.retained = Math.min(match.retained, parcel.solidCompositionHandle());
+			match.sourceSlots.add(slot); match.records.add(record);
+		}
+		for (SettlementComposition group : grouped) {
+			SolidCompositionRecord merged = combineSettlementComposition(group.records);
+			if (merged == null) return null;
+			compositions.requireOverwrite(group.retained, merged); after.put(group.retained, merged);
+			for (int slot : group.sourceSlots) {
+				targetHandle[slot] = group.retained;
+				int handle = sources.get(slot).solidCompositionHandle(); if (handle != group.retained) released.add(handle);
+			}
+		}
+		ArrayList<GranularDepositStore.SolidPortion> additions = new ArrayList<>(indices.length);
+		ArrayList<DepositTransfer> transfers = new ArrayList<>(indices.length);
+		for (int slot = 0; slot < indices.length; slot++) {
+			GranularParcelStore.Parcel parcel = sources.get(slot);
+			additions.add(new GranularDepositStore.SolidPortion(parcel.materialHandle(), targetHandle[slot],
+					parcel.solidVolumeSvq(), parcel.mass()));
+			transfers.add(new DepositTransfer(indices[slot], cell, parcel.materialHandle(), targetHandle[slot]));
+		}
+		GranularDepositStore.AdditionsPlan depositPlan = deposits.planAdditions(cell, additions, geometricOpenSvq);
+		if (depositPlan == null) return null;
+		for (GranularDepositStore.Group group : depositPlan.groups()) {
+			SolidCompositionRecord composition = after.get(group.solidCompositionHandle());
+			if (composition != null && !compositionMassClose(composition.totalMass(compositions.registry()), group.mass())) return null;
+		}
+		EnergyPlan energy = thermalEnergy == null ? null : thermalEnergy.planActiveToDeposits(List.copyOf(transfers));
+		if (thermalEnergy != null && energy == null) return null;
+		return new SettlementPlan(this, cell, indices, sources, totalSvq, depositPlan, before, after,
+				released.stream().mapToInt(Integer::intValue).toArray(), energy);
+	}
+
+	private SolidCompositionRecord combineSettlementComposition(List<SolidCompositionRecord> records) {
+		BigInteger totalQuanta = BigInteger.ZERO;
+		for (SolidCompositionRecord record : records) totalQuanta = totalQuanta.add(BigInteger.valueOf(record.totalQuanta()));
+		if (totalQuanta.compareTo(BigInteger.valueOf(ChemicalLimits.MAX_REGION_TOTAL_QUANTA)) > 0) return null;
+		long[] amounts = new long[records.getFirst().entryCount()];
+		SignedDyadic residual = SignedDyadic.ZERO;
+		for (SolidCompositionRecord record : records) {
+			for (int entry = 0; entry < amounts.length; entry++) amounts[entry] = Math.addExact(amounts[entry], record.amountAt(entry));
+			residual = residual.add(SignedDyadic.of(record.massResidual()));
+		}
+		double storedResidual = residual.toDouble(); if (!Double.isFinite(storedResidual)) return null;
+		SolidCompositionRecord combined = new SolidCompositionRecord(records.getFirst().copySpeciesHandles(), amounts,
+				Double.doubleToRawLongBits(storedResidual));
+		double mass = combined.totalMass(compositions.registry());
+		return Double.isFinite(mass) && mass > 0 ? combined : null;
+	}
+
+	private void requireCompositionMass(SolidCompositionRecord record, double mass) {
+		if (!compositionMassClose(record.totalMass(compositions.registry()), mass)) {
+			throw new IllegalStateException("Settlement source composition does not match its mechanical mass");
+		}
+	}
+	private static boolean compositionMassClose(double left, double right) {
+		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
+	}
+
+	/** Checks every inventory, composition and thermal dependency before any participant is changed. */
+	public void requireCurrent(SettlementPlan plan) {
+		if (plan == null || plan.owner != this || plan.parcelRevision != parcels.mutationRevision()
+				|| plan.pool != compositions || plan.adapter != thermalEnergy) {
+			throw new IllegalStateException("Granular inventory changed after settlement planning");
+		}
+		deposits.requireCurrent(plan.additions);
+		for (int slot = 0; slot < plan.indices.length; slot++) if (!parcels.parcel(plan.indices[slot]).equals(plan.parcels.get(slot))) {
+			throw new IllegalStateException("Settlement source parcel changed after planning");
+		}
+		for (var entry : plan.before.entrySet()) if (!compositions.isLive(entry.getKey())
+				|| !compositions.record(entry.getKey()).equals(entry.getValue())) {
+			throw new IllegalStateException("Settlement composition changed after planning");
+		}
+		if (plan.energy != null) plan.energy.requireCurrent();
+	}
+
+	/** Commit follows the same descending swap removals in every ordinal-aligned side column. */
+	public void commitSettlement(SettlementPlan plan) {
+		requireCurrent(plan);
+		deposits.commitAdditions(plan.additions);
+		for (var entry : plan.after.entrySet()) compositions.overwrite(entry.getKey(), entry.getValue());
+		for (int handle : plan.released) compositions.release(handle);
+		for (int index : plan.indices) parcels.removeSwap(index);
+		if (plan.energy != null) plan.energy.commit();
 	}
 
 	/** Bounded same-cell compaction for representative active parcels, including reactive composition ownership. */
@@ -257,13 +441,17 @@ public final class GranularInventory {
 		             GranularParcelStore.Parcel merged);
 	}
 	public interface EnergyAdapter {
-		void requireActiveToDeposit(int active, int cell, int material, int composition);
-		void commitActiveToDeposit(int active, int cell, int material, int composition);
+		EnergyPlan planActiveToDeposits(List<DepositTransfer> transfers);
 		void requireActiveMerge(int first, int second);
 		void commitActiveMerge(int first, int second);
 		void requireDepositWake(int cell, int material, int composition, long takenSvq, long totalSvq);
 		void commitDepositWake(int cell, int material, int composition, long takenSvq, long totalSvq);
 		void clearExternal();
+	}
+	public record DepositTransfer(int active, int cell, int material, int composition) { }
+	public interface EnergyPlan {
+		void requireCurrent();
+		void commit();
 	}
 	private record ActiveMerge(GranularParcelStore.Parcel parcel, SolidCompositionRecord composition) { }
 }

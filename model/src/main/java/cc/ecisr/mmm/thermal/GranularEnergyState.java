@@ -4,6 +4,7 @@ import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.List;
 import java.util.Map;
+import cc.ecisr.mmm.granular.GranularInventory;
 
 /**
  * Owns the granular and coherent-solid energy truth: the granular energy column (active
@@ -105,6 +106,26 @@ public final class GranularEnergyState {
 		granularEnergy.addDeposit(target, energy);
 		audit.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
 		revision++;
+	}
+
+	GranularInventory.EnergyPlan planActiveToDeposits(List<GranularInventory.DepositTransfer> transfers) {
+		GranularEnergyColumn.ActiveToDepositsPlan columnPlan = granularEnergy.planActiveToDeposits(transfers);
+		if (columnPlan == null) return null;
+		long baseRevision = revision, auditRevision = audit.revision();
+		ThermalAuditLedger auditAfter = audit.ledger().withRoundoff(columnPlan.roundoff);
+		return new GranularInventory.EnergyPlan() {
+			@Override public void requireCurrent() {
+				if (revision != baseRevision || audit.revision() != auditRevision) {
+					throw new IllegalStateException("Granular thermal state changed after settlement planning");
+				}
+				granularEnergy.requireCurrent(columnPlan);
+			}
+			@Override public void commit() {
+				requireCurrent();
+				granularEnergy.commitActiveToDeposits(columnPlan);
+				audit.replace(auditAfter); revision++;
+			}
+		};
 	}
 
 	void requireActiveMerge(int first, int second) { granularEnergy.requireMergeActive(first, second); }

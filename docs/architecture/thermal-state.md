@@ -52,6 +52,8 @@
 
 同一载体的 identity、质量/体积、组成和 `U` 必须同 ordinal、同 generation；非空载体持有内能，空载体零内能。单元温度为所有载体带入 LTE 反演的瞬态结果，由实时状态推导。
 
+活动颗粒联合沉积先按最终 deposit identity 汇总原始 `U`，整体检查新增组数和有限值。每个目标组以精确二进制和计算一次 binary64 舍入，并预先构造相应 `roundoff_residual`。库存、组成与热计划全部核对当前代次后，按同一组降序 ordinal 删除活动载体，再提交完整沉积内能与账本。
+
 各能量 owner 的增量写入口只在 thermal 包内可见；跨包只获得读视图或由 `ThermalDomainState` 暴露的明确事务入口。跨 owner 计划绑定 liquid、granular/coherent、gas 与 audit 四项 revision 的完整元组，不能把它们求和压成可能碰撞的单值；gas remap 和 operator clear 在第一处库存修改前完成完整 source/sink/work/roundoff dyadic 链的构造。
 
 后续任一 owner generation 不匹配或精确账本溢出都拒绝整个计划。handoff 对 coherent snapshot 只调用独立的 canonical validator，不能借公开 restore 入口改写 live store。

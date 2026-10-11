@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.granular;
 
 import java.util.Arrays;
+import java.util.function.IntPredicate;
 
 /** Per-step center-cell index; scratch state follows only settlement swaps and wake appends. */
 final class GranularBedAdmission {
@@ -29,8 +30,16 @@ final class GranularBedAdmission {
 	int visits() { return visits; }
 	boolean budgetBlocked() { return budgetBlocked; }
 	void reserveLogicalOperations(int operations) { limit = GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - operations; }
+	boolean spend(int work) {
+		if (work > limit - visits) { budgetBlocked = true; return false; }
+		visits += work; return true;
+	}
 
 	boolean allows(int cell, long bulk, int excluded) {
+		return allows(cell, bulk, index -> index == excluded, index -> false);
+	}
+
+	boolean allows(int cell, long bulk, IntPredicate excluded, IntPredicate acceptBlocking) {
 		if (bulk <= deposits.cellBulkVolumeSvq(cell)) return true;
 		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
 		double minX = x * h, minY = y * h, minZ = z * h;
@@ -42,13 +51,12 @@ final class GranularBedAdmission {
 		int z0 = coordinate(Math.nextDown(minZ - radius), sizeZ), z1 = coordinate(maxZ + radius, sizeZ);
 		for (int iz = z0; iz <= z1; iz++) for (int iy = y0; iy <= y1; iy++) for (int ix = x0; ix <= x1; ix++) {
 			for (int index = head[(iz * sizeY + iy) * sizeX + ix]; index >= 0; index = next[index]) {
-				if (visits >= limit) { budgetBlocked = true; return false; }
-				visits++;
-				if (index == excluded) continue;
+				if (!spend(1)) return false;
+				if (excluded.test(index)) continue;
 				var p = parcels.parcel(index);
 				if (GranularSphereGeometry.touchesBox(p.x(), p.y(), p.z(),
 						GranularMechanics.representativeRadius(p.solidVolumeSvq(), (float) h),
-						minX, minY, minZ, maxX, maxY, maxZ)) return false;
+						minX, minY, minZ, maxX, maxY, maxZ) && !acceptBlocking.test(index)) return false;
 			}
 		}
 		return true;

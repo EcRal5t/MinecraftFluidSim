@@ -22,6 +22,8 @@ public final class ThermalOwnerStoreValidation {
 	public static void validate() {
 		coherentPhaseMergeSplitConservesInventories();
 		granularColumnTransactionsConserveEnergy();
+		granularBatchDepositPreflightIsAtomic();
+		dyadicConversionRoundsInFinalBinary64Unit();
 		liquidTemperatureTracksMutableInventory();
 		referenceTermsKeepCanonicalRationalRounding();
 		referenceEnergyUsesCanonicalSpeciesOrder();
@@ -78,7 +80,7 @@ public final class ThermalOwnerStoreValidation {
 	private static void referenceTermsKeepCanonicalRationalRounding() {
 		var cache = new ThermalReferenceEnergyCache(); var random = new java.util.Random(728173L);
 		for (int i = 0; i < 2048; i++) {
-			long numerator = i == 0 ? Long.MIN_VALUE : i == 1 ? -57300 : random.nextInt();
+			long numerator = i == 0 ? Long.MIN_VALUE : i == 1 ? -57300 : i == 2 ? 9_007_199_254_740_999L : random.nextInt();
 			long denominator = i % 3 == 0 ? 1 : (random.nextLong() & 0xfffffL) + 1;
 			var rational = new ExactRational(java.math.BigInteger.valueOf(numerator), java.math.BigInteger.valueOf(denominator));
 			var offset = new ThermalSpeciesOffset("test:offset", "test:species", "test:material", rational);
@@ -209,6 +211,82 @@ public final class ThermalOwnerStoreValidation {
 		require(restored.exactEnergy().equals(column.exactEnergy())
 				&& restored.clear().equals(column.exactEnergy()),
 				"granular thermal column handoff/clear did not preserve exact energy");
+	}
+
+	private static void granularBatchDepositPreflightIsAtomic() {
+		var first = new GranularEnergyColumn.DepositKey(0, 0, 0);
+		var second = new GranularEnergyColumn.DepositKey(0, 1, 0);
+		GranularEnergyColumn budget = new GranularEnergyColumn(4, 1);
+		budget.addActive(1); budget.addActive(2);
+		double[] before = budget.copyActiveEnergy();
+		var separate = List.of(new cc.ecisr.mmm.granular.GranularInventory.DepositTransfer(1, 0, 0, 0),
+				new cc.ecisr.mmm.granular.GranularInventory.DepositTransfer(0, 0, 1, 0));
+		require(budget.planActiveToDeposits(separate) == null && java.util.Arrays.equals(before, budget.copyActiveEnergy())
+				&& budget.depositCount() == 0, "batch must preflight all new deposit keys together");
+		GranularEnergyColumn overflow = new GranularEnergyColumn(4, 4);
+		overflow.addDeposit(first, Double.MAX_VALUE / 2); overflow.addActive(Double.MAX_VALUE / 2);
+		overflow.addActive(Double.MAX_VALUE / 2);
+		var same = List.of(new cc.ecisr.mmm.granular.GranularInventory.DepositTransfer(1, 0, 0, 0),
+				new cc.ecisr.mmm.granular.GranularInventory.DepositTransfer(0, 0, 0, 0));
+		SignedDyadic exactBefore = overflow.exactEnergy();
+		require(overflow.planActiveToDeposits(same) == null && overflow.activeCount() == 2
+				&& overflow.exactEnergy().equals(exactBefore), "batch U overflow must retain all selected carriers");
+		GranularEnergyColumn cancellation = new GranularEnergyColumn(4, 4);
+		cancellation.addDeposit(first, Double.MAX_VALUE); cancellation.addActive(-Double.MAX_VALUE);
+		cancellation.addActive(Double.MAX_VALUE);
+		var cancellationPlan = cancellation.planActiveToDeposits(same);
+		require(cancellationPlan != null, "signed U cancellation must use the final sum before testing overflow");
+		cancellation.commitActiveToDeposits(cancellationPlan);
+		require(cancellation.activeCount() == 0 && cancellation.depositEnergy(first) == Double.MAX_VALUE
+				&& cancellationPlan.roundoff.equals(SignedDyadic.ZERO), "signed batch U was changed during deposition");
+		GranularEnergyColumn rounding = new GranularEnergyColumn(4, 4);
+		rounding.addDeposit(first, 1.0e16); rounding.addActive(1); rounding.addActive(1);
+		var roundingPlan = rounding.planActiveToDeposits(same); rounding.commitActiveToDeposits(roundingPlan);
+		require(rounding.depositEnergy(first) == 1.0e16 + 2 && roundingPlan.roundoff.equals(SignedDyadic.ZERO),
+				"deposit U must round the complete sum once");
+		GranularEnergyColumn swaps = new GranularEnergyColumn(8, 4);
+		for (double energy : new double[] {11, 22, 33, 44, 55}) swaps.addActive(energy);
+		var swapTransfers = List.of(new cc.ecisr.mmm.granular.GranularInventory.DepositTransfer(3, 0, 0, 0),
+				new cc.ecisr.mmm.granular.GranularInventory.DepositTransfer(1, 0, 0, 0));
+		var swapPlan = swaps.planActiveToDeposits(swapTransfers); swaps.commitActiveToDeposits(swapPlan);
+		require(java.util.Arrays.equals(swaps.copyActiveEnergy(), new double[] {11, 55, 33})
+				&& swaps.depositEnergy(first) == 66, "descending batch swaps must preserve unselected ordinal energy");
+		GranularEnergyColumn stale = new GranularEnergyColumn(4, 4); stale.addActive(1); stale.addActive(2);
+		var stalePlan = stale.planActiveToDeposits(same); stale.setActiveEnergy(1, 3);
+		boolean rejected = false; try { stale.commitActiveToDeposits(stalePlan); } catch (IllegalStateException expected) { rejected = true; }
+		require(rejected && stale.activeCount() == 2 && stale.depositCount() == 0, "stale batch must fail before swap removals");
+		GranularEnergyColumn stateColumn = new GranularEnergyColumn(4, 4); stateColumn.addActive(0.1); stateColumn.addActive(0.2);
+		ThermalAuditState audit = new ThermalAuditState(ThermalAuditLedger.initialized(stateColumn.exactEnergy()));
+		GranularEnergyState state = new GranularEnergyState(null, stateColumn, null, null, null, 300, audit);
+		var statePlan = state.planActiveToDeposits(same); var savedEnergy = stateColumn.exactEnergy();
+		statePlan.commit();
+		require(stateColumn.exactEnergy().subtract(savedEnergy).equals(audit.ledger().roundoffResidual())
+				&& state.revision() == 1, "batch state must publish raw U and its exact roundoff together");
+		GranularEnergyColumn auditColumn = new GranularEnergyColumn(4, 4); auditColumn.addActive(1); auditColumn.addActive(2);
+		ThermalAuditState changedAudit = new ThermalAuditState(ThermalAuditLedger.initialized(auditColumn.exactEnergy()));
+		GranularEnergyState auditState = new GranularEnergyState(null, auditColumn, null, null, null, 300, changedAudit);
+		var auditPlan = auditState.planActiveToDeposits(same); changedAudit.update(ledger -> ledger.withRoundoff(SignedDyadic.of(1, 0)));
+		rejected = false; try { auditPlan.commit(); } catch (IllegalStateException expected) { rejected = true; }
+		require(rejected && auditColumn.activeCount() == 2 && auditColumn.depositCount() == 0 && auditState.revision() == 0,
+				"changed audit must reject a complete batch before inventory mutation");
+	}
+
+	private static void dyadicConversionRoundsInFinalBinary64Unit() {
+		SignedDyadic minimum = SignedDyadic.of(Double.MIN_VALUE);
+		require(SignedDyadic.of(Double.MAX_VALUE).add(minimum).toDouble() == Double.MAX_VALUE
+				&& SignedDyadic.of(0.1).add(minimum).toDouble() == 0.1, "wide finite dyadic sum overflowed its intermediate significand");
+		SignedDyadic half = SignedDyadic.of(1, -1075);
+		require(Double.doubleToRawLongBits(half.toDouble()) == 0
+				&& Double.doubleToRawLongBits(half.negate().toDouble()) == Long.MIN_VALUE
+				&& half.add(SignedDyadic.of(1, -2000)).toDouble() == Double.MIN_VALUE,
+				"subnormal half ties and signed underflow must round once");
+		require(SignedDyadic.of(1.0).add(SignedDyadic.of(1, -53)).toDouble() == 1.0
+				&& SignedDyadic.of(Math.nextUp(1.0)).add(SignedDyadic.of(1, -53)).toDouble() == Math.nextUp(Math.nextUp(1.0)),
+				"normal halfway cases must choose the even significand");
+		SignedDyadic maximum = SignedDyadic.of(Double.MAX_VALUE), overflowHalf = SignedDyadic.of(1, 970);
+		require(Double.isInfinite(maximum.add(overflowHalf).toDouble())
+				&& maximum.add(overflowHalf).subtract(minimum).toDouble() == Double.MAX_VALUE,
+				"overflow midpoint must use the final rounding bit");
 	}
 
 	private static void require(boolean condition, String message) {

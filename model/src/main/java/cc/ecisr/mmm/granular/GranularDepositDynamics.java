@@ -43,8 +43,8 @@ public final class GranularDepositDynamics {
 		default boolean verticalPathOpen(float x, float fromY, float z, float toY, long solidSvq) { return true; }
 		double shields(int surfaceCell, ParticulateMaterial material);
 		default void receiveContactImpulse(double x, double y, double z) { }
-		default boolean planSettlement(GranularParcelStore.Parcel parcel, int cell) { return true; }
-		default void cancelSettlement(GranularParcelStore.Parcel parcel, int cell) { }
+		default boolean planSettlement(GranularInventory.SettlementPlan plan) { return true; }
+		default void cancelSettlement(GranularInventory.SettlementPlan plan) { }
 		default boolean planRelaxation(int fromCell, int toCell, long solidSvq) { return true; }
 		default void cancelRelaxation(int fromCell, int toCell, long solidSvq) { }
 		default void requireThermalRelaxation(
@@ -63,6 +63,7 @@ public final class GranularDepositDynamics {
 	private final GranularDepositStore deposits;
 	private final GranularInventory inventory;
 	private final GranularBedAdmission admission;
+	private final GranularSettlementGeometryPlan settlement;
 	private final int sizeX, sizeY, sizeZ, columnCount;
 	private final float cellSize;
 	private final int[] dirtyQueue, stableAge;
@@ -83,6 +84,7 @@ public final class GranularDepositDynamics {
 		}
 		this.registry = registry; this.parcels = parcels; this.deposits = deposits; this.inventory = inventory;
 		this.admission = new GranularBedAdmission(parcels, deposits, sizeX, sizeY, sizeZ, cellSize);
+		this.settlement = new GranularSettlementGeometryPlan(inventory, admission, parcels.capacity());
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.cellSize = cellSize;
 		this.columnCount = Math.multiplyExact(sizeX, sizeZ);
 		this.dirtyQueue = new int[columnCount]; this.stableAge = new int[columnCount];
@@ -158,46 +160,28 @@ public final class GranularDepositDynamics {
 				parcelIndex++;
 				continue;
 			}
-			int x = coordinate(parcel.x(), sizeX), yStart = coordinate(parcel.y(), sizeY);
-			int z = coordinate(parcel.z(), sizeZ);
-			int sourceCell = cell(x, yStart, z);
 			ParticulateMaterial material = registry.material(parcel.materialHandle());
-			GranularDepositStore.SolidPortion addition = new GranularDepositStore.SolidPortion(
-					parcel.materialHandle(), parcel.solidCompositionHandle(),
-					parcel.solidVolumeSvq(), parcel.mass());
 			boolean deposited = false;
-			for (int y = 0; y <= yStart; y++) {
-				int cell = cell(x, y, z);
+			int cell = settlementTarget(parcel, environment);
+			if (cell >= 0) {
 				long open = environment.geometricOpenSvq(cell);
-				if (open <= 0L) continue;
-				long candidateBulk = deposits.previewCellBulkVolumeAfterAdd(cell, addition);
-				if (candidateBulk > open) continue;
-				if (!environment.verticalPathOpen(parcel.x(), parcel.y(), parcel.z(),
-						settlementCenterY(cell, parcel.solidVolumeSvq()), parcel.solidVolumeSvq())) continue;
 				if (!settlementSlopeAllowed(cell, parcel, material, environment)) {
 					if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
-					break;
+				} else {
+					var plan = settlement.find(parcelIndex, cell, open, index -> eligibleTarget(index, environment));
+					if (plan != null) {
+						int[] indices = plan.parcelIndices();
+						admission.reserveLogicalOperations(operations + indices.length);
+						if (admission.spend(2 * indices.length)) {
+							if (settlementSlopeAllowed(plan, environment) && environment.planSettlement(plan)) {
+								commitSettlement(plan, indices, environment);
+								deposited = true; settled += indices.length; operations += indices.length;
+								parcelIndex = indices[indices.length - 1];
+							} else if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
+						}
+					}
 				}
-				// The first bulk-capable layer is the only legal target. Active occupancy may make
-				// it temporarily unavailable, but that never licenses a deposit in an upper void.
-				if (!admission.allows(cell, candidateBulk, parcelIndex)) break;
-				if (!environment.planSettlement(parcel, cell)) {
-					if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
-					break;
-				}
-				if (inventory.depositParcel(parcelIndex, cell, open)) {
-					admission.removedSwap(parcelIndex);
-					environment.receiveContactImpulse(parcel.mass() * parcel.velocityX(),
-							parcel.mass() * parcel.velocityY(), parcel.mass() * parcel.velocityZ());
-					environment.onSolidChanged(sourceCell);
-					environment.onSolidChanged(cell);
-					disturbCell(cell);
-					deposited = true; settled++; operations++;
-					break;
-				}
-				environment.cancelSettlement(parcel, cell);
-				if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
-				break;
+				if (admission.budgetBlocked()) disturbCell(cell);
 			}
 			if (!deposited) parcelIndex++;
 			if (admission.budgetBlocked()) break;
@@ -249,6 +233,49 @@ public final class GranularDepositDynamics {
 		}
 		logicalStep++;
 		return new Stats(settled, relaxed, woken, processed, queueSize);
+	}
+
+	private void commitSettlement(GranularInventory.SettlementPlan plan, int[] indices, Environment environment) {
+		try { inventory.commitSettlement(plan); }
+		catch (RuntimeException failure) { environment.cancelSettlement(plan); throw failure; }
+		double impulseX = 0, impulseY = 0, impulseZ = 0;
+		for (int index = 0; index < indices.length; index++) {
+			admission.removedSwap(indices[index]);
+			var source = plan.parcels().get(index);
+			impulseX += source.mass() * source.velocityX(); impulseY += source.mass() * source.velocityY();
+			impulseZ += source.mass() * source.velocityZ();
+			environment.onSolidChanged(cell(coordinate(source.x(), sizeX), coordinate(source.y(), sizeY), coordinate(source.z(), sizeZ)));
+		}
+		environment.receiveContactImpulse(impulseX, impulseY, impulseZ);
+		environment.onSolidChanged(plan.cell()); disturbCell(plan.cell());
+	}
+
+	/** Lowest bulk-capable, vertically reachable layer; later admission cannot select an upper void. */
+	private int settlementTarget(GranularParcelStore.Parcel parcel, Environment environment) {
+		int x = coordinate(parcel.x(), sizeX), z = coordinate(parcel.z(), sizeZ);
+		var addition = new GranularDepositStore.SolidPortion(parcel.materialHandle(), parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.mass());
+		for (int y = 0; y <= coordinate(parcel.y(), sizeY); y++) {
+			if (!admission.spend(1)) return -1;
+			int target = cell(x, y, z); long open = environment.geometricOpenSvq(target);
+			if (open > 0 && deposits.previewCellBulkVolumeAfterAdd(target, addition) <= open
+					&& environment.verticalPathOpen(parcel.x(), parcel.y(), parcel.z(),
+						settlementCenterY(target, parcel.solidVolumeSvq()), parcel.solidVolumeSvq())) return target;
+		}
+		return -1;
+	}
+
+	private int eligibleTarget(int index, Environment environment) {
+		if (!admission.spend(1)) return -1;
+		var parcel = parcels.parcel(index);
+		if ((parcel.flags() & GranularParcelStore.FLAG_SUPPORTED) == 0 || parcel.contactAge() < SETTLE_CONTACT_STEPS) return -1;
+		int target = settlementTarget(parcel, environment);
+		return target >= 0 && settlementSlopeAllowed(target, parcel, registry.material(parcel.materialHandle()), environment) ? target : -1;
+	}
+
+	private boolean settlementSlopeAllowed(GranularInventory.SettlementPlan plan, Environment environment) {
+		for (var parcel : plan.parcels()) if (!additionSlopeAllowed(plan.cell(), plan.bulkVolumeSvq(),
+				registry.material(parcel.materialHandle()), environment)) return false;
+		return true;
 	}
 
 	private boolean tryWake(int column, int surfaceCell, GranularDepositStore.Group exposed,
@@ -352,10 +379,13 @@ public final class GranularDepositDynamics {
 			int cell, GranularDepositStore.SolidPortion addition,
 			ParticulateMaterial material, Environment environment
 	) {
+		return additionSlopeAllowed(cell, deposits.previewCellBulkVolumeAfterAdd(cell, addition), material, environment);
+	}
+
+	private boolean additionSlopeAllowed(int cell, long nextCellBulk, ParticulateMaterial material, Environment environment) {
 		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
 		long previousSurface = columnSurfaceSvq(z * sizeX + x);
 		long previousCellBulk = deposits.cellBulkVolumeSvq(cell);
-		long nextCellBulk = deposits.previewCellBulkVolumeAfterAdd(cell, addition);
 		long addedCellSurface = Math.addExact(Math.multiplyExact((long) y, SolidVolume.SVQ_PER_CELL), nextCellBulk);
 		long candidateSurface = Math.max(previousSurface, addedCellSurface);
 		long discreteAllowance = nextCellBulk - previousCellBulk;

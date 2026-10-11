@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import cc.ecisr.mmm.granular.GranularInventory.DepositTransfer;
 
 /** Orthogonal raw-U column aligned with active granular ordinals and canonical deposit identities. */
 public final class GranularEnergyColumn {
@@ -130,6 +131,76 @@ public final class GranularEnergyColumn {
 			throw new IllegalStateException("Granular thermal deposit budget exceeded");
 		}
 		if (current != null) finiteAdd(current, energy);
+	}
+
+	static final class ActiveToDepositsPlan {
+		final GranularEnergyColumn owner;
+		final int activeCount;
+		final int[] active;
+		final long[] energies;
+		final TreeMap<DepositKey, Double> before, after;
+		final SignedDyadic roundoff;
+		ActiveToDepositsPlan(GranularEnergyColumn owner, int[] active, long[] energies,
+		                     TreeMap<DepositKey, Double> before, TreeMap<DepositKey, Double> after,
+		                     SignedDyadic roundoff) {
+			this.owner = owner; this.activeCount = owner.activeCount; this.active = active; this.energies = energies;
+			this.before = before; this.after = after; this.roundoff = roundoff;
+		}
+	}
+
+	/** All selected U and new target keys are budgeted together, without ordinal edits. */
+	ActiveToDepositsPlan planActiveToDeposits(List<DepositTransfer> transfers) {
+		if (transfers == null || transfers.isEmpty()) throw new IllegalArgumentException("Granular thermal transfers are missing");
+		int[] active = new int[transfers.size()]; long[] energies = new long[active.length];
+		TreeMap<DepositKey, Double> before = new TreeMap<>(), after = new TreeMap<>();
+		TreeMap<DepositKey, SignedDyadic> sums = new TreeMap<>();
+		int previous = activeCount, newKeys = 0;
+		for (int slot = 0; slot < active.length; slot++) {
+			DepositTransfer transfer = transfers.get(slot); requireActive(transfer.active());
+			if (transfer.active() >= previous) throw new IllegalArgumentException("Thermal settlement ordinals must be unique and descending");
+			previous = active[slot] = transfer.active();
+			double energy = activeEnergy[active[slot]]; energies[slot] = Double.doubleToRawLongBits(energy);
+			SignedDyadic incoming = SignedDyadic.of(energy);
+			DepositKey key = new DepositKey(transfer.cell(), transfer.material(), transfer.composition());
+			if (!sums.containsKey(key)) {
+				Double current = depositEnergy.get(key); before.put(key, current);
+				if (current == null) { newKeys++; sums.put(key, SignedDyadic.ZERO); }
+				else sums.put(key, SignedDyadic.of(current));
+			}
+			sums.put(key, sums.get(key).add(incoming));
+		}
+		if (newKeys > maximumDeposits - depositEnergy.size()) return null;
+		SignedDyadic roundoff = SignedDyadic.ZERO;
+		for (var entry : sums.entrySet()) {
+			double energy = entry.getValue().toDouble(); if (!Double.isFinite(energy)) return null;
+			after.put(entry.getKey(), energy);
+			roundoff = roundoff.add(SignedDyadic.of(energy).subtract(entry.getValue()));
+		}
+		return new ActiveToDepositsPlan(this, active, energies, before, after, roundoff);
+	}
+
+	void requireCurrent(ActiveToDepositsPlan plan) {
+		if (plan == null || plan.owner != this || plan.activeCount != activeCount) {
+			throw new IllegalStateException("Granular energy ordinals changed after settlement planning");
+		}
+		for (int slot = 0; slot < plan.active.length; slot++) if (Double.doubleToRawLongBits(activeEnergy[plan.active[slot]]) != plan.energies[slot]) {
+			throw new IllegalStateException("Settlement source energy changed after planning");
+		}
+		for (var entry : plan.before.entrySet()) {
+			Double current = depositEnergy.get(entry.getKey()), expected = entry.getValue();
+			if (current == null ? expected != null : expected == null || Double.doubleToRawLongBits(current) != Double.doubleToRawLongBits(expected)) {
+				throw new IllegalStateException("Settlement target energy changed after planning");
+			}
+		}
+		if (depositEnergy.size() + plan.before.values().stream().filter(java.util.Objects::isNull).count() > maximumDeposits) {
+			throw new IllegalStateException("Granular energy group budget changed after settlement planning");
+		}
+	}
+
+	void commitActiveToDeposits(ActiveToDepositsPlan plan) {
+		requireCurrent(plan);
+		for (int ordinal : plan.active) removeActiveSwap(ordinal);
+		depositEnergy.putAll(plan.after);
 	}
 
 	/** Proportional exact-SVQ take; caller supplies the group's pre-commit SVQ truth. */

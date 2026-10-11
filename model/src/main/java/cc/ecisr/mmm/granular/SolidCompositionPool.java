@@ -53,7 +53,7 @@ public final class SolidCompositionPool {
 	}
 
 	public void overwrite(int handle, SolidCompositionRecord record) {
-		requireLive(handle); validate(record);
+		requireOverwrite(handle, record);
 		int base = handle * GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES;
 		int previous = Byte.toUnsignedInt(entryCount[handle]);
 		if (previous > record.entryCount()) {
@@ -61,6 +61,11 @@ public final class SolidCompositionPool {
 			Arrays.fill(amounts, base + record.entryCount(), base + previous, 0L);
 		}
 		write(handle, record);
+	}
+
+	/** Pure preflight for an ownership-preserving composition overwrite. */
+	public void requireOverwrite(int handle, SolidCompositionRecord record) {
+		requireLive(handle); validate(record);
 	}
 
 	public void release(int handle) {
