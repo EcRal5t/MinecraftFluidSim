@@ -600,6 +600,20 @@ public final class AirNetwork {
 			double[] availableVolumes, List<GasInventory> inventories,
 			GasAuditLedger sourceDelta, GasAuditLedger sinkDelta, List<AirEdge> replacementEdges
 	) {
+		return planRemapNodes(availableVolumes, inventories, sourceDelta, sinkDelta, replacementEdges, null);
+	}
+
+	/** Prepares the successor topology against the already planned phase columns. */
+	public RemapPlan planRemapAfterPhase(PhaseMutationPlan phase, double[] availableVolumes,
+			List<GasInventory> inventories, GasAuditLedger sourceDelta, GasAuditLedger sinkDelta,
+			List<AirEdge> replacementEdges) {
+		requirePhaseMutationCurrent(phase);
+		return planRemapNodes(availableVolumes, inventories, sourceDelta, sinkDelta, replacementEdges, phase);
+	}
+
+	private RemapPlan planRemapNodes(double[] availableVolumes, List<GasInventory> inventories,
+			GasAuditLedger sourceDelta, GasAuditLedger sinkDelta, List<AirEdge> replacementEdges,
+			PhaseMutationPlan phase) {
 		if (availableVolumes.length != inventories.size()) throw new IllegalArgumentException("Gas remap slots disagree");
 		if (sourceDelta == null || sinkDelta == null || replacementEdges == null) {
 			throw new IllegalArgumentException("Gas remap plan is incomplete");
@@ -622,15 +636,26 @@ public final class AirNetwork {
 			}
 			plannedEdges.add(edge);
 		}
-		MassColumns before = liveMassColumns();
-		GasRegionAudit.requireClosure(sealedInventory(), GasRegionAudit.aggregate(inventories), sourceDelta, sinkDelta);
+		ArrayList<GasInventory> baseline = new ArrayList<>(nodes.size());
+		for (AirNode node : nodes.values()) baseline.add(phase != null && node == phase.mutation.sourceNode()
+				? phase.inventoryAfter : node.inventory());
+		MassColumns before = massColumns(baseline);
+		GasRegionAudit.requireClosure(GasRegionAudit.aggregate(baseline), GasRegionAudit.aggregate(inventories), sourceDelta, sinkDelta);
 		MassColumns after = massColumns(inventories);
 		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
-		return new RemapPlan(this, revision, replacementNodes, plannedEdges, inventories.size() + 1,
-				massRoundoff.add(after.mass()).add(sink.mass()).subtract(before.mass()).subtract(source.mass()),
-				residualRoundoff.add(after.residual()).add(sink.residual())
+		return new RemapPlan(this, phase == null ? revision : Math.addExact(revision, 1), replacementNodes, plannedEdges, inventories.size() + 1,
+				(phase == null ? massRoundoff : phase.mutation.massRoundoffAfter()).add(after.mass()).add(sink.mass()).subtract(before.mass()).subtract(source.mass()),
+				(phase == null ? residualRoundoff : phase.mutation.residualRoundoffAfter()).add(after.residual()).add(sink.residual())
 						.subtract(before.residual()).subtract(source.residual()),
-				externalSource.add(sourceDelta), escapedSink.add(sinkDelta));
+				(phase == null ? externalSource : phase.mutation.externalSourceAfter()).add(sourceDelta),
+				(phase == null ? escapedSink : phase.mutation.escapedSinkAfter()).add(sinkDelta));
+	}
+
+	/** Checks a prepared successor before the phase performs its first write. */
+	public void requireRemapAfterPhaseCurrent(RemapPlan remap, PhaseMutationPlan phase) {
+		requirePhaseMutationCurrent(phase);
+		if (remap == null || remap.owner != this || remap.baseRevision != Math.addExact(revision, 1))
+			throw new IllegalStateException("Gas phase successor topology is stale");
 	}
 
 	/** Rejects a remap planned against another owner or an older authoritative generation. */

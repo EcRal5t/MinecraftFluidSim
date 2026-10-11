@@ -105,7 +105,18 @@ final class ThermochemistryStageAssembly {
 					}
 					@Override public void ensureGrid() { domain.ensureInventoryGrid(); }
 					@Override public void refreshGasTopology() { domain.gasTopologyCoordinator.refresh(); }
-					@Override public void refreshGasGeometry() { domain.refreshGasPhaseGeometry(); }
+					@Override public GasTopologyCoordinator.GasTopologyPlan planGasGeometry(int cell, int count, double volume, int node,
+							cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal) {
+						return domain.gasTopologyCoordinator.planAfterPhase(cell, count, volume, node, gas, energy, thermal);
+					}
+					@Override public void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
+							cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal) {
+						domain.gasTopologyCoordinator.requireAfterPhaseCurrent(topology, gas, thermal);
+					}
+					@Override public void commitGasGeometry(GasTopologyCoordinator.GasTopologyPlan topology) {
+						domain.rebuildGasPhaseGeometryFromParticles();
+						domain.gasTopologyCoordinator.commit(topology);
+					}
 					@Override public void refreshCoherentOccupancy() { domain.refreshCoherentOccupancy(); }
 					@Override public boolean canAddCarrierVolume(double volume) { return domain.canAddCarrierVolume(volume); }
 					@Override public void markGridDirty() { domain.gridDirty = true; }

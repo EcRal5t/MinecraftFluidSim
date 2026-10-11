@@ -125,6 +125,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void gasStateCompressionAndCarrierEnergy() {
+		gasTopologyRemapsRetainCommonTemperature();
+		gasRemapPlansRequireTheirPreparingOwner();
 		gasInitializationAndRestoreValidateActualInventory();
 		gasTransferBoundsScaleBeforeOverflow();
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
@@ -849,6 +851,155 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			} catch (IOException cleanup) {
 				throw new AssertionError("finite thermal device registry cleanup failed", cleanup);
 			}
+		}
+	}
+
+	private static ThermalMaterialDefinition topologyMaterial(String id, ThermalMaterialDefinition.CarrierKind kind,
+			String carrier, double reference, double capacity) {
+		return new ThermalMaterialDefinition(id, kind, carrier, 300, reference, 0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(150, 1000, capacity)));
+	}
+
+	private static void phaseGeometryRemapIsPreparedBeforeCarrierCommit() {
+		for (int scenario = 0; scenario < 4; scenario++) {
+			int components = scenario == 0 ? 33 : 32;
+			boolean energyOverflow = scenario == 2;
+			double energyReference = scenario == 2 ? 1e308 : scenario == 3 ? 1e307 : 0;
+			FluidDomain domain = phaseTopologyDomain(components, energyReference);
+			var before = domain.captureAuthoritativeState();
+			var beforeMarkers = domain.exportMaterialParticleState();
+			var beforeGas = domain.gasState.network.sealedInventory();
+			var beforeEnergy = domain.exactInternalEnergy();
+			var beforeMass = actualPhaseMass(domain);
+			var beforeAudit = domain.thermalAudit();
+			long markerRevision = domain.carrierMutationRevision;
+			var stats = domain.stepGasPhaseChangeOnly(1);
+			require(domain.exactInternalEnergy().equals(beforeEnergy) && actualPhaseMass(domain).equals(beforeMass)
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+					&& domain.gasState.network.auditClosed(), "phase topology successor lost physical mass or energy");
+			if (components == 33 || energyOverflow) {
+				require(stats.operations() == 0 && domain.particleCount() == 1
+						&& domain.gasState.network.nodeCount() == 2 && domain.carrierMutationRevision == markerRevision
+						&& domain.gasState.network.sealedInventory().equals(beforeGas)
+						&& domain.thermalAudit().equals(beforeAudit) && domain.pendingPhaseCellVolume[22].equals(SignedDyadic.ZERO)
+						&& Arrays.equals(beforeMarkers.copyPositionVolume(), domain.exportMaterialParticleState().copyPositionVolume()),
+						"unrepresentable future cavity was rejected after publishing its liquid removal");
+			} else {
+				require(stats.operations() == 1 && stats.boiledCells() == 1 && domain.particleCount() == 0
+						&& domain.gasState.network.nodeCount() == 1
+						&& domain.pendingPhaseCellVolume[22].equals(SignedDyadic.of(-1, -3)),
+						"a complete 32-component phase successor was not committed");
+			}
+			FluidDomain restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
+					&& actualPhaseMass(restored).equals(beforeMass)
+					&& FluidDomain.restoreAuthoritativeState(before).particleCount() == 1,
+					"prospective phase topology did not retain a restorable state");
+		}
+	}
+
+	private static FluidDomain phaseTopologyDomain(int componentCount, double energyReference) {
+		var gasDefinitions = new java.util.ArrayList<cc.ecisr.mmm.fluid.air.GasComponentDefinition>();
+		var materials = new java.util.ArrayList<ThermalMaterialDefinition>();
+		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		var grains = BuiltinGranularDefinitions.createRegistry();
+		var water = topologyMaterial("test:topology_water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.WATER.id(), 0, 2);
+		materials.add(water);
+		for (int k = 0; k < 33; k++) {
+			gasDefinitions.add(new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:g" + k, 1, 1, List.of(), List.of()));
+			materials.add(topologyMaterial("test:tg" + k, ThermalMaterialDefinition.CarrierKind.GAS,
+					"test:g" + k, k == 0 ? 100 : energyReference != 0 && (k == 1 || k == 17) ? energyReference : 0, 1));
+		}
+		for (int k = 0; k < grains.materials().size(); k++) materials.add(topologyMaterial("test:ts" + k,
+				ThermalMaterialDefinition.CarrierKind.GRANULAR, grains.material(k).id(), 0, 1));
+		var gasRegistry = new GasRegistry(gasDefinitions,
+				List.of(new GasRegistry.AmbientFraction("test:g0", ExactRational.ONE)));
+		var transition = new ThermalPhaseTransition("test:topology_phase", water.id(), "test:tg0", 300,
+				SolidVolume.SVQ_PER_CELL / 8, SolidVolume.SVQ_PER_BV / 8, ExactRational.parse("125/8"),
+				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
+		var registry = new ThermalRegistry(materials, List.of(), List.of(transition), "", grains.fingerprint());
+		FluidDomain domain = new FluidDomain(5, 3, 3,
+				new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
+		domain.sealDomainBoundary();
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 5; x++)
+			if (y != 1 || z != 1 || x == 0 || x == 4) domain.setSolid(x, y, z, true);
+		domain.setVolume(2, 1, 1, .125F);
+		domain.bindGranular(grains, liquids, BuiltinFluidMaterials.createRegistry());
+		int sand = grains.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = grains.material(sand).maximumActiveParcelSvq();
+		double mass = svq / (double) SolidVolume.SVQ_PER_BV * grains.material(sand).referenceDensity();
+		domain.granularState.parcels.add(new cc.ecisr.mmm.granular.GranularParcelStore.Parcel(
+				1.25F, .75F, .75F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
+		domain.markGranularExternalChange(22);
+		domain.bindGasRegistry(gasRegistry); domain.bootstrapGasState("");
+		domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
+		for (int node = 1; node <= 2; node++) {
+			var amounts = new java.util.ArrayList<GasComponentAmount>();
+			int start = node == 1 ? 0 : 17, end = node == 1 ? 17 : componentCount;
+			for (int k = start; k < end; k++) {
+				double gasMass = energyReference != 0 && (k == 1 || k == 17) ? 1 : 1.0 / 1024;
+				amounts.add(new GasComponentAmount("test:g" + k, 1_000_000, gasMass, List.of(), gasMass));
+			}
+			domain.gasState.network.commitPhaseSource(node, new GasInventory(amounts));
+		}
+		domain.bindThermal(registry, liquids, energyReference != 0 ? 301 : 400); domain.stepGasPhaseChangeOnly(0);
+		return FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+	}
+
+	private static void gasRemapPlansRequireTheirPreparingOwner() {
+		var gases = BuiltinGasDefinitions.createRegistry();
+		var liquid = new FluidMaterial("test:remap_host", 1000, "test:remap_host", 0, Math.PI / 2);
+		var liquids = new FluidMaterialRegistry(List.of(liquid));
+		var registry = new ThermalRegistry(List.of(topologyMaterial("test:remap_liquid",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 0, 1),
+				topologyMaterial("test:remap_air", ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR, 0, 1)));
+		var network = new AirNetwork(gases); network.addNode(1, 1);
+		var first = FluidThermalBinding.create(registry, liquids, 300, 1, 2, 2, 2, .5F, emptyMarkers(), network);
+		var foreign = FluidThermalBinding.create(registry, liquids, 300, 1, 2, 2, 2, .5F, emptyMarkers(), network);
+		var plan = first.planGasRemap(network, List.of(network.inventory(1)), new double[]{1},
+				new double[]{first.gasNodeEnergy(1, network)}, new double[]{1}, 0, 0);
+		var audit = foreign.auditLedger(); double energy = foreign.gasNodeEnergy(1, network);
+		expectFailure(() -> foreign.commitGasRemap(plan), "foreign gas thermal remap was accepted");
+		require(foreign.auditLedger() == audit && foreign.gasNodeEnergy(1, network) == energy,
+				"foreign gas remap rejection changed its target owner");
+		first.commitGasRemap(plan);
+		expectFailure(() -> first.commitGasRemap(plan), "stale gas thermal remap was accepted twice");
+	}
+
+	private static void gasTopologyRemapsRetainCommonTemperature() {
+		var gasDefinitions = List.of(new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:a", 8, 8, List.of(), List.of()),
+				new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:b", 8, 8, List.of(), List.of()),
+				new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:c", 8, 8, List.of(), List.of()));
+		var gas = new GasRegistry(gasDefinitions, List.of(new GasRegistry.AmbientFraction("test:a", ExactRational.ONE)));
+		var liquids = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2)));
+		var registry = new ThermalRegistry(List.of(topologyMaterial("test:w", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"mmm:water", 0, 1000), topologyMaterial("test:ta", ThermalMaterialDefinition.CarrierKind.GAS, "test:a", 1e18, 1),
+				topologyMaterial("test:tb", ThermalMaterialDefinition.CarrierKind.GAS, "test:b", 200, 1),
+				topologyMaterial("test:tc", ThermalMaterialDefinition.CarrierKind.GAS, "test:c", -1e18, 1)));
+		for (var order : List.of(List.of("test:a", "test:b", "test:c"), List.of("test:a", "test:c", "test:b"))) {
+			FluidDomain domain = new FluidDomain(5, 2, 2,
+					new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, .8F), 128);
+			domain.sealDomainBoundary();
+			for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 5; x++)
+				if (!(y == 0 && z == 0 && x % 2 == 0)) domain.setSolid(x, y, z, true);
+			int[] membership = new int[20], lineage = new int[20]; Arrays.fill(lineage, -1);
+			var nodes = new java.util.ArrayList<cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node>();
+			var source = cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY;
+			for (int i = 0; i < 3; i++) {
+				int cell = domain.cellIndex(i * 2, 0, 0); membership[cell] = lineage[cell] = i + 1;
+				var inventory = new GasInventory(List.of(new GasComponentAmount(order.get(i), 125_000_000, 1, List.of(), 1)));
+				nodes.add(new cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node(cell, inventory)); source = source.add(inventory);
+			}
+			domain.restoreGasState(new cc.ecisr.mmm.fluid.air.GasStateSnapshot(5, 2, 2, gas.fingerprint(), "", nodes,
+					membership, lineage, source, cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO), gas);
+			domain.bindThermal(registry, liquids, 300);
+			domain.setSolid(1, 0, 0, false); domain.setSolid(3, 0, 0, false); domain.synchronizeGasTopologyForPersistence();
+			require(domain.gasNodeTemperatureK(1) == 300 && domain.exactInternalEnergy().equals(SignedDyadic.of(200))
+					&& domain.thermalAudit().mechanicalWork().equals(SignedDyadic.ZERO)
+					&& domain.thermalAudit().roundoffResidual().equals(SignedDyadic.ZERO)
+					&& FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState()).gasNodeTemperatureK(1) == 300,
+					"gas topology aggregation depends on the old node order or changes a common temperature");
 		}
 	}
 
@@ -1782,6 +1933,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void phaseGasCapacityIsAtomicAndRetainsSmallerBatch() {
+		phaseGeometryRemapIsPreparedBeforeCarrierCommit();
 		phaseMassTransfersUseActualStoredKilograms();
 		gasPhaseTransfersCheckActualGasKilograms();
 		phaseRawCarrierAssignmentIsAtomic();

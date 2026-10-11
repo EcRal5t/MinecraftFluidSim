@@ -96,7 +96,6 @@ final class GasLiquidPhaseChangeStage {
 								remainingBudget);
 						if (plan == null) continue;
 						commitBoil(cell, node, plan);
-						support.refreshGasGeometry();
 						operations = Math.addExact(operations, Math.toIntExact(plan.batches()));
 						boiled++;
 						break;
@@ -106,7 +105,6 @@ final class GasLiquidPhaseChangeStage {
 								thermalCell, gas.carrierId(), remainingBudget);
 						if (plan == null) continue;
 						commitCondense(cell, node, liquidHandle, plan);
-						support.refreshGasGeometry();
 						operations = Math.addExact(operations, Math.toIntExact(plan.batches()));
 						condensed++;
 						break;
@@ -177,8 +175,12 @@ final class GasLiquidPhaseChangeStage {
 			double candidateLiquidTemperature = thermalPlan.temperatureK();
 			GasLiquidPhaseModel.Saturation saturationAfter = prospectiveSaturation(
 					node, transition, phase, candidateLiquidTemperature, candidateGas, candidateGasEnergy);
+			if (saturationAfter.direction() == GasLiquidPhaseModel.Direction.CONDENSE) return null;
+			int countDelta = 0;
+			for (var allocation : removal.allocations()) if (allocation.fullRemoval()) countDelta--;
+			var topology = support.planGasGeometry(cell, countDelta, -removedSvq, node, gasPlan, candidateGasEnergy, thermalPlan);
 			return new GasBoilPlan(
-					batches, removedSvq, removal, gasPlan, thermalPlan, candidateGasEnergy, saturationAfter);
+					batches, removedSvq, removal, gasPlan, thermalPlan, candidateGasEnergy, saturationAfter, topology);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| ThermalStateFunction.EnergyRepresentationException
 				| ThermalDomainState.EmptyPhaseCandidateEnergyException
@@ -196,12 +198,14 @@ final class GasLiquidPhaseChangeStage {
 		GasDomainState gasState = support.gasState();
 		thermal.requirePhaseCellEnergyCurrent(plan.thermalPlan());
 		gasState.network.requirePhaseMutationCurrent(plan.gasPlan());
+		support.requireGasGeometryCurrent(plan.topology(), plan.gasPlan(), plan.thermalPlan());
 		support.commitLiquidRemoval(cell, plan.removal());
 		gasState.network.commitPhaseMutation(plan.gasPlan());
 		thermal.commitGasNodeEnergy(node, plan.candidateGasEnergy());
 		support.commitPendingVolume(cell, -plan.removedSvq());
 		support.markGridDirty();
 		thermal.commitPhaseCellEnergy(plan.thermalPlan(), support.state().thermalMarkers());
+		support.commitGasGeometry(plan.topology());
 	}
 
 	private GasCondensePlan planCondense(
@@ -364,9 +368,11 @@ final class GasLiquidPhaseChangeStage {
 			double candidateLiquidTemperature = thermalPlan.temperatureK();
 			GasLiquidPhaseModel.Saturation saturationAfter = prospectiveSaturation(
 					node, transition, phase, candidateLiquidTemperature, take.second(), candidateGasEnergy);
+			if (saturationAfter.direction() == GasLiquidPhaseModel.Direction.BOIL) return null;
+			var topology = support.planGasGeometry(cell, target < 0 ? 1 : 0, addedSvq, node, gasPlan, candidateGasEnergy, thermalPlan);
 			return new GasCondensePlan(
 					batches, gasPlan, thermalPlan, candidateGasEnergy, target, condensedMixture,
-					targetVolume, targetMass, momentum, slot, addedSvq, moved.mass(), saturationAfter);
+					targetVolume, targetMass, momentum, slot, addedSvq, moved.mass(), saturationAfter, topology);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| ThermalStateFunction.EnergyRepresentationException
 				| AirNetwork.PhaseCapacityExceededException
@@ -402,6 +408,7 @@ final class GasLiquidPhaseChangeStage {
 		LiquidParticleStore particles = support.state().particles();
 		thermal.requirePhaseCellEnergyCurrent(plan.thermalPlan());
 		gasState.network.requirePhaseMutationCurrent(plan.gasPlan());
+		support.requireGasGeometryCurrent(plan.topology(), plan.gasPlan(), plan.thermalPlan());
 		gasState.network.commitPhaseMutation(plan.gasPlan());
 		thermal.commitGasNodeEnergy(node, plan.candidateGasEnergy());
 		if (plan.target() >= 0) {
@@ -418,6 +425,7 @@ final class GasLiquidPhaseChangeStage {
 		support.commitPendingVolume(cell, plan.addedSvq());
 		support.markGridDirty();
 		thermal.commitPhaseCellEnergy(plan.thermalPlan(), support.state().thermalMarkers());
+		support.commitGasGeometry(plan.topology());
 	}
 
 	private PhaseCellInventory gasLiquidCellInventory(int cell, int liquidHandle) {
@@ -623,7 +631,7 @@ final class GasLiquidPhaseChangeStage {
 
 	private record GasBoilPlan(
 			long batches, long removedSvq, PhaseRemovalPlan removal, AirNetwork.PhaseMutationPlan gasPlan,
-			ThermalDomainState.PhaseCellEnergyPlan thermalPlan, double candidateGasEnergy, GasLiquidPhaseModel.Saturation saturationAfter
+			ThermalDomainState.PhaseCellEnergyPlan thermalPlan, double candidateGasEnergy, GasLiquidPhaseModel.Saturation saturationAfter, GasTopologyCoordinator.GasTopologyPlan topology
 	) {
 		GasLiquidPhaseModel.Direction directionAfter() { return saturationAfter.direction(); }
 	}
@@ -633,7 +641,7 @@ final class GasLiquidPhaseChangeStage {
 			double candidateGasEnergy, int target,
 			ChemicalMixtureRecord condensedMixture, float targetVolume, double targetMass,
 			CarrierMassMomentum.Plan momentum, int slot, long addedSvq, double movedMass,
-			GasLiquidPhaseModel.Saturation saturationAfter
+			GasLiquidPhaseModel.Saturation saturationAfter, GasTopologyCoordinator.GasTopologyPlan topology
 	) {
 		GasLiquidPhaseModel.Direction directionAfter() { return saturationAfter.direction(); }
 	}

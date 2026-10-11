@@ -47,7 +47,11 @@ final class PhaseChangeStageSupport {
 		SignedDyadic exactInternalEnergy();
 		void ensureGrid();
 		void refreshGasTopology();
-		void refreshGasGeometry();
+		GasTopologyCoordinator.GasTopologyPlan planGasGeometry(int cell, int count, double volume, int node,
+				cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal);
+		void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
+				cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal);
+		void commitGasGeometry(GasTopologyCoordinator.GasTopologyPlan topology);
 		void refreshCoherentOccupancy();
 		void markGridDirty();
 		boolean canAddCarrierVolume(double volume);
@@ -74,7 +78,20 @@ final class PhaseChangeStageSupport {
 	int firstOpenSlot(int cell) { return access.firstOpenSlot(cell, 0); }
 	void ensureGrid() { access.ensureGrid(); }
 	void refreshGasTopology() { access.refreshGasTopology(); }
-	void refreshGasGeometry() { access.refreshGasGeometry(); }
+	GasTopologyCoordinator.GasTopologyPlan planGasGeometry(int cell, int countDelta, long volumeDelta, int node,
+			cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal) {
+		SignedDyadic volume = SignedDyadic.ZERO;
+		for (int marker = state.markerGrid().cellMarkerHead[cell]; marker >= 0;
+				marker = state.markerGrid().particleCellNext[marker]) volume = volume.add(SignedDyadic.of(state.particles().volume(marker)));
+		volume = volume.add(SignedDyadic.of(volumeDelta, -24));
+		return access.planGasGeometry(cell, Math.addExact(state.markerGrid().markerCount[cell], countDelta),
+				volume.toDouble(), node, gas, energy, thermal);
+	}
+	void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
+			cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal) {
+		access.requireGasGeometryCurrent(topology, gas, thermal);
+	}
+	void commitGasGeometry(GasTopologyCoordinator.GasTopologyPlan topology) { access.commitGasGeometry(topology); }
 	void refreshCoherentOccupancy() { access.refreshCoherentOccupancy(); }
 	void markGridDirty() { access.markGridDirty(); }
 	boolean canExpandCondensedVolume(long svq) {

@@ -390,6 +390,20 @@ public final class ThermalDomainState {
 				inheritedAvailableVolumes, sourceEnergy, sinkEnergy);
 	}
 
+	/** Plans the topology successor against the complete prepared phase energy and audit. */
+	public GasEnergyStore.GasRemapPlan planGasRemapAfterPhase(PhaseCellEnergyPlan phase, int node, double energy,
+			AirNetwork network, List<GasInventory> inventories, double[] volumes, double[] mixed,
+			double[] inherited, double source, double sink) {
+		requirePhaseCellEnergyCurrent(phase);
+		return gasState.planRemapAfterPhase(network, node, energy, phase.assignment.afterAudit(),
+				inventories, volumes, mixed, inherited, source, sink);
+	}
+
+	public void requireGasRemapAfterPhaseCurrent(GasEnergyStore.GasRemapPlan remap, PhaseCellEnergyPlan phase) {
+		requirePhaseCellEnergyCurrent(phase);
+		gasState.requireRemapAfterPhaseCurrent(remap, phase.assignment.afterAudit());
+	}
+
 	public void requireCanCommitGasRemap(GasEnergyStore.GasRemapPlan plan) {
 		gasState.requireCanCommitRemap(plan);
 	}

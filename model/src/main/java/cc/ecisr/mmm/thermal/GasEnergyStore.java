@@ -193,6 +193,23 @@ public final class GasEnergyStore {
 			double[] mixedEnergy, double[] inheritedAvailableVolumes,
 			double sourceEnergy, double sinkEnergy
 	) {
+		return planRemap(oldNetwork, inventories, availableVolumes, mixedEnergy, inheritedAvailableVolumes,
+				sourceEnergy, sinkEnergy, nodeEnergy, null, revision);
+	}
+
+	GasRemapPlan planRemapAfterPhase(AirNetwork network, int node, double energy,
+			ThermalAuditLedger afterPhase, List<GasInventory> inventories, double[] volumes,
+			double[] mixed, double[] inherited, double source, double sink) {
+		requireGasNode(node, network);
+		double[] baseline = nodeEnergy.clone(); baseline[node - 1] = energy;
+		return planRemap(network, inventories, volumes, mixed, inherited, source, sink,
+				baseline, afterPhase, Math.addExact(revision, 1));
+	}
+
+	private GasRemapPlan planRemap(AirNetwork oldNetwork, List<GasInventory> inventories,
+			double[] availableVolumes, double[] mixedEnergy, double[] inheritedAvailableVolumes,
+			double sourceEnergy, double sinkEnergy, double[] baselineEnergy,
+			ThermalAuditLedger beforeAudit, long baseRevision) {
 		if (!hasGasEnergy(oldNetwork.nodeCount()) || inventories == null
 				|| inventories.size() != availableVolumes.length || inventories.size() != mixedEnergy.length
 				|| inventories.size() != inheritedAvailableVolumes.length
@@ -222,29 +239,37 @@ public final class GasEnergyStore {
 						inheritedAvailableVolumes[node], availableVolumes[node]).finalInternalEnergy();
 			}
 		}
-		SignedDyadic oldGas = SignedDyadic.sum(nodeEnergy);
+		SignedDyadic oldGas = SignedDyadic.sum(baselineEnergy);
 		SignedDyadic mixed = SignedDyadic.sum(mixedEnergy);
 		SignedDyadic finalGas = SignedDyadic.sum(result);
 		SignedDyadic source = SignedDyadic.of(sourceEnergy), sink = SignedDyadic.of(sinkEnergy);
 		SignedDyadic work = finalGas.subtract(mixed);
 		SignedDyadic roundoff = finalGas.subtract(oldGas).subtract(source).add(sink).subtract(work);
-		return new GasRemapPlan(revision, result, source, sink, work, roundoff);
+		ThermalAuditLedger afterAudit = (beforeAudit == null ? audit.ledger() : beforeAudit).withExternalSourceEnergy(source).withExternalSinkEnergy(sink)
+				.withMechanicalWork(work).withRoundoff(roundoff);
+		afterAudit.expectedInventory();
+		return new GasRemapPlan(this, baseRevision, result, source, sink, work, roundoff, beforeAudit, beforeAudit == null ? null : afterAudit);
 	}
 
 	void requireCanCommitRemap(GasRemapPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Gas thermal remap plan is missing");
-		if (plan.baseRevision() != revision) {
+		if (plan.owner != this || plan.baseRevision() != revision || plan.beforeAudit() != null && audit.ledger() != plan.beforeAudit()) {
 			throw new IllegalStateException("Gas energy changed after remap planning");
 		}
 	}
 
+	void requireRemapAfterPhaseCurrent(GasRemapPlan plan, ThermalAuditLedger afterPhase) {
+		if (plan == null || plan.owner != this || plan.baseRevision() != Math.addExact(revision, 1) || plan.beforeAudit() != afterPhase)
+			throw new IllegalStateException("Gas energy successor topology is stale");
+	}
+
 	void commitRemap(GasRemapPlan plan) {
 		requireCanCommitRemap(plan);
-		ThermalAuditLedger auditAfter = audit.ledger()
+		ThermalAuditLedger after = plan.afterAudit() != null ? plan.afterAudit() : audit.ledger()
 				.withExternalSourceEnergy(plan.sourceEnergy()).withExternalSinkEnergy(plan.sinkEnergy())
 				.withMechanicalWork(plan.mechanicalWork()).withRoundoff(plan.roundoff());
 		nodeEnergy = plan.nodeEnergy();
-		audit.replace(auditAfter);
+		audit.replace(after);
 		revision++;
 	}
 
@@ -315,12 +340,29 @@ public final class GasEnergyStore {
 		}
 	}
 
-	public record GasRemapPlan(
-			long baseRevision, double[] nodeEnergy, SignedDyadic sourceEnergy, SignedDyadic sinkEnergy,
-			SignedDyadic mechanicalWork, SignedDyadic roundoff
-	) {
-		public GasRemapPlan { nodeEnergy = nodeEnergy.clone(); }
-		@Override public double[] nodeEnergy() { return nodeEnergy.clone(); }
+	public static final class GasRemapPlan {
+		private final GasEnergyStore owner;
+		private final long baseRevision;
+		private final double[] nodeEnergy;
+		private final SignedDyadic sourceEnergy, sinkEnergy, mechanicalWork, roundoff;
+		private final ThermalAuditLedger beforeAudit, afterAudit;
+
+		private GasRemapPlan(GasEnergyStore owner, long baseRevision, double[] nodeEnergy,
+				SignedDyadic sourceEnergy, SignedDyadic sinkEnergy, SignedDyadic mechanicalWork,
+				SignedDyadic roundoff, ThermalAuditLedger beforeAudit, ThermalAuditLedger afterAudit) {
+			this.owner = owner; this.baseRevision = baseRevision; this.nodeEnergy = nodeEnergy;
+			this.sourceEnergy = sourceEnergy; this.sinkEnergy = sinkEnergy;
+			this.mechanicalWork = mechanicalWork; this.roundoff = roundoff;
+			this.beforeAudit = beforeAudit; this.afterAudit = afterAudit;
+		}
+		public long baseRevision() { return baseRevision; }
+		public double[] nodeEnergy() { return nodeEnergy.clone(); }
+		public SignedDyadic sourceEnergy() { return sourceEnergy; }
+		public SignedDyadic sinkEnergy() { return sinkEnergy; }
+		public SignedDyadic mechanicalWork() { return mechanicalWork; }
+		public SignedDyadic roundoff() { return roundoff; }
+		private ThermalAuditLedger beforeAudit() { return beforeAudit; }
+		private ThermalAuditLedger afterAudit() { return afterAudit; }
 	}
 
 	public SignedDyadic exactGasEnergy() { return SignedDyadic.sum(nodeEnergy); }
