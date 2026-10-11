@@ -238,13 +238,24 @@ final class FlipGranularCollision {
 	}
 
 	private void resolveContact(float[] velocity, int axis, ParticulateMaterial material) {
+		float incomingNormal = velocity[axis];
 		velocity[axis] = (float) (-velocity[axis] * material.restitution());
 		// A parcel resting on a face receives gravity again before every preview. Without a
 		// low-energy contact dead zone, restitution turns that one-tick impulse into an endless
 		// sub-visible bounce and the parcel can never accumulate settlement contact age.
 		if (Math.abs(velocity[axis]) <= cellSize * 0.125F) velocity[axis] = 0.0F;
-		float tangentScale = (float) Math.max(0.0, 1.0 - material.dynamicFriction());
-		for (int tangent = 0; tangent < 3; tangent++) if (tangent != axis) velocity[tangent] *= tangentScale;
+		double normalImpulsePerMass = Math.abs((double) velocity[axis] - incomingNormal);
+		double tangentSquared = 0;
+		for (int tangent = 0; tangent < 3; tangent++) if (tangent != axis) {
+			tangentSquared += velocity[tangent] * (double) velocity[tangent];
+		}
+		double tangentSpeed = Math.sqrt(tangentSquared);
+		if (tangentSpeed == 0 || normalImpulsePerMass == 0) return;
+		double tangentScale = tangentSpeed <= material.staticFriction() * normalImpulsePerMass ? 0
+				: Math.max(0, 1 - material.dynamicFriction() * normalImpulsePerMass / tangentSpeed);
+		for (int tangent = 0; tangent < 3; tangent++) if (tangent != axis) {
+			velocity[tangent] = (float) (velocity[tangent] * tangentScale);
+		}
 	}
 
 	/** Low-cost deposits are vertical bulk columns; skeleton remains the displaced-volume truth. */

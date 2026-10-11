@@ -12,6 +12,7 @@ public final class GranularCarrierValidation {
 	public static void validate() {
 		sphereMicroBoxContacts();
 		contactImpulsePreservesSolvedDrift();
+		contactImpulseObeysCoulombCone();
 		contactAgeSaturates();
 		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
@@ -93,7 +94,7 @@ public final class GranularCarrierValidation {
 		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
 		float dt = .05F, vx = .4F, vy = -.6F, vz = .8F;
-		float friction = (float) (1 - material.dynamicFriction());
+		double tangentScale = 1 - material.dynamicFriction() * vz * (1 + material.restitution()) / Math.hypot(vx, vy);
 		for (boolean internal : new boolean[]{false, true}) {
 			var geometry = new FlipCutCellGeometry(3, 3, 3);
 			float x = .625F, y = .625F, z = 1.5F - radius;
@@ -114,10 +115,44 @@ public final class GranularCarrierValidation {
 			require(next.z() >= z && next.z() < z + vz * dt
 					&& collision.positionValid(next.x(), next.y(), next.z(), svq),
 					"contact must clip normal drift without entering solid geometry");
-			require(next.velocityX() == vx * friction && next.velocityY() == vy * friction
+			require(next.velocityX() == (float) (vx * tangentScale) && next.velocityY() == (float) (vy * tangentScale)
 					&& next.velocityZ() == (float) (-vz * material.restitution()),
 					"contact friction and restitution must update the end-of-step velocity");
 		}
+	}
+
+	private static void contactImpulseObeysCoulombCone() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		var material = registry.material(registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND));
+		var collision = new FlipGranularCollision(2, 2, 2, .5F, new FlipCutCellGeometry(2, 2, 2), null, 1);
+		try {
+			var contact = FlipGranularCollision.class.getDeclaredMethod("resolveContact", float[].class,
+					int.class, cc.ecisr.mmm.granular.ParticulateMaterial.class);
+			contact.setAccessible(true);
+			for (int axis = 0; axis < 3; axis++) for (float normal : new float[]{0, .01F, .2F, 2, -2}) {
+				int first = (axis + 1) % 3, second = (axis + 2) % 3;
+				float[] velocity = new float[3];
+				velocity[axis] = normal; velocity[first] = .6F; velocity[second] = .8F;
+				double speed = Math.hypot(velocity[first], velocity[second]);
+				float nextNormal = (float) (-normal * material.restitution());
+				if (Math.abs(nextNormal) <= .5F * .125F) nextNormal = 0;
+				double impulse = Math.abs((double) nextNormal - normal);
+				double expectedSpeed = speed <= material.staticFriction() * impulse ? 0
+						: Math.max(0, speed - material.dynamicFriction() * impulse);
+				contact.invoke(collision, velocity, axis, material);
+				double nextSpeed = Math.hypot(velocity[first], velocity[second]);
+				require(velocity[axis] == nextNormal && Math.abs(nextSpeed - expectedSpeed) < 2 * Math.ulp(1F),
+						"Coulomb friction must use the actual normal impulse including the resting dead zone");
+				require(speed - nextSpeed <= material.staticFriction() * impulse + 2 * Math.ulp(1F)
+						&& nextSpeed * nextSpeed + nextNormal * (double) nextNormal <= speed * speed + normal * (double) normal,
+						"contact impulse exceeded its friction cone or increased kinetic energy");
+				if (normal == 0) for (int repeat = 0; repeat < 10; repeat++) {
+					contact.invoke(collision, velocity, axis, material);
+					require(velocity[first] == .6F && velocity[second] == .8F,
+							"zero normal impulse must preserve tangent velocity under repeated contact");
+				}
+			}
+		} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
 	}
 
 	private static void contactAgeSaturates() {
