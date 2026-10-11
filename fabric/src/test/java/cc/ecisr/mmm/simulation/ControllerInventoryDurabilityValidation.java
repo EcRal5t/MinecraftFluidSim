@@ -700,7 +700,7 @@ final class ControllerInventoryDurabilityValidation {
 		void insertWater() { insertLiquid(water); }
 		void insertMercury() { insertLiquid(mercury); }
 		void insertLiquid(int material) {
-			settle();
+			if (!settle()) return;
 			check(domain.tryInsertExactVolume(injectX, injectY, injectZ, 8.0F, 6, material, true).transferred(),
 					"normal-play liquid insertion was rejected");
 			roundTrip();
@@ -716,7 +716,7 @@ final class ControllerInventoryDurabilityValidation {
 			for (int bucket = 0; bucket < buckets; bucket++) insertChemical(base, baseEnergy, "base");
 		}
 		void insertChemical(ChemicalTransferLedger ledger, double energy, String name) {
-			settle();
+			if (!settle()) return;
 			FuzzMetrics.note(scene.name(), "chemistry");
 			check(domain.tryInsertExactChemical(injectX, injectY, injectZ, ledger, 6, true, energy).transferred(),
 					"normal-play " + name + " insertion was rejected at generation " + generation
@@ -725,13 +725,13 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		void insertSand() {
-			settle();
+			if (!settle()) return;
 			check(domain.tryInsertExactGranular(injectX, injectY, injectZ, sand, 6, true).inserted(),
 					"normal-play granular insertion was rejected");
 			roundTrip();
 		}
 		boolean tryInsertLiquidAt(int x, int y, int z, int material) {
-			settle();
+			if (!settle()) return false;
 			FluidDomainState before = snapshot();
 			float volume = FUZZ_PARTIAL ? partialVolume(x, y, z) : 8.0F;
 			if (!domain.tryInsertExactVolume(x, y, z, volume, 6, material, true).transferred()) {
@@ -742,7 +742,7 @@ final class ControllerInventoryDurabilityValidation {
 			return true;
 		}
 		boolean tryInsertChemicalAt(int x, int y, int z, ChemicalTransferLedger ledger, double energy) {
-			settle();
+			if (!settle()) return false;
 			FuzzMetrics.note(scene.name(), "chemistry");
 			FluidDomainState before = snapshot();
 			if (!domain.tryInsertExactChemical(x, y, z, ledger, 6, true, energy).transferred()) {
@@ -753,7 +753,7 @@ final class ControllerInventoryDurabilityValidation {
 			return true;
 		}
 		boolean tryInsertSandAt(int x, int y, int z) {
-			settle();
+			if (!settle()) return false;
 			FuzzMetrics.note(scene.name(), "granular");
 			FluidDomainState before = snapshot();
 			if (!domain.tryInsertExactGranular(x, y, z, sand, 6, true).inserted()) {
@@ -771,7 +771,7 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		void extractWater() {
-			settle();
+			if (!settle()) return;
 			check(domain.tryExtractExactVolume(injectX, injectY, injectZ, 8.0F, 6).transferred(),
 					"normal-play water extraction was rejected");
 			roundTrip();
@@ -797,7 +797,7 @@ final class ControllerInventoryDurabilityValidation {
 			return true;
 		}
 		boolean tryInsertMixtureAt(int x, int y, int z) {
-			settle();
+			if (!settle()) return false;
 			FluidDomainState before = snapshot();
 			double portion = FUZZ_PARTIAL ? partialVolume(x, y, z) : 2.0;
 			List<FluidDomain.MaterialPortion> portions = List.of(
@@ -920,7 +920,7 @@ final class ControllerInventoryDurabilityValidation {
 		 * fail only if every rung down to the resolution floor is refused while liquid is observable.
 		 */
 		String extractTail() {
-			settle();
+			if (!settle()) return "skip(pendingSettlementRejected)";
 			int[] target = maximumNearbyLiquidCell(6);
 			double observed = domain.exactVolumeNear(target[0], target[1], target[2], 6, ALL_MATERIALS);
 			if (observed <= 0.0) return "skip(noLiquid)";
@@ -949,7 +949,7 @@ final class ControllerInventoryDurabilityValidation {
 		 * would be a real accounting failure; rejection must also leave the inventory untouched.
 		 */
 		String extractOverCapacity() {
-			settle();
+			if (!settle()) return "skip(pendingSettlementRejected)";
 			double total = domain.totalVolumeExact();
 			float requested = (float) (total + Math.max(1.0, total * 0.01));
 			if (!Float.isFinite(requested)) return "skip(overflow)";
@@ -970,7 +970,7 @@ final class ControllerInventoryDurabilityValidation {
 		 * refusal must not mutate state and a settlement must not exceed its request.
 		 */
 		String extractSubBucket(int variant) {
-			settle();
+			if (!settle()) return "skip(pendingSettlementRejected)";
 			int[] target = maximumNearbyLiquidCell(6);
 			double observed = domain.exactVolumeNear(target[0], target[1], target[2], 6, ALL_MATERIALS);
 			if (observed <= 0.0) return "skip(noLiquid)";
@@ -997,7 +997,7 @@ final class ControllerInventoryDurabilityValidation {
 		 * rather than requiring the whole domain to be water.
 		 */
 		String extractThenRestore() {
-			settle();
+			if (!settle()) return "skip(pendingSettlementRejected)";
 			int radius = 3;
 			int[] target = maximumNearbyLiquidCell(radius, water);
 			double observed = domain.exactVolumeNear(target[0], target[1], target[2], radius, water);
@@ -1029,7 +1029,7 @@ final class ControllerInventoryDurabilityValidation {
 
 		/** Minimal-volume insertion. An empty inject cell is a clear precondition, so rejection fails. */
 		String insertMinimalVolume(int variant) {
-			settle();
+			if (!settle()) return "skip(pendingSettlementRejected)";
 			float volume = MINIMUM_VOLUMES[variant % MINIMUM_VOLUMES.length];
 			boolean preconditionEmpty = domain.exactVolumeNear(injectX, injectY, injectZ, 0, -1) == 0.0
 					&& domain.granularSolidVolumeSvq(injectX, injectY, injectZ) == 0L;
@@ -1048,7 +1048,7 @@ final class ControllerInventoryDurabilityValidation {
 
 		/** Toggles one interior collision cell at runtime, the way a placed or broken block would. */
 		String toggleSolid(java.util.Random random) {
-			settle();
+			if (!settle()) return "skip(pendingSettlementRejected)";
 			int x = random.nextInt(domain.sizeX());
 			int y = random.nextInt(domain.sizeY());
 			int z = random.nextInt(domain.sizeZ());
@@ -1216,7 +1216,7 @@ final class ControllerInventoryDurabilityValidation {
 
 		/** Drives the loader-neutral container-transfer chain: private candidate, staged HEAD, adoption. */
 		boolean containerTransfer(java.util.Random random) {
-			settle();
+			if (!settle()) return false;
 			long baseGeneration = region.checkpointGeneration();
 			FluidDomainState liveBefore = region.domain().captureAuthoritativeState();
 			FluidDomain candidateDomain = FluidDomain.restoreAuthoritativeState(liveBefore);
@@ -1265,7 +1265,7 @@ final class ControllerInventoryDurabilityValidation {
 			return true;
 		}
 		void extractChemical() {
-			settle();
+			if (!settle()) return;
 			int[] target = maximumNearbyLiquidCell(6);
 			double available = domain.exactVolumeNear(target[0], target[1], target[2], 6, -1);
 			check(domain.tryExtractExactChemical(target[0], target[1], target[2], 8.0F, 6).transferred(),
@@ -1289,18 +1289,21 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return selected;
 		}
-		void clear() {
-			settle();
+		boolean clear() {
+			if (!settle()) return false;
 			domain.commitOperatorClear(domain.planOperatorClear());
 			roundTrip();
+			return true;
 		}
-		void vent() {
-			settle();
+		boolean vent() {
+			if (!settle()) return false;
 			domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
 			roundTrip();
+			return true;
 		}
-		void settle() {
-			if (!domain.hasPendingPhaseVolumeWork()) return;
+		boolean settle() {
+			if (!domain.hasPendingPhaseVolumeWork()) return true;
+			FluidDomainState before = snapshot();
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluate(
 						FluidStepRequest.pendingPhaseSettlement(solverGeneration(), domain.captureAuthoritativeState()));
@@ -1312,11 +1315,13 @@ final class ControllerInventoryDurabilityValidation {
 				check(!domain.hasPendingPhaseVolumeWork(),
 						"pending phase-work settlement retained the prior lien");
 			} catch (RuntimeException failure) {
+				if (rejectedOutsideBuoyancyDomain(failure, before)) return false;
 				throw new IllegalStateException("normal-play pending phase-work settlement failed at generation "
 						+ generation, failure);
 			}
 			generation++;
 			roundTrip();
+			return true;
 		}
 		void steps(boolean phase, int count) { for (int step = 0; step < count; step++) step(phase); }
 		void step(boolean phase) {
@@ -1465,11 +1470,34 @@ final class ControllerInventoryDurabilityValidation {
 			state.step(false);
 			check(state.rejectedBoussinesqSteps == 1,
 					"selfcheck: out-of-domain buoyancy must reject without changing state");
+			int[] target = state.maximumNearbyLiquidCell(0);
+			int cell = (target[2] * state.domain.sizeY() + target[1]) * state.domain.sizeX() + target[0];
+			state.domain.restorePendingPhaseVolumeState(new cc.ecisr.mmm.fluid.PendingPhaseVolumeState(
+					state.domain.sizeX() * state.domain.sizeY() * state.domain.sizeZ(), List.of(
+					new cc.ecisr.mmm.fluid.PendingPhaseVolumeState.Entry(cell,
+							cc.ecisr.mmm.units.SignedDyadic.of(1, -20)))));
+			FluidDomainState pendingBefore = state.snapshot();
+			long generationBefore = state.generation;
+			check(!state.settle(), "selfcheck: out-of-domain pending settlement must refuse");
+			check(state.extractOverCapacity().equals("skip(pendingSettlementRejected)"),
+					"selfcheck: extraction continued after pending settlement refused");
+			check(!state.clear() && !state.vent()
+					&& !state.tryInsertLiquidAt(state.injectX, state.injectY, state.injectZ, state.water),
+					"selfcheck: inventory edit continued after pending settlement refused");
+			state.assertUnchanged(pendingBefore, "selfcheck: rejected pending action");
+			check(state.generation == generationBefore && state.rejectedBoussinesqSteps == 6,
+					"selfcheck: refused pending actions changed generation or were not evaluated");
+			check(!state.rejectedOutsideBuoyancyDomain(
+					new cc.ecisr.mmm.fluid.FluidSolverBackend.MechanicalWorkBudgetExceededException("selfcheck"),
+					pendingBefore) && !state.rejectedOutsideBuoyancyDomain(
+					new cc.ecisr.mmm.fluid.FluidSolverBackend.CandidateEvaluationRejectedException(
+							"selfcheck", new IllegalArgumentException("other candidate failure")), pendingBefore),
+					"selfcheck: mechanical budget or unrelated candidate failure was hidden");
 
 			FuzzMetrics.note("selfcheck", "thermal");
 			check(FuzzMetrics.familyGapExists("selfcheck", "thermal"),
 					"selfcheck: coverage gap detection missed an exercised family with no events");
-			System.out.println("harness selfcheck PASS (rejection guard, closed-loop comparison, coverage gap)");
+			System.out.println("harness selfcheck PASS (rejection guard, pending-action refusal, closed-loop comparison, coverage gap)");
 		} finally {
 			state.close();
 		}
@@ -1793,7 +1821,7 @@ final class ControllerInventoryDurabilityValidation {
 			return "temperature(" + kelvin + ")";
 		}
 		if (pick < 76) {
-			state.settle();
+			if (!state.settle()) return "skip(pendingSettlementRejected)";
 			int[] target = state.maximumNearbyLiquidCell(6, state.water);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, state.water) >= 8.0
 					&& state.tryExtractWaterAt(target)) {
@@ -1802,7 +1830,7 @@ final class ControllerInventoryDurabilityValidation {
 			return "skip(noCanonicalWater)";
 		}
 		if (pick < 82) {
-			state.settle();
+			if (!state.settle()) return "skip(pendingSettlementRejected)";
 			int[] target = state.maximumNearbyLiquidCell(6);
 			if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
 					&& state.tryExtractChemicalAt(target)) {
@@ -1818,9 +1846,9 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(indicator:" + edit.failure() + ")";
 		}
-		if (pick < 91) { state.clear(); return "clear"; }
-		if (pick < 96) { state.vent(); return "vent"; }
-		state.settle();
+		if (pick < 91) return state.clear() ? "clear" : "skip(pendingSettlementRejected)";
+		if (pick < 96) return state.vent() ? "vent" : "skip(pendingSettlementRejected)";
+		if (!state.settle()) return "skip(pendingSettlementRejected)";
 		return "settle";
 	}
 
@@ -1953,7 +1981,7 @@ final class ControllerInventoryDurabilityValidation {
 				state.coldRestart(random);
 				return "coldRestart";
 			case "extractWater": {
-				state.settle();
+				if (!state.settle()) return "skip(pendingSettlementRejected)";
 				int[] target = state.maximumNearbyLiquidCell(6, state.water);
 				if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, state.water) >= 8.0
 						&& state.tryExtractWaterAt(target)) {
@@ -1962,7 +1990,7 @@ final class ControllerInventoryDurabilityValidation {
 				return "skip(noCanonicalWater)";
 			}
 			case "extractChemical": {
-				state.settle();
+				if (!state.settle()) return "skip(pendingSettlementRejected)";
 				int[] target = state.maximumNearbyLiquidCell(6);
 				if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
 						&& state.tryExtractChemicalAt(target)) {
@@ -1971,7 +1999,7 @@ final class ControllerInventoryDurabilityValidation {
 				return "skip(noCanonicalLiquid)";
 			}
 			case "extractMixture": {
-				state.settle();
+				if (!state.settle()) return "skip(pendingSettlementRejected)";
 				int[] target = state.maximumNearbyLiquidCell(6);
 				if (state.domain.exactVolumeNear(target[0], target[1], target[2], 6, -1) >= 8.0
 						&& state.tryExtractMixtureAt(target)) {
@@ -2009,14 +2037,12 @@ final class ControllerInventoryDurabilityValidation {
 				return "skip(indicator:" + edit.failure() + ")";
 			}
 			case "clear":
-				state.clear();
-				return "clear";
+				return state.clear() ? "clear" : "skip(pendingSettlementRejected)";
 			case "vent":
-				state.vent();
-				return "vent";
+				return state.vent() ? "vent" : "skip(pendingSettlementRejected)";
 			default:
 				if (frozen) return "skip(paused)";
-				state.settle();
+				if (!state.settle()) return "skip(pendingSettlementRejected)";
 				return "settle";
 		}
 	}
