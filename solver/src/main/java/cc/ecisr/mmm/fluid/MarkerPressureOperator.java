@@ -130,7 +130,10 @@ final class MarkerPressureOperator {
 			int entry = marker * 8 + slot;
 			double pFirst = first[axis][entry] < 0 ? 0 : pressure[first[axis][entry]];
 			double pSecond = second[axis][entry] < 0 ? 0 : pressure[second[axis][entry]];
-			result += faceCoefficients[axis][entry] * (pFirst - pSecond);
+			double difference = pFirst - pSecond, coefficient = faceCoefficients[axis][entry];
+			// Opposite finite pressures can overflow their difference while the area-scaled force fits.
+			result += Double.isInfinite(difference) && Double.isFinite(pFirst) && Double.isFinite(pSecond)
+					? coefficient * pFirst - coefficient * pSecond : coefficient * difference;
 		}
 		return result;
 	}

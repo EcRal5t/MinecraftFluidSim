@@ -107,7 +107,6 @@ final class MarkerVelocityTransfer {
 		if (faceVelocity.length != 3) throw new IllegalArgumentException("Expected three MAC axes");
 		for (int axis = 0; axis < 3; axis++) if (faceVelocity[axis].length != faceCount(axis)) throw new IllegalArgumentException("MAC shape mismatch");
 		if (faceVelocity[0] == faceVelocity[1] || faceVelocity[0] == faceVelocity[2] || faceVelocity[1] == faceVelocity[2]) throw new IllegalArgumentException("Aliased MAC axes");
-		for (int first = 0; first < 3; first++) for (int second = first + 1; second < 3; second++) if (faceVelocity[first] == faceVelocity[second]) throw new IllegalArgumentException("Aliased MAC axes");
 		apply(markerVelocity, workspace);
 		for (double[] axis : workspace) for (double value : axis) if (!Float.isFinite((float) value)) {
 			throw new IllegalStateException("Unrepresentable published MAC velocity");

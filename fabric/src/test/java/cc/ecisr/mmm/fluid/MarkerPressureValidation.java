@@ -13,6 +13,7 @@ public final class MarkerPressureValidation {
 		var closed = layout(true); verifyIndependentFluxAndGram(closed); closedPressureKernel(closed);
 		finiteGasStorage();
 		tinyMassPressureDiagonal();
+		largePressureDifferences();
 	}
 
 	private static Layout layout(boolean full) {
@@ -178,5 +179,23 @@ public final class MarkerPressureValidation {
 		if(!(diagonal[0]>0&&Double.isFinite(diagonal[0])&&Double.doubleToRawLongBits(diagonal[0])==Double.doubleToRawLongBits(applied[0])))throw new AssertionError("Tiny actual mass lost pressure rank");
 		var force=markers(j);c.force(new double[]{1},force);near(force[0][0],0,0,"Major carrier cancellation");
 		if(force[0][1]*force[0][1]!=0)throw new AssertionError("Tiny-mass fixture does not expose square-first underflow");
+	}
+
+	private static void largePressureDifferences() {
+		var l=layout(false);var j=l.transfer;int[][] first=new int[3][],second=new int[3][];var area=faces(j);
+		for(int a=0;a<3;a++){first[a]=new int[j.faceCount(a)];second[a]=new int[j.faceCount(a)];Arrays.fill(first[a],-1);Arrays.fill(second[a],-1);}
+		int face=l.domain.xFaceIndex(2,1,1);first[0][face]=0;second[0][face]=1;area[0][face]=.25;
+		var c=new MarkerPressureOperator(j,2,first,second,area,new double[]{0,0});var force=markers(j);
+		c.force(new double[]{Double.MAX_VALUE,-Double.MAX_VALUE},force);
+		for(int marker=0;marker<j.markerCount();marker++) {
+			double coefficient=0;
+			for(int slot=0;slot<j.coefficientCount(0,marker);slot++)if(j.faceIndex(0,marker,slot)==face)coefficient=j.coefficient(0,marker,slot);
+			// Exact dyadic area: 0.25*(MAX-(-MAX)) = 0.5*MAX remains representable.
+			double expected=(.5*coefficient)*Double.MAX_VALUE;
+			near(force[0][marker],expected,4*Math.ulp(expected),"Finite force from overflowing pressure difference");
+			near(force[1][marker],0,0,"Isolated pressure Y force");near(force[2][marker],0,0,"Isolated pressure Z force");
+		}
+		double[] response=new double[2];c.apply(new double[]{Double.MAX_VALUE,-Double.MAX_VALUE},response);
+		if(!(Double.isFinite(response[0])&&response[0]>0&&response[1]==-response[0]))throw new AssertionError("Representable high-pressure Gram response overflowed");
 	}
 }
