@@ -47,7 +47,9 @@ public final class GasPressureBoundary {
 	public long drawnFromAmbientNanos() { return domain.gasState.network.drawnFromAmbientNanos(); }
 	public int edgeCount() { return domain.gasState.network.edgeCount(); }
 	public boolean hasPressureDrivenFlow() {
-		return domain.gasState.network.hasPressureDrivenFlow(this::nodeGaugePressurePa);
+		return domain.thermalState == null || !domain.thermalState.gasModelBound()
+				? domain.gasState.network.hasPressureDrivenFlow(this::nodeGaugePressurePa)
+				: domain.gasState.network.hasPressureDrivenFlow(domain.thermalState.gasThermodynamics(domain.gasState.network));
 	}
 	public GasAuditLedger externalSource() { return domain.gasState.network.externalSource(); }
 	public GasAuditLedger escapedSink() { return domain.gasState.network.escapedSink(); }
@@ -56,6 +58,7 @@ public final class GasPressureBoundary {
 
 	/** Thermal-aware node pressure source; standard-temperature fallback before the gas model binds. */
 	public double nodeGaugePressurePa(int node) {
+		if (node == cc.ecisr.mmm.fluid.air.AirNetwork.AMBIENT_NODE) return 0.0;
 		return domain.thermalState == null || !domain.thermalState.gasModelBound()
 				? domain.gasState.network.gaugePressure(node)
 				: domain.thermalState.gasGaugePressure(node, domain.gasState.network);

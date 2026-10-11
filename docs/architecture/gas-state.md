@@ -39,7 +39,7 @@ marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 compone
 
 已存在的密闭有限库存若暂时只剩部分充液格，则其旧 lineage 中仍有正 residual volume、且不接触任何本轮 full-air/ambient component 的连通部分成为显式 partial owner component；真实连通时仍按正常 merge 处理。
 
-完整重扫后若仍没有节点，扫描器为具有正残余体积的部分充液连通区建立显式归属，按原规则规范化节点顺序和闭域总容量。这覆盖满液域的分数抽取，以及旧 membership 全部消失、抽取位置没有旧 lineage 的情况。节点通过正常 remap 接受库存：没有可转移库存时保持真空，旧密闭库存仍按既有容量权重转移。持久化与恢复使用相同的扫描规则。
+首次扫描或完整重扫后若仍没有节点，扫描器为具有正残余体积的部分充液连通区建立显式归属，按原规则规范化节点顺序和闭域总容量。这覆盖满液域的分数抽取，以及旧 membership 全部消失、抽取位置没有旧 lineage 的情况。节点通过正常 remap 接受库存：没有可转移库存时保持真空，旧密闭库存仍按既有容量权重转移。持久化与恢复使用相同的扫描规则。
 
 密闭壳内失去全部拓扑去向的库存**不判为丢失**：腔体消失时先沿开放面交给仍能到达的最近腔体，一个都到不了时才按全部剩余腔体的容量权重转移，库存随容量一起走。被载体挤没的气泡、被抬升液面压碎的 headspace 碎片、以及闪断的载体空隙在这里是同一个事件——闭体积里的气，腔体没了；可达性先决定它去哪，守恒只在没有可达腔体时兜底。开放域中同样的情形才记 escaped sink。
 
@@ -122,6 +122,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 一个界面 cell 可以同时含多种合法 liquid carrier。某条气液 transition 只结算其目标 liquid 的体积、质量、组成和相变能量；同格其他 liquid 原样加入该 cell 的 LTE heat-bath inventory，并计入冷凝容量，但不被改材料、不被并入目标组成，也不能仅因存在就触发候选暂停。
 - 所有 candidate 必须能由 world thermal registry 的连续状态函数从权威 `U` 唯一反演；声明 caloric 温区之外沿最近端点 `cv` 延拓，不因标定端点暂停。凝聚相的 `T_eq(p)` 在数据内插值、数据外沿端点割线延伸，详见热学专题。
 - 一个 liquid cell 可同时邻接多个独立 sealed node。gas topology 继续保留各 node 的库存和 `U`，phase planner 不合并它们；每个 pressure interval 只向绝对分压失衡最大的可执行 node 提交一次 cell 交换，随后由下一 projection 同步该体积变化。
+- 气液接口读取同格正剩余体积的实际 membership/lineage owner，并沿正开放面积的共享面查找相邻 gas node；全闭 cut-cell 面不形成跨格相变接口。同格 partial owner 继续参与汽化与凝结。
 - mechanics 可从所有液气界面选择一个统一 sealed-node gauge reference，在 PCG 内只求相对压力并在绝对观察/热学边界加回；该数值换元不修改 node inventory、U 或不同 node 间的压差。接触液体的有限 node 会得到当次 projection 的集总可压缩 pressure unknown；该项为同一 EoS 线性化的临时求解变量，不写入权威 node pressure 列。
 
 当前 `AirNetwork` 是有限体积热力学与孔流网络模型；空间 FLIP 网格承载不可压凝聚相。有限 node 与液体接触时已用 `C_V = V*beta_s` 作为集总储存项进入同一对称 pressure block system，液体侵入/退出气腔的面通量与 node 压力响应因而在本子步隐式闭合；等温 `beta=1/p_abs`，热状态 `beta_s=1/(gamma*p_abs)`。
@@ -173,7 +174,7 @@ caloric 标定端点不截断内禀温度，相平衡曲线继续拥有自己的
 Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 ```
 
-一个 step 的 transfer 会被共同平衡压力所需的最大份额限制，不能越过均压点。标准体积 nanos 用整数结算；热状态同时搬运源侧焓 `h = u + p*v`。ambient 流入记 source，流出记 sink；节点间转移不记外部源汇。
+实际孔流量通过源库存的 `Vstd/Vavailable` 换成标准体积流量；无限环境使用 `T0/Tambient`，密度也按环境温度推导。一个 step 的 transfer 由完整候选的均压条件限制：热状态搬运源侧焓 `h = u + p*v`，用候选两侧库存与 `U` 重新推导压力，在整数 nanos 上寻找保持源压不低于目标压力的最大可表示份额。ambient 流入记 source，流出记 sink；节点间转移不记外部源汇。
 
 休眠观察复用这项整数均压限制，读取当前热力学压力而不修改库存。全部 edge 的均压可转移量为零时，气体允许休眠；存在浮点压差但已达到整数均压状态的节点无需反复执行空步骤。仍有均压余量的细小孔保持活动，判断与孔面积、单步时长无关，避免把低流率误认为平衡。`air-network` 同时验证均压后连续空步骤、环境流入/流出，以及微小孔的非平衡状态。
 

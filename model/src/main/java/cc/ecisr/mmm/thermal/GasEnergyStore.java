@@ -86,6 +86,64 @@ public final class GasEnergyStore {
 				nodeEnergy[nodeId - 1]);
 	}
 
+	/** Reads the same inventory/U state for flow rate and its finite-energy equilibrium limit. */
+	public AirNetwork.NodeThermodynamics thermodynamics(AirNetwork network) {
+		return new AirNetwork.NodeThermodynamics() {
+			@Override public double gaugePressure(int node) {
+				return node == AirNetwork.AMBIENT_NODE ? 0.0 : GasEnergyStore.this.gaugePressure(node, network);
+			}
+			@Override public double density(int node) {
+				return node == AirNetwork.AMBIENT_NODE
+						? network.density(node) * GasRegistry.STANDARD_TEMPERATURE_K / insertionTemperatureK
+						: GasEnergyStore.this.density(node, network);
+			}
+			@Override public double standardVolumeRatio(int node) {
+				return node == AirNetwork.AMBIENT_NODE ? GasRegistry.STANDARD_TEMPERATURE_K / insertionTemperatureK
+						: network.standardVolume(node) / network.availableVolume(node);
+			}
+			@Override public long limitTransferNanos(int source, int target, long requested) {
+				return maximumTransfer(source, target, requested, network);
+			}
+		};
+	}
+
+	/** Finds the last exact portion before enthalpy transport reverses the pressure difference. */
+	private long maximumTransfer(int source, int target, long requested, AirNetwork network) {
+		if (requested <= 0L) return 0L;
+		long low = 0L, high = requested;
+		double sourceTemperature = source == AirNetwork.AMBIENT_NODE
+				? insertionTemperatureK : temperature(source, network);
+		if (permitsTransfer(source, target, requested, sourceTemperature, network)) return requested;
+		high--;
+		while (low < high) {
+			long amount = low + (high - low) / 2 + (high - low) % 2;
+			if (permitsTransfer(source, target, amount, sourceTemperature, network)) low = amount;
+			else high = amount - 1;
+		}
+		return low;
+	}
+
+	private boolean permitsTransfer(int source, int target, long amount, double sourceTemperature, AirNetwork network) {
+		GasInventory moved, sourceAfter;
+		if (source == AirNetwork.AMBIENT_NODE) {
+			moved = network.ambientInventory(amount); sourceAfter = GasInventory.EMPTY;
+		} else {
+			GasInventory.Split split = network.inventory(source).splitTotal(amount);
+			moved = split.first(); sourceAfter = split.second();
+		}
+		GasInventory targetAfter = target == AirNetwork.AMBIENT_NODE ? GasInventory.EMPTY : network.inventory(target).merge(moved);
+		double carried = gasModel.enthalpy(moved, sourceTemperature);
+		try {
+			double sourcePressure = source == AirNetwork.AMBIENT_NODE ? GasRegistry.STANDARD_PRESSURE_PA
+					: gasModel.absolutePressure(sourceAfter, network.availableVolume(source), nodeEnergy[source - 1] - carried);
+			double targetPressure = target == AirNetwork.AMBIENT_NODE ? GasRegistry.STANDARD_PRESSURE_PA
+					: gasModel.absolutePressure(targetAfter, network.availableVolume(target), nodeEnergy[target - 1] + carried);
+			return sourcePressure >= targetPressure;
+		} catch (IllegalArgumentException invalidCaloricState) {
+			return false;
+		}
+	}
+
 	public double requireNodeState(int nodeId, GasInventory inventory, double energy, AirNetwork network) {
 		requireGasNode(nodeId, network);
 		return gasModel.absolutePressure(inventory, network.availableVolume(nodeId), energy);

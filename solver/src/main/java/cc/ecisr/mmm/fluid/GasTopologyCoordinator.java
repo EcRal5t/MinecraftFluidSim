@@ -691,16 +691,8 @@ final class GasTopologyCoordinator {
 		refresh();
 		if (!domain.gasState.pressureActive) return;
 		if (domain.thermalState == null || !domain.thermalState.gasModelBound()) domain.gasState.network.stepEdges(dt);
-		else domain.gasState.network.stepEdges(dt, new AirNetwork.NodeThermodynamics() {
-			@Override public double gaugePressure(int nodeId) {
-				return nodeId == AirNetwork.AMBIENT_NODE ? 0.0
-						: domain.thermalState.gasGaugePressure(nodeId, domain.gasState.network);
-			}
-			@Override public double density(int nodeId) {
-				return nodeId == AirNetwork.AMBIENT_NODE ? domain.gasState.network.density(nodeId)
-						: domain.thermalState.gasDensity(nodeId, domain.gasState.network);
-			}
-		}, (source, target, moved, sourceAfter, targetAfter) -> domain.thermalState.planGasTransfer(
+		else domain.gasState.network.stepEdges(dt, domain.thermalState.gasThermodynamics(domain.gasState.network),
+				(source, target, moved, sourceAfter, targetAfter) -> domain.thermalState.planGasTransfer(
 				source, target, moved, sourceAfter, targetAfter, domain.gasState.network));
 	}
 

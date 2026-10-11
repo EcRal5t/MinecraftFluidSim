@@ -156,9 +156,12 @@ public final class GasThermalModel {
 					GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.0);
 		}
 		HydrodynamicState initial = hydrodynamicState(inventory, initialAvailableVolume, internalEnergy);
+		if (initialAvailableVolume == finalAvailableVolume) {
+			return new Compression(initial.temperatureK(), initial.temperatureK(), internalEnergy, 0.0);
+		}
 		List<ThermalStateFunction.InventoryPortion> portions = portions(inventory);
 		double entropyChange = initial.gasConstantEuPerK()
-				* Math.log(initialAvailableVolume / finalAvailableVolume);
+				* logRatio(initialAvailableVolume, finalAvailableVolume);
 		double targetTemperature;
 		try {
 			targetTemperature = isentropicTemperature(
@@ -172,7 +175,12 @@ public final class GasThermalModel {
 					+ ", remaining |dS|="
 					+ outside.remainingEntropyEuPerK + " EU/K", outside);
 		}
-		double finalEnergy = internalEnergyAtTemperature(inventory, targetTemperature);
+		double energyChange = 0.0;
+		for (ThermalStateFunction.InventoryPortion portion : portions) {
+			energyChange += portion.massMu() * thermalRegistry.material(portion.materialHandle())
+					.sensibleSpecificEnergyBetween(initial.temperatureK(), targetTemperature);
+		}
+		double finalEnergy = internalEnergy + energyChange;
 		hydrodynamicState(inventory, finalAvailableVolume, finalEnergy);
 		return new Compression(initial.temperatureK(), targetTemperature, finalEnergy, finalEnergy - internalEnergy);
 	}
@@ -192,7 +200,9 @@ public final class GasThermalModel {
 					: nextLowerCaloricBoundary(portions, temperature);
 			if (heating && boundary == Double.POSITIVE_INFINITY) {
 				double heatCapacity = heatCapacityAt(portions, temperature);
-				double result = temperature + temperature * Math.expm1(remaining / heatCapacity);
+				double exponent = remaining / heatCapacity;
+				double result = temperature + temperature * Math.expm1(exponent);
+				if (!Double.isFinite(result)) result = scaledExponential(temperature, exponent);
 				if (!(Double.isFinite(result) && result >= temperature)) {
 					throw new CaloricRangeException(remaining);
 				}
@@ -201,13 +211,13 @@ public final class GasThermalModel {
 			if (!(heating ? boundary > temperature : boundary < temperature)) {
 				throw new CaloricRangeException(remaining);
 			}
-			double sampleTemperature = Math.sqrt(temperature * boundary);
+			double sampleTemperature = Math.sqrt(temperature) * Math.sqrt(boundary);
 			double heatCapacity = heatCapacityAt(portions, sampleTemperature);
 			double intervalEntropy = heatCapacity
-					* Math.abs(Math.log(boundary) - Math.log(temperature));
+					* Math.abs(logRatio(boundary, temperature));
 			if (remaining <= intervalEntropy) {
 				double signed = (heating ? 1.0 : -1.0) * remaining / heatCapacity;
-				double result = temperature * Math.exp(signed);
+				double result = scaledExponential(temperature, signed);
 				return heating ? Math.max(temperature, Math.min(boundary, result))
 						: Math.max(boundary, Math.min(temperature, result));
 			}
@@ -215,6 +225,17 @@ public final class GasThermalModel {
 			temperature = boundary;
 		}
 		return temperature;
+	}
+
+	/** Retains nearby ratios without overflowing or underflowing far-separated endpoints. */
+	private static double logRatio(double first, double second) {
+		double relative = (first - second) / second;
+		return Math.abs(relative) < 0.5 ? Math.log1p(relative) : Math.log(first) - Math.log(second);
+	}
+
+	private static double scaledExponential(double scale, double exponent) {
+		double result = scale * Math.exp(exponent);
+		return Double.isFinite(result) && result > 0.0 ? result : Math.exp(Math.log(scale) + exponent);
 	}
 
 	private static final class CaloricRangeException extends IllegalArgumentException {

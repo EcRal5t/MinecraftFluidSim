@@ -171,13 +171,18 @@ import java.util.TreeMap;
 		int[] cellLineageNodeId = cellNodeId.clone();
 		attributeInterfaceResiduals(cellNodeId, cellLineageNodeId, solid, markerCount, cellLiquidVolume,
 				cutCells, granular, cellAvailableVolume, sealedAvailableVolume);
-		if (sealedDomainBoundary && !budgetExhausted && normalizeClosedCapacity) normalizeClosedCapacity(
-				solid, cellLiquidVolume, cutCells, granular, cellNodeId, cellLineageNodeId,
-				sealedAvailableVolume);
 		List<GeometricEdge> edges = collectGeometricEdges(cellNodeId, cutCells);
-		return new Result(cellNodeId, cellLineageNodeId, cellAvailableVolume,
+		Result result = new Result(cellNodeId, cellLineageNodeId, cellAvailableVolume,
 				sealedNodes, sealedAvailableVolume, edges, visitedAirCells,
 				budgetExhausted ? StopReason.BUDGET_EXHAUSTED : StopReason.COMPLETED);
+		if (sealedDomainBoundary && !budgetExhausted && normalizeClosedCapacity) {
+			if (sealedNodes == 0) {
+				result = retainOrphanedPartialLineages(result, solid, cutCells, cellLineageNodeId.clone(), 0);
+			}
+			normalizeClosedCapacity(solid, cellLiquidVolume, cutCells, granular,
+					result.cellNodeId(), result.cellLineageNodeId(), result.sealedAvailableVolume());
+		}
+		return result;
 	}
 
 	private Result retainOrphanedPartialLineages(

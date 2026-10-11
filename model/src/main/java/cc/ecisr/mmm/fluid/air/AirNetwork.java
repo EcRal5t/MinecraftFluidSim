@@ -27,6 +27,12 @@ public final class AirNetwork {
 	public interface NodeThermodynamics {
 		double gaugePressure(int nodeId);
 		double density(int nodeId);
+		/** Standard volume per actual source volume, including the source temperature. */
+		default double standardVolumeRatio(int nodeId) {
+			return (REFERENCE_PRESSURE + gaugePressure(nodeId)) / REFERENCE_PRESSURE;
+		}
+		/** Returns an energy-aware exact limit, or -1 to use the isothermal equilibrium. */
+		default long limitTransferNanos(int source, int target, long requested) { return -1L; }
 	}
 
 	@FunctionalInterface
@@ -99,6 +105,15 @@ public final class AirNetwork {
 
 	/** Uses the transport's integer equilibrium limit; slow openings remain active until that limit is zero. */
 	public boolean hasPressureDrivenFlow(java.util.function.IntToDoubleFunction pressure) {
+		return hasPressureDrivenFlow(pressure, null);
+	}
+
+	public boolean hasPressureDrivenFlow(NodeThermodynamics thermodynamics) {
+		Objects.requireNonNull(thermodynamics, "thermodynamics");
+		return hasPressureDrivenFlow(thermodynamics::gaugePressure, thermodynamics);
+	}
+
+	private boolean hasPressureDrivenFlow(java.util.function.IntToDoubleFunction pressure, NodeThermodynamics thermodynamics) {
 		Objects.requireNonNull(pressure, "pressure");
 		for (AirEdge edge : edges) {
 			double first = pressure.applyAsDouble(edge.firstNode());
@@ -108,6 +123,11 @@ public final class AirNetwork {
 			if (first == second) continue;
 			int source = first > second ? edge.firstNode() : edge.secondNode();
 			int target = first > second ? edge.secondNode() : edge.firstNode();
+			long thermalLimit = thermodynamics == null ? -1L : thermodynamics.limitTransferNanos(source, target, 1L);
+			if (thermalLimit >= 0L) {
+				if (thermalLimit > 0L) return true;
+				continue;
+			}
 			// Ignore the rate here: a small aperture must not make a non-equilibrium state look idle.
 			if (equalizationClampedTransfer(source, target, Double.MAX_VALUE,
 					REFERENCE_PRESSURE + Math.max(first, second),
@@ -298,15 +318,20 @@ public final class AirNetwork {
 			int source = firstPressure > secondPressure ? edge.firstNode() : edge.secondNode();
 			int target = firstPressure > secondPressure ? edge.secondNode() : edge.firstNode();
 			double delta = Math.abs(firstPressure - secondPressure);
-			double sourcePressure = Math.max(firstPressure, secondPressure);
 			double density = thermodynamics.density(source);
 			if (!(Double.isFinite(density) && density > 0.0)) {
 				throw new IllegalArgumentException("Gas orifice source density is invalid");
 			}
 			double flow = edge.dischargeCoefficient() * edge.areaSquareMeters()
 					* Math.sqrt(2.0 * delta / density);
-			double transferCubicMeters = flow * dt * (REFERENCE_PRESSURE + sourcePressure) / REFERENCE_PRESSURE;
-			long transferNanos = equalizationClampedTransfer(source, target, transferCubicMeters,
+			double transferCubicMeters = flow * dt * thermodynamics.standardVolumeRatio(source);
+			double maximumVolume = source == AMBIENT_NODE ? cubicMeters(Long.MAX_VALUE) : standardVolume(source);
+			long requested = transferCubicMeters >= maximumVolume
+					? (source == AMBIENT_NODE ? Long.MAX_VALUE : standardVolumeNanos(source))
+					: AirNode.toNanos(transferCubicMeters);
+			if (target != AMBIENT_NODE) requested = Math.min(requested, Long.MAX_VALUE - standardVolumeNanos(target));
+			long thermalLimit = thermodynamics.limitTransferNanos(source, target, requested);
+			long transferNanos = thermalLimit >= 0L ? thermalLimit : equalizationClampedTransfer(source, target, transferCubicMeters,
 					REFERENCE_PRESSURE + (source == edge.firstNode() ? firstPressure : secondPressure),
 					REFERENCE_PRESSURE + (target == edge.firstNode() ? firstPressure : secondPressure));
 			if (transferNanos > 0L) moveInventory(source, target, transferNanos, transferPlanner);

@@ -278,6 +278,7 @@ public final class ThermalDomainState {
 	public double gasNodeEnergy(int nodeId, AirNetwork network) { return gasState.nodeEnergy(nodeId, network); }
 	public double gasTemperature(int nodeId, AirNetwork network) { return gasState.temperature(nodeId, network); }
 	public double gasGaugePressure(int nodeId, AirNetwork network) { return gasState.gaugePressure(nodeId, network); }
+	public AirNetwork.NodeThermodynamics gasThermodynamics(AirNetwork network) { return gasState.thermodynamics(network); }
 	public double gasDensity(int nodeId, AirNetwork network) { return gasState.density(nodeId, network); }
 	public GasThermalModel.HydrodynamicState gasHydrodynamicState(int nodeId, AirNetwork network) {
 		return gasState.hydrodynamicState(nodeId, network);

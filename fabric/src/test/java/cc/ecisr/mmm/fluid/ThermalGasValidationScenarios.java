@@ -176,6 +176,35 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				inventory, compressed.finalInternalEnergy(), 0.5, 1.0);
 		require(Math.abs(expanded.finalInternalEnergy() - initial) < 1.0E-9,
 				"reversible analytic gas expansion did not return initial U");
+		double arbitraryEnergy = initial + 123.456789;
+		GasThermalModel.Compression unchanged = model.compressAdiabatically(inventory, arbitraryEnergy, 1.0, 1.0);
+		require(Double.doubleToRawLongBits(unchanged.finalInternalEnergy()) == Double.doubleToRawLongBits(arbitraryEnergy)
+				&& unchanged.workIntoGas() == 0.0,
+				"unchanged gas volume manufactured caloric inversion work");
+		ThermalMaterialDefinition highCapacityAir = new ThermalMaterialDefinition("test:thermal/high_capacity_air",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+				GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 30_000.0)));
+		GasThermalModel highCapacityModel = new GasThermalModel(new ThermalRegistry(List.of(highCapacityAir)), gas);
+		double highCapacityEnergy = highCapacityModel.internalEnergyAtTemperature(inventory, GasRegistry.STANDARD_TEMPERATURE_K);
+		GasThermalModel.Compression farExpansion = highCapacityModel.compressAdiabatically(inventory,
+				highCapacityEnergy, 1.0E-200, 1.0E200);
+		double expectedFarTemperature = GasRegistry.STANDARD_TEMPERATURE_K * Math.exp(expectedGasConstant
+				* (Math.log(1.0E-200) - Math.log(1.0E200)) / (inventory.totalMass() * 30_000.0));
+		require(Math.abs(farExpansion.finalTemperatureK() / expectedFarTemperature - 1.0) < 1.0E-12,
+				"representable isentrope failed when the raw volume ratio underflowed");
+		ThermalMaterialDefinition coldReference = new ThermalMaterialDefinition("test:thermal/cold_reference_air",
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+				1.0E-300, 0.0, 0.025, List.of(new ThermalMaterialDefinition.CaloricSegment(
+						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 1_500.0, 150.0)));
+		GasThermalModel coldReferenceModel = new GasThermalModel(new ThermalRegistry(List.of(coldReference)), gas);
+		double coldEnergy = coldReferenceModel.internalEnergyAtTemperature(inventory, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+		double heatedVolume = Math.exp(-inventory.totalMass() * 150.0 / expectedGasConstant
+				* (Math.log(100.0) - Math.log(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)));
+		GasThermalModel.Compression coldHeating = coldReferenceModel.compressAdiabatically(
+				inventory, coldEnergy, 1.0, heatedVolume);
+		require(Math.abs(coldHeating.finalTemperatureK() / 100.0 - 1.0) < 1.0E-12,
+				"scaled isentropic exponential overflowed despite a representable final temperature");
 		ThermalMaterialDefinition piecewiseAir = new ThermalMaterialDefinition("mmm:thermal/piecewise_air",
 				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
 				GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025, List.of(
@@ -575,7 +604,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		flowingNetwork.addOrMergeEdge(high, low, 0.1, 0.65);
 		ThermalDomainState flowing = FluidThermalBinding.create(registry, liquids,
 				GasRegistry.STANDARD_TEMPERATURE_K, 1, 2, 2, 2, 0.5F, empty, flowingNetwork);
-		flowingNetwork.stepEdges(0.01, thermodynamics(flowing, flowingNetwork),
+		flowingNetwork.stepEdges(0.0001, thermodynamics(flowing, flowingNetwork),
 				(source, target, moved, sourceAfter, targetAfter) -> flowing.planGasTransfer(
 						source, target, moved, sourceAfter, targetAfter, flowingNetwork));
 		require(flowing.gasTemperature(high, flowingNetwork) < GasRegistry.STANDARD_TEMPERATURE_K
@@ -584,12 +613,61 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"internal gas orifice did not carry source-state enthalpy with exact audit closure");
 
 		flowingNetwork.addOrMergeEdge(high, AirNetwork.AMBIENT_NODE, 0.1, 0.65);
-		flowingNetwork.stepEdges(0.01, thermodynamics(flowing, flowingNetwork),
+		flowingNetwork.stepEdges(0.0001, thermodynamics(flowing, flowingNetwork),
 				(source, target, moved, sourceAfter, targetAfter) -> flowing.planGasTransfer(
 						source, target, moved, sourceAfter, targetAfter, flowingNetwork));
 		require(flowing.auditLedger().externalSink().compareTo(SignedDyadic.ZERO) > 0
 				&& flowing.exactEnergy(0).equals(flowing.auditLedger().expectedInventory()),
 				"ambient gas outflow did not book carried enthalpy as an external sink");
+
+		AirNetwork equalizingNetwork = new AirNetwork(gasRegistry);
+		int donor = equalizingNetwork.addNode(1.0, 1.1), receiver = equalizingNetwork.addNode(1.0, 0.9);
+		equalizingNetwork.addOrMergeEdge(donor, receiver, 0.1, 0.65);
+		ThermalDomainState equalizing = FluidThermalBinding.create(registry, liquids,
+				GasRegistry.STANDARD_TEMPERATURE_K, 1, 2, 2, 2, 0.5F, empty, equalizingNetwork);
+		double gamma = 1.0 + GasRegistry.STANDARD_PRESSURE_PA / GasRegistry.STANDARD_TEMPERATURE_K
+				/ (gasRegistry.createAmbient(1_000_000_000L).totalMass() * 718.0);
+		for (int step = 0; step < 4; step++) {
+			equalizingNetwork.stepEdges(0.05, thermodynamics(equalizing, equalizingNetwork),
+					(source, target, moved, sourceAfter, targetAfter) -> equalizing.planGasTransfer(
+							source, target, moved, sourceAfter, targetAfter, equalizingNetwork));
+			require(equalizing.gasGaugePressure(donor, equalizingNetwork)
+					>= equalizing.gasGaugePressure(receiver, equalizingNetwork)
+					&& Math.abs(equalizingNetwork.standardVolume(donor) - (1.1 - 0.1 / gamma)) < 2.0E-9
+					&& equalizing.exactEnergy(0).equals(equalizing.auditLedger().expectedInventory()),
+					"finite-energy orifice overshot the analytic pressure equilibrium");
+		}
+		require(!equalizingNetwork.hasPressureDrivenFlow(thermodynamics(equalizing, equalizingNetwork)),
+				"unrepresentable enthalpy flow kept an equilibrated gas network active");
+
+		AirNetwork hotNetwork = new AirNetwork(gasRegistry);
+		int hotSource = hotNetwork.addNode(1.0, 1.1), hotTarget = hotNetwork.addNode(1.0, 0.9);
+		hotNetwork.addOrMergeEdge(hotSource, hotTarget, 0.001, 0.65);
+		ThermalDomainState hot = FluidThermalBinding.create(registry, liquids,
+				600.0, 1, 2, 2, 2, 0.5F, empty, hotNetwork);
+		double expectedStandardTransfer = 0.65 * 0.001 * Math.sqrt(2.0
+				* (hot.gasGaugePressure(hotSource, hotNetwork) - hot.gasGaugePressure(hotTarget, hotNetwork))
+				/ hot.gasDensity(hotSource, hotNetwork)) * 1.0E-4 * 1.1;
+		hotNetwork.stepEdges(1.0E-4, thermodynamics(hot, hotNetwork),
+				(source, target, moved, sourceAfter, targetAfter) -> hot.planGasTransfer(
+						source, target, moved, sourceAfter, targetAfter, hotNetwork));
+		require(Math.abs((1.1 - hotNetwork.standardVolume(hotSource)) - expectedStandardTransfer) <= 0.5E-9
+				&& hot.exactEnergy(0).equals(hot.auditLedger().expectedInventory()),
+				"non-isothermal orifice rate omitted the source temperature in standard-volume conversion");
+
+		AirNetwork drawingNetwork = new AirNetwork(gasRegistry);
+		int vacuumTarget = drawingNetwork.addNode(1.0, 0.0);
+		drawingNetwork.addOrMergeEdge(AirNetwork.AMBIENT_NODE, vacuumTarget, 0.1, 0.65);
+		ThermalDomainState drawing = FluidThermalBinding.create(registry, liquids,
+				600.0, 1, 2, 2, 2, 0.5F, empty, drawingNetwork);
+		drawingNetwork.stepEdges(1.0, thermodynamics(drawing, drawingNetwork),
+				(source, target, moved, sourceAfter, targetAfter) -> drawing.planGasTransfer(
+						source, target, moved, sourceAfter, targetAfter, drawingNetwork));
+		require(Math.abs(drawingNetwork.standardVolume(vacuumTarget)
+				- GasRegistry.STANDARD_TEMPERATURE_K / (gamma * 600.0)) < 2.0E-9
+				&& drawing.gasGaugePressure(vacuumTarget, drawingNetwork) <= 0.0
+				&& drawing.exactEnergy(0).equals(drawing.auditLedger().expectedInventory()),
+				"ambient filling ignored source enthalpy and finite receiver heat capacity");
 	}
 
 	static void persistenceBarrierSynchronizesGasTopology() {
@@ -942,6 +1020,15 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& model.saturation(transition, 363.15, batch,
 				GasRegistry.STANDARD_PRESSURE_PA).direction() == GasLiquidPhaseModel.Direction.CONDENSE,
 				"Clausius-Clapeyron saturation did not select the physical phase direction");
+		double referenceGasVolume = (double) gasSvq / SolidVolume.SVQ_PER_BV;
+		double latentEnthalpy = 2_256_000.0 + GasRegistry.STANDARD_PRESSURE_PA
+				* (referenceGasVolume - (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV) / 0.001;
+		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * referenceGasVolume / (0.001 * 373.15);
+		double expectedHotSaturation = GasRegistry.STANDARD_PRESSURE_PA
+				* Math.exp(-latentEnthalpy / gasConstant * (1.0 / 383.15 - 1.0 / 373.15));
+		require(close(model.saturation(transition, 383.15, batch, GasRegistry.STANDARD_PRESSURE_PA)
+				.saturationPressurePa(), expectedHotSaturation),
+				"saturation latent enthalpy used standard volume in reference-state pressure work");
 		require(model.saturation(transition, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, batch,
 				GasRegistry.STANDARD_PRESSURE_PA).direction() == GasLiquidPhaseModel.Direction.CONDENSE,
 				"near-zero liquid temperature did not retain the condensation path");
@@ -957,15 +1044,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	static AirNetwork.NodeThermodynamics thermodynamics(
 			ThermalDomainState thermal, AirNetwork network
 	) {
-		return new AirNetwork.NodeThermodynamics() {
-			@Override public double gaugePressure(int nodeId) {
-				return nodeId == AirNetwork.AMBIENT_NODE ? 0.0 : thermal.gasGaugePressure(nodeId, network);
-			}
-			@Override public double density(int nodeId) {
-				return nodeId == AirNetwork.AMBIENT_NODE ? network.density(nodeId)
-						: thermal.gasDensity(nodeId, network);
-			}
-		};
+		return thermal.gasThermodynamics(network);
 	}
 
 	static ThermalCarrierContext emptyMarkers() {
@@ -1009,6 +1088,34 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				List.of(water, oil, air, vapor), List.of(), List.of(boiling), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FluidDomain isolated = new FluidDomain(4, 4, 4, config, 512);
+		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++)
+			isolated.setSolid(x, y, z, true);
+		isolated.setSolidMicroMask(1, 1, 1, 0xAA);
+		isolated.setSolid(2, 1, 1, false);
+		isolated.setVolume(1, 1, 1, 0.5F);
+		isolated.setMarkerMaterial(0, liquids, 0);
+		isolated.bindThermal(thermal, liquids, 500.0);
+		SignedDyadic isolatedEnergy = isolated.exactInternalEnergy();
+		require(isolated.stepGasPhaseChangeOnly(128).operations() == 0
+				&& isolated.gasBoundary().sealedInventory().component(BuiltinGasDefinitions.WATER_VAPOR) == null
+				&& isolated.exactInternalEnergy().equals(isolatedEnergy),
+				"gas/liquid phase exchange crossed a closed cut-cell face");
+		FluidDomain partialCavity = new FluidDomain(4, 4, 4, config, 512);
+		partialCavity.sealDomainBoundary();
+		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++)
+			partialCavity.setSolid(x, y, z, true);
+		partialCavity.setSolidMicroMask(1, 1, 1, 0xAA);
+		partialCavity.bindThermal(thermal, liquids, 500.0);
+		partialCavity.setVolume(1, 1, 1, 0.25F);
+		var partialPhase = partialCavity.stepGasPhaseChangeOnly(128);
+		require(partialCavity.gasBoundary().nodeCount() == 1
+				&& partialPhase.boiledCells() == 1
+				&& partialCavity.gasBoundary().sealedInventory().component(BuiltinGasDefinitions.WATER_VAPOR) != null
+				&& partialCavity.exactInternalEnergy().equals(partialCavity.thermalAudit().expectedInventory()),
+				"partial-cell gas owner lost its same-cell liquid phase interface: " + partialPhase
+						+ ", nodes=" + partialCavity.gasBoundary().nodeCount()
+						+ ", gas=" + partialCavity.gasBoundary().sealedInventory());
 		FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
 			if (x == 0 || x == 3 || y == 0 || y == 3 || z == 0 || z == 3) domain.setSolid(x, y, z, true);

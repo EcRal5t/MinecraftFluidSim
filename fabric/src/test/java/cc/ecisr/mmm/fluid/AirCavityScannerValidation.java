@@ -106,6 +106,10 @@ public final class AirCavityScannerValidation {
 		var opened = scanner.scanRetainingClosedLineages(grid.solid, grid.markerCount,
 				grid.liquidVolume, grid.cutCells, null, previous, 0);
 		check(opened.sealedNodeCount() == 2, "disconnected partial voids need separate vacuum owners");
+		var initial = scanner.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true);
+		check(java.util.Arrays.equals(opened.cellNodeId(), initial.cellNodeId())
+				&& java.util.Arrays.equals(opened.sealedAvailableVolume(), initial.sealedAvailableVolume()),
+				"initial closed partial topology failed to establish the same geometry owners");
 		var orphaned = scanner.scanRetainingClosedLineages(grid.solid, grid.markerCount,
 				grid.liquidVolume, grid.cutCells, null, previous, 2);
 		check(java.util.Arrays.equals(opened.cellNodeId(), orphaned.cellNodeId()),

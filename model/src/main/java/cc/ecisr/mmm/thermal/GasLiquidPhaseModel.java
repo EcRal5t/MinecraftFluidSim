@@ -132,8 +132,8 @@ public final class GasLiquidPhaseModel {
 		double mass = transition.massMuPerBatch().toDouble();
 		double referenceTemperature = referenceTemperature(transition);
 		gasRegistry.component(gas.carrierId());
-		double gasVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV
-				* GasRegistry.STANDARD_TEMPERATURE_K / referenceTemperature;
+		double gasVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
+		double standardGasVolume = gasVolume * GasRegistry.STANDARD_TEMPERATURE_K / referenceTemperature;
 		double liquidVolume = (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
 		int liquidHandle = thermalRegistry.materialHandle(transition.lowerEnergyMaterialId());
 		int gasHandle = thermalRegistry.materialHandle(transition.upperEnergyMaterialId());
@@ -143,7 +143,7 @@ public final class GasLiquidPhaseModel {
 				gasHandle, mass, Map.of(), referenceTemperature);
 		double latentEnthalpy = (gasU - liquidU + GasRegistry.STANDARD_PRESSURE_PA
 				* (gasVolume - liquidVolume)) / mass;
-		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * gasVolume
+		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardGasVolume
 				/ (mass * GasRegistry.STANDARD_TEMPERATURE_K);
 		if (!(Double.isFinite(latentEnthalpy) && latentEnthalpy > 0.0
 				&& Double.isFinite(gasConstant) && gasConstant > 0.0)) {
