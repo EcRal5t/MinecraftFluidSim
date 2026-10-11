@@ -17,6 +17,12 @@ public final class ThermalStateFunction {
 			super("Thermal LTE energy is outside the positive-temperature domain");
 		}
 	}
+	/** A well-formed prospective inventory exceeds the finite thermal column representation. */
+	public static final class EnergyRepresentationException extends IllegalArgumentException {
+		public EnergyRepresentationException() {
+			super("Thermal energy or derived state exceeds its finite representation");
+		}
+	}
 	public record InventoryPortion(int materialHandle, double massMu, Map<String, Long> speciesQuanta) {
 		public InventoryPortion {
 			if (!(Double.isFinite(massMu) && massMu > 0.0) || speciesQuanta == null) {
@@ -40,7 +46,7 @@ public final class ThermalStateFunction {
 	) {
 		ThermalMaterialDefinition material = registry.material(materialHandle);
 		double energy = ThermalCaloricInversion.energyAt(material, massMu, baseEnergy(materialHandle, massMu, speciesQuanta), temperatureK);
-		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal internal energy is not finite");
+		if (!Double.isFinite(energy)) throw new EnergyRepresentationException();
 		return energy;
 	}
 
@@ -50,7 +56,7 @@ public final class ThermalStateFunction {
 	) {
 		ThermalMaterialDefinition material = registry.material(materialHandle);
 		double energy = ThermalCaloricInversion.energyAt(material, massMu, baseEnergy(materialHandle, massMu, mixture, chemicalRegistry), temperatureK);
-		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal internal energy is not finite");
+		if (!Double.isFinite(energy)) throw new EnergyRepresentationException();
 		return energy;
 	}
 
@@ -64,7 +70,7 @@ public final class ThermalStateFunction {
 
 	/** Closed-form common-temperature inversion for a heterogeneous LTE inventory. */
 	public State stateForInventory(List<InventoryPortion> portions, double internalEnergy) {
-		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Thermal LTE energy is non-finite");
+		if (!Double.isFinite(internalEnergy)) throw new EnergyRepresentationException();
 		return stateForInventory(portions, SignedDyadic.of(internalEnergy));
 	}
 
@@ -129,7 +135,7 @@ public final class ThermalStateFunction {
 				total += referenceEnergy(offset, quanta);
 			}
 		}
-		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal base energy is not finite");
+		if (!Double.isFinite(total)) throw new EnergyRepresentationException();
 		return total;
 	}
 
@@ -150,7 +156,7 @@ public final class ThermalStateFunction {
 				total += referenceEnergy(offset, quanta);
 			}
 		}
-		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal base energy is not finite");
+		if (!Double.isFinite(total)) throw new EnergyRepresentationException();
 		return total;
 	}
 

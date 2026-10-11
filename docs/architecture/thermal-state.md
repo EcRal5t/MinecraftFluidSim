@@ -365,6 +365,8 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 
 气液候选先用当前 marker geometry 同步 gas topology，再规划 inventory/energy。凝结和固液相变的体积增长须同时满足局部容量与全域凝聚态库存的剩余容量；密闭域仍有气体库存时，必须留下严格正的气体体积。同一 liquid thermal material 的候选状态函数可把 cell 内剩余 marker 聚合为一份 extensive inventory；实际删除、截断、species 与 residual 搬运仍保留逐 marker exact plan。
 
+气液计划同时预计算气体节点库存、区域标准体积总量及累计 source/sink/roundoff 账本，并绑定气体网络与完整热载体的 revision。提交在第一次修改前联合检查两者，再写入计划中的气体结果。数量或有限热能列无法表示的整数批次保留原库存，搜索继续检查其他批次；定义、组成和计划身份错误仍按各自不变量报告。
+
 每次真实气液 commit 后都从 carrier truth 重建 cell-marker ordinal 并完整重扫 gas topology：marker ordinal 存活不保证 air membership 不变，partial cell 可能被填满或越过 interface 判据。
 
 零库存、零内能的真空节点可在拓扑重映射时缩至零体积，压力和密度保持零；非空气体仍要求严格正体积。密闭全域容量已经包含已有气腔控制体积；未归属局部空隙只能按全域新增容量继承真空空间，避免局部几何权重与归一化体积重复计算压缩功。

@@ -47,7 +47,7 @@ final class ThermalCaloricInversion {
 		} catch (IllegalArgumentException overflow) { /* The validated endpoints leave only integral overflow. */ }
 		double value = SignedDyadic.of(base).add(ThermalContactExchange.exactEnergyChangeBetween(material, mass,
 				material.referenceTemperatureK(), temperature)).toDouble();
-		if (!Double.isFinite(value)) throw new IllegalArgumentException("Thermal owner energy is not representable");
+		if (!Double.isFinite(value)) throw new ThermalStateFunction.EnergyRepresentationException();
 		return value;
 	}
 
@@ -147,10 +147,12 @@ final class ThermalCaloricInversion {
 	}
 
 	private static ThermalStateFunction.State state(Inventory inventory, double temperature) {
-		if (!(Double.isFinite(temperature) && temperature >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K))
+		if (!Double.isFinite(temperature)) throw new ThermalStateFunction.EnergyRepresentationException();
+		if (temperature < ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)
 			throw new IllegalArgumentException("Thermal state inversion overflowed or left the positive-temperature domain");
 		double capacity = capacity(inventory, temperature).toDouble();
-		if (!(Double.isFinite(capacity) && capacity > 0)) throw new IllegalArgumentException("Thermal heat capacity is invalid");
+		if (!Double.isFinite(capacity)) throw new ThermalStateFunction.EnergyRepresentationException();
+		if (!(capacity > 0)) throw new IllegalArgumentException("Thermal heat capacity is invalid");
 		return new ThermalStateFunction.State(temperature, capacity);
 	}
 	private static SignedDyadic capacity(Inventory inventory, double temperature) {

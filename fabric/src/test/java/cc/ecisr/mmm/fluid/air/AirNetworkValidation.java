@@ -436,6 +436,41 @@ public final class AirNetworkValidation {
 				"phase take did not retain grouped-rounding remainder columns");
 		network.commitPhaseSink(node, take.first());
 		checkLedger(network, "phase column take");
+		validatePhaseMutationPlans();
+	}
+
+	private static void validatePhaseMutationPlans() {
+		AirNetwork network = new AirNetwork();
+		int first = network.addNode(1.0, 0.0), second = network.addNode(1.0, 0.0);
+		GasInventory oneNano = network.registry().createAmbient(1L);
+		AirNetwork.PhaseMutationPlan plan = network.planPhaseSource(first, oneNano);
+		check(network.standardVolumeNanos(first) == 0L, "phase planning changed live gas");
+		AirNetwork other = new AirNetwork();
+		other.addNode(1.0, 0.0);
+		expectStateThrow(() -> other.commitPhaseMutation(plan), "foreign phase mutation");
+		network.updateAvailableVolume(first, 0.5);
+		expectStateThrow(() -> network.commitPhaseMutation(plan), "stale phase mutation");
+		check(network.standardVolumeNanos(first) == 0L && other.sealedInventoryNanos() == 0L,
+				"rejected phase plan changed gas");
+		AirNetwork.PhaseMutationPlan committed = network.planPhaseSource(first, oneNano);
+		network.commitPhaseMutation(committed);
+		expectStateThrow(() -> network.commitPhaseMutation(committed), "reused phase mutation");
+		checkLedger(network, "phase plan ownership and generation");
+
+		network.commitPhaseSource(first, network.registry().createAmbient(Long.MAX_VALUE - 1L));
+		long revision = network.revision();
+		GasInventory inventory = network.inventory(first);
+		GasAuditLedger source = network.externalSource(), sink = network.escapedSink();
+		try {
+			network.planPhaseSource(second, oneNano);
+			throw new AssertionError("phase plan accepted overflowing regional gas inventory and source ledger");
+		} catch (AirNetwork.PhaseCapacityExceededException expected) { }
+		check(network.revision() == revision && network.inventory(first).equals(inventory)
+				&& network.standardVolumeNanos(second) == 0L
+				&& network.externalSource().equals(source) && network.escapedSink().equals(sink)
+				&& network.sealedInventoryNanos() == Long.MAX_VALUE,
+				"unrepresentable regional phase plan changed raw gas or audit columns");
+		checkLedger(network, "rejected regional phase capacity");
 	}
 
 	private static void checkLedger(AirNetwork network, String context) {

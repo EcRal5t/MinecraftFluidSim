@@ -174,15 +174,29 @@ public final class AirNetwork {
 
 	/** Books material entering the gas owner from another phase and merges all independent columns. */
 	public void commitPhaseSource(int nodeId, GasInventory addition) {
+		commitPhaseMutation(planPhaseSource(nodeId, addition));
+	}
+
+	/** Prepares node and cumulative audit columns before the other phase publishes any edits. */
+	public PhaseMutationPlan planPhaseSource(int nodeId, GasInventory addition) {
 		if (addition == null || addition.isEmpty()) throw new IllegalArgumentException("Gas phase source is empty");
 		registry.requireCompatible(addition);
-		AirNode node = sealed(nodeId); MassColumns before = liveMassColumns();
-		node.setInventory(node.inventory().merge(addition));
-		finishMutation(before, addition, GasInventory.EMPTY);
+		AirNode node = sealed(nodeId);
+		try {
+			GasInventory after = node.inventory().merge(addition);
+			return planPhaseMutation(node, after, addition, GasInventory.EMPTY);
+		} catch (ArithmeticException | IllegalArgumentException capacity) {
+			throw new PhaseCapacityExceededException(capacity);
+		}
 	}
 
 	/** Books material leaving the gas owner into another phase after an exact preview. */
 	public void commitPhaseSink(int nodeId, GasInventory expectedRemoval) {
+		commitPhaseMutation(planPhaseSink(nodeId, expectedRemoval));
+	}
+
+	/** Prepares the exact component take and its complete cumulative sink ledger. */
+	public PhaseMutationPlan planPhaseSink(int nodeId, GasInventory expectedRemoval) {
 		if (expectedRemoval == null || expectedRemoval.components().size() != 1) {
 			throw new IllegalArgumentException("Gas phase sink must name one component portion");
 		}
@@ -191,8 +205,32 @@ public final class AirNetwork {
 		GasInventory.Split split = node.inventory().splitComponent(component.componentId(),
 				component.standardVolumeNanos(), component.mass(), component.massResidual());
 		if (!split.first().equals(expectedRemoval)) throw new IllegalStateException("Gas phase sink preview changed");
-		MassColumns before = liveMassColumns(); node.setInventory(split.second());
-		finishMutation(before, GasInventory.EMPTY, split.first());
+		try {
+			return planPhaseMutation(node, split.second(), GasInventory.EMPTY, split.first());
+		} catch (ArithmeticException | IllegalArgumentException capacity) {
+			throw new PhaseCapacityExceededException(capacity);
+		}
+	}
+
+	public void requirePhaseMutationCurrent(PhaseMutationPlan plan) {
+		if (plan == null || plan.owner != this || plan.baseRevision != revision)
+			throw new IllegalStateException("Gas phase mutation plan is stale or belongs to another network");
+	}
+
+	private PhaseMutationPlan planPhaseMutation(AirNode node, GasInventory after, GasInventory source, GasInventory sink) {
+		TransferMutation mutation = planTransferMutation(liveMassColumns(), node, after, null, null, source, sink);
+		mutation.externalSourceAfter().standardVolumeNanos();
+		mutation.escapedSinkAfter().standardVolumeNanos();
+		long total = 0L;
+		for (AirNode current : nodes.values()) total = Math.addExact(total,
+				(current == node ? after : current.inventory()).standardVolumeNanos());
+		return new PhaseMutationPlan(this, revision, after, mutation);
+	}
+
+	/** Publishes the precomputed columns without repeating inventory or ledger arithmetic. */
+	public void commitPhaseMutation(PhaseMutationPlan plan) {
+		requirePhaseMutationCurrent(plan);
+		commitTransferMutation(plan.mutation);
 	}
 
 	/**
@@ -676,7 +714,7 @@ public final class AirNetwork {
 
 	public long sealedInventoryNanos() {
 		long sum = 0L;
-		for (Map.Entry<Integer, AirNode> entry : nodes.entrySet()) sum += entry.getValue().standardVolumeNanos();
+		for (AirNode node : nodes.values()) sum = Math.addExact(sum, node.standardVolumeNanos());
 		return sum;
 	}
 
@@ -845,6 +883,25 @@ public final class AirNetwork {
 	}
 
 	private record MassColumns(SignedDyadic mass, SignedDyadic residual) { }
+	public static final class PhaseCapacityExceededException extends IllegalArgumentException {
+		private PhaseCapacityExceededException(RuntimeException cause) {
+			super("Gas phase inventory or cumulative audit exceeds its representation", cause);
+		}
+	}
+
+	public static final class PhaseMutationPlan {
+		private final AirNetwork owner;
+		private final long baseRevision;
+		private final GasInventory inventoryAfter;
+		private final TransferMutation mutation;
+
+		private PhaseMutationPlan(AirNetwork owner, long baseRevision, GasInventory inventoryAfter, TransferMutation mutation) {
+			this.owner = owner; this.baseRevision = baseRevision;
+			this.inventoryAfter = inventoryAfter; this.mutation = mutation;
+		}
+		public GasInventory inventoryAfter() { return inventoryAfter; }
+	}
+
 	public static final class RemapPlan {
 		private final AirNetwork owner;
 		private final long baseRevision;

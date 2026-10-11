@@ -2,6 +2,7 @@ package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
+import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasComponentAmount;
 import cc.ecisr.mmm.fluid.air.GasInventory;
 import cc.ecisr.mmm.granular.SolidVolume;
@@ -127,7 +128,13 @@ final class GasLiquidPhaseChangeStage {
 		long byVolume = inventory.freezableUpperSvq() / transition.lowerVolumeSvqPerBatch();
 		long byMass = (long) Math.floor((inventory.freezableUpperMass()
 				+ massTolerance(inventory.freezableUpperMass())) / batchMass);
-		long high = Math.min(maximumBatches, Math.min(byVolume, byMass));
+		AirNetwork network = support.gasState().network;
+		long gasRoom = Math.min(Long.MAX_VALUE - network.inventory(node).standardVolumeNanos(),
+				Math.min(Long.MAX_VALUE - network.sealedInventoryNanos(),
+						Long.MAX_VALUE - network.externalSource().standardVolumeNanos()));
+		long byGas = gasRoom
+				/ phase.gasBatch(transition, 1L).standardVolumeNanos();
+		long high = Math.min(maximumBatches, Math.min(byGas, Math.min(byVolume, byMass)));
 		if (high <= 0L) return null;
 		GasBoilingBatchBounds bounds = new GasBoilingBatchBounds(support, cell, node, liquidHandle,
 				transition, thermalCell, volatileSpecies, liquidTemperature, phase);
@@ -159,16 +166,21 @@ final class GasLiquidPhaseChangeStage {
 			double batchEnergy = phase.internalEnergyAtTemperature(transition, batch, liquidTemperature);
 			List<ThermalStateFunction.InventoryPortion> remainingLiquid = liquidInventoryAfterBoiling(
 					cell, removal);
-			GasInventory candidateGas = gasState.network.inventory(node).merge(batch);
+			AirNetwork.PhaseMutationPlan gasPlan = gasState.network.planPhaseSource(node, batch);
+			GasInventory candidateGas = gasPlan.inventoryAfter();
 			double candidateGasEnergy = thermal.gasNodeEnergy(node, gasState.network) + batchEnergy;
+			if (!Double.isFinite(candidateGasEnergy)) throw new PhaseCandidateUnavailableException(
+					"Boiling gas energy exceeds its finite representation");
 			double candidateLiquidTemperature = thermal.requirePhaseCandidateState(
 					thermalCell, remainingLiquid, thermal.gasNodeEnergy(node, gasState.network), candidateGasEnergy);
 			GasLiquidPhaseModel.Saturation saturationAfter = prospectiveSaturation(
 					node, transition, phase, candidateLiquidTemperature, candidateGas, candidateGasEnergy);
 			return new GasBoilPlan(
-					batches, removedSvq, removal, batch, candidateGasEnergy, saturationAfter);
+					batches, removedSvq, removal, gasPlan, thermal.thermalRevision(), candidateGasEnergy, saturationAfter);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
+				| ThermalStateFunction.EnergyRepresentationException
 				| ThermalDomainState.EmptyPhaseCandidateEnergyException
+				| AirNetwork.PhaseCapacityExceededException
 				| PhaseCandidateUnavailableException unavailable) {
 			return null;
 		}
@@ -181,8 +193,11 @@ final class GasLiquidPhaseChangeStage {
 		ThermalDomainState thermal = support.thermal();
 		GasDomainState gasState = support.gasState();
 		double gasEnergyBefore = thermal.gasNodeEnergy(node, gasState.network);
+		if (!thermal.matchesThermalRevision(plan.thermalRevision()))
+			throw new IllegalStateException("Boiling thermal plan is stale");
+		gasState.network.requirePhaseMutationCurrent(plan.gasPlan());
 		support.commitLiquidRemoval(cell, plan.removal());
-		gasState.network.commitPhaseSource(node, plan.batch());
+		gasState.network.commitPhaseMutation(plan.gasPlan());
 		thermal.commitGasNodeEnergy(node, plan.candidateGasEnergy());
 		support.commitPendingVolume(cell, -plan.removedSvq());
 		support.markGridDirty();
@@ -202,6 +217,8 @@ final class GasLiquidPhaseChangeStage {
 		if (vapor == null) return null;
 		long nanosPerBatch = phase.gasBatch(transition, 1L).standardVolumeNanos();
 		long byGas = vapor.standardVolumeNanos() / nanosPerBatch;
+		byGas = Math.min(byGas,
+				(Long.MAX_VALUE - gasState.network.escapedSink().standardVolumeNanos()) / nanosPerBatch);
 		long occupied = Math.addExact(Math.addExact(
 				liquidCellSvq(cell), support.granularSvq(cell)),
 				support.thermal().coherentPhases().cellOccupiedSvq(cell));
@@ -230,11 +247,13 @@ final class GasLiquidPhaseChangeStage {
 			ChemicalParcelStore chemistry = support.chemistry();
 			GasDomainState gasState = support.gasState();
 			LiquidParticleStore particles = support.state().particles();
+			double requestedMass = transition.massMuPerBatch().multiply(batches).toDouble();
+			if (!(Double.isFinite(requestedMass) && requestedMass > 0.0)) throw new PhaseCandidateUnavailableException(
+					"Condensation batch mass exceeds its finite representation");
 			GasInventory requestedBatch = phase.gasBatch(transition, batches);
 			String componentId = requestedBatch.components().getFirst().componentId();
 			GasInventory.Split proportionalTake = gasState.network.previewComponentTake(
 					node, componentId, requestedBatch.standardVolumeNanos());
-			double requestedMass = transition.massMuPerBatch().multiply(batches).toDouble();
 			GasComponentAmount proportionalMoved = proportionalTake.first().components().getFirst();
 			double requestedResidual = requestedBatch.components().getFirst().massResidual();
 			if (chemistry != null) {
@@ -251,6 +270,7 @@ final class GasLiquidPhaseChangeStage {
 						"Condensation has no complete representable gas column quantum", unrepresentableColumns);
 			}
 			GasComponentAmount moved = take.first().components().getFirst();
+			AirNetwork.PhaseMutationPlan gasPlan = gasState.network.planPhaseSink(node, take.first());
 			if (!FluidDomain.massClose(moved.mass(), requestedMass)) {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Condensation gas batch mass differs from its exact transition");
@@ -271,6 +291,8 @@ final class GasLiquidPhaseChangeStage {
 			double gasTemperature = thermal.gasTemperature(node, gasState.network);
 			double batchEnergy = phase.internalEnergyAtTemperature(transition, take.first(), gasTemperature);
 			double candidateGasEnergy = thermal.gasNodeEnergy(node, gasState.network) - batchEnergy;
+			if (!Double.isFinite(candidateGasEnergy)) throw new PhaseCandidateUnavailableException(
+					"Condensation gas energy exceeds its finite representation");
 			PhaseComposition movedComposition = PhaseComposition.fromGas(moved);
 			ChemicalMixtureRecord condensedMixture = null;
 			if (chemistry != null) {
@@ -340,9 +362,11 @@ final class GasLiquidPhaseChangeStage {
 			GasLiquidPhaseModel.Saturation saturationAfter = prospectiveSaturation(
 					node, transition, phase, candidateLiquidTemperature, take.second(), candidateGasEnergy);
 			return new GasCondensePlan(
-					batches, take.first(), candidateGasEnergy, target, condensedMixture,
+					batches, gasPlan, thermal.thermalRevision(), candidateGasEnergy, target, condensedMixture,
 					targetVolume, targetMass, momentum, slot, addedSvq, moved.mass(), saturationAfter);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
+				| ThermalStateFunction.EnergyRepresentationException
+				| AirNetwork.PhaseCapacityExceededException
 				| PhaseCandidateUnavailableException unavailable) {
 			return null;
 		}
@@ -374,7 +398,10 @@ final class GasLiquidPhaseChangeStage {
 		GasDomainState gasState = support.gasState();
 		LiquidParticleStore particles = support.state().particles();
 		double gasEnergyBefore = thermal.gasNodeEnergy(node, gasState.network);
-		gasState.network.commitPhaseSink(node, plan.removedGas());
+		if (!thermal.matchesThermalRevision(plan.thermalRevision()))
+			throw new IllegalStateException("Condensation thermal plan is stale");
+		gasState.network.requirePhaseMutationCurrent(plan.gasPlan());
+		gasState.network.commitPhaseMutation(plan.gasPlan());
 		thermal.commitGasNodeEnergy(node, plan.candidateGasEnergy());
 		if (plan.target() >= 0) {
 			if (chemistry != null) chemistry.commitPlannedReplacements(
@@ -587,14 +614,15 @@ final class GasLiquidPhaseChangeStage {
 	}
 
 	private record GasBoilPlan(
-			long batches, long removedSvq, PhaseRemovalPlan removal, GasInventory batch,
-			double candidateGasEnergy, GasLiquidPhaseModel.Saturation saturationAfter
+			long batches, long removedSvq, PhaseRemovalPlan removal, AirNetwork.PhaseMutationPlan gasPlan,
+			ThermalDomainState.Revision thermalRevision, double candidateGasEnergy, GasLiquidPhaseModel.Saturation saturationAfter
 	) {
 		GasLiquidPhaseModel.Direction directionAfter() { return saturationAfter.direction(); }
 	}
 
 	private record GasCondensePlan(
-			long batches, GasInventory removedGas, double candidateGasEnergy, int target,
+			long batches, AirNetwork.PhaseMutationPlan gasPlan, ThermalDomainState.Revision thermalRevision,
+			double candidateGasEnergy, int target,
 			ChemicalMixtureRecord condensedMixture, float targetVolume, double targetMass,
 			CarrierMassMomentum.Plan momentum, int slot, long addedSvq, double movedMass,
 			GasLiquidPhaseModel.Saturation saturationAfter

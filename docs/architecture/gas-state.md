@@ -8,6 +8,7 @@
 |---|---|---|
 | 气腔扫描和归属 | [AirCavityScanner](../../solver/src/main/java/cc/ecisr/mmm/fluid/AirCavityScanner.java) | `air-cavity` |
 | 气体库存与孔流 | [AirNetwork](../../model/src/main/java/cc/ecisr/mmm/fluid/air/AirNetwork.java) | `air-network` |
+| 气液相变库存与账本提交计划 | [AirNetwork](../../model/src/main/java/cc/ecisr/mmm/fluid/air/AirNetwork.java) 的 `planPhaseSource` / `planPhaseSink` / `commitPhaseMutation`、[GasLiquidPhaseChangeStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasLiquidPhaseChangeStage.java) | `thermal`、`air-network` |
 | 热孔流整数均压 | [GasEnergyStore](../../model/src/main/java/cc/ecisr/mmm/thermal/GasEnergyStore.java)、[GasTransferSearch](../../model/src/main/java/cc/ecisr/mmm/thermal/GasTransferSearch.java)、[GasTransferValidation](../../fabric/src/test/java/cc/ecisr/mmm/thermal/GasTransferValidation.java) | `thermal` |
 | 温度、压力和声学状态 | [GasThermalModel](../../model/src/main/java/cc/ecisr/mmm/thermal/GasThermalModel.java) | `thermal` |
 | 气液压力耦合 | [PressureBoundaryView](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureBoundaryView.java)、[PressureProjectionWorkspace](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionWorkspace.java) | `gas-liquid` |
