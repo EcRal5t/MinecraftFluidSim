@@ -23,6 +23,8 @@ public final class CarrierMutationValidation {
 		chemicalRemapPublishesTheFinalBudget();
 		cellVolumeReplacementPreflightsAllOwners();
 		defaultInsertionsPreflightStoredThermalState();
+		explicitInsertionsPreflightStoredThermalState();
+		explicitInsertionsPreflightCompleteThermalLedger();
 		readOnlyCellQueriesFollowCarrierEdits();
 		volumeObservationRoundsTheExactInventoryOnce();
 		insertionNeverRoundsCapacityUp();
@@ -179,6 +181,96 @@ public final class CarrierMutationValidation {
 					"default source did not retain the exact sum of actual stored energies");
 			require(valid.chemicalParcels.totalQuanta() - beforeQ == valid.chemicalParcels.externalSource().totalQuanta() - sourceQ,
 					"default insertion chemical source did not close");
+		}
+	}
+
+	private static void explicitInsertionsPreflightStoredThermalState() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		FluidDomain domain = emptyMaterialDomain(64); domain.setVolume(2, 2, 2, .001F);
+		domain.bindChemistry(registries.chemical()); domain.bindGasRegistry(registries.gas());
+		var definitions = registries.thermal().materials().stream().map(material ->
+				material.carrierKind() != cc.ecisr.mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID ? material
+				: new cc.ecisr.mmm.thermal.ThermalMaterialDefinition(material.id(), material.carrierKind(), material.carrierId(),
+				200, material.carrierId().equals("mmm:water") ? 0x1p61 : material.carrierId().equals("mmm:oil") ? -0x1p61 : 0,
+				0, java.util.List.of(new cc.ecisr.mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)))).toList();
+		var offsets = registries.thermal().speciesOffsets().stream().map(offset -> new cc.ecisr.mmm.thermal.ThermalSpeciesOffset(
+				offset.id(), offset.speciesId(), offset.hostThermalMaterialId(), cc.ecisr.mmm.chemistry.ExactRational.ZERO)).toList();
+		var registry = new cc.ecisr.mmm.thermal.ThermalRegistry(definitions, offsets,
+				java.util.List.of(), java.util.List.of(), java.util.List.of(), registries.chemical().fingerprint(), "", registries.gas().fingerprint());
+		domain.bindThermal(registry, domain.materialRegistry, 300);
+		require(domain.thermalState.temperature(0, domain.thermalMarkerContext()) > 0, "initial explicit-insertion owner was invalid");
+		var pieces = java.util.List.of(new FluidDomain.MaterialPortion(0, .125, 8), new FluidDomain.MaterialPortion(1, .125, 8));
+		var common = new cc.ecisr.mmm.thermal.ThermalStateFunction(registry).stateForInventory(java.util.List.of(
+				new cc.ecisr.mmm.thermal.ThermalStateFunction.InventoryPortion(registry.materialHandle("mmm:water"), 1, java.util.Map.of()),
+				new cc.ecisr.mmm.thermal.ThermalStateFunction.InventoryPortion(registry.materialHandle("mmm:oil"), 1, java.util.Map.of())), -398);
+		require(common.temperatureK() == 1 && common.heatCapacityEuPerK() == 2,
+				"explicit fixture did not have an exact positive common-temperature request");
+		var builder = cc.ecisr.mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical());
+		for (var piece : pieces) builder.add(domain.materialRegistry.material(piece.materialHandle()).id(), false,
+				piece.volume(), domain.unitScale.kilograms(piece.mass()), domain.chemicalParcels.defaultRecord(
+						domain.materialRegistry.material(piece.materialHandle()).id(), .125F, .5F, 8, false));
+		var chemical = builder.build();
+		// At requested T=1, water U rounds to 2^61-256: T(U)=200-256=-56 despite finite U.
+		for (Runnable insertion : java.util.List.<Runnable>of(
+				() -> domain.tryInsertExactMixture(1, 1, 1, pieces, 0, true, -398),
+				() -> domain.tryInsertExactChemical(1, 1, 1, chemical, 0, true, -398))) {
+			ReplacementState before = replacementState(domain);
+			try { insertion.run(); throw new AssertionError("explicit insertion accepted an invalid rounded carrier energy"); }
+			catch (IllegalArgumentException expected) { }
+			requireUnchanged(domain, before);
+		}
+		// T=100 rounds both carriers back to their references, whose T(U)=200 is valid.
+		for (Runnable insertion : java.util.List.<Runnable>of(
+				() -> require(domain.tryInsertExactMixture(1, 1, 1, pieces, 0, true, -200).transferred(), "valid explicit material rounding failed"),
+				() -> require(domain.tryInsertExactChemical(1, 1, 1, chemical, 0, true, -200).transferred(), "valid explicit chemical rounding failed"))) {
+			int first = domain.particleCount(); var before = domain.thermalState.auditLedger(); var oldU = domain.exactInternalEnergy();
+			insertion.run(); var after = domain.thermalState.auditLedger();
+			var stored = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+			for (int p = first; p < domain.particleCount(); p++) {
+				stored = stored.add(cc.ecisr.mmm.units.SignedDyadic.of(domain.thermalState.liquidInternalEnergy(p)));
+				require(domain.thermalState.temperature(p, domain.thermalMarkerContext()) == 200, "accepted explicit energy did not preserve a valid stored owner");
+			}
+			var requested = cc.ecisr.mmm.units.SignedDyadic.of(-200);
+			require(stored.equals(cc.ecisr.mmm.units.SignedDyadic.ZERO) && after.externalSource().subtract(before.externalSource()).equals(requested)
+					&& after.roundoffResidual().subtract(before.roundoffResidual()).equals(stored.subtract(requested))
+					&& domain.exactInternalEnergy().subtract(oldU).equals(stored)
+					&& domain.exactInternalEnergy().equals(after.expectedInventory()), "valid explicit source/roundoff did not close actual stored energy");
+		}
+	}
+
+	private static void explicitInsertionsPreflightCompleteThermalLedger() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		var huge = new cc.ecisr.mmm.units.SignedDyadic(java.math.BigInteger.ONE, 40_000);
+		var zero = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		for (boolean expectedSumOverflow : new boolean[] {false, true}) {
+			FluidDomain domain = fullCapabilityDomain(registries);
+			domain.setVolume(2, 2, 2, .001F);
+			var actual = domain.exactInternalEnergy();
+			// Both restored ledgers close exactly; only the latter fails during final expectedInventory().
+			var ledger = expectedSumOverflow
+					? new cc.ecisr.mmm.thermal.ThermalAuditLedger(huge, zero, huge, actual, zero, zero)
+					: new cc.ecisr.mmm.thermal.ThermalAuditLedger(zero, huge, huge, actual, zero, zero);
+			require(ledger.expectedInventory().equals(actual), "restored explicit audit did not close inventory");
+			domain.thermalState.restoreAuditLedger(ledger);
+			var mixture = domain.chemicalParcels.defaultRecord("mmm:water", .125F, .5F, 125, false);
+			double energy = domain.thermalState.liquid().modeledEnergy(0, 125, mixture,
+					GasRegistry.STANDARD_TEMPERATURE_K, domain.chemicalParcels.registry());
+			var packet = cc.ecisr.mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical())
+					.add("mmm:water", false, .125, domain.unitScale.kilograms(125), mixture).build();
+			var insertions = new java.util.ArrayList<Runnable>(java.util.List.of(
+					() -> domain.tryInsertExactMixture(1, 1, 1, java.util.List.of(new FluidDomain.MaterialPortion(0, .125, 125)), 0, true, energy),
+					() -> domain.tryInsertExactChemical(1, 1, 1, packet, 0, true, energy)));
+			if (expectedSumOverflow) insertions.addAll(java.util.List.of(
+					() -> domain.tryInsertExactMixture(1, 1, 1, java.util.List.of(new FluidDomain.MaterialPortion(0, .125, 125)), 0, true),
+					() -> domain.tryInsertExactChemical(1, 1, 1, packet, 0, true),
+					() -> domain.addVolumeNearBudgeted(1, 1, 1, .125F, 0),
+					() -> domain.setVolume(2, 2, 2, .5F)));
+			for (Runnable insertion : insertions) {
+				ReplacementState before = replacementState(domain);
+				try { insertion.run(); throw new AssertionError("liquid insertion published before complete audit preflight"); }
+				catch (IllegalArgumentException expected) { }
+				requireUnchanged(domain, before);
+			}
 		}
 	}
 

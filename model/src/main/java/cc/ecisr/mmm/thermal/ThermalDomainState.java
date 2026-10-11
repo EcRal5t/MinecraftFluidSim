@@ -251,6 +251,7 @@ public final class ThermalDomainState {
 		for (int ordinal : removedOrdinals) sink = sink.add(SignedDyadic.of(liquidEnergy.energy(ordinal)));
 		ThermalAuditLedger after = auditState.ledger().withExternalSinkEnergy(sink)
 				.withExternalSourceEnergy(SignedDyadic.sum(energies));
+		after.expectedInventory();
 		return new LiquidReplacementPlan(this, thermalRevision(), energies, auditState.ledger(), after);
 	}
 

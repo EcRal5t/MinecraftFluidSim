@@ -251,9 +251,15 @@ public final class LiquidEnergyColumn {
 			LiquidInsertion insertion = insertions.get(index);
 			energies[index] = modeledEnergy(insertion.fluidMaterialHandle(), insertion.mass(),
 					insertion.mixture(), temperatureK, markers.chemicalRegistry());
+			temperatureForInventory(insertion.fluidMaterialHandle(), insertion.mass(), insertion.mixture(),
+					energies[index], markers.chemicalRegistry());
 		}
 		SignedDyadic source = SignedDyadic.of(totalEnergy);
-		return new ExternalLiquidInsertionPlan(energies, source, SignedDyadic.sum(energies).subtract(source));
+		SignedDyadic roundoff = SignedDyadic.sum(energies).subtract(source);
+		ThermalAuditLedger before = audit.ledger();
+		ThermalAuditLedger after = before.withExternalSourceEnergy(source).withRoundoff(roundoff);
+		after.expectedInventory();
+		return new ExternalLiquidInsertionPlan(this, energies, before, after);
 	}
 
 	/** Preflights the configured insertion temperature separately for every stored carrier. */
@@ -283,17 +289,18 @@ public final class LiquidEnergyColumn {
 	}
 
 	void commitExternalLiquidInsertions(int firstOrdinal, ExternalLiquidInsertionPlan plan) {
-		if (plan == null || firstOrdinal < 0 || firstOrdinal + plan.energies.length > internalEnergy.length) {
+		if (plan == null || plan.owner != this || firstOrdinal < 0
+				|| firstOrdinal > internalEnergy.length - plan.energies.length) {
 			throw new IllegalArgumentException("Thermal liquid insertion ordinals are incompatible");
 		}
+		if (audit.ledger() != plan.before)
+			throw new IllegalStateException("Explicit thermal insertion audit changed after planning");
 		for (int index = 0; index < plan.energies.length; index++) {
-			int ordinal = firstOrdinal + index;
-			if (Double.doubleToRawLongBits(internalEnergy[ordinal]) != Double.doubleToRawLongBits(0.0)) {
+			if (Double.doubleToRawLongBits(internalEnergy[firstOrdinal + index]) != Double.doubleToRawLongBits(0.0))
 				throw new IllegalStateException("Explicit thermal insertion did not reserve an empty energy ordinal");
-			}
-			internalEnergy[ordinal] = plan.energies[index];
 		}
-		audit.update(ledger -> ledger.withExternalSourceEnergy(plan.source()).withRoundoff(plan.roundoff()));
+		System.arraycopy(plan.energies, 0, internalEnergy, firstOrdinal, plan.energies.length);
+		audit.replace(plan.after);
 		revision++;
 	}
 
@@ -414,13 +421,15 @@ public final class LiquidEnergyColumn {
 			}
 		}
 	}
-	public record ExternalLiquidInsertionPlan(double[] energies, SignedDyadic source, SignedDyadic roundoff) {
-		public ExternalLiquidInsertionPlan {
-			if (energies == null || energies.length == 0 || source == null || roundoff == null) {
-				throw new IllegalArgumentException("Thermal liquid insertion plan is incomplete");
-			}
-			energies = energies.clone();
+	/** Validated stored energies and complete audit replacement bound to their planning owner. */
+	public static final class ExternalLiquidInsertionPlan {
+		private final LiquidEnergyColumn owner;
+		private final double[] energies;
+		private final ThermalAuditLedger before, after;
+		private ExternalLiquidInsertionPlan(LiquidEnergyColumn owner, double[] energies,
+				ThermalAuditLedger before, ThermalAuditLedger after) {
+			this.owner = owner; this.energies = energies.clone();
+			this.before = before; this.after = after;
 		}
-		@Override public double[] energies() { return energies.clone(); }
 	}
 }
