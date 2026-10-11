@@ -68,7 +68,7 @@
 - transition 定义上下相、分段线性 `T_eq(p)` 曲线、exact 两侧体积量子、exact 质量批和接口要求；曲线端点记录压力采样范围，不重复保存参考温度或上下限；
 - boundary 定义哪些世界方块提供固定温度面。
 
-总材料数、segment、species offset、transition、boundary、cell carrier 和 phase operation 均有硬上限。world fingerprint 或引用不一致时保留存档并 LOCKED，不按当前数据包重解释。
+总材料数、segment、species offset、transition、boundary、区域实际载体预算和 phase operation 均有硬上限。同格 LTE 反演按完整实际库存求解，使用与真实热网格相同的区域载体预算。world fingerprint 或引用不一致时保留存档并 LOCKED，不按当前数据包重解释。
 
 ## 状态函数
 
@@ -373,6 +373,8 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 ## 反应热
 
 化学和固液反应先完成 exact extent 规划，再将定义的能量变化提交给同一 cell 的热载体。反应热不得绕过 chemical/solid 账本单独修改温度。
+
+固液反应在分配新固体组成 handle 前，预检完整候选热库存；预检失败时保持物质库存、内能与组成池不变。
 
 species reference offset 是组成携带的能量原始数据。reaction extent 改变 species 时，反应热表现为同一总 `U` 下 base energy 的改变，随后 LTE 温度自然变化；外部热浴或命令注热才进入 external source/sink。禁止既修改 species offset 又额外重复加一份反应热。
 

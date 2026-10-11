@@ -296,24 +296,19 @@ final class GranularReactionStage {
 		if (!granular.compositions.hasCapacity(1) || !granular.parcels.hasCapacity(1)) {
 			return false;
 		}
-		int composition = granular.compositions.create(plan.transferredComposition());
-		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(
-				position.x(), position.y(), position.z(),
-				momentum.solidX(), momentum.solidY(), momentum.solidZ(), plan.signedSolidSvq(), plan.signedSolidMass(),
-				material, composition, 0, (byte) 0);
-		if (!granular.parcels.canAdd(parcel)) {
-			granular.compositions.release(composition);
-			throw new GranularPhaseTransferEngine.BlockedException("Precipitation active parcel budget exceeded");
-		}
 		ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : planThermalReaction(
 				cell, thermalReactionMarkers(plan), new GranularEnergyState.GranularReactionEdit(
-						GranularEnergyState.GranularReactionKind.ADD_ACTIVE, -1, null, material, parcel.mass(),
+						GranularEnergyState.GranularReactionKind.ADD_ACTIVE, -1, null, material, plan.signedSolidMass(),
 						plan.transferredComposition().stableAmounts(chemistry.registry())));
-		if (thermal != null && thermalPlan == null) {
-			granular.compositions.release(composition);
-			return false;
-		}
+		if (thermal != null && thermalPlan == null) return false;
+		int composition = granular.compositions.create(plan.transferredComposition());
+		GranularParcelStore.Parcel parcel;
 		try {
+			parcel = new GranularParcelStore.Parcel(position.x(), position.y(), position.z(),
+					momentum.solidX(), momentum.solidY(), momentum.solidZ(), plan.signedSolidSvq(), plan.signedSolidMass(),
+					material, composition, 0, (byte) 0);
+			if (!granular.parcels.canAdd(parcel)) throw new GranularPhaseTransferEngine.BlockedException(
+					"Precipitation active parcel budget exceeded");
 			chemistry.commitPlannedReplacements(markers, mixtures);
 		} catch (RuntimeException failure) {
 			granular.compositions.release(composition);

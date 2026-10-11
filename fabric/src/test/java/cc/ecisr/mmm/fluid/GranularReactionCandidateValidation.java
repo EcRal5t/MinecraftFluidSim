@@ -16,6 +16,7 @@ public final class GranularReactionCandidateValidation {
 		allocationCases();
 		phaseTransferPreservesMomentum();
 		precipitationPreservesAvailableMassMoment();
+		precipitationUsesCompleteThermalInventory();
 		precipitationMergePreservesMassMoment();
 		precipitationMergeRetainsRotationalMotion();
 		phaseTransferFitsLiquidAndSolidKernel();
@@ -26,6 +27,66 @@ public final class GranularReactionCandidateValidation {
 	}
 
 	public static void main(String[] args) { validate(); }
+
+	private static void precipitationUsesCompleteThermalInventory() {
+		for (int count : new int[]{256, 300}) {
+			var granular = BuiltinGranularDefinitions.createRegistry();
+			var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+			var domain = new FluidDomain(3, 3, 3,
+					new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 512);
+			float[] positions = new float[4 * count], velocities = new float[3 * count];
+			for (int marker = 0; marker < count; marker++) {
+				Arrays.fill(positions, 4 * marker, 4 * marker + 3, .75F);
+				positions[4 * marker + 3] = 1F / 1_024;
+				Arrays.fill(velocities, 3 * marker, 3 * marker + 3, .01F);
+			}
+			domain.restoreParticleState(new FlipParticleState(3, 3, 3, .5F, count, count / 1_024F,
+					positions, velocities, new byte[27]));
+			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+			domain.setPrecipitationEnabled(true);
+			for (int marker = 0; marker < count; marker++) domain.setMarkerChemical(marker,
+					Map.of(BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
+							BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), false);
+			domain.bindThermal(ThermochemistryValidationScenarios.reactiveGranularThermalRegistry(liquids, granular), liquids, 300);
+			domain.captureAuthoritativeState();
+			var energy = domain.exactInternalEnergy();
+			var audit = domain.thermalAudit();
+			var initialVolume = cc.ecisr.mmm.units.SignedDyadic.of(domain.totalVolumeExact());
+			var initialMass = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+			for (int marker = 0; marker < count; marker++) initialMass = initialMass.add(
+					cc.ecisr.mmm.units.SignedDyadic.of(domain.unitScale.kilograms(domain.particles.mass(marker))));
+			long[] initialSpecies = domain.chemicalParcels.speciesTotals(count);
+			var stats = domain.stepThermalAxis(false, 0);
+			require(stats.granularPhase().precipitations() == 1 && domain.granularState.parcels.count() == 1
+					&& domain.granularState.compositions.liveCount() == 1,
+					"complete LTE inventories above 256 carriers permit a valid precipitation");
+			var solid = domain.granularState.parcels.parcel(0);
+			var finalMass = cc.ecisr.mmm.units.SignedDyadic.of(solid.mass());
+			for (int marker = 0; marker < count; marker++) finalMass = finalMass.add(
+					cc.ecisr.mmm.units.SignedDyadic.of(domain.unitScale.kilograms(domain.particles.mass(marker))));
+			require(Math.abs(finalMass.subtract(initialMass).toDouble()) <= 16 * Math.ulp(initialMass.toDouble()),
+					"complete thermal reaction retains actual liquid and solid kilograms to storage precision");
+			long[] finalSpecies = domain.chemicalParcels.speciesTotals(count);
+			var composition = domain.granularState.compositions.record(solid.solidCompositionHandle());
+			for (int entry = 0; entry < composition.entryCount(); entry++) finalSpecies[composition.speciesHandle(entry)] =
+					Math.addExact(finalSpecies[composition.speciesHandle(entry)], composition.amountAt(entry));
+			require(Arrays.equals(initialSpecies, finalSpecies), "complete thermal reaction preserves each integer species inventory");
+			var finalVolume = cc.ecisr.mmm.units.SignedDyadic.of(domain.totalVolumeExact()).add(
+					new cc.ecisr.mmm.units.SignedDyadic(java.math.BigInteger.valueOf(solid.solidVolumeSvq()), -24));
+			require(finalVolume.equals(initialVolume) && solid.solidVolumeSvq() == stats.granularPhase().signedSolidSvq(),
+					"complete thermal reaction preserves exact liquid plus solid volume");
+			require(domain.exactInternalEnergy().equals(energy) && domain.thermalAudit().equals(audit),
+					"complete thermal reaction preserves actual U and its audit");
+			var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			require(restored.particleCount() == count && restored.granularState.parcels.parcel(0).equals(solid)
+					&& restored.exactInternalEnergy().equals(energy) && restored.thermalAudit().equals(audit)
+					&& Arrays.equals(restored.chemicalParcels.speciesTotals(count), domain.chemicalParcels.speciesTotals(count)),
+					"complete thermal reaction restores all liquid, solid and thermal owners");
+			restored.copyThermalDisplaySnapshot();
+			requireCombinedCapacity(domain);
+		}
+	}
 
 	private static void precipitationMergePreservesMassMoment() {
 		var registry = BuiltinGranularDefinitions.createRegistry();

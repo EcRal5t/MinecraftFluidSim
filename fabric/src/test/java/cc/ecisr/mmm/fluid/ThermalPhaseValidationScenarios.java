@@ -125,6 +125,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	}
 
 	static void coherentPhaseInventoryAndExactBatchPlanning() {
+		condensedPhaseUsesActualRegionalCarrierBudget();
 		coherentExternalMergeIsPreflightedAndAudited();
 		ThermalMaterialDefinition lower = new ThermalMaterialDefinition("test:thermal/lower",
 				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "test:solid", 300.0, 0.0, 1.0,
@@ -333,6 +334,66 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		require(SolidVolume.cellVolumeSvqAtMost(tailedMarkerVolume) == markerSvq
 				&& SolidVolume.cellVolumeSvqAtLeast(tailedMarkerVolume) == markerSvq + 1L,
 				"phase SVQ bounds quantized away an authoritative float marker-volume tail");
+	}
+
+	private static void condensedPhaseUsesActualRegionalCarrierBudget() {
+		FluidMaterial target = FluidMaterial.withSurfaceTension("test:a_phase_carriers", 1.0,
+				"test:miscible", 0.0, 90.0);
+		FluidMaterial other = FluidMaterial.withSurfaceTension("test:z_phase_carriers", 1.0,
+				"test:miscible", 0.0, 90.0);
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(target, other));
+		var segments = List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0));
+		var solid = new ThermalMaterialDefinition("test:thermal/phase_carriers_solid",
+				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "test:solid", 300.0, 0.0, 0.0, segments);
+		var liquid = new ThermalMaterialDefinition("test:thermal/phase_carriers_target",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, target.id(), 300.0, 100.0, 0.0, segments);
+		var heatBath = new ThermalMaterialDefinition("test:thermal/phase_carriers_other",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, other.id(), 300.0, 100.0, 0.0, segments);
+		var transition = new ThermalPhaseTransition("test:phase/regional_carriers", solid.id(), liquid.id(),
+				300.0, 128L, 128L, ExactRational.parse("1/1048576"),
+				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
+		var registry = new ThermalRegistry(List.of(solid, liquid, heatBath), List.of(),
+				List.of(transition), "", "");
+		var config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config, 512);
+		domain.setVolume(1, 1, 1, 1.0F / 4_096);
+		domain.setMarkerMaterial(0, liquids, liquids.handle(target.id()));
+		for (int marker = 1; marker < 256; marker++) {
+			require(domain.tryInsertExactVolume(1, 1, 1, 1.0F / 4_096, 1,
+					liquids.handle(other.id()), false).transferred(), "phase heat-bath insertion failed");
+		}
+		domain.bindThermal(registry, liquids, 295.0);
+		SignedDyadic before = domain.exactInternalEnergy();
+		ThermalAuditLedger audit = domain.thermalAudit();
+		double volume = domain.totalVolumeExact(), mass = domain.totalMass();
+		FluidDomain.ThermalPhaseStats frozen = domain.stepInertPhaseChangeOnly(1);
+		require(frozen.operations() == 1 && frozen.signedBatches() == 1L && domain.particleCount() == 256
+				&& domain.thermalState.coherentPhases().groupCount() == 1
+				&& domain.totalCoherentSolidVolumeSvq() == 128L
+				&& domain.totalVolumeExact() + SolidVolume.toCellVolume(128L) == volume
+				&& domain.unitScale.kilograms(domain.totalMass()) + domain.totalCoherentMass()
+						== domain.unitScale.kilograms(mass)
+				&& domain.exactInternalEnergy().subtract(before).equals(
+						domain.thermalAudit().roundoffResidual().subtract(audit.roundoffResidual()))
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"valid 257-carrier phase inventory must conserve actual mass, volume and energy: " + frozen);
+		FluidDomainState snapshot = domain.captureAuthoritativeState();
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(snapshot);
+		FluidDomainState restoredSnapshot = restored.captureAuthoritativeState();
+		var restoredThermal = restoredSnapshot.thermal();
+		require(restored.particleCount() == domain.particleCount()
+				&& restored.totalVolumeExact() == domain.totalVolumeExact()
+				&& restored.totalMass() == domain.totalMass()
+				&& restored.totalCoherentMass() == domain.totalCoherentMass()
+				&& restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
+				&& restored.thermalAudit().equals(domain.thermalAudit())
+				&& java.util.Arrays.equals(restoredSnapshot.materials().copyParticleMass(), snapshot.materials().copyParticleMass())
+				&& java.util.Arrays.equals(restoredSnapshot.materials().copyPositionVolume(), snapshot.materials().copyPositionVolume())
+				&& java.util.Arrays.equals(restoredThermal.copyInternalEnergy(), snapshot.thermal().copyInternalEnergy())
+				&& restoredThermal.coherentGroups().equals(snapshot.thermal().coherentGroups())
+				&& restored.thermalTemperatureInCell(1, 1, 1) == domain.thermalTemperatureInCell(1, 1, 1),
+				"public handoff changed the valid 257-carrier caloric inventory");
 	}
 
 	static void coherentExternalMergeIsPreflightedAndAudited() {

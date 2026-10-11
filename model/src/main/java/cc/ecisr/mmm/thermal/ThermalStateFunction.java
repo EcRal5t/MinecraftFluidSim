@@ -70,8 +70,8 @@ public final class ThermalStateFunction {
 
 	/** Retains an aggregate's exact energy until its fixed reference terms have been removed. */
 	public State stateForInventory(List<InventoryPortion> portions, SignedDyadic totalEnergy) {
-		if (portions == null || portions.isEmpty() || portions.size() > ThermalLimits.MAX_THERMAL_CARRIERS_PER_CELL || totalEnergy == null)
-			throw new IllegalArgumentException("Thermal LTE inventory is missing, over budget or non-finite");
+		if (portions == null || portions.isEmpty() || totalEnergy == null)
+			throw new IllegalArgumentException("Thermal LTE inventory is missing or non-finite");
 		SignedDyadic reference = SignedDyadic.ZERO;
 		for (InventoryPortion portion : portions) reference = reference.add(SignedDyadic.of(
 				baseEnergy(portion.materialHandle(), portion.massMu(), portion.speciesQuanta())));
