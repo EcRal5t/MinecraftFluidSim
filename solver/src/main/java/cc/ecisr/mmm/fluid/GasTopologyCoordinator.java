@@ -5,6 +5,7 @@ import cc.ecisr.mmm.thermal.GasEnergyStore;
 import cc.ecisr.mmm.fluid.air.AirEdge;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasInventory;
+import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
 import cc.ecisr.mmm.fluid.air.GasStateSnapshot;
 
@@ -178,7 +179,7 @@ final class GasTopologyCoordinator {
 			if (deferPhaseVolumeWork) inherited[0] = volumes[0];
 		}
 		return prepareRemap(result, List.of(domain.gasState.network.inventory(1)), volumes,
-				mixed, inherited, GasInventory.EMPTY, GasInventory.EMPTY, 0, 0);
+				mixed, inherited, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, 0, 0);
 	}
 
 	private GasTopologyPlan planWithOverlaps(AirCavityScanner.Result result, boolean deferPhaseVolumeWork) {
@@ -192,8 +193,8 @@ final class GasTopologyCoordinator {
 		double[] availableVolumes = result.sealedAvailableVolume();
 		ArrayList<GasInventory> inventories = new ArrayList<>(sealed);
 		for (int node = 0; node < sealed; node++) inventories.add(GasInventory.EMPTY);
-		GasInventory sourceDelta = GasInventory.EMPTY;
-		GasInventory sinkDelta = GasInventory.EMPTY;
+		GasAuditLedger sourceDelta = GasAuditLedger.EMPTY;
+		GasAuditLedger sinkDelta = GasAuditLedger.EMPTY;
 		double[] mixedEnergy = thermalGas ? new double[sealed] : null;
 		double[] inheritedAvailable = thermalGas ? new double[sealed] : null;
 		double sourceEnergy = 0.0, sinkEnergy = 0.0;
@@ -273,7 +274,7 @@ final class GasTopologyCoordinator {
 						throw new GasTopologyBlockedException("Closed gas inventory lost its topology lineage: "
 								+ gasTopologyLossDetail(old, newMembership, newLabels, cellAvailableVolume, sealed));
 					}
-					sinkDelta = sinkDelta.merge(inventory);
+					sinkDelta = sinkDelta.add(inventory);
 					if (thermalGas) sinkEnergy += domain.thermalState.gasNodeEnergy(old, domain.gasState.network);
 					continue;
 				}
@@ -289,7 +290,7 @@ final class GasTopologyCoordinator {
 				for (Map.Entry<Long, Long> entry : oldOverlap.entrySet()) {
 					int node = (int) (entry.getKey() & 0xffffffffL);
 					if (node == AirNetwork.AMBIENT_NODE) {
-						sinkDelta = sinkDelta.merge(parts.get(part));
+						sinkDelta = sinkDelta.add(parts.get(part));
 						if (thermalGas) sinkEnergy += partEnergy[part];
 					} else {
 						inventories.set(node - 1, inventories.get(node - 1).merge(parts.get(part)));
@@ -315,7 +316,7 @@ final class GasTopologyCoordinator {
 				GasInventory trappedAmbient = domain.gasState.network.ambientInventory(
 						Math.max(1L, AirNetwork.nanos(ambientInheritedAvailable[node])));
 				inventories.set(node - 1, inventories.get(node - 1).merge(trappedAmbient));
-				sourceDelta = sourceDelta.merge(trappedAmbient);
+				sourceDelta = sourceDelta.add(trappedAmbient);
 				if (thermalGas) {
 					double trappedEnergy = domain.thermalState.ambientGasEnergy(trappedAmbient);
 					mixedEnergy[node - 1] += trappedEnergy;
@@ -338,7 +339,7 @@ final class GasTopologyCoordinator {
 					if (domain.gasState.sealedDomainBoundary && !domain.gasState.network.inventory(node).isEmpty()) {
 						throw new GasTopologyBlockedException("Closed gas inventory has no available cavity volume");
 					}
-					sinkDelta = sinkDelta.merge(domain.gasState.network.inventory(node));
+					sinkDelta = sinkDelta.add(domain.gasState.network.inventory(node));
 					if (thermalGas) sinkEnergy += domain.thermalState.gasNodeEnergy(node, domain.gasState.network);
 				}
 			}
@@ -350,7 +351,7 @@ final class GasTopologyCoordinator {
 				GasInventory created = domain.gasState.network.ambientInventory(
 						Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])));
 				inventories.set(node - 1, created);
-				sourceDelta = sourceDelta.merge(created);
+				sourceDelta = sourceDelta.add(created);
 				if (thermalGas) {
 					mixedEnergy[node - 1] = domain.thermalState.ambientGasEnergy(created);
 					inheritedAvailable[node - 1] = availableVolumes[node - 1];
@@ -373,7 +374,7 @@ final class GasTopologyCoordinator {
 
 	private GasTopologyPlan prepareRemap(AirCavityScanner.Result result, List<GasInventory> inventories,
 			double[] availableVolumes, double[] mixedEnergy, double[] inheritedAvailable,
-			GasInventory sourceDelta, GasInventory sinkDelta, double sourceEnergy, double sinkEnergy) {
+			GasAuditLedger sourceDelta, GasAuditLedger sinkDelta, double sourceEnergy, double sinkEnergy) {
 		GasEnergyStore.GasRemapPlan thermalPlan = mixedEnergy == null ? null : domain.thermalState.planGasRemap(
 				domain.gasState.network, inventories, availableVolumes, mixedEnergy, inheritedAvailable, sourceEnergy, sinkEnergy);
 		ArrayList<AirEdge> edges = new ArrayList<>(result.geometricEdges().size());

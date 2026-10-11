@@ -392,12 +392,13 @@ public final class MinecraftRegionLifecycle {
 
 	private static GasSummary lifecycleGasSummary(FluidDomain domain) {
 		long nanos = 0L, species = 0L;
-		double mass = 0.0;
-		for (var component : domain.gasBoundary().sealedInventory().components()) {
+		cc.ecisr.mmm.units.SignedDyadic exactMass = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		for (var component : domain.gasBoundary().sealedInventory().entries()) {
 			nanos = Math.addExact(nanos, component.standardVolumeNanos());
-			mass += component.mass();
+			exactMass = exactMass.add(component.mass());
 			for (var amount : component.species()) species = Math.addExact(species, amount.amountQuanta());
 		}
+		double mass = exactMass.toDouble();
 		if (!Double.isFinite(mass)) throw new ArithmeticException("Lifecycle gas mass summary overflow");
 		return new GasSummary(nanos, mass, species);
 	}

@@ -4,7 +4,6 @@ import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 
@@ -579,34 +578,6 @@ public final class AirNetwork {
 		edges.addAll(rewired);
 	}
 
-	/**
-	 * Replaces the whole node set with slot-ordered nodes (ids 1..n) and clears all edges.
-	 * The caller's topology mapping is responsible for inventory conservation; the net
-	 * difference between the removed and replaced sums books as drawn (growth, e.g. newly
-	 * discovered cavities starting at ambient equilibrium) or vented (loss, e.g. a cavity
-	 * that opened to ambient or vanished under liquid), keeping the ledger identity exact.
-	 */
-	public void remapNodes(double[] availableVolumes, long[] inventoriesNanos) {
-		if (availableVolumes.length != inventoriesNanos.length) {
-			throw new IllegalArgumentException("Slot arrays must have equal length");
-		}
-		for (int slot = 0; slot < availableVolumes.length; slot++) {
-			if (!(availableVolumes[slot] >= 0.0) || Double.isNaN(availableVolumes[slot])
-					|| Double.isInfinite(availableVolumes[slot])) {
-				throw new IllegalArgumentException("Available volume must be finite and non-negative");
-			}
-			if (inventoriesNanos[slot] < 0L) {
-				throw new IllegalArgumentException("Inventory cannot be negative");
-			}
-		}
-		long oldSum = sealedInventoryNanos(), newSum = 0L;
-		ArrayList<GasInventory> replacement = new ArrayList<>(inventoriesNanos.length);
-		for (long inventory : inventoriesNanos) { replacement.add(registry.createAmbient(inventory)); newSum = Math.addExact(newSum, inventory); }
-		GasInventory source = newSum > oldSum ? registry.createAmbient(newSum - oldSum) : GasInventory.EMPTY;
-		GasInventory sink = oldSum > newSum ? aggregateNodes().splitTotal(oldSum - newSum).first() : GasInventory.EMPTY;
-		remapNodes(availableVolumes, replacement, source, sink);
-	}
-
 	/** Applies a topology plan whose explicit source/sink deltas close every exact component column. */
 	public void remapNodes(
 			double[] availableVolumes, List<GasInventory> inventories,
@@ -620,13 +591,22 @@ public final class AirNetwork {
 			double[] availableVolumes, List<GasInventory> inventories,
 			GasInventory sourceDelta, GasInventory sinkDelta, List<AirEdge> replacementEdges
 	) {
+		if (sourceDelta == null || sinkDelta == null) throw new IllegalArgumentException("Gas remap plan is incomplete");
+		return planRemapNodes(availableVolumes, inventories, GasAuditLedger.of(sourceDelta), GasAuditLedger.of(sinkDelta), replacementEdges);
+	}
+
+	/** Region source/sink summaries retain exact masses and the registry-wide component budget. */
+	public RemapPlan planRemapNodes(
+			double[] availableVolumes, List<GasInventory> inventories,
+			GasAuditLedger sourceDelta, GasAuditLedger sinkDelta, List<AirEdge> replacementEdges
+	) {
 		if (availableVolumes.length != inventories.size()) throw new IllegalArgumentException("Gas remap slots disagree");
 		if (sourceDelta == null || sinkDelta == null || replacementEdges == null) {
 			throw new IllegalArgumentException("Gas remap plan is incomplete");
 		}
 		for (GasInventory inventory : inventories) registry.requireCompatible(inventory);
-		registry.requireCompatible(sourceDelta);
-		registry.requireCompatible(sinkDelta);
+		for (var entry : sourceDelta.entries()) registry.requireCompatible(entry.componentId(), entry.species());
+		for (var entry : sinkDelta.entries()) registry.requireCompatible(entry.componentId(), entry.species());
 		TreeMap<Integer, AirNode> replacementNodes = new TreeMap<>();
 		for (int slot = 0; slot < availableVolumes.length; slot++) {
 			if (!(Double.isFinite(availableVolumes[slot]) && availableVolumes[slot] >= 0.0) || inventories.get(slot) == null) {
@@ -643,7 +623,7 @@ public final class AirNetwork {
 			plannedEdges.add(edge);
 		}
 		MassColumns before = liveMassColumns();
-		requireExactRemapClosure(aggregateNodes(), aggregate(inventories), sourceDelta, sinkDelta);
+		GasRegionAudit.requireClosure(sealedInventory(), GasRegionAudit.aggregate(inventories), sourceDelta, sinkDelta);
 		MassColumns after = massColumns(inventories);
 		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
 		return new RemapPlan(this, revision, replacementNodes, plannedEdges, inventories.size() + 1,
@@ -697,18 +677,15 @@ public final class AirNetwork {
 		for (GasInventory inventory : inventories) registry.requireCompatible(inventory);
 		for (GasAuditLedger.Entry entry : source.entries()) registry.requireCompatible(entry.componentId(), entry.species());
 		for (GasAuditLedger.Entry entry : sink.entries()) registry.requireCompatible(entry.componentId(), entry.species());
-		nodes.clear(); edges.clear();
+		TreeMap<Integer, AirNode> replacement = new TreeMap<>();
 		for (int slot = 0; slot < inventories.size(); slot++) {
-			nodes.put(slot + 1, new AirNode(availableVolumes[slot], inventories.get(slot)));
+			replacement.put(slot + 1, new AirNode(availableVolumes[slot], inventories.get(slot)));
 		}
-		nextNodeId = inventories.size() + 1;
+		if (!GasRegionAudit.closed(GasRegionAudit.aggregate(inventories), source, sink, savedMassRoundoff, savedResidualRoundoff))
+			throw new IllegalArgumentException("Restored gas audit does not close");
+		nodes = replacement; edges = new ArrayList<>(); nextNodeId = inventories.size() + 1;
 		externalSource = source; escapedSink = sink;
 		massRoundoff = savedMassRoundoff; residualRoundoff = savedResidualRoundoff;
-		if (!auditClosed()) {
-			nodes.clear(); externalSource = GasAuditLedger.EMPTY; escapedSink = GasAuditLedger.EMPTY;
-			massRoundoff = SignedDyadic.ZERO; residualRoundoff = SignedDyadic.ZERO; nextNodeId = 1;
-			throw new IllegalArgumentException("Restored gas audit does not close");
-		}
 		revision++;
 	}
 
@@ -719,7 +696,7 @@ public final class AirNetwork {
 	}
 
 	/** Immutable aggregate of every sealed component column; ambient is deliberately absent. */
-	public GasInventory sealedInventory() { return aggregateNodes(); }
+	public GasAuditLedger sealedInventory() { return GasRegionAudit.aggregate(nodes.values().stream().map(AirNode::inventory).toList()); }
 
 	public long ventedNanos() { return escapedSink.standardVolumeNanos(); }
 
@@ -732,16 +709,7 @@ public final class AirNetwork {
 
 	/** Full exact-column audit used by persistence and validation boundaries. */
 	public boolean auditClosed() {
-		TreeMap<String, ExactColumns> live = exactColumns(aggregateNodes());
-		TreeMap<String, ExactColumns> source = exactColumns(externalSource);
-		TreeMap<String, ExactColumns> sink = exactColumns(escapedSink);
-		java.util.TreeSet<String> ids = new java.util.TreeSet<>(); ids.addAll(live.keySet()); ids.addAll(source.keySet()); ids.addAll(sink.keySet());
-		for (String id : ids) if (!ExactColumns.add(live.get(id), sink.get(id)).equals(source.getOrDefault(id, ExactColumns.EMPTY))) {
-			return false;
-		}
-		MassColumns liveMass = liveMassColumns(), sourceMass = massColumns(externalSource), sinkMass = massColumns(escapedSink);
-		return liveMass.mass().add(sinkMass.mass()).equals(sourceMass.mass().add(massRoundoff))
-				&& liveMass.residual().add(sinkMass.residual()).equals(sourceMass.residual().add(residualRoundoff));
+		return GasRegionAudit.closed(sealedInventory(), externalSource, escapedSink, massRoundoff, residualRoundoff);
 	}
 
 	public int transferClampEvents() { return transferClampEvents; }
@@ -754,18 +722,6 @@ public final class AirNetwork {
 	}
 
 	private AirNode sealed(int nodeId) { return nodes.get(sealedId(nodeId)); }
-
-	private GasInventory aggregateNodes() {
-		GasInventory result = GasInventory.EMPTY;
-		for (AirNode node : nodes.values()) result = result.merge(node.inventory());
-		return result;
-	}
-
-	private static GasInventory aggregate(List<GasInventory> inventories) {
-		GasInventory result = GasInventory.EMPTY;
-		for (GasInventory inventory : inventories) result = result.merge(inventory);
-		return result;
-	}
 
 	private void finishMutation(MassColumns before, GasInventory sourceDelta, GasInventory sinkDelta) {
 		MassColumns after = liveMassColumns(), source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
@@ -850,38 +806,6 @@ public final class AirNetwork {
 		return new MassColumns(mass, residual);
 	}
 
-	private static void requireExactRemapClosure(
-			GasInventory before, GasInventory after, GasInventory source, GasInventory sink
-	) {
-		TreeMap<String, ExactColumns> left = exactColumns(before), right = exactColumns(after);
-		mergeExact(left, exactColumns(source)); mergeExact(right, exactColumns(sink));
-		if (!left.equals(right)) throw new IllegalArgumentException("Gas topology remap does not close component nanos/species");
-	}
-
-	private static TreeMap<String, ExactColumns> exactColumns(GasInventory inventory) {
-		TreeMap<String, ExactColumns> result = new TreeMap<>();
-		for (GasComponentAmount amount : inventory.components()) {
-			TreeMap<String, Long> species = new TreeMap<>();
-			for (GasComponentAmount.SpeciesAmount entry : amount.species()) species.put(entry.speciesId(), entry.amountQuanta());
-			result.put(amount.componentId(), new ExactColumns(amount.standardVolumeNanos(), species));
-		}
-		return result;
-	}
-
-	private static TreeMap<String, ExactColumns> exactColumns(GasAuditLedger ledger) {
-		TreeMap<String, ExactColumns> result = new TreeMap<>();
-		for (GasAuditLedger.Entry amount : ledger.entries()) {
-			TreeMap<String, Long> species = new TreeMap<>();
-			for (GasComponentAmount.SpeciesAmount entry : amount.species()) species.put(entry.speciesId(), entry.amountQuanta());
-			result.put(amount.componentId(), new ExactColumns(amount.standardVolumeNanos(), species));
-		}
-		return result;
-	}
-
-	private static void mergeExact(TreeMap<String, ExactColumns> target, TreeMap<String, ExactColumns> values) {
-		for (Map.Entry<String, ExactColumns> entry : values.entrySet()) target.merge(entry.getKey(), entry.getValue(), ExactColumns::add);
-	}
-
 	private record MassColumns(SignedDyadic mass, SignedDyadic residual) { }
 	public static final class PhaseCapacityExceededException extends IllegalArgumentException {
 		private PhaseCapacityExceededException(RuntimeException cause) {
@@ -928,6 +852,7 @@ public final class AirNetwork {
 			this.residualRoundoffAfter = residualRoundoffAfter;
 			this.externalSourceAfter = externalSourceAfter;
 			this.escapedSinkAfter = escapedSinkAfter;
+			externalSourceAfter.standardVolumeNanos(); escapedSinkAfter.standardVolumeNanos();
 		}
 	}
 	private record TransferMutation(
@@ -936,14 +861,4 @@ public final class AirNetwork {
 			SignedDyadic massRoundoffAfter, SignedDyadic residualRoundoffAfter,
 			GasAuditLedger externalSourceAfter, GasAuditLedger escapedSinkAfter
 	) { }
-	private record ExactColumns(long nanos, Map<String, Long> species) {
-		private static final ExactColumns EMPTY = new ExactColumns(0L, Map.of());
-		private ExactColumns { species = Map.copyOf(species); }
-		private static ExactColumns add(ExactColumns first, ExactColumns second) {
-			if (first == null) first = EMPTY; if (second == null) second = EMPTY;
-			TreeMap<String, Long> species = new TreeMap<>(first.species);
-			for (Map.Entry<String, Long> entry : second.species.entrySet()) species.merge(entry.getKey(), entry.getValue(), Math::addExact);
-			return new ExactColumns(Math.addExact(first.nanos, second.nanos), species);
-		}
-	}
 }

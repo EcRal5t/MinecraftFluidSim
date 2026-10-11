@@ -21,6 +21,7 @@ public final class AirNetworkValidation {
 		validateComponentTransport();
 		validateComponentSpeciesBoundary();
 		validatePhaseColumnTake();
+		validateRegionalComponentAggregation();
 		validateGuards();
 		System.out.println("M5 air network gate passed: isothermal EoS, finite-rate orifice equalization, "
 				+ "hole open/close freeze and exact nanovolume ledger");
@@ -471,6 +472,63 @@ public final class AirNetworkValidation {
 				&& network.sealedInventoryNanos() == Long.MAX_VALUE,
 				"unrepresentable regional phase plan changed raw gas or audit columns");
 		checkLedger(network, "rejected regional phase capacity");
+	}
+
+	private static void validateRegionalComponentAggregation() {
+		java.util.ArrayList<GasComponentDefinition> definitions = new java.util.ArrayList<>();
+		java.util.ArrayList<GasComponentAmount> first = new java.util.ArrayList<>(), second = new java.util.ArrayList<>();
+		for (int component = 0; component < 33; component++) {
+			String id = "test:regional_" + component;
+			definitions.add(new GasComponentDefinition(id, 1.0, 0.0, List.of(), List.of()));
+			(component < 17 ? first : second).add(new GasComponentAmount(id, 1L, 1.0, List.of(), 0.0));
+		}
+		GasRegistry registry = new GasRegistry(definitions, List.of(new GasRegistry.AmbientFraction("test:regional_0", ExactRational.ONE)));
+		AirNetwork network = new AirNetwork(registry);
+		int a = network.addNode(1.0, 0.0), b = network.addNode(1.0, 0.0);
+		network.commitPhaseSource(a, new GasInventory(first)); network.commitPhaseSource(b, new GasInventory(second));
+		check(network.sealedInventory().entries().size() == 33 && network.auditClosed(), "regional summary used the single-node component limit");
+		var snapshot = GasStateSnapshot.capture(2, 1, 1, new int[]{a, b}, new int[]{a, b}, network, "");
+		AirNetwork restored = new AirNetwork(registry);
+		restored.restoreNodes(new double[]{1, 1}, snapshot.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
+				snapshot.externalSource(), snapshot.escapedSink(), snapshot.massRoundoff(), snapshot.residualRoundoff());
+		check(restored.auditClosed() && restored.sealedInventory().equals(network.sealedInventory()), "33-component region failed restore");
+		var identity = restored.planRemapNodes(new double[]{1, 1}, List.of(restored.inventory(1), restored.inventory(2)),
+				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, List.of());
+		restored.commitRemapNodes(identity); check(restored.auditClosed(), "regional identity remap failed");
+		restored.commitRemapNodes(restored.planRemapNodes(new double[]{1, 1}, List.of(GasInventory.EMPTY, GasInventory.EMPTY),
+				GasAuditLedger.EMPTY, restored.sealedInventory(), List.of()));
+		check(restored.sealedInventory().isEmpty() && restored.escapedSink().entries().size() == 33 && restored.auditClosed(),
+				"regional clear rebuilt the sink with a single-node limit");
+		first.addAll(second);
+		expectThrow(() -> new GasInventory(first), "single node above 32 components");
+
+		AirNetwork rejected = new AirNetwork(registry);
+		GasAuditLedger source = rejected.externalSource(), sink = rejected.escapedSink();
+		expectThrow(() -> rejected.restoreNodes(new double[]{1, 1}, List.of(network.inventory(a), network.inventory(b)),
+				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO), "nonclosing regional restore");
+		check(rejected.nodeCount() == 0 && rejected.revision() == 0 && rejected.externalSource() == source
+				&& rejected.escapedSink() == sink, "failed restore published nodes or ledger");
+		GasInventory hugeFirst = new GasInventory(List.of(new GasComponentAmount("test:regional_0", Long.MAX_VALUE, 1, List.of(), 0)));
+		GasInventory hugeSecond = new GasInventory(List.of(new GasComponentAmount("test:regional_1", 1, 1, List.of(), 0)));
+		try {
+			rejected.restoreNodes(new double[]{1, 1}, List.of(hugeFirst, hugeSecond), GasAuditLedger.EMPTY,
+					GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO);
+			throw new AssertionError("regional nanos overflow was accepted");
+		} catch (ArithmeticException expected) { }
+		check(rejected.nodeCount() == 0 && rejected.revision() == 0 && rejected.externalSource() == source
+				&& rejected.escapedSink() == sink, "throwing restore published partial state");
+
+		GasInventory hugeMass = new GasInventory(List.of(new GasComponentAmount("test:regional_0", 1, 1e308, List.of(), 0)));
+		AirNetwork massive = new AirNetwork(registry);
+		massive.commitPhaseSource(massive.addNode(1, 0), hugeMass); massive.commitPhaseSource(massive.addNode(1, 0), hugeMass);
+		check(massive.auditClosed() && massive.sealedInventory().component("test:regional_0").mass()
+				.equals(SignedDyadic.of(1e308).add(SignedDyadic.of(1e308))), "finite node masses overflowed exact regional audit");
+		GasInventory positive = new GasInventory(List.of(new GasComponentAmount("test:regional_0", 1, 1, List.of(), 1e308)));
+		GasInventory negative = new GasInventory(List.of(new GasComponentAmount("test:regional_0", 1, 1, List.of(), -1e308)));
+		AirNetwork residual = new AirNetwork(registry);
+		for (GasInventory inventory : List.of(positive, positive, negative)) residual.commitPhaseSource(residual.addNode(1, 0), inventory);
+		check(residual.auditClosed() && residual.sealedInventory().component("test:regional_0").massResidual().equals(SignedDyadic.of(1e308)),
+				"intermediate floating residual overflow rejected a finite regional sum");
 	}
 
 	private static void checkLedger(AirNetwork network, String context) {

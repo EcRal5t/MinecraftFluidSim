@@ -36,7 +36,7 @@ public final class GasPressureBoundary {
 	public int nodeCount() { return domain.gasState.network.nodeCount(); }
 	public List<Integer> nodeIds() { return domain.gasState.network.nodeIds(); }
 	public GasInventory inventory(int node) { return domain.gasState.network.inventory(node); }
-	public GasInventory sealedInventory() { return domain.gasState.network.sealedInventory(); }
+	public GasAuditLedger sealedInventory() { return domain.gasState.network.sealedInventory(); }
 	public long sealedInventoryNanos() { return domain.gasState.network.sealedInventoryNanos(); }
 	public boolean auditClosed() { return domain.gasState.network.auditClosed(); }
 	public double standardVolume(int node) { return domain.gasState.network.standardVolume(node); }

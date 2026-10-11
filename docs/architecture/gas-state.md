@@ -71,6 +71,8 @@ component 与 species 的隶属关系是 world-local registry 原始数据，不
 
 表示硬上限为：registry 64 个 component、单 node 32 个 component、单 component 16 个 species、单 region 65536 个 sealed node、stable ID 128 字符、单 extension 16 MiB。到达上限时拒绝候选或 fail-open 到 ambient；不能丢掉最小 component 继续运行。
 
+区域库存摘要和 source/sink 使用 `GasAuditLedger`，按注册表组分范围累加 nanos、species 与精确二进制质量和 residual；实际节点库存继续使用 `GasInventory`。审计、拓扑源汇、排气与恢复共用区域摘要。恢复先在局部候选中验证完整组分和审计闭合，再一次发布节点、账本和 revision。
+
 node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membership 和 minimum-cell key 决定。component stable ID、standard-volume nanos、kg 和 species/residual 独立保存，不能从理想气体状态方程反算库存。
 
 凝聚相与气相搬运 chemical residual 时，只在相边界用该区域冻结的 `cellSize³` 做 signed solver-weight/kg 换算；气相内部输运、分裂、合并和持久化始终保持 kg。

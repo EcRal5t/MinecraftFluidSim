@@ -4,6 +4,7 @@ import cc.ecisr.mmm.thermal.GasEnergyStore;
 
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasInventory;
+import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 
@@ -27,7 +28,7 @@ final class GasLifecyclePlanner {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator vent");
 		}
 		if (!domain.gasState.network.auditClosed()) throw new IllegalStateException("Gas inventory audit is open");
-		GasInventory removed = domain.gasState.network.sealedInventory();
+		GasAuditLedger removed = domain.gasState.network.sealedInventory();
 		int nodeCount = domain.gasState.network.nodeCount();
 		double[] availableVolumes = new double[nodeCount];
 		java.util.ArrayList<GasInventory> vacuum = new java.util.ArrayList<>(nodeCount);
@@ -36,7 +37,7 @@ final class GasLifecyclePlanner {
 			vacuum.add(GasInventory.EMPTY);
 		}
 		AirNetwork.RemapPlan gasPlan = domain.gasState.network.planRemapNodes(
-				availableVolumes, vacuum, GasInventory.EMPTY, removed, domain.gasState.network.edges());
+				availableVolumes, vacuum, GasAuditLedger.EMPTY, removed, domain.gasState.network.edges());
 		GasEnergyStore.GasVentPlan thermalPlan = domain.thermalState == null ? null
 				: domain.thermalState.planGasVent(domain.gasState.network, domain.particles.count());
 		return new FluidDomain.OperatorGasVentPlan(nodeCount, removed, gasPlan, thermalPlan,

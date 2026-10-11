@@ -58,6 +58,11 @@ public final class GasAuditLedger {
 	}
 
 	public List<Entry> entries() { return entries; }
+	public boolean isEmpty() { return entries.isEmpty(); }
+	public Entry component(String id) {
+		for (Entry entry : entries) if (entry.componentId().equals(id)) return entry;
+		return null;
+	}
 	public long standardVolumeNanos() {
 		long total = 0L;
 		for (Entry entry : entries) total = Math.addExact(total, entry.standardVolumeNanos());

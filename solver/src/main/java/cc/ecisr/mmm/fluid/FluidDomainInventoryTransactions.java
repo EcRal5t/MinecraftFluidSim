@@ -6,6 +6,7 @@ import cc.ecisr.mmm.thermal.ThermalDomainState;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasInventory;
+import cc.ecisr.mmm.fluid.air.GasAuditLedger;
 import cc.ecisr.mmm.granular.GranularAuditLedger;
 import cc.ecisr.mmm.granular.GranularDepositStore;
 import cc.ecisr.mmm.units.SignedDyadic;
@@ -272,9 +273,9 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 		public CondensedClearPlan { coherentGroups = List.copyOf(coherentGroups); }
 	}
 	public record OperatorClear(CondensedClear condensed, FluidDomain.GranularClear granular) { }
-	public record OperatorGasVent(GasInventory removed, SignedDyadic internalEnergy, int sealedNodes) { }
+	public record OperatorGasVent(GasAuditLedger removed, SignedDyadic internalEnergy, int sealedNodes) { }
 	public record OperatorGasVentPlan(
-			int nodeCount, GasInventory removed, AirNetwork.RemapPlan gasPlan,
+			int nodeCount, GasAuditLedger removed, AirNetwork.RemapPlan gasPlan,
 			GasEnergyStore.GasVentPlan thermalPlan, ThermalDomainState.Revision thermalRevision
 	) { }
 	public static final class OperatorClearPlan {
