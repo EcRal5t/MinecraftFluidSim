@@ -241,19 +241,34 @@ final class GranularReactionStage {
 		int x = cell % state.sizeX(), yz = cell / state.sizeX();
 		int y = yz % state.sizeY(), z = yz / state.sizeY();
 		long spawnSequence = ((long) cell << 16) + granular.parcels.count();
-		GranularCouplingFields.Position position = access.collision().spawnPosition(
-				x, y, z, plan.signedSolidSvq(), spawnSequence,
-				state.particles().positionX(carrierMarker), state.particles().positionY(carrierMarker),
-				state.particles().positionZ(carrierMarker));
+		GranularCouplingFields.Position position = GranularReactionMomentum.precipitationPosition(
+				state.particles(), chemistry.unitScale(), plan);
+		float h = state.cellSize();
+		boolean useMassMomentPosition = position != null && position.x() >= x * h && position.x() < (x + 1) * h
+				&& position.y() >= y * h && position.y() < (y + 1) * h
+				&& position.z() >= z * h && position.z() < (z + 1) * h
+				&& access.collision().positionValid(position.x(), position.y(), position.z(), plan.signedSolidSvq());
+		if (!useMassMomentPosition) {
+			position = access.collision().spawnPosition(x, y, z, plan.signedSolidSvq(), spawnSequence,
+					state.particles().positionX(carrierMarker), state.particles().positionY(carrierMarker),
+					state.particles().positionZ(carrierMarker));
+		}
 		refreshOccupancy();
 		int material = granular.registry.materialHandle(rule.solidMaterialId());
 		GranularReactionMomentum.Plan momentum = GranularReactionMomentum.plan(
 				state.particles(), chemistry.unitScale(), plan, 0, 0, 0);
 		PrecipitationMerge merge = precipitationMerge(
 				cell, material, plan, position, momentum, capacity);
+		if (useMassMomentPosition && merge == null && (!granular.compositions.hasCapacity(1)
+				|| !granular.parcels.hasCapacity(1) || !capacity.fitsReplacement(
+				access.coupling(), null, 0, position, plan.signedSolidSvq()))) {
+			position = access.collision().spawnPosition(x, y, z, plan.signedSolidSvq(), spawnSequence,
+					state.particles().positionX(carrierMarker), state.particles().positionY(carrierMarker),
+					state.particles().positionZ(carrierMarker));
+			merge = precipitationMerge(cell, material, plan, position, momentum, capacity);
+		}
 		if (merge == null && (position == null || !capacity.fitsReplacement(
 				access.coupling(), null, 0, position, plan.signedSolidSvq()))) {
-			float h = state.cellSize();
 			position = new GranularCouplingFields.Position((x + .5F) * h, (y + .5F) * h, (z + .5F) * h);
 			if (!access.collision().positionValid(position.x(), position.y(), position.z(), plan.signedSolidSvq())
 					|| !capacity.fitsReplacement(access.coupling(), null, 0, position, plan.signedSolidSvq())) return false;

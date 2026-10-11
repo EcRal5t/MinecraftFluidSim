@@ -15,6 +15,7 @@ public final class GranularReactionCandidateValidation {
 	public static void validate() {
 		allocationCases();
 		phaseTransferPreservesMomentum();
+		precipitationPreservesAvailableMassMoment();
 		precipitationMergePreservesMassMoment();
 		phaseTransferFitsLiquidAndSolidKernel();
 		carrierPropertiesFollowChemicalComposition();
@@ -51,16 +52,16 @@ public final class GranularReactionCandidateValidation {
 			domain.granularState.parcels.add(original);
 			domain.gridDirty = true;
 			int cell = domain.cellIndex(1, 1, 1);
-			var spawned = domain.granularCollision.spawnPosition(1, 1, 1, svq, ((long) cell << 16) + 1,
-					domain.particles.positionX(0), domain.particles.positionY(0), domain.particles.positionZ(0));
-			require(spawned != null && domain.runThermalReactionPhaseAxis(false, 0).granularPhase().precipitations() == 1
+			double oldLiquidMass = domain.unitScale.kilograms(domain.particles.mass(0));
+			float[] sourcePosition = {domain.particles.positionX(0), domain.particles.positionY(0), domain.particles.positionZ(0)};
+			require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().precipitations() == 1
 					&& domain.granularState.parcels.count() == 1, "mass moment fixture must merge actual precipitation");
 			var merged = domain.granularState.parcels.parcel(0);
 			double[] oldPosition = {original.x(), original.y(), original.z()};
-			double[] addedPosition = {spawned.x(), spawned.y(), spawned.z()};
+			double transferredMass = oldLiquidMass - domain.unitScale.kilograms(domain.particles.mass(0));
 			float[] finalPosition = {merged.x(), merged.y(), merged.z()};
 			for (int axis = 0; axis < 3; axis++) {
-				double expectedMoment = original.mass() * oldPosition[axis] + reactionMass * addedPosition[axis];
+				double expectedMoment = original.mass() * oldPosition[axis] + transferredMass * sourcePosition[axis];
 				double storageBound = merged.mass() * .5 * Math.ulp(finalPosition[axis])
 						+ 8 * Math.ulp(expectedMoment);
 				require(Math.abs(merged.mass() * finalPosition[axis] - expectedMoment) <= storageBound,
@@ -69,6 +70,74 @@ public final class GranularReactionCandidateValidation {
 			require(merged.solidVolumeSvq() == 2 * svq && merged.mass() == original.mass() + reactionMass,
 					"mass moment merge must retain independently stored SVQ and kg");
 			requireCombinedCapacity(domain);
+		}
+	}
+
+	private static void precipitationPreservesAvailableMassMoment() {
+		var granular = BuiltinGranularDefinitions.createRegistry();
+		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 216);
+		domain.setVolume(1, 1, 1, .25F);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		domain.setPrecipitationEnabled(true);
+		float[] velocity = {1, .5F, -.25F};
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			domain.setMarkerChemical(marker, Map.of(BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
+					BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), false);
+			domain.particles.setVelocityX(marker, velocity[0]);
+			domain.particles.setVelocityY(marker, velocity[1]);
+			domain.particles.setVelocityZ(marker, velocity[2]);
+		}
+		domain.bindThermal(ThermochemistryValidationScenarios.reactiveGranularThermalRegistry(liquids, granular), liquids, 300);
+		double[] before = spatialMoments(domain);
+		var energy = domain.exactInternalEnergy();
+		require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().precipitations() == 1
+				&& domain.granularState.parcels.count() == 1, "spatial moment fixture actually precipitates");
+		var solid = domain.granularState.parcels.parcel(0);
+		require(solid.x() == .75F && solid.y() == .625F && solid.z() == .625F,
+				"available transferred-mass centre is used without sub-cell jitter");
+		double[] after = spatialMoments(domain);
+		float[] position = {solid.x(), solid.y(), solid.z()};
+		double[] storageBound = new double[3];
+		for (int axis = 0; axis < 3; axis++) {
+			storageBound[axis] = solid.mass() * .5 * Math.ulp(position[axis])
+					+ 32 * Math.ulp(Math.max(Math.abs(before[axis]), Math.abs(after[axis])));
+			require(Math.abs(after[axis] - before[axis]) <= storageBound[axis],
+					"precipitation preserves actual liquid/solid mass moment axis " + axis);
+		}
+		for (int axis = 0; axis < 3; axis++) {
+			int j = (axis + 1) % 3, k = (axis + 2) % 3;
+			double bound = storageBound[j] * Math.abs(velocity[k]) + storageBound[k] * Math.abs(velocity[j])
+					+ 32 * Math.ulp(Math.max(Math.abs(before[axis + 3]), Math.abs(after[axis + 3])));
+			require(Math.abs(after[axis + 3] - before[axis + 3]) <= bound,
+					"common-velocity precipitation preserves angular momentum axis " + axis);
+		}
+		require(domain.exactInternalEnergy().equals(energy)
+				&& energy.equals(domain.thermalAudit().expectedInventory()), "spatial transfer preserves actual internal energy");
+		requireCombinedCapacity(domain);
+	}
+
+	private static double[] spatialMoments(FluidDomain domain) {
+		double[] result = new double[6];
+		for (int marker = 0; marker < domain.particleCount(); marker++) addSpatialMoments(result,
+				domain.unitScale.kilograms(domain.particles.mass(marker)),
+				new float[]{domain.particles.positionX(marker), domain.particles.positionY(marker), domain.particles.positionZ(marker)},
+				new float[]{domain.particles.velocityX(marker), domain.particles.velocityY(marker), domain.particles.velocityZ(marker)});
+		for (int ordinal = 0; ordinal < domain.granularState.parcels.count(); ordinal++) {
+			var parcel = domain.granularState.parcels.parcel(ordinal);
+			addSpatialMoments(result, parcel.mass(), new float[]{parcel.x(), parcel.y(), parcel.z()},
+					new float[]{parcel.velocityX(), parcel.velocityY(), parcel.velocityZ()});
+		}
+		return result;
+	}
+
+	private static void addSpatialMoments(double[] result, double mass, float[] position, float[] velocity) {
+		for (int axis = 0; axis < 3; axis++) {
+			int j = (axis + 1) % 3, k = (axis + 2) % 3;
+			result[axis] += mass * position[axis];
+			result[axis + 3] += mass * (position[j] * (double) velocity[k] - position[k] * (double) velocity[j]);
 		}
 	}
 

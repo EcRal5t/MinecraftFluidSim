@@ -84,6 +84,8 @@ particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 
 当前反应是瞬时同格模型，不应用 Arrhenius 速率、平衡常数或跨格搜索。
 
+同格载体在不同位置之间重新分配质量时，现有平均输入速度保存总线动量。质量一阶矩和内部角动量还取决于各份实际来源与接收位置；这些空间运动信息的共同转移模型尚需完善。固液析出的首选位置与当前表示限制见[固液相转移](granular-state.md#固液相转移)。
+
 ### Indicator 与 pH
 
 indicator 添加只标记当时可接受 indicator 的互溶连通 parcel，受 100 BV 硬上限；超过上限整次拒绝。标记随 advection、reseed 和容器传输，后续混入的未标记 parcel 不自动继承。
