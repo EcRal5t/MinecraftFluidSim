@@ -26,7 +26,25 @@ public final class ThermalContactExchange {
 		}
 		@Override public double heatCapacityEuPerK() { return massKilograms * material.specificHeatAt(temperatureK()); }
 		@Override public double energyChangeToTemperature(double target) {
-			return massKilograms * material.sensibleSpecificEnergyBetween(temperatureK(), target);
+			double from = temperatureK();
+			material.specificHeatAt(target); // Validate the endpoint before forming an interval bound.
+			double low = Math.min(from, target), high = Math.max(from, target);
+			double specific = 0.0, scaled = 0.0;
+			boolean rescale = false;
+			var segments = material.caloricSegments();
+			for (int index = 0; index < segments.size(); index++) {
+				var segment = segments.get(index);
+				double a = index == 0 ? low : Math.max(low, segment.minimumTemperatureK());
+				double b = index + 1 == segments.size() ? high : Math.min(high, segment.maximumTemperatureK());
+				if (b <= a) continue;
+				double term = (b - a) * segment.specificHeatEuPerMuK();
+				rescale |= !Double.isFinite(term) || term < Double.MIN_NORMAL;
+				specific += term;
+				scaled += product(b - a, segment.specificHeatEuPerMuK(), massKilograms);
+			}
+			// An infinite bound is usable when the other finite body supplies a smaller interval.
+			double amount = !rescale && Double.isFinite(specific) ? massKilograms * specific : scaled;
+			return target < from ? -amount : amount;
 		}
 		@Override public ThermalStateFunction.State stateAfterEnergyChange(double change) {
 			double temperature = material.temperatureForSensibleSpecificEnergy(
@@ -66,30 +84,73 @@ public final class ThermalContactExchange {
 		double sign = secondT > firstT ? 1.0 : -1.0;
 		double high = Math.abs(first.energyChangeToTemperature(secondT));
 		if (second.finite()) high = Math.min(high, Math.abs(second.energyChangeToTemperature(firstT)));
-		if (!(Double.isFinite(high) && high > 0.0))
+		if (!(high >= 0.0))
 			throw new IllegalArgumentException("Thermal contact energy interval is invalid");
+		if (high == 0.0) return 0.0;
+		high = Math.min(high, Double.MAX_VALUE);
 		double inverseConductanceDt = (1.0 / conductanceEuPerSecondK) / dtSeconds;
 		// Change division order when a reciprocal overflow hides a representable conductance-times-dt.
 		if (Double.isInfinite(inverseConductanceDt)) inverseConductanceDt = (1.0 / dtSeconds) / conductanceEuPerSecondK;
-		double slope = 1.0 / first.heatCapacityEuPerK() + 1.0 / second.heatCapacityEuPerK();
 		double low = 0.0;
-		double amount = Math.min(high, Math.abs(secondT - firstT) / (inverseConductanceDt + slope));
+		double amount = Math.min(high, response(Math.abs(secondT - firstT),
+				first.heatCapacityEuPerK(), second.heatCapacityEuPerK(), conductanceEuPerSecondK, dtSeconds));
 		if (amount == 0.0) return 0.0;
 		while (true) {
 			var firstState = first.stateAfterEnergyChange(sign * amount);
 			var secondState = second.stateAfterEnergyChange(-sign * amount);
-			double residual = amount * inverseConductanceDt
+			double drop = amount * inverseConductanceDt;
+			if (!Double.isFinite(drop)) drop = Math.scalb(Math.scalb(amount, -exponent(amount))
+					/ (Math.scalb(conductanceEuPerSecondK, -exponent(conductanceEuPerSecondK))
+					* Math.scalb(dtSeconds, -exponent(dtSeconds))),
+					exponent(amount) - exponent(conductanceEuPerSecondK) - exponent(dtSeconds));
+			double residual = drop
 					- sign * (secondState.temperatureK() - firstState.temperatureK());
-			double precision = 16.0 * Math.max(Math.ulp(secondState.temperatureK()), Math.ulp(firstState.temperatureK()));
-			if (Math.abs(residual) <= precision || Math.nextUp(low) >= high) break;
+			double precision = Math.max(Math.ulp(secondState.temperatureK()), Math.ulp(firstState.temperatureK()));
+			if (Math.abs(residual) / 16.0 <= precision || Math.nextUp(low) >= high) break;
+			if (amount == Double.MAX_VALUE && residual < 0.0)
+				throw new IllegalArgumentException("Thermal contact transfer is not representable");
 			if (residual > 0.0) high = amount; else low = amount;
-			slope = 1.0 / firstState.heatCapacityEuPerK() + 1.0 / secondState.heatCapacityEuPerK();
-			double next = amount - residual / (inverseConductanceDt + slope);
+			double next = amount - response(residual, firstState.heatCapacityEuPerK(),
+					secondState.heatCapacityEuPerK(), conductanceEuPerSecondK, dtSeconds);
 			if (!(next > low && next < high)) next = low + (high - low) * 0.5;
 			if (next == amount) break;
 			amount = next;
 		}
 		return sign * amount;
+	}
+
+	/** delta / (1/(G dt) + 1/C1 + 1/C2), keeping the shared binary scale outside the sum. */
+	private static double response(double delta, double firstCapacity, double secondCapacity, double g, double dt) {
+		double inverse = (1.0 / g) / dt;
+		if (Double.isInfinite(inverse)) inverse = (1.0 / dt) / g;
+		double denominator = inverse + (1.0 / firstCapacity + 1.0 / secondCapacity);
+		double result = delta / denominator;
+		if (Double.isFinite(denominator) && denominator > 0.0 && Double.isFinite(result) && result != 0.0)
+			return result;
+		if (delta == 0.0 || !Double.isFinite(delta)) return delta;
+		int ge = exponent(g), de = exponent(dt), ce = exponent(firstCapacity);
+		int scale = Math.min(ge + de, ce);
+		if (Double.isFinite(secondCapacity)) scale = Math.min(scale, exponent(secondCapacity));
+		denominator = Math.scalb(1.0 / (Math.scalb(g, -ge) * Math.scalb(dt, -de)), scale - ge - de)
+				+ Math.scalb(1.0 / Math.scalb(firstCapacity, -ce), scale - ce);
+		if (Double.isFinite(secondCapacity)) {
+			ce = exponent(secondCapacity);
+			denominator += Math.scalb(1.0 / Math.scalb(secondCapacity, -ce), scale - ce);
+		}
+		int re = exponent(Math.abs(delta));
+		return Math.scalb(Math.scalb(delta, -re) / denominator, re + scale);
+	}
+
+	private static double product(double a, double b, double c) {
+		double first = a * b, result = first * c;
+		if (Double.isFinite(first) && first >= Double.MIN_NORMAL && Double.isFinite(result) && result > 0.0) return result;
+		int ae = exponent(a), be = exponent(b), ce = exponent(c);
+		return Math.scalb(Math.scalb(a, -ae) * Math.scalb(b, -be) * Math.scalb(c, -ce), ae + be + ce);
+	}
+
+	private static int exponent(double value) {
+		int exponent = Math.getExponent(value);
+		return exponent == Double.MIN_EXPONENT - 1 ? Math.getExponent(Math.scalb(value, 54)) - 54 : exponent;
 	}
 
 	private static void requireCapacity(double capacity) {

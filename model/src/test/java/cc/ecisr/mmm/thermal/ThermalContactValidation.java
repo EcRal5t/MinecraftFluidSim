@@ -10,6 +10,7 @@ public final class ThermalContactValidation {
 	public static void main(String[] args) { validate(); System.out.println("Thermal contact validation passed"); }
 	public static void validate() {
 		finiteContactMatchesAnalyticPair();
+		finiteContactRetainsEnergyScale();
 		heterogeneousContactsPreserveTemperatureOrderAndEntropy();
 		invalidCarrierCannotHideInValidCellMean();
 		carrierGraphPreservesCaloricInventoryAndPreflights();
@@ -161,6 +162,60 @@ public final class ThermalContactValidation {
 		}
 		require(energies[4] == isolated && Math.abs(SignedDyadic.sum(energies).subtract(before).toDouble()) < 1e-8,
 				"adiabatic contact chain changed isolated U or failed energy closure");
+	}
+
+	private static void finiteContactRetainsEnergyScale() {
+		for (int exponent : new int[] {-1040, -1000, -500, 0, 500, 1000}) {
+			double capacity = Math.scalb(1.0, exponent);
+			var material = constantMaterial("scaled", capacity, 300, 1, 1000);
+			var registry = new ThermalRegistry(List.of(material));
+			var states = new ThermalStateFunction(registry);
+			double hotU = states.internalEnergyAtTemperature(0, 1, java.util.Map.of(), 556);
+			var cold = new ThermalContactExchange.Carrier(material, 1, 0, 0);
+			var hot = new ThermalContactExchange.Carrier(material, 1, 0, hotU);
+			require(states.stateForInternalEnergy(0, 1, java.util.Map.of(), hotU).temperatureK() == 556,
+					"scaled contact is not reachable through the production state function");
+			double q = ThermalContactExchange.transfer(cold, hot, capacity, 1);
+			double expected = Math.scalb(256.0 / 3.0, exponent);
+			require(Math.abs(q - expected) <= 8 * Math.ulp(expected) && q > 0
+					&& q == -ThermalContactExchange.transfer(hot, cold, capacity, 1),
+					"contact lost analytic solution under a change of energy scale: " + exponent);
+		}
+		var huge = carrier(constantMaterial("huge", 1e308, 300, 299, 303), 1, 0, 300);
+		var ordinary = carrier(constantMaterial("ordinary", 1, 300, 299, 303), 1, 0, 302);
+		require(ThermalContactExchange.transfer(huge, ordinary, 1, 1) == 1
+				&& ThermalContactExchange.transfer(ordinary, huge, 1, 1) == -1,
+				"an overflowing endpoint interval concealed a finite exchange");
+		var tiny = constantMaterial("tiny", 1e-310, 300, 1, 1e301);
+		var cold = carrier(tiny, 1, 0, 300); var hot = carrier(tiny, 1, 0, 1e300);
+		double q = ThermalContactExchange.transfer(cold, hot, 1e-310, 1e-310);
+		require(q > 0 && Math.abs(q - 1e-320) <= 2 * Double.MIN_VALUE,
+				"unrepresentable G dt hid a representable heat exchange");
+		var quantum = carrier(constantMaterial("quantum", Double.MIN_VALUE, 300, 1, 1000), 1, 0, 300);
+		var near = carrier(constantMaterial("near", 1, 300, 1, 1000), 1, 0, Math.nextUp(300.0));
+		require(ThermalContactExchange.transfer(quantum, near, 1, 1) == 0,
+				"an exchange below the energy quantum was rejected instead of rounding to zero");
+		double mass = Math.scalb(1.0, 1000);
+		var enlarged = new ThermalContactExchange.Carrier(quantum.material(), mass, 0, 0);
+		require(enlarged.energyChangeToTemperature(Math.nextUp(300.0)) == Math.scalb(1.0, -118),
+				"mass amplification lost an underflowing specific-energy interval");
+		var rounded = new ThermalContactExchange.Carrier(
+				constantMaterial("rounded", 2 * Double.MIN_VALUE, 300, 1, 1000), mass, 0, 0);
+		require(rounded.energyChangeToTemperature(300.75) == Math.scalb(3.0, -75),
+				"mass amplification retained subnormal specific-energy rounding");
+		var split = new ThermalMaterialDefinition("test:thermal/split", ThermalMaterialDefinition.CarrierKind.DEVICE,
+				"test:split", 299.75, 0, 1, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 300, Double.MIN_VALUE),
+				new ThermalMaterialDefinition.CaloricSegment(300, 500, 2 * Double.MIN_VALUE)));
+		var registry = new ThermalRegistry(List.of(split));
+		var initial = new ThermalStateFunction(registry).stateForInternalEnergy(0, mass, java.util.Map.of(), 0);
+		require(initial.temperatureK() == 299.75 && initial.heatCapacityEuPerK() == Math.scalb(1.0, -74)
+				&& new ThermalContactExchange.Carrier(split, mass, 0, 0).energyChangeToTemperature(300.5) == Math.scalb(5.0, -76),
+				"one representable segment concealed another underflowing segment");
+	}
+
+	private static ThermalMaterialDefinition constantMaterial(String name, double cv, double reference, double low, double high) {
+		return new ThermalMaterialDefinition("test:thermal/" + name, ThermalMaterialDefinition.CarrierKind.DEVICE,
+				"test:" + name, reference, 0, 1, List.of(new ThermalMaterialDefinition.CaloricSegment(low, high, cv)));
 	}
 
 	private static void invalidCarrierCannotHideInValidCellMean() {
