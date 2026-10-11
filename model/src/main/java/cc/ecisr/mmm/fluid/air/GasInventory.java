@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.fluid.air;
 
+import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.math.BigInteger;
@@ -43,6 +44,27 @@ public final class GasInventory {
 		for (GasComponentAmount component : components) result += component.mass();
 		if (!(Double.isFinite(result) && result >= 0.0)) {
 			throw new IllegalStateException("Gas inventory mass is not finite");
+		}
+		return result;
+	}
+
+	/** Physical kg/m³: exact component sum divided by volume, rounded once in the final unit. */
+	public double density(double availableVolume) {
+		if (!(Double.isFinite(availableVolume) && availableVolume >= 0.0)
+				|| availableVolume == 0.0 && !isEmpty()) {
+			throw new IllegalArgumentException("Gas density needs a valid available volume");
+		}
+		if (isEmpty()) return 0.0;
+		SignedDyadic mass = SignedDyadic.ZERO;
+		for (GasComponentAmount component : components) mass = mass.add(SignedDyadic.of(component.mass()));
+		SignedDyadic volume = SignedDyadic.of(availableVolume);
+		int power = mass.exponent() - volume.exponent();
+		BigInteger numerator = mass.significand(), denominator = volume.significand();
+		if (power >= 0) numerator = numerator.shiftLeft(power);
+		else denominator = denominator.shiftLeft(-power);
+		double result = new ExactRational(numerator, denominator).toDouble();
+		if (!(Double.isFinite(result) && result >= 0.0)) {
+			throw new IllegalStateException("Gas inventory density is not finite");
 		}
 		return result;
 	}

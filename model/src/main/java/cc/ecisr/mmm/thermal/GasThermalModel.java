@@ -98,7 +98,7 @@ public final class GasThermalModel {
 		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardVolume
 				/ GasRegistry.STANDARD_TEMPERATURE_K;
 		double pressure = gasConstant * thermal.temperatureK() / availableVolume;
-		double density = requirePositiveMass(inventory) / availableVolume;
+		double density = density(inventory, availableVolume);
 		double exponent = 1.0 + gasConstant / thermal.heatCapacityEuPerK();
 		double bulkModulus = exponent * pressure;
 		double soundSpeed = Math.sqrt(bulkModulus / density);
@@ -130,7 +130,7 @@ public final class GasThermalModel {
 		requireAvailableVolume(availableVolume, inventory);
 		if (inventory == null) throw new IllegalArgumentException("Gas inventory is missing");
 		if (inventory.isEmpty()) return 0.0;
-		double density = requirePositiveMass(inventory) / availableVolume;
+		double density = inventory.density(availableVolume);
 		if (!(Double.isFinite(density) && density > 0.0)) {
 			throw new IllegalArgumentException("Gas density is outside the thermal model");
 		}
@@ -356,11 +356,4 @@ public final class GasThermalModel {
 		}
 	}
 
-	private static double requirePositiveMass(GasInventory inventory) {
-		double mass = inventory.totalMass();
-		if (!(Double.isFinite(mass) && mass > 0.0)) {
-			throw new IllegalArgumentException("Gas mass is outside the thermal model");
-		}
-		return mass;
-	}
 }

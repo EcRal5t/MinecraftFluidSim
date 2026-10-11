@@ -125,6 +125,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void gasStateCompressionAndCarrierEnergy() {
+		gasDensityUsesTheFinalPhysicalQuotient();
 		gasTopologyRemapsRetainCommonTemperature();
 		gasRemapPlansRequireTheirPreparingOwner();
 		gasInitializationAndRestoreValidateActualInventory();
@@ -852,6 +853,69 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				throw new AssertionError("finite thermal device registry cleanup failed", cleanup);
 			}
 		}
+	}
+
+	private static void gasDensityUsesTheFinalPhysicalQuotient() {
+		for (boolean extreme : new boolean[] {false, true}) {
+			double mass = extreme ? 1e308 : 1, capacity = extreme ? 1e-308 : 1;
+			var gas = new GasRegistry(List.of(
+					new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:a", 1, 1, List.of(), List.of()),
+					new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:b", 1, 1, List.of(), List.of())),
+					List.of(new GasRegistry.AmbientFraction("test:a", ExactRational.ONE)));
+			var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+			var thermal = new ThermalRegistry(List.of(topologyMaterial("test:w", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					BuiltinFluidMaterials.WATER.id(), 0, 1), topologyMaterial("test:ta", ThermalMaterialDefinition.CarrierKind.GAS,
+					"test:a", 0, capacity), topologyMaterial("test:tb", ThermalMaterialDefinition.CarrierKind.GAS, "test:b", 0, capacity)));
+			var inventory = new GasInventory(List.of(new GasComponentAmount("test:a", 1_000_000L, mass, List.of(), mass),
+					new GasComponentAmount("test:b", 1_000_000L, mass, List.of(), mass)));
+			var domain = new FluidDomain(8, 4, 4,
+					new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0), 128);
+			domain.sealDomainBoundary(); domain.setVolume(0, 0, 0, .125F);
+			int[] membership = new int[128], lineage = new int[128];
+			Arrays.fill(membership, 1); Arrays.fill(lineage, 1); membership[0] = 0;
+			domain.restoreGasState(new cc.ecisr.mmm.fluid.air.GasStateSnapshot(8, 4, 4, gas.fingerprint(), "",
+					List.of(new cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node(1, inventory)), membership, lineage,
+					cc.ecisr.mmm.fluid.air.GasAuditLedger.of(inventory), cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY,
+					SignedDyadic.ZERO, SignedDyadic.ZERO), gas);
+			domain.bindThermal(thermal, liquids, 300);
+			domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			var before = domain.captureAuthoritativeState();
+			var network = domain.gasState.network; var stored = network.inventory(1);
+			var source = network.externalSource(); var sink = network.escapedSink();
+			var massRoundoff = network.massRoundoff(); var residualRoundoff = network.residualRoundoff();
+			long gasRevision = network.revision();
+			var thermalRevision = domain.thermalState.thermalRevision(); var audit = domain.thermalAudit();
+			double[] marker = {domain.particles.positionX(0), domain.particles.positionY(0), domain.particles.positionZ(0),
+					domain.particles.velocityX(0), domain.particles.velocityY(0), domain.particles.velocityZ(0),
+					domain.particles.volume(0), domain.particles.mass(0)};
+			double volume = network.availableVolume(1);
+			double expected = new java.math.BigDecimal(mass).multiply(java.math.BigDecimal.valueOf(2))
+					.divide(new java.math.BigDecimal(volume), new java.math.MathContext(110)).doubleValue();
+			var hydro = domain.thermalState.gasHydrodynamicState(1, network);
+			require(expected > 0 && Double.isFinite(expected) && network.density(1) == expected
+					&& domain.thermalState.gasDensity(1, network) == expected && hydro.densityKgPerCubicMeter() == expected,
+					"gas density rounded the component mass aggregate before division by its actual volume");
+			require(hydro.temperatureK() == 300 && hydro.absolutePressurePa() > 0 && Double.isFinite(hydro.absolutePressurePa())
+					&& hydro.soundSpeedMetersPerSecond() > 0 && Double.isFinite(hydro.soundSpeedMetersPerSecond()),
+					"finite gas temperature, pressure or sound speed was lost to an intermediate mass overflow");
+			require(network.inventory(1) == stored && network.externalSource() == source && network.escapedSink() == sink
+					&& network.massRoundoff() == massRoundoff && network.residualRoundoff() == residualRoundoff
+					&& network.revision() == gasRevision && domain.thermalState.matchesThermalRevision(thermalRevision)
+					&& domain.thermalAudit() == audit && network.auditClosed(), "gas density queries changed authoritative state");
+			require(Arrays.equals(marker, new double[] {domain.particles.positionX(0), domain.particles.positionY(0),
+					domain.particles.positionZ(0), domain.particles.velocityX(0), domain.particles.velocityY(0),
+					domain.particles.velocityZ(0), domain.particles.volume(0), domain.particles.mass(0)})
+					&& Arrays.equals(before.thermal().copyInternalEnergy(), domain.captureAuthoritativeState().thermal().copyInternalEnergy())
+					&& Arrays.equals(before.thermal().copyGasNodeEnergy(), domain.captureAuthoritativeState().thermal().copyGasNodeEnergy()),
+					"gas state derivation modified liquid stock or raw internal energy");
+		}
+		var tiny = new GasInventory(List.of(new GasComponentAmount("test:a", 1, Double.MIN_VALUE, List.of(), Double.MIN_VALUE),
+				new GasComponentAmount("test:b", 1, Double.MIN_VALUE, List.of(), Double.MIN_VALUE)));
+		double expectedTiny = new java.math.BigDecimal(Double.MIN_VALUE).multiply(java.math.BigDecimal.valueOf(2))
+				.divide(java.math.BigDecimal.valueOf(3), new java.math.MathContext(110)).doubleValue();
+		require(Double.MIN_VALUE / 3 == 0 && expectedTiny == Double.MIN_VALUE && tiny.density(3) == expectedTiny,
+				"component-wise density division lost a collectively representable positive mass");
+		require(GasInventory.EMPTY.density(0) == 0 && GasInventory.EMPTY.density(1) == 0, "vacuum density is not zero");
 	}
 
 	private static ThermalMaterialDefinition topologyMaterial(String id, ThermalMaterialDefinition.CarrierKind kind,

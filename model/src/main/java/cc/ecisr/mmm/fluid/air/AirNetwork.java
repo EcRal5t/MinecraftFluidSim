@@ -329,7 +329,7 @@ public final class AirNetwork {
 		if (!(node.availableVolume() > 0.0)) {
 			throw new IllegalStateException("Finite gas inventory has no available volume");
 		}
-		double density = node.inventory().totalMass() / node.availableVolume();
+		double density = node.inventory().density(node.availableVolume());
 		if (!(Double.isFinite(density) && density > 0.0)) {
 			throw new IllegalStateException("Derived gas density is invalid");
 		}
