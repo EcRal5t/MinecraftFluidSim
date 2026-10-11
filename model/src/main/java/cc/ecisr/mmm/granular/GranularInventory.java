@@ -382,19 +382,15 @@ public final class GranularInventory {
 		}
 		double combinedMass = first.mass() + second.mass();
 		GranularParcelStore.Parcel merged = new GranularParcelStore.Parcel(
-				weighted(first.x(), first.solidVolumeSvq(), second.x(), second.solidVolumeSvq(), combinedSvq),
-				weighted(first.y(), first.solidVolumeSvq(), second.y(), second.solidVolumeSvq(), combinedSvq),
-				weighted(first.z(), first.solidVolumeSvq(), second.z(), second.solidVolumeSvq(), combinedSvq),
+				weighted(first.x(), first.mass(), second.x(), second.mass(), combinedMass),
+				weighted(first.y(), first.mass(), second.y(), second.mass(), combinedMass),
+				weighted(first.z(), first.mass(), second.z(), second.mass(), combinedMass),
 				weighted(first.velocityX(), first.mass(), second.velocityX(), second.mass(), combinedMass),
 				weighted(first.velocityY(), first.mass(), second.velocityY(), second.mass(), combinedMass),
 				weighted(first.velocityZ(), first.mass(), second.velocityZ(), second.mass(), combinedMass),
 				combinedSvq, combinedMass, first.materialHandle(), first.solidCompositionHandle(),
 				0, (byte) ((first.flags() & second.flags()) & ~GranularParcelStore.FLAG_SUPPORTED));
 		return new ActiveMerge(merged, combinedComposition);
-	}
-
-	private static float weighted(float left, long leftWeight, float right, long rightWeight, long total) {
-		return (float) (((double) left * leftWeight + (double) right * rightWeight) / total);
 	}
 
 	private static float weighted(float left, double leftWeight, float right, double rightWeight, double total) {

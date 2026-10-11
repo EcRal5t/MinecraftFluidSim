@@ -12,6 +12,7 @@ public final class GranularCarrierValidation {
 	public static void validate() {
 		sphereMicroBoxContacts();
 		depositContactsRespectCellGeometry();
+		depositPathsRespectSuspendedBeds();
 		straightSphereContactsAreSymmetric();
 		contactImpulsePreservesSolvedDrift();
 		contactImpulseObeysCoulombCone();
@@ -160,6 +161,94 @@ public final class GranularCarrierValidation {
 		collision.preview(parcels, registry, .05F); collision.commit(parcels);
 		require(parcels.parcel(0).contactAge() == 1 && parcels.parcel(0).velocityY() == 0,
 				"a shrunken sphere must reacquire the actual lower bed at its new radius");
+	}
+
+	private static void depositPathsRespectSuspendedBeds() {
+		var domain = new FluidDomain(3, 4, 3,
+				new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .4F, .002F, .8F), 512);
+		domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
+				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
+		domain.sealDomainBoundary();
+		var state = domain.granularState;
+		int sand = state.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62);
+		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) require(state.deposits.tryAdd(domain.cellIndex(x, 1, z),
+				new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(sand, 0, skeleton,
+						2_600.0 * skeleton / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "suspended bed must fit each cell");
+		int barrier = domain.cellIndex(1, 1, 1);
+		double top = (1 + state.deposits.cellBulkVolumeSvq(barrier) / (double) SolidVolume.SVQ_PER_CELL) * .5;
+		float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
+		float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
+		state.parcels.add(new GranularParcelStore.Parcel(.75F, y, .75F, 0, 0, 0, volume,
+				2_600.0 * volume / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+		domain.ensureGrid();
+		require(domain.granularCollision.positionValid(.75F, y, .75F, volume), "bed support must start outside the actual bed");
+		for (int step = 0; step < 3; step++) {
+			domain.granularCollision.preview(state.parcels, state.registry, .05F);
+			domain.granularCollision.commit(state.parcels);
+		}
+		var source = state.parcels.parcel(0);
+		require(source.contactAge() == 3 && (source.flags() & GranularParcelStore.FLAG_SUPPORTED) != 0,
+				"cold collision must acquire actual support without manufacturing settlement eligibility");
+		long[] planned = domain.granularCoupling.copySolidSvq(), original = planned.clone();
+		var environment = domain.granularDepositEnvironment(planned);
+		require(environment.verticalPathWork(source.x(), source.y(), source.z(), Math.nextUp(radius), volume) == 3,
+				"vertical path must charge its three candidate bed layers before querying them");
+		require(!environment.verticalPathOpen(source.x(), source.y(), source.z(), Math.nextUp(radius), volume)
+				&& environment.verticalPathOpen(source.x(), source.y(), source.z(), Math.nextUp(1 + radius), volume)
+				&& environment.verticalPathOpen(source.x(), source.y(), source.z(), source.y(), volume)
+				&& !environment.verticalPathOpen(.75F, .75F, .75F, .75F, volume),
+				"vertical admission must block bed interior while allowing its legal top contact");
+		require(java.util.Arrays.equals(planned, original) && state.parcels.parcel(0).equals(source)
+				&& state.deposits.cellSolidVolumeSvq(barrier) == skeleton, "path preview must preserve inventory and planned occupancy");
+		long revision = state.deposits.mutationRevision();
+		domain.granularDepositDynamics().disturbCell(barrier);
+		var exhausted = new cc.ecisr.mmm.granular.GranularDepositDynamics.Environment() {
+			@Override public long geometricOpenSvq(int cell) { return environment.geometricOpenSvq(cell); }
+			@Override public boolean horizontalPathOpen(int cell, int dx, int dz) { return environment.horizontalPathOpen(cell, dx, dz); }
+			@Override public double shields(int cell, cc.ecisr.mmm.granular.ParticulateMaterial material) { return environment.shields(cell, material); }
+			@Override public double gravity() { return environment.gravity(); }
+			@Override public int verticalPathWork(float x, float from, float z, float to, long amount) {
+				return GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP;
+			}
+			@Override public boolean verticalPathOpen(float x, float from, float z, float to, long amount) {
+				throw new AssertionError("exhausted path budget must stop before geometry query");
+			}
+		};
+		var deferred = domain.granularDepositDynamics().step(exhausted, .05F);
+		require(deferred.settledParcels() == 0 && state.parcels.parcel(0).equals(source)
+				&& state.deposits.mutationRevision() == revision && java.util.Arrays.equals(planned, original)
+				&& deferred.dirtyColumns() > 0, "path work exhaustion must preserve all inventory and pending columns");
+		var result = domain.granularDepositDynamics().step(environment, .05F);
+		require(state.deposits.cellSolidVolumeSvq(domain.cellIndex(1, 0, 1)) == 0
+				&& state.deposits.cellSolidVolumeSvq(barrier) == skeleton
+				&& result.wokenParcels() == 0 && result.relaxedMoves() == 0,
+				"settlement must preserve the suspended barrier and the lower cavity");
+		require(result.settledParcels() == 1 && state.parcels.count() == 0
+				&& state.deposits.cellSolidVolumeSvq(domain.cellIndex(1, 2, 1)) == volume,
+				"the lowest reachable upper layer must accept this capacity- and potential-valid parcel");
+		long tower = (long) (SolidVolume.SVQ_PER_CELL * .62 * .8);
+		require(state.deposits.tryAdd(domain.cellIndex(1, 2, 1),
+				new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(sand, 0, tower,
+						2_600.0 * tower / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "upper source bed must fit its layer");
+		domain.granularCoupling.rebuild(state.parcels, state.deposits);
+		domain.granularDepositDynamics().disturbCell(domain.cellIndex(1, 2, 1));
+		var relaxed = domain.granularDepositDynamics().step(domain.granularDepositEnvironment(domain.granularCoupling.copySolidSvq()), .05F);
+		long upperTotal = 0;
+		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) {
+			require(state.deposits.cellSolidVolumeSvq(domain.cellIndex(x, 0, z)) == 0
+					&& state.deposits.cellSolidVolumeSvq(domain.cellIndex(x, 1, z)) == skeleton,
+					"neighbor relaxation must preserve every lower cavity and intervening bed");
+			upperTotal += state.deposits.cellSolidVolumeSvq(domain.cellIndex(x, 2, z));
+		}
+		require(relaxed.relaxedMoves() > 0 && relaxed.wokenParcels() == 0 && upperTotal == tower + volume,
+				"capacity- and potential-valid relaxation must reach an upper receiver without passing through its lower bed");
+		var cuts = new FlipCutCellGeometry(3, 3, 3); cuts.replaceMask(13, 1);
+		var geometry = new GranularCollisionGeometry(3, 3, 3, .5F, cuts, null);
+		require(!geometry.verticalSpherePathTouchesSolid(.625F, .8125F, .625F, 1.0F, .0625F)
+				&& geometry.verticalSpherePathTouchesSolid(.625F, .8125F, .625F, .7F, .0625F),
+				"exact source support tangency must allow departure and reject passage into a micro box");
 	}
 
 	private static void straightSphereContactsAreSymmetric() {

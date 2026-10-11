@@ -583,6 +583,8 @@ public final class M8GranularValidation {
 		require(rawClose(store.totalMass(), mass), "parcel split changed mass");
 		for (int index = 0; index < store.count(); index++) {
 			var child = store.parcel(index);
+			require(child.x() == initial.x() && child.y() == initial.y() && child.z() == initial.z(),
+					"parcel split must preserve each child's position");
 			require(child.contactAge() == 0 && child.flags() == 2,
 					"split children must reacquire support for their smaller representative spheres");
 			store.overwrite(index, new GranularParcelStore.Parcel(child.x(), child.y(), child.z(),
@@ -626,6 +628,53 @@ public final class M8GranularValidation {
 				&& dynamics.step(new TestDepositEnvironment(1, 1, 1, 0), 0.05F).settledParcels() == 0
 				&& store.count() == 1,
 				"radius reduction must wait for a fresh mechanical contact before settling");
+		for (double[] masses : new double[][] {{2.5625, 2.5}, {2.5, 2.5625}, {2.5, 2.5}}) {
+			GranularParcelStore pair = new GranularParcelStore(registry, 2);
+			pair.add(new GranularParcelStore.Parcel(0.625F, 0.625F, 0.625F, 0.125F, 0.25F, -0.5F,
+					volume / 2, masses[0], material, 0, 0, (byte) 0));
+			pair.add(new GranularParcelStore.Parcel(0.875F, 0.875F, 0.875F, 0.125F, 0.25F, -0.5F,
+					volume / 2, masses[1], material, 0, 0, (byte) 0));
+			GranularDepositStore emptyBed = new GranularDepositStore(registry, 1, 2);
+			GranularInventory pairInventory = new GranularInventory(pair, emptyBed);
+			var left = pair.parcel(0); var right = pair.parcel(1);
+			long revision = pair.mutationRevision();
+			var audit = GranularAuditLedger.captureInventory(registry, pair, emptyBed, null);
+			double totalMass = masses[0] + masses[1];
+			SignedDyadic momentBefore = SignedDyadic.of(masses[0]).multiply(SignedDyadic.of(0.625))
+					.add(SignedDyadic.of(masses[1]).multiply(SignedDyadic.of(0.875)));
+			GranularParcelStore directMerge = new GranularParcelStore(registry, 2);
+			directMerge.add(left); directMerge.add(right); directMerge.merge(0, 1);
+			var directResult = directMerge.parcel(0);
+			require(Math.abs(SignedDyadic.of(directResult.mass()).multiply(SignedDyadic.of((double) directResult.y()))
+					.subtract(momentBefore).toDouble()) <= totalMass * Math.ulp(directResult.y()) * 0.5
+					&& directResult.x() == directResult.y() && directResult.z() == directResult.y()
+					&& audit.equals(GranularAuditLedger.captureInventory(registry, directMerge, emptyBed, null)),
+					"direct parcel merge must preserve mass first moments and exact stock");
+			var rejected = pairInventory.compactActive(index -> 0, (first, second, candidate) -> {
+				SignedDyadic error = SignedDyadic.of(totalMass).multiply(SignedDyadic.of((double) candidate.y()))
+						.subtract(momentBefore);
+				require(Math.abs(error.toDouble()) <= totalMass * Math.ulp(candidate.y()) * 0.5,
+						"compaction geometry must inspect the mass-weighted candidate position");
+				return false;
+			}, 0, 4);
+			require(rejected.merges() == 0 && pair.count() == 2 && pair.mutationRevision() == revision
+					&& pair.parcel(0).equals(left) && pair.parcel(1).equals(right),
+					"rejected mass-weighted compaction must preserve both source parcels");
+			require(pairInventory.compactActive(index -> 0, candidate -> true, 0, 4).merges() == 1,
+					"compatible unequal-density parcels must compact after geometry admission");
+			var result = pair.parcel(0);
+			SignedDyadic error = SignedDyadic.of(result.mass()).multiply(SignedDyadic.of((double) result.y()))
+					.subtract(momentBefore);
+			require(Math.abs(error.toDouble()) <= totalMass * Math.ulp(result.y()) * 0.5
+					&& result.x() == result.y() && result.z() == result.y(),
+					"active compaction must preserve mass first moments within binary32 position rounding");
+			require(result.velocityX() == left.velocityX() && result.velocityY() == left.velocityY()
+					&& result.velocityZ() == left.velocityZ() && result.mass() == totalMass
+					&& audit.equals(GranularAuditLedger.captureInventory(registry, pair, emptyBed, null)),
+					"compaction must preserve momentum, kinetic energy and exact stock for common velocities");
+			if (masses[0] == masses[1]) require(result.y() == 0.75F,
+					"equal-density compaction must retain its original volume-weighted position");
+		}
 	}
 
 	private static void batchSettlementPreservesInventoryAndComposition() {

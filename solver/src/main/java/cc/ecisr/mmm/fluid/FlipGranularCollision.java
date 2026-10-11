@@ -106,6 +106,14 @@ final class FlipGranularCollision {
 		return true;
 	}
 
+	boolean verticalSpherePathTouchesSolid(float x, float fromY, float z, float toY, long solidVolumeSvq) {
+		return geometry.verticalSpherePathTouchesSolid(x, fromY, z, toY, collisionRadius(solidVolumeSvq));
+	}
+
+	int verticalSpherePathWork(float x, float fromY, float z, float toY, long solidVolumeSvq) {
+		return geometry.verticalSpherePathWork(x, fromY, z, toY, collisionRadius(solidVolumeSvq));
+	}
+
 	GranularCouplingFields.Position previewPosition(int index, GranularParcelStore.Parcel ignored) {
 		if (index < 0 || index >= previewCount) throw new IllegalArgumentException("Unknown granular preview index");
 		return new GranularCouplingFields.Position(nextX[index], nextY[index], nextZ[index]);

@@ -131,9 +131,9 @@ public final class GranularParcelStore {
 		double combinedMass = left.mass() + right.mass();
 		if (!Double.isFinite(combinedMass)) throw new ArithmeticException("Merged granular parcel mass overflow");
 		Parcel merged = new Parcel(
-				weighted(left.x(), left.solidVolumeSvq(), right.x(), right.solidVolumeSvq(), combinedVolume),
-				weighted(left.y(), left.solidVolumeSvq(), right.y(), right.solidVolumeSvq(), combinedVolume),
-				weighted(left.z(), left.solidVolumeSvq(), right.z(), right.solidVolumeSvq(), combinedVolume),
+				weighted(left.x(), left.mass(), right.x(), right.mass(), combinedMass),
+				weighted(left.y(), left.mass(), right.y(), right.mass(), combinedMass),
+				weighted(left.z(), left.mass(), right.z(), right.mass(), combinedMass),
 				weighted(left.velocityX(), left.mass(), right.velocityX(), right.mass(), combinedMass),
 				weighted(left.velocityY(), left.mass(), right.velocityY(), right.mass(), combinedMass),
 				weighted(left.velocityZ(), left.mass(), right.velocityZ(), right.mass(), combinedMass),
@@ -189,10 +189,6 @@ public final class GranularParcelStore {
 
 	private void requireIndex(int index) {
 		if (index < 0 || index >= count) throw new IllegalArgumentException("Unknown granular parcel index " + index);
-	}
-
-	private static float weighted(float left, long leftWeight, float right, long rightWeight, long total) {
-		return (float) (((double) left * leftWeight + (double) right * rightWeight) / total);
 	}
 
 	private static float weighted(float left, double leftWeight, float right, double rightWeight, double total) {

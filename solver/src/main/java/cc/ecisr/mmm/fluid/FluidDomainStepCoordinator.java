@@ -382,8 +382,11 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				for (int y = Math.min(from, to); y < Math.max(from, to); y++) {
 					if (openFaceFromCell(cellIndex(cx, y, cz), 0, 1, 0) <= 0.0F) return false;
 				}
-				float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(solidSvq, config.cellSize());
-				return !geometry.cutCells.verticalSpherePathTouchesSolid(x, fromY, z, toY, radius, config.cellSize());
+				return !granularCollision.verticalSpherePathTouchesSolid(x, fromY, z, toY, solidSvq);
+			}
+
+			@Override public int verticalPathWork(float x, float fromY, float z, float toY, long solidSvq) {
+				return granularCollision.verticalSpherePathWork(x, fromY, z, toY, solidSvq);
 			}
 
 			@Override public void receiveContactImpulse(double x, double y, double z) {

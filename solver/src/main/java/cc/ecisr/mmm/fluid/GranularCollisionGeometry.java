@@ -42,6 +42,31 @@ final class GranularCollisionGeometry {
 		return touches[0];
 	}
 
+	/** Number of candidate bed cells visited by the same vertical broad phase. */
+	int verticalSpherePathWork(float x, float fromY, float z, float toY, float radius) {
+		if (deposits == null) return 0;
+		int[] lo = lower(new double[]{x - (double) radius, Math.min(fromY, toY) - (double) radius, z - (double) radius}, h);
+		int[] hi = upper(new double[]{x + (double) radius, Math.max(fromY, toY) + (double) radius, z + (double) radius}, h, 1);
+		int work = 1;
+		for (int a = 0; a < 3; a++) work = Math.multiplyExact(work, Math.max(0, hi[a] - lo[a] + 1));
+		return work;
+	}
+
+	/** Vertical swept-sphere interior overlap; endpoint support tangency remains admissible. */
+	boolean verticalSpherePathTouchesSolid(float x, float fromY, float z, float toY, float radius) {
+		double lowY = Math.min(fromY, toY), highY = Math.max(fromY, toY);
+		double[] lo = {x - (double) radius, lowY - radius, z - (double) radius};
+		double[] hi = {x + (double) radius, highY + radius, z + (double) radius};
+		boolean[] crosses = {false};
+		forEachBox(lo, hi, (minimum, maximum) -> {
+			double dx = x - Math.max(minimum[0], Math.min(maximum[0], x));
+			double dy = Math.max(0, Math.max(minimum[1] - highY, lowY - maximum[1]));
+			double dz = z - Math.max(minimum[2], Math.min(maximum[2], z));
+			if (dx * dx + dy * dy + dz * dz < radius * (double) radius) crosses[0] = true;
+		});
+		return crosses[0];
+	}
+
 	private static int[] lower(double[] point, double length) {
 		int[] result = new int[3];
 		for (int a = 0; a < 3; a++) result[a] = Math.max(0, (int) Math.floor(Math.nextDown(point[a]) / length));
