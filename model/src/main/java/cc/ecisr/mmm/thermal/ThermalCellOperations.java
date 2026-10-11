@@ -188,8 +188,7 @@ final class ThermalCellOperations {
 	void commitGranularReaction(ThermalDomainState.ReactionPlan plan, ThermalCarrierContext markers) {
 		if (plan == null) throw new IllegalArgumentException("Thermal granular reaction plan is missing");
 		cellGrid.rebuildWithCellEnergy(carrierAccess(markers), plan.cell(), plan.cellEnergy().toDouble());
-		double[] target = cellGrid.copyInternalEnergy();
-		cellGrid.setCellInternalEnergies(target);
+		cellGrid.setCellInternalEnergy(plan.cell(), plan.cellEnergy().toDouble());
 		audit.update(ledger -> ledger.withRoundoff(exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore())));
 	}
 
@@ -328,9 +327,7 @@ final class ThermalCellOperations {
 		SignedDyadic before = exactEnergy(markers.markerCount());
 		cellGrid.rebuild(carrierAccess(markers));
 		if (!cellGrid.occupied(cell)) throw new IllegalArgumentException("Cannot set temperature in an empty cell");
-		double[] target = cellGrid.copyInternalEnergy();
-		target[cell] = modeledCellEnergy(cell, temperatureK, markers);
-		cellGrid.setCellInternalEnergies(target);
+		cellGrid.setCellInternalEnergy(cell, modeledCellEnergy(cell, temperatureK, markers));
 		audit.update(ledger -> ledger.withHeatExchange(exactEnergy(markers.markerCount()).subtract(before)));
 	}
 
@@ -338,9 +335,7 @@ final class ThermalCellOperations {
 			int cell, double targetEnergy, ThermalCarrierContext markers, SignedDyadic inventoryBefore
 	) {
 		cellGrid.rebuild(carrierAccess(markers));
-		double[] target = cellGrid.copyInternalEnergy();
-		target[cell] = targetEnergy;
-		cellGrid.setCellInternalEnergies(target);
+		cellGrid.setCellInternalEnergy(cell, targetEnergy);
 		audit.update(ledger -> ledger.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore)));
 	}
 

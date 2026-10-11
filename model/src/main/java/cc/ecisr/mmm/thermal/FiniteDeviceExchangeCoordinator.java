@@ -30,22 +30,39 @@ public final class FiniteDeviceExchangeCoordinator {
 	}
 	public record FiniteDeviceCellPlan(
 			double[] targetCellEnergy,
+			int[] editedCells,
 			int[] carrierCells, double[] carrierEnergy,
+			List<CarrierCaloricState> caloricBefore, ThermalDomainState.Revision revisionBefore,
 			SignedDyadic inventoryBefore, SignedDyadic requestedDelta
 	) {
 		public FiniteDeviceCellPlan {
-			if (targetCellEnergy == null || carrierCells == null || carrierEnergy == null
+			if (targetCellEnergy == null || editedCells == null || carrierCells == null || carrierEnergy == null
+					|| caloricBefore == null || revisionBefore == null
+					|| caloricBefore.size() != carrierCells.length
 					|| inventoryBefore == null || requestedDelta == null
 					|| carrierCells.length != carrierEnergy.length) {
 				throw new IllegalArgumentException("Finite thermal cell plan is incomplete");
 			}
 			targetCellEnergy = targetCellEnergy.clone();
+			editedCells = editedCells.clone();
 			carrierCells = carrierCells.clone();
 			carrierEnergy = carrierEnergy.clone();
+			caloricBefore = List.copyOf(caloricBefore);
 		}
 		@Override public double[] targetCellEnergy() { return targetCellEnergy.clone(); }
+		@Override public int[] editedCells() { return editedCells.clone(); }
 		@Override public int[] carrierCells() { return carrierCells.clone(); }
 		@Override public double[] carrierEnergy() { return carrierEnergy.clone(); }
+	}
+	public record CarrierCaloricState(ThermalMaterialDefinition material, double mass, double baseEnergy) { }
+
+	private static List<CarrierCaloricState> caloricSnapshot(ThermalCellGrid.CarrierAccess carriers) {
+		ArrayList<CarrierCaloricState> states = new ArrayList<>(carriers.carrierCount());
+		for (int carrier = 0; carrier < carriers.carrierCount(); carrier++) {
+			states.add(new CarrierCaloricState(carriers.material(carrier), carriers.mass(carrier),
+					carriers.baseEnergy(carrier)));
+		}
+		return List.copyOf(states);
 	}
 
 	private final ThermalDomainState domain;
@@ -96,7 +113,8 @@ public final class FiniteDeviceExchangeCoordinator {
 		}
 		canonical.sort(java.util.Comparator.comparingInt(CellEnergyDelta::cell));
 		ThermalCellGrid cellGrid = domain.grid();
-		cellGrid.rebuild(domain.carrierAccess(markers));
+		ThermalCellGrid.CarrierAccess carriers = domain.carrierAccess(markers);
+		cellGrid.rebuild(carriers);
 		double[] target = cellGrid.copyInternalEnergy();
 		SignedDyadic requested = SignedDyadic.ZERO;
 		int previousCell = -1;
@@ -113,15 +131,21 @@ public final class FiniteDeviceExchangeCoordinator {
 			requested = requested.add(SignedDyadic.of(delta.internalEnergyDeltaEu()));
 		}
 		cellGrid.validateCellInternalEnergies(target);
-		return new FiniteDeviceCellPlan(target, cellGrid.copyCarrierCells(),
-				cellGrid.copyCarrierInternalEnergy(), domain.exactEnergy(markers.markerCount()), requested);
+		int[] editedCells = canonical.stream().filter(delta -> delta.internalEnergyDeltaEu() != 0.0)
+				.mapToInt(CellEnergyDelta::cell).toArray();
+		return new FiniteDeviceCellPlan(target, editedCells, cellGrid.copyCarrierCells(),
+				cellGrid.copyCarrierInternalEnergy(), caloricSnapshot(carriers), domain.thermalRevision(),
+				domain.exactEnergy(markers.markerCount()), requested);
 	}
 
 	public void commitFiniteDeviceCellExchange(FiniteDeviceCellPlan plan, ThermalCarrierContext markers) {
 		if (plan == null) throw new IllegalArgumentException("Finite thermal cell plan is missing");
 		ThermalCellGrid cellGrid = domain.grid();
-		cellGrid.rebuild(domain.carrierAccess(markers));
-		if (!plan.inventoryBefore().equals(domain.exactEnergy(markers.markerCount()))
+		ThermalCellGrid.CarrierAccess carriers = domain.carrierAccess(markers);
+		cellGrid.rebuild(carriers);
+		if (!domain.matchesThermalRevision(plan.revisionBefore())
+				|| !plan.caloricBefore().equals(caloricSnapshot(carriers))
+				|| !plan.inventoryBefore().equals(domain.exactEnergy(markers.markerCount()))
 				|| !Arrays.equals(plan.carrierCells(), cellGrid.copyCarrierCells())
 				|| !Arrays.equals(plan.carrierEnergy(), cellGrid.copyCarrierInternalEnergy())) {
 			throw new IllegalArgumentException("Finite thermal cell plan is stale");
@@ -129,7 +153,10 @@ public final class FiniteDeviceExchangeCoordinator {
 		double[] rollback = cellGrid.copyCarrierInternalEnergy();
 		ThermalAuditLedger beforeAudit = domain.audit().ledger();
 		try {
-			cellGrid.setCellInternalEnergies(plan.targetCellEnergy());
+			double[] target = plan.targetCellEnergy();
+			for (int cell : plan.editedCells()) if (target[cell] != cellGrid.internalEnergy(cell)) {
+				cellGrid.setCellInternalEnergy(cell, target[cell]);
+			}
 			SignedDyadic actualDelta = domain.exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore());
 			domain.audit().update(ledger -> ledger.withFiniteDeviceExchange(plan.requestedDelta())
 					.withRoundoff(actualDelta.subtract(plan.requestedDelta())));

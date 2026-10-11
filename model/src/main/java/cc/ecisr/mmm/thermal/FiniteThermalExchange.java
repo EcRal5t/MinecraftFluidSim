@@ -47,18 +47,21 @@ public final class FiniteThermalExchange {
 	public record Plan(
 			FiniteThermalBodyState before,
 			FiniteThermalBodyState after,
+			List<Contact> initialContacts,
 			List<ContactDelta> contacts,
 			int substeps,
 			double maximumAbsoluteTransferEu,
 			SignedDyadic roundoffResidual
 	) {
 		public Plan {
-			if (before == null || after == null || contacts == null || contacts.isEmpty()
+			if (before == null || after == null || initialContacts == null || contacts == null || contacts.isEmpty()
+					|| initialContacts.size() != contacts.size()
 					|| contacts.size() > ThermalLimits.MAX_FINITE_DEVICE_CONTACTS
 					|| substeps <= 0 || !Double.isFinite(maximumAbsoluteTransferEu)
 					|| maximumAbsoluteTransferEu < 0.0 || roundoffResidual == null) {
 				throw new IllegalArgumentException("Finite thermal exchange plan is incomplete");
 			}
+			initialContacts = List.copyOf(initialContacts);
 			contacts = List.copyOf(contacts);
 			if (!before.thermalRegistryFingerprint().equals(after.thermalRegistryFingerprint())
 					|| !before.thermalMaterialId().equals(after.thermalMaterialId())
@@ -71,9 +74,13 @@ public final class FiniteThermalExchange {
 			int previousOrdinal = -1;
 			SignedDyadic exactChange = SignedDyadic.of(after.internalEnergyEu())
 					.subtract(SignedDyadic.of(before.internalEnergyEu()));
-			for (ContactDelta contact : contacts) {
+			for (int index = 0; index < contacts.size(); index++) {
+				ContactDelta contact = contacts.get(index);
 				if (contact == null || contact.ordinal() <= previousOrdinal) {
 					throw new IllegalArgumentException("Finite thermal contact results are not canonical");
+				}
+				if (initialContacts.get(index).ordinal() != contact.ordinal()) {
+					throw new IllegalArgumentException("Finite thermal initial contact ordinal changed");
 				}
 				previousOrdinal = contact.ordinal();
 				exactChange = exactChange.add(SignedDyadic.of(contact.internalEnergyDeltaEu()));
@@ -204,6 +211,6 @@ public final class FiniteThermalExchange {
 			deltas.add(new ContactDelta(contact.ordinal(), fluidDelta[index], finalTemperature));
 			exactChange = exactChange.add(SignedDyadic.of(fluidDelta[index]));
 		}
-		return new Plan(body, after, deltas, substeps, maximumTransfer, exactChange);
+		return new Plan(body, after, canonical, deltas, substeps, maximumTransfer, exactChange);
 	}
 }

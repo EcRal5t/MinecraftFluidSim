@@ -31,6 +31,12 @@ import cc.ecisr.mmm.fluid.FluidStepCandidate;
 import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.FluidThermalStepCandidate;
 import cc.ecisr.mmm.fluid.FluidThermalStepRequest;
+import cc.ecisr.mmm.thermal.FiniteThermalBodyState;
+import cc.ecisr.mmm.thermal.FiniteThermalDeviceInventory;
+import cc.ecisr.mmm.thermal.FiniteThermalDeviceState;
+import cc.ecisr.mmm.thermal.FiniteThermalExchange;
+import cc.ecisr.mmm.thermal.ThermalStateFunction;
+import cc.ecisr.mmm.thermal.ThermalTransport;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Registry;
 import net.minecraft.resources.Identifier;
@@ -50,13 +56,14 @@ public final class FluidRegionLifecycleValidation {
 
 	private FluidRegionLifecycleValidation() { }
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws Exception {
 		validatePacingAndOperatorPause();
 		validateRegionTickPlanningAndPacing();
 		validateAvailabilityPreservesRunIntent();
 		validateHydrostaticSleepAndWake();
 		validateHydrostaticSleepPreservesMarkerLedger();
 		validateInternalConductionWakesMotion();
+		validateFiniteDeviceExchangeInvalidatesCandidatesAndWakesMotion();
 		validateBackendCandidateAdoption();
 		validateLiveCaptureFailureIsTyped();
 		validateApplicationCheckpointResults();
@@ -336,6 +343,74 @@ public final class FluidRegionLifecycleValidation {
 		region.setPaused(true);
 		MinecraftRegionTick.applyThermalObservation(region, conducting);
 		require(!region.canStep(), "thermal activity overrode the operator's pause");
+	}
+
+	private static void validateFiniteDeviceExchangeInvalidatesCandidatesAndWakesMotion() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		FluidDomain domain = new FluidDomain(4, 4, 4, ProductionReplayValidationSupport.productionConfig());
+		domain.sealDomainBoundary();
+		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+		domain.setVolume(1, 1, 1, 0.5F);
+		FullCapabilityTestFixture.bindFull(domain, registries, 300.0,
+				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		FluidRegion region = new FluidRegion(new UUID(71L, 73L), DIMENSION, BlockPos.ZERO,
+				domain, domain.maximumParticleCount());
+		region.setPaused(false);
+		region.enableThermalActivity();
+		var thermal = registries.thermal();
+		var stateFunction = new ThermalStateFunction(thermal);
+		var body = new FiniteThermalBodyState(0L, thermal.fingerprint(), "mmm:copper_heat_exchanger", 2.0,
+				stateFunction.internalEnergyAtTemperature(thermal.materialHandle("mmm:copper_heat_exchanger"),
+						2.0, java.util.Map.of(), 350.0));
+		var devices = new FiniteThermalDeviceInventory(thermal.fingerprint(), List.of(
+				new FiniteThermalDeviceState("mmm:test", "mmm:device", "mmm:finite_heat_exchanger", body)));
+		region.restoreFiniteThermalDevices(devices, thermal, region.checkpointGeneration());
+		FluidRegionManager manager = new FluidRegionManager(new RegionCatalog.Limits(
+				4, 4_096L, Integer.MAX_VALUE, 16_384L, Integer.MAX_VALUE));
+		require(manager.addAndSelect(region).accepted(), "finite device fixture was not admitted");
+		var oldCandidate = new CpuFluidSolverBackend().evaluateThermal(new FluidThermalStepRequest(
+				region.solverGeneration(), domain.captureAuthoritativeState(), false, 0));
+		var exchange = FiniteThermalExchange.plan(thermal, body, domain.finiteThermalContacts(List.of(
+				new FluidDomain.ThermalContactRequest(0, 1, 1, 1, 10.0))),
+				0.05, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		var staleCellPlan = domain.planFiniteThermalCellExchange(List.of(
+				new FluidDomain.ThermalCellEnergyDelta(1, 1, 1, 1.0)));
+		domain.setThermalTemperatureInCell(1, 1, 1, 320.0);
+		var changedFluidEnergy = domain.exactInternalEnergy();
+		boolean staleContactRejected = false;
+		try {
+			region.commitFiniteThermalExchange("mmm:test", "mmm:device", exchange,
+					List.of(new FluidRegion.FiniteThermalCellBinding(0, 1, 1, 1)), thermal);
+		} catch (IllegalArgumentException expected) { staleContactRejected = true; }
+		require(staleContactRejected && domain.exactInternalEnergy().equals(changedFluidEnergy)
+				&& region.finiteThermalDevices(thermal.fingerprint()).equals(devices)
+				&& region.solverGeneration() == 0L,
+				"finite device applied heat computed from an obsolete fluid temperature");
+		domain.setThermalTemperatureInCell(1, 1, 1, 300.0);
+		boolean staleCellRejected = false;
+		try { domain.commitFiniteThermalCellExchange(staleCellPlan); }
+		catch (IllegalArgumentException expected) { staleCellRejected = true; }
+		require(staleCellRejected, "finite device cell plan ignored a changed thermal revision");
+		require(region.lifecycle().observeCompletedStep(true, 1), "finite device fixture did not sleep");
+		var fluidBefore = domain.exactInternalEnergy();
+		var fluidRoundoffBefore = domain.thermalAudit().roundoffResidual();
+		require(region.commitFiniteThermalExchange("mmm:test", "mmm:device", exchange,
+				List.of(new FluidRegion.FiniteThermalCellBinding(0, 1, 1, 1)), thermal),
+				"finite device fixture did not exchange heat");
+		var after = region.finiteThermalDevices(thermal.fingerprint());
+		require(region.solverGeneration() == 1L && region.canStep() && region.canStepThermal(),
+				"finite device heat failed to invalidate old candidates or wake mechanics and thermal activity");
+		require(domain.exactInternalEnergy().subtract(fluidBefore)
+				.add(after.exactInternalEnergy().subtract(devices.exactInternalEnergy()))
+				.equals(domain.thermalAudit().roundoffResidual().subtract(fluidRoundoffBefore)
+						.add(after.audit().roundoffResidual().subtract(devices.audit().roundoffResidual()))),
+				"finite device heat did not close body and fluid energy");
+		var fluidAfter = domain.exactInternalEnergy();
+		require(new FluidRegionRepository(manager).adoptThermal(region.id(), oldCandidate, CpuFluidSolverBackend.ID)
+				== RegionStepStatus.STALE_GENERATION && region.domain() == domain
+				&& domain.exactInternalEnergy().equals(fluidAfter)
+				&& region.finiteThermalDevices(thermal.fingerprint()).equals(after),
+				"pre-exchange candidate overwrote the coupled body/fluid energy");
 	}
 
 	private static void validatePacingAndOperatorPause() {

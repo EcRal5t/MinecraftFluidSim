@@ -418,6 +418,7 @@ public final class FluidRegion {
 		}
 		canonical.sort(Comparator.comparingInt(FiniteThermalCellBinding::ordinal));
 		ArrayList<FluidDomain.ThermalCellEnergyDelta> deltas = new ArrayList<>(canonical.size());
+		ArrayList<FluidDomain.ThermalContactRequest> contacts = new ArrayList<>(canonical.size());
 		for (int index = 0; index < canonical.size(); index++) {
 			FiniteThermalCellBinding binding = canonical.get(index);
 			FiniteThermalExchange.ContactDelta contact = exchange.contacts().get(index);
@@ -426,13 +427,22 @@ public final class FluidRegion {
 			}
 			deltas.add(new FluidDomain.ThermalCellEnergyDelta(binding.cellX(), binding.cellY(), binding.cellZ(),
 					contact.internalEnergyDeltaEu()));
+			contacts.add(new FluidDomain.ThermalContactRequest(binding.ordinal(),
+					binding.cellX(), binding.cellY(), binding.cellZ(),
+					exchange.initialContacts().get(index).conductanceEuPerSecondK()));
+		}
+		if (!domain.finiteThermalContacts(contacts).equals(exchange.initialContacts())) {
+			throw new IllegalArgumentException("Finite thermal fluid contact plan is stale");
 		}
 		FiniteThermalDeviceInventory current = finiteThermalDevices(registry.fingerprint());
 		FiniteThermalDeviceInventory candidate = current.applyExchange(providerId, objectId, exchange);
 		candidate.requireCompatible(registry);
 		FluidDomain.FiniteThermalCellPlan cellPlan = domain.planFiniteThermalCellExchange(deltas);
+		long nextSolverGeneration = Math.addExact(solverGeneration, 1L);
 		domain.commitFiniteThermalCellExchange(cellPlan);
 		finiteThermalDevices = candidate;
+		solverGeneration = nextSolverGeneration;
+		wakeForActivity();
 		wakeThermal(ThermalActivity.WakeReason.FINITE_DEVICE_EXCHANGE);
 		return true;
 	}

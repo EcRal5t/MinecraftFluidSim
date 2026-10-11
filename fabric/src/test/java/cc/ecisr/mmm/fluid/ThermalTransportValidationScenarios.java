@@ -16,6 +16,7 @@ import cc.ecisr.mmm.thermal.LiquidThermalExpansion;
 import cc.ecisr.mmm.units.SolverUnitScale;
 import cc.ecisr.mmm.thermal.FiniteThermalBodyState;
 import cc.ecisr.mmm.thermal.FiniteThermalExchange;
+import cc.ecisr.mmm.thermal.FiniteDeviceExchangeCoordinator;
 import cc.ecisr.mmm.thermal.ThermalCellGrid;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
@@ -301,6 +302,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	}
 
 	static void finiteThermalBodyExchangesWithoutMixing() {
+		localThermalEditsPreserveRemoteCarrierEnergy();
 		ThermalMaterialDefinition wall = new ThermalMaterialDefinition("test:thermal/exchanger_wall",
 				ThermalMaterialDefinition.CarrierKind.DEVICE, "test:exchanger_wall",
 				300.0, 0.0, 20.0,
@@ -373,6 +375,44 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				new FiniteThermalExchange.Contact(0, 250.0, 1_000.0, 100.0, 250.0, 500.0)
 		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS),
 				"finite thermal planner ignored a lower-capacity reachable caloric segment");
+	}
+
+	private static void localThermalEditsPreserveRemoteCarrierEnergy() {
+		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:local_heat", 1.0,
+				"test:miscible", 0.0, 90.0);
+		ThermalMaterialDefinition definition = new ThermalMaterialDefinition("test:thermal/local_heat",
+				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 0.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
+		ThermalCarrierContext markers = new ThermalCarrierContext() {
+			@Override public int markerCount() { return 3; }
+			@Override public int cell(int marker) { return marker == 0 ? 0 : 1; }
+			@Override public int fluidMaterialHandle(int marker) { return 0; }
+			@Override public double mass(int marker) { return 1.0; }
+			@Override public double volume(int marker) { return 0.25; }
+			@Override public ChemicalMixtureRecord mixture(int marker) { return null; }
+			@Override public ChemicalRegistry chemicalRegistry() { return null; }
+		};
+		ThermalDomainState thermal = FluidThermalBinding.create(new ThermalRegistry(List.of(definition)),
+				new FluidMaterialRegistry(List.of(liquid)), 300.0, 3, 2, 1, 1, 0.5F, markers);
+		thermal.resetMarkerTemperature(1, 250.0, markers, thermal.exactEnergy(3));
+		thermal.resetMarkerTemperature(2, 350.0, markers, thermal.exactEnergy(3));
+		long cold = Double.doubleToRawLongBits(thermal.liquid().energy(1));
+		long hot = Double.doubleToRawLongBits(thermal.liquid().energy(2));
+		for (int operation = 0; operation < 3; operation++) {
+			if (operation == 0) thermal.setTemperatureInCell(0, 320.0, markers);
+			else if (operation == 1) {
+				var plan = thermal.planFiniteDeviceCellExchange(List.of(
+						new FiniteDeviceExchangeCoordinator.CellEnergyDelta(0, 100.0),
+						new FiniteDeviceExchangeCoordinator.CellEnergyDelta(1, 0.0)), markers);
+				thermal.commitFiniteDeviceCellExchange(plan, markers);
+			} else thermal.repartitionCellEnergy(0, thermal.liquid().energy(0),
+					markers, thermal.exactEnergy(3));
+			require(Double.doubleToRawLongBits(thermal.liquid().energy(1)) == cold
+					&& Double.doubleToRawLongBits(thermal.liquid().energy(2)) == hot,
+					"local thermal edit equilibrated remote zero-conductivity carriers: operation=" + operation);
+			require(thermal.exactEnergy(3).equals(thermal.auditLedger().expectedInventory()),
+					"local thermal edit did not close its energy audit: operation=" + operation);
+		}
 	}
 
 	static void productionFixedBoundaryFieldAuditsExchange() {

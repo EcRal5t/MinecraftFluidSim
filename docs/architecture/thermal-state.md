@@ -104,6 +104,8 @@ caloric segment 内 `cv` 为常量，积分与反演均为分段闭式线性计�
 
 批量读取的缓存只在明确的阶段内有效，跨库存、组成、内能或位置修改即失效；它不进入 `FluidDomainState`，也不进存档，恢复后重建。
 
+局部温度编辑、液固反应与有限设备交换只重新分配被编辑单元的载体内能。其他单元保留每份载体的原始 `U`，格内温差继续由有限速率导热推进。
+
 `prepareSpatialObservation` 提供独立的连续空间温度观察，供热平流验证使用。液体按 cell-center 三线性权重分配最多八份只读 caloric portion；支撑格须持有液体、完全开放且与原载体属于同一 pressure phase，各格之间沿完全开放面连通。外壳附近对剩余正权重归一化，partial cut-cell 与含多相单元沿用所属单元。其他凝聚态载体保持所属单元。
 
 每份 portion 使用同一权重乘原载体的质量、体积、`U` 和完整 base energy。species 参考能先由原始整数库存求出，再参与加权；观察过程中保持 species、质量和能量 owner 原样。所有真实载体先通过正温反演，随后使用既有分段 caloric 反演得到格温度。正权重保证观察温度位于贡献载体的温度范围内；均匀 quadrature 的内域线性温度场可精确重建，外壳截断与 partial cut-cell 的误差需分别观察。
@@ -181,7 +183,9 @@ codec 回读时重新验证 registry fingerprint、`DEVICE` material、material 
 
 这个 planner 不搬运任何物质，也没有世界、region HEAD 或 block entity 提交权。同一区域路径先批量重建一次 LTE grid，冻结每个独立 cell port 的温度、热容和当前线性区间；同一 cell 的多面 conductance 必须先聚合，不能伪装成多个能量 owner。
 
-body candidate、所有 cell `delta U`、solver `finiteDeviceExchange` 与两侧 roundoff 全部预检后才修改载体，提交异常会恢复 carrier U；下一 checkpoint 把 body 与流体一起交给 HEAD。
+交换计划保存各端口的初始温度、热容和线性区间，提交时从当前载体重新推导并核对。cell 分配计划同时核对热学修订号、载体所属单元、原始内能和 caloric 库存，保障组成或质量变化后的计划失效。
+
+body candidate、所有 cell `delta U`、solver `finiteDeviceExchange` 与两侧 roundoff 全部预检后才修改载体，提交异常会恢复 carrier U。成功交换递增求解器代次，使交换前的计算候选失效，并唤醒力学与热学以重建热浮力和气体压力；下一 checkpoint 把 body 与流体一起交给 HEAD。
 
 接触多个区域时不得调用这条单区域路径，必须先验证全部 candidate，再通过跨 region HEAD 协调提交。当前尚未接入世界对象 enrollment、接触几何生成和生产 tick 调度，因此固定温度 boundary 仍是唯一生产世界热边界。
 

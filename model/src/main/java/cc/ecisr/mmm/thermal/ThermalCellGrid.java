@@ -248,6 +248,20 @@ public final class ThermalCellGrid {
 		updateObservedTemperatureRange();
 	}
 
+	/** Repartitions one edited cell while preserving every remote carrier's original U. */
+	public void setCellInternalEnergy(int cell, double targetEnergy) {
+		if (carriers == null || cell < 0 || cell >= cellCount || !Double.isFinite(targetEnergy)) {
+			throw new IllegalArgumentException("Thermal cell energy edit is invalid");
+		}
+		if (carrierCount[cell] == 0) {
+			if (targetEnergy != 0.0) throw new IllegalArgumentException("Empty thermal cell received energy");
+			return;
+		}
+		solveCell(cell, targetEnergy);
+		assignSolvedCellEnergy(cell, targetEnergy);
+		updateObservedTemperatureRange();
+	}
+
 	CarrierAccess carrierAccess() { return carriers; }
 	int firstCarrier(int cell) { return cellHead[cell]; }
 	int nextCarrier(int carrier) { return carrierNext[carrier]; }
