@@ -11,6 +11,7 @@ import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.thermal.GranularEnergyColumn;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
+import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.math.BigInteger;
@@ -317,12 +318,33 @@ final class GranularTransferPlanner {
 		}
 		GranularAuditLedger sinkAfter = escapedSink ? granular.escapedSink.plus(
 				transfer, granular.registry, granular.compositions == null ? null : granular.compositions.registry()) : granular.escapedSink;
-		// Every fallible aggregation completes before the first granular or thermal mutation:
-		// the removed thermal energy is summed from the previews so an overflow can still reject
-		// the whole extraction instead of firing after parcels and deposits already changed.
+		// Match the commit order so every intermediate audit chain is checked before inventory edits.
+		removals.sort(Comparator.comparingInt((GranularRemoval removal) -> removal.deposit() ? 0
+				: removal.solidVolumeSvq() != removal.originalSolidVolumeSvq() ? 1 : 2)
+				.thenComparingInt(removal -> removal.deposit() ? removal.cell()
+						: removal.solidVolumeSvq() != removal.originalSolidVolumeSvq() ? removal.index() : -removal.index()));
 		double removedEnergy = 0.0;
-		for (GranularRemoval removal : removals) removedEnergy += removal.internalEnergy();
-		if (!Double.isFinite(removedEnergy)) throw new ArithmeticException("Granular extraction thermal energy overflow");
+		SignedDyadic bookedEnergy = SignedDyadic.ZERO;
+		if (domain.thermalState != null) {
+			ThermalAuditLedger thermalAfter = domain.thermalState.auditLedger();
+			SignedDyadic carrierRemoval = SignedDyadic.ZERO;
+			GranularEnergyColumn energy = domain.thermalState.granularColumn();
+			for (GranularRemoval removal : removals) {
+				double before = removal.deposit() ? energy.depositEnergy(new GranularEnergyColumn.DepositKey(
+						removal.cell(), removal.materialHandle(), removal.compositionHandle())) : energy.activeEnergy(removal.index());
+				double after = removal.solidVolumeSvq() == removal.originalSolidVolumeSvq()
+						? 0.0 : before - removal.internalEnergy();
+				SignedDyadic actualRemoval = SignedDyadic.of(before).subtract(SignedDyadic.of(after));
+				SignedDyadic exported = SignedDyadic.of(removal.internalEnergy());
+				carrierRemoval = carrierRemoval.add(actualRemoval);
+				bookedEnergy = bookedEnergy.add(exported);
+				thermalAfter = thermalAfter.withExternalSinkEnergy(exported).withRoundoff(exported.subtract(actualRemoval));
+			}
+			removedEnergy = carrierRemoval.toDouble();
+			if (!Double.isFinite(removedEnergy)) throw new ArithmeticException("Granular extraction thermal energy overflow");
+			SignedDyadic settlement = SignedDyadic.of(removedEnergy).subtract(bookedEnergy);
+			thermalAfter.withExternalSinkEnergy(settlement).withRoundoff(settlement);
+		}
 		for (GranularRemoval removal : removals) if (removal.deposit()) {
 			granular.deposits.take(removal.cell(), removal.materialHandle(), removal.compositionHandle(), removal.solidVolumeSvq());
 			if (domain.thermalState != null) domain.thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
@@ -348,6 +370,7 @@ final class GranularTransferPlanner {
 							removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
 					if (removed.solidCompositionHandle() != 0) granular.compositions.release(removed.solidCompositionHandle());
 				});
+		if (domain.thermalState != null) domain.thermalState.settleExternalExtraction(bookedEnergy, removedEnergy);
 		boolean[] changedCells = new boolean[domain.cellCount];
 		for (GranularRemoval removal : removals) if (!changedCells[removal.cell()]) {
 			domain.markGranularExternalChange(removal.cell()); changedCells[removal.cell()] = true;

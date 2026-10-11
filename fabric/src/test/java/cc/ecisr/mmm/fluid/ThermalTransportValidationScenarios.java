@@ -77,6 +77,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	}
 
 	static void granularEnergyColumnTransactions() {
+		granularExternalExtractionRounding();
 		String granularFingerprint = "2".repeat(64);
 		ThermalMaterialDefinition liquid = material("test:thermal/granular_host", "test:liquid", 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
@@ -117,6 +118,14 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(close(granularThermal.temperatureInCell(0, carriers), 310.0)
 				&& granularThermal.exactEnergy(0).equals(granularThermal.auditLedger().expectedInventory()),
 				"M8 active/deposit cell heat exchange did not close the thermal audit");
+		granularThermal.restoreThermalGranular(new double[]{1.0},
+				List.of(new GranularEnergyColumn.DepositEnergy(deposit, 1.0)));
+		granularThermal.restoreAuditLedger(ThermalAuditLedger.initialized(SignedDyadic.of(2.0)));
+		granularThermal.commitExternalActiveTake(0, 1, 3);
+		granularThermal.commitExternalDepositTake(deposit, 1, 3);
+		require(granularThermal.exactEnergy(0).equals(granularThermal.auditLedger().expectedInventory())
+				&& granularThermal.auditLedger().roundoffResidual().equals(SignedDyadic.of(1, -53)),
+				"partial active/deposit extraction omitted its exact binary64 energy roundoff");
 
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry productionLiquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
@@ -154,6 +163,59 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(domain.exactInternalEnergy().equals(SignedDyadic.ZERO)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"granular clear did not move all active/deposit energy to the escaped sink");
+	}
+
+	static void granularExternalExtractionRounding() {
+		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
+		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		for (double[] energies : List.of(new double[]{.1, .2, .3}, new double[]{.3, .2, .1},
+				new double[]{.1, .2, -.1}, new double[]{-.1, .2, .1})) {
+			FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
+			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+			for (int parcel = 0; parcel < 3; parcel++) require(domain.tryInsertExactGranular(
+					1, 1, 1, sand, 0, 3, 3.0 / SolidVolume.SVQ_PER_BV * granular.material(sand).referenceDensity()).inserted(),
+					"granular extraction rounding fixture could not insert its parcel");
+			domain.bindThermal(granularThermalRegistry(liquids, granular), liquids, 300.0);
+			domain.thermalState.restoreThermalGranular(energies, List.of());
+			SignedDyadic initial = SignedDyadic.sum(energies);
+			domain.thermalState.restoreAuditLedger(ThermalAuditLedger.initialized(initial));
+			var revision = domain.thermalState.thermalRevision();
+			var before = java.util.stream.IntStream.range(0, 3).mapToObj(domain.granularState.parcels::parcel).toList();
+			var rejected = domain.tryExtractExactGranular(1, 1, 1, 9, 0, false, ignored -> false);
+			require(!rejected.transferred() && domain.thermalState.matchesThermalRevision(revision)
+					&& Arrays.equals(domain.thermalState.granularColumn().copyActiveEnergy(), energies)
+					&& domain.granularState.parcels.count() == 3
+					&& java.util.stream.IntStream.range(0, 3).mapToObj(domain.granularState.parcels::parcel).toList().equals(before),
+					"rejected granular extraction changed inventory or thermal audit");
+			var extracted = domain.tryExtractExactGranular(1, 1, 1, 9, 0, false);
+			require(extracted.transferred()
+					&& Double.doubleToRawLongBits(extracted.internalEnergy()) == Double.doubleToRawLongBits(initial.toDouble())
+					&& domain.thermalAudit().externalSink().equals(SignedDyadic.of(extracted.internalEnergy()))
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"multi-parcel extraction did not round once at the item energy boundary");
+		}
+		for (boolean deposited : new boolean[]{false, true}) {
+			FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
+			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+			require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, 3,
+					3.0 / SolidVolume.SVQ_PER_BV * granular.material(sand).referenceDensity()).inserted(),
+					"partial granular extraction fixture could not insert its parcel");
+			domain.bindThermal(granularThermalRegistry(liquids, granular), liquids, 300.0);
+			domain.thermalState.restoreThermalGranular(new double[]{1.0}, List.of());
+			domain.thermalState.restoreAuditLedger(ThermalAuditLedger.initialized(SignedDyadic.of(1.0)));
+			if (deposited) require(domain.granularState.inventory.depositParcel(0,
+					domain.cellIndexChecked(1, 1, 1), SolidVolume.SVQ_PER_CELL), "partial deposit fixture could not settle");
+			var extracted = domain.tryExtractExactGranular(1, 1, 1, 1, 0, false);
+			SignedDyadic actualRemoval = SignedDyadic.of(1.0).subtract(domain.exactInternalEnergy());
+			require(extracted.transferred() && extracted.ledger().totalSolidVolumeSvq() == 1
+					&& Double.doubleToRawLongBits(extracted.internalEnergy()) == Double.doubleToRawLongBits(actualRemoval.toDouble())
+					&& domain.thermalAudit().externalSink().equals(SignedDyadic.of(extracted.internalEnergy()))
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"partial active/deposit item U differs from the actual raw carrier energy removal");
+		}
 	}
 
 	static ThermalRegistry granularThermalRegistry(
