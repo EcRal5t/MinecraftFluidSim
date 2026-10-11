@@ -15,6 +15,7 @@ import cc.ecisr.mmm.thermal.ThermalStateFunction;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.List;
 
 import static cc.ecisr.mmm.fluid.PhaseChangeStageSupport.PhaseCandidateUnavailableException;
@@ -186,39 +187,46 @@ final class CondensedPhaseChangeStage {
 		long minimumBatches = minimumBatchesForCapacity(occupied, capacity, signedVolumePerBatch);
 		if (high < minimumBatches) return null;
 		boolean capacityForced = occupied > capacity;
-		JointPhasePlan first;
-		try {
-			first = candidate(cell, liquidHandle, transition, inventory, freezing, minimumBatches);
-		} catch (ThermalStateFunction.EnergyOutsideValidityException
-				| PhaseCandidateUnavailableException unavailable) {
-			return null;
-		}
-		if (!capacityForced && !strictlyCloserToEquilibrium(
-				first.temperatureAfterK(), temperature, equilibrium)) return null;
-		if (crossedEquilibrium(first.temperatureAfterK(), equilibrium, freezing)) return first;
-		JointPhasePlan best = first;
-		long low = minimumBatches + 1L;
-		while (low <= high) {
-			long middle = low + ((high - low) >>> 1);
-			JointPhasePlan candidate;
-			try {
-				candidate = candidate(cell, liquidHandle, transition, inventory, freezing, middle);
-			} catch (ThermalStateFunction.EnergyOutsideValidityException
-					| PhaseCandidateUnavailableException unavailable) {
-				high = middle - 1L;
+		JointPhasePlan best = null;
+		var bounds = new CondensedPhaseBatchBounds(support, cell, liquidHandle, transition,
+				before, inventory.unchanged(), freezing, temperature);
+		var intervals = new ArrayDeque<BatchInterval>();
+		if (high > minimumBatches) intervals.push(new BatchInterval(minimumBatches, high - 1));
+		intervals.push(new BatchInterval(high, high));
+		// Integer species/carrier holes require actual leaves. Proven temperature
+		// envelopes can exclude intervals that cannot improve the retained result.
+		while (!intervals.isEmpty()) {
+			var interval = intervals.pop();
+			if ((best != null || !capacityForced) && bounds.excluded(interval.low(), interval.high(),
+					best == null ? temperature : best.temperatureAfterK(), equilibrium)) continue;
+			if (interval.low() != interval.high()) {
+				long middle = interval.low() + (interval.high() - interval.low()) / 2;
+				intervals.push(new BatchInterval(interval.low(), middle));
+				intervals.push(new BatchInterval(middle + 1, interval.high()));
 				continue;
 			}
-			if (crossedEquilibrium(candidate.temperatureAfterK(), equilibrium, freezing)) {
-				if (strictlyCloserToEquilibrium(
-						candidate.temperatureAfterK(), best.temperatureAfterK(), equilibrium)) best = candidate;
-				high = middle - 1L;
-			} else {
+			long batches = interval.low();
+			JointPhasePlan candidate;
+			try {
+				candidate = candidate(cell, liquidHandle, transition, inventory, freezing, batches);
+			} catch (ThermalStateFunction.EnergyOutsideValidityException
+					| PhaseCandidateUnavailableException unavailable) {
+				continue;
+			}
+			if (!capacityForced && !strictlyCloserToEquilibrium(
+					candidate.temperatureAfterK(), temperature, equilibrium)) continue;
+			if (best == null || strictlyCloserToEquilibrium(
+					candidate.temperatureAfterK(), best.temperatureAfterK(), equilibrium)) {
 				best = candidate;
-				low = middle + 1L;
+				// Every accepted improvement must exceed at least 1e-12 K. Once inside
+				// that distance, no remaining candidate can improve the retained result.
+				if (Math.abs(best.temperatureAfterK() - equilibrium) <= 1.0E-12) break;
 			}
 		}
 		return best;
 	}
+
+	private record BatchInterval(long low, long high) { }
 
 	static long minimumBatchesForCapacity(long occupiedSvq, long capacitySvq, long signedVolumeSvqPerBatch) {
 		if (occupiedSvq < 0L || capacitySvq < 0L) {
@@ -229,10 +237,6 @@ final class CondensedPhaseChangeStage {
 		long shrink = Math.negateExact(signedVolumeSvqPerBatch);
 		long excess = occupiedSvq - capacitySvq;
 		return excess / shrink + (excess % shrink == 0L ? 0L : 1L);
-	}
-
-	private static boolean crossedEquilibrium(double candidateK, double equilibriumK, boolean freezing) {
-		return freezing ? candidateK > equilibriumK : candidateK < equilibriumK;
 	}
 
 	private static boolean strictlyCloserToEquilibrium(

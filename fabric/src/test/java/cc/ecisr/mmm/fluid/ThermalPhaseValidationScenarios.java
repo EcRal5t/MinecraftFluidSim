@@ -125,6 +125,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	}
 
 	static void coherentPhaseInventoryAndExactBatchPlanning() {
+		condensedIntegerCarrierSearch();
 		condensedPhaseUsesActualRegionalCarrierBudget();
 		coherentExternalMergeIsPreflightedAndAudited();
 		ThermalMaterialDefinition lower = new ThermalMaterialDefinition("test:thermal/lower",
@@ -334,6 +335,111 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		require(SolidVolume.cellVolumeSvqAtMost(tailedMarkerVolume) == markerSvq
 				&& SolidVolume.cellVolumeSvqAtLeast(tailedMarkerVolume) == markerSvq + 1L,
 				"phase SVQ bounds quantized away an authoritative float marker-volume tail");
+	}
+
+	static void condensedIntegerCarrierSearch() {
+		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		for (boolean freezing : new boolean[]{true, false}) for (int batches : new int[]{2, 4}) {
+			FluidDomain domain = condensedIntegerCarrierFixture(freezing, batches);
+			var before = condensedLedger(domain, chemistry);
+			var energy = domain.exactInternalEnergy(); var audit = domain.thermalAudit();
+			var mass = SignedDyadic.of(domain.unitScale.kilograms(domain.totalMass()))
+					.add(SignedDyadic.of(domain.totalCoherentMass()));
+			double volume = domain.totalVolumeExact()
+					+ SolidVolume.toCellVolume(domain.totalCoherentSolidVolumeSvq());
+			// Freezing two batches from one quantum has no one-batch carrier split.
+			// Two two-batch donors carrying one and three quanta admit 1/2/4, but not 3.
+			// A two-batch coherent group carrying one quantum likewise only melts whole.
+			var stats = domain.stepInertPhaseChangeOnly(batches);
+			var after = condensedLedger(domain, chemistry);
+			require(stats.operations() == batches && stats.signedBatches() == (freezing ? batches : -batches)
+					&& stats.frozenCells() == (freezing ? 1 : 0) && stats.meltedCells() == (freezing ? 0 : 1),
+					"complete condensed integer candidates must remain searchable across carrier holes: " + stats);
+			require(SignedDyadic.of(domain.unitScale.kilograms(domain.totalMass()))
+					.add(SignedDyadic.of(domain.totalCoherentMass())).equals(mass)
+					&& domain.totalVolumeExact() + SolidVolume.toCellVolume(domain.totalCoherentSolidVolumeSvq()) == volume
+					&& after.species().equals(before.species())
+					&& Math.abs(after.massResidual() - before.massResidual()) <= Math.ulp(before.massResidual()),
+					"complete condensed candidates preserve actual kg, species, residual and total SVQ");
+			require(domain.exactInternalEnergy().subtract(energy).equals(
+					domain.thermalAudit().roundoffResidual().subtract(audit.roundoffResidual()))
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+					&& domain.thermalAudit().externalSource().equals(audit.externalSource())
+					&& domain.thermalAudit().externalSink().equals(audit.externalSink()),
+					"complete condensed candidates book actual U storage roundoff without changing external inventory");
+			double temperature = domain.thermalTemperatureInCell(1, 1, 1);
+			require(freezing ? temperature > 200 && temperature < 300 : temperature > 300 && temperature < 500,
+					"complete condensed extent must move the actual heat bath toward equilibrium");
+			var snapshot = domain.captureAuthoritativeState();
+			var restored = FluidDomain.restoreAuthoritativeState(snapshot);
+			var restoredSnapshot = restored.captureAuthoritativeState();
+			require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
+					&& restored.thermalAudit().equals(domain.thermalAudit())
+					&& condensedLedger(restored, chemistry).equals(after)
+					&& restored.totalMass() == domain.totalMass() && restored.totalCoherentMass() == domain.totalCoherentMass()
+					&& restored.totalVolumeExact() == domain.totalVolumeExact()
+					&& java.util.Arrays.equals(restoredSnapshot.thermal().copyInternalEnergy(), snapshot.thermal().copyInternalEnergy())
+					&& restoredSnapshot.thermal().coherentGroups().equals(snapshot.thermal().coherentGroups()),
+					"condensed integer candidate handoff preserves the committed physical inventories");
+		}
+	}
+
+	private static FluidDomain condensedIntegerCarrierFixture(boolean freezing, int batches) {
+		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.OIL));
+		var water = condensedIntegerMaterial("test:integer/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.WATER.id(), 0, 4_180);
+		var oil = condensedIntegerMaterial("test:integer/oil", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.OIL.id(), 0, 2_000);
+		var ice = condensedIntegerMaterial("test:integer/ice", ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID,
+				"test:ice", -334_000, 2_000);
+		var air = condensedIntegerMaterial("test:integer/air", ThermalMaterialDefinition.CarrierKind.GAS,
+				cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions.AIR, 0, 718);
+		long batchSvq = SolidVolume.SVQ_PER_CELL / 16;
+		var transition = new ThermalPhaseTransition("test:integer/phase", ice.id(), water.id(), 300,
+				batchSvq, batchSvq, ExactRational.parse("125/16"),
+				ThermalPhaseTransition.InterfaceRequirement.NONE, 10_000, 3_000_000);
+		var thermal = new ThermalRegistry(List.of(water, oil, ice, air), List.of(
+				new ThermalSpeciesOffset("test:integer/wh", BuiltinChemicalDefinitions.H2O, water.id(), ExactRational.ZERO),
+				new ThermalSpeciesOffset("test:integer/ih", BuiltinChemicalDefinitions.H2O, ice.id(), ExactRational.ZERO),
+				new ThermalSpeciesOffset("test:integer/oc", BuiltinChemicalDefinitions.OIL_CARRIER, oil.id(), ExactRational.ZERO)),
+				List.of(transition), chemistry.fingerprint(), "");
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
+		domain.sealDomainBoundary();
+		domain.setVolume(1, 1, 1, freezing ? SolidVolume.toCellVolume(2 * batchSvq) : .25F);
+		domain.setMarkerMaterial(0, liquids, freezing ? 0 : 1);
+		if (freezing) {
+			if (batches == 4) require(domain.tryInsertExactVolume(1, 1, 1,
+					SolidVolume.toCellVolume(2 * batchSvq), 0, 0).transferred(), "second integer-phase water carrier");
+			require(domain.tryInsertExactVolume(1, 1, 1, .25F, 0, 1).transferred(), "integer-phase oil heat bath");
+		}
+		domain.bindChemistry(chemistry);
+		if (freezing) {
+			domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
+			if (batches == 4) domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.H2O, 3L), false);
+		}
+		domain.bindThermal(thermal, liquids, freezing ? 200 : 500);
+		if (!freezing) {
+			long quanta = batches == 2 ? 1 : 4;
+			double mass = transition.massMuPerBatch().multiply(batches).toDouble();
+			double speciesMass = chemistry.species(chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O))
+					.massKilogramsPerAu().multiply(quanta).divide(cc.ecisr.mmm.chemistry.ChemicalLimits.QUANTA_PER_AU).toDouble();
+			var composition = new CoherentPhaseStore.Composition(
+					List.of(new CoherentPhaseStore.Component(BuiltinChemicalDefinitions.H2O, quanta)),
+					Double.doubleToRawLongBits(mass - speciesMass));
+			double energy = new ThermalStateFunction(thermal).internalEnergyAtTemperature(
+					thermal.materialHandle(ice.id()), mass, Map.of(BuiltinChemicalDefinitions.H2O, quanta), 500);
+			domain.addCoherentPhaseExternal(1, 1, 1, ice.id(), batchSvq * batches, mass, composition, energy);
+		}
+		domain.captureAuthoritativeState();
+		return domain;
+	}
+
+	private static ThermalMaterialDefinition condensedIntegerMaterial(String id,
+			ThermalMaterialDefinition.CarrierKind kind, String carrier, double reference, double capacity) {
+		return new ThermalMaterialDefinition(id, kind, carrier, 300, reference, .1,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(150, 800, capacity)));
 	}
 
 	private static void condensedPhaseUsesActualRegionalCarrierBudget() {
