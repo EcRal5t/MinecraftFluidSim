@@ -104,6 +104,8 @@ CPU 在私有对象上按阶段执行计算。`CpuWorkBatch` 的并行度取可�
 
 [MarkerVelocityTransfer](../../solver/src/main/java/cc/ecisr/mmm/fluid/MarkerVelocityTransfer.java) 提供实际 kg 加权的固定稀疏 `J/Jᵀ`，封闭面统一排除，MAC 发布采用双精度归约及一次 float 写入。[MarkerPressureOperator](../../solver/src/main/java/cc/ecisr/mmm/fluid/MarkerPressureOperator.java) 将共享面面积和相邻压力行组成 `C`，提供体积流率 `Cv`、压力力 `Cᵀp` 和 `CM⁻¹Cᵀ + S_g`；有限气体储存为 `S_g = Vβ_s/Δt²`。压力力先计算共享面压差，封闭常压力保持严格零力；相同压力行的面贡献先合并，再计算对角项。独立离散验证覆盖实际粒子质量下的连续性、压力冲量与功、封闭常压力零空间和气体压缩符号。当前主流程继续使用上述面压力与 G2P 路径；离散核的主流程集成还包括已知压力力、表面张力、颗粒阻力、未支撑开放面的共同速度表示，以及最终粒子速度直接发布。
 
+归一化质量权重上的面力作用于实际粒子的加权质心，该力臂一般偏离面中心，刚体旋转可产生额外体积流率与内部压力力矩。令 `Rω = ω×(x−center)`，保持内部角动量要求 `CR = 0`；当前质量映射还须补齐面速度的切向一阶矩。[PressureTransferExperiment](../../fabric/src/test/java/cc/ecisr/mmm/fluid/PressureTransferExperiment.java) 的 `--rotation` 对照独立面通量、紧支撑压力的实际总力矩与旋转虚功。
+
 `DivergenceFreeVelocityExtension` 对连接到 pressure phase、仍有 marker 的空气分类单元延拓不可压运动。压力液体面、正 P2G 权重面和固体面均为已知速度；辅助求解调整完全开放的无质量空气面，以最小二乘通量修正消除可解析的离散散度。这保持载体面上的动量和动能，以及物理压力和所有库存。没有可调整空气出口的封闭气体分量按已知面通量保留平均压缩率；未解析的孤立液滴与薄层按 marker 速度运动。partial cut-face 继续使用既有切割插值。延拓后的速度再次接受 CFL 校验，超限由完整私有候选细化时间步。
 
 完整面支撑的 `H(div)` 重建读取 cut-face 开口。完全闭合的固体面保持整张面上的零法向速度，面平均值与两个切向斜率均为零；相邻开放面的斜率继续由共享 stencil 推导。内部二次修正保持点散度与 MAC 离散散度一致。该规则覆盖整格固体的角落和台阶；partial cut-face 使用已有切割插值与 CCD。

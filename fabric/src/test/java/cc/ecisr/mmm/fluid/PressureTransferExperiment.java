@@ -9,7 +9,10 @@ public final class PressureTransferExperiment {
 	                        float[][] published, float[][] pic, float[][] residual, double alpha,
 	                        double projectedDivergence, double extensionChange) { }
 	private PressureTransferExperiment() { }
-	public static void main(String[] args) { report(true); report(false); publicStep(); }
+	public static void main(String[] args) {
+		if (Arrays.asList(args).contains("--rotation")) { markerRotation(); return; }
+		report(true); report(false); publicStep(); markerRotation();
+	}
 
 	private static FluidDomain domain(boolean full) {
 		var d = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, .8F), 2048);
@@ -132,5 +135,36 @@ public final class PressureTransferExperiment {
 		var d = domain(false); var before = momentum(d, markers(d)); var stats = d.stepWithMechanicalAudit(false, 0); var after = momentum(d, markers(d));
 		for (int a = 0; a < 3; a++) after[a] -= before[a];
 		System.out.printf("publicStep deltaP=%s substeps=%d viscosity=%s transport=%s audit=%s%n", Arrays.toString(after), stats.substeps(), stats.viscosity(), stats.liquidTransport(), stats.mechanicalAudit());
+	}
+	/** Fixed actual-mass J: independent face flux and compact pressure force reveal first-moment error. */
+	private static void markerRotation() {
+		var d=domain(false);var j=new MarkerVelocityTransfer();j.capture(d);int n=j.markerCount();
+		double[][] load=new double[][]{new double[j.faceCount(0)],new double[j.faceCount(1)],new double[j.faceCount(2)]};
+		int[] lower={d.xFaceIndex(1,1,1),d.yFaceIndex(1,1,1),d.zFaceIndex(1,1,1)};
+		int[] upper={d.xFaceIndex(2,1,1),d.yFaceIndex(1,2,1),d.zFaceIndex(1,1,2)};
+		for(int a=0;a<3;a++){load[a][lower[a]]=-.25;load[a][upper[a]]=.25;}
+		var force=new double[3][n];j.transpose(load,force);double[] total=new double[3],torque=new double[3];
+		for(int p=0;p<n;p++) {
+			double[] r={d.particles.positionX(p)-1,d.particles.positionY(p)-1,d.particles.positionZ(p)-1};
+			for(int a=0;a<3;a++){total[a]+=force[a][p];torque[a]+=r[(a+1)%3]*force[(a+2)%3][p]-r[(a+2)%3]*force[(a+1)%3][p];}
+		}
+		double[] peak=new double[3],compactRate=new double[3];
+		for(int rotation=0;rotation<3;rotation++) {
+			var velocity=new double[3][n];
+			for(int p=0;p<n;p++) {
+				double[] r={d.particles.positionX(p)-1,d.particles.positionY(p)-1,d.particles.positionZ(p)-1};
+				velocity[(rotation+1)%3][p]=-r[(rotation+2)%3];velocity[(rotation+2)%3][p]=r[(rotation+1)%3];
+			}
+			var mac=new double[][]{new double[j.faceCount(0)],new double[j.faceCount(1)],new double[j.faceCount(2)]};j.apply(velocity,mac);
+			for(int z=0;z<d.sizeZ;z++)for(int y=0;y<d.sizeY;y++)for(int x=0;x<d.sizeX;x++)if(d.isFluid(d.cellIndex(x,y,z))) {
+				double flux=.25*(d.pressureXFaceOpen(x+1,y,z)*mac[0][d.xFaceIndex(x+1,y,z)]-d.pressureXFaceOpen(x,y,z)*mac[0][d.xFaceIndex(x,y,z)]
+						+d.pressureYFaceOpen(x,y+1,z)*mac[1][d.yFaceIndex(x,y+1,z)]-d.pressureYFaceOpen(x,y,z)*mac[1][d.yFaceIndex(x,y,z)]
+						+d.pressureZFaceOpen(x,y,z+1)*mac[2][d.zFaceIndex(x,y,z+1)]-d.pressureZFaceOpen(x,y,z)*mac[2][d.zFaceIndex(x,y,z)]);
+				peak[rotation]=Math.max(peak[rotation],Math.abs(flux));if(x==1&&y==1&&z==1)compactRate[rotation]=flux;
+			}
+			if(Math.abs(compactRate[rotation]-torque[rotation])>3e-14)throw new AssertionError("Rotation virtual work differs from pressure flux");
+		}
+		for(double[] values:new double[][]{total,torque,peak,compactRate})for(double value:values)if(!Double.isFinite(value))throw new AssertionError("Non-finite rotation observation");
+		System.out.printf("fixedMassTransferRotation markers=%d omega=1rad/s center=(1,1,1)m maxVolumeRate=%s m3/s compactPressureCell=21 pressure=1Pa totalForce=%s N torque=%s Nm rotationWork=%s W%n",n,Arrays.toString(peak),Arrays.toString(total),Arrays.toString(torque),Arrays.toString(compactRate));
 	}
 }
