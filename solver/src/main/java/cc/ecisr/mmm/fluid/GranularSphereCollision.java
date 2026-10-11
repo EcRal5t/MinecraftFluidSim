@@ -51,6 +51,10 @@ final class GranularSphereCollision {
 		boolean supported = velocity[1] <= 0 && history.stream().anyMatch(hit -> hit.normal[1] > 0);
 		return new Motion(endpoint[0], endpoint[1], endpoint[2], (float) v[0], (float) v[1], (float) v[2], supported, budget - remainingOperations);
 	}
+	/** Cold support at a stored resting pose, using the same coordinate rounding envelope as motion. */
+	boolean supportsAtRest(float x, float y, float z, float radius) {
+		return touching(new double[]{x, y, z}, radius, new ArrayList<>()).stream().anyMatch(hit -> hit.normal[1] > 0);
+	}
 	private void operation() { if (--remainingOperations < 0) throw new MechanicalTimeRefinement(2, "Granular sphere contact operations"); }
 	private List<Hit> first(double[] p, double[] d, double radius) {
 		List<Hit> candidates = new ArrayList<>();

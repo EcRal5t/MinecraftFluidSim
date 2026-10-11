@@ -19,6 +19,7 @@ public final class GranularCarrierValidation {
 		contactImpulsePreservesSolvedDrift();
 		contactImpulseObeysCoulombCone();
 		committedContactMomentumCloses();
+		capacityHoldRequiresActualSupport();
 		contactAgeSaturates();
 		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
@@ -611,6 +612,63 @@ public final class GranularCarrierValidation {
 					"held parcel must commit its original position and zero velocity");
 			else require(after.velocityX() != before.velocityX() && after.velocityY() != before.velocityY()
 					&& after.velocityZ() < 0, "wall fixture must include tangent friction and normal restitution");
+		}
+	}
+
+	private static void capacityHoldRequiresActualSupport() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double mass = 2_600.0 * svq / SolidVolume.SVQ_PER_BV;
+		float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+		for (boolean bedContact : new boolean[]{false, true}) {
+			var parcels = new GranularParcelStore(registry, 65);
+			var beds = new cc.ecisr.mmm.granular.GranularDepositStore(registry, 27, 27);
+			float cloudY = bedContact ? .25F : .75F;
+			for (int i = 0; i < 64; i++) parcels.add(new GranularParcelStore.Parcel(.75F, cloudY, .75F,
+					0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
+			float px = bedContact ? .25F : .75F, py = 1.25F;
+			if (bedContact) {
+				require(beds.tryAdd(9, new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(
+						sand, 0, svq, mass), SolidVolume.SVQ_PER_CELL), "support bed must fit");
+				double exactY = beds.cellBulkVolumeSvq(9) / (double) SolidVolume.SVQ_PER_CELL * .5 + radius;
+				py = (float) exactY; if (py < exactY) py = Math.nextUp(py);
+			}
+			parcels.add(new GranularParcelStore.Parcel(px, py, .75F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
+			var collision = new FlipGranularCollision(3, 3, 3, .5F, new FlipCutCellGeometry(3, 3, 3), beds, 65);
+			var coupling = new cc.ecisr.mmm.granular.GranularCouplingFields(3, 3, 3, .5);
+			if (bedContact) for (int i = 0; i < 3; i++) {
+				collision.preview(parcels, registry, .05F); collision.commit(parcels);
+			}
+			for (int step = 0; step < 3; step++) {
+				var source = parcels.parcel(64);
+				parcels.overwrite(64, new GranularParcelStore.Parcel(px, py, .75F,
+						bedContact ? .1F : 0, -.1F, 0, svq, mass, sand, 0, source.contactAge(), source.flags()));
+				coupling.rebuild(parcels, beds);
+				// L1 displacement <= .01 m, inside the default .4 Courant limit of .2 m.
+				collision.preview(parcels, registry, .05F);
+				require(collision.resolveCapacity(parcels, coupling, cell -> SolidVolume.SVQ_PER_CELL) == 1,
+						"full neighboring kernel must reject exactly the moving parcel");
+				collision.commit(parcels);
+				var held = parcels.parcel(64);
+				require(held.x() == px && held.y() == py && held.velocityX() == 0 && held.velocityY() == 0,
+						"capacity hold must restore the source pose and rest velocity");
+				require(held.contactAge() == (bedContact ? step + 4 : 0)
+						&& ((held.flags() & GranularParcelStore.FLAG_SUPPORTED) != 0) == bedContact,
+						"capacity hold must derive support from its original actual contact");
+			}
+			if (!bedContact) {
+				var inventory = new cc.ecisr.mmm.granular.GranularInventory(parcels, beds);
+				var dynamics = new cc.ecisr.mmm.granular.GranularDepositDynamics(registry, parcels, beds, inventory, 3, 3, 3, .5F);
+				var stats = dynamics.step(new cc.ecisr.mmm.granular.GranularDepositDynamics.Environment() {
+					public long geometricOpenSvq(int cell) { return SolidVolume.SVQ_PER_CELL; }
+					public double gravity() { return 9.81; }
+					public boolean horizontalPathOpen(int cell, int dx, int dz) { return true; }
+					public double shields(int cell, cc.ecisr.mmm.granular.ParticulateMaterial material) { return 0; }
+				}, .05F);
+				require(stats.settledParcels() == 0 && parcels.count() == 65 && beds.groupCount() == 0,
+						"an airborne held parcel must remain active rather than acquire deposit eligibility");
+			}
 		}
 	}
 

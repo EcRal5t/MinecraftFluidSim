@@ -206,11 +206,12 @@ final class FlipGranularCollision {
 
 	private void holdParcel(GranularParcelStore parcels, int index) {
 		GranularParcelStore.Parcel parcel = parcels.parcel(index);
-		boolean downwardContact = nextY[index] < parcel.y();
+		boolean supported = sphereCollision.supportsAtRest(parcel.x(), parcel.y(), parcel.z(),
+				collisionRadius(parcel.solidVolumeSvq()));
 		nextX[index] = parcel.x(); nextY[index] = parcel.y(); nextZ[index] = parcel.z();
 		nextVelocityX[index] = nextVelocityY[index] = nextVelocityZ[index] = 0.0F;
-		nextContactAge[index] = downwardContact ? incrementContactAge(parcel.contactAge()) : 0;
-		nextFlags[index] = downwardContact ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
+		nextContactAge[index] = supported ? incrementContactAge(parcel.contactAge()) : 0;
+		nextFlags[index] = supported ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
 				: (byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED);
 	}
 
