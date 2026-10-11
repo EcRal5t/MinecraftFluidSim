@@ -68,7 +68,7 @@ public final class ThermalCellGrid {
 			for (int cell = from; cell < until; cell++) {
 				if (carrierCount[cell] > 0) {
 					conductivity[cell] /= totalVolume[cell];
-					solveCell(cell, internalEnergy[cell]);
+					solveCarrierCell(cell);
 				}
 			}
 		});
@@ -91,7 +91,7 @@ public final class ThermalCellGrid {
 		});
 		CpuWorkBatch.run(cellCount, (from, until) -> {
 			for (int cell = from; cell < until; cell++) if (carrierCount[cell] > 0)
-				solveCell(cell, internalEnergy[cell]);
+				solveCarrierCell(cell);
 		});
 		updateObservedTemperatureRange();
 	}
@@ -106,7 +106,8 @@ public final class ThermalCellGrid {
 		internalEnergy[targetCell] = targetEnergy;
 		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
 			conductivity[cell] /= totalVolume[cell];
-			solveCell(cell, internalEnergy[cell]);
+			if (cell == targetCell) solveCell(cell, targetEnergy);
+			else solveCarrierCell(cell);
 		}
 		updateObservedTemperatureRange();
 	}
@@ -136,6 +137,7 @@ public final class ThermalCellGrid {
 					throw new IllegalArgumentException("Untouched thermal phase cell has no prepared LTE state");
 				}
 				temperature[cell] = previousTemperature[cell];
+					internalEnergy[cell] = exactCarrierEnergyInCell(cell).toDouble();
 				heatCapacity[cell] = modeledCellHeatCapacity(cell, temperature[cell]);
 				updateLinearTemperatureInterval(cell);
 			}
@@ -268,6 +270,18 @@ public final class ThermalCellGrid {
 	double carrierVolume(int cell) { return totalVolume[cell]; }
 
 	private void assignSolvedCellEnergy(int cell, double requested) {
+		CellEnergyAssignment assignment = prepareSolvedCellEnergy(cell, requested);
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			double value = carrier == assignment.remainderCarrier() ? assignment.remainder()
+					: modeledEnergy(carrier, temperature[cell]);
+			carriers.setInternalEnergy(carrier, value);
+		}
+		internalEnergy[cell] = requested;
+	}
+
+	private record CellEnergyAssignment(int remainderCarrier, double remainder) { }
+
+	private CellEnergyAssignment prepareSolvedCellEnergy(int cell, double requested) {
 		int remainderCarrier = -1;
 		double largestHeatCapacity = Double.NEGATIVE_INFINITY;
 		SignedDyadic assigned = SignedDyadic.ZERO;
@@ -284,14 +298,12 @@ public final class ThermalCellGrid {
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
 			if (carrier == remainderCarrier) continue;
 			double value = modeledEnergy(carrier, temperature[cell]);
-			carriers.setInternalEnergy(carrier, value);
 			assigned = assigned.add(SignedDyadic.of(value));
 		}
 		double remainder = SignedDyadic.of(requested).subtract(assigned).toDouble();
 		if (!Double.isFinite(remainder)) throw new IllegalArgumentException("Thermal carrier energy remainder is invalid");
-		carriers.setInternalEnergy(remainderCarrier, remainder);
-		validateCarrierAtCellTemperature(remainderCarrier, temperature[cell]);
-		internalEnergy[cell] = requested;
+		validateCarrierAtCellTemperature(remainderCarrier, remainder, temperature[cell]);
+		return new CellEnergyAssignment(remainderCarrier, remainder);
 	}
 
 	/** Validates a complete prospective LTE energy assignment without changing any authoritative carrier. */
@@ -307,6 +319,7 @@ public final class ThermalCellGrid {
 			} else {
 				if (!Double.isFinite(targetEnergy[cell])) throw new IllegalArgumentException("Thermal cell energy is not finite");
 				solveCell(cell, targetEnergy[cell]);
+				prepareSolvedCellEnergy(cell, targetEnergy[cell]);
 			}
 		}
 	}
@@ -369,9 +382,25 @@ public final class ThermalCellGrid {
 		rebuild(carriers);
 	}
 
-	private void solveCell(int cell, double targetEnergy) {
+	private void solveCarrierCell(int cell) {
+		SignedDyadic target = exactCarrierEnergyInCell(cell);
+		internalEnergy[cell] = target.toDouble();
+		if (!Double.isFinite(internalEnergy[cell])) throw new IllegalArgumentException("Thermal cell energy is not finite");
+		solveCell(cell, target);
+	}
+
+	private void solveCell(int cell, double targetEnergy) { solveCell(cell, SignedDyadic.of(targetEnergy)); }
+
+	private void solveCell(int cell, SignedDyadic target) {
+		SignedDyadic reference = SignedDyadic.ZERO;
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier])
+			reference = reference.add(SignedDyadic.of(cachedBaseEnergy(carrier)));
+		// Solve in sensible-energy coordinates; a large arbitrary reference must not round away
+		// the caloric curve before subtracting it from the authoritative target.
+		double targetEnergy = target.subtract(reference).toDouble();
+		if (!Double.isFinite(targetEnergy)) throw new IllegalArgumentException("Thermal cell sensible energy is invalid");
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-		double energyAtMinimum = modeledCellEnergy(cell, minimum);
+		double energyAtMinimum = modeledCellSensibleEnergy(cell, minimum);
 		double tolerance = energyTolerance(targetEnergy, energyAtMinimum);
 		if (targetEnergy < energyAtMinimum - tolerance) {
 			throw new IllegalArgumentException("Thermal cell energy is outside the positive-temperature domain");
@@ -450,10 +479,11 @@ public final class ThermalCellGrid {
 		maximumTemperature[cell] = maximum;
 	}
 
-	private double modeledCellEnergy(int cell, double temperatureK) {
+	private double modeledCellSensibleEnergy(int cell, double temperatureK) {
 		double total = 0.0, correction = 0.0;
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			double value = modeledEnergy(carrier, temperatureK), next = total + value;
+			double value = carrierMass[carrier] * carrierMaterial[carrier].sensibleSpecificEnergyAt(temperatureK);
+			double next = total + value;
 			correction += Math.abs(total) >= Math.abs(value) ? (total - next) + value : (value - next) + total;
 			total = next;
 		}
@@ -480,14 +510,14 @@ public final class ThermalCellGrid {
 		return value;
 	}
 
-	private void validateCarrierAtCellTemperature(int carrier, double cellTemperature) {
-		if (carriers.internalEnergy(carrier) == modeledEnergy(carrier, cellTemperature)) return;
+	private void validateCarrierAtCellTemperature(int carrier, double energy, double cellTemperature) {
+		if (energy == modeledEnergy(carrier, cellTemperature)) return;
 		ThermalMaterialDefinition material = carrierMaterial[carrier];
-		double sensible = (carriers.internalEnergy(carrier) - cachedBaseEnergy(carrier)) / carrierMass[carrier];
+		double sensible = (energy - cachedBaseEnergy(carrier)) / carrierMass[carrier];
 		double restored = material.temperatureForSensibleSpecificEnergy(sensible);
 		double tolerance = Math.max(1.0E-9, Math.max(Math.ulp(restored), Math.ulp(cellTemperature)) * 16.0);
 		if (Math.abs(restored - cellTemperature) > tolerance) {
-			double residual = carriers.internalEnergy(carrier) - modeledEnergy(carrier, cellTemperature);
+			double residual = energy - modeledEnergy(carrier, cellTemperature);
 			throw new IllegalArgumentException("Thermal carrier remainder left local equilibrium"
 					+ " (carrier=" + carrier + ", cellTemperature=" + cellTemperature
 					+ ", restoredTemperature=" + restored + ", energyResidual=" + residual

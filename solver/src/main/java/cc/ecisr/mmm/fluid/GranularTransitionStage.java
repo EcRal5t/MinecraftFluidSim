@@ -8,10 +8,11 @@ import cc.ecisr.mmm.granular.GranularParcelStore;
 /** Performs active compaction followed by deposit settlement/relaxation/wake transitions. */
 final class GranularTransitionStage {
 	record Workspace(FluidSolverConfig config) { }
+	record Outcome(GranularDepositDynamics.Stats depositStats, FluidDomain.LiquidTransportStats liquidTransport) { }
 
 	interface Access {
 		long[] beginGeometryTransition();
-		void commitGeometryTransition(long[] previous);
+		FluidDomain.LiquidTransportStats commitGeometryTransition(long[] previous);
 		GranularDomainState granularState();
 		GranularCouplingFields coupling();
 		GranularDepositDynamics depositDynamics();
@@ -37,7 +38,7 @@ final class GranularTransitionStage {
 		this.access = access;
 	}
 
-	GranularDepositDynamics.Stats step() {
+	Outcome step() {
 		long[] previousSolid = access.beginGeometryTransition();
 		GranularDomainState granular = access.granularState();
 		GranularCouplingFields coupling = access.coupling();
@@ -54,7 +55,7 @@ final class GranularTransitionStage {
 			}
 		}
 		GranularDepositDynamics dynamics = access.depositDynamics();
-		if (dynamics == null) return EMPTY_STATS;
+		if (dynamics == null) return new Outcome(EMPTY_STATS, FluidDomain.LiquidTransportStats.INACTIVE);
 		long[] dynamicsSolid = null;
 		GranularDepositDynamics.Stats stats;
 		if (access.hasInventory() || dynamics.dirtyColumnCount() != 0) {
@@ -77,7 +78,6 @@ final class GranularTransitionStage {
 			coupling.clear();
 			access.pressureCoupling(null);
 		}
-		access.commitGeometryTransition(previousSolid);
-		return stats;
+		return new Outcome(stats, access.commitGeometryTransition(previousSolid));
 	}
 }

@@ -2,6 +2,7 @@ package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.Map;
 import java.util.List;
@@ -76,8 +77,13 @@ public final class ThermalStateFunction {
 				|| !Double.isFinite(internalEnergy)) {
 			throw new IllegalArgumentException("Thermal LTE inventory is missing, over budget or non-finite");
 		}
+		SignedDyadic reference = SignedDyadic.ZERO;
+		for (InventoryPortion portion : portions) reference = reference.add(SignedDyadic.of(
+				baseEnergy(portion.materialHandle(), portion.massMu(), portion.speciesQuanta())));
+		internalEnergy = SignedDyadic.of(internalEnergy).subtract(reference).toDouble();
+		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Thermal LTE sensible energy overflow");
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-		double minimumEnergy = inventoryEnergy(portions, minimum);
+		double minimumEnergy = inventorySensibleEnergy(portions, minimum);
 		double tolerance = energyTolerance(internalEnergy, minimumEnergy);
 		if (internalEnergy < minimumEnergy - tolerance) {
 			throw new EnergyOutsideValidityException();
@@ -230,10 +236,11 @@ public final class ThermalStateFunction {
 		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Thermal internal energy must be finite");
 	}
 
-	private double inventoryEnergy(List<InventoryPortion> portions, double temperatureK) {
-		double total = 0.0;
-		for (InventoryPortion portion : portions) total += internalEnergyAtTemperature(
-				portion.materialHandle(), portion.massMu(), portion.speciesQuanta(), temperatureK);
+	private double inventorySensibleEnergy(List<InventoryPortion> portions, double temperatureK) {
+		SignedDyadic energy = SignedDyadic.ZERO;
+		for (InventoryPortion portion : portions) energy = energy.add(SignedDyadic.of(portion.massMu()
+				* registry.material(portion.materialHandle()).sensibleSpecificEnergyAt(temperatureK)));
+		double total = energy.toDouble();
 		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal LTE energy overflow");
 		return total;
 	}

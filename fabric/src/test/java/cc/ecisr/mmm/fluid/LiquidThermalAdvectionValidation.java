@@ -205,6 +205,8 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	}
 
 	static void caloricAndSpeciesObservation() {
+		observationPreservesTemperatureUnderReferenceOffsets();
+		referenceGridLifecycleIsAtomic();
 		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		var first = new ThermalMaterialDefinition("test:thermal/first", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"test:first", 300, -10000, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(200, 300, 10),
@@ -261,6 +263,108 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 					&& markers.mixture(0).equals(mixtures[0]) && markers.mixture(1).equals(mixtures[1]),
 					"carrier conduction changed species or external energy");
 		}
+	}
+
+	private static void observationPreservesTemperatureUnderReferenceOffsets() {
+		var markers = new ThermalCarrierContext() {
+			@Override public int markerCount() { return 1; }
+			@Override public int cell(int marker) { return 0; }
+			@Override public int fluidMaterialHandle(int marker) { return 0; }
+			@Override public double mass(int marker) { return 1; }
+			@Override public double volume(int marker) { return 1; }
+			@Override public ChemicalMixtureRecord mixture(int marker) { return null; }
+			@Override public ChemicalRegistry chemicalRegistry() { return null; }
+			@Override public void observationSupport(int marker, SupportConsumer consumer) {
+				consumer.accept(0, 0.1); consumer.accept(1, 0.9);
+			}
+		};
+		for (double reference : new double[] {0, 1e18, -1e18}) {
+			var material = new ThermalMaterialDefinition("test:thermal/reference", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"test:reference", 300, reference, 0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1)));
+			var thermal = new ThermalDomainState(new ThermalRegistry(List.of(material)), new int[] {0}, new int[0],
+					300, 2, 2, 1, 1, 1, markers, null, 8);
+			thermal.resetMarkerTemperature(0, 172, markers, thermal.exactEnergy(1));
+			double ownerTemperature = thermal.temperature(0, markers);
+			var before = thermal.exactEnergy(1); var audit = thermal.auditLedger();
+			var stateFunction = new cc.ecisr.mmm.thermal.ThermalStateFunction(new ThermalRegistry(List.of(material)));
+			require(close(stateFunction.stateForInventory(List.of(new cc.ecisr.mmm.thermal.ThermalStateFunction.InventoryPortion(
+					0, 1, Map.of())), before.toDouble()).temperatureK(), ownerTemperature),
+					"candidate LTE inversion rounded away sensible energy under a large reference");
+			thermal.preparePhaseScan(markers);
+			require(close(thermal.phaseScanTemperatureInCell(0), ownerTemperature),
+					"LTE inversion rounded away sensible energy under a large reference");
+			thermal.prepareSpatialObservation(markers);
+			for (int cell = 0; cell < 2; cell++) require(close(thermal.spatialTemperatureInCell(cell), ownerTemperature),
+					"observation weights changed a uniform source temperature under a large reference");
+			require(before.equals(thermal.exactEnergy(1)) && audit.equals(thermal.auditLedger()),
+					"reference-coordinate observation changed authoritative energy or its ledger");
+		}
+		var materials = new java.util.ArrayList<ThermalMaterialDefinition>();
+		for (int i = 0; i < 3; i++) materials.add(new ThermalMaterialDefinition("test:thermal/reference_" + i,
+				ThermalMaterialDefinition.CarrierKind.LIQUID, "test:reference_" + i, 300,
+				i == 0 ? 1e18 : i == 1 ? -1e18 : 0, 0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1))));
+		for (int[] order : new int[][] {{0, 1, 2}, {2, 0, 1}, {1, 2, 0}}) {
+			var mixed = new ThermalCarrierContext() {
+				@Override public int markerCount() { return 3; }
+				@Override public int cell(int marker) { return 0; }
+				@Override public int fluidMaterialHandle(int marker) { return order[marker]; }
+				@Override public double mass(int marker) { return 1; }
+				@Override public double volume(int marker) { return 0.25; }
+				@Override public ChemicalMixtureRecord mixture(int marker) { return null; }
+				@Override public ChemicalRegistry chemicalRegistry() { return null; }
+			};
+			var thermal = new ThermalDomainState(new ThermalRegistry(materials), new int[] {0, 1, 2}, new int[0],
+					300, 3, 1, 1, 1, 1, mixed, null, 8);
+			for (int p = 0; p < 3; p++) if (order[p] == 2)
+				thermal.resetMarkerTemperature(p, 500, mixed, thermal.exactEnergy(3));
+			var before = thermal.exactEnergy(3); var audit = thermal.auditLedger();
+			var portions = materials.stream().map(m -> new cc.ecisr.mmm.thermal.ThermalStateFunction.InventoryPortion(
+					materials.indexOf(m), 1, Map.<String, Long>of())).toList();
+			require(close(new cc.ecisr.mmm.thermal.ThermalStateFunction(new ThermalRegistry(materials))
+					.stateForInventory(portions, before.toDouble()).temperatureK(), (300 + 300 + 500) / 3.0),
+					"candidate LTE inversion lost energy under opposing references");
+			thermal.preparePhaseScan(mixed);
+			require(close(thermal.phaseScanTemperatureInCell(0), (300 + 300 + 500) / 3.0),
+					"opposing references erased another carrier's energy before LTE inversion");
+			require(before.equals(thermal.exactEnergy(3)) && audit.equals(thermal.auditLedger()),
+					"LTE reference cancellation changed the inventory or audit");
+		}
+	}
+
+	private static void referenceGridLifecycleIsAtomic() {
+		int[] writes = {0};
+		double[] remote = {1e16, 1, -1e16, 5};
+		var grid = new ThermalCellGrid(2);
+		var owners = referenceOwners(new int[] {0, 0, 0, 1}, remote.clone(), remote, writes);
+		grid.rebuild(owners);
+		grid.rebuildPhaseCellWithEnergy(owners, 1, 5);
+		require(grid.internalEnergy(0) == 1 && grid.temperature(0) == 300 && Arrays.equals(remote, new double[] {1e16, 1, -1e16, 5}),
+				"phase rebuild lost remote exact energy or changed its owners");
+		double[] energy = {1e18 + 256, -1e18 - 128}, before = energy.clone(); writes[0] = 0;
+		var unrepresentable = new ThermalCellGrid(1);
+		unrepresentable.rebuild(referenceOwners(new int[] {0, 0}, new double[] {1e18, -1e18}, energy, writes));
+		expectFailure(() -> unrepresentable.validateCellInternalEnergies(new double[] {128}),
+				"LTE preflight accepted an unrepresentable carrier remainder");
+		expectFailure(() -> unrepresentable.setCellInternalEnergy(0, 128),
+				"LTE commit accepted an unrepresentable carrier remainder");
+		require(writes[0] == 0 && Arrays.equals(energy, before), "rejected LTE assignment changed an owner before validation");
+	}
+
+	private static ThermalCellGrid.CarrierAccess referenceOwners(int[] cells, double[] base, double[] energy, int[] writes) {
+		var model = new ThermalMaterialDefinition("test:thermal/lifecycle", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:lifecycle", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1)));
+		return new ThermalCellGrid.CarrierAccess() {
+			@Override public int carrierCount() { return energy.length; }
+			@Override public int cell(int carrier) { return cells[carrier]; }
+			@Override public ThermalMaterialDefinition material(int carrier) { return model; }
+			@Override public double mass(int carrier) { return 1; }
+			@Override public double volume(int carrier) { return 0.125; }
+			@Override public double baseEnergy(int carrier) { return base[carrier]; }
+			@Override public double internalEnergy(int carrier) { return energy[carrier]; }
+			@Override public void setInternalEnergy(int carrier, double value) { energy[carrier] = value; writes[0]++; }
+		};
 	}
 
 	static void geometryRestrictsObservation() {

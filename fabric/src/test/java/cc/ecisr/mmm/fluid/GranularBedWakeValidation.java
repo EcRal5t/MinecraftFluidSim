@@ -151,7 +151,7 @@ public final class GranularBedWakeValidation {
 		var beforeAudit = domain.thermalAudit();
 		double beforeK = domain.particleKineticEnergyJoules(), beforeMass = domain.totalGranularMass();
 		int beforeCount = domain.particles.count();
-		var stats = domain.granularTransitionStage.step();
+		var stats = domain.granularTransitionStage.step().depositStats();
 		require(stats.wokenParcels() > 0, "Sleeping bed ignored actual liquid velocity");
 		require(domain.exactInternalEnergy().subtract(beforeU).equals(
 				domain.thermalAudit().roundoffResidual().subtract(beforeAudit.roundoffResidual()))

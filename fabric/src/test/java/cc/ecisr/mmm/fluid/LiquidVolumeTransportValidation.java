@@ -37,6 +37,113 @@ public final class LiquidVolumeTransportValidation {
 		return r2 >= 6.25 ? 0 : 6.25 * Math.pow(1 - r2 / 6.25, 3);
 	}
 
+	private static FluidDomain representationRemapDomain(int nx, int ny, int nz, boolean fill) {
+		var domain = new FluidDomain(nx, ny, nz,
+				new FluidSolverConfig(.5F, 1000, 0, .05F, 400, 1E-5F, .4F, .002F, .8F), 216);
+		domain.bindGranular(cc.ecisr.mmm.granular.BuiltinGranularDefinitions.createRegistry(),
+				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
+		long volume = cc.ecisr.mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ / 2;
+		for (double mass : new double[] {2.5625, 2.5}) {
+			var group = new cc.ecisr.mmm.granular.GranularTransferLedger.Group(
+					cc.ecisr.mmm.granular.BuiltinGranularDefinitions.FINE_SAND, volume, mass, null);
+			if (!domain.tryInsertExactGranular(1, 1, 1, new cc.ecisr.mmm.granular.GranularTransferLedger(
+					java.util.List.of(group)), 0, true).inserted()) throw new AssertionError("Granular remap setup failed");
+		}
+		if (fill) {
+			domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
+			long[] solid = domain.granularCoupling.copySolidSvq();
+			for (int cell = 0; cell < domain.cellCount; cell++) {
+				float amount = (float) (1 - solid[cell] / (double) cc.ecisr.mmm.granular.SolidVolume.SVQ_PER_CELL);
+				if (!domain.tryInsertExactMaterial(cell % nx, cell / nx % ny, cell / (nx * ny),
+						amount, 1000 * amount, 0, 0).transferred()) throw new AssertionError("Liquid remap setup failed");
+			}
+		}
+		return domain;
+	}
+
+	private static SignedDyadic liquidVerticalMassMoment(FluidDomain domain) {
+		SignedDyadic moment = SignedDyadic.ZERO;
+		for (int marker = 0; marker < domain.particles.count(); marker++) moment = moment.add(
+				SignedDyadic.of(domain.unitScale.kilograms(domain.particles.mass(marker)))
+						.multiply(SignedDyadic.of(domain.particles.positionY(marker))));
+		return moment;
+	}
+
+	private static void representationRemapReportsLogicalMoments() {
+		var domain = representationRemapDomain(3, 3, 3, true);
+		domain.captureAuthoritativeState();
+		SignedDyadic before = liquidVerticalMassMoment(domain);
+		double mass = domain.totalMass(); float volume = domain.totalVolume();
+		// Two stationary mechanical substeps contribute no remap; compaction then contributes exactly once.
+		var logical = domain.step(false, 0, false, false, 2);
+		domain.captureAuthoritativeState();
+		SignedDyadic after = liquidVerticalMassMoment(domain);
+		var moments = logical.liquidTransport();
+		double delta = after.subtract(before).toDouble();
+		double bound = 64 * Math.ulp(Math.max(Math.abs(before.toDouble()), Math.abs(after.toDouble())));
+		if (domain.granularState.parcels.count() != 1 || logical.substeps() != 2
+				|| domain.totalMass() != mass || domain.totalVolume() != volume
+				|| !(delta > .1) || Math.abs(moments.signedMassResidual().y() - delta) > bound
+				|| !moments.equals(domain.cellLiquidVolumeTransport.momentAudit.stats())
+				|| moments.reconstructedGroups() != 27 || moments.projectedGroups() == 0
+				|| Math.abs(moments.gravitationalPotentialErrorJoules(9.81) - 9.81 * delta) > 9.81 * bound)
+			throw new AssertionError("Representation remap lost or repeated its observable mass moment error");
+		var unchanged = domain.step(false, 0, false, false, 2).liquidTransport();
+		if (!unchanged.equals(FluidDomain.LiquidTransportStats.INACTIVE))
+			throw new AssertionError("A later unchanged representation replayed an earlier remap audit");
+	}
+
+	private static void representationRemapBudgetRejectsPrivateCandidate() {
+		var domain = representationRemapDomain(100, 10, 10, false);
+		var dryCandidate = new CpuFluidSolverBackend().evaluate(
+				FluidStepRequest.pendingPhaseSettlement(0, domain.captureAuthoritativeState()));
+		if (!dryCandidate.stats().liquidTransport().equals(FluidDomain.LiquidTransportStats.INACTIVE)
+				|| dryCandidate.state().granular().activeParcels().size() != 1)
+			throw new AssertionError("A dry granular compaction needlessly searched for liquid displacement");
+		if (!domain.tryInsertExactMaterial(1, 1, 1, .25F, 250, 0, 0).transferred())
+			throw new AssertionError("Wet displacement budget setup failed");
+		var before = domain.captureAuthoritativeState();
+		long revision = domain.carrierMutationRevision();
+		int count = domain.particles.count();
+		SignedDyadic moment = liquidVerticalMassMoment(domain);
+		double mass = domain.totalMass(); float volume = domain.totalVolume();
+		try {
+			new CpuFluidSolverBackend().evaluate(FluidStepRequest.pendingPhaseSettlement(0, before));
+			throw new AssertionError("Oversized representation graph bypassed its stage operation budget");
+		} catch (FluidSolverBackend.MechanicalWorkBudgetExceededException expected) {
+			if (!expected.getMessage().contains("representation-remap")) throw expected;
+		}
+		var after = domain.captureAuthoritativeState();
+		if (domain.carrierMutationRevision() != revision || domain.particles.count() != count
+				|| domain.totalMass() != mass || domain.totalVolume() != volume || !moment.equals(liquidVerticalMassMoment(domain))
+				|| !before.granular().activeParcels().equals(after.granular().activeParcels())
+				|| !before.granular().depositGroups().equals(after.granular().depositGroups()))
+			throw new AssertionError("Rejected private remap changed its committed source inventory");
+	}
+
+	private static void logicalRemapStatsSumDistinctSubstepsAndTail() {
+		var actual = representationRemapDomain(3, 3, 3, false);
+		var reference = representationRemapDomain(3, 3, 3, false);
+		for (var domain : new FluidDomain[] {actual, reference}) {
+			for (int cell = 0; cell < 27; cell++) if (!domain.tryInsertExactMaterial(
+					cell % 3, cell / 3 % 3, cell / 9, .5F, 500, 0, 0).transferred())
+				throw new AssertionError("Partial liquid accumulation setup failed");
+			for (int marker = 0; marker < domain.particles.count(); marker++) domain.particles.setVelocityX(marker, .1F);
+			domain.gridDirty = true;
+		}
+		var logical = actual.step(false, 0, false, false, 2).liquidTransport();
+		reference.carrierPropertiesWorkspace.beginStep();
+		var expected = FluidDomain.LiquidTransportStats.INACTIVE;
+		for (int substep = 0; substep < 2; substep++) {
+			var contribution = reference.mechanicalPipeline.substep(.025F, substep, false, null).liquidTransport();
+			if (contribution.reconstructedGroups() == 0) throw new AssertionError("Mechanical accumulation control is inactive");
+			expected = expected.plus(contribution);
+		}
+		var tail = reference.granularTransitionStage.step().liquidTransport();
+		if (tail.reconstructedGroups() == 0 || !logical.equals(expected.plus(tail)))
+			throw new AssertionError("Logical stats omitted or repeated a distinct mechanical or representation remap");
+	}
+
 	private static void granularRepresentationRoundingHasExactBudget() {
 		var domain = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 128);
@@ -203,6 +310,11 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("representation")) {
+			representationRemapReportsLogicalMoments(); logicalRemapStatsSumDistinctSubstepsAndTail();
+			representationRemapBudgetRejectsPrivateCandidate();
+			System.out.println("Granular representation remap diagnostics and budget validation passed"); return;
+		}
 		uniformDensityMassAllocation();
 		if (args.length == 1 && args[0].equals("mass")) {
 			System.out.println("Liquid mass allocation validation passed"); return;
@@ -212,6 +324,9 @@ public final class LiquidVolumeTransportValidation {
 		liquidFaceFloorHasExactBudget();
 		negativeKernelErrorCancelsFaceFloor();
 		jointErrorRoundsOnlyOnce();
+		representationRemapReportsLogicalMoments();
+		logicalRemapStatsSumDistinctSubstepsAndTail();
+		representationRemapBudgetRejectsPrivateCandidate();
 		if (args.length == 1 && args[0].equals("quantization")) {
 			System.out.println("Liquid/granular quantization handoff validation passed"); return;
 		}

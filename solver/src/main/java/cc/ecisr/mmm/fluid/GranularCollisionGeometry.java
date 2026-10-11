@@ -59,9 +59,13 @@ final class GranularCollisionGeometry {
 
 	/** Number of candidate bed cells visited by the same vertical broad phase. */
 	int verticalSpherePathWork(float x, float fromY, float z, float toY, float radius) {
+		return spherePathWork(x, fromY, z, x, toY, z, radius);
+	}
+
+	int spherePathWork(float x, float y, float z, float toX, float toY, float toZ, float radius) {
 		if (deposits == null) return 0;
-		int[] lo = lower(new double[]{x - (double) radius, Math.min(fromY, toY) - (double) radius, z - (double) radius}, h);
-		int[] hi = upper(new double[]{x + (double) radius, Math.max(fromY, toY) + (double) radius, z + (double) radius}, h, 1);
+		int[] lo = lower(new double[]{Math.min(x, toX) - (double) radius, Math.min(y, toY) - (double) radius, Math.min(z, toZ) - (double) radius}, h);
+		int[] hi = upper(new double[]{Math.max(x, toX) + (double) radius, Math.max(y, toY) + (double) radius, Math.max(z, toZ) + (double) radius}, h, 1);
 		int work = 1;
 		for (int a = 0; a < 3; a++) work = Math.multiplyExact(work, Math.max(0, hi[a] - lo[a] + 1));
 		return work;
@@ -69,15 +73,15 @@ final class GranularCollisionGeometry {
 
 	/** Vertical swept-sphere interior overlap; endpoint support tangency remains admissible. */
 	boolean verticalSpherePathTouchesSolid(float x, float fromY, float z, float toY, float radius) {
-		double lowY = Math.min(fromY, toY), highY = Math.max(fromY, toY);
-		double[] lo = {x - (double) radius, lowY - radius, z - (double) radius};
-		double[] hi = {x + (double) radius, highY + radius, z + (double) radius};
+		return spherePathTouchesSolid(x, fromY, z, x, toY, z, radius);
+	}
+
+	boolean spherePathTouchesSolid(float x, float y, float z, float toX, float toY, float toZ, float radius) {
+		double[] from = {x, y, z}, to = {toX, toY, toZ}, lo = new double[3], hi = new double[3];
+		for (int a = 0; a < 3; a++) { lo[a] = Math.min(from[a], to[a]) - radius; hi[a] = Math.max(from[a], to[a]) + radius; }
 		boolean[] crosses = {false};
 		forEachBox(lo, hi, (minimum, maximum) -> {
-			double dx = x - Math.max(minimum[0], Math.min(maximum[0], x));
-			double dy = Math.max(0, Math.max(minimum[1] - highY, lowY - maximum[1]));
-			double dz = z - Math.max(minimum[2], Math.min(maximum[2], z));
-			if (dx * dx + dy * dy + dz * dz < radius * (double) radius) crosses[0] = true;
+			if (!crosses[0] && GranularSphereGeometry.pathEntersBox(from, to, radius, minimum, maximum)) crosses[0] = true;
 		});
 		return crosses[0];
 	}

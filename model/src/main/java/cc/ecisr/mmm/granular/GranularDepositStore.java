@@ -2,6 +2,7 @@ package cc.ecisr.mmm.granular;
 
 import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ProportionalDoubleSplit;
 
 import java.math.BigInteger;
 import java.util.Arrays;
@@ -339,8 +340,9 @@ public final class GranularDepositStore {
 		if (result.solidVolumeSvq() == solidVolumeSvq[entry]) {
 			unlinkAndRelease(cell, previous, entry);
 		} else {
+			double remainingMass = ProportionalDoubleSplit.of(mass[entry], result.solidVolumeSvq(), solidVolumeSvq[entry]).remaining();
 			solidVolumeSvq[entry] -= result.solidVolumeSvq();
-			mass[entry] -= result.mass();
+			mass[entry] = remainingMass;
 		}
 		porosityQByCell[cell] = remainingPacking.porosityQ();
 		bulkVolumeSvqByCell[cell] = remainingPacking.bulkVolumeSvq();
@@ -367,12 +369,12 @@ public final class GranularDepositStore {
 		if (!allowReactivePartial && composition != 0 && takenVolume != solidVolumeSvq[entry]) {
 			throw new IllegalArgumentException("Reactive deposit requires a composition-aware split plan");
 		}
-		double takenMass = takenVolume == solidVolumeSvq[entry] ? mass[entry]
-				: mass[entry] * ((double) takenVolume / solidVolumeSvq[entry]);
+		ProportionalDoubleSplit split = ProportionalDoubleSplit.of(mass[entry], takenVolume, solidVolumeSvq[entry]);
+		double takenMass = split.removed();
 		if (!(takenMass > 0.0 && Double.isFinite(takenMass))) {
 			throw new IllegalArgumentException("Deposit partial mass is not representable");
 		}
-		if (takenVolume != solidVolumeSvq[entry] && !(mass[entry] - takenMass > 0.0)) {
+		if (takenVolume != solidVolumeSvq[entry] && !(split.remaining() > 0.0)) {
 			throw new IllegalArgumentException("Remaining deposit mass is not representable");
 		}
 		return new SolidPortion(material, composition, takenVolume, takenMass);

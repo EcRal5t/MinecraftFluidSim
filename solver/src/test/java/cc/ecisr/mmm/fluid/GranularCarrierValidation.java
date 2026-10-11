@@ -14,6 +14,7 @@ public final class GranularCarrierValidation {
 		depositContactsRespectCellGeometry();
 		depositPathsRespectSuspendedBeds();
 		cutBedGeometryMatchesFinalPlan();
+		relaxationRequiresAnActualHorizontalPath();
 		straightSphereContactsAreSymmetric();
 		contactImpulsePreservesSolvedDrift();
 		contactImpulseObeysCoulombCone();
@@ -313,6 +314,67 @@ public final class GranularCarrierValidation {
 				for (int index = 0; index < originals.length; index++) require(state.parcels.parcel(index).equals(originals[index]),
 						"cut-bed rejection must preserve each original source");
 			}
+		}
+	}
+
+	private static void relaxationRequiresAnActualHorizontalPath() {
+		for (int mode = 0; mode < 3; mode++) {
+			boolean blocked = mode == 0, exhausted = mode == 2;
+			var domain = new FluidDomain(3, 4, 3,
+					new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .4F, .002F, .8F), 512);
+			domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
+					new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
+			domain.sealDomainBoundary();
+			var state = domain.granularState;
+			int sand = state.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+			int source = domain.cellIndex(1, 1, 1), portal = domain.cellIndex(2, 1, 1), receiver = domain.cellIndex(2, 1, 2);
+			for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) {
+				long floor = (long) (SolidVolume.SVQ_PER_CELL * .62);
+				require(state.deposits.tryAdd(domain.cellIndex(x, 0, z), new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(
+						sand, 0, floor, 2_600.0 * floor / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "floor bed must fit its cell");
+				domain.geometry.cutCells.replaceMask(domain.cellIndex(x, 2, z), 255);
+				int cell = domain.cellIndex(x, 1, z);
+				if (cell != source && cell != portal && cell != receiver) domain.geometry.cutCells.replaceMask(cell, 255);
+			}
+			domain.geometry.cutCells.replaceMask(portal, blocked ? 126 : 0); // Open octants 0 and 7 have no face connection.
+			if (!blocked) {
+				domain.geometry.cutCells.replaceMask(domain.cellIndex(1, 1, 2), 0);
+				long side = (long) (SolidVolume.SVQ_PER_CELL * .62 * .3);
+				require(state.deposits.tryAdd(domain.cellIndex(1, 1, 2), new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(
+						sand, 0, side, 2_600.0 * side / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "open diagonal corridor must clear both adjacent corners");
+			}
+			for (int cell : new int[]{source, domain.cellIndex(2, 3, 1)}) {
+				long volume = (long) (SolidVolume.SVQ_PER_CELL * .62 * (cell == source ? .885 : .1));
+				require(state.deposits.tryAdd(cell, new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(
+						sand, 0, volume, 2_600.0 * volume / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "supported upper beds must fit");
+			}
+			domain.ensureGrid();
+			long[] planned = domain.granularCoupling.copySolidSvq(), before = planned.clone();
+			var environment = domain.granularDepositEnvironment(planned);
+			for (int cell = 0; cell < state.deposits.cellCount(); cell++) require(environment.bedGeometryFits(cell, state.deposits.cellBulkVolumeSvq(cell)),
+					"horizontal-path fixture must begin with every bed outside cut geometry");
+			require(environment.horizontalPathOpen(source, 1, 1), "both scalar open-face routes must admit this diagonal candidate");
+			if (exhausted) {
+				var actual = environment;
+				environment = (cc.ecisr.mmm.granular.GranularDepositDynamics.Environment) java.lang.reflect.Proxy.newProxyInstance(
+						cc.ecisr.mmm.granular.GranularDepositDynamics.Environment.class.getClassLoader(),
+						new Class<?>[]{cc.ecisr.mmm.granular.GranularDepositDynamics.Environment.class}, (proxy, method, args) -> {
+							if (method.getName().equals("horizontalTransferPathWork")) return GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP;
+							if (method.getName().equals("horizontalTransferPathOpen")) throw new AssertionError("path work must be charged before querying geometry");
+							return method.invoke(actual, args);
+						});
+			}
+			long sourceBefore = state.deposits.cellSolidVolumeSvq(source), stock = state.deposits.totalSolidVolumeSvq();
+			long revision = state.deposits.mutationRevision();
+			domain.granularDepositDynamics().disturbCell(source);
+			var result = domain.granularDepositDynamics().step(environment, .05F);
+			long arrived = state.deposits.cellSolidVolumeSvq(receiver);
+			require(state.deposits.totalSolidVolumeSvq() == stock && state.parcels.count() == 0 && result.wokenParcels() == 0,
+					"horizontal topology admission must preserve the exact inventory");
+			if (blocked || exhausted) require(result.relaxedMoves() == 0 && arrived == 0 && state.deposits.mutationRevision() == revision
+					&& result.dirtyColumns() > 0 && java.util.Arrays.equals(planned, before), "disconnected or over-budget horizontal paths must preserve bed stock and pending columns");
+			else require(result.relaxedMoves() == 1 && arrived > 0 && sourceBefore - state.deposits.cellSolidVolumeSvq(source) == arrived,
+					"an actual open horizontal corridor must preserve legal source contact and permit downward relaxation: " + result + ", arrived=" + arrived);
 		}
 	}
 

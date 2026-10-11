@@ -18,7 +18,9 @@ final class LogicalStepTailAssembly {
 				new GranularTransitionStage.Workspace(domain.config),
 				new GranularTransitionStage.Access() {
 					@Override public long[] beginGeometryTransition() { return GranularLiquidDisplacement.begin(domain); }
-					@Override public void commitGeometryTransition(long[] previous) { GranularLiquidDisplacement.commit(domain, previous); }
+					@Override public FluidDomain.LiquidTransportStats commitGeometryTransition(long[] previous) {
+						return GranularLiquidDisplacement.commit(domain, previous);
+					}
 					@Override public GranularDomainState granularState() { return domain.granularState; }
 					@Override public GranularCouplingFields coupling() { return domain.granularCoupling; }
 					@Override public GranularDepositDynamics depositDynamics() { return domain.granularDepositDynamics(); }

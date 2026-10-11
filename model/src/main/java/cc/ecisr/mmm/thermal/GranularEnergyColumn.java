@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ProportionalDoubleSplit;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -103,14 +104,18 @@ public final class GranularEnergyColumn {
 	/** Proportionally removes energy without changing the active ordinal cardinality. */
 	double takeActivePortion(int index, long takenSvq, long totalSvq) {
 		requireActive(index);
-		double removed = previewActiveTake(index, takenSvq, totalSvq);
 		if (takenSvq == totalSvq) throw new IllegalArgumentException("Full active take must use swap removal");
-		activeEnergy[index] -= removed;
-		return removed;
+		ProportionalDoubleSplit split = proportionalSplit(activeEnergy[index], takenSvq, totalSvq);
+		activeEnergy[index] = split.remaining();
+		return split.removed();
 	}
 	double previewActiveTake(int index, long takenSvq, long totalSvq) {
 		requireActive(index);
-		return proportionalTake(activeEnergy[index], takenSvq, totalSvq);
+		return proportionalSplit(activeEnergy[index], takenSvq, totalSvq).removed();
+	}
+	public double previewActiveRemaining(int index, long takenSvq, long totalSvq) {
+		requireActive(index);
+		return proportionalSplit(activeEnergy[index], takenSvq, totalSvq).remaining();
 	}
 
 	void addDeposit(DepositKey key, double energy) {
@@ -205,14 +210,16 @@ public final class GranularEnergyColumn {
 
 	/** Proportional exact-SVQ take; caller supplies the group's pre-commit SVQ truth. */
 	double takeDeposit(DepositKey key, long takenSvq, long totalSvq) {
-		double current = depositEnergy(key);
-		double removed = previewDepositTake(key, takenSvq, totalSvq);
+		ProportionalDoubleSplit split = proportionalSplit(depositEnergy(key), takenSvq, totalSvq);
 		if (takenSvq == totalSvq) depositEnergy.remove(key);
-		else depositEnergy.put(key, current - removed);
-		return removed;
+		else depositEnergy.put(key, split.remaining());
+		return split.removed();
 	}
 	double previewDepositTake(DepositKey key, long takenSvq, long totalSvq) {
-		return proportionalTake(depositEnergy(key), takenSvq, totalSvq);
+		return proportionalSplit(depositEnergy(key), takenSvq, totalSvq).removed();
+	}
+	public double previewDepositRemaining(DepositKey key, long takenSvq, long totalSvq) {
+		return proportionalSplit(depositEnergy(key), takenSvq, totalSvq).remaining();
 	}
 
 	void moveDeposit(
@@ -221,7 +228,7 @@ public final class GranularEnergyColumn {
 		if (source == null || target == null || source.equals(target)) {
 			throw new IllegalArgumentException("Granular thermal deposit move requires distinct groups");
 		}
-		double moved = proportionalTake(depositEnergy(source), movedSvq, sourceTotalSvq);
+		double moved = previewDepositTake(source, movedSvq, sourceTotalSvq);
 		Double targetEnergy = depositEnergy.get(target);
 		if (targetEnergy == null && depositEnergy.size() == maximumDeposits && movedSvq != sourceTotalSvq) {
 			throw new IllegalStateException("Granular thermal deposit budget exceeded");
@@ -284,16 +291,11 @@ public final class GranularEnergyColumn {
 	private static void requireEnergy(double energy) {
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Granular internal energy is not finite");
 	}
-	private static double proportionalTake(double energy, long takenSvq, long totalSvq) {
+	private static ProportionalDoubleSplit proportionalSplit(double energy, long takenSvq, long totalSvq) {
 		if (takenSvq <= 0L || totalSvq <= 0L || takenSvq > totalSvq) {
 			throw new IllegalArgumentException("Granular thermal split volume is invalid");
 		}
-		if (takenSvq == totalSvq) return energy;
-		double removed = energy * ((double) takenSvq / totalSvq);
-		if (!Double.isFinite(removed) || !Double.isFinite(energy - removed)) {
-			throw new IllegalArgumentException("Granular thermal split is not representable");
-		}
-		return removed;
+		return ProportionalDoubleSplit.of(energy, takenSvq, totalSvq);
 	}
 	private static double finiteAdd(double first, double second) {
 		double result = first + second;

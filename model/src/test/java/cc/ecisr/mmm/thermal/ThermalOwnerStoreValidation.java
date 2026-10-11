@@ -22,6 +22,7 @@ public final class ThermalOwnerStoreValidation {
 	public static void validate() {
 		coherentPhaseMergeSplitConservesInventories();
 		granularColumnTransactionsConserveEnergy();
+		condensedTinyPortionsRetainTemperatureAndAudit();
 		granularBatchDepositPreflightIsAtomic();
 		dyadicConversionRoundsInFinalBinary64Unit();
 		liquidTemperatureTracksMutableInventory();
@@ -186,6 +187,29 @@ public final class ThermalOwnerStoreValidation {
 				&& removed.composition().stableAmounts().equals(Map.of("test:a", 5L, "test:b", 2L))
 				&& removed.composition().massResidual() + store.group(0).composition().massResidual() == -24.0,
 				"coherent phase merge/split did not conserve its independent inventories");
+		for (double residual : new double[] {0.0, .125, -.125}) for (boolean tinyRemoved : new boolean[] {false, true}) {
+			long total = 10_401_812;
+			long quanta = total - 1;
+			var composition = new CoherentPhaseStore.Composition(List.of(new CoherentPhaseStore.Component("test:a", quanta)),
+					Double.doubleToRawLongBits(residual));
+			var source = new CoherentPhaseStore.Group(0, "test:thermal/solid", total, quanta + residual, composition, 1.0);
+			var portions = new CoherentPhaseStore(1, 1); portions.add(source);
+			long take = tinyRemoved ? 1 : total - 1;
+			var previewRemaining = portions.previewRemaining(0, source.phaseId(), take, chemistry);
+			var piece = portions.take(0, source.phaseId(), take, chemistry);
+			require(portions.group(0).equals(previewRemaining), "Chemical remaining preview differs from committed columns");
+			var tiny = tinyRemoved ? piece : portions.group(0);
+			var large = tinyRemoved ? portions.group(0) : piece;
+			require(tiny.composition().stableAmounts().equals(Map.of("test:a", 1L))
+					&& large.composition().stableAmounts().equals(Map.of("test:a", quanta - 1)), "Chemical split changed integer species totals");
+			SignedDyadic representedTiny = SignedDyadic.of(1.0).add(SignedDyadic.of(tiny.composition().massResidual()));
+			require(representedTiny.equals(SignedDyadic.of(tiny.mass())), "Tiny chemical residual amplified the large mass ULP");
+			SignedDyadic residualError = SignedDyadic.of(piece.composition().massResidual())
+					.add(SignedDyadic.of(portions.group(0).composition().massResidual())).subtract(SignedDyadic.of(residual));
+			if (residualError.signum() < 0) residualError = residualError.negate();
+			require(residualError.compareTo(SignedDyadic.of(Math.ulp(large.composition().massResidual()) * .5)) <= 0,
+					"Chemical residual exceeded one large-share rounding");
+		}
 	}
 
 	private static void granularColumnTransactionsConserveEnergy() {
@@ -211,6 +235,76 @@ public final class ThermalOwnerStoreValidation {
 		require(restored.exactEnergy().equals(column.exactEnergy())
 				&& restored.clear().equals(column.exactEnergy()),
 				"granular thermal column handoff/clear did not preserve exact energy");
+	}
+
+	private static void condensedTinyPortionsRetainTemperatureAndAudit() {
+		var sand = new ThermalMaterialDefinition("test:sand", ThermalMaterialDefinition.CarrierKind.GRANULAR,
+				"test:sand", 293.15, 0, .27, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, 830)));
+		var ice = new ThermalMaterialDefinition("test:ice", ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID,
+				"test:ice", 293.15, -375070, 2.22, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, 2108)));
+		var registry = new ThermalRegistry(List.of(sand, ice)); var function = new ThermalStateFunction(registry);
+		for (var material : List.of(sand, ice)) for (double temperature : new double[] {1e-9, 1e-6, 300, 900}) {
+			long total = 10_401_873;
+			double density = material == sand ? 2600 : 916.7, mass = density * Math.scalb((double) total, -27);
+			int handle = registry.materialHandle(material.id());
+			double energy = function.internalEnergyAtTemperature(handle, mass, Map.of(), temperature);
+			double sourceK = function.stateForInternalEnergy(handle, mass, Map.of(), energy).temperatureK();
+			for (long taken : new long[] {1, total - 1, total}) {
+				var store = new CoherentPhaseStore(1, 1);
+				store.add(new CoherentPhaseStore.Group(0, material.id(), total, mass, null, energy));
+				var preview = store.previewTake(0, material.id(), taken, null);
+				var expectedRemainingGroup = store.previewRemaining(0, material.id(), taken, null);
+				var removed = store.take(0, material.id(), taken, null);
+				require(removed.equals(preview), "Coherent preview and commit split differ");
+				SignedDyadic sum = SignedDyadic.of(removed.internalEnergy());
+				if (taken != total) {
+					require(store.group(0).equals(expectedRemainingGroup), "Coherent remaining preview and commit differ");
+					var smaller = taken == 1 ? removed : store.group(0);
+					double restoredK = function.stateForInternalEnergy(handle, smaller.mass(), Map.of(), smaller.internalEnergy()).temperatureK();
+					double bound = 32 * Math.ulp(smaller.internalEnergy()) / (smaller.mass() * material.specificHeatAt(sourceK))
+							+ 64 * Math.ulp(material.referenceTemperatureK());
+					require(Math.abs(restoredK - sourceK) <= bound, "Coherent small share amplified subtraction error");
+					sum = sum.add(store.exactEnergy());
+				} else require(store.groupCount() == 0 && removed.internalEnergy() == energy, "Whole coherent take changed raw energy");
+				SignedDyadic error = sum.subtract(SignedDyadic.of(energy)); if (error.signum() < 0) error = error.negate();
+				require(error.compareTo(SignedDyadic.of(Math.ulp(energy) * .5)) <= 0, "Coherent energy exceeded single large-share rounding");
+				SignedDyadic massSum = SignedDyadic.of(removed.mass());
+				if (taken != total) massSum = massSum.add(SignedDyadic.of(store.group(0).mass()));
+				SignedDyadic massError = massSum.subtract(SignedDyadic.of(mass)); if (massError.signum() < 0) massError = massError.negate();
+				require(massError.compareTo(SignedDyadic.of(Math.ulp(mass) * .5)) <= 0, "Coherent mass exceeded single large-share rounding");
+				if (material != sand) continue;
+				var column = new GranularEnergyColumn(1, 1); var key = new GranularEnergyColumn.DepositKey(0, 0, 0);
+				column.addActive(energy); column.addDeposit(key, energy);
+				double expectedRemaining = column.previewDepositRemaining(key, taken, total);
+				double expectedRemoved = column.previewDepositTake(key, taken, total);
+				var audit = new ThermalAuditState(ThermalAuditLedger.initialized(column.exactEnergy()));
+				var owner = new GranularEnergyState(registry, column, new CoherentPhaseStore(1, 1), function,
+						new int[] {handle}, 293.15, audit);
+				require(owner.commitExternalDepositTake(key, taken, total) == expectedRemoved, "Granular export differs from preview");
+				require(column.exactEnergy().equals(audit.ledger().expectedInventory()),
+						"Granular external take audit did not use actual remaining U");
+				if (taken != total) {
+					require(column.depositEnergy(key) == expectedRemaining, "Granular commit re-subtracted its small remaining energy");
+					double smallerU = taken == 1 ? expectedRemoved : expectedRemaining;
+					require(smallerU == energy * (1.0 / total), "Granular small share lost its direct proportional value");
+					require(column.takeActivePortion(0, taken, total) == expectedRemoved && column.activeEnergy(0) == expectedRemaining,
+							"Active and deposit energy splits differ");
+					var refunded = new GranularEnergyColumn(1, 2); refunded.addDeposit(key, energy);
+					var target = new GranularEnergyColumn.DepositKey(1, 0, 0);
+					refunded.moveDeposit(key, target, taken, total);
+					require(refunded.depositEnergy(key) == expectedRemaining && refunded.depositEnergy(target) == expectedRemoved,
+							"Deposit move does not share take's two U columns");
+					refunded.moveDeposit(target, key, taken, taken);
+					require(refunded.depositCount() == 1 && close(refunded.depositEnergy(key), energy), "Returned deposit portion did not recombine energy");
+				} else require(column.depositCount() == 0 && column.previewActiveRemaining(0, total, total) == 0
+						&& column.removeActiveSwap(0) == energy, "Whole granular take changed raw energy");
+			}
+		}
+		var subnormal = new CoherentPhaseStore(1, 1);
+		var original = new CoherentPhaseStore.Group(0, ice.id(), 2, Double.MIN_VALUE, null, 1);
+		subnormal.add(original);
+		try { subnormal.take(0, ice.id(), 1, null); throw new AssertionError("Unrepresentable positive coherent share accepted"); }
+		catch (IllegalArgumentException expected) { require(subnormal.group(0).equals(original), "Rejected coherent split changed original columns"); }
 	}
 
 	private static void granularBatchDepositPreflightIsAtomic() {

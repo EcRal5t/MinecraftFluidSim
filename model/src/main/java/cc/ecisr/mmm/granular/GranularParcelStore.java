@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.granular;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ProportionalDoubleSplit;
 
 /** Fixed-capacity primitive SoA for active granular parcels; every mass column is kilograms. */
 public final class GranularParcelStore {
@@ -105,8 +106,8 @@ public final class GranularParcelStore {
 			throw new IllegalArgumentException("Granular split amount must be a strict parcel subset");
 		}
 		if (!hasCapacity(1)) throw new BudgetExceededException("Active granular parcel budget exceeded");
-		double takenMass = original.mass() * ((double) takenSvq / original.solidVolumeSvq());
-		double remainingMass = original.mass() - takenMass;
+		ProportionalDoubleSplit split = ProportionalDoubleSplit.of(original.mass(), takenSvq, original.solidVolumeSvq());
+		double takenMass = split.removed(), remainingMass = split.remaining();
 		if (!(takenMass > 0.0 && remainingMass > 0.0)) throw new IllegalArgumentException("Granular split mass is not representable");
 		write(index, new Parcel(original.x(), original.y(), original.z(), original.velocityX(), original.velocityY(),
 				original.velocityZ(), original.solidVolumeSvq() - takenSvq, remainingMass,

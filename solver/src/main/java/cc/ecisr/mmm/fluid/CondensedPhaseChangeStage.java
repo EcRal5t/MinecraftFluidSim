@@ -297,8 +297,11 @@ final class CondensedPhaseChangeStage {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Melt extent exceeds coherent inventory");
 			}
+			CoherentPhaseStore.Group coherentRemaining;
 			try {
 				coherentTransfer = thermal.coherentPhases().previewTake(
+						cell, transition.lowerEnergyMaterialId(), lowerDelta, chemistry == null ? null : chemistry.registry());
+				coherentRemaining = thermal.coherentPhases().previewRemaining(
 						cell, transition.lowerEnergyMaterialId(), lowerDelta, chemistry == null ? null : chemistry.registry());
 			} catch (IllegalArgumentException | ArithmeticException unavailable) {
 				throw new PhaseCandidateUnavailableException(
@@ -311,10 +314,10 @@ final class CondensedPhaseChangeStage {
 			PhaseComposition moved = PhaseComposition.fromCoherent(coherentTransfer.composition());
 			finalLowerSvq = before.lowerVolumeSvq() - lowerDelta;
 			finalUpperSvq = Math.addExact(before.upperVolumeSvq(), upperDelta);
-			finalLowerMass = before.lowerMass() - coherentTransfer.mass();
+			finalLowerMass = coherentRemaining == null ? 0.0 : coherentRemaining.mass();
 			finalUpperMass = before.upperMass() + coherentTransfer.mass();
 			if (finalLowerMass < 0.0 && finalLowerMass >= -massTolerance(before.lowerMass())) finalLowerMass = 0.0;
-			finalLowerComposition = before.lowerComposition().minus(moved);
+			finalLowerComposition = PhaseComposition.fromCoherent(coherentRemaining == null ? null : coherentRemaining.composition());
 			finalUpperComposition = before.upperComposition().plus(moved);
 			if (chemistry != null) {
 				meltedMixture = moved.toMixture(chemistry.registry());

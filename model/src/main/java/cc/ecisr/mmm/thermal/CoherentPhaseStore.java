@@ -1,10 +1,12 @@
 package cc.ecisr.mmm.thermal;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ProportionalDoubleSplit;
 
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
+import cc.ecisr.mmm.chemistry.ExactRational;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -131,43 +133,42 @@ public final class CoherentPhaseStore {
 
 	/** Proportional exact-SVQ split. The caller may subsequently re-equilibrate energy at cell LTE. */
 	Group take(int cell, String phaseId, long requestedSvq, ChemicalRegistry chemistry) {
-		Group removed = previewTake(cell, phaseId, requestedSvq, chemistry);
+		TakeSplit split = previewSplit(cell, phaseId, requestedSvq, chemistry);
 		int index = find(cell, phaseId);
-		Group current = groups.get(index);
-		if (requestedSvq == current.occupiedVolumeSvq()) {
-			groups.remove(index);
-			return removed;
-		}
-		long remainingSvq = current.occupiedVolumeSvq() - requestedSvq;
-		Composition[] composition = split(current.composition(), remainingSvq, requestedSvq, removed.mass(), chemistry);
-		Group remaining = new Group(cell, phaseId, remainingSvq,
-				current.mass() - removed.mass(),
-				composition[0],
-				current.internalEnergy() - removed.internalEnergy());
-		groups.set(index, remaining);
-		return removed;
+		if (split.remaining() == null) groups.remove(index);
+		else groups.set(index, split.remaining());
+		return split.removed();
 	}
 
 	/** Validates and computes a proportional take without changing authoritative inventory. */
 	public Group previewTake(int cell, String phaseId, long requestedSvq, ChemicalRegistry chemistry) {
+		return previewSplit(cell, phaseId, requestedSvq, chemistry).removed();
+	}
+	/** Remaining authoritative columns of the same take; null means the whole group is removed. */
+	public Group previewRemaining(int cell, String phaseId, long requestedSvq, ChemicalRegistry chemistry) {
+		return previewSplit(cell, phaseId, requestedSvq, chemistry).remaining();
+	}
+	private record TakeSplit(Group removed, Group remaining) { }
+	private TakeSplit previewSplit(int cell, String phaseId, long requestedSvq, ChemicalRegistry chemistry) {
 		int index = find(cell, phaseId);
 		if (index < 0) throw new IllegalArgumentException("Unknown coherent phase group");
 		Group current = groups.get(index);
 		if (requestedSvq <= 0L || requestedSvq > current.occupiedVolumeSvq()) {
 			throw new IllegalArgumentException("Coherent phase take volume is invalid");
 		}
-		if (requestedSvq == current.occupiedVolumeSvq()) return current;
+		if (requestedSvq == current.occupiedVolumeSvq()) return new TakeSplit(current, null);
 		long remainingSvq = current.occupiedVolumeSvq() - requestedSvq;
-		double removedMass = current.mass() * ((double) requestedSvq / current.occupiedVolumeSvq());
-		double remainingMass = current.mass() - removedMass;
-		double removedEnergy = current.internalEnergy() * ((double) requestedSvq / current.occupiedVolumeSvq());
-		double remainingEnergy = current.internalEnergy() - removedEnergy;
+		ProportionalDoubleSplit masses = ProportionalDoubleSplit.of(current.mass(), requestedSvq, current.occupiedVolumeSvq());
+		ProportionalDoubleSplit energies = ProportionalDoubleSplit.of(current.internalEnergy(), requestedSvq, current.occupiedVolumeSvq());
+		double removedMass = masses.removed(), remainingMass = masses.remaining();
+		double removedEnergy = energies.removed(), remainingEnergy = energies.remaining();
 		if (!(removedMass > 0.0 && remainingMass > 0.0)
 				|| !Double.isFinite(removedEnergy) || !Double.isFinite(remainingEnergy)) {
 			throw new IllegalArgumentException("Coherent phase split is not representable");
 		}
-		Composition[] split = split(current.composition(), remainingSvq, requestedSvq, removedMass, chemistry);
-		return new Group(cell, phaseId, requestedSvq, removedMass, split[1], removedEnergy);
+		Composition[] split = split(current.composition(), remainingSvq, requestedSvq, remainingMass, removedMass, chemistry);
+		return new TakeSplit(new Group(cell, phaseId, requestedSvq, removedMass, split[1], removedEnergy),
+				new Group(cell, phaseId, remainingSvq, remainingMass, split[0], remainingEnergy));
 	}
 
 	void setInternalEnergy(int index, double internalEnergy) {
@@ -257,7 +258,7 @@ public final class CoherentPhaseStore {
 	}
 
 	private static Composition[] split(Composition composition, long remainingSvq, long removedSvq,
-	                                   double removedMass, ChemicalRegistry chemistry) {
+	                                   double remainingMass, double removedMass, ChemicalRegistry chemistry) {
 		if (composition == null) return new Composition[]{null, null};
 		ArrayList<Component> remaining = new ArrayList<>(), removed = new ArrayList<>();
 		for (Component component : composition.components()) {
@@ -269,12 +270,19 @@ public final class CoherentPhaseStore {
 			throw new IllegalArgumentException("Coherent split is below chemical quantum resolution");
 		}
 		if (chemistry == null) throw new IllegalArgumentException("Coherent chemical split requires its registry");
-		TreeMap<String, Long> removedAmounts = new TreeMap<>();
-		for (Component component : removed) removedAmounts.put(component.speciesId(), component.amountQuanta());
-		double removedSpeciesMass = ChemicalMixtureRecord.fromStableAmounts(chemistry, removedAmounts, 0.0)
-				.exactSpeciesMassKilograms(chemistry).toDouble();
-		double removedResidual = removedMass - removedSpeciesMass;
-		double remainingResidual = composition.massResidual() - removedResidual;
+		boolean removedIsSmaller = removedSvq <= remainingSvq;
+		TreeMap<String, Long> smallerAmounts = new TreeMap<>();
+		for (Component component : removedIsSmaller ? removed : remaining) smallerAmounts.put(component.speciesId(), component.amountQuanta());
+		SignedDyadic smallerMass = SignedDyadic.of(removedIsSmaller ? removedMass : remainingMass);
+		ExactRational exactMass = smallerMass.exponent() >= 0
+				? new ExactRational(smallerMass.significand().shiftLeft(smallerMass.exponent()), BigInteger.ONE)
+				: new ExactRational(smallerMass.significand(), BigInteger.ONE.shiftLeft(-smallerMass.exponent()));
+		// Species quanta close exactly. Put residual rounding on the larger volume share too.
+		double smallerResidual = exactMass.subtract(ChemicalMixtureRecord.fromStableAmounts(chemistry, smallerAmounts, 0.0)
+				.exactSpeciesMassKilograms(chemistry)).toDouble();
+		double largerResidual = SignedDyadic.of(composition.massResidual()).subtract(SignedDyadic.of(smallerResidual)).toDouble();
+		double removedResidual = removedIsSmaller ? smallerResidual : largerResidual;
+		double remainingResidual = removedIsSmaller ? largerResidual : smallerResidual;
 		return new Composition[]{
 				new Composition(remaining, Double.doubleToRawLongBits(remainingResidual)),
 				new Composition(removed, Double.doubleToRawLongBits(removedResidual))};

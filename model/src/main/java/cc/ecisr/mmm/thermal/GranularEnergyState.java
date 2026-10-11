@@ -220,7 +220,8 @@ public final class GranularEnergyState {
 	double commitExternalActiveTake(int active, long takenSvq, long totalSvq) {
 		double before = granularEnergy.activeEnergy(active);
 		double preview = granularEnergy.previewActiveTake(active, takenSvq, totalSvq);
-		ThermalAuditLedger auditAfter = externalTakeAudit(before, preview, takenSvq == totalSvq);
+		double remaining = granularEnergy.previewActiveRemaining(active, takenSvq, totalSvq);
+		ThermalAuditLedger auditAfter = externalTakeAudit(before, preview, remaining);
 		double removed = takenSvq == totalSvq ? granularEnergy.removeActiveSwap(active)
 				: granularEnergy.takeActivePortion(active, takenSvq, totalSvq);
 		audit.replace(auditAfter);
@@ -231,16 +232,17 @@ public final class GranularEnergyState {
 	double commitExternalDepositTake(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
 		double before = granularEnergy.depositEnergy(key);
 		double preview = granularEnergy.previewDepositTake(key, takenSvq, totalSvq);
-		ThermalAuditLedger auditAfter = externalTakeAudit(before, preview, takenSvq == totalSvq);
+		double remaining = granularEnergy.previewDepositRemaining(key, takenSvq, totalSvq);
+		ThermalAuditLedger auditAfter = externalTakeAudit(before, preview, remaining);
 		double removed = granularEnergy.takeDeposit(key, takenSvq, totalSvq);
 		audit.replace(auditAfter);
 		revision++;
 		return removed;
 	}
 
-	private ThermalAuditLedger externalTakeAudit(double before, double removed, boolean full) {
+	private ThermalAuditLedger externalTakeAudit(double before, double removed, double remaining) {
 		SignedDyadic exported = SignedDyadic.of(removed);
-		SignedDyadic after = full ? SignedDyadic.ZERO : SignedDyadic.of(before - removed);
+		SignedDyadic after = SignedDyadic.of(remaining);
 		return audit.ledger().withExternalSinkEnergy(exported)
 				.withRoundoff(after.add(exported).subtract(SignedDyadic.of(before)));
 	}

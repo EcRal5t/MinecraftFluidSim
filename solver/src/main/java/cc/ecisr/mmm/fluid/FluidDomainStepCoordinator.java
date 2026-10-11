@@ -97,7 +97,9 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			lastGasThermalPhaseStats = thermalAxis.gasPhase();
 		}
 		ChemicalParcelStore.ReactionStats chemistry = thermalAxis.chemistry();
-		lastGranularDepositStats = granularTransitionStage.step();
+		GranularTransitionStage.Outcome granularTransition = granularTransitionStage.step();
+		lastGranularDepositStats = granularTransition.depositStats();
+		liquidTransport = liquidTransport.plus(granularTransition.liquidTransport());
 		ParticleReseedStage.Outcome reseedOutcome = particleReseedStage.step(captureMechanicalAudit);
 		double reseedInitialKineticEnergy = reseedOutcome.initialKineticEnergy();
 		if (captureMechanicalAudit) mechanicalAudit.carrierInventoryTransferJoules +=
@@ -390,6 +392,14 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			}
 
 			@Override public boolean bedGeometryFits(int cell, long bulk) { return granularCollision.bedGeometryFits(cell, bulk); }
+
+			@Override public boolean horizontalTransferPathOpen(float x, float y, float z, float toX, float toZ, long solidSvq) {
+				return !granularCollision.spherePathTouchesSolid(x, y, z, toX, y, toZ, solidSvq);
+			}
+
+			@Override public int horizontalTransferPathWork(float x, float y, float z, float toX, float toZ, long solidSvq) {
+				return granularCollision.spherePathWork(x, y, z, toX, y, toZ, solidSvq);
+			}
 
 			@Override public void receiveContactImpulse(double x, double y, double z) {
 				lastGranularBoundaryImpulseX += x;

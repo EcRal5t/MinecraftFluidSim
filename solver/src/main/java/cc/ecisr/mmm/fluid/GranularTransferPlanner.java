@@ -13,6 +13,7 @@ import cc.ecisr.mmm.thermal.GranularEnergyColumn;
 import cc.ecisr.mmm.thermal.ThermalCarrierContext;
 import cc.ecisr.mmm.thermal.ThermalAuditLedger;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.ProportionalDoubleSplit;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -284,8 +285,11 @@ final class GranularTransferPlanner {
 			if (!near[parcelCell] || !ledger.canAccept(granular.registry.material(parcel.materialHandle()).id())) continue;
 			long taken = Math.min(remaining, parcel.solidVolumeSvq());
 			if (parcel.solidCompositionHandle() != 0 && taken != parcel.solidVolumeSvq()) continue;
-			double mass = taken == parcel.solidVolumeSvq() ? parcel.mass()
-					: parcel.mass() * ((double) taken / parcel.solidVolumeSvq());
+			ProportionalDoubleSplit split = ProportionalDoubleSplit.of(parcel.mass(), taken, parcel.solidVolumeSvq());
+			double mass = split.removed();
+			if (!(mass > 0.0) || taken != parcel.solidVolumeSvq() && !(split.remaining() > 0.0)) {
+				return FluidDomain.GranularExtraction.rejected("Granular extraction mass split is not representable");
+			}
 			SolidCompositionRecord composition = parcel.solidCompositionHandle() == 0 ? null
 					: granular.compositions.record(parcel.solidCompositionHandle());
 			ledger.add(granular.registry.material(parcel.materialHandle()).id(), taken, mass, composition);
@@ -332,8 +336,10 @@ final class GranularTransferPlanner {
 			for (GranularRemoval removal : removals) {
 				double before = removal.deposit() ? energy.depositEnergy(new GranularEnergyColumn.DepositKey(
 						removal.cell(), removal.materialHandle(), removal.compositionHandle())) : energy.activeEnergy(removal.index());
-				double after = removal.solidVolumeSvq() == removal.originalSolidVolumeSvq()
-						? 0.0 : before - removal.internalEnergy();
+				double after = removal.deposit() ? energy.previewDepositRemaining(new GranularEnergyColumn.DepositKey(
+						removal.cell(), removal.materialHandle(), removal.compositionHandle()),
+						removal.solidVolumeSvq(), removal.originalSolidVolumeSvq())
+						: energy.previewActiveRemaining(removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
 				SignedDyadic actualRemoval = SignedDyadic.of(before).subtract(SignedDyadic.of(after));
 				SignedDyadic exported = SignedDyadic.of(removal.internalEnergy());
 				carrierRemoval = carrierRemoval.add(actualRemoval);
@@ -357,7 +363,8 @@ final class GranularTransferPlanner {
 			GranularParcelStore.Parcel parcel = granular.parcels.parcel(removal.index());
 			granular.parcels.overwrite(removal.index(), new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(),
 					parcel.velocityX(), parcel.velocityY(), parcel.velocityZ(),
-					parcel.solidVolumeSvq() - removal.solidVolumeSvq(), parcel.mass() - removal.mass(),
+					parcel.solidVolumeSvq() - removal.solidVolumeSvq(), ProportionalDoubleSplit.of(
+							parcel.mass(), removal.solidVolumeSvq(), parcel.solidVolumeSvq()).remaining(),
 					parcel.materialHandle(), 0, parcel.contactAge(), parcel.flags()));
 			if (domain.thermalState != null) domain.thermalState.commitExternalActiveTake(
 					removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());

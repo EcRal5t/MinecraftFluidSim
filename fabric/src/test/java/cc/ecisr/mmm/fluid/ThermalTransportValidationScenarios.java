@@ -216,6 +216,51 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"partial active/deposit item U differs from the actual raw carrier energy removal");
 		}
+		granularColdRemainderRetainsTemperature();
+	}
+
+	private static void granularColdRemainderRetainsTemperature() {
+		for (int variant = 0; variant < 3; variant++) try {
+			var production = cc.ecisr.mmm.simulation.FullCapabilityTestFixture.load();
+			var domain = new FluidDomain(3, 3, 3,
+					new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F), 216);
+			var liquids = cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, production.liquids());
+			domain.bindChemistry(production.chemical()); domain.bindGranular(production.granular(), liquids, production.materials());
+			domain.bindGasRegistry(production.gas());
+			int cell = domain.cellIndexChecked(1, 1, 1), sand = production.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+			boolean active = variant == 2;
+			long svq = variant == 0 ? 10_401_873 : active ? 262_143 : 10_401_812;
+			double mass = production.granular().material(sand).referenceDensity() * Math.scalb((double) svq, -27)
+					* (variant == 0 ? 1 : 1 + 1e-9);
+			if (active) domain.granularState.parcels.add(new cc.ecisr.mmm.granular.GranularParcelStore.Parcel(
+					.75F, .75F, .75F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
+			else require(domain.granularState.deposits.tryAdd(cell, new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(
+					sand, 0, svq, mass), SolidVolume.SVQ_PER_CELL), "Cold remainder bed exceeds packing capacity");
+			domain.bindThermal(production.thermal(), liquids, 293.15); domain.setThermalTemperatureInCell(1, 1, 1, 1e-8);
+			var function = new cc.ecisr.mmm.thermal.ThermalStateFunction(production.thermal());
+			var material = production.thermal().materials().stream().filter(entry -> entry.carrierId().equals(BuiltinGranularDefinitions.FINE_SAND)).findFirst().orElseThrow();
+			int handle = production.thermal().materialHandle(material.id()); var key = new GranularEnergyColumn.DepositKey(cell, sand, 0);
+			double sourceK = function.stateForInternalEnergy(handle, mass, java.util.Map.of(), active
+					? domain.thermalState.granularColumn().activeEnergy(0) : domain.thermalState.granularColumn().depositEnergy(key)).temperatureK();
+			SignedDyadic before = domain.exactInternalEnergy();
+			var rejected = domain.tryExtractExactGranular(1, 1, 1, svq - 1, 0, false, ledger -> false);
+			require(!rejected.transferred() && domain.exactInternalEnergy().equals(before)
+					&& (active ? domain.granularState.parcels.parcel(0).solidVolumeSvq()
+					: domain.granularState.deposits.dominantGroup(cell).solidVolumeSvq()) == svq, "Rejected cold extraction changed inventory or U");
+			var taken = domain.tryExtractExactGranular(1, 1, 1, svq - 1, 0, false);
+			double remainingMass = active ? domain.granularState.parcels.parcel(0).mass() : domain.granularState.deposits.dominantGroup(cell).mass();
+			long remainingVolume = active ? domain.granularState.parcels.parcel(0).solidVolumeSvq()
+					: domain.granularState.deposits.dominantGroup(cell).solidVolumeSvq();
+			double expected = function.internalEnergyAtTemperature(handle, remainingMass, java.util.Map.of(), sourceK);
+			double actual = active ? domain.thermalState.granularColumn().activeEnergy(0) : domain.thermalState.granularColumn().depositEnergy(key);
+			double finalK = function.stateForInternalEnergy(handle, remainingMass, java.util.Map.of(), actual).temperatureK();
+			double temperatureBound = 32 * Math.ulp(actual) / (remainingMass * material.specificHeatAt(sourceK))
+					+ 64 * Math.ulp(material.referenceTemperatureK());
+			require(taken.transferred() && remainingVolume == 1
+					&& remainingMass == mass * (1.0 / svq) && Math.abs(actual - expected) <= 2 * Math.ulp(actual)
+					&& Math.abs(finalK - sourceK) <= temperatureBound && finalK > 1e-9
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "Cold granular remainder lost temperature or exact U audit");
+		} catch (Exception failure) { throw new AssertionError("Production cold granular extraction fixture failed", failure); }
 	}
 
 	static ThermalRegistry granularThermalRegistry(

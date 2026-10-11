@@ -46,6 +46,8 @@ public final class GranularDepositDynamics {
 		default int verticalPathWork(float x, float fromY, float z, float toY, long solidSvq) { return 0; }
 		/** Fixed local cut geometry work is included in each candidate target's logical charge. */
 		default boolean bedGeometryFits(int cell, long bulkSvq) { return true; }
+		default boolean horizontalTransferPathOpen(float x, float y, float z, float toX, float toZ, long solidSvq) { return true; }
+		default int horizontalTransferPathWork(float x, float y, float z, float toX, float toZ, long solidSvq) { return 0; }
 		double shields(int surfaceCell, ParticulateMaterial material);
 		default void receiveContactImpulse(double x, double y, double z) { }
 		default boolean planSettlement(GranularInventory.SettlementPlan plan) { return true; }
@@ -398,6 +400,12 @@ public final class GranularDepositDynamics {
 		GranularDepositStore.SolidPortion moved;
 		try { moved = deposits.peekTake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), requestedSkeleton); }
 		catch (IllegalArgumentException unavailableSplit) { return false; }
+		float radius = GranularMechanics.representativeRadius(requestedSkeleton, cellSize);
+		float pathY = Math.nextUp((float) (height * cellSize + radius));
+		float fromX = (x + .5F) * cellSize, fromZ = (z + .5F) * cellSize;
+		float toX = (receiverX + .5F) * cellSize, toZ = (receiverZ + .5F) * cellSize;
+		if (!admission.spend(environment.horizontalTransferPathWork(fromX, pathY, fromZ, toX, toZ, requestedSkeleton))
+				|| !environment.horizontalTransferPathOpen(fromX, pathY, fromZ, toX, toZ, requestedSkeleton)) return false;
 		for (int y = 0; y < sizeY; y++) {
 			if (!admission.spend(1)) return false;
 			int receiver = cell(receiverX, y, receiverZ);
@@ -405,9 +413,8 @@ public final class GranularDepositDynamics {
 			if (open <= 0L) continue;
 			long candidateBulk = deposits.previewCellBulkVolumeAfterAdd(receiver, moved);
 			if (candidateBulk > open || !environment.bedGeometryFits(receiver, candidateBulk)) continue;
-			float radius = GranularMechanics.representativeRadius(requestedSkeleton, cellSize);
 			if (!verticalPathOpen(environment, (receiverX + 0.5F) * cellSize,
-					Math.nextUp((float) (height * cellSize + radius)), (receiverZ + 0.5F) * cellSize,
+					pathY, (receiverZ + 0.5F) * cellSize,
 					settlementCenterY(receiver, requestedSkeleton), requestedSkeleton)) continue;
 			if (!GranularBedPotential.allowsRelaxation(deposits, surfaceCell, receiver, moved,
 					cellSize, sizeX, sizeY, environment.gravity())) {
