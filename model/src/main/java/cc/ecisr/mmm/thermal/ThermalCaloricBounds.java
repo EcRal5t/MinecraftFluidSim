@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.thermal;
 
+import cc.ecisr.mmm.chemistry.ChemicalLimits;
+import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.Collections;
@@ -98,36 +100,76 @@ public final class ThermalCaloricBounds {
 	public double temperatureBound(List<PortionRange> portions, double targetEnergy, boolean upper,
 	                               double initialBracket) {
 		if (!Double.isFinite(targetEnergy)) return unboundedTemperature(upper);
-		return boundedTemperature(portions, SignedDyadic.of(targetEnergy), upper, initialBracket, false);
+		return boundedTemperature(portions, SignedDyadic.of(targetEnergy), upper, initialBracket);
 	}
 
 	/** Keeps the cell/gas handoff exact until it is compared against an outward-facing curve. */
 	public double temperatureBound(List<PortionRange> portions, SignedDyadic targetEnergy, boolean upper,
 	                               double initialBracket) {
-		return boundedTemperature(portions, Objects.requireNonNull(targetEnergy), upper, initialBracket, true);
+		return boundedTemperature(portions, Objects.requireNonNull(targetEnergy), upper, initialBracket);
 	}
 
 	private double boundedTemperature(List<PortionRange> portions, SignedDyadic targetEnergy, boolean upper,
-	                                  double initialBracket, boolean exactComparison) {
+	                                  double initialBracket) {
 		if (portions.isEmpty() || !Double.isFinite(initialBracket)) return unboundedTemperature(upper);
 		try {
-			double low = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-			double high = Math.max(1.0, initialBracket);
-			if (compareCurve(portions, low, !upper, targetEnergy, exactComparison) >= 0) return low;
-			while (compareCurve(portions, high, !upper, targetEnergy, exactComparison) < 0) {
-				if (high >= Double.MAX_VALUE / 2.0) return upper ? Double.POSITIVE_INFINITY : down(down(high));
-				high *= 2.0;
+			double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
+			double cursor = Math.max(minimum, initialBracket);
+			SignedDyadic energy = exactCurveEnergy(portions, cursor, !upper);
+			if (energy == null) return unboundedTemperature(upper);
+			int direction = targetEnergy.compareTo(energy);
+			if (direction == 0) {
+				if (boundCapacity(portions, cursor, !upper).signum() == 0
+						|| cursor > minimum && boundCapacity(portions, down(cursor), !upper).signum() == 0)
+					return unboundedTemperature(upper);
+				return upper ? up(up(cursor)) : Math.max(minimum, down(down(cursor)));
 			}
-			for (int iteration = 0; iteration < 64 && Math.nextUp(low) < high; iteration++) {
-				double middle = low + (high - low) / 2.0;
-				if (compareCurve(portions, middle, !upper, targetEnergy, exactComparison) < 0) low = middle;
-				else high = middle;
+			while (true) {
+				if (direction < 0 && cursor == minimum) return minimum;
+				double next = direction > 0 ? Double.POSITIVE_INFINITY : minimum;
+				for (PortionRange portion : portions) {
+					var material = thermal.material(portion.materialHandle());
+					next = nearerKnot(cursor, next, material.referenceTemperatureK(), direction);
+					for (var segment : material.caloricSegments()) {
+						next = nearerKnot(cursor, next, segment.minimumTemperatureK(), direction);
+						next = nearerKnot(cursor, next, segment.maximumTemperatureK(), direction);
+					}
+				}
+				// Directional endpoint probes select the correct side even at adjacent binary64 knots.
+				SignedDyadic capacity = boundCapacity(portions, direction > 0 ? cursor : down(cursor), !upper);
+				if (capacity.signum() == 0) return unboundedTemperature(upper);
+				SignedDyadic nextEnergy = Double.isFinite(next) ? energy.add(
+						SignedDyadic.of(next).subtract(SignedDyadic.of(cursor)).multiply(capacity)) : null;
+				if (nextEnergy == null || (direction > 0 ? targetEnergy.compareTo(nextEnergy) <= 0
+						: targetEnergy.compareTo(nextEnergy) >= 0)) {
+					double root = divide(SignedDyadic.of(cursor).multiply(capacity).add(targetEnergy.subtract(energy)), capacity);
+					if (!Double.isFinite(root)) return unboundedTemperature(upper);
+					// Exact affine inversion has one final rounding; retain the actual inverter's two-neighbour allowance.
+					return upper ? Math.max(minimum, up(up(root))) : Math.max(minimum, down(down(root)));
+				}
+				cursor = next; energy = nextEnergy;
 			}
-			// A one-ULP fast-path temperature error spans two neighbours across an exponent seam.
-			return upper ? up(up(high)) : Math.max(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, down(down(low)));
-		} catch (IllegalArgumentException | ArithmeticException unresolved) {
-			return unboundedTemperature(upper);
+		} catch (IllegalArgumentException | ArithmeticException unresolved) { return unboundedTemperature(upper); }
+	}
+
+	private SignedDyadic boundCapacity(List<PortionRange> portions, double probe, boolean upper) {
+		SignedDyadic total = SignedDyadic.ZERO;
+		for (PortionRange portion : portions) {
+			var material = thermal.material(portion.materialHandle());
+			double mass = (probe >= material.referenceTemperatureK()) == upper ? portion.massHigh() : portion.massLow();
+			total = total.add(SignedDyadic.of(mass).multiply(SignedDyadic.of(material.specificHeatAt(probe))));
 		}
+		return total;
+	}
+	private static double nearerKnot(double cursor, double next, double knot, int direction) {
+		return direction > 0 ? knot > cursor && knot < next ? knot : next : knot < cursor && knot > next ? knot : next;
+	}
+	private static double divide(SignedDyadic numerator, SignedDyadic denominator) {
+		int shift = Math.subtractExact(numerator.exponent(), denominator.exponent());
+		if (Math.abs((long) shift) > ChemicalLimits.MAX_RATIONAL_BITS)
+			throw new IllegalArgumentException("Caloric bound ratio is over budget");
+		return new ExactRational(shift >= 0 ? numerator.significand().shiftLeft(shift) : numerator.significand(),
+				shift >= 0 ? denominator.significand() : denominator.significand().shiftLeft(-shift)).toDouble();
 	}
 
 	/** Merges columns belonging to one actual owner; independent owners retain separate rounded reference terms. */
@@ -138,17 +180,6 @@ public final class ThermalCaloricBounds {
 				new QuantaRange(Math.addExact(a.low(), b.low()), Math.addExact(a.high(), b.high()))));
 		return new PortionRange(first.materialHandle(), Math.max(0.0, down(first.massLow() + second.massLow())),
 				up(first.massHigh() + second.massHigh()), species);
-	}
-
-	private int compareCurve(List<PortionRange> portions, double temperature, boolean upper,
-	                         SignedDyadic target, boolean exactComparison) {
-		if (exactComparison) {
-			SignedDyadic curve = exactCurveEnergy(portions, temperature, upper);
-			return curve == null ? upper ? 1 : -1 : curve.compareTo(target);
-		}
-		double value = curveEnergyAtTemperature(portions, temperature, upper);
-		if (!Double.isFinite(value)) return upper ? 1 : -1;
-		return SignedDyadic.of(value).compareTo(target);
 	}
 
 	private double forwardBound(PortionRange portion, ThermalMaterialDefinition material,
