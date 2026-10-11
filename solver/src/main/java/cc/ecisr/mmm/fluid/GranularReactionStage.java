@@ -7,6 +7,7 @@ import cc.ecisr.mmm.granular.GranularCouplingFields;
 import cc.ecisr.mmm.granular.GranularDepositDynamics;
 import cc.ecisr.mmm.granular.GranularDepositStore;
 import cc.ecisr.mmm.granular.GranularLimits;
+import cc.ecisr.mmm.granular.GranularMergeKinematics;
 import cc.ecisr.mmm.granular.GranularParcelStore;
 import cc.ecisr.mmm.granular.GranularPhaseTransferEngine;
 import cc.ecisr.mmm.granular.SolidCompositionRecord;
@@ -353,6 +354,8 @@ final class GranularReactionStage {
 			float deltaZ = existing.velocityZ() - velocityZ;
 			if (deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ
 					> maximumVelocityDelta * maximumVelocityDelta) continue;
+			if (!GranularMergeKinematics.preservesAngularMomentum(existing,
+					spawned.x(), spawned.y(), spawned.z(), velocityX, velocityY, velocityZ)) continue;
 			double combinedMass = existing.mass() + plan.signedSolidMass();
 			float x = weighted(existing.x(), existing.mass(), spawned.x(), plan.signedSolidMass(), combinedMass);
 			float y = weighted(existing.y(), existing.mass(), spawned.y(), plan.signedSolidMass(), combinedMass);

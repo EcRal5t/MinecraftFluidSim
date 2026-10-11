@@ -379,6 +379,7 @@ public final class GranularInventory {
 		float deltaZ = first.velocityZ() - second.velocityZ();
 		if (deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ
 				> maximumVelocityDelta * maximumVelocityDelta) return null;
+		if (!GranularMergeKinematics.preservesAngularMomentum(first, second)) return null;
 		SolidCompositionRecord combinedComposition = null;
 		if (first.solidCompositionHandle() != 0 || second.solidCompositionHandle() != 0) {
 			if (compositions == null || first.solidCompositionHandle() == 0 || second.solidCompositionHandle() == 0

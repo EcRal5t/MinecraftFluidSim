@@ -17,6 +17,7 @@ public final class GranularReactionCandidateValidation {
 		phaseTransferPreservesMomentum();
 		precipitationPreservesAvailableMassMoment();
 		precipitationMergePreservesMassMoment();
+		precipitationMergeRetainsRotationalMotion();
 		phaseTransferFitsLiquidAndSolidKernel();
 		carrierPropertiesFollowChemicalComposition();
 		for (String mode : List.of("irreversible", "huge-capacity", "surface-budget", "marker-budget", "region-budget")) {
@@ -71,6 +72,42 @@ public final class GranularReactionCandidateValidation {
 					"mass moment merge must retain independently stored SVQ and kg");
 			requireCombinedCapacity(domain);
 		}
+	}
+
+	private static void precipitationMergeRetainsRotationalMotion() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 216);
+		domain.setVolume(1, 1, 1, .1F);
+		domain.bindGranular(registry, liquids, BuiltinFluidMaterials.createRegistry());
+		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		domain.setPrecipitationEnabled(true);
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
+				BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), false);
+		long svq = 4_050, extent = svq / 50 * 281;
+		var composition = SolidCompositionRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY,
+				Map.of(BuiltinChemicalDefinitions.NA_PLUS, extent * 64,
+						BuiltinChemicalDefinitions.CL_MINUS, extent * 64), 0);
+		var existing = new GranularParcelStore.Parcel(.625F, .7F, .8F, 0, .001F, 0,
+				svq, composition.totalMass(BuiltinChemicalDefinitions.REGISTRY),
+				registry.materialHandle(BuiltinGranularDefinitions.PRECIPITATE),
+				domain.granularState.compositions.create(composition), 0, (byte) 0);
+		domain.granularState.parcels.add(existing);
+		domain.gridDirty = true;
+		domain.bindThermal(ThermochemistryValidationScenarios.reactiveGranularThermalRegistry(liquids, registry), liquids, 300);
+		double[] before = spatialMoments(domain);
+		var energy = domain.exactInternalEnergy();
+		require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().precipitations() == 1
+				&& domain.granularState.parcels.count() == 2
+				&& domain.granularState.parcels.parcel(0).equals(existing),
+				"precipitation retains distinct parcels when merging would erase relative rotation");
+		double[] after = spatialMoments(domain);
+		for (int axis = 3; axis < 6; axis++) require(before[axis] == after[axis],
+				"zero-velocity precipitation leaves the existing granular angular momentum unchanged");
+		require(domain.exactInternalEnergy().equals(energy) && energy.equals(domain.thermalAudit().expectedInventory()),
+				"separate precipitation parcels preserve the complete thermal inventory");
+		requireCombinedCapacity(domain);
 	}
 
 	private static void precipitationPreservesAvailableMassMoment() {

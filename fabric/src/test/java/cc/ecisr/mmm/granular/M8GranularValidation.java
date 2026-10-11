@@ -39,6 +39,7 @@ public final class M8GranularValidation {
 		exactDryContainerTransferIsAtomic();
 		solidVolumeConversionsAreConservative();
 		parcelSplitMergePreservesInventory();
+		parcelMergesPreserveAngularMomentum();
 		depositCapacityAndGroupBudgetAreAtomic();
 		batchSettlementPreservesInventoryAndComposition();
 		multiTargetSettlementIsAtomic();
@@ -563,6 +564,48 @@ public final class M8GranularValidation {
 			long svq = SolidVolume.nanosToSvqAtMost(nanos);
 			long settled = SolidVolume.svqToNanosAtMost(svq);
 			require(settled <= nanos && nanos - settled <= 8L, "SVQ/nanovolume conversion exceeded bound");
+		}
+	}
+
+	private static void parcelMergesPreserveAngularMomentum() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int material = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = registry.material(material).maximumActiveParcelSvq() / 4;
+		for (int axis = 0; axis < 3; axis++) {
+			float[] position = {.625F, .625F, .625F}, velocity = {0, 0, 0};
+			position[axis] = .875F;
+			velocity[(axis + 1) % 3] = .001F;
+			var first = new GranularParcelStore.Parcel(.625F, .625F, .625F, 0, 0, 0,
+					svq, 2.5, material, 0, 0, (byte) 0);
+			var second = new GranularParcelStore.Parcel(position[0], position[1], position[2],
+					velocity[0], velocity[1], velocity[2], svq, 2.5625, material, 0, 0, (byte) 0);
+			var store = new GranularParcelStore(registry, 2);
+			store.add(first); store.add(second);
+			long revision = store.mutationRevision();
+			expectIllegal("angular momentum", () -> store.merge(0, 1));
+			var inventory = new GranularInventory(store, new GranularDepositStore(registry, 1, 2));
+			require(inventory.compactActive(index -> 0, candidate -> true, .01F, 4).merges() == 0
+					&& store.count() == 2 && store.mutationRevision() == revision
+					&& store.parcel(0).equals(first) && store.parcel(1).equals(second),
+					"direct and automatic merges retain all three relative rotation modes");
+			velocity[(axis + 1) % 3] = 0;
+			velocity[axis] = .001F;
+			store.overwrite(1, new GranularParcelStore.Parcel(position[0], position[1], position[2],
+					velocity[0], velocity[1], velocity[2], svq, second.mass(), material, 0, 0, (byte) 0));
+			require(inventory.compactActive(index -> 0, candidate -> true, .01F, 4).merges() == 1,
+					"parallel relative motion remains representable by one parcel");
+			var merged = store.parcel(0);
+			float[] finalPosition = {merged.x(), merged.y(), merged.z()};
+			float[] finalVelocity = {merged.velocityX(), merged.velocityY(), merged.velocityZ()};
+			for (int component = 0; component < 3; component++) {
+				int j = (component + 1) % 3, k = (component + 2) % 3;
+				double before = second.mass() * (position[j] * (double) velocity[k] - position[k] * (double) velocity[j]);
+				double after = merged.mass() * (finalPosition[j] * (double) finalVelocity[k]
+						- finalPosition[k] * (double) finalVelocity[j]);
+				double bound = merged.mass() * (Math.ulp(.001F) + .001 * Math.ulp(.875F))
+						+ 16 * Math.ulp(Math.max(Math.abs(before), Math.abs(after)));
+				require(Math.abs(after - before) <= bound, "parallel merge angular momentum follows storage rounding");
+			}
 		}
 	}
 

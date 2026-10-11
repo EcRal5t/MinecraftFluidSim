@@ -122,6 +122,9 @@ public final class GranularParcelStore {
 	public void merge(int first, int second) {
 		if (first == second) throw new IllegalArgumentException("Cannot merge a parcel with itself");
 		Parcel left = parcel(first), right = parcel(second);
+		if (!GranularMergeKinematics.preservesAngularMomentum(left, right)) {
+			throw new IllegalArgumentException("Granular merge cannot retain the pair's internal angular momentum");
+		}
 		if (left.materialHandle() != right.materialHandle()
 				|| left.solidCompositionHandle() != right.solidCompositionHandle()) {
 			throw new IllegalArgumentException("Granular parcels have incompatible inventory identities");
