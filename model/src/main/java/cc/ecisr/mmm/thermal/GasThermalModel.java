@@ -180,8 +180,8 @@ public final class GasThermalModel {
 		}
 		double energyChange = 0.0;
 		for (ThermalStateFunction.InventoryPortion portion : portions) {
-			energyChange += portion.massMu() * thermalRegistry.material(portion.materialHandle())
-					.sensibleSpecificEnergyBetween(initial.temperatureK(), targetTemperature);
+			energyChange += ThermalContactExchange.energyChangeBetween(thermalRegistry.material(portion.materialHandle()),
+					portion.massMu(), initial.temperatureK(), targetTemperature);
 		}
 		double finalEnergy = internalEnergy + energyChange;
 		hydrodynamicState(inventory, finalAvailableVolume, finalEnergy);

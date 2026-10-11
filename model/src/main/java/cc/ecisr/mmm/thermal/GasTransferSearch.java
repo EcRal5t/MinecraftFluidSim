@@ -5,6 +5,7 @@ import cc.ecisr.mmm.fluid.air.GasComponentAmount;
 import cc.ecisr.mmm.fluid.air.GasComponentDefinition;
 import cc.ecisr.mmm.fluid.air.GasInventory;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -121,6 +122,7 @@ final class GasTransferSearch {
 	private double chartEnergy(List<PortionRange> portions, double temperature, double targetEnergy, boolean upper) {
 		double cursor = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
 		double result = energy(portions, cursor, upper);
+		if (!Double.isFinite(result)) return upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
 		double largestUlp = Math.max(Math.ulp(result), Math.ulp(targetEnergy));
 		TreeSet<Double> ends = new TreeSet<>();
 		for (PortionRange portion : portions) for (ThermalMaterialDefinition.CaloricSegment segment : portion.material.caloricSegments()) {
@@ -135,7 +137,8 @@ final class GasTransferSearch {
 				capacity = outward(capacity + outward(term, upper), upper);
 			}
 			result = outward(result + outward(capacity * (end - cursor), upper), upper);
-			// State inversion accepts at most 16 ulps around each chart endpoint.
+			if (!Double.isFinite(result)) return upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+			// Conservative padding also encloses the minimum-temperature acceptance allowance.
 			largestUlp = Math.max(largestUlp, Math.ulp(result));
 			result = outward(result + (upper ? 1.0 : -1.0) * largestUlp * 16.0, upper);
 			cursor = end;
@@ -147,7 +150,6 @@ final class GasTransferSearch {
 		double result = 0.0;
 		for (PortionRange portion : portions) {
 			double reference = portion.material.referenceSpecificEnergyEuPerMu();
-			double sensible = portion.material.sensibleSpecificEnergyAt(temperature);
 			double base = productRange(portion.massLow, portion.massHigh, reference, upper);
 			int handle = thermal.materialHandle(portion.material.id());
 			for (var entry : portion.species.entrySet()) {
@@ -156,10 +158,24 @@ final class GasTransferSearch {
 				double last = thermal.referenceEnergyCache().energy(offset, entry.getValue()[1]);
 				base = outward(base + (upper ? Math.max(first, last) : Math.min(first, last)), upper);
 			}
-			double specific = productRange(portion.massLow, portion.massHigh, sensible, upper);
-			result = outward(result + outward(base + specific, upper), upper);
+			result = outward(result + caloricBound(portion, temperature, base, upper), upper);
 		}
-		return result;
+		return Double.isFinite(result) ? result : upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+	}
+
+	private double caloricBound(PortionRange portion, double temperature, double base, boolean upper) {
+		try {
+			double sensible = portion.material.sensibleSpecificEnergyAt(temperature);
+			double energy = base + productRange(portion.massLow, portion.massHigh, sensible, upper);
+			if (Double.isFinite(energy)) return outward(energy, upper);
+		} catch (IllegalArgumentException integralOverflow) { /* Retry the validated caloric integral before scaling. */ }
+		if (!Double.isFinite(base)) return upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+		SignedDyadic specific = ThermalContactExchange.exactEnergyChangeBetween(portion.material, 1.0,
+				portion.material.referenceTemperatureK(), temperature);
+		double mass = (specific.signum() >= 0) == upper ? portion.massHigh : portion.massLow;
+		double energy = SignedDyadic.of(base).add(specific.multiply(SignedDyadic.of(mass))).toDouble();
+		return Double.isFinite(energy) ? outward(energy, upper)
+				: upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
 	}
 
 	private PortionRange range(GasComponentAmount low, GasComponentAmount high) {

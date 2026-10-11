@@ -125,6 +125,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void gasStateCompressionAndCarrierEnergy() {
+		gasTransferBoundsScaleBeforeOverflow();
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		ThermalMaterialDefinition air = new ThermalMaterialDefinition("mmm:thermal/air",
 				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
@@ -199,8 +200,15 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 1_500.0, 150.0)));
 		GasThermalModel coldReferenceModel = new GasThermalModel(new ThermalRegistry(List.of(coldReference)), gas);
 		double coldEnergy = coldReferenceModel.internalEnergyAtTemperature(inventory, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+		double actualColdTemperature = new java.math.BigDecimal(coldEnergy)
+				.divide(new java.math.BigDecimal(inventory.totalMass()).multiply(java.math.BigDecimal.valueOf(150)),
+						new java.math.MathContext(110))
+				.add(new java.math.BigDecimal(coldReference.referenceTemperatureK())).doubleValue();
+		require(Double.doubleToRawLongBits(coldReferenceModel.state(inventory, coldEnergy).temperatureK())
+				== Double.doubleToRawLongBits(actualColdTemperature),
+				"cold gas inversion lost the temperature carried by its actual raw energy");
 		double heatedVolume = Math.exp(-inventory.totalMass() * 150.0 / expectedGasConstant
-				* (Math.log(100.0) - Math.log(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)));
+				* (Math.log(100.0) - Math.log(actualColdTemperature)));
 		GasThermalModel.Compression coldHeating = coldReferenceModel.compressAdiabatically(
 				inventory, coldEnergy, 1.0, heatedVolume);
 		require(Math.abs(coldHeating.finalTemperatureK() / 100.0 - 1.0) < 1.0E-12,
@@ -258,6 +266,82 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		require(Math.abs(partitioned - initial) <= Math.ulp(initial) * 4.0
 				&& model.enthalpy(children.getFirst(), GasRegistry.STANDARD_TEMPERATURE_K) > energies[0],
 				"gas topology/orifice carrier energy did not close");
+	}
+
+	static void gasTransferBoundsScaleBeforeOverflow() {
+		for (int scenario = 0; scenario < 5; scenario++) {
+			double density = scenario == 0 ? 1 : 1e-300, cv = scenario == 0 ? 10_000 : 1e307;
+			double reference = scenario == 3 ? 1e307 : scenario == 4 ? -1e307 : 0;
+			double temperature = scenario == 2 ? 600 : scenario == 3 ? 299 : scenario == 4 ? 301 : 300;
+			var definition = new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:scaled_gas",
+					density, density, List.of(), List.of());
+			var gas = new GasRegistry(List.of(definition), List.of(new GasRegistry.AmbientFraction(definition.id(), ExactRational.ONE)));
+			var material = new ThermalMaterialDefinition("test:thermal/scaled_gas", ThermalMaterialDefinition.CarrierKind.GAS,
+					definition.id(), 300, reference, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1_000, cv)));
+			var model = new GasThermalModel(new ThermalRegistry(List.of(material)), gas);
+			var network = new AirNetwork(gas); network.addNode(.125, 0); network.addNode(.125, 0);
+			var source = gas.createAmbient(1_000_000_000L); var target = gas.createAmbient(500_000_000L);
+			gas.requireCompatible(source); gas.requireCompatible(target);
+			network.commitPhaseSource(1, source); network.commitPhaseSource(2, target);
+			var audit = new cc.ecisr.mmm.thermal.ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO));
+			var store = new GasEnergyStore(model, temperature, audit, network);
+			double sourceEnergy = store.nodeEnergy(1, network), targetEnergy = store.nodeEnergy(2, network);
+			double actualTemperature = store.temperature(1, network);
+			model.hydrodynamicState(source, .125, sourceEnergy); model.hydrodynamicState(target, .125, targetEnergy);
+			java.util.function.LongPredicate permits = amount -> {
+				try {
+					var split = source.splitTotal(amount); double carried = model.enthalpy(split.first(), actualTemperature);
+					return model.absolutePressure(split.second(), .125, sourceEnergy - carried)
+							>= model.absolutePressure(target.merge(split.first()), .125, targetEnergy + carried);
+				} catch (IllegalArgumentException | ArithmeticException invalid) { return false; }
+			};
+			// With one constant-Cv component and equal initial temperatures, the pressure difference decreases with the portion.
+			long low = 0, high = source.standardVolumeNanos();
+			while (low + 1 < high) {
+				long middle = low + (high - low) / 2;
+				if (permits.test(middle)) low = middle; else high = middle;
+			}
+			var before = network.inventory(1); var beforeTarget = network.inventory(2);
+			long revision = store.revision();
+			long actual = store.thermodynamics(network).limitTransferNanos(1, 2, source.standardVolumeNanos());
+			require(actual == low && permits.test(actual) && !permits.test(actual + 1)
+					&& network.inventory(1).equals(before) && network.inventory(2).equals(beforeTarget)
+					&& store.revision() == revision && store.nodeEnergy(1, network) == sourceEnergy
+					&& store.nodeEnergy(2, network) == targetEnergy,
+					"finite gas transfer lost its caloric bounds through specific integral overflow or mutated a preview");
+			if (scenario == 0) require(actual == 241_647_638L, "ordinary gas transfer bounds changed");
+			if (scenario == 1) require(actual == 249_991_359L, "scaled gas transfer no longer matches its monotone pressure oracle");
+		}
+		for (boolean scaled : new boolean[]{false, true}) {
+			double cv = scaled ? 1e308 : 10_000, density = scaled ? 1e-300 : 1;
+			double initialVolume = scaled ? 1e-300 : 1, finalVolume = scaled ? 1e20 : 2;
+			var definition = new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:compression_gas",
+					density, density, List.of(), List.of());
+			var gas = new GasRegistry(List.of(definition), List.of(new GasRegistry.AmbientFraction(definition.id(), ExactRational.ONE)));
+			var material = new ThermalMaterialDefinition("test:thermal/compression_gas", ThermalMaterialDefinition.CarrierKind.GAS,
+					definition.id(), 600, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2_000, cv)));
+			var model = new GasThermalModel(new ThermalRegistry(List.of(material)), gas);
+			var inventory = gas.createAmbient(1_000_000_000L);
+			double initialEnergy = model.internalEnergyAtTemperature(inventory, 1_000);
+			var initial = model.hydrodynamicState(inventory, initialVolume, initialEnergy);
+			double exponent = initial.gasConstantEuPerK() / initial.heatCapacityEuPerK()
+					* (Math.log(initialVolume) - Math.log(finalVolume));
+			double expectedTemperature = initial.temperatureK() + initial.temperatureK() * Math.expm1(exponent);
+			SignedDyadic capacity = SignedDyadic.of(inventory.totalMass()).multiply(SignedDyadic.of(cv));
+			SignedDyadic expectedDelta = capacity.multiply(SignedDyadic.of(expectedTemperature)
+					.subtract(SignedDyadic.of(initial.temperatureK())));
+			double expectedEnergy = SignedDyadic.of(initialEnergy).add(expectedDelta).toDouble();
+			var compression = model.compressAdiabatically(inventory, initialEnergy, initialVolume, finalVolume);
+			var finalState = model.hydrodynamicState(inventory, finalVolume, compression.finalInternalEnergy());
+			double temperatureBound = 4 * Math.ulp(expectedTemperature);
+			double energyBound = capacity.toDouble() * temperatureBound + 4 * Math.ulp(expectedEnergy);
+			require(Math.abs(compression.finalTemperatureK() - expectedTemperature) <= temperatureBound
+					&& Math.abs(finalState.temperatureK() - expectedTemperature) <= temperatureBound
+					&& Math.abs(compression.finalInternalEnergy() - expectedEnergy) <= energyBound
+					&& Math.abs(compression.workIntoGas() - expectedDelta.toDouble()) <= energyBound
+					&& compression.workIntoGas() == compression.finalInternalEnergy() - initialEnergy,
+					"finite scaled isentropic gas expansion overflowed before mass scaling or lost its raw energy change");
+		}
 	}
 
 	private static void tinyGasEnergyPartitions(GasThermalModel model, GasRegistry gas) {
