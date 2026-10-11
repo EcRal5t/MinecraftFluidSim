@@ -165,7 +165,7 @@ public final class GranularInventory {
 				weighted(first.velocityY(), first.mass(), second.velocityY(), second.mass(), combinedMass),
 				weighted(first.velocityZ(), first.mass(), second.velocityZ(), second.mass(), combinedMass),
 				combinedSvq, combinedMass, first.materialHandle(), first.solidCompositionHandle(),
-				Math.min(first.contactAge(), second.contactAge()), (byte) (first.flags() & second.flags()));
+				0, (byte) ((first.flags() & second.flags()) & ~GranularParcelStore.FLAG_SUPPORTED));
 		return new ActiveMerge(merged, combinedComposition);
 	}
 

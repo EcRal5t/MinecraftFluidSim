@@ -566,12 +566,59 @@ public final class M8GranularValidation {
 		long volume = registry.material(material).maximumActiveParcelSvq();
 		double mass = 7.25;
 		store.add(parcel(material, volume, mass));
+		var initial = store.parcel(0);
+		store.overwrite(0, new GranularParcelStore.Parcel(initial.x(), initial.y(), initial.z(),
+				initial.velocityX(), initial.velocityY(), initial.velocityZ(), volume, mass, material, 0, 3, (byte) 3));
+		require(store.parcel(0).contactAge() == 3 && store.parcel(0).flags() == 3,
+				"same-volume mechanical writes must preserve newly computed contact state");
 		int split = store.split(0, volume / 3L);
 		require(store.totalSolidVolumeSvq() == volume, "parcel split changed SVQ");
 		require(rawClose(store.totalMass(), mass), "parcel split changed mass");
+		for (int index = 0; index < store.count(); index++) {
+			var child = store.parcel(index);
+			require(child.contactAge() == 0 && child.flags() == 2,
+					"split children must reacquire support for their smaller representative spheres");
+			store.overwrite(index, new GranularParcelStore.Parcel(child.x(), child.y(), child.z(),
+					child.velocityX(), child.velocityY(), child.velocityZ(), child.solidVolumeSvq(), child.mass(),
+					material, 0, 3, (byte) 3));
+		}
 		store.merge(0, split);
 		require(store.count() == 1 && store.totalSolidVolumeSvq() == volume, "parcel merge changed SVQ");
 		require(rawClose(store.totalMass(), mass), "parcel merge changed mass");
+		require(store.parcel(0).contactAge() == 0 && store.parcel(0).flags() == 2,
+				"generic merge must reacquire support while preserving unrelated flags");
+		var merged = store.parcel(0);
+		store.overwrite(0, new GranularParcelStore.Parcel(merged.x(), merged.y(), merged.z(),
+				merged.velocityX(), merged.velocityY(), merged.velocityZ(), volume, mass, material, 0, 3, (byte) 3));
+		store.overwrite(0, new GranularParcelStore.Parcel(merged.x(), merged.y(), merged.z(),
+				merged.velocityX(), merged.velocityY(), merged.velocityZ(), volume / 8, mass / 8, material, 0, 3, (byte) 3));
+		require(store.parcel(0).contactAge() == 0 && store.parcel(0).flags() == 2,
+				"partial removal must invalidate support at its old radius");
+		store.removeSwap(0);
+		for (int index = 0; index < 2; index++) store.add(new GranularParcelStore.Parcel(
+				0.5F, 0.5F, 0.5F, 0, 0, 0, volume / 4, mass / 4, material, 0, 3, (byte) 3));
+		GranularDepositStore deposits = new GranularDepositStore(registry, 1, 2);
+		GranularInventory inventory = new GranularInventory(store, deposits);
+		var compacted = inventory.compactActive(index -> 0, (left, right, replacement) -> {
+			require(replacement.contactAge() == 0 && replacement.flags() == 2,
+					"active compaction preflight must expose invalidated contact geometry");
+			return true;
+		}, 0, 4);
+		require(compacted.merges() == 1 && store.parcel(0).contactAge() == 0 && store.parcel(0).flags() == 2,
+				"active compaction commit must reacquire support");
+		store.removeSwap(0);
+		float originalRadius = GranularMechanics.representativeRadius(volume, 0.5F);
+		store.add(new GranularParcelStore.Parcel(0.25F, originalRadius, 0.25F, 0, 0, 0,
+				volume, mass, material, 0, 3, GranularParcelStore.FLAG_SUPPORTED));
+		store.overwrite(0, new GranularParcelStore.Parcel(0.25F, originalRadius, 0.25F, 0, 0, 0,
+				volume / 8, mass / 8, material, 0, 3, GranularParcelStore.FLAG_SUPPORTED));
+		GranularDepositDynamics dynamics = new GranularDepositDynamics(registry, store, deposits,
+				inventory, 1, 1, 1, 0.5F);
+		// Radius halves while the center stays fixed: this particle is now above its former support.
+		require(originalRadius > GranularMechanics.representativeRadius(volume / 8, 0.5F)
+				&& dynamics.step(new TestDepositEnvironment(1, 1, 1, 0), 0.05F).settledParcels() == 0
+				&& store.count() == 1,
+				"radius reduction must wait for a fresh mechanical contact before settling");
 	}
 
 	private static void depositCapacityAndGroupBudgetAreAtomic() {

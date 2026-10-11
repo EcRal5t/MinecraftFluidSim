@@ -42,6 +42,7 @@
 - active/deposit 的 binary64 kg 总账在 snapshot、handoff 与清空计划边界按精确二进制和归约、最后只舍入一次；稀疏槽位分配顺序、cell 规范排序和 parcel swap-remove 不能改变总账 raw bits。
 - reactive solid composition/species 与机械材料身份分开保存。
 - active parcel、deposit group 和 coherent condensed phase 是不同载体，不互相替代；active parcel 的连续支撑接触年龄与支撑标志是沉积状态机的权威侧列。
+- 活动颗粒的 SVQ 改变后，清除接触年龄与支撑标志，由后续机械计算按新体积重新判定代表球的接触几何；拆分、合并、部分取出和溶解共用此规则。同 SVQ 的机械写回保留本次计算出的接触状态。
 - deposit 保存 cell、材料、SVQ、质量、组成、porosity 和孔隙水相关状态。
 - external source、escaped sink、boundary impulse 与反应审计独立闭合。
 

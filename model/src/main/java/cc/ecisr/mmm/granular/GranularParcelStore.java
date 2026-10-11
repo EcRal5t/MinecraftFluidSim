@@ -81,7 +81,9 @@ public final class GranularParcelStore {
 	public void overwrite(int index, Parcel parcel) {
 		requireIndex(index);
 		validate(parcel);
+		boolean changedGeometry = solidVolumeSvq[index] != parcel.solidVolumeSvq();
 		write(index, parcel);
+		if (changedGeometry) { contactAge[index] = 0; flags[index] &= ~FLAG_SUPPORTED; }
 		mutationRevision++;
 	}
 
@@ -108,11 +110,11 @@ public final class GranularParcelStore {
 		if (!(takenMass > 0.0 && remainingMass > 0.0)) throw new IllegalArgumentException("Granular split mass is not representable");
 		write(index, new Parcel(original.x(), original.y(), original.z(), original.velocityX(), original.velocityY(),
 				original.velocityZ(), original.solidVolumeSvq() - takenSvq, remainingMass,
-				original.materialHandle(), original.solidCompositionHandle(), original.contactAge(), original.flags()));
+				original.materialHandle(), original.solidCompositionHandle(), 0, (byte) (original.flags() & ~FLAG_SUPPORTED)));
 		mutationRevision++;
 		return add(new Parcel(original.x(), original.y(), original.z(), original.velocityX(), original.velocityY(),
 				original.velocityZ(), takenSvq, takenMass, original.materialHandle(), original.solidCompositionHandle(),
-				original.contactAge(), original.flags()));
+				0, (byte) (original.flags() & ~FLAG_SUPPORTED)));
 	}
 
 	/** Merges two compatible parcels and swap-removes the second index. */
@@ -136,7 +138,7 @@ public final class GranularParcelStore {
 				weighted(left.velocityY(), left.mass(), right.velocityY(), right.mass(), combinedMass),
 				weighted(left.velocityZ(), left.mass(), right.velocityZ(), right.mass(), combinedMass),
 				combinedVolume, combinedMass, left.materialHandle(), left.solidCompositionHandle(),
-				Math.max(left.contactAge(), right.contactAge()), (byte) (left.flags() | right.flags()));
+				0, (byte) ((left.flags() | right.flags()) & ~FLAG_SUPPORTED));
 		write(first, merged);
 		int last = count - 1;
 		removeSwap(second);
