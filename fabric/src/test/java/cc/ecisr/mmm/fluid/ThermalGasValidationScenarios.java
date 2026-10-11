@@ -939,10 +939,73 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					&& FluidDomain.restoreAuthoritativeState(before).particleCount() == 1,
 					"prospective phase topology did not retain a restorable state");
 		}
+		phaseDirectionsFollowCurrentCavity();
+	}
+
+	private static void phaseDirectionsFollowCurrentCavity() {
+		FluidDomain domain = phaseTopologyDomain(1, 0, 0, 0L, true);
+		var initial = domain.captureAuthoritativeState();
+		var energy = domain.exactInternalEnergy();
+		var mass = actualPhaseMass(domain);
+		var phase = domain.thermalState.gasLiquidPhase(domain.gasState.network);
+		var transition = domain.thermalState.registry().transitions().getFirst();
+		require(domain.gasState.network.nodeCount() == 3 && domain.particleCount() == 2
+				&& domain.gasState.cellNodeId[domain.cellIndex(1, 1, 1)] == 1
+				&& domain.gasState.cellNodeId[domain.cellIndex(4, 1, 1)] == 2
+				&& domain.gasState.cellNodeId[domain.cellIndex(6, 1, 1)] == 3,
+				"independent interfaces did not begin in three distinct sealed cavities");
+		for (int node = 1; node <= 3; node++) require(phase.saturation(transition, 400,
+				domain.gasState.network.inventory(node), domain.thermalState.requireGasNodeState(node,
+						domain.gasState.network.inventory(node), domain.thermalState.gasNodeEnergy(node, domain.gasState.network),
+						domain.gasState.network)).direction() == (node == 2
+				? GasLiquidPhaseModel.Direction.CONDENSE : GasLiquidPhaseModel.Direction.BOIL),
+				"independent cavity phase affinities differ from their prescribed initial states");
+		FluidDomain separate = FluidDomain.restoreAuthoritativeState(initial);
+		var joinedStats = domain.stepGasPhaseChangeOnly(2);
+		var firstStats = separate.stepGasPhaseChangeOnly(1);
+		require(firstStats.operations() == 1 && separate.gasState.network.nodeCount() == 2
+				&& separate.gasState.cellNodeId[separate.cellIndex(6, 1, 1)] == 2,
+				"the first bridge did not merge its cavities and renumber the independent cavity");
+		separate = FluidDomain.restoreAuthoritativeState(separate.captureAuthoritativeState());
+		var secondStats = separate.stepGasPhaseChangeOnly(1);
+		require(joinedStats.operations() == 2 && joinedStats.boiledCells() == 2
+				&& secondStats.operations() == 1 && domain.particleCount() == 0 && separate.particleCount() == 0,
+				"a reused cavity ordinal suppressed a legitimate independent same-temperature phase change");
+		var joinedThermal = domain.exportThermalParticleState();
+		var separateThermal = separate.exportThermalParticleState();
+		require(domain.exactInternalEnergy().equals(energy) && separate.exactInternalEnergy().equals(energy)
+				&& actualPhaseMass(domain).equals(mass) && actualPhaseMass(separate).equals(mass)
+				&& domain.thermalAudit().equals(separate.thermalAudit())
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+				&& domain.gasState.network.auditClosed() && separate.gasState.network.auditClosed()
+				&& domain.gasState.network.sealedInventory().equals(separate.gasState.network.sealedInventory())
+				&& domain.gasState.network.externalSource().equals(separate.gasState.network.externalSource())
+				&& domain.gasState.network.escapedSink().equals(separate.gasState.network.escapedSink())
+				&& Arrays.equals(domain.pendingPhaseCellVolume, separate.pendingPhaseCellVolume)
+				&& Arrays.equals(joinedThermal.copyInternalEnergy(), separateThermal.copyInternalEnergy())
+				&& Arrays.equals(joinedThermal.copyActiveParcelEnergy(), separateThermal.copyActiveParcelEnergy())
+				&& Arrays.equals(joinedThermal.copyGasNodeEnergy(), separateThermal.copyGasNodeEnergy()),
+				"combined and separate phase budgets produced different conserved inventory or raw thermal state");
+		for (int node = 1; node <= 2; node++) require(domain.gasState.network.inventory(node).equals(separate.gasState.network.inventory(node))
+				&& domain.gasState.network.availableVolume(node) == separate.gasState.network.availableVolume(node),
+				"combined and separate phase budgets assigned different final gas cavities");
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.particleCount() == 0 && restored.gasState.network.nodeCount() == 2
+				&& restored.exactInternalEnergy().equals(energy) && actualPhaseMass(restored).equals(mass)
+				&& restored.thermalAudit().equals(domain.thermalAudit())
+				&& restored.gasState.network.sealedInventory().equals(domain.gasState.network.sealedInventory()),
+				"independent completed phase transfers did not retain a restorable state");
 	}
 
 	private static FluidDomain phaseTopologyDomain(
 			int componentCount, double energyReference, int extraVaporNode, long extraVaporNanos
+	) {
+		return phaseTopologyDomain(componentCount, energyReference, extraVaporNode, extraVaporNanos, false);
+	}
+
+	private static FluidDomain phaseTopologyDomain(
+			int componentCount, double energyReference, int extraVaporNode, long extraVaporNanos,
+			boolean independentInterface
 	) {
 		var gasDefinitions = new java.util.ArrayList<cc.ecisr.mmm.fluid.air.GasComponentDefinition>();
 		var materials = new java.util.ArrayList<ThermalMaterialDefinition>();
@@ -964,27 +1027,34 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				SolidVolume.SVQ_PER_CELL / 8, SolidVolume.SVQ_PER_BV / 8, ExactRational.parse("125/8"),
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
 		var registry = new ThermalRegistry(materials, List.of(), List.of(transition), "", grains.fingerprint());
-		FluidDomain domain = new FluidDomain(5, 3, 3,
+		int width = independentInterface ? 9 : 5;
+		int[] bridges = independentInterface ? new int[]{3, 7} : new int[]{2};
+		FluidDomain domain = new FluidDomain(width, 3, 3,
 				new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
 		domain.sealDomainBoundary();
-		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 5; x++)
-			if (y != 1 || z != 1 || x == 0 || x == 4) domain.setSolid(x, y, z, true);
-		domain.setVolume(2, 1, 1, .125F);
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < width; x++)
+			if (y != 1 || z != 1 || x == 0 || x == width - 1 || independentInterface && x == 5)
+				domain.setSolid(x, y, z, true);
+		for (int bridge : bridges) domain.setVolume(bridge, 1, 1, .125F);
 		domain.bindGranular(grains, liquids, BuiltinFluidMaterials.createRegistry());
 		int sand = grains.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = grains.material(sand).maximumActiveParcelSvq();
 		double mass = svq / (double) SolidVolume.SVQ_PER_BV * grains.material(sand).referenceDensity();
-		domain.granularState.parcels.add(new cc.ecisr.mmm.granular.GranularParcelStore.Parcel(
-				1.25F, .75F, .75F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
-		domain.markGranularExternalChange(22);
+		for (int bridge : bridges) {
+			domain.granularState.parcels.add(new cc.ecisr.mmm.granular.GranularParcelStore.Parcel(
+					(bridge + .5F) * .5F, .75F, .75F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
+			domain.markGranularExternalChange(domain.cellIndex(bridge, 1, 1));
+		}
 		domain.bindGasRegistry(gasRegistry); domain.bootstrapGasState("");
 		domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
-		for (int node = 1; node <= 2; node++) {
+		for (int node = 1; node <= (independentInterface ? 3 : 2); node++) {
 			var amounts = new java.util.ArrayList<GasComponentAmount>();
-			int start = node == 1 ? 0 : 17, end = node == 1 ? 17 : componentCount;
+			int start = independentInterface || node == 1 ? 0 : 17;
+			int end = independentInterface ? 1 : node == 1 ? 17 : componentCount;
 			for (int k = start; k < end; k++) {
 				double gasMass = energyReference != 0 && (k == 1 || k == 17) ? 1 : 1.0 / 1024;
-				amounts.add(new GasComponentAmount("test:g" + k, 1_000_000, gasMass, List.of(), gasMass));
+				long nanos = independentInterface && node == 2 ? 300_000_000L : 1_000_000L;
+				amounts.add(new GasComponentAmount("test:g" + k, nanos, gasMass, List.of(), gasMass));
 			}
 			domain.gasState.network.commitPhaseSource(node, new GasInventory(amounts));
 		}

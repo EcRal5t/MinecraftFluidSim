@@ -52,7 +52,6 @@ final class GasLiquidPhaseChangeStage {
 		if (!phaseGridPrepared) thermal.preparePhaseScan(support.state().thermalMarkers());
 		GasDomainState gasState = support.gasState();
 		GasLiquidPhaseModel phase = thermal.gasLiquidPhase(gasState.network);
-		HashMap<GasPhaseDirectionKey, GasLiquidPhaseModel.Direction> stepDirections = new HashMap<>();
 		int operations = 0, boiled = 0, condensed = 0;
 		for (ThermalPhaseTransition transition : thermal.registry().transitions()) {
 			if (transition.interfaceRequirement()
@@ -78,10 +77,6 @@ final class GasLiquidPhaseChangeStage {
 					GasLiquidPhaseModel.Saturation saturation = gasInterface.saturation();
 					GasLiquidPhaseModel.Direction direction = saturation.direction();
 					if (direction == GasLiquidPhaseModel.Direction.EQUILIBRIUM) continue;
-					GasPhaseDirectionKey directionKey = new GasPhaseDirectionKey(
-							transition.id(), node, Double.doubleToRawLongBits(liquidTemperature));
-					GasLiquidPhaseModel.Direction firstDirection = stepDirections.putIfAbsent(directionKey, direction);
-					if (firstDirection != null && firstDirection != direction) continue;
 					if (inventory == null) {
 						inventory = gasLiquidCellInventory(cell, liquidHandle);
 						if (inventory == null) break;
@@ -616,5 +611,4 @@ final class GasLiquidPhaseChangeStage {
 			GasTopologyCoordinator.GasTopologyPlan topology
 	) { }
 
-	private record GasPhaseDirectionKey(String transitionId, int node, long liquidTemperatureBits) { }
 }
