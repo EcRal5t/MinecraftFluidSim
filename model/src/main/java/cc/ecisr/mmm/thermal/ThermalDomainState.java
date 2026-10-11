@@ -384,7 +384,7 @@ public final class ThermalDomainState {
 	public GasEnergyStore.GasRemapPlan planGasRemap(
 			AirNetwork oldNetwork, List<GasInventory> inventories, double[] availableVolumes,
 			double[] mixedEnergy, double[] inheritedAvailableVolumes,
-			double sourceEnergy, double sinkEnergy
+			SignedDyadic sourceEnergy, SignedDyadic sinkEnergy
 	) {
 		return gasState.planRemap(oldNetwork, inventories, availableVolumes, mixedEnergy,
 				inheritedAvailableVolumes, sourceEnergy, sinkEnergy);
@@ -393,7 +393,7 @@ public final class ThermalDomainState {
 	/** Plans the topology successor against the complete prepared phase energy and audit. */
 	public GasEnergyStore.GasRemapPlan planGasRemapAfterPhase(PhaseCellEnergyPlan phase, int node, double energy,
 			AirNetwork network, List<GasInventory> inventories, double[] volumes, double[] mixed,
-			double[] inherited, double source, double sink) {
+			double[] inherited, SignedDyadic source, SignedDyadic sink) {
 		requirePhaseCellEnergyCurrent(phase);
 		return gasState.planRemapAfterPhase(network, node, energy, phase.assignment.afterAudit(),
 				inventories, volumes, mixed, inherited, source, sink);

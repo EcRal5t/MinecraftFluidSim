@@ -958,7 +958,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var first = FluidThermalBinding.create(registry, liquids, 300, 1, 2, 2, 2, .5F, emptyMarkers(), network);
 		var foreign = FluidThermalBinding.create(registry, liquids, 300, 1, 2, 2, 2, .5F, emptyMarkers(), network);
 		var plan = first.planGasRemap(network, List.of(network.inventory(1)), new double[]{1},
-				new double[]{first.gasNodeEnergy(1, network)}, new double[]{1}, 0, 0);
+				new double[]{first.gasNodeEnergy(1, network)}, new double[]{1}, SignedDyadic.ZERO, SignedDyadic.ZERO);
 		var audit = foreign.auditLedger(); double energy = foreign.gasNodeEnergy(1, network);
 		expectFailure(() -> foreign.commitGasRemap(plan), "foreign gas thermal remap was accepted");
 		require(foreign.auditLedger() == audit && foreign.gasNodeEnergy(1, network) == energy,
@@ -968,6 +968,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	private static void gasTopologyRemapsRetainCommonTemperature() {
+		gasTopologyExchangePreservesExactRegionalEnergy();
 		var gasDefinitions = List.of(new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:a", 8, 8, List.of(), List.of()),
 				new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:b", 8, 8, List.of(), List.of()),
 				new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:c", 8, 8, List.of(), List.of()));
@@ -1003,6 +1004,69 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		}
 	}
 
+	private static void gasTopologyExchangePreservesExactRegionalEnergy() {
+		SignedDyadic total = SignedDyadic.of(1e308).add(SignedDyadic.of(1e308));
+		for (boolean source : new boolean[]{false, true}) {
+			FluidDomain domain = gasRegionalEnergyDomain(source);
+			var before = domain.captureAuthoritativeState();
+			require(domain.exactInternalEnergy().equals(source ? SignedDyadic.ZERO : total)
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"regional gas energy control has an invalid initial exact ledger");
+			domain.setSolid(0, 1, 1, source); domain.setSolid(4, 1, 1, source);
+			domain.synchronizeGasTopologyForPersistence();
+			require(domain.gasBoundary().nodeCount() == (source ? 2 : 0)
+					&& domain.exactInternalEnergy().equals(source ? total : SignedDyadic.ZERO)
+					&& (source ? domain.thermalAudit().externalSource() : domain.thermalAudit().externalSink()).equals(total)
+					&& domain.thermalAudit().mechanicalWork().equals(SignedDyadic.ZERO)
+					&& domain.thermalAudit().roundoffResidual().equals(SignedDyadic.ZERO)
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+					&& domain.gasBoundary().auditClosed()
+					&& FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState()).exactInternalEnergy()
+							.equals(domain.exactInternalEnergy()),
+					"topology gas source or sink forced its exact regional energy through a double total");
+			if (!source) {
+				FluidDomain explicit = FluidDomain.restoreAuthoritativeState(before);
+				explicit.commitOperatorVentSealedGas(explicit.planOperatorVentSealedGas());
+				require(explicit.exactInternalEnergy().equals(SignedDyadic.ZERO)
+						&& explicit.thermalAudit().externalSink().equals(total)
+						&& explicit.exactInternalEnergy().equals(explicit.thermalAudit().expectedInventory()),
+						"explicit vent and topology escape disagree on the same exact exported energy");
+			}
+		}
+	}
+
+	private static FluidDomain gasRegionalEnergyDomain(boolean initiallyAmbient) {
+		var gas = new GasRegistry(List.of(
+				new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:a", 8, 8, List.of(), List.of()),
+				new cc.ecisr.mmm.fluid.air.GasComponentDefinition("test:b", 8, 8, List.of(), List.of())),
+				List.of(new GasRegistry.AmbientFraction("test:a", ExactRational.ONE)));
+		var liquids = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2)));
+		var thermal = new ThermalRegistry(List.of(topologyMaterial("test:w", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"mmm:water", 0, 1), topologyMaterial("test:ta", ThermalMaterialDefinition.CarrierKind.GAS, "test:a", 1e308, 1),
+				topologyMaterial("test:tb", ThermalMaterialDefinition.CarrierKind.GAS, "test:b", 1e308, 1)));
+		FluidDomain domain = new FluidDomain(5, 3, 3,
+				new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, .8F), 128);
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 5; x++)
+			if (!(y == 1 && z == 1 && (x == 1 || x == 3 || initiallyAmbient && (x == 0 || x == 4))))
+				domain.setSolid(x, y, z, true);
+		if (initiallyAmbient) { domain.bindGasRegistry(gas); domain.bootstrapGasState(""); }
+		else {
+			int[] membership = new int[45], lineage = new int[45]; Arrays.fill(lineage, -1);
+			var nodes = new java.util.ArrayList<cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node>();
+			var source = cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY;
+			for (int i = 0; i < 2; i++) {
+				int cell = domain.cellIndex(1 + 2 * i, 1, 1); membership[cell] = lineage[cell] = i + 1;
+				var inventory = new GasInventory(List.of(new GasComponentAmount(i == 0 ? "test:a" : "test:b",
+						125_000_000, 1, List.of(), 1)));
+				nodes.add(new cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node(cell, inventory)); source = source.add(inventory);
+			}
+			domain.restoreGasState(new cc.ecisr.mmm.fluid.air.GasStateSnapshot(5, 3, 3, gas.fingerprint(), "", nodes,
+					membership, lineage, source, cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO), gas);
+		}
+		domain.bindThermal(thermal, liquids, 300);
+		return FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+	}
+
 	static void gasRuntimeTransfersEnergyAndWork() {
 		cc.ecisr.mmm.thermal.GasTransferValidation.validate();
 		GasRegistry gasRegistry = BuiltinGasDefinitions.createRegistry();
@@ -1026,7 +1090,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		double initialEnergy = compressed.gasNodeEnergy(1, compressedNetwork);
 		GasEnergyStore.GasRemapPlan compression = compressed.planGasRemap(compressedNetwork,
 				List.of(compressedNetwork.inventory(1)), new double[] {0.8}, new double[] {initialEnergy},
-				new double[] {1.0}, 0.0, 0.0);
+				new double[] {1.0}, SignedDyadic.ZERO, SignedDyadic.ZERO);
 		compressedNetwork.remapNodes(new double[] {0.8}, List.of(compressedNetwork.inventory(1)),
 				GasInventory.EMPTY, GasInventory.EMPTY);
 		compressed.commitGasRemap(compression);

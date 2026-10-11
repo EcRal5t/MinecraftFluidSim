@@ -191,7 +191,7 @@ public final class GasEnergyStore {
 	GasRemapPlan planRemap(
 			AirNetwork oldNetwork, List<GasInventory> inventories, double[] availableVolumes,
 			double[] mixedEnergy, double[] inheritedAvailableVolumes,
-			double sourceEnergy, double sinkEnergy
+			SignedDyadic sourceEnergy, SignedDyadic sinkEnergy
 	) {
 		return planRemap(oldNetwork, inventories, availableVolumes, mixedEnergy, inheritedAvailableVolumes,
 				sourceEnergy, sinkEnergy, nodeEnergy, null, revision);
@@ -199,7 +199,7 @@ public final class GasEnergyStore {
 
 	GasRemapPlan planRemapAfterPhase(AirNetwork network, int node, double energy,
 			ThermalAuditLedger afterPhase, List<GasInventory> inventories, double[] volumes,
-			double[] mixed, double[] inherited, double source, double sink) {
+			double[] mixed, double[] inherited, SignedDyadic source, SignedDyadic sink) {
 		requireGasNode(node, network);
 		double[] baseline = nodeEnergy.clone(); baseline[node - 1] = energy;
 		return planRemap(network, inventories, volumes, mixed, inherited, source, sink,
@@ -208,12 +208,12 @@ public final class GasEnergyStore {
 
 	private GasRemapPlan planRemap(AirNetwork oldNetwork, List<GasInventory> inventories,
 			double[] availableVolumes, double[] mixedEnergy, double[] inheritedAvailableVolumes,
-			double sourceEnergy, double sinkEnergy, double[] baselineEnergy,
+			SignedDyadic sourceEnergy, SignedDyadic sinkEnergy, double[] baselineEnergy,
 			ThermalAuditLedger beforeAudit, long baseRevision) {
 		if (!hasGasEnergy(oldNetwork.nodeCount()) || inventories == null
 				|| inventories.size() != availableVolumes.length || inventories.size() != mixedEnergy.length
 				|| inventories.size() != inheritedAvailableVolumes.length
-				|| !Double.isFinite(sourceEnergy) || !Double.isFinite(sinkEnergy)) {
+				|| sourceEnergy == null || sinkEnergy == null) {
 			throw new IllegalArgumentException("Gas thermal remap plan is incompatible");
 		}
 		double[] result = mixedEnergy.clone();
@@ -242,7 +242,7 @@ public final class GasEnergyStore {
 		SignedDyadic oldGas = SignedDyadic.sum(baselineEnergy);
 		SignedDyadic mixed = SignedDyadic.sum(mixedEnergy);
 		SignedDyadic finalGas = SignedDyadic.sum(result);
-		SignedDyadic source = SignedDyadic.of(sourceEnergy), sink = SignedDyadic.of(sinkEnergy);
+		SignedDyadic source = sourceEnergy, sink = sinkEnergy;
 		SignedDyadic work = finalGas.subtract(mixed);
 		SignedDyadic roundoff = finalGas.subtract(oldGas).subtract(source).add(sink).subtract(work);
 		ThermalAuditLedger afterAudit = (beforeAudit == null ? audit.ledger() : beforeAudit).withExternalSourceEnergy(source).withExternalSinkEnergy(sink)

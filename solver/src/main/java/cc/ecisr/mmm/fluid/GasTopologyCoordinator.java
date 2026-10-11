@@ -244,7 +244,7 @@ final class GasTopologyCoordinator {
 			if (deferPhaseVolumeWork) inherited[0] = volumes[0];
 		}
 		return prepareRemap(result, List.of(inventory(1, edit)), volumes,
-				mixed, inherited, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, 0, 0, edit);
+				mixed, inherited, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO, edit);
 	}
 
 	private GasTopologyPlan planWithOverlaps(AirCavityScanner.Result result, boolean deferPhaseVolumeWork, PhaseEdit edit) {
@@ -435,12 +435,12 @@ final class GasTopologyCoordinator {
 			System.arraycopy(availableVolumes, 0, inheritedAvailable, 0, availableVolumes.length);
 		}
 		return prepareRemap(result, inventories, availableVolumes, doubles(mixedEnergy), inheritedAvailable,
-				sourceDelta, sinkDelta, sourceEnergy.toDouble(), sinkEnergy.toDouble(), edit);
+				sourceDelta, sinkDelta, sourceEnergy, sinkEnergy, edit);
 	}
 
 	private GasTopologyPlan prepareRemap(AirCavityScanner.Result result, List<GasInventory> inventories,
 			double[] availableVolumes, double[] mixedEnergy, double[] inheritedAvailable,
-			GasAuditLedger sourceDelta, GasAuditLedger sinkDelta, double sourceEnergy, double sinkEnergy, PhaseEdit edit) {
+			GasAuditLedger sourceDelta, GasAuditLedger sinkDelta, SignedDyadic sourceEnergy, SignedDyadic sinkEnergy, PhaseEdit edit) {
 		GasEnergyStore.GasRemapPlan thermalPlan = mixedEnergy == null ? null : edit == null
 				? domain.thermalState.planGasRemap(domain.gasState.network, inventories, availableVolumes,
 						mixedEnergy, inheritedAvailable, sourceEnergy, sinkEnergy)
