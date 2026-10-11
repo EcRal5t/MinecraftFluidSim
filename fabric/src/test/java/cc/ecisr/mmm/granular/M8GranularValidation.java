@@ -591,6 +591,17 @@ public final class M8GranularValidation {
 				"deposit group rejection left residue");
 
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		GranularDepositStore tiny = new GranularDepositStore(registry, 2, 2);
+		require(tiny.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, 3, Double.MIN_VALUE),
+				SolidVolume.SVQ_PER_CELL), "subnormal deposit fixture was rejected");
+		long tinyRevision = tiny.mutationRevision();
+		boolean partialRejected = false;
+		try { tiny.take(0, sand, 0, 2); }
+		catch (IllegalArgumentException unrepresentable) { partialRejected = true; }
+		require(partialRejected && !tiny.tryMove(0, 1, sand, 0, 2, SolidVolume.SVQ_PER_CELL)
+				&& tiny.mutationRevision() == tinyRevision && tiny.cellSolidVolumeSvq(0) == 3
+				&& tiny.cellSolidVolumeSvq(1) == 0 && tiny.totalMass() == Double.MIN_VALUE,
+				"unrepresentable partial deposit must retain both inventories and revision");
 		GranularDepositStore full = new GranularDepositStore(registry, 1, 8);
 		long tooMuchSkeleton = SolidVolume.SVQ_PER_CELL * 3L / 4L;
 		require(!full.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, tooMuchSkeleton, 5.0),

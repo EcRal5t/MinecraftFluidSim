@@ -13,6 +13,7 @@ final class M3MaterialTransferValidation {
 	static Summary validate() {
 		FluidMaterialRegistry registry = registry();
 		validateRegistry(registry);
+		validatePartialExtractionMassResolution();
 		validateActiveDomainP2G(registry);
 		validateActivePhaseAggregation(registry);
 		validateActiveVariableDensityPressure(registry);
@@ -31,6 +32,23 @@ final class M3MaterialTransferValidation {
 		return new Summary(variableDensity.totalVolume(), variableDensity.totalMass(),
 				variableDensity.momentum(0), maximumDifference(
 						variableTransfer.volumeWeightedVelocity(), variableTransfer.massWeightedVelocity()));
+	}
+
+	private static void validatePartialExtractionMassResolution() {
+		FluidDomain domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(
+				1, 1_000, 0, 0.05F, 100, 1e-5F, 0.45F, 0.002F, 0.8F), 216);
+		domain.setVolume(1, 1, 1, 0.125F);
+		domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+		domain.particles.setMass(0, Double.MIN_VALUE);
+		check(!domain.tryExtractExactMixture(1, 1, 1, 0.0625F, 0).transferred()
+				&& domain.particles.volume(0) == 0.125F && domain.particles.mass(0) == Double.MIN_VALUE,
+				"partial extraction cannot leave positive volume with zero mass");
+		domain.particles.setMass(0, 4 * Double.MIN_VALUE);
+		var transfer = domain.tryExtractExactMixture(1, 1, 1, 0.0625F, 0);
+		check(transfer.transferred() && domain.particles.volume(0) == 0.0625F
+				&& domain.particles.mass(0) == 2 * Double.MIN_VALUE
+				&& transfer.portions().getFirst().mass() == 2 * Double.MIN_VALUE,
+				"representable subnormal partial extraction must preserve both masses");
 	}
 
 	private static void validateActiveDomainP2G(FluidMaterialRegistry registry) {

@@ -183,6 +183,9 @@ public final class GranularDepositStore {
 		if (!(takenMass > 0.0 && Double.isFinite(takenMass))) {
 			throw new IllegalArgumentException("Deposit partial mass is not representable");
 		}
+		if (takenVolume != solidVolumeSvq[entry] && !(mass[entry] - takenMass > 0.0)) {
+			throw new IllegalArgumentException("Remaining deposit mass is not representable");
+		}
 		return new SolidPortion(material, composition, takenVolume, takenMass);
 	}
 

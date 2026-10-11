@@ -306,7 +306,8 @@ final class MaterialTransferPlanner {
 				}
 				if (actual <= 0.0) continue;
 				double previousMass = domain.particles.mass(marker);
-				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
+				double newMass = newVolume == 0.0F ? 0.0 : previousMass * ((double) newVolume / previousVolume);
+				if (newVolume > 0.0F && !(newMass > 0.0)) continue;
 				double removedMass = previousMass - newMass;
 				if (!(removedMass > 0.0)) continue;
 				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels.tryPlanTruncate(
@@ -398,7 +399,8 @@ final class MaterialTransferPlanner {
 				}
 				if (actual <= 0.0) continue;
 				double previousMass = domain.particles.mass(i);
-				double newMass = newVolume == 0.0F ? 0.0 : previousMass * newVolume / previousVolume;
+				double newMass = newVolume == 0.0F ? 0.0 : previousMass * ((double) newVolume / previousVolume);
+				if (newVolume > 0.0F && !(newMass > 0.0)) continue;
 				if (!(previousMass - newMass > 0.0)) continue;
 				int handle = domain.particles.materialHandle(i);
 				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels == null ? null
