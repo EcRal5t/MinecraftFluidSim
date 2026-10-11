@@ -121,6 +121,45 @@ public final class GranularCarrierValidation {
 					&& next.velocityZ() == (float) (-vz * material.restitution()),
 					"contact friction and restitution must update the end-of-step velocity");
 		}
+		// The supported Courant range includes .6. A .27 m drift then fits h=.5,
+		// but can cross an internal micro box before reaching the outer shell.
+		var config = new FluidSolverConfig(.5F, 1_000F, 0, .05F, 400, 1.0e-5F, .6F, .002F, .8F);
+		for (int axis = 0; axis < 3; axis++) for (boolean lower : new boolean[]{false, true}) {
+			for (boolean internal : new boolean[]{false, true}) for (float step : new float[]{.01F, .027F}) {
+				float[] position = {.625F, .625F, .625F}, velocity = new float[3];
+				position[axis] = internal ? (lower ? .25F + radius + .01F : 1.25F - radius - .01F)
+						: (lower ? radius + .01F : 1.5F - radius - .01F);
+				velocity[axis] = lower ? -10F : 10F;
+				velocity[(axis + 1) % 3] = .05F;
+				require((10 + .05) * step <= config.cellSize() * config.maxCourantNumber(),
+						"first-contact fixture must fit its supported mechanical Courant configuration");
+				var geometry = new FlipCutCellGeometry(3, 3, 3);
+				if (internal) {
+					int[] cell = {1, 1, 1}; cell[axis] = lower ? 0 : 2;
+					geometry.replaceMask((cell[2] * 3 + cell[1]) * 3 + cell[0],
+							1 << (lower ? 0 : 1 << axis));
+				}
+				var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, null, 1);
+				require(collision.positionValid(position[0], position[1], position[2], svq),
+						"first-contact fixture must start clear of the internal and outer geometry");
+				var parcels = new GranularParcelStore(registry, 1);
+				parcels.add(new GranularParcelStore.Parcel(position[0], position[1], position[2],
+						velocity[0], velocity[1], velocity[2], svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV,
+						sand, 0, 0, (byte) 0));
+				collision.preview(parcels, registry, step);
+				var impulse = collision.commit(parcels);
+				var next = parcels.parcel(0);
+				float[] actual = {next.velocityX(), next.velocityY(), next.velocityZ()};
+				require(actual[axis] == (float) (-velocity[axis] * material.restitution()),
+						"only the first reached wall may apply restitution, including a farther outer shell");
+				require(actual[(axis + 1) % 3] == 0,
+						"the first normal impulse must apply the material's static friction");
+				double boundary = axis == 0 ? impulse.x() : axis == 1 ? impulse.y() : impulse.z();
+				require(boundary == next.mass() * ((double) velocity[axis] - actual[axis])
+						&& collision.positionValid(next.x(), next.y(), next.z(), svq),
+						"the first-contact impulse and committed geometry must remain consistent");
+			}
+		}
 	}
 
 	private static void contactImpulseObeysCoulombCone() {

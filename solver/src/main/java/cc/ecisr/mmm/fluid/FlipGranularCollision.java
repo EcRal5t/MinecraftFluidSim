@@ -53,13 +53,14 @@ final class FlipGranularCollision {
 				// Drift uses the solved velocity; contact impulses update the committed end velocity.
 				float rawTarget = position[axis] + motionVelocity[axis] * dt;
 				float target = clamp(rawTarget, radius, maximum);
-				if (target != rawTarget) {
-					boolean lowerSupport = axis == 1 && rawTarget < radius;
-					resolveContact(velocity, axis, material);
-					supported |= lowerSupport;
-				}
 				boolean downward = axis == 1 && motionVelocity[axis] <= 0.0F;
 				position[axis] = sweepAxis(position, velocity, axis, target, radius, material);
+				// An intervening micro box owns the first contact; the outer shell receives
+				// an impulse only when the swept drift actually reaches its clamped target.
+				if (target != rawTarget && position[axis] == target) {
+					resolveContact(velocity, axis, material);
+					supported |= axis == 1 && rawTarget < radius;
+				}
 				supported |= downward && position[axis] != target;
 				if (axis == 1) {
 					float depositSurface = depositSurfaceY(position[0], position[2]);
@@ -232,7 +233,7 @@ final class FlipGranularCollision {
 		int increments = Math.max(1, (int) Math.ceil(Math.abs(distance) / maximumIncrement));
 		float accepted = start;
 		for (int increment = 1; increment <= increments; increment++) {
-			float candidate = start + distance * increment / increments;
+			float candidate = increment == increments ? target : start + distance * increment / increments;
 			float previous = position[axis]; position[axis] = candidate;
 			boolean blocked = sphereTouchesSolid(position[0], position[1], position[2], radius);
 			position[axis] = previous;
