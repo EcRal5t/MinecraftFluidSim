@@ -1485,12 +1485,28 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var phaseModel = new GasLiquidPhaseModel(thermal, gasRegistry);
 		finiteVapor.gasState.network.commitPhaseSource(1, phaseModel.gasBatch(boiling, 2));
 		finiteVapor.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
+		float[] condensationVelocity = {2.0F, -1.0F, 0.5F};
+		finiteVapor.particles.setVelocityX(0, condensationVelocity[0]);
+		finiteVapor.particles.setVelocityY(0, condensationVelocity[1]);
+		finiteVapor.particles.setVelocityZ(0, condensationVelocity[2]);
+		double condensationMassBefore = finiteVapor.unitScale.kilograms(finiteVapor.particles.mass(0));
 		var pairEnergy = finiteVapor.exactInternalEnergy();
 		var limitedCondensation = finiteVapor.stepGasPhaseChangeOnly(2);
 		require(limitedCondensation.operations() == 1 && limitedCondensation.condensedCells() == 1
 				&& finiteVapor.gasBoundary().standardVolumeNanos(1) == phaseModel.gasBatch(boiling, 1).standardVolumeNanos()
 				&& finiteVapor.exactInternalEnergy().equals(pairEnergy) && finiteVapor.gasBoundary().auditClosed(),
 				"integer condensation crossed saturation instead of retaining the final vapor quantum");
+		require(finiteVapor.particleCount() == 1, "condensation replaced its existing liquid receiver");
+		double condensationMassAfter = finiteVapor.unitScale.kilograms(finiteVapor.particles.mass(0));
+		float[] receiverVelocity = {finiteVapor.particles.velocityX(0), finiteVapor.particles.velocityY(0),
+				finiteVapor.particles.velocityZ(0)};
+		for (int axis = 0; axis < 3; axis++) {
+			double before = condensationMassBefore * condensationVelocity[axis];
+			double after = condensationMassAfter * receiverVelocity[axis];
+			double rounding = 0.5 * condensationMassAfter * Math.ulp(receiverVelocity[axis]) + 4.0 * Math.ulp(before);
+			require(Math.abs(after - before) <= rounding,
+					"zero-momentum condensation created receiver momentum on axis " + axis + ": " + before + " -> " + after);
+		}
 	}
 
 	/**

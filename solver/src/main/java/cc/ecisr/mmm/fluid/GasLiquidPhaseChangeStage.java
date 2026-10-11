@@ -329,11 +329,19 @@ final class GasLiquidPhaseChangeStage {
 			}
 			float targetVolume = 0.0F;
 			double targetMass = 0.0;
+			CarrierMassMomentum.Plan momentum = null;
 			int slot = -1;
 			if (target >= 0) {
 				targetVolume = PhaseChangeStageSupport.adjustedMarkerVolume(
 						particles.volume(target), addedSvq, "Condensation");
 				targetMass = particles.mass(target) + support.state().unitScale().solverMass(moved.mass());
+				try {
+					momentum = CarrierMassMomentum.plan(particles, new int[]{target}, new double[]{targetMass},
+							targetMass - particles.mass(target), 0.0F, 0.0F, 0.0F);
+				} catch (IllegalArgumentException unrepresentableMomentum) {
+					throw new PhaseCandidateUnavailableException(
+							"Condensation momentum exceeds liquid carrier representation", unrepresentableMomentum);
+				}
 			} else {
 				if (particles.count() >= support.state().maximumParticleCount()) {
 					throw new PhaseCandidateUnavailableException("Condensation exceeds marker budget");
@@ -350,7 +358,7 @@ final class GasLiquidPhaseChangeStage {
 					node, transition, phase, candidateLiquidTemperature, take.second(), candidateGasEnergy);
 			return new GasCondensePlan(
 					batches, take.first(), candidateGasEnergy, target, condensedMixture,
-					targetVolume, targetMass, slot, addedSvq, moved.mass(), saturationAfter);
+					targetVolume, targetMass, momentum, slot, addedSvq, moved.mass(), saturationAfter);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| PhaseCandidateUnavailableException unavailable) {
 			return null;
@@ -390,6 +398,7 @@ final class GasLiquidPhaseChangeStage {
 					new int[]{plan.target()}, new ChemicalMixtureRecord[]{plan.condensedMixture()});
 			particles.setVolume(plan.target(), plan.targetVolume());
 			particles.setMass(plan.target(), plan.targetMass());
+			plan.momentum().apply(particles);
 		} else {
 			support.spawnParticle(
 					cell, plan.slot(), SolidVolume.toCellVolume(plan.addedSvq()), liquidHandle,
@@ -604,7 +613,8 @@ final class GasLiquidPhaseChangeStage {
 	private record GasCondensePlan(
 			long batches, GasInventory removedGas, double candidateGasEnergy, int target,
 			ChemicalMixtureRecord condensedMixture, float targetVolume, double targetMass,
-			int slot, long addedSvq, double movedMass, GasLiquidPhaseModel.Saturation saturationAfter
+			CarrierMassMomentum.Plan momentum, int slot, long addedSvq, double movedMass,
+			GasLiquidPhaseModel.Saturation saturationAfter
 	) {
 		GasLiquidPhaseModel.Direction directionAfter() { return saturationAfter.direction(); }
 	}
