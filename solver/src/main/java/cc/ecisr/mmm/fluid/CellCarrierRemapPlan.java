@@ -229,6 +229,16 @@ final class CellCarrierRemapPlan {
 						preference[g] = phaseGeometry.swept(phase, cell, flux.receiver(face), flux.axis[face], width, flux.velocity[face] > 0)
 								* weights[g].toDouble() / phaseGeometry.volume(phase, cell);
 					}
+					double representation = flux.representationBlend(face);
+					if (representation > 0) {
+						double preferred = 0, inventory = 0;
+						for (int g = 0; g < groups.size(); g++) { preferred += preference[g]; inventory += weights[g].toDouble(); }
+						for (int g = 0; g < groups.size(); g++) {
+							double uniform = weights[g].toDouble() / inventory;
+							preference[g] = (1 - representation) * (preferred > 0 ? preference[g] / preferred : uniform)
+									+ representation * uniform;
+						}
+					}
 					allocation = ExactVolumeAllocation.allocateCapped(amounts[d], weights, preference);
 				}
 				for (int g = 0; g < groups.size(); g++) { pieces[g][d] = allocation[g]; weights[g] = weights[g].subtract(allocation[g]); }
@@ -433,7 +443,7 @@ final class CellCarrierRemapPlan {
 				point[flux.axis[face]] = Math.copySign(0.5 - 0.5 * Math.abs(flux.velocity[face]) * dt / domain.config.cellSize(), flux.velocity[face]);
 				double t = CellPolynomialField.evaluate(source.transportTemperature, point[0], point[1], point[2]);
 				t = Math.max(source.minimumTemperature, Math.min(source.maximumTemperature, t));
-				correction[d] = caloric.energy(t) - baseline[d].toDouble();
+				correction[d] = (caloric.energy(t) - baseline[d].toDouble()) * (1 - flux.representationBlend(face));
 				correctionSum += correction[d];
 			}
 		}

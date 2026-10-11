@@ -9,6 +9,20 @@ final class LiquidFluxGeometry {
 
 	FlipPressurePhaseGeometry transportPlane() { return domain == null ? null : domain.pressurePhaseGeometry; }
 
+	cc.ecisr.mmm.units.SignedDyadic[] quantizationBudget(double dtOverH) {
+		return domain == null ? null : GranularQuantizationError.budget(domain, (float) (dtOverH * domain.config.cellSize()));
+	}
+
+	boolean connected(int left, int right, int axis) {
+		if (domain == null) return aperture(left, right, axis) > 0;
+		int x = right % domain.sizeX, y = right / domain.sizeX % domain.sizeY, z = right / (domain.sizeX * domain.sizeY);
+		return switch (axis) {
+			case 0 -> cut.xFaceOpen(x, y, z) > 0;
+			case 1 -> cut.yFaceOpen(x, y, z) > 0;
+			default -> cut.zFaceOpen(x, y, z) > 0;
+		};
+	}
+
 	double capacity(int cell) { return domain == null ? cut.openCellVolume(cell) : domain.effectiveOpenCellVolume(cell); }
 	double finalCapacity(int cell) {
 		return domain != null && domain.granularState != null && domain.granularState.parcels.count() > 0

@@ -20,6 +20,8 @@ final class ConservativeLiquidFlux {
 	private final SignedDyadic[] upperFlux, remainingSupply;
 	private final double[] finalCapacity;
 	private final double[] geometricBlend;
+	private final double[] representationBlend;
+	private SignedDyadic[] quantizationBudget;
 	private double dtOverH;
 	private LiquidFluxGeometry geometry;
 	private SignedDyadic[] reserved;
@@ -40,6 +42,7 @@ final class ConservativeLiquidFlux {
 		exactCapacity = new SignedDyadic[cellCount];
 		upperFlux = new SignedDyadic[faces]; remainingSupply = new SignedDyadic[cellCount]; finalCapacity = new double[cellCount];
 		geometricBlend = new double[faces];
+		representationBlend = new double[faces];
 		int f = 0;
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			left[f] = index(x - 1, y, z); right[f] = left[f] + 1; axis[f++] = 0;
@@ -59,6 +62,8 @@ final class ConservativeLiquidFlux {
 	/** Volumes and capacities are in this grid's cell-volume units; velocities are m/s. */
 	void plan(double[] volume, boolean[] solid, double dtOverH, SignedDyadic[] exactVolume) {
 		this.dtOverH = dtOverH;
+		quantizationBudget = null;
+		Arrays.fill(representationBlend, 0);
 		prepareGeometry(solid, dtOverH, volume);
 		reconstructPlanes(volume, solid, exactVolume);
 		provisionalFluxes(volume, dtOverH);
@@ -212,6 +217,7 @@ final class ConservativeLiquidFlux {
 				}
 				if (destination < 0) {
 					if (augmentOutgoing(c)) continue;
+					if (repairQuantization(c, volume, solid)) continue;
 					throw new MechanicalTimeRefinement(2, "Shared liquid flux at cell " + c + ": excess="
 							+ after[c].subtract(localCapacity).toDouble() + ", initial=" + volume[c].toDouble()
 							+ ", finalCapacity=" + localCapacity.toDouble());
@@ -274,15 +280,99 @@ final class ConservativeLiquidFlux {
 			SignedDyadic previous = exactFlux[f];
 			exactFlux[f] = previous.add(amount);
 			geometricBlend[f] *= previous.toDouble() / exactFlux[f].toDouble();
+			representationBlend[f] *= previous.toDouble() / exactFlux[f].toDouble();
 			remainingSupply[donor(f)] = remainingSupply[donor(f)].subtract(amount);
 		}
 		after[source] = after[source].subtract(amount); after[destination] = after[destination].add(amount);
 		return true;
 	}
 
+	/** Representation rounding has a finite local budget, separate from the velocity face sweep. */
+	private boolean repairQuantization(int source, SignedDyadic[] volume, boolean[] solid) {
+		if (geometry == null) return false;
+		if (quantizationBudget == null) quantizationBudget = geometry.quantizationBudget(dtOverH);
+		if (quantizationBudget == null) return false;
+		SignedDyadic excess = after[source].subtract(exactCapacity[source]);
+		if (excess.compareTo(quantizationBudget[source]) > 0) return false;
+		Arrays.fill(predecessor, -1); int read = 0, written = 0, destination = -1;
+		queue[written++] = source; predecessor[source] = -2;
+		while (read < written && destination < 0) {
+			int current = queue[read++];
+			for (int face : adjacent(current)) if (face >= 0) {
+				int next = left[face] == current ? right[face] : left[face];
+				if (solid[next] || predecessor[next] != -1 || !geometry.connected(left[face], right[face], axis[face])
+						|| representationAllowance(current, face).signum() == 0) continue;
+				predecessor[next] = 2 * face + (left[face] == current ? 0 : 1); queue[written++] = next;
+				if (after[next].compareTo(exactCapacity[next]) < 0) { destination = next; break; }
+			}
+		}
+		if (destination < 0) return false;
+		SignedDyadic amount = min(excess, exactCapacity[destination].subtract(after[destination]));
+		for (int node = destination; node != source;) {
+			int edge = predecessor[node], face = edge / 2, previous = (edge & 1) == 0 ? left[face] : right[face];
+			amount = min(amount, representationAllowance(previous, face)); node = previous;
+		}
+		if (!representationPathFits(source, destination, amount, volume)) return false;
+		for (int node = destination; node != source;) {
+			int edge = predecessor[node], face = edge / 2, previous = (edge & 1) == 0 ? left[face] : right[face];
+			SignedDyadic old = exactFlux[face];
+			if (donor(face) == previous) {
+				exactFlux[face] = old.add(amount);
+				double ratio = old.toDouble() / exactFlux[face].toDouble();
+				geometricBlend[face] *= ratio;
+				representationBlend[face] = representationBlend[face] * ratio + 1 - ratio;
+			} else if (old.compareTo(amount) >= 0) exactFlux[face] = old.subtract(amount);
+			else {
+				exactFlux[face] = amount.subtract(old);
+				velocity[face] = Math.copySign(Math.max(Double.MIN_VALUE, Math.abs(velocity[face])), (edge & 1) == 0 ? 1 : -1);
+				geometricBlend[face] = 0; representationBlend[face] = 1;
+				upperFlux[face] = SignedDyadic.ZERO;
+			}
+			node = previous;
+		}
+		quantizationBudget[source] = quantizationBudget[source].subtract(amount);
+		initializeSharedFluxes(volume);
+		return true;
+	}
+
+	private SignedDyadic representationAllowance(int current, int face) {
+		SignedDyadic supply = remainingSupply[current];
+		if (predecessor[current] >= 0) {
+			int incoming = predecessor[current] / 2;
+			if (donor(incoming) == current) supply = supply.add(exactFlux[incoming]);
+		}
+		SignedDyadic cancellation = donor(face) == current ? SignedDyadic.ZERO : exactFlux[face];
+		if (donor(face) == current && exactFlux[face].signum() > 0
+				|| carrierShares == null || carrierShares[current] >= 7) return supply.add(cancellation);
+		int outgoingFaces = 0;
+		for (int adjacent : adjacent(current)) if (adjacent >= 0 && donor(adjacent) == current && exactFlux[adjacent].signum() > 0) outgoingFaces++;
+		boolean releasesFace = predecessor[current] >= 0 && donor(predecessor[current] / 2) == current;
+		return outgoingFaces < carrierShares[current] - 1 || releasesFace ? supply.add(cancellation) : cancellation;
+	}
+
+	/** A reverse edge returns its original donor inventory; a forward arrival never becomes new supply. */
+	private boolean representationPathFits(int source, int destination, SignedDyadic amount, SignedDyadic[] volume) {
+		int outgoing = -1;
+		for (int current = destination;;) {
+			SignedDyadic sent = SignedDyadic.ZERO; int faces = 0;
+			for (int face : adjacent(current)) if (face >= 0) {
+				SignedDyadic signed = donor(face) == current ? exactFlux[face] : exactFlux[face].negate();
+				if (face == outgoing) signed = signed.add(amount);
+				if (predecessor[current] >= 0 && face == predecessor[current] / 2) signed = signed.subtract(amount);
+				if (signed.signum() > 0) { sent = sent.add(signed); faces++; }
+			}
+			if (sent.compareTo(volume[current]) > 0) throw new IllegalStateException("Representation remap overdrew its original donor inventory");
+			if (carrierShares != null && faces > 0 && faces >= carrierShares[current]) return false;
+			if (current == source) return true;
+			int edge = predecessor[current]; outgoing = edge / 2;
+			current = (edge & 1) == 0 ? left[outgoing] : right[outgoing];
+		}
+	}
+
 	int donor(int f) { return velocity[f] >= 0 ? left[f] : right[f]; }
 	/** Fraction of the final face transfer assigned to the limited geometric sweep. */
 	double geometricBlend(int face) { return geometricBlend[face]; }
+	double representationBlend(int face) { return representationBlend[face]; }
 	void sweptMoments(int face, double[] result) {
 		int donor = donor(face), neighbor = receiver(face), a = axis[face];
 		double width = Math.abs(velocity[face]) * dtOverH;

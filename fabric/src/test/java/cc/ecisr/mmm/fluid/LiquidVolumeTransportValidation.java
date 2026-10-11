@@ -37,10 +37,80 @@ public final class LiquidVolumeTransportValidation {
 		return r2 >= 6.25 ? 0 : 6.25 * Math.pow(1 - r2 / 6.25, 3);
 	}
 
+	private static void granularRepresentationRoundingHasExactBudget() {
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 128);
+		var registry = cc.ecisr.mmm.granular.BuiltinGranularDefinitions.createRegistry();
+		domain.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
+		int material = registry.materialHandle(cc.ecisr.mmm.granular.BuiltinGranularDefinitions.FINE_SAND);
+		var parcel = new cc.ecisr.mmm.granular.GranularParcelStore.Parcel(.875F, .75F, .75F,
+				0, 0, 0, 262144, .001, material, 0, 0, (byte) 0);
+		domain.granularState.parcels.add(parcel);
+		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
+		domain.granularCollision.preview(domain.granularState.parcels, registry, .001F);
+		domain.granularNextCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits,
+				domain.granularCollision::previewPosition);
+		for (var budget : GranularQuantizationError.budget(domain, .001F)) if (!budget.equals(SignedDyadic.ZERO))
+			throw new AssertionError("A stationary granular kernel created a rounding budget");
+		domain.granularState.parcels.overwrite(0, new cc.ecisr.mmm.granular.GranularParcelStore.Parcel(
+				parcel.x(), parcel.y(), parcel.z(), Math.scalb(1F, -20), 0, 0,
+				parcel.solidVolumeSvq(), parcel.mass(), material, 0, 0, (byte) 0));
+		domain.granularCollision.preview(domain.granularState.parcels, registry, .001F);
+		domain.granularNextCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits,
+				domain.granularCollision::previewPosition);
+		if (domain.granularCollision.previewPosition(0, parcel).x() != parcel.x())
+			throw new AssertionError("Sub-ULP fixture moved its stored float endpoint");
+		var budget = GranularQuantizationError.budget(domain, .001F);
+		if (!budget[domain.cellIndex(1, 1, 1)].equals(SignedDyadic.of(1, -24))
+				|| !budget[domain.cellIndex(2, 1, 1)].equals(SignedDyadic.ZERO))
+			throw new AssertionError("Lost sub-ULP receding motion did not retain its exact positive capacity error");
+	}
+
+	private static void representationRepairReusesOriginalDonorSupply() {
+		for (int amount : new int[] {1, 2}) for (int repair = 1; repair <= amount; repair++) {
+			var flux = new ConservativeLiquidFlux(3, 1, 1);
+			flux.geometry(new LiquidFluxGeometry(new FlipCutCellGeometry(3, 1, 1)));
+			flux.carrierShares(new int[] {7, 2, 0});
+			SignedDyadic unit = SignedDyadic.of(1, -24), original = SignedDyadic.of(amount, -24), correction = SignedDyadic.of(repair, -24);
+			SignedDyadic[] volume = {unit, original, SignedDyadic.ZERO};
+			flux.velocity[0] = -1; flux.velocity[1] = 1;
+			flux.exactFlux[0] = original; flux.exactFlux[1] = SignedDyadic.ZERO;
+			try {
+				var capacities = (SignedDyadic[]) privateFluxField(flux, "exactCapacity");
+				capacities[0] = unit.add(original).subtract(correction); capacities[1] = SignedDyadic.ZERO; capacities[2] = original;
+				var field = ConservativeLiquidFlux.class.getDeclaredField("quantizationBudget"); field.setAccessible(true);
+				field.set(flux, new SignedDyadic[] {correction, SignedDyadic.ZERO, SignedDyadic.ZERO});
+				var initialize = ConservativeLiquidFlux.class.getDeclaredMethod("initializeSharedFluxes", SignedDyadic[].class);
+				initialize.setAccessible(true); initialize.invoke(flux, (Object) volume);
+				var apply = ConservativeLiquidFlux.class.getDeclaredMethod("repairQuantization", int.class, SignedDyadic[].class, boolean[].class);
+				apply.setAccessible(true);
+				boolean accepted = (boolean) apply.invoke(flux, 0, volume, new boolean[3]);
+				if (accepted != (repair == amount)) throw new AssertionError("Chemical outgoing slots must require complete cancellation of the old face");
+				if (accepted) {
+					var after = flux.resultingVolumes();
+					if (!after[0].equals(unit) || !after[1].equals(SignedDyadic.ZERO) || !after[2].equals(original)
+							|| !flux.exactFlux[0].equals(SignedDyadic.ZERO) || !flux.exactFlux[1].equals(original)
+							|| flux.representationBlend(1) != 1)
+						throw new AssertionError("Reverse cancellation failed to reassign the same original donor inventory");
+				} else if (!flux.exactFlux[0].equals(original) || !flux.exactFlux[1].equals(SignedDyadic.ZERO))
+					throw new AssertionError("A rejected partial cancellation changed the candidate flux");
+			} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+		}
+	}
+
+	private static Object privateFluxField(ConservativeLiquidFlux flux, String name) throws ReflectiveOperationException {
+		var field = ConservativeLiquidFlux.class.getDeclaredField(name); field.setAccessible(true); return field.get(flux);
+	}
+
 	public static void main(String[] args) {
 		uniformDensityMassAllocation();
 		if (args.length == 1 && args[0].equals("mass")) {
 			System.out.println("Liquid mass allocation validation passed"); return;
+		}
+		granularRepresentationRoundingHasExactBudget();
+		representationRepairReusesOriginalDonorSupply();
+		if (args.length == 1 && args[0].equals("quantization")) {
+			System.out.println("Liquid/granular quantization handoff validation passed"); return;
 		}
 		if (args.length == 1 && args[0].equals("continuity")) {
 			LiquidHandoffContinuityValidation.main(new String[0]);
