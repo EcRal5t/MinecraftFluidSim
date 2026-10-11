@@ -61,7 +61,7 @@ public final class GasTransferValidation {
 	}
 
 	private static void validateLargeTransferIsReadOnly(GasRegistry gas, GasThermalModel model) {
-		long scale = 100_000_000_000_000_000L;
+		long scale = Long.MAX_VALUE / 96L;
 		GasInventory source = inventory(new long[] {24L * scale, 23L * scale, 20L * scale});
 		GasInventory target = inventory(new long[] {scale, 24L * scale, 4L * scale});
 		double sourceTemperature = 53.39535978004694, targetTemperature = 246.8989771402024;
@@ -70,6 +70,9 @@ public final class GasTransferValidation {
 		AirNetwork network = new AirNetwork(gas);
 		network.addNode(1.0E-7 * scale, 0.0); network.addNode(2.102679657646761E-7 * scale, 0.0);
 		network.commitPhaseSource(1, source); network.commitPhaseSource(2, target);
+		long totalNanos = Math.addExact(source.standardVolumeNanos(), target.standardVolumeNanos());
+		require(network.sealedInventoryNanos() == totalNanos && network.drawnFromAmbientNanos() == totalNanos,
+				"large mixture fixture must fit both the region inventory and its cumulative source audit");
 		network.addOrMergeEdge(1, 2, 0.1, 0.65);
 		ThermalAuditState audit = new ThermalAuditState(ThermalAuditLedger.initialized(
 				SignedDyadic.of(sourceEnergy).add(SignedDyadic.of(targetEnergy))));
