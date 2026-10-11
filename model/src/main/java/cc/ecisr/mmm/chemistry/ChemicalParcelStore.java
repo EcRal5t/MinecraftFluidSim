@@ -73,6 +73,31 @@ public final class ChemicalParcelStore {
 		validateAuditLedger(ledger);
 		escapedSink.plus(ledger);
 	}
+
+	/** Prepares both external audit directions without changing inventory or either ledger. */
+	public AuditExchange planAuditExchange(ChemicalTransferLedger source, ChemicalTransferLedger sink) {
+		validateAuditLedger(source); validateAuditLedger(sink);
+		return new AuditExchange(this, externalSource, escapedSink, externalSource.plus(source), escapedSink.plus(sink));
+	}
+
+	public void requireCurrentAuditExchange(AuditExchange plan) {
+		if (plan == null || plan.owner != this || plan.oldSource != externalSource || plan.oldSink != escapedSink)
+			throw new IllegalStateException("Chemical audit exchange is stale or belongs to another store");
+	}
+
+	public void commitAuditExchange(AuditExchange plan) {
+		requireCurrentAuditExchange(plan);
+		externalSource = plan.source; escapedSink = plan.sink;
+	}
+
+	public static final class AuditExchange {
+		private final ChemicalParcelStore owner;
+		private final ChemicalTransferLedger oldSource, oldSink, source, sink;
+		private AuditExchange(ChemicalParcelStore owner, ChemicalTransferLedger oldSource,
+				ChemicalTransferLedger oldSink, ChemicalTransferLedger source, ChemicalTransferLedger sink) {
+			this.owner = owner; this.oldSource = oldSource; this.oldSink = oldSink; this.source = source; this.sink = sink;
+		}
+	}
 	public void restoreAuditLedgers(ChemicalTransferLedger source, ChemicalTransferLedger sink) {
 		if (!externalSource.isEmpty() || !escapedSink.isEmpty()) {
 			throw new IllegalStateException("Chemical audit ledgers can only be restored into a fresh parcel store");

@@ -242,6 +242,44 @@ public final class ThermalDomainState {
 		liquidEnergy.commitExternalLiquidInsertions(firstOrdinal, plan);
 	}
 
+	/** Models a cell replacement and its complete signed audit before any carrier is removed. */
+	public LiquidReplacementPlan planLiquidReplacement(
+			int[] removedOrdinals, List<LiquidEnergyColumn.LiquidInsertion> insertions, ThermalCarrierContext markers
+	) {
+		double[] energies = liquidEnergy.planDefaultLiquidInsertions(insertions, markers);
+		SignedDyadic sink = SignedDyadic.ZERO;
+		for (int ordinal : removedOrdinals) sink = sink.add(SignedDyadic.of(liquidEnergy.energy(ordinal)));
+		ThermalAuditLedger after = auditState.ledger().withExternalSinkEnergy(sink)
+				.withExternalSourceEnergy(SignedDyadic.sum(energies));
+		return new LiquidReplacementPlan(this, thermalRevision(), energies, auditState.ledger(), after);
+	}
+
+	public void requireCurrentLiquidReplacement(LiquidReplacementPlan plan) {
+		if (plan == null || plan.owner != this || !matchesThermalRevision(plan.revision)
+				|| plan.auditBefore != auditState.ledger())
+			throw new IllegalStateException("Liquid replacement thermal inventory or audit changed after planning");
+	}
+
+	/** The coordinator has removed old energies internally and reserved empty new ordinals. */
+	public void commitLiquidReplacement(int firstOrdinal, LiquidReplacementPlan plan) {
+		if (plan == null || plan.owner != this || plan.auditBefore != auditState.ledger())
+			throw new IllegalStateException("Liquid replacement thermal audit changed before publication");
+		liquidEnergy.commitInternalLiquidInsertions(firstOrdinal, plan.energies);
+		auditState.replace(plan.auditAfter);
+	}
+
+	public static final class LiquidReplacementPlan {
+		private final ThermalDomainState owner;
+		private final Revision revision;
+		private final double[] energies;
+		private final ThermalAuditLedger auditBefore, auditAfter;
+		private LiquidReplacementPlan(ThermalDomainState owner, Revision revision, double[] energies,
+				ThermalAuditLedger auditBefore, ThermalAuditLedger auditAfter) {
+			this.owner = owner; this.revision = revision; this.energies = energies;
+			this.auditBefore = auditBefore; this.auditAfter = auditAfter;
+		}
+	}
+
 	public void removeExternalAndSwap(int index, int last) { liquidEnergy.removeExternalAndSwap(index, last); }
 	public void addInternalMarker(int marker, double energy) { liquidEnergy.addInternalMarker(marker, energy); }
 	public double removeInternalAndSwap(int index, int last) { return liquidEnergy.removeInternalAndSwap(index, last); }

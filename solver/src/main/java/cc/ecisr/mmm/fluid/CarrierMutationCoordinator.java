@@ -80,6 +80,23 @@ final class CarrierMutationCoordinator {
 		return removedEnergy;
 	}
 
+	/** Publishes a cell-local replacement whose pieces and complete audits were preflighted together. */
+	void replaceCellVolume(CellVolumeReplacementPlan candidate) {
+		verify(candidate.mutation, CarrierMutationPlan.Kind.WHOLESALE_COUNT);
+		candidate.requireCurrent(domain);
+		for (int ordinal : candidate.removed) swapRemoveMarker(
+				CarrierMutationPlan.swapRemove(domain.carrierMutationRevision(), domain.particles.count(), ordinal),
+				domain.thermalState != null);
+		int firstOrdinal = domain.particles.count();
+		for (var piece : candidate.pieces) appendMarker(
+				CarrierMutationPlan.append(domain.carrierMutationRevision(), domain.particles.count()), candidate.cell,
+				piece.x(), piece.y(), piece.z(), piece.volume(), 0, piece.mass(), piece.mixture(), false, false);
+		if (domain.chemicalParcels != null) {
+			domain.chemicalParcels.commitAuditExchange(candidate.chemistryAudit);
+		}
+		if (candidate.thermal != null) domain.thermalState.commitLiquidReplacement(firstOrdinal, candidate.thermal);
+	}
+
 	/** Adopts an externally computed marker count for wholesale transitions (restore, clear, reseed). */
 	void adoptWholesaleCount(CarrierMutationPlan plan, int newCount) {
 		verify(plan, CarrierMutationPlan.Kind.WHOLESALE_COUNT);

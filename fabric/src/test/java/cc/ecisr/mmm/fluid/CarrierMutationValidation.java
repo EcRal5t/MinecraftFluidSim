@@ -21,12 +21,131 @@ public final class CarrierMutationValidation {
 		stalePlansRejectWithoutStateChange();
 		wholesaleCountBindsRevisionAndBudget();
 		chemicalRemapPublishesTheFinalBudget();
+		cellVolumeReplacementPreflightsAllOwners();
 		readOnlyCellQueriesFollowCarrierEdits();
 		volumeObservationRoundsTheExactInventoryOnce();
 		insertionNeverRoundsCapacityUp();
 		insertionNeverRoundsTheRequestUp();
 		independentWorkFinishesBeforeRejection();
 		System.out.println("Carrier mutation validation passed");
+	}
+
+	private static void cellVolumeReplacementPreflightsAllOwners() throws Exception {
+		cellFillUsesEveryOpenSlot();
+		FluidDomain domain = fullCapabilityDomain(FullCapabilityTestFixture.load());
+		domain.setVolume(1, 1, 1, .25F);
+		domain.setVolume(2, 2, 2, .125F);
+		int survivor = domain.particles.count() - 1;
+		var mixture = domain.chemicalParcels.record(survivor);
+		double energy = domain.thermalState.liquidInternalEnergy(survivor);
+		float position = domain.particles.positionX(survivor);
+		long beforeQ = domain.chemicalParcels.totalQuanta();
+		long sourceQ = domain.chemicalParcels.externalSource().totalQuanta();
+		long sinkQ = domain.chemicalParcels.escapedSink().totalQuanta();
+		domain.setVolume(1, 1, 1, .5F);
+		require(domain.particles.count() == 5 && domain.particles.positionX(0) == position
+				&& domain.chemicalParcels.record(0).equals(mixture)
+				&& domain.thermalState.liquidInternalEnergy(0) == energy,
+				"cell replacement misplaced a surviving marker or its side columns during descending deletion");
+		require(domain.chemicalParcels.totalQuanta() - beforeQ
+				== domain.chemicalParcels.externalSource().totalQuanta() - sourceQ
+				- (domain.chemicalParcels.escapedSink().totalQuanta() - sinkQ),
+				"cell replacement chemical source/sink did not close");
+		require(domain.exactInternalEnergy().equals(domain.thermalState.auditLedger().expectedInventory()),
+				"cell replacement did not book the exact sum of stored incoming and removed internal energies");
+		for (float invalid : new float[] {Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.MIN_VALUE}) {
+			ReplacementState before = replacementState(domain);
+			try { domain.setVolume(1, 1, 1, invalid); throw new AssertionError("unrepresentable cell replacement was accepted"); }
+			catch (IllegalArgumentException expected) { }
+			requireUnchanged(domain, before);
+		}
+		var plan = CellVolumeReplacementPlan.build(domain, 1, 1, 1, .25F, false);
+		domain.chemicalParcels.recordExternalSource(domain.chemicalParcels.externalSource());
+		ReplacementState staleState = replacementState(domain);
+		try { domain.carrierMutations().replaceCellVolume(plan); throw new AssertionError("stale chemical audit was accepted"); }
+		catch (IllegalStateException expected) { }
+		requireUnchanged(domain, staleState);
+		cellReplacementRejectsInvalidStoredThermalState();
+	}
+
+	private static void cellFillUsesEveryOpenSlot() {
+		FluidDomain domain = emptyMaterialDomain(1024);
+		domain.bindGranular(cc.ecisr.mmm.granular.BuiltinGranularDefinitions.createRegistry(),
+				domain.materialRegistry, BuiltinFluidMaterials.createRegistry());
+		int sand = domain.granularState.registry.materialHandle(cc.ecisr.mmm.granular.BuiltinGranularDefinitions.FINE_SAND);
+		long grain = cc.ecisr.mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, grain,
+				2600 * grain / (double) cc.ecisr.mmm.granular.SolidVolume.SVQ_PER_CELL).inserted(), "initial grain was rejected");
+		for (int c = 0; c < domain.cellCount; c++) domain.setVolume(c % 4, c / 4 % 4, c / 16, 1);
+		for (int c = 0; c < domain.cellCount; c++) {
+			var sum = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+			double[] moment = new double[3]; int count = 0;
+			for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == c) {
+				float v = domain.particles.volume(p); sum = sum.add(cc.ecisr.mmm.units.SignedDyadic.of(v)); count++;
+				moment[0] += v * (double) domain.particles.positionX(p);
+				moment[1] += v * (double) domain.particles.positionY(p);
+				moment[2] += v * (double) domain.particles.positionZ(p);
+			}
+			require(count == 8 && sum.equals(cc.ecisr.mmm.units.SignedDyadic.of(domain.effectiveOpenCellVolume(c))),
+					"full available capacity lost an open slot or exact total volume");
+			for (int axis = 0; axis < 3; axis++) {
+				double center = ((axis == 0 ? c % 4 : axis == 1 ? c / 4 % 4 : c / 16) + .5) * .5;
+				require(moment[axis] == sum.toDouble() * center, "uniform scalar pore fill displaced its first moment");
+			}
+		}
+		for (int open : new int[] {3, 5, 7}) {
+			FluidDomain cut = emptyMaterialDomain(64);
+			cut.setSolidMicroMask(1, 1, 1, 255 ^ ((1 << open) - 1)); cut.setVolume(1, 1, 1, 1);
+			require(cut.particles.count() == open, "full cut-cell fill omitted an open micro slot");
+			for (int p = 0; p < open; p++) require(cut.particles.volume(p) == .125F, "cut-cell fill changed exact uniform weights");
+		}
+		FluidDomain partial = emptyMaterialDomain(64); partial.setVolume(1, 1, 1, .2F);
+		require(partial.particles.count() == 2 && partial.particles.volume(0) == .125F
+				&& partial.particles.positionX(0) == .625F && partial.particles.positionX(1) == .875F
+				&& partial.particles.positionY(1) == .625F, "partial fill changed its sequential open-slot geometry");
+	}
+
+	private static void cellReplacementRejectsInvalidStoredThermalState() throws Exception {
+		FluidDomain domain = emptyMaterialDomain(64); domain.setVolume(1, 1, 1, .001F);
+		var registries = FullCapabilityTestFixture.load(); domain.bindGasRegistry(registries.gas());
+		var definitions = registries.thermal().materials().stream().map(material ->
+				material.carrierKind() != cc.ecisr.mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID ? material
+				: new cc.ecisr.mmm.thermal.ThermalMaterialDefinition(
+				material.id(), material.carrierKind(), material.carrierId(),
+				300, 0, 0, java.util.List.of(new cc.ecisr.mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1, 1000,
+						Double.MAX_VALUE / 8)))).toList();
+		domain.bindThermal(new cc.ecisr.mmm.thermal.ThermalRegistry(definitions, java.util.List.of(), java.util.List.of(),
+				java.util.List.of(), java.util.List.of(), "", "", registries.gas().fingerprint()), domain.materialRegistry, 300);
+		require(domain.thermalState.temperature(0, domain.thermalMarkerContext()) == 300, "initial thermal owner was invalid");
+		double modeled = domain.thermalState.liquid().modeledEnergy(0, 125, null, 300, (cc.ecisr.mmm.chemistry.ChemicalRegistry) null);
+		require(Double.isFinite(modeled), "invalid-inversion fixture did not have finite modeled energy");
+		ReplacementState before = replacementState(domain);
+		try { domain.setVolume(1, 1, 1, 1); throw new AssertionError("finite U with unrepresentable caloric owner was accepted"); }
+		catch (IllegalArgumentException expected) { }
+		requireUnchanged(domain, before);
+	}
+
+	private record ReplacementState(String owners, Object source, Object sink, Object thermalAudit) { }
+	private static ReplacementState replacementState(FluidDomain domain) {
+		StringBuilder state = new StringBuilder().append(domain.carrierMutationRevision()).append(':').append(domain.particles.count());
+		for (int p = 0; p < domain.particles.count(); p++) {
+			state.append(':').append(domain.particles.positionX(p)).append(':').append(domain.particles.positionY(p))
+					.append(':').append(domain.particles.positionZ(p)).append(':').append(domain.particles.volume(p)).append(':').append(domain.particles.mass(p))
+					.append(':').append(domain.particles.velocityX(p)).append(':').append(domain.particles.velocityY(p)).append(':').append(domain.particles.velocityZ(p))
+					.append(':').append(domain.particles.materialHandle(p));
+			if (domain.chemicalParcels != null) state.append(':').append(domain.chemicalParcels.mixtureHandle(p)).append(':').append(domain.chemicalParcels.record(p));
+			if (domain.thermalState != null) state.append(':').append(domain.thermalState.liquidInternalEnergy(p));
+		}
+		if (domain.chemicalParcels != null) state.append(':').append(domain.chemicalParcels.mutationRevision()).append(':').append(domain.chemicalParcels.totalQuanta())
+				.append(':').append(java.util.Arrays.toString(domain.chemicalParcels.dirtyCells()));
+		if (domain.thermalState != null) state.append(':').append(domain.thermalState.thermalRevision());
+		return new ReplacementState(state.toString(), domain.chemicalParcels == null ? null : domain.chemicalParcels.externalSource(),
+				domain.chemicalParcels == null ? null : domain.chemicalParcels.escapedSink(), domain.thermalState == null ? null : domain.thermalState.auditLedger());
+	}
+	private static void requireUnchanged(FluidDomain domain, ReplacementState before) {
+		ReplacementState after = replacementState(domain);
+		require(after.owners.equals(before.owners) && after.source == before.source && after.sink == before.sink
+				&& after.thermalAudit == before.thermalAudit, "rejected cell replacement changed owners, revisions or audit objects");
 	}
 
 	private static void independentWorkFinishesBeforeRejection() {

@@ -388,87 +388,44 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 				back, geometry.cutCells.openCellVolume(back), front, geometry.cutCells.openCellVolume(front));
 	}
 
-	void spawnCellVolume(int x, int y, int z, float amount) {
-		int requiredParticles = particlesRequired(amount);
-		if ((long) particles.count() + requiredParticles > maximumParticleCount) {
-			throw new ParticleBudgetExceededException(requiredParticles, maximumParticleCount - particles.count());
-		}
-		float remaining = amount;
-		int slot = firstOpenSlot(cellIndex(x, y, z), 0);
-		while (remaining > 0) {
-			if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
-			float piece = Math.min(PARTICLE_VOLUME, remaining);
-			spawnParticle(x, y, z, slot, piece);
-			remaining -= piece;
-			slot = firstOpenSlot(cellIndex(x, y, z), slot + 1);
-		}
-	}
-
 	int firstOpenSlot(int cell, int first) {
 		int mask = geometry.cutCells.mask(cell);
 		for (int slot = first; slot < 8; slot++) if ((mask & 1 << slot) == 0) return slot;
 		return -1;
 	}
 
-private void spawnParticle(int cellX, int cellY, int cellZ, int slot, float amount) {
-spawnParticle(cellX, cellY, cellZ, slot, amount, 0);
-}
+	void spawnParticle(
+			int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
+			ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal
+	) {
+		if (particles.count() >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
+		if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
+		if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
+		if (materialRegistry != null) materialRegistry.material(materialHandle);
+		else if (materialHandle != 0) throw new IllegalArgumentException("Material handle requires a bound material registry");
+		if (chemicalParcels != null && chemicalMixture != null)
+			chemicalParcels.requireCompatible(chemicalMixture, materialRegistry.material(materialHandle).id(), indicator);
+		float[] position = markerSlotPosition(cellX, cellY, cellZ, slot);
+		coordinator.appendMarker(
+				CarrierMutationPlan.append(carrierMutationRevision(), particles.count()),
+				cellIndex(cellX, cellY, cellZ), position[0], position[1], position[2],
+				amount, materialHandle, mass, chemicalMixture, indicator, thermalExternal);
+	}
 
-private void spawnParticle(int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle) {
-double mass = materialRegistry == null
-? (double) amount * config.density()
-: (double) amount * materialRegistry.material(materialHandle).referenceDensity();
-spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass);
-}
-
-private void spawnParticle(
-int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass
-) {
-spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, null, false);
-}
-
-private void spawnParticle(
- int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
- ChemicalMixtureRecord chemicalMixture, boolean indicator
- ) {
-	spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, chemicalMixture, indicator, true);
-}
-
-void spawnParticle(
- int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
- ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal
- ) {
-if (particles.count() >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
-if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
-if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
-if (materialRegistry != null) materialRegistry.material(materialHandle);
-else if (materialHandle != 0) throw new IllegalArgumentException("Material handle requires a bound material registry");
-if (chemicalParcels != null && chemicalMixture != null) {
-chemicalParcels.requireCompatible(chemicalMixture, materialRegistry.material(materialHandle).id(), indicator);
-}
-float h = config.cellSize();
-float radiusFraction = ConservativeMarkerSampling.DOMAIN_CONTACT_FRACTION;
-float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
-float oy = (slot & 2) == 0 ? 0.25F : 0.75F;
-float oz = (slot & 4) == 0 ? 0.25F : 0.75F;
-if (cellX == 0 || geometry.solid[cellIndex(cellX - 1, cellY, cellZ)]) ox = Math.max(ox, radiusFraction);
-if (cellX + 1 == sizeX || geometry.solid[cellIndex(cellX + 1, cellY, cellZ)]) ox = Math.min(ox, 1.0F - radiusFraction);
-if (cellY == 0 || geometry.solid[cellIndex(cellX, cellY - 1, cellZ)]) oy = Math.max(oy, radiusFraction);
-if (cellY + 1 == sizeY || geometry.solid[cellIndex(cellX, cellY + 1, cellZ)]) oy = Math.min(oy, 1.0F - radiusFraction);
-if (cellZ == 0 || geometry.solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.max(oz, radiusFraction);
-if (cellZ + 1 == sizeZ || geometry.solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
-coordinator.appendMarker(
-CarrierMutationPlan.append(carrierMutationRevision(), particles.count()),
-cellIndex(cellX, cellY, cellZ), (cellX + ox) * h, (cellY + oy) * h, (cellZ + oz) * h,
-amount, materialHandle, mass, chemicalMixture, indicator, thermalExternal);
- }
-
-private void spawnChemicalParticle(
-int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
-ChemicalMixtureRecord mixture, boolean indicator
-) {
-spawnParticle(cellX, cellY, cellZ, slot, amount, materialHandle, mass, mixture, indicator);
-}
+	float[] markerSlotPosition(int cellX, int cellY, int cellZ, int slot) {
+		float h = config.cellSize();
+		float radiusFraction = ConservativeMarkerSampling.DOMAIN_CONTACT_FRACTION;
+		float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
+		float oy = (slot & 2) == 0 ? 0.25F : 0.75F;
+		float oz = (slot & 4) == 0 ? 0.25F : 0.75F;
+		if (cellX == 0 || geometry.solid[cellIndex(cellX - 1, cellY, cellZ)]) ox = Math.max(ox, radiusFraction);
+		if (cellX + 1 == sizeX || geometry.solid[cellIndex(cellX + 1, cellY, cellZ)]) ox = Math.min(ox, 1.0F - radiusFraction);
+		if (cellY == 0 || geometry.solid[cellIndex(cellX, cellY - 1, cellZ)]) oy = Math.max(oy, radiusFraction);
+		if (cellY + 1 == sizeY || geometry.solid[cellIndex(cellX, cellY + 1, cellZ)]) oy = Math.min(oy, 1.0F - radiusFraction);
+		if (cellZ == 0 || geometry.solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.max(oz, radiusFraction);
+		if (cellZ + 1 == sizeZ || geometry.solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
+		return new float[] {(cellX + ox) * h, (cellY + oy) * h, (cellZ + oz) * h};
+	}
 
 	/** Planned per-marker truncation for one cell, applied later without re-deciding anything. */
 	record MarkerTruncation(

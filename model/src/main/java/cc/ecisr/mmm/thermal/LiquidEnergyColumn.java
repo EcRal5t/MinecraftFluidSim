@@ -256,6 +256,32 @@ public final class LiquidEnergyColumn {
 		return new ExternalLiquidInsertionPlan(energies, source, SignedDyadic.sum(energies).subtract(source));
 	}
 
+	/** Preflights the configured insertion temperature separately for every stored carrier. */
+	public double[] planDefaultLiquidInsertions(List<LiquidInsertion> insertions, ThermalCarrierContext markers) {
+		if (insertions == null) throw new IllegalArgumentException("Liquid insertions are missing");
+		double[] energies = new double[insertions.size()];
+		for (int index = 0; index < energies.length; index++) {
+			LiquidInsertion insertion = insertions.get(index);
+			energies[index] = modeledEnergy(insertion.fluidMaterialHandle(), insertion.mass(),
+					insertion.mixture(), insertionTemperatureK, markers.chemicalRegistry());
+			temperatureForInventory(insertion.fluidMaterialHandle(), insertion.mass(), insertion.mixture(),
+					energies[index], markers.chemicalRegistry());
+		}
+		return energies;
+	}
+
+	/** Writes already modeled energies into the empty ordinals reserved by the carrier coordinator. */
+	void commitInternalLiquidInsertions(int firstOrdinal, double[] energies) {
+		if (energies == null || firstOrdinal < 0 || firstOrdinal + energies.length > internalEnergy.length)
+			throw new IllegalArgumentException("Thermal liquid insertion ordinals are incompatible");
+		for (int index = 0; index < energies.length; index++) {
+			if (!Double.isFinite(energies[index]) || internalEnergy[firstOrdinal + index] != 0.0)
+				throw new IllegalStateException("Thermal liquid insertion did not reserve an empty energy ordinal");
+		}
+		System.arraycopy(energies, 0, internalEnergy, firstOrdinal, energies.length);
+		if (energies.length > 0) revision++;
+	}
+
 	void commitExternalLiquidInsertions(int firstOrdinal, ExternalLiquidInsertionPlan plan) {
 		if (plan == null || firstOrdinal < 0 || firstOrdinal + plan.energies.length > internalEnergy.length) {
 			throw new IllegalArgumentException("Thermal liquid insertion ordinals are incompatible");

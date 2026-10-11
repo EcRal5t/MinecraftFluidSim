@@ -435,19 +435,14 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 	public float openFaceFractionZ(int x, int y, int z) { return geometry.cutCells.zFaceOpen(x, y, z); }
 
 	public void setVolume(int x, int y, int z, float value) {
+		if (!Float.isFinite(value)) throw new IllegalArgumentException("Cell volume must be finite");
 		if (granularCoupling != null) ensureGrid();
 		int index = cellIndexChecked(x, y, z);
 		float requested = clamp01(value);
 		if (geometry.solid[index] && requested > 0.0F) throw new IllegalStateException("Cannot place fluid in a solid cell");
-		float clamped = Math.min(requested, effectiveOpenCellVolume(index));
-		int existingParticles = particleCountInCell(x, y, z);
-		int requiredParticles = particlesRequired(clamped);
-		if ((long) particles.count() - existingParticles + requiredParticles > maximumParticleCount) {
-			throw new ParticleBudgetExceededException(requiredParticles, maximumParticleCount - particles.count() + existingParticles);
-		}
-		removeParticlesInCell(x, y, z, Float.POSITIVE_INFINITY);
-		spawnCellVolume(x, y, z, clamped);
-		gridDirty = true;
+		float capacity = effectiveOpenCellVolume(index);
+		float clamped = Math.min(requested, capacity);
+		coordinator.replaceCellVolume(CellVolumeReplacementPlan.build(domain(), x, y, z, clamped, clamped == capacity));
 	}
 
 	public float volume(int x, int y, int z) {
