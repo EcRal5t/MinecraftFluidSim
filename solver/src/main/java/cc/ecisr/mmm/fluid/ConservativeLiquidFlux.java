@@ -21,6 +21,7 @@ final class ConservativeLiquidFlux {
 	private final double[] finalCapacity;
 	private final double[] geometricBlend;
 	private final double[] representationBlend;
+	private final SignedDyadic[] faceFloorLoss;
 	private SignedDyadic[] quantizationBudget;
 	private double dtOverH;
 	private LiquidFluxGeometry geometry;
@@ -43,6 +44,7 @@ final class ConservativeLiquidFlux {
 		upperFlux = new SignedDyadic[faces]; remainingSupply = new SignedDyadic[cellCount]; finalCapacity = new double[cellCount];
 		geometricBlend = new double[faces];
 		representationBlend = new double[faces];
+		faceFloorLoss = new SignedDyadic[faces];
 		int f = 0;
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			left[f] = index(x - 1, y, z); right[f] = left[f] + 1; axis[f++] = 0;
@@ -170,6 +172,8 @@ final class ConservativeLiquidFlux {
 			double resolution = ConservativeMarkerSampling.VOLUME_FLUX_RESOLUTION;
 			double stored = Math.floor(amount / resolution) * resolution;
 			exactFlux[f] = SignedDyadic.of(stored);
+			// The floor gives stored <= amount < 2*stored when stored > 0: subtraction is exact by Sterbenz.
+			faceFloorLoss[f] = amount == stored ? SignedDyadic.ZERO : SignedDyadic.of(amount - stored);
 			flux[f] = Math.copySign(stored, flux[f]);
 			upperFlux[f] = SignedDyadic.of(Math.floor(Math.abs(velocity[f]) * dtOverH * aperture[f] / resolution) * resolution);
 		}
@@ -188,7 +192,10 @@ final class ConservativeLiquidFlux {
 						&& incomingNext[f] != -2 && (selected < 0 || exactFlux[f].compareTo(exactFlux[selected]) > 0)) selected = f;
 				if (selected < 0) continue;
 				incomingNext[selected] = -2;
-				if (incomingHead[c]++ >= carrierShares[c] - 1) { exactFlux[selected] = SignedDyadic.ZERO; upperFlux[selected] = SignedDyadic.ZERO; }
+				if (incomingHead[c]++ >= carrierShares[c] - 1) {
+					exactFlux[selected] = SignedDyadic.ZERO; upperFlux[selected] = SignedDyadic.ZERO;
+					faceFloorLoss[selected] = SignedDyadic.ZERO;
+				}
 			}
 			for (int f = 0; f < flux.length; f++)
 				if (carrierShares[donor(f)] < 7 && (incomingNext[f] != -2 || exactFlux[f].signum() == 0))
@@ -289,9 +296,7 @@ final class ConservativeLiquidFlux {
 
 	/** Representation rounding has a finite local budget, separate from the velocity face sweep. */
 	private boolean repairQuantization(int source, SignedDyadic[] volume, boolean[] solid) {
-		if (geometry == null) return false;
-		if (quantizationBudget == null) quantizationBudget = geometry.quantizationBudget(dtOverH);
-		if (quantizationBudget == null) return false;
+		if (quantizationBudget == null) initializeQuantizationBudget();
 		SignedDyadic excess = after[source].subtract(exactCapacity[source]);
 		if (excess.compareTo(quantizationBudget[source]) > 0) return false;
 		Arrays.fill(predecessor, -1); int read = 0, written = 0, destination = -1;
@@ -300,7 +305,7 @@ final class ConservativeLiquidFlux {
 			int current = queue[read++];
 			for (int face : adjacent(current)) if (face >= 0) {
 				int next = left[face] == current ? right[face] : left[face];
-				if (solid[next] || predecessor[next] != -1 || !geometry.connected(left[face], right[face], axis[face])
+				if (solid[next] || predecessor[next] != -1 || geometry != null && !geometry.connected(left[face], right[face], axis[face])
 						|| representationAllowance(current, face).signum() == 0) continue;
 				predecessor[next] = 2 * face + (left[face] == current ? 0 : 1); queue[written++] = next;
 				if (after[next].compareTo(exactCapacity[next]) < 0) { destination = next; break; }
@@ -333,6 +338,21 @@ final class ConservativeLiquidFlux {
 		quantizationBudget[source] = quantizationBudget[source].subtract(amount);
 		initializeSharedFluxes(volume);
 		return true;
+	}
+
+	private void initializeQuantizationBudget() {
+		quantizationBudget = geometry == null ? null : geometry.quantizationBudget(dtOverH);
+		if (quantizationBudget == null) {
+			quantizationBudget = new SignedDyadic[cellCount]; Arrays.fill(quantizationBudget, SignedDyadic.ZERO);
+		}
+		// Keep both signed errors until their sum: incoming floor loss can cancel solid or outgoing error.
+		for (int face = 0; face < flux.length; face++) if (faceFloorLoss[face] != null) {
+			int donor = donor(face), receiver = receiver(face);
+			quantizationBudget[donor] = quantizationBudget[donor].add(faceFloorLoss[face]);
+			quantizationBudget[receiver] = quantizationBudget[receiver].subtract(faceFloorLoss[face]);
+		}
+		for (int cell = 0; cell < cellCount; cell++) if (quantizationBudget[cell].signum() < 0)
+			quantizationBudget[cell] = SignedDyadic.ZERO;
 	}
 
 	private SignedDyadic representationAllowance(int current, int face) {

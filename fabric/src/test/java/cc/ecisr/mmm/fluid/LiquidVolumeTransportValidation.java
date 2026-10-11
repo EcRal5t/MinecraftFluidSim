@@ -102,6 +102,77 @@ public final class LiquidVolumeTransportValidation {
 		var field = ConservativeLiquidFlux.class.getDeclaredField(name); field.setAccessible(true); return field.get(flux);
 	}
 
+	private static void liquidFaceFloorHasExactBudget() {
+		double quantum = ConservativeMarkerSampling.VOLUME_FLUX_RESOLUTION;
+		// Continuous outward 3.5Q + 0.5Q fits the 4Q capacity reduction; integer faces lose exactly Q.
+		for (int mode = 0; mode < 3; mode++) {
+			var flux = new ConservativeLiquidFlux(3, 1, 1);
+			flux.geometry(new LiquidFluxGeometry(new FlipCutCellGeometry(3, 1, 1)));
+			if (mode == 2) flux.carrierShares(new int[] {7, 1, 7});
+			flux.velocity[0] = flux.flux[0] = -3.5 * quantum;
+			flux.velocity[1] = flux.flux[1] = .5 * quantum;
+			SignedDyadic[] original = {SignedDyadic.ZERO, SignedDyadic.of(1), SignedDyadic.ZERO};
+			try {
+				java.util.Arrays.fill((double[]) privateFluxField(flux, "aperture"), 1);
+				((double[]) privateFluxField(flux, "outgoing"))[1] = 4 * quantum;
+				var quantize = ConservativeLiquidFlux.class.getDeclaredMethod("quantizeDonorSupply", double[].class, double.class);
+				quantize.setAccessible(true); quantize.invoke(flux, new double[] {0, 1, 0}, 1.0);
+				var losses = (SignedDyadic[]) privateFluxField(flux, "faceFloorLoss");
+				if (!losses[0].equals(SignedDyadic.of(.5 * quantum)) || !losses[1].equals(losses[0]))
+					throw new AssertionError("Accepted face floor loss differs from its exact binary64 amount");
+				if (mode == 2) {
+					var chemical = ConservativeLiquidFlux.class.getDeclaredMethod("limitChemicalShares");
+					chemical.setAccessible(true); chemical.invoke(flux);
+					if (!losses[0].equals(SignedDyadic.ZERO))
+						throw new AssertionError("A chemical whole-face removal was counted as floor rounding");
+				}
+				var capacities = (SignedDyadic[]) privateFluxField(flux, "exactCapacity");
+				capacities[0] = capacities[2] = SignedDyadic.of(1);
+				capacities[1] = SignedDyadic.of(1 - (mode == 2 ? .5 : 4 + mode) * quantum);
+				var repair = ConservativeLiquidFlux.class.getDeclaredMethod("repairSharedFluxes", SignedDyadic[].class, boolean[].class);
+				repair.setAccessible(true);
+				boolean accepted = true;
+				try { repair.invoke(flux, original, new boolean[3]); }
+				catch (java.lang.reflect.InvocationTargetException failure) {
+					if (!(failure.getCause() instanceof MechanicalTimeRefinement)) throw failure;
+					accepted = false;
+				}
+				if (accepted != (mode == 0)) throw new AssertionError("Face floor repair bypassed its local error or chemical share limit");
+				if (accepted && (!flux.resultingVolumes()[1].equals(capacities[1])
+						|| !flux.resultingVolumes()[0].add(flux.resultingVolumes()[1]).add(flux.resultingVolumes()[2]).equals(SignedDyadic.of(1))))
+					throw new AssertionError("Pure liquid floor repair changed exact volume or left a capacity excess");
+				if (!((SignedDyadic[]) privateFluxField(flux, "upperFlux"))[0].equals(mode == 2 ? SignedDyadic.ZERO : SignedDyadic.of(3 * quantum)))
+					throw new AssertionError("Representation repair relaxed the physical velocity allowance");
+			} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+		}
+	}
+
+	private static void negativeKernelErrorCancelsFaceFloor() {
+		var domain = new FluidDomain(130, 3, 3,
+				new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 128);
+		var registry = cc.ecisr.mmm.granular.BuiltinGranularDefinitions.createRegistry();
+		domain.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
+		int material = registry.materialHandle(cc.ecisr.mmm.granular.BuiltinGranularDefinitions.FINE_SAND);
+		domain.granularState.parcels.add(new cc.ecisr.mmm.granular.GranularParcelStore.Parcel(
+				64.125F, .75F, .75F, 1, 0, 0, 262144, .001, material, 0, 0, (byte) 0));
+		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
+		domain.granularCollision.preview(domain.granularState.parcels, registry, .0015F);
+		domain.granularNextCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits, domain.granularCollision::previewPosition);
+		int source = domain.cellIndex(127, 1, 1);
+		if (!GranularQuantizationError.budget(domain, .0015F)[source].equals(SignedDyadic.of(-1, -24)))
+			throw new AssertionError("Negative kernel residual was clipped before face-error cancellation");
+		var flux = new ConservativeLiquidFlux(130, 3, 3); flux.geometry(new LiquidFluxGeometry(domain));
+		try {
+			var losses = (SignedDyadic[]) privateFluxField(flux, "faceFloorLoss");
+			for (int face = 0; face < flux.left.length; face++) if (flux.left[face] == source && flux.right[face] == source + 1)
+				losses[face] = SignedDyadic.of(3, -28);
+			var time = ConservativeLiquidFlux.class.getDeclaredField("dtOverH"); time.setAccessible(true); time.setDouble(flux, .003F);
+			var combine = ConservativeLiquidFlux.class.getDeclaredMethod("initializeQuantizationBudget"); combine.setAccessible(true); combine.invoke(flux);
+			if (!((SignedDyadic[]) privateFluxField(flux, "quantizationBudget"))[source].equals(SignedDyadic.ZERO))
+				throw new AssertionError("Positive face loss hid a larger negative kernel error");
+		} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+	}
+
 	public static void main(String[] args) {
 		uniformDensityMassAllocation();
 		if (args.length == 1 && args[0].equals("mass")) {
@@ -109,6 +180,8 @@ public final class LiquidVolumeTransportValidation {
 		}
 		granularRepresentationRoundingHasExactBudget();
 		representationRepairReusesOriginalDonorSupply();
+		liquidFaceFloorHasExactBudget();
+		negativeKernelErrorCancelsFaceFloor();
 		if (args.length == 1 && args[0].equals("quantization")) {
 			System.out.println("Liquid/granular quantization handoff validation passed"); return;
 		}
