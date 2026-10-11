@@ -205,4 +205,6 @@ container-transfer 根目录是严格短期恢复域：未知文件名、目录�
 
 材料质量、species、solid composition 和总内能分别闭合，不能只凭体积相等通过事务。含热抽取以实际 carrier `U` 的 exact dyadic 变化为物理量，整件物品只舍入一次；external sink 使用物品保存的 raw energy，舍入差单列 thermal roundoff，不能逐 marker 累积近似后令 item 与 region 分叉。
 
+液体部分倾倒由实际两份质量与组成求热容，小热容份额按源温度直接计算内能，大热容份额接收精确相减后一次舍入的余量；纯水按小体积份额执行同一余量分配。区域接收选中份额内能，物品保存剩余份额内能。raw 源物品与 raw 剩余物品的精确内能差在 coupled energy/WAL 中舍入一次，作为 external source；它与区域实收能量的差额进入 thermal roundoff。所有份额必须满足实际库存的正温校验，极小余量的热状态受原始能量列的可表示精度限制。
+
 创造放出没有物品侧减少，因此明确记 region external source；创造装取仍必须从 region 删除，只是 Minecraft 保留玩家物品。这个不对称是显式 actor 语义，不得隐藏在 tooltip 或 item damage 中。

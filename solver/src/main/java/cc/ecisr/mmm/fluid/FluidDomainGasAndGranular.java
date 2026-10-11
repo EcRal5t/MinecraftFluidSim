@@ -226,6 +226,10 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		thermalState.settleExternalExtraction(removedCarrierEnergy, coupledItemEnergy);
 	}
+	public void settleExternalContainerInsertion(double insertedCarrierEnergy, double coupledItemEnergy) {
+		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		thermalState.settleExternalInsertion(insertedCarrierEnergy, coupledItemEnergy);
+	}
 	public double totalInternalEnergy() {
 		return thermalState == null ? 0.0 : thermalState.totalEnergy(particles.count());
 	}

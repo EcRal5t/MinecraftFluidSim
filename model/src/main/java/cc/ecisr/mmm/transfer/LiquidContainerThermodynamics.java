@@ -3,6 +3,7 @@ package cc.ecisr.mmm.transfer;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -71,9 +72,13 @@ public final class LiquidContainerThermodynamics {
 		if (remaining == null) return new ThermalContents.EnergySplit(sourceEnergy, 0.0);
 		ThermalStateFunction state = stateFunction(registry);
 		double temperature = state.stateForInventory(source, sourceEnergy).temperatureK();
-		double modeledSelected = inventoryEnergy(state, selected, temperature);
-		double remainingEnergy = sourceEnergy - modeledSelected;
-		double selectedEnergy = sourceEnergy - remainingEnergy;
+		double selectedCapacity = inventoryHeatCapacity(registry, selected, temperature);
+		double remainingCapacity = inventoryHeatCapacity(registry, remaining, temperature);
+		boolean selectedIsLarger = selectedCapacity >= remainingCapacity;
+		double smaller = inventoryEnergy(state, selectedIsLarger ? remaining : selected, temperature);
+		double larger = SignedDyadic.of(sourceEnergy).subtract(SignedDyadic.of(smaller)).toDouble();
+		double selectedEnergy = selectedIsLarger ? larger : smaller;
+		double remainingEnergy = selectedIsLarger ? smaller : larger;
 		if (!Double.isFinite(selectedEnergy) || !Double.isFinite(remainingEnergy)) {
 			throw new IllegalArgumentException("Container thermal split energy is not representable");
 		}
@@ -82,14 +87,26 @@ public final class LiquidContainerThermodynamics {
 		return new ThermalContents.EnergySplit(selectedEnergy, remainingEnergy);
 	}
 
+	private static double inventoryHeatCapacity(ThermalRegistry registry,
+			List<ThermalStateFunction.InventoryPortion> inventory, double temperature) {
+		SignedDyadic total = SignedDyadic.ZERO;
+		for (var portion : inventory) total = total.add(SignedDyadic.of(portion.massMu()
+				* registry.material(portion.materialHandle()).specificHeatAt(temperature)));
+		double capacity = total.toDouble();
+		if (!(Double.isFinite(capacity) && capacity > 0))
+			throw new IllegalArgumentException("Container thermal inventory heat capacity is invalid");
+		return capacity;
+	}
+
 	private static double inventoryEnergy(
 			ThermalStateFunction state, List<ThermalStateFunction.InventoryPortion> inventory, double temperature
 	) {
-		double total = 0.0;
+		SignedDyadic exact = SignedDyadic.ZERO;
 		for (ThermalStateFunction.InventoryPortion portion : inventory) {
-			total += state.internalEnergyAtTemperature(
-					portion.materialHandle(), portion.massMu(), portion.speciesQuanta(), temperature);
+			exact = exact.add(SignedDyadic.of(state.internalEnergyAtTemperature(
+					portion.materialHandle(), portion.massMu(), portion.speciesQuanta(), temperature)));
 		}
+		double total = exact.toDouble();
 		if (!Double.isFinite(total)) throw new IllegalArgumentException("Container thermal inventory energy overflow");
 		return total;
 	}

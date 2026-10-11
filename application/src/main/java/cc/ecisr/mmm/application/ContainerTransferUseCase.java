@@ -42,7 +42,7 @@ public final class ContainerTransferUseCase {
 					long totalAmount = liquidAmount(command.sourceItem());
 					ThermalContents.EnergySplit split = source.splitHomogeneousEnergy(
 							command.requestedAmount(), totalAmount);
-					preparedEnergy = source.internalEnergy() - split.remainingEnergy();
+					preparedEnergy = split.coupledEnergy(source.internalEnergy());
 				} catch (RuntimeException invalidThermal) {
 					return Result.rejected(command,
 							"容器热状态损坏或与当前 registry/库存不一致；转移保持不变");

@@ -451,6 +451,14 @@ public final class ThermalDomainState {
 		auditState.update(ledger -> ledger.withExternalSinkEnergy(delta).withRoundoff(delta));
 	}
 
+	public void settleExternalInsertion(double insertedCarrierEnergy, double coupledItemEnergy) {
+		if (!Double.isFinite(insertedCarrierEnergy) || !Double.isFinite(coupledItemEnergy)) {
+			throw new IllegalArgumentException("Container thermal settlement is not finite");
+		}
+		SignedDyadic delta = SignedDyadic.of(coupledItemEnergy).subtract(SignedDyadic.of(insertedCarrierEnergy));
+		auditState.update(ledger -> ledger.withExternalSourceEnergy(delta).withRoundoff(delta.negate()));
+	}
+
 	public void recordRoundoff(SignedDyadic delta) { auditState.update(ledger -> ledger.withRoundoff(delta)); }
 
 	// ---- granular reaction plan ----

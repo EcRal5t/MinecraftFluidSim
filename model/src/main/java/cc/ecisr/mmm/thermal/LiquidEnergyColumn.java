@@ -177,7 +177,12 @@ public final class LiquidEnergyColumn {
 		}
 		public double temperature(double energy) {
 			if (!Double.isFinite(energy)) throw new IllegalArgumentException("Prospective liquid energy is invalid");
-			return material.temperatureForSensibleSpecificEnergy((energy - base) / mass);
+			return temperature(SignedDyadic.of(energy));
+		}
+		public double temperature(SignedDyadic energy) {
+			if (energy == null || !Double.isFinite(energy.toDouble()))
+				throw new IllegalArgumentException("Prospective liquid energy is invalid");
+			return material.temperatureForSensibleSpecificEnergy(energy.subtract(SignedDyadic.of(base)).toDouble() / mass);
 		}
 		public double roundoff(double temperature) {
 			double sensible = material.sensibleSpecificEnergyAt(temperature), term = mass * sensible;

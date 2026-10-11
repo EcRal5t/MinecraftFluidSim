@@ -24,6 +24,7 @@ import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
 import cc.ecisr.mmm.thermal.ThermalSpeciesOffset;
 import cc.ecisr.mmm.thermal.ThermalStateFunction;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -56,6 +57,7 @@ public final class M6ContainerValidation {
 		run("malformed mixture mass and sub-float portions are rejected", M6ContainerValidation::testMixtureHardening);
 		run("granular contents are canonical and registry-bound", M6ContainerValidation::testGranularContents);
 		run("thermal contents bind raw energy to exact liquid truth", M6ContainerValidation::testThermalContents);
+		run("tiny container thermal shares preserve actual caloric inventories", M6ContainerValidation::testTinyThermalShares);
 		run("full bucket round-trips through the primitives", M6ContainerValidation::testBucketRoundTrip);
 		System.out.println("M6ContainerValidation passed " + passed + " scenarios");
 	}
@@ -103,6 +105,10 @@ public final class M6ContainerValidation {
 				&& LiquidContainerThermodynamics.temperatureK(registry,
 				ThermalContents.forMixture(registry.fingerprint(), remaining, split.remainingEnergy()), remaining) == 320.0,
 				"bucket split did not preserve the source equilibrium temperature on both inventories");
+		var zeroSplit = LiquidContainerThermodynamics.split(registry,
+				ThermalContents.forMixture(registry.fingerprint(), mixture, 0.0), mixture, selected, remaining);
+		check(zeroSplit.selectedEnergy() == 0.0 && zeroSplit.remainingEnergy() == 0.0,
+				"zero reference-coordinate energy changed during heterogeneous split");
 		assertChemicalThermalSplit();
 		try {
 			contents.splitHomogeneousEnergy(500_000_000L, BUCKET);
@@ -118,6 +124,47 @@ public final class M6ContainerValidation {
 				new FluidMixture.Component("test:light", 499_999_999L, 1.0)));
 		check(!ThermalContents.forMixture(registry.fingerprint(), changed, contents.internalEnergy()).underlyingHash()
 					.equals(contents.underlyingHash()), "thermal contents hash ignored an exact liquid-ledger change");
+	}
+
+	private static void testTinyThermalShares() {
+		long total = 999_999_999L;
+		for (double sourceEnergy : new double[] {0.0, -1.226E9, 1.0E20}) {
+			ThermalContents pure = ThermalContents.forPureWater("0".repeat(64), total, sourceEnergy);
+			for (long selected : new long[] {59, total - 59}) {
+				var split = pure.splitHomogeneousEnergy(selected, total);
+				double smaller = sourceEnergy * (59.0 / total);
+				check(Double.doubleToRawLongBits(selected == 59 ? split.selectedEnergy() : split.remainingEnergy())
+						== Double.doubleToRawLongBits(smaller), "pure tiny energy was formed by cancellation");
+				check(split.coupledEnergy(sourceEnergy) == SignedDyadic.of(sourceEnergy)
+						.subtract(SignedDyadic.of(split.remainingEnergy())).toDouble(), "item debit changed raw energy definition");
+			}
+		}
+		for (double reference : new double[] {0.0, 1.0E18, -1.0E18}) {
+			var definition = new ThermalMaterialDefinition("test:thermal/tiny", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"mmm:water", 293.15, reference, 0.0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
+			var registry = new ThermalRegistry(List.of(definition));
+			var state = new ThermalStateFunction(registry);
+			var source = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", total, 999.0)));
+			double energy = state.internalEnergyAtTemperature(0, 999.0, java.util.Map.of(), reference == 0 ? 1.0E-8 : 300.0);
+			var contents = ThermalContents.forMixture(registry.fingerprint(), source, energy);
+			double sourceT = LiquidContainerThermodynamics.temperatureK(registry, contents, source);
+			for (long selectedNanos : new long[] {59, total - 59}) {
+				double selectedMass = 999.0 * ((double) selectedNanos / total);
+				var selected = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", selectedNanos, selectedMass)));
+				var remaining = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", total - selectedNanos, 999.0 - selectedMass)));
+				var split = LiquidContainerThermodynamics.split(registry, contents, source, selected, remaining);
+				boolean smallSelected = selectedNanos == 59;
+				double direct = state.internalEnergyAtTemperature(0, smallSelected ? selected.totalMass() : remaining.totalMass(),
+						java.util.Map.of(), sourceT);
+				check((smallSelected ? split.selectedEnergy() : split.remainingEnergy()) == direct,
+						"tiny actual-mass caloric energy was replaced by a large-share subtraction");
+				SignedDyadic error = SignedDyadic.of(split.selectedEnergy()).add(SignedDyadic.of(split.remainingEnergy()))
+						.subtract(SignedDyadic.of(energy));
+				check(Math.abs(error.toDouble()) <= 0.5 * Math.ulp(smallSelected ? split.remainingEnergy() : split.selectedEnergy()),
+						"split exceeded its single larger-share rounding bound");
+			}
+		}
 	}
 
 	private static void assertChemicalThermalSplit() {
@@ -143,6 +190,18 @@ public final class M6ContainerValidation {
 				ThermalContents.forChemical(registry.fingerprint(), inventory.inserted(), split.selectedEnergy()),
 				inventory.inserted()) - 320.0) < 1.0E-12,
 				"chemical thermal split ignored selected mass or species reference energy");
+		for (long selectedNanos : new long[] {1L, BUCKET - 1L}) {
+			var tinyInventory = source.split(selectedNanos, BuiltinChemicalDefinitions.REGISTRY);
+			var tinyEnergy = LiquidContainerThermodynamics.split(registry, thermal, source,
+					tinyInventory.inserted(), tinyInventory.remaining());
+			var smaller = selectedNanos == 1L ? tinyInventory.inserted() : tinyInventory.remaining();
+			var group = smaller.groups().getFirst();
+			var amounts = java.util.Map.of(group.species().getFirst().speciesId(), group.species().getFirst().amountQuanta());
+			double actualT = LiquidContainerThermodynamics.temperatureK(registry, thermal, source);
+			double expected = state.internalEnergyAtTemperature(0, group.massKilograms(), amounts, actualT);
+			check((selectedNanos == 1L ? tinyEnergy.selectedEnergy() : tinyEnergy.remainingEnergy()) == expected,
+					"tiny chemical share ignored its actual integer species offset");
+		}
 	}
 
 	private static ThermalMaterialDefinition thermalLiquid(String id, String carrierId, double heatCapacity) {

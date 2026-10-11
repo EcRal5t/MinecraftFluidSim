@@ -180,15 +180,15 @@ final class ThermalCellOperations {
 					granularEdit.finalComposition());
 			granular.column().requireAddActive(0.0);
 		}
-		ThermalStateFunction.State state = stateFunction.stateForInventory(finalInventory, cellEnergy.toDouble());
+		ThermalStateFunction.State state = stateFunction.stateForInventory(finalInventory, cellEnergy);
 		return new ThermalDomainState.ReactionPlan(
 				cell, cellEnergy, exactEnergy(markers.markerCount()), state.temperatureK());
 	}
 
 	void commitGranularReaction(ThermalDomainState.ReactionPlan plan, ThermalCarrierContext markers) {
 		if (plan == null) throw new IllegalArgumentException("Thermal granular reaction plan is missing");
-		cellGrid.rebuildWithCellEnergy(carrierAccess(markers), plan.cell(), plan.cellEnergy().toDouble());
-		cellGrid.setCellInternalEnergy(plan.cell(), plan.cellEnergy().toDouble());
+		cellGrid.rebuildWithCellEnergy(carrierAccess(markers), plan.cell(), plan.cellEnergy());
+		cellGrid.setCellInternalEnergy(plan.cell(), plan.cellEnergy());
 		audit.update(ledger -> ledger.withRoundoff(exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore())));
 	}
 
@@ -260,7 +260,7 @@ final class ThermalCellOperations {
 			energy = energy.add(SignedDyadic.of(granular.column().depositEnergy(key)));
 		}
 		return inventory.isEmpty() ? Double.NaN
-				: stateFunction.stateForInventory(inventory, energy.toDouble()).temperatureK();
+				: stateFunction.stateForInventory(inventory, energy).temperatureK();
 	}
 
 	double phaseCandidateTemperature(
@@ -320,7 +320,7 @@ final class ThermalCellOperations {
 			}
 			return Double.NaN;
 		}
-		return stateFunction.stateForInventory(finalInventory, energy.toDouble()).temperatureK();
+		return stateFunction.stateForInventory(finalInventory, energy).temperatureK();
 	}
 
 	void setTemperatureInCell(int cell, double temperatureK, ThermalCarrierContext markers) {
@@ -348,10 +348,7 @@ final class ThermalCellOperations {
 			currentCellEnergy = currentCellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
 		}
 		SignedDyadic energyOutsideCell = exactEnergy(markers.markerCount()).subtract(currentCellEnergy);
-		double targetCellEnergy = inventoryBefore.subtract(energyOutsideCell).toDouble();
-		if (!Double.isFinite(targetCellEnergy)) {
-			throw new IllegalArgumentException("Conservative thermal cell remainder is not representable");
-		}
+		SignedDyadic targetCellEnergy = inventoryBefore.subtract(energyOutsideCell);
 		cellGrid.rebuildPhaseCellWithEnergy(current, cell, targetCellEnergy);
 		audit.update(ledger -> ledger.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore)));
 	}
@@ -364,10 +361,7 @@ final class ThermalCellOperations {
 			throw new IllegalArgumentException("Gas/liquid thermal closure is invalid");
 		}
 		SignedDyadic beforePair = beforeCell.cellEnergy().add(SignedDyadic.of(gasEnergyBefore));
-		double targetCellEnergy = beforePair.subtract(SignedDyadic.of(gasEnergyAfter)).toDouble();
-		if (!Double.isFinite(targetCellEnergy)) {
-			throw new IllegalArgumentException("Gas/liquid cell energy remainder is not representable");
-		}
+		SignedDyadic targetCellEnergy = beforePair.subtract(SignedDyadic.of(gasEnergyAfter));
 		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
 		if (carrierTopologyChanged) {
 			cellGrid.rebuildPhaseCellWithEnergy(current, beforeCell.cell(), targetCellEnergy);
@@ -441,7 +435,7 @@ final class ThermalCellOperations {
 			}
 			return null;
 		}
-		return stateFunction.stateForInventory(finalInventory, cellEnergy.toDouble());
+		return stateFunction.stateForInventory(finalInventory, cellEnergy);
 	}
 
 	private double modeledCellEnergy(int cell, double temperatureK, ThermalCarrierContext markers) {

@@ -205,6 +205,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	}
 
 	static void caloricAndSpeciesObservation() {
+		referenceEnergyRemapPreservesSpatialField();
 		observationPreservesTemperatureUnderReferenceOffsets();
 		referenceGridLifecycleIsAtomic();
 		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
@@ -299,6 +300,10 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 					"observation weights changed a uniform source temperature under a large reference");
 			require(before.equals(thermal.exactEnergy(1)) && audit.equals(thermal.auditLedger()),
 					"reference-coordinate observation changed authoritative energy or its ledger");
+			var group = thermal.liquid().caloricInventory(0, 2, null, null);
+			var groupEnergy = SignedDyadic.of(reference + 128).add(SignedDyadic.of(reference + 256));
+			require(group.temperature(groupEnergy) == 492,
+					"liquid remap rounded aggregate energy before subtracting its reference");
 		}
 		var materials = new java.util.ArrayList<ThermalMaterialDefinition>();
 		for (int i = 0; i < 3; i++) materials.add(new ThermalMaterialDefinition("test:thermal/reference_" + i,
@@ -330,6 +335,27 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 					"opposing references erased another carrier's energy before LTE inversion");
 			require(before.equals(thermal.exactEnergy(3)) && audit.equals(thermal.auditLedger()),
 					"LTE reference cancellation changed the inventory or audit");
+		}
+	}
+
+	private static void referenceEnergyRemapPreservesSpatialField() {
+		for (double reference : new double[] {0, 1e18, -1e18}) {
+			var domain = new FluidDomain(2, 2, 2,
+					new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-7F, .4F, .002F, 0), 128);
+			domain.setVolume(0, 0, 0, 1);
+			for (int p = 0; p < domain.particleCount(); p++) domain.particles.setMass(p, 2);
+			var material = new ThermalMaterialDefinition("test:thermal/remap_reference", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"mmm:water", 300, reference, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)));
+			domain.bindThermal(new ThermalRegistry(List.of(material)), new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 300);
+			for (int p = 0; p < domain.particleCount(); p++) domain.thermalState.resetMarkerTemperature(p,
+					domain.particles.positionX(p) < .25 ? 428 : 556, domain.thermalMarkerContext(), domain.exactInternalEnergy());
+			domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+			var flux = new ConservativeLiquidFlux(2, 2, 2); flux.geometry(new LiquidFluxGeometry(domain));
+			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
+			var plan = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true);
+			for (var marker : plan.markers) require(domain.thermalState.liquid().caloricInventory(
+					marker.material(), marker.mass(), null, null).temperature(marker.energy()) == (marker.offsetX() < 0 ? 428 : 556),
+					"stationary liquid remap changed the caloric spatial field under a reference offset");
 		}
 	}
 

@@ -310,6 +310,12 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("components")) {
+			disconnectedMicroComponentsKeepTheirInventory(); microPortsUseTheirOwnBeginningSupply();
+			microComponentCapacityIncludesBallisticArrivals(); geometryRemapRechecksMicroCapacity();
+			ballisticComponentUsesPublishedFloatPosition();
+			System.out.println("Liquid micro-component provenance validation passed"); return;
+		}
 		if (args.length == 1 && args[0].equals("representation")) {
 			representationRemapReportsLogicalMoments(); logicalRemapStatsSumDistinctSubstepsAndTail();
 			representationRemapBudgetRejectsPrivateCandidate();
@@ -347,6 +353,9 @@ public final class LiquidVolumeTransportValidation {
 			return;
 		}
 		courantUsesOccupiedDonors();
+		disconnectedMicroComponentsKeepTheirInventory(); microPortsUseTheirOwnBeginningSupply();
+		microComponentCapacityIncludesBallisticArrivals(); geometryRemapRechecksMicroCapacity();
+		ballisticComponentUsesPublishedFloatPosition();
 		allocationMatchesIntegerOracle();
 		quadratureAndMassKeepSmallShares();
 		chemicalShareCountRespectsSpeciesGroups();
@@ -583,6 +592,136 @@ public final class LiquidVolumeTransportValidation {
 		}
 	}
 
+	private static void disconnectedMicroComponentsKeepTheirInventory() {
+		for (boolean full : new boolean[] {false, true}) for (boolean chemical : new boolean[] {false, true}) {
+			var domain = new FluidDomain(4, 3, 3,
+					new FluidSolverConfig(.5F, 1000, 0, .05F, 400, 1e-5F, .4F, .002F, .8F), 256);
+			byte[] masks = new byte[36]; java.util.Arrays.fill(masks, (byte) 255);
+			masks[16] = masks[17] = 0; masks[18] = 126;
+			float[] points = new float[36], velocity = new float[27];
+			for (int bit = 0; bit < 8; bit++) {
+				points[4 * bit] = .625F + .25F * (bit & 1);
+				points[4 * bit + 1] = .625F + .25F * (bit >>> 1 & 1);
+				points[4 * bit + 2] = .625F + .25F * (bit >>> 2 & 1);
+				points[4 * bit + 3] = .09375F; velocity[3 * bit] = .1F;
+			}
+			points[32] = 1.125F; points[33] = points[34] = .625F;
+			points[35] = full ? .125F : .0625F; velocity[24] = .1F;
+			if (chemical) {
+				double[] masses = new double[9]; for (int p = 0; p < 9; p++) masses[p] = 1000 * points[4 * p + 3];
+				domain.restoreMaterialParticleState(new FlipMaterialParticleState(4, 3, 3, .5F, 9,
+						.75 + points[35], 1000 * (.75 + points[35]), BuiltinFluidMaterials.DEFAULT_PALETTE.stream()
+						.filter(material -> material.id().equals("mmm:water")).toList(), points, velocity, masks, masses, new int[9]));
+				var species = new cc.ecisr.mmm.chemistry.ChemicalSpecies("test:solute", java.util.Map.of("X", 1), 0,
+						cc.ecisr.mmm.chemistry.ExactRational.ONE, 0xff000000);
+				var product = new cc.ecisr.mmm.chemistry.ChemicalSpecies("test:product", java.util.Map.of("X", 1), 0,
+						cc.ecisr.mmm.chemistry.ExactRational.ONE, 0xff000000);
+				var registry = new cc.ecisr.mmm.chemistry.ChemicalRegistry(java.util.List.of(species, product), java.util.List.of(
+						new cc.ecisr.mmm.chemistry.ChemicalPhaseDefinition("test:phase", "mmm:water", java.util.List.of(species.id(), product.id()),
+								java.util.Map.of(species.id(), cc.ecisr.mmm.chemistry.ExactRational.ONE), false)), java.util.List.of(
+						new cc.ecisr.mmm.chemistry.ChemicalReaction("test:conversion", cc.ecisr.mmm.chemistry.ChemicalReaction.Kind.INSTANTANEOUS,
+								"test:phase", java.util.Map.of(species.id(), 1), java.util.Map.of(product.id(), 1), cc.ecisr.mmm.chemistry.ExactRational.ZERO)));
+				domain.bindChemistry(registry);
+				for (int p = 0; p < 9; p++) {
+					var mixture = new cc.ecisr.mmm.chemistry.ChemicalMixtureRecord(new int[] {0}, new long[] {1}, 0);
+					domain.chemicalParcels.assign(p, mixture.withMassResidualKilograms(domain.unitScale.kilograms(masses[p])
+							- mixture.exactSpeciesMassKilograms(registry).toDouble()), false);
+				}
+			} else domain.restoreParticleState(new FlipParticleState(4, 3, 3, .5F, 9, .75F + points[35], points, velocity, masks));
+			domain.sealDomainBoundary(); double before = domain.totalVolumeExact();
+			var stats = domain.stepMechanicsOnly(); double entered = 0;
+			for (int p = 0; p < domain.particleCount(); p++) if (domain.particleCellIndex(p) == 18) {
+				if (CellRemapMicroTopology.markerSupport(domain, p) != 1)
+					throw new AssertionError("Shared liquid crossed a solid micro wall into the isolated corner");
+				entered += domain.particles.volume(p);
+			}
+			if (domain.totalVolumeExact() != before || entered > .125 || !full && !(entered > .0625)
+					|| stats.substeps() > 4) throw new AssertionError("Legal connected liquid arrival failed to advance conservatively");
+		}
+	}
+
+	private static void microPortsUseTheirOwnBeginningSupply() {
+		var domain = microPortDomain((byte) 126, (byte) 0, new float[] {.125F, .125F, .125F, .125F});
+		var flux = microPortFlux(domain, .0625);
+		new CellRemapPorts(domain, flux, new BallisticLiquidRemap(8), false, null);
+		if (flux.exactFlux[0].signum() != 0 || !flux.resultingVolumes()[0].equals(SignedDyadic.of(.125)))
+			throw new AssertionError("An empty outgoing component borrowed another component's beginning inventory");
+		var chemical = microPortDomain((byte) 126, (byte) 0, new float[] {.375F, .375F, .375F, .125F});
+		var limited = microPortFlux(chemical, .0625);
+		new CellRemapPorts(chemical, limited, new BallisticLiquidRemap(8), false, (cell, support) -> 1);
+		if (limited.exactFlux[0].signum() != 0)
+			throw new AssertionError("A one-quantum component split retained and outgoing chemical shares");
+	}
+
+	private static void microComponentCapacityIncludesBallisticArrivals() {
+		var domain = microPortDomain((byte) 0, (byte) 126,
+				new float[] {.125F, .125F, .125F, .5F, .625F, .125F, .125F, .125F});
+		var flux = microPortFlux(domain, .0625);
+		var independent = new BallisticLiquidRemap(8);
+		independent.markers.add(new CellCarrierRemapPlan.Marker(1, 0, false, .03125F, 31.25,
+				.25, .25, .25, 0, 0, 0, null, 0));
+		independent.reserved[1] = SignedDyadic.of(.03125); flux.reserve(independent.reserved);
+		var capacities = new SignedDyadic[8]; java.util.Arrays.fill(capacities, SignedDyadic.ZERO);
+		capacities[0] = SignedDyadic.of(1); capacities[1] = SignedDyadic.of(.25).subtract(independent.reserved[1]);
+		flux.geometricResult(domain.markerGrid.exactCellVolumeInventory, capacities);
+		var ports = new CellRemapPorts(domain, flux, independent, false, null);
+		if (flux.exactFlux[0].signum() != 0 || !ports.reserved(1, 128).equals(SignedDyadic.of(.03125))
+				|| !flux.resultingVolumes()[1].equals(SignedDyadic.of(.125)))
+			throw new AssertionError("Full connected corner spilled into an independently occupied isolated corner");
+	}
+
+	private static void geometryRemapRechecksMicroCapacity() {
+		var domain = microPortDomain((byte) 126, (byte) 0, new float[] {.125F, .125F, .125F, .125F});
+		var flux = microPortFlux(domain, 0);
+		var unchanged = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(8), true);
+		for (var marker : unchanged.markers) if (marker.cell() == 0 && (marker.offsetX() >= 0 || marker.offsetY() >= 0 || marker.offsetZ() >= 0))
+			throw new AssertionError("Geometry reconstruction sampled another micro component");
+		var capacity = new SignedDyadic[8]; java.util.Arrays.fill(capacity, SignedDyadic.ZERO);
+		capacity[0] = SignedDyadic.of(.125); capacity[1] = SignedDyadic.of(1);
+		flux.geometricResult(domain.markerGrid.exactCellVolumeInventory, capacity);
+		try {
+			new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(8), true);
+			throw new AssertionError("A no-face-change geometry remap retained over-capacity micro inventory");
+		} catch (MechanicalTimeRefinement expected) { }
+	}
+
+	private static void ballisticComponentUsesPublishedFloatPosition() {
+		var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.1F, 1000, 0, .05F, 200, 1e-5F, .4F, .002F, .8F), 64);
+		byte[] masks = new byte[64]; java.util.Arrays.fill(masks, (byte) 255); masks[42] = 126;
+		domain.restoreParticleState(new FlipParticleState(4, 4, 4, .1F, 1, .0625F,
+				new float[] {.25F, .25F, .25F, .0625F}, new float[3], masks));
+		domain.rebuildGridFromParticles(); java.util.Arrays.fill(domain.gridToParticleStage.advectionCells(), false);
+		double offset = .25 / (double) domain.config.cellSize() - 2.5;
+		var marker = new CellCarrierRemapPlan.Marker(42, 0, false, .0625F, 62.5, offset, offset, offset, 0, 0, 0, null, 0);
+		if (!(offset < 0) || CellRemapMicroTopology.markerSupport(domain, 0) != 128
+				|| CellRemapMicroTopology.markerSupport(domain, marker) != 128)
+			throw new AssertionError("Independent arrival classification differs from its actual binary32 physical position");
+		var ballistic = new BallisticLiquidRemap(64); ballistic.markers.add(marker); ballistic.reserved[42] = SignedDyadic.of(.0625);
+		var flux = new ConservativeLiquidFlux(4, 4, 4); flux.reserve(ballistic.reserved);
+		flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
+		var capacities = new SignedDyadic[64]; java.util.Arrays.fill(capacities, SignedDyadic.ZERO); capacities[42] = SignedDyadic.of(.1875);
+		flux.geometricResult(domain.markerGrid.exactCellVolumeInventory, capacities);
+		var ports = new CellRemapPorts(domain, flux, ballistic, false, null);
+		if (!ports.reserved(42, 128).equals(SignedDyadic.of(.0625)) || ports.reserved(42, 1).signum() != 0)
+			throw new AssertionError("Independent arrival reserved another micro component's capacity");
+	}
+
+	private static FluidDomain microPortDomain(byte leftMask, byte rightMask, float[] points) {
+		int count = points.length / 4; float total = 0; for (int p = 0; p < count; p++) total += points[4 * p + 3];
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 200, 1e-5F, .4F, .002F, .8F), 64);
+		byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte) 255); masks[0] = leftMask; masks[1] = rightMask;
+		domain.restoreParticleState(new FlipParticleState(2, 2, 2, .5F, count, total, points, new float[3 * count], masks));
+		domain.rebuildGridFromParticles(); java.util.Arrays.fill(domain.gridToParticleStage.advectionCells(), true); return domain;
+	}
+	private static ConservativeLiquidFlux microPortFlux(FluidDomain domain, double amount) {
+		var flux = new ConservativeLiquidFlux(2, 2, 2);
+		flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
+		var capacity = new SignedDyadic[8];
+		for (int cell = 0; cell < 8; cell++) capacity[cell] = SignedDyadic.of(Integer.bitCount(~domain.geometry.cutCells.mask(cell) & 255), -3);
+		flux.geometricResult(domain.markerGrid.exactCellVolumeInventory, capacity);
+		flux.exactFlux[0] = SignedDyadic.of(amount); flux.velocity[0] = 1; return flux;
+	}
+
 	private static void chemicalShareCountRespectsSpeciesGroups() {
 		var definitions = new java.util.ArrayList<cc.ecisr.mmm.chemistry.ChemicalSpecies>();
 		for (int species = 0; species < 18; species++) definitions.add(new cc.ecisr.mmm.chemistry.ChemicalSpecies(
@@ -639,6 +778,13 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	private static void uniformDensityMassAllocation() {
+		SignedDyadic[] equalWeights = new SignedDyadic[8]; java.util.Arrays.fill(equalWeights, SignedDyadic.of(.125));
+		for (double source : new double[] {999.999999, Math.nextUp(1000.0), 1.0000001}) {
+			double[] shares = CellRemapMassAllocation.allocate(source, SignedDyadic.of(1.0), equalWeights);
+			double error = SignedDyadic.sum(shares).subtract(SignedDyadic.of(source)).toDouble();
+			if (Math.abs(error) > .5 * Math.ulp(shares[0]))
+				throw new AssertionError("Nonuniform-density mass remainder accumulated repeated subtraction roundoff");
+		}
 		if (CellRemapMassAllocation.exactMass(Double.MIN_VALUE, SignedDyadic.of(1.0)) != Double.MIN_VALUE
 				|| !Double.isNaN(CellRemapMassAllocation.exactMass(Double.MIN_VALUE, SignedDyadic.of(0.5)))
 				|| CellRemapMassAllocation.exactMass(Double.MAX_VALUE, SignedDyadic.of(1.0)) != Double.MAX_VALUE

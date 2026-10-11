@@ -13,6 +13,7 @@ import cc.ecisr.mmm.item.MmmComponents;
 import cc.ecisr.mmm.item.ContainerItemStacks;
 import cc.ecisr.mmm.transfer.LiquidContainerThermodynamics;
 import cc.ecisr.mmm.transfer.ThermalContents;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.granular.GranularTransferLedger;
 import cc.ecisr.mmm.granular.SolidVolume;
 import cc.ecisr.mmm.worldprofile.WorldCapability;
@@ -44,17 +45,18 @@ final class MinecraftContainerTransferOperations {
 		ThermalContents.EnergySplit thermalSplit = thermalContents == null ? null
 				: thermalContents.splitHomogeneousEnergy(plannedNanos, volumeNanos);
 		Double coupledEnergy = thermalSplit == null ? null
-				: thermalContents.internalEnergy() - thermalSplit.remainingEnergy();
+				: thermalSplit.coupledEnergy(thermalContents.internalEnergy());
 		FluidDomain.ExactVolumeTransfer inserted = thermalSplit == null
 				? domain.tryInsertExactVolume(cell[0], cell[1], cell[2], requestedCellVolume, maxRadius,
 						materialHandle, externalSource)
 				: domain.tryInsertExactVolume(cell[0], cell[1], cell[2], requestedCellVolume, maxRadius,
-						materialHandle, externalSource, coupledEnergy);
+						materialHandle, externalSource, thermalSplit.selectedEnergy());
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
 		}
 		long poured = settledNanos(inserted.volume(), volumeNanos);
 		if (poured != plannedNanos) throw new IllegalStateException("Thermal insertion settlement changed after planning");
+		if (thermalSplit != null) domain.settleExternalContainerInsertion(thermalSplit.selectedEnergy(), coupledEnergy);
 		ItemStack after = withVolume(volumeNanos - poured);
 		if (thermalSplit != null && volumeNanos > poured) ContainerItemStacks.attachThermal(
 				after, world.thermalRegistryFingerprint(), thermalSplit.remainingEnergy());
@@ -74,6 +76,7 @@ final class MinecraftContainerTransferOperations {
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "容器余量小于 solver 可表示体积");
 		}
+		SignedDyadic energyBefore = region.domain().hasThermalState() ? region.domain().exactInternalEnergy() : null;
 		FluidDomain.ExactVolumeTransfer extracted = region.domain().tryExtractExactVolume(
 				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius, materialHandle);
 		if (!extracted.transferred() || extracted.volume() <= 0.0) {
@@ -84,9 +87,9 @@ final class MinecraftContainerTransferOperations {
 		Double thermalEnergy = null;
 		if (region.domain().hasThermalState()) {
 			double baseEnergy = baseThermal == null ? 0.0 : baseThermal.internalEnergy();
-			double finalEnergy = baseEnergy + extracted.internalEnergy();
+			double finalEnergy = mergedExtractionEnergy(baseEnergy, energyBefore.subtract(region.domain().exactInternalEnergy()));
 			ContainerItemStacks.attachThermal(after, world.thermalRegistryFingerprint(), finalEnergy);
-			thermalEnergy = finalEnergy - baseEnergy;
+			thermalEnergy = SignedDyadic.of(finalEnergy).subtract(SignedDyadic.of(baseEnergy)).toDouble();
 			region.domain().settleExternalContainerExtraction(extracted.internalEnergy(), thermalEnergy);
 		}
 		region.wakeForActivity();
@@ -96,6 +99,10 @@ final class MinecraftContainerTransferOperations {
 				thermalEnergy);
 	}
 
+
+	static double mergedExtractionEnergy(double baseEnergy, SignedDyadic removedCarrierEnergy) {
+		return SignedDyadic.of(baseEnergy).add(removedCarrierEnergy).toDouble();
+	}
 
 	static TransferOutcome pourMaterialIntoCell(
 			CommittedWorldRegistries world, FluidRegion region, int[] cell, FluidMixture mixture, int maxRadius,
@@ -116,11 +123,11 @@ final class MinecraftContainerTransferOperations {
 				: LiquidContainerThermodynamics.split(world.thermalRegistry(), thermalContents, mixture,
 						plannedSettlement.inserted(), plannedSettlement.remaining());
 		Double coupledEnergy = thermalSplit == null ? null
-				: thermalContents.internalEnergy() - thermalSplit.remainingEnergy();
+				: thermalSplit.coupledEnergy(thermalContents.internalEnergy());
 		FluidDomain.ExactMixtureTransfer inserted = thermalSplit == null
 				? domain.tryInsertExactMixture(cell[0], cell[1], cell[2], portions, maxRadius, externalSource)
 				: domain.tryInsertExactMixture(cell[0], cell[1], cell[2], portions, maxRadius, externalSource,
-						coupledEnergy);
+						thermalSplit.selectedEnergy());
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(mixture), "空间或 marker 预算不足，未能注入混合物");
 		}
@@ -128,6 +135,7 @@ final class MinecraftContainerTransferOperations {
 		if (!settlement.equals(plannedSettlement)) {
 			throw new IllegalStateException("Thermal material settlement changed after planning");
 		}
+		if (thermalSplit != null) domain.settleExternalContainerInsertion(thermalSplit.selectedEnergy(), coupledEnergy);
 		ItemStack after = settlement.remaining() == null
 				? new ItemStack(MmmItems.MATERIAL_BUCKET)
 				: ContainerItemStacks.toStack(settlement.remaining());
@@ -171,15 +179,16 @@ final class MinecraftContainerTransferOperations {
 					: LiquidContainerThermodynamics.split(world.thermalRegistry(), thermalContents, contents,
 							split.inserted(), split.remaining());
 			Double coupledEnergy = thermalSplit == null ? null
-					: thermalContents.internalEnergy() - thermalSplit.remainingEnergy();
+					: thermalSplit.coupledEnergy(thermalContents.internalEnergy());
 			FluidDomain.ExactChemicalTransfer inserted = thermalSplit == null
 					? domain.tryInsertExactChemical(cell[0], cell[1], cell[2], requested, maxRadius, externalSource)
 					: domain.tryInsertExactChemical(cell[0], cell[1], cell[2], requested, maxRadius,
-							externalSource, coupledEnergy);
+							externalSource, thermalSplit.selectedEnergy());
 			if (!inserted.transferred()) {
 				candidate /= 2L;
 				continue;
 			}
+			if (thermalSplit != null) domain.settleExternalContainerInsertion(thermalSplit.selectedEnergy(), coupledEnergy);
 			region.wakeForActivity();
 			ItemStack after = split.remaining() == null
 					? new ItemStack(MmmItems.MATERIAL_BUCKET) : ContainerItemStacks.toStack(split.remaining());

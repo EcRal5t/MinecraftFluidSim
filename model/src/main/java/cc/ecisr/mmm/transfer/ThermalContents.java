@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.transfer;
 
+import cc.ecisr.mmm.units.ProportionalDoubleSplit;
+import cc.ecisr.mmm.units.SignedDyadic;
+
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -64,19 +67,19 @@ public record ThermalContents(
 
 	/** Conservative homogeneous split; heterogeneous material/chemical inventory requires its state function. */
 	public EnergySplit splitHomogeneousEnergy(long selectedNanos, long totalNanos) {
-		if (selectedNanos <= 0L || totalNanos <= 0L || selectedNanos > totalNanos) {
+		if (selectedNanos <= 0L || totalNanos <= 0L || totalNanos > ContainerFluidLedger.NANOS_PER_BLOCK
+				|| selectedNanos > totalNanos) {
 			throw new IllegalArgumentException("Thermal contents split volume is invalid");
 		}
 		if (selectedNanos == totalNanos) return new EnergySplit(internalEnergy(), 0.0);
 		if (underlyingKind != UnderlyingKind.PURE_WATER) {
 			throw new IllegalArgumentException("Heterogeneous thermal contents cannot be split by volume alone");
 		}
-		double selected = internalEnergy() * ((double) selectedNanos / totalNanos);
-		double remaining = internalEnergy() - selected;
-		if (!Double.isFinite(selected) || !Double.isFinite(remaining)) {
+		ProportionalDoubleSplit split = ProportionalDoubleSplit.of(internalEnergy(), selectedNanos, totalNanos);
+		if (!Double.isFinite(split.removed()) || !Double.isFinite(split.remaining())) {
 			throw new IllegalArgumentException("Thermal contents split energy is not representable");
 		}
-		return new EnergySplit(selected, remaining);
+		return new EnergySplit(split.removed(), split.remaining());
 	}
 
 	public String encode() {
@@ -135,5 +138,12 @@ public record ThermalContents(
 	}
 
 	private record Underlying(UnderlyingKind kind, byte[] canonicalBytes) { }
-	public record EnergySplit(double selectedEnergy, double remainingEnergy) { }
+	public record EnergySplit(double selectedEnergy, double remainingEnergy) {
+		/** Item debit recorded at the container/region handoff, rounded once from raw item columns. */
+		public double coupledEnergy(double sourceEnergy) {
+			double debit = SignedDyadic.of(sourceEnergy).subtract(SignedDyadic.of(remainingEnergy)).toDouble();
+			if (!Double.isFinite(debit)) throw new IllegalArgumentException("Container thermal debit is not representable");
+			return debit;
+		}
+	}
 }

@@ -421,6 +421,25 @@ final class ConservativeLiquidFlux {
 	}
 	int receiver(int f) { return velocity[f] >= 0 ? right[f] : left[f]; }
 	SignedDyadic[] resultingVolumes() { return after; }
+	/** Publish only the port-level reductions of this same prospective face plan. */
+	void adoptPortFluxes(SignedDyadic[] volume, SignedDyadic[] amounts) {
+		System.arraycopy(volume, 0, after, 0, cellCount);
+		for (int face = 0; face < exactFlux.length; face++) {
+			if (amounts[face].signum() < 0 || amounts[face].compareTo(exactFlux[face]) > 0)
+				throw new IllegalStateException("Micro ports increased their shared face transfer");
+			exactFlux[face] = amounts[face]; flux[face] = Math.copySign(amounts[face].toDouble(), velocity[face]);
+			after[donor(face)] = after[donor(face)].subtract(amounts[face]);
+			after[receiver(face)] = after[receiver(face)].add(amounts[face]);
+		}
+		for (int cell = 0; cell < cellCount; cell++) if (after[cell].signum() < 0 || after[cell].compareTo(exactCapacity[cell]) > 0)
+			throw new MechanicalTimeRefinement(2, "Micro port reduction cannot satisfy final whole-cell capacity");
+	}
+	void sweptMoments(int face, int donorSupport, int receiverSupport, double[] result) {
+		if (geometry == null) { sweptMoments(face, result); return; }
+		int donor = donor(face);
+		geometry.sweptMoments(donor, receiver(face), axis[face], Math.abs(velocity[face]) * dtOverH, velocity[face] >= 0,
+				normalX[donor], normalY[donor], normalZ[donor], offset[donor], result, donorSupport, receiverSupport);
+	}
 	/** Final joint liquid capacity, including any capacity reserved for independent arrivals. */
 	SignedDyadic finalCapacity(int cell) {
 		return reserved == null ? exactCapacity[cell] : exactCapacity[cell].add(reserved[cell]);

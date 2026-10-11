@@ -30,9 +30,16 @@ import cc.ecisr.mmm.fluid.FluidStepRequest;
 import cc.ecisr.mmm.fluid.BuiltinFluidMaterials;
 import cc.ecisr.mmm.fluid.FlipMaterialParticleState;
 import cc.ecisr.mmm.fluid.FlipParticleState;
+import cc.ecisr.mmm.fluid.FlipThermalParticleState;
 import cc.ecisr.mmm.fluid.FluidMaterial;
 import cc.ecisr.mmm.fluid.FluidSolverConfig;
 import cc.ecisr.mmm.thermal.ThermalLimits;
+import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
+import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.thermal.ThermalStateFunction;
+import cc.ecisr.mmm.thermal.ThermalAuditLedger;
+import cc.ecisr.mmm.transfer.LiquidContainerThermodynamics;
+import cc.ecisr.mmm.units.SignedDyadic;
 import cc.ecisr.mmm.recovery.CrossDomainRecovery;
 import cc.ecisr.mmm.simulation.controller.FluidRegionFootprint;
 
@@ -68,6 +75,9 @@ public final class ContainerTransferStoreValidation {
 			run("nanovolume and solver cell-volume conversion", ContainerTransferStoreValidation::testNanosCellConversion);
 			run("non-float-friendly transfers settle actual marker volume", ContainerTransferStoreValidation::testActualMarkerSettlement);
 			run("material service settlement preserves component residuals", ContainerTransferStoreValidation::testMaterialSettlement);
+			run("tiny thermal item remainder and actual insertion audit agree", ContainerTransferStoreValidation::testTinyThermalMaterialSettlement);
+			run("chemical insertion rounds complete mass and residual columns once", ContainerTransferStoreValidation::testChemicalInsertionStorageRounding);
+			run("existing partial bucket rounds actual extracted energy only at final item", ContainerTransferStoreValidation::testExistingBucketThermalSettlement);
 			run("partial outlet requests only available marker volume", ContainerTransferStoreValidation::testPartialOutlet);
 			run("ownership sidecar lock blocks loaded checkpoints", ContainerTransferStoreValidation::testOwnershipCheckpointLock);
 			run("committed private target replaces an in-process base solver",
@@ -120,7 +130,7 @@ public final class ContainerTransferStoreValidation {
 		check(store.read(transaction).equals(committed), "committed thermal WAL did not round-trip");
 			ThermalContents.EnergySplit creativeSplit = contents.splitHomogeneousEnergy(500_000_000L,
 				ContainerFluidLedger.NANOS_PER_BLOCK);
-		double creativeEnergy = contents.internalEnergy() - creativeSplit.remainingEnergy();
+		double creativeEnergy = creativeSplit.coupledEnergy(contents.internalEnergy());
 		ContainerTransferJournal creative = ContainerTransferJournal.thermalFluid(
 				UUID.randomUUID(), region, "minecraft:overworld", 8L, 9L,
 				ContainerTransferJournal.Operation.INSERT, 500_000_000L,
@@ -680,6 +690,133 @@ public final class ContainerTransferStoreValidation {
 		check(Math.abs(bucket.totalMass() + (settlement.remaining() == null ? 0.0 : settlement.remaining().totalMass())
 				- source.totalMass()) <= 1.0E-12,
 				"material insertion/extraction lost the independent mass ledger");
+	}
+
+	private static void testTinyThermalMaterialSettlement() {
+		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+		var liquids = new cc.ecisr.mmm.fluid.FluidMaterialRegistry(List.of(
+				new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2)));
+		var definition = new ThermalMaterialDefinition("test:thermal/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"mmm:water", 293.15, 0.0, 0.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
+		var registry = new ThermalRegistry(List.of(definition));
+		var state = new ThermalStateFunction(registry);
+		var domain = new FluidDomain(3, 3, 3, config, 216);
+		domain.bindThermal(registry, liquids, 300.0);
+		var source = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", 999_999_999L, 999.0)));
+		var planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source);
+		var settlement = MinecraftContainerTransferOperations.settleMaterialInsertion(domain, source, planned);
+		check(settlement.remaining().totalVolumeNanos() == 59L, "normal float insertion no longer leaves the covered tiny remainder");
+		double sourceEnergy = state.internalEnergyAtTemperature(0, source.totalMass(), java.util.Map.of(), 1.0E-8);
+		var thermal = ThermalContents.forMixture(registry.fingerprint(), source, sourceEnergy);
+		var split = LiquidContainerThermodynamics.split(registry, thermal, source, settlement.inserted(), settlement.remaining());
+		double sourceT = LiquidContainerThermodynamics.temperatureK(registry, thermal, source);
+		double modeledRemaining = state.internalEnergyAtTemperature(0, settlement.remaining().totalMass(), java.util.Map.of(), sourceT);
+		check(split.remainingEnergy() == modeledRemaining, "59 nano remaining item did not preserve its own caloric energy");
+		var inserted = domain.tryInsertExactMixture(1, 1, 1, planned, 3, false, split.selectedEnergy());
+		check(inserted.transferred(), "legal cold thermal insertion failed");
+		check(MinecraftContainerTransferOperations.settleMaterialInsertion(domain, source, inserted.portions()).equals(settlement),
+				"actual inventory diverged from the thermal split plan");
+		double[] markerMass = domain.exportMaterialParticleState().copyParticleMass();
+		SignedDyadic actualMass = SignedDyadic.sum(markerMass);
+		double largestMass = java.util.Arrays.stream(markerMass).max().orElseThrow();
+		check(actualMass.toDouble() == planned.getFirst().mass()
+				&& Math.abs(actualMass.subtract(SignedDyadic.of(planned.getFirst().mass())).toDouble()) <= 0.5 * Math.ulp(largestMass),
+				"raw marker mass differs beyond the single largest-piece rounding bound");
+		double debit = split.coupledEnergy(sourceEnergy);
+		var before = domain.thermalAudit();
+		var actualEnergy = domain.exactInternalEnergy();
+		domain.settleExternalContainerInsertion(split.selectedEnergy(), debit);
+		var after = domain.thermalAudit();
+		SignedDyadic correction = SignedDyadic.of(debit).subtract(SignedDyadic.of(split.selectedEnergy()));
+		check(after.externalSource().equals(SignedDyadic.of(debit))
+				&& after.roundoffResidual().subtract(before.roundoffResidual()).equals(correction.negate()),
+				"item debit/received energy difference was not assigned to thermal roundoff");
+		check(domain.exactInternalEnergy().equals(actualEnergy) && after.expectedInventory().equals(actualEnergy),
+				"container settlement changed carrier U or failed exact audit closure");
+	}
+
+	private static void testChemicalInsertionStorageRounding() {
+		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+		for (double sourceMass : new double[] {1.0, 18.0, 999.0}) {
+			var domain = new FluidDomain(3, 3, 3, config, 216);
+			domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
+					new cc.ecisr.mmm.fluid.FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
+			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+			double sourceResidual = sourceMass - 18.0;
+			var contents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(), ChemicalLimits.QUANTA_PER_AU,
+					List.of(new ChemicalContents.Group("mmm:water", true, 999_999_999L,
+							Double.doubleToRawLongBits(sourceMass), Double.doubleToRawLongBits(sourceResidual),
+							List.of(new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU)))));
+			contents.validateAgainst(BuiltinChemicalDefinitions.REGISTRY);
+			var requested = contents.toLedger(BuiltinChemicalDefinitions.REGISTRY, FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
+			var result = domain.tryInsertExactChemical(1, 1, 1, requested, 3, false);
+			check(result.transferred(), "representable chemical insertion was refused");
+			double[] mass = domain.exportMaterialParticleState().copyParticleMass();
+			double largestMass = java.util.Arrays.stream(mass).max().orElseThrow();
+			SignedDyadic exactMass = SignedDyadic.sum(mass);
+			double requestedMass = domain.solverMassForKilograms(sourceMass);
+			check(exactMass.toDouble() == requestedMass
+					&& Math.abs(exactMass.subtract(SignedDyadic.of(requestedMass)).toDouble()) <= 0.5 * Math.ulp(largestMass),
+					"chemical carrier mass retained sequential subtraction error");
+			SignedDyadic residual = SignedDyadic.ZERO;
+			double largestResidual = 0.0;
+			long species = 0;
+			for (int i = 0; i < mass.length; i++) {
+				var record = domain.chemicalParcels().record(i);
+				residual = residual.add(SignedDyadic.of(record.massResidualKilograms()));
+				largestResidual = Math.max(largestResidual, Math.abs(record.massResidualKilograms()));
+				species = Math.addExact(species, record.totalQuanta());
+			}
+			check(species == ChemicalLimits.QUANTA_PER_AU
+					&& Math.abs(residual.subtract(SignedDyadic.of(sourceResidual)).toDouble()) <= 0.5 * Math.ulp(largestResidual),
+					"chemical species or complete residual exceeded its single rounding bound");
+		}
+	}
+
+	private static void testExistingBucketThermalSettlement() {
+		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+		var liquids = new cc.ecisr.mmm.fluid.FluidMaterialRegistry(List.of(
+				new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2)));
+		var definition = new ThermalMaterialDefinition("test:thermal/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"mmm:water", 293.15, 0.0, 0.0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
+		var registry = new ThermalRegistry(List.of(definition));
+		for (double sign : new double[] {-1.0, 1.0}) {
+			var source = new FluidDomain(3, 3, 3, config, 216);
+			source.setVolume(1, 1, 1, 0.25F);
+			source.bindThermal(registry, liquids, 300.0);
+			var domain = new FluidDomain(3, 3, 3, config, 216);
+			domain.restoreMaterialParticleState(source.exportMaterialParticleState());
+			double[] energy = {sign * 16_384.0, sign * Math.scalb(1.0, -40)};
+			SignedDyadic exact = SignedDyadic.sum(energy);
+			domain.restoreThermalParticleState(new FlipThermalParticleState(3, 3, 3, 0.5F, 2,
+					registry.fingerprint(), energy, ThermalAuditLedger.initialized(exact)), registry);
+			var auditBefore = domain.thermalAudit();
+			var snapshotBefore = domain.exportThermalParticleState();
+			SignedDyadic before = domain.exactInternalEnergy();
+			check(before.equals(exact) && domain.thermalAudit().equals(auditBefore)
+					&& java.util.Arrays.equals(snapshotBefore.copyInternalEnergy(), domain.exportThermalParticleState().copyInternalEnergy()),
+					"exact inventory observation changed raw thermal state");
+			var extracted = domain.tryExtractExactVolume(1, 1, 1, 0.25F, 1, 0);
+			check(extracted.transferred() && extracted.internalEnergy() == sign * 16_384.0,
+					"regression no longer exercises the rounded transfer receipt");
+			double base = -sign * 16_384.0;
+			var state = new ThermalStateFunction(registry);
+			state.stateForInternalEnergy(0, 500.0, java.util.Map.of(), base);
+			double finalEnergy = MinecraftContainerTransferOperations.mergedExtractionEnergy(base,
+					before.subtract(domain.exactInternalEnergy()));
+			check(finalEnergy == sign * Math.scalb(1.0, -40), "existing bucket lost a representable final energy through intermediate rounding");
+			var item = ThermalContents.forPureWater(registry.fingerprint(), 531_250_000L, finalEnergy);
+			check(item.internalEnergy() == finalEnergy, "final item failed to retain raw energy");
+			double coupled = SignedDyadic.of(finalEnergy).subtract(SignedDyadic.of(base)).toDouble();
+			domain.settleExternalContainerExtraction(extracted.internalEnergy(), coupled);
+			check(domain.thermalAudit().externalSink().equals(SignedDyadic.of(coupled))
+					&& domain.thermalAudit().roundoffResidual().equals(SignedDyadic.of(coupled).subtract(exact))
+					&& domain.thermalAudit().expectedInventory().equals(domain.exactInternalEnergy())
+					&& before.add(SignedDyadic.of(base)).equals(domain.exactInternalEnergy().add(SignedDyadic.of(finalEnergy))),
+					"final bucket/coupled receipt/region audit do not describe the same transfer");
+		}
 	}
 
 	private static void testPartialOutlet() {

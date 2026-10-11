@@ -23,6 +23,10 @@ final class CellRemapMoments {
 	/** Projects the centroid into its fill-constrained support, contracting only axes that cannot retain their original span. */
 	static boolean fit(FluidDomain domain, int cell, ArrayList<double[]> offsets, double[] masses,
 			double[] target, double[] projection, double[] storage, double maximumTranslation) {
+		return fit(domain, cell, offsets, masses, target, projection, storage, maximumTranslation, ~domain.geometry.cutCells.mask(cell) & 255);
+	}
+	static boolean fit(FluidDomain domain, int cell, ArrayList<double[]> offsets, double[] masses,
+			double[] target, double[] projection, double[] storage, double maximumTranslation, int support) {
 		if (!(Double.isFinite(maximumTranslation) && maximumTranslation >= 0))
 			throw new IllegalArgumentException("Liquid quadrature translation requires finite available capacity");
 		double h = domain.config.cellSize(); int mask = domain.geometry.cutCells.mask(cell);
@@ -30,6 +34,8 @@ final class CellRemapMoments {
 		int[] micro = mask == 0 ? null : new int[masses.length];
 		if (micro != null) for (int p = 0; p < masses.length; p++) for (int a = 0; a < 3; a++)
 			if (offsets.get(p)[a] >= 0) micro[p] |= 1 << a;
+		if (micro != null) for (int assigned : micro) if ((support & 1 << assigned) == 0)
+			throw new IllegalStateException("Liquid quadrature is outside its assigned micro component");
 		boolean moved = false;
 		double[] lower = new double[2], upper = new double[2];
 		for (int axis = 0; axis < 3; axis++) {
@@ -112,6 +118,8 @@ final class CellRemapMoments {
 			if (domain.particleCellIndex(point[0], point[1], point[2]) != cell
 					|| domain.geometry.cutCells.pointInsideSolid(point[0], point[1], point[2], domain.config.cellSize()))
 				throw new IllegalStateException("Published liquid position left its assigned open cell");
+			if (micro != null && (support & 1 << micro[p]) == 0)
+				throw new IllegalStateException("Published liquid position left its assigned micro component");
 		}
 		for (int a = 0; a < 3; a++) storage[a] = stored[a] - target[a] - projection[a];
 		return moved;

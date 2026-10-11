@@ -94,9 +94,11 @@ caloric segment 内 `cv` 为常量，积分与反演均为分段闭式线性计�
 
 端点定比热外推保证数值连续，极远处的相态精度仍受热量模型限制。例如内置水、冰的外推内能差在约 112.5 K 以下反号，极冷液态初态可能没有向平衡温度靠近的守恒冻结批次，求解会保留当前相态并继续推进。高压熔点曲线延伸本身不会修正这项低温热量近似。
 
-异质 cell 在所有 carrier 合并后的 segment 边界上反演 `sum U_i(T) = U_cell`，在全温区求解唯一 LTE 温度。求解先精确扣除各载体的固定参考能之和，再在显热坐标中累加 caloric 曲线，避免任意参考能偏移吞掉可表示的显热。严格正温数值域下界为 binary64 最小正常正数；有限过程可连续逼近，UI 舍入显示为 `0 K`。
+异质 cell 在所有 carrier 合并后的 segment 边界上反演 `sum U_i(T) = U_cell`，在全温区求解唯一 LTE 温度。观察、反应与相变候选、提交分配和同种液体重建均保留载体内能的精确和，先扣除各载体的固定参考能之和，再将显热转为 binary64 并累加 caloric 曲线；单份物品的原始 double 内能沿用其权威数值。严格正温数值域下界为 binary64 最小正常正数；有限过程可连续逼近，UI 舍入显示为 `0 K`。
 
-普通建格先验证每个真实载体的质量、内能与正温反演，再精确汇总原始 `U` 并求单元平均温度，避免有效平均值掩盖无效载体。格内分配先计算所有拟写入值并验证最大热容载体的守恒余量，全部通过后才修改载体。局部反应或相变重建时，被编辑单元使用已预检的守恒候选 `U` 完成重新分配，其他单元仍逐载体验证；相变的局部重建保留其他单元已求出的温度并刷新精确内能汇总。候选期间新增载体的临时能量列按该提交时点处理。
+普通建格先验证每个真实载体的质量、内能与正温反演，再精确汇总原始 `U` 并求单元平均温度，避免有效平均值掩盖无效载体。格内分配先精确汇总所有拟写入值，优先由最大热容载体承接守恒余量；该载体无法在既有温度校验内表示余量时，按规范 ordinal 尝试其他载体。全部候选均不可表示时保持所有载体原样，通过后才提交并记录最终 binary64 舍入差。局部反应或相变重建时，被编辑单元使用已预检的守恒候选 `U` 完成重新分配，其他单元仍逐载体验证；相变的局部重建保留其他单元已求出的温度并刷新精确内能汇总。候选期间新增载体的临时能量列按该提交时点处理。
+
+单元与批量预检保留原有温度、热容和 caloric interval，并在首次写入前验证每份拟存储内能及其精确总和。提交完成后，单元内能、温度与热容按实际载体列重新推导，扫描和即时观察使用同一份库存；请求目标与实际存储的舍入差进入审计。带候选内能的纯重建用于准备提交，后续显式内能分配发布实际结果。
 
 载体校验与单元温度反演按独立索引范围执行，全部完成后再进入后续阶段。组成参考能的派生缓存先绑定本批次的 registry，库存与能量审计读取实际载体列。恢复热状态时，固定凝固物占据量与当前颗粒、沉积联合重建，液体容量始终包含全部固体载体。
 
@@ -400,6 +402,10 @@ U_inventory
 
 有限设备位于 solver carrier 边界外、region HEAD 边界内：流体侧把实际请求量记入 `finite_device_exchange`，cell 分配舍入只进 solver roundoff；设备侧独立保存相反的 `solver_exchange` 与 planner roundoff，并要求 body 总 `U` 等于其 expected inventory。
 
+流体端口的目标为单元内实际载体 `U` 的精确和加设备热量，保留 `SignedDyadic` 至扣除 caloric reference 后再反演。计划仅预检和分配非零换热单元；零热量端口及未参与的单元保留全部载体内能位模式。所有修改目标通过只读预检后，再与设备库存及审计一起提交。
+
+单元分配在写入前校验各载体拟存储的原始内能及其精确总和，失败时保留原温度、热容和 caloric interval。提交后温度、热容与单元总内能由实际写入的载体内能重新推导，实际总和与请求目标的差额计入舍入审计。
+
 两份 roundoff 相加必须等于 region 内 body+fluid 的实际总 `U` 变化。audit 不闭合时保留候选前状态并 PAUSED，禁止通过重算温度掩盖差额。
 
 管理员清空也遵守同一审计：`EMPTY_CONDENSED` 把 liquid/active/deposit/coherent 的实际 `U` 记入 external sink，`VENT_SEALED_GAS` 把全部 sealed gas node 的实际 `U` 记入 external sink，并与对应物质库存及 topology 在同一私有 candidate/HEAD 中提交。预览展示的能量直接取自权威总 `U`；有限设备非空时阻止释放 ownership 与移除区域。
@@ -409,7 +415,8 @@ U_inventory
 - 完整热区域 generation 必须联合保存 marker/solid/gas topology、所有载体 `U`、audit、Boussinesq identity 和 pending phase-work。
 - capture 前执行 gas topology synchronization，确保 marker geometry、gas membership 和 gas energy ordinal 同代一致。
 - `ThermalContents` 将物品中的液体物质原始数据与同一 registry fingerprint 下的总内能绑定；桶内只假设一个平衡温度，该温度由完整质量、组分和总 `U` 反演，不另存第二份温度原始数据。若界面展示温度，它只能是只读派生。
-- 纯水等同质库存可以按实际体积分拆 `U`。材料或化学混合物的部分倾倒必须先从源桶完整库存和 `U` 反演共同温度，再按实际选中材料质量、species 与 reference offset 计算搬运能量；余下 item `U` 用源 `U` 减去搬运量得到。禁止在密度、热容或组成不同的库存上用总液量比例分热能。没有 region/WAL roundoff owner 的工作台配方不得剥离或合并带 `ThermalContents` 的物品。
+- 纯水等同质库存按实际体积直接计算小份额 `U`，大份额接收精确相减后一次舍入的余量。材料或化学混合物的部分倾倒先从源桶完整库存和 `U` 反演共同温度，再按两份实际材料质量、species 与 reference offset 求状态能；小热容份额直接保存该能量，大热容份额接收源 `U` 减去小份额后的单次舍入余量。两份均须通过实际库存的正温反演，源温度的保留精度受 binary64 能量表示限制。没有 region/WAL roundoff owner 的工作台配方不得剥离或合并带 `ThermalContents` 的物品。
+- 注入向区域提交选中份额的实际 `U`，余下物品保存剩余份额的 `U`。物品扣能从 raw 源内能与 raw 剩余内能的精确二进制差推导，在 coupled energy/WAL 中只舍入一次；region external source 使用这一记录值。区域实收能量与记录扣能的差额归入 `roundoff_residual`，载体内能保持原样。拆分的总内能表示误差由大热容份额的一次舍入产生，物品自身保存原始内能，不另存审计列。
 - 多 marker 抽取先以 raw binary64 `U_before-U_after` 的 exact dyadic 和确定真实 carrier 能量变化，再只在整件物品边界舍入一次；region external sink 必须等于最终 `ThermalContents` 的 raw `double`，两者与 exact carrier 变化的差只记入 `roundoff_residual`。不得逐 marker 舍入后再把近似和冒充物品能量，也不得用放宽 handoff 审计掩盖差额。
 - 容器 WAL 在含热转移中同时保存 exact liquid amount、item before/after 和 coupled energy；物品 durable save 前不得清理。
 

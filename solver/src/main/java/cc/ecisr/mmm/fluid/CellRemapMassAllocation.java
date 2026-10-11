@@ -66,12 +66,12 @@ final class CellRemapMassAllocation {
 			}
 			if (exact) return result;
 		}
-		int largest = largest(weights); double remaining = mass, total = volume.toDouble();
+		int largest = largest(weights); double total = volume.toDouble();
 		double[] result = new double[weights.length];
 		for (int i = 0; i < result.length; i++) if (i != largest && weights[i].signum() > 0) {
-			result[i] = mass * (weights[i].toDouble() / total); remaining -= result[i];
+			result[i] = mass * (weights[i].toDouble() / total);
 		}
-		result[largest] = remaining;
+		result[largest] = SignedDyadic.of(mass).subtract(SignedDyadic.sum(result)).toDouble();
 		for (int i = 0; i < result.length; i++) if (weights[i].signum() > 0 && !(Double.isFinite(result[i]) && result[i] > 0))
 			throw new IllegalStateException("Positive liquid volume has no representable positive mass share");
 		return result;

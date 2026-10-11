@@ -422,9 +422,11 @@ cc.ecisr.mmm.transfer.ThermalContents source = cc.ecisr.mmm.transfer.ThermalCont
 journal.beforeItem().thermalContents());
 cc.ecisr.mmm.transfer.ThermalContents.EnergySplit split = source.splitHomogeneousEnergy(
 		journal.volumeNanos(), total);
-moved = source.internalEnergy() - split.remainingEnergy();
+moved = split.coupledEnergy(source.internalEnergy());
 } else {
-moved = journal.operation() == ContainerTransferJournal.Operation.INSERT ? before - after : after - before;
+moved = (journal.operation() == ContainerTransferJournal.Operation.INSERT
+		? cc.ecisr.mmm.units.SignedDyadic.of(before).subtract(cc.ecisr.mmm.units.SignedDyadic.of(after))
+		: cc.ecisr.mmm.units.SignedDyadic.of(after).subtract(cc.ecisr.mmm.units.SignedDyadic.of(before))).toDouble();
 }
 if (Double.doubleToRawLongBits(moved) != transfer.internalEnergyBits()) {
 throw new IOException("Container transfer item energy delta does not match WAL coupled energy");

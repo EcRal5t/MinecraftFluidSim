@@ -72,15 +72,21 @@ public final class ThermalStateFunction {
 
 	/** Closed-form common-temperature inversion for a heterogeneous LTE inventory. */
 	public State stateForInventory(List<InventoryPortion> portions, double internalEnergy) {
+		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Thermal LTE energy is non-finite");
+		return stateForInventory(portions, SignedDyadic.of(internalEnergy));
+	}
+
+	/** Retains an aggregate's exact energy until its fixed reference terms have been removed. */
+	public State stateForInventory(List<InventoryPortion> portions, SignedDyadic totalEnergy) {
 		if (portions == null || portions.isEmpty()
 				|| portions.size() > ThermalLimits.MAX_THERMAL_CARRIERS_PER_CELL
-				|| !Double.isFinite(internalEnergy)) {
+				|| totalEnergy == null) {
 			throw new IllegalArgumentException("Thermal LTE inventory is missing, over budget or non-finite");
 		}
 		SignedDyadic reference = SignedDyadic.ZERO;
 		for (InventoryPortion portion : portions) reference = reference.add(SignedDyadic.of(
 				baseEnergy(portion.materialHandle(), portion.massMu(), portion.speciesQuanta())));
-		internalEnergy = SignedDyadic.of(internalEnergy).subtract(reference).toDouble();
+		double internalEnergy = totalEnergy.subtract(reference).toDouble();
 		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Thermal LTE sensible energy overflow");
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
 		double minimumEnergy = inventorySensibleEnergy(portions, minimum);

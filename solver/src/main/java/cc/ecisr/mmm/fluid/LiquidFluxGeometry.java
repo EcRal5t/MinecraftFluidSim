@@ -69,10 +69,17 @@ final class LiquidFluxGeometry {
 	/** Volume and three initial-position moments, relative to the donor centre, in the same swept open boxes. */
 	void sweptMoments(int cell, int neighbor, int axis, double width, boolean positive,
 			double nx, double ny, double nz, double offset, double[] result) {
+		sweptMoments(cell, neighbor, axis, width, positive, nx, ny, nz, offset, result, 255, 255);
+	}
+	void sweptMoments(int cell, int neighbor, int axis, double width, boolean positive,
+			double nx, double ny, double nz, double offset, double[] result, int donorSupport, int receiverSupport) {
 		double volume = 0, mx = 0, my = 0, mz = 0;
-		boolean whole = cut.mask(cell) == 0 && cut.mask(neighbor) == 0;
+		boolean whole = cut.mask(cell) == 0 && cut.mask(neighbor) == 0 && donorSupport == 255 && receiverSupport == 255;
 		for (int slot = 0; slot < (whole ? 1 : 8); slot++) {
 			int x = slot & 1, y = slot >>> 1 & 1, z = slot >>> 2 & 1;
+			int neighborSlot = axis == 0 ? (positive ? 0 : 1) + 2 * y + 4 * z
+					: axis == 1 ? x + (positive ? 0 : 2) + 4 * z : x + 2 * y + (positive ? 0 : 4);
+			if (!whole && ((donorSupport & 1 << slot) == 0 || (receiverSupport & 1 << neighborSlot) == 0)) continue;
 			if (!whole && (!cut.microCellOpen(cell, x, y, z) || !cut.microCellOpen(neighbor,
 					axis == 0 ? (positive ? 0 : 1) : x, axis == 1 ? (positive ? 0 : 1) : y,
 					axis == 2 ? (positive ? 0 : 1) : z))) continue;

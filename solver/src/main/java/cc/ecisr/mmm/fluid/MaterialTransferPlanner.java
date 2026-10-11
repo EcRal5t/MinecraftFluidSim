@@ -6,6 +6,7 @@ import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
 import cc.ecisr.mmm.chemistry.ChemicalLimits;
 import cc.ecisr.mmm.chemistry.ChemicalTransferLedger;
+import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
@@ -82,7 +83,6 @@ final class MaterialTransferPlanner {
 		}
 
 		double[] inserted = new double[portions.size()];
-		double[] insertedMass = new double[portions.size()];
 		double[] volumeLeft = new double[portions.size()];
 		double[] massLeft = new double[portions.size()];
 		for (int i = 0; i < portions.size(); i++) {
@@ -111,11 +111,9 @@ final class MaterialTransferPlanner {
 				if (domain.chemicalParcels != null && chemical == null) {
 					return new FluidDomain.ExactMixtureTransfer(false, List.of());
 				}
-				if (chemical != null) plannedChemicalQuanta = Math.addExact(plannedChemicalQuanta, chemical.totalQuanta());
 				insertPieces.add(new MaterialInsertPiece(allocation.x(), allocation.y(), allocation.z(), slot, piece,
 						allocation.materialHandle(), pieceMass, chemical));
 				inserted[portionIndex] += piece;
-				insertedMass[portionIndex] += pieceMass;
 				left = allocationRemainder ? 0.0 : left - piece;
 				if (finalPortionPiece) {
 					volumeLeft[portionIndex] = 0.0;
@@ -126,6 +124,11 @@ final class MaterialTransferPlanner {
 				}
 				slot = domain.firstOpenSlot(domain.cellIndex(allocation.x(), allocation.y(), allocation.z()), slot + 1);
 			}
+		}
+		double[] insertedMass = settleMaterialPieceMasses(insertPieces, portions);
+		if (insertedMass == null) return new FluidDomain.ExactMixtureTransfer(false, List.of());
+		for (MaterialInsertPiece piece : insertPieces) if (piece.chemical() != null) {
+			plannedChemicalQuanta = Math.addExact(plannedChemicalQuanta, piece.chemical().totalQuanta());
 		}
 		if (domain.chemicalParcels != null && Math.addExact(domain.chemicalParcels.totalQuanta(), plannedChemicalQuanta)
 				> cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
@@ -165,6 +168,51 @@ final class MaterialTransferPlanner {
 			result.add(new FluidDomain.MaterialPortion(portions.get(i).materialHandle(), inserted[i], insertedMass[i]));
 		}
 		return new FluidDomain.ExactMixtureTransfer(true, List.copyOf(result), internalEnergy == null ? 0.0 : internalEnergy);
+	}
+
+	/** One large carrier owns each material's final mass rounding; return the actual rounded sum. */
+	private double[] settleMaterialPieceMasses(List<MaterialInsertPiece> pieces, List<FluidDomain.MaterialPortion> portions) {
+		int[] portionByMaterial = new int[domain.materialRegistry.size()];
+		java.util.Arrays.fill(portionByMaterial, -1);
+		for (int i = 0; i < portions.size(); i++) portionByMaterial[portions.get(i).materialHandle()] = i;
+		int[] pivot = new int[portions.size()];
+		java.util.Arrays.fill(pivot, -1);
+		SignedDyadic[] sums = new SignedDyadic[portions.size()];
+		java.util.Arrays.fill(sums, SignedDyadic.ZERO);
+		for (int i = 0; i < pieces.size(); i++) {
+			MaterialInsertPiece piece = pieces.get(i);
+			if (!(Double.isFinite(piece.mass()) && piece.mass() > 0.0)) return null;
+			int portion = portionByMaterial[piece.materialHandle()];
+			sums[portion] = sums[portion].add(SignedDyadic.of(piece.mass()));
+			if (pivot[portion] < 0 || piece.mass() > pieces.get(pivot[portion]).mass()) pivot[portion] = i;
+		}
+		double[] actualMass = new double[portions.size()];
+		for (int portion = 0; portion < portions.size(); portion++) {
+			MaterialInsertPiece old = pieces.get(pivot[portion]);
+			SignedDyadic others = sums[portion].subtract(SignedDyadic.of(old.mass()));
+			double mass = largestShareRemainder(portions.get(portion).mass(), sums[portion], old.mass());
+			if (!(Double.isFinite(mass) && mass > 0.0)) return null;
+			ChemicalMixtureRecord chemical = domain.chemicalParcels == null ? null : domain.chemicalParcels.tryDefaultRecord(
+					domain.materialRegistry.material(old.materialHandle()).id(), old.volume(), domain.config.cellSize(), mass, false);
+			if (domain.chemicalParcels != null && chemical == null) return null;
+			pieces.set(pivot[portion], new MaterialInsertPiece(old.cellX(), old.cellY(), old.cellZ(), old.slot(),
+					old.volume(), old.materialHandle(), mass, chemical));
+			actualMass[portion] = others.add(SignedDyadic.of(mass)).toDouble();
+			if (Double.doubleToRawLongBits(actualMass[portion]) != Double.doubleToRawLongBits(portions.get(portion).mass())) return null;
+		}
+		return actualMass;
+	}
+
+	private static double largestShareRemainder(double source, SignedDyadic sum, double oldLargest) {
+		return SignedDyadic.of(source).subtract(sum.subtract(SignedDyadic.of(oldLargest))).toDouble();
+	}
+
+	private double chemicalMassResidual(double kilograms, ChemicalMixtureRecord record) {
+		SignedDyadic mass = SignedDyadic.of(kilograms);
+		ExactRational exact = mass.exponent() >= 0
+				? new ExactRational(mass.significand().shiftLeft(mass.exponent()), java.math.BigInteger.ONE)
+				: new ExactRational(mass.significand(), java.math.BigInteger.ONE.shiftLeft(-mass.exponent()));
+		return exact.subtract(record.exactSpeciesMassKilograms(domain.chemicalParcels.registry())).toDouble();
 	}
 
 	/**
@@ -537,23 +585,48 @@ final class MaterialTransferPlanner {
 					distributed[piece].put(species.getKey(), allocation[piece]);
 				}
 			}
-			double volumeLeft = group.volume(), massLeft = domain.unitScale.solverMass(group.massKilograms());
+			double sourceMass = domain.unitScale.solverMass(group.massKilograms());
+			double volumeLeft = group.volume(), massLeft = sourceMass;
+			double[] masses = new double[groupPieces.size()];
+			int massPivot = 0;
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
 				if (distributed[piece].isEmpty()) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 				ChemicalPieceDraft draft = groupPieces.get(piece);
 				boolean last = piece + 1 == groupPieces.size();
 				double mass = last ? massLeft : massLeft * draft.volume() / volumeLeft;
-				ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(
-						domain.chemicalParcels.registry(), distributed[piece], 0.0);
-				ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
-						domain.chemicalParcels.registry(), distributed[piece],
-						domain.unitScale.kilograms(mass)
-								- withoutResidual.exactSpeciesMassKilograms(domain.chemicalParcels.registry()).toDouble());
-				domain.chemicalParcels.requireCompatible(record, group.materialId(), group.indicator());
-				pieces.add(new ChemicalInsertPiece(draft.cellX(), draft.cellY(), draft.cellZ(),
-						draft.volume(), draft.materialHandle(), mass, record, group.indicator()));
+				masses[piece] = mass;
+				if (mass > masses[massPivot]) massPivot = piece;
 				volumeLeft -= draft.volume();
 				massLeft -= mass;
+			}
+			masses[massPivot] = largestShareRemainder(sourceMass, SignedDyadic.sum(masses), masses[massPivot]);
+			if (Double.doubleToRawLongBits(SignedDyadic.sum(masses).toDouble()) != Double.doubleToRawLongBits(sourceMass))
+				return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			ChemicalMixtureRecord[] records = new ChemicalMixtureRecord[groupPieces.size()];
+			SignedDyadic residualSum = SignedDyadic.ZERO;
+			int residualPivot = 0;
+			for (int piece = 0; piece < groupPieces.size(); piece++) {
+				if (!(Double.isFinite(masses[piece]) && masses[piece] > 0.0))
+					return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+				ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(
+						domain.chemicalParcels.registry(), distributed[piece], 0.0);
+				records[piece] = withoutResidual.withMassResidualKilograms(
+						chemicalMassResidual(domain.unitScale.kilograms(masses[piece]), withoutResidual));
+				residualSum = residualSum.add(SignedDyadic.of(records[piece].massResidualKilograms()));
+				if (Math.abs(records[piece].massResidualKilograms()) > Math.abs(records[residualPivot].massResidualKilograms()))
+					residualPivot = piece;
+			}
+			records[residualPivot] = records[residualPivot].withMassResidualKilograms(largestShareRemainder(
+					group.massResidualKilograms(), residualSum, records[residualPivot].massResidualKilograms()));
+			for (int piece = 0; piece < groupPieces.size(); piece++) {
+				ChemicalPieceDraft draft = groupPieces.get(piece);
+				ChemicalMixtureRecord record = records[piece];
+				domain.chemicalParcels.requireCompatible(record, group.materialId(), group.indicator());
+				if (!FluidDomain.massClose(record.exactSpeciesMassKilograms(domain.chemicalParcels.registry()).toDouble()
+						+ record.massResidualKilograms(), domain.unitScale.kilograms(masses[piece])))
+					return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+				pieces.add(new ChemicalInsertPiece(draft.cellX(), draft.cellY(), draft.cellZ(),
+						draft.volume(), draft.materialHandle(), masses[piece], record, group.indicator()));
 			}
 		}
 		} catch (IllegalArgumentException | ArithmeticException

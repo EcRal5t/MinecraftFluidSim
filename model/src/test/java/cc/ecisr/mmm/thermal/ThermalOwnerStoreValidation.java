@@ -28,7 +28,194 @@ public final class ThermalOwnerStoreValidation {
 		liquidTemperatureTracksMutableInventory();
 		referenceTermsKeepCanonicalRationalRounding();
 		referenceEnergyUsesCanonicalSpeciesOrder();
+		exactAggregateEnergySurvivesCaloricHandoffs();
 		coolingInversionRetainsEnergyScale();
+	}
+
+	private static void exactAggregateEnergySurvivesCaloricHandoffs() {
+		finiteCellExchangeRetainsExactBaseline();
+		cellEnergyPreflightPreservesDerivedState();
+		for (double reference : new double[] {1e18, -1e18}) for (double smallCv : new double[] {1, 1.0001})
+			for (boolean reverse : new boolean[] {false, true}) {
+				var large = new ThermalMaterialDefinition("test:handoff/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+						"test:handoff/a", 300, reference, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, 1)));
+				var small = new ThermalMaterialDefinition("test:handoff/b", ThermalMaterialDefinition.CarrierKind.LIQUID,
+						"test:handoff/b", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, smallCv)));
+				var registry = new ThermalRegistry(List.of(large, small)); var function = new ThermalStateFunction(registry);
+				double smallEnergy = function.internalEnergyAtTemperature(1, 1, Map.of(), 500);
+				var context = thermalHandoffContext();
+				var state = ThermalDomainState.restoreTarget(registry, reverse ? new int[] {1, 0} : new int[] {0, 1},
+						new int[0], 300, 2, 1, 1, 1, .5F, context, null, 1,
+						reverse ? new double[] {smallEnergy, reference} : new double[] {reference, smallEnergy});
+				SignedDyadic before = state.exactEnergy(2);
+				state.restoreAuditLedger(ThermalAuditLedger.initialized(before));
+				var audit = state.auditLedger(); var revision = state.thermalRevision();
+				var inventory = List.of(new ThermalStateFunction.InventoryPortion(0, 1, Map.of()),
+						new ThermalStateFunction.InventoryPortion(1, 1, Map.of()));
+				double expected = 300 + smallEnergy / (1 + smallCv), tolerance = 4 * Math.ulp(expected);
+				require(Math.abs(function.stateForInventory(inventory, before).temperatureK() - expected) <= tolerance,
+						"Exact LTE input rounded before reference removal");
+				state.preparePhaseScan(context);
+				require(Math.abs(state.phaseScanTemperatureInCell(0) - expected) <= tolerance
+						&& Math.abs(state.observeTemperatureInCell(0, context) - expected) <= tolerance
+						&& Math.abs(state.phaseCandidateTemperature(0, inventory, context) - expected) <= tolerance
+						&& Math.abs(state.requirePhaseCandidateState(state.preparePhaseCandidateCell(0, context), inventory, 0, 0) - expected) <= tolerance,
+						"Actual cell, observation and phase candidates used different sensible energy");
+				require(state.exactEnergy(2).equals(before) && state.auditLedger().equals(audit) && state.thermalRevision().equals(revision),
+						"Read-only caloric handoff changed owner energy or audit");
+				state.repartitionCellEnergyConserving(0, context, before);
+				double expectedSmall = function.internalEnergyAtTemperature(1, 1, Map.of(), expected);
+				require(Math.abs(state.liquidInternalEnergy(reverse ? 0 : 1) - expectedSmall) <= 8 * Math.ulp(expectedSmall)
+						&& state.exactEnergy(2).equals(state.auditLedger().expectedInventory())
+						&& state.auditLedger().roundoffResidual().equals(state.exactEnergy(2).subtract(before)),
+						"Conservative LTE commit lost the small energy or failed to find a valid remainder carrier");
+				double actualTemperature = function.stateForInventory(inventory, state.exactEnergy(2)).temperatureK();
+				require(Math.abs(state.phaseScanTemperatureInCell(0) - actualTemperature) <= 4 * Math.ulp(actualTemperature)
+						&& state.observeTemperatureInCell(0, context) == actualTemperature,
+						"Committed cell retained the prospective temperature instead of deriving actual owner energy");
+			}
+		var positive = new ThermalMaterialDefinition("test:reject/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:reject/a", 300, 1e18, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1)));
+		var negative = new ThermalMaterialDefinition("test:reject/b", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:reject/b", 300, -1e18, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1)));
+		var context = thermalHandoffContext();
+		var state = ThermalDomainState.restoreTarget(new ThermalRegistry(List.of(positive, negative)), new int[] {0, 1}, new int[0],
+				300, 2, 1, 1, 1, .5F, context, null, 1, new double[] {1e18 + 256, -1e18 - 128});
+		SignedDyadic before = state.exactEnergy(2); state.restoreAuditLedger(ThermalAuditLedger.initialized(before));
+		var audit = state.auditLedger(); var revision = state.thermalRevision(); state.preparePhaseScan(context);
+		try { state.repartitionCellEnergyConserving(0, context, before); throw new AssertionError("Unrepresentable LTE remainder accepted"); }
+		catch (IllegalArgumentException expected) {
+			require(state.exactEnergy(2).equals(before) && state.liquidInternalEnergy(0) == 1e18 + 256
+					&& state.liquidInternalEnergy(1) == -1e18 - 128 && state.auditLedger().equals(audit) && state.thermalRevision().equals(revision),
+					"Unrepresentable LTE assignment changed an owner before full validation");
+		}
+		try { state.repartitionCellEnergy(0, 129, context, before); throw new AssertionError("Unrepresentable direct target accepted"); }
+		catch (IllegalArgumentException expected) {
+			require(state.phaseScanTemperatureInCell(0) == 364 && state.observeTemperatureInCell(0, context) == 364
+					&& state.exactEnergy(2).equals(before) && state.auditLedger().equals(audit) && state.thermalRevision().equals(revision),
+					"Rejected direct assignment leaked a prospective temperature");
+		}
+		var finite = state.planFiniteDeviceCellExchange(List.of(new FiniteDeviceExchangeCoordinator.CellEnergyDelta(0, -127)), context);
+		state.commitFiniteDeviceCellExchange(finite, context);
+		require(state.exactEnergy(2).equals(SignedDyadic.ZERO) && state.phaseScanTemperatureInCell(0) == 300
+				&& state.observeTemperatureInCell(0, context) == 300
+				&& state.auditLedger().roundoffResidual().equals(SignedDyadic.of(-1))
+				&& state.exactEnergy(2).equals(state.auditLedger().expectedInventory()),
+				"Finite commit derived temperature from its requested energy instead of actual rounded inventory");
+	}
+
+	private static ThermalCarrierContext thermalHandoffContext() {
+		return new ThermalCarrierContext() {
+			public int markerCount() { return 2; } public int cell(int marker) { return 0; }
+			public int fluidMaterialHandle(int marker) { return marker; } public double mass(int marker) { return 8; }
+			public double volume(int marker) { return .5; } public ChemicalMixtureRecord mixture(int marker) { return null; }
+			public ChemicalRegistry chemicalRegistry() { return null; }
+		};
+	}
+
+	private static void finiteCellExchangeRetainsExactBaseline() {
+		for (double reference : new double[] {1e18, -1e18}) for (boolean reverse : new boolean[] {false, true})
+			for (double delta : new double[] {-128, -1, 0, 1, 128}) {
+				var large = new ThermalMaterialDefinition("test:finite/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+						"test:finite/a", 300, reference, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, 1)));
+				var small = new ThermalMaterialDefinition("test:finite/b", ThermalMaterialDefinition.CarrierKind.LIQUID,
+						"test:finite/b", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, 1)));
+				var context = thermalHandoffContext();
+				var state = ThermalDomainState.restoreTarget(new ThermalRegistry(List.of(large, small)),
+						reverse ? new int[] {1, 0} : new int[] {0, 1}, new int[0], 300, 2, 1, 1, 1, .5F,
+						context, null, 1, reverse ? new double[] {200, reference} : new double[] {reference, 200});
+				SignedDyadic before = state.exactEnergy(2); state.restoreAuditLedger(ThermalAuditLedger.initialized(before));
+				var revision = state.thermalRevision();
+				var plan = state.planFiniteDeviceCellExchange(List.of(new FiniteDeviceExchangeCoordinator.CellEnergyDelta(0, delta)), context);
+				require(plan.targetCellEnergy()[0].equals(before.add(SignedDyadic.of(delta)))
+						&& state.phaseScanTemperatureInCell(0) == 400 && state.exactEnergy(2).equals(before)
+						&& state.thermalRevision().equals(revision), "Finite cell preflight rounded or edited its actual baseline");
+				state.commitFiniteDeviceCellExchange(plan, context);
+				require(state.liquidInternalEnergy(reverse ? 0 : 1) == (delta == 0 ? 200 : 100 + delta / 2)
+						&& state.auditLedger().finiteDeviceExchange().equals(SignedDyadic.of(delta))
+						&& state.auditLedger().roundoffResidual().equals(state.exactEnergy(2).subtract(before).subtract(SignedDyadic.of(delta)))
+						&& state.exactEnergy(2).equals(state.auditLedger().expectedInventory()),
+						"Finite cell exchange lost a resolvable transfer or solved a rounded target");
+				double actualTemperature = 300 + state.exactEnergy(2).subtract(SignedDyadic.of(reference)).toDouble() / 2;
+				require(state.phaseScanTemperatureInCell(0) == actualTemperature
+						&& state.observeTemperatureInCell(0, context) == actualTemperature,
+						"Finite commit cached a requested temperature different from actual owner energy");
+			}
+		var positive = new ThermalMaterialDefinition("test:remote/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:remote/a", 300, 1e18, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1)));
+		var negative = new ThermalMaterialDefinition("test:remote/b", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:remote/b", 300, -1e18, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1)));
+		var small = new ThermalMaterialDefinition("test:remote/c", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:remote/c", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1)));
+		var context = new ThermalCarrierContext() {
+			public int markerCount() { return 3; } public int cell(int marker) { return marker == 2 ? 1 : 0; }
+			public int fluidMaterialHandle(int marker) { return marker; } public double mass(int marker) { return 8; }
+			public double volume(int marker) { return .5; } public ChemicalMixtureRecord mixture(int marker) { return null; }
+			public ChemicalRegistry chemicalRegistry() { return null; }
+		};
+		var state = ThermalDomainState.restoreTarget(new ThermalRegistry(List.of(positive, negative, small)),
+				new int[] {0, 1, 2}, new int[0], 300, 3, 2, 1, 1, .5F, context, null, 1,
+				new double[] {1e18 + 256, -1e18 - 128, 100});
+		var before = state.exactEnergy(3); state.restoreAuditLedger(ThermalAuditLedger.initialized(before));
+		var plan = state.planFiniteDeviceCellExchange(List.of(new FiniteDeviceExchangeCoordinator.CellEnergyDelta(0, 0),
+				new FiniteDeviceExchangeCoordinator.CellEnergyDelta(1, 1)), context);
+		state.commitFiniteDeviceCellExchange(plan, context);
+		require(state.liquidInternalEnergy(0) == 1e18 + 256 && state.liquidInternalEnergy(1) == -1e18 - 128
+				&& state.liquidInternalEnergy(2) == 101 && state.auditLedger().roundoffResidual().equals(SignedDyadic.ZERO)
+				&& state.exactEnergy(3).equals(state.auditLedger().expectedInventory()),
+				"Local finite exchange tried to redistribute an untouched, unrepresentable remote LTE cell");
+	}
+
+	private static void cellEnergyPreflightPreservesDerivedState() {
+		var ordinary = new ThermalMaterialDefinition("test:bulk/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:bulk/a", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1)));
+		var energies = new double[] {100, 1e18 + 256, -1e18 - 128};
+		var grid = new ThermalCellGrid(2);
+		grid.rebuild(new ThermalCellGrid.CarrierAccess() {
+			public int carrierCount() { return 3; } public int cell(int carrier) { return carrier == 0 ? 0 : 1; }
+			public ThermalMaterialDefinition material(int carrier) { return ordinary; } public double mass(int carrier) { return 1; }
+			public double volume(int carrier) { return .25; }
+			public double baseEnergy(int carrier) { return carrier == 0 ? 0 : carrier == 1 ? 1e18 : -1e18; }
+			public double internalEnergy(int carrier) { return energies[carrier]; }
+			public void setInternalEnergy(int carrier, double value) { energies[carrier] = value; }
+		});
+		var range = grid.observedTemperatureRange();
+		for (boolean apply : new boolean[] {false, true}) {
+			try {
+				if (apply) grid.setCellInternalEnergies(new double[] {101, 129});
+				else grid.validateCellInternalEnergies(new double[] {101, 129});
+				throw new AssertionError("Unrepresentable bulk target accepted");
+			} catch (IllegalArgumentException expected) {
+				require(energies[0] == 100 && energies[1] == 1e18 + 256 && energies[2] == -1e18 - 128
+						&& grid.temperature(0) == 400 && grid.temperature(1) == 364
+						&& grid.internalEnergy(0) == 100 && grid.internalEnergy(1) == 128
+						&& grid.observedTemperatureRange().equals(range), "Failed bulk preflight edited inventory or derived cells");
+			}
+		}
+		grid.setCellInternalEnergies(new double[] {101, 1});
+		require(energies[0] == 101 && SignedDyadic.of(energies[1]).add(SignedDyadic.of(energies[2])).equals(SignedDyadic.ZERO)
+				&& grid.internalEnergy(1) == 0 && grid.temperature(0) == 401 && grid.temperature(1) == 300,
+				"Bulk commit lost the preflight temperature or retained a prospective energy cache");
+		var cold = new ThermalMaterialDefinition("test:positive/raw", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:positive/raw", 363, 1e18, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)));
+		var coldContext = new ThermalCarrierContext() {
+			public int markerCount() { return 1; } public int cell(int marker) { return 0; }
+			public int fluidMaterialHandle(int marker) { return 0; } public double mass(int marker) { return 8; }
+			public double volume(int marker) { return .5; } public ChemicalMixtureRecord mixture(int marker) { return null; }
+			public ChemicalRegistry chemicalRegistry() { return null; }
+		};
+		var state = ThermalDomainState.restoreTarget(new ThermalRegistry(List.of(cold)), new int[] {0}, new int[0],
+				363, 1, 1, 1, 1, .5F, coldContext, null, 1, new double[] {1e18});
+		var before = state.exactEnergy(1); state.restoreAuditLedger(ThermalAuditLedger.initialized(before));
+		var audit = state.auditLedger(); var revision = state.thermalRevision();
+		try {
+			state.planFiniteDeviceCellExchange(List.of(new FiniteDeviceExchangeCoordinator.CellEnergyDelta(0, -363 + 1e-6)), coldContext);
+			throw new AssertionError("Positive modeled temperature accepted an invalid rounded owner energy");
+		} catch (IllegalArgumentException expected) {
+			require(state.liquidInternalEnergy(0) == 1e18 && state.exactEnergy(1).equals(before)
+					&& state.phaseScanTemperatureInCell(0) == 363 && state.auditLedger().equals(audit)
+					&& state.thermalRevision().equals(revision), "Invalid actual rounded owner failed after a partial publication");
+		}
 	}
 
 	private static void coolingInversionRetainsEnergyScale() {
