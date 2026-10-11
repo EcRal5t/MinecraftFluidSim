@@ -27,7 +27,7 @@ public final class PressureTransferExperiment {
 		return d;
 	}
 	private static float[][] faces(FluidDomain d) { return new float[][]{d.mac.velocityX.clone(), d.mac.velocityY.clone(), d.mac.velocityZ.clone()}; }
-	private static float[][] weights(FluidDomain d) { return new float[][]{d.mac.p2gWeightX, d.mac.p2gWeightY, d.mac.p2gWeightZ}; }
+	private static double[][] weights(FluidDomain d) { return new double[][]{d.mac.p2gWeightX, d.mac.p2gWeightY, d.mac.p2gWeightZ}; }
 	private static float[][] markers(FluidDomain d) {
 		float[][] v = new float[3][d.particles.count()];
 		for (int p = 0; p < d.particles.count(); p++) { v[0][p] = d.particles.velocityX(p); v[1][p] = d.particles.velocityY(p); v[2][p] = d.particles.velocityZ(p); }

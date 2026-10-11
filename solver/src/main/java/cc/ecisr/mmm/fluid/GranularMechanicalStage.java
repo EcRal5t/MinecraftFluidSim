@@ -157,7 +157,7 @@ final class GranularMechanicalStage {
 
 	/** The sampled impulse response is sum(w*w*m)/sum(w*m)^2; its reciprocal is the coupled mass. */
 	private CarrierKernel sampleCarrier(
-			float[] field, float[] faceMass, int axis, float px, float py, float pz
+			float[] field, double[] faceMass, int axis, float px, float py, float pz
 	) {
 		float h = state.config.cellSize();
 		int nx = axis == 0 ? state.sizeX + 1 : state.sizeX;

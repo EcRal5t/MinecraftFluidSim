@@ -9,6 +9,7 @@ public final class MarkerVelocityTransferValidation {
 	public static void validate() {
 		sparseGeometryAndAdjoint();
 		actualMassAndClosedFaces();
+		productionP2GPreservesFiniteMassWeightedVelocities();
 		captureAndPublicationAreAtomic();
 	}
 
@@ -69,6 +70,51 @@ public final class MarkerVelocityTransferValidation {
 		if (!(aperture > 0 && aperture < 1 && j.supportsFace(1, partial))) throw new AssertionError("Partial cut-face support missing");
 		var load = faces(j); load[0][closed] = 7; var markerLoad = markers(j); j.transpose(load, markerLoad);
 		for (double[] axis : markerLoad) for (double value : axis) near(value, 0, 0, "Closed-face impulse");
+	}
+
+	private static void productionP2GPreservesFiniteMassWeightedVelocities() {
+		for (double scale : new double[] {125, 1.25e39}) {
+			var d = restoredMassDomain(new double[] {scale, 3 * scale},
+					new float[] {1, -2, 3, 5, 2, -1}, .125F, .625F, .625F, .625F);
+			var sample = d.sampleVelocity(.625F, .625F, .625F);
+			near(sample.x(), 4, 4 * Math.ulp(4F), "Production weighted X");
+			near(sample.y(), 1, 4 * Math.ulp(1F), "Production weighted Y");
+			near(sample.z(), 0, 1e-7, "Production weighted Z cancellation");
+			for (int axis = 0; axis < 3; axis++) {
+				double[] actual = axis == 0 ? d.mac.p2gWeightX : axis == 1 ? d.mac.p2gWeightY : d.mac.p2gWeightZ;
+				double[] expected = new double[actual.length];
+				for (int marker = 0; marker < 2; marker++) {
+					float[] geometric = new float[actual.length], scratch = new float[actual.length];
+					d.splatFaceField(geometric, scratch, axis, 1.25F, 1.25F, 1.25F, 1, 1);
+					for (int face = 0; face < actual.length; face++) expected[face] += geometric[face] * d.particles.mass(marker);
+				}
+				for (int face = 0; face < actual.length; face++) near(actual[face], expected[face], 0, "Production retained mass");
+			}
+		}
+		for (var d : java.util.List.of(
+				restoredMassDomain(new double[] {1.25e39}, new float[] {1, -2, 3}, .125F, .625F, .625F, .625F),
+				restoredMassDomain(new double[] {8e307}, new float[] {3, 1, -1}, 1, .5F, .75F, .75F))) {
+			var sample = d.sampleVelocity(d.particles.positionX(0), d.particles.positionY(0), d.particles.positionZ(0));
+			near(sample.x(), d.particles.velocityX(0), 0, "Production constant X");
+			near(sample.y(), d.particles.velocityY(0), 0, "Production constant Y");
+			near(sample.z(), d.particles.velocityZ(0), 0, "Production constant Z");
+			for (float[] axis : new float[][] {d.mac.velocityX, d.mac.velocityY, d.mac.velocityZ})
+				for (float value : axis) if (!Float.isFinite(value)) throw new AssertionError("Finite marker mean polluted a MAC face");
+		}
+	}
+
+	private static FluidDomain restoredMassDomain(double[] masses, float[] velocities, float volume, float x, float y, float z) {
+		var d = domain(); float[] positionVolume = new float[4 * masses.length]; int[] materials = new int[masses.length];
+		for (int marker = 0; marker < masses.length; marker++) {
+			positionVolume[4 * marker] = x; positionVolume[4 * marker + 1] = y;
+			positionVolume[4 * marker + 2] = z; positionVolume[4 * marker + 3] = volume; materials[marker] = 1;
+		}
+		d.restoreMaterialParticleState(new FlipMaterialParticleState(4, 4, 4, .5F, masses.length,
+				(double) volume * masses.length, cc.ecisr.mmm.units.SignedDyadic.sum(masses).toDouble(),
+				java.util.List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2),
+						new FluidMaterial("mmm:dense", 1e40, "mmm:dense", 0, Math.PI / 2)),
+				positionVolume, velocities, new byte[64], masses, materials));
+		return d;
 	}
 
 	private static void checkGeometryAndAdjoint(FluidDomain d, MarkerVelocityTransfer j) {

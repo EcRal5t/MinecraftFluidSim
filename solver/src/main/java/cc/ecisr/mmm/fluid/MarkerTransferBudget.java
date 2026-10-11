@@ -29,7 +29,7 @@ final class MarkerTransferBudget {
 	}
 
 	void capture(double densityScale) {
-		float[][] velocity = velocities(), weights = weights();
+		float[][] velocity = velocities(); double[][] weights = weights();
 		for (int a = 0; a < 3; a++) for (int f = 0; f < velocity[a].length; f++) {
 			predicted[a][f] = 0.5 * densityScale * weights[a][f] * velocity[a][f] * (double) velocity[a][f];
 		}
@@ -149,7 +149,7 @@ final class MarkerTransferBudget {
 				sums[2][r] += 0.5 * mass * pic[a][p] * (double) pic[a][p];
 			}
 		}
-		float[][] velocity = velocities(), weights = weights();
+		float[][] velocity = velocities(); double[][] weights = weights();
 		float[][] previous = {mac.p2gVelocityX, mac.p2gVelocityY, mac.p2gVelocityZ};
 		for (int a = 0; a < 3; a++) for (int f = 0; f < velocity[a].length; f++) {
 			int r = root(face(a, f));
@@ -168,5 +168,5 @@ final class MarkerTransferBudget {
 	int component(int axis, int face) { return root(face(axis, face)); }
 	int componentCapacity() { return size; }
 	private float[][] velocities() { return new float[][] {mac.velocityX, mac.velocityY, mac.velocityZ}; }
-	private float[][] weights() { return new float[][] {mac.p2gWeightX, mac.p2gWeightY, mac.p2gWeightZ}; }
+	private double[][] weights() { return new double[][] {mac.p2gWeightX, mac.p2gWeightY, mac.p2gWeightZ}; }
 }

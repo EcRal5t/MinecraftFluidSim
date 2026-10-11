@@ -17,12 +17,18 @@ final class MacVelocityGrid {
 	final float[] velocityWeightY;
 	final float[] velocityWeightZ;
 	// Retained mass/volume weights for physical impulse exchange and kinetic energy.
-	final float[] p2gWeightX;
-	final float[] p2gWeightY;
-	final float[] p2gWeightZ;
+	final double[] p2gWeightX;
+	final double[] p2gWeightY;
+	final double[] p2gWeightZ;
 	final boolean[] velocityValidX;
 	final boolean[] velocityValidY;
 	final boolean[] velocityValidZ;
+
+	private final double[][] scatterMeans = new double[3][];
+	double[] scatterMeans(int axis, int length) {
+		if (scatterMeans[axis] == null) scatterMeans[axis] = new double[length];
+		return scatterMeans[axis];
+	}
 
 	MacVelocityGrid(int sizeX, int sizeY, int sizeZ) {
 		this.velocityX = new float[(sizeX + 1) * sizeY * sizeZ];
@@ -34,9 +40,9 @@ final class MacVelocityGrid {
 		this.velocityWeightX = new float[velocityX.length];
 		this.velocityWeightY = new float[velocityY.length];
 		this.velocityWeightZ = new float[velocityZ.length];
-		this.p2gWeightX = new float[velocityX.length];
-		this.p2gWeightY = new float[velocityY.length];
-		this.p2gWeightZ = new float[velocityZ.length];
+		this.p2gWeightX = new double[velocityX.length];
+		this.p2gWeightY = new double[velocityY.length];
+		this.p2gWeightZ = new double[velocityZ.length];
 		this.velocityValidX = new boolean[velocityX.length];
 		this.velocityValidY = new boolean[velocityY.length];
 		this.velocityValidZ = new boolean[velocityZ.length];

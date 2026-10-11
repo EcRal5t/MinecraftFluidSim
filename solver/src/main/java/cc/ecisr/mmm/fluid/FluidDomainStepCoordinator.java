@@ -174,7 +174,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		return energy;
 	}
 
-	static double faceKineticEnergy(float[] velocity, float[] weight, double densityScale) {
+	static double faceKineticEnergy(float[] velocity, double[] weight, double densityScale) {
 		double energy = 0.0;
 		for (int face = 0; face < velocity.length; face++) {
 			energy += 0.5 * densityScale * weight[face] * velocity[face] * (double) velocity[face];

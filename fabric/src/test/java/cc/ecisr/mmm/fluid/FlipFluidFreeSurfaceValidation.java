@@ -343,7 +343,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		float[][] values = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
 		float[][] old = {domain.mac.p2gVelocityX, domain.mac.p2gVelocityY, domain.mac.p2gVelocityZ};
 		boolean[][] valid = {domain.mac.velocityValidX, domain.mac.velocityValidY, domain.mac.velocityValidZ};
-		float[][] weights = {domain.mac.p2gWeightX, domain.mac.p2gWeightY, domain.mac.p2gWeightZ};
+		double[][] weights = {domain.mac.p2gWeightX, domain.mac.p2gWeightY, domain.mac.p2gWeightZ};
 		int n = domain.particles.count(); float[][] pic = new float[3][n], delta = new float[3][n];
 		double quadratic = 0, linear = 0, constant = 0, budget = 0;
 		for (int a = 0; a < 3; a++) {

@@ -114,7 +114,7 @@ final class DivergenceFreeVelocityExtension {
 		}
 	}
 
-	private void add(int a, int b, int f, int component, float aperture, boolean[] fluid, float[] velocity, float[] massWeight) {
+	private void add(int a, int b, int f, int component, float aperture, boolean[] fluid, float[] velocity, double[] massWeight) {
 		if (aperture != 1 || !active[a] && !active[b]) return;
 		if (dependencies != null) {
 			if (active[a]) dependencies.connect(dependencies.airPotential(a), dependencies.face(component, f));
@@ -149,7 +149,7 @@ final class DivergenceFreeVelocityExtension {
 					float aperture = d < 2 ? geometry.xFaceOpen(Math.max(x, ax), y, z)
 							: d < 4 ? geometry.yFaceOpen(x, Math.max(y, ay), z) : geometry.zFaceOpen(x, y, Math.max(z, az));
 					if (aperture != 1 || fluid[neighbor] || solid[neighbor]) continue;
-					float massWeight = d < 2 ? mac.p2gWeightX[(z * ny + y) * (nx + 1) + Math.max(x, ax)]
+					double massWeight = d < 2 ? mac.p2gWeightX[(z * ny + y) * (nx + 1) + Math.max(x, ax)]
 							: d < 4 ? mac.p2gWeightY[(z * (ny + 1) + Math.max(y, ay)) * nx + x]
 							: mac.p2gWeightZ[(Math.max(z, az) * ny + y) * nx + x];
 					if (massWeight > 0) continue;

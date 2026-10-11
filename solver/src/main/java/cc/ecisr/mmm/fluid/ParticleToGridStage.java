@@ -99,9 +99,6 @@ final class ParticleToGridStage {
 		access.normalize(mac.velocityX, mac.velocityWeightX);
 		access.normalize(mac.velocityY, mac.velocityWeightY);
 		access.normalize(mac.velocityZ, mac.velocityWeightZ);
-		System.arraycopy(mac.velocityWeightX, 0, mac.p2gWeightX, 0, mac.velocityWeightX.length);
-		System.arraycopy(mac.velocityWeightY, 0, mac.p2gWeightY, 0, mac.velocityWeightY.length);
-		System.arraycopy(mac.velocityWeightZ, 0, mac.p2gWeightZ, 0, mac.velocityWeightZ.length);
 		bodyForceStage.enforceSolidFaceVelocities();
 		gridToParticleStage.extrapolateVelocityIntoAir();
 		access.markVelocityGridClean();

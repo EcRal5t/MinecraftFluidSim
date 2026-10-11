@@ -204,7 +204,7 @@ final class GranularImplicitDrag {
 				if (!(open > 0)) continue;
 				int local = (z * ny + y) * nx + x, face = offsets[axis] + local;
 				if (!domain.isFluid(a) && !domain.isFluid(b)) {
-					float[] p2g = axis == 0 ? domain.mac.p2gWeightX : axis == 1 ? domain.mac.p2gWeightY : domain.mac.p2gWeightZ;
+					double[] p2g = axis == 0 ? domain.mac.p2gWeightX : axis == 1 ? domain.mac.p2gWeightY : domain.mac.p2gWeightZ;
 					if (domain.carrierFaceActive(a, b, open)) mass[face] = domain.unitScale.kilograms(
 							p2g[local] * (domain.variableDensityActive ? 1.0 : domain.config.density()));
 					continue;
@@ -226,7 +226,7 @@ final class GranularImplicitDrag {
 		int x0 = (int) Math.floor(x), y0 = (int) Math.floor(y), z0 = (int) Math.floor(z);
 		int nx = domain.sizeX + (axis == 0 ? 1 : 0), ny = domain.sizeY + (axis == 1 ? 1 : 0);
 		int nz = domain.sizeZ + (axis == 2 ? 1 : 0), count = 0, base = contacts * 8;
-		float[] p2g = axis == 0 ? domain.mac.p2gWeightX : axis == 1 ? domain.mac.p2gWeightY : domain.mac.p2gWeightZ;
+		double[] p2g = axis == 0 ? domain.mac.p2gWeightX : axis == 1 ? domain.mac.p2gWeightY : domain.mac.p2gWeightZ;
 		double sum = 0;
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int cx = x0 + ox, cy = y0 + oy, cz = z0 + oz;
