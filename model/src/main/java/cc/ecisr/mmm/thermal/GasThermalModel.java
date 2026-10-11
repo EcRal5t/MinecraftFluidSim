@@ -4,6 +4,7 @@ import cc.ecisr.mmm.fluid.air.AirNetwork;
 import cc.ecisr.mmm.fluid.air.GasComponentAmount;
 import cc.ecisr.mmm.fluid.air.GasInventory;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -312,7 +313,7 @@ public final class GasThermalModel {
 		return result;
 	}
 
-	/** Splits node U at its derived common temperature; the final child receives raw floating remainder. */
+	/** Splits node U at its common temperature; the largest heat capacity absorbs the reduction error. */
 	public double[] partitionEnergy(GasInventory source, double internalEnergy, List<GasInventory> children) {
 		if (children == null || children.isEmpty()) throw new IllegalArgumentException("Gas energy partition needs children");
 		if (source == null) throw new IllegalArgumentException("Gas inventory is missing");
@@ -326,16 +327,18 @@ public final class GasThermalModel {
 		long childNanos = 0L;
 		for (GasInventory child : children) childNanos = Math.addExact(childNanos, child.standardVolumeNanos());
 		if (childNanos != source.standardVolumeNanos()) throw new IllegalArgumentException("Gas energy partition volume does not close");
-		double[] result = new double[children.size()]; double assigned = 0.0;
-		int last = -1;
-		for (int index = children.size() - 1; index >= 0; index--) if (!children.get(index).isEmpty()) { last = index; break; }
+		double[] result = new double[children.size()];
+		int pivot = -1; double largestCapacity = 0.0;
 		for (int index = 0; index < children.size(); index++) {
 			GasInventory child = children.get(index);
 			if (child.isEmpty()) continue;
-			result[index] = index == last ? internalEnergy - assigned : internalEnergyAtTemperature(child, temperature);
-			if (index != last) assigned += result[index];
-			state(child, result[index]);
+			result[index] = internalEnergyAtTemperature(child, temperature);
+			double capacity = heatCapacityAt(portions(child), temperature);
+			if (capacity > largestCapacity) { pivot = index; largestCapacity = capacity; }
 		}
+		SignedDyadic otherEnergy = SignedDyadic.sum(result).subtract(SignedDyadic.of(result[pivot]));
+		result[pivot] = SignedDyadic.of(internalEnergy).subtract(otherEnergy).toDouble();
+		for (int index = 0; index < children.size(); index++) requireInventoryEnergy(children.get(index), result[index]);
 		return result;
 	}
 

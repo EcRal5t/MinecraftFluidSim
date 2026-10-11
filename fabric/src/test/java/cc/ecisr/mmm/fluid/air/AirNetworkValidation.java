@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid.air;
 
 import cc.ecisr.mmm.chemistry.ExactRational;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.List;
 
@@ -347,6 +348,55 @@ public final class AirNetworkValidation {
 		check(after.components().stream().map(GasComponentAmount::componentId).toList()
 				.equals(List.of("test:alpha", "test:beta")), "component transport lost stable identities");
 		check(network.auditClosed(), "component transport did not close mass/species audit");
+		validateTinyPartitionColumns();
+	}
+
+	private static void validateTinyPartitionColumns() {
+		GasRegistry registry = BuiltinGasDefinitions.createRegistry();
+		for (long nanos : new long[] {1_000_000_000L, 2_000_000_000_000_000L, 1L << 54, Long.MAX_VALUE}) {
+			GasInventory inventory = registry.createAmbient(nanos);
+			GasInventory.Split tinyFirst = inventory.splitTotal(1), tinyLast = inventory.splitTotal(nanos - 1);
+			var first = tinyFirst.first().components().getFirst();
+			var last = tinyLast.second().components().getFirst();
+			check(first.standardVolumeNanos() == 1 && last.standardVolumeNanos() == 1 && last.mass() > 0,
+					"representable tiny gas remainder lost positive mass");
+			check(Double.doubleToRawLongBits(first.mass()) == Double.doubleToRawLongBits(last.mass())
+					&& Double.doubleToRawLongBits(first.massResidual()) == Double.doubleToRawLongBits(last.massResidual()),
+					"gas take direction changed the tiny mass/residual columns");
+			var column = new GasComponentAmount("test:alpha", nanos, inventory.totalMass(),
+					List.of(new GasComponentAmount.SpeciesAmount("test:a", 17)), -inventory.totalMass() / 3);
+			GasInventory composed = new GasInventory(List.of(column));
+			List<GasInventory> forward = composed.partition(new long[] {nanos - 3, 0, 1, 2});
+			List<GasInventory> reverse = composed.partition(new long[] {2, 1, 0, nanos - 3});
+			SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO; long quanta = 0;
+			for (int child = 0; child < forward.size(); child++) {
+				check(forward.get(child).components().equals(reverse.get(3 - child).components()),
+						"unique gas share permutation changed independent columns");
+				for (var amount : forward.get(child).components()) {
+					mass = mass.add(SignedDyadic.of(amount.mass())); residual = residual.add(SignedDyadic.of(amount.massResidual()));
+					for (var species : amount.species()) quanta += species.amountQuanta();
+				}
+			}
+			var pivot = forward.getFirst().components().getFirst();
+			check(quanta == 17 && forward.get(2).standardVolumeNanos() == 1 && forward.get(3).standardVolumeNanos() == 2,
+					"gas tiny partition changed exact species or nanos");
+			SignedDyadic massError = mass.subtract(SignedDyadic.of(column.mass()));
+			SignedDyadic residualError = residual.subtract(SignedDyadic.of(column.massResidual()));
+			if (massError.signum() < 0) massError = massError.negate();
+			if (residualError.signum() < 0) residualError = residualError.negate();
+			check(massError.compareTo(SignedDyadic.of(Math.ulp(pivot.mass()) * .5)) <= 0
+					&& residualError.compareTo(SignedDyadic.of(Math.ulp(pivot.massResidual()) * .5)) <= 0,
+					"gas partition exceeds its single pivot rounding");
+		}
+		for (boolean reverse : new boolean[] {false, true}) {
+			AirNetwork network = new AirNetwork(registry); int source = network.addNode(1, 1);
+			int[] children = network.splitNode(source, reverse ? 1e-9 : .999999999, reverse ? .999999999 : 1e-9);
+			check(network.inventory(children[reverse ? 0 : 1]).standardVolumeNanos() == 1 && network.auditClosed(),
+					"production tiny topology split failed its exact mass ledger");
+		}
+		GasInventory subQuantumMass = new GasInventory(List.of(
+				new GasComponentAmount(BuiltinGasDefinitions.AIR, 2, Double.MIN_VALUE, List.of(), 0)));
+		expectThrow(() -> subQuantumMass.splitTotal(1), "unrepresentable positive gas child mass");
 	}
 
 	private static void validateComponentSpeciesBoundary() {

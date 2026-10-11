@@ -79,7 +79,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 拓扑重扫以重扫前后节点的实际 cell lineage 规划 merge、split、vent 和新腔初始化：
 
 - merge 汇总完整库存和能量；
-- split 按几何份额分配，精确余数只落入一个确定节点；
+- split 按几何份额分配；每组分的质量与质量余量由最大 nanos 子份额承接余数，同份额按节点顺序取首个。其余子列按比例求值并精确求和，承接列一次舍入；无法表示的严格正质量子列拒绝候选。物种整数份额沿用最大余数分配；
 - 开放域中打开或消失的腔体把实际库存记入环境 sink；密闭域中不产生 source/sink，失去拓扑去向的库存按剩余腔体容量权重转移，不记为丢失；
 - 开放域中从上一代 ambient lineage 被夹断的实际体积按环境组成记 source；若同一新节点还继承既有 sealed node，则环境来源体积与旧节点体积、库存和 `U` 分列合并后，才对最终几何差额结算功；同一节点中上一代无 owner 的本代体积仍是零库存真空并进入 inherited volume；
 - 相变产生或消耗的 water vapor 通过同一组件库存与 source/sink 审计提交。
@@ -111,7 +111,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 一对一 lineage 携带完整 node inventory；
 - 多对一 merge 对 component、species、mass/residual 和 U 分列求和；
 - 空库存节点若并入有限气体，旧真空控制体积也进入 inherited volume；本代新出现且上一代没有 sealed/ambient owner 的体积同样作为新真空控制体积进入该列。气体向这些体积的自由膨胀保持 `U` 不变，不能误记为可逆边界功；真空被载体完全挤至零体积且没有后继时则没有物质、`U` 或控制体积需要转移；
-- 一对多 split 按 overlap/available-volume 整数权重分配，最后一个非空 child 接收 raw remainder；
+- 一对多 split 按 overlap/available-volume 整数权重和上述库存分配规则求出子列，`U` 按[热学共同温度拆分契约](thermal-state.md)分配；
 - 连到 ambient 的旧有限库存份额进入 sink；只有从上一代 ambient lineage 截留的体积按 ambient composition 进入 source，无 owner 的 sealed volume 是显式真空；
 - topology 与 thermal U 的 transfer plan 必须一起可提交，否则 network 保持重扫前状态。
 

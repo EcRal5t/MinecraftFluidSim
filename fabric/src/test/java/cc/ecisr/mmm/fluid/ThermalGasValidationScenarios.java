@@ -260,6 +260,37 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"gas topology/orifice carrier energy did not close");
 	}
 
+	private static void tinyGasEnergyPartitions(GasThermalModel model, GasRegistry gas) {
+		for (long nanos : new long[] {1_000_000_000L, 2_000_000_000_000_000L, 1L << 54, Long.MAX_VALUE}) {
+			GasInventory source = gas.createAmbient(nanos);
+			List<GasInventory> forward = source.partition(new long[] {nanos - 3, 0, 1, 2});
+			List<GasInventory> reverse = source.partition(new long[] {2, 1, 0, nanos - 3});
+			for (double temperature : new double[] {293.15, 100.0, 1.0, .001, 1e-5, 1e-6, 1e-9}) {
+				double energy = model.internalEnergyAtTemperature(source, temperature);
+				var state = model.state(source, energy);
+				double[] energies = model.partitionEnergy(source, energy, forward);
+				double[] reversed = model.partitionEnergy(source, energy, reverse);
+				for (int child = 0; child < forward.size(); child++) {
+					require(Double.doubleToRawLongBits(energies[child]) == Double.doubleToRawLongBits(reversed[3 - child]),
+							"unique heat-capacity pivot depends on tiny child order");
+					if (forward.get(child).isEmpty()) { require(energies[child] == 0.0, "vacuum received gas energy"); continue; }
+					double modeled = model.internalEnergyAtTemperature(forward.get(child), state.temperatureK());
+					model.requireInventoryEnergy(forward.get(child), modeled);
+					var childState = model.state(forward.get(child), energies[child]);
+					double inversionError = 32 * (Math.ulp(modeled) / childState.heatCapacityEuPerK()
+							+ Math.ulp(energy) / state.heatCapacityEuPerK()) + 64 * Math.ulp(state.temperatureK());
+					require(childState.temperatureK() > 0.0
+							&& Math.abs(childState.temperatureK() - state.temperatureK()) <= inversionError,
+							"tiny gas child amplified the topology energy remainder");
+				}
+				SignedDyadic error = SignedDyadic.sum(energies).subtract(SignedDyadic.of(energy));
+				if (error.signum() < 0) error = error.negate();
+				require(error.compareTo(SignedDyadic.of(Math.ulp(energies[0]) * .5)) <= 0,
+						"gas energy partition exceeds single pivot rounding");
+			}
+		}
+	}
+
 	static void builtinDryAirWaterAndVaporPhysicsIsCalibrated() {
 		try (InputStreamReader airReader = resourceReader(
 				"/data/mmm/mmm/thermal_materials/air.json");
@@ -344,6 +375,22 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 							List.of(), 0.0)));
 			GasThermalModel reportedModel = new GasThermalModel(
 					registry, BuiltinGasDefinitions.createRegistry());
+			tinyGasEnergyPartitions(reportedModel, BuiltinGasDefinitions.createRegistry());
+			GasInventory airChild = BuiltinGasDefinitions.createRegistry().createAmbient(2_000_000_000L);
+			GasInventory vaporChild = new GasInventory(List.of(new GasComponentAmount(
+					BuiltinGasDefinitions.WATER_VAPOR, 2_000_000_000L,
+					2 * BuiltinGasDefinitions.WATER_VAPOR_STANDARD_DENSITY, List.of(), 0.0)));
+			GasInventory mixed = airChild.merge(vaporChild);
+			double mixedEnergy = Math.nextUp(reportedModel.internalEnergyAtTemperature(mixed, 321.0));
+			double mixedTemperature = reportedModel.state(mixed, mixedEnergy).temperatureK();
+			double[] mixedParts = reportedModel.partitionEnergy(mixed, mixedEnergy, List.of(vaporChild, airChild));
+			double[] mixedReverse = reportedModel.partitionEnergy(mixed, mixedEnergy, List.of(airChild, vaporChild));
+			require(airChild.totalMass() > vaporChild.totalMass()
+					&& airChild.totalMass() * air.specificHeatAt(mixedTemperature)
+						< vaporChild.totalMass() * vapor.specificHeatAt(mixedTemperature)
+					&& mixedParts[1] == reportedModel.internalEnergyAtTemperature(airChild, mixedTemperature)
+					&& mixedParts[0] == mixedReverse[1] && mixedParts[1] == mixedReverse[0],
+					"gas energy remainder followed mass or child order instead of heat capacity");
 			double reportedInitial = reportedModel.internalEnergyAtTemperature(reportedExpansion, 306.0691472872192);
 			GasThermalModel.Compression reported = reportedModel.compressAdiabatically(
 					reportedExpansion, reportedInitial, 0.13749912215963653, 0.34265727368591875);

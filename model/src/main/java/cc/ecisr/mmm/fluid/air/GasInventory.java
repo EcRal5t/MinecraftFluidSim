@@ -1,5 +1,7 @@
 package cc.ecisr.mmm.fluid.air;
 
+import cc.ecisr.mmm.units.SignedDyadic;
+
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -206,21 +208,23 @@ public final class GasInventory {
 			speciesShares[species] = largestRemainder(source.species().get(species).amountQuanta(), weights);
 		}
 		GasComponentAmount[] result = new GasComponentAmount[nanos.length];
-		double assignedMass = 0.0, assignedResidual = 0.0;
-		int lastPositive = -1;
-		for (int child = nanos.length - 1; child >= 0; child--) if (nanos[child] > 0L) { lastPositive = child; break; }
-		for (int child = 0; child < nanos.length; child++) {
+		SignedDyadic assignedMass = SignedDyadic.ZERO, assignedResidual = SignedDyadic.ZERO;
+		int pivot = 0;
+		for (int child = 1; child < nanos.length; child++) if (nanos[child] > nanos[pivot]) pivot = child;
+		// The largest share absorbs the source reduction error; tiny children retain their own scale.
+		for (int ordinal = 0; ordinal < nanos.length; ordinal++) {
+			int child = ordinal == nanos.length - 1 ? pivot : ordinal < pivot ? ordinal : ordinal + 1;
 			if (nanos[child] == 0L) continue;
 			double mass, residual;
-			if (child == lastPositive) {
-				mass = source.mass() - assignedMass;
-				residual = source.massResidual() - assignedResidual;
+			if (child == pivot) {
+				mass = SignedDyadic.of(source.mass()).subtract(assignedMass).toDouble();
+				residual = SignedDyadic.of(source.massResidual()).subtract(assignedResidual).toDouble();
 			} else {
 				double fraction = (double) nanos[child] / source.standardVolumeNanos();
 				mass = source.mass() * fraction;
 				residual = source.massResidual() * fraction;
-				assignedMass += mass;
-				assignedResidual += residual;
+				assignedMass = assignedMass.add(SignedDyadic.of(mass));
+				assignedResidual = assignedResidual.add(SignedDyadic.of(residual));
 			}
 			ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>();
 			for (int entry = 0; entry < source.species().size(); entry++) if (speciesShares[entry][child] > 0L) {

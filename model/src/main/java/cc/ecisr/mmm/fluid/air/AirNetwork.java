@@ -457,7 +457,7 @@ public final class AirNetwork {
 	/**
 	 * Splits a cavity into children with the given available volumes. The first child keeps
 	 * the source id and its edges; later children get fresh ids. Shares are proportional to
-	 * the available volumes and the last child receives the exact remainder.
+	 * the available volumes; each component's largest share receives its mass-column remainder.
 	 */
 	public int[] splitNode(int sourceNodeId, double... childAvailableVolumes) {
 		AirNode source = sealed(sourceNodeId);
