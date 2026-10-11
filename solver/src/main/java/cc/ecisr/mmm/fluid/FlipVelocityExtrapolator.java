@@ -42,23 +42,23 @@ final class FlipVelocityExtrapolator {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z);
 			int face = xFaceIndex(x, y, z);
-			validX[face] = mac.p2gWeightX[face] > 0 || faceActive(
+			validX[face] = cutCells.xFaceOpen(x, y, z) > 0 && (mac.p2gWeightX[face] > 0 || faceActive(
 					solid, markerCount, pressureFluid, left, right, cutCells.xFaceOpen(x, y, z)
-			);
+			));
 		}
 		for (int z = 0; z < sizeZ; z++) for (int y = 1; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
 			int face = yFaceIndex(x, y, z);
-			validY[face] = mac.p2gWeightY[face] > 0 || faceActive(
+			validY[face] = cutCells.yFaceOpen(x, y, z) > 0 && (mac.p2gWeightY[face] > 0 || faceActive(
 					solid, markerCount, pressureFluid, below, above, cutCells.yFaceOpen(x, y, z)
-			);
+			));
 		}
 		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z);
 			int face = zFaceIndex(x, y, z);
-			validZ[face] = mac.p2gWeightZ[face] > 0 || faceActive(
+			validZ[face] = cutCells.zFaceOpen(x, y, z) > 0 && (mac.p2gWeightZ[face] > 0 || faceActive(
 					solid, markerCount, pressureFluid, back, front, cutCells.zFaceOpen(x, y, z)
-			);
+			));
 		}
 	}
 

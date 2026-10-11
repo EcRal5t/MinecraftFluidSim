@@ -13,6 +13,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			planeVolumeInversionIsAccurate(); liquidPlaneRetainsSmallInventoryGeometry(); sharedWetFacesControlTransportOnly(); momentNormalMatchesAnalyticShapes();
 			System.out.println("Liquid-plane geometry validation passed"); return;
 		}
+		closedFaceValidityMatchesTheTransferSpace();
 		freeSurfaceTransferSeparatesIndependentSupport();
 		closedTransferSeparatesIndependentSupport();
 		resolvedTransferRequiresExactAvailableCapacity();
@@ -94,6 +95,50 @@ public final class FlipFluidFreeSurfaceValidation {
 			moment.rebuild(new boolean[27], volumes, cut, null, new boolean[27], markers, particles, 1);
 			for (int a = 0; a < 3; a++) check(gradient.planeNormal(cell, a) == moment.planeNormal(cell, a),
 					"Zero eccentricity changed the existing fraction-gradient fallback");
+		}
+	}
+
+	private static void closedFaceValidityMatchesTheTransferSpace() {
+		var config = new FluidSolverConfig(.5F, 1000, 0, .05F, 120, 1e-4F, .4F, .002F, .8F);
+		for (int normal = 0; normal < 3; normal++) for (boolean high : new boolean[] {false, true}) {
+			for (boolean full : new boolean[] {false, true}) for (boolean interior : new boolean[] {false, true}) {
+				byte[] masks = new byte[64];
+				if (interior) for (int c = 0; c < 64; c++) {
+					int coordinate = normal == 0 ? c % 4 : normal == 1 ? c / 4 % 4 : c / 16;
+					if (coordinate == (high ? 3 : 0)) masks[c] = (byte) 255;
+				}
+				float[] point = {.625F, .625F, .625F};
+				point[normal] = high ? (interior ? 1.375F : 1.875F) : (interior ? .625F : .125F);
+				float[] velocity = new float[3]; velocity[normal] = high ? -1 : 1;
+				velocity[(normal + 1) % 3] = 2; velocity[(normal + 2) % 3] = -.5F;
+				var domain = new FluidDomain(4, 4, 4, config, 512);
+				domain.restoreParticleState(new FlipParticleState(4, 4, 4, .5F, 1, .125F,
+						new float[] {point[0], point[1], point[2], .125F}, velocity, masks));
+				domain.sealDomainBoundary();
+				if (full) {
+					for (int c = 0; c < 64; c++) if (masks[c] == 0) domain.setVolume(c % 4, c / 4 % 4, c / 16, 1);
+					for (int p = 0; p < domain.particleCount(); p++) {
+						domain.particles.setVelocityX(p, velocity[0]); domain.particles.setVelocityY(p, velocity[1]);
+						domain.particles.setVelocityZ(p, velocity[2]);
+					}
+				}
+				domain.ensureGrid();
+				float[][] fields = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
+				boolean[][] valid = {domain.mac.velocityValidX, domain.mac.velocityValidY, domain.mac.velocityValidZ};
+				for (int a = 0; a < 3; a++) {
+					float[] aperture = domain.geometry.cutCells.openFaceField(a);
+					for (int f = 0; f < aperture.length; f++) if (aperture[f] == 0) check(valid[a][f] == full && fields[a][f] == 0,
+							"Closed face validity disagreed with the free/full transfer space on axis " + a);
+					if (full && a != normal) continue;
+					float sampled = a == 0 ? domain.sampleX(fields[a], point[0], point[1], point[2])
+							: a == 1 ? domain.sampleY(fields[a], point[0], point[1], point[2])
+							: domain.sampleZ(fields[a], point[0], point[1], point[2]);
+					// Open-stencil constants reproduce themselves. Full space retains the 3/4 known wall-zero weight.
+					float expected = velocity[a] * (full ? .25F : 1);
+					check(sampled == expected, "Wall translation, reflection or axis permutation changed the sampling rule: "
+							+ normal + ", high=" + high + ", full=" + full + ", interior=" + interior + ", axis=" + a + ": " + sampled);
+				}
+			}
 		}
 	}
 
