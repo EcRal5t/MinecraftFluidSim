@@ -32,6 +32,7 @@ import java.util.Map;
 
 abstract class ThermalTransportValidationScenarios extends ThermalValidationSupport {
 	static void containerTransferCarriesAuthoritativeEnergy() {
+		thermalHandoffPreservesInsertionTemperature();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		ThermalMaterialDefinition water = new ThermalMaterialDefinition("mmm:thermal/container_water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
@@ -76,6 +77,98 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				"collision relocation did not restore material U without a guessed temperature");
 	}
 
+	private static void thermalHandoffPreservesInsertionTemperature() {
+		var granular = BuiltinGranularDefinitions.createRegistry();
+		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F);
+		for (boolean narrow : new boolean[]{false, true}) {
+			var materials = new java.util.ArrayList<ThermalMaterialDefinition>();
+			for (var fluid : liquids.materials()) materials.add(new ThermalMaterialDefinition(
+					"test:handoff/" + fluid.id().replace(':', '_'), ThermalMaterialDefinition.CarrierKind.LIQUID,
+					fluid.id(), fluid.id().equals(BuiltinFluidMaterials.WATER.id()) ? (narrow ? 500 : 293.15) : 300,
+					0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 600, 1))));
+			for (var material : granular.materials()) materials.add(new ThermalMaterialDefinition(
+					"test:handoff/" + material.id().replace(':', '_'), ThermalMaterialDefinition.CarrierKind.GRANULAR,
+					material.id(), 300, 20, 0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(250, narrow ? 350 : 600, 1))));
+			var registry = new ThermalRegistry(materials, List.of(), List.of(), "", granular.fingerprint());
+			var source = new FluidDomain(4, 4, 4, config, 512);
+			source.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+			source.setVolume(2, 2, 2, .001F);
+			int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+			long svq = 262144; double mass = 5.078125;
+			require(source.tryInsertExactGranular(1, 1, 1, sand, 0, svq, mass).inserted(),
+					"thermal handoff could not create its initial grain");
+			source.bindThermal(registry, liquids, 300);
+			var snapshot = source.exportThermalParticleState();
+			require(snapshot.insertionTemperatureK() == 300, "thermal capture omitted the configured insertion temperature");
+			var materialSnapshot = source.exportMaterialParticleState();
+			var granularSnapshot = source.exportGranularState();
+			var target = new FluidDomain(4, 4, 4, config, 512);
+			target.restoreMaterialParticleState(source.exportMaterialParticleState());
+			target.restoreGranularState(source.exportGranularState(), granular, liquids, BuiltinFluidMaterials.createRegistry());
+			target.restoreThermalParticleState(snapshot, registry);
+			require(target.thermalState.insertionTemperatureK() == 300
+					&& target.exactInternalEnergy().equals(source.exactInternalEnergy())
+					&& target.thermalAudit().equals(source.thermalAudit()),
+					"public thermal restore changed the source configuration or its inventory");
+			var backend = FluidDomain.restoreAuthoritativeState(source.captureAuthoritativeState());
+			require(backend.exportThermalParticleState().insertionTemperatureK() == 300
+					&& backend.exactInternalEnergy().equals(source.exactInternalEnergy()),
+					"complete backend handoff changed the configured insertion temperature");
+			require(source.authoritativeLayout().equals(source.captureAuthoritativeState().layout()),
+					"live and captured backend configuration identities differ");
+			var changedTemperature = new FlipThermalParticleState(4, 4, 4, .5F, snapshot.particleCount(), registry.fingerprint(),
+					301, snapshot.copyInternalEnergy(), snapshot.copyActiveParcelEnergy(), snapshot.copyDepositEnergy(),
+					snapshot.coherentGroups(), snapshot.copyGasNodeEnergy(), snapshot.audit());
+			var changed = new FluidDomain(4, 4, 4, config, 512);
+			changed.restoreMaterialParticleState(materialSnapshot);
+			changed.restoreGranularState(granularSnapshot, granular, liquids, BuiltinFluidMaterials.createRegistry());
+			changed.restoreThermalParticleState(changedTemperature, registry);
+			require(changed.exactInternalEnergy().equals(source.exactInternalEnergy())
+					&& !changed.authoritativeLayout().equals(source.authoritativeLayout())
+					&& !changed.authoritativeLayout().equals(source.captureAuthoritativeState().layout()),
+					"backend configuration identity omitted the external insertion temperature");
+			SignedDyadic before = source.thermalAudit().externalSource();
+			require(source.tryInsertExactGranular(2, 1, 1, sand, 0, svq, mass).inserted(), "source handoff insertion failed");
+			SignedDyadic added = source.thermalAudit().externalSource().subtract(before);
+			int thermal = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, BuiltinGranularDefinitions.FINE_SAND);
+			for (var restored : List.of(target, backend)) {
+				SignedDyadic restoredBefore = restored.thermalAudit().externalSource();
+				require(restored.tryInsertExactGranular(2, 1, 1, sand, 0, svq, mass).inserted()
+						&& restored.thermalAudit().externalSource().subtract(restoredBefore).equals(added)
+						&& Double.doubleToRawLongBits(restored.thermalState.granularColumn().activeEnergy(1))
+						== Double.doubleToRawLongBits(source.thermalState.granularColumn().activeEnergy(1))
+						&& restored.thermalState.stateFunction().stateForInternalEnergy(thermal, mass, Map.of(),
+								restored.thermalState.granularColumn().activeEnergy(1)).temperatureK() == 300
+						&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
+						"thermal handoff changed the energy or temperature of the next public insertion");
+			}
+			for (double invalid : new double[]{0, Math.nextDown(cc.ecisr.mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K),
+					Double.NaN, Double.POSITIVE_INFINITY}) expectFailure(() -> new FlipThermalParticleState(
+					4, 4, 4, .5F, snapshot.particleCount(), registry.fingerprint(), invalid, snapshot.copyInternalEnergy(),
+					snapshot.copyActiveParcelEnergy(), snapshot.copyDepositEnergy(), snapshot.coherentGroups(),
+					snapshot.copyGasNodeEnergy(), snapshot.audit()), "thermal handoff accepted an invalid source temperature");
+			if (narrow) {
+				var outside = new FlipThermalParticleState(4, 4, 4, .5F, snapshot.particleCount(), registry.fingerprint(),
+						500, snapshot.copyInternalEnergy(), snapshot.copyActiveParcelEnergy(), snapshot.copyDepositEnergy(),
+						snapshot.coherentGroups(), snapshot.copyGasNodeEnergy(), snapshot.audit());
+				var original = new FluidDomain(4, 4, 4, config, 512);
+				original.restoreMaterialParticleState(materialSnapshot);
+				original.restoreGranularState(granularSnapshot, granular, liquids, BuiltinFluidMaterials.createRegistry());
+				var revision = original.granularState.mutationRevision();
+				try {
+					original.restoreThermalParticleState(outside, registry);
+					throw new AssertionError("thermal restore bypassed the common external temperature calibration");
+				} catch (IllegalArgumentException expected) {
+					require(expected.getMessage().startsWith("Initial temperature is outside"),
+							"invalid configuration was rejected for an unrelated reason");
+				}
+				require(original.thermalState == null && original.granularState.mutationRevision() == revision,
+						"invalid external temperature published a thermal candidate");
+			}
+		}
+	}
 	static void granularEnergyColumnTransactions() {
 		granularActiveMergePreservesPositiveTemperature();
 		granularExternalExtractionRounding();
@@ -319,7 +412,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		double invalid = function.internalEnergyAtTemperature(thermal, mass, species, 1);
 		var badActive = snapshot.copyActiveParcelEnergy(); var badDeposit = snapshot.copyDepositEnergy();
 		if (deposited) badDeposit[0] = invalid; else badActive[0] = invalid;
-		var bad = new FlipThermalParticleState(4, 4, 4, .5F, source.particles.count(), registry.fingerprint(),
+		var bad = new FlipThermalParticleState(4, 4, 4, .5F, source.particles.count(), registry.fingerprint(), snapshot.insertionTemperatureK(),
 				snapshot.copyInternalEnergy(), badActive, badDeposit, snapshot.coherentGroups(), snapshot.copyGasNodeEnergy(),
 				ThermalAuditLedger.initialized(SignedDyadic.sum(snapshot.copyInternalEnergy()).add(SignedDyadic.sum(badActive))
 						.add(SignedDyadic.sum(badDeposit)).add(SignedDyadic.sum(snapshot.copyGasNodeEnergy()))));

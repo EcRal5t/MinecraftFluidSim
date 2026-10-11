@@ -94,7 +94,7 @@ final class FluidThermalBinding {
 	static FlipThermalParticleState capture(
 			ThermalDomainState state, int sizeX, int sizeY, int sizeZ, float cellSize, int count
 	) {
-		return new FlipThermalParticleState(sizeX, sizeY, sizeZ, cellSize, count, state.registry().fingerprint(),
+		return new FlipThermalParticleState(sizeX, sizeY, sizeZ, cellSize, count, state.registry().fingerprint(), state.insertionTemperatureK(),
 				state.liquid().copyEnergies(count), state.granularColumn().copyActiveEnergy(),
 				state.granularColumn().depositSnapshot().stream()
 						.mapToDouble(GranularEnergyColumn.DepositEnergy::internalEnergy).toArray(),

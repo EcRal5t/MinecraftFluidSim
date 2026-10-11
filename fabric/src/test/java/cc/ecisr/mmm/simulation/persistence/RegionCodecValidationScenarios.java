@@ -83,7 +83,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				Double.doubleToRawLongBits(activeMass + depositMass));
 		region.domain().restoreGranularState(granularFixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
 		ThermalRegistry thermal = thermalRegistry(liquids, granular);
-		region.domain().bindThermal(thermal, liquids, 300.0);
+		double insertionTemperatureK = Math.nextUp(300.0);
+		region.domain().bindThermal(thermal, liquids, insertionTemperatureK);
 		ThermalStateFunction thermalState = new ThermalStateFunction(thermal);
 		FiniteThermalDeviceInventory expectedDevices = new FiniteThermalDeviceInventory(
 				thermal.fingerprint(), List.of(new FiniteThermalDeviceState(
@@ -135,6 +136,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 						SignedDyadic.of(Math.scalb(-9.0, -24)))));
 		region.domain().restorePendingPhaseVolumeState(expectedPending);
 		FlipThermalParticleState expected = region.domain().exportThermalParticleState();
+		require(Double.doubleToRawLongBits(expected.insertionTemperatureK())
+				== Double.doubleToRawLongBits(insertionTemperatureK), "configured insertion temperature was not captured");
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		GasStateSnapshot expectedGas = region.domain().exportGasState("");
 		GranularStateSnapshot expectedGranular = region.domain().exportGranularState();
@@ -176,6 +179,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				new CoherentPhaseStore.Component("test:a", 7L),
 				new CoherentPhaseStore.Component("test:b", 11L)), Double.doubleToRawLongBits(0.25));
 		ThermalRegionStateCodec thermalCodec = new ThermalRegionStateCodec();
+		validateInsertionTemperaturePayload(thermalCodec, state);
 		ThermalRegionStateCodec.SectionData composed = new ThermalRegionStateCodec.SectionData(
 				new long[0], new long[0], new long[0], List.of(new ThermalRegionStateCodec.CoherentEntry(
 				3, "test:solid", 8L, Double.doubleToRawLongBits(2.0), composition,
@@ -213,6 +217,33 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				state.sections()).validate(), "thermal region without buoyancy identity was accepted");
 
 		validateExplicitVacuumThermalCheckpoint();
+	}
+
+	private static void validateInsertionTemperaturePayload(ThermalRegionStateCodec codec, RegionState state) throws Exception {
+		byte[] payload = state.manifest().extensions().stream()
+				.filter(extension -> ThermalRegionStateCodec.MANIFEST_EXTENSION.equals(extension.type()))
+				.findFirst().orElseThrow().payload();
+		int temperatureOffset;
+		try (var input = new java.io.DataInputStream(new java.io.ByteArrayInputStream(payload))) {
+			input.readInt(); input.readInt(); input.readInt(); input.readUTF();
+			temperatureOffset = payload.length - input.available();
+		}
+		for (double temperature : new double[]{Double.MIN_NORMAL, Math.nextUp(300.0), Double.MAX_VALUE}) {
+			byte[] candidate = payload.clone();
+			java.nio.ByteBuffer.wrap(candidate).putLong(temperatureOffset, Double.doubleToRawLongBits(temperature));
+			var decoded = codec.decodeManifest(candidate);
+			require(Double.doubleToRawLongBits(decoded.insertionTemperatureK()) == Double.doubleToRawLongBits(temperature)
+					&& Arrays.equals(candidate, codec.encodeManifest(decoded)), "thermal insertion temperature raw bits changed");
+		}
+		for (double invalid : new double[]{-0.0, 0.0, Double.MIN_VALUE, Double.NaN,
+				Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY}) {
+			byte[] candidate = payload.clone();
+			java.nio.ByteBuffer.wrap(candidate).putLong(temperatureOffset, Double.doubleToRawLongBits(invalid));
+			expectIOException(() -> codec.decodeManifest(candidate), "invalid insertion temperature was accepted");
+		}
+		byte[] previousVersion = payload.clone();
+		java.nio.ByteBuffer.wrap(previousVersion).putInt(Integer.BYTES, 2);
+		expectIOException(() -> codec.decodeManifest(previousVersion), "previous thermal payload schema was accepted");
 	}
 
 	private static void validateGasLineageCodec() throws Exception {

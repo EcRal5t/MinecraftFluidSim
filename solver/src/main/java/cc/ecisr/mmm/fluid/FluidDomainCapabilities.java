@@ -346,9 +346,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			throw new IllegalArgumentException("Thermal handoff registry identity mismatch");
 		}
 		validateCoherentRestoreCapacity(state.coherentGroups());
-		double initialTemperature = registry.material(
-				registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID,
-						materialRegistry.material(0).id())).referenceTemperatureK();
+		double initialTemperature = state.insertionTemperatureK();
 		// Restore must retain the gas ordinals already derived from the complete checkpoint.
 		if (!prepareThermalBinding(registry, materialRegistry, initialTemperature)) {
 			throw new IllegalStateException("Thermal restore target is already bound");

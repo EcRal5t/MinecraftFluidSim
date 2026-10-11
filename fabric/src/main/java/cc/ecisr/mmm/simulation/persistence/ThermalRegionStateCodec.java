@@ -31,7 +31,7 @@ final class ThermalRegionStateCodec {
 	private static final int KNOWN_CAPABILITIES = CAP_MATERIALS | CAP_CHEMISTRY | CAP_GRANULAR | CAP_GAS | CAP_THERMAL;
 	private static final int MANIFEST_MAGIC = 0x5257544d; // RWTM
 	private static final int SECTION_MAGIC = 0x52575453; // RWTS
-	private static final int PAYLOAD_VERSION = 2;
+	private static final int PAYLOAD_VERSION = 3;
 	private static final int MAX_DYADIC_BYTES = SignedDyadic.MAX_SIGNIFICAND_BITS / 8 + 2;
 
 	byte[] encodeManifest(ManifestData data) throws IOException {
@@ -39,7 +39,9 @@ final class ThermalRegionStateCodec {
 		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 		try (DataOutputStream out = new DataOutputStream(bytes)) {
 			out.writeInt(MANIFEST_MAGIC); out.writeInt(PAYLOAD_VERSION); out.writeInt(data.capabilities());
-			out.writeUTF(data.registryFingerprint()); out.writeUTF(ThermalRegistry.UNIT_SYSTEM_ID);
+			out.writeUTF(data.registryFingerprint());
+			out.writeLong(Double.doubleToRawLongBits(data.insertionTemperatureK()));
+			out.writeUTF(ThermalRegistry.UNIT_SYSTEM_ID);
 			out.writeInt(data.liquidMarkerCount()); out.writeInt(data.activeParcelCount());
 			out.writeInt(data.depositGroupCount()); out.writeInt(data.coherentGroupCount()); out.writeInt(data.gasNodeCount());
 			writeDyadic(out, data.liquidEnergy()); writeDyadic(out, data.activeEnergy());
@@ -65,7 +67,8 @@ final class ThermalRegionStateCodec {
 			if (input.readInt() != MANIFEST_MAGIC || input.readInt() != PAYLOAD_VERSION) {
 				throw new IOException("Unknown thermal manifest payload");
 			}
-			int capabilities = input.readInt(); String fingerprint = input.readUTF(); String unit = input.readUTF();
+			int capabilities = input.readInt(); String fingerprint = input.readUTF();
+			double insertionTemperatureK = Double.longBitsToDouble(input.readLong()); String unit = input.readUTF();
 			if (!ThermalRegistry.UNIT_SYSTEM_ID.equals(unit)) throw new IOException("Thermal region unit system mismatch");
 			int liquid = count(input.readInt(), Integer.MAX_VALUE, "liquid markers");
 			int active = count(input.readInt(), Integer.MAX_VALUE, "active parcels");
@@ -90,7 +93,8 @@ final class ThermalRegionStateCodec {
 			long[] gasEnergyBits = new long[gasEnergyCount];
 			for (int index = 0; index < gasEnergyCount; index++) gasEnergyBits[index] = input.readLong();
 			requireEnd(input);
-			ManifestData result = new ManifestData(capabilities, fingerprint, liquid, active, deposits, coherent, gas,
+			ManifestData result = new ManifestData(capabilities, fingerprint, insertionTemperatureK,
+					liquid, active, deposits, coherent, gas,
 					liquidEnergy, activeEnergy, depositEnergy, coherentEnergy, gasEnergy, totalEnergy,
 					audit, ledgers, gasEnergyBits);
 			validateManifest(result);
@@ -149,6 +153,8 @@ final class ThermalRegionStateCodec {
 		if (data == null || (data.capabilities() & ~KNOWN_CAPABILITIES) != 0
 				|| (data.capabilities() & (CAP_MATERIALS | CAP_THERMAL)) != (CAP_MATERIALS | CAP_THERMAL)
 				|| data.registryFingerprint() == null || !data.registryFingerprint().matches("[0-9a-f]{64}")
+				|| !Double.isFinite(data.insertionTemperatureK())
+				|| data.insertionTemperatureK() < ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K
 				|| data.sectionLedgers() == null || data.sectionLedgers().isEmpty()
 				|| data.sectionLedgers().size() > RegionStateCodec.MAX_SECTIONS
 				|| data.gasNodeEnergyBits() == null || data.gasNodeEnergyBits().length != data.gasNodeCount()) {
@@ -284,7 +290,7 @@ final class ThermalRegionStateCodec {
 	}
 
 	record ManifestData(
-			int capabilities, String registryFingerprint,
+			int capabilities, String registryFingerprint, double insertionTemperatureK,
 			int liquidMarkerCount, int activeParcelCount, int depositGroupCount, int coherentGroupCount, int gasNodeCount,
 			SignedDyadic liquidEnergy, SignedDyadic activeEnergy, SignedDyadic depositEnergy,
 			SignedDyadic coherentEnergy, SignedDyadic gasEnergy, SignedDyadic totalEnergy,

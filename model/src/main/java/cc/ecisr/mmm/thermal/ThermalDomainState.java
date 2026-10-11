@@ -151,6 +151,7 @@ public final class ThermalDomainState {
 	}
 
 	public ThermalRegistry registry() { return registry; }
+	public double insertionTemperatureK() { return insertionTemperatureK; }
 	public ThermalAuditState audit() { return auditState; }
 	public ThermalAuditLedger auditLedger() { return auditState.ledger(); }
 

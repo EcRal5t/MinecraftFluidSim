@@ -355,7 +355,8 @@ public final class RegionCheckpointAssembler {
 			}
 			SignedDyadic gasEnergy = SignedDyadic.sum(gasNodeEnergy);
 			ThermalRegionStateCodec.ManifestData data = new ThermalRegionStateCodec.ManifestData(capabilities,
-					thermal.thermalRegistryFingerprint(), particles.particleCount(), allActiveEnergy.length, allDepositEnergy.length,
+					thermal.thermalRegistryFingerprint(), thermal.insertionTemperatureK(),
+					particles.particleCount(), allActiveEnergy.length, allDepositEnergy.length,
 					thermal.coherentGroups().size(), gasNodeEnergy.length,
 					liquidEnergy, activeEnergy, depositEnergy, coherentEnergy, gasEnergy,
 					liquidEnergy.add(activeEnergy).add(depositEnergy).add(coherentEnergy).add(gasEnergy),

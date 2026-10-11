@@ -40,7 +40,7 @@ public final class ExtremeThermalValidation {
 			var delta = SignedDyadic.of(gasEnergy)
 					.subtract(SignedDyadic.sum(snapshot.copyGasNodeEnergy()));
 			FluidThermalBinding.restore(domain.thermalState, new FlipThermalParticleState(4, 4, 4, 0.5F, domain.particleCount(),
-					registries.thermal().fingerprint(), snapshot.copyInternalEnergy(), new double[0], new double[0],
+					registries.thermal().fingerprint(), snapshot.insertionTemperatureK(), snapshot.copyInternalEnergy(), new double[0], new double[0],
 					List.of(), new double[] {gasEnergy}, snapshot.audit().withHeatExchange(delta)), domain.thermalMarkerContext(), domain.gasState.network);
 			double actualPressure = GasRegistry.STANDARD_PRESSURE_PA + domain.thermalState.gasGaugePressure(1, domain.gasState.network);
 			ThermalValidationSupport.require(actualPressure > 0.5 * pressure && actualPressure < 1.5 * pressure,

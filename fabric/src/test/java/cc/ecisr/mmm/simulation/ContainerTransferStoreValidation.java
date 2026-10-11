@@ -791,7 +791,7 @@ public final class ContainerTransferStoreValidation {
 			double[] energy = {sign * 16_384.0, sign * Math.scalb(1.0, -40)};
 			SignedDyadic exact = SignedDyadic.sum(energy);
 			domain.restoreThermalParticleState(new FlipThermalParticleState(3, 3, 3, 0.5F, 2,
-					registry.fingerprint(), energy, ThermalAuditLedger.initialized(exact)), registry);
+					registry.fingerprint(), 300.0, energy, ThermalAuditLedger.initialized(exact)), registry);
 			var auditBefore = domain.thermalAudit();
 			var snapshotBefore = domain.exportThermalParticleState();
 			SignedDyadic before = domain.exactInternalEnergy();

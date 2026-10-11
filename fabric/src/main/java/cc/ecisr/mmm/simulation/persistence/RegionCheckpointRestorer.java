@@ -153,6 +153,7 @@ public final class RegionCheckpointRestorer {
 			double[] gasEnergy = toDoubles(thermal.gasNodeEnergyBits());
 			return new FlipThermalParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
 					manifest.solverConfig().cellSize(), manifest.totalMarkerCount(), thermal.registryFingerprint(),
+					thermal.insertionTemperatureK(),
 					energy, activeEnergy, depositEnergy, coherent, gasEnergy, thermal.audit());
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid region-state thermal inventory: " + invalid.getMessage(), invalid);

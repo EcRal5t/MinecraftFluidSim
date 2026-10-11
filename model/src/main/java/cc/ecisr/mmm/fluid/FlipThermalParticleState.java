@@ -13,6 +13,7 @@ public final class FlipThermalParticleState {
 	private final int sizeX, sizeY, sizeZ, particleCount;
 	private final float cellSize;
 	private final String thermalRegistryFingerprint;
+	private final double insertionTemperatureK;
 	private final double[] internalEnergy;
 	private final double[] activeParcelEnergy;
 	private final double[] depositEnergy;
@@ -22,34 +23,34 @@ public final class FlipThermalParticleState {
 
 	public FlipThermalParticleState(
 			int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
-			String thermalRegistryFingerprint, double[] internalEnergy, ThermalAuditLedger audit
+			String thermalRegistryFingerprint, double insertionTemperatureK, double[] internalEnergy, ThermalAuditLedger audit
 	) {
-		this(sizeX, sizeY, sizeZ, cellSize, particleCount, thermalRegistryFingerprint,
+		this(sizeX, sizeY, sizeZ, cellSize, particleCount, thermalRegistryFingerprint, insertionTemperatureK,
 				internalEnergy, new double[0], new double[0], List.of(), new double[0], audit);
 	}
 
 	public FlipThermalParticleState(
 			int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
-			String thermalRegistryFingerprint, double[] internalEnergy,
+			String thermalRegistryFingerprint, double insertionTemperatureK, double[] internalEnergy,
 			List<CoherentPhaseStore.Group> coherentGroups, ThermalAuditLedger audit
 	) {
-		this(sizeX, sizeY, sizeZ, cellSize, particleCount, thermalRegistryFingerprint,
+		this(sizeX, sizeY, sizeZ, cellSize, particleCount, thermalRegistryFingerprint, insertionTemperatureK,
 				internalEnergy, new double[0], new double[0], coherentGroups, new double[0], audit);
 	}
 
 	public FlipThermalParticleState(
 			int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
-			String thermalRegistryFingerprint, double[] internalEnergy, double[] activeParcelEnergy,
+			String thermalRegistryFingerprint, double insertionTemperatureK, double[] internalEnergy, double[] activeParcelEnergy,
 			double[] depositEnergy,
 			List<CoherentPhaseStore.Group> coherentGroups, ThermalAuditLedger audit
 	) {
-		this(sizeX, sizeY, sizeZ, cellSize, particleCount, thermalRegistryFingerprint, internalEnergy,
+		this(sizeX, sizeY, sizeZ, cellSize, particleCount, thermalRegistryFingerprint, insertionTemperatureK, internalEnergy,
 				activeParcelEnergy, depositEnergy, coherentGroups, new double[0], audit);
 	}
 
 	public FlipThermalParticleState(
 			int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
-			String thermalRegistryFingerprint, double[] internalEnergy, double[] activeParcelEnergy,
+			String thermalRegistryFingerprint, double insertionTemperatureK, double[] internalEnergy, double[] activeParcelEnergy,
 			double[] depositEnergy, List<CoherentPhaseStore.Group> coherentGroups,
 			double[] gasNodeEnergy, ThermalAuditLedger audit
 	) {
@@ -60,6 +61,10 @@ public final class FlipThermalParticleState {
 		}
 		if (thermalRegistryFingerprint == null || !thermalRegistryFingerprint.matches("[0-9a-f]{64}")) {
 			throw new IllegalArgumentException("Invalid thermal registry fingerprint");
+		}
+		if (!(Double.isFinite(insertionTemperatureK)
+				&& insertionTemperatureK >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) {
+			throw new IllegalArgumentException("Thermal insertion temperature must be finite and positive");
 		}
 		if (audit == null) throw new IllegalArgumentException("Thermal audit is missing");
 		for (double energy : internalEnergy) if (!Double.isFinite(energy)) {
@@ -93,6 +98,7 @@ public final class FlipThermalParticleState {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.cellSize = cellSize;
 		this.particleCount = particleCount;
 		this.thermalRegistryFingerprint = thermalRegistryFingerprint;
+		this.insertionTemperatureK = insertionTemperatureK;
 		this.internalEnergy = internalEnergy.clone();
 		this.activeParcelEnergy = activeParcelEnergy.clone();
 		this.depositEnergy = depositEnergy.clone();
@@ -111,6 +117,7 @@ public final class FlipThermalParticleState {
 
 	public int particleCount() { return particleCount; }
 	public String thermalRegistryFingerprint() { return thermalRegistryFingerprint; }
+	public double insertionTemperatureK() { return insertionTemperatureK; }
 	public double[] copyInternalEnergy() { return internalEnergy.clone(); }
 	public double[] copyActiveParcelEnergy() { return activeParcelEnergy.clone(); }
 	public double[] copyDepositEnergy() { return depositEnergy.clone(); }

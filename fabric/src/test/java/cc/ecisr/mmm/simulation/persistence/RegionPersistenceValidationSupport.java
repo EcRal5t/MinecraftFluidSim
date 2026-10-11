@@ -118,6 +118,8 @@ abstract class RegionPersistenceValidationSupport {
 	static void assertThermalStateEquals(FlipThermalParticleState expected, FlipThermalParticleState actual) {
 		require(expected.particleCount() == actual.particleCount()
 				&& expected.thermalRegistryFingerprint().equals(actual.thermalRegistryFingerprint())
+				&& Double.doubleToRawLongBits(expected.insertionTemperatureK())
+						== Double.doubleToRawLongBits(actual.insertionTemperatureK())
 				&& Arrays.equals(expected.copyInternalEnergy(), actual.copyInternalEnergy())
 				&& Arrays.equals(expected.copyActiveParcelEnergy(), actual.copyActiveParcelEnergy())
 				&& Arrays.equals(expected.copyDepositEnergy(), actual.copyDepositEnergy())

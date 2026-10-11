@@ -428,7 +428,7 @@ U_inventory
 - 多 marker 抽取先以 raw binary64 `U_before-U_after` 的 exact dyadic 和确定真实 carrier 能量变化，再只在整件物品边界舍入一次；region external sink 必须等于最终 `ThermalContents` 的 raw `double`，两者与 exact carrier 变化的差只记入 `roundoff_residual`。不得逐 marker 舍入后再把近似和冒充物品能量，也不得用放宽 handoff 审计掩盖差额。
 - 容器 WAL 在含热转移中同时保存 exact liquid amount、item before/after 和 coupled energy；物品 durable save 前不得清理。
 
-section payload 逐 ordinal 保存 liquid/active/deposit energy raw bits 和 coherent group；manifest 保存各载体 exact dyadic 汇总、gas node energy、audit、registry identity、phase-work 及 section ledger。恢复时先验证 cardinality 与所有汇总，再构造 solver；派生温度不落盘，也不用于补全缺失 `U`。
+section payload 逐 ordinal 保存 liquid/active/deposit energy raw bits 和 coherent group；manifest 保存各载体 exact dyadic 汇总、gas node energy、audit、registry identity、phase-work 及 section ledger。热域的外部注入温度也是环境气体的配置温度，其 Kelvin 原始 double 随内存交接与 manifest 保存；恢复沿用该配置完成材料温区校验，后续注入内能与环境气体热力学保持同一输入。恢复时先验证 cardinality 与所有汇总，再构造 solver；载体派生温度由实际 `U` 反演。
 
 ## 调度与观察
 

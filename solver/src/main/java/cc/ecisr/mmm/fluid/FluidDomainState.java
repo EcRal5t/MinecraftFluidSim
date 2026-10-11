@@ -220,7 +220,7 @@ public final class FluidDomainState {
 				chemicalRegistry == null ? "" : chemicalRegistry.fingerprint(),
 				granularRegistry == null ? "" : granularRegistry.fingerprint(), precipitationEnabled,
 				gasRegistry.fingerprint(), thermalRegistry == null ? "" : thermalRegistry.fingerprint(),
-				maximumThermalTransportSubsteps,
+				thermal == null ? 0 : thermal.insertionTemperatureK(), maximumThermalTransportSubsteps,
 				materialDefinitions == null ? "" : materialDefinitions.fingerprint());
 	}
 
@@ -238,6 +238,7 @@ public final class FluidDomainState {
 			boolean precipitationEnabled,
 			String gasRegistryFingerprint,
 			String thermalRegistryFingerprint,
+			double insertionTemperatureK,
 			int maximumThermalTransportSubsteps,
 			String materialDefinitionsFingerprint
 	) {

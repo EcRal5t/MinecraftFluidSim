@@ -194,7 +194,7 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 - materials 决定 marker 是否必须有 material ordinal 和独立 mass；
 - chemistry 决定 mixture/indicator/species/residual 列及 registry fingerprint 是否 required；
 - granular 决定 active/deposit、solid composition、SVQ/mass/porosity 与 granular ledger 是否 required；
-- thermal 决定所有 solver carrier `U`、coherent store、gas topology/inventory/energy、audit、buoyancy identity 和 pending phase-work 是否 required；非空有限热设备集合是 manifest-only extension，其 provider/object 只作 locator，kg 与 `U` 仍由同一 region HEAD 持有。
+- thermal 决定所有 solver carrier `U`、coherent store、gas topology/inventory/energy、外部注入与环境气体的配置温度、audit、buoyancy identity 和 pending phase-work 是否 required；配置温度以 Kelvin 原始 double 保存在热学 manifest，恢复时与库存一起交接。非空有限热设备集合是 manifest-only extension，其 provider/object 只作 locator，kg 与 `U` 仍由同一 region HEAD 持有。
 
 一个 capability 存在时，它的 manifest 和每个相关 section extension 必须成套出现；不存在时也不得偷偷携带该 truth。unknown optional extension 只有在不影响当前 required truth 时才允许跳过。
 

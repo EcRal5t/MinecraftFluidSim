@@ -67,6 +67,7 @@ final class FluidDomainStateMapper {
 				domain.granularState == null ? "" : domain.granularState.registry.fingerprint(),
 				domain.precipitationEnabled(), domain.gasState.network.registry().fingerprint(),
 				domain.thermalState == null ? "" : domain.thermalState.registry().fingerprint(),
+				domain.thermalState == null ? 0 : domain.thermalState.insertionTemperatureK(),
 				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps(),
 				domain.materialDefinitions == null ? "" : domain.materialDefinitions.fingerprint());
 	}
