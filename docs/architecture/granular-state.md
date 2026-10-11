@@ -179,7 +179,7 @@ reaction/phase candidate 必须先在不可变快照上规划 exact extent，再
 
 marker 的 binary32 体积列也是候选表示格：规划器按完整 reaction batch 确定性分配体积与 species，逐个验证 marker 正质量、物种槽位和量子容量。候选受限时缩小整批，保持原库存与 dirty 调度等待下一次求值。单向规则只生成沉淀候选；每步表面额度只结算完整批次。
 
-沉淀与溶解提交前共同检查可用内能、区域量子容量和载体表示。沉淀同时验证碰撞位置、联合 occupancy 与 active/composition 容量。资源受限时保留原库存与 cell dirty，条件满足后重试。
+沉淀与溶解提交前共同检查可用内能、区域量子容量和载体表示。沉淀和溶解同时验证候选液体原始体积与候选固体整数 SVQ：每个核支撑格的总占容须满足 cut-cell 几何容量。沉淀优先沿用已有生成或合并位置，容量受限时再尝试碰撞合法的源格中心，以支持满液池中的等体积转换。溶解按旧颗粒核实际释放的各格空间检查源格新增液体。载体位置、active/composition 容量或联合占容暂时无法表示完整批次时，保留原库存与 cell dirty，空间条件满足后重试。
 
 没有可溶 solid 且液相连一个完整 aqueous stoichiometric extent 都不具备时，按 exact species quanta 直接判定为无候选，不进入完整 planner；这不改变任何正向或反向可表示反应。
 

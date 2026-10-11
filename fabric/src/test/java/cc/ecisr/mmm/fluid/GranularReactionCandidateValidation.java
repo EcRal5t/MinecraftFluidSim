@@ -15,6 +15,7 @@ public final class GranularReactionCandidateValidation {
 	public static void validate() {
 		allocationCases();
 		phaseTransferPreservesMomentum();
+		phaseTransferFitsLiquidAndSolidKernel();
 		carrierPropertiesFollowChemicalComposition();
 		for (String mode : List.of("irreversible", "huge-capacity", "surface-budget", "marker-budget", "region-budget")) {
 			ruleCandidate(mode);
@@ -22,6 +23,57 @@ public final class GranularReactionCandidateValidation {
 	}
 
 	public static void main(String[] args) { validate(); }
+
+	private static void phaseTransferFitsLiquidAndSolidKernel() {
+		var granular = BuiltinGranularDefinitions.createRegistry();
+		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 216);
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) domain.setVolume(x, y, z, 1);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		domain.bindThermal(ThermochemistryValidationScenarios.reactiveGranularThermalRegistry(liquids, granular), liquids, 300);
+		domain.setPrecipitationEnabled(true);
+		int source = domain.cellIndex(1, 1, 1);
+		for (int marker = 0; marker < domain.particleCount(); marker++) if (domain.particleCellIndex(marker) == source)
+			domain.setMarkerChemical(marker, Map.of(BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
+					BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), false);
+		require(domain.stepThermalAxis(false, 0).granularPhase().precipitations() == 1,
+				"equal-volume precipitation has a valid representation inside a full liquid pool");
+		var parcel = domain.granularState.parcels.parcel(0);
+		require(parcel.x() == .75F && parcel.y() == .75F && parcel.z() == .75F,
+				"full neighbors require a collision-valid source-cell kernel");
+		requireCombinedCapacity(domain);
+
+		// A moving parcel releases solid volume across two cells, while dissolved liquid
+		// is produced in its source cell. Saturated local capacity must defer the batch.
+		domain.granularState.parcels.overwrite(0, new GranularParcelStore.Parcel(
+				.875F, parcel.y(), parcel.z(), 0, 0, 0, parcel.solidVolumeSvq(), parcel.mass(),
+				parcel.materialHandle(), parcel.solidCompositionHandle(), 0, (byte) 0));
+		domain.gridDirty = true;
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) domain.setVolume(x, y, z, 1);
+		for (int marker = 0; marker < domain.particleCount(); marker++) if (domain.particleCellIndex(marker) == source) setWater(domain, marker, 100_000);
+		long solidBefore = domain.totalGranularSolidVolumeSvq();
+		double liquidBefore = domain.totalVolumeExact();
+		require(domain.stepThermalAxis(false, 0).granularPhase().dissolutions() == 0
+				&& domain.totalGranularSolidVolumeSvq() == solidBefore && domain.totalVolumeExact() == liquidBefore,
+				"dissolution keeps both inventories when its source cell cannot receive the full batch");
+		requireCombinedCapacity(domain);
+		domain.setVolume(1, 1, 1, .5F);
+		require(domain.stepThermalAxis(false, 0).granularPhase().dissolutions() == 1,
+				"a deferred dissolution resumes when source-cell capacity becomes available");
+		requireCombinedCapacity(domain);
+	}
+
+	private static void requireCombinedCapacity(FluidDomain domain) {
+		domain.ensureInventoryGrid();
+		for (int cell = 0; cell < domain.cellCount; cell++) {
+			var occupied = domain.markerGrid.exactCellVolumeInventory[cell].add(
+					new cc.ecisr.mmm.units.SignedDyadic(java.math.BigInteger.valueOf(domain.granularCoupling.solidSvq(cell)), -24));
+			require(occupied.compareTo(cc.ecisr.mmm.units.SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell))) <= 0,
+					"thermal-axis phase transfer exceeds joint liquid/solid capacity at cell " + cell);
+		}
+	}
 
 	private static void carrierPropertiesFollowChemicalComposition() {
 		var granular = BuiltinGranularDefinitions.createRegistry();

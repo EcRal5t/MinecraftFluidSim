@@ -51,7 +51,7 @@ final class ThermochemistryStageAssembly {
 				});
 		GranularReactionStage granular = new GranularReactionStage(
 				new GranularReactionStage.Workspace(
-						domain.sizeX, domain.sizeY, domain.cellCount,
+						domain.sizeX, domain.sizeY, domain.cellCount, domain.config.cellSize(),
 						domain.particles, domain.pendingPhaseCellVolume, domain.thermalMarkerContext()),
 				new GranularReactionStage.Access() {
 					@Override public boolean enabled() { return domain.precipitationEnabled(); }
