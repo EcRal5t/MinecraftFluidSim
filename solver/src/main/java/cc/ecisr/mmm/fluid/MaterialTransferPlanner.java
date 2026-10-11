@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.thermal.LiquidEnergyColumn;
+import cc.ecisr.mmm.thermal.ThermalDomainState;
 
 import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalParcelStore;
@@ -148,19 +149,25 @@ final class MaterialTransferPlanner {
 			}
 		}
 		LiquidEnergyColumn.ExternalLiquidInsertionPlan thermalPlan = null;
-		if (domain.thermalState != null && internalEnergy != null) {
+		ThermalDomainState.LiquidReplacementPlan defaultThermalPlan = null;
+		if (domain.thermalState != null) {
 			List<LiquidEnergyColumn.LiquidInsertion> thermalInsertions = new ArrayList<>(insertPieces.size());
 			for (MaterialInsertPiece piece : insertPieces) thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(
 					piece.materialHandle(), piece.mass(), piece.chemical()));
-			thermalPlan = domain.thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
-					domain.thermalMarkerContext());
+			if (internalEnergy != null) thermalPlan = domain.thermalState.planExternalLiquidInsertions(
+					thermalInsertions, internalEnergy, domain.thermalMarkerContext());
+			else defaultThermalPlan = domain.thermalState.planLiquidReplacement(
+					new int[0], thermalInsertions, domain.thermalMarkerContext());
 		}
+		if (defaultThermalPlan != null) domain.thermalState.requireCurrentLiquidReplacement(defaultThermalPlan);
+		domain.ensureParticleCapacity(domain.particles.count() + insertPieces.size());
 		int firstInsertedOrdinal = domain.particles.count();
 		for (MaterialInsertPiece piece : insertPieces) {
 			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.chemical(), false, thermalPlan == null);
+					piece.materialHandle(), piece.mass(), piece.chemical(), false, false);
 		}
 		if (thermalPlan != null) domain.thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
+		if (defaultThermalPlan != null) domain.thermalState.commitLiquidReplacement(firstInsertedOrdinal, defaultThermalPlan);
 		if (!externalAddition.isEmpty()) domain.chemicalParcels.recordExternalSource(externalAddition);
 		domain.gridDirty = true;
 		List<FluidDomain.MaterialPortion> result = new java.util.ArrayList<>(portions.size());
@@ -219,8 +226,7 @@ final class MaterialTransferPlanner {
 	 * Plans the at-most pure-volume insertion against per-cell capacity, the marker budget and
 	 * the region chemical budget before any marker is written, then commits the pre-validated
 	 * pieces through the spawn path. With chemistry bound the inserted default parcels are
-	 * booked as an external chemical source, the audit twin of the external thermal energy the
-	 * spawn path already records; without chemistry there is no chemical truth to book.
+	 * booked as an external chemical source, alongside the preflighted thermal source.
 	 */
 	FluidDomain.VolumeAddition insertVolumeAtMost(
 			int centerX, int centerY, int centerZ, float amount, int maxRadius) {
@@ -302,10 +308,22 @@ final class MaterialTransferPlanner {
 				return new FluidDomain.VolumeAddition(0.0F, false);
 			}
 		}
+		ThermalDomainState.LiquidReplacementPlan thermalPlan = null;
+		if (domain.thermalState != null && !insertPieces.isEmpty()) {
+			List<LiquidEnergyColumn.LiquidInsertion> thermalInsertions = new ArrayList<>(insertPieces.size());
+			for (MaterialInsertPiece piece : insertPieces) thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(
+					piece.materialHandle(), piece.mass(), piece.chemical()));
+			thermalPlan = domain.thermalState.planLiquidReplacement(new int[0], thermalInsertions,
+					domain.thermalMarkerContext());
+			domain.thermalState.requireCurrentLiquidReplacement(thermalPlan);
+		}
+		domain.ensureParticleCapacity(domain.particles.count() + insertPieces.size());
+		int firstInsertedOrdinal = domain.particles.count();
 		for (MaterialInsertPiece piece : insertPieces) {
 			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.chemical(), false, true);
+					piece.materialHandle(), piece.mass(), piece.chemical(), false, false);
 		}
+		if (thermalPlan != null) domain.thermalState.commitLiquidReplacement(firstInsertedOrdinal, thermalPlan);
 		if (!externalAddition.isEmpty()) domain.chemicalParcels.recordExternalSource(externalAddition);
 		domain.gridDirty = true;
 		return new FluidDomain.VolumeAddition((float) SignedDyadic.of(capacity).subtract(remaining).toDouble(), markerBudgetLimited);
@@ -639,21 +657,27 @@ final class MaterialTransferPlanner {
 			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
 		LiquidEnergyColumn.ExternalLiquidInsertionPlan thermalPlan = null;
-		if (domain.thermalState != null && internalEnergy != null) {
+		ThermalDomainState.LiquidReplacementPlan defaultThermalPlan = null;
+		if (domain.thermalState != null) {
 			List<LiquidEnergyColumn.LiquidInsertion> thermalInsertions = new ArrayList<>(pieces.size());
 			for (ChemicalInsertPiece piece : pieces) thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(
 					piece.materialHandle(), piece.mass(), piece.mixture()));
-			thermalPlan = domain.thermalState.planExternalLiquidInsertions(thermalInsertions, internalEnergy,
-					domain.thermalMarkerContext());
+			if (internalEnergy != null) thermalPlan = domain.thermalState.planExternalLiquidInsertions(
+					thermalInsertions, internalEnergy, domain.thermalMarkerContext());
+			else defaultThermalPlan = domain.thermalState.planLiquidReplacement(
+					new int[0], thermalInsertions, domain.thermalMarkerContext());
 		}
+		if (defaultThermalPlan != null) domain.thermalState.requireCurrentLiquidReplacement(defaultThermalPlan);
+		domain.ensureParticleCapacity(domain.particles.count() + pieces.size());
 		int firstInsertedOrdinal = domain.particles.count();
 		for (ChemicalInsertPiece piece : pieces) {
 			int slot = domain.firstOpenSlot(domain.cellIndex(piece.cellX(), piece.cellY(), piece.cellZ()), 0);
 			if (slot < 0) throw new IllegalStateException("Chemical insertion lost its planned open slot");
 			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), slot, piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator(), thermalPlan == null);
+					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator(), false);
 		}
 		if (thermalPlan != null) domain.thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
+		if (defaultThermalPlan != null) domain.thermalState.commitLiquidReplacement(firstInsertedOrdinal, defaultThermalPlan);
 		if (externalSource) domain.chemicalParcels.recordExternalSource(ledger);
 		domain.gridDirty = true;
 		return new FluidDomain.ExactChemicalTransfer(true, ledger, internalEnergy == null ? 0.0 : internalEnergy);

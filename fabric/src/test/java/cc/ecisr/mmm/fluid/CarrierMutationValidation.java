@@ -22,6 +22,7 @@ public final class CarrierMutationValidation {
 		wholesaleCountBindsRevisionAndBudget();
 		chemicalRemapPublishesTheFinalBudget();
 		cellVolumeReplacementPreflightsAllOwners();
+		defaultInsertionsPreflightStoredThermalState();
 		readOnlyCellQueriesFollowCarrierEdits();
 		volumeObservationRoundsTheExactInventoryOnce();
 		insertionNeverRoundsCapacityUp();
@@ -125,6 +126,62 @@ public final class CarrierMutationValidation {
 		requireUnchanged(domain, before);
 	}
 
+	private static void defaultInsertionsPreflightStoredThermalState() throws Exception {
+		var registries = FullCapabilityTestFixture.load();
+		FluidDomain invalid = emptyMaterialDomain(64); invalid.setVolume(1, 1, 1, .001F);
+		invalid.bindChemistry(registries.chemical()); invalid.bindGasRegistry(registries.gas());
+		var definitions = registries.thermal().materials().stream().map(material ->
+				material.carrierKind() != cc.ecisr.mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID ? material
+				: new cc.ecisr.mmm.thermal.ThermalMaterialDefinition(material.id(), material.carrierKind(), material.carrierId(),
+				300, 0, 0, java.util.List.of(new cc.ecisr.mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1, 1000,
+						Double.MAX_VALUE / 8)))).toList();
+		invalid.bindThermal(new cc.ecisr.mmm.thermal.ThermalRegistry(definitions, registries.thermal().speciesOffsets(),
+				java.util.List.of(), java.util.List.of(), java.util.List.of(), registries.chemical().fingerprint(), "",
+				registries.gas().fingerprint()), invalid.materialRegistry, 300);
+		require(invalid.thermalState.temperature(0, invalid.thermalMarkerContext()) == 300, "initial insertion owner was invalid");
+		var record = invalid.chemicalParcels.tryDefaultRecord(invalid.materialRegistry.material(0).id(),
+				.125F, invalid.config.cellSize(), 125, false);
+		var ledger = cc.ecisr.mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical())
+				.add(invalid.materialRegistry.material(0).id(), false, .125, invalid.unitScale.kilograms(125), record).build();
+		// The mixed batch's first small carrier is valid; the second carrier overflows m*cv at finite U.
+		for (Runnable insertion : java.util.List.<Runnable>of(
+				() -> invalid.addVolumeNearBudgeted(1, 1, 1, .125F, 0),
+				() -> invalid.tryInsertExactMixture(1, 1, 1, java.util.List.of(
+						new FluidDomain.MaterialPortion(0, .001F, (double) .001F * 1000),
+						new FluidDomain.MaterialPortion(1, .125, 106.25)), 0, true),
+				() -> invalid.tryInsertExactChemical(1, 1, 1, ledger, 0, true))) {
+			ReplacementState before = replacementState(invalid);
+			try { insertion.run(); throw new AssertionError("default insertion accepted a finite U with overflowing heat capacity"); }
+			catch (IllegalArgumentException expected) { }
+			requireUnchanged(invalid, before);
+		}
+		FluidDomain valid = fullCapabilityDomain(registries);
+		var water = valid.chemicalParcels.tryDefaultRecord(valid.materialRegistry.material(0).id(),
+				.13F, valid.config.cellSize(), (double) .13F * 1000, false);
+		var chemical = cc.ecisr.mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical())
+				.add(valid.materialRegistry.material(0).id(), false, .13F, valid.unitScale.kilograms((double) .13F * 1000), water).build();
+		for (Runnable insertion : java.util.List.<Runnable>of(
+				() -> require(valid.addVolumeNearBudgeted(1, 1, 1, .13F, 0).addedVolume() == .13F, "default volume insertion failed"),
+				() -> require(valid.tryInsertExactMixture(1, 1, 1, java.util.List.of(
+						new FluidDomain.MaterialPortion(1, .13F, (double) .13F * 850)), 0, true).transferred(), "default material insertion failed"),
+				() -> require(valid.tryInsertExactChemical(1, 1, 1, chemical, 0, true).transferred(), "default chemical insertion failed"))) {
+			int first = valid.particles.count(); long beforeQ = valid.chemicalParcels.totalQuanta();
+			long sourceQ = valid.chemicalParcels.externalSource().totalQuanta();
+			var sourceU = valid.thermalState.auditLedger().externalSource();
+			insertion.run();
+			var addedU = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+			for (int p = first; p < valid.particles.count(); p++) {
+				addedU = addedU.add(cc.ecisr.mmm.units.SignedDyadic.of(valid.thermalState.liquidInternalEnergy(p)));
+				require(valid.thermalState.temperature(p, valid.thermalMarkerContext()) > 0, "default insertion stored invalid temperature");
+			}
+			require(valid.thermalState.auditLedger().externalSource().subtract(sourceU).equals(addedU)
+					&& valid.exactInternalEnergy().equals(valid.thermalState.auditLedger().expectedInventory()),
+					"default source did not retain the exact sum of actual stored energies");
+			require(valid.chemicalParcels.totalQuanta() - beforeQ == valid.chemicalParcels.externalSource().totalQuanta() - sourceQ,
+					"default insertion chemical source did not close");
+		}
+	}
+
 	private record ReplacementState(String owners, Object source, Object sink, Object thermalAudit) { }
 	private static ReplacementState replacementState(FluidDomain domain) {
 		StringBuilder state = new StringBuilder().append(domain.carrierMutationRevision()).append(':').append(domain.particles.count());
@@ -145,7 +202,7 @@ public final class CarrierMutationValidation {
 	private static void requireUnchanged(FluidDomain domain, ReplacementState before) {
 		ReplacementState after = replacementState(domain);
 		require(after.owners.equals(before.owners) && after.source == before.source && after.sink == before.sink
-				&& after.thermalAudit == before.thermalAudit, "rejected cell replacement changed owners, revisions or audit objects");
+				&& after.thermalAudit == before.thermalAudit, "rejected carrier edit changed owners, revisions or audit objects");
 	}
 
 	private static void independentWorkFinishesBeforeRejection() {
