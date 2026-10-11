@@ -25,6 +25,26 @@ public final class ThermalOwnerStoreValidation {
 		liquidTemperatureTracksMutableInventory();
 		referenceTermsKeepCanonicalRationalRounding();
 		referenceEnergyUsesCanonicalSpeciesOrder();
+		coolingInversionRetainsEnergyScale();
+	}
+
+	private static void coolingInversionRetainsEnergyScale() {
+		for (double cv : new double[] {Math.scalb(1.0, -1000), 1, Math.scalb(1.0, 1000), 1e308}) {
+			var material = new ThermalMaterialDefinition("test:cooling", ThermalMaterialDefinition.CarrierKind.DEVICE,
+					"test:cooling", 300, 0, 1, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 500, cv)));
+			var state = new ThermalStateFunction(new ThermalRegistry(List.of(material)));
+			double energy = state.internalEnergyAtTemperature(0, 1, Map.of(), 299);
+			require(energy == -cv && state.stateForInternalEnergy(0, 1, Map.of(), energy).temperatureK() == 299,
+					"cooling inversion lost a finite temperature under energy scaling");
+		}
+		var material = new ThermalMaterialDefinition("test:wide_cooling", ThermalMaterialDefinition.CarrierKind.DEVICE,
+				"test:wide_cooling", Math.scalb(1.0, 600), 0, 1,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(1, Math.scalb(1.0, 600), Math.scalb(1.0, 424))));
+		var state = new ThermalStateFunction(new ThermalRegistry(List.of(material)));
+		double target = Math.scalb(1.0, 599), energy = state.internalEnergyAtTemperature(0, 1, Map.of(), target);
+		require(energy == -Math.scalb(1.0, 1023)
+				&& state.stateForInternalEnergy(0, 1, Map.of(), energy).temperatureK() == target,
+				"an overflowing whole-segment capacity rejected a finite cooling state");
 	}
 
 	private static void referenceEnergyUsesCanonicalSpeciesOrder() {

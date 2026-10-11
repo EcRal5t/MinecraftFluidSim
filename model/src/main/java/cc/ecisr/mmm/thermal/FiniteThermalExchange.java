@@ -149,8 +149,7 @@ public final class FiniteThermalExchange {
 		for (Contact contact : canonical) {
 			exchangeRequired |= contact.temperatureK() != initialBodyTemperature;
 			conductanceSum += contact.conductanceEuPerSecondK();
-			stableDt = Math.min(stableDt, 0.5 * contact.heatCapacityEuPerK()
-					/ contact.conductanceEuPerSecondK());
+			stableDt = Math.min(stableDt, stableStep(contact.heatCapacityEuPerK(), contact.conductanceEuPerSecondK()));
 		}
 		if (!(Double.isFinite(conductanceSum) && conductanceSum > 0.0)) {
 			throw new IllegalArgumentException("Finite thermal conductance sum is invalid");
@@ -158,7 +157,7 @@ public final class FiniteThermalExchange {
 		// The body may cross a caloric-segment boundary during this plan. Using only its initial
 		// heat capacity can make a later lower-capacity segment unstable, so bind the whole plan
 		// to the smallest capacity in the registry-frozen declared segments.
-		stableDt = Math.min(stableDt, 0.5 * minimumBodyHeatCapacity / conductanceSum);
+		stableDt = Math.min(stableDt, stableStep(minimumBodyHeatCapacity, conductanceSum));
 		int substeps = exchangeRequired ? Math.max(1, (int) Math.ceil(logicalDtSeconds / stableDt)) : 1;
 		if (substeps > maximumSubsteps) {
 			throw new IllegalArgumentException("Finite thermal stability substep budget exceeded: " + substeps);
@@ -175,8 +174,8 @@ public final class FiniteThermalExchange {
 			double bodyDelta = 0.0;
 			for (int index = 0; index < canonical.size(); index++) {
 				Contact contact = canonical.get(index);
-				double transfer = contact.conductanceEuPerSecondK()
-						* (bodyTemperature - fluidTemperature[index]) * dt;
+				double transfer = ThermalContactExchange.product(contact.conductanceEuPerSecondK(),
+						bodyTemperature - fluidTemperature[index], dt);
 				if (!Double.isFinite(transfer)) throw new IllegalArgumentException("Finite thermal transfer is not finite");
 				double candidateTemperature = fluidTemperature[index] + transfer / contact.heatCapacityEuPerK();
 				if (!(Double.isFinite(candidateTemperature) && candidateTemperature >= contact.minimumTemperatureK()
@@ -212,5 +211,12 @@ public final class FiniteThermalExchange {
 			exactChange = exactChange.add(SignedDyadic.of(fluidDelta[index]));
 		}
 		return new Plan(body, after, canonical, deltas, substeps, maximumTransfer, exactChange);
+	}
+
+	private static double stableStep(double capacity, double conductance) {
+		double half = 0.5 * capacity, result = half / conductance;
+		if (half >= Double.MIN_NORMAL && Double.isFinite(result) && result > 0.0) return result;
+		int ce = ThermalContactExchange.exponent(capacity), ge = ThermalContactExchange.exponent(conductance);
+		return Math.scalb(0.5 * Math.scalb(capacity, -ce) / Math.scalb(conductance, -ge), ce - ge);
 	}
 }

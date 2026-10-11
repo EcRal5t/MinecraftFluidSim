@@ -365,6 +365,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 
 	static void finiteThermalBodyExchangesWithoutMixing() {
 		localThermalEditsPreserveRemoteCarrierEnergy();
+		finiteThermalExchangeRetainsEnergyScale();
 		ThermalMaterialDefinition wall = new ThermalMaterialDefinition("test:thermal/exchanger_wall",
 				ThermalMaterialDefinition.CarrierKind.DEVICE, "test:exchanger_wall",
 				300.0, 0.0, 20.0,
@@ -437,6 +438,44 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				new FiniteThermalExchange.Contact(0, 250.0, 1_000.0, 100.0, 250.0, 500.0)
 		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS),
 				"finite thermal planner ignored a lower-capacity reachable caloric segment");
+	}
+
+	private static void finiteThermalExchangeRetainsEnergyScale() {
+		for (double capacity : new double[] {Double.MIN_VALUE, 3 * Double.MIN_VALUE, Math.scalb(1.0, -1000), 1, Math.scalb(1.0, 1000)}) {
+			var material = new ThermalMaterialDefinition("test:scaled_device", ThermalMaterialDefinition.CarrierKind.DEVICE,
+					"test:scaled_device", 300, 0, 1, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, capacity)));
+			var registry = new ThermalRegistry(List.of(material)); var state = new ThermalStateFunction(registry);
+			var body = new FiniteThermalBodyState(0, registry.fingerprint(), material.id(), 1,
+					state.internalEnergyAtTemperature(0, 1, Map.of(), 400));
+			var plan = FiniteThermalExchange.plan(registry, body, List.of(
+					new FiniteThermalExchange.Contact(0, 300, capacity, capacity, 1, 1000)), 1, 8);
+			require(plan.substeps() == 2 && plan.contacts().get(0).finalTemperatureK() == 350
+					&& state.stateForInternalEnergy(0, 1, Map.of(), plan.after().internalEnergyEu()).temperatureK() == 350
+					&& plan.roundoffResidual().equals(SignedDyadic.ZERO),
+					"finite exchange lost its stable step or temperature under energy scaling");
+			if (capacity == 3 * Double.MIN_VALUE) {
+				var partial = FiniteThermalExchange.plan(registry, body, List.of(
+						new FiniteThermalExchange.Contact(0, 300, capacity, capacity, 1, 1000)), 0.6, 8);
+				require(partial.substeps() == 2, "rounded subnormal half-capacity weakened the stability limit");
+			}
+		}
+		double capacity = Math.scalb(1.0, -300), hot = Math.scalb(1.0, 500), cold = Math.scalb(1.0, 499);
+		var material = new ThermalMaterialDefinition("test:wide_device", ThermalMaterialDefinition.CarrierKind.DEVICE,
+				"test:wide_device", 1, 0, 1, List.of(new ThermalMaterialDefinition.CaloricSegment(1, hot, capacity)));
+		var registry = new ThermalRegistry(List.of(material)); var state = new ThermalStateFunction(registry);
+		for (boolean cooling : new boolean[] {true, false}) {
+			var body = new FiniteThermalBodyState(0, registry.fingerprint(), material.id(), 1,
+					state.internalEnergyAtTemperature(0, 1, Map.of(), cooling ? hot : cold));
+			var plan = FiniteThermalExchange.plan(registry, body, List.of(new FiniteThermalExchange.Contact(
+					0, cooling ? cold : hot, capacity, Math.scalb(1.0, 700), 1, hot)), Math.scalb(1.0, -1000), 8);
+			double finalTemperature = 3 * Math.scalb(1.0, 498);
+			require(plan.substeps() == 2
+					&& plan.contacts().get(0).internalEnergyDeltaEu() == (cooling ? 1 : -1) * Math.scalb(1.0, 198)
+					&& plan.contacts().get(0).finalTemperatureK() == finalTemperature
+					&& state.stateForInternalEnergy(0, 1, Map.of(), plan.after().internalEnergyEu()).temperatureK() == finalTemperature
+					&& plan.roundoffResidual().equals(SignedDyadic.ZERO),
+					"intermediate heat-flux overflow rejected a finite closed exchange");
+		}
 	}
 
 	private static void localThermalEditsPreserveRemoteCarrierEnergy() {

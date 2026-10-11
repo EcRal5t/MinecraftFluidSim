@@ -141,14 +141,17 @@ public final class ThermalContactExchange {
 		return Math.scalb(Math.scalb(delta, -re) / denominator, re + scale);
 	}
 
-	private static double product(double a, double b, double c) {
+	/** Shared contact arithmetic; sign is retained while intermediate overflow and subnormal rounding are avoided. */
+	static double product(double a, double b, double c) {
+		if (a == 0.0 || b == 0.0 || c == 0.0) return 0.0;
 		double first = a * b, result = first * c;
-		if (Double.isFinite(first) && first >= Double.MIN_NORMAL && Double.isFinite(result) && result > 0.0) return result;
+		if (Double.isFinite(first) && Math.abs(first) >= Double.MIN_NORMAL
+				&& Double.isFinite(result) && result != 0.0) return result;
 		int ae = exponent(a), be = exponent(b), ce = exponent(c);
 		return Math.scalb(Math.scalb(a, -ae) * Math.scalb(b, -be) * Math.scalb(c, -ce), ae + be + ce);
 	}
 
-	private static int exponent(double value) {
+	static int exponent(double value) {
 		int exponent = Math.getExponent(value);
 		return exponent == Double.MIN_EXPONENT - 1 ? Math.getExponent(Math.scalb(value, 54)) - 54 : exponent;
 	}
