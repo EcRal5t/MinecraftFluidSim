@@ -13,11 +13,11 @@ import java.util.function.IntToLongFunction;
 
 /** Collision-resolved granular motion preview from pressure-corrected velocities, committed after liquid advection. */
 final class FlipGranularCollision {
-	private static final int[] SWEEP_AXIS_ORDER = {0, 2, 1};
 	private final int sizeX, sizeY, sizeZ;
 	private final float cellSize;
 	private final FlipCutCellGeometry cutCells;
 	private final GranularDepositStore deposits;
+	private final GranularSphereCollision sphereCollision;
 	private final float[] nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ;
 	private final int[] nextContactAge;
 	private final byte[] nextFlags;
@@ -29,6 +29,8 @@ final class FlipGranularCollision {
 	                      FlipCutCellGeometry cutCells, GranularDepositStore deposits, int capacity) {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
 		this.cellSize = cellSize; this.cutCells = cutCells; this.deposits = deposits;
+		this.sphereCollision = new GranularSphereCollision(sizeX, sizeY, sizeZ, cellSize, cutCells,
+				deposits == null ? null : this::depositSurfaceY);
 		this.nextX = new float[capacity]; this.nextY = new float[capacity]; this.nextZ = new float[capacity];
 		this.nextVelocityX = new float[capacity]; this.nextVelocityY = new float[capacity];
 		this.nextVelocityZ = new float[capacity];
@@ -40,42 +42,20 @@ final class FlipGranularCollision {
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular preview dt is invalid");
 		previewCount = parcels.count();
 		lastCapacityHeld = 0;
+		int operations = GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP;
 		for (int index = 0; index < previewCount; index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index);
 			ParticulateMaterial material = registry.material(parcel.materialHandle());
 			float radius = collisionRadius(parcel.solidVolumeSvq());
 			float[] position = {parcel.x(), parcel.y(), parcel.z()};
-			float[] motionVelocity = {parcel.velocityX(), parcel.velocityY(), parcel.velocityZ()};
-			float[] velocity = motionVelocity.clone();
-			boolean supported = false;
-			for (int axis : SWEEP_AXIS_ORDER) {
-				float maximum = (axis == 0 ? sizeX : axis == 1 ? sizeY : sizeZ) * cellSize - radius;
-				// Drift uses the solved velocity; contact impulses update the committed end velocity.
-				float rawTarget = position[axis] + motionVelocity[axis] * dt;
-				float target = clamp(rawTarget, radius, maximum);
-				boolean downward = axis == 1 && motionVelocity[axis] <= 0.0F;
-				position[axis] = sweepAxis(position, velocity, axis, target, radius, material);
-				// An intervening micro box owns the first contact; the outer shell receives
-				// an impulse only when the swept drift actually reaches its clamped target.
-				if (target != rawTarget && position[axis] == target) {
-					resolveContact(velocity, axis, material);
-					supported |= axis == 1 && rawTarget < radius;
-				}
-				supported |= downward && position[axis] != target;
-				if (axis == 1) {
-					float depositSurface = depositSurfaceY(position[0], position[2]);
-					if (depositSurface >= 0.0F && position[1] - radius <= depositSurface + cellSize * 1.0e-5F) {
-						position[1] = Math.min(maximum, depositSurface + radius);
-						if (velocity[1] <= 0.0F) resolveContact(velocity, 1, material);
-						supported = true;
-					}
-				}
-			}
-			nextX[index] = position[0]; nextY[index] = position[1]; nextZ[index] = position[2];
-			nextVelocityX[index] = velocity[0]; nextVelocityY[index] = velocity[1]; nextVelocityZ[index] = velocity[2];
+			float[] velocity = {parcel.velocityX(), parcel.velocityY(), parcel.velocityZ()};
+			var motion = sphereCollision.preview(position, velocity, radius, dt, material, operations);
+			operations -= motion.operations();
+			nextX[index] = motion.x(); nextY[index] = motion.y(); nextZ[index] = motion.z();
+			nextVelocityX[index] = motion.vx(); nextVelocityY[index] = motion.vy(); nextVelocityZ[index] = motion.vz();
 			float restingSpeed = cellSize * 0.05F;
-			boolean resting = supported && velocity[0] * velocity[0] + velocity[1] * velocity[1]
-					+ velocity[2] * velocity[2] <= restingSpeed * restingSpeed;
+			boolean resting = motion.supported() && motion.vx() * motion.vx() + motion.vy() * motion.vy()
+					+ motion.vz() * motion.vz() <= restingSpeed * restingSpeed;
 			nextContactAge[index] = resting ? incrementContactAge(parcel.contactAge()) : 0;
 			nextFlags[index] = resting ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
 					: (byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED);
@@ -125,9 +105,9 @@ final class FlipGranularCollision {
 
 	boolean positionValid(float x, float y, float z, long solidVolumeSvq) {
 		float radius = collisionRadius(solidVolumeSvq);
-		if (x < radius || x > sizeX * cellSize - radius
-				|| y < radius || y > sizeY * cellSize - radius
-				|| z < radius || z > sizeZ * cellSize - radius
+		if (x < radius || x > sizeX * (double) cellSize - radius
+				|| y < radius || y > sizeY * (double) cellSize - radius
+				|| z < radius || z > sizeZ * (double) cellSize - radius
 				|| sphereTouchesSolid(x, y, z, radius)) return false;
 		float depositSurface = depositSurfaceY(x, z);
 		return depositSurface < 0.0F || y - radius > depositSurface + cellSize * 1.0e-5F;
@@ -225,48 +205,6 @@ final class FlipGranularCollision {
 
 	private static int incrementContactAge(int age) { return age == Integer.MAX_VALUE ? age : age + 1; }
 
-	private float sweepAxis(float[] position, float[] velocity, int axis, float target, float radius,
-	                        ParticulateMaterial material) {
-		float start = position[axis], distance = target - start;
-		if (distance == 0.0F) return start;
-		float maximumIncrement = cellSize / (FlipCutCellGeometry.MICRO_CELLS_PER_AXIS * 4.0F);
-		int increments = Math.max(1, (int) Math.ceil(Math.abs(distance) / maximumIncrement));
-		float accepted = start;
-		for (int increment = 1; increment <= increments; increment++) {
-			float candidate = increment == increments ? target : start + distance * increment / increments;
-			float previous = position[axis]; position[axis] = candidate;
-			boolean blocked = sphereTouchesSolid(position[0], position[1], position[2], radius);
-			position[axis] = previous;
-			if (blocked) {
-				resolveContact(velocity, axis, material);
-				break;
-			}
-			accepted = candidate;
-		}
-		return accepted;
-	}
-
-	private void resolveContact(float[] velocity, int axis, ParticulateMaterial material) {
-		float incomingNormal = velocity[axis];
-		velocity[axis] = (float) (-velocity[axis] * material.restitution());
-		// A parcel resting on a face receives gravity again before every preview. Without a
-		// low-energy contact dead zone, restitution turns that one-tick impulse into an endless
-		// sub-visible bounce and the parcel can never accumulate settlement contact age.
-		if (Math.abs(velocity[axis]) <= cellSize * 0.125F) velocity[axis] = 0.0F;
-		double normalImpulsePerMass = Math.abs((double) velocity[axis] - incomingNormal);
-		double tangentSquared = 0;
-		for (int tangent = 0; tangent < 3; tangent++) if (tangent != axis) {
-			tangentSquared += velocity[tangent] * (double) velocity[tangent];
-		}
-		double tangentSpeed = Math.sqrt(tangentSquared);
-		if (tangentSpeed == 0 || normalImpulsePerMass == 0) return;
-		double tangentScale = tangentSpeed <= material.staticFriction() * normalImpulsePerMass ? 0
-				: Math.max(0, 1 - material.dynamicFriction() * normalImpulsePerMass / tangentSpeed);
-		for (int tangent = 0; tangent < 3; tangent++) if (tangent != axis) {
-			velocity[tangent] = (float) (velocity[tangent] * tangentScale);
-		}
-	}
-
 	/** Low-cost deposits are vertical bulk columns; skeleton remains the displaced-volume truth. */
 	private float depositSurfaceY(float x, float z) {
 		if (deposits == null) return -1.0F;
@@ -302,7 +240,4 @@ final class FlipGranularCollision {
 		return Math.max(minimum, Math.min(maximum, value));
 	}
 
-	private static double clamp(double value, double minimum, double maximum) {
-		return Math.max(minimum, Math.min(maximum, value));
-	}
 }

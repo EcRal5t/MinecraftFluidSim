@@ -11,6 +11,7 @@ public final class GranularCarrierValidation {
 
 	public static void validate() {
 		sphereMicroBoxContacts();
+		straightSphereContactsAreSymmetric();
 		contactImpulsePreservesSolvedDrift();
 		contactImpulseObeysCoulombCone();
 		committedContactMomentumCloses();
@@ -85,8 +86,103 @@ public final class GranularCarrierValidation {
 				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
 		collision.preview(parcels, registry, .05F);
 		collision.commit(parcels);
-		require(parcels.parcel(0).x() == .42F,
-				"granular motion entered an occupied micro-box through its corner");
+		var next = parcels.parcel(0);
+		require(next.x() > .42F && collision.positionValid(next.x(), next.y(), next.z(), svq)
+				&& next.velocityY() < 0 && next.velocityZ() < 0,
+				"sphere corner contact must use its oblique normal and preserve the remaining tangent drift");
+	}
+
+	private static void straightSphereContactsAreSymmetric() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+		int[][] permutations = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
+		for (int feature : new int[]{1, 3, 7, 0}) {
+			GranularSphereCollision.Motion reference = null;
+			for (int[] permutation : permutations) for (int reflection = 0; reflection < 8; reflection++) {
+				float[] position = {.39F, .51F, .625F}, velocity = {1.76F, -2.16F, 0};
+				if (feature != 0) for (int a = 0; a < 3; a++) {
+					double normal = (feature & 1 << a) == 0 ? 0 : 1 / Math.sqrt(Integer.bitCount(feature));
+					position[a] = (float) (normal == 0 ? .625 : .75 + (radius + .02) * normal);
+					velocity[a] = (float) (-1.6 * normal);
+				}
+				float[] transformedPosition = new float[3], transformedVelocity = new float[3];
+				for (int a = 0; a < 3; a++) {
+					boolean reflected = (reflection & 1 << a) != 0;
+					transformedPosition[a] = reflected ? 1.25F - position[permutation[a]] : position[permutation[a]];
+					transformedVelocity[a] = reflected ? -velocity[permutation[a]] : velocity[permutation[a]];
+				}
+				var geometry = new FlipCutCellGeometry(3, 3, 3); geometry.replaceMask(13, 1);
+				var collision = new GranularSphereCollision(3, 3, 3, .5F, geometry, null);
+				require((Math.abs(transformedVelocity[0]) + Math.abs(transformedVelocity[1]) + Math.abs(transformedVelocity[2])) * .05F <= .5F * .4F,
+						"straight sphere fixture must fit the default Courant bound");
+				var motion = collision.preview(transformedPosition, transformedVelocity, radius, .05F, registry.material(sand), 32);
+				float[] endpoint = {motion.x(), motion.y(), motion.z()}, response = {motion.vx(), motion.vy(), motion.vz()};
+				require(!geometry.sphereTouchesSolid(motion.x(), motion.y(), motion.z(), radius, .5F), "rounded CCD endpoint intersects a micro box");
+				if (feature == 0) for (int a = 0; a < 3; a++) {
+					// The straight diagonal misses the rounded box; an axis-folded path collides.
+					require(endpoint[a] == transformedPosition[a] + transformedVelocity[a] * .05F && response[a] == transformedVelocity[a],
+							"straight sphere trajectory acquired a spurious contact");
+				}
+				else for (int a = 0; a < 3; a++) {
+					double normal = (feature & 1 << permutation[a]) == 0 ? 0 : 1 / Math.sqrt(Integer.bitCount(feature));
+					double analytic = normal == 0 ? .625 : .75 + radius * normal;
+					if ((reflection & 1 << a) != 0) { analytic = 1.25 - analytic; normal = -normal; }
+					require(Math.abs(endpoint[a] - analytic) <= 2 * Math.ulp(endpoint[a])
+							&& Math.abs(response[a] - 1.6 * registry.material(sand).restitution() * normal) < 8 * Math.ulp(1F),
+							"radial face, edge or corner contact disagrees with the independent distance solution");
+				}
+				if (reference == null) reference = motion;
+				float[] referencePosition = {reference.x(), reference.y(), reference.z()}, referenceVelocity = {reference.vx(), reference.vy(), reference.vz()};
+				for (int a = 0; a < 3; a++) {
+					boolean reflected = (reflection & 1 << a) != 0;
+					double expectedPosition = reflected ? 1.25 - referencePosition[permutation[a]] : referencePosition[permutation[a]];
+					double expectedVelocity = reflected ? -referenceVelocity[permutation[a]] : referenceVelocity[permutation[a]];
+					require(Math.abs(endpoint[a] - expectedPosition) <= 2 * Math.ulp(endpoint[a])
+							&& Math.abs(response[a] - expectedVelocity) <= 8 * Math.ulp(1F), "sphere contact changed under an axis permutation or reflection");
+				}
+			}
+		}
+		var geometry = new FlipCutCellGeometry(3, 3, 3); geometry.replaceMask(13, 1);
+		var material = registry.material(sand);
+		geometry.replaceMask(13, 33); // Two successive, non-orthogonal edge contacts.
+		float edge = (float) (.75 + (radius + .01) / Math.sqrt(2));
+		var response = new GranularSphereCollision(3, 3, 3, .5F, geometry, null)
+				.preview(new float[]{edge, edge, .60F}, new float[]{-.2F, -.2F, 2}, radius, .05F, material, 32);
+		require(response.operations() == 2 && response.z() < .70F && response.y() > .75 + radius / Math.sqrt(2)
+				&& !geometry.sphereTouchesSolid(response.x(), response.y(), response.z(), radius, .5F)
+				&& response.vx() + response.vy() >= 0 && response.vy() - response.vz() >= 0
+				&& response.vx() * (double) response.vx() + response.vy() * (double) response.vy()
+						+ response.vz() * (double) response.vz() <= 4.08,
+				"successive edge contacts must advance remaining drift and retain the earlier tangent constraint");
+		// Two simultaneous perpendicular faces: neither contact may undo the other.
+		geometry.replaceMask(13, 0); geometry.replaceMask(10, 4); geometry.replaceMask(12, 2);
+		float start = .5F + radius + .01F;
+		response = new GranularSphereCollision(3, 3, 3, .5F, geometry, null)
+				.preview(new float[]{start, start, .625F}, new float[]{-1, -1, .2F}, radius, .05F, material, 32);
+		require(response.operations() == 1 && response.vx() >= 0 && response.vy() >= 0
+				&& !geometry.sphereTouchesSolid(response.x(), response.y(), response.z(), radius, .5F),
+				"simultaneous face contacts must share one admissible response");
+		geometry.replaceMask(10, 0); geometry.replaceMask(12, 0); geometry.replaceMask(13, 1);
+		var parcels = new GranularParcelStore(registry, 1);
+		parcels.add(new GranularParcelStore.Parcel(.625F, .75F + radius + .01F, .625F, 0, -.2F, 0,
+				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+		var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, null, 1);
+		collision.preview(parcels, registry, .1F); collision.commit(parcels);
+		for (int step = 1; step <= 8; step++) {
+			var p = parcels.parcel(0);
+			parcels.overwrite(0, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(), 0, -.0001F, 0,
+					p.solidVolumeSvq(), p.mass(), p.materialHandle(), p.solidCompositionHandle(), p.contactAge(), p.flags()));
+			// A fresh collision object proves support is derived from the stored pose.
+			collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, null, 1);
+			collision.preview(parcels, registry, .0001F); var impulse = collision.commit(parcels);
+			var next = parcels.parcel(0);
+			require(next.y() == p.y() && next.velocityY() == 0 && next.contactAge() == step + 1
+					&& (next.flags() & GranularParcelStore.FLAG_SUPPORTED) != 0
+					&& impulse.y() == next.mass() * (double) -.0001F,
+					"rounded resting contact lost support or normal impulse when drift rounded to zero");
+		}
 	}
 
 	private static void contactImpulsePreservesSolvedDrift() {
@@ -99,7 +195,7 @@ public final class GranularCarrierValidation {
 		double tangentScale = 1 - material.dynamicFriction() * vz * (1 + material.restitution()) / Math.hypot(vx, vy);
 		for (boolean internal : new boolean[]{false, true}) {
 			var geometry = new FlipCutCellGeometry(3, 3, 3);
-			float x = .625F, y = .625F, z = 1.5F - radius;
+			float x = .625F, y = .625F, z = Math.nextDown(1.5F - radius);
 			if (internal) {
 				geometry.replaceMask(13, 1); // [.5,.75]^3, approached along Z.
 				z = .5F - radius - .01F;
@@ -165,14 +261,14 @@ public final class GranularCarrierValidation {
 	private static void contactImpulseObeysCoulombCone() {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		var material = registry.material(registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND));
-		var collision = new FlipGranularCollision(2, 2, 2, .5F, new FlipCutCellGeometry(2, 2, 2), null, 1);
+		var collision = new GranularSphereCollision(2, 2, 2, .5F, new FlipCutCellGeometry(2, 2, 2), null);
 		try {
-			var contact = FlipGranularCollision.class.getDeclaredMethod("resolveContact", float[].class,
-					int.class, cc.ecisr.mmm.granular.ParticulateMaterial.class);
+			var contact = GranularSphereCollision.class.getDeclaredMethod("impulse", double[].class,
+					double[][].class, cc.ecisr.mmm.granular.ParticulateMaterial.class);
 			contact.setAccessible(true);
 			for (int axis = 0; axis < 3; axis++) for (float normal : new float[]{0, .01F, .2F, 2, -2}) {
 				int first = (axis + 1) % 3, second = (axis + 2) % 3;
-				float[] velocity = new float[3];
+				double[] velocity = new double[3];
 				velocity[axis] = normal; velocity[first] = .6F; velocity[second] = .8F;
 				double speed = Math.hypot(velocity[first], velocity[second]);
 				float nextNormal = (float) (-normal * material.restitution());
@@ -180,15 +276,16 @@ public final class GranularCarrierValidation {
 				double impulse = Math.abs((double) nextNormal - normal);
 				double expectedSpeed = speed <= material.staticFriction() * impulse ? 0
 						: Math.max(0, speed - material.dynamicFriction() * impulse);
-				contact.invoke(collision, velocity, axis, material);
+				double[][] normals = {new double[3]}; normals[0][axis] = normal > 0 ? -1 : 1;
+				velocity = (double[]) contact.invoke(collision, velocity, normals, material);
 				double nextSpeed = Math.hypot(velocity[first], velocity[second]);
-				require(velocity[axis] == nextNormal && Math.abs(nextSpeed - expectedSpeed) < 2 * Math.ulp(1F),
+				require((float) velocity[axis] == nextNormal && Math.abs(nextSpeed - expectedSpeed) < 2 * Math.ulp(1F),
 						"Coulomb friction must use the actual normal impulse including the resting dead zone");
 				require(speed - nextSpeed <= material.staticFriction() * impulse + 2 * Math.ulp(1F)
 						&& nextSpeed * nextSpeed + nextNormal * (double) nextNormal <= speed * speed + normal * (double) normal,
 						"contact impulse exceeded its friction cone or increased kinetic energy");
 				if (normal == 0) for (int repeat = 0; repeat < 10; repeat++) {
-					contact.invoke(collision, velocity, axis, material);
+					velocity = (double[]) contact.invoke(collision, velocity, normals, material);
 					require(velocity[first] == .6F && velocity[second] == .8F,
 							"zero normal impulse must preserve tangent velocity under repeated contact");
 				}
@@ -201,7 +298,7 @@ public final class GranularCarrierValidation {
 			var domain = domain();
 			long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 			float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
-			addParcel(domain, .75F, .75F, held ? .75F : 3F - radius, .4F, -.6F, .8F);
+			addParcel(domain, .75F, .75F, held ? .75F : Math.nextDown(3F - radius), .4F, -.6F, .8F);
 			domain.ensureGrid();
 			var before = domain.granularState.parcels.parcel(0);
 			domain.granularMechanicalStage.previewCollision(.05F);
