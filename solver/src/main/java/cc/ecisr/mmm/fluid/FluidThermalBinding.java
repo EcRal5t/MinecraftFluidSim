@@ -127,7 +127,7 @@ final class FluidThermalBinding {
 		for (int index = 0; index < depositEnergy.length; index++) {
 			deposits.add(new GranularEnergyColumn.DepositEnergy(depositKeys.get(index), depositEnergy[index]));
 		}
-		state.restoreThermalGranular(activeEnergy, deposits);
+		state.restoreThermalGranular(activeEnergy, deposits, markers);
 		double[] restoredGas = snapshot.copyGasNodeEnergy();
 		if (restoredGas.length != (airNetwork == null ? 0 : airNetwork.nodeCount())
 				|| restoredGas.length > 0 && !state.gas().gasModelBound()) {

@@ -61,7 +61,7 @@ public final class ThermalDomainState {
 				sizeX, sizeY, sizeZ, cellSize, markers, airNetwork, maximumTransportSubsteps, null);
 	}
 
-	/** Builds a private restore target without first modeling energies that the snapshot will replace. */
+	/** Builds a private restore target with zero granular placeholders and the snapshot's liquid energies. */
 	public static ThermalDomainState restoreTarget(
 			ThermalRegistry registry, int[] materialByFluidHandle, int[] materialByGranularHandle,
 			double initialTemperatureK, int initialCapacity, int sizeX, int sizeY, int sizeZ,
@@ -106,12 +106,12 @@ public final class ThermalDomainState {
 		this.granularState = new GranularEnergyState(registry, granularColumn, coherentPhases, stateFunction,
 				materialByGranularHandle, initialTemperatureK, auditState);
 		for (int parcel = 0; parcel < markers.activeParcelCount(); parcel++) {
-			granularColumn.addActive(granularState.modeledGranularEnergy(markers.activeParcelMaterial(parcel),
+			granularColumn.addActive(restoredLiquidEnergy != null ? 0 : granularState.modeledGranularEnergy(markers.activeParcelMaterial(parcel),
 					markers.activeParcelComposition(parcel), markers.activeParcelMass(parcel),
 					initialTemperatureK, markers));
 		}
 		for (GranularEnergyColumn.DepositKey key : markers.depositKeys()) {
-			granularColumn.addDeposit(key, granularState.modeledGranularEnergy(key.materialHandle(), key.compositionHandle(),
+			granularColumn.addDeposit(key, restoredLiquidEnergy != null ? 0 : granularState.modeledGranularEnergy(key.materialHandle(), key.compositionHandle(),
 					markers.depositMass(key), initialTemperatureK, markers));
 		}
 		boolean supportsGas = airNetwork != null;
@@ -172,6 +172,31 @@ public final class ThermalDomainState {
 	public void restoreThermalCoherent(List<CoherentPhaseStore.Group> groups) { granularState.restoreCoherent(groups); }
 
 	public void restoreThermalGranular(double[] activeEnergy, List<GranularEnergyColumn.DepositEnergy> deposits) {
+		granularState.restoreGranular(activeEnergy, deposits);
+	}
+
+	/** Validates the actual restored carrier inventories before replacing either granular energy column. */
+	public void restoreThermalGranular(double[] activeEnergy, List<GranularEnergyColumn.DepositEnergy> deposits,
+			ThermalCarrierContext markers) {
+		if (activeEnergy == null || deposits == null || markers == null
+				|| activeEnergy.length != markers.activeParcelCount()) {
+			throw new IllegalArgumentException("Restored granular thermal inventory is incompatible");
+		}
+		List<GranularEnergyColumn.DepositKey> keys = markers.depositKeys();
+		if (deposits.size() != keys.size()) throw new IllegalArgumentException("Restored granular deposit energies are incompatible");
+		for (int parcel = 0; parcel < activeEnergy.length; parcel++) {
+			stateFunction.stateForInternalEnergy(materialByGranularHandle[markers.activeParcelMaterial(parcel)],
+					markers.activeParcelMass(parcel), markers.solidComposition(markers.activeParcelComposition(parcel)), activeEnergy[parcel]);
+		}
+		GranularEnergyColumn.DepositKey previous = null;
+		for (int index = 0; index < deposits.size(); index++) {
+			GranularEnergyColumn.DepositEnergy deposit = deposits.get(index);
+			if (deposit == null || !deposit.key().equals(keys.get(index)) || previous != null && previous.compareTo(deposit.key()) >= 0)
+				throw new IllegalArgumentException("Restored granular deposit keys are not canonical");
+			stateFunction.stateForInternalEnergy(materialByGranularHandle[deposit.key().materialHandle()],
+					markers.depositMass(deposit.key()), markers.solidComposition(deposit.key().compositionHandle()), deposit.internalEnergy());
+			previous = deposit.key();
+		}
 		granularState.restoreGranular(activeEnergy, deposits);
 	}
 

@@ -79,6 +79,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	static void granularEnergyColumnTransactions() {
 		granularActiveMergePreservesPositiveTemperature();
 		granularExternalExtractionRounding();
+		granularInsertionPreflightsExternalSource();
+		granularInsertionValidatesStoredEnergy();
 		String granularFingerprint = "2".repeat(64);
 		ThermalMaterialDefinition liquid = material("test:thermal/granular_host", "test:liquid", 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
@@ -164,6 +166,190 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(domain.exactInternalEnergy().equals(SignedDyadic.ZERO)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"granular clear did not move all active/deposit energy to the escaped sink");
+	}
+
+	private static void granularInsertionPreflightsExternalSource() {
+		try {
+			var production = cc.ecisr.mmm.simulation.FullCapabilityTestFixture.load();
+			var huge = SignedDyadic.of(1L, 40_000);
+			for (double temperature : new double[]{280, 300}) for (int mode = 0; mode < 3; mode++) {
+				var domain = new FluidDomain(4, 4, 4,
+						new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F), 512);
+				cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindFull(domain, production, temperature,
+						ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+				domain.setVolume(2, 2, 2, .001F);
+				int sand = production.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+				long parcel = cc.ecisr.mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+				double mass = production.granular().material(sand).referenceDensity() * parcel / SolidVolume.SVQ_PER_CELL;
+				require(domain.tryInsertExactGranular(2, 1, 1, sand, 0, parcel, mass).inserted(),
+						"granular source-budget fixture could not create its retained parcel");
+				var actual = domain.exactInternalEnergy();
+				var audit = new ThermalAuditLedger(SignedDyadic.ZERO, huge, huge, actual, SignedDyadic.ZERO, SignedDyadic.ZERO);
+				domain.thermalState.restoreAuditLedger(audit);
+				require(audit.expectedInventory().equals(actual), "restored granular source/sink did not close");
+				var granular = domain.granularState;
+				var retained = granular.parcels.parcel(0);
+				var inventory = cc.ecisr.mmm.granular.GranularAuditLedger.captureInventory(
+						granular.registry, granular.parcels, granular.deposits, granular.compositions);
+				var source = granular.externalSource; var sink = granular.escapedSink;
+				var liquid = domain.chemicalParcels.record(0);
+				var liquidSource = domain.chemicalParcels.externalSource(); var liquidSink = domain.chemicalParcels.escapedSink();
+				long carrierRevision = domain.carrierMutationRevision();
+				var revision = domain.thermalState.thermalRevision(); long structuralRevision = granular.mutationRevision();
+				var energy = domain.thermalState.granularColumn().copyActiveEnergy();
+				int compositions = granular.compositions.liveCount();
+				cc.ecisr.mmm.granular.SolidCompositionRecord composition = mode != 2 ? null
+						: cc.ecisr.mmm.granular.SolidCompositionRecord.fromStableAmounts(production.chemical(), Map.of(
+								cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions.NA_PLUS, 17_984L,
+								cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions.CL_MINUS, 17_984L), 0);
+				var group = mode != 2
+						? new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND, parcel * 2, mass * 2, null)
+						: new GranularTransferLedger.Group(BuiltinGranularDefinitions.PRECIPITATE, 50,
+								composition.totalMass(production.chemical()), composition);
+				var packet = new GranularTransferLedger(List.of(group));
+				java.util.function.Supplier<FluidDomain.GranularInsertion> insertion = mode == 0
+						? () -> domain.tryInsertExactGranular(1, 1, 1, sand, 0, parcel, mass)
+						: () -> domain.tryInsertExactGranular(1, 1, 1, packet, 0);
+				try {
+					insertion.get();
+					throw new AssertionError("unrepresentable granular external-source field was accepted");
+				} catch (IllegalArgumentException expected) {
+					require(expected.getMessage().contains("dyadic significand is over budget"),
+							"granular insertion failed before reaching the external-source budget");
+				}
+				require(granular.parcels.count() == 1 && granular.parcels.parcel(0).equals(retained)
+						&& granular.mutationRevision() == structuralRevision && granular.deposits.groupCount() == 0
+						&& granular.compositions.liveCount() == compositions && granular.externalSource.equals(source)
+						&& granular.escapedSink.equals(sink) && inventory.equals(cc.ecisr.mmm.granular.GranularAuditLedger.captureInventory(
+								granular.registry, granular.parcels, granular.deposits, granular.compositions))
+						&& Arrays.equals(energy, domain.thermalState.granularColumn().copyActiveEnergy())
+						&& domain.thermalState.matchesThermalRevision(revision) && domain.thermalAudit().equals(audit)
+						&& domain.particles.count() == 1 && domain.carrierMutationRevision() == carrierRevision
+						&& domain.chemicalParcels.record(0).equals(liquid) && domain.chemicalParcels.externalSource().equals(liquidSource)
+						&& domain.chemicalParcels.escapedSink().equals(liquidSink)
+						&& domain.exactInternalEnergy().equals(actual),
+						"granular source-budget rejection changed inventory, compositions, energy, audit or generation");
+				domain.thermalState.restoreAuditLedger(ThermalAuditLedger.initialized(actual));
+				require(insertion.get().inserted() && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+						&& granular.parcels.count() == domain.thermalState.granularColumn().activeCount(),
+						"valid granular insertion failed after a rejected source budget or lost its audit");
+			}
+		} catch (Exception failure) { throw new AssertionError(failure); }
+	}
+
+	private static void granularInsertionValidatesStoredEnergy() {
+		try {
+			var production = cc.ecisr.mmm.simulation.FullCapabilityTestFixture.load();
+			var definitions = production.thermal().materials().stream().map(material -> {
+				boolean sand = material.carrierId().equals(BuiltinGranularDefinitions.FINE_SAND);
+				boolean reactive = material.carrierId().equals(BuiltinGranularDefinitions.PRECIPITATE);
+				return new ThermalMaterialDefinition(material.id(), material.carrierKind(), material.carrierId(),
+						sand || reactive ? 400 : 1, sand ? 0x1p61 : reactive ? 0x1p62 : 0, 0,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)));
+			}).toList();
+			var registry = new ThermalRegistry(definitions, production.thermal().speciesOffsets(), List.of(), List.of(), List.of(),
+					production.chemical().fingerprint(), production.granular().fingerprint(), production.gas().fingerprint());
+			for (int mode = 0; mode < 3; mode++) {
+				var domain = new FluidDomain(4, 4, 4,
+						new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F), 512);
+				var liquids = cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, production.liquids());
+				domain.bindChemistry(production.chemical()); domain.bindGranular(production.granular(), liquids, production.materials());
+				domain.bindGasRegistry(production.gas()); domain.bindThermal(registry, liquids, 1);
+				String materialId = mode == 2 ? BuiltinGranularDefinitions.PRECIPITATE : BuiltinGranularDefinitions.FINE_SAND;
+				int material = production.granular().materialHandle(materialId);
+				long svq = cc.ecisr.mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+				double mass = production.granular().material(material).referenceDensity() * svq / SolidVolume.SVQ_PER_CELL;
+				var reactiveSpecies = Map.of(cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions.NA_PLUS, 17_984L,
+						cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions.CL_MINUS, 17_984L);
+				double speciesMass = cc.ecisr.mmm.granular.SolidCompositionRecord.fromStableAmounts(
+						production.chemical(), reactiveSpecies, 0).totalMass(production.chemical());
+				var composition = mode != 2 ? null : cc.ecisr.mmm.granular.SolidCompositionRecord.fromStableAmounts(
+						production.chemical(), reactiveSpecies, mass - speciesMass);
+				var function = new ThermalStateFunction(registry);
+				int thermal = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, materialId);
+				var species = composition == null ? Map.<String, Long>of() : composition.stableAmounts(production.chemical());
+				double modeled = function.internalEnergyAtTemperature(thermal, mass, species, 1);
+				require(Double.isFinite(modeled), "stored granular rejection fixture must have finite raw U");
+				try { function.stateForInternalEnergy(thermal, mass, species, modeled);
+					throw new AssertionError("stored granular fixture unexpectedly retained positive temperature");
+				} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
+				var audit = domain.thermalAudit(); var revision = domain.thermalState.thermalRevision();
+				long structural = domain.granularState.mutationRevision();
+				try {
+					if (mode == 0) domain.tryInsertExactGranular(1, 1, 1, material, 0, svq, mass);
+					else domain.tryInsertExactGranular(1, 1, 1,
+							new GranularTransferLedger(List.of(new GranularTransferLedger.Group(materialId, svq, mass, composition))), 0);
+					throw new AssertionError("granular insertion accepted a nonpositive stored owner temperature");
+				} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
+				require(domain.granularState.parcels.count() == 0 && domain.granularState.deposits.groupCount() == 0
+						&& domain.granularState.compositions.liveCount() == 0 && domain.thermalState.granularColumn().activeCount() == 0
+						&& domain.granularState.mutationRevision() == structural && domain.thermalState.matchesThermalRevision(revision)
+						&& domain.thermalAudit().equals(audit) && domain.exactInternalEnergy().equals(SignedDyadic.ZERO),
+						"invalid stored granular energy changed an inventory, composition, audit or generation");
+				int beads = production.granular().materialHandle(BuiltinGranularDefinitions.LIGHT_BEADS);
+				double beadMass = production.granular().material(beads).referenceDensity() * svq / SolidVolume.SVQ_PER_CELL;
+				require(domain.tryInsertExactGranular(1, 1, 1, beads, 0, svq, beadMass).inserted()
+						&& function.stateForInternalEnergy(registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,
+								BuiltinGranularDefinitions.LIGHT_BEADS), beadMass, Map.of(), domain.thermalState.granularColumn().activeEnergy(0)).temperatureK() == 1,
+						"valid cold granular owner was rejected after invalid stored energy");
+				granularRestoreUsesSnapshotEnergy(production, registry, materialId, svq, mass, composition, mode == 1);
+			}
+		} catch (Exception failure) { throw new AssertionError(failure); }
+	}
+
+	private static void granularRestoreUsesSnapshotEnergy(cc.ecisr.mmm.simulation.FullCapabilityTestFixture.Registries production,
+			ThermalRegistry registry, String materialId, long svq, double mass,
+			cc.ecisr.mmm.granular.SolidCompositionRecord composition, boolean deposited) {
+		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F);
+		var source = new FluidDomain(4, 4, 4, config, 512);
+		var liquids = cc.ecisr.mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(source, production.liquids());
+		source.bindChemistry(production.chemical()); source.bindGranular(production.granular(), liquids, production.materials());
+		source.bindGasRegistry(production.gas()); source.setVolume(2, 2, 2, .001F);
+		int material = production.granular().materialHandle(materialId);
+		int handle = composition == null ? 0 : source.granularState.compositions.create(composition);
+		require(source.tryInsertExactGranular(1, 1, 1, material, handle, svq, mass).inserted(), "snapshot grain could not be inserted");
+		if (deposited) require(source.granularState.inventory.depositParcel(0, source.cellIndex(1, 1, 1), SolidVolume.SVQ_PER_CELL),
+				"snapshot grain could not be deposited");
+		source.bindThermal(registry, liquids, 400);
+		source.setThermalTemperatureInCell(2, 2, 2, 1);
+		var snapshot = source.exportThermalParticleState();
+		var function = new ThermalStateFunction(registry);
+		int thermal = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, materialId);
+		var species = composition == null ? Map.<String, Long>of() : composition.stableAmounts(production.chemical());
+		double invalid = function.internalEnergyAtTemperature(thermal, mass, species, 1);
+		var badActive = snapshot.copyActiveParcelEnergy(); var badDeposit = snapshot.copyDepositEnergy();
+		if (deposited) badDeposit[0] = invalid; else badActive[0] = invalid;
+		var bad = new FlipThermalParticleState(4, 4, 4, .5F, source.particles.count(), registry.fingerprint(),
+				snapshot.copyInternalEnergy(), badActive, badDeposit, snapshot.coherentGroups(), snapshot.copyGasNodeEnergy(),
+				ThermalAuditLedger.initialized(SignedDyadic.sum(snapshot.copyInternalEnergy()).add(SignedDyadic.sum(badActive))
+						.add(SignedDyadic.sum(badDeposit)).add(SignedDyadic.sum(snapshot.copyGasNodeEnergy()))));
+		var target = new FluidDomain(4, 4, 4, config, 512);
+		target.restoreMaterialParticleState(source.exportMaterialParticleState());
+		target.bindChemistry(production.chemical());
+		target.restoreGranularState(source.exportGranularState(), production.granular(), target.materialRegistry, production.materials());
+		target.bindGasRegistry(production.gas());
+		var structural = target.granularState.mutationRevision();
+		var inventory = cc.ecisr.mmm.granular.GranularAuditLedger.captureInventory(target.granularState.registry,
+				target.granularState.parcels, target.granularState.deposits, target.granularState.compositions);
+		var liquid = target.chemicalParcels.record(0);
+		try { target.restoreThermalParticleState(bad, registry);
+			throw new AssertionError("snapshot restored an invalid raw granular temperature");
+		} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
+		require(target.thermalState == null && target.granularState.mutationRevision() == structural
+				&& inventory.equals(cc.ecisr.mmm.granular.GranularAuditLedger.captureInventory(target.granularState.registry,
+						target.granularState.parcels, target.granularState.deposits, target.granularState.compositions))
+				&& target.chemicalParcels.record(0).equals(liquid), "invalid thermal restore published a partial target");
+		target.restoreThermalParticleState(snapshot, registry);
+		var restored = target.exportThermalParticleState();
+		require(Arrays.equals(snapshot.copyInternalEnergy(), restored.copyInternalEnergy())
+				&& Arrays.equals(snapshot.copyActiveParcelEnergy(), restored.copyActiveParcelEnergy())
+				&& Arrays.equals(snapshot.copyDepositEnergy(), restored.copyDepositEnergy())
+				&& source.exactInternalEnergy().equals(target.exactInternalEnergy()) && source.thermalAudit().equals(target.thermalAudit())
+				&& target.thermalState.temperature(0, target.thermalMarkerContext()) == 1
+				&& function.stateForInternalEnergy(thermal, mass, species,
+						deposited ? restored.copyDepositEnergy()[0] : restored.copyActiveParcelEnergy()[0]).temperatureK() == 400
+				&& target.exactInternalEnergy().equals(target.thermalAudit().expectedInventory()),
+				"thermal restore modeled placeholder grain U instead of preserving the valid snapshot and its temperatures");
 	}
 
 	static void granularExternalExtractionRounding() {

@@ -24,6 +24,7 @@ import cc.ecisr.mmm.thermal.FiniteThermalExchange;
 import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
 import cc.ecisr.mmm.thermal.ThermalLimits;
 import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.thermal.ThermalDomainState;
 import cc.ecisr.mmm.thermal.ThermalDisplaySnapshot;
 import cc.ecisr.mmm.thermal.ThermalTransport;
 
@@ -287,7 +288,6 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	}
 
 	private void finishThermalBinding() {
-		if (granularState != null) granularState.inventory.bindThermalEnergy(thermalGranularAdapter());
 		if (granularCoupling == null) {
 			granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
 			granularNextCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
@@ -295,6 +295,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		refreshCoherentOccupancy();
 		if (thermalState.coherentPhases().groupCount() > 0) gridDirty = true;
 		else particleToGridStage.rebuildPressureGeometry();
+		if (granularState != null) granularState.inventory.bindThermalEnergy(thermalGranularAdapter());
 	}
 
 	GranularInventory.EnergyAdapter thermalGranularAdapter() {
@@ -352,11 +353,19 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		if (!prepareThermalBinding(registry, materialRegistry, initialTemperature)) {
 			throw new IllegalStateException("Thermal restore target is already bound");
 		}
-		thermalState = FluidThermalBinding.createRestoreTarget(registry, materialRegistry, initialTemperature,
+		ThermalDomainState candidate = FluidThermalBinding.createRestoreTarget(registry, materialRegistry, initialTemperature,
 				particles.capacity(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
 				maximumTransportSubsteps, state.copyInternalEnergy());
-		FluidThermalBinding.restore(thermalState, state, thermalMarkerContext(), gasState.network);
-		finishThermalBinding();
+		FluidThermalBinding.restore(candidate, state, thermalMarkerContext(), gasState.network);
+		thermalState = candidate;
+		try { finishThermalBinding(); }
+		catch (RuntimeException failure) {
+			thermalState = null;
+			try { refreshCoherentOccupancy(); }
+			catch (RuntimeException rollbackFailure) { failure.addSuppressed(rollbackFailure); }
+			gridDirty = true;
+			throw failure;
+		}
 	}
 
 	void validateCoherentRestoreCapacity(List<CoherentPhaseStore.Group> groups) {

@@ -191,6 +191,7 @@ public final class GranularEnergyState {
 
 	double[] planExternalActiveInsertions(int firstOrdinal, int count, ThermalCarrierContext markers) {
 		if (firstOrdinal != granularEnergy.activeCount() || count < 0
+				|| count > cc.ecisr.mmm.granular.GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION - firstOrdinal
 				|| firstOrdinal + count != markers.activeParcelCount()) {
 			throw new IllegalArgumentException("Granular thermal insertion ordinals are incompatible");
 		}
@@ -202,24 +203,34 @@ public final class GranularEnergyState {
 					insertionTemperatureK, markers);
 			granularEnergy.requireAddActive(energies[index]);
 		}
+		externalInsertionAudit(SignedDyadic.sum(energies));
 		return energies;
 	}
 
 	double planExternalGranularEnergy(int material, int composition, double mass, ThermalCarrierContext markers) {
 		double energy = modeledGranularEnergy(material, composition, mass, insertionTemperatureK, markers);
 		granularEnergy.requireAddActive(energy);
+		externalInsertionAudit(SignedDyadic.of(energy));
 		return energy;
 	}
 
 	void commitExternalActiveInsertions(double[] energies) {
 		if (energies == null) throw new IllegalArgumentException("Granular thermal insertion plan is missing");
-		SignedDyadic source = SignedDyadic.ZERO;
-		for (double energy : energies) {
-			granularEnergy.addActive(energy); source = source.add(SignedDyadic.of(energy));
+		if (energies.length > cc.ecisr.mmm.granular.GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION
+				- granularEnergy.activeCount()) {
+			throw new IllegalStateException("Granular thermal active budget exceeded");
 		}
-		SignedDyadic inserted = source;
-		audit.update(ledger -> ledger.withExternalSourceEnergy(inserted));
+		for (double energy : energies) granularEnergy.requireAddActive(energy);
+		ThermalAuditLedger auditAfter = externalInsertionAudit(SignedDyadic.sum(energies));
+		for (double energy : energies) granularEnergy.addActive(energy);
+		audit.replace(auditAfter);
 		revision++;
+	}
+
+	private ThermalAuditLedger externalInsertionAudit(SignedDyadic source) {
+		ThermalAuditLedger after = audit.ledger().withExternalSourceEnergy(source);
+		after.expectedInventory();
+		return after;
 	}
 
 	double previewActiveTake(int active, long takenSvq, long totalSvq) {
@@ -269,9 +280,11 @@ public final class GranularEnergyState {
 		int thermalHandle = materialByGranularHandle[granularMaterial];
 		ThermalMaterialDefinition material = registry.material(thermalHandle);
 		double physicalMass = mass;
+		Map<String, Long> species = markers.solidComposition(composition);
 		double energy = ThermalCaloricInversion.energyAt(material, physicalMass,
-				stateFunction.baseEnergy(thermalHandle, physicalMass, markers.solidComposition(composition)), temperatureK);
+				stateFunction.baseEnergy(thermalHandle, physicalMass, species), temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Granular modeled energy is invalid");
+		stateFunction.stateForInternalEnergy(thermalHandle, physicalMass, species, energy);
 		return energy;
 	}
 
