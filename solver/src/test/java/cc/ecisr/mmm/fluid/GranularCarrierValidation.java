@@ -11,6 +11,7 @@ public final class GranularCarrierValidation {
 
 	public static void validate() {
 		sphereMicroBoxContacts();
+		contactImpulsePreservesSolvedDrift();
 		contactAgeSaturates();
 		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
@@ -83,6 +84,40 @@ public final class GranularCarrierValidation {
 		collision.commit(parcels);
 		require(parcels.parcel(0).x() == .42F,
 				"granular motion entered an occupied micro-box through its corner");
+	}
+
+	private static void contactImpulsePreservesSolvedDrift() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		var material = registry.material(sand);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+		float dt = .05F, vx = .4F, vy = -.6F, vz = .8F;
+		float friction = (float) (1 - material.dynamicFriction());
+		for (boolean internal : new boolean[]{false, true}) {
+			var geometry = new FlipCutCellGeometry(3, 3, 3);
+			float x = .625F, y = .625F, z = 1.5F - radius;
+			if (internal) {
+				geometry.replaceMask(13, 1); // [.5,.75]^3, approached along Z.
+				z = .5F - radius - .01F;
+			}
+			var parcels = new GranularParcelStore(registry, 1);
+			parcels.add(new GranularParcelStore.Parcel(x, y, z, vx, vy, vz,
+					svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+			var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, null, 1);
+			require(collision.positionValid(x, y, z, svq), "contact drift fixture starts inside solid geometry");
+			collision.preview(parcels, registry, dt);
+			collision.commit(parcels);
+			var next = parcels.parcel(0);
+			require(next.x() == x + vx * dt && next.y() == y + vy * dt,
+					"Z contact changed a solved tangential drift according to the axis sweep order");
+			require(next.z() >= z && next.z() < z + vz * dt
+					&& collision.positionValid(next.x(), next.y(), next.z(), svq),
+					"contact must clip normal drift without entering solid geometry");
+			require(next.velocityX() == vx * friction && next.velocityY() == vy * friction
+					&& next.velocityZ() == (float) (-vz * material.restitution()),
+					"contact friction and restitution must update the end-of-step velocity");
+		}
 	}
 
 	private static void contactAgeSaturates() {

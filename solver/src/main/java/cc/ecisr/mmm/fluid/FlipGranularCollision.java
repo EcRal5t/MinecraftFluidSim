@@ -45,18 +45,20 @@ final class FlipGranularCollision {
 			ParticulateMaterial material = registry.material(parcel.materialHandle());
 			float radius = collisionRadius(parcel.solidVolumeSvq());
 			float[] position = {parcel.x(), parcel.y(), parcel.z()};
-			float[] velocity = {parcel.velocityX(), parcel.velocityY(), parcel.velocityZ()};
+			float[] motionVelocity = {parcel.velocityX(), parcel.velocityY(), parcel.velocityZ()};
+			float[] velocity = motionVelocity.clone();
 			boolean supported = false;
 			for (int axis : SWEEP_AXIS_ORDER) {
 				float maximum = (axis == 0 ? sizeX : axis == 1 ? sizeY : sizeZ) * cellSize - radius;
-				float rawTarget = position[axis] + velocity[axis] * dt;
+				// Drift uses the solved velocity; contact impulses update the committed end velocity.
+				float rawTarget = position[axis] + motionVelocity[axis] * dt;
 				float target = clamp(rawTarget, radius, maximum);
 				if (target != rawTarget) {
 					boolean lowerSupport = axis == 1 && rawTarget < radius;
 					resolveContact(velocity, axis, material);
 					supported |= lowerSupport;
 				}
-				boolean downward = axis == 1 && velocity[axis] <= 0.0F;
+				boolean downward = axis == 1 && motionVelocity[axis] <= 0.0F;
 				position[axis] = sweepAxis(position, velocity, axis, target, radius, material);
 				supported |= downward && position[axis] != target;
 				if (axis == 1) {
