@@ -13,6 +13,7 @@ public final class GranularCarrierValidation {
 		sphereMicroBoxContacts();
 		contactImpulsePreservesSolvedDrift();
 		contactImpulseObeysCoulombCone();
+		committedContactMomentumCloses();
 		contactAgeSaturates();
 		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
@@ -153,6 +154,41 @@ public final class GranularCarrierValidation {
 				}
 			}
 		} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+	}
+
+	private static void committedContactMomentumCloses() {
+		for (boolean held : new boolean[]{false, true}) {
+			var domain = domain();
+			long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+			float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+			addParcel(domain, .75F, .75F, held ? .75F : 3F - radius, .4F, -.6F, .8F);
+			domain.ensureGrid();
+			var before = domain.granularState.parcels.parcel(0);
+			domain.granularMechanicalStage.previewCollision(.05F);
+			if (held) {
+				require(domain.granularCollision.resolveCapacity(domain.granularState.parcels,
+						domain.granularCoupling, domain.granularCoupling::solidSvq) == 1,
+						"capacity fixture must hold the moving parcel at its original kernel");
+			}
+			domain.granularMechanicalStage.commitCollision();
+			var after = domain.granularState.parcels.parcel(0);
+			double[] initial = {before.velocityX(), before.velocityY(), before.velocityZ()};
+			double[] committed = {after.velocityX(), after.velocityY(), after.velocityZ()};
+			double[] boundary = {domain.lastGranularBoundaryImpulseX(), domain.lastGranularBoundaryImpulseY(),
+					domain.lastGranularBoundaryImpulseZ()};
+			for (int axis = 0; axis < 3; axis++) {
+				double originalMomentum = before.mass() * initial[axis];
+				double finalMomentum = after.mass() * committed[axis];
+				require(boundary[axis] != 0 && Math.abs(finalMomentum + boundary[axis] - originalMomentum)
+						<= 4 * Math.ulp(originalMomentum),
+						"committed contact or capacity hold lost its signed boundary momentum on axis " + axis);
+			}
+			if (held) require(after.x() == before.x() && after.y() == before.y() && after.z() == before.z()
+					&& after.velocityX() == 0 && after.velocityY() == 0 && after.velocityZ() == 0,
+					"held parcel must commit its original position and zero velocity");
+			else require(after.velocityX() != before.velocityX() && after.velocityY() != before.velocityY()
+					&& after.velocityZ() < 0, "wall fixture must include tangent friction and normal restitution");
+		}
 	}
 
 	private static void contactAgeSaturates() {

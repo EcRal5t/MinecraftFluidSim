@@ -101,6 +101,11 @@ final class MechanicalStageAssembly {
 			@Override public FlipGranularCollision granularCollision() { return domain.granularCollision; }
 			@Override public GranularCouplingFields granularCoupling() { return domain.granularCoupling; }
 			@Override public GranularCouplingFields granularNextCoupling() { return domain.granularNextCoupling; }
+			@Override public void addBoundaryImpulse(FlipGranularCollision.BoundaryImpulse impulse) {
+				domain.lastGranularBoundaryImpulseX += impulse.x();
+				domain.lastGranularBoundaryImpulseY += impulse.y();
+				domain.lastGranularBoundaryImpulseZ += impulse.z();
+			}
 			@Override public boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling) {
 				return domain.granularOccupancyFitsGeometry(coupling);
 			}

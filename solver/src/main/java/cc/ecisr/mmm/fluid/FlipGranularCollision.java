@@ -192,16 +192,24 @@ final class FlipGranularCollision {
 
 	int lastCapacityHeld() { return lastCapacityHeld; }
 
-	void commit(GranularParcelStore parcels) {
+	/** Momentum received by the fixed geometry and capacity constraints, in kg m/s. */
+	record BoundaryImpulse(double x, double y, double z) { }
+
+	BoundaryImpulse commit(GranularParcelStore parcels) {
 		if (parcels.count() != previewCount) throw new IllegalStateException("Granular parcel count changed during preview");
+		double impulseX = 0, impulseY = 0, impulseZ = 0;
 		for (int index = 0; index < previewCount; index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index);
+			impulseX += parcel.mass() * ((double) parcel.velocityX() - nextVelocityX[index]);
+			impulseY += parcel.mass() * ((double) parcel.velocityY() - nextVelocityY[index]);
+			impulseZ += parcel.mass() * ((double) parcel.velocityZ() - nextVelocityZ[index]);
 			parcels.overwrite(index, new GranularParcelStore.Parcel(nextX[index], nextY[index], nextZ[index],
 					nextVelocityX[index], nextVelocityY[index], nextVelocityZ[index], parcel.solidVolumeSvq(),
 					parcel.mass(), parcel.materialHandle(), parcel.solidCompositionHandle(),
 					nextContactAge[index], nextFlags[index]));
 		}
 		previewCount = 0;
+		return new BoundaryImpulse(impulseX, impulseY, impulseZ);
 	}
 
 	private void holdParcel(GranularParcelStore parcels, int index) {

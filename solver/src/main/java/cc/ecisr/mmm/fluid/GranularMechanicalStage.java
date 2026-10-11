@@ -18,6 +18,7 @@ final class GranularMechanicalStage {
 		FlipGranularCollision granularCollision();
 		GranularCouplingFields granularCoupling();
 		GranularCouplingFields granularNextCoupling();
+		void addBoundaryImpulse(FlipGranularCollision.BoundaryImpulse impulse);
 		boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling);
 		/** Derived per-cell liquid carrier properties for the current revision. */
 		LiquidCarrierProperties liquidCarrierProperties();
@@ -101,7 +102,7 @@ final class GranularMechanicalStage {
 	/** Applies the already-previewed collision capacity after marker advection. */
 	void commitCollision() {
 		if (access.hasGranularInventory()) {
-			access.granularCollision().commit(access.granularState().parcels);
+			access.addBoundaryImpulse(access.granularCollision().commit(access.granularState().parcels));
 		}
 	}
 
