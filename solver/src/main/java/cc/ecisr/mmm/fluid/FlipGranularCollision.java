@@ -73,7 +73,7 @@ final class FlipGranularCollision {
 			float restingSpeed = cellSize * 0.05F;
 			boolean resting = supported && velocity[0] * velocity[0] + velocity[1] * velocity[1]
 					+ velocity[2] * velocity[2] <= restingSpeed * restingSpeed;
-			nextContactAge[index] = resting ? Math.min(Integer.MAX_VALUE, parcel.contactAge() + 1) : 0;
+			nextContactAge[index] = resting ? incrementContactAge(parcel.contactAge()) : 0;
 			nextFlags[index] = resting ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
 					: (byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED);
 		}
@@ -207,10 +207,12 @@ final class FlipGranularCollision {
 		boolean downwardContact = nextY[index] < parcel.y();
 		nextX[index] = parcel.x(); nextY[index] = parcel.y(); nextZ[index] = parcel.z();
 		nextVelocityX[index] = nextVelocityY[index] = nextVelocityZ[index] = 0.0F;
-		nextContactAge[index] = downwardContact ? Math.min(Integer.MAX_VALUE, parcel.contactAge() + 1) : 0;
+		nextContactAge[index] = downwardContact ? incrementContactAge(parcel.contactAge()) : 0;
 		nextFlags[index] = downwardContact ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
 				: (byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED);
 	}
+
+	private static int incrementContactAge(int age) { return age == Integer.MAX_VALUE ? age : age + 1; }
 
 	private float sweepAxis(float[] position, float[] velocity, int axis, float target, float radius,
 	                        ParticulateMaterial material) {

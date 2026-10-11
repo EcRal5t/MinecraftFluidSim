@@ -10,6 +10,7 @@ public final class GranularCarrierValidation {
 	private GranularCarrierValidation() { }
 
 	public static void validate() {
+		contactAgeSaturates();
 		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
 		finitePressureResponse();
@@ -24,6 +25,23 @@ public final class GranularCarrierValidation {
 		implicitSharedCarrier();
 		implicitCarrierValidity();
 		thinBedRetainsFreeFlow();
+	}
+
+	private static void contactAgeSaturates() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		var parcels = new GranularParcelStore(registry, 1);
+		var deposits = new cc.ecisr.mmm.granular.GranularDepositStore(registry, 8, 8);
+		long svq = 1_024;
+		float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+		parcels.add(new GranularParcelStore.Parcel(.5F, radius, .5F, 0, -.01F, 0,
+				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0,
+				Integer.MAX_VALUE, GranularParcelStore.FLAG_SUPPORTED));
+		var collision = new FlipGranularCollision(2, 2, 2, .5F, new FlipCutCellGeometry(2, 2, 2), deposits, 1);
+		collision.preview(parcels, registry, .05F);
+		collision.commit(parcels);
+		require(parcels.parcel(0).contactAge() == Integer.MAX_VALUE,
+				"resting contact age must saturate without overflowing its valid range");
 	}
 
 	private static void carrierCacheFollowsAdvection() {
