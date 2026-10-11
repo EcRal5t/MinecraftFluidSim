@@ -311,7 +311,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 
 无相库存、已处于平衡或方向上没有可搬运载体的 cell 不构造完整 inventory；只有首个可执行气液 interface 才生成液体和固体热平衡候选对象。deposit heat-bath 通过目标 cell 的 canonical sparse group 视图读取，不为每个 phase cell 扫描全 region。
 
-气液 extent 的二分候选冻结该 cell 的 exact dyadic 总 `U` 与不变 solid heat-bath inventory，只替换候选 liquid inventory。真实 phase commit 后重建载体 ordinal，但只按守恒余量重新求解被编辑 cell；未编辑 cell 必须已有同代 LTE 状态并原样保留，不能借此反算或改写其 `U`。
+气液 extent 的候选保存该 cell 的 exact dyadic 总 `U` 与不变 solid heat-bath inventory，只替换候选 liquid inventory。真实 phase commit 后重建载体 ordinal，但只按守恒余量重新求解被编辑 cell；未编辑 cell 必须已有同代 LTE 状态并原样保留，不能借此反算或改写其 `U`。
 
 若沸腾候选移走最后一个凝聚相载体且无法使单元剩余 `U` 精确归零，二分规划缩小或跳过该 extent。候选热浴逐 marker 使用计划提交的剩余质量与组成构造，完整移除的 marker 不贡献热容量。气液能量交换按气体前后实际 binary64 内能的精确二进制差计算。
 
@@ -346,6 +346,8 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - chemistry 启用时，每个 gas transition 先把允许挥发且具有 host-gas energy offset 的 stable species 编译为本步 runtime handle 集；液体 marker 仍按 ordinal 搬运 exact species、质量 residual 与 `U`，runtime handle 不持久化。
 
 零输入动量近似适用于平均气体动量可忽略的场景；气体空间动量及蒸发带出的动量仍需由空间气体模型承载。凝结质量 `dm` 即时加入质量 `m`、速度 `v` 的 marker 时，速度混合减少的动能为 `m*dm/(2*(m+dm))*|v|²`，另有最终速度舍入误差。当前两相内能事务保持总 `U`，该动能差尚未转为混合热；对应温度误差可按动能差除以接收单元热容量估计。
+
+整数 species 份额使气液候选的可行集合出现间断：部分移出可能缺少可表示的保留或移出载体，完整移出仍可执行。当前 extent 二分搜索把不可表示候选当作较大批次的上限，因此可能遗漏完整、守恒的转移。完善搜索时须分别检查热力学驱动力与库存可表示性，按可证明的区间界裁剪，并保持候选求值的计算额度；完成条件见[产品路线](../roadmap/product-roadmap.md#物理缺口的依赖安排)。
 
 水/蒸气的方向由 ideal-mixture component 分压和数据化的 Clausius–Clapeyron 饱和关系决定：
 
