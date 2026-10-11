@@ -795,6 +795,20 @@ public final class FlipFluidFreeSurfaceValidation {
 				"energy-stable G2P exceeded its projected-grid energy budget");
 		check(FlipTransferScheme.maximumEnergyStableTransfer(1.0, -2.0, 1.0, 1.0) == 1.0,
 				"an energetically admissible full FLIP increment was damped");
+		for (int exponent : new int[] {-1000, -600, 0, 600, 1000}) {
+			double energyScale = Math.scalb(1.0, exponent);
+			check(Math.abs(FlipTransferScheme.maximumEnergyStableTransfer(
+					4 * energyScale, -2 * energyScale, 3 * energyScale, 3 * energyScale) - 0.5) <= Math.ulp(0.5),
+					"common energy scaling changed the admissible FLIP increment at exponent " + exponent);
+			check(Math.abs(FlipTransferScheme.maximumEnergyStableTransfer(
+					4 * energyScale, 0, 0, energyScale) - 0.5) <= Math.ulp(0.5),
+					"zero-linear energy root lost its scale at exponent " + exponent);
+		}
+		double cancellationRoot = FlipTransferScheme.maximumEnergyStableTransfer(0.25, 1, 1, Math.nextUp(1.0));
+		check(cancellationRoot > 0 && Math.abs(cancellationRoot / Math.ulp(1.0) - 1) < 8 * Math.ulp(1.0),
+				"positive-linear energy root cancelled a representable admissible increment");
+		check(Math.abs(FlipTransferScheme.maximumEnergyStableTransfer(1e200, 0, 0, 1e-200) / 1e-200 - 1) < 8 * Math.ulp(1.0),
+				"square-root energy ratio underflowed before producing a representable increment");
 	}
 
 	private static void fractionalHydrostaticColumnsBalanceGravity() {

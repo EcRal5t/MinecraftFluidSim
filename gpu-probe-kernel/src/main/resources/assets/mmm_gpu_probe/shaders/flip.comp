@@ -446,12 +446,27 @@ void transferEnergyReduceStage(uint id) {
 	for(uint stride=128u;stride>0u;stride>>=1u){if(local<stride){diagnosticSquared[local]+=diagnosticSquared[local+stride];diagnosticVolume[local]+=diagnosticVolume[local+stride];diagnosticWeightedX[local]+=diagnosticWeightedX[local+stride];diagnosticPressure[local]=floatBitsToUint(uintBitsToFloat(diagnosticPressure[local])+uintBitsToFloat(diagnosticPressure[local+stride]));}barrier();}
 	if(local==0u){uint base=4u*gl_WorkGroupID.x;volumeReductionScratch.value[base]=diagnosticSquared[0];volumeReductionScratch.value[base+1u]=diagnosticVolume[0];volumeReductionScratch.value[base+2u]=diagnosticWeightedX[0];volumeReductionScratch.value[base+3u]=uintBitsToFloat(diagnosticPressure[0]);}
 }
+float maximumEnergyStableTransfer(float quadratic,float linear,float available) {
+	if(quadratic+linear<=available)return 1.0;
+	if(!(quadratic>0.0)||!(available>=0.0)||!finiteFloat(quadratic)||!finiteFloat(linear)||!finiteFloat(available))return 0.0;
+	float scale=max(quadratic,max(abs(linear),available)),sqrtScale=sqrt(scale);
+	float normalizedLinear=linear/scale,sqrtAvailable=sqrt(available)/sqrtScale;
+	float cross=2.0*(sqrt(quadratic)/sqrtScale)*sqrtAvailable;
+	float normScale=max(abs(normalizedLinear),cross);
+	float discriminantRoot=normScale==0.0?0.0:normScale*length(vec2(normalizedLinear,cross)/normScale);
+	float root;
+	if(linear>=0.0){
+		if(available==0.0)return 0.0;
+		root=sqrtAvailable*(sqrtAvailable/(0.5*normalizedLinear+0.5*discriminantRoot));
+	}else root=(0.5*discriminantRoot-0.5*normalizedLinear)/(quadratic/scale);
+	return clamp(root,0.0,1.0);
+}
 void transferEnergyFinalizeStage(uint id) {
 	if(id!=0u)return;float quadratic=0.0,linear=0.0,picEnergy=0.0,gridEnergy=0.0;
 	for(uint group=0u;group<uint(pc.iteration);group++){uint base=4u*group;quadratic+=volumeReductionScratch.value[base];linear+=volumeReductionScratch.value[base+1u];picEnergy+=volumeReductionScratch.value[base+2u];gridEnergy+=volumeReductionScratch.value[base+3u];}
 	if(pc.flags==1){transferState.value[1]=floatBitsToUint(gridEnergy);return;}
-	float limit=max(picEnergy,min(gridEnergy,uintBitsToFloat(transferState.value[1]))),fullEnergy=quadratic+linear+picEnergy,transfer=1.0;
-	if(fullEnergy>limit){transfer=0.0;if(quadratic>0.0){float discriminant=linear*linear-4.0*quadratic*(picEnergy-limit);if(discriminant>=0.0&&finiteFloat(discriminant))transfer=clamp((-linear+sqrt(discriminant))/(2.0*quadratic),0.0,1.0);}}
+	float limit=max(picEnergy,min(gridEnergy,uintBitsToFloat(transferState.value[1])));
+	float transfer=maximumEnergyStableTransfer(quadratic,linear,limit-picEnergy);
 	transferState.value[0]=floatBitsToUint(transfer);
 }
 
