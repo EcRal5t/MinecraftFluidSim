@@ -168,6 +168,7 @@ final class GasLiquidPhaseChangeStage {
 					cell, removal);
 			AirNetwork.PhaseMutationPlan gasPlan = gasState.network.planPhaseSource(node, batch);
 			GasInventory candidateGas = gasPlan.inventoryAfter();
+			support.representedGasMassTransfer(node, candidateGas, batch.components().getFirst().componentId(), removedMass);
 			double candidateGasEnergy = thermal.gasNodeEnergy(node, gasState.network) + batchEnergy;
 			if (!Double.isFinite(candidateGasEnergy)) throw new PhaseCandidateUnavailableException(
 					"Boiling gas energy exceeds its finite representation");
@@ -268,6 +269,7 @@ final class GasLiquidPhaseChangeStage {
 			}
 			GasComponentAmount moved = take.first().components().getFirst();
 			AirNetwork.PhaseMutationPlan gasPlan = gasState.network.planPhaseSink(node, take.first());
+			support.representedGasMassTransfer(node, gasPlan.inventoryAfter(), componentId, -requestedMass);
 			if (!FluidDomain.massClose(moved.mass(), requestedMass)) {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Condensation gas batch mass differs from its exact transition");

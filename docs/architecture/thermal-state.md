@@ -348,6 +348,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - liquid water 与 water vapor 使用同一个 transition 的质量、潜热和 exact standard-volume batch。
 - 沸腾/凝结由 water-vapor 分压、温度和 transition 饱和压力关系决定，并受 sealed/ambient gas inventory 容量约束。
 - commit 同时更新 liquid marker、gas component nanos/kg、gas node energy、source/sink 与 topology remap；任何列不闭合则整批拒绝。
+- 气侧预检目标 component 的原始 kg 增减量，采用同一相变份额尺度的质量误差预算。当前库存的 ULP 大于待转移质量时，继续检查其他整数批次；可表示的整个份额才进入提交。
 - 当前集总气腔在区域参考系中采用零输入动量的凝结近似。新增 marker 使用零速；加入已有 marker 时，候选按实际接收质量预先求出质量加权速度，提交质量和速度，保存原有液体动量，误差限于最终 binary32 速度舍入。
 - 每次气液 commit 还按实际增加/删除的 liquid SVQ 写入带 cell 的 exact pending volume；下一次真实 projection 完成力学同步，随后清除该 entry。capture/restore 必须保留尚未结算的原始 pending 值。
 - 同一 transition、gas node 与 exact liquid temperature 在一个 logical step 内只有一个热力学方向；首次观察到的沸腾或凝结方向是该状态点的唯一方向，后续候选若试图在同一状态点反向则不提交。不同温度的热/冷界面仍独立求值。

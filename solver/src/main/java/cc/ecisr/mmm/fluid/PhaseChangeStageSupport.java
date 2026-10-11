@@ -158,6 +158,14 @@ final class PhaseChangeStageSupport {
 				state.unitScale().kilograms(afterSolverMass), requestedKilograms);
 	}
 
+	void representedGasMassTransfer(int node, cc.ecisr.mmm.fluid.air.GasInventory after,
+			String componentId, double requestedKg) {
+		GasComponentAmount beforeComponent = gasState().network.inventory(node).component(componentId);
+		GasComponentAmount afterComponent = after.component(componentId);
+		representedPhysicalMassTransfer(beforeComponent == null ? 0.0 : beforeComponent.mass(),
+				afterComponent == null ? 0.0 : afterComponent.mass(), requestedKg);
+	}
+
 	static double representedPhysicalMassTransfer(double beforeKilograms, double afterKilograms, double requestedKilograms) {
 		try {
 			if (!Double.isFinite(beforeKilograms) || beforeKilograms < 0 || !Double.isFinite(afterKilograms)
