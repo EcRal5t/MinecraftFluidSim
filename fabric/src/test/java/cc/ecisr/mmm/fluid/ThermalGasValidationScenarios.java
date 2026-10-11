@@ -269,6 +269,49 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void gasTransferBoundsScaleBeforeOverflow() {
+		// A large first segment followed by individually sub-ULP segments retains their exact caloric energy.
+		var segments = new java.util.ArrayList<ThermalMaterialDefinition.CaloricSegment>();
+		segments.add(new ThermalMaterialDefinition.CaloricSegment(1, 2, 1e18));
+		for (int end = 2; end < 17; end++) segments.add(new ThermalMaterialDefinition.CaloricSegment(end, end + 1, 128));
+		var piecewiseGas = new GasRegistry(List.of(new cc.ecisr.mmm.fluid.air.GasComponentDefinition(
+				"test:piecewise_gas", 1e-9, 1e-9, List.of(), List.of())),
+				List.of(new GasRegistry.AmbientFraction("test:piecewise_gas", ExactRational.ONE)));
+		var piecewiseThermal = new ThermalRegistry(List.of(new ThermalMaterialDefinition("test:thermal/piecewise_gas",
+				ThermalMaterialDefinition.CarrierKind.GAS, "test:piecewise_gas", 17, 2e18, 0, segments)));
+		var piecewiseModel = new GasThermalModel(piecewiseThermal, piecewiseGas);
+		var piecewiseInventory = new GasInventory(List.of(new GasComponentAmount("test:piecewise_gas",
+				1_000_000_000_000_000_000L, 1, List.of(), 1)));
+		piecewiseGas.requireCompatible(piecewiseInventory);
+		var piecewiseNetwork = new AirNetwork(piecewiseGas);
+		piecewiseNetwork.addNode(1, 0); piecewiseNetwork.addNode(.2, 0);
+		piecewiseNetwork.commitPhaseSource(1, piecewiseInventory); piecewiseNetwork.commitPhaseSource(2, piecewiseInventory);
+		var piecewiseState = new ThermalDomainState(piecewiseThermal, new int[0], new int[0], 17,
+				0, 1, 1, 1, 1, emptyMarkers(), piecewiseNetwork, 1);
+		piecewiseState.restoreGasEnergies(piecewiseNetwork, new double[]{-1024, -1792});
+		piecewiseState.restoreAuditLedger(ThermalAuditLedger.initialized(SignedDyadic.of(-2816)));
+		double sourceT = new java.math.BigDecimal(896).divide(new java.math.BigDecimal(1e18),
+				java.math.MathContext.DECIMAL128).doubleValue();
+		double targetT = new java.math.BigDecimal(128).divide(new java.math.BigDecimal(1e18),
+				java.math.MathContext.DECIMAL128).doubleValue();
+		require(piecewiseState.gasTemperature(1, piecewiseNetwork) == sourceT
+				&& piecewiseState.gasTemperature(2, piecewiseNetwork) == targetT,
+				"piecewise gas inventory lost the original-reference caloric integral");
+		java.util.function.LongPredicate piecewisePermits = amount -> {
+			try {
+				var split = piecewiseInventory.splitTotal(amount); double carried = piecewiseModel.enthalpy(split.first(), sourceT);
+				return piecewiseModel.absolutePressure(split.second(), 1, -1024 - carried)
+						>= piecewiseModel.absolutePressure(piecewiseInventory.merge(split.first()), .2, -1792 + carried);
+			} catch (IllegalArgumentException | ArithmeticException invalid) { return false; }
+		};
+		long oracle = 0;
+		for (int amount = 1; amount <= 512; amount++) if (piecewisePermits.test(amount)) oracle = amount;
+		var piecewiseRevision = piecewiseState.thermalRevision(); var piecewiseAudit = piecewiseState.auditLedger();
+		long found = piecewiseState.gasThermodynamics(piecewiseNetwork).limitTransferNanos(1, 2, 512);
+		require(oracle == 333 && found == oracle && piecewisePermits.test(found) && !piecewisePermits.test(found + 1)
+				&& piecewiseState.thermalRevision().equals(piecewiseRevision) && piecewiseState.auditLedger().equals(piecewiseAudit)
+				&& piecewiseState.gasNodeEnergy(1, piecewiseNetwork) == -1024 && piecewiseState.gasNodeEnergy(2, piecewiseNetwork) == -1792
+				&& piecewiseNetwork.inventory(1).equals(piecewiseInventory) && piecewiseNetwork.inventory(2).equals(piecewiseInventory),
+				"gas search pruned valid portions using rounded minimum-temperature prefixes or changed a preview");
 		for (int scenario = 0; scenario < 5; scenario++) {
 			double density = scenario == 0 ? 1 : 1e-300, cv = scenario == 0 ? 10_000 : 1e307;
 			double reference = scenario == 3 ? 1e307 : scenario == 4 ? -1e307 : 0;

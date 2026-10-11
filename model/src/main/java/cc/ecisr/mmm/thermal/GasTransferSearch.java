@@ -11,7 +11,6 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
-import java.util.TreeSet;
 import java.util.function.LongPredicate;
 
 /** Exact integer search with caloric interval bounds for non-monotone mixture rounding. */
@@ -75,6 +74,7 @@ final class GasTransferSearch {
 			}
 			double minimumCarried = energy(moved, sourceTemperature, false);
 			minimumCarried = down(minimumCarried + flowWorkBound(low, sourceTemperature, false));
+			if (!Double.isFinite(minimumCarried)) return false;
 			double maximumSourcePressure;
 			if (source == AirNetwork.AMBIENT_NODE) maximumSourcePressure = GasRegistry.STANDARD_PRESSURE_PA;
 			else {
@@ -102,46 +102,48 @@ final class GasTransferSearch {
 	}
 
 	private double temperatureBound(List<PortionRange> portions, double targetEnergy, boolean upper) {
+		if (!Double.isFinite(targetEnergy)) return upper ? Double.POSITIVE_INFINITY : ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
 		double low = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
 		double high = Math.max(1.0, sourceTemperature);
-		if (chartEnergy(portions, low, targetEnergy, !upper) >= targetEnergy) return low;
-		while (chartEnergy(portions, high, targetEnergy, !upper) < targetEnergy) {
-			if (high >= Double.MAX_VALUE / 2.0) return upper ? Double.POSITIVE_INFINITY : high;
+		if (chartEnergy(portions, low, !upper) >= targetEnergy) return low;
+		while (chartEnergy(portions, high, !upper) < targetEnergy) {
+			if (high >= Double.MAX_VALUE / 2.0) return upper ? Double.POSITIVE_INFINITY : down(down(high));
 			high *= 2.0;
 		}
 		// The bracket remains outward-facing even when its root is too close to resolve.
 		for (int iteration = 0; iteration < 64 && Math.nextUp(low) < high; iteration++) {
 			double middle = low + (high - low) / 2.0;
-			if (chartEnergy(portions, middle, targetEnergy, !upper) < targetEnergy) low = middle;
+			if (chartEnergy(portions, middle, !upper) < targetEnergy) low = middle;
 			else high = middle;
 		}
-		return upper ? high : low;
+		// One fast-path temperature ULP spans at most two adjacent values across a binary exponent seam.
+		return upper ? up(up(high)) : Math.max(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, down(down(low)));
 	}
 
-	/** Bounds the same piecewise-linear inversion chart used by ThermalStateFunction. */
-	private double chartEnergy(List<PortionRange> portions, double temperature, double targetEnergy, boolean upper) {
-		double cursor = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-		double result = energy(portions, cursor, upper);
-		if (!Double.isFinite(result)) return upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
-		double largestUlp = Math.max(Math.ulp(result), Math.ulp(targetEnergy));
-		TreeSet<Double> ends = new TreeSet<>();
-		for (PortionRange portion : portions) for (ThermalMaterialDefinition.CaloricSegment segment : portion.material.caloricSegments()) {
-			if (segment.maximumTemperatureK() < temperature) ends.add(segment.maximumTemperatureK());
+	/** The inversion uses original references and exact integrals, independently of its rounded forward-energy API. */
+	private double chartEnergy(List<PortionRange> portions, double temperature, boolean upper) {
+		SignedDyadic result = SignedDyadic.ZERO;
+		for (PortionRange portion : portions) {
+			double base = baseBound(portion, upper);
+			if (!Double.isFinite(base)) return upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+			SignedDyadic specific = ThermalContactExchange.exactEnergyChangeBetween(portion.material, 1.0,
+					portion.material.referenceTemperatureK(), temperature);
+			double mass = (specific.signum() >= 0) == upper ? portion.massHigh : portion.massLow;
+			result = result.add(SignedDyadic.of(base)).add(specific.multiply(SignedDyadic.of(mass)));
 		}
-		ends.add(temperature);
-		for (double end : ends) {
-			double capacity = 0.0;
-			for (PortionRange portion : portions) {
-				double mass = upper ? portion.massHigh : portion.massLow;
-				double term = mass * portion.material.specificHeatAt(cursor + (end - cursor) * 0.5);
-				capacity = outward(capacity + outward(term, upper), upper);
-			}
-			result = outward(result + outward(capacity * (end - cursor), upper), upper);
-			if (!Double.isFinite(result)) return upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
-			// Conservative padding also encloses the minimum-temperature acceptance allowance.
-			largestUlp = Math.max(largestUlp, Math.ulp(result));
-			result = outward(result + (upper ? 1.0 : -1.0) * largestUlp * 16.0, upper);
-			cursor = end;
+		return outward(result.toDouble(), upper);
+	}
+
+	/** Rounded multiplication and ordered addition are monotone, including signed reference offsets. */
+	private double baseBound(PortionRange portion, boolean upper) {
+		double reference = portion.material.referenceSpecificEnergyEuPerMu();
+		double result = ((reference >= 0) == upper ? portion.massHigh : portion.massLow) * reference;
+		int handle = thermal.materialHandle(portion.material.id());
+		for (var entry : portion.species.entrySet()) {
+			ThermalSpeciesOffset offset = thermal.speciesOffset(handle, entry.getKey());
+			double first = thermal.referenceEnergyCache().energy(offset, entry.getValue()[0]);
+			double last = thermal.referenceEnergyCache().energy(offset, entry.getValue()[1]);
+			result += upper ? Math.max(first, last) : Math.min(first, last);
 		}
 		return result;
 	}
