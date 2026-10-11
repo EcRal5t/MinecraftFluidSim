@@ -19,7 +19,7 @@ import java.util.Arrays;
  */
 final class LiquidCarrierProperties {
 	/** Cell key of the derived arrays; rebuilt whenever any component advances. */
-	record Revision(long carrierMutation, ThermalDomainState.Revision thermal) { }
+	record Revision(long carrierMutation, long chemistryMutation, ThermalDomainState.Revision thermal) { }
 
 	private final int cellCount;
 	private final boolean[] liquid;
@@ -126,7 +126,9 @@ final class LiquidCarrierProperties {
 	 */
 	void refresh(FluidDomainStorage domain, ThermalCarrierContext markers, FluidMaterialRegistry materials,
 			MaterialRegistry definitions, GranularDomainState granular, ThermalDomainState thermal, long carrierMutation) {
+		long chemistryMutation = domain.chemicalParcels == null ? 0 : domain.chemicalParcels.mutationRevision();
 		if (built != null && built.carrierMutation() == carrierMutation
+				&& built.chemistryMutation() == chemistryMutation
 				&& (thermal == null ? built.thermal() == null : thermal.matchesThermalRevision(built.thermal()))) return;
 		MarkerGridIndex grid = domain.markerGrid;
 		if (definitions != null && thermal != null) thermal.preparePhaseScan(markers);
@@ -186,7 +188,7 @@ final class LiquidCarrierProperties {
 				}
 			}
 		}
-		built = new Revision(carrierMutation, thermal == null ? null : thermal.thermalRevision());
+		built = new Revision(carrierMutation, chemistryMutation, thermal == null ? null : thermal.thermalRevision());
 		if (recording) {
 			stepExtrapolatedCells = Math.addExact(stepExtrapolatedCells, extrapolatedCells);
 			if (stepSample == null) stepSample = extrapolatedSample();

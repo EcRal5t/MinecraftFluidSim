@@ -352,7 +352,7 @@ public final class GranularDepositDynamics {
 	) {
 		int x = surfaceCell % sizeX, yz = surfaceCell / sizeX, z = yz / sizeY;
 		int bestNeighbor = -1;
-		long bestSurface = Long.MAX_VALUE;
+		long bestSurface = columnSurfaceSvq(z * sizeX + x);
 		int directionStart = (int) ((parcelIndex * 0x9E3779B9L + logicalStep) & 7L);
 		for (int offset = 0; offset < NEIGHBOR_X.length; offset++) {
 			int neighbor = (directionStart + offset) & 7;
@@ -364,12 +364,17 @@ public final class GranularDepositDynamics {
 			if (height < bestSurface) { bestSurface = height; bestNeighbor = neighbor; }
 		}
 		if (bestNeighbor < 0) return false;
+		double speed = Math.sqrt(parcel.velocityX() * (double) parcel.velocityX()
+				+ parcel.velocityY() * (double) parcel.velocityY()
+				+ parcel.velocityZ() * (double) parcel.velocityZ());
+		if (speed == 0) return false;
 		float dx = NEIGHBOR_X[bestNeighbor], dz = NEIGHBOR_Z[bestNeighbor];
-		float inverseLength = dx != 0.0F && dz != 0.0F ? (float) (1.0 / Math.sqrt(2.0)) : 1.0F;
-		float speed = Math.max(0.15F, cellSize * 0.75F);
+		double inverseLength = dx != 0.0F && dz != 0.0F ? 1.0 / Math.sqrt(2.0) : 1.0;
+		// Reorient existing motion along a descending bed. Gravity has already been integrated
+		// by mechanics; adding a prescribed rolling speed here would create kinetic energy.
 		parcels.overwrite(parcelIndex, new GranularParcelStore.Parcel(
-				parcel.x(), parcel.y(), parcel.z(), dx * inverseLength * speed, 0.0F,
-				dz * inverseLength * speed, parcel.solidVolumeSvq(), parcel.mass(), parcel.materialHandle(),
+				parcel.x(), parcel.y(), parcel.z(), (float) (dx * inverseLength * speed), 0.0F,
+				(float) (dz * inverseLength * speed), parcel.solidVolumeSvq(), parcel.mass(), parcel.materialHandle(),
 				parcel.solidCompositionHandle(), 0,
 				(byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED)));
 		return true;

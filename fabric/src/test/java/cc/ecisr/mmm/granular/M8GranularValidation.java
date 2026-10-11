@@ -47,6 +47,7 @@ public final class M8GranularValidation {
 		couplingOccupancyResumsExactly();
 		porousBedPreservesHydrostatics();
 		settlingRelaxationSleepAndWakeAreLocal();
+		blockedSettlementPreservesKineticEnergy();
 		cc.ecisr.mmm.fluid.GranularBedWakeValidation.validate();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
 		wholeBucketCongestionRemainsLocal(fast ? 40 : 200);
@@ -912,6 +913,37 @@ public final class M8GranularValidation {
 				"local shear wake touched a sleeping remote deposit");
 		require(inventory.totalSolidVolumeSvq() == beforeSubcritical && rawClose(inventory.totalMass(), massBeforeWake),
 				"local granular wake changed exact inventory");
+	}
+
+	private static void blockedSettlementPreservesKineticEnergy() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = 1_024L;
+		double mass = svq / (double) SolidVolume.SVQ_PER_BV * registry.material(sand).referenceDensity();
+		for (int slope : new int[]{-1, 0, 1}) for (boolean moving : new boolean[]{false, true}) {
+			var parcels = new GranularParcelStore(registry, 2);
+			var deposits = new GranularDepositStore(registry, 3, 4);
+			var inventory = new GranularInventory(parcels, deposits);
+			var dynamics = new GranularDepositDynamics(registry, parcels, deposits, inventory, 3, 1, 1, 0.5F);
+			for (int cell = 0; cell < 3; cell++) if (slope > 0 && cell == 1 || slope < 0 && cell != 1) {
+				require(deposits.tryAdd(cell, new GranularDepositStore.SolidPortion(sand, 0,
+						SolidVolume.SVQ_PER_CELL / 4, 2_600.0 / 32), SolidVolume.SVQ_PER_CELL),
+						"rolling fixture requires its declared bed slope");
+			}
+			var original = new GranularParcelStore.Parcel(0.75F, 0.3F, 0.25F,
+					moving ? 0.03F : 0, moving ? 0.04F : 0, moving ? 0.12F : 0,
+					svq, mass, sand, 0, GranularDepositDynamics.SETTLE_CONTACT_STEPS, GranularParcelStore.FLAG_SUPPORTED);
+			parcels.add(original);
+			dynamics.step(new TestDepositEnvironment(3, 1, 1, 0) {
+				@Override public boolean planSettlement(GranularParcelStore.Parcel parcel, int cell) { return false; }
+			}, 0.05F);
+			var after = parcels.parcel(0);
+			if (slope <= 0 || !moving) require(after.equals(original),
+					"blocked settlement cannot accelerate a resting parcel or steer it across a flat bed");
+			else require(after.velocityZ() == 0 && Math.abs(Math.abs(after.velocityX()) - 0.13F) <= Math.ulp(0.13F)
+						&& after.velocityY() == 0 && after.flags() == 0,
+					"rolling reorients existing kinetic energy toward a lower bed surface");
+		}
 	}
 
 	private static void assertReposeBound(GranularDepositStore deposits, double repose,

@@ -249,8 +249,10 @@ final class GranularReactionStage {
 			occupancyCurrent = true;
 		}
 		int material = granular.registry.materialHandle(rule.solidMaterialId());
+		GranularReactionMomentum.Plan momentum = GranularReactionMomentum.plan(
+				state.particles(), chemistry.unitScale(), plan, 0, 0, 0);
 		PrecipitationMerge merge = precipitationMerge(
-				cell, material, plan, position, carrierMarker);
+				cell, material, plan, position, momentum);
 		ThermalDomainState thermal = access.thermalState();
 		if (merge != null) {
 			ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : planThermalReaction(
@@ -260,7 +262,7 @@ final class GranularReactionStage {
 							merge.composition().stableAmounts(chemistry.registry())));
 			if (thermal != null && thermalPlan == null) return false;
 			chemistry.commitPlannedReplacements(markers, mixtures);
-			applyMarkerUpdates(plan);
+			applyMarkerUpdates(plan, momentum);
 			granular.compositions.overwrite(merge.compositionHandle(), merge.composition());
 			granular.parcels.overwrite(merge.parcelIndex(), merge.parcel());
 			if (thermalPlan != null) thermal.commitGranularReaction(thermalPlan, state.thermalMarkers());
@@ -278,8 +280,7 @@ final class GranularReactionStage {
 		int composition = granular.compositions.create(plan.transferredComposition());
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(
 				position.x(), position.y(), position.z(),
-				state.particles().velocityX(carrierMarker), state.particles().velocityY(carrierMarker),
-				state.particles().velocityZ(carrierMarker), plan.signedSolidSvq(), plan.signedSolidMass(),
+				momentum.solidX(), momentum.solidY(), momentum.solidZ(), plan.signedSolidSvq(), plan.signedSolidMass(),
 				material, composition, 0, (byte) 0);
 		if (!granular.parcels.canAdd(parcel)) {
 			granular.compositions.release(composition);
@@ -299,7 +300,7 @@ final class GranularReactionStage {
 			granular.compositions.release(composition);
 			throw failure;
 		}
-		applyMarkerUpdates(plan);
+		applyMarkerUpdates(plan, momentum);
 		granular.parcels.add(parcel);
 		if (thermalPlan != null) {
 			thermal.addGranularReactionActive();
@@ -312,13 +313,13 @@ final class GranularReactionStage {
 
 	private PrecipitationMerge precipitationMerge(
 			int cell, int material, GranularPhaseTransferEngine.Plan plan,
-			GranularCouplingFields.Position spawned, int carrierMarker
+			GranularCouplingFields.Position spawned, GranularReactionMomentum.Plan momentum
 	) {
 		GranularDomainState granular = access.granularState();
 		long maximum = granular.registry.material(material).maximumActiveParcelSvq();
-		float velocityX = state.particles().velocityX(carrierMarker);
-		float velocityY = state.particles().velocityY(carrierMarker);
-		float velocityZ = state.particles().velocityZ(carrierMarker);
+		float velocityX = momentum.solidX();
+		float velocityY = momentum.solidY();
+		float velocityZ = momentum.solidZ();
 		float maximumVelocityDelta = access.mergeVelocityDelta();
 		for (int parcelIndex : activeParcels(cell)) {
 			GranularParcelStore.Parcel existing = granular.parcels.parcel(parcelIndex);
@@ -403,6 +404,11 @@ final class GranularReactionStage {
 		int[] markers = updateMarkers(plan);
 		ChemicalMixtureRecord[] mixtures = updateMixtures(plan);
 		if (!canReplaceMarkers(markers, mixtures)) return false;
+		GranularParcelStore.Parcel donor = solid.deposit() ? null : granular.parcels.parcel(solid.index());
+		GranularReactionMomentum.Plan momentum = GranularReactionMomentum.plan(
+				state.particles(), chemistry.unitScale(), plan,
+				donor == null ? 0 : donor.velocityX(), donor == null ? 0 : donor.velocityY(),
+				donor == null ? 0 : donor.velocityZ());
 		GranularEnergyColumn.DepositKey thermalDepositKey = solid.deposit()
 				? new GranularEnergyColumn.DepositKey(cell, solid.materialHandle(), solid.compositionHandle()) : null;
 		GranularEnergyState.GranularReactionKind thermalKind = solid.deposit()
@@ -422,7 +428,7 @@ final class GranularReactionStage {
 			else thermal.previewActiveTake(solid.index(), removedSvq, solid.solidSvq());
 		}
 		chemistry.commitPlannedReplacements(markers, mixtures);
-		applyMarkerUpdates(plan);
+		applyMarkerUpdates(plan, momentum);
 		if (solid.deposit()) granular.deposits.takeCompositionAware(
 				cell, solid.materialHandle(), solid.compositionHandle(), removedSvq);
 		else if (full) granular.parcels.removeSwap(solid.index());
@@ -525,10 +531,14 @@ final class GranularReactionStage {
 		return List.copyOf(result);
 	}
 
-	private void applyMarkerUpdates(GranularPhaseTransferEngine.Plan plan) {
-		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
+	private void applyMarkerUpdates(GranularPhaseTransferEngine.Plan plan, GranularReactionMomentum.Plan momentum) {
+		for (int index = 0; index < plan.markerUpdates().size(); index++) {
+			GranularPhaseTransferEngine.MarkerUpdate update = plan.markerUpdates().get(index);
 			state.particles().setVolume(update.marker(), update.cellVolume());
 			state.particles().setMass(update.marker(), update.mass());
+			state.particles().setVelocityX(update.marker(), momentum.x()[index]);
+			state.particles().setVelocityY(update.marker(), momentum.y()[index]);
+			state.particles().setVelocityZ(update.marker(), momentum.z()[index]);
 		}
 	}
 

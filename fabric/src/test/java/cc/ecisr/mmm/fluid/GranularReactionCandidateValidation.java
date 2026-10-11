@@ -14,9 +14,126 @@ public final class GranularReactionCandidateValidation {
 
 	public static void validate() {
 		allocationCases();
+		phaseTransferPreservesMomentum();
+		carrierPropertiesFollowChemicalComposition();
 		for (String mode : List.of("irreversible", "huge-capacity", "surface-budget", "marker-budget", "region-budget")) {
 			ruleCandidate(mode);
 		}
+	}
+
+	public static void main(String[] args) { validate(); }
+
+	private static void carrierPropertiesFollowChemicalComposition() {
+		var granular = BuiltinGranularDefinitions.createRegistry();
+		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 100, 1.0e-5F, 0.45F, 0.002F, 0.8F), 216);
+		domain.setVolume(1, 1, 1, 0.125F);
+		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		var base = ThermochemistryValidationScenarios.reactiveGranularThermalRegistry(liquids, granular);
+		var offsets = base.speciesOffsets().stream().map(offset -> new cc.ecisr.mmm.thermal.ThermalSpeciesOffset(
+				offset.id(), offset.speciesId(), offset.hostThermalMaterialId(),
+				offset.speciesId().equals(BuiltinChemicalDefinitions.HCL) ? ExactRational.of(10_000) : ExactRational.ZERO)).toList();
+		domain.bindThermal(new cc.ecisr.mmm.thermal.ThermalRegistry(base.materials(), offsets, List.of(),
+				base.chemicalRegistryFingerprint(), base.granularRegistryFingerprint()), liquids, 300);
+		int cell = domain.cellIndex(1, 1, 1);
+		var before = domain.thermalBuoyancyProperties();
+		double previousViscosity = before.viscosityPaPerS(cell), previousBuoyancy = before.relativeBuoyancy(cell);
+		var originalEnergy = domain.exactInternalEnergy();
+		long originalCarrierRevision = domain.carrierMutationRevision;
+		var originalThermalRevision = domain.thermalState.thermalRevision();
+		var finitePlan = domain.planFiniteThermalCellExchange(List.of(new FluidDomain.ThermalCellEnergyDelta(1, 1, 1, 1)));
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, ChemicalLimits.QUANTA_PER_AU), false);
+		require(domain.carrierMutationRevision == originalCarrierRevision
+				&& domain.thermalState.matchesThermalRevision(originalThermalRevision),
+				"chemical edit fixture retains carrier structure and thermal owner state");
+		boolean staleRejected = false;
+		try { domain.commitFiniteThermalCellExchange(finitePlan); }
+		catch (IllegalArgumentException stale) { staleRejected = true; }
+		require(staleRejected && domain.exactInternalEnergy().equals(originalEnergy),
+				"finite cell plan must reject changed species reference energy before writing U");
+		var edited = domain.thermalBuoyancyProperties();
+		double temperature = domain.thermalState.temperature(0, domain.thermalMarkerContext());
+		require(edited.viscosityPaPerS(cell) != previousViscosity && edited.relativeBuoyancy(cell) != previousBuoyancy
+				&& edited.viscosityPaPerS(cell) == BuiltinFluidMaterials.createRegistry().dynamicViscosityAt("mmm:water", temperature),
+				"fixed-energy species edits must refresh carrier temperature, viscosity and buoyancy");
+		require(domain.runThermalReactionPhaseAxis(false, 0).chemistry().changedMarkers() == 1,
+				"cache fixture must commit the chemical reaction");
+		var reacted = domain.thermalBuoyancyProperties();
+		require(reacted.viscosityPaPerS(cell) == previousViscosity && reacted.relativeBuoyancy(cell) == previousBuoyancy,
+				"reaction commit refreshes carrier temperature and buoyancy with unchanged total energy");
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, ChemicalLimits.QUANTA_PER_AU), false);
+		domain.thermalBuoyancyProperties();
+		// A planned composition replacement also changes the state function while retaining U and structure.
+		var water = ChemicalMixtureRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY,
+				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU), 0);
+		water = water.withMassResidualKilograms(domain.unitScale.kilograms(domain.particles.mass(0))
+				- water.exactSpeciesMassKilograms(BuiltinChemicalDefinitions.REGISTRY).toDouble());
+		domain.chemicalParcels.commitPlannedReplacements(new int[]{0}, new ChemicalMixtureRecord[]{water});
+		var replaced = domain.thermalBuoyancyProperties();
+		require(replaced.viscosityPaPerS(cell) == previousViscosity && replaced.relativeBuoyancy(cell) == previousBuoyancy
+				&& domain.exactInternalEnergy().equals(originalEnergy),
+				"atomic species replacement refreshes carrier properties with conserved internal energy");
+	}
+
+	private static void phaseTransferPreservesMomentum() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 100, 1.0e-5F, 0.45F, 0.002F, 0.8F), 216);
+		domain.setVolume(1, 1, 1, 0.25F);
+		domain.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
+				BuiltinFluidMaterials.createRegistry());
+		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		domain.setPrecipitationEnabled(true);
+		require(domain.particleCount() >= 2, "momentum fixture requires distinct liquid carrier velocities");
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			domain.setMarkerChemical(marker, Map.of(BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
+					BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), false);
+			domain.particles.setVelocityX(marker, marker % 2 == 0 ? 2 : -1);
+			domain.particles.setVelocityY(marker, marker % 2 == 0 ? -3 : 1);
+			domain.particles.setVelocityZ(marker, marker % 2 == 0 ? 1 : -2);
+		}
+		double[] before = momentumAndEnergy(domain);
+		require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().precipitations() == 1,
+				"momentum fixture must actually precipitate");
+		requireMomentumAndDissipation(before, momentumAndEnergy(domain));
+		for (int marker = 0; marker < domain.particleCount(); marker++) setWater(domain, marker, 100_000L);
+		var solid = domain.granularState.parcels.parcel(0);
+		domain.granularState.parcels.overwrite(0, new GranularParcelStore.Parcel(
+				solid.x(), solid.y(), solid.z(), -4, 3, 2, solid.solidVolumeSvq(), solid.mass(),
+				solid.materialHandle(), solid.solidCompositionHandle(), 0, (byte) 0));
+		before = momentumAndEnergy(domain);
+		require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().dissolutions() == 1,
+				"momentum fixture must actually dissolve moving solid");
+		requireMomentumAndDissipation(before, momentumAndEnergy(domain));
+	}
+
+	private static double[] momentumAndEnergy(FluidDomain domain) {
+		double[] result = new double[4];
+		for (int marker = 0; marker < domain.particleCount(); marker++) addMomentumAndEnergy(result,
+				domain.unitScale.kilograms(domain.particles.mass(marker)), domain.particles.velocityX(marker),
+				domain.particles.velocityY(marker), domain.particles.velocityZ(marker));
+		for (int parcel = 0; parcel < domain.granularState.parcels.count(); parcel++) {
+			var solid = domain.granularState.parcels.parcel(parcel);
+			addMomentumAndEnergy(result, solid.mass(), solid.velocityX(), solid.velocityY(), solid.velocityZ());
+		}
+		return result;
+	}
+
+	private static void addMomentumAndEnergy(double[] result, double mass, double x, double y, double z) {
+		result[0] += mass * x; result[1] += mass * y; result[2] += mass * z;
+		result[3] += mass * (x * x + y * y + z * z) / 2;
+	}
+
+	private static void requireMomentumAndDissipation(double[] before, double[] after) {
+		for (int axis = 0; axis < 3; axis++) {
+			double tolerance = 8 * Math.ulp((float) Math.max(Math.abs(before[axis]), Math.abs(after[axis])));
+			require(Math.abs(before[axis] - after[axis]) <= tolerance,
+					"solid/liquid phase transfer preserves momentum axis " + axis + ": " + before[axis] + " -> " + after[axis]);
+		}
+		require(after[3] <= before[3] + 8 * Math.ulp((float) before[3]),
+				"solid/liquid mass mixing cannot increase kinetic energy");
 	}
 
 	private static void ruleCandidate(String mode) {

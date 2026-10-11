@@ -92,9 +92,9 @@ pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指
 
 ## 求解顺序
 
-每个 logical step 中，机械 advection 完成后按当前 cell 和 chemical phase 分组反应；反应热随后通过热状态的同 cell source/sink 提交。化学反应不得直接修改平滑 density、pressure 或客户端颜色场。
+每个 logical step 中，机械 advection 与导热完成后按当前 cell 和 chemical phase 分组反应。反应保持每份液体载体的总内能，提交后的 species 与质量通过热状态函数重新推导温度；反应热体现为组成基准能与显热之间的转换。密度、压力和客户端颜色随后从已提交库存重新派生。
 
-热学开启时，reaction plan 先证明 species/质量闭合，再把定义的状态函数能差提交给参与载体；该能差是内部重排，不重复记 external source。颗粒 precipitation 使用同一 liquid chemical ledger，但必须在 granular/thermal 联合 plan 中另行验证 solid composition、SVQ、容量和 U。
+热学开启时，reaction plan 先证明 species/质量闭合，再用各载体原有总内能、候选组成与候选质量验证正温可表示性，成功后统一提交 species 与质量。颗粒 precipitation 使用同一 liquid chemical ledger，并在 granular/thermal 联合 plan 中验证 solid composition、SVQ、容量和 U；颗粒反应按同格总内能守恒，依据最终液固库存重新分配各载体内能与温度。
 
 ## 跨层边界
 
