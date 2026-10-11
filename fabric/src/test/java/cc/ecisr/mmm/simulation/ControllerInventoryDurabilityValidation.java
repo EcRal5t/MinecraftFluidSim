@@ -443,6 +443,20 @@ final class ControllerInventoryDurabilityValidation {
 		private FluidDomain domain;
 		private long generation;
 		long substepsThisAction;
+		private long rejectedBoussinesqSteps;
+
+		private boolean rejectedOutsideBuoyancyDomain(RuntimeException failure, FluidDomainState before) {
+			if (!(failure instanceof cc.ecisr.mmm.fluid.FluidSolverBackend.CandidateEvaluationRejectedException))
+				return false;
+			for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+				if (cause instanceof cc.ecisr.mmm.thermal.LiquidThermalExpansion.ValidityExceededException) {
+					assertUnchanged(before, "Boussinesq validity rejection");
+					rejectedBoussinesqSteps++;
+					return true;
+				}
+			}
+			return false;
+		}
 
 		private void recordSubsteps(FluidStepCandidate candidate) {
 			substepsThisAction = Math.addExact(substepsThisAction, candidate.stats().substeps());
@@ -818,7 +832,7 @@ final class ControllerInventoryDurabilityValidation {
 
 		/** Durable per-material inventory, independent of marker order or grid layout. */
 		record AggregateInventory(long particles, double liquidVolume, double liquidMass, long solidSvq,
-				double solidMass, double internalEnergy, long speciesQuanta,
+				double solidMass, double condensedInternalEnergy, long speciesQuanta,
 				java.util.TreeMap<String, double[]> perMaterial) { }
 
 		AggregateInventory aggregateInventory() {
@@ -838,7 +852,8 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return new AggregateInventory(domain.particleCount(), domain.totalVolumeExact(), domain.totalMass(),
 					domain.totalGranularSolidVolumeSvq(), domain.totalGranularMass(),
-					domain.totalInternalEnergy(), domain.totalChemicalSpeciesQuanta(), perMaterial);
+					domain.exactInternalEnergy().subtract(domain.exactGasInternalEnergy()).toDouble(),
+					domain.totalChemicalSpeciesQuanta(), perMaterial);
 		}
 
 		private static boolean inventoryClose(double baseline, double actual) {
@@ -873,15 +888,15 @@ final class ControllerInventoryDurabilityValidation {
 		}
 
 		/**
-		 * Closed-loop comparison: inventory plus the two conserved carriers that a symmetric
-		 * extract-and-return must restore. Species quanta are integer counts, so the bound is tight.
+		 * Closed-loop comparison: inventory, composition and condensed energy carried by the container.
+		 * Cavity compression work follows the gas audit when the returned liquid occupies different cells.
 		 */
 		void checkClosedLoopMatches(AggregateInventory baseline, String context) {
 			checkInventoryMatches(baseline, context);
 			AggregateInventory actual = aggregateInventory();
-			check(inventoryClose(baseline.internalEnergy(), actual.internalEnergy()),
-					context + ": internal energy changed " + baseline.internalEnergy()
-							+ " -> " + actual.internalEnergy());
+			check(inventoryClose(baseline.condensedInternalEnergy(), actual.condensedInternalEnergy()),
+					context + ": condensed internal energy changed " + baseline.condensedInternalEnergy()
+							+ " -> " + actual.condensedInternalEnergy());
 			long allowed = Math.max(1L, (long) (Math.abs(baseline.speciesQuanta()) * 1.0E-9));
 			check(Math.abs(baseline.speciesQuanta() - actual.speciesQuanta()) <= allowed,
 					context + ": species quanta changed " + baseline.speciesQuanta() + " -> "
@@ -976,7 +991,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 
 		/**
-		 * Extracts locally then pours the returned amount straight back; per-material inventory, species
+		 * Extracts locally then pours the complete returned ledger straight back; per-material inventory, species
 		 * quanta and internal energy must all return to baseline. Both the purity precondition and the
 		 * extraction are limited to the same small radius, so the loop runs on a local aqueous pocket
 		 * rather than requiring the whole domain to be water.
@@ -994,15 +1009,15 @@ final class ControllerInventoryDurabilityValidation {
 			float request = representableBelow(Math.min(2.0, observed));
 			AggregateInventory baseline = aggregateInventory();
 			FluidDomainState beforeExtract = snapshot();
-			var extracted = domain.tryExtractExactVolume(target[0], target[1], target[2], request, radius, water);
+			var extracted = domain.tryExtractExactChemical(target[0], target[1], target[2], request, radius);
 			if (!extracted.transferred()) {
 				assertUnchanged(beforeExtract, "closed-loop extraction");
 				return "skip(loopExtractRejected)";
 			}
-			check(extracted.volume() > 0.0, "closed-loop extraction reported no volume");
-			float returned = (float) extracted.volume();
+			check(extracted.ledger().totalVolume() > 0.0, "closed-loop extraction reported no volume");
 			FluidDomainState beforeInsert = snapshot();
-			if (!domain.tryInsertExactVolume(target[0], target[1], target[2], returned, radius, water, true)
+			if (!domain.tryInsertExactChemical(target[0], target[1], target[2], extracted.ledger(), radius,
+					false, extracted.internalEnergy())
 					.transferred()) {
 				assertUnchanged(beforeInsert, "closed-loop re-insertion");
 				return "skip(loopInsertRejected)";
@@ -1305,6 +1320,7 @@ final class ControllerInventoryDurabilityValidation {
 		}
 		void steps(boolean phase, int count) { for (int step = 0; step < count; step++) step(phase); }
 		void step(boolean phase) {
+			FluidDomainState before = snapshot();
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
 						solverGeneration(), domain.captureAuthoritativeState(), List.of(), phase,
@@ -1312,6 +1328,7 @@ final class ControllerInventoryDurabilityValidation {
 				recordSubsteps(candidate);
 				adopt(candidate);
 			} catch (RuntimeException failure) {
+				if (rejectedOutsideBuoyancyDomain(failure, before)) return;
 				throw new IllegalStateException("normal-play logical step failed at generation " + generation
 						+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
 						+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq(), failure);
@@ -1336,6 +1353,7 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 		}
 		void stepWithMovingBodies(java.util.Random random, int count) {
+			FluidDomainState before = snapshot();
 			double half = domain.sizeX() * 0.5;
 			List<MovingBodyFluidCoupling.Request> bodies = new java.util.ArrayList<>(count);
 			for (int index = 0; index < count; index++) {
@@ -1354,6 +1372,7 @@ final class ControllerInventoryDurabilityValidation {
 				recordSubsteps(candidate);
 				adopt(candidate);
 			} catch (RuntimeException failure) {
+				if (rejectedOutsideBuoyancyDomain(failure, before)) return;
 				throw new IllegalStateException("normal-play moving-body step failed at generation " + generation
 						+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
 						+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq() + ", bodies=" + count, failure);
@@ -1438,6 +1457,14 @@ final class ControllerInventoryDurabilityValidation {
 				loopFired = true;
 			}
 			check(loopFired, "selfcheck: closed-loop comparison missed an inventory change");
+			state.insertAcid();
+			state.temperature(320);
+			check(state.extractThenRestore().equals("extractThenRestore"),
+					"selfcheck: actual chemical/energy closed loop was not exercised");
+			state.temperature(1_500);
+			state.step(false);
+			check(state.rejectedBoussinesqSteps == 1,
+					"selfcheck: out-of-domain buoyancy must reject without changing state");
 
 			FuzzMetrics.note("selfcheck", "thermal");
 			check(FuzzMetrics.familyGapExists("selfcheck", "thermal"),
@@ -1735,6 +1762,8 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return null;
 		} finally {
+			if (state.rejectedBoussinesqSteps > 0) System.out.println("FUZZ VALIDITY REJECTIONS scene="
+					+ scene.name() + " seed=" + seed + " count=" + state.rejectedBoussinesqSteps);
 			String job = scene.name() + "/" + seed;
 			JOB_MILLIS.put(job, (System.nanoTime() - jobStartNanos) / 1_000_000L);
 			JOB_SUBSTEPS.put(job, jobSubsteps);
