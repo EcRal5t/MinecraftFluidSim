@@ -236,7 +236,7 @@ final class GranularReactionStage {
 		int[] markers = updateMarkers(plan);
 		ChemicalMixtureRecord[] mixtures = updateMixtures(plan);
 		if (!canReplaceMarkers(markers, mixtures)) return false;
-		ReactionCapacity capacity = reactionCapacity(plan);
+		JointPhaseCapacity capacity = reactionCapacity(plan);
 		int carrierMarker = precipitationCarrierMarker(cell, plan);
 		int x = cell % state.sizeX(), yz = cell / state.sizeX();
 		int y = yz % state.sizeY(), z = yz / state.sizeY();
@@ -251,11 +251,12 @@ final class GranularReactionStage {
 				state.particles(), chemistry.unitScale(), plan, 0, 0, 0);
 		PrecipitationMerge merge = precipitationMerge(
 				cell, material, plan, position, momentum, capacity);
-		if (merge == null && (position == null || !fitsParcelCapacity(capacity, null, 0, position, plan.signedSolidSvq()))) {
+		if (merge == null && (position == null || !capacity.fitsReplacement(
+				access.coupling(), null, 0, position, plan.signedSolidSvq()))) {
 			float h = state.cellSize();
 			position = new GranularCouplingFields.Position((x + .5F) * h, (y + .5F) * h, (z + .5F) * h);
 			if (!access.collision().positionValid(position.x(), position.y(), position.z(), plan.signedSolidSvq())
-					|| !fitsParcelCapacity(capacity, null, 0, position, plan.signedSolidSvq())) return false;
+					|| !capacity.fitsReplacement(access.coupling(), null, 0, position, plan.signedSolidSvq())) return false;
 			merge = precipitationMerge(cell, material, plan, position, momentum, capacity);
 		}
 		ThermalDomainState thermal = access.thermalState();
@@ -316,7 +317,7 @@ final class GranularReactionStage {
 
 	private PrecipitationMerge precipitationMerge(
 			int cell, int material, GranularPhaseTransferEngine.Plan plan,
-			GranularCouplingFields.Position spawned, GranularReactionMomentum.Plan momentum, ReactionCapacity capacity
+			GranularCouplingFields.Position spawned, GranularReactionMomentum.Plan momentum, JointPhaseCapacity capacity
 	) {
 		if (spawned == null) return null;
 		GranularDomainState granular = access.granularState();
@@ -350,7 +351,7 @@ final class GranularReactionStage {
 					weighted(existing.velocityY(), existing.mass(), velocityY, plan.signedSolidMass(), combinedMass),
 					weighted(existing.velocityZ(), existing.mass(), velocityZ, plan.signedSolidMass(), combinedMass),
 					combinedSvq, combinedMass, material, existing.solidCompositionHandle(), 0, (byte) 0);
-			if (!fitsParcelCapacity(capacity,
+			if (!capacity.fitsReplacement(access.coupling(),
 					new GranularCouplingFields.Position(existing.x(), existing.y(), existing.z()), existing.solidVolumeSvq(),
 					new GranularCouplingFields.Position(x, y, z), combinedSvq)) continue;
 			return new PrecipitationMerge(
@@ -408,17 +409,15 @@ final class GranularReactionStage {
 		ChemicalMixtureRecord[] mixtures = updateMixtures(plan);
 		if (!canReplaceMarkers(markers, mixtures)) return false;
 		GranularParcelStore.Parcel donor = solid.deposit() ? null : granular.parcels.parcel(solid.index());
-		ReactionCapacity capacity = reactionCapacity(plan);
+		JointPhaseCapacity capacity = reactionCapacity(plan);
 		refreshOccupancy();
-		long[] occupied = access.coupling().copySolidSvq();
-		if (solid.deposit()) occupied[cell] -= removedSvq;
-		else {
+		if (solid.deposit()) {
+			if (!capacity.fitsDepositRemoval(access.coupling(), cell, removedSvq)) return false;
+		} else {
 			var position = new GranularCouplingFields.Position(donor.x(), donor.y(), donor.z());
-			access.coupling().removePlannedParcel(occupied, position, donor.solidVolumeSvq());
-			if (!full && !access.coupling().tryPlanParcel(occupied, position,
-					donor.solidVolumeSvq() - removedSvq, c -> capacity.solid()[c])) return false;
+			if (!capacity.fitsReplacement(access.coupling(), position, donor.solidVolumeSvq(),
+					position, donor.solidVolumeSvq() - removedSvq)) return false;
 		}
-		if (!fitsCapacity(occupied, capacity)) return false;
 		GranularReactionMomentum.Plan momentum = GranularReactionMomentum.plan(
 				state.particles(), chemistry.unitScale(), plan,
 				donor == null ? 0 : donor.velocityX(), donor == null ? 0 : donor.velocityY(),
@@ -467,37 +466,11 @@ final class GranularReactionStage {
 		return true;
 	}
 
-	private record ReactionCapacity(SignedDyadic[] liquid, long[] solid) { }
-
-	/** Joint candidate inventory uses the same raw liquid volumes and exact solid kernel as mechanics. */
-	private ReactionCapacity reactionCapacity(GranularPhaseTransferEngine.Plan plan) {
-		if (liquidVolumes == null) {
-			liquidVolumes = new SignedDyadic[state.cellCount()];
-			java.util.Arrays.fill(liquidVolumes, SignedDyadic.ZERO);
-			for (int marker = 0; marker < state.particles().count(); marker++) {
-				int cell = access.particleCell(marker);
-				liquidVolumes[cell] = liquidVolumes[cell].add(SignedDyadic.of(state.particles().volume(marker)));
-			}
-		}
-		SignedDyadic[] liquid = liquidVolumes.clone();
-		for (var update : plan.markerUpdates()) {
-			int cell = access.particleCell(update.marker());
-			liquid[cell] = liquid[cell].add(SignedDyadic.of(update.cellVolume()))
-					.subtract(SignedDyadic.of(state.particles().volume(update.marker())));
-		}
-		long[] capacity = new long[liquid.length];
-		for (int cell = 0; cell < liquid.length; cell++) {
-			int exponent = liquid[cell].exponent() + 24;
-			BigInteger occupied = liquid[cell].significand();
-			if (exponent >= 0) occupied = occupied.shiftLeft(exponent);
-			else {
-				BigInteger divisor = BigInteger.ONE.shiftLeft(-exponent);
-				BigInteger[] division = occupied.divideAndRemainder(divisor);
-				occupied = division[0].add(division[1].signum() == 0 ? BigInteger.ZERO : BigInteger.ONE);
-			}
-			capacity[cell] = access.geometricOpenSvq(cell) - occupied.longValueExact();
-		}
-		return new ReactionCapacity(liquid, capacity);
+	private JointPhaseCapacity reactionCapacity(GranularPhaseTransferEngine.Plan plan) {
+		if (liquidVolumes == null) liquidVolumes = JointPhaseCapacity.collectLiquid(
+				state.cellCount(), state.particles(), access::particleCell);
+		return JointPhaseCapacity.plan(liquidVolumes, state.particles(),
+				access::particleCell, access::geometricOpenSvq, plan);
 	}
 
 	private void refreshOccupancy() {
@@ -506,19 +479,6 @@ final class GranularReactionStage {
 			access.coupling().rebuild(granular.parcels, granular.deposits);
 			occupancyCurrent = true;
 		}
-	}
-
-	private boolean fitsParcelCapacity(ReactionCapacity capacity, GranularCouplingFields.Position previous,
-			long previousSvq, GranularCouplingFields.Position next, long nextSvq) {
-		long[] occupied = access.coupling().copySolidSvq();
-		if (previous != null) access.coupling().removePlannedParcel(occupied, previous, previousSvq);
-		return access.coupling().tryPlanParcel(occupied, next, nextSvq, cell -> capacity.solid()[cell])
-				&& fitsCapacity(occupied, capacity);
-	}
-
-	private boolean fitsCapacity(long[] occupied, ReactionCapacity capacity) {
-		for (int cell = 0; cell < occupied.length; cell++) if (occupied[cell] > capacity.solid()[cell]) return false;
-		return true;
 	}
 
 	private ThermalDomainState.ReactionPlan planThermalReaction(int cell,
