@@ -62,6 +62,7 @@ public final class GranularDepositDynamics {
 	private final GranularParcelStore parcels;
 	private final GranularDepositStore deposits;
 	private final GranularInventory inventory;
+	private final GranularBedAdmission admission;
 	private final int sizeX, sizeY, sizeZ, columnCount;
 	private final float cellSize;
 	private final int[] dirtyQueue, stableAge;
@@ -81,6 +82,7 @@ public final class GranularDepositDynamics {
 			throw new IllegalArgumentException("Granular deposit dynamics geometry is invalid");
 		}
 		this.registry = registry; this.parcels = parcels; this.deposits = deposits; this.inventory = inventory;
+		this.admission = new GranularBedAdmission(parcels, deposits, sizeX, sizeY, sizeZ, cellSize);
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.cellSize = cellSize;
 		this.columnCount = Math.multiplyExact(sizeX, sizeZ);
 		this.dirtyQueue = new int[columnCount]; this.stableAge = new int[columnCount];
@@ -145,9 +147,11 @@ public final class GranularDepositDynamics {
 		if (environment == null) throw new IllegalArgumentException("Granular deposit environment is missing");
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular deposit dt is invalid");
 		int operations = 0, settled = 0, relaxed = 0, woken = 0;
+		admission.rebuild();
 
 		for (int parcelIndex = 0; parcelIndex < parcels.count()
-				&& operations < GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP;) {
+				&& operations + admission.visits() < GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP;) {
+			admission.reserveLogicalOperations(operations + 1);
 			GranularParcelStore.Parcel parcel = parcels.parcel(parcelIndex);
 			if ((parcel.flags() & GranularParcelStore.FLAG_SUPPORTED) == 0
 					|| parcel.contactAge() < SETTLE_CONTACT_STEPS) {
@@ -166,7 +170,8 @@ public final class GranularDepositDynamics {
 				int cell = cell(x, y, z);
 				long open = environment.geometricOpenSvq(cell);
 				if (open <= 0L) continue;
-				if (deposits.previewCellBulkVolumeAfterAdd(cell, addition) > open) continue;
+				long candidateBulk = deposits.previewCellBulkVolumeAfterAdd(cell, addition);
+				if (candidateBulk > open) continue;
 				if (!environment.verticalPathOpen(parcel.x(), parcel.y(), parcel.z(),
 						settlementCenterY(cell, parcel.solidVolumeSvq()), parcel.solidVolumeSvq())) continue;
 				if (!settlementSlopeAllowed(cell, parcel, material, environment)) {
@@ -175,11 +180,13 @@ public final class GranularDepositDynamics {
 				}
 				// The first bulk-capable layer is the only legal target. Active occupancy may make
 				// it temporarily unavailable, but that never licenses a deposit in an upper void.
+				if (!admission.allows(cell, candidateBulk, parcelIndex)) break;
 				if (!environment.planSettlement(parcel, cell)) {
 					if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
 					break;
 				}
 				if (inventory.depositParcel(parcelIndex, cell, open)) {
+					admission.removedSwap(parcelIndex);
 					environment.receiveContactImpulse(parcel.mass() * parcel.velocityX(),
 							parcel.mass() * parcel.velocityY(), parcel.mass() * parcel.velocityZ());
 					environment.onSolidChanged(sourceCell);
@@ -193,6 +200,7 @@ public final class GranularDepositDynamics {
 				break;
 			}
 			if (!deposited) parcelIndex++;
+			if (admission.budgetBlocked()) break;
 		}
 
 		// Resting geometry can sleep while the carrier changes. Inspect only occupied surfaces on
@@ -208,9 +216,14 @@ public final class GranularDepositDynamics {
 				enqueue(column);
 			}
 		}
-		int scheduled = Math.min(queueSize, GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - operations);
-		for (int visit = 0; visit < scheduled; visit++) {
+		int scheduled = admission.budgetBlocked() ? 0
+				: Math.min(queueSize, GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - operations - admission.visits());
+		int processed = 0;
+		for (int visit = 0; visit < scheduled
+				&& operations + admission.visits() < GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP; visit++) {
+			admission.reserveLogicalOperations(operations + 1);
 			int column = pollColumn();
+			processed++;
 			if (columnBulkSvq(column) == 0L) { stableAge[column] = 0; continue; }
 			int surfaceCell = surfaceCell(column);
 			GranularDepositStore.Group exposed = deposits.dominantGroup(surfaceCell);
@@ -222,6 +235,7 @@ public final class GranularDepositDynamics {
 				changed = true; relaxed++;
 			}
 			operations++;
+			if (admission.budgetBlocked()) { stableAge[column] = 0; enqueue(column); break; }
 			if (changed) {
 				int x = column % sizeX, z = column / sizeX;
 				disturbColumn(x, z);
@@ -234,7 +248,7 @@ public final class GranularDepositDynamics {
 			}
 		}
 		logicalStep++;
-		return new Stats(settled, relaxed, woken, scheduled, queueSize);
+		return new Stats(settled, relaxed, woken, processed, queueSize);
 	}
 
 	private boolean tryWake(int column, int surfaceCell, GranularDepositStore.Group exposed,
@@ -257,7 +271,7 @@ public final class GranularDepositDynamics {
 			// and its equal liquid reaction. Copying carrier velocity here would create momentum.
 			boolean woken = inventory.wake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion,
 					px, py, pz, 0, 0, 0);
-			if (woken) environment.onSolidChanged(surfaceCell);
+			if (woken) { admission.append(parcels.count() - 1); environment.onSolidChanged(surfaceCell); }
 			else environment.cancelWake(surfaceCell, erosion, px, py, pz);
 			return woken;
 		} catch (IllegalArgumentException compositionSplitUnavailable) {
@@ -300,12 +314,14 @@ public final class GranularDepositDynamics {
 			int receiver = cell(receiverX, y, receiverZ);
 			long open = environment.geometricOpenSvq(receiver);
 			if (open <= 0L) continue;
-			if (deposits.previewCellBulkVolumeAfterAdd(receiver, moved) > open) continue;
+			long candidateBulk = deposits.previewCellBulkVolumeAfterAdd(receiver, moved);
+			if (candidateBulk > open) continue;
 			float radius = GranularMechanics.representativeRadius(requestedSkeleton, cellSize);
 			if (!environment.verticalPathOpen((receiverX + 0.5F) * cellSize,
 					Math.nextUp((float) (height * cellSize + radius)), (receiverZ + 0.5F) * cellSize,
 					settlementCenterY(receiver, requestedSkeleton), requestedSkeleton)) continue;
 			if (!additionSlopeAllowed(receiver, moved, material, environment)) return false;
+			if (!admission.allows(receiver, candidateBulk, -1)) return false;
 			if (!environment.planRelaxation(surfaceCell, receiver, requestedSkeleton)) return false;
 			environment.requireThermalRelaxation(surfaceCell, receiver, exposed.materialHandle(),
 					exposed.solidCompositionHandle(), requestedSkeleton, exposed.solidVolumeSvq());

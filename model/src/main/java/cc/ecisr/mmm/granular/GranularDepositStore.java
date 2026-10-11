@@ -1,7 +1,9 @@
 package cc.ecisr.mmm.granular;
 
+import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.units.SignedDyadic;
 
+import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.function.Predicate;
 
@@ -19,6 +21,7 @@ public final class GranularDepositStore {
 
 	private final GranularRegistry registry;
 	private final int[] headByCell, porosityQByCell;
+	private final long[] bulkVolumeSvqByCell;
 	private final int[] materialHandle, solidCompositionHandle, next, freeEntries;
 	private final long[] solidVolumeSvq;
 	private final double[] mass;
@@ -34,6 +37,7 @@ public final class GranularDepositStore {
 		this.registry = registry;
 		this.headByCell = new int[cellCount]; Arrays.fill(headByCell, -1);
 		this.porosityQByCell = new int[cellCount];
+		this.bulkVolumeSvqByCell = new long[cellCount];
 		this.materialHandle = new int[maximumGroups]; this.solidCompositionHandle = new int[maximumGroups];
 		this.solidVolumeSvq = new long[maximumGroups]; this.mass = new double[maximumGroups];
 		this.next = new int[maximumGroups]; Arrays.fill(next, -1);
@@ -47,16 +51,15 @@ public final class GranularDepositStore {
 	public long mutationRevision() { return mutationRevision; }
 	public int porosityQ(int cell) { requireCell(cell); return porosityQByCell[cell]; }
 	public long cellBulkVolumeSvq(int cell) {
-		long skeleton = cellSolidVolumeSvq(cell);
-		return skeleton == 0L ? 0L : SolidVolume.bulkVolumeCeil(skeleton, porosityQByCell[cell]);
+		requireCell(cell);
+		return bulkVolumeSvqByCell[cell];
 	}
 
 	/** Derived bulk height for an uncommitted add; no sparse inventory is changed. */
 	public long previewCellBulkVolumeAfterAdd(int cell, SolidPortion portion) {
 		requireCell(cell);
 		validate(portion);
-		long total = Math.addExact(cellSolidVolumeSvq(cell), portion.solidVolumeSvq());
-		return SolidVolume.bulkVolumeCeil(total, porosityAfterAdding(cell, portion, total));
+		return packing(cell, portion).bulkVolumeSvq();
 	}
 
 	public Group dominantGroup(int cell) {
@@ -105,8 +108,9 @@ public final class GranularDepositStore {
 		}
 		long oldVolume = cellSolidVolumeSvq(cell);
 		long newVolume = Math.addExact(oldVolume, portion.solidVolumeSvq());
-		int newPorosity = porosityAfterAdding(cell, portion, newVolume);
-		if (newVolume > geometricOpenSvq || SolidVolume.bulkVolumeCeil(newVolume, newPorosity) > geometricOpenSvq) return false;
+		if (newVolume > geometricOpenSvq) return false;
+		CellPacking plannedPacking = packing(cell, portion);
+		if (plannedPacking.bulkVolumeSvq() > geometricOpenSvq) return false;
 
 		int existing = find(cell, portion.materialHandle(), portion.solidCompositionHandle());
 		if (existing < 0 && (groupsInCell(cell) >= GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL
@@ -125,7 +129,8 @@ public final class GranularDepositStore {
 			groupCount++;
 			if (oldVolume == 0L) occupiedCellCount++;
 		}
-		porosityQByCell[cell] = newPorosity;
+		porosityQByCell[cell] = plannedPacking.porosityQ();
+		bulkVolumeSvqByCell[cell] = plannedPacking.bulkVolumeSvq();
 		mutationRevision++;
 		return true;
 	}
@@ -154,7 +159,10 @@ public final class GranularDepositStore {
 			solidVolumeSvq[entry] -= result.solidVolumeSvq();
 			mass[entry] -= result.mass();
 		}
-		recomputePorosity(cell);
+		// Removal leaves at most eight capacity-bounded groups; exact packing stays within its arithmetic budget.
+		CellPacking remainingPacking = packing(cell, null);
+		porosityQByCell[cell] = remainingPacking.porosityQ();
+		bulkVolumeSvqByCell[cell] = remainingPacking.bulkVolumeSvq();
 		mutationRevision++;
 		return result;
 	}
@@ -245,6 +253,7 @@ public final class GranularDepositStore {
 		if (removed == null) throw new IllegalArgumentException("Deposit clear consumer is missing");
 		forEachGroup(removed);
 		Arrays.fill(headByCell, -1); Arrays.fill(porosityQByCell, 0);
+		Arrays.fill(bulkVolumeSvqByCell, 0L);
 		Arrays.fill(materialHandle, 0); Arrays.fill(solidCompositionHandle, 0);
 		Arrays.fill(solidVolumeSvq, 0L); Arrays.fill(mass, 0.0); Arrays.fill(next, -1);
 		nextUnused = 0; freeCount = 0; groupCount = 0; occupiedCellCount = 0;
@@ -301,25 +310,32 @@ public final class GranularDepositStore {
 		if (headByCell[cell] < 0) { porosityQByCell[cell] = 0; occupiedCellCount--; }
 	}
 
-	private void recomputePorosity(int cell) {
-		long total = cellSolidVolumeSvq(cell);
-		if (total == 0L) { porosityQByCell[cell] = 0; return; }
-		long weighted = 0L;
+	private record CellPacking(long bulkVolumeSvq, int porosityQ) { }
+
+	/** Independent rest bulk volumes add exactly; rounding porosity never sets the bed height. */
+	private CellPacking packing(int cell, SolidPortion addition) {
+		ExactRational bulk = ExactRational.ZERO;
+		long skeleton = 0L;
 		for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) {
-			weighted = Math.addExact(weighted, Math.multiplyExact(solidVolumeSvq[entry],
-					registry.material(materialHandle[entry]).restPorosityQ()));
+			skeleton = Math.addExact(skeleton, solidVolumeSvq[entry]);
+			bulk = bulk.add(restBulk(solidVolumeSvq[entry], materialHandle[entry]));
 		}
-		porosityQByCell[cell] = (int) ((weighted + total / 2L) / total);
+		if (addition != null) {
+			skeleton = Math.addExact(skeleton, addition.solidVolumeSvq());
+			bulk = bulk.add(restBulk(addition.solidVolumeSvq(), addition.materialHandle()));
+		}
+		if (skeleton == 0L) return new CellPacking(0L, 0);
+		BigInteger numerator = bulk.numerator(), denominator = bulk.denominator();
+		long ceilBulk = numerator.add(denominator.subtract(BigInteger.ONE)).divide(denominator).longValueExact();
+		BigInteger poreNumerator = numerator.subtract(denominator.multiply(BigInteger.valueOf(skeleton)))
+				.multiply(BigInteger.valueOf(GranularLimits.POROSITY_SCALE));
+		int porosity = poreNumerator.add(numerator.divide(BigInteger.TWO)).divide(numerator).intValueExact();
+		return new CellPacking(ceilBulk, porosity);
 	}
 
-	private int porosityAfterAdding(int cell, SolidPortion portion, long total) {
-		long weighted = Math.multiplyExact(portion.solidVolumeSvq(),
-				registry.material(portion.materialHandle()).restPorosityQ());
-		for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) {
-			weighted = Math.addExact(weighted, Math.multiplyExact(solidVolumeSvq[entry],
-					registry.material(materialHandle[entry]).restPorosityQ()));
-		}
-		return (int) ((weighted + total / 2L) / total);
+	private ExactRational restBulk(long skeleton, int material) {
+		return ExactRational.of(skeleton).multiply(GranularLimits.POROSITY_SCALE)
+				.divide(GranularLimits.POROSITY_SCALE - registry.material(material).restPorosityQ());
 	}
 
 	private void requireCell(int cell) {

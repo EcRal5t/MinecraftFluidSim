@@ -49,6 +49,8 @@ public final class M8GranularValidation {
 		settlingRelaxationSleepAndWakeAreLocal();
 		blockedSettlementPreservesKineticEnergy();
 		settlementAndRelaxationRespectVerticalPartitions();
+		bedGrowthPreservesActiveSphereGeometry();
+		bedAdmissionIndexFollowsSwapsAndWake();
 		cc.ecisr.mmm.fluid.GranularBedWakeValidation.validate();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
 		wholeBucketCongestionRemainsLocal(fast ? 40 : 200);
@@ -622,6 +624,7 @@ public final class M8GranularValidation {
 	}
 
 	private static void depositCapacityAndGroupBudgetAreAtomic() {
+		mixedDepositPackingIsAdditive();
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		int reactive = registry.materialHandle(BuiltinGranularDefinitions.PRECIPITATE);
 		GranularDepositStore deposits = new GranularDepositStore(registry, 2, 8);
@@ -632,10 +635,14 @@ public final class M8GranularValidation {
 		}
 		long beforeVolume = deposits.totalSolidVolumeSvq();
 		double beforeMass = deposits.totalMass();
+		long beforeBulk = deposits.cellBulkVolumeSvq(0), beforeRevision = deposits.mutationRevision();
+		int beforePorosity = deposits.porosityQ(0);
 		require(!deposits.tryAdd(0, new GranularDepositStore.SolidPortion(reactive, 9, portion, 1.0),
 				SolidVolume.SVQ_PER_CELL), "ninth deposit group accepted");
 		require(deposits.totalSolidVolumeSvq() == beforeVolume
-				&& Double.doubleToRawLongBits(deposits.totalMass()) == Double.doubleToRawLongBits(beforeMass),
+				&& Double.doubleToRawLongBits(deposits.totalMass()) == Double.doubleToRawLongBits(beforeMass)
+				&& deposits.cellBulkVolumeSvq(0) == beforeBulk && deposits.porosityQ(0) == beforePorosity
+				&& deposits.mutationRevision() == beforeRevision,
 				"deposit group rejection left residue");
 
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
@@ -668,6 +675,85 @@ public final class M8GranularValidation {
 		require(reorderedSnapshot.totalMassBits() == Double.doubleToRawLongBits(
 				SignedDyadic.sum(new double[] {1.0e16, 1.0, 1.0}).toDouble()),
 				"granular snapshot mass depended on sparse deposit allocation order");
+	}
+
+	private static void mixedDepositPackingIsAdditive() {
+		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		int beads = registry.materialHandle(BuiltinGranularDefinitions.LIGHT_BEADS);
+		long sandVolume = 1_999_913, beadsVolume = 2_000_113;
+		var sandPortion = new GranularDepositStore.SolidPortion(sand, 0, sandVolume, 2.0);
+		var beadsPortion = new GranularDepositStore.SolidPortion(beads, 0, beadsVolume, 1.0);
+		GranularDepositStore deposits = new GranularDepositStore(registry, 4, 8);
+		require(deposits.tryAdd(0, sandPortion, SolidVolume.SVQ_PER_CELL), "mixed sand rejected");
+		long numerator = sandVolume * 150 + beadsVolume * 155; // 50/31 sand + 5/3 beads.
+		long expectedBulk = (numerator + 92) / 93;
+		int expectedPorosity = (int) ((1_000_000L * (numerator - (sandVolume + beadsVolume) * 93)
+				+ numerator / 2) / numerator);
+		long revision = deposits.mutationRevision(), originalBulk = deposits.cellBulkVolumeSvq(0);
+		require(deposits.previewCellBulkVolumeAfterAdd(0, beadsPortion) == expectedBulk
+				&& !deposits.tryAdd(0, beadsPortion, expectedBulk - 1)
+				&& deposits.mutationRevision() == revision && deposits.cellBulkVolumeSvq(0) == originalBulk
+				&& deposits.groupCount() == 1 && deposits.cellSolidVolumeSvq(0) == sandVolume
+				&& deposits.totalMass() == 2.0, "mixed bulk preflight changed rejected inventory or cache");
+		require(deposits.tryAdd(0, beadsPortion, expectedBulk)
+				&& deposits.cellBulkVolumeSvq(0) == expectedBulk && deposits.porosityQ(0) == expectedPorosity,
+				"mixed bulk preview, independent fraction oracle and commit disagree");
+		require(deposits.tryAdd(1, beadsPortion, SolidVolume.SVQ_PER_CELL)
+				&& deposits.tryAdd(1, sandPortion, SolidVolume.SVQ_PER_CELL)
+				&& deposits.cellBulkVolumeSvq(1) == expectedBulk && deposits.porosityQ(1) == expectedPorosity,
+				"mixed packing depends on insertion order");
+		for (long piece : new long[] {1, sandVolume - 1}) require(deposits.tryAdd(2,
+				new GranularDepositStore.SolidPortion(sand, 0, piece, 1.0),
+				SolidVolume.SVQ_PER_CELL), "partitioned sand rejected");
+		require(deposits.tryAdd(2, beadsPortion, SolidVolume.SVQ_PER_CELL)
+				&& deposits.cellBulkVolumeSvq(2) == expectedBulk && deposits.porosityQ(2) == expectedPorosity,
+				"same-material partition changed mixed packing");
+		for (int material : new int[] {sand, beads}) {
+			long before = deposits.cellBulkVolumeSvq(0);
+			var removed = deposits.take(0, material, 0, 1);
+			require(deposits.cellBulkVolumeSvq(0) < before, "removing skeleton did not reduce mixed bed volume");
+			require(deposits.previewCellBulkVolumeAfterAdd(0, removed) == before
+					&& deposits.tryAdd(0, removed, SolidVolume.SVQ_PER_CELL)
+					&& deposits.cellBulkVolumeSvq(0) == before, "readding skeleton changed mixed bed volume");
+		}
+		require(deposits.tryAdd(3, new GranularDepositStore.SolidPortion(sand, 0, 1, 1.0), SolidVolume.SVQ_PER_CELL)
+				&& deposits.tryAdd(3, new GranularDepositStore.SolidPortion(beads, 0, 2, 1.0), SolidVolume.SVQ_PER_CELL)
+				&& deposits.cellBulkVolumeSvq(3) == 5, "bulk rounded each component before summation");
+		var snapshot = GranularStateSnapshot.capture(2, 2, 1, registry, new GranularParcelStore(registry, 1), deposits);
+		var restored = new GranularDepositStore(registry, 4, 8);
+		snapshot.restoreInto(registry, new GranularParcelStore(registry, 1), restored, ignored -> SolidVolume.SVQ_PER_CELL);
+		for (int cell = 0; cell < 4; cell++) require(restored.cellBulkVolumeSvq(cell) == deposits.cellBulkVolumeSvq(cell)
+				&& restored.porosityQ(cell) == deposits.porosityQ(cell), "snapshot changed derived mixed packing");
+		var extreme = new GranularRegistry(List.of(packingMaterial("mmm:low_porosity", 1),
+				packingMaterial("mmm:high_porosity", 999_999)), registry.carriers());
+		var limits = new GranularDepositStore(extreme, 1, 2);
+		int low = extreme.materialHandle("mmm:low_porosity"), high = extreme.materialHandle("mmm:high_porosity");
+		require(limits.tryAdd(0, new GranularDepositStore.SolidPortion(high, 0, 1, 1.0), SolidVolume.SVQ_PER_CELL)
+				&& limits.cellBulkVolumeSvq(0) == 1_000_000 && limits.porosityQ(0) == 999_999,
+				"high-porosity exact packing failed");
+		var overflow = new GranularDepositStore.SolidPortion(high, 0, 16, 1.0);
+		revision = limits.mutationRevision();
+		require(limits.previewCellBulkVolumeAfterAdd(0, overflow) == 17_000_000
+				&& !limits.tryAdd(0, overflow, SolidVolume.SVQ_PER_CELL)
+				&& limits.mutationRevision() == revision && limits.cellBulkVolumeSvq(0) == 1_000_000,
+				"extreme porosity capacity rejection changed cached packing");
+		require(limits.tryAdd(0, new GranularDepositStore.SolidPortion(low, 0, 1, 1.0), SolidVolume.SVQ_PER_CELL)
+				&& limits.cellBulkVolumeSvq(0) == 1_000_002 && limits.porosityQ(0) == 999_998,
+				"extreme mixed porosity failed");
+		limits.take(0, high, 0, 1);
+		require(limits.cellBulkVolumeSvq(0) == 2 && limits.porosityQ(0) == 1, "take retained stale packing");
+		limits.take(0, low, 0, 1);
+		require(limits.cellBulkVolumeSvq(0) == 0 && limits.porosityQ(0) == 0, "last take retained cached packing");
+		require(limits.tryAdd(0, new GranularDepositStore.SolidPortion(low, 0, 1, 1.0), SolidVolume.SVQ_PER_CELL)
+				&& limits.cellBulkVolumeSvq(0) == 2 && limits.porosityQ(0) == 1, "reused entry retained stale packing");
+		limits.clear((cell, phi, material, composition, volume, mass) -> { });
+		require(limits.cellBulkVolumeSvq(0) == 0 && limits.porosityQ(0) == 0, "clear retained cached packing");
+	}
+
+	private static ParticulateMaterial packingMaterial(String id, int porosity) {
+		return new ParticulateMaterial(id, 1_000, 0.0005, porosity, Math.toRadians(30),
+				0.6, 0.45, 0.1, 0.05, 1, 1, 0, id, false);
 	}
 
 	private static void parcelDepositCyclesDoNotDrift(int iterations) {
@@ -1090,6 +1176,100 @@ public final class M8GranularValidation {
 
 	private static int cellIndex(int x, int y, int z, int sizeX, int sizeY) {
 		return (z * sizeY + y) * sizeX + x;
+	}
+
+	private static void bedGrowthPreservesActiveSphereGeometry() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double mass = 2_600.0 * svq / SolidVolume.SVQ_PER_BV;
+		var parcels = new GranularParcelStore(registry, 4);
+		var deposits = new GranularDepositStore(registry, 1, 8);
+		var inventory = new GranularInventory(parcels, deposits);
+		long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62 * .6);
+		require(deposits.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, skeleton,
+				2_600.0 * skeleton / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "bed admission fixture");
+		long beforeBulk = deposits.cellBulkVolumeSvq(0);
+		float y = Math.nextUp((float) (beforeBulk * .5 / SolidVolume.SVQ_PER_CELL
+				+ GranularMechanics.representativeRadius(svq, .5F)));
+		parcels.add(new GranularParcelStore.Parcel(.25F, y, .25F, 0, 0, 0,
+				svq, mass, sand, 0, 3, GranularParcelStore.FLAG_SUPPORTED));
+		parcels.add(new GranularParcelStore.Parcel(.25F, y, .25F, 0, 0, 0,
+				svq - 1, 2_600.0 * (svq - 1) / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+		var dynamics = new GranularDepositDynamics(registry, parcels, deposits, inventory, 1, 1, 1, .5F);
+		var calm = new TestDepositEnvironment(1, 1, 1, 0);
+		long total = inventory.totalSolidVolumeSvq(); double totalMass = inventory.totalMass();
+		require(dynamics.step(calm, .05F).settledParcels() == 0 && parcels.count() == 2
+				&& deposits.cellBulkVolumeSvq(0) == beforeBulk, "settlement must not swallow a remaining active sphere");
+		var second = parcels.parcel(1);
+		parcels.overwrite(1, new GranularParcelStore.Parcel(second.x(), second.y(), second.z(), 0, 0, 0,
+				second.solidVolumeSvq(), second.mass(), sand, 0, 3, GranularParcelStore.FLAG_SUPPORTED));
+		for (int step = 0; step < 3; step++) require(dynamics.step(calm, .05F).settledParcels() == 0,
+				"overlapping supported representatives must defer a bed conversion that engulfs a sibling");
+		require(inventory.totalSolidVolumeSvq() == total && rawClose(inventory.totalMass(), totalMass)
+				&& calm.impulseX == 0 && calm.impulseY == 0 && calm.impulseZ == 0,
+				"deferred bed admission must preserve inventory, motion and fixed-bed impulse");
+		parcels.removeSwap(1);
+		require(dynamics.step(calm, .05F).settledParcels() == 1 && parcels.count() == 0,
+				"removing the obstruction must allow the supported parcel to settle");
+
+		parcels = new GranularParcelStore(registry, 4); deposits = new GranularDepositStore(registry, 2, 8);
+		inventory = new GranularInventory(parcels, deposits);
+		long source = (long) (SolidVolume.SVQ_PER_CELL * .62 * .9), receiver = skeleton / 12;
+		for (int cell = 0; cell < 2; cell++) {
+			long volume = cell == 0 ? source : receiver;
+			require(deposits.tryAdd(cell, new GranularDepositStore.SolidPortion(sand, 0, volume,
+					2_600.0 * volume / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "relaxation admission fixture");
+		}
+		y = Math.nextUp((float) (deposits.cellBulkVolumeSvq(1) * .5 / SolidVolume.SVQ_PER_CELL
+				+ GranularMechanics.representativeRadius(svq, .5F)));
+		parcels.add(new GranularParcelStore.Parcel(.75F, y, .25F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
+		dynamics = new GranularDepositDynamics(registry, parcels, deposits, inventory, 2, 1, 1, .5F);
+		dynamics.disturbCell(0);
+		require(dynamics.step(new TestDepositEnvironment(2, 1, 1, 0), .05F).relaxedMoves() == 0
+				&& deposits.cellSolidVolumeSvq(0) == source && deposits.cellSolidVolumeSvq(1) == receiver,
+				"repose transfer must retain both inventories when the receiving bed would engulf a sphere");
+		parcels.removeSwap(0);
+		require(dynamics.step(new TestDepositEnvironment(2, 1, 1, 0), .05F).relaxedMoves() > 0,
+				"clear receiving geometry must permit the same repose transfer");
+	}
+
+	private static void bedAdmissionIndexFollowsSwapsAndWake() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		var parcels = new GranularParcelStore(registry, 8);
+		var deposits = new GranularDepositStore(registry, 3, 8);
+		long svq = 1_024; double mass = 2_600.0 * svq / SolidVolume.SVQ_PER_BV;
+		for (float x : new float[]{.25F, 1.25F, .75F})
+			parcels.add(new GranularParcelStore.Parcel(x, .1F, .25F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
+		var index = new GranularBedAdmission(parcels, deposits, 3, 1, 1, .5F); index.rebuild();
+		parcels.removeSwap(0); index.removedSwap(0);
+		parcels.removeSwap(0); index.removedSwap(0);
+		require(!index.allows(2, SolidVolume.SVQ_PER_CELL / 2, -1)
+				&& index.allows(2, SolidVolume.SVQ_PER_CELL / 2, 0), "two swap removals must retain the moved sphere's cell links");
+		require(deposits.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, svq * 2, mass * 2),
+				SolidVolume.SVQ_PER_CELL), "wake index fixture");
+		var inventory = new GranularInventory(parcels, deposits);
+		require(inventory.wake(0, sand, 0, svq, .25F, .1F, .25F, 0, 0, 0), "wake index fixture must append");
+		index.append(parcels.count() - 1);
+		require(!index.allows(0, SolidVolume.SVQ_PER_CELL / 2, -1)
+				&& index.allows(1, SolidVolume.SVQ_PER_CELL / 2, -1), "wake append must become visible without linking an unrelated cell");
+		index.reserveLogicalOperations(GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - index.visits());
+		require(!index.allows(0, SolidVolume.SVQ_PER_CELL / 2, -1) && index.budgetBlocked(),
+				"exhausted query work must defer conversion before touching inventory");
+
+		parcels = new GranularParcelStore(registry, GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
+		deposits = new GranularDepositStore(registry, 2, 8);
+		for (int i = 0; i < parcels.capacity(); i++) parcels.add(new GranularParcelStore.Parcel(
+				i < 10 ? .25F : .75F, .4F, .25F, 0, 0, 0, 1, 2_600.0 / SolidVolume.SVQ_PER_BV,
+				sand, 0, i < 10 ? 3 : 0, i < 10 ? GranularParcelStore.FLAG_SUPPORTED : (byte) 0));
+		inventory = new GranularInventory(parcels, deposits);
+		var dynamics = new GranularDepositDynamics(registry, parcels, deposits, inventory, 2, 1, 1, .5F);
+		var stats = dynamics.step(new TestDepositEnvironment(2, 1, 1, 1), .05F);
+		require(stats.settledParcels() > 0 && stats.settledParcels() < 10 && stats.wokenParcels() == 0
+				&& stats.processedColumns() == 0 && stats.dirtyColumns() > 0
+				&& inventory.totalSolidVolumeSvq() == GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,
+				"local query quota must defer remaining conversions and dirty work before a later wake");
 	}
 
 	private static class TestDepositEnvironment implements GranularDepositDynamics.Environment {

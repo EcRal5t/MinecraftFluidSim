@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.granular.GranularDepositStore;
+import cc.ecisr.mmm.granular.GranularSphereGeometry;
 import cc.ecisr.mmm.granular.SolidVolume;
 import java.util.function.BiConsumer;
 
@@ -35,9 +36,8 @@ final class GranularCollisionGeometry {
 		double[] p = {x, y, z}, lo = new double[3], hi = new double[3]; boolean[] touches = {false};
 		for (int a = 0; a < 3; a++) { lo[a] = p[a] - radius; hi[a] = p[a] + radius; }
 		forEachBox(lo, hi, (minimum, maximum) -> {
-			double squared = 0;
-			for (int a = 0; a < 3; a++) { double distance = p[a] - Math.max(minimum[a], Math.min(maximum[a], p[a])); squared += distance * distance; }
-			if (squared <= radius * (double) radius) touches[0] = true;
+			if (GranularSphereGeometry.touchesBox(x, y, z, radius,
+					minimum[0], minimum[1], minimum[2], maximum[0], maximum[1], maximum[2])) touches[0] = true;
 		});
 		return touches[0];
 	}
