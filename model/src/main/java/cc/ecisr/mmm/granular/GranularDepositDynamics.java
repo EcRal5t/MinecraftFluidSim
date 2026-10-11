@@ -39,6 +39,7 @@ public final class GranularDepositDynamics {
 
 	public interface Environment {
 		long geometricOpenSvq(int cell);
+		default double gravity() { return 0.0; }
 		boolean horizontalPathOpen(int fromCell, int directionX, int directionZ);
 		default boolean verticalPathOpen(float x, float fromY, float z, float toY, long solidSvq) { return true; }
 		double shields(int surfaceCell, ParticulateMaterial material);
@@ -67,7 +68,7 @@ public final class GranularDepositDynamics {
 	private final int sizeX, sizeY, sizeZ, columnCount;
 	private final float cellSize;
 	private final int[] dirtyQueue, stableAge;
-	private final boolean[] queued;
+	private final boolean[] queued, energyDeferred;
 	private int queueHead, queueSize;
 	private long logicalStep;
 
@@ -89,6 +90,7 @@ public final class GranularDepositDynamics {
 		this.columnCount = Math.multiplyExact(sizeX, sizeZ);
 		this.dirtyQueue = new int[columnCount]; this.stableAge = new int[columnCount];
 		this.queued = new boolean[columnCount];
+		this.energyDeferred = new boolean[columnCount];
 	}
 
 	/** Marks only the affected surface column and its one-cell slope neighborhood. */
@@ -150,6 +152,7 @@ public final class GranularDepositDynamics {
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular deposit dt is invalid");
 		int operations = 0, settled = 0, relaxed = 0, woken = 0;
 		admission.rebuild();
+		java.util.Arrays.fill(energyDeferred, false);
 
 		for (int parcelIndex = 0; parcelIndex < parcels.count()
 				&& operations + admission.visits() < GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP;) {
@@ -173,7 +176,10 @@ public final class GranularDepositDynamics {
 						int[] indices = plan.parcelIndices();
 						admission.reserveLogicalOperations(operations + indices.length);
 						if (admission.spend(2 * indices.length)) {
-							if (settlementSlopeAllowed(plan, environment) && environment.planSettlement(plan)) {
+							if (!GranularSettlementEnergy.allows(plan, cellSize, sizeX, sizeY, environment.gravity())) {
+								energyDeferred[(cell / (sizeX * sizeY)) * sizeX + cell % sizeX] = true;
+								disturbCell(cell);
+							} else if (settlementSlopeAllowed(plan, environment) && environment.planSettlement(plan)) {
 								commitSettlement(plan, indices, environment);
 								deposited = true; settled += indices.length; operations += indices.length;
 								parcelIndex = indices[indices.length - 1];
@@ -208,7 +214,11 @@ public final class GranularDepositDynamics {
 			admission.reserveLogicalOperations(operations + 1);
 			int column = pollColumn();
 			processed++;
-			if (columnBulkSvq(column) == 0L) { stableAge[column] = 0; continue; }
+			if (columnBulkSvq(column) == 0L) {
+				stableAge[column] = 0;
+				if (energyDeferred[column]) enqueue(column);
+				continue;
+			}
 			int surfaceCell = surfaceCell(column);
 			GranularDepositStore.Group exposed = deposits.dominantGroup(surfaceCell);
 			if (exposed == null) { stableAge[column] = 0; continue; }
@@ -226,6 +236,8 @@ public final class GranularDepositDynamics {
 				for (int neighbor = 0; neighbor < NEIGHBOR_X.length; neighbor++) {
 					disturbColumn(x + NEIGHBOR_X[neighbor], z + NEIGHBOR_Z[neighbor]);
 				}
+			} else if (energyDeferred[column]) {
+				stableAge[column] = 0; enqueue(column);
 			} else {
 				stableAge[column] = Math.min(SLEEP_LOGICAL_STEPS, stableAge[column] + 1);
 				if (stableAge[column] < SLEEP_LOGICAL_STEPS) enqueue(column);

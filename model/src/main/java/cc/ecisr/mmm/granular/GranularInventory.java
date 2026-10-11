@@ -68,6 +68,8 @@ public final class GranularInventory {
 		private final int[] indices;
 		private final List<GranularParcelStore.Parcel> parcels;
 		private final long totalSvq;
+		private final SignedDyadic oldBedMass;
+		private final long oldBedBulkSvq;
 		private final GranularDepositStore.AdditionsPlan additions;
 		private final SolidCompositionPool pool;
 		private final Map<Integer, SolidCompositionRecord> before, after;
@@ -82,6 +84,10 @@ public final class GranularInventory {
 			this.owner = owner; this.parcelRevision = owner.parcels.mutationRevision();
 			this.cell = cell; this.indices = indices; this.parcels = List.copyOf(parcels); this.totalSvq = totalSvq;
 			this.additions = additions; this.pool = owner.compositions;
+			SignedDyadic[] oldMass = {SignedDyadic.ZERO};
+			owner.deposits.forEachGroupInCell(cell, (ignoredCell, porosity, material, composition, volume, mass) ->
+					oldMass[0] = oldMass[0].add(SignedDyadic.of(mass)));
+			this.oldBedMass = oldMass[0]; this.oldBedBulkSvq = owner.deposits.cellBulkVolumeSvq(cell);
 			this.before = Map.copyOf(before); this.after = Map.copyOf(after); this.released = released;
 			this.adapter = owner.thermalEnergy; this.energy = energy;
 		}
@@ -91,6 +97,8 @@ public final class GranularInventory {
 		public List<GranularParcelStore.Parcel> parcels() { return parcels; }
 		public long totalSolidVolumeSvq() { return totalSvq; }
 		public long bulkVolumeSvq() { return additions.bulkVolumeSvq(); }
+		public SignedDyadic oldBedMass() { return oldBedMass; }
+		public long oldBedBulkVolumeSvq() { return oldBedBulkSvq; }
 		public SignedDyadic massStorageDelta() { return additions.massStorageDelta(); }
 		public SignedDyadic massStorageBound() { return additions.massStorageBound(); }
 	}

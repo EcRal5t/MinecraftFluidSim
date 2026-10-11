@@ -272,6 +272,11 @@ public final class ThermalOwnerStoreValidation {
 	}
 
 	private static void dyadicConversionRoundsInFinalBinary64Unit() {
+		require(SignedDyadic.of(0.1).multiply(SignedDyadic.of(-3.0)).equals(SignedDyadic.of(0.1).negate()
+				.add(SignedDyadic.of(0.1).negate()).add(SignedDyadic.of(0.1).negate()))
+				&& SignedDyadic.of(Double.MIN_VALUE).multiply(SignedDyadic.of(1, 1074)).equals(SignedDyadic.of(1.0))
+				&& SignedDyadic.of(1, Integer.MAX_VALUE).multiply(SignedDyadic.ZERO).equals(SignedDyadic.ZERO),
+				"dyadic products must keep exact signed values and normalize zero before exponent addition");
 		SignedDyadic minimum = SignedDyadic.of(Double.MIN_VALUE);
 		require(SignedDyadic.of(Double.MAX_VALUE).add(minimum).toDouble() == Double.MAX_VALUE
 				&& SignedDyadic.of(0.1).add(minimum).toDouble() == 0.1, "wide finite dyadic sum overflowed its intermediate significand");

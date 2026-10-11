@@ -345,6 +345,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 
 	GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid) {
 		return new GranularDepositDynamics.Environment() {
+			@Override public double gravity() { return config.gravity(); }
 			@Override public long geometricOpenSvq(int cell) {
 				return SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));
 			}

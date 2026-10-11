@@ -196,6 +196,13 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 	public SignedDyadic add(SignedDyadic other) { return combine(other, false); }
 	public SignedDyadic subtract(SignedDyadic other) { return combine(other, true); }
 
+	/** Exact product in the same bounded canonical representation. */
+	public SignedDyadic multiply(SignedDyadic other) {
+		Objects.requireNonNull(other, "other");
+		if (sign == 0 || other.sign == 0) return ZERO;
+		return new SignedDyadic(significand().multiply(other.significand()), Math.addExact(exponent, other.exponent));
+	}
+
 	private SignedDyadic combine(SignedDyadic other, boolean subtract) {
 		Objects.requireNonNull(other, "other");
 		if (other.sign == 0) return this;

@@ -41,6 +41,7 @@ public final class M8GranularValidation {
 		parcelSplitMergePreservesInventory();
 		depositCapacityAndGroupBudgetAreAtomic();
 		batchSettlementPreservesInventoryAndComposition();
+		settlementDoesNotRaiseGravitationalPotential();
 		parcelDepositCyclesDoNotDrift(fast ? 1_000 : 10_000);
 		mechanicsMatchesTerminalVelocity();
 		twoWayDragPreservesMomentum();
@@ -735,6 +736,61 @@ public final class M8GranularValidation {
 		boolean rejected = false; try { staleInventory.commitSettlement(stalePlan); } catch (IllegalStateException expected) { rejected = true; }
 		require(rejected && staleParcels.count() == 1 && staleParcels.parcel(0).mass() == 2 && staleDeposits.groupCount() == 0,
 				"stale inventory plan must reject before any bed or composition changes");
+	}
+
+	private static void settlementDoesNotRaiseGravitationalPotential() {
+		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double mass = svq / (double) SolidVolume.SVQ_PER_BV * registry.material(sand).referenceDensity();
+		float radius = GranularMechanics.representativeRadius(svq, .5F);
+		for (int count : new int[] {12, 13, 16}) {
+			GranularParcelStore parcels = new GranularParcelStore(registry, 32);
+			GranularDepositStore deposits = new GranularDepositStore(registry, 1, 8);
+			for (int index = 0; index < count; index++) parcels.add(new GranularParcelStore.Parcel(
+					.25F, radius, .25F, 0, 0, 0, svq, mass, sand, 0, 3, GranularParcelStore.FLAG_SUPPORTED));
+			GranularInventory inventory = new GranularInventory(parcels, deposits);
+			int[] indices = java.util.stream.IntStream.range(0, count).toArray();
+			var plan = inventory.planSettlement(indices, 0, SolidVolume.SVQ_PER_CELL);
+			require(plan != null && plan.oldBedMass().equals(SignedDyadic.ZERO) && plan.oldBedBulkVolumeSvq() == 0
+					&& GranularSettlementEnergy.allows(plan, .5F, 1, 1, 9.81) == (count == 12)
+					&& GranularSettlementEnergy.allows(plan, .5F, 1, 1, 0),
+					"uniform bed admission must compare exact mass first moments and skip zero gravity");
+			var dynamics = new GranularDepositDynamics(registry, parcels, deposits, inventory, 1, 1, 1, .5F);
+			var environment = new TestDepositEnvironment(1, 1, 1, 0) {
+				@Override public double gravity() { return 9.81; }
+			};
+			long parcelRevision = parcels.mutationRevision(), depositRevision = deposits.mutationRevision();
+			var before = inventory.exactMass();
+			var first = dynamics.step(environment, .05F);
+			if (count == 12) {
+				require(first.settledParcels() == 12 && parcels.count() == 0 && inventory.exactMass().equals(before),
+						"lower-potential cohort must still settle completely");
+			} else {
+				var second = dynamics.step(environment, .05F);
+				require(first.settledParcels() == 0 && second.settledParcels() == 0 && dynamics.dirtyColumnCount() > 0
+						&& parcels.count() == count && deposits.groupCount() == 0
+						&& parcels.mutationRevision() == parcelRevision && deposits.mutationRevision() == depositRevision
+						&& inventory.exactMass().equals(before) && parcels.parcel(0).y() == radius,
+						"positive-potential closure must defer unchanged and retain its scheduled column");
+			}
+		}
+		GranularParcelStore parcels = new GranularParcelStore(registry, 4);
+		GranularDepositStore deposits = new GranularDepositStore(registry, 1, 8);
+		require(deposits.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, svq * 4, mass * 4), SolidVolume.SVQ_PER_CELL),
+				"old-bed potential fixture failed");
+		long oldBulk = deposits.cellBulkVolumeSvq(0);
+		float y = Math.nextUp((float) (oldBulk * Math.scalb(.5, -24) + radius));
+		parcels.add(new GranularParcelStore.Parcel(.25F, y, .25F, 0, 0, 0, svq, mass, sand, 0, 3, GranularParcelStore.FLAG_SUPPORTED));
+		GranularInventory inventory = new GranularInventory(parcels, deposits);
+		var plan = inventory.planSettlement(new int[] {0}, 0, SolidVolume.SVQ_PER_CELL);
+		require(plan != null && plan.oldBedMass().equals(SignedDyadic.of(mass * 4)) && plan.oldBedBulkVolumeSvq() == oldBulk
+				&& GranularSettlementEnergy.allows(plan, .5F, 1, 1, 9.81), "ordinary existing-bed settlement must reduce potential");
+		var dynamics = new GranularDepositDynamics(registry, parcels, deposits, inventory, 1, 1, 1, .5F);
+		require(dynamics.step(new TestDepositEnvironment(1, 1, 1, 0) {
+			@Override public double gravity() { return 9.81; }
+		}, .05F).settledParcels() == 1 && parcels.count() == 0,
+				"potential guard must preserve supported single-grain bed conversion");
 	}
 
 	private static void depositCapacityAndGroupBudgetAreAtomic() {
