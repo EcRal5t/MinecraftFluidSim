@@ -5,7 +5,8 @@ import cc.ecisr.mmm.fluid.air.GasComponentAmount;
 import cc.ecisr.mmm.fluid.air.GasComponentDefinition;
 import cc.ecisr.mmm.fluid.air.GasInventory;
 import cc.ecisr.mmm.fluid.air.GasRegistry;
-import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.thermal.ThermalCaloricBounds.PortionRange;
+import cc.ecisr.mmm.thermal.ThermalCaloricBounds.QuantaRange;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -16,6 +17,7 @@ import java.util.function.LongPredicate;
 /** Exact integer search with caloric interval bounds for non-monotone mixture rounding. */
 final class GasTransferSearch {
 	private final ThermalRegistry thermal;
+	private final ThermalCaloricBounds caloric;
 	private final AirNetwork network;
 	private final int source, target;
 	private final double sourceTemperature, sourceEnergy, targetEnergy;
@@ -25,7 +27,7 @@ final class GasTransferSearch {
 
 	GasTransferSearch(ThermalRegistry thermal, AirNetwork network, int source, int target,
 	                  double sourceTemperature, double sourceEnergy, double targetEnergy, LongPredicate permits) {
-		this.thermal = thermal; this.network = network; this.source = source; this.target = target;
+		this.thermal = thermal; this.caloric = new ThermalCaloricBounds(thermal); this.network = network; this.source = source; this.target = target;
 		this.sourceTemperature = sourceTemperature; this.sourceEnergy = sourceEnergy;
 		this.targetEnergy = targetEnergy; this.permits = permits;
 		this.sourceInventory = source == AirNetwork.AMBIENT_NODE ? GasInventory.EMPTY : network.inventory(source);
@@ -72,13 +74,13 @@ final class GasTransferSearch {
 					remaining.add(range(most.second().component(component.componentId()), least.second().component(component.componentId())));
 				}
 			}
-			double minimumCarried = energy(moved, sourceTemperature, false);
+			double minimumCarried = caloric.energyAtTemperature(moved, sourceTemperature, false);
 			minimumCarried = down(minimumCarried + flowWorkBound(low, sourceTemperature, false));
 			if (!Double.isFinite(minimumCarried)) return false;
 			double maximumSourcePressure;
 			if (source == AirNetwork.AMBIENT_NODE) maximumSourcePressure = GasRegistry.STANDARD_PRESSURE_PA;
 			else {
-				double temperature = temperatureBound(remaining, up(sourceEnergy - minimumCarried), true);
+				double temperature = caloric.temperatureBound(remaining, up(sourceEnergy - minimumCarried), true, sourceTemperature);
 				maximumSourcePressure = up(up(gasConstantBound(sourceInventory.standardVolumeNanos() - low, true)
 						* temperature) / network.availableVolume(source));
 			}
@@ -86,11 +88,11 @@ final class GasTransferSearch {
 			if (target == AirNetwork.AMBIENT_NODE) minimumTargetPressure = GasRegistry.STANDARD_PRESSURE_PA;
 			else {
 				TreeMap<String, PortionRange> combined = new TreeMap<>();
-				for (PortionRange portion : moved) combined.put(portion.material.carrierId(), portion);
+				for (PortionRange portion : moved) combined.put(thermal.material(portion.materialHandle()).carrierId(), portion);
 				for (GasComponentAmount component : targetInventory.components()) {
-					combined.merge(component.componentId(), range(component, component), this::merge);
+					combined.merge(component.componentId(), range(component, component), caloric::merge);
 				}
-				double temperature = temperatureBound(List.copyOf(combined.values()), down(targetEnergy + minimumCarried), false);
+				double temperature = caloric.temperatureBound(List.copyOf(combined.values()), down(targetEnergy + minimumCarried), false, sourceTemperature);
 				minimumTargetPressure = down(down(gasConstantBound(Math.addExact(targetInventory.standardVolumeNanos(), low), false)
 						* temperature) / network.availableVolume(target));
 			}
@@ -101,102 +103,16 @@ final class GasTransferSearch {
 		}
 	}
 
-	private double temperatureBound(List<PortionRange> portions, double targetEnergy, boolean upper) {
-		if (!Double.isFinite(targetEnergy)) return upper ? Double.POSITIVE_INFINITY : ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-		double low = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-		double high = Math.max(1.0, sourceTemperature);
-		if (chartEnergy(portions, low, !upper) >= targetEnergy) return low;
-		while (chartEnergy(portions, high, !upper) < targetEnergy) {
-			if (high >= Double.MAX_VALUE / 2.0) return upper ? Double.POSITIVE_INFINITY : down(down(high));
-			high *= 2.0;
-		}
-		// The bracket remains outward-facing even when its root is too close to resolve.
-		for (int iteration = 0; iteration < 64 && Math.nextUp(low) < high; iteration++) {
-			double middle = low + (high - low) / 2.0;
-			if (chartEnergy(portions, middle, !upper) < targetEnergy) low = middle;
-			else high = middle;
-		}
-		// One fast-path temperature ULP spans at most two adjacent values across a binary exponent seam.
-		return upper ? up(up(high)) : Math.max(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, down(down(low)));
-	}
-
-	/** The inversion uses original references and exact integrals, independently of its rounded forward-energy API. */
-	private double chartEnergy(List<PortionRange> portions, double temperature, boolean upper) {
-		SignedDyadic result = SignedDyadic.ZERO;
-		for (PortionRange portion : portions) {
-			double base = baseBound(portion, upper);
-			if (!Double.isFinite(base)) return upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
-			SignedDyadic specific = ThermalContactExchange.exactEnergyChangeBetween(portion.material, 1.0,
-					portion.material.referenceTemperatureK(), temperature);
-			double mass = (specific.signum() >= 0) == upper ? portion.massHigh : portion.massLow;
-			result = result.add(SignedDyadic.of(base)).add(specific.multiply(SignedDyadic.of(mass)));
-		}
-		return outward(result.toDouble(), upper);
-	}
-
-	/** Rounded multiplication and ordered addition are monotone, including signed reference offsets. */
-	private double baseBound(PortionRange portion, boolean upper) {
-		double reference = portion.material.referenceSpecificEnergyEuPerMu();
-		double result = ((reference >= 0) == upper ? portion.massHigh : portion.massLow) * reference;
-		int handle = thermal.materialHandle(portion.material.id());
-		for (var entry : portion.species.entrySet()) {
-			ThermalSpeciesOffset offset = thermal.speciesOffset(handle, entry.getKey());
-			double first = thermal.referenceEnergyCache().energy(offset, entry.getValue()[0]);
-			double last = thermal.referenceEnergyCache().energy(offset, entry.getValue()[1]);
-			result += upper ? Math.max(first, last) : Math.min(first, last);
-		}
-		return result;
-	}
-
-	private double energy(List<PortionRange> portions, double temperature, boolean upper) {
-		double result = 0.0;
-		for (PortionRange portion : portions) {
-			double reference = portion.material.referenceSpecificEnergyEuPerMu();
-			double base = productRange(portion.massLow, portion.massHigh, reference, upper);
-			int handle = thermal.materialHandle(portion.material.id());
-			for (var entry : portion.species.entrySet()) {
-				ThermalSpeciesOffset offset = thermal.speciesOffset(handle, entry.getKey());
-				double first = thermal.referenceEnergyCache().energy(offset, entry.getValue()[0]);
-				double last = thermal.referenceEnergyCache().energy(offset, entry.getValue()[1]);
-				base = outward(base + (upper ? Math.max(first, last) : Math.min(first, last)), upper);
-			}
-			result = outward(result + caloricBound(portion, temperature, base, upper), upper);
-		}
-		return Double.isFinite(result) ? result : upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
-	}
-
-	private double caloricBound(PortionRange portion, double temperature, double base, boolean upper) {
-		try {
-			double sensible = portion.material.sensibleSpecificEnergyAt(temperature);
-			double energy = base + productRange(portion.massLow, portion.massHigh, sensible, upper);
-			if (Double.isFinite(energy)) return outward(energy, upper);
-		} catch (IllegalArgumentException integralOverflow) { /* Retry the validated caloric integral before scaling. */ }
-		if (!Double.isFinite(base)) return upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
-		SignedDyadic specific = ThermalContactExchange.exactEnergyChangeBetween(portion.material, 1.0,
-				portion.material.referenceTemperatureK(), temperature);
-		double mass = (specific.signum() >= 0) == upper ? portion.massHigh : portion.massLow;
-		double energy = SignedDyadic.of(base).add(specific.multiply(SignedDyadic.of(mass))).toDouble();
-		return Double.isFinite(energy) ? outward(energy, upper)
-				: upper ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
-	}
-
 	private PortionRange range(GasComponentAmount low, GasComponentAmount high) {
 		GasComponentAmount any = high == null ? low : high;
 		int handle = thermal.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, any.componentId());
 		TreeMap<String, long[]> species = new TreeMap<>();
 		if (low != null) for (GasComponentAmount.SpeciesAmount entry : low.species()) species.computeIfAbsent(entry.speciesId(), ignored -> new long[2])[0] = entry.amountQuanta();
 		if (high != null) for (GasComponentAmount.SpeciesAmount entry : high.species()) species.computeIfAbsent(entry.speciesId(), ignored -> new long[2])[1] = entry.amountQuanta();
-		return new PortionRange(thermal.material(handle), low == null ? 0.0 : low.mass(),
-				high == null ? 0.0 : high.mass(), species);
-	}
-
-	private PortionRange merge(PortionRange first, PortionRange second) {
-		TreeMap<String, long[]> species = new TreeMap<>();
-		first.species.forEach((id, amounts) -> species.put(id, amounts.clone()));
-		second.species.forEach((id, amounts) -> species.merge(id, amounts.clone(), (a, b) ->
-				new long[] {Math.addExact(a[0], b[0]), Math.addExact(a[1], b[1])}));
-		return new PortionRange(first.material, Math.max(0.0, down(first.massLow + second.massLow)),
-				up(first.massHigh + second.massHigh), species);
+		TreeMap<String, QuantaRange> ranges = new TreeMap<>();
+		species.forEach((id, values) -> ranges.put(id, new QuantaRange(values[0], values[1])));
+		return new PortionRange(handle, low == null ? 0.0 : low.mass(),
+				high == null ? 0.0 : high.mass(), ranges);
 	}
 
 	private GasComponentAmount ambientComponent(String id, long nanos) {
@@ -216,9 +132,6 @@ final class GasTransferSearch {
 		BigInteger[] divided = numerator.multiply(BigInteger.valueOf(amount)).divideAndRemainder(denominator);
 		return divided[0].add(ceiling && divided[1].signum() != 0 ? BigInteger.ONE : BigInteger.ZERO).longValueExact();
 	}
-	private static double productRange(double low, double high, double factor, boolean upper) {
-		return outward((factor >= 0.0 == upper ? high : low) * factor, upper);
-	}
 	private static double outward(double value, boolean upper) { return upper ? up(value) : down(value); }
 	private static double gasConstantBound(long nanos, boolean upper) {
 		double volume = outward(nanos * 1.0e-9, upper);
@@ -232,6 +145,4 @@ final class GasTransferSearch {
 	}
 	private static double up(double value) { return Math.nextUp(value); }
 	private static double down(double value) { return Math.nextDown(value); }
-	private record PortionRange(ThermalMaterialDefinition material, double massLow, double massHigh,
-	                            TreeMap<String, long[]> species) { }
 }

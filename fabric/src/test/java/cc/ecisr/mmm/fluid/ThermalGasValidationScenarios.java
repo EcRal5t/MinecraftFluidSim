@@ -1286,6 +1286,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void sealedInterfaceBoilingCommitsJointInventory() {
+		massOnlyCondensationUsesExistingReceiver();
 		FluidMaterial waterCarrier = FluidMaterial.withSurfaceTension(
 				"test:boiling_water", 1_000.0, "test:miscible", 0.0, 90.0);
 		FluidMaterial oilCarrier = FluidMaterial.withSurfaceTension(
@@ -1581,6 +1582,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void compositionBearingBoilingMovesOnlyGasAdmittedSpecies() {
+		compositionBearingBoilingSearchesCompleteBatches();
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
@@ -1709,6 +1711,160 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						+ partiallyRestored.residualLedger() + "+" + vaporRemainder.massResidual()
 						+ "/" + initial.residualLedger() + " audit="
 						+ domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
+	}
+
+	static void massOnlyCondensationUsesExistingReceiver() {
+		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		var gasRegistry = BuiltinGasDefinitions.createRegistry();
+		var water = phaseSearchMaterial("test:receiver/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.WATER.id(), 0, 4_180);
+		var air = phaseSearchMaterial("test:receiver/air", ThermalMaterialDefinition.CarrierKind.GAS,
+				BuiltinGasDefinitions.AIR, 0, 718);
+		var vapor = phaseSearchMaterial("test:receiver/vapor", ThermalMaterialDefinition.CarrierKind.GAS,
+				BuiltinGasDefinitions.WATER_VAPOR, 2_256_000, 1_410);
+		long batchSvq = SolidVolume.SVQ_PER_CELL / 20_000L;
+		var transition = new ThermalPhaseTransition("test:receiver/condensation", water.id(), vapor.id(), 373.15,
+				batchSvq, batchSvq * 1_700, ExactRational.parse("52375/8388608"),
+				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000, 3_000_000);
+		var thermal = new ThermalRegistry(List.of(water, air, vapor), List.of(
+				new ThermalSpeciesOffset("test:receiver/water_h2o", BuiltinChemicalDefinitions.H2O, water.id(), ExactRational.ZERO),
+				new ThermalSpeciesOffset("test:receiver/vapor_h2o", BuiltinChemicalDefinitions.H2O, vapor.id(), ExactRational.ZERO)),
+				List.of(transition), chemistry.fingerprint(), "");
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
+		domain.sealDomainBoundary();
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
+			if (y != 1 || z != 1 || x == 0) domain.setSolid(x, y, z, true);
+		domain.setVolume(1, 1, 1, .1F); domain.setMarkerMaterial(0, liquids, 0);
+		domain.bindChemistry(chemistry);
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
+		domain.bindGasRegistry(gasRegistry); domain.bootstrapGasState(chemistry.fingerprint());
+		domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
+		var phase = new GasLiquidPhaseModel(thermal, gasRegistry);
+		double mass = transition.massMuPerBatch().multiply(3).toDouble();
+		double speciesMass = chemistry.species(chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O))
+				.massKilogramsPerAu().divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+		var gas = phase.gasBatch(transition, 3, Map.of(BuiltinChemicalDefinitions.H2O, 1L), mass - speciesMass);
+		domain.gasState.network.commitPhaseSource(1, gas);
+		domain.bindThermal(thermal, liquids, 250);
+		long nanos = phase.gasBatch(transition, 1).standardVolumeNanos();
+		var proportional = domain.gasState.network.previewComponentTake(1, BuiltinGasDefinitions.WATER_VAPOR, nanos);
+		require(proportional.first().components().getFirst().species().isEmpty(),
+				"one of three gas batches must round its single H2O quantum to the remaining gas");
+		double batchMass = transition.massMuPerBatch().toDouble();
+		var take = domain.gasState.network.previewComponentTake(
+				1, BuiltinGasDefinitions.WATER_VAPOR, nanos, batchMass, batchMass);
+		var chemicalBefore = domain.exportChemicalParticleState();
+		var energyBefore = domain.exactInternalEnergy(); var auditBefore = domain.thermalAudit();
+		var massBefore = SignedDyadic.of(domain.unitScale.kilograms(domain.totalMass())).add(SignedDyadic.of(gas.totalMass()));
+		var residualBefore = SignedDyadic.of(chemicalBefore.residualLedger()).add(SignedDyadic.of(gas.components().getFirst().massResidual()));
+		double volumeBefore = domain.totalVolumeExact();
+		var stats = domain.stepGasPhaseChangeOnly(1);
+		var remaining = domain.gasBoundary().inventory(1);
+		var chemicalAfter = domain.exportChemicalParticleState();
+		require(stats.operations() == 1 && stats.condensedCells() == 1 && stats.boiledCells() == 0
+				&& domain.particleCount() == 1 && remaining.equals(take.second())
+				&& Arrays.equals(chemicalAfter.copySpeciesTotals(), chemicalBefore.copySpeciesTotals())
+				&& remaining.component(BuiltinGasDefinitions.WATER_VAPOR).species().equals(gas.components().getFirst().species())
+				&& domain.totalVolumeExact() - volumeBefore == SolidVolume.toCellVolume(batchSvq),
+				"mass-only gas batch must merge into its positive-species liquid receiver");
+		var massAfter = SignedDyadic.of(domain.unitScale.kilograms(domain.totalMass())).add(SignedDyadic.of(remaining.totalMass()));
+		var residualAfter = SignedDyadic.of(chemicalAfter.residualLedger()).add(SignedDyadic.of(remaining.components().getFirst().massResidual()));
+		require(Math.abs(massAfter.subtract(massBefore).toDouble()) <= .5 * Math.ulp(domain.unitScale.kilograms(domain.totalMass()))
+				&& Math.abs(residualAfter.subtract(residualBefore).toDouble()) <= Math.ulp(chemicalAfter.residualLedger()),
+				"mass-only condensation preserves kg and residual within the receiver's storage rounding");
+		require(domain.exactInternalEnergy().subtract(energyBefore).equals(
+				domain.thermalAudit().roundoffResidual().subtract(auditBefore.roundoffResidual()))
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+				&& domain.gasBoundary().auditClosed(), "mass-only condensation closes actual energy and gas audits");
+		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
+				&& restored.thermalAudit().equals(domain.thermalAudit())
+				&& restored.gasBoundary().inventory(1).equals(remaining)
+				&& restored.totalMass() == domain.totalMass() && restored.totalVolumeExact() == domain.totalVolumeExact()
+				&& Arrays.equals(restored.exportChemicalParticleState().copySpeciesTotals(), chemicalAfter.copySpeciesTotals())
+				&& restored.exportChemicalParticleState().residualLedger() == chemicalAfter.residualLedger(),
+				"mass-only condensation capture/restore retains its coupled inventories");
+	}
+
+	static void compositionBearingBoilingSearchesCompleteBatches() {
+		for (int maximum : new int[]{2, 4}) boilingIntegerCandidateSearch(maximum);
+	}
+
+	private static void boilingIntegerCandidateSearch(int maximum) {
+		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.OIL));
+		var water = phaseSearchMaterial("test:search/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.WATER.id(), 0, 4_180);
+		var oil = phaseSearchMaterial("test:search/oil", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.OIL.id(), 0, 2_000);
+		var air = phaseSearchMaterial("test:search/air", ThermalMaterialDefinition.CarrierKind.GAS,
+				BuiltinGasDefinitions.AIR, 0, 718);
+		var vapor = phaseSearchMaterial("test:search/vapor", ThermalMaterialDefinition.CarrierKind.GAS,
+				BuiltinGasDefinitions.WATER_VAPOR, 2_256_000, 1_410);
+		long batchSvq = SolidVolume.SVQ_PER_CELL / 20_000L;
+		var transition = new ThermalPhaseTransition("test:search/boiling", water.id(), vapor.id(), 373.15,
+				batchSvq, batchSvq * 1_700, ExactRational.parse("52375/8388608"),
+				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000, 3_000_000);
+		var thermal = new ThermalRegistry(List.of(water, oil, air, vapor), List.of(
+				new ThermalSpeciesOffset("test:search/water_h2o", BuiltinChemicalDefinitions.H2O, water.id(), ExactRational.ZERO),
+				new ThermalSpeciesOffset("test:search/oil_carrier", BuiltinChemicalDefinitions.OIL_CARRIER, oil.id(), ExactRational.ZERO),
+				new ThermalSpeciesOffset("test:search/vapor_h2o", BuiltinChemicalDefinitions.H2O, vapor.id(), ExactRational.ZERO)),
+				List.of(transition), chemistry.fingerprint(), "");
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
+		domain.sealDomainBoundary();
+		domain.setVolume(1, 1, 1, SolidVolume.toCellVolume(2 * batchSvq));
+		domain.setMarkerMaterial(0, liquids, 0);
+		if (maximum == 4) require(domain.tryInsertExactVolume(1, 1, 1,
+				SolidVolume.toCellVolume(2 * batchSvq), 0, 0).transferred(), "integer-search second water insertion");
+		require(domain.tryInsertExactVolume(1, 1, 1, .125F, 0, 1).transferred(), "integer-search oil heat bath insertion");
+		domain.bindChemistry(chemistry);
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
+		if (maximum == 4) domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.H2O, 3L), false);
+		domain.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
+		domain.bootstrapGasState("");
+		domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
+		domain.bindThermal(thermal, liquids, 500);
+		var before = domain.exportChemicalParticleState();
+		var energy = domain.exactInternalEnergy();
+		var audit = domain.thermalAudit();
+		double mass = domain.unitScale.kilograms(domain.totalMass());
+		double volume = domain.totalVolumeExact();
+		// One H2O quantum permits a complete two-batch take but no partial one-batch take.
+		// With a second 3-quantum carrier, batches 1/2/4 are valid and 3 is unrepresentable.
+		var stats = domain.stepGasPhaseChangeOnly(maximum);
+		require(stats.operations() == maximum && stats.boiledCells() == 1 && stats.condensedCells() == 0,
+				"integer feasibility holes must retain the largest complete boiling candidate: max=" + maximum + " actual=" + stats);
+		var gas = domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
+		var after = domain.exportChemicalParticleState();
+		long[] species = after.copySpeciesTotals();
+		for (var amount : gas.species()) species[chemistry.speciesHandle(amount.speciesId())] =
+				Math.addExact(species[chemistry.speciesHandle(amount.speciesId())], amount.amountQuanta());
+		require(Arrays.equals(species, before.copySpeciesTotals())
+				&& domain.unitScale.kilograms(domain.totalMass()) + gas.mass() == mass
+				&& Math.abs(after.residualLedger() + gas.massResidual() - before.residualLedger())
+				<= 16 * Math.ulp(before.residualLedger())
+				&& volume - domain.totalVolumeExact() == SolidVolume.toCellVolume(maximum * batchSvq),
+				"complete boiling preserves actual kg, integer species, residual and liquid SVQ");
+		require(domain.exactInternalEnergy().subtract(energy).equals(
+				domain.thermalAudit().roundoffResidual().subtract(audit.roundoffResidual()))
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+				&& domain.gasBoundary().auditClosed(), "complete boiling books only actual energy roundoff and closes gas/thermal audits");
+		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
+				&& restored.thermalAudit().equals(domain.thermalAudit())
+				&& restored.gasBoundary().inventory(1).equals(domain.gasBoundary().inventory(1))
+				&& Arrays.equals(restored.exportChemicalParticleState().copySpeciesTotals(), after.copySpeciesTotals())
+				&& restored.totalVolumeExact() == domain.totalVolumeExact()
+				&& restored.totalMass() == domain.totalMass(), "complete boiling capture/restore retains the coupled inventories");
+	}
+
+	private static ThermalMaterialDefinition phaseSearchMaterial(String id, ThermalMaterialDefinition.CarrierKind kind,
+			String carrier, double reference, double capacity) {
+		return new ThermalMaterialDefinition(id, kind, carrier, 373.15, reference, .1,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(250, 800, capacity)));
 	}
 
 	private static void condensationCapacityRetry(FluidDomain domain) {

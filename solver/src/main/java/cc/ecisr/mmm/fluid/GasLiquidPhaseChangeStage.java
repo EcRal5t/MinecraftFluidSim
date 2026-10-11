@@ -129,28 +129,14 @@ final class GasLiquidPhaseChangeStage {
 				+ massTolerance(inventory.freezableUpperMass())) / batchMass);
 		long high = Math.min(maximumBatches, Math.min(byVolume, byMass));
 		if (high <= 0L) return null;
-		GasBoilPlan first = boilCandidate(
-				cell, node, liquidHandle, gasThermalHandle, transition, inventory, phase,
-				thermalCell, volatileSpecies, liquidTemperature, 1L);
-		if (first == null) return null;
-		if (first.directionAfter() == GasLiquidPhaseModel.Direction.CONDENSE) return null;
-		if (first.directionAfter() == GasLiquidPhaseModel.Direction.EQUILIBRIUM) return first;
-		GasBoilPlan best = first;
-		long low = 2L;
-		while (low <= high) {
-			long middle = low + ((high - low) >>> 1);
-			GasBoilPlan candidate = boilCandidate(
-					cell, node, liquidHandle, gasThermalHandle, transition, inventory,
-					phase, thermalCell, volatileSpecies, liquidTemperature, middle);
-			if (candidate != null && candidate.directionAfter() == GasLiquidPhaseModel.Direction.EQUILIBRIUM) return candidate;
-			if (candidate == null || candidate.directionAfter() != GasLiquidPhaseModel.Direction.BOIL) {
-				high = middle - 1L;
-			} else {
-				best = candidate;
-				low = middle + 1L;
-			}
-		}
-		return best;
+		GasBoilingBatchBounds bounds = new GasBoilingBatchBounds(support, cell, node, liquidHandle,
+				transition, thermalCell, volatileSpecies, liquidTemperature, phase);
+		return GasPhaseBatchSearch.maximum(high, batches -> {
+			GasBoilPlan candidate = boilCandidate(cell, node, liquidHandle, gasThermalHandle, transition,
+					inventory, phase, thermalCell, volatileSpecies, liquidTemperature, batches);
+			return candidate != null && candidate.directionAfter() != GasLiquidPhaseModel.Direction.CONDENSE
+					? candidate : null;
+		}, bounds::excluded);
 	}
 
 	private GasBoilPlan boilCandidate(
@@ -224,27 +210,14 @@ final class GasLiquidPhaseChangeStage {
 		long byCapacity = (capacity - occupied) / transition.lowerVolumeSvqPerBatch();
 		long high = Math.min(maximumBatches, Math.min(byGas, byCapacity));
 		if (high <= 0L) return null;
-		GasCondensePlan first = condenseCandidate(
-				cell, node, liquidHandle, transition, phase, thermalCell, 1L);
-		if (first == null) return null;
-		if (first.directionAfter() == GasLiquidPhaseModel.Direction.BOIL) return null;
-		if (first.directionAfter() == GasLiquidPhaseModel.Direction.EQUILIBRIUM) return first;
-		GasCondensePlan best = first;
-		long low = 2L;
-		while (low <= high) {
-			long middle = low + ((high - low) >>> 1);
-			GasCondensePlan candidate = condenseCandidate(
-					cell, node, liquidHandle, transition, phase, thermalCell, middle);
-			if (candidate != null && candidate.directionAfter() == GasLiquidPhaseModel.Direction.EQUILIBRIUM) return candidate;
-			if (candidate == null || candidate.directionAfter()
-					!= GasLiquidPhaseModel.Direction.CONDENSE) {
-				high = middle - 1L;
-			} else {
-				best = candidate;
-				low = middle + 1L;
-			}
-		}
-		return best;
+		GasCondensingBatchBounds bounds = new GasCondensingBatchBounds(
+				support, cell, node, liquidHandle, transition, thermalCell, phase);
+		return GasPhaseBatchSearch.maximum(high, batches -> {
+			GasCondensePlan candidate = condenseCandidate(cell, node, liquidHandle, transition,
+					phase, thermalCell, batches);
+			return candidate != null && candidate.directionAfter() != GasLiquidPhaseModel.Direction.BOIL
+					? candidate : null;
+		}, bounds::excluded);
 	}
 
 	private GasCondensePlan condenseCandidate(
@@ -299,10 +272,11 @@ final class GasLiquidPhaseChangeStage {
 			double batchEnergy = phase.internalEnergyAtTemperature(transition, take.first(), gasTemperature);
 			double candidateGasEnergy = thermal.gasNodeEnergy(node, gasState.network) - batchEnergy;
 			PhaseComposition movedComposition = PhaseComposition.fromGas(moved);
-			ChemicalMixtureRecord condensedMixture = chemistry == null ? null : movedComposition.toMixture(chemistry.registry());
+			ChemicalMixtureRecord condensedMixture = null;
 			if (chemistry != null) {
-				chemistry.requireCompatible(condensedMixture, support.materialRegistry().material(liquidHandle).id(), false);
-				if (condensedMixture.totalQuanta() > cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA
+				long movedQuanta = 0L;
+				for (long amount : movedComposition.amounts().values()) movedQuanta = Math.addExact(movedQuanta, amount);
+				if (movedQuanta > cc.ecisr.mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA
 						- chemistry.totalQuanta()) {
 					throw new PhaseCandidateUnavailableException("Condensation awaits liquid chemical capacity");
 				}
@@ -314,8 +288,11 @@ final class GasLiquidPhaseChangeStage {
 						&& (chemistry == null || !chemistry.indicator(marker))) {
 					try {
 						PhaseChangeStageSupport.adjustedMarkerVolume(particles.volume(marker), addedSvq, "Condensation");
-						if (chemistry != null) condensedMixture = PhaseComposition.fromMixture(
-								chemistry.record(marker), chemistry.registry()).plus(movedComposition).toMixture(chemistry.registry());
+						if (chemistry != null) {
+							condensedMixture = PhaseComposition.fromMixture(chemistry.record(marker), chemistry.registry())
+									.plus(movedComposition).toMixture(chemistry.registry());
+							chemistry.requireCompatible(condensedMixture, support.materialRegistry().material(liquidHandle).id(), false);
+						}
 					} catch (PhaseCandidateUnavailableException unavailable) {
 						continue;
 					}
@@ -343,6 +320,12 @@ final class GasLiquidPhaseChangeStage {
 							"Condensation momentum exceeds liquid carrier representation", unrepresentableMomentum);
 				}
 			} else {
+				if (chemistry != null) {
+					if (movedComposition.amounts().isEmpty()) throw new PhaseCandidateUnavailableException(
+							"Condensation needs an existing chemical receiver for a mass-only gas portion");
+					condensedMixture = movedComposition.toMixture(chemistry.registry());
+					chemistry.requireCompatible(condensedMixture, support.materialRegistry().material(liquidHandle).id(), false);
+				}
 				if (particles.count() >= support.state().maximumParticleCount()) {
 					throw new PhaseCandidateUnavailableException("Condensation exceeds marker budget");
 				}

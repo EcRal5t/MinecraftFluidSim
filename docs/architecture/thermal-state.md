@@ -313,7 +313,7 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 
 气液 extent 的候选保存该 cell 的 exact dyadic 总 `U` 与不变 solid heat-bath inventory，只替换候选 liquid inventory。真实 phase commit 后重建载体 ordinal，但只按守恒余量重新求解被编辑 cell；未编辑 cell 必须已有同代 LTE 状态并原样保留，不能借此反算或改写其 `U`。
 
-若沸腾候选移走最后一个凝聚相载体且无法使单元剩余 `U` 精确归零，二分规划缩小或跳过该 extent。候选热浴逐 marker 使用计划提交的剩余质量与组成构造，完整移除的 marker 不贡献热容量。气液能量交换按气体前后实际 binary64 内能的精确二进制差计算。
+沸腾候选移走最后一个凝聚相载体时，单元剩余 `U` 须精确归零；该条件参与每个候选的可提交性校验。候选热浴逐 marker 使用计划提交的剩余质量与组成构造，完整移除的 marker 不贡献热容量。气液能量交换按气体前后实际 binary64 内能的精确二进制差计算。
 
 固液和气液相变的容量检查共用 `PhaseChangeStageSupport`：活动颗粒按连续位置的三线性权重分摊整数 SVQ，沉积按所属单元计入；coherent 库存由相变层另行计入。这与运动、沉积及恢复检查使用同一份空间归属规则。
 
@@ -341,13 +341,14 @@ logical thermal axis 在最后一次真实 carrier 修改后从全部载体构�
 - 当前集总气腔在区域参考系中采用零输入动量的凝结近似。新增 marker 使用零速；加入已有 marker 时，候选按实际接收质量预先求出质量加权速度，提交质量和速度，保存原有液体动量，误差限于最终 binary32 速度舍入。
 - 每次气液 commit 还按实际增加/删除的 liquid SVQ 写入带 cell 的 exact pending volume；下一次真实 projection 完成力学同步，随后清除该 entry。capture/restore 必须保留尚未结算的原始 pending 值。
 - 同一 transition、gas node 与 exact liquid temperature 在一个 logical step 内只有一个热力学方向；首次观察到的沸腾或凝结方向是该状态点的唯一方向，后续候选若试图在同一状态点反向则不提交。不同温度的热/冷界面仍独立求值。
-- exact batch 搜索以饱和驱动力的方向限制整数 extent：沸腾后的 `p_sat >= p_partial`，凝结后的 `p_sat <= p_partial`。最大可提交批次在平衡点之前停止，保持两相联合内能；不足一个完整批次的剩余转移量留在原库存，等待热通量或几何变化。量化误差上限为一个声明的最小相变量子，薄液体的有限热容量同样参加候选反演。
+- exact batch 搜索以饱和驱动力的方向限制整数 extent：沸腾后的 `p_sat >= p_partial`，凝结后的 `p_sat <= p_partial`。搜索选择预算内满足全部提交条件的最大批数，保持两相联合内能；薄液体的有限热容量同样参加候选反演。库存可表示性连续且容量、操作预算充足时，剩余转移量小于一个最小相变量子；组成份额或载体容量受限时，余量保留在原库存，等待库存、热通量或几何变化。
 - 一个液体 cell 同时接触多个互不连通的 sealed node 是合法界面，不得因此暂停或合并气腔。一次 pressure interval 内该 cell 只向一个 node 提交一次守恒交换：按 `|p_sat-p_partial|` 从大到小尝试，最强候选若受库存、能量、组分或容量约束无法执行再尝试下一 node；相同驱动力按稳定 node ID 决定顺序。
 - chemistry 启用时，每个 gas transition 先把允许挥发且具有 host-gas energy offset 的 stable species 编译为本步 runtime handle 集；液体 marker 仍按 ordinal 搬运 exact species、质量 residual 与 `U`，runtime handle 不持久化。
+- 凝结的接收者按最终合并组成校验。零整数 species、正质量 residual 的气体份额可加入已有化学载体；生成独立化学 marker 时，移入份额须含正整数 species。
 
 零输入动量近似适用于平均气体动量可忽略的场景；气体空间动量及蒸发带出的动量仍需由空间气体模型承载。凝结质量 `dm` 即时加入质量 `m`、速度 `v` 的 marker 时，速度混合减少的动能为 `m*dm/(2*(m+dm))*|v|²`，另有最终速度舍入误差。当前两相内能事务保持总 `U`，该动能差尚未转为混合热；对应温度误差可按动能差除以接收单元热容量估计。
 
-整数 species 份额使气液候选的可行集合出现间断：部分移出可能缺少可表示的保留或移出载体，完整移出仍可执行。当前 extent 二分搜索把不可表示候选当作较大批次的上限，因此可能遗漏完整、守恒的转移。完善搜索时须分别检查热力学驱动力与库存可表示性，按可证明的区间界裁剪，并保持候选求值的计算额度；完成条件见[产品路线](../roadmap/product-roadmap.md#物理缺口的依赖安排)。
+整数 species 份额使气液候选的可行集合出现间断：部分移出可能缺少可表示的保留或移出载体，完整移出仍可执行。搜索先求值最大批数，再从高到低划分整数区间；候选空缺仅影响该批数。区间裁剪依据实际库存的质量与 species 份额范围、逐载体原始参考能、分段热容及向外舍入的压力界。沸腾按实际移出顺序构造保留库存，凝结覆盖所有接收者及新增载体；只有整段资源不可表示或饱和驱动力严格反向时才排除区间。宽区间或无法求界的区间继续划分，单步至多检查共享预算内的 4096 个整数批数。
 
 水/蒸气的方向由 ideal-mixture component 分压和数据化的 Clausius–Clapeyron 饱和关系决定：
 

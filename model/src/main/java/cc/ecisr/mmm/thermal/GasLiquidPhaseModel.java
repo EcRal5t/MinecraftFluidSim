@@ -39,10 +39,7 @@ public final class GasLiquidPhaseModel {
 			throw new IllegalArgumentException("Gas/liquid phase pressure is outside the transition model");
 		}
 		pair.liquid().specificHeatAt(liquidTemperatureK);
-		double referenceTemperature = referenceTemperature(transition);
-		double exponent = -pair.latentEnthalpyPerMass() / pair.gasConstantPerMass()
-				* (1.0 / liquidTemperatureK - 1.0 / referenceTemperature);
-		double saturation = GasRegistry.STANDARD_PRESSURE_PA * Math.exp(exponent);
+		double saturation = GasRegistry.STANDARD_PRESSURE_PA * saturationExponential(transition, pair, liquidTemperatureK);
 		if (!(Double.isFinite(saturation) && saturation >= 0.0)) {
 			throw new IllegalArgumentException("Saturation pressure is outside the phase model");
 		}
@@ -52,6 +49,25 @@ public final class GasLiquidPhaseModel {
 		Direction direction = saturation > partial ? Direction.BOIL
 				: saturation < partial ? Direction.CONDENSE : Direction.EQUILIBRIUM;
 		return new Saturation(saturation, partial, direction);
+	}
+
+	/** Envelope for the production pressure expression at an outward-facing temperature endpoint. */
+	public double saturationPressureBound(ThermalPhaseTransition transition, double temperatureK, boolean upper) {
+		PhasePair pair = requirePair(transition);
+		pair.liquid().specificHeatAt(temperatureK);
+		double exponential = saturationExponential(transition, pair, temperatureK);
+		// The raw exponent operations preserve temperature order. Four neighbours cover the
+		// two Math.exp one-ULP errors, including a change of exponent, before positive scaling.
+		for (int rounding = 0; rounding < 4; rounding++) exponential = upper
+				? Math.nextUp(exponential) : Math.max(0.0, Math.nextDown(exponential));
+		double pressure = GasRegistry.STANDARD_PRESSURE_PA * exponential;
+		return upper ? Math.nextUp(pressure) : Math.max(0.0, Math.nextDown(pressure));
+	}
+
+	private static double saturationExponential(ThermalPhaseTransition transition, PhasePair pair, double temperatureK) {
+		double exponent = -pair.latentEnthalpyPerMass() / pair.gasConstantPerMass()
+				* (1.0 / temperatureK - 1.0 / referenceTemperature(transition));
+		return Math.exp(exponent);
 	}
 
 	/** Creates a gas-side batch with exact phase mass and stable standard-volume nanos. */
