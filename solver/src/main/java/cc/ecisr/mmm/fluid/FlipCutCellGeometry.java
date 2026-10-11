@@ -126,6 +126,36 @@ final class FlipCutCellGeometry {
 		return microSolid(microX, microY, microZ);
 	}
 
+	/** Closed sphere/box contact, including edges and corners between axis probes. */
+	boolean sphereTouchesSolid(float x, float y, float z, float radius, float cellSize) {
+		int minX = Math.max(0, (int) Math.floor(Math.nextDown((x - (double) radius) / cellSize)));
+		int minY = Math.max(0, (int) Math.floor(Math.nextDown((y - (double) radius) / cellSize)));
+		int minZ = Math.max(0, (int) Math.floor(Math.nextDown((z - (double) radius) / cellSize)));
+		int maxX = Math.min(sizeX - 1, (int) Math.floor((x + (double) radius) / cellSize));
+		int maxY = Math.min(sizeY - 1, (int) Math.floor((y + (double) radius) / cellSize));
+		int maxZ = Math.min(sizeZ - 1, (int) Math.floor((z + (double) radius) / cellSize));
+		double microSize = cellSize / (double) MICRO_CELLS_PER_AXIS;
+		double radiusSquared = radius * (double) radius;
+		for (int cz = minZ; cz <= maxZ; cz++) for (int cy = minY; cy <= maxY; cy++) {
+			for (int cx = minX; cx <= maxX; cx++) {
+				int mask = mask(cellIndex(cx, cy, cz));
+				if (mask == 0) continue;
+				for (int bit = 0; bit < 8; bit++) {
+					if ((mask & 1 << bit) == 0) continue;
+					double dx = intervalDistance(x, (2 * cx + (bit & 1)) * microSize, microSize);
+					double dy = intervalDistance(y, (2 * cy + (bit >> 1 & 1)) * microSize, microSize);
+					double dz = intervalDistance(z, (2 * cz + (bit >> 2)) * microSize, microSize);
+					if (dx * dx + dy * dy + dz * dz <= radiusSquared) return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private static double intervalDistance(double coordinate, double minimum, double length) {
+		return Math.max(0.0, Math.max(minimum - coordinate, coordinate - (minimum + length)));
+	}
+
 	boolean microCellOpen(int cell, int localX, int localY, int localZ) {
 		if (cell < 0 || cell >= occupancy.length || localX < 0 || localX >= MICRO_CELLS_PER_AXIS
 				|| localY < 0 || localY >= MICRO_CELLS_PER_AXIS

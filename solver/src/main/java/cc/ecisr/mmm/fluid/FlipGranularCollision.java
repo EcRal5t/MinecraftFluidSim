@@ -260,13 +260,7 @@ final class FlipGranularCollision {
 	}
 
 	private boolean sphereTouchesSolid(float x, float y, float z, float radius) {
-		return cutCells.pointInsideSolid(x, y, z, cellSize)
-				|| cutCells.pointInsideSolid(x - radius, y, z, cellSize)
-				|| cutCells.pointInsideSolid(x + radius, y, z, cellSize)
-				|| cutCells.pointInsideSolid(x, y - radius, z, cellSize)
-				|| cutCells.pointInsideSolid(x, y + radius, z, cellSize)
-				|| cutCells.pointInsideSolid(x, y, z - radius, cellSize)
-				|| cutCells.pointInsideSolid(x, y, z + radius, cellSize);
+		return cutCells.sphereTouchesSolid(x, y, z, radius, cellSize);
 	}
 
 	private float collisionRadius(long svq) {

@@ -10,6 +10,7 @@ public final class GranularCarrierValidation {
 	private GranularCarrierValidation() { }
 
 	public static void validate() {
+		sphereMicroBoxContacts();
 		contactAgeSaturates();
 		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
@@ -25,6 +26,63 @@ public final class GranularCarrierValidation {
 		implicitSharedCarrier();
 		implicitCarrierValidity();
 		thinBedRetainsFreeFlow();
+	}
+
+	private static void sphereMicroBoxContacts() {
+		var geometry = new FlipCutCellGeometry(3, 3, 3);
+		geometry.replaceMask((1 * 3 + 1) * 3 + 1, 1); // [.5,.75]^3
+		require(geometry.sphereTouchesSolid(.46F, .46F, .46F, .08F, .5F),
+				"sphere corner contact fell between the seven axis probes");
+		for (int outsideAxes = 1; outsideAxes < 8; outsideAxes++) for (int sides = 0; sides < 8; sides++) {
+			float[] center = new float[3];
+			double distanceSquared = 0;
+			for (int axis = 0; axis < 3; axis++) {
+				center[axis] = (outsideAxes & 1 << axis) == 0 ? .625F
+						: (sides & 1 << axis) == 0 ? .46F : .79F;
+				double nearest = Math.min(.75, Math.max(.5, center[axis]));
+				double distance = center[axis] - nearest;
+				distanceSquared += distance * distance;
+			}
+			float threshold = (float) Math.sqrt(distanceSquared);
+			require(geometry.sphereTouchesSolid(center[0], center[1], center[2], Math.nextUp(threshold), .5F)
+					&& !geometry.sphereTouchesSolid(center[0], center[1], center[2], Math.nextDown(threshold), .5F),
+					"rotated/reflected face, edge or corner near-contact lost its geometric threshold");
+		}
+		// The sphere's lower bound coincides with the occupied cell's upper bound.
+		geometry.replaceMask(13, 2); // [.75,1] x [.5,.75]^2
+		require(geometry.sphereTouchesSolid(1.25F, .625F, .625F, .25F, .5F),
+				"closed tangency was omitted from the broad-phase cell range");
+		geometry.replaceMask(13, 1);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+		float corner = .5F - radius * .5F;
+		var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, null, 1);
+		require(!collision.positionValid(corner, corner, corner, svq),
+				"granular placement accepted an intersecting sphere corner");
+		int spawnedCount = 0;
+		for (int sequence = 0; sequence < 48; sequence++) {
+			var spawned = collision.spawnPosition(1, 1, 1, svq, sequence, .76F, .76F, .76F);
+			if (spawned != null) {
+				spawnedCount++;
+				double squared = 0;
+				for (float coordinate : new float[]{spawned.x(), spawned.y(), spawned.z()}) {
+					double nearest = Math.min(.75, Math.max(.5, coordinate));
+					squared += (coordinate - nearest) * (coordinate - nearest);
+				}
+				require(squared > radius * (double) radius,
+						"granular spawn intersected the occupied micro-box");
+			}
+		}
+		require(spawnedCount > 0, "granular spawn fixture never found an open position");
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		var parcels = new GranularParcelStore(registry, 1);
+		parcels.add(new GranularParcelStore.Parcel(.42F, .46F, .46F, .8F, 0, 0,
+				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+		collision.preview(parcels, registry, .05F);
+		collision.commit(parcels);
+		require(parcels.parcel(0).x() == .42F,
+				"granular motion entered an occupied micro-box through its corner");
 	}
 
 	private static void contactAgeSaturates() {
