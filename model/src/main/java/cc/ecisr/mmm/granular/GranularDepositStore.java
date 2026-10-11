@@ -65,6 +65,12 @@ public final class GranularDepositStore {
 		return packing(cell, portion).bulkVolumeSvq();
 	}
 
+	/** Exact mixed packing after a whole-group or inert partial take; inventory stays unchanged. */
+	public long previewCellBulkVolumeAfterTake(int cell, int material, int composition, long requestedSvq) {
+		SolidPortion removed = peekTake(cell, material, composition, requestedSvq);
+		return packing(cell, null, removed).bulkVolumeSvq();
+	}
+
 	public Group dominantGroup(int cell) {
 		requireCell(cell);
 		int best = -1;
@@ -147,16 +153,58 @@ public final class GranularDepositStore {
 		private final int[] entries;
 		private final CellPacking packing;
 		private final SignedDyadic massStorageDelta, massStorageBound;
+		private final SignedDyadic oldMass;
+		private final long oldBulk;
 		private AdditionsPlan(GranularDepositStore owner, int cell, List<Group> groups, int[] entries,
-		                      CellPacking packing, SignedDyadic delta, SignedDyadic bound) {
+		                      CellPacking packing, SignedDyadic delta, SignedDyadic bound, SignedDyadic oldMass) {
 			this.owner = owner; this.revision = owner.mutationRevision; this.cell = cell;
 			this.groups = List.copyOf(groups); this.entries = entries; this.packing = packing;
 			this.massStorageDelta = delta; this.massStorageBound = bound;
+			this.oldMass = oldMass; this.oldBulk = owner.cellBulkVolumeSvq(cell);
 		}
+		public int cell() { return cell; }
+		public SignedDyadic oldMass() { return oldMass; }
+		public long oldBulkVolumeSvq() { return oldBulk; }
 		public List<Group> groups() { return groups; }
 		public long bulkVolumeSvq() { return packing.bulkVolumeSvq(); }
 		public SignedDyadic massStorageDelta() { return massStorageDelta; }
 		public SignedDyadic massStorageBound() { return massStorageBound; }
+	}
+
+	public record CellAddition(int cell, List<SolidPortion> incoming, long geometricOpenSvq) {
+		public CellAddition { incoming = List.copyOf(incoming); }
+	}
+	/** All receiving cells share one region group preflight and one commit revision. */
+	public static final class AdditionsBatchPlan {
+		private final GranularDepositStore owner;
+		private final List<AdditionsPlan> cells;
+		private final SignedDyadic delta, bound;
+		private AdditionsBatchPlan(GranularDepositStore owner, List<AdditionsPlan> cells) {
+			this.owner = owner; this.cells = List.copyOf(cells);
+			SignedDyadic delta = SignedDyadic.ZERO, bound = SignedDyadic.ZERO;
+			for (var cell : cells) { delta = delta.add(cell.massStorageDelta()); bound = bound.add(cell.massStorageBound()); }
+			this.delta = delta; this.bound = bound;
+		}
+		public List<AdditionsPlan> cells() { return cells; }
+		public SignedDyadic massStorageDelta() { return delta; }
+		public SignedDyadic massStorageBound() { return bound; }
+	}
+
+	public AdditionsBatchPlan planAdditions(List<CellAddition> incoming) {
+		if (incoming == null || incoming.isEmpty()) throw new IllegalArgumentException("Deposit receiving cells are missing");
+		TreeMap<Integer, CellAddition> sorted = new TreeMap<>();
+		for (var cell : incoming) if (sorted.putIfAbsent(cell.cell(), cell) != null) {
+			throw new IllegalArgumentException("Deposit receiving cell is duplicated");
+		}
+		ArrayList<AdditionsPlan> cells = new ArrayList<>(sorted.size()); int newGroups = 0;
+		for (var cell : sorted.values()) {
+			var plan = planCellAdditions(cell.cell(), cell.incoming(), cell.geometricOpenSvq());
+			if (plan == null) return null;
+			for (int entry : plan.entries) if (entry < 0) newGroups++;
+			if (newGroups > materialHandle.length - groupCount) return null;
+			cells.add(plan);
+		}
+		return new AdditionsBatchPlan(this, cells);
 	}
 
 	private record GroupKey(int material, int composition) implements Comparable<GroupKey> {
@@ -176,13 +224,19 @@ public final class GranularDepositStore {
 
 	/** Capacity-limited candidates return null without changing sparse entries or revisions. */
 	public AdditionsPlan planAdditions(int cell, List<SolidPortion> incoming, long geometricOpenSvq) {
+		var plan = planAdditions(List.of(new CellAddition(cell, incoming, geometricOpenSvq)));
+		return plan == null ? null : plan.cells.getFirst();
+	}
+	private AdditionsPlan planCellAdditions(int cell, List<SolidPortion> incoming, long geometricOpenSvq) {
 		requireCell(cell);
 		if (incoming == null || incoming.isEmpty() || geometricOpenSvq <= 0
 				|| geometricOpenSvq > SolidVolume.SVQ_PER_CELL) {
 			throw new IllegalArgumentException("Deposit additions are missing or capacity is invalid");
 		}
 		TreeMap<GroupKey, Addition> combined = new TreeMap<>();
+		SignedDyadic oldMass = SignedDyadic.ZERO;
 		for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) {
+			oldMass = oldMass.add(SignedDyadic.of(mass[entry]));
 			combined.put(new GroupKey(materialHandle[entry], solidCompositionHandle[entry]),
 					new Addition(entry, solidVolumeSvq[entry], mass[entry]));
 		}
@@ -223,7 +277,7 @@ public final class GranularDepositStore {
 		if (addedGroups > materialHandle.length - groupCount || skeleton > geometricOpenSvq) return null;
 		CellPacking packing = mixedPacking(skeleton, bulk);
 		if (packing.bulkVolumeSvq() > geometricOpenSvq) return null;
-		return new AdditionsPlan(this, cell, groups, entries, packing, delta, bound);
+		return new AdditionsPlan(this, cell, groups, entries, packing, delta, bound, oldMass);
 	}
 
 	public void requireCurrent(AdditionsPlan plan) {
@@ -234,7 +288,18 @@ public final class GranularDepositStore {
 
 	/** Applies only previously checked group values and the single final mixed packing. */
 	public void commitAdditions(AdditionsPlan plan) {
+		commitAdditions(new AdditionsBatchPlan(this, List.of(plan)));
+	}
+	public void requireCurrent(AdditionsBatchPlan plan) {
+		if (plan == null || plan.owner != this) throw new IllegalStateException("Deposit addition plan owner changed");
+		for (var cell : plan.cells) requireCurrent(cell);
+	}
+	public void commitAdditions(AdditionsBatchPlan plan) {
 		requireCurrent(plan);
+		for (var cell : plan.cells) applyCheckedAdditions(cell);
+		mutationRevision++;
+	}
+	private void applyCheckedAdditions(AdditionsPlan plan) {
 		boolean wasEmpty = headByCell[plan.cell] < 0;
 		for (int index = 0; index < plan.groups.size(); index++) {
 			Group group = plan.groups.get(index);
@@ -250,7 +315,6 @@ public final class GranularDepositStore {
 		if (wasEmpty) occupiedCellCount++;
 		porosityQByCell[plan.cell] = plan.packing.porosityQ();
 		bulkVolumeSvqByCell[plan.cell] = plan.packing.bulkVolumeSvq();
-		mutationRevision++;
 	}
 
 	/** Removes up to requested SVQ from one exact group, preserving floating mass by remainder. */
@@ -265,6 +329,7 @@ public final class GranularDepositStore {
 
 	private SolidPortion takeInternal(int cell, int material, int composition, long requestedSvq, boolean allowReactivePartial) {
 		SolidPortion result = peekTakeInternal(cell, material, composition, requestedSvq, allowReactivePartial);
+		CellPacking remainingPacking = packing(cell, null, result);
 		requireCell(cell);
 		int previous = -1, entry = headByCell[cell];
 		while (entry >= 0 && (materialHandle[entry] != material || solidCompositionHandle[entry] != composition)) {
@@ -277,8 +342,6 @@ public final class GranularDepositStore {
 			solidVolumeSvq[entry] -= result.solidVolumeSvq();
 			mass[entry] -= result.mass();
 		}
-		// Removal leaves at most eight capacity-bounded groups; exact packing stays within its arithmetic budget.
-		CellPacking remainingPacking = packing(cell, null);
 		porosityQByCell[cell] = remainingPacking.porosityQ();
 		bulkVolumeSvqByCell[cell] = remainingPacking.bulkVolumeSvq();
 		mutationRevision++;
@@ -432,11 +495,17 @@ public final class GranularDepositStore {
 
 	/** Independent rest bulk volumes add exactly; rounding porosity never sets the bed height. */
 	private CellPacking packing(int cell, SolidPortion addition) {
+		return packing(cell, addition, null);
+	}
+	private CellPacking packing(int cell, SolidPortion addition, SolidPortion removal) {
 		ExactRational bulk = ExactRational.ZERO;
 		long skeleton = 0L;
 		for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) {
-			skeleton = Math.addExact(skeleton, solidVolumeSvq[entry]);
-			bulk = bulk.add(restBulk(solidVolumeSvq[entry], materialHandle[entry]));
+			long volume = solidVolumeSvq[entry];
+			if (removal != null && materialHandle[entry] == removal.materialHandle()
+					&& solidCompositionHandle[entry] == removal.solidCompositionHandle()) volume -= removal.solidVolumeSvq();
+			skeleton = Math.addExact(skeleton, volume);
+			bulk = bulk.add(restBulk(volume, materialHandle[entry]));
 		}
 		if (addition != null) {
 			skeleton = Math.addExact(skeleton, addition.solidVolumeSvq());

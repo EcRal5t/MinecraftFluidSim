@@ -163,28 +163,25 @@ public final class GranularDepositDynamics {
 				parcelIndex++;
 				continue;
 			}
-			ParticulateMaterial material = registry.material(parcel.materialHandle());
 			boolean deposited = false;
 			int cell = settlementTarget(parcel, environment);
 			if (cell >= 0) {
-				long open = environment.geometricOpenSvq(cell);
-				if (!settlementSlopeAllowed(cell, parcel, material, environment)) {
-					if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
-				} else {
-					var plan = settlement.find(parcelIndex, cell, open, index -> eligibleTarget(index, environment));
-					if (plan != null) {
-						int[] indices = plan.parcelIndices();
-						admission.reserveLogicalOperations(operations + indices.length);
-						if (admission.spend(2 * indices.length)) {
-							if (!GranularSettlementEnergy.allows(plan, cellSize, sizeX, sizeY, environment.gravity())) {
-								energyDeferred[(cell / (sizeX * sizeY)) * sizeX + cell % sizeX] = true;
-								disturbCell(cell);
-							} else if (settlementSlopeAllowed(plan, environment) && environment.planSettlement(plan)) {
-								commitSettlement(plan, indices, environment);
-								deposited = true; settled += indices.length; operations += indices.length;
-								parcelIndex = indices[indices.length - 1];
-							} else if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
-						}
+				var plan = settlement.find(parcelIndex, cell, index -> eligibleTarget(index, environment), environment::geometricOpenSvq);
+				if (plan != null) {
+					int[] indices = plan.parcelIndices();
+					admission.reserveLogicalOperations(operations + indices.length);
+					if (admission.spend(2 * indices.length)) {
+						if (!GranularBedPotential.allowsSettlement(plan, cellSize, sizeX, sizeY, environment.gravity())) {
+							for (var target : plan.targets()) {
+								int destination = target.cell();
+								energyDeferred[(destination / (sizeX * sizeY)) * sizeX + destination % sizeX] = true;
+								disturbCell(destination);
+							}
+						} else if (settlementSlopeAllowed(plan, environment) && environment.planSettlement(plan)) {
+							commitSettlement(plan, indices, environment);
+							deposited = true; settled += indices.length; operations += indices.length;
+							parcelIndex = indices[indices.length - 1];
+						} else if (!admission.budgetBlocked() && rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
 					}
 				}
 				if (admission.budgetBlocked()) disturbCell(cell);
@@ -259,7 +256,7 @@ public final class GranularDepositDynamics {
 			environment.onSolidChanged(cell(coordinate(source.x(), sizeX), coordinate(source.y(), sizeY), coordinate(source.z(), sizeZ)));
 		}
 		environment.receiveContactImpulse(impulseX, impulseY, impulseZ);
-		environment.onSolidChanged(plan.cell()); disturbCell(plan.cell());
+		for (var target : plan.targets()) { environment.onSolidChanged(target.cell()); disturbCell(target.cell()); }
 	}
 
 	/** Lowest bulk-capable, vertically reachable layer; later admission cannot select an upper void. */
@@ -280,13 +277,40 @@ public final class GranularDepositDynamics {
 		if (!admission.spend(1)) return -1;
 		var parcel = parcels.parcel(index);
 		if ((parcel.flags() & GranularParcelStore.FLAG_SUPPORTED) == 0 || parcel.contactAge() < SETTLE_CONTACT_STEPS) return -1;
-		int target = settlementTarget(parcel, environment);
-		return target >= 0 && settlementSlopeAllowed(target, parcel, registry.material(parcel.materialHandle()), environment) ? target : -1;
+		return settlementTarget(parcel, environment);
 	}
 
 	private boolean settlementSlopeAllowed(GranularInventory.SettlementPlan plan, Environment environment) {
-		for (var parcel : plan.parcels()) if (!additionSlopeAllowed(plan.cell(), plan.bulkVolumeSvq(),
-				registry.material(parcel.materialHandle()), environment)) return false;
+		var bulk = new java.util.HashMap<Integer, Long>();
+		var previous = new java.util.HashMap<Integer, Long>();
+		for (var target : plan.targets()) {
+			int cell = target.cell(), column = cell / (sizeX * sizeY) * sizeX + cell % sizeX;
+			if (!cacheColumnSurface(previous, column)) return false;
+			int x = cell % sizeX, z = cell / (sizeX * sizeY);
+			for (int neighbor = 0; neighbor < NEIGHBOR_X.length; neighbor++) {
+				int dx = NEIGHBOR_X[neighbor], dz = NEIGHBOR_Z[neighbor];
+				if (insideColumn(x + dx, z + dz) && environment.horizontalPathOpen(cell, dx, dz)
+						&& !cacheColumnSurface(previous, (z + dz) * sizeX + x + dx)) return false;
+			}
+			bulk.put(cell, target.bulkVolumeSvq());
+		}
+		var surfaces = new java.util.HashMap<>(previous);
+		for (var target : plan.targets()) {
+			int cell = target.cell(), column = cell / (sizeX * sizeY) * sizeX + cell % sizeX;
+			long top = (long) (cell / sizeX % sizeY) * SolidVolume.SVQ_PER_CELL + target.bulkVolumeSvq();
+			surfaces.put(column, Math.max(surfaces.get(column), top));
+		}
+		int[] destinations = plan.targetCells();
+		for (int index = 0; index < destinations.length; index++) if (!additionSlopeAllowed(destinations[index], bulk.get(destinations[index]),
+				registry.material(plan.parcels().get(index).materialHandle()), environment,
+				previous.get(destinations[index] / (sizeX * sizeY) * sizeX + destinations[index] % sizeX), surfaces::get)) return false;
+		return true;
+	}
+
+	private boolean cacheColumnSurface(java.util.Map<Integer, Long> cache, int column) {
+		if (cache.containsKey(column)) return true;
+		if (!admission.spend(sizeY)) return false;
+		cache.put(column, columnSurfaceSvq(column));
 		return true;
 	}
 
@@ -304,6 +328,14 @@ public final class GranularDepositDynamics {
 		float px = (x + 0.5F) * cellSize,
 				py = height + GranularMechanics.representativeRadius(erosion, cellSize) + cellSize * 1e-5F,
 				pz = (z + 0.5F) * cellSize;
+		GranularDepositStore.SolidPortion moved;
+		try { moved = deposits.peekTake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion); }
+		catch (IllegalArgumentException unavailableSplit) { return false; }
+		if (!GranularBedPotential.allowsWake(deposits, surfaceCell, moved, py,
+				cellSize, sizeX, sizeY, environment.gravity())) {
+			energyDeferred[column] = true;
+			return false;
+		}
 		if (!environment.planWake(surfaceCell, erosion, px, py, pz)) return false;
 		try {
 			// Bed material starts at rest; the next coupled mechanical solve supplies acceleration
@@ -345,10 +377,9 @@ public final class GranularDepositDynamics {
 				Math.min(exposed.solidVolumeSvq(), requestedSkeleton));
 		if (requestedSkeleton <= 0L) return false;
 		int receiverX = bestColumn % sizeX, receiverZ = bestColumn / sizeX;
-		double movedMass = requestedSkeleton == exposed.solidVolumeSvq() ? exposed.mass()
-				: exposed.mass() * ((double) requestedSkeleton / exposed.solidVolumeSvq());
-		GranularDepositStore.SolidPortion moved = new GranularDepositStore.SolidPortion(
-				exposed.materialHandle(), exposed.solidCompositionHandle(), requestedSkeleton, movedMass);
+		GranularDepositStore.SolidPortion moved;
+		try { moved = deposits.peekTake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), requestedSkeleton); }
+		catch (IllegalArgumentException unavailableSplit) { return false; }
 		for (int y = 0; y < sizeY; y++) {
 			int receiver = cell(receiverX, y, receiverZ);
 			long open = environment.geometricOpenSvq(receiver);
@@ -359,6 +390,11 @@ public final class GranularDepositDynamics {
 			if (!environment.verticalPathOpen((receiverX + 0.5F) * cellSize,
 					Math.nextUp((float) (height * cellSize + radius)), (receiverZ + 0.5F) * cellSize,
 					settlementCenterY(receiver, requestedSkeleton), requestedSkeleton)) continue;
+			if (!GranularBedPotential.allowsRelaxation(deposits, surfaceCell, receiver, moved,
+					cellSize, sizeX, sizeY, environment.gravity())) {
+				energyDeferred[column] = true;
+				return false;
+			}
 			if (!additionSlopeAllowed(receiver, moved, material, environment)) return false;
 			if (!admission.allows(receiver, candidateBulk, -1)) return false;
 			if (!environment.planRelaxation(surfaceCell, receiver, requestedSkeleton)) return false;
@@ -379,14 +415,6 @@ public final class GranularDepositDynamics {
 		return false;
 	}
 
-	private boolean settlementSlopeAllowed(
-			int cell, GranularParcelStore.Parcel parcel, ParticulateMaterial material, Environment environment
-	) {
-		GranularDepositStore.SolidPortion addition = new GranularDepositStore.SolidPortion(
-				parcel.materialHandle(), parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.mass());
-		return additionSlopeAllowed(cell, addition, material, environment);
-	}
-
 	private boolean additionSlopeAllowed(
 			int cell, GranularDepositStore.SolidPortion addition,
 			ParticulateMaterial material, Environment environment
@@ -395,8 +423,13 @@ public final class GranularDepositDynamics {
 	}
 
 	private boolean additionSlopeAllowed(int cell, long nextCellBulk, ParticulateMaterial material, Environment environment) {
+		return additionSlopeAllowed(cell, nextCellBulk, material, environment,
+				columnSurfaceSvq(cell / (sizeX * sizeY) * sizeX + cell % sizeX), this::columnSurfaceSvq);
+	}
+
+	private boolean additionSlopeAllowed(int cell, long nextCellBulk, ParticulateMaterial material, Environment environment,
+	                                    long previousSurface, java.util.function.IntToLongFunction neighborSurface) {
 		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
-		long previousSurface = columnSurfaceSvq(z * sizeX + x);
 		long previousCellBulk = deposits.cellBulkVolumeSvq(cell);
 		long addedCellSurface = Math.addExact(Math.multiplyExact((long) y, SolidVolume.SVQ_PER_CELL), nextCellBulk);
 		long candidateSurface = Math.max(previousSurface, addedCellSurface);
@@ -408,8 +441,8 @@ public final class GranularDepositDynamics {
 			double distance = neighbor < 4 ? 1.0 : Math.sqrt(2.0);
 			long reposeRise = (long) Math.floor(distance * Math.tan(material.reposeAngleRadians())
 					* SolidVolume.SVQ_PER_CELL);
-			long neighborSurface = columnSurfaceSvq(neighborZ * sizeX + neighborX);
-			if (candidateSurface - neighborSurface > Math.addExact(reposeRise, discreteAllowance)) return false;
+			long adjacentSurface = neighborSurface.applyAsLong(neighborZ * sizeX + neighborX);
+			if (candidateSurface - adjacentSurface > Math.addExact(reposeRise, discreteAllowance)) return false;
 		}
 		return true;
 	}

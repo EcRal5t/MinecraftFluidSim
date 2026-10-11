@@ -60,45 +60,50 @@ public final class GranularInventory {
 		return true;
 	}
 
-	/** Whole-parcel, same-cell conversion with one complete inventory and energy preflight. */
+	public record SettlementTarget(int cell, long addedSolidVolumeSvq, long bulkVolumeSvq,
+	                               SignedDyadic oldBedMass, long oldBedBulkVolumeSvq, SignedDyadic addedMass) { }
+
+	/** Whole-parcel conversion with one complete multi-cell inventory and energy preflight. */
 	public static final class SettlementPlan {
 		private final GranularInventory owner;
 		private final long parcelRevision;
-		private final int cell;
 		private final int[] indices;
+		private final int[] targetCells;
+		private final List<SettlementTarget> targets;
 		private final List<GranularParcelStore.Parcel> parcels;
 		private final long totalSvq;
-		private final SignedDyadic oldBedMass;
-		private final long oldBedBulkSvq;
-		private final GranularDepositStore.AdditionsPlan additions;
+		private final GranularDepositStore.AdditionsBatchPlan additions;
 		private final SolidCompositionPool pool;
 		private final Map<Integer, SolidCompositionRecord> before, after;
 		private final int[] released;
 		private final EnergyAdapter adapter;
 		private final EnergyPlan energy;
-		private SettlementPlan(GranularInventory owner, int cell, int[] indices,
+		private SettlementPlan(GranularInventory owner, int[] indices, int[] targetCells, List<SettlementTarget> targets,
 		                       List<GranularParcelStore.Parcel> parcels, long totalSvq,
-		                       GranularDepositStore.AdditionsPlan additions,
+		                       GranularDepositStore.AdditionsBatchPlan additions,
 		                       Map<Integer, SolidCompositionRecord> before, Map<Integer, SolidCompositionRecord> after,
 		                       int[] released, EnergyPlan energy) {
 			this.owner = owner; this.parcelRevision = owner.parcels.mutationRevision();
-			this.cell = cell; this.indices = indices; this.parcels = List.copyOf(parcels); this.totalSvq = totalSvq;
+			this.indices = indices; this.targetCells = targetCells; this.targets = List.copyOf(targets);
+			this.parcels = List.copyOf(parcels); this.totalSvq = totalSvq;
 			this.additions = additions; this.pool = owner.compositions;
-			SignedDyadic[] oldMass = {SignedDyadic.ZERO};
-			owner.deposits.forEachGroupInCell(cell, (ignoredCell, porosity, material, composition, volume, mass) ->
-					oldMass[0] = oldMass[0].add(SignedDyadic.of(mass)));
-			this.oldBedMass = oldMass[0]; this.oldBedBulkSvq = owner.deposits.cellBulkVolumeSvq(cell);
 			this.before = Map.copyOf(before); this.after = Map.copyOf(after); this.released = released;
 			this.adapter = owner.thermalEnergy; this.energy = energy;
 		}
-		public int cell() { return cell; }
+		private SettlementTarget onlyTarget() {
+			if (targets.size() != 1) throw new IllegalStateException("Settlement plan has multiple receiving cells");
+			return targets.getFirst();
+		}
+		public int cell() { return onlyTarget().cell(); }
+		public List<SettlementTarget> targets() { return targets; }
+		public int[] targetCells() { return targetCells.clone(); }
 		public int[] parcelIndices() { return indices.clone(); }
 		/** Source snapshots align with the descending original ordinals. */
 		public List<GranularParcelStore.Parcel> parcels() { return parcels; }
 		public long totalSolidVolumeSvq() { return totalSvq; }
-		public long bulkVolumeSvq() { return additions.bulkVolumeSvq(); }
-		public SignedDyadic oldBedMass() { return oldBedMass; }
-		public long oldBedBulkVolumeSvq() { return oldBedBulkSvq; }
+		public long bulkVolumeSvq() { return onlyTarget().bulkVolumeSvq(); }
+		public SignedDyadic oldBedMass() { return onlyTarget().oldBedMass(); }
+		public long oldBedBulkVolumeSvq() { return onlyTarget().oldBedBulkVolumeSvq(); }
 		public SignedDyadic massStorageDelta() { return additions.massStorageDelta(); }
 		public SignedDyadic massStorageBound() { return additions.massStorageBound(); }
 	}
@@ -125,19 +130,35 @@ public final class GranularInventory {
 
 	/** The shared logical budget includes selected-source reads and reactive ownership scans. */
 	public SettlementPlan planSettlement(int[] parcelIndices, int cell, long geometricOpenSvq, IntPredicate workBudget) {
+		if (parcelIndices == null) throw new IllegalArgumentException("Settlement parcel selection is missing");
+		int[] targetCells = new int[parcelIndices.length]; Arrays.fill(targetCells, cell);
+		long[] open = new long[parcelIndices.length]; Arrays.fill(open, geometricOpenSvq);
+		return planSettlement(parcelIndices, targetCells, open, workBudget);
+	}
+
+	/** Source ordinals, receiving cells and capacities are paired in caller order. */
+	public SettlementPlan planSettlement(int[] parcelIndices, int[] targetCells, long[] targetOpenSvq, IntPredicate workBudget) {
 		if (parcelIndices == null || parcelIndices.length == 0 || parcelIndices.length > parcels.count()) {
 			throw new IllegalArgumentException("Settlement parcel selection is invalid");
 		}
-		if (workBudget == null) throw new IllegalArgumentException("Settlement planning budget is missing");
-		int[] indices = parcelIndices.clone(); Arrays.sort(indices);
-		if (indices[0] < 0 || indices[indices.length - 1] >= parcels.count()) {
-			throw new IllegalArgumentException("Settlement source ordinal is invalid");
+		if (workBudget == null || targetCells == null || targetOpenSvq == null
+				|| targetCells.length != parcelIndices.length || targetOpenSvq.length != parcelIndices.length) {
+			throw new IllegalArgumentException("Settlement target arrays or planning budget are invalid");
 		}
-		for (int index = 1; index < indices.length; index++) if (indices[index] == indices[index - 1]) {
-			throw new IllegalArgumentException("Settlement contains a duplicate parcel");
+		long[] order = new long[parcelIndices.length]; TreeMap<Integer, Long> openByCell = new TreeMap<>();
+		for (int slot = 0; slot < order.length; slot++) {
+			int index = parcelIndices[slot], cell = targetCells[slot]; long open = targetOpenSvq[slot];
+			if (index < 0 || index >= parcels.count() || cell < 0 || cell >= deposits.cellCount()
+					|| open <= 0 || open > SolidVolume.SVQ_PER_CELL) throw new IllegalArgumentException("Settlement source or target is invalid");
+			Long previous = openByCell.putIfAbsent(cell, open);
+			if (previous != null && previous != open) throw new IllegalArgumentException("Settlement target capacities disagree");
+			order[slot] = (long) index << 32 | slot;
 		}
-		for (int low = 0, high = indices.length - 1; low < high; low++, high--) {
-			int saved = indices[low]; indices[low] = indices[high]; indices[high] = saved;
+		Arrays.sort(order); int[] indices = new int[order.length], cells = new int[order.length];
+		for (int slot = 0; slot < order.length; slot++) {
+			long entry = order[order.length - 1 - slot]; indices[slot] = (int) (entry >>> 32);
+			cells[slot] = targetCells[(int) entry];
+			if (slot > 0 && indices[slot] == indices[slot - 1]) throw new IllegalArgumentException("Settlement contains a duplicate parcel");
 		}
 		if (!workBudget.test(indices.length)) return null;
 		ArrayList<GranularParcelStore.Parcel> sources = new ArrayList<>(indices.length);
@@ -163,10 +184,12 @@ public final class GranularInventory {
 			requireCanClear();
 		}
 		int[] targetHandle = new int[indices.length];
-		ArrayList<SettlementComposition> grouped = new ArrayList<>();
+		TreeMap<Integer, ArrayList<SettlementComposition>> groupedByCell = new TreeMap<>();
 		for (int slot = 0; slot < sources.size(); slot++) {
+			int cell = cells[slot];
 			GranularParcelStore.Parcel parcel = sources.get(slot);
 			if (parcel.solidCompositionHandle() == 0) continue;
+			var grouped = groupedByCell.computeIfAbsent(cell, ignored -> new ArrayList<>());
 			SolidCompositionRecord record = before.get(parcel.solidCompositionHandle());
 			SettlementComposition match = null;
 			for (SettlementComposition group : grouped) if (group.material == parcel.materialHandle()
@@ -190,7 +213,7 @@ public final class GranularInventory {
 			} else if (!match.existing) match.retained = Math.min(match.retained, parcel.solidCompositionHandle());
 			match.sourceSlots.add(slot); match.records.add(record);
 		}
-		for (SettlementComposition group : grouped) {
+		for (var grouped : groupedByCell.values()) for (SettlementComposition group : grouped) {
 			SolidCompositionRecord merged = combineSettlementComposition(group.records);
 			if (merged == null) return null;
 			compositions.requireOverwrite(group.retained, merged); after.put(group.retained, merged);
@@ -199,23 +222,32 @@ public final class GranularInventory {
 				int handle = sources.get(slot).solidCompositionHandle(); if (handle != group.retained) released.add(handle);
 			}
 		}
-		ArrayList<GranularDepositStore.SolidPortion> additions = new ArrayList<>(indices.length);
+		TreeMap<Integer, ArrayList<GranularDepositStore.SolidPortion>> additions = new TreeMap<>();
+		TreeMap<Integer, SignedDyadic> addedMass = new TreeMap<>(); TreeMap<Integer, Long> addedSvq = new TreeMap<>();
 		ArrayList<DepositTransfer> transfers = new ArrayList<>(indices.length);
 		for (int slot = 0; slot < indices.length; slot++) {
+			int cell = cells[slot];
 			GranularParcelStore.Parcel parcel = sources.get(slot);
-			additions.add(new GranularDepositStore.SolidPortion(parcel.materialHandle(), targetHandle[slot],
+			additions.computeIfAbsent(cell, ignored -> new ArrayList<>()).add(new GranularDepositStore.SolidPortion(parcel.materialHandle(), targetHandle[slot],
 					parcel.solidVolumeSvq(), parcel.mass()));
+			addedMass.merge(cell, SignedDyadic.of(parcel.mass()), SignedDyadic::add);
+			addedSvq.merge(cell, parcel.solidVolumeSvq(), Math::addExact);
 			transfers.add(new DepositTransfer(indices[slot], cell, parcel.materialHandle(), targetHandle[slot]));
 		}
-		GranularDepositStore.AdditionsPlan depositPlan = deposits.planAdditions(cell, additions, geometricOpenSvq);
+		ArrayList<GranularDepositStore.CellAddition> receiving = new ArrayList<>(additions.size());
+		for (var entry : additions.entrySet()) receiving.add(new GranularDepositStore.CellAddition(entry.getKey(), entry.getValue(), openByCell.get(entry.getKey())));
+		GranularDepositStore.AdditionsBatchPlan depositPlan = deposits.planAdditions(receiving);
 		if (depositPlan == null) return null;
-		for (GranularDepositStore.Group group : depositPlan.groups()) {
+		for (var cellPlan : depositPlan.cells()) for (GranularDepositStore.Group group : cellPlan.groups()) {
 			SolidCompositionRecord composition = after.get(group.solidCompositionHandle());
 			if (composition != null && !compositionMassClose(composition.totalMass(compositions.registry()), group.mass())) return null;
 		}
 		EnergyPlan energy = thermalEnergy == null ? null : thermalEnergy.planActiveToDeposits(List.copyOf(transfers));
 		if (thermalEnergy != null && energy == null) return null;
-		return new SettlementPlan(this, cell, indices, sources, totalSvq, depositPlan, before, after,
+		ArrayList<SettlementTarget> targets = new ArrayList<>(depositPlan.cells().size());
+		for (var cellPlan : depositPlan.cells()) targets.add(new SettlementTarget(cellPlan.cell(), addedSvq.get(cellPlan.cell()),
+				cellPlan.bulkVolumeSvq(), cellPlan.oldMass(), cellPlan.oldBulkVolumeSvq(), addedMass.get(cellPlan.cell())));
+		return new SettlementPlan(this, indices, cells, targets, sources, totalSvq, depositPlan, before, after,
 				released.stream().mapToInt(Integer::intValue).toArray(), energy);
 	}
 

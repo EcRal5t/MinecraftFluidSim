@@ -396,14 +396,14 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				long[] candidate = plannedSolid.clone();
 				for (var parcel : plan.parcels()) granularCoupling.removePlannedParcel(candidate,
 						parcelPosition(parcel), parcel.solidVolumeSvq());
-				if (!granularCoupling.tryPlanCell(candidate, plan.cell(), plan.totalSolidVolumeSvq(),
+				for (var target : plan.targets()) if (!granularCoupling.tryPlanCell(candidate, target.cell(), target.addedSolidVolumeSvq(),
 						((FluidDomain) FluidDomainStepCoordinator.this)::granularGeometricOpenSvq)) return false;
 				System.arraycopy(candidate, 0, plannedSolid, 0, candidate.length);
 				return true;
 			}
 
 			@Override public void cancelSettlement(GranularInventory.SettlementPlan plan) {
-				granularCoupling.removePlannedCell(plannedSolid, plan.cell(), plan.totalSolidVolumeSvq());
+				for (var target : plan.targets()) granularCoupling.removePlannedCell(plannedSolid, target.cell(), target.addedSolidVolumeSvq());
 				for (var parcel : plan.parcels()) restorePlannedParcel(plannedSolid, parcelPosition(parcel),
 						parcel.solidVolumeSvq(), "joint settlement rollback");
 			}
