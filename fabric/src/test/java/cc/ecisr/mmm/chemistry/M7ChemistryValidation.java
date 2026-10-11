@@ -67,6 +67,7 @@ public final class M7ChemistryValidation {
 	}
 
 	private static void validateRationalsAndCodec() {
+		validateRationalRounding();
 		check(ExactRational.parse("1.25").canonical().equals("5/4"), "finite decimal did not canonicalize exactly");
 		check(ExactRational.parse("10/8").canonical().equals("5/4"), "fraction did not reduce");
 		for (int numerator = -24; numerator <= 24; numerator++) {
@@ -101,6 +102,34 @@ public final class M7ChemistryValidation {
 		expectFailure(() -> ExactRational.parse("1e-500000"), "unbounded decimal scale was accepted");
 		expectFailure(() -> ExactRational.parse("9".repeat(ChemicalLimits.MAX_RATIONAL_TEXT_LENGTH + 1)),
 				"unbounded rational text was accepted");
+	}
+
+	private static void validateRationalRounding() {
+		var one = java.math.BigInteger.ONE;
+		var wide = one.shiftLeft(2000);
+		check(new ExactRational(wide.add(one), wide.add(java.math.BigInteger.valueOf(3))).toDouble() == 1.0,
+				"wide finite rational became non-finite during operand conversion");
+		for (int sign : new int[] {1, -1}) {
+			var signed = java.math.BigInteger.valueOf(sign);
+			check(Double.doubleToRawLongBits(new ExactRational(signed, one.shiftLeft(1075)).toDouble())
+					== Double.doubleToRawLongBits(sign < 0 ? -0.0 : 0.0), "subnormal halfway did not round to even zero");
+			check(new ExactRational(signed.multiply(java.math.BigInteger.valueOf(3)), one.shiftLeft(1075)).toDouble()
+					== sign * 2 * Double.MIN_VALUE, "subnormal odd halfway did not round to even");
+			check(new ExactRational(one.shiftLeft(53).subtract(one).multiply(signed), one.shiftLeft(1075)).toDouble()
+					== sign * Double.MIN_NORMAL, "subnormal-normal halfway did not round to even");
+			check(new ExactRational(one.shiftLeft(53).add(one).multiply(signed), one.shiftLeft(53)).toDouble()
+					== sign, "normal even halfway did not round to even");
+			check(new ExactRational(one.shiftLeft(53).add(java.math.BigInteger.valueOf(3)).multiply(signed), one.shiftLeft(53)).toDouble()
+					== sign * Math.nextUp(Math.nextUp(1.0)), "normal odd halfway did not round to even");
+			var overflowMidpoint = one.shiftLeft(54).subtract(one).shiftLeft(970);
+			check(new ExactRational(overflowMidpoint.subtract(one).multiply(signed), one).toDouble() == sign * Double.MAX_VALUE,
+					"finite rational below overflow halfway overflowed");
+			check(new ExactRational(overflowMidpoint.multiply(signed), one).toDouble()
+					== (sign < 0 ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY), "overflow halfway did not round to even");
+		}
+		var maximumBudget = one.shiftLeft(ChemicalLimits.MAX_RATIONAL_BITS - 1);
+		check(new ExactRational(maximumBudget.add(one), maximumBudget.add(java.math.BigInteger.valueOf(3))).toDouble() == 1.0,
+				"budget-valid quotient failed final binary64 conversion");
 	}
 
 	private static void validateCanonicalRegistry() {

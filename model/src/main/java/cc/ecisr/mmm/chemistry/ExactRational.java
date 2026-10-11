@@ -121,8 +121,31 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 	public int signum() { return numerator.signum(); }
 	public boolean isZero() { return numerator.signum() == 0; }
 
+	/** Rounds the exact quotient once to the final binary64 unit, with ties to even. */
 	public double toDouble() {
-		return numerator.doubleValue() / denominator.doubleValue();
+		int sign = numerator.signum();
+		if (sign == 0) return 0.0;
+		BigInteger magnitude = numerator.abs();
+		if (magnitude.bitLength() <= 53 && denominator.bitLength() <= 53) {
+			return numerator.doubleValue() / denominator.doubleValue();
+		}
+		int highestExponent = magnitude.bitLength() - denominator.bitLength();
+		int order = highestExponent >= 0
+				? magnitude.compareTo(denominator.shiftLeft(highestExponent))
+				: magnitude.shiftLeft(-highestExponent).compareTo(denominator);
+		if (order < 0) highestExponent--;
+		if (highestExponent > 1023) return sign < 0 ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+		if (highestExponent < -1075) return sign < 0 ? -0.0 : 0.0;
+		int unitExponent = Math.max(-1074, highestExponent - 52);
+		BigInteger scaledNumerator = unitExponent < 0 ? magnitude.shiftLeft(-unitExponent) : magnitude;
+		BigInteger scaledDenominator = unitExponent > 0 ? denominator.shiftLeft(unitExponent) : denominator;
+		BigInteger[] quotient = scaledNumerator.divideAndRemainder(scaledDenominator);
+		int halfway = quotient[1].shiftLeft(1).compareTo(scaledDenominator);
+		BigInteger rounded = halfway > 0 || halfway == 0 && quotient[0].testBit(0)
+				? quotient[0].add(BigInteger.ONE) : quotient[0];
+		// At most 53 bits remain, or the exact power 2^53 after a rounding carry.
+		double value = Math.scalb(rounded.doubleValue(), unitExponent);
+		return sign < 0 ? -value : value;
 	}
 
 	public String canonical() {

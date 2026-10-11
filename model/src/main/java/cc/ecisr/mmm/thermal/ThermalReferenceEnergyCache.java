@@ -31,7 +31,11 @@ final class ThermalReferenceEnergyCache {
 				if (numerator != Long.MIN_VALUE) {
 					long a = Math.abs(numerator), b = denominator;
 					while (b != 0) { long remainder = a % b; a = b; b = remainder; }
-					return (double) (numerator / a) / (double) (denominator / a);
+					long reducedNumerator = numerator / a, reducedDenominator = denominator / a;
+					// Exact binary64 operands retain the same single quotient rounding as the wide path.
+					if ((Math.abs(reducedNumerator) >>> 53) == 0 && (reducedDenominator >>> 53) == 0) {
+						return (double) reducedNumerator / (double) reducedDenominator;
+					}
 				}
 			} catch (ArithmeticException wide) { /* Retain the bounded exact-rational calculation below. */ }
 		}
