@@ -59,6 +59,7 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 			return gravityMetresPerSecondSquared * signedMassResidual.y;
 		}
 	}
+	/** Stage kinetic-energy accounting for liquid and granular carriers; potential includes uniform beds. */
 	public record MechanicalStepAudit(
 			boolean captured,
 			double initialParticleKineticEnergyJoules,
@@ -66,7 +67,6 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 			double initialGravitationalPotentialEnergyJoules,
 			double finalGravitationalPotentialEnergyJoules,
 			double particleToGridTransferJoules,
-			double granularCouplingWorkJoules,
 			double porousBoundaryWorkJoules,
 			double gravityWorkJoules,
 			double thermalBuoyancyWorkJoules,
@@ -85,7 +85,7 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 		static MechanicalStepAudit notCaptured() {
 			return new MechanicalStepAudit(false, 0.0, 0.0, 0.0, 0.0,
 					0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-					0.0, 0.0, 0.0, 0.0, 0.0, 0.0, SignedDyadic.ZERO, 0.0);
+					0.0, 0.0, 0.0, 0.0, 0.0, SignedDyadic.ZERO, 0.0);
 		}
 	}
 	record MaterialInventory(double volume, double mass, double centerY) { }

@@ -12,7 +12,6 @@ final class MechanicalAuditAccumulator {
 	final double initialParticleKineticEnergyJoules;
 	final double initialGravitationalPotentialEnergyJoules;
 	double particleToGridTransferJoules;
-	double granularCouplingWorkJoules;
 	double porousBoundaryWorkJoules;
 	double gravityWorkJoules;
 	double thermalBuoyancyWorkJoules;
@@ -39,7 +38,7 @@ final class MechanicalAuditAccumulator {
 			double finalGravitationalPotentialEnergyJoules,
 			SignedDyadic thermalInventoryMechanicalWork
 	) {
-		double accounted = particleToGridTransferJoules + granularCouplingWorkJoules
+		double accounted = particleToGridTransferJoules
 				+ porousBoundaryWorkJoules + gravityWorkJoules + thermalBuoyancyWorkJoules
 				+ surfaceTensionWorkJoules + viscousWorkJoules + fixedBoundaryWorkJoules
 				+ pressureProjectionWorkJoules + gridToParticleTransferJoules
@@ -49,7 +48,7 @@ final class MechanicalAuditAccumulator {
 				- initialParticleKineticEnergyJoules - accounted;
 		double scale = Math.abs(initialParticleKineticEnergyJoules)
 				+ Math.abs(finalParticleKineticEnergyJoules)
-				+ Math.abs(particleToGridTransferJoules) + Math.abs(granularCouplingWorkJoules)
+				+ Math.abs(particleToGridTransferJoules)
 				+ Math.abs(porousBoundaryWorkJoules) + Math.abs(gravityWorkJoules)
 				+ Math.abs(thermalBuoyancyWorkJoules) + Math.abs(surfaceTensionWorkJoules)
 				+ Math.abs(viscousWorkJoules) + Math.abs(fixedBoundaryWorkJoules) + Math.abs(pressureProjectionWorkJoules)
@@ -63,7 +62,7 @@ final class MechanicalAuditAccumulator {
 		return new FluidDomain.MechanicalStepAudit(true,
 				initialParticleKineticEnergyJoules, finalParticleKineticEnergyJoules,
 				initialGravitationalPotentialEnergyJoules, finalGravitationalPotentialEnergyJoules,
-				particleToGridTransferJoules, granularCouplingWorkJoules, porousBoundaryWorkJoules,
+				particleToGridTransferJoules, porousBoundaryWorkJoules,
 				gravityWorkJoules, thermalBuoyancyWorkJoules, surfaceTensionWorkJoules, viscousWorkJoules,
 				fixedBoundaryWorkJoules, pressureProjectionWorkJoules,
 				gridToParticleTransferJoules, particleCollisionWorkJoules, volumeTransportTransferJoules,

@@ -261,8 +261,9 @@ final class MechanicalStageAssembly {
 				domain.carrierPropertiesWorkspace.invalidate();
 				domain.derivedCarrierState();
 			}
-			@Override public double gridKineticEnergyJoules() { return domain.gridKineticEnergyJoules(); }
-			@Override public double particleKineticEnergyJoules() { return domain.particleKineticEnergyJoules(); }
+			@Override public double gridAndGranularKineticEnergyJoules() { return domain.mechanicalGridKineticEnergyJoules(); }
+			@Override public double carrierKineticEnergyJoules() { return domain.mechanicalCarrierKineticEnergyJoules(); }
+			@Override public double granularKineticEnergyJoules() { return domain.granularKineticEnergyJoules(); }
 			@Override public int lastPressureIterations() { return domain.lastPressureIterations; }
 			@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 			@Override public boolean hasPendingPhaseVolumeWork() { return domain.hasPendingPhaseVolumeWork(); }

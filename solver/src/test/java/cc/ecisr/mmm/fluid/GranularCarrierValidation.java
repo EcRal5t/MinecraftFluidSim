@@ -20,6 +20,7 @@ public final class GranularCarrierValidation {
 		contactImpulseObeysCoulombCone();
 		committedContactMomentumCloses();
 		capacityHoldRequiresActualSupport();
+		mechanicalAuditIncludesGranularEnergy();
 		contactAgeSaturates();
 		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
@@ -670,6 +671,67 @@ public final class GranularCarrierValidation {
 						"an airborne held parcel must remain active rather than acquire deposit eligibility");
 			}
 		}
+	}
+
+	private static void mechanicalAuditIncludesGranularEnergy() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		var material = registry.material(sand);
+		var config = new FluidSolverConfig(.5F, 1000F, 9.81F, .05F, 100, 1e-5F, .45F, .002F, 0F);
+		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double mass = volume / (double) SolidVolume.SVQ_PER_BV * material.referenceDensity();
+		float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
+		for (int scene = 0; scene < 3; scene++) {
+			float y = scene == 0 ? 1.25F : scene == 1 ? radius + .01F : radius;
+			float vy = scene == 1 ? -.4F : 0;
+			var parcel = new cc.ecisr.mmm.granular.GranularStateSnapshot.ActiveParcel(
+					.75F, y, .75F, 0, vy, 0, volume, mass, sand, 0,
+					scene == 2 ? 3 : 0, scene == 2 ? GranularParcelStore.FLAG_SUPPORTED : (byte) 0);
+			var snapshot = new cc.ecisr.mmm.granular.GranularStateSnapshot(4, 4, 4, registry.fingerprint(),
+					registry.materials().stream().map(cc.ecisr.mmm.granular.ParticulateMaterial::id).toList(),
+					java.util.List.of(parcel), java.util.List.of(), volume, Double.doubleToRawLongBits(mass));
+			FluidDomain[] domains = {new FluidDomain(4, 4, 4, config, 128), new FluidDomain(4, 4, 4, config, 128)};
+			for (var domain : domains) {
+				domain.sealDomainBoundary();
+				domain.restoreGranularState(snapshot, registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
+						BuiltinFluidMaterials.createRegistry());
+			}
+			var audit = domains[0].stepWithMechanicalAudit(false, 0).mechanicalAudit();
+			domains[1].step();
+			var result = domains[0].exportGranularState();
+			var control = domains[1].exportGranularState();
+			require(result.activeParcels().equals(control.activeParcels()) && result.depositGroups().equals(control.depositGroups()),
+					"mechanical audit changed the actual granular step");
+			double finalK = 0, finalP = 0;
+			for (var p : result.activeParcels()) {
+				finalK += .5 * p.mass() * (p.velocityX() * (double) p.velocityX()
+						+ p.velocityY() * (double) p.velocityY() + p.velocityZ() * (double) p.velocityZ());
+				finalP += p.mass() * config.gravity() * p.y();
+			}
+			long denominator = GranularLimits.POROSITY_SCALE - material.restPorosityQ();
+			for (var group : result.depositGroups()) {
+				long bulk = (group.solidVolumeSvq() * GranularLimits.POROSITY_SCALE + denominator - 1) / denominator;
+				double centre = .5 * (group.cell() / 4 % 4 + .5 * bulk / SolidVolume.SVQ_PER_CELL);
+				finalP += group.mass() * config.gravity() * centre;
+			}
+			mechanicalNear(audit.initialParticleKineticEnergyJoules(), .5 * mass * vy * (double) vy, "initial granular K");
+			mechanicalNear(audit.finalParticleKineticEnergyJoules(), finalK, "final granular K");
+			mechanicalNear(audit.initialGravitationalPotentialEnergyJoules(), mass * config.gravity() * y, "initial granular potential");
+			mechanicalNear(audit.finalGravitationalPotentialEnergyJoules(), finalP, "final granular/bed potential");
+			require(audit.gravityWorkJoules() > 0 && audit.closureResidualJoules() == 0,
+					"granular gravity was omitted from the stage kinetic-energy accounting");
+			if (scene == 0) {
+				mechanicalNear(audit.gravityWorkJoules(), finalK, "freefall gravity work");
+				require(audit.finalParticleKineticEnergyJoules() + finalP
+						< audit.initialGravitationalPotentialEnergyJoules(), "semi-implicit freefall error was concealed");
+			} else require(audit.particleCollisionWorkJoules() < 0, "granular contact dissipation was omitted");
+			if (scene == 2) require(result.activeParcels().isEmpty() && result.depositGroups().size() == 1,
+					"bed-potential control did not exercise an actual settlement");
+		}
+	}
+
+	private static void mechanicalNear(double actual, double expected, String quantity) {
+		require(Math.abs(actual - expected) <= 8 * Math.ulp(expected), quantity + ": " + actual + " vs " + expected);
 	}
 
 	private static void contactAgeSaturates() {

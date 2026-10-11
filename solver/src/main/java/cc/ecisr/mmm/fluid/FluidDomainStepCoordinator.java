@@ -60,7 +60,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		float before = domain().totalVolume();
 		double massBefore = domain().totalMass();
 		MechanicalAuditAccumulator mechanicalAudit = captureMechanicalAudit
-				? new MechanicalAuditAccumulator(particleKineticEnergyJoules(), gravitationalPotentialEnergyJoules())
+				? new MechanicalAuditAccumulator(mechanicalCarrierKineticEnergyJoules(), mechanicalPotentialEnergyJoules())
 				: null;
 		SignedDyadic thermalMechanicalWorkBefore = !captureMechanicalAudit || thermalState == null ? SignedDyadic.ZERO
 				: thermalState.auditLedger().mechanicalWork();
@@ -85,7 +85,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				lastGranularBoundaryImpulseZ += outcome.granularMechanics().boundaryImpulseZ();
 			}
 		}
-		double carrierTransferInitialKineticEnergy = captureMechanicalAudit ? particleKineticEnergyJoules() : 0.0;
+		double carrierTransferInitialKineticEnergy = captureMechanicalAudit ? mechanicalCarrierKineticEnergyJoules() : 0.0;
 		if (precipitationEnabled) markMovedReactiveGranularCells(granularParcelCountBeforeAdvection);
 		ThermalAxisStats thermalAxis = thermochemistryEnabled
 				? runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations)
@@ -116,7 +116,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				chemistry.dirtyCells(), chemistry.evaluations(), chemistry.changedMarkers(),
 				thermalAxis.condensedPhase(), thermalAxis.gasPhase(),
 				captureMechanicalAudit ? mechanicalAudit.finish(
-						finalParticleKineticEnergy, gravitationalPotentialEnergyJoules(),
+						finalParticleKineticEnergy, mechanicalPotentialEnergyJoules(),
 						(thermalState == null ? SignedDyadic.ZERO : thermalState.auditLedger().mechanicalWork())
 								.subtract(thermalMechanicalWorkBefore)) : MechanicalStepAudit.notCaptured(),
 				thermalAxis, lastGranularDepositStats, carrierPropertiesWorkspace.finishStep(), viscosity, liquidTransport
@@ -132,6 +132,49 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				new FluidDomain.GasThermalPhaseStats(0, 0, 0));
 	}
 
+	/** Diagnostic kinetic energy of liquid markers and active granular carriers. */
+	double mechanicalCarrierKineticEnergyJoules() {
+		return checkedMechanicalEnergy(particleKineticEnergyJoules() + granularKineticEnergyJoules());
+	}
+
+	/** The grid represents liquid only; active granular velocity remains in its own carrier store. */
+	double mechanicalGridKineticEnergyJoules() {
+		return checkedMechanicalEnergy(gridKineticEnergyJoules() + granularKineticEnergyJoules());
+	}
+
+	double granularKineticEnergyJoules() {
+		double energy = 0;
+		if (granularState != null) for (int index = 0; index < granularState.parcels.count(); index++) {
+			var p = granularState.parcels.parcel(index);
+			energy += .5 * p.mass() * (p.velocityX() * (double) p.velocityX()
+					+ p.velocityY() * (double) p.velocityY() + p.velocityZ() * (double) p.velocityZ());
+		}
+		return checkedMechanicalEnergy(energy);
+	}
+
+	/** Liquid and active positions are stored points; each deposit uses its uniform bulk-bed centre. */
+	double mechanicalPotentialEnergyJoules() {
+		double[] energy = {gravitationalPotentialEnergyJoules()};
+		if (granularState != null) {
+			for (int index = 0; index < granularState.parcels.count(); index++) {
+				var p = granularState.parcels.parcel(index);
+				energy[0] += p.mass() * config.gravity() * p.y();
+			}
+			granularState.deposits.forEachGroup((cell, porosity, material, composition, volume, mass) -> {
+				double centre = config.cellSize() * (cell / sizeX % sizeY
+						+ .5 * granularState.deposits.cellBulkVolumeSvq(cell) / SolidVolume.SVQ_PER_CELL);
+				energy[0] += mass * config.gravity() * centre;
+			});
+		}
+		return checkedMechanicalEnergy(energy[0]);
+	}
+
+	private static double checkedMechanicalEnergy(double energy) {
+		if (!(Double.isFinite(energy) && energy >= 0)) throw new ArithmeticException("Mechanical carrier energy is invalid");
+		return energy;
+	}
+
+	/** Liquid-only energy used by liquid transfer observations. */
 	double particleKineticEnergyJoules() {
 		double energy = 0.0;
 		for (int marker = 0; marker < particles.count(); marker++) {

@@ -24,8 +24,9 @@ final class MechanicalStepPipeline {
 		void ensureGrid();
 		void prepareCarrierProperties();
 		double projectedCourant(float dt);
-		double gridKineticEnergyJoules();
-		double particleKineticEnergyJoules();
+		double gridAndGranularKineticEnergyJoules();
+		double carrierKineticEnergyJoules();
+		double granularKineticEnergyJoules();
 		int lastPressureIterations();
 		ThermalDomainState thermalState();
 		boolean hasPendingPhaseVolumeWork();
@@ -61,9 +62,9 @@ final class MechanicalStepPipeline {
 
 	SubstepOutcome substep(float dt, int substep, boolean captureAudit, MechanicalAuditAccumulator audit) {
 		access.ensureGrid();
-		double stageKineticEnergy = captureAudit ? access.gridKineticEnergyJoules() : 0.0;
+		double stageKineticEnergy = captureAudit ? access.gridAndGranularKineticEnergyJoules() : 0.0;
 		if (captureAudit) audit.particleToGridTransferJoules +=
-				stageKineticEnergy - access.particleKineticEnergyJoules();
+				stageKineticEnergy - access.carrierKineticEnergyJoules();
 		try {
 			state.gasTopology.step(dt);
 		} catch (GasTopologyBlockedException blocked) {
@@ -78,41 +79,41 @@ final class MechanicalStepPipeline {
 		System.arraycopy(mac.velocityY, 0, mac.p2gVelocityY, 0, mac.velocityY.length);
 		System.arraycopy(mac.velocityZ, 0, mac.p2gVelocityZ, 0, mac.velocityZ.length);
 		GranularMechanics.StepStats granularMechanics = granularMechanicalStage.predictVelocities(dt);
-		double nextKineticEnergy = captureAudit ? access.gridKineticEnergyJoules() : 0.0;
+		double nextKineticEnergy = captureAudit ? access.gridAndGranularKineticEnergyJoules() : 0.0;
 		if (captureAudit) {
-			audit.granularCouplingWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			audit.gravityWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		// Dampen previously committed flow before body forces so a zero-velocity porous bed retains
 		// the full hydrostatic gravity/pressure balance in the shared projection.
 		bodyForceStage.applyGranularPorousDamping(dt);
 		if (captureAudit) {
-			nextKineticEnergy = access.gridKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.porousBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		// Evaluate incoming strain before gravity prediction so hydrostatic flow retains zero viscous dissipation.
 		bodyForceStage.enforceSolidFaceVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = access.gridKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		FluidDomain.ViscousStepStats viscosity = viscosityStage.apply(dt);
 		if (captureAudit) {
-			nextKineticEnergy = access.gridKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.viscousWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		bodyForceStage.applyGravity(dt);
 		if (captureAudit) {
-			nextKineticEnergy = access.gridKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.gravityWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		bodyForceStage.applyThermalBuoyancy(dt);
 		if (captureAudit) {
-			nextKineticEnergy = access.gridKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.thermalBuoyancyWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
@@ -120,13 +121,13 @@ final class MechanicalStepPipeline {
 		bodyForceStage.applyLiquidSolidSurfaceEnergyForce(dt);
 		bodyForceStage.applyLiquidPairSurfaceTensionForce(dt);
 		if (captureAudit) {
-			nextKineticEnergy = access.gridKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.surfaceTensionWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		bodyForceStage.enforceSolidFaceVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = access.gridKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
@@ -140,7 +141,7 @@ final class MechanicalStepPipeline {
 		granularMechanicalStage.previewCollision(dt);
 		granularMechanicalStage.validateVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = access.gridKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
@@ -151,27 +152,29 @@ final class MechanicalStepPipeline {
 		}
 		bodyForceStage.enforceSolidFaceVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = access.gridKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		gridToParticleStage.extrapolateAndTransfer();
 		// The extension has already classified this unchanged geometry; recheck its new velocities.
 		validateProjectedCourant(dt);
-		double particleKineticEnergy = captureAudit ? access.particleKineticEnergyJoules() : 0.0;
+		double particleKineticEnergy = captureAudit ? access.carrierKineticEnergyJoules() : 0.0;
 		if (captureAudit) audit.gridToParticleTransferJoules +=
 				particleKineticEnergy - stageKineticEnergy;
 		particleAdvectionStage.advect(dt);
+		double granularCollisionBefore = captureAudit ? access.granularKineticEnergyJoules() : 0;
+		granularMechanicalStage.commitCollision();
 		if (captureAudit) {
-			double transfer = access.particleKineticEnergyJoules() - particleKineticEnergy;
+			double transfer = access.carrierKineticEnergyJoules() - particleKineticEnergy;
 			if (particleAdvectionStage.usedConservativeVolume()) {
-				double collision = particleAdvectionStage.conservativeCollisionWorkJoules();
+				double collision = particleAdvectionStage.conservativeCollisionWorkJoules()
+						+ access.granularKineticEnergyJoules() - granularCollisionBefore;
 				audit.volumeTransportTransferJoules += transfer - collision;
 				audit.particleCollisionWorkJoules += collision;
 			}
 			else audit.particleCollisionWorkJoules += transfer;
 		}
-		granularMechanicalStage.commitCollision();
 		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending, viscosity, particleAdvectionStage.transportStats());
 	}
 

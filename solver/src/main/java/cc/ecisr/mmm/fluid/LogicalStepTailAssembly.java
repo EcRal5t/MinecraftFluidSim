@@ -66,7 +66,7 @@ final class LogicalStepTailAssembly {
 					}
 					@Override public long carrierMutationRevision() { return domain.carrierMutationRevision(); }
 					@Override public CarrierMutationCoordinator carrierMutations() { return domain.carrierMutations(); }
-					@Override public double particleKineticEnergyJoules() { return domain.particleKineticEnergyJoules(); }
+					@Override public double particleKineticEnergyJoules() { return domain.mechanicalCarrierKineticEnergyJoules(); }
 					@Override public SignedDyadic exactInternalEnergy() { return domain.exactInternalEnergy(); }
 					@Override public void markGridDirty() { domain.gridDirty = true; }
 					@Override public void rebuildGrid() { domain.rebuildGridFromParticles(); }
