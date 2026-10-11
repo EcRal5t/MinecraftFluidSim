@@ -1562,11 +1562,11 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		ThermalRegistry deepColdThermal = new ThermalRegistry(List.of(
 				new ThermalMaterialDefinition("test:thermal/deep_cold_water",
 						ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
-						300.0, 0.0, 0.598, List.of(new ThermalMaterialDefinition.CaloricSegment(
+						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 0.0, 0.598, List.of(new ThermalMaterialDefinition.CaloricSegment(
 						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 1_500.0, 4_184.0))),
 				new ThermalMaterialDefinition("test:thermal/deep_cold_air",
 						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
-						300.0, 0.0, 0.026, List.of(new ThermalMaterialDefinition.CaloricSegment(
+						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 0.0, 0.026, List.of(new ThermalMaterialDefinition.CaloricSegment(
 						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 1_500.0, 718.0)))));
 		FluidDomain deepCold = new FluidDomain(4, 4, 4, config, 128);
 		deepCold.sealDomainBoundary();
@@ -1576,7 +1576,12 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		}
 		deepCold.bindGasRegistry(gas);
 		deepCold.bootstrapGasState("");
-		deepCold.bindThermal(deepColdThermal, liquids, 1.0E-40);
+		// U=0 at the cold reference preserves the intended actual temperature in binary64.
+		deepCold.bindThermal(deepColdThermal, liquids, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+		double coldStorage = config.density() * deepCold.pressureBoundaryView.gasNodeVolumeCompliance(1)
+				/ (config.timeStep() * (double) config.timeStep()
+				* config.cellSize() * config.cellSize() * config.cellSize());
+		require(Double.isInfinite(coldStorage), "deep-cold fixture did not exceed pressure storage precision");
 		FluidStepCandidate deepColdCandidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
 				0L, deepCold.captureAuthoritativeState(), List.of(), false, 0));
 		deepCold = deepColdCandidate.claimPreparedCpuDomain();
