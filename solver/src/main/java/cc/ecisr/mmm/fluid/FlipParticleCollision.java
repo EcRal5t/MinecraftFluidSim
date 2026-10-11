@@ -78,19 +78,38 @@ final class FlipParticleCollision {
 			}
 			if (solid(cell)) {
 				int crossed = normal;
-				// Crossing a tangent micro-grid plane at the same instant as a wall
-				// contact does not turn that tangent into another contact normal.
-				normal = 0;
-				for (int subset = 1; subset < 8; subset++) if ((subset & crossed) == subset && (subset & normal) == 0) {
-					for (int a = 0; a < 3; a++) if ((crossed & ~subset & 1 << a) != 0) cell[a] -= displacement[a] > 0 ? 1 : -1;
-					if (solid(cell)) normal |= subset;
-					for (int a = 0; a < 3; a++) if ((crossed & ~subset & 1 << a) != 0) cell[a] += displacement[a] > 0 ? 1 : -1;
-				}
+				normal = contactNormals(crossed, cell, displacement);
 				for (int a = 0; a < 3; a++) if ((normal & 1 << a) != 0) cell[a] -= displacement[a] > 0 ? 1 : -1;
 				crossing[0] = time;
 				return normal;
 			}
 		}
+	}
+
+	/** Selects the least change of motion at a union of boxes, independent of axis order. */
+	private int contactNormals(int crossed, int[] cell, double[] displacement) {
+		double minimum = Double.POSITIVE_INFINITY;
+		int normal = 0;
+		for (int subset = 1; subset < 8; subset++) if ((subset & crossed) == subset) {
+			shift(cell, displacement, subset, -1);
+			if (!solid(cell)) {
+				double removed = 0;
+				for (int a = 0; a < 3; a++) if ((subset & 1 << a) != 0) removed += displacement[a] * displacement[a];
+				if (removed < minimum) { minimum = removed; normal = subset; }
+				else if (removed == minimum) normal |= subset;
+			}
+			shift(cell, displacement, subset, 1);
+		}
+		// Equal least-change choices constrain their combined normals. If that
+		// combination reaches another occupied box, retain the original open box.
+		shift(cell, displacement, normal, -1);
+		boolean open = !solid(cell);
+		shift(cell, displacement, normal, 1);
+		return open ? normal : crossed;
+	}
+
+	private static void shift(int[] cell, double[] displacement, int axes, int sign) {
+		for (int a = 0; a < 3; a++) if ((axes & 1 << a) != 0) cell[a] += sign * (displacement[a] > 0 ? 1 : -1);
 	}
 
 	private boolean solid(int[] cell) {

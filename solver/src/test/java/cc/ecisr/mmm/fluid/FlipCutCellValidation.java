@@ -15,6 +15,7 @@ public final class FlipCutCellValidation {
 		bodyOverlapExcludesOccupiedMicroCells();
 		cutCellSweepStopsOnlyTheContactNormal();
 		straightSweepResolvesDiagonalContacts();
+		simultaneousContactsRespectSpatialSymmetry();
 		contactPositionsFollowFloatMicroGeometry();
 		exactMarkerDisplacementUsesMicroOccupancy();
 		cutCellCapacityDisplacesMergedMarkerVolume();
@@ -158,6 +159,52 @@ public final class FlipCutCellValidation {
 			collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
 			checkClose(x[0], 0, 0, "lower domain wall contact");
 		}
+	}
+
+	private static void simultaneousContactsRespectSpatialSymmetry() {
+		int[][] permutations = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
+		for (int mask = 0; mask < 256; mask += 2) {
+			float[][] original = cornerMotion(mask, permutations[0], 0);
+			if (mask == 168) {
+				checkClose(original[1][0], 0, 0, "union corner X normal");
+				checkClose(original[1][1], .5F, 0, "union corner Y tangent");
+				checkClose(original[1][2], .5F, 0, "union corner Z tangent");
+			}
+			for (int[] permutation : permutations) for (int reflection = 0; reflection < 8; reflection++) {
+				float[][] transformed = cornerMotion(mask, permutation, reflection);
+				for (int axis = 0; axis < 3; axis++) {
+					boolean reflected = (reflection & 1 << axis) != 0;
+					float position = reflected ? 3 - transformed[0][axis] : transformed[0][axis];
+					float velocity = reflected ? -transformed[1][axis] : transformed[1][axis];
+					checkClose(position, original[0][permutation[axis]], 8 * Math.ulp(position),
+							"corner position depends on axis order: mask=" + mask);
+					checkClose(velocity, original[1][permutation[axis]], 0,
+							"corner velocity depends on axis order: mask=" + mask);
+				}
+			}
+		}
+	}
+
+	private static float[][] cornerMotion(int mask, int[] permutation, int reflection) {
+		FlipCutCellGeometry geometry = new FlipCutCellGeometry(3, 3, 3);
+		for (int bit = 0; bit < 8; bit++) if ((mask & 1 << bit) != 0) {
+			int[] original = {1 + (bit & 1), 1 + (bit >> 1 & 1), 1 + (bit >> 2 & 1)};
+			int[] micro = new int[3];
+			for (int axis = 0; axis < 3; axis++) micro[axis] = (reflection & 1 << axis) == 0
+					? original[permutation[axis]] : 5 - original[permutation[axis]];
+			int cell = index(3, 3, micro[0] / 2, micro[1] / 2, micro[2] / 2);
+			geometry.replaceMask(cell, geometry.mask(cell) | 1 << ((micro[0] & 1) + 2 * ((micro[1] & 1) + 2 * (micro[2] & 1))));
+		}
+		float[][] position = new float[3][1], velocity = new float[3][1];
+		for (int axis = 0; axis < 3; axis++) {
+			position[axis][0] = (reflection & 1 << axis) == 0 ? .75F : 2.25F;
+			velocity[axis][0] = (reflection & 1 << axis) == 0 ? .5F : -.5F;
+		}
+		new FlipParticleCollision(3, 3, 3, 1, geometry).advect(
+				position[0], position[1], position[2], velocity[0], velocity[1], velocity[2],
+				velocity[0], velocity[1], velocity[2], 1, 1);
+		return new float[][] {{position[0][0], position[1][0], position[2][0]},
+				{velocity[0][0], velocity[1][0], velocity[2][0]}};
 	}
 
 	private static void exactMarkerDisplacementUsesMicroOccupancy() {
