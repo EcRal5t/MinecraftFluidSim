@@ -15,8 +15,7 @@ import java.util.function.IntToLongFunction;
 final class FlipGranularCollision {
 	private final int sizeX, sizeY, sizeZ;
 	private final float cellSize;
-	private final FlipCutCellGeometry cutCells;
-	private final GranularDepositStore deposits;
+	private final GranularCollisionGeometry geometry;
 	private final GranularSphereCollision sphereCollision;
 	private final float[] nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ;
 	private final int[] nextContactAge;
@@ -28,9 +27,9 @@ final class FlipGranularCollision {
 	FlipGranularCollision(int sizeX, int sizeY, int sizeZ, float cellSize,
 	                      FlipCutCellGeometry cutCells, GranularDepositStore deposits, int capacity) {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
-		this.cellSize = cellSize; this.cutCells = cutCells; this.deposits = deposits;
+		this.cellSize = cellSize; this.geometry = new GranularCollisionGeometry(sizeX, sizeY, sizeZ, cellSize, cutCells, deposits);
 		this.sphereCollision = new GranularSphereCollision(sizeX, sizeY, sizeZ, cellSize, cutCells,
-				deposits == null ? null : this::depositSurfaceY);
+				deposits);
 		this.nextX = new float[capacity]; this.nextY = new float[capacity]; this.nextZ = new float[capacity];
 		this.nextVelocityX = new float[capacity]; this.nextVelocityY = new float[capacity];
 		this.nextVelocityZ = new float[capacity];
@@ -93,12 +92,7 @@ final class FlipGranularCollision {
 				y = minimumY + (maximumY - minimumY) * unitY;
 				z = minimumZ + (maximumZ - minimumZ) * unitZ;
 			}
-			if (!sphereTouchesSolid(x, y, z, radius)) {
-				float depositSurface = depositSurfaceY(x, z);
-				if (depositSurface < 0.0F || y - radius > depositSurface + cellSize * 1.0e-5F) {
-					return new GranularCouplingFields.Position(x, y, z);
-				}
-			}
+			if (positionValid(x, y, z, solidVolumeSvq)) return new GranularCouplingFields.Position(x, y, z);
 		}
 		return null;
 	}
@@ -109,8 +103,7 @@ final class FlipGranularCollision {
 				|| y < radius || y > sizeY * (double) cellSize - radius
 				|| z < radius || z > sizeZ * (double) cellSize - radius
 				|| sphereTouchesSolid(x, y, z, radius)) return false;
-		float depositSurface = depositSurfaceY(x, z);
-		return depositSurface < 0.0F || y - radius > depositSurface + cellSize * 1.0e-5F;
+		return true;
 	}
 
 	GranularCouplingFields.Position previewPosition(int index, GranularParcelStore.Parcel ignored) {
@@ -205,22 +198,8 @@ final class FlipGranularCollision {
 
 	private static int incrementContactAge(int age) { return age == Integer.MAX_VALUE ? age : age + 1; }
 
-	/** Low-cost deposits are vertical bulk columns; skeleton remains the displaced-volume truth. */
-	private float depositSurfaceY(float x, float z) {
-		if (deposits == null) return -1.0F;
-		int cellX = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(x / cellSize)));
-		int cellZ = Math.min(sizeZ - 1, Math.max(0, (int) Math.floor(z / cellSize)));
-		long surface = 0L;
-		for (int cellY = 0; cellY < sizeY; cellY++) {
-			long bulk = deposits.cellBulkVolumeSvq((cellZ * sizeY + cellY) * sizeX + cellX);
-			if (bulk > 0L) surface = Math.max(surface, Math.addExact(
-					Math.multiplyExact((long) cellY, SolidVolume.SVQ_PER_CELL), bulk));
-		}
-		return surface == 0L ? -1.0F : (float) ((double) surface / SolidVolume.SVQ_PER_CELL * cellSize);
-	}
-
 	private boolean sphereTouchesSolid(float x, float y, float z, float radius) {
-		return cutCells.sphereTouchesSolid(x, y, z, radius, cellSize);
+		return geometry.sphereTouchesSolid(x, y, z, radius);
 	}
 
 	private float collisionRadius(long svq) {

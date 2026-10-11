@@ -11,6 +11,7 @@ public final class GranularCarrierValidation {
 
 	public static void validate() {
 		sphereMicroBoxContacts();
+		depositContactsRespectCellGeometry();
 		straightSphereContactsAreSymmetric();
 		contactImpulsePreservesSolvedDrift();
 		contactImpulseObeysCoulombCone();
@@ -90,6 +91,75 @@ public final class GranularCarrierValidation {
 		require(next.x() > .42F && collision.positionValid(next.x(), next.y(), next.z(), svq)
 				&& next.velocityY() < 0 && next.velocityZ() < 0,
 				"sphere corner contact must use its oblique normal and preserve the remaining tangent drift");
+	}
+
+	private static void depositContactsRespectCellGeometry() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+		var geometry = new FlipCutCellGeometry(3, 3, 3);
+		var beds = new cc.ecisr.mmm.granular.GranularDepositStore(registry, 27, 8);
+		for (int cell : new int[]{9, 10}) {
+			long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62 * (cell == 9 ? .1 : .6));
+			require(beds.tryAdd(cell, new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(
+					sand, 0, skeleton, 2_600.0 * skeleton / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "bed fixture must fit its cell capacity");
+		}
+		for (float vy : new float[]{0, -.4905F}) {
+			var parcels = new GranularParcelStore(registry, 1);
+			parcels.add(new GranularParcelStore.Parcel(.4F, .25F, .75F, 3.2F, vy, 0,
+					svq, 2_600.0 * svq / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+			var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, beds, 1);
+			require((3.2 + Math.abs(vy)) * .05 <= .5 * .4 && collision.positionValid(.4F, .25F, .75F, svq),
+					"rising-bed fixture must have a legal start and default Courant drift");
+			collision.preview(parcels, registry, .05F); var impulse = collision.commit(parcels); var next = parcels.parcel(0);
+			require(next.x() <= .5 - radius && next.y() == .25F + vy * .05F
+					&& next.velocityX() < 0 && collision.positionValid(next.x(), next.y(), next.z(), svq),
+					"a bed side must stop normal drift while preserving solved tangential drift");
+			require(impulse.x() == next.mass() * ((double) 3.2F - next.velocityX())
+					&& impulse.y() == next.mass() * ((double) vy - next.velocityY())
+					&& next.velocityX() * (double) next.velocityX() + next.velocityY() * (double) next.velocityY()
+							<= 3.2F * (double) 3.2F + vy * (double) vy,
+					"bed contact must close momentum and dissipate kinetic energy");
+		}
+		// A supported upper bed and a lower bed leave a genuine open cavity.
+		beds = new cc.ecisr.mmm.granular.GranularDepositStore(registry, 27, 8);
+		for (int cell : new int[]{9, 15}) {
+			long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62 * .6);
+			require(beds.tryAdd(cell, new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(
+					sand, 0, skeleton, 2_600.0 * skeleton / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "separated beds must fit their cells");
+		}
+		geometry.replaceMask(12, 255); // [.0,.5] x [.5,1] x [.5,1], upper bed rests above it.
+		double top = beds.cellBulkVolumeSvq(9) * .5 / SolidVolume.SVQ_PER_CELL;
+		var parcels = new GranularParcelStore(registry, 1);
+		parcels.add(new GranularParcelStore.Parcel(.25F, (float) (top + radius + .01), .75F, 0, -.4F, 0,
+				svq, 2_600.0 * svq / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+		var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, beds, 1);
+		var initial = parcels.parcel(0);
+		require(collision.positionValid(initial.x(), initial.y(), initial.z(), svq)
+				&& collision.spawnPosition(0, 0, 1, svq, 0, initial.x(), initial.y(), initial.z()) != null,
+				"an upper bed must not cover placement in a separated lower cavity");
+		collision.preview(parcels, registry, .05F); collision.commit(parcels); var resting = parcels.parcel(0);
+		require(resting.y() > top + radius && resting.y() < .5 - radius && resting.contactAge() == 1
+				&& (resting.flags() & GranularParcelStore.FLAG_SUPPORTED) != 0,
+				"the actual lower bed must support its cavity without lifting the parcel to the column maximum");
+		for (int step = 0; step < 2; step++) {
+			var p = parcels.parcel(0); parcels.overwrite(0, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(), 0, -1.0e-8F, 0,
+					p.solidVolumeSvq(), p.mass(), sand, 0, p.contactAge(), p.flags()));
+			collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, beds, 1);
+			collision.preview(parcels, registry, .05F); collision.commit(parcels);
+			require(parcels.parcel(0).y() == resting.y() && parcels.parcel(0).velocityY() == 0
+					&& parcels.parcel(0).contactAge() == step + 2, "cold bed contact must retain support after rounded zero drift");
+		}
+		var p = parcels.parcel(0); long remaining = svq / 8;
+		parcels.overwrite(0, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(), 0, -.4F, 0,
+				remaining, p.mass() / 8, sand, 0, p.contactAge(), p.flags()));
+		require(parcels.parcel(0).contactAge() == 0 && parcels.parcel(0).flags() == 0, "changed representative radius must invalidate the old contact");
+		collision.preview(parcels, registry, .05F); collision.commit(parcels);
+		require(parcels.parcel(0).contactAge() == 0 && parcels.parcel(0).velocityY() < 0, "a shrunken sphere must fall through its newly vacated gap");
+		collision.preview(parcels, registry, .05F); collision.commit(parcels);
+		require(parcels.parcel(0).contactAge() == 1 && parcels.parcel(0).velocityY() == 0,
+				"a shrunken sphere must reacquire the actual lower bed at its new radius");
 	}
 
 	private static void straightSphereContactsAreSymmetric() {

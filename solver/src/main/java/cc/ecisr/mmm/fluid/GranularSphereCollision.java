@@ -1,26 +1,25 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.granular.ParticulateMaterial;
+import cc.ecisr.mmm.granular.GranularDepositStore;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 /** Local swept sphere contacts; position drift and material impulses use independent vectors. */
 final class GranularSphereCollision {
-	@FunctionalInterface interface DepositSurface { float height(float x, float z); }
 	record Motion(float x, float y, float z, float vx, float vy, float vz, boolean supported, int operations) { }
-	private record Hit(double lower, double upper, double[] normal, double[] minimum, double envelope, int axis, int column) { }
+	private record Hit(double lower, double upper, double[] normal, double[] minimum, double[] maximum, double envelope, int axis) { }
 	private final int[] sizes;
 	private final double h;
-	private final FlipCutCellGeometry geometry;
-	private final DepositSurface deposits;
+	private final GranularCollisionGeometry geometry;
 	private int remainingOperations;
 	private static double gamma(int operations) {
 		double error = operations * Math.ulp(1.0) / 2;
 		return error / (1 - error);
 	}
-	GranularSphereCollision(int x, int y, int z, float h, FlipCutCellGeometry geometry, DepositSurface deposits) {
-		this.sizes = new int[]{x, y, z}; this.h = h; this.geometry = geometry; this.deposits = deposits;
+	GranularSphereCollision(int x, int y, int z, float h, FlipCutCellGeometry geometry, GranularDepositStore deposits) {
+		this.sizes = new int[]{x, y, z}; this.h = h; this.geometry = new GranularCollisionGeometry(x, y, z, h, geometry, deposits);
 	}
 	Motion preview(float[] initial, float[] velocity, float radius, float dt, ParticulateMaterial material, int budget) {
 		remainingOperations = budget;
@@ -40,15 +39,15 @@ final class GranularSphereCollision {
 			double time = hits.stream().mapToDouble(Hit::lower).min().orElseThrow();
 			for (int a = 0; a < 3; a++) { p[a] += time * d[a]; d[a] *= 1 - time; }
 			for (Hit hit : hits) {
-				double gap = hit.axis >= 0 ? Math.abs(p[hit.axis] - hit.minimum[0]) : Math.abs(norm2(boxNormal(p, hit.minimum, h / 2)) - radius * radius);
-				history.add(new Hit(0, 0, hit.normal, hit.minimum, Math.max(hit.envelope, gap), hit.axis, hit.column));
+				double gap = hit.axis >= 0 ? Math.abs(p[hit.axis] - hit.minimum[0]) : Math.abs(norm2(boxNormal(p, hit.minimum, hit.maximum)) - radius * radius);
+				history.add(new Hit(0, 0, hit.normal, hit.minimum, hit.maximum, Math.max(hit.envelope, gap), hit.axis));
 			}
 			history = touching(p, radius, history);
 			double[][] normals = history.stream().map(Hit::normal).toArray(double[][]::new);
 			d = project(d, normals); v = impulse(v, normals, material);
 		}
 		history = touching(p, radius, history);
-		float[] endpoint = roundOutside(p, radius, history);
+		float[] endpoint = roundOutside(p, radius);
 		boolean supported = velocity[1] <= 0 && history.stream().anyMatch(hit -> hit.normal[1] > 0);
 		return new Motion(endpoint[0], endpoint[1], endpoint[2], (float) v[0], (float) v[1], (float) v[2], supported, budget - remainingOperations);
 	}
@@ -58,38 +57,15 @@ final class GranularSphereCollision {
 		for (int a = 0; a < 3; a++) if (d[a] != 0) {
 			double plane = d[a] > 0 ? sizes[a] * h - radius : radius;
 			double[] normal = new double[3]; normal[a] = d[a] > 0 ? -1 : 1;
-			planeHit(candidates, (plane - p[a]) / d[a], gamma(3) * (Math.abs(plane) + Math.abs(p[a])) / Math.abs(d[a]), normal, a, -1, plane, d[a]);
+			planeHit(candidates, (plane - p[a]) / d[a], gamma(3) * (Math.abs(plane) + Math.abs(p[a])) / Math.abs(d[a]), normal, a, plane, d[a]);
 		}
-		// Mechanical CFL bounds the initial L1 drift by h; cone projection cannot
-		// increase its L2 length. With r <= .2h, each swept axis spans <= 1.4h:
-		// at most four micro boxes per axis, independent of time subdivision.
-		double micro = h / 2; int[] lo = new int[3], hi = new int[3];
-		for (int a = 0; a < 3; a++) {
-			lo[a] = Math.max(0, (int) Math.floor((Math.min(p[a], p[a] + d[a]) - radius) / micro));
-			hi[a] = Math.min(2 * sizes[a] - 1, (int) Math.floor((Math.max(p[a], p[a] + d[a]) + radius) / micro));
-		}
-		for (int z = lo[2]; z <= hi[2]; z++) for (int y = lo[1]; y <= hi[1]; y++) for (int x = lo[0]; x <= hi[0]; x++) {
-			int mask = geometry.mask(((z / 2) * sizes[1] + y / 2) * sizes[0] + x / 2);
-			if ((mask & 1 << ((x & 1) + 2 * (y & 1) + 4 * (z & 1))) == 0) continue;
-			Hit hit = box(p, d, new double[]{x * micro, y * micro, z * micro}, radius, micro);
-			if (hit != null) candidates.add(hit);
-		}
-		// Deposits currently support a descending center on its local column top.
-		// A center already below that top keeps its cavity position and receives no upward correction.
-		if (deposits != null && d[1] < 0) {
-			int x0 = Math.max(0, (int) Math.floor(Math.min(p[0], p[0] + d[0]) / h));
-			int x1 = Math.min(sizes[0] - 1, (int) Math.floor(Math.max(p[0], p[0] + d[0]) / h));
-			int z0 = Math.max(0, (int) Math.floor(Math.min(p[2], p[2] + d[2]) / h));
-			int z1 = Math.min(sizes[2] - 1, (int) Math.floor(Math.max(p[2], p[2] + d[2]) / h));
-			for (int z = z0; z <= z1; z++) for (int x = x0; x <= x1; x++) {
-				float surface = deposits.height((float) ((x + .5) * h), (float) ((z + .5) * h));
-				double top = surface + radius, time = (top - p[1]) / d[1];
-				if (surface < 0 || p[1] < top || time < 0 || time > 1) continue;
-				double px = p[0] + time * d[0], pz = p[2] + time * d[2];
-				if (px < x * h || px >= (x + 1) * h || pz < z * h || pz >= (z + 1) * h) continue;
-				planeHit(candidates, time, gamma(3) * (Math.abs(top) + Math.abs(p[1])) / Math.abs(d[1]), new double[]{0, 1, 0}, 1, z * sizes[0] + x, top, d[1]);
-			}
-		}
+		// CFL bounds the initial L1 drift by h; projection cannot increase L2.
+		// Local queries cover at most 4^3 micro boxes and 3^3 bed cells.
+		double[] lo = new double[3], hi = new double[3];
+		for (int a = 0; a < 3; a++) { lo[a] = Math.min(p[a], p[a] + d[a]) - radius; hi[a] = Math.max(p[a], p[a] + d[a]) + radius; }
+		geometry.forEachBox(lo, hi, (minimum, maximum) -> {
+			Hit hit = box(p, d, minimum, maximum, radius); if (hit != null) candidates.add(hit);
+		});
 		if (candidates.isEmpty()) return candidates;
 		double earliestUpper = candidates.stream().mapToDouble(Hit::upper).min().orElseThrow();
 		List<Hit> group = new ArrayList<>();
@@ -99,12 +75,12 @@ final class GranularSphereCollision {
 		}
 		return group;
 	}
-	private static void planeHit(List<Hit> hits, double time, double error, double[] normal, int axis, int column, double plane, double speed) {
-		if (time >= 0 && time <= 1) hits.add(new Hit(Math.max(0, Math.nextDown(time - error)), Math.min(1, Math.nextUp(time + error)), normal, new double[]{plane, 0, 0}, error * Math.abs(speed), axis, column));
+	private static void planeHit(List<Hit> hits, double time, double error, double[] normal, int axis, double plane, double speed) {
+		if (time >= 0 && time <= 1) hits.add(new Hit(Math.max(0, Math.nextDown(time - error)), Math.min(1, Math.nextUp(time + error)), normal, new double[]{plane, 0, 0}, null, error * Math.abs(speed), axis));
 	}
-	private static Hit box(double[] p, double[] d, double[] lo, double radius, double length) {
+	private static Hit box(double[] p, double[] d, double[] lo, double[] hi, double radius) {
 		double[] knots = new double[8]; int count = 2; knots[0] = 0; knots[1] = 1;
-		for (int a = 0; a < 3; a++) if (d[a] != 0) for (double plane : new double[]{lo[a], lo[a] + length}) {
+		for (int a = 0; a < 3; a++) if (d[a] != 0) for (double plane : new double[]{lo[a], hi[a]}) {
 			double time = (plane - p[a]) / d[a]; if (time > 0 && time < 1) knots[count++] = time;
 		}
 		Arrays.sort(knots, 0, count);
@@ -112,8 +88,8 @@ final class GranularSphereCollision {
 			double start = knots[k], end = knots[k + 1]; if (start == end) continue;
 			double midpoint = (start + end) / 2, A = 0, B = 0, squares = 0, coordinateError = 0;
 			for (int a = 0; a < 3; a++) {
-				double at = p[a] + midpoint * d[a]; if (at >= lo[a] && at <= lo[a] + length) continue;
-				double plane = at < lo[a] ? lo[a] : lo[a] + length, offset = p[a] + start * d[a] - plane;
+				double at = p[a] + midpoint * d[a]; if (at >= lo[a] && at <= hi[a]) continue;
+				double plane = at < lo[a] ? lo[a] : hi[a], offset = p[a] + start * d[a] - plane;
 				double error = gamma(3) * (Math.abs(p[a]) + Math.abs(start * d[a]) + Math.abs(plane));
 				coordinateError += 2 * error * (Math.abs(offset) + (end - start) * Math.abs(d[a])) + error * error;
 				A += d[a] * d[a]; B += offset * d[a]; squares += offset * offset;
@@ -131,42 +107,35 @@ final class GranularSphereCollision {
 			double upperDisc = B * B - A * upperC;
 			double upper = upperDisc <= 0 ? -B / A : upperC / (-B + Math.sqrt(upperDisc));
 			double time = Math.max(start, Math.nextDown(start + lower)); double[] normal = new double[3];
-			for (int a = 0; a < 3; a++) { double at = p[a] + time * d[a]; normal[a] = at - Math.max(lo[a], Math.min(lo[a] + length, at)); }
+			for (int a = 0; a < 3; a++) { double at = p[a] + time * d[a]; normal[a] = at - Math.max(lo[a], Math.min(hi[a], at)); }
 			double magnitude = Math.sqrt(norm2(normal)); if (magnitude == 0) throw new IllegalStateException("Initial granular sphere penetration");
 			for (int a = 0; a < 3; a++) normal[a] /= magnitude;
-			if (dot(normal, d) < 0) return new Hit(time, Math.min(1, Math.nextUp(start + upper)), normal, lo, error, -1, -1);
+			if (dot(normal, d) < 0) return new Hit(time, Math.min(1, Math.nextUp(start + upper)), normal, lo, hi, error, -1);
 		}
 		return null;
 	}
 	private List<Hit> touching(double[] p, double radius, List<Hit> history) {
-		List<Hit> candidates = new ArrayList<>(history), active = new ArrayList<>(); double micro = h / 2;
+		List<Hit> candidates = new ArrayList<>(history), active = new ArrayList<>();
 		double[] quantum = new double[3]; for (int a = 0; a < 3; a++) { float stored = (float) p[a]; quantum[a] = Math.max(Math.nextUp(stored) - (double) stored, stored - (double) Math.nextDown(stored)); }
 		for (int a = 0; a < 3; a++) for (int side : new int[]{-1, 1}) {
 			double[] normal = new double[3]; normal[a] = side; double plane = side > 0 ? radius : sizes[a] * h - radius;
-			candidates.add(new Hit(0, 0, normal, new double[]{plane, 0, 0}, 0, a, -1));
+			candidates.add(new Hit(0, 0, normal, new double[]{plane, 0, 0}, null, 0, a));
 		}
-		if (deposits != null) {
-			float surface = deposits.height((float) p[0], (float) p[2]);
-			if (surface >= 0) candidates.add(new Hit(0, 0, new double[]{0, 1, 0}, new double[]{surface + radius, 0, 0}, 0, 1, (int) Math.floor(p[0] / h) + sizes[0] * (int) Math.floor(p[2] / h)));
-		}
-		int[] lo = new int[3], hi = new int[3]; for (int a = 0; a < 3; a++) { lo[a] = Math.max(0, (int) Math.floor((p[a] - radius - quantum[a]) / micro)); hi[a] = Math.min(2 * sizes[a] - 1, (int) Math.floor((p[a] + radius + quantum[a]) / micro)); }
-		for (int z = lo[2]; z <= hi[2]; z++) for (int y = lo[1]; y <= hi[1]; y++) for (int x = lo[0]; x <= hi[0]; x++) {
-			int mask = geometry.mask(((z / 2) * sizes[1] + y / 2) * sizes[0] + x / 2);
-			if ((mask & 1 << ((x & 1) + 2 * (y & 1) + 4 * (z & 1))) != 0) candidates.add(new Hit(0, 0, new double[3], new double[]{x * micro, y * micro, z * micro}, 0, -1, -1));
-		}
+		double[] lo = new double[3], hi = new double[3];
+		for (int a = 0; a < 3; a++) { lo[a] = p[a] - radius - quantum[a]; hi[a] = p[a] + radius + quantum[a]; }
+		geometry.forEachBox(lo, hi, (minimum, maximum) -> candidates.add(new Hit(0, 0, new double[3], minimum, maximum, 0, -1)));
 		for (Hit hit : candidates) {
 			double[] normal = hit.normal;
 			if (hit.axis >= 0) {
-				if (hit.column >= 0 && ((int) Math.floor(p[0] / h) + sizes[0] * (int) Math.floor(p[2] / h)) != hit.column) continue;
 				if (Math.abs(p[hit.axis] - hit.minimum[0]) > hit.envelope + quantum[hit.axis] + gamma(3) * (Math.abs(p[hit.axis]) + Math.abs(hit.minimum[0]))) continue;
 			} else {
 				normal = new double[3]; double error = 0;
-				for (int a = 0; a < 3; a++) { double plane = Math.max(hit.minimum[a], Math.min(hit.minimum[a] + micro, p[a])); normal[a] = p[a] - plane; double round = quantum[a] + gamma(1) * (Math.abs(p[a]) + Math.abs(plane)); error += 2 * Math.abs(normal[a]) * round + round * round; }
+				for (int a = 0; a < 3; a++) { double plane = Math.max(hit.minimum[a], Math.min(hit.maximum[a], p[a])); normal[a] = p[a] - plane; double round = quantum[a] + gamma(1) * (Math.abs(p[a]) + Math.abs(plane)); error += 2 * Math.abs(normal[a]) * round + round * round; }
 				double squared = norm2(normal); if (squared == 0 || Math.abs(squared - radius * radius) > hit.envelope + error + gamma(6) * (squared + radius * radius)) continue;
 				double length = Math.sqrt(squared); for (int a = 0; a < 3; a++) normal[a] /= length;
 			}
 			boolean duplicate = false; for (Hit old : active) duplicate |= Arrays.equals(old.normal, normal);
-			if (!duplicate) active.add(new Hit(0, 0, normal, hit.minimum, hit.envelope, hit.axis, hit.column));
+			if (!duplicate) active.add(new Hit(0, 0, normal, hit.minimum, hit.maximum, hit.envelope, hit.axis));
 		}
 		return active;
 	}
@@ -183,9 +152,9 @@ final class GranularSphereCollision {
 		return result;
 	}
 	private double[] project(double[] v, double[][] normals) {
-		// Diameter < one micro box: at most eight box normals, three shell planes,
-		// and one local deposit top. At most 298 independent active subsets in 3D.
-		if (normals.length > 12) throw new MechanicalTimeRefinement(2, "Granular contact support");
+		// Diameter < one micro box: at most eight micro boxes, eight bed boxes,
+		// and three shell planes. At most 1159 active subsets in 3D.
+		if (normals.length > 19) throw new MechanicalTimeRefinement(2, "Granular contact support");
 		if (feasible(v, normals, new double[3])) return v.clone();
 		double[] best = null; double cost = Double.POSITIVE_INFINITY; int n = normals.length;
 		for (int a = 0; a < n; a++) for (int b = -1; b < n; b++) for (int c = -1; c < n; c++) {
@@ -224,7 +193,7 @@ final class GranularSphereCollision {
 		}
 		return best;
 	}
-	private static double[] boxNormal(double[] p, double[] lo, double length) { double[] n = new double[3]; for (int a = 0; a < 3; a++) n[a] = p[a] - Math.max(lo[a], Math.min(lo[a] + length, p[a])); return n; }
+	private static double[] boxNormal(double[] p, double[] lo, double[] hi) { double[] n = new double[3]; for (int a = 0; a < 3; a++) n[a] = p[a] - Math.max(lo[a], Math.min(hi[a], p[a])); return n; }
 	private static boolean feasible(double[] v, double[][] normals, double[] formation) {
 		for (double[] normal : normals) {
 			double sum = 0, formed = 0; for (int a = 0; a < 3; a++) { sum += Math.abs(v[a] * normal[a]); formed += Math.abs(normal[a]) * formation[a]; }
@@ -252,26 +221,25 @@ final class GranularSphereCollision {
 		for (double[] normal : normals) { double sum = 0; for (int a = 0; a < 3; a++) sum += Math.abs(normal[a] * cross[a]); if (Math.abs(dot(normal, cross)) > gamma(3) * sum) return new double[3]; }
 		double scale = dot(v, cross); for (int a = 0; a < 3; a++) cross[a] *= scale; return cross;
 	}
-	private float[] roundOutside(double[] point, float radius, List<Hit> active) {
+	private float[] roundOutside(double[] point, float radius) {
 		float[] nearest = {(float) point[0], (float) point[1], (float) point[2]};
 		// Independent nearest-coordinate rounding minimizes the Euclidean distance.
-		if (validEndpoint(nearest, radius, active)) return nearest;
+		if (validEndpoint(nearest, radius)) return nearest;
 		float[][] choices = new float[3][3];
 		for (int a = 0; a < 3; a++) { float center = (float) point[a]; choices[a] = new float[]{Math.nextDown(center), center, Math.nextUp(center)}; }
 		float[] best = null; double error = Double.POSITIVE_INFINITY;
 		for (float x : choices[0]) for (float y : choices[1]) for (float z : choices[2]) {
 			float[] candidate = {x, y, z}; double squared = 0;
 			for (int a = 0; a < 3; a++) squared += (candidate[a] - point[a]) * (candidate[a] - point[a]);
-			if (squared >= error || !validEndpoint(candidate, radius, active)) continue;
+			if (squared >= error || !validEndpoint(candidate, radius)) continue;
 			best = candidate; error = squared;
 		}
 		if (best == null) throw new MechanicalTimeRefinement(2, "No representable granular sphere endpoint");
 		return best;
 	}
-	private boolean validEndpoint(float[] p, float radius, List<Hit> active) {
+	private boolean validEndpoint(float[] p, float radius) {
 		for (int a = 0; a < 3; a++) if (!(p[a] >= radius && p[a] <= sizes[a] * h - radius)) return false;
-		if (geometry.sphereTouchesSolid(p[0], p[1], p[2], radius, (float) h)) return false;
-		for (Hit hit : active) if (hit.column >= 0 && (int) Math.floor(p[0] / h) + sizes[0] * (int) Math.floor(p[2] / h) == hit.column && p[1] < hit.minimum[0]) return false;
+		if (geometry.sphereTouchesSolid(p[0], p[1], p[2], radius)) return false;
 		return true;
 	}
 	private static double[] cross(double[] a, double[] b) { return new double[]{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]}; }
