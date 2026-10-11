@@ -13,6 +13,7 @@ public final class GranularCarrierValidation {
 		sphereMicroBoxContacts();
 		depositContactsRespectCellGeometry();
 		depositPathsRespectSuspendedBeds();
+		cutBedGeometryMatchesFinalPlan();
 		straightSphereContactsAreSymmetric();
 		contactImpulsePreservesSolvedDrift();
 		contactImpulseObeysCoulombCone();
@@ -249,6 +250,70 @@ public final class GranularCarrierValidation {
 		require(!geometry.verticalSpherePathTouchesSolid(.625F, .8125F, .625F, 1.0F, .0625F)
 				&& geometry.verticalSpherePathTouchesSolid(.625F, .8125F, .625F, .7F, .0625F),
 				"exact source support tangency must allow departure and reject passage into a micro box");
+	}
+
+	private static void cutBedGeometryMatchesFinalPlan() {
+		for (int scenario = 0; scenario < 3; scenario++) {
+			var domain = new FluidDomain(3, 4, 3,
+					new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .4F, .002F, .8F), 512);
+			domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
+					new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
+			domain.sealDomainBoundary();
+			var state = domain.granularState;
+			int sand = state.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND), target = domain.cellIndex(1, 0, 1);
+			domain.geometry.cutCells.replaceMask(target, scenario == 0 ? 1 : 4);
+			long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+			if (scenario == 2) {
+				long oldSkeleton = (long) (SolidVolume.SVQ_PER_CELL * .62 * .46);
+				require(state.deposits.tryAdd(target, new cc.ecisr.mmm.granular.GranularDepositStore.SolidPortion(sand, 0,
+						oldSkeleton, 2_600.0 * oldSkeleton / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL * 7 / 8),
+						"initial mixed-space bed must fit below the upper cut micro box");
+			}
+			float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
+			double top = state.deposits.cellBulkVolumeSvq(target) * .5 / SolidVolume.SVQ_PER_CELL;
+			float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
+			for (int index = 0; index < (scenario == 2 ? 2 : 1); index++) state.parcels.add(new GranularParcelStore.Parcel(
+					.9F, y, .9F, 0, 0, 0, volume, 2_600.0 * volume / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+			domain.ensureGrid();
+			require(domain.granularCollision.positionValid(.9F, y, .9F, volume), "cut-bed fixture needs a legal supported sphere start");
+			for (int step = 0; step < 3; step++) {
+				domain.granularCollision.preview(state.parcels, state.registry, .05F); domain.granularCollision.commit(state.parcels);
+			}
+			var originals = new GranularParcelStore.Parcel[state.parcels.count()];
+			for (int index = 0; index < originals.length; index++) {
+				originals[index] = state.parcels.parcel(index);
+				require(originals[index].contactAge() == 3, "cut-bed sources must acquire actual contact age");
+			}
+			long[] planned = domain.granularCoupling.copySolidSvq(), before = planned.clone();
+			var environment = domain.granularDepositEnvironment(planned);
+			require(environment.bedGeometryFits(target, 0) && (scenario == 0
+					? !environment.bedGeometryFits(target, 1)
+					: environment.bedGeometryFits(target, SolidVolume.SVQ_PER_CELL / 2)
+						&& !environment.bedGeometryFits(target, SolidVolume.SVQ_PER_CELL / 2 + 1)),
+					"full-footprint bed must preserve pure top tangency and reject cut interior overlap");
+			if (scenario == 2) {
+				var single = state.inventory.planSettlement(new int[]{0}, target, environment.geometricOpenSvq(target));
+				var joint = state.inventory.planSettlement(new int[]{0, 1}, target, environment.geometricOpenSvq(target));
+				require(single != null && joint != null && environment.bedGeometryFits(target, single.bulkVolumeSvq())
+						&& !environment.bedGeometryFits(target, joint.bulkVolumeSvq())
+						&& cc.ecisr.mmm.granular.GranularBedPotential.allowsSettlement(joint, .5F, 3, 4, 9.81),
+						"joint cut rejection must protect a height crossing that each single source and potential guard allow");
+			}
+			long revision = state.deposits.mutationRevision(), oldStock = state.deposits.cellSolidVolumeSvq(target);
+			domain.granularDepositDynamics().disturbCell(target);
+			var result = domain.granularDepositDynamics().step(environment, .05F);
+			if (scenario == 1) require(result.settledParcels() == 1 && state.parcels.count() == 0
+					&& state.deposits.cellSolidVolumeSvq(target) == volume && environment.bedGeometryFits(target, state.deposits.cellBulkVolumeSvq(target)),
+					"a low bed below an upper micro box must remain representable and settle");
+			else {
+				require(result.settledParcels() == 0 && result.relaxedMoves() == 0 && result.wokenParcels() == 0
+						&& state.parcels.count() == originals.length && state.deposits.mutationRevision() == revision
+						&& state.deposits.cellSolidVolumeSvq(target) == oldStock && java.util.Arrays.equals(planned, before)
+						&& (scenario == 0 || result.dirtyColumns() > 0), "unrepresentable cut-bed growth must defer the complete inventory atomically: scenario=" + scenario + ", " + result);
+				for (int index = 0; index < originals.length; index++) require(state.parcels.parcel(index).equals(originals[index]),
+						"cut-bed rejection must preserve each original source");
+			}
+		}
 	}
 
 	private static void straightSphereContactsAreSymmetric() {

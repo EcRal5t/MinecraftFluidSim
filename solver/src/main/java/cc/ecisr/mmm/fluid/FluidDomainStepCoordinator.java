@@ -389,6 +389,8 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				return granularCollision.verticalSpherePathWork(x, fromY, z, toY, solidSvq);
 			}
 
+			@Override public boolean bedGeometryFits(int cell, long bulk) { return granularCollision.bedGeometryFits(cell, bulk); }
+
 			@Override public void receiveContactImpulse(double x, double y, double z) {
 				lastGranularBoundaryImpulseX += x;
 				lastGranularBoundaryImpulseY += y;

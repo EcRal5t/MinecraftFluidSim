@@ -114,6 +114,8 @@ final class FlipGranularCollision {
 		return geometry.verticalSpherePathWork(x, fromY, z, toY, collisionRadius(solidVolumeSvq));
 	}
 
+	boolean bedGeometryFits(int cell, long bulk) { return geometry.bedGeometryFits(cell, bulk); }
+
 	GranularCouplingFields.Position previewPosition(int index, GranularParcelStore.Parcel ignored) {
 		if (index < 0 || index >= previewCount) throw new IllegalArgumentException("Unknown granular preview index");
 		return new GranularCouplingFields.Position(nextX[index], nextY[index], nextZ[index]);

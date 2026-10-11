@@ -42,6 +42,21 @@ final class GranularCollisionGeometry {
 		return touches[0];
 	}
 
+	/** Candidate full-footprint bed versus its eight fixed micro boxes, with pure tangency allowed. */
+	boolean bedGeometryFits(int cell, long bulk) {
+		if (bulk < 0) throw new IllegalArgumentException("Candidate bed bulk is negative");
+		if (bulk > SolidVolume.SVQ_PER_CELL) return false;
+		int mask = cutCells.mask(cell), y = cell / sizes[0] % sizes[1];
+		double bottom = y * h, top = (y + bulk / (double) SolidVolume.SVQ_PER_CELL) * h;
+		if (bulk == 0) return true;
+		for (int bit = 0; bit < 8; bit++) if ((mask & 1 << bit) != 0) {
+			// The bed covers each micro box's entire x/z footprint within this same cell.
+			double microBottom = (2 * y + (bit >> 1 & 1)) * (h / 2);
+			if (bottom < microBottom + h / 2 && microBottom < top) return false;
+		}
+		return true;
+	}
+
 	/** Number of candidate bed cells visited by the same vertical broad phase. */
 	int verticalSpherePathWork(float x, float fromY, float z, float toY, float radius) {
 		if (deposits == null) return 0;

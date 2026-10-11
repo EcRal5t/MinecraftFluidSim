@@ -44,6 +44,8 @@ public final class GranularDepositDynamics {
 		default boolean verticalPathOpen(float x, float fromY, float z, float toY, long solidSvq) { return true; }
 		/** Candidate bed-cell visits charged before the pure geometric query. */
 		default int verticalPathWork(float x, float fromY, float z, float toY, long solidSvq) { return 0; }
+		/** Fixed local cut geometry work is included in each candidate target's logical charge. */
+		default boolean bedGeometryFits(int cell, long bulkSvq) { return true; }
 		double shields(int surfaceCell, ParticulateMaterial material);
 		default void receiveContactImpulse(double x, double y, double z) { }
 		default boolean planSettlement(GranularInventory.SettlementPlan plan) { return true; }
@@ -173,7 +175,9 @@ public final class GranularDepositDynamics {
 					int[] indices = plan.parcelIndices();
 					admission.reserveLogicalOperations(operations + indices.length);
 					if (admission.spend(2 * indices.length)) {
-						if (!GranularBedPotential.allowsSettlement(plan, cellSize, sizeX, sizeY, environment.gravity())) {
+						if (!settlementBedsFit(plan, environment)) {
+							for (var target : plan.targets()) disturbCell(target.cell());
+						} else if (!GranularBedPotential.allowsSettlement(plan, cellSize, sizeX, sizeY, environment.gravity())) {
 							for (var target : plan.targets()) {
 								int destination = target.cell();
 								energyDeferred[(destination / (sizeX * sizeY)) * sizeX + destination % sizeX] = true;
@@ -268,11 +272,18 @@ public final class GranularDepositDynamics {
 		for (int y = 0; y <= coordinate(parcel.y(), sizeY); y++) {
 			if (!admission.spend(1)) return -1;
 			int target = cell(x, y, z); long open = environment.geometricOpenSvq(target);
-			if (open > 0 && deposits.previewCellBulkVolumeAfterAdd(target, addition) <= open
+			if (open <= 0) continue;
+			long bulk = deposits.previewCellBulkVolumeAfterAdd(target, addition);
+			if (bulk <= open && environment.bedGeometryFits(target, bulk)
 					&& verticalPathOpen(environment, parcel.x(), parcel.y(), parcel.z(),
 						settlementCenterY(target, parcel.solidVolumeSvq()), parcel.solidVolumeSvq())) return target;
 		}
 		return -1;
+	}
+
+	private boolean settlementBedsFit(GranularInventory.SettlementPlan plan, Environment environment) {
+		for (var target : plan.targets()) if (!environment.bedGeometryFits(target.cell(), target.bulkVolumeSvq())) return false;
+		return true;
 	}
 
 	private boolean verticalPathOpen(Environment environment, float x, float fromY, float z, float toY, long volume) {
@@ -393,7 +404,7 @@ public final class GranularDepositDynamics {
 			long open = environment.geometricOpenSvq(receiver);
 			if (open <= 0L) continue;
 			long candidateBulk = deposits.previewCellBulkVolumeAfterAdd(receiver, moved);
-			if (candidateBulk > open) continue;
+			if (candidateBulk > open || !environment.bedGeometryFits(receiver, candidateBulk)) continue;
 			float radius = GranularMechanics.representativeRadius(requestedSkeleton, cellSize);
 			if (!verticalPathOpen(environment, (receiverX + 0.5F) * cellSize,
 					Math.nextUp((float) (height * cellSize + radius)), (receiverZ + 0.5F) * cellSize,
