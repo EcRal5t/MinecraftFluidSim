@@ -167,7 +167,8 @@ public final class ThermalOwnerStoreValidation {
 			if (count == 2) {
 				grid.setCellInternalEnergy(0, target);
 				require(SignedDyadic.sum(energy).equals(target) && java.util.Arrays.equals(energy, before)
-						&& grid.temperature(0) == temperature && Double.isFinite(grid.heatCapacity(0)),
+						&& grid.temperature(0) == temperature && Double.isFinite(grid.heatCapacity(0))
+						&& grid.carriersMatchSolvedTemperature(),
 						"A single unrepresentable modeled owner prevented a valid conservation remainder");
 			} else {
 				try { grid.setCellInternalEnergy(0, target); throw new AssertionError("Two unrepresentable modeled owners accepted"); }

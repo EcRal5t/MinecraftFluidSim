@@ -383,7 +383,8 @@ public final class ThermalCellGrid {
 		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
 		for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0) {
 			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-				if (carriers.internalEnergy(carrier) == modeledEnergy(carrier, temperature[cell])) continue;
+				try { if (carriers.internalEnergy(carrier) == modeledEnergy(carrier, temperature[cell])) continue; }
+				catch (ThermalStateFunction.EnergyRepresentationException overflow) { /* Validate the stored remainder directly. */ }
 				ThermalMaterialDefinition material = carrierMaterial[carrier];
 				double restored = ThermalCaloricInversion.owner(material, carrierMass[carrier], carriers.internalEnergy(carrier), cachedBaseEnergy(carrier)).temperatureK();
 				double tolerance = Math.max(1.0E-9,
