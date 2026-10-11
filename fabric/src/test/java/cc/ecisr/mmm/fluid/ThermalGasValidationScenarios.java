@@ -1351,13 +1351,21 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.setVolume(1, 1, 1, 1.0F);
 		domain.setMarkerMaterial(0, liquids, 1);
 		domain.bindThermal(thermal, liquids, 500.0);
-		var emptyCandidate = new ThermalDomainState.PhaseCandidateCell(0, SignedDyadic.of(1.0), List.of());
+		domain.thermalState.preparePhaseScan(domain.thermalMarkerContext());
+		var emptyCandidate = domain.thermalState.preparePhaseCandidateCell(0, domain.thermalMarkerContext());
+		var emptyCandidateBeforeEnergy = domain.exactInternalEnergy();
+		var emptyCandidateBeforeAudit = domain.thermalAudit();
+		var emptyCandidateBeforeRevision = domain.thermalState.thermalRevision();
 		try {
-			domain.thermalState.requirePhaseCandidateState(emptyCandidate, List.of(), 1.0E20, 1.0E20);
+			domain.thermalState.requirePhaseCandidateState(emptyCandidate, List.of(), 1.0E20, Math.nextDown(1.0E20));
 			throw new AssertionError("empty candidate discarded exact energy after rounded gas transfer");
 		} catch (ThermalDomainState.EmptyPhaseCandidateEnergyException expected) { }
-		require(Double.isNaN(domain.thermalState.requirePhaseCandidateState(emptyCandidate, List.of(), 0.0, 1.0)),
+		require(Double.isNaN(domain.thermalState.requirePhaseCandidateState(emptyCandidate, List.of(), 1.0, 1.0)),
 				"exactly empty candidate acquired a fictitious temperature");
+		require(domain.exactInternalEnergy().equals(emptyCandidateBeforeEnergy)
+				&& domain.thermalAudit() == emptyCandidateBeforeAudit
+				&& domain.thermalState.thermalRevision().equals(emptyCandidateBeforeRevision),
+				"empty-inventory energy validation changed a thermal owner or its audit");
 		require(domain.gasBoundary().nodeCount() == 1, "boiling fixture did not form one sealed receiver");
 		ThermalDisplaySnapshot display = domain.copyThermalDisplaySnapshot();
 		int liquidCell = (1 * 4 + 1) * 4 + 1;
@@ -1715,6 +1723,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void phaseGasCapacityIsAtomicAndRetainsSmallerBatch() {
+		phaseMassTransfersUseActualStoredKilograms();
 		phaseRawCarrierAssignmentIsAtomic();
 		phaseGasEnergyRepresentationRetainsSmallerBatch();
 		FluidDomain history = phaseGasCapacityDomain(true);
@@ -1768,6 +1777,100 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& limited.exactInternalEnergy().equals(limited.thermalAudit().expectedInventory())
 				&& limited.gasBoundary().auditClosed(),
 				"an overflowing largest gas phase batch prevented its smaller complete batch");
+	}
+
+	private static void phaseMassTransfersUseActualStoredKilograms() {
+		for (long batchMass : new long[]{1, 200}) {
+			FluidDomain blocked = phaseMassResolutionDomain(batchMass, true, false);
+			var beforeMaterial = blocked.exportMaterialParticleState();
+			var beforeThermal = blocked.exportThermalParticleState();
+			var beforeRevision = blocked.thermalState.thermalRevision();
+			var beforeGas = blocked.gasBoundary().inventory(1);
+			var beforeSource = blocked.gasState.network.externalSource();
+			var beforeSink = blocked.gasState.network.escapedSink();
+			var beforeAudit = blocked.thermalAudit();
+			var beforeMass = actualPhaseMass(blocked);
+			var result = blocked.stepGasPhaseChangeOnly(1);
+			var afterMaterial = blocked.exportMaterialParticleState();
+			var afterThermal = blocked.exportThermalParticleState();
+			require(result.operations() == 0 && blocked.particleCount() == 1
+					&& Arrays.equals(beforeMaterial.copyPositionVolume(), afterMaterial.copyPositionVolume())
+					&& Arrays.equals(beforeMaterial.copyParticleMass(), afterMaterial.copyParticleMass())
+					&& Arrays.equals(beforeMaterial.copyParticleVelocities(), afterMaterial.copyParticleVelocities())
+					&& Arrays.equals(beforeThermal.copyInternalEnergy(), afterThermal.copyInternalEnergy())
+					&& Arrays.equals(beforeThermal.copyGasNodeEnergy(), afterThermal.copyGasNodeEnergy())
+					&& blocked.thermalState.thermalRevision().liquid() == beforeRevision.liquid()
+					&& blocked.thermalState.thermalRevision().granular() == beforeRevision.granular()
+					&& blocked.gasBoundary().inventory(1).equals(beforeGas)
+					&& blocked.gasState.network.externalSource() == beforeSource
+					&& blocked.gasState.network.escapedSink() == beforeSink && blocked.thermalAudit().equals(beforeAudit)
+					&& actualPhaseMass(blocked).equals(beforeMass),
+					"boiling admitted an unresolved or incorrectly rounded actual kilogram transfer: " + batchMass);
+			blocked.captureAuthoritativeState();
+			FluidDomain appended = phaseMassResolutionDomain(batchMass, false, false);
+			var initialMass = actualPhaseMass(appended);
+			double largeMass = appended.particles.mass(0);
+			var initialRoundoff = appended.gasState.network.massRoundoff();
+			require(appended.stepGasPhaseChangeOnly(1).condensedCells() == 1 && appended.particleCount() == 2
+					&& appended.particles.mass(0) == largeMass && appended.particles.volume(0) == .125F
+					&& appended.unitScale.kilograms(appended.particles.mass(1)) == batchMass
+					&& actualPhaseMass(appended).equals(initialMass)
+					&& appended.gasState.network.massRoundoff().equals(initialRoundoff)
+					&& appended.exactInternalEnergy().equals(appended.thermalAudit().expectedInventory()),
+					"condensation failed to append a representable carrier after its first receiver lost mass: " + batchMass);
+			appended.captureAuthoritativeState();
+		}
+		FluidDomain nextReceiver = phaseMassResolutionDomain(1, false, true);
+		var beforeMass = actualPhaseMass(nextReceiver);
+		double unchangedMass = nextReceiver.particles.mass(0);
+		require(nextReceiver.stepGasPhaseChangeOnly(1).condensedCells() == 1 && nextReceiver.particleCount() == 2
+				&& nextReceiver.particles.mass(0) == unchangedMass && nextReceiver.particles.volume(0) == .125F
+				&& nextReceiver.unitScale.kilograms(nextReceiver.particles.mass(1)) == 3.0
+				&& actualPhaseMass(nextReceiver).equals(beforeMass),
+				"condensation did not try its next representable receiver after a failed actual mass delta");
+		nextReceiver.captureAuthoritativeState();
+		FluidDomain represented = phaseMassResolutionDomain(256, true, false);
+		var representedMass = actualPhaseMass(represented);
+		require(represented.stepGasPhaseChangeOnly(1).boiledCells() == 1 && actualPhaseMass(represented).equals(representedMass),
+				"an exactly represented mass increment was rejected at a large marker mass");
+		represented.captureAuthoritativeState();
+	}
+
+	private static SignedDyadic actualPhaseMass(FluidDomain domain) {
+		SignedDyadic mass = SignedDyadic.ZERO;
+		for (int marker = 0; marker < domain.particleCount(); marker++)
+			mass = mass.add(SignedDyadic.of(domain.unitScale.kilograms(domain.particles.mass(marker))));
+		for (var entry : domain.gasState.network.sealedInventory().entries()) mass = mass.add(entry.mass());
+		for (var group : domain.thermalState.coherentPhases().snapshot()) mass = mass.add(SignedDyadic.of(group.mass()));
+		return mass;
+	}
+
+	private static FluidDomain phaseMassResolutionDomain(long batchMass, boolean boiling, boolean secondReceiver) {
+		var liquids = new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(
+				"test:mass_water", (double) 1e20F, "test:miscible", 0, 90)));
+		var water = new ThermalMaterialDefinition("test:mass_water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:mass_water", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(200, 400, 1)));
+		var air = new ThermalMaterialDefinition("test:mass_air", ThermalMaterialDefinition.CarrierKind.GAS,
+				BuiltinGasDefinitions.AIR, 299, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(200, 400, 1)));
+		var vapor = new ThermalMaterialDefinition("test:mass_vapor", ThermalMaterialDefinition.CarrierKind.GAS,
+				BuiltinGasDefinitions.WATER_VAPOR, 299, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(200, 400, 1)));
+		var transition = new ThermalPhaseTransition("test:mass_phase", water.id(), vapor.id(), 300,
+				SolidVolume.SVQ_PER_CELL / 64, SolidVolume.SVQ_PER_BV / 8, ExactRational.of(batchMass),
+				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
+		var registry = new ThermalRegistry(List.of(water, air, vapor), List.of(), List.of(transition), "", "");
+		var gases = BuiltinGasDefinitions.createRegistry();
+		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 1e20F, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
+		domain.sealDomainBoundary();
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
+			if (y != 1 || z != 1 || x == 0) domain.setSolid(x, y, z, true);
+		domain.setVolume(1, 1, 1, .125F); domain.setMarkerMaterial(0, liquids, 0);
+		if (secondReceiver) require(domain.tryInsertExactMaterial(1, 1, 1, .125F, 16, 0, 0).transferred(),
+				"mass-resolution receiver setup failed");
+		domain.bindGasRegistry(gases); domain.bootstrapGasState("");
+		domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
+		if (!boiling) domain.gasState.network.commitPhaseSource(1, new GasLiquidPhaseModel(registry, gases).gasBatch(transition, 4));
+		domain.bindThermal(registry, liquids, 300); domain.stepGasPhaseChangeOnly(0); domain.captureAuthoritativeState();
+		return domain;
 	}
 
 	private static void phaseRawCarrierAssignmentIsAtomic() {

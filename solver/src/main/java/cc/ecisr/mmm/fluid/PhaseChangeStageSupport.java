@@ -152,6 +152,29 @@ final class PhaseChangeStageSupport {
 		return x + state.sizeX() * (y + state.sizeY() * z);
 	}
 
+	/** Validates the actual stored SI mass change at the transferred mass scale. */
+	double representedMassTransfer(double beforeSolverMass, double afterSolverMass, double requestedKilograms) {
+		return representedPhysicalMassTransfer(state.unitScale().kilograms(beforeSolverMass),
+				state.unitScale().kilograms(afterSolverMass), requestedKilograms);
+	}
+
+	static double representedPhysicalMassTransfer(double beforeKilograms, double afterKilograms, double requestedKilograms) {
+		try {
+			if (!Double.isFinite(beforeKilograms) || beforeKilograms < 0 || !Double.isFinite(afterKilograms)
+					|| afterKilograms < 0 || !Double.isFinite(requestedKilograms) || requestedKilograms == 0.0)
+				throw new IllegalArgumentException("Phase transfer mass is invalid");
+			SignedDyadic actual = SignedDyadic.of(afterKilograms).subtract(SignedDyadic.of(beforeKilograms));
+			SignedDyadic error = actual.subtract(SignedDyadic.of(requestedKilograms));
+			if (actual.signum() != (requestedKilograms > 0 ? 1 : -1)
+					|| (error.signum() < 0 ? error.negate() : error).compareTo(
+					SignedDyadic.of(massTolerance(Math.abs(requestedKilograms)))) > 0)
+				throw new IllegalArgumentException("Phase transfer changed a different actual mass");
+			return actual.toDouble();
+		} catch (IllegalArgumentException | ArithmeticException unrepresentable) {
+			throw new PhaseCandidateUnavailableException("Phase mass change is not representable in its carrier", unrepresentable);
+		}
+	}
+
 	static double massTolerance(double mass) {
 		return Math.max(1.0E-12, Math.ulp(mass) * 32.0);
 	}

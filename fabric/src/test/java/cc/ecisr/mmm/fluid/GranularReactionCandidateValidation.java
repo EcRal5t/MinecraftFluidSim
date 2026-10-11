@@ -14,6 +14,7 @@ public final class GranularReactionCandidateValidation {
 
 	public static void validate() {
 		allocationCases();
+		phaseTransferRequiresActualMassChange();
 		phaseTransferPreservesMomentum();
 		precipitationPreservesAvailableMassMoment();
 		precipitationUsesCompleteThermalInventory();
@@ -27,6 +28,35 @@ public final class GranularReactionCandidateValidation {
 	}
 
 	public static void main(String[] args) { validate(); }
+
+	private static void phaseTransferRequiresActualMassChange() {
+		var granular = BuiltinGranularDefinitions.createRegistry();
+		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		for (double initialKg : new double[]{1.0E18, Math.scalb(1.0, 48)}) {
+			var domain = new FluidDomain(3, 3, 3,
+					new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 216);
+			domain.restoreParticleState(new FlipParticleState(3, 3, 3, .5F, 1, .125F,
+					new float[]{.75F, .75F, .75F, .125F}, new float[3], new byte[27]));
+			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+			domain.setPrecipitationEnabled(true);
+			domain.particles.setMass(0, domain.unitScale.solverMass(initialKg));
+			domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
+					BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), false);
+			domain.captureAuthoritativeState();
+			var original = domain.chemicalParcels.record(0);
+			double originalMass = domain.particles.mass(0);
+			float originalVolume = domain.particles.volume(0);
+			var stats = domain.runThermalReactionPhaseAxis(false, 0);
+			require(stats.granularPhase().precipitations() == 0 && domain.granularState.parcels.count() == 0
+					&& domain.particles.mass(0) == originalMass && domain.particles.volume(0) == originalVolume
+					&& domain.chemicalParcels.record(0).equals(original),
+					"precipitation defers when its actual liquid mass change cannot represent the solid transfer");
+			var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			require(restored.particles.mass(0) == originalMass && restored.chemicalParcels.record(0).equals(original),
+					"deferred mass transfer preserves a valid, restorable inventory");
+		}
+	}
 
 	private static void precipitationUsesCompleteThermalInventory() {
 		for (int count : new int[]{256, 300}) {
@@ -440,8 +470,14 @@ public final class GranularReactionCandidateValidation {
 							&& Arrays.equals(domain.chemicalParcels.dirtyCells(), new int[]{13}),
 					"deferred dissolution retains source inventory and scheduling");
 			setWater(domain, mode.equals("region-budget") ? 1 : 0, 100_000L);
+			if (mode.equals("region-budget")) {
+				require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().dissolutions() == 0
+						&& domain.chemicalParcels.record(0).equals(before),
+						"dissolution retains the source when free composition capacity still leaves an unrepresentable mass transfer");
+				setWater(domain, 0, 100_000L);
+			}
 			require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().dissolutions() == 1,
-					"dissolution resumes when marker and region capacity are available");
+					"dissolution resumes when marker capacity, region capacity and actual mass representation are available");
 		}
 		domain.chemicalParcels.restoreReactionCursor(13);
 		require(FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState())

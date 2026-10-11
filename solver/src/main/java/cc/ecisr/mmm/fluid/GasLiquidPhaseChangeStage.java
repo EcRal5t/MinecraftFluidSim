@@ -307,6 +307,8 @@ final class GasLiquidPhaseChangeStage {
 						&& (chemistry == null || !chemistry.indicator(marker))) {
 					try {
 						PhaseChangeStageSupport.adjustedMarkerVolume(particles.volume(marker), addedSvq, "Condensation");
+						double candidateMass = particles.mass(marker) + support.state().unitScale().solverMass(moved.mass());
+						support.representedMassTransfer(particles.mass(marker), candidateMass, moved.mass());
 						if (chemistry != null) {
 							condensedMixture = PhaseComposition.fromMixture(chemistry.record(marker), chemistry.registry())
 									.plus(movedComposition).toMixture(chemistry.registry());
@@ -339,6 +341,7 @@ final class GasLiquidPhaseChangeStage {
 							"Condensation momentum exceeds liquid carrier representation", unrepresentableMomentum);
 				}
 			} else {
+				support.representedMassTransfer(0.0, support.state().unitScale().solverMass(moved.mass()), moved.mass());
 				if (chemistry != null) {
 					if (movedComposition.amounts().isEmpty()) throw new PhaseCandidateUnavailableException(
 							"Condensation needs an existing chemical receiver for a mass-only gas portion");
@@ -527,6 +530,7 @@ final class GasLiquidPhaseChangeStage {
 				throw new PhaseCandidateUnavailableException(
 						"Boiling batch mass/volume split is not representable");
 			}
+			support.representedMassTransfer(particles.mass(marker), full ? 0.0 : newMass, -takeMass);
 			ChemicalParcelStore.SplitPlan chemicalPlan;
 			try {
 				chemicalPlan = chemistry == null ? null : chemistry.planSelectivePhaseTruncate(

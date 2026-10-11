@@ -291,6 +291,8 @@ final class CondensedPhaseChangeStage {
 				throw new PhaseCandidateUnavailableException(
 						"Freeze cannot represent another coherent carrier group", unavailable);
 			}
+			PhaseChangeStageSupport.representedPhysicalMassTransfer(
+					before.lowerMass(), coherentFinal.mass(), requestedMass);
 		} else {
 			if (lowerDelta > before.lowerVolumeSvq()
 					|| requestedMass > before.lowerMass() + massTolerance(before.lowerMass())) {
@@ -310,6 +312,11 @@ final class CondensedPhaseChangeStage {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Melt exact batch mass differs from coherent inventory");
 			}
+			PhaseChangeStageSupport.representedPhysicalMassTransfer(0.0, coherentTransfer.mass(), requestedMass);
+			PhaseChangeStageSupport.representedPhysicalMassTransfer(before.lowerMass(),
+					coherentFinal == null ? 0.0 : coherentFinal.mass(), -coherentTransfer.mass());
+			support.representedMassTransfer(0.0, support.state().unitScale().solverMass(coherentTransfer.mass()),
+					coherentTransfer.mass());
 			PhaseComposition moved = PhaseComposition.fromCoherent(coherentTransfer.composition());
 			finalLowerSvq = before.lowerVolumeSvq() - lowerDelta;
 			finalUpperSvq = Math.addExact(before.upperVolumeSvq(), upperDelta);
@@ -414,6 +421,7 @@ final class CondensedPhaseChangeStage {
 		ArrayList<PhaseMarkerAllocation> allocations = new ArrayList<>();
 		PhaseCompositionBuilder moved = chemistry == null ? null : new PhaseCompositionBuilder(chemistry);
 		SignedDyadic movedEnergy = SignedDyadic.ZERO;
+		SignedDyadic actualRemovedMass = SignedDyadic.ZERO;
 		long remainingSvq = requestedSvq;
 		double remainingMass = requestedMass;
 		double cellTemperature = support.thermal().temperatureInCell(
@@ -437,12 +445,15 @@ final class CondensedPhaseChangeStage {
 			float newVolume = full ? 0.0F
 					: PhaseChangeStageSupport.adjustedMarkerVolume(
 							particles.volume(marker), -takeSvq, "Freeze");
-			double newMass = particles.mass(marker) - takeSolverMass;
-			if (!(takeMass > 0.0) || full && Math.abs(newMass) > massTolerance(particles.mass(marker))
-					|| !full && !(newMass > 0.0)) {
+			double newMass = full ? 0.0 : particles.mass(marker) - takeSolverMass;
+			if (!full && !(newMass > 0.0)) {
 				throw new PhaseCandidateUnavailableException(
 						"Freeze batch mass/volume split is not representable");
 			}
+			support.representedMassTransfer(particles.mass(marker), newMass, -takeMass);
+			actualRemovedMass = actualRemovedMass.add(SignedDyadic.of(
+					support.state().unitScale().kilograms(particles.mass(marker))).subtract(SignedDyadic.of(
+					support.state().unitScale().kilograms(newMass))));
 			ChemicalParcelStore.SplitPlan chemicalPlan;
 			try {
 				chemicalPlan = chemistry == null ? null : chemistry.planTruncate(
@@ -466,6 +477,7 @@ final class CondensedPhaseChangeStage {
 			throw new PhaseCandidateUnavailableException(
 					"Freeze exact batch cannot be allocated to liquid markers");
 		}
+		PhaseChangeStageSupport.representedPhysicalMassTransfer(0.0, actualRemovedMass.toDouble(), requestedMass);
 		return new PhaseRemovalPlan(
 				List.copyOf(allocations), chemistry == null ? PhaseComposition.EMPTY : moved.build(),
 				movedEnergy.toDouble());

@@ -352,6 +352,9 @@ final class GranularReactionStage {
 			if (!GranularMergeKinematics.preservesAngularMomentum(existing,
 					spawned.x(), spawned.y(), spawned.z(), velocityX, velocityY, velocityZ)) continue;
 			double combinedMass = existing.mass() + plan.signedSolidMass();
+			try { PhaseChangeStageSupport.representedPhysicalMassTransfer(
+					existing.mass(), combinedMass, plan.signedSolidMass()); }
+			catch (PhaseChangeStageSupport.PhaseCandidateUnavailableException unavailable) { continue; }
 			float x = weighted(existing.x(), existing.mass(), spawned.x(), plan.signedSolidMass(), combinedMass);
 			float y = weighted(existing.y(), existing.mass(), spawned.y(), plan.signedSolidMass(), combinedMass);
 			float z = weighted(existing.z(), existing.mass(), spawned.z(), plan.signedSolidMass(), combinedMass);
@@ -407,6 +410,9 @@ final class GranularReactionStage {
 		SolidCompositionRecord remaining = full ? null : subtractComposition(
 				original, plan.transferredComposition());
 		double remainingMass = solid.mass() - removedMass;
+		try { PhaseChangeStageSupport.representedPhysicalMassTransfer(
+				solid.mass(), full ? 0.0 : remainingMass, -removedMass); }
+		catch (PhaseChangeStageSupport.PhaseCandidateUnavailableException unavailable) { return false; }
 		if (!full && (!(remainingMass > 0.0)
 				|| !FluidDomain.massClose(remaining.totalMass(chemistry.registry()), remainingMass))) {
 			return false;

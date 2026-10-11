@@ -6,6 +6,7 @@ import cc.ecisr.mmm.chemistry.ChemicalMixtureRecord;
 import cc.ecisr.mmm.chemistry.ChemicalRegistry;
 import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.units.SolverUnitScale;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -101,7 +102,7 @@ public final class GranularPhaseTransferEngine {
 		long[] volumeDeltas = representableVolumeAllocation(solidSvq, liquid, ordinals, precipitation);
 		if (volumeDeltas == null) return null;
 		MarkerUpdate[] updates = new MarkerUpdate[liquid.size()];
-		double oldMass = 0.0, newMass = 0.0;
+		SignedDyadic liquidMassChange = SignedDyadic.ZERO;
 		for (int index = 0; index < liquid.size(); index++) {
 			LiquidParcel source = liquid.get(index);
 			ChemicalMixtureRecord replacement = record(
@@ -118,12 +119,15 @@ public final class GranularPhaseTransferEngine {
 				throw new BlockedException("Liquid marker cannot represent the exact SVQ phase-transfer delta");
 			}
 			updates[index] = new MarkerUpdate(source.marker(), replacement, cellVolume, solverMass);
-			oldMass += unitScale.kilograms(source.mass()); newMass += massKilograms;
+			liquidMassChange = liquidMassChange.add(SignedDyadic.of(unitScale.kilograms(solverMass)))
+					.subtract(SignedDyadic.of(unitScale.kilograms(source.mass())));
 		}
 		SolidCompositionRecord solid = recordSolid(transferred);
 		double solidMass = solid.totalMass(chemistry);
-		double expectedNew = precipitation ? oldMass - solidMass : oldMass + solidMass;
-		if (!massClose(newMass, expectedNew)) throw new BlockedException("Liquid/solid phase-transfer mass did not close");
+		double signedTransfer = precipitation ? -solidMass : solidMass;
+		double representedTransfer = liquidMassChange.toDouble();
+		if (!(Double.isFinite(representedTransfer) && representedTransfer * Math.signum(signedTransfer) > 0.0)
+				|| !massClose(representedTransfer, signedTransfer)) return null;
 		return new Plan(precipitation ? magnitude : -magnitude, precipitation ? solidSvq : -solidSvq,
 				precipitation ? solidMass : -solidMass, solid, List.of(updates), false);
 	}

@@ -127,6 +127,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	static void coherentPhaseInventoryAndExactBatchPlanning() {
 		condensedIntegerCarrierSearch();
 		condensedCandidatesPreserveActualThermalOwners();
+		condensedTransfersRequireActualMassChange();
 		condensedPhaseUsesActualRegionalCarrierBudget();
 		coherentExternalMergeIsPreflightedAndAudited();
 		ThermalMaterialDefinition lower = new ThermalMaterialDefinition("test:thermal/lower",
@@ -336,6 +337,49 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		require(SolidVolume.cellVolumeSvqAtMost(tailedMarkerVolume) == markerSvq
 				&& SolidVolume.cellVolumeSvqAtLeast(tailedMarkerVolume) == markerSvq + 1L,
 				"phase SVQ bounds quantized away an authoritative float marker-volume tail");
+	}
+
+	static void condensedTransfersRequireActualMassChange() {
+		for (int batchMass : new int[] {1, 200, 256}) {
+			var liquid = FluidMaterial.withSurfaceTension("test:mass/water", 1.0E20F, "test:mass/miscible", 0, 90);
+			var liquids = new FluidMaterialRegistry(List.of(liquid));
+			var segments = List.of(new ThermalMaterialDefinition.CaloricSegment(150, 800, 1));
+			var water = new ThermalMaterialDefinition("test:mass/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					liquid.id(), 300, 0, 0, segments);
+			var ice = new ThermalMaterialDefinition("test:mass/ice", ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID,
+					"test:mass/ice", 300, -1.0E20 / batchMass, 0, segments);
+			var transition = new ThermalPhaseTransition("test:mass/freeze", ice.id(), water.id(), 300, 1, 1,
+					ExactRational.of(batchMass), ThermalPhaseTransition.InterfaceRequirement.NONE, 10000, 3000000);
+			var domain = new FluidDomain(3, 3, 3,
+					new FluidSolverConfig(.5F, 1.0E20F, 0, .05F, 100, 1.0E-5F, .45F, .002F, 0), 64);
+			domain.setVolume(1, 1, 1, .125F);
+			domain.setMarkerMaterial(0, liquids, 0);
+			domain.bindThermal(new ThermalRegistry(List.of(water, ice), List.of(), List.of(transition), "", ""), liquids, 200);
+			var before = domain.captureAuthoritativeState();
+			var revision = domain.thermalState.thermalRevision();
+			var energy = domain.exactInternalEnergy();
+			double sourceMass = domain.unitScale.kilograms(domain.totalMass());
+			double sourceSolverMass = domain.totalMass();
+			require(Math.ulp(sourceMass) == 256, "mass-quantization fixture did not reach the intended actual kg spacing");
+			var stats = domain.stepInertPhaseChangeOnly(1);
+			if (batchMass < 256) {
+				var after = domain.captureAuthoritativeState();
+				require(stats.operations() == 0 && domain.totalCoherentSolidVolumeSvq() == 0
+						&& domain.totalMass() == sourceSolverMass
+						&& domain.totalVolumeExact() == .125 && domain.exactInternalEnergy().equals(energy)
+						&& domain.thermalState.thermalRevision().equals(revision)
+						&& after.thermal().audit().equals(before.thermal().audit())
+						&& java.util.Arrays.equals(after.thermal().copyInternalEnergy(), before.thermal().copyInternalEnergy()),
+						"unrepresentable freeze transferred requested kg without debiting the actual source: " + batchMass);
+			} else {
+				require(stats.operations() == 1 && domain.totalCoherentMass() == 256
+						&& SignedDyadic.of(domain.unitScale.kilograms(domain.totalMass()))
+								.add(SignedDyadic.of(domain.totalCoherentMass())).equals(SignedDyadic.of(sourceMass))
+						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+						"representable transferred kg must retain the normal phase path");
+				FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			}
+		}
 	}
 
 	static void condensedCandidatesPreserveActualThermalOwners() {
