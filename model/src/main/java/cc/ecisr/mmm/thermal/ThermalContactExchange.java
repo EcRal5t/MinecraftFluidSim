@@ -1,6 +1,5 @@
 package cc.ecisr.mmm.thermal;
 
-import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 /** Conservative backward-Euler heat transfer through one finite conductance, in EU/(s K). */
@@ -21,22 +20,17 @@ public final class ThermalContactExchange {
 			if (material == null || !(Double.isFinite(massKilograms) && massKilograms > 0.0)
 					|| !Double.isFinite(baseEnergyEu) || !Double.isFinite(internalEnergyEu))
 				throw new IllegalArgumentException("Thermal contact carrier inventory is invalid");
-			double t = material.temperatureForSensibleSpecificEnergy((internalEnergyEu - baseEnergyEu) / massKilograms);
-			requireCapacity(massKilograms * material.specificHeatAt(t));
+			ThermalCaloricInversion.owner(material, massKilograms, internalEnergyEu, baseEnergyEu);
 		}
 		@Override public double temperatureK() {
-			return material.temperatureForSensibleSpecificEnergy((internalEnergyEu - baseEnergyEu) / massKilograms);
+			return ThermalCaloricInversion.owner(material, massKilograms, internalEnergyEu, baseEnergyEu).temperatureK();
 		}
 		@Override public double heatCapacityEuPerK() { return massKilograms * material.specificHeatAt(temperatureK()); }
 		@Override public double energyChangeToTemperature(double target) {
 			return energyChangeBetween(material, massKilograms, temperatureK(), target);
 		}
 		@Override public ThermalStateFunction.State stateAfterEnergyChange(double change) {
-			double temperature = material.temperatureForSensibleSpecificEnergy(
-					(internalEnergyEu + change - baseEnergyEu) / massKilograms);
-			double capacity = massKilograms * material.specificHeatAt(temperature);
-			requireCapacity(capacity);
-			return new ThermalStateFunction.State(temperature, capacity);
+			return ThermalCaloricInversion.owner(material, massKilograms, internalEnergyEu + change, baseEnergyEu);
 		}
 	}
 
@@ -75,8 +69,11 @@ public final class ThermalContactExchange {
 		return target < from ? -amount : amount;
 	}
 
-	/** Wide endpoint arithmetic is only needed when a caloric bound exceeds binary64. */
+	/** Exact original caloric integral, including the material's continuous endpoint extensions. */
 	static SignedDyadic exactEnergyChangeBetween(ThermalMaterialDefinition material, double mass, double from, double target) {
+		return exactEnergyChangeBetween(material, SignedDyadic.of(mass), from, target);
+	}
+	static SignedDyadic exactEnergyChangeBetween(ThermalMaterialDefinition material, SignedDyadic mass, double from, double target) {
 		material.specificHeatAt(from); material.specificHeatAt(target);
 		double low = Math.min(from, target), high = Math.max(from, target);
 		SignedDyadic total = SignedDyadic.ZERO;
@@ -86,16 +83,9 @@ public final class ThermalContactExchange {
 			double a = index == 0 ? low : Math.max(low, segment.minimumTemperatureK());
 			double b = index + 1 == segments.size() ? high : Math.min(high, segment.maximumTemperatureK());
 			if (b > a) total = total.add(SignedDyadic.of(b).subtract(SignedDyadic.of(a))
-					.multiply(SignedDyadic.of(segment.specificHeatEuPerMuK())).multiply(SignedDyadic.of(mass)));
+					.multiply(SignedDyadic.of(segment.specificHeatEuPerMuK())).multiply(mass));
 		}
 		return target < from ? SignedDyadic.ZERO.subtract(total) : total;
-	}
-
-	static double temperatureDifference(SignedDyadic energy, double capacity) {
-		SignedDyadic divisor = SignedDyadic.of(capacity);
-		int shift = energy.exponent() - divisor.exponent();
-		return new ExactRational(shift >= 0 ? energy.significand().shiftLeft(shift) : energy.significand(),
-				shift >= 0 ? divisor.significand() : divisor.significand().shiftLeft(-shift)).toDouble();
 	}
 
 	/** Returns signed energy entering first; finite second receives the opposite amount. No inventory is edited. */

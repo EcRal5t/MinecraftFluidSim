@@ -82,7 +82,7 @@ public final class ThermalCarrierTransport {
 				}
 			} else {
 				if (step == 0) System.arraycopy(initialT, 0, temperature, 0, n);
-				else CpuWorkBatch.run(n, (from, until) -> { for (int p = from; p < until; p++) { temperature[p] = materials[p].temperatureForSensibleSpecificEnergy((energy[p] - base[p]) / mass[p]); } });
+				else CpuWorkBatch.run(n, (from, until) -> { for (int p = from; p < until; p++) { temperature[p] = ThermalCaloricInversion.owner(materials[p], mass[p], energy[p], base[p]).temperatureK(); } });
 				Arrays.fill(delta, 0);
 				for (int i = 0; i < graph.size(); i++) {
 					int first = graph.first[i], second = graph.second[i];

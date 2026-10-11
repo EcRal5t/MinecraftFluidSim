@@ -125,6 +125,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	}
 
 	static void coherentPhaseInventoryAndExactBatchPlanning() {
+		coherentExternalMergeIsPreflightedAndAudited();
 		ThermalMaterialDefinition lower = new ThermalMaterialDefinition("test:thermal/lower",
 				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "test:solid", 300.0, 0.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
@@ -332,6 +333,101 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		require(SolidVolume.cellVolumeSvqAtMost(tailedMarkerVolume) == markerSvq
 				&& SolidVolume.cellVolumeSvqAtLeast(tailedMarkerVolume) == markerSvq + 1L,
 				"phase SVQ bounds quantized away an authoritative float marker-volume tail");
+	}
+
+	static void coherentExternalMergeIsPreflightedAndAudited() {
+		var components = List.of(new CoherentPhaseStore.Component("test:a", 1));
+		for (double residual : new double[]{Double.NaN, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY}) {
+			boolean rejected = false;
+			try { new CoherentPhaseStore.Composition(components, Double.doubleToRawLongBits(residual)); }
+			catch (IllegalArgumentException expected) { rejected = true; }
+			require(rejected, "coherent composition accepted a non-finite residual before record field initialization");
+		}
+		for (double residual : new double[]{0.0, -0.0, Double.MIN_VALUE, -Double.MIN_VALUE, Double.MAX_VALUE, -1.25}) {
+			long raw = Double.doubleToRawLongBits(residual);
+			var composition = new CoherentPhaseStore.Composition(components, raw);
+			require(composition.massResidualBits() == raw && Double.doubleToRawLongBits(composition.massResidual()) == raw,
+					"coherent composition changed finite residual raw bits");
+		}
+		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		var chemistry = new ChemicalRegistry(List.of(
+				new cc.ecisr.mmm.chemistry.ChemicalSpecies("test:a", Map.of("A", 1), 0, ExactRational.ONE, 0),
+				new cc.ecisr.mmm.chemistry.ChemicalSpecies("test:b", Map.of("A", 1), 0, ExactRational.ONE, 0)),
+				List.of(new cc.ecisr.mmm.chemistry.ChemicalPhaseDefinition("test:water", BuiltinFluidMaterials.WATER.id(),
+						List.of("test:a", "test:b"), Map.of("test:a", ExactRational.ONE), false)), List.of(
+				new cc.ecisr.mmm.chemistry.ChemicalReaction("test:reaction", cc.ecisr.mmm.chemistry.ChemicalReaction.Kind.INSTANTANEOUS,
+						"test:water", Map.of("test:a", 1), Map.of("test:b", 1), ExactRational.ZERO)));
+		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
+				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		String phase = "test:thermal/coherent_merge";
+		for (int compositionCase = 0; compositionCase < 3; compositionCase++) {
+			var water = new ThermalMaterialDefinition("test:thermal/merge_water",
+					ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
+					300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1_000, 1)));
+			var solid = new ThermalMaterialDefinition(phase, ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID,
+					"test:solid", 300, 1e18, 0, water.caloricSegments());
+			var offsets = List.of(new ThermalSpeciesOffset("test:offset/a", "test:a", phase, ExactRational.ZERO),
+					new ThermalSpeciesOffset("test:offset/b", "test:b", phase, ExactRational.ZERO));
+			var registry = new ThermalRegistry(List.of(water, solid), offsets, List.of(), chemistry.fingerprint(), "");
+			var domain = new FluidDomain(3, 3, 3, config, 216);
+			domain.bindMaterialRegistry(liquids); domain.bindChemistry(chemistry);
+			domain.bindThermal(registry, liquids, 300);
+			double firstMass = 0.24999999999999914, secondMass = 1.2999999999999952;
+			CoherentPhaseStore.Composition first = compositionCase == 0 ? null : new CoherentPhaseStore.Composition(
+					List.of(new CoherentPhaseStore.Component("test:a", 1)), Double.doubleToRawLongBits(firstMass - 1e-9));
+			CoherentPhaseStore.Composition second = compositionCase == 0 ? null : new CoherentPhaseStore.Composition(
+					List.of(new CoherentPhaseStore.Component(compositionCase == 1 ? "test:a" : "test:b", 1)),
+					Double.doubleToRawLongBits(secondMass - 1e-9));
+			domain.addCoherentPhaseExternal(1, 1, 1, phase, 3, firstMass, first, 2.4999999999999907e17);
+			var before = domain.thermalState.coherentPhases().snapshot();
+			var revision = domain.thermalState.thermalRevision();
+			var audit = domain.thermalAudit();
+			boolean rejected = false;
+			try { domain.addCoherentPhaseExternal(1, 1, 1, phase, 3, secondMass, second, 1.299999999999995e18); }
+			catch (ThermalStateFunction.EnergyOutsideValidityException expected) { rejected = true; }
+			require(rejected && domain.thermalState.coherentPhases().snapshot().equals(before)
+					&& domain.thermalState.thermalRevision().equals(revision) && domain.thermalAudit().equals(audit)
+					&& domain.exactInternalEnergy().equals(audit.expectedInventory()),
+					"coherent merge committed an invalid final thermal owner or changed a rejected candidate");
+
+			// A valid merge must book its raw storage loss, including chemical groups.
+			var ordinary = new ThermalRegistry(List.of(water, new ThermalMaterialDefinition(phase,
+					ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "test:solid", 300, 0, 0,
+					water.caloricSegments())), List.of(
+					new ThermalSpeciesOffset("test:offset/a", "test:a", phase, ExactRational.of(1_000_000_000)),
+					new ThermalSpeciesOffset("test:offset/b", "test:b", phase, ExactRational.of(-1_000_000_000))),
+					List.of(), chemistry.fingerprint(), "");
+			var accepted = new FluidDomain(3, 3, 3, config, 216);
+			accepted.bindMaterialRegistry(liquids); accepted.bindChemistry(chemistry);
+			accepted.bindThermal(ordinary, liquids, 300);
+			accepted.addCoherentPhaseExternal(1, 1, 1, phase, 3, firstMass, first, 128);
+			double additionEnergy = compositionCase == 2 ? -1 + 1e-15 : 1e-15;
+			accepted.addCoherentPhaseExternal(1, 1, 1, phase, 3, secondMass, second, additionEnergy);
+			var groups = accepted.thermalState.coherentPhases().snapshot();
+			var importedEnergy = SignedDyadic.of(128).add(SignedDyadic.of(additionEnergy));
+			require(groups.size() == 1 && groups.getFirst().internalEnergy() == 128 + additionEnergy
+					&& groups.getFirst().mass() == firstMass + secondMass && groups.getFirst().occupiedVolumeSvq() == 6
+					&& (compositionCase == 0 ? groups.getFirst().composition() == null
+							: groups.getFirst().composition().stableAmounts().equals(compositionCase == 1
+									? Map.of("test:a", 2L) : Map.of("test:a", 1L, "test:b", 1L)))
+					&& accepted.thermalAudit().externalSource().equals(importedEnergy)
+					&& accepted.thermalAudit().roundoffResidual().equals(
+							SignedDyadic.of(groups.getFirst().internalEnergy()).subtract(importedEnergy))
+					&& accepted.exactInternalEnergy().equals(accepted.thermalAudit().expectedInventory()),
+					"coherent merge raw energy roundoff was omitted from its audit");
+			var restored = new FluidDomain(3, 3, 3, config, 216);
+			restored.bindMaterialRegistry(liquids); restored.bindChemistry(chemistry);
+			restored.bindThermal(ordinary, liquids, 300);
+			restored.thermalState.restoreThermalCoherent(groups);
+			restored.thermalState.restoreAuditLedger(accepted.thermalAudit());
+			var group = restored.thermalState.coherentPhases().group(0);
+			require(restored.thermalState.coherentPhases().snapshot().equals(groups)
+					&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory())
+					&& restored.thermalState.stateFunction().stateForInventory(List.of(new ThermalStateFunction.InventoryPortion(
+							ordinary.materialHandle(phase), group.mass(), group.composition() == null
+							? Map.of() : group.composition().stableAmounts())), group.internalEnergy()).temperatureK() > 0,
+					"valid coherent capture/restore lost its exact energy or positive-temperature state");
+		}
 	}
 
 	static void compositionAndGranularPhaseChangeConservesJointTruth() {

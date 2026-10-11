@@ -269,8 +269,8 @@ public final class GranularEnergyState {
 		int thermalHandle = materialByGranularHandle[granularMaterial];
 		ThermalMaterialDefinition material = registry.material(thermalHandle);
 		double physicalMass = mass;
-		double energy = stateFunction.baseEnergy(thermalHandle, physicalMass, markers.solidComposition(composition))
-				+ physicalMass * material.sensibleSpecificEnergyAt(temperatureK);
+		double energy = ThermalCaloricInversion.energyAt(material, physicalMass,
+				stateFunction.baseEnergy(thermalHandle, physicalMass, markers.solidComposition(composition)), temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Granular modeled energy is invalid");
 		return energy;
 	}
@@ -293,8 +293,19 @@ public final class GranularEnergyState {
 		}
 		Map<String, Long> composition = group.composition() == null ? Map.of() : group.composition().stableAmounts();
 		stateFunction.stateForInternalEnergy(material, group.mass(), composition, group.internalEnergy());
+		CoherentPhaseStore.Group candidate = coherentPhases.previewAdd(group);
+		Map<String, Long> finalComposition = candidate.composition() == null
+				? Map.of() : candidate.composition().stableAmounts();
+		stateFunction.stateForInventory(List.of(new ThermalStateFunction.InventoryPortion(
+				material, candidate.mass(), finalComposition)), candidate.internalEnergy());
+		int previous = coherentPhases.find(group.cell(), group.phaseId());
+		SignedDyadic oldEnergy = previous < 0 ? SignedDyadic.ZERO
+				: SignedDyadic.of(coherentPhases.group(previous).internalEnergy());
+		SignedDyadic source = SignedDyadic.of(group.internalEnergy());
+		SignedDyadic roundoff = SignedDyadic.of(candidate.internalEnergy()).subtract(oldEnergy).subtract(source);
+		ThermalAuditLedger auditAfter = audit.ledger().withExternalSourceEnergy(source).withRoundoff(roundoff);
 		coherentPhases.add(group);
-		audit.update(ledger -> ledger.withExternalSourceEnergy(SignedDyadic.of(group.internalEnergy())));
+		audit.replace(auditAfter);
 		revision++;
 	}
 

@@ -67,8 +67,7 @@ public final class LiquidEnergyColumn {
 			double physicalMass = unitScale.kilograms(markers.mass(marker));
 			ChemicalMixtureRecord mixture = markers.mixture(marker);
 			double base = baseEnergy(thermalHandle, physicalMass, mixture, markers.chemicalRegistry());
-			internalEnergy[marker] = base + physicalMass
-					* registry.material(thermalHandle).sensibleSpecificEnergyAt(insertionTemperatureK);
+			internalEnergy[marker] = ThermalCaloricInversion.energyAt(registry.material(thermalHandle), physicalMass, base, insertionTemperatureK);
 			if (!Double.isFinite(internalEnergy[marker])) {
 				throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
 			}
@@ -144,9 +143,8 @@ public final class LiquidEnergyColumn {
 
 	public double temperature(int marker, ThermalCarrierContext markers) {
 		ThermalMaterialDefinition material = material(marker, markers);
-		double sensible = (internalEnergy[marker] - baseEnergy(marker, markers))
-				/ unitScale.kilograms(markers.mass(marker));
-		return material.temperatureForSensibleSpecificEnergy(sensible);
+		return ThermalCaloricInversion.owner(material, unitScale.kilograms(markers.mass(marker)),
+				internalEnergy[marker], baseEnergy(marker, markers)).temperatureK();
 	}
 
 	/** Prepares immutable caloric data for a prospective conservative liquid inventory. */
@@ -171,7 +169,7 @@ public final class LiquidEnergyColumn {
 			material = registry.material(handle); base = baseEnergy(handle, mass, mixture, chemistry);
 		}
 		public double energy(double temperature) {
-			double value = base + mass * material.sensibleSpecificEnergyAt(temperature);
+			double value = ThermalCaloricInversion.energyAt(material, mass, base, temperature);
 			if (!Double.isFinite(value)) throw new IllegalArgumentException("Prospective liquid energy is invalid");
 			return value;
 		}
@@ -182,15 +180,11 @@ public final class LiquidEnergyColumn {
 		public double temperature(SignedDyadic energy) {
 			if (energy == null || !Double.isFinite(energy.toDouble()))
 				throw new IllegalArgumentException("Prospective liquid energy is invalid");
-			return material.temperatureForSensibleSpecificEnergy(energy.subtract(SignedDyadic.of(base)).toDouble() / mass);
+			return ThermalCaloricInversion.single(material, mass, energy.subtract(SignedDyadic.of(base))).temperatureK();
 		}
 		public double roundoff(double temperature) {
-			double sensible = material.sensibleSpecificEnergyAt(temperature), term = mass * sensible;
 			return stateFunction.baseEnergyRoundoff(handle, mass, mixture, chemistry)
-					+ material.caloricSegments().size() * mass * Math.ulp(sensible)
-					+ Math.ulp(term) + Math.ulp(base + term)
-					+ Math.ulp(mass) * Math.abs(material.referenceSpecificEnergyEuPerMu() + sensible)
-					+ mass * material.specificHeatAt(temperature) * Math.ulp(temperature);
+					+ ThermalCaloricInversion.modeledRoundoff(material, mass, base, temperature);
 		}
 	}
 
@@ -201,8 +195,8 @@ public final class LiquidEnergyColumn {
 		double physicalMass = unitScale.kilograms(mass);
 		if (!(Double.isFinite(physicalMass) && physicalMass > 0 && Double.isFinite(energy)))
 			throw new IllegalArgumentException("Prospective liquid energy or mass is invalid");
-		return registry.material(handle).temperatureForSensibleSpecificEnergy(
-				(energy - baseEnergy(handle, physicalMass, mixture, chemistry)) / physicalMass);
+		return ThermalCaloricInversion.owner(registry.material(handle), physicalMass, energy,
+				baseEnergy(handle, physicalMass, mixture, chemistry)).temperatureK();
 	}
 
 	/** Roundoff in a prospective caloric evaluation, including temperature and mass storage. */
@@ -211,13 +205,9 @@ public final class LiquidEnergyColumn {
 		int handle = thermalMaterialHandleForFluid(fluidMaterialHandle);
 		double physicalMass = unitScale.kilograms(mass);
 		var material = registry.material(handle);
-		double sensible = material.sensibleSpecificEnergyAt(temperature), term = physicalMass * sensible;
 		double base = baseEnergy(handle, physicalMass, mixture, chemistry);
 		return stateFunction.baseEnergyRoundoff(handle, physicalMass, mixture, chemistry)
-				+ material.caloricSegments().size() * physicalMass * Math.ulp(sensible)
-				+ Math.ulp(term) + Math.ulp(base + term)
-				+ Math.ulp(physicalMass) * Math.abs(material.referenceSpecificEnergyEuPerMu() + sensible)
-				+ physicalMass * material.specificHeatAt(temperature) * Math.ulp(temperature);
+				+ ThermalCaloricInversion.modeledRoundoff(material, physicalMass, base, temperature);
 	}
 
 	public void requireReactionState(
@@ -228,11 +218,7 @@ public final class LiquidEnergyColumn {
 		double physicalMass = unitScale.kilograms(candidateMass);
 		double base = baseEnergy(
 				thermalHandle, physicalMass, candidateMixture, markers.chemicalRegistry());
-		double sensible = (internalEnergy[marker] - base) / physicalMass;
-		if (sensible < material.sensibleSpecificEnergyAt(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) {
-			throw new ThermalStateFunction.EnergyOutsideValidityException();
-		}
-		material.temperatureForSensibleSpecificEnergy(sensible);
+		ThermalCaloricInversion.owner(material, physicalMass, internalEnergy[marker], base);
 	}
 
 	void addExternalMarker(int marker, ThermalCarrierContext markers) {
@@ -357,7 +343,7 @@ public final class LiquidEnergyColumn {
 		ThermalMaterialDefinition material = registry.material(thermalHandle);
 		double physicalMass = unitScale.kilograms(mass);
 		double base = baseEnergy(thermalHandle, physicalMass, mixture, chemicalRegistry);
-		double energy = base + physicalMass * material.sensibleSpecificEnergyAt(temperatureK);
+		double energy = ThermalCaloricInversion.energyAt(material, physicalMass, base, temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
 		return energy;
 	}

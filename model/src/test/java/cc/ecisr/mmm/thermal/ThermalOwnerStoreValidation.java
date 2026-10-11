@@ -31,6 +31,7 @@ public final class ThermalOwnerStoreValidation {
 		exactAggregateEnergySurvivesCaloricHandoffs();
 		caloricKnotsRetainTheirOwnEnergyScale();
 		caloricBoundsKeepFiniteStates();
+		caloricEndpointsAndPortionsPreserveFiniteStates();
 		coolingInversionRetainsEnergyScale();
 	}
 
@@ -315,6 +316,58 @@ public final class ThermalOwnerStoreValidation {
 			});
 			require(grid.temperature(0) == 500, "Wide opposite caloric cell bounds lost their finite state");
 		}
+	}
+
+	private static void caloricEndpointsAndPortionsPreserveFiniteStates() {
+		for (double mass : new double[] {1, .7}) for (double reference : new double[] {0, -1e18, 1e18}) {
+			var material = new ThermalMaterialDefinition("test:handoff/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"test:handoff/a", 1200, reference, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(100, 1000, 1),
+					new ThermalMaterialDefinition.CaloricSegment(1000, 1500, 1e16)));
+			var function = new ThermalStateFunction(new ThermalRegistry(List.of(material)));
+			double raw = function.internalEnergyAtTemperature(0, mass, Map.of(), 500), base = function.baseEnergy(0, mass, Map.of());
+			var exactMass = new java.math.BigDecimal(mass);
+			double expected = new java.math.BigDecimal(raw).subtract(new java.math.BigDecimal(base))
+					.add(new java.math.BigDecimal(2e18).multiply(exactMass)).divide(exactMass, java.math.MathContext.DECIMAL128)
+					.add(new java.math.BigDecimal(1000)).doubleValue();
+			requireCaloricHandoff(material, mass, raw, expected);
+		}
+		for (double mass : new double[] {1, 1e-100}) {
+			var material = new ThermalMaterialDefinition("test:handoff/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"test:handoff/a", mass == 1 ? 1 : 300, mass == 1 ? -1.7e308 : 0, 0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1e308)));
+			requireCaloricHandoff(material, mass, mass == 1 ? 1.7e308 : 2e210, mass == 1 ? 4.4 : 500);
+		}
+	}
+
+	private static void requireCaloricHandoff(ThermalMaterialDefinition material, double mass, double raw, double expected) {
+		var device = new ThermalMaterialDefinition("test:handoff/b", ThermalMaterialDefinition.CarrierKind.DEVICE,
+				"test:handoff/b", material.referenceTemperatureK(), material.referenceSpecificEnergyEuPerMu(), 0, material.caloricSegments());
+		var registry = new ThermalRegistry(List.of(material, device)); var function = new ThermalStateFunction(registry);
+		var context = new ThermalCarrierContext() {
+			public int markerCount() { return 1; } public int cell(int p) { return 0; } public int fluidMaterialHandle(int p) { return 0; }
+			public double mass(int p) { return mass * 8; } public double volume(int p) { return .5; }
+			public ChemicalMixtureRecord mixture(int p) { return null; } public ChemicalRegistry chemicalRegistry() { return null; }
+			public void observationSupport(int p, SupportConsumer consumer) { consumer.accept(0, .1); consumer.accept(1, .9); }
+		};
+		var state = ThermalDomainState.restoreTarget(registry, new int[] {0}, new int[0], material.referenceTemperatureK(),
+				2, 1, 1, 2, .5F, context, null, 1, new double[] {raw});
+		state.preparePhaseScan(context); state.prepareSpatialObservation(context); double tolerance = 4 * Math.ulp(expected);
+		require(Math.abs(state.temperature(0, context) - expected) <= tolerance
+				&& Math.abs(state.phaseScanTemperatureInCell(0) - expected) <= tolerance
+				&& Math.abs(state.observeTemperatureInCell(0, context) - expected) <= tolerance
+				&& Math.abs(state.spatialTemperatureInCell(0) - expected) <= tolerance
+				&& Math.abs(state.spatialTemperatureInCell(1) - expected) <= tolerance,
+				"Exact caloric endpoint or shared spatial mass/energy coefficient lost a finite owner temperature");
+		double actual = state.temperature(0, context), forward = function.internalEnergyAtTemperature(0, mass, Map.of(), actual);
+		require(Double.isFinite(forward) && Math.abs(forward - raw) <= 4 * Math.ulp(raw), "Finite final owner energy was lost to an intermediate overflow");
+		var caloric = state.liquid().caloricInventory(0, mass * 8, null, null);
+		require(Math.abs(caloric.temperature(SignedDyadic.of(raw)) - actual) <= tolerance
+				&& Double.isFinite(caloric.energy(actual)) && Double.isFinite(caloric.roundoff(actual)),
+				"Prospective liquid caloric state or roundoff retained an overflowing specific intermediate");
+		var contacts = state.finiteDeviceContacts(List.of(new FiniteDeviceExchangeCoordinator.CellContactRequest(0, 0, 1)), context);
+		var body = new FiniteThermalBodyState(0, registry.fingerprint(), device.id(), mass, raw);
+		var exchange = FiniteThermalExchange.plan(registry, body, contacts, .01, 8);
+		require(!exchange.changed() && exchange.contacts().getFirst().internalEnergyDeltaEu() == 0, "Equivalent caloric paths created equal-temperature device heat flow");
 	}
 
 	private static void coolingInversionRetainsEnergyScale() {

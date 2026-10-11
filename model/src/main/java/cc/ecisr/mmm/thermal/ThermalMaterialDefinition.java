@@ -117,53 +117,8 @@ public record ThermalMaterialDefinition(
 
 	/** Closed-form inverse of the continuous piecewise-linear caloric model. */
 	public double temperatureForSensibleSpecificEnergy(double sensibleSpecificEnergy) {
-		if (!Double.isFinite(sensibleSpecificEnergy)) {
-			throw new IllegalArgumentException("Thermal sensible energy must be finite");
-		}
-		if (sensibleSpecificEnergy == 0.0) return referenceTemperatureK;
-		if (sensibleSpecificEnergy > 0.0) {
-			double remaining = sensibleSpecificEnergy;
-			double cursor = referenceTemperatureK;
-			for (int index = 0; index < caloricSegments.size(); index++) {
-				CaloricSegment segment = caloricSegments.get(index);
-				if (segment.maximumTemperatureK() <= cursor) continue;
-				double start = Math.max(cursor, segment.minimumTemperatureK());
-				double capacity = (segment.maximumTemperatureK() - start) * segment.specificHeatEuPerMuK();
-				if (remaining <= capacity) return start + remaining / segment.specificHeatEuPerMuK();
-				remaining -= capacity;
-				cursor = segment.maximumTemperatureK();
-			}
-			double temperature = cursor
-					+ remaining / caloricSegments.getLast().specificHeatEuPerMuK();
-			if (Double.isFinite(temperature)) return temperature;
-		} else {
-			double remaining = -sensibleSpecificEnergy;
-			double cursor = referenceTemperatureK;
-			for (int index = caloricSegments.size() - 1; index >= 0; index--) {
-				CaloricSegment segment = caloricSegments.get(index);
-				if (segment.minimumTemperatureK() >= cursor) continue;
-				double end = Math.min(cursor, segment.maximumTemperatureK());
-				double capacity = (end - segment.minimumTemperatureK()) * segment.specificHeatEuPerMuK();
-				if (remaining <= capacity) {
-					// Every finite remaining energy lies inside an overflowing segment capacity.
-					if (Double.isInfinite(capacity)) return end - remaining / segment.specificHeatEuPerMuK();
-					return remaining <= capacity - remaining ? end - remaining / segment.specificHeatEuPerMuK()
-							: segment.minimumTemperatureK() + (capacity - remaining) / segment.specificHeatEuPerMuK();
-				}
-				remaining -= capacity;
-				cursor = segment.minimumTemperatureK();
-			}
-			double cv = caloricSegments.getFirst().specificHeatEuPerMuK();
-			double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-			double capacity = (cursor - minimum) * cv;
-			double temperature = remaining <= capacity - remaining || Double.isInfinite(capacity)
-					? cursor - remaining / cv : minimum + (capacity - remaining) / cv;
-			double tolerance = Math.max(Math.ulp(cursor) * 16.0, Math.ulp(temperature) * 16.0);
-			if (temperature >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K - tolerance) {
-				return Math.max(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, temperature);
-			}
-		}
-		throw new IllegalArgumentException("Internal energy is outside the positive-temperature thermal domain");
+		if (!Double.isFinite(sensibleSpecificEnergy)) throw new IllegalArgumentException("Thermal sensible energy must be finite");
+		return ThermalCaloricInversion.single(this, 1, cc.ecisr.mmm.units.SignedDyadic.of(sensibleSpecificEnergy)).temperatureK();
 	}
 
 	private void requireIntrinsicTemperature(double temperatureK) {

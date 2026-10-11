@@ -39,8 +39,7 @@ public final class ThermalStateFunction {
 			int materialHandle, double massMu, Map<String, Long> speciesQuanta, double temperatureK
 	) {
 		ThermalMaterialDefinition material = registry.material(materialHandle);
-		double energy = baseEnergy(materialHandle, massMu, speciesQuanta)
-				+ massMu * material.sensibleSpecificEnergyAt(temperatureK);
+		double energy = ThermalCaloricInversion.energyAt(material, massMu, baseEnergy(materialHandle, massMu, speciesQuanta), temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal internal energy is not finite");
 		return energy;
 	}
@@ -50,8 +49,7 @@ public final class ThermalStateFunction {
 			ChemicalRegistry chemicalRegistry, double temperatureK
 	) {
 		ThermalMaterialDefinition material = registry.material(materialHandle);
-		double energy = baseEnergy(materialHandle, massMu, mixture, chemicalRegistry)
-				+ massMu * material.sensibleSpecificEnergyAt(temperatureK);
+		double energy = ThermalCaloricInversion.energyAt(material, massMu, baseEnergy(materialHandle, massMu, mixture, chemicalRegistry), temperatureK);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal internal energy is not finite");
 		return energy;
 	}
@@ -60,14 +58,8 @@ public final class ThermalStateFunction {
 			int materialHandle, double massMu, Map<String, Long> speciesQuanta, double internalEnergy
 	) {
 		requireMassEnergy(massMu, internalEnergy);
-		ThermalMaterialDefinition material = registry.material(materialHandle);
-		double sensibleSpecific = (internalEnergy - baseEnergy(materialHandle, massMu, speciesQuanta)) / massMu;
-		double temperature = material.temperatureForSensibleSpecificEnergy(sensibleSpecific);
-		double heatCapacity = massMu * material.specificHeatAt(temperature);
-		if (!(Double.isFinite(heatCapacity) && heatCapacity > 0.0)) {
-			throw new IllegalArgumentException("Thermal heat capacity is invalid");
-		}
-		return new State(temperature, heatCapacity);
+		return ThermalCaloricInversion.owner(registry.material(materialHandle), massMu, internalEnergy,
+				baseEnergy(materialHandle, massMu, speciesQuanta));
 	}
 
 	/** Closed-form common-temperature inversion for a heterogeneous LTE inventory. */
@@ -78,68 +70,16 @@ public final class ThermalStateFunction {
 
 	/** Retains an aggregate's exact energy until its fixed reference terms have been removed. */
 	public State stateForInventory(List<InventoryPortion> portions, SignedDyadic totalEnergy) {
-		if (portions == null || portions.isEmpty()
-				|| portions.size() > ThermalLimits.MAX_THERMAL_CARRIERS_PER_CELL
-				|| totalEnergy == null) {
+		if (portions == null || portions.isEmpty() || portions.size() > ThermalLimits.MAX_THERMAL_CARRIERS_PER_CELL || totalEnergy == null)
 			throw new IllegalArgumentException("Thermal LTE inventory is missing, over budget or non-finite");
-		}
 		SignedDyadic reference = SignedDyadic.ZERO;
 		for (InventoryPortion portion : portions) reference = reference.add(SignedDyadic.of(
 				baseEnergy(portion.materialHandle(), portion.massMu(), portion.speciesQuanta())));
-		double internalEnergy = totalEnergy.subtract(reference).toDouble();
-		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Thermal LTE sensible energy overflow");
-		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-		double minimumEnergy = inventorySensibleEnergy(portions, minimum);
-		double tolerance = Double.isFinite(minimumEnergy) ? energyTolerance(internalEnergy, minimumEnergy) : 0;
-		if (internalEnergy < minimumEnergy - tolerance) {
-			throw new EnergyOutsideValidityException();
-		}
-		if (internalEnergy <= minimumEnergy) return new State(minimum, inventoryHeatCapacity(portions, minimum));
-
-		double cursor = minimum;
-		double cursorEnergy = minimumEnergy;
-		while (true) {
-			double next = Double.POSITIVE_INFINITY;
-			for (InventoryPortion portion : portions) {
-				double referenceTemperature = registry.material(portion.materialHandle()).referenceTemperatureK();
-				if (referenceTemperature > cursor && referenceTemperature < next) next = referenceTemperature;
-				for (ThermalMaterialDefinition.CaloricSegment segment
-						: registry.material(portion.materialHandle()).caloricSegments()) {
-					if (segment.maximumTemperatureK() > cursor && segment.maximumTemperatureK() < next) {
-						next = segment.maximumTemperatureK();
-					}
-				}
-			}
-			if (next == Double.POSITIVE_INFINITY) {
-				double capacity = inventoryHeatCapacity(portions, cursor);
-				double temperature = cursor + (Double.isFinite(cursorEnergy) ? (internalEnergy - cursorEnergy) / capacity
-						: ThermalContactExchange.temperatureDifference(SignedDyadic.of(internalEnergy)
-						.subtract(inventorySensibleEnergyExact(portions, cursor)), capacity));
-				if (!(Double.isFinite(temperature) && temperature >= cursor)) {
-					throw new IllegalArgumentException("Thermal LTE state inversion overflowed");
-				}
-				return new State(temperature, inventoryHeatCapacity(portions, temperature));
-			}
-			// Each endpoint is anchored to the original caloric reference. Accumulating a
-			// large preceding interval can erase the energy of a much smaller adjacent segment.
-			double nextEnergy = inventorySensibleEnergy(portions, next);
-			if (internalEnergy <= nextEnergy) {
-				double capacity = inventoryHeatCapacity(portions, cursor + (next - cursor) * 0.5);
-				double fromLower = internalEnergy - cursorEnergy, fromUpper = nextEnergy - internalEnergy;
-				double temperature;
-				if (Double.isInfinite(fromLower) && Double.isInfinite(fromUpper)) {
-					SignedDyadic lower = SignedDyadic.of(internalEnergy).subtract(inventorySensibleEnergyExact(portions, cursor));
-					SignedDyadic upper = inventorySensibleEnergyExact(portions, next).subtract(SignedDyadic.of(internalEnergy));
-					temperature = lower.compareTo(upper) <= 0 ? cursor + ThermalContactExchange.temperatureDifference(lower, capacity)
-							: next - ThermalContactExchange.temperatureDifference(upper, capacity);
-				} else temperature = fromLower <= fromUpper ? cursor + fromLower / capacity : next - fromUpper / capacity;
-				if (!Double.isFinite(temperature)) throw new IllegalArgumentException("Thermal LTE state inversion overflowed");
-				temperature = Math.max(cursor, Math.min(next, temperature));
-				return new State(temperature, inventoryHeatCapacity(portions, temperature));
-			}
-			cursorEnergy = nextEnergy;
-			cursor = next;
-		}
+		return ThermalCaloricInversion.solve(new ThermalCaloricInversion.Inventory() {
+			public int first() { return 0; } public int next(int item) { return item + 1 < portions.size() ? item + 1 : -1; }
+			public ThermalMaterialDefinition material(int item) { return registry.material(portions.get(item).materialHandle()); }
+			public double mass(int item) { return portions.get(item).massMu(); }
+		}, totalEnergy.subtract(reference));
 	}
 
 	public EquilibriumState equilibriumState(
@@ -252,42 +192,6 @@ public final class ThermalStateFunction {
 			throw new IllegalArgumentException("Thermal carrier mass must be finite and positive");
 		}
 		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Thermal internal energy must be finite");
-	}
-
-	private double inventorySensibleEnergy(List<InventoryPortion> portions, double temperatureK) {
-		SignedDyadic energy = SignedDyadic.ZERO;
-		for (InventoryPortion portion : portions) {
-			var material = registry.material(portion.materialHandle());
-			double value = ThermalContactExchange.energyChangeBetween(material, portion.massMu(), material.referenceTemperatureK(), temperatureK);
-			if (!Double.isFinite(value)) return inventorySensibleEnergyExact(portions, temperatureK).toDouble();
-			energy = energy.add(SignedDyadic.of(value));
-		}
-		return energy.toDouble();
-	}
-
-	private SignedDyadic inventorySensibleEnergyExact(List<InventoryPortion> portions, double temperatureK) {
-		SignedDyadic energy = SignedDyadic.ZERO;
-		for (InventoryPortion portion : portions) {
-			var material = registry.material(portion.materialHandle());
-			energy = energy.add(ThermalContactExchange.exactEnergyChangeBetween(material, portion.massMu(), material.referenceTemperatureK(), temperatureK));
-		}
-		return energy;
-	}
-
-	private double inventoryHeatCapacity(List<InventoryPortion> portions, double temperatureK) {
-		double total = 0.0;
-		for (InventoryPortion portion : portions) total += portion.massMu()
-				* registry.material(portion.materialHandle()).specificHeatAt(temperatureK);
-		if (!(Double.isFinite(total) && total > 0.0)) {
-			throw new IllegalArgumentException("Thermal LTE heat capacity is invalid");
-		}
-		return total;
-	}
-
-	private static double energyTolerance(double... values) {
-		double tolerance = 0.0;
-		for (double value : values) tolerance = Math.max(tolerance, Math.ulp(value) * 16.0);
-		return tolerance;
 	}
 
 	/** Normalizes a chemical mixture into the stable species-amount map used by inventory portions. */

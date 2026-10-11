@@ -29,7 +29,7 @@ public final class CoherentPhaseStore {
 		public Composition {
 			components = List.copyOf(components);
 			if (components.isEmpty() || components.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL
-					|| !Double.isFinite(massResidual())) {
+					|| !Double.isFinite(Double.longBitsToDouble(massResidualBits))) {
 				throw new IllegalArgumentException("Invalid coherent composition");
 			}
 			String previous = null;
