@@ -246,7 +246,7 @@ public final class CarrierMutationValidation {
 			FluidDomain domain = fullCapabilityDomain(registries);
 			domain.setVolume(2, 2, 2, .001F);
 			var actual = domain.exactInternalEnergy();
-			// Both restored ledgers close exactly; only the latter fails during final expectedInventory().
+			// Both ledgers close exactly; the second requires cancellation before a bounded final sum.
 			var ledger = expectedSumOverflow
 					? new cc.ecisr.mmm.thermal.ThermalAuditLedger(huge, zero, huge, actual, zero, zero)
 					: new cc.ecisr.mmm.thermal.ThermalAuditLedger(zero, huge, huge, actual, zero, zero);
@@ -264,13 +264,28 @@ public final class CarrierMutationValidation {
 					() -> domain.tryInsertExactMixture(1, 1, 1, java.util.List.of(new FluidDomain.MaterialPortion(0, .125, 125)), 0, true),
 					() -> domain.tryInsertExactChemical(1, 1, 1, packet, 0, true),
 					() -> domain.addVolumeNearBudgeted(1, 1, 1, .125F, 0),
-					() -> domain.setVolume(2, 2, 2, .5F)));
+					() -> domain.setVolume(3, 3, 3, .5F)));
 			for (Runnable insertion : insertions) {
-				ReplacementState before = replacementState(domain);
-				try { insertion.run(); throw new AssertionError("liquid insertion published before complete audit preflight"); }
-				catch (IllegalArgumentException expected) { }
-				requireUnchanged(domain, before);
+				if (expectedSumOverflow) {
+					int count = domain.particleCount(); insertion.run();
+					require(domain.particleCount() > count && domain.thermalState.auditLedger().expectedInventory().equals(domain.exactInternalEnergy()),
+							"representable final audit was rejected or failed to close actual insertion energy");
+				} else {
+					ReplacementState before = replacementState(domain);
+					try { insertion.run(); throw new AssertionError("liquid insertion published an over-budget source field"); }
+					catch (IllegalArgumentException expected) { }
+					requireUnchanged(domain, before);
+				}
 			}
+		}
+		for (boolean operator : new boolean[]{false, true}) {
+			FluidDomain cleared = fullCapabilityDomain(registries); cleared.setVolume(2, 2, 2, .001F);
+			var initial = cleared.exactInternalEnergy();
+			cleared.thermalState.restoreAuditLedger(new cc.ecisr.mmm.thermal.ThermalAuditLedger(huge, zero, zero, huge.negate(), zero, initial));
+			if (operator) cleared.commitOperatorClear(cleared.planOperatorClear());
+			else cleared.setVolume(2, 2, 2, 0);
+			require(cleared.particleCount() == 0 && cleared.thermalState.auditLedger().expectedInventory().equals(cleared.exactInternalEnergy()),
+					"clear rejected representable final cancellation or lost the exact sink energy");
 		}
 	}
 

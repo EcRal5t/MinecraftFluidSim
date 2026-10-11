@@ -704,7 +704,41 @@ public final class ThermalOwnerStoreValidation {
 				"changed audit must reject a complete batch before inventory mutation");
 	}
 
+	private static void dyadicAuditSumsRetainFinalBudget() {
+		var huge = SignedDyadic.of(1, 40_000);
+		var terms = new SignedDyadic[] {huge, SignedDyadic.of(10), huge.negate(), SignedDyadic.of(-3), SignedDyadic.ZERO, SignedDyadic.ZERO};
+		requireDyadicPermutations(terms, 0, SignedDyadic.of(7));
+		var max = SignedDyadic.of(1, Integer.MAX_VALUE);
+		requireDyadicPermutations(new SignedDyadic[] {max, max, max.negate(), max.negate(), SignedDyadic.of(9), SignedDyadic.ZERO}, 0, SignedDyadic.of(9));
+		int budget = SignedDyadic.MAX_SIGNIFICAND_BITS;
+		var ones = new SignedDyadic(java.math.BigInteger.ONE.shiftLeft(budget).subtract(java.math.BigInteger.ONE), 0);
+		require(SignedDyadic.of(1, budget).subtract(ones).equals(SignedDyadic.of(1))
+				&& SignedDyadic.sum(SignedDyadic.of(1, budget), SignedDyadic.of(-1)).equals(ones),
+				"dyadic budget endpoint lost exact borrowing cancellation");
+		var min = SignedDyadic.of(1, Integer.MIN_VALUE);
+		require(SignedDyadic.sum(min, max, max.negate()).equals(min), "remote cancellation allocated or lost the surviving extreme exponent");
+		for (Runnable invalid : List.<Runnable>of(
+				() -> min.add(max), () -> SignedDyadic.sum(min, max),
+				() -> SignedDyadic.sum(SignedDyadic.of(1, budget + 1), SignedDyadic.of(-1)),
+				() -> SignedDyadic.sum(max, max))) {
+			try { invalid.run(); throw new AssertionError("unrepresentable final dyadic sum was accepted"); }
+			catch (IllegalArgumentException | ArithmeticException expected) { }
+		}
+	}
+
+	private static void requireDyadicPermutations(SignedDyadic[] values, int offset, SignedDyadic expected) {
+		if (offset == values.length) {
+			require(SignedDyadic.sum(values).equals(expected), "dyadic final sum depends on field order"); return;
+		}
+		for (int i = offset; i < values.length; i++) {
+			var old = values[offset]; values[offset] = values[i]; values[i] = old;
+			requireDyadicPermutations(values, offset + 1, expected);
+			old = values[offset]; values[offset] = values[i]; values[i] = old;
+		}
+	}
+
 	private static void dyadicConversionRoundsInFinalBinary64Unit() {
+		dyadicAuditSumsRetainFinalBudget();
 		require(SignedDyadic.of(0.1).multiply(SignedDyadic.of(-3.0)).equals(SignedDyadic.of(0.1).negate()
 				.add(SignedDyadic.of(0.1).negate()).add(SignedDyadic.of(0.1).negate()))
 				&& SignedDyadic.of(Double.MIN_VALUE).multiply(SignedDyadic.of(1, 1074)).equals(SignedDyadic.of(1.0))

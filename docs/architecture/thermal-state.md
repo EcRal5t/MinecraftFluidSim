@@ -233,6 +233,8 @@ dt_stable = min_carrier(0.5 * C_min_carrier / sum_contacts G)
 
 `SignedDyadic` 保存规范化的整数尾数和二进制指数。小尾数使用 signed long 精确相加、比较与单位转换；溢出或跨越机器字宽时切换到有界 `BigInteger`。需要写入 codec 时按需生成相同的规范整数表示，相等判定、舍入结果和持久格式共用这一数学值。
 
+热账本六项的精确和与字段求值顺序无关，相消后的最终规范值接受尾数预算与指数范围校验。相交或相邻的二进制区间先做精确合并；不可表示的分离指数项在移位分配前拒绝，临时位宽随输入项的尾数位数有界。
+
 批量求和按 binary64 固有的 2,046 个 dyadic exponent 分桶，每桶以有符号 128-bit 两字累加后只做一次 `BigInteger` 合并；该算法与逐项精确相加二进制等价，覆盖所有载体审计。
 
 内置 `mmm:air` 按 [NIST 干空气组成](https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=921756)中的 N₂/O₂/Ar（CO₂ 在 registry 中是独立 component）以及 [N₂](https://webbook.nist.gov/cgi/cbook.cgi?ID=7727-37-9&cTG=on)、[O₂](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7782447&Mask=1001&Table=on&Type=JANAFG)、[Ar](https://webbook.nist.gov/cgi/cbook.cgi?ID=C7440371&Mask=11) 的 caloric 数据，在冻结标准态由理想气体关系得到 `rho = 1.2038886846941566 kg/m³`，并把 `Cp-R` 的区间焓积分换算为覆盖 `100–1700 K` 的七段质量比 `cv`；标准态所在的 `250–350 K` 单独成段，其余边界随物性曲率展开，避免宽区间平均值歪曲常温声学闭合，也不把热表查找膨胀到 material 的段数硬上限。

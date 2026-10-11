@@ -76,7 +76,12 @@ public record ThermalAuditLedger(
 	}
 
 	public SignedDyadic expectedInventory() {
-		return initialInventory.add(externalSource).subtract(externalSink)
-				.add(mechanicalWork).add(finiteDeviceExchange).add(roundoffResidual);
+		try {
+			return initialInventory.add(externalSource).subtract(externalSink)
+					.add(mechanicalWork).add(finiteDeviceExchange).add(roundoffResidual);
+		} catch (IllegalArgumentException | ArithmeticException intermediateLimit) {
+			return SignedDyadic.sum(initialInventory, externalSource, externalSink.negate(),
+					mechanicalWork, finiteDeviceExchange, roundoffResidual);
+		}
 	}
 }

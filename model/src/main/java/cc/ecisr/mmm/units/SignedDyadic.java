@@ -193,6 +193,62 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 		return new SignedDyadic(significand, minimumExponent);
 	}
 
+	/** Exact final sum; cancellation is independent of the order of bounded input terms. */
+	public static SignedDyadic sum(SignedDyadic... values) {
+		Objects.requireNonNull(values, "values");
+		try {
+			SignedDyadic total = ZERO;
+			for (SignedDyadic value : values) total = total.add(Objects.requireNonNull(value, "value"));
+			return total;
+		} catch (IllegalArgumentException | ArithmeticException intermediateLimit) {
+			return sumClusters(values);
+		}
+	}
+
+	private static SignedDyadic sumClusters(SignedDyadic[] values) {
+		var groups = new java.util.ArrayList<SumPart>(values.length);
+		for (SignedDyadic value : values) {
+			Objects.requireNonNull(value, "value");
+			if (value.sign != 0) groups.add(new SumPart(value.significand(), value.exponent));
+		}
+		// Only overlapping/adjacent supports are aligned. Each merge adds at most one carry bit:
+		// k inputs need at most k*MAX_SIGNIFICAND_BITS+k-1 temporary bits, independent of absolute exponents.
+		boolean merged;
+		do {
+			merged = false;
+			search: for (int i = 0; i < groups.size(); i++) for (int j = i + 1; j < groups.size(); j++) {
+				SumPart a = groups.get(i), b = groups.get(j);
+				if (a.exponent > b.top() + 1 || b.exponent > a.top() + 1) continue;
+				long common = Math.min(a.exponent, b.exponent);
+				BigInteger total = a.significand.shiftLeft(Math.toIntExact(a.exponent - common))
+						.add(b.significand.shiftLeft(Math.toIntExact(b.exponent - common)));
+				groups.remove(j); groups.remove(i);
+				if (total.signum() != 0) groups.add(sumPart(total, common));
+				merged = true; break search;
+			}
+		} while (merged);
+		if (groups.isEmpty()) return ZERO;
+		groups.sort(java.util.Comparator.comparingLong(part -> part.exponent));
+		long common = groups.getFirst().exponent;
+		// Disjoint supports have a zero bit between them: lower terms can reduce the top by at most one.
+		// The unique lowest odd bit survives. A wider span therefore cannot fit the final storage budget.
+		if (groups.getLast().top() - common + 1 > MAX_SIGNIFICAND_BITS + 1L)
+			throw new IllegalArgumentException("Thermal dyadic significand is over budget");
+		BigInteger total = BigInteger.ZERO;
+		for (SumPart part : groups) total = total.add(part.significand.shiftLeft(Math.toIntExact(part.exponent - common)));
+		SumPart result = sumPart(total, common);
+		return new SignedDyadic(result.significand, Math.toIntExact(result.exponent));
+	}
+
+	private static SumPart sumPart(BigInteger value, long exponent) {
+		if (value.signum() == 0) return new SumPart(BigInteger.ZERO, 0);
+		int trailing = value.abs().getLowestSetBit();
+		return new SumPart(value.shiftRight(trailing), exponent + trailing);
+	}
+	private record SumPart(BigInteger significand, long exponent) {
+		long top() { return exponent + significand.abs().bitLength() - 1; }
+	}
+
 	public SignedDyadic add(SignedDyadic other) { return combine(other, false); }
 	public SignedDyadic subtract(SignedDyadic other) { return combine(other, true); }
 
@@ -209,6 +265,9 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 		if (sign == 0) return subtract ? other.negate() : other;
 		int common = Math.min(exponent, other.exponent);
 		long leftShift = (long) exponent - common, rightShift = (long) other.exponent - common;
+		// With this gap the lower odd significand cannot cancel the upper value into the storage budget.
+		if (Math.max(leftShift, rightShift) > MAX_SIGNIFICAND_BITS)
+			throw new IllegalArgumentException("Thermal dyadic significand is over budget");
 		if (magnitudeBits + leftShift < Long.SIZE && other.magnitudeBits + rightShift < Long.SIZE) {
 			long left = compact << (int) leftShift, right = other.compact << (int) rightShift;
 			try {
