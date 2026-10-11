@@ -65,9 +65,10 @@ final class ChemicalReactionStage {
 	                                   double mass, ThermalCarrierContext markers) {
 		try {
 			thermal.requireReactionState(marker, mixture, mass, markers);
-		} catch (ThermalStateFunction.EnergyOutsideValidityException unavailable) {
+		} catch (ThermalStateFunction.EnergyOutsideValidityException
+				| ThermalStateFunction.EnergyRepresentationException unavailable) {
 			throw new ChemicalReactionEngine.BudgetExceededException(
-					"Reaction candidate requires additional thermal energy");
+					"Reaction candidate exceeds available thermal energy or its finite representation");
 		}
 	}
 }

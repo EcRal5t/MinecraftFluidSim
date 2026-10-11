@@ -14,6 +14,7 @@ public final class GranularReactionCandidateValidation {
 
 	public static void validate() {
 		allocationCases();
+		phaseTransferPreservesUnchangedMass();
 		phaseTransferRequiresActualMassChange();
 		phaseTransferPreservesMomentum();
 		precipitationPreservesAvailableMassMoment();
@@ -29,6 +30,50 @@ public final class GranularReactionCandidateValidation {
 	}
 
 	public static void main(String[] args) { validate(); }
+
+	private static void phaseTransferPreservesUnchangedMass() {
+		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
+		var scale = SolverUnitScale.forCellSize(.5F);
+		var first = ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(
+				BuiltinChemicalDefinitions.NA_PLUS, 10_000_000_000L, BuiltinChemicalDefinitions.CL_MINUS, 10_000_000_000L), 0);
+		double firstMass = scale.solverMass(first.massKilograms(chemistry));
+		double unchangedMass = 57.426859368108516;
+		var palette = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 2, .25,
+				cc.ecisr.mmm.units.SignedDyadic.sum(new double[]{firstMass, unchangedMass}).toDouble(), palette.materials(),
+				new float[]{.75F, .75F, .75F, .125F, .75F, .75F, .75F, .125F}, new float[6], new byte[27],
+				new double[]{firstMass, unchangedMass}, new int[]{0, 0}));
+		domain.bindGranular(BuiltinGranularDefinitions.createRegistry(), domain.materialRegistry(),
+				BuiltinFluidMaterials.createRegistry());
+		domain.bindChemistry(chemistry);
+		domain.setMarkerChemical(0, first.stableAmounts(chemistry), false);
+		domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.NA_PLUS, 1_000_000_000L,
+				BuiltinChemicalDefinitions.CL_MINUS, 1_000_000_000L), false);
+		FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		var second = domain.chemicalParcels.record(1);
+		var rule = new SolidLiquidReaction("test:unchanged_mass", BuiltinChemicalDefinitions.AQUEOUS,
+				Map.of(BuiltinChemicalDefinitions.NA_PLUS, 1, BuiltinChemicalDefinitions.CL_MINUS, 1),
+				BuiltinGranularDefinitions.PRECIPITATE,
+				Map.of(BuiltinChemicalDefinitions.NA_PLUS, 1, BuiltinChemicalDefinitions.CL_MINUS, 1),
+				ExactRational.ZERO, 1, 1, 1, true);
+		var plan = new GranularPhaseTransferEngine(chemistry, scale).plan(rule, List.of(
+				new GranularPhaseTransferEngine.LiquidParcel(0, .125F, firstMass, domain.chemicalParcels.record(0)),
+				new GranularPhaseTransferEngine.LiquidParcel(1, .125F, unchangedMass, second)), 0, 1);
+		require(plan.changed() && plan.markerUpdates().get(1).mixture().equals(second)
+				&& Double.doubleToRawLongBits(plan.markerUpdates().get(1).mass()) == Double.doubleToRawLongBits(unchangedMass),
+				"zero species mass delta preserves the authoritative solver mass bit for bit");
+		var delta = plan.markerUpdates().getFirst().mixture().exactSpeciesMassKilograms(chemistry)
+				.subtract(domain.chemicalParcels.record(0).exactSpeciesMassKilograms(chemistry));
+		var exactIncrement = new java.math.BigDecimal(delta.numerator()).divide(
+				new java.math.BigDecimal(delta.denominator()).multiply(
+						new java.math.BigDecimal(scale.cubicMetersPerNormalizedVolume())), new java.math.MathContext(100));
+		double expectedMass = new java.math.BigDecimal(firstMass).add(exactIncrement).doubleValue();
+		require(plan.markerUpdates().getFirst().mass() == expectedMass && domain.particles.mass(0) == firstMass
+				&& domain.particles.mass(1) == unchangedMass && domain.chemicalParcels.record(1).equals(second),
+				"nonzero species delta is rounded once in solver units without changing the source during planning");
+	}
 
 	private static void phaseTransferRequiresActualMassChange() {
 		var granular = BuiltinGranularDefinitions.createRegistry();

@@ -44,7 +44,16 @@ final class ChemicalReactionAllocation {
 			if (!(Double.isFinite(kilograms) && kilograms > 0.0)) {
 				throw new ChemicalReactionEngine.BudgetExceededException("Reaction allocation requires positive carrier mass");
 			}
-			masses[i] = store.unitScale().solverMass(kilograms);
+			ExactRational speciesDelta = replacements[i].exactSpeciesMassKilograms(registry)
+					.subtract(store.record(marker).exactSpeciesMassKilograms(registry));
+			try {
+				masses[i] = ChemicalMixtureRecord.solverMassAfterSpeciesChange(markerMass[marker], speciesDelta, store.unitScale());
+			} catch (IllegalArgumentException | ArithmeticException unavailable) {
+				throw new ChemicalReactionEngine.BudgetExceededException("Reaction mass update exceeds representation precision");
+			}
+			if (!(Double.isFinite(masses[i]) && masses[i] > 0.0)) {
+				throw new ChemicalReactionEngine.BudgetExceededException("Reaction allocation requires positive solver mass");
+			}
 			previousMass += markerMass[marker];
 			candidateMass += masses[i];
 			delta = Math.addExact(delta, replacements[i].totalQuanta() - store.record(marker).totalQuanta());

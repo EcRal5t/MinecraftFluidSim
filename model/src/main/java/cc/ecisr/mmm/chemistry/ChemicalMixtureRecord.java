@@ -1,5 +1,9 @@
 package cc.ecisr.mmm.chemistry;
 
+import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.units.SolverUnitScale;
+
+import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.TreeMap;
@@ -107,6 +111,24 @@ public final class ChemicalMixtureRecord {
 
 	public double massKilograms(ChemicalRegistry registry) {
 		return exactSpeciesMassKilograms(registry).toDouble() + massResidualKilograms();
+	}
+
+	/** Updates the authoritative solver mass by an exact species delta, preserving its residual. */
+	public static double solverMassAfterSpeciesChange(
+			double previous, ExactRational speciesDeltaKilograms, SolverUnitScale unitScale
+	) {
+		if (speciesDeltaKilograms.isZero()) return previous;
+		ExactRational scale = exactDouble(unitScale.cubicMetersPerNormalizedVolume());
+		ExactRational increment = new ExactRational(
+				speciesDeltaKilograms.numerator().multiply(scale.denominator()),
+				speciesDeltaKilograms.denominator().multiply(scale.numerator()));
+		return exactDouble(previous).add(increment).toDouble();
+	}
+
+	private static ExactRational exactDouble(double value) {
+		SignedDyadic exact = SignedDyadic.of(value);
+		return exact.exponent() >= 0 ? new ExactRational(exact.significand().shiftLeft(exact.exponent()), BigInteger.ONE)
+				: new ExactRational(exact.significand(), BigInteger.ONE.shiftLeft(-exact.exponent()));
 	}
 
 	public long chargeQuanta(ChemicalRegistry registry) {

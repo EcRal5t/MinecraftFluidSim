@@ -1,6 +1,9 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.chemistry.*;
+import cc.ecisr.mmm.thermal.ThermalMaterialDefinition;
+import cc.ecisr.mmm.thermal.ThermalRegistry;
+import cc.ecisr.mmm.thermal.ThermalSpeciesOffset;
 import cc.ecisr.mmm.units.SolverUnitScale;
 
 import java.util.ArrayList;
@@ -15,6 +18,7 @@ final class ChemicalReactionCandidateValidation {
 
 	static void validate() {
 		reactionMassTransfersMomentum();
+		reactionRetainsActualMassAndDefersUnrepresentableEnergy();
 		evaluationBudgetRotates();
 		ChemicalRegistry builtin = BuiltinChemicalDefinitions.REGISTRY;
 		checkDeferred(builtin, List.of(
@@ -42,6 +46,59 @@ final class ChemicalReactionCandidateValidation {
 		region.mass[1] = region.store.record(1).massKilograms(builtin);
 		require(region.step().changedMarkers() == 1 && !region.store.hasDirtyCells(),
 				"region capacity retry commits after capacity becomes available");
+	}
+
+	private static void reactionRetainsActualMassAndDefersUnrepresentableEnergy() {
+		for (int sample = 0; sample < 4; sample++) {
+			boolean energyUnavailable = sample == 3;
+			double density = sample == 0 ? 1000.1 : sample == 1 ? 1000.3 : 1024;
+			String a = "test:identity/a", b = "test:identity/b", liquidId = "test:identity/liquid", thermalId = "test:identity/thermal";
+			var chemistry = new ChemicalRegistry(List.of(
+					new ChemicalSpecies(a, Map.of("X", 1), 0, ExactRational.of(3), 0),
+					new ChemicalSpecies(b, Map.of("X", 1), 0, ExactRational.of(3), 0)), List.of(
+					new ChemicalPhaseDefinition("test:basephase", "test:base", List.of(a, b), Map.of(a, ExactRational.ONE), false),
+					new ChemicalPhaseDefinition("test:phase", liquidId, List.of(a, b), Map.of(a, ExactRational.ONE), false)), List.of(
+					new ChemicalReaction("test:isomer", ChemicalReaction.Kind.INSTANTANEOUS, "test:phase",
+							Map.of(a, 1), Map.of(b, 1), ExactRational.ZERO)));
+			var liquids = new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension("test:base", 64, "test:miscible", 0, 90),
+					FluidMaterial.withSurfaceTension(liquidId, density, "test:miscible", 0, 90)));
+			var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
+			domain.bindMaterialRegistry(liquids); domain.setVolume(1, 1, 1, .125F);
+			domain.setMarkerMaterial(0, liquids, 1); domain.bindChemistry(chemistry);
+			long amount = 16 * ChemicalLimits.QUANTA_PER_AU;
+			domain.setMarkerChemical(0, Map.of(a, amount), false);
+			var thermal = new ThermalRegistry(List.of(
+					identityThermalMaterial("test:base_thermal", "test:base"), identityThermalMaterial(thermalId, liquidId)), List.of(
+					new ThermalSpeciesOffset("test:baseoa", a, "test:base_thermal", ExactRational.ZERO),
+					new ThermalSpeciesOffset("test:baseob", b, "test:base_thermal", ExactRational.ZERO),
+					new ThermalSpeciesOffset("test:oa", a, thermalId, ExactRational.ZERO),
+					new ThermalSpeciesOffset("test:ob", b, thermalId,
+							energyUnavailable ? ExactRational.parse("1" + "0".repeat(308)) : ExactRational.ZERO)),
+					List.of(), chemistry.fingerprint(), "");
+			domain.bindThermal(thermal, liquids, 300); domain.captureAuthoritativeState();
+			long massBits = Double.doubleToRawLongBits(domain.particles.mass(0));
+			var initial = domain.chemicalParcels.record(0); var energy = domain.exactInternalEnergy(); var audit = domain.thermalAudit();
+			for (int pass = 0; pass < 2; pass++) {
+				var result = domain.runThermalReactionPhaseAxis(false, 0).chemistry();
+				var actual = domain.chemicalParcels.record(0);
+				require(result.changedMarkers() == (energyUnavailable || pass == 1 ? 0 : 1)
+						&& domain.chemicalParcels.hasDirtyCells() == energyUnavailable,
+						"Reaction representation changed progress or lost its retry state");
+				require(Double.doubleToRawLongBits(domain.particles.mass(0)) == massBits
+						&& actual.massResidualKilogramsBits() == initial.massResidualKilogramsBits()
+						&& actual.exactSpeciesMassKilograms(chemistry).equals(initial.exactSpeciesMassKilograms(chemistry))
+						&& actual.amount(chemistry.speciesHandle(energyUnavailable ? a : b)) == amount
+						&& domain.exactInternalEnergy().equals(energy) && domain.thermalAudit().equals(audit),
+						"Reaction altered actual mass, residual or energy despite unchanged exact species mass");
+				domain.captureAuthoritativeState();
+			}
+		}
+	}
+
+	private static ThermalMaterialDefinition identityThermalMaterial(String id, String carrier) {
+		return new ThermalMaterialDefinition(id,
+				ThermalMaterialDefinition.CarrierKind.LIQUID, carrier, 300, 0, 0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(100, 500, 1000)));
 	}
 
 	private static void reactionMassTransfersMomentum() {

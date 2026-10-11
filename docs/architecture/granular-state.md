@@ -197,6 +197,7 @@ dirty queue、安静年龄和邻居轮转步属于调度瞬态运行数据。它
 
 - precipitation/dissolution 由 registry 的 exact reaction extent 规划，同时验证 liquid species、solid composition、质量和体积容量。
 - 液体计划按拟写入的实际 solver mass 换算 kg，精确汇总与原库存的质量差，再与固体转移份额核对。已有固体的接收增量和溶解扣量也按实际存储差预检；暂时不可表示时保留原库存与 dirty 调度。
+- 液体质量从原始 solver mass 加上 exact species 质量差推导，复用化学反应的精确单位换算。组成分配后 species 质量保持原值的载体保留原始质量位模式。
 - commit 必须联合更新 chemistry、solid inventory、source/sink、热能和相变 volume/work；任一候选失败则整批不落地。
 - 析出与溶解按每份载体的实际质量差搬运动量。移出的液体质量携带原速度，溶解的活动固体携带自身速度，沉积固体以静止速度参与；接收质量的载体和新析出颗粒取得质量加权的输入动量。格内 species 重分配造成的质量转移使用同一计划，逐载体速度在提交前验证，动量误差受 binary32 速度舍入限制。质量混合耗散的动能沿用热机械收支的适用范围。
 - 连续凝固相由 coherent store 保存；熔化后恢复到液体 marker。它不借用 active/deposit 表示。

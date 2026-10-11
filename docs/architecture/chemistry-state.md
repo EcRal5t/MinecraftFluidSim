@@ -80,6 +80,8 @@ particleMass * cellSize^3 = exact_species_mass_kg + massResidual_kg
 
 反应后的格总库存按各 marker 的 exact species mass 转成 binary64 权重，以最大余数法确定性分配；余数相同时按 marker ordinal 排序。分配计划验证每个载体的物种槽位、正质量、区域总量与候选温度，再统一提交。同格、同 chemical phase 内移出的实际质量携带原速度，接收质量按输入动量与保留质量混合；动量误差受 binary32 速度舍入限制，质量混合保持动能不增。完整速度计划在提交前验证，与组成和质量一起生效。混合耗散的热结算沿用热机械收支的适用范围。载体数、容量或可用内能限制当前候选时，原库存、质量与速度逐位保留，所属 cell 保持 dirty，其他可提交的 cell 继续推进。表示条件改变后沿同一入口重试。
 
+候选质量以载体现存的原始 solver mass 为起点，加上新旧 exact species mass 的差量，经精确单位换算后只舍入一次。species 质量差为零时，载体质量逐位保留；组成基准能或候选正温超出有限数值表示时，保留原库存与 dirty 调度。
+
 若求值后的逐 species integer inventory 与输入逐位相同，该组只占用求值预算并清除 dirty 状态，不进入分配、热候选验证或 parcel 覆写，marker 的组成、残差、质量和 indicator 原样保留。
 
 当前反应是瞬时同格模型，不应用 Arrhenius 速率、平衡常数或跨格搜索。

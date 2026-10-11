@@ -111,7 +111,15 @@ public final class GranularPhaseTransferEngine {
 			if (!(Double.isFinite(massKilograms) && massKilograms > 0.0)) {
 				return null;
 			}
-			double solverMass = unitScale.solverMass(massKilograms);
+			double solverMass;
+			try {
+				solverMass = ChemicalMixtureRecord.solverMassAfterSpeciesChange(source.mass(),
+						replacement.exactSpeciesMassKilograms(chemistry)
+								.subtract(source.mixture().exactSpeciesMassKilograms(chemistry)), unitScale);
+			} catch (IllegalArgumentException | ArithmeticException unrepresentable) {
+				return null;
+			}
+			if (!(Double.isFinite(solverMass) && solverMass > 0.0)) return null;
 			long signedVolumeDelta = precipitation ? -volumeDeltas[index] : volumeDeltas[index];
 			float cellVolume;
 			try { cellVolume = SolidVolume.addCellVolumeSvqExact(source.cellVolume(), signedVolumeDelta); }
