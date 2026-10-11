@@ -38,14 +38,18 @@ final class SweptGranularVolumeGradient {
 			for (int side = -1; side <= 1; side += 2) {
 				double time = middle + side * width / Math.sqrt(12);
 				accumulate(position[0] + time * distance[0], position[1] + time * distance[1],
-						position[2] + time * distance[2], fraction * width / 2, h);
+						position[2] + time * distance[2], fraction * width / 2, h, distance);
 			}
 		}
 		return count;
 	}
 
-	private void accumulate(double px, double py, double pz, double scale, double h) {
+	private void accumulate(double px, double py, double pz, double scale, double h, double[] distance) {
 		int x0 = (int) Math.floor(px), y0 = (int) Math.floor(py), z0 = (int) Math.floor(pz), entries = 0;
+		// At an exactly represented knot, use the derivative on the side entered by this sweep.
+		if (px == x0 && distance[0] < 0) x0--;
+		if (py == y0 && distance[1] < 0) y0--;
+		if (pz == z0 && distance[2] < 0) z0--;
 		double fx = px - x0, fy = py - y0, fz = pz - z0, sum = 0, sx = 0, sy = 0, sz = 0;
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int cx = x0 + ox, cy = y0 + oy, cz = z0 + oz;

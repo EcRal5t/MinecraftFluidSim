@@ -19,6 +19,7 @@ public final class GranularCarrierValidation {
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
 		finitePressureResponse();
 		sweptOccupancyConservation();
+		sweptKnotDirectionsMatchHatKernel();
 		hydrostaticParcelForce();
 		sharedGasPressureAlgebra();
 		pressureReferenceDoesNotAccelerateMatter();
@@ -475,6 +476,49 @@ public final class GranularCarrierValidation {
 			require(crossed && Math.abs(sum) < 32 * Math.ulp(p.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_CELL),
 					"Swept support failed to enter a new cell or changed total solid volume");
 		}
+	}
+
+	private static void sweptKnotDirectionsMatchHatKernel() {
+		var domain = domain();
+		var gradient = new SweptGranularVolumeGradient(domain);
+		int sand = domain.granularState.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double fraction = svq / (double) SolidVolume.SVQ_PER_CELL;
+		for (int axis = 0; axis < 3; axis++) for (int reflection = 0; reflection < 8; reflection++) {
+			float[] position = new float[3];
+			for (int coordinate = 0; coordinate < 3; coordinate++) position[coordinate] = (reflection & 1 << coordinate) == 0 ? .75F : 2.25F;
+			double[] velocity = new double[3]; velocity[axis] = (reflection & 1 << axis) == 0 ? .5 : -.5;
+			var parcel = new GranularParcelStore.Parcel(position[0], position[1], position[2], (float) velocity[0], (float) velocity[1], (float) velocity[2],
+					svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0);
+			for (int power = 3; power <= 20; power++) {
+				double dt = Math.scalb(1, -power);
+				int count = gradient.build(parcel, dt);
+				double[] changes = new double[domain.cellCount];
+				for (int slot = 0; slot < count; slot++) changes[gradient.cells[slot]] = dt
+						* (gradient.x[slot] * velocity[0] + gradient.y[slot] * velocity[1] + gradient.z[slot] * velocity[2]);
+				for (int cell = 0; cell < changes.length; cell++) {
+					int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY, z = cell / (domain.sizeX * domain.sizeY);
+					double old = interiorHatKernel(position[0], position[1], position[2], x, y, z);
+					double next = interiorHatKernel(position[0] + dt * velocity[0], position[1] + dt * velocity[1],
+							position[2] + dt * velocity[2], x, y, z);
+					require(changes[cell] == fraction * (next - old),
+							"selected knot direction disagrees with the independent hat kernel after axis reflection");
+				}
+			}
+			// The sampled coordinate rounds back to the exact knot; its entered side still determines the derivative.
+			int count = gradient.build(parcel, Math.scalb(1, -60));
+			int oldCell = domain.cellIndex((int) (position[0] / .5 - .5), (int) (position[1] / .5 - .5), (int) (position[2] / .5 - .5));
+			double rate = 0;
+			for (int slot = 0; slot < count; slot++) if (gradient.cells[slot] == oldCell) {
+				rate = gradient.x[slot] * velocity[0] + gradient.y[slot] * velocity[1] + gradient.z[slot] * velocity[2];
+			}
+			require(rate == -fraction, "a sub-ULP Gauss coordinate chose the outgoing side of its knot");
+		}
+	}
+
+	private static double interiorHatKernel(double x, double y, double z, int cx, int cy, int cz) {
+		return Math.max(0, 1 - Math.abs(x / .5 - .5 - cx)) * Math.max(0, 1 - Math.abs(y / .5 - .5 - cy))
+				* Math.max(0, 1 - Math.abs(z / .5 - .5 - cz));
 	}
 
 	private static void hydrostaticParcelForce() {
