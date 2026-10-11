@@ -253,19 +253,26 @@ final class GranularSphereCollision {
 		double scale = dot(v, cross); for (int a = 0; a < 3; a++) cross[a] *= scale; return cross;
 	}
 	private float[] roundOutside(double[] point, float radius, List<Hit> active) {
+		float[] nearest = {(float) point[0], (float) point[1], (float) point[2]};
+		// Independent nearest-coordinate rounding minimizes the Euclidean distance.
+		if (validEndpoint(nearest, radius, active)) return nearest;
 		float[][] choices = new float[3][3];
 		for (int a = 0; a < 3; a++) { float center = (float) point[a]; choices[a] = new float[]{Math.nextDown(center), center, Math.nextUp(center)}; }
 		float[] best = null; double error = Double.POSITIVE_INFINITY;
 		for (float x : choices[0]) for (float y : choices[1]) for (float z : choices[2]) {
-			float[] candidate = {x, y, z}; boolean inside = true; double squared = 0;
-			for (int a = 0; a < 3; a++) { inside &= candidate[a] >= radius && candidate[a] <= sizes[a] * h - radius; squared += (candidate[a] - point[a]) * (candidate[a] - point[a]); }
-			if (!inside || squared >= error || geometry.sphereTouchesSolid(x, y, z, radius, (float) h)) continue;
-			boolean floor = false; for (Hit hit : active) if (hit.column >= 0 && (int) Math.floor(x / h) + sizes[0] * (int) Math.floor(z / h) == hit.column && y < hit.minimum[0]) floor = true;
-			if (floor) continue;
+			float[] candidate = {x, y, z}; double squared = 0;
+			for (int a = 0; a < 3; a++) squared += (candidate[a] - point[a]) * (candidate[a] - point[a]);
+			if (squared >= error || !validEndpoint(candidate, radius, active)) continue;
 			best = candidate; error = squared;
 		}
 		if (best == null) throw new MechanicalTimeRefinement(2, "No representable granular sphere endpoint");
 		return best;
+	}
+	private boolean validEndpoint(float[] p, float radius, List<Hit> active) {
+		for (int a = 0; a < 3; a++) if (!(p[a] >= radius && p[a] <= sizes[a] * h - radius)) return false;
+		if (geometry.sphereTouchesSolid(p[0], p[1], p[2], radius, (float) h)) return false;
+		for (Hit hit : active) if (hit.column >= 0 && (int) Math.floor(p[0] / h) + sizes[0] * (int) Math.floor(p[2] / h) == hit.column && p[1] < hit.minimum[0]) return false;
+		return true;
 	}
 	private static double[] cross(double[] a, double[] b) { return new double[]{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]}; }
 	private static double norm2(double[] a) { return dot(a, a); }
