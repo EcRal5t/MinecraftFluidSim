@@ -862,6 +862,9 @@ public final class AirNetwork {
 		private final GasAuditLedger externalSourceAfter;
 		private final GasAuditLedger escapedSinkAfter;
 
+		public GasInventory inventory(int nodeId) { return replacementNodes.get(nodeId).inventory(); }
+		public double availableVolume(int nodeId) { return replacementNodes.get(nodeId).availableVolume(); }
+
 		private RemapPlan(
 				AirNetwork owner, long baseRevision, TreeMap<Integer, AirNode> replacementNodes,
 				ArrayList<AirEdge> replacementEdges, int nextNodeId,

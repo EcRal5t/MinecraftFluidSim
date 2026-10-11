@@ -36,7 +36,8 @@ final class GasBoilingBatchBounds {
 	private final ThermalCaloricBounds caloric;
 	private final ChemicalParcelStore chemistry;
 	private final boolean[] volatileSpecies;
-	private final double liquidTemperature, oldGasEnergy, gasVolume;
+	private final double liquidTemperature, oldGasEnergy;
+	private final GasPhaseCapacityBounds capacity;
 	private final GasInventory oldGas;
 	private final int gasThermalHandle;
 	private final String gasCarrier;
@@ -55,7 +56,7 @@ final class GasBoilingBatchBounds {
 		this.caloric = new ThermalCaloricBounds(support.thermal().registry());
 		this.oldGas = support.gasState().network.inventory(node);
 		this.oldGasEnergy = support.thermal().gasNodeEnergy(node, support.gasState().network);
-		this.gasVolume = support.gasState().network.availableVolume(node);
+		this.capacity = new GasPhaseCapacityBounds(support, cell);
 		this.gasThermalHandle = support.thermal().registry().materialHandle(transition.upperEnergyMaterialId());
 		this.gasCarrier = support.thermal().registry().material(gasThermalHandle).carrierId();
 		this.nanosPerBatch = phase.gasBatch(transition, 1).standardVolumeNanos();
@@ -136,6 +137,8 @@ final class GasBoilingBatchBounds {
 		}
 		remaining.addAll(solidPortions);
 		if (remaining.isEmpty()) return false;
+		var volume = capacity.volume(-lastVolume, -firstVolume);
+		if (volume == null) return false;
 		var batch = new ThermalCaloricBounds.PortionRange(gasThermalHandle,
 				transition.massMuPerBatch().multiply(low).toDouble(), transition.massMuPerBatch().multiply(high).toDouble(), moved);
 		double batchLower = caloric.energyAtTemperature(List.of(batch), liquidTemperature, false);
@@ -149,10 +152,10 @@ final class GasBoilingBatchBounds {
 		double liquidUpper = caloric.assignedTemperatureBound(remaining, cellLower, cellUpper, true, liquidTemperature);
 		if (!Double.isFinite(liquidUpper)) return false;
 		double gasTemperatureLower = caloric.temperatureBound(gas, gasLower, false, liquidTemperature);
-		return pressureExcludes(low, high, liquidUpper, gasTemperatureLower);
+		return pressureExcludes(low, high, liquidUpper, gasTemperatureLower, volume.high());
 	}
 
-	private boolean pressureExcludes(long low, long high, double liquidUpper, double gasTemperatureLower) {
+	private boolean pressureExcludes(long low, long high, double liquidUpper, double gasTemperatureLower, double gasVolume) {
 		long totalLower = Math.addExact(oldGas.standardVolumeNanos(), Math.multiplyExact(low, nanosPerBatch));
 		long totalUpper = Math.addExact(oldGas.standardVolumeNanos(), Math.multiplyExact(high, nanosPerBatch));
 		GasComponentAmount vapor = oldGas.component(gasCarrier);

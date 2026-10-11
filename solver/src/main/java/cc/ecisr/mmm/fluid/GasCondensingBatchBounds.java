@@ -30,7 +30,8 @@ final class GasCondensingBatchBounds {
 	private final ThermalCaloricBounds caloric;
 	private final GasInventory oldGas;
 	private final GasComponentAmount vapor;
-	private final double oldGasEnergy, gasTemperature, liquidTemperature, gasVolume;
+	private final double oldGasEnergy, gasTemperature, liquidTemperature;
+	private final GasPhaseCapacityBounds capacity;
 	private final long nanosPerBatch;
 	private final List<Liquid> liquids = new ArrayList<>();
 	private final List<ThermalCaloricBounds.PortionRange> solids = new ArrayList<>(), otherGas = new ArrayList<>();
@@ -51,7 +52,7 @@ final class GasCondensingBatchBounds {
 		this.oldGasEnergy = thermal.gasNodeEnergy(node, support.gasState().network);
 		this.gasTemperature = thermal.gasTemperature(node, support.gasState().network);
 		this.liquidTemperature = thermal.phaseScanTemperatureInCell(cell);
-		this.gasVolume = support.gasState().network.availableVolume(node);
+		this.capacity = new GasPhaseCapacityBounds(support, cell);
 		this.nanosPerBatch = phase.gasBatch(transition, 1).standardVolumeNanos();
 		var particles = support.state().particles();
 		var chemistry = support.chemistry();
@@ -84,6 +85,9 @@ final class GasCondensingBatchBounds {
 			// Vacuum has no temperature; it remains an exact candidate rather than a finite bound.
 			if (vapor == null || lastNanos > vapor.standardVolumeNanos()
 					|| lastNanos == oldGas.standardVolumeNanos()) return false;
+			var volume = capacity.volume(Math.multiplyExact(low, transition.lowerVolumeSvqPerBatch()),
+					Math.multiplyExact(high, transition.lowerVolumeSvqPerBatch()));
+			if (volume == null || !(volume.low() > 0)) return false;
 			GasComponentAmount first = support.gasState().network.previewComponentTake(node, gasCarrier, firstNanos)
 					.first().component(gasCarrier);
 			GasComponentAmount last = support.gasState().network.previewComponentTake(node, gasCarrier, lastNanos)
@@ -133,7 +137,7 @@ final class GasCondensingBatchBounds {
 			// Preserve the production pressure and partial-fraction operation order, with outward rounding.
 			double constant = up(up(GasRegistry.STANDARD_PRESSURE_PA * AirNetwork.cubicMeters(totalHigh))
 					/ GasRegistry.STANDARD_TEMPERATURE_K);
-			double pressureUpper = up(up(constant * gasUpperTemperature) / gasVolume);
+			double pressureUpper = up(up(constant * gasUpperTemperature) / volume.low());
 			double ratioUpper = Math.min(1.0, up((double) vaporHigh / totalLow));
 			double partialUpper = up(pressureUpper * ratioUpper);
 			return Double.isFinite(saturationLower) && Double.isFinite(partialUpper) && saturationLower > partialUpper;

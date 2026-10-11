@@ -38,14 +38,29 @@ public final class GasLiquidPhaseModel {
 		if (!(Double.isFinite(absolutePressurePa) && absolutePressurePa >= 0.0)) {
 			throw new IllegalArgumentException("Gas/liquid phase pressure is outside the transition model");
 		}
+		GasComponentAmount component = gasInventory.component(pair.gas().carrierId());
+		double partial = component == null ? 0.0
+				: absolutePressurePa * ((double) component.standardVolumeNanos() / gasInventory.standardVolumeNanos());
+		return saturation(transition, pair, liquidTemperatureK, partial);
+	}
+
+	/** Uses the ambient reservoir's defined composition after an interface opens to it. */
+	public Saturation ambientSaturation(ThermalPhaseTransition transition, double liquidTemperatureK) {
+		PhasePair pair = requirePair(transition);
+		double fraction = 0.0;
+		for (var ambient : gasRegistry.ambient()) if (ambient.componentId().equals(pair.gas().carrierId())) {
+			fraction = ambient.fraction().toDouble(); break;
+		}
+		return saturation(transition, pair, liquidTemperatureK, GasRegistry.STANDARD_PRESSURE_PA * fraction);
+	}
+
+	private static Saturation saturation(ThermalPhaseTransition transition, PhasePair pair,
+	                                    double liquidTemperatureK, double partial) {
 		pair.liquid().specificHeatAt(liquidTemperatureK);
 		double saturation = GasRegistry.STANDARD_PRESSURE_PA * saturationExponential(transition, pair, liquidTemperatureK);
 		if (!(Double.isFinite(saturation) && saturation >= 0.0)) {
 			throw new IllegalArgumentException("Saturation pressure is outside the phase model");
 		}
-		GasComponentAmount component = gasInventory.component(pair.gas().carrierId());
-		double partial = component == null ? 0.0
-				: absolutePressurePa * ((double) component.standardVolumeNanos() / gasInventory.standardVolumeNanos());
 		Direction direction = saturation > partial ? Direction.BOIL
 				: saturation < partial ? Direction.CONDENSE : Direction.EQUILIBRIUM;
 		return new Saturation(saturation, partial, direction);

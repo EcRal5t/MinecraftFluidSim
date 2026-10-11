@@ -861,14 +861,31 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	private static void phaseGeometryRemapIsPreparedBeforeCarrierCommit() {
-		for (int scenario = 0; scenario < 4; scenario++) {
+		for (int scenario = 0; scenario < 6; scenario++) {
 			int components = scenario == 0 ? 33 : 32;
 			boolean energyOverflow = scenario == 2;
+			boolean saturationOvershoot = scenario == 4;
 			double energyReference = scenario == 2 ? 1e308 : scenario == 3 ? 1e307 : 0;
-			FluidDomain domain = phaseTopologyDomain(components, energyReference);
+			FluidDomain domain = phaseTopologyDomain(components, energyReference,
+					scenario == 4 ? 2 : scenario == 5 ? 1 : 0,
+					scenario == 4 ? 1_000_000_000L : scenario == 5 ? 100_000_000L : 0L);
 			var before = domain.captureAuthoritativeState();
 			var beforeMarkers = domain.exportMaterialParticleState();
+			var beforeThermal = domain.exportThermalParticleState();
 			var beforeGas = domain.gasState.network.sealedInventory();
+			var beforeNodes = List.of(domain.gasState.network.inventory(1), domain.gasState.network.inventory(2));
+			double[] beforeGasVolume = {domain.gasState.network.availableVolume(1), domain.gasState.network.availableVolume(2)};
+			var beforeSource = domain.gasState.network.externalSource();
+			var beforeSink = domain.gasState.network.escapedSink();
+			var beforePending = domain.pendingPhaseCellVolume.clone();
+			var thermalRevision = domain.thermalState.thermalRevision();
+			var transition = domain.thermalState.registry().transitions().getFirst();
+			var phase = domain.thermalState.gasLiquidPhase(domain.gasState.network);
+			if (scenario == 5) for (int node = 1; node <= 2; node++) require(phase.saturation(transition, 400,
+					domain.gasState.network.inventory(node), domain.thermalState.requireGasNodeState(node,
+							domain.gasState.network.inventory(node), domain.thermalState.gasNodeEnergy(node, domain.gasState.network),
+							domain.gasState.network)).direction() == GasLiquidPhaseModel.Direction.BOIL,
+					"future-volume boiling control must start with boiling affinity at both interfaces");
 			var beforeEnergy = domain.exactInternalEnergy();
 			var beforeMass = actualPhaseMass(domain);
 			var beforeAudit = domain.thermalAudit();
@@ -877,28 +894,56 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			require(domain.exactInternalEnergy().equals(beforeEnergy) && actualPhaseMass(domain).equals(beforeMass)
 					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
 					&& domain.gasState.network.auditClosed(), "phase topology successor lost physical mass or energy");
-			if (components == 33 || energyOverflow) {
+			if (components == 33 || energyOverflow || saturationOvershoot) {
+				var afterThermal = domain.exportThermalParticleState();
 				require(stats.operations() == 0 && domain.particleCount() == 1
 						&& domain.gasState.network.nodeCount() == 2 && domain.carrierMutationRevision == markerRevision
+						&& domain.thermalState.thermalRevision().liquid() == thermalRevision.liquid()
+						&& domain.thermalState.thermalRevision().granular() == thermalRevision.granular()
 						&& domain.gasState.network.sealedInventory().equals(beforeGas)
+						&& domain.gasState.network.inventory(1).equals(beforeNodes.getFirst())
+						&& domain.gasState.network.inventory(2).equals(beforeNodes.get(1))
+						&& domain.gasState.network.availableVolume(1) == beforeGasVolume[0]
+						&& domain.gasState.network.availableVolume(2) == beforeGasVolume[1]
+						&& domain.gasState.network.externalSource().equals(beforeSource)
+						&& domain.gasState.network.escapedSink().equals(beforeSink)
 						&& domain.thermalAudit().equals(beforeAudit) && domain.pendingPhaseCellVolume[22].equals(SignedDyadic.ZERO)
-						&& Arrays.equals(beforeMarkers.copyPositionVolume(), domain.exportMaterialParticleState().copyPositionVolume()),
-						"unrepresentable future cavity was rejected after publishing its liquid removal");
+						&& Arrays.equals(beforePending, domain.pendingPhaseCellVolume)
+						&& Arrays.equals(beforeMarkers.copyPositionVolume(), domain.exportMaterialParticleState().copyPositionVolume())
+						&& Arrays.equals(beforeMarkers.copyParticleMass(), domain.exportMaterialParticleState().copyParticleMass())
+						&& Arrays.equals(beforeThermal.copyInternalEnergy(), afterThermal.copyInternalEnergy())
+						&& Arrays.equals(beforeThermal.copyActiveParcelEnergy(), afterThermal.copyActiveParcelEnergy())
+						&& Arrays.equals(beforeThermal.copyGasNodeEnergy(), afterThermal.copyGasNodeEnergy()),
+						"unrepresentable or supersaturated future cavity was rejected after publishing its liquid removal: " + scenario);
 			} else {
 				require(stats.operations() == 1 && stats.boiledCells() == 1 && domain.particleCount() == 0
 						&& domain.gasState.network.nodeCount() == 1
 						&& domain.pendingPhaseCellVolume[22].equals(SignedDyadic.of(-1, -3)),
 						"a complete 32-component phase successor was not committed");
+				require(phase.saturation(transition, domain.thermalState.observeTemperatureInCell(22, domain.thermalMarkerContext()),
+						domain.gasState.network.inventory(1), domain.thermalState.requireGasNodeState(1,
+								domain.gasState.network.inventory(1), domain.thermalState.gasNodeEnergy(1, domain.gasState.network),
+								domain.gasState.network)).direction() != GasLiquidPhaseModel.Direction.CONDENSE,
+						"committed boiling successor reversed saturation after its complete topology remap");
 			}
-			FluidDomain restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			var after = domain.captureAuthoritativeState();
+			FluidDomain restored = FluidDomain.restoreAuthoritativeState(after);
+			var restoredThermal = restored.exportThermalParticleState();
 			require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
 					&& actualPhaseMass(restored).equals(beforeMass)
+					&& restored.thermalAudit().equals(after.thermal().audit())
+					&& restored.gasState.network.sealedInventory().equals(domain.gasState.network.sealedInventory())
+					&& Arrays.equals(restoredThermal.copyInternalEnergy(), after.thermal().copyInternalEnergy())
+					&& Arrays.equals(restoredThermal.copyActiveParcelEnergy(), after.thermal().copyActiveParcelEnergy())
+					&& Arrays.equals(restoredThermal.copyGasNodeEnergy(), after.thermal().copyGasNodeEnergy())
 					&& FluidDomain.restoreAuthoritativeState(before).particleCount() == 1,
 					"prospective phase topology did not retain a restorable state");
 		}
 	}
 
-	private static FluidDomain phaseTopologyDomain(int componentCount, double energyReference) {
+	private static FluidDomain phaseTopologyDomain(
+			int componentCount, double energyReference, int extraVaporNode, long extraVaporNanos
+	) {
 		var gasDefinitions = new java.util.ArrayList<cc.ecisr.mmm.fluid.air.GasComponentDefinition>();
 		var materials = new java.util.ArrayList<ThermalMaterialDefinition>();
 		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
@@ -943,6 +988,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			}
 			domain.gasState.network.commitPhaseSource(node, new GasInventory(amounts));
 		}
+		if (extraVaporNanos > 0) domain.gasState.network.commitPhaseSource(extraVaporNode,
+				new GasInventory(List.of(new GasComponentAmount("test:g0", extraVaporNanos,
+						1.0 / 1024, List.of(), 1.0 / 1024))));
 		domain.bindThermal(registry, liquids, energyReference != 0 ? 301 : 400); domain.stepGasPhaseChangeOnly(0);
 		return FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 	}
@@ -1520,6 +1568,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& model.saturation(transition, 363.15, batch,
 				GasRegistry.STANDARD_PRESSURE_PA).direction() == GasLiquidPhaseModel.Direction.CONDENSE,
 				"Clausius-Clapeyron saturation did not select the physical phase direction");
+		GasRegistry humidAmbient = new GasRegistry(gas.components(), List.of(
+				new GasRegistry.AmbientFraction(BuiltinGasDefinitions.AIR, ExactRational.parse("3/4")),
+				new GasRegistry.AmbientFraction(BuiltinGasDefinitions.WATER_VAPOR, ExactRational.parse("1/4"))));
+		var ambientSaturation = new GasLiquidPhaseModel(thermal, humidAmbient).ambientSaturation(transition, 373.15);
+		require(ambientSaturation.componentPartialPressurePa() == GasRegistry.STANDARD_PRESSURE_PA / 4
+				&& ambientSaturation.direction() == GasLiquidPhaseModel.Direction.BOIL
+				&& model.ambientSaturation(transition, 373.15).componentPartialPressurePa() == 0,
+				"an opened phase interface did not use the ambient reservoir's vapor fraction");
 		double referenceGasVolume = (double) gasSvq / SolidVolume.SVQ_PER_BV;
 		double latentEnthalpy = 2_256_000.0 + GasRegistry.STANDARD_PRESSURE_PA
 				* (referenceGasVolume - (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV) / 0.001;

@@ -55,6 +55,7 @@ final class PhaseChangeStageSupport {
 		void refreshCoherentOccupancy();
 		void markGridDirty();
 		boolean canAddCarrierVolume(double volume);
+		long gasGeometrySolidSvq();
 	}
 
 	private final Workspace state;
@@ -74,6 +75,7 @@ final class PhaseChangeStageSupport {
 	FluidMaterialRegistry materialRegistry() { return access.materialRegistry(); }
 	GasDomainState gasState() { return state.gasState(); }
 	float pressureReference() { return access.pressureReference(); }
+	long gasGeometrySolidSvq() { return access.gasGeometrySolidSvq(); }
 	int particleCell(int marker) { return access.particleCell(marker); }
 	int firstOpenSlot(int cell) { return access.firstOpenSlot(cell, 0); }
 	void ensureGrid() { access.ensureGrid(); }

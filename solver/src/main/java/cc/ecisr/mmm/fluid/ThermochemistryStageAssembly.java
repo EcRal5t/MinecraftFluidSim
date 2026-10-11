@@ -105,6 +105,9 @@ final class ThermochemistryStageAssembly {
 					}
 					@Override public void ensureGrid() { domain.ensureInventoryGrid(); }
 					@Override public void refreshGasTopology() { domain.gasTopologyCoordinator.refresh(); }
+					@Override public long gasGeometrySolidSvq() {
+						return domain.pressureGranularCoupling == null ? 0L : domain.pressureGranularCoupling.totalSolidSvq();
+					}
 					@Override public GasTopologyCoordinator.GasTopologyPlan planGasGeometry(int cell, int count, double volume, int node,
 							cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal) {
 						return domain.gasTopologyCoordinator.planAfterPhase(cell, count, volume, node, gas, energy, thermal);

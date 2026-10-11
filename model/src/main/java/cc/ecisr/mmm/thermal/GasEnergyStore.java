@@ -357,6 +357,7 @@ public final class GasEnergyStore {
 		}
 		public long baseRevision() { return baseRevision; }
 		public double[] nodeEnergy() { return nodeEnergy.clone(); }
+		public double nodeEnergy(int nodeId) { return nodeEnergy[nodeId - 1]; }
 		public SignedDyadic sourceEnergy() { return sourceEnergy; }
 		public SignedDyadic sinkEnergy() { return sinkEnergy; }
 		public SignedDyadic mechanicalWork() { return mechanicalWork; }

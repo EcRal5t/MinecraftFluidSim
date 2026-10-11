@@ -136,12 +136,9 @@ final class GasLiquidPhaseChangeStage {
 		if (high <= 0L) return null;
 		GasBoilingBatchBounds bounds = new GasBoilingBatchBounds(support, cell, node, liquidHandle,
 				transition, thermalCell, volatileSpecies, liquidTemperature, phase);
-		return GasPhaseBatchSearch.maximum(high, batches -> {
-			GasBoilPlan candidate = boilCandidate(cell, node, liquidHandle, gasThermalHandle, transition,
-					inventory, phase, thermalCell, volatileSpecies, liquidTemperature, batches);
-			return candidate != null && candidate.directionAfter() != GasLiquidPhaseModel.Direction.CONDENSE
-					? candidate : null;
-		}, bounds::excluded);
+		return GasPhaseBatchSearch.maximum(high, batches -> boilCandidate(
+				cell, node, liquidHandle, gasThermalHandle, transition, inventory, phase,
+				thermalCell, volatileSpecies, liquidTemperature, batches), bounds::excluded);
 	}
 
 	private GasBoilPlan boilCandidate(
@@ -173,14 +170,13 @@ final class GasLiquidPhaseChangeStage {
 			ThermalDomainState.PhaseCellEnergyPlan thermalPlan = thermal.planPhaseCellEnergy(
 					thermalCell, remainingLiquid, thermal.gasNodeEnergy(node, gasState.network), candidateGasEnergy);
 			double candidateLiquidTemperature = thermalPlan.temperatureK();
-			GasLiquidPhaseModel.Saturation saturationAfter = prospectiveSaturation(
-					node, transition, phase, candidateLiquidTemperature, candidateGas, candidateGasEnergy);
-			if (saturationAfter.direction() == GasLiquidPhaseModel.Direction.CONDENSE) return null;
 			int countDelta = 0;
 			for (var allocation : removal.allocations()) if (allocation.fullRemoval()) countDelta--;
 			var topology = support.planGasGeometry(cell, countDelta, -removedSvq, node, gasPlan, candidateGasEnergy, thermalPlan);
+			if (!interfaces.allowsAfter(cell, node, transition, phase, candidateLiquidTemperature,
+					topology, GasLiquidPhaseModel.Direction.BOIL)) return null;
 			return new GasBoilPlan(
-					batches, removedSvq, removal, gasPlan, thermalPlan, candidateGasEnergy, saturationAfter, topology);
+					batches, removedSvq, removal, gasPlan, thermalPlan, candidateGasEnergy, topology);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| ThermalStateFunction.EnergyRepresentationException
 				| ThermalDomainState.EmptyPhaseCandidateEnergyException
@@ -231,12 +227,8 @@ final class GasLiquidPhaseChangeStage {
 		if (high <= 0L) return null;
 		GasCondensingBatchBounds bounds = new GasCondensingBatchBounds(
 				support, cell, node, liquidHandle, transition, thermalCell, phase);
-		return GasPhaseBatchSearch.maximum(high, batches -> {
-			GasCondensePlan candidate = condenseCandidate(cell, node, liquidHandle, transition,
-					phase, thermalCell, batches);
-			return candidate != null && candidate.directionAfter() != GasLiquidPhaseModel.Direction.BOIL
-					? candidate : null;
-		}, bounds::excluded);
+		return GasPhaseBatchSearch.maximum(high, batches -> condenseCandidate(
+				cell, node, liquidHandle, transition, phase, thermalCell, batches), bounds::excluded);
 	}
 
 	private GasCondensePlan condenseCandidate(
@@ -366,36 +358,18 @@ final class GasLiquidPhaseChangeStage {
 							cell, liquidHandle, target, targetMass, condensedMixture, moved.mass()),
 					thermal.gasNodeEnergy(node, support.gasState().network), candidateGasEnergy);
 			double candidateLiquidTemperature = thermalPlan.temperatureK();
-			GasLiquidPhaseModel.Saturation saturationAfter = prospectiveSaturation(
-					node, transition, phase, candidateLiquidTemperature, take.second(), candidateGasEnergy);
-			if (saturationAfter.direction() == GasLiquidPhaseModel.Direction.BOIL) return null;
 			var topology = support.planGasGeometry(cell, target < 0 ? 1 : 0, addedSvq, node, gasPlan, candidateGasEnergy, thermalPlan);
+			if (!interfaces.allowsAfter(cell, node, transition, phase, candidateLiquidTemperature,
+					topology, GasLiquidPhaseModel.Direction.CONDENSE)) return null;
 			return new GasCondensePlan(
 					batches, gasPlan, thermalPlan, candidateGasEnergy, target, condensedMixture,
-					targetVolume, targetMass, momentum, slot, addedSvq, moved.mass(), saturationAfter, topology);
+					targetVolume, targetMass, momentum, slot, addedSvq, moved.mass(), topology);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| ThermalStateFunction.EnergyRepresentationException
 				| AirNetwork.PhaseCapacityExceededException
 				| ThermalDomainState.PhaseCellEnergyUnavailableException
 				| PhaseCandidateUnavailableException unavailable) {
 			return null;
-		}
-	}
-
-	private GasLiquidPhaseModel.Saturation prospectiveSaturation(
-			int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
-			double liquidTemperature, GasInventory gasInventory, double gasEnergy
-	) {
-		try {
-			double pressure = support.thermal().requireGasNodeState(
-					node, gasInventory, gasEnergy, support.gasState().network);
-			return phase.saturation(transition, liquidTemperature, gasInventory, pressure);
-		} catch (ThermalStateFunction.EnergyOutsideValidityException outsideThermalRange) {
-			throw outsideThermalRange;
-		} catch (IllegalArgumentException outsideGasPhaseRange) {
-			throw new PhaseCandidateUnavailableException(
-					"Gas phase candidate is outside its pressure or saturation validity range",
-					outsideGasPhaseRange);
 		}
 	}
 
@@ -631,20 +605,16 @@ final class GasLiquidPhaseChangeStage {
 
 	private record GasBoilPlan(
 			long batches, long removedSvq, PhaseRemovalPlan removal, AirNetwork.PhaseMutationPlan gasPlan,
-			ThermalDomainState.PhaseCellEnergyPlan thermalPlan, double candidateGasEnergy, GasLiquidPhaseModel.Saturation saturationAfter, GasTopologyCoordinator.GasTopologyPlan topology
-	) {
-		GasLiquidPhaseModel.Direction directionAfter() { return saturationAfter.direction(); }
-	}
+			ThermalDomainState.PhaseCellEnergyPlan thermalPlan, double candidateGasEnergy, GasTopologyCoordinator.GasTopologyPlan topology
+	) { }
 
 	private record GasCondensePlan(
 			long batches, AirNetwork.PhaseMutationPlan gasPlan, ThermalDomainState.PhaseCellEnergyPlan thermalPlan,
 			double candidateGasEnergy, int target,
 			ChemicalMixtureRecord condensedMixture, float targetVolume, double targetMass,
 			CarrierMassMomentum.Plan momentum, int slot, long addedSvq, double movedMass,
-			GasLiquidPhaseModel.Saturation saturationAfter, GasTopologyCoordinator.GasTopologyPlan topology
-	) {
-		GasLiquidPhaseModel.Direction directionAfter() { return saturationAfter.direction(); }
-	}
+			GasTopologyCoordinator.GasTopologyPlan topology
+	) { }
 
 	private record GasPhaseDirectionKey(String transitionId, int node, long liquidTemperatureBits) { }
 }
