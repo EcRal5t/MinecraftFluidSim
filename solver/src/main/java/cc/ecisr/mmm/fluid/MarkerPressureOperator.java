@@ -1,5 +1,6 @@
 package cc.ecisr.mmm.fluid;
 
+import cc.ecisr.mmm.units.SignedDyadic;
 import java.util.Arrays;
 
 /** SI volume-rate constraint C = face incidence * area * J, and C M^-1 C^T + gas storage. */
@@ -122,9 +123,28 @@ final class MarkerPressureOperator {
 			boolean rescale = Double.isFinite(force) && (!Double.isFinite(acceleration) || acceleration == 0 && force != 0);
 			for (int slot = 0; slot < counts[axis][marker]; slot++) {
 				double coefficient = coefficients[axis][start + slot];
-				result[rows[axis][start + slot]] += rescale ? (coefficient * inverseMass[marker]) * force : coefficient * acceleration;
+				result[rows[axis][start + slot]] += rescale ? rescaledResponse(coefficient, inverseMass[marker], force) : coefficient * acceleration;
 			}
 		}
+	}
+
+	static double rescaledResponse(double coefficient, double inverseMass, double force) {
+		double result = (coefficient * inverseMass) * force;
+		if ((!Double.isFinite(result) || result == 0) && coefficient != 0 && inverseMass != 0 && force != 0
+				&& Double.isFinite(coefficient) && Double.isFinite(inverseMass) && Double.isFinite(force)) {
+			return SignedDyadic.of(coefficient).multiply(SignedDyadic.of(inverseMass)).multiply(SignedDyadic.of(force)).toDouble();
+		}
+		return result;
+	}
+
+	static double scaledPressureDifference(double coefficient, double pFirst, double pSecond) {
+		double difference = pFirst - pSecond;
+		if (!Double.isInfinite(difference) || !Double.isFinite(pFirst) || !Double.isFinite(pSecond)) return coefficient * difference;
+		double result = coefficient * pFirst - coefficient * pSecond;
+		if (!Double.isFinite(result) && Double.isFinite(coefficient)) {
+			return SignedDyadic.of(coefficient).multiply(SignedDyadic.of(pFirst).subtract(SignedDyadic.of(pSecond))).toDouble();
+		}
+		return result;
 	}
 
 	/** Difference first: constant closed pressure stays exactly force-free even at large gauges. */
@@ -134,10 +154,26 @@ final class MarkerPressureOperator {
 			int entry = marker * 8 + slot;
 			double pFirst = first[axis][entry] < 0 ? 0 : pressure[first[axis][entry]];
 			double pSecond = second[axis][entry] < 0 ? 0 : pressure[second[axis][entry]];
-			double difference = pFirst - pSecond, coefficient = faceCoefficients[axis][entry];
 			// Opposite finite pressures can overflow their difference while the area-scaled force fits.
-			result += Double.isInfinite(difference) && Double.isFinite(pFirst) && Double.isFinite(pSecond)
-					? coefficient * pFirst - coefficient * pSecond : coefficient * difference;
+			result += scaledPressureDifference(faceCoefficients[axis][entry], pFirst, pSecond);
+		}
+		if (!Double.isFinite(result)) {
+			// A marker can receive opposing face forces larger than binary64 before they cancel.
+			for (int slot = 0; slot < faceCounts[axis][marker]; slot++) {
+				int entry = marker * 8 + slot;
+				if (!Double.isFinite(faceCoefficients[axis][entry])
+						|| first[axis][entry] >= 0 && !Double.isFinite(pressure[first[axis][entry]])
+						|| second[axis][entry] >= 0 && !Double.isFinite(pressure[second[axis][entry]])) return result;
+			}
+			SignedDyadic exact = SignedDyadic.ZERO;
+			for (int slot = 0; slot < faceCounts[axis][marker]; slot++) {
+				int entry = marker * 8 + slot;
+				double pFirst = first[axis][entry] < 0 ? 0 : pressure[first[axis][entry]];
+				double pSecond = second[axis][entry] < 0 ? 0 : pressure[second[axis][entry]];
+				exact = exact.add(SignedDyadic.of(faceCoefficients[axis][entry])
+						.multiply(SignedDyadic.of(pFirst).subtract(SignedDyadic.of(pSecond))));
+			}
+			return exact.toDouble();
 		}
 		return result;
 	}

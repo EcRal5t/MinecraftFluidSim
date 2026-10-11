@@ -15,6 +15,7 @@ public final class MarkerPressureValidation {
 		tinyMassPressureDiagonal();
 		largePressureDifferences();
 		pressureResponseAvoidsIntermediateOverflow();
+		pressureExtremeRoundingAndCancellation();
 	}
 
 	private static Layout layout(boolean full) {
@@ -214,5 +215,36 @@ public final class MarkerPressureValidation {
 		double expected=(.0625/j.massKilograms(0))*2e107;
 		near(response[0],expected,4*Math.ulp(expected),"Representable pressure response");
 		near(response[1],-expected,4*Math.ulp(expected),"Opposite shared pressure response");
+	}
+
+	private static void pressureExtremeRoundingAndCancellation() {
+		// Independently evaluated exact binary products round to these literal endpoints.
+		for (double sign : new double[]{1,-1}) {
+			near(MarkerPressureOperator.rescaledResponse(sign*0x1.b9f88e001b9f8p-77,0x1.04p500,0x1.24p600),
+					sign*Double.MAX_VALUE,0,"Final pressure response overflow midpoint");
+			near(MarkerPressureOperator.rescaledResponse(sign*0x1.e18ce7228170bp24,0x1.04p-1000,0x1.0cp-100),
+					sign*Double.MIN_VALUE,0,"Final pressure response underflow midpoint");
+			near(MarkerPressureOperator.scaledPressureDifference(sign*0x1.f07c1f07c1f07p-1,0x1.04p1023,-0x1.0cp1023),
+					sign*Double.MAX_VALUE,0,"Final scaled pressure difference midpoint");
+		}
+		if(MarkerPressureOperator.rescaledResponse(1,Double.MAX_VALUE,2)!=Double.POSITIVE_INFINITY
+				||MarkerPressureOperator.scaledPressureDifference(1,Double.MAX_VALUE,-Double.MAX_VALUE)!=Double.POSITIVE_INFINITY)
+			throw new AssertionError("True exact pressure overflow was hidden");
+		if(!Double.isNaN(MarkerPressureOperator.scaledPressureDifference(1,Double.NaN,0)))
+			throw new AssertionError("Invalid pressure was hidden");
+		near(MarkerPressureOperator.scaledPressureDifference(1,Double.MAX_VALUE,Double.MAX_VALUE),0,0,"Maximum closed constant pressure");
+		var d=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.001F,400,1e-5F,.45F,.002F,.8F),2048);
+		d.restoreMaterialParticleState(new FlipMaterialParticleState(4,4,4,1,1,.125,125,
+				java.util.List.of(new FluidMaterial("mmm:water",1000,"mmm:water",0,Math.PI/2)),
+				new float[]{1.5F,1.5F,1.5F,.125F},new float[3],new byte[64],new double[]{125},new int[]{0}));
+		var j=new MarkerVelocityTransfer();j.capture(d);int[][] first=new int[3][],second=new int[3][];var area=faces(j);
+		for(int a=0;a<3;a++){first[a]=new int[j.faceCount(a)];second[a]=new int[j.faceCount(a)];Arrays.fill(first[a],-1);Arrays.fill(second[a],-1);}
+		int low=d.xFaceIndex(1,1,1),high=d.xFaceIndex(2,1,1);
+		first[0][low]=0;second[0][low]=1;first[0][high]=1;second[0][high]=0;area[0][low]=area[0][high]=1;
+		var c=new MarkerPressureOperator(j,2,first,second,area,new double[]{0,0});var force=markers(j);
+		c.force(new double[]{Double.MAX_VALUE,-Double.MAX_VALUE},force);
+		for(double[] axis:force)for(double value:axis)near(value,0,0,"Opposing unrepresentable face forces cancel exactly");
+		c.force(new double[]{Double.NaN,0},force);
+		if(!Double.isNaN(force[0][0]))throw new AssertionError("Marker cancellation hid invalid pressure");
 	}
 }
