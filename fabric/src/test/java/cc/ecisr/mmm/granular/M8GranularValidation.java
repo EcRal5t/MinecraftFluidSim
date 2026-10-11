@@ -48,6 +48,7 @@ public final class M8GranularValidation {
 		porousBedPreservesHydrostatics();
 		settlingRelaxationSleepAndWakeAreLocal();
 		blockedSettlementPreservesKineticEnergy();
+		settlementAndRelaxationRespectVerticalPartitions();
 		cc.ecisr.mmm.fluid.GranularBedWakeValidation.validate();
 		solverCouplingPreservesInventories(fast ? 8 : 80);
 		wholeBucketCongestionRemainsLocal(fast ? 40 : 200);
@@ -880,12 +881,14 @@ public final class M8GranularValidation {
 				* registry.material(sand).referenceDensity();
 		long parcelSvq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		double parcelMass = initialMass * parcelSvq / initialSvq;
-		parcels.add(new GranularParcelStore.Parcel(0.75F, 0.05F, 0.75F, 0.0F, 0.0F, 0.0F,
+		parcels.add(new GranularParcelStore.Parcel(0.75F, 0.05F, 0.75F, 0.01F, 0.0F, 0.0F,
 				parcelSvq, parcelMass, sand, 0, GranularDepositDynamics.SETTLE_CONTACT_STEPS,
 				GranularParcelStore.FLAG_SUPPORTED));
 		TestDepositEnvironment calm = new TestDepositEnvironment(sizeX, sizeY, sizeZ, 0.0);
 		GranularDepositDynamics.Stats settled = dynamics.step(calm, 0.05F);
 		require(settled.settledParcels() == 1 && parcels.count() == 0, "supported granular parcel did not settle");
+		require(calm.impulseX == parcelMass * (double) 0.01F && calm.impulseY == 0 && calm.impulseZ == 0,
+				"settling must transfer the removed parcel momentum to its fixed bed");
 		int centerCell = cellIndex(1, 0, 1, sizeX, sizeY);
 		require(deposits.tryAdd(centerCell, new GranularDepositStore.SolidPortion(
 				sand, 0, initialSvq - parcelSvq, initialMass - parcelMass), SolidVolume.SVQ_PER_CELL),
@@ -945,16 +948,78 @@ public final class M8GranularValidation {
 					moving ? 0.03F : 0, moving ? 0.04F : 0, moving ? 0.12F : 0,
 					svq, mass, sand, 0, GranularDepositDynamics.SETTLE_CONTACT_STEPS, GranularParcelStore.FLAG_SUPPORTED);
 			parcels.add(original);
-			dynamics.step(new TestDepositEnvironment(3, 1, 1, 0) {
+			TestDepositEnvironment environment = new TestDepositEnvironment(3, 1, 1, 0) {
 				@Override public boolean planSettlement(GranularParcelStore.Parcel parcel, int cell) { return false; }
-			}, 0.05F);
+			};
+			dynamics.step(environment, 0.05F);
 			var after = parcels.parcel(0);
+			require(Math.abs(mass * after.velocityX() + environment.impulseX - mass * original.velocityX())
+					<= 4 * Math.ulp(mass * (double) original.velocityX())
+					&& Math.abs(mass * after.velocityY() + environment.impulseY - mass * original.velocityY())
+					<= 4 * Math.ulp(mass * (double) original.velocityY())
+					&& Math.abs(mass * after.velocityZ() + environment.impulseZ - mass * original.velocityZ())
+					<= 4 * Math.ulp(mass * (double) original.velocityZ()),
+					"blocked settlement steering must close momentum with the fixed bed impulse");
 			if (slope <= 0 || !moving) require(after.equals(original),
 					"blocked settlement cannot accelerate a resting parcel or steer it across a flat bed");
 			else require(after.velocityZ() == 0 && Math.abs(Math.abs(after.velocityX()) - 0.13F) <= Math.ulp(0.13F)
 						&& after.velocityY() == 0 && after.flags() == 0,
 					"rolling reorients existing kinetic energy toward a lower bed surface");
 		}
+	}
+
+	private static void settlementAndRelaxationRespectVerticalPartitions() {
+		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		for (boolean partition : new boolean[]{false, true}) {
+			GranularParcelStore parcels = new GranularParcelStore(registry, 8);
+			GranularDepositStore deposits = new GranularDepositStore(registry, 8, 16);
+			GranularInventory inventory = new GranularInventory(parcels, deposits);
+			GranularDepositDynamics dynamics = new GranularDepositDynamics(registry, parcels, deposits, inventory, 2, 4, 1, 0.5F);
+			TestDepositEnvironment environment = new TestDepositEnvironment(2, 4, 1, 0) {
+				@Override public long geometricOpenSvq(int cell) {
+					return cell / 2 % 4 == 1 ? SolidVolume.SVQ_PER_CELL / 2 : SolidVolume.SVQ_PER_CELL;
+				}
+				@Override public boolean verticalPathOpen(float x, float fromY, float z, float toY, long svq) {
+					float radius = GranularMechanics.representativeRadius(svq, 0.5F);
+					return !partition || Math.min(fromY, toY) - radius >= 1.0F
+							|| Math.max(fromY, toY) + radius <= 0.75F;
+				}
+			};
+			long svq = SolidVolume.SVQ_PER_CELL * 3 / 5;
+			double mass = svq / (double) SolidVolume.SVQ_PER_BV * registry.material(sand).referenceDensity();
+			require(deposits.tryAdd(cellIndex(0, 2, 0, 2, 4),
+					new GranularDepositStore.SolidPortion(sand, 0, svq, mass), SolidVolume.SVQ_PER_CELL),
+					"vertical relaxation fixture must fit its source cell");
+			dynamics.disturbCell(cellIndex(0, 2, 0, 2, 4));
+			var stats = dynamics.step(environment, 0.05F);
+			require(partition ? deposits.cellSolidVolumeSvq(1) == 0 : stats.relaxedMoves() > 0,
+					"repose relaxation must retain an intervening slab, while an open column can receive material");
+			require(inventory.totalSolidVolumeSvq() == svq && rawClose(inventory.totalMass(), mass),
+					"vertical relaxation path check changed inventory");
+		}
+		GranularParcelStore parcels = new GranularParcelStore(registry, 8);
+		GranularDepositStore deposits = new GranularDepositStore(registry, 4, 8);
+		GranularInventory inventory = new GranularInventory(parcels, deposits);
+		GranularDepositDynamics dynamics = new GranularDepositDynamics(registry, parcels, deposits, inventory, 1, 4, 1, 0.5F);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double mass = svq / (double) SolidVolume.SVQ_PER_BV * registry.material(sand).referenceDensity();
+		float y = Math.nextUp(1 + GranularMechanics.representativeRadius(svq, 0.5F));
+		parcels.add(new GranularParcelStore.Parcel(0.25F, y, 0.25F, 0, 0, 0, svq, mass, sand, 0, 3,
+				GranularParcelStore.FLAG_SUPPORTED));
+		var stats = dynamics.step(new TestDepositEnvironment(1, 4, 1, 0) {
+			@Override public long geometricOpenSvq(int cell) {
+				return cell == 1 ? SolidVolume.SVQ_PER_CELL / 2 : SolidVolume.SVQ_PER_CELL;
+			}
+			@Override public boolean verticalPathOpen(float x, float fromY, float z, float toY, long volume) {
+				return Math.min(fromY, toY) - GranularMechanics.representativeRadius(volume, 0.5F) >= 1;
+			}
+		}, 0.05F);
+		require(stats.settledParcels() == 1 && deposits.cellSolidVolumeSvq(2) == svq
+				&& deposits.cellSolidVolumeSvq(0) == 0 && deposits.cellSolidVolumeSvq(1) == 0,
+				"supported parcel must settle in the reachable layer above a slab");
+		require(inventory.totalSolidVolumeSvq() == svq && rawClose(inventory.totalMass(), mass),
+				"partitioned settlement changed inventory");
 	}
 
 	private static void assertReposeBound(GranularDepositStore deposits, double repose,
@@ -983,6 +1048,7 @@ public final class M8GranularValidation {
 	private static class TestDepositEnvironment implements GranularDepositDynamics.Environment {
 		private final int sizeX, sizeY, sizeZ;
 		private final double shields;
+		double impulseX, impulseY, impulseZ;
 
 		private TestDepositEnvironment(int sizeX, int sizeY, int sizeZ, double shields) {
 			this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.shields = shields;
@@ -995,6 +1061,9 @@ public final class M8GranularValidation {
 					&& z + directionZ >= 0 && z + directionZ < sizeZ;
 		}
 		@Override public double shields(int surfaceCell, ParticulateMaterial material) { return shields; }
+		@Override public void receiveContactImpulse(double x, double y, double z) {
+			impulseX += x; impulseY += y; impulseZ += z;
+		}
 
 	}
 

@@ -40,7 +40,9 @@ public final class GranularDepositDynamics {
 	public interface Environment {
 		long geometricOpenSvq(int cell);
 		boolean horizontalPathOpen(int fromCell, int directionX, int directionZ);
+		default boolean verticalPathOpen(float x, float fromY, float z, float toY, long solidSvq) { return true; }
 		double shields(int surfaceCell, ParticulateMaterial material);
+		default void receiveContactImpulse(double x, double y, double z) { }
 		default boolean planSettlement(GranularParcelStore.Parcel parcel, int cell) { return true; }
 		default void cancelSettlement(GranularParcelStore.Parcel parcel, int cell) { }
 		default boolean planRelaxation(int fromCell, int toCell, long solidSvq) { return true; }
@@ -165,6 +167,8 @@ public final class GranularDepositDynamics {
 				long open = environment.geometricOpenSvq(cell);
 				if (open <= 0L) continue;
 				if (deposits.previewCellBulkVolumeAfterAdd(cell, addition) > open) continue;
+				if (!environment.verticalPathOpen(parcel.x(), parcel.y(), parcel.z(),
+						settlementCenterY(cell, parcel.solidVolumeSvq()), parcel.solidVolumeSvq())) continue;
 				if (!settlementSlopeAllowed(cell, parcel, material, environment)) {
 					if (rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
 					break;
@@ -176,6 +180,8 @@ public final class GranularDepositDynamics {
 					break;
 				}
 				if (inventory.depositParcel(parcelIndex, cell, open)) {
+					environment.receiveContactImpulse(parcel.mass() * parcel.velocityX(),
+							parcel.mass() * parcel.velocityY(), parcel.mass() * parcel.velocityZ());
 					environment.onSolidChanged(sourceCell);
 					environment.onSolidChanged(cell);
 					disturbCell(cell);
@@ -295,6 +301,10 @@ public final class GranularDepositDynamics {
 			long open = environment.geometricOpenSvq(receiver);
 			if (open <= 0L) continue;
 			if (deposits.previewCellBulkVolumeAfterAdd(receiver, moved) > open) continue;
+			float radius = GranularMechanics.representativeRadius(requestedSkeleton, cellSize);
+			if (!environment.verticalPathOpen((receiverX + 0.5F) * cellSize,
+					Math.nextUp((float) (height * cellSize + radius)), (receiverZ + 0.5F) * cellSize,
+					settlementCenterY(receiver, requestedSkeleton), requestedSkeleton)) continue;
 			if (!additionSlopeAllowed(receiver, moved, material, environment)) return false;
 			if (!environment.planRelaxation(surfaceCell, receiver, requestedSkeleton)) return false;
 			environment.requireThermalRelaxation(surfaceCell, receiver, exposed.materialHandle(),
@@ -377,7 +387,17 @@ public final class GranularDepositDynamics {
 				(float) (dz * inverseLength * speed), parcel.solidVolumeSvq(), parcel.mass(), parcel.materialHandle(),
 				parcel.solidCompositionHandle(), 0,
 				(byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED)));
+		GranularParcelStore.Parcel redirected = parcels.parcel(parcelIndex);
+		environment.receiveContactImpulse(parcel.mass() * (parcel.velocityX() - (double) redirected.velocityX()),
+				parcel.mass() * (parcel.velocityY() - (double) redirected.velocityY()),
+				parcel.mass() * (parcel.velocityZ() - (double) redirected.velocityZ()));
 		return true;
+	}
+
+	private float settlementCenterY(int cell, long solidSvq) {
+		int y = cell / sizeX % sizeY;
+		double bedHeight = (y + deposits.cellBulkVolumeSvq(cell) / (double) SolidVolume.SVQ_PER_CELL) * cellSize;
+		return Math.nextUp((float) (bedHeight + GranularMechanics.representativeRadius(solidSvq, cellSize)));
 	}
 
 	private long columnBulkSvq(int column) {

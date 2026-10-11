@@ -156,6 +156,33 @@ final class FlipCutCellGeometry {
 		return Math.max(0.0, Math.max(minimum - coordinate, coordinate - (minimum + length)));
 	}
 
+	/** Interior sphere/box overlap along a vertical segment; pure support tangency remains legal. */
+	boolean verticalSpherePathTouchesSolid(float x, float fromY, float z, float toY, float radius, float cellSize) {
+		double lowY = Math.min(fromY, toY), highY = Math.max(fromY, toY);
+		int minX = Math.max(0, (int) Math.floor(Math.nextDown((x - (double) radius) / cellSize)));
+		int minY = Math.max(0, (int) Math.floor(Math.nextDown((lowY - radius) / cellSize)));
+		int minZ = Math.max(0, (int) Math.floor(Math.nextDown((z - (double) radius) / cellSize)));
+		int maxX = Math.min(sizeX - 1, (int) Math.floor((x + (double) radius) / cellSize));
+		int maxY = Math.min(sizeY - 1, (int) Math.floor((highY + radius) / cellSize));
+		int maxZ = Math.min(sizeZ - 1, (int) Math.floor((z + (double) radius) / cellSize));
+		double microSize = cellSize / (double) MICRO_CELLS_PER_AXIS, radiusSquared = radius * (double) radius;
+		for (int cz = minZ; cz <= maxZ; cz++) for (int cy = minY; cy <= maxY; cy++) {
+			for (int cx = minX; cx <= maxX; cx++) {
+				int mask = mask(cellIndex(cx, cy, cz));
+				if (mask == 0) continue;
+				for (int bit = 0; bit < 8; bit++) {
+					if ((mask & 1 << bit) == 0) continue;
+					double dx = intervalDistance(x, (2 * cx + (bit & 1)) * microSize, microSize);
+					double boxY = (2 * cy + (bit >> 1 & 1)) * microSize;
+					double dy = Math.max(0, Math.max(boxY - highY, lowY - (boxY + microSize)));
+					double dz = intervalDistance(z, (2 * cz + (bit >> 2)) * microSize, microSize);
+					if (dx * dx + dy * dy + dz * dz < radiusSquared) return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	boolean microCellOpen(int cell, int localX, int localY, int localZ) {
 		if (cell < 0 || cell >= occupancy.length || localX < 0 || localX >= MICRO_CELLS_PER_AXIS
 				|| localY < 0 || localY >= MICRO_CELLS_PER_AXIS

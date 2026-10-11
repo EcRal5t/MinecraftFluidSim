@@ -371,6 +371,25 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				return GranularBedShear.shields(domain(), surfaceCell, material);
 			}
 
+			@Override public boolean verticalPathOpen(float x, float fromY, float z, float toY, long solidSvq) {
+				float h = config.cellSize();
+				int cx = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(x / h)));
+				int cz = Math.min(sizeZ - 1, Math.max(0, (int) Math.floor(z / h)));
+				int from = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(fromY / h)));
+				int to = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(toY / h)));
+				for (int y = Math.min(from, to); y < Math.max(from, to); y++) {
+					if (openFaceFromCell(cellIndex(cx, y, cz), 0, 1, 0) <= 0.0F) return false;
+				}
+				float radius = cc.ecisr.mmm.granular.GranularMechanics.representativeRadius(solidSvq, config.cellSize());
+				return !geometry.cutCells.verticalSpherePathTouchesSolid(x, fromY, z, toY, radius, config.cellSize());
+			}
+
+			@Override public void receiveContactImpulse(double x, double y, double z) {
+				lastGranularBoundaryImpulseX += x;
+				lastGranularBoundaryImpulseY += y;
+				lastGranularBoundaryImpulseZ += z;
+			}
+
 			@Override public boolean planSettlement(GranularParcelStore.Parcel parcel, int cell) {
 				GranularCouplingFields.Position position = parcelPosition(parcel);
 				granularCoupling.removePlannedParcel(plannedSolid, position, parcel.solidVolumeSvq());
