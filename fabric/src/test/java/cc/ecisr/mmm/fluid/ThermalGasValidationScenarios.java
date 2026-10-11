@@ -201,10 +201,16 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, 1_500.0, 150.0)));
 		GasThermalModel coldReferenceModel = new GasThermalModel(new ThermalRegistry(List.of(coldReference)), gas);
 		double coldEnergy = coldReferenceModel.internalEnergyAtTemperature(inventory, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+		double exactMinimumEnergy = new java.math.BigDecimal(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)
+				.subtract(new java.math.BigDecimal(coldReference.referenceTemperatureK()))
+				.multiply(new java.math.BigDecimal(inventory.totalMass())).multiply(java.math.BigDecimal.valueOf(150)).doubleValue();
+		require(coldEnergy == exactMinimumEnergy, "cold gas forward energy differs from its exact caloric integral");
 		double actualColdTemperature = new java.math.BigDecimal(coldEnergy)
 				.divide(new java.math.BigDecimal(inventory.totalMass()).multiply(java.math.BigDecimal.valueOf(150)),
 						new java.math.MathContext(110))
 				.add(new java.math.BigDecimal(coldReference.referenceTemperatureK())).doubleValue();
+		// Final storage rounding at MIN may lie below the numeric domain by at most half an energy ULP.
+		actualColdTemperature = Math.max(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, actualColdTemperature);
 		require(Double.doubleToRawLongBits(coldReferenceModel.state(inventory, coldEnergy).temperatureK())
 				== Double.doubleToRawLongBits(actualColdTemperature),
 				"cold gas inversion lost the temperature carried by its actual raw energy");
@@ -286,17 +292,39 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			}
 			GasThermalModel model = new GasThermalModel(new ThermalRegistry(materials), gas);
 			GasInventory source = new GasInventory(components);
-			double sourceEnergy = model.internalEnergyAtTemperature(source, 300);
-			List<GasInventory> children = source.partition(new long[] {1, 1});
-			double[] energies = model.partitionEnergy(source, sourceEnergy, children);
-			require(sourceEnergy == 200 && model.state(source, sourceEnergy).temperatureK() == 300
-					&& Arrays.equals(energies, new double[] {100, 100})
-					&& model.state(children.get(0), energies[0]).temperatureK() == 300
-					&& model.state(children.get(1), energies[1]).temperatureK() == 300
-					&& SignedDyadic.sum(energies).equals(SignedDyadic.of(sourceEnergy)),
-					"gas component reduction changed a common-temperature exact split");
-			require(model.internalEnergyAtTemperature(source, 300) == sourceEnergy,
-					"gas partition changed its source inventory or energy");
+			for (double temperature : new double[] {300, 300.5}) {
+				double sourceEnergy = model.internalEnergyAtTemperature(source, temperature);
+				double expected = 200 + 3 * (temperature - 300);
+				List<GasInventory> children = source.partition(new long[] {1, 1});
+				double[] energies = model.partitionEnergy(source, sourceEnergy, children);
+				require(sourceEnergy == expected && model.state(source, sourceEnergy).temperatureK() == temperature
+						&& Arrays.equals(energies, new double[] {expected / 2, expected / 2})
+						&& model.state(children.get(0), energies[0]).temperatureK() == temperature
+						&& model.state(children.get(1), energies[1]).temperatureK() == temperature
+						&& SignedDyadic.sum(energies).equals(SignedDyadic.of(sourceEnergy)),
+						"gas component reduction changed a common-temperature exact split");
+				require(model.internalEnergyAtTemperature(source, temperature) == sourceEnergy,
+						"gas partition changed its source inventory or energy");
+			}
+		}
+		for (double sign : new double[] {1, -1}) {
+			ThermalRegistry thermal = new ThermalRegistry(List.of(
+					new ThermalMaterialDefinition("test:thermal/extreme_a", ThermalMaterialDefinition.CarrierKind.GAS,
+							ids.get(0), 1, sign * Double.MAX_VALUE, 0,
+							List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2, 5e307))),
+					new ThermalMaterialDefinition("test:thermal/extreme_b", ThermalMaterialDefinition.CarrierKind.GAS,
+							ids.get(1), 1, -sign * Double.MAX_VALUE, 0,
+							List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2, 5e307)))));
+			GasThermalModel model = new GasThermalModel(thermal, gas);
+			GasInventory source = new GasInventory(List.of(new GasComponentAmount(ids.get(0), 125_000_000L, 1, List.of(), 1),
+					new GasComponentAmount(ids.get(1), 125_000_000L, 1, List.of(), 1)));
+			double temperature = Math.nextUp(1.0);
+			double expected = new java.math.BigDecimal(5e307).multiply(java.math.BigDecimal.valueOf(2))
+					.multiply(new java.math.BigDecimal(temperature).subtract(java.math.BigDecimal.ONE)).doubleValue();
+			double energy = model.internalEnergyAtTemperature(source, temperature);
+			require(energy == expected && model.state(source, energy).temperatureK() == temperature
+					&& model.partitionEnergy(source, energy, List.of(source))[0] == energy,
+					"finite mixed gas energy depends on overflowing virtual component energies");
 		}
 	}
 

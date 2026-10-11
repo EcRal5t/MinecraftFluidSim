@@ -68,6 +68,21 @@ public final class ThermalStateFunction {
 				baseEnergy(materialHandle, massMu, speciesQuanta));
 	}
 
+	/** One inventory energy column: retain each reference and caloric integral until final storage rounding. */
+	double inventoryEnergyAtTemperature(List<InventoryPortion> portions, double temperatureK) {
+		if (portions == null || portions.isEmpty()) throw new IllegalArgumentException("Thermal LTE inventory is missing");
+		SignedDyadic energy = SignedDyadic.ZERO;
+		for (InventoryPortion portion : portions) {
+			ThermalMaterialDefinition material = registry.material(portion.materialHandle());
+			energy = energy.add(SignedDyadic.of(baseEnergy(portion.materialHandle(), portion.massMu(), portion.speciesQuanta())))
+					.add(ThermalContactExchange.exactEnergyChangeBetween(material, portion.massMu(),
+							material.referenceTemperatureK(), temperatureK));
+		}
+		double result = energy.toDouble();
+		if (!Double.isFinite(result)) throw new EnergyRepresentationException();
+		return result;
+	}
+
 	/** Closed-form common-temperature inversion for a heterogeneous LTE inventory. */
 	public State stateForInventory(List<InventoryPortion> portions, double internalEnergy) {
 		if (!Double.isFinite(internalEnergy)) throw new EnergyRepresentationException();
