@@ -339,9 +339,9 @@ final class GranularReactionStage {
 			if (deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ
 					> maximumVelocityDelta * maximumVelocityDelta) continue;
 			double combinedMass = existing.mass() + plan.signedSolidMass();
-			float x = weighted(existing.x(), existing.solidVolumeSvq(), spawned.x(), plan.signedSolidSvq(), combinedSvq);
-			float y = weighted(existing.y(), existing.solidVolumeSvq(), spawned.y(), plan.signedSolidSvq(), combinedSvq);
-			float z = weighted(existing.z(), existing.solidVolumeSvq(), spawned.z(), plan.signedSolidSvq(), combinedSvq);
+			float x = weighted(existing.x(), existing.mass(), spawned.x(), plan.signedSolidMass(), combinedMass);
+			float y = weighted(existing.y(), existing.mass(), spawned.y(), plan.signedSolidMass(), combinedMass);
+			float z = weighted(existing.z(), existing.mass(), spawned.z(), plan.signedSolidMass(), combinedMass);
 			if (!access.collision().positionValid(x, y, z, combinedSvq)) continue;
 			SolidCompositionRecord composition = granular.compositions.record(existing.solidCompositionHandle())
 					.plus(plan.transferredComposition());
@@ -577,10 +577,6 @@ final class GranularReactionStage {
 		access.chemistry().markDirtyCell(cell);
 		access.depositDynamics().disturbCell(cell);
 		access.markGridDirty();
-	}
-
-	private static float weighted(float left, long leftWeight, float right, long rightWeight, long total) {
-		return (float) (((double) left * leftWeight + (double) right * rightWeight) / total);
 	}
 
 	private static float weighted(float left, double leftWeight, float right, double rightWeight, double total) {

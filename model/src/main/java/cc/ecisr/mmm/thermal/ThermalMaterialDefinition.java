@@ -147,14 +147,17 @@ public record ThermalMaterialDefinition(
 				if (remaining <= capacity) {
 					// Every finite remaining energy lies inside an overflowing segment capacity.
 					if (Double.isInfinite(capacity)) return end - remaining / segment.specificHeatEuPerMuK();
-					return segment.minimumTemperatureK()
-							+ (capacity - remaining) / segment.specificHeatEuPerMuK();
+					return remaining <= capacity - remaining ? end - remaining / segment.specificHeatEuPerMuK()
+							: segment.minimumTemperatureK() + (capacity - remaining) / segment.specificHeatEuPerMuK();
 				}
 				remaining -= capacity;
 				cursor = segment.minimumTemperatureK();
 			}
-			double temperature = cursor
-					- remaining / caloricSegments.getFirst().specificHeatEuPerMuK();
+			double cv = caloricSegments.getFirst().specificHeatEuPerMuK();
+			double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
+			double capacity = (cursor - minimum) * cv;
+			double temperature = remaining <= capacity - remaining || Double.isInfinite(capacity)
+					? cursor - remaining / cv : minimum + (capacity - remaining) / cv;
 			double tolerance = Math.max(Math.ulp(cursor) * 16.0, Math.ulp(temperature) * 16.0);
 			if (temperature >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K - tolerance) {
 				return Math.max(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, temperature);

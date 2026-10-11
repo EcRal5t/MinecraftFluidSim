@@ -336,7 +336,9 @@ public final class GranularInventory {
 				evaluations++;
 				if (mergePaired[first]) continue;
 				ActiveMerge merge = activeMerge(first, second, maximumVelocityDelta);
-				if (merge == null || !mergeAcceptance.test(parcels.parcel(first), candidate, merge.parcel())) continue;
+				if (merge == null || thermalEnergy != null && !thermalEnergy.canActiveMerge(first, second,
+						merge.parcel(), merge.composition())
+						|| !mergeAcceptance.test(parcels.parcel(first), candidate, merge.parcel())) continue;
 				mergeFirst[pairs] = first; mergeSecond[pairs] = second; pairs++;
 				plannedMerge[pairs - 1] = merge;
 				mergePaired[first] = true; mergePaired[second] = true;
@@ -349,7 +351,13 @@ public final class GranularInventory {
 			if (merge == null || !merge.equals(plannedMerge[pair])) {
 				throw new IllegalStateException("Active granular merge plan changed before commit");
 			}
-			if (thermalEnergy != null) thermalEnergy.requireActiveMerge(mergeFirst[pair], mergeSecond[pair]);
+			if (thermalEnergy != null && !thermalEnergy.canActiveMerge(mergeFirst[pair], mergeSecond[pair],
+					merge.parcel(), merge.composition())) {
+				throw new IllegalStateException("Active granular merge thermal state changed before commit");
+			}
+		}
+		for (int pair = pairs - 1; pair >= 0; pair--) {
+			ActiveMerge merge = plannedMerge[pair];
 			if (merge.composition() != null) {
 				compositions.overwrite(merge.parcel().solidCompositionHandle(), merge.composition());
 				compositions.release(parcels.parcel(mergeSecond[pair]).solidCompositionHandle());
@@ -478,7 +486,8 @@ public final class GranularInventory {
 	}
 	public interface EnergyAdapter {
 		EnergyPlan planActiveToDeposits(List<DepositTransfer> transfers);
-		void requireActiveMerge(int first, int second);
+		boolean canActiveMerge(int first, int second, GranularParcelStore.Parcel merged,
+		                       SolidCompositionRecord composition);
 		void commitActiveMerge(int first, int second);
 		void requireDepositWake(int cell, int material, int composition, long takenSvq, long totalSvq);
 		void commitDepositWake(int cell, int material, int composition, long takenSvq, long totalSvq);

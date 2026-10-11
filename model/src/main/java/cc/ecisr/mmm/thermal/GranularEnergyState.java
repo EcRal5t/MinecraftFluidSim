@@ -128,7 +128,20 @@ public final class GranularEnergyState {
 		};
 	}
 
-	void requireActiveMerge(int first, int second) { granularEnergy.requireMergeActive(first, second); }
+	boolean canActiveMerge(int first, int second, int material, double mass, Map<String, Long> composition) {
+		double left = granularEnergy.activeEnergy(first), right = granularEnergy.activeEnergy(second);
+		double merged = left + right;
+		if (!Double.isFinite(merged)) return false;
+		try {
+			stateFunction.stateForInventory(List.of(new ThermalStateFunction.InventoryPortion(
+					materialByGranularHandle[material], mass, composition)), merged);
+		} catch (ThermalStateFunction.EnergyOutsideValidityException outside) {
+			return false;
+		}
+		SignedDyadic roundoff = SignedDyadic.of(merged).subtract(SignedDyadic.of(left)).subtract(SignedDyadic.of(right));
+		audit.ledger().withRoundoff(roundoff);
+		return true;
+	}
 
 	void commitActiveMerge(int first, int second) {
 		SignedDyadic before = granularEnergy.exactEnergy();

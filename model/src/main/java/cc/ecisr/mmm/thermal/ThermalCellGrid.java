@@ -467,7 +467,7 @@ public final class ThermalCellGrid {
 		if (!Double.isFinite(targetEnergy)) throw new IllegalArgumentException("Thermal cell sensible energy is invalid");
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
 		double energyAtMinimum = modeledCellSensibleEnergy(cell, minimum);
-		double tolerance = energyTolerance(targetEnergy, energyAtMinimum);
+		double tolerance = Double.isFinite(energyAtMinimum) ? energyTolerance(targetEnergy, energyAtMinimum) : 0;
 		if (targetEnergy < energyAtMinimum - tolerance) {
 			throw new IllegalArgumentException("Thermal cell energy is outside the positive-temperature domain");
 		}
@@ -483,6 +483,8 @@ public final class ThermalCellGrid {
 		while (true) {
 			double next = Double.POSITIVE_INFINITY;
 			for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+				double referenceTemperature = carrierMaterial[carrier].referenceTemperatureK();
+				if (referenceTemperature > cursor && referenceTemperature < next) next = referenceTemperature;
 				for (ThermalMaterialDefinition.CaloricSegment segment : carrierMaterial[carrier].caloricSegments()) {
 					if (segment.maximumTemperatureK() > cursor && segment.maximumTemperatureK() < next) {
 						next = segment.maximumTemperatureK();
@@ -491,7 +493,9 @@ public final class ThermalCellGrid {
 			}
 			if (next == Double.POSITIVE_INFINITY) {
 				double capacity = modeledCellHeatCapacity(cell, cursor);
-				double solved = cursor + (targetEnergy - cursorEnergy) / capacity;
+				double solved = cursor + (Double.isFinite(cursorEnergy) ? (targetEnergy - cursorEnergy) / capacity
+						: ThermalContactExchange.temperatureDifference(SignedDyadic.of(targetEnergy)
+						.subtract(modeledCellSensibleEnergyExact(cell, cursor)), capacity));
 				if (!(Double.isFinite(solved) && solved >= cursor)) {
 					throw new IllegalArgumentException("Thermal cell state inversion overflowed");
 				}
@@ -501,12 +505,18 @@ public final class ThermalCellGrid {
 				return;
 			}
 			double middle = cursor + (next - cursor) * 0.5;
-			double capacity = modeledCellHeatCapacity(cell, middle);
-			double intervalEnergy = capacity * (next - cursor);
-			double nextEnergy = cursorEnergy + intervalEnergy;
-			tolerance = energyTolerance(targetEnergy, cursorEnergy, nextEnergy);
-			if (targetEnergy <= nextEnergy + tolerance) {
-				double solved = cursor + (targetEnergy - cursorEnergy) / capacity;
+			double nextEnergy = modeledCellSensibleEnergy(cell, next);
+			if (targetEnergy <= nextEnergy) {
+				double capacity = modeledCellHeatCapacity(cell, middle);
+				double fromLower = targetEnergy - cursorEnergy, fromUpper = nextEnergy - targetEnergy;
+				double solved;
+				if (Double.isInfinite(fromLower) && Double.isInfinite(fromUpper)) {
+					SignedDyadic lower = SignedDyadic.of(targetEnergy).subtract(modeledCellSensibleEnergyExact(cell, cursor));
+					SignedDyadic upper = modeledCellSensibleEnergyExact(cell, next).subtract(SignedDyadic.of(targetEnergy));
+					solved = lower.compareTo(upper) <= 0 ? cursor + ThermalContactExchange.temperatureDifference(lower, capacity)
+							: next - ThermalContactExchange.temperatureDifference(upper, capacity);
+				} else solved = fromLower <= fromUpper ? cursor + fromLower / capacity : next - fromUpper / capacity;
+				if (!Double.isFinite(solved)) throw new IllegalArgumentException("Thermal cell state inversion overflowed");
 				temperature[cell] = Math.max(cursor, Math.min(next, solved));
 				heatCapacity[cell] = modeledCellHeatCapacity(cell, temperature[cell]);
 				updateLinearTemperatureInterval(cell);
@@ -546,14 +556,23 @@ public final class ThermalCellGrid {
 	}
 
 	private double modeledCellSensibleEnergy(int cell, double temperatureK) {
-		double total = 0.0, correction = 0.0;
+		SignedDyadic total = SignedDyadic.ZERO;
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			double value = carrierMass[carrier] * carrierMaterial[carrier].sensibleSpecificEnergyAt(temperatureK);
-			double next = total + value;
-			correction += Math.abs(total) >= Math.abs(value) ? (total - next) + value : (value - next) + total;
-			total = next;
+			var material = carrierMaterial[carrier];
+			double value = ThermalContactExchange.energyChangeBetween(material, carrierMass[carrier], material.referenceTemperatureK(), temperatureK);
+			if (!Double.isFinite(value)) return modeledCellSensibleEnergyExact(cell, temperatureK).toDouble();
+			total = total.add(SignedDyadic.of(value));
 		}
-		return total + correction;
+		return total.toDouble();
+	}
+
+	private SignedDyadic modeledCellSensibleEnergyExact(int cell, double temperatureK) {
+		SignedDyadic total = SignedDyadic.ZERO;
+		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier]) {
+			var material = carrierMaterial[carrier];
+			total = total.add(ThermalContactExchange.exactEnergyChangeBetween(material, carrierMass[carrier], material.referenceTemperatureK(), temperatureK));
+		}
+		return total;
 	}
 
 	private double modeledCellHeatCapacity(int cell, double temperatureK) {

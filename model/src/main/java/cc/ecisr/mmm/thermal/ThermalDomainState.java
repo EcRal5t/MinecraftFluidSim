@@ -380,7 +380,9 @@ public final class ThermalDomainState {
 	) {
 		return granularState.planActiveToDeposits(transfers);
 	}
-	public void requireActiveMerge(int first, int second) { granularState.requireActiveMerge(first, second); }
+	public boolean canActiveMerge(int first, int second, int material, double mass, java.util.Map<String, Long> composition) {
+		return granularState.canActiveMerge(first, second, material, mass, composition);
+	}
 	public void commitActiveMerge(int first, int second) { granularState.commitActiveMerge(first, second); }
 	public void requireDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
 		granularState.requireDepositWake(source, takenSvq, totalSvq);

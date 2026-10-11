@@ -310,6 +310,10 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("chemical-tails")) {
+			chemicalFloatTailsShareExistingQuanta(); chemicalGeometryRemapRejectsUnrepresentableCandidate(); chemicalLazyPortBuildRechecksActualShares();
+			System.out.println("Liquid chemical binary32-tail validation passed"); return;
+		}
 		if (args.length == 1 && args[0].equals("components")) {
 			disconnectedMicroComponentsKeepTheirInventory(); microPortsUseTheirOwnBeginningSupply();
 			microComponentCapacityIncludesBallisticArrivals(); geometryRemapRechecksMicroCapacity();
@@ -356,6 +360,7 @@ public final class LiquidVolumeTransportValidation {
 		disconnectedMicroComponentsKeepTheirInventory(); microPortsUseTheirOwnBeginningSupply();
 		microComponentCapacityIncludesBallisticArrivals(); geometryRemapRechecksMicroCapacity();
 		ballisticComponentUsesPublishedFloatPosition();
+		chemicalFloatTailsShareExistingQuanta(); chemicalGeometryRemapRejectsUnrepresentableCandidate(); chemicalLazyPortBuildRechecksActualShares();
 		allocationMatchesIntegerOracle();
 		quadratureAndMassKeepSmallShares();
 		chemicalShareCountRespectsSpeciesGroups();
@@ -638,6 +643,105 @@ public final class LiquidVolumeTransportValidation {
 			if (domain.totalVolumeExact() != before || entered > .125 || !full && !(entered > .0625)
 					|| stats.substeps() > 4) throw new AssertionError("Legal connected liquid arrival failed to advance conservatively");
 		}
+	}
+
+	private static void chemicalFloatTailsShareExistingQuanta() {
+		for (long quanta : new long[] {2, 3}) for (float speed : new float[] {.001F, .1F}) {
+			var domain = lowQuantumTailDomain(speed, quanta); double before = domain.totalVolumeExact();
+			var stats = domain.stepMechanicsOnly(); int sourceCount = 0; long sourceQuanta = 0, totalQuanta = 0;
+			SignedDyadic sourceVolume = SignedDyadic.ZERO;
+			for (int p = 0; p < domain.particleCount(); p++) {
+				totalQuanta += domain.chemicalParcels.record(p).totalQuanta();
+				if (domain.particleCellIndex(p) == 17) { sourceCount++; sourceVolume = sourceVolume.add(SignedDyadic.of(domain.particles.volume(p))); sourceQuanta += domain.chemicalParcels.record(p).totalQuanta(); }
+				if (domain.particleCellIndex(p) == 18 && CellRemapMicroTopology.markerSupport(domain, p) != 1)
+					throw new AssertionError("Chemical volume-tail correction crossed the solid micro wall");
+			}
+			var amount = SignedDyadic.of(.75).subtract(sourceVolume);
+			long expectedUnits = speed == .001F ? quanta == 2 ? 1692 : 1693 : 169300;
+			if (domain.totalVolumeExact() != before || totalQuanta != quanta + 1 || sourceCount != quanta - 1 || sourceQuanta != quanta - 1
+					|| !amount.equals(SignedDyadic.of(expectedUnits, -26)) || stats.substeps() != 1)
+				throw new AssertionError("Low-quanta flow did not choose the nearest conservative float-representable retained share");
+		}
+	}
+
+	private static void chemicalGeometryRemapRejectsUnrepresentableCandidate() {
+		var domain = lowQuantumTailDomain(0); domain.rebuildGridFromParticles();
+		var flux = new ConservativeLiquidFlux(4, 3, 3);
+		flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
+		var capacities = new SignedDyadic[36];
+		for (int c = 0; c < 36; c++) capacities[c] = SignedDyadic.of(Integer.bitCount(~domain.geometry.cutCells.mask(c) & 255), -3);
+		// This future geometry needs two destinations while the source only has two quanta.
+		for (int f = 0; f < flux.flux.length; f++) {
+			if (flux.left[f] == 16 && flux.right[f] == 17) { flux.velocity[f] = -1; flux.exactFlux[f] = SignedDyadic.of(.125); }
+			if (flux.left[f] == 17 && flux.right[f] == 18) { flux.velocity[f] = 1; flux.exactFlux[f] = SignedDyadic.of(.0625); }
+		}
+		capacities[17] = SignedDyadic.of(.5625);
+		var result = domain.markerGrid.exactCellVolumeInventory.clone();
+		result[17] = SignedDyadic.of(.5625); result[16] = result[18] = SignedDyadic.of(.125);
+		flux.geometricResult(result, capacities);
+		try {
+			new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(36), true);
+			throw new AssertionError("Geometry remap published more positive chemical carriers than its integer inventory supports");
+		} catch (MechanicalTimeRefinement expected) { }
+		if (domain.particleCount() != 2 || domain.totalVolumeExact() != .8125
+				|| domain.chemicalParcels.record(0).totalQuanta() != 2)
+			throw new AssertionError("Rejected chemical geometry candidate changed original inventory");
+	}
+
+	private static void chemicalLazyPortBuildRechecksActualShares() {
+		var domain = lowQuantumTailDomain(0, 2, (byte) 0); domain.rebuildGridFromParticles();
+		if (CellRemapMicroTopology.needed(domain)) throw new AssertionError("Lazy chemical fixture unexpectedly prebuilds micro ports");
+		var flux = new ConservativeLiquidFlux(4, 3, 3);
+		flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
+		var capacities = new SignedDyadic[36];
+		for (int c = 0; c < 36; c++) capacities[c] = SignedDyadic.of(Integer.bitCount(~domain.geometry.cutCells.mask(c) & 255), -3);
+		for (int f = 0; f < flux.flux.length; f++) {
+			if (flux.left[f] == 16 && flux.right[f] == 17) { flux.velocity[f] = -1; flux.exactFlux[f] = SignedDyadic.of(.125); }
+			if (flux.left[f] == 17 && flux.right[f] == 18) { flux.velocity[f] = 1; flux.exactFlux[f] = SignedDyadic.of(.125); }
+		}
+		var result = domain.markerGrid.exactCellVolumeInventory.clone();
+		result[17] = SignedDyadic.of(.5); result[16] = SignedDyadic.of(.125); result[18] = SignedDyadic.of(.1875);
+		flux.geometricResult(result, capacities);
+		var candidate = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(36), true);
+		SignedDyadic transferred = SignedDyadic.ZERO, retained = SignedDyadic.ZERO; int positiveFaces = 0; long quanta = 0;
+		for (var amount : flux.exactFlux) if (amount.signum() > 0) { transferred = transferred.add(amount); positiveFaces++; }
+		for (var marker : candidate.markers) {
+			if (marker.cell() == 17) retained = retained.add(SignedDyadic.of(marker.volume()));
+			quanta += marker.mixture().totalQuanta();
+		}
+		if (positiveFaces != 1 || !transferred.equals(SignedDyadic.of(.125)) || !retained.equals(SignedDyadic.of(.625)) || quanta != 3)
+			throw new AssertionError("Lazy micro-port construction cancelled an already representable chemical flow using stale shares");
+		if (domain.particleCount() != 2 || domain.totalVolumeExact() != .8125 || domain.chemicalParcels.record(0).totalQuanta() != 2)
+			throw new AssertionError("Chemical candidate preview changed source inventory");
+	}
+
+	private static FluidDomain lowQuantumTailDomain(float speed) {
+		return lowQuantumTailDomain(speed, 2);
+	}
+	private static FluidDomain lowQuantumTailDomain(float speed, long quanta) {
+		return lowQuantumTailDomain(speed, quanta, (byte) 126);
+	}
+	private static FluidDomain lowQuantumTailDomain(float speed, long quanta, byte targetMask) {
+		var domain = new FluidDomain(4, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 400, 1e-5F, .4F, .002F, .8F), 256);
+		byte[] masks = new byte[36]; java.util.Arrays.fill(masks, (byte) 255); masks[16] = masks[17] = 0; masks[18] = targetMask;
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(4, 3, 3, .5F, 2, .8125, 812.5,
+				BuiltinFluidMaterials.DEFAULT_PALETTE.stream().filter(material -> material.id().equals("mmm:water")).toList(),
+				new float[] {.75F, .75F, .75F, .75F, 1.125F, .625F, .625F, .0625F}, new float[] {speed, 0, 0, speed, 0, 0},
+				masks, new double[] {750, 62.5}, new int[2]));
+		var a = new cc.ecisr.mmm.chemistry.ChemicalSpecies("test:a", java.util.Map.of("X", 1), 0, cc.ecisr.mmm.chemistry.ExactRational.ONE, 0xff000000);
+		var b = new cc.ecisr.mmm.chemistry.ChemicalSpecies("test:b", java.util.Map.of("X", 1), 0, cc.ecisr.mmm.chemistry.ExactRational.ONE, 0xff000000);
+		var registry = new cc.ecisr.mmm.chemistry.ChemicalRegistry(java.util.List.of(a, b), java.util.List.of(
+				new cc.ecisr.mmm.chemistry.ChemicalPhaseDefinition("test:phase", "mmm:water", java.util.List.of(a.id(), b.id()),
+						java.util.Map.of(a.id(), cc.ecisr.mmm.chemistry.ExactRational.ONE), false)), java.util.List.of(
+				new cc.ecisr.mmm.chemistry.ChemicalReaction("test:conversion", cc.ecisr.mmm.chemistry.ChemicalReaction.Kind.INSTANTANEOUS,
+						"test:phase", java.util.Map.of(a.id(), 1), java.util.Map.of(b.id(), 1), cc.ecisr.mmm.chemistry.ExactRational.ZERO)));
+		domain.bindChemistry(registry);
+		for (int p = 0; p < 2; p++) {
+			var mixture = new cc.ecisr.mmm.chemistry.ChemicalMixtureRecord(new int[] {0}, new long[] {p == 0 ? quanta : 1}, 0);
+			domain.chemicalParcels.assign(p, mixture.withMassResidualKilograms(domain.unitScale.kilograms(domain.particles.mass(p))
+					- mixture.exactSpeciesMassKilograms(registry).toDouble()), false);
+		}
+		domain.sealDomainBoundary(); return domain;
 	}
 
 	private static void microPortsUseTheirOwnBeginningSupply() {

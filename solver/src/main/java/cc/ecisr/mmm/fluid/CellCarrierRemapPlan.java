@@ -59,22 +59,16 @@ final class CellCarrierRemapPlan {
 			retainUnchangedCells();
 		}
 		gatherInput();
-		ports = CellRemapMicroTopology.needed(domain) ? new CellRemapPorts(domain, flux, ballistic, geometryRemap,
-				domain.chemicalParcels == null ? null : (cell, support) -> {
-					int shares = 25;
-					if (input[cell] != null) for (var group : input[cell]) if (group.support == support)
-						shares = (int) Math.min(shares, group.species.totalQuanta());
-					return shares;
-				}) : null;
+		phaseGeometry = phaseGeometry();
+		for (int f = flux.flux.length - 1; f >= 0; f--) if (flux.exactFlux[f].signum() > 0) {
+			int c = flux.donor(f); outgoingNext[f] = outgoingHead[c]; outgoingHead[c] = f;
+		}
+		ports = preparePorts(flux, ballistic);
 		if (ports != null) for (var groups : input) if (groups != null) for (var group : groups)
 			if (!geometryRemap && remappedCells[group.cell] && !ports.changed(group.cell, group.support)) {
 				group.retained = true;
 				for (int p : group.original) retainedMarkers.add(originalMarker(p, group.cell));
 			}
-		phaseGeometry = phaseGeometry();
-		for (int f = flux.flux.length - 1; f >= 0; f--) if (flux.exactFlux[f].signum() > 0) {
-			int c = flux.donor(f); outgoingNext[f] = outgoingHead[c]; outgoingHead[c] = f;
-		}
 		if (domain.thermalState == null && domain.chemicalParcels == null) {
 			for (int cell = 0; cell < domain.cellCount; cell++) if (remappedCells[cell] && input[cell] != null) {
 				distribute(cell, flux);
@@ -233,13 +227,56 @@ final class CellCarrierRemapPlan {
 		}
 	}
 	private ArrayList<Transfer> transfers(int cell, int support, ConservativeLiquidFlux flux) {
+		return transfers(cell, support, flux, ports);
+	}
+	private ArrayList<Transfer> transfers(int cell, int support, ConservativeLiquidFlux flux, CellRemapPorts selectedPorts) {
 		var result = new ArrayList<Transfer>(6);
-		if (ports != null) {
-			for (var port : ports.outgoing(cell, support)) if (port.volume.signum() > 0)
-				result.add(new Transfer(port.face, ports.cellOf(port.receiver), port.receiverSupport, port.volume));
+		if (selectedPorts != null) {
+			for (var port : selectedPorts.outgoing(cell, support)) if (port.volume.signum() > 0)
+				result.add(new Transfer(port.face, selectedPorts.cellOf(port.receiver), port.receiverSupport, port.volume));
 		} else for (int face = outgoingHead[cell]; face >= 0; face = outgoingNext[face])
 			result.add(new Transfer(face, flux.receiver(face), CellRemapMicroTopology.components(domain.geometry.cutCells.mask(flux.receiver(face)))[0], flux.exactFlux[face]));
 		return result;
+	}
+	private CellRemapPorts preparePorts(ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
+		CellRemapPorts selected = CellRemapMicroTopology.needed(domain) ? newPorts(flux, ballistic) : null;
+		if (domain.chemicalParcels == null) return selected;
+		var candidates = new ArrayList<ArrayList<Group>>();
+		for (int cell = 0; cell < domain.cellCount; cell++) if (remappedCells[cell] && input[cell] != null) {
+			boolean lowCell = false;
+			for (var group : input[cell]) lowCell |= group.species.totalQuanta() < CellRemapChemicalSupport.MAX_EXPANSION * CellRemapChemicalSupport.MAX_COMPONENT_SHARES;
+			if (!lowCell) continue;
+			for (int support : CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell))) {
+				var component = new ArrayList<Group>(); boolean low = false;
+				for (var group : input[cell]) if (group.support == support) {
+					component.add(group); low |= group.species.totalQuanta() < CellRemapChemicalSupport.MAX_EXPANSION * CellRemapChemicalSupport.MAX_COMPONENT_SHARES;
+				}
+				if (low) candidates.add(component);
+			}
+		}
+		for (;;) {
+			boolean complete = true;
+			for (var component : candidates) {
+				var first = component.getFirst();
+				if (selected != null) selected.chemicalWork(1L + component.size() * 8L * CellRemapChemicalSupport.MAX_COMPONENT_SHARES);
+				var pieces = volumePieces(first.cell, flux, component, transfers(first.cell, first.support, flux, selected));
+				for (int g = 0; g < component.size(); g++) if (!CellRemapChemicalSupport.fits(component.get(g).species.totalQuanta(), pieces[g])) {
+					if (selected == null) selected = newPorts(flux, ballistic);
+					else selected.reduceChemical(first.cell, first.support, pieces[g][pieces[g].length - 1], component.size() == 1);
+					complete = false; break;
+				}
+				if (!complete) break;
+			}
+			if (complete) return selected;
+		}
+	}
+	private CellRemapPorts newPorts(ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
+		return new CellRemapPorts(domain, flux, ballistic, geometryRemap, domain.chemicalParcels == null ? null : (cell, support) -> {
+			int shares = CellRemapChemicalSupport.MAX_COMPONENT_SHARES;
+			if (input[cell] != null) for (var group : input[cell]) if (group.support == support)
+				shares = (int) Math.min(shares, group.species.totalQuanta());
+			return shares;
+		});
 	}
 	private void distribute(int cell, ConservativeLiquidFlux flux, ArrayList<Group> groups, ArrayList<Transfer> transfers) {
 		if (domain.thermalState == null && domain.chemicalParcels == null && groups.size() == 1
@@ -248,45 +285,12 @@ final class CellCarrierRemapPlan {
 		}
 		int shares = transfers.size() + 1;
 		int[] destinations = new int[shares], supports = new int[shares], faces = new int[shares];
-		SignedDyadic[] amounts = new SignedDyadic[shares]; SignedDyadic total = SignedDyadic.ZERO, sent = SignedDyadic.ZERO;
-		for (Group group : groups) total = total.add(group.volume);
 		int share = 0;
 		for (var transfer : transfers) {
-			destinations[share] = transfer.destination; supports[share] = transfer.support; amounts[share] = transfer.volume;
-			sent = sent.add(transfer.volume); faces[share++] = transfer.face;
+			destinations[share] = transfer.destination; supports[share] = transfer.support; faces[share++] = transfer.face;
 		}
-		destinations[share] = cell; supports[share] = groups.getFirst().support; amounts[share] = total.subtract(sent); faces[share] = -1;
-		SignedDyadic[][] pieces = new SignedDyadic[groups.size()][shares];
-		if (groups.size() == 1) pieces[0] = amounts;
-		else {
-			SignedDyadic[] weights = new SignedDyadic[groups.size()];
-			for (int g = 0; g < groups.size(); g++) weights[g] = groups.get(g).volume;
-			for (int d = 0; d < shares; d++) {
-				SignedDyadic[] allocation;
-				if (phaseGeometry == null || faces[d] < 0) allocation = ExactVolumeAllocation.allocate(amounts[d], weights);
-				else {
-					int face = faces[d]; double width = Math.abs(flux.velocity[face]) * dt / domain.config.cellSize();
-					double[] preference = new double[groups.size()];
-					for (int g = 0; g < groups.size(); g++) {
-						int phase = phase(groups.get(g).material);
-						preference[g] = phaseGeometry.swept(phase, cell, flux.receiver(face), flux.axis[face], width, flux.velocity[face] > 0)
-								* weights[g].toDouble() / phaseGeometry.volume(phase, cell);
-					}
-					double representation = flux.representationBlend(face);
-					if (representation > 0) {
-						double preferred = 0, inventory = 0;
-						for (int g = 0; g < groups.size(); g++) { preferred += preference[g]; inventory += weights[g].toDouble(); }
-						for (int g = 0; g < groups.size(); g++) {
-							double uniform = weights[g].toDouble() / inventory;
-							preference[g] = (1 - representation) * (preferred > 0 ? preference[g] / preferred : uniform)
-									+ representation * uniform;
-						}
-					}
-					allocation = ExactVolumeAllocation.allocateCapped(amounts[d], weights, preference);
-				}
-				for (int g = 0; g < groups.size(); g++) { pieces[g][d] = allocation[g]; weights[g] = weights[g].subtract(allocation[g]); }
-			}
-		}
+		destinations[share] = cell; supports[share] = groups.getFirst().support; faces[share] = -1;
+		SignedDyadic[][] pieces = volumePieces(cell, flux, groups, transfers);
 		for (int g = 0; g < groups.size(); g++) {
 			Group source = groups.get(g); ChemicalMixtureRecord[] species = allocateSpecies(source.species, pieces[g]);
 			prepareMoments(source);
@@ -321,6 +325,47 @@ final class CellCarrierRemapPlan {
 			// Its moment is read only after all outgoing face contributions have been subtracted.
 			if (pieces[g][shares - 1].signum() == 0) source.discardedMoment = true;
 		}
+	}
+	private SignedDyadic[][] volumePieces(int cell, ConservativeLiquidFlux flux, ArrayList<Group> groups, ArrayList<Transfer> transfers) {
+		int shares = transfers.size() + 1; SignedDyadic[] amounts = new SignedDyadic[shares];
+		int[] faces = new int[shares]; SignedDyadic total = SignedDyadic.ZERO, sent = SignedDyadic.ZERO;
+		for (var group : groups) total = total.add(group.volume);
+		for (int d = 0; d < transfers.size(); d++) {
+			amounts[d] = transfers.get(d).volume; faces[d] = transfers.get(d).face; sent = sent.add(amounts[d]);
+		}
+		amounts[shares - 1] = total.subtract(sent); faces[shares - 1] = -1;
+		SignedDyadic[][] pieces = new SignedDyadic[groups.size()][shares];
+		if (groups.size() == 1) pieces[0] = amounts;
+		else {
+			SignedDyadic[] weights = new SignedDyadic[groups.size()];
+			for (int g = 0; g < groups.size(); g++) weights[g] = groups.get(g).volume;
+			for (int d = 0; d < shares; d++) {
+				SignedDyadic[] allocation;
+				if (phaseGeometry == null || faces[d] < 0) allocation = ExactVolumeAllocation.allocate(amounts[d], weights);
+				else {
+					int face = faces[d]; double width = Math.abs(flux.velocity[face]) * dt / domain.config.cellSize();
+					double[] preference = new double[groups.size()];
+					for (int g = 0; g < groups.size(); g++) {
+						int phase = phase(groups.get(g).material);
+						preference[g] = phaseGeometry.swept(phase, cell, flux.receiver(face), flux.axis[face], width, flux.velocity[face] > 0)
+								* weights[g].toDouble() / phaseGeometry.volume(phase, cell);
+					}
+					double representation = flux.representationBlend(face);
+					if (representation > 0) {
+						double preferred = 0, inventory = 0;
+						for (int g = 0; g < groups.size(); g++) { preferred += preference[g]; inventory += weights[g].toDouble(); }
+						for (int g = 0; g < groups.size(); g++) {
+							double uniform = weights[g].toDouble() / inventory;
+							preference[g] = (1 - representation) * (preferred > 0 ? preference[g] / preferred : uniform)
+									+ representation * uniform;
+						}
+					}
+					allocation = ExactVolumeAllocation.allocateCapped(amounts[d], weights, preference);
+				}
+				for (int g = 0; g < groups.size(); g++) { pieces[g][d] = allocation[g]; weights[g] = weights[g].subtract(allocation[g]); }
+			}
+		}
+		return pieces;
 	}
 
 	/** Receiver reductions retain the donor and share order independently of worker scheduling. */
@@ -569,8 +614,16 @@ final class CellCarrierRemapPlan {
 			count = (int) Math.min(count, quanta);
 			if (mask == 0) count = Integer.highestOneBit(count);
 		}
+		var volumes = LiquidCellQuadrature.volumes(group.volume, count);
+		if (domain.chemicalParcels != null) while (volumes.size() > group.species.totalQuanta() && count > 1) {
+			count = mask == 0 ? count / 2 : count - 1; volumes = LiquidCellQuadrature.volumes(group.volume, count);
+		}
+		if (domain.chemicalParcels != null && volumes.size() > group.species.totalQuanta()) {
+			count = 1; volumes = CellRemapChemicalSupport.expansion(group.volume);
+			if (volumes.size() > group.species.totalQuanta()) throw new MechanicalTimeRefinement(2, "Chemical quadrature has no exact positive carrier representation");
+		}
 		group.quadratureCount = count;
-		return LiquidCellQuadrature.volumes(group.volume, count);
+		return volumes;
 	}
 
 	private void sample(Group group) {
@@ -803,12 +856,13 @@ final class CellCarrierRemapPlan {
 			handles[slot] = species.handleAt(slot); quantities[slot] = ExactVolumeAllocation.allocate(species.amountAt(slot), weights);
 			for (int p = 0; p < result.length; p++) totals[p] = Math.addExact(totals[p], quantities[slot][p]);
 		}
-		// Each live chemical carrier holds at least one integer quantum. Repair empty
-		// positive-volume shares by moving one existing quantum from the largest share.
-		for (int p = 0; p < result.length; p++) if (weights[p].signum() > 0 && totals[p] == 0) {
-			int donor = -1; long largest = 1;
+		// Every positive binary32 expansion carrier needs an existing integer quantum.
+		int[] required = CellRemapChemicalSupport.required(weights);
+		for (int p = 0; p < result.length; p++) while (totals[p] < required[p]) {
+			int donor = -1; long largest = 0;
 			for (int d = 0; d < result.length; d++) {
-				if (totals[d] > largest) { donor = d; largest = totals[d]; }
+				long spare = totals[d] - required[d];
+				if (spare > largest) { donor = d; largest = spare; }
 			}
 			if (donor < 0) throw new IllegalStateException("Liquid flux requires more chemical carriers than available quanta");
 			for (long[] values : quantities) if (values[donor] > 0) { values[donor]--; values[p]++; break; }

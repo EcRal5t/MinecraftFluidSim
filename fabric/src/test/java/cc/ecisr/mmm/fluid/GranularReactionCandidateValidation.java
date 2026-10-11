@@ -15,6 +15,7 @@ public final class GranularReactionCandidateValidation {
 	public static void validate() {
 		allocationCases();
 		phaseTransferPreservesMomentum();
+		precipitationMergePreservesMassMoment();
 		phaseTransferFitsLiquidAndSolidKernel();
 		carrierPropertiesFollowChemicalComposition();
 		for (String mode : List.of("irreversible", "huge-capacity", "surface-budget", "marker-budget", "region-budget")) {
@@ -23,6 +24,53 @@ public final class GranularReactionCandidateValidation {
 	}
 
 	public static void main(String[] args) { validate(); }
+
+	private static void precipitationMergePreservesMassMoment() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		long svq = 4_050, extent = svq / 50 * 281;
+		var species = Map.of(BuiltinChemicalDefinitions.NA_PLUS, extent * 64,
+				BuiltinChemicalDefinitions.CL_MINUS, extent * 64);
+		double reactionMass = SolidCompositionRecord.fromStableAmounts(
+				BuiltinChemicalDefinitions.REGISTRY, species, 0).totalMass(BuiltinChemicalDefinitions.REGISTRY);
+		for (double residualScale : new double[]{0, 2, -.5}) {
+			var domain = new FluidDomain(3, 3, 3,
+					new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 216);
+			domain.setVolume(1, 1, 1, .1F);
+			domain.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
+					BuiltinFluidMaterials.createRegistry());
+			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+			domain.setPrecipitationEnabled(true);
+			domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
+					BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), false);
+			var composition = SolidCompositionRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY,
+					species, residualScale * reactionMass);
+			var original = new GranularParcelStore.Parcel(.625F, .7F, .8F, 0, 0, 0,
+					svq, composition.totalMass(BuiltinChemicalDefinitions.REGISTRY),
+					registry.materialHandle(BuiltinGranularDefinitions.PRECIPITATE),
+					domain.granularState.compositions.create(composition), 0, (byte) 0);
+			domain.granularState.parcels.add(original);
+			domain.gridDirty = true;
+			int cell = domain.cellIndex(1, 1, 1);
+			var spawned = domain.granularCollision.spawnPosition(1, 1, 1, svq, ((long) cell << 16) + 1,
+					domain.particles.positionX(0), domain.particles.positionY(0), domain.particles.positionZ(0));
+			require(spawned != null && domain.runThermalReactionPhaseAxis(false, 0).granularPhase().precipitations() == 1
+					&& domain.granularState.parcels.count() == 1, "mass moment fixture must merge actual precipitation");
+			var merged = domain.granularState.parcels.parcel(0);
+			double[] oldPosition = {original.x(), original.y(), original.z()};
+			double[] addedPosition = {spawned.x(), spawned.y(), spawned.z()};
+			float[] finalPosition = {merged.x(), merged.y(), merged.z()};
+			for (int axis = 0; axis < 3; axis++) {
+				double expectedMoment = original.mass() * oldPosition[axis] + reactionMass * addedPosition[axis];
+				double storageBound = merged.mass() * .5 * Math.ulp(finalPosition[axis])
+						+ 8 * Math.ulp(expectedMoment);
+				require(Math.abs(merged.mass() * finalPosition[axis] - expectedMoment) <= storageBound,
+						"precipitation merge must preserve mass moment through final float position rounding");
+			}
+			require(merged.solidVolumeSvq() == 2 * svq && merged.mass() == original.mass() + reactionMass,
+					"mass moment merge must retain independently stored SVQ and kg");
+			requireCombinedCapacity(domain);
+		}
+	}
 
 	private static void phaseTransferFitsLiquidAndSolidKernel() {
 		var granular = BuiltinGranularDefinitions.createRegistry();

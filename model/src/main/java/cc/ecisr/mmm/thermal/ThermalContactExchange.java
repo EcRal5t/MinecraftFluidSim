@@ -1,5 +1,8 @@
 package cc.ecisr.mmm.thermal;
 
+import cc.ecisr.mmm.chemistry.ExactRational;
+import cc.ecisr.mmm.units.SignedDyadic;
+
 /** Conservative backward-Euler heat transfer through one finite conductance, in EU/(s K). */
 public final class ThermalContactExchange {
 	/** A caloric curve evaluated against the same initial inventory throughout one contact solve. */
@@ -26,25 +29,7 @@ public final class ThermalContactExchange {
 		}
 		@Override public double heatCapacityEuPerK() { return massKilograms * material.specificHeatAt(temperatureK()); }
 		@Override public double energyChangeToTemperature(double target) {
-			double from = temperatureK();
-			material.specificHeatAt(target); // Validate the endpoint before forming an interval bound.
-			double low = Math.min(from, target), high = Math.max(from, target);
-			double specific = 0.0, scaled = 0.0;
-			boolean rescale = false;
-			var segments = material.caloricSegments();
-			for (int index = 0; index < segments.size(); index++) {
-				var segment = segments.get(index);
-				double a = index == 0 ? low : Math.max(low, segment.minimumTemperatureK());
-				double b = index + 1 == segments.size() ? high : Math.min(high, segment.maximumTemperatureK());
-				if (b <= a) continue;
-				double term = (b - a) * segment.specificHeatEuPerMuK();
-				rescale |= !Double.isFinite(term) || term < Double.MIN_NORMAL;
-				specific += term;
-				scaled += product(b - a, segment.specificHeatEuPerMuK(), massKilograms);
-			}
-			// An infinite bound is usable when the other finite body supplies a smaller interval.
-			double amount = !rescale && Double.isFinite(specific) ? massKilograms * specific : scaled;
-			return target < from ? -amount : amount;
+			return energyChangeBetween(material, massKilograms, temperatureK(), target);
 		}
 		@Override public ThermalStateFunction.State stateAfterEnergyChange(double change) {
 			double temperature = material.temperatureForSensibleSpecificEnergy(
@@ -70,6 +55,48 @@ public final class ThermalContactExchange {
 	}
 
 	private ThermalContactExchange() { }
+
+	/** Signed caloric integral; infinite endpoints remain usable as inversion/contact bounds. */
+	static double energyChangeBetween(ThermalMaterialDefinition material, double mass, double from, double target) {
+		material.specificHeatAt(from); material.specificHeatAt(target);
+		double low = Math.min(from, target), high = Math.max(from, target);
+		double specific = 0.0, scaled = 0.0; boolean rescale = false;
+		var segments = material.caloricSegments();
+		for (int index = 0; index < segments.size(); index++) {
+			var segment = segments.get(index);
+			double a = index == 0 ? low : Math.max(low, segment.minimumTemperatureK());
+			double b = index + 1 == segments.size() ? high : Math.min(high, segment.maximumTemperatureK());
+			if (b <= a) continue;
+			double term = (b - a) * segment.specificHeatEuPerMuK();
+			rescale |= !Double.isFinite(term) || term < Double.MIN_NORMAL;
+			specific += term; scaled += product(b - a, segment.specificHeatEuPerMuK(), mass);
+		}
+		double amount = !rescale && Double.isFinite(specific) ? mass * specific : scaled;
+		return target < from ? -amount : amount;
+	}
+
+	/** Wide endpoint arithmetic is only needed when a caloric bound exceeds binary64. */
+	static SignedDyadic exactEnergyChangeBetween(ThermalMaterialDefinition material, double mass, double from, double target) {
+		material.specificHeatAt(from); material.specificHeatAt(target);
+		double low = Math.min(from, target), high = Math.max(from, target);
+		SignedDyadic total = SignedDyadic.ZERO;
+		var segments = material.caloricSegments();
+		for (int index = 0; index < segments.size(); index++) {
+			var segment = segments.get(index);
+			double a = index == 0 ? low : Math.max(low, segment.minimumTemperatureK());
+			double b = index + 1 == segments.size() ? high : Math.min(high, segment.maximumTemperatureK());
+			if (b > a) total = total.add(SignedDyadic.of(b).subtract(SignedDyadic.of(a))
+					.multiply(SignedDyadic.of(segment.specificHeatEuPerMuK())).multiply(SignedDyadic.of(mass)));
+		}
+		return target < from ? SignedDyadic.ZERO.subtract(total) : total;
+	}
+
+	static double temperatureDifference(SignedDyadic energy, double capacity) {
+		SignedDyadic divisor = SignedDyadic.of(capacity);
+		int shift = energy.exponent() - divisor.exponent();
+		return new ExactRational(shift >= 0 ? energy.significand().shiftLeft(shift) : energy.significand(),
+				shift >= 0 ? divisor.significand() : divisor.significand().shiftLeft(-shift)).toDouble();
+	}
 
 	/** Returns signed energy entering first; finite second receives the opposite amount. No inventory is edited. */
 	public static double transfer(Body first, Body second, double conductanceEuPerSecondK, double dtSeconds) {

@@ -90,7 +90,7 @@ public final class ThermalStateFunction {
 		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Thermal LTE sensible energy overflow");
 		double minimum = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
 		double minimumEnergy = inventorySensibleEnergy(portions, minimum);
-		double tolerance = energyTolerance(internalEnergy, minimumEnergy);
+		double tolerance = Double.isFinite(minimumEnergy) ? energyTolerance(internalEnergy, minimumEnergy) : 0;
 		if (internalEnergy < minimumEnergy - tolerance) {
 			throw new EnergyOutsideValidityException();
 		}
@@ -101,6 +101,8 @@ public final class ThermalStateFunction {
 		while (true) {
 			double next = Double.POSITIVE_INFINITY;
 			for (InventoryPortion portion : portions) {
+				double referenceTemperature = registry.material(portion.materialHandle()).referenceTemperatureK();
+				if (referenceTemperature > cursor && referenceTemperature < next) next = referenceTemperature;
 				for (ThermalMaterialDefinition.CaloricSegment segment
 						: registry.material(portion.materialHandle()).caloricSegments()) {
 					if (segment.maximumTemperatureK() > cursor && segment.maximumTemperatureK() < next) {
@@ -110,18 +112,28 @@ public final class ThermalStateFunction {
 			}
 			if (next == Double.POSITIVE_INFINITY) {
 				double capacity = inventoryHeatCapacity(portions, cursor);
-				double temperature = cursor + (internalEnergy - cursorEnergy) / capacity;
+				double temperature = cursor + (Double.isFinite(cursorEnergy) ? (internalEnergy - cursorEnergy) / capacity
+						: ThermalContactExchange.temperatureDifference(SignedDyadic.of(internalEnergy)
+						.subtract(inventorySensibleEnergyExact(portions, cursor)), capacity));
 				if (!(Double.isFinite(temperature) && temperature >= cursor)) {
 					throw new IllegalArgumentException("Thermal LTE state inversion overflowed");
 				}
 				return new State(temperature, inventoryHeatCapacity(portions, temperature));
 			}
-			double capacity = inventoryHeatCapacity(portions, cursor + (next - cursor) * 0.5);
-			double intervalEnergy = capacity * (next - cursor);
-			double nextEnergy = cursorEnergy + intervalEnergy;
-			tolerance = energyTolerance(internalEnergy, cursorEnergy, nextEnergy);
-			if (internalEnergy <= nextEnergy + tolerance) {
-				double temperature = cursor + (internalEnergy - cursorEnergy) / capacity;
+			// Each endpoint is anchored to the original caloric reference. Accumulating a
+			// large preceding interval can erase the energy of a much smaller adjacent segment.
+			double nextEnergy = inventorySensibleEnergy(portions, next);
+			if (internalEnergy <= nextEnergy) {
+				double capacity = inventoryHeatCapacity(portions, cursor + (next - cursor) * 0.5);
+				double fromLower = internalEnergy - cursorEnergy, fromUpper = nextEnergy - internalEnergy;
+				double temperature;
+				if (Double.isInfinite(fromLower) && Double.isInfinite(fromUpper)) {
+					SignedDyadic lower = SignedDyadic.of(internalEnergy).subtract(inventorySensibleEnergyExact(portions, cursor));
+					SignedDyadic upper = inventorySensibleEnergyExact(portions, next).subtract(SignedDyadic.of(internalEnergy));
+					temperature = lower.compareTo(upper) <= 0 ? cursor + ThermalContactExchange.temperatureDifference(lower, capacity)
+							: next - ThermalContactExchange.temperatureDifference(upper, capacity);
+				} else temperature = fromLower <= fromUpper ? cursor + fromLower / capacity : next - fromUpper / capacity;
+				if (!Double.isFinite(temperature)) throw new IllegalArgumentException("Thermal LTE state inversion overflowed");
 				temperature = Math.max(cursor, Math.min(next, temperature));
 				return new State(temperature, inventoryHeatCapacity(portions, temperature));
 			}
@@ -244,11 +256,22 @@ public final class ThermalStateFunction {
 
 	private double inventorySensibleEnergy(List<InventoryPortion> portions, double temperatureK) {
 		SignedDyadic energy = SignedDyadic.ZERO;
-		for (InventoryPortion portion : portions) energy = energy.add(SignedDyadic.of(portion.massMu()
-				* registry.material(portion.materialHandle()).sensibleSpecificEnergyAt(temperatureK)));
-		double total = energy.toDouble();
-		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal LTE energy overflow");
-		return total;
+		for (InventoryPortion portion : portions) {
+			var material = registry.material(portion.materialHandle());
+			double value = ThermalContactExchange.energyChangeBetween(material, portion.massMu(), material.referenceTemperatureK(), temperatureK);
+			if (!Double.isFinite(value)) return inventorySensibleEnergyExact(portions, temperatureK).toDouble();
+			energy = energy.add(SignedDyadic.of(value));
+		}
+		return energy.toDouble();
+	}
+
+	private SignedDyadic inventorySensibleEnergyExact(List<InventoryPortion> portions, double temperatureK) {
+		SignedDyadic energy = SignedDyadic.ZERO;
+		for (InventoryPortion portion : portions) {
+			var material = registry.material(portion.materialHandle());
+			energy = energy.add(ThermalContactExchange.exactEnergyChangeBetween(material, portion.massMu(), material.referenceTemperatureK(), temperatureK));
+		}
+		return energy;
 	}
 
 	private double inventoryHeatCapacity(List<InventoryPortion> portions, double temperatureK) {

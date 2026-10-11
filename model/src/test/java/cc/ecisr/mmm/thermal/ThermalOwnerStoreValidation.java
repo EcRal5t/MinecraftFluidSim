@@ -29,6 +29,8 @@ public final class ThermalOwnerStoreValidation {
 		referenceTermsKeepCanonicalRationalRounding();
 		referenceEnergyUsesCanonicalSpeciesOrder();
 		exactAggregateEnergySurvivesCaloricHandoffs();
+		caloricKnotsRetainTheirOwnEnergyScale();
+		caloricBoundsKeepFiniteStates();
 		coolingInversionRetainsEnergyScale();
 	}
 
@@ -215,6 +217,103 @@ public final class ThermalOwnerStoreValidation {
 			require(state.liquidInternalEnergy(0) == 1e18 && state.exactEnergy(1).equals(before)
 					&& state.phaseScanTemperatureInCell(0) == 363 && state.auditLedger().equals(audit)
 					&& state.thermalRevision().equals(revision), "Invalid actual rounded owner failed after a partial publication");
+		}
+	}
+
+	private static void caloricKnotsRetainTheirOwnEnergyScale() {
+		var context = new ThermalCarrierContext() {
+			public int markerCount() { return 1; } public int cell(int marker) { return 0; }
+			public int fluidMaterialHandle(int marker) { return 0; } public double mass(int marker) { return 8; }
+			public double volume(int marker) { return .5; } public ChemicalMixtureRecord mixture(int marker) { return null; }
+			public ChemicalRegistry chemicalRegistry() { return null; }
+		};
+		for (boolean reverseCapacity : new boolean[] {false, true}) for (double reference : new double[] {0, -1e18, 1e18})
+			for (double referenceTemperature : new double[] {300, 600}) for (double requestedTemperature : new double[] {
+					250, Math.nextDown(300), 300, Math.nextUp(300), 500, Math.nextDown(600), 600, Math.nextUp(600)}) {
+				var segments = List.of(new ThermalMaterialDefinition.CaloricSegment(250, 300, reverseCapacity ? 1 : 1e16),
+						new ThermalMaterialDefinition.CaloricSegment(300, 600, reverseCapacity ? 1e16 : 1));
+				var liquid = new ThermalMaterialDefinition("test:knot/a", ThermalMaterialDefinition.CarrierKind.LIQUID,
+						"test:knot/a", referenceTemperature, reference, 0, segments);
+				var device = new ThermalMaterialDefinition("test:knot/b", ThermalMaterialDefinition.CarrierKind.DEVICE,
+						"test:knot/b", referenceTemperature, reference, 0, segments);
+				var registry = new ThermalRegistry(List.of(liquid, device)); var function = new ThermalStateFunction(registry);
+				double energy = function.internalEnergyAtTemperature(0, 1, Map.of(), requestedTemperature);
+				double actualTemperature = function.stateForInternalEnergy(0, 1, Map.of(), energy).temperatureK();
+				var state = ThermalDomainState.restoreTarget(registry, new int[] {0}, new int[0], referenceTemperature,
+						1, 1, 1, 1, .5F, context, null, 1, new double[] {energy});
+				state.preparePhaseScan(context);
+				double tolerance = 4 * Math.ulp(actualTemperature);
+				require(Math.abs(state.phaseScanTemperatureInCell(0) - actualTemperature) <= tolerance
+						&& Math.abs(state.observeTemperatureInCell(0, context) - actualTemperature) <= tolerance,
+						"Caloric knot used a preceding interval's energy magnitude or accumulated cancellation");
+				var contacts = state.finiteDeviceContacts(List.of(new FiniteDeviceExchangeCoordinator.CellContactRequest(0, 0, 1)), context);
+				var body = new FiniteThermalBodyState(0, registry.fingerprint(), device.id(), 1, energy);
+				var exchange = FiniteThermalExchange.plan(registry, body, contacts, .01, 8);
+				require(!exchange.changed() && exchange.contacts().getFirst().internalEnergyDeltaEu() == 0,
+						"Caloric knot created a finite-device heat flow between equal actual temperatures");
+			}
+		for (double cv : new double[] {3 * Double.MIN_VALUE, 1e308}) {
+			var liquid = new ThermalMaterialDefinition("test:endpoint", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"test:endpoint", cv < 1 ? 300 : 1, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, cv)));
+			var registry = new ThermalRegistry(List.of(liquid));
+			for (double energy : cv < 1 ? new double[] {0, Double.MIN_VALUE, 3 * Double.MIN_VALUE} : new double[] {0, 1e307}) {
+				var state = ThermalDomainState.restoreTarget(registry, new int[] {0}, new int[0], liquid.referenceTemperatureK(),
+						1, 1, 1, 1, .5F, context, null, 1, new double[] {energy});
+				state.preparePhaseScan(context);
+				double expected = liquid.referenceTemperatureK() + energy / cv;
+				require(state.phaseScanTemperatureInCell(0) == expected && state.observeTemperatureInCell(0, context) == expected,
+						"A subnormal caloric quantum or overflowing distant endpoint changed a finite temperature");
+			}
+		}
+		var nearMinimum = new ThermalMaterialDefinition("test:minimum", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				"test:minimum", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 300, 1e16),
+				new ThermalMaterialDefinition.CaloricSegment(300, 600, 1)));
+		var function = new ThermalStateFunction(new ThermalRegistry(List.of(nearMinimum)));
+		double minimumEnergy = -3e18, energy = Math.nextUp(minimumEnergy);
+		require(function.stateForInventory(List.of(new ThermalStateFunction.InventoryPortion(0, 1, Map.of())), energy).temperatureK()
+				== (energy - minimumEnergy) / 1e16, "Minimum-domain tolerance swallowed a representable positive temperature");
+		require(function.stateForInternalEnergy(0, 1, Map.of(), energy).temperatureK() == (energy - minimumEnergy) / 1e16,
+				"Single-owner cold extrapolation erased its positive temperature");
+	}
+
+	private static void caloricBoundsKeepFiniteStates() {
+		for (double reference : new double[] {0, -1e18}) {
+			var material = new ThermalMaterialDefinition("test:infinite", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"test:infinite", 300, reference, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 300, 1e308),
+					new ThermalMaterialDefinition.CaloricSegment(300, 600, 1)));
+			var registry = new ThermalRegistry(List.of(material)); double raw = reference == 0 ? 200 : reference + 256;
+			var context = new ThermalCarrierContext() {
+				public int markerCount() { return 1; } public int cell(int p) { return 0; } public int fluidMaterialHandle(int p) { return 0; }
+				public double mass(int p) { return 8; } public double volume(int p) { return .5; }
+				public ChemicalMixtureRecord mixture(int p) { return null; } public ChemicalRegistry chemicalRegistry() { return null; }
+			};
+			var state = ThermalDomainState.restoreTarget(registry, new int[] {0}, new int[0], 300,
+					1, 1, 1, 1, .5F, context, null, 1, new double[] {raw}); state.preparePhaseScan(context);
+			double expected = 300 + (raw - reference);
+			require(state.temperature(0, context) == expected && state.phaseScanTemperatureInCell(0) == expected
+					&& state.observeTemperatureInCell(0, context) == expected, "An infinite cold bound rejected a finite caloric state");
+		}
+		for (boolean cancellingSegments : new boolean[] {false, true}) for (boolean reverse : new boolean[] {false, true}) {
+			var a = new ThermalMaterialDefinition("test:wide/a", ThermalMaterialDefinition.CarrierKind.LIQUID, "test:wide/a", 100, 0, 0,
+					cancellingSegments ? List.of(new ThermalMaterialDefinition.CaloricSegment(1, 400, 1e308),
+					new ThermalMaterialDefinition.CaloricSegment(400, 1000, 1)) : List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 5e307)));
+			var b = new ThermalMaterialDefinition("test:wide/b", ThermalMaterialDefinition.CarrierKind.LIQUID, "test:wide/b", 900, 0, 0,
+					cancellingSegments ? List.of(new ThermalMaterialDefinition.CaloricSegment(1, 600, 1),
+					new ThermalMaterialDefinition.CaloricSegment(600, 1000, 1e308)) : a.caloricSegments());
+			var registry = new ThermalRegistry(List.of(a, b)); var function = new ThermalStateFunction(registry);
+			var portions = List.of(new ThermalStateFunction.InventoryPortion(reverse ? 1 : 0, 1, Map.of()),
+					new ThermalStateFunction.InventoryPortion(reverse ? 0 : 1, 1, Map.of()));
+			require(function.stateForInventory(portions, 0).temperatureK() == 500,
+					"Wide opposite caloric bounds lost their finite common-temperature state or depended on portion order");
+			var grid = new ThermalCellGrid(1);
+			grid.rebuild(new ThermalCellGrid.CarrierAccess() {
+				public int carrierCount() { return 2; } public int cell(int p) { return 0; }
+				public ThermalMaterialDefinition material(int p) { return (p == 0) == !reverse ? a : b; }
+				public double mass(int p) { return 1; } public double volume(int p) { return .25; }
+				public double baseEnergy(int p) { return 0; } public double internalEnergy(int p) { return 0; }
+				public void setInternalEnergy(int p, double u) { throw new AssertionError("Caloric observation wrote inventory"); }
+			});
+			require(grid.temperature(0) == 500, "Wide opposite caloric cell bounds lost their finite state");
 		}
 	}
 

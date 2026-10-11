@@ -306,8 +306,10 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			GranularEnergyColumn.DepositKey key(int cell, int material, int composition) {
 				return new GranularEnergyColumn.DepositKey(cell, material, composition);
 			}
-			@Override public void requireActiveMerge(int first, int second) {
-				thermalState.requireActiveMerge(first, second);
+			@Override public boolean canActiveMerge(int first, int second, GranularParcelStore.Parcel merged,
+					cc.ecisr.mmm.granular.SolidCompositionRecord composition) {
+				return thermalState.canActiveMerge(first, second, merged.materialHandle(), merged.mass(),
+						composition == null ? Map.of() : composition.stableAmounts(granularState.compositions.registry()));
 			}
 			@Override public void commitActiveMerge(int first, int second) {
 				thermalState.commitActiveMerge(first, second);

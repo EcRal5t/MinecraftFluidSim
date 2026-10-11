@@ -77,6 +77,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	}
 
 	static void granularEnergyColumnTransactions() {
+		granularActiveMergePreservesPositiveTemperature();
 		granularExternalExtractionRounding();
 		String granularFingerprint = "2".repeat(64);
 		ThermalMaterialDefinition liquid = material("test:thermal/granular_host", "test:liquid", 0.0,
@@ -261,6 +262,74 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					&& Math.abs(finalK - sourceK) <= temperatureBound && finalK > 1e-9
 					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "Cold granular remainder lost temperature or exact U audit");
 		} catch (Exception failure) { throw new AssertionError("Production cold granular extraction fixture failed", failure); }
+	}
+
+	static void granularActiveMergePreservesPositiveTemperature() {
+		var granular = BuiltinGranularDefinitions.createRegistry();
+		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		var definitions = granularThermalRegistry(liquids, granular).materials().stream().map(material ->
+				material.carrierKind() == ThermalMaterialDefinition.CarrierKind.GRANULAR
+						? new ThermalMaterialDefinition(material.id(), material.carrierKind(), material.carrierId(),
+								300, 1e18, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)))
+						: material).toList();
+		var registry = new ThermalRegistry(definitions, List.of(), List.of(), "", granular.fingerprint());
+		int thermalSand = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,
+				granular.material(sand).id());
+		double[] invalidMass = {.24999999999999914, 1.2999999999999952};
+		double[] invalidEnergy = {2.4999999999999907e17, 1.299999999999995e18};
+		for (int variant = 0; variant < 3; variant++) {
+			var domain = new FluidDomain(4, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F,
+					100, 1e-5F, .45F, .002F, 0), 216);
+			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+			int count = variant == 0 ? 2 : 4, invalidStart = variant == 2 ? 2 : 0;
+			double[] energies = new double[count];
+			for (int index = 0; index < count; index++) {
+				boolean invalid = index >= invalidStart && index < invalidStart + 2;
+				double mass = invalid ? invalidMass[index - invalidStart] : .25;
+				energies[index] = invalid ? invalidEnergy[index - invalidStart] : 2.5e17;
+				require(domain.tryInsertExactGranular(index / 2 + 1, 1, 1, sand, 0, 3, mass).inserted(),
+						"thermal merge fixture could not insert its legal mass inventory");
+			}
+			domain.bindThermal(registry, liquids, 300);
+			domain.thermalState.restoreThermalGranular(energies, List.of());
+			domain.thermalState.restoreAuditLedger(ThermalAuditLedger.initialized(SignedDyadic.sum(energies)));
+			var parcels = domain.granularState.parcels;
+			var before = java.util.stream.IntStream.range(0, count).mapToObj(parcels::parcel).toList();
+			var revision = domain.thermalState.thermalRevision();
+			long stockRevision = parcels.mutationRevision(); var audit = domain.thermalAudit();
+			for (int index = 0; index < count; index++) require(domain.thermalState.stateFunction().stateForInventory(
+					List.of(new ThermalStateFunction.InventoryPortion(thermalSand, before.get(index).mass(), java.util.Map.of())),
+					energies[index]).temperatureK() > 0, "thermal merge source must have a legal positive temperature");
+			int[] acceptedGeometry = {0};
+			var result = domain.granularState.inventory.compactActive(
+					index -> (int) (parcels.parcel(index).x() / .5F),
+					(left, right, merged) -> { acceptedGeometry[0]++; return true; }, 0, 16);
+			require(result.merges() == (variant == 0 ? 0 : 1) && acceptedGeometry[0] == result.merges(),
+					"unrepresentable thermal merge must defer before reserving candidate geometry");
+			if (variant == 0) require(parcels.count() == count && parcels.mutationRevision() == stockRevision
+					&& before.equals(java.util.stream.IntStream.range(0, count).mapToObj(parcels::parcel).toList())
+					&& Arrays.equals(energies, domain.thermalState.granularColumn().copyActiveEnergy())
+					&& domain.thermalState.matchesThermalRevision(revision) && domain.thermalAudit().equals(audit),
+					"deferred thermal merge changed inventory, energy or audit revision");
+			else {
+				for (int index = 0; index < 2; index++) {
+					var original = before.get(invalidStart + index); boolean found = false;
+					for (int current = 0; current < parcels.count(); current++) if (parcels.parcel(current).equals(original)) {
+						found = true; require(domain.thermalState.granularColumn().activeEnergy(current) == invalidEnergy[index],
+								"successful neighboring pair desynchronized a deferred parcel's energy side column");
+					}
+					require(found, "successful neighboring merge changed a deferred parcel");
+				}
+				for (int current = 0; current < parcels.count(); current++) require(
+						domain.thermalState.stateFunction().stateForInventory(List.of(new ThermalStateFunction.InventoryPortion(
+								thermalSand, parcels.parcel(current).mass(), java.util.Map.of())),
+								domain.thermalState.granularColumn().activeEnergy(current)).temperatureK() > 0,
+						"compaction committed an invalid positive-temperature owner");
+			}
+			require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"thermal compaction roundoff did not close its audit");
+		}
 	}
 
 	static ThermalRegistry granularThermalRegistry(

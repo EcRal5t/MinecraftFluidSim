@@ -19,6 +19,7 @@ final class CellRemapPorts {
 	private final FluidDomain domain;
 	private final ConservativeLiquidFlux flux;
 	private final SignedDyadic[] supply, after, capacity, reserved;
+	private final SignedDyadic[] cellSupply;
 	private final ArrayList<Port>[] outgoing, incoming;
 	private final ArrayList<Port> ports = new ArrayList<>();
 	private final boolean[] changed;
@@ -90,12 +91,39 @@ final class CellRemapPorts {
 		System.arraycopy(supply, 0, after, 0, count);
 		for (var port : ports) { after[port.donor] = after[port.donor].subtract(port.volume); after[port.receiver] = after[port.receiver].add(port.volume); }
 		for (int node = 0; node < count; node++) while (after[node].compareTo(capacity[node]) > 0) cancelIncoming(node);
+		cellSupply = supplyByCell(); synchronizeFluxes();
+	}
+	private void synchronizeFluxes() {
+		Arrays.fill(changed, false);
 		SignedDyadic[] amounts = new SignedDyadic[flux.flux.length]; Arrays.fill(amounts, SignedDyadic.ZERO);
 		for (var port : ports) if (port.volume.signum() > 0) {
 			amounts[port.face] = amounts[port.face].add(port.volume); changed[port.donor] = changed[port.receiver] = true;
 		}
-		flux.adoptPortFluxes(supplyByCell(), amounts);
+		flux.adoptPortFluxes(cellSupply, amounts);
 	}
+
+	/** Increase retained inventory to a float value when possible; otherwise remove the smallest port. */
+	void reduceChemical(int cell, int support, SignedDyadic retained, boolean homogeneous) {
+		var available = outgoing[node(cell, support)];
+		spendSearch(available == null ? 1 : available.size());
+		Port selected = null; SignedDyadic amount = SignedDyadic.ZERO;
+		if (homogeneous) {
+			float upper = (float) retained.toDouble();
+			if (SignedDyadic.of(upper).compareTo(retained) < 0) upper = Math.nextUp(upper);
+			amount = SignedDyadic.of(upper).subtract(retained);
+			if (amount.signum() > 0 && available != null) for (var port : available)
+				if (port.volume.compareTo(amount) >= 0 && (selected == null || port.volume.compareTo(selected.volume) < 0)) selected = port;
+		}
+		if (selected == null && available != null) for (var port : available) if (port.volume.signum() > 0
+				&& (selected == null || port.volume.compareTo(selected.volume) < 0)) { selected = port; amount = port.volume; }
+		if (selected == null) throw new MechanicalTimeRefinement(2, "Chemical component has no representable exact volume carriers");
+		spendSearch(after.length + (long) changed.length + ports.size() + flux.flux.length + domain.cellCount);
+		selected.volume = selected.volume.subtract(amount);
+		after[selected.donor] = after[selected.donor].add(amount); after[selected.receiver] = after[selected.receiver].subtract(amount);
+		for (int node = 0; node < after.length; node++) while (after[node].compareTo(capacity[node]) > 0) cancelIncoming(node);
+		synchronizeFluxes();
+	}
+	void chemicalWork(long amount) { spendSearch(amount); }
 
 	boolean changed(int cell, int support) { return changed[node(cell, support)]; }
 	int cellOf(int node) { return cells[node]; }

@@ -43,7 +43,7 @@
 - reactive solid composition/species 与机械材料身份分开保存。
 - active parcel、deposit group 和 coherent condensed phase 是不同载体，不互相替代；active parcel 的连续支撑接触年龄与支撑标志是沉积状态机的权威侧列。
 - 活动颗粒的 SVQ 改变后，清除接触年龄与支撑标志，由后续机械计算按新体积重新判定代表球的接触几何；拆分、合并、部分取出和溶解共用此规则。同 SVQ 的机械写回保留本次计算出的接触状态。
-- 活动颗粒合并的位置与速度均按实际 kg 加权；位置的质量一阶矩误差限于最终 binary32 坐标舍入。生产合并候选的位置先通过现有几何与占容预检，拒绝时保留两份来源。
+- 活动颗粒合并及析出加入已有颗粒时，位置与速度均按实际 kg 加权；位置的质量一阶矩误差限于最终 binary32 坐标舍入。生产合并候选先按合并后的实际质量、组成与拟存储内能校验正温，再预留几何与占容；有限精度无法表示有效热状态时保留两份来源。整批配对在首次写入前完成库存与热状态复核。
 - deposit 保存 cell、材料、SVQ、质量、组成、porosity 和孔隙水相关状态。
 - external source、escaped sink、boundary impulse 与反应审计独立闭合。
 
