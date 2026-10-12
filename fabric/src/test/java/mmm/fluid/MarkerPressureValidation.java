@@ -8,17 +8,21 @@ public final class MarkerPressureValidation {
 	                      int[] cells) { }
 	private MarkerPressureValidation() { }
 	public static void main(String[] args) {
-		if (args.length == 1 && args[0].equals("--kernel")) {
+		if (args.length == 1 && args[0].equals("--gas-geometry")) {
+			pressureUsesCurrentMicroGasGeometry();
+			System.out.println("MarkerPressureValidation PASS (current micro gas geometry)");
+		} else if (args.length == 1 && args[0].equals("--kernel")) {
 			validateKernel();
 			System.out.println("MarkerPressureValidation PASS (kernel; production capillary/wall transport skipped)");
 		} else {
-			if (args.length != 0) throw new IllegalArgumentException("Use --kernel or no arguments for marker pressure validation");
+			if (args.length != 0) throw new IllegalArgumentException("Use --kernel, --gas-geometry or no arguments for marker pressure validation");
 			validate();
 			System.out.println("MarkerPressureValidation PASS");
 		}
 	}
 	public static void validate() {
 		validateKernel();
+		pressureUsesCurrentMicroGasGeometry();
 		unresolvedCapillaryTractionIsAppliedOnce();
 		transportPreservesFixedWallVelocity();
 	}
@@ -33,6 +37,67 @@ public final class MarkerPressureValidation {
 		largePressureDifferences();
 		pressureResponseAvoidsIntermediateOverflow();
 		pressureExtremeRoundingAndCancellation();
+	}
+
+	private static void pressureUsesCurrentMicroGasGeometry() {
+		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, 0));
+		for (int c = 0; c < d.cellCount; c++) d.setSolid(c % 3, c / 3 % 3, c / 9, true);
+		d.setSolid(0, 1, 1, false); d.setSolid(2, 1, 1, false);
+		d.setSolidMicroMask(1, 1, 1, 126);
+		d.setVolume(0, 1, 1, 1); d.setVolume(2, 1, 1, 1);
+		d.sealDomainBoundary(); d.ensureGrid(); d.gasTopologyCoordinator.refresh();
+		var frame = d.gasState.frame;
+		int dry = d.cellIndex(1, 1, 1), first = frame.nodeOfPiece(8 * dry), second = frame.nodeOfPiece(8 * dry + 7);
+		if (first <= 0 || second <= 0 || first == second || frame.commonCellNode(dry) != -1)
+			throw new AssertionError("Pressure fixture lost its two independent gas owners");
+		d.gasState.network.setStandardVolume(first, 1.5 * d.gasState.network.availableVolume(first));
+		d.gasState.network.setStandardVolume(second, .75 * d.gasState.network.availableVolume(second));
+		var geometry = frame.liquidPressureGeometry(d); boolean[] contacts = new boolean[frame.nodeCount() + 1];
+		geometry.forEachGasPiece(piece -> {
+			int owner = frame.nodeOfPiece(piece);
+			if (owner != first && owner != second) throw new AssertionError("Wet face used a gas owner outside its actual microbox");
+			contacts[owner] = true;
+		});
+		if (!contacts[first] || !contacts[second]) throw new AssertionError("Pressure geometry omitted a contacted gas owner");
+		double p1 = d.gasState.network.gaugePressure(first), p2 = d.gasState.network.gaugePressure(second);
+		double c1 = d.gasState.network.availableVolume(first) / (101325 + p1);
+		double c2 = d.gasState.network.availableVolume(second) / (101325 + p2);
+		System.arraycopy(d.mac.velocityX, 0, d.mac.p2gVelocityX, 0, d.mac.velocityX.length);
+		System.arraycopy(d.mac.velocityY, 0, d.mac.p2gVelocityY, 0, d.mac.velocityY.length);
+		System.arraycopy(d.mac.velocityZ, 0, d.mac.p2gVelocityZ, 0, d.mac.velocityZ.length);
+		d.bodyForceStage.applyGravity(.001F);
+		d.pressureStage.solve(.001F); d.pressureStage.projectVelocities(.001F);
+		near(d.pressureReference, (p1 * c1 + p2 * c2) / (c1 + c2), 1e-3, "Actual-contact gas pressure gauge");
+		if (d.projection.gasUnknownCount != 2 || !d.projection.gasPressureUnknown[first] || !d.projection.gasPressureUnknown[second])
+			throw new AssertionError("Pressure preparation merged independently contacted gas nodes");
+		near(d.pressureSystem.gasPressure(first) + d.pressureReference, p1, 1e-4, "First stationary cavity retains its pressure");
+		near(d.pressureSystem.gasPressure(second) + d.pressureReference, p2, 1e-4, "Second stationary cavity retains its pressure");
+		near(d.maximumParticleSpeed(), 0, 1e-6, "Closed stationary compartments retain zero motion");
+		float x = d.particles.positionX(0); d.particles.setPositionX(0, Math.nextUp(x));
+		boolean rejected = false;
+		try { frame.liquidPressureGeometry(d); } catch (GasTopologyBlockedException expected) { rejected = true; }
+		if (!rejected) throw new AssertionError("Pressure geometry accepted a stale liquid first moment");
+		d.particles.setPositionX(0, x);
+		if (!frame.liquidPressureGeometry(d).cellSnapshot(12).equals(geometry.cellSnapshot(12)))
+			throw new AssertionError("Repeated geometry capture changed the immutable physical profile");
+		var plan = d.pressureSystem.markerProjection(); plan.prepare(.001F);
+		if (!plan.solve(d.config.pressureTolerance()).converged()) throw new AssertionError("Current pressure input failed to solve");
+		d.gasTopologyCoordinator.refresh();
+		rejected = false;
+		try { frame.liquidPressureGeometry(d); } catch (GasTopologyBlockedException expected) { rejected = true; }
+		if (!rejected) throw new AssertionError("Pressure geometry reused a replaced gas frame");
+		rejected = false;
+		try { plan.publish(); } catch (IllegalStateException expected) { rejected = true; }
+		if (!rejected) throw new AssertionError("Pressure candidate published after its gas frame was replaced");
+		near(d.maximumParticleSpeed(), 0, 1e-6, "Rejected pressure candidate retains current velocities");
+		d.setVolume(0, 1, 1, 0); d.setVolume(2, 1, 1, 0);
+		d.stepMechanicsOnly();
+		var emptyField = d.pressureSystem.markerVelocityField();
+		for (int cell = 0; cell < d.cellCount; cell++) if (emptyField != null && emptyField.hasCell(cell))
+			throw new AssertionError("Empty liquid pressure retained a populated velocity cell");
+		if (d.pressureAnchor != -1 || d.pressureReference != 0
+				|| d.projection.fluidUnknownCount != 0 || d.projection.gasUnknownCount != 0)
+			throw new AssertionError("Empty liquid pressure reused an earlier projection or velocity field");
 	}
 
 	static void transportPreservesFixedWallVelocity() {

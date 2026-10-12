@@ -104,7 +104,9 @@ G2P 的预测、投影、PIC 与输入载体动能，以及 FLIP 混合的线性
 
 压力面惯性与实际 P2G 面质量存在差异。自由面场景中，压力算子上的内部总冲量可以闭合，写回粒子后的实际总冲量仍有偏差。压力后的 G2P 与再次 P2G 也会改变已投影的散度；满液体的质量正交速度投影保留可解析采样空间，未保证该空间中的压力连续性。实际粒子质量、速度传递和压力约束需要共同组成一致的离散，完成条件见[物理缺口的依赖安排](../roadmap/product-roadmap.md#物理缺口的依赖安排)。[PressureTransferExperiment](../../fabric/src/test/java/mmm/fluid/PressureTransferExperiment.java) 分别报告压力面、P2G 面质量和实际粒子的冲量与功，以及速度回映射后的散度；自由面实验同时分解 PIC 压力响应、FLIP 系数变化和支撑面外推变化。
 
-[MarkerVelocityTransfer](../../solver/src/main/java/mmm/fluid/MarkerVelocityTransfer.java) 提供实际 kg 加权的固定稀疏 `J/Jᵀ`，封闭面统一排除，MAC 发布采用双精度归约及一次 float 写入。[MarkerPressureOperator](../../solver/src/main/java/mmm/fluid/MarkerPressureOperator.java) 将共享面面积和相邻压力行组成 `C`，提供体积流率 `Cv`、压力力 `Cᵀp` 和 `CM⁻¹Cᵀ + S_g`；有限气体储存为 `S_g = Vβ_s/Δt²`。压力力先计算共享面压差，封闭常压力保持严格零力；相同压力行的面贡献先合并，再计算对角项。独立离散验证覆盖实际粒子质量下的连续性、压力冲量与功、封闭常压力零空间和气体压缩符号。当前主流程继续使用上述面压力与 G2P 路径；离散核的主流程集成还包括已知压力力、表面张力、颗粒阻力、未支撑开放面的共同速度表示，以及最终粒子速度直接发布。
+[MarkerVelocityTransfer](../../solver/src/main/java/mmm/fluid/MarkerVelocityTransfer.java) 提供实际 kg 加权的固定稀疏 `J/Jᵀ`，封闭面统一排除，MAC 发布采用双精度归约及一次 float 写入。[MarkerPressureOperator](../../solver/src/main/java/mmm/fluid/MarkerPressureOperator.java) 将共享面面积和相邻压力行组成 `C`，提供体积流率 `Cv`、压力力 `Cᵀp` 和 `CM⁻¹Cᵀ + S_g`；有限气体储存为 `S_g = Vβ_s/Δt²`。压力力先计算共享面压差，封闭常压力保持严格零力；相同压力行的面贡献先合并，再计算对角项。独立离散验证覆盖实际粒子质量下的连续性、压力冲量与功、封闭常压力零空间和气体压缩符号。
+
+纯液体主流程通过 [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java) 使用实际质量的格内仿射拟合与微盒湿面约束，直接发布粒子速度和同一拟合场的 MAC 法向迹。压力几何来自当前气腔 frame 的 PLIC，具体来源校核见[气体压力耦合](gas-state.md#压力与热耦合)。含颗粒或连续固相库存时，主流程使用联合面压力和既有 G2P 写回。稀疏支撑、断开分量及各相共同惯性的完成条件见[求解器整合计划](../roadmap/solver-consolidation-plan.md)。
 
 归一化质量权重上的面力作用于实际粒子的加权质心，该力臂一般偏离面中心，刚体旋转可产生额外体积流率与内部压力力矩。令 `Rω = ω×(x−center)`，保持内部角动量要求 `CR = 0`；当前质量映射还须补齐面速度的切向一阶矩。[PressureTransferExperiment](../../fabric/src/test/java/mmm/fluid/PressureTransferExperiment.java) 的 `--rotation` 对照独立面通量、紧支撑压力的实际总力矩与旋转虚功。
 

@@ -39,6 +39,9 @@ public final class M5GasLiquidCouplingValidation {
 	/** Compare prepared neighbor sources with direct classification across successive projections. */
 	private static void validatePressureSourceRefresh() {
 		FluidDomain domain = new FluidDomain(4, 3, 2, FluidSolverConfig.prototypeDefaults());
+		for (int cell = 0; cell < domain.cellCount; cell++)
+			if (cell % 4 == 1 || cell / 4 % 3 == 1) domain.setSolid(cell % 4, cell / 4 % 3, cell / 12, true);
+		domain.sealDomainBoundary(); domain.gasTopologyCoordinator.refresh();
 		PressureSystem system = new PressureSystem(domain);
 		double[] liquid = new double[domain.cellCount], gas = new double[domain.cellCount + 1];
 		for (int i = 0; i < liquid.length; i++) liquid[i] = (i - 11) * 0.3125;
@@ -51,16 +54,15 @@ public final class M5GasLiquidCouplingValidation {
 			assemble.setAccessible(true); neighbor.setAccessible(true); accumulate.setAccessible(true);
 			for (int pass = 0; pass < 6; pass++) {
 				domain.pressureAnchor = pass;
-				for (int node = 1; node <= 3; node++) domain.projection.gasPressureUnknown[node] = (node + pass) % 2 == 0;
+				for (int node = 1; node <= domain.gasState.network.nodeCount(); node++)
+					domain.projection.gasPressureUnknown[node] = (node + pass) % 2 == 0;
 				for (int cell = 0; cell < domain.cellCount; cell++) {
-					domain.geometry.solid[cell] = (cell + pass) % 5 == 0;
 					domain.projection.pressureFluid[cell] = !domain.geometry.solid[cell] && (cell + pass) % 2 == 0;
-					domain.projection.pressureAirNodeId[cell] = (cell + pass) % 4;
 				}
 				assemble.invoke(system);
 				double[] expectedGas = new double[gas.length], actualGas = new double[gas.length];
 				for (int cell = 0; cell < domain.cellCount; cell++) {
-					int node = domain.isAir(cell) ? domain.gasNodeOfAirCell(cell) : -1;
+					int node = domain.isAir(cell) ? domain.gasState.frame.commonCellNode(cell) : -1;
 					boolean gasUnknown = node > 0 && domain.projection.gasPressureUnknown[node];
 					double expected = domain.isFluid(cell) ? (cell == domain.pressureAnchor ? 0 : liquid[cell])
 							: gasUnknown ? gas[node] : 0;

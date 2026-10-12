@@ -134,6 +134,12 @@ final class GasRuntimeGeometry {
 	}
 
 	GasComplementGeometry geometry() { return geometry; }
+	LiquidPressureGeometry liquidPressureGeometry(FluidDomain domain) {
+		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		if (domain.gasState.frame != this || sealedExterior != domain.gasState.sealedDomainBoundary || !matchesCarrierGeometry(domain, occupied))
+			throw new GasTopologyBlockedException("Pressure gas frame no longer matches carrier geometry");
+		return LiquidPressureGeometry.capture(domain, phase);
+	}
 	float planeNormal(int cell, int micro, int axis) { return phase.planeNormal(cell, micro, axis); }
 	double planeOffset(int cell, int micro) { return phase.planeOffset(cell, micro); }
 	double liquidFractionExact(int cell, int micro) { return phase.liquidFractionExact(cell, micro); }

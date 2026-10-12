@@ -37,14 +37,21 @@ final class LiquidPressureGeometry {
 	}
 	enum FacetKind { WALL, GAS }
 	/** Micro key is owner microbox*6+axis*2+(positive-side?1:0); peer=-1 denotes the fixed exterior. */
-	record Facet(FacetKind kind, int cell, int peerCell, int axis, int sign, int microKey, SurfaceMoments moments) { }
+	record Facet(FacetKind kind, int cell, int peerCell, int axis, int sign, int microKey, SurfaceMoments moments) {
+		int gasPiece() {
+			if (kind != FacetKind.GAS) throw new IllegalStateException("A wall facet has no gas piece");
+			return 8 * peerCell + ((microKey / 6) ^ (1 << axis));
+		}
+	}
 	record SideWet(int axis, int sign, int microKey, SurfaceMoments moments) { }
 	/** One physical shared microface, oriented from the negative-axis cell to the positive-axis cell. */
 	record SharedFace(int minusCell, int plusCell, int axis, int microKey, SurfaceMoments moments) { }
 	/** Rows store integral n_a*x_b; all fields are immutable and expressed in SI. */
 	record NormalFirstMoment(Vec3 x, Vec3 y, Vec3 z) { Vec3 row(int axis) { return axis == 0 ? x : axis == 1 ? y : z; } }
 	/** Wet integration piece and actual gas-side microbox are separate when PLIC coincides with a microface. */
-	record FreeFragment(int cell, int microKey, int gasMicro, Vec3 areaNormal, NormalFirstMoment normalFirstMoment) { }
+	record FreeFragment(int cell, int microKey, int gasMicro, Vec3 areaNormal, NormalFirstMoment normalFirstMoment) {
+		int gasPiece() { return 8 * cell + gasMicro; }
+	}
 	record CellSnapshot(int cell, double volume, Vec3 firstMoment, Vec3 centroid,
 	                    double admittedVolume, double rawMarkerVolume, double rawPressureVolume, double volumeErrorBound,
 	                    List<SideWet> sideWet, List<Facet> facets, List<FreeFragment> freeFragments) {
@@ -55,9 +62,18 @@ final class LiquidPressureGeometry {
 
 	private LiquidPressureGeometry(CellSnapshot[] cells, List<SharedFace> faces) { this.cells=cells; sharedFaces=List.copyOf(faces); }
 	static LiquidPressureGeometry capture(FluidDomain domain) {
+		return capture(domain, domain.pressurePhaseGeometry);
+	}
+	static LiquidPressureGeometry capture(FluidDomain domain, FlipPressurePhaseGeometry phase) {
 		var cells = new CellSnapshot[domain.cellCount]; var faces = new ArrayList<SharedFace>();
-		for (int cell=0;cell<cells.length;cell++) if(domain.pressurePhaseGeometry.liquidFractionExact(cell)>0) cells[cell]=captureCell(domain,cell,faces);
+		for (int cell=0;cell<cells.length;cell++) if(phase.liquidFractionExact(cell)>0) cells[cell]=captureCell(domain,phase,cell,faces);
 		return new LiquidPressureGeometry(cells,faces);
+	}
+	void forEachGasPiece(java.util.function.IntConsumer accept) {
+		for (var cell : cells) if (cell != null) {
+			for (var facet : cell.facets()) if (facet.kind() == FacetKind.GAS) accept.accept(facet.gasPiece());
+			for (var fragment : cell.freeFragments()) accept.accept(fragment.gasPiece());
+		}
 	}
 	CellSnapshot cellSnapshot(int cell) { return cells[cell]; }
 	List<SharedFace> sharedFaces() { return sharedFaces; }
@@ -67,8 +83,8 @@ final class LiquidPressureGeometry {
 		return result;
 	}
 
-	private static CellSnapshot captureCell(FluidDomain d,int cell,List<SharedFace> shared) {
-		var plane=d.pressurePhaseGeometry; var cut=d.geometry.cutCells;
+	private static CellSnapshot captureCell(FluidDomain d,FlipPressurePhaseGeometry plane,int cell,List<SharedFace> shared) {
+		var cut=d.geometry.cutCells;
 		double h=d.config.cellSize(), h3=h*h*h;
 		int[] index={cell%d.sizeX,cell/d.sizeX%d.sizeY,cell/(d.sizeX*d.sizeY)};
 		double volume=0,mx=0,my=0,mz=0; int open=0;

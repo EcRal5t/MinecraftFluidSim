@@ -9,13 +9,13 @@
 | 代码事实 | 对应工作 |
 |---|---|
 | [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)按区域是否存在颗粒或 coherent 库存选择压力路径 | 明确支持范围，形成共用的液体惯性、几何与发布契约 |
-| [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java)已接入纯液体路径；[流体文档](../architecture/fluid-solver.md)仍将相关离散核描述为待接入 | 建立当前 WIP 基线，验收后同步稳定架构 |
+| [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java)接入纯液体路径，压力几何读取当前气腔 frame | 分别验收来源契约、独立离散和完整生产交接 |
 | [CellAffineVelocity](../../solver/src/main/java/mmm/fluid/CellAffineVelocity.java)按 cell 拟合；[GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)保留固定连通分量与微盒归属 | 规定同格断开分量的速度、湿面、压力与库存对应关系 |
 | 新压力要求活动格具有秩 4 的仿射支撑 | 先验证稀疏支撑、壁面约束与内部旋涡的表示能力 |
 | [GridToParticleStage](../../solver/src/main/java/mmm/fluid/GridToParticleStage.java)在新压力发布后跳过既有 PIC/FLIP 写回；[CellLiquidVolumeTransport](../../solver/src/main/java/mmm/fluid/CellLiquidVolumeTransport.java)按采样场选择标量或双向输运 | 把载体速度、面流动与输运来源绑定到同一子步结果 |
 | [CellVolumeReplacementPlan](../../solver/src/main/java/mmm/fluid/CellVolumeReplacementPlan.java)、[GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)及 [ThermalDomainState](../../model/src/main/java/mmm/thermal/ThermalDomainState.java)已有完整预检和版本绑定 | 复用具体计划，统一相邻业务的来源检查与发布顺序 |
-| [MarkerPressureValidation](../../fabric/src/test/java/mmm/fluid/MarkerPressureValidation.java)和 [MarkerVelocityTransferValidation](../../fabric/src/test/java/mmm/fluid/MarkerVelocityTransferValidation.java)有独立 main，尚未被 Java 调用或 Gradle 任务注册 | 接入正式聚焦验证入口 |
-| [FlipCutCellValidation](../../solver/src/test/java/mmm/fluid/FlipCutCellValidation.java)固定执行 600 步场景；CPU 部分 fast 条目调用完整入口 | 明确短验证、集成验证和长场景的覆盖与成本 |
+| [MarkerPressureValidation](../../fabric/src/test/java/mmm/fluid/MarkerPressureValidation.java)和 [MarkerVelocityTransferValidation](../../fabric/src/test/java/mmm/fluid/MarkerVelocityTransferValidation.java)通过正式选择器运行，压力核与微盒来源另有聚焦入口 | 维护可重复基线，逐项关闭失败与未验证项 |
+| [FlipCutCellValidation](../../solver/src/test/java/mmm/fluid/FlipCutCellValidation.java)区分短验证与 600 步场景；CPU 部分领域仍共用完整入口 | 持续核对短验证、集成验证和长场景的实际覆盖与成本 |
 | [FluidDomain](../../solver/src/main/java/mmm/fluid/FluidDomain.java)通过八个包内父类共享状态；[CellCarrierRemapPlan](../../solver/src/main/java/mmm/fluid/CellCarrierRemapPlan.java)集中实现复杂流程 | 随物理契约稳定迁出具体职责，减少共享可变依赖 |
 
 数值正确性、失败复现与性能结论由 M00 建立当前基线。历史通过记录属于其被测构建。

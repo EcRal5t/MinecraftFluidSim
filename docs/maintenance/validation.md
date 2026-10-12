@@ -83,6 +83,8 @@
 
 压力核可通过 `:fabric:runMarkerPressureValidation --args="--kernel"` 单独运行仿射拟合、转置虚功、固定壁面投影、独立通量、实际质量 Gram 矩阵、有限气体储存和极端数值对照；完整 `marker-pressure` 另含生产张力与壁面输运场景。
 
+`--args="--gas-geometry"` 单独校验压力准备和发布中的当前微盒归属：同格两个独立气腔、实际接触气压参考、液体第一矩变化、frame 替换后的几何与候选拒绝。
+
 自然对流增长率随 `thermal` 选择器常驻校验：两级网格、临界 Ra 两侧、两倍线性振幅，以及体积、材料质量、species、壁面 source/sink、舍入与载体内能闭合。单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[线性对流有效域](../architecture/thermal-state.md#自然对流的线性有效域)。
 
 粒子分布研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。默认输出固壁法向轮廓、正反向平流、满液体与自由面解析保面积映射、重播种二阶矩和 5,000 步溃坝的空间误差，并对照封闭满液体约束前后的压力体积；用 `--args="analytic transport"` 可只运行指定对照。`--args="free-analytic"` 从逆解析映射独立积分液体覆盖率，报告两级参考积分的差异，并检查积分点及网格细化后 L1 误差递减和整体体积闭合。默认构建的完整 `free-surface` 同时运行 5,000 步溃坝，逐步检查精确单元容量、共享压力库存、满格积分点分布及累计质量舍入界。`free-surface` 守护 G2P 数值依赖分量隔离、未使用外推面的隔离、有限气体耦合、满液体/自由面切换的工作区更新，以及精确满液体判定和微小真实缺口，`reseeding` 守护旋转协方差、秩损失拒绝、线性速度场和体积推导的拆分空间矩误差界。空间验收见[单元有限体积输运](../architecture/fluid-solver.md#单元有限体积输运)，完整步的成本要求见[生产资格](../roadmap/performance-and-backends.md#有限体积输运的生产资格)。

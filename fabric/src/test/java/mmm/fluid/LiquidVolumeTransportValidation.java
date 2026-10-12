@@ -677,7 +677,9 @@ public final class LiquidVolumeTransportValidation {
 				entered += domain.particles.volume(p);
 			}
 			if (domain.totalVolumeExact() != before || entered > .125 || !full && !(entered > .0625)
-					|| stats.substeps() > 4) throw new AssertionError("Legal connected liquid arrival failed to advance conservatively");
+					|| stats.substeps() > 4) throw new AssertionError("Legal connected liquid arrival failed to advance conservatively: full="
+					+ full + ", chemical=" + chemical + ", entered=" + entered + ", volume=" + domain.totalVolumeExact()
+					+ ", before=" + before + ", substeps=" + stats.substeps());
 		}
 	}
 

@@ -47,7 +47,16 @@ final class MarkerPressureProjection {
 		active = solved = published = hasFreeSurface = false; this.dt = dt;
 		if (!domain.pressureSystem.usesMarkerPressure()) throw new IllegalStateException("Cell pressure requires liquid-only spatial inventory");
 		if (domain.particles.count() == 0) return false;
-		basis = CellAffineVelocity.capture(domain); geometry = LiquidPressureGeometry.capture(domain);
+		gasFrame = domain.gasBoundary.frame();
+		if (gasFrame == null) throw blocked("Marker pressure requires current gas geometry");
+		basis = CellAffineVelocity.capture(domain); geometry = gasFrame.liquidPressureGeometry(domain);
+		boolean[] gasContacts = new boolean[domain.gasState.network.nodeCount() + 1];
+		geometry.forEachGasPiece(piece -> gasContacts[gasNode(piece)] = true);
+		pressureAnchor = -1;
+		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.isFluid(cell)) { pressureAnchor = cell; break; }
+		for (boolean contact : gasContacts) if (contact) { pressureAnchor = -1; break; }
+		pressureReference = boundary.pressureReference(gasContacts);
+		domain.pressureAnchor = pressureAnchor; domain.pressureReference = pressureReference;
 		wallProjection = new CellAffineWallProjection(domain, basis, geometry);
 		transfer = CellAffineMacTransfer.capture(domain, basis, geometry);
 		int count = basis.markerCount();
@@ -104,8 +113,7 @@ final class MarkerPressureProjection {
 			var profile = geometry.cellSnapshot(cell); if (profile == null) continue;
 			for (var facet : profile.facets()) {
 				if (facet.kind() == LiquidPressureGeometry.FacetKind.GAS) {
-					int peerMicro = (facet.microKey() / 6) ^ (1 << facet.axis());
-					freeBoundary(cell, gasNode(8 * facet.peerCell() + peerMicro), List.of(new Block(cell, facet.axis(), trace(cell, facet.axis(), facet.moments(), 0, facet.sign()))), gasBlocks);
+					freeBoundary(cell, gasNode(facet.gasPiece()), List.of(new Block(cell, facet.axis(), trace(cell, facet.axis(), facet.moments(), 0, facet.sign()))), gasBlocks);
 				}
 			}
 			for (var fragment : profile.freeFragments()) {
@@ -115,7 +123,7 @@ final class MarkerPressureProjection {
 					for (int b = 0; b < 3; b++) coefficient[b + 1] = (fragment.normalFirstMoment().row(axis).component(b) - n * basis.center(cell, b)) / basis.cellSize();
 					blocks.add(new Block(cell, axis, coefficient));
 				}
-				freeBoundary(cell, gasNode(8 * cell + fragment.gasMicro()), blocks, gasBlocks);
+				freeBoundary(cell, gasNode(fragment.gasPiece()), blocks, gasBlocks);
 			}
 		}
 		for (var entry : gasBlocks.entrySet()) {
@@ -292,7 +300,11 @@ final class MarkerPressureProjection {
 		float[][] mac = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
 		for (int axis = 0; axis < 3; axis++) for (int face = 0; face < mac[axis].length; face++) mac[axis][face] = (float) faceCandidate[axis][face];
 		domain.pressureSystem.updateMarkerVelocityField(candidateField);
-		for (int cell = 0; cell < liquidRows.length; cell++) if (liquidRows[cell] >= 0) domain.projection.pressure[cell] = (float) observedPressure[cell];
+		domain.projection.fluidUnknownCount = 0;
+		for (int cell = 0; cell < liquidRows.length; cell++) if (liquidRows[cell] >= 0) {
+			domain.projection.pressure[cell] = (float) observedPressure[cell];
+			domain.projection.fluidUnknownCells[domain.projection.fluidUnknownCount++] = cell;
+		}
 		Arrays.fill(domain.projection.gasPressureUnknown, false); Arrays.fill(domain.projection.gasStorageCoefficient, 0);
 		System.arraycopy(diagnosticGasDiagonal, 0, domain.projection.gasMatrixDiagonal, 0, gasRows.length);
 		System.arraycopy(diagnosticGasRhs, 0, domain.projection.gasRhs, 0, gasRows.length);

@@ -1,7 +1,5 @@
 package mmm.fluid;
 
-import mmm.fluid.air.AirNetwork;
-
 import java.util.Arrays;
 
 /**
@@ -64,10 +62,15 @@ final class PressureProjectionStage {
 		Arrays.fill(state.projection.gasStorageCoefficient, 0.0F);
 		state.projection.fluidUnknownCount = 0;
 		state.projection.gasUnknownCount = 0;
+		Arrays.fill(state.projection.pressure, 0.0F);
+		Arrays.fill(state.projection.divergence, 0.0F);
+		if (system.usesMarkerPressure()) {
+			acceptResult(system.solveMarker(dt, state.config.pressureTolerance()));
+			return;
+		}
 		pressureAnchor = findPressureAnchor();
 		access.pressureAnchor(pressureAnchor);
 		access.pressureReference(pressureAnchor < 0 ? pressureBoundaryReference(dt) : 0.0F);
-		Arrays.fill(state.projection.pressure, 0.0F);
 		float inverseCell = 1.0F / state.config.cellSize();
 		int fluidCells = 0;
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
@@ -92,16 +95,24 @@ final class PressureProjectionStage {
 		system.prepareGranular(dt);
 		double target = state.config.pressureTolerance();
 		PressureProjectionResult result = system.solve(fluidCells + state.projection.gasUnknownCount, target);
+		acceptResult(result);
+	}
+
+	private void acceptResult(PressureProjectionResult result) {
 		float residual = (float) result.residualRms();
 		access.pressureResult(result.iterations(), residual);
 		if (!result.converged()) {
 			throw new FluidDomain.PressureSolveBlockedException("Pressure projection did not converge: residual="
-					+ residual + ", tolerance=" + target + ", total iterations=" + result.iterations()
+					+ residual + ", tolerance=" + state.config.pressureTolerance() + ", total iterations=" + result.iterations()
 					+ ", linear iteration limit=" + state.config.maxPressureIterations());
 		}
 	}
 
 	void projectVelocities(float dt) {
+		if (system.usesMarkerPressure()) {
+			if (system.markerPressureActive()) system.projectGranular(dt);
+			return;
+		}
 		boolean coupled = system.projectGranular(dt);
 		double scale = dt / (state.config.density() * (double) state.config.cellSize());
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
@@ -265,18 +276,7 @@ final class PressureProjectionStage {
 			int node = gasBoundary.gasNodeOfAirCell(air);
 			if (node >= 0) seen[node] = true;
 		}
-		if (seen[AirNetwork.AMBIENT_NODE]) return 0.0F;
-		double compliance = 0, reference = 0;
-		for (int node = 1; node < seen.length; node++) {
-			if (seen[node]) {
-				if (!gasBoundary.gasNodeHasContinuumState(node)) return (float) gasBoundary.gasPressureOfNode(node);
-				double weight = gasBoundary.gasNodeVolumeCompliance(node);
-				if (!Double.isFinite(weight)) return (float) gasBoundary.gasPressureOfNode(node);
-				compliance += weight;
-				reference += (gasBoundary.gasPressureOfNode(node) - reference) * (weight / compliance);
-			}
-		}
-		return (float) reference;
+		return gasBoundary.pressureReference(seen);
 	}
 
 	private int findPressureAnchor() {

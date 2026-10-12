@@ -79,10 +79,17 @@ final class PressureSystem {
 	}
 
 	/** Runs PCG on the assembled right-hand side; the pressure vector mutates in the workspace. */
+	PressureProjectionResult solveMarker(float dt, double target) {
+		if (!markerProjection.prepare(dt)) {
+			samplingField = null;
+			domain.pressureAnchor = -1;
+			domain.pressureReference = 0;
+		}
+		return markerProjection.solve(target);
+	}
 	PressureProjectionResult solve(int unknownCount, double target) {
 		if (usesMarkerPressure()) {
-			markerProjection.prepare(substepDuration);
-			return markerProjection.solve(target);
+			return solveMarker(substepDuration, target);
 		}
 		if (unknownCount == 0 && !drag.active()) return new PressureProjectionResult(0, 0, true);
 		assembleMatrix();

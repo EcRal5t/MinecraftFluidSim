@@ -48,6 +48,29 @@ final class PressureBoundaryView {
 		return compliance;
 	}
 	double gasPressureOfNode(int node) { return domain.gasBoundary.nodeGaugePressurePa(node); }
+	float pressureReference(boolean[] seen) {
+		if (!pressureActive() || seen[AirNetwork.AMBIENT_NODE]) return 0;
+		double largest = 0;
+		for (int node = 1; node < seen.length; node++) if (seen[node]) {
+			if (!gasNodeHasContinuumState(node)) return checkedReference(gasPressureOfNode(node));
+			double compliance = gasNodeVolumeCompliance(node);
+			if (!Double.isFinite(compliance)) return checkedReference(gasPressureOfNode(node));
+			largest = Math.max(largest, compliance);
+		}
+		if (largest == 0) return 0;
+		double total = 0, reference = 0;
+		for (int node = 1; node < seen.length; node++) if (seen[node]) {
+			double weight = gasNodeVolumeCompliance(node) / largest;
+			if (weight == 0) continue;
+			total += weight;
+			reference += (gasPressureOfNode(node) - reference) * (weight / total);
+		}
+		return checkedReference(reference);
+	}
+	private static float checkedReference(double value) {
+		if (!Float.isFinite((float) value)) throw new FluidDomain.PressureSolveBlockedException("Unrepresentable gas pressure reference");
+		return (float) value;
+	}
 	/** Cell-referenced cavity pressure with the ambient/inactive zero gate. */
 	float gasPressureOfAirCell(int airCell) {
 		int node = wholeCellGasNode(domain, airCell);
