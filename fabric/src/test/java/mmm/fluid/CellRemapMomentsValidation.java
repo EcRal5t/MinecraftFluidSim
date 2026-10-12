@@ -7,9 +7,12 @@ public final class CellRemapMomentsValidation {
 	private CellRemapMomentsValidation() { }
 
 	public static void main(String[] args) {
+		if (args.length > 1 || args.length == 1 && !java.util.List.of("transport-moments", "sweep-only", "footprint-only").contains(args[0]))
+			throw new IllegalArgumentException("Unknown remap moments validation entry");
 		if (args.length == 1 && args[0].equals("transport-moments")) {
 			scalarTransportKeepsUnexcitedSpatialInertia();
 			directionalTransportPartitionsActualMomentumAndKineticEnergy();
+			System.out.println("Cell remap transport moments validation passed");
 			return;
 		}
 		sweptLiquidMomentsKeepThinTangentialCentroids();
@@ -257,11 +260,11 @@ public final class CellRemapMomentsValidation {
 		}
 		for (int i = 0; i < shearError.length; i++) {
 			close(shearError[i], 0, "Affine shear face velocity");
-			close(shearWeight[i], 1, "Uniform-density shear face weight");
+			close(shearWeight[i], 1000, "Uniform-density shear face mass (solver units)");
 		}
 		close(curvature, 0, "Affine shear curvature");
-		close(domain.mac.p2gWeightX[left], 1, "Uniform-density left face weight");
-		close(domain.mac.p2gWeightX[right], 1, "Uniform-density right face weight");
+		close(domain.mac.p2gWeightX[left], 1000, "Uniform-density left face mass (solver units)");
+		close(domain.mac.p2gWeightX[right], 1000, "Uniform-density right face mass (solver units)");
 		close(domain.mac.velocityX[left], -0.5, "Affine normal left face velocity");
 		close(domain.mac.velocityX[right], 0.5, "Affine normal right face velocity");
 		close(divergenceError, 0, "Affine normal divergence");

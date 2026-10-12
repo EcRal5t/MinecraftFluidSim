@@ -15,6 +15,7 @@
 | 选择方式 | 含义 |
 |---|---|
 | 指定名称，例如 `thermal` | 完整运行该领域；多个名称会去重 |
+| 名称加 `:short`，例如 `cut-cell:short` | 单独运行该领域的短入口；没有短入口的领域运行完整入口并标明 `full` |
 | 省略参数或使用 `fast` | 运行默认组合，提供短模式的场景使用短模式 |
 | `milestone` | 较广的阶段验收组合，仍使用各场景的短模式 |
 | `soak` | 完整运行 `gas-liquid`、`free-surface`、`reseeding` |
@@ -22,6 +23,16 @@
 | `list` | 输出当前组合与选择器名称 |
 
 显式写出的领域名称运行完整模式，即使它也出现在 `fast` 中。`production-live-budget` 和 `controller-gas-lineage` 需要显式选择，或通过 `full` 执行。Gradle 的 `check` 任务没有隐式包含所有 CPU 场景。
+
+同一领域同时选择短模式和完整模式时，完整模式优先。基线测量可加 `-PcpuValidationKeepGoing=true`，记录当前领域的首个失败后继续下一领域，最后仍以失败退出；默认在首个失败处停止。输出区分断言、参数配置与执行失败，并记录每个领域的耗时。超时或主动中止的进程须另行登记，已开始的场景不计作通过。
+
+`cut-cell:short` 保留参数、黏性、微盒几何、CCD、容量及恢复对照，省略 600 步障碍物流动。长场景单独运行：
+
+```powershell
+./gradlew.bat :solver:runSolverValidation --args="--flow-only" --offline --no-daemon
+```
+
+`free-surface:short` 省略长静水、5,000 步溃坝、300 步台阶流动，以及输运中的连续交接轨迹和 1 秒、4 秒多网格旋流。其他短组合仍可能包含成本较高的领域；具体省略项由对应入口输出。
 
 <a id="cpu"></a>
 ## 按改动选择测试
@@ -41,6 +52,8 @@
 | 调度、暂停、完整状态交接 | `lifecycle` | [FluidRegionLifecycleValidation](../../fabric/src/test/java/mmm/simulation/FluidRegionLifecycleValidation.java)、[FluidDomainStateParityValidation](../../fabric/src/test/java/mmm/simulation/FluidDomainStateParityValidation.java) |
 | 实体位移观测和液体响应 | `entity-fluid` | [EntityFluidWiringValidation](../../fabric/src/test/java/mmm/simulation/EntityFluidWiringValidation.java)、[ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java) |
 | 压力、自由面、速度传递与平流 | `free-surface` | [FlipFluidFreeSurfaceValidation](../../fabric/src/test/java/mmm/fluid/FlipFluidFreeSurfaceValidation.java) |
+| 实际质量的稀疏速度传递与转置虚功 | `marker-transfer` | [MarkerVelocityTransferValidation](../../fabric/src/test/java/mmm/fluid/MarkerVelocityTransferValidation.java) |
+| 仿射速度、压力惯性、功与有限气体储存 | `marker-pressure` | [MarkerPressureValidation](../../fabric/src/test/java/mmm/fluid/MarkerPressureValidation.java) |
 | 粒子拆分、合并和数据列搬移 | `reseeding` | [FlipFluidReseedingValidation](../../fabric/src/test/java/mmm/fluid/FlipFluidReseedingValidation.java)、[CarrierMutationValidation](../../fabric/src/test/java/mmm/fluid/CarrierMutationValidation.java) |
 | 黏性解析解、谱界、局部网格碰撞和连续碰撞检测 | `cut-cell` | [FlipCutCellValidation](../../solver/src/test/java/mmm/fluid/FlipCutCellValidation.java) |
 | Minecraft 方块形状采样 | `shape` | [FluidCutCellShapeValidation](../../fabric/src/test/java/mmm/simulation/FluidCutCellShapeValidation.java) |
@@ -58,6 +71,17 @@
 | 有限热接触解析解、跨热容分段熵增与逐载体正温 | `thermal` | [ThermalContactValidation](../../model/src/test/java/mmm/thermal/ThermalContactValidation.java) |
 
 表中是定位场景的入口，完整调用列表以 `CpuValidationSuite` 为准。长场景的注液坐标、循环步数和逐步断言留在测试代码中维护。
+
+输运与空间矩的聚焦入口复用现有断言：
+
+```powershell
+./gradlew.bat :fabric:runLiquidTransportValidation --args="components" --offline --no-daemon
+./gradlew.bat :fabric:runRemapMomentsValidation --args="transport-moments" --offline --no-daemon
+```
+
+液体输运参数为 `--fast`、`components`、`chemical-tails`、`representation`、`mass`、`quantization`、`continuity`、`handoff`；空间矩参数为 `transport-moments`、`sweep-only`、`footprint-only`。省略参数执行完整入口，未知参数直接拒绝。
+
+压力核可通过 `:fabric:runMarkerPressureValidation --args="--kernel"` 单独运行仿射拟合、转置虚功、固定壁面投影、独立通量、实际质量 Gram 矩阵、有限气体储存和极端数值对照；完整 `marker-pressure` 另含生产张力与壁面输运场景。
 
 自然对流增长率随 `thermal` 选择器常驻校验：两级网格、临界 Ra 两侧、两倍线性振幅，以及体积、材料质量、species、壁面 source/sink、舍入与载体内能闭合。单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[线性对流有效域](../architecture/thermal-state.md#自然对流的线性有效域)。
 

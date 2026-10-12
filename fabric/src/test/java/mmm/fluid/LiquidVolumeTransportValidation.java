@@ -338,6 +338,10 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	public static void main(String[] args) {
+		if (args.length > 1 || args.length == 1 && !java.util.List.of("--fast", "chemical-tails", "components",
+				"representation", "mass", "quantization", "continuity", "handoff").contains(args[0]))
+			throw new IllegalArgumentException("Unknown liquid transport validation entry");
+		boolean fast = args.length == 1 && args[0].equals("--fast");
 		if (args.length == 1 && args[0].equals("chemical-tails")) {
 			chemicalFloatTailsShareExistingQuanta(); chemicalGeometryRemapRejectsUnrepresentableCandidate(); chemicalLazyPortBuildRechecksActualShares();
 			System.out.println("Liquid chemical binary32-tail validation passed"); return;
@@ -379,7 +383,7 @@ public final class LiquidVolumeTransportValidation {
 		boundedMomentProjectionIsObservable();
 		CellRemapMomentsValidation.main(new String[0]);
 		CellPolynomialFieldValidation.main(new String[0]);
-		LiquidHandoffContinuityValidation.main(new String[0]);
+		if (!fast) LiquidHandoffContinuityValidation.main(new String[0]);
 		if (args.length == 1 && args[0].equals("handoff")) {
 			System.out.println("Liquid transport handoff validation passed");
 			return;
@@ -392,6 +396,10 @@ public final class LiquidVolumeTransportValidation {
 		allocationMatchesIntegerOracle();
 		quadratureAndMassKeepSmallShares();
 		chemicalShareCountRespectsSpeciesGroups();
+		if (fast) {
+			System.out.println("Liquid transport validation passed (short; continuity trajectories and 1- and 4-second multi-grid swirl skipped)");
+			return;
+		}
 		for (double duration : new double[] {1, 4}) {
 			double previousError = Double.POSITIVE_INFINITY, previousReferenceError = 0;
 			for (int n : duration == 1 ? new int[] {12, 24, 48} : new int[] {24, 48, 96}) {

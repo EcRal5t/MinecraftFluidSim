@@ -72,9 +72,23 @@ tasks.register('runCpuValidation', JavaExec) {
 	mainClass = 'mmm.validation.CpuValidationSuite'
 	enableAssertions = true
 	args providers.gradleProperty('cpuValidation').getOrElse('fast')
+	systemProperty 'mmm.validation.keepGoing', providers.gradleProperty('cpuValidationKeepGoing').getOrElse('false')
 	def validationWorkDir = layout.buildDirectory.dir('cpu-validation-work').get().asFile
 	workingDir validationWorkDir
 	doFirst { validationWorkDir.mkdirs() }
+}
+
+['runMarkerPressureValidation': 'mmm.fluid.MarkerPressureValidation',
+ 'runLiquidTransportValidation': 'mmm.fluid.LiquidVolumeTransportValidation',
+ 'runRemapMomentsValidation': 'mmm.fluid.CellRemapMomentsValidation'].each { taskName, validationClass ->
+	tasks.register(taskName, JavaExec) {
+		group = 'verification'
+		description = "Runs ${validationClass} (use --args for a retained focused entry)."
+		dependsOn tasks.named('testClasses')
+		classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+		mainClass = validationClass
+		enableAssertions = true
+	}
 }
 
 tasks.register('runStepBenchmark', JavaExec) {

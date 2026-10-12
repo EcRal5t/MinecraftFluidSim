@@ -8,6 +8,15 @@ public final class FlipCutCellValidation {
 	private FlipCutCellValidation() { }
 
 	public static void main(String[] args) {
+		boolean fast = args.length == 1 && args[0].equals("--fast");
+		boolean flowOnly = args.length == 1 && args[0].equals("--flow-only");
+		if (args.length != 0 && !fast && !flowOnly)
+			throw new IllegalArgumentException("Use --fast, --flow-only, or no arguments for the complete cut-cell validation");
+		if (flowOnly) {
+			partialObstacleFlowRemainsFiniteAndConservative();
+			System.out.println("FlipFluid cut-cell validation passed (600-step obstacle flow)");
+			return;
+		}
 		solverConfigRejectsNonfiniteCoefficients();
 		LiquidViscosityValidation.validate();
 		volumeAndSharedFaceFractionsAreConsistent();
@@ -20,8 +29,8 @@ public final class FlipCutCellValidation {
 		exactMarkerDisplacementUsesMicroOccupancy();
 		cutCellCapacityDisplacesMergedMarkerVolume();
 		checkpointPreservesCutCellGeometry();
-		partialObstacleFlowRemainsFiniteAndConservative();
-		System.out.println("FlipFluid cut-cell validation passed");
+		if (!fast) partialObstacleFlowRemainsFiniteAndConservative();
+		System.out.println("FlipFluid cut-cell validation passed" + (fast ? " (short; 600-step obstacle flow skipped)" : ""));
 	}
 
 	private static void solverConfigRejectsNonfiniteCoefficients() {
@@ -270,7 +279,9 @@ public final class FlipCutCellValidation {
 		}
 		float exactVolume = domain.totalVolume();
 		var backend = new CpuFluidSolverBackend();
+		long start = System.nanoTime();
 		for (int step = 0; step < 600; step++) {
+			if (step == 0) System.out.printf("Cut-cell obstacle flow: starting 600 steps, markers=%d%n", domain.particleCount());
 			var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(),
 					java.util.List.of(), false, 0, false));
 			FluidDomain.StepStats stats = candidate.stats();
@@ -279,6 +290,9 @@ public final class FlipCutCellValidation {
 			check(Float.isFinite(domain.maximumPressure()), "cut-cell pressure became non-finite");
 			check(stats.relativeVolumeError() < 2.0E-6F, "cut-cell step changed exact marker volume");
 			assertNoMarkerCenterInsideSolid(domain);
+			if (step < 5 || (step + 1) % 25 == 0)
+				System.out.printf("Cut-cell obstacle flow: completed %d/600, markers=%d, substeps=%d, elapsed=%.3fs%n",
+						step + 1, domain.particleCount(), stats.substeps(), (System.nanoTime() - start) / 1e9);
 		}
 		checkClose(domain.totalVolume(), exactVolume, 2.0E-4F, "long cut-cell marker ledger");
 		check(domain.centerOfMassX() > 3.0F, "fluid did not pass the partial obstacle aperture");

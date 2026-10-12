@@ -10,6 +10,8 @@ import mmm.fluid.M3ConnectedVesselValidation;
 import mmm.fluid.M4SurfaceTensionValidation;
 import mmm.fluid.M5GasLiquidCouplingValidation;
 import mmm.fluid.M7ChemicalTransportValidation;
+import mmm.fluid.MarkerPressureValidation;
+import mmm.fluid.MarkerVelocityTransferValidation;
 import mmm.fluid.air.AirNetworkValidation;
 import mmm.granular.M8GranularValidation;
 import mmm.item.M6ContainerValidation;
@@ -48,11 +50,11 @@ public final class CpuValidationSuite {
 	private static final String[] FAST = {"--fast"};
 	private static final List<String> FAST_GROUP = List.of(
 			"audit", "air-network", "air-cavity", "region-manager", "lifecycle", "entity-fluid", "production-replay",
-			"free-surface", "reseeding", "cut-cell", "shape", "protocol", "boundary", "containers", "chemistry", "granular",
+			"marker-transfer", "marker-pressure", "free-surface", "reseeding", "cut-cell", "shape", "protocol", "boundary", "containers", "chemistry", "granular",
 			"thermal");
 	private static final List<String> MILESTONE_GROUP = List.of(
 			"materials", "surface-tension", "air-network", "air-cavity", "gas-liquid",
-			"region-manager", "lifecycle", "entity-fluid", "production-replay", "free-surface", "reseeding", "cut-cell", "shape",
+			"region-manager", "lifecycle", "entity-fluid", "production-replay", "marker-transfer", "marker-pressure", "free-surface", "reseeding", "cut-cell", "shape",
 			"region-state", "protocol", "boundary", "takeover", "containers", "ownership", "audit", "chemistry", "granular",
 			"thermal");
 	private static final List<String> SOAK_GROUP = List.of("gas-liquid", "free-surface", "reseeding");
@@ -66,6 +68,7 @@ public final class CpuValidationSuite {
 		if (selection.equals("list")) {
 			System.out.println("groups: fast, milestone, soak, full");
 			System.out.println("selectors: " + String.join(", ", gates.keySet()));
+			System.out.println("append :short to a selector for its short entry; selectors without one run the full entry");
 			return;
 		}
 
@@ -74,12 +77,30 @@ public final class CpuValidationSuite {
 		if (requested.isEmpty()) throw new IllegalArgumentException("CPU validation selection is empty");
 
 		long suiteStart = System.nanoTime();
+		Exception failures = null;
 		for (Map.Entry<String, Mode> request : requested.entrySet()) {
 			Gate gate = gates.get(request.getKey());
 			long start = System.nanoTime();
-			System.out.println("\n=== CPU validation: " + request.getKey() + " [" + request.getValue().label + "] ===");
-			(request.getValue() == Mode.FULL ? gate.full() : gate.fast()).run();
+			boolean shortEntry = request.getValue() == Mode.FAST && gate.fast() != gate.full();
+			System.out.println("\n=== CPU validation: " + request.getKey() + " [" + (shortEntry ? "short" : "full") + "] ===");
+			try {
+				(shortEntry ? gate.fast() : gate.full()).run();
+			} catch (Exception | AssertionError failure) {
+				String status = failure instanceof AssertionError ? "ASSERTION_FAILURE"
+						: failure instanceof IllegalArgumentException ? "CONFIGURATION_FAILURE" : "EXECUTION_FAILURE";
+				System.out.printf("=== %s %s (%.3fs): %s ===%n", status, request.getKey(), secondsSince(start), failure);
+				if (!Boolean.getBoolean("mmm.validation.keepGoing")) throw failure;
+				failure.printStackTrace(System.out);
+				if (failures == null) failures = new Exception("CPU validation selection '" + selection + "' failed");
+				failures.addSuppressed(failure);
+				continue;
+			}
 			System.out.printf("=== PASS %s (%.3fs) ===%n", request.getKey(), secondsSince(start));
+		}
+		if (failures != null) {
+			System.out.printf("CPU validation selection '%s' failed %d of %d gates in %.3fs%n",
+					selection, failures.getSuppressed().length, requested.size(), secondsSince(suiteStart));
+			throw failures;
 		}
 		System.out.printf("CPU validation selection '%s' passed %d gates in %.3fs%n",
 				selection, requested.size(), secondsSince(suiteStart));
@@ -95,11 +116,13 @@ public final class CpuValidationSuite {
 			case "soak" -> SOAK_GROUP.forEach(id -> add(requested, id, Mode.FULL));
 			case "full" -> gates.keySet().forEach(id -> add(requested, id, Mode.FULL));
 			default -> {
-				if (!gates.containsKey(token)) {
+				boolean shortEntry = token.endsWith(":short");
+				String id = shortEntry ? token.substring(0, token.length() - ":short".length()) : token;
+				if (!gates.containsKey(id)) {
 					throw new IllegalArgumentException("Unknown CPU validation selector '" + token
 							+ "'; use -PcpuValidation=list");
 				}
-				add(requested, token, Mode.FULL);
+				add(requested, id, shortEntry ? Mode.FAST : Mode.FULL);
 			}
 		}
 	}
@@ -151,7 +174,10 @@ public final class CpuValidationSuite {
 			FlipFluidReseedingValidation.main(NONE);
 			CarrierMutationValidation.main(NONE);
 		}, () -> FlipFluidReseedingValidation.main(FAST));
-		gate(gates, "cut-cell", () -> FlipCutCellValidation.main(NONE));
+		gate(gates, "marker-transfer", () -> MarkerVelocityTransferValidation.main(NONE));
+		gate(gates, "marker-pressure", () -> MarkerPressureValidation.main(NONE));
+		gate(gates, "cut-cell", () -> FlipCutCellValidation.main(NONE),
+				() -> FlipCutCellValidation.main(FAST));
 		gate(gates, "shape", () -> FluidCutCellShapeValidation.main(NONE));
 		gate(gates, "region-state", () -> {
 			RegionRepositoryAdapterValidation.main(NONE);
@@ -193,9 +219,7 @@ public final class CpuValidationSuite {
 	}
 
 	private enum Mode {
-		FAST("short"), FULL("full");
-		private final String label;
-		Mode(String label) { this.label = label; }
+		FAST, FULL
 	}
 
 	private record Gate(CheckedAction full, CheckedAction fast) { }

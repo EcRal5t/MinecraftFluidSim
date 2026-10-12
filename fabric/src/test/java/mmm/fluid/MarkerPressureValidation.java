@@ -7,13 +7,25 @@ public final class MarkerPressureValidation {
 	private record Layout(FluidDomain domain, MarkerVelocityTransfer transfer, MarkerPressureOperator operator,
 	                      int[] cells) { }
 	private MarkerPressureValidation() { }
-	public static void main(String[] args) { validate(); System.out.println("MarkerPressureValidation PASS"); }
+	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("--kernel")) {
+			validateKernel();
+			System.out.println("MarkerPressureValidation PASS (kernel; production capillary/wall transport skipped)");
+		} else {
+			if (args.length != 0) throw new IllegalArgumentException("Use --kernel or no arguments for marker pressure validation");
+			validate();
+			System.out.println("MarkerPressureValidation PASS");
+		}
+	}
 	public static void validate() {
+		validateKernel();
+		unresolvedCapillaryTractionIsAppliedOnce();
+		transportPreservesFixedWallVelocity();
+	}
+	private static void validateKernel() {
 		cellAffineVelocityPreservesResolvedMotion();
 		cellWetFaceAndConstraintWork();
 		fixedWallProjectionUsesActualMass();
-		unresolvedCapillaryTractionIsAppliedOnce();
-		transportPreservesFixedWallVelocity();
 		var free = layout(false); verifyIndependentFluxAndGram(free); projectFreeSurface(free);
 		var closed = layout(true); verifyIndependentFluxAndGram(closed); closedPressureKernel(closed);
 		finiteGasStorage();
@@ -67,6 +79,7 @@ public final class MarkerPressureValidation {
 		d.ensureGrid();
 		if (d.isFluid(d.cellIndex(1, 1, 1)) || d.isFluid(d.cellIndex(2, 1, 1)))
 			throw new AssertionError("Sub-centre capillary fixture became a resolved pressure cell");
+		d.gasTopologyCoordinator.refresh();
 		System.arraycopy(d.mac.velocityX, 0, d.mac.p2gVelocityX, 0, d.mac.velocityX.length);
 		System.arraycopy(d.mac.velocityY, 0, d.mac.p2gVelocityY, 0, d.mac.velocityY.length);
 		System.arraycopy(d.mac.velocityZ, 0, d.mac.p2gVelocityZ, 0, d.mac.velocityZ.length);

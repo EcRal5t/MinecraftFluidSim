@@ -29,7 +29,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		liquidPlaneRetainsSmallInventoryGeometry();
 		sharedWetFacesControlTransportOnly();
 		momentNormalMatchesAnalyticShapes();
-		LiquidVolumeTransportValidation.main(new String[0]);
+		LiquidVolumeTransportValidation.main(fast ? new String[]{"--fast"} : new String[0]);
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pressurePhaseUsesConservativeFootprintVolume();
 		closedComponentsUseExactLiquidCapacity();
@@ -49,9 +49,9 @@ public final class FlipFluidFreeSurfaceValidation {
 		if (!fast) {
 			longRunHydrostaticSurfaceDoesNotSink();
 			if (CellLiquidVolumeTransport.enabled()) MarkerDistributionExperiment.damDistribution();
+			waterDescendsAStairSlope();
 		}
-		waterDescendsAStairSlope();
-		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; 5,000-step soak skipped)" : ""));
+		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; hydrostatic/dam soaks and 300-step stair flow skipped)" : ""));
 	}
 
 	private static void momentNormalMatchesAnalyticShapes() {

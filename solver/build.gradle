@@ -33,7 +33,7 @@ tasks.withType(Test).configureEach {
 
 tasks.register('runSolverValidation', JavaExec) {
 	group = 'verification'
-	description = 'Runs the solver stage/cut-cell validation without Minecraft.'
+	description = 'Runs solver/cut-cell validation without Minecraft; --args="--fast" skips the 600-step flow, --args="--flow-only" runs it alone.'
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = 'mmm.fluid.FlipCutCellValidation'
