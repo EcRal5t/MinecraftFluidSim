@@ -4,7 +4,7 @@
 
 ## 修正的测量问题
 
-旧程序位于未跟踪的 `build/full-profile/CompositeProfileBenchmark.java`。它的组合结果及派生收益判断已经撤回，原文保留供审计；该程序入口已停用。正式入口为 [CompositeStepBenchmark](../../../fabric/src/test/java/cc/ecisr/mmm/simulation/CompositeStepBenchmark.java)，参数见 [验证指南](../../maintenance/validation.md#performance)。
+旧程序位于未跟踪的 `build/full-profile/CompositeProfileBenchmark.java`。它的组合结果及派生收益判断已经撤回，原文保留供审计；该程序入口已停用。正式入口为 [CompositeStepBenchmark](../../../fabric/src/test/java/mmm/simulation/CompositeStepBenchmark.java)，参数见 [验证指南](../../maintenance/validation.md#performance)。
 
 | 原问题 | 补正 |
 |---|---|

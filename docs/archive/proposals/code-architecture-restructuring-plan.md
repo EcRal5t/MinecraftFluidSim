@@ -77,12 +77,12 @@
 
 | 包 | 文件/行数 | 问题 |
 |---|---:|---|
-| `cc.ecisr.mmm.fluid` | 32 / 14001 | 一个包同时容纳聚合根、mechanics、状态快照、backend SPI、查询 DTO |
-| `cc.ecisr.mmm.simulation` | 31 / 10451 | runtime、use case、Minecraft adapter 和 durable transaction 相互可见 |
-| `cc.ecisr.mmm.simulation.persistence` | 24 / 6150 | codec/store 反向引用 `FluidRegion` 与 lifecycle 类型 |
-| `cc.ecisr.mmm.thermal` | 31 / 4289 | 领域模型较完整，但由 `FlipThermalState` 反向桥接 fluid/air |
-| `cc.ecisr.mmm.granular` | 24 / 3806 | 领域类已拆出，仍由 god domain 直接协调其内部 |
-| `cc.ecisr.mmm.network` | 20 / 2279 | server 端点直接取得 `FluidSimulationService` |
+| `mmm.fluid` | 32 / 14001 | 一个包同时容纳聚合根、mechanics、状态快照、backend SPI、查询 DTO |
+| `mmm.simulation` | 31 / 10451 | runtime、use case、Minecraft adapter 和 durable transaction 相互可见 |
+| `mmm.simulation.persistence` | 24 / 6150 | codec/store 反向引用 `FluidRegion` 与 lifecycle 类型 |
+| `mmm.thermal` | 31 / 4289 | 领域模型较完整，但由 `FlipThermalState` 反向桥接 fluid/air |
+| `mmm.granular` | 24 / 3806 | 领域类已拆出，仍由 god domain 直接协调其内部 |
+| `mmm.network` | 20 / 2279 | server 端点直接取得 `FluidSimulationService` |
 
 已存在的 `FlipFreeSurfaceGeometry`、`FlipPressurePhaseGeometry`、`FlipCutCellGeometry`、`FlipParticleReseeder`、`AirCavityScanner`、`GranularInventory`、`ThermalCellGrid` 等不是失败代码。新结构必须复用这些经过验证的实现，不得另写一套“更干净”的算法与原实现竞争。
 
@@ -193,7 +193,7 @@ application               region/use-case、port、typed command/result、genera
  |
 fabric                    Minecraft/NBT/network/client/command/item/world adapters
 
-gpu-probe-kernel  ------> model + solver
+gpu-kernel  ------> model + solver
 gpu-probe-fabric  ------> api/application integration SPI + Fabric API
 ```
 
@@ -210,7 +210,7 @@ gpu-probe-fabric  ------> api/application integration SPI + Fabric API
 | `solver` | 可变 domain aggregate、机械/热化学 stages、workspace、candidate backend | 世界、HEAD、WAL、actor、packet、ItemStack、NBT |
 | `application` | command/result、region runtime metadata、scheduler、use case、repository/world/actor ports | Minecraft/NBT 具体类、直接文件 IO、客户端文案、GPU buffer |
 | `fabric` | composition root、Minecraft adapters、NBT codecs/stores、network/command/item/client | 复制 solver 真值、绕过 use case 直接改 domain |
-| `gpu-probe-kernel` | Vulkan pipeline、buffer/layout/kernel/readback、CPU 对照 | Fabric world/service/network |
+| `gpu-kernel` | Vulkan pipeline、buffer/layout/kernel/readback、CPU 对照 | Fabric world/service/network |
 | `gpu-probe-fabric` | 可选 Mod lifecycle、命令、只读 world capture、probe snapshot adapter | 主区域提交权、region HEAD、ownership |
 
 ### 先逻辑拆分、后物理拆分
@@ -232,7 +232,7 @@ fabric/.../adapter/network/...
 fabric/.../adapter/item/...
 ```
 
-阶段二由编译通过的 import 方向机械迁移到 `model`、`solver`、`application` 新模块。旧 `core` 暂时作为聚合发布模块：`api project(':model')`、`api project(':solver')`、`api project(':application')`，自身不再放生产代码。所有消费者迁移后再决定是否删除聚合模块；不得在同一提交中既拆模块又改算法。
+阶段二由编译通过的 import 方向机械迁移到 `model`、`solver`、`application` 新模块。旧 `core` 暂时作为聚合发布模块：`api project(':model')`、`api project(':solver')`、`api project(':app')`，自身不再放生产代码。所有消费者迁移后再决定是否删除聚合模块；不得在同一提交中既拆模块又改算法。
 
 ## solver 内部设计
 
@@ -521,7 +521,7 @@ RegionRepositoryAdapter        application port；组合上述三者和当前 re
 2. `model` 不 import `solver/application/fabric`；`solver` 不 import `application/fabric`；`application` 不 import Fabric adapter 包。
 3. persistence codec/model 不 import live `FluidRegion` 或 solver mutable domain。
 4. network/command/item adapter 不 import `FlipFluidDomain`；它们只接触 application command/result 或 read view。
-5. `gpu-probe-kernel` 不 import `simulation`、`network`、Minecraft/Fabric。
+5. `gpu-kernel` 不 import `simulation`、`network`、Minecraft/Fabric。
 6. 除 `MmmRuntimeRegistry` 外没有 `Map<MinecraftServer, ...Service>` 静态 locator。
 7. source package 依赖图无环；临时 allowlist 必须带工作包编号和删除期限，最终 allowlist 为空。
 8. 生产类超过 1000 行使 task 失败；迁移期只 allowlist 当前大类，并要求每个相关工作包单调下降。新类超过 600 行只警告并要求设计说明。行数是防回归信号，不代替职责评审。
@@ -643,9 +643,9 @@ Gradle 编译边界建立后仍保留 import 门，防止 Fabric 源集内部重
 
 ### 修改范围
 
-- `fabric/src/test/java/cc/ecisr/mmm/validation/ArchitectureDependencyValidation.java`（新增）
-- `fabric/src/test/java/cc/ecisr/mmm/validation/FluidDomainStateAssertions.java`（新增或按现有 test package 放置）
-- `fabric/src/test/java/cc/ecisr/mmm/fluid/FluidDomainArchitectureValidation.java`（新增）
+- `fabric/src/test/java/mmm/validation/ArchitectureDependencyValidation.java`（新增）
+- `fabric/src/test/java/mmm/validation/FluidDomainStateAssertions.java`（新增或按现有 test package 放置）
+- `fabric/src/test/java/mmm/fluid/FluidDomainArchitectureValidation.java`（新增）
 - `fabric/build.gradle`、根 `build.gradle`
 - 可新增 `docs/maintenance/architecture-baseline.md` 记录机器可复核指标
 
@@ -674,7 +674,7 @@ Gradle 编译边界建立后仍保留 import 门，防止 Fabric 源集内部重
 
 ### 目标文件
 
-在 `core/src/main/java/cc/ecisr/mmm/solver/observation/` 新建：
+在 `core/src/main/java/mmm/solver/observation/` 新建：
 
 - `DomainReadView`
 - `CellInventoryReader`
@@ -682,7 +682,7 @@ Gradle 编译边界建立后仍保留 import 门，防止 Fabric 源集内部重
 - `DomainSnapshotBuilder`
 - `DomainMetrics`
 
-若暂不迁 package，可先置于 `cc.ecisr.mmm.fluid` 的 package-private 类，S12 再机械移动。不要同时移动 package 和改实现。
+若暂不迁 package，可先置于 `mmm.fluid` 的 package-private 类，S12 再机械移动。不要同时移动 package 和改实现。
 
 ### 操作
 
@@ -996,7 +996,7 @@ Gradle 编译边界建立后仍保留 import 门，防止 Fabric 源集内部重
 
 ### 目标文件
 
-在 `core/src/main/java/cc/ecisr/mmm/application/` 暂建：
+在 `core/src/main/java/mmm/application/` 暂建：
 
 - `port/RegionRepository.java`
 - `port/OwnershipPort.java`
@@ -1207,7 +1207,7 @@ solver
 application
 core                 # 临时聚合模块，无生产源码
 fabric
-gpu-probe-kernel
+gpu-kernel
 gpu-probe            # Fabric adapter/mod
 ```
 
@@ -1216,7 +1216,7 @@ gpu-probe            # Fabric adapter/mod
 1. 先创建空模块和依赖，再按已经稳定的 package 机械移动源码；一次移动一个包，禁止同时重命名类型或改算法。
 2. `model` 依赖 JDK、现有必要的 Gson 和 `api`；`solver` 依赖 model/api；`application` 依赖 solver/model/api；`fabric` implementation/include相应模块。
 3. 旧 `core` 改为 `java-library` 聚合依赖，暂保 artifact name；确认没有源码和反向依赖后再决定下个发布是否删除。
-4. 把 `VulkanFlipPipeline`、checkpoint、shader binding、headless validation搬到 `gpu-probe-kernel`；把 `GpuProbeService`、world capture、命令、snapshot发送留在 `gpu-probe`。
+4. 把 `VulkanFlipPipeline`、checkpoint、shader binding、headless validation搬到 `gpu-kernel`；把 `GpuProbeService`、world capture、命令、snapshot发送留在 `gpu-probe`。
 5. `VulkanFlipPipeline` 进一步拆为 `VulkanDeviceContext`、`FlipGpuResources`、`FlipKernelBindings`、`GpuStepScheduler`、`GpuReadback`；每个资源实现明确 close ownership。不得在结构拆分中改变 shader/buffer layout。
 6. 可选 probe若仍需主Mod冲突检测/快照通道，通过窄 integration SPI；允许 Fabric adapter对 host integration API的compile-only依赖，但kernel不能依赖`:fabric`。
 7. 更新root assemble、publication、sourcesJar和Loom include。检查最终JAR没有重复class或漏资源。
@@ -1225,7 +1225,7 @@ gpu-probe            # Fabric adapter/mod
 ### 完成条件
 
 - Gradle图无 cycle；model/solver/application可在没有Minecraft classpath时编译和测试。
-- `gpu-probe-kernel`无Minecraft/Fabric/simulation/network imports；`gpu-probe`不取得HEAD/ownership写权。
+- `gpu-kernel`无Minecraft/Fabric/simulation/network imports；`gpu-probe`不取得HEAD/ownership写权。
 - clean assemble、compileTestJava、verifyArchitecture、milestone和GPU headless correctness通过。
 - 比较Fabric最终JAR包含的API/model/solver/application类和资源符合预期。
 - 建议提交：`refactor: enforce architecture with Gradle modules`。

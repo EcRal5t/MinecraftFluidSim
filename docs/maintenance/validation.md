@@ -10,7 +10,7 @@
 ./gradlew.bat :fabric:runCpuValidation '-PcpuValidation=region-state,containers' --offline --no-daemon
 ```
 
-`cpuValidation` 是测试选择器，多个名称用逗号连接。[CpuValidationSuite](../../fabric/src/test/java/cc/ecisr/mmm/validation/CpuValidationSuite.java) 定义了全部名称与组合。[fabric/build.gradle](../../fabric/build.gradle) 定义执行任务。
+`cpuValidation` 是测试选择器，多个名称用逗号连接。[CpuValidationSuite](../../fabric/src/test/java/mmm/validation/CpuValidationSuite.java) 定义了全部名称与组合。[fabric/build.gradle](../../fabric/build.gradle) 定义执行任务。
 
 | 选择方式 | 含义 |
 |---|---|
@@ -28,34 +28,34 @@
 
 | 改动 | 选择器 | 测试源码入口 |
 |---|---|---|
-| 极端温度、压力与相变连续推进 | `thermal-extremes` | [ExtremeThermalValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/ExtremeThermalValidation.java) |
-| 材料、质量、混合与液液界面 | `materials` | [M3ConnectedVesselValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M3ConnectedVesselValidation.java) |
-| 表面张力和润湿 | `surface-tension` | [M4SurfaceTensionValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M4SurfaceTensionValidation.java) |
-| 气体库存、状态方程与孔流 | `air-network` | [AirNetworkValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/air/AirNetworkValidation.java) |
-| 气腔扫描和连通关系 | `air-cavity` | [AirCavityScannerValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/AirCavityScannerValidation.java) |
-| 液体与气体压力耦合 | `gas-liquid` | [M5GasLiquidCouplingValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M5GasLiquidCouplingValidation.java) |
-| 控制器清空后再注液的气腔归属 | `controller-gas-lineage` | [ProductionFluidReplayValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionFluidReplayValidation.java) |
-| 生产场景耗时 | `production-live-budget` | [ProductionFluidReplayValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionFluidReplayValidation.java) |
-| 连续注液、后端恢复和长时间物理行为 | `production-replay` | [ProductionFluidReplayValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionFluidReplayValidation.java) |
-| 区域数量、预算、重叠和选择 | `region-manager` | [FluidRegionManagerValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/FluidRegionManagerValidation.java) |
-| 调度、暂停、完整状态交接 | `lifecycle` | [FluidRegionLifecycleValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/FluidRegionLifecycleValidation.java)、[FluidDomainStateParityValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/FluidDomainStateParityValidation.java) |
-| 实体位移观测和液体响应 | `entity-fluid` | [EntityFluidWiringValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/EntityFluidWiringValidation.java)、[ProductionFluidReplayValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionFluidReplayValidation.java) |
-| 压力、自由面、速度传递与平流 | `free-surface` | [FlipFluidFreeSurfaceValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/FlipFluidFreeSurfaceValidation.java) |
-| 粒子拆分、合并和数据列搬移 | `reseeding` | [FlipFluidReseedingValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/FlipFluidReseedingValidation.java)、[CarrierMutationValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/CarrierMutationValidation.java) |
-| 黏性解析解、谱界、局部网格碰撞和连续碰撞检测 | `cut-cell` | [FlipCutCellValidation](../../solver/src/test/java/cc/ecisr/mmm/fluid/FlipCutCellValidation.java) |
-| Minecraft 方块形状采样 | `shape` | [FluidCutCellShapeValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/FluidCutCellShapeValidation.java) |
-| 存档、世界能力包、配置和启动恢复 | `region-state` | [RegionRepositoryAdapterValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/persistence/RegionRepositoryAdapterValidation.java)、[WorldCapabilityBundleStoreValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/persistence/WorldCapabilityBundleStoreValidation.java)、[WorldCapabilityStartupValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/persistence/WorldCapabilityStartupValidation.java) |
-| 网络、查询、探针和提交通知 | `protocol` | [FluidNetworkProtocolValidation](../../fabric/src/test/java/cc/ecisr/mmm/network/FluidNetworkProtocolValidation.java)、[ShellFluidQueryValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ShellFluidQueryValidation.java)、[CommittedEventHubValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/CommittedEventHubValidation.java) |
-| 控制器外壳和内腔扫描 | `boundary` | [FluidBoundaryScannerValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/controller/FluidBoundaryScannerValidation.java) |
-| 开发场景的世界接管备份 | `takeover` | [TakeoverJournalValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/TakeoverJournalValidation.java) |
-| 桶、发射器、库存编码与事务恢复 | `containers` | [M6ContainerValidation](../../fabric/src/test/java/cc/ecisr/mmm/item/M6ContainerValidation.java)、[ContainerApplicationValidation](../../application/src/test/java/cc/ecisr/mmm/application/ContainerApplicationValidation.java)、[ContainerTransferStoreValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ContainerTransferStoreValidation.java) |
-| 世界方块归属和恢复 | `ownership` | [M6OwnershipValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ownership/M6OwnershipValidation.java) |
-| 命令日志 | `audit` | [CommandAuditFileValidation](../../fabric/src/test/java/cc/ecisr/mmm/logging/CommandAuditFileValidation.java) |
-| 化学反应和组分输运 | `chemistry` | [M7ChemistryValidation](../../fabric/src/test/java/cc/ecisr/mmm/chemistry/M7ChemistryValidation.java)、[M7ChemicalTransportValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M7ChemicalTransportValidation.java) |
-| 颗粒运动、沉积和固液转移 | `granular` | [M8GranularValidation](../../fabric/src/test/java/cc/ecisr/mmm/granular/M8GranularValidation.java)、[GranularReactionCandidateValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/GranularReactionCandidateValidation.java) |
-| 内能、导热、反应热、相变和设备换热 | `thermal` | [M9ThermalValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/M9ThermalValidation.java) |
-| 零导热平流、连续组成密度与热浮力、caloric 空间观察及冷热尖峰单调性 | `thermal` | [LiquidThermalAdvectionValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/LiquidThermalAdvectionValidation.java)、[LiquidStratificationValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/LiquidStratificationValidation.java) |
-| 有限热接触解析解、跨热容分段熵增与逐载体正温 | `thermal` | [ThermalContactValidation](../../model/src/test/java/cc/ecisr/mmm/thermal/ThermalContactValidation.java) |
+| 极端温度、压力与相变连续推进 | `thermal-extremes` | [ExtremeThermalValidation](../../fabric/src/test/java/mmm/fluid/ExtremeThermalValidation.java) |
+| 材料、质量、混合与液液界面 | `materials` | [M3ConnectedVesselValidation](../../fabric/src/test/java/mmm/fluid/M3ConnectedVesselValidation.java) |
+| 表面张力和润湿 | `surface-tension` | [M4SurfaceTensionValidation](../../fabric/src/test/java/mmm/fluid/M4SurfaceTensionValidation.java) |
+| 气体库存、状态方程与孔流 | `air-network` | [AirNetworkValidation](../../fabric/src/test/java/mmm/fluid/air/AirNetworkValidation.java) |
+| 气腔扫描和连通关系 | `air-cavity` | [AirCavityScannerValidation](../../fabric/src/test/java/mmm/fluid/AirCavityScannerValidation.java) |
+| 液体与气体压力耦合 | `gas-liquid` | [M5GasLiquidCouplingValidation](../../fabric/src/test/java/mmm/fluid/M5GasLiquidCouplingValidation.java) |
+| 控制器清空后再注液的气腔归属 | `controller-gas-lineage` | [ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java) |
+| 生产场景耗时 | `production-live-budget` | [ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java) |
+| 连续注液、后端恢复和长时间物理行为 | `production-replay` | [ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java) |
+| 区域数量、预算、重叠和选择 | `region-manager` | [FluidRegionManagerValidation](../../fabric/src/test/java/mmm/simulation/FluidRegionManagerValidation.java) |
+| 调度、暂停、完整状态交接 | `lifecycle` | [FluidRegionLifecycleValidation](../../fabric/src/test/java/mmm/simulation/FluidRegionLifecycleValidation.java)、[FluidDomainStateParityValidation](../../fabric/src/test/java/mmm/simulation/FluidDomainStateParityValidation.java) |
+| 实体位移观测和液体响应 | `entity-fluid` | [EntityFluidWiringValidation](../../fabric/src/test/java/mmm/simulation/EntityFluidWiringValidation.java)、[ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java) |
+| 压力、自由面、速度传递与平流 | `free-surface` | [FlipFluidFreeSurfaceValidation](../../fabric/src/test/java/mmm/fluid/FlipFluidFreeSurfaceValidation.java) |
+| 粒子拆分、合并和数据列搬移 | `reseeding` | [FlipFluidReseedingValidation](../../fabric/src/test/java/mmm/fluid/FlipFluidReseedingValidation.java)、[CarrierMutationValidation](../../fabric/src/test/java/mmm/fluid/CarrierMutationValidation.java) |
+| 黏性解析解、谱界、局部网格碰撞和连续碰撞检测 | `cut-cell` | [FlipCutCellValidation](../../solver/src/test/java/mmm/fluid/FlipCutCellValidation.java) |
+| Minecraft 方块形状采样 | `shape` | [FluidCutCellShapeValidation](../../fabric/src/test/java/mmm/simulation/FluidCutCellShapeValidation.java) |
+| 存档、世界能力包、配置和启动恢复 | `region-state` | [RegionRepositoryAdapterValidation](../../fabric/src/test/java/mmm/simulation/persistence/RegionRepositoryAdapterValidation.java)、[WorldCapabilityBundleStoreValidation](../../fabric/src/test/java/mmm/simulation/persistence/WorldCapabilityBundleStoreValidation.java)、[WorldCapabilityStartupValidation](../../fabric/src/test/java/mmm/simulation/persistence/WorldCapabilityStartupValidation.java) |
+| 网络、查询、探针和提交通知 | `protocol` | [FluidNetworkProtocolValidation](../../fabric/src/test/java/mmm/network/FluidNetworkProtocolValidation.java)、[ShellFluidQueryValidation](../../fabric/src/test/java/mmm/simulation/ShellFluidQueryValidation.java)、[CommittedEventHubValidation](../../fabric/src/test/java/mmm/simulation/CommittedEventHubValidation.java) |
+| 控制器外壳和内腔扫描 | `boundary` | [FluidBoundaryScannerValidation](../../fabric/src/test/java/mmm/simulation/controller/FluidBoundaryScannerValidation.java) |
+| 开发场景的世界接管备份 | `takeover` | [TakeoverJournalValidation](../../fabric/src/test/java/mmm/simulation/TakeoverJournalValidation.java) |
+| 桶、发射器、库存编码与事务恢复 | `containers` | [M6ContainerValidation](../../fabric/src/test/java/mmm/item/M6ContainerValidation.java)、[ContainerApplicationValidation](../../app/src/test/java/mmm/application/ContainerApplicationValidation.java)、[ContainerTransferStoreValidation](../../fabric/src/test/java/mmm/simulation/ContainerTransferStoreValidation.java) |
+| 世界方块归属和恢复 | `ownership` | [M6OwnershipValidation](../../fabric/src/test/java/mmm/simulation/ownership/M6OwnershipValidation.java) |
+| 命令日志 | `audit` | [CommandAuditFileValidation](../../fabric/src/test/java/mmm/logging/CommandAuditFileValidation.java) |
+| 化学反应和组分输运 | `chemistry` | [M7ChemistryValidation](../../fabric/src/test/java/mmm/chemistry/M7ChemistryValidation.java)、[M7ChemicalTransportValidation](../../fabric/src/test/java/mmm/fluid/M7ChemicalTransportValidation.java) |
+| 颗粒运动、沉积和固液转移 | `granular` | [M8GranularValidation](../../fabric/src/test/java/mmm/granular/M8GranularValidation.java)、[GranularReactionCandidateValidation](../../fabric/src/test/java/mmm/fluid/GranularReactionCandidateValidation.java) |
+| 内能、导热、反应热、相变和设备换热 | `thermal` | [M9ThermalValidation](../../fabric/src/test/java/mmm/fluid/M9ThermalValidation.java) |
+| 零导热平流、连续组成密度与热浮力、caloric 空间观察及冷热尖峰单调性 | `thermal` | [LiquidThermalAdvectionValidation](../../fabric/src/test/java/mmm/fluid/LiquidThermalAdvectionValidation.java)、[LiquidStratificationValidation](../../fabric/src/test/java/mmm/fluid/LiquidStratificationValidation.java) |
+| 有限热接触解析解、跨热容分段熵增与逐载体正温 | `thermal` | [ThermalContactValidation](../../model/src/test/java/mmm/thermal/ThermalContactValidation.java) |
 
 表中是定位场景的入口，完整调用列表以 `CpuValidationSuite` 为准。长场景的注液坐标、循环步数和逐步断言留在测试代码中维护。
 
@@ -80,11 +80,11 @@
 ## 性能和长期场景
 
 快速离线测量使用 `./gradlew.bat :fabric:runStepBenchmark --offline`。
-[ProductionStepBenchmark](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionStepBenchmark.java)
+[ProductionStepBenchmark](../../fabric/src/test/java/mmm/simulation/ProductionStepBenchmark.java)
 测量控制器半满场景与大型 demo，各预热 20 步、采样 20 步，分别报告捕获、计算、提交和完整步的均值、中位数、p95 与最大值，以及调用线程的内存分配量，并检查物质与能量收支。
 测量范围是 CPU 计算流程，适合同机同配置的优化对比；评估耗时收益时应结合多次测量的波动。
 
-组合过程使用 [CompositeStepBenchmark](../../fabric/src/test/java/cc/ecisr/mmm/simulation/CompositeStepBenchmark.java)，例如：
+组合过程使用 [CompositeStepBenchmark](../../fabric/src/test/java/mmm/simulation/CompositeStepBenchmark.java)，例如：
 
 ```powershell
 ./gradlew.bat :fabric:runCompositeBenchmark -PbenchmarkScene=thermochem -PbenchmarkWarmup=20 -PbenchmarkSamples=80 --offline
@@ -118,11 +118,11 @@
 
 `production-replay` 检查长时间注液、清空、气腔归属、相变功结算、实体响应以及后端捕获/恢复。它关注每步物质与能量收支。性能是否达标由上面的独立测试判定。
 
-`granular` 中的 [GranularCarrierValidation](../../solver/src/test/java/cc/ecisr/mmm/fluid/GranularCarrierValidation.java) 检查多 parcel 阻力交换的动量守恒、能量耗散和顺序无关性、有限颗粒质量的压力功和连续性、跨单元面的连续液体接触、静水梯度给出的浮力、步末阻力有效性检查，以及小时间步下对压力零点的独立性。`containers` 保留正常操作随机序列的种子 4、54、103，覆盖薄液层反冲、密集颗粒排水与高压下的时间细化。
+`granular` 中的 [GranularCarrierValidation](../../solver/src/test/java/mmm/fluid/GranularCarrierValidation.java) 检查多 parcel 阻力交换的动量守恒、能量耗散和顺序无关性、有限颗粒质量的压力功和连续性、跨单元面的连续液体接触、静水梯度给出的浮力、步末阻力有效性检查，以及小时间步下对压力零点的独立性。`containers` 保留正常操作随机序列的种子 4、54、103，覆盖薄液层反冲、密集颗粒排水与高压下的时间细化。
 
-同一 `granular` 选择器中的 [GranularBedWakeValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/GranularBedWakeValidation.java) 使用正式全能力注册表、启用相变，并逐步经过后端捕获/恢复：细砂沉积并休眠后，弱刚体扰动应无侵蚀，较强扰动应重新起动并实际水平搬运，减弱为静止物体后应再次沉积、休眠。逐步记录起动数、活动数、床面 Shields 数与真实接触数，检查恢复后与每步液体、active、deposit、coherent 的联合逐格容量，以及固体质量/体积和气体、内能收支；另检查释放瞬间的零速度、内能搬运、碰撞空间及干区/隔墙误触发。`GranularCarrierValidation` 同时检查薄床切向自由流动和时间细化。
+同一 `granular` 选择器中的 [GranularBedWakeValidation](../../fabric/src/test/java/mmm/fluid/GranularBedWakeValidation.java) 使用正式全能力注册表、启用相变，并逐步经过后端捕获/恢复：细砂沉积并休眠后，弱刚体扰动应无侵蚀，较强扰动应重新起动并实际水平搬运，减弱为静止物体后应再次沉积、休眠。逐步记录起动数、活动数、床面 Shields 数与真实接触数，检查恢复后与每步液体、active、deposit、coherent 的联合逐格容量，以及固体质量/体积和气体、内能收支；另检查释放瞬间的零速度、内能搬运、碰撞空间及干区/隔墙误触发。`GranularCarrierValidation` 同时检查薄床切向自由流动和时间细化。
 
-批量排查使用 [ControllerInventoryDurabilityValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ControllerInventoryDurabilityValidation.java) 的带种子操作序列，每次操作后执行完整状态往返。参数依次是起始种子、种子数量、操作数和是否禁用沙粒（可省略，默认 `false`）：
+批量排查使用 [ControllerInventoryDurabilityValidation](../../fabric/src/test/java/mmm/simulation/ControllerInventoryDurabilityValidation.java) 的带种子操作序列，每次操作后执行完整状态往返。参数依次是起始种子、种子数量、操作数和是否禁用沙粒（可省略，默认 `false`）：
 
 ```powershell
 ./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=0,200,60' --offline --no-daemon
@@ -150,9 +150,9 @@
 
 `verifyArchitecture` 是仓库根任务，会调用 `:fabric:runArchitectureValidation`；它不是 `:fabric:runCpuValidation` 的 `cpuValidation` 选择器。架构检查应使用上面的根任务，不要写成 `-PcpuValidation=architecture` 或 `:fabric:verifyArchitecture`。
 
-[ArchitectureDependencyValidation](../../fabric/src/test/java/cc/ecisr/mmm/validation/ArchitectureDependencyValidation.java) 检查模块 import 方向、纯 Java 模块包循环、持久化与运行时依赖隔离、唯一服务器运行时注册点，以及生产类 1000 行上限。超过 600 行会提示，超过 1000 行会失败。[CarrierMutationPointInventoryValidation](../../fabric/src/test/java/cc/ecisr/mmm/validation/CarrierMutationPointInventoryValidation.java) 同时检查粒子结构修改的调用位置。
+[ArchitectureDependencyValidation](../../fabric/src/test/java/mmm/validation/ArchitectureDependencyValidation.java) 检查模块 import 方向、纯 Java 模块包循环、持久化与运行时依赖隔离、唯一服务器运行时注册点，以及生产类 1000 行上限。超过 600 行会提示，超过 1000 行会失败。[CarrierMutationPointInventoryValidation](../../fabric/src/test/java/mmm/validation/CarrierMutationPointInventoryValidation.java) 同时检查粒子结构修改的调用位置。
 
-需要单独运行 model、solver、application 的验证时，使用根任务 `runModuleValidation`。当前源码规模可用 [Python 工具](pytool.md)重新统计。
+需要单独运行 model、solver、app 的验证时，使用根任务 `runModuleValidation`。当前源码规模可用 [Python 工具](pytool.md)重新统计。
 
 修改客户端类型、Jade 依赖或界面后，编译服务端和客户端源码：
 
@@ -163,27 +163,27 @@
 <a id="gpu"></a>
 ## GPU probe 验证
 
-任务定义在 [kernel 构建文件](../../gpu-probe-kernel/build.gradle)和 [Fabric 适配构建文件](../../gpu-probe/build.gradle)。
+任务定义在 [kernel 构建文件](../../gpu-kernel/build.gradle)和 [Fabric 适配构建文件](../../gpu-probe/build.gradle)。
 
 改适配器或模块依赖时，先运行：
 
 ```powershell
-./gradlew.bat :gpu-probe-kernel:compileJava :gpu-probe:compileJava :gpu-probe:runAdapterValidation verifyArchitecture --offline --no-daemon
+./gradlew.bat :gpu-kernel:compileJava :gpu-probe:compileJava :gpu-probe:runAdapterValidation verifyArchitecture --offline --no-daemon
 ```
 
 改设备资源、着色器、checkpoint 或数值算法时，运行基础数值验证：
 
 ```powershell
-./gradlew.bat :gpu-probe-kernel:runGpuFlipValidation -PgpuProbeSkipLarge=true -PgpuProbeSkipLong=true --offline --no-daemon
+./gradlew.bat :gpu-kernel:runGpuFlipValidation -PgpuProbeSkipLarge=true -PgpuProbeSkipLong=true --offline --no-daemon
 ```
 
 粒子分布或能量变化需要长时间验证，可先用 100 步定位，再按风险运行默认 1000 步：
 
 ```powershell
-./gradlew.bat :gpu-probe-kernel:runGpuLongRunSurfaceValidation -PgpuProbeLongRunSteps=100 --offline --no-daemon
+./gradlew.bat :gpu-kernel:runGpuLongRunSurfaceValidation -PgpuProbeLongRunSteps=100 --offline --no-daemon
 ```
 
-修改设备能力检测或初始化时，再运行 `:gpu-probe-kernel:runHeadlessGpuProbe`。
+修改设备能力检测或初始化时，再运行 `:gpu-kernel:runHeadlessGpuProbe`。
 
 Windows 上若 `vkCreateInstance` 返回 `-9`，可在当前 PowerShell 进程设置 `$env:VK_LOADER_DEBUG='error,warn,driver'` 后运行 headless probe，检查加载器实际发现的驱动清单和 DLL。日志出现 `Found no drivers` 时，核对当前显卡驱动对应的 `VulkanDriverName` 注册项和 ICD 清单。可用 `$env:VK_DRIVER_FILES` 指定清单验证已安装驱动；清单中的 `ICD.library_path` 应指向驱动 DLL 的绝对路径，必要时在 `build` 下生成清单副本。任务继承此环境变量，验证后恢复原值。驱动发现机制与环境变量见 [Khronos 加载器文档](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#overriding-the-default-driver-discovery)。
 

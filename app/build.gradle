@@ -1,0 +1,64 @@
+plugins {
+	id 'java-library'
+	id 'maven-publish'
+}
+
+base {
+	archivesName = 'mmm-app'
+}
+
+version = project.mod_version
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	api project(':solver')
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.release = 25
+}
+
+tasks.withType(Test).configureEach {
+	failOnNoDiscoveredTests = false
+}
+
+tasks.register('runApplicationValidation', JavaExec) {
+	group = 'verification'
+	description = 'Runs loader-neutral use-case and transaction validation without Minecraft.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'mmm.application.ContainerApplicationValidation'
+	enableAssertions = true
+}
+
+tasks.register('testJar', Jar) {
+	archiveClassifier = 'tests'
+	from sourceSets.test.output
+	dependsOn tasks.named('testClasses')
+}
+
+configurations {
+	testArtifacts {
+		canBeConsumed = true
+		canBeResolved = false
+	}
+}
+
+artifacts {
+	testArtifacts tasks.named('testJar')
+}
+
+publishing {
+	publications {
+		create('mavenJava', MavenPublication) { from components.java }
+	}
+}

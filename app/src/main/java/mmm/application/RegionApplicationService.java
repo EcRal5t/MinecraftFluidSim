@@ -1,0 +1,119 @@
+package mmm.application;
+
+import mmm.application.command.CheckpointRegionCommand;
+import mmm.application.command.MotionStepCommand;
+import mmm.application.command.ThermalStepCommand;
+import mmm.application.port.RegionCheckpointPort;
+import mmm.application.port.RegionRepository;
+import mmm.application.result.CheckpointRegionResult;
+import mmm.application.result.MotionStepResult;
+import mmm.application.result.RegionStepStatus;
+import mmm.application.result.ThermalStepResult;
+import mmm.fluid.FluidSolverBackend;
+import mmm.fluid.FluidStepCandidate;
+import mmm.fluid.FluidStepRequest;
+import mmm.fluid.FluidThermalStepCandidate;
+import mmm.fluid.FluidThermalStepRequest;
+
+import java.util.Objects;
+
+/** Loader-neutral orchestration for the first migrated region commands and bounded reads. */
+public final class RegionApplicationService implements RegionTickUseCase.StepExecutor {
+	private final FluidSolverBackend solverBackend;
+	private final RegionRepository regions;
+	private final RegionCheckpointPort checkpoints;
+
+	public RegionApplicationService(
+			FluidSolverBackend solverBackend,
+			RegionRepository regions,
+			RegionCheckpointPort checkpoints
+	) {
+		this.solverBackend = Objects.requireNonNull(solverBackend, "solverBackend");
+		this.regions = Objects.requireNonNull(regions, "regions");
+		this.checkpoints = Objects.requireNonNull(checkpoints, "checkpoints");
+	}
+
+	@Override
+	public MotionStepResult stepMotion(MotionStepCommand command) {
+		Objects.requireNonNull(command, "command");
+		RegionRepository.Capture capture = captureForStep(command.regionId());
+		RegionStepStatus unavailable = captureStatus(capture);
+		if (unavailable != null) return MotionStepResult.rejected(unavailable);
+		if (capture.solverGeneration() != command.expectedSolverGeneration()) {
+			return MotionStepResult.rejected(RegionStepStatus.STALE_GENERATION);
+		}
+		FluidStepCandidate candidate = solverBackend.evaluate(new FluidStepRequest(
+				capture.solverGeneration(), capture.state(), command.movingBodies(),
+				command.phaseChangeEnabled(), command.maximumPhaseOperations(), command.mechanicalAuditEnabled(),
+				command.pendingPhaseSettlementOnly()));
+		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
+				candidate.candidateGeneration(), candidate.layout());
+		if (invalid != null) return MotionStepResult.rejected(invalid);
+		RegionStepStatus adoption = regions.adoptMotion(command.regionId(), candidate, solverBackend.id());
+		return adoption == RegionStepStatus.ACCEPTED
+				? MotionStepResult.accepted(candidate) : MotionStepResult.rejected(adoption);
+	}
+
+	@Override
+	public ThermalStepResult stepThermal(ThermalStepCommand command) {
+		Objects.requireNonNull(command, "command");
+		RegionRepository.Capture capture = captureForStep(command.regionId());
+		RegionStepStatus unavailable = captureStatus(capture);
+		if (unavailable != null) return ThermalStepResult.rejected(unavailable);
+		if (capture.solverGeneration() != command.expectedSolverGeneration()) {
+			return ThermalStepResult.rejected(RegionStepStatus.STALE_GENERATION);
+		}
+		FluidThermalStepCandidate candidate = solverBackend.evaluateThermal(new FluidThermalStepRequest(
+				capture.solverGeneration(), capture.state(), command.phaseChangeEnabled(),
+				command.maximumPhaseOperations()));
+		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
+				candidate.candidateGeneration(), candidate.layout());
+		if (invalid != null) return ThermalStepResult.rejected(invalid);
+		RegionStepStatus adoption = regions.adoptThermal(command.regionId(), candidate, solverBackend.id());
+		return adoption == RegionStepStatus.ACCEPTED
+				? ThermalStepResult.accepted(candidate) : ThermalStepResult.rejected(adoption);
+	}
+
+	public CheckpointRegionResult checkpoint(CheckpointRegionCommand command) {
+		Objects.requireNonNull(command, "command");
+		if (command.containerWalPending()) {
+			return new CheckpointRegionResult(CheckpointRegionResult.Status.PENDING_CONTAINER_WAL,
+					command.expectedCheckpointGeneration(), null);
+		}
+		RegionCheckpointPort.Attempt attempt = checkpoints.checkpoint(
+				command.regionId(), command.expectedCheckpointGeneration());
+		return new CheckpointRegionResult(attempt.status(), attempt.checkpointGeneration(), attempt.diagnostic());
+	}
+
+	private RegionStepStatus validateCandidate(
+			RegionRepository.Capture capture, String backendId, long baseGeneration,
+			long candidateGeneration, mmm.fluid.FluidDomainState.Layout layout
+	) {
+		if (!solverBackend.id().equals(backendId)) return RegionStepStatus.BACKEND_MISMATCH;
+		if (baseGeneration != capture.solverGeneration()
+				|| candidateGeneration != Math.addExact(capture.solverGeneration(), 1L)) {
+			return RegionStepStatus.STALE_GENERATION;
+		}
+		return layout.equals(capture.state().layout()) ? null : RegionStepStatus.LAYOUT_MISMATCH;
+	}
+
+	private RegionRepository.Capture captureForStep(java.util.UUID regionId) {
+		try {
+			return regions.captureForStep(regionId);
+		} catch (RegionRepository.StateCaptureRejectedException rejected) {
+			throw rejected;
+		} catch (RuntimeException invalidLiveState) {
+			throw new RegionRepository.StateCaptureRejectedException(
+					"Live region could not produce a complete authoritative step base: "
+							+ invalidLiveState.getMessage(), invalidLiveState);
+		}
+	}
+
+	private static RegionStepStatus captureStatus(RegionRepository.Capture capture) {
+		return switch (capture.status()) {
+			case READY -> null;
+			case REGION_NOT_FOUND -> RegionStepStatus.REGION_NOT_FOUND;
+			case REGION_NOT_LOADED -> RegionStepStatus.REGION_NOT_LOADED;
+		};
+	}
+}

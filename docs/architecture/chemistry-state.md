@@ -6,10 +6,10 @@
 
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
-| 组分状态和反应 | [ChemicalParcelStore](../../model/src/main/java/cc/ecisr/mmm/chemistry/ChemicalParcelStore.java)、[ChemicalReactionAllocation](../../model/src/main/java/cc/ecisr/mmm/chemistry/ChemicalReactionAllocation.java)、[ChemicalReactionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/ChemicalReactionStage.java) | `chemistry` |
-| 粒子上的化学数据 | [FlipChemicalParticleState](../../model/src/main/java/cc/ecisr/mmm/fluid/FlipChemicalParticleState.java)、[CarrierMutationCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/CarrierMutationCoordinator.java) | `chemistry,reseeding` |
-| 指示剂操作 | [ChemicalIndicatorItem](../../fabric/src/main/java/cc/ecisr/mmm/item/ChemicalIndicatorItem.java)、[MinecraftIndicatorEditing](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftIndicatorEditing.java) | `chemistry` |
-| 化学定义编码 | [ChemicalRegistryCodec](../../fabric/src/main/java/cc/ecisr/mmm/chemistry/ChemicalRegistryCodec.java) | `region-state` |
+| 组分状态和反应 | [ChemicalParcelStore](../../model/src/main/java/mmm/chemistry/ChemicalParcelStore.java)、[ChemicalReactionAllocation](../../model/src/main/java/mmm/chemistry/ChemicalReactionAllocation.java)、[ChemicalReactionStage](../../solver/src/main/java/mmm/fluid/ChemicalReactionStage.java) | `chemistry` |
+| 粒子上的化学数据 | [FlipChemicalParticleState](../../model/src/main/java/mmm/fluid/FlipChemicalParticleState.java)、[CarrierMutationCoordinator](../../solver/src/main/java/mmm/fluid/CarrierMutationCoordinator.java) | `chemistry,reseeding` |
+| 指示剂操作 | [ChemicalIndicatorItem](../../fabric/src/main/java/mmm/item/ChemicalIndicatorItem.java)、[MinecraftIndicatorEditing](../../fabric/src/main/java/mmm/simulation/MinecraftIndicatorEditing.java) | `chemistry` |
+| 化学定义编码 | [ChemicalRegistryCodec](../../fabric/src/main/java/mmm/chemistry/ChemicalRegistryCodec.java) | `region-state` |
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。
 

@@ -6,13 +6,13 @@
 
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
-| 气腔几何和归属 | [GasRuntimeGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasRuntimeGeometry.java)、[GasTopologyCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasTopologyCoordinator.java) | `air-cavity` |
-| 气体库存与孔流 | [AirNetwork](../../model/src/main/java/cc/ecisr/mmm/fluid/air/AirNetwork.java) | `air-network` |
-| 气液相变库存与账本提交计划 | [AirNetwork](../../model/src/main/java/cc/ecisr/mmm/fluid/air/AirNetwork.java) 的 `planPhaseSource` / `planPhaseSink` / `commitPhaseMutation`、[GasLiquidPhaseChangeStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasLiquidPhaseChangeStage.java) | `thermal`、`air-network` |
-| 热孔流整数均压 | [GasEnergyStore](../../model/src/main/java/cc/ecisr/mmm/thermal/GasEnergyStore.java)、[GasTransferSearch](../../model/src/main/java/cc/ecisr/mmm/thermal/GasTransferSearch.java)、[GasTransferValidation](../../fabric/src/test/java/cc/ecisr/mmm/thermal/GasTransferValidation.java) | `thermal` |
-| 温度、压力和声学状态 | [GasThermalModel](../../model/src/main/java/cc/ecisr/mmm/thermal/GasThermalModel.java) | `thermal` |
-| 气液压力耦合 | [PressureBoundaryView](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureBoundaryView.java)、[PressureProjectionWorkspace](../../solver/src/main/java/cc/ecisr/mmm/fluid/PressureProjectionWorkspace.java) | `gas-liquid` |
-| 定义与存档 | [GasRegistryCodec](../../fabric/src/main/java/cc/ecisr/mmm/fluid/air/GasRegistryCodec.java) | `region-state` |
+| 气腔几何和归属 | [GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)、[GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java) | `air-cavity` |
+| 气体库存与孔流 | [AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java) | `air-network` |
+| 气液相变库存与账本提交计划 | [AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java) 的 `planPhaseSource` / `planPhaseSink` / `commitPhaseMutation`、[GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java) | `thermal`、`air-network` |
+| 热孔流整数均压 | [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)、[GasTransferSearch](../../model/src/main/java/mmm/thermal/GasTransferSearch.java)、[GasTransferValidation](../../fabric/src/test/java/mmm/thermal/GasTransferValidation.java) | `thermal` |
+| 温度、压力和声学状态 | [GasThermalModel](../../model/src/main/java/mmm/thermal/GasThermalModel.java) | `thermal` |
+| 气液压力耦合 | [PressureBoundaryView](../../solver/src/main/java/mmm/fluid/PressureBoundaryView.java)、[PressureProjectionWorkspace](../../solver/src/main/java/mmm/fluid/PressureProjectionWorkspace.java) | `gas-liquid` |
+| 定义与存档 | [GasRegistryCodec](../../fabric/src/main/java/mmm/fluid/air/GasRegistryCodec.java) | `region-state` |
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。
 
@@ -33,23 +33,23 @@
 
 ### 微盒气体几何
 
-[GasComplementGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComplementGeometry.java) 从服务端 PLIC 和开放微盒生成不可变的气体块、共享通路与外壳气面。每块以 `8*cell+micro` 定位，体积使用 m³，面积使用 m²；同格内被固体隔开的气体块保持独立。
+[GasComplementGeometry](../../solver/src/main/java/mmm/fluid/GasComplementGeometry.java) 从服务端 PLIC 和开放微盒生成不可变的气体块、共享通路与外壳气面。每块以 `8*cell+micro` 定位，体积使用 m³，面积使用 m²；同格内被固体隔开的气体块保持独立。
 
 气体块读取其固定连通分量的独立 PLIC。每块保留精确单元归一化有理数体积，乘当前 `h³` 后一次舍入为 SI 观察值。气腔几何观察值精确汇总各块的 binary64 体积再舍入一次，`volumeErrorBound` 向外包住叶子与气腔两级舍入；平面求逆余差及库存容量补量各自结算。
 
-单平面微盒体积由 [MicroBoxPlaneVolume](../../solver/src/main/java/cc/ecisr/mmm/fluid/MicroBoxPlaneVolume.java) 的精确盒积分求得；每块保留捕获时的干侧半空间与 PLIC 求逆证书，几何对象保存碰撞掩码及精确孔隙容量副本。零孔隙容量的固定连通分量省去气体块。[GasComponentCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComponentCapacity.java) 直接读取原始液体库存，按固定连通分量计算扣除固体后的剩余容量，同时保留精确几何气体体积与两者差额。计算校核原始库存目标、捕获孔隙容量及相邻阈值体积区间；捕获的碰撞掩码、孔隙容量或体积目标过期、容量差额超出证书或正库存容量缺少干区时明确拒绝计算。
+单平面微盒体积由 [MicroBoxPlaneVolume](../../solver/src/main/java/mmm/fluid/MicroBoxPlaneVolume.java) 的精确盒积分求得；每块保留捕获时的干侧半空间与 PLIC 求逆证书，几何对象保存碰撞掩码及精确孔隙容量副本。零孔隙容量的固定连通分量省去气体块。[GasComponentCapacity](../../solver/src/main/java/mmm/fluid/GasComponentCapacity.java) 直接读取原始液体库存，按固定连通分量计算扣除固体后的剩余容量，同时保留精确几何气体体积与两者差额。计算校核原始库存目标、捕获孔隙容量及相邻阈值体积区间；捕获的碰撞掩码、孔隙容量或体积目标过期、容量差额超出证书或正库存容量缺少干区时明确拒绝计算。
 
-[GasPieceCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasPieceCapacity.java) 在每块的相邻偏移体积区间内分配该分量的原始气体容量。令各块容量区间为 `[Lᵢ,Uᵢ]`、原始分量容量为 `G`，使用 `aᵢ=Lᵢ+θ(Uᵢ−Lᵢ)`，其中 `θ=(G−ΣLᵢ)/Σ(Uᵢ−Lᵢ)`。零宽区间保持固定容量；全部块的归一化容量精确和为 `G`。缺少选定几何块时，其容量为零；`G` 超出已有块可承接的区间时拒绝计算。通路由选定 PLIC 几何确定，容量证书按每块保存。
+[GasPieceCapacity](../../solver/src/main/java/mmm/fluid/GasPieceCapacity.java) 在每块的相邻偏移体积区间内分配该分量的原始气体容量。令各块容量区间为 `[Lᵢ,Uᵢ]`、原始分量容量为 `G`，使用 `aᵢ=Lᵢ+θ(Uᵢ−Lᵢ)`，其中 `θ=(G−ΣLᵢ)/Σ(Uᵢ−Lᵢ)`。零宽区间保持固定容量；全部块的归一化容量精确和为 `G`。缺少选定几何块时，其容量为零；`G` 超出已有块可承接的区间时拒绝计算。通路由选定 PLIC 几何确定，容量证书按每块保存。
 
-SI 容量以当前 `h³` 换算，各非最大份额一次舍入，最大份额承接原始 SI 总量减去已储存子列后的余数；分量总量误差至多为承接列的半个 ULP。每块另存实际舍入误差上包。[GasChamberCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasChamberCapacity.java) 在同一份几何与气腔图上汇总块容量，节点误差上包包含叶子误差及节点最终舍入。规划中的固体占据量以完整 SVQ 副本参与容量计算，包含恢复前的连续固相库存。
+SI 容量以当前 `h³` 换算，各非最大份额一次舍入，最大份额承接原始 SI 总量减去已储存子列后的余数；分量总量误差至多为承接列的半个 ULP。每块另存实际舍入误差上包。[GasChamberCapacity](../../solver/src/main/java/mmm/fluid/GasChamberCapacity.java) 在同一份几何与气腔图上汇总块容量，节点误差上包包含叶子误差及节点最终舍入。规划中的固体占据量以完整 SVQ 副本参与容量计算，包含恢复前的连续固相库存。
 
-[GasFaceIntersection](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
+[GasFaceIntersection](../../solver/src/main/java/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
 
-[GasGeometryOverlap](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasGeometryOverlap.java) 精确积分同一开放微盒与前后两个气体半空间的交集，返回单元归一化有理数体积。纯相切的交集体积为零，严格正的薄层保留精确量。库存交接仍需结合旧库存归属与实际可达路径；零重叠的有限气腔需要扫掠轨迹或可达性证明才能确定去向。
+[GasGeometryOverlap](../../solver/src/main/java/mmm/fluid/GasGeometryOverlap.java) 精确积分同一开放微盒与前后两个气体半空间的交集，返回单元归一化有理数体积。纯相切的交集体积为零，严格正的薄层保留精确量。库存交接仍需结合旧库存归属与实际可达路径；零重叠的有限气腔需要扫掠轨迹或可达性证明才能确定去向。
 
 ### 运行中的共同几何
 
-[GasRuntimeGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasRuntimeGeometry.java) 保存一份不可变的几何、拓扑、库存容量和 `8N` 微盒归属。每个格子的完整液体分量元组包括 count、精确体积和位置第一矩，零体积分量也保留。构造直接读取原始载体列，未来编辑同时覆盖各目标格的完整元组后重建全域 PLIC，包含受梯度影响的邻格。完整固体占容 SVQ 副本与固定碰撞掩码共同参与容量计算。
+[GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java) 保存一份不可变的几何、拓扑、库存容量和 `8N` 微盒归属。每个格子的完整液体分量元组包括 count、精确体积和位置第一矩，零体积分量也保留。构造直接读取原始载体列，未来编辑同时覆盖各目标格的完整元组后重建全域 PLIC，包含受梯度影响的邻格。完整固体占容 SVQ 副本与固定碰撞掩码共同参与容量计算。
 
 原始液体或固体占容变化后，旧 frame 继续标识原库存的空间位置；下一次重建规划旧新几何间的完整库存与内能交接。相变和清空计划分别绑定完整来源与目标元组，在首次载体写入前复核来源，载体提交后复核目标。观察中的单格摘要仅在该格所有正气体块具有同一归属时返回节点，多归属或无气体返回 `-1`。
 
@@ -90,7 +90,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由微盒归属和
 
 ## 拓扑变化
 
-[GasTopologyCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasTopologyCoordinator.java) 在同一开放微盒内精确积分旧新干区的正体积交集。交接权重为旧块的已认证物理容量乘以交集占旧干区的精确比例。
+[GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java) 在同一开放微盒内精确积分旧新干区的正体积交集。交接权重为旧块的已认证物理容量乘以交集占旧干区的精确比例。
 
 - 一对一携带完整库存；多对一合并组分、species、质量余量和内能。
 - 一对多按精确有理数权重拆分。`GasInventory.partition` 保持逐组件 nanos 与 species 的整数总量，质量列由最大份额承接余数；内能按共同温度拆分。

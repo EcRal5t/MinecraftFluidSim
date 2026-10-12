@@ -6,12 +6,12 @@
 
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
-| 世界方块归属 | [OwnershipTransactionCoordinator](../../fabric/src/main/java/cc/ecisr/mmm/simulation/OwnershipTransactionCoordinator.java)、[OwnershipCoordinator](../../fabric/src/main/java/cc/ecisr/mmm/simulation/ownership/OwnershipCoordinator.java) | `ownership` |
-| 容器操作入口 | [PlayerContainerTransferAdapter](../../fabric/src/main/java/cc/ecisr/mmm/simulation/PlayerContainerTransferAdapter.java)、[DispenserContainerTransferAdapter](../../fabric/src/main/java/cc/ecisr/mmm/simulation/DispenserContainerTransferAdapter.java)、[MinecraftContainerTransferPlan](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftContainerTransferPlan.java) | `containers` |
-| 物品数据与日志文件 | [ContainerItemMapper](../../fabric/src/main/java/cc/ecisr/mmm/item/ContainerItemMapper.java)、[ContainerJournalCodec](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/ContainerJournalCodec.java)、[ContainerJournalFileStore](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/ContainerJournalFileStore.java) | `containers` |
-| 事务提交与恢复 | [ContainerTransferCoordinator](../../application/src/main/java/cc/ecisr/mmm/application/ContainerTransferCoordinator.java)、[ContainerRecoveryCoordinator](../../application/src/main/java/cc/ecisr/mmm/application/ContainerRecoveryCoordinator.java)、[CrossDomainRecovery](../../model/src/main/java/cc/ecisr/mmm/recovery/CrossDomainRecovery.java) | `containers` |
-| 清空、排气和移除 | [MinecraftRegionLifecycle](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionLifecycle.java)、[RegionLifecycleUseCase](../../application/src/main/java/cc/ecisr/mmm/application/RegionLifecycleUseCase.java) | `lifecycle,region-state` |
-| 转移前同步相变几何 | [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java) | `containers,thermal` |
+| 世界方块归属 | [OwnershipTransactionCoordinator](../../fabric/src/main/java/mmm/simulation/OwnershipTransactionCoordinator.java)、[OwnershipCoordinator](../../fabric/src/main/java/mmm/simulation/ownership/OwnershipCoordinator.java) | `ownership` |
+| 容器操作入口 | [PlayerContainerTransferAdapter](../../fabric/src/main/java/mmm/simulation/PlayerContainerTransferAdapter.java)、[DispenserContainerTransferAdapter](../../fabric/src/main/java/mmm/simulation/DispenserContainerTransferAdapter.java)、[MinecraftContainerTransferPlan](../../fabric/src/main/java/mmm/simulation/MinecraftContainerTransferPlan.java) | `containers` |
+| 物品数据与日志文件 | [ContainerItemMapper](../../fabric/src/main/java/mmm/item/ContainerItemMapper.java)、[ContainerJournalCodec](../../fabric/src/main/java/mmm/simulation/persistence/ContainerJournalCodec.java)、[ContainerJournalFileStore](../../fabric/src/main/java/mmm/simulation/persistence/ContainerJournalFileStore.java) | `containers` |
+| 事务提交与恢复 | [ContainerTransferCoordinator](../../app/src/main/java/mmm/application/ContainerTransferCoordinator.java)、[ContainerRecoveryCoordinator](../../app/src/main/java/mmm/application/ContainerRecoveryCoordinator.java)、[CrossDomainRecovery](../../model/src/main/java/mmm/recovery/CrossDomainRecovery.java) | `containers` |
+| 清空、排气和移除 | [MinecraftRegionLifecycle](../../fabric/src/main/java/mmm/simulation/MinecraftRegionLifecycle.java)、[RegionLifecycleUseCase](../../app/src/main/java/mmm/application/RegionLifecycleUseCase.java) | `lifecycle,region-state` |
+| 转移前同步相变几何 | [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java) | `containers,thermal` |
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。
 
@@ -174,7 +174,7 @@ mixin 与原版 dispenser registry 分别直连这两个 adapter，不保留旧 
 7. actor adapter 把 item 收敛为 after；`ContainerRecoveryCoordinator` 随即或在对应 player/chunk availability 事件上驱动玩家同步 save 或 owning dimension flushing save。Minecraft 当前没有公开的单 chunk durable save，因此 dispenser 完成路径宁可承担低频的 dimension flush，也不能用非 flush autosave 后提前删除 WAL。
 8. durable save 后回读 exact after truth；只有回读仍为 after 才由 recovery coordinator 删除 WAL 并移出 boot index。删除失败只留下可幂等收敛的 WAL，不重复资源转移；committed event 只能在删除完成后发布。
 
-玩家保存由原版 `PlayerList.saveAll` 执行，但其正常返回不能单独证明存盘成功。适配器先使用原版 player serializer 捕获当前数据并拒绝编码错误，再保存；[PlayerInventorySaveVerifier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/PlayerInventorySaveVerifier.java) 强制写入并回读 `playerdata/<uuid>.dat`，逐项核对 UUID、完整 Inventory、SelectedItemSlot 和 equipment（包括副手）。核对完成后仍需确认在线物品等于事务 after。缺失、过期或读取失败的文件保留 WAL，等待 I/O 重试。
+玩家保存由原版 `PlayerList.saveAll` 执行，但其正常返回不能单独证明存盘成功。适配器先使用原版 player serializer 捕获当前数据并拒绝编码错误，再保存；[PlayerInventorySaveVerifier](../../fabric/src/main/java/mmm/simulation/persistence/PlayerInventorySaveVerifier.java) 强制写入并回读 `playerdata/<uuid>.dat`，逐项核对 UUID、完整 Inventory、SelectedItemSlot 和 equipment（包括副手）。核对完成后仍需确认在线物品等于事务 after。缺失、过期或读取失败的文件保留 WAL，等待 I/O 重试。
 
 WAL/WARNING/committed/HEAD 的文件内容在 rename 前 `force`，rename 与事务完成后的 delete 还要同步父目录 entry；支持目录 channel 的文件系统执行 directory fsync。Windows JDK 不暴露目录 channel，因此仍依赖同卷原子 rename 与已强制写入的文件内容，但不会把一次普通进程崩溃误当成已提交。
 

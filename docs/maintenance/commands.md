@@ -1,6 +1,6 @@
 # 游戏内命令速查
 
-`/mmm` 用于开发场景、管理员操作和故障诊断。正常创建区域的步骤见 [项目 README](../../README.md#在游戏里使用)。命令树定义在 [MmmCommands](../../fabric/src/main/java/cc/ecisr/mmm/MmmCommands.java)，处理器入口见 [命令路由](routing.md#gameplay)。
+`/mmm` 用于开发场景、管理员操作和故障诊断。正常创建区域的步骤见 [项目 README](../../README.md#在游戏里使用)。命令树定义在 [MmmCommands](../../fabric/src/main/java/mmm/MmmCommands.java)，处理器入口见 [命令路由](routing.md#gameplay)。
 
 下表省略每项前面的 `/mmm`。
 

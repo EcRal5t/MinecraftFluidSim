@@ -6,11 +6,11 @@
 
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
-| 库存和压力耦合 | [GranularInventory](../../model/src/main/java/cc/ecisr/mmm/granular/GranularInventory.java)、[GranularCouplingFields](../../model/src/main/java/cc/ecisr/mmm/granular/GranularCouplingFields.java) | `granular` |
-| 运动、反应和沉积 | [GranularMechanicalStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularMechanicalStage.java)、[GranularPressureCoupling](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularPressureCoupling.java)、[GranularReactionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularReactionStage.java)、[GranularTransitionStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularTransitionStage.java) | `granular` |
-| 水流起动与薄沙床阻力 | [GranularBedShear](../../solver/src/main/java/cc/ecisr/mmm/fluid/GranularBedShear.java)、[BodyForceStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/BodyForceStage.java)、[GranularDepositDynamics](../../model/src/main/java/cc/ecisr/mmm/granular/GranularDepositDynamics.java) | `granular` |
-| 定义与存档 | [GranularRegistryCodec](../../fabric/src/main/java/cc/ecisr/mmm/granular/GranularRegistryCodec.java) | `region-state` |
-| 物品转移 | [MinecraftContainerTransferPlan](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftContainerTransferPlan.java)、[ContainerItemMapper](../../fabric/src/main/java/cc/ecisr/mmm/item/ContainerItemMapper.java) | `containers,granular` |
+| 库存和压力耦合 | [GranularInventory](../../model/src/main/java/mmm/granular/GranularInventory.java)、[GranularCouplingFields](../../model/src/main/java/mmm/granular/GranularCouplingFields.java) | `granular` |
+| 运动、反应和沉积 | [GranularMechanicalStage](../../solver/src/main/java/mmm/fluid/GranularMechanicalStage.java)、[GranularPressureCoupling](../../solver/src/main/java/mmm/fluid/GranularPressureCoupling.java)、[GranularReactionStage](../../solver/src/main/java/mmm/fluid/GranularReactionStage.java)、[GranularTransitionStage](../../solver/src/main/java/mmm/fluid/GranularTransitionStage.java) | `granular` |
+| 水流起动与薄沙床阻力 | [GranularBedShear](../../solver/src/main/java/mmm/fluid/GranularBedShear.java)、[BodyForceStage](../../solver/src/main/java/mmm/fluid/BodyForceStage.java)、[GranularDepositDynamics](../../model/src/main/java/mmm/granular/GranularDepositDynamics.java) | `granular` |
+| 定义与存档 | [GranularRegistryCodec](../../fabric/src/main/java/mmm/granular/GranularRegistryCodec.java) | `region-state` |
+| 物品转移 | [MinecraftContainerTransferPlan](../../fabric/src/main/java/mmm/simulation/MinecraftContainerTransferPlan.java)、[ContainerItemMapper](../../fabric/src/main/java/mmm/item/ContainerItemMapper.java) | `containers,granular` |
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。
 

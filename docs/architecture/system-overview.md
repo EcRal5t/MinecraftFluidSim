@@ -6,33 +6,35 @@
 
 | 模块 | 保存或执行什么 | 主要依赖 |
 |---|---|---|
-| [api](../../api/src/main/java/cc/ecisr/mmm/api/) | 外部查询、提交通知和带单位的数量类型 | JDK |
-| [model](../../model/src/main/java/cc/ecisr/mmm/) | 材料定义、物质收支、载体状态、容器数据和存档模型 | api、必要的纯 Java 编解码库 |
-| [solver](../../solver/src/main/java/cc/ecisr/mmm/fluid/) | CPU 物理计算、完整计算输入和候选结果 | model |
-| [application](../../application/src/main/java/cc/ecisr/mmm/application/) | 调度、授权、事务协调，以及读取和提交区域的接口 | solver、model |
-| [fabric](../../fabric/src/main/java/cc/ecisr/mmm/) | 世界与物品操作、持久化、数据包、命令和网络 | api、model、solver、application |
-| [fabric client](../../fabric/src/client/java/cc/ecisr/mmm/) | 快照插值、几何生成和界面显示 | 客户端协议与展示数据 |
-| [gpu-probe-kernel](../../gpu-probe-kernel/src/main/java/cc/ecisr/mmm/gpuprobe/) | Vulkan 计算实验、回读与独立验证 | solver |
-| [gpu-probe](../../gpu-probe/src/main/java/cc/ecisr/mmm/gpuprobe/) | 可选 GPU probe 的 Minecraft 适配 | kernel，编译时引用 fabric |
-| [core](../../core/build.gradle) | 聚合发布 api/model/solver/application | 无生产源码 |
+| [api](../../api/src/main/java/mmm/api/) | 外部查询、提交通知和带单位的数量类型 | JDK |
+| [model](../../model/src/main/java/mmm/) | 材料定义、物质收支、载体状态、容器数据和存档模型 | api、必要的纯 Java 编解码库 |
+| [solver](../../solver/src/main/java/mmm/fluid/) | CPU 物理计算、完整计算输入和候选结果 | model |
+| [app](../../app/src/main/java/mmm/application/) | 调度、授权、事务协调，以及读取和提交区域的接口 | solver、model |
+| [fabric](../../fabric/src/main/java/mmm/) | 世界与物品操作、持久化、数据包、命令和网络 | api、model、solver、app |
+| [fabric client](../../fabric/src/client/java/mmm/) | 快照插值、几何生成和界面显示 | 客户端协议与展示数据 |
+| [gpu-kernel](../../gpu-kernel/src/main/java/mmm/gpuprobe/) | Vulkan 计算实验、回读与独立验证 | solver |
+| [gpu-probe](../../gpu-probe/src/main/java/mmm/gpuprobe/) | 可选 GPU probe 的 Minecraft 适配 | kernel，编译时引用 fabric |
+| [core](../../core/build.gradle) | 聚合发布 api/model/solver/app | 无生产源码 |
+
+Java 根包为 `mmm`。用例模块目录为 `app`，对应 Java 包为 `mmm.application`。
 
 世界读取、方块修改、物品变化和磁盘提交由 Fabric 在服务器主线程执行。数值模块接收纯 Java 输入，计算私有的下一步状态。客户端和外部查询读取服务端提供的数据。
 
-依赖方向、包循环、运行时注册点和生产类 1000 行上限由 [ArchitectureDependencyValidation](../../fabric/src/test/java/cc/ecisr/mmm/validation/ArchitectureDependencyValidation.java) 检查。执行方式见 [验证指南](../maintenance/validation.md#architecture)。
+依赖方向、包循环、运行时注册点和生产类 1000 行上限由 [ArchitectureDependencyValidation](../../fabric/src/test/java/mmm/validation/ArchitectureDependencyValidation.java) 检查。执行方式见 [验证指南](../maintenance/validation.md#architecture)。
 
 ## 从游戏操作到计算结果
 
 ```text
 方块 / 物品 / 命令 / 网络请求
   → MmmRuntime 中对应的业务处理器
-  → application 用例检查请求与当前状态
+  → app 用例检查请求与当前状态
   → solver 在私有状态上计算完整结果
-  → application 与区域仓库核对身份、代次和布局
+  → app 与区域仓库核对身份、代次和布局
   → Fabric 提交区域、世界或物品的变化
   → 发布客户端快照与适用的提交通知
 ```
 
-服务器 tick 从 [MinecraftSimulationLoop](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftSimulationLoop.java) 开始，经过 [MinecraftRegionInputs](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionInputs.java)、[MinecraftRegionTick](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionTick.java) 和 [RegionTickUseCase](../../application/src/main/java/cc/ecisr/mmm/application/RegionTickUseCase.java) 进入 [RegionApplicationService](../../application/src/main/java/cc/ecisr/mmm/application/RegionApplicationService.java)。启动顺序、状态提交、暂停、区域预算和控制器授权详见 [运行时与区域操作](runtime-and-lifecycle.md)。
+服务器 tick 从 [MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java) 开始，经过 [MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)、[MinecraftRegionTick](../../fabric/src/main/java/mmm/simulation/MinecraftRegionTick.java) 和 [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java) 进入 [RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)。启动顺序、状态提交、暂停、区域预算和控制器授权详见 [运行时与区域操作](runtime-and-lifecycle.md)。
 
 ## 哪些数据决定物质库存
 
@@ -57,14 +59,14 @@
 - 液体容器用整数纳体积：`1 BV = 1,000,000,000 nanos`。
 - 固体用整数 `SVQ`：`1 BV = 2^27 SVQ`，默认单元为 `2^24 SVQ`。
 - 化学用整数 quanta：`1 AU = 1,000,000,000 quanta`。AU 是本求解器使用的化学数量单位。
-- 液体粒子质量权重通过 [SolverUnitScale](../../model/src/main/java/cc/ecisr/mmm/units/SolverUnitScale.java) 乘以 `cellSize³` 换成 kg。固体、气体、化学组分及容器质量直接保存 kg。
+- 液体粒子质量权重通过 [SolverUnitScale](../../model/src/main/java/mmm/units/SolverUnitScale.java) 乘以 `cellSize³` 换成 kg。固体、气体、化学组分及容器质量直接保存 kg。
 - 热学使用 K、Pa、J、W/(m·K) 和 J/(kg·K)。内能审计使用原始 double 或 `SignedDyadic` 精确表示。
 
 浮点粒子数量与整数容器数量之间的转换需要明确舍入方向，并保留不能表示的差额。详细数据布局在 [材料](material-state.md)、[化学](chemistry-state.md)、[颗粒](granular-state.md)、[气体](gas-state.md)和[热学](thermal-state.md)专题中。
 
 ## 一个完整计算步
 
-[FluidDomainStepCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStepCoordinator.java) 组织下列步骤：
+[FluidDomainStepCoordinator](../../solver/src/main/java/mmm/fluid/FluidDomainStepCoordinator.java) 组织下列步骤：
 
 1. 记录物质和能量收支，以及待同步的相变体积。
 2. 根据碰撞形状、固体占据体积和气体拓扑建立力学输入。
@@ -77,7 +79,7 @@
 9. 处理沉积、唤醒和粒子拆分/合并，同步搬移材料、化学和内能数据。
 10. 核对全部收支，成功后发布本步统计并判断后续活动状态。
 
-力学顺序在 [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)，传热、反应和相变顺序在 [ThermochemistryPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/ThermochemistryPipeline.java)。具体离散方法见 [流体求解器](fluid-solver.md)，相变几何的后续处理见 [转移前同步相变几何](runtime-and-lifecycle.md#phase-work)。
+力学顺序在 [MechanicalStepPipeline](../../solver/src/main/java/mmm/fluid/MechanicalStepPipeline.java)，传热、反应和相变顺序在 [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)。具体离散方法见 [流体求解器](fluid-solver.md)，相变几何的后续处理见 [转移前同步相变几何](runtime-and-lifecycle.md#phase-work)。
 
 相变按固定区域体积联合守恒两相内能。体积变化记录留给下一次真实压力投影同步几何；液体与颗粒运动造成的气腔容量变化按气体等熵模型结算机械功。详见 [相变](thermal-state.md#相变)。
 
@@ -99,6 +101,6 @@
 
 ## 查询和展示
 
-[FluidSnapshotPublisher](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidSnapshotPublisher.java) 生成展示消息，[ClientRegionSnapshotStore](../../fabric/src/client/java/cc/ecisr/mmm/client/ClientRegionSnapshotStore.java) 按区域代次和序号接收，再交给客户端几何与绘制代码。旧包在区域移除后失效。
+[FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java) 生成展示消息，[ClientRegionSnapshotStore](../../fabric/src/client/java/mmm/client/ClientRegionSnapshotStore.java) 按区域代次和序号接收，再交给客户端几何与绘制代码。旧包在区域移除后失效。
 
-[MmmFabricApi](../../fabric/src/main/java/cc/ecisr/mmm/api/fabric/MmmFabricApi.java) 提供同步单格查询和容器提交完成事件。查询读取已加载区域；事件在物品强制保存且事务日志删除后发布。参数、单位、线程和失败状态见 [外部 API](external-api.md)，界面与绘制入口见 [客户端路由](../maintenance/routing.md#client)。
+[MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java) 提供同步单格查询和容器提交完成事件。查询读取已加载区域；事件在物品强制保存且事务日志删除后发布。参数、单位、线程和失败状态见 [外部 API](external-api.md)，界面与绘制入口见 [客户端路由](../maintenance/routing.md#client)。

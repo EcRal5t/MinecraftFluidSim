@@ -13,7 +13,7 @@
 | 撤回前生产快照 | `717e9b0`；分支 `codex/free-surface-unification-rejected-20261010`，保留 161 次提交的实现、测试与失败模式 |
 | Git 历史备份 | 主目录 `build/free-surface-exploration-archive-20261010.bundle`，包含上述三个归档分支及完整历史；可用 `git bundle verify` 检查。 |
 | 研究基函数生成器 | 研究分支及研究 worktree 的 `pytool/stokes_macro_basis.py`；用 `uv run pytool/stokes_macro_basis.py build/free-surface-audit/stokes-macro-basis.json` 生成离线 GN 对照表。 |
-| 双路径空间矩研究诊断 | `codex/free-surface-exploration-archive-20261010` 分支的 `fabric/src/test/java/cc/ecisr/mmm/fluid/MarkerDistributionExperiment.java`；在该分支的独立检出中执行 `:fabric:runMarkerDistributionExperiment --args=handoff`。已测日志与局限保存在双路径修复归档。 |
+| 双路径空间矩研究诊断 | `codex/free-surface-exploration-archive-20261010` 分支的 `fabric/src/test/java/mmm/fluid/MarkerDistributionExperiment.java`；在该分支的独立检出中执行 `:fabric:runMarkerDistributionExperiment --args=handoff`。已测日志与局限保存在双路径修复归档。 |
 | 较早独立实验 | 主目录 `build/free-surface-audit/`；索引为 `current-method-audit.md`，包含多面体交集、正库存转移与早期机械实验 |
 | 后期独立实验 | `C:/Users/Ecisral/.codex/worktrees/free-surface-feasibility/fabric-example-mod/build/free-surface-audit/`；包含 Hermite、GN 支撑、客观有限变形功与最后的诊断驱动 |
 | 最终结论 | 主目录 `build/free-surface-audit/final-verdict-20261010.md`；`continued-research-checkpoint.md` 保存后期证据，结论以其最后一节为准 |
@@ -66,10 +66,10 @@
 
 | 对照对象 | 现有入口 | 基准适用范围 |
 |---|---|---|
-| 库存份额、微小尾数、容量 | `fabric/src/test/java/cc/ecisr/mmm/fluid/LiquidVolumeTransportValidation.java` | 已有整数分配 oracle、微小正份额与解析旋流多级收敛；适合加强现有测试 |
-| 覆盖率、空间矩、压力 footprint | 当前 `fabric/src/test/java/cc/ecisr/mmm/fluid/MarkerDistributionExperiment.java`；归档分支的同名类 | 当前 `free-analytic` 用逆解析映射独立积分，两级参考差异用于分离基准误差；归档 `handoff` 记录规定三轴输运的质心、协方差、动量和分类变化，完整压力力学另行验证。 |
+| 库存份额、微小尾数、容量 | `fabric/src/test/java/mmm/fluid/LiquidVolumeTransportValidation.java` | 已有整数分配 oracle、微小正份额与解析旋流多级收敛；适合加强现有测试 |
+| 覆盖率、空间矩、压力 footprint | 当前 `fabric/src/test/java/mmm/fluid/MarkerDistributionExperiment.java`；归档分支的同名类 | 当前 `free-analytic` 用逆解析映射独立积分，两级参考差异用于分离基准误差；归档 `handoff` 记录规定三轴输运的质心、协方差、动量和分类变化，完整压力力学另行验证。 |
 | 一步复杂几何交集 | 较早 `NumericBoxCut`、`CurrentBoundaryClipProbe`；争议交集再核对快照 `LiquidExactPolygon` | 已知输入的交集/体积/矩；精确几何与原始库存分别核对，复杂自交表面超出已验证范围 |
-| 黏性解析解与刚体 | `solver/src/test/java/cc/ecisr/mmm/fluid/LiquidViscosityValidation.java`，由 `FlipCutCellValidation` 调用 | 保留已有完整对称应变、旋转和壁面约束对照；独立液滴模式再用后期支撑诊断 |
+| 黏性解析解与刚体 | `solver/src/test/java/mmm/fluid/LiquidViscosityValidation.java`，由 `FlipCutCellValidation` 调用 | 保留已有完整对称应变、旋转和壁面约束对照；独立液滴模式再用后期支撑诊断 |
 | 客观有限功与正支撑 | 后期 `ObjectiveMaterialWork`、`MassSupportedRigidAudit`、`PhysicalSupportEnrichmentAudit` | 算子恒等式和静态支撑比较，动态拓扑与产品生命周期须独立验收 |
 
 ### 可执行入口
@@ -93,9 +93,9 @@
 编译后只运行下一项需要的算子：
 
 ```powershell
-java -cp build/free-surface-audit/final-repro-classes cc.ecisr.mmm.fluid.ObjectiveMaterialWork
-java -cp build/free-surface-audit/final-repro-classes cc.ecisr.mmm.fluid.PhysicalSupportEnrichmentAudit build/free-surface-audit/stokes-macro-basis.txt
-java '-Dprobe.massSupported=true' '-Dprobe.directMaterialMass=true' '-Dprobe.sigma=0' -cp build/free-surface-audit/final-repro-classes cc.ecisr.mmm.fluid.MassSupportedRigidAudit build/free-surface-audit/stokes-macro-basis.txt
+java -cp build/free-surface-audit/final-repro-classes mmm.fluid.ObjectiveMaterialWork
+java -cp build/free-surface-audit/final-repro-classes mmm.fluid.PhysicalSupportEnrichmentAudit build/free-surface-audit/stokes-macro-basis.txt
+java '-Dprobe.massSupported=true' '-Dprobe.directMaterialMass=true' '-Dprobe.sigma=0' -cp build/free-surface-audit/final-repro-classes mmm.fluid.MassSupportedRigidAudit build/free-surface-audit/stokes-macro-basis.txt
 ```
 
 以上 `java` 要求 Java 25 或更新版本。成本比较保留同机、同输入、同物性、同物理时长；机械内核、几何更新与完整生产步分别报告。重跑直到偶然通过会破坏成本证据，应保留每次原始结果。

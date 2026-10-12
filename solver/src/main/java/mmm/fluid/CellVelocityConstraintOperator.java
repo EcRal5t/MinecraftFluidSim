@@ -1,0 +1,205 @@
+package mmm.fluid;
+
+import mmm.units.SignedDyadic;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.TreeMap;
+
+/** Fixed volume and normal-trace constraints pulled back through the actual-mass cell basis. */
+final class CellVelocityConstraintOperator {
+	record Block(int cell, int axis, double[] coefficients) {
+		Block {
+			if (coefficients == null || coefficients.length != 4) throw new IllegalArgumentException("Invalid cell constraint block");
+			coefficients = coefficients.clone();
+			for (double value : coefficients) if (!Double.isFinite(value)) throw new IllegalArgumentException("Nonfinite cell constraint coefficient");
+		}
+		@Override public double[] coefficients() { return coefficients.clone(); }
+	}
+	record Row(List<Block> blocks, double storage) {
+		Row {
+			if (blocks == null || !(storage >= 0 && Double.isFinite(storage))) throw new IllegalArgumentException("Invalid cell constraint row");
+			blocks = List.copyOf(blocks);
+		}
+	}
+
+	private final int markerCount;
+	private final double[] inverseMass, storage, coefficients, coefficientLow;
+	private final int[] offsets, indices;
+	private final double[] response;
+	private final SignedDyadic[] exactCoefficients, exactInverseMass, exactStorage, exactResponse;
+
+	CellVelocityConstraintOperator(CellAffineVelocity basis, List<Row> rows) {
+		if (basis == null || rows == null) throw new IllegalArgumentException("Constraint snapshot is missing");
+		markerCount = basis.markerCount(); inverseMass = new double[markerCount];
+		for (int marker = 0; marker < markerCount; marker++) {
+			inverseMass[marker] = 1 / basis.massKilograms(marker);
+			if (!(inverseMass[marker] > 0 && Double.isFinite(inverseMass[marker])))
+				throw new IllegalArgumentException("Actual marker inertia is unrepresentable");
+		}
+		storage = new double[rows.size()]; offsets = new int[rows.size() + 1];
+		var entryIndices = new ArrayList<Integer>(); var high = new ArrayList<Double>(); var low = new ArrayList<Double>();
+		boolean hasExpandedRows = false;
+		for (int row = 0; row < rows.size(); row++) {
+			Row definition = rows.get(row); storage[row] = definition.storage; boolean expanded = false;
+			for (Block block : definition.blocks) {
+				if (block.cell < 0 || block.cell >= basis.cellCount() || block.axis < 0 || block.axis >= 3)
+					throw new IllegalArgumentException("Cell constraint references an invalid velocity block");
+				expanded |= basis.expandedCell(block.cell);
+			}
+			hasExpandedRows |= expanded;
+			if (expanded) appendExpanded(basis, definition, entryIndices, high, low);
+			else appendFast(basis, definition, entryIndices, high, low);
+			offsets[row + 1] = entryIndices.size();
+		}
+		indices = new int[entryIndices.size()]; coefficients = new double[indices.length]; coefficientLow = new double[indices.length];
+		boolean expanded = hasExpandedRows;
+		for (int entry = 0; entry < indices.length; entry++) {
+			indices[entry] = entryIndices.get(entry); coefficients[entry] = high.get(entry); coefficientLow[entry] = low.get(entry);
+			expanded |= coefficientLow[entry] != 0;
+		}
+		response = new double[Math.multiplyExact(3, markerCount)];
+		exactCoefficients = expanded ? new SignedDyadic[indices.length] : null;
+		exactInverseMass = expanded ? new SignedDyadic[markerCount] : null;
+		exactStorage = expanded ? new SignedDyadic[storage.length] : null;
+		exactResponse = expanded ? new SignedDyadic[response.length] : null;
+		if (expanded) {
+			for (int entry = 0; entry < indices.length; entry++) exactCoefficients[entry] = SignedDyadic.of(coefficients[entry]).add(SignedDyadic.of(coefficientLow[entry]));
+			for (int marker = 0; marker < markerCount; marker++) exactInverseMass[marker] = SignedDyadic.of(inverseMass[marker]);
+			for (int row = 0; row < storage.length; row++) exactStorage[row] = SignedDyadic.of(storage[row]);
+		}
+	}
+
+	private void appendFast(CellAffineVelocity basis, Row row, List<Integer> indices, List<Double> high, List<Double> low) {
+		var merged = new TreeMap<Integer, Double>();
+		for (Block block : row.blocks) for (int ordinal = 0; ordinal < basis.cellMarkerCount(block.cell); ordinal++) {
+			int marker = basis.cellMarker(block.cell, ordinal); double value = 0;
+			for (int term = 0; term < 4; term++) value = Math.fma(block.coefficients[term], basis.coefficient(marker, term), value);
+			if (!Double.isFinite(value)) throw new IllegalArgumentException("Pulled-back cell constraint is unrepresentable");
+			if (value != 0) merged.merge(block.axis * markerCount + marker, value, Double::sum);
+		}
+		for (var entry : merged.entrySet()) if (entry.getValue() != 0) {
+			if (!Double.isFinite(entry.getValue())) throw new IllegalArgumentException("Merged cell constraint is unrepresentable");
+			indices.add(entry.getKey()); high.add(entry.getValue()); low.add(0.0);
+		}
+	}
+	private void appendExpanded(CellAffineVelocity basis, Row row, List<Integer> indices, List<Double> high, List<Double> low) {
+		var merged = new TreeMap<Integer, SignedDyadic>();
+		for (Block block : row.blocks) for (int ordinal = 0; ordinal < basis.cellMarkerCount(block.cell); ordinal++) {
+			int marker = basis.cellMarker(block.cell, ordinal); SignedDyadic value = SignedDyadic.ZERO;
+			for (int term = 0; term < 4; term++) if (block.coefficients[term] != 0)
+				value = value.add(SignedDyadic.of(block.coefficients[term]).multiply(basis.coefficientExact(marker, term)));
+			if (value.signum() != 0) merged.merge(block.axis * markerCount + marker, value, SignedDyadic::add);
+		}
+		for (var entry : merged.entrySet()) if (entry.getValue().signum() != 0) {
+			double hi = entry.getValue().toDouble();
+			if (!Double.isFinite(hi)) throw new IllegalArgumentException("Merged cell constraint is unrepresentable");
+			double lo = entry.getValue().subtract(SignedDyadic.of(hi)).toDouble();
+			if (hi == 0 && lo == 0) throw new IllegalArgumentException("Expanded cell constraint underflows its representation");
+			indices.add(entry.getKey()); high.add(hi); low.add(lo);
+		}
+	}
+
+	int rowCount() { return storage.length; }
+	ConstraintGramPreconditioner preconditioner(double[] diagonal) {
+		checkRows(diagonal);
+		return new ConstraintGramPreconditioner(markerCount, inverseMass, offsets, indices, coefficients, coefficientLow, diagonal);
+	}
+
+	/** C v: volume rates and surface-tested normal velocity rates in their declared SI units. */
+	void volumeRate(double[][] velocity, double[] result) {
+		checkMarkers(velocity); checkRows(result);
+		for (double[] axis : velocity) if (axis == result) throw new IllegalArgumentException("Aliased constraint vectors");
+		Arrays.fill(result, 0);
+		for (int row = 0; row < storage.length; row++) {
+			if (exactCoefficients != null) {
+				SignedDyadic value = SignedDyadic.ZERO;
+				for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+					int index = indices[entry]; value = value.add(exactCoefficients[entry].multiply(SignedDyadic.of(velocity[index / markerCount][index % markerCount])));
+				}
+				result[row] = value.toDouble();
+			} else for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+				int index = indices[entry]; result[row] = Math.fma(coefficients[entry], velocity[index / markerCount][index % markerCount], result[row]);
+			}
+		}
+	}
+
+	/** C^T p, using the same immutable scalar coefficients and ordinary SI virtual work. */
+	void force(double[] pressure, double[][] result) {
+		checkRows(pressure); checkMarkers(result);
+		for (double[] axis : result) {
+			if (axis == pressure) throw new IllegalArgumentException("Aliased constraint vectors");
+			Arrays.fill(axis, 0);
+		}
+		if (exactCoefficients != null) {
+			prepareExactResponse(pressure);
+			for (int index = 0; index < exactResponse.length; index++) result[index / markerCount][index % markerCount] = exactResponse[index].toDouble();
+			return;
+		}
+		for (int row = 0; row < storage.length; row++) for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+			int index = indices[entry], axis = index / markerCount, marker = index % markerCount;
+			result[axis][marker] = Math.fma(coefficients[entry], pressure[row], result[axis][marker]);
+		}
+	}
+	private void prepareExactResponse(double[] pressure) {
+		Arrays.fill(exactResponse, SignedDyadic.ZERO);
+		for (int row = 0; row < storage.length; row++) {
+			SignedDyadic value = SignedDyadic.of(pressure[row]);
+			for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+				int index = indices[entry]; exactResponse[index] = exactResponse[index].add(exactCoefficients[entry].multiply(value));
+			}
+		}
+	}
+
+	/** C M_actual^-1 C^T plus the finite gas compliance; expanded responses retain all product bits. */
+	void apply(double[] pressure, double[] result) {
+		checkRows(pressure); checkRows(result);
+		if (pressure == result) throw new IllegalArgumentException("Aliased constraint vectors");
+		if (exactCoefficients != null) {
+			prepareExactResponse(pressure);
+			for (int row = 0; row < storage.length; row++) {
+				SignedDyadic value = exactStorage[row].multiply(SignedDyadic.of(pressure[row]));
+				for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+					int index = indices[entry]; value = value.add(exactCoefficients[entry].multiply(exactInverseMass[index % markerCount]).multiply(exactResponse[index]));
+				}
+				result[row] = value.toDouble();
+			}
+			return;
+		}
+		Arrays.fill(response, 0);
+		for (int row = 0; row < storage.length; row++) for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+			int index = indices[entry]; response[index] = Math.fma(coefficients[entry], pressure[row], response[index]);
+		}
+		for (int row = 0; row < storage.length; row++) {
+			result[row] = storage[row] * pressure[row];
+			for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+				int index = indices[entry]; result[row] += MarkerPressureOperator.rescaledResponse(coefficients[entry], inverseMass[index % markerCount], response[index]);
+			}
+		}
+	}
+
+	void diagonal(double[] result) {
+		checkRows(result); System.arraycopy(storage, 0, result, 0, storage.length);
+		for (int row = 0; row < storage.length; row++) {
+			if (exactCoefficients != null) {
+				SignedDyadic value = exactStorage[row];
+				for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+					int marker = indices[entry] % markerCount; value = value.add(exactCoefficients[entry].multiply(exactCoefficients[entry]).multiply(exactInverseMass[marker]));
+				}
+				result[row] = value.toDouble();
+			} else for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+				int marker = indices[entry] % markerCount; double value = coefficients[entry];
+				result[row] += MarkerPressureOperator.rescaledResponse(value, inverseMass[marker], value);
+			}
+		}
+	}
+
+	private void checkRows(double[] vector) {
+		if (vector == null || vector.length != rowCount()) throw new IllegalArgumentException("Constraint row shape mismatch");
+	}
+	private void checkMarkers(double[][] vector) {
+		if (vector == null || vector.length != 3) throw new IllegalArgumentException("Expected three marker velocity axes");
+		for (double[] axis : vector) if (axis == null || axis.length != markerCount) throw new IllegalArgumentException("Marker velocity shape mismatch");
+		if (vector[0] == vector[1] || vector[0] == vector[2] || vector[1] == vector[2]) throw new IllegalArgumentException("Aliased marker velocity axes");
+	}
+}

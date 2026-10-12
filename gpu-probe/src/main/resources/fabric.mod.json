@@ -11,7 +11,7 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": [
-			"cc.ecisr.mmm.gpuprobe.MmmGpuProbeMod"
+			"mmm.gpuprobe.MmmGpuProbeMod"
 		]
 	},
 	"depends": {

@@ -109,7 +109,7 @@
 
 ```powershell
 $profileCp = Get-Content build/hotspot-optimization/classpath.txt -Raw
-java -ea -cp "build/hotspot-optimization/harness-classes;$profileCp" cc.ecisr.mmm.simulation.LongStepBenchmark demo 100 300 build/hotspot-optimization/demo-recheck false
+java -ea -cp "build/hotspot-optimization/harness-classes;$profileCp" mmm.simulation.LongStepBenchmark demo 100 300 build/hotspot-optimization/demo-recheck false
 uv run pytool/compare_step_profiles.py --before "build/hotspot-optimization/demo-before*.csv" --after "build/hotspot-optimization/demo-identity[12].csv" --check-trajectory
 ```
 

@@ -4,42 +4,42 @@
 
 | 要修改的部分 | 代码入口 | 测试选择器 |
 |---|---|---|
-| 启动、组装服务与停服 | [MmmRuntimeFactory](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MmmRuntimeFactory.java)、[MinecraftSimulationLoop](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftSimulationLoop.java) | `region-state,lifecycle` |
-| tick 调度与性能暂停 | [RegionTickUseCase](../../application/src/main/java/cc/ecisr/mmm/application/RegionTickUseCase.java)、[MinecraftRegionTick](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionTick.java) | `lifecycle` |
-| 单步计算和结果提交 | [RegionApplicationService](../../application/src/main/java/cc/ecisr/mmm/application/RegionApplicationService.java)、[FluidRegionRepository](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidRegionRepository.java) | `lifecycle`，受影响的物理测试 |
-| 区域预算和可用性 | [RegionCatalog](../../application/src/main/java/cc/ecisr/mmm/application/RegionCatalog.java)、[FluidRegionOperations](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidRegionOperations.java) | `region-manager` |
-| 控制器摘要与操作授权 | [ControllerQueryUseCase](../../application/src/main/java/cc/ecisr/mmm/application/ControllerQueryUseCase.java)、[RegionLifecycleUseCase](../../application/src/main/java/cc/ecisr/mmm/application/RegionLifecycleUseCase.java)、[MinecraftRegionLifecycle](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionLifecycle.java) | `lifecycle,protocol` |
-| 实体与碰撞输入 | [MinecraftRegionInputs](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionInputs.java) | `entity-fluid` 或 `shape,cut-cell` |
+| 启动、组装服务与停服 | [MmmRuntimeFactory](../../fabric/src/main/java/mmm/simulation/MmmRuntimeFactory.java)、[MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java) | `region-state,lifecycle` |
+| tick 调度与性能暂停 | [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)、[MinecraftRegionTick](../../fabric/src/main/java/mmm/simulation/MinecraftRegionTick.java) | `lifecycle` |
+| 单步计算和结果提交 | [RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)、[FluidRegionRepository](../../fabric/src/main/java/mmm/simulation/FluidRegionRepository.java) | `lifecycle`，受影响的物理测试 |
+| 区域预算和可用性 | [RegionCatalog](../../app/src/main/java/mmm/application/RegionCatalog.java)、[FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java) | `region-manager` |
+| 控制器摘要与操作授权 | [ControllerQueryUseCase](../../app/src/main/java/mmm/application/ControllerQueryUseCase.java)、[RegionLifecycleUseCase](../../app/src/main/java/mmm/application/RegionLifecycleUseCase.java)、[MinecraftRegionLifecycle](../../fabric/src/main/java/mmm/simulation/MinecraftRegionLifecycle.java) | `lifecycle,protocol` |
+| 实体与碰撞输入 | [MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java) | `entity-fluid` 或 `shape,cut-cell` |
 
 执行方式见 [验证指南](../maintenance/validation.md)。改类职责或依赖时，运行 `verifyArchitecture`。
 
 <a id="startup"></a>
 ## 服务器启动与服务组装
 
-[MmmMod](../../fabric/src/main/java/cc/ecisr/mmm/MmmMod.java) 在 `SERVER_STARTING` 通过 [MmmRuntimeRegistry](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MmmRuntimeRegistry.java) 建立当前服务器的运行时。Registry 按 `MinecraftServer` 保存实例，后续方块、网络和 API 回调从这里查找服务。
+[MmmMod](../../fabric/src/main/java/mmm/MmmMod.java) 在 `SERVER_STARTING` 通过 [MmmRuntimeRegistry](../../fabric/src/main/java/mmm/simulation/MmmRuntimeRegistry.java) 建立当前服务器的运行时。Registry 按 `MinecraftServer` 保存实例，后续方块、网络和 API 回调从这里查找服务。
 
-[MmmRuntimeFactory](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MmmRuntimeFactory.java) 负责按顺序构造服务和注入依赖：
+[MmmRuntimeFactory](../../fabric/src/main/java/mmm/simulation/MmmRuntimeFactory.java) 负责按顺序构造服务和注入依赖：
 
-1. [WorldStartupCoordinator](../../fabric/src/main/java/cc/ecisr/mmm/simulation/WorldStartupCoordinator.java) 读取世界配置，验证或恢复世界能力包。[RegistryBundleLoader](../../fabric/src/main/java/cc/ecisr/mmm/simulation/RegistryBundleLoader.java) 提供材料定义的加载和验证。
-2. [CommittedWorldRegistries](../../fabric/src/main/java/cc/ecisr/mmm/simulation/CommittedWorldRegistries.java) 保存这次启动确认的材料定义与功能配置，供区域和物品使用。
+1. [WorldStartupCoordinator](../../fabric/src/main/java/mmm/simulation/WorldStartupCoordinator.java) 读取世界配置，验证或恢复世界能力包。[RegistryBundleLoader](../../fabric/src/main/java/mmm/simulation/RegistryBundleLoader.java) 提供材料定义的加载和验证。
+2. [CommittedWorldRegistries](../../fabric/src/main/java/mmm/simulation/CommittedWorldRegistries.java) 保存这次启动确认的材料定义与功能配置，供区域和物品使用。
 3. 建立区域管理与存档服务，完成已删除区域的文件隔离，并扫描世界归属日志和容器事务日志。
 4. 组装运行策略、单步执行器、区域输入、tick、可用性检查、控制器操作、容器及观察服务。
 
-依赖已加载 Minecraft 世界的恢复放在 `SERVER_STARTED`。[MinecraftSimulationLoop](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftSimulationLoop.java) 负责此时的恢复、后续服务器 tick 和停服顺序。
+依赖已加载 Minecraft 世界的恢复放在 `SERVER_STARTED`。[MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java) 负责此时的恢复、后续服务器 tick 和停服顺序。
 
-[MmmRuntime](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MmmRuntime.java) 提供按具体业务命名的入口。世界内可变运行政策归 [MinecraftRuntimePolicy](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRuntimePolicy.java)，同步力学计算归 [MinecraftMotionExecutor](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftMotionExecutor.java)，管理员写操作归 [MinecraftRegionOperatorActions](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionOperatorActions.java)。
+[MmmRuntime](../../fabric/src/main/java/mmm/simulation/MmmRuntime.java) 提供按具体业务命名的入口。世界内可变运行政策归 [MinecraftRuntimePolicy](../../fabric/src/main/java/mmm/simulation/MinecraftRuntimePolicy.java)，同步力学计算归 [MinecraftMotionExecutor](../../fabric/src/main/java/mmm/simulation/MinecraftMotionExecutor.java)，管理员写操作归 [MinecraftRegionOperatorActions](../../fabric/src/main/java/mmm/simulation/MinecraftRegionOperatorActions.java)。
 
 新增服务由 `MmmRuntimeFactory` 组装并注入对应业务模块，实例随所属服务器创建和释放。静态服务器实例查找统一通过 `MmmRuntimeRegistry`；类职责、依赖方向与注册点由架构检查约束。
 
 外部 Mod 可以在启动前订阅事件。Registry 暂存事件中心，运行时建立后接管同一实例。启动前的只读查询返回暂不可用；查找服务本身没有初始化世界的副作用。
 
-玩家协议会话由 [ProtocolSessions](../../fabric/src/main/java/cc/ecisr/mmm/network/ProtocolSessions.java) 随当前运行时保存。[FluidProtocolServer](../../fabric/src/main/java/cc/ecisr/mmm/network/FluidProtocolServer.java) 保存配置协商期间的短期任务。可选 GPU probe 使用自己的生命周期实例，通过 [MmmGpuProbeHostIntegration](../../gpu-probe/src/main/java/cc/ecisr/mmm/gpuprobe/MmmGpuProbeHostIntegration.java) 接入主模组。
+玩家协议会话由 [ProtocolSessions](../../fabric/src/main/java/mmm/network/ProtocolSessions.java) 随当前运行时保存。[FluidProtocolServer](../../fabric/src/main/java/mmm/network/FluidProtocolServer.java) 保存配置协商期间的短期任务。可选 GPU probe 使用自己的生命周期实例，通过 [MmmGpuProbeHostIntegration](../../gpu-probe/src/main/java/mmm/gpuprobe/MmmGpuProbeHostIntegration.java) 接入主模组。
 
 <a id="tick"></a>
 ## 一次区域计算
 
 1. `MinecraftSimulationLoop` 检查世界、区域可用性和恢复工作，把可以处理的区域交给 `MinecraftRegionTick`。
-2. `MinecraftRegionInputs` 刷新到期的碰撞与热交换输入，记录实体观测，生成本 tick 的 [RegionRuntime](../../application/src/main/java/cc/ecisr/mmm/application/RegionRuntime.java) 调度快照。
+2. `MinecraftRegionInputs` 刷新到期的碰撞与热交换输入，记录实体观测，生成本 tick 的 [RegionRuntime](../../app/src/main/java/mmm/application/RegionRuntime.java) 调度快照。
 3. `RegionTickUseCase` 根据运行状态和执行间隔选择 `NONE`、`MOTION` 或 `THERMAL`。同一个 tick 选择一项，力学计算优先于单独热计算。
 4. 到期的计算通过用例持有的 `StepExecutor` 调用 `RegionApplicationService`。请求包含区域 UUID、预期求解器代次、预算和本次输入。
 5. 结果成功提交后，`MinecraftRegionTick` 更新统计、休眠判断和快照输出。`RegionTickUseCase` 使用可注入的单调时钟记录耗时，并调整执行间隔。
@@ -67,7 +67,7 @@
 <a id="candidate"></a>
 ## 后端计算与提交
 
-[FluidDomainState](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainState.java) 保存完整物理输入。力学计算使用 [FluidStepRequest](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidStepRequest.java) / [FluidStepCandidate](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidStepCandidate.java)，单独热计算使用 [FluidThermalStepRequest](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidThermalStepRequest.java) / [FluidThermalStepCandidate](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidThermalStepCandidate.java)。
+[FluidDomainState](../../solver/src/main/java/mmm/fluid/FluidDomainState.java) 保存完整物理输入。力学计算使用 [FluidStepRequest](../../solver/src/main/java/mmm/fluid/FluidStepRequest.java) / [FluidStepCandidate](../../solver/src/main/java/mmm/fluid/FluidStepCandidate.java)，单独热计算使用 [FluidThermalStepRequest](../../solver/src/main/java/mmm/fluid/FluidThermalStepRequest.java) / [FluidThermalStepCandidate](../../solver/src/main/java/mmm/fluid/FluidThermalStepCandidate.java)。
 
 后端在私有状态上完成计算。`RegionApplicationService` 检查后端标识、紧邻代次和完整 `Layout`，其中包括网格、求解配置、预算、外壳、载体种类、注册表指纹和功能配置。`FluidRegionRepository` 在替换当前状态前再次核对区域身份。
 
@@ -80,18 +80,18 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 <a id="admission"></a>
 ## 区域登记与可用性
 
-[RegionCatalog](../../application/src/main/java/cc/ecisr/mmm/application/RegionCatalog.java) 保存 UUID、维度、包围盒、预算预留和区域对象标识，负责数量限制、重复身份、重叠、选择与替换。[FluidRegionManager](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidRegionManager.java) 负责 Minecraft 数据与这些描述之间的转换。
+[RegionCatalog](../../app/src/main/java/mmm/application/RegionCatalog.java) 保存 UUID、维度、包围盒、预算预留和区域对象标识，负责数量限制、重复身份、重叠、选择与替换。[FluidRegionManager](../../fabric/src/main/java/mmm/simulation/FluidRegionManager.java) 负责 Minecraft 数据与这些描述之间的转换。
 
 新区域在首次 HEAD 提交成功后登记。恢复时，已经提交的元数据先登记，再检查当前预算和运行条件。暂时超出预算的区域仍保留身份与预留量，等待以后恢复求解器。
 
-[FluidRegionOperations](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidRegionOperations.java) 依次检查区域自身的数值失败、世界方块归属与政策、目录预算、外壳和区块。数值或归属问题在原处阻止运行；政策、预算或外壳造成的卸载需要先成功保存完整 checkpoint。
+[FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java) 依次检查区域自身的数值失败、世界方块归属与政策、目录预算、外壳和区块。数值或归属问题在原处阻止运行；政策、预算或外壳造成的卸载需要先成功保存完整 checkpoint。
 
-[RegionAvailabilityReason](../../api/src/main/java/cc/ecisr/mmm/api/RegionAvailabilityReason.java) 给出具体不可用原因。控制器扫描在 [controller 包](../../fabric/src/main/java/cc/ecisr/mmm/simulation/controller/)：它检查已经加载的世界，要求唯一封闭内腔、完整所需区块、无重叠且预算足够。
+[RegionAvailabilityReason](../../api/src/main/java/mmm/api/RegionAvailabilityReason.java) 给出具体不可用原因。控制器扫描在 [controller 包](../../fabric/src/main/java/mmm/simulation/controller/)：它检查已经加载的世界，要求唯一封闭内腔、完整所需区块、无重叠且预算足够。
 
 <a id="console"></a>
 ## 控制器查询和确认操作
 
-[MinecraftControllerConsole](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftControllerConsole.java) 先校验服务器线程、玩家距离、控制器方块和区域归属。[ControllerSummaryAdapter](../../fabric/src/main/java/cc/ecisr/mmm/simulation/ControllerSummaryAdapter.java) 提供摘要数据，`ControllerQueryUseCase` 验证身份和字段后，生成摘要并签发绑定玩家与区域的一次性令牌。
+[MinecraftControllerConsole](../../fabric/src/main/java/mmm/simulation/MinecraftControllerConsole.java) 先校验服务器线程、玩家距离、控制器方块和区域归属。[ControllerSummaryAdapter](../../fabric/src/main/java/mmm/simulation/ControllerSummaryAdapter.java) 提供摘要数据，`ControllerQueryUseCase` 验证身份和字段后，生成摘要并签发绑定玩家与区域的一次性令牌。
 
 查询失败时返回失败状态。`UNLOADED` 区域显示已知元数据与未加载状态；实时库存在求解器加载后查询。
 
@@ -111,19 +111,19 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 <a id="phase-work"></a>
 ## 转移前同步相变几何
 
-相变造成的体积变化会留下待同步几何记录，由后续真实压力投影处理。相变本身联合守恒内能，内部相界位移不单独计入外部功。桶、发射器、管理员转移或生命周期操作若遇到这项记录，先调用 [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java)。
+相变造成的体积变化会留下待同步几何记录，由后续真实压力投影处理。相变本身联合守恒内能，内部相界位移不单独计入外部功。桶、发射器、管理员转移或生命周期操作若遇到这项记录，先调用 [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java)。
 
 它通过当前后端执行一次仅含力学的计算，完成已有相变几何的力学同步。该次计算跳过导热、反应和相变，因此不会立即新增相变待结算记录。结算成功后，以新的已提交区域状态准备容器事务或操作预览；失败时保留相应的阻止原因。
 
 <a id="world-inputs"></a>
 ## 实体与碰撞输入
 
-`MinecraftRegionInputs` 按五 tick 节拍刷新到期的世界碰撞输入。[MinecraftCollisionWorldPort](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftCollisionWorldPort.java) 把 `VoxelShape` 采样为纯 Java [CollisionField](../../model/src/main/java/cc/ecisr/mmm/world/CollisionField.java)，变化的网格单元同时唤醒力学与热计算。
+`MinecraftRegionInputs` 按五 tick 节拍刷新到期的世界碰撞输入。[MinecraftCollisionWorldPort](../../fabric/src/main/java/mmm/simulation/MinecraftCollisionWorldPort.java) 把 `VoxelShape` 采样为纯 Java [CollisionField](../../model/src/main/java/mmm/world/CollisionField.java)，变化的网格单元同时唤醒力学与热计算。
 
-[FluidRegionWorldInteraction](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidRegionWorldInteraction.java) 先比较采样结果与当前几何。存在变化时，从完整状态快照重建私有流体域，在副本上完成碰撞编辑、颗粒处理及液体排出和回填。`FluidRegion.adoptCollisionCandidate` 核对原对象、求解器代次和功能布局，再通过完整状态捕获同步并校验气体拓扑；成功后一次替换流体域并递增求解器代次。持久化 HEAD 代次保持原值，沿既有 checkpoint 流程存盘。
+[FluidRegionWorldInteraction](../../fabric/src/main/java/mmm/simulation/FluidRegionWorldInteraction.java) 先比较采样结果与当前几何。存在变化时，从完整状态快照重建私有流体域，在副本上完成碰撞编辑、颗粒处理及液体排出和回填。`FluidRegion.adoptCollisionCandidate` 核对原对象、求解器代次和功能布局，再通过完整状态捕获同步并校验气体拓扑；成功后一次替换流体域并递增求解器代次。持久化 HEAD 代次保持原值，沿既有 checkpoint 流程存盘。
 
 密闭气体失去全部可用容量时，本次碰撞候选被拒绝，原几何、物质库存和收支记录保留，调用方按碰撞失败暂停区域。没有碰撞变化时直接返回，不创建私有副本。`region-manager` 覆盖排液提交、过期候选拒绝、气腔消失时保持原状态，以及修正碰撞场后的再次提交。
 
 实体位置、包围盒和原版速度响应留在 Fabric。输入适配器比较相邻服务器 tick 的实际观测位置，得到本 tick 位移；`Entity#oldPosition` 会在 Minecraft tick 内被重写，无法提供这里需要的完整位移。首次观测或中断一 tick 的实体只接收实体侧响应。
 
-求解器按实体包围盒、液层与局部碰撞几何计算浸湿体积。[MovingBodyFluidCoupling](../../model/src/main/java/cc/ecisr/mmm/world/MovingBodyFluidCoupling.java) 把位置、实际位移速度和湿体积交给力学请求。到期的力学计算使用一次该请求，热计算保留独立流程。当前模型采用运动学包围盒近似，双向动量与动态排水仍在产品路线中。
+求解器按实体包围盒、液层与局部碰撞几何计算浸湿体积。[MovingBodyFluidCoupling](../../model/src/main/java/mmm/world/MovingBodyFluidCoupling.java) 把位置、实际位移速度和湿体积交给力学请求。到期的力学计算使用一次该请求，热计算保留独立流程。当前模型采用运动学包围盒近似，双向动量与动态排水仍在产品路线中。

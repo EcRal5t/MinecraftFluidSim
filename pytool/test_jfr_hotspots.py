@@ -9,14 +9,14 @@ from pytool.jfr_hotspots import neighbours, tally
 
 class JfrHotspotsTest(unittest.TestCase):
     def test_jdk_leaf_retains_project_inclusive_cost(self):
-        own = "cc.ecisr.mmm.Work.run()"
-        caller = "cc.ecisr.mmm.Loop.step()"
+        own = "mmm.Work.run()"
+        caller = "mmm.Loop.step()"
         self_hits, inclusive = tally([
             ["java.math.BigInteger.multiply()", own, caller],
             [own, caller],
             ["java.lang.Thread.sleep()"],
             [],
-        ], "cc.ecisr.mmm")
+        ], "mmm")
         self.assertEqual(dict(self_hits), {own: 1})
         self.assertEqual(dict(inclusive), {own: 2, caller: 2})
 

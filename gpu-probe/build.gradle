@@ -21,10 +21,10 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-	implementation project(':gpu-probe-kernel')
-	include project(':gpu-probe-kernel')
+	implementation project(':gpu-kernel')
+	include project(':gpu-kernel')
 	compileOnly project(':fabric')
-	testImplementation project(':gpu-probe-kernel')
+	testImplementation project(':gpu-kernel')
 	testImplementation project(':fabric')
 }
 
@@ -48,25 +48,25 @@ java {
 tasks.register('runHeadlessGpuProbe') {
 	group = 'verification'
 	description = 'Runs the loader-neutral Vulkan capability probe.'
-	dependsOn ':gpu-probe-kernel:runHeadlessGpuProbe'
+	dependsOn ':gpu-kernel:runHeadlessGpuProbe'
 }
 
 tasks.register('runGpuFlipValidation') {
 	group = 'verification'
 	description = 'Runs the loader-neutral 3D GPU FLIP validation suite.'
-	dependsOn ':gpu-probe-kernel:runGpuFlipValidation'
+	dependsOn ':gpu-kernel:runGpuFlipValidation'
 }
 
 tasks.register('runGpuOccupancyBenchmark') {
 	group = 'verification'
 	description = 'Runs the loader-neutral M1 CPU/GPU break-even matrix.'
-	dependsOn ':gpu-probe-kernel:runGpuOccupancyBenchmark'
+	dependsOn ':gpu-kernel:runGpuOccupancyBenchmark'
 }
 
 tasks.register('runGpuLongRunSurfaceValidation') {
 	group = 'verification'
 	description = 'Runs the loader-neutral long-run GPU/CPU surface gate.'
-	dependsOn ':gpu-probe-kernel:runGpuLongRunSurfaceValidation'
+	dependsOn ':gpu-kernel:runGpuLongRunSurfaceValidation'
 }
 
 tasks.register('runAdapterValidation', JavaExec) {
@@ -74,7 +74,7 @@ tasks.register('runAdapterValidation', JavaExec) {
 	description = 'Validates the Fabric probe command adapter shape.'
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.runtimeClasspath
-	mainClass = 'cc.ecisr.mmm.gpuprobe.GpuProbeAdapterValidation'
+	mainClass = 'mmm.gpuprobe.GpuProbeAdapterValidation'
 	def adapterWorkDir = layout.buildDirectory.dir('adapter-validation-work').get().asFile
 	workingDir adapterWorkDir
 	doFirst { adapterWorkDir.mkdirs() }

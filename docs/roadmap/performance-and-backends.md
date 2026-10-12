@@ -20,7 +20,7 @@
 
 报告记录区域尺寸、活动粒子和载体数、子步数、PCG 迭代与残差、GC 和实际耗时。GPU 内部执行用设备 timestamp 测量，调度仍使用实际经过时间。
 
-[ProductionFluidReplayValidation](../../fabric/src/test/java/cc/ecisr/mmm/simulation/ProductionFluidReplayValidation.java) 的 `defaultLiveStepsRemainBounded` 覆盖默认控制器和最大装量开发场景。JVM 预热单独报告，被测场景保持完整物理能力、原有阈值和每步收支校验。
+[ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java) 的 `defaultLiveStepsRemainBounded` 覆盖默认控制器和最大装量开发场景。JVM 预热单独报告，被测场景保持完整物理能力、原有阈值和每步收支校验。
 
 当前 CPU 已减少三类重复开销：精确数量的重复求和、候选状态的序列化往返，以及同次压力投影中反复构造矩阵。继续优化时对照原输入和轨迹，记录子步、PCG 与相变事件，确认改动只消除了重复工作。
 

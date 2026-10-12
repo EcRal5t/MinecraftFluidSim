@@ -25,11 +25,11 @@
 | `api/src/main/java` | 11 | 264 |
 | `model/src/main/java` | 129 | 17764 |
 | `solver/src/main/java` | 83 | 15865 |
-| `application/src/main/java` | 24 | 1849 |
+| `app/src/main/java` | 24 | 1849 |
 | `core/src/main/java` | 0 | 0 |
 | `fabric/src/main/java` | 158 | 25811 |
 | `fabric/src/client/java` | 14 | 1590 |
-| `gpu-probe-kernel/src/main/java` | 18 | 4129 |
+| `gpu-kernel/src/main/java` | 18 | 4129 |
 | `gpu-probe/src/main/java` | 5 | 734 |
 
 共 442 个生产 Java 源；硬门超限类为 0。
@@ -41,7 +41,7 @@
 - `api/model/solver/application` 的 loader-neutral 依赖方向和包环；
 - `simulation.persistence` 不 import live region 类型；network/item/block/client 不 import solver mutable domain；
 - 已删除的 `FluidSimulationService` 不得从任何生产源重新引入；
-- `gpu-probe-kernel` 不接触 Minecraft/Fabric/runtime/network，GPU adapter 只有 `MmmGpuProbeHostIntegration` 可接触 host runtime/network；
+- `gpu-kernel` 不接触 Minecraft/Fabric/runtime/network，GPU adapter 只有 `MmmGpuProbeHostIntegration` 可接触 host runtime/network；
 - `MmmRuntimeRegistry` 必须是唯一 `Map<MinecraftServer, …>` locator；
 - 生产类 1000 行硬上限与 carrier structural mutation 的唯一 coordinator。
 

@@ -1,6 +1,6 @@
 {
 	"required": true,
-	"package": "cc.ecisr.mmm.mixin",
+	"package": "mmm.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"minVersion": "0.8",
 	"mixins": [

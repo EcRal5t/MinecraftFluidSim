@@ -141,7 +141,7 @@
 
 ### S10a (`52cf213f`)
 
-* `cc.ecisr.mmm.units.SignedDyadic` 下沉（携带 `MAX_SIGNIFICAND_BITS` 预算，`ThermalLimits` 旧常量删除），`fluid.air→thermal` 边消除，core 包环清零并删除 CYCLE_ALLOWLIST
+* `mmm.units.SignedDyadic` 下沉（携带 `MAX_SIGNIFICAND_BITS` 预算，`ThermalLimits` 旧常量删除），`fluid.air→thermal` 边消除，core 包环清零并删除 CYCLE_ALLOWLIST
 * `FlipThermalState.MarkerContext` 上提为 thermal 包 `ThermalCarrierContext`（thermal owner 读载体真值的正式入口）
 * `ThermalAuditState` 接管审计账本所有权（每处 `withX` 链保持单次原子替换）并自带 revision 计数
 * `LiquidEnergyColumn` 接管液体序数列（能量序数存储、精确和、逐温建模、液体序数提交与审计记账，`resetMarkerTemperature` 的跨 carrier 全域审计增量留在 facade）
@@ -207,7 +207,7 @@
 ### S12a (`1db5d34`)
 
 * 将真实求解器聚合根从 `FlipFluidDomain` 机械切换为 `FluidDomain`；core、Fabric、全部现有 validation 与 GPU probe 消费者同批迁移，旧类和旧 import 归零，没有保留继承式 compatibility 双路径
-* aggregate 继续留在 `cc.ecisr.mmm.fluid`：当前 stage 热路径依赖同包的 package-private primitive access；此时强搬 `solver/domain` 会迫使内部数组变成广泛 public。`FluidDomainState` 也暂不搬到 `model/state`，因为它仍组合 `FlipParticleState` 等 fluid-side handoff 类型，先搬会制造 `model → solver` 反向依赖
+* aggregate 继续留在 `mmm.fluid`：当前 stage 热路径依赖同包的 package-private primitive access；此时强搬 `solver/domain` 会迫使内部数组变成广泛 public。`FluidDomainState` 也暂不搬到 `model/state`，因为它仍组合 `FlipParticleState` 等 fluid-side handoff 类型，先搬会制造 `model → solver` 反向依赖
 
 ### S12完成 (`fed05cf`)
 
@@ -423,7 +423,7 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 
 ### S20b
 
-* 建立 loader-neutral `gpu-probe-kernel`：Vulkan pipeline、Shaderc/VMA capability probe、四组 headless validation、checkpoint/scenario/benchmark 与 shader 资源整体迁入该 artifact；其生产源码和资源对 Minecraft/Fabric import 为零。可选 Loom 模块只剩 mod initializer、server/world collision adapter 与服务生命周期，并通过 nested kernel jar 消费实现。
+* 建立 loader-neutral `gpu-kernel`：Vulkan pipeline、Shaderc/VMA capability probe、四组 headless validation、checkpoint/scenario/benchmark 与 shader 资源整体迁入该 artifact；其生产源码和资源对 Minecraft/Fabric import 为零。可选 Loom 模块只剩 mod initializer、server/world collision adapter 与服务生命周期，并通过 nested kernel jar 消费实现。
 * 把原本混在 server service 的固定 probe scenario、CPU fallback 构造、checkpoint/manual-step 规则及 benchmark 迁入 kernel；世界 `VoxelShape` 采样仍留在 adapter，但八位 block mask 到 solver-cell 的纯展开规则由 kernel 独占。没有改变网格、迭代数、checkpoint 节拍、shader binding 或碰撞位序。
 * headless/GPU JavaExec 门移到 kernel，原 `gpu-probe:*` 任务仅保留兼容委托；原 GPU correctness 中唯一的 Brigadier/Fabric 命令树断言替换为 adapter 自有 `runAdapterValidation`，避免 kernel 反依赖 loader。独立 kernel compile、adapter main/test compile、command adapter 门与 `verifyArchitecture` 通过，架构门扫描 415 个生产源。
 
@@ -442,7 +442,7 @@ S19 完成条件复核：network/item/block/client/API/GPU 与 `MmmCommands` Bri
 
 ### S20 完成
 
-* S20 最终模块边界为 `api ← model ← solver ← application`，Fabric 显式组合这四个实际 artifact；`core` 不再拥有生产源码。可选 GPU 路径分为 loader-neutral `gpu-probe-kernel` 与 Fabric `gpu-probe` adapter，后者产出的 mod jar 已核对内嵌 kernel jar、shader 与 kernel class，不依赖开发源码目录才能装载。
+* S20 最终模块边界为 `api ← model ← solver ← application`，Fabric 显式组合这四个实际 artifact；`core` 不再拥有生产源码。可选 GPU 路径分为 loader-neutral `gpu-kernel` 与 Fabric `gpu-probe` adapter，后者产出的 mod jar 已核对内嵌 kernel jar、shader 与 kernel class，不依赖开发源码目录才能装载。
 * Vulkan native 所有权已分别闭合在 device、resources、bindings、scheduler 与 readback owner；adapter host bridge 只有一个实现，static server locator 已删除。README、system overview、routing、performance/backend roadmap 与 architecture baseline 同步为当前依赖方向、运行时数据流、模块规模和选择器入口，不再保留 S19 的过期 god-service 图示。
 * 使用 JDK 26.0.2、Java 25 target 的最终干净运行 `clean assemble runModuleValidation :fabric:runCpuValidation verifyArchitecture -PcpuValidation=milestone --offline --no-daemon` 成功：三个模块边界门、23 个 CPU 里程碑门、carrier inventory 与 422 个生产源架构扫描全部通过；可选 GPU adapter 门与真实 capability probe 也已分别通过。没有需要进游戏观察的视觉、真实 `VoxelShape` 或跨重启场景。
 * 完整 GPU correctness 仍由既有 long-run surface 门拒绝：GPU 约 1728 cells、当前 CPU conservative reseeding 为 2840 cells；在拆 owner 前的 `7af2590` 独立 worktree 中复现为 1727/2840，排除了 S20 生命周期、scheduler 或 readback 回退。该差异没有通过经验阈值、速度钳制、渲染补偿或特例掩盖；GPU backend 继续不具备生产资格，后续应实现与 CPU 同一守恒不变量下的 GPU reseeding，而不是把它误记为本轮架构迁移已修复。

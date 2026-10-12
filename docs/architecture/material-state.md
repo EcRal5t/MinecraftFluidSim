@@ -6,10 +6,10 @@
 
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
-| 材料定义与单位 | [FluidMaterialRegistry](../../model/src/main/java/cc/ecisr/mmm/fluid/FluidMaterialRegistry.java)、[BuiltinFluidMaterials](../../solver/src/main/java/cc/ecisr/mmm/fluid/BuiltinFluidMaterials.java)、[SolverUnitScale](../../model/src/main/java/cc/ecisr/mmm/units/SolverUnitScale.java) | `materials` |
-| 插入、提取和容器表示 | [MaterialTransferPlanner](../../solver/src/main/java/cc/ecisr/mmm/fluid/MaterialTransferPlanner.java)、[FluidMixture](../../model/src/main/java/cc/ecisr/mmm/transfer/FluidMixture.java) | `materials,containers` |
-| 材料界面和表面张力 | [MaterialSurfaceGeometry](../../fabric/src/client/java/cc/ecisr/mmm/client/MaterialSurfaceGeometry.java)、[SurfaceTensionWorkspace](../../solver/src/main/java/cc/ecisr/mmm/fluid/SurfaceTensionWorkspace.java) | `materials,surface-tension` |
-| 定义的持久化 | [MaterialRegistryCodec](../../fabric/src/main/java/cc/ecisr/mmm/fluid/MaterialRegistryCodec.java) | `region-state` |
+| 材料定义与单位 | [FluidMaterialRegistry](../../model/src/main/java/mmm/fluid/FluidMaterialRegistry.java)、[BuiltinFluidMaterials](../../solver/src/main/java/mmm/fluid/BuiltinFluidMaterials.java)、[SolverUnitScale](../../model/src/main/java/mmm/units/SolverUnitScale.java) | `materials` |
+| 插入、提取和容器表示 | [MaterialTransferPlanner](../../solver/src/main/java/mmm/fluid/MaterialTransferPlanner.java)、[FluidMixture](../../model/src/main/java/mmm/transfer/FluidMixture.java) | `materials,containers` |
+| 材料界面和表面张力 | [MaterialSurfaceGeometry](../../fabric/src/client/java/mmm/client/MaterialSurfaceGeometry.java)、[SurfaceTensionWorkspace](../../solver/src/main/java/mmm/fluid/SurfaceTensionWorkspace.java) | `materials,surface-tension` |
+| 定义的持久化 | [MaterialRegistryCodec](../../fabric/src/main/java/mmm/fluid/MaterialRegistryCodec.java) | `region-state` |
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。
 

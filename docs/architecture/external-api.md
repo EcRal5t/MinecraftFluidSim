@@ -6,13 +6,13 @@
 
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
-| 外部接口发现 | [MmmFabricApi](../../fabric/src/main/java/cc/ecisr/mmm/api/fabric/MmmFabricApi.java) | `protocol` |
-| 只读查询实现 | [FabricFluidQueryApi](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FabricFluidQueryApi.java)、[FluidCellInventoryView](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidCellInventoryView.java) | `protocol` |
-| 容器提交完成事件 | [CommittedEventHub](../../fabric/src/main/java/cc/ecisr/mmm/simulation/CommittedEventHub.java)、[ContainerRecoveryCoordinator](../../application/src/main/java/cc/ecisr/mmm/application/ContainerRecoveryCoordinator.java) | `protocol,containers` |
-| 探针与控制台 | [ShellFluidQuery](../../fabric/src/main/java/cc/ecisr/mmm/simulation/ShellFluidQuery.java)、[MinecraftControllerConsole](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftControllerConsole.java)、[ControllerQueryUseCase](../../application/src/main/java/cc/ecisr/mmm/application/ControllerQueryUseCase.java) | `protocol,lifecycle` |
-| 恒温源界面授权 | [ThermalReservoirUseCase](../../application/src/main/java/cc/ecisr/mmm/application/ThermalReservoirUseCase.java) | `protocol,thermal` |
+| 外部接口发现 | [MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java) | `protocol` |
+| 只读查询实现 | [FabricFluidQueryApi](../../fabric/src/main/java/mmm/simulation/FabricFluidQueryApi.java)、[FluidCellInventoryView](../../solver/src/main/java/mmm/fluid/FluidCellInventoryView.java) | `protocol` |
+| 容器提交完成事件 | [CommittedEventHub](../../fabric/src/main/java/mmm/simulation/CommittedEventHub.java)、[ContainerRecoveryCoordinator](../../app/src/main/java/mmm/application/ContainerRecoveryCoordinator.java) | `protocol,containers` |
+| 探针与控制台 | [ShellFluidQuery](../../fabric/src/main/java/mmm/simulation/ShellFluidQuery.java)、[MinecraftControllerConsole](../../fabric/src/main/java/mmm/simulation/MinecraftControllerConsole.java)、[ControllerQueryUseCase](../../app/src/main/java/mmm/application/ControllerQueryUseCase.java) | `protocol,lifecycle` |
+| 恒温源界面授权 | [ThermalReservoirUseCase](../../app/src/main/java/mmm/application/ThermalReservoirUseCase.java) | `protocol,thermal` |
 
-执行方式见 [验证指南](../maintenance/validation.md#cpu)。 Jade 入口分为[服务端](../../fabric/src/main/java/cc/ecisr/mmm/compat/jade/)和[客户端](../../fabric/src/client/java/cc/ecisr/mmm/compat/jade/)。
+执行方式见 [验证指南](../maintenance/validation.md#cpu)。 Jade 入口分为[服务端](../../fabric/src/main/java/mmm/compat/jade/)和[客户端](../../fabric/src/client/java/mmm/compat/jade/)。
 
 ## 本文内容
 
@@ -26,7 +26,7 @@
 
 ## 当前稳定范围
 
-当前冻结同步只读 Query API，以及只发布 durable container completion 的 committed-event API。loader-neutral 契约位于 `api` 模块的 `cc.ecisr.mmm.api.query`、`cc.ecisr.mmm.api.event` 与共享 typed quantity 所在的 `cc.ecisr.mmm.api.transfer`；Fabric 调用方分别通过 `MmmFabricApi.query(MinecraftServer)` 和 `MmmFabricApi.events(MinecraftServer)` 发现实现。
+当前冻结同步只读 Query API，以及只发布 durable container completion 的 committed-event API。loader-neutral 契约位于 `api` 模块的 `mmm.api.query`、`mmm.api.event` 与共享 typed quantity 所在的 `mmm.api.transfer`；Fabric 调用方分别通过 `MmmFabricApi.query(MinecraftServer)` 和 `MmmFabricApi.events(MinecraftServer)` 发现实现。
 
 Fabric 提供可选 Jade 适配，通过 Query API 读取并展示摘要。受控转移、其他类型的提交通知、WAILA/HWYLA 和其他加载器接入见 [产品路线](../roadmap/product-roadmap.md)。
 

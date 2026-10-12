@@ -6,12 +6,12 @@
 
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
-| 世界启动与定义加载 | [WorldStartupCoordinator](../../fabric/src/main/java/cc/ecisr/mmm/simulation/WorldStartupCoordinator.java)、[RegistryBundleLoader](../../fabric/src/main/java/cc/ecisr/mmm/simulation/RegistryBundleLoader.java) | `region-state` |
-| 世界能力包 | [WorldCapabilityBundleStore](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/WorldCapabilityBundleStore.java)、[WorldCapabilityStartup](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/WorldCapabilityStartup.java) | `region-state` |
-| 捕获和恢复完整状态 | [MinecraftRegionCheckpointSource](../../fabric/src/main/java/cc/ecisr/mmm/simulation/MinecraftRegionCheckpointSource.java)、[RegionCheckpointAssembler](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/RegionCheckpointAssembler.java)、[RegionCheckpointValidator](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/RegionCheckpointValidator.java)、[RegionCheckpointRestorer](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/RegionCheckpointRestorer.java) | `region-state` |
-| 文件编码与双槽提交 | [RegionStateCodec](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/RegionStateCodec.java)、[RegionGenerationStore](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/RegionGenerationStore.java) | `region-state` |
-| 删除区域与隔离旧文件 | [RemovedGenerationStore](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/RemovedGenerationStore.java)、[RemovedQuarantineStore](../../fabric/src/main/java/cc/ecisr/mmm/simulation/persistence/RemovedQuarantineStore.java) | `region-state` |
-| 登记和加载区域 | [RegionRepositoryAdapter](../../fabric/src/main/java/cc/ecisr/mmm/simulation/RegionRepositoryAdapter.java)、[FluidRegionOperations](../../fabric/src/main/java/cc/ecisr/mmm/simulation/FluidRegionOperations.java) | `region-state,region-manager` |
+| 世界启动与定义加载 | [WorldStartupCoordinator](../../fabric/src/main/java/mmm/simulation/WorldStartupCoordinator.java)、[RegistryBundleLoader](../../fabric/src/main/java/mmm/simulation/RegistryBundleLoader.java) | `region-state` |
+| 世界能力包 | [WorldCapabilityBundleStore](../../fabric/src/main/java/mmm/simulation/persistence/WorldCapabilityBundleStore.java)、[WorldCapabilityStartup](../../fabric/src/main/java/mmm/simulation/persistence/WorldCapabilityStartup.java) | `region-state` |
+| 捕获和恢复完整状态 | [MinecraftRegionCheckpointSource](../../fabric/src/main/java/mmm/simulation/MinecraftRegionCheckpointSource.java)、[RegionCheckpointAssembler](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointAssembler.java)、[RegionCheckpointValidator](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointValidator.java)、[RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java) | `region-state` |
+| 文件编码与双槽提交 | [RegionStateCodec](../../fabric/src/main/java/mmm/simulation/persistence/RegionStateCodec.java)、[RegionGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RegionGenerationStore.java) | `region-state` |
+| 删除区域与隔离旧文件 | [RemovedGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RemovedGenerationStore.java)、[RemovedQuarantineStore](../../fabric/src/main/java/mmm/simulation/persistence/RemovedQuarantineStore.java) | `region-state` |
+| 登记和加载区域 | [RegionRepositoryAdapter](../../fabric/src/main/java/mmm/simulation/RegionRepositoryAdapter.java)、[FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java) | `region-state,region-manager` |
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。
 

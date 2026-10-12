@@ -37,15 +37,15 @@ dependencies {
 	implementation project(':api')
 	implementation project(':model')
 	implementation project(':solver')
-	implementation project(':application')
+	implementation project(':app')
 	include project(':api')
 	include project(':model')
 	include project(':solver')
-	include project(':application')
+	include project(':app')
 
 	testImplementation project(path: ':model', configuration: 'testArtifacts')
 	testImplementation project(path: ':solver', configuration: 'testArtifacts')
-	testImplementation project(path: ':application', configuration: 'testArtifacts')
+	testImplementation project(path: ':app', configuration: 'testArtifacts')
 	testImplementation files(sourceSets.client.output)
 }
 
@@ -69,7 +69,7 @@ tasks.register('runCpuValidation', JavaExec) {
 	description = 'Runs selected CPU validation gates in one JVM (default: fast; use -PcpuValidation=list).'
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = 'cc.ecisr.mmm.validation.CpuValidationSuite'
+	mainClass = 'mmm.validation.CpuValidationSuite'
 	enableAssertions = true
 	args providers.gradleProperty('cpuValidation').getOrElse('fast')
 	def validationWorkDir = layout.buildDirectory.dir('cpu-validation-work').get().asFile
@@ -82,7 +82,7 @@ tasks.register('runStepBenchmark', JavaExec) {
 	description = 'Measures short offline production steps; no hardware-dependent pass threshold.'
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = 'cc.ecisr.mmm.simulation.ProductionStepBenchmark'
+	mainClass = 'mmm.simulation.ProductionStepBenchmark'
 	enableAssertions = true
 	def benchmarkWorkDir = layout.buildDirectory.dir('step-benchmark-work').get().asFile
 	workingDir benchmarkWorkDir
@@ -94,7 +94,7 @@ tasks.register('runConvectionExperiment', JavaExec) {
 	description = 'Measures registry-derived Rayleigh growth; --verify-growth checks linear response and mesh convergence.'
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = 'cc.ecisr.mmm.fluid.LiquidConvectionExperiment'
+	mainClass = 'mmm.fluid.LiquidConvectionExperiment'
 	enableAssertions = true
 }
 
@@ -103,7 +103,7 @@ tasks.register('runMarkerDistributionExperiment', JavaExec) {
 	description = 'Measures marker transport, solid-wall profiles, quadrature and resampling errors.'
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = 'cc.ecisr.mmm.fluid.MarkerDistributionExperiment'
+	mainClass = 'mmm.fluid.MarkerDistributionExperiment'
 	enableAssertions = true
 }
 
@@ -112,7 +112,7 @@ tasks.register('runCompositeBenchmark', JavaExec) {
 	description = 'Measures observable composite workloads; see validation.md for scene scope.'
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = 'cc.ecisr.mmm.simulation.CompositeStepBenchmark'
+	mainClass = 'mmm.simulation.CompositeStepBenchmark'
 	enableAssertions = true
 	def scene = providers.gradleProperty('benchmarkScene').getOrElse('thermochem')
 	args scene, providers.gradleProperty('benchmarkWarmup').getOrElse('20'),
@@ -128,7 +128,7 @@ tasks.register('runNormalPlayFuzz', JavaExec) {
 	group = 'verification'
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
-	mainClass = 'cc.ecisr.mmm.simulation.ControllerInventoryDurabilityValidation'
+	mainClass = 'mmm.simulation.ControllerInventoryDurabilityValidation'
 	enableAssertions = true
 	if (project.hasProperty('fuzzArgs')) args project.property('fuzzArgs').toString().split(',')
 	def validationWorkDir = layout.buildDirectory.dir('cpu-validation-work').get().asFile
@@ -141,7 +141,7 @@ tasks.register('runArchitectureValidation', JavaExec) {
 	description = 'Scans production sources for dependency-direction, locator, cycle and size regressions.'
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.output
-	mainClass = 'cc.ecisr.mmm.validation.ArchitectureDependencyValidation'
+	mainClass = 'mmm.validation.ArchitectureDependencyValidation'
 	enableAssertions = true
 	args rootProject.projectDir.absolutePath
 }

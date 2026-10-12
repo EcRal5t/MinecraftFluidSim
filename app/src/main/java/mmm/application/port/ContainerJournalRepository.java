@@ -1,0 +1,17 @@
+package mmm.application.port;
+
+import mmm.transfer.ContainerTransferActor;
+import mmm.transfer.ContainerTransferJournal;
+
+import java.io.IOException;
+import java.util.UUID;
+
+/** Durable container WAL access plus the in-memory recovery index that shadows it. */
+public interface ContainerJournalRepository {
+	boolean hasPending(UUID regionId, ContainerTransferActor actor);
+
+	void write(ContainerTransferJournal journal) throws IOException;
+
+	void delete(UUID transactionId) throws IOException;
+
+}

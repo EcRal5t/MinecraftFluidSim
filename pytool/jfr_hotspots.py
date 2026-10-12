@@ -1,7 +1,7 @@
 """Aggregate JFR execution samples into self-time and inclusive-time method tables.
 
 Usage:
-    uv run pytool/jfr_hotspots.py <recording.jfr> [--top N] [--module cc.ecisr.mmm]
+    uv run pytool/jfr_hotspots.py <recording.jfr> [--top N] [--module mmm]
 
 The JDK `jfr` tool is resolved from `JAVA_HOME`, with the repository's documented local JDK
 as the fallback.
@@ -110,7 +110,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("recording", type=Path)
     parser.add_argument("--top", type=int, default=25)
-    parser.add_argument("--module", default="cc.ecisr.mmm")
+    parser.add_argument("--module", default="mmm")
     parser.add_argument("--callers", metavar="PATTERN",
                         help="split the samples containing PATTERN by their immediate caller")
     parser.add_argument("--callees", metavar="PATTERN",

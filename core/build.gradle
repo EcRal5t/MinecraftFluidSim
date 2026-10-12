@@ -13,7 +13,7 @@ dependencies {
 	api project(':api')
 	api project(':model')
 	api project(':solver')
-	api project(':application')
+	api project(':app')
 }
 
 java {

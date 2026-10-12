@@ -37,7 +37,7 @@ tasks.register('runModelValidation', JavaExec) {
 	description = 'Runs immutable-state and state-owner validation without Minecraft.'
 	dependsOn tasks.named('testClasses')
 	classpath = sourceSets.test.runtimeClasspath
-	mainClass = 'cc.ecisr.mmm.thermal.ThermalOwnerStoreValidation'
+	mainClass = 'mmm.thermal.ThermalOwnerStoreValidation'
 	enableAssertions = true
 }
 
