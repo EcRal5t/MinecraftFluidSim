@@ -3,7 +3,9 @@ package cc.ecisr.mmm.fluid.air;
 import cc.ecisr.mmm.chemistry.ExactRational;
 import cc.ecisr.mmm.units.SignedDyadic;
 
+import java.math.BigInteger;
 import java.util.List;
+import java.util.TreeMap;
 
 /** Standalone M5 gas-network gate: isothermal state equation, finite-rate orifice equalization and the exact inventory ledger. */
 public final class AirNetworkValidation {
@@ -19,6 +21,7 @@ public final class AirNetworkValidation {
 		validateSplitMergeVentLedger();
 		validateAmbientInteraction();
 		validateComponentTransport();
+		validateExactTopologyPartition();
 		validateComponentSpeciesBoundary();
 		validatePhaseColumnTake();
 		validateRegionalComponentAggregation();
@@ -398,6 +401,70 @@ public final class AirNetworkValidation {
 		GasInventory subQuantumMass = new GasInventory(List.of(
 				new GasComponentAmount(BuiltinGasDefinitions.AIR, 2, Double.MIN_VALUE, List.of(), 0)));
 		expectThrow(() -> subQuantumMass.splitTotal(1), "unrepresentable positive gas child mass");
+	}
+
+	private static void validateExactTopologyPartition() {
+		GasInventory source = new GasInventory(List.of(
+				new GasComponentAmount("test:a", 61, .125, List.of(
+						new GasComponentAmount.SpeciesAmount("test:s", 101)), -.03125),
+				new GasComponentAmount("test:b", 17, 1.5, List.of(
+						new GasComponentAmount.SpeciesAmount("test:s", 13)), .25)));
+		var normal = source.partition(List.of(ExactRational.ZERO, ExactRational.ONE.divide(4), ExactRational.of(3).divide(4)));
+		check(normal.equals(source.partition(new long[] {0, 1, 3})),
+				"Dyadic topology weights changed a normal partition's stored columns");
+		checkPartitionColumns(source, normal);
+		GasInventory large = new GasInventory(List.of(new GasComponentAmount("test:a", Long.MAX_VALUE,
+				.125, List.of(new GasComponentAmount.SpeciesAmount("test:s", 7)), -.03125)));
+		var before = new GasInventory(large.components());
+		for (int power : new int[] {60, 1074}) {
+			BigInteger denominator = BigInteger.ONE.shiftLeft(power);
+			var parts = large.partition(List.of(new ExactRational(BigInteger.ONE, denominator), ExactRational.ONE));
+			// The first quota is Long.MAX_VALUE/(2^power+1); the second has the complementary remainder.
+			BigInteger divisor = denominator.add(BigInteger.ONE);
+			BigInteger[] quota = BigInteger.valueOf(Long.MAX_VALUE).divideAndRemainder(divisor);
+			long expected = quota[0].longValueExact() + (quota[1].shiftLeft(1).compareTo(divisor) >= 0 ? 1 : 0);
+			check(parts.getFirst().standardVolumeNanos() == expected
+						&& parts.getLast().standardVolumeNanos() == Long.MAX_VALUE - expected,
+					"Positive tiny topology weight was replaced by a minimum integer weight");
+			checkPartitionColumns(large, parts);
+		}
+		check(large.equals(before), "Read-only rational topology partition changed its source inventory");
+		for(boolean reverse:new boolean[]{false,true}) {
+			AirNetwork network=new AirNetwork();int node=network.addNode(3e-10,1e-9);
+			int[] split=network.splitNode(node,reverse?2.99e-10:1e-12,reverse?1e-12:2.99e-10);
+			check(network.inventory(split[reverse?1:0]).isEmpty() && network.inventory(split[reverse?0:1]).standardVolumeNanos()==1
+					&& network.auditClosed(),"Public cavity split replaced sub-nano volume proportions by equal minimum weights");
+		}
+	}
+
+	private static void checkPartitionColumns(GasInventory source, List<GasInventory> parts) {
+		for (GasComponentAmount original : source.components()) {
+			long nanos = 0;
+			var species = new TreeMap<String, Long>();
+			SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
+			GasComponentAmount pivot = null;
+			for (GasInventory part : parts) {
+				GasComponentAmount portion = part.component(original.componentId());
+				if (portion == null) continue;
+				nanos = Math.addExact(nanos, portion.standardVolumeNanos());
+				mass = mass.add(SignedDyadic.of(portion.mass()));
+				residual = residual.add(SignedDyadic.of(portion.massResidual()));
+				for (var amount : portion.species()) species.merge(amount.speciesId(), amount.amountQuanta(), Math::addExact);
+				if (pivot == null || portion.standardVolumeNanos() > pivot.standardVolumeNanos()) pivot = portion;
+			}
+			check(nanos == original.standardVolumeNanos(), "Rational topology partition lost component nanos");
+			check(species.size() == original.species().size(), "Rational topology partition changed species membership");
+			for (var amount : original.species()) check(species.get(amount.speciesId()) == amount.amountQuanta(),
+					"Rational topology partition lost integer species");
+			double[] stored = {original.mass(), original.massResidual()}, pivotColumns = {pivot.mass(), pivot.massResidual()};
+			SignedDyadic[] totals = {mass, residual};
+			for (int column = 0; column < totals.length; column++) {
+				SignedDyadic difference = totals[column].subtract(SignedDyadic.of(stored[column]));
+				if (difference.signum() < 0) difference = difference.negate();
+				SignedDyadic halfUlp = SignedDyadic.of(Math.ulp(pivotColumns[column])).multiply(SignedDyadic.of(.5));
+				check(difference.compareTo(halfUlp) <= 0, "Rational topology partition exceeded its pivot rounding bound");
+			}
+		}
 	}
 
 	private static void validateComponentSpeciesBoundary() {

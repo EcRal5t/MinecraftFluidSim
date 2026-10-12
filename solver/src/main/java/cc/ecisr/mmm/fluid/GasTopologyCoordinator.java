@@ -96,6 +96,7 @@ final class GasTopologyCoordinator {
 						domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
 						occupancy, false);
 		int[] expected = state.cellNodeOrdinal(), actual = result.cellNodeId();
+		int[] expectedLineage = state.cellLineageOrdinal(), actualLineage = result.cellLineageNodeId();
 		if (result.sealedNodeCount() != state.nodes().size()) {
 			throw new IllegalArgumentException("Restored gas sealed-node count does not match derived topology");
 		}
@@ -103,6 +104,8 @@ final class GasTopologyCoordinator {
 			int derived = actual[cell] > 0 ? actual[cell] : 0;
 			if (expected[cell] != derived) throw new IllegalArgumentException(
 					"Restored gas topology differs from committed membership at cell " + cell);
+			if (expectedLineage[cell] != actualLineage[cell]) throw new IllegalArgumentException(
+					"Restored gas topology differs from committed lineage at cell " + cell);
 		}
 		for (int node = 0; node < state.nodes().size(); node++) {
 			int minimum = Integer.MAX_VALUE;

@@ -10,7 +10,7 @@ import java.util.List;
 final class GasComplementGeometry {
 	/** Stable microbox key; normalizedVolume is the exact fraction of one whole cell, volume is its SI observation. */
 	record Piece(int id, int cell, int micro, double volume, ExactRational normalizedVolume,
-	             GasGeometryOverlap.HalfSpace dryPlane) { }
+	             GasGeometryOverlap.HalfSpace dryPlane, PlicPlaneOffset.Result offsetBracket) { }
 	/** Oriented along the positive axis; a fixed cut restriction retains finite-rate chamber transport. */
 	record Port(int first, int second, int axis, double area, boolean fullCutConnection) { }
 	record ExteriorPort(int piece, int axis, int sign, double area) { }
@@ -19,16 +19,18 @@ final class GasComplementGeometry {
 	private final int sizeX, sizeY, sizeZ;
 	private final double cellVolumeCubicMeters;
 	private final byte[] collisionMasks;
+	private final SignedDyadic[] poreVolumes;
 	private final Piece[] byId;
 	private final List<Piece> pieces;
 	private final List<Port> ports;
 	private final List<ExteriorPort> exteriorPorts;
 
-	private GasComplementGeometry(int sizeX, int sizeY, int sizeZ, double cellVolumeCubicMeters, byte[] collisionMasks, Piece[] byId,
+	private GasComplementGeometry(int sizeX, int sizeY, int sizeZ, double cellVolumeCubicMeters, byte[] collisionMasks, SignedDyadic[] poreVolumes, Piece[] byId,
 			List<Piece> pieces, List<Port> ports, List<ExteriorPort> exteriorPorts) {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
 		this.cellVolumeCubicMeters = cellVolumeCubicMeters;
 		this.collisionMasks = collisionMasks.clone();
+		this.poreVolumes = poreVolumes.clone();
 		this.byId = byId;
 		this.pieces = List.copyOf(pieces);
 		this.ports = List.copyOf(ports);
@@ -52,12 +54,18 @@ final class GasComplementGeometry {
 		ExactRational physicalScale = exact(SignedDyadic.of(h3));
 		var byId = new Piece[Math.multiplyExact(count, 8)];
 		var pieces = new ArrayList<Piece>();
+		var poreVolumes = new SignedDyadic[count];
 		for (int cell = 0; cell < count; cell++) {
 			if (phase.collisionMask(cell) != cut.mask(cell))
 				throw new IllegalArgumentException("Gas complement PLIC collision geometry differs at cell " + cell);
+			poreVolumes[cell] = phase.poreVolume(cell);
 			if (solid[cell]) continue;
+			int[] supports = CellRemapMicroTopology.components(cut.mask(cell));
+			SignedDyadic[] capacities = CellRemapMicroTopology.capacities(cut.mask(cell),poreVolumes[cell]);
+			int positivePores = 0;
+			for(int i=0;i<supports.length;i++) if(capacities[i].signum()>0) positivePores |= supports[i];
 			for (int slot = 0; slot < 8; slot++) {
-				if (!open(cut, cell, slot)) continue;
+				if ((positivePores & 1<<slot)==0) continue;
 				double fraction = phase.liquidFractionExact(cell,slot);
 				double nx = phase.planeNormal(cell,slot,0), ny = phase.planeNormal(cell,slot,1), nz = phase.planeNormal(cell,slot,2);
 				double offset = phase.planeOffset(cell,slot);
@@ -75,7 +83,7 @@ final class GasComplementGeometry {
 				if (normalizedVolume.isZero()) continue;
 				double volume = normalizedVolume.multiply(physicalScale).toDouble();
 				if (!(volume > 0 && Double.isFinite(volume))) throw blocked("Positive gas piece volume is not representable", cell);
-				Piece piece = new Piece(8 * cell + slot, cell, slot, volume, normalizedVolume, plane);
+				Piece piece = new Piece(8 * cell + slot, cell, slot, volume, normalizedVolume, plane, phase.offsetBracket(cell,slot));
 				byId[piece.id()] = piece; pieces.add(piece);
 			}
 		}
@@ -105,7 +113,7 @@ final class GasComplementGeometry {
 						GasFaceIntersection.area(phase, cell, -1, axis, 1, 0, tangent, other, .5), h2);
 			}
 		}
-		return new GasComplementGeometry(sizeX, sizeY, sizeZ, h3, cut.copyMicroMasks(), byId, pieces, ports, exterior);
+		return new GasComplementGeometry(sizeX, sizeY, sizeZ, h3, cut.copyMicroMasks(), poreVolumes, byId, pieces, ports, exterior);
 	}
 
 	private static ExactRational exact(SignedDyadic value) {
@@ -146,6 +154,7 @@ final class GasComplementGeometry {
 
 	double cellVolumeCubicMeters() { return cellVolumeCubicMeters; }
 	int collisionMask(int cell) { return Byte.toUnsignedInt(collisionMasks[cell]); }
+	SignedDyadic poreVolume(int cell) { return poreVolumes[cell]; }
 	int sizeX() { return sizeX; }
 	int sizeY() { return sizeY; }
 	int sizeZ() { return sizeZ; }

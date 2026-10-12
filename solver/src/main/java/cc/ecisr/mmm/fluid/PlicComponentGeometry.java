@@ -6,8 +6,9 @@ import java.math.BigInteger;
 
 /** Independent PLICs for the fixed face-connected supports of a partially filled cell. */
 final class PlicComponentGeometry {
-	record Plane(int support, double fraction, double porosity, float nx, float ny, float nz, double offset) {
+	record Plane(int support, double fraction, double porosity, float nx, float ny, float nz, PlicPlaneOffset.Result bracket) {
 		float normal(int axis) { return axis == 0 ? nx : axis == 1 ? ny : nz; }
+		double offset() { return bracket == null ? 0 : bracket.offset(); }
 	}
 	private final Plane[] byMicro = new Plane[8];
 
@@ -21,7 +22,7 @@ final class PlicComponentGeometry {
 				throw new MechanicalTimeRefinement(2,"Liquid inventory exceeds its connected pore capacity");
 			ExactRational exactFraction = capacity.signum() == 0 ? ExactRational.ZERO : ratio(stock.volume(),capacity);
 			double fraction = exactFraction.toDouble();
-			float[] normal = {0,0,0}; double offset = 0;
+			float[] normal = {0,0,0}; PlicPlaneOffset.Result bracket = null;
 			if (fraction > 0 && fraction < 1) {
 				int support = stock.supportMask(), count = Integer.bitCount(support);
 				int[] low = new int[3];
@@ -39,9 +40,9 @@ final class PlicComponentGeometry {
 				double length = Math.sqrt((double)normal[0]*normal[0]+(double)normal[1]*normal[1]+(double)normal[2]*normal[2]);
 				if (length == 0) normal[1] = 1;
 				else for (int axis = 0; axis < 3; axis++) normal[axis] = (float)(normal[axis]/length);
-				offset = PlicPlaneOffset.solve(support,normal[0],normal[1],normal[2],exactFraction.multiply(count).divide(8)).offset();
+				bracket = PlicPlaneOffset.solve(support,normal[0],normal[1],normal[2],exactFraction.multiply(count).divide(8));
 			}
-			Plane plane = new Plane(stock.supportMask(),fraction,capacity.toDouble()*8/Integer.bitCount(stock.supportMask()),normal[0],normal[1],normal[2],offset);
+			Plane plane = new Plane(stock.supportMask(),fraction,capacity.toDouble()*8/Integer.bitCount(stock.supportMask()),normal[0],normal[1],normal[2],bracket);
 			for (int micro = 0; micro < 8; micro++) if ((plane.support & 1 << micro) != 0) result.byMicro[micro] = plane;
 		}
 		return result;

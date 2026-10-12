@@ -19,6 +19,7 @@ public final class AirCavityScannerValidation {
 		validateMultipleSealedCavities();
 		validatePartialFaceGeometricEdge();
 		validateInterfaceResidualAttribution();
+		validateGasRestoreLineage();
 		validateScanBudget();
 		System.out.println("M5 cavity scanner gate passed: ambient/sealed classification, available volume, "
 				+ "geometric edges and budget stop");
@@ -27,6 +28,7 @@ public final class AirCavityScannerValidation {
 	private static void validateMicroGasGeometry() {
 		validateMicroGasOverlap();
 		validateComponentLiquidGeometry();
+		validateMicroGasPoreCapacity();
 		Grid grid=new Grid(2,2,2,.5F);var phase=new FlipPressurePhaseGeometry(2,2,2);
 		phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
 		var geometry=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,phase);
@@ -73,6 +75,24 @@ public final class AirCavityScannerValidation {
 		check(strip>0 && Double.doubleToLongBits(strip)==Double.doubleToLongBits(expected),"A true narrow gas port lost its exact physical area");
 	}
 
+	private static void validateMicroGasPoreCapacity() {
+		Grid grid=new Grid(2,2,2,1);java.util.Arrays.fill(grid.solid,true);
+		for(int cell=0;cell<8;cell++)grid.cutCells.replaceMask(cell,255);
+		grid.solid[0]=false;grid.cutCells.replaceMask(0,126);
+		var pore=new cc.ecisr.mmm.granular.GranularCouplingFields(2,2,2,1);
+		var phase=new FlipPressurePhaseGeometry(2,2,2);long[] fixed=new long[8];
+		for(long volume:new long[]{1L<<22,(1L<<22)-1}) {
+			fixed[0]=volume;pore.setFixedCellSvq(fixed);
+			phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,pore,new boolean[8]);
+			var gas=GasComplementGeometry.capture(2,2,2,1,grid.solid,grid.cutCells,phase);
+			check(gas.poreVolume(0).equals(cc.ecisr.mmm.units.SignedDyadic.of((1L<<22)-volume,-24)),"Gas geometry changed exact pore capacity");
+			if(volume==1L<<22) check(gas.pieces().isEmpty() && gas.ports().isEmpty() && GasChamberTopology.capture(gas,true).chambers().isEmpty(),
+					"A fully occupied pore component acquired a gas chamber");
+			else check(gas.pieces().size()==1 && gas.piece(0)==null && gas.piece(7)!=null,
+					"A zero-capacity disconnected component acquired gas support");
+		}
+	}
+
 	private static void validateComponentLiquidGeometry() {
 		for (int corner = 0; corner < 8; corner++) for (float[] stock : List.of(
 				new float[]{.0625F,.03125F},new float[]{.03125F,.0625F},new float[]{.0625F,.0625F},new float[]{0,.125F})) {
@@ -116,6 +136,17 @@ public final class AirCavityScannerValidation {
 			new LiquidFluxGeometry(d).sweptMoments(0,peer,axis,.5,true,phase.planeNormal(0,0),phase.planeNormal(0,1),phase.planeNormal(0,2),phase.planeOffset(0),swept,1<<corner,1);
 			check(Math.abs(swept[0]-.0625)<2e-15,"Shared-face swept volume used another component's PLIC");
 		}
+		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=126;
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
+		float[] pv={.125F,.2F,.3F,.03F,.8F,.875F,.7F,.06F};
+		d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09F,pv,new float[6],masks));d.ensureInventoryGrid();
+		var gas=GasComplementGeometry.capture(2,2,2,1,d.geometry.solid,d.geometry.cutCells,d.pressurePhaseGeometry);
+		var capacities=GasComponentCapacity.capture(d,gas,null);
+		check(capacities.stream().anyMatch(c->!c.geometricDifferenceNormalized().isZero()),"PLIC capacity certificate lacked an inexact-root control");
+		check(gas.piece(0).offsetBracket()!=null,"Gas piece lost its captured inverse certificate");
+		d.particles.setVolume(0,.04F);
+		try {GasComponentCapacity.capture(d,gas,null);throw new AssertionError("Stale gas geometry accepted a different raw liquid stock");}
+		catch(GasTopologyBlockedException expected) { }
 	}
 
 	private static void validateMicroGasOverlap() {
@@ -158,6 +189,70 @@ public final class AirCavityScannerValidation {
 						"Repeated gas plane double-counted its overlap");
 			}
 		}
+	}
+
+	private static void validateGasRestoreLineage() {
+		var config = new FluidSolverConfig(1, 1000, 0, .01F, 200, 1e-5F, .5F, 1e-4F, 0);
+		byte[] masks = new byte[8]; masks[1] = (byte) 255;
+		float[] positions = new float[36];
+		positions[0] = positions[1] = positions[2] = .25F; positions[3] = .125F;
+		for (int slot = 0; slot < 8; slot++) {
+			int base = 4 * (slot + 1);
+			positions[base] = .25F + .5F * (slot & 1);
+			positions[base + 1] = 1.25F + .5F * (slot >> 1 & 1);
+			positions[base + 2] = .25F + .5F * (slot >> 2 & 1);
+			positions[base + 3] = .125F;
+		}
+		var particles = new FlipParticleState(2, 2, 2, 1, 9, 1.125F, positions, new float[27], masks);
+		var source = gasRestoreTarget(config, particles);
+		var committed = source.bootstrapGasState("");
+		check(committed.cellNodeOrdinal()[0] == 0 && committed.cellLineageOrdinal()[0] == 1
+				&& committed.cellLineageOrdinal()[1] == -1 && committed.cellLineageOrdinal()[2] == -1,
+				"Gas restore fixture must distinguish partial gas, solid and exact full-liquid cells");
+		var valid = gasRestoreTarget(config, particles);
+		valid.restoreGasState(committed, cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
+		var restored = valid.exportGasState("");
+		check(java.util.Arrays.equals(restored.cellNodeOrdinal(), committed.cellNodeOrdinal())
+				&& java.util.Arrays.equals(restored.cellLineageOrdinal(), committed.cellLineageOrdinal())
+				&& restored.nodes().equals(committed.nodes())
+				&& restored.externalSource().equals(committed.externalSource())
+				&& restored.escapedSink().equals(committed.escapedSink())
+				&& restored.massRoundoff().equals(committed.massRoundoff())
+				&& restored.residualRoundoff().equals(committed.residualRoundoff()),
+				"Valid gas restoration changed complete topology or inventory");
+		for (int cell : new int[]{0, 1, 2}) {
+			int[] lineage = committed.cellLineageOrdinal(); lineage[cell] = 0;
+			var altered = new cc.ecisr.mmm.fluid.air.GasStateSnapshot(2, 2, 2, committed.registryFingerprint(), "",
+					committed.nodes(), committed.cellNodeOrdinal(), lineage, committed.externalSource(), committed.escapedSink(),
+					committed.massRoundoff(), committed.residualRoundoff());
+			var rejected = gasRestoreTarget(config, particles);
+			var network = rejected.gasState.network;
+			long gasRevision = network.revision(), carrierRevision = rejected.carrierMutationRevision();
+			var externalSource = network.externalSource(); var escapedSink = network.escapedSink();
+			var massRoundoff = network.massRoundoff(); var residualRoundoff = network.residualRoundoff();
+			try {
+				rejected.restoreGasState(altered, cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
+				throw new AssertionError("Gas restoration accepted altered lineage at cell " + cell);
+			} catch (IllegalArgumentException expected) {
+				check(expected.getMessage().contains("committed lineage at cell " + cell),
+						"Gas restoration rejected a different property instead of the complete lineage");
+			}
+			check(rejected.gasState.network == network && network.revision() == gasRevision && network.nodeCount() == 0
+					&& network.externalSource().equals(externalSource) && network.escapedSink().equals(escapedSink)
+					&& network.massRoundoff().equals(massRoundoff) && network.residualRoundoff().equals(residualRoundoff)
+					&& rejected.gasState.cellNodeId == null && rejected.gasState.cellLineageNodeId == null
+					&& rejected.gasState.previousSealedNodeCount == 0 && !rejected.gasState.pressureActive
+					&& rejected.carrierMutationRevision() == carrierRevision
+					&& java.util.Arrays.equals(rejected.exportParticleState().copyPositionVolume(), positions)
+					&& java.util.Arrays.equals(rejected.exportParticleState().copyCollisionMicroMasks(), masks),
+					"Rejected gas lineage restoration changed authoritative owners");
+		}
+	}
+
+	private static FluidDomain gasRestoreTarget(FluidSolverConfig config, FlipParticleState particles) {
+		var domain = new FluidDomain(2, 2, 2, config);
+		domain.sealDomainBoundary(); domain.restoreParticleState(particles);
+		return domain;
 	}
 
 	private static void validateControllerExtentIsSealed() {

@@ -1,6 +1,8 @@
 package cc.ecisr.mmm.fluid.air;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.chemistry.ExactRational;
+import java.math.BigInteger;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -501,19 +503,18 @@ public final class AirNetwork {
 		if (childAvailableVolumes.length < 2) {
 			throw new IllegalArgumentException("A split needs at least two children");
 		}
-		double availableSum = 0.0;
+		boolean positiveVolume = false;
+		var weights = new ArrayList<ExactRational>(childAvailableVolumes.length);
 		for (double volume : childAvailableVolumes) {
-			if (!(volume >= 0.0) || Double.isNaN(volume)) {
+			if (!(volume >= 0.0) || !Double.isFinite(volume)) {
 				throw new IllegalArgumentException("Child available volumes must be finite and non-negative");
 			}
-			availableSum += volume;
+			positiveVolume |= volume>0;
+			SignedDyadic value = SignedDyadic.of(volume);
+			weights.add(value.exponent()>=0 ? new ExactRational(value.significand().shiftLeft(value.exponent()),BigInteger.ONE)
+					: new ExactRational(value.significand(),BigInteger.ONE.shiftLeft(-value.exponent())));
 		}
-		if (!(availableSum > 0.0)) throw new IllegalArgumentException("A split needs positive available volume");
-		long[] weights = new long[childAvailableVolumes.length];
-		for (int child = 0; child < childAvailableVolumes.length; child++) {
-			weights[child] = childAvailableVolumes[child] == 0.0 ? 0L
-					: Math.max(1L, AirNode.toNanos(childAvailableVolumes[child]));
-		}
+		if (!positiveVolume) throw new IllegalArgumentException("A split needs positive available volume");
 		List<GasInventory> partitions = source.inventory().partition(weights);
 		MassColumns before = liveMassColumns();
 		int[] childIds = new int[childAvailableVolumes.length];

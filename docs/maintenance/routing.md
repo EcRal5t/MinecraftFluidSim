@@ -70,6 +70,8 @@
 
 PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/src/main/java/cc/ecisr/mmm/fluid/PlicPlaneOffset.java)，单平面盒积分见 [MicroBoxPlaneVolume](../../solver/src/main/java/cc/ecisr/mmm/fluid/MicroBoxPlaneVolume.java)。组件气体库存容量及其几何差额见 [GasComponentCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComponentCapacity.java)；环境截留量分辨率检查在 `GasTopologyCoordinator.ambientInventory`，验证为 `AirCavityScannerValidation.validateAmbientCaptureResolution`。
 
+完整气腔归属恢复前校核在 `GasTopologyCoordinator.restore`，验证为 `AirCavityScannerValidation.validateGasRestoreLineage`；零孔隙容量的气体块过滤验证为 `validateMicroGasPoreCapacity`。几何权重的精确气体库存分配在 `GasInventory.partition(List<ExactRational>)`。
+
 | 修改内容 | 首先打开 | 需要了解的数据和算法 |
 |---|---|---|
 | 力学计算顺序 | [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)、[MechanicalStageAssembly](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStageAssembly.java) | [流体求解器](../architecture/fluid-solver.md) |

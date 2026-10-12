@@ -37,7 +37,7 @@
 
 气体块读取其固定连通分量的独立 PLIC。每块保留精确单元归一化有理数体积，乘当前 `h³` 后一次舍入为 SI 观察值。气腔几何观察值精确汇总各块的 binary64 体积再舍入一次，`volumeErrorBound` 向外包住叶子与气腔两级舍入；平面求逆余差及库存容量补量各自结算。
 
-单平面微盒体积由 [MicroBoxPlaneVolume](../../solver/src/main/java/cc/ecisr/mmm/fluid/MicroBoxPlaneVolume.java) 的精确盒积分求得；每块保留捕获时的干侧半空间，几何对象保存碰撞掩码副本并校核 PLIC 使用的掩码。[GasComponentCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComponentCapacity.java) 直接读取原始液体库存，按固定连通分量计算扣除固体后的剩余容量，同时保留精确几何气体体积与两者差额。正库存容量缺少干区时明确拒绝计算。
+单平面微盒体积由 [MicroBoxPlaneVolume](../../solver/src/main/java/cc/ecisr/mmm/fluid/MicroBoxPlaneVolume.java) 的精确盒积分求得；每块保留捕获时的干侧半空间与 PLIC 求逆证书，几何对象保存碰撞掩码及精确孔隙容量副本。零孔隙容量的固定连通分量省去气体块。[GasComponentCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComponentCapacity.java) 直接读取原始液体库存，按固定连通分量计算扣除固体后的剩余容量，同时保留精确几何气体体积与两者差额。计算校核原始库存目标、捕获孔隙容量及相邻阈值体积区间；几何过期、容量差额超出证书或正库存容量缺少干区时明确拒绝计算。
 
 [GasFaceIntersection](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
 
@@ -52,6 +52,8 @@
 是否成为腔体不靠分类决定，腔体带什么初始库存才需要区分，而那由 lineage 分配处负责：无旧 owner 的新 component 是显式真空节点，库存、质量与 `U` 均为零；开放域里上一代明确连接 ambient 的实际体积若本代被夹断为 sealed，则按该体积截留环境库存，即使它同时并入一个既有有限气泡也一样。
 
 环境截留量按标准体积 nanos 就近舍入。正截留体积舍入为零时，在库存提交前抛出 `GasTopologyBlockedException`。整数舍入对应的压力误差为 `|Δp| ≤ p₀·(0.5×10⁻⁹ m³)/V`，其中 `V` 是截留体积；体积到 nanos 的 binary64 换算误差另计。
+
+`AirNetwork.splitNode` 按各子腔 binary64 可用体积的精确比值分配库存，使用 `GasInventory.partition(List<ExactRational>)` 的最大余数分配；体积权重与库存 nanos 分别保留其单位。逐组件 nanos 与 species 整数闭合，质量和质量残差的最终舍入差额留在该组件的最大份额。
 
 marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 component 也拿不到库存。六邻域 flood fill 只跨越接近全开的 face；部分开放 face 不合并 component，而是形成有限速率 geometric edge。
 
@@ -203,7 +205,7 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 
 ## 持久化
 
-气体作为完整热区域 generation 的 required payload 发布。快照和逐 section payload 同时保存 `cellNodeOrdinal`（拓扑 membership）与 `cellLineageOrdinal`（包含部分充液格的气体归属）。两列使用同一 minimum-cell 顺序的节点 ordinal；lineage 的 `-1` 表示无归属，`0` 表示 ambient。恢复时从已提交的液体、颗粒和 coherent 库存共同推导几何后重扫。气体节点先于其热能恢复，因此重扫直接读取同一输入热快照中的 coherent 体积，避免使用尚未恢复的热状态，并用完整 lineage 保留仅存在于部分充液格中的气泡。随后要求节点数、minimum-cell key、逐格 membership、库存和能量 ordinal 一致；差异归入状态恢复失败。
+气体作为完整热区域 generation 的 required payload 发布。快照和逐 section payload 同时保存 `cellNodeOrdinal`（拓扑 membership）与 `cellLineageOrdinal`（包含部分充液格的气体归属）。两列使用同一 minimum-cell 顺序的节点 ordinal；lineage 的 `-1` 表示无归属，`0` 表示 ambient。恢复时从已提交的液体、颗粒和 coherent 库存共同推导几何后重扫。气体节点先于其热能恢复，因此重扫直接读取同一输入热快照中的 coherent 体积，避免使用尚未恢复的热状态，并用完整 lineage 保留仅存在于部分充液格中的气泡。随后要求节点数、minimum-cell key、逐格 membership 与完整 lineage、库存和能量 ordinal 一致；差异在发布恢复状态之前拒绝。
 
 持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账和 source/sink/roundoff 审计；显式真空 node 以空 component inventory 原样保存。membership 的正 ordinal 必须与同格 lineage 一致，缺失或越界的 lineage 拒绝恢复。
 

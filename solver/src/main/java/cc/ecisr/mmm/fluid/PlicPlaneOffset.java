@@ -5,7 +5,8 @@ import cc.ecisr.mmm.units.SignedDyadic;
 
 /** Inverts the exact selected-microbox volume CDF on the binary64 offset lattice. */
 final class PlicPlaneOffset {
-	record Result(double offset, double lower, double upper, ExactRational lowerVolume, ExactRational upperVolume) { }
+	record Result(double offset, double lower, double upper, ExactRational lowerVolume, ExactRational upperVolume,
+	              ExactRational targetVolume) { }
 	private PlicPlaneOffset() { }
 
 	static Result solve(int supportMask, float nx, float ny, float nz, ExactRational target) {
@@ -46,7 +47,7 @@ final class PlicPlaneOffset {
 				else { highOrdinal = middleOrdinal; upper = middle; highVolume = middleVolume; }
 			}
 			double selected = target.multiply(2).compareTo(lowVolume.add(highVolume)) <= 0 ? lower : upper;
-			return new Result(selected, lower, upper, lowVolume, highVolume);
+			return new Result(selected, lower, upper, lowVolume, highVolume,target);
 		} catch (IllegalArgumentException magnitude) {
 			throw new GasTopologyBlockedException("Exact PLIC offset inversion exceeds its representation budget: " + magnitude.getMessage());
 		}
@@ -61,7 +62,7 @@ final class PlicPlaneOffset {
 	}
 
 	private static Result exact(double offset, ExactRational volume) {
-		return new Result(offset, offset, offset, volume, volume);
+		return new Result(offset, offset, offset, volume, volume,volume);
 	}
 	private static double outward(SignedDyadic exact, boolean upper) {
 		double rounded = exact.toDouble();

@@ -16,6 +16,8 @@ final class FlipPressurePhaseGeometry {
 	private final float[] normalY;
 	private final float[] normalZ;
 	private final double[] planeOffset;
+	private final PlicPlaneOffset.Result[] offsetBrackets;
+	private final SignedDyadic[] poreVolumes;
 	private final PlicComponentGeometry[] components;
 	private byte[] collisionMasks;
 	private long revision;
@@ -35,6 +37,9 @@ final class FlipPressurePhaseGeometry {
 		this.normalY = new float[cellCount];
 		this.normalZ = new float[cellCount];
 		this.planeOffset = new double[cellCount];
+		this.offsetBrackets = new PlicPlaneOffset.Result[cellCount];
+		this.poreVolumes = new SignedDyadic[cellCount];
+		java.util.Arrays.fill(poreVolumes,SignedDyadic.ZERO);
 		this.components = new PlicComponentGeometry[cellCount];
 		this.collisionMasks = new byte[cellCount];
 	}
@@ -42,6 +47,7 @@ final class FlipPressurePhaseGeometry {
 	boolean matchesShape(int x, int y, int z) { return sizeX == x && sizeY == y && sizeZ == z; }
 	long revision() { return revision; }
 	int collisionMask(int cell) { return Byte.toUnsignedInt(collisionMasks[cell]); }
+	SignedDyadic poreVolume(int cell) { return poreVolumes[cell]; }
 
 	void rebuild(
 			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
@@ -74,10 +80,12 @@ final class FlipPressurePhaseGeometry {
 		revision = Math.addExact(revision,1);
 		collisionMasks = cutCells.copyMicroMasks();
 		java.util.Arrays.fill(components,null);
+		java.util.Arrays.fill(offsetBrackets,null);
 		for (int cell = 0; cell < fraction.length; cell++) {
 			float geometricOpen = cutCells.openCellVolume(cell);
 			float openVolume = granular == null ? geometricOpen
 					: granular.effectiveOpenCellVolume(cell, geometricOpen);
+			poreVolumes[cell] = solid[cell] ? SignedDyadic.ZERO : SignedDyadic.of(openVolume);
 			double liquid = edit != null && cell == edit.cell() ? edit.volume().toDouble() : reconstructedVolume[cell];
 			fraction[cell] = solid[cell] || openVolume <= 0.0F ? 0.0F : clamp(liquid / openVolume, 0.0, 1.0);
 			pressureFluid[cell] = false;
@@ -120,10 +128,11 @@ final class FlipPressurePhaseGeometry {
 					: PhaseLiquidGeometryEdit.current(cell,cutCells.mask(cell),cellSize,markers,particles);
 			float open = granular == null ? cutCells.openCellVolume(cell)
 					: granular.effectiveOpenCellVolume(cell,cutCells.openCellVolume(cell));
-			planeOffset[cell] = stock == null ? integration.offset(cell, nx, ny, nz, center * cutCells.openCellVolume(cell))
-					: PlicPlaneOffset.solve(~cutCells.mask(cell)&255,nx,ny,nz,
+			offsetBrackets[cell] = stock == null ? null : PlicPlaneOffset.solve(~cutCells.mask(cell)&255,nx,ny,nz,
 						PlicComponentGeometry.ratio(stock.volume(),SignedDyadic.of(open))
-								.multiply(Integer.bitCount(~cutCells.mask(cell)&255)).divide(8)).offset();
+								.multiply(Integer.bitCount(~cutCells.mask(cell)&255)).divide(8));
+			planeOffset[cell] = offsetBrackets[cell] == null ? integration.offset(cell,nx,ny,nz,center*cutCells.openCellVolume(cell))
+					: offsetBrackets[cell].offset();
 			if (markers != null && CellRemapMicroTopology.components(cutCells.mask(cell)).length > 1) {
 				components[cell] = PlicComponentGeometry.capture(stock,
 						CellRemapMicroTopology.capacities(cutCells.mask(cell),SignedDyadic.of(open)),
@@ -208,6 +217,10 @@ final class FlipPressurePhaseGeometry {
 	double planeOffset(int cell, int micro) {
 		var plane = components[cell] == null ? null : components[cell].plane(micro);
 		return components[cell] == null ? planeOffset[cell] : plane == null ? 0 : plane.offset();
+	}
+	PlicPlaneOffset.Result offsetBracket(int cell,int micro) {
+		var plane = components[cell] == null ? null : components[cell].plane(micro);
+		return components[cell] == null ? offsetBrackets[cell] : plane == null ? null : plane.bracket();
 	}
 	double liquidFractionExact(int cell, int micro) {
 		var plane = components[cell] == null ? null : components[cell].plane(micro);
