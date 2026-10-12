@@ -1,26 +1,31 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.chemistry.ExactRational;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 
 /** Immutable positive gas complement of the admitted PLIC and fixed open microboxes, in SI units. */
 final class GasComplementGeometry {
-	/** Stable geometric key: eight times cell ordinal plus its microbox slot. */
-	record Piece(int id, int cell, int micro, double volume) { }
+	/** Stable microbox key; normalizedVolume is the exact fraction of one whole cell, volume is its SI observation. */
+	record Piece(int id, int cell, int micro, double volume, ExactRational normalizedVolume) { }
 	/** Oriented along the positive axis; a fixed cut restriction retains finite-rate chamber transport. */
 	record Port(int first, int second, int axis, double area, boolean fullCutConnection) { }
 	record ExteriorPort(int piece, int axis, int sign, double area) { }
 
+	private static final ExactRational MICRO_VOLUME = ExactRational.ONE.divide(8);
 	private final int sizeX, sizeY, sizeZ;
+	private final double cellVolumeCubicMeters;
 	private final Piece[] byId;
 	private final List<Piece> pieces;
 	private final List<Port> ports;
 	private final List<ExteriorPort> exteriorPorts;
 
-	private GasComplementGeometry(int sizeX, int sizeY, int sizeZ, Piece[] byId,
+	private GasComplementGeometry(int sizeX, int sizeY, int sizeZ, double cellVolumeCubicMeters, Piece[] byId,
 			List<Piece> pieces, List<Port> ports, List<ExteriorPort> exteriorPorts) {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
+		this.cellVolumeCubicMeters = cellVolumeCubicMeters;
 		this.byId = byId;
 		this.pieces = List.copyOf(pieces);
 		this.ports = List.copyOf(ports);
@@ -41,29 +46,31 @@ final class GasComplementGeometry {
 		if (!(h2 > 0 && h3 > 0 && Double.isFinite(h2) && Double.isFinite(h3))) {
 			throw new IllegalArgumentException("Gas complement SI area and volume must be representable");
 		}
+		ExactRational physicalScale = exact(SignedDyadic.of(h3));
 		var byId = new Piece[Math.multiplyExact(count, 8)];
 		var pieces = new ArrayList<Piece>();
 		for (int cell = 0; cell < count; cell++) {
-			double fraction = phase.liquidFractionExact(cell);
-			double nx = phase.planeNormal(cell, 0), ny = phase.planeNormal(cell, 1), nz = phase.planeNormal(cell, 2);
-			double offset = phase.planeOffset(cell);
+			if (solid[cell]) continue;
+			for (int slot = 0; slot < 8; slot++) {
+				if (!open(cut, cell, slot)) continue;
+			double fraction = phase.liquidFractionExact(cell,slot);
+			double nx = phase.planeNormal(cell,slot,0), ny = phase.planeNormal(cell,slot,1), nz = phase.planeNormal(cell,slot,2);
+			double offset = phase.planeOffset(cell,slot);
 			if (!(fraction >= 0 && fraction <= 1) || !Double.isFinite(nx) || !Double.isFinite(ny)
 					|| !Double.isFinite(nz) || !Double.isFinite(offset)) {
 				throw new IllegalArgumentException("Gas complement PLIC is invalid at cell " + cell);
 			}
-			if (solid[cell] || fraction == 1) continue;
+			if (fraction == 1) continue;
 			if (fraction > 0 && nx == 0 && ny == 0 && nz == 0) {
 				throw blocked("Partial PLIC has no normal", cell);
 			}
-			SignedDyadic[] normal = {SignedDyadic.of(nx), SignedDyadic.of(ny), SignedDyadic.of(nz)};
-			SignedDyadic threshold = SignedDyadic.of(offset);
-			for (int slot = 0; slot < 8; slot++) {
-				if (!open(cut, cell, slot)) continue;
-				double unitVolume = fraction == 0 ? 1 : dryMicroVolume(cell, slot, normal, threshold);
-				if (unitVolume == 0) continue;
-				double volume = SignedDyadic.of(unitVolume).multiply(SignedDyadic.of(.125)).multiply(SignedDyadic.of(h3)).toDouble();
+			List<GasGeometryOverlap.HalfSpace> planes = fraction == 0 ? List.of() : List.of(new GasGeometryOverlap.HalfSpace(
+					SignedDyadic.of(nx), SignedDyadic.of(ny), SignedDyadic.of(nz), SignedDyadic.of(offset)));
+				ExactRational normalizedVolume = fraction == 0 ? MICRO_VOLUME : GasGeometryOverlap.normalizedVolume(slot, planes);
+				if (normalizedVolume.isZero()) continue;
+				double volume = normalizedVolume.multiply(physicalScale).toDouble();
 				if (!(volume > 0 && Double.isFinite(volume))) throw blocked("Positive gas piece volume is not representable", cell);
-				Piece piece = new Piece(8 * cell + slot, cell, slot, volume);
+				Piece piece = new Piece(8 * cell + slot, cell, slot, volume, normalizedVolume);
 				byId[piece.id()] = piece; pieces.add(piece);
 			}
 		}
@@ -93,30 +100,14 @@ final class GasComplementGeometry {
 						GasFaceIntersection.area(phase, cell, -1, axis, 1, 0, tangent, other, .5), h2);
 			}
 		}
-		return new GasComplementGeometry(sizeX, sizeY, sizeZ, byId, pieces, ports, exterior);
+		return new GasComplementGeometry(sizeX, sizeY, sizeZ, h3, byId, pieces, ports, exterior);
 	}
 
-	private static double dryMicroVolume(int cell, int slot, SignedDyadic[] normal, SignedDyadic threshold) {
-		SignedDyadic origin = SignedDyadic.ZERO, minimum = SignedDyadic.ZERO, maximum = SignedDyadic.ZERO;
-		for (int axis = 0; axis < 3; axis++) {
-			SignedDyadic start = normal[axis].multiply(SignedDyadic.of(.5 * (slot >>> axis & 1)));
-			SignedDyadic extent = normal[axis].multiply(SignedDyadic.of(.5));
-			origin = origin.add(start);
-			minimum = minimum.add(start).add(extent.signum() < 0 ? extent : SignedDyadic.ZERO);
-			maximum = maximum.add(start).add(extent.signum() > 0 ? extent : SignedDyadic.ZERO);
-		}
-		// Equality at the maximum has no positive 3D support; equality at the minimum is full dry volume.
-		if (maximum.compareTo(threshold) <= 0) return 0;
-		if (minimum.compareTo(threshold) >= 0) return 1;
-		var integral = new double[4];
-		LiquidFluxGeometry.unitCubeMoments(-.5 * normal[0].toDouble(), -.5 * normal[1].toDouble(),
-				-.5 * normal[2].toDouble(), origin.subtract(threshold).toDouble(), integral);
-		if (!(integral[0] > 0 && integral[0] <= 1 && Double.isFinite(integral[0]))) {
-			throw blocked("Positive gas support has no representable clipped volume", cell);
-		}
-		return integral[0];
+	private static ExactRational exact(SignedDyadic value) {
+		return value.exponent() >= 0
+				? new ExactRational(value.significand().shiftLeft(value.exponent()), BigInteger.ONE)
+				: new ExactRational(value.significand(), BigInteger.ONE.shiftLeft(-value.exponent()));
 	}
-
 	private static boolean open(FlipCutCellGeometry cut, int cell, int slot) {
 		return cut.microCellOpen(cell, slot & 1, slot >>> 1 & 1, slot >>> 2 & 1);
 	}
@@ -148,6 +139,8 @@ final class GasComplementGeometry {
 		return new GasTopologyBlockedException(message + " at cell " + cell);
 	}
 
+	double cellVolumeCubicMeters() { return cellVolumeCubicMeters; }
+	double physicalVolume(ExactRational normalizedVolume) { return normalizedVolume.multiply(exact(SignedDyadic.of(cellVolumeCubicMeters))).toDouble(); }
 	int sizeX() { return sizeX; }
 	int sizeY() { return sizeY; }
 	int sizeZ() { return sizeZ; }

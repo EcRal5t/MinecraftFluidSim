@@ -993,6 +993,12 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 						&& active[c] == d.projection.pressureFluid[c],"Future phase fraction, plane or pressure class differs after publication");
 				for (int axis = 0; axis < 3; axis++) require(Float.floatToRawIntBits(planned.planeNormal(c,axis))
 						== Float.floatToRawIntBits(d.pressurePhaseGeometry.planeNormal(c,axis)),"Future phase normal differs after publication");
+				for(int micro=0;micro<8;micro++) {
+					require(Double.doubleToRawLongBits(planned.liquidFractionExact(c,micro))==Double.doubleToRawLongBits(d.pressurePhaseGeometry.liquidFractionExact(c,micro))
+							&& Double.doubleToRawLongBits(planned.planeOffset(c,micro))==Double.doubleToRawLongBits(d.pressurePhaseGeometry.planeOffset(c,micro)),"Future component PLIC differs after publication");
+					for(int axis=0;axis<3;axis++) require(Float.floatToRawIntBits(planned.planeNormal(c,micro,axis))
+							==Float.floatToRawIntBits(d.pressurePhaseGeometry.planeNormal(c,micro,axis)),"Future component normal differs after publication");
+				}
 			}
 		}
 	}

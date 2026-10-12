@@ -23,14 +23,16 @@ final class GasFaceIntersection {
 				|| !Double.isFinite(firstCoordinate) || !Double.isFinite(secondCoordinate)
 				|| !Double.isFinite(tangentStart) || !Double.isFinite(otherStart)
 				|| !(width >= 0 && Double.isFinite(width))) throw new IllegalArgumentException("Invalid gas face rectangle");
-		double firstFraction = phase.liquidFractionExact(firstCell);
-		double secondFraction = secondCell < 0 ? 0 : phase.liquidFractionExact(secondCell);
+		int firstMicro = phase.microAtFace(firstCell,axis,firstCoordinate,tangentStart,otherStart);
+		int secondMicro = secondCell < 0 ? 0 : phase.microAtFace(secondCell,axis,secondCoordinate,tangentStart,otherStart);
+		double firstFraction = phase.liquidFractionExact(firstCell,firstMicro);
+		double secondFraction = secondCell < 0 ? 0 : phase.liquidFractionExact(secondCell,secondMicro);
 		if (!(firstFraction >= 0 && firstFraction <= 1 && secondFraction >= 0 && secondFraction <= 1))
 			throw new IllegalArgumentException("Invalid gas face phase fraction");
 		if (width == 0 || firstFraction >= 1 || secondFraction >= 1) return 0;
 		var planes = new ArrayList<Plane>(2);
-		if (firstFraction > 0) planes.add(plane(phase, firstCell, axis, firstCoordinate));
-		if (secondFraction > 0) planes.add(plane(phase, secondCell, axis, secondCoordinate));
+		if (firstFraction > 0) planes.add(plane(phase, firstCell, firstMicro, axis, firstCoordinate));
+		if (secondFraction > 0) planes.add(plane(phase, secondCell, secondMicro, axis, secondCoordinate));
 		return area(tangentStart, otherStart, width, planes);
 	}
 
@@ -62,12 +64,12 @@ final class GasFaceIntersection {
 		}
 	}
 
-	private static Plane plane(FlipPressurePhaseGeometry phase, int cell, int axis, double coordinate) {
-		double offset = phase.planeOffset(cell);
+	private static Plane plane(FlipPressurePhaseGeometry phase, int cell, int micro, int axis, double coordinate) {
+		double offset = phase.planeOffset(cell,micro);
 		if (!Double.isFinite(offset)) throw new IllegalArgumentException("Nonfinite gas face phase plane");
-		for (int a = 0; a < 3; a++) if (!Float.isFinite(phase.planeNormal(cell, a))) throw new IllegalArgumentException("Nonfinite gas face phase normal");
-		SignedDyadic threshold = SignedDyadic.of(offset).subtract(SignedDyadic.of(phase.planeNormal(cell, axis)).multiply(SignedDyadic.of(coordinate)));
-		return new Plane(SignedDyadic.of(phase.planeNormal(cell, (axis + 1) % 3)), SignedDyadic.of(phase.planeNormal(cell, (axis + 2) % 3)), threshold);
+		for (int a = 0; a < 3; a++) if (!Float.isFinite(phase.planeNormal(cell,micro,a))) throw new IllegalArgumentException("Nonfinite gas face phase normal");
+		SignedDyadic threshold = SignedDyadic.of(offset).subtract(SignedDyadic.of(phase.planeNormal(cell,micro,axis)).multiply(SignedDyadic.of(coordinate)));
+		return new Plane(SignedDyadic.of(phase.planeNormal(cell,micro,(axis+1)%3)),SignedDyadic.of(phase.planeNormal(cell,micro,(axis+2)%3)),threshold);
 	}
 	private static List<Point> clip(List<Point> polygon, Plane plane) {
 		if (polygon.isEmpty()) return polygon;

@@ -35,6 +35,25 @@ final class CellRemapMicroTopology {
 	static int[] components(int mask) {
 		return COMPONENTS[mask];
 	}
+	/** Exact pore capacities in canonical component order, before independently arriving liquid. */
+	static SignedDyadic[] capacities(int mask, SignedDyadic totalEffectiveOpen) {
+		if (mask < 0 || mask > 255 || totalEffectiveOpen == null)
+			throw new IllegalArgumentException("Component capacity requires a collision mask and effective open volume");
+		int[] components = COMPONENTS[mask];
+		SignedDyadic open = SignedDyadic.of(Integer.bitCount(~mask & 255), -3);
+		SignedDyadic solid = open.subtract(totalEffectiveOpen);
+		if (solid.signum() < 0 || solid.compareTo(open) > 0 || !solid.fitsLongUnits(-24))
+			throw new IllegalStateException("Open component capacity requires the existing integer solid-volume lattice");
+		SignedDyadic[] result = new SignedDyadic[components.length];
+		if (components.length == 0) return result;
+		SignedDyadic[] weights = new SignedDyadic[components.length];
+		// Keep the solid-capacity lattice even when the whole-cell capacity has a compact exponent.
+		for (int i = 0; i < weights.length; i++) weights[i] = SignedDyadic.of(Integer.bitCount(components[i]), -24);
+		long[] solidShares = ExactVolumeAllocation.allocate(solid.longUnitsExact(-24), weights);
+		for (int i = 0; i < result.length; i++) result[i] = SignedDyadic.of(Integer.bitCount(components[i]), -3)
+				.subtract(SignedDyadic.of(solidShares[i], -24));
+		return result;
+	}
 	static boolean needed(FluidDomain domain) {
 		for (int cell = 0; cell < domain.cellCount; cell++) if (COMPONENTS[domain.geometry.cutCells.mask(cell)].length > 1) return true;
 		return false;
@@ -71,7 +90,7 @@ final class CellRemapMicroTopology {
 	private static int positionSupport(FluidDomain domain, int cell, float x, float y, float z) {
 		return positionSupport(domain.geometry.cutCells.mask(cell), domain.config.cellSize(), x, y, z);
 	}
-	private static int positionSupport(int mask, float cellSize, float x, float y, float z) {
+	static int positionSupport(int mask, float cellSize, float x, float y, float z) {
 		float spacing = cellSize / 2;
 		int micro = ((int) Math.floor(x / spacing) & 1) | (((int) Math.floor(y / spacing) & 1) << 1)
 				| (((int) Math.floor(z / spacing) & 1) << 2);

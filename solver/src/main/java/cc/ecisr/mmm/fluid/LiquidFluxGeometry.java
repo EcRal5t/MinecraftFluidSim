@@ -56,6 +56,9 @@ final class LiquidFluxGeometry {
 	}
 
 	double swept(int cell, int neighbor, int axis, double width, boolean positive, double nx, double ny, double nz, double offset) {
+		if (domain != null && domain.pressurePhaseGeometry.hasComponentPlanes(cell)) {
+			var result = new double[4]; sweptMoments(cell,neighbor,axis,width,positive,nx,ny,nz,offset,result); return result[0];
+		}
 		double pore = Math.min(poreScale(cell), poreScale(neighbor));
 		if (cut.mask(cell) == 0 && cut.mask(neighbor) == 0) {
 			double off = offset;
@@ -74,6 +77,8 @@ final class LiquidFluxGeometry {
 	void sweptMoments(int cell, int neighbor, int axis, double width, boolean positive,
 			double nx, double ny, double nz, double offset, double[] result, int donorSupport, int receiverSupport) {
 		double volume = 0, mx = 0, my = 0, mz = 0;
+		var phase = transportPlane();
+		boolean componentPores = phase != null && (phase.hasComponentPlanes(cell) || phase.hasComponentPlanes(neighbor));
 		boolean whole = cut.mask(cell) == 0 && cut.mask(neighbor) == 0 && donorSupport == 255 && receiverSupport == 255;
 		for (int slot = 0; slot < (whole ? 1 : 8); slot++) {
 			int x = slot & 1, y = slot >>> 1 & 1, z = slot >>> 2 & 1;
@@ -90,12 +95,20 @@ final class LiquidFluxGeometry {
 			if (hi <= lo) continue;
 			double span = whole ? width : hi - lo;
 			if (axis == 0) { ox = lo; ex = span; } else if (axis == 1) { oy = lo; ey = span; } else { oz = lo; ez = span; }
-			unitCubeMoments(nx * ex, ny * ey, nz * ez, offset - nx * ox - ny * oy - nz * oz, result);
-			double box = ex * ey * ez;
+			double px = phase != null && phase.hasComponentPlanes(cell) ? phase.planeNormal(cell,slot,0) : nx;
+			double py = phase != null && phase.hasComponentPlanes(cell) ? phase.planeNormal(cell,slot,1) : ny;
+			double pz = phase != null && phase.hasComponentPlanes(cell) ? phase.planeNormal(cell,slot,2) : nz;
+			double threshold = phase != null && phase.hasComponentPlanes(cell) ? phase.planeOffset(cell,slot) : offset;
+			double wet = phase != null && phase.hasComponentPlanes(cell) ? phase.liquidFractionExact(cell,slot) : -1;
+			if (wet == 0 || wet >= 1) { result[0] = wet == 0 ? 0 : 1; result[1]=result[2]=result[3]=.5*result[0]; }
+			else unitCubeMoments(px*ex,py*ey,pz*ez,threshold-px*ox-py*oy-pz*oz,result);
+			double pore = componentPores ? Math.min(phase.componentPoreScale(cell,slot,poreScale(cell)),
+					phase.componentPoreScale(neighbor,neighborSlot,poreScale(neighbor))) : 1;
+			double box = ex * ey * ez * pore;
 			volume += box * result[0]; mx += box * (ox * result[0] + ex * result[1]);
 			my += box * (oy * result[0] + ey * result[2]); mz += box * (oz * result[0] + ez * result[3]);
 		}
-		double pore = Math.min(poreScale(cell), poreScale(neighbor));
+		double pore = componentPores ? 1 : Math.min(poreScale(cell), poreScale(neighbor));
 		result[0] = pore * volume; result[1] = pore * (mx - .5 * volume);
 		result[2] = pore * (my - .5 * volume); result[3] = pore * (mz - .5 * volume);
 	}

@@ -9,7 +9,7 @@ import java.util.TreeMap;
 
 /** Immutable chamber membership on actual gas pieces; fixed partial cuts retain finite-rate ports. */
 final class GasChamberTopology {
-	record Chamber(int node, int minimumPiece, double geometricVolume) { }
+	record Chamber(int node, int minimumPiece, double geometricVolume, double volumeErrorBound) { }
 	record Connection(int firstNode, int secondNode, double area) { }
 	private final int[] pieceNodes;
 	private final List<Chamber> chambers;
@@ -35,14 +35,20 @@ final class GasChamberTopology {
 		int node = 0;
 		for (var entry : nodeByRoot.entrySet()) entry.setValue(++node);
 		int[] pieceNodes = new int[size]; Arrays.fill(pieceNodes, -1);
-		SignedDyadic[] volumes = new SignedDyadic[node + 1]; Arrays.fill(volumes, SignedDyadic.ZERO);
+		SignedDyadic[] volumes = new SignedDyadic[node + 1], volumeErrors = new SignedDyadic[node + 1];
+		Arrays.fill(volumes,SignedDyadic.ZERO); Arrays.fill(volumeErrors,SignedDyadic.ZERO);
 		for (var piece : geometry.pieces()) {
 			int root = root(parent, piece.id()), owner = ambient[root] ? 0 : nodeByRoot.get(root);
 			pieceNodes[piece.id()] = owner;
 			volumes[owner] = volumes[owner].add(SignedDyadic.of(piece.volume()));
+			volumeErrors[owner] = volumeErrors[owner].add(SignedDyadic.of(Math.ulp(piece.volume())).multiply(SignedDyadic.of(.5)));
 		}
 		var chambers = new ArrayList<Chamber>(node);
-		for (var entry : nodeByRoot.entrySet()) chambers.add(new Chamber(entry.getValue(), entry.getKey(), positive(volumes[entry.getValue()], "Gas chamber volume")));
+		for (var entry : nodeByRoot.entrySet()) {
+			int owner = entry.getValue(); double volume = positive(volumes[owner],"Gas chamber volume");
+			SignedDyadic error = volumeErrors[owner].add(SignedDyadic.of(Math.ulp(volume)).multiply(SignedDyadic.of(.5)));
+			chambers.add(new Chamber(owner,entry.getKey(),volume,Math.nextUp(error.toDouble())));
+		}
 		var areaByNodes = new TreeMap<Long, SignedDyadic>();
 		for (var port : geometry.ports()) {
 			int first = pieceNodes[port.first()], second = pieceNodes[port.second()]; if (first == second) continue;

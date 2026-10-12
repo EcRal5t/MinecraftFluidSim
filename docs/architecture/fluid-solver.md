@@ -187,7 +187,9 @@ dt <= 2/L
 
 有限体积步长使用正库存供给格的总出流 Courant 数 `sum(|u_face|*dt/h*A_open/O_cell) <= 1`，partial micro face 的扫掠宽度还须小于等于半格。初始估计包含重力预测，压力后与 G2P 后再次检查。连通薄层的分类复用 `DivergenceFreeVelocityExtension` 的搜索，要求相邻 PLIC 在同一开放面上具有正面积交集，每次 P2G 重建后重新推导；独立液滴继续使用位移 CFL 与 CCD。压力与输运共用当前库存生成的 cut-cell PLIC；部分格的法向采用格内体积质心估计，零偏心时沿体积分数梯度生成。
 
-PLIC 的体积质心从实际 binary32 体积和位置精确汇总体积与位置第一矩，先在物理坐标中精确减去格中心矩，再除以 `h*V` 并舍入一次。[PhaseLiquidGeometryEdit](../../solver/src/main/java/cc/ecisr/mmm/fluid/PhaseLiquidGeometryEdit.java) 提供相变后单格的实际体积与位置矩；PLIC 候选重建用这些量替换被编辑格，并重新计算全网格体积分数梯度。候选与已发布载体重建使用相同算法。
+PLIC 的体积质心从实际 binary32 体积和位置精确汇总体积与位置第一矩，先在物理坐标中精确减去格中心矩，再除以 `h*V` 并舍入一次。固定微盒的各个面连通分量分别保存这些派生矩，[PlicComponentGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/PlicComponentGeometry.java) 按各分量的库存重建独立平面。微面、共享湿面积、暴露湿面及扫掠体积读取所属分量的平面，逐分量保持体积。单 PLIC 的位置矩近似和同格速度自由度的分量拆分仍按共同空间表示的完成条件完善。
+
+[PhaseLiquidGeometryEdit](../../solver/src/main/java/cc/ecisr/mmm/fluid/PhaseLiquidGeometryEdit.java) 以固定 mask 和全部开放分量的不可变库存矩列表作为未来几何输入，包含清空后的零分量；整格数量、体积和位置矩由该列表精确汇总。PLIC 候选替换被编辑格的全部分量，再计算全网格体积分数梯度。候选与已发布载体重建使用同一聚合与平面算法。分量孔隙容量复用 [CellRemapMicroTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/CellRemapMicroTopology.java) 的规范 SVQ 分配，与微面输运保持相同的固体份额和剩余容量。
 
 `CellCarrierRemapPlan` 按单元、开放微格的面连通分量、材料、指示剂和有界 species 并集分组，同一体积通量搬运材料质量、动量、组成和内能。species 使用整数最大余数分配；质量与内能的可表示余数分配到有容量的份额，提交前检查逐材料质量的 binary64 舍入界、精确 species、精确逐格体积、内能和动量收支。热量重建复用实际质量与组成的 caloric 数据，在相邻输入温度范围内保持正温，并保留完整能量审计。
 

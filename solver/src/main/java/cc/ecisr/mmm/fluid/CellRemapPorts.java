@@ -67,18 +67,10 @@ final class CellRemapPorts {
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			int[] components = CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell));
 			if (components.length == 0) continue;
-			SignedDyadic[] weights = new SignedDyadic[components.length];
-			// Use the solid-capacity lattice even when the whole-cell capacity has a compact exponent.
-			for (int i = 0; i < weights.length; i++) weights[i] = SignedDyadic.of(Integer.bitCount(components[i]), -24);
-			SignedDyadic open = SignedDyadic.of(Integer.bitCount(~domain.geometry.cutCells.mask(cell) & 255), -3);
-			SignedDyadic solid = open.subtract(flux.finalCapacity(cell));
-			if (solid.signum() < 0 || !solid.fitsLongUnits(-24))
-				throw new IllegalStateException("Open component capacity requires the existing integer solid-volume lattice");
-			long[] solidShares = ExactVolumeAllocation.allocate(solid.longUnitsExact(-24), weights);
-			for (int i = 0; i < solidShares.length; i++) {
+			SignedDyadic[] pores = CellRemapMicroTopology.capacities(domain.geometry.cutCells.mask(cell), flux.finalCapacity(cell));
+			for (int i = 0; i < pores.length; i++) {
 				int node = node(cell, components[i]);
-				capacity[node] = SignedDyadic.of(Integer.bitCount(components[i]), -3)
-						.subtract(SignedDyadic.of(solidShares[i], -24)).subtract(reserved[node]);
+				capacity[node] = pores[i].subtract(reserved[node]);
 				if (capacity[node].signum() < 0) throw new MechanicalTimeRefinement(2, "Independent liquid arrival exceeds its open micro component");
 			}
 		}

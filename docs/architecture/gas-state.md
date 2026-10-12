@@ -35,6 +35,8 @@
 
 [GasComplementGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComplementGeometry.java) 从服务端 PLIC 和开放微盒生成不可变的气体块、共享通路与外壳气面。每块以 `8*cell+micro` 定位，体积使用 m³，面积使用 m²；同格内被固体隔开的气体块保持独立。
 
+气体块读取其固定连通分量的独立 PLIC。每块保留精确单元归一化有理数体积，乘当前 `h³` 后一次舍入为 SI 观察值。气腔几何观察值精确汇总各块的 binary64 体积再舍入一次，`volumeErrorBound` 向外包住叶子与气腔两级舍入；平面求逆余差及库存容量补量各自结算。
+
 [GasFaceIntersection](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
 
 [GasGeometryOverlap](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasGeometryOverlap.java) 精确积分同一开放微盒与前后两个气体半空间的交集，返回单元归一化有理数体积。纯相切的交集体积为零，严格正的薄层保留精确量。库存交接仍需结合旧库存归属与实际可达路径；零重叠的有限气腔需要扫掠轨迹或可达性证明才能确定去向。

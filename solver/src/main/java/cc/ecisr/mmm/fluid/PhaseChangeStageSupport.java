@@ -57,6 +57,7 @@ final class PhaseChangeStageSupport {
 		void markGridDirty();
 		boolean canAddCarrierVolume(double volume);
 		long gasGeometrySolidSvq();
+		double effectiveOpenCellVolume(int cell);
 	}
 
 	private final Workspace state;
@@ -84,6 +85,9 @@ final class PhaseChangeStageSupport {
 	void refreshGasTopology() { access.refreshGasTopology(); }
 	GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
 			cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal) {
+		var capacities = CellRemapMicroTopology.capacities(edit.collisionMask(),SignedDyadic.of(access.effectiveOpenCellVolume(edit.cell())));
+		for(int i=0;i<capacities.length;i++) if(edit.components().get(i).volume().compareTo(capacities[i])>0)
+			throw new PhaseCandidateUnavailableException("Phase liquid inventory exceeds its connected pore capacity");
 		return access.planGasGeometry(edit, node, gas, energy, thermal);
 	}
 	void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,

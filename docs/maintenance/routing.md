@@ -66,6 +66,8 @@
 
 粒子恢复的单位身份检查见 [FlipParticleState](../../model/src/main/java/cc/ecisr/mmm/fluid/FlipParticleState.java) 的 `requireCompatible`；连通开放容量检查见 [CellRemapMicroTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/CellRemapMicroTopology.java) 的 `requireRestoreCapacity`。恢复前的材料、化学组成和账本准备见 [FluidDomainCollisionState](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainCollisionState.java)。对应验证位于 [CarrierMutationValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/CarrierMutationValidation.java) 的 `restoreRequiresConnectedOpenCapacity`。
 
+同格断开液体的空间库存矩见 [LiquidComponentMoments](../../solver/src/main/java/cc/ecisr/mmm/fluid/LiquidComponentMoments.java)，未来编辑的分量聚合见 [PhaseLiquidGeometryEdit](../../solver/src/main/java/cc/ecisr/mmm/fluid/PhaseLiquidGeometryEdit.java)，独立 PLIC 见 [PlicComponentGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/PlicComponentGeometry.java)。微面几何入口在 [FlipPressurePhaseGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipPressurePhaseGeometry.java)，共享孔隙容量入口是 `CellRemapMicroTopology.capacities`。对应验证为 `AirCavityScannerValidation.validateComponentLiquidGeometry`。
+
 | 修改内容 | 首先打开 | 需要了解的数据和算法 |
 |---|---|---|
 | 力学计算顺序 | [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)、[MechanicalStageAssembly](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStageAssembly.java) | [流体求解器](../architecture/fluid-solver.md) |

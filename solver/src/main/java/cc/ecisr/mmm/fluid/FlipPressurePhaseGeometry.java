@@ -16,6 +16,9 @@ final class FlipPressurePhaseGeometry {
 	private final float[] normalY;
 	private final float[] normalZ;
 	private final double[] planeOffset;
+	private final PlicComponentGeometry[] components;
+	private byte[] collisionMasks;
+	private long revision;
 	private final double[] faceX = new double[8], faceY = new double[8];
 	private final double[] clippedX = new double[8], clippedY = new double[8];
 
@@ -32,9 +35,12 @@ final class FlipPressurePhaseGeometry {
 		this.normalY = new float[cellCount];
 		this.normalZ = new float[cellCount];
 		this.planeOffset = new double[cellCount];
+		this.components = new PlicComponentGeometry[cellCount];
+		this.collisionMasks = new byte[cellCount];
 	}
 
 	boolean matchesShape(int x, int y, int z) { return sizeX == x && sizeY == y && sizeZ == z; }
+	long revision() { return revision; }
 
 	void rebuild(
 			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
@@ -62,6 +68,11 @@ final class FlipPressurePhaseGeometry {
 				|| markers != null && (particles == null || !(cellSize > 0) || !Float.isFinite(cellSize))) {
 			throw new IllegalArgumentException("Pressure phase arrays disagree with the cell count");
 		}
+		if (edit != null && edit.collisionMask() != cutCells.mask(edit.cell()))
+			throw new IllegalStateException("Phase PLIC candidate collision geometry changed");
+		revision = Math.addExact(revision,1);
+		collisionMasks = cutCells.copyMicroMasks();
+		java.util.Arrays.fill(components,null);
 		for (int cell = 0; cell < fraction.length; cell++) {
 			float geometricOpen = cutCells.openCellVolume(cell);
 			float openVolume = granular == null ? geometricOpen
@@ -82,6 +93,7 @@ final class FlipPressurePhaseGeometry {
 					- sampleFraction(x, y - 1, z, center, solid));
 			float nz = (float) -(sampleFraction(x, y, z + 1, center, solid)
 					- sampleFraction(x, y, z - 1, center, solid));
+			float gradientX = nx, gradientY = ny, gradientZ = nz;
 			if (markers != null && momentNormal(cell, x, y, z, cutCells, markers, particles, cellSize,
 					edit != null && cell == edit.cell() ? edit : null)) {
 				nx = normalX[cell]; ny = normalY[cell]; nz = normalZ[cell];
@@ -104,6 +116,15 @@ final class FlipPressurePhaseGeometry {
 			normalY[cell] = ny;
 			normalZ[cell] = nz;
 			planeOffset[cell] = integration.offset(cell, nx, ny, nz, center * cutCells.openCellVolume(cell));
+			if (markers != null && CellRemapMicroTopology.components(cutCells.mask(cell)).length > 1) {
+				var stock = edit != null && cell == edit.cell() ? edit
+						: PhaseLiquidGeometryEdit.current(cell,cutCells.mask(cell),cellSize,markers,particles);
+				float open = granular == null ? cutCells.openCellVolume(cell)
+						: granular.effectiveOpenCellVolume(cell,cutCells.openCellVolume(cell));
+				components[cell] = PlicComponentGeometry.capture(stock,
+						CellRemapMicroTopology.capacities(cutCells.mask(cell),SignedDyadic.of(open)),
+						x,y,z,cellSize,gradientX,gradientY,gradientZ);
+			}
 		}
 		for (int cell = 0; cell < fraction.length; cell++) {
 			if (solid[cell] || !(fraction[cell] > 0.5F)) continue;
@@ -156,7 +177,7 @@ final class FlipPressurePhaseGeometry {
 		return true;
 	}
 
-	private static double centeredMoment(SignedDyadic first, SignedDyadic metricVolume, int coordinate) {
+	static double centeredMoment(SignedDyadic first, SignedDyadic metricVolume, int coordinate) {
 		SignedDyadic centered = first.subtract(metricVolume.multiply(SignedDyadic.of(coordinate + .5)));
 		int shift = centered.exponent() - metricVolume.exponent();
 		BigInteger numerator = centered.significand(), denominator = metricVolume.significand();
@@ -164,7 +185,7 @@ final class FlipPressurePhaseGeometry {
 				: new ExactRational(numerator, denominator.shiftLeft(-shift))).toDouble();
 	}
 
-	private static double momentDirection(double centre, int lowCount, int openCount) {
+	static double momentDirection(double centre, int lowCount, int openCount) {
 		double lower = lowCount == 0 ? 0 : -.5, upper = lowCount == openCount ? 0 : .5;
 		double openCentre = .25 * (openCount - 2.0 * lowCount) / openCount;
 		if (centre <= lower) return Double.POSITIVE_INFINITY;
@@ -175,6 +196,29 @@ final class FlipPressurePhaseGeometry {
 	float liquidFraction(int cell) { return (float) fraction[cell]; }
 	float planeNormal(int cell, int axis) { return axis == 0 ? normalX[cell] : axis == 1 ? normalY[cell] : normalZ[cell]; }
 	double planeOffset(int cell) { return planeOffset[cell]; }
+	boolean hasComponentPlanes(int cell) { return components[cell] != null; }
+	float planeNormal(int cell, int micro, int axis) {
+		var plane = components[cell] == null ? null : components[cell].plane(micro);
+		return components[cell] == null ? planeNormal(cell,axis) : plane == null ? 0 : plane.normal(axis);
+	}
+	double planeOffset(int cell, int micro) {
+		var plane = components[cell] == null ? null : components[cell].plane(micro);
+		return components[cell] == null ? planeOffset[cell] : plane == null ? 0 : plane.offset();
+	}
+	double liquidFractionExact(int cell, int micro) {
+		var plane = components[cell] == null ? null : components[cell].plane(micro);
+		return components[cell] == null ? fraction[cell] : plane == null ? 0 : plane.fraction();
+	}
+	double componentPoreScale(int cell,int micro,double fallback) {
+		var plane = components[cell] == null ? null : components[cell].plane(micro);
+		return components[cell] == null ? fallback : plane == null ? 0 : plane.porosity();
+	}
+	double geometricLiquidVolume(int cell,FlipCutCellGeometry cut) {
+		if (components[cell] == null) return fraction[cell]*cut.openCellVolume(cell);
+		double volume = 0;
+		for (int micro=0;micro<8;micro++) if (components[cell].plane(micro)!=null) volume += liquidFractionExact(cell,micro)/8;
+		return volume;
+	}
 
 	/** Area occupied by both PLICs on their shared open face; left is the negative-axis cell. */
 	double sharedLiquidFaceArea(int left, int right, int axis, FlipCutCellGeometry cut) {
@@ -193,12 +237,14 @@ final class FlipPressurePhaseGeometry {
 	}
 
 	private double wetRectangle(int left, int right, int axis, double x, double y, double span) {
+		int minus = microAtFace(left,axis,1,x,y), plus = microAtFace(right,axis,0,x,y);
+		if (liquidFractionExact(left,minus) == 0 || liquidFractionExact(right,plus) == 0) return 0;
 		faceX[0] = faceX[3] = x; faceX[1] = faceX[2] = x + span;
 		faceY[0] = faceY[1] = y; faceY[2] = faceY[3] = y + span;
 		int tangent = (axis + 1) % 3, other = (axis + 2) % 3;
-		int count = clipFace(4, planeNormal(left, tangent), planeNormal(left, other),
-				planeOffset[left] - planeNormal(left, axis));
-		count = clipFace(count, planeNormal(right, tangent), planeNormal(right, other), planeOffset[right]);
+		int count = liquidFractionExact(left,minus) >= 1 ? 4 : clipFace(4, planeNormal(left,minus,tangent), planeNormal(left,minus,other),
+				planeOffset(left,minus) - planeNormal(left,minus,axis));
+		if (liquidFractionExact(right,plus) < 1) count = clipFace(count, planeNormal(right,plus,tangent), planeNormal(right,plus,other), planeOffset(right,plus));
 		double twiceArea = 0;
 		for (int i = 1; i + 1 < count; i++) twiceArea += (faceX[i] - faceX[0]) * (faceY[i + 1] - faceY[0])
 				- (faceY[i] - faceY[0]) * (faceX[i + 1] - faceX[0]);
@@ -225,34 +271,46 @@ final class FlipPressurePhaseGeometry {
 
 	/** Copied local face polygon; tangential coordinates use cyclic axis order. */
 	double[][] wetFacePolygon(int cell, int axis, double coordinate, double tangent, double other, double span) {
-		if (!(fraction[cell] > 0)) return new double[2][0];
+		int micro = microAtFace(cell,axis,coordinate,tangent,other);
+		double wet = liquidFractionExact(cell,micro);
+		if (!(wet > 0)) return new double[2][0];
 		rectangle(tangent, other, span);
-		int count = fraction[cell] >= 1 ? 4 : clipFace(4, planeNormal(cell,(axis+1)%3), planeNormal(cell,(axis+2)%3),
-				planeOffset[cell] - coordinate * planeNormal(cell,axis));
+		int count = wet >= 1 ? 4 : clipFace(4, planeNormal(cell,micro,(axis+1)%3), planeNormal(cell,micro,(axis+2)%3),
+				planeOffset(cell,micro) - coordinate * planeNormal(cell,micro,axis));
 		return polygon(count);
 	}
 
 	/** Both positive liquid profiles on one shared open microface. */
 	double[][] sharedWetPolygon(int left, int right, int axis, double tangent, double other, double span) {
-		if (!(fraction[left] > 0) || !(fraction[right] > 0)) return new double[2][0];
+		int minus = microAtFace(left,axis,1,tangent,other), plus = microAtFace(right,axis,0,tangent,other);
+		if (!(liquidFractionExact(left,minus) > 0) || !(liquidFractionExact(right,plus) > 0)) return new double[2][0];
 		rectangle(tangent, other, span);
-		int count = fraction[left] >= 1 ? 4 : clipFace(4, planeNormal(left,(axis+1)%3),planeNormal(left,(axis+2)%3),planeOffset[left]-planeNormal(left,axis));
-		if(fraction[right]<1)count=clipFace(count,planeNormal(right,(axis+1)%3),planeNormal(right,(axis+2)%3),planeOffset[right]);
+		int count = liquidFractionExact(left,minus) >= 1 ? 4 : clipFace(4,planeNormal(left,minus,(axis+1)%3),planeNormal(left,minus,(axis+2)%3),planeOffset(left,minus)-planeNormal(left,minus,axis));
+		if(liquidFractionExact(right,plus)<1)count=clipFace(count,planeNormal(right,plus,(axis+1)%3),planeNormal(right,plus,(axis+2)%3),planeOffset(right,plus));
 		return polygon(count);
 	}
 
 	/** Owner liquid intersected with the peer's dry half-space, retaining actual gas-facing geometry. */
 	double[][] exposedWetPolygon(int owner, int peer, int axis, int sign, double tangent, double other, double span) {
-		if (!(fraction[owner] > 0) || peer>=0 && fraction[peer]>=1) return new double[2][0];
+		int micro = microAtFace(owner,axis,sign>0?1:0,tangent,other);
+		int peerMicro = peer<0 ? 0 : microAtFace(peer,axis,sign>0?0:1,tangent,other);
+		if (!(liquidFractionExact(owner,micro) > 0) || peer>=0 && liquidFractionExact(peer,peerMicro)>=1) return new double[2][0];
 		rectangle(tangent,other,span);
-		int count=fraction[owner]>=1?4:clipFace(4,planeNormal(owner,(axis+1)%3),planeNormal(owner,(axis+2)%3),
-				planeOffset[owner]-(sign>0?1:0)*planeNormal(owner,axis));
-		if(peer>=0 && fraction[peer]>0)count=clipFace(count,-planeNormal(peer,(axis+1)%3),-planeNormal(peer,(axis+2)%3),
-				-planeOffset[peer]+(sign>0?0:1)*planeNormal(peer,axis));
+		int count=liquidFractionExact(owner,micro)>=1?4:clipFace(4,planeNormal(owner,micro,(axis+1)%3),planeNormal(owner,micro,(axis+2)%3),
+				planeOffset(owner,micro)-(sign>0?1:0)*planeNormal(owner,micro,axis));
+		if(peer>=0 && liquidFractionExact(peer,peerMicro)>0)count=clipFace(count,-planeNormal(peer,peerMicro,(axis+1)%3),-planeNormal(peer,peerMicro,(axis+2)%3),
+				-planeOffset(peer,peerMicro)+(sign>0?0:1)*planeNormal(peer,peerMicro,axis));
 		return polygon(count);
 	}
 
 	double liquidFractionExact(int cell) { return fraction[cell]; }
+	int microAtFace(int cell,int axis,double coordinate,double tangent,double other) {
+		int base = (tangent >= .5 ? 1 : 0) << ((axis+1)%3) | (other >= .5 ? 1 : 0) << ((axis+2)%3);
+		if (coordinate >= 1) return base | 1 << axis;
+		if (coordinate <= 0) return base;
+		int mask = Byte.toUnsignedInt(collisionMasks[cell]);
+		return (mask & 1 << base) == 0 ? base : base | 1 << axis;
+	}
 	private void rectangle(double x,double y,double span) {
 		faceX[0]=faceX[3]=x;faceX[1]=faceX[2]=x+span;
 		faceY[0]=faceY[1]=y;faceY[2]=faceY[3]=y+span;

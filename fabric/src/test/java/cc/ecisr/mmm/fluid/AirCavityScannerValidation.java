@@ -25,6 +25,7 @@ public final class AirCavityScannerValidation {
 
 	private static void validateMicroGasGeometry() {
 		validateMicroGasOverlap();
+		validateComponentLiquidGeometry();
 		Grid grid=new Grid(2,2,2,.5F);var phase=new FlipPressurePhaseGeometry(2,2,2);
 		phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
 		var geometry=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,phase);
@@ -66,6 +67,47 @@ public final class AirCavityScannerValidation {
 		var denominator=new java.math.BigDecimal((double).1234567F).multiply(new java.math.BigDecimal((double).7654321F)).multiply(java.math.BigDecimal.valueOf(2));
 		double expected=numerator.divide(denominator,java.math.MathContext.DECIMAL128).doubleValue();
 		check(strip>0 && Double.doubleToLongBits(strip)==Double.doubleToLongBits(expected),"A true narrow gas port lost its exact physical area");
+	}
+
+	private static void validateComponentLiquidGeometry() {
+		for (int corner = 0; corner < 8; corner++) for (float[] stock : List.of(
+				new float[]{.0625F,.03125F},new float[]{.03125F,.0625F},new float[]{.0625F,.0625F},new float[]{0,.125F})) {
+			int opposite=corner^7, count=(stock[0]>0?1:0)+(stock[1]>0?1:0), marker=0;
+			float[] pv=new float[4*count];
+			for (int i=0;i<2;i++) if(stock[i]>0) {
+				int bit=i==0?corner:opposite, base=4*marker++;
+				pv[base]=.25F+.5F*(bit&1);pv[base+1]=.25F+.5F*(bit>>1&1);pv[base+2]=.25F+.5F*(bit>>2&1);pv[base+3]=stock[i];
+			}
+			byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)(255^(1<<corner)^(1<<opposite));
+			var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
+			d.restoreParticleState(new FlipParticleState(2,2,2,1,count,stock[0]+stock[1],pv,new float[3*count],masks));d.ensureInventoryGrid();
+			var phase=d.pressurePhaseGeometry;
+			var gas=GasComplementGeometry.capture(2,2,2,1,d.geometry.solid,d.geometry.cutCells,phase);
+			for (int i=0;i<2;i++) {
+				int bit=i==0?corner:opposite;double[] moments=new double[4];double wet=phase.liquidFractionExact(0,bit);
+				if(wet>=1)moments[0]=1;
+				else if(wet>0) {
+					double nx=phase.planeNormal(0,bit,0),ny=phase.planeNormal(0,bit,1),nz=phase.planeNormal(0,bit,2);
+					LiquidFluxGeometry.unitCubeMoments(.5*nx,.5*ny,.5*nz,phase.planeOffset(0,bit)-.5*(nx*(bit&1)+ny*(bit>>1&1)+nz*(bit>>2&1)),moments);
+				}
+				check(Math.abs(.125*moments[0]-stock[i])<2e-15,"PLIC transferred liquid between disconnected components");
+				double expected=.125-stock[i];var piece=gas.piece(bit);
+				check(expected==0?piece==null:piece!=null&&Math.abs(piece.volume()-expected)<2e-15,"Gas geometry disagrees with component inventory");
+			}
+			var topology=GasChamberTopology.capture(gas,true);
+			check(topology.chambers().size()==(stock[0]<.125F?1:0)+(stock[1]<.125F?1:0),"Component PLIC omitted or invented an independent gas chamber");
+		}
+		for(int axis=0;axis<3;axis++) {
+			int corner=1<<axis,opposite=corner^7,peer=axis==0?1:axis==1?2:4;
+			byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)(255^(1<<corner)^(1<<opposite));masks[peer]=(byte)254;
+			float[] pv=new float[8];
+			for(int i=0;i<2;i++) {int bit=i==0?corner:opposite,b=4*i;pv[b]=.25F+.5F*(bit&1);pv[b+1]=.25F+.5F*(bit>>1&1);pv[b+2]=.25F+.5F*(bit>>2&1);pv[b+3]=i==0?.0625F:.03125F;}
+			var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
+			d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09375F,pv,new float[6],masks));d.ensureInventoryGrid();
+			var phase=d.pressurePhaseGeometry;double[] swept=new double[4];
+			new LiquidFluxGeometry(d).sweptMoments(0,peer,axis,.5,true,phase.planeNormal(0,0),phase.planeNormal(0,1),phase.planeNormal(0,2),phase.planeOffset(0),swept,1<<corner,1);
+			check(Math.abs(swept[0]-.0625)<2e-15,"Shared-face swept volume used another component's PLIC");
+		}
 	}
 
 	private static void validateMicroGasOverlap() {
