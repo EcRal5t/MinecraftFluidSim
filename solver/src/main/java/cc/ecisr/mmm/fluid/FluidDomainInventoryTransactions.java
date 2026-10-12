@@ -176,7 +176,14 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 	/** Commits a jointly prevalidated liquid/coherent clear and records only the energy actually removed. */
 	public CondensedClear commitRemoveAllCondensedExact(CondensedClearPlan plan) {
 		preflightCondensedClear(plan);
-		return applyCondensedClear(plan);
+		var gas = gasTopologyCoordinator.planAfterCondensedClear();
+		if (gas != null) gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
+		if (thermalState != null) thermalState.requireCanCommitOperatorClear(thermalState.thermalRevision(),
+				plan.liquid().internalEnergy(), plan.coherentEnergy(), SignedDyadic.ZERO,
+				gas == null ? null : gas.thermalPlan());
+		CondensedClear cleared = applyCondensedClear(plan);
+		if (gas != null) gasTopologyCoordinator.commit(gas);
+		return cleared;
 	}
 
 	/** Reruns every fallible condensed-clear check against live truth without mutating anything. */

@@ -81,7 +81,12 @@ final class GasRuntimeGeometry {
 	/** Complete future clear: no liquid or solid stock, retaining the captured fixed collision masks. */
 	static GasRuntimeGeometry allDry(FluidDomain domain, boolean sealedExterior) {
 		if (domain == null) throw new IllegalArgumentException("Gas runtime domain is missing");
-		return new GasRuntimeGeometry(domain, List.of(), new long[domain.cellCount], sealedExterior, true);
+		return allDry(domain, new long[domain.cellCount], sealedExterior);
+	}
+
+	/** Clears the liquid column while retaining the supplied future solid occupancy. */
+	static GasRuntimeGeometry allDry(FluidDomain domain, long[] occupiedSvq, boolean sealedExterior) {
+		return new GasRuntimeGeometry(domain, List.of(), occupiedSvq, sealedExterior, true);
 	}
 
 	/** Compares physical markers after publication with the complete captured target, including zero components. */

@@ -1552,7 +1552,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		for (int cell = 0; cell < 3; cell++) for (int micro = 0; micro < 8; micro++)
 			require(merged.gasBoundary().nodeOfPiece(8 * cell + micro) == 1,
 					"the merged cavity did not retain complete actual piece ownership");
-		for (int extraction = 0; extraction < 4; extraction++) {
+		for (int extraction = 0; extraction < 5; extraction++) {
 			for (int liquidCells = 1; liquidCells <= 2; liquidCells++) {
 				var delayed = isolatedVacuumBeforeWallOpening(config, liquids, gas, thermal,
 						extraction, liquidCells, false, false);
@@ -1709,7 +1709,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"material container extraction failed");
 		else if (extraction == 2) require(domain.tryExtractExactChemical(2, 0, 0, liquidCells, liquidCells - 1).transferred(),
 				"chemical container extraction failed");
-		else domain.removeAllWaterExact();
+		else if (extraction == 3) domain.removeAllWaterExact();
+		else domain.commitRemoveAllCondensedExact(domain.planRemoveAllCondensedExact());
 		if (!openFirst) require(domain.gasBoundary().nodeCount() == 2 && domain.gasBoundary().inventory(2).isEmpty(),
 				"liquid extraction did not publish the isolated vacuum successor");
 		if (intermediateSync) domain.synchronizeGasTopologyForPersistence();

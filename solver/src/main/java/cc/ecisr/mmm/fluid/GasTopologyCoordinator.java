@@ -132,6 +132,15 @@ final class GasTopologyCoordinator {
 		return plan(GasRuntimeGeometry.allDry(domain, domain.gasState.sealedDomainBoundary), false, null);
 	}
 
+	/** Liquid and coherent removal preserves actual active/deposit granular occupancy. */
+	GasTopologyPlan planAfterCondensedClear() {
+		if (domain.gasState.frame == null) return null;
+		domain.ensureInventoryGrid();
+		var retained = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
+		if (domain.granularState != null) retained.rebuild(domain.granularState.parcels, domain.granularState.deposits);
+		return plan(GasRuntimeGeometry.allDry(domain, retained.copySolidSvq(), domain.gasState.sealedDomainBoundary), false, null);
+	}
+
 	/** Exact common dry support, weighted by the old certified physical piece capacity. */
 	private TreeMap<Long, ExactRational> overlaps(GasRuntimeGeometry old, GasRuntimeGeometry next) {
 		var result = new TreeMap<Long, ExactRational>();
