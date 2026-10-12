@@ -1,6 +1,8 @@
 package cc.ecisr.mmm.fluid;
 
 import java.util.List;
+import cc.ecisr.mmm.chemistry.ExactRational;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 /** Standalone M5 cavity-scanner gate: ambient/sealed classification, exact available volume, partial-face geometric edges and the scan budget. */
 public final class AirCavityScannerValidation {
@@ -29,6 +31,7 @@ public final class AirCavityScannerValidation {
 	private static void validateMicroGasGeometry() {
 		validateMicroGasOverlap();
 		validateComponentLiquidGeometry();
+		validateGasPieceCapacity();
 		validateMicroGasPoreCapacity();
 		Grid grid=new Grid(2,2,2,.5F);var phase=new FlipPressurePhaseGeometry(2,2,2);
 		phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
@@ -148,6 +151,117 @@ public final class AirCavityScannerValidation {
 		d.particles.setVolume(0,.04F);
 		try {GasComponentCapacity.capture(d,gas,null);throw new AssertionError("Stale gas geometry accepted a different raw liquid stock");}
 		catch(GasTopologyBlockedException expected) { }
+	}
+
+	private static void validateGasPieceCapacity() {
+		var fixed=pieceCapacityDomain(0,.25F,.5F,.5F,.25F);
+		fixed.granularCoupling=new cc.ecisr.mmm.granular.GranularCouplingFields(2,2,2,1);
+		long[] occupied=new long[8];occupied[0]=1L<<22;fixed.granularCoupling.setFixedCellSvq(occupied);
+		var geometry=pieceCapacityGeometry(fixed);var component=GasComponentCapacity.capture(fixed,geometry,null).getFirst();
+		check(geometry.piece(1).offsetBracket().targetVolume().equals(ExactRational.ONE.divide(3)),
+				"Pore-capacity fixture must use exact wet volume one third");
+		for(var piece:component.pieces()) if((piece.id()&1)==1)
+			check(piece.lower().equals(ExactRational.of(3).divide(32)) && piece.upper().equals(piece.lower())
+					&& piece.normalizedVolume().equals(piece.lower()),"Inverse compensation moved a fully dry zero-width leaf");
+		var topology=GasChamberTopology.capture(geometry,true);var liveOccupancy=fixed.granularCoupling;
+		fixed.granularCoupling=null;
+		try { GasChamberCapacity.capture(fixed,geometry,topology,null);throw new AssertionError("Live occupancy silently replaced planned solid stock"); }
+		catch(GasTopologyBlockedException expected) { }
+		var planned=GasChamberCapacity.capture(fixed,geometry,topology,null,occupied);
+		occupied[0]=0;
+		check(planned.chambers().getFirst().cubicMeters()==.5,"Planned coherent occupancy was omitted or retained a mutable alias");
+		fixed.granularCoupling=liveOccupancy;
+		checkPieceCapacityBounds(fixed,geometry,true);
+
+		var general=pieceCapacityDomain(0,.2F,.3F,.4F,.07123456F,.7F,.6F,.8F,.0312F);
+		var generalGeometry=pieceCapacityGeometry(general);
+		checkPieceCapacityBounds(general,generalGeometry,false);
+		check(GasComponentCapacity.capture(general,generalGeometry,null).getFirst().pieces().stream()
+				.anyMatch(p->p.roundingErrorBound()>0),"Gas capacity rounding fixture lacks an inexact physical leaf");
+
+		var split=pieceCapacityDomain(126,.25F,.25F,.25F,.0625F,.75F,.75F,.75F,.03125F);
+		var splitGeometry=pieceCapacityGeometry(split);var closed=GasChamberTopology.capture(splitGeometry,true);
+		var closedCapacity=GasChamberCapacity.capture(split,splitGeometry,closed,null);
+		check(closedCapacity.chambers().size()==2 && closed.nodeOfPiece(0)!=closed.nodeOfPiece(7)
+				&& closedCapacity.chambers().get(0).cubicMeters()==.0625 && closedCapacity.chambers().get(1).cubicMeters()==.09375,
+				"Two same-cell gas owners lost their distinct raw capacities");
+		for(float h:new float[]{.1F,.5F}) {
+			var scaled=pieceCapacityScaledDomain(h,126,.25F,.25F,.25F,.0625F,.75F,.75F,.75F,.03125F);
+			var scaledGeometry=pieceCapacityGeometry(scaled);
+			var scaledCapacity=GasChamberCapacity.capture(scaled,scaledGeometry,GasChamberTopology.capture(scaledGeometry,true),null);
+			double metric=h, cubic=metric*metric*metric;
+			check(scaledCapacity.chambers().get(0).cubicMeters()==.0625*cubic
+					&& scaledCapacity.chambers().get(1).cubicMeters()==.09375*cubic,"Gas chamber raw capacity lost its cubic SI metric");
+			checkPieceCapacityBounds(scaled,scaledGeometry,true);
+		}
+		var open=GasChamberTopology.capture(splitGeometry,false);var openCapacity=GasChamberCapacity.capture(split,splitGeometry,open,null);
+		check(open.nodeOfPiece(0)==0 && open.nodeOfPiece(7)==1 && openCapacity.ambientCubicMeters()==.0625
+				&& openCapacity.chambers().getFirst().cubicMeters()==.09375,"Ambient attribution consumed an isolated same-cell gas capacity");
+		try { GasChamberCapacity.capture(split,pieceCapacityGeometry(split),closed,null);throw new AssertionError("Gas capacity accepted a topology from another geometry capture"); }
+		catch(IllegalArgumentException expected) { }
+
+		float a=Math.nextDown(.5F),b=Math.nextDown(Math.scalb(1F,-25)),c=(float)(Math.scalb(1.0,-49)-Math.scalb(1.0,-56));
+		var missing=pieceCapacityDomain(0,.25F,.5F,.5F,a,.25F,.5F,.5F,b,.25F,.5F,.5F,c);
+		var missingGeometry=pieceCapacityGeometry(missing);var bracket=missingGeometry.pieces().getFirst().offsetBracket();
+		var raw=SignedDyadic.of(1).subtract(SignedDyadic.of(a).add(SignedDyadic.of(b)).add(SignedDyadic.of(c)));
+		check(raw.equals(SignedDyadic.of(.5).add(SignedDyadic.of(1,-56))) && missingGeometry.pieces().size()==4
+				&& bracket.offset()==.5 && bracket.lower()==Math.nextDown(.5),"Missing-leaf fixture lost its normal three-float exact stock");
+		check(capacityRational(raw).compareTo(ExactRational.ONE.subtract(bracket.lowerVolume()))<=0,
+				"Missing-leaf fixture must fit the whole-component inverse certificate");
+		try { GasComponentCapacity.capture(missing,missingGeometry,null);throw new AssertionError("Raw gas capacity was assigned to absent selected pieces"); }
+		catch(GasTopologyBlockedException expected) {
+			check(expected.getMessage().contains("cannot fit its selected positive pieces"),"Missing gas leaf was rejected for another property");
+		}
+	}
+
+	private static FluidDomain pieceCapacityDomain(int mask,float... positions) {
+		return pieceCapacityScaledDomain(1,mask,positions);
+	}
+	private static FluidDomain pieceCapacityScaledDomain(float h,int mask,float... positions) {
+		positions=positions.clone();
+		int count=positions.length/4;float volume=0;for(int i=0;i<count;i++)volume+=positions[4*i+3];
+		for(int i=0;i<count;i++)for(int axis=0;axis<3;axis++)positions[4*i+axis]*=h;
+		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)mask;
+		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(h,1000,0,.01F,200,1e-5F,.5F,1e-4F,0));
+		domain.restoreParticleState(new FlipParticleState(2,2,2,h,count,volume,positions,new float[3*count],masks));domain.ensureInventoryGrid();return domain;
+	}
+	private static GasComplementGeometry pieceCapacityGeometry(FluidDomain domain) {
+		domain.pressurePhaseGeometry.rebuild(domain.geometry.solid,domain.markerGrid.exactCellMarkerVolume,domain.geometry.cutCells,
+				domain.granularCoupling,new boolean[8],domain.markerGrid,domain.particles,domain.config.cellSize(),null);
+		return GasComplementGeometry.capture(2,2,2,domain.config.cellSize(),domain.geometry.solid,domain.geometry.cutCells,domain.pressurePhaseGeometry);
+	}
+	private static ExactRational capacityRational(SignedDyadic value) {
+		return value.exponent()>=0 ? new ExactRational(value.significand().shiftLeft(value.exponent()),java.math.BigInteger.ONE)
+				:new ExactRational(value.significand(),java.math.BigInteger.ONE.shiftLeft(-value.exponent()));
+	}
+	private static void checkPieceCapacityBounds(FluidDomain domain,GasComplementGeometry geometry,boolean sealed) {
+		var topology=GasChamberTopology.capture(geometry,sealed);var frame=GasChamberCapacity.capture(domain,geometry,topology,null);
+		ExactRational[] intended=new ExactRational[topology.chambers().size()+1];java.util.Arrays.fill(intended,ExactRational.ZERO);
+		var scale=capacityRational(SignedDyadic.of(geometry.cellVolumeCubicMeters()));
+		for(var component:GasComponentCapacity.capture(domain,geometry,null)) {
+			var sum=ExactRational.ZERO;var stored=SignedDyadic.ZERO;GasPieceCapacity.Piece pivot=null;
+			for(var piece:component.pieces()) {
+				check(piece.normalizedVolume().signum()>0 && piece.normalizedVolume().compareTo(piece.lower())>=0
+						&& piece.normalizedVolume().compareTo(piece.upper())<=0,"Raw leaf capacity escaped its inverse certificate");
+				sum=sum.add(piece.normalizedVolume());stored=stored.add(SignedDyadic.of(piece.cubicMeters()));
+				var target=piece.normalizedVolume().multiply(scale);var error=capacityRational(SignedDyadic.of(piece.cubicMeters())).subtract(target);
+				check((error.signum()<0?error.multiply(-1):error).compareTo(capacityRational(SignedDyadic.of(piece.roundingErrorBound())))<=0,
+						"Leaf SI rounding error exceeds its outward bound");
+				int node=topology.nodeOfPiece(piece.id());intended[node]=intended[node].add(target);
+				if(pivot==null || piece.normalizedVolume().compareTo(pivot.normalizedVolume())>0)pivot=piece;
+			}
+			check(sum.equals(capacityRational(component.availableVolumeNormalized())),"Leaf capacities do not close exact raw component stock");
+			if(pivot!=null) {var error=capacityRational(stored).subtract(sum.multiply(scale));
+				check((error.signum()<0?error.multiply(-1):error).compareTo(capacityRational(SignedDyadic.of(Math.ulp(pivot.cubicMeters())).multiply(SignedDyadic.of(1,-1))))<=0,
+						"Raw component SI closure exceeds the pivot half ULP");}
+		}
+		for(var chamber:frame.chambers()) checkCapacityNodeBound(chamber.cubicMeters(),chamber.roundingErrorBound(),intended[chamber.node()]);
+		checkCapacityNodeBound(frame.ambientCubicMeters(),frame.ambientRoundingErrorBound(),intended[0]);
+	}
+	private static void checkCapacityNodeBound(double volume,double bound,ExactRational intended) {
+		var error=capacityRational(SignedDyadic.of(volume)).subtract(intended);
+		check((error.signum()<0?error.multiply(-1):error).compareTo(capacityRational(SignedDyadic.of(bound)))<=0,
+				"Gas node capacity rounding error exceeds its SI bound");
 	}
 
 	private static void validateMicroGasOverlap() {

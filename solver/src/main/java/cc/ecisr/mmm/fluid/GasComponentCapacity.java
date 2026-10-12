@@ -12,15 +12,27 @@ final class GasComponentCapacity {
 	/** Volumes are fractions of a whole cell; difference is authoritative capacity minus geometry. */
 	record Component(int cell, int supportMask, SignedDyadic poreVolumeNormalized, SignedDyadic availableVolumeNormalized,
 	                 ExactRational geometricGasVolumeNormalized, ExactRational geometricDifferenceNormalized,
-	                 InverseErrorRange inverseErrorRange) { }
+	                 InverseErrorRange inverseErrorRange, List<GasPieceCapacity.Piece> pieces) {
+		Component { pieces = List.copyOf(pieces); }
+	}
 	record InverseErrorRange(ExactRational lower,ExactRational upper) { }
 
 	private GasComponentCapacity() { }
 
 	static List<Component> capture(FluidDomain domain, GasComplementGeometry geometry, PhaseLiquidGeometryEdit futureEdit) {
+		if (domain == null) throw new IllegalArgumentException("Gas component domain is missing");
+		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		return capture(domain, geometry, futureEdit, occupied);
+	}
+
+	/** Reads a complete current or planned solid-occupancy snapshot, including incoming coherent stock. */
+	static List<Component> capture(FluidDomain domain, GasComplementGeometry geometry,
+	                               PhaseLiquidGeometryEdit futureEdit, long[] occupiedSvq) {
 		if (domain == null || geometry == null || geometry.sizeX() != domain.sizeX
-				|| geometry.sizeY() != domain.sizeY || geometry.sizeZ() != domain.sizeZ)
+				|| geometry.sizeY() != domain.sizeY || geometry.sizeZ() != domain.sizeZ
+				|| occupiedSvq == null || occupiedSvq.length != domain.cellCount)
 			throw new IllegalArgumentException("Gas component geometry dimensions differ from the domain");
+		occupiedSvq = occupiedSvq.clone();
 		double h = domain.config.cellSize();
 		if (Double.doubleToRawLongBits(geometry.cellVolumeCubicMeters()) != Double.doubleToRawLongBits(h * h * h))
 			throw new IllegalArgumentException("Gas component geometry metric differs from the domain");
@@ -48,8 +60,7 @@ final class GasComponentCapacity {
 			int mask = domain.geometry.cutCells.mask(cell);
 			int[] supports = CellRemapMicroTopology.components(mask);
 			SignedDyadic open = SignedDyadic.of(Integer.bitCount(~mask & 255), -3);
-			SignedDyadic solid = domain.granularCoupling == null ? SignedDyadic.ZERO
-					: SignedDyadic.of(domain.granularCoupling.solidSvq(cell), -24);
+			SignedDyadic solid = SignedDyadic.of(occupiedSvq[cell], -24);
 			if (solid.signum() < 0 || solid.compareTo(open) > 0)
 				throw blocked("Solid inventory exceeds fixed open capacity", cell);
 			if (!geometry.poreVolume(cell).equals(open.subtract(solid)))
@@ -79,7 +90,8 @@ final class GasComponentCapacity {
 					InverseErrorRange range = inverseRange(representative,support,capacities[i],available,porosity,gas,cell);
 					if (difference.compareTo(range.lower())<0 || difference.compareTo(range.upper())>0)
 						throw blocked("Gas component inventory differs beyond its PLIC inverse certificate",cell);
-					result.add(new Component(cell, support, capacities[i], available, gas, difference,range));
+					result.add(new Component(cell, support, capacities[i], available, gas, difference,range,
+							GasPieceCapacity.capture(cell,support,capacities[i],available,geometry)));
 				} catch (IllegalArgumentException | ArithmeticException magnitude) {
 					throw blocked("Gas component capacity exceeds exact representation budget", cell);
 				}

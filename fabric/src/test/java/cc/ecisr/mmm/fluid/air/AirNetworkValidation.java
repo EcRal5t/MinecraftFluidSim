@@ -24,6 +24,7 @@ public final class AirNetworkValidation {
 		validateExactTopologyPartition();
 		validateSplitPreflightsAllOwners();
 		validatePublicMutatorsPreflightAllOwners();
+		validatePhaseSuccessorAndParallelEdges();
 		validateComponentSpeciesBoundary();
 		validatePhaseColumnTake();
 		validateRegionalComponentAggregation();
@@ -574,11 +575,70 @@ public final class AirNetworkValidation {
 		checkNodeMutationRejectsUnchanged(edges, () -> edges.addOrMergeEdge(1, 2, Double.POSITIVE_INFINITY, .65));
 	}
 
+	private static void validatePhaseSuccessorAndParallelEdges() {
+		AirNetwork phase = new AirNetwork();
+		int node = phase.addNode(1, 0);
+		var first = phase.planPhaseSource(node, phase.ambientInventory(1));
+		var second = phase.planPhaseSource(node, phase.ambientInventory(2));
+		var successor = phase.planRemapAfterPhase(first, new double[]{1}, List.of(first.inventoryAfter()),
+				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, List.of());
+		checkNodeMutationRejectsUnchanged(phase, () -> phase.requireRemapAfterPhaseCurrent(successor, second), true);
+		phase.requireRemapAfterPhaseCurrent(successor, first);
+		phase.commitPhaseMutation(second);
+		checkNodeMutationRejectsUnchanged(phase, () -> phase.commitRemapNodes(successor), true);
+		check(phase.standardVolumeNanos(node) == 2 && phase.drawnFromAmbientNanos() == 2,
+				"A different phase successor replaced committed inventory or source");
+		var next = phase.planPhaseSource(node, phase.ambientInventory(1));
+		var correct = phase.planRemapAfterPhase(next, new double[]{1}, List.of(next.inventoryAfter()),
+				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, List.of());
+		phase.requireRemapAfterPhaseCurrent(correct, next);
+		phase.commitPhaseMutation(next); phase.commitRemapNodes(correct);
+		check(phase.standardVolumeNanos(1) == 3 && phase.drawnFromAmbientNanos() == 3 && phase.auditClosed(),
+				"The matching phase successor did not preserve its inventory and audit");
+		checkNodeMutationRejectsUnchanged(phase, () -> phase.commitRemapNodes(correct), true);
+
+		double[] areas = {.01, .02, .03}, coefficients = {.1, .9, .4};
+		int[][] orders = {{0,1,2}, {0,2,1}, {1,0,2}, {1,2,0}, {2,0,1}, {2,1,0}};
+		for (int count = 2; count <= 3; count++) {
+			java.math.BigDecimal area = java.math.BigDecimal.ZERO, dischargeArea = java.math.BigDecimal.ZERO;
+			for (int i = 0; i < count; i++) {
+				var exactArea = new java.math.BigDecimal(areas[i]);
+				area = area.add(exactArea);
+				dischargeArea = dischargeArea.add(exactArea.multiply(new java.math.BigDecimal(coefficients[i])));
+			}
+			double expectedArea = area.doubleValue();
+			double expectedCoefficient = dischargeArea.divide(area, new java.math.MathContext(100)).doubleValue();
+			for (int[] order : orders) for (boolean reverse : new boolean[]{false, true}) {
+				AirNetwork merged = new AirNetwork();
+				for (int i = 0; i < count; i++) merged.addNode(1, 1);
+				var incoming = new java.util.ArrayList<AirEdge>();
+				for (int ordinal : order) if (ordinal < count) {
+					int firstNode = reverse ? 0 : ordinal + 1, secondNode = reverse ? ordinal + 1 : 0;
+					merged.addOrMergeEdge(firstNode, secondNode, areas[ordinal], coefficients[ordinal]);
+					incoming.add(new AirEdge(reverse ? 1 : 0, reverse ? 0 : 1, areas[ordinal], coefficients[ordinal]));
+				}
+				merged.mergeNodes(1, count == 2 ? new int[]{2} : new int[]{2, 3});
+				AirEdge expected = new AirEdge(0, 1, expectedArea, expectedCoefficient);
+				check(merged.edges().equals(List.of(expected)) && merged.auditClosed(),
+						"Node merge changed parallel conductance with edge order or orientation");
+				var remap = merged.planRemapNodes(new double[]{1}, List.of(merged.inventory(1)),
+						GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, incoming);
+				merged.commitRemapNodes(remap);
+				check(merged.edges().equals(List.of(expected)) && merged.auditClosed(),
+						"Topology remap did not aggregate all parallel openings canonically");
+			}
+		}
+	}
+
 	private static void checkSplitRejectsUnchanged(AirNetwork network, double... volumes) {
 		checkNodeMutationRejectsUnchanged(network, () -> network.splitNode(1, volumes));
 	}
 
 	private static void checkNodeMutationRejectsUnchanged(AirNetwork network, Runnable mutation) {
+		checkNodeMutationRejectsUnchanged(network, mutation, false);
+	}
+
+	private static void checkNodeMutationRejectsUnchanged(AirNetwork network, Runnable mutation, boolean stalePlan) {
 		var ids = network.nodeIds();
 		var inventories = ids.stream().map(network::inventory).toList();
 		double[] capacities = ids.stream().mapToDouble(network::availableVolume).toArray();
@@ -588,7 +648,11 @@ public final class AirNetworkValidation {
 		long revision = network.revision();
 		int clamps = network.transferClampEvents();
 		boolean rejected = false;
-		try { mutation.run(); } catch (IllegalArgumentException | ArithmeticException expected) { rejected = true; }
+		try { mutation.run(); } catch (IllegalArgumentException | ArithmeticException expected) {
+			if (stalePlan) throw expected;
+			rejected = true;
+		}
+		catch (IllegalStateException stale) { if (!stalePlan) throw stale; rejected = true; }
 		check(rejected, "Unrepresentable gas mutation did not reject its complete candidate");
 		check(network.nodeIds().equals(ids) && network.edges().equals(edges) && network.revision() == revision && network.transferClampEvents() == clamps
 				&& network.externalSource().equals(source) && network.escapedSink().equals(sink)

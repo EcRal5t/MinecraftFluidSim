@@ -75,6 +75,7 @@ public final class AirNetwork {
 	private SignedDyadic massRoundoff = SignedDyadic.ZERO;
 	private SignedDyadic residualRoundoff = SignedDyadic.ZERO;
 	private long revision;
+	private PhaseMutationPlan lastCommittedPhasePlan;
 	private int transferClampEvents;
 
 	public AirNetwork() { this(BuiltinGasDefinitions.createRegistry()); }
@@ -232,6 +233,7 @@ public final class AirNetwork {
 	public void commitPhaseMutation(PhaseMutationPlan plan) {
 		requirePhaseMutationCurrent(plan);
 		commitTransferMutation(plan.mutation);
+		lastCommittedPhasePlan = plan;
 	}
 
 	/**
@@ -563,23 +565,36 @@ public final class AirNetwork {
 				if (second == removed) second = replacement;
 			}
 			if (first == second) continue;
-			boolean mergedIntoExisting = false;
-			for (int i = 0; i < rewired.size(); i++) {
-				AirEdge candidate = rewired.get(i);
-				boolean samePair = (candidate.firstNode() == first && candidate.secondNode() == second)
-						|| (candidate.firstNode() == second && candidate.secondNode() == first);
-				if (!samePair) continue;
-				rewired.set(i, new AirEdge(first, second,
-						candidate.areaSquareMeters() + edge.areaSquareMeters(), edge.dischargeCoefficient()));
-				mergedIntoExisting = true;
-				break;
-			}
-			if (!mergedIntoExisting) {
-				rewired.add(new AirEdge(first, second, edge.areaSquareMeters(), edge.dischargeCoefficient()));
-			}
+			rewired.add(new AirEdge(first, second, edge.areaSquareMeters(), edge.dischargeCoefficient()));
 		}
-		return rewired;
+		return aggregateEdges(rewired);
 	}
+
+	/** Parallel openings retain their summed area and discharge-area product, independent of input order. */
+	private static ArrayList<AirEdge> aggregateEdges(List<AirEdge> input) {
+		var totals = new TreeMap<Long, EdgeTotals>();
+		for (AirEdge edge : input) {
+			int first = Math.min(edge.firstNode(), edge.secondNode()), second = Math.max(edge.firstNode(), edge.secondNode());
+			long pair = ((long) first << 32) | Integer.toUnsignedLong(second);
+			SignedDyadic area = SignedDyadic.of(edge.areaSquareMeters());
+			SignedDyadic dischargeArea = area.multiply(SignedDyadic.of(edge.dischargeCoefficient()));
+			EdgeTotals old = totals.get(pair);
+			totals.put(pair, old == null ? new EdgeTotals(area, dischargeArea)
+					: new EdgeTotals(old.area.add(area), old.dischargeArea.add(dischargeArea)));
+		}
+		var result = new ArrayList<AirEdge>(totals.size());
+		for (var entry : totals.entrySet()) {
+			EdgeTotals total = entry.getValue();
+			int shift = total.dischargeArea.exponent() - total.area.exponent();
+			BigInteger numerator = total.dischargeArea.significand(), denominator = total.area.significand();
+			if (shift >= 0) numerator = numerator.shiftLeft(shift); else denominator = denominator.shiftLeft(-shift);
+			result.add(new AirEdge((int) (entry.getKey() >>> 32), (int) (long) entry.getKey(),
+					total.area.toDouble(), new ExactRational(numerator, denominator).toDouble()));
+		}
+		return result;
+	}
+
+	private record EdgeTotals(SignedDyadic area, SignedDyadic dischargeArea) { }
 
 	/** Applies a topology plan whose explicit source/sink deltas close every exact component column. */
 	public void remapNodes(
@@ -649,7 +664,7 @@ public final class AirNetwork {
 		MassColumns after = massColumns(inventories);
 		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
 		MassColumns delta = mutationDelta(before, after, source, sink);
-		return new RemapPlan(this, phase == null ? revision : Math.addExact(revision, 1), replacementNodes, plannedEdges, inventories.size() + 1,
+		return new RemapPlan(this, phase == null ? revision : Math.addExact(revision, 1), phase, replacementNodes, aggregateEdges(plannedEdges), inventories.size() + 1,
 				(phase == null ? massRoundoff : phase.mutation.massRoundoffAfter()).add(delta.mass()),
 				(phase == null ? residualRoundoff : phase.mutation.residualRoundoffAfter()).add(delta.residual()),
 				(phase == null ? externalSource : phase.mutation.externalSourceAfter()).add(sourceDelta),
@@ -659,7 +674,7 @@ public final class AirNetwork {
 	/** Checks a prepared successor before the phase performs its first write. */
 	public void requireRemapAfterPhaseCurrent(RemapPlan remap, PhaseMutationPlan phase) {
 		requirePhaseMutationCurrent(phase);
-		if (remap == null || remap.owner != this || remap.baseRevision != Math.addExact(revision, 1))
+		if (remap == null || remap.owner != this || remap.parentPhase != phase || remap.baseRevision != Math.addExact(revision, 1))
 			throw new IllegalStateException("Gas phase successor topology is stale");
 	}
 
@@ -671,6 +686,8 @@ public final class AirNetwork {
 		if (plan.baseRevision != revision) {
 			throw new IllegalStateException("Gas network changed after remap planning");
 		}
+		if (plan.parentPhase != null && plan.parentPhase != lastCommittedPhasePlan)
+			throw new IllegalStateException("Gas phase successor does not match the committed phase");
 	}
 
 	/** Publishes a previously validated remap using assignments only. */
@@ -683,6 +700,7 @@ public final class AirNetwork {
 		residualRoundoff = plan.residualRoundoffAfter;
 		externalSource = plan.externalSourceAfter;
 		escapedSink = plan.escapedSinkAfter;
+		lastCommittedPhasePlan = null;
 		revision++;
 	}
 
@@ -761,7 +779,7 @@ public final class AirNetwork {
 		MassColumns before = liveMassColumns(), after = massColumns(replacement.values().stream().map(AirNode::inventory).toList());
 		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
 		MassColumns delta = mutationDelta(before, after, source, sink);
-		return new RemapPlan(this, revision, replacement, replacementEdges, nextAfter,
+		return new RemapPlan(this, revision, null, replacement, replacementEdges, nextAfter,
 				massRoundoff.add(delta.mass()), residualRoundoff.add(delta.residual()),
 				externalSource.add(sourceDelta), escapedSink.add(sinkDelta));
 	}
@@ -867,6 +885,7 @@ public final class AirNetwork {
 	public static final class RemapPlan {
 		private final AirNetwork owner;
 		private final long baseRevision;
+		private final PhaseMutationPlan parentPhase;
 		private final TreeMap<Integer, AirNode> replacementNodes;
 		private final ArrayList<AirEdge> replacementEdges;
 		private final int nextNodeId;
@@ -879,13 +898,14 @@ public final class AirNetwork {
 		public double availableVolume(int nodeId) { return replacementNodes.get(nodeId).availableVolume(); }
 
 		private RemapPlan(
-				AirNetwork owner, long baseRevision, TreeMap<Integer, AirNode> replacementNodes,
+				AirNetwork owner, long baseRevision, PhaseMutationPlan parentPhase, TreeMap<Integer, AirNode> replacementNodes,
 				ArrayList<AirEdge> replacementEdges, int nextNodeId,
 				SignedDyadic massRoundoffAfter, SignedDyadic residualRoundoffAfter,
 				GasAuditLedger externalSourceAfter, GasAuditLedger escapedSinkAfter
 		) {
 			this.owner = owner;
 			this.baseRevision = baseRevision;
+			this.parentPhase = parentPhase;
 			this.replacementNodes = replacementNodes;
 			this.replacementEdges = replacementEdges;
 			this.nextNodeId = nextNodeId;

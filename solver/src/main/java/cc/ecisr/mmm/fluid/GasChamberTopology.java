@@ -12,10 +12,12 @@ final class GasChamberTopology {
 	record Chamber(int node, int minimumPiece, double geometricVolume, double volumeErrorBound) { }
 	record Connection(int firstNode, int secondNode, double area) { }
 	private final int[] pieceNodes;
+	private final GasComplementGeometry geometry;
 	private final List<Chamber> chambers;
 	private final List<Connection> connections;
 
-	private GasChamberTopology(int[] pieceNodes, List<Chamber> chambers, List<Connection> connections) {
+	private GasChamberTopology(GasComplementGeometry geometry, int[] pieceNodes, List<Chamber> chambers, List<Connection> connections) {
+		this.geometry = geometry;
 		this.pieceNodes = pieceNodes; this.chambers = List.copyOf(chambers); this.connections = List.copyOf(connections);
 	}
 
@@ -57,7 +59,7 @@ final class GasChamberTopology {
 		}
 		var connections = new ArrayList<Connection>(areaByNodes.size());
 		for (var entry : areaByNodes.entrySet()) connections.add(new Connection((int) (entry.getKey() >>> 32), (int) (long) entry.getKey(), positive(entry.getValue(), "Gas chamber port area")));
-		return new GasChamberTopology(pieceNodes, chambers, connections);
+		return new GasChamberTopology(geometry, pieceNodes, chambers, connections);
 	}
 
 	private static int root(int[] parent, int piece) {
@@ -74,6 +76,7 @@ final class GasChamberTopology {
 		return result;
 	}
 	int nodeOfPiece(int piece) { return pieceNodes[piece]; }
+	boolean matchesGeometry(GasComplementGeometry candidate) { return geometry == candidate; }
 	List<Chamber> chambers() { return chambers; }
 	List<Connection> connections() { return connections; }
 }

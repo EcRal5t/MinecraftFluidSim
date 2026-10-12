@@ -37,7 +37,11 @@
 
 气体块读取其固定连通分量的独立 PLIC。每块保留精确单元归一化有理数体积，乘当前 `h³` 后一次舍入为 SI 观察值。气腔几何观察值精确汇总各块的 binary64 体积再舍入一次，`volumeErrorBound` 向外包住叶子与气腔两级舍入；平面求逆余差及库存容量补量各自结算。
 
-单平面微盒体积由 [MicroBoxPlaneVolume](../../solver/src/main/java/cc/ecisr/mmm/fluid/MicroBoxPlaneVolume.java) 的精确盒积分求得；每块保留捕获时的干侧半空间与 PLIC 求逆证书，几何对象保存碰撞掩码及精确孔隙容量副本。零孔隙容量的固定连通分量省去气体块。[GasComponentCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComponentCapacity.java) 直接读取原始液体库存，按固定连通分量计算扣除固体后的剩余容量，同时保留精确几何气体体积与两者差额。计算校核原始库存目标、捕获孔隙容量及相邻阈值体积区间；几何过期、容量差额超出证书或正库存容量缺少干区时明确拒绝计算。
+单平面微盒体积由 [MicroBoxPlaneVolume](../../solver/src/main/java/cc/ecisr/mmm/fluid/MicroBoxPlaneVolume.java) 的精确盒积分求得；每块保留捕获时的干侧半空间与 PLIC 求逆证书，几何对象保存碰撞掩码及精确孔隙容量副本。零孔隙容量的固定连通分量省去气体块。[GasComponentCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComponentCapacity.java) 直接读取原始液体库存，按固定连通分量计算扣除固体后的剩余容量，同时保留精确几何气体体积与两者差额。计算校核原始库存目标、捕获孔隙容量及相邻阈值体积区间；捕获的碰撞掩码、孔隙容量或体积目标过期、容量差额超出证书或正库存容量缺少干区时明确拒绝计算。
+
+[GasPieceCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasPieceCapacity.java) 在每块的相邻偏移体积区间内分配该分量的原始气体容量。令各块容量区间为 `[Lᵢ,Uᵢ]`、原始分量容量为 `G`，使用 `aᵢ=Lᵢ+θ(Uᵢ−Lᵢ)`，其中 `θ=(G−ΣLᵢ)/Σ(Uᵢ−Lᵢ)`。零宽区间保持固定容量；全部块的归一化容量精确和为 `G`。缺少选定几何块时，其容量为零；`G` 超出已有块可承接的区间时拒绝计算。通路由选定 PLIC 几何确定，容量证书按每块保存。
+
+SI 容量以当前 `h³` 换算，各非最大份额一次舍入，最大份额承接原始 SI 总量减去已储存子列后的余数；分量总量误差至多为承接列的半个 ULP。每块另存实际舍入误差上包。[GasChamberCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasChamberCapacity.java) 在同一份几何与气腔图上汇总块容量，节点误差上包包含叶子误差及节点最终舍入。规划中的固体占据量以完整 SVQ 副本参与容量计算，包含恢复前的连续固相库存。
 
 [GasFaceIntersection](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
 
@@ -88,6 +92,8 @@ component 与 species 的隶属关系是 world-local registry 原始数据，不
 气液相变只把同时被 component 允许且具有 host gas thermal offset 的 species 视为可挥发，其他 species 留在凝聚相。允许集合非空只声明能力，当前功能布局中实际出现 species 时仍必须同时存在匹配的 chemical registry 和 host gas thermal species offset。
 
 `AirNetwork` 对节点、库存、可用体积、edge 和物质审计维护同一个单调 revision。节点创建、库存设置、拆分、合并和排气先准备完整节点、连接及累计审计后继，再统一发布；质量和残差先计算本次净差额，再加入已有舍入账本。孔流连接须引用已有节点或环境，单次请求的面积与流量系数先接受校验，再合并平行开口。topology remap 绑定规划时 revision；提交前 gas inventory 与 gas-energy 两个 owner 必须同时接受各自 generation，之后才发布任一侧。几何仍相同但库存、体积、edge 或 `U` 已改变的旧计划必须整体拒绝，不能覆盖较新的 owner 原始数据。
+
+相变后的拓扑计划同时绑定具体的父相变计划；首次相变写入前和父计划提交后均检查该身份。相同基础 revision 上准备的其他相变计划使其后继失效。
 
 气体拓扑计划同时保存不可变的 cut-micro 掩码和外壳密闭状态。操作级清空在任何库存写入前复核这份几何，以及重新扫描所得的节点归属、逐格与逐节点容量和孔流面积；几何变化即使保留相同节点标签，也会使旧计划失效。
 
@@ -196,6 +202,8 @@ caloric 标定端点不截断内禀温度，相平衡曲线继续拥有自己的
 ```text
 Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 ```
+
+气腔重连和拓扑提交按无向节点对汇总平行开口。面积为 `ΣAᵢ`，流量系数为 `Σ(CdᵢAᵢ)/ΣAᵢ`；两项和使用精确二进制累加，最后各自一次舍入，保持连接输入次序和端点方向的一致性。
 
 实际孔流量通过源库存的 `Vstd/Vavailable` 换成标准体积流量；无限环境使用 `T0/Tambient`，密度也按环境温度推导。一个 step 的 transfer 由完整候选的均压条件限制：热状态搬运源侧焓 `h = u + p*v`，用候选两侧库存与 `U` 重新推导压力，在整数 nanos 上寻找保持源压不低于目标压力的最大可表示份额。ambient 流入记 source，流出记 sink；节点间转移不记外部源汇。
 

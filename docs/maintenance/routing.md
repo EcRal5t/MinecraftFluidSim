@@ -72,6 +72,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 完整气腔归属恢复前校核在 `GasTopologyCoordinator.restore`，验证为 `AirCavityScannerValidation.validateGasRestoreLineage`；零孔隙容量的气体块过滤验证为 `validateMicroGasPoreCapacity`。几何权重的精确气体库存分配在 `GasInventory.partition(List<ExactRational>)`。
 
+逐气体块证书容量分配见 [GasPieceCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasPieceCapacity.java)，对应节点容量及 SI 误差汇总见 [GasChamberCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasChamberCapacity.java)，验证为 `AirCavityScannerValidation.validateGasPieceCapacity`。相变后继计划身份与平行孔流连接汇总在 `AirNetwork`，验证为 `AirNetworkValidation.validatePhaseSuccessorAndParallelEdges`。
+
 拓扑继承控制体积的精确权重分配见 [GasTopologyVolumePartition](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasTopologyVolumePartition.java)，公开拓扑验证为 `AirCavityScannerValidation.validateExactGasTopologyWeights`。节点拆分的发布前校验为 `AirNetworkValidation.validateSplitPreflightsAllOwners`，公开库存写入、连接请求与累计源汇校验为 `validatePublicMutatorsPreflightAllOwners`；单格替换的气体、分量容量、坐标表示及原位抽取缓存校验为 `CarrierMutationValidation.cellVolumeReplacementPreflightsAllOwners`。
 
 | 修改内容 | 首先打开 | 需要了解的数据和算法 |
