@@ -8,20 +8,26 @@ public final class MarkerPressureValidation {
 	                      int[] cells) { }
 	private MarkerPressureValidation() { }
 	public static void main(String[] args) {
-		if (args.length == 1 && args[0].equals("--gas-geometry")) {
+		if (args.length == 1 && args[0].equals("--velocity-space")) {
+			MarkerVelocitySpaceExperiment.validateCandidate();
+			MarkerVelocitySpaceExperiment.validateProduction();
+		} else if (args.length == 1 && args[0].equals("--velocity-candidate")) {
+			MarkerVelocitySpaceExperiment.validateCandidate();
+		} else if (args.length == 1 && args[0].equals("--gas-geometry")) {
 			pressureUsesCurrentMicroGasGeometry();
 			System.out.println("MarkerPressureValidation PASS (current micro gas geometry)");
 		} else if (args.length == 1 && args[0].equals("--kernel")) {
 			validateKernel();
 			System.out.println("MarkerPressureValidation PASS (kernel; production capillary/wall transport skipped)");
 		} else {
-			if (args.length != 0) throw new IllegalArgumentException("Use --kernel, --gas-geometry or no arguments for marker pressure validation");
+			if (args.length != 0) throw new IllegalArgumentException("Unknown marker pressure validation entry");
 			validate();
 			System.out.println("MarkerPressureValidation PASS");
 		}
 	}
 	public static void validate() {
 		validateKernel();
+		MarkerVelocitySpaceExperiment.validateProduction();
 		pressureUsesCurrentMicroGasGeometry();
 		unresolvedCapillaryTractionIsAppliedOnce();
 		transportPreservesFixedWallVelocity();
@@ -40,6 +46,9 @@ public final class MarkerPressureValidation {
 	}
 
 	private static void pressureUsesCurrentMicroGasGeometry() {
+		pressureUsesCurrentMicroGasGeometry(false);
+	}
+	static void pressureUsesCurrentMicroGasGeometry(boolean verifyLiquidPressure) {
 		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, 0));
 		for (int c = 0; c < d.cellCount; c++) d.setSolid(c % 3, c / 3 % 3, c / 9, true);
 		d.setSolid(0, 1, 1, false); d.setSolid(2, 1, 1, false);
@@ -73,6 +82,10 @@ public final class MarkerPressureValidation {
 		near(d.pressureSystem.gasPressure(first) + d.pressureReference, p1, 1e-4, "First stationary cavity retains its pressure");
 		near(d.pressureSystem.gasPressure(second) + d.pressureReference, p2, 1e-4, "Second stationary cavity retains its pressure");
 		near(d.maximumParticleSpeed(), 0, 1e-6, "Closed stationary compartments retain zero motion");
+		if (verifyLiquidPressure) {
+			near(d.projection.pressure[12] + d.pressureReference, p1, 1e-3, "First stationary liquid pressure equals its contacted cavity pressure");
+			near(d.projection.pressure[14] + d.pressureReference, p2, 1e-3, "Second stationary liquid pressure equals its contacted cavity pressure");
+		}
 		float x = d.particles.positionX(0); d.particles.setPositionX(0, Math.nextUp(x));
 		boolean rejected = false;
 		try { frame.liquidPressureGeometry(d); } catch (GasTopologyBlockedException expected) { rejected = true; }
