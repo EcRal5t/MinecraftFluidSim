@@ -131,8 +131,10 @@ public final class CarrierMutationValidation {
 			}
 			require(domain.removeVolumeNear(1, 0, 0, .0625F, 0) == .0625F
 					&& domain.particleCount() == 16 && domain.carrierMutationRevision() == carrierRevision
-					&& network.revision() == gasRevision && domain.totalVolumeExact() == 1.4375,
-					"Partial extraction fixture must change volume while preserving marker and gas revisions");
+					&& network.revision() > gasRevision && network.availableVolume(1) == .5625
+					&& domain.totalVolumeExact() == 1.4375,
+					"Partial extraction must retain marker ordinals and publish its gas successor");
+			long extractionRevision = network.revision(); var extractedGas = domain.exportGasState("");
 			if (stale != null) {
 				var before = replacementState(domain);
 				try { domain.carrierMutations().replaceCellVolume(stale); throw new AssertionError("Replacement accepted an outdated liquid inventory"); }
@@ -140,7 +142,7 @@ public final class CarrierMutationValidation {
 					require(expected.getMessage().contains("changed after planning"), "Stale inventory rejection lost its cause");
 				}
 				requireUnchanged(domain, before);
-				requireReplacementGasUnchanged(domain, network, gasRevision, gas);
+				requireReplacementGasUnchanged(domain, network, extractionRevision, extractedGas, .5625);
 			}
 			// A fresh public preview reads the newly created space directly, before any capture refresh.
 			domain.setVolume(0, 0, 0, 1);
@@ -187,9 +189,15 @@ public final class CarrierMutationValidation {
 	private static void requireReplacementGasUnchanged(
 			FluidDomain domain, cc.ecisr.mmm.fluid.air.AirNetwork network, long revision,
 			cc.ecisr.mmm.fluid.air.GasStateSnapshot expected) {
+		requireReplacementGasUnchanged(domain, network, revision, expected, .5);
+	}
+
+	private static void requireReplacementGasUnchanged(
+			FluidDomain domain, cc.ecisr.mmm.fluid.air.AirNetwork network, long revision,
+			cc.ecisr.mmm.fluid.air.GasStateSnapshot expected, double availableVolume) {
 		var actual = domain.exportGasState("");
-		require(domain.gasState.network == network && network.revision() == revision && network.availableVolume(1) == .5
-				&& domain.gasBoundary.previousSealedNodeCount() == 1 && domain.gasState.pressureActive
+		require(domain.gasState.network == network && network.revision() == revision && network.availableVolume(1) == availableVolume
+				&& domain.gasBoundary.previousSealedNodeCount() == expected.nodes().size() && domain.gasState.pressureActive
 				&& java.util.Arrays.equals(actual.pieceNodeOrdinal(), expected.pieceNodeOrdinal())
 				&& actual.nodes().equals(expected.nodes()) && actual.externalSource().equals(expected.externalSource())
 				&& actual.escapedSink().equals(expected.escapedSink()) && actual.massRoundoff().equals(expected.massRoundoff())

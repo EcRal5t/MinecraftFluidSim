@@ -157,13 +157,15 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 				.equals(plan.internalEnergy())) {
 			throw new IllegalStateException("Liquid inventory changed after clear planning");
 		}
+		var gas = new LiquidExtractionGasPlan(domain());
+		gas.clearLiquid(); gas.prepare(null);
 		if (chemicalParcels != null) {
 			chemicalParcels.recordEscapedSink(plan.drained());
 		}
 		if (thermalState != null) thermalState.recordExternalSink(plan.internalEnergy());
 		coordinator.clearLiquidMarkers(
 				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()));
-		gridDirty = true;
+		gas.commit();
 	}
 
 	/** Plans one operator clear across liquid markers and every coherent condensed phase. */

@@ -315,6 +315,28 @@ public final class ThermalDomainState {
 				.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
 	}
 
+	/** Checks each external truncation, container rounding and gas work in their publication order. */
+	public void requireCanCommitLiquidExtraction(List<SignedDyadic> removedEnergy, Double itemEnergy,
+	                                           GasEnergyStore.GasRemapPlan gas) {
+		if (removedEnergy == null || itemEnergy != null && !Double.isFinite(itemEnergy))
+			throw new IllegalArgumentException("Liquid extraction energy is invalid");
+		var after = auditState.ledger();
+		SignedDyadic removed = SignedDyadic.ZERO;
+		for (var energy : removedEnergy) {
+			after = after.withExternalSinkEnergy(energy); after.expectedInventory();
+			removed = removed.add(energy);
+		}
+		if (itemEnergy != null) {
+			var delta = SignedDyadic.of(itemEnergy).subtract(removed);
+			after = after.withExternalSinkEnergy(delta).withRoundoff(delta); after.expectedInventory();
+		}
+		if (gas != null) {
+			gasState.requireCanCommitRemap(gas);
+			after.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
+					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
+		}
+	}
+
 	/** The coordinator has removed old energies internally and reserved empty new ordinals. */
 	public void commitLiquidReplacement(int firstOrdinal, LiquidReplacementPlan plan) {
 		if (plan == null || plan.owner != this || plan.auditBefore != auditState.ledger())

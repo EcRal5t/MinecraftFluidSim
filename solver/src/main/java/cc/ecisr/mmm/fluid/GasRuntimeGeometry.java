@@ -18,12 +18,18 @@ final class GasRuntimeGeometry {
 	private final GasChamberCapacity capacity;
 	private final int[] pieceNodes, minimumPieceKeys;
 
-	private GasRuntimeGeometry(FluidDomain domain, PhaseLiquidGeometryEdit edit, long[] occupiedSvq,
+	private GasRuntimeGeometry(FluidDomain domain, List<PhaseLiquidGeometryEdit> edits, long[] occupiedSvq,
 	                           boolean sealedExterior, boolean allDry) {
-		if (domain == null || occupiedSvq == null || occupiedSvq.length != domain.cellCount
-				|| edit != null && (edit.cell() >= domain.cellCount
-				|| edit.collisionMask() != domain.geometry.cutCells.mask(edit.cell())))
+		if (domain == null || occupiedSvq == null || occupiedSvq.length != domain.cellCount || edits == null)
 			throw new IllegalArgumentException("Gas runtime geometry requires a complete candidate");
+		edits = List.copyOf(edits);
+		boolean[] selected = new boolean[domain.cellCount];
+		for (var edit : edits) {
+			if (edit.cell() >= domain.cellCount || selected[edit.cell()]
+					|| edit.collisionMask() != domain.geometry.cutCells.mask(edit.cell()))
+				throw new IllegalArgumentException("Repeated gas liquid edit or mismatched collision mask");
+			selected[edit.cell()] = true;
+		}
 		this.cellSize = domain.config.cellSize(); this.sealedExterior = sealedExterior;
 		this.occupiedSvq = occupiedSvq.clone();
 		this.sourceOccupiedSvq = domain.granularCoupling == null ? new long[domain.cellCount]
@@ -40,7 +46,7 @@ final class GasRuntimeGeometry {
 		this.sourceLiquidStock = stock(domain, cut, rawIndex);
 		MarkerGridIndex phaseIndex = allDry ? emptyIndex(domain.cellCount, 0) : rawIndex;
 		var target = new ArrayList<>(allDry ? stock(domain, cut, phaseIndex) : sourceLiquidStock);
-		if (edit != null) target.set(edit.cell(), edit);
+		for (var edit : edits) target.set(edit.cell(), edit);
 		this.liquidStock = List.copyOf(target);
 		phaseIndex.exactCellVolumeInventory = new SignedDyadic[domain.cellCount];
 		for (int cell = 0; cell < domain.cellCount; cell++) {
@@ -52,8 +58,8 @@ final class GasRuntimeGeometry {
 		var occupancy = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize);
 		occupancy.setFixedCellSvq(this.occupiedSvq);
 		this.phase = new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
-		phase.rebuild(solid, phaseIndex.exactCellMarkerVolume, cut, occupancy, new boolean[domain.cellCount],
-				phaseIndex, domain.particles, cellSize, edit);
+		phase.rebuildLiquidEdits(solid, phaseIndex.exactCellMarkerVolume, cut, occupancy, new boolean[domain.cellCount],
+				phaseIndex, domain.particles, cellSize, liquidStock);
 		this.geometry = GasComplementGeometry.capture(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize, solid, cut, phase);
 		this.topology = GasChamberTopology.capture(geometry, sealedExterior);
 		this.capacity = GasChamberCapacity.capture(domain, geometry, topology, this.occupiedSvq, liquidStock);
@@ -64,13 +70,18 @@ final class GasRuntimeGeometry {
 	}
 
 	static GasRuntimeGeometry capture(FluidDomain domain, PhaseLiquidGeometryEdit edit, long[] occupiedSvq, boolean sealedExterior) {
-		return new GasRuntimeGeometry(domain, edit, occupiedSvq, sealedExterior, false);
+		return captureLiquidEdits(domain, edit == null ? List.of() : List.of(edit), occupiedSvq, sealedExterior);
+	}
+
+	static GasRuntimeGeometry captureLiquidEdits(FluidDomain domain, List<PhaseLiquidGeometryEdit> edits,
+	                                          long[] occupiedSvq, boolean sealedExterior) {
+		return new GasRuntimeGeometry(domain, edits, occupiedSvq, sealedExterior, false);
 	}
 
 	/** Complete future clear: no liquid or solid stock, retaining the captured fixed collision masks. */
 	static GasRuntimeGeometry allDry(FluidDomain domain, boolean sealedExterior) {
 		if (domain == null) throw new IllegalArgumentException("Gas runtime domain is missing");
-		return new GasRuntimeGeometry(domain, null, new long[domain.cellCount], sealedExterior, true);
+		return new GasRuntimeGeometry(domain, List.of(), new long[domain.cellCount], sealedExterior, true);
 	}
 
 	/** Compares physical markers after publication with the complete captured target, including zero components. */

@@ -51,13 +51,30 @@ record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponent
 		return current(cell, state.geometry().cutCells.mask(cell), state.cellSize(), state.markerGrid(), state.particles());
 	}
 
+	static PhaseLiquidGeometryEdit current(PhaseChangeStageSupport.Workspace state, int cell, float[] futureMarkerVolumes) {
+		if (cell < 0 || cell >= state.cellCount()) throw new IllegalArgumentException("Invalid phase liquid cell");
+		return current(cell, state.geometry().cutCells.mask(cell), state.cellSize(), state.markerGrid(), state.particles(), futureMarkerVolumes);
+	}
+
 	static PhaseLiquidGeometryEdit current(
 			int cell, int collisionMask, float cellSize, MarkerGridIndex markers, LiquidParticleStore particles) {
+		return current(cell, collisionMask, cellSize, markers, particles, null);
+	}
+
+	/** Volumes retain original marker ordinals; a zero removes that marker from the future tuple. */
+	static PhaseLiquidGeometryEdit current(
+			int cell, int collisionMask, float cellSize, MarkerGridIndex markers, LiquidParticleStore particles,
+			float[] futureMarkerVolumes) {
 		if (markers == null || particles == null || cell < 0 || cell >= markers.cellCount)
 			throw new IllegalArgumentException("Invalid current liquid component input");
+		if (futureMarkerVolumes != null && futureMarkerVolumes.length != particles.count())
+			throw new IllegalArgumentException("Future liquid volumes must use the original marker count");
 		var total = new Moments(cell, collisionMask, cellSize, 0, 0);
-		for (int marker = markers.cellMarkerHead[cell]; marker >= 0; marker = markers.particleCellNext[marker])
-			total.add(particles, marker, particles.volume(marker));
+		for (int marker = markers.cellMarkerHead[cell]; marker >= 0; marker = markers.particleCellNext[marker]) {
+			float value = futureMarkerVolumes == null ? particles.volume(marker) : futureMarkerVolumes[marker];
+			if (!Float.isFinite(value) || value < 0) throw new IllegalArgumentException("Invalid future liquid volume");
+			if (value > 0) total.add(particles, marker, value);
+		}
 		return total.edit();
 	}
 

@@ -1552,6 +1552,107 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		for (int cell = 0; cell < 3; cell++) for (int micro = 0; micro < 8; micro++)
 			require(merged.gasBoundary().nodeOfPiece(8 * cell + micro) == 1,
 					"the merged cavity did not retain complete actual piece ownership");
+		for (int extraction = 0; extraction < 4; extraction++) {
+			for (int liquidCells = 1; liquidCells <= 2; liquidCells++) {
+				var delayed = isolatedVacuumBeforeWallOpening(config, liquids, gas, thermal,
+						extraction, liquidCells, false, false);
+				var synchronizedState = isolatedVacuumBeforeWallOpening(config, liquids, gas, thermal,
+						extraction, liquidCells, true, false);
+				require(delayed.equals(synchronizedState), "an observation changed gas work or energy across vacuum birth");
+			}
+			isolatedVacuumBeforeWallOpening(config, liquids, gas, thermal, extraction, 1, false, true);
+		}
+		coldGasExpansionRejectsExtractionBeforeWrite();
+	}
+
+	private static void coldGasExpansionRejectsExtractionBeforeWrite() {
+		var config = new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0);
+		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		var thermal = new ThermalRegistry(List.of(
+				new ThermalMaterialDefinition("test:cold_water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+						BuiltinFluidMaterials.WATER.id(), Double.MIN_NORMAL, 0, 0,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(Double.MIN_NORMAL, 1, 1))),
+				new ThermalMaterialDefinition("test:cold_air", ThermalMaterialDefinition.CarrierKind.GAS,
+						BuiltinGasDefinitions.AIR, Double.MIN_NORMAL, 0, 0,
+						List.of(new ThermalMaterialDefinition.CaloricSegment(Double.MIN_NORMAL, 1, 1)))));
+		var domain = new FluidDomain(2, 2, 2, config, 64);
+		domain.sealDomainBoundary();
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++)
+			if (x != 0 || y != 0 || z != 0) domain.setSolid(x, y, z, true);
+		domain.setVolume(0, 0, 0, .5F); domain.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
+		domain.bootstrapGasState(""); domain.bindThermal(thermal, liquids, Double.MIN_NORMAL);
+		var before = domain.exportMaterialParticleState(); var gas = domain.exportGasState("");
+		var frame = domain.gasState.frame; var network = domain.gasState.network;
+		long revision = network.revision(), carrierRevision = domain.carrierMutationRevision();
+		var thermalRevision = domain.thermalState.thermalRevision(); var audit = domain.thermalAudit();
+		require(!domain.tryExtractExactVolume(0, 0, 0, .5F, 0).transferred(),
+				"unrepresentable gas expansion did not refuse the complete container extraction");
+		var after = domain.exportMaterialParticleState(); var gasAfter = domain.exportGasState("");
+		require(Arrays.equals(before.copyPositionVolume(), after.copyPositionVolume())
+				&& Arrays.equals(before.copyParticleMass(), after.copyParticleMass())
+				&& Arrays.equals(before.copyParticleVelocities(), after.copyParticleVelocities())
+				&& Arrays.equals(gasAfter.pieceNodeOrdinal(), gas.pieceNodeOrdinal()) && gasAfter.nodes().equals(gas.nodes())
+				&& gasAfter.externalSource().equals(gas.externalSource()) && gasAfter.escapedSink().equals(gas.escapedSink())
+				&& gasAfter.massRoundoff().equals(gas.massRoundoff()) && gasAfter.residualRoundoff().equals(gas.residualRoundoff())
+				&& domain.gasState.frame == frame
+				&& domain.gasState.network == network && network.revision() == revision
+				&& domain.carrierMutationRevision() == carrierRevision && domain.thermalAudit() == audit
+				&& domain.thermalState.thermalRevision().equals(thermalRevision)
+				&& domain.exactInternalEnergy().equals(audit.expectedInventory()),
+				"rejected extraction changed liquid, gas or thermal owners");
+	}
+
+	private record VacuumOpeningState(GasInventory stock, double energy, double temperature, SignedDyadic work) { }
+
+	private static VacuumOpeningState isolatedVacuumBeforeWallOpening(FluidSolverConfig config,
+			FluidMaterialRegistry liquids, GasRegistry gas, ThermalRegistry thermal, int extraction,
+			int liquidCells, boolean intermediateSync, boolean openFirst) {
+		int nx = 2 + liquidCells;
+		var domain = new FluidDomain(nx, 2, 2, config, 128);
+		domain.sealDomainBoundary();
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < nx; x++)
+			if (y != 0 || z != 0 || x == 1) domain.setSolid(x, y, z, true);
+		for (int x = 2; x < nx; x++) domain.setVolume(x, 0, 0, 1);
+		if (extraction == 2) {
+			domain.bindMaterialRegistry(liquids); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+			thermal = new ThermalRegistry(thermal.materials(), List.of(new ThermalSpeciesOffset(
+					"test:vacuum_water", BuiltinChemicalDefinitions.H2O, thermal.materials().stream()
+					.filter(material -> material.carrierKind() == ThermalMaterialDefinition.CarrierKind.LIQUID)
+					.findFirst().orElseThrow().id(), ExactRational.ZERO)), List.of(),
+					BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
+		}
+		domain.bindGasRegistry(gas); domain.bootstrapGasState(""); domain.bindThermal(thermal, liquids, 300);
+		var stock = domain.gasBoundary().inventory(1);
+		var source = domain.gasBoundary().externalSource(); var sink = domain.gasBoundary().escapedSink();
+		double oldEnergy = domain.thermalState.gasNodeEnergy(1, domain.gasState.network);
+		if (openFirst) domain.setSolid(1, 0, 0, false);
+		if (extraction == 0) require(domain.removeVolumeNear(2, 0, 0, liquidCells, liquidCells - 1) == liquidCells,
+				"operator extraction did not remove both planned cells");
+		else if (extraction == 1) require(domain.tryExtractExactMixture(2, 0, 0, liquidCells, liquidCells - 1).transferred(),
+				"material container extraction failed");
+		else if (extraction == 2) require(domain.tryExtractExactChemical(2, 0, 0, liquidCells, liquidCells - 1).transferred(),
+				"chemical container extraction failed");
+		else domain.removeAllWaterExact();
+		if (!openFirst) require(domain.gasBoundary().nodeCount() == 2 && domain.gasBoundary().inventory(2).isEmpty(),
+				"liquid extraction did not publish the isolated vacuum successor");
+		if (intermediateSync) domain.synchronizeGasTopologyForPersistence();
+		if (!openFirst) domain.setSolid(1, 0, 0, false);
+		domain.synchronizeGasTopologyForPersistence();
+		double temperature = domain.gasNodeTemperatureK(1);
+		double energy = domain.thermalState.gasNodeEnergy(1, domain.gasState.network);
+		var work = domain.thermalAudit().mechanicalWork();
+		double specificR = GasRegistry.STANDARD_PRESSURE_PA * AirNetwork.cubicMeters(stock.standardVolumeNanos())
+				/ (stock.totalMass() * GasRegistry.STANDARD_TEMPERATURE_K);
+		double expected = openFirst ? 300 * Math.pow(2.0 / nx, specificR / 718) : 300;
+		require(Math.abs(temperature - expected) < 2e-9 && domain.gasBoundary().inventory(1).equals(stock)
+				&& domain.gasBoundary().nodeCount() == 1 && domain.gasBoundary().availableVolume(1) == nx * .125
+				&& domain.gasBoundary().externalSource().equals(source) && domain.gasBoundary().escapedSink().equals(sink)
+				&& work.equals(SignedDyadic.of(energy).subtract(SignedDyadic.of(oldEnergy)))
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"fixed wall opening confused isolated vacuum with pressure-driven liquid retreat");
+		if (!openFirst) require(energy == oldEnergy && work.signum() == 0,
+				"free expansion into an isolated newborn vacuum changed gas internal energy");
+		return new VacuumOpeningState(stock, energy, temperature, work);
 	}
 
 	static void thermalGasPressureRowUsesIsentropicCompliance() {

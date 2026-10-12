@@ -70,13 +70,28 @@ final class FlipPressurePhaseGeometry {
 			GranularCouplingFields granular, boolean[] pressureFluid,
 			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize, PhaseLiquidGeometryEdit edit
 	) {
+		rebuildLiquidEdits(solid, reconstructedVolume, cutCells, granular, pressureFluid, markers, particles, cellSize,
+				edit == null ? java.util.List.of() : java.util.List.of(edit));
+	}
+
+	/** Reconstructs all fraction gradients and component planes from a common future stock overlay. */
+	void rebuildLiquidEdits(
+			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
+			GranularCouplingFields granular, boolean[] pressureFluid,
+			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize, java.util.List<PhaseLiquidGeometryEdit> edits
+	) {
 		if (solid.length != fraction.length || reconstructedVolume.length != fraction.length
-				|| pressureFluid.length != fraction.length || edit != null && (edit.cell() >= fraction.length || markers == null)
+				|| pressureFluid.length != fraction.length || edits == null || !edits.isEmpty() && markers == null
 				|| markers != null && (particles == null || !(cellSize > 0) || !Float.isFinite(cellSize))) {
 			throw new IllegalArgumentException("Pressure phase arrays disagree with the cell count");
 		}
-		if (edit != null && edit.collisionMask() != cutCells.mask(edit.cell()))
-			throw new IllegalStateException("Phase PLIC candidate collision geometry changed");
+		PhaseLiquidGeometryEdit[] overlay = edits.isEmpty() ? null : new PhaseLiquidGeometryEdit[fraction.length];
+		for (var edit : edits) {
+			if (edit == null || edit.cell() >= fraction.length || overlay[edit.cell()] != null
+					|| edit.collisionMask() != cutCells.mask(edit.cell()))
+				throw new IllegalArgumentException("Repeated PLIC liquid edit or mismatched collision mask");
+			overlay[edit.cell()] = edit;
+		}
 		revision = Math.addExact(revision,1);
 		collisionMasks = cutCells.copyMicroMasks();
 		java.util.Arrays.fill(components,null);
@@ -86,7 +101,7 @@ final class FlipPressurePhaseGeometry {
 			float openVolume = granular == null ? geometricOpen
 					: granular.effectiveOpenCellVolume(cell, geometricOpen);
 			poreVolumes[cell] = solid[cell] ? SignedDyadic.ZERO : SignedDyadic.of(openVolume);
-			double liquid = edit != null && cell == edit.cell() ? edit.volume().toDouble() : reconstructedVolume[cell];
+			double liquid = overlay != null && overlay[cell] != null ? overlay[cell].volume().toDouble() : reconstructedVolume[cell];
 			fraction[cell] = solid[cell] || openVolume <= 0.0F ? 0.0F : clamp(liquid / openVolume, 0.0, 1.0);
 			pressureFluid[cell] = false;
 			normalX[cell] = normalY[cell] = normalZ[cell] = 0.0F; planeOffset[cell] = 0;
@@ -94,6 +109,7 @@ final class FlipPressurePhaseGeometry {
 		var integration = new LiquidFluxGeometry(cutCells);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int cell = cellIndex(x, y, z);
+			PhaseLiquidGeometryEdit edit = overlay == null ? null : overlay[cell];
 			if (solid[cell] || !(fraction[cell] > 0.0F) || fraction[cell] >= 1) continue;
 			double center = fraction[cell];
 			float nx = (float) -(sampleFraction(x + 1, y, z, center, solid)
@@ -103,8 +119,7 @@ final class FlipPressurePhaseGeometry {
 			float nz = (float) -(sampleFraction(x, y, z + 1, center, solid)
 					- sampleFraction(x, y, z - 1, center, solid));
 			float gradientX = nx, gradientY = ny, gradientZ = nz;
-			if (markers != null && momentNormal(cell, x, y, z, cutCells, markers, particles, cellSize,
-					edit != null && cell == edit.cell() ? edit : null)) {
+			if (markers != null && momentNormal(cell, x, y, z, cutCells, markers, particles, cellSize, edit)) {
 				nx = normalX[cell]; ny = normalY[cell]; nz = normalZ[cell];
 			}
 			double lengthSquared = (double) nx * nx + (double) ny * ny + (double) nz * nz;
@@ -124,7 +139,7 @@ final class FlipPressurePhaseGeometry {
 			normalX[cell] = nx;
 			normalY[cell] = ny;
 			normalZ[cell] = nz;
-			var stock = markers == null ? null : edit != null && cell == edit.cell() ? edit
+			var stock = markers == null ? null : edit != null ? edit
 					: PhaseLiquidGeometryEdit.current(cell,cutCells.mask(cell),cellSize,markers,particles);
 			float open = granular == null ? cutCells.openCellVolume(cell)
 					: granular.effectiveOpenCellVolume(cell,cutCells.openCellVolume(cell));

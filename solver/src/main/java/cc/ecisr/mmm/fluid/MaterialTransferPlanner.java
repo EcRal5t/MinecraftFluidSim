@@ -397,6 +397,8 @@ final class MaterialTransferPlanner {
 		}
 		if (!acceptsLedger.test(removed)) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		SignedDyadic extractionEnergy = exactExtractionEnergy(plan);
+		var gas = prepareExtractionGas(plan, extractionEnergy.toDouble());
+		if (gas == null) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		for (ExtractionAllocation allocation : plan) {
 			if (allocation.chemicalPlan().kept() != null) {
 				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
@@ -411,6 +413,7 @@ final class MaterialTransferPlanner {
 		if (domain.thermalState != null) {
 			domain.thermalState.settleExternalExtraction(extractionEnergy, removedEnergy);
 		}
+		gas.commit();
 		return new FluidDomain.ExactChemicalTransfer(true, removed, removedEnergy);
 	}
 	FluidDomain.ExactMixtureTransfer extractMixture(
@@ -500,6 +503,8 @@ final class MaterialTransferPlanner {
 			result.add(new FluidDomain.MaterialPortion(handle, removedVolume, removedMass));
 		}
 		SignedDyadic extractionEnergy = exactExtractionEnergy(plan);
+		var gas = prepareExtractionGas(plan, extractionEnergy.toDouble());
+		if (gas == null) return new FluidDomain.ExactMixtureTransfer(false, List.of());
 		for (ExtractionAllocation allocation : plan) {
 			if (domain.chemicalParcels != null && allocation.chemicalPlan().kept() != null) {
 				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
@@ -518,7 +523,17 @@ final class MaterialTransferPlanner {
 		if (domain.thermalState != null) {
 			domain.thermalState.settleExternalExtraction(extractionEnergy, removedEnergy);
 		}
+		gas.commit();
 		return new FluidDomain.ExactMixtureTransfer(true, List.copyOf(result), removedEnergy);
+	}
+
+	private LiquidExtractionGasPlan prepareExtractionGas(List<ExtractionAllocation> allocations, double itemEnergy) {
+		var gas = new LiquidExtractionGasPlan(domain);
+		for (var allocation : allocations)
+			gas.truncate(allocation.particle(), allocation.newVolume(), allocation.thermalPlan());
+		try { gas.prepare(itemEnergy); }
+		catch (GasTopologyBlockedException | IllegalArgumentException | ArithmeticException unavailable) { return null; }
+		return gas;
 	}
 
 	private SignedDyadic exactExtractionEnergy(List<ExtractionAllocation> plan) {

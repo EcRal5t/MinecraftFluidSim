@@ -83,7 +83,21 @@ final class GasTopologyCoordinator {
 		}
 	}
 	GasTopologyPlan planAfterLiquidEdit(PhaseLiquidGeometryEdit edit) {
-		return domain.gasState.frame == null ? null : plan(capture(edit), false, null);
+		return planAfterLiquidEdits(List.of(edit));
+	}
+	GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits) {
+		if (edits == null) throw new IllegalArgumentException("Gas liquid edit list is missing");
+		boolean[] selected = new boolean[domain.cellCount];
+		for (var edit : edits) {
+			if (edit == null || edit.cell() >= domain.cellCount || selected[edit.cell()]
+					|| edit.collisionMask() != domain.geometry.cutCells.mask(edit.cell()))
+				throw new IllegalArgumentException("Repeated gas liquid edit or mismatched collision mask");
+			selected[edit.cell()] = true;
+		}
+		if (domain.gasState.frame == null) return null;
+		domain.ensureInventoryGrid();
+		return plan(GasRuntimeGeometry.captureLiquidEdits(domain, edits, currentOccupied(),
+				domain.gasState.sealedDomainBoundary), false, null);
 	}
 	private GasRuntimeGeometry capture(PhaseLiquidGeometryEdit edit) {
 		domain.ensureInventoryGrid();

@@ -512,6 +512,10 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 			if (remaining <= 1.0E-6F) break;
 		}
 		if (removedChemistry != null) chemicalParcels.requireCanRecordEscapedSink(removedChemistry.build());
+		var gas = new LiquidExtractionGasPlan(domain());
+		for (PlannedCell cell : planned) for (MarkerTruncation entry : cell.plan().markers())
+			gas.truncate(entry.marker(), entry.newVolume(), entry.thermalPlan());
+		gas.prepare(null);
 		for (PlannedCell cell : planned) {
 			int dirtyCell = cellIndex(cell.x(), cell.y(), cell.z());
 			for (MarkerTruncation entry : cell.plan().markers()) {
@@ -529,6 +533,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 			if (particles.volume(marker) == 0.0F) removeParticle(marker);
 		}
 		if (removedChemistry != null) chemicalParcels.recordEscapedSink(removedChemistry.build());
+		gas.commit();
 		return amount - remaining;
 	}
 
