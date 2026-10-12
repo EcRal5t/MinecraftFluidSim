@@ -381,8 +381,7 @@ final class GasTopologyCoordinator {
 			}
 			for (int node = 1; node <= sealed; node++) {
 				if (!(ambientInheritedAvailable[node] > 0.0)) continue;
-				GasInventory trappedAmbient = domain.gasState.network.ambientInventory(
-						Math.max(1L, AirNetwork.nanos(ambientInheritedAvailable[node])));
+				GasInventory trappedAmbient = ambientInventory(ambientInheritedAvailable[node]);
 				inventories.set(node - 1, inventories.get(node - 1).merge(trappedAmbient));
 				sourceDelta = sourceDelta.add(trappedAmbient);
 				if (thermalGas) {
@@ -416,8 +415,7 @@ final class GasTopologyCoordinator {
 					if (thermalGas) inheritedAvailable[node - 1] = availableVolumes[node - 1];
 					continue;
 				}
-				GasInventory created = domain.gasState.network.ambientInventory(
-						Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])));
+				GasInventory created = ambientInventory(availableVolumes[node - 1]);
 				inventories.set(node - 1, created);
 				sourceDelta = sourceDelta.add(created);
 				if (thermalGas) {
@@ -438,6 +436,12 @@ final class GasTopologyCoordinator {
 		}
 		return prepareRemap(result, inventories, availableVolumes, doubles(mixedEnergy), inheritedAvailable,
 				sourceDelta, sinkDelta, sourceEnergy, sinkEnergy, edit);
+	}
+
+	private GasInventory ambientInventory(double availableVolume) {
+		long nanos = AirNetwork.nanos(availableVolume);
+		if (nanos == 0) throw new GasTopologyBlockedException("Ambient capture volume is below the gas inventory resolution");
+		return domain.gasState.network.ambientInventory(nanos);
 	}
 
 	private GasTopologyPlan prepareRemap(AirCavityScanner.Result result, List<GasInventory> inventories,

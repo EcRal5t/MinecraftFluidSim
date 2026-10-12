@@ -68,6 +68,8 @@
 
 同格断开液体的空间库存矩见 [LiquidComponentMoments](../../solver/src/main/java/cc/ecisr/mmm/fluid/LiquidComponentMoments.java)，未来编辑的分量聚合见 [PhaseLiquidGeometryEdit](../../solver/src/main/java/cc/ecisr/mmm/fluid/PhaseLiquidGeometryEdit.java)，独立 PLIC 见 [PlicComponentGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/PlicComponentGeometry.java)。微面几何入口在 [FlipPressurePhaseGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/FlipPressurePhaseGeometry.java)，共享孔隙容量入口是 `CellRemapMicroTopology.capacities`。对应验证为 `AirCavityScannerValidation.validateComponentLiquidGeometry`。
 
+PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/src/main/java/cc/ecisr/mmm/fluid/PlicPlaneOffset.java)，单平面盒积分见 [MicroBoxPlaneVolume](../../solver/src/main/java/cc/ecisr/mmm/fluid/MicroBoxPlaneVolume.java)。组件气体库存容量及其几何差额见 [GasComponentCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComponentCapacity.java)；环境截留量分辨率检查在 `GasTopologyCoordinator.ambientInventory`，验证为 `AirCavityScannerValidation.validateAmbientCaptureResolution`。
+
 | 修改内容 | 首先打开 | 需要了解的数据和算法 |
 |---|---|---|
 | 力学计算顺序 | [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)、[MechanicalStageAssembly](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStageAssembly.java) | [流体求解器](../architecture/fluid-solver.md) |

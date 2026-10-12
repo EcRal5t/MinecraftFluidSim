@@ -19,7 +19,8 @@ final class PlicComponentGeometry {
 			var stock = edit.components().get(i); SignedDyadic capacity = capacities[i];
 			if (capacity.signum() < 0 || stock.volume().compareTo(capacity) > 0)
 				throw new MechanicalTimeRefinement(2,"Liquid inventory exceeds its connected pore capacity");
-			double fraction = capacity.signum() == 0 ? 0 : ratio(stock.volume(),capacity);
+			ExactRational exactFraction = capacity.signum() == 0 ? ExactRational.ZERO : ratio(stock.volume(),capacity);
+			double fraction = exactFraction.toDouble();
 			float[] normal = {0,0,0}; double offset = 0;
 			if (fraction > 0 && fraction < 1) {
 				int support = stock.supportMask(), count = Integer.bitCount(support);
@@ -38,7 +39,7 @@ final class PlicComponentGeometry {
 				double length = Math.sqrt((double)normal[0]*normal[0]+(double)normal[1]*normal[1]+(double)normal[2]*normal[2]);
 				if (length == 0) normal[1] = 1;
 				else for (int axis = 0; axis < 3; axis++) normal[axis] = (float)(normal[axis]/length);
-				offset = offset(support,normal,fraction*count/8);
+				offset = PlicPlaneOffset.solve(support,normal[0],normal[1],normal[2],exactFraction.multiply(count).divide(8)).offset();
 			}
 			Plane plane = new Plane(stock.supportMask(),fraction,capacity.toDouble()*8/Integer.bitCount(stock.supportMask()),normal[0],normal[1],normal[2],offset);
 			for (int micro = 0; micro < 8; micro++) if ((plane.support & 1 << micro) != 0) result.byMicro[micro] = plane;
@@ -46,24 +47,10 @@ final class PlicComponentGeometry {
 		return result;
 	}
 
-	private static double ratio(SignedDyadic a, SignedDyadic b) {
+	static ExactRational ratio(SignedDyadic a, SignedDyadic b) {
 		int shift = a.exponent()-b.exponent(); BigInteger numerator = a.significand(), denominator = b.significand();
 		return (shift >= 0 ? new ExactRational(numerator.shiftLeft(shift),denominator)
-				: new ExactRational(numerator,denominator.shiftLeft(-shift))).toDouble();
-	}
-	private static double offset(int support, float[] normal, double volume) {
-		double lower = Math.min(0,normal[0])+Math.min(0,normal[1])+Math.min(0,normal[2]);
-		double upper = Math.max(0,normal[0])+Math.max(0,normal[1])+Math.max(0,normal[2]);
-		for (int i = 0; i < 64; i++) {
-			double middle = .5*(lower+upper); if (middle == lower || middle == upper) break;
-			double retained = 0;
-			for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
-				double threshold = middle-.5*(normal[0]*(micro&1)+normal[1]*(micro>>1&1)+normal[2]*(micro>>2&1));
-				retained += .125*FlipFreeSurfaceGeometry.unitCubeLiquidFraction(.5*normal[0],.5*normal[1],.5*normal[2],threshold);
-			}
-			if (retained < volume) lower = middle; else upper = middle;
-		}
-		return .5*(lower+upper);
+				: new ExactRational(numerator,denominator.shiftLeft(-shift)));
 	}
 	Plane plane(int micro) { return byMicro[micro]; }
 }

@@ -11,6 +11,7 @@ public final class AirCavityScannerValidation {
 		validateOpenTankIsAmbient();
 		validateControllerExtentIsSealed();
 		validateClosedCapacityComplementsCarrierInventory();
+		validateAmbientCaptureResolution();
 		validateIsolatedCompartmentCapacityIsLocal();
 		validateNewPartialVacuumOwners();
 		validateSealedTankVolume();
@@ -39,7 +40,10 @@ public final class AirCavityScannerValidation {
 				"Sealed gas chamber lost canonical micro-piece identity");
 		checkRelative(closedTopology.chambers().getFirst().geometricVolume(),1,"Sealed microgas chamber volume");
 		grid.solid[0]=true;grid.cutCells.replaceMask(0,255);phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
-		check(geometry.pieces().size()==64 && geometry.piece(0).volume()==.015625,"Gas geometry retained mutable input aliases");
+		check(geometry.pieces().size()==64 && geometry.piece(0).volume()==.015625 && geometry.collisionMask(0)==0,"Gas geometry retained mutable input aliases");
+		grid.cutCells.replaceMask(1,126);
+		try { GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,phase);throw new AssertionError("Stale PLIC collision geometry was captured"); }
+		catch(IllegalArgumentException expected) { }
 		try { geometry.pieces().clear();throw new AssertionError("Gas pieces remained mutable"); }
 		catch(UnsupportedOperationException expected) { }
 		Grid split=new Grid(2,2,2,1);java.util.Arrays.fill(split.solid,true);
@@ -83,6 +87,8 @@ public final class AirCavityScannerValidation {
 			d.restoreParticleState(new FlipParticleState(2,2,2,1,count,stock[0]+stock[1],pv,new float[3*count],masks));d.ensureInventoryGrid();
 			var phase=d.pressurePhaseGeometry;
 			var gas=GasComplementGeometry.capture(2,2,2,1,d.geometry.solid,d.geometry.cutCells,phase);
+			var capacities=GasComponentCapacity.capture(d,gas,null);
+			check(capacities.size()==2,"Gas capacity omitted a fixed open component");
 			for (int i=0;i<2;i++) {
 				int bit=i==0?corner:opposite;double[] moments=new double[4];double wet=phase.liquidFractionExact(0,bit);
 				if(wet>=1)moments[0]=1;
@@ -93,6 +99,8 @@ public final class AirCavityScannerValidation {
 				check(Math.abs(.125*moments[0]-stock[i])<2e-15,"PLIC transferred liquid between disconnected components");
 				double expected=.125-stock[i];var piece=gas.piece(bit);
 				check(expected==0?piece==null:piece!=null&&Math.abs(piece.volume()-expected)<2e-15,"Gas geometry disagrees with component inventory");
+				var capacity=capacities.stream().filter(c->c.supportMask()==1<<bit).findFirst().orElseThrow();
+				check(capacity.availableVolumeNormalized().equals(cc.ecisr.mmm.units.SignedDyadic.of(expected)),"Gas capacity changed the authoritative component remainder");
 			}
 			var topology=GasChamberTopology.capture(gas,true);
 			check(topology.chambers().size()==(stock[0]<.125F?1:0)+(stock[1]<.125F?1:0),"Component PLIC omitted or invented an independent gas chamber");
@@ -115,9 +123,22 @@ public final class AirCavityScannerValidation {
 		var one=cc.ecisr.mmm.units.SignedDyadic.of(1);
 		var quarter=cc.ecisr.mmm.units.SignedDyadic.of(.25);
 		var exact=cc.ecisr.mmm.chemistry.ExactRational.ONE;
+		var tinyTarget=cc.ecisr.mmm.chemistry.ExactRational.ofFloat(Float.MIN_VALUE).divide(3);
+		var inverse=PlicPlaneOffset.solve(1,Float.MIN_VALUE,1,0,tinyTarget);
+		var tinyNormal=cc.ecisr.mmm.units.SignedDyadic.of(Float.MIN_VALUE);
+		for(double offset:new double[]{inverse.lower(),inverse.upper()}) {
+			var wet=new GasGeometryOverlap.HalfSpace(tinyNormal.negate(),one.negate(),zero,cc.ecisr.mmm.units.SignedDyadic.of(-offset));
+			var measured=GasGeometryOverlap.normalizedVolume(0,List.of(wet));
+			check(measured.equals(offset==inverse.lower()?inverse.lowerVolume():inverse.upperVolume()),"PLIC inverse certificate differs from independent polyhedron volume");
+		}
+		check(inverse.lowerVolume().compareTo(tinyTarget)<=0 && inverse.upperVolume().compareTo(tinyTarget)>=0
+				&& Math.nextUp(inverse.lower())==inverse.upper(),"Tiny PLIC volume lacks adjacent enclosing offsets");
+		check(inverse.offset()>0 && inverse.offset()<1e-44,"PLIC inversion manufactured a finite layer from an extreme tail");
 		var tetra=new GasGeometryOverlap.HalfSpace(one.negate(),one.negate(),one.negate(),cc.ecisr.mmm.units.SignedDyadic.of(-.5));
 		check(GasGeometryOverlap.normalizedVolume(0,List.of(tetra)).equals(exact.divide(48)),
 				"Gas overlap did not retain the exact tetrahedron volume");
+		for(int slot=0;slot<8;slot++) check(MicroBoxPlaneVolume.dryVolume(slot,tetra).equals(GasGeometryOverlap.normalizedVolume(slot,List.of(tetra))),
+				"Microbox CDF disagrees with exact tetrahedron clipping");
 		for(int slot=1;slot<8;slot++) check(GasGeometryOverlap.normalizedVolume(slot,List.of(tetra)).isZero(),
 				"Gas tetrahedron tangency manufactured positive volume");
 		for(int axis=0;axis<3;axis++) {
@@ -148,6 +169,29 @@ public final class AirCavityScannerValidation {
 				"a validated controller interior must keep boundary-layer headspace sealed");
 		checkRelative(result.sealedAvailableVolume()[0], 64.0,
 				"controller interior gas volume");
+	}
+
+	private static void validateAmbientCaptureResolution() {
+		for (int exponent : new int[]{-12,-28}) {
+			byte[] masks=new byte[27];java.util.Arrays.fill(masks,(byte)255);masks[13]=0;
+			float[] volumes={.5F,.25F,.125F,.0625F,.03125F,.015625F,.0078125F,(float)(.0078125-Math.scalb(1,exponent))};
+			float[] pv=new float[32];double sum=0;
+			for(int i=0;i<8;i++) {int b=4*i;pv[b]=.625F+.25F*(i&1);pv[b+1]=.625F+.25F*(i>>1&1);pv[b+2]=.625F+.25F*(i>>2&1);pv[b+3]=volumes[i];sum+=volumes[i];}
+			var d=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,200,1e-5F,.4F,.002F,0));
+			d.restoreParticleState(new FlipParticleState(3,3,3,.5F,8,(float)sum,pv,new float[24],masks));d.sealDomainBoundary();
+			var network=d.gasState.network;long gasRevision=network.revision(),carrierRevision=d.carrierMutationRevision();
+			if(exponent==-12) {
+				var gas=d.bootstrapGasState("");long expected=cc.ecisr.mmm.fluid.air.AirNetwork.nanos((1-sum)*.125);
+				check(gas.externalSource().standardVolumeNanos()==expected,"Ambient bootstrap changed the rounded source amount");
+			} else {
+				try {d.bootstrapGasState("");throw new AssertionError("Sub-resolution ambient space invented a minimum gas portion");}
+				catch(GasTopologyBlockedException expected) { }
+				check(d.gasState.network==network && network.revision()==gasRevision && network.nodeCount()==0
+						&& network.externalSource().entries().isEmpty() && network.escapedSink().entries().isEmpty()
+						&& d.gasState.cellNodeId==null && d.carrierMutationRevision()==carrierRevision
+						&& java.util.Arrays.equals(pv,d.exportParticleState().copyPositionVolume()),"Rejected ambient capture changed authoritative owners");
+			}
+		}
 	}
 
 	private static void validateClosedCapacityComplementsCarrierInventory() {

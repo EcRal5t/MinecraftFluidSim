@@ -41,6 +41,7 @@ final class FlipPressurePhaseGeometry {
 
 	boolean matchesShape(int x, int y, int z) { return sizeX == x && sizeY == y && sizeZ == z; }
 	long revision() { return revision; }
+	int collisionMask(int cell) { return Byte.toUnsignedInt(collisionMasks[cell]); }
 
 	void rebuild(
 			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
@@ -115,12 +116,15 @@ final class FlipPressurePhaseGeometry {
 			normalX[cell] = nx;
 			normalY[cell] = ny;
 			normalZ[cell] = nz;
-			planeOffset[cell] = integration.offset(cell, nx, ny, nz, center * cutCells.openCellVolume(cell));
+			var stock = markers == null ? null : edit != null && cell == edit.cell() ? edit
+					: PhaseLiquidGeometryEdit.current(cell,cutCells.mask(cell),cellSize,markers,particles);
+			float open = granular == null ? cutCells.openCellVolume(cell)
+					: granular.effectiveOpenCellVolume(cell,cutCells.openCellVolume(cell));
+			planeOffset[cell] = stock == null ? integration.offset(cell, nx, ny, nz, center * cutCells.openCellVolume(cell))
+					: PlicPlaneOffset.solve(~cutCells.mask(cell)&255,nx,ny,nz,
+						PlicComponentGeometry.ratio(stock.volume(),SignedDyadic.of(open))
+								.multiply(Integer.bitCount(~cutCells.mask(cell)&255)).divide(8)).offset();
 			if (markers != null && CellRemapMicroTopology.components(cutCells.mask(cell)).length > 1) {
-				var stock = edit != null && cell == edit.cell() ? edit
-						: PhaseLiquidGeometryEdit.current(cell,cutCells.mask(cell),cellSize,markers,particles);
-				float open = granular == null ? cutCells.openCellVolume(cell)
-						: granular.effectiveOpenCellVolume(cell,cutCells.openCellVolume(cell));
 				components[cell] = PlicComponentGeometry.capture(stock,
 						CellRemapMicroTopology.capacities(cutCells.mask(cell),SignedDyadic.of(open)),
 						x,y,z,cellSize,gradientX,gradientY,gradientZ);

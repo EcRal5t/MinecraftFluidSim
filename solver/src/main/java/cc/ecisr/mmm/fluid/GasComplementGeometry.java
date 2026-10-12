@@ -9,7 +9,8 @@ import java.util.List;
 /** Immutable positive gas complement of the admitted PLIC and fixed open microboxes, in SI units. */
 final class GasComplementGeometry {
 	/** Stable microbox key; normalizedVolume is the exact fraction of one whole cell, volume is its SI observation. */
-	record Piece(int id, int cell, int micro, double volume, ExactRational normalizedVolume) { }
+	record Piece(int id, int cell, int micro, double volume, ExactRational normalizedVolume,
+	             GasGeometryOverlap.HalfSpace dryPlane) { }
 	/** Oriented along the positive axis; a fixed cut restriction retains finite-rate chamber transport. */
 	record Port(int first, int second, int axis, double area, boolean fullCutConnection) { }
 	record ExteriorPort(int piece, int axis, int sign, double area) { }
@@ -17,15 +18,17 @@ final class GasComplementGeometry {
 	private static final ExactRational MICRO_VOLUME = ExactRational.ONE.divide(8);
 	private final int sizeX, sizeY, sizeZ;
 	private final double cellVolumeCubicMeters;
+	private final byte[] collisionMasks;
 	private final Piece[] byId;
 	private final List<Piece> pieces;
 	private final List<Port> ports;
 	private final List<ExteriorPort> exteriorPorts;
 
-	private GasComplementGeometry(int sizeX, int sizeY, int sizeZ, double cellVolumeCubicMeters, Piece[] byId,
+	private GasComplementGeometry(int sizeX, int sizeY, int sizeZ, double cellVolumeCubicMeters, byte[] collisionMasks, Piece[] byId,
 			List<Piece> pieces, List<Port> ports, List<ExteriorPort> exteriorPorts) {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
 		this.cellVolumeCubicMeters = cellVolumeCubicMeters;
+		this.collisionMasks = collisionMasks.clone();
 		this.byId = byId;
 		this.pieces = List.copyOf(pieces);
 		this.ports = List.copyOf(ports);
@@ -50,27 +53,29 @@ final class GasComplementGeometry {
 		var byId = new Piece[Math.multiplyExact(count, 8)];
 		var pieces = new ArrayList<Piece>();
 		for (int cell = 0; cell < count; cell++) {
+			if (phase.collisionMask(cell) != cut.mask(cell))
+				throw new IllegalArgumentException("Gas complement PLIC collision geometry differs at cell " + cell);
 			if (solid[cell]) continue;
 			for (int slot = 0; slot < 8; slot++) {
 				if (!open(cut, cell, slot)) continue;
-			double fraction = phase.liquidFractionExact(cell,slot);
-			double nx = phase.planeNormal(cell,slot,0), ny = phase.planeNormal(cell,slot,1), nz = phase.planeNormal(cell,slot,2);
-			double offset = phase.planeOffset(cell,slot);
-			if (!(fraction >= 0 && fraction <= 1) || !Double.isFinite(nx) || !Double.isFinite(ny)
-					|| !Double.isFinite(nz) || !Double.isFinite(offset)) {
-				throw new IllegalArgumentException("Gas complement PLIC is invalid at cell " + cell);
-			}
-			if (fraction == 1) continue;
-			if (fraction > 0 && nx == 0 && ny == 0 && nz == 0) {
-				throw blocked("Partial PLIC has no normal", cell);
-			}
-			List<GasGeometryOverlap.HalfSpace> planes = fraction == 0 ? List.of() : List.of(new GasGeometryOverlap.HalfSpace(
-					SignedDyadic.of(nx), SignedDyadic.of(ny), SignedDyadic.of(nz), SignedDyadic.of(offset)));
-				ExactRational normalizedVolume = fraction == 0 ? MICRO_VOLUME : GasGeometryOverlap.normalizedVolume(slot, planes);
+				double fraction = phase.liquidFractionExact(cell,slot);
+				double nx = phase.planeNormal(cell,slot,0), ny = phase.planeNormal(cell,slot,1), nz = phase.planeNormal(cell,slot,2);
+				double offset = phase.planeOffset(cell,slot);
+				if (!(fraction >= 0 && fraction <= 1) || !Double.isFinite(nx) || !Double.isFinite(ny)
+						|| !Double.isFinite(nz) || !Double.isFinite(offset)) {
+					throw new IllegalArgumentException("Gas complement PLIC is invalid at cell " + cell);
+				}
+				if (fraction == 1) continue;
+				if (fraction > 0 && nx == 0 && ny == 0 && nz == 0) {
+					throw blocked("Partial PLIC has no normal", cell);
+				}
+				GasGeometryOverlap.HalfSpace plane = fraction == 0 ? null : new GasGeometryOverlap.HalfSpace(
+						SignedDyadic.of(nx), SignedDyadic.of(ny), SignedDyadic.of(nz), SignedDyadic.of(offset));
+				ExactRational normalizedVolume = plane == null ? MICRO_VOLUME : MicroBoxPlaneVolume.dryVolume(slot, plane);
 				if (normalizedVolume.isZero()) continue;
 				double volume = normalizedVolume.multiply(physicalScale).toDouble();
 				if (!(volume > 0 && Double.isFinite(volume))) throw blocked("Positive gas piece volume is not representable", cell);
-				Piece piece = new Piece(8 * cell + slot, cell, slot, volume, normalizedVolume);
+				Piece piece = new Piece(8 * cell + slot, cell, slot, volume, normalizedVolume, plane);
 				byId[piece.id()] = piece; pieces.add(piece);
 			}
 		}
@@ -100,7 +105,7 @@ final class GasComplementGeometry {
 						GasFaceIntersection.area(phase, cell, -1, axis, 1, 0, tangent, other, .5), h2);
 			}
 		}
-		return new GasComplementGeometry(sizeX, sizeY, sizeZ, h3, byId, pieces, ports, exterior);
+		return new GasComplementGeometry(sizeX, sizeY, sizeZ, h3, cut.copyMicroMasks(), byId, pieces, ports, exterior);
 	}
 
 	private static ExactRational exact(SignedDyadic value) {
@@ -140,7 +145,7 @@ final class GasComplementGeometry {
 	}
 
 	double cellVolumeCubicMeters() { return cellVolumeCubicMeters; }
-	double physicalVolume(ExactRational normalizedVolume) { return normalizedVolume.multiply(exact(SignedDyadic.of(cellVolumeCubicMeters))).toDouble(); }
+	int collisionMask(int cell) { return Byte.toUnsignedInt(collisionMasks[cell]); }
 	int sizeX() { return sizeX; }
 	int sizeY() { return sizeY; }
 	int sizeZ() { return sizeZ; }

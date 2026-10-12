@@ -37,6 +37,8 @@
 
 气体块读取其固定连通分量的独立 PLIC。每块保留精确单元归一化有理数体积，乘当前 `h³` 后一次舍入为 SI 观察值。气腔几何观察值精确汇总各块的 binary64 体积再舍入一次，`volumeErrorBound` 向外包住叶子与气腔两级舍入；平面求逆余差及库存容量补量各自结算。
 
+单平面微盒体积由 [MicroBoxPlaneVolume](../../solver/src/main/java/cc/ecisr/mmm/fluid/MicroBoxPlaneVolume.java) 的精确盒积分求得；每块保留捕获时的干侧半空间，几何对象保存碰撞掩码副本并校核 PLIC 使用的掩码。[GasComponentCapacity](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComponentCapacity.java) 直接读取原始液体库存，按固定连通分量计算扣除固体后的剩余容量，同时保留精确几何气体体积与两者差额。正库存容量缺少干区时明确拒绝计算。
+
 [GasFaceIntersection](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
 
 [GasGeometryOverlap](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasGeometryOverlap.java) 精确积分同一开放微盒与前后两个气体半空间的交集，返回单元归一化有理数体积。纯相切的交集体积为零，严格正的薄层保留精确量。库存交接仍需结合旧库存归属与实际可达路径；零重叠的有限气腔需要扫掠轨迹或可达性证明才能确定去向。
@@ -48,6 +50,8 @@
 由当前几何直接发现的 air cell 同时满足：非 solid、`markerCount == 0`、扣除 cut-cell、granular/coherent occupancy 后仍有正 open volume。**扫描不区分"气"和"未采样的液体格"**：两者对同一个 flood fill 是同一件事——一段连通的无载体体积。
 
 是否成为腔体不靠分类决定，腔体带什么初始库存才需要区分，而那由 lineage 分配处负责：无旧 owner 的新 component 是显式真空节点，库存、质量与 `U` 均为零；开放域里上一代明确连接 ambient 的实际体积若本代被夹断为 sealed，则按该体积截留环境库存，即使它同时并入一个既有有限气泡也一样。
+
+环境截留量按标准体积 nanos 就近舍入。正截留体积舍入为零时，在库存提交前抛出 `GasTopologyBlockedException`。整数舍入对应的压力误差为 `|Δp| ≤ p₀·(0.5×10⁻⁹ m³)/V`，其中 `V` 是截留体积；体积到 nanos 的 binary64 换算误差另计。
 
 marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 component 也拿不到库存。六邻域 flood fill 只跨越接近全开的 face；部分开放 face 不合并 component，而是形成有限速率 geometric edge。
 

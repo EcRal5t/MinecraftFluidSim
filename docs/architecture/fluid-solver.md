@@ -189,6 +189,8 @@ dt <= 2/L
 
 PLIC 的体积质心从实际 binary32 体积和位置精确汇总体积与位置第一矩，先在物理坐标中精确减去格中心矩，再除以 `h*V` 并舍入一次。固定微盒的各个面连通分量分别保存这些派生矩，[PlicComponentGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/PlicComponentGeometry.java) 按各分量的库存重建独立平面。微面、共享湿面积、暴露湿面及扫掠体积读取所属分量的平面，逐分量保持体积。单 PLIC 的位置矩近似和同格速度自由度的分量拆分仍按共同空间表示的完成条件完善。
 
+基于粒子库存的平面阈值由 [PlicPlaneOffset](../../solver/src/main/java/cc/ecisr/mmm/fluid/PlicPlaneOffset.java) 按精确库存与孔隙容量的比值求逆。精确盒积分在 binary64 阈值序列上单调查找，返回精确根或相邻阈值及其精确体积，并选取体积误差较小的阈值。相邻阈值间的体积差明确给出当前平面表示的分辨率。
+
 [PhaseLiquidGeometryEdit](../../solver/src/main/java/cc/ecisr/mmm/fluid/PhaseLiquidGeometryEdit.java) 以固定 mask 和全部开放分量的不可变库存矩列表作为未来几何输入，包含清空后的零分量；整格数量、体积和位置矩由该列表精确汇总。PLIC 候选替换被编辑格的全部分量，再计算全网格体积分数梯度。候选与已发布载体重建使用同一聚合与平面算法。分量孔隙容量复用 [CellRemapMicroTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/CellRemapMicroTopology.java) 的规范 SVQ 分配，与微面输运保持相同的固体份额和剩余容量。
 
 `CellCarrierRemapPlan` 按单元、开放微格的面连通分量、材料、指示剂和有界 species 并集分组，同一体积通量搬运材料质量、动量、组成和内能。species 使用整数最大余数分配；质量与内能的可表示余数分配到有容量的份额，提交前检查逐材料质量的 binary64 舍入界、精确 species、精确逐格体积、内能和动量收支。热量重建复用实际质量与组成的 caloric 数据，在相邻输入温度范围内保持正温，并保留完整能量审计。
