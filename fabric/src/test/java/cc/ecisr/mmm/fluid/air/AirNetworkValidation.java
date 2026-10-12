@@ -22,6 +22,8 @@ public final class AirNetworkValidation {
 		validateAmbientInteraction();
 		validateComponentTransport();
 		validateExactTopologyPartition();
+		validateSplitPreflightsAllOwners();
+		validatePublicMutatorsPreflightAllOwners();
 		validateComponentSpeciesBoundary();
 		validatePhaseColumnTake();
 		validateRegionalComponentAggregation();
@@ -435,6 +437,166 @@ public final class AirNetworkValidation {
 			check(network.inventory(split[reverse?1:0]).isEmpty() && network.inventory(split[reverse?0:1]).standardVolumeNanos()==1
 					&& network.auditClosed(),"Public cavity split replaced sub-nano volume proportions by equal minimum weights");
 		}
+	}
+
+	private static void validateSplitPreflightsAllOwners() {
+		AirNetwork full = new AirNetwork();
+		double[] volumes = new double[GasLimits.MAX_NODES_PER_REGION];
+		java.util.Arrays.fill(volumes, 1);
+		full.restoreNodes(volumes, java.util.Collections.nCopies(volumes.length, GasInventory.EMPTY),
+				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO);
+		AirNetwork oversized = new AirNetwork();
+		double[] excessVolumes = new double[volumes.length + 1];
+		java.util.Arrays.fill(excessVolumes, 1);
+		checkNodeMutationRejectsUnchanged(oversized, () -> oversized.restoreNodes(excessVolumes,
+				java.util.Collections.nCopies(excessVolumes.length, GasInventory.EMPTY), GasAuditLedger.EMPTY,
+				GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO));
+		checkNodeMutationRejectsUnchanged(oversized, () -> oversized.remapNodes(excessVolumes,
+				java.util.Collections.nCopies(excessVolumes.length, GasInventory.EMPTY), GasInventory.EMPTY, GasInventory.EMPTY));
+		full.addOrMergeEdge(1, 2, .01, .65);
+		checkSplitRejectsUnchanged(full, .5, .5);
+		full.ventNode(volumes.length);
+		int[] accepted = full.splitNode(1, .5, .5);
+		check(accepted[0] == 1 && accepted[1] == volumes.length + 1 && full.nodeCount() == volumes.length && full.auditClosed(),
+				"Rejected over-budget split consumed a node id or prevented a legal split");
+
+		// A zero net mass change leaves this exact, closed ledger representable despite its wide stored roundoff.
+		AirNetwork wide = restoredWideLedger(false);
+		SignedDyadic roundoff = wide.massRoundoff();
+		GasAuditLedger source = wide.externalSource();
+		wide.addOrMergeEdge(1, AirNetwork.AMBIENT_NODE, .01, .65);
+		check(wide.auditClosed() && Double.isFinite(wide.gaugePressure(1)) && wide.density(1) == 3,
+				"Split audit-budget fixture is not a valid restored gas owner");
+		long revision = wide.revision();
+		var edges = wide.edges();
+		int[] exactChildren = wide.splitNode(1, .5, .5);
+		check(exactChildren[0] == 1 && exactChildren[1] == 2 && wide.revision() == revision + 1
+				&& wide.massRoundoff().equals(roundoff) && wide.residualRoundoff().equals(SignedDyadic.ZERO)
+				&& wide.externalSource().equals(source) && wide.escapedSink().equals(GasAuditLedger.EMPTY)
+				&& wide.edges().equals(edges) && wide.availableVolume(1) == .5 && wide.availableVolume(2) == .5 && wide.auditClosed(),
+				"Zero-delta split changed the wide audit or rejected a representable final ledger");
+
+		// The unequal split of binary64 mass 3.2 adds exactly 2^-52 kg; the final stored roundoff exceeds its budget.
+		GasInventory rounded = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR, 3, 3.2, List.of(), 0)));
+		var parts = rounded.partition(new long[] {1, 2});
+		SignedDyadic delta = SignedDyadic.of(parts.getFirst().totalMass()).add(SignedDyadic.of(parts.getLast().totalMass()))
+				.subtract(SignedDyadic.of(3.2));
+		check(delta.equals(SignedDyadic.of(1, -52)), "Audit-budget rejection fixture has no actual rounding delta");
+		GasAuditLedger roundedSource = new GasAuditLedger(List.of(new GasAuditLedger.Entry(BuiltinGasDefinitions.AIR,
+				3, SignedDyadic.of(3.2).subtract(roundoff), List.of(), SignedDyadic.ZERO)));
+		AirNetwork unrepresentable = new AirNetwork();
+		unrepresentable.restoreNodes(new double[] {1}, List.of(rounded), roundedSource, GasAuditLedger.EMPTY, roundoff, SignedDyadic.ZERO);
+		check(unrepresentable.auditClosed() && Double.isFinite(unrepresentable.gaugePressure(1)),
+				"Final-roundoff rejection fixture is not a valid restored gas owner");
+		checkSplitRejectsUnchanged(unrepresentable, 1, 2);
+	}
+
+	private static AirNetwork restoredWideLedger(boolean twoNodes) {
+		int span = SignedDyadic.MAX_SIGNIFICAND_BITS - 1;
+		SignedDyadic sourceMass = new SignedDyadic(BigInteger.ONE.shiftLeft(span).add(BigInteger.ONE), -span);
+		SignedDyadic roundoff = new SignedDyadic(BigInteger.ONE.shiftLeft(span + 1).subtract(BigInteger.ONE), -span);
+		GasInventory inventory = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR,
+				twoNodes ? 500_000_000L : 1_000_000_000L, twoNodes ? 1.5 : 3, List.of(), 0)));
+		GasAuditLedger source = new GasAuditLedger(List.of(new GasAuditLedger.Entry(
+				BuiltinGasDefinitions.AIR, 1_000_000_000L, sourceMass, List.of(), SignedDyadic.ZERO)));
+		AirNetwork network = new AirNetwork();
+		network.restoreNodes(twoNodes ? new double[] {.5, .5} : new double[] {1},
+				twoNodes ? List.of(inventory, inventory) : List.of(inventory), source, GasAuditLedger.EMPTY, roundoff, SignedDyadic.ZERO);
+		return network;
+	}
+
+	private static void validatePublicMutatorsPreflightAllOwners() {
+		AirNetwork cumulative = new AirNetwork();
+		int sourceNode = cumulative.addNode(1, AirNetwork.cubicMeters(Long.MAX_VALUE));
+		cumulative.setStandardVolume(sourceNode, 0);
+		check(cumulative.auditClosed() && cumulative.drawnFromAmbientNanos() == Long.MAX_VALUE
+				&& cumulative.ventedNanos() == Long.MAX_VALUE, "Cumulative source-budget fixture is invalid");
+		checkNodeMutationRejectsUnchanged(cumulative, () -> cumulative.setStandardVolume(sourceNode, 1e-9));
+		checkNodeMutationRejectsUnchanged(cumulative, () -> cumulative.addNode(1, 1e-9));
+		checkNodeMutationRejectsUnchanged(cumulative, () -> cumulative.addNode(Double.NaN, 0));
+		check(cumulative.addNode(1, 0) == 2 && cumulative.auditClosed(), "Rejected creation consumed a node id");
+		GasRegistry mixture = new GasRegistry(List.of(
+				new GasComponentDefinition("test:a", 1, 1, List.of(), List.of()),
+				new GasComponentDefinition("test:b", 1, 1, List.of(), List.of())), List.of(
+				new GasRegistry.AmbientFraction("test:a", ExactRational.ONE.divide(2)),
+				new GasRegistry.AmbientFraction("test:b", ExactRational.ONE.divide(2))));
+		AirNetwork mixed = new AirNetwork(mixture);
+		int vacuum = mixed.addNode(1, AirNetwork.cubicMeters(Long.MAX_VALUE));
+		mixed.setStandardVolume(vacuum, 0);
+		mixed.addOrMergeEdge(AirNetwork.AMBIENT_NODE, vacuum, 3e-10, .65);
+		check(mixed.auditClosed() && mixed.drawnFromAmbientNanos() == Long.MAX_VALUE
+				&& mixed.externalSource().entries().stream().allMatch(entry -> entry.standardVolumeNanos() < Long.MAX_VALUE),
+				"Multi-component cumulative source-budget fixture is invalid");
+		checkNodeMutationRejectsUnchanged(mixed, () -> mixed.stepEdges(.01));
+		for (int action = 0; action < 4; action++) {
+			AirNetwork network = restoredWideLedger(action == 1);
+			network.addOrMergeEdge(1, AirNetwork.AMBIENT_NODE, .01, .65);
+			if (action == 1) network.addOrMergeEdge(2, AirNetwork.AMBIENT_NODE, .02, .65);
+			GasAuditLedger source = network.externalSource();
+			SignedDyadic roundoff = network.massRoundoff();
+			long revision = network.revision();
+			switch (action) {
+				case 0 -> check(network.addNode(1, 0) == 2 && network.inventory(2).isEmpty(), "Vacuum creation changed identity");
+				case 1 -> { network.mergeNodes(1, 2); check(network.nodeIds().equals(List.of(1)) && network.availableVolume(1) == .5
+						&& network.edgeCount() == 1 && close(network.edges().getFirst().areaSquareMeters(), .03), "Merge changed capacity or edge rewiring"); }
+				case 2 -> { network.ventNode(1); check(network.nodeCount() == 0 && network.edgeCount() == 0, "Vent retained nodes or edges"); }
+				case 3 -> { network.setStandardVolume(1, 0); check(network.inventory(1).isEmpty() && network.availableVolume(1) == 1
+						&& network.edgeCount() == 1, "Explicit removal changed physical capacity or edge identity"); }
+			}
+			check(network.revision() == revision + 1 && network.externalSource().equals(source)
+					&& network.massRoundoff().equals(roundoff) && network.residualRoundoff().equals(SignedDyadic.ZERO)
+					&& network.ventedNanos() == (action >= 2 ? 1_000_000_000L : 0) && network.auditClosed(),
+					"Zero-delta public edit rejected or changed its wide audit");
+		}
+		AirNetwork phase = restoredWideLedger(false);
+		SignedDyadic roundoff = phase.massRoundoff();
+		phase.commitPhaseSource(1, new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR,
+				500_000_000L, .5, List.of(), 0))));
+		check(phase.inventory(1).totalMass() == 3.5 && phase.massRoundoff().equals(roundoff) && phase.auditClosed(),
+				"Zero-delta phase source rejected a representable wide ledger");
+		phase = restoredWideLedger(false);
+		phase.commitPhaseSink(1, phase.inventory(1).splitTotal(500_000_000L).first());
+		check(phase.inventory(1).totalMass() == 1.5 && phase.massRoundoff().equals(roundoff) && phase.auditClosed(),
+				"Zero-delta phase sink rejected a representable wide ledger");
+		AirNetwork pore = restoredWideLedger(true);
+		pore.updateAvailableVolume(1, .25); pore.updateAvailableVolume(2, .75);
+		pore.addOrMergeEdge(1, 2, .01, .65);
+		pore.stepEdges(1);
+		check(pore.standardVolumeNanos(1) == 250_000_000L && pore.massRoundoff().equals(roundoff) && pore.auditClosed(),
+				"Zero-delta finite-rate transfer rejected a representable wide ledger");
+
+		AirNetwork edges = new AirNetwork(); edges.addNode(1, 1); edges.addNode(1, 1);
+		checkNodeMutationRejectsUnchanged(edges, () -> edges.addOrMergeEdge(1, 99, .01, .65));
+		expectThrow(() -> new AirEdge(1, 2, Double.POSITIVE_INFINITY, .65), "nonfinite direct gas edge");
+		edges.addOrMergeEdge(1, 2, .01, .65);
+		checkNodeMutationRejectsUnchanged(edges, () -> edges.addOrMergeEdge(1, 2, -.001, .65));
+		checkNodeMutationRejectsUnchanged(edges, () -> edges.addOrMergeEdge(1, 2, .001, 2));
+		checkNodeMutationRejectsUnchanged(edges, () -> edges.addOrMergeEdge(1, 2, Double.POSITIVE_INFINITY, .65));
+	}
+
+	private static void checkSplitRejectsUnchanged(AirNetwork network, double... volumes) {
+		checkNodeMutationRejectsUnchanged(network, () -> network.splitNode(1, volumes));
+	}
+
+	private static void checkNodeMutationRejectsUnchanged(AirNetwork network, Runnable mutation) {
+		var ids = network.nodeIds();
+		var inventories = ids.stream().map(network::inventory).toList();
+		double[] capacities = ids.stream().mapToDouble(network::availableVolume).toArray();
+		var edges = List.copyOf(network.edges());
+		GasAuditLedger source = network.externalSource(), sink = network.escapedSink();
+		SignedDyadic mass = network.massRoundoff(), residual = network.residualRoundoff();
+		long revision = network.revision();
+		int clamps = network.transferClampEvents();
+		boolean rejected = false;
+		try { mutation.run(); } catch (IllegalArgumentException | ArithmeticException expected) { rejected = true; }
+		check(rejected, "Unrepresentable gas mutation did not reject its complete candidate");
+		check(network.nodeIds().equals(ids) && network.edges().equals(edges) && network.revision() == revision && network.transferClampEvents() == clamps
+				&& network.externalSource().equals(source) && network.escapedSink().equals(sink)
+				&& network.massRoundoff().equals(mass) && network.residualRoundoff().equals(residual) && network.auditClosed(),
+				"Rejected gas mutation changed node identity, edges, audit or revision");
+		for (int slot = 0; slot < ids.size(); slot++) check(network.inventory(ids.get(slot)).equals(inventories.get(slot))
+				&& Double.doubleToRawLongBits(network.availableVolume(ids.get(slot))) == Double.doubleToRawLongBits(capacities[slot]),
+				"Rejected gas mutation changed a node inventory or capacity");
 	}
 
 	private static void checkPartitionColumns(GasInventory source, List<GasInventory> parts) {

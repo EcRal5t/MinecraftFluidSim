@@ -53,7 +53,9 @@
 
 环境截留量按标准体积 nanos 就近舍入。正截留体积舍入为零时，在库存提交前抛出 `GasTopologyBlockedException`。整数舍入对应的压力误差为 `|Δp| ≤ p₀·(0.5×10⁻⁹ m³)/V`，其中 `V` 是截留体积；体积到 nanos 的 binary64 换算误差另计。
 
-`AirNetwork.splitNode` 按各子腔 binary64 可用体积的精确比值分配库存，使用 `GasInventory.partition(List<ExactRational>)` 的最大余数分配；体积权重与库存 nanos 分别保留其单位。逐组件 nanos 与 species 整数闭合，质量和质量残差的最终舍入差额留在该组件的最大份额。
+`AirNetwork.splitNode` 与拓扑重扫按 binary64 可用体积的精确比值分配库存，使用 `GasInventory.partition(List<ExactRational>)` 的最大余数分配；体积权重与库存 nanos 分别保留其单位。逐组件 nanos 与 species 整数闭合，质量和质量残差的最终舍入差额留在该组件的最大份额。节点拆分在发布前校核节点数量、编号和完整审计后继，拒绝时保留全部原节点、连接与账本。
+
+热学继承控制体积由 `GasTopologyVolumePartition` 使用相同几何权重分配，各非最大份额从精确乘积一次舍入，最大份额承接实际储存子列的余量。总体积误差至多为承接列的半个 ULP；正份额无法表示时拒绝候选。
 
 marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 component 也拿不到库存。六邻域 flood fill 只跨越接近全开的 face；部分开放 face 不合并 component，而是形成有限速率 geometric edge。
 
@@ -61,7 +63,7 @@ marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 compone
 
 首次扫描或完整重扫后若仍没有节点，扫描器为具有正残余体积的部分充液连通区建立显式归属，按原规则规范化节点顺序和闭域总容量。这覆盖满液域的分数抽取，以及旧 membership 全部消失、抽取位置没有旧 lineage 的情况。节点通过正常 remap 接受库存：没有可转移库存时保持真空，旧密闭库存仍按既有容量权重转移。持久化与恢复使用相同的扫描规则。
 
-密闭壳内失去全部拓扑去向的库存**不判为丢失**：腔体消失时先沿开放面交给仍能到达的最近腔体，一个都到不了时才按全部剩余腔体的容量权重转移，库存随容量一起走。被载体挤没的气泡、被抬升液面压碎的 headspace 碎片、以及闪断的载体空隙在这里是同一个事件——闭体积里的气，腔体没了；可达性先决定它去哪，守恒只在没有可达腔体时兜底。开放域中同样的情形才记 escaped sink。
+密闭壳内腔体消失时，有限库存沿开放面交给仍能到达且具有正容量的最近腔体。不存在可达去向时，`GasTopologyBlockedException` 在库存发布前拒绝完整候选。开放域中失去拓扑去向的库存记 escaped sink。
 
 - controller 已验证闭壳时，solver 外边界不自动判作 ambient；命令临时域和真实缺口仍连接 ambient node 0。
 - scan 按固定邻居顺序执行，节点以 canonical minimum-cell key 排序，保证同一几何得到确定 topology。
@@ -85,7 +87,7 @@ component 与 species 的隶属关系是 world-local registry 原始数据，不
 
 气液相变只把同时被 component 允许且具有 host gas thermal offset 的 species 视为可挥发，其他 species 留在凝聚相。允许集合非空只声明能力，当前功能布局中实际出现 species 时仍必须同时存在匹配的 chemical registry 和 host gas thermal species offset。
 
-`AirNetwork` 对节点、库存、可用体积、edge 和物质审计维护同一个单调 revision。topology remap 绑定规划时 revision；提交前 gas inventory 与 gas-energy 两个 owner 必须同时接受各自 generation，之后才发布任一侧。几何仍相同但库存、体积、edge 或 `U` 已改变的旧计划必须整体拒绝，不能覆盖较新的 owner 原始数据。
+`AirNetwork` 对节点、库存、可用体积、edge 和物质审计维护同一个单调 revision。节点创建、库存设置、拆分、合并和排气先准备完整节点、连接及累计审计后继，再统一发布；质量和残差先计算本次净差额，再加入已有舍入账本。孔流连接须引用已有节点或环境，单次请求的面积与流量系数先接受校验，再合并平行开口。topology remap 绑定规划时 revision；提交前 gas inventory 与 gas-energy 两个 owner 必须同时接受各自 generation，之后才发布任一侧。几何仍相同但库存、体积、edge 或 `U` 已改变的旧计划必须整体拒绝，不能覆盖较新的 owner 原始数据。
 
 气体拓扑计划同时保存不可变的 cut-micro 掩码和外壳密闭状态。操作级清空在任何库存写入前复核这份几何，以及重新扫描所得的节点归属、逐格与逐节点容量和孔流面积；几何变化即使保留相同节点标签，也会使旧计划失效。
 
@@ -103,7 +105,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 - merge 汇总完整库存和能量；
 - split 按几何份额分配；每组分的质量与质量余量由最大 nanos 子份额承接余数，同份额按节点顺序取首个。其余子列按比例求值并精确求和，承接列一次舍入；无法表示的严格正质量子列拒绝候选。物种整数份额沿用最大余数分配；
-- 开放域中打开或消失的腔体把实际库存记入环境 sink；密闭域中不产生 source/sink，失去拓扑去向的库存按剩余腔体容量权重转移，不记为丢失；
+- 开放域中打开或消失的腔体把实际库存记入环境 sink；密闭域中不产生 source/sink，失去拓扑去向的库存需要可达的正容量腔体才能转移，缺少去向时拒绝候选；
 - 开放域中从上一代 ambient lineage 被夹断的实际体积按环境组成记 source；若同一新节点还继承既有 sealed node，则环境来源体积与旧节点体积、库存和 `U` 分列合并后，才对最终几何差额结算功；同一节点中上一代无 owner 的本代体积仍是零库存真空并进入 inherited volume；
 - 相变产生或消耗的 water vapor 通过同一组件库存与 source/sink 审计提交。
 
@@ -130,7 +132,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 一对一 lineage 携带完整 node inventory；
 - 多对一 merge 对 component、species、mass/residual 和 U 分列求和；
 - 空库存节点若并入有限气体，旧真空控制体积也进入 inherited volume；本代新出现且上一代没有 sealed/ambient owner 的体积同样作为新真空控制体积进入该列。气体向这些体积的自由膨胀保持 `U` 不变，不能误记为可逆边界功；真空被载体完全挤至零体积且没有后继时则没有物质、`U` 或控制体积需要转移；
-- 一对多 split 按 overlap/available-volume 整数权重和上述库存分配规则求出子列，`U` 按[热学共同温度拆分契约](thermal-state.md)分配；
+- 一对多 split 按 overlap/available-volume 的精确二进制权重和上述库存分配规则求出子列，`U` 按[热学共同温度拆分契约](thermal-state.md)分配；
 - 连到 ambient 的旧有限库存份额进入 sink；只有从上一代 ambient lineage 截留的体积按 ambient composition 进入 source，无 owner 的 sealed volume 是显式真空；
 - topology 与 thermal U 的 transfer plan 必须一起可提交，否则 network 保持重扫前状态。
 

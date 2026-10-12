@@ -91,11 +91,21 @@ final class CellRemapMicroTopology {
 		return positionSupport(domain.geometry.cutCells.mask(cell), domain.config.cellSize(), x, y, z);
 	}
 	static int positionSupport(int mask, float cellSize, float x, float y, float z) {
-		float spacing = cellSize / 2;
-		int micro = ((int) Math.floor(x / spacing) & 1) | (((int) Math.floor(y / spacing) & 1) << 1)
-				| (((int) Math.floor(z / spacing) & 1) << 2);
+		int micro = positionMicro(cellSize, x, y, z);
 		int result = support(mask, micro);
 		if (result == 0) throw new IllegalStateException("Liquid source is outside its open micro component");
 		return result;
+	}
+	static int positionMicro(float cellSize, float x, float y, float z) {
+		float spacing = cellSize / 2;
+		float qx = x / spacing, qy = y / spacing, qz = z / spacing;
+		if (!(spacing > 0 && Float.isFinite(spacing)) || spacing * 2 != cellSize || !representableIndex(qx)
+				|| !representableIndex(qy) || !representableIndex(qz))
+			throw new IllegalArgumentException("Liquid micro coordinates exceed their binary32 representation");
+		return ((int) Math.floor(qx) & 1) | (((int) Math.floor(qy) & 1) << 1)
+				| (((int) Math.floor(qz) & 1) << 2);
+	}
+	private static boolean representableIndex(float value) {
+		return Float.isFinite(value) && value >= 0 && (double) value <= Integer.MAX_VALUE;
 	}
 }

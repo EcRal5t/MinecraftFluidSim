@@ -24,6 +24,7 @@ final class MarkerGridIndex {
 	int[] phaseEntryNext;
 	double[] phaseEntryVolume;
 	int phaseEntryCount;
+	long inventoryRevision;
 
 	MarkerGridIndex(int cellCount, int markerCapacity) {
 		this.cellCount = cellCount;

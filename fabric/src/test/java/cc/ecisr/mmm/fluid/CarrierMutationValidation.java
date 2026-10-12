@@ -34,6 +34,9 @@ public final class CarrierMutationValidation {
 	}
 
 	private static void cellVolumeReplacementPreflightsAllOwners() throws Exception {
+		cellReplacementRequiresRepresentableGeometry();
+		cellReplacementPreflightsGasTopology();
+		cellReplacementRefreshesAfterPartialExtraction();
 		cellFillUsesEveryOpenSlot();
 		FluidDomain domain = fullCapabilityDomain(FullCapabilityTestFixture.load());
 		domain.setVolume(1, 1, 1, .25F);
@@ -69,6 +72,167 @@ public final class CarrierMutationValidation {
 		catch (IllegalStateException expected) { }
 		requireUnchanged(domain, staleState);
 		cellReplacementRejectsInvalidStoredThermalState();
+	}
+
+	private static void cellReplacementRequiresRepresentableGeometry() {
+		for (float h : new float[] {Float.MIN_VALUE, 3 * Float.MIN_VALUE, .1F, .5F, 1F}) {
+			var d = new FluidDomain(2, 2, 2, new FluidSolverConfig(h, 1000, 0, .05F, 100, 1e-5F, .4F, .002F, 0));
+			byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte) 255); masks[0] = 126;
+			d.restoreParticleState(new FlipParticleState(2, 2, 2, h, 0, 0, new float[0], new float[0], masks));
+			var before = replacementState(d);
+			if (h == Float.MIN_VALUE || h == 3 * Float.MIN_VALUE) {
+				try { d.setVolume(0, 0, 0, .25F); throw new AssertionError("Unrepresentable micro geometry was published"); }
+				catch (IllegalArgumentException expected) { }
+				requireUnchanged(d, before);
+				if (h == 3 * Float.MIN_VALUE) {
+					byte[] incomingMasks = new byte[8]; java.util.Arrays.fill(incomingMasks, (byte) 255); incomingMasks[7] = 126;
+					float coordinate = 5 * Float.MIN_VALUE;
+					var incoming = new FlipParticleState(2, 2, 2, h, 1, .125F,
+							new float[]{coordinate, coordinate, coordinate, .125F}, new float[3], incomingMasks);
+					try { d.restoreParticleState(incoming); throw new AssertionError("Inexact half-cell metric changed a restored marker's micro component"); }
+					catch (IllegalArgumentException expected) { }
+					requireUnchanged(d, before);
+					require(java.util.Arrays.equals(d.exportParticleState().copyCollisionMicroMasks(), masks),
+							"Rejected half-cell metric changed restored collision geometry");
+				}
+			} else {
+				d.setVolume(0, 0, 0, .25F);
+				require(d.particleCount() == 2 && d.particleCellIndex(0) == 0 && d.particleCellIndex(1) == 0
+						&& CellRemapMicroTopology.markerSupport(d, 0) == 1 && CellRemapMicroTopology.markerSupport(d, 1) == 128,
+						"Representable marker slots changed their cell or fixed component");
+				d.exportParticleState();
+			}
+		}
+	}
+
+	private static FluidDomain replacementGasCompartments(boolean bootstrap) {
+		var d = new FluidDomain(5, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .4F, .002F, 0));
+		byte[] masks = new byte[45]; java.util.Arrays.fill(masks, (byte) 255);
+		masks[21] = masks[23] = 0;
+		d.restoreParticleState(new FlipParticleState(5, 3, 3, .5F, 0, 0, new float[0], new float[0], masks));
+		d.sealDomainBoundary();
+		if (bootstrap) d.bootstrapGasState("");
+		return d;
+	}
+
+	private static void cellReplacementRefreshesAfterPartialExtraction() {
+		for (boolean warmRejectedPreview : new boolean[]{true, false}) {
+			var domain = replacementGasWithFullNeighbour();
+			var network = domain.gasState.network;
+			long gasRevision = network.revision(), carrierRevision = domain.carrierMutationRevision();
+			var gas = domain.exportGasState("");
+			var stale = warmRejectedPreview ? null : CellVolumeReplacementPlan.build(domain, 0, 0, 0, .75F, false);
+			if (warmRejectedPreview) {
+				var before = replacementState(domain);
+				try { domain.setVolume(0, 0, 0, 1); throw new AssertionError("Full replacement crushed finite gas"); }
+				catch (GasTopologyBlockedException expected) { }
+				requireUnchanged(domain, before);
+				requireReplacementGasUnchanged(domain, network, gasRevision, gas);
+			}
+			require(domain.removeVolumeNear(1, 0, 0, .0625F, 0) == .0625F
+					&& domain.particleCount() == 16 && domain.carrierMutationRevision() == carrierRevision
+					&& network.revision() == gasRevision && domain.totalVolumeExact() == 1.4375,
+					"Partial extraction fixture must change volume while preserving marker and gas revisions");
+			if (stale != null) {
+				var before = replacementState(domain);
+				try { domain.carrierMutations().replaceCellVolume(stale); throw new AssertionError("Replacement accepted an outdated liquid inventory"); }
+				catch (IllegalStateException expected) {
+					require(expected.getMessage().contains("changed after planning"), "Stale inventory rejection lost its cause");
+				}
+				requireUnchanged(domain, before);
+				requireReplacementGasUnchanged(domain, network, gasRevision, gas);
+			}
+			// A fresh public preview reads the newly created space directly, before any capture refresh.
+			domain.setVolume(0, 0, 0, 1);
+			var after = domain.captureAuthoritativeState().gas();
+			require(domain.totalVolumeExact() == 1.9375 && network.availableVolume(1) == .0625
+					&& after.nodes().size() == 1 && after.nodes().getFirst().inventory().equals(gas.nodes().getFirst().inventory())
+					&& after.externalSource().equals(gas.externalSource()) && after.escapedSink().equals(gas.escapedSink())
+					&& network.auditClosed(), "Fresh replacement preview reused the partial extraction's old liquid volume");
+		}
+	}
+
+	private static FluidDomain replacementGasWithFullNeighbour() {
+		byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte) 255); masks[0] = masks[1] = 0;
+		float[] positions = new float[64];
+		for (int cell = 0; cell < 2; cell++) for (int slot = 0; slot < 8; slot++) {
+			int base = 4 * (8 * cell + slot);
+			positions[base] = cell + .25F + .5F * (slot & 1);
+			positions[base + 1] = .25F + .5F * (slot >> 1 & 1);
+			positions[base + 2] = .25F + .5F * (slot >> 2 & 1);
+			positions[base + 3] = cell == 0 ? .0625F : .125F;
+		}
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .01F, 200, 1e-5F, .5F, 1e-4F, 0));
+		domain.restoreParticleState(new FlipParticleState(2, 2, 2, 1, 16, 1.5F, positions, new float[48], masks));
+		domain.sealDomainBoundary(); domain.bootstrapGasState("");
+		return domain;
+	}
+
+	private static void requireReplacementGasUnchanged(
+			FluidDomain domain, cc.ecisr.mmm.fluid.air.AirNetwork network, long revision,
+			cc.ecisr.mmm.fluid.air.GasStateSnapshot expected) {
+		var actual = domain.exportGasState("");
+		require(domain.gasState.network == network && network.revision() == revision && network.availableVolume(1) == .5
+				&& domain.gasState.previousSealedNodeCount == 1 && domain.gasState.pressureActive
+				&& java.util.Arrays.equals(actual.cellNodeOrdinal(), expected.cellNodeOrdinal())
+				&& java.util.Arrays.equals(actual.cellLineageOrdinal(), expected.cellLineageOrdinal())
+				&& actual.nodes().equals(expected.nodes()) && actual.externalSource().equals(expected.externalSource())
+				&& actual.escapedSink().equals(expected.escapedSink()) && actual.massRoundoff().equals(expected.massRoundoff())
+				&& actual.residualRoundoff().equals(expected.residualRoundoff()), "Rejected replacement changed gas owners or topology");
+		for (int cell = 0; cell < 8; cell++) require(domain.geometry.cutCells.mask(cell) == (cell < 2 ? 0 : 255),
+				"Rejected replacement changed collision geometry");
+	}
+
+	private static void cellReplacementPreflightsGasTopology() {
+		var d = replacementGasCompartments(true);
+		d.setVolume(1, 1, 1, .5F); d.captureAuthoritativeState();
+		int left = d.airNodeAt(1, 1, 1), right = d.airNodeAt(3, 1, 1);
+		var network = d.gasState.network;
+		require(network.availableVolume(left) == .0625 && network.standardVolumeNanos(left) == 125000000
+				&& d.gasNodeGaugePressurePa(left) == 101325, "Partial replacement failed to compress its own gas cavity");
+		var state = replacementState(d); var source = network.externalSource(); var sink = network.escapedSink();
+		long gasRevision = network.revision();
+		try { d.setVolume(1, 1, 1, 1); throw new AssertionError("Replacement moved trapped gas through a solid partition"); }
+		catch (GasTopologyBlockedException expected) { }
+		requireUnchanged(d, state);
+		require(d.gasState.network == network && network.revision() == gasRevision
+				&& network.externalSource() == source && network.escapedSink() == sink
+				&& network.standardVolumeNanos(left) == 125000000 && network.standardVolumeNanos(right) == 125000000,
+				"Rejected replacement changed trapped gas or its audit");
+		var stale = CellVolumeReplacementPlan.build(d, 1, 1, 1, .25F, false);
+		d.setGasNodeStandardVolume(left, .15); state = replacementState(d); gasRevision = network.revision();
+		try { d.carrierMutations().replaceCellVolume(stale); throw new AssertionError("Replacement accepted a stale gas revision"); }
+		catch (IllegalStateException expected) { }
+		requireUnchanged(d, state); require(network.revision() == gasRevision, "Stale rejection changed gas revision");
+		stale = CellVolumeReplacementPlan.build(d, 1, 1, 1, .25F, false);
+		d.setSolidMicroMask(2, 1, 1, 254); state = replacementState(d);
+		try { d.carrierMutations().replaceCellVolume(stale); throw new AssertionError("Replacement accepted changed topology masks"); }
+		catch (IllegalStateException expected) { }
+		requireUnchanged(d, state);
+		var vacuum = replacementGasCompartments(true);
+		vacuum.setGasNodeStandardVolume(vacuum.airNodeAt(1, 1, 1), 0);
+		vacuum.setVolume(1, 1, 1, 1); vacuum.captureAuthoritativeState();
+		require(vacuum.totalVolumeExact() == 1 && vacuum.gasState.network.nodeCount() == 1,
+				"Replacement rejected an empty cavity");
+		var initial = replacementGasCompartments(false); initial.setVolume(1, 1, 1, 1);
+		require(initial.totalVolumeExact() == 1 && initial.gasState.cellNodeId == null,
+				"Replacement required gas inventory before topology initialization");
+		var cut = new FluidDomain(2, 2, 2, d.config);
+		byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte)255); masks[0] = 126;
+		cut.restoreParticleState(new FlipParticleState(2, 2, 2, .5F, 0, 0, new float[0], new float[0], masks));
+		cut.granularCoupling = new cc.ecisr.mmm.granular.GranularCouplingFields(2, 2, 2, .5F);
+		long[] occupied = new long[8]; occupied[0] = 1; cut.granularCoupling.setFixedCellSvq(occupied);
+		float amount = .25F - Math.scalb(1F, -24);
+		cut.carrierMutations().replaceCellVolume(CellVolumeReplacementPlan.build(cut, 0, 0, 0, amount, true));
+		require(cut.particleCount() == 2 && cut.particles.volume(0) == .125F - Math.scalb(1F, -24)
+				&& cut.particles.volume(1) == .125F, "Full fill violated the shared component SVQ capacities");
+		var corner = new FluidDomain(2, 2, 2, d.config);
+		corner.restoreParticleState(new FlipParticleState(2, 2, 2, .5F, 0, 0, new float[0], new float[0], masks));
+		corner.granularCoupling = new cc.ecisr.mmm.granular.GranularCouplingFields(2, 2, 2, .5F);
+		occupied[0] = 4194303; corner.granularCoupling.setFixedCellSvq(occupied);
+		corner.carrierMutations().replaceCellVolume(CellVolumeReplacementPlan.build(corner, 0, 0, 0, Math.scalb(1F, -24), true));
+		require(corner.particleCount() == 1 && corner.particles.volume(0) == Math.scalb(1F, -24)
+				&& CellRemapMicroTopology.markerSupport(corner, 0) == 128, "One-SVQ fill entered a zero-capacity component");
 	}
 
 	private static void cellFillUsesEveryOpenSlot() {

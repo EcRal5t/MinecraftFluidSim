@@ -20,6 +20,7 @@ public final class AirCavityScannerValidation {
 		validatePartialFaceGeometricEdge();
 		validateInterfaceResidualAttribution();
 		validateGasRestoreLineage();
+		validateExactGasTopologyWeights();
 		validateScanBudget();
 		System.out.println("M5 cavity scanner gate passed: ambient/sealed classification, available volume, "
 				+ "geometric edges and budget stop");
@@ -189,6 +190,52 @@ public final class AirCavityScannerValidation {
 						"Repeated gas plane double-counted its overlap");
 			}
 		}
+	}
+
+	private static void validateExactGasTopologyWeights() {
+		for (boolean reflected : new boolean[]{false, true}) {
+			float h = .0008F;
+			byte[] masks = new byte[45]; java.util.Arrays.fill(masks, (byte) 255);
+			for (int x = 1; x <= 3; x++) masks[(1 * 3 + 1) * 5 + x] = 0;
+			var domain = new FluidDomain(5, 3, 3, new FluidSolverConfig(h, 1000, 0, .01F, 200, 1e-5F, .5F, 1e-4F, 0));
+			domain.restoreParticleState(new FlipParticleState(5, 3, 3, h, 0, 0, new float[0], new float[0], masks));
+			domain.sealDomainBoundary();
+			var parent = domain.bootstrapGasState("");
+			check(parent.nodes().size() == 1 && parent.nodes().getFirst().inventory().standardVolumeNanos() == 2,
+					"Public gas split fixture must begin with one two-nano parent");
+			int x = reflected ? 3 : 1, corner = reflected ? 6 : 7;
+			check(domain.setSolidMicroMask(x, 1, 1, 255 ^ 1 << corner) == 0,
+					"Empty-cell collision edit displaced liquid");
+			var captured = domain.captureAuthoritativeState();
+			var split = captured.gas();
+			int tiny = domain.airNodeAt(x, 1, 1), large = domain.airNodeAt(2, 1, 1);
+			check(split.nodes().size() == 2 && tiny > 0 && large > 0 && tiny != large && domain.gasBoundary.edgeCount() == 1,
+					"Partial cut-face must connect two separately owned finite gas volumes");
+			check(domain.gasBoundary.availableVolume(tiny) > 0
+					&& domain.gasBoundary.availableVolume(large) == 16 * domain.gasBoundary.availableVolume(tiny),
+					"Gas split must use the actual one-to-sixteen geometric volume ratio");
+			check(domain.gasBoundary.inventory(tiny).isEmpty()
+					&& domain.gasBoundary.inventory(large).equals(parent.nodes().getFirst().inventory()),
+					"Quantized geometry weights diverted a nano into the tiny gas volume");
+			check(split.externalSource().equals(parent.externalSource()) && split.escapedSink().equals(parent.escapedSink())
+					&& split.massRoundoff().equals(parent.massRoundoff()) && split.residualRoundoff().equals(parent.residualRoundoff())
+					&& domain.gasBoundary.auditClosed(), "Closed gas split changed its external ledgers");
+			var restored = FluidDomainStateMapper.restore(captured);
+			check(restored.gasBoundary.nodeCount() == 2
+					&& restored.gasBoundary.inventory(restored.airNodeAt(x, 1, 1)).isEmpty()
+					&& restored.gasBoundary.inventory(restored.airNodeAt(2, 1, 1)).equals(parent.nodes().getFirst().inventory()),
+					"Complete gas handoff lost the tiny vacuum volume or its parent's inventory");
+		}
+		var one = cc.ecisr.mmm.units.SignedDyadic.of(1);
+		var tinyWeight = cc.ecisr.mmm.units.SignedDyadic.of(1, -60);
+		double[] direct = GasTopologyVolumePartition.partition(1, List.of(one, tinyWeight));
+		double[] reflected = GasTopologyVolumePartition.partition(1, List.of(tinyWeight, one));
+		check(direct[1] == Math.scalb(1.0, -60) && reflected[0] == direct[1] && reflected[1] == direct[0],
+				"Gas volume remainder placement erased a positive tiny share or changed under permutation");
+		var error = cc.ecisr.mmm.units.SignedDyadic.of(direct[0]).add(cc.ecisr.mmm.units.SignedDyadic.of(direct[1])).subtract(one);
+		if (error.signum() < 0) error = error.negate();
+		var halfUlp = cc.ecisr.mmm.units.SignedDyadic.of(Math.ulp(direct[0])).multiply(cc.ecisr.mmm.units.SignedDyadic.of(1, -1));
+		check(error.compareTo(halfUlp) <= 0, "Gas volume partition exceeded its exact half-ULP closure bound");
 	}
 
 	private static void validateGasRestoreLineage() {

@@ -11,7 +11,7 @@ package cc.ecisr.mmm.fluid.air;
 public record AirEdge(int firstNode, int secondNode, double areaSquareMeters, double dischargeCoefficient) {
 	public AirEdge {
 		if (firstNode == secondNode) throw new IllegalArgumentException("An edge needs two distinct nodes");
-		if (!(areaSquareMeters > 0.0) || Double.isNaN(areaSquareMeters)) {
+		if (!(areaSquareMeters > 0.0) || !Double.isFinite(areaSquareMeters)) {
 			throw new IllegalArgumentException("Edge area must be positive and finite");
 		}
 		if (!(dischargeCoefficient > 0.0 && dischargeCoefficient <= 1.0)) {

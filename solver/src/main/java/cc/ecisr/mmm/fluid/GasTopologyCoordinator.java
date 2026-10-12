@@ -4,6 +4,8 @@ import cc.ecisr.mmm.thermal.GasEnergyStore;
 import cc.ecisr.mmm.thermal.GasThermalModel;
 import cc.ecisr.mmm.thermal.ThermalDomainState;
 import cc.ecisr.mmm.units.SignedDyadic;
+import cc.ecisr.mmm.chemistry.ExactRational;
+import java.math.BigInteger;
 
 import cc.ecisr.mmm.fluid.air.AirEdge;
 import cc.ecisr.mmm.fluid.air.AirNetwork;
@@ -32,6 +34,7 @@ final class GasTopologyCoordinator {
 	private int[] phaseCounts;
 	private double[] phaseVolumes;
 	private long phasePreviewRevision = -1;
+	private long phasePreviewInventoryRevision = -1;
 	private AirNetwork phasePreviewNetwork;
 
 	private record PhaseEdit(int node, AirNetwork.PhaseMutationPlan gas, double energy,
@@ -156,30 +159,45 @@ final class GasTopologyCoordinator {
 	/** Plans the complete topology successor using one-cell geometry and node-column overlays. */
 	GasTopologyPlan planAfterPhase(PhaseLiquidGeometryEdit geometryEdit, int node,
 			AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal) {
-		int cell = geometryEdit.cell(), markerCount = geometryEdit.markerCount();
-		double markerVolume = geometryEdit.volume().toDouble();
 		domain.gasState.network.requirePhaseMutationCurrent(gas);
 		domain.thermalState.requirePhaseCellEnergyCurrent(thermal);
+		try {
+			return plan(scanAfterLiquidEdit(geometryEdit),true,new PhaseEdit(node,gas,energy,thermal));
+		} catch (IllegalArgumentException | ArithmeticException | GasTopologyBlockedException unavailable) {
+			throw new PhaseChangeStageSupport.PhaseCandidateUnavailableException(
+					"Phase-edited gas topology has no complete representable remap",unavailable);
+		}
+	}
+
+	/** Checks an external liquid replacement before its first carrier or audit write. */
+	void requireAfterLiquidEdit(PhaseLiquidGeometryEdit geometryEdit) {
+		if (domain.gasState.cellNodeId == null) return;
+		plan(scanAfterLiquidEdit(geometryEdit),false);
+	}
+
+	private AirCavityScanner.Result scanAfterLiquidEdit(PhaseLiquidGeometryEdit geometryEdit) {
+		domain.ensureInventoryGrid();
+		int cell = geometryEdit.cell();
+		if (cell >= domain.cellCount || geometryEdit.collisionMask()!=domain.geometry.cutCells.mask(cell))
+			throw new IllegalArgumentException("Liquid replacement geometry differs from the current collision mask");
 		if (phaseCounts == null) { phaseCounts = new int[domain.cellCount]; phaseVolumes = new double[domain.cellCount]; }
-		if (phasePreviewNetwork != domain.gasState.network || phasePreviewRevision != domain.gasState.network.revision()) {
+		if (phasePreviewNetwork != domain.gasState.network || phasePreviewRevision != domain.gasState.network.revision()
+				|| phasePreviewInventoryRevision != domain.markerGrid.inventoryRevision) {
 			phasePreviewNetwork = domain.gasState.network;
 			System.arraycopy(domain.markerGrid.markerCount, 0, phaseCounts, 0, phaseCounts.length);
 			System.arraycopy(domain.markerGrid.exactCellMarkerVolume, 0, phaseVolumes, 0, phaseVolumes.length);
 			phasePreviewRevision = domain.gasState.network.revision();
+			phasePreviewInventoryRevision = domain.markerGrid.inventoryRevision;
 		}
 		int originalCount = phaseCounts[cell]; double originalVolume = phaseVolumes[cell];
-		phaseCounts[cell] = markerCount; phaseVolumes[cell] = markerVolume;
+		phaseCounts[cell] = geometryEdit.markerCount(); phaseVolumes[cell] = geometryEdit.volume().toDouble();
 		try {
-			AirCavityScanner.Result result = domain.gasState.sealedDomainBoundary && domain.gasState.cellLineageNodeId != null
+			return domain.gasState.sealedDomainBoundary && domain.gasState.cellLineageNodeId != null
 					? scanner.scanRetainingClosedLineages(domain.geometry.solid, phaseCounts, phaseVolumes,
 							domain.geometry.cutCells, domain.pressureGranularCoupling, domain.gasState.cellLineageNodeId,
 							domain.gasState.previousSealedNodeCount)
 					: scanner.scan(domain.geometry.solid, phaseCounts, phaseVolumes, domain.geometry.cutCells,
 							domain.pressureGranularCoupling, domain.gasState.sealedDomainBoundary);
-			return plan(result, true, new PhaseEdit(node, gas, energy, thermal));
-		} catch (IllegalArgumentException | ArithmeticException | GasTopologyBlockedException unavailable) {
-			throw new PhaseChangeStageSupport.PhaseCandidateUnavailableException(
-					"Phase-edited gas topology has no complete representable remap", unavailable);
 		} finally {
 			phaseCounts[cell] = originalCount; phaseVolumes[cell] = originalVolume;
 		}
@@ -271,7 +289,7 @@ final class GasTopologyCoordinator {
 		SignedDyadic sourceEnergy = SignedDyadic.ZERO, sinkEnergy = SignedDyadic.ZERO;
 		if (!initialBootstrap && sealed > 0) {
 			int previous = domain.gasState.previousSealedNodeCount;
-			TreeMap<Long, Long> overlap = new TreeMap<>();
+			TreeMap<Long, SignedDyadic> overlap = new TreeMap<>();
 			boolean[] hasMembershipOverlap = new boolean[previous + 1];
 			boolean[] newNodeHasMembershipOverlap = new boolean[sealed + 1];
 			int[] newMembership = result.cellNodeId();
@@ -294,8 +312,7 @@ final class GasTopologyCoordinator {
 				int now = newMembership[cell];
 				if (now < 0 || !(cellAvailableVolume[cell] > 0.0)) continue;
 				long key = ((long) oldMembership << 32) | (now & 0xffffffffL);
-				long weight = Math.max(1L, AirNetwork.nanos(cellAvailableVolume[cell]));
-				overlap.merge(key, weight, Math::addExact);
+				overlap.merge(key,SignedDyadic.of(cellAvailableVolume[cell]),SignedDyadic::add);
 				hasMembershipOverlap[oldMembership] = true;
 				if (now > 0) newNodeHasMembershipOverlap[now] = true;
 			}
@@ -333,7 +350,7 @@ final class GasTopologyCoordinator {
 			boolean[] contributed = new boolean[sealed + 1];
 			for (int old = 1; old <= previous; old++) {
 				GasInventory inventory = inventory(old, edit);
-				Map<Long, Long> oldOverlap = overlap.subMap(
+				Map<Long, SignedDyadic> oldOverlap = overlap.subMap(
 						(long) old << 32, (long) (old + 1) << 32);
 				int destinations = oldOverlap.size();
 				if (destinations == 0) {
@@ -349,16 +366,14 @@ final class GasTopologyCoordinator {
 					if (thermalGas) sinkEnergy = sinkEnergy.add(SignedDyadic.of(energy(old, edit)));
 					continue;
 				}
-				long[] weights = new long[destinations];
-				int weight = 0;
-				for (long available : oldOverlap.values()) weights[weight++] = available;
-				List<GasInventory> parts = inventory.partition(weights);
+				List<SignedDyadic> weights = List.copyOf(oldOverlap.values());
+				List<GasInventory> parts = inventory.partition(weights.stream().map(GasTopologyCoordinator::exactWeight).toList());
 				double[] partEnergy = !thermalGas ? null : inventory.isEmpty() ? new double[destinations]
 						: partitionEnergy(old, parts, edit);
 				double[] partAvailable = !thermalGas ? null
-						: partitionTopologyVolume(domain.gasState.network.availableVolume(old), weights);
+						: GasTopologyVolumePartition.partition(domain.gasState.network.availableVolume(old),weights);
 				int part = 0;
-				for (Map.Entry<Long, Long> entry : oldOverlap.entrySet()) {
+				for (Map.Entry<Long, SignedDyadic> entry : oldOverlap.entrySet()) {
 					int node = (int) (entry.getKey() & 0xffffffffL);
 					if (node == AirNetwork.AMBIENT_NODE) {
 						sinkDelta = sinkDelta.add(parts.get(part));
@@ -486,7 +501,7 @@ final class GasTopologyCoordinator {
 	/** Adds each old lineage touching a newly full-air child in one bounded cell pass. */
 	private void addAdjacentPreviousGasOverlaps(
 			int[] newMembership, boolean[] newNodeHasMembershipOverlap, double[] availableVolumes,
-			TreeMap<Long, Long> overlap, boolean[] hasMembershipOverlap, boolean[] previousOwnsAirCell
+			TreeMap<Long, SignedDyadic> overlap, boolean[] hasMembershipOverlap, boolean[] previousOwnsAirCell
 	) {
 		TreeSet<Long> adjacentPairs = new TreeSet<>();
 		for (int cell = 0; cell < domain.cellCount; cell++) {
@@ -515,8 +530,8 @@ final class GasTopologyCoordinator {
 		for (long key : adjacentPairs) {
 			int old = (int) (key >>> 32);
 			int newNode = (int) key;
-			long weight = Math.max(1L, AirNetwork.nanos(availableVolumes[newNode - 1]));
-			overlap.merge(key, weight, Math::addExact);
+			if (!(availableVolumes[newNode-1]>0)) continue;
+			overlap.merge(key,SignedDyadic.of(availableVolumes[newNode-1]),SignedDyadic::add);
 			hasMembershipOverlap[old] = true;
 			newNodeHasMembershipOverlap[newNode] = true;
 		}
@@ -525,7 +540,7 @@ final class GasTopologyCoordinator {
 	/** Returns every fully vanished old child in one pass over its previous interface cells. */
 	private void addDisappearingPreviousGasOverlaps(
 			boolean[] hasMembershipOverlap, int[] newMembership, int[] newLabels,
-			double[] cellAvailableVolume, TreeMap<Long, Long> overlap
+			double[] cellAvailableVolume, TreeMap<Long, SignedDyadic> overlap
 	) {
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			int old = domain.gasState.cellLineageNodeId[cell];
@@ -556,26 +571,11 @@ final class GasTopologyCoordinator {
 		return result;
 	}
 
-	/**
-	 * Hands inventory that lost every topological destination to a cavity it can actually reach.
-	 *
-	 * <p>A sealed shell cannot lose gas. When a node's cells end up carrying no air volume at all -
-	 * a pocket the carrier closed over, or a headspace fragment it crushed - the scan gives it no
-	 * destination, but `normalizeClosedCapacity` has already settled its capacity onto the cavities
-	 * that remain. The inventory travels with that capacity instead of being reported as lost.</p>
-	 *
-	 * <p>This is deliberately not a judgement about what the node used to be. A bubble pinched off by
-	 * the carrier, a headspace split by a rising surface and a carrier void that flickered shut are
-	 * all the same event here: gas in a closed volume whose cavity is gone. Where it goes is decided
-	 * by reachability first and by conservation only when nothing is reachable.</p>
-	 */
-
+	/** Requires a positive reachable destination before transferring orphaned closed inventory. */
 	private void retainClosedOrphans(
-			TreeMap<Long, Long> overlap, int previous, int sealed, double[] availableVolumes,
+			TreeMap<Long, SignedDyadic> overlap, int previous, int sealed, double[] availableVolumes,
 			int[] newMembership, int[] newLabels, double[] cellAvailableVolume, PhaseEdit edit
 	) {
-		boolean anyCapacity = false;
-		for (int node = 1; node <= sealed; node++) anyCapacity |= availableVolumes[node - 1] > 0.0;
 		boolean[] orphaned = new boolean[previous + 1];
 		for (int old = 1; old <= previous; old++) {
 			if (inventory(old, edit).isEmpty()) continue;
@@ -588,24 +588,17 @@ final class GasTopologyCoordinator {
 		}
 		for (int old = 1; old <= previous; old++) {
 			if (!orphaned[old]) continue;
-			Map<Integer, Long> reachable = nearestReachableCavities(
+			Map<Integer, SignedDyadic> reachable = nearestReachableCavities(
 					old, newMembership, newLabels, cellAvailableVolume, availableVolumes);
 			if (!reachable.isEmpty()) {
-				for (Map.Entry<Integer, Long> destination : reachable.entrySet()) {
+				for (Map.Entry<Integer, SignedDyadic> destination : reachable.entrySet()) {
 					overlap.merge(gasOverlapKey(old, destination.getKey()),
-							destination.getValue(), Math::addExact);
+							destination.getValue(), SignedDyadic::add);
 				}
 				continue;
 			}
-			// Nothing is reachable through open geometry: the shell is the only owner left. A shell
-			// that ran out of gas space leaves every cavity at zero, and the inventory still has to
-			// land somewhere - dropping it would break the shell's conservation audit instead of
-			// reporting the over-filled state.
-			for (int node = 1; node <= sealed; node++) {
-				if (anyCapacity && !(availableVolumes[node - 1] > 0.0)) continue;
-				overlap.merge(gasOverlapKey(old, node),
-						Math.max(1L, AirNetwork.nanos(availableVolumes[node - 1])), Math::addExact);
-			}
+			throw new GasTopologyBlockedException("Closed gas inventory has no reachable cavity: "
+					+ gasTopologyLossDetail(old,newMembership,newLabels,cellAvailableVolume,sealed));
 		}
 	}
 
@@ -623,7 +616,7 @@ final class GasTopologyCoordinator {
 	 * hands its gas to the cavity it is actually next to instead of to every cavity in the shell.
 	 * An orphan that reaches no cavity at all reports an empty map.</p>
 	 */
-	private Map<Integer, Long> nearestReachableCavities(
+	private Map<Integer, SignedDyadic> nearestReachableCavities(
 			int old, int[] newMembership, int[] newLabels, double[] cellAvailableVolume,
 			double[] availableVolumes
 	) {
@@ -638,7 +631,7 @@ final class GasTopologyCoordinator {
 		}
 		int head = 0;
 		while (head < tail) {
-			TreeMap<Integer, Long> ring = new TreeMap<>();
+			TreeMap<Integer, SignedDyadic> ring = new TreeMap<>();
 			int ringEnd = tail;
 			while (head < ringEnd) {
 				int cell = queue[head++];
@@ -656,8 +649,7 @@ final class GasTopologyCoordinator {
 					if (!(cellAvailableVolume[neighbor] > 0.0)) continue;
 					int destination = newMembership[neighbor] >= 0 ? newMembership[neighbor] : newLabels[neighbor];
 					if (destination > 0 && availableVolumes[destination - 1] > 0.0) {
-						ring.merge(destination,
-								Math.max(1L, AirNetwork.nanos(cellAvailableVolume[neighbor])), Long::sum);
+						ring.merge(destination,SignedDyadic.of(cellAvailableVolume[neighbor]),SignedDyadic::add);
 					}
 					if (!seen[neighbor]) {
 						seen[neighbor] = true;
@@ -671,28 +663,16 @@ final class GasTopologyCoordinator {
 	}
 
 	private static void addGasOverlapDestination(
-			int old, int now, double availableVolume, TreeMap<Long, Long> overlap
+			int old, int now, double availableVolume, TreeMap<Long, SignedDyadic> overlap
 	) {
 		if (now < 0 || !(availableVolume > 0.0)) return;
 		long key = gasOverlapKey(old, now);
-		long weight = Math.max(1L, AirNetwork.nanos(availableVolume));
-		overlap.merge(key, weight, Math::addExact);
+		overlap.merge(key,SignedDyadic.of(availableVolume),SignedDyadic::add);
 	}
 
-	private static double[] partitionTopologyVolume(double total, long[] weights) {
-		long weightSum = 0L;
-		for (long weight : weights) weightSum = Math.addExact(weightSum, weight);
-		if (!(Double.isFinite(total) && total >= 0.0) || weightSum <= 0L) {
-			throw new IllegalArgumentException("Gas topology volume partition is invalid");
-		}
-		double[] result = new double[weights.length];
-		double assigned = 0.0;
-		for (int index = 0; index < weights.length; index++) {
-			result[index] = index == weights.length - 1 ? total - assigned
-					: total * ((double) weights[index] / weightSum);
-			assigned += result[index];
-		}
-		return result;
+	private static ExactRational exactWeight(SignedDyadic weight) {
+		return weight.exponent()>=0 ? new ExactRational(weight.significand().shiftLeft(weight.exponent()),BigInteger.ONE)
+				: new ExactRational(weight.significand(),BigInteger.ONE.shiftLeft(-weight.exponent()));
 	}
 
 	private static long gasOverlapKey(int old, int now) {

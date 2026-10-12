@@ -72,6 +72,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 完整气腔归属恢复前校核在 `GasTopologyCoordinator.restore`，验证为 `AirCavityScannerValidation.validateGasRestoreLineage`；零孔隙容量的气体块过滤验证为 `validateMicroGasPoreCapacity`。几何权重的精确气体库存分配在 `GasInventory.partition(List<ExactRational>)`。
 
+拓扑继承控制体积的精确权重分配见 [GasTopologyVolumePartition](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasTopologyVolumePartition.java)，公开拓扑验证为 `AirCavityScannerValidation.validateExactGasTopologyWeights`。节点拆分的发布前校验为 `AirNetworkValidation.validateSplitPreflightsAllOwners`，公开库存写入、连接请求与累计源汇校验为 `validatePublicMutatorsPreflightAllOwners`；单格替换的气体、分量容量、坐标表示及原位抽取缓存校验为 `CarrierMutationValidation.cellVolumeReplacementPreflightsAllOwners`。
+
 | 修改内容 | 首先打开 | 需要了解的数据和算法 |
 |---|---|---|
 | 力学计算顺序 | [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)、[MechanicalStageAssembly](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStageAssembly.java) | [流体求解器](../architecture/fluid-solver.md) |

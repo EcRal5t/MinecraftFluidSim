@@ -93,12 +93,14 @@ public final class AirNetwork {
 
 	/** Creates a sealed cavity node; the initial component inventory is booked as drawn from ambient. */
 	public int addNode(double availableVolume, double standardVolume) {
-		MassColumns before = liveMassColumns();
-		int id = nextNodeId++;
+		if (nodes.size() == GasLimits.MAX_NODES_PER_REGION)
+			throw new IllegalArgumentException("Gas creation exceeds the regional node budget");
+		int id = nextNodeId, nextAfter = Math.addExact(nextNodeId, 1);
 		GasInventory created = registry.createAmbient(AirNode.toNanos(standardVolume));
 		AirNode node = new AirNode(availableVolume, created);
-		nodes.put(id, node);
-		finishMutation(before, created, GasInventory.EMPTY);
+		TreeMap<Integer, AirNode> replacement = new TreeMap<>(nodes);
+		replacement.put(id, node);
+		commitRemapNodes(planNodeMutation(replacement, new ArrayList<>(edges), nextAfter, created, GasInventory.EMPTY));
 		return id;
 	}
 
@@ -220,8 +222,6 @@ public final class AirNetwork {
 
 	private PhaseMutationPlan planPhaseMutation(AirNode node, GasInventory after, GasInventory source, GasInventory sink) {
 		TransferMutation mutation = planTransferMutation(liveMassColumns(), node, after, null, null, source, sink);
-		mutation.externalSourceAfter().standardVolumeNanos();
-		mutation.escapedSinkAfter().standardVolumeNanos();
 		long total = 0L;
 		for (AirNode current : nodes.values()) total = Math.addExact(total,
 				(current == node ? after : current.inventory()).standardVolumeNanos());
@@ -243,21 +243,26 @@ public final class AirNetwork {
 		long target = AirNode.toNanos(standardVolume);
 		long current = node.standardVolumeNanos();
 		if (target == current) return;
-		MassColumns before = liveMassColumns();
 		GasInventory source = GasInventory.EMPTY, sink = GasInventory.EMPTY;
+		GasInventory after;
 		if (target > current) {
 			source = registry.createAmbient(target - current);
-			node.setInventory(node.inventory().merge(source));
+			after = node.inventory().merge(source);
 		} else {
 			GasInventory.Split split = node.inventory().splitTotal(target);
-			node.setInventory(split.first()); sink = split.second();
+			after = split.first(); sink = split.second();
 		}
-		finishMutation(before, source, sink);
+		TreeMap<Integer, AirNode> replacement = new TreeMap<>(nodes);
+		replacement.put(nodeId, new AirNode(node.availableVolume(), after));
+		commitRemapNodes(planNodeMutation(replacement, new ArrayList<>(edges), nextNodeId, source, sink));
 	}
 
 	/** Adds an orifice edge; parallel openings between the same pair of nodes sum their areas. */
 	public void addOrMergeEdge(int firstNode, int secondNode, double areaSquareMeters, double dischargeCoefficient) {
 		if (firstNode == secondNode) throw new IllegalArgumentException("An edge needs two distinct nodes");
+		if (firstNode != AMBIENT_NODE) sealed(firstNode);
+		if (secondNode != AMBIENT_NODE) sealed(secondNode);
+		AirEdge incoming = new AirEdge(firstNode, secondNode, areaSquareMeters, dischargeCoefficient);
 		int existing = findEdge(firstNode, secondNode);
 		if (existing >= 0) {
 			AirEdge edge = edges.get(existing);
@@ -268,7 +273,7 @@ public final class AirNetwork {
 			revision++;
 			return;
 		}
-		edges.add(new AirEdge(firstNode, secondNode, areaSquareMeters, dischargeCoefficient));
+		edges.add(incoming);
 		revision++;
 	}
 
@@ -484,13 +489,13 @@ public final class AirNetwork {
 		AirNode target = sealed(targetNodeId);
 		GasInventory merged = target.inventory();
 		for (int sourceNodeId : sourceNodeIds) merged = merged.merge(sealed(sourceNodeId).inventory());
-		MassColumns before = liveMassColumns();
-		target.setInventory(merged);
+		TreeMap<Integer, AirNode> replacement = new TreeMap<>(nodes);
+		replacement.put(targetNodeId, new AirNode(target.availableVolume(), merged));
 		for (int sourceNodeId : sourceNodeIds) {
-			nodes.remove(sourceNodeId);
+			replacement.remove(sourceNodeId);
 		}
-		rewireEdges(targetNodeId, sourceNodeIds);
-		finishMutation(before, GasInventory.EMPTY, GasInventory.EMPTY);
+		commitRemapNodes(planNodeMutation(replacement, rewiredEdges(targetNodeId, sourceNodeIds), nextNodeId,
+				GasInventory.EMPTY, GasInventory.EMPTY));
 	}
 
 	/**
@@ -503,6 +508,9 @@ public final class AirNetwork {
 		if (childAvailableVolumes.length < 2) {
 			throw new IllegalArgumentException("A split needs at least two children");
 		}
+		if ((long) nodes.size() + childAvailableVolumes.length - 1 > GasLimits.MAX_NODES_PER_REGION)
+			throw new IllegalArgumentException("Gas split exceeds the regional node budget");
+		int nextAfter = Math.addExact(nextNodeId, childAvailableVolumes.length - 1);
 		boolean positiveVolume = false;
 		var weights = new ArrayList<ExactRational>(childAvailableVolumes.length);
 		for (double volume : childAvailableVolumes) {
@@ -516,29 +524,24 @@ public final class AirNetwork {
 		}
 		if (!positiveVolume) throw new IllegalArgumentException("A split needs positive available volume");
 		List<GasInventory> partitions = source.inventory().partition(weights);
-		MassColumns before = liveMassColumns();
+		TreeMap<Integer, AirNode> replacement = new TreeMap<>(nodes);
 		int[] childIds = new int[childAvailableVolumes.length];
-		childIds[0] = sourceNodeId;
 		for (int child = 0; child < childAvailableVolumes.length; child++) {
-			if (child == 0) {
-				source.setInventory(partitions.get(child));
-				source.setAvailableVolume(childAvailableVolumes[child]);
-			} else {
-				int id = nextNodeId++;
-				nodes.put(id, new AirNode(childAvailableVolumes[child], partitions.get(child)));
-				childIds[child] = id;
-			}
+			int id = child == 0 ? sourceNodeId : nextNodeId + child - 1;
+			replacement.put(id, new AirNode(childAvailableVolumes[child], partitions.get(child)));
+			childIds[child] = id;
 		}
-		finishMutation(before, GasInventory.EMPTY, GasInventory.EMPTY);
+		commitRemapNodes(planNodeMutation(replacement, new ArrayList<>(edges), nextAfter, GasInventory.EMPTY, GasInventory.EMPTY));
 		return childIds;
 	}
 
 	/** Vents a cavity's whole inventory to ambient and removes it together with its edges. */
 	public void ventNode(int nodeId) {
-		MassColumns before = liveMassColumns();
-		AirNode node = nodes.remove(sealedId(nodeId));
-		rewireEdges(-1, nodeId);
-		finishMutation(before, GasInventory.EMPTY, node.inventory());
+		AirNode node = sealed(nodeId);
+		TreeMap<Integer, AirNode> replacement = new TreeMap<>(nodes);
+		replacement.remove(nodeId);
+		commitRemapNodes(planNodeMutation(replacement, rewiredEdges(-1, nodeId), nextNodeId,
+				GasInventory.EMPTY, node.inventory()));
 	}
 
 	/**
@@ -546,8 +549,8 @@ public final class AirNetwork {
 	 * nodes (self loops dropped, parallel areas summed); a negative replacement drops every
 	 * edge that touched a removed node, because the opening vanished with the node.
 	 */
-	private void rewireEdges(int replacement, int... removedNodes) {
-		List<AirEdge> rewired = new ArrayList<>();
+	private ArrayList<AirEdge> rewiredEdges(int replacement, int... removedNodes) {
+		ArrayList<AirEdge> rewired = new ArrayList<>();
 		for (AirEdge edge : edges) {
 			boolean touchesRemoved = false;
 			for (int removed : removedNodes) if (edge.touches(removed)) { touchesRemoved = true; break; }
@@ -575,8 +578,7 @@ public final class AirNetwork {
 				rewired.add(new AirEdge(first, second, edge.areaSquareMeters(), edge.dischargeCoefficient()));
 			}
 		}
-		edges.clear();
-		edges.addAll(rewired);
+		return rewired;
 	}
 
 	/** Applies a topology plan whose explicit source/sink deltas close every exact component column. */
@@ -616,6 +618,8 @@ public final class AirNetwork {
 			GasAuditLedger sourceDelta, GasAuditLedger sinkDelta, List<AirEdge> replacementEdges,
 			PhaseMutationPlan phase) {
 		if (availableVolumes.length != inventories.size()) throw new IllegalArgumentException("Gas remap slots disagree");
+		if (availableVolumes.length > GasLimits.MAX_NODES_PER_REGION)
+			throw new IllegalArgumentException("Gas remap exceeds the regional node budget");
 		if (sourceDelta == null || sinkDelta == null || replacementEdges == null) {
 			throw new IllegalArgumentException("Gas remap plan is incomplete");
 		}
@@ -644,10 +648,10 @@ public final class AirNetwork {
 		GasRegionAudit.requireClosure(GasRegionAudit.aggregate(baseline), GasRegionAudit.aggregate(inventories), sourceDelta, sinkDelta);
 		MassColumns after = massColumns(inventories);
 		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
+		MassColumns delta = mutationDelta(before, after, source, sink);
 		return new RemapPlan(this, phase == null ? revision : Math.addExact(revision, 1), replacementNodes, plannedEdges, inventories.size() + 1,
-				(phase == null ? massRoundoff : phase.mutation.massRoundoffAfter()).add(after.mass()).add(sink.mass()).subtract(before.mass()).subtract(source.mass()),
-				(phase == null ? residualRoundoff : phase.mutation.residualRoundoffAfter()).add(after.residual()).add(sink.residual())
-						.subtract(before.residual()).subtract(source.residual()),
+				(phase == null ? massRoundoff : phase.mutation.massRoundoffAfter()).add(delta.mass()),
+				(phase == null ? residualRoundoff : phase.mutation.residualRoundoffAfter()).add(delta.residual()),
 				(phase == null ? externalSource : phase.mutation.externalSourceAfter()).add(sourceDelta),
 				(phase == null ? escapedSink : phase.mutation.escapedSinkAfter()).add(sinkDelta));
 	}
@@ -691,7 +695,7 @@ public final class AirNetwork {
 		if (!nodes.isEmpty() || !externalSource.entries().isEmpty() || !escapedSink.entries().isEmpty()) {
 			throw new IllegalStateException("Gas restore requires a fresh network");
 		}
-		if (availableVolumes.length != inventories.size() || source == null || sink == null
+		if (availableVolumes.length != inventories.size() || availableVolumes.length > GasLimits.MAX_NODES_PER_REGION || source == null || sink == null
 				|| savedMassRoundoff == null || savedResidualRoundoff == null) {
 			throw new IllegalArgumentException("Gas restore state is incomplete");
 		}
@@ -749,13 +753,17 @@ public final class AirNetwork {
 
 	private AirNode sealed(int nodeId) { return nodes.get(sealedId(nodeId)); }
 
-	private void finishMutation(MassColumns before, GasInventory sourceDelta, GasInventory sinkDelta) {
-		MassColumns after = liveMassColumns(), source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
-		massRoundoff = massRoundoff.add(after.mass()).add(sink.mass()).subtract(before.mass()).subtract(source.mass());
-		residualRoundoff = residualRoundoff.add(after.residual()).add(sink.residual())
-				.subtract(before.residual()).subtract(source.residual());
-		externalSource = externalSource.add(sourceDelta); escapedSink = escapedSink.add(sinkDelta);
-		revision++;
+	/** Stages public node edits and all fallible cumulative accounting before their first publication. */
+	private RemapPlan planNodeMutation(TreeMap<Integer, AirNode> replacement, ArrayList<AirEdge> replacementEdges,
+	                                 int nextAfter, GasInventory sourceDelta, GasInventory sinkDelta) {
+		if (replacement.size() > GasLimits.MAX_NODES_PER_REGION)
+			throw new IllegalArgumentException("Gas mutation exceeds the regional node budget");
+		MassColumns before = liveMassColumns(), after = massColumns(replacement.values().stream().map(AirNode::inventory).toList());
+		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
+		MassColumns delta = mutationDelta(before, after, source, sink);
+		return new RemapPlan(this, revision, replacement, replacementEdges, nextAfter,
+				massRoundoff.add(delta.mass()), residualRoundoff.add(delta.residual()),
+				externalSource.add(sourceDelta), escapedSink.add(sinkDelta));
 	}
 
 	/** Performs every fallible ledger calculation before either gas or thermal state is published. */
@@ -767,11 +775,15 @@ public final class AirNetwork {
 	) {
 		MassColumns after = liveMassColumnsReplacing(sourceNode, sourceAfter, targetNode, targetAfter);
 		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
+		MassColumns delta = mutationDelta(before, after, source, sink);
 		return new TransferMutation(sourceNode, sourceAfter, targetNode, targetAfter,
-				massRoundoff.add(after.mass()).add(sink.mass()).subtract(before.mass()).subtract(source.mass()),
-				residualRoundoff.add(after.residual()).add(sink.residual())
-						.subtract(before.residual()).subtract(source.residual()),
+				massRoundoff.add(delta.mass()), residualRoundoff.add(delta.residual()),
 				externalSource.add(sourceDelta), escapedSink.add(sinkDelta));
+	}
+
+	private static MassColumns mutationDelta(MassColumns before, MassColumns after, MassColumns source, MassColumns sink) {
+		return new MassColumns(after.mass().add(sink.mass()).subtract(before.mass()).subtract(source.mass()),
+				after.residual().add(sink.residual()).subtract(before.residual()).subtract(source.residual()));
 	}
 
 	private void commitTransferMutation(TransferMutation mutation) {
@@ -889,5 +901,10 @@ public final class AirNetwork {
 			AirNode targetNode, GasInventory targetAfter,
 			SignedDyadic massRoundoffAfter, SignedDyadic residualRoundoffAfter,
 			GasAuditLedger externalSourceAfter, GasAuditLedger escapedSinkAfter
-	) { }
+	) {
+		private TransferMutation {
+			externalSourceAfter.standardVolumeNanos();
+			escapedSinkAfter.standardVolumeNanos();
+		}
+	}
 }

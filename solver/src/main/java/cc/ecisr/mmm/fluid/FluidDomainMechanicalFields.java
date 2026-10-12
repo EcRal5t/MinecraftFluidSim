@@ -424,7 +424,11 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		if (cellY + 1 == sizeY || geometry.solid[cellIndex(cellX, cellY + 1, cellZ)]) oy = Math.min(oy, 1.0F - radiusFraction);
 		if (cellZ == 0 || geometry.solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.max(oz, radiusFraction);
 		if (cellZ + 1 == sizeZ || geometry.solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
-		return new float[] {(cellX + ox) * h, (cellY + oy) * h, (cellZ + oz) * h};
+		float px = (cellX + ox) * h, py = (cellY + oy) * h, pz = (cellZ + oz) * h;
+		if (Math.floor(px / h) != cellX || Math.floor(py / h) != cellY || Math.floor(pz / h) != cellZ
+				|| CellRemapMicroTopology.positionMicro(h, px, py, pz) != slot)
+			throw new IllegalArgumentException("Cell marker slot exceeds its binary32 coordinate representation");
+		return new float[] {px, py, pz};
 	}
 
 	/** Planned per-marker truncation for one cell, applied later without re-deciding anything. */

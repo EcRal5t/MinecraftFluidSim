@@ -85,6 +85,7 @@ final class ParticleToGridStage {
 		}
 		rebuildPressureGeometry();
 		access.markGridClean();
+		markerGrid.inventoryRevision++;
 	}
 
 	void rebuildVelocity() {
