@@ -22,7 +22,7 @@ public final class FlipParticleState {
 	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
 	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
 	                         byte[] collisionMicroMasks) {
-		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(cellSize > 0.0F)) {
+		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(cellSize > 0.0F) || !Float.isFinite(cellSize)) {
 			throw new IllegalArgumentException("Invalid particle-state grid");
 		}
 		if (particleCount < 0) throw new IllegalArgumentException("Particle-state count must not be negative");
@@ -109,7 +109,7 @@ public final class FlipParticleState {
 
 	public void requireCompatible(int expectedX, int expectedY, int expectedZ, float expectedCellSize) {
 		if (sizeX != expectedX || sizeY != expectedY || sizeZ != expectedZ
-				|| Math.abs(cellSize - expectedCellSize) > 1.0E-7F) {
+				|| Float.floatToRawIntBits(cellSize) != Float.floatToRawIntBits(expectedCellSize)) {
 			throw new IllegalArgumentException("Particle state does not match the target domain");
 		}
 	}

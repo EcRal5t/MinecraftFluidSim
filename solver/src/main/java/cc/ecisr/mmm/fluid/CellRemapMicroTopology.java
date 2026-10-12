@@ -1,6 +1,8 @@
 package cc.ecisr.mmm.fluid;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import cc.ecisr.mmm.units.SignedDyadic;
 
 /** Face-connected open support inside each fixed eight-micro-box collision mask. */
 final class CellRemapMicroTopology {
@@ -38,6 +40,24 @@ final class CellRemapMicroTopology {
 		return false;
 	}
 
+	/** Validates incoming physical cell/component stock before a restore changes any domain owner. */
+	static void requireRestoreCapacity(FlipParticleState state) {
+		float[] columns = state.positionVolume(); byte[] masks = state.collisionMicroMasks();
+		var volume = new HashMap<Long, SignedDyadic>();
+		for (int marker = 0; marker < state.particleCount(); marker++) {
+			int base = 4 * marker;
+			float x = columns[base], y = columns[base + 1], z = columns[base + 2], h = state.cellSize();
+			int cell = (int) Math.floor(x / h) + state.sizeX()
+					* ((int) Math.floor(y / h) + state.sizeY() * (int) Math.floor(z / h));
+			int component = positionSupport(Byte.toUnsignedInt(masks[cell]), h, x, y, z);
+			long key = ((long) cell << 8) | component;
+			SignedDyadic after = volume.getOrDefault(key, SignedDyadic.ZERO).add(SignedDyadic.of(columns[base + 3]));
+			if (after.compareTo(SignedDyadic.of(Integer.bitCount(component), -3)) > 0)
+				throw new IllegalArgumentException("Restored liquid volume exceeds its connected open capacity at cell " + cell);
+			volume.put(key, after);
+		}
+	}
+
 	static int markerSupport(FluidDomain domain, int particle) {
 		return positionSupport(domain, domain.particleCellIndex(particle), domain.particles.positionX(particle),
 				domain.particles.positionY(particle), domain.particles.positionZ(particle));
@@ -49,10 +69,13 @@ final class CellRemapMicroTopology {
 				(float) ((cell / (domain.sizeX * domain.sizeY) + .5 + marker.offsetZ()) * h));
 	}
 	private static int positionSupport(FluidDomain domain, int cell, float x, float y, float z) {
-		float spacing = domain.config.cellSize() / 2;
+		return positionSupport(domain.geometry.cutCells.mask(cell), domain.config.cellSize(), x, y, z);
+	}
+	private static int positionSupport(int mask, float cellSize, float x, float y, float z) {
+		float spacing = cellSize / 2;
 		int micro = ((int) Math.floor(x / spacing) & 1) | (((int) Math.floor(y / spacing) & 1) << 1)
 				| (((int) Math.floor(z / spacing) & 1) << 2);
-		int result = support(domain.geometry.cutCells.mask(cell), micro);
+		int result = support(mask, micro);
 		if (result == 0) throw new IllegalStateException("Liquid source is outside its open micro component");
 		return result;
 	}

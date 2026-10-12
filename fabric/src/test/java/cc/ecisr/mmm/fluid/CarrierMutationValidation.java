@@ -605,6 +605,7 @@ public final class CarrierMutationValidation {
 	}
 
 	private static void wholesaleCountBindsRevisionAndBudget() throws Exception {
+		restoreRequiresConnectedOpenCapacity();
 		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
 		FluidDomain domain = fullCapabilityDomain(registries);
 		domain.addVolumeNearBudgeted(1, 1, 1, 0.5F, 1);
@@ -634,6 +635,76 @@ public final class CarrierMutationValidation {
 		} catch (IllegalArgumentException expected) {
 			require(domain.particles.count() == 2, "budget rejection changed the count");
 		}
+	}
+
+	private static void restoreRequiresConnectedOpenCapacity() throws Exception {
+		var config = new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,.5F,1e-4F,0);
+		var d = new FluidDomain(2,2,2,config,16); d.setVolume(1,1,1,.25F);
+		byte[] masks = new byte[8]; java.util.Arrays.fill(masks,(byte)255); masks[0]=126;
+		var before = d.exportParticleState(); long revision = d.carrierMutationRevision();
+		try {
+			d.restoreParticleState(new FlipParticleState(2,2,2,Math.nextUp(.5F),1,.125F,
+					new float[]{.125F,.125F,.125F,.125F},new float[3],new byte[8]));
+			throw new AssertionError("Restore silently changed physical volume and mass through another cell metric");
+		} catch (IllegalArgumentException expected) {
+			require(d.carrierMutationRevision()==revision && java.util.Arrays.equals(before.copyPositionVolume(),d.exportParticleState().copyPositionVolume()),
+					"Metric-rejected restore changed the original stock");
+		}
+		try {
+			new FlipParticleState(2,2,2,Float.POSITIVE_INFINITY,0,0,new float[0],new float[0],new byte[8]);
+			throw new AssertionError("Particle handoff accepted an infinite cell metric");
+		} catch (IllegalArgumentException expected) { }
+		for (float[] points : java.util.List.of(new float[]{.125F,.125F,.125F,.25F},
+				new float[]{.125F,.125F,.125F,.125F,.125F,.125F,.125F,Float.MIN_VALUE})) {
+			var invalid = new FlipParticleState(2,2,2,.5F,points.length/4,points.length==4?.25F:.125F,
+					points,new float[3*(points.length/4)],masks);
+			try { d.restoreParticleState(invalid); throw new AssertionError("Restore accepted over-capacity connected liquid stock"); }
+			catch (IllegalArgumentException expected) { }
+			var after = d.exportParticleState();
+			require(d.carrierMutationRevision()==revision && java.util.Arrays.equals(before.copyPositionVolume(),after.copyPositionVolume())
+					&& java.util.Arrays.equals(before.copyParticleVelocities(),after.copyParticleVelocities())
+					&& java.util.Arrays.equals(before.copyCollisionMicroMasks(),after.copyCollisionMicroMasks()),
+					"Capacity-rejected restore changed original marker or collision state");
+		}
+		d.restoreParticleState(new FlipParticleState(2,2,2,.5F,2,.25F,
+				new float[]{.125F,.125F,.125F,.125F,.375F,.375F,.375F,.125F},new float[6],masks));
+		require(d.totalVolumeExact()==.25,"Restore rejected legitimate separately filled micro components");
+		d.restoreParticleState(new FlipParticleState(2,2,2,.5F,1,1,new float[]{.125F,.125F,.125F,1},new float[3],new byte[8]));
+		require(d.totalVolumeExact()==1,"Restore limited a connected component to one microbox");
+		var floatGrid = new FluidDomain(4,4,4,new FluidSolverConfig(.1F,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
+		byte[] floatMasks=new byte[64];java.util.Arrays.fill(floatMasks,(byte)255);floatMasks[42]=126;
+		floatGrid.restoreParticleState(new FlipParticleState(4,4,4,.1F,1,.125F,new float[]{.25F,.25F,.25F,.125F},new float[3],floatMasks));
+		require(CellRemapMicroTopology.markerSupport(floatGrid,0)==128,"Restore changed actual binary32 micro-face ownership");
+
+		var material = fullCapabilityDomain(FullCapabilityTestFixture.load()); material.setVolume(1,1,1,.25F);
+		ReplacementState materialBefore=replacementState(material); byte[] originalMasks=material.geometry.cutCells.copyMicroMasks();
+		byte[] materialMasks=originalMasks.clone();
+		materialMasks[0]=126;
+		var mixed = new FlipMaterialParticleState(4,4,4,.5F,2,.1875,178.125,material.materialRegistry.materials(),
+				new float[]{.125F,.125F,.125F,.09375F,.125F,.125F,.125F,.09375F},new float[6],materialMasks,
+				new double[]{93.75,84.375},new int[]{0,1});
+		try { material.restoreMaterialParticleState(mixed); throw new AssertionError("Restore gave each material an independent component capacity"); }
+		catch (IllegalArgumentException expected) { }
+		requireUnchanged(material,materialBefore);
+		require(java.util.Arrays.equals(material.geometry.cutCells.copyMicroMasks(),originalMasks),
+				"Capacity-rejected material restore changed collision geometry");
+		var builtin=cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY;
+		var waterOnly=new cc.ecisr.mmm.chemistry.ChemicalRegistry(builtin.species(),builtin.phases().stream()
+				.filter(phase->phase.materialId().equals("mmm:water")).toList(),builtin.reactions());
+		var emptyIncoming=new FlipMaterialParticleState(4,4,4,.5F,0,0,0,material.materialRegistry.materials(),
+				new float[0],new float[0],new byte[64],new double[0],new int[0]);
+		var incompatible=FlipChemicalParticleState.capture(emptyIncoming,waterOnly,java.util.List.of(),new byte[0],
+				cc.ecisr.mmm.chemistry.ChemicalTransferLedger.EMPTY,cc.ecisr.mmm.chemistry.ChemicalTransferLedger.EMPTY);
+		try { material.restoreChemicalParticleState(incompatible,waterOnly); throw new AssertionError("Restore accepted unsupported chemical material phases"); }
+		catch (IllegalArgumentException expected) { }
+		requireUnchanged(material,materialBefore);
+		var valid=material.exportChemicalParticleState();
+		var restored=new FluidDomain(4,4,4,material.config(),material.maximumParticleCount());
+		restored.restoreChemicalParticleState(valid,material.chemicalParcels.registry());
+		require(restored.totalVolumeExact()==material.totalVolumeExact() && restored.totalMass()==material.totalMass()
+				&& java.util.Arrays.equals(restored.chemicalParcels.speciesTotals(restored.particles.count()),valid.copySpeciesTotals())
+				&& java.util.Arrays.equals(restored.exportChemicalParticleState().materials().copyPositionVolume(),valid.materials().copyPositionVolume()),
+				"Prepared chemical restore changed valid carrier inventory or positions");
 	}
 
 	private static void chemicalRemapPublishesTheFinalBudget() {

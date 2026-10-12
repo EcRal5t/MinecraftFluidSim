@@ -57,6 +57,8 @@ marker 保存 mixture handle 与 indicator bit；handle 指向 `ChemicalMixtureP
 
 `FlipChemicalParticleState` 捕获时对不可变运行时记录去重，按 species 数量、规范 species handle/数量和 residual raw bits 排序。构造器逐项检查顺序、逐 marker 质量关系、species 总量和 residual 总账；同一注册表下恢复复用记录，重新建立独立的 marker handle 和记录引用数组。恢复时按已知 marker 数预留组成池容量，避免逐级扩容复制。
 
+恢复先在私有组成池中验证输入材料的 chemical phase、逐 marker 组成与指示剂、完整 species 总量及 source/sink 审计账本，再替换载体和绑定组成池。材料或化学候选不兼容时，原粒子、化学库存、热绑定和修订号保持原值。
+
 稳定 ID 表由快照在首次导出时生成不可变副本。运行时 species handle 的顺序由注册表的 stable ID 排序确定，因此延迟生成保持原有表顺序与 marker 索引。冷恢复仍从稳定记录转换并执行完整校验。不可变化学记录按注册表对象身份缓存一份精确 species 质量；缓存值与注册表引用一起发布，重复校验保持相同有理数结果。
 
 质量关系为：

@@ -323,6 +323,8 @@ u[n+1] = u* - dt * (1/rho) * grad(p[n+1])
 
 `FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 按微单元平面的相交时刻遍历 marker 直线轨迹，取首个固体接触，随后沿墙面推进剩余切向位移。角落的同时接触按实际阻挡微单元确定法向；碰撞去除指向固体的法向速度，切向分量保持。
 
+粒子 handoff 的格长必须有限且与接收域逐位一致，保持 solver 体积、质量与 SI 单位换算相同。恢复在首次状态修改前，按实际 binary32 位置与固定微盒的面连通分量精确汇总体积；所有材料共用分量的开放容量。超量候选保留原载体、碰撞几何和修订号。该预检守护体积容量，空间第一矩的可表示性仍按共同空间表示的完成条件推进。
+
 实体交互由 Fabric 每个 Minecraft tick 冻结有界 AABB、原版更新后的实体响应速度、本 tick 实际位姿差和流体观察。core 将 AABB 与当前派生的水平液层逐格求交；每格液层按开放 `2×2×2` micro layer 自下而上分配，所以浸没体积和湿区质心随子格位移连续变化，并排除 `VoxelShape` 已占据的 micro volume。
 
 该项观察保持 marker 库存不变。实体侧响应按游戏 tick 应用；liquid moving boundary 取 `position - oldPosition` 的实际当 tick 位移速度，避免误用计入下 tick 预先外力的 `deltaMovement`。

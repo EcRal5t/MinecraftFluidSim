@@ -58,6 +58,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize());
 		int restoredCount = state.particleCount();
 		if (restoredCount > maximumParticleCount) throw new IllegalArgumentException("Particle state exceeds domain marker budget");
+		CellRemapMicroTopology.requireRestoreCapacity(state);
 		ensureParticleCapacity(restoredCount);
 		float[] positionVolume = state.positionVolume();
 		float[] particleVelocities = state.particleVelocities();
@@ -124,24 +125,28 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 				.map(cc.ecisr.mmm.chemistry.ChemicalSpecies::id).toList())) {
 			throw new IllegalArgumentException("Chemical handoff registry identity mismatch");
 		}
-		restoreMaterialParticleState(state.materials());
-		for (FluidMaterial material : materialRegistry.materials()) registry.phaseHandleForMaterial(material.id());
+		FlipMaterialParticleState incoming = state.materials();
+		incoming.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize());
+		if (incoming.particleCount() > maximumParticleCount) throw new IllegalArgumentException("Chemical state exceeds domain marker budget");
+		for (FluidMaterial material : incoming.materials()) registry.phaseHandleForMaterial(material.id());
 		ChemicalParcelStore restored = new ChemicalParcelStore(
 				registry, unitScale, maximumParticleCount, cellCount);
 		int[] tableIndex = state.copyMarkerMixtureIndex();
 		byte[] indicator = state.copyIndicator();
 		List<ChemicalMixtureRecord> runtimeMixtures = state.runtimeMixtures(registry);
-		restored.pool().reserveRecords(particles.count());
-		for (int marker = 0; marker < particles.count(); marker++) {
+		int[] incomingMaterials = incoming.copyMaterialPaletteIndex();
+		restored.pool().reserveRecords(incoming.particleCount());
+		for (int marker = 0; marker < incoming.particleCount(); marker++) {
 			ChemicalMixtureRecord mixture = runtimeMixtures.get(tableIndex[marker]);
-			restored.requireCompatible(mixture, materialRegistry.material(particles.materialHandle(marker)).id(), indicator[marker] != 0);
+			restored.requireCompatible(mixture, incoming.materials().get(incomingMaterials[marker]).id(), indicator[marker] != 0);
 			restored.assign(marker, mixture, indicator[marker] != 0);
 		}
-		if (!Arrays.equals(restored.speciesTotals(particles.count()), state.copySpeciesTotals())) {
+		if (!Arrays.equals(restored.speciesTotals(incoming.particleCount()), state.copySpeciesTotals())) {
 			throw new IllegalArgumentException("Restored chemical species ledger mismatch");
 		}
+		restored.restoreAuditLedgers(state.externalSource(), state.escapedSink());
+		restoreMaterialParticleState(incoming);
 		chemicalParcels = restored;
-		chemicalParcels.restoreAuditLedgers(state.externalSource(), state.escapedSink());
 		// A cold checkpoint restore has no trusted scheduler cursor. Re-evaluate every occupied
 		// cell once; an in-memory backend handoff immediately replaces this with its exact dirty set.
 		for (int marker = 0; marker < particles.count(); marker++) {

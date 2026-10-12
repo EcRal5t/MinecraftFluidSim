@@ -64,6 +64,8 @@
 
 [FluidDomain](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomain.java) 是运行中的物理状态对象。总计算顺序在 [FluidDomainStepCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStepCoordinator.java)，捕获和恢复状态在 [FluidDomainStateMapper](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainStateMapper.java)。从下表选择具体算法，避免从整个状态对象逐个方法翻找。
 
+粒子恢复的单位身份检查见 [FlipParticleState](../../model/src/main/java/cc/ecisr/mmm/fluid/FlipParticleState.java) 的 `requireCompatible`；连通开放容量检查见 [CellRemapMicroTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/CellRemapMicroTopology.java) 的 `requireRestoreCapacity`。恢复前的材料、化学组成和账本准备见 [FluidDomainCollisionState](../../solver/src/main/java/cc/ecisr/mmm/fluid/FluidDomainCollisionState.java)。对应验证位于 [CarrierMutationValidation](../../fabric/src/test/java/cc/ecisr/mmm/fluid/CarrierMutationValidation.java) 的 `restoreRequiresConnectedOpenCapacity`。
+
 | 修改内容 | 首先打开 | 需要了解的数据和算法 |
 |---|---|---|
 | 力学计算顺序 | [MechanicalStepPipeline](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStepPipeline.java)、[MechanicalStageAssembly](../../solver/src/main/java/cc/ecisr/mmm/fluid/MechanicalStageAssembly.java) | [流体求解器](../architecture/fluid-solver.md) |
