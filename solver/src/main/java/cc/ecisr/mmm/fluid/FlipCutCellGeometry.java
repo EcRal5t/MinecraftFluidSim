@@ -44,6 +44,8 @@ final class FlipCutCellGeometry {
 		solidWallAreaZ = new float[cellCount];
 	}
 
+	boolean matchesShape(int x, int y, int z) { return sizeX == x && sizeY == y && sizeZ == z; }
+
 	int mask(int index) {
 		return Byte.toUnsignedInt(occupancy[index]);
 	}

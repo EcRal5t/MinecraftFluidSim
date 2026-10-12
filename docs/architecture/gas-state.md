@@ -31,6 +31,14 @@
 - `AirCavityScanner` 只在当前网格预算内 flood fill，不读取未加载世界；部分充液格的剩余空间参与 runtime available volume。
 - 节点 pressure、density、temperature、孔流速度和边均为派生运行态，不作独立库存存储。
 
+### 微盒气体几何
+
+[GasComplementGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasComplementGeometry.java) 从服务端 PLIC 和开放微盒生成不可变的气体块、共享通路与外壳气面。每块以 `8*cell+micro` 定位，体积使用 m³，面积使用 m²；同格内被固体隔开的气体块保持独立。
+
+[GasFaceIntersection](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
+
+这些对象保存几何与几何容量。当前 `AirNetwork` 库存归属使用下述格级扫描；微盒归属、库存容量、相变候选和状态交接的统一完成条件见[物理缺口](../roadmap/product-roadmap.md#物理缺口的依赖安排)。
+
 ### Cavity scan
 
 由当前几何直接发现的 air cell 同时满足：非 solid、`markerCount == 0`、扣除 cut-cell、granular/coherent occupancy 后仍有正 open volume。**扫描不区分"气"和"未采样的液体格"**：两者对同一个 flood fill 是同一件事——一段连通的无载体体积。

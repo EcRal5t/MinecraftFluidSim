@@ -31,6 +31,8 @@ final class FlipPressurePhaseGeometry {
 		this.planeOffset = new double[cellCount];
 	}
 
+	boolean matchesShape(int x, int y, int z) { return sizeX == x && sizeY == y && sizeZ == z; }
+
 	void rebuild(
 			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
 			GranularCouplingFields granular, boolean[] pressureFluid
@@ -191,6 +193,44 @@ final class FlipPressurePhaseGeometry {
 		}
 		System.arraycopy(clippedX, 0, faceX, 0, next); System.arraycopy(clippedY, 0, faceY, 0, next);
 		return next;
+	}
+
+	/** Copied local face polygon; tangential coordinates use cyclic axis order. */
+	double[][] wetFacePolygon(int cell, int axis, double coordinate, double tangent, double other, double span) {
+		if (!(fraction[cell] > 0)) return new double[2][0];
+		rectangle(tangent, other, span);
+		int count = fraction[cell] >= 1 ? 4 : clipFace(4, planeNormal(cell,(axis+1)%3), planeNormal(cell,(axis+2)%3),
+				planeOffset[cell] - coordinate * planeNormal(cell,axis));
+		return polygon(count);
+	}
+
+	/** Both positive liquid profiles on one shared open microface. */
+	double[][] sharedWetPolygon(int left, int right, int axis, double tangent, double other, double span) {
+		if (!(fraction[left] > 0) || !(fraction[right] > 0)) return new double[2][0];
+		rectangle(tangent, other, span);
+		int count = fraction[left] >= 1 ? 4 : clipFace(4, planeNormal(left,(axis+1)%3),planeNormal(left,(axis+2)%3),planeOffset[left]-planeNormal(left,axis));
+		if(fraction[right]<1)count=clipFace(count,planeNormal(right,(axis+1)%3),planeNormal(right,(axis+2)%3),planeOffset[right]);
+		return polygon(count);
+	}
+
+	/** Owner liquid intersected with the peer's dry half-space, retaining actual gas-facing geometry. */
+	double[][] exposedWetPolygon(int owner, int peer, int axis, int sign, double tangent, double other, double span) {
+		if (!(fraction[owner] > 0) || peer>=0 && fraction[peer]>=1) return new double[2][0];
+		rectangle(tangent,other,span);
+		int count=fraction[owner]>=1?4:clipFace(4,planeNormal(owner,(axis+1)%3),planeNormal(owner,(axis+2)%3),
+				planeOffset[owner]-(sign>0?1:0)*planeNormal(owner,axis));
+		if(peer>=0 && fraction[peer]>0)count=clipFace(count,-planeNormal(peer,(axis+1)%3),-planeNormal(peer,(axis+2)%3),
+				-planeOffset[peer]+(sign>0?0:1)*planeNormal(peer,axis));
+		return polygon(count);
+	}
+
+	double liquidFractionExact(int cell) { return fraction[cell]; }
+	private void rectangle(double x,double y,double span) {
+		faceX[0]=faceX[3]=x;faceX[1]=faceX[2]=x+span;
+		faceY[0]=faceY[1]=y;faceY[2]=faceY[3]=y+span;
+	}
+	private double[][] polygon(int count) {
+		return new double[][]{java.util.Arrays.copyOf(faceX,count),java.util.Arrays.copyOf(faceY,count)};
 	}
 
 	float interfaceTheta(int fluid, int directionX, int directionY, int directionZ) {

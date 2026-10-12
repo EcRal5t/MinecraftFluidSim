@@ -7,6 +7,7 @@ public final class AirCavityScannerValidation {
 	private AirCavityScannerValidation() { }
 
 	public static void main(String[] args) {
+		validateMicroGasGeometry();
 		validateOpenTankIsAmbient();
 		validateControllerExtentIsSealed();
 		validateClosedCapacityComplementsCarrierInventory();
@@ -20,6 +21,50 @@ public final class AirCavityScannerValidation {
 		validateScanBudget();
 		System.out.println("M5 cavity scanner gate passed: ambient/sealed classification, available volume, "
 				+ "geometric edges and budget stop");
+	}
+
+	private static void validateMicroGasGeometry() {
+		Grid grid=new Grid(2,2,2,.5F);var phase=new FlipPressurePhaseGeometry(2,2,2);
+		phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
+		var geometry=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,phase);
+		check(geometry.pieces().size()==64 && geometry.ports().size()==144 && geometry.exteriorPorts().size()==96,
+				"Full cube gas microgeometry omitted or duplicated a piece or port");
+		checkRelative(geometry.pieces().stream().mapToDouble(GasComplementGeometry.Piece::volume).sum(),1,"Full cube gas geometry volume");
+		checkRelative(geometry.exteriorPorts().stream().mapToDouble(GasComplementGeometry.ExteriorPort::area).sum(),6,"Full cube exterior area");
+		var openTopology=GasChamberTopology.capture(geometry,false);var closedTopology=GasChamberTopology.capture(geometry,true);
+		check(openTopology.chambers().isEmpty() && openTopology.nodeOfPiece(0)==0,"Actual exterior gas failed to reach ambient");
+		check(closedTopology.chambers().size()==1 && closedTopology.chambers().getFirst().minimumPiece()==0,
+				"Sealed gas chamber lost canonical micro-piece identity");
+		checkRelative(closedTopology.chambers().getFirst().geometricVolume(),1,"Sealed microgas chamber volume");
+		grid.solid[0]=true;grid.cutCells.replaceMask(0,255);phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
+		check(geometry.pieces().size()==64 && geometry.piece(0).volume()==.015625,"Gas geometry retained mutable input aliases");
+		try { geometry.pieces().clear();throw new AssertionError("Gas pieces remained mutable"); }
+		catch(UnsupportedOperationException expected) { }
+		Grid split=new Grid(2,2,2,1);java.util.Arrays.fill(split.solid,true);
+		for(int cell=0;cell<8;cell++)split.cutCells.replaceMask(cell,255);
+		split.solid[0]=false;split.cutCells.replaceMask(0,126);var splitPhase=new FlipPressurePhaseGeometry(2,2,2);
+		splitPhase.rebuild(split.solid,split.liquidVolume,split.cutCells,null,new boolean[8]);
+		var separate=GasComplementGeometry.capture(2,2,2,1,split.solid,split.cutCells,splitPhase);
+		check(separate.pieces().size()==2 && separate.ports().isEmpty() && separate.piece(0)!=null && separate.piece(7)!=null,
+				"Two opposite open microboxes acquired a gas connection through solid");
+		checkRelative(separate.pieces().stream().mapToDouble(GasComplementGeometry.Piece::volume).sum(),.25,"Disconnected gas volume");
+		var splitOpen=GasChamberTopology.capture(separate,false);var splitClosed=GasChamberTopology.capture(separate,true);
+		check(splitOpen.chambers().size()==1 && splitOpen.nodeOfPiece(0)==0 && splitOpen.nodeOfPiece(7)==1,
+				"A cell-level ambient label vented its isolated opposite microbox");
+		check(splitClosed.chambers().size()==2 && splitClosed.nodeOfPiece(0)!=splitClosed.nodeOfPiece(7),
+				"Two disjoint same-cell gas chambers acquired one owner");
+		var a=cc.ecisr.mmm.units.SignedDyadic.of((double).1234567F);
+		var b=cc.ecisr.mmm.units.SignedDyadic.of((double).7654321F);var threshold=cc.ecisr.mmm.units.SignedDyadic.of(.1);
+		var lower=new GasFaceIntersection.Plane(a,b,threshold);
+		var tangent=new GasFaceIntersection.Plane(a.negate(),b.negate(),threshold.negate());
+		check(GasFaceIntersection.area(0,0,1,List.of(lower,tangent))==0,"Tangential half-spaces manufactured a gas port");
+		double upper=Math.nextUp(.1);
+		var narrow=new GasFaceIntersection.Plane(a.negate(),b.negate(),cc.ecisr.mmm.units.SignedDyadic.of(-upper));
+		double strip=GasFaceIntersection.area(0,0,1,List.of(lower,narrow));
+		var numerator=new java.math.BigDecimal(upper).pow(2).subtract(new java.math.BigDecimal(.1).pow(2));
+		var denominator=new java.math.BigDecimal((double).1234567F).multiply(new java.math.BigDecimal((double).7654321F)).multiply(java.math.BigDecimal.valueOf(2));
+		double expected=numerator.divide(denominator,java.math.MathContext.DECIMAL128).doubleValue();
+		check(strip>0 && Double.doubleToLongBits(strip)==Double.doubleToLongBits(expected),"A true narrow gas port lost its exact physical area");
 	}
 
 	private static void validateControllerExtentIsSealed() {
