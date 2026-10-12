@@ -1563,6 +1563,83 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			isolatedVacuumBeforeWallOpening(config, liquids, gas, thermal, extraction, 1, false, true);
 		}
 		coldGasExpansionRejectsExtractionBeforeWrite();
+		gasInsertionPublishesCapacityWork(config, liquids, gas, thermal);
+	}
+
+	private static void gasInsertionPublishesCapacityWork(FluidSolverConfig config, FluidMaterialRegistry liquids,
+	                                                     GasRegistry gas, ThermalRegistry thermal) {
+		for (int insertion = 0; insertion < 4; insertion++) {
+			VacuumOpeningState reference = null;
+			for (boolean intermediateSync : new boolean[] {false, true}) {
+				var domain = insertionDomain(config, liquids, gas, thermal, insertion == 3);
+				var stock = domain.gasBoundary().inventory(1);
+				double oldEnergy = domain.thermalState.gasNodeEnergy(1, domain.gasState.network);
+				require(insertGasFixtureLiquid(domain, insertion, .5F), "public liquid insertion was refused");
+				double specificR = GasRegistry.STANDARD_PRESSURE_PA * AirNetwork.cubicMeters(stock.standardVolumeNanos())
+						/ (stock.totalMass() * GasRegistry.STANDARD_TEMPERATURE_K);
+				double expected = 300 * Math.pow(2, specificR / 718);
+				require(domain.gasBoundary().availableVolume(1) == .0625
+						&& Math.abs(domain.gasNodeTemperatureK(1) - expected) < 2e-9,
+						"insertion did not publish gas compression with its liquid successor");
+				if (intermediateSync) domain.synchronizeGasTopologyForPersistence();
+				domain.setSolid(1, 0, 0, false); domain.synchronizeGasTopologyForPersistence();
+				double energy = domain.thermalState.gasNodeEnergy(1, domain.gasState.network);
+				var result = new VacuumOpeningState(domain.gasBoundary().inventory(1), energy,
+						domain.gasNodeTemperatureK(1), domain.thermalAudit().mechanicalWork());
+				require(result.stock().equals(stock) && Math.abs(result.temperature() - expected) < 2e-9
+						&& domain.gasBoundary().availableVolume(1) == .3125
+						&& result.work().equals(SignedDyadic.of(energy).subtract(SignedDyadic.of(oldEnergy)))
+						&& domain.gasBoundary().auditClosed()
+						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+						"fixed wall opening changed already committed liquid compression work");
+				if (reference == null) reference = result;
+				else require(reference.equals(result), "read synchronization changed insertion history");
+			}
+			var refused = insertionDomain(config, liquids, gas, thermal, insertion == 3);
+			var state = refused.captureAuthoritativeState();
+			// Closing the only stock-bearing cell leaves its inventory without a successor.
+			var frame = refused.gasState.frame; long gasRevision = refused.gasState.network.revision();
+			var thermalRevision = refused.thermalState.thermalRevision();
+			long carrierRevision = refused.carrierMutationRevision();
+			var audit = refused.thermalAudit();
+			long chemicalRevision = refused.chemicalParcels == null ? 0 : refused.chemicalParcels.mutationRevision();
+			require(!insertGasFixtureLiquid(refused, insertion, 1), "finite gas cavity disappearance accepted insertion");
+			require(refused.particleCount() == 0 && refused.gasState.frame == frame
+					&& refused.gasState.network.revision() == gasRevision
+					&& refused.carrierMutationRevision() == carrierRevision
+					&& refused.thermalState.thermalRevision().equals(thermalRevision) && refused.thermalAudit() == audit
+					&& (refused.chemicalParcels == null ? 0 : refused.chemicalParcels.mutationRevision()) == chemicalRevision
+					&& refused.exportGasState("").nodes().equals(state.gas().nodes()),
+					"rejected insertion changed a carrier, gas, thermal or chemical owner");
+		}
+	}
+
+	private static FluidDomain insertionDomain(FluidSolverConfig config, FluidMaterialRegistry liquids,
+	                                         GasRegistry gas, ThermalRegistry thermal, boolean chemical) {
+		var domain = new FluidDomain(3, 2, 2, config, 128); domain.sealDomainBoundary();
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 3; x++)
+			if (y != 0 || z != 0 || x == 1) domain.setSolid(x, y, z, true);
+		if (chemical) {
+			domain.bindMaterialRegistry(liquids); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+			thermal = new ThermalRegistry(thermal.materials(), List.of(new ThermalSpeciesOffset(
+					"test:insertion_water", BuiltinChemicalDefinitions.H2O, thermal.materials().stream()
+					.filter(material -> material.carrierKind() == ThermalMaterialDefinition.CarrierKind.LIQUID)
+					.findFirst().orElseThrow().id(), ExactRational.ZERO)), List.of(),
+					BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
+		}
+		domain.bindGasRegistry(gas); domain.bootstrapGasState(""); domain.setGasNodeStandardVolume(2, 0);
+		domain.bindThermal(thermal, liquids, 300); return domain;
+	}
+
+	private static boolean insertGasFixtureLiquid(FluidDomain domain, int insertion, float volume) {
+		if (insertion == 0) return domain.tryInsertExactVolume(0, 0, 0, volume, 0, 0, true).transferred();
+		if (insertion == 1) return domain.tryInsertExactMixture(0, 0, 0,
+				List.of(new FluidDomain.MaterialPortion(0, volume, volume * 1000)), 0, true, 1.001).transferred();
+		if (insertion == 2) return domain.addVolumeNearBudgeted(0, 0, 0, volume, 0).addedVolume() == volume;
+		var record = domain.chemicalParcels.defaultRecord(BuiltinFluidMaterials.WATER.id(), volume, .5F, volume * 1000, false);
+		var ledger = cc.ecisr.mmm.chemistry.ChemicalTransferLedger.builder(domain.chemicalParcels.registry())
+				.add(BuiltinFluidMaterials.WATER.id(), false, volume, volume * 125, record).build();
+		return domain.tryInsertExactChemical(0, 0, 0, ledger, 0, true, 1.001).transferred();
 	}
 
 	private static void coldGasExpansionRejectsExtractionBeforeWrite() {

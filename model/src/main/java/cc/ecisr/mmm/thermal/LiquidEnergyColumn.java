@@ -306,6 +306,12 @@ public final class LiquidEnergyColumn {
 		revision++;
 	}
 
+	ThermalAuditLedger requireExternalInsertionCurrent(ExternalLiquidInsertionPlan plan) {
+		if (plan == null || plan.owner != this || plan.before != audit.ledger())
+			throw new IllegalStateException("Explicit thermal insertion audit changed after planning");
+		return plan.after;
+	}
+
 	void removeExternalAndSwap(int index, int last) {
 		audit.update(ledger -> ledger.withExternalSinkEnergy(SignedDyadic.of(internalEnergy[index])));
 		if (index != last) internalEnergy[index] = internalEnergy[last];

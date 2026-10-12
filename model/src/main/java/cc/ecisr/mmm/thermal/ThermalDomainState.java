@@ -315,6 +315,15 @@ public final class ThermalDomainState {
 				.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
 	}
 
+	/** Validates explicit liquid source, energy rounding and gas work in their publication order. */
+	public void requireGasRemapAfterExternalLiquidInsertion(
+			LiquidEnergyColumn.ExternalLiquidInsertionPlan liquid, GasEnergyStore.GasRemapPlan gas) {
+		var after = liquidEnergy.requireExternalInsertionCurrent(liquid);
+		gasState.requireCanCommitRemap(gas);
+		after.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
+				.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
+	}
+
 	/** Checks each external truncation, container rounding and gas work in their publication order. */
 	public void requireCanCommitLiquidExtraction(List<SignedDyadic> removedEnergy, Double itemEnergy,
 	                                           GasEnergyStore.GasRemapPlan gas) {

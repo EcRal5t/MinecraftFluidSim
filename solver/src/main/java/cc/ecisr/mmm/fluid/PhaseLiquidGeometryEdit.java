@@ -93,6 +93,17 @@ record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponent
 		return total.edit();
 	}
 
+	record InsertedMarker(float volume, float x, float y, float z) { }
+
+	/** Adds actual published marker positions to the complete existing component tuples. */
+	static PhaseLiquidGeometryEdit afterInsertion(FluidDomain domain, int cell, List<InsertedMarker> appended) {
+		var total = new Moments(cell, domain.geometry.cutCells.mask(cell), domain.config.cellSize(), domain.sizeX, domain.sizeY);
+		for (int marker = domain.markerGrid.cellMarkerHead[cell]; marker >= 0; marker = domain.markerGrid.particleCellNext[marker])
+			if (domain.particles.volume(marker) > 0) total.add(domain.particles, marker, domain.particles.volume(marker));
+		for (var marker : appended) total.add(marker.volume(), marker.x(), marker.y(), marker.z());
+		return total.edit();
+	}
+
 	static PhaseLiquidGeometryEdit afterCondensation(
 			PhaseChangeStageSupport.Workspace state, int cell, int target, float targetVolume, float appendedVolume, float[] appendedPosition) {
 		var total = new Moments(state, cell); boolean found = target < 0;

@@ -333,15 +333,14 @@ public final class CarrierMutationValidation {
 		var ledger = cc.ecisr.mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical())
 				.add(invalid.materialRegistry.material(0).id(), false, .125, invalid.unitScale.kilograms(125), record).build();
 		// The mixed batch's first small carrier is valid; the second carrier overflows m*cv at finite U.
-		for (Runnable insertion : java.util.List.<Runnable>of(
-				() -> invalid.addVolumeNearBudgeted(1, 1, 1, .125F, 0),
+		for (var insertion : java.util.List.<java.util.function.BooleanSupplier>of(
+				() -> invalid.addVolumeNearBudgeted(1, 1, 1, .125F, 0).addedVolume() > 0,
 				() -> invalid.tryInsertExactMixture(1, 1, 1, java.util.List.of(
 						new FluidDomain.MaterialPortion(0, .001F, (double) .001F * 1000),
-						new FluidDomain.MaterialPortion(1, .125, 106.25)), 0, true),
-				() -> invalid.tryInsertExactChemical(1, 1, 1, ledger, 0, true))) {
+						new FluidDomain.MaterialPortion(1, .125, 106.25)), 0, true).transferred(),
+				() -> invalid.tryInsertExactChemical(1, 1, 1, ledger, 0, true).transferred())) {
 			ReplacementState before = replacementState(invalid);
-			try { insertion.run(); throw new AssertionError("default insertion accepted a finite U with overflowing heat capacity"); }
-			catch (IllegalArgumentException expected) { }
+			require(!insertion.getAsBoolean(), "default insertion accepted a finite U with overflowing heat capacity");
 			requireUnchanged(invalid, before);
 		}
 		FluidDomain valid = fullCapabilityDomain(registries);
@@ -398,12 +397,11 @@ public final class CarrierMutationValidation {
 						domain.materialRegistry.material(piece.materialHandle()).id(), .125F, .5F, 8, false));
 		var chemical = builder.build();
 		// At requested T=1, water U rounds to 2^61-256: T(U)=200-256=-56 despite finite U.
-		for (Runnable insertion : java.util.List.<Runnable>of(
-				() -> domain.tryInsertExactMixture(1, 1, 1, pieces, 0, true, -398),
-				() -> domain.tryInsertExactChemical(1, 1, 1, chemical, 0, true, -398))) {
+		for (var insertion : java.util.List.<java.util.function.BooleanSupplier>of(
+				() -> domain.tryInsertExactMixture(1, 1, 1, pieces, 0, true, -398).transferred(),
+				() -> domain.tryInsertExactChemical(1, 1, 1, chemical, 0, true, -398).transferred())) {
 			ReplacementState before = replacementState(domain);
-			try { insertion.run(); throw new AssertionError("explicit insertion accepted an invalid rounded carrier energy"); }
-			catch (IllegalArgumentException expected) { }
+			require(!insertion.getAsBoolean(), "explicit insertion accepted an invalid rounded carrier energy");
 			requireUnchanged(domain, before);
 		}
 		// T=100 rounds both carriers back to their references, whose T(U)=200 is valid.
@@ -411,6 +409,7 @@ public final class CarrierMutationValidation {
 				() -> require(domain.tryInsertExactMixture(1, 1, 1, pieces, 0, true, -200).transferred(), "valid explicit material rounding failed"),
 				() -> require(domain.tryInsertExactChemical(1, 1, 1, chemical, 0, true, -200).transferred(), "valid explicit chemical rounding failed"))) {
 			int first = domain.particleCount(); var before = domain.thermalState.auditLedger(); var oldU = domain.exactInternalEnergy();
+			var oldGasU = domain.thermalState.exactGasEnergy();
 			insertion.run(); var after = domain.thermalState.auditLedger();
 			var stored = cc.ecisr.mmm.units.SignedDyadic.ZERO;
 			for (int p = first; p < domain.particleCount(); p++) {
@@ -418,9 +417,11 @@ public final class CarrierMutationValidation {
 				require(domain.thermalState.temperature(p, domain.thermalMarkerContext()) == 200, "accepted explicit energy did not preserve a valid stored owner");
 			}
 			var requested = cc.ecisr.mmm.units.SignedDyadic.of(-200);
+			var gasDelta = domain.thermalState.exactGasEnergy().subtract(oldGasU);
+			var gasRoundoff = gasDelta.subtract(after.mechanicalWork().subtract(before.mechanicalWork()));
 			require(stored.equals(cc.ecisr.mmm.units.SignedDyadic.ZERO) && after.externalSource().subtract(before.externalSource()).equals(requested)
-					&& after.roundoffResidual().subtract(before.roundoffResidual()).equals(stored.subtract(requested))
-					&& domain.exactInternalEnergy().subtract(oldU).equals(stored)
+					&& after.roundoffResidual().subtract(before.roundoffResidual()).equals(stored.subtract(requested).add(gasRoundoff))
+					&& domain.exactInternalEnergy().subtract(oldU).equals(stored.add(gasDelta))
 					&& domain.exactInternalEnergy().equals(after.expectedInventory()), "valid explicit source/roundoff did not close actual stored energy");
 		}
 	}
@@ -459,14 +460,14 @@ public final class CarrierMutationValidation {
 							"representable final audit was rejected or failed to close actual insertion energy");
 				} else {
 					ReplacementState before = replacementState(domain);
-					try { insertion.run(); throw new AssertionError("liquid insertion published an over-budget source field"); }
-					catch (IllegalArgumentException expected) { }
+					insertion.run();
 					requireUnchanged(domain, before);
 				}
 			}
 		}
 		for (boolean operator : new boolean[]{false, true}) {
 			FluidDomain cleared = fullCapabilityDomain(registries); cleared.setVolume(2, 2, 2, .001F);
+			cleared.commitOperatorVentSealedGas(cleared.planOperatorVentSealedGas());
 			var initial = cleared.exactInternalEnergy();
 			cleared.thermalState.restoreAuditLedger(new cc.ecisr.mmm.thermal.ThermalAuditLedger(huge, zero, zero, huge.negate(), zero, initial));
 			if (operator) cleared.commitOperatorClear(cleared.planOperatorClear());
