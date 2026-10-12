@@ -9,6 +9,11 @@ public final class MarkerPressureValidation {
 	private MarkerPressureValidation() { }
 	public static void main(String[] args) { validate(); System.out.println("MarkerPressureValidation PASS"); }
 	public static void validate() {
+		cellAffineVelocityPreservesResolvedMotion();
+		cellWetFaceAndConstraintWork();
+		fixedWallProjectionUsesActualMass();
+		unresolvedCapillaryTractionIsAppliedOnce();
+		transportPreservesFixedWallVelocity();
 		var free = layout(false); verifyIndependentFluxAndGram(free); projectFreeSurface(free);
 		var closed = layout(true); verifyIndependentFluxAndGram(closed); closedPressureKernel(closed);
 		finiteGasStorage();
@@ -16,6 +21,250 @@ public final class MarkerPressureValidation {
 		largePressureDifferences();
 		pressureResponseAvoidsIntermediateOverflow();
 		pressureExtremeRoundingAndCancellation();
+	}
+
+	static void transportPreservesFixedWallVelocity() {
+		var d = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, .8F), 2048);
+		for (int z = 1; z < 3; z++) for (int y = 1; y < 3; y++) for (int x = 0; x < 2; x++) d.setVolume(x, y, z, .6F);
+		d.sealDomainBoundary();
+		d.applyMovingBodyCoupling(new cc.ecisr.mmm.world.MovingBodyFluidCoupling.Request(.35F, .95F, 1.05F, 1, .2, -.1, .1));
+		double mass = d.totalMass(), volume = d.totalVolume();
+		var stats = d.stepWithMechanicalAudit(false, 0);
+		near(stats.mechanicalAudit().closureResidualJoules(), 0, 1e-10, "Transported wall response contributes its actual kinetic work");
+		near(d.totalMass(), mass, 2e-12, "Wall response preserves actual mass");
+		near(d.totalVolume(), volume, 0, "Wall response preserves volume");
+		for (var observed : new FluidDomain[]{d, FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState())}) {
+			near(observed.sampleVelocity(0, .75F, .75F).x(), 0, 32 * Math.ulp(observed.maximumParticleSpeed()),
+					"Transport and state restoration preserve the fixed-wall normal trace");
+			near(observed.mac.velocityX[observed.xFaceIndex(0, 1, 1)], 0, 0, "Fixed-wall MAC trace");
+		}
+	}
+
+	static void fixedWallProjectionUsesActualMass() {
+		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
+		d.setVolume(1, 0, 1, 1); d.ensureGrid();
+		var basis = CellAffineVelocity.capture(d); var wall = new CellAffineWallProjection(d, basis, LiquidPressureGeometry.capture(d));
+		int n = basis.markerCount(); var before = new double[3][n]; var after = new double[3][n]; var impulse = new double[3][n];
+		for (int i = 0; i < n; i++) before[1][i] = 2 + 3 * (basis.position(i, 1) - .5) + 4 * (basis.position(i, 0) - 1.5);
+		wall.project(before, after, impulse); double removed = 0, energyChange = 0;
+		for (int i = 0; i < n; i++) {
+			near(after[1][i], 3.8 * basis.position(i, 1), 2e-14, "Independent actual-mass wall-admissible normal mode");
+			double delta = before[1][i] - after[1][i];
+			removed += basis.massKilograms(i) * delta * delta;
+			energyChange += basis.massKilograms(i) * (before[1][i] * before[1][i] - after[1][i] * after[1][i]);
+			near(impulse[1][i], -basis.massKilograms(i) * delta, 2e-13, "Actual fixed-wall impulse");
+		}
+		near(energyChange, removed, 2e-12, "Mass-orthogonal wall projection work");
+		var twice = new double[3][n]; wall.project(after, twice, impulse);
+		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < n; i++) near(twice[axis][i], after[axis][i], 2e-14, "Fixed-wall projection idempotence");
+	}
+
+	static void unresolvedCapillaryTractionIsAppliedOnce() {
+		var d = new FluidDomain(4, 4, 4, new FluidSolverConfig(1, 1000, 0, .001F, 400, 1e-7F, .45F, .002F, .8F), 128);
+		d.setVolume(1, 1, 1, .4F); d.setVolume(2, 1, 1, .2F);
+		var registry = new FluidMaterialRegistry(java.util.List.of(new FluidMaterial("mmm:cap", 1000, "mmm:cap", .0728, Math.PI / 2)));
+		for (int marker = 0; marker < d.particleCount(); marker++) d.setMarkerMaterial(marker, registry, 0);
+		d.ensureGrid();
+		if (d.isFluid(d.cellIndex(1, 1, 1)) || d.isFluid(d.cellIndex(2, 1, 1)))
+			throw new AssertionError("Sub-centre capillary fixture became a resolved pressure cell");
+		System.arraycopy(d.mac.velocityX, 0, d.mac.p2gVelocityX, 0, d.mac.velocityX.length);
+		System.arraycopy(d.mac.velocityY, 0, d.mac.p2gVelocityY, 0, d.mac.velocityY.length);
+		System.arraycopy(d.mac.velocityZ, 0, d.mac.p2gVelocityZ, 0, d.mac.velocityZ.length);
+		d.bodyForceStage.applyGravity(.001F); d.bodyForceStage.applyLiquidGasSurfaceTensionForce(.001F);
+		var plan = d.pressureSystem.markerProjection(); plan.prepare(.001F);
+		var predictor = plan.predictor(); var impulse = plan.knownImpulse(); double magnitude = 0;
+		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < d.particleCount(); marker++) {
+			near(predictor[axis][marker], impulse[axis][marker] / d.unitScale.kilograms(d.particles.mass(marker)), 1e-15,
+					"One natural capillary traction in the actual-mass predictor");
+			magnitude = Math.hypot(magnitude, impulse[axis][marker]);
+		}
+		if (!(magnitude > 0)) throw new AssertionError("Capillary fixture omitted its natural surface traction");
+	}
+
+	/** Shared and exposed wet portions use their own traces, with actual-mass virtual work. */
+	static void cellWetFaceAndConstraintWork() {
+		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, .8F), 256);
+		float fraction = .6F; int count = 144, marker = 0; float[] position = new float[4 * count]; double volume = 0;
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 3; x++) for (int slot = 0; slot < 8; slot++) {
+			float height = y == 0 || x == 0 ? 1 : fraction; int base = 4 * marker++;
+			position[base] = x + .25F + .5F * (slot & 1);
+			position[base + 1] = y + height * (.25F + .5F * (slot >> 1 & 1));
+			position[base + 2] = z + .25F + .5F * (slot >> 2 & 1);
+			position[base + 3] = height / 8; volume += height / 8;
+		}
+		d.restoreParticleState(new FlipParticleState(3, 3, 3, 1, count, (float) volume, position, new float[3 * count], new byte[27]));
+		d.ensureGrid(); var basis = CellAffineVelocity.capture(d);
+		var transfer = CellAffineMacTransfer.capture(d, basis, LiquidPressureGeometry.capture(d));
+		int left = d.cellIndex(0, 1, 1), right = d.cellIndex(1, 1, 1), face = d.xFaceIndex(1, 1, 1);
+		var coefficients = new double[3][4 * d.cellCount]; coefficients[0][4 * left] = 2; coefficients[0][4 * right] = 4;
+		var mapped = new double[][]{new double[transfer.faceCount(0)], new double[transfer.faceCount(1)], new double[transfer.faceCount(2)]};
+		transfer.apply(coefficients, mapped);
+		near(transfer.wetArea(0, face), 1, 2e-14, "Shared plus exposed wet area");
+		near(mapped[0][face], 2 + (double) fraction, 2e-14, "Shared half traces plus exposed owner trace");
+		var moments = new double[][]{new double[3 * transfer.faceCount(0)], new double[3 * transfer.faceCount(1)], new double[3 * transfer.faceCount(2)]};
+		transfer.applyMoments(coefficients, moments);
+		near(moments[0][3 * face], 2 + (double) fraction, 2e-14, "Wet normal flux");
+		near(moments[0][3 * face + 1], fraction * ((double) fraction - 1) / 2, 2e-14, "Wet normal flux first moment");
+		near(moments[0][3 * face + 2], 0, 2e-14, "Symmetric other wet flux moment");
+		var faceLoad = new double[][]{mapped[0].clone(), mapped[1].clone(), mapped[2].clone()};
+		for (int axis = 0; axis < 3; axis++) for (int f = 0; f < faceLoad[axis].length; f++) faceLoad[axis][f] = Math.sin((axis + 1) * .2 + f * .1);
+		var cellLoad = new double[3][4 * d.cellCount]; transfer.transpose(faceLoad, cellLoad);
+		near(work(mapped, faceLoad), work(coefficients, cellLoad), 2e-12, "Wet-face map and transpose work");
+		var definitions = java.util.List.of(
+				new CellVelocityConstraintOperator.Row(java.util.List.of(
+						new CellVelocityConstraintOperator.Block(left, 0, new double[]{1, 2, 3, 4}),
+						new CellVelocityConstraintOperator.Block(left, 0, new double[]{-.5, 0, 0, 0})), 0),
+				new CellVelocityConstraintOperator.Row(java.util.List.of(
+						new CellVelocityConstraintOperator.Block(left, 0, new double[]{2, -1, 0, .5}),
+						new CellVelocityConstraintOperator.Block(right, 1, new double[]{1, 0, 2, 1})), .125));
+		var constraint = new CellVelocityConstraintOperator(basis, definitions);
+		var velocity = new double[3][count];
+		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < count; i++) velocity[axis][i] = Math.sin(.2 * i + axis);
+		double[] rate = new double[2], pressure = {.7, -1.3}; constraint.volumeRate(velocity, rate);
+		var force = new double[3][count]; constraint.force(pressure, force);
+		near(rate[0] * pressure[0] + rate[1] * pressure[1], work(velocity, force), 2e-12, "Constraint and actual-marker force work");
+		double[] applied = new double[2]; constraint.apply(pressure, applied); double kinetic = 0;
+		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < count; i++) kinetic += force[axis][i] * force[axis][i] / basis.massKilograms(i);
+		near(pressure[0] * applied[0] + pressure[1] * applied[1], kinetic + .125 * pressure[1] * pressure[1], 2e-12, "Actual mass Gram and gas storage");
+		double[] diagonal = new double[2], unit = new double[2]; constraint.diagonal(diagonal);
+		for (int row = 0; row < 2; row++) {
+			Arrays.fill(unit, 0); unit[row] = 1; constraint.apply(unit, applied);
+			near(diagonal[row], applied[row], 2e-14, "Merged constraint block diagonal");
+		}
+		unit[0] = 1; unit[1] = 0; constraint.apply(unit, applied);
+		double coupling = applied[1], scale = Math.sqrt(diagonal[0] * diagonal[1]);
+		double normalized = coupling / scale;
+		var preconditioner = constraint.preconditioner(diagonal); double[] first = {2, -3}, second = {-.7, 1.1};
+		double[] firstResult = new double[2], secondResult = new double[2];
+		preconditioner.apply(first, firstResult); preconditioner.apply(second, secondResult);
+		near(firstResult[0], (1 + normalized * normalized) * first[0] / diagonal[0] - normalized * first[1] / scale,
+				2e-12, "Independent two-row symmetric Gauss-Seidel inverse");
+		near(firstResult[1], first[1] / diagonal[1] - normalized * first[0] / scale, 2e-12,
+				"Independent two-row backward solve");
+		near(dot(first, secondResult), dot(second, firstResult), 2e-12, "Symmetric actual-Gram preconditioner");
+		if (!(dot(first, firstResult) > 0)) throw new AssertionError("Actual-Gram preconditioner lost positive work");
+	}
+
+	static void cellAffineVelocityPreservesResolvedMotion() {
+		float[][] cube = new float[8][3];
+		for (int i = 0; i < 8; i++) for (int a = 0; a < 3; a++) cube[i][a] = (i >> a & 1) == 0 ? .125F : .375F;
+		FluidDomain domain = affineDomain(cube); CellAffineVelocity basis = CellAffineVelocity.capture(domain);
+		if (basis.rank(0) != 4 || !basis.hasRepresentableBasis(0) || !basis.canRepresentPoint(0, .5, .5, .5))
+			throw new AssertionError("Full spatial quadrature lost its affine velocity capacity");
+		for (int a = 0; a < 3; a++) {
+			java.math.BigDecimal mass = java.math.BigDecimal.ZERO, first = java.math.BigDecimal.ZERO;
+			for (int i = 0; i < cube.length; i++) {
+				var m = new java.math.BigDecimal(basis.massKilograms(i)); mass = mass.add(m);
+				first = first.add(m.multiply(new java.math.BigDecimal((double) cube[i][a])));
+			}
+			near(basis.center(0, a), first.divide(mass, java.math.MathContext.DECIMAL128).doubleValue(), 0,
+					"Actual mass first-moment centre");
+		}
+		verifyAffineRigidMotion(basis);
+		var velocity = new double[3][cube.length]; var load = new double[3][4 * basis.cellCount()];
+		for (int a = 0; a < 3; a++) {
+			for (int i = 0; i < cube.length; i++) velocity[a][i] = Math.sin(.37 * i + a);
+			for (int term = 0; term < 4; term++) load[a][term] = Math.cos(.23 * term + a);
+		}
+		var fitted = new double[3][4 * basis.cellCount()]; var force = new double[3][cube.length]; basis.fit(velocity, fitted); basis.transposeLoad(load, force);
+		near(work(velocity, force), work(fitted, load), 2e-14, "Cell affine map/adjoint virtual work");
+		var resolved = new double[3][cube.length]; basis.predict(fitted, resolved);
+		for (int a = 0; a < 3; a++) for (int term = 0; term < 4; term++) {
+			double residual = 0;
+			for (int i = 0; i < cube.length; i++) residual += basis.massKilograms(i) * (velocity[a][i] - resolved[a][i])
+					* (term == 0 ? 1 : (cube[i][term - 1] - basis.center(0, term - 1)) / basis.cellSize());
+			near(residual, 0, 2e-13, "Mass-orthogonal unresolved cell velocity");
+		}
+		float[][][] sparse = {
+				{{.125F, .125F, .125F}},
+				{{.125F, .125F, .125F}, {.375F, .375F, .375F}},
+				{{.125F, .125F, .25F}, {.375F, .125F, .25F}, {.125F, .375F, .25F}}
+		};
+		for (int k = 0; k < sparse.length; k++) {
+			var lowRank = CellAffineVelocity.capture(affineDomain(sparse[k]));
+			if (lowRank.rank(0) != k + 1 || !lowRank.hasRepresentableBasis(0)
+					|| !lowRank.canRepresentPoint(0, sparse[k][0][0], sparse[k][0][1], sparse[k][0][2])
+					|| lowRank.canRepresentPoint(0, .125, .125, k == 2 ? Math.nextUp(.25) : .375))
+				throw new AssertionError("Sparse actual geometry was assigned an invented affine direction");
+			verifyAffineRigidMotion(lowRank);
+		}
+		var tilted = new float[][]{{.125F, .125F, .125F}, {.375F, .125F, .125F}, {.125F, .375F, .125F}, {.375F, .375F, Math.nextUp(.125F)}};
+		if (CellAffineVelocity.capture(affineDomain(tilted)).rank(0) != 4)
+			throw new AssertionError("Exact geometric rank discarded a real binary32 spatial direction");
+		var closePoints = new FluidDomain(12, 8, 4, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
+		float[] saved = {7.9979296F, 3.0201921F, .5030171F, 1.6467273e-4F,
+				7.9978232F, 3.0137305F, .50301975F, 3.2901764e-5F,
+				7.421645F, 3.3454382F, .49268323F, .0026631951F};
+		closePoints.restoreParticleState(new FlipParticleState(12, 8, 4, 1, 3, .0028607696F, saved, new float[9], new byte[384]));
+		var closeBasis = CellAffineVelocity.capture(closePoints);
+		int closeCell = closeBasis.markerCell(0);
+		if (closeBasis.rank(closeCell) != 3 || !closeBasis.hasRepresentableBasis(closeCell))
+			throw new AssertionError("Separated binary32 points lost their certified affine map through rounded refinement residuals");
+		var affineVelocity = new double[3][3]; var closeCoefficients = new double[3][4 * closeBasis.cellCount()];
+		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 3; i++) affineVelocity[axis][i] = 1 + closeBasis.position(i, axis);
+		closeBasis.fit(affineVelocity, closeCoefficients); var closePrediction = new double[3][3]; closeBasis.predict(closeCoefficients, closePrediction);
+		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 3; i++)
+			near(closePrediction[axis][i], affineVelocity[axis][i], 2e-12, "Certified affine field on separated near-collinear points");
+		var thinTetrahedron = new FluidDomain(12, 8, 4, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
+		float[] thin = {3.880811F, 3.0868871F, 3.0868871F, 2.6449561e-5F,
+				3.852336F, 3.086874F, 3.086874F, 8.146465e-5F,
+				3.2086852F, 3.4979026F, 3.4938903F, .08683321F,
+				3.733526F, 3.4979026F, 3.4938903F, .08683321F};
+		thinTetrahedron.restoreParticleState(new FlipParticleState(12, 8, 4, 1, 4, .17377433F, thin, new float[12], new byte[384]));
+		var thinBasis = CellAffineVelocity.capture(thinTetrahedron); int thinCell = thinBasis.markerCell(0);
+		if (thinBasis.rank(thinCell) != 4 || !thinBasis.hasRepresentableBasis(thinCell) || !thinBasis.expandedCell(thinCell))
+			throw new AssertionError("Near-degenerate actual tetrahedron lost the precision required by its affine moment certificate");
+		var thinVelocity = new double[3][4]; var thinCoefficients = new double[3][4 * thinBasis.cellCount()];
+		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 4; i++) thinVelocity[axis][i] = 1 + thinBasis.position(i, axis);
+		thinBasis.fit(thinVelocity, thinCoefficients); var thinPrediction = new double[3][4]; thinBasis.predict(thinCoefficients, thinPrediction);
+		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 4; i++)
+			near(thinPrediction[axis][i], thinVelocity[axis][i], 2e-14, "Expanded affine fit reproduces the actual resolved field");
+		var thinConstraint = new CellVelocityConstraintOperator(thinBasis, java.util.List.of(new CellVelocityConstraintOperator.Row(
+				java.util.List.of(new CellVelocityConstraintOperator.Block(thinCell, 0, new double[]{0, 1, 0, 0})), 0)));
+		var translation = new double[3][4]; Arrays.fill(translation[0], 1); double[] translationRate = new double[1];
+		thinConstraint.volumeRate(translation, translationRate);
+		near(translationRate[0], 0, 2e-14, "Expanded constraint preserves its constant-velocity kernel");
+		double savedMass = basis.massKilograms(0), savedCentre = basis.center(0, 0), savedCoefficient = basis.coefficient(0, 0);
+		domain.particles.setMass(0, 200); domain.particles.setPositionX(0, .25F);
+		near(basis.massKilograms(0), savedMass, 0, "Captured affine mass ownership");
+		near(basis.center(0, 0), savedCentre, 0, "Captured affine centre ownership");
+		near(basis.coefficient(0, 0), savedCoefficient, 0, "Captured affine map ownership");
+	}
+
+	private static void verifyAffineRigidMotion(CellAffineVelocity basis) {
+		for (int mode = 0; mode < 4; mode++) {
+			var velocity = new double[3][basis.markerCount()]; var coefficient = new double[3][4 * basis.cellCount()];
+			for (int i = 0; i < basis.markerCount(); i++) for (int a = 0; a < 3; a++) velocity[a][i] = mode == 0
+					? new double[]{1.25, -.75, .125}[a] : a == mode % 3 ? -basis.position(i, (a + 1) % 3)
+					: a == (mode + 1) % 3 ? basis.position(i, (a + 2) % 3) : 0;
+			basis.fit(velocity, coefficient); var reconstructed = new double[3][basis.markerCount()]; basis.predict(coefficient, reconstructed);
+			for (int a = 0; a < 3; a++) for (int i = 0; i < basis.markerCount(); i++)
+				near(reconstructed[a][i], velocity[a][i], 2e-14, "Constant/rigid rotation on actual affine support");
+			near(basis.divergence(coefficient, 0), 0, 2e-14, "Rigid rotation affine divergence");
+			if (basis.rank(0) == 4) {
+				double[] point = {.45, .3, .2};
+				for (int a = 0; a < 3; a++) {
+					double expected = mode == 0 ? new double[]{1.25, -.75, .125}[a] : a == mode % 3 ? -point[(a + 1) % 3]
+							: a == (mode + 1) % 3 ? point[(a + 2) % 3] : 0;
+					near(basis.value(coefficient, a, 0, point[0], point[1], point[2]), expected, 2e-14,
+							"Full-rank rigid field at a face trace point");
+				}
+			}
+		}
+	}
+
+	private static FluidDomain affineDomain(float[][] points) {
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0), 32);
+		var positions = new float[4 * points.length]; var mass = new double[points.length];
+		for (int i = 0; i < points.length; i++) {
+			for (int a = 0; a < 3; a++) positions[4 * i + a] = points[i][a];
+			positions[4 * i + 3] = .0625F; mass[i] = 100 * (1 + .125 * i);
+		}
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, .5F, points.length, points.length / 16.0,
+				cc.ecisr.mmm.units.SignedDyadic.sum(mass, mass.length).toDouble(),
+				java.util.List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2)),
+				positions, new float[3 * points.length], new byte[8], mass, new int[points.length]));
+		return domain;
 	}
 
 	private static Layout layout(boolean full) {

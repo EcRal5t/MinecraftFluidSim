@@ -91,12 +91,10 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 							centerXSum += overlap * centerSampleX;
 							centerYSum += overlap * centerSampleY;
 							centerZSum += overlap * centerSampleZ;
-							velocityXSum += overlap * sampleX(this.mac.velocityX,
-									(float) centerSampleX, (float) centerSampleY, (float) centerSampleZ);
-							velocityYSum += overlap * sampleY(this.mac.velocityY,
-									(float) centerSampleX, (float) centerSampleY, (float) centerSampleZ);
-							velocityZSum += overlap * sampleZ(this.mac.velocityZ,
-									(float) centerSampleX, (float) centerSampleY, (float) centerSampleZ);
+							VelocitySample velocity = sampleStoredVelocity((float) centerSampleX, (float) centerSampleY, (float) centerSampleZ);
+							velocityXSum += overlap * velocity.x();
+							velocityYSum += overlap * velocity.y();
+							velocityZSum += overlap * velocity.z();
 						}
 					}
 				}
@@ -114,6 +112,12 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 		if (localX < 0.0F || localX > sizeX * config.cellSize()
 				|| localY < 0.0F || localY > sizeY * config.cellSize()
 				|| localZ < 0.0F || localZ > sizeZ * config.cellSize()) return VelocitySample.ZERO;
+		return sampleStoredVelocity(localX, localY, localZ);
+	}
+
+	private VelocitySample sampleStoredVelocity(float localX, float localY, float localZ) {
+		VelocitySample resolved = pressureSystem.sampleMarkerVelocity(localX, localY, localZ);
+		if (resolved != null) return resolved;
 		return new VelocitySample(
 				sampleX(mac.velocityX, localX, localY, localZ),
 				sampleY(mac.velocityY, localX, localY, localZ),

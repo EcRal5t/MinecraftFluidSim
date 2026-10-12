@@ -6,7 +6,23 @@ import java.util.Arrays;
 
 /** Shared geometric liquid fluxes with conservative multidimensional capacity constraints. */
 final class ConservativeLiquidFlux {
+	@FunctionalInterface
+	interface FaceSweep {
+		void sweptMoments(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
+		                  int donorSupport, int receiverSupport, double[] result);
+		default void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
+		                               int donorSupport, int receiverSupport, double[] swept, double[] wet) {
+			throw new IllegalStateException("Liquid face sweep has no common micro source integration rule");
+		}
+		default void sweptPhaseMoments(PhaseVolumeTransportGeometry phases, int phase, int face, int donor,
+		                               int receiver, int axis, boolean positive, double width, double dtOverH,
+		                               int donorSupport, int receiverSupport, double[] result) {
+			phases.sweptMoments(phase, donor, receiver, axis, width, positive, donorSupport, receiverSupport, result);
+		}
+	}
 	final int sizeX, sizeY, sizeZ, cellCount;
+	final int physicalFaceCount;
+	private final boolean bidirectional;
 	final int[] left, right, axis;
 	final double[] velocity, flux;
 	final SignedDyadic[] exactFlux;
@@ -25,13 +41,19 @@ final class ConservativeLiquidFlux {
 	private SignedDyadic[] quantizationBudget;
 	private double dtOverH;
 	private LiquidFluxGeometry geometry;
+	private FaceSweep faceSweep;
 	private SignedDyadic[] reserved;
 	private int[] carrierShares;
 
 	ConservativeLiquidFlux(int sizeX, int sizeY, int sizeZ) {
+		this(sizeX, sizeY, sizeZ, false);
+	}
+	ConservativeLiquidFlux(int sizeX, int sizeY, int sizeZ, boolean bidirectional) {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
+		this.bidirectional = bidirectional;
 		cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
-		int faces = (sizeX - 1) * sizeY * sizeZ + sizeX * (sizeY - 1) * sizeZ + sizeX * sizeY * (sizeZ - 1);
+		physicalFaceCount = (sizeX - 1) * sizeY * sizeZ + sizeX * (sizeY - 1) * sizeZ + sizeX * sizeY * (sizeZ - 1);
+		int faces = Math.multiplyExact(physicalFaceCount, bidirectional ? 2 : 1);
 		left = new int[faces]; right = left.clone(); axis = left.clone();
 		velocity = new double[faces]; flux = velocity.clone(); exactFlux = new SignedDyadic[faces];
 		low = new double[cellCount]; positive = low.clone(); negative = low.clone();
@@ -55,11 +77,26 @@ final class ConservativeLiquidFlux {
 		for (int z = 1; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			left[f] = index(x, y, z - 1); right[f] = left[f] + sizeX * sizeY; axis[f++] = 2;
 		}
+		if (bidirectional) {
+			System.arraycopy(left, 0, left, physicalFaceCount, physicalFaceCount);
+			System.arraycopy(right, 0, right, physicalFaceCount, physicalFaceCount);
+			System.arraycopy(axis, 0, axis, physicalFaceCount, physicalFaceCount);
+			Arrays.fill(velocity, physicalFaceCount, faces, -0.0);
+		}
 	}
 
 	void geometry(LiquidFluxGeometry geometry) { this.geometry = geometry; }
+	void faceSweep(FaceSweep faceSweep) { this.faceSweep = faceSweep; }
 	void reserve(SignedDyadic[] reserved) { this.reserved = reserved; }
 	void carrierShares(int[] carrierShares) { this.carrierShares = carrierShares; }
+	void sweptPhaseMoments(PhaseVolumeTransportGeometry phases, int phase, int face,
+	                       int donorSupport, int receiverSupport, double[] result) {
+		double width = Math.abs(velocity[face]) * dtOverH;
+		if (faceSweep == null) phases.sweptMoments(phase, donor(face), receiver(face), axis[face], width,
+				positive(face), donorSupport, receiverSupport, result);
+		else faceSweep.sweptPhaseMoments(phases, phase, face % physicalFaceCount, donor(face), receiver(face),
+				axis[face], positive(face), width, dtOverH, donorSupport, receiverSupport, result);
+	}
 
 	/** Volumes and capacities are in this grid's cell-volume units; velocities are m/s. */
 	void plan(double[] volume, boolean[] solid, double dtOverH, SignedDyadic[] exactVolume) {
@@ -87,8 +124,8 @@ final class ConservativeLiquidFlux {
 		for (int f = 0; f < flux.length; f++) aperture[f] = geometry == null ? 1 : geometry.aperture(left[f], right[f], axis[f]);
 		Arrays.fill(outgoing, 0);
 		for (int f = 0; f < flux.length; f++) {
-			if (solid[left[f]] || solid[right[f]] || aperture[f] == 0) { velocity[f] = 0; continue; }
-			int donor = velocity[f] >= 0 ? left[f] : right[f];
+			if (solid[left[f]] || solid[right[f]] || aperture[f] == 0) { velocity[f] = Math.copySign(0, velocity[f]); continue; }
+			int donor = positive(f) ? left[f] : right[f];
 			if (capacity[donor] > 0 && volume[donor] > 0) outgoing[donor] += Math.abs(velocity[f]) * dtOverH * aperture[f] / capacity[donor];
 		}
 		for (int c = 0; c < cellCount; c++) if (outgoing[c] > 1 + 8 * Math.ulp(1.0F))
@@ -121,23 +158,28 @@ final class ConservativeLiquidFlux {
 		System.arraycopy(volume, 0, low, 0, cellCount);
 		Arrays.fill(positive, 0); Arrays.fill(negative, 0);
 		CpuWorkBatch.run(flux.length, (from, until) -> {
+			double[] moments = faceSweep == null ? null : new double[4];
 			for (int f = from; f < until; f++) {
 				double courant = velocity[f] * dtOverH;
-				int donor = courant >= 0 ? left[f] : right[f];
-				if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) { flux[f] = 0; continue; }
+				int donor = positive(f) ? left[f] : right[f];
+				if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) { flux[f] = Math.copySign(0, velocity[f]); continue; }
 				double width = Math.abs(courant), nx = normalX[donor], ny = normalY[donor], nz = normalZ[donor], off = offset[donor];
-				if (courant > 0) off -= (axis[f] == 0 ? nx : axis[f] == 1 ? ny : nz) * (1 - width);
+				if (positive(f)) off -= (axis[f] == 0 ? nx : axis[f] == 1 ? ny : nz) * (1 - width);
 				if (axis[f] == 0) nx *= width; else if (axis[f] == 1) ny *= width; else nz *= width;
 				donorFlux[f] = capacity[donor] == 0 ? 0 : courant * aperture[f] * volume[donor] / capacity[donor];
-				double swept = geometry == null ? Math.abs(courant) * FlipFreeSurfaceGeometry.unitCubeLiquidFraction(nx, ny, nz, off)
-						: geometry.swept(donor, courant >= 0 ? right[f] : left[f], axis[f], Math.abs(courant), courant >= 0,
+				double swept;
+				if (faceSweep != null) {
+					faceSweep.sweptMoments(f % physicalFaceCount, donor, receiver(f), axis[f], positive(f), dtOverH, 255, 255, moments);
+					swept = moments[0];
+				} else swept = geometry == null ? Math.abs(courant) * FlipFreeSurfaceGeometry.unitCubeLiquidFraction(nx, ny, nz, off)
+						: geometry.swept(donor, receiver(f), axis[f], Math.abs(courant), positive(f),
 								normalX[donor], normalY[donor], normalZ[donor], offset[donor]);
 				flux[f] = Math.copySign(swept, courant) - donorFlux[f];
 			}
 		});
 		for (int f = 0; f < flux.length; f++) {
 			double courant = velocity[f] * dtOverH;
-			int donor = courant >= 0 ? left[f] : right[f];
+			int donor = positive(f) ? left[f] : right[f];
 			if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) continue;
 			low[left[f]] -= donorFlux[f]; low[right[f]] += donorFlux[f];
 			double a = flux[f];
@@ -155,7 +197,7 @@ final class ConservativeLiquidFlux {
 		for (int f = 0; f < flux.length; f++) {
 			double a = flux[f];
 			double limiter = a >= 0 ? Math.min(rNegative[left[f]], rPositive[right[f]]) : Math.min(rPositive[left[f]], rNegative[right[f]]);
-			int donor = velocity[f] >= 0 ? left[f] : right[f];
+			int donor = positive(f) ? left[f] : right[f];
 			flux[f] = (capacity[donor] == 0 ? 0 : velocity[f] * dtOverH * aperture[f] * volume[donor] / capacity[donor]) + a * limiter;
 			geometricBlend[f] = flux[f] == 0 ? 0 : Math.max(0, Math.min(1, limiter * (donorFlux[f] + a) / flux[f]));
 			outgoing[donor] += Math.abs(flux[f]);
@@ -166,7 +208,7 @@ final class ConservativeLiquidFlux {
 		// A single-step carrier commit draws from beginning-of-step inventory.
 		// Limiting outgoing flux prevents same-step transshipment through empty parcels.
 		for (int f = 0; f < flux.length; f++) {
-			int donor = flux[f] >= 0 ? left[f] : right[f];
+			int donor = positive(f) ? left[f] : right[f];
 			double scale = outgoing[donor] <= volume[donor] ? 1 : volume[donor] / outgoing[donor];
 			double amount = Math.abs(flux[f]) * scale;
 			double resolution = ConservativeMarkerSampling.VOLUME_FLUX_RESOLUTION;
@@ -174,7 +216,7 @@ final class ConservativeLiquidFlux {
 			exactFlux[f] = SignedDyadic.of(stored);
 			// The floor gives stored <= amount < 2*stored when stored > 0: subtraction is exact by Sterbenz.
 			faceFloorLoss[f] = amount == stored ? SignedDyadic.ZERO : SignedDyadic.of(amount - stored);
-			flux[f] = Math.copySign(stored, flux[f]);
+			flux[f] = Math.copySign(stored, velocity[f]);
 			upperFlux[f] = SignedDyadic.of(Math.floor(Math.abs(velocity[f]) * dtOverH * aperture[f] / resolution) * resolution);
 		}
 	}
@@ -302,7 +344,11 @@ final class ConservativeLiquidFlux {
 		queue[written++] = source; predecessor[source] = -2;
 		while (read < written && destination < 0) {
 			int current = queue[read++];
+			// Directed channels retain their geometric exchange. Prefer returning an
+			// incoming parcel, then append to the canonical outward channel.
+			for (int pass = 0; pass < (bidirectional ? 2 : 1) && destination < 0; pass++)
 			for (int face : adjacent(current)) if (face >= 0) {
+				if (bidirectional && (donor(face) == current) != (pass == 1)) continue;
 				int next = left[face] == current ? right[face] : left[face];
 				if (solid[next] || predecessor[next] != -1 || geometry != null && !geometry.connected(left[face], right[face], axis[face])
 						|| representationAllowance(current, face).signum() == 0) continue;
@@ -327,6 +373,7 @@ final class ConservativeLiquidFlux {
 				representationBlend[face] = representationBlend[face] * ratio + 1 - ratio;
 			} else if (old.compareTo(amount) >= 0) exactFlux[face] = old.subtract(amount);
 			else {
+				if (bidirectional) throw new IllegalStateException("Directed liquid channel cannot reverse its geometric sweep");
 				exactFlux[face] = amount.subtract(old);
 				velocity[face] = Math.copySign(Math.max(Double.MIN_VALUE, Math.abs(velocity[face])), (edge & 1) == 0 ? 1 : -1);
 				geometricBlend[face] = 0; representationBlend[face] = 1;
@@ -364,6 +411,7 @@ final class ConservativeLiquidFlux {
 	}
 
 	private SignedDyadic representationAllowance(int current, int face) {
+		if (bidirectional && donor(face) != current) return exactFlux[face];
 		SignedDyadic supply = remainingSupply[current];
 		if (predecessor[current] >= 0) {
 			int incoming = predecessor[current] / 2;
@@ -397,14 +445,18 @@ final class ConservativeLiquidFlux {
 		}
 	}
 
-	int donor(int f) { return velocity[f] >= 0 ? left[f] : right[f]; }
+	boolean positive(int face) { return Double.doubleToRawLongBits(velocity[face]) >= 0; }
+	int donor(int f) { return positive(f) ? left[f] : right[f]; }
 	/** Fraction of the final face transfer assigned to the limited geometric sweep. */
 	double geometricBlend(int face) { return geometricBlend[face]; }
 	double representationBlend(int face) { return representationBlend[face]; }
 	void sweptMoments(int face, double[] result) {
 		int donor = donor(face), neighbor = receiver(face), a = axis[face];
+		if (faceSweep != null) {
+			faceSweep.sweptMoments(face % physicalFaceCount, donor, neighbor, a, positive(face), dtOverH, 255, 255, result); return;
+		}
 		double width = Math.abs(velocity[face]) * dtOverH;
-		boolean positive = velocity[face] >= 0;
+		boolean positive = positive(face);
 		if (geometry != null) {
 			geometry.sweptMoments(donor, neighbor, a, width, positive,
 					normalX[donor], normalY[donor], normalZ[donor], offset[donor], result); return;
@@ -418,7 +470,7 @@ final class ConservativeLiquidFlux {
 				+ width * result[i + 1] : result[i + 1]) - .5 * volume);
 		result[0] *= width;
 	}
-	int receiver(int f) { return velocity[f] >= 0 ? right[f] : left[f]; }
+	int receiver(int f) { return positive(f) ? right[f] : left[f]; }
 	SignedDyadic[] resultingVolumes() { return after; }
 	/** Publish only the port-level reductions of this same prospective face plan. */
 	void adoptPortFluxes(SignedDyadic[] volume, SignedDyadic[] amounts) {
@@ -434,24 +486,31 @@ final class ConservativeLiquidFlux {
 			throw new MechanicalTimeRefinement(2, "Micro port reduction cannot satisfy final whole-cell capacity");
 	}
 	void sweptMoments(int face, int donorSupport, int receiverSupport, double[] result) {
+		if (faceSweep != null) {
+			faceSweep.sweptMoments(face % physicalFaceCount, donor(face), receiver(face), axis[face], positive(face), dtOverH,
+					donorSupport, receiverSupport, result); return;
+		}
 		if (geometry == null) { sweptMoments(face, result); return; }
 		int donor = donor(face);
-		geometry.sweptMoments(donor, receiver(face), axis[face], Math.abs(velocity[face]) * dtOverH, velocity[face] >= 0,
+		geometry.sweptMoments(donor, receiver(face), axis[face], Math.abs(velocity[face]) * dtOverH, positive(face),
 				normalX[donor], normalY[donor], normalZ[donor], offset[donor], result, donorSupport, receiverSupport);
 	}
 	/** Separate source micro measures from the same frozen directional sweep used to plan this face. */
 	void sweptMicroVolumes(int face, int donorSupport, int receiverSupport, double[] swept, double[] wet) {
 		if (swept.length != 8 || wet.length != 8) throw new IllegalArgumentException("Missing liquid micro volumes");
-
+		if (faceSweep != null) {
+			faceSweep.sweptMicroVolumes(face % physicalFaceCount, donor(face), receiver(face), axis[face], positive(face),
+					dtOverH, donorSupport, receiverSupport, swept, wet); return;
+		}
 		int donor = donor(face); double[] moments = new double[4];
 		for (int m = 0; m < 8; m++) {
 			swept[m] = wet[m] = 0;
 			if ((donorSupport & 1 << m) == 0) continue;
 			if (geometry != null) {
-				geometry.sweptMoments(donor, receiver(face), axis[face], Math.abs(velocity[face]) * dtOverH, (velocity[face] >= 0),
+				geometry.sweptMoments(donor, receiver(face), axis[face], Math.abs(velocity[face]) * dtOverH, positive(face),
 						normalX[donor], normalY[donor], normalZ[donor], offset[donor], moments, 1 << m, receiverSupport);
 				swept[m] = moments[0];
-				geometry.sweptMoments(donor, receiver(face), axis[face], 1, (velocity[face] >= 0), normalX[donor], normalY[donor],
+				geometry.sweptMoments(donor, receiver(face), axis[face], 1, positive(face), normalX[donor], normalY[donor],
 						normalZ[donor], offset[donor], moments, 1 << m, receiverSupport); wet[m] = moments[0];
 			} else {
 				double ox = .5 * (m & 1), oy = .5 * (m >>> 1 & 1), oz = .5 * (m >>> 2 & 1);
@@ -460,7 +519,7 @@ final class ConservativeLiquidFlux {
 				wet[m] = .125 * moments[0];
 				double lower = axis[face] == 0 ? ox : axis[face] == 1 ? oy : oz;
 				double width = Math.abs(velocity[face]) * dtOverH;
-				double lo = Math.max(lower, (velocity[face] >= 0) ? 1 - width : 0), hi = Math.min(lower + .5, (velocity[face] >= 0) ? 1 : width);
+				double lo = Math.max(lower, positive(face) ? 1 - width : 0), hi = Math.min(lower + .5, positive(face) ? 1 : width);
 				if (hi <= lo) continue;
 				double ex = .5, ey = .5, ez = .5;
 				if (axis[face] == 0) { ox = lo; ex = hi - lo; }
@@ -483,12 +542,17 @@ final class ConservativeLiquidFlux {
 	private int[] adjacent(int c) {
 		int x = c % sizeX, y = c / sizeX % sizeY, z = c / (sizeX * sizeY);
 		int yBase = (sizeX - 1) * sizeY * sizeZ, zBase = yBase + sizeX * (sizeY - 1) * sizeZ;
-		return new int[] {x > 0 ? (z * sizeY + y) * (sizeX - 1) + x - 1 : -1,
+		int[] physical = {x > 0 ? (z * sizeY + y) * (sizeX - 1) + x - 1 : -1,
 				x + 1 < sizeX ? (z * sizeY + y) * (sizeX - 1) + x : -1,
 				y > 0 ? yBase + (z * (sizeY - 1) + y - 1) * sizeX + x : -1,
 				y + 1 < sizeY ? yBase + (z * (sizeY - 1) + y) * sizeX + x : -1,
 				z > 0 ? zBase + ((z - 1) * sizeY + y) * sizeX + x : -1,
 				z + 1 < sizeZ ? zBase + (z * sizeY + y) * sizeX + x : -1};
+		if (!bidirectional) return physical;
+		int[] result = new int[12];
+		System.arraycopy(physical, 0, result, 0, 6);
+		for (int i = 0; i < 6; i++) result[i + 6] = physical[i] < 0 ? -1 : physical[i] + physicalFaceCount;
+		return result;
 	}
 	private double sample(double[] volume, boolean[] solid, int x, int y, int z, int fallback) {
 		int c = x < 0 || x >= sizeX || y < 0 || y >= sizeY || z < 0 || z >= sizeZ ? fallback : index(x, y, z);

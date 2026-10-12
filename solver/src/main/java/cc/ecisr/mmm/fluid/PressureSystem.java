@@ -1,12 +1,14 @@
 package cc.ecisr.mmm.fluid;
 
-/** Selects the liquid/gas PCG or the double-precision pressure system with shared granular drag. */
+/** Selects actual-mass liquid pressure or the mixed-solid pressure/drag system. */
 final class PressureSystem {
 	private static final int LIQUID_PRESSURE = -1;
 	private static final int FIXED_PRESSURE = 0;
 	private final FluidDomain domain;
 	private final GranularPressureCoupling granular;
 	private final GranularImplicitDrag drag;
+	private final MarkerPressureProjection markerProjection;
+	private CellAffineVelocityField samplingField;
 	private final double[] liquidPressure;
 	private double[] gasPressure;
 	/** Per-projection pressure source: liquid, fixed zero, or a positive gas node id. */
@@ -19,6 +21,7 @@ final class PressureSystem {
 		neighborPressureSource = new int[domain.cellCount];
 		this.granular = new GranularPressureCoupling(domain);
 		this.drag = new GranularImplicitDrag(domain, granular);
+		this.markerProjection = new MarkerPressureProjection(domain);
 	}
 	void prepareGranular(float dt) {
 		substepDuration = dt;
@@ -53,9 +56,23 @@ final class PressureSystem {
 		granular.connectTransferSupport(budget);
 	}
 	void forEachGranularGasNode(float dt, java.util.function.IntConsumer accept) { granular.forEachGasNode(dt, accept); }
-	double liquidPressure(int cell) { return liquidPressure[cell]; }
-	double gasPressure(int node) { return gasPressure[node]; }
+	MarkerPressureProjection markerProjection() { return markerProjection; }
+	void updateMarkerVelocityField(CellAffineVelocityField field) { samplingField = field; }
+	CellAffineVelocityField markerVelocityField() { return usesMarkerPressure() ? samplingField : null; }
+	FluidDomain.VelocitySample sampleMarkerVelocity(float x, float y, float z) {
+		if (!usesMarkerPressure() || samplingField == null) return null;
+		int cell = domain.particleCellIndex(x, y, z);
+		return samplingField.hasCell(cell) ? samplingField.sample(cell, x, y, z) : null;
+	}
+	boolean usesMarkerPressure() {
+		return !domain.hasGranularInventory()
+				&& (domain.thermalState == null || domain.thermalState.coherentPhases().groupCount() == 0);
+	}
+	boolean markerPressureActive() { return usesMarkerPressure() && markerProjection.active(); }
+	double liquidPressure(int cell) { return markerPressureActive() ? markerProjection.liquidPressure(cell) : liquidPressure[cell]; }
+	double gasPressure(int node) { return markerPressureActive() ? markerProjection.gasPressure(node) : gasPressure[node]; }
 	boolean projectGranular(float dt) {
+		if (markerPressureActive()) { markerProjection.publish(); return true; }
 		if (drag.active()) { drag.project(); return true; }
 		granular.project(dt, liquidPressure, gasPressure);
 		return false;
@@ -63,6 +80,10 @@ final class PressureSystem {
 
 	/** Runs PCG on the assembled right-hand side; the pressure vector mutates in the workspace. */
 	PressureProjectionResult solve(int unknownCount, double target) {
+		if (usesMarkerPressure()) {
+			markerProjection.prepare(substepDuration);
+			return markerProjection.solve(target);
+		}
 		if (unknownCount == 0 && !drag.active()) return new PressureProjectionResult(0, 0, true);
 		assembleMatrix();
 		int totalIterations = 0;

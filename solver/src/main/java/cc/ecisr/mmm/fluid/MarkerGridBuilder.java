@@ -72,9 +72,39 @@ final class MarkerGridBuilder {
 	}
 
 	static void scatterVelocities(FluidDomain domain) {
+		if (domain.pressureSystem.usesMarkerPressure()) { scatterMarkerVelocities(domain); return; }
 		CpuWorkBatch.run(3, domain.particles.count() >= 2_048 ? 1 : 3, (from, until) -> {
 			for (int axis = from; axis < until; axis++) scatterAxis(domain, axis);
 		});
+	}
+
+	/** Uses the pressure map for both the incoming velocity and subsequent marker publications. */
+	private static void scatterMarkerVelocities(FluidDomain domain) {
+		CellAffineVelocity basis = CellAffineVelocity.capture(domain);
+		CellAffineMacTransfer transfer = CellAffineMacTransfer.capture(domain, basis, LiquidPressureGeometry.capture(domain));
+		double[][] markerVelocity = new double[3][domain.particles.count()];
+		for (int marker = 0; marker < domain.particles.count(); marker++) {
+			markerVelocity[0][marker] = domain.particles.velocityX(marker);
+			markerVelocity[1][marker] = domain.particles.velocityY(marker);
+			markerVelocity[2][marker] = domain.particles.velocityZ(marker);
+		}
+		double[][] coefficients = new double[3][4 * domain.cellCount];
+		basis.fit(markerVelocity, coefficients);
+		double[][] mapped = {new double[domain.mac.velocityX.length], new double[domain.mac.velocityY.length], new double[domain.mac.velocityZ.length]};
+		transfer.apply(coefficients, mapped);
+		var field = new CellAffineVelocityField(basis, coefficients);
+		for (int axis = 0; axis < 3; axis++) {
+			float[] velocity = axis == 0 ? domain.mac.velocityX : axis == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
+			float[] flags = axis == 0 ? domain.mac.velocityWeightX : axis == 1 ? domain.mac.velocityWeightY : domain.mac.velocityWeightZ;
+			double[] mass = axis == 0 ? domain.mac.p2gWeightX : axis == 1 ? domain.mac.p2gWeightY : domain.mac.p2gWeightZ;
+			scatterMassAxis(domain, axis, velocity, flags, mass, domain.config.cellSize());
+			for (int face = 0; face < velocity.length; face++) {
+				if (!Float.isFinite((float) mapped[axis][face])) throw new IllegalStateException("Unrepresentable marker MAC velocity");
+				velocity[face] = (float) mapped[axis][face];
+				flags[face] = transfer.wetArea(axis, face) > 0 ? 1 : 0;
+			}
+		}
+		domain.pressureSystem.updateMarkerVelocityField(field);
 	}
 
 	private static void scatterAxis(FluidDomain domain, int axis) {

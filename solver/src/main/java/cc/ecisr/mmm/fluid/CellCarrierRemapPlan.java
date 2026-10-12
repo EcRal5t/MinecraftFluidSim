@@ -342,9 +342,9 @@ final class CellCarrierRemapPlan {
 					double[] preference = new double[groups.size()];
 					for (int g = 0; g < groups.size(); g++) {
 						int phase = phase(groups.get(g).material);
-						preference[g] = phaseGeometry.swept(phase, cell, flux.receiver(face), flux.axis[face],
-								Math.abs(flux.velocity[face]) * dt / domain.config.cellSize(), flux.velocity[face] > 0)
-								* weights[g].toDouble() / phaseGeometry.volume(phase, cell);
+						var moments = new double[4];
+						flux.sweptPhaseMoments(phaseGeometry, phase, face, groups.get(g).support, transfers.get(d).support, moments);
+						preference[g] = moments[0] * weights[g].toDouble() / phaseGeometry.volume(phase, cell);
 					}
 					double representation = flux.representationBlend(face);
 					if (representation > 0) {

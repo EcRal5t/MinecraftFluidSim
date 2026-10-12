@@ -26,6 +26,7 @@ final class GridToParticleStage {
 		int granularParcelCount();
 		void connectTransferSupport(MarkerTransferBudget budget);
 		boolean completelyFilled(int cell);
+		boolean markerPressurePublished();
 	}
 
 	private final Workspace state;
@@ -57,6 +58,12 @@ final class GridToParticleStage {
 
 	/** Extrapolates grid velocities into air and transfers their change to marker velocities. */
 	void extrapolateAndTransfer() {
+		if (access.markerPressurePublished()) {
+			extrapolateVelocityIntoAir(null);
+			velocityExtension.extend(state.mac, state.pressureFluid, state.geometry.solid, state.markerGrid.markerCount, null);
+			preProjectionEnergy = Double.NaN;
+			return;
+		}
 		MarkerTransferBudget dependencies = componentBudget.begin(state.particles, access.granularParcelCount(), access.gasNodeCount()) ? componentBudget : null;
 		if (dependencies != null) access.connectTransferSupport(dependencies);
 		extrapolateVelocityIntoAir(dependencies);

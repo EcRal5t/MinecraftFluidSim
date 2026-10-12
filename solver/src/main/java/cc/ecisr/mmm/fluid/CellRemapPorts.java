@@ -138,7 +138,7 @@ final class CellRemapPorts {
 	}
 	private void prepareFace(int face, SignedDyadic[] remaining) {
 		int donor = flux.donor(face), receiver = flux.receiver(face), axis = flux.axis[face];
-		boolean positive = flux.velocity[face] >= 0;
+		boolean positive = flux.positive(face);
 		var candidates = new ArrayList<Port>(4);
 		int[] donorComponents = CellRemapMicroTopology.components(domain.geometry.cutCells.mask(donor));
 		int[] receiverComponents = CellRemapMicroTopology.components(domain.geometry.cutCells.mask(receiver));

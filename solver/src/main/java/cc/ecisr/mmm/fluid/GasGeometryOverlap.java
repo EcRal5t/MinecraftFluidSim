@@ -9,7 +9,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
-/** Exact overlap of at most two positive gas half-spaces inside one open microbox. */
+/** Exact intersection of at most two half-spaces inside one open microbox. */
 final class GasGeometryOverlap {
 	/** Dry support nx*x+ny*y+nz*z >= threshold in cell-local coordinates. */
 	record HalfSpace(SignedDyadic nx, SignedDyadic ny, SignedDyadic nz, SignedDyadic threshold) {
@@ -32,29 +32,69 @@ final class GasGeometryOverlap {
 
 	/** Exact cell-normalized volume. The caller supplies only microboxes open in both geometries. */
 	static ExactRational normalizedVolume(int micro, List<HalfSpace> planes) {
+		return integrate(micro, planes, false)[0];
+	}
+
+	/** Exact normalized volume and signed first moments about the whole-cell centre. */
+	static ExactRational[] normalizedMoments(int micro, List<HalfSpace> planes) {
+		return integrate(micro, planes, true);
+	}
+
+	private static ExactRational[] integrate(int micro, List<HalfSpace> planes, boolean moments) {
 		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 2 || planes.stream().anyMatch(Objects::isNull)) {
 			throw new IllegalArgumentException("Invalid gas overlap microbox or half-spaces");
 		}
-		if (planes.isEmpty()) return MICRO_VOLUME;
 		List<HalfSpace> constraints = List.copyOf(planes);
 		try {
 			Point origin = new Point(ExactRational.of(micro & 1).divide(2), ExactRational.of(micro >>> 1 & 1).divide(2), ExactRational.of(micro >>> 2 & 1).divide(2));
-			List<List<Point>> faces = box(origin);
+			ExactRational[] result = {ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
+			var active = new ArrayList<Plane>(2);
 			for (HalfSpace halfSpace : constraints) {
 				Plane plane = new Plane(exact(halfSpace.nx), exact(halfSpace.ny), exact(halfSpace.nz), exact(halfSpace.threshold));
+				ExactRational low = plane.distance(origin), high = low;
+				for (int axis = 0; axis < 3; axis++) {
+					ExactRational spread = plane.normal(axis).multiply(HALF);
+					if (spread.signum() < 0) low = low.add(spread); else high = high.add(spread);
+				}
+				if (low.signum() < 0 && high.signum() <= 0) return result;
+				if (low.signum() < 0) active.add(plane);
+			}
+			if (active.isEmpty()) {
+				result[0] = MICRO_VOLUME;
+				if (moments) for (int axis = 0; axis < 3; axis++)
+					result[axis + 1] = MICRO_VOLUME.multiply(origin.component(axis).subtract(HALF.divide(2)));
+				return result;
+			}
+			List<List<Point>> faces = box(origin);
+			for (Plane plane : active) {
 				faces = clip(faces, plane);
-				if (faces.isEmpty()) return ExactRational.ZERO;
+				if (faces.isEmpty()) return result;
 			}
 			ExactRational sixVolume = ExactRational.ZERO;
 			for (List<Point> face : faces) {
 				Point first = face.getFirst().subtract(origin);
 				for (int i = 1; i + 1 < face.size(); i++) {
-					sixVolume = sixVolume.add(determinant(first, face.get(i).subtract(origin), face.get(i + 1).subtract(origin)));
+					ExactRational determinant = determinant(first, face.get(i).subtract(origin), face.get(i + 1).subtract(origin));
+					if (determinant.isZero()) continue;
+					sixVolume = sixVolume.add(determinant);
+					if (moments) for (int axis = 0; axis < 3; axis++) {
+						// A tetrahedron's centroid is the average of its four vertices.
+						ExactRational sum = origin.component(axis).add(face.getFirst().component(axis))
+								.add(face.get(i).component(axis)).add(face.get(i + 1).component(axis)).subtract(ExactRational.of(2));
+						result[axis + 1] = result[axis + 1].add(determinant.multiply(sum).divide(24));
+					}
 				}
 			}
 			ExactRational volume = sixVolume.divide(6);
 			if (volume.signum() < 0 || volume.compareTo(MICRO_VOLUME) > 0) throw new IllegalStateException("Gas overlap polyhedron orientation does not close");
-			return volume;
+			result[0] = volume;
+			if (moments) for (int axis = 0; axis < 3; axis++) {
+				ExactRational low = origin.component(axis).subtract(HALF).multiply(volume);
+				ExactRational high = origin.component(axis).multiply(volume);
+				if (result[axis + 1].compareTo(low) < 0 || result[axis + 1].compareTo(high) > 0)
+					throw new IllegalStateException("Overlap first moment lies outside its microbox");
+			}
+			return result;
 		} catch (IllegalArgumentException magnitude) {
 			throw new GasTopologyBlockedException("Exact gas overlap exceeds the rational representation budget: " + magnitude.getMessage());
 		}

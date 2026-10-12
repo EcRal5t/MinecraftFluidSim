@@ -42,6 +42,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		bodyOverlapResolvesContinuousSubmergence();
 		pureWaterMarkerMassLedgerTracksVolume();
 		fractionalHydrostaticColumnsBalanceGravity();
+		liquidPressureGeometryConservesShapeMoments();
 		pressureNonConvergenceRejectsStep();
 		thinLayerRegularizationRemainsStable();
 		isolatedDropletReceivesUndilutedGravity();
@@ -854,6 +855,121 @@ public final class FlipFluidFreeSurfaceValidation {
 				"positive-linear energy root cancelled a representable admissible increment");
 		check(Math.abs(FlipTransferScheme.maximumEnergyStableTransfer(1e200, 0, 0, 1e-200) / 1e-200 - 1) < 8 * Math.ulp(1.0),
 				"square-root energy ratio underflowed before producing a representable increment");
+	}
+
+	private static FluidDomain pressureGeometryDomain() {
+		return new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.001F,400,1e-5F,.45F,.002F,.8F),256);
+	}
+	private static void geometryClose(double actual,double expected,String name) {
+		check(Double.isFinite(actual) && Math.abs(actual-expected)<=256*Math.ulp(Math.max(1,Math.abs(expected))),name+": "+actual+" != "+expected);
+	}
+	private static void liquidPressureGeometryConservesShapeMoments() {
+		microFaceAlignedInterfacesPreserveTraction();
+		var cube=pressureGeometryDomain();cube.setVolume(1,1,1,1);cube.setVolume(2,1,1,1);cube.ensureGrid();
+		var geometry=LiquidPressureGeometry.capture(cube);int cell=cube.cellIndex(1,1,1);
+		var whole=geometry.cellSnapshot(cell);geometryClose(whole.volume(),1,"Whole cube volume");
+		for(int axis=0;axis<3;axis++)geometryClose(whole.centroid().component(axis),1.5,"Whole cube centroid");
+		var shared=geometry.faceMoments(cell,cube.cellIndex(2,1,1),0);
+		geometryClose(shared.area(),1,"Shared cube face");geometryClose(shared.centroid().x(),2,"Shared face coordinate");
+		geometryClose(shared.centroid().y(),1.5,"Shared face tangent centroid");
+		geometryClose(shared.centeredSecondMoment(1,1,shared.centroid()),1.0/12,"Shared face tangent variance");
+		geometryClose(shared.centeredSecondMoment(1,2,shared.centroid()),0,"Shared face tangent cross moment");
+		verifyPressureShapeGauss(whole);
+		var slab=pressureGeometryDomain();float fill=.6F;
+		int count=9*2*8,ordinal=0;float[] positions=new float[4*count];
+		for(int z=0;z<3;z++)for(int y=0;y<2;y++)for(int x=0;x<3;x++)for(int slot=0;slot<8;slot++) {
+			float height=y==0?1:fill;int base=4*ordinal++;
+			positions[base]=x+.25F+.5F*(slot&1);positions[base+1]=y+height*(.25F+.5F*(slot>>1&1));
+			positions[base+2]=z+.25F+.5F*(slot>>2&1);positions[base+3]=height/8;
+		}
+		slab.restoreParticleState(new FlipParticleState(3,3,3,1,count,(float)(9*(1+(double)fill)),positions,new float[3*count],new byte[27]));
+		slab.ensureGrid();var slabs=LiquidPressureGeometry.capture(slab);var partial=slabs.cellSnapshot(cell);
+		geometryClose(partial.volume(),fill,"Slab admitted volume");geometryClose(partial.centroid().y(),1+.5*fill,"Slab centroid");
+		var wet=slabs.faceMoments(cell,slab.cellIndex(2,1,1),0);
+		geometryClose(wet.area(),fill,"Shared slab wet face");geometryClose(wet.centroid().y(),1+.5*fill,"Shared slab centroid");
+		geometryClose(wet.centeredSecondMoment(1,1,wet.centroid()),fill*(double)fill*fill/12,"Slab wet second moment");
+		var normal=LiquidPressureGeometry.Vec3.ZERO;
+		for(var fragment:partial.freeFragments())normal=normal.add(fragment.areaNormal());
+		geometryClose(normal.x(),0,"Slab free normal X");geometryClose(normal.y(),1,"Slab free normal Y");geometryClose(normal.z(),0,"Slab free normal Z");
+		verifyPressureShapeGauss(partial);
+		var cut=pressureGeometryDomain();cut.setSolidMicroMask(1,1,1,1);cut.setVolume(1,1,1,.875F);cut.ensureGrid();
+		var cutShape=LiquidPressureGeometry.capture(cut).cellSnapshot(cell);geometryClose(cutShape.volume(),.875,"Cut cube volume");
+		for(int axis=0;axis<3;axis++)geometryClose(cutShape.centroid().component(axis),1+15.0/28,"Cut cube centroid");
+		long walls=cutShape.facets().stream().filter(f->f.kind()==LiquidPressureGeometry.FacetKind.WALL && f.peerCell()==cell).count();
+		check(walls==3,"Cut cube omitted internal solid microfacets");verifyPressureShapeGauss(cutShape);
+		var slanted=pressureGeometryDomain();slanted.setVolume(1,1,1,5F/6);slanted.setVolume(0,1,1,1);
+		slanted.setVolume(1,0,1,1);slanted.setVolume(1,1,0,1);
+		for(int p=0;p<slanted.particles.count();p++)if(slanted.particleCellIndex(p)==cell) {
+			slanted.particles.setPositionX(p,1.45F);slanted.particles.setPositionY(p,1.45F);slanted.particles.setPositionZ(p,1.45F);
+		}
+		slanted.rebuildGridFromParticles();
+		var plane=slanted.pressurePhaseGeometry;double nx=plane.planeNormal(cell,0);
+		check(nx>0 && nx==plane.planeNormal(cell,1) && nx==plane.planeNormal(cell,2),"Slanted analytic plane changed symmetry");
+		double missingLength=3-plane.planeOffset(cell)/nx,missingVolume=missingLength*missingLength*missingLength/6;
+		var tetra=LiquidPressureGeometry.capture(slanted).cellSnapshot(cell);
+		geometryClose(tetra.volume(),1-missingVolume,"Slanted positive profile volume");
+		for(int axis=0;axis<3;axis++)geometryClose(tetra.firstMoment().component(axis),1-missingVolume+.5-missingVolume*(1-missingLength/4),"Slanted profile first moment");
+		verifyPressureShapeGauss(tetra);
+		double[] freeArea=new double[3];double[][] freeFirst=new double[3][3];
+		for(var fragment:tetra.freeFragments())for(int a=0;a<3;a++) {
+			freeArea[a]+=fragment.areaNormal().component(a);
+			for(int b=0;b<3;b++)freeFirst[a][b]+=fragment.normalFirstMoment().row(a).component(b);
+		}
+		for(int a=0;a<3;a++){geometryClose(freeArea[a],missingLength*missingLength/2,"Slanted free oriented area");
+			for(int b=0;b<3;b++)geometryClose(freeFirst[a][b],missingLength*missingLength/2*(2-missingLength/3),"Slanted free normal first moment");}
+		// A narrow triangle's central Gram must survive subtraction of much larger raw world moments.
+		double delta=Math.scalb(1.0,-24);
+		var narrow=LiquidPressureMoments.integrate(new double[][]{{.5,.5+delta,.5},{.5,.5,.5+delta}},0,1,cell,cube);
+		double expected=narrow.area()*delta*delta/18;
+		check(Math.abs(narrow.centeredSecondMoment(1,1,narrow.centroid())-expected)<=64*Math.ulp(expected),"Narrow wet trace lost its positive second moment");
+	}
+	private static void microFaceAlignedInterfacesPreserveTraction() {
+		for(int axis=0;axis<3;axis++)for(int sign:new int[]{-1,1}) {
+			var d=pressureGeometryDomain();int count=9*2*8,marker=0;float[] positions=new float[4*count];
+			for(int other=0;other<3;other++)for(int tangent=0;tangent<3;tangent++)for(int layer=0;layer<2;layer++)for(int slot=0;slot<8;slot++) {
+				int coordinate=layer==0?(sign>0?0:2):1;float height=layer==0?1:.5F;int base=4*marker++;
+				positions[base+axis]=coordinate+(sign<0&&layer==1?.5F:0)+height*(.25F+.5F*(slot>>axis&1));
+				positions[base+(axis+1)%3]=tangent+.25F+.5F*(slot>>(axis+1)%3&1);
+				positions[base+(axis+2)%3]=other+.25F+.5F*(slot>>(axis+2)%3&1);positions[base+3]=height/8;
+			}
+			d.restoreParticleState(new FlipParticleState(3,3,3,1,count,13.5F,positions,new float[3*count],new byte[27]));
+			d.ensureGrid();int cell=d.cellIndex(1,1,1);var shape=LiquidPressureGeometry.capture(d).cellSnapshot(cell);
+			geometryClose(d.pressurePhaseGeometry.planeNormal(cell,axis),sign,"Microface-aligned physical normal");
+			geometryClose(d.pressurePhaseGeometry.planeOffset(cell),sign*.5,"Microface-aligned physical offset");
+			check(shape.freeFragments().size()==4,"Microface-aligned liquid interface must have four unique wet-side pieces");
+			var gas=GasComplementGeometry.capture(3,3,3,1,d.geometry.solid,d.geometry.cutCells,d.pressurePhaseGeometry);
+			double area=0;double[] first=new double[3];
+			for(var fragment:shape.freeFragments()) {
+				check(gas.piece(8*cell+fragment.gasMicro())!=null && gas.piece(8*cell+fragment.microKey())==null,
+						"Aligned liquid interface attributed gas pressure to its full-wet integration microbox");
+				area+=fragment.areaNormal().component(axis);
+				for(int b=0;b<3;b++)first[b]+=fragment.normalFirstMoment().row(axis).component(b);
+			}
+			geometryClose(area,sign,"Aligned free interface oriented area");
+			for(int b=0;b<3;b++)geometryClose(first[b],sign*1.5,"Aligned free interface normal first moment");
+			geometryClose(-10*area,-10*sign,"Ten-pascal interface traction");
+			geometryClose(-area,-sign,"Finite-gas volume rate for uniform normal velocity");
+			verifyPressureShapeGauss(shape);
+		}
+	}
+	private static void verifyPressureShapeGauss(LiquidPressureGeometry.CellSnapshot shape) {
+		double[] normal=new double[3];double[][] first=new double[3][3];
+		for(var facet:shape.facets()) {
+			normal[facet.axis()]+=facet.sign()*facet.moments().area();
+			for(int b=0;b<3;b++)first[facet.axis()][b]+=facet.sign()*facet.moments().firstMoment().component(b);
+		}
+		for(var side:shape.sideWet()) {
+			// Shared liquid contacts are absent from the external-facet list; add just that remainder.
+			double area=side.moments().area();var moment=side.moments().firstMoment();
+			for(var facet:shape.facets())if(facet.microKey()==side.microKey()){area-=facet.moments().area();moment=moment.add(facet.moments().firstMoment().scale(-1));}
+			normal[side.axis()]+=side.sign()*area;
+			for(int b=0;b<3;b++)first[side.axis()][b]+=side.sign()*moment.component(b);
+		}
+		for(var free:shape.freeFragments())for(int a=0;a<3;a++) {
+			normal[a]+=free.areaNormal().component(a);
+			for(int b=0;b<3;b++)first[a][b]+=free.normalFirstMoment().row(a).component(b);
+		}
+		for(int a=0;a<3;a++){geometryClose(normal[a],0,"Closed shape oriented area");for(int b=0;b<3;b++)geometryClose(first[a][b],a==b?shape.volume():0,"Closed shape normal first moment");}
 	}
 
 	private static void fractionalHydrostaticColumnsBalanceGravity() {

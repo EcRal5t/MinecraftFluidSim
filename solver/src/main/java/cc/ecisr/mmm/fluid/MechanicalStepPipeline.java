@@ -30,6 +30,8 @@ final class MechanicalStepPipeline {
 		int lastPressureIterations();
 		ThermalDomainState thermalState();
 		boolean hasPendingPhaseVolumeWork();
+		boolean markerPressureActive();
+		double markerPressurePredictorKineticEnergyJoules();
 	}
 
 	private final Workspace state;
@@ -133,6 +135,12 @@ final class MechanicalStepPipeline {
 		}
 		gridToParticleStage.capturePreProjectionEnergy();
 		pressureStage.solve(dt);
+		boolean markerPressure = access.markerPressureActive();
+		if (captureAudit && markerPressure) {
+			double predictorEnergy = access.markerPressurePredictorKineticEnergyJoules();
+			audit.gridToParticleTransferJoules += predictorEnergy - stageKineticEnergy;
+			stageKineticEnergy = predictorEnergy;
+		}
 		int pressureIterations = access.lastPressureIterations();
 		boolean phaseGeometryPending = substep == 0 && access.hasPendingPhaseVolumeWork();
 		pressureStage.projectVelocities(dt);
@@ -141,7 +149,7 @@ final class MechanicalStepPipeline {
 		granularMechanicalStage.previewCollision(dt);
 		granularMechanicalStage.validateVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = markerPressure ? access.carrierKineticEnergyJoules() : access.gridAndGranularKineticEnergyJoules();
 			audit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
@@ -152,7 +160,7 @@ final class MechanicalStepPipeline {
 		}
 		bodyForceStage.enforceSolidFaceVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = markerPressure ? access.carrierKineticEnergyJoules() : access.gridAndGranularKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}

@@ -1,6 +1,7 @@
 package cc.ecisr.mmm.fluid;
 
 import java.util.Map;
+import java.util.Arrays;
 
 import cc.ecisr.mmm.granular.GranularDepositStore;
 import cc.ecisr.mmm.granular.GranularLimits;
@@ -36,6 +37,7 @@ final class BodyForceStage {
 		double thermalMarkerRelativeBuoyancy(int marker);
 		FluidMaterialRegistry materialRegistry();
 		boolean liquidGasTensionActive();
+		boolean usesCellLiquidPressure();
 		boolean liquidPairTensionActive();
 		double phaseFraction(int cell, int phase);
 		void smoothSurfaceTensionColor();
@@ -48,10 +50,17 @@ final class BodyForceStage {
 
 	private final Workspace state;
 	private final Access access;
+	private double[] markerVerticalIncrement = new double[0];
+	private final double[] faceVerticalIncrement;
+	private boolean markerPredictionReady;
+
+	/** Physical marker acceleration and the MAC increments already applied for observation. */
+	record MarkerPrediction(double[] verticalIncrement, double[] faceVerticalIncrement) { }
 
 	BodyForceStage(Workspace state, Access access) {
 		this.state = state;
 		this.access = access;
+		faceVerticalIncrement = new double[state.mac.velocityY.length];
 	}
 
 	void applyGranularPorousDamping(float dt) {
@@ -110,13 +119,19 @@ final class BodyForceStage {
 	}
 
 	void applyGravity(float dt) {
+		markerVerticalIncrement = new double[state.particles.count()];
+		Arrays.fill(markerVerticalIncrement, -state.config.gravity() * (double) dt);
+		Arrays.fill(faceVerticalIncrement, 0);
+		markerPredictionReady = true;
 		float impulse = state.config.gravity() * dt;
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
 			int face = access.yFaceIndex(x, y, z);
 			float open = access.pressureYFaceOpen(x, y, z);
 			if (open > 0 && (state.mac.p2gWeightY[face] > 0 || access.carrierFaceActive(below, above, open))) {
+				float before = state.mac.velocityY[face];
 				state.mac.velocityY[face] -= impulse;
+				faceVerticalIncrement[face] = (double) state.mac.velocityY[face] - before;
 			}
 		}
 	}
@@ -125,7 +140,9 @@ final class BodyForceStage {
 	void applyThermalBuoyancy(float dt) {
 		if (!access.thermalActive() || state.particles.count() == 0 || state.config.gravity() == 0.0F) return;
 		LiquidCarrierProperties properties = access.thermalBuoyancyProperties();
-		double scale = state.config.gravity() * dt;
+		double scale = state.config.gravity() * (double) dt;
+		if (markerPredictionReady) for (int marker = 0; marker < markerVerticalIncrement.length; marker++)
+			markerVerticalIncrement[marker] += scale * access.thermalMarkerRelativeBuoyancy(marker);
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
 			int face = access.yFaceIndex(x, y, z);
@@ -135,8 +152,18 @@ final class BodyForceStage {
 			if (access.carrierFaceActive(below, above, open)) relative = access.thermalFaceRelativeBuoyancy(below, above, properties);
 			else if (state.mac.p2gWeightY[face] > 0) relative = fringeRelativeBuoyancy(x, y, z);
 			else continue;
+			float before = state.mac.velocityY[face];
 			state.mac.velocityY[face] += (float) (scale * relative);
+			if (markerPredictionReady) faceVerticalIncrement[face] += (double) state.mac.velocityY[face] - before;
 		}
+	}
+
+	/** Each pressure preparation receives the current body-force prediction once. */
+	MarkerPrediction takeMarkerPrediction() {
+		if (!markerPredictionReady) return new MarkerPrediction(new double[state.particles.count()], new double[faceVerticalIncrement.length]);
+		if (markerVerticalIncrement.length != state.particles.count()) throw new IllegalStateException("Body-force marker layout changed");
+		markerPredictionReady = false;
+		return new MarkerPrediction(markerVerticalIncrement.clone(), faceVerticalIncrement.clone());
 	}
 
 	/** Mass average on the same trilinear P2G support for faces beyond the cell-centred carrier footprint. */
@@ -166,15 +193,9 @@ final class BodyForceStage {
 		return correction / mass;
 	}
 
-	/**
-	 * Balanced-force CSF momentum on liquid-gas carrier faces that have no pressure unknown on either
-	 * side. Resolved faces receive the same capillary stress as a sharp ghost-fluid jump; this slice
-	 * closes only the complementary sub-cell interface, avoiding both a missing contact-line force and
-	 * double application. The exact volume fraction is the discrete Heaviside field, while normals and
-	 * curvature are reconstructed from its smoothed copy.
-	 */
+	/** Complementary CSF for the mixed-solid pressure path's unresolved liquid-gas interfaces. */
 	void applyLiquidGasSurfaceTensionForce(float dt) {
-		if (!access.liquidGasTensionActive()) return;
+		if (!access.liquidGasTensionActive() || access.usesCellLiquidPressure()) return;
 		float scale = dt / (state.config.density() * state.config.cellSize());
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
 			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z), face = access.xFaceIndex(x, y, z);

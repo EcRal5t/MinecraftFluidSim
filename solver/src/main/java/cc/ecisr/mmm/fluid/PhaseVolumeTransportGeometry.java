@@ -39,6 +39,26 @@ final class PhaseVolumeTransportGeometry {
 		return geometry.swept(cell, neighbor, axis, width, positive, a, b, c, off);
 	}
 
+	void sweptMoments(int phase, int cell, int neighbor, int axis, double width, boolean positive,
+	                  int donorSupport, int receiverSupport, double[] result) {
+		sweptAffineMoments(phase, cell, neighbor, axis, positive, Math.copySign(width, positive ? 1 : -1),
+				0, 0, 1, donorSupport, receiverSupport, result);
+	}
+
+	void sweptAffineMoments(int phase, int cell, int neighbor, int axis, boolean positive,
+	                        double intercept, double tangentSlope, double otherSlope, double dtOverH,
+	                        int donorSupport, int receiverSupport, double[] result) {
+		double fraction = volumes[phase][cell];
+		if (!(fraction > 0)) { java.util.Arrays.fill(result, 0, 4, 0); return; }
+		double a = nx[phase][cell], b = ny[phase][cell], c = nz[phase][cell], off = offsets[phase][cell];
+		boolean uniform = a == 0 && b == 0 && c == 0;
+		boolean full = fraction >= geometry.capacity(cell);
+		LiquidAffineSweepGeometry.sweptPlaneMoments(domain, cell, neighbor, axis, positive, intercept, tangentSlope,
+				otherSlope, dtOverH, donorSupport, receiverSupport, full || uniform ? 0 : a,
+				full || uniform ? 0 : b, full || uniform ? 0 : c, full || uniform ? 1 : off, result);
+		if (uniform && !full) for (int i = 0; i < 4; i++) result[i] *= fraction / geometry.capacity(cell);
+	}
+
 	private double sample(int phase, int x, int y, int z, int fallback) {
 		if (x < 0 || x >= domain.sizeX || y < 0 || y >= domain.sizeY || z < 0 || z >= domain.sizeZ) return volumes[phase][fallback];
 		int cell = domain.cellIndex(x, y, z); return domain.geometry.solid[cell] ? volumes[phase][fallback] : volumes[phase][cell];
