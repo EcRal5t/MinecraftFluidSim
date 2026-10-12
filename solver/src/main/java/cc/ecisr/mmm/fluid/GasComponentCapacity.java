@@ -28,6 +28,19 @@ final class GasComponentCapacity {
 	/** Reads a complete current or planned solid-occupancy snapshot, including incoming coherent stock. */
 	static List<Component> capture(FluidDomain domain, GasComplementGeometry geometry,
 	                               PhaseLiquidGeometryEdit futureEdit, long[] occupiedSvq) {
+		return captureStock(domain,geometry,futureEdit,occupiedSvq,null);
+	}
+
+	/** Complete planned liquid tuples in cell order, including every zero-stock fixed component. */
+	static List<Component> capture(FluidDomain domain, GasComplementGeometry geometry,
+	                               long[] occupiedSvq, List<PhaseLiquidGeometryEdit> liquidStock) {
+		if (liquidStock == null) throw new IllegalArgumentException("Planned gas capacity requires complete liquid stock");
+		return captureStock(domain,geometry,null,occupiedSvq,List.copyOf(liquidStock));
+	}
+
+	private static List<Component> captureStock(FluidDomain domain, GasComplementGeometry geometry,
+	                                           PhaseLiquidGeometryEdit futureEdit, long[] occupiedSvq,
+	                                           List<PhaseLiquidGeometryEdit> liquidStock) {
 		if (domain == null || geometry == null || geometry.sizeX() != domain.sizeX
 				|| geometry.sizeY() != domain.sizeY || geometry.sizeZ() != domain.sizeZ
 				|| occupiedSvq == null || occupiedSvq.length != domain.cellCount)
@@ -45,7 +58,15 @@ final class GasComponentCapacity {
 
 		// Read authoritative columns directly; a captured geometry does not make an old marker index current.
 		var stock = new HashMap<Long, SignedDyadic>();
-		for (int marker = 0; marker < domain.particles.count(); marker++) {
+		if (liquidStock != null) {
+			if (liquidStock.size()!=domain.cellCount) throw new IllegalArgumentException("Planned gas liquid stock is incomplete");
+			for (int cell=0;cell<domain.cellCount;cell++) {
+				var row=liquidStock.get(cell);
+				if (row.cell()!=cell || row.collisionMask()!=geometry.collisionMask(cell))
+					throw new IllegalArgumentException("Planned gas liquid stock differs from its geometry");
+				for (var component:row.components()) stock.put(key(cell,component.supportMask()),component.volume());
+			}
+		} else for (int marker = 0; marker < domain.particles.count(); marker++) {
 			int cell = domain.particleCellIndex(marker);
 			if (futureEdit != null && cell == futureEdit.cell()) continue;
 			int support = CellRemapMicroTopology.positionSupport(domain.geometry.cutCells.mask(cell), domain.config.cellSize(),

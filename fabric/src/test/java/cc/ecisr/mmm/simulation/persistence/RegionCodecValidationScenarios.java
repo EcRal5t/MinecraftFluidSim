@@ -51,7 +51,7 @@ import java.util.UUID;
 
 abstract class RegionCodecValidationScenarios extends RegionPersistenceValidationSupport {
 	static void validateThermalCodec() throws Exception {
-		validateGasLineageCodec();
+		validateGasPieceCodec();
 		FluidRegion region = populatedRegion(new UUID(27L, 28L));
 		FlipParticleState pure = region.domain().exportParticleState();
 		float[] positions = pure.copyPositionVolume();
@@ -246,29 +246,47 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		expectIOException(() -> codec.decodeManifest(previousVersion), "previous thermal payload schema was accepted");
 	}
 
-	private static void validateGasLineageCodec() throws Exception {
+	static void validateGasPieceCodec() throws Exception {
 		var network = new cc.ecisr.mmm.fluid.air.AirNetwork();
 		network.addNode(1.0, 1.0);
 		network.addNode(2.0, 2.0);
-		GasStateSnapshot snapshot = GasStateSnapshot.capture(3, 2, 1,
-				new int[]{2, 0, 0, 1, 0, 0}, new int[]{2, 2, -1, 1, 1, 0}, network, "");
-		require(snapshot.nodes().get(0).inventory().equals(network.inventory(2))
-				&& snapshot.nodes().get(1).inventory().equals(network.inventory(1))
-				&& Arrays.equals(snapshot.cellLineageOrdinal(), new int[]{1, 1, -1, 2, 2, 0}),
-				"canonical gas ordering separated partial-cell lineage from its inventory");
+		int[] pieces = new int[48]; Arrays.fill(pieces, -1);
+		pieces[3] = 1; pieces[7] = 2; pieces[8] = 0; pieces[9] = 2;
+		GasStateSnapshot snapshot = GasStateSnapshot.capture(3, 2, 1, pieces, network, "");
+		require(snapshot.nodes().get(0).inventory().equals(network.inventory(1))
+				&& snapshot.nodes().get(1).inventory().equals(network.inventory(2))
+				&& snapshot.nodes().get(0).topologyKey() == 3 && snapshot.nodes().get(1).topologyKey() == 7,
+				"piece snapshot lost same-cell independent chambers or reordered node inventories");
 		GasRegionStateCodec codec = new GasRegionStateCodec();
-		byte[] payload = codec.encodeSection(new GasRegionStateCodec.SectionData(
-				snapshot.cellNodeOrdinal(), snapshot.cellLineageOrdinal()));
+		var section = new GasRegionStateCodec.SectionData(snapshot.pieceNodeOrdinal());
+		pieces[3] = -1; int[] alias = section.pieceNodeOrdinal(); alias[7] = -1;
+		require(section.pieceNodeOrdinal()[3] == 1 && section.pieceNodeOrdinal()[7] == 2,
+				"gas section aliases primary piece membership");
+		byte[] payload = codec.encodeSection(section);
 		var restored = codec.decodeSection(payload, 6, 2);
-		require(Arrays.equals(restored.cellNodeOrdinal(), snapshot.cellNodeOrdinal())
-				&& Arrays.equals(restored.cellLineageOrdinal(), snapshot.cellLineageOrdinal()),
-				"gas section lost interface lineage or unowned/ambient distinction");
+		require(Arrays.equals(restored.pieceNodeOrdinal(), snapshot.pieceNodeOrdinal()),
+				"gas section lost full 8N memberships or absent/ambient distinction");
 		expectIOException(() -> codec.decodeSection(Arrays.copyOf(payload, payload.length - 4), 6, 2),
-				"gas section accepted missing lineage");
+				"gas section accepted missing final micro piece");
 		byte[] wrongOwner = payload.clone();
-		java.nio.ByteBuffer.wrap(wrongOwner).putInt(8 + 6 * Integer.BYTES, 2);
+		java.nio.ByteBuffer.wrap(wrongOwner).putInt(8 + 9 * Integer.BYTES, 3);
 		expectIOException(() -> codec.decodeSection(wrongOwner, 6, 2),
-				"gas section accepted membership/lineage owner mismatch");
+				"gas section accepted an unknown node owner");
+		byte[] negative = payload.clone(); java.nio.ByteBuffer.wrap(negative).putInt(8, -2);
+		expectIOException(() -> codec.decodeSection(negative, 6, 2), "gas section accepted invalid absent sentinel");
+		expectIOException(() -> codec.decodeSection(Arrays.copyOf(payload, payload.length + 1), 6, 2),
+				"gas section accepted trailing bytes");
+		expectIOException(() -> codec.decodeSection(payload, Integer.MAX_VALUE, 2), "gas section piece count overflow");
+		expectIOException(() -> codec.decodeSection(payload, 524288, 2), "gas section allocation exceeded 16 MiB");
+		var manifest = new GasRegionStateCodec.ManifestData(GasRegionStateCodec.CAP_MATERIALS | GasRegionStateCodec.CAP_GAS,
+				snapshot.registryFingerprint(), "", snapshot.nodes().stream()
+				.map(n -> new GasRegionStateCodec.NodeData(n.topologyKey(), n.inventory())).toList(),
+				snapshot.externalSource(), snapshot.escapedSink(), snapshot.massRoundoff(), snapshot.residualRoundoff(),
+				List.of(new GasRegionStateCodec.SectionLedger(new RegionSectionState.SectionKey(0, 0, 0), 3)));
+		var decodedManifest = codec.decodeManifest(codec.encodeManifest(manifest));
+		require(decodedManifest.sectionLedgers().getFirst().sealedPieceCount() == 3
+				&& decodedManifest.nodes().getFirst().topologyKey() == 3 && decodedManifest.nodes().getLast().topologyKey() == 7,
+				"gas manifest lost sealed piece count or global micro keys");
 	}
 
 	/** A sealed, inventory-free cavity is durable vacuum, not a malformed gas thermal node. */

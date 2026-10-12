@@ -19,21 +19,18 @@ public final class GasPressureBoundary {
 	}
 
 	public boolean pressureActive() { return domain.gasState.pressureActive; }
-	public boolean topologyInitialized() { return domain.gasState.cellNodeId != null; }
+	public boolean topologyInitialized() { return frame() != null; }
 
-	/** Node owning the air cell: 0 ambient, at least 1 sealed; requires an initialized topology. */
-	public int cellNode(int cell) { return domain.gasState.cellNodeId[cell]; }
+	/** Unique common gas-piece owner for observation; absent or mixed cells return -1. */
+	public int cellNode(int cell) { return frame() == null ? -1 : frame().commonCellNode(cell); }
 
-	/** Sealed-or-lineage node owning the cell, or -1 when no scan has run yet. */
-	public int rawCellNode(int cell) {
-		if (domain.gasState.cellNodeId == null) return -1;
-		int node = domain.gasState.cellNodeId[cell];
-		return node < 0 && domain.gasState.cellLineageNodeId != null
-				? domain.gasState.cellLineageNodeId[cell] : node;
-	}
+	public int rawCellNode(int cell) { return cellNode(cell); }
+	/** Gas owner at canonical 8*cell+micro: -1 absent, 0 ambient, positive finite node. */
+	public int nodeOfPiece(int piece) { return frame() == null ? -1 : frame().nodeOfPiece(piece); }
+	GasRuntimeGeometry frame() { return domain.gasState.frame; }
 
-	public int previousSealedNodeCount() { return domain.gasState.previousSealedNodeCount; }
-	public int nodeCount() { return domain.gasState.network.nodeCount(); }
+	public int previousSealedNodeCount() { return nodeCount(); }
+	public int nodeCount() { return frame() == null ? 0 : frame().nodeCount(); }
 	public List<Integer> nodeIds() { return domain.gasState.network.nodeIds(); }
 	public GasInventory inventory(int node) { return domain.gasState.network.inventory(node); }
 	public GasAuditLedger sealedInventory() { return domain.gasState.network.sealedInventory(); }

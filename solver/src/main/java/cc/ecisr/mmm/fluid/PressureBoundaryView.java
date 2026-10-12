@@ -15,7 +15,20 @@ final class PressureBoundaryView {
 	}
 
 	boolean pressureActive() { return domain.gasState.pressureActive; }
-	int gasNodeOfAirCell(int airCell) { return domain.gasNodeOfAirCell(airCell); }
+	int gasNodeCount() { return domain.gasBoundary.nodeCount(); }
+	int gasNodeOfAirCell(int airCell) { return wholeCellGasNode(domain, airCell); }
+	/** Coarse pressure rows require one actual gas owner; pressure-air fringe retains its derived extension. */
+	static int wholeCellGasNode(FluidDomain domain, int cell) {
+		var frame = domain.gasState.frame; int owner = -1;
+		if (frame == null) return -1;
+		for (int micro = 0; micro < 8; micro++) {
+			int node = frame.nodeOfPiece(8 * cell + micro); if (node < 0) continue;
+			if (owner >= 0 && owner != node)
+				throw new GasTopologyBlockedException("Whole-cell pressure coupling cannot resolve multiple gas owners at cell " + cell);
+			owner = node;
+		}
+		return owner >= 0 ? owner : domain.gasNodeOfAirCell(cell);
+	}
 	boolean gasNodeHasContinuumState(int node) {
 		return node > 0 && !domain.gasState.network.inventory(node).isEmpty();
 	}
@@ -36,5 +49,8 @@ final class PressureBoundaryView {
 	}
 	double gasPressureOfNode(int node) { return domain.gasBoundary.nodeGaugePressurePa(node); }
 	/** Cell-referenced cavity pressure with the ambient/inactive zero gate. */
-	float gasPressureOfAirCell(int airCell) { return domain.gasPressureOfAirCell(airCell); }
+	float gasPressureOfAirCell(int airCell) {
+		int node = wholeCellGasNode(domain, airCell);
+		return node > 0 ? (float) gasPressureOfNode(node) : 0;
+	}
 }

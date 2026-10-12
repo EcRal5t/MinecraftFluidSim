@@ -55,8 +55,8 @@ final class DomainInventoryLifecyclePlanner {
 		FluidDomain.CondensedClearPlan condensed = domain.planRemoveAllCondensedExact();
 		FluidDomain.GranularClearPlan granular = planGranularClear();
 		GasTopologyCoordinator.GasTopologyPlan gasTopology = null;
-		if (domain.gasState.cellNodeId != null) {
-			domain.ensureGrid();
+		if (domain.gasState.frame != null) {
+			domain.ensureInventoryGrid();
 			gasTopology = domain.gasTopologyCoordinator.planFromFreshScan();
 		}
 		ThermalDomainState.Revision thermalRevision = domain.thermalState == null

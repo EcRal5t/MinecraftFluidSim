@@ -7,27 +7,33 @@ final class GranularCoupledPressureSolver {
 	private final FluidDomain domain;
 	private final GranularImplicitDrag drag;
 	private final GranularPressurePreconditioner preconditioner;
-	private final double[] pressure, rhs, residual, direction, product, diagonal, preconditioned;
-	private final int[] unknowns;
+	private double[] pressure = new double[0], rhs = new double[0], residual = new double[0], direction = new double[0];
+	private double[] product = new double[0], diagonal = new double[0], preconditioned = new double[0];
+	private int[] unknowns = new int[0];
 	private int count;
 
 	GranularCoupledPressureSolver(FluidDomain domain, GranularImplicitDrag drag) {
 		this.domain = domain;
 		this.drag = drag;
 		preconditioner = new GranularPressurePreconditioner(domain);
-		int size = 2 * domain.cellCount + 1;
-		pressure = new double[size]; rhs = new double[size]; residual = new double[size];
-		direction = new double[size]; product = new double[size]; diagonal = new double[size];
-		preconditioned = new double[size];
-		unknowns = new int[size];
+		ensureCapacity();
+	}
+	private void ensureCapacity() {
+		int size = Math.addExact(domain.cellCount, Math.addExact(domain.projection.gasNodeCount, 1));
+		if (pressure.length >= size) return;
+		pressure = Arrays.copyOf(pressure, size); rhs = Arrays.copyOf(rhs, size); residual = Arrays.copyOf(residual, size);
+		direction = Arrays.copyOf(direction, size); product = Arrays.copyOf(product, size); diagonal = Arrays.copyOf(diagonal, size);
+		preconditioned = Arrays.copyOf(preconditioned, size); unknowns = Arrays.copyOf(unknowns, size);
 	}
 
 	double[] pressure() { return pressure; }
 	void reset() {
+		ensureCapacity();
 		Arrays.fill(pressure, 0); Arrays.fill(direction, 0);
 	}
 
 	PressureProjectionResult solve(GranularPressureCoupling granular, double target) {
+		ensureCapacity();
 		count = 0;
 		double h = domain.config.cellSize();
 		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {

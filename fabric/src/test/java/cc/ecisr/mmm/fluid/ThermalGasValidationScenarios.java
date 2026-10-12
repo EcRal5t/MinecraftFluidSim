@@ -871,10 +871,16 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			var domain = new FluidDomain(8, 4, 4,
 					new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0), 128);
 			domain.sealDomainBoundary(); domain.setVolume(0, 0, 0, .125F);
-			int[] membership = new int[128], lineage = new int[128];
-			Arrays.fill(membership, 1); Arrays.fill(lineage, 1); membership[0] = 0;
+			domain.bindGasRegistry(gas);
+			var geometryTwin = new FluidDomain(8, 4, 4, domain.config, 128);
+			geometryTwin.sealDomainBoundary();
+			geometryTwin.restoreParticleState(domain.exportParticleState());
+			geometryTwin.bindGasRegistry(gas);
+			var topology = geometryTwin.bootstrapGasState("");
+			require(topology.nodes().size() == 1, "Gas-density fixture must have one actual gas component");
 			domain.restoreGasState(new cc.ecisr.mmm.fluid.air.GasStateSnapshot(8, 4, 4, gas.fingerprint(), "",
-					List.of(new cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node(1, inventory)), membership, lineage,
+					List.of(new cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node(topology.nodes().getFirst().topologyKey(), inventory)),
+					topology.pieceNodeOrdinal(),
 					cc.ecisr.mmm.fluid.air.GasAuditLedger.of(inventory), cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY,
 					SignedDyadic.ZERO, SignedDyadic.ZERO), gas);
 			domain.bindThermal(thermal, liquids, 300);
@@ -935,6 +941,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					scenario == 4 ? 1_000_000_000L : scenario == 5 ? 100_000_000L : 0L);
 			var before = domain.captureAuthoritativeState();
 			var beforeMarkers = domain.exportMaterialParticleState();
+			int bridgeCell = domain.cellIndex(phaseTopologyScene(false).bridges()[0], 1, 1);
 			var beforeThermal = domain.exportThermalParticleState();
 			var beforeGas = domain.gasState.network.sealedInventory();
 			var beforeNodes = List.of(domain.gasState.network.inventory(1), domain.gasState.network.inventory(2));
@@ -960,7 +967,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					&& domain.gasState.network.auditClosed(), "phase topology successor lost physical mass or energy");
 			if (components == 33 || energyOverflow || saturationOvershoot) {
 				var afterThermal = domain.exportThermalParticleState();
-				require(stats.operations() == 0 && domain.particleCount() == 1
+				require(stats.operations() == 0 && domain.particleCount() == beforeMarkers.particleCount()
 						&& domain.gasState.network.nodeCount() == 2 && domain.carrierMutationRevision == markerRevision
 						&& domain.thermalState.thermalRevision().liquid() == thermalRevision.liquid()
 						&& domain.thermalState.thermalRevision().granular() == thermalRevision.granular()
@@ -971,7 +978,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						&& domain.gasState.network.availableVolume(2) == beforeGasVolume[1]
 						&& domain.gasState.network.externalSource().equals(beforeSource)
 						&& domain.gasState.network.escapedSink().equals(beforeSink)
-						&& domain.thermalAudit().equals(beforeAudit) && domain.pendingPhaseCellVolume[22].equals(SignedDyadic.ZERO)
+						&& domain.thermalAudit().equals(beforeAudit) && domain.pendingPhaseCellVolume[bridgeCell].equals(SignedDyadic.ZERO)
 						&& Arrays.equals(beforePending, domain.pendingPhaseCellVolume)
 						&& Arrays.equals(beforeMarkers.copyPositionVolume(), domain.exportMaterialParticleState().copyPositionVolume())
 						&& Arrays.equals(beforeMarkers.copyParticleMass(), domain.exportMaterialParticleState().copyParticleMass())
@@ -982,9 +989,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			} else {
 				require(stats.operations() == 1 && stats.boiledCells() == 1 && domain.particleCount() == 0
 						&& domain.gasState.network.nodeCount() == 1
-						&& domain.pendingPhaseCellVolume[22].equals(SignedDyadic.of(-1, -3)),
+						&& domain.pendingPhaseCellVolume[bridgeCell].equals(SignedDyadic.of(-1, 0)),
 						"a complete 32-component phase successor was not committed");
-				require(phase.saturation(transition, domain.thermalState.observeTemperatureInCell(22, domain.thermalMarkerContext()),
+				require(phase.saturation(transition, domain.gasNodeTemperatureK(1),
 						domain.gasState.network.inventory(1), domain.thermalState.requireGasNodeState(1,
 								domain.gasState.network.inventory(1), domain.thermalState.gasNodeEnergy(1, domain.gasState.network),
 								domain.gasState.network)).direction() != GasLiquidPhaseModel.Direction.CONDENSE,
@@ -1000,7 +1007,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					&& Arrays.equals(restoredThermal.copyInternalEnergy(), after.thermal().copyInternalEnergy())
 					&& Arrays.equals(restoredThermal.copyActiveParcelEnergy(), after.thermal().copyActiveParcelEnergy())
 					&& Arrays.equals(restoredThermal.copyGasNodeEnergy(), after.thermal().copyGasNodeEnergy())
-					&& FluidDomain.restoreAuthoritativeState(before).particleCount() == 1,
+					&& FluidDomain.restoreAuthoritativeState(before).particleCount() == beforeMarkers.particleCount(),
 					"prospective phase topology did not retain a restorable state");
 		}
 		phaseDirectionsFollowCurrentCavity();
@@ -1008,15 +1015,16 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 
 	private static void phaseDirectionsFollowCurrentCavity() {
 		FluidDomain domain = phaseTopologyDomain(1, 0, 0, 0L, true);
+		int[] samples = phaseTopologyScene(true).cavitySamples();
 		var initial = domain.captureAuthoritativeState();
 		var energy = domain.exactInternalEnergy();
 		var mass = actualPhaseMass(domain);
 		var phase = domain.thermalState.gasLiquidPhase(domain.gasState.network);
 		var transition = domain.thermalState.registry().transitions().getFirst();
-		require(domain.gasState.network.nodeCount() == 3 && domain.particleCount() == 2
-				&& domain.gasState.cellNodeId[domain.cellIndex(1, 1, 1)] == 1
-				&& domain.gasState.cellNodeId[domain.cellIndex(4, 1, 1)] == 2
-				&& domain.gasState.cellNodeId[domain.cellIndex(6, 1, 1)] == 3,
+		require(domain.gasState.network.nodeCount() == 3 && domain.totalVolumeExact() == 2
+				&& domain.gasState.frame.commonCellNode(domain.cellIndex(samples[0], 1, 1)) == 1
+				&& domain.gasState.frame.commonCellNode(domain.cellIndex(samples[1], 1, 1)) == 2
+				&& domain.gasState.frame.commonCellNode(domain.cellIndex(samples[2], 1, 1)) == 3,
 				"independent interfaces did not begin in three distinct sealed cavities");
 		for (int node = 1; node <= 3; node++) require(phase.saturation(transition, 400,
 				domain.gasState.network.inventory(node), domain.thermalState.requireGasNodeState(node,
@@ -1028,7 +1036,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var joinedStats = domain.stepGasPhaseChangeOnly(2);
 		var firstStats = separate.stepGasPhaseChangeOnly(1);
 		require(firstStats.operations() == 1 && separate.gasState.network.nodeCount() == 2
-				&& separate.gasState.cellNodeId[separate.cellIndex(6, 1, 1)] == 2,
+				&& separate.gasState.frame.commonCellNode(separate.cellIndex(samples[2], 1, 1)) == 2,
 				"the first bridge did not merge its cavities and renumber the independent cavity");
 		separate = FluidDomain.restoreAuthoritativeState(separate.captureAuthoritativeState());
 		var secondStats = separate.stepGasPhaseChangeOnly(1);
@@ -1088,27 +1096,20 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var gasRegistry = new GasRegistry(gasDefinitions,
 				List.of(new GasRegistry.AmbientFraction("test:g0", ExactRational.ONE)));
 		var transition = new ThermalPhaseTransition("test:topology_phase", water.id(), "test:tg0", 300,
-				SolidVolume.SVQ_PER_CELL / 8, SolidVolume.SVQ_PER_BV / 8, ExactRational.parse("125/8"),
+				SolidVolume.SVQ_PER_CELL, SolidVolume.SVQ_PER_BV, ExactRational.of(125),
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
 		var registry = new ThermalRegistry(materials, List.of(), List.of(transition), "", grains.fingerprint());
-		int width = independentInterface ? 9 : 5;
-		int[] bridges = independentInterface ? new int[]{3, 7} : new int[]{2};
+		var scene = phaseTopologyScene(independentInterface);
+		int width = scene.width();
+		int[] bridges = scene.bridges();
 		FluidDomain domain = new FluidDomain(width, 3, 3,
 				new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
 		domain.sealDomainBoundary();
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < width; x++)
-			if (y != 1 || z != 1 || x == 0 || x == width - 1 || independentInterface && x == 5)
+			if (y != 1 || z != 1 || x == 0 || x == width - 1 || x == scene.separatingWall())
 				domain.setSolid(x, y, z, true);
-		for (int bridge : bridges) domain.setVolume(bridge, 1, 1, .125F);
+		for (int bridge : bridges) domain.setVolume(bridge, 1, 1, 1);
 		domain.bindGranular(grains, liquids, BuiltinFluidMaterials.createRegistry());
-		int sand = grains.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
-		long svq = grains.material(sand).maximumActiveParcelSvq();
-		double mass = svq / (double) SolidVolume.SVQ_PER_BV * grains.material(sand).referenceDensity();
-		for (int bridge : bridges) {
-			domain.granularState.parcels.add(new cc.ecisr.mmm.granular.GranularParcelStore.Parcel(
-					(bridge + .5F) * .5F, .75F, .75F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
-			domain.markGranularExternalChange(domain.cellIndex(bridge, 1, 1));
-		}
 		domain.bindGasRegistry(gasRegistry); domain.bootstrapGasState("");
 		domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
 		for (int node = 1; node <= (independentInterface ? 3 : 2); node++) {
@@ -1125,8 +1126,16 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		if (extraVaporNanos > 0) domain.gasState.network.commitPhaseSource(extraVaporNode,
 				new GasInventory(List.of(new GasComponentAmount("test:g0", extraVaporNanos,
 						1.0 / 1024, List.of(), 1.0 / 1024))));
-		domain.bindThermal(registry, liquids, energyReference != 0 ? 301 : 400); domain.stepGasPhaseChangeOnly(0);
+		domain.bindThermal(registry, liquids, energyReference != 0 ? 300 : 400); domain.stepGasPhaseChangeOnly(0);
 		return FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+	}
+
+	private record PhaseTopologyScene(int width, int[] bridges, int separatingWall, int[] cavitySamples) { }
+
+	private static PhaseTopologyScene phaseTopologyScene(boolean independentInterface) {
+		// Five cells per side admit the full vapor batch; the independent scene keeps a one-cell supersaturated middle cavity.
+		return independentInterface ? new PhaseTopologyScene(26, new int[]{11,24}, 13, new int[]{1,12,14})
+				: new PhaseTopologyScene(13, new int[]{6}, -1, new int[]{1,7});
 	}
 
 	private static void gasRemapPlansRequireTheirPreparingOwner() {
@@ -1166,16 +1175,16 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			domain.sealDomainBoundary();
 			for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 5; x++)
 				if (!(y == 0 && z == 0 && x % 2 == 0)) domain.setSolid(x, y, z, true);
-			int[] membership = new int[20], lineage = new int[20]; Arrays.fill(lineage, -1);
+			int[] membership = new int[20 * 8]; Arrays.fill(membership, -1);
 			var nodes = new java.util.ArrayList<cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node>();
 			var source = cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY;
 			for (int i = 0; i < 3; i++) {
-				int cell = domain.cellIndex(i * 2, 0, 0); membership[cell] = lineage[cell] = i + 1;
+				int cell = domain.cellIndex(i * 2, 0, 0); Arrays.fill(membership, cell * 8, cell * 8 + 8, i + 1);
 				var inventory = new GasInventory(List.of(new GasComponentAmount(order.get(i), 125_000_000, 1, List.of(), 1)));
-				nodes.add(new cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node(cell, inventory)); source = source.add(inventory);
+				nodes.add(new cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node(cell * 8, inventory)); source = source.add(inventory);
 			}
 			domain.restoreGasState(new cc.ecisr.mmm.fluid.air.GasStateSnapshot(5, 2, 2, gas.fingerprint(), "", nodes,
-					membership, lineage, source, cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO), gas);
+					membership, source, cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO), gas);
 			domain.bindThermal(registry, liquids, 300);
 			domain.setSolid(1, 0, 0, false); domain.setSolid(3, 0, 0, false); domain.synchronizeGasTopologyForPersistence();
 			require(domain.gasNodeTemperatureK(1) == 300 && domain.exactInternalEnergy().equals(SignedDyadic.of(200))
@@ -1233,17 +1242,17 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				domain.setSolid(x, y, z, true);
 		if (initiallyAmbient) { domain.bindGasRegistry(gas); domain.bootstrapGasState(""); }
 		else {
-			int[] membership = new int[45], lineage = new int[45]; Arrays.fill(lineage, -1);
+			int[] membership = new int[45 * 8]; Arrays.fill(membership, -1);
 			var nodes = new java.util.ArrayList<cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node>();
 			var source = cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY;
 			for (int i = 0; i < 2; i++) {
-				int cell = domain.cellIndex(1 + 2 * i, 1, 1); membership[cell] = lineage[cell] = i + 1;
+				int cell = domain.cellIndex(1 + 2 * i, 1, 1); Arrays.fill(membership, cell * 8, cell * 8 + 8, i + 1);
 				var inventory = new GasInventory(List.of(new GasComponentAmount(i == 0 ? "test:a" : "test:b",
 						125_000_000, 1, List.of(), 1)));
-				nodes.add(new cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node(cell, inventory)); source = source.add(inventory);
+				nodes.add(new cc.ecisr.mmm.fluid.air.GasStateSnapshot.Node(cell * 8, inventory)); source = source.add(inventory);
 			}
 			domain.restoreGasState(new cc.ecisr.mmm.fluid.air.GasStateSnapshot(5, 3, 3, gas.fingerprint(), "", nodes,
-					membership, lineage, source, cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO), gas);
+					membership, source, cc.ecisr.mmm.fluid.air.GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO), gas);
 		}
 		domain.bindThermal(thermal, liquids, 300);
 		return FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
@@ -1375,31 +1384,23 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.bootstrapGasState("");
 		domain.bindThermal(thermal, liquids, 300.0);
 		require(domain.gasBoundary().nodeCount() == 1, "persistence topology fixture did not start as one cavity");
-		try {
-			var reference = GasTopologyCoordinator.class.getDeclaredMethod("planWithOverlaps", AirCavityScanner.Result.class, boolean.class);
-			reference.setAccessible(true);
-			for (float volume : new float[] {0.25F, 0.75F, 0.5F}) {
-				domain.setVolume(0, 0, 0, volume); domain.ensureGrid();
-				var scan = new AirCavityScanner(4, 4, 4, config.cellSize(), domain.cellCount)
-						.scanRetainingClosedLineages(domain.geometry.solid, domain.markerGrid.markerCount,
-								domain.markerGrid.exactCellMarkerVolume, domain.geometry.cutCells,
-								domain.pressureGranularCoupling, domain.gasState.cellLineageNodeId, 1);
-				for (boolean defer : new boolean[] {false, true}) {
-					var actual = domain.gasTopologyCoordinator.plan(scan, defer).thermalPlan();
-					var expected = ((GasTopologyCoordinator.GasTopologyPlan) reference.invoke(domain.gasTopologyCoordinator, scan, defer)).thermalPlan();
-					require(Arrays.equals(actual.nodeEnergy(), expected.nodeEnergy())
-							&& actual.sourceEnergy().equals(expected.sourceEnergy()) && actual.sinkEnergy().equals(expected.sinkEnergy())
-							&& actual.mechanicalWork().equals(expected.mechanicalWork()) && actual.roundoff().equals(expected.roundoff()),
-							"surviving single-cavity compression or deferred-phase remap changed the general energy plan");
-				}
-			}
-		} catch (ReflectiveOperationException failed) { throw new AssertionError(failed); }
+		for (float volume : new float[] {0.25F, 0.75F, 0.5F}) {
+			double oldV = domain.gasBoundary().availableVolume(1), oldT = domain.gasNodeTemperatureK(1);
+			GasInventory stock = domain.gasBoundary().inventory(1);
+			double specificR = GasRegistry.STANDARD_PRESSURE_PA * AirNetwork.cubicMeters(stock.standardVolumeNanos())
+					/ (stock.totalMass() * GasRegistry.STANDARD_TEMPERATURE_K);
+			domain.setVolume(0, 0, 0, volume); domain.synchronizeGasTopologyForPersistence();
+			double expectedT = oldT * Math.pow(oldV / domain.gasBoundary().availableVolume(1), specificR / 718.0);
+			require(Math.abs(domain.gasNodeTemperatureK(1) - expectedT) < 2e-9
+					&& domain.gasBoundary().inventory(1).equals(stock)
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"actual cavity compression/expansion differs from the independent ideal-gas adiabat");
+		}
 
-
-		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) domain.setVolume(2, y, z, 1.0F);
-		FlipMaterialParticleState carriers = domain.exportMaterialParticleState();
 		GasInventory beforeGas = domain.gasBoundary().inventory(1);
 		var stale = domain.exportGasState("");
+		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) domain.setVolume(2, y, z, 1.0F);
+		FlipMaterialParticleState carriers = domain.exportMaterialParticleState();
 		FluidDomain rejected = new FluidDomain(4, 4, 4, config, 1_024);
 		rejected.sealDomainBoundary();
 		rejected.restoreMaterialParticleState(carriers);
@@ -1470,51 +1471,87 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						vacuumBirth.thermalAudit().expectedInventory()),
 				"first unowned sealed cavity was not preserved as explicit vacuum");
 
-		FluidDomain vacuumMerge = new FluidDomain(2, 2, 2, config, 128);
-		vacuumMerge.sealDomainBoundary();
-		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) {
-			vacuumMerge.setSolid(x, y, z, true);
-		}
-		vacuumMerge.setSolidMicroMask(0, 0, 0, 0xAA);
-		vacuumMerge.bindGasRegistry(gas);
-		vacuumMerge.bootstrapGasState("");
-		vacuumMerge.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
-		SignedDyadic energyBeforeVacuum = vacuumMerge.exactInternalEnergy();
-		double temperatureBeforeVacuum = vacuumMerge.thermalState.gasTemperature(
-				1, vacuumMerge.gasState.network);
-		vacuumMerge.setSolidMicroMask(1, 0, 0, 0x55);
-		vacuumMerge.synchronizeGasTopologyForPersistence();
-		require(vacuumMerge.gasBoundary().nodeCount() == 2
-				&& vacuumMerge.gasBoundary().inventory(2).isEmpty(),
-				"new closed cut-cell cavity did not remain an explicit vacuum node");
-		vacuumMerge.setSolidMicroMask(0, 0, 0, 0x55);
-		vacuumMerge.setSolidMicroMask(1, 0, 0, 0xAA);
-		vacuumMerge.synchronizeGasTopologyForPersistence();
-		require(vacuumMerge.gasBoundary().nodeCount() == 1
-				&& vacuumMerge.exactInternalEnergy().equals(energyBeforeVacuum)
-				&& close(vacuumMerge.thermalState.gasTemperature(1, vacuumMerge.gasState.network),
-					temperatureBeforeVacuum),
-				"gas/vacuum topology merge created reversible boundary work or changed U");
+		// A fixed-mask swap removes every old gas support; inventory has no certified swept route.
+		// Reject that unsupported edit without publishing a false successor or thermal work.
+		FluidDomain unsupportedSwap = new FluidDomain(2, 2, 2, config, 128);
+		unsupportedSwap.sealDomainBoundary();
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++)
+			unsupportedSwap.setSolid(x, y, z, true);
+		unsupportedSwap.setSolidMicroMask(0, 0, 0, 0xAA);
+		unsupportedSwap.bindGasRegistry(gas); unsupportedSwap.bootstrapGasState("");
+		unsupportedSwap.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
+		var gasBeforeSwap = unsupportedSwap.exportGasState("");
+		var thermalBeforeSwap = unsupportedSwap.thermalAudit();
+		unsupportedSwap.setSolidMicroMask(0, 0, 0, 0x55);
+		expectFailure(unsupportedSwap::synchronizeGasTopologyForPersistence,
+				"gas stock without positive spatial overlap acquired an invented successor");
+		var gasAfterSwap = unsupportedSwap.exportGasState("");
+		require(Arrays.equals(gasBeforeSwap.pieceNodeOrdinal(), gasAfterSwap.pieceNodeOrdinal())
+				&& gasBeforeSwap.nodes().equals(gasAfterSwap.nodes())
+				&& gasBeforeSwap.externalSource().equals(gasAfterSwap.externalSource())
+				&& gasBeforeSwap.escapedSink().equals(gasAfterSwap.escapedSink())
+				&& thermalBeforeSwap == unsupportedSwap.thermalAudit(),
+				"rejected unsupported gas remap partially changed inventory or energy");
+		gasExpansionRetainsTheOldControlVolume();
 
-		// The scanner's local void weights can exceed its globally normalized closed
-		// capacity when liquid markers cluster. An unowned local fringe adds no new
-		// control volume if that global capacity has stayed constant.
-		int[] membership = vacuumMerge.gasState.cellNodeId.clone();
-		int[] lineage = vacuumMerge.gasState.cellLineageNodeId.clone();
-		double[] localVolumes = new double[8];
-		for (int cell = 0; cell < 8; cell++) if (membership[cell] > 0) localVolumes[cell] = 0.0625;
-		int unowned = vacuumMerge.cellIndex(0, 1, 0);
-		require(lineage[unowned] < 0, "normalized remap fixture needs an unowned fringe");
-		membership[unowned] = lineage[unowned] = 1;
-		localVolumes[unowned] = 0.125;
-		var normalizedRemap = vacuumMerge.gasTopologyCoordinator.plan(new AirCavityScanner.Result(
-				membership, lineage, localVolumes, 1,
-				new double[] {vacuumMerge.gasBoundary().availableVolume(1)}, List.of(), 3,
-				AirCavityScanner.StopReason.COMPLETED), false);
-		require(normalizedRemap.thermalPlan().mechanicalWork().equals(SignedDyadic.ZERO)
-				&& normalizedRemap.thermalPlan().nodeEnergy()[0]
-				== vacuumMerge.thermalState.gasNodeEnergy(1, vacuumMerge.gasState.network),
-				"normalized local fringe invented gas compression work at unchanged closed capacity");
+	}
+
+	private static void gasExpansionRetainsTheOldControlVolume() {
+		var config = new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0);
+		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		var gas = BuiltinGasDefinitions.createRegistry();
+		var thermal = new ThermalRegistry(List.of(
+			new ThermalMaterialDefinition("test:expansion_water", ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.WATER.id(), 300, 0, .598, List.of(new ThermalMaterialDefinition.CaloricSegment(150,1500,4184))),
+			new ThermalMaterialDefinition("test:expansion_air", ThermalMaterialDefinition.CarrierKind.GAS,
+				BuiltinGasDefinitions.AIR, GasRegistry.STANDARD_TEMPERATURE_K, 0, .026,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(150,1500,718)))));
+		for (float initial : new float[] {1, .5F}) {
+			var domain = new FluidDomain(2, 2, 2, config, 128);
+			byte[] masks = new byte[8]; Arrays.fill(masks, (byte)255); masks[0] = masks[1] = 0;
+			domain.restoreParticleState(new FlipParticleState(2, 2, 2, .5F, 0, 0, new float[0], new float[0], masks));
+			domain.sealDomainBoundary(); domain.setVolume(1, 0, 0, initial);
+			domain.setMarkerMaterial(0, liquids, 0); domain.bindGasRegistry(gas); domain.bootstrapGasState("");
+			domain.bindThermal(thermal, liquids, 600);
+			double oldV = domain.gasBoundary().availableVolume(1); GasInventory stock = domain.gasBoundary().inventory(1);
+			double specificR = GasRegistry.STANDARD_PRESSURE_PA * AirNetwork.cubicMeters(stock.standardVolumeNanos())
+					/ (stock.totalMass() * GasRegistry.STANDARD_TEMPERATURE_K);
+			domain.removeVolumeNear(1, 0, 0, .5F, 0); domain.synchronizeGasTopologyForPersistence();
+			double expectedT = 600 * Math.pow(oldV / domain.gasBoundary().availableVolume(1), specificR / 718);
+			require(Math.abs(domain.gasNodeTemperatureK(1) - expectedT) < 2e-9
+					&& domain.gasBoundary().inventory(1).equals(stock) && domain.gasBoundary().auditClosed()
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"gas expansion suppressed work when a previously full liquid cell exposed new dry pieces");
+		}
+		var merged = new FluidDomain(3, 2, 2, config, 64);
+		merged.sealDomainBoundary();
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 3; x++)
+			if (y != 0 || z != 0) merged.setSolid(x, y, z, true);
+		merged.setVolume(1, 0, 0, 1);
+		merged.bindGasRegistry(gas); merged.bootstrapGasState(""); merged.setGasNodeStandardVolume(2, 0);
+		merged.bindThermal(thermal, liquids, 300);
+		require(merged.gasBoundary().nodeCount() == 2 && merged.gasBoundary().inventory(2).isEmpty(),
+				"liquid barrier did not separate actual gas and vacuum control volumes");
+		GasInventory stock = merged.gasBoundary().inventory(1);
+		double inheritedVolume = merged.gasBoundary().availableVolume(1) + merged.gasBoundary().availableVolume(2);
+		double oldEnergy = merged.thermalState.gasNodeEnergy(1, merged.gasState.network);
+		var source = merged.gasBoundary().externalSource(); var sink = merged.gasBoundary().escapedSink();
+		var work = merged.thermalAudit().mechanicalWork();
+		double specificR = GasRegistry.STANDARD_PRESSURE_PA * AirNetwork.cubicMeters(stock.standardVolumeNanos())
+				/ (stock.totalMass() * GasRegistry.STANDARD_TEMPERATURE_K);
+		require(merged.removeVolumeNear(1, 0, 0, 1, 0) == 1, "full liquid barrier was not removed");
+		merged.synchronizeGasTopologyForPersistence();
+		double expected = 300 * Math.pow(inheritedVolume / merged.gasBoundary().availableVolume(1), specificR / 718);
+		require(merged.particleCount() == 0 && merged.gasBoundary().nodeCount() == 1
+				&& merged.gasBoundary().inventory(1).equals(stock) && Math.abs(merged.gasNodeTemperatureK(1) - expected) < 2e-9
+				&& merged.gasBoundary().externalSource().equals(source) && merged.gasBoundary().escapedSink().equals(sink)
+				&& merged.thermalAudit().mechanicalWork().subtract(work).equals(SignedDyadic.of(
+						merged.thermalState.gasNodeEnergy(1, merged.gasState.network)).subtract(SignedDyadic.of(oldEnergy)))
+				&& merged.exactInternalEnergy().equals(merged.thermalAudit().expectedInventory()),
+				"gas/vacuum merge lost inherited volume, stock or its actual expansion work");
+		for (int cell = 0; cell < 3; cell++) for (int micro = 0; micro < 8; micro++)
+			require(merged.gasBoundary().nodeOfPiece(8 * cell + micro) == 1,
+					"the merged cavity did not retain complete actual piece ownership");
 	}
 
 	static void thermalGasPressureRowUsesIsentropicCompliance() {

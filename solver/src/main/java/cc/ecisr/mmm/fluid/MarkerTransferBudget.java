@@ -18,7 +18,7 @@ final class MarkerTransferBudget {
 	private boolean[] requiredComponent = new boolean[0];
 	private int dependencyCount;
 	private double[][] sums = new double[0][];
-	private int parcelStart, markerStart, size;
+	private int parcelStart, markerStart, size, gasNodes;
 	private boolean singleComponent, anyResolved;
 	private boolean[] resolvedRoots = new boolean[0];
 
@@ -38,9 +38,13 @@ final class MarkerTransferBudget {
 		}
 	}
 
-	boolean begin(LiquidParticleStore particles, int parcels) {
-		parcelStart = faces + 2 * cells + 1; markerStart = parcelStart + 3 * parcels;
-		size = markerStart + particles.count();
+	boolean begin(LiquidParticleStore particles, int parcels, int gasNodeCount) {
+		if (parcels < 0 || gasNodeCount < 0 || gasNodeCount > cc.ecisr.mmm.fluid.air.GasLimits.MAX_NODES_PER_REGION)
+			throw new IllegalArgumentException("Transfer pressure/parcel count is outside its representation");
+		gasNodes = gasNodeCount;
+		parcelStart = Math.addExact(faces, Math.addExact(cells, Math.addExact(gasNodes, 1)));
+		markerStart = Math.addExact(parcelStart, Math.multiplyExact(3, parcels));
+		size = Math.addExact(markerStart, particles.count());
 		if (parent.length < size) parent = new int[size];
 		for (int i = 0; i < size; i++) parent[i] = i;
 		Arrays.fill(dependencyHead, -1); dependencyCount = 0;
@@ -52,7 +56,10 @@ final class MarkerTransferBudget {
 	}
 
 	int face(int axis, int local) { return offsets[axis] + local; }
-	int pressureRow(int row) { return row >= 0 ? faces + row : faces + cells - row; }
+	int pressureRow(int row) {
+		if (row >= cells || row < -gasNodes) throw new IllegalArgumentException("Transfer pressure row is outside its actual space");
+		return row >= 0 ? faces + row : faces + cells - row;
+	}
 	int parcel(int ordinal, int axis) { return parcelStart + 3 * ordinal + axis; }
 	int airPotential(int cell) { return faces + cell; }
 	/** Extrapolation has directed inputs: an unused output never couples its sources. */

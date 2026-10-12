@@ -15,6 +15,7 @@ public final class AirNetworkValidation {
 		validateRegistrySnapshot();
 		validateEquationOfState();
 		validateVacuumNode();
+		validatePieceSnapshot();
 		validateOrificeEqualization();
 		validateFlowActivity();
 		validateHoleOpenClose();
@@ -141,8 +142,8 @@ public final class AirNetworkValidation {
 				GasRegistry.STANDARD_TEMPERATURE_K, List.of());
 		check(network.standardVolumeNanos(2) == 0L && network.auditClosed(),
 				"vacuum node created gas inventory or opened the ledger");
-		GasStateSnapshot snapshot = GasStateSnapshot.capture(
-				2, 1, 1, new int[]{1, 2}, new int[]{1, 2}, network, "");
+		int[] pieces = new int[16]; java.util.Arrays.fill(pieces, -1); pieces[0] = 1; pieces[8] = 2;
+		GasStateSnapshot snapshot = GasStateSnapshot.capture(2, 1, 1, pieces, network, "");
 		AirNetwork restored = new AirNetwork(network.registry());
 		restored.restoreNodes(new double[]{1.0, 1.0},
 				snapshot.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
@@ -158,6 +159,48 @@ public final class AirNetworkValidation {
 				&& restored.standardVolumeNanos(2) == 1_000_000_000L,
 				"ambient orifice did not fill a vacuum node to equilibrium");
 		checkLedger(restored, "vacuum fill");
+	}
+
+	public static void validatePieceSnapshot() {
+		AirNetwork network = new AirNetwork(); network.addNode(1, 1); network.addNode(2, 2);
+		int[] pieces = new int[32]; java.util.Arrays.fill(pieces, -1);
+		pieces[2] = 1; pieces[7] = 2; pieces[8] = 0; pieces[9] = 1; pieces[16] = 2;
+		GasStateSnapshot state = GasStateSnapshot.capture(4, 1, 1, pieces, network, "");
+		check(state.nodes().getFirst().topologyKey() == 2 && state.nodes().getLast().topologyKey() == 7
+				&& state.nodes().getFirst().inventory().equals(network.inventory(1))
+				&& state.nodes().getLast().inventory().equals(network.inventory(2)),
+				"piece capture changed canonical inventory order or global micro keys");
+		check(java.util.Arrays.equals(state.cellNodeOrdinal(), new int[]{-1, -1, 2, -1}),
+				"cell observation selected an owner from a mixed gas cell");
+		pieces[2] = 0; int[] copy = state.pieceNodeOrdinal(); copy[7] = -1;
+		check(state.pieceNodeOrdinal()[2] == 1 && state.pieceNodeOrdinal()[7] == 2,
+				"snapshot primary piece membership aliases caller arrays");
+		int[] reversed = state.pieceNodeOrdinal(); reversed[2] = 2; reversed[7] = 1;
+		expectThrow(() -> GasStateSnapshot.capture(4, 1, 1, reversed, network, ""),
+				"independent snapshot sorting of noncanonical inventory/thermal ordinals");
+		int[] shortColumn = java.util.Arrays.copyOf(state.pieceNodeOrdinal(), 31);
+		expectThrow(() -> pieceSnapshot(state, state.nodes(), shortColumn), "incomplete final micro membership");
+		int[] unknown = state.pieceNodeOrdinal(); unknown[31] = 3;
+		expectThrow(() -> pieceSnapshot(state, state.nodes(), unknown), "unknown piece owner");
+		int[] negative = state.pieceNodeOrdinal(); negative[31] = -2;
+		expectThrow(() -> pieceSnapshot(state, state.nodes(), negative), "invalid absent piece sentinel");
+		int[] missing = state.pieceNodeOrdinal();
+		for (int p = 0; p < missing.length; p++) if (missing[p] == 2) missing[p] = -1;
+		expectThrow(() -> pieceSnapshot(state, state.nodes(), missing), "finite node without a positive piece owner");
+		expectThrow(() -> pieceSnapshot(state, List.of(state.nodes().getFirst(),
+				new GasStateSnapshot.Node(Integer.MAX_VALUE, network.inventory(2))), missing), "missing owner aliased the minimum-key sentinel");
+		expectThrow(() -> pieceSnapshot(state, List.of(new GasStateSnapshot.Node(1, network.inventory(1)),
+				state.nodes().getLast()), state.pieceNodeOrdinal()), "incorrect global minimum-piece key");
+		expectThrow(() -> pieceSnapshot(state, List.of(state.nodes().getLast(), state.nodes().getFirst()),
+				state.pieceNodeOrdinal()), "noncanonical node key order");
+		expectThrow(() -> new GasStateSnapshot(Integer.MAX_VALUE, 1, 1, state.registryFingerprint(), "",
+				state.nodes(), state.pieceNodeOrdinal(), state.externalSource(), state.escapedSink(),
+				state.massRoundoff(), state.residualRoundoff()), "piece dimension overflow");
+	}
+
+	private static GasStateSnapshot pieceSnapshot(GasStateSnapshot state, List<GasStateSnapshot.Node> nodes, int[] pieces) {
+		return new GasStateSnapshot(state.sizeX(), state.sizeY(), state.sizeZ(), state.registryFingerprint(), "",
+				nodes, pieces, state.externalSource(), state.escapedSink(), state.massRoundoff(), state.residualRoundoff());
 	}
 
 	private static void validateOrificeEqualization() {
@@ -780,7 +823,8 @@ public final class AirNetworkValidation {
 		int a = network.addNode(1.0, 0.0), b = network.addNode(1.0, 0.0);
 		network.commitPhaseSource(a, new GasInventory(first)); network.commitPhaseSource(b, new GasInventory(second));
 		check(network.sealedInventory().entries().size() == 33 && network.auditClosed(), "regional summary used the single-node component limit");
-		var snapshot = GasStateSnapshot.capture(2, 1, 1, new int[]{a, b}, new int[]{a, b}, network, "");
+		int[] pieces = new int[16]; java.util.Arrays.fill(pieces, -1); pieces[0] = a; pieces[8] = b;
+		var snapshot = GasStateSnapshot.capture(2, 1, 1, pieces, network, "");
 		AirNetwork restored = new AirNetwork(registry);
 		restored.restoreNodes(new double[]{1, 1}, snapshot.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
 				snapshot.externalSource(), snapshot.escapedSink(), snapshot.massRoundoff(), snapshot.residualRoundoff());

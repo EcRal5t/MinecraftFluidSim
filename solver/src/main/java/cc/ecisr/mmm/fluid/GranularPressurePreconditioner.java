@@ -5,11 +5,12 @@ import java.util.Arrays;
 /** Incomplete Cholesky preconditioner retaining the local liquid/gas pressure connections. */
 final class GranularPressurePreconditioner {
 	private final FluidDomain domain;
-	private final int[] rank, first, next, column;
+	private int[] rank, first;
+	private final int[] next, column;
 	private final double[] coefficient;
-	private final double[] factor, pivot;
-	private final double[] rowFactor;
-	private final int[] factorOwner;
+	private final double[] factor;
+	private double[] pivot, rowFactor;
+	private int[] factorOwner;
 	private int entries;
 
 	GranularPressurePreconditioner(FluidDomain domain) {
@@ -22,6 +23,10 @@ final class GranularPressurePreconditioner {
 	}
 
 	void prepare(int[] unknowns, int count, double[] diagonal) {
+		if (rank.length < diagonal.length) {
+			rank = new int[diagonal.length]; first = new int[diagonal.length];
+			pivot = new double[diagonal.length]; rowFactor = new double[diagonal.length]; factorOwner = new int[diagonal.length];
+		}
 		Arrays.fill(rank, -1); Arrays.fill(first, -1);
 		Arrays.fill(factorOwner, -1);
 		for (int ordinal = 0; ordinal < count; ordinal++) rank[unknowns[ordinal]] = ordinal;
@@ -61,7 +66,8 @@ final class GranularPressurePreconditioner {
 	private void add(int cell, int neighbor, double faceCoefficient) {
 		if (!(faceCoefficient > 0)) return;
 		boolean liquid = domain.isFluid(neighbor);
-		int node = liquid ? -1 : domain.gasNodeOfAirCell(neighbor);
+		int node = PressureBoundaryView.wholeCellGasNode(domain, neighbor);
+		if (liquid) node = -1;
 		if (!liquid && node <= 0) return;
 		int row = liquid ? neighbor : domain.cellCount + node;
 		if (row < 0 || row >= rank.length || rank[row] < 0 || liquid && rank[row] >= rank[cell]) return;

@@ -327,6 +327,10 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	int gasNodeOfAirCell(int airCell) {
+		if (gasState.frame != null) {
+			for (int micro = 0; micro < 8; micro++) if (gasState.frame.nodeOfPiece(8 * airCell + micro) >= 0)
+				return gasState.frame.commonCellNode(airCell);
+		}
 		int node = projection.pressureAirNodeId[airCell];
 		return node >= 0 ? node : rawGasNodeOfCell(airCell);
 	}
@@ -369,6 +373,9 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	) {
 		if (!inside(x, y, z)) return tail;
 		int cell = cellIndex(x, y, z);
+		// Actual gas geometry already owns its pressure source; extend only into missing pressure-air support.
+		if (gasState.frame != null) for (int micro = 0; micro < 8; micro++)
+			if (gasState.frame.nodeOfPiece(8 * cell + micro) >= 0) return tail;
 		if (!isAir(cell) || projection.pressureAirNodeId[cell] >= 0 && projection.pressureAirNodeId[cell] <= node
 				|| !(pressureOpenFaceFromCell(from, cell, directionX, directionY, directionZ) > 0.0F)) {
 			return tail;

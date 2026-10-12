@@ -61,8 +61,8 @@ final class CellInventoryReader {
 		}
 
 		CellCarrierInventoryView.GasAmount gas = null;
-		if (domain.gasState.cellNodeId != null) {
-			int node = domain.gasState.cellNodeId[requested];
+		if (domain.gasState.frame != null) {
+			int node = domain.gasState.frame.commonCellNode(requested);
 			if (node == AirNetwork.AMBIENT_NODE) {
 				gas = new CellCarrierInventoryView.GasAmount(true, node, AirNetwork.REFERENCE_PRESSURE,
 						GasRegistry.STANDARD_TEMPERATURE_K, List.of());

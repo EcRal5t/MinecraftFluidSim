@@ -29,6 +29,8 @@ public final class AirCavityScannerValidation {
 	}
 
 	private static void validateMicroGasGeometry() {
+		validateRuntimeGeometryBinding();
+		GasPhaseInterfaceValidation.validate();
 		validateMicroGasOverlap();
 		validateComponentLiquidGeometry();
 		validateGasPieceCapacity();
@@ -151,6 +153,52 @@ public final class AirCavityScannerValidation {
 		d.particles.setVolume(0,.04F);
 		try {GasComponentCapacity.capture(d,gas,null);throw new AssertionError("Stale gas geometry accepted a different raw liquid stock");}
 		catch(GasTopologyBlockedException expected) { }
+	}
+
+	private static void validateRuntimeGeometryBinding() {
+		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=masks[1]=0;
+		float[] markers={.25F,.5F,.5F,.5F,1.5F,.5F,.5F,.25F};
+		var domain=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
+				new FlipParticleState(2,2,2,1,2,.75F,markers,new float[6],masks));domain.ensureInventoryGrid();
+		long[] occupied=new long[8];long inventoryRevision=domain.markerGrid.inventoryRevision;
+		long phaseRevision=domain.pressurePhaseGeometry.revision(),carrierRevision=domain.carrierMutationRevision();
+		var current=GasRuntimeGeometry.capture(domain,null,occupied,true);
+		var volume=SignedDyadic.of(.125);
+		var edit=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,volume,
+				volume.multiply(SignedDyadic.of(.25)),volume.multiply(SignedDyadic.of(.5)),volume.multiply(SignedDyadic.of(.5)))));
+		var future=GasRuntimeGeometry.capture(domain,edit,occupied,true);
+		check(future.matchesSourceCarrierGeometry(domain,occupied) && !future.matchesCarrierGeometry(domain,occupied)
+				&& future.liquidStock().get(0).equals(edit) && future.liquidStock().get(1).equals(current.liquidStock().get(1)),
+				"Future gas frame lost its complete before/after liquid tuples");
+		check(current.planeNormal(1,0,0)>0 && future.planeNormal(1,0,0)<0,
+				"Future liquid edit failed to rebuild a centered neighbor's PLIC gradient");
+		check(domain.markerGrid.inventoryRevision==inventoryRevision && domain.pressurePhaseGeometry.revision()==phaseRevision
+				&& domain.carrierMutationRevision()==carrierRevision && domain.particles.volume(0)==.5F
+				&& domain.gasState.frame==null,"Private gas frame capture changed live owners or geometry caches");
+		domain.particles.setVolume(0,.125F);
+		check(future.matchesCarrierGeometry(domain,occupied) && !future.matchesSourceCarrierGeometry(domain,occupied),
+				"Published phase stock did not match its complete target frame");
+		domain.particles.setVolume(0,.5F);domain.particles.setPositionX(0,.75F);
+		var moved=GasRuntimeGeometry.capture(domain,null,occupied,true);
+		check(moved.liquidStock().get(0).volume().equals(current.liquidStock().get(0).volume())
+				&& moved.liquidStock().get(0).markerCount()==current.liquidStock().get(0).markerCount()
+				&& domain.markerGrid.inventoryRevision==inventoryRevision && domain.carrierMutationRevision()==carrierRevision,
+				"Position-only stale-frame fixture changed volume, count or epochs");
+		check(!current.matchesCarrierGeometry(domain,occupied) && !current.matchesSourceCarrierGeometry(domain,occupied)
+				&& moved.matchesCarrierGeometry(domain,occupied) && moved.planeNormal(0,0,0)<0,
+				"Gas frame reused old M1 after a raw marker move with unchanged volume and count");
+		domain.granularCoupling=new cc.ecisr.mmm.granular.GranularCouplingFields(2,2,2,1);
+		occupied[0]=1L<<22;domain.granularCoupling.setFixedCellSvq(occupied);
+		var clear=GasRuntimeGeometry.allDry(domain,true);
+		check(clear.matchesSourceCarrierGeometry(domain,occupied) && !clear.matchesSourceCarrierGeometry(domain,new long[8])
+				&& !clear.matchesCarrierGeometry(domain,new long[8]) && clear.capacity().chambers().getFirst().cubicMeters()==2,
+				"Complete clear frame failed to bind source occupancy or remove target solid capacity");
+		check(clear.liquidStock().get(0).markerCount()==0 && clear.liquidStock().get(1).volume().equals(SignedDyadic.ZERO)
+				&& domain.particles.count()==2 && domain.granularCoupling.solidSvq(0)==1L<<22,
+				"Clear preview omitted zero-stock components or changed source inventory");
+		domain.particles.setCount(0);domain.granularCoupling.setFixedCellSvq(new long[8]);
+		check(clear.matchesCarrierGeometry(domain,new long[8]) && !clear.matchesSourceCarrierGeometry(domain,new long[8]),
+				"Published clear stock failed its target/source geometry distinction");
 	}
 
 	private static void validateGasPieceCapacity() {
@@ -367,24 +415,23 @@ public final class AirCavityScannerValidation {
 		var particles = new FlipParticleState(2, 2, 2, 1, 9, 1.125F, positions, new float[27], masks);
 		var source = gasRestoreTarget(config, particles);
 		var committed = source.bootstrapGasState("");
-		check(committed.cellNodeOrdinal()[0] == 0 && committed.cellLineageOrdinal()[0] == 1
-				&& committed.cellLineageOrdinal()[1] == -1 && committed.cellLineageOrdinal()[2] == -1,
+		check(committed.pieceNodeOrdinal()[7] == 1
+				&& committed.pieceNodeOrdinal()[8] == -1 && committed.pieceNodeOrdinal()[16] == -1,
 				"Gas restore fixture must distinguish partial gas, solid and exact full-liquid cells");
 		var valid = gasRestoreTarget(config, particles);
 		valid.restoreGasState(committed, cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
 		var restored = valid.exportGasState("");
-		check(java.util.Arrays.equals(restored.cellNodeOrdinal(), committed.cellNodeOrdinal())
-				&& java.util.Arrays.equals(restored.cellLineageOrdinal(), committed.cellLineageOrdinal())
+		check(java.util.Arrays.equals(restored.pieceNodeOrdinal(), committed.pieceNodeOrdinal())
 				&& restored.nodes().equals(committed.nodes())
 				&& restored.externalSource().equals(committed.externalSource())
 				&& restored.escapedSink().equals(committed.escapedSink())
 				&& restored.massRoundoff().equals(committed.massRoundoff())
 				&& restored.residualRoundoff().equals(committed.residualRoundoff()),
 				"Valid gas restoration changed complete topology or inventory");
-		for (int cell : new int[]{0, 1, 2}) {
-			int[] lineage = committed.cellLineageOrdinal(); lineage[cell] = 0;
+		for (int piece : new int[]{7, 8, 16}) {
+			int[] membership = committed.pieceNodeOrdinal(); membership[piece] = 0;
 			var altered = new cc.ecisr.mmm.fluid.air.GasStateSnapshot(2, 2, 2, committed.registryFingerprint(), "",
-					committed.nodes(), committed.cellNodeOrdinal(), lineage, committed.externalSource(), committed.escapedSink(),
+					committed.nodes(), membership, committed.externalSource(), committed.escapedSink(),
 					committed.massRoundoff(), committed.residualRoundoff());
 			var rejected = gasRestoreTarget(config, particles);
 			var network = rejected.gasState.network;
@@ -393,16 +440,12 @@ public final class AirCavityScannerValidation {
 			var massRoundoff = network.massRoundoff(); var residualRoundoff = network.residualRoundoff();
 			try {
 				rejected.restoreGasState(altered, cc.ecisr.mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
-				throw new AssertionError("Gas restoration accepted altered lineage at cell " + cell);
-			} catch (IllegalArgumentException expected) {
-				check(expected.getMessage().contains("committed lineage at cell " + cell),
-						"Gas restoration rejected a different property instead of the complete lineage");
-			}
+				throw new AssertionError("Gas restoration accepted altered membership at piece " + piece);
+			} catch (IllegalArgumentException expected) { }
 			check(rejected.gasState.network == network && network.revision() == gasRevision && network.nodeCount() == 0
 					&& network.externalSource().equals(externalSource) && network.escapedSink().equals(escapedSink)
 					&& network.massRoundoff().equals(massRoundoff) && network.residualRoundoff().equals(residualRoundoff)
-					&& rejected.gasState.cellNodeId == null && rejected.gasState.cellLineageNodeId == null
-					&& rejected.gasState.previousSealedNodeCount == 0 && !rejected.gasState.pressureActive
+					&& rejected.gasState.frame == null && !rejected.gasState.pressureActive
 					&& rejected.carrierMutationRevision() == carrierRevision
 					&& java.util.Arrays.equals(rejected.exportParticleState().copyPositionVolume(), positions)
 					&& java.util.Arrays.equals(rejected.exportParticleState().copyCollisionMicroMasks(), masks),
@@ -444,7 +487,7 @@ public final class AirCavityScannerValidation {
 				catch(GasTopologyBlockedException expected) { }
 				check(d.gasState.network==network && network.revision()==gasRevision && network.nodeCount()==0
 						&& network.externalSource().entries().isEmpty() && network.escapedSink().entries().isEmpty()
-						&& d.gasState.cellNodeId==null && d.carrierMutationRevision()==carrierRevision
+						&& d.gasState.frame==null && d.carrierMutationRevision()==carrierRevision
 						&& java.util.Arrays.equals(pv,d.exportParticleState().copyPositionVolume()),"Rejected ambient capture changed authoritative owners");
 			}
 		}

@@ -31,7 +31,7 @@ final class GasRegionStateCodec {
 	private static final int MAX_DYADIC_BYTES = 16 * 1_024;
 
 	record NodeData(int topologyKey, GasInventory inventory) { }
-	record SectionLedger(RegionSectionState.SectionKey key, int sealedCellCount) { }
+	record SectionLedger(RegionSectionState.SectionKey key, int sealedPieceCount) { }
 	record ManifestData(
 			int capabilities, String registryFingerprint, String chemicalRegistryFingerprint,
 			List<NodeData> nodes, GasAuditLedger externalSource, GasAuditLedger escapedSink,
@@ -39,13 +39,15 @@ final class GasRegionStateCodec {
 	) {
 		ManifestData { nodes = List.copyOf(nodes); sectionLedgers = List.copyOf(sectionLedgers); }
 	}
-	record SectionData(int[] cellNodeOrdinal, int[] cellLineageOrdinal) {
+	record SectionData(int[] pieceNodeOrdinal) {
 		SectionData {
-			if (cellNodeOrdinal.length != cellLineageOrdinal.length) throw new IllegalArgumentException("Gas section lineage cardinality mismatch");
-			cellNodeOrdinal = cellNodeOrdinal.clone(); cellLineageOrdinal = cellLineageOrdinal.clone();
+			if (pieceNodeOrdinal == null || pieceNodeOrdinal.length % 8 != 0)
+				throw new IllegalArgumentException("Gas section piece cardinality mismatch");
+			pieceNodeOrdinal = pieceNodeOrdinal.clone();
+			for (int node : pieceNodeOrdinal) if (node < -1 || node > GasLimits.MAX_NODES_PER_REGION)
+				throw new IllegalArgumentException("Invalid gas section node ordinal");
 		}
-		@Override public int[] cellNodeOrdinal() { return cellNodeOrdinal.clone(); }
-		@Override public int[] cellLineageOrdinal() { return cellLineageOrdinal.clone(); }
+		@Override public int[] pieceNodeOrdinal() { return pieceNodeOrdinal.clone(); }
 	}
 
 	byte[] encodeManifest(ManifestData data) throws IOException {
@@ -63,7 +65,7 @@ final class GasRegionStateCodec {
 			out.writeInt(data.sectionLedgers().size());
 			for (SectionLedger ledger : data.sectionLedgers()) {
 				out.writeInt(ledger.key().x()); out.writeInt(ledger.key().y()); out.writeInt(ledger.key().z());
-				out.writeInt(ledger.sealedCellCount());
+				out.writeInt(ledger.sealedPieceCount());
 			}
 		});
 	}
@@ -88,7 +90,7 @@ final class GasRegionStateCodec {
 			ArrayList<SectionLedger> ledgers = new ArrayList<>(sectionCount);
 			for (int section = 0; section < sectionCount; section++) ledgers.add(new SectionLedger(
 					new RegionSectionState.SectionKey(input.readInt(), input.readInt(), input.readInt()),
-					count(input.readInt(), Integer.MAX_VALUE, "sealed cells")));
+					count(input.readInt(), Integer.MAX_VALUE, "sealed pieces")));
 			requireEnd(input);
 			ManifestData result = new ManifestData(capabilities, registry, chemistry, nodes, source, sink,
 					massRoundoff, residualRoundoff, ledgers);
@@ -103,36 +105,39 @@ final class GasRegionStateCodec {
 
 	byte[] encodeSection(SectionData data) throws IOException {
 		if (data == null) throw new IOException("Gas section data is missing");
+		requireSectionSize(data.pieceNodeOrdinal.length);
 		return encode(out -> {
 			out.writeInt(SECTION_MAGIC);
-			int[] membership = data.cellNodeOrdinal(); out.writeInt(membership.length);
+			int[] membership = data.pieceNodeOrdinal(); out.writeInt(membership.length);
 			for (int value : membership) out.writeInt(value);
-			for (int value : data.cellLineageOrdinal()) out.writeInt(value);
 		});
 	}
 
 	SectionData decodeSection(byte[] payload, int expectedCells, int nodeCount) throws IOException {
+		if (expectedCells < 0 || nodeCount < 0 || nodeCount > GasLimits.MAX_NODES_PER_REGION)
+			throw new IOException("Invalid gas section dimensions or node count");
+		int expectedPieces;
+		try { expectedPieces = Math.multiplyExact(expectedCells, 8); }
+		catch (ArithmeticException overflow) { throw new IOException("Gas section piece count overflows", overflow); }
+		requireSectionSize(expectedPieces);
 		try (DataInputStream input = input(payload)) {
 			if (input.readInt() != SECTION_MAGIC) throw new IOException("Unknown gas section payload");
-			int length = count(input.readInt(), expectedCells, "section cells");
-			if (length != expectedCells) throw new IOException("Gas section membership cardinality mismatch");
+			int length = count(input.readInt(), expectedPieces, "section pieces");
+			if (length != expectedPieces) throw new IOException("Gas section membership cardinality mismatch");
 			int[] membership = new int[length];
-			for (int cell = 0; cell < length; cell++) {
-				membership[cell] = input.readInt();
-				if (membership[cell] < 0 || membership[cell] > nodeCount) {
+			for (int piece = 0; piece < length; piece++) {
+				membership[piece] = input.readInt();
+				if (membership[piece] < -1 || membership[piece] > nodeCount) {
 					throw new IOException("Gas section names an unknown node ordinal");
 				}
 			}
-			int[] lineage = new int[length];
-			for (int cell = 0; cell < length; cell++) {
-				lineage[cell] = input.readInt();
-				if (lineage[cell] < -1 || lineage[cell] > nodeCount
-						|| membership[cell] > 0 && lineage[cell] != membership[cell]) {
-					throw new IOException("Gas section lineage disagrees with node identity");
-				}
-			}
-			requireEnd(input); return new SectionData(membership, lineage);
+			requireEnd(input); return new SectionData(membership);
 		} catch (EOFException truncated) { throw new IOException("Truncated gas section payload", truncated); }
+	}
+
+	private static void requireSectionSize(int pieces) throws IOException {
+		if (2L * Integer.BYTES + (long) pieces * Integer.BYTES > GasLimits.MAX_SERIALIZED_EXTENSION_BYTES)
+			throw new IOException("Gas section is over its serialized budget");
 	}
 
 	private static void validateManifest(ManifestData data) {
@@ -159,7 +164,7 @@ final class GasRegionStateCodec {
 		}
 		RegionSectionState.SectionKey previousSection = null;
 		for (SectionLedger ledger : data.sectionLedgers()) {
-			if (ledger == null || ledger.sealedCellCount() < 0
+			if (ledger == null || ledger.sealedPieceCount() < 0
 					|| previousSection != null && previousSection.compareTo(ledger.key()) >= 0) {
 				throw new IllegalArgumentException("Gas manifest section ledgers are not canonical");
 			}
@@ -249,7 +254,19 @@ final class GasRegionStateCodec {
 
 	private static byte[] encode(Writer writer) throws IOException {
 		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-		try (DataOutputStream output = new DataOutputStream(bytes)) { writer.write(output); }
+		try (DataOutputStream output = new DataOutputStream(new java.io.FilterOutputStream(bytes) {
+			@Override public void write(int value) throws IOException {
+				requireSpace(1); bytes.write(value);
+			}
+			@Override public void write(byte[] value, int offset, int length) throws IOException {
+				java.util.Objects.checkFromIndexSize(offset, length, value.length);
+				requireSpace(length); bytes.write(value, offset, length);
+			}
+			private void requireSpace(int length) throws IOException {
+				if (length > GasLimits.MAX_SERIALIZED_EXTENSION_BYTES - bytes.size())
+					throw new IOException("Gas extension is over budget");
+			}
+		})) { writer.write(output); }
 		byte[] result = bytes.toByteArray();
 		if (result.length > GasLimits.MAX_SERIALIZED_EXTENSION_BYTES) throw new IOException("Gas extension is over budget");
 		return result;

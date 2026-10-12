@@ -371,35 +371,38 @@ public final class RegionCheckpointRestorer {
 			if (ledgers.put(ledger.key(), ledger) != null) throw new IOException("Duplicate gas section ledger");
 		}
 		if (ledgers.size() != sections.size()) throw new IOException("Gas section ledger cardinality mismatch");
-		int[] memberships = new int[Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ())];
-		int[] lineages = new int[memberships.length];
+		int cellCount = Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ());
+		int[] memberships = new int[Math.multiplyExact(8, cellCount)];
+		java.util.Arrays.fill(memberships, -1);
+		boolean[] seenCells = new boolean[cellCount];
 		for (RegionSectionState section : sections) {
 			GasRegionStateCodec.SectionData sectionData = codec.decodeSection(
 					requiredExtension(section.extensions(), GasRegionStateCodec.SECTION_EXTENSION).payload(),
 					Math.multiplyExact(Math.multiplyExact(section.sizeX(), section.sizeY()), section.sizeZ()), data.nodes().size());
 			int sealed = 0, source = 0;
-			int[] slice = sectionData.cellNodeOrdinal();
-			int[] lineageSlice = sectionData.cellLineageOrdinal();
+			int[] slice = sectionData.pieceNodeOrdinal();
 			for (int z = 0; z < section.sizeZ(); z++) for (int y = 0; y < section.sizeY(); y++) for (int x = 0; x < section.sizeX(); x++) {
-				int value = slice[source++];
-				if (value > 0) sealed++;
 				int cell = section.localStartX() + x + manifest.sizeX() *
 						(section.localStartY() + y + manifest.sizeY() * (section.localStartZ() + z));
-				memberships[cell] = value;
-				lineages[cell] = lineageSlice[source - 1];
+				if (cell < 0 || cell >= cellCount || seenCells[cell]) throw new IOException("Gas section coverage overlaps or lies outside the region");
+				seenCells[cell] = true;
+				System.arraycopy(slice, source, memberships, cell * 8, 8);
+				for (int piece = 0; piece < 8; piece++) if (slice[source + piece] > 0) sealed++;
+				source += 8;
 			}
 			GasRegionStateCodec.SectionLedger ledger = ledgers.remove(section.key());
-			if (ledger == null || ledger.sealedCellCount() != sealed) {
+			if (ledger == null || ledger.sealedPieceCount() != sealed) {
 				throw new IOException("Gas section does not match its topology ledger");
 			}
 		}
 		if (!ledgers.isEmpty()) throw new IOException("Gas manifest names missing sections");
+		for (boolean seen : seenCells) if (!seen) throw new IOException("Incomplete gas microbox coverage");
 		List<GasStateSnapshot.Node> nodes = data.nodes().stream()
 				.map(node -> new GasStateSnapshot.Node(node.topologyKey(), node.inventory())).toList();
 		GasStateSnapshot snapshot;
 		try {
 			snapshot = new GasStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
-					data.registryFingerprint(), data.chemicalRegistryFingerprint(), nodes, memberships, lineages,
+					data.registryFingerprint(), data.chemicalRegistryFingerprint(), nodes, memberships,
 					data.externalSource(), data.escapedSink(),
 					data.massRoundoff(), data.residualRoundoff());
 			AirNetwork audit = new AirNetwork(registry == null

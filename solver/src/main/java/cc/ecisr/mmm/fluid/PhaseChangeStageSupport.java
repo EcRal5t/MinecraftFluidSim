@@ -80,6 +80,7 @@ final class PhaseChangeStageSupport {
 	long gasGeometrySolidSvq() { return access.gasGeometrySolidSvq(); }
 	int particleCell(int marker) { return access.particleCell(marker); }
 	int firstOpenSlot(int cell) { return access.firstOpenSlot(cell, 0); }
+	int firstOpenSlot(int cell, int first) { return access.firstOpenSlot(cell, first); }
 	float[] markerSlotPosition(int cell, int slot) { return access.markerSlotPosition(cell, slot); }
 	void ensureGrid() { access.ensureGrid(); }
 	void refreshGasTopology() { access.refreshGasTopology(); }

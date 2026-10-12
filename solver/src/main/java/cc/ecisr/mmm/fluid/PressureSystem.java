@@ -7,7 +7,8 @@ final class PressureSystem {
 	private final FluidDomain domain;
 	private final GranularPressureCoupling granular;
 	private final GranularImplicitDrag drag;
-	private final double[] liquidPressure, gasPressure;
+	private final double[] liquidPressure;
+	private double[] gasPressure;
 	/** Per-projection pressure source: liquid, fixed zero, or a positive gas node id. */
 	private final int[] neighborPressureSource;
 	private float substepDuration;
@@ -19,7 +20,13 @@ final class PressureSystem {
 		this.granular = new GranularPressureCoupling(domain);
 		this.drag = new GranularImplicitDrag(domain, granular);
 	}
-	void prepareGranular(float dt) { substepDuration = dt; granular.prepare(dt); drag.prepare(dt); }
+	void prepareGranular(float dt) {
+		substepDuration = dt;
+		int count = domain.gasBoundary().nodeCount();
+		domain.projection.ensureGasCapacity(count);
+		if (gasPressure.length <= count) gasPressure = new double[Math.addExact(count, 1)];
+		granular.prepare(dt); drag.prepare(dt);
+	}
 	/** Connects the nonzero factors of the already prepared joint pressure/velocity operator. */
 	void connectTransferSupport(MarkerTransferBudget budget) {
 		if (drag.active()) drag.connectTransferSupport(budget);
@@ -287,7 +294,7 @@ final class PressureSystem {
 
 	private int gasUnknownOfAirCell(int cell) {
 		if (!domain.isAir(cell)) return -1;
-		int node = domain.gasNodeOfAirCell(cell);
+		int node = PressureBoundaryView.wholeCellGasNode(domain, cell);
 		return node > 0 && domain.projection.gasPressureUnknown[node] ? node : -1;
 	}
 

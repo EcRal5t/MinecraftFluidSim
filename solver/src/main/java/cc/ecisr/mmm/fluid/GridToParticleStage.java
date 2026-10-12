@@ -19,6 +19,7 @@ final class GridToParticleStage {
 	) { }
 
 	interface Access {
+		int gasNodeCount();
 		void samplePair(int axis, float[] field, float[] previous, float x, float y, float z, float[] result);
 		boolean variableDensityActive();
 		float referenceDensity();
@@ -56,7 +57,7 @@ final class GridToParticleStage {
 
 	/** Extrapolates grid velocities into air and transfers their change to marker velocities. */
 	void extrapolateAndTransfer() {
-		MarkerTransferBudget dependencies = componentBudget.begin(state.particles, access.granularParcelCount()) ? componentBudget : null;
+		MarkerTransferBudget dependencies = componentBudget.begin(state.particles, access.granularParcelCount(), access.gasNodeCount()) ? componentBudget : null;
 		if (dependencies != null) access.connectTransferSupport(dependencies);
 		extrapolateVelocityIntoAir(dependencies);
 		velocityExtension.extend(state.mac, state.pressureFluid, state.geometry.solid, state.markerGrid.markerCount, dependencies);

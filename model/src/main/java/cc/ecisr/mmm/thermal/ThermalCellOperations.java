@@ -191,7 +191,8 @@ final class ThermalCellOperations {
 		cellGrid.rebuild(carrierAccess(markers));
 		for (int cell = 0; cell < pendingCellVolume.length; cell++) {
 			if (pendingCellVolume[cell] == null) throw new IllegalArgumentException("Pending phase volume is missing");
-			if (!pendingCellVolume[cell].equals(SignedDyadic.ZERO) && !cellGrid.occupied(cell)) {
+			// Full vaporization leaves no condensed thermal carrier; its negative volume remains pending.
+			if (pendingCellVolume[cell].signum() > 0 && !cellGrid.occupied(cell)) {
 				throw new IllegalArgumentException("Pending phase volume names an empty thermal cell");
 			}
 		}

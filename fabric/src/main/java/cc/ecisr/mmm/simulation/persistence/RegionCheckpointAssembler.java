@@ -145,8 +145,7 @@ public final class RegionCheckpointAssembler {
 		float[] positionVolume = particles.positionVolume();
 		float[] velocities = particles.velocities();
 		byte[] solids = particles.solidMask();
-		int[] gasMembership = gas == null ? new int[0] : gas.cellNodeOrdinal();
-		int[] gasLineage = gas == null ? new int[0] : gas.cellLineageOrdinal();
+		int[] gasMembership = gas == null ? new int[0] : gas.pieceNodeOrdinal();
 		if (gas != null && (gas.sizeX() != geometry.sizeX() || gas.sizeY() != geometry.sizeY() || gas.sizeZ() != geometry.sizeZ())) {
 			throw new IOException("Gas topology dimensions do not match region-state");
 		}
@@ -224,14 +223,12 @@ public final class RegionCheckpointAssembler {
 					int endZ = Math.min(geometry.sizeZ(), ((sectionZ + 1) * 16 - geometry.origin().z()) * cellsPerBlock);
 					int sliceX = endX - startX, sliceY = endY - startY, sliceZ = endZ - startZ;
 					byte[] solidSlice = new byte[Math.multiplyExact(Math.multiplyExact(sliceX, sliceY), sliceZ)];
-					int[] gasSlice = gas == null ? new int[0] : new int[solidSlice.length];
-					int[] lineageSlice = new int[gasSlice.length];
+					int[] gasSlice = gas == null ? new int[0] : new int[Math.multiplyExact(8, solidSlice.length)];
 					int target = 0;
 					for (int z = startZ; z < endZ; z++) for (int y = startY; y < endY; y++) for (int x = startX; x < endX; x++) {
 						int cell = x + geometry.sizeX() * (y + geometry.sizeY() * z);
 						solidSlice[target] = solids[cell];
-						if (gas != null) gasSlice[target] = gasMembership[cell];
-						if (gas != null) lineageSlice[target] = gasLineage[cell];
+						if (gas != null) System.arraycopy(gasMembership, cell * 8, gasSlice, target * 8, 8);
 						target++;
 					}
 					List<Integer> ordinals = markersBySection.getOrDefault(key, List.of());
@@ -264,7 +261,7 @@ public final class RegionCheckpointAssembler {
 					}
 					ArrayList<RegionExtension> sectionExtensions = new ArrayList<>();
 					if (gas != null) sectionExtensions.add(new RegionExtension(GasRegionStateCodec.SECTION_EXTENSION,
-							new GasRegionStateCodec().encodeSection(new GasRegionStateCodec.SectionData(gasSlice, lineageSlice))));
+							new GasRegionStateCodec().encodeSection(new GasRegionStateCodec.SectionData(gasSlice))));
 					if (granular != null) {
 						GranularRegionStateCodec.SectionData data = new GranularRegionStateCodec.SectionData(
 								List.copyOf(granularActiveBySection.getOrDefault(key, List.of())),
@@ -485,7 +482,7 @@ public final class RegionCheckpointAssembler {
 					Math.multiplyExact(Math.multiplyExact(section.sizeX(), section.sizeY()), section.sizeZ()),
 					snapshot.nodes().size());
 			int sealed = 0;
-			for (int value : data.cellNodeOrdinal()) if (value > 0) sealed++;
+			for (int value : data.pieceNodeOrdinal()) if (value > 0) sealed++;
 			ledgers.add(new GasRegionStateCodec.SectionLedger(section.key(), sealed));
 		}
 		int capabilities = GasRegionStateCodec.CAP_MATERIALS | GasRegionStateCodec.CAP_GAS

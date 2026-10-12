@@ -95,6 +95,7 @@ final class CarrierMutationCoordinator {
 			domain.chemicalParcels.commitAuditExchange(candidate.chemistryAudit);
 		}
 		if (candidate.thermal != null) domain.thermalState.commitLiquidReplacement(firstOrdinal, candidate.thermal);
+		if (candidate.gasTopology != null) domain.gasTopologyCoordinator.commit(candidate.gasTopology);
 	}
 
 	/** Adopts an externally computed marker count for wholesale transitions (restore, clear, reseed). */

@@ -6,7 +6,7 @@
 
 | 要改什么 | 代码入口 | 测试选择器 |
 |---|---|---|
-| 气腔扫描和归属 | [AirCavityScanner](../../solver/src/main/java/cc/ecisr/mmm/fluid/AirCavityScanner.java) | `air-cavity` |
+| 气腔几何和归属 | [GasRuntimeGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasRuntimeGeometry.java)、[GasTopologyCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasTopologyCoordinator.java) | `air-cavity` |
 | 气体库存与孔流 | [AirNetwork](../../model/src/main/java/cc/ecisr/mmm/fluid/air/AirNetwork.java) | `air-network` |
 | 气液相变库存与账本提交计划 | [AirNetwork](../../model/src/main/java/cc/ecisr/mmm/fluid/air/AirNetwork.java) 的 `planPhaseSource` / `planPhaseSink` / `commitPhaseMutation`、[GasLiquidPhaseChangeStage](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasLiquidPhaseChangeStage.java) | `thermal`、`air-network` |
 | 热孔流整数均压 | [GasEnergyStore](../../model/src/main/java/cc/ecisr/mmm/thermal/GasEnergyStore.java)、[GasTransferSearch](../../model/src/main/java/cc/ecisr/mmm/thermal/GasTransferSearch.java)、[GasTransferValidation](../../fabric/src/test/java/cc/ecisr/mmm/thermal/GasTransferValidation.java) | `thermal` |
@@ -28,7 +28,7 @@
 
 - 开放空间连接无限环境节点；密闭空间保存有限气体库存。
 - controller 的已验证闭壳 footprint 可声明 sealed domain boundary。命令临时域保持环境开放。
-- `AirCavityScanner` 只在当前网格预算内 flood fill，不读取未加载世界；部分充液格的剩余空间参与 runtime available volume。
+- `GasRuntimeGeometry` 从原始液体位置、体积和固定连通分量第一矩生成 PLIC，正干微盒形成气腔；部分充液格的干区持有实际归属。
 - 节点 pressure、density、temperature、孔流速度和边均为派生运行态，不作独立库存存储。
 
 ### 微盒气体几何
@@ -47,36 +47,19 @@ SI 容量以当前 `h³` 换算，各非最大份额一次舍入，最大份额�
 
 [GasGeometryOverlap](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasGeometryOverlap.java) 精确积分同一开放微盒与前后两个气体半空间的交集，返回单元归一化有理数体积。纯相切的交集体积为零，严格正的薄层保留精确量。库存交接仍需结合旧库存归属与实际可达路径；零重叠的有限气腔需要扫掠轨迹或可达性证明才能确定去向。
 
-这些对象保存几何与几何容量。当前 `AirNetwork` 库存归属使用下述格级扫描；微盒归属、库存容量、相变候选和状态交接的统一完成条件见[物理缺口](../roadmap/product-roadmap.md#物理缺口的依赖安排)。
+### 运行中的共同几何
 
-### Cavity scan
+[GasRuntimeGeometry](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasRuntimeGeometry.java) 保存一份不可变的几何、拓扑、库存容量和 `8N` 微盒归属。每个格子的完整液体分量元组包括 count、精确体积和位置第一矩，零体积分量也保留。构造直接读取原始载体列，未来单格编辑覆盖其完整元组后重建全域 PLIC，包含受梯度影响的邻格。完整固体占容 SVQ 副本与固定碰撞掩码共同参与容量计算。
 
-由当前几何直接发现的 air cell 同时满足：非 solid、`markerCount == 0`、扣除 cut-cell、granular/coherent occupancy 后仍有正 open volume。**扫描不区分"气"和"未采样的液体格"**：两者对同一个 flood fill 是同一件事——一段连通的无载体体积。
-
-是否成为腔体不靠分类决定，腔体带什么初始库存才需要区分，而那由 lineage 分配处负责：无旧 owner 的新 component 是显式真空节点，库存、质量与 `U` 均为零；开放域里上一代明确连接 ambient 的实际体积若本代被夹断为 sealed，则按该体积截留环境库存，即使它同时并入一个既有有限气泡也一样。
+原始液体或固体占容变化后，旧 frame 继续标识原库存的空间位置；下一次重建规划旧新几何间的完整库存与内能交接。相变和清空计划分别绑定完整来源与目标元组，在首次载体写入前复核来源，载体提交后复核目标。观察中的单格摘要仅在该格所有正气体块具有同一归属时返回节点，多归属或无气体返回 `-1`。
 
 环境截留量按标准体积 nanos 就近舍入。正截留体积舍入为零时，在库存提交前抛出 `GasTopologyBlockedException`。整数舍入对应的压力误差为 `|Δp| ≤ p₀·(0.5×10⁻⁹ m³)/V`，其中 `V` 是截留体积；体积到 nanos 的 binary64 换算误差另计。
 
-`AirNetwork.splitNode` 与拓扑重扫按 binary64 可用体积的精确比值分配库存，使用 `GasInventory.partition(List<ExactRational>)` 的最大余数分配；体积权重与库存 nanos 分别保留其单位。逐组件 nanos 与 species 整数闭合，质量和质量残差的最终舍入差额留在该组件的最大份额。节点拆分在发布前校核节点数量、编号和完整审计后继，拒绝时保留全部原节点、连接与账本。
-
-热学继承控制体积由 `GasTopologyVolumePartition` 使用相同几何权重分配，各非最大份额从精确乘积一次舍入，最大份额承接实际储存子列的余量。总体积误差至多为承接列的半个 ULP；正份额无法表示时拒绝候选。
-
-marker bulk 的普通空隙不必被猜成气泡，因为它即使成为 component 也拿不到库存。六邻域 flood fill 只跨越接近全开的 face；部分开放 face 不合并 component，而是形成有限速率 geometric edge。
-
-已存在的密闭有限库存若暂时只剩部分充液格，则其旧 lineage 中仍有正 residual volume、且不接触任何本轮 full-air/ambient component 的连通部分成为显式 partial owner component；真实连通时仍按正常 merge 处理。
-
-首次扫描或完整重扫后若仍没有节点，扫描器为具有正残余体积的部分充液连通区建立显式归属，按原规则规范化节点顺序和闭域总容量。这覆盖满液域的分数抽取，以及旧 membership 全部消失、抽取位置没有旧 lineage 的情况。节点通过正常 remap 接受库存：没有可转移库存时保持真空，旧密闭库存仍按既有容量权重转移。持久化与恢复使用相同的扫描规则。
-
-密闭壳内腔体消失时，有限库存沿开放面交给仍能到达且具有正容量的最近腔体。不存在可达去向时，`GasTopologyBlockedException` 在库存发布前拒绝完整候选。开放域中失去拓扑去向的库存记 escaped sink。
-
-- controller 已验证闭壳时，solver 外边界不自动判作 ambient；命令临时域和真实缺口仍连接 ambient node 0。
-- scan 按固定邻居顺序执行，节点以 canonical minimum-cell key 排序，保证同一几何得到确定 topology。
-- 超过 scan budget 时，尚未完成的空间 fail-open 为 ambient，不能凭不完整 flood fill 创建有限密闭库存。
-- available volume 是每 cell 的几何 open volume 减逐格 exact marker volume 与统一固体 occupancy，再乘 `cellSize³`；平滑液体 fraction 不结算气体容量或绝热功。单格 residual 只在局部拓扑归属时钳在几何范围内；完整闭域的每个节点按它实际拥有的 cell 结算带符号补量（有效 open volume 减权威 liquid），局部 marker 聚集只缩小这些 marker 所归属的腔体，不能越过实墙影响另一个腔体，也不能凭逐格钳制创造额外气相体积或绝热功。没有任何腔体拥有的残余体积（与任何气腔都不连通的部分充液格）才进入全域结算，因此节点容量总和仍严格等于“有效 open geometry 总量减全部权威 liquid carrier 体积”。runtime attribution 可沿 gas-centered（gas residual 至少占 open volume 一半）的连通部分充液格传播，随后只给相邻的一层 liquid-centered interface residual 归属，不能借 marker 空隙穿过整个液体 bulk；多 node 相遇时 ambient/较小 node 优先。
+`AirCavityScanner` 保留格级离线对照入口。运行中的气体归属与节点容量由上述微盒 frame 提供。
 
 ## 权威数据
 
-- 每个密闭节点以 canonical minimum-cell key 和完整 cell membership 标识。
+- 每个密闭节点以 canonical minimum-piece key 和完整微盒归属标识。
 - 每个气体组分保存稳定 component ID、标准体积 nanos、独立质量 kg、可选 species 和 chemical mass residual kg；气体的两个质量列都不使用凝聚相 solver mass weight。
 - source、sink、质量 roundoff 和 residual roundoff 是独立审计列。
 - ambient 节点不持有有限库存；开放域中新密闭腔从环境建立时明确记 external source。已启动闭域内没有旧 owner 的新 cavity 是显式真空节点，其 component 库存、质量和 `U` 均为零，不得伪造 ambient source。
@@ -95,52 +78,32 @@ component 与 species 的隶属关系是 world-local registry 原始数据，不
 
 相变后的拓扑计划同时绑定具体的父相变计划；首次相变写入前和父计划提交后均检查该身份。相同基础 revision 上准备的其他相变计划使其后继失效。
 
-气体拓扑计划同时保存不可变的 cut-micro 掩码和外壳密闭状态。操作级清空在任何库存写入前复核这份几何，以及重新扫描所得的节点归属、逐格与逐节点容量和孔流面积；几何变化即使保留相同节点标签，也会使旧计划失效。
+气体拓扑计划同时绑定来源 frame、不可变的 cut-micro 掩码、外壳密闭状态及完整载体元组。操作级清空在任何库存写入前复核来源，重新生成全干候选并核对微盒归属和节点容量。排气计划同时绑定来源 frame 与实际载体几何；位置第一矩或固体占容变化使旧计划失效。
 
-表示硬上限为：registry 64 个 component、单 node 32 个 component、单 component 16 个 species、单 region 65536 个 sealed node、stable ID 128 字符、单 extension 16 MiB。到达上限时拒绝候选或 fail-open 到 ambient；不能丢掉最小 component 继续运行。
+表示硬上限为：registry 64 个 component、单 node 32 个 component、单 component 16 个 species、单 region 65536 个 sealed node、stable ID 128 字符、单 extension 16 MiB。到达上限时明确拒绝完整候选。
 
 区域库存摘要和 source/sink 使用 `GasAuditLedger`，按注册表组分范围累加 nanos、species 与精确二进制质量和 residual；实际节点库存继续使用 `GasInventory`。审计、拓扑源汇、排气与恢复共用区域摘要。恢复先在局部候选中验证完整组分和审计闭合，再一次发布节点、账本和 revision。
 
-node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membership 和 minimum-cell key 决定。component stable ID、standard-volume nanos、kg 和 species/residual 独立保存，不能从理想气体状态方程反算库存。
+node ID 只是当前 topology 的稠密 ordinal；持久身份由微盒归属和 minimum-piece key 决定。component stable ID、standard-volume nanos、kg 和 species/residual 独立保存，不能从理想气体状态方程反算库存。
 
 凝聚相与气相搬运 chemical residual 时，只在相边界用该区域冻结的 `cellSize³` 做 signed solver-weight/kg 换算；气相内部输运、分裂、合并和持久化始终保持 kg。
 
 ## 拓扑变化
 
-拓扑重扫以重扫前后节点的实际 cell lineage 规划 merge、split、vent 和新腔初始化：
+[GasTopologyCoordinator](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasTopologyCoordinator.java) 在同一开放微盒内精确积分旧新干区的正体积交集。交接权重为旧块的已认证物理容量乘以交集占旧干区的精确比例。
 
-- merge 汇总完整库存和能量；
-- split 按几何份额分配；每组分的质量与质量余量由最大 nanos 子份额承接余数，同份额按节点顺序取首个。其余子列按比例求值并精确求和，承接列一次舍入；无法表示的严格正质量子列拒绝候选。物种整数份额沿用最大余数分配；
-- 开放域中打开或消失的腔体把实际库存记入环境 sink；密闭域中不产生 source/sink，失去拓扑去向的库存需要可达的正容量腔体才能转移，缺少去向时拒绝候选；
-- 开放域中从上一代 ambient lineage 被夹断的实际体积按环境组成记 source；若同一新节点还继承既有 sealed node，则环境来源体积与旧节点体积、库存和 `U` 分列合并后，才对最终几何差额结算功；同一节点中上一代无 owner 的本代体积仍是零库存真空并进入 inherited volume；
-- 相变产生或消耗的 water vapor 通过同一组件库存与 source/sink 审计提交。
+- 一对一携带完整库存；多对一合并组分、species、质量余量和内能。
+- 一对多按精确有理数权重拆分。`GasInventory.partition` 保持逐组件 nanos 与 species 的整数总量，质量列由最大份额承接余数；内能按共同温度拆分。
+- `GasTopologyVolumePartition` 使用相同权重分配旧控制体积。各非最大份额一次舍入，最大份额承接实际储存子列的余量；正份额无法表示时拒绝候选。
+- 已有真空节点合并时携带自己的旧控制体积。液体退让使已有有限气腔扩大时，新增干区进入最终容量，按旧控制体积计算绝热功。撤去固定固体后新开放微盒的实际干容量作为新暴露的真空体积参与合并，保持自由膨胀的内能处理。全新且没有有限或环境来源的独立气腔初始化为零库存真空。
+- 旧有限库存与新环境归属存在正交集时，实际库存份额进入 sink。旧环境干区被截为有限节点时，其交集容量按环境组成进入 source。
+- 延迟的液体编辑可通过当前已发表载体几何证明去向：旧、当前及未来几何均为同一个封闭连通气腔，固定掩码与固体占容保持一致，旧到当前及当前到未来分别有正干区交集时，集总均匀库存沿该实际气道整体交接；单一库存的绝热过程按总体积比连续合成。其他缺少正空间交集的有限库存以 `GasTopologyBlockedException` 拒绝，扩展支持需要实际扫掠轨迹或可达路径证明。空库存且没有后继的节点可以消失。
 
-部分充液界面的短时拓扑抖动使用 runtime lineage 减少虚假空气周转，但不能改变物质账本。新 full-air child 没有同格 membership overlap 时，只能继承同格或跨开放 face 相邻的旧 runtime lineage。
+闭域完成初次环境库存建立后，拓扑重建保持封闭物质总量。节点容量来自逐微盒原始库存证书；每个节点只汇总其自身容量。
 
-**继承只在旧 node 已经不拥有任何本轮开放 cell 时发生**：仍拥有开放 cell 的旧 node 一律按 membership overlap 匹配，不会把库存分给一个新出现的空腔。因此已启动闭域里无旧 owner 的新 cavity 按契约是显式真空节点，库存、质量与 `U` 均为零，不伪造 ambient source。
+外部单格替换保存完整 gas/thermal 拓扑后继，联合校核液体 source/sink 与气体容量功账本，载体替换后直接提交同一后继。
 
-旧 node 的 full-air membership 完全消失且旧 residual component 仍与新 gas component 相邻时，从原 interface cells 返回该新 lineage。若该 residual component 具有正容量但不接触任何新 gas component，它必须继续拥有原有限库存：该 component 的 partial owner cells 进入本代 topology membership，并按 minimum cell 与其他节点一起重新 canonicalize；若分裂成多个不连通 residual component，则按各自实际容量规划库存 split。
-
-这样不会把无法以 full-air cell 表示的真实气泡删除或任意并入另一节点。marker bulk 的普通空隙也不需要专门识别：它即使成为 component 也拿不到库存，消失时又按上一条规则把库存交回可达腔体。
-
-稳定 topology 快路每次仍从当前 exact residual volume 重新分配 interface lineage；相变新打开的微小气隙不能沿用上一轮空 residual 的归属，也不能被当成凭空新 node。
-
-闭域重扫前后均为单一气腔且存在正容量的同格 membership overlap 时，直接携带该腔完整库存、内能和原控制体积，再按当前几何与新增真空体积结算功。该路径仍完整规划气体与热学两侧的 revision 和守恒账本；气腔分裂、合并、消失或缺少 overlap 时使用一般 lineage 分配。
-
-闭域完成初次环境库存建立后，任何 topology source/sink、正容量有限库存失去 owner、有限库存被压到零容量或 scan budget 耗尽都以 typed gas-topology failure 拒绝完整候选；生产域进入 `NUMERICAL_PAUSE`，不会让该失败穿透 server tick，也不会提交部分 remap。
-
-注液只能改变现有库存的容量、拓扑分配和压缩功。
-
-每次气液相变候选都用未来实际 marker 数量与精确体积重扫格级拓扑。既有 marker 的截断或扩充也可能越过残余空间的归属判据。相变期间保留联合守恒的 gas `U`，并与 node volume 一次提交；后续实际运动的容量变化结算等熵功。logical step 末以及 capture 前从完整 carrier geometry 重扫，以保证持久拓扑与瞬态几何一致。
-
-重扫先建立旧 node 与新 node 的实际 cell overlap，再纯规划全部 transfer：
-
-- 一对一 lineage 携带完整 node inventory；
-- 多对一 merge 对 component、species、mass/residual 和 U 分列求和；
-- 空库存节点若并入有限气体，旧真空控制体积也进入 inherited volume；本代新出现且上一代没有 sealed/ambient owner 的体积同样作为新真空控制体积进入该列。气体向这些体积的自由膨胀保持 `U` 不变，不能误记为可逆边界功；真空被载体完全挤至零体积且没有后继时则没有物质、`U` 或控制体积需要转移；
-- 一对多 split 按 overlap/available-volume 的精确二进制权重和上述库存分配规则求出子列，`U` 按[热学共同温度拆分契约](thermal-state.md)分配；
-- 连到 ambient 的旧有限库存份额进入 sink；只有从上一代 ambient lineage 截留的体积按 ambient composition 进入 source，无 owner 的 sealed volume 是显式真空；
-- topology 与 thermal U 的 transfer plan 必须一起可提交，否则 network 保持重扫前状态。
+每次气液候选覆盖未来完整 count/V/M1 和固体占容，重建受影响邻格的 PLIC、微盒连通及节点容量，气体与热学两侧计划在首次载体写入前完成。相变期间保留联合守恒的 gas `U`，后续真实液体与颗粒运动改变容量时结算等熵功。逻辑步末与捕获前重建共同几何，使载体、微盒归属、库存及内能处于同一提交时点。
 
 ## 压力与热耦合
 
@@ -151,10 +114,12 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 - 一个界面 cell 可以同时含多种合法 liquid carrier。某条气液 transition 只结算其目标 liquid 的体积、质量、组成和相变能量；同格其他 liquid 原样加入该 cell 的 LTE heat-bath inventory，并计入冷凝容量，但不被改材料、不被并入目标组成，也不能仅因存在就触发候选暂停。
 - 所有 candidate 必须能由 world thermal registry 的连续状态函数从权威 `U` 唯一反演；声明 caloric 温区之外沿最近端点 `cv` 延拓，不因标定端点暂停。凝聚相的 `T_eq(p)` 在数据内插值、数据外沿端点割线延伸，详见热学专题。
 - 一个 liquid cell 可同时邻接多个独立 sealed node。gas topology 继续保留各 node 的库存和 `U`，phase planner 不合并它们；每个 pressure interval 只向绝对分压失衡最大的可执行 node 提交一次 cell 交换，随后由下一 projection 同步该体积变化。
-- 气液接口读取同格正剩余体积的实际 membership/lineage owner，并沿正开放面积的共享面查找相邻 gas node；全闭 cut-cell 面不形成跨格相变接口。同格 partial owner 继续参与汽化与凝结。
+- 气液接口读取实际 PLIC 的正湿干接触面，包括同微盒的部分界面及微面上的湿干交集。候选绑定液体固定连通分量和接触的气体块，汽化供体、凝结接收者及新增位置均限制在该液体分量内。完整汽化沿原接触块的正空间交集跟踪后继气腔。
 - mechanics 可从所有液气界面选择一个统一 sealed-node gauge reference，在 PCG 内只求相对压力并在绝对观察/热学边界加回；该数值换元不修改 node inventory、U 或不同 node 间的压差。接触液体的有限 node 会得到当次 projection 的集总可压缩 pressure unknown；该项为同一 EoS 线性化的临时求解变量，不写入权威 node pressure 列。
 
 当前 `AirNetwork` 是有限体积热力学与孔流网络模型；空间 FLIP 网格承载不可压凝聚相。有限 node 与液体接触时已用 `C_V = V*beta_s` 作为集总储存项进入同一对称 pressure block system，液体侵入/退出气腔的面通量与 node 压力响应因而在本子步隐式闭合；等温 `beta=1/p_abs`，热状态 `beta_s=1/(gamma*p_abs)`。
+
+压力节点观察读取实际微盒归属。气体工作数组按实际节点数量扩容，转移预算中的气体与颗粒编号保持独立。整格压力耦合当前要求相关格具有唯一气体归属；同格多气腔以明确的数值暂停处理，细分耦合仍需补充证明。
 
 活动颗粒的占据率支撑涉及有限气体节点时，该节点也进入压力系统。多个支撑单元属于同一节点时先合并体积导数，再与颗粒有限质量组成对称压力项；气体容量变化和颗粒受压使用同一份导数。离散方程见 [颗粒压力耦合](granular-state.md#统一排水与压力)。
 
@@ -215,9 +180,11 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 
 ## 持久化
 
-气体作为完整热区域 generation 的 required payload 发布。快照和逐 section payload 同时保存 `cellNodeOrdinal`（拓扑 membership）与 `cellLineageOrdinal`（包含部分充液格的气体归属）。两列使用同一 minimum-cell 顺序的节点 ordinal；lineage 的 `-1` 表示无归属，`0` 表示 ambient。恢复时从已提交的液体、颗粒和 coherent 库存共同推导几何后重扫。气体节点先于其热能恢复，因此重扫直接读取同一输入热快照中的 coherent 体积，避免使用尚未恢复的热状态，并用完整 lineage 保留仅存在于部分充液格中的气泡。随后要求节点数、minimum-cell key、逐格 membership 与完整 lineage、库存和能量 ordinal 一致；差异在发布恢复状态之前拒绝。
+气体作为完整热区域 generation 的 required payload 发布。快照与 section 都保存唯一 `pieceNodeOrdinal` 主列，每格八项，`-1` 表示无干区、`0` 表示环境、正整数表示规范有限节点。节点按全域最小气体块编号排序，库存与热能保持该顺序；section 切片保留全域 key，并记录 `sealedPieceCount`。
 
-持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账和 source/sink/roundoff 审计；显式真空 node 以空 component inventory 原样保存。membership 的正 ordinal 必须与同格 lineage 一致，缺失或越界的 lineage 拒绝恢复。
+恢复先从已提交液体、颗粒和 incoming thermal 快照中的 coherent 占容共同生成 frame，再校核完整 `8N` 归属、节点数与 minimum-piece key。随后恢复对应库存和内能列。section 组装校核完整覆盖、重复覆盖、节点引用和逐 section 计数；解码对大小、溢出、EOF 及尾随字节严格校验。显式真空节点以空库存原样保存。
+
+持久 payload 还包含 registry fingerprint、unit identity、component palette、节点总账与 source/sink/roundoff 审计。
 
 gas registry fingerprint 同时绑定每个 component 的允许 species 集合；不匹配时原样保留并锁定。edge、pressure、temperature 和 flow velocity 从完整库存与几何重建。
 

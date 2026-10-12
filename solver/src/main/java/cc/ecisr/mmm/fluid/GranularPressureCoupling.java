@@ -10,7 +10,8 @@ final class GranularPressureCoupling {
 	private double[] gx = new double[0], gy = new double[0], gz = new double[0];
 	private double[] boundaryX = new double[0], boundaryY = new double[0], boundaryZ = new double[0];
 	private double[] inverseMass = new double[0];
-	private final float[] liquidDiagonal, gasDiagonal;
+	private final float[] liquidDiagonal;
+	private float[] gasDiagonal;
 	private static final int SUPPORT = SweptGranularVolumeGradient.MAX_SUPPORT;
 	private final SweptGranularVolumeGradient gradient;
 
@@ -25,8 +26,10 @@ final class GranularPressureCoupling {
 		if (domain.granularState == null) return;
 		for (int parcel = 0; parcel < domain.granularState.parcels.count(); parcel++) {
 			int entries = gradient.build(domain.granularState.parcels.parcel(parcel), dt);
-			for (int slot = 0; slot < entries; slot++) if (domain.isAir(gradient.cells[slot])) {
-				accept.accept(domain.gasNodeOfAirCell(gradient.cells[slot]));
+			for (int slot = 0; slot < entries; slot++) {
+				int cell = gradient.cells[slot];
+				int node = PressureBoundaryView.wholeCellGasNode(domain, cell);
+				if (domain.isAir(cell) && node >= 0) accept.accept(node);
 			}
 		}
 	}
@@ -35,6 +38,9 @@ final class GranularPressureCoupling {
 	void prepare(float dt) {
 		count = domain.granularState == null ? 0 : domain.granularState.parcels.count();
 		ensureCapacity(count);
+		int gasNodes = domain.gasState.network.nodeCount();
+		domain.projection.ensureGasCapacity(gasNodes);
+		if (gasDiagonal.length <= gasNodes) gasDiagonal = new float[gasNodes + 1];
 		double h = domain.config.cellSize(), cellVolume = h * h * h;
 		for (int parcel = 0; parcel < count; parcel++) {
 			var p = domain.granularState.parcels.parcel(parcel);
@@ -48,12 +54,13 @@ final class GranularPressureCoupling {
 				gx[index] = gy[index] = gz[index] = 0;
 				if (slot >= entries) continue;
 				int cell = gradient.cells[slot];
-				int node = domain.isAir(cell) ? domain.gasNodeOfAirCell(cell) : -1;
+				int node = PressureBoundaryView.wholeCellGasNode(domain, cell);
+				if (!domain.isAir(cell)) node = -1;
 				int row = domain.isFluid(cell) && cell != domain.pressureAnchor ? cell
 						: node > 0 && domain.projection.gasPressureUnknown[node] ? -node : Integer.MAX_VALUE;
 				if (row == Integer.MAX_VALUE) {
-					double pressure = domain.isAir(cell)
-							? domain.gasPressureOfAirCell(cell) - domain.pressureReference : 0;
+					double pressure = node >= 0
+							? domain.gasBoundary.nodeGaugePressurePa(node) - domain.pressureReference : 0;
 					boundaryX[parcel] += gradient.x[slot] * pressure;
 					boundaryY[parcel] += gradient.y[slot] * pressure;
 					boundaryZ[parcel] += gradient.z[slot] * pressure;

@@ -40,7 +40,7 @@ final class PressureProjectionStage {
 	private final Access access;
 	private final PressureSystem system;
 	private final PressureBoundaryView gasBoundary;
-	private final boolean[] referenceNodes;
+	private boolean[] referenceNodes;
 	private int pressureAnchor;
 
 	PressureProjectionStage(Workspace state, Access access, PressureSystem system, PressureBoundaryView gasBoundary) {
@@ -53,6 +53,9 @@ final class PressureProjectionStage {
 
 	void solve(float dt) {
 		access.rebuildPressureBoundaryLineage();
+		state.projection.ensureGasCapacity(gasBoundary.gasNodeCount());
+		if (referenceNodes.length < state.projection.gasPressureUnknown.length)
+			referenceNodes = Arrays.copyOf(referenceNodes, state.projection.gasPressureUnknown.length);
 		Arrays.fill(state.projection.rhs, 0.0F);
 		Arrays.fill(state.projection.gasPressureUnknown, false);
 		Arrays.fill(state.projection.gasPressure, 0.0F);
@@ -242,7 +245,7 @@ final class PressureProjectionStage {
 		if (!gasBoundary.pressureActive()) return 0.0F;
 		boolean[] seen = referenceNodes;
 		Arrays.fill(seen, false);
-		system.forEachGranularGasNode(dt, node -> seen[Math.max(0, node)] = true);
+		system.forEachGranularGasNode(dt, node -> { if (node >= 0) seen[node] = true; });
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int air = access.cellIndex(x, y, z);
 			if (!access.isAir(air)) continue;
@@ -260,7 +263,7 @@ final class PressureProjectionStage {
 					&& access.isFluid(access.cellIndex(x, y, z + 1));
 			if (!touchesFluid) continue;
 			int node = gasBoundary.gasNodeOfAirCell(air);
-			seen[Math.max(0, node)] = true;
+			if (node >= 0) seen[node] = true;
 		}
 		if (seen[AirNetwork.AMBIENT_NODE]) return 0.0F;
 		double compliance = 0, reference = 0;

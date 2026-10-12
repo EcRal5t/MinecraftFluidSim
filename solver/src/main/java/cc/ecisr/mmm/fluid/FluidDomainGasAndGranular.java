@@ -71,7 +71,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	 */
 	public void sealDomainBoundary() {
 		if (gasState.sealedDomainBoundary) return;
-		if (gasState.cellNodeId != null || gasState.network.nodeCount() != 0 || gasState.network.drawnFromAmbientNanos() != 0L) {
+		if (gasState.frame != null || gasState.network.nodeCount() != 0 || gasState.network.drawnFromAmbientNanos() != 0L) {
 			throw new IllegalStateException("Gas domain boundary cannot change after topology initialization");
 		}
 		gasState.sealedDomainBoundary = true;
@@ -80,7 +80,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	/** Explicitly selects the authoritative gas registry before a first topology bootstrap. */
 	public void bindGasRegistry(GasRegistry registry) {
 		if (registry == null) throw new IllegalArgumentException("Gas registry is missing");
-		if (gasState.cellNodeId != null || gasState.network.nodeCount() != 0 || gasState.network.drawnFromAmbientNanos() != 0L) {
+		if (gasState.frame != null || gasState.network.nodeCount() != 0 || gasState.network.drawnFromAmbientNanos() != 0L) {
 			throw new IllegalStateException("Gas registry cannot change after topology initialization");
 		}
 		gasState.network = new AirNetwork(registry);
@@ -116,12 +116,10 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	}
 
 	/**
-	 * Gas node owning the air cell at a grid position: 0 ambient, at least 1 sealed, -1 when the
-	 * cell is not air or no scan has run yet.
+	 * Unique gas-piece owner at a grid position: 0 ambient, positive finite, -1 absent or mixed.
 	 */
 	public int airNodeAt(int x, int y, int z) {
-		if (gasState.cellNodeId == null) return -1;
-		return gasState.cellNodeId[cellIndexChecked(x, y, z)];
+		return gasBoundary.cellNode(cellIndexChecked(x, y, z));
 	}
 
 	/**
@@ -131,9 +129,9 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	 */
 	public byte[] copyGasNodeMask() {
 		byte[] mask = new byte[cellCount];
-		if (gasState.cellNodeId == null) return mask;
+		if (gasState.frame == null) return mask;
 		for (int cell = 0; cell < cellCount; cell++) {
-			int node = gasState.cellNodeId[cell];
+			int node = gasState.frame.commonCellNode(cell);
 			mask[cell] = node >= 1 ? (byte) Math.min(255, node) : 0;
 		}
 		return mask;
@@ -211,6 +209,15 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		}
 		SignedDyadic[] restored = state.toDense();
 		thermalState.requirePendingPhaseCells(restored, thermalMarkerContext());
+		for (int cell = 0; cell < restored.length; cell++) if (restored[cell].signum() < 0
+				&& Double.isNaN(thermalState.phaseScanTemperatureInCell(cell))) {
+			boolean gasStock = false;
+			if (gasState.frame != null) for (int micro = 0; micro < 8; micro++) {
+				int node = gasState.frame.nodeOfPiece(8 * cell + micro);
+				if (node > 0 && !gasState.network.inventory(node).isEmpty()) { gasStock = true; break; }
+			}
+			if (!gasStock) throw new IllegalArgumentException("Depleted phase cell has no finite gas successor inventory");
+		}
 		System.arraycopy(restored, 0, pendingPhaseCellVolume, 0, cellCount);
 	}
 	public ThermalTransport.Stats lastThermalTransportStats() {

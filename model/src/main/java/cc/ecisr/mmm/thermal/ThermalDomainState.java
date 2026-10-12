@@ -307,6 +307,14 @@ public final class ThermalDomainState {
 			throw new IllegalStateException("Liquid replacement thermal inventory or audit changed after planning");
 	}
 
+	/** Validates the combined external liquid audit and gas volume work before either inventory changes. */
+	public void requireGasRemapAfterLiquidReplacement(LiquidReplacementPlan liquid, GasEnergyStore.GasRemapPlan gas) {
+		requireCurrentLiquidReplacement(liquid);
+		gasState.requireCanCommitRemap(gas);
+		liquid.auditAfter.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
+				.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
+	}
+
 	/** The coordinator has removed old energies internally and reserved empty new ordinals. */
 	public void commitLiquidReplacement(int firstOrdinal, LiquidReplacementPlan plan) {
 		if (plan == null || plan.owner != this || plan.auditBefore != auditState.ledger())

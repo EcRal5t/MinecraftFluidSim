@@ -150,14 +150,30 @@ public final class CarrierMutationValidation {
 					&& after.externalSource().equals(gas.externalSource()) && after.escapedSink().equals(gas.escapedSink())
 					&& network.auditClosed(), "Fresh replacement preview reused the partial extraction's old liquid volume");
 		}
+		var disconnected = replacementGasWithFullNeighbour(false);
+		disconnected.removeVolumeNear(1, 0, 0, .0625F, 0);
+		var before = replacementState(disconnected); var frame = disconnected.gasState.frame;
+		var network = disconnected.gasState.network; var stock = network.sealedInventory(); long revision = network.revision();
+		try { disconnected.setVolume(0, 0, 0, 1); throw new AssertionError("Gas crossed a liquid-filled face without a spatial path"); }
+		catch (GasTopologyBlockedException expected) { }
+		requireUnchanged(disconnected, before);
+		require(disconnected.gasState.frame == frame && network.revision() == revision && network.sealedInventory().equals(stock),
+				"Rejected disconnected gas displacement changed geometry or inventory");
 	}
 
 	private static FluidDomain replacementGasWithFullNeighbour() {
+		return replacementGasWithFullNeighbour(true);
+	}
+
+	private static FluidDomain replacementGasWithFullNeighbour(boolean connected) {
 		byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte) 255); masks[0] = masks[1] = 0;
 		float[] positions = new float[64];
 		for (int cell = 0; cell < 2; cell++) for (int slot = 0; slot < 8; slot++) {
 			int base = 4 * (8 * cell + slot);
-			positions[base] = cell + .25F + .5F * (slot & 1);
+			// The liquid in cell 0 lies to its left. Reverse the full neighbour's x ordering so
+			// extracting its final marker exposes dry support at the same shared face.
+			positions[base] = !connected ? cell + .25F + .5F * (slot & 1)
+					: cell == 0 ? .25F : cell + .25F + .5F * (1 - (slot & 1));
 			positions[base + 1] = .25F + .5F * (slot >> 1 & 1);
 			positions[base + 2] = .25F + .5F * (slot >> 2 & 1);
 			positions[base + 3] = cell == 0 ? .0625F : .125F;
@@ -173,9 +189,8 @@ public final class CarrierMutationValidation {
 			cc.ecisr.mmm.fluid.air.GasStateSnapshot expected) {
 		var actual = domain.exportGasState("");
 		require(domain.gasState.network == network && network.revision() == revision && network.availableVolume(1) == .5
-				&& domain.gasState.previousSealedNodeCount == 1 && domain.gasState.pressureActive
-				&& java.util.Arrays.equals(actual.cellNodeOrdinal(), expected.cellNodeOrdinal())
-				&& java.util.Arrays.equals(actual.cellLineageOrdinal(), expected.cellLineageOrdinal())
+				&& domain.gasBoundary.previousSealedNodeCount() == 1 && domain.gasState.pressureActive
+				&& java.util.Arrays.equals(actual.pieceNodeOrdinal(), expected.pieceNodeOrdinal())
 				&& actual.nodes().equals(expected.nodes()) && actual.externalSource().equals(expected.externalSource())
 				&& actual.escapedSink().equals(expected.escapedSink()) && actual.massRoundoff().equals(expected.massRoundoff())
 				&& actual.residualRoundoff().equals(expected.residualRoundoff()), "Rejected replacement changed gas owners or topology");
@@ -215,7 +230,7 @@ public final class CarrierMutationValidation {
 		require(vacuum.totalVolumeExact() == 1 && vacuum.gasState.network.nodeCount() == 1,
 				"Replacement rejected an empty cavity");
 		var initial = replacementGasCompartments(false); initial.setVolume(1, 1, 1, 1);
-		require(initial.totalVolumeExact() == 1 && initial.gasState.cellNodeId == null,
+		require(initial.totalVolumeExact() == 1 && initial.gasState.frame == null,
 				"Replacement required gas inventory before topology initialization");
 		var cut = new FluidDomain(2, 2, 2, d.config);
 		byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte)255); masks[0] = 126;

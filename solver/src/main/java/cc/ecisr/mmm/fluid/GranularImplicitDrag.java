@@ -440,13 +440,17 @@ final class GranularImplicitDrag {
 	}
 
 	private int row(int cell) {
+		int node = PressureBoundaryView.wholeCellGasNode(domain, cell);
 		if (domain.isFluid(cell)) return cell == domain.pressureAnchor ? Integer.MAX_VALUE : cell;
-		int node = domain.gasNodeOfAirCell(cell);
 		return node > 0 && domain.projection.gasPressureUnknown[node] ? -node : Integer.MAX_VALUE;
 	}
 	private double boundaryPressure(int cell) {
 		return row(cell) == Integer.MAX_VALUE && domain.isAir(cell)
-				? domain.gasPressureOfAirCell(cell) - domain.pressureReference : 0;
+				? nodeBoundaryPressure(cell) - domain.pressureReference : 0;
+	}
+	private double nodeBoundaryPressure(int cell) {
+		int node = PressureBoundaryView.wholeCellGasNode(domain, cell);
+		return node > 0 ? domain.gasBoundary.nodeGaugePressurePa(node) : 0;
 	}
 	private double value(int row, double[] source) {
 		return row == Integer.MAX_VALUE ? 0 : source[row >= 0 ? row : domain.cellCount - row];

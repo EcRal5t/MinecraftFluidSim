@@ -15,7 +15,7 @@ final class FluidDomainStateMapper {
 		if (domain.collisionTransactionActive()) {
 			throw new IllegalStateException("Cannot capture while a collision transaction is active");
 		}
-		if (domain.gasState.cellNodeId != null) domain.gasTopologyCoordinator.synchronizeForPersistence();
+		if (domain.gasState.frame != null) domain.gasTopologyCoordinator.synchronizeForPersistence();
 
 		FlipParticleState pure = null;
 		FlipMaterialParticleState materials = null;
@@ -32,7 +32,7 @@ final class FluidDomainStateMapper {
 
 		GranularStateSnapshot granular = domain.granularState == null ? null : domain.exportGranularState();
 		String chemicalFingerprint = chemistry == null ? "" : chemistry.fingerprint();
-		GasStateSnapshot gas = domain.gasState.cellNodeId == null
+		GasStateSnapshot gas = domain.gasState.frame == null
 				? null : domain.exportGasState(chemicalFingerprint);
 		FlipThermalParticleState thermal = domain.thermalState == null
 				? null : domain.exportThermalParticleState();

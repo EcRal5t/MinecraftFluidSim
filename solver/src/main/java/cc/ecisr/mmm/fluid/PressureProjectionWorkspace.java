@@ -27,16 +27,17 @@ final class PressureProjectionWorkspace {
 	final double[] matrixPositiveY;
 	final double[] matrixNegativeZ;
 	final double[] matrixPositiveZ;
-	final boolean[] gasPressureUnknown;
-	final int[] gasUnknownNodes;
-	final float[] gasPressure;
-	final double[] gasRhs;
-	final double[] gasResidual;
-	final double[] gasPreconditioned;
-	final double[] gasDirection;
-	final double[] gasMatrixDirection;
-	final double[] gasMatrixDiagonal;
-	final double[] gasStorageCoefficient;
+	boolean[] gasPressureUnknown;
+	int[] gasUnknownNodes;
+	float[] gasPressure;
+	double[] gasRhs;
+	double[] gasResidual;
+	double[] gasPreconditioned;
+	double[] gasDirection;
+	double[] gasMatrixDirection;
+	double[] gasMatrixDiagonal;
+	double[] gasStorageCoefficient;
+	int gasNodeCount;
 	int fluidUnknownCount;
 	int gasUnknownCount;
 
@@ -61,8 +62,7 @@ final class PressureProjectionWorkspace {
 		this.matrixPositiveY = new double[cellCount];
 		this.matrixNegativeZ = new double[cellCount];
 		this.matrixPositiveZ = new double[cellCount];
-		// Node ids are one-based and cannot outnumber cells. These vectors are projection scratch;
-		// AirNetwork inventory/U remain the sole persistent gas truth.
+		// One-based gas scratch grows with the actual micro-piece chamber count.
 		this.gasPressureUnknown = new boolean[cellCount + 1];
 		this.gasUnknownNodes = new int[cellCount];
 		this.gasPressure = new float[cellCount + 1];
@@ -73,5 +73,20 @@ final class PressureProjectionWorkspace {
 		this.gasMatrixDirection = new double[cellCount + 1];
 		this.gasMatrixDiagonal = new double[cellCount + 1];
 		this.gasStorageCoefficient = new double[cellCount + 1];
+	}
+
+	void ensureGasCapacity(int nodes) {
+		if (nodes < 0 || nodes > cc.ecisr.mmm.fluid.air.GasLimits.MAX_NODES_PER_REGION)
+			throw new IllegalArgumentException("Gas pressure node count exceeds its representation budget");
+		gasNodeCount = nodes;
+		if (nodes < gasPressure.length) return;
+		int length = Math.addExact(nodes, 1);
+		gasPressureUnknown = Arrays.copyOf(gasPressureUnknown, length);
+		gasUnknownNodes = Arrays.copyOf(gasUnknownNodes, nodes);
+		gasPressure = Arrays.copyOf(gasPressure, length);
+		gasRhs = Arrays.copyOf(gasRhs, length); gasResidual = Arrays.copyOf(gasResidual, length);
+		gasPreconditioned = Arrays.copyOf(gasPreconditioned, length); gasDirection = Arrays.copyOf(gasDirection, length);
+		gasMatrixDirection = Arrays.copyOf(gasMatrixDirection, length); gasMatrixDiagonal = Arrays.copyOf(gasMatrixDiagonal, length);
+		gasStorageCoefficient = Arrays.copyOf(gasStorageCoefficient, length);
 	}
 }

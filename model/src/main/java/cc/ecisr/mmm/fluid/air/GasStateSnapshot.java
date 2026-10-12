@@ -3,7 +3,6 @@ package cc.ecisr.mmm.fluid.air;
 import cc.ecisr.mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 /** Stable-handle-free gas topology/inventory handoff used at the region persistence boundary. */
@@ -14,8 +13,7 @@ public record GasStateSnapshot(
 		String registryFingerprint,
 		String chemicalRegistryFingerprint,
 		List<Node> nodes,
-		int[] cellNodeOrdinal,
-		int[] cellLineageOrdinal,
+		int[] pieceNodeOrdinal,
 		GasAuditLedger externalSource,
 		GasAuditLedger escapedSink,
 		SignedDyadic massRoundoff,
@@ -35,34 +33,29 @@ public record GasStateSnapshot(
 				|| chemicalRegistryFingerprint == null
 				|| !(chemicalRegistryFingerprint.isEmpty() || chemicalRegistryFingerprint.matches("[0-9a-f]{64}"))
 				|| nodes == null || nodes.size() > GasLimits.MAX_NODES_PER_REGION
-				|| cellNodeOrdinal == null
-				|| cellNodeOrdinal.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)
-				|| cellLineageOrdinal == null || cellLineageOrdinal.length != cellNodeOrdinal.length
+				|| pieceNodeOrdinal == null || pieceNodeOrdinal.length != pieceCount(sizeX, sizeY, sizeZ)
 				|| externalSource == null || escapedSink == null || massRoundoff == null || residualRoundoff == null) {
 			throw new IllegalArgumentException("Invalid gas state identity or dimensions");
 		}
 		nodes = List.copyOf(nodes);
+		pieceNodeOrdinal = pieceNodeOrdinal.clone();
 		int previousKey = -1;
-		int[] minimumCell = new int[nodes.size()];
-		java.util.Arrays.fill(minimumCell, Integer.MAX_VALUE);
+		int[] minimumPiece = new int[nodes.size()];
+		java.util.Arrays.fill(minimumPiece, Integer.MAX_VALUE);
 		for (Node node : nodes) {
 			if (node == null || node.topologyKey() <= previousKey) {
 				throw new IllegalArgumentException("Gas nodes are not in canonical topology order");
 			}
 			previousKey = node.topologyKey();
 		}
-		for (int cell = 0; cell < cellNodeOrdinal.length; cell++) {
-			int ordinal = cellNodeOrdinal[cell];
-			int lineage = cellLineageOrdinal[cell];
-			if (lineage < -1 || lineage > nodes.size() || ordinal > 0 && lineage != ordinal) {
-				throw new IllegalArgumentException("Gas cell lineage ordinal is invalid or disagrees with membership");
-			}
-			if (ordinal < 0 || ordinal > nodes.size()) throw new IllegalArgumentException("Gas cell node ordinal is invalid");
-			if (ordinal > 0) minimumCell[ordinal - 1] = Math.min(minimumCell[ordinal - 1], cell);
+		for (int piece = 0; piece < pieceNodeOrdinal.length; piece++) {
+			int ordinal = pieceNodeOrdinal[piece];
+			if (ordinal < -1 || ordinal > nodes.size()) throw new IllegalArgumentException("Gas piece node ordinal is invalid");
+			if (ordinal > 0) minimumPiece[ordinal - 1] = Math.min(minimumPiece[ordinal - 1], piece);
 		}
 		for (int ordinal = 0; ordinal < nodes.size(); ordinal++) {
-			if (minimumCell[ordinal] != nodes.get(ordinal).topologyKey()) {
-				throw new IllegalArgumentException("Gas node topology key does not match complete cell membership");
+			if (minimumPiece[ordinal] == Integer.MAX_VALUE || minimumPiece[ordinal] != nodes.get(ordinal).topologyKey()) {
+				throw new IllegalArgumentException("Gas node topology key does not match complete piece membership");
 			}
 		}
 		boolean species = nodes.stream().flatMap(node -> node.inventory().components().stream())
@@ -72,54 +65,56 @@ public record GasStateSnapshot(
 		if (species && chemicalRegistryFingerprint.isEmpty()) {
 			throw new IllegalArgumentException("Gas species state requires a chemical registry fingerprint");
 		}
-		cellNodeOrdinal = cellNodeOrdinal.clone();
-		cellLineageOrdinal = cellLineageOrdinal.clone();
 	}
 
-	@Override public int[] cellNodeOrdinal() { return cellNodeOrdinal.clone(); }
-	@Override public int[] cellLineageOrdinal() { return cellLineageOrdinal.clone(); }
+	@Override public int[] pieceNodeOrdinal() { return pieceNodeOrdinal.clone(); }
 
-	/** Captures runtime node ids into canonical minimum-cell topology order. */
-	public static GasStateSnapshot capture(int sizeX, int sizeY, int sizeZ, int[] runtimeCellNodeId,
-	                                      int[] runtimeCellLineageId, AirNetwork network,
+	/** Unique common owner for observation; absent or mixed cells return -1. */
+	public int[] cellNodeOrdinal() {
+		int[] result = new int[pieceNodeOrdinal.length / 8];
+		for (int cell = 0; cell < result.length; cell++) {
+			int owner = -1;
+			for (int slot = 0; slot < 8; slot++) {
+				int node = pieceNodeOrdinal[8 * cell + slot];
+				if (node < 0) continue;
+				if (owner < 0) owner = node;
+				else if (owner != node) { owner = -1; break; }
+			}
+			result[cell] = owner;
+		}
+		return result;
+	}
+
+	/** Captures an already canonical runtime, preserving the inventory and thermal node order. */
+	public static GasStateSnapshot capture(int sizeX, int sizeY, int sizeZ, int[] runtimePieceNodeId, AirNetwork network,
 	                                      String chemicalRegistryFingerprint) {
-		if (runtimeCellNodeId == null || runtimeCellLineageId == null
-				|| runtimeCellLineageId.length != runtimeCellNodeId.length || network == null) {
+		if (runtimePieceNodeId == null || runtimePieceNodeId.length != pieceCount(sizeX, sizeY, sizeZ) || network == null) {
 			throw new IllegalArgumentException("Gas runtime topology is unavailable");
 		}
 		int nodeCount = network.nodeCount();
 		int[] keys = new int[nodeCount + 1]; java.util.Arrays.fill(keys, Integer.MAX_VALUE);
-		for (int cell = 0; cell < runtimeCellNodeId.length; cell++) {
-			int node = runtimeCellNodeId[cell];
+		for (int piece = 0; piece < runtimePieceNodeId.length; piece++) {
+			int node = runtimePieceNodeId[piece];
+			if (node < -1 || node > nodeCount) throw new IllegalArgumentException("Gas runtime topology names an unknown node");
 			if (node > 0) {
-				if (node > nodeCount) throw new IllegalArgumentException("Gas runtime topology names an unknown node");
-				keys[node] = Math.min(keys[node], cell);
+				keys[node] = Math.min(keys[node], piece);
 			}
 		}
-		ArrayList<RuntimeNode> ordered = new ArrayList<>(nodeCount);
-		for (int node = 1; node <= nodeCount; node++) {
-			if (keys[node] == Integer.MAX_VALUE) throw new IllegalArgumentException("Gas runtime node has no owning cell");
-			ordered.add(new RuntimeNode(node, keys[node], network.inventory(node)));
-		}
-		ordered.sort(Comparator.comparingInt(RuntimeNode::key));
-		int[] ordinalByRuntime = new int[nodeCount + 1];
 		ArrayList<Node> nodes = new ArrayList<>(nodeCount);
-		for (int ordinal = 0; ordinal < ordered.size(); ordinal++) {
-			RuntimeNode runtime = ordered.get(ordinal); ordinalByRuntime[runtime.nodeId()] = ordinal + 1;
-			nodes.add(new Node(runtime.key(), runtime.inventory()));
-		}
-		int[] memberships = new int[runtimeCellNodeId.length];
-		int[] lineages = new int[memberships.length];
-		for (int cell = 0; cell < memberships.length; cell++) {
-			int runtime = runtimeCellNodeId[cell]; memberships[cell] = runtime > 0 ? ordinalByRuntime[runtime] : 0;
-			int lineage = runtimeCellLineageId[cell];
-			if (lineage < -1 || lineage > nodeCount) throw new IllegalArgumentException("Gas runtime lineage names an unknown node");
-			lineages[cell] = lineage > 0 ? ordinalByRuntime[lineage] : lineage;
+		int previousKey = -1;
+		for (int node = 1; node <= nodeCount; node++) {
+			if (keys[node] == Integer.MAX_VALUE || keys[node] <= previousKey)
+				throw new IllegalArgumentException("Gas runtime nodes are not in canonical minimum-piece order");
+			nodes.add(new Node(keys[node], network.inventory(node))); previousKey = keys[node];
 		}
 		return new GasStateSnapshot(sizeX, sizeY, sizeZ, network.registry().fingerprint(), chemicalRegistryFingerprint,
-				List.copyOf(nodes), memberships, lineages, network.externalSource(), network.escapedSink(),
+				List.copyOf(nodes), runtimePieceNodeId, network.externalSource(), network.escapedSink(),
 				network.massRoundoff(), network.residualRoundoff());
 	}
 
-	private record RuntimeNode(int nodeId, int key, GasInventory inventory) { }
+	private static int pieceCount(int x, int y, int z) {
+		if (x <= 0 || y <= 0 || z <= 0) throw new IllegalArgumentException("Gas dimensions must be positive");
+		try { return Math.multiplyExact(8, Math.multiplyExact(Math.multiplyExact(x, y), z)); }
+		catch (ArithmeticException overflow) { throw new IllegalArgumentException("Gas piece dimensions overflow", overflow); }
+	}
 }

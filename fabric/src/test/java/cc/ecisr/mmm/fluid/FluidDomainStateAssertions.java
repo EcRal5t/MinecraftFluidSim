@@ -181,10 +181,8 @@ public final class FluidDomainStateAssertions {
 		require(expected.chemicalRegistryFingerprint().equals(actual.chemicalRegistryFingerprint()),
 				context + ": gas chemical fingerprint changed");
 		require(expected.nodes().equals(actual.nodes()), context + ": gas nodes changed");
-		require(Arrays.equals(expected.cellNodeOrdinal(), actual.cellNodeOrdinal()),
-				context + ": gas cell ownership changed");
-		require(Arrays.equals(expected.cellLineageOrdinal(), actual.cellLineageOrdinal()),
-				context + ": gas cell lineage changed");
+		require(Arrays.equals(expected.pieceNodeOrdinal(), actual.pieceNodeOrdinal()),
+				context + ": gas microbox ownership changed");
 		require(expected.externalSource().equals(actual.externalSource()), context + ": gas source changed");
 		require(expected.escapedSink().equals(actual.escapedSink()), context + ": gas sink changed");
 		require(expected.massRoundoff().equals(actual.massRoundoff()), context + ": gas mass roundoff changed");

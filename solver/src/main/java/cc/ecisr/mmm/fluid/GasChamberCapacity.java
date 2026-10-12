@@ -30,6 +30,19 @@ final class GasChamberCapacity {
 		if (domain == null || geometry == null || topology == null || !topology.matchesGeometry(geometry))
 			throw new IllegalArgumentException("Gas chamber capacity requires its matching captured geometry");
 		var components = GasComponentCapacity.capture(domain, geometry, futureEdit, occupiedSvq);
+		return assemble(components,geometry,topology);
+	}
+
+	static GasChamberCapacity capture(FluidDomain domain, GasComplementGeometry geometry,
+	                                 GasChamberTopology topology, long[] occupiedSvq,
+	                                 List<PhaseLiquidGeometryEdit> liquidStock) {
+		if (domain == null || geometry == null || topology == null || !topology.matchesGeometry(geometry))
+			throw new IllegalArgumentException("Gas chamber capacity requires its matching captured geometry");
+		return assemble(GasComponentCapacity.capture(domain,geometry,occupiedSvq,liquidStock),geometry,topology);
+	}
+
+	private static GasChamberCapacity assemble(List<GasComponentCapacity.Component> components,
+	                                           GasComplementGeometry geometry, GasChamberTopology topology) {
 		int count = topology.chambers().size();
 		SignedDyadic[] capacities = new SignedDyadic[count + 1], errors = new SignedDyadic[count + 1];
 		Arrays.fill(capacities, SignedDyadic.ZERO); Arrays.fill(errors, SignedDyadic.ZERO);

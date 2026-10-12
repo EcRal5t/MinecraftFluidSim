@@ -276,7 +276,8 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 	public record OperatorGasVent(GasAuditLedger removed, SignedDyadic internalEnergy, int sealedNodes) { }
 	public record OperatorGasVentPlan(
 			int nodeCount, GasAuditLedger removed, AirNetwork.RemapPlan gasPlan,
-			GasEnergyStore.GasVentPlan thermalPlan, ThermalDomainState.Revision thermalRevision
+			GasEnergyStore.GasVentPlan thermalPlan, ThermalDomainState.Revision thermalRevision,
+			GasRuntimeGeometry sourceGeometry
 	) { }
 	public static final class OperatorClearPlan {
 		final CondensedClearPlan condensed;

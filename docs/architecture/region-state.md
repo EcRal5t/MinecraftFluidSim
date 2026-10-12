@@ -262,4 +262,4 @@ controller console 的 summary 只读现有 metadata 和已维护的 bounded led
 
 普通 checkpoint 不删除上一完整 slot，因为它既是原子覆盖的另一半，也是显式 recoverprevious 的唯一候选。清理逻辑绝不能触碰 HEAD 当前指向的 slot。
 
-气体区域载荷同时保存每格当前 membership 和保留封闭气腔归属的 lineage ordinal，两列使用同一规范节点排序并随 section 拆分、组装。部分充液单元可能只持有 lineage；恢复扫描必须读取这一列才能重建原气腔及其库存绑定。具体格式见 [气体状态](gas-state.md)。
+气体区域载荷保存完整 `8N` 微盒归属主列 `pieceNodeOrdinal`，按全域 minimum-piece key 规范节点排序并随 section 拆分、组装。section 保留全域节点编号并校核 `sealedPieceCount`；恢复从完整载体几何重新生成微盒归属与容量，核对库存和热能的同序绑定。具体格式见 [气体状态](gas-state.md)。

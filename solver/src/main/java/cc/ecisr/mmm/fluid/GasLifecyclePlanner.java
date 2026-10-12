@@ -27,6 +27,10 @@ final class GasLifecyclePlanner {
 		if (domain.hasPendingPhaseVolumeWork()) {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator vent");
 		}
+		domain.ensureInventoryGrid();
+		GasRuntimeGeometry sourceGeometry = domain.gasState.frame == null ? null : GasRuntimeGeometry.capture(domain, null,
+				domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq(),
+				domain.gasState.sealedDomainBoundary);
 		if (!domain.gasState.network.auditClosed()) throw new IllegalStateException("Gas inventory audit is open");
 		GasAuditLedger removed = domain.gasState.network.sealedInventory();
 		int nodeCount = domain.gasState.network.nodeCount();
@@ -41,12 +45,17 @@ final class GasLifecyclePlanner {
 		GasEnergyStore.GasVentPlan thermalPlan = domain.thermalState == null ? null
 				: domain.thermalState.planGasVent(domain.gasState.network, domain.particles.count());
 		return new FluidDomain.OperatorGasVentPlan(nodeCount, removed, gasPlan, thermalPlan,
-				domain.thermalState == null ? null : domain.thermalState.thermalRevision());
+				domain.thermalState == null ? null : domain.thermalState.thermalRevision(),
+				sourceGeometry);
 	}
 
 	/** Leaves a complete sealed vacuum topology and books the removed gas plus U to sinks. */
 	FluidDomain.OperatorGasVent commitVent(FluidDomain.OperatorGasVentPlan plan) {
+		domain.ensureInventoryGrid();
 		if (plan == null || domain.gasState.network.nodeCount() != plan.nodeCount()
+				|| (domain.gasState.frame == null) != (plan.sourceGeometry() == null)
+				|| plan.sourceGeometry() != null && !plan.sourceGeometry().matchesCarrierGeometry(domain,
+						domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq())
 				|| !domain.gasState.network.sealedInventory().equals(plan.removed())) {
 			throw new IllegalStateException("Sealed gas inventory changed after vent planning");
 		}
@@ -58,8 +67,7 @@ final class GasLifecyclePlanner {
 		if (plan.thermalPlan() != null) domain.thermalState.requireCanCommitGasVent(plan.thermalPlan());
 		if (plan.thermalPlan() != null) domain.thermalState.commitGasVent(plan.thermalPlan());
 		domain.gasState.network.commitRemapNodes(plan.gasPlan());
-		domain.gasState.previousSealedNodeCount = plan.nodeCount();
-		domain.gasState.pressureActive = plan.nodeCount() > 0;
+		domain.gasState.pressureActive = domain.gasBoundary.nodeCount() > 0;
 		return new FluidDomain.OperatorGasVent(plan.removed(), plan.thermalPlan() == null
 				? SignedDyadic.ZERO : plan.thermalPlan().removedEnergy(), plan.nodeCount());
 	}

@@ -161,6 +161,7 @@ final class MechanicalStageAssembly {
 
 	private static GridToParticleStage.Access gridToParticleAccess(FluidDomain domain, PressureSystem pressureSystem) {
 		return new GridToParticleStage.Access() {
+			@Override public int gasNodeCount() { return domain.gasBoundary().nodeCount(); }
 			@Override public void samplePair(int axis, float[] field, float[] previous, float x, float y, float z, float[] result) {
 				float h = domain.config.cellSize();
 				boolean[] valid = axis == 0 ? domain.mac.velocityValidX : axis == 1 ? domain.mac.velocityValidY : domain.mac.velocityValidZ;

@@ -22,6 +22,7 @@ final class CellVolumeReplacementPlan {
 	final List<Piece> pieces;
 	final ChemicalParcelStore.AuditExchange chemistryAudit;
 	final ThermalDomainState.LiquidReplacementPlan thermal;
+	final GasTopologyCoordinator.GasTopologyPlan gasTopology;
 	private final long chemicalRevision;
 	private final ChemicalParcelStore chemicalOwner;
 	private final AirNetwork gasNetwork;
@@ -29,23 +30,24 @@ final class CellVolumeReplacementPlan {
 	private final long inventoryRevision;
 	private final boolean sealed;
 	private final int collisionMask;
-	private final byte[] topologyMasks;
 	private final SignedDyadic pore;
 	private final ThermalDomainState thermalOwner;
 	private final ThermalDomainState.Revision thermalRevision;
 
 	private CellVolumeReplacementPlan(FluidDomain domain, int cell, int[] removed, List<Piece> pieces,
-			ChemicalParcelStore.AuditExchange chemistryAudit, ThermalDomainState.LiquidReplacementPlan thermal) {
+			ChemicalParcelStore.AuditExchange chemistryAudit, ThermalDomainState.LiquidReplacementPlan thermal,
+			GasTopologyCoordinator.GasTopologyPlan gasTopology) {
 		this.mutation = CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), domain.particles.count());
 		this.cell = cell; this.removed = removed; this.pieces = List.copyOf(pieces);
 		this.chemistryAudit = chemistryAudit; this.thermal = thermal;
-		inventoryRevision = domain.gasState.cellNodeId == null ? -1 : domain.markerGrid.inventoryRevision;
+		this.gasTopology = gasTopology;
+		if (domain.gasState.frame != null) domain.ensureInventoryGrid();
+		inventoryRevision = domain.gasState.frame == null ? -1 : domain.markerGrid.inventoryRevision;
 		chemicalRevision = domain.chemicalParcels == null ? 0 : domain.chemicalParcels.mutationRevision();
 		chemicalOwner = domain.chemicalParcels;
 		gasNetwork = domain.gasState.network; gasRevision = gasNetwork.revision();
 		sealed = domain.gasState.sealedDomainBoundary;
 		collisionMask = domain.geometry.cutCells.mask(cell);
-		topologyMasks = domain.gasState.cellNodeId == null ? null : domain.geometry.cutCells.copyMicroMasks();
 		pore = pore(domain, cell);
 		granularRevision = domain.granularState == null ? 0 : domain.granularState.mutationRevision();
 		thermalOwner = domain.thermalState;
@@ -104,12 +106,14 @@ final class CellVolumeReplacementPlan {
 		var audit = chemistry == null ? null : chemistry.planAuditExchange(source, sink);
 		var thermal = domain.thermalState == null || removed.length == 0 && pieces.isEmpty() ? null : domain.thermalState.planLiquidReplacement(
 				removed, thermalInsertions, domain.thermalMarkerContext());
-		domain.gasTopologyCoordinator.requireAfterLiquidEdit(futureEdit(domain, cell, pieces));
+		var gasTopology = domain.gasTopologyCoordinator.planAfterLiquidEdit(futureEdit(domain, cell, pieces));
+		if (thermal != null && gasTopology != null && gasTopology.thermalPlan() != null)
+			domain.thermalState.requireGasRemapAfterLiquidReplacement(thermal, gasTopology.thermalPlan());
 		// Reserve only storage. Ownership, inventory, audit objects and revisions remain unchanged.
 		domain.ensureParticleCapacity(finalCount);
 		if (domain.thermalState != null) domain.thermalState.ensureCapacity(Math.max(finalCount, domain.particles.capacity()));
 		if (chemistry != null) chemistry.pool().reserveRecords(finalCount);
-		return new CellVolumeReplacementPlan(domain, cell, removed, pieces, audit, thermal);
+		return new CellVolumeReplacementPlan(domain, cell, removed, pieces, audit, thermal, gasTopology);
 	}
 
 	void requireCurrent(FluidDomain domain) {
@@ -118,7 +122,7 @@ final class CellVolumeReplacementPlan {
 				|| domain.gasState.network != gasNetwork || gasNetwork.revision() != gasRevision
 				|| sealed != domain.gasState.sealedDomainBoundary
 				|| collisionMask != domain.geometry.cutCells.mask(cell)
-				|| topologyMasks != null && !Arrays.equals(topologyMasks, domain.geometry.cutCells.copyMicroMasks())
+				|| (gasTopology == null) != (domain.gasState.frame == null)
 				|| !pore.equals(pore(domain, cell))
 				|| granularRevision != (domain.granularState == null ? 0 : domain.granularState.mutationRevision())
 				|| thermalOwner != domain.thermalState
@@ -129,6 +133,7 @@ final class CellVolumeReplacementPlan {
 			throw new IllegalStateException("Cell replacement chemical inventory or audit changed after planning");
 		if (chemistryAudit != null) domain.chemicalParcels.requireCurrentAuditExchange(chemistryAudit);
 		if (thermal != null) domain.thermalState.requireCurrentLiquidReplacement(thermal);
+		if (gasTopology != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gasTopology);
 	}
 
 	private static SignedDyadic pore(FluidDomain domain, int cell) {
