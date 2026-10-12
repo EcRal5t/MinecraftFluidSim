@@ -179,6 +179,7 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	private static void representationRepairReusesOriginalDonorSupply() {
+		cancelledFluxCanBeAugmentedAgain();
 		for (int amount : new int[] {1, 2}) for (int repair = 1; repair <= amount; repair++) {
 			var flux = new ConservativeLiquidFlux(3, 1, 1);
 			flux.geometry(new LiquidFluxGeometry(new FlipCutCellGeometry(3, 1, 1)));
@@ -208,6 +209,33 @@ public final class LiquidVolumeTransportValidation {
 					throw new AssertionError("A rejected partial cancellation changed the candidate flux");
 			} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
 		}
+	}
+
+	private static void cancelledFluxCanBeAugmentedAgain() {
+		var flux = new ConservativeLiquidFlux(2, 1, 1);
+		SignedDyadic one = SignedDyadic.of(1), amount = SignedDyadic.of(.125);
+		flux.velocity[0] = .5; flux.exactFlux[0] = amount;
+		try {
+			var capacity = (SignedDyadic[]) privateFluxField(flux, "exactCapacity");
+			capacity[0] = one.subtract(amount); capacity[1] = one;
+			var initialize = ConservativeLiquidFlux.class.getDeclaredMethod("initializeSharedFluxes", SignedDyadic[].class);
+			initialize.setAccessible(true); initialize.invoke(flux, (Object) new SignedDyadic[] {one, SignedDyadic.ZERO});
+			((SignedDyadic[]) privateFluxField(flux, "upperFlux"))[0] = SignedDyadic.of(.5);
+			var augment = ConservativeLiquidFlux.class.getDeclaredMethod("augmentOutgoing", int.class); augment.setAccessible(true);
+			for (int repeat = 0; repeat < 2; repeat++) {
+				// A later capacity correction reopens a previously cancelled face transfer.
+				flux.exactFlux[0] = SignedDyadic.ZERO;
+				flux.resultingVolumes()[0] = one; flux.resultingVolumes()[1] = SignedDyadic.ZERO;
+				((SignedDyadic[]) privateFluxField(flux, "remainingSupply"))[0] = one;
+				if (!(boolean) augment.invoke(flux, 0) || !flux.exactFlux[0].equals(amount))
+					throw new AssertionError("Cancelled face did not reuse its original donor supply");
+				int[] head = (int[]) privateFluxField(flux, "incomingHead"), next = (int[]) privateFluxField(flux, "incomingNext");
+				int visits = 0;
+				for (int face = head[1]; face >= 0; face = next[face]) if (++visits > flux.flux.length)
+					throw new AssertionError("Capacity repair duplicated an incoming face and created an adjacency cycle");
+				if (visits != 1) throw new AssertionError("Reopened transfer lost its incoming adjacency");
+			}
+		} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
 	}
 
 	private static Object privateFluxField(ConservativeLiquidFlux flux, String name) throws ReflectiveOperationException {

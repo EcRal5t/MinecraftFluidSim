@@ -253,7 +253,9 @@ final class ConservativeLiquidFlux {
 		}
 		for (int c = 0; c < cellCount; c++) remainingSupply[c] = volume[c].subtract(after[c]);
 		System.arraycopy(volume, 0, after, 0, cellCount); Arrays.fill(incomingHead, -1);
-		for (int f = 0; f < flux.length; f++) if (exactFlux[f].signum() > 0) {
+		// Keep one adjacency entry per channel even while its transfer is zero;
+		// capacity repair can cancel and later augment that same channel.
+		for (int f = 0; f < flux.length; f++) {
 			int donor = donor(f), receiver = receiver(f);
 			after[donor] = after[donor].subtract(exactFlux[f]); after[receiver] = after[receiver].add(exactFlux[f]);
 			incomingNext[f] = incomingHead[receiver]; incomingHead[receiver] = f;
@@ -281,9 +283,6 @@ final class ConservativeLiquidFlux {
 		}
 		for (int node = destination; node != source; node = donor(predecessor[node])) {
 			int f = predecessor[node];
-			if (exactFlux[f].signum() == 0) {
-				incomingNext[f] = incomingHead[receiver(f)]; incomingHead[receiver(f)] = f;
-			}
 			SignedDyadic previous = exactFlux[f];
 			exactFlux[f] = previous.add(amount);
 			geometricBlend[f] *= previous.toDouble() / exactFlux[f].toDouble();
