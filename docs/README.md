@@ -26,6 +26,7 @@
 - [命令速查](maintenance/commands.md)：游戏内开发、诊断和恢复命令。
 - [Python 工具](maintenance/pytool.md)：源码规模、import 和 JFR 分析。
 - [产品路线](roadmap/product-roadmap.md)：后续功能的顺序和完成条件。
+- [求解器整合与维护改进](roadmap/solver-consolidation-plan.md)：恢复展示主线前的求解器工作包、依赖与验收条件。
 - [性能与后端规划](roadmap/performance-and-backends.md)：性能指标、范围扩张和生产 GPU 要求。
 - [验收与发布](roadmap/acceptance-and-release.md)：发布前检查与部署。
 
