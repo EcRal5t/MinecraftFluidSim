@@ -439,6 +439,38 @@ final class ConservativeLiquidFlux {
 		geometry.sweptMoments(donor, receiver(face), axis[face], Math.abs(velocity[face]) * dtOverH, velocity[face] >= 0,
 				normalX[donor], normalY[donor], normalZ[donor], offset[donor], result, donorSupport, receiverSupport);
 	}
+	/** Separate source micro measures from the same frozen directional sweep used to plan this face. */
+	void sweptMicroVolumes(int face, int donorSupport, int receiverSupport, double[] swept, double[] wet) {
+		if (swept.length != 8 || wet.length != 8) throw new IllegalArgumentException("Missing liquid micro volumes");
+
+		int donor = donor(face); double[] moments = new double[4];
+		for (int m = 0; m < 8; m++) {
+			swept[m] = wet[m] = 0;
+			if ((donorSupport & 1 << m) == 0) continue;
+			if (geometry != null) {
+				geometry.sweptMoments(donor, receiver(face), axis[face], Math.abs(velocity[face]) * dtOverH, (velocity[face] >= 0),
+						normalX[donor], normalY[donor], normalZ[donor], offset[donor], moments, 1 << m, receiverSupport);
+				swept[m] = moments[0];
+				geometry.sweptMoments(donor, receiver(face), axis[face], 1, (velocity[face] >= 0), normalX[donor], normalY[donor],
+						normalZ[donor], offset[donor], moments, 1 << m, receiverSupport); wet[m] = moments[0];
+			} else {
+				double ox = .5 * (m & 1), oy = .5 * (m >>> 1 & 1), oz = .5 * (m >>> 2 & 1);
+				LiquidFluxGeometry.unitCubeMoments(.5 * normalX[donor], .5 * normalY[donor], .5 * normalZ[donor],
+						offset[donor] - normalX[donor] * ox - normalY[donor] * oy - normalZ[donor] * oz, moments);
+				wet[m] = .125 * moments[0];
+				double lower = axis[face] == 0 ? ox : axis[face] == 1 ? oy : oz;
+				double width = Math.abs(velocity[face]) * dtOverH;
+				double lo = Math.max(lower, (velocity[face] >= 0) ? 1 - width : 0), hi = Math.min(lower + .5, (velocity[face] >= 0) ? 1 : width);
+				if (hi <= lo) continue;
+				double ex = .5, ey = .5, ez = .5;
+				if (axis[face] == 0) { ox = lo; ex = hi - lo; }
+				else if (axis[face] == 1) { oy = lo; ey = hi - lo; } else { oz = lo; ez = hi - lo; }
+				LiquidFluxGeometry.unitCubeMoments(ex * normalX[donor], ey * normalY[donor], ez * normalZ[donor],
+						offset[donor] - normalX[donor] * ox - normalY[donor] * oy - normalZ[donor] * oz, moments);
+				swept[m] = ex * ey * ez * moments[0];
+			}
+		}
+	}
 	/** Final joint liquid capacity, including any capacity reserved for independent arrivals. */
 	SignedDyadic finalCapacity(int cell) {
 		return reserved == null ? exactCapacity[cell] : exactCapacity[cell].add(reserved[cell]);

@@ -7,6 +7,11 @@ public final class CellRemapMomentsValidation {
 	private CellRemapMomentsValidation() { }
 
 	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("transport-moments")) {
+			scalarTransportKeepsUnexcitedSpatialInertia();
+			directionalTransportPartitionsActualMomentumAndKineticEnergy();
+			return;
+		}
 		sweptLiquidMomentsKeepThinTangentialCentroids();
 		limitedFluxMixesTheSamePositiveMomentWeights();
 		thinSlabRemapRetainsItsTangentialMoment();
@@ -16,7 +21,9 @@ public final class CellRemapMomentsValidation {
 		reconstructedFieldsRetainAllShearAxes();
 		reconstructedFieldsRetainRotationAxes();
 		smallTransferredGroupsRetainShear();
-		chemicalQuadratureRejectsLostFieldCoordinates();
+		chemicalQuadratureRetainsJointMomentsWithFewQuanta();
+		scalarTransportKeepsUnexcitedSpatialInertia();
+		directionalTransportPartitionsActualMomentumAndKineticEnergy();
 		geometryRemapUsesPlannedCapacity();
 		partialLayerContractsOnlyItsConstrainedAxis();
 		if (args.length == 1 && args[0].equals("footprint-only")) return;
@@ -104,9 +111,96 @@ public final class CellRemapMomentsValidation {
 				new FluidSolverConfig(0.1F, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 64);
 	}
 
+	/** An ordinary scalar remap preserves spatial inertia even along an unexcited coordinate. */
+	private static void scalarTransportKeepsUnexcitedSpatialInertia() {
+		var domain = new FluidDomain(6, 6, 6,
+				new FluidSolverConfig(.5F, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 2048);
+		byte[] masks = new byte[216];
+		for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++)
+			if (x == 0 || x == 5 || y == 0 || y == 5 || z == 0 || z == 5)
+				masks[domain.cellIndex(x, y, z)] = (byte) 255;
+		float[] positions = new float[64], velocities = new float[48];
+		for (int cell = 0; cell < 2; cell++) for (int slot = 0; slot < 8; slot++) {
+			int p = 8 * cell + slot;
+			positions[4 * p] = (2 + cell + .25F + .5F * (slot & 1)) * .5F;
+			positions[4 * p + 1] = (2.25F + .5F * (slot >>> 1 & 1)) * .5F;
+			positions[4 * p + 2] = (2.25F + .5F * (slot >>> 2 & 1)) * .5F;
+			positions[4 * p + 3] = .125F;
+			velocities[3 * p] = (slot & 2) == 0 ? 0 : .5F;
+		}
+		domain.restoreParticleState(new FlipParticleState(6, 6, 6, .5F, 16, 2, positions, velocities, masks));
+		domain.bindMaterialRegistry(new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)));
+		domain.bindChemistry(cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
+		for (int p = 8; p < 16; p++) domain.chemicalParcels.updateIndicator(p, true);
+		domain.sealDomainBoundary(); domain.bootstrapGasState("");
+		long[] species = domain.chemicalParcels.speciesTotals(domain.particleCount());
+		double before = transverseSecondMoment(domain);
+		precise(before, 3.90625, "Original unexcited spatial inertia");
+		domain.ensureGrid(); domain.gridToParticleStage.prepareAdvectionCells();
+		domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
+		domain.cellLiquidVolumeTransport.advect(.05F);
+		double crossed = 0;
+		for (int p = 0; p < domain.particleCount(); p++)
+			if (domain.particleCellIndex(p) == domain.cellIndex(3, 2, 2) && !domain.chemicalParcels.indicator(p))
+				crossed += domain.particles.volume(p);
+		check(crossed > 0, "Scalar remap has no actual labelled face transfer");
+		check(domain.totalVolumeExact() == 2 && domain.totalMass() == 2000,
+				"Scalar remap changed its raw volume or mass");
+		check(java.util.Arrays.equals(species, domain.chemicalParcels.speciesTotals(domain.particleCount())),
+				"Scalar remap changed its exact species inventory");
+		close(transverseSecondMoment(domain), before, "Unexcited transverse spatial inertia");
+	}
+
+	private static double transverseSecondMoment(FluidDomain domain) {
+		double result = 0;
+		for (int p = 0; p < domain.particleCount(); p++) {
+			double z = domain.particles.positionZ(p) - 1.25;
+			result += domain.unitScale.kilograms(domain.particles.mass(p)) * z * z;
+		}
+		return result;
+	}
+
+	/** Positive and negative shear shares use the same raw source weights for mass, P and K. */
+	private static void directionalTransportPartitionsActualMomentumAndKineticEnergy() {
+		var domain = new FluidDomain(3, 3, 3, FluidSolverConfig.prototypeDefaults(), 32);
+		domain.setVolume(1, 1, 1, 1);
+		var original = new ArrayList<Integer>();
+		for (int p = 0; p < domain.particleCount(); p++) {
+			original.add(p);
+			domain.particles.setVelocityX(p, domain.particles.positionY(p) / domain.config.cellSize() - 1.5F);
+		}
+		double[][] preferences = new double[2][8];
+		for (int micro = 0; micro < 8; micro++) preferences[(micro & 2) == 0 ? 1 : 0][micro] = 1;
+		var pieces = new cc.ecisr.mmm.units.SignedDyadic[] {
+				cc.ecisr.mmm.units.SignedDyadic.of(.125), cc.ecisr.mmm.units.SignedDyadic.of(.0625),
+				cc.ecisr.mmm.units.SignedDyadic.of(.8125)};
+		var result = new CellRemapTransportMoments(domain, domain.cellIndex(1, 1, 1), original).allocate(pieces, preferences);
+		double[] expectedMass = {125, 62.5, 812.5}, expectedMomentum = {31.25, -15.625, -15.625};
+		double[] expectedKinetic = {7.8125, 3.90625, 50.78125}; // K is the unhalved raw mass-weighted square.
+		for (int share = 0; share < pieces.length; share++) {
+			precise(result.mass()[share], expectedMass[share], "Directional share mass");
+			precise(result.momentum()[share][0], expectedMomentum[share], "Directional share momentum");
+			precise(result.momentum()[share][1], 0, "Directional share transverse momentum");
+			precise(result.momentum()[share][2], 0, "Directional share transverse momentum");
+			precise(result.kinetic()[share], expectedKinetic[share], "Directional share kinetic moment");
+			check(result.massRounding()[share].isZero() && result.kineticRounding()[share].isZero(),
+					"Dyadic directional moments acquired a rounding remainder");
+		}
+		for (int i = 0; i < original.size(); i++) {
+			var sum = cc.ecisr.mmm.chemistry.ExactRational.ZERO;
+			for (var weights : result.markerWeights()) {
+				check(weights[i].signum() >= 0, "Directional transport allocated negative source supply");
+				sum = sum.add(weights[i]);
+			}
+			check(sum.equals(cc.ecisr.mmm.chemistry.ExactRational.ONE), "Retained share does not close its source marker exactly");
+			boolean positive = domain.particles.velocityX(original.get(i)) > 0;
+			check(result.markerWeights()[positive ? 1 : 0][i].isZero(), "Directional shear borrowed the opposite source support");
+		}
+	}
+
 	/** A full uniform-density cell has its geometric centroid and the original tensor rule. */
 	private static void fullHomogeneousReconstructionKeepsMacPatch(boolean multipleGroups) {
-		int n = 5, column = 2;
+		int n = 5;
 		var domain = new FluidDomain(n, n, n,
 				new FluidSolverConfig(1, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), n * n * n * 8);
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++)
@@ -116,9 +210,10 @@ public final class CellRemapMomentsValidation {
 				new FluidMaterial("mmm:patch_b", 1000, "mmm:patch", 0, Math.PI / 2))) : null;
 		for (int p = 0; p < domain.particleCount(); p++) {
 			if (multipleGroups) domain.setMarkerMaterial(p, materials, p & 1);
-			if (domain.particleCellIndex(p) % n == column)
-				domain.particles.setPositionX(p, domain.particles.positionX(p) + 0.2F);
 		}
+		// Complementary material groups retain their half-cell centroids and spatial inertia.
+		int center = domain.cellIndex(2, 2, 2), groups = multipleGroups ? 2 : 1;
+		double[][] before = materialSpatialMoments(domain, center, groups);
 		domain.rebuildGridFromParticles();
 		var flux = new ConservativeLiquidFlux(n, n, n);
 		flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
@@ -149,9 +244,12 @@ public final class CellRemapMomentsValidation {
 		for (int p = 0; p < domain.particleCount(); p++) {
 			float[] point = {domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
 			for (int axis = 0; axis < point.length; axis++)
-				check(Math.abs(point[axis] - Math.floor(point[axis]) - 0.5) == (multipleGroups && axis == 1 ? 0 : 0.25),
-						"Full homogeneous remap retained a displaced tensor rule");
+				close(Math.abs(point[axis] - Math.floor(point[axis]) - 0.5), .25,
+						"Full homogeneous remap changed its original spatial rule");
 		}
+		double[][] after = materialSpatialMoments(domain, center, groups);
+		for (int group = 0; group < groups; group++) for (int moment = 0; moment < before[group].length; moment++)
+			close(after[group][moment], before[group][moment], "Material group spatial moment");
 		for (int c = 0; c < domain.cellCount; c++) {
 			check(domain.markerGrid.exactCellMarkerVolume[c] == 1 && domain.projection.pressureVolume[c] == 1,
 					"Full homogeneous reconstruction changed cell volume or pressure inventory");
@@ -167,6 +265,21 @@ public final class CellRemapMomentsValidation {
 		close(domain.mac.velocityX[left], -0.5, "Affine normal left face velocity");
 		close(domain.mac.velocityX[right], 0.5, "Affine normal right face velocity");
 		close(divergenceError, 0, "Affine normal divergence");
+	}
+
+	private static double[][] materialSpatialMoments(FluidDomain domain, int cell, int groups) {
+		double[][] moments = new double[groups][7];
+		for (int p = 0; p < domain.particleCount(); p++) if (domain.particleCellIndex(p) == cell) {
+			double mass = domain.particles.mass(p);
+			double[] position = {domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
+			int group = domain.particles.materialHandle(p); moments[group][0] += mass;
+			for (int axis = 0; axis < 3; axis++) {
+				double offset = position[axis] / domain.config.cellSize() - 2.5;
+				moments[group][axis + 1] += mass * offset;
+				moments[group][axis + 4] += mass * offset * offset;
+			}
+		}
+		return moments;
 	}
 
 	/** Material labels can reduce nominal point counts without reducing a resolved velocity coordinate. */
@@ -225,8 +338,8 @@ public final class CellRemapMomentsValidation {
 		}
 	}
 
-	/** Low integer inventory cannot silently collapse an already resolved three-coordinate field. */
-	private static void chemicalQuadratureRejectsLostFieldCoordinates() {
+	/** Four positive tetrahedral nodes per label retain a three-dimensional affine rotation. */
+	private static void chemicalQuadratureRetainsJointMomentsWithFewQuanta() {
 		var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults(), 64);
 		domain.setVolume(1, 1, 1, 1);
 		domain.bindMaterialRegistry(new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)));
@@ -244,10 +357,13 @@ public final class CellRemapMomentsValidation {
 		}
 		domain.rebuildGridFromParticles(); var flux = new ConservativeLiquidFlux(4, 4, 4);
 		flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
-		boolean rejected = false;
-		try { new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true); }
-		catch (MechanicalTimeRefinement expected) { rejected = true; }
-		check(rejected && domain.particleCount() == 8, "Low-quanta field lost resolved coordinates or modified its source");
+		var remap = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true);
+		check(remap.markers.size() == 8 && domain.particleCount() == 8, "Low-quanta joint reconstruction changed its source or node budget");
+		for (var marker : remap.markers) {
+			close(marker.velocityX(), 2 * marker.offsetZ() - 3 * marker.offsetY(), "Low-quanta rotation X");
+			close(marker.velocityY(), 3 * marker.offsetX() - marker.offsetZ(), "Low-quanta rotation Y");
+			close(marker.velocityZ(), marker.offsetY() - 2 * marker.offsetX(), "Low-quanta rotation Z");
+		}
 	}
 
 	/** A positive small indicator share retains its resolved transverse shear when merged into a full cell. */
@@ -334,6 +450,16 @@ public final class CellRemapMomentsValidation {
 			domain.particles.setPositionX(p, domain.particles.positionX(p) + 0.2F);
 			domain.particles.setPositionY(p, domain.particles.positionY(p) + 0.2F);
 		}
+		double sourceMass = domain.totalMass();
+		double[] sourceMoment = new double[3], sourceSecond = new double[3];
+		for (int p = 0; p < domain.particleCount(); p++) {
+			double[] offset = {domain.particles.positionX(p) - .5, domain.particles.positionY(p) - .5,
+					domain.particles.positionZ(p) - .5};
+			for (int a = 0; a < 3; a++) {
+				sourceMoment[a] += domain.particles.mass(p) * offset[a];
+				sourceSecond[a] += domain.particles.mass(p) * offset[a] * offset[a];
+			}
+		}
 		double beforePotential = domain.gravitationalPotentialEnergyJoules();
 		domain.rebuildGridFromParticles();
 		var flux = new ConservativeLiquidFlux(2, 2, 2);
@@ -343,15 +469,32 @@ public final class CellRemapMomentsValidation {
 		capacities[0] = cc.ecisr.mmm.units.SignedDyadic.of(0.5);
 		flux.geometricResult(domain.markerGrid.exactCellVolumeInventory, capacities);
 		var remap = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true);
-		double moment = 0;
-		for (var marker : remap.markers) moment += marker.volume() * marker.offsetX();
-		check(moment == 0 && remap.momentAudit.projectedGroups() == 1,
-				"Saturated representation remap used a different final capacity from its flux plan");
+		var volume = cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		double[] moment = new double[3], second = new double[3];
+		for (var marker : remap.markers) {
+			volume = volume.add(cc.ecisr.mmm.units.SignedDyadic.of(marker.volume()));
+			for (int a = 0; a < 3; a++) {
+				double offset = (float) (.5 + marker.offset(a)) - .5;
+				moment[a] += marker.mass() * offset;
+				second[a] += marker.mass() * offset * offset;
+			}
+		}
+		check(volume.equals(capacities[0]) && remap.momentAudit.projectedGroups() == 0,
+				"Planned full capacity changed its stock or projected a feasible source centroid");
+		for (int a = 0; a < 3; a++) {
+			close(moment[a] / sourceMass, sourceMoment[a] / sourceMass, "Planned-capacity source centroid");
+			close(second[a] / sourceMass, sourceSecond[a] / sourceMass, "Planned-capacity source second moment");
+		}
 		double afterPotential = 0;
 		for (var marker : remap.markers) afterPotential += domain.unitScale.kilograms(marker.mass())
-				* domain.config.gravity() * (0.5 + marker.offsetY());
+				* domain.config.gravity() * (float) (0.5 + marker.offsetY());
 		var diagnostic = remap.momentAudit.stats();
-		check(diagnostic.signedMassResidual().y() < 0, "Moment projection lost its potential-energy sign");
+		double storageBound = 4 * domain.unitScale.kilograms(sourceMass) * Math.ulp(1.0F);
+		check(diagnostic.massProjection().y() == 0 && Math.abs(diagnostic.signedMassResidual().y()) <= storageBound,
+				"Feasible centroid acquired an error beyond binary32 position storage");
+		precise(Math.abs(diagnostic.signedMassResidual().y()), diagnostic.massStorage().y(), "Signed position-storage residual");
+		check(Math.abs(afterPotential - beforePotential) <= domain.config.gravity() * storageBound + 32 * Math.ulp(beforePotential),
+				"Joint spatial remap changed potential energy beyond position storage");
 		close(diagnostic.gravitationalPotentialErrorJoules(domain.config.gravity()), afterPotential - beforePotential,
 				"Geometric potential error");
 	}
