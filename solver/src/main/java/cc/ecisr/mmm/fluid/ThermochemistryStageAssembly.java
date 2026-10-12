@@ -91,6 +91,10 @@ final class ThermochemistryStageAssembly {
 					@Override public int firstOpenSlot(int cell, int first) {
 						return domain.firstOpenSlot(cell, first);
 					}
+					@Override public float[] markerSlotPosition(int cell, int slot) {
+						return domain.markerSlotPosition(cell % domain.sizeX, cell / domain.sizeX % domain.sizeY,
+								cell / (domain.sizeX * domain.sizeY), slot);
+					}
 					@Override public void removeParticle(int marker) { domain.removeParticleInternalPhase(marker); }
 					@Override public void spawnParticle(
 							int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle,
@@ -108,9 +112,9 @@ final class ThermochemistryStageAssembly {
 					@Override public long gasGeometrySolidSvq() {
 						return domain.pressureGranularCoupling == null ? 0L : domain.pressureGranularCoupling.totalSolidSvq();
 					}
-					@Override public GasTopologyCoordinator.GasTopologyPlan planGasGeometry(int cell, int count, double volume, int node,
+					@Override public GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
 							cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal) {
-						return domain.gasTopologyCoordinator.planAfterPhase(cell, count, volume, node, gas, energy, thermal);
+						return domain.gasTopologyCoordinator.planAfterPhase(edit, node, gas, energy, thermal);
 					}
 					@Override public void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
 							cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal) {

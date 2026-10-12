@@ -39,6 +39,7 @@ final class PhaseChangeStageSupport {
 		float pressureReference();
 		int particleCell(int marker);
 		int firstOpenSlot(int cell, int first);
+		float[] markerSlotPosition(int cell, int slot);
 		void removeParticle(int marker);
 		void spawnParticle(
 				int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle,
@@ -47,7 +48,7 @@ final class PhaseChangeStageSupport {
 		SignedDyadic exactInternalEnergy();
 		void ensureGrid();
 		void refreshGasTopology();
-		GasTopologyCoordinator.GasTopologyPlan planGasGeometry(int cell, int count, double volume, int node,
+		GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
 				cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal);
 		void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
 				cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal);
@@ -78,16 +79,12 @@ final class PhaseChangeStageSupport {
 	long gasGeometrySolidSvq() { return access.gasGeometrySolidSvq(); }
 	int particleCell(int marker) { return access.particleCell(marker); }
 	int firstOpenSlot(int cell) { return access.firstOpenSlot(cell, 0); }
+	float[] markerSlotPosition(int cell, int slot) { return access.markerSlotPosition(cell, slot); }
 	void ensureGrid() { access.ensureGrid(); }
 	void refreshGasTopology() { access.refreshGasTopology(); }
-	GasTopologyCoordinator.GasTopologyPlan planGasGeometry(int cell, int countDelta, long volumeDelta, int node,
+	GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
 			cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal) {
-		SignedDyadic volume = SignedDyadic.ZERO;
-		for (int marker = state.markerGrid().cellMarkerHead[cell]; marker >= 0;
-				marker = state.markerGrid().particleCellNext[marker]) volume = volume.add(SignedDyadic.of(state.particles().volume(marker)));
-		volume = volume.add(SignedDyadic.of(volumeDelta, -24));
-		return access.planGasGeometry(cell, Math.addExact(state.markerGrid().markerCount[cell], countDelta),
-				volume.toDouble(), node, gas, energy, thermal);
+		return access.planGasGeometry(edit, node, gas, energy, thermal);
 	}
 	void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
 			cc.ecisr.mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal) {

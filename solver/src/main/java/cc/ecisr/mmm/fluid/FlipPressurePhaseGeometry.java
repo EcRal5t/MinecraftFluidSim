@@ -1,6 +1,9 @@
 package cc.ecisr.mmm.fluid;
 
 import cc.ecisr.mmm.granular.GranularCouplingFields;
+import cc.ecisr.mmm.chemistry.ExactRational;
+import cc.ecisr.mmm.units.SignedDyadic;
+import java.math.BigInteger;
 
 /** PLIC reconstructed from current liquid inventory, shared by pressure and cell transport. */
 final class FlipPressurePhaseGeometry {
@@ -45,16 +48,26 @@ final class FlipPressurePhaseGeometry {
 			GranularCouplingFields granular, boolean[] pressureFluid,
 			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize
 	) {
+		rebuild(solid, reconstructedVolume, cutCells, granular, pressureFluid, markers, particles, cellSize, null);
+	}
+
+	/** Reconstructs the same full grid from actual future volume and position moments in one edited cell. */
+	void rebuild(
+			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
+			GranularCouplingFields granular, boolean[] pressureFluid,
+			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize, PhaseLiquidGeometryEdit edit
+	) {
 		if (solid.length != fraction.length || reconstructedVolume.length != fraction.length
-				|| pressureFluid.length != fraction.length) {
+				|| pressureFluid.length != fraction.length || edit != null && (edit.cell() >= fraction.length || markers == null)
+				|| markers != null && (particles == null || !(cellSize > 0) || !Float.isFinite(cellSize))) {
 			throw new IllegalArgumentException("Pressure phase arrays disagree with the cell count");
 		}
 		for (int cell = 0; cell < fraction.length; cell++) {
 			float geometricOpen = cutCells.openCellVolume(cell);
 			float openVolume = granular == null ? geometricOpen
 					: granular.effectiveOpenCellVolume(cell, geometricOpen);
-			fraction[cell] = solid[cell] || openVolume <= 0.0F ? 0.0F
-					: clamp(reconstructedVolume[cell] / openVolume, 0.0, 1.0);
+			double liquid = edit != null && cell == edit.cell() ? edit.volume().toDouble() : reconstructedVolume[cell];
+			fraction[cell] = solid[cell] || openVolume <= 0.0F ? 0.0F : clamp(liquid / openVolume, 0.0, 1.0);
 			pressureFluid[cell] = false;
 			normalX[cell] = normalY[cell] = normalZ[cell] = 0.0F; planeOffset[cell] = 0;
 		}
@@ -69,7 +82,8 @@ final class FlipPressurePhaseGeometry {
 					- sampleFraction(x, y - 1, z, center, solid));
 			float nz = (float) -(sampleFraction(x, y, z + 1, center, solid)
 					- sampleFraction(x, y, z - 1, center, solid));
-			if (markers != null && momentNormal(cell, x, y, z, cutCells, markers, particles, cellSize)) {
+			if (markers != null && momentNormal(cell, x, y, z, cutCells, markers, particles, cellSize,
+					edit != null && cell == edit.cell() ? edit : null)) {
 				nx = normalX[cell]; ny = normalY[cell]; nz = normalZ[cell];
 			}
 			double lengthSquared = (double) nx * nx + (double) ny * ny + (double) nz * nz;
@@ -102,17 +116,23 @@ final class FlipPressurePhaseGeometry {
 	/** Monotone moment estimate: a centred phase retains the fraction-gradient direction. */
 	private boolean momentNormal(
 			int cell, int x, int y, int z, FlipCutCellGeometry cut,
-			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize
+			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize, PhaseLiquidGeometryEdit edit
 	) {
-		double volume = markers.exactCellMarkerVolume[cell];
-		if (!(volume > 0)) return false;
-		double mx = 0, my = 0, mz = 0;
-		for (int p = markers.cellMarkerHead[cell]; p >= 0; p = markers.particleCellNext[p]) {
-			double weight = particles.volume(p);
-			mx += weight * ((double) particles.positionX(p) / cellSize - x - .5);
-			my += weight * ((double) particles.positionY(p) / cellSize - y - .5);
-			mz += weight * ((double) particles.positionZ(p) / cellSize - z - .5);
+		SignedDyadic volume = edit == null ? SignedDyadic.ZERO : edit.volume();
+		SignedDyadic[] first = edit == null ? new SignedDyadic[] {SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO}
+				: new SignedDyadic[] {edit.firstMomentX(), edit.firstMomentY(), edit.firstMomentZ()};
+		if (edit == null) for (int p = markers.cellMarkerHead[cell]; p >= 0; p = markers.particleCellNext[p]) {
+			SignedDyadic weight = SignedDyadic.of(particles.volume(p));
+			volume = volume.add(weight);
+			first[0] = first[0].add(weight.multiply(SignedDyadic.of(particles.positionX(p))));
+			first[1] = first[1].add(weight.multiply(SignedDyadic.of(particles.positionY(p))));
+			first[2] = first[2].add(weight.multiply(SignedDyadic.of(particles.positionZ(p))));
 		}
+		if (volume.signum() == 0) return false;
+		SignedDyadic metricVolume = volume.multiply(SignedDyadic.of(cellSize));
+		double mx = centeredMoment(first[0], metricVolume, x);
+		double my = centeredMoment(first[1], metricVolume, y);
+		double mz = centeredMoment(first[2], metricVolume, z);
 		int count = 8, lowX = 4, lowY = 4, lowZ = 4;
 		if (cut.mask(cell) != 0) {
 			count = lowX = lowY = lowZ = 0;
@@ -122,9 +142,9 @@ final class FlipPressurePhaseGeometry {
 			}
 		}
 		if (count == 0) return false;
-		double nx = momentDirection(mx / volume, lowX, count);
-		double ny = momentDirection(my / volume, lowY, count);
-		double nz = momentDirection(mz / volume, lowZ, count);
+		double nx = momentDirection(mx, lowX, count);
+		double ny = momentDirection(my, lowY, count);
+		double nz = momentDirection(mz, lowZ, count);
 		double scale = Math.max(Math.abs(nx), Math.max(Math.abs(ny), Math.abs(nz)));
 		if (scale == 0) return false;
 		if (Double.isInfinite(scale)) {
@@ -134,6 +154,14 @@ final class FlipPressurePhaseGeometry {
 		} else { nx /= scale; ny /= scale; nz /= scale; }
 		normalX[cell] = (float) nx; normalY[cell] = (float) ny; normalZ[cell] = (float) nz;
 		return true;
+	}
+
+	private static double centeredMoment(SignedDyadic first, SignedDyadic metricVolume, int coordinate) {
+		SignedDyadic centered = first.subtract(metricVolume.multiply(SignedDyadic.of(coordinate + .5)));
+		int shift = centered.exponent() - metricVolume.exponent();
+		BigInteger numerator = centered.significand(), denominator = metricVolume.significand();
+		return (shift >= 0 ? new ExactRational(numerator.shiftLeft(shift), denominator)
+				: new ExactRational(numerator, denominator.shiftLeft(-shift))).toDouble();
 	}
 
 	private static double momentDirection(double centre, int lowCount, int openCount) {

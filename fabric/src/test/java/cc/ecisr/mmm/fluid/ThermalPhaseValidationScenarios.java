@@ -881,6 +881,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	) { }
 
 	static void phaseVolumeWorkWaitsForMechanicalProjection() {
+		phaseLiquidGeometryMatchesPublishedMarkers();
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:pending_liquid", 1.0,
 				"test:miscible", 0.0, 90.0);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
@@ -944,6 +945,56 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		require(!domain.hasPendingPhaseVolumeWork()
 				&& domain.thermalAudit().mechanicalWork().equals(after.mechanicalWork()),
 				"cleared phase volume repeated its mechanical work on a later projection");
+	}
+
+	private static void phaseLiquidGeometryMatchesPublishedMarkers() {
+		for (int kind = 0; kind < 4; kind++) {
+			var d = new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.001F,100,1e-6F,.45F,.002F,0),128);
+			float[] positions = new float[96]; int marker = 0;
+			for (int group = 0; group < 3; group++) for (int slot = 0; slot < 8; slot++) {
+				int base = 4 * marker++, x = group == 0 ? 1 : 2, y = group == 2 ? 0 : 1;
+				positions[base] = x + .25F + .5F * (slot & 1);
+				positions[base+1] = y + .25F + .5F * (slot >> 1 & 1);
+				positions[base+2] = 1.25F + .5F * (slot >> 2 & 1);
+				positions[base+3] = group == 0 ? .0625F : .03125F;
+			}
+			d.restoreParticleState(new FlipParticleState(3,3,3,1,24,1,positions,new float[72],new byte[27]));
+			d.ensureInventoryGrid(); int cell = d.cellIndex(1,1,1), neighbor = d.cellIndex(2,1,1);
+			var state = new PhaseChangeStageSupport.Workspace(d.sizeX,d.sizeY,d.sizeZ,d.cellCount,d.maximumParticleCount,
+					d.config.cellSize(),d.unitScale,d.geometry,d.markerGrid,d.projection,d.particles,d.gasState,d.pendingPhaseCellVolume,null);
+			var before = PhaseLiquidGeometryEdit.current(state,cell);
+			float neighborNormal = d.pressurePhaseGeometry.planeNormal(neighbor,0);
+			PhaseLiquidGeometryEdit edit;
+			if (kind == 0 || kind == 3) {
+				var allocation = new PhaseChangeStageSupport.PhaseMarkerAllocation(7,kind == 0 ? .03125F : 0,
+						kind == 0 ? 31.25 : 0,kind == 3,null,null);
+				edit = PhaseLiquidGeometryEdit.afterBoiling(state,cell,new PhaseChangeStageSupport.PhaseRemovalPlan(
+						List.of(allocation),PhaseChangeStageSupport.PhaseComposition.EMPTY,0));
+			} else edit = PhaseLiquidGeometryEdit.afterCondensation(state,cell,kind == 1 ? 0 : -1,
+					kind == 1 ? .09375F : 0,.03125F,kind == 2 ? d.markerSlotPosition(1,1,1,0) : null);
+			var planned = new FlipPressurePhaseGeometry(3,3,3); var active = new boolean[27];
+			planned.rebuild(d.geometry.solid,d.projection.pressureVolume,d.geometry.cutCells,d.pressureGranularCoupling,
+					active,d.markerGrid,d.particles,1,edit);
+			if (kind == 0) require(edit.volume().toDouble() == .46875 && edit.firstMomentX().toDouble() == .6953125,
+					"Partial phase donor lost its actual volume position moment");
+			require(!edit.firstMomentX().equals(before.firstMomentX().multiply(SignedDyadic.of(edit.volume().toDouble()/before.volume().toDouble()))),
+					"Phase geometry fixture failed to distinguish actual donor moments from whole-cell scaling");
+			require(planned.planeNormal(neighbor,0) != neighborNormal,"Future phase volume failed to rebuild neighboring gradient normals");
+			if (kind == 0 || kind == 1) {
+				int target = kind == 0 ? 7 : 0; d.particles.setVolume(target,kind == 0 ? .03125F : .09375F);
+				d.particles.setMass(target,kind == 0 ? 31.25 : 93.75);
+			} else if (kind == 2) d.spawnParticle(1,1,1,0,.03125F,0,31.25,null,false,false);
+			else d.removeParticle(7);
+			d.rebuildGridFromParticles();
+			require(edit.equals(PhaseLiquidGeometryEdit.current(state,cell)),"Planned phase moments differ from published markers");
+			for (int c = 0; c < 27; c++) {
+				require(Double.doubleToRawLongBits(planned.liquidFractionExact(c)) == Double.doubleToRawLongBits(d.pressurePhaseGeometry.liquidFractionExact(c))
+						&& Double.doubleToRawLongBits(planned.planeOffset(c)) == Double.doubleToRawLongBits(d.pressurePhaseGeometry.planeOffset(c))
+						&& active[c] == d.projection.pressureFluid[c],"Future phase fraction, plane or pressure class differs after publication");
+				for (int axis = 0; axis < 3; axis++) require(Float.floatToRawIntBits(planned.planeNormal(c,axis))
+						== Float.floatToRawIntBits(d.pressurePhaseGeometry.planeNormal(c,axis)),"Future phase normal differs after publication");
+			}
+		}
 	}
 
 	static void exactDyadicAuditDoesNotLoseCancellationRemainders() {

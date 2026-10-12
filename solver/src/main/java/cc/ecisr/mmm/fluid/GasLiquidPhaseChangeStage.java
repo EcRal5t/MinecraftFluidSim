@@ -165,9 +165,8 @@ final class GasLiquidPhaseChangeStage {
 			ThermalDomainState.PhaseCellEnergyPlan thermalPlan = thermal.planPhaseCellEnergy(
 					thermalCell, remainingLiquid, thermal.gasNodeEnergy(node, gasState.network), candidateGasEnergy);
 			double candidateLiquidTemperature = thermalPlan.temperatureK();
-			int countDelta = 0;
-			for (var allocation : removal.allocations()) if (allocation.fullRemoval()) countDelta--;
-			var topology = support.planGasGeometry(cell, countDelta, -removedSvq, node, gasPlan, candidateGasEnergy, thermalPlan);
+			var liquidGeometry = PhaseLiquidGeometryEdit.afterBoiling(support.state(), cell, removal);
+			var topology = support.planGasGeometry(liquidGeometry, node, gasPlan, candidateGasEnergy, thermalPlan);
 			if (!interfaces.allowsAfter(cell, node, transition, phase, candidateLiquidTemperature,
 					topology, GasLiquidPhaseModel.Direction.BOIL)) return null;
 			return new GasBoilPlan(
@@ -353,7 +352,9 @@ final class GasLiquidPhaseChangeStage {
 							cell, liquidHandle, target, targetMass, condensedMixture, moved.mass()),
 					thermal.gasNodeEnergy(node, support.gasState().network), candidateGasEnergy);
 			double candidateLiquidTemperature = thermalPlan.temperatureK();
-			var topology = support.planGasGeometry(cell, target < 0 ? 1 : 0, addedSvq, node, gasPlan, candidateGasEnergy, thermalPlan);
+			var liquidGeometry = PhaseLiquidGeometryEdit.afterCondensation(support.state(), cell, target, targetVolume,
+					SolidVolume.toCellVolume(addedSvq), target < 0 ? support.markerSlotPosition(cell, slot) : null);
+			var topology = support.planGasGeometry(liquidGeometry, node, gasPlan, candidateGasEnergy, thermalPlan);
 			if (!interfaces.allowsAfter(cell, node, transition, phase, candidateLiquidTemperature,
 					topology, GasLiquidPhaseModel.Direction.CONDENSE)) return null;
 			return new GasCondensePlan(

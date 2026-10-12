@@ -151,8 +151,10 @@ final class GasTopologyCoordinator {
 	}
 
 	/** Plans the complete topology successor using one-cell geometry and node-column overlays. */
-	GasTopologyPlan planAfterPhase(int cell, int markerCount, double markerVolume, int node,
+	GasTopologyPlan planAfterPhase(PhaseLiquidGeometryEdit geometryEdit, int node,
 			AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal) {
+		int cell = geometryEdit.cell(), markerCount = geometryEdit.markerCount();
+		double markerVolume = geometryEdit.volume().toDouble();
 		domain.gasState.network.requirePhaseMutationCurrent(gas);
 		domain.thermalState.requirePhaseCellEnergyCurrent(thermal);
 		if (phaseCounts == null) { phaseCounts = new int[domain.cellCount]; phaseVolumes = new double[domain.cellCount]; }

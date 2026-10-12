@@ -115,11 +115,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由 cell membershi
 
 注液只能改变现有库存的容量、拓扑分配和压缩功。
 
-气液相变若只截断或扩充既有 marker，marker cardinality、cell membership、solid/cut-cell 与 granular occupancy 都没有改变，因此 air-cell 连通性和 interface lineage 也严格不变。
-
-该中间候选用实际提交前后 float marker 体积差更新被编辑 cell 的 exact marker sum，再沿现有 node membership 重新汇总连续 available volume；相变期间保留联合守恒的 gas `U`，并与 node volume 一次提交；后续实际运动的容量变化才结算等熵功。
-
-只有 marker 新增/删除或其他结构变化才重新 flood fill、overlap 和 remap。logical step 末以及 capture 前仍从完整 carrier geometry 重扫，以保证持久拓扑与瞬态几何严格一致。
+每次气液相变候选都用未来实际 marker 数量与精确体积重扫格级拓扑。既有 marker 的截断或扩充也可能越过残余空间的归属判据。相变期间保留联合守恒的 gas `U`，并与 node volume 一次提交；后续实际运动的容量变化结算等熵功。logical step 末以及 capture 前从完整 carrier geometry 重扫，以保证持久拓扑与瞬态几何一致。
 
 重扫先建立旧 node 与新 node 的实际 cell overlap，再纯规划全部 transfer：
 
