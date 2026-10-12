@@ -453,7 +453,7 @@ final class GasTopologyCoordinator {
 		AirNetwork.RemapPlan gasPlan = edit == null
 				? domain.gasState.network.planRemapNodes(availableVolumes, inventories, sourceDelta, sinkDelta, edges)
 				: domain.gasState.network.planRemapAfterPhase(edit.gas(), availableVolumes, inventories, sourceDelta, sinkDelta, edges);
-		return new GasTopologyPlan(result, gasPlan, thermalPlan);
+		return new GasTopologyPlan(result, gasPlan, thermalPlan, domain.geometry.cutCells.copyMicroMasks(), domain.gasState.sealedDomainBoundary);
 	}
 
 	/**
@@ -730,7 +730,10 @@ final class GasTopologyCoordinator {
 				domain.geometry.cutCells, null, domain.gasState.sealedDomainBoundary);
 		if (fresh.sealedNodeCount() != plan.scan().sealedNodeCount()
 				|| !Arrays.equals(fresh.cellNodeId(), plan.scan().cellNodeId())
-				|| !Arrays.equals(fresh.cellLineageNodeId(), plan.scan().cellLineageNodeId())) {
+				|| !Arrays.equals(fresh.cellLineageNodeId(), plan.scan().cellLineageNodeId())
+				|| !Arrays.equals(fresh.cellAvailableVolume(), plan.scan().cellAvailableVolume())
+				|| !Arrays.equals(fresh.sealedAvailableVolume(), plan.scan().sealedAvailableVolume())
+				|| !fresh.geometricEdges().equals(plan.scan().geometricEdges())) {
 			throw new IllegalStateException("Gas topology changed after operator clear planning");
 		}
 	}
@@ -750,6 +753,9 @@ final class GasTopologyCoordinator {
 	/** Checks both owners before either side of the joint gas topology commit is published. */
 	private void requireCanCommit(GasTopologyPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Gas topology plan is missing");
+		if (plan.sealedDomainBoundary() != domain.gasState.sealedDomainBoundary
+				|| !Arrays.equals(plan.geometryMasks(), domain.geometry.cutCells.copyMicroMasks()))
+			throw new IllegalStateException("Gas topology geometry changed after planning");
 		domain.gasState.network.requireCanCommitRemap(plan.gasPlan());
 		if (plan.thermalPlan() != null) {
 			if (domain.thermalState == null) {
@@ -789,6 +795,10 @@ final class GasTopologyCoordinator {
 	record GasTopologyPlan(
 			AirCavityScanner.Result scan,
 			AirNetwork.RemapPlan gasPlan,
-			GasEnergyStore.GasRemapPlan thermalPlan
-	) { }
+			GasEnergyStore.GasRemapPlan thermalPlan,
+			byte[] geometryMasks, boolean sealedDomainBoundary
+	) {
+		GasTopologyPlan { geometryMasks = geometryMasks.clone(); }
+		@Override public byte[] geometryMasks() { return geometryMasks.clone(); }
+	}
 }

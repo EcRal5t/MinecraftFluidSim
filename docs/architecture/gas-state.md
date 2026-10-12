@@ -69,6 +69,8 @@ component 与 species 的隶属关系是 world-local registry 原始数据，不
 
 `AirNetwork` 对节点、库存、可用体积、edge 和物质审计维护同一个单调 revision。topology remap 绑定规划时 revision；提交前 gas inventory 与 gas-energy 两个 owner 必须同时接受各自 generation，之后才发布任一侧。几何仍相同但库存、体积、edge 或 `U` 已改变的旧计划必须整体拒绝，不能覆盖较新的 owner 原始数据。
 
+气体拓扑计划同时保存不可变的 cut-micro 掩码和外壳密闭状态。操作级清空在任何库存写入前复核这份几何，以及重新扫描所得的节点归属、逐格与逐节点容量和孔流面积；几何变化即使保留相同节点标签，也会使旧计划失效。
+
 表示硬上限为：registry 64 个 component、单 node 32 个 component、单 component 16 个 species、单 region 65536 个 sealed node、stable ID 128 字符、单 extension 16 MiB。到达上限时拒绝候选或 fail-open 到 ambient；不能丢掉最小 component 继续运行。
 
 区域库存摘要和 source/sink 使用 `GasAuditLedger`，按注册表组分范围累加 nanos、species 与精确二进制质量和 residual；实际节点库存继续使用 `GasInventory`。审计、拓扑源汇、排气与恢复共用区域摘要。恢复先在局部候选中验证完整组分和审计闭合，再一次发布节点、账本和 revision。

@@ -1023,6 +1023,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	}
 
 	static void operatorEmptyClearsAuditedCondensedCarriers() {
+		operatorClearBindsTheCompleteGeometry();
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
@@ -1072,6 +1073,23 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				"operator empty did not jointly clear/audit liquid and coherent carriers: cleared=" + cleared
 						+ " U=" + domain.exactInternalEnergy()
 						+ " expected=" + domain.thermalAudit().expectedInventory());
+	}
+
+	static void operatorClearBindsTheCompleteGeometry() {
+		var d = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
+		d.sealDomainBoundary(); d.bootstrapGasState("");
+		var plan = d.planOperatorClear();
+		long carrierRevision = d.carrierMutationRevision(), gasRevision = d.gasState.network.revision();
+		d.setSolidMicroMask(0, 0, 0, 1);
+		require(d.carrierMutationRevision() == carrierRevision && d.gasState.network.revision() == gasRevision,
+				"Geometry-only clear fixture unexpectedly mutated inventory generations");
+		double volume = d.gasState.network.availableVolume(1);
+		var stock = d.gasState.network.sealedInventory();
+		expectFailure(() -> d.commitOperatorClear(plan), "Operator clear accepted changed geometry with unchanged cavity labels");
+		require(d.gasState.network.revision() == gasRevision && d.gasState.network.availableVolume(1) == volume
+				&& d.gasState.network.sealedInventory().equals(stock), "Rejected geometry-stale clear changed gas inventory or capacity");
+		var current = d.planOperatorClear(); d.commitOperatorClear(current);
+		require(d.gasState.network.availableVolume(1) == 7.875, "Current operator clear did not use the actual geometric capacity");
 	}
 
 }
