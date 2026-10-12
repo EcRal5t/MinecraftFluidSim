@@ -608,6 +608,9 @@ final class CellCarrierRemapPlan {
 		if (output[group.cell].size() > 1) count = Integer.highestOneBit(Math.min(8,
 				Math.max(1, (int) Math.floor(amount / ConservativeMarkerSampling.NOMINAL_MARKER_VOLUME))));
 		int mask = domain.geometry.cutCells.mask(group.cell);
+		int requiredAxes = mask == 0 ? CellRemapQuadrature.requiredAxes(group.field) : 0;
+		int minimumCount = CellRemapQuadrature.minimumCount(requiredAxes);
+		if (mask == 0) count = Math.max(count, minimumCount);
 		if (mask != 0) count = Integer.bitCount(group.support);
 		if (domain.chemicalParcels != null) {
 			long quanta = group.species.totalQuanta();
@@ -622,7 +625,10 @@ final class CellCarrierRemapPlan {
 			count = 1; volumes = CellRemapChemicalSupport.expansion(group.volume);
 			if (volumes.size() > group.species.totalQuanta()) throw new MechanicalTimeRefinement(2, "Chemical quadrature has no exact positive carrier representation");
 		}
+		if (mask == 0 && count < minimumCount)
+			throw new MechanicalTimeRefinement(2, "Chemical quadrature cannot retain the reconstructed field coordinates");
 		group.quadratureCount = count;
+		group.quadratureAxes = mask == 0 ? CellRemapQuadrature.samplingAxes(count, requiredAxes) : 0;
 		return volumes;
 	}
 
@@ -631,7 +637,7 @@ final class CellCarrierRemapPlan {
 		ArrayList<Float> volumes = group.sampleVolumes;
 		ArrayList<double[]> offsets = new ArrayList<>();
 		for (int slot = 0; slot < volumes.size(); slot++) offsets.add(slot < count
-				? mask == 0 ? offset(slot, count) : openOffset(mask, slot)
+				? mask == 0 ? CellRemapQuadrature.offset(slot, group.quadratureAxes) : openOffset(mask, slot)
 				: mask == 0 ? offset(0, 1) : openOffset(mask, 0));
 		SignedDyadic[] weights = new SignedDyadic[volumes.size()];
 		for (int p = 0; p < weights.length; p++) weights[p] = SignedDyadic.of(volumes.get(p));
@@ -927,7 +933,7 @@ final class CellCarrierRemapPlan {
 	private static final class Group {
 		final int cell, material, support; final boolean indicator;
 		boolean retained;
-		int sampleStart, quadratureCount; ArrayList<Float> sampleVolumes;
+		int sampleStart, quadratureCount, quadratureAxes; ArrayList<Float> sampleVolumes;
 		ArrayList<Share> shares;
 		final ArrayList<Integer> original = new ArrayList<>(); final CellSpeciesInventory species = new CellSpeciesInventory();
 		SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO;

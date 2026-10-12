@@ -13,6 +13,10 @@ public final class CellRemapMomentsValidation {
 		if (args.length == 1 && args[0].equals("sweep-only")) return;
 		fullHomogeneousReconstructionKeepsMacPatch(false);
 		fullHomogeneousReconstructionKeepsMacPatch(true);
+		reconstructedFieldsRetainAllShearAxes();
+		reconstructedFieldsRetainRotationAxes();
+		smallTransferredGroupsRetainShear();
+		chemicalQuadratureRejectsLostFieldCoordinates();
 		geometryRemapUsesPlannedCapacity();
 		partialLayerContractsOnlyItsConstrainedAxis();
 		if (args.length == 1 && args[0].equals("footprint-only")) return;
@@ -163,6 +167,129 @@ public final class CellRemapMomentsValidation {
 		close(domain.mac.velocityX[left], -0.5, "Affine normal left face velocity");
 		close(domain.mac.velocityX[right], 0.5, "Affine normal right face velocity");
 		close(divergenceError, 0, "Affine normal divergence");
+	}
+
+	/** Material labels can reduce nominal point counts without reducing a resolved velocity coordinate. */
+	private static void reconstructedFieldsRetainAllShearAxes() {
+		for (int velocityAxis = 0; velocityAxis < 3; velocityAxis++) for (int gradientAxis = 0; gradientAxis < 3; gradientAxis++) {
+			if (velocityAxis == gradientAxis) continue;
+			var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults(), 64);
+			domain.setVolume(1, 1, 1, 1);
+			var materials = new FluidMaterialRegistry(java.util.List.of(
+					new FluidMaterial("test:shear_a", 1000, "test:shear", 0, Math.PI / 2),
+					new FluidMaterial("test:shear_b", 1000, "test:shear", 0, Math.PI / 2)));
+			for (int p = 0; p < domain.particleCount(); p++) {
+				double[] position = {domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
+				int slot = 0;
+				for (int axis = 0; axis < 3; axis++) if (position[axis] / domain.config.cellSize() > 1.5) slot |= 1 << axis;
+				// Each group is a tetrahedron, so all three affine coordinates remain resolved.
+				domain.setMarkerMaterial(p, materials, Integer.bitCount(slot) & 1);
+				setVelocity(domain, p, velocityAxis, (float) (position[gradientAxis] / domain.config.cellSize() - 1.5));
+			}
+			domain.rebuildGridFromParticles();
+			var flux = new ConservativeLiquidFlux(4, 4, 4);
+			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
+			var remap = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true);
+			checkShear(remap, velocityAxis, gradientAxis, 1000.0 / 16);
+		}
+	}
+
+	/** Every rotation plane retains both velocity coordinates and its discrete angular momentum. */
+	private static void reconstructedFieldsRetainRotationAxes() {
+		for (int rotationAxis = 0; rotationAxis < 3; rotationAxis++) {
+			var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults(), 64);
+			domain.setVolume(1, 1, 1, 1);
+			domain.bindMaterialRegistry(new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)));
+			domain.bindChemistry(cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
+			int first = (rotationAxis + 1) % 3, second = (rotationAxis + 2) % 3;
+			for (int p = 0; p < domain.particleCount(); p++) {
+				double[] offset = {domain.particles.positionX(p) / domain.config.cellSize() - 1.5,
+						domain.particles.positionY(p) / domain.config.cellSize() - 1.5,
+						domain.particles.positionZ(p) / domain.config.cellSize() - 1.5};
+				int slot = 0; for (int axis = 0; axis < 3; axis++) if (offset[axis] > 0) slot |= 1 << axis;
+				domain.chemicalParcels.updateIndicator(p, (Integer.bitCount(slot) & 1) != 0);
+				setVelocity(domain, p, first, (float) -offset[second]); setVelocity(domain, p, second, (float) offset[first]);
+			}
+			domain.rebuildGridFromParticles(); var flux = new ConservativeLiquidFlux(4, 4, 4);
+			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
+			var remap = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true);
+			double squaredSpeedMass = 0, angularMomentum = 0;
+			for (var marker : remap.markers) {
+				close(marker.velocity(first), -marker.offset(second), "Reconstructed first rotation component");
+				close(marker.velocity(second), marker.offset(first), "Reconstructed second rotation component");
+				squaredSpeedMass += marker.mass() * (marker.velocity(first) * marker.velocity(first) + marker.velocity(second) * marker.velocity(second));
+				angularMomentum += marker.mass() * (marker.offset(first) * marker.velocity(second) - marker.offset(second) * marker.velocity(first));
+			}
+			close(squaredSpeedMass, 1000.0 / 8, "Reconstructed rotation kinetic energy");
+			close(angularMomentum, 1000.0 / 8, "Reconstructed rotation angular momentum");
+		}
+	}
+
+	/** Low integer inventory cannot silently collapse an already resolved three-coordinate field. */
+	private static void chemicalQuadratureRejectsLostFieldCoordinates() {
+		var domain = new FluidDomain(4, 4, 4, FluidSolverConfig.prototypeDefaults(), 64);
+		domain.setVolume(1, 1, 1, 1);
+		domain.bindMaterialRegistry(new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)));
+		domain.bindChemistry(cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
+		for (int p = 0; p < domain.particleCount(); p++) {
+			float x = domain.particles.positionX(p) / domain.config.cellSize() - 1.5F;
+			float y = domain.particles.positionY(p) / domain.config.cellSize() - 1.5F;
+			float z = domain.particles.positionZ(p) / domain.config.cellSize() - 1.5F;
+			domain.particles.setVelocityX(p, 2 * z - 3 * y); domain.particles.setVelocityY(p, 3 * x - z); domain.particles.setVelocityZ(p, y - 2 * x);
+			var original = domain.chemicalParcels.record(p);
+			var mixture = new cc.ecisr.mmm.chemistry.ChemicalMixtureRecord(new int[] {original.speciesHandle(0)}, new long[] {1}, 0);
+			int slot = (x > 0 ? 1 : 0) | (y > 0 ? 2 : 0) | (z > 0 ? 4 : 0);
+			domain.chemicalParcels.assign(p, mixture.withMassResidualKilograms(domain.unitScale.kilograms(domain.particles.mass(p))
+					- mixture.exactSpeciesMassKilograms(domain.chemicalParcels.registry()).toDouble()), (Integer.bitCount(slot) & 1) != 0);
+		}
+		domain.rebuildGridFromParticles(); var flux = new ConservativeLiquidFlux(4, 4, 4);
+		flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
+		boolean rejected = false;
+		try { new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true); }
+		catch (MechanicalTimeRefinement expected) { rejected = true; }
+		check(rejected && domain.particleCount() == 8, "Low-quanta field lost resolved coordinates or modified its source");
+	}
+
+	/** A positive small indicator share retains its resolved transverse shear when merged into a full cell. */
+	private static void smallTransferredGroupsRetainShear() {
+		var domain = new FluidDomain(5, 3, 3, FluidSolverConfig.prototypeDefaults(), 128);
+		domain.setVolume(1, 1, 1, 1); domain.setVolume(2, 1, 1, 1);
+		domain.bindMaterialRegistry(new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)));
+		domain.bindChemistry(cc.ecisr.mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
+		for (int p = 0; p < domain.particleCount(); p++) {
+			domain.chemicalParcels.updateIndicator(p, domain.particleCellIndex(p) == domain.cellIndex(1, 1, 1));
+			domain.particles.setVelocityX(p, (float) (domain.particles.positionY(p) / domain.config.cellSize() - 1.5));
+		}
+		domain.rebuildGridFromParticles(); java.util.Arrays.fill(domain.gridToParticleStage.advectionCells(), true);
+		var flux = new ConservativeLiquidFlux(5, 3, 3);
+		for (int f = 0; f < flux.velocity.length; f++) if (flux.axis[f] == 0
+				&& (flux.left[f] == domain.cellIndex(1, 1, 1) || flux.left[f] == domain.cellIndex(2, 1, 1))) flux.velocity[f] = .25;
+		flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, .125, domain.markerGrid.exactCellVolumeInventory);
+		var remap = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount));
+		int arrivals = 0;
+		for (var marker : remap.markers) if (marker.cell() == domain.cellIndex(2, 1, 1) && marker.indicator()) arrivals++;
+		check(arrivals >= 2, "Small transferred shear has no complete coordinate rule");
+		checkShear(remap, 0, 1, 2000.0 / 16);
+	}
+
+	private static void setVelocity(FluidDomain domain, int marker, int axis, float value) {
+		switch (axis) {
+			case 0 -> domain.particles.setVelocityX(marker, value);
+			case 1 -> domain.particles.setVelocityY(marker, value);
+			case 2 -> domain.particles.setVelocityZ(marker, value);
+			default -> throw new AssertionError("Unknown shear axis");
+		}
+	}
+
+	private static void checkShear(CellCarrierRemapPlan remap, int velocityAxis, int gradientAxis, double expectedSquaredSpeedMass) {
+		double momentum = 0, squaredSpeedMass = 0;
+		for (var marker : remap.markers) {
+			close(marker.velocity(velocityAxis), marker.offset(gradientAxis), "Reconstructed affine shear");
+			momentum += marker.mass() * marker.velocity(velocityAxis);
+			squaredSpeedMass += marker.mass() * marker.velocity(velocityAxis) * marker.velocity(velocityAxis);
+		}
+		close(momentum, 0, "Reconstructed shear momentum");
+		close(squaredSpeedMass, expectedSquaredSpeedMass, "Reconstructed shear kinetic energy");
 	}
 
 	private static void close(double actual, double expected, String label) {
