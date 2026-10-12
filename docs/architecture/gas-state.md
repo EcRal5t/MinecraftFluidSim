@@ -37,6 +37,8 @@
 
 [GasFaceIntersection](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
 
+[GasGeometryOverlap](../../solver/src/main/java/cc/ecisr/mmm/fluid/GasGeometryOverlap.java) 精确积分同一开放微盒与前后两个气体半空间的交集，返回单元归一化有理数体积。纯相切的交集体积为零，严格正的薄层保留精确量。库存交接仍需结合旧库存归属与实际可达路径；零重叠的有限气腔需要扫掠轨迹或可达性证明才能确定去向。
+
 这些对象保存几何与几何容量。当前 `AirNetwork` 库存归属使用下述格级扫描；微盒归属、库存容量、相变候选和状态交接的统一完成条件见[物理缺口](../roadmap/product-roadmap.md#物理缺口的依赖安排)。
 
 ### Cavity scan

@@ -24,6 +24,7 @@ public final class AirCavityScannerValidation {
 	}
 
 	private static void validateMicroGasGeometry() {
+		validateMicroGasOverlap();
 		Grid grid=new Grid(2,2,2,.5F);var phase=new FlipPressurePhaseGeometry(2,2,2);
 		phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
 		var geometry=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,phase);
@@ -65,6 +66,35 @@ public final class AirCavityScannerValidation {
 		var denominator=new java.math.BigDecimal((double).1234567F).multiply(new java.math.BigDecimal((double).7654321F)).multiply(java.math.BigDecimal.valueOf(2));
 		double expected=numerator.divide(denominator,java.math.MathContext.DECIMAL128).doubleValue();
 		check(strip>0 && Double.doubleToLongBits(strip)==Double.doubleToLongBits(expected),"A true narrow gas port lost its exact physical area");
+	}
+
+	private static void validateMicroGasOverlap() {
+		var zero=cc.ecisr.mmm.units.SignedDyadic.ZERO;
+		var one=cc.ecisr.mmm.units.SignedDyadic.of(1);
+		var quarter=cc.ecisr.mmm.units.SignedDyadic.of(.25);
+		var exact=cc.ecisr.mmm.chemistry.ExactRational.ONE;
+		var tetra=new GasGeometryOverlap.HalfSpace(one.negate(),one.negate(),one.negate(),cc.ecisr.mmm.units.SignedDyadic.of(-.5));
+		check(GasGeometryOverlap.normalizedVolume(0,List.of(tetra)).equals(exact.divide(48)),
+				"Gas overlap did not retain the exact tetrahedron volume");
+		for(int slot=1;slot<8;slot++) check(GasGeometryOverlap.normalizedVolume(slot,List.of(tetra)).isZero(),
+				"Gas tetrahedron tangency manufactured positive volume");
+		for(int axis=0;axis<3;axis++) {
+			var normal=new cc.ecisr.mmm.units.SignedDyadic[]{zero,zero,zero};normal[axis]=one;
+			var lower=new GasGeometryOverlap.HalfSpace(normal[0],normal[1],normal[2],quarter);
+			var tangent=new GasGeometryOverlap.HalfSpace(normal[0].negate(),normal[1].negate(),normal[2].negate(),quarter.negate());
+			var thickness=cc.ecisr.mmm.units.SignedDyadic.of(1,-100);
+			var upper=new GasGeometryOverlap.HalfSpace(normal[0].negate(),normal[1].negate(),normal[2].negate(),quarter.add(thickness).negate());
+			for(int slot=0;slot<8;slot++) {
+				check(GasGeometryOverlap.normalizedVolume(slot,List.of()).equals(exact.divide(8)),"Empty gas overlap constraints changed an open microbox");
+				check(GasGeometryOverlap.normalizedVolume(slot,List.of(lower,tangent)).isZero(),"Coincident gas planes manufactured overlap");
+				var expected=(slot>>axis&1)==0?new cc.ecisr.mmm.chemistry.ExactRational(java.math.BigInteger.ONE,java.math.BigInteger.ONE.shiftLeft(102))
+						:cc.ecisr.mmm.chemistry.ExactRational.ZERO;
+				check(GasGeometryOverlap.normalizedVolume(slot,List.of(lower,upper)).equals(expected),"Sub-ULP positive gas overlap was lost");
+				check(GasGeometryOverlap.normalizedVolume(slot,List.of(upper,lower)).equals(expected),"Gas overlap depends on clipping order");
+				check(GasGeometryOverlap.normalizedVolume(slot,List.of(lower,lower)).equals(GasGeometryOverlap.normalizedVolume(slot,List.of(lower))),
+						"Repeated gas plane double-counted its overlap");
+			}
+		}
 	}
 
 	private static void validateControllerExtentIsSealed() {
