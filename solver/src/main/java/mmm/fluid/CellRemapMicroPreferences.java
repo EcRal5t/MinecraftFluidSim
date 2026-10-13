@@ -16,25 +16,28 @@ final class CellRemapMicroPreferences {
 		for (int d = 0; d < result.length; d++) {
 			flux.sweptMicroVolumes(faces[d], support, receiverSupports[d], swept, wet);
 			int normalBit = 1 << flux.axis[faces[d]];
+			double[] donorPreference = new double[8];
 			double geometric = 0, donor = 0;
 			for (int m = 0; m < 8; m++) if (inventory[m].signum() > 0) {
 				int peer = m ^ normalBit;
-				// A source node integrates its connected normal column; tangential columns retain
-				// the frozen trace selection even when that column's face-side half has no node.
 				double columnSwept = swept[m], columnWet = wet[m];
 				if ((support & 1 << peer) != 0) { columnSwept += swept[peer]; columnWet += wet[peer]; }
 				if (columnSwept == 0) continue;
-				if (!(Double.isFinite(columnWet) && columnWet > 0 && Double.isFinite(columnSwept)))
+				double raw = inventory[m].toDouble(); donorPreference[m] = raw; donor += raw;
+				// The geometric proposal uses represented swept microboxes; donor-cell supply uses the column.
+				boolean represented = swept[m] > 0 || ((support & 1 << peer) != 0 && inventory[peer].signum() > 0 && swept[peer] > 0);
+				double sweptMeasure = represented ? swept[m] : columnSwept, wetMeasure = represented ? wet[m] : columnWet;
+				if (sweptMeasure == 0) continue;
+				if (!(Double.isFinite(wetMeasure) && wetMeasure > 0 && Double.isFinite(sweptMeasure)))
 					throw new IllegalStateException("Positive liquid micro sweep lacks its wet source measure");
-				double raw = inventory[m].toDouble();
-				result[d][m] = raw * (columnSwept / columnWet); geometric += result[d][m]; donor += raw;
+				result[d][m] = raw * (sweptMeasure / wetMeasure); geometric += result[d][m];
 				if (!(Double.isFinite(result[d][m]) && result[d][m] > 0))
 					throw new IllegalStateException("Supported liquid micro preference is unrepresentable");
 			}
 			if (geometric == 0) continue;
 			double blend = flux.geometricBlend(faces[d]);
-			for (int m = 0; m < 8; m++) if (result[d][m] > 0)
-				result[d][m] = blend * result[d][m] / geometric + (1 - blend) * inventory[m].toDouble() / donor;
+			for (int m = 0; m < 8; m++) if (donorPreference[m] > 0)
+				result[d][m] = blend * result[d][m] / geometric + (1 - blend) * donorPreference[m] / donor;
 		}
 		return result;
 	}

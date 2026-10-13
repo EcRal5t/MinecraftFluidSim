@@ -18,6 +18,7 @@ public final class CellRemapMomentsValidation {
 			System.out.println("Positive joint liquid moments validation passed"); return;
 		}
 		if (args.length == 1 && args[0].equals("transport-moments")) {
+			limitedFluxMixesTheSamePositiveMomentWeights();
 			scalarTransportKeepsUnexcitedSpatialInertia();
 			directionalTransportPartitionsActualMomentumAndKineticEnergy();
 			System.out.println("Cell remap transport moments validation passed");
@@ -87,6 +88,21 @@ public final class CellRemapMomentsValidation {
 		precise(moments[0], .1, "FCT geometric sweep");
 		check(flux.exactFlux[0].signum() > 0 && flux.resultingVolumes()[1].compareTo(mmm.units.SignedDyadic.of(1)) <= 0,
 				"FCT moment mixture changed capacity-constrained inventory");
+		var domain = new FluidDomain(2, 2, 2,
+				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 32);
+		domain.setVolume(0, 0, 0, .25F); var source = new ArrayList<Integer>();
+		// Supply quadrature is explicit; the two-cell FCT fixture independently defines the sweep.
+		for (int p = 0; p < domain.particleCount(); p++) {
+			source.add(p); float y = .25F + .5F * (p >> 1 & 1);
+			domain.particles.setPositionY(p, y); domain.particles.setVelocityY(p, y - .5F);
+		}
+		var preference = CellRemapMicroPreferences.create(domain, flux, source, 255, new int[]{0, -1}, new int[]{255, 255});
+		for (int micro = 0; micro < 8; micro++) precise(preference[0][micro], (1 - flux.geometricBlend(0)) / 8
+				+ ((micro & 2) == 0 ? 0 : flux.geometricBlend(0) / 4), "Common geometric/donor source mixture");
+		var result = new CellRemapTransportMoments(domain, 0, source).allocate(new mmm.units.SignedDyadic[]{flux.exactFlux[0],
+				exact[0].subtract(flux.exactFlux[0])}, preference);
+		precise(result.momentum()[0][1] / result.mass()[0], .25 * flux.geometricBlend(0), "Mixed normal source velocity");
+		compareCarrierMoments(domain, 0, result);
 	}
 
 	private static void precise(double actual, double expected, String label) {
@@ -213,6 +229,46 @@ public final class CellRemapMomentsValidation {
 			check(result.markerWeights()[positive ? 1 : 0][i].isZero(), "Directional shear borrowed the opposite source support");
 		}
 		microAggregatesMatchCarrierReference();
+		sweptMicroSourcesRetainNormalMomentum();
+	}
+
+	/** Normal stretch selects the actual swept half before the common mass/P/K allocation. */
+	private static void sweptMicroSourcesRetainNormalMomentum() {
+		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) for (boolean sparse : new boolean[]{false, true}) {
+			var domain = new FluidDomain(3, 3, 3,
+					new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 32);
+			domain.setVolume(1, 1, 1, 1); var original = new ArrayList<Integer>();
+			for (int p = 0; p < domain.particleCount(); p++) {
+				original.add(p);
+				float[] xyz = {domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
+				if (sparse) {
+					xyz[axis] = 1.5F - sign * .25F;
+					domain.particles.setPositionX(p, xyz[0]); domain.particles.setPositionY(p, xyz[1]); domain.particles.setPositionZ(p, xyz[2]);
+				}
+				float normal = xyz[axis] - 1.5F;
+				domain.particles.setVelocityX(p, axis == 0 ? normal : 0);
+				domain.particles.setVelocityY(p, axis == 1 ? normal : 0);
+				domain.particles.setVelocityZ(p, axis == 2 ? normal : 0);
+			}
+			domain.gridDirty = true; domain.ensureInventoryGrid(); int cell = domain.cellIndex(1, 1, 1);
+			var flux = new ConservativeLiquidFlux(3, 3, 3); flux.geometry(new LiquidFluxGeometry(domain)); int face = -1;
+			for (int f = 0; f < flux.physicalFaceCount; f++) if (flux.axis[f] == axis && (sign > 0 ? flux.left[f] : flux.right[f]) == cell) {
+				face = f; flux.velocity[f] = sign * .5; break;
+			}
+			check(face >= 0, "Normal source fixture lacks its outgoing face");
+			double[] volume = new double[27]; volume[cell] = 1;
+			var inventory = new mmm.units.SignedDyadic[27]; java.util.Arrays.fill(inventory, mmm.units.SignedDyadic.ZERO);
+			inventory[cell] = mmm.units.SignedDyadic.of(1); flux.plan(volume, domain.geometry.solid, .125, inventory);
+			var sent = flux.exactFlux[face]; var pieces = new mmm.units.SignedDyadic[]{sent, inventory[cell].subtract(sent)};
+			var preferences = CellRemapMicroPreferences.create(domain, flux, original, 255, new int[]{face, -1}, new int[]{255, 255});
+			var result = new CellRemapTransportMoments(domain, cell, original).allocate(pieces, preferences);
+			precise(result.momentum()[0][axis] / result.mass()[0], sign * (sparse ? -.25 : .25), "Swept micro source normal velocity");
+			compareCarrierMoments(domain, cell, result);
+			if (!sparse) for (int p = 0; p < original.size(); p++) {
+				float normal = axis == 0 ? domain.particles.velocityX(p) : axis == 1 ? domain.particles.velocityY(p) : domain.particles.velocityZ(p);
+				if (sign * normal < 0) check(result.markerWeights()[0][p].isZero(), "Represented sweep borrowed the opposite normal half");
+			}
+		}
 	}
 
 	private static void microAggregatesMatchCarrierReference() {

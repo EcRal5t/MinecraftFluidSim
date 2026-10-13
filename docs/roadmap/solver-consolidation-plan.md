@@ -233,8 +233,8 @@ M09 的局部改进随对应工作包提交。M07 与 M08 各自验收；恢复 
 
 正式 Marker、切格短长入口及当前失败基线已建立。当前优先推进既有仿射流程的来源、压力与输运契约，继续保留 M02 的稀疏支撑及内部运动验收条件。
 
-流入包的均匀进入时间重建与共同常压粗空间修正已接入，气腔单后继交接按完整比例复用精确正交集。`joint-moments`、`handoff-short`、压力 `--kernel`、载体修改、`air-cavity`、`air-network`、`representation` 及架构校验通过。密闭注液完成前两个逻辑步，第三步的单后继有理数累计失败已越过；`gas-liquid:short` 当前被薄层整面仿射外推所需的至少 7930 子步拒绝，原累计上限为 4096。
+流入包的均匀进入时间重建与共同常压粗空间修正已接入，气腔单后继交接按完整比例复用精确正交集。几何出流优先使用实际扫掠微盒的原始来源，低阶 donor-cell 份额保留柱级供给。`joint-moments`、`transport-moments`、`sweep-only`、`handoff-short`、压力 `--kernel`、载体修改、`air-cavity`、`air-network`、`representation` 及架构校验通过。密闭注液完成前三个逻辑步；`gas-liquid:short` 和有界诊断在第四步复现格 266 的两点共线来源（空间秩 2），现有仿射压力要求秩 4。断开微盒 `components` 用例也在首次压力准备时由格 18 的单点来源拒绝。
 
-下一增量继续 M02–M04 的薄层速度与几何支撑对应，核对薄层实际位置速度交叉矩与全格法向迹的可表示性。流入重建的原始载体速度、扫掠面法向迹及 PLIC 截断误差分别验收；原满液格的微量空腔按量化前、量化后及容量修正后的净通量定位。气腔多后继的精确比例和环境绝对截留继续保留原预算。局部对照使用 `--pressure-gauge`、`joint-moments` 和 `handoff-short`，密闭注液用 `runBoundaryPourDiagnostic` 保存来源和能量证据，再以 `gas-liquid:short` 验收正常流程。各项以共同方程、实际惯性与库存契约确定支持条件。
+下一增量聚焦 M01–M04 的稀疏流入空间表示与压力相容性：由实际来源份额核对切向空间矩、湿几何和压力自由度，明确仅有一根法向线的流入包如何参与三维体积约束，并继续检查薄层实际位置速度交叉矩与全格法向迹。流入重建的原始载体速度、扫掠面法向迹及 PLIC 截断误差分别验收；原满液格的微量空腔按量化前、量化后及容量修正后的净通量定位。气腔多后继的精确比例和环境绝对截留继续保留原预算。局部对照使用 `--pressure-gauge`、`transport-moments`、`joint-moments` 和 `handoff-short`，密闭注液用 `runBoundaryPourDiagnostic` 保存来源和能量证据，再以 `gas-liquid:short` 验收正常流程。各项以共同方程、实际惯性与库存契约确定支持条件。
 
 M04 继续检查断开分量的合法到达及长轨迹正采样可表示性。局部回归使用 `handoff-short`、`joint-moments` 和 `representation`，包级验收保留 `components`、`chemical-tails`、`handoff` 及原有长场景。M05–M08 按前置条件接续，各包以列出的验收条件关闭。

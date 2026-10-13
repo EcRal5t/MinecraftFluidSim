@@ -149,7 +149,20 @@ public final class BoundaryPourDiagnostic {
 		LiquidPressureGeometry geometry = value(projection, "geometry", LiquidPressureGeometry.class);
 		System.out.printf("POUR snapshot attempt=%d substep=%d dt=%g actualSpeed=%g actualMarkers=%d %s%n",
 				attempt, substep, dt, d.maximumParticleSpeed(), d.particleCount(), outcome);
-		if (basis == null || !value(projection, "active", Boolean.class)) return;
+		if (basis == null) return;
+		if (!value(projection, "active", Boolean.class)) {
+			var coefficient = new double[3][4 * d.cellCount];
+			var velocity = new double[3][basis.markerCount()];
+			for (int p = 0; p < basis.markerCount(); p++) {
+				velocity[0][p] = d.particles.velocityX(p); velocity[1][p] = d.particles.velocityY(p); velocity[2][p] = d.particles.velocityZ(p);
+			}
+			basis.fit(velocity, coefficient);
+			for (int cell = 0, shown = 0; cell < d.cellCount && shown < 4; cell++) if (basis.cellMarkerCount(cell) > 0
+					&& (basis.rank(cell) < 4 || !basis.hasRepresentableBasis(cell))) {
+				inputCell(d, basis, coefficient, cell); shown++;
+			}
+			return;
+		}
 		boolean hasCandidate = value(projection, "solved", Boolean.class) || value(projection, "published", Boolean.class);
 		for (String name : new String[]{"originalVelocity", "predictor", "wallPredictor", "candidate", "publishedVelocity"}) {
 			if (!hasCandidate && (name.equals("candidate") || name.equals("publishedVelocity"))) continue;
