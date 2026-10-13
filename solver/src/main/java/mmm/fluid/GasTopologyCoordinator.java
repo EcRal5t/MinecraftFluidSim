@@ -159,10 +159,15 @@ final class GasTopologyCoordinator {
 			// Persistent ambient space carries no finite stock, control volume or external transfer.
 			if (destination < 0 || source == 0 && destination == 0) continue;
 			var before = old.geometry().piece(piece); var after = next.geometry().piece(piece);
-			var planes = new ArrayList<GasGeometryOverlap.HalfSpace>(2);
-			if (before.dryPlane() != null) planes.add(before.dryPlane());
-			if (after.dryPlane() != null) planes.add(after.dryPlane());
-			var overlap = GasGeometryOverlap.normalizedVolume(before.micro(), planes);
+			if (before.micro() != after.micro()) throw new IllegalStateException("Gas overlap changed its fixed microbox");
+			ExactRational overlap;
+			if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane())) {
+				overlap = before.normalizedVolume();
+			} else if (before.dryPlane() == null) {
+				overlap = after.normalizedVolume();
+			} else {
+				overlap = GasGeometryOverlap.normalizedVolume(before.micro(), List.of(before.dryPlane(), after.dryPlane()));
+			}
 			if (overlap.isZero()) continue;
 			intersections[index] = overlap;
 			if (source > 0) {

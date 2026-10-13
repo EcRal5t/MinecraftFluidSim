@@ -325,6 +325,8 @@ public final class AirCavityScannerValidation {
 			var wet=new GasGeometryOverlap.HalfSpace(tinyNormal.negate(),one.negate(),zero,mmm.units.SignedDyadic.of(-offset));
 			var measured=GasGeometryOverlap.normalizedVolume(0,List.of(wet));
 			check(measured.equals(offset==inverse.lower()?inverse.lowerVolume():inverse.upperVolume()),"PLIC inverse certificate differs from independent polyhedron volume");
+			check(measured.equals(GasGeometryOverlap.normalizedVolume(0,List.of(wet,wet))),
+					"Coincident thin gas planes differ from the certified single-plane volume");
 		}
 		check(inverse.lowerVolume().compareTo(tinyTarget)<=0 && inverse.upperVolume().compareTo(tinyTarget)>=0
 				&& Math.nextUp(inverse.lower())==inverse.upper(),"Tiny PLIC volume lacks adjacent enclosing offsets");
