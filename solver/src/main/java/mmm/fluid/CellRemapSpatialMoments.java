@@ -90,6 +90,72 @@ final class CellRemapSpatialMoments {
 		factor.addPositionSpread(axis, deviation);
 		covariance[axis][axis] = finite(covariance[axis][axis] + deviation * deviation);
 	}
+	/** Bounded subcell shape completion; changes only the position block of the joint measure. */
+	double[] completeFaceTangents(int axis, ExactRational[] swept, double normalizedVolume, double massFraction) {
+		return completeFaceTangents(axis, swept, normalizedVolume, massFraction, spatialSpan());
+	}
+	double[] completeFaceTangents(int axis, ExactRational[] swept, double normalizedVolume, double massFraction, double[][] span) {
+		if (axis < 0 || axis > 2 || swept.length != 10 || !(Double.isFinite(normalizedVolume) && normalizedVolume > 0)
+				|| !(Double.isFinite(massFraction) && massFraction > 0 && massFraction <= 1))
+			throw new IllegalArgumentException("Invalid liquid shape completion");
+		var added = new double[3]; if (swept[0].isZero()) return added;
+		if (span.length == 3) return added;
+		int x = (axis + 1) % 3, y = (axis + 2) % 3;
+		var xx = sweepCovariance(swept, x, x); var xy = sweepCovariance(swept, x, y); var yy = sweepCovariance(swept, y, y);
+		var trace = xx.add(yy); if (trace.isZero()) return added;
+		double length = Math.cbrt(normalizedVolume), limit = finite(length * length / 16);
+		var scale = PlicComponentGeometry.ratio(SignedDyadic.of(limit), SignedDyadic.of(1)).multiply(inverse(trace));
+		if (scale.compareTo(ExactRational.ONE) > 0) scale = ExactRational.ONE;
+		scale = scale.multiply(PlicComponentGeometry.ratio(SignedDyadic.of(massFraction), SignedDyadic.of(1)));
+		if (xx.signum() < 0 || yy.signum() < 0) throw new IllegalStateException("Negative swept liquid covariance");
+		var direction = new double[3];
+		if (!xx.isZero()) {
+			direction[x] = finite(Math.sqrt(xx.multiply(scale).toDouble()));
+			if (!(direction[x] > 0)) throw failure(Failure.UNREPRESENTABLE, "Liquid tangential shape underflows its factor");
+			direction[y] = finite(xy.multiply(scale).toDouble() / direction[x]);
+			addShapeSpread(direction, span, added);
+			yy = yy.subtract(xy.multiply(xy).multiply(inverse(xx)));
+		} else if (!xy.isZero()) throw new IllegalStateException("Swept covariance has an unsupported cross moment");
+		if (yy.signum() < 0) throw new IllegalStateException("Swept liquid covariance is not positive semidefinite");
+		if (!yy.isZero()) {
+			java.util.Arrays.fill(direction, 0); direction[y] = finite(Math.sqrt(yy.multiply(scale).toDouble()));
+			if (!(direction[y] > 0)) throw failure(Failure.UNREPRESENTABLE, "Liquid tangential shape underflows its factor");
+			addShapeSpread(direction, span, added);
+		}
+		return added;
+	}
+	private static ExactRational sweepCovariance(ExactRational[] swept, int a, int b) {
+		int low = Math.min(a, b), high = Math.max(a, b), index = low == 0 ? 4 + high : low == 1 ? 6 + high : 9;
+		var inverseVolume = inverse(swept[0]);
+		return swept[index].multiply(inverseVolume).subtract(swept[a + 1].multiply(swept[b + 1]).multiply(inverseVolume).multiply(inverseVolume));
+	}
+	private static ExactRational inverse(ExactRational value) { return new ExactRational(value.denominator(), value.numerator()); }
+	double[][] spatialSpan() {
+		var state = decompose(); var span = new double[state.spatialRank()][3];
+		for (int k = 0; k < span.length; k++) {
+			for (int a = 0; a < 3; a++) span[k][a] = state.loads()[a][k];
+			for (int pass = 0; pass < 2; pass++) for (int j = 0; j < k; j++) {
+				double dot = 0; for (int a = 0; a < 3; a++) dot += span[k][a] * span[j][a];
+				for (int a = 0; a < 3; a++) span[k][a] -= dot * span[j][a];
+			}
+			double length = Math.hypot(Math.hypot(span[k][0], span[k][1]), span[k][2]);
+			if (!(length > 0 && Double.isFinite(length))) throw failure(Failure.UNREPRESENTABLE, "Liquid spatial shape has an unrepresentable span");
+			for (int a = 0; a < 3; a++) span[k][a] /= length;
+		}
+		return span;
+	}
+	private void addShapeSpread(double[] direction, double[][] span, double[] added) {
+		for (int pass = 0; pass < 2; pass++) for (double[] resolved : span) {
+			double dot = 0; for (int a = 0; a < 3; a++) dot += direction[a] * resolved[a];
+			for (int a = 0; a < 3; a++) direction[a] -= dot * resolved[a];
+		}
+		addPositionSpread(direction); for (int a = 0; a < 3; a++) added[a] += direction[a] * direction[a];
+	}
+	private void addPositionSpread(double[] direction) {
+		factor.addPositionSpread(direction);
+		for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++)
+			covariance[b][a] = covariance[a][b] = finite(covariance[a][b] + direction[a] * direction[b]);
+	}
 	double mass() { return mass; }
 	double[] centroid() { return new double[]{mean[0], mean[1], mean[2]}; }
 	double spatialVariance(int axis) { return covariance[axis][axis]; }

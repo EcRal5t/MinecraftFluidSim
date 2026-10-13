@@ -18,11 +18,15 @@ final class JointMomentFactor {
 	}
 
 	void addPositionSpread(int axis, double deviation) {
+		var direction = new double[3]; direction[axis] = deviation; addPositionSpread(direction);
+	}
+
+	void addPositionSpread(double[] deviation) {
 		for (int a = 0; a < 6; a++) {
 			System.arraycopy(values[a], 0, joined[a], 0, 6);
 			java.util.Arrays.fill(joined[a], 6, 13, 0);
 		}
-		joined[axis][6] = finite(deviation);
+		for (int a = 0; a < 3; a++) joined[a][6] = finite(deviation[a]);
 		compress();
 	}
 

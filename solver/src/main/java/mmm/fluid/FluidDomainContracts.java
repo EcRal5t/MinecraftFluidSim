@@ -40,19 +40,20 @@ abstract class FluidDomainContracts extends FluidDomainStorage {
 		static final Moment3 ZERO = new Moment3(0, 0, 0);
 		Moment3 plus(Moment3 other) { return new Moment3(x + other.x, y + other.y, z + other.z); }
 	}
-	/** Per logical step: mass moments in kg*m, volume moments in cell fraction*m, centroid distance in m. */
+	/** Mass first moments in kg*m, volume first moments in cell fraction*m, shape completion diagonals in kg*m^2. */
 	public record LiquidTransportStats(Moment3 massProjection, Moment3 massStorage, Moment3 volumeResidual,
 			Moment3 unadvancedMassMoment, Moment3 signedMassResidual, double maximumCentroidProjection,
-			int projectedGroups, int reconstructedGroups) {
+			int projectedGroups, int reconstructedGroups, Moment3 massSecondMomentApproximation) {
 		static final LiquidTransportStats INACTIVE = new LiquidTransportStats(Moment3.ZERO, Moment3.ZERO, Moment3.ZERO,
-				Moment3.ZERO, Moment3.ZERO, 0, 0, 0);
+				Moment3.ZERO, Moment3.ZERO, 0, 0, 0, Moment3.ZERO);
 		LiquidTransportStats plus(LiquidTransportStats other) {
 			if (other == INACTIVE) return this;
 			if (this == INACTIVE) return other;
 			return new LiquidTransportStats(massProjection.plus(other.massProjection), massStorage.plus(other.massStorage),
 					volumeResidual.plus(other.volumeResidual), unadvancedMassMoment.plus(other.unadvancedMassMoment),
 					signedMassResidual.plus(other.signedMassResidual), Math.max(maximumCentroidProjection, other.maximumCentroidProjection),
-					Math.addExact(projectedGroups, other.projectedGroups), Math.addExact(reconstructedGroups, other.reconstructedGroups));
+					Math.addExact(projectedGroups, other.projectedGroups), Math.addExact(reconstructedGroups, other.reconstructedGroups),
+					massSecondMomentApproximation.plus(other.massSecondMomentApproximation));
 		}
 		/** Potential error from remap geometry relative to its trapezoidal momentum displacement. */
 		public double gravitationalPotentialErrorJoules(double gravityMetresPerSecondSquared) {

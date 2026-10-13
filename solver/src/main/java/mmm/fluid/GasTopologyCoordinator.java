@@ -207,7 +207,10 @@ final class GasTopologyCoordinator {
 				if (destinations.isEmpty()) {
 					if (stock.isEmpty()) continue;
 					throw new GasTopologyBlockedException("Finite gas stock has no positive successor support: node="
-							+ previous + ", key=" + old.minimumPiece(previous));
+							+ previous + ", key=" + old.minimumPiece(previous) + ", standardNanos=" + stock.standardVolumeNanos()
+							+ ", oldVolumeM3=" + old.capacity().chambers().get(previous - 1).cubicMeters()
+							+ ", oldCellLiquid=" + old.liquidStock().get(old.minimumPiece(previous) / 8).volume().toDouble()
+							+ ", nextCellLiquid=" + next.liquidStock().get(old.minimumPiece(previous) / 8).volume().toDouble());
 				}
 				var weights = List.copyOf(destinations.values()); var parts = stock.partition(weights);
 				double[] energies = !thermal ? null : stock.isEmpty() ? new double[parts.size()] : partitionEnergy(previous, parts, edit);

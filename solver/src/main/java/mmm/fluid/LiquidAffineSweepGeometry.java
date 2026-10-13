@@ -94,11 +94,28 @@ final class LiquidAffineSweepGeometry {
 				dtOverH, donorSupport, receiverSupport, null);
 	}
 
+	/** Returns donor-centred V, X, Y, Z, XX, XY, XZ, YY, YZ, ZZ in cell-normalized coordinates. */
+	static ExactRational[] sweptExactSecondMoments(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
+	                                            double intercept, double tangentSlope, double otherSlope, double dtOverH,
+	                                            int donorSupport, int receiverSupport) {
+		return sweptExactMoments(domain, donor, receiver, axis, positive, intercept, tangentSlope, otherSlope,
+				dtOverH, donorSupport, receiverSupport, null, true);
+	}
+
 	private static ExactRational[] sweptExactMoments(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
 	                                               double intercept, double tangentSlope, double otherSlope, double dtOverH,
 	                                               int donorSupport, int receiverSupport, GasGeometryOverlap.HalfSpace wetOverride) {
+		return sweptExactMoments(domain, donor, receiver, axis, positive, intercept, tangentSlope, otherSlope,
+				dtOverH, donorSupport, receiverSupport, wetOverride, false);
+	}
+
+	private static ExactRational[] sweptExactMoments(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
+	                                               double intercept, double tangentSlope, double otherSlope, double dtOverH,
+	                                               int donorSupport, int receiverSupport, GasGeometryOverlap.HalfSpace wetOverride,
+	                                               boolean secondMoments) {
 		requireInput(domain, donor, receiver, axis, intercept, tangentSlope, otherSlope, dtOverH, donorSupport, receiverSupport);
-		ExactRational[] total = {ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
+		ExactRational[] total = new ExactRational[secondMoments ? 10 : 4];
+		java.util.Arrays.fill(total, ExactRational.ZERO);
 		if (dtOverH == 0 || donorSupport == 0 || receiverSupport == 0) return total;
 		var cut = domain.geometry.cutCells;
 		var phase = domain.pressurePhaseGeometry;
@@ -125,8 +142,9 @@ final class LiquidAffineSweepGeometry {
 				if (!Double.isFinite(pore) || pore < 0 || pore > 1) throw new IllegalStateException("Invalid affine sweep pore fraction");
 				if (pore == 0) continue;
 				ExactRational weight = rational(pore);
-				ExactRational[] part = GasGeometryOverlap.normalizedMoments(micro, constraints);
-				for (int i = 0; i < 4; i++) total[i] = total[i].add(part[i].multiply(weight));
+				ExactRational[] part = secondMoments ? GasGeometryOverlap.normalizedSecondMoments(micro, constraints)
+						: GasGeometryOverlap.normalizedMoments(micro, constraints);
+				for (int i = 0; i < total.length; i++) total[i] = total[i].add(part[i].multiply(weight));
 			}
 			if (total[0].signum() < 0 || total[0].compareTo(ExactRational.ONE) > 0)
 				throw new IllegalStateException("Affine liquid sweep volume does not close");

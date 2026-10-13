@@ -67,6 +67,13 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dtOverH,
 				donorSupport, receiverSupport, swept, wet);
 	}
+	@Override public mmm.chemistry.ExactRational[] sweptSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
+	                                                              double dtOverH, int donorSupport, int receiverSupport) {
+		double[] q = trace[face + (positive ? 0 : faces.physicalFaceCount)];
+		if (q == null) throw new IllegalStateException("Positive liquid arrival has no captured affine trace");
+		return LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dtOverH,
+				donorSupport, receiverSupport);
+	}
 
 	@Override public void sweptPhaseMoments(PhaseVolumeTransportGeometry phases, int phase, int face, int donor,
 	                                       int receiver, int axis, boolean positive, double width, double dtOverH,

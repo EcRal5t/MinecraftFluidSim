@@ -98,6 +98,7 @@ final class CellCarrierRemapPlan {
 			if (capacity.signum() <= 0 || occupied.compareTo(capacity) > 0)
 				throw new IllegalStateException("Liquid quadrature exceeds its final open capacity");
 			for (Group group : output[cell]) {
+				completeArrivalShape(group, flux);
 				group.maximumTranslation = Double.isFinite(group.density)
 						? .5 * capacity.subtract(group.volume).toDouble() / capacity.toDouble() : .5;
 				if (ports != null) {
@@ -318,7 +319,7 @@ final class CellCarrierRemapPlan {
 					spatial.spreadFaceArrival(flux.axis[faces[d]], dt / domain.config.cellSize());
 					spatial.setCentroid(Arrays.copyOf(facePoint, 3));
 				}
-				source.shares.add(new Share(source, destinations[d], supports[d], pieces[g][d], masses[d], transport.kinetic()[d],
+				source.shares.add(new Share(source, destinations[d], supports[d], faces[d], pieces[g][d], masses[d], transport.kinetic()[d],
 						energy, species[d], rounding, transport.momentum()[d], facePoint, spatial, transport.volumeMotion()[d]));
 			}
 			if (pieces[g][shares - 1].signum() == 0) source.discardedMoment = true;
@@ -380,7 +381,21 @@ final class CellCarrierRemapPlan {
 			if (share.species != null) target.species.add(share.species);
 			for (int a = 0; a < 3; a++) target.momentum[a] += share.momentum[a];
 			addMoments(target, share);
+			if (share.face >= 0 && !geometryRemap) {
+				if (target.arrivals == null) target.arrivals = new ArrayList<>();
+				target.arrivals.add(share);
+			}
 			addFields(target, source, share.mass, 4);
+		}
+	}
+	/** Complete only unresolved arriving shapes; the independent position spread preserves velocity and cross moments. */
+	private void completeArrivalShape(Group group, ConservativeLiquidFlux flux) {
+		if (group.arrivals == null || group.spatial.spatialRank() == 3) return;
+		var span = group.spatial.spatialSpan();
+		for (Share share : group.arrivals) {
+			var swept = flux.sweptSecondMoments(domain, share.face, share.source.support, share.support);
+			var added = group.spatial.completeFaceTangents(flux.axis[share.face], swept, share.volume.toDouble(), share.mass / group.mass, span);
+			for (int a = 0; a < 3; a++) group.shapeApproximation[a] += group.mass * added[a];
 		}
 	}
 
@@ -748,11 +763,12 @@ final class CellCarrierRemapPlan {
 
 	private CellRemapMoments.Audit momentAudit() {
 		double[] projection = new double[3], storage = new double[3], volume = new double[3], unadvanced = new double[3], signed = new double[3];
-		double maximum = 0, h = domain.config.cellSize(); int projected = 0, reconstructed = 0;
+		double maximum = 0, h = domain.config.cellSize(); var shape = new double[3]; int projected = 0, reconstructed = 0;
 		for (ArrayList<Group> groups : output) if (groups != null) for (Group group : groups) {
 			reconstructed++;
 			double worst = 0;
 			for (int a = 0; a < 3; a++) {
+				shape[a] += domain.unitScale.kilograms(h * h * group.shapeApproximation[a]);
 				projection[a] += domain.unitScale.kilograms(h * Math.abs(group.projection[a])); storage[a] += domain.unitScale.kilograms(h * Math.abs(group.storage[a]));
 				signed[a] += domain.unitScale.signedKilograms(h * (group.projection[a] + group.storage[a]));
 				volume[a] += h * Math.abs(group.volumeResidual[a]); worst = Math.max(worst, h * Math.abs(group.projection[a]) / group.mass);
@@ -774,7 +790,7 @@ final class CellCarrierRemapPlan {
 			}
 			maximum = Math.max(maximum, worst); if (worst > 0) projected++;
 		}
-		return new CellRemapMoments.Audit(projection, storage, volume, maximum, projected, unadvanced, signed, reconstructed);
+		return new CellRemapMoments.Audit(projection, storage, volume, maximum, projected, unadvanced, signed, reconstructed, shape);
 	}
 
 	private static Map<Integer, Long> cellSpecies(ArrayList<Group> groups) {
@@ -885,14 +901,14 @@ final class CellCarrierRemapPlan {
 		double velocity(int axis) { return switch (axis) { case 0 -> velocityX; case 1 -> velocityY; case 2 -> velocityZ; default -> throw new IllegalArgumentException("Unknown axis"); }; }
 	}
 	private record Transfer(int face, int destination, int support, SignedDyadic volume) { }
-	private record Share(Group source, int destination, int support, SignedDyadic volume, double mass, double kinetic,
+	private record Share(Group source, int destination, int support, int face, SignedDyadic volume, double mass, double kinetic,
 			SignedDyadic energy, ChemicalMixtureRecord species, double rounding, double[] momentum, double[] facePoint,
 			CellRemapSpatialMoments spatial, double[] volumeMotion) { }
 	private static final class Group {
 		final int cell, material, support; final boolean indicator;
 		boolean retained;
 		int sampleStart, quadratureCount, quadratureAxes, movingAxes; ArrayList<Float> sampleVolumes;
-		ArrayList<Share> shares;
+		ArrayList<Share> shares, arrivals;
 		final ArrayList<Integer> original = new ArrayList<>(); final CellSpeciesInventory species = new CellSpeciesInventory();
 		final CellRemapSpatialMoments spatial = new CellRemapSpatialMoments();
 		SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO;
@@ -902,6 +918,7 @@ final class CellCarrierRemapPlan {
 		double lowMassX, lowMassY, lowMassZ, lowVolumeX, lowVolumeY, lowVolumeZ;
 		final double[] massMoment = new double[3], volumeMoment = new double[3], volumeMotion = new double[3];
 		final double[] projection = new double[3], storage = new double[3], volumeResidual = new double[3]; boolean discardedMoment;
+		final double[] shapeApproximation = new double[3];
 		double localMinimum = Double.POSITIVE_INFINITY, localMaximum = Double.NEGATIVE_INFINITY;
 		double minimumTemperature = Double.POSITIVE_INFINITY, maximumTemperature = Double.NEGATIVE_INFINITY;
 		Group(int cell, int material, boolean indicator, int support) { this.cell = cell; this.material = material; this.indicator = indicator; this.support = support; }

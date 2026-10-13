@@ -9,13 +9,13 @@ final class CellRemapMoments {
 	/** Mass errors use SI kg*m; volume errors use raw cell fraction*m. */
 	record Audit(double[] massProjection, double[] massStorage, double[] volumeResidual,
 			double maximumCentroidProjection, int projectedGroups, double[] unadvancedMassMoment,
-			double[] signedMassResidual, int reconstructedGroups) {
-		static Audit empty() { return new Audit(new double[3], new double[3], new double[3], 0, 0, new double[3], new double[3], 0); }
+			double[] signedMassResidual, int reconstructedGroups, double[] shapeApproximation) {
+		static Audit empty() { return new Audit(new double[3], new double[3], new double[3], 0, 0, new double[3], new double[3], 0, new double[3]); }
 		FluidDomain.LiquidTransportStats stats() {
 			if (reconstructedGroups == 0 && unadvancedMassMoment[0] == 0 && unadvancedMassMoment[1] == 0 && unadvancedMassMoment[2] == 0)
 				return FluidDomain.LiquidTransportStats.INACTIVE;
 			return new FluidDomain.LiquidTransportStats(moment(massProjection), moment(massStorage), moment(volumeResidual),
-					moment(unadvancedMassMoment), moment(signedMassResidual), maximumCentroidProjection, projectedGroups, reconstructedGroups);
+					moment(unadvancedMassMoment), moment(signedMassResidual), maximumCentroidProjection, projectedGroups, reconstructedGroups, moment(shapeApproximation));
 		}
 		private static FluidDomain.Moment3 moment(double[] a) { return new FluidDomain.Moment3(a[0], a[1], a[2]); }
 	}

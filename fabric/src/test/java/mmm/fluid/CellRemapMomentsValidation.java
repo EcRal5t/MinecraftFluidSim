@@ -12,6 +12,8 @@ public final class CellRemapMomentsValidation {
 		if (args.length == 1 && args[0].equals("joint-moments")) {
 			partialCellInitializationHasPositiveWetLayerSupport();
 			faceArrivalRetainsFiniteNormalThickness();
+			boundedFaceTangentsKeepMechanicalMoments();
+			sparseFaceArrivalPublishesActualPressureSupport();
 			thinJointRuleKeepsActualRank(); jointRuleKeepsIndependentVelocityModes(); thinAffineRuleKeepsCrossMoments();
 			unequalSourceMassKeepsFirstMoment();
 			chemicalQuadratureRetainsJointMomentsWithFewQuanta(); smallTransferredGroupsRetainShear();
@@ -25,6 +27,7 @@ public final class CellRemapMomentsValidation {
 			return;
 		}
 		sweptLiquidMomentsKeepThinTangentialCentroids();
+		sweptQuadraticMomentsRetainAffineWedgeGeometry();
 		limitedFluxMixesTheSamePositiveMomentWeights();
 		thinSlabRemapRetainsItsTangentialMoment();
 		if (args.length == 1 && args[0].equals("sweep-only")) return;
@@ -39,6 +42,8 @@ public final class CellRemapMomentsValidation {
 		thinJointRuleKeepsActualRank();
 		partialCellInitializationHasPositiveWetLayerSupport();
 		faceArrivalRetainsFiniteNormalThickness();
+		boundedFaceTangentsKeepMechanicalMoments();
+		sparseFaceArrivalPublishesActualPressureSupport();
 		jointRuleKeepsIndependentVelocityModes();
 		thinAffineRuleKeepsCrossMoments(); unequalSourceMassKeepsFirstMoment();
 		geometryRemapUsesPlannedCapacity();
@@ -73,6 +78,47 @@ public final class CellRemapMomentsValidation {
 		geometry.sweptMoments(0, 1, 1, .125, true, 0, 0, 0, 0, moments);
 		precise(moments[0], .0625, "Cut swept volume");
 		precise(moments[1] / moments[0], -.25, "Cut tangential centroid");
+	}
+
+	private static void sweptQuadraticMomentsRetainAffineWedgeGeometry() {
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 32);
+		domain.setVolume(1, 1, 1, 1); domain.rebuildGridFromParticles();
+		int donor = domain.cellIndex(1, 1, 1);
+		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
+			int[] xyz = {1, 1, 1}; xyz[axis] += sign;
+			int receiver = domain.cellIndex(xyz[0], xyz[1], xyz[2]), tangent = (axis + 1) % 3;
+			for (boolean affine : new boolean[]{false, true}) {
+				double intercept = sign * (affine ? .125 : .25), slope = affine ? sign * .25 : 0;
+				var first = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, receiver, axis, sign > 0,
+						intercept, slope, 0, .5, 255, 255);
+				var second = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, sign > 0,
+						intercept, slope, 0, .5, 255, 255);
+				check(second.length == 10, "Quadratic sweep has incomplete moments");
+				for (int i = 0; i < 4; i++) check(second[i].equals(first[i]), "Quadratic sweep changed its exact prefix");
+				check(second[0].equals(mmm.chemistry.ExactRational.ONE.divide(8)), "Analytic wedge volume differs");
+				var means = new mmm.chemistry.ExactRational[]{mmm.chemistry.ExactRational.ZERO,
+						mmm.chemistry.ExactRational.ZERO, mmm.chemistry.ExactRational.ZERO};
+				means[axis] = affine ? mmm.chemistry.ExactRational.of(83L * sign).divide(192)
+						: mmm.chemistry.ExactRational.of(7L * sign).divide(16);
+				if (affine) means[tangent] = mmm.chemistry.ExactRational.ONE.divide(12);
+				for (int a = 0; a < 3; a++) check(second[a + 1].multiply(8).equals(means[a]), "Analytic wedge centroid differs");
+				int entry = 4;
+				for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++) {
+					var expected = mmm.chemistry.ExactRational.ZERO;
+					if (a == b) expected = a == axis
+							? affine ? mmm.chemistry.ExactRational.of(71).divide(36864) : mmm.chemistry.ExactRational.ONE.divide(768)
+							: affine && a == tangent ? mmm.chemistry.ExactRational.of(11).divide(144) : mmm.chemistry.ExactRational.ONE.divide(12);
+					else if (affine && (a == axis && b == tangent || a == tangent && b == axis))
+						expected = mmm.chemistry.ExactRational.of(-11L * sign).divide(2304);
+					var covariance = second[entry++].multiply(8).subtract(means[a].multiply(means[b]));
+					check(covariance.equals(expected), "Analytic wedge covariance differs on axes " + a + "," + b);
+				}
+			}
+			var empty = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, sign > 0,
+					sign * .25, 0, 0, 0, 255, 255);
+			for (var value : empty) check(value.isZero(), "Zero-duration quadratic sweep has a nonzero moment");
+		}
 	}
 
 	private static void limitedFluxMixesTheSamePositiveMomentWeights() {
@@ -414,8 +460,149 @@ public final class CellRemapMomentsValidation {
 		}
 	}
 
+	private static void boundedFaceTangentsKeepMechanicalMoments() {
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 32);
+		domain.setVolume(1, 1, 1, 1); domain.rebuildGridFromParticles();
+		int donor = domain.cellIndex(1, 1, 1);
+		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) for (boolean skew : new boolean[]{false, true})
+				for (boolean shear : new boolean[]{false, true}) {
+			int tangent = (axis + 1) % 3, other = (axis + 2) % 3;
+			int[] xyz = {1, 1, 1}; xyz[axis] += sign;
+			var swept = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor,
+					domain.cellIndex(xyz[0], xyz[1], xyz[2]), axis, sign > 0, sign * .125,
+					sign * (skew ? .125 : .25), skew ? sign * .125 : 0, .5, 255, 255);
+			var moments = new CellRemapSpatialMoments();
+			double[] mean = {sign * .125, sign * -.25, sign * .0625}, velocity = {sign * .5, sign * -.25, sign * .125};
+			for (int node = 0; node < (shear ? 4 : 2); node++) {
+				double[] point = mean.clone(), value = velocity.clone();
+				int side = (node & 1) == 0 ? -1 : 1, tangentSide = (node & 2) == 0 ? -1 : 1;
+				point[axis] += side / 32.0; value[tangent] += side * sign / 8.0;
+				if (shear) { point[tangent] += tangentSide / 16.0; value[other] += tangentSide * sign / 4.0; }
+				moments.add(1, point, value);
+			}
+			check(moments.spatialRank() == (shear ? 2 : 1), "Face tangent fixture lost its original spatial rank");
+			double[] added = moments.completeFaceTangents(axis, swept, 1.0 / 64, .25);
+			double tangentVariance = skew ? 47.0 / 576 : 11.0 / 144, otherVariance = skew ? 47.0 / 576 : 1.0 / 12;
+			double kappa = (1.0 / 16) / (16 * (tangentVariance + otherVariance));
+			precise(added[axis], 0, "Face completion changed normal variance");
+			precise(added[tangent], shear ? 0 : .25 * kappa * tangentVariance, "Wedge first tangent increment");
+			precise(added[other], .25 * kappa * otherVariance, "Wedge second tangent increment");
+			precise(added[0] + added[1] + added[2], shear ? .25 * kappa * otherVariance : 1.0 / 1024,
+					"Volume-scaled spatial trace bound");
+			check(moments.spatialRank() == 3 && moments.minimumCount() == 4,
+					"Face completion did not produce its actual three-dimensional positive support");
+			double[][] reference = new double[8][6]; double[] weights = new double[8];
+			for (int p = 0; p < 8; p++) {
+				weights[p] = 1;
+				for (int a = 0; a < 3; a++) {
+					int side = (p & 1 << a) == 0 ? -1 : 1;
+					reference[p][a] = mean[a] + side * (a == axis ? 1.0 / 32 : shear && a == tangent ? 1.0 / 16 : Math.sqrt(added[a]));
+					reference[p][a + 3] = velocity[a] + (a == tangent ? ((p & 1 << axis) == 0 ? -1 : 1) * sign / 8.0
+							: shear && a == other ? ((p & 1 << tangent) == 0 ? -1 : 1) * sign / 4.0 : 0);
+				}
+				if (skew && !shear) {
+					double crossLoading = -.25 * kappa / (576 * Math.sqrt(added[tangent]));
+					reference[p][other] = mean[other] + ((p & 1 << tangent) == 0 ? -1 : 1) * crossLoading
+							+ ((p & 1 << other) == 0 ? -1 : 1) * Math.sqrt(added[other] - crossLoading * crossLoading);
+				}
+			}
+			// Full joint-moment comparison includes unchanged P, kinetic energy and angular momentum.
+			verifyJointRule(moments, weights, reference);
+			if (shear) {
+				var fitted = moments.fit(weights, java.util.Arrays.stream(reference).map(p -> java.util.Arrays.copyOf(p, 3)).toArray(double[][]::new));
+				for (int p = 0; p < weights.length; p++) precise(fitted.velocities()[p][other] - velocity[other],
+						4 * sign * (fitted.positions()[p][tangent] - mean[tangent]), "Face completion retained linear tangential shear");
+			} else {
+				var combined = new CellRemapSpatialMoments();
+				for (int side : new int[]{-1, 1}) {
+					var point = mean.clone(); var value = velocity.clone(); point[axis] += side / 32.0; value[tangent] += side * sign / 8.0;
+					combined.add(1, point, value);
+				}
+				var originalSpan = combined.spatialSpan();
+				combined.completeFaceTangents(axis, swept, 1.0 / 64, .25, originalSpan);
+				combined.completeFaceTangents(axis, swept, 1.0 / 64, .75, originalSpan);
+				for (var point : reference) for (int a = 0; a < 3; a++) if (a != axis) point[a] = mean[a] + 2 * (point[a] - mean[a]);
+				verifyJointRule(combined, weights, reference);
+			}
+		}
+	}
+
 	private static void verifyJointRule(CellRemapSpatialMoments moments, double[] weights, double[][] source) {
 		verifyJointRule(moments, weights, source, weights);
+	}
+
+	private static void sparseFaceArrivalPublishesActualPressureSupport() {
+		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) for (int count : new int[]{1, 2}) {
+			float h = .5F, dt = .125F;
+			var domain = new FluidDomain(3, 3, 3,
+					new FluidSolverConfig(h, 1000, 0, dt, 200, 1e-5F, .45F, .002F, 0), 64);
+			float[] positions = new float[4 * count], velocities = new float[3 * count];
+			for (int p = 0; p < count; p++) {
+				for (int a = 0; a < 3; a++) positions[4 * p + a] = (1.5F + (a == axis && count == 2 ? (p == 0 ? -.125F : .125F) : 0)) * h;
+				positions[4 * p + 3] = 1.0F / count; velocities[3 * p + axis] = sign * .25F;
+			}
+			domain.restoreParticleState(new FlipParticleState(3, 3, 3, h, count, 1, positions, velocities, new byte[27]));
+			domain.rebuildGridFromParticles();
+			java.util.Arrays.fill(domain.gridToParticleStage.advectionCells(), true);
+			int donor = domain.cellIndex(1, 1, 1); int[] xyz = {1, 1, 1}; xyz[axis] += sign;
+			int receiver = domain.cellIndex(xyz[0], xyz[1], xyz[2]);
+			var flux = new ConservativeLiquidFlux(3, 3, 3); flux.geometry(new LiquidFluxGeometry(domain));
+			int face = -1;
+			for (int f = 0; f < flux.flux.length; f++) if (flux.axis[f] == axis
+					&& flux.left[f] == (sign > 0 ? donor : receiver) && flux.right[f] == (sign > 0 ? receiver : donor)) face = f;
+			check(face >= 0, "Sparse arrival has no shared face"); flux.velocity[face] = sign * .25;
+			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, dt / h, domain.markerGrid.exactCellVolumeInventory);
+			check(flux.exactFlux[face].signum() > 0, "Sparse arrival has no positive flux");
+			var remap = new CellCarrierRemapPlan(domain, flux, dt, new BallisticLiquidRemap(27));
+			var volume = mmm.units.SignedDyadic.ZERO; var mass = volume; var momentum = volume; var energy = volume;
+			double receivedMass = 0, shapeTrace = 0;
+			for (var marker : remap.markers) {
+				check(marker.volume() > 0 && marker.mass() > 0, "Sparse arrival published a nonpositive weight");
+				volume = volume.add(mmm.units.SignedDyadic.of(marker.volume()));
+				mass = mass.add(mmm.units.SignedDyadic.of(marker.mass()));
+				double[] v = {marker.velocityX(), marker.velocityY(), marker.velocityZ()};
+				for (int a = 0; a < 3; a++) check(v[a] == (a == axis ? sign * .25 : 0), "Sparse arrival changed constant velocity");
+				momentum = momentum.add(mmm.units.SignedDyadic.of(marker.mass()).multiply(mmm.units.SignedDyadic.of(v[axis])));
+				energy = energy.add(mmm.units.SignedDyadic.of(marker.mass()).multiply(mmm.units.SignedDyadic.of(v[axis])).multiply(mmm.units.SignedDyadic.of(v[axis])).multiply(mmm.units.SignedDyadic.of(.5)));
+				if (marker.cell() == receiver) receivedMass += domain.unitScale.kilograms(marker.mass());
+			}
+			check(volume.equals(mmm.units.SignedDyadic.of(1)) && mass.equals(mmm.units.SignedDyadic.of(1000)),
+					"Sparse arrival changed its exact raw inventory");
+			check(momentum.equals(mmm.units.SignedDyadic.of(sign * 250)) && energy.equals(mmm.units.SignedDyadic.of(31.25)),
+					"Sparse arrival changed its exact source P or KE");
+			precise(domain.unitScale.signedKilograms(momentum.toDouble()), sign * 31.25, "Sparse arrival actual momentum");
+			precise(domain.unitScale.kilograms(energy.toDouble()), 3.90625, "Sparse arrival actual kinetic energy");
+			for (double component : remap.momentAudit.shapeApproximation()) { check(component >= 0, "Negative spatial approximation diagnostic"); shapeTrace += component; }
+			double edge = Math.cbrt(flux.exactFlux[face].toDouble()), bound = receivedMass * h * h * edge * edge / 16;
+			check(shapeTrace > 0 && shapeTrace <= bound + 128 * Math.ulp(bound), "Sparse arrival exceeded its spatial second-moment bound");
+			var published = publishRemapForSupport(domain, remap);
+			var basis = CellAffineVelocity.capture(published);
+			check(basis.rank(receiver) == 4 && basis.hasRepresentableBasis(receiver), "Sparse arrival lacks actual published affine pressure support");
+			var zero = new ConservativeLiquidFlux(3, 3, 3); zero.geometry(new LiquidFluxGeometry(domain));
+			zero.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
+			for (boolean geometric : new boolean[]{false, true}) {
+				var unchanged = new CellCarrierRemapPlan(domain, zero, geometric ? 0 : dt, new BallisticLiquidRemap(27), geometric);
+				for (double component : unchanged.momentAudit.shapeApproximation()) check(component == 0, "Unmoved liquid gained a spatial shape approximation");
+				check(CellAffineVelocity.capture(publishRemapForSupport(domain, unchanged)).rank(donor) == count,
+						"Zero-time or zero-flux remap changed its actual source rank");
+			}
+		}
+	}
+
+	private static FluidDomain publishRemapForSupport(FluidDomain source, CellCarrierRemapPlan remap) {
+		float h = source.config.cellSize(); int count = remap.markers.size();
+		float[] positions = new float[4 * count], velocities = new float[3 * count]; int p = 0;
+		for (var marker : remap.markers) {
+			int[] xyz = {marker.cell() % 3, marker.cell() / 3 % 3, marker.cell() / 9};
+			double[] offset = {marker.offsetX(), marker.offsetY(), marker.offsetZ()};
+			double[] velocity = {marker.velocityX(), marker.velocityY(), marker.velocityZ()};
+			for (int a = 0; a < 3; a++) { positions[4 * p + a] = (float) ((xyz[a] + .5 + offset[a]) * h); velocities[3 * p + a] = (float) velocity[a]; }
+			positions[4 * p++ + 3] = marker.volume();
+		}
+		var result = new FluidDomain(3, 3, 3, source.config, 64);
+		result.restoreParticleState(new FlipParticleState(3, 3, 3, h, count, 1, positions, velocities, new byte[27]));
+		return result;
 	}
 
 	private static void verifyJointRule(CellRemapSpatialMoments moments, double[] weights, double[][] source, double[] sourceWeights) {

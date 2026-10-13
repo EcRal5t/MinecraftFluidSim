@@ -10,6 +10,10 @@ final class ConservativeLiquidFlux {
 	interface FaceSweep {
 		void sweptMoments(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
 		                  int donorSupport, int receiverSupport, double[] result);
+		default mmm.chemistry.ExactRational[] sweptSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
+		                                                     double dtOverH, int donorSupport, int receiverSupport) {
+			throw new IllegalStateException("Liquid face sweep has no quadratic spatial integration rule");
+		}
 		default void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
 		                               int donorSupport, int receiverSupport, double[] swept, double[] wet) {
 			throw new IllegalStateException("Liquid face sweep has no common micro source integration rule");
@@ -89,6 +93,12 @@ final class ConservativeLiquidFlux {
 	void faceSweep(FaceSweep faceSweep) { this.faceSweep = faceSweep; }
 	void reserve(SignedDyadic[] reserved) { this.reserved = reserved; }
 	void carrierShares(int[] carrierShares) { this.carrierShares = carrierShares; }
+	mmm.chemistry.ExactRational[] sweptSecondMoments(FluidDomain domain, int face, int donorSupport, int receiverSupport) {
+		return faceSweep == null ? LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor(face), receiver(face), axis[face], positive(face),
+				velocity[face], 0, 0, dtOverH, donorSupport, receiverSupport)
+				: faceSweep.sweptSecondMoments(face % physicalFaceCount, donor(face), receiver(face), axis[face], positive(face), dtOverH,
+						donorSupport, receiverSupport);
+	}
 	void sweptPhaseMoments(PhaseVolumeTransportGeometry phases, int phase, int face,
 	                       int donorSupport, int receiverSupport, double[] result) {
 		double width = Math.abs(velocity[face]) * dtOverH;
