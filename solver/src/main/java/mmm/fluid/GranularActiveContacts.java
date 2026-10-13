@@ -6,6 +6,7 @@ import mmm.granular.GranularParcelStore;
 import mmm.granular.GranularRegistry;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Comparator;
 import java.util.PriorityQueue;
@@ -20,6 +21,7 @@ final class GranularActiveContacts {
 	private final int sizeX, sizeY, sizeZ;
 	private final double h;
 	private final double[][] position, trajectoryOrigin, drift, velocity;
+	private final double[][] driftError, velocityError;
 	private final double[] updated, mass, distanceLimit;
 	private final float[] radius;
 	private final int[] versions;
@@ -41,6 +43,7 @@ final class GranularActiveContacts {
 		this.duration = duration; this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.h = h;
 		int count = parcels.count(); position = new double[count][3]; trajectoryOrigin = new double[count][3]; drift = new double[count][3]; velocity = new double[count][3];
 		updated = new double[count]; mass = new double[count]; distanceLimit = new double[count]; radius = new float[count]; versions = new int[count];
+		driftError = new double[count][3]; velocityError = new double[count][3];
 		sweptCells = new BitSet[sizeX * sizeY * sizeZ]; registrations = new int[count][];
 		sweptMinimum = new double[count][3]; sweptMaximum = new double[count][3];
 		int[] heads = new int[sizeX * sizeY * sizeZ], next = new int[count]; Arrays.fill(heads, -1);
@@ -83,24 +86,28 @@ final class GranularActiveContacts {
 			spend(); processedEvents++; if (event.time() == eventTime) zeroTimeEvents++;
 			eventTime = event.time(); lastFirst = first; lastSecond = second;
 			advance(first, event.time()); if (second >= 0) advance(second, event.time());
-			boolean changed;
+			// A new drift starts at this contact; it cannot be applied to the already travelled segment.
+			trajectoryOrigin[first] = position[first].clone(); updated[first] = event.time();
+			if (second >= 0) { trajectoryOrigin[second] = position[second].clone(); updated[second] = event.time(); }
+			double[] fixedImpact = new double[3];
 			if (second < 0) {
 				double[] compression = fixed.compress(drift[first], event.normals());
-				double[] response = fixed.respond(velocity[first], event.normals(), registry.material(parcels.parcel(first).materialHandle()));
-				changed = changed(drift[first], compression) || changed(velocity[first], response);
-				if (changed) { drift[first] = compression; velocity[first] = response; }
+				double[] response = fixed.respondNormal(velocity[first], event.normals(), registry.material(parcels.parcel(first).materialHandle()));
+				for (int axis = 0; axis < 3; axis++) fixedImpact[axis] = response[axis] - velocity[first][axis];
+				drift[first] = compression; velocity[first] = response;
 			} else {
 				double[] normal = event.normals()[0];
 				double restitution = Math.min(registry.material(parcels.parcel(first).materialHandle()).restitution(),
 						registry.material(parcels.parcel(second).materialHandle()).restitution());
-				changed = compressPair(first, second, normal, drift, restitution);
-				changed |= compressPair(first, second, normal, velocity, restitution);
+				compressPair(first, second, normal, drift, restitution);
+				compressPair(first, second, normal, velocity, restitution);
 			}
-			if (!changed) continue;
-			versions[first]++; if (second >= 0) versions[second]++;
-			// Both changed trajectories must be visible before either source queries new pairs.
-			registerSweep(first, event.time()); if (second >= 0) registerSweep(second, event.time());
-			reschedule(first, event.time()); if (second >= 0) reschedule(second, event.time());
+			BitSet projected = compressComponent(event, fixedImpact);
+			// Every changed trajectory in the component is visible before any new pair query.
+			for (int i = projected.nextSetBit(0); i >= 0; i = projected.nextSetBit(i + 1)) {
+				versions[i]++; registerSweep(i, event.time());
+			}
+			for (int i = projected.nextSetBit(0); i >= 0; i = projected.nextSetBit(i + 1)) reschedule(i, event.time());
 		}
 		for (int i = 0; i < parcels.count(); i++) advance(i, duration);
 		var endpoints = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, (float) h, parcels.count());
@@ -127,6 +134,67 @@ final class GranularActiveContacts {
 				}
 			}
 		}
+	}
+
+	private BitSet compressComponent(Event event, double[] fixedImpact) {
+		var members = new ArrayList<Integer>(); var rows = new ArrayList<GranularContactCompression.Row>();
+		int[] local = new int[parcels.count()]; Arrays.fill(local, -1);
+		local[event.first()] = 0; members.add(event.first());
+		if (event.second() >= 0) {
+			local[event.second()] = 1; members.add(event.second());
+			rows.add(new GranularContactCompression.Row(0, 1, event.normals()[0]));
+		} else for (var normal : event.normals()) rows.add(new GranularContactCompression.Row(0, -1, normal));
+		for (int visit = 0; visit < members.size(); visit++) {
+			int i = members.get(visit); advance(i, event.time()); spend();
+			if (event.second() >= 0 || i != event.first())
+				for (var normal : fixed.contactNormals(position[i], radius[i])) rows.add(new GranularContactCompression.Row(local[i], -1, normal));
+			sweepCandidates(i);
+			for (int j = candidates.nextSetBit(0); j >= 0; j = candidates.nextSetBit(j + 1)) if (j != i) {
+				spend(); advance(j, event.time());
+				if (!touching(position[i], radius[i], position[j], radius[j])) continue;
+				if (local[j] < 0) { local[j] = members.size(); members.add(j); }
+				if (i > j || event.second() >= 0
+						&& (i == event.first() && j == event.second() || i == event.second() && j == event.first())) continue;
+				double[] normal = new double[3]; double length = 0;
+				for (int axis = 0; axis < 3; axis++) { normal[axis] = position[j][axis] - position[i][axis]; length = Math.hypot(length, normal[axis]); }
+				if (!(length > 0)) throw new IllegalStateException("Granular contact component has coincident centers");
+				for (int axis = 0; axis < 3; axis++) normal[axis] /= length;
+				rows.add(new GranularContactCompression.Row(local[i], local[j], normal));
+			}
+		}
+		double[] weights = new double[members.size()]; double[][] d = new double[members.size()][], v = new double[members.size()][];
+		for (int i = 0; i < members.size(); i++) { int global = members.get(i); weights[i] = mass[global]; d[i] = drift[global]; v[i] = velocity[global]; }
+		var constraints = rows.toArray(GranularContactCompression.Row[]::new);
+		var compression = GranularContactCompression.solve(weights, d, constraints, this::spend);
+		var response = Arrays.deepEquals(d, v) ? compression : GranularContactCompression.solve(weights, v, constraints, this::spend);
+		var fixedRows = new ArrayList<ArrayList<Integer>>(members.size());
+		for (int i = 0; i < members.size(); i++) fixedRows.add(new ArrayList<>());
+		for (int row = 0; row < constraints.length; row++) {
+			spend(); if (constraints[row].second() < 0) fixedRows.get(constraints[row].first()).add(row);
+		}
+		var frictionInput = response.values().clone(); boolean frictionChanged = false;
+		for (int i = 0; i < members.size(); i++) {
+			var normals = new ArrayList<double[]>(); double[] load = new double[3];
+			if (event.second() < 0 && members.get(i) == event.first()) load = fixedImpact.clone();
+			for (int row : fixedRows.get(i)) {
+				spend(); var normal = constraints[row].normal(); normals.add(normal);
+				for (int axis = 0; axis < 3; axis++) load[axis] = Math.fma(response.impulses()[row] / weights[i], normal[axis], load[axis]);
+			}
+			if (normals.isEmpty()) continue;
+			frictionInput[i] = fixed.friction(response.values()[i], normals.toArray(double[][]::new),
+					Math.hypot(Math.hypot(load[0], load[1]), load[2]), registry.material(parcels.parcel(members.get(i)).materialHandle()));
+			frictionChanged |= !Arrays.equals(frictionInput[i], response.values()[i]);
+		}
+		// Tangential wall impulses can close an oblique pair; recheck the same joint normal constraints.
+		if (frictionChanged) response = GranularContactCompression.solve(weights, frictionInput, constraints, this::spend);
+		BitSet projected = new BitSet(parcels.count());
+		for (int i = 0; i < members.size(); i++) {
+			int global = members.get(i);
+			projected.set(global);
+			drift[global] = compression.values()[i]; velocity[global] = response.values()[i];
+			driftError[global] = compression.arithmeticError()[i]; velocityError[global] = response.arithmeticError()[i];
+		}
+		return projected;
 	}
 
 	private void reschedule(int i, double time) {
@@ -182,7 +250,7 @@ final class GranularActiveContacts {
 	}
 	private void scheduleFixed(int i, double time) {
 		fixedSchedules++; spend(); advance(i, time);
-		var contact = fixed.nextContact(position[i], drift[i], velocity[i], radius[i], duration - time);
+		var contact = fixed.nextContact(position[i], drift[i], velocity[i], radius[i], duration - time, driftError[i], velocityError[i]);
 		if (contact != null) events.add(new Event(time + contact.time(), i, -1, versions[i], -1, contact.normals()));
 	}
 	private void schedulePair(int i, int j, double time) {
@@ -193,6 +261,14 @@ final class GranularActiveContacts {
 			a = Math.fma(v[axis], v[axis], a); b = Math.fma(r[axis], v[axis], b); c = Math.fma(r[axis], r[axis], c);
 		}
 		double sum = (double) radius[i] + radius[j], squares = c; c = Math.fma(-sum, sum, c);
+		if (touching(position[i], radius[i], position[j], radius[j])) {
+			double length = Math.hypot(Math.hypot(r[0], r[1]), r[2]);
+			if (!(length > 0)) throw new IllegalStateException("Granular contact has coincident centers");
+			double[] normal = {r[0] / length, r[1] / length, r[2] / length};
+			if (closingPair(i, j, normal, drift, driftError) || closingPair(i, j, normal, velocity, velocityError))
+				events.add(new Event(time, i, j, versions[i], versions[j], new double[][]{normal}));
+			return;
+		}
 		if (!(a > 0) || b >= 0) return;
 		double discriminant = Math.fma(-a, c, b * b);
 		double error = 12 * 0x1.0p-53;
@@ -209,6 +285,9 @@ final class GranularActiveContacts {
 		if (!(length > 0)) throw new IllegalStateException("Granular contact has no separating normal");
 		for (int axis = 0; axis < 3; axis++) normal[axis] /= length;
 		events.add(new Event(time + elapsed, i, j, versions[i], versions[j], new double[][]{normal}));
+	}
+	private static boolean closingPair(int first, int second, double[] normal, double[][] values, double[][] error) {
+		return !GranularContactCompression.admits(new GranularContactCompression.Row(first, second, normal), values, error);
 	}
 	private boolean compressPair(int i, int j, double[] normal, double[][] values, double restitution) {
 		double closing = 0; for (int axis = 0; axis < 3; axis++) closing += normal[axis] * (values[j][axis] - values[i][axis]);
@@ -238,11 +317,9 @@ final class GranularActiveContacts {
 			if (!Arrays.equals(point, fixed.roundContactPoint(new double[]{point[0], point[1], point[2]}, radius[i]))) continue;
 			if (endpoints.allows(point[0], point[1], point[2], parcels.parcel(i).solidVolumeSvq())) return point;
 		}
-		throw new MechanicalTimeRefinement(2, "Joint granular contact endpoints lack a binary32 placement");
-	}
-	private static boolean changed(double[] old, double[] next) {
-		for (int axis = 0; axis < 3; axis++) if ((float) old[axis] != (float) next[axis]) return true;
-		return false;
+		throw new MechanicalTimeRefinement(2, "Joint granular contact endpoint lacks a binary32 placement: parcel=" + i
+				+ ", position=" + Arrays.toString(position[i]) + ", nearest=" + Arrays.toString(nearest)
+				+ ", radius=" + radius[i] + ", time=" + eventTime + "/" + duration);
 	}
 	private static boolean overlap(double[] p, float r, double[] q, float s) {
 		return GranularSpawnAdmission.interiorsOverlap(p[0], p[1], p[2], r, q[0], q[1], q[2], s);
@@ -255,6 +332,17 @@ final class GranularActiveContacts {
 	private static boolean touching(float x, float y, float z, float r, float ox, float oy, float oz, float s) {
 		double rounding = Math.hypot(Math.hypot((double) Math.ulp(x) + Math.ulp(ox), (double) Math.ulp(y) + Math.ulp(oy)), (double) Math.ulp(z) + Math.ulp(oz));
 		return Math.hypot(Math.hypot((double) x - ox, (double) y - oy), (double) z - oz) <= (double) r + s + rounding;
+	}
+	private static boolean touching(double[] p, float r, double[] q, float s) {
+		double lower = 0;
+		for (int axis = 0; axis < 3; axis++) {
+			double difference = Math.abs(p[axis] - q[axis]);
+			double error = Math.ulp(p[axis]) + Math.ulp(q[axis]) + Math.ulp(difference);
+			double distance = Math.max(0, Math.nextDown(difference - error));
+			lower = Math.nextDown(lower + Math.nextDown(distance * distance));
+		}
+		double sum = (double) r + s;
+		return lower <= Math.nextUp(sum * sum);
 	}
 	private void spend() {
 		if (++operations > GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP)

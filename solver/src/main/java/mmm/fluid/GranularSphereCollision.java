@@ -56,13 +56,18 @@ final class GranularSphereCollision {
 		return touching(new double[]{x, y, z}, radius, new ArrayList<>()).stream().anyMatch(hit -> hit.normal[1] > 0);
 	}
 	record Contact(double time, double[][] normals) { }
-	Contact nextContact(double[] position, double[] velocity, double[] responseVelocity, float radius, double duration) {
+	double[][] contactNormals(double[] position, float radius) {
+		return touching(position, radius, new ArrayList<>(), false).stream().map(Hit::normal).toArray(double[][]::new);
+	}
+	Contact nextContact(double[] position, double[] velocity, double[] responseVelocity, float radius, double duration,
+	                    double[] driftError, double[] responseError) {
 		double[] displacement = new double[3];
 		for (int axis = 0; axis < 3; axis++) displacement[axis] = velocity[axis] * duration;
 		var contacts = touching(position, radius, new ArrayList<>());
-		if (contacts.stream().anyMatch(hit -> dot(velocity, hit.normal) < 0 || dot(responseVelocity, hit.normal) < 0))
+		if (contacts.stream().anyMatch(hit -> closing(velocity, hit.normal, driftError) || closing(responseVelocity, hit.normal, responseError)))
 			return new Contact(0, contacts.stream().map(Hit::normal).toArray(double[][]::new));
-		var hits = first(position, displacement, radius);
+		var hits = first(position, displacement, radius, hit -> hit.lower() > 0
+				|| closing(velocity, hit.normal(), driftError) || closing(responseVelocity, hit.normal(), responseError));
 		if (hits.isEmpty()) return null;
 		double time = hits.stream().mapToDouble(Hit::lower).min().orElseThrow();
 		double[] atHit = new double[3];
@@ -74,13 +79,27 @@ final class GranularSphereCollision {
 		}
 		return new Contact(duration * time, touching(atHit, radius, contacts).stream().map(Hit::normal).toArray(double[][]::new));
 	}
+	static boolean closing(double[] velocity, double[] normal, double[] error) {
+		return !GranularContactCompression.admits(new GranularContactCompression.Row(0, -1, normal),
+				new double[][]{velocity}, new double[][]{error});
+	}
 	double[] compress(double[] velocity, double[][] normals) { return project(velocity, normals); }
-	double[] respond(double[] velocity, double[][] normals, ParticulateMaterial material) {
-		return impulse(velocity, normals, material);
+	double[] respondNormal(double[] velocity, double[][] normals, ParticulateMaterial material) {
+		return normalImpulse(velocity, normals, material);
+	}
+	double[] friction(double[] velocity, double[][] normals, double load, ParticulateMaterial material) {
+		double[] result = velocity.clone(), tangent = tangent(result, normals);
+		double speed = Math.sqrt(norm2(tangent));
+		double scale = speed == 0 || speed <= material.staticFriction() * load ? 0 : Math.max(0, 1 - material.dynamicFriction() * load / speed);
+		for (int a = 0; a < 3; a++) result[a] += (scale - 1) * tangent[a];
+		return result;
 	}
 	float[] roundContactPoint(double[] position, float radius) { return roundOutside(position, radius); }
 	private void operation() { if (--remainingOperations < 0) throw new MechanicalTimeRefinement(2, "Granular sphere contact operations"); }
 	private List<Hit> first(double[] p, double[] d, double radius) {
+		return first(p, d, radius, ignored -> true);
+	}
+	private List<Hit> first(double[] p, double[] d, double radius, java.util.function.Predicate<Hit> admissible) {
 		List<Hit> candidates = new ArrayList<>();
 		for (int a = 0; a < 3; a++) if (d[a] != 0) {
 			double plane = d[a] > 0 ? sizes[a] * h - radius : radius;
@@ -94,6 +113,7 @@ final class GranularSphereCollision {
 		geometry.forEachBox(lo, hi, (minimum, maximum) -> {
 			Hit hit = box(p, d, minimum, maximum, radius); if (hit != null) candidates.add(hit);
 		});
+		candidates.removeIf(hit -> !admissible.test(hit));
 		if (candidates.isEmpty()) return candidates;
 		double earliestUpper = candidates.stream().mapToDouble(Hit::upper).min().orElseThrow();
 		List<Hit> group = new ArrayList<>();
@@ -143,8 +163,12 @@ final class GranularSphereCollision {
 		return null;
 	}
 	private List<Hit> touching(double[] p, double radius, List<Hit> history) {
+		return touching(p, radius, history, true);
+	}
+	private List<Hit> touching(double[] p, double radius, List<Hit> history, boolean storedPose) {
 		List<Hit> candidates = new ArrayList<>(history), active = new ArrayList<>();
-		double[] quantum = new double[3]; for (int a = 0; a < 3; a++) { float stored = (float) p[a]; quantum[a] = Math.max(Math.nextUp(stored) - (double) stored, stored - (double) Math.nextDown(stored)); }
+		double[] quantum = new double[3];
+		if (storedPose) for (int a = 0; a < 3; a++) { float stored = (float) p[a]; quantum[a] = Math.max(Math.nextUp(stored) - (double) stored, stored - (double) Math.nextDown(stored)); }
 		for (int a = 0; a < 3; a++) for (int side : new int[]{-1, 1}) {
 			double[] normal = new double[3]; normal[a] = side; double plane = side > 0 ? radius : sizes[a] * h - radius;
 			candidates.add(new Hit(0, 0, normal, new double[]{plane, 0, 0}, null, 0, a));
@@ -168,15 +192,16 @@ final class GranularSphereCollision {
 		return active;
 	}
 	private double[] impulse(double[] incoming, double[][] normals, ParticulateMaterial material) {
+		double[] result = normalImpulse(incoming, normals, material), impulse = new double[3];
+		for (int a = 0; a < 3; a++) impulse[a] = result[a] - incoming[a];
+		return friction(result, normals, Math.sqrt(norm2(impulse)), material);
+	}
+	private double[] normalImpulse(double[] incoming, double[][] normals, ParticulateMaterial material) {
 		double[] compressed = project(incoming, normals), impulse = new double[3], predicted = new double[3];
 		for (int a = 0; a < 3; a++) impulse[a] = compressed[a] - incoming[a];
 		double restitution = material.restitution(); if (restitution * Math.sqrt(norm2(impulse)) <= h * .125) restitution = 0;
 		for (int a = 0; a < 3; a++) predicted[a] = compressed[a] + restitution * impulse[a];
 		double[] result = project(predicted, normals);
-		for (int a = 0; a < 3; a++) impulse[a] = result[a] - incoming[a];
-		double[] tangent = tangent(result, normals); double speed = Math.sqrt(norm2(tangent)), load = Math.sqrt(norm2(impulse));
-		double scale = speed == 0 || speed <= material.staticFriction() * load ? 0 : Math.max(0, 1 - material.dynamicFriction() * load / speed);
-		for (int a = 0; a < 3; a++) result[a] += (scale - 1) * tangent[a];
 		return result;
 	}
 	private double[] project(double[] v, double[][] normals) {

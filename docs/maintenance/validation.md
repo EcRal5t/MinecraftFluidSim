@@ -89,6 +89,8 @@
 
 压力核可通过 `:fabric:runMarkerPressureValidation --args="--kernel"` 单独运行仿射拟合、转置虚功、固定壁面投影、独立通量、实际质量 Gram 矩阵、有限气体储存和极端数值对照；完整 `marker-pressure` 另含生产张力与壁面输运场景。
 
+`--args="--chemical-pressure"` 复用原热化学抽取场景的库存与实体输入，在前四个逻辑步的首个压力失败处报告实际残差分区、拉回系数的精确因式差及速度空间秩。包级验收继续运行 `chemistry:short` 的完整物理断言。
+
 `--args="--pressure-gauge"` 聚焦部分充液格的压力参考不变性，核对真实湿体积行、有限气体恒压载荷与固定墙投影后的实际载体力。相同断言同时参与 `--kernel`。
 
 密闭控制器注液的有界诊断使用 `:fabric:runBoundaryPourDiagnostic --offline --no-daemon`。它执行真实完整逻辑步及捕获恢复，从首个失败来源重放力学子步，报告实际质量动能、气腔储存功、压力残差功、仿射梯度及薄层载体元组。追加 `--args=--flux` 聚焦有限气腔的连续通量、供给缩放、逐面舍入与容量修正；先核验原始库存、PLIC、独立到达预留和全部最终面通量相同，再报告各阶段差额。最多检查四个逻辑步，重放沿用生产累计子步上限；严格故障保留失败退出，场景验收使用 `gas-liquid:short`。
@@ -169,6 +171,8 @@
 `granular` 中的 [GranularCarrierValidation](../../solver/src/test/java/mmm/fluid/GranularCarrierValidation.java) 检查多 parcel 阻力交换的动量守恒、能量耗散和顺序无关性、有限颗粒质量的压力功和连续性、跨单元面的连续液体接触、静水梯度给出的浮力、步末阻力有效性检查，以及小时间步下对压力零点的独立性。`containers` 保留正常操作随机序列的种子 4、54、103，覆盖薄液层反冲、密集颗粒排水与高压下的时间细化。
 
 `./gradlew.bat :fabric:runGranularCarrierValidation --offline --no-daemon` 单独执行完整颗粒载体校验。加 `--args="--contacts"` 聚焦固定墙与床体连续碰撞、Coulomb 摩擦、真实支撑年龄、容量暂停、合并后联合球体几何、六轴悬殊质量碰撞的动量与质量第一矩，以及碰撞改道后的三球接触链。
+
+`./gradlew.bat :fabric:runThermalValidation --args="--granular-energy" --offline --no-daemon` 聚焦颗粒内能列的插入、部分提取、床层转换、清空和精确热账。省去参数执行完整热学入口，沿用 `thermal` 的全部场景。
 
 同一 `granular` 选择器中的 [GranularBedWakeValidation](../../fabric/src/test/java/mmm/fluid/GranularBedWakeValidation.java) 使用正式全能力注册表、启用相变，并逐步经过后端捕获/恢复：细砂沉积并休眠后，弱刚体扰动应无侵蚀，较强扰动应重新起动并实际水平搬运，减弱为静止物体后应再次沉积、休眠。逐步记录起动数、活动数、床面 Shields 数与真实接触数，检查恢复后与每步液体、active、deposit、coherent 的联合逐格容量，以及固体质量/体积和气体、内能收支；另检查释放瞬间的零速度、内能搬运、碰撞空间及干区/隔墙误触发。`GranularCarrierValidation` 同时检查薄床切向自由流动和时间细化。
 

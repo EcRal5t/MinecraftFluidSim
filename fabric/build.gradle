@@ -80,6 +80,7 @@ tasks.register('runCpuValidation', JavaExec) {
 
 ['runMarkerPressureValidation': 'mmm.fluid.MarkerPressureValidation',
  'runGranularCarrierValidation': 'mmm.fluid.GranularCarrierValidation',
+ 'runThermalValidation': 'mmm.fluid.M9ThermalValidation',
  'runCarrierMutationValidation': 'mmm.fluid.CarrierMutationValidation',
  'runLiquidTransportValidation': 'mmm.fluid.LiquidVolumeTransportValidation',
  'runRemapMomentsValidation': 'mmm.fluid.CellRemapMomentsValidation'].each { taskName, validationClass ->

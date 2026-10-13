@@ -105,20 +105,28 @@ final class FlipGranularCollision {
 		float minimumZ = cellZ * cellSize + margin, maximumZ = (cellZ + 1) * cellSize - margin;
 		boolean preferred = Float.isFinite(preferredX) && Float.isFinite(preferredY) && Float.isFinite(preferredZ);
 		for (int attempt = 0; attempt < 48; attempt++) {
-			long sample = Math.addExact(sequence + 1L, attempt * 65_537L);
-			float unitX = (float) radicalInverse(sample, 2);
-			float unitY = (float) radicalInverse(sample, 3);
-			float unitZ = (float) radicalInverse(sample, 5);
 			float x, y, z;
-			if (preferred) {
-				float jitter = cellSize * 0.32F;
-				x = clamp(preferredX + (unitX - 0.5F) * jitter, minimumX, maximumX);
-				y = clamp(preferredY + (unitY - 0.5F) * jitter, minimumY, maximumY);
-				z = clamp(preferredZ + (unitZ - 0.5F) * jitter, minimumZ, maximumZ);
+			if (!preferred && attempt < 27) {
+				// Try the complete three-axis packing lattice before filling gaps with low-discrepancy samples.
+				int slot = (int) ((sequence % 27 + attempt) % 27);
+				x = minimumX + (maximumX - minimumX) * (.5F * (slot % 3));
+				y = minimumY + (maximumY - minimumY) * (.5F * (slot / 3 % 3));
+				z = minimumZ + (maximumZ - minimumZ) * (.5F * (slot / 9));
 			} else {
-				x = minimumX + (maximumX - minimumX) * unitX;
-				y = minimumY + (maximumY - minimumY) * unitY;
-				z = minimumZ + (maximumZ - minimumZ) * unitZ;
+				long sample = Math.addExact(sequence + 1L, attempt * 65_537L);
+				float unitX = (float) radicalInverse(sample, 2);
+				float unitY = (float) radicalInverse(sample, 3);
+				float unitZ = (float) radicalInverse(sample, 5);
+				if (preferred) {
+					float jitter = cellSize * 0.32F;
+					x = clamp(preferredX + (unitX - 0.5F) * jitter, minimumX, maximumX);
+					y = clamp(preferredY + (unitY - 0.5F) * jitter, minimumY, maximumY);
+					z = clamp(preferredZ + (unitZ - 0.5F) * jitter, minimumZ, maximumZ);
+				} else {
+					x = minimumX + (maximumX - minimumX) * unitX;
+					y = minimumY + (maximumY - minimumY) * unitY;
+					z = minimumZ + (maximumZ - minimumZ) * unitZ;
+				}
 			}
 			if (positionValid(x, y, z, solidVolumeSvq)) {
 				var candidate = new GranularCouplingFields.Position(x, y, z);

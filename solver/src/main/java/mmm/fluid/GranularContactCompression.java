@@ -1,0 +1,285 @@
+package mmm.fluid;
+
+import mmm.chemistry.ExactRational;
+import mmm.units.SignedDyadic;
+
+/** Mass-metric projection of a touching sphere component onto its common contact cone. */
+final class GranularContactCompression {
+	/** A fixed row is n.v(first); a pair row is n.(v(second)-v(first)). */
+	record Row(int first, int second, double[] normal) {
+		Row { normal = normal.clone(); }
+	}
+
+	/** Errors describe this binary64 reconstruction and its stored impulse resolution. */
+	record Result(double[][] values, double[] impulses, double[] gapError, double[][] arithmeticError) {
+		boolean admits(Row row) { return GranularContactCompression.admits(row, values, arithmeticError); }
+	}
+
+	private GranularContactCompression() { }
+
+	private static final class Progress {
+		private final Runnable budget;
+		private final Row[] rows;
+		private final double[] lambda;
+		private final double[][] values;
+		private final double[] physicalMass;
+		private final double[][] input;
+		private final int massExponent;
+		private int sweeps, operations;
+		private String phase = "setup";
+		private double[] lastGapError;
+		private double[] lastGaps;
+		private int lastWorst = -1;
+		private double lastExcess, lastWorstGap, lastWorstBound, lastWorstLambda;
+
+		Progress(Runnable budget, Row[] rows, double[] lambda, double[][] values, int massExponent,
+		         double[] physicalMass, double[][] input) {
+			this.budget = budget; this.rows = rows; this.lambda = lambda; this.values = values; this.massExponent = massExponent;
+			this.physicalMass = physicalMass; this.input = input;
+		}
+
+		void spend() {
+			operations++;
+			try { budget.run(); }
+			catch (MechanicalTimeRefinement failure) {
+				int active = 0; for (double l : lambda) if (l > 0) active++;
+				double impulse = Math.scalb(lastWorstLambda, massExponent);
+				String details = "";
+				if (values.length <= 3 && !phase.equals("setup")) {
+					var dump = new StringBuilder("; smallComponent massKg=").append(java.util.Arrays.toString(physicalMass))
+							.append(", input=").append(java.util.Arrays.deepToString(input))
+							.append(", currentValues=").append(java.util.Arrays.deepToString(values));
+					for (int k = 0; k < rows.length; k++) dump.append("; row=").append(k).append("[").append(rows[k].first()).append(',')
+							.append(rows[k].second()).append("] normal=").append(java.util.Arrays.toString(rows[k].normal()))
+							.append(", certifiedGap=").append(lastGaps == null ? Double.NaN : lastGaps[k])
+							.append(", bound=").append(lastGapError == null ? Double.NaN : lastGapError[k])
+							.append(", currentGap=").append(gap(rows[k], values)).append(", currentLambdaScaled=").append(lambda[k])
+							.append(", currentImpulseKg=").append(Math.scalb(lambda[k], massExponent));
+					details = dump.toString();
+				}
+				var reported = new MechanicalTimeRefinement(failure.minimumSubsteps,
+						"Common contact compression: componentN=" + values.length + ", rows=" + rows.length + ", activeRows=" + active
+						+ ", phase=" + phase + ", sweepsStarted=" + sweeps + ", componentOperations=" + operations
+						+ ", lastMaxKktExcess=" + lastExcess + ", worstRow=" + lastWorst + ", certifiedGap=" + lastWorstGap
+						+ ", lastGapBound=" + lastWorstBound + ", certifiedImpulseKg=" + impulse + ", impulseUlpKg=" + Math.ulp(impulse)
+						+ details + "; " + failure.getMessage());
+				reported.initCause(failure); throw reported;
+			}
+		}
+	}
+
+	static Result solve(double[] mass, double[][] input, Row[] rows, Runnable spend) {
+		if (mass.length != input.length) throw new IllegalArgumentException("Contact input size mismatch");
+		double[] physicalMass = mass;
+		double largestMass = 0;
+		for (double m : mass) {
+			if (!(m > 0 && Double.isFinite(m))) throw new IllegalArgumentException("Invalid contact mass");
+			largestMass = Math.max(largestMass, m);
+		}
+		int massExponent = Math.getExponent(largestMass);
+		if (largestMass > 0 && largestMass < Double.MIN_NORMAL) massExponent = Math.getExponent(Math.scalb(largestMass, 54)) - 54;
+		double[] scaledMass = new double[mass.length];
+		for (int i = 0; i < mass.length; i++) {
+			scaledMass[i] = Math.scalb(mass[i], -massExponent);
+			if (!(scaledMass[i] > 0) || Math.scalb(scaledMass[i], massExponent) != mass[i])
+				throw new MechanicalTimeRefinement(2, "Unrepresentable contact mass ratio");
+		}
+		mass = scaledMass;
+		double[][] values = new double[mass.length][3];
+		for (int i = 0; i < mass.length; i++) {
+			if (!(mass[i] > 0 && Double.isFinite(mass[i])) || input[i].length != 3)
+				throw new IllegalArgumentException("Invalid contact mass or velocity");
+			for (int a = 0; a < 3; a++) {
+				if (!Double.isFinite(input[i][a])) throw new IllegalArgumentException("Nonfinite contact velocity");
+				values[i][a] = input[i][a];
+			}
+		}
+		double[] lambda = new double[rows.length];
+		var progress = new Progress(spend, rows, lambda, values, massExponent, physicalMass, input);
+		spend = progress::spend;
+		for (int k = 0; k < rows.length; k++) {
+			spend.run(); Row row = rows[k];
+			if (row.first() < 0 || row.first() >= mass.length || row.second() < -1 || row.second() >= mass.length
+					|| row.first() == row.second() || row.normal().length != 3)
+				throw new IllegalArgumentException("Invalid contact row");
+			double norm = 0;
+			for (double n : row.normal()) {
+				if (!Double.isFinite(n)) throw new IllegalArgumentException("Nonfinite contact normal");
+				norm = Math.fma(n, n, norm);
+			}
+			double diagonal = norm / mass[row.first()] + (row.second() < 0 ? 0 : norm / mass[row.second()]);
+			if (!(diagonal > 0 && Double.isFinite(diagonal)))
+				throw new MechanicalTimeRefinement(2, "Unrepresentable contact inverse mass");
+		}
+		Coordinates coordinates = null;
+		while (true) {
+			// Each sweep reconstructs from the original input, so roundoff cannot become a new source velocity.
+			progress.phase = "reconstruct";
+			double[][] error = reconstruct(mass, input, rows, lambda, values, spend);
+			double[] gapError = new double[rows.length]; boolean accepted = true;
+			double[] gaps = mass.length <= 3 ? new double[rows.length] : null;
+			int worst = -1; double excess = 0, worstGap = 0, worstBound = 0, worstLambda = 0;
+			progress.phase = "certify";
+			for (int k = 0; k < rows.length; k++) {
+				spend.run(); double g = gap(rows[k], values);
+				gapError[k] = gapError(rows[k], values, error);
+				if (gaps != null) gaps[k] = g;
+				if (!(Double.isFinite(g) && Double.isFinite(gapError[k])))
+					throw new MechanicalTimeRefinement(2, "Unrepresentable contact normal velocity");
+				accepted &= g >= -gapError[k] && (lambda[k] == 0 || Math.abs(g) <= gapError[k]);
+				double violation = (lambda[k] == 0 ? Math.max(0, -g) : Math.abs(g)) - gapError[k];
+				if (violation > excess) { worst = k; excess = violation; worstGap = g; worstBound = gapError[k]; worstLambda = lambda[k]; }
+			}
+			progress.lastGapError = gapError;
+			progress.lastGaps = gaps; progress.lastWorst = worst; progress.lastExcess = excess;
+			progress.lastWorstGap = worstGap; progress.lastWorstBound = worstBound; progress.lastWorstLambda = worstLambda;
+			if (accepted) {
+				// The common power-of-two mass unit leaves the cone projection unchanged; audits receive kg impulses.
+				double[] physicalImpulse = new double[lambda.length];
+				for (int k = 0; k < lambda.length; k++) {
+					physicalImpulse[k] = Math.scalb(lambda[k], massExponent);
+					if (!Double.isFinite(physicalImpulse[k]) || lambda[k] > 0 && physicalImpulse[k] == 0)
+						throw new MechanicalTimeRefinement(2, "Unrepresentable physical contact impulse");
+				}
+				return new Result(values, physicalImpulse, gapError, error);
+			}
+			boolean changed = false;
+			progress.phase = "coordinates"; progress.sweeps++;
+			if (coordinates == null) coordinates = new Coordinates(mass, input, rows, spend);
+			for (int k = 0; k < rows.length; k++) {
+				spend.run(); changed |= coordinates.update(k, lambda, spend);
+			}
+			if (!changed) throw new MechanicalTimeRefinement(2, "Contact impulse lattice cannot certify the common cone");
+		}
+	}
+
+	static boolean admits(Row row, double[][] values, double[][] error) {
+		double g = gap(row, values), bound = gapError(row, values, error);
+		return Double.isFinite(g) && Double.isFinite(bound) && g >= -bound;
+	}
+
+	/** Exact source momentum keeps coordinate gradients independent of rounded observed velocities. */
+	private static final class Coordinates {
+		private final Row[] rows;
+		private final SignedDyadic[] mass;
+		private final SignedDyadic[][] momentum, normal;
+		private final int[][] axes;
+		private final ExactRational[] inverseDiagonal;
+
+		Coordinates(double[] weights, double[][] input, Row[] rows, Runnable spend) {
+			this.rows = rows; mass = new SignedDyadic[weights.length]; momentum = new SignedDyadic[weights.length][3];
+			normal = new SignedDyadic[rows.length][3]; axes = new int[rows.length][];
+			inverseDiagonal = new ExactRational[rows.length];
+			for (int i = 0; i < weights.length; i++) {
+				spend.run(); mass[i] = SignedDyadic.of(weights[i]);
+				for (int a = 0; a < 3; a++) { spend.run(); momentum[i][a] = mass[i].multiply(SignedDyadic.of(input[i][a])); }
+			}
+			for (int k = 0; k < rows.length; k++) {
+				var norm = SignedDyadic.ZERO;
+				int[] active = new int[3]; int count = 0;
+				for (int a = 0; a < 3; a++) {
+					spend.run(); normal[k][a] = SignedDyadic.of(rows[k].normal()[a]); norm = norm.add(normal[k][a].multiply(normal[k][a]));
+					if (normal[k][a].signum() != 0) active[count++] = a;
+				}
+				axes[k] = java.util.Arrays.copyOf(active, count);
+				spend.run(); var diagonal = ratio(norm, mass[rows[k].first()]);
+				if (rows[k].second() >= 0) { spend.run(); diagonal = diagonal.add(ratio(norm, mass[rows[k].second()])); }
+				inverseDiagonal[k] = new ExactRational(diagonal.denominator(), diagonal.numerator());
+			}
+		}
+
+		boolean update(int k, double[] lambda, Runnable spend) {
+			Row row = rows[k];
+			var gradient = ratio(dot(k, row.first(), spend), mass[row.first()]);
+			if (row.second() >= 0) gradient = ratio(dot(k, row.second(), spend), mass[row.second()]).subtract(gradient);
+			var old = SignedDyadic.of(lambda[k]);
+			var optimum = ratio(old, SignedDyadic.of(1)).subtract(gradient.multiply(inverseDiagonal[k]));
+			double next = optimum.signum() <= 0 ? 0 : optimum.toDouble();
+			if (!Double.isFinite(next) || optimum.signum() > 0 && next == 0)
+				throw new MechanicalTimeRefinement(2, "Unrepresentable contact coordinate impulse");
+			if (next == lambda[k]) return false;
+			var delta = SignedDyadic.of(next).subtract(old); lambda[k] = next;
+			add(k, row.first(), row.second() < 0 ? delta : delta.negate(), spend);
+			if (row.second() >= 0) add(k, row.second(), delta, spend);
+			return true;
+		}
+
+		private SignedDyadic dot(int k, int source, Runnable spend) {
+			var value = SignedDyadic.ZERO;
+			for (int a : axes[k]) { spend.run(); value = value.add(normal[k][a].multiply(momentum[source][a])); }
+			return value;
+		}
+		private void add(int k, int source, SignedDyadic delta, Runnable spend) {
+			for (int a : axes[k]) { spend.run(); momentum[source][a] = momentum[source][a].add(normal[k][a].multiply(delta)); }
+		}
+		private static ExactRational ratio(SignedDyadic numerator, SignedDyadic denominator) {
+			int power = numerator.exponent() - denominator.exponent();
+			return power >= 0 ? new ExactRational(numerator.significand().shiftLeft(power), denominator.significand())
+					: new ExactRational(numerator.significand(), denominator.significand().shiftLeft(-power));
+		}
+	}
+
+	static double[][] reconstruct(double[] mass, double[][] input, Row[] rows, double[] lambda,
+	                                     double[][] values, Runnable spend) {
+		double[][] force = new double[mass.length][3], low = new double[mass.length][3], high = new double[mass.length][3];
+		for (int k = 0; k < rows.length; k++) {
+			spend.run(); Row row = rows[k]; double l = lambda[k];
+			if (l == 0) continue;
+			// One adjacent binary64 impulse value bounds its storage resolution, including subnormals.
+			double lower = Math.max(0, Math.nextDown(l)), upper = Math.nextUp(l);
+			accumulate(row.first(), row.second() < 0 ? 1 : -1, row.normal(), l, lower, upper, force, low, high);
+			if (row.second() >= 0) accumulate(row.second(), 1, row.normal(), l, lower, upper, force, low, high);
+		}
+		double[][] error = new double[mass.length][3];
+		for (int i = 0; i < mass.length; i++) {
+			spend.run();
+			for (int a = 0; a < 3; a++) {
+				values[i][a] = input[i][a] + force[i][a] / mass[i];
+				double lower = Math.nextDown(input[i][a] + Math.nextDown(low[i][a] / mass[i]));
+				double upper = Math.nextUp(input[i][a] + Math.nextUp(high[i][a] / mass[i]));
+				error[i][a] = Math.nextUp(Math.max(values[i][a] - lower, upper - values[i][a]));
+				if (!(Double.isFinite(values[i][a]) && Double.isFinite(error[i][a])))
+					throw new MechanicalTimeRefinement(2, "Unrepresentable common contact reconstruction");
+			}
+		}
+		return error;
+	}
+
+	private static void accumulate(int i, int sign, double[] normal, double l, double lower, double upper,
+	                               double[][] force, double[][] low, double[][] high) {
+		for (int a = 0; a < 3; a++) {
+			double n = sign * normal[a]; if (n == 0) continue;
+			force[i][a] = Math.fma(n, l, force[i][a]);
+			double lo = n * (n < 0 ? upper : lower), hi = n * (n < 0 ? lower : upper);
+			low[i][a] = Math.nextDown(low[i][a] + Math.nextDown(lo));
+			high[i][a] = Math.nextUp(high[i][a] + Math.nextUp(hi));
+		}
+	}
+
+	private static double gap(Row row, double[][] values) {
+		double g = 0;
+		for (int a = 0; a < 3; a++) {
+			double v = row.second() < 0 ? values[row.first()][a] : values[row.second()][a] - values[row.first()][a];
+			g = Math.fma(row.normal()[a], v, g);
+		}
+		return g;
+	}
+
+	static double gapError(Row row, double[][] values, double[][] error) {
+		double lower = 0, upper = 0;
+		for (int a = 0; a < 3; a++) {
+			double n = row.normal()[a]; if (n == 0) continue;
+			double lo = Math.nextDown(values[row.first()][a] - error[row.first()][a]);
+			double hi = Math.nextUp(values[row.first()][a] + error[row.first()][a]);
+			if (row.second() >= 0) {
+				double nextLow = Math.nextDown(values[row.second()][a] - error[row.second()][a]);
+				double nextHigh = Math.nextUp(values[row.second()][a] + error[row.second()][a]);
+				double oldLow = lo; lo = Math.nextDown(nextLow - hi); hi = Math.nextUp(nextHigh - oldLow);
+			}
+			lower = Math.nextDown(lower + Math.nextDown(n * (n < 0 ? hi : lo)));
+			upper = Math.nextUp(upper + Math.nextUp(n * (n < 0 ? lo : hi)));
+		}
+		double g = gap(row, values);
+		return Math.nextUp(Math.max(g - lower, upper - g));
+	}
+}
