@@ -367,12 +367,20 @@ public final class MarkerPressureValidation {
 				{{.125F, .125F, .25F}, {.375F, .125F, .25F}, {.125F, .375F, .25F}}
 		};
 		for (int k = 0; k < sparse.length; k++) {
-			var lowRank = CellAffineVelocity.capture(affineDomain(sparse[k]));
+			var sparseDomain = affineDomain(sparse[k]); var lowRank = CellAffineVelocity.capture(sparseDomain);
 			if (lowRank.rank(0) != k + 1 || !lowRank.hasRepresentableBasis(0)
 					|| !lowRank.canRepresentPoint(0, sparse[k][0][0], sparse[k][0][1], sparse[k][0][2])
 					|| lowRank.canRepresentPoint(0, .125, .125, k == 2 ? Math.nextUp(.25) : .375))
 				throw new AssertionError("Sparse actual geometry was assigned an invented affine direction");
 			verifyAffineRigidMotion(lowRank);
+			sparseDomain.sealDomainBoundary(); sparseDomain.bootstrapGasState(null); sparseDomain.ensureGrid();
+			sparseDomain.gasTopologyCoordinator.refresh(); sparseDomain.bodyForceStage.applyGravity(.001F);
+			var sparsePlan = sparseDomain.pressureSystem.markerProjection(); sparsePlan.prepare(.001F);
+			var common = new double[sparsePlan.operator().rowCount()]; Arrays.fill(common, 1);
+			var commonForce = new double[3][lowRank.markerCount()]; sparsePlan.operator().force(common, commonForce);
+			for (double[] axis : commonForce) for (double value : axis) near(value, 0, 2e-13, "Sparse production Gauss force");
+			if (!sparsePlan.solve(sparseDomain.config.pressureTolerance()).converged())
+				throw new AssertionError("Stationary restricted-hull pressure did not converge at rank " + lowRank.rank(0));
 		}
 		var tilted = new float[][]{{.125F, .125F, .125F}, {.375F, .125F, .125F}, {.125F, .375F, .125F}, {.375F, .375F, Math.nextUp(.125F)}};
 		if (CellAffineVelocity.capture(affineDomain(tilted)).rank(0) != 4)

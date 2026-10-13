@@ -4,20 +4,29 @@ import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
 
-/** Immutable actual-mass least-squares map to cell affine velocities and its discrete adjoint. */
+/**
+ * Actual-mass fit and adjoint for cell affine fields. Free gradients use the source spatial hull H.
+ * Off-hull evaluation uses the minimum-gradient extension. Rank-one production fields use
+ * one actual amplitude per component, extended linearly to a single wetted normal wall.
+ */
 final class CellAffineVelocity {
 	private final int cellCount, markerCount;
 	private final double h;
 	private final int[] cells, offsets, markers, ranks, hullPoints;
-	private final double[] mass, position, center, coefficients, coefficientLow, directions;
+	private final double[] mass, position, center, coefficients, coefficientLow, directions, wallSlopes;
 	private final boolean[] representable, expanded;
+	private double[] wallCoefficients;
 
-	static CellAffineVelocity capture(FluidDomain domain) { return new CellAffineVelocity(domain); }
-	private CellAffineVelocity(FluidDomain domain) {
+	static CellAffineVelocity capture(FluidDomain domain) { return new CellAffineVelocity(domain, null); }
+	static CellAffineVelocity capture(FluidDomain domain, LiquidPressureGeometry geometry) {
+		if (geometry == null) throw new IllegalArgumentException("Missing affine wet geometry");
+		return new CellAffineVelocity(domain, geometry);
+	}
+	private CellAffineVelocity(FluidDomain domain, LiquidPressureGeometry geometry) {
 		cellCount = domain.cellCount; markerCount = domain.particles.count(); h = domain.config.cellSize();
 		cells = new int[markerCount]; mass = new double[markerCount]; position = new double[3 * markerCount];
 		offsets = new int[cellCount + 1]; markers = new int[markerCount]; ranks = new int[cellCount];
-		center = new double[3 * cellCount]; directions = new double[9 * cellCount];
+		center = new double[3 * cellCount]; directions = new double[9 * cellCount]; wallSlopes = new double[3 * cellCount];
 		hullPoints = new int[4 * cellCount]; Arrays.fill(hullPoints, -1);
 		coefficients = new double[4 * markerCount]; representable = new boolean[cellCount];
 		coefficientLow = new double[4 * markerCount]; expanded = new boolean[cellCount];
@@ -33,7 +42,36 @@ final class CellAffineVelocity {
 		for (int i = 0; i < markerCount; i++) markers[cursor[cells[i]]++] = i;
 		for (int c = 0; c < cellCount; c++) if (offsets[c] != offsets[c + 1]) {
 			captureCenter(c); captureHull(c); representable[c] = fitMap(c) || fitExpandedMap(c);
+			if (geometry != null && ranks[c] == 1 && representable[c]) captureWallExtension(domain, geometry, c);
 		}
+	}
+	private void captureWallExtension(FluidDomain domain, LiquidPressureGeometry geometry, int cell) {
+		var profile = geometry.cellSnapshot(cell); if (profile == null) return;
+		int[] planes = wallPlanes(profile);
+		int[] index = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
+		for (int axis = 0; axis < 3; axis++) if (Integer.bitCount(planes[axis]) == 1) {
+			double wall = (index[axis] + .5 * Integer.numberOfTrailingZeros(planes[axis])) * h;
+			double offset = (center(cell, axis) - wall) / h; if (offset == 0) continue;
+			double slope = 1 / offset;
+			if (!Double.isFinite(slope)) throw new FluidDomain.PressureSolveBlockedException("Unrepresentable rank-one wall extension at cell " + cell);
+			wallSlopes[3 * cell + axis] = slope;
+			if (!expanded[cell]) {
+				if (wallCoefficients == null) wallCoefficients = new double[3 * markerCount];
+				for (int k = offsets[cell]; k < offsets[cell + 1]; k++) {
+					int marker = markers[k]; double value = coefficients[4 * marker] * slope;
+					if (!Double.isFinite(value)) throw new FluidDomain.PressureSolveBlockedException("Unrepresentable stored wall coefficient at cell " + cell);
+					wallCoefficients[3 * marker + axis] = value;
+				}
+			}
+		}
+	}
+	static int[] wallPlanes(LiquidPressureGeometry.CellSnapshot profile) {
+		int[] planes = new int[3];
+		for (var facet : profile.facets()) if (facet.kind() == LiquidPressureGeometry.FacetKind.WALL) {
+			int plane = (facet.microKey() / 6 >> facet.axis() & 1) + (facet.sign() > 0 ? 1 : 0);
+			planes[facet.axis()] |= 1 << plane;
+		}
+		return planes;
 	}
 
 	private void captureCenter(int cell) {
@@ -182,7 +220,7 @@ final class CellAffineVelocity {
 	int rank(int cell) { return ranks[cell]; }
 	boolean hasRepresentableBasis(int cell) { return representable[cell]; }
 	boolean expandedCell(int cell) { return expanded[cell]; }
-	boolean canRepresentDirection(int cell, int axis) {
+	private boolean canRepresentDirection(int cell, int axis) {
 		if (axis < 0 || axis >= 3) throw new IllegalArgumentException("Invalid spatial axis");
 		int base = 4 * cell, origin = hullPoints[base];
 		if (ranks[cell] < 2) return false;
@@ -195,6 +233,21 @@ final class CellAffineVelocity {
 	double center(int cell, int axis) { return center[3 * cell + axis]; }
 	double coefficient(int marker, int term) { requireRepresentable(cells[marker]); return coefficients[4 * marker + term]; }
 	SignedDyadic coefficientExact(int marker, int term) { requireRepresentable(cells[marker]); return storedCoefficientExact(marker, term); }
+	double coefficient(int marker, int axis, int term) {
+		requireRepresentable(cells[marker]); double slope = wallSlopes[3 * cells[marker] + axis];
+		if (slope != 0 && term != 0) return term != axis + 1 ? 0
+				: expanded[cells[marker]] ? coefficients[4 * marker] * slope : wallCoefficients[3 * marker + axis];
+		return coefficients[4 * marker + term];
+	}
+	SignedDyadic coefficientExact(int marker, int axis, int term) {
+		requireRepresentable(cells[marker]); return storedCoefficientExact(marker, axis, term);
+	}
+	private SignedDyadic storedCoefficientExact(int marker, int axis, int term) {
+		double slope = wallSlopes[3 * cells[marker] + axis];
+		if (slope != 0 && term != 0) return term != axis + 1 ? SignedDyadic.ZERO : expanded[cells[marker]]
+				? storedCoefficientExact(marker, 0).multiply(SignedDyadic.of(slope)) : SignedDyadic.of(wallCoefficients[3 * marker + axis]);
+		return storedCoefficientExact(marker, term);
+	}
 	private SignedDyadic storedCoefficientExact(int marker, int term) {
 		return SignedDyadic.of(coefficients[4 * marker + term]).add(SignedDyadic.of(coefficientLow[4 * marker + term]));
 	}
@@ -207,11 +260,18 @@ final class CellAffineVelocity {
 		for (int i = 0; i < markerCount; i++) {
 			int cell = cells[i]; requireRepresentable(cell);
 			if (expanded[cell]) continue;
+			if (wallCoefficients != null && ranks[cell] == 1) {
+				for (int a = 0; a < 3; a++) {
+					cellCoefficients[a][4 * cell] += coefficients[4 * i] * markerVelocity[a][i];
+					cellCoefficients[a][4 * cell + a + 1] += wallCoefficients[3 * i + a] * markerVelocity[a][i];
+				}
+				continue;
+			}
 			for (int a = 0; a < 3; a++) for (int term = 0; term < 4; term++) cellCoefficients[a][4 * cell + term] += coefficients[4 * i + term] * markerVelocity[a][i];
 		}
 		for (int cell = 0; cell < cellCount; cell++) if (expanded[cell]) for (int a = 0; a < 3; a++) for (int term = 0; term < 4; term++) {
 			SignedDyadic sum = SignedDyadic.ZERO;
-			for (int k = offsets[cell]; k < offsets[cell + 1]; k++) sum = sum.add(storedCoefficientExact(markers[k], term).multiply(SignedDyadic.of(markerVelocity[a][markers[k]])));
+			for (int k = offsets[cell]; k < offsets[cell + 1]; k++) sum = sum.add(storedCoefficientExact(markers[k], a, term).multiply(SignedDyadic.of(markerVelocity[a][markers[k]])));
 			cellCoefficients[a][4 * cell + term] = sum.toDouble();
 		}
 	}
@@ -223,9 +283,14 @@ final class CellAffineVelocity {
 			if (expanded[cell]) {
 				for (int a = 0; a < 3; a++) {
 					SignedDyadic sum = SignedDyadic.ZERO;
-					for (int term = 0; term < 4; term++) sum = sum.add(storedCoefficientExact(i, term).multiply(SignedDyadic.of(cellLoad[a][4 * cell + term])));
+					for (int term = 0; term < 4; term++) sum = sum.add(storedCoefficientExact(i, a, term).multiply(SignedDyadic.of(cellLoad[a][4 * cell + term])));
 					markerForce[a][i] = sum.toDouble();
 				}
+				continue;
+			}
+			if (wallCoefficients != null && ranks[cell] == 1) {
+				for (int a = 0; a < 3; a++) markerForce[a][i] = coefficients[4 * i] * cellLoad[a][4 * cell]
+						+ wallCoefficients[3 * i + a] * cellLoad[a][4 * cell + a + 1];
 				continue;
 			}
 			for (int a = 0; a < 3; a++) for (int term = 0; term < 4; term++) markerForce[a][i] += coefficients[4 * i + term] * cellLoad[a][4 * cell + term];
@@ -248,12 +313,24 @@ final class CellAffineVelocity {
 		requireRepresentable(cell); if (result.length != 4) throw new IllegalArgumentException("Expected four affine weights");
 		result[0] = 1; result[1] = (x - center[3 * cell]) / h; result[2] = (y - center[3 * cell + 1]) / h; result[3] = (z - center[3 * cell + 2]) / h;
 	}
-	void divergenceWeights(int cell, int axis, double[] result) {
-		requireRepresentable(cell); if (result.length != 4) throw new IllegalArgumentException("Expected four affine weights");
-		Arrays.fill(result, 0); result[axis + 1] = 1 / h;
+	/** Integral of the derivative of the same restricted polynomial used by every surface trace. */
+	void volumeDivergenceWeights(int cell, int axis, double volume, double[] result) {
+		requireRepresentable(cell);
+		if (axis < 0 || axis >= 3 || result.length != 4 || !(volume > 0 && Double.isFinite(volume)))
+			throw new IllegalArgumentException("Invalid wet-volume derivative");
+		Arrays.fill(result, 0); result[axis + 1] = volume / h;
+	}
+	/** Admitted affine field vanishing on an entire axis-normal wall plane. */
+	boolean wallNormalWeights(int cell, int axis, double wall, double[] result) {
+		requireRepresentable(cell);
+		if (result.length != 4 || !Double.isFinite(wall)) throw new IllegalArgumentException("Invalid fixed wall plane");
+		Arrays.fill(result, 0);
+		if (wallSlopes[3 * cell + axis] == 0 && !canRepresentDirection(cell, axis)) return false;
+		result[0] = (center(cell, axis) - wall) / h; result[axis + 1] = 1;
+		return true;
 	}
 
-	/** Exact affine-hull membership; evaluation elsewhere is the explicit minimum-gradient extension. */
+	/** Exact membership in the source affine hull, independently of the chosen field extension. */
 	boolean canRepresentPoint(int cell, double x, double y, double z) {
 		if (!(Double.isFinite(x) && Double.isFinite(y) && Double.isFinite(z)) || ranks[cell] == 0) return false;
 		int base = 4 * cell, origin = hullPoints[base];

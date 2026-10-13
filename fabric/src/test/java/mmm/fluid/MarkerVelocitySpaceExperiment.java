@@ -65,9 +65,9 @@ final class MarkerVelocitySpaceExperiment {
 		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, 0));
 		d.restoreParticleState(new FlipParticleState(3, 3, 3, 1, 1, .125F,
 				new float[]{.25F, 1.5F, 1.5F, .125F}, new float[]{1, 0, 0}, new byte[27]));
-		d.ensureGrid(); var basis = CellAffineVelocity.capture(d);
+		d.ensureGrid(); var geometry = LiquidPressureGeometry.capture(d); var basis = CellAffineVelocity.capture(d, geometry);
 		double[][] input = {{1}, {0}, {0}}, result = new double[3][1], impulse = new double[3][1];
-		new CellAffineWallProjection(d, basis, LiquidPressureGeometry.capture(d)).project(input, result, impulse);
+		new CellAffineWallProjection(d, basis, geometry).project(input, result, impulse);
 		// u=4x represents this value with actual mass and vanishes on x=0. This is a space check, before pressure.
 		near(result[0][0], 1, 1e-14, "A supported one-amplitude wall mode was removed");
 	}

@@ -108,7 +108,11 @@ G2P 的预测、投影、PIC 与输入载体动能，以及 FLIP 混合的线性
 
 [MarkerVelocityTransfer](../../solver/src/main/java/mmm/fluid/MarkerVelocityTransfer.java) 提供实际 kg 加权的固定稀疏 `J/Jᵀ`，封闭面统一排除，MAC 发布采用双精度归约及一次 float 写入。[MarkerPressureOperator](../../solver/src/main/java/mmm/fluid/MarkerPressureOperator.java) 将共享面面积和相邻压力行组成 `C`，提供体积流率 `Cv`、压力力 `Cᵀp` 和 `CM⁻¹Cᵀ + S_g`；有限气体储存为 `S_g = Vβ_s/Δt²`。压力力先计算共享面压差，封闭常压力保持严格零力；相同压力行的面贡献先合并，再计算对角项。独立离散验证覆盖实际粒子质量下的连续性、压力冲量与功、封闭常压力零空间和气体压缩符号。
 
-纯液体主流程通过 [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java) 使用实际质量的格内仿射拟合与微盒湿面约束，直接发布粒子速度和同一拟合场的 MAC 法向迹。每个正湿体积格参与 `V div` 体积约束，载体须具有可表示的秩四支撑；部分充液格与有限气腔共同满足恒压载荷的 Gauss 关系，改变数值压力参考保持实际载体力。线性求解以气腔储存加权的共同常压模式起算，再由实际算子计算完整残差；零对角行保持零初值。存在有限气腔储存时，SGS 预条件采用同一常压模式的单维 balanced 粗空间修正，缓存实际 `Aχ`；`χᵀAχ` 与载体惯性、气体储存的正能量按算子舍入界独立校核，固定气压的真实牵引共同参与。方程、迭代上限及实际残差验收保持原规则。压力几何来自当前气腔 frame 的 PLIC，具体来源校核见[气体压力耦合](gas-state.md#压力与热耦合)。含颗粒或连续固相库存时，主流程使用联合面压力和既有 G2P 写回。稀疏支撑、断开分量及各相共同惯性的完成条件见[求解器整合计划](../roadmap/solver-consolidation-plan.md)。
+纯液体主流程通过 [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java) 使用实际质量的格内仿射拟合与微盒湿面约束，直接发布粒子速度和同一拟合场的 MAC 法向迹。每个正湿体积格参与 `V div` 体积约束；部分充液格与有限气腔共同满足恒压载荷的 Gauss 关系，改变数值压力参考保持实际载体力。
+
+一般来源采用 `u = a + g·(x-c)/h`，梯度 `g` 位于实际来源位置差所张成的空间。单点、共线、共面和三维来源分别保留常量、一维、二维和完整三维梯度；空间外采用最小梯度延拓。单点来源接触同轴一张湿墙时，每个速度分量保留一个实际幅值，法向形状按 `(x-wall)/(c-wall)` 延拓至墙面零值。同轴多张墙沿用整面法向约束。拟合、体积导数、面迹与压力转置共用同一系数和实际质量；原始采样惯性与几何积分的差异沿用空间输入的观察契约。高阶内部运动与同格断开分量的独立速度继续按整合计划验收。
+
+线性求解以气腔储存加权的共同常压模式起算，再由实际算子计算完整残差；零对角行保持零初值。存在有限气腔储存时，SGS 预条件采用同一常压模式的单维 balanced 粗空间修正，缓存实际 `Aχ`；`χᵀAχ` 与载体惯性、气体储存的正能量按算子舍入界独立校核，固定气压的真实牵引共同参与。方程、迭代上限及实际残差验收保持原规则。压力几何来自当前气腔 frame 的 PLIC，具体来源校核见[气体压力耦合](gas-state.md#压力与热耦合)。含颗粒或连续固相库存时，主流程使用联合面压力和既有 G2P 写回。稀疏支撑、断开分量及各相共同惯性的完成条件见[求解器整合计划](../roadmap/solver-consolidation-plan.md)。
 
 [LiquidSpatialInput](../../solver/src/main/java/mmm/fluid/LiquidSpatialInput.java) 按需捕获当前 frame 的 PLIC 与原始载体矩。微盒使用 `8*cell+micro` 编号，按固定连通分量分别汇总；空分量、干微盒及其中的未解析载体保留各自身份。源权重按积分点位置分组，PLIC 的体积、一阶矩与六项二阶矩共用一次精确半空间裁剪积分；分量孔隙率将覆盖积分换算为孔隙内液体测度。全干格的分量孔隙率按规范整数 SVQ 分配后的容量计算，与气体块共用容量解释。
 
@@ -147,6 +151,8 @@ sum_binary_split_tree Delta moment <= h^2*V_initial^(5/3) / [16*(1-2^(-2/3))]
 ### 内存布局
 
 `ParticleToGridStage` 分别重建单元库存几何和 MAC 速度。`gridDirty` 跟踪位置、容量和材料库存，`velocityGridDirty` 跟踪待执行的速度传递。库存几何重建后标记速度待更新；热学、气体归属、存档捕获和单元观察调用 `ensureInventoryGrid`，需要速度的力学阶段与速度查询调用 `ensureGrid`。完整速度重建仍执行三轴 P2G、权重归一、固壁约束与空气速度延拓。两项工作区都从当前载体原始数据推导，恢复后按需重建。
+
+`PressureSystem` 的仿射采样场绑定库存网格和压力几何的代次。原始列待重建或任一代次变化时，旧场失效；压力发布和壁面投影分别安装当前场。有限体积输运的面速度、扫掠和本次 Courant 检查复用同一个捕获结果。
 
 活动核心使用固定容量的 structure-of-arrays：
 

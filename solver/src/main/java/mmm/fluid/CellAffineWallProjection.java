@@ -14,8 +14,8 @@ final class CellAffineWallProjection {
 	/** Enforces fixed walls on the actual remapped velocity, before any later observation. */
 	static double projectTransport(FluidDomain domain) {
 		domain.ensureInventoryGrid();
-		var basis = CellAffineVelocity.capture(domain);
 		var geometry = LiquidPressureGeometry.capture(domain);
+		var basis = CellAffineVelocity.capture(domain, geometry);
 		var projection = new CellAffineWallProjection(domain, basis, geometry);
 		var before = new double[3][basis.markerCount()];
 		for (int marker = 0; marker < basis.markerCount(); marker++) {
@@ -54,18 +54,16 @@ final class CellAffineWallProjection {
 		kinds = new byte[3 * basis.cellCount()]; centerOffsets = new double[kinds.length]; weights = new double[4 * kinds.length];
 		for (int cell = 0; cell < basis.cellCount(); cell++) {
 			var profile = geometry.cellSnapshot(cell); if (profile == null) continue;
-			int[] planes = new int[3];
-			for (var facet : profile.facets()) if (facet.kind() == LiquidPressureGeometry.FacetKind.WALL) {
-				int plane = (facet.microKey() / 6 >> facet.axis() & 1) + (facet.sign() > 0 ? 1 : 0);
-				planes[facet.axis()] |= 1 << plane;
-			}
+			int[] planes = CellAffineVelocity.wallPlanes(profile);
 			int[] index = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
 			for (int axis = 0; axis < 3; axis++) {
 				int key = 3 * cell + axis;
 				if (planes[axis] == 0) continue;
-				if (Integer.bitCount(planes[axis]) > 1 || !basis.canRepresentDirection(cell, axis)) { kinds[key] = ZERO; continue; }
+				if (Integer.bitCount(planes[axis]) > 1) { kinds[key] = ZERO; continue; }
 				double wall = (index[axis] + .5 * Integer.numberOfTrailingZeros(planes[axis])) * basis.cellSize();
-				centerOffsets[key] = (basis.center(cell, axis) - wall) / basis.cellSize();
+				var normal = new double[4];
+				if (!basis.wallNormalWeights(cell, axis, wall, normal)) { kinds[key] = ZERO; continue; }
+				centerOffsets[key] = normal[0];
 				captureMassProjection(cell, axis, key); kinds[key] = NORMAL_MODE;
 			}
 		}

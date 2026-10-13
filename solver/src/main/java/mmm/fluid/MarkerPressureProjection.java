@@ -49,7 +49,7 @@ final class MarkerPressureProjection {
 		if (domain.particles.count() == 0) return false;
 		gasFrame = domain.gasBoundary.frame();
 		if (gasFrame == null) throw blocked("Marker pressure requires current gas geometry");
-		basis = CellAffineVelocity.capture(domain); geometry = gasFrame.liquidPressureGeometry(domain);
+		geometry = gasFrame.liquidPressureGeometry(domain); basis = CellAffineVelocity.capture(domain, geometry);
 		boolean[] gasContacts = new boolean[domain.gasState.network.nodeCount() + 1];
 		geometry.forEachGasPiece(piece -> gasContacts[gasNode(piece)] = true);
 		pressureAnchor = -1;
@@ -94,10 +94,11 @@ final class MarkerPressureProjection {
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			var profile = geometry.cellSnapshot(cell);
 			if (profile == null || !(profile.volume() > 0)) continue;
-			if (basis.rank(cell) != 4 || !basis.hasRepresentableBasis(cell))
-				throw blocked("Active pressure lacks a resolved three-dimensional affine velocity basis at cell " + cell);
 			liquidRows[cell] = definitions.size(); var blocks = new ArrayList<Block>();
-			for (int axis = 0; axis < 3; axis++) { double[] coefficient = new double[4]; coefficient[axis + 1] = profile.volume() / basis.cellSize(); blocks.add(new Block(cell, axis, coefficient)); }
+			for (int axis = 0; axis < 3; axis++) {
+				double[] coefficient = new double[4]; basis.volumeDivergenceWeights(cell, axis, profile.volume(), coefficient);
+				blocks.add(new Block(cell, axis, coefficient));
+			}
 			definitions.add(new Row(blocks, 0));
 		}
 		// A single whole-face trace test spans the same affine traces as its microfacets.

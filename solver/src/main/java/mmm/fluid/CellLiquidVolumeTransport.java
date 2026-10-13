@@ -97,6 +97,7 @@ final class CellLiquidVolumeTransport {
 		momentAudit = CellRemapMoments.Audit.empty();
 		if (stationary()) return;
 		var field = domain.pressureSystem.markerVelocityField();
+		LiquidAffineFaceFlow flow = null;
 		if (field == null) transport = scalarTransport;
 		else {
 			if (affineTransport == null) {
@@ -104,7 +105,7 @@ final class CellLiquidVolumeTransport {
 				affineTransport.geometry(geometry);
 			}
 			transport = affineTransport;
-			var flow = new LiquidAffineFaceFlow(domain, scalarTransport, field);
+			flow = new LiquidAffineFaceFlow(domain, scalarTransport, field);
 			transport.faceSweep(flow); flow.prepareVelocities(transport, geometry);
 		}
 		var ballistic = new BallisticLiquidRemap(domain, dt);
@@ -116,7 +117,7 @@ final class CellLiquidVolumeTransport {
 				? domain.markerGrid.exactCellVolumeInventory[c] : SignedDyadic.ZERO;
 		for (int c = 0; c < volume.length; c++) volume[c] = exactVolume[c].toDouble();
 		if (field == null) for (int f = 0; f < transport.flux.length; f++) transport.velocity[f] = faceVelocity(f);
-		double maximumOutgoing = courantRate(0) * dt;
+		double maximumOutgoing = (flow == null ? courantRate(0) : affineCourantRate(flow, 0)) * dt;
 		if (maximumOutgoing > 1 + 8 * Math.ulp(1.0F))
 			throw new MechanicalTimeRefinement((int) Math.ceil(maximumOutgoing * domain.config.timeStep() / dt));
 		try {

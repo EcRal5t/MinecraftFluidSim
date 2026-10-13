@@ -9,6 +9,7 @@ final class PressureSystem {
 	private final GranularImplicitDrag drag;
 	private final MarkerPressureProjection markerProjection;
 	private CellAffineVelocityField samplingField;
+	private long samplingInventoryRevision, samplingGeometryRevision;
 	private final double[] liquidPressure;
 	private double[] gasPressure;
 	/** Per-projection pressure source: liquid, fixed zero, or a positive gas node id. */
@@ -57,12 +58,21 @@ final class PressureSystem {
 	}
 	void forEachGranularGasNode(float dt, java.util.function.IntConsumer accept) { granular.forEachGasNode(dt, accept); }
 	MarkerPressureProjection markerProjection() { return markerProjection; }
-	void updateMarkerVelocityField(CellAffineVelocityField field) { samplingField = field; }
-	CellAffineVelocityField markerVelocityField() { return usesMarkerPressure() ? samplingField : null; }
+	void updateMarkerVelocityField(CellAffineVelocityField field) {
+		samplingField = field;
+		samplingInventoryRevision = domain.markerGrid.inventoryRevision;
+		samplingGeometryRevision = domain.pressurePhaseGeometry.revision();
+	}
+	CellAffineVelocityField markerVelocityField() {
+		if (domain.gridDirty || samplingInventoryRevision != domain.markerGrid.inventoryRevision
+				|| samplingGeometryRevision != domain.pressurePhaseGeometry.revision()) samplingField = null;
+		return usesMarkerPressure() ? samplingField : null;
+	}
 	FluidDomain.VelocitySample sampleMarkerVelocity(float x, float y, float z) {
-		if (!usesMarkerPressure() || samplingField == null) return null;
+		var field = markerVelocityField();
+		if (field == null) return null;
 		int cell = domain.particleCellIndex(x, y, z);
-		return samplingField.hasCell(cell) ? samplingField.sample(cell, x, y, z) : null;
+		return field.hasCell(cell) ? field.sample(cell, x, y, z) : null;
 	}
 	boolean usesMarkerPressure() {
 		return !domain.hasGranularInventory()

@@ -74,7 +74,7 @@ final class CellVelocityConstraintOperator {
 		var merged = new TreeMap<Integer, Double>();
 		for (Block block : row.blocks) for (int ordinal = 0; ordinal < basis.cellMarkerCount(block.cell); ordinal++) {
 			int marker = basis.cellMarker(block.cell, ordinal); double value = 0;
-			for (int term = 0; term < 4; term++) value = Math.fma(block.coefficients[term], basis.coefficient(marker, term), value);
+			for (int term = 0; term < 4; term++) value = Math.fma(block.coefficients[term], basis.coefficient(marker, block.axis, term), value);
 			if (!Double.isFinite(value)) throw new IllegalArgumentException("Pulled-back cell constraint is unrepresentable");
 			if (value != 0) merged.merge(block.axis * markerCount + marker, value, Double::sum);
 		}
@@ -88,7 +88,7 @@ final class CellVelocityConstraintOperator {
 		for (Block block : row.blocks) for (int ordinal = 0; ordinal < basis.cellMarkerCount(block.cell); ordinal++) {
 			int marker = basis.cellMarker(block.cell, ordinal); SignedDyadic value = SignedDyadic.ZERO;
 			for (int term = 0; term < 4; term++) if (block.coefficients[term] != 0)
-				value = value.add(SignedDyadic.of(block.coefficients[term]).multiply(basis.coefficientExact(marker, term)));
+				value = value.add(SignedDyadic.of(block.coefficients[term]).multiply(basis.coefficientExact(marker, block.axis, term)));
 			if (value.signum() != 0) merged.merge(block.axis * markerCount + marker, value, SignedDyadic::add);
 		}
 		for (var entry : merged.entrySet()) if (entry.getValue().signum() != 0) {
