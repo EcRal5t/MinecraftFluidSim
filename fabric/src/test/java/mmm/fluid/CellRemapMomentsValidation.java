@@ -7,8 +7,14 @@ public final class CellRemapMomentsValidation {
 	private CellRemapMomentsValidation() { }
 
 	public static void main(String[] args) {
-		if (args.length > 1 || args.length == 1 && !java.util.List.of("transport-moments", "sweep-only", "footprint-only").contains(args[0]))
+		if (args.length > 1 || args.length == 1 && !java.util.List.of("transport-moments", "joint-moments", "sweep-only", "footprint-only").contains(args[0]))
 			throw new IllegalArgumentException("Unknown remap moments validation entry");
+		if (args.length == 1 && args[0].equals("joint-moments")) {
+			thinJointRuleKeepsActualRank(); jointRuleKeepsIndependentVelocityModes(); thinAffineRuleKeepsCrossMoments();
+			unequalSourceMassKeepsFirstMoment();
+			chemicalQuadratureRetainsJointMomentsWithFewQuanta(); smallTransferredGroupsRetainShear();
+			System.out.println("Positive joint liquid moments validation passed"); return;
+		}
 		if (args.length == 1 && args[0].equals("transport-moments")) {
 			scalarTransportKeepsUnexcitedSpatialInertia();
 			directionalTransportPartitionsActualMomentumAndKineticEnergy();
@@ -27,6 +33,9 @@ public final class CellRemapMomentsValidation {
 		chemicalQuadratureRetainsJointMomentsWithFewQuanta();
 		scalarTransportKeepsUnexcitedSpatialInertia();
 		directionalTransportPartitionsActualMomentumAndKineticEnergy();
+		thinJointRuleKeepsActualRank();
+		jointRuleKeepsIndependentVelocityModes();
+		thinAffineRuleKeepsCrossMoments(); unequalSourceMassKeepsFirstMoment();
 		geometryRemapUsesPlannedCapacity();
 		partialLayerContractsOnlyItsConstrainedAxis();
 		if (args.length == 1 && args[0].equals("footprint-only")) return;
@@ -278,6 +287,138 @@ public final class CellRemapMomentsValidation {
 	}
 	private static void checkSameObservation(double actual, mmm.chemistry.ExactRational expected, String label) {
 		check(Double.doubleToRawLongBits(actual) == Double.doubleToRawLongBits(expected.toDouble()), label + " changed binary64 rounding");
+	}
+
+	/** Four positive points from the failing representation remap have no independent velocity mode. */
+	private static void thinJointRuleKeepsActualRank() {
+		double[][] source = {
+				{-.2500079617206558, -.25000802408127815, -.24999999999999994, .10578703880310059, .058233842253685, 0},
+				{.24999203827934421, -.250280105132629, -.25001930988247867, .10578703880310059, .047350600361824036, -7.723952876403928E-4},
+				{-.25028072897048986, .24999197591872188, -.25014213253955736, .09487634897232056, .058233842253685, -.005685301497578621},
+				{.24971927102951016, .24971989496050326, -.2501366097733245, .09487634897232056, .047350604087114334, -.005464390851557255}};
+		for (int axis = 0; axis < 3; axis++) for (boolean merged : new boolean[] {false, true}) {
+			var moments = new CellRemapSpatialMoments(); var part = new CellRemapSpatialMoments();
+			double[][] points = new double[4][6]; double[] weights = new double[4];
+			for (int p = 0; p < 4; p++) {
+				weights[p] = 123.97503480315208;
+				for (int a = 0; a < 3; a++) {
+					points[p][a] = source[p][(a + axis) % 3]; points[p][a + 3] = source[p][3 + (a + axis) % 3];
+				}
+				(merged && p >= 2 ? part : moments).add(weights[p], java.util.Arrays.copyOf(points[p], 3),
+						java.util.Arrays.copyOfRange(points[p], 3, 6));
+			}
+			if (merged) moments.add(part);
+			check(moments.spatialRank() == 3 && moments.minimumCount() == 4, "Thin four-point rule gained an artificial velocity mode");
+			boolean refused = false;
+			try { moments.fit(new double[] {1, 1, 1}, new double[3][3]); }
+			catch (CellRemapSpatialMoments.FitFailure expected) { refused = expected.failure == CellRemapSpatialMoments.Failure.INSUFFICIENT_NODES; }
+			check(refused, "Thin joint rule accepted fewer nodes than its actual rank");
+			verifyJointRule(moments, weights, points);
+			double alpha = .125; moments.advancePositions(alpha);
+			for (double[] point : points) for (int a = 0; a < 3; a++) point[a] += alpha * point[a + 3];
+			verifyJointRule(moments, weights, points);
+			moments.projectPositionAxis(axis); double[] centroid = moments.centroid();
+			for (double[] point : points) point[axis] = centroid[axis];
+			verifyJointRule(moments, weights, points);
+		}
+	}
+
+	private static void verifyJointRule(CellRemapSpatialMoments moments, double[] weights, double[][] source) {
+		verifyJointRule(moments, weights, source, weights);
+	}
+
+	private static void verifyJointRule(CellRemapSpatialMoments moments, double[] weights, double[][] source, double[] sourceWeights) {
+		double[][] preferred = new double[weights.length][3];
+		for (int p = 0; p < weights.length; p++) System.arraycopy(source[p % source.length], 0, preferred[p], 0, 3);
+		var result = moments.fit(weights, preferred);
+		var probability = probabilities(sourceWeights); var outputProbability = probabilities(weights);
+		var expectedMean = new mmm.chemistry.ExactRational[6]; double[] observedMean = new double[6];
+		for (int a = 0; a < 6; a++) {
+			expectedMean[a] = mmm.chemistry.ExactRational.ZERO;
+			for (int p = 0; p < source.length; p++) {
+				expectedMean[a] = expectedMean[a].add(probability[p].multiply(rawRational(source[p][a])));
+			}
+			for (int p = 0; p < weights.length; p++) observedMean[a] += outputProbability[p].toDouble() * jointComponent(result, p, a);
+			check(Math.abs(observedMean[a] - expectedMean[a].toDouble()) <= 512 * Math.ulp(Math.max(1, Math.abs(expectedMean[a].toDouble()))),
+					"Joint rule changed its source first moment");
+		}
+		double[] variance = new double[6];
+		for (int a = 0; a < 6; a++) {
+			var exact = mmm.chemistry.ExactRational.ZERO;
+			for (int p = 0; p < source.length; p++) {
+				var centered = rawRational(source[p][a]).subtract(expectedMean[a]);
+				exact = exact.add(probability[p].multiply(centered.multiply(centered)));
+			}
+			variance[a] = exact.toDouble();
+		}
+		for (int a = 0; a < 6; a++) for (int b = a; b < 6; b++) {
+			var expected = mmm.chemistry.ExactRational.ZERO; double observed = 0;
+			for (int p = 0; p < source.length; p++) {
+				expected = expected.add(probability[p].multiply(rawRational(source[p][a]).subtract(expectedMean[a]))
+						.multiply(rawRational(source[p][b]).subtract(expectedMean[b])));
+			}
+			for (int p = 0; p < weights.length; p++) {
+				observed += outputProbability[p].toDouble() * (jointComponent(result, p, a) - observedMean[a])
+						* (jointComponent(result, p, b) - observedMean[b]);
+			}
+			double limit = 2048 * Math.ulp(Math.sqrt(variance[a]) * Math.sqrt(variance[b]))
+					+ 2048 * Math.ulp(expectedMean[a].toDouble()) * Math.sqrt(variance[b])
+					+ 2048 * Math.ulp(expectedMean[b].toDouble()) * Math.sqrt(variance[a]);
+			check(Math.abs(observed - expected.toDouble()) <= limit, "Joint rule changed a source covariance: axes=" + a + "," + b
+					+ " expected=" + expected.toDouble() + " actual=" + observed + " bound=" + limit);
+		}
+	}
+
+	private static mmm.chemistry.ExactRational[] probabilities(double[] weights) {
+		var total = mmm.chemistry.ExactRational.ZERO;
+		for (double weight : weights) total = total.add(rawRational(weight));
+		var result = new mmm.chemistry.ExactRational[weights.length];
+		for (int p = 0; p < weights.length; p++) {
+			var w = rawRational(weights[p]); result[p] = new mmm.chemistry.ExactRational(
+					w.numerator().multiply(total.denominator()), w.denominator().multiply(total.numerator()));
+		}
+		return result;
+	}
+
+	private static double jointComponent(CellRemapSpatialMoments.Result result, int node, int axis) {
+		return axis < 3 ? result.positions()[node][axis] : result.velocities()[node][axis - 3];
+	}
+
+	private static void jointRuleKeepsIndependentVelocityModes() {
+		for (int exponent : new int[] {-900, 0, 900}) for (boolean unequalVelocity : new boolean[] {false, true}) {
+			var moments = new CellRemapSpatialMoments(); double[][] source = new double[8][6];
+			double mass = Math.scalb(1.0, exponent); double[] sourceWeights = new double[8]; java.util.Arrays.fill(sourceWeights, mass);
+			double[] weights = {mass / 4, mass / 4, mass / 2, mass, mass, 2 * mass, 3 * mass};
+			for (int p = 0; p < 8; p++) {
+				for (int a = 0; a < 3; a++) source[p][a] = (p >>> a & 1) == 0 ? -.25 : .25;
+				for (int a = 0; a < 3; a++) source[p][a + 3] = source[p][a] * source[p][(a + 1) % 3]
+						* (unequalVelocity && a == 2 ? Math.scalb(1.0, -40) : 1);
+				moments.add(mass, java.util.Arrays.copyOf(source[p], 3), java.util.Arrays.copyOfRange(source[p], 3, 6));
+			}
+			check(moments.spatialRank() == 3 && moments.minimumCount() == 7, "Independent velocity mode lost its actual joint rank");
+			verifyJointRule(moments, weights, source, sourceWeights);
+		}
+	}
+
+	private static void thinAffineRuleKeepsCrossMoments() {
+		double[][] source = {{-.375, -.375, 0, 1, 0, 0}, {.375, .375, 0, 1, 0, 0}, {0, -Math.scalb(1.0, -25), 0, -2, 0, 0}};
+		double[] weights = {1, 1, 1}; var moments = new CellRemapSpatialMoments();
+		for (double[] point : source) moments.add(1, java.util.Arrays.copyOf(point, 3), java.util.Arrays.copyOfRange(point, 3, 6));
+		check(moments.minimumCount() == 3, "Thin affine rule requires more nodes than its positive source");
+		verifyJointRule(moments, weights, source);
+	}
+
+	private static void unequalSourceMassKeepsFirstMoment() {
+		double[][] source = {{0, 0, 0, Math.scalb(1.0, 120), 0, 0}, {0, 0, 0, 1, 0, 0}};
+		double[] weights = {1, Math.scalb(1.0, 150)};
+		for (boolean reverse : new boolean[] {false, true}) {
+			var moments = new CellRemapSpatialMoments();
+			for (int i = 0; i < 2; i++) {
+				int p = reverse ? 1 - i : i;
+				moments.add(weights[p], java.util.Arrays.copyOf(source[p], 3), java.util.Arrays.copyOfRange(source[p], 3, 6));
+			}
+			verifyJointRule(moments, weights, source);
+		}
 	}
 
 	/** A full uniform-density cell has its geometric centroid and the original tensor rule. */

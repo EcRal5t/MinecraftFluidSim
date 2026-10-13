@@ -39,7 +39,7 @@ public final class LiquidVolumeTransportValidation {
 
 	private static FluidDomain representationRemapDomain(int nx, int ny, int nz, boolean fill) {
 		var domain = new FluidDomain(nx, ny, nz,
-				new FluidSolverConfig(.5F, 1000, 0, .05F, 400, 1E-5F, .4F, .002F, .8F), 216);
+				new FluidSolverConfig(.5F, 1000, 0, .05F, 400, 1E-5F, .4F, .002F, .8F), 8 * nx * ny * nz);
 		domain.bindGranular(mmm.granular.BuiltinGranularDefinitions.createRegistry(),
 				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 		long volume = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ / 2;
@@ -128,13 +128,22 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	private static void logicalRemapStatsSumDistinctSubstepsAndTail() {
-		var actual = representationRemapDomain(3, 3, 3, false);
-		var reference = representationRemapDomain(3, 3, 3, false);
+		var actual = representationRemapDomain(7, 3, 3, false);
+		var reference = representationRemapDomain(7, 3, 3, false);
 		for (var domain : new FluidDomain[] {actual, reference}) {
-			for (int cell = 0; cell < 27; cell++) if (!domain.tryInsertExactMaterial(
-					cell % 3, cell / 3 % 3, cell / 9, .5F, 500, 0, 0).transferred())
-				throw new AssertionError("Partial liquid accumulation setup failed");
-			for (int marker = 0; marker < domain.particles.count(); marker++) domain.particles.setVelocityX(marker, .1F);
+			// Separate stationary saturated compaction from the moving partial liquid.
+			for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) domain.setSolid(3, y, z, true);
+			domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
+			long[] solid = domain.granularCoupling.copySolidSvq();
+			for (int cell = 0; cell < domain.cellCount; cell++) {
+				int x = cell % 7; if (x == 3) continue;
+				float volume = x > 3 ? .5F : (float) (1 - solid[cell] / (double) mmm.granular.SolidVolume.SVQ_PER_CELL);
+				if (cell == domain.cellIndex(5, 1, 1)) volume = 1;
+				if (!domain.tryInsertExactMaterial(x, cell / 7 % 3, cell / 21, volume, 1000 * volume, 0, 0).transferred())
+					throw new AssertionError("Partially filled transport and saturated compaction setup failed");
+			}
+			for (int marker = 0; marker < domain.particles.count(); marker++)
+				if (domain.particleCellIndex(marker) % 7 > 3) domain.particles.setVelocityX(marker, .1F);
 			domain.gridDirty = true;
 		}
 		var logical = actual.step(false, 0, false, false, 2).liquidTransport();
@@ -147,7 +156,8 @@ public final class LiquidVolumeTransportValidation {
 		}
 		var tail = reference.granularTransitionStage.step().liquidTransport();
 		if (tail.reconstructedGroups() == 0 || !logical.equals(expected.plus(tail)))
-			throw new AssertionError("Logical stats omitted or repeated a distinct mechanical or representation remap");
+			throw new AssertionError("Logical stats omitted or repeated a distinct mechanical or representation remap: actual="
+					+ logical + ", expected=" + expected + ", tail=" + tail);
 	}
 
 	private static void granularRepresentationRoundingHasExactBudget() {

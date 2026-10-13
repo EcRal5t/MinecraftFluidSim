@@ -9,6 +9,7 @@ final class CellRemapSpatialMoments {
 	private double mass;
 	private final double[] mean = new double[6];
 	private final double[][] covariance = new double[6][6];
+	private final JointMomentFactor factor = new JointMomentFactor();
 
 	void add(FluidDomain domain, int ordinal, ExactRational fraction) {
 		add(domain, ordinal, fraction, 0, 0, 0);
@@ -35,29 +36,32 @@ final class CellRemapSpatialMoments {
 		checkPositive(weight);
 		double[] point = new double[6];
 		for (int a = 0; a < 3; a++) { point[a] = finite(position[a]); point[a + 3] = finite(velocity[a]); }
-		merge(weight, point, null);
+		merge(weight, point, null, null);
 	}
 
 	/** Parallel-axis merge uses centered moments, retaining small spreads around large velocities. */
 	void add(CellRemapSpatialMoments other) {
 		if (other.mass == 0) return;
-		merge(other.mass, other.mean, other.covariance);
+		merge(other.mass, other.mean, other.covariance, other.factor);
 	}
 
-	private void merge(double addedMass, double[] addedMean, double[][] addedCovariance) {
+	private void merge(double addedMass, double[] addedMean, double[][] addedCovariance, JointMomentFactor addedFactor) {
 		double total = finite(mass + addedMass), ratio = addedMass / total, retained = mass / total;
 		double[] delta = new double[6];
 		for (int a = 0; a < 6; a++) delta[a] = addedMean[a] - mean[a];
+		factor.merge(addedFactor, retained, ratio, delta);
 		for (int a = 0; a < 6; a++) for (int b = a; b < 6; b++)
 			covariance[b][a] = covariance[a][b] = finite(retained * covariance[a][b] + (addedCovariance == null ? 0 : ratio * addedCovariance[a][b])
 					+ retained * ratio * delta[a] * delta[b]);
-		for (int a = 0; a < 6; a++) mean[a] = finite(mean[a] + ratio * delta[a]);
+		for (int a = 0; a < 6; a++) mean[a] = finite(ratio <= retained
+				? mean[a] + ratio * delta[a] : addedMean[a] - retained * delta[a]);
 		mass = total;
 	}
 
 	/** Joint affine advection: position += alpha * velocity in normalized cell coordinates. */
 	void advancePositions(double alpha) {
 		finite(alpha);
+		factor.advancePositions(alpha);
 		for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++) {
 			double value = covariance[a][b] + alpha * (covariance[a][b + 3] + covariance[a + 3][b])
 					+ alpha * alpha * covariance[a + 3][b + 3];
@@ -74,68 +78,51 @@ final class CellRemapSpatialMoments {
 	/** A transported face measure has a constant normal position and retains tangential moments. */
 	void projectPositionAxis(int axis) {
 		if (axis < 0 || axis >= 3) throw new IllegalArgumentException("Unknown spatial axis");
+		factor.projectPositionAxis(axis);
 		for (int a = 0; a < 6; a++) covariance[axis][a] = covariance[a][axis] = 0;
 	}
 	double mass() { return mass; }
 	double[] centroid() { return new double[]{mean[0], mean[1], mean[2]}; }
 	double spatialVariance(int axis) { return covariance[axis][axis]; }
-	int spatialRank() { return decompose().space.rank; }
+	int spatialRank() { return decompose().spatialRank(); }
 	int spatialAxes() {
 		int axes = 0; for (int a = 0; a < 3; a++) if (covariance[a][a] > 0) axes |= 1 << a; return axes;
 	}
-	int minimumCount() { var state = decompose(); return 1 + state.space.rank + state.residual.rank; }
+	int minimumCount() { return 1 + decompose().rank(); }
 
 	/** Rows are nodes, columns are axes. Preferred geometry chooses the latent orientation only. */
 	Result fit(double[] weights, double[][] preferredOffsets) {
 		checkPositive(mass);
 		if (weights.length != preferredOffsets.length) throw new IllegalArgumentException("Quadrature layout differs");
 		var state = decompose(); int count = weights.length;
-		if (count < 1 + state.space.rank + state.residual.rank)
+		if (count < 1 + state.rank())
 			throw failure(Failure.INSUFFICIENT_NODES, "Positive liquid quadrature cannot retain its joint moment rank");
 		double total = SignedDyadic.sum(weights).toDouble(); checkPositive(total);
 		double[] probability = new double[count];
 		for (int p = 0; p < count; p++) { checkPositive(weights[p]); probability[p] = weights[p] / total; checkPositive(probability[p]); }
 		var basis = new ArrayList<double[]>();
-		for (int k = 0; k < state.space.rank; k++) {
+		for (int k = 0; k < state.spatialRank(); k++) {
 			double[] candidate = new double[count];
+			double norm = 0; for (int a = 0; a < 3; a++) norm = Math.hypot(norm, state.loads()[a][k]);
 			for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++)
-				candidate[p] += finite(preferredOffsets[p][a]) * state.space.axes[a][k];
+				candidate[p] += finite(preferredOffsets[p][a]) * (state.loads()[a][k] / norm);
 			basis.add(nextBasis(candidate, probability, basis));
 		}
-		for (int k = 0; k < state.residual.rank; k++) basis.add(nextBasis(new double[count], probability, basis));
+		for (int k = state.spatialRank(); k < state.rank(); k++) basis.add(nextBasis(new double[count], probability, basis));
 		double[][] positions = new double[count][3], velocities = new double[count][3];
 		for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++) {
 			double x = mean[a], v = mean[a + 3];
-			for (int k = 0; k < state.space.rank; k++) {
-				x += state.space.axes[a][k] * Math.sqrt(state.space.values[k]) * basis.get(k)[p];
-				v += state.affine[a][k] * basis.get(k)[p];
-			}
-			for (int k = 0; k < state.residual.rank; k++)
-				v += state.residual.axes[a][k] * Math.sqrt(state.residual.values[k]) * basis.get(state.space.rank + k)[p];
+			for (int k = 0; k < state.rank(); k++) x += state.loads()[a][k] * basis.get(k)[p];
+			for (int k = 0; k < state.rank(); k++) v += state.loads()[a + 3][k] * basis.get(k)[p];
 			positions[p][a] = finite(x); velocities[p][a] = finite(v);
 		}
 		verify(probability, positions, velocities);
 		return new Result(positions, velocities);
 	}
 
-	private Decomposition decompose() {
+	private JointMomentFactor.Decomposition decompose() {
 		checkPositive(mass);
-		double[][] xx = new double[3][3], residual = new double[3][3];
-		for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
-			xx[a][b] = covariance[a][b]; residual[a][b] = covariance[a + 3][b + 3];
-		}
-		Spectrum space = spectrum(xx, scale(xx)); double[][] affine = new double[3][3];
-		for (int a = 0; a < 3; a++) for (int k = 0; k < space.rank; k++) {
-			for (int b = 0; b < 3; b++) affine[a][k] += covariance[a + 3][b] * space.axes[b][k];
-			affine[a][k] /= Math.sqrt(space.values[k]);
-		}
-		for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) for (int k = 0; k < space.rank; k++)
-			residual[a][b] -= affine[a][k] * affine[b][k];
-		// Tolerance uses the full velocity covariance: an exact affine field has roundoff residuals.
-		double velocityScale = 0;
-		for (int a = 3; a < 6; a++) velocityScale = Math.max(velocityScale, Math.abs(covariance[a][a]));
-		Spectrum unresolved = spectrum(residual, velocityScale);
-		return new Decomposition(space, affine, unresolved);
+		return factor.decompose(covariance);
 	}
 
 	private static double[] nextBasis(double[] preferred, double[] probability, ArrayList<double[]> previous) {
@@ -169,36 +156,6 @@ final class CellRemapSpatialMoments {
 		return finite(norm);
 	}
 
-	/** Jacobi spectrum, including planar/linear covariance and a typed rejection of negative modes. */
-	private static Spectrum spectrum(double[][] source, double referenceScale) {
-		double[][] a = new double[3][3], q = new double[3][3];
-		for (int i = 0; i < 3; i++) { a[i] = source[i].clone(); q[i][i] = 1; }
-		for (int sweep = 0; sweep < 32; sweep++) {
-			int p = 0, r = 1;
-			for (int i = 0; i < 3; i++) for (int j = i + 1; j < 3; j++)
-				if (Math.abs(a[i][j]) > Math.abs(a[p][r])) { p = i; r = j; }
-			if (Math.abs(a[p][r]) <= 8 * Math.ulp(scale(a))) break;
-			double angle = .5 * Math.atan2(2 * a[p][r], a[r][r] - a[p][p]);
-			double c = Math.cos(angle), s = Math.sin(angle);
-			for (int i = 0; i < 3; i++) {
-				double ap = a[i][p], ar = a[i][r]; a[i][p] = c * ap - s * ar; a[i][r] = s * ap + c * ar;
-				double qp = q[i][p], qr = q[i][r]; q[i][p] = c * qp - s * qr; q[i][r] = s * qp + c * qr;
-			}
-			for (int j = 0; j < 3; j++) {
-				double ap = a[p][j], ar = a[r][j]; a[p][j] = c * ap - s * ar; a[r][j] = s * ap + c * ar;
-			}
-		}
-		double tolerance = 128 * Math.ulp(Math.max(referenceScale, scale(a)));
-		double[] values = new double[3]; double[][] axes = new double[3][3]; int rank = 0;
-		for (int k = 0; k < 3; k++) {
-			double value = finite(a[k][k]);
-			if (value < -tolerance) throw failure(Failure.NON_POSITIVE_COVARIANCE, "Liquid joint covariance has a negative eigenvalue");
-			if (value <= tolerance) continue;
-			values[rank] = value; for (int i = 0; i < 3; i++) axes[i][rank] = q[i][k]; rank++;
-		}
-		return new Spectrum(values, axes, rank);
-	}
-
 	private void verify(double[] probability, double[][] positions, double[][] velocities) {
 		double[] observed = new double[6]; double[][] second = new double[6][6];
 		for (int p = 0; p < probability.length; p++) {
@@ -220,10 +177,6 @@ final class CellRemapSpatialMoments {
 			}
 		}
 	}
-
-	private static double scale(double[][] matrix) {
-		double value = 0; for (double[] row : matrix) for (double item : row) value = Math.max(value, Math.abs(item)); return finite(value);
-	}
 	private static void checkPositive(double value) {
 		if (!(Double.isFinite(value) && value > 0)) throw failure(Failure.UNREPRESENTABLE, "Liquid moment mass must be finite and positive");
 	}
@@ -232,9 +185,7 @@ final class CellRemapSpatialMoments {
 	}
 	private static FitFailure failure(Failure failure, String message) { return new FitFailure(failure, message); }
 	record Result(double[][] positions, double[][] velocities) { }
-	private record Spectrum(double[] values, double[][] axes, int rank) { }
-	private record Decomposition(Spectrum space, double[][] affine, Spectrum residual) { }
-	enum Failure { INSUFFICIENT_NODES, NON_POSITIVE_COVARIANCE, UNREPRESENTABLE }
+	enum Failure { INSUFFICIENT_NODES, UNREPRESENTABLE }
 	static final class FitFailure extends IllegalStateException {
 		final Failure failure;
 		FitFailure(Failure failure, String message) { super(message); this.failure = failure; }
