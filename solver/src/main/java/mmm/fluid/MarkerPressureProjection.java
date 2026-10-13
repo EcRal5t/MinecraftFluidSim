@@ -184,13 +184,14 @@ final class MarkerPressureProjection {
 			}
 			definitions.add(new Row(blocks,0)); return;
 		}
-		double[] moments=geometry.supportMoments(basis.physicalCell(block),basis.blockSupport(block));
+		boolean completeMicroBoxes=profile.freeFragments().isEmpty();
+		double[] moments=completeMicroBoxes ? null : geometry.supportMoments(basis.physicalCell(block),basis.blockSupport(block));
 		double[][][] polynomial=new double[3][4][10];
 		for(int axis=0;axis<3;axis++) {
-			double[] coefficient=new double[4];
+			double[] coefficient=completeMicroBoxes ? boxDivergence(block,axis) : new double[4];
 			for(int term=0;term<4;term++) {
 				basis.divergencePolynomial(block,axis,term,polynomial[axis][term]);
-				coefficient[term]=dot(polynomial[axis][term],moments)/basis.cellSize();
+				if(!completeMicroBoxes) coefficient[term]=dot(polynomial[axis][term],moments)/basis.cellSize();
 			}
 			blocks.add(new Block(block,axis,coefficient));
 		}
@@ -208,6 +209,22 @@ final class MarkerPressureProjection {
 			}
 			if(positive) definitions.add(new Row(blocks,0));
 		}
+	}
+
+	private double[] boxDivergence(int block,int axis) {
+		int cell=basis.physicalCell(block), bit=1<<axis;
+		int support=basis.blockSupport(block)&geometry.wetMicroMask(cell);
+		double[] coefficient=new double[4];
+		// Internal microfaces cancel geometrically; wall traces retain their exact shape zeros.
+		for(int micro=0;micro<8;micro++) if((support&(1<<micro))!=0) {
+			for(var face:geometry.microFaces(cell,micro)) if(face.axis()==axis && face.moments().area()>0) {
+				boolean inside=(micro&bit)==0 ? face.sign()>0 : face.sign()<0;
+				if(inside && (support&(1<<(micro^bit)))!=0) continue;
+				double[] side=trace(block,axis,face.moments(),0,face.sign());
+				for(int term=0;term<4;term++) coefficient[term]+=side[term];
+			}
+		}
+		return coefficient;
 	}
 
 	private double[] freeTrace(int block,int axis,LiquidPressureGeometry.FreeFragment fragment) {

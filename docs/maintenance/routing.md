@@ -78,7 +78,7 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 实际压力 Gram、常压粗模式正能量检查在 [CellVelocityConstraintOperator](../../solver/src/main/java/mmm/fluid/CellVelocityConstraintOperator.java)，SGS 与 balanced 粗空间修正在 [ConstraintGramPreconditioner](../../solver/src/main/java/mmm/fluid/ConstraintGramPreconditioner.java)。对称性、正能量及粗模式解使用 `:fabric:runMarkerPressureValidation --args="--kernel"`。
 
-壁面零点形状、实际空间秩与微盒拆块在 `CellAffineVelocity`，共同加权 QR 在 [CellAffineFit](../../solver/src/main/java/mmm/fluid/CellAffineFit.java)，精度扩展在 `ExactCellAffineFit`。湿体积二阶矩、完整六面和内部共享面在 `LiquidPressureGeometry.supportMoments`、`microFaces` 与 `interiorFaces`；散度多项式和自由面压力功组装在 `MarkerPressureProjection`。三轴闭合旋涡的求解、发布与点采样，以及独立静液压使用 `:fabric:runMarkerPressureValidation --args="--velocity-space"`。
+壁面零点形状、实际空间秩与微盒拆块在 `CellAffineVelocity`，共同加权 QR 在 [CellAffineFit](../../solver/src/main/java/mmm/fluid/CellAffineFit.java)，精度扩展在 `ExactCellAffineFit`。湿体积二阶矩、完整六面和内部共享面在 `LiquidPressureGeometry.supportMoments`、`microFaces` 与 `interiorFaces`；完整湿块六面散度在 `MarkerPressureProjection.boxDivergence`，部分湿块散度多项式和自由面压力功也在该类组装。均匀及非均匀质量的三轴闭合旋涡求解、发布与点采样，以及独立静液压使用 `:fabric:runMarkerPressureValidation --args="--velocity-space"`。
 
 原始载体矩与 PLIC 的逐微盒、逐固定分量比较及几何协方差在 [LiquidSpatialInput](../../solver/src/main/java/mmm/fluid/LiquidSpatialInput.java)，精确零至二阶盒积分在 `LiquidPressureGeometry.pieceSecondMoments` 与 [GasGeometryOverlap](../../solver/src/main/java/mmm/fluid/GasGeometryOverlap.java)。来源检查、孔隙率、单位换算与未解析载体验证使用 `:fabric:runMarkerPressureValidation --args="--spatial-input"`；积分的盒体、四面体和极薄层对照使用 `air-cavity`。
 

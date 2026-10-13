@@ -14,7 +14,9 @@ final class MarkerVelocitySpaceExperiment {
 		var failures = new AssertionError("Production velocity space does not satisfy the retained physical modes");
 		for (int axis = 0; axis < 3; axis++) {
 			int rotation = axis;
-			checkCase("closed circulation axis " + axis, () -> closedCirculation(rotation), failures);
+			for(boolean heterogeneous:new boolean[]{false,true})
+				checkCase("closed circulation axis " + axis + " heterogeneous=" + heterogeneous,
+						() -> closedCirculation(rotation,heterogeneous), failures);
 		}
 		checkCase("single marker near a wall", MarkerVelocitySpaceExperiment::singleMarkerWallMode, failures);
 		checkCase("disconnected component motion", MarkerVelocitySpaceExperiment::disconnectedComponentMotion, failures);
@@ -45,8 +47,18 @@ final class MarkerVelocitySpaceExperiment {
 		return result;
 	}
 
-	private static void closedCirculation(int axis) {
-		var d = cube(); var geometry=LiquidPressureGeometry.capture(d); var basis = CellAffineVelocity.capture(d,geometry);
+	private static void closedCirculation(int axis,boolean heterogeneous) {
+		var d = cube();
+		if(heterogeneous) {
+			var source=d.exportParticleState(); double[] mass=new double[source.particleCount()];
+			for(int i=0;i<mass.length;i++) mass[i]=d.particles.mass(i)*(1+i/8.0);
+			d.restoreMaterialParticleState(new FlipMaterialParticleState(source.sizeX(),source.sizeY(),source.sizeZ(),
+					source.cellSize(),source.particleCount(),source.totalVolume(),SignedDyadic.sum(mass).toDouble(),
+					java.util.List.of(new FluidMaterial("mmm:water",1000,"mmm:water",0,Math.PI/2)),
+					source.copyPositionVolume(),source.copyParticleVelocities(),source.copySolidMask(),mass,new int[mass.length]));
+			d.ensureGrid();
+		}
+		var geometry=LiquidPressureGeometry.capture(d); var basis = CellAffineVelocity.capture(d,geometry);
 		var input = new double[3][basis.markerCount()];
 		for (int i = 0; i < basis.markerCount(); i++) {
 			var v = circulation(point(basis, i), axis);
@@ -64,6 +76,8 @@ final class MarkerVelocitySpaceExperiment {
 		}
 		d.sealDomainBoundary(); d.ensureGrid(); d.gasTopologyCoordinator.refresh(); d.bodyForceStage.applyGravity(.001F);
 		var plan=d.pressureSystem.markerProjection(); plan.prepare(.001F);
+		var diagonal=new double[plan.operator().rowCount()]; plan.operator().diagonal(diagonal);
+		near(diagonal[plan.rowOfLiquidBlock(0)],0,0,"Closed wet volume has exactly zero integrated divergence");
 		var rates=new double[plan.operator().rowCount()]; plan.operator().volumeRate(input,rates);
 		for(double rate:rates)near(rate,0,1e-14,"Admissible circulation has zero production constraint rate");
 		if(!plan.solve(d.config.pressureTolerance()).converged())throw new AssertionError("Closed circulation pressure failed to converge");
