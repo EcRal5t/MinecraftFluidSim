@@ -93,6 +93,8 @@
 
 `--args="--micro-velocity-enrichment"` 先回归上述完全湿润微面模型，再运行 [MicroFaceVelocityEnrichmentExperiment](../../fabric/src/test/java/mmm/fluid/MicroFaceVelocityEnrichmentExperiment.java) 的共享面与局部旋涡联合对照。每个微盒补充三轴零法向通量、零散度旋涡；64 粒子的闭合立方体分别采用均匀和非均匀实际质量，校验完整惯性秩、原始动能、压力虚功与墙面力矩，均匀质量另验收静水压力；断开微盒校验独立内部运动。入口同时检查中心稀疏布局的不可见旋涡列，并复现偏移稀疏布局的秩缺陷及体积第一矩积分误差。任务通过表示所列正向断言和保留反例均可复现；通用稀疏表示、部分充液与生产成本继续按 M02 验收。
 
+`--args="--micro-velocity-moments"` 在上述对照后，按体积加权平均速度的精确零空间选择内部旋涡基底，再检查实际粒子质量支撑。覆盖 256 种掩码、两种质量和位置布局，以及两粒子共线、稠密和断开微盒；校验空间基底与采样矩阵一致、压力连续性、虚功和墙面反力，并比较准备前后的原始状态。静水对照先校核实际质量积分与几何压力功的相容性；偏移输入另输出原始体积第一矩与 PLIC 的差额。该入口在来源或积分条件不满足时失败，支持范围与后续处理按 M01、M02 的完成要求确定。
+
 自然对流增长率随 `thermal` 选择器常驻校验：两级网格、临界 Ra 两侧、两倍线性振幅，以及体积、材料质量、species、壁面 source/sink、舍入与载体内能闭合。单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[线性对流有效域](../architecture/thermal-state.md#自然对流的线性有效域)。
 
 粒子分布研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。默认输出固壁法向轮廓、正反向平流、满液体与自由面解析保面积映射、重播种二阶矩和 5,000 步溃坝的空间误差，并对照封闭满液体约束前后的压力体积；用 `--args="analytic transport"` 可只运行指定对照。`--args="free-analytic"` 从逆解析映射独立积分液体覆盖率，报告两级参考积分的差异，并检查积分点及网格细化后 L1 误差递减和整体体积闭合。默认构建的完整 `free-surface` 同时运行 5,000 步溃坝，逐步检查精确单元容量、共享压力库存、满格积分点分布及累计质量舍入界。`free-surface` 守护 G2P 数值依赖分量隔离、未使用外推面的隔离、有限气体耦合、满液体/自由面切换的工作区更新，以及精确满液体判定和微小真实缺口，`reseeding` 守护旋转协方差、秩损失拒绝、线性速度场和体积推导的拆分空间矩误差界。空间验收见[单元有限体积输运](../architecture/fluid-solver.md#单元有限体积输运)，完整步的成本要求见[生产资格](../roadmap/performance-and-backends.md#有限体积输运的生产资格)。

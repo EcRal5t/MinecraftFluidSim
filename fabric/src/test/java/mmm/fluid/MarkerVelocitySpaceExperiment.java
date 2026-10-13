@@ -332,23 +332,49 @@ final class MarkerVelocitySpaceExperiment {
 	}
 	/** Exact rank for these small dyadic matrices, including every real input direction. */
 	static int rank(double[][] input) {
-		var a = new ExactRational[input.length][input[0].length];
-		for (int row = 0; row < a.length; row++) for (int col = 0; col < a[row].length; col++) {
-			var value = SignedDyadic.of(input[row][col]);
-			a[row][col] = new ExactRational(value.significand().shiftLeft(Math.max(0, value.exponent())),
-					BigInteger.ONE.shiftLeft(Math.max(0, -value.exponent())));
+		var a = new ExactRational[input.length][];
+		for (int row = 0; row < a.length; row++) {
+			a[row] = new ExactRational[input[row].length];
+			for (int col = 0; col < a[row].length; col++) a[row][col] = exact(input[row][col]);
 		}
+		return rank(a);
+	}
+	static ExactRational exact(double input) {
+		var value = SignedDyadic.of(input);
+		return new ExactRational(value.significand().shiftLeft(Math.max(0, value.exponent())),
+				BigInteger.ONE.shiftLeft(Math.max(0, -value.exponent())));
+	}
+	static int rank(ExactRational[][] input) { return eliminate(input).pivots().length; }
+	private record Echelon(ExactRational[][] values, int[] pivots) { }
+	private static Echelon eliminate(ExactRational[][] input) {
+		var a = new ExactRational[input.length][]; for (int row = 0; row < a.length; row++) a[row] = input[row].clone();
+		int columns = a.length == 0 ? 0 : a[0].length; var pivots = new int[Math.min(a.length, columns)];
 		int rank = 0;
-		for (int column = 0; column < a[0].length && rank < a.length; column++) {
+		for (int column = 0; column < columns && rank < a.length; column++) {
 			int pivot = rank; while (pivot < a.length && a[pivot][column].signum() == 0) pivot++;
 			if (pivot == a.length) continue;
 			var swap = a[pivot]; a[pivot] = a[rank]; a[rank] = swap;
 			var scale = a[rank][column]; var inverse = new ExactRational(scale.denominator(), scale.numerator());
 			for (int j = column; j < a[rank].length; j++) a[rank][j] = a[rank][j].multiply(inverse);
 			for (int row = rank + 1; row < a.length; row++) { var q = a[row][column]; for (int j = column; j < a[row].length; j++) a[row][j] = a[row][j].subtract(q.multiply(a[rank][j])); }
-			rank++;
+			pivots[rank++] = column;
 		}
-		return rank;
+		return new Echelon(a, Arrays.copyOf(pivots, rank));
+	}
+	/** Each returned row is an exact coefficient vector in the input's null space. */
+	static ExactRational[][] nullspace(ExactRational[][] input) {
+		var reduction = eliminate(input); var a = reduction.values(); var pivots = reduction.pivots(); int columns = input[0].length;
+		var result = new ExactRational[columns - pivots.length][columns]; int output = 0, pivot = 0;
+		for (int free = 0; free < columns; free++) {
+			if (pivot < pivots.length && pivots[pivot] == free) { pivot++; continue; }
+			var vector = result[output++]; Arrays.fill(vector, ExactRational.ZERO); vector[free] = ExactRational.ONE;
+			for (int row = pivots.length - 1; row >= 0; row--) {
+				var value = ExactRational.ZERO;
+				for (int column = pivots[row] + 1; column < columns; column++) value = value.subtract(a[row][column].multiply(vector[column]));
+				vector[pivots[row]] = value;
+			}
+		}
+		return result;
 	}
 	static void near(double actual, double expected, double tolerance, String message) {
 		if (!Double.isFinite(actual) || Math.abs(actual - expected) > tolerance) throw new AssertionError(message + ": actual=" + actual + ", expected=" + expected);
