@@ -318,7 +318,7 @@ final class MarkerVelocitySpaceExperiment {
 		double sum = 0; for (int i = 0; i < a.length; i++) sum += a[i] * b[i]; return sum;
 	}
 	/** Small, well-conditioned test-only dense reference, independent of production PCG and fits. */
-	private static double[] solve(double[][] input, double[] right) {
+	static double[] solve(double[][] input, double[] right) {
 		int n = right.length; var a = new double[n][n + 1];
 		for (int row = 0; row < n; row++) { System.arraycopy(input[row], 0, a[row], 0, n); a[row][n] = right[row]; }
 		for (int column = 0; column < n; column++) {
@@ -331,7 +331,7 @@ final class MarkerVelocitySpaceExperiment {
 		var result = new double[n]; for (int i = 0; i < n; i++) result[i] = a[i][n]; return result;
 	}
 	/** Exact rank for these small dyadic matrices, including every real input direction. */
-	private static int rank(double[][] input) {
+	static int rank(double[][] input) {
 		var a = new ExactRational[input.length][input[0].length];
 		for (int row = 0; row < a.length; row++) for (int col = 0; col < a[row].length; col++) {
 			var value = SignedDyadic.of(input[row][col]);
@@ -350,7 +350,7 @@ final class MarkerVelocitySpaceExperiment {
 		}
 		return rank;
 	}
-	private static void near(double actual, double expected, double tolerance, String message) {
+	static void near(double actual, double expected, double tolerance, String message) {
 		if (!Double.isFinite(actual) || Math.abs(actual - expected) > tolerance) throw new AssertionError(message + ": actual=" + actual + ", expected=" + expected);
 	}
 }
