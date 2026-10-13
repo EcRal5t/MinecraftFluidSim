@@ -62,7 +62,8 @@ final class GasRuntimeGeometry {
 				phaseIndex, domain.particles, cellSize, liquidStock);
 		this.geometry = GasComplementGeometry.capture(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize, solid, cut, phase);
 		this.topology = GasChamberTopology.capture(geometry, sealedExterior);
-		this.capacity = GasChamberCapacity.capture(domain, geometry, topology, this.occupiedSvq, liquidStock);
+		this.capacity = GasChamberCapacity.capture(domain, geometry, topology, this.occupiedSvq, liquidStock,
+				domain.gasState.frame);
 		this.pieceNodes = new int[Math.multiplyExact(8, domain.cellCount)]; Arrays.fill(pieceNodes, -1);
 		for (var piece : geometry.pieces()) pieceNodes[piece.id()] = topology.nodeOfPiece(piece.id());
 		this.minimumPieceKeys = new int[topology.chambers().size() + 1]; Arrays.fill(minimumPieceKeys, -1);

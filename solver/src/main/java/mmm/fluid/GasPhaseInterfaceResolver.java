@@ -50,10 +50,10 @@ final class GasPhaseInterfaceResolver {
 			var before = topology.source().geometry().piece(piece);
 			var after = future.geometry().piece(piece);
 			if (before == null || after == null) continue;
-			var planes = new ArrayList<GasGeometryOverlap.HalfSpace>(2);
-			if (before.dryPlane() != null) planes.add(before.dryPlane());
-			if (after.dryPlane() != null) planes.add(after.dryPlane());
-			if (GasGeometryOverlap.normalizedVolume(before.micro(), planes).isZero()) continue;
+			if (before.dryPlane() != null && after.dryPlane() != null
+					&& !before.dryPlane().equals(after.dryPlane())
+					&& GasGeometryOverlap.normalizedVolume(before.micro(),
+							List.of(before.dryPlane(), after.dryPlane())).isZero()) continue;
 			int node = future.nodeOfPiece(piece);
 			if (node >= 0) nodes.add(node);
 		}

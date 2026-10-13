@@ -9,12 +9,15 @@ import java.util.List;
 final class GasChamberCapacity {
 	record Chamber(int node, int minimumPiece, double cubicMeters, double roundingErrorBound) { }
 	private final List<GasPieceCapacity.Piece> pieces;
+	private final List<GasComponentCapacity.Component> components;
 	private final List<Chamber> chambers;
 	private final double ambientCubicMeters, ambientRoundingErrorBound;
 
-	private GasChamberCapacity(List<GasPieceCapacity.Piece> pieces, List<Chamber> chambers,
+	private GasChamberCapacity(List<GasComponentCapacity.Component> components,
+	                          List<GasPieceCapacity.Piece> pieces, List<Chamber> chambers,
 	                          double ambientCubicMeters, double ambientRoundingErrorBound) {
 		this.pieces = List.copyOf(pieces); this.chambers = List.copyOf(chambers);
+		this.components = List.copyOf(components);
 		this.ambientCubicMeters = ambientCubicMeters; this.ambientRoundingErrorBound = ambientRoundingErrorBound;
 	}
 
@@ -36,9 +39,15 @@ final class GasChamberCapacity {
 	static GasChamberCapacity capture(FluidDomain domain, GasComplementGeometry geometry,
 	                                 GasChamberTopology topology, long[] occupiedSvq,
 	                                 List<PhaseLiquidGeometryEdit> liquidStock) {
+		return capture(domain, geometry, topology, occupiedSvq, liquidStock, null);
+	}
+
+	static GasChamberCapacity capture(FluidDomain domain, GasComplementGeometry geometry,
+	                                 GasChamberTopology topology, long[] occupiedSvq,
+	                                 List<PhaseLiquidGeometryEdit> liquidStock, GasRuntimeGeometry source) {
 		if (domain == null || geometry == null || topology == null || !topology.matchesGeometry(geometry))
 			throw new IllegalArgumentException("Gas chamber capacity requires its matching captured geometry");
-		return assemble(GasComponentCapacity.capture(domain,geometry,occupiedSvq,liquidStock),geometry,topology);
+		return assemble(GasComponentCapacity.capture(domain,geometry,occupiedSvq,liquidStock,source),geometry,topology);
 	}
 
 	private static GasChamberCapacity assemble(List<GasComponentCapacity.Component> components,
@@ -63,7 +72,7 @@ final class GasChamberCapacity {
 			chambers.add(new Chamber(node, chamber.minimumPiece(), capacity, bound(errors[node], capacity)));
 		}
 		double ambient = capacities[0].signum() == 0 ? 0 : positive(capacities[0]);
-		return new GasChamberCapacity(pieces, chambers, ambient, bound(errors[0], ambient));
+		return new GasChamberCapacity(components, pieces, chambers, ambient, bound(errors[0], ambient));
 	}
 
 	private static double positive(SignedDyadic value) {
@@ -79,6 +88,7 @@ final class GasChamberCapacity {
 		return result;
 	}
 	List<GasPieceCapacity.Piece> pieces() { return pieces; }
+	List<GasComponentCapacity.Component> components() { return components; }
 	List<Chamber> chambers() { return chambers; }
 	double ambientCubicMeters() { return ambientCubicMeters; }
 	double ambientRoundingErrorBound() { return ambientRoundingErrorBound; }

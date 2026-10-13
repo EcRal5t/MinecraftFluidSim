@@ -172,6 +172,11 @@ public final class AirCavityScannerValidation {
 				"Future gas frame lost its complete before/after liquid tuples");
 		check(current.planeNormal(1,0,0)>0 && future.planeNormal(1,0,0)<0,
 				"Future liquid edit failed to rebuild a centered neighbor's PLIC gradient");
+		var rebuiltCapacity=GasChamberCapacity.capture(domain,future.geometry(),future.topology(),occupied,future.liquidStock(),current);
+		check(rebuiltCapacity.components().get(1)!=current.capacity().components().get(1)
+				&& rebuiltCapacity.components().equals(future.capacity().components())
+				&& rebuiltCapacity.chambers().equals(future.capacity().chambers()),
+				"An unchanged liquid tuple reused a changed neighbor PLIC capacity certificate");
 		check(domain.markerGrid.inventoryRevision==inventoryRevision && domain.pressurePhaseGeometry.revision()==phaseRevision
 				&& domain.carrierMutationRevision()==carrierRevision && domain.particles.volume(0)==.5F
 				&& domain.gasState.frame==null,"Private gas frame capture changed live owners or geometry caches");
@@ -226,6 +231,31 @@ public final class AirCavityScannerValidation {
 		checkPieceCapacityBounds(general,generalGeometry,false);
 		check(GasComponentCapacity.capture(general,generalGeometry,null).getFirst().pieces().stream()
 				.anyMatch(p->p.roundingErrorBound()>0),"Gas capacity rounding fixture lacks an inexact physical leaf");
+		var source=GasRuntimeGeometry.capture(general,null,new long[8],true);
+		var reusable=GasChamberCapacity.capture(general,source.geometry(),source.topology(),new long[8],source.liquidStock(),source);
+		check(reusable.components().getFirst()==source.capacity().components().getFirst()
+				&& reusable.components().equals(source.capacity().components())
+				&& reusable.chambers().equals(source.capacity().chambers()),
+				"Unchanged local raw stock and geometry failed to reuse its certified capacity");
+		byte[] mergeMasks=new byte[8];java.util.Arrays.fill(mergeMasks,(byte)255);mergeMasks[0]=(byte)254;mergeMasks[1]=0;
+		var merger=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
+				new FlipParticleState(2,2,2,1,0,0,new float[0],new float[0],mergeMasks));
+		var divided=GasRuntimeGeometry.capture(merger,null,new long[8],true);
+		merger.geometry.cutCells.replaceMask(0,0);
+		var joined=GasRuntimeGeometry.capture(merger,null,new long[8],true);
+		var joinedReuse=GasChamberCapacity.capture(merger,joined.geometry(),joined.topology(),new long[8],joined.liquidStock(),divided);
+		check(divided.nodeCount()==2 && joined.nodeCount()==1
+				&& joinedReuse.components().get(1)==divided.capacity().components().get(1)
+				&& joinedReuse.components().get(0)!=divided.capacity().components().get(0)
+				&& joinedReuse.pieces().equals(joined.capacity().pieces()) && joinedReuse.chambers().equals(joined.capacity().chambers()),
+				"Merged nodes failed to reassign reused local capacity exactly as a fresh capture");
+		merger.geometry.cutCells.replaceMask(0,254);
+		var dividedAgain=GasRuntimeGeometry.capture(merger,null,new long[8],true);
+		var dividedReuse=GasChamberCapacity.capture(merger,dividedAgain.geometry(),dividedAgain.topology(),new long[8],dividedAgain.liquidStock(),joined);
+		check(dividedAgain.nodeCount()==2 && dividedReuse.components().get(1)==joined.capacity().components().get(1)
+				&& dividedReuse.pieces().equals(dividedAgain.capacity().pieces())
+				&& dividedReuse.chambers().equals(dividedAgain.capacity().chambers()),
+				"Split nodes failed to reassign reused local capacity exactly as a fresh capture");
 
 		var split=pieceCapacityDomain(126,.25F,.25F,.25F,.0625F,.75F,.75F,.75F,.03125F);
 		var splitGeometry=pieceCapacityGeometry(split);var closed=GasChamberTopology.capture(splitGeometry,true);

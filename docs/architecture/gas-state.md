@@ -43,6 +43,8 @@
 
 SI 容量以当前 `h³` 换算，各非最大份额一次舍入，最大份额承接原始 SI 总量减去已储存子列后的余数；分量总量误差至多为承接列的半个 ULP。每块另存实际舍入误差上包。[GasChamberCapacity](../../solver/src/main/java/mmm/fluid/GasChamberCapacity.java) 在同一份几何与气腔图上汇总块容量，节点误差上包包含叶子误差及节点最终舍入。规划中的固体占据量以完整 SVQ 副本参与容量计算，包含恢复前的连续固相库存。
 
+未来 frame 逐格核对完整液体元组、固体 SVQ、固定掩码、孔隙容量、SI 尺度和八个微盒的完整 PLIC 证书。全部相同的格子复用已认证的分量与块容量；气腔容量沿未来微盒归属重新汇总，包含拆分、合并及环境归属变化。
+
 [GasFaceIntersection](../../solver/src/main/java/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
 
 [GasGeometryOverlap](../../solver/src/main/java/mmm/fluid/GasGeometryOverlap.java) 精确积分同一开放微盒与至多两个半空间的交集，返回单元归一化有理数体积。按需还可返回距格中心的一阶矩及六项二阶矩，液体湿几何共用该积分；体积与一阶矩入口仅计算各自需要的阶数。纯相切的交集体积为零，严格正的薄层保留精确量。库存交接仍需结合旧库存归属与实际可达路径；零重叠的有限气腔需要扫掠轨迹或可达性证明才能确定去向。
