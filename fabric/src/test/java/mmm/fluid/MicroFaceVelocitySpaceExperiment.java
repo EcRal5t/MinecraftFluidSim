@@ -18,6 +18,42 @@ final class MicroFaceVelocitySpaceExperiment {
 	private record Projection(double[] faceVelocity, double[] liquidPressure, double[] gasPressure) { }
 	private MicroFaceVelocitySpaceExperiment() { }
 
+	static void validateSupport() {
+		var failures = new AssertionError("Microface-only velocity lacks the retained spatial support");
+		checkSupport("single marker", new double[][]{{.5, .5, .5}}, failures);
+		checkSupport("collinear markers", new double[][]{{.25, .5, .5}, {.75, .5, .5}}, failures);
+		checkSupport("coplanar markers", new double[][]{{.25, .25, .5}, {.75, .25, .5}, {.25, .75, .5}, {.75, .75, .5}}, failures);
+		checkSupport("near-coplanar markers", new double[][]{{.25, .25, .5}, {.75, .25, .5}, {.25, .75, .5}, {.75, .75, Math.nextUp(.5F)}}, failures);
+		var fixture = MarkerVelocitySpaceExperiment.componentFixture();
+		var model = new Model(fixture.domain());
+		double energy = 0;
+		for (int i = 0; i < fixture.domain().particleCount(); i++) for (int axis = 0; axis < 3; axis++)
+			energy += .5 * fixture.domain().unitScale.kilograms(fixture.domain().particles.mass(i)) * Math.pow(fixture.velocity()[axis][i], 2);
+		System.out.printf("Isolated microbox circulation: markers=%d, face DOFs=%d, inertia rank=%d, incoming kinetic energy=%g J%n",
+				fixture.domain().particleCount(), model.faces.size(), rank(model.sample), energy);
+		if (model.faces.isEmpty() && energy > 0)
+			failures.addSuppressed(new AssertionError("Eight markers in each disconnected microbox resolve a wall-tangent circulation that has no shared-face mean"));
+		if (failures.getSuppressed().length != 0) throw failures;
+	}
+	private static void checkSupport(String name, double[][] points, AssertionError failures) {
+		var d = domain(2, 2, 2);
+		var positions = new float[4 * points.length]; var masks = new byte[8]; Arrays.fill(masks, (byte) 255); masks[0] = 0;
+		for (int i = 0; i < points.length; i++) {
+			for (int axis = 0; axis < 3; axis++) positions[4 * i + axis] = (float) points[i][axis];
+			positions[4 * i + 3] = 1F / points.length;
+		}
+		d.restoreParticleState(new FlipParticleState(2, 2, 2, 1, points.length, 1, positions, new float[3 * points.length], masks));
+		d.ensureInventoryGrid(); var model = new Model(d);
+		var joint = new double[model.sample.length + model.divergence.length][];
+		System.arraycopy(model.sample, 0, joint, 0, model.sample.length);
+		System.arraycopy(model.divergence, 0, joint, model.sample.length, model.divergence.length);
+		int support = rank(model.sample), inertia = rank(model.mass), pressure = rank(model.divergence), jointRank = rank(joint);
+		System.out.printf("Microface support %s: DOFs=%d, sample/mass ranks=%d/%d, pressure rank=%d, joint rank=%d%n",
+				name, model.faces.size(), support, inertia, pressure, jointRank);
+		if (inertia != support) failures.addSuppressed(new AssertionError(name + ": rounded mass Gram rank differs from actual velocity support"));
+		if (jointRank > support) failures.addSuppressed(new AssertionError(name + ": a zero-inertia velocity changes liquid volume; pressure cannot use an arbitrary mass pseudoinverse"));
+	}
+
 	static void validate() {
 		int cycles = 0;
 		for (int mask = 0; mask < 256; mask++) for (boolean heterogeneous : new boolean[]{false, true}) for (boolean shifted : new boolean[]{false, true}) {

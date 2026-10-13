@@ -7,7 +7,7 @@ import java.util.Arrays;
 
 /** Independent representation checks and a test-only wall-adapted polynomial candidate. */
 final class MarkerVelocitySpaceExperiment {
-	private record ComponentFixture(FluidDomain domain, double[][] velocity) { }
+	record ComponentFixture(FluidDomain domain, double[][] velocity) { }
 	private MarkerVelocitySpaceExperiment() { }
 
 	static void validateProduction() {
@@ -82,7 +82,7 @@ final class MarkerVelocitySpaceExperiment {
 		System.out.printf("Disconnected component motion: relative fit error=%g%n", relative);
 		near(relative, 0, 1e-13, "A common cell fit coupled separately resolved component circulation");
 	}
-	private static ComponentFixture componentFixture() {
+	static ComponentFixture componentFixture() {
 		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, 0));
 		byte[] masks = new byte[27]; Arrays.fill(masks, (byte) 255); masks[13] = 126;
 		float[] positions = new float[64], velocities = new float[48];

@@ -89,6 +89,8 @@
 
 `--args="--micro-velocity-candidate"` 运行 [MicroFaceVelocitySpaceExperiment](../../fabric/src/test/java/mmm/fluid/MicroFaceVelocitySpaceExperiment.java) 的独立微面模型。覆盖 256 种固定微盒掩码、两种实际质量布局、两种粒子位置布局，检查惯性与压力秩、共享法向迹、点态散度、投影能量、转置虚功以及压力冲量和力矩与墙面反力的闭合；另有三轴闭合旋涡及同格两个有限气腔的独立压力对照。模型采用完全湿润的微盒、共享微面平均法向速度和实际粒子惯性；部分充液、稀疏支撑、开放气体、完整输运与生产成本待后续验收。此入口独立运行，生产选择器继续检查当前实现。
 
+`--args="--micro-velocity-support"` 检查该模型的单点、共线、共面及相邻 float 近共面布局，分别报告采样、舍入惯性、压力和联合矩阵的秩。实际采样的零空间必须保持零液体体积通量；另复用每个断开微盒有八个粒子的旋涡场景，检查内部运动的表示能力。入口汇总全部不满足项后失败，候选模型满足所有条件时通过。
+
 自然对流增长率随 `thermal` 选择器常驻校验：两级网格、临界 Ra 两侧、两倍线性振幅，以及体积、材料质量、species、壁面 source/sink、舍入与载体内能闭合。单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[线性对流有效域](../architecture/thermal-state.md#自然对流的线性有效域)。
 
 粒子分布研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。默认输出固壁法向轮廓、正反向平流、满液体与自由面解析保面积映射、重播种二阶矩和 5,000 步溃坝的空间误差，并对照封闭满液体约束前后的压力体积；用 `--args="analytic transport"` 可只运行指定对照。`--args="free-analytic"` 从逆解析映射独立积分液体覆盖率，报告两级参考积分的差异，并检查积分点及网格细化后 L1 误差递减和整体体积闭合。默认构建的完整 `free-surface` 同时运行 5,000 步溃坝，逐步检查精确单元容量、共享压力库存、满格积分点分布及累计质量舍入界。`free-surface` 守护 G2P 数值依赖分量隔离、未使用外推面的隔离、有限气体耦合、满液体/自由面切换的工作区更新，以及精确满液体判定和微小真实缺口，`reseeding` 守护旋转协方差、秩损失拒绝、线性速度场和体积推导的拆分空间矩误差界。空间验收见[单元有限体积输运](../architecture/fluid-solver.md#单元有限体积输运)，完整步的成本要求见[生产资格](../roadmap/performance-and-backends.md#有限体积输运的生产资格)。
