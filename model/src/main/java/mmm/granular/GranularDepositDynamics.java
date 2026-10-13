@@ -60,6 +60,8 @@ public final class GranularDepositDynamics {
 		default void commitThermalRelaxation(
 				int fromCell, int toCell, int material, int composition, long movedSvq, long sourceTotalSvq
 		) { }
+		/** Upper bound for building and querying the current active-sphere release index. */
+		default int wakeGeometryWork() { return 0; }
 		default boolean planWake(int cell, long solidSvq, float x, float y, float z) { return true; }
 		default void cancelWake(int cell, long solidSvq, float x, float y, float z) { }
 		default void onSolidChanged(int cell) { }
@@ -356,7 +358,8 @@ public final class GranularDepositDynamics {
 			energyDeferred[column] = true;
 			return false;
 		}
-		if (!environment.planWake(surfaceCell, erosion, px, py, pz)) return false;
+		if (!admission.spend(environment.wakeGeometryWork())
+				|| !environment.planWake(surfaceCell, erosion, px, py, pz)) return false;
 		try {
 			// Bed material starts at rest; the next coupled mechanical solve supplies acceleration
 			// and its equal liquid reaction. Copying carrier velocity here would create momentum.

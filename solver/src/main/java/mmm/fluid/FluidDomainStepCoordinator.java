@@ -516,8 +516,13 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 						new GranularEnergyColumn.DepositKey(toCell, material, composition), movedSvq, sourceTotalSvq);
 			}
 
+			@Override public int wakeGeometryWork() {
+				return cellCount + 2 * granularState.parcels.count() + 27;
+			}
 			@Override public boolean planWake(int cell, long solidSvq, float x, float y, float z) {
 				if (!granularCollision.positionValid(x, y, z, solidSvq)) return false;
+				var admission = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, config.cellSize(), granularState.parcels, 0);
+				if (!admission.allows(x, y, z, solidSvq)) return false;
 				granularCoupling.removePlannedCell(plannedSolid, cell, solidSvq);
 				GranularCouplingFields.Position position = new GranularCouplingFields.Position(x, y, z);
 				if (granularCoupling.tryPlanParcel(plannedSolid, position, solidSvq,

@@ -129,6 +129,29 @@ public final class GranularBedWakeValidation {
 		domain.carrierViscosityPaPerS(cell);
 		require(!domain.carrierPropertiesWorkspace.finishStep().extrapolated(),
 				"Retried step inherited a discarded attempt's excursions");
+		int sand = registries.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double mass = registries.granular().material(sand).referenceDensity() * svq / SolidVolume.SVQ_PER_BV;
+		require(domain.tryInsertExactGranular(1, 0, 1, sand, 0, svq, mass).inserted(), "Occupied wake fixture rejected its retained parcel");
+		domain.ensureGrid();
+		occupiedWakePointKeepsState(domain);
+	}
+
+	private static void occupiedWakePointKeepsState(FluidDomain domain) {
+		var active = domain.granularState.parcels.parcel(0);
+		long wakeSvq = active.solidVolumeSvq();
+		var planned = domain.granularCoupling.copySolidSvq(); var beforePlanned = planned.clone();
+		var beforeBlocked = domain.exportGranularState(); var blockedEnergy = domain.exactInternalEnergy();
+		var blockedAudit = domain.thermalAudit(); long blockedRevision = domain.granularState.parcels.mutationRevision();
+		require(domain.granularCollision.positionValid(active.x(), active.y(), active.z(), wakeSvq),
+				"Blocked wake fixture requires a fixed-geometry-valid release point");
+		require(!domain.granularDepositEnvironment(planned).planWake(domain.cellIndex(1, 0, 1), wakeSvq, active.x(), active.y(), active.z())
+				&& java.util.Arrays.equals(planned, beforePlanned)
+				&& domain.granularState.parcels.mutationRevision() == blockedRevision
+				&& domain.exportGranularState().activeParcels().equals(beforeBlocked.activeParcels())
+				&& domain.exportGranularState().depositGroups().equals(beforeBlocked.depositGroups())
+				&& domain.exactInternalEnergy().equals(blockedEnergy) && domain.thermalAudit().equals(blockedAudit),
+				"Occupied wake point changed its planned occupancy, carriers, bed or thermal owners");
 	}
 
 	private static double depositMoment(FluidDomain domain) {
@@ -170,6 +193,7 @@ public final class GranularBedWakeValidation {
 			require(domain.granularCollision.positionValid(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()),
 					"Released parcel overlaps collision geometry");
 		}
+		GranularCarrierValidation.requireNonOverlappingRelease(domain.exportGranularState(), domain.config.cellSize());
 		var group = domain.exportGranularState().depositGroups().getFirst();
 		int cell = group.cell(), above = cell + domain.sizeX;
 		var material = domain.granularState.registry.material(domain.granularState.deposits.dominantGroup(cell).materialHandle());
