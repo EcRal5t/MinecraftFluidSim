@@ -78,6 +78,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 原始载体矩与 PLIC 的逐微盒、逐固定分量比较在 [LiquidSpatialInput](../../solver/src/main/java/mmm/fluid/LiquidSpatialInput.java)，共享盒积分在 `LiquidPressureGeometry.pieceMoments`。来源检查、孔隙率、单位换算与未解析载体验证使用 `:fabric:runMarkerPressureValidation --args="--spatial-input"`。
 
+零时长固体几何排液的来源比例见 [CellRemapMicroPreferences](../../solver/src/main/java/mmm/fluid/CellRemapMicroPreferences.java) 的 `inventory`，同微盒精确矩汇总见 [CellRemapTransportMoments](../../solver/src/main/java/mmm/fluid/CellRemapTransportMoments.java)。聚焦验证分别为 `:fabric:runLiquidTransportValidation --args="geometry-remap"` 与 `:fabric:runRemapMomentsValidation --args="transport-moments"`。
+
 外部液体提取与清空的多格气腔后继在 [LiquidExtractionGasPlan](../../solver/src/main/java/mmm/fluid/LiquidExtractionGasPlan.java)，注液后继在 [LiquidInsertionGasPlan](../../solver/src/main/java/mmm/fluid/LiquidInsertionGasPlan.java)；未来 count/V/M1 覆盖在 `FlipPressurePhaseGeometry.rebuildLiquidEdits` 与 `PhaseLiquidGeometryEdit.afterInsertion`。保留颗粒的凝聚相清空后继在 `GasTopologyCoordinator.planAfterCondensedClear`。移液、注液、撤墙与中途同步的热力学顺序对照在 `ThermalGasValidationScenarios.gasExpansionRetainsTheOldControlVolume`。
 
 拓扑继承控制体积的精确权重分配见 [GasTopologyVolumePartition](../../solver/src/main/java/mmm/fluid/GasTopologyVolumePartition.java)，公开拓扑验证为 `AirCavityScannerValidation.validateExactGasTopologyWeights`。节点拆分的发布前校验为 `AirNetworkValidation.validateSplitPreflightsAllOwners`，公开库存写入、连接请求与累计源汇校验为 `validatePublicMutatorsPreflightAllOwners`；单格替换的气体、分量容量、坐标表示及原位抽取缓存校验为 `CarrierMutationValidation.cellVolumeReplacementPreflightsAllOwners`。

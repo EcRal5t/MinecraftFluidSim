@@ -291,7 +291,9 @@ final class CellCarrierRemapPlan {
 			Group source = groups.get(g); ChemicalMixtureRecord[] species = allocateSpecies(source.species, pieces[g]);
 			prepareMoments(source);
 			source.shares = new ArrayList<>(shares);
-			var preferences = CellRemapMicroPreferences.create(domain, flux, source.original, source.support, faces, supports);
+			var preferences = geometryRemap
+					? CellRemapMicroPreferences.inventory(domain, source.original, shares - 1)
+					: CellRemapMicroPreferences.create(domain, flux, source.original, source.support, faces, supports);
 			CellRemapTransportMoments.Result transport;
 			try { transport = new CellRemapTransportMoments(domain, source.cell, source.original).allocate(pieces[g], preferences); }
 			catch (CellRemapTransportMoments.AllocationFailure infeasible) { throw new MechanicalTimeRefinement(2, infeasible.getMessage()); }

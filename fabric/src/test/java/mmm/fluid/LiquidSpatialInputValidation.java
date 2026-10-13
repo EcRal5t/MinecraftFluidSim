@@ -63,7 +63,32 @@ final class LiquidSpatialInputValidation {
 		var empty = input.component(0, 128).comparison();
 		near(empty.carriers().count(), 0, 0, "Empty fixed component keeps its source tuple");
 		near(empty.represented().volume(), 0, 0, "Empty fixed component has zero wet volume");
+		near(input.component(0, 128).poreScale(), 1, 0, "Dry disconnected component retains its open pore capacity");
 		if (input.piece(7) == null) throw new AssertionError("Dry component piece identity was omitted");
+		d.granularCoupling = new mmm.granular.GranularCouplingFields(2, 2, 2, 1);
+		var occupied = new long[8]; occupied[0] = 3; d.granularCoupling.setFixedCellSvq(occupied);
+		// A partial source leaves enough room for the integer occupancy allocated to both components.
+		d.particles.setVolume(0, 1F / 16);
+		d.gasState.frame = GasRuntimeGeometry.capture(d, null, occupied, d.gasState.sealedDomainBoundary);
+		var occupiedInput = LiquidSpatialInput.capture(d);
+		near(occupiedInput.component(0, 128).poreScale(), 1 - Math.scalb(1.0, -21), 0,
+				"Dry component retains its one-SVQ share of the captured pore capacity");
+		near(occupiedInput.piece(7).poreScale(), occupiedInput.component(0, 128).poreScale(), 0,
+				"Dry microbox and component share the captured pore scale");
+		var dry = MicroFaceVelocitySpaceExperiment.domain(2, 2, 2);
+		var masks = new byte[8]; Arrays.fill(masks, (byte) 255); masks[0] = 126;
+		dry.restoreParticleState(new FlipParticleState(2, 2, 2, 1, 0, 0, new float[0], new float[0], masks));
+		dry.granularCoupling = new mmm.granular.GranularCouplingFields(2, 2, 2, 1);
+		dry.granularCoupling.setFixedCellSvq(occupied);
+		dry.gasState.frame = GasRuntimeGeometry.capture(dry, null, occupied, dry.gasState.sealedDomainBoundary);
+		var dryInput = LiquidSpatialInput.capture(dry);
+		near(dryInput.component(0, 1).poreScale(), 1 - Math.scalb(1.0, -20), 0,
+				"Entirely dry cell retains its first component's two-SVQ allocation");
+		near(dryInput.component(0, 128).poreScale(), 1 - Math.scalb(1.0, -21), 0,
+				"Entirely dry cell retains its second component's one-SVQ allocation");
+		for (var gasPiece : dry.gasState.frame.capacity().pieces())
+			near(dryInput.piece(gasPiece.id()).poreScale() / 8, gasPiece.cubicMeters(), 0,
+					"Dry liquid spatial view shares the gas piece's captured pore capacity");
 		var unresolved = oneMarker(0, 1F / 64, .5F); var source = capture(unresolved);
 		near(source.piece(7).comparison().carriers().count(), 1, 0, "Unresolved carrier keeps its actual microbox identity");
 		near(source.piece(7).comparison().represented().volume(), 0, 0, "PLIC can leave the carrier's microbox dry");

@@ -10,12 +10,7 @@ final class CellRemapMicroPreferences {
 
 	static double[][] create(FluidDomain domain, ConservativeLiquidFlux flux, List<Integer> original,
 	                         int support, int[] faces, int[] receiverSupports) {
-		SignedDyadic[] inventory = new SignedDyadic[8]; Arrays.fill(inventory, SignedDyadic.ZERO);
-		for (int p : original) {
-			int micro = CellRemapMicroTopology.positionMicro(domain.config.cellSize(), domain.particles.positionX(p),
-					domain.particles.positionY(p), domain.particles.positionZ(p));
-			inventory[micro] = inventory[micro].add(SignedDyadic.of(domain.particles.volume(p)));
-		}
+		SignedDyadic[] inventory = rawInventory(domain, original);
 		double[][] result = new double[faces.length - 1][8];
 		double[] swept = new double[8], wet = new double[8];
 		for (int d = 0; d < result.length; d++) {
@@ -42,5 +37,23 @@ final class CellRemapMicroPreferences {
 				result[d][m] = blend * result[d][m] / geometric + (1 - blend) * inventory[m].toDouble() / donor;
 		}
 		return result;
+	}
+
+	/** Solid representation changes redistribute pore stock without a time-dependent sweep. */
+	static double[][] inventory(FluidDomain domain, List<Integer> original, int outgoing) {
+		SignedDyadic[] inventory = rawInventory(domain, original);
+		double[][] result = new double[outgoing][8];
+		for (double[] share : result) for (int micro = 0; micro < 8; micro++) share[micro] = inventory[micro].toDouble();
+		return result;
+	}
+
+	private static SignedDyadic[] rawInventory(FluidDomain domain, List<Integer> original) {
+		SignedDyadic[] inventory = new SignedDyadic[8]; Arrays.fill(inventory, SignedDyadic.ZERO);
+		for (int p : original) {
+			int micro = CellRemapMicroTopology.positionMicro(domain.config.cellSize(), domain.particles.positionX(p),
+					domain.particles.positionY(p), domain.particles.positionZ(p));
+			inventory[micro] = inventory[micro].add(SignedDyadic.of(domain.particles.volume(p)));
+		}
+		return inventory;
 	}
 }

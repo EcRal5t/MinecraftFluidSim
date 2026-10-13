@@ -76,16 +76,17 @@
 
 ```powershell
 ./gradlew.bat :fabric:runLiquidTransportValidation --args="components" --offline --no-daemon
+./gradlew.bat :fabric:runLiquidTransportValidation --args="geometry-remap" --offline --no-daemon
 ./gradlew.bat :fabric:runRemapMomentsValidation --args="transport-moments" --offline --no-daemon
 ```
 
-液体输运参数为 `--fast`、`components`、`chemical-tails`、`representation`、`mass`、`quantization`、`continuity`、`handoff`；空间矩参数为 `transport-moments`、`sweep-only`、`footprint-only`。省略参数执行完整入口，未知参数直接拒绝。
+液体输运参数为 `--fast`、`components`、`chemical-tails`、`geometry-remap`、`representation`、`mass`、`quantization`、`continuity`、`handoff`；空间矩参数为 `transport-moments`、`sweep-only`、`footprint-only`。省略参数执行完整入口，未知参数直接拒绝。`geometry-remap` 复用零时长正出流、断开分量容量、低 quanta 拒绝与完整逻辑步矩统计用例。`transport-moments` 同时用逐载体精确参考检查微盒汇总结果，覆盖非二进制份额、供给重分配、零出流和完全流出，逐位核对最终观察及舍入差额。
 
 压力核可通过 `:fabric:runMarkerPressureValidation --args="--kernel"` 单独运行仿射拟合、转置虚功、固定壁面投影、独立通量、实际质量 Gram 矩阵、有限气体储存和极端数值对照；完整 `marker-pressure` 另含生产张力与壁面输运场景。
 
 `--args="--gas-geometry"` 单独校验压力准备和发布中的当前微盒归属：同格两个独立气腔、实际接触气压参考、液体第一矩变化、frame 替换后的几何与候选拒绝。
 
-`--args="--spatial-input"` 先运行压力核及既有湿几何矩对照，再运行 [LiquidSpatialInputValidation](../../fabric/src/test/java/mmm/fluid/LiquidSpatialInputValidation.java)。覆盖原始体积与质量矩、半米格长的 SI 换算、悬殊质量的精确差额、同格断开分量的相反误差、完全干域与零分量、位于 PLIC 干微盒中的未解析载体、来源不可变副本及过期 frame 拒绝；孔隙率用例分别校核几何覆盖和孔隙内液体体积。几何对照复用立方体、薄层、切格、斜面及微面重合接口的既有断言。
+`--args="--spatial-input"` 先运行压力核及既有湿几何矩对照，再运行 [LiquidSpatialInputValidation](../../fabric/src/test/java/mmm/fluid/LiquidSpatialInputValidation.java)。覆盖原始体积与质量矩、半米格长的 SI 换算、悬殊质量的精确差额、同格断开分量的相反误差、完全干域与零分量、位于 PLIC 干微盒中的未解析载体、来源不可变副本及过期 frame 拒绝；孔隙率用例分别校核几何覆盖、孔隙内液体体积和全干断开分量的整数 SVQ 容量。几何对照复用立方体、薄层、切格、斜面及微面重合接口的既有断言。
 
 `--args="--velocity-space"` 先运行独立候选基底对照，再检查生产速度空间的三轴闭合旋涡、单点近壁模式、断开分量运动和独立液池的静态压力；生产条件不满足时任务失败。`--args="--velocity-candidate"` 运行测试专用的小矩阵原型，比较壁面适配的仿射和张量基底、真实质量支撑、完整多项式散度、投影功及转置虚功。原型通过只证明所列小场景的模型条件，完整生产验收继续使用 `marker-pressure` 和所涉及领域的选择器。代码在 [MarkerVelocitySpaceExperiment](../../fabric/src/test/java/mmm/fluid/MarkerVelocitySpaceExperiment.java)。
 

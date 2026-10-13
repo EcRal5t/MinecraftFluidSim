@@ -83,11 +83,17 @@ public final class LiquidVolumeTransportValidation {
 		double bound = 64 * Math.ulp(Math.max(Math.abs(before.toDouble()), Math.abs(after.toDouble())));
 		if (domain.granularState.parcels.count() != 1 || logical.substeps() != 2
 				|| domain.totalMass() != mass || domain.totalVolume() != volume
-				|| !(delta > .1) || Math.abs(moments.signedMassResidual().y() - delta) > bound
+				|| Math.abs(delta) > moments.massStorage().y() + bound
+				|| Math.abs(moments.signedMassResidual().y() - delta) > bound
 				|| !moments.equals(domain.cellLiquidVolumeTransport.momentAudit.stats())
-				|| moments.reconstructedGroups() != 27 || moments.projectedGroups() == 0
+				|| moments.reconstructedGroups() != 27 || moments.projectedGroups() != 0
+				|| !moments.massProjection().equals(FluidDomain.Moment3.ZERO)
 				|| Math.abs(moments.gravitationalPotentialErrorJoules(9.81) - 9.81 * delta) > 9.81 * bound)
-			throw new AssertionError("Representation remap lost or repeated its observable mass moment error");
+			throw new AssertionError("Representation remap lost or repeated its observable mass moment error: parcels="
+					+ domain.granularState.parcels.count() + ", substeps=" + logical.substeps()
+					+ ", mass=" + domain.totalMass() + "/" + mass + ", volume=" + domain.totalVolume() + "/" + volume
+					+ ", massMomentDelta=" + delta + ", audit=" + moments
+					+ ", latestAudit=" + domain.cellLiquidVolumeTransport.momentAudit.stats() + ", bound=" + bound);
 		var unchanged = domain.step(false, 0, false, false, 2).liquidTransport();
 		if (!unchanged.equals(FluidDomain.LiquidTransportStats.INACTIVE))
 			throw new AssertionError("A later unchanged representation replayed an earlier remap audit");
@@ -339,9 +345,14 @@ public final class LiquidVolumeTransportValidation {
 
 	public static void main(String[] args) {
 		if (args.length > 1 || args.length == 1 && !java.util.List.of("--fast", "chemical-tails", "components",
-				"representation", "mass", "quantization", "continuity", "handoff").contains(args[0]))
+				"representation", "geometry-remap", "mass", "quantization", "continuity", "handoff").contains(args[0]))
 			throw new IllegalArgumentException("Unknown liquid transport validation entry");
 		boolean fast = args.length == 1 && args[0].equals("--fast");
+		if (args.length == 1 && args[0].equals("geometry-remap")) {
+			geometryRemapRechecksMicroCapacity(); chemicalGeometryRemapRejectsUnrepresentableCandidate();
+			representationRemapReportsLogicalMoments();
+			System.out.println("Zero-duration liquid geometry remap validation passed"); return;
+		}
 		if (args.length == 1 && args[0].equals("chemical-tails")) {
 			chemicalFloatTailsShareExistingQuanta(); chemicalGeometryRemapRejectsUnrepresentableCandidate(); chemicalLazyPortBuildRechecksActualShares();
 			System.out.println("Liquid chemical binary32-tail validation passed"); return;
@@ -813,6 +824,35 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	private static void geometryRemapRechecksMicroCapacity() {
+		var moving = microPortDomain((byte) 0, (byte) 126,
+				new float[] {.375F, .125F, .125F, .125F, .875F, .375F, .375F, .125F});
+		var transfer = microPortFlux(moving, .0625);
+		var capacities = new SignedDyadic[8]; java.util.Arrays.fill(capacities, SignedDyadic.ZERO);
+		capacities[0] = SignedDyadic.of(1); capacities[1] = SignedDyadic.of(.25);
+		var result = moving.markerGrid.exactCellVolumeInventory.clone();
+		result[0] = SignedDyadic.of(.0625); result[1] = SignedDyadic.of(.1875);
+		transfer.geometricResult(result, capacities);
+		var before = moving.exportParticleState();
+		var raw = moving.particles.directArrays();
+		var masses = raw.mass.clone(); var materials = raw.materialHandle.clone(); var phases = raw.phaseLabel.clone();
+		var relocated = new CellCarrierRemapPlan(moving, transfer, 0, new BallisticLiquidRemap(8), true);
+		SignedDyadic isolated = SignedDyadic.ZERO, received = SignedDyadic.ZERO;
+		for (var marker : relocated.markers) if (marker.cell() == 1) {
+			int support = CellRemapMicroTopology.markerSupport(moving, marker);
+			if (support == 128) isolated = isolated.add(SignedDyadic.of(marker.volume()));
+			else if (support == 1) received = received.add(SignedDyadic.of(marker.volume()));
+			else throw new AssertionError("Geometry relocation changed the receiving micro component");
+		}
+		var after = moving.exportParticleState();
+		if (!isolated.equals(SignedDyadic.of(.125)) || !received.equals(SignedDyadic.of(.0625))
+				|| before.particleCount() != after.particleCount()
+				|| !java.util.Arrays.equals(before.positionVolume(), after.positionVolume())
+				|| !java.util.Arrays.equals(before.particleVelocities(), after.particleVelocities())
+				|| !java.util.Arrays.equals(before.collisionMicroMasks(), after.collisionMicroMasks())
+				|| !java.util.Arrays.equals(masses, moving.particles.directArrays().mass)
+				|| !java.util.Arrays.equals(materials, moving.particles.directArrays().materialHandle)
+				|| !java.util.Arrays.equals(phases, moving.particles.directArrays().phaseLabel))
+			throw new AssertionError("Zero-duration geometry relocation lost source stock or isolated component inventory");
 		var domain = microPortDomain((byte) 126, (byte) 0, new float[] {.125F, .125F, .125F, .125F});
 		var flux = microPortFlux(domain, 0);
 		var unchanged = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(8), true);

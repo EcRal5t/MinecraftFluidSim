@@ -67,10 +67,14 @@ final class LiquidSpatialInput {
 		var empty = new Comparison(CarrierMoments.EMPTY, VolumeMoments.EMPTY, VolumeMoments.EMPTY, scale);
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			var selected = new ArrayList<Component>();
-			for (int support : CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell))) {
+			int mask = domain.geometry.cutCells.mask(cell);
+			int[] supports = CellRemapMicroTopology.components(mask);
+			SignedDyadic[] capacities = CellRemapMicroTopology.capacities(mask, phase.poreVolume(cell));
+			for (int componentIndex = 0; componentIndex < supports.length; componentIndex++) {
+				int support = supports[componentIndex];
 				var raw = CarrierMoments.EMPTY; var represented = VolumeMoments.EMPTY; var envelope = VolumeMoments.EMPTY;
 				double poreScale = phase.componentPoreScale(cell, Integer.numberOfTrailingZeros(support),
-						phase.poreVolume(cell).toDouble() / domain.geometry.cutCells.openCellVolume(cell));
+						capacities[componentIndex].toDouble() * 8 / Integer.bitCount(support));
 				for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
 					int key = 8 * cell + micro; var value = source[key] == null ? CarrierMoments.EMPTY : source[key].snapshot();
 					var integrated = phase.liquidFractionExact(cell) > 0 ? LiquidPressureGeometry.pieceMoments(domain, phase, cell, micro) : VolumeMoments.EMPTY;

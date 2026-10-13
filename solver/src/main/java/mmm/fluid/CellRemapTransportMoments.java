@@ -8,35 +8,39 @@ import java.util.List;
 /** Allocates transport moments from one positive, supply-limited source integration rule. */
 final class CellRemapTransportMoments {
 	private final int[] ordinals, micro;
-	private final ExactRational[] volumes, masses;
-	private final ExactRational[][] velocities;
-	private final ExactRational[][] positions;
 	private final ExactRational[] supply = zeros(8);
+	private final ExactRational[] sourceMass = zeros(8), sourceKinetic = zeros(8);
+	private final ExactRational[][] sourceMomentum = new ExactRational[8][3];
+	private final ExactRational[][] sourceVolumeMoment = new ExactRational[8][3], sourceVolumeMotion = new ExactRational[8][3];
 	private final ExactRational volume;
 
 	CellRemapTransportMoments(FluidDomain domain, int cell, List<Integer> original) {
 		ordinals = original.stream().mapToInt(Integer::intValue).toArray();
-		micro = new int[ordinals.length]; volumes = new ExactRational[ordinals.length];
-		masses = new ExactRational[ordinals.length]; velocities = new ExactRational[ordinals.length][3];
-		positions = new ExactRational[ordinals.length][3];
+		micro = new int[ordinals.length];
+		for (int m = 0; m < 8; m++) {
+			sourceMomentum[m] = zeros(3); sourceVolumeMoment[m] = zeros(3); sourceVolumeMotion[m] = zeros(3);
+		}
 		ExactRational total = ExactRational.ZERO;
 		for (int i = 0; i < ordinals.length; i++) {
 			int p = ordinals[i];
 			if (domain.particleCellIndex(p) != cell) throw new IllegalArgumentException("Transport source belongs to another cell");
 			micro[i] = CellRemapMicroTopology.positionMicro(domain.config.cellSize(), domain.particles.positionX(p),
 					domain.particles.positionY(p), domain.particles.positionZ(p));
-			volumes[i] = ExactRational.ofFloat(domain.particles.volume(p));
-			masses[i] = rational(domain.particles.mass(p));
-			velocities[i][0] = rational(domain.particles.velocityX(p));
-			velocities[i][1] = rational(domain.particles.velocityY(p));
-			velocities[i][2] = rational(domain.particles.velocityZ(p));
+			ExactRational v = ExactRational.ofFloat(domain.particles.volume(p)), mass = rational(domain.particles.mass(p));
+			ExactRational[] velocity = {rational(domain.particles.velocityX(p)), rational(domain.particles.velocityY(p)), rational(domain.particles.velocityZ(p))};
 			double h = domain.config.cellSize();
-			positions[i][0] = rational(domain.particles.positionX(p) / h - cell % domain.sizeX - .5);
-			positions[i][1] = rational(domain.particles.positionY(p) / h - cell / domain.sizeX % domain.sizeY - .5);
-			positions[i][2] = rational(domain.particles.positionZ(p) / h - cell / (domain.sizeX * domain.sizeY) - .5);
-			if (volumes[i].signum() <= 0 || masses[i].signum() <= 0)
+			ExactRational[] position = {rational(domain.particles.positionX(p) / h - cell % domain.sizeX - .5),
+					rational(domain.particles.positionY(p) / h - cell / domain.sizeX % domain.sizeY - .5),
+					rational(domain.particles.positionZ(p) / h - cell / (domain.sizeX * domain.sizeY) - .5)};
+			if (v.signum() <= 0 || mass.signum() <= 0)
 				throw new IllegalArgumentException("Transport requires positive raw source volume and mass");
-			supply[micro[i]] = supply[micro[i]].add(volumes[i]); total = total.add(volumes[i]);
+			int m = micro[i]; supply[m] = supply[m].add(v); total = total.add(v); sourceMass[m] = sourceMass[m].add(mass);
+			for (int a = 0; a < 3; a++) {
+				sourceMomentum[m][a] = sourceMomentum[m][a].add(mass.multiply(velocity[a]));
+				sourceKinetic[m] = sourceKinetic[m].add(mass.multiply(velocity[a].multiply(velocity[a])));
+				sourceVolumeMoment[m][a] = sourceVolumeMoment[m][a].add(v.multiply(position[a]));
+				sourceVolumeMotion[m][a] = sourceVolumeMotion[m][a].add(v.multiply(velocity[a]));
+			}
 		}
 		volume = total;
 	}
@@ -90,20 +94,23 @@ final class CellRemapTransportMoments {
 				missing = missing.subtract(advanced);
 			}
 		}
-		ExactRational[][] weights = new ExactRational[pieces.length][ordinals.length];
-		for (int p = 0; p < ordinals.length; p++) {
+		ExactRational[][] microWeights = new ExactRational[pieces.length][8];
+		for (int d = 0; d < pieces.length; d++) microWeights[d] = zeros(8);
+		for (int m = 0; m < 8; m++) if (supply[m].signum() > 0) {
 			ExactRational retained = ExactRational.ONE;
 			for (int d = 0; d < outgoing; d++) {
-				weights[d][p] = divide(allocation[d][micro[p]], supply[micro[p]]);
-				retained = retained.subtract(weights[d][p]);
+				microWeights[d][m] = divide(allocation[d][m], supply[m]);
+				retained = retained.subtract(microWeights[d][m]);
 			}
 			if (retained.signum() < 0) throw new IllegalStateException("Transport overdrew a source marker");
-			weights[outgoing][p] = retained;
+			microWeights[outgoing][m] = retained;
 		}
-		return moments(weights);
+		ExactRational[][] weights = new ExactRational[pieces.length][ordinals.length];
+		for (int d = 0; d < pieces.length; d++) for (int p = 0; p < ordinals.length; p++) weights[d][p] = microWeights[d][micro[p]];
+		return moments(weights, microWeights);
 	}
 
-	private Result moments(ExactRational[][] weights) {
+	private Result moments(ExactRational[][] weights, ExactRational[][] microWeights) {
 		double[][] momentum = new double[weights.length][3]; double[] kinetic = new double[weights.length];
 		double[][] volumeMoment = new double[weights.length][3], volumeMotion = new double[weights.length][3];
 		double[] mass = new double[weights.length]; ExactRational[] massRounding = new ExactRational[weights.length];
@@ -113,14 +120,14 @@ final class CellRemapTransportMoments {
 			ExactRational exactMass = ExactRational.ZERO, k = ExactRational.ZERO;
 			ExactRational[] p = zeros(3);
 			ExactRational[] x = zeros(3), motion = zeros(3);
-			for (int i = 0; i < ordinals.length; i++) {
-				ExactRational weightedMass = masses[i].multiply(weights[d][i]); exactMass = exactMass.add(weightedMass);
-				ExactRational weightedVolume = volumes[i].multiply(weights[d][i]);
+			// All carriers in a microbox have one allocation weight; distribute its exact moments once.
+			for (int m = 0; m < 8; m++) {
+				ExactRational weight = microWeights[d][m]; if (weight.isZero()) continue;
+				exactMass = exactMass.add(sourceMass[m].multiply(weight)); k = k.add(sourceKinetic[m].multiply(weight));
 				for (int a = 0; a < 3; a++) {
-					x[a] = x[a].add(weightedVolume.multiply(positions[i][a]));
-					motion[a] = motion[a].add(weightedVolume.multiply(velocities[i][a]));
-					p[a] = p[a].add(weightedMass.multiply(velocities[i][a]));
-					k = k.add(weightedMass.multiply(velocities[i][a].multiply(velocities[i][a])));
+					x[a] = x[a].add(sourceVolumeMoment[m][a].multiply(weight));
+					motion[a] = motion[a].add(sourceVolumeMotion[m][a].multiply(weight));
+					p[a] = p[a].add(sourceMomentum[m][a].multiply(weight));
 				}
 			}
 			mass[d] = observe(exactMass); massRounding[d] = rational(mass[d]).subtract(exactMass);

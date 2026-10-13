@@ -199,6 +199,85 @@ public final class CellRemapMomentsValidation {
 			boolean positive = domain.particles.velocityX(original.get(i)) > 0;
 			check(result.markerWeights()[positive ? 1 : 0][i].isZero(), "Directional shear borrowed the opposite source support");
 		}
+		microAggregatesMatchCarrierReference();
+	}
+
+	private static void microAggregatesMatchCarrierReference() {
+		var domain = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(.3F, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 64);
+		float h = domain.config.cellSize(); float[] positions = new float[256], velocities = new float[192];
+		for (int m = 0; m < 8; m++) for (int slot = 0; slot < 8; slot++) {
+			int p = 8 * m + slot;
+			for (int a = 0; a < 3; a++) {
+				positions[4 * p + a] = (1 + .5F * (m >>> a & 1) + .125F + .25F * (slot >>> a & 1)) * h;
+				velocities[3 * p + a] = (float) ((p % 7 - 3) * (a + 1) / 13.0);
+			}
+			positions[4 * p + 3] = 1F / 64;
+		}
+		domain.restoreParticleState(new FlipParticleState(3, 3, 3, h, 64, 1, positions, velocities, new byte[27]));
+		var source = new ArrayList<Integer>();
+		for (int p = 0; p < 64; p++) {
+			source.add(p); domain.particles.setMass(p, Math.scalb(1 + (p % 5) / 7.0, p % 9 - 4));
+		}
+		int cell = domain.cellIndex(1, 1, 1); var moments = new CellRemapTransportMoments(domain, cell, source);
+		var pieces = new mmm.units.SignedDyadic[] {mmm.units.SignedDyadic.of(.25), mmm.units.SignedDyadic.of(.125),
+				mmm.units.SignedDyadic.of(.25), mmm.units.SignedDyadic.of(.0625), mmm.units.SignedDyadic.of(.3125)};
+		double[][] preferences = new double[4][8];
+		for (int d = 0; d < 4; d++) for (int m = 0; m < 8; m++) preferences[d][m] = .1 + .03 * (1 + d * m);
+		compareCarrierMoments(domain, cell, moments.allocate(pieces, preferences));
+		// The second row needs all of microbox zero, forcing earlier supply to be reassigned.
+		java.util.Arrays.fill(preferences[0], 0); java.util.Arrays.fill(preferences[1], 0);
+		preferences[0][0] = preferences[0][1] = preferences[0][2] = 1; preferences[1][0] = 1;
+		compareCarrierMoments(domain, cell, moments.allocate(pieces, preferences));
+		compareCarrierMoments(domain, cell, moments.allocate(new mmm.units.SignedDyadic[] {mmm.units.SignedDyadic.ZERO,
+				mmm.units.SignedDyadic.of(1)}, new double[1][8]));
+		compareCarrierMoments(domain, cell, moments.allocate(new mmm.units.SignedDyadic[] {mmm.units.SignedDyadic.of(1),
+				mmm.units.SignedDyadic.ZERO}, new double[][] {{1, 1, 1, 1, 1, 1, 1, 1}}));
+	}
+
+	/** Independent per-carrier evaluation retains the original multiplication and observation order. */
+	private static void compareCarrierMoments(FluidDomain domain, int cell, CellRemapTransportMoments.Result result) {
+		int[] coordinate = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
+		for (int d = 0; d < result.markerWeights().length; d++) {
+			var mass = mmm.chemistry.ExactRational.ZERO; var kinetic = mass;
+			var momentum = new mmm.chemistry.ExactRational[] {mass, mass, mass};
+			var position = momentum.clone(); var motion = momentum.clone();
+			for (int i = 0; i < result.ordinals().length; i++) {
+				int p = result.ordinals()[i]; var weight = result.markerWeights()[d][i];
+				check(weight.signum() >= 0, "Aggregate moment used a negative carrier weight");
+				var wm = rawRational(domain.particles.mass(p)).multiply(weight);
+				var wv = rawRational(domain.particles.volume(p)).multiply(weight); mass = mass.add(wm);
+				double[] xyz = {domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
+				double[] uvw = {domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
+				for (int a = 0; a < 3; a++) {
+					var u = rawRational(uvw[a]);
+					momentum[a] = momentum[a].add(wm.multiply(u)); kinetic = kinetic.add(wm.multiply(u.multiply(u)));
+					position[a] = position[a].add(wv.multiply(rawRational(xyz[a] / domain.config.cellSize() - coordinate[a] - .5)));
+					motion[a] = motion[a].add(wv.multiply(u));
+				}
+			}
+			checkSameObservation(result.mass()[d], mass, "Aggregate mass"); checkSameObservation(result.kinetic()[d], kinetic, "Aggregate kinetic moment");
+			check(result.massRounding()[d].equals(rawRational(result.mass()[d]).subtract(mass)), "Aggregate mass rounding changed");
+			check(result.kineticRounding()[d].equals(rawRational(result.kinetic()[d]).subtract(kinetic)), "Aggregate kinetic rounding changed");
+			for (int a = 0; a < 3; a++) {
+				checkSameObservation(result.momentum()[d][a], momentum[a], "Aggregate momentum");
+				checkSameObservation(result.volumeMoment()[d][a], position[a], "Aggregate volume moment");
+				checkSameObservation(result.volumeMotion()[d][a], motion[a], "Aggregate volume motion");
+				check(result.momentumRounding()[d][a].equals(rawRational(result.momentum()[d][a]).subtract(momentum[a])), "Aggregate momentum rounding changed");
+			}
+		}
+		for (int i = 0; i < result.ordinals().length; i++) {
+			var sum = mmm.chemistry.ExactRational.ZERO;
+			for (var weights : result.markerWeights()) sum = sum.add(weights[i]);
+			check(sum.equals(mmm.chemistry.ExactRational.ONE), "Aggregate source weights do not close exactly");
+		}
+	}
+
+	private static mmm.chemistry.ExactRational rawRational(double value) {
+		return PlicComponentGeometry.ratio(mmm.units.SignedDyadic.of(value), mmm.units.SignedDyadic.of(1));
+	}
+	private static void checkSameObservation(double actual, mmm.chemistry.ExactRational expected, String label) {
+		check(Double.doubleToRawLongBits(actual) == Double.doubleToRawLongBits(expected.toDouble()), label + " changed binary64 rounding");
 	}
 
 	/** A full uniform-density cell has its geometric centroid and the original tensor rule. */
