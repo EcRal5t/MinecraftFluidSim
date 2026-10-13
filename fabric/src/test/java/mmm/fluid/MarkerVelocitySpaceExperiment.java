@@ -74,13 +74,24 @@ final class MarkerVelocitySpaceExperiment {
 
 	private static void disconnectedComponentMotion() {
 		var fixture = componentFixture(); var basis = CellAffineVelocity.capture(fixture.domain()); var input = fixture.velocity();
-		var coefficients = new double[3][4 * basis.cellCount()]; basis.fit(input, coefficients);
+		var coefficients = new double[3][4 * basis.blockCount()]; basis.fit(input, coefficients);
 		var resolved = new double[3][16]; basis.predict(coefficients, resolved);
 		double relative = 0;
 		for (int a = 0; a < 3; a++) for (int i = 0; i < 16; i++) relative += basis.massKilograms(i) * Math.pow(input[a][i] - resolved[a][i], 2);
 		relative = Math.sqrt(relative / (2 * energy(basis, input)));
 		System.out.printf("Disconnected component motion: relative fit error=%g%n", relative);
 		near(relative, 0, 1e-13, "A common cell fit coupled separately resolved component circulation");
+		var field=new CellAffineVelocityField(basis,coefficients);
+		for(int marker=0;marker<basis.markerCount();marker++)for(int axis=0;axis<3;axis++)
+			near(field.value(axis,basis.physicalCell(basis.markerBlock(marker)),basis.position(marker,0),basis.position(marker,1),basis.position(marker,2)),
+					resolved[axis][marker],1e-14,"Point sample selected another fixed component");
+		var domain=fixture.domain(); domain.sealDomainBoundary(); domain.ensureGrid(); domain.gasTopologyCoordinator.refresh();
+		domain.bodyForceStage.applyGravity(.001F);
+		var projection=domain.pressureSystem.markerProjection(); projection.prepare(.001F);
+		int first=projection.rowOfLiquidBlock(projection.basis().markerBlock(0));
+		int second=projection.rowOfLiquidBlock(projection.basis().markerBlock(8));
+		if(first<0 || second<0 || first==second || !projection.solve(domain.config.pressureTolerance()).converged())
+			throw new AssertionError("Disconnected liquid components lost independent production pressure rows");
 	}
 	static ComponentFixture componentFixture() {
 		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, 0));

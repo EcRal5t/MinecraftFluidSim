@@ -8,7 +8,7 @@ import java.util.TreeMap;
 
 /** Fixed volume and normal-trace constraints pulled back through the actual-mass cell basis. */
 final class CellVelocityConstraintOperator {
-	record Block(int cell, int axis, double[] coefficients) {
+	record Block(int velocityBlock, int axis, double[] coefficients) {
 		Block {
 			if (coefficients == null || coefficients.length != 4) throw new IllegalArgumentException("Invalid cell constraint block");
 			coefficients = coefficients.clone();
@@ -43,9 +43,9 @@ final class CellVelocityConstraintOperator {
 		for (int row = 0; row < rows.size(); row++) {
 			Row definition = rows.get(row); storage[row] = definition.storage; boolean expanded = false;
 			for (Block block : definition.blocks) {
-				if (block.cell < 0 || block.cell >= basis.cellCount() || block.axis < 0 || block.axis >= 3)
+				if (block.velocityBlock < 0 || block.velocityBlock >= basis.blockCount() || block.axis < 0 || block.axis >= 3)
 					throw new IllegalArgumentException("Cell constraint references an invalid velocity block");
-				expanded |= basis.expandedCell(block.cell);
+				expanded |= basis.expandedCell(block.velocityBlock);
 			}
 			hasExpandedRows |= expanded;
 			if (expanded) appendExpanded(basis, definition, entryIndices, high, low);
@@ -72,8 +72,8 @@ final class CellVelocityConstraintOperator {
 
 	private void appendFast(CellAffineVelocity basis, Row row, List<Integer> indices, List<Double> high, List<Double> low) {
 		var merged = new TreeMap<Integer, Double>();
-		for (Block block : row.blocks) for (int ordinal = 0; ordinal < basis.cellMarkerCount(block.cell); ordinal++) {
-			int marker = basis.cellMarker(block.cell, ordinal); double value = 0;
+		for (Block block : row.blocks) for (int ordinal = 0; ordinal < basis.blockMarkerCount(block.velocityBlock); ordinal++) {
+			int marker = basis.blockMarker(block.velocityBlock, ordinal); double value = 0;
 			for (int term = 0; term < 4; term++) value = Math.fma(block.coefficients[term], basis.coefficient(marker, block.axis, term), value);
 			if (!Double.isFinite(value)) throw new IllegalArgumentException("Pulled-back cell constraint is unrepresentable");
 			if (value != 0) merged.merge(block.axis * markerCount + marker, value, Double::sum);
@@ -85,8 +85,8 @@ final class CellVelocityConstraintOperator {
 	}
 	private void appendExpanded(CellAffineVelocity basis, Row row, List<Integer> indices, List<Double> high, List<Double> low) {
 		var merged = new TreeMap<Integer, SignedDyadic>();
-		for (Block block : row.blocks) for (int ordinal = 0; ordinal < basis.cellMarkerCount(block.cell); ordinal++) {
-			int marker = basis.cellMarker(block.cell, ordinal); SignedDyadic value = SignedDyadic.ZERO;
+		for (Block block : row.blocks) for (int ordinal = 0; ordinal < basis.blockMarkerCount(block.velocityBlock); ordinal++) {
+			int marker = basis.blockMarker(block.velocityBlock, ordinal); SignedDyadic value = SignedDyadic.ZERO;
 			for (int term = 0; term < 4; term++) if (block.coefficients[term] != 0)
 				value = value.add(SignedDyadic.of(block.coefficients[term]).multiply(basis.coefficientExact(marker, block.axis, term)));
 			if (value.signum() != 0) merged.merge(block.axis * markerCount + marker, value, SignedDyadic::add);

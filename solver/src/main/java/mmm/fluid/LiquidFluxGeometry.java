@@ -31,11 +31,17 @@ final class LiquidFluxGeometry {
 	private double poreScale(int cell) { return cut.openCellVolume(cell) > 0 ? capacity(cell) / cut.openCellVolume(cell) : 0; }
 
 	double aperture(int left, int right, int axis) {
+		return aperture(left,right,axis,255,255);
+	}
+	double aperture(int left, int right, int axis, int leftSupport, int rightSupport) {
 		double pore = Math.min(poreScale(left), poreScale(right));
-		if (cut.mask(left) == 0 && cut.mask(right) == 0) return pore;
+		if (cut.mask(left) == 0 && cut.mask(right) == 0 && leftSupport==255 && rightSupport==255) return pore;
 		int open = 0;
-		for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++)
-			if (openFace(left, right, axis, a, b)) open++;
+		for (int micro=0;micro<8;micro++) if((micro>>axis&1)!=0) {
+			int peer=micro^(1<<axis);
+			if((leftSupport&1<<micro)!=0 && (rightSupport&1<<peer)!=0
+					&& (cut.mask(left)&1<<micro)==0 && (cut.mask(right)&1<<peer)==0)open++;
+		}
 		return 0.25 * open * pore;
 	}
 
@@ -186,11 +192,4 @@ final class LiquidFluxGeometry {
 		return sum;
 	}
 
-	private boolean openFace(int left, int right, int axis, int a, int b) {
-		return switch (axis) {
-			case 0 -> cut.microCellOpen(left, 1, a, b) && cut.microCellOpen(right, 0, a, b);
-			case 1 -> cut.microCellOpen(left, a, 1, b) && cut.microCellOpen(right, a, 0, b);
-			default -> cut.microCellOpen(left, a, b, 1) && cut.microCellOpen(right, a, b, 0);
-		};
-	}
 }

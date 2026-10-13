@@ -78,11 +78,11 @@ public final class PressureTransferExperiment {
 						+ 128 * Math.ulp(Math.max(1, Math.abs(rate[row]))), "Float marker continuity");
 			}
 			var rep2g = new double[][]{new double[transfer.faceCount(0)], new double[transfer.faceCount(1)], new double[transfer.faceCount(2)]};
-			var fitted = new double[3][4 * d.cellCount]; j.fit(actual, fitted); transfer.apply(fitted, rep2g); var actualMac = faces(d);
+			var fitted = new double[3][4 * j.blockCount()]; j.fit(actual, fitted); transfer.apply(fitted, rep2g); var actualMac = faces(d);
 			for (int marker = 0; marker < j.markerCount(); marker++) {
 				float x = d.particles.positionX(marker), y = d.particles.positionY(marker), z = d.particles.positionZ(marker);
 				var observed = d.sampleVelocity(x, y, z); float[] components = {observed.x(), observed.y(), observed.z()};
-				for (int axis = 0; axis < 3; axis++) near(components[axis], (float) j.value(fitted, axis, j.markerCell(marker), x, y, z), 0,
+				for (int axis = 0; axis < 3; axis++) near(components[axis], (float) j.value(fitted, axis, j.markerBlock(marker), x, y, z), 0,
 						"Point observation preserves the published cell field");
 			}
 			for (int a = 0; a < 3; a++) for (int f = 0; f < transfer.faceCount(a); f++) if (transfer.wetArea(a, f) > 0
@@ -129,7 +129,7 @@ public final class PressureTransferExperiment {
 	private static void validateAffinePressureSupport(FluidDomain d, MarkerPressureProjection plan) {
 		var j = plan.basis(); var transfer = plan.transfer(); var c = plan.operator();
 		double[] load = new double[c.rowCount()];
-		int compactRow = plan.rowOfLiquidCell(d.cellIndex(1, 1, 1));
+		int compactRow = plan.rowOfLiquidBlock(j.blockForCell(d.cellIndex(1, 1, 1),0));
 		if (compactRow < 0) throw new AssertionError("Compact liquid pressure row missing");
 		load[compactRow] = 1;
 		var force = new double[3][j.markerCount()]; c.force(load, force);
@@ -147,11 +147,11 @@ public final class PressureTransferExperiment {
 				velocity[(rotation + 1) % 3][p] = -(rotation == 0 ? d.particles.positionZ(p) : rotation == 1 ? d.particles.positionX(p) : d.particles.positionY(p));
 				velocity[(rotation + 2) % 3][p] = rotation == 0 ? d.particles.positionY(p) : rotation == 1 ? d.particles.positionZ(p) : d.particles.positionX(p);
 			}
-			var coefficients = new double[3][4 * d.cellCount]; j.fit(velocity, coefficients);
+			var coefficients = new double[3][4 * j.blockCount()]; j.fit(velocity, coefficients);
 			var rates = new double[c.rowCount()]; c.volumeRate(velocity, rates);
-			for (int cell = 0; cell < d.cellCount; cell++) if (plan.rowOfLiquidCell(cell) >= 0
-					&& plan.geometry().cellSnapshot(cell).facets().stream().noneMatch(f -> f.kind() == LiquidPressureGeometry.FacetKind.WALL))
-				near(rates[plan.rowOfLiquidCell(cell)], 0, 3e-13, "Rigid translation/rotation liquid volume rate");
+			for (int block = 0; block < j.blockCount(); block++) if (plan.rowOfLiquidBlock(block) >= 0
+					&& plan.geometry().componentSnapshot(j.physicalCell(block),j.blockSupport(block)).facets().stream().noneMatch(f -> f.kind() == LiquidPressureGeometry.FacetKind.WALL))
+				near(rates[plan.rowOfLiquidBlock(block)], 0, 3e-13, "Rigid translation/rotation liquid volume rate");
 			var mapped = new double[][]{new double[transfer.faceCount(0)], new double[transfer.faceCount(1)], new double[transfer.faceCount(2)]};
 			transfer.apply(coefficients, mapped);
 			for (int a = 0; a < 3; a++) for (int f = 0; f < transfer.faceCount(a); f++) if (transfer.wetArea(a, f) > 0) {

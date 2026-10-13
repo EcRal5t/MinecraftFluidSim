@@ -89,7 +89,7 @@ final class MarkerGridBuilder {
 			markerVelocity[1][marker] = domain.particles.velocityY(marker);
 			markerVelocity[2][marker] = domain.particles.velocityZ(marker);
 		}
-		double[][] coefficients = new double[3][4 * domain.cellCount];
+		double[][] coefficients = new double[3][4 * basis.blockCount()];
 		basis.fit(markerVelocity, coefficients);
 		double[][] mapped = {new double[domain.mac.velocityX.length], new double[domain.mac.velocityY.length], new double[domain.mac.velocityZ.length]};
 		transfer.apply(coefficients, mapped);

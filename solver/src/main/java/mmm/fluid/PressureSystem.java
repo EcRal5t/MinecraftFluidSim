@@ -72,7 +72,7 @@ final class PressureSystem {
 		var field = markerVelocityField();
 		if (field == null) return null;
 		int cell = domain.particleCellIndex(x, y, z);
-		return field.hasCell(cell) ? field.sample(cell, x, y, z) : null;
+		return field.hasPoint(cell, x, y, z) ? field.sample(cell, x, y, z) : null;
 	}
 	boolean usesMarkerPressure() {
 		return !domain.hasGranularInventory()

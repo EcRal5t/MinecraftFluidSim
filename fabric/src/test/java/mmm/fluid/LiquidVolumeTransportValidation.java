@@ -484,10 +484,8 @@ public final class LiquidVolumeTransportValidation {
 			if (!domain.gridToParticleStage.advectionCells()[target] || domain.gridToParticleStage.advectionCells()[remote])
 				throw new AssertionError("Handoff fixture must contain connected and isolated carriers");
 			var trace = domain.pressureSystem.markerVelocityField();
-			double[] normalTrace = new double[3];
 			for (int axis = 0; axis < 3; axis++) for (boolean positive : new boolean[] {false, true}) {
-				trace.faceTrace(target, axis, positive, domain.sizeX, domain.sizeY, normalTrace);
-				for (double coefficient : normalTrace)
+				for (var component : trace.faceTraces(target, axis, positive, domain.sizeX, domain.sizeY)) for (double coefficient : component.q())
 					if (coefficient != 0) throw new AssertionError("Zero-flux fixture has a moving donor trace");
 			}
 			var before = carrierColumns(domain, target);

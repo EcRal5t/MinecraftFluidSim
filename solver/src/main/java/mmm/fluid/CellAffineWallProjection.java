@@ -32,7 +32,7 @@ final class CellAffineWallProjection {
 			work += .5 * basis.massKilograms(marker) * (after[axis][marker] - before[axis][marker]) * (after[axis][marker] + before[axis][marker]);
 		}
 		if (!Double.isFinite(work)) throw new FluidDomain.PressureSolveBlockedException("Unrepresentable transported wall work");
-		var coefficient = new double[3][4 * basis.cellCount()]; basis.fit(after, coefficient);
+		var coefficient = new double[3][4 * basis.blockCount()]; basis.fit(after, coefficient);
 		var field = new CellAffineVelocityField(basis, coefficient);
 		var transfer = CellAffineMacTransfer.capture(domain, basis, geometry);
 		var mapped = new double[][]{new double[transfer.faceCount(0)], new double[transfer.faceCount(1)], new double[transfer.faceCount(2)]};
@@ -51,11 +51,13 @@ final class CellAffineWallProjection {
 
 	CellAffineWallProjection(FluidDomain domain, CellAffineVelocity basis, LiquidPressureGeometry geometry) {
 		this.basis = basis;
-		kinds = new byte[3 * basis.cellCount()]; centerOffsets = new double[kinds.length]; weights = new double[4 * kinds.length];
-		for (int cell = 0; cell < basis.cellCount(); cell++) {
-			var profile = geometry.cellSnapshot(cell); if (profile == null) continue;
+		kinds = new byte[3 * basis.blockCount()]; centerOffsets = new double[kinds.length]; weights = new double[4 * kinds.length];
+		for (int cell = 0; cell < basis.blockCount(); cell++) {
+			if (basis.blockMarkerCount(cell) == 0) continue;
+			int physical = basis.physicalCell(cell);
+			var profile = geometry.componentSnapshot(physical, basis.blockSupport(cell)); if (profile == null) continue;
 			int[] planes = CellAffineVelocity.wallPlanes(profile);
-			int[] index = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
+			int[] index = {physical % domain.sizeX, physical / domain.sizeX % domain.sizeY, physical / (domain.sizeX * domain.sizeY)};
 			for (int axis = 0; axis < 3; axis++) {
 				int key = 3 * cell + axis;
 				if (planes[axis] == 0) continue;
@@ -72,8 +74,8 @@ final class CellAffineWallProjection {
 	private void captureMassProjection(int cell, int axis, int key) {
 		SignedDyadic denominator = SignedDyadic.ZERO;
 		SignedDyadic[] numerator = {SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO};
-		for (int ordinal = 0; ordinal < basis.cellMarkerCount(cell); ordinal++) {
-			int marker = basis.cellMarker(cell, ordinal); double[] feature = new double[4];
+		for (int ordinal = 0; ordinal < basis.blockMarkerCount(cell); ordinal++) {
+			int marker = basis.blockMarker(cell, ordinal); double[] feature = new double[4];
 			basis.pointWeights(cell, basis.position(marker, 0), basis.position(marker, 1), basis.position(marker, 2), feature);
 			SignedDyadic q = SignedDyadic.of(centerOffsets[key] + feature[axis + 1]);
 			SignedDyadic massTimesQ = SignedDyadic.of(basis.massKilograms(marker)).multiply(q);
@@ -93,22 +95,22 @@ final class CellAffineWallProjection {
 	CellVelocityConstraintOperator.Row transform(CellVelocityConstraintOperator.Row row) {
 		var blocks = new ArrayList<CellVelocityConstraintOperator.Block>();
 		for (var block : row.blocks()) {
-			int key = 3 * block.cell() + block.axis(); double[] coefficient = block.coefficients();
+			int key = 3 * block.velocityBlock() + block.axis(); double[] coefficient = block.coefficients();
 			if (kinds[key] == ZERO) continue;
 			if (kinds[key] == NORMAL_MODE) {
 				double amplitude = Math.fma(coefficient[0], centerOffsets[key], coefficient[block.axis() + 1]);
 				for (int term = 0; term < 4; term++) coefficient[term] = amplitude * weights[4 * key + term];
 			}
-			blocks.add(new CellVelocityConstraintOperator.Block(block.cell(), block.axis(), coefficient));
+			blocks.add(new CellVelocityConstraintOperator.Block(block.velocityBlock(), block.axis(), coefficient));
 		}
 		return new CellVelocityConstraintOperator.Row(blocks, row.storage());
 	}
 
 	/** Retains the unresolved residual and records the fixed-wall impulse once. */
 	void project(double[][] input, double[][] result, double[][] impulse) {
-		var coefficient = new double[3][4 * basis.cellCount()]; basis.fit(input, coefficient);
+		var coefficient = new double[3][4 * basis.blockCount()]; basis.fit(input, coefficient);
 		var before = new double[3][basis.markerCount()]; basis.predict(coefficient, before);
-		for (int cell = 0; cell < basis.cellCount(); cell++) for (int axis = 0; axis < 3; axis++) {
+		for (int cell = 0; cell < basis.blockCount(); cell++) for (int axis = 0; axis < 3; axis++) {
 			int key = 3 * cell + axis; if (kinds[key] == FREE) continue;
 			double amplitude = 0;
 			if (kinds[key] == NORMAL_MODE) for (int term = 0; term < 4; term++)
@@ -119,7 +121,7 @@ final class CellAffineWallProjection {
 		}
 		var after = new double[3][basis.markerCount()]; basis.predict(coefficient, after);
 		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < basis.markerCount(); marker++) {
-			double change = kinds[3 * basis.markerCell(marker) + axis] == FREE ? 0 : after[axis][marker] - before[axis][marker];
+			double change = kinds[3 * basis.markerBlock(marker) + axis] == FREE ? 0 : after[axis][marker] - before[axis][marker];
 			result[axis][marker] = input[axis][marker] + change;
 			impulse[axis][marker] = basis.massKilograms(marker) * change;
 			if (!Double.isFinite(result[axis][marker]) || !Double.isFinite(impulse[axis][marker]))

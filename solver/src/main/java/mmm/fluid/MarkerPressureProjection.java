@@ -19,6 +19,13 @@ final class MarkerPressureProjection {
 	private CellAffineWallProjection wallProjection;
 	private CellVelocityConstraintOperator operator;
 	private List<Row> rows;
+	private record SharedBlocks(int minus, int plus, int axis) implements Comparable<SharedBlocks> {
+		@Override public int compareTo(SharedBlocks other) {
+			int order=Integer.compare(axis,other.axis);
+			if(order==0)order=Integer.compare(plus,other.plus);
+			return order==0 ? Integer.compare(minus,other.minus) : order;
+		}
+	}
 	private int[] liquidRows, gasRows;
 	private double[][] originalVelocity, originalPosition, predictor, wallPredictor, wallImpulse, candidate, publishedVelocity, knownImpulse, faceCandidate, knownCellLoad;
 	private double[] originalMass, originalVolume, originalFraction, originalPlaneOffset, pressure, commonPressureMode, rhs, storage, gasInitialPressure, targetVolumeRate, observedPressure;
@@ -86,49 +93,51 @@ final class MarkerPressureProjection {
 		originalMacVelocity = copy(current); originalP2gVelocity = copy(previous);
 		int gasNodeCount = domain.gasState.network.nodeCount();
 		domain.projection.ensureGasCapacity(gasNodeCount);
-		liquidRows = new int[domain.cellCount]; gasRows = new int[gasNodeCount + 1];
+		liquidRows = new int[basis.blockCount()]; gasRows = new int[gasNodeCount + 1];
 		Arrays.fill(liquidRows, -1); Arrays.fill(gasRows, -1);
 		nodeStorage = new double[gasRows.length]; Arrays.fill(nodeStorage, Double.NaN);
 		var definitions = new ArrayList<Row>(); var gasBlocks = new TreeMap<Integer, List<Block>>();
 		knownCellLoad = cellVectors();
-		for (int cell = 0; cell < domain.cellCount; cell++) {
-			var profile = geometry.cellSnapshot(cell);
-			if (profile == null || !(profile.volume() > 0)) continue;
-			liquidRows[cell] = definitions.size(); var blocks = new ArrayList<Block>();
+		for (int block = 0; block < basis.blockCount(); block++) {
+			if (basis.blockMarkerCount(block)==0) continue;
+			var profile = blockProfile(block);
+			if (profile == null || !(profile.volume() > 0)) throw blocked("Liquid velocity block lacks positive wet geometry at block " + block);
+			liquidRows[block] = definitions.size(); var blocks = new ArrayList<Block>();
 			for (int axis = 0; axis < 3; axis++) {
-				double[] coefficient = new double[4]; basis.volumeDivergenceWeights(cell, axis, profile.volume(), coefficient);
-				blocks.add(new Block(cell, axis, coefficient));
+				double[] coefficient = new double[4]; basis.volumeDivergenceWeights(block, axis, profile.volume(), coefficient);
+				blocks.add(new Block(block, axis, coefficient));
 			}
 			definitions.add(new Row(blocks, 0));
 		}
-		// A single whole-face trace test spans the same affine traces as its microfacets.
-		var shared = new TreeMap<Long, LiquidPressureGeometry.SurfaceMoments>();
-		var identities = new TreeMap<Long, LiquidPressureGeometry.SharedFace>();
+		// Aggregate only microfaces sharing both actual velocity blocks.
+		var shared = new TreeMap<SharedBlocks, LiquidPressureGeometry.SurfaceMoments>();
 		for (var face : geometry.sharedFaces()) {
-			long key = (long) face.axis() * domain.cellCount + face.plusCell();
-			shared.merge(key, face.moments(), LiquidPressureGeometry.SurfaceMoments::add); identities.putIfAbsent(key, face);
+			var key = new SharedBlocks(ownerBlock(face.minusCell(),face.minusMicro()),ownerBlock(face.plusCell(),face.plusMicro()),face.axis());
+			shared.merge(key, face.moments(), LiquidPressureGeometry.SurfaceMoments::add);
 		}
 		int sharedStart = definitions.size();
 		for (var entry : shared.entrySet()) {
-			var face = identities.get(entry.getKey());
+			var face = entry.getKey();
 			for (int test = 0; test < 3; test++) definitions.add(new Row(List.of(
-					new Block(face.minusCell(), face.axis(), trace(face.minusCell(), face.axis(), entry.getValue(), test, 1)),
-					new Block(face.plusCell(), face.axis(), trace(face.plusCell(), face.axis(), entry.getValue(), test, -1))), 0));
+					new Block(face.minus(), face.axis(), trace(face.minus(), face.axis(), entry.getValue(), test, 1)),
+					new Block(face.plus(), face.axis(), trace(face.plus(), face.axis(), entry.getValue(), test, -1))), 0));
 		}
 		int sharedEnd = definitions.size();
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			var profile = geometry.cellSnapshot(cell); if (profile == null) continue;
 			for (var facet : profile.facets()) {
 				if (facet.kind() == LiquidPressureGeometry.FacetKind.GAS) {
-					freeBoundary(cell, gasNode(facet.gasPiece()), List.of(new Block(cell, facet.axis(), trace(cell, facet.axis(), facet.moments(), 0, facet.sign()))), gasBlocks);
+					int block=ownerBlock(cell,facet.microKey()/6);
+					freeBoundary(cell, gasNode(facet.gasPiece()), List.of(new Block(block, facet.axis(), trace(block, facet.axis(), facet.moments(), 0, facet.sign()))), gasBlocks);
 				}
 			}
 			for (var fragment : profile.freeFragments()) {
+				int block=ownerBlock(cell,fragment.microKey());
 				var blocks = new ArrayList<Block>();
 				for (int axis = 0; axis < 3; axis++) {
 					double n = fragment.areaNormal().component(axis); double[] coefficient = new double[4]; coefficient[0] = n;
-					for (int b = 0; b < 3; b++) coefficient[b + 1] = (fragment.normalFirstMoment().row(axis).component(b) - n * basis.center(cell, b)) / basis.cellSize();
-					blocks.add(new Block(cell, axis, coefficient));
+					for (int b = 0; b < 3; b++) coefficient[b + 1] = (fragment.normalFirstMoment().row(axis).component(b) - n * basis.center(block, b)) / basis.cellSize();
+					blocks.add(new Block(block, axis, coefficient));
 				}
 				freeBoundary(cell, gasNode(fragment.gasPiece()), blocks, gasBlocks);
 			}
@@ -196,6 +205,14 @@ final class MarkerPressureProjection {
 		if (node < 0) throw blocked("Free liquid surface lacks current gas ownership at piece " + piece);
 		return node;
 	}
+	private int ownerBlock(int cell,int micro) {
+		int block=basis.blockForMicro(cell,micro);
+		if(block<0)throw blocked("Wet microface lacks actual component inertia at cell " + cell + ", micro " + micro);
+		return block;
+	}
+	private LiquidPressureGeometry.Profile blockProfile(int block) {
+		return geometry.componentSnapshot(basis.physicalCell(block),basis.blockSupport(block));
+	}
 	private void freeBoundary(int cell, int node, List<Block> blocks, TreeMap<Integer, List<Block>> gasBlocks) {
 		hasFreeSurface = true;
 		double jump = domain.tension.surfaceTensionPressure[cell];
@@ -203,10 +220,10 @@ final class MarkerPressureProjection {
 		double known = jump + (finite ? 0 : node > 0 ? boundary.gasPressureOfNode(node) - pressureReference : -pressureReference);
 		for (var block : blocks) {
 			double[] coefficient = block.coefficients();
-			for (int term = 0; term < 4; term++) knownCellLoad[block.axis()][4 * cell + term] -= known * coefficient[term];
+			for (int term = 0; term < 4; term++) knownCellLoad[block.axis()][4 * block.velocityBlock() + term] -= known * coefficient[term];
 			if (finite) {
 				for (int term = 0; term < 4; term++) coefficient[term] = -coefficient[term];
-				gasBlocks.computeIfAbsent(node, ignored -> new ArrayList<>()).add(new Block(cell, block.axis(), coefficient));
+				gasBlocks.computeIfAbsent(node, ignored -> new ArrayList<>()).add(new Block(block.velocityBlock(), block.axis(), coefficient));
 			}
 		}
 	}
@@ -294,21 +311,25 @@ final class MarkerPressureProjection {
 	}
 
 	private void preparePressureObservation(double[][] force) {
-		double[][] traction = new double[3][domain.cellCount];
+		Arrays.fill(observedPressure,0);
+		double[][] traction = new double[3][basis.blockCount()];
 		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < basis.markerCount(); marker++)
-			traction[axis][basis.markerCell(marker)] += force[axis][marker] + (knownImpulse[axis][marker] + wallImpulse[axis][marker]) / dt;
-		for (int cell = 0; cell < domain.cellCount; cell++) if (liquidRows[cell] >= 0) {
-			var profile = geometry.cellSnapshot(cell); double value = pressure[liquidRows[cell]];
+			traction[axis][basis.markerBlock(marker)] += force[axis][marker] + (knownImpulse[axis][marker] + wallImpulse[axis][marker]) / dt;
+		double[] volume = new double[domain.cellCount];
+		for (int block = 0; block < basis.blockCount(); block++) if (liquidRows[block] >= 0) {
+			int cell=basis.physicalCell(block);
+			var profile = blockProfile(block); double value = pressure[liquidRows[block]];
 			int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY, z = cell / (domain.sizeX * domain.sizeY);
 			for (int axis = 0; axis < 3; axis++) {
 				double center = ((axis == 0 ? x : axis == 1 ? y : z) + .5) * basis.cellSize();
-				value -= traction[axis][cell] / profile.volume() * (center - profile.centroid().component(axis));
+				value -= traction[axis][block] / profile.volume() * (center - profile.centroid().component(axis));
 			}
-			observedPressure[cell] = value;
+			observedPressure[cell] += value * profile.volume(); volume[cell] += profile.volume();
 		}
+		for(int cell=0;cell<domain.cellCount;cell++)if(volume[cell]>0)observedPressure[cell]/=volume[cell];
 		// The closed-system pressure gauge changes observation, never the solved force.
 		double gauge = !hasFreeSurface && pressureAnchor >= 0 && pressureAnchor < liquidRows.length && liquidRows[pressureAnchor] >= 0 ? observedPressure[pressureAnchor] : 0;
-		for (int cell = 0; cell < domain.cellCount; cell++) if (liquidRows[cell] >= 0) {
+		for (int cell = 0; cell < domain.cellCount; cell++) if (volume[cell] > 0) {
 			observedPressure[cell] -= gauge;
 			if (!Float.isFinite((float) observedPressure[cell])) throw blocked("Unrepresentable resolved cell pressure");
 		}
@@ -328,7 +349,7 @@ final class MarkerPressureProjection {
 		for (int axis = 0; axis < 3; axis++) for (int face = 0; face < mac[axis].length; face++) mac[axis][face] = (float) faceCandidate[axis][face];
 		domain.pressureSystem.updateMarkerVelocityField(candidateField);
 		domain.projection.fluidUnknownCount = 0;
-		for (int cell = 0; cell < liquidRows.length; cell++) if (liquidRows[cell] >= 0) {
+		for (int cell = 0; cell < domain.cellCount; cell++) if (geometry.cellSnapshot(cell)!=null) {
 			domain.projection.pressure[cell] = (float) observedPressure[cell];
 			domain.projection.fluidUnknownCells[domain.projection.fluidUnknownCount++] = cell;
 		}
@@ -369,7 +390,7 @@ final class MarkerPressureProjection {
 	boolean active() { return active; }
 	boolean published() { return published; }
 	double liquidPressure(int cell) { return observedPressure[cell]; }
-	int rowOfLiquidCell(int cell) { return liquidRows[cell]; }
+	int rowOfLiquidBlock(int block) { return liquidRows[block]; }
 	double gasPressure(int node) { return gasRows[node] < 0 ? 0 : pressure[gasRows[node]]; }
 	CellVelocityConstraintOperator operator() { return operator; }
 	CellAffineMacTransfer transfer() { return transfer; }
@@ -390,7 +411,7 @@ final class MarkerPressureProjection {
 		if (!Double.isFinite(result)) throw blocked("Unrepresentable actual marker kinetic energy"); return result;
 	}
 	private double[][] faces() { return new double[][]{new double[transfer.faceCount(0)], new double[transfer.faceCount(1)], new double[transfer.faceCount(2)]}; }
-	private double[][] cellVectors() { return new double[3][4 * domain.cellCount]; }
+	private double[][] cellVectors() { return new double[3][4 * basis.blockCount()]; }
 	private static double[][] markers(int count) { return new double[3][count]; }
 	private static double[][] copy(double[][] value) { return new double[][]{value[0].clone(), value[1].clone(), value[2].clone()}; }
 	private static float[][] copy(float[][] value) { return new float[][]{value[0].clone(), value[1].clone(), value[2].clone()}; }

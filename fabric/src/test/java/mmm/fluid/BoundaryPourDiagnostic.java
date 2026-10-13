@@ -104,40 +104,43 @@ public final class BoundaryPourDiagnostic {
 		for (int p = 0; p < d.particleCount(); p++) {
 			velocity[0][p] = d.particles.velocityX(p); velocity[1][p] = d.particles.velocityY(p); velocity[2][p] = d.particles.velocityZ(p);
 		}
-		var coefficients = new double[3][4 * d.cellCount]; basis.fit(velocity, coefficients);
+		var coefficients = new double[3][4 * basis.blockCount()]; basis.fit(velocity, coefficients);
 		var field = new CellAffineVelocityField(basis, coefficients);
-		double gradient = 0, trace = 0; int gradientCell = -1, traceCell = -1;
-		for (int cell = 0; cell < d.cellCount; cell++) if (field.hasCell(cell)) for (int axis = 0; axis < 3; axis++) {
+		double gradient = 0, trace = 0; int gradientBlock = -1, traceBlock = -1;
+		for (int block = 0; block < basis.blockCount(); block++) if (basis.blockMarkerCount(block) > 0) for (int axis = 0; axis < 3; axis++) {
 			for (int term = 1; term < 4; term++) {
-				double value = Math.abs(coefficients[axis][4 * cell + term] / basis.cellSize());
-				if (value > gradient) { gradient = value; gradientCell = cell; }
+				double value = Math.abs(coefficients[axis][4 * block + term] / basis.cellSize());
+				if (value > gradient) { gradient = value; gradientBlock = block; }
 			}
-			for (boolean positive : new boolean[]{false, true}) {
-				var q = new double[3]; field.faceTrace(cell, axis, positive, d.sizeX, d.sizeY, q);
+		}
+		for (int cell = 0; cell < d.cellCount; cell++) if (field.hasCell(cell)) for (int axis = 0; axis < 3; axis++)
+			for (boolean positive : new boolean[]{false, true}) for (var part : field.faceTraces(cell, axis, positive, d.sizeX, d.sizeY)) {
+				var q = part.q(); int block = basis.blockForMicro(cell, Integer.numberOfTrailingZeros(part.support()));
 				for (int t = 0; t < 2; t++) for (int u = 0; u < 2; u++) {
 					double value = Math.abs(q[0] + t * q[1] + u * q[2]);
-					if (value > trace) { trace = value; traceCell = cell; }
+					if (value > trace) { trace = value; traceBlock = block; }
 				}
 			}
-		}
 		System.out.printf("POUR input=%s actualSpeed=%g markers=%d freshGradient=%g cell=%d fullTrace=%g cell=%d gridDirty=%s velocityDirty=%s%n",
-				stage, d.maximumParticleSpeed(), d.particleCount(), gradient, gradientCell, trace, traceCell, d.gridDirty, d.velocityGridDirty);
-		if (gradientCell >= 0) inputCell(d, basis, coefficients, gradientCell);
-		if (traceCell >= 0 && traceCell != gradientCell) inputCell(d, basis, coefficients, traceCell);
+				stage, d.maximumParticleSpeed(), d.particleCount(), gradient, gradientBlock < 0 ? -1 : basis.physicalCell(gradientBlock),
+				trace, traceBlock < 0 ? -1 : basis.physicalCell(traceBlock), d.gridDirty, d.velocityGridDirty);
+		if (gradientBlock >= 0) inputCell(d, basis, coefficients, gradientBlock);
+		if (traceBlock >= 0 && traceBlock != gradientBlock) inputCell(d, basis, coefficients, traceBlock);
 	}
 
-	private static void inputCell(FluidDomain d, CellAffineVelocity basis, double[][] coefficient, int cell) {
+	private static void inputCell(FluidDomain d, CellAffineVelocity basis, double[][] coefficient, int block) {
+		int cell = basis.physicalCell(block);
 		double mass = 0, volume = 0;
-		for (int k = 0; k < basis.cellMarkerCount(cell); k++) {
-			int p = basis.cellMarker(cell, k); mass += basis.massKilograms(p); volume += d.particles.volume(p);
+		for (int k = 0; k < basis.blockMarkerCount(block); k++) {
+			int p = basis.blockMarker(block, k); mass += basis.massKilograms(p); volume += d.particles.volume(p);
 		}
 		System.out.printf("POUR source cell=%d rank=%d expanded=%s count=%d kg=%g rawV=%g fraction=%g normal=[%g,%g,%g] offset=%g%n", cell,
-				basis.rank(cell), basis.expandedCell(cell), basis.cellMarkerCount(cell), mass, volume,
+				basis.rank(block), basis.expandedCell(block), basis.blockMarkerCount(block), mass, volume,
 				d.pressurePhaseGeometry.liquidFractionExact(cell), d.pressurePhaseGeometry.planeNormal(cell, 0),
 				d.pressurePhaseGeometry.planeNormal(cell, 1), d.pressurePhaseGeometry.planeNormal(cell, 2), d.pressurePhaseGeometry.planeOffset(cell));
-		for (int a = 0; a < 3; a++) System.out.printf("POUR source cell=%d axis=%d coefficients=%s%n", cell, a, Arrays.toString(Arrays.copyOfRange(coefficient[a], 4 * cell, 4 * cell + 4)));
-		for (int k = 0; k < Math.min(12, basis.cellMarkerCount(cell)); k++) {
-			int p = basis.cellMarker(cell, k);
+		for (int a = 0; a < 3; a++) System.out.printf("POUR source cell=%d axis=%d coefficients=%s%n", cell, a, Arrays.toString(Arrays.copyOfRange(coefficient[a], 4 * block, 4 * block + 4)));
+		for (int k = 0; k < Math.min(12, basis.blockMarkerCount(block)); k++) {
+			int p = basis.blockMarker(block, k);
 			System.out.printf("POUR source marker=%d pos=[%.12g,%.12g,%.12g] V=%.12g M=%.12g v=[%.12g,%.12g,%.12g]%n", p,
 					basis.position(p, 0), basis.position(p, 1), basis.position(p, 2), d.particles.volume(p), d.particles.mass(p),
 					d.particles.velocityX(p), d.particles.velocityY(p), d.particles.velocityZ(p));
@@ -161,15 +164,15 @@ public final class BoundaryPourDiagnostic {
 				attempt, substep, dt, d.maximumParticleSpeed(), d.particleCount(), outcome);
 		if (basis == null) return;
 		if (!value(projection, "active", Boolean.class)) {
-			var coefficient = new double[3][4 * d.cellCount];
+			var coefficient = new double[3][4 * basis.blockCount()];
 			var velocity = new double[3][basis.markerCount()];
 			for (int p = 0; p < basis.markerCount(); p++) {
 				velocity[0][p] = d.particles.velocityX(p); velocity[1][p] = d.particles.velocityY(p); velocity[2][p] = d.particles.velocityZ(p);
 			}
 			basis.fit(velocity, coefficient);
-			for (int cell = 0, shown = 0; cell < d.cellCount && shown < 4; cell++) if (basis.cellMarkerCount(cell) > 0
-					&& (basis.rank(cell) < 4 || !basis.hasRepresentableBasis(cell))) {
-				inputCell(d, basis, coefficient, cell); shown++;
+			for (int block = 0, shown = 0; block < basis.blockCount() && shown < 4; block++) if (basis.blockMarkerCount(block) > 0
+					&& (basis.rank(block) < 4 || !basis.hasRepresentableBasis(block))) {
+				inputCell(d, basis, coefficient, block); shown++;
 			}
 			return;
 		}
@@ -184,7 +187,7 @@ public final class BoundaryPourDiagnostic {
 				energy += .5 * basis.massKilograms(p) * speed * speed;
 				if (speed > maximum) { maximum = speed; marker = p; }
 			}
-			System.out.printf("POUR velocity=%s max=%g KE=%g marker=%d cell=%d%n", name, maximum, energy, marker, marker < 0 ? -1 : basis.markerCell(marker));
+			System.out.printf("POUR velocity=%s max=%g KE=%g marker=%d cell=%d%n", name, maximum, energy, marker, marker < 0 ? -1 : basis.physicalCell(basis.markerBlock(marker)));
 		}
 		if (!hasCandidate || field == null || geometry == null) return;
 		if (value(field, "basis", CellAffineVelocity.class) != basis) {
@@ -193,37 +196,47 @@ public final class BoundaryPourDiagnostic {
 		}
 		pressureWork(projection, basis, value(projection, "dt", Float.class));
 		double[][] coefficient = value(field, "coefficients", double[][].class);
-		double largest = 0; int worstCell = -1, worstAxis = -1, worstTerm = -1;
-		for (int cell = 0; cell < d.cellCount; cell++) if (field.hasCell(cell))
+		double largest = 0; int worstBlock = -1, worstAxis = -1, worstTerm = -1;
+		for (int block = 0; block < basis.blockCount(); block++) if (basis.blockMarkerCount(block) > 0)
 			for (int axis = 0; axis < 3; axis++) for (int term = 1; term < 4; term++) {
-				double derivative = Math.abs(coefficient[axis][4 * cell + term] / basis.cellSize());
-				if (derivative > largest) { largest = derivative; worstCell = cell; worstAxis = axis; worstTerm = term; }
+				double derivative = Math.abs(coefficient[axis][4 * block + term] / basis.cellSize());
+				if (derivative > largest) { largest = derivative; worstBlock = block; worstAxis = axis; worstTerm = term; }
 			}
-		System.out.printf("POUR affineGradient=%g cell=%d axis=%d term=%d%n", largest, worstCell, worstAxis, worstTerm);
+		System.out.printf("POUR affineGradient=%g cell=%d axis=%d term=%d%n", largest, worstBlock < 0 ? -1 : basis.physicalCell(worstBlock), worstAxis, worstTerm);
 		var faces = new ConservativeLiquidFlux(d.sizeX, d.sizeY, d.sizeZ);
 		var flow = new LiquidAffineFaceFlow(d, faces, field);
-		double traceMaximum = 0; int traceCell = -1, traceAxis = -1; boolean tracePositive = false;
+		double traceMaximum = 0; int traceCell = -1, traceBlock = -1, traceAxis = -1; boolean tracePositive = false;
 		for (int face = 0; face < faces.physicalFaceCount; face++) for (boolean positive : new boolean[]{false, true}) {
 			int donor = positive ? faces.left[face] : faces.right[face];
 			if (d.geometry.solid[faces.left[face]] || d.geometry.solid[faces.right[face]]) continue;
 			double speed = flow.maximumOutwardSpeed(face, positive, 0);
-			if (speed > traceMaximum) { traceMaximum = speed; traceCell = donor; traceAxis = faces.axis[face]; tracePositive = positive; }
+			if (speed > traceMaximum) {
+				traceMaximum = speed; traceCell = donor; traceAxis = faces.axis[face]; tracePositive = positive;
+				double largestPart = -1;
+				for (var part : field.faceTraces(donor, traceAxis, positive, d.sizeX, d.sizeY)) {
+					var q = part.q(); double bound = positive ? q[0] + Math.max(0, q[1]) + Math.max(0, q[2])
+							: -q[0] - Math.min(0, q[1]) - Math.min(0, q[2]);
+					if (bound > largestPart) { largestPart = bound; traceBlock = basis.blockForMicro(donor, Integer.numberOfTrailingZeros(part.support())); }
+				}
+			}
 		}
 		System.out.printf("POUR donorTraceBound=%g cell=%d axis=%d positive=%s courantRate=%g%n", traceMaximum,
 				traceCell, traceAxis, tracePositive, d.cellLiquidVolumeTransport == null ? Double.NaN : d.cellLiquidVolumeTransport.courantRate(0));
-		double wetMaximum = 0; int wetCell = -1; String surface = "none";
+		double wetMaximum = 0; int wetCell = -1, wetBlock = -1; String surface = "none";
 		for (int cell = 0; cell < d.cellCount; cell++) {
 			var profile = geometry.cellSnapshot(cell); if (profile == null || !field.hasCell(cell)) continue;
 			for (var facet : profile.facets()) {
 				var center = facet.moments().centroid();
-				double speed = Math.abs(field.value(facet.axis(), cell, center.x(), center.y(), center.z()));
-				if (speed > wetMaximum) { wetMaximum = speed; wetCell = cell; surface = facet.kind() + " axis=" + facet.axis() + " sign=" + facet.sign() + " micro=" + facet.microKey() / 6 + " area=" + facet.moments().area(); }
+				int block = basis.blockForMicro(cell, facet.microKey() / 6);
+				if (block < 0) throw new FluidDomain.PressureSolveBlockedException("Diagnostic wet facet lacks its source block");
+				double speed = Math.abs(basis.value(coefficient, facet.axis(), block, center.x(), center.y(), center.z()));
+				if (speed > wetMaximum) { wetMaximum = speed; wetCell = cell; wetBlock = block; surface = facet.kind() + " axis=" + facet.axis() + " sign=" + facet.sign() + " micro=" + facet.microKey() / 6 + " area=" + facet.moments().area(); }
 			}
 		}
 		System.out.printf("POUR wetFacetCentroidSpeed=%g cell=%d surface=%s%n", wetMaximum, wetCell, surface);
-		if (worstCell >= 0) cell(d, projection, basis, geometry, coefficient, worstCell);
-		if (wetCell >= 0 && wetCell != worstCell) cell(d, projection, basis, geometry, coefficient, wetCell);
-		if (traceCell >= 0 && traceCell != worstCell && traceCell != wetCell) cell(d, projection, basis, geometry, coefficient, traceCell);
+		if (worstBlock >= 0) cell(d, projection, basis, geometry, coefficient, worstBlock);
+		if (wetBlock >= 0 && wetBlock != worstBlock) cell(d, projection, basis, geometry, coefficient, wetBlock);
+		if (traceBlock >= 0 && traceBlock != worstBlock && traceBlock != wetBlock) cell(d, projection, basis, geometry, coefficient, traceBlock);
 	}
 
 	private static void pressureWork(MarkerPressureProjection projection, CellAffineVelocity basis, float dt) {
@@ -265,23 +278,23 @@ public final class BoundaryPourDiagnostic {
 	}
 
 	private static void cell(FluidDomain d, MarkerPressureProjection projection, CellAffineVelocity basis,
-	                         LiquidPressureGeometry geometry, double[][] coefficients, int cell) {
-		var profile = geometry.cellSnapshot(cell);
+	                         LiquidPressureGeometry geometry, double[][] coefficients, int block) {
+		int cell = basis.physicalCell(block); var profile = geometry.componentSnapshot(cell, basis.blockSupport(block));
 		double[] minimum = {Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY};
 		double[] maximum = {Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY};
 		double totalMass = 0;
-		for (int k = 0; k < basis.cellMarkerCount(cell); k++) {
-			int marker = basis.cellMarker(cell, k); totalMass += basis.massKilograms(marker);
+		for (int k = 0; k < basis.blockMarkerCount(block); k++) {
+			int marker = basis.blockMarker(block, k); totalMass += basis.massKilograms(marker);
 			for (int a = 0; a < 3; a++) { minimum[a] = Math.min(minimum[a], basis.position(marker, a)); maximum[a] = Math.max(maximum[a], basis.position(marker, a)); }
 		}
 		System.out.printf("POUR cell=%d rank=%d expanded=%s count=%d massKg=%g geometricVolume=%g centroid=%s positionMin=%s max=%s%n",
-				cell, basis.rank(cell), basis.expandedCell(cell), basis.cellMarkerCount(cell), totalMass,
+				cell, basis.rank(block), basis.expandedCell(block), basis.blockMarkerCount(block), totalMass,
 				profile == null ? 0 : profile.volume(), profile == null ? "none" : profile.centroid(), Arrays.toString(minimum), Arrays.toString(maximum));
-		for (int a = 0; a < 3; a++) System.out.printf("POUR cell=%d axis=%d coefficients=%s%n", cell, a, Arrays.toString(Arrays.copyOfRange(coefficients[a], 4 * cell, 4 * cell + 4)));
+		for (int a = 0; a < 3; a++) System.out.printf("POUR cell=%d axis=%d coefficients=%s%n", cell, a, Arrays.toString(Arrays.copyOfRange(coefficients[a], 4 * block, 4 * block + 4)));
 		double[] rawMass = value(projection, "originalMass", double[].class), rawVolume = value(projection, "originalVolume", double[].class);
 		double[][] velocity = value(projection, "publishedVelocity", double[][].class);
-		for (int k = 0; k < Math.min(12, basis.cellMarkerCount(cell)); k++) {
-			int marker = basis.cellMarker(cell, k);
+		for (int k = 0; k < Math.min(12, basis.blockMarkerCount(block)); k++) {
+			int marker = basis.blockMarker(block, k);
 			System.out.printf("POUR marker=%d position=[%g,%g,%g] rawV=%g rawM=%g velocity=[%g,%g,%g]%n", marker,
 					basis.position(marker, 0), basis.position(marker, 1), basis.position(marker, 2), rawVolume[marker], rawMass[marker],
 					velocity[0][marker], velocity[1][marker], velocity[2][marker]);

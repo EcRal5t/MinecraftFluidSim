@@ -10,9 +10,10 @@ import java.util.Arrays;
  * one actual amplitude per component, extended linearly to a single wetted normal wall.
  */
 final class CellAffineVelocity {
-	private final int cellCount, markerCount;
+	private final int physicalCellCount, blockCount, markerCount, sizeX, sizeY;
 	private final double h;
 	private final int[] cells, offsets, markers, ranks, hullPoints;
+	private final int[] blockCells, supports, extraOffsets;
 	private final double[] mass, position, center, coefficients, coefficientLow, directions, wallSlopes;
 	private final boolean[] representable, expanded;
 	private double[] wallCoefficients;
@@ -23,32 +24,53 @@ final class CellAffineVelocity {
 		return new CellAffineVelocity(domain, geometry);
 	}
 	private CellAffineVelocity(FluidDomain domain, LiquidPressureGeometry geometry) {
-		cellCount = domain.cellCount; markerCount = domain.particles.count(); h = domain.config.cellSize();
+		physicalCellCount = domain.cellCount; markerCount = domain.particles.count(); h = domain.config.cellSize();
+		sizeX = domain.sizeX; sizeY = domain.sizeY;
 		cells = new int[markerCount]; mass = new double[markerCount]; position = new double[3 * markerCount];
-		offsets = new int[cellCount + 1]; markers = new int[markerCount]; ranks = new int[cellCount];
-		center = new double[3 * cellCount]; directions = new double[9 * cellCount]; wallSlopes = new double[3 * cellCount];
-		hullPoints = new int[4 * cellCount]; Arrays.fill(hullPoints, -1);
-		coefficients = new double[4 * markerCount]; representable = new boolean[cellCount];
-		coefficientLow = new double[4 * markerCount]; expanded = new boolean[cellCount];
+		int[] active = new int[physicalCellCount];
 		for (int i = 0; i < markerCount; i++) {
-			cells[i] = domain.particleCellIndex(i); offsets[cells[i] + 1]++;
+			cells[i] = domain.particleCellIndex(i);
+			active[cells[i]] |= Integer.lowestOneBit(CellRemapMicroTopology.markerSupport(domain, i));
 			mass[i] = domain.unitScale.kilograms(domain.particles.mass(i));
 			if (!(mass[i] > 0 && Double.isFinite(mass[i]))) throw new IllegalStateException("Invalid affine marker mass");
 			position[3 * i] = domain.particles.positionX(i); position[3 * i + 1] = domain.particles.positionY(i); position[3 * i + 2] = domain.particles.positionZ(i);
 			for (int a = 0; a < 3; a++) if (!Double.isFinite(position[3 * i + a])) throw new IllegalStateException("Invalid affine marker position");
 		}
-		for (int c = 0; c < cellCount; c++) offsets[c + 1] += offsets[c];
+		extraOffsets = new int[physicalCellCount + 1];
+		for (int cell = 0; cell < physicalCellCount; cell++) extraOffsets[cell + 1] = Math.addExact(extraOffsets[cell], Math.max(0, Integer.bitCount(active[cell]) - 1));
+		blockCount = Math.addExact(physicalCellCount, extraOffsets[physicalCellCount]);
+		blockCells = new int[blockCount]; supports = new int[blockCount];
+		for (int cell = 0; cell < physicalCellCount; cell++) {
+			blockCells[cell] = cell; int ordinal = 0;
+			for (int support : CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell))) if ((active[cell] & Integer.lowestOneBit(support)) != 0) {
+				int extra = extraOffsets[cell] + ordinal - 1, block = ordinal == 0 ? cell : physicalCellCount + extra;
+				blockCells[block] = cell; supports[block] = support;
+				ordinal++;
+			}
+		}
+		offsets = new int[blockCount + 1]; markers = new int[markerCount]; ranks = new int[blockCount];
+		center = new double[3 * blockCount]; directions = new double[9 * blockCount]; wallSlopes = new double[3 * blockCount];
+		hullPoints = new int[4 * blockCount]; Arrays.fill(hullPoints, -1);
+		coefficients = new double[4 * markerCount]; representable = new boolean[blockCount];
+		coefficientLow = new double[4 * markerCount]; expanded = new boolean[blockCount];
+		for (int i = 0; i < markerCount; i++) {
+			int micro = CellRemapMicroTopology.positionMicro((float) h, (float) position[3 * i], (float) position[3 * i + 1], (float) position[3 * i + 2]);
+			cells[i] = blockForMicro(cells[i], micro);
+			if (cells[i] < 0) throw new IllegalStateException("Affine source lost its fixed open component");
+			offsets[cells[i] + 1]++;
+		}
+		for (int c = 0; c < blockCount; c++) offsets[c + 1] += offsets[c];
 		int[] cursor = offsets.clone();
 		for (int i = 0; i < markerCount; i++) markers[cursor[cells[i]]++] = i;
-		for (int c = 0; c < cellCount; c++) if (offsets[c] != offsets[c + 1]) {
+		for (int c = 0; c < blockCount; c++) if (offsets[c] != offsets[c + 1]) {
 			captureCenter(c); captureHull(c); representable[c] = fitMap(c) || fitExpandedMap(c);
 			if (geometry != null && ranks[c] == 1 && representable[c]) captureWallExtension(domain, geometry, c);
 		}
 	}
 	private void captureWallExtension(FluidDomain domain, LiquidPressureGeometry geometry, int cell) {
-		var profile = geometry.cellSnapshot(cell); if (profile == null) return;
+		int physical = physicalCell(cell); var profile = geometry.componentSnapshot(physical, blockSupport(cell)); if (profile == null) return;
 		int[] planes = wallPlanes(profile);
-		int[] index = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
+		int[] index = {physical % domain.sizeX, physical / domain.sizeX % domain.sizeY, physical / (domain.sizeX * domain.sizeY)};
 		for (int axis = 0; axis < 3; axis++) if (Integer.bitCount(planes[axis]) == 1) {
 			double wall = (index[axis] + .5 * Integer.numberOfTrailingZeros(planes[axis])) * h;
 			double offset = (center(cell, axis) - wall) / h; if (offset == 0) continue;
@@ -65,7 +87,7 @@ final class CellAffineVelocity {
 			}
 		}
 	}
-	static int[] wallPlanes(LiquidPressureGeometry.CellSnapshot profile) {
+	static int[] wallPlanes(LiquidPressureGeometry.Profile profile) {
 		int[] planes = new int[3];
 		for (var facet : profile.facets()) if (facet.kind() == LiquidPressureGeometry.FacetKind.WALL) {
 			int plane = (facet.microKey() / 6 >> facet.axis() & 1) + (facet.sign() > 0 ? 1 : 0);
@@ -191,19 +213,19 @@ final class CellAffineVelocity {
 	}
 
 	private boolean fitExpandedMap(int cell) {
-		int n = cellMarkerCount(cell), rank = ranks[cell];
+		int n = blockMarkerCount(cell), rank = ranks[cell];
 		var localMass = new double[n]; var feature = new double[rank][n]; var localDirections = new double[rank - 1][3];
 		for (int j = 0; j < rank - 1; j++) for (int a = 0; a < 3; a++) localDirections[j][a] = rank == 4
 				? (j == a ? 1 : 0) : directions[9 * cell + 3 * j + a];
 		for (int i = 0; i < n; i++) {
-			int marker = cellMarker(cell, i); localMass[i] = mass[marker]; feature[0][i] = 1;
+			int marker = blockMarker(cell, i); localMass[i] = mass[marker]; feature[0][i] = 1;
 			for (int j = 1; j < rank; j++) for (int a = 0; a < 3; a++) feature[j][i] += localDirections[j - 1][a]
 					* ((position[3 * marker + a] - center[3 * cell + a]) / h);
 		}
 		var fitted = ExactCellAffineFit.fit(localMass, feature, localDirections);
 		if (fitted == null) return false;
 		for (int i = 0; i < n; i++) {
-			int marker = cellMarker(cell, i);
+			int marker = blockMarker(cell, i);
 			for (int term = 0; term < 4; term++) {
 				coefficients[4 * marker + term] = fitted[0][4 * i + term]; coefficientLow[4 * marker + term] = fitted[1][4 * i + term];
 			}
@@ -212,11 +234,39 @@ final class CellAffineVelocity {
 	}
 
 	int markerCount() { return markerCount; }
-	int cellCount() { return cellCount; }
+	int blockCount() { return blockCount; }
+	int physicalCellCount() { return physicalCellCount; }
 	double cellSize() { return h; }
-	int markerCell(int marker) { return cells[marker]; }
-	int cellMarkerCount(int cell) { return offsets[cell + 1] - offsets[cell]; }
-	int cellMarker(int cell, int ordinal) { if (ordinal < 0 || ordinal >= cellMarkerCount(cell)) throw new IndexOutOfBoundsException("Unknown cell marker"); return markers[offsets[cell] + ordinal]; }
+	int markerBlock(int marker) { return cells[marker]; }
+	int physicalCell(int block) { return blockCells[block]; }
+	int blockSupport(int block) { return supports[block]; }
+	int blockCountForCell(int physicalCell) {
+		if (physicalCell < 0 || physicalCell >= physicalCellCount) throw new IllegalArgumentException("Invalid velocity cell");
+		return supports[physicalCell] == 0 ? 0 : 1 + extraOffsets[physicalCell + 1] - extraOffsets[physicalCell];
+	}
+	int blockForCell(int physicalCell, int ordinal) {
+		if (ordinal < 0 || ordinal >= blockCountForCell(physicalCell)) throw new IndexOutOfBoundsException("Unknown cell velocity block");
+		return ordinal == 0 ? physicalCell : physicalCellCount + extraOffsets[physicalCell] + ordinal - 1;
+	}
+	int blockMarkerCount(int block) { return offsets[block + 1] - offsets[block]; }
+	int blockMarker(int block, int ordinal) { if (ordinal < 0 || ordinal >= blockMarkerCount(block)) throw new IndexOutOfBoundsException("Unknown block marker"); return markers[offsets[block] + ordinal]; }
+	int blockForMicro(int physicalCell, int micro) {
+		if (physicalCell < 0 || physicalCell >= physicalCellCount || micro < 0 || micro >= 8) throw new IllegalArgumentException("Invalid velocity microbox");
+		int bit = 1 << micro;
+		if ((supports[physicalCell] & bit) != 0) return physicalCell;
+		for (int slot = extraOffsets[physicalCell]; slot < extraOffsets[physicalCell + 1]; slot++) {
+			int block = physicalCellCount + slot; if ((supports[block] & bit) != 0) return block;
+		}
+		return -1;
+	}
+	int blockForPoint(int physicalCell, double x, double y, double z) {
+		if (physicalCell < 0 || physicalCell >= physicalCellCount || !Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z))
+			throw new IllegalArgumentException("Invalid velocity sample point");
+		int micro = (x >= (physicalCell % sizeX + .5) * h ? 1 : 0)
+				| (y >= (physicalCell / sizeX % sizeY + .5) * h ? 2 : 0)
+				| (z >= (physicalCell / (sizeX * sizeY) + .5) * h ? 4 : 0);
+		return blockForMicro(physicalCell, micro);
+	}
 	int rank(int cell) { return ranks[cell]; }
 	boolean hasRepresentableBasis(int cell) { return representable[cell]; }
 	boolean expandedCell(int cell) { return expanded[cell]; }
@@ -255,7 +305,7 @@ final class CellAffineVelocity {
 		double value = 0; for (int j = 0; j < ranks[cell] - 1; j++) value += directions[9 * cell + 3 * j + first] * directions[9 * cell + 3 * j + second]; return value;
 	}
 	void fit(double[][] markerVelocity, double[][] cellCoefficients) {
-		checkShape(markerVelocity, markerCount); checkShape(cellCoefficients, 4 * cellCount); checkAlias(markerVelocity, cellCoefficients);
+		checkShape(markerVelocity, markerCount); checkShape(cellCoefficients, 4 * blockCount); checkAlias(markerVelocity, cellCoefficients);
 		for (double[] axis : cellCoefficients) Arrays.fill(axis, 0);
 		for (int i = 0; i < markerCount; i++) {
 			int cell = cells[i]; requireRepresentable(cell);
@@ -269,14 +319,14 @@ final class CellAffineVelocity {
 			}
 			for (int a = 0; a < 3; a++) for (int term = 0; term < 4; term++) cellCoefficients[a][4 * cell + term] += coefficients[4 * i + term] * markerVelocity[a][i];
 		}
-		for (int cell = 0; cell < cellCount; cell++) if (expanded[cell]) for (int a = 0; a < 3; a++) for (int term = 0; term < 4; term++) {
+		for (int cell = 0; cell < blockCount; cell++) if (expanded[cell]) for (int a = 0; a < 3; a++) for (int term = 0; term < 4; term++) {
 			SignedDyadic sum = SignedDyadic.ZERO;
 			for (int k = offsets[cell]; k < offsets[cell + 1]; k++) sum = sum.add(storedCoefficientExact(markers[k], a, term).multiply(SignedDyadic.of(markerVelocity[a][markers[k]])));
 			cellCoefficients[a][4 * cell + term] = sum.toDouble();
 		}
 	}
 	void transposeLoad(double[][] cellLoad, double[][] markerForce) {
-		checkShape(cellLoad, 4 * cellCount); checkShape(markerForce, markerCount); checkAlias(cellLoad, markerForce);
+		checkShape(cellLoad, 4 * blockCount); checkShape(markerForce, markerCount); checkAlias(cellLoad, markerForce);
 		for (double[] axis : markerForce) Arrays.fill(axis, 0);
 		for (int i = 0; i < markerCount; i++) {
 			int cell = cells[i]; requireRepresentable(cell);
@@ -297,7 +347,7 @@ final class CellAffineVelocity {
 		}
 	}
 	void predict(double[][] cellCoefficients, double[][] markerVelocity) {
-		checkShape(cellCoefficients, 4 * cellCount); checkShape(markerVelocity, markerCount); checkAlias(cellCoefficients, markerVelocity);
+		checkShape(cellCoefficients, 4 * blockCount); checkShape(markerVelocity, markerCount); checkAlias(cellCoefficients, markerVelocity);
 		for (int i = 0; i < markerCount; i++) for (int a = 0; a < 3; a++) markerVelocity[a][i] = value(cellCoefficients, a, cells[i], position[3 * i], position[3 * i + 1], position[3 * i + 2]);
 	}
 	double value(double[][] cellCoefficients, int axis, int cell, double x, double y, double z) {

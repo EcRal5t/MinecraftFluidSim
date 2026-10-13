@@ -46,7 +46,10 @@ final class LiquidPressureGeometry {
 	}
 	record SideWet(int axis, int sign, int microKey, SurfaceMoments moments) { }
 	/** One physical shared microface, oriented from the negative-axis cell to the positive-axis cell. */
-	record SharedFace(int minusCell, int plusCell, int axis, int microKey, SurfaceMoments moments) { }
+	record SharedFace(int minusCell, int plusCell, int axis, int microKey, SurfaceMoments moments) {
+		int plusMicro() { return (microKey&1)<<((axis+1)%3) | (microKey>>1&1)<<((axis+2)%3); }
+		int minusMicro() { return plusMicro() | 1<<axis; }
+	}
 	/** Rows store integral n_a*x_b; all fields are immutable and expressed in SI. */
 	record NormalFirstMoment(Vec3 x, Vec3 y, Vec3 z) { Vec3 row(int axis) { return axis == 0 ? x : axis == 1 ? y : z; } }
 	/** Wet integration piece and actual gas-side microbox are separate when PLIC coincides with a microface. */
@@ -58,15 +61,25 @@ final class LiquidPressureGeometry {
 		VolumeMoments add(VolumeMoments value) { return new VolumeMoments(volume + value.volume, firstMoment.add(value.firstMoment)); }
 		VolumeMoments scale(double value) { return value == 1 ? this : new VolumeMoments(volume * value, firstMoment.scale(value)); }
 	}
+	interface Profile {
+		int cell(); double volume(); Vec3 firstMoment(); Vec3 centroid();
+		List<SideWet> sideWet(); List<Facet> facets(); List<FreeFragment> freeFragments();
+	}
 	record CellSnapshot(int cell, double volume, Vec3 firstMoment, Vec3 centroid,
 	                    double admittedVolume, double rawMarkerVolume, double rawPressureVolume, double volumeErrorBound,
-	                    List<SideWet> sideWet, List<Facet> facets, List<FreeFragment> freeFragments) {
+	                    List<SideWet> sideWet, List<Facet> facets, List<FreeFragment> freeFragments) implements Profile {
 		CellSnapshot { sideWet=List.copyOf(sideWet); facets=List.copyOf(facets); freeFragments=List.copyOf(freeFragments); }
 	}
+	private record ComponentSnapshot(int cell, double volume, Vec3 firstMoment, Vec3 centroid,
+	                                 List<SideWet> sideWet, List<Facet> facets, List<FreeFragment> freeFragments) implements Profile { }
 	private final CellSnapshot[] cells;
+	private final Profile[][] components;
+	private final byte[] collisionMasks;
 	private final List<SharedFace> sharedFaces;
 
-	private LiquidPressureGeometry(CellSnapshot[] cells, List<SharedFace> faces) { this.cells=cells; sharedFaces=List.copyOf(faces); }
+	private LiquidPressureGeometry(CellSnapshot[] cells, Profile[][] components, byte[] masks, List<SharedFace> faces) {
+		this.cells=cells; this.components=components; collisionMasks=masks; sharedFaces=List.copyOf(faces);
+	}
 	static LiquidPressureGeometry capture(FluidDomain domain) {
 		return capture(domain, domain.pressurePhaseGeometry);
 	}
@@ -75,10 +88,11 @@ final class LiquidPressureGeometry {
 	}
 	static LiquidPressureGeometry capture(FluidDomain domain, FlipPressurePhaseGeometry phase, List<PhaseLiquidGeometryEdit> stock) {
 		if (stock != null && stock.size() != domain.cellCount) throw new IllegalArgumentException("Liquid geometry source stock has the wrong shape");
-		var cells = new CellSnapshot[domain.cellCount]; var faces = new ArrayList<SharedFace>();
+		var cells = new CellSnapshot[domain.cellCount]; var components = new Profile[domain.cellCount][];
+		var faces = new ArrayList<SharedFace>();
 		for (int cell=0;cell<cells.length;cell++) if(phase.liquidFractionExact(cell)>0)
-			cells[cell]=captureCell(domain,phase,cell,faces,stock == null ? domain.markerGrid.exactCellMarkerVolume[cell] : stock.get(cell).volume().toDouble());
-		return new LiquidPressureGeometry(cells,faces);
+			cells[cell]=captureCell(domain,phase,cell,faces,stock == null ? domain.markerGrid.exactCellMarkerVolume[cell] : stock.get(cell).volume().toDouble(),components);
+		return new LiquidPressureGeometry(cells,components,domain.geometry.cutCells.copyMicroMasks(),faces);
 	}
 	void forEachGasPiece(java.util.function.IntConsumer accept) {
 		for (var cell : cells) if (cell != null) {
@@ -87,6 +101,12 @@ final class LiquidPressureGeometry {
 		}
 	}
 	CellSnapshot cellSnapshot(int cell) { return cells[cell]; }
+	Profile componentSnapshot(int cell, int support) {
+		int[] masks = CellRemapMicroTopology.components(Byte.toUnsignedInt(collisionMasks[cell]));
+		for (int i=0;i<masks.length;i++) if(masks[i]==support)
+			return components[cell]==null ? cells[cell] : components[cell][i];
+		throw new IllegalArgumentException("Velocity support is not a fixed liquid component");
+	}
 	List<SharedFace> sharedFaces() { return sharedFaces; }
 	SurfaceMoments faceMoments(int minus, int plus, int axis) {
 		SurfaceMoments result=SurfaceMoments.EMPTY;
@@ -94,10 +114,12 @@ final class LiquidPressureGeometry {
 		return result;
 	}
 
-	private static CellSnapshot captureCell(FluidDomain d,FlipPressurePhaseGeometry plane,int cell,List<SharedFace> shared,double rawVolume) {
+	private static CellSnapshot captureCell(FluidDomain d,FlipPressurePhaseGeometry plane,int cell,List<SharedFace> shared,double rawVolume,Profile[][] components) {
 		var cut=d.geometry.cutCells;
 		double h=d.config.cellSize(), h3=h*h*h;
 		int[] index={cell%d.sizeX,cell/d.sizeX%d.sizeY,cell/(d.sizeX*d.sizeY)};
+		int[] supports=CellRemapMicroTopology.components(cut.mask(cell));
+		VolumeMoments[] pieces=supports.length>1 ? new VolumeMoments[8] : null;
 		double volume=0,mx=0,my=0,mz=0; int open=0;
 		var sides=new ArrayList<SideWet>(); var facets=new ArrayList<Facet>(); var fragments=new ArrayList<FreeFragment>();
 		for(int slot=0;slot<8;slot++) {
@@ -105,6 +127,10 @@ final class LiquidPressureGeometry {
 			open++; double ox=.5*micro[0],oy=.5*micro[1],oz=.5*micro[2]; var integral=unitMicroMoments(plane,cell,slot);
 			double boxVolume=integral[0]/8; volume+=boxVolume;
 			mx+=(ox*integral[0]+.5*integral[1])/8;my+=(oy*integral[0]+.5*integral[2])/8;mz+=(oz*integral[0]+.5*integral[3])/8;
+			if(pieces!=null)pieces[slot]=new VolumeMoments(boxVolume*h3,new Vec3(
+					h3*h*(index[0]*integral[0]+ox*integral[0]+.5*integral[1])/8,
+					h3*h*(index[1]*integral[0]+oy*integral[0]+.5*integral[2])/8,
+					h3*h*(index[2]*integral[0]+oz*integral[0]+.5*integral[3])/8));
 			double[] areaNormal=new double[3]; double[][] normalFirst=new double[3][3];
 			for(int axis=0;axis<3;axis++)for(int sign:new int[]{-1,1}) {
 				double coordinate=.5*(micro[axis]+(sign>0?1:0)), tangent=.5*micro[(axis+1)%3],other=.5*micro[(axis+2)%3];
@@ -155,6 +181,18 @@ final class LiquidPressureGeometry {
 		double error=(128.0*open+64)*Math.ulp(1.0)*h3+Math.ulp(admitted)+Math.ulp(volume);
 		if(!(volume>0 && Double.isFinite(volume)) || Math.abs(volume-admitted)>error)throw new IllegalStateException("PLIC pressure volume integration disagrees with admitted geometry at cell "+cell
 				+": integrated="+volume+", admitted="+admitted+", raw="+rawVolume*h3);
+		if(pieces!=null) {
+			components[cell]=new Profile[supports.length];
+			for(int i=0;i<supports.length;i++) {
+				int support=supports[i]; VolumeMoments total=VolumeMoments.EMPTY;
+				for(int micro=0;micro<8;micro++)if((support&1<<micro)!=0)total=total.add(pieces[micro]);
+				if(!(total.volume()>0))continue;
+				components[cell][i]=new ComponentSnapshot(cell,total.volume(),total.firstMoment(),total.firstMoment().scale(1/total.volume()),
+						sides.stream().filter(side->(support&1<<(side.microKey()/6))!=0).toList(),
+						facets.stream().filter(facet->(support&1<<(facet.microKey()/6))!=0).toList(),
+						fragments.stream().filter(fragment->(support&1<<fragment.microKey())!=0).toList());
+			}
+		}
 		return new CellSnapshot(cell,volume,first,first.scale(1/volume),admitted,rawVolume*h3,
 				d.projection.pressureVolume[cell]*h3,error,sides,facets,fragments);
 	}

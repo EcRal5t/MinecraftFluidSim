@@ -64,23 +64,7 @@ final class CellLiquidVolumeTransport {
 	}
 
 	private double affineCourantRate(LiquidAffineFaceFlow flow, double verticalPrediction) {
-		double maximum = 0, h = domain.config.cellSize(); Arrays.fill(outgoing, 0);
-		for (int face = 0; face < scalarTransport.physicalFaceCount; face++) {
-			int left = scalarTransport.left[face], right = scalarTransport.right[face];
-			if (domain.geometry.solid[left] || domain.geometry.solid[right]) continue;
-			double open = geometry.aperture(left, right, scalarTransport.axis[face]);
-			if (!(open > 0)) continue;
-			for (int direction = 0; direction < 2; direction++) {
-				int donor = direction == 0 ? left : right;
-				if (!domain.gridToParticleStage.advectionCells()[donor]) continue;
-				if (domain.markerGrid.exactCellVolumeInventory[donor].signum() == 0) continue;
-				double speed = flow.maximumOutwardSpeed(face, direction == 0, verticalPrediction);
-				outgoing[donor] += speed / h * open / geometry.capacity(donor);
-				if (geometry.partialFace(left, right)) maximum = Math.max(maximum, 2 * speed / h);
-			}
-		}
-		for (double rate : outgoing) maximum = Math.max(maximum, rate);
-		return maximum;
+		return flow.courantRate(geometry,verticalPrediction);
 	}
 
 	private float faceVelocity(int face) {

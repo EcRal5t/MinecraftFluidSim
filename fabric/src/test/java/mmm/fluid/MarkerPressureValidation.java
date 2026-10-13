@@ -56,16 +56,16 @@ public final class MarkerPressureValidation {
 		d.gasState.network.setStandardVolume(1, 1.23456789 * d.gasState.network.availableVolume(1));
 		d.bodyForceStage.applyGravity(.001F);
 		var plan = d.pressureSystem.markerProjection(); plan.prepare(.001F);
-		var basis = plan.basis(); int cell = basis.markerCell(0);
+		var basis = plan.basis(); int block = basis.markerBlock(0), cell = basis.physicalCell(block);
 		var profile = plan.geometry().cellSnapshot(cell);
-		if (basis.rank(cell) != 4 || profile == null || !(profile.volume() > 0 && profile.volume() < Math.pow(basis.cellSize(), 3))
+		if (basis.rank(block) != 4 || profile == null || !(profile.volume() > 0 && profile.volume() < Math.pow(basis.cellSize(), 3))
 				|| d.gasState.network.nodeCount() != 1 || d.gasState.network.inventory(1).isEmpty())
 			throw new AssertionError("Partial pressure gauge fixture lost its actual rank-four liquid and finite gas");
 		var constant = new double[plan.operator().rowCount()];
-		int liquidRow = plan.rowOfLiquidCell(cell);
+		int liquidRow = plan.rowOfLiquidBlock(block);
 		int liquidCount = 0;
 		for (int c = 0; c < cells; c++) {
-			int row = plan.rowOfLiquidCell(basis.markerCell(8 * c));
+			int row = plan.rowOfLiquidBlock(basis.markerBlock(8 * c));
 			if (row >= 0) { constant[row] = 1; liquidCount++; }
 		}
 		if (cells == 2 && constant.length - liquidCount - 1 != 3) throw new AssertionError("Adjacent partial cells lost their three shared trace rows");
@@ -78,7 +78,7 @@ public final class MarkerPressureValidation {
 		var bulk = new java.util.ArrayList<CellVelocityConstraintOperator.Block>();
 		for (int axis = 0; axis < 3; axis++) {
 			var coefficient = new double[4]; coefficient[axis + 1] = profile.volume() / basis.cellSize();
-			bulk.add(new CellVelocityConstraintOperator.Block(cell, axis, coefficient));
+			bulk.add(new CellVelocityConstraintOperator.Block(block, axis, coefficient));
 		}
 		var wall = new CellAffineWallProjection(d, basis, plan.geometry());
 		var bulkOperator = new CellVelocityConstraintOperator(basis, java.util.List.of(wall.transform(new CellVelocityConstraintOperator.Row(bulk, 0))));
@@ -91,12 +91,12 @@ public final class MarkerPressureValidation {
 			bulkMagnitude = Math.hypot(bulkMagnitude, missingBulkForce[axis][p]);
 		}
 		System.out.printf("Partial pressure gauge: cells=%d fraction=%g rank=%d liquidRow=%d constantForceNorm=%g missingVolumeForceNorm=%g deltaForceFor1000Pa=%g N%n",
-				cells, profile.volume() / Math.pow(basis.cellSize(), 3), basis.rank(cell), liquidRow, magnitude, bulkMagnitude, 1000 * magnitude);
+				cells, profile.volume() / Math.pow(basis.cellSize(), 3), basis.rank(block), liquidRow, magnitude, bulkMagnitude, 1000 * magnitude);
 		near(magnitude, 0, 2e-13, "Changing only the pressure reference changed actual carrier force");
 		if (!plan.solve(d.config.pressureTolerance()).converged())
 			throw new AssertionError("Stationary partial-liquid pressure did not converge");
 		plan.publish();
-		for (int c = 0; c < cells; c++) near(d.pressure(c, 0, 0), d.projection.pressure[basis.markerCell(8 * c)] + d.pressureReference, 0,
+		for (int c = 0; c < cells; c++) near(d.pressure(c, 0, 0), d.projection.pressure[basis.physicalCell(basis.markerBlock(8 * c))] + d.pressureReference, 0,
 				"Partial-liquid public pressure includes its reference");
 		near(d.maximumPressure(), d.pressure(0, 0, 0), 0, "Maximum pressure includes partial-liquid observation");
 	}
@@ -271,7 +271,7 @@ public final class MarkerPressureValidation {
 		d.ensureGrid(); var basis = CellAffineVelocity.capture(d);
 		var transfer = CellAffineMacTransfer.capture(d, basis, LiquidPressureGeometry.capture(d));
 		int left = d.cellIndex(0, 1, 1), right = d.cellIndex(1, 1, 1), face = d.xFaceIndex(1, 1, 1);
-		var coefficients = new double[3][4 * d.cellCount]; coefficients[0][4 * left] = 2; coefficients[0][4 * right] = 4;
+		var coefficients = new double[3][4 * basis.blockCount()]; coefficients[0][4 * left] = 2; coefficients[0][4 * right] = 4;
 		var mapped = new double[][]{new double[transfer.faceCount(0)], new double[transfer.faceCount(1)], new double[transfer.faceCount(2)]};
 		transfer.apply(coefficients, mapped);
 		near(transfer.wetArea(0, face), 1, 2e-14, "Shared plus exposed wet area");
@@ -283,7 +283,7 @@ public final class MarkerPressureValidation {
 		near(moments[0][3 * face + 2], 0, 2e-14, "Symmetric other wet flux moment");
 		var faceLoad = new double[][]{mapped[0].clone(), mapped[1].clone(), mapped[2].clone()};
 		for (int axis = 0; axis < 3; axis++) for (int f = 0; f < faceLoad[axis].length; f++) faceLoad[axis][f] = Math.sin((axis + 1) * .2 + f * .1);
-		var cellLoad = new double[3][4 * d.cellCount]; transfer.transpose(faceLoad, cellLoad);
+		var cellLoad = new double[3][4 * basis.blockCount()]; transfer.transpose(faceLoad, cellLoad);
 		near(work(mapped, faceLoad), work(coefficients, cellLoad), 2e-12, "Wet-face map and transpose work");
 		var definitions = java.util.List.of(
 				new CellVelocityConstraintOperator.Row(java.util.List.of(
@@ -347,12 +347,12 @@ public final class MarkerPressureValidation {
 					"Actual mass first-moment centre");
 		}
 		verifyAffineRigidMotion(basis);
-		var velocity = new double[3][cube.length]; var load = new double[3][4 * basis.cellCount()];
+		var velocity = new double[3][cube.length]; var load = new double[3][4 * basis.blockCount()];
 		for (int a = 0; a < 3; a++) {
 			for (int i = 0; i < cube.length; i++) velocity[a][i] = Math.sin(.37 * i + a);
 			for (int term = 0; term < 4; term++) load[a][term] = Math.cos(.23 * term + a);
 		}
-		var fitted = new double[3][4 * basis.cellCount()]; var force = new double[3][cube.length]; basis.fit(velocity, fitted); basis.transposeLoad(load, force);
+		var fitted = new double[3][4 * basis.blockCount()]; var force = new double[3][cube.length]; basis.fit(velocity, fitted); basis.transposeLoad(load, force);
 		near(work(velocity, force), work(fitted, load), 2e-14, "Cell affine map/adjoint virtual work");
 		var resolved = new double[3][cube.length]; basis.predict(fitted, resolved);
 		for (int a = 0; a < 3; a++) for (int term = 0; term < 4; term++) {
@@ -391,10 +391,10 @@ public final class MarkerPressureValidation {
 				7.421645F, 3.3454382F, .49268323F, .0026631951F};
 		closePoints.restoreParticleState(new FlipParticleState(12, 8, 4, 1, 3, .0028607696F, saved, new float[9], new byte[384]));
 		var closeBasis = CellAffineVelocity.capture(closePoints);
-		int closeCell = closeBasis.markerCell(0);
+		int closeCell = closeBasis.markerBlock(0);
 		if (closeBasis.rank(closeCell) != 3 || !closeBasis.hasRepresentableBasis(closeCell))
 			throw new AssertionError("Separated binary32 points lost their certified affine map through rounded refinement residuals");
-		var affineVelocity = new double[3][3]; var closeCoefficients = new double[3][4 * closeBasis.cellCount()];
+		var affineVelocity = new double[3][3]; var closeCoefficients = new double[3][4 * closeBasis.blockCount()];
 		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 3; i++) affineVelocity[axis][i] = 1 + closeBasis.position(i, axis);
 		closeBasis.fit(affineVelocity, closeCoefficients); var closePrediction = new double[3][3]; closeBasis.predict(closeCoefficients, closePrediction);
 		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 3; i++)
@@ -405,10 +405,10 @@ public final class MarkerPressureValidation {
 				3.2086852F, 3.4979026F, 3.4938903F, .08683321F,
 				3.733526F, 3.4979026F, 3.4938903F, .08683321F};
 		thinTetrahedron.restoreParticleState(new FlipParticleState(12, 8, 4, 1, 4, .17377433F, thin, new float[12], new byte[384]));
-		var thinBasis = CellAffineVelocity.capture(thinTetrahedron); int thinCell = thinBasis.markerCell(0);
+		var thinBasis = CellAffineVelocity.capture(thinTetrahedron); int thinCell = thinBasis.markerBlock(0);
 		if (thinBasis.rank(thinCell) != 4 || !thinBasis.hasRepresentableBasis(thinCell) || !thinBasis.expandedCell(thinCell))
 			throw new AssertionError("Near-degenerate actual tetrahedron lost the precision required by its affine moment certificate");
-		var thinVelocity = new double[3][4]; var thinCoefficients = new double[3][4 * thinBasis.cellCount()];
+		var thinVelocity = new double[3][4]; var thinCoefficients = new double[3][4 * thinBasis.blockCount()];
 		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 4; i++) thinVelocity[axis][i] = 1 + thinBasis.position(i, axis);
 		thinBasis.fit(thinVelocity, thinCoefficients); var thinPrediction = new double[3][4]; thinBasis.predict(thinCoefficients, thinPrediction);
 		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 4; i++)
@@ -427,7 +427,7 @@ public final class MarkerPressureValidation {
 
 	private static void verifyAffineRigidMotion(CellAffineVelocity basis) {
 		for (int mode = 0; mode < 4; mode++) {
-			var velocity = new double[3][basis.markerCount()]; var coefficient = new double[3][4 * basis.cellCount()];
+			var velocity = new double[3][basis.markerCount()]; var coefficient = new double[3][4 * basis.blockCount()];
 			for (int i = 0; i < basis.markerCount(); i++) for (int a = 0; a < 3; a++) velocity[a][i] = mode == 0
 					? new double[]{1.25, -.75, .125}[a] : a == mode % 3 ? -basis.position(i, (a + 1) % 3)
 					: a == (mode + 1) % 3 ? basis.position(i, (a + 2) % 3) : 0;
