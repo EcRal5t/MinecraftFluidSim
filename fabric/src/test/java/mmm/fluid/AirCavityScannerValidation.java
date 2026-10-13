@@ -180,6 +180,14 @@ public final class AirCavityScannerValidation {
 		check(domain.markerGrid.inventoryRevision==inventoryRevision && domain.pressurePhaseGeometry.revision()==phaseRevision
 				&& domain.carrierMutationRevision()==carrierRevision && domain.particles.volume(0)==.5F
 				&& domain.gasState.frame==null,"Private gas frame capture changed live owners or geometry caches");
+		domain.gasState.frame=current;
+		var repeated=GasRuntimeGeometry.capture(domain,null,occupied,true);
+		var editedFromCaptured=GasRuntimeGeometry.capture(domain,edit,occupied,true);
+		domain.gasState.frame=null;
+		check(repeated.offsetBracket(0,0)==current.offsetBracket(0,0)
+				&& repeated.offsetBracket(1,0)==current.offsetBracket(1,0),"Unchanged PLIC failed to reuse captured inverse-volume certificates");
+		checkRuntimePlanesEqual(repeated,current,"Unchanged captured PLIC differs from a complete rebuild");
+		checkRuntimePlanesEqual(editedFromCaptured,future,"Captured PLIC reused a changed gradient neighbor");
 		domain.particles.setVolume(0,.125F);
 		check(future.matchesCarrierGeometry(domain,occupied) && !future.matchesSourceCarrierGeometry(domain,occupied),
 				"Published phase stock did not match its complete target frame");
@@ -192,8 +200,22 @@ public final class AirCavityScannerValidation {
 		check(!current.matchesCarrierGeometry(domain,occupied) && !current.matchesSourceCarrierGeometry(domain,occupied)
 				&& moved.matchesCarrierGeometry(domain,occupied) && moved.planeNormal(0,0,0)<0,
 				"Gas frame reused old M1 after a raw marker move with unchanged volume and count");
+		domain.gasState.frame=current;
+		var movedFromCaptured=GasRuntimeGeometry.capture(domain,null,occupied,true);
+		domain.gasState.frame=null;
+		check(movedFromCaptured.offsetBracket(1,0)==current.offsetBracket(1,0),
+				"Neighbor M1 changed a PLIC whose actual fraction-gradient inputs stayed equal");
+		checkRuntimePlanesEqual(movedFromCaptured,moved,"Position-edited captured PLIC differs from a complete rebuild");
 		domain.granularCoupling=new mmm.granular.GranularCouplingFields(2,2,2,1);
 		occupied[0]=1L<<22;domain.granularCoupling.setFixedCellSvq(occupied);
+		domain.particles.setVolume(0,.375F);
+		var equalFractionFresh=GasRuntimeGeometry.capture(domain,null,occupied,true);
+		domain.gasState.frame=current;
+		var equalFractionCaptured=GasRuntimeGeometry.capture(domain,null,occupied,true);
+		domain.gasState.frame=null;
+		check(equalFractionCaptured.offsetBracket(1,0)==current.offsetBracket(1,0),
+				"Neighbor SVQ and volume changes invalidated an unchanged actual fraction-gradient input");
+		checkRuntimePlanesEqual(equalFractionCaptured,equalFractionFresh,"Pore-edited captured PLIC differs from a complete rebuild");
 		var clear=GasRuntimeGeometry.allDry(domain,true);
 		check(clear.matchesSourceCarrierGeometry(domain,occupied) && !clear.matchesSourceCarrierGeometry(domain,new long[8])
 				&& !clear.matchesCarrierGeometry(domain,new long[8]) && clear.capacity().chambers().getFirst().cubicMeters()==2,
@@ -204,6 +226,19 @@ public final class AirCavityScannerValidation {
 		domain.particles.setCount(0);domain.granularCoupling.setFixedCellSvq(new long[8]);
 		check(clear.matchesCarrierGeometry(domain,new long[8]) && !clear.matchesSourceCarrierGeometry(domain,new long[8]),
 				"Published clear stock failed its target/source geometry distinction");
+	}
+
+	private static void checkRuntimePlanesEqual(GasRuntimeGeometry actual, GasRuntimeGeometry expected, String message) {
+		check(actual.liquidStock().equals(expected.liquidStock()) && actual.geometry().pieces().equals(expected.geometry().pieces())
+				&& actual.geometry().ports().equals(expected.geometry().ports()) && actual.geometry().exteriorPorts().equals(expected.geometry().exteriorPorts())
+				&& actual.capacity().components().equals(expected.capacity().components()) && actual.capacity().chambers().equals(expected.capacity().chambers()),message);
+		for(int cell=0;cell<actual.liquidStock().size();cell++) for(int micro=0;micro<8;micro++) {
+			check(Double.doubleToRawLongBits(actual.liquidFractionExact(cell,micro))==Double.doubleToRawLongBits(expected.liquidFractionExact(cell,micro))
+					&& Double.doubleToRawLongBits(actual.planeOffset(cell,micro))==Double.doubleToRawLongBits(expected.planeOffset(cell,micro))
+					&& java.util.Objects.equals(actual.offsetBracket(cell,micro),expected.offsetBracket(cell,micro)),message);
+			for(int axis=0;axis<3;axis++) check(Float.floatToRawIntBits(actual.planeNormal(cell,micro,axis))
+					==Float.floatToRawIntBits(expected.planeNormal(cell,micro,axis)),message);
+		}
 	}
 
 	private static void validateGasPieceCapacity() {
@@ -263,6 +298,14 @@ public final class AirCavityScannerValidation {
 		check(closedCapacity.chambers().size()==2 && closed.nodeOfPiece(0)!=closed.nodeOfPiece(7)
 				&& closedCapacity.chambers().get(0).cubicMeters()==.0625 && closedCapacity.chambers().get(1).cubicMeters()==.09375,
 				"Two same-cell gas owners lost their distinct raw capacities");
+		var componentFrame=GasRuntimeGeometry.capture(split,null,new long[8],true);
+		split.gasState.frame=componentFrame;
+		var componentReuse=GasRuntimeGeometry.capture(split,null,new long[8],true);
+		split.gasState.frame=null;
+		check(componentReuse.offsetBracket(0,0)==componentFrame.offsetBracket(0,0)
+				&& componentReuse.offsetBracket(0,7)==componentFrame.offsetBracket(0,7),
+				"Disconnected liquid components failed to retain their independent captured PLIC certificates");
+		checkRuntimePlanesEqual(componentReuse,componentFrame,"Captured disconnected-component PLIC differs from a complete rebuild");
 		for(float h:new float[]{.1F,.5F}) {
 			var scaled=pieceCapacityScaledDomain(h,126,.25F,.25F,.25F,.0625F,.75F,.75F,.75F,.03125F);
 			var scaledGeometry=pieceCapacityGeometry(scaled);

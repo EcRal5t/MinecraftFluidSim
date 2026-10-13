@@ -80,11 +80,25 @@ final class FlipPressurePhaseGeometry {
 			GranularCouplingFields granular, boolean[] pressureFluid,
 			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize, java.util.List<PhaseLiquidGeometryEdit> edits
 	) {
+		rebuildLiquidEdits(solid, reconstructedVolume, cutCells, granular, pressureFluid,
+				markers, particles, cellSize, edits, null, null);
+	}
+
+	/** A captured frame supplies its read-only planes and the matching complete local stock. */
+	void rebuildLiquidEdits(
+			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
+			GranularCouplingFields granular, boolean[] pressureFluid,
+			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize, java.util.List<PhaseLiquidGeometryEdit> edits,
+			FlipPressurePhaseGeometry captured, boolean[] sameLocalStock
+	) {
 		if (solid.length != fraction.length || reconstructedVolume.length != fraction.length
 				|| pressureFluid.length != fraction.length || edits == null || !edits.isEmpty() && markers == null
 				|| markers != null && (particles == null || !(cellSize > 0) || !Float.isFinite(cellSize))) {
 			throw new IllegalArgumentException("Pressure phase arrays disagree with the cell count");
 		}
+		if (captured != null && (captured == this || !captured.matchesShape(sizeX, sizeY, sizeZ)
+				|| sameLocalStock == null || sameLocalStock.length != fraction.length))
+			throw new IllegalArgumentException("Captured PLIC requires a distinct matching frame and local stock checks");
 		PhaseLiquidGeometryEdit[] overlay = edits.isEmpty() ? null : new PhaseLiquidGeometryEdit[fraction.length];
 		for (var edit : edits) {
 			if (edit == null || edit.cell() >= fraction.length || overlay[edit.cell()] != null
@@ -111,6 +125,12 @@ final class FlipPressurePhaseGeometry {
 			int cell = cellIndex(x, y, z);
 			PhaseLiquidGeometryEdit edit = overlay == null ? null : overlay[cell];
 			if (solid[cell] || !(fraction[cell] > 0.0F) || fraction[cell] >= 1) continue;
+			if (captured != null && sameLocalStock[cell] && sameStencil(captured, cell, x, y, z, solid)) {
+				normalX[cell] = captured.normalX[cell]; normalY[cell] = captured.normalY[cell]; normalZ[cell] = captured.normalZ[cell];
+				planeOffset[cell] = captured.planeOffset[cell]; offsetBrackets[cell] = captured.offsetBrackets[cell];
+				components[cell] = captured.components[cell];
+				continue;
+			}
 			double center = fraction[cell];
 			float nx = (float) -(sampleFraction(x + 1, y, z, center, solid)
 					- sampleFraction(x - 1, y, z, center, solid));
@@ -160,6 +180,21 @@ final class FlipPressurePhaseGeometry {
 			else pressureFluid[cell] = planeOffset[cell]
 					> 0.5 * ((double) normalX[cell] + normalY[cell] + normalZ[cell]);
 		}
+	}
+
+	private boolean sameStencil(FlipPressurePhaseGeometry captured, int cell, int x, int y, int z, boolean[] solid) {
+		return collisionMask(cell) == captured.collisionMask(cell) && poreVolumes[cell].equals(captured.poreVolumes[cell])
+				&& Double.doubleToRawLongBits(fraction[cell]) == Double.doubleToRawLongBits(captured.fraction[cell])
+				&& sameNeighbor(captured, x + 1, y, z, solid) && sameNeighbor(captured, x - 1, y, z, solid)
+				&& sameNeighbor(captured, x, y + 1, z, solid) && sameNeighbor(captured, x, y - 1, z, solid)
+				&& sameNeighbor(captured, x, y, z + 1, solid) && sameNeighbor(captured, x, y, z - 1, solid);
+	}
+
+	private boolean sameNeighbor(FlipPressurePhaseGeometry captured, int x, int y, int z, boolean[] solid) {
+		if (!inside(x, y, z)) return true;
+		int cell = cellIndex(x, y, z);
+		return solid[cell] == (captured.collisionMask(cell) == 255) && (solid[cell]
+				|| Double.doubleToRawLongBits(fraction[cell]) == Double.doubleToRawLongBits(captured.fraction[cell]));
 	}
 
 	/** Monotone moment estimate: a centred phase retains the fraction-gradient direction. */

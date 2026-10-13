@@ -58,8 +58,10 @@ final class GasRuntimeGeometry {
 		var occupancy = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize);
 		occupancy.setFixedCellSvq(this.occupiedSvq);
 		this.phase = new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
+		GasRuntimeGeometry captured = domain.gasState.frame;
+		boolean[] sameLocalStock = matchingLocalStock(captured, cut);
 		phase.rebuildLiquidEdits(solid, phaseIndex.exactCellMarkerVolume, cut, occupancy, new boolean[domain.cellCount],
-				phaseIndex, domain.particles, cellSize, liquidStock);
+				phaseIndex, domain.particles, cellSize, liquidStock, sameLocalStock == null ? null : captured.phase, sameLocalStock);
 		this.geometry = GasComplementGeometry.capture(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize, solid, cut, phase);
 		this.topology = GasChamberTopology.capture(geometry, sealedExterior);
 		this.capacity = GasChamberCapacity.capture(domain, geometry, topology, this.occupiedSvq, liquidStock,
@@ -68,6 +70,16 @@ final class GasRuntimeGeometry {
 		for (var piece : geometry.pieces()) pieceNodes[piece.id()] = topology.nodeOfPiece(piece.id());
 		this.minimumPieceKeys = new int[topology.chambers().size() + 1]; Arrays.fill(minimumPieceKeys, -1);
 		for (var chamber : topology.chambers()) minimumPieceKeys[chamber.node()] = chamber.minimumPiece();
+	}
+
+	private boolean[] matchingLocalStock(GasRuntimeGeometry captured, FlipCutCellGeometry cut) {
+		if (captured == null || !cut.matchesShape(captured.geometry.sizeX(), captured.geometry.sizeY(), captured.geometry.sizeZ())
+				|| Float.floatToRawIntBits(cellSize) != Float.floatToRawIntBits(captured.cellSize)
+				|| captured.liquidStock.size() != liquidStock.size()) return null;
+		boolean[] same = new boolean[liquidStock.size()];
+		for (int cell = 0; cell < same.length; cell++) same[cell] = occupiedSvq[cell] == captured.occupiedSvq[cell]
+				&& cut.mask(cell) == captured.geometry.collisionMask(cell) && liquidStock.get(cell).equals(captured.liquidStock.get(cell));
+		return same;
 	}
 
 	static GasRuntimeGeometry capture(FluidDomain domain, PhaseLiquidGeometryEdit edit, long[] occupiedSvq, boolean sealedExterior) {
