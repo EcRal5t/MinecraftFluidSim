@@ -146,7 +146,7 @@ final class GasTopologyCoordinator {
 		return plan(GasRuntimeGeometry.allDry(domain, retained.copySolidSvq(), domain.gasState.sealedDomainBoundary), false, null);
 	}
 
-	/** Single-successor finite stock needs only positive support; splits and ambient retain exact physical weights. */
+	/** Single-successor finite stock needs positive support; splits and ambient capture retain exact physical weights. */
 	private TreeMap<Long, ExactRational> overlaps(GasRuntimeGeometry old, GasRuntimeGeometry next) {
 		var result = new TreeMap<Long, ExactRational>();
 		var capacities = old.capacity().pieces();
@@ -155,7 +155,8 @@ final class GasTopologyCoordinator {
 		for (int index = 0; index < capacities.size(); index++) {
 			var capacity = capacities.get(index);
 			int piece = capacity.id(), source = old.nodeOfPiece(piece), destination = next.nodeOfPiece(piece);
-			if (destination < 0) continue;
+			// Persistent ambient space carries no finite stock, control volume or external transfer.
+			if (destination < 0 || source == 0 && destination == 0) continue;
 			var before = old.geometry().piece(piece); var after = next.geometry().piece(piece);
 			var planes = new ArrayList<GasGeometryOverlap.HalfSpace>(2);
 			if (before.dryPlane() != null) planes.add(before.dryPlane());

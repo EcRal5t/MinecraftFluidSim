@@ -412,6 +412,7 @@ public final class AirCavityScannerValidation {
 
 	private static void validateExactGasTopologyWeights() {
 		validateSingleGasSuccessorWeight();
+		validateAmbientSelfRemap();
 		validateAmbientGasSuccessorWeight();
 		for (boolean reflected : new boolean[]{false, true}) {
 			float h = .0008F;
@@ -492,11 +493,29 @@ public final class AirCavityScannerValidation {
 		check(domain.gasBoundary.inventory(1).isEmpty(), "A surviving vacuum acquired gas inventory during geometry remapping");
 	}
 
+	private static void validateAmbientSelfRemap() {
+		var domain = pieceCapacityDomain(0, .19F, .24F, .31F, .1875F);
+		var before = domain.bootstrapGasState(""); var old = domain.gasState.frame;
+		check(old.nodeCount() == 0 && old.capacity().pieces().size() > 1,
+				"Ambient self-remap fixture requires exterior-connected slanted dry microboxes");
+		domain.particles.setPositionX(0, .27F); domain.particles.setPositionY(0, .22F); domain.particles.setPositionZ(0, .29F);
+		domain.gridDirty = true; domain.ensureInventoryGrid();
+		var next = GasRuntimeGeometry.capture(domain, null, new long[8], false);
+		check(next.nodeCount() == 0 && gasOverlapWeights(domain, old, next).isEmpty(),
+				"Persistent ambient space acquired unused exact remap weights");
+		domain.gasTopologyCoordinator.refresh(); var after = domain.exportGasState("");
+		check(after.nodes().isEmpty() && after.externalSource().equals(before.externalSource())
+				&& after.escapedSink().equals(before.escapedSink()) && after.massRoundoff().equals(before.massRoundoff())
+				&& after.residualRoundoff().equals(before.residualRoundoff()) && domain.gasBoundary.auditClosed(),
+				"Ambient geometry movement changed finite stock or external gas ledgers");
+	}
+
 	private static void validateAmbientGasSuccessorWeight() {
 		var domain = pieceCapacityScaledDomain(.5F, 0); domain.bootstrapGasState(""); var old = domain.gasState.frame;
 		check(old.nodeCount() == 0, "Ambient trapping fixture must begin with an exterior-connected cell");
 		domain.setSolidMicroMask(0, 0, 0, 126); domain.gasTopologyCoordinator.refresh(); var next = domain.gasState.frame;
 		var weights = gasOverlapWeights(domain, old, next);
+		check(!weights.containsKey(0L), "Ambient capture also accumulated an unused ambient self-weight");
 		check(ExactRational.ONE.divide(64).equals(weights.get(1L)),
 				"Ambient capture lost the actual SI volume of its isolated microbox");
 		check(domain.gasBoundary.inventory(1).standardVolumeNanos() == 15_625_000

@@ -90,7 +90,7 @@ node ID 只是当前 topology 的稠密 ordinal；持久身份由微盒归属和
 
 ## 拓扑变化
 
-[GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java) 在同一开放微盒内精确积分旧新干区的正体积交集，确定每个旧节点的全部正后继。旧有限节点只有一个后继时使用完整交接比例 `1`，包含环境后继和真空旧控制体积；多后继分配与旧环境截留使用旧块的已认证物理容量乘以交集占旧干区的精确比例。每块交集计算一次，分配共用保存的结果。
+[GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java) 在同一开放微盒内精确积分旧新干区的正体积交集，确定每个旧节点的全部正后继。旧有限节点只有一个后继时使用完整交接比例 `1`，包含环境后继和真空旧控制体积；多后继分配与旧环境截留使用旧块的已认证物理容量乘以交集占旧干区的精确比例。每块交集计算一次，分配共用保存的结果。持续归属环境的微盒保持环境连接，直接跳过库存权重积分与累加；有限库存、旧控制体积和外部源汇按实际交接计算。
 
 - 一对一携带完整库存；多对一合并组分、species、质量余量和内能。
 - 一对多按精确有理数权重拆分。`GasInventory.partition` 保持逐组件 nanos 与 species 的整数总量，质量列由最大份额承接余数；内能按共同温度拆分。
