@@ -863,7 +863,7 @@ public final class FlipFluidFreeSurfaceValidation {
 	private static void geometryClose(double actual,double expected,String name) {
 		check(Double.isFinite(actual) && Math.abs(actual-expected)<=256*Math.ulp(Math.max(1,Math.abs(expected))),name+": "+actual+" != "+expected);
 	}
-	private static void liquidPressureGeometryConservesShapeMoments() {
+	static void liquidPressureGeometryConservesShapeMoments() {
 		microFaceAlignedInterfacesPreserveTraction();
 		var cube=pressureGeometryDomain();cube.setVolume(1,1,1,1);cube.setVolume(2,1,1,1);cube.ensureGrid();
 		var geometry=LiquidPressureGeometry.capture(cube);int cell=cube.cellIndex(1,1,1);

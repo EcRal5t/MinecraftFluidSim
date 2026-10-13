@@ -108,6 +108,10 @@ G2P 的预测、投影、PIC 与输入载体动能，以及 FLIP 混合的线性
 
 纯液体主流程通过 [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java) 使用实际质量的格内仿射拟合与微盒湿面约束，直接发布粒子速度和同一拟合场的 MAC 法向迹。压力几何来自当前气腔 frame 的 PLIC，具体来源校核见[气体压力耦合](gas-state.md#压力与热耦合)。含颗粒或连续固相库存时，主流程使用联合面压力和既有 G2P 写回。稀疏支撑、断开分量及各相共同惯性的完成条件见[求解器整合计划](../roadmap/solver-consolidation-plan.md)。
 
+[LiquidSpatialInput](../../solver/src/main/java/mmm/fluid/LiquidSpatialInput.java) 按需捕获当前 frame 的 PLIC 与原始载体矩。微盒使用 `8*cell+micro` 编号，按固定连通分量分别汇总；空分量、干微盒及其中的未解析载体保留各自身份。源权重按积分点位置分组，PLIC 保存几何覆盖积分，组件孔隙率将覆盖积分换算为孔隙内液体体积及其第一矩。原始体积和质量保留求解器单位，两种位置第一矩均乘物理米；SI 比较使用捕获的 `SolverUnitScale`。源与几何的差额先精确相减，再舍入为观察值，保留悬殊质量下的小差额。
+
+该视图保存不可变的 frame 引用、源矩和几何矩，捕获时复用 frame 的完整载体几何检查；质量从原始列读取。普通压力流程沿用现有几何捕获，细分空间比较在显式请求时执行。压力候选发布继续校核完整原始列。均匀密度对照共同检查空间矩、实际惯性积分与压力功，相应入口见[验证指南](../maintenance/validation.md)。
+
 归一化质量权重上的面力作用于实际粒子的加权质心，该力臂一般偏离面中心，刚体旋转可产生额外体积流率与内部压力力矩。令 `Rω = ω×(x−center)`，保持内部角动量要求 `CR = 0`；当前质量映射还须补齐面速度的切向一阶矩。[PressureTransferExperiment](../../fabric/src/test/java/mmm/fluid/PressureTransferExperiment.java) 的 `--rotation` 对照独立面通量、紧支撑压力的实际总力矩与旋转虚功。
 
 面速度的局部线性保持要求切向矩 `Σ J_fi t_i = t_face` 与常量保持 `Σ J_fi = 1` 同时成立。目标切向位置须位于支撑积分点的仿射包内；采用非负系数时，须进一步位于凸包内。单点、共线及稀疏自由面可缺少所需支撑。速度表示的验收同时覆盖刚体旋转、可解析的体积流率模式与压力源的相容性；这些空间能力由实际质量及共同几何决定。

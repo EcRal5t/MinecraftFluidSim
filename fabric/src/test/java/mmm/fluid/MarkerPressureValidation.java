@@ -8,7 +8,10 @@ public final class MarkerPressureValidation {
 	                      int[] cells) { }
 	private MarkerPressureValidation() { }
 	public static void main(String[] args) {
-		if (args.length == 1 && args[0].equals("--micro-velocity-moments")) {
+		if (args.length == 1 && args[0].equals("--spatial-input")) {
+			validateKernel();
+			LiquidSpatialInputValidation.validate();
+		} else if (args.length == 1 && args[0].equals("--micro-velocity-moments")) {
 			MicroFaceVelocityEnrichmentExperiment.validateMomentSupport();
 		} else if (args.length == 1 && args[0].equals("--micro-velocity-enrichment")) {
 			MicroFaceVelocityEnrichmentExperiment.validate();

@@ -52,6 +52,11 @@ final class LiquidPressureGeometry {
 	record FreeFragment(int cell, int microKey, int gasMicro, Vec3 areaNormal, NormalFirstMoment normalFirstMoment) {
 		int gasPiece() { return 8 * cell + gasMicro; }
 	}
+	record VolumeMoments(double volume, Vec3 firstMoment) {
+		static final VolumeMoments EMPTY = new VolumeMoments(0, Vec3.ZERO);
+		VolumeMoments add(VolumeMoments value) { return new VolumeMoments(volume + value.volume, firstMoment.add(value.firstMoment)); }
+		VolumeMoments scale(double value) { return value == 1 ? this : new VolumeMoments(volume * value, firstMoment.scale(value)); }
+	}
 	record CellSnapshot(int cell, double volume, Vec3 firstMoment, Vec3 centroid,
 	                    double admittedVolume, double rawMarkerVolume, double rawPressureVolume, double volumeErrorBound,
 	                    List<SideWet> sideWet, List<Facet> facets, List<FreeFragment> freeFragments) {
@@ -65,8 +70,13 @@ final class LiquidPressureGeometry {
 		return capture(domain, domain.pressurePhaseGeometry);
 	}
 	static LiquidPressureGeometry capture(FluidDomain domain, FlipPressurePhaseGeometry phase) {
+		return capture(domain, phase, null);
+	}
+	static LiquidPressureGeometry capture(FluidDomain domain, FlipPressurePhaseGeometry phase, List<PhaseLiquidGeometryEdit> stock) {
+		if (stock != null && stock.size() != domain.cellCount) throw new IllegalArgumentException("Liquid geometry source stock has the wrong shape");
 		var cells = new CellSnapshot[domain.cellCount]; var faces = new ArrayList<SharedFace>();
-		for (int cell=0;cell<cells.length;cell++) if(phase.liquidFractionExact(cell)>0) cells[cell]=captureCell(domain,phase,cell,faces);
+		for (int cell=0;cell<cells.length;cell++) if(phase.liquidFractionExact(cell)>0)
+			cells[cell]=captureCell(domain,phase,cell,faces,stock == null ? domain.markerGrid.exactCellMarkerVolume[cell] : stock.get(cell).volume().toDouble());
 		return new LiquidPressureGeometry(cells,faces);
 	}
 	void forEachGasPiece(java.util.function.IntConsumer accept) {
@@ -83,7 +93,7 @@ final class LiquidPressureGeometry {
 		return result;
 	}
 
-	private static CellSnapshot captureCell(FluidDomain d,FlipPressurePhaseGeometry plane,int cell,List<SharedFace> shared) {
+	private static CellSnapshot captureCell(FluidDomain d,FlipPressurePhaseGeometry plane,int cell,List<SharedFace> shared,double rawVolume) {
 		var cut=d.geometry.cutCells;
 		double h=d.config.cellSize(), h3=h*h*h;
 		int[] index={cell%d.sizeX,cell/d.sizeX%d.sizeY,cell/(d.sizeX*d.sizeY)};
@@ -91,10 +101,7 @@ final class LiquidPressureGeometry {
 		var sides=new ArrayList<SideWet>(); var facets=new ArrayList<Facet>(); var fragments=new ArrayList<FreeFragment>();
 		for(int slot=0;slot<8;slot++) {
 			int[] micro={slot&1,slot>>1&1,slot>>2&1}; if(!cut.microCellOpen(cell,micro[0],micro[1],micro[2]))continue;
-			open++; double ox=.5*micro[0],oy=.5*micro[1],oz=.5*micro[2]; var integral=new double[4];
-			double nx=plane.planeNormal(cell,slot,0),ny=plane.planeNormal(cell,slot,1),nz=plane.planeNormal(cell,slot,2);
-			if(plane.liquidFractionExact(cell,slot)>=1){integral[0]=1;integral[1]=integral[2]=integral[3]=.5;}
-			else if(plane.liquidFractionExact(cell,slot)>0) LiquidFluxGeometry.unitCubeMoments(.5*nx,.5*ny,.5*nz,plane.planeOffset(cell,slot)-nx*ox-ny*oy-nz*oz,integral);
+			open++; double ox=.5*micro[0],oy=.5*micro[1],oz=.5*micro[2]; var integral=unitMicroMoments(plane,cell,slot);
 			double boxVolume=integral[0]/8; volume+=boxVolume;
 			mx+=(ox*integral[0]+.5*integral[1])/8;my+=(oy*integral[0]+.5*integral[2])/8;mz+=(oz*integral[0]+.5*integral[3])/8;
 			double[] areaNormal=new double[3]; double[][] normalFirst=new double[3][3];
@@ -146,8 +153,28 @@ final class LiquidPressureGeometry {
 		// Absolute quadrature allowance covers the clipped-cube CDF, transformed moments and eight-box reduction.
 		double error=(128.0*open+64)*Math.ulp(1.0)*h3+Math.ulp(admitted)+Math.ulp(volume);
 		if(!(volume>0 && Double.isFinite(volume)) || Math.abs(volume-admitted)>error)throw new IllegalStateException("PLIC pressure volume integration disagrees with admitted geometry at cell "+cell);
-		return new CellSnapshot(cell,volume,first,first.scale(1/volume),admitted,d.markerGrid.exactCellMarkerVolume[cell]*h3,
+		return new CellSnapshot(cell,volume,first,first.scale(1/volume),admitted,rawVolume*h3,
 				d.projection.pressureVolume[cell]*h3,error,sides,facets,fragments);
+	}
+	static VolumeMoments pieceMoments(FluidDomain domain, FlipPressurePhaseGeometry phase, int cell, int micro) {
+		if (cell < 0 || cell >= domain.cellCount || micro < 0 || micro >= 8) throw new IllegalArgumentException("Invalid liquid geometry piece");
+		if ((domain.geometry.cutCells.mask(cell) & 1 << micro) != 0) return VolumeMoments.EMPTY;
+		var integral = unitMicroMoments(phase, cell, micro);
+		double h = domain.config.cellSize(), h3 = h*h*h, volume = integral[0] / 8;
+		return new VolumeMoments(volume*h3, new Vec3(
+				h3*h*((cell%domain.sizeX + .5*(micro&1))*integral[0] + .5*integral[1])/8,
+				h3*h*((cell/domain.sizeX%domain.sizeY + .5*(micro>>1&1))*integral[0] + .5*integral[2])/8,
+				h3*h*((cell/(domain.sizeX*domain.sizeY) + .5*(micro>>2&1))*integral[0] + .5*integral[3])/8));
+	}
+	private static double[] unitMicroMoments(FlipPressurePhaseGeometry plane, int cell, int micro) {
+		var integral = new double[4]; double fraction = plane.liquidFractionExact(cell, micro);
+		if (fraction >= 1) { integral[0] = 1; integral[1] = integral[2] = integral[3] = .5; }
+		else if (fraction > 0) {
+			double nx=plane.planeNormal(cell,micro,0), ny=plane.planeNormal(cell,micro,1), nz=plane.planeNormal(cell,micro,2);
+			LiquidFluxGeometry.unitCubeMoments(.5*nx,.5*ny,.5*nz,
+					plane.planeOffset(cell,micro)-.5*nx*(micro&1)-.5*ny*(micro>>1&1)-.5*nz*(micro>>2&1), integral);
+		}
+		return integral;
 	}
 	/** Exact coincidence of the outward wet side with one open internal microface. */
 	private static boolean coincidentFreeFace(FlipPressurePhaseGeometry plane,int cell,int micro,int axis,int sign,double coordinate) {
