@@ -45,13 +45,17 @@ public final class CarrierMutationValidation {
 		var mixture = domain.chemicalParcels.record(survivor);
 		double energy = domain.thermalState.liquidInternalEnergy(survivor);
 		float position = domain.particles.positionX(survivor);
+		float positionY = domain.particles.positionY(survivor), positionZ = domain.particles.positionZ(survivor);
 		long beforeQ = domain.chemicalParcels.totalQuanta();
 		long sourceQ = domain.chemicalParcels.externalSource().totalQuanta();
 		long sinkQ = domain.chemicalParcels.escapedSink().totalQuanta();
 		domain.setVolume(1, 1, 1, .5F);
-		require(domain.particles.count() == 5 && domain.particles.positionX(0) == position
-				&& domain.chemicalParcels.record(0).equals(mixture)
-				&& domain.thermalState.liquidInternalEnergy(0) == energy,
+		int retained = -1;
+		for (int p = 0; p < domain.particleCount(); p++) if (domain.particles.positionX(p) == position
+				&& domain.particles.positionY(p) == positionY && domain.particles.positionZ(p) == positionZ) retained = p;
+		require(domain.particles.count() == 16 && retained >= 0
+				&& domain.chemicalParcels.record(retained).equals(mixture)
+				&& domain.thermalState.liquidInternalEnergy(retained) == energy,
 				"cell replacement misplaced a surviving marker or its side columns during descending deletion");
 		require(domain.chemicalParcels.totalQuanta() - beforeQ
 				== domain.chemicalParcels.externalSource().totalQuanta() - sourceQ
@@ -290,9 +294,9 @@ public final class CarrierMutationValidation {
 			for (int p = 0; p < open; p++) require(cut.particles.volume(p) == .125F, "cut-cell fill changed exact uniform weights");
 		}
 		FluidDomain partial = emptyMaterialDomain(64); partial.setVolume(1, 1, 1, .2F);
-		require(partial.particles.count() == 2 && partial.particles.volume(0) == .125F
+		require(partial.particles.count() == 8 && partial.particles.volume(0) == .025F
 				&& partial.particles.positionX(0) == .625F && partial.particles.positionX(1) == .875F
-				&& partial.particles.positionY(1) == .625F, "partial fill changed its sequential open-slot geometry");
+				&& partial.particles.positionY(1) == .525F, "partial fill differs from its horizontal-layer quadrature");
 	}
 
 	private static void cellReplacementRejectsInvalidStoredThermalState() throws Exception {

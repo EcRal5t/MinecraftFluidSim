@@ -107,12 +107,14 @@ final class MarkerPressureProjection {
 			long key = (long) face.axis() * domain.cellCount + face.plusCell();
 			shared.merge(key, face.moments(), LiquidPressureGeometry.SurfaceMoments::add); identities.putIfAbsent(key, face);
 		}
+		int sharedStart = definitions.size();
 		for (var entry : shared.entrySet()) {
 			var face = identities.get(entry.getKey());
 			for (int test = 0; test < 3; test++) definitions.add(new Row(List.of(
 					new Block(face.minusCell(), face.axis(), trace(face.minusCell(), face.axis(), entry.getValue(), test, 1)),
 					new Block(face.plusCell(), face.axis(), trace(face.plusCell(), face.axis(), entry.getValue(), test, -1))), 0));
 		}
+		int sharedEnd = definitions.size();
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			var profile = geometry.cellSnapshot(cell); if (profile == null) continue;
 			for (var facet : profile.facets()) {
@@ -154,10 +156,26 @@ final class MarkerPressureProjection {
 			if (!Double.isFinite(predictor[axis][marker])) throw blocked("Unrepresentable actual marker predictor");
 		}
 		pressure = new double[rowCount]; rhs = new double[rowCount]; targetVolumeRate = new double[rowCount]; observedPressure = new double[domain.cellCount];
+		initializeCommonPressure(sharedStart, sharedEnd);
 		wallPredictor = markers(count); wallImpulse = markers(count); wallProjection.project(predictor, wallPredictor, wallImpulse);
 		operator.volumeRate(wallPredictor, rhs);
 		for (int row = 0; row < rowCount; row++) { rhs[row] = storage[row] * gasInitialPressure[row] - rhs[row] / dt; if (!Double.isFinite(rhs[row])) throw blocked("Unrepresentable cell pressure source"); }
 		active = true; return true;
+	}
+
+	private void initializeCommonPressure(int sharedStart, int sharedEnd) {
+		double largest = 0;
+		for (int row : gasRows) if (row >= 0) largest = Math.max(largest, storage[row]);
+		if (largest == 0) return;
+		double weight = 0, mean = 0;
+		for (int row : gasRows) if (row >= 0) {
+			double added = storage[row] / largest, total = weight + added;
+			if (added == 0) continue;
+			mean += added / total * (gasInitialPressure[row] - mean); weight = total;
+		}
+		for (int row : liquidRows) if (row >= 0) pressure[row] = mean;
+		for (int row = sharedStart; row < sharedEnd; row += 3) pressure[row] = -mean;
+		for (int row : gasRows) if (row >= 0) pressure[row] = mean;
 	}
 
 	private double[] trace(int cell, int axis, LiquidPressureGeometry.SurfaceMoments face, int test, double sign) {
@@ -209,13 +227,16 @@ final class MarkerPressureProjection {
 		if (!active) return new PressureProjectionResult(0, 0, true);
 		if (!(target > 0 && Double.isFinite(target))) throw new IllegalArgumentException("Invalid pressure residual target");
 		requireCurrent(); solved = false;
-		int n = rhs.length; double[] diagonal = new double[n], r = rhs.clone(), z = new double[n], direction = new double[n], applied = new double[n];
-		operator.diagonal(diagonal); Arrays.fill(pressure, 0);
+		int n = rhs.length; double[] diagonal = new double[n], r = new double[n], z = new double[n], direction = new double[n], applied = new double[n];
+		operator.diagonal(diagonal);
 		double h = domain.config.cellSize(), unit = h * h * h / domain.config.density(), tolerance = target * unit;
 		for (int i = 0; i < n; i++) {
 			if (!(diagonal[i] >= 0 && Double.isFinite(diagonal[i]))) throw blocked("Nonfinite actual pressure diagonal at row " + i);
 			if (diagonal[i] == 0 && rhs[i] != 0) throw blocked("Pressure source has no actual marker velocity support at row " + i);
+			if (diagonal[i] == 0) pressure[i] = 0;
 		}
+		operator.apply(pressure, applied);
+		for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
 		var preconditioner = operator.preconditioner(diagonal); preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
 		double residual = rms(r), rz = dot(r, z); int iterations = 0;
 		for (; residual > tolerance && iterations < domain.config.maxPressureIterations();) {

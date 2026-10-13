@@ -233,6 +233,6 @@ M09 的局部改进随对应工作包提交。M07 与 M08 各自验收；恢复 
 
 正式 Marker、切格短长入口及当前失败基线已建立。当前优先推进既有仿射流程的来源、压力与输运契约，继续保留 M02 的稀疏支撑及内部运动验收条件。
 
-下一增量聚焦 M02、M03 的完整湿体积约束：核对重建后稀疏载体的体积约束相容性及薄层线性求解的收敛条件，同时复查原满液格的微量空腔来源。局部对照使用 `--pressure-gauge` 和 `handoff-short`，密闭注液用 `runBoundaryPourDiagnostic` 保存来源和能量证据，再以 `gas-liquid:short` 验收正常流程。各项以共同方程、实际惯性与库存契约确定支持条件。
+下一增量聚焦 M02–M04 的完整湿体积约束：把流入液体的法向空间信息与扫掠体积对应，核对接收格的体积约束相容性及薄层线性求解的收敛条件，同时复查原满液格的微量空腔来源。局部对照使用 `--pressure-gauge` 和 `handoff-short`，密闭注液用 `runBoundaryPourDiagnostic` 保存来源和能量证据，再以 `gas-liquid:short` 验收正常流程。各项以共同方程、实际惯性与库存契约确定支持条件。
 
 M04 继续检查断开分量的合法到达及长轨迹正采样可表示性。局部回归使用 `handoff-short`、`joint-moments` 和 `representation`，包级验收保留 `components`、`chemical-tails`、`handoff` 及原有长场景。M05–M08 按前置条件接续，各包以列出的验收条件关闭。

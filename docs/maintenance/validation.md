@@ -78,6 +78,7 @@
 ./gradlew.bat :fabric:runLiquidTransportValidation --args="components" --offline --no-daemon
 ./gradlew.bat :fabric:runLiquidTransportValidation --args="geometry-remap" --offline --no-daemon
 ./gradlew.bat :fabric:runLiquidTransportValidation --args="handoff-short" --offline --no-daemon
+./gradlew.bat :fabric:runCarrierMutationValidation --offline --no-daemon
 ./gradlew.bat :fabric:runRemapMomentsValidation --args="transport-moments" --offline --no-daemon
 ./gradlew.bat :fabric:runRemapMomentsValidation --args="joint-moments" --offline --no-daemon
 ```

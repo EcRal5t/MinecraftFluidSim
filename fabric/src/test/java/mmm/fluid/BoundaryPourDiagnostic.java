@@ -149,8 +149,10 @@ public final class BoundaryPourDiagnostic {
 		LiquidPressureGeometry geometry = value(projection, "geometry", LiquidPressureGeometry.class);
 		System.out.printf("POUR snapshot attempt=%d substep=%d dt=%g actualSpeed=%g actualMarkers=%d %s%n",
 				attempt, substep, dt, d.maximumParticleSpeed(), d.particleCount(), outcome);
-		if (basis == null) return;
+		if (basis == null || !value(projection, "active", Boolean.class)) return;
+		boolean hasCandidate = value(projection, "solved", Boolean.class) || value(projection, "published", Boolean.class);
 		for (String name : new String[]{"originalVelocity", "predictor", "wallPredictor", "candidate", "publishedVelocity"}) {
+			if (!hasCandidate && (name.equals("candidate") || name.equals("publishedVelocity"))) continue;
 			double[][] velocity = value(projection, name, double[][].class);
 			if (velocity == null) continue;
 			double maximum = 0, energy = 0; int marker = -1;
@@ -161,7 +163,7 @@ public final class BoundaryPourDiagnostic {
 			}
 			System.out.printf("POUR velocity=%s max=%g KE=%g marker=%d cell=%d%n", name, maximum, energy, marker, marker < 0 ? -1 : basis.markerCell(marker));
 		}
-		if (field == null || geometry == null) return;
+		if (!hasCandidate || field == null || geometry == null) return;
 		if (value(field, "basis", CellAffineVelocity.class) != basis) {
 			System.out.println("POUR candidate field belongs to an earlier prepare; stopping snapshot before field comparison");
 			return;

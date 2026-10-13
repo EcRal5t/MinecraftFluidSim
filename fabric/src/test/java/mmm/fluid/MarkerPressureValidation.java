@@ -42,15 +42,18 @@ public final class MarkerPressureValidation {
 
 	/** A pressure reference shift preserves physical force on a rank-four, partially filled cell. */
 	private static void partiallyFilledPressureRetainsReferenceGauge() {
-		var points = new float[8][3];
-		for (int p = 0; p < 8; p++) {
-			points[p][0] = .125F + .25F * (p & 1);
+		for (int cells = 1; cells <= 2; cells++) partiallyFilledPressureRetainsReferenceGauge(cells);
+	}
+	private static void partiallyFilledPressureRetainsReferenceGauge(int cells) {
+		var points = new float[8 * cells][3];
+		for (int p = 0; p < points.length; p++) {
+			points[p][0] = .125F + .25F * (p & 1) + .5F * (p / 8);
 			points[p][1] = .05F + .10F * (p >> 1 & 1);
 			points[p][2] = .125F + .25F * (p >> 2 & 1);
 		}
 		var d = affineDomain(points);
 		d.sealDomainBoundary(); d.bootstrapGasState(null); d.ensureGrid(); d.gasTopologyCoordinator.refresh();
-		d.gasState.network.setStandardVolume(1, 1.25 * d.gasState.network.availableVolume(1));
+		d.gasState.network.setStandardVolume(1, 1.23456789 * d.gasState.network.availableVolume(1));
 		d.bodyForceStage.applyGravity(.001F);
 		var plan = d.pressureSystem.markerProjection(); plan.prepare(.001F);
 		var basis = plan.basis(); int cell = basis.markerCell(0);
@@ -60,8 +63,17 @@ public final class MarkerPressureValidation {
 			throw new AssertionError("Partial pressure gauge fixture lost its actual rank-four liquid and finite gas");
 		var constant = new double[plan.operator().rowCount()];
 		int liquidRow = plan.rowOfLiquidCell(cell);
-		if (liquidRow >= 0) constant[liquidRow] = 1;
+		int liquidCount = 0;
+		for (int c = 0; c < cells; c++) {
+			int row = plan.rowOfLiquidCell(basis.markerCell(8 * c));
+			if (row >= 0) { constant[row] = 1; liquidCount++; }
+		}
+		if (cells == 2 && constant.length - liquidCount - 1 != 3) throw new AssertionError("Adjacent partial cells lost their three shared trace rows");
+		for (int row = liquidCount; row < constant.length - 1; row += 3) constant[row] = -1;
 		constant[constant.length - 1] = 1;
+		var initialized = plan.pressure(); double common = initialized[initialized.length - 1];
+		if (common == 0) throw new AssertionError("Pressure initializer fixture lost its finite reference rounding difference");
+		for (int row = 0; row < constant.length; row++) near(initialized[row], common * constant[row], 0, "Common pressure initialization follows the complete Gauss mode");
 		var shiftedForce = new double[3][basis.markerCount()]; plan.operator().force(constant, shiftedForce);
 		var bulk = new java.util.ArrayList<CellVelocityConstraintOperator.Block>();
 		for (int axis = 0; axis < 3; axis++) {
@@ -78,25 +90,25 @@ public final class MarkerPressureValidation {
 			magnitude = Math.hypot(magnitude, shiftedForce[axis][p]);
 			bulkMagnitude = Math.hypot(bulkMagnitude, missingBulkForce[axis][p]);
 		}
-		System.out.printf("Partial pressure gauge: fraction=%g rank=%d liquidRow=%d constantForceNorm=%g missingVolumeForceNorm=%g deltaForceFor1000Pa=%g N%n",
-				profile.volume() / Math.pow(basis.cellSize(), 3), basis.rank(cell), liquidRow, magnitude, bulkMagnitude, 1000 * magnitude);
+		System.out.printf("Partial pressure gauge: cells=%d fraction=%g rank=%d liquidRow=%d constantForceNorm=%g missingVolumeForceNorm=%g deltaForceFor1000Pa=%g N%n",
+				cells, profile.volume() / Math.pow(basis.cellSize(), 3), basis.rank(cell), liquidRow, magnitude, bulkMagnitude, 1000 * magnitude);
 		near(magnitude, 0, 2e-13, "Changing only the pressure reference changed actual carrier force");
 		if (!plan.solve(d.config.pressureTolerance()).converged())
 			throw new AssertionError("Stationary partial-liquid pressure did not converge");
 		plan.publish();
-		near(d.pressure(0, 0, 0), d.projection.pressure[cell] + d.pressureReference, 0,
+		for (int c = 0; c < cells; c++) near(d.pressure(c, 0, 0), d.projection.pressure[basis.markerCell(8 * c)] + d.pressureReference, 0,
 				"Partial-liquid public pressure includes its reference");
 		near(d.maximumPressure(), d.pressure(0, 0, 0), 0, "Maximum pressure includes partial-liquid observation");
 	}
 	public static void validate() {
 		validateKernel();
 		MarkerVelocitySpaceExperiment.validateProduction();
-		pressureUsesCurrentMicroGasGeometry();
 		unresolvedCapillaryTractionIsAppliedOnce();
 		transportPreservesFixedWallVelocity();
 	}
 	private static void validateKernel() {
 		partiallyFilledPressureRetainsReferenceGauge();
+		pressureUsesCurrentMicroGasGeometry();
 		cellAffineVelocityPreservesResolvedMotion();
 		cellWetFaceAndConstraintWork();
 		fixedWallProjectionUsesActualMass();
@@ -167,6 +179,14 @@ public final class MarkerPressureValidation {
 		try { plan.publish(); } catch (IllegalStateException expected) { rejected = true; }
 		if (!rejected) throw new AssertionError("Pressure candidate published after its gas frame was replaced");
 		near(d.maximumParticleSpeed(), 0, 1e-6, "Rejected pressure candidate retains current velocities");
+		d.gasState.network.setStandardVolume(second, 0);
+		plan.prepare(.001F);
+		near(d.pressureReference, -101325, 0, "Vacuum pressure reference");
+		if (!plan.solve(d.config.pressureTolerance()).converged()) throw new AssertionError("Finite gas and vacuum pressure failed to solve");
+		plan.publish();
+		near(d.pressureSystem.gasPressure(first) + d.pressureReference, p1, 1e-3, "Finite-gas initial pressure survives the common-pressure solve");
+		near(d.pressureSystem.gasPressure(second) + d.pressureReference, -101325, 1e-3, "Vacuum compartment retains its own physical pressure");
+		near(d.maximumParticleSpeed(), 0, 1e-6, "Common gas pressure initialization preserves stationary compartments");
 		d.setVolume(0, 1, 1, 0); d.setVolume(2, 1, 1, 0);
 		d.stepMechanicsOnly();
 		var emptyField = d.pressureSystem.markerVelocityField();
@@ -551,7 +571,12 @@ public final class MarkerPressureValidation {
 		var force=markers(j);c.force(new double[]{liquidNew,gasNew},force);
 		for(int a=0;a<3;a++)for(int i=0;i<j.markerCount();i++)v[a][i]+=dt*force[a][i]/j.massKilograms(i);
 		c.volumeRate(v,rate);near(rate[0],0,2e-16,"Liquid/gas shared flux");near(rate[1]+compliance*(gasNew-gasInitial)/dt,0,2e-16,"Finite gas storage sign");
-		c.apply(new double[]{liquidNew,gasNew},h);near(h[0],-.05/dt,2e-12,"SI liquid RHS");near(h[1],.05/dt+storage*gasInitial,2e-12,"SI finite gas RHS");
+		c.apply(new double[]{liquidNew,gasNew},h);near(h[0],-.05/dt,2e-12,"SI liquid RHS");
+		double gasRhs = .05/dt + storage*gasInitial;
+		// Positive marker reduction and the six products/divisions forming this one-face response.
+		int operations = j.markerCount() + 6;
+		double roundoff = operations * Math.scalb(1.0, -53) / (1 - operations * Math.scalb(1.0, -53));
+		near(h[1],gasRhs,roundoff*gasRhs,"SI finite gas RHS");
 		// Prescribed liquid pressure, finite gas: incoming liquid compresses the gas.
 		first[0][face]=-1;second[0][face]=0;
 		var gas=new MarkerPressureOperator(j,1,first,second,area,new double[]{storage});

@@ -23,8 +23,8 @@ final class CellRemapSampling {
 				center /= Integer.bitCount(support);
 				lower[axis] = low ? -.5 : 0; upper[axis] = high ? .5 : 0;
 				if ((movingAxes & 1 << axis) != 0) {
-					mean[axis] = Math.max(lower[axis], Math.min(upper[axis], Math.max(center - maximumTranslation, Math.min(center + maximumTranslation, mean[axis]))));
-					target[axis] = moments.mass() * mean[axis];
+					double adjusted = Math.max(lower[axis], Math.min(upper[axis], Math.max(center - maximumTranslation, Math.min(center + maximumTranslation, mean[axis]))));
+					if (adjusted != mean[axis]) { mean[axis] = adjusted; target[axis] = moments.mass() * adjusted; }
 				}
 			}
 			projected.setCentroid(mean);

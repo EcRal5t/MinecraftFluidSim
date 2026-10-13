@@ -10,6 +10,7 @@ public final class CellRemapMomentsValidation {
 		if (args.length > 1 || args.length == 1 && !java.util.List.of("transport-moments", "joint-moments", "sweep-only", "footprint-only").contains(args[0]))
 			throw new IllegalArgumentException("Unknown remap moments validation entry");
 		if (args.length == 1 && args[0].equals("joint-moments")) {
+			partialCellInitializationHasPositiveWetLayerSupport();
 			thinJointRuleKeepsActualRank(); jointRuleKeepsIndependentVelocityModes(); thinAffineRuleKeepsCrossMoments();
 			unequalSourceMassKeepsFirstMoment();
 			chemicalQuadratureRetainsJointMomentsWithFewQuanta(); smallTransferredGroupsRetainShear();
@@ -34,6 +35,7 @@ public final class CellRemapMomentsValidation {
 		scalarTransportKeepsUnexcitedSpatialInertia();
 		directionalTransportPartitionsActualMomentumAndKineticEnergy();
 		thinJointRuleKeepsActualRank();
+		partialCellInitializationHasPositiveWetLayerSupport();
 		jointRuleKeepsIndependentVelocityModes();
 		thinAffineRuleKeepsCrossMoments(); unequalSourceMassKeepsFirstMoment();
 		geometryRemapUsesPlannedCapacity();
@@ -382,6 +384,23 @@ public final class CellRemapMomentsValidation {
 
 	private static double jointComponent(CellRemapSpatialMoments.Result result, int node, int axis) {
 		return axis < 3 ? result.positions()[node][axis] : result.velocities()[node][axis - 3];
+	}
+
+	private static void partialCellInitializationHasPositiveWetLayerSupport() {
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, .8F), 64);
+		domain.setVolume(0, 0, 0, .25F);
+		var basis = CellAffineVelocity.capture(domain);
+		var volume = mmm.units.SignedDyadic.ZERO; var firstY = mmm.units.SignedDyadic.ZERO;
+		check(domain.particleCount() == 8 && basis.rank(0) == 4 && basis.hasRepresentableBasis(0),
+				"Partial wet-layer initialization lacks positive three-dimensional affine support");
+		for (int p = 0; p < domain.particleCount(); p++) {
+			var weight = mmm.units.SignedDyadic.of(domain.particles.volume(p));
+			check(weight.equals(mmm.units.SignedDyadic.of(.03125)) && domain.particles.mass(p) == 31.25,
+					"Partial wet-layer initialization changed its actual source weights");
+			volume = volume.add(weight); firstY = firstY.add(weight.multiply(mmm.units.SignedDyadic.of(domain.particles.positionY(p))));
+		}
+		check(volume.equals(mmm.units.SignedDyadic.of(.25)) && firstY.equals(volume.multiply(mmm.units.SignedDyadic.of(.0625))),
+				"Partial wet-layer initialization changed its exact volume or physical centroid");
 	}
 
 	private static void jointRuleKeepsIndependentVelocityModes() {

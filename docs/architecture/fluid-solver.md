@@ -108,7 +108,7 @@ G2P 的预测、投影、PIC 与输入载体动能，以及 FLIP 混合的线性
 
 [MarkerVelocityTransfer](../../solver/src/main/java/mmm/fluid/MarkerVelocityTransfer.java) 提供实际 kg 加权的固定稀疏 `J/Jᵀ`，封闭面统一排除，MAC 发布采用双精度归约及一次 float 写入。[MarkerPressureOperator](../../solver/src/main/java/mmm/fluid/MarkerPressureOperator.java) 将共享面面积和相邻压力行组成 `C`，提供体积流率 `Cv`、压力力 `Cᵀp` 和 `CM⁻¹Cᵀ + S_g`；有限气体储存为 `S_g = Vβ_s/Δt²`。压力力先计算共享面压差，封闭常压力保持严格零力；相同压力行的面贡献先合并，再计算对角项。独立离散验证覆盖实际粒子质量下的连续性、压力冲量与功、封闭常压力零空间和气体压缩符号。
 
-纯液体主流程通过 [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java) 使用实际质量的格内仿射拟合与微盒湿面约束，直接发布粒子速度和同一拟合场的 MAC 法向迹。每个正湿体积格参与 `V div` 体积约束，载体须具有可表示的秩四支撑；部分充液格与有限气腔共同满足恒压载荷的 Gauss 关系，改变数值压力参考保持实际载体力。压力几何来自当前气腔 frame 的 PLIC，具体来源校核见[气体压力耦合](gas-state.md#压力与热耦合)。含颗粒或连续固相库存时，主流程使用联合面压力和既有 G2P 写回。稀疏支撑、断开分量及各相共同惯性的完成条件见[求解器整合计划](../roadmap/solver-consolidation-plan.md)。
+纯液体主流程通过 [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java) 使用实际质量的格内仿射拟合与微盒湿面约束，直接发布粒子速度和同一拟合场的 MAC 法向迹。每个正湿体积格参与 `V div` 体积约束，载体须具有可表示的秩四支撑；部分充液格与有限气腔共同满足恒压载荷的 Gauss 关系，改变数值压力参考保持实际载体力。线性求解以气腔储存加权的共同常压模式起算，再由实际算子计算完整残差；零对角行保持零初值。压力几何来自当前气腔 frame 的 PLIC，具体来源校核见[气体压力耦合](gas-state.md#压力与热耦合)。含颗粒或连续固相库存时，主流程使用联合面压力和既有 G2P 写回。稀疏支撑、断开分量及各相共同惯性的完成条件见[求解器整合计划](../roadmap/solver-consolidation-plan.md)。
 
 [LiquidSpatialInput](../../solver/src/main/java/mmm/fluid/LiquidSpatialInput.java) 按需捕获当前 frame 的 PLIC 与原始载体矩。微盒使用 `8*cell+micro` 编号，按固定连通分量分别汇总；空分量、干微盒及其中的未解析载体保留各自身份。源权重按积分点位置分组，PLIC 保存几何覆盖积分，分量孔隙率将覆盖积分换算为孔隙内液体体积及其第一矩。全干格的分量孔隙率按规范整数 SVQ 分配后的容量计算，与气体块共用容量解释。原始体积和质量保留求解器单位，两种位置第一矩均乘物理米；SI 比较使用捕获的 `SolverUnitScale`。源与几何的差额先精确相减，再舍入为观察值，保留悬殊质量下的小差额。
 
@@ -187,7 +187,7 @@ dt <= 2/L
 
 默认构建使用单元有限体积液体输运。各格实际 marker 体积精确求和，压力、PLIC、气腔剩余容量和输运使用同一单元库存。独立数值对照可用 JVM 参数 `-Dmmm.cellVolumeTransport=false` 选择粒子积分点平流。空间精度与长期分布的验收如下；完整生产步的耗时要求见[生产资格](../roadmap/performance-and-backends.md#有限体积输运的生产资格)。
 
-`setVolume` 通过 `CellVolumeReplacementPlan` 预检单格替换。请求达到当前可用容量时，各固定连通分量先取得共享 SVQ 分配后的精确孔隙容量，再由其开放微格的四分之一格积分点分配液体体积；`LiquidCellQuadrature` 在共同 binary32 格点上均匀分配并保留分量精确总体积，份额的储存差最多为该格点的一个单位。部分填充按开放微格顺序保留每份至多八分之一格的既有采样规则，并逐分量抵扣剩余容量。生成点使用最终 binary32 坐标校核实际所在格与微格，无法表示所需采样位置时立即拒绝。
+`setVolume` 通过 `CellVolumeReplacementPlan` 预检单格替换。请求达到当前可用容量时，各固定连通分量先取得共享 SVQ 分配后的精确孔隙容量，再由其开放微格的四分之一格积分点分配液体体积；`LiquidCellQuadrature` 在共同 binary32 格点上均匀分配并保留分量精确总体积，份额的储存差最多为该格点的一个单位。无切割格的部分填充采用请求水平湿层内的八点规则，层厚为请求体积除以当前孔隙容量；切格部分填充按开放微格顺序逐分量抵扣剩余容量。生成点使用最终 binary32 坐标校核实际所在格与微格，无法表示所需采样位置时立即拒绝。
 
 旧载体索引、新载体质量、完整化学组成与区域数量额度、实际储存内能的正温反演，以及完整 source/sink 审计候选均在删除前完成校验和储存预留。气体已初始化时，以未来完整载体矩列表预检气腔拓扑及热学后继；预览缓存与替换计划绑定实际库存网格的重建版本，原位抽取同样使旧计划失效。提交前复核载体、化学、气体、颗粒、热学版本与碰撞几何。提交按原索引降序删除并同步附属列，随后发布新载体与两份完整审计；气体按后续正常几何同步更新。热源精确等于全部新载体实际储存内能之和，热汇精确等于移除载体的内能之和。
 

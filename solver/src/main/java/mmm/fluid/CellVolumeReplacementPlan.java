@@ -82,6 +82,8 @@ final class CellVolumeReplacementPlan {
 		ArrayList<Piece> pieces = new ArrayList<>(volumes.size());
 		ArrayList<LiquidEnergyColumn.LiquidInsertion> thermalInsertions = new ArrayList<>(volumes.size());
 		double density = domain.materialRegistry == null ? domain.config.density() : domain.materialRegistry.material(0).referenceDensity();
+		boolean layer = !volumes.isEmpty() && !full && domain.geometry.cutCells.mask(cell) == 0;
+		double depth = layer ? amount / pore(domain, cell).toDouble() : 1;
 		for (var entry : volumes) {
 			float volume = entry.volume();
 			double mass = volume * density;
@@ -96,6 +98,12 @@ final class CellVolumeReplacementPlan {
 				sourceBuilder.add(material, false, volume, chemistry.unitScale().kilograms(mass), mixture);
 			}
 			float[] position = domain.markerSlotPosition(x, y, z, entry.slot());
+			if (layer) {
+				double height = (entry.slot() & 2) == 0 ? .25 : .75;
+				position[1] = (float) ((y + height * depth) * domain.config.cellSize());
+				if (domain.particleCellIndex(position[0], position[1], position[2]) != cell)
+					throw new IllegalArgumentException("Cell liquid layer exceeds its binary32 coordinate representation");
+			}
 			pieces.add(new Piece(position[0], position[1], position[2], volume, mass, mixture));
 			thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(0, mass, mixture));
 		}
@@ -161,6 +169,11 @@ final class CellVolumeReplacementPlan {
 					result.add(new SlotVolume(slot++, value));
 				}
 			}
+		} else if (mask == 0 && remaining.signum() > 0) {
+			var values = LiquidCellQuadrature.volumes(remaining, 8);
+			if (values.size() != 8) throw new IllegalArgumentException("Cell liquid layer lacks eight positive binary32 weights");
+			for (int slot = 0; slot < values.size(); slot++) result.add(new SlotVolume(slot, values.get(slot)));
+			remaining = SignedDyadic.ZERO;
 		} else for (int slot = 0; slot < 8 && remaining.signum() > 0; slot++) {
 			int i = 0; while (i < supports.length && (supports[i] & 1 << slot) == 0) i++;
 			if (i == supports.length || capacities[i].signum() == 0) continue;

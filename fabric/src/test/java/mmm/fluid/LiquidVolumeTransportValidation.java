@@ -468,12 +468,15 @@ public final class LiquidVolumeTransportValidation {
 			mmm.simulation.FullCapabilityTestFixture.bindFull(domain, registries, 310,
 					mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 			int target = domain.cellIndex(2, 1, 1), remote = domain.cellIndex(7, 1, 1), slot = 0;
+			int targetCount = 0;
+			for (int p = 0; p < domain.particleCount(); p++) if (domain.particleCellIndex(p) == target) targetCount++;
 			for (int p = 0; p < domain.particles.count(); p++) {
 				if (domain.particleCellIndex(p) == target) {
 					// The retained rule touches the full cell through its actual left-face liquid slab.
 					domain.particles.setPositionX(p, (2.0F + 0.5F * amount) * config.cellSize());
-					domain.particles.setPositionY(p, (1.2F + 0.2F * slot) * config.cellSize());
-					domain.particles.setPositionZ(p, (1.7F - 0.15F * slot) * config.cellSize());
+					float fraction = slot / (float) Math.max(1, targetCount - 1);
+					domain.particles.setPositionY(p, (1.2F + .6F * fraction) * config.cellSize());
+					domain.particles.setPositionZ(p, (1.7F - .4F * fraction) * config.cellSize());
 					slot++;
 				} else if (domain.particleCellIndex(p) == remote) domain.particles.setVelocityX(p, 0.2F);
 			}
@@ -577,7 +580,9 @@ public final class LiquidVolumeTransportValidation {
 				double error = Math.abs((actual - initial) / mass - step * (double) dt * 0.2F);
 				if (error > step * 2 * Math.ulp(4.0F)) throw new AssertionError("Feasible uniform transport centroid drift: " + error);
 				if (transport.momentAudit.projectedGroups() != 0 || transport.momentAudit.maximumCentroidProjection() != 0)
-					throw new AssertionError("Feasible uniform transport unexpectedly projected its moment");
+					throw new AssertionError("Feasible uniform transport unexpectedly projected its moment: thermal=" + thermal
+							+ " dt=" + dt + " step=" + step + " groups=" + transport.momentAudit.projectedGroups()
+							+ " centroidProjection=" + transport.momentAudit.maximumCentroidProjection());
 				if (!inventory.equals(SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count())))
 					throw new AssertionError("Moment reconstruction changed exact volume");
 			}
