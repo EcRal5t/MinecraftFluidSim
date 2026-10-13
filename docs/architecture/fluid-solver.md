@@ -130,7 +130,7 @@ G2P 的预测、投影、PIC 与输入载体动能，以及 FLIP 混合的线性
 
 [MomentPreservingMergePlan](../../solver/src/main/java/mmm/fluid/MomentPreservingMergePlan.java) 在提交前预检整组替换。[QuadratureMomentFit](../../solver/src/main/java/mmm/fluid/QuadratureMomentFit.java) 以对称协方差映射恢复体积加权质心和六项二阶矩，并按原速度的最小二乘线性场更新新积分位置上的速度。空间秩为 `r` 的组至少保留 `r+1` 个正权重点；秩损失、越格、固体碰撞或超出速度舍入范围的动能增长均拒绝整组替换。逐材料质量、species 与内能沿原库存合并规则提交，均匀密度组同时保持质量加权矩。不可解析速度残差的耗散计入既有 reseed 机械诊断，位置与速度的误差受 binary32 写入精度限制。同温、同密度、同浓度分组保留已有局部物性场，必要时保留多于目标数的积分点。
 
-对称拆分用载体体积决定积分尺度。令 `V` 为父载体的 cell-normalized 体积、`h` 为格长，各向同性特征长度为 `h*cbrt(V)`；沿所选轴将体积二等分，对应的子积分点距离父点为四分之一特征长度。位移还受既有可放置区间限制：
+对称拆分用载体体积决定积分尺度。体积和质量都须可精确二等分为正的储存值，来源选择跳过无法满足这项条件的载体；全部来源均受限时计入 `conservationSkipped`，保留原始列。令 `V` 为父载体的 cell-normalized 体积、`h` 为格长，各向同性特征长度为 `h*cbrt(V)`；沿所选轴将体积二等分，对应的子积分点距离父点为四分之一特征长度。位移还受既有可放置区间限制：
 
 ```text
 d <= h*cbrt(V)/4

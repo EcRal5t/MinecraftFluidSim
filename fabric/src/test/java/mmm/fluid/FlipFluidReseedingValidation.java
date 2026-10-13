@@ -11,6 +11,7 @@ public final class FlipFluidReseedingValidation {
 		boolean fast = java.util.Arrays.asList(args).contains("--fast");
 		underpopulatedCellSplitsConservatively();
 		splitSpatialErrorScalesWithParcelVolume();
+		splitsRequirePositiveEqualStoredHalves();
 		overpopulatedCellMergesConservatively();
 		mergePreservesSpatialCovarianceAndRejectsRankLoss();
 		mergeRetainsAffineVelocityWithoutEnergyGain();
@@ -42,6 +43,39 @@ public final class FlipFluidReseedingValidation {
 				"full underpopulated cell did not reach its quadrature count: " + result);
 		checkLedger(before, after, 2.0E-7, "split");
 		check(Math.abs(result.ledgerError()) < 1.0E-12, "power-of-two split changed the exact float ledger");
+	}
+
+	private static void splitsRequirePositiveEqualStoredHalves() {
+		for (double mass : new double[]{Double.MIN_VALUE, 3 * Double.MIN_VALUE, Math.nextUp(Double.MIN_NORMAL)}) {
+			var fixture = new Fixture(8, 1);
+			fixture.x[0] = fixture.y[0] = fixture.z[0] = 1.5F;
+			fixture.volume[0] = .5F; fixture.mass[0] = mass;
+			var result = fixture.reseedMaterialAware(8);
+			check(result.particleCount() == 1 && result.split() == 0 && result.conservationSkipped() == 3
+					&& result.geometrySkipped() == 0 && fixture.mass[0] == mass && fixture.volume[0] == .5F
+					&& fixture.x[0] == 1.5F && fixture.y[0] == 1.5F && fixture.z[0] == 1.5F,
+					"Unrepresentable symmetric split changed its source or lost its conservation refusal");
+		}
+		var fixture = new Fixture(8, 1);
+		fixture.x[0] = fixture.y[0] = fixture.z[0] = 1.5F;
+		fixture.volume[0] = .5F; fixture.mass[0] = 2 * Double.MIN_VALUE;
+		var result = fixture.reseedMaterialAware(2);
+		check(result.particleCount() == 2 && result.split() == 1 && result.conservationSkipped() == 0
+				&& fixture.mass[0] == Double.MIN_VALUE && fixture.mass[1] == Double.MIN_VALUE,
+				"Representable subnormal split lost its positive equal masses");
+		var firstMoment = mmm.units.SignedDyadic.of(fixture.mass[0]).multiply(mmm.units.SignedDyadic.of(fixture.x[0]))
+				.add(mmm.units.SignedDyadic.of(fixture.mass[1]).multiply(mmm.units.SignedDyadic.of(fixture.x[1])));
+		check(firstMoment.equals(mmm.units.SignedDyadic.of(2 * Double.MIN_VALUE).multiply(mmm.units.SignedDyadic.of(1.5))),
+				"Symmetric stored split changed the subnormal mass first moment");
+		var mixed = new Fixture(8, 2);
+		for (int p = 0; p < 2; p++) mixed.x[p] = mixed.y[p] = mixed.z[p] = 1.5F;
+		mixed.volume[0] = .5F; mixed.mass[0] = 3 * Double.MIN_VALUE;
+		mixed.volume[1] = .125F; mixed.mass[1] = 125;
+		var available = mixed.reseedMaterialAware(3);
+		check(available.split() == 1 && available.particleCount() == 3 && available.conservationSkipped() == 0
+				&& mixed.volume[0] == .5F && mixed.mass[0] == 3 * Double.MIN_VALUE && mixed.x[0] == 1.5F
+				&& mixed.mass[1] == 62.5 && mixed.mass[2] == 62.5,
+				"Largest unrepresentable source hid another legal symmetric split");
 	}
 
 	private static void overpopulatedCellMergesConservatively() {

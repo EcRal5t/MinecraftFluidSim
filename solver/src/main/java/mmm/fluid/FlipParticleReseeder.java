@@ -101,8 +101,12 @@ final class FlipParticleReseeder {
 					budgetSkipped += target - cellMarkerCount[cell];
 					break;
 				}
-				int source = largestMarker(cell, particleVolume);
-				if (source < 0 || !splitParticle(
+				int source = largestMarker(cell, particleVolume, particleMass);
+				if (source < 0) {
+					conservationSkipped += target - cellMarkerCount[cell];
+					break;
+				}
+				if (!splitParticle(
 						solid, cell, source, particleCount,
 						particleX, particleY, particleZ, velocityX, velocityY, velocityZ,
 						particleVolume, particleMass, particleMaterialHandle, particlePhaseLabel,
@@ -377,10 +381,15 @@ final class FlipParticleReseeder {
 		return solid[cellIndex(nx, ny, nz)];
 	}
 
-	private int largestMarker(int cell, float[] particleVolume) {
+	private int largestMarker(int cell, float[] particleVolume, double[] particleMass) {
 		int best = -1;
 		float bestVolume = -1.0F;
 		for (int particle = cellHead[cell]; particle >= 0; particle = nextParticle[particle]) {
+			// Symmetric positions require exactly equal positive stored mass and volume shares.
+			float volume = particleVolume[particle], halfVolume = volume * .5F;
+			double mass = particleMass[particle], halfMass = mass * .5;
+			if (!(halfVolume > 0 && Float.isFinite(halfVolume) && halfVolume == volume - halfVolume
+					&& halfMass > 0 && Double.isFinite(halfMass) && halfMass == mass - halfMass)) continue;
 			if (particleVolume[particle] > bestVolume) {
 				bestVolume = particleVolume[particle];
 				best = particle;
