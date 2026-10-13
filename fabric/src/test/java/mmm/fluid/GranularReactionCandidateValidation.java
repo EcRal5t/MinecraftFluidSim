@@ -459,7 +459,9 @@ public final class GranularReactionCandidateValidation {
 		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		var domain = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 100, 1.0e-5F, 0.45F, 0.002F, 0.8F), 216);
-		domain.setVolume(1, 1, 1, 0.125F);
+		// The cache comparison edits and reacts one raw thermal carrier with the full cell inventory.
+		ThermalValidationSupport.restorePhaseTestCarriers(domain, liquids, new float[]{.125F}, new int[]{0});
+		liquids = domain.materialRegistry;
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		var base = ThermochemistryValidationScenarios.reactiveGranularThermalRegistry(liquids, granular);
@@ -580,9 +582,16 @@ public final class GranularReactionCandidateValidation {
 		var registry = new GranularRegistry(builtin.materials(), builtin.carriers(), List.of(rule), chemistry);
 		var domain = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 100, 1.0e-5F, 0.45F, 0.002F, 0.8F), 216);
-		domain.setVolume(1, 1, 1, 0.1F);
-		if (mode.equals("region-budget")) domain.setVolume(2, 1, 1, 0.1F);
-		domain.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
+		// Budget cases use one source carrier and, for the region limit, one independent neighbor.
+		float[] volumes = mode.equals("region-budget") ? new float[]{.1F, .1F} : new float[]{.1F};
+		ThermalValidationSupport.restorePhaseTestCarriers(domain,
+				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), volumes, new int[volumes.length]);
+		if (mode.equals("region-budget")) {
+			float[] neighbor = domain.markerSlotPosition(2, 1, 1, 0);
+			domain.particles.setPositionX(1, neighbor[0]); domain.particles.setPositionY(1, neighbor[1]);
+			domain.particles.setPositionZ(1, neighbor[2]); domain.gridDirty = true;
+		}
+		domain.bindGranular(registry, domain.materialRegistry, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(chemistry);
 		domain.setPrecipitationEnabled(true);
 		long amount = mode.equals("marker-budget") ? ChemicalLimits.MAX_REGION_TOTAL_QUANTA
