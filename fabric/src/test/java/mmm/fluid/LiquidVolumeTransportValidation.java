@@ -279,7 +279,7 @@ public final class LiquidVolumeTransportValidation {
 				if (mode == 2) {
 					var chemical = ConservativeLiquidFlux.class.getDeclaredMethod("limitChemicalShares");
 					chemical.setAccessible(true); chemical.invoke(flux);
-					if (!losses[0].equals(SignedDyadic.ZERO))
+					if (!losses[0].equals(SignedDyadic.ZERO) || !losses[1].equals(SignedDyadic.ZERO))
 						throw new AssertionError("A chemical whole-face removal was counted as floor rounding");
 				}
 				var capacities = (SignedDyadic[]) privateFluxField(flux, "exactCapacity");

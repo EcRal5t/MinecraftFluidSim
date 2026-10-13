@@ -153,7 +153,8 @@ final class LiquidPressureGeometry {
 		double admitted=plane.geometricLiquidVolume(cell,cut)*h3;
 		// Absolute quadrature allowance covers the clipped-cube CDF, transformed moments and eight-box reduction.
 		double error=(128.0*open+64)*Math.ulp(1.0)*h3+Math.ulp(admitted)+Math.ulp(volume);
-		if(!(volume>0 && Double.isFinite(volume)) || Math.abs(volume-admitted)>error)throw new IllegalStateException("PLIC pressure volume integration disagrees with admitted geometry at cell "+cell);
+		if(!(volume>0 && Double.isFinite(volume)) || Math.abs(volume-admitted)>error)throw new IllegalStateException("PLIC pressure volume integration disagrees with admitted geometry at cell "+cell
+				+": integrated="+volume+", admitted="+admitted+", raw="+rawVolume*h3);
 		return new CellSnapshot(cell,volume,first,first.scale(1/volume),admitted,rawVolume*h3,
 				d.projection.pressureVolume[cell]*h3,error,sides,facets,fragments);
 	}

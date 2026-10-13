@@ -2,17 +2,19 @@ package mmm.fluid;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
+import mmm.units.SignedDyadic;
 
 /** Bounded first-pour diagnostic using the production mechanical substep and private pressure snapshots. */
 public final class BoundaryPourDiagnostic {
 	private BoundaryPourDiagnostic() { }
 
 	public static void main(String[] args) {
-		if (args.length != 0) throw new IllegalArgumentException("Boundary pour diagnostic accepts no arguments");
-		run();
+		if (args.length > 1 || args.length == 1 && !args[0].equals("--flux"))
+			throw new IllegalArgumentException("Boundary pour diagnostic accepts --flux");
+		run(args.length == 1);
 	}
 
-	private static void run() {
+	private static void run(boolean fluxOnly) {
 		var config = new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 120, 1e-4F, .40F, .002F, .80F);
 		var initial = new FluidDomain(8, 8, 8, config, 4096);
 		initial.sealDomainBoundary(); initial.bootstrapGasState(null); initial.setGasNodeStandardVolume(1, 34);
@@ -21,18 +23,18 @@ public final class BoundaryPourDiagnostic {
 		FluidDomainState saved = null;
 		GasRuntimeGeometry previousGas = null;
 		for (int logical = 0; logical < 4; logical++) {
-			inspectInput(initial, "logical=" + logical + " before-capture");
+			if (!fluxOnly) inspectInput(initial, "logical=" + logical + " before-capture");
 			saved = initial.captureAuthoritativeState();
-			inspectGas(initial, previousGas, logical);
+			if (!fluxOnly) inspectGas(initial, previousGas, logical);
 			previousGas = initial.gasState.frame;
-			inspectInput(initial, "logical=" + logical + " after-capture");
+			if (!fluxOnly) inspectInput(initial, "logical=" + logical + " after-capture");
 			var restored = FluidDomain.restoreAuthoritativeState(saved);
-			inspectInput(restored, "logical=" + logical + " restored-input");
+			if (!fluxOnly) inspectInput(restored, "logical=" + logical + " restored-input");
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, saved, java.util.List.of(), false, 0));
 				initial = candidate.claimPreparedCpuDomain();
 				System.out.printf("POUR full logical=%d complete actualSpeed=%g markers=%d%n", logical, initial.maximumParticleSpeed(), initial.particleCount());
-				snapshot(initial, logical, -1, config.timeStep(), "after-full-step");
+				snapshot(initial, logical, -1, config.timeStep(), "after-full-step", fluxOnly);
 				initial = FluidDomain.restoreAuthoritativeState(initial.captureAuthoritativeState());
 			} catch (RuntimeException failed) {
 				System.out.printf("POUR full logical=%d failure=%s%n", logical, failed);
@@ -44,7 +46,7 @@ public final class BoundaryPourDiagnostic {
 		for (int attempt = 0; attempt < 16; attempt++) {
 			var domain = FluidDomain.restoreAuthoritativeState(saved);
 			domain.minimumMechanicalSubsteps = minimum;
-			inspectInput(domain, "failed-source before-CFL attempt=" + attempt);
+			if (!fluxOnly) inspectInput(domain, "failed-source before-CFL attempt=" + attempt);
 			int count = domain.calculateSubsteps(config.timeStep());
 			spent += count;
 			System.out.printf("POUR attempt=%d count=%d cumulative=%d sourceMarkers=%d gasPa=%g%n",
@@ -59,13 +61,13 @@ public final class BoundaryPourDiagnostic {
 			for (int substep = 0; substep < count; substep++) {
 				try {
 					domain.mechanicalPipeline.substep(dt, substep, false, null);
-					if (substep < 4 || substep % 128 == 0) snapshot(domain, attempt, substep, dt, "complete");
+					if (substep < 4 || substep % 128 == 0) snapshot(domain, attempt, substep, dt, "complete", fluxOnly);
 				} catch (MechanicalTimeRefinement finer) {
-					snapshot(domain, attempt, substep, dt, "refine=" + finer.getMessage());
+					snapshot(domain, attempt, substep, dt, "refine=" + finer.getMessage(), fluxOnly);
 					minimum = Math.max(Math.multiplyExact(minimum, 2), finer.minimumSubsteps);
 					refined = true; break;
 				} catch (RuntimeException failed) {
-					snapshot(domain, attempt, substep, dt, "failed=" + failed);
+					snapshot(domain, attempt, substep, dt, "failed=" + failed, fluxOnly);
 					throw failed;
 				}
 			}
@@ -142,7 +144,15 @@ public final class BoundaryPourDiagnostic {
 		}
 	}
 
-	private static void snapshot(FluidDomain d, int attempt, int substep, float dt, String outcome) {
+	private static void snapshot(FluidDomain d, int attempt, int substep, float dt, String outcome, boolean fluxOnly) {
+		if (fluxOnly) {
+			System.out.printf("POUR flux snapshot attempt=%d substep=%d dt=%g %s%n", attempt, substep, dt, outcome);
+			if (outcome.startsWith("failed=")) {
+				try { fluxReplay(d, dt); }
+				catch (RuntimeException | AssertionError failure) { System.out.println("POUR flux replay unverified; interpretation stopped: " + failure); }
+			}
+			return;
+		}
 		var projection = d.pressureSystem.markerProjection();
 		CellAffineVelocity basis = value(projection, "basis", CellAffineVelocity.class);
 		CellAffineVelocityField field = value(projection, "candidateField", CellAffineVelocityField.class);
@@ -276,6 +286,177 @@ public final class BoundaryPourDiagnostic {
 					basis.position(marker, 0), basis.position(marker, 1), basis.position(marker, 2), rawVolume[marker], rawMass[marker],
 					velocity[0][marker], velocity[1][marker], velocity[2][marker]);
 		}
+	}
+
+	private static void fluxReplay(FluidDomain failed, float dt) {
+		if (failed.chemicalParcels != null || failed.thermalState != null || failed.granularState != null)
+			throw new IllegalStateException("Pure-liquid flux replay requires matching side-column reconstruction");
+		var projection = failed.pressureSystem.markerProjection();
+		var field = value(projection, "candidateField", CellAffineVelocityField.class);
+		var basis = value(projection, "basis", CellAffineVelocity.class);
+		var old = value(projection, "gasFrame", GasRuntimeGeometry.class);
+		var network = value(projection, "gasNetworkOwner", mmm.fluid.air.AirNetwork.class);
+		if (!value(projection, "published", Boolean.class) || field == null || value(field, "basis", CellAffineVelocity.class) != basis)
+			throw new IllegalStateException("Failed substep has no current published pressure field");
+		if (value(projection, "dt", Float.class) != dt) throw new IllegalStateException("Pressure snapshot timestep differs from failure");
+		var position = value(projection, "originalPosition", double[][].class);
+		var velocity = value(projection, "publishedVelocity", double[][].class);
+		var mass = value(projection, "originalMass", double[].class);
+		var volume = value(projection, "originalVolume", double[].class);
+		int count = volume.length; float[] points = new float[4 * count], speeds = new float[3 * count];
+		SignedDyadic total = SignedDyadic.ZERO;
+		for (int p = 0; p < count; p++) {
+			for (int a = 0; a < 3; a++) {
+				points[4 * p + a] = (float) position[a][p]; speeds[3 * p + a] = (float) velocity[a][p];
+				if (points[4 * p + a] != position[a][p] || speeds[3 * p + a] != velocity[a][p])
+					throw new IllegalStateException("Pressure source position or published velocity is not binary32");
+			}
+			points[4 * p + 3] = (float) volume[p];
+			if (points[4 * p + 3] != volume[p]) throw new IllegalStateException("Pressure source volume is not binary32");
+			total = total.add(SignedDyadic.of(volume[p]));
+		}
+		var source = new FluidDomain(failed.sizeX, failed.sizeY, failed.sizeZ, failed.config, Math.max(1, count));
+		source.restoreParticleState(new FlipParticleState(source.sizeX, source.sizeY, source.sizeZ, source.config.cellSize(), count,
+				(float) total.toDouble(), points, speeds, value(projection, "geometryMasks", byte[].class)));
+		for (int p = 0; p < count; p++) source.particles.setMass(p, mass[p]);
+		source.ensureInventoryGrid();
+		if (!old.matchesCarrierGeometry(source, new long[source.cellCount]))
+			throw new IllegalStateException("Pressure source V/M1 does not match the old gas frame");
+		for (int cell = 0; cell < source.cellCount; cell++) for (int micro = 0; micro < 8; micro++) {
+			if (source.pressurePhaseGeometry.liquidFractionExact(cell, micro) != old.liquidFractionExact(cell, micro)
+					|| source.pressurePhaseGeometry.planeOffset(cell, micro) != old.planeOffset(cell, micro))
+				throw new IllegalStateException("Replay PLIC differs from the pressure frame at cell " + cell);
+			for (int a = 0; a < 3; a++) if (source.pressurePhaseGeometry.planeNormal(cell, micro, a) != old.planeNormal(cell, micro, a))
+				throw new IllegalStateException("Replay PLIC normal differs from the pressure frame at cell " + cell);
+		}
+		var actual = value(failed.cellLiquidVolumeTransport, "transport", ConservativeLiquidFlux.class);
+		var actualVolume = value(failed.cellLiquidVolumeTransport, "exactVolume", SignedDyadic[].class);
+		System.arraycopy(failed.gridToParticleStage.advectionCells(), 0, source.gridToParticleStage.advectionCells(), 0, source.cellCount);
+		source.gasState.frame = old; source.gasState.network = network;
+		// Transport saved its source classification before remap and wall projection rebuilt it.
+		for (int cell = 0; cell < source.cellCount; cell++) {
+			var stock = source.markerGrid.exactCellVolumeInventory[cell];
+			if (stock.signum() > 0) {
+				if (actualVolume[cell].signum() != 0 && !actualVolume[cell].equals(stock))
+					throw new IllegalStateException("Replay source classification differs at cell " + cell
+							+ ": rawInventory=" + stock + ", transportInventory=" + actualVolume[cell]);
+				source.gridToParticleStage.advectionCells()[cell] = actualVolume[cell].signum() != 0;
+			}
+		}
+		var replay = new ConservativeLiquidFlux(source.sizeX, source.sizeY, source.sizeZ, true);
+		var geometry = new LiquidFluxGeometry(source);
+		var flow = new LiquidAffineFaceFlow(source, replay, field);
+		replay.geometry(geometry); replay.faceSweep(flow); flow.prepareVelocities(replay, geometry);
+		var ballistic = new BallisticLiquidRemap(source, dt); replay.reserve(ballistic.reserved);
+		SignedDyadic[] exact = new SignedDyadic[source.cellCount]; double[] observed = new double[source.cellCount];
+		for (int cell = 0; cell < source.cellCount; cell++) {
+			exact[cell] = source.gridToParticleStage.advectionCells()[cell] ? source.markerGrid.exactCellVolumeInventory[cell] : SignedDyadic.ZERO;
+			observed[cell] = exact[cell].toDouble();
+		}
+		requireSameCells("source inventory", actualVolume, exact);
+		requireSameCells("ballistic reservation", value(actual, "reserved", SignedDyadic[].class), ballistic.reserved);
+		double normalizedDt = dt / source.config.cellSize();
+		replay.plan(observed, source.geometry.solid, normalizedDt, exact);
+		invokeStage(replay, "prepareGeometry", new Class<?>[]{boolean[].class, double.class, double[].class}, source.geometry.solid, normalizedDt, observed);
+		invokeStage(replay, "reconstructPlanes", new Class<?>[]{double[].class, boolean[].class, SignedDyadic[].class}, observed, source.geometry.solid, exact);
+		invokeStage(replay, "provisionalFluxes", new Class<?>[]{double[].class, double.class}, observed, normalizedDt);
+		invokeStage(replay, "limitAntidiffusion", new Class<?>[]{double[].class, double.class}, observed, normalizedDt);
+		double[] continuous = replay.flux.clone(), scaled = continuous.clone();
+		double[] outgoing = value(replay, "outgoing", double[].class);
+		for (int face = 0; face < scaled.length; face++) {
+			int donor = replay.donor(face); scaled[face] *= outgoing[donor] <= observed[donor] ? 1 : observed[donor] / outgoing[donor];
+		}
+		invokeStage(replay, "quantizeDonorSupply", new Class<?>[]{double[].class, double.class}, observed, normalizedDt);
+		invokeStage(replay, "limitChemicalShares", new Class<?>[0]);
+		SignedDyadic[] floor = replay.exactFlux.clone(), floorLoss = value(replay, "faceFloorLoss", SignedDyadic[].class).clone();
+		invokeStage(replay, "repairSharedFluxes", new Class<?>[]{SignedDyadic[].class, boolean[].class}, exact, source.geometry.solid);
+		if (actual.exactFlux.length != replay.exactFlux.length) throw new IllegalStateException("Replay transport channel count differs");
+		for (int face = 0; face < replay.exactFlux.length; face++)
+			if (actual.left[face] != replay.left[face] || actual.right[face] != replay.right[face] || actual.axis[face] != replay.axis[face]
+					|| !actual.exactFlux[face].equals(replay.exactFlux[face]))
+				throw new IllegalStateException("Replay final exact flux differs on channel " + face);
+		System.out.printf("POUR flux replay verified sourceV/M1+PLIC channels=%d markers=%d%n", replay.exactFlux.length, count);
+		var next = GasRuntimeGeometry.capture(failed, null, old.occupiedSvq(), old.sealedExterior());
+		var gasRows = value(projection, "gasRows", int[].class);
+		var storage = value(projection, "storage", double[].class);
+		var initialPressure = value(projection, "gasInitialPressure", double[].class);
+		var pressure = value(projection, "pressure", double[].class);
+		double reference = value(projection, "pressureReference", Float.class);
+		double[] candidateRate = new double[pressure.length], publishedRate = new double[pressure.length];
+		projection.operator().volumeRate(value(projection, "candidate", double[][].class), candidateRate);
+		projection.operator().volumeRate(velocity, publishedRate);
+		int closed = 0;
+		for (int node = 1; node <= old.nodeCount(); node++) {
+			if (network.inventory(node).isEmpty() || hasPositiveSuccessor(old, next, node)) continue;
+			closed++;
+			System.out.printf("POUR finiteNodeClosed node=%d stockNanos=%d oldGasM3=%.17g newPositiveOverlap=false minimumPiece=%d%n",
+					node, network.inventory(node).standardVolumeNanos(), old.capacity().chambers().get(node - 1).cubicMeters(), old.minimumPiece(node));
+			int row = gasRows[node];
+			if (row >= 0) {
+				double gasVolume = old.capacity().chambers().get(node - 1).cubicMeters();
+				double linearRatio = 1 - (double) dt * dt * storage[row] * (pressure[row] - initialPressure[row]) / gasVolume;
+				System.out.printf("POUR finiteNodePressure node=%d row=%d storage=%.17g p0=%.17g p=%.17g reference=%.17g p0Abs=%.17g pAbs=%.17g boundaryP0Abs=%.17g linearVolumeRatio=%.17g candidateCgDt=%.17g publishedCgDt=%.17g%n",
+						node, row, storage[row], initialPressure[row], pressure[row], reference,
+						initialPressure[row] + reference + mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE,
+						pressure[row] + reference + mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE,
+						network.gaugePressure(node) + mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE, linearRatio,
+						candidateRate[row] * dt, publishedRate[row] * dt);
+			}
+			var cells = new java.util.TreeSet<Integer>();
+			for (int piece = 0; piece < 8 * source.cellCount; piece++) if (old.nodeOfPiece(piece) == node) cells.add(piece / 8);
+			for (int cell : cells) {
+				fluxCell(replay, cell, exact[cell], "continuousFCT", continuous, null);
+				fluxCell(replay, cell, exact[cell], "scaledUnrounded", scaled, null);
+				fluxCell(replay, cell, exact[cell], "floor", null, floor);
+				fluxCell(replay, cell, exact[cell], "repair", null, replay.exactFlux);
+				for (int face = 0; face < replay.flux.length; face++) if (replay.left[face] == cell || replay.right[face] == cell)
+					System.out.printf("POUR fluxFace cell=%d channel=%d donor=%d receiver=%d continuous=%.17g scaled=%.17g floor=%s floorLoss=%s final=%s%n",
+							cell, face, replay.donor(face), replay.receiver(face), Math.abs(continuous[face]), Math.abs(scaled[face]), floor[face], floorLoss[face], replay.exactFlux[face]);
+			}
+		}
+		System.out.printf("POUR flux finiteNodesWithoutPositiveOverlap=%d%n", closed);
+	}
+
+	private static boolean hasPositiveSuccessor(GasRuntimeGeometry old, GasRuntimeGeometry next, int node) {
+		for (var piece : old.capacity().pieces()) {
+			if (old.nodeOfPiece(piece.id()) != node || next.nodeOfPiece(piece.id()) < 0) continue;
+			var before = old.geometry().piece(piece.id()); var after = next.geometry().piece(piece.id());
+			var planes = new java.util.ArrayList<GasGeometryOverlap.HalfSpace>(2);
+			if (before.dryPlane() != null) planes.add(before.dryPlane());
+			if (after.dryPlane() != null) planes.add(after.dryPlane());
+			if (!GasGeometryOverlap.normalizedVolume(before.micro(), planes).isZero()) return true;
+		}
+		return false;
+	}
+
+	private static void fluxCell(ConservativeLiquidFlux flux, int cell, SignedDyadic initial, String stage,
+	                             double[] approximate, SignedDyadic[] exact) {
+		SignedDyadic net = SignedDyadic.ZERO;
+		for (int face = 0; face < flux.flux.length; face++) {
+			SignedDyadic amount = exact == null ? SignedDyadic.of(Math.abs(approximate[face])) : exact[face];
+			if (flux.donor(face) == cell) net = net.subtract(amount);
+			if (flux.receiver(face) == cell) net = net.add(amount);
+		}
+		var capacity = value(flux, "exactCapacity", SignedDyadic[].class)[cell];
+		var remaining = capacity.subtract(initial).subtract(net);
+		System.out.printf("POUR fluxCell cell=%d stage=%s initial=%s net=%s remainingGap=%s gapValue=%.17g%n",
+				cell, stage, initial, net, remaining, remaining.toDouble());
+	}
+
+	private static void invokeStage(Object target, String name, Class<?>[] types, Object... arguments) {
+		try {
+			var method = target.getClass().getDeclaredMethod(name, types); method.setAccessible(true); method.invoke(target, arguments);
+		} catch (java.lang.reflect.InvocationTargetException failure) {
+			if (failure.getCause() instanceof RuntimeException cause) throw cause;
+			throw new AssertionError("Flux replay stage failed: " + name, failure.getCause());
+		} catch (ReflectiveOperationException failure) { throw new AssertionError("Missing flux replay stage: " + name, failure); }
+	}
+
+	private static void requireSameCells(String label, SignedDyadic[] expected, SignedDyadic[] replay) {
+		if (expected.length != replay.length) throw new IllegalStateException("Replay " + label + " cell count differs");
+		for (int cell = 0; cell < expected.length; cell++) if (!expected[cell].equals(replay[cell]))
+			throw new IllegalStateException("Replay " + label + " differs at cell " + cell + ": actual=" + expected[cell]
+					+ ", replay=" + replay[cell] + ", actualValue=" + expected[cell].toDouble() + ", replayValue=" + replay[cell].toDouble());
 	}
 
 	private static <T> T value(Object object, String name, Class<T> type) {

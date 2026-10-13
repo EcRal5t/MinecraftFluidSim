@@ -84,7 +84,7 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 正质量联合矩的合并、流入法向厚度、缺失空间方向的有界形状近似与输出回验见 [CellRemapSpatialMoments](../../solver/src/main/java/mmm/fluid/CellRemapSpatialMoments.java)，接收组装配在 `CellCarrierRemapPlan.completeArrivalShape`，精确扫掠二阶矩在 [LiquidAffineSweepGeometry](../../solver/src/main/java/mmm/fluid/LiquidAffineSweepGeometry.java)。平方根压缩及逐行尺度 QR 在 [JointMomentFactor](../../solver/src/main/java/mmm/fluid/JointMomentFactor.java)。聚焦验证为 `:fabric:runRemapMomentsValidation --args="joint-moments"` 和 `sweep-only`；完整逻辑步的分次统计与表示转换预算使用输运选择器 `representation`。
 
-有限体积与独立粒子的步长检查分别在 `CellLiquidVolumeTransport.courantRate`、`FluidDomainStepCoordinator.calculateVolumeTransportSubsteps` 和 `MechanicalStageAssembly.projectedCourant`。密闭注液的压力功与薄层支撑排查使用 [BoundaryPourDiagnostic](../../fabric/src/test/java/mmm/fluid/BoundaryPourDiagnostic.java)，入口 `:fabric:runBoundaryPourDiagnostic`。
+有限体积与独立粒子的步长检查分别在 `CellLiquidVolumeTransport.courantRate`、`FluidDomainStepCoordinator.calculateVolumeTransportSubsteps` 和 `MechanicalStageAssembly.projectedCourant`。密闭注液的压力功、薄层支撑与通量取整排查使用 [BoundaryPourDiagnostic](../../fabric/src/test/java/mmm/fluid/BoundaryPourDiagnostic.java)，入口 `:fabric:runBoundaryPourDiagnostic`，追加 `--args=--flux` 重放量化各阶段。
 
 外部液体提取与清空的多格气腔后继在 [LiquidExtractionGasPlan](../../solver/src/main/java/mmm/fluid/LiquidExtractionGasPlan.java)，注液后继在 [LiquidInsertionGasPlan](../../solver/src/main/java/mmm/fluid/LiquidInsertionGasPlan.java)；未来 count/V/M1 覆盖在 `FlipPressurePhaseGeometry.rebuildLiquidEdits` 与 `PhaseLiquidGeometryEdit.afterInsertion`。保留颗粒的凝聚相清空后继在 `GasTopologyCoordinator.planAfterCondensedClear`。移液、注液、撤墙与中途同步的热力学顺序对照在 `ThermalGasValidationScenarios.gasExpansionRetainsTheOldControlVolume`。
 

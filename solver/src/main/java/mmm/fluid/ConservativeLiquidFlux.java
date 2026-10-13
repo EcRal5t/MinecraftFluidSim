@@ -250,8 +250,10 @@ final class ConservativeLiquidFlux {
 				}
 			}
 			for (int f = 0; f < flux.length; f++)
-				if (carrierShares[donor(f)] < 7 && (incomingNext[f] != -2 || exactFlux[f].signum() == 0))
+				if (carrierShares[donor(f)] < 7 && (incomingNext[f] != -2 || exactFlux[f].signum() == 0)) {
 					upperFlux[f] = SignedDyadic.ZERO;
+					faceFloorLoss[f] = SignedDyadic.ZERO;
+				}
 		}
 	}
 
