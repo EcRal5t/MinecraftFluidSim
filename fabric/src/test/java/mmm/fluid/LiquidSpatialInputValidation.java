@@ -16,6 +16,11 @@ final class LiquidSpatialInputValidation {
 		vector(comparison.volumeFirstMomentDifference(), 0, 0, 0, "Centred source and PLIC first moment agree");
 		vector(comparison.uniformMassFirstMomentDifference(1000), 0, 0, 0, "Uniform centred actual mass first moment");
 		near(comparison.observedMassKg(), 1000, 0, "Actual kilograms remain separate from raw normalized volume");
+		tensor(comparison.volumeSecondMomentDifference(), -1.0 / 48, "Quarter-cell source versus continuous cube second moment");
+		tensor(comparison.uniformMassSecondMomentDifference(1000), -1000.0 / 48, "Uniform source versus geometric inertia");
+		tensor(comparison.representedLocal().covariance().observe(), 1.0 / 12, "Continuous cube covariance is centred on its geometric centroid");
+		try { comparison.representedSecondMoment().entries().set(0, mmm.chemistry.ExactRational.ZERO); throw new AssertionError("Quadratic snapshot allowed mutation"); }
+		catch (UnsupportedOperationException expected) { }
 		var stock = centred.gasState.frame.liquidStock().getFirst().components().getFirst();
 		if (!comparison.carriers().volume().equals(stock.volume()) || !comparison.carriers().volumeFirstMoment().x().equals(stock.firstMomentX()))
 			throw new AssertionError("Spatial source disagrees with the captured complete liquid tuple");
@@ -23,6 +28,10 @@ final class LiquidSpatialInputValidation {
 		var updated = LiquidSpatialInput.capture(centred);
 		near(updated.component(0, 255).comparison().carriers().mass().toDouble(), 1125, 0, "Mass-only edits read current raw mass despite old index mass");
 		near(comparison.carriers().mass().toDouble(), 1000, 0, "Prior source snapshot remains immutable");
+		near(updated.component(0, 255).comparison().carriers().massSecondMoment().observe().xx(), 70.3125, 0, "Mass-only edit refreshes the actual second moment");
+		near(comparison.carriers().massSecondMoment().observe().xx(), 62.5, 0, "Prior quadratic source snapshot remains immutable");
+		if (!comparison.representedSecondMoment().equals(updated.component(0, 255).comparison().representedSecondMoment()))
+			throw new AssertionError("Mass-only edit changed quadratic volume geometry");
 		if (!initial.geometry().cellSnapshot(0).equals(updated.geometry().cellSnapshot(0))) throw new AssertionError("Mass-only edit changed the volume geometry");
 		var shifted = MicroFaceVelocitySpaceExperiment.closedMask(0);
 		for (int marker = 0; marker < shifted.particleCount(); marker++) shifted.particles.setPositionX(marker, shifted.particles.positionX(marker) + 1F / 16);
@@ -63,6 +72,7 @@ final class LiquidSpatialInputValidation {
 		var empty = input.component(0, 128).comparison();
 		near(empty.carriers().count(), 0, 0, "Empty fixed component keeps its source tuple");
 		near(empty.represented().volume(), 0, 0, "Empty fixed component has zero wet volume");
+		tensor(empty.representedLocal().covariance().observe(), 0, "Empty geometric covariance remains zero");
 		near(input.component(0, 128).poreScale(), 1, 0, "Dry disconnected component retains its open pore capacity");
 		if (input.piece(7) == null) throw new AssertionError("Dry component piece identity was omitted");
 		d.granularCoupling = new mmm.granular.GranularCouplingFields(2, 2, 2, 1);
@@ -103,16 +113,27 @@ final class LiquidSpatialInputValidation {
 		var comparison = LiquidSpatialInput.capture(d).component(0, 255).comparison(); double density = Math.scalb(1.0, 501);
 		near(comparison.uniformMassDifference(density), 6, 0, "Mass residual is computed before observer rounding");
 		vector(comparison.uniformMassFirstMomentDifference(density), 3, 3, 3, "Mass moment residual survives large-mass cancellation");
+		var quadratic = comparison.uniformMassSecondMomentDifference(Math.scalb(3.0, 499));
+		for (int a = 0; a < 3; a++) near(quadratic.component(a, a), .375, 0,
+				"Quadratic mass residual is subtracted before large-mass observer rounding");
 	}
 	private static void halfCellUnits() {
 		var d = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, 0));
-		for (int cell = 1; cell < d.cellCount; cell++) d.setSolid(cell % 2, cell / 2 % 2, cell / 4, true);
-		d.setVolume(0, 0, 0, 1); var comparison = capture(d).component(0, 255).comparison();
+		for (int cell = 0; cell < d.cellCount - 1; cell++) d.setSolid(cell % 2, cell / 2 % 2, cell / 4, true);
+		d.setVolume(1, 1, 1, 1); var comparison = capture(d).component(7, 255).comparison();
 		near(comparison.carriers().mass().toDouble(), 1000, 0, "Half-metre cell retains raw solver mass");
 		near(comparison.observedMassKg(), 125, 0, "Half-metre cell converts physical mass once");
 		near(comparison.represented().volume(), .125, 0, "Half-metre cell PLIC volume uses cubic metres");
 		vector(comparison.volumeFirstMomentDifference(), 0, 0, 0, "Half-metre volume moments share physical coordinates");
 		vector(comparison.uniformMassFirstMomentDifference(1000), 0, 0, 0, "Half-metre mass moments use consistent SI scale");
+		tensor(comparison.volumeSecondMomentDifference(), -1.0 / 1536, "Half-metre volume second moments use cubic volume and squared position scale");
+		tensor(comparison.uniformMassSecondMomentDifference(1000), -1000.0 / 1536, "Half-metre source inertia has consistent units");
+		tensor(comparison.representedLocal().covariance().observe(), 1.0 / 48, "Translated half-metre cell covariance uses squared metres");
+		d.setVolume(1, 1, 1, Math.scalb(1F, -20));
+		var thin = capture(d).component(7, 255).comparison(); var covariance = thin.representedLocal().covariance().observe();
+		for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++) near(covariance.component(a, b),
+				a != b ? 0 : a == 1 ? Math.scalb(1.0 / 48, -40) : 1.0 / 48, 0,
+				"Thin translated PLIC covariance is evaluated before local moment cancellation axes=" + a + "," + b);
 	}
 	private static void capturedPoreScale() {
 		var d = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, 0));
@@ -128,6 +149,10 @@ final class LiquidSpatialInputValidation {
 		near(comparison.volumeDifference(), 0, 0, "Pore occupancy is distinguished from source approximation error");
 		vector(comparison.uniformMassFirstMomentDifference(1000), 0, 0, 0, "Pore-scaled uniform mass moment");
 		near(input.geometry().cellSnapshot(0).rawMarkerVolume(), .09375, 0, "Frame geometry reads captured raw stock rather than an unprepared index");
+		tensor(comparison.wetEnvelopeSecondMoment().observe(), 1.0 / 384, "Full geometric quadratic envelope");
+		tensor(comparison.representedSecondMoment().observe(), 1.0 / 512, "Quadratic geometry uses captured porosity");
+		tensor(comparison.volumeSecondMomentDifference(), -1.0 / 512, "Single-point source has zero cell-centred quadratic measure");
+		tensor(comparison.representedLocal().covariance().observe(), 1.0 / 48, "Scalar porosity preserves the geometric covariance");
 	}
 	private static FluidDomain oneMarker(int mask, float volume, float position) {
 		var d = MicroFaceVelocitySpaceExperiment.domain(2, 2, 2); var masks = new byte[8]; Arrays.fill(masks, (byte) 255); masks[0] = (byte) mask;
@@ -139,5 +164,8 @@ final class LiquidSpatialInputValidation {
 	}
 	private static void vector(LiquidPressureGeometry.Vec3 actual, double x, double y, double z, String message) {
 		near(actual.x(), x, 0, message + " X"); near(actual.y(), y, 0, message + " Y"); near(actual.z(), z, 0, message + " Z");
+	}
+	private static void tensor(LiquidPressureGeometry.SecondMoment actual, double diagonal, String message) {
+		for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++) near(actual.component(a, b), a == b ? diagonal : 0, 0, message + " axes=" + a + "," + b);
 	}
 }

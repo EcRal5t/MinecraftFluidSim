@@ -32,22 +32,28 @@ final class GasGeometryOverlap {
 
 	/** Exact cell-normalized volume. The caller supplies only microboxes open in both geometries. */
 	static ExactRational normalizedVolume(int micro, List<HalfSpace> planes) {
-		return integrate(micro, planes, false)[0];
+		return integrate(micro, planes, 0)[0];
 	}
 
 	/** Exact normalized volume and signed first moments about the whole-cell centre. */
 	static ExactRational[] normalizedMoments(int micro, List<HalfSpace> planes) {
-		return integrate(micro, planes, true);
+		return integrate(micro, planes, 1);
 	}
 
-	private static ExactRational[] integrate(int micro, List<HalfSpace> planes, boolean moments) {
+	/** V, X, Y, Z, XX, XY, XZ, YY, YZ, ZZ, with coordinates about the whole-cell centre. */
+	static ExactRational[] normalizedSecondMoments(int micro, List<HalfSpace> planes) {
+		return integrate(micro, planes, 2);
+	}
+
+	private static ExactRational[] integrate(int micro, List<HalfSpace> planes, int order) {
+		boolean moments = order > 0;
 		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 2 || planes.stream().anyMatch(Objects::isNull)) {
 			throw new IllegalArgumentException("Invalid gas overlap microbox or half-spaces");
 		}
 		List<HalfSpace> constraints = List.copyOf(planes);
 		try {
 			Point origin = new Point(ExactRational.of(micro & 1).divide(2), ExactRational.of(micro >>> 1 & 1).divide(2), ExactRational.of(micro >>> 2 & 1).divide(2));
-			ExactRational[] result = {ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
+			ExactRational[] result = new ExactRational[order == 2 ? 10 : 4]; java.util.Arrays.fill(result, ExactRational.ZERO);
 			var active = new ArrayList<Plane>(2);
 			for (HalfSpace halfSpace : constraints) {
 				Plane plane = new Plane(exact(halfSpace.nx), exact(halfSpace.ny), exact(halfSpace.nz), exact(halfSpace.threshold));
@@ -63,6 +69,10 @@ final class GasGeometryOverlap {
 				result[0] = MICRO_VOLUME;
 				if (moments) for (int axis = 0; axis < 3; axis++)
 					result[axis + 1] = MICRO_VOLUME.multiply(origin.component(axis).subtract(HALF.divide(2)));
+				if (order == 2) for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) {
+					var product = origin.component(a).subtract(HALF.divide(2)).multiply(origin.component(b).subtract(HALF.divide(2)));
+					result[index++] = MICRO_VOLUME.multiply(a == b ? product.add(ExactRational.ONE.divide(48)) : product);
+				}
 				return result;
 			}
 			List<List<Point>> faces = box(origin);
@@ -83,6 +93,7 @@ final class GasGeometryOverlap {
 								.add(face.get(i).component(axis)).add(face.get(i + 1).component(axis)).subtract(ExactRational.of(2));
 						result[axis + 1] = result[axis + 1].add(determinant.multiply(sum).divide(24));
 					}
+					if (order == 2) addSecondMoments(result, determinant, origin, face.getFirst(), face.get(i), face.get(i + 1));
 				}
 			}
 			ExactRational volume = sixVolume.divide(6);
@@ -97,6 +108,20 @@ final class GasGeometryOverlap {
 			return result;
 		} catch (IllegalArgumentException magnitude) {
 			throw new GasTopologyBlockedException("Exact gas overlap exceeds the rational representation budget: " + magnitude.getMessage());
+		}
+	}
+
+	private static void addSecondMoments(ExactRational[] result, ExactRational determinant, Point... vertices) {
+		var centered = new ExactRational[4][3];
+		var sum = new ExactRational[]{ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
+		for (int p = 0; p < 4; p++) for (int a = 0; a < 3; a++) {
+			centered[p][a] = vertices[p].component(a).subtract(HALF); sum[a] = sum[a].add(centered[p][a]);
+		}
+		// A simplex quadratic mean is (sum(x)*sum(y) + sum(x*y))/20; signed volume is det/6.
+		for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) {
+			var product = sum[a].multiply(sum[b]);
+			for (int p = 0; p < 4; p++) product = product.add(centered[p][a].multiply(centered[p][b]));
+			result[index] = result[index].add(determinant.multiply(product).divide(120)); index++;
 		}
 	}
 

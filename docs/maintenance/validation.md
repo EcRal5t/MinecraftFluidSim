@@ -95,7 +95,7 @@
 
 `--args="--gas-geometry"` 单独校验压力准备和发布中的当前微盒归属：同格两个独立气腔、实际接触气压参考、液体第一矩变化、frame 替换后的几何与候选拒绝。
 
-`--args="--spatial-input"` 先运行压力核及既有湿几何矩对照，再运行 [LiquidSpatialInputValidation](../../fabric/src/test/java/mmm/fluid/LiquidSpatialInputValidation.java)。覆盖原始体积与质量矩、半米格长的 SI 换算、悬殊质量的精确差额、同格断开分量的相反误差、完全干域与零分量、位于 PLIC 干微盒中的未解析载体、来源不可变副本及过期 frame 拒绝；孔隙率用例分别校核几何覆盖、孔隙内液体体积和全干断开分量的整数 SVQ 容量。几何对照复用立方体、薄层、切格、斜面及微面重合接口的既有断言。
+`--args="--spatial-input"` 先运行压力核及既有湿几何矩对照，再运行 [LiquidSpatialInputValidation](../../fabric/src/test/java/mmm/fluid/LiquidSpatialInputValidation.java)。覆盖原始体积与质量的一、二阶矩、平移后半米格长的 SI 换算、极薄 PLIC 的精确协方差、悬殊质量的精确差额、同格断开分量的相反误差、完全干域与零分量、位于 PLIC 干微盒中的未解析载体、来源不可变副本及过期 frame 拒绝；孔隙率用例分别校核几何覆盖、孔隙内液体矩和全干断开分量的整数 SVQ 容量。`air-cavity` 的共同盒积分对照检查八个微盒、三轴排列及八向反射的四面体、厚度 `2^-100` 的液层、相切与裁剪顺序，并核对零至二阶积分使用相同体积和第一矩。
 
 `--args="--velocity-space"` 先运行独立候选基底对照，再检查生产速度空间的三轴闭合旋涡、单点近壁模式、断开分量运动和独立液池的静态压力；生产条件不满足时任务失败。`--args="--velocity-candidate"` 运行测试专用的小矩阵原型，比较壁面适配的仿射和张量基底、真实质量支撑、完整多项式散度、投影功及转置虚功，同时以实际注液的两点来源及其单点情形检查采样、惯性和体积约束秩；八点联合矩重建继续检查空间秩。原型通过只证明所列小场景的模型条件，完整生产验收继续使用 `marker-pressure` 和所涉及领域的选择器。代码在 [MarkerVelocitySpaceExperiment](../../fabric/src/test/java/mmm/fluid/MarkerVelocitySpaceExperiment.java)。
 

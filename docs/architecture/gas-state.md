@@ -45,7 +45,7 @@ SI 容量以当前 `h³` 换算，各非最大份额一次舍入，最大份额�
 
 [GasFaceIntersection](../../solver/src/main/java/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
 
-[GasGeometryOverlap](../../solver/src/main/java/mmm/fluid/GasGeometryOverlap.java) 精确积分同一开放微盒与前后两个气体半空间的交集，返回单元归一化有理数体积。纯相切的交集体积为零，严格正的薄层保留精确量。库存交接仍需结合旧库存归属与实际可达路径；零重叠的有限气腔需要扫掠轨迹或可达性证明才能确定去向。
+[GasGeometryOverlap](../../solver/src/main/java/mmm/fluid/GasGeometryOverlap.java) 精确积分同一开放微盒与至多两个半空间的交集，返回单元归一化有理数体积。按需还可返回距格中心的一阶矩及六项二阶矩，液体湿几何共用该积分；体积与一阶矩入口仅计算各自需要的阶数。纯相切的交集体积为零，严格正的薄层保留精确量。库存交接仍需结合旧库存归属与实际可达路径；零重叠的有限气腔需要扫掠轨迹或可达性证明才能确定去向。
 
 ### 运行中的共同几何
 

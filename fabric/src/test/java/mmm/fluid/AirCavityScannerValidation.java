@@ -313,6 +313,7 @@ public final class AirCavityScannerValidation {
 	}
 
 	private static void validateMicroGasOverlap() {
+		validateQuadraticMicroMoments();
 		var zero=mmm.units.SignedDyadic.ZERO;
 		var one=mmm.units.SignedDyadic.of(1);
 		var quarter=mmm.units.SignedDyadic.of(.25);
@@ -352,6 +353,61 @@ public final class AirCavityScannerValidation {
 						"Repeated gas plane double-counted its overlap");
 			}
 		}
+	}
+
+	private static void validateQuadraticMicroMoments() {
+		var total = new ExactRational[10]; java.util.Arrays.fill(total, ExactRational.ZERO);
+		for (int micro = 0; micro < 8; micro++) {
+			var q = GasGeometryOverlap.normalizedSecondMoments(micro, List.of());
+			checkQuadraticPrefix(micro, List.of(), q);
+			for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) {
+				var expected = a == b ? ExactRational.ONE.divide(96)
+						: ExactRational.of((micro >> a & 1) == (micro >> b & 1) ? 1 : -1).divide(128);
+				check(q[index++].equals(expected), "Full microbox quadratic integral differs from its analytic box moment");
+			}
+			for (int i = 0; i < 10; i++) total[i] = total[i].add(q[i]);
+			for (int rotation = 0; rotation < 3; rotation++) {
+				var normal = new SignedDyadic[3]; var lengths = new ExactRational[3]; var threshold = SignedDyadic.of(-1, -2);
+				for (int a = 0; a < 3; a++) {
+					long scale = 1L << (a + rotation) % 3; int sign = (micro >> a & 1) == 0 ? -1 : 1;
+					normal[a] = SignedDyadic.of(sign * scale); lengths[a] = ExactRational.ONE.divide(4 * scale);
+					if (sign > 0) threshold = threshold.add(SignedDyadic.of(scale));
+				}
+				var planes = List.of(new GasGeometryOverlap.HalfSpace(normal[0], normal[1], normal[2], threshold));
+				var tetra = GasGeometryOverlap.normalizedSecondMoments(micro, planes); checkQuadraticPrefix(micro, planes, tetra);
+				check(tetra[0].equals(ExactRational.ONE.divide(3072)), "Corner tetrahedron volume differs from abc/6");
+				for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) {
+					int sign = (micro >> a & 1) == (micro >> b & 1) ? 1 : -1;
+					var mean = a == b ? ExactRational.ONE.divide(4).subtract(lengths[a].divide(4)).add(lengths[a].multiply(lengths[a]).divide(10))
+							: ExactRational.ONE.divide(4).subtract(lengths[a].add(lengths[b]).divide(8)).add(lengths[a].multiply(lengths[b]).divide(20));
+					check(tetra[index++].equals(tetra[0].multiply(mean).multiply(sign)), "Reflected tetrahedron quadratic moment differs from analytic monomial integration");
+				}
+			}
+		}
+		check(total[0].equals(ExactRational.ONE), "Eight quadratic micro integrals lost whole-cell volume");
+		for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++)
+			check(total[index++].equals(a == b ? ExactRational.ONE.divide(12) : ExactRational.ZERO), "Whole-cell quadratic moment differs from the uniform cube");
+		for (int axis = 0; axis < 3; axis++) {
+			var normal = new SignedDyadic[]{SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO}; normal[axis] = SignedDyadic.of(1);
+			var width = SignedDyadic.of(1, -100); var lower = new GasGeometryOverlap.HalfSpace(normal[0], normal[1], normal[2], SignedDyadic.of(1, -2));
+			var upper = new GasGeometryOverlap.HalfSpace(normal[0].negate(), normal[1].negate(), normal[2].negate(), SignedDyadic.of(1, -2).add(width).negate());
+			var planes = List.of(lower, upper); var q = GasGeometryOverlap.normalizedSecondMoments(0, planes); checkQuadraticPrefix(0, planes, q);
+			check(java.util.Arrays.equals(q, GasGeometryOverlap.normalizedSecondMoments(0, List.of(upper, lower))), "Quadratic overlap depends on clipping order");
+			var inverse = new ExactRational(q[0].denominator(), q[0].numerator());
+			for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) {
+				var covariance = q[index++].multiply(inverse).subtract(q[a + 1].multiply(inverse).multiply(q[b + 1].multiply(inverse)));
+				var expected = a != b ? ExactRational.ZERO : a == axis ? capacityRational(width.multiply(width)).divide(12) : ExactRational.ONE.divide(48);
+				check(covariance.equals(expected), "Sub-ULP thin slab lost its exact positive covariance");
+			}
+			var tangent = new GasGeometryOverlap.HalfSpace(normal[0].negate(), normal[1].negate(), normal[2].negate(), SignedDyadic.of(-1, -2));
+			for (var value : GasGeometryOverlap.normalizedSecondMoments(0, List.of(lower, tangent)))
+				check(value.isZero(), "Tangential overlap acquired a quadratic measure");
+		}
+	}
+	private static void checkQuadraticPrefix(int micro, List<GasGeometryOverlap.HalfSpace> planes, ExactRational[] quadratic) {
+		check(quadratic[0].equals(GasGeometryOverlap.normalizedVolume(micro, planes)), "Quadratic integration changed its volume");
+		var first = GasGeometryOverlap.normalizedMoments(micro, planes);
+		for (int i = 0; i < 4; i++) check(quadratic[i].equals(first[i]), "Quadratic integration changed a retained first moment");
 	}
 
 	private static void validateExactGasTopologyWeights() {

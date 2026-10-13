@@ -1,5 +1,6 @@
 package mmm.fluid;
 
+import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
 import java.util.ArrayList;
 import java.util.List;
@@ -165,6 +166,17 @@ final class LiquidPressureGeometry {
 				h3*h*((cell%domain.sizeX + .5*(micro&1))*integral[0] + .5*integral[1])/8,
 				h3*h*((cell/domain.sizeX%domain.sizeY + .5*(micro>>1&1))*integral[0] + .5*integral[2])/8,
 				h3*h*((cell/(domain.sizeX*domain.sizeY) + .5*(micro>>2&1))*integral[0] + .5*integral[3])/8));
+	}
+	/** Exact normalized coverage moments through degree two, about the whole-cell centre. */
+	static ExactRational[] pieceSecondMoments(FluidDomain domain, FlipPressurePhaseGeometry phase, int cell, int micro) {
+		if (cell < 0 || cell >= domain.cellCount || micro < 0 || micro >= 8) throw new IllegalArgumentException("Invalid liquid geometry piece");
+		if ((domain.geometry.cutCells.mask(cell) & 1 << micro) != 0 || phase.liquidFractionExact(cell, micro) == 0) {
+			var empty = new ExactRational[10]; java.util.Arrays.fill(empty, ExactRational.ZERO); return empty;
+		}
+		if (phase.liquidFractionExact(cell, micro) >= 1) return GasGeometryOverlap.normalizedSecondMoments(micro, List.of());
+		return GasGeometryOverlap.normalizedSecondMoments(micro, List.of(new GasGeometryOverlap.HalfSpace(
+				SignedDyadic.of(phase.planeNormal(cell, micro, 0)).negate(), SignedDyadic.of(phase.planeNormal(cell, micro, 1)).negate(),
+				SignedDyadic.of(phase.planeNormal(cell, micro, 2)).negate(), SignedDyadic.of(phase.planeOffset(cell, micro)).negate())));
 	}
 	private static double[] unitMicroMoments(FlipPressurePhaseGeometry plane, int cell, int micro) {
 		var integral = new double[4]; double fraction = plane.liquidFractionExact(cell, micro);
