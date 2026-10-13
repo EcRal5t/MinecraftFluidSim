@@ -70,7 +70,7 @@
 
 PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/src/main/java/mmm/fluid/PlicPlaneOffset.java)，单平面盒积分见 [MicroBoxPlaneVolume](../../solver/src/main/java/mmm/fluid/MicroBoxPlaneVolume.java)。组件气体库存容量及其几何差额见 [GasComponentCapacity](../../solver/src/main/java/mmm/fluid/GasComponentCapacity.java)；环境截留量分辨率检查在 `GasTopologyCoordinator.ambientInventory`，验证为 `AirCavityScannerValidation.validateAmbientCaptureResolution`。
 
-完整气腔归属恢复前校核在 `GasTopologyCoordinator.restore`，验证为 `AirCavityScannerValidation.validateGasRestoreLineage`；零孔隙容量的气体块过滤验证为 `validateMicroGasPoreCapacity`。几何权重的精确气体库存分配在 `GasInventory.partition(List<ExactRational>)`。
+完整气腔归属恢复前校核在 `GasTopologyCoordinator.restore`，验证为 `AirCavityScannerValidation.validateGasRestoreLineage`；零孔隙容量的气体块过滤验证为 `validateMicroGasPoreCapacity`。几何权重的精确气体库存分配在 `GasInventory.partition(List<ExactRational>)`，预约分求和共用 [ExactRational.add](../../model/src/main/java/mmm/chemistry/ExactRational.java)。重叠求和超限信息在 `GasTopologyCoordinator.overlaps`，按来源节点、后继节点、微盒与两份权重位数定位。
 
 共同运行几何及完整 source/target 元组校核见 [GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)，持久微盒列见 [GasStateSnapshot](../../model/src/main/java/mmm/fluid/air/GasStateSnapshot.java) 与 [GasRegionStateCodec](../../fabric/src/main/java/mmm/simulation/persistence/GasRegionStateCodec.java)。逐气体块证书容量分配见 [GasPieceCapacity](../../solver/src/main/java/mmm/fluid/GasPieceCapacity.java)，对应节点容量及 SI 误差汇总见 [GasChamberCapacity](../../solver/src/main/java/mmm/fluid/GasChamberCapacity.java)，验证为 `AirCavityScannerValidation.validateGasPieceCapacity`。相变后继计划身份与平行孔流连接汇总在 `AirNetwork`，验证为 `AirNetworkValidation.validatePhaseSuccessorAndParallelEdges`。
 

@@ -181,14 +181,7 @@ public final class GasInventory {
 		ExactRational sum = ExactRational.ZERO;
 		for (ExactRational weight : weights) {
 			if (weight == null || weight.signum() < 0) throw new IllegalArgumentException("Gas partition weight cannot be negative");
-			// Reduce each sum before applying the rational representation budget.
-			BigInteger common = sum.denominator().gcd(weight.denominator());
-			BigInteger factor = weight.denominator().divide(common);
-			BigInteger numerator = sum.numerator().multiply(factor)
-					.add(weight.numerator().multiply(sum.denominator().divide(common)));
-			BigInteger denominator = sum.denominator().multiply(factor);
-			BigInteger divisor = numerator.gcd(denominator);
-			sum = new ExactRational(numerator.divide(divisor), denominator.divide(divisor));
+			sum = sum.add(weight);
 		}
 		if (sum.signum() == 0) throw new IllegalArgumentException("Exact partition weights sum to zero");
 		ArrayList<ExactRational> normalized = new ArrayList<>(weights.size());

@@ -180,7 +180,15 @@ final class GasTopologyCoordinator {
 			}
 			var before = old.geometry().piece(piece);
 			var weight = exact(SignedDyadic.of(capacity.cubicMeters())).multiply(divide(overlap, before.normalizedVolume()));
-			result.merge(pair, weight, ExactRational::add);
+			try { result.merge(pair, weight, ExactRational::add); }
+			catch (IllegalArgumentException unavailable) {
+				var accumulated = result.get(pair);
+				throw new GasTopologyBlockedException("Exact gas overlap sum unavailable: source=" + source
+						+ ", destination=" + destination + ", piece=" + piece
+						+ ", accumulatedBits=" + accumulated.numerator().bitLength() + "/" + accumulated.denominator().bitLength()
+						+ ", weightBits=" + weight.numerator().bitLength() + "/" + weight.denominator().bitLength()
+						+ ": " + unavailable.getMessage());
+			}
 		}
 		return result;
 	}

@@ -90,9 +90,13 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 	public ExactRational add(ExactRational other) {
 		if (isZero()) return other;
 		if (other.isZero()) return this;
-		if (denominator.equals(other.denominator)) return new ExactRational(numerator.add(other.numerator), denominator);
-		return new ExactRational(numerator.multiply(other.denominator).add(other.numerator.multiply(denominator)),
-				denominator.multiply(other.denominator));
+		BigInteger common = denominator.gcd(other.denominator);
+		BigInteger first = denominator.divide(common), second = other.denominator.divide(common);
+		BigInteger sum = numerator.multiply(second).add(other.numerator.multiply(first));
+		if (sum.signum() == 0) return ZERO;
+		// Canonical inputs leave possible numerator cancellation only in the shared denominator factor.
+		BigInteger divisor = sum.gcd(common);
+		return new ExactRational(sum.divide(divisor), first.multiply(other.denominator.divide(divisor)));
 	}
 
 	public ExactRational subtract(ExactRational other) {

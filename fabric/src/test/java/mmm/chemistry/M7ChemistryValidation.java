@@ -68,6 +68,7 @@ public final class M7ChemistryValidation {
 
 	private static void validateRationalsAndCodec() {
 		validateRationalRounding();
+		validateRationalAdditionBudget();
 		check(ExactRational.parse("1.25").canonical().equals("5/4"), "finite decimal did not canonicalize exactly");
 		check(ExactRational.parse("10/8").canonical().equals("5/4"), "fraction did not reduce");
 		for (int numerator = -24; numerator <= 24; numerator++) {
@@ -102,6 +103,29 @@ public final class M7ChemistryValidation {
 		expectFailure(() -> ExactRational.parse("1e-500000"), "unbounded decimal scale was accepted");
 		expectFailure(() -> ExactRational.parse("9".repeat(ChemicalLimits.MAX_RATIONAL_TEXT_LENGTH + 1)),
 				"unbounded rational text was accepted");
+	}
+
+	private static void validateRationalAdditionBudget() {
+		var one = java.math.BigInteger.ONE;
+		var common = one.shiftLeft(ChemicalLimits.MAX_RATIONAL_BITS - 3);
+		var firstDenominator = common.multiply(java.math.BigInteger.TWO);
+		var secondDenominator = common.multiply(java.math.BigInteger.valueOf(3));
+		var totalDenominator = common.multiply(java.math.BigInteger.valueOf(6));
+		check(new ExactRational(one, firstDenominator).add(new ExactRational(one, secondDenominator))
+				.equals(new ExactRational(java.math.BigInteger.valueOf(5), totalDenominator)),
+				"legal unequal-denominator sum rejected its over-budget intermediate product");
+		var cancelled = new ExactRational(firstDenominator.subtract(one), firstDenominator)
+				.add(new ExactRational(one.subtract(secondDenominator), secondDenominator));
+		check(cancelled.equals(new ExactRational(one.negate(), totalDenominator))
+				&& cancelled.add(new ExactRational(one, totalDenominator)).equals(ExactRational.ZERO),
+				"wide opposing fractions lost exact cancellation before the final budget check");
+		var maximumDenominator = one.shiftLeft(ChemicalLimits.MAX_RATIONAL_BITS - 1);
+		var nearOne = new ExactRational(maximumDenominator.subtract(one), maximumDenominator);
+		check(nearOne.add(nearOne).equals(new ExactRational(maximumDenominator.subtract(one), maximumDenominator.shiftRight(1))),
+				"equal-denominator sum checked its numerator budget before reduction");
+		expectFailure(() -> new ExactRational(one, maximumDenominator)
+				.add(new ExactRational(one, maximumDenominator.subtract(one))),
+				"canonical addition result bypassed the rational magnitude budget");
 	}
 
 	private static void validateRationalRounding() {
