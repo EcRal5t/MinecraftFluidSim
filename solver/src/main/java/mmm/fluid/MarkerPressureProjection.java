@@ -338,7 +338,7 @@ final class MarkerPressureProjection {
 		var preconditioner = operator.preconditioner(diagonal, commonPressureMode); preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
 		double residual = rms(r), rz = dot(r, z); int iterations = 0;
 		for (; residual > tolerance && iterations < domain.config.maxPressureIterations();) {
-			operator.apply(direction, applied); double denominator = dot(direction, applied);
+			double denominator = operator.applyWithWork(direction, applied);
 			if (!(denominator > 0 && Double.isFinite(denominator) && rz > 0 && Double.isFinite(rz))) break;
 			double alpha = rz / denominator;
 			if (!Double.isFinite(alpha)) break;

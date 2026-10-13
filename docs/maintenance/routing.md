@@ -76,7 +76,7 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 纯液体压力的共同 PLIC 输入在 `GasRuntimeGeometry.liquidPressureGeometry`，湿面气体块编号在 [LiquidPressureGeometry](../../solver/src/main/java/mmm/fluid/LiquidPressureGeometry.java)，路径选择和参考值装配在 [PressureProjectionStage](../../solver/src/main/java/mmm/fluid/PressureProjectionStage.java) 与 [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java)。聚焦验证为 `:fabric:runMarkerPressureValidation --args="--gas-geometry"`。
 
-实际压力 Gram、常压粗模式正能量检查在 [CellVelocityConstraintOperator](../../solver/src/main/java/mmm/fluid/CellVelocityConstraintOperator.java)，SGS 与 balanced 粗空间修正在 [ConstraintGramPreconditioner](../../solver/src/main/java/mmm/fluid/ConstraintGramPreconditioner.java)。对称性、正能量及粗模式解使用 `:fabric:runMarkerPressureValidation --args="--kernel"`。
+实际压力 Gram、CG 正二次型 `applyWithWork` 与常压粗模式正能量检查在 [CellVelocityConstraintOperator](../../solver/src/main/java/mmm/fluid/CellVelocityConstraintOperator.java)，SGS 与 balanced 粗空间修正在 [ConstraintGramPreconditioner](../../solver/src/main/java/mmm/fluid/ConstraintGramPreconditioner.java)。对称性、正能量及粗模式解使用 `:fabric:runMarkerPressureValidation --args="--kernel"`。
 
 壁面零点形状、实际空间秩与微盒拆块在 `CellAffineVelocity`，共同加权 QR 在 [CellAffineFit](../../solver/src/main/java/mmm/fluid/CellAffineFit.java)，精度扩展在 `ExactCellAffineFit`。湿体积二阶矩、完整六面和内部共享面在 `LiquidPressureGeometry.supportMoments`、`microFaces` 与 `interiorFaces`；完整湿块六面散度在 `MarkerPressureProjection.boxDivergence`，部分湿块散度多项式和自由面压力功也在该类组装。均匀及非均匀质量的三轴闭合旋涡求解、发布与点采样，以及独立静液压使用 `:fabric:runMarkerPressureValidation --args="--velocity-space"`。
 

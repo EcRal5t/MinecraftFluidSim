@@ -309,9 +309,10 @@ public final class MarkerPressureValidation {
 		double[] rate = new double[2], pressure = {.7, -1.3}; constraint.volumeRate(velocity, rate);
 		var force = new double[3][count]; constraint.force(pressure, force);
 		near(rate[0] * pressure[0] + rate[1] * pressure[1], work(velocity, force), 2e-12, "Constraint and actual-marker force work");
-		double[] applied = new double[2]; constraint.apply(pressure, applied); double kinetic = 0;
+		double[] applied = new double[2]; double positiveWork=constraint.applyWithWork(pressure, applied); double kinetic = 0;
 		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < count; i++) kinetic += force[axis][i] * force[axis][i] / basis.massKilograms(i);
 		near(pressure[0] * applied[0] + pressure[1] * applied[1], kinetic + .125 * pressure[1] * pressure[1], 2e-12, "Actual mass Gram and gas storage");
+		near(positiveWork,kinetic+.125*pressure[1]*pressure[1],2e-12,"Positive actual-mass pressure work");
 		double[] diagonal = new double[2], unit = new double[2]; constraint.diagonal(diagonal);
 		for (int row = 0; row < 2; row++) {
 			Arrays.fill(unit, 0); unit[row] = 1; constraint.apply(unit, applied);

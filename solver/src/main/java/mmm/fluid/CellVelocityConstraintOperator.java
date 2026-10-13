@@ -210,6 +210,12 @@ final class CellVelocityConstraintOperator {
 
 	/** C M_actual^-1 C^T plus the finite gas compliance; expanded responses retain all product bits. */
 	void apply(double[] pressure, double[] result) {
+		apply(pressure,result,false);
+	}
+	double applyWithWork(double[] pressure,double[] result) {
+		return apply(pressure,result,true);
+	}
+	private double apply(double[] pressure,double[] result,boolean work) {
 		checkRows(pressure); checkRows(result);
 		if (pressure == result) throw new IllegalArgumentException("Aliased constraint vectors");
 		if (exactCoefficients != null) {
@@ -221,7 +227,7 @@ final class CellVelocityConstraintOperator {
 				}
 				result[row] = value.toDouble();
 			}
-			return;
+			return work ? positiveWork(pressure) : 0;
 		}
 		Arrays.fill(response, 0);
 		for (int row = 0; row < storage.length; row++) for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
@@ -233,6 +239,28 @@ final class CellVelocityConstraintOperator {
 				int index = indices[entry]; result[row] += MarkerPressureOperator.rescaledResponse(coefficients[entry], inverseMass[index % markerCount], response[index]);
 			}
 		}
+		return work ? positiveWork(pressure) : 0;
+	}
+
+	/** The same pulled-back force measures positive work without cancellation between pressure rows. */
+	private double positiveWork(double[] pressure) {
+		if(exactCoefficients!=null) {
+			SignedDyadic work=SignedDyadic.ZERO;
+			for(int index=0;index<exactResponse.length;index++)
+				work=work.add(exactResponse[index].multiply(exactResponse[index]).multiply(exactInverseMass[index%markerCount]));
+			for(int row=0;row<storage.length;row++) {
+				var value=SignedDyadic.of(pressure[row]); work=work.add(exactStorage[row].multiply(value).multiply(value));
+			}
+			return work.toDouble();
+		}
+		double work=0,error=0;
+		for(int index=0;index<response.length+storage.length;index++) {
+			double value=index<response.length
+					? MarkerPressureOperator.rescaledResponse(response[index],inverseMass[index%markerCount],response[index])
+					: MarkerPressureOperator.rescaledResponse(pressure[index-response.length],storage[index-response.length],pressure[index-response.length]);
+			double adjusted=value-error, next=work+adjusted; error=(next-work)-adjusted; work=next;
+		}
+		return work;
 	}
 
 	void diagonal(double[] result) {
