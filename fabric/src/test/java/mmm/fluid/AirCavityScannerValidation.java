@@ -355,6 +355,8 @@ public final class AirCavityScannerValidation {
 	}
 
 	private static void validateExactGasTopologyWeights() {
+		validateSingleGasSuccessorWeight();
+		validateAmbientGasSuccessorWeight();
 		for (boolean reflected : new boolean[]{false, true}) {
 			float h = .0008F;
 			byte[] masks = new byte[45]; java.util.Arrays.fill(masks, (byte) 255);
@@ -363,6 +365,7 @@ public final class AirCavityScannerValidation {
 			domain.restoreParticleState(new FlipParticleState(5, 3, 3, h, 0, 0, new float[0], new float[0], masks));
 			domain.sealDomainBoundary();
 			var parent = domain.bootstrapGasState("");
+			var parentFrame = domain.gasState.frame;
 			check(parent.nodes().size() == 1 && parent.nodes().getFirst().inventory().standardVolumeNanos() == 2,
 					"Public gas split fixture must begin with one two-nano parent");
 			int x = reflected ? 3 : 1, corner = reflected ? 6 : 7;
@@ -376,6 +379,9 @@ public final class AirCavityScannerValidation {
 			check(domain.gasBoundary.availableVolume(tiny) > 0
 					&& domain.gasBoundary.availableVolume(large) == 16 * domain.gasBoundary.availableVolume(tiny),
 					"Gas split must use the actual one-to-sixteen geometric volume ratio");
+			var weights = gasOverlapWeights(domain, parentFrame, domain.gasState.frame);
+			check(weights.get(1L << 32 | large).equals(weights.get(1L << 32 | tiny).multiply(16)),
+					"Multiple gas successors lost their actual geometric weight ratio");
 			check(domain.gasBoundary.inventory(tiny).isEmpty()
 					&& domain.gasBoundary.inventory(large).equals(parent.nodes().getFirst().inventory()),
 					"Quantized geometry weights diverted a nano into the tiny gas volume");
@@ -398,6 +404,57 @@ public final class AirCavityScannerValidation {
 		if (error.signum() < 0) error = error.negate();
 		var halfUlp = mmm.units.SignedDyadic.of(Math.ulp(direct[0])).multiply(mmm.units.SignedDyadic.of(1, -1));
 		check(error.compareTo(halfUlp) <= 0, "Gas volume partition exceeded its exact half-ULP closure bound");
+	}
+
+	private static void validateSingleGasSuccessorWeight() {
+		var domain = pieceCapacityDomain(0, .19F, .24F, .31F, .1875F);
+		domain.sealDomainBoundary(); var before = domain.bootstrapGasState(""); var old = domain.gasState.frame;
+		check(old.nodeCount() == 1 && old.capacity().pieces().size() > 1,
+				"Single-successor fixture requires a cavity spanning multiple dry microboxes");
+		domain.particles.setPositionX(0, .27F); domain.particles.setPositionY(0, .22F); domain.particles.setPositionZ(0, .29F);
+		domain.gridDirty = true; domain.ensureInventoryGrid();
+		var next = GasRuntimeGeometry.capture(domain, null, new long[8], true);
+		var weights = gasOverlapWeights(domain, old, next);
+		check(weights.size() == 1 && ExactRational.ONE.equals(weights.get(1L << 32 | 1)),
+				"A unique finite gas successor needs the complete inventory proportion");
+		double previousVolume = domain.gasState.network.availableVolume(1);
+		check(Double.doubleToRawLongBits(GasTopologyVolumePartition.partitionRational(previousVolume, List.copyOf(weights.values()))[0])
+				== Double.doubleToRawLongBits(previousVolume), "A unique gas successor changed its inherited control volume");
+		var ambient = GasRuntimeGeometry.capture(domain, null, new long[8], false);
+		check(ExactRational.ONE.equals(gasOverlapWeights(domain, old, ambient).get(1L << 32)),
+				"A unique ambient destination lost the complete finite inventory proportion");
+		domain.gasTopologyCoordinator.refresh(); var after = domain.exportGasState("");
+		check(after.nodes().size() == 1 && after.nodes().getFirst().inventory().equals(before.nodes().getFirst().inventory())
+				&& after.externalSource().equals(before.externalSource()) && after.escapedSink().equals(before.escapedSink())
+				&& domain.gasBoundary.auditClosed(), "Single-successor remapping changed finite stock or its external ledgers");
+		domain.setGasNodeStandardVolume(1, 0); old = domain.gasState.frame;
+		domain.particles.setPositionZ(0, Math.nextUp(domain.particles.positionZ(0)));
+		domain.gridDirty = true; domain.ensureInventoryGrid(); next = GasRuntimeGeometry.capture(domain, null, new long[8], true);
+		check(ExactRational.ONE.equals(gasOverlapWeights(domain, old, next).get(1L << 32 | 1)),
+				"Vacuum geometry lost its unique successor's control-volume proportion");
+		domain.gasTopologyCoordinator.refresh();
+		check(domain.gasBoundary.inventory(1).isEmpty(), "A surviving vacuum acquired gas inventory during geometry remapping");
+	}
+
+	private static void validateAmbientGasSuccessorWeight() {
+		var domain = pieceCapacityScaledDomain(.5F, 0); domain.bootstrapGasState(""); var old = domain.gasState.frame;
+		check(old.nodeCount() == 0, "Ambient trapping fixture must begin with an exterior-connected cell");
+		domain.setSolidMicroMask(0, 0, 0, 126); domain.gasTopologyCoordinator.refresh(); var next = domain.gasState.frame;
+		var weights = gasOverlapWeights(domain, old, next);
+		check(ExactRational.ONE.divide(64).equals(weights.get(1L)),
+				"Ambient capture lost the actual SI volume of its isolated microbox");
+		check(domain.gasBoundary.inventory(1).standardVolumeNanos() == 15_625_000
+				&& domain.gasState.network.externalSource().standardVolumeNanos() == 15_625_000
+				&& domain.gasBoundary.auditClosed(), "Ambient capture did not use its actual absolute trapped volume");
+	}
+
+	@SuppressWarnings("unchecked")
+	private static java.util.Map<Long, ExactRational> gasOverlapWeights(FluidDomain domain, GasRuntimeGeometry old, GasRuntimeGeometry next) {
+		try {
+			var method = GasTopologyCoordinator.class.getDeclaredMethod("overlaps", GasRuntimeGeometry.class, GasRuntimeGeometry.class);
+			method.setAccessible(true);
+			return (java.util.Map<Long, ExactRational>) method.invoke(domain.gasTopologyCoordinator, old, next);
+		} catch (ReflectiveOperationException failure) { throw new AssertionError("Gas topology weight inspection failed", failure); }
 	}
 
 	private static void validateGasRestoreLineage() {

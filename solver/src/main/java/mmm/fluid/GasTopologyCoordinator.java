@@ -141,10 +141,14 @@ final class GasTopologyCoordinator {
 		return plan(GasRuntimeGeometry.allDry(domain, retained.copySolidSvq(), domain.gasState.sealedDomainBoundary), false, null);
 	}
 
-	/** Exact common dry support, weighted by the old certified physical piece capacity. */
+	/** Single-successor finite stock needs only positive support; splits and ambient retain exact physical weights. */
 	private TreeMap<Long, ExactRational> overlaps(GasRuntimeGeometry old, GasRuntimeGeometry next) {
 		var result = new TreeMap<Long, ExactRational>();
-		for (var capacity : old.capacity().pieces()) {
+		var capacities = old.capacity().pieces();
+		var intersections = new ExactRational[capacities.size()];
+		int[] successor = new int[old.nodeCount() + 1]; Arrays.fill(successor, -1);
+		for (int index = 0; index < capacities.size(); index++) {
+			var capacity = capacities.get(index);
 			int piece = capacity.id(), source = old.nodeOfPiece(piece), destination = next.nodeOfPiece(piece);
 			if (destination < 0) continue;
 			var before = old.geometry().piece(piece); var after = next.geometry().piece(piece);
@@ -153,8 +157,24 @@ final class GasTopologyCoordinator {
 			if (after.dryPlane() != null) planes.add(after.dryPlane());
 			var overlap = GasGeometryOverlap.normalizedVolume(before.micro(), planes);
 			if (overlap.isZero()) continue;
+			intersections[index] = overlap;
+			if (source > 0) {
+				if (successor[source] == -1) successor[source] = destination;
+				else if (successor[source] >= 0 && successor[source] != destination) successor[source] = -2;
+			}
+		}
+		for (int index = 0; index < capacities.size(); index++) {
+			var overlap = intersections[index]; if (overlap == null) continue;
+			var capacity = capacities.get(index);
+			int piece = capacity.id(), source = old.nodeOfPiece(piece), destination = next.nodeOfPiece(piece);
+			long pair = (long) source << 32 | (destination & 0xffffffffL);
+			if (source > 0 && successor[source] >= 0) {
+				result.putIfAbsent(pair, ExactRational.ONE);
+				continue;
+			}
+			var before = old.geometry().piece(piece);
 			var weight = exact(SignedDyadic.of(capacity.cubicMeters())).multiply(divide(overlap, before.normalizedVolume()));
-			result.merge((long) source << 32 | (destination & 0xffffffffL), weight, ExactRational::add);
+			result.merge(pair, weight, ExactRational::add);
 		}
 		return result;
 	}
