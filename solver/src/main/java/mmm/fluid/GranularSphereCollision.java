@@ -57,7 +57,7 @@ final class GranularSphereCollision {
 	}
 	record Contact(double time, double[][] normals) { }
 	double[][] contactNormals(double[] position, float radius) {
-		return touching(position, radius, new ArrayList<>(), false).stream().map(Hit::normal).toArray(double[][]::new);
+		return touching(position, radius, new ArrayList<>()).stream().map(Hit::normal).toArray(double[][]::new);
 	}
 	Contact nextContact(double[] position, double[] velocity, double[] responseVelocity, float radius, double duration,
 	                    double[] driftError, double[] responseError) {
@@ -163,12 +163,9 @@ final class GranularSphereCollision {
 		return null;
 	}
 	private List<Hit> touching(double[] p, double radius, List<Hit> history) {
-		return touching(p, radius, history, true);
-	}
-	private List<Hit> touching(double[] p, double radius, List<Hit> history, boolean storedPose) {
 		List<Hit> candidates = new ArrayList<>(history), active = new ArrayList<>();
 		double[] quantum = new double[3];
-		if (storedPose) for (int a = 0; a < 3; a++) { float stored = (float) p[a]; quantum[a] = Math.max(Math.nextUp(stored) - (double) stored, stored - (double) Math.nextDown(stored)); }
+		for (int a = 0; a < 3; a++) { float stored = (float) p[a]; quantum[a] = Math.max(Math.nextUp(stored) - (double) stored, stored - (double) Math.nextDown(stored)); }
 		for (int a = 0; a < 3; a++) for (int side : new int[]{-1, 1}) {
 			double[] normal = new double[3]; normal[a] = side; double plane = side > 0 ? radius : sizes[a] * h - radius;
 			candidates.add(new Hit(0, 0, normal, new double[]{plane, 0, 0}, null, 0, a));

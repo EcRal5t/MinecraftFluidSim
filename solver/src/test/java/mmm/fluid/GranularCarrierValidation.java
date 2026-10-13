@@ -661,6 +661,16 @@ public final class GranularCarrierValidation {
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		var material = registry.material(sand); long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		float radius = mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+		var fixed = new GranularSphereCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null);
+		for (int axis = 0; axis < 3; axis++) for (int side : new int[]{-1, 1}) for (double fraction : new double[]{.5, 1}) {
+			double plane = side > 0 ? radius : 3 - (double) radius;
+			double[] position = {1.25, 1.25, 1.25}, incoming = new double[3];
+			position[axis] = plane + side * fraction * Math.ulp((float) plane); incoming[axis] = -side;
+			var contact = fixed.nextContact(position, incoming, incoming, radius, .025, new double[3], new double[3]);
+			require(contact != null && contact.time() == 0
+					&& java.util.Arrays.deepEquals(contact.normals(), fixed.contactNormals(position, radius)),
+					"joint contact projection dropped a fixed support accepted at the same event time");
+		}
 		for (float incomingNormal : new float[]{-.2F, -2}) {
 			int steps = incomingNormal == -.2F ? 3 : 1;
 			var reference = new GranularParcelStore.Parcel[steps];

@@ -143,7 +143,7 @@ final class GranularActiveContacts {
 			int i = members.get(visit); advance(i, event.time()); spend();
 			if (event.second() >= 0 || i != event.first())
 				for (var normal : fixed.contactNormals(position[i], radius[i])) rows.add(new GranularContactCompression.Row(local[i], -1, normal));
-			sweepCandidates(i);
+			contactCandidates(i);
 			for (int j = candidates.nextSetBit(0); j >= 0; j = candidates.nextSetBit(j + 1)) if (j != i) {
 				if (local[j] >= 0 && local[j] < visit || event.second() >= 0
 						&& (i == event.first() && j == event.second() || i == event.second() && j == event.first())) continue;
@@ -224,6 +224,19 @@ final class GranularActiveContacts {
 	}
 	private void sweepCandidates(int i) {
 		candidates.clear(); for (int cell : registrations[i]) candidates.or(sweptCells[cell]);
+	}
+	private void contactCandidates(int i) {
+		candidates.clear(); int[] lower = new int[3], upper = new int[3], sizes = {sizeX, sizeY, sizeZ};
+		for (int axis = 0; axis < 3; axis++) {
+			// A stored-coordinate quantum encloses the binary64 touching test, including neighboring centers.
+			double envelope = Math.ulp((float) (Math.abs(position[i][axis]) + h));
+			lower[axis] = coordinate(Math.nextDown(Math.nextDown(position[i][axis] - radius[i] - envelope) / h), sizes[axis]);
+			upper[axis] = coordinate(Math.nextUp(Math.nextUp(position[i][axis] + radius[i] + envelope) / h), sizes[axis]);
+		}
+		for (int z = lower[2]; z <= upper[2]; z++) for (int y = lower[1]; y <= upper[1]; y++) for (int x = lower[0]; x <= upper[0]; x++) {
+			var occupants = sweptCells[(z * sizeY + y) * sizeX + x];
+			if (occupants != null) candidates.or(occupants);
+		}
 	}
 	private boolean sweepsIntersect(int i, int j) {
 		for (int axis = 0; axis < 3; axis++)
