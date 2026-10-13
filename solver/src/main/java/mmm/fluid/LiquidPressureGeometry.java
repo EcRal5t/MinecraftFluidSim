@@ -50,6 +50,7 @@ final class LiquidPressureGeometry {
 		int plusMicro() { return (microKey&1)<<((axis+1)%3) | (microKey>>1&1)<<((axis+2)%3); }
 		int minusMicro() { return plusMicro() | 1<<axis; }
 	}
+	record InteriorFace(int cell, int minusMicro, int plusMicro, int axis, SurfaceMoments moments) { }
 	/** Rows store integral n_a*x_b; all fields are immutable and expressed in SI. */
 	record NormalFirstMoment(Vec3 x, Vec3 y, Vec3 z) { Vec3 row(int axis) { return axis == 0 ? x : axis == 1 ? y : z; } }
 	/** Wet integration piece and actual gas-side microbox are separate when PLIC coincides with a microface. */
@@ -76,9 +77,34 @@ final class LiquidPressureGeometry {
 	private final Profile[][] components;
 	private final byte[] collisionMasks;
 	private final List<SharedFace> sharedFaces;
+	private final MicroSnapshot[][] microPieces;
+	private final List<InteriorFace> interiorFaces;
+	private final double cellVolume;
+	private static final class MicroSnapshot {
+		final VolumeMoments physical;
+		final double[] first;
+		final GasGeometryOverlap.HalfSpace wetPlane;
+		final List<SideWet> faces;
+		private double[] moments;
+		MicroSnapshot(VolumeMoments physical, double[] first, GasGeometryOverlap.HalfSpace wetPlane, List<SideWet> faces) {
+			this.physical = physical; this.first = first; this.wetPlane = wetPlane; this.faces = List.copyOf(faces);
+		}
+		synchronized double[] moments(int micro, double cellVolume) {
+			if (moments == null) {
+				var integrated = GasGeometryOverlap.normalizedSecondMoments(micro, wetPlane == null ? List.of() : List.of(wetPlane));
+				var result = new double[10]; System.arraycopy(first, 0, result, 0, 4);
+				var scale = PlicComponentGeometry.ratio(SignedDyadic.of(cellVolume), SignedDyadic.of(1));
+				for (int i = 4; i < result.length; i++) result[i] = integrated[i].multiply(scale).toDouble();
+				moments = result;
+			}
+			return moments;
+		}
+	}
 
-	private LiquidPressureGeometry(CellSnapshot[] cells, Profile[][] components, byte[] masks, List<SharedFace> faces) {
+	private LiquidPressureGeometry(CellSnapshot[] cells, Profile[][] components, byte[] masks, List<SharedFace> faces,
+	                                MicroSnapshot[][] microPieces, List<InteriorFace> interiorFaces, double cellVolume) {
 		this.cells=cells; this.components=components; collisionMasks=masks; sharedFaces=List.copyOf(faces);
+		this.microPieces=microPieces; this.interiorFaces=List.copyOf(interiorFaces); this.cellVolume=cellVolume;
 	}
 	static LiquidPressureGeometry capture(FluidDomain domain) {
 		return capture(domain, domain.pressurePhaseGeometry);
@@ -89,10 +115,20 @@ final class LiquidPressureGeometry {
 	static LiquidPressureGeometry capture(FluidDomain domain, FlipPressurePhaseGeometry phase, List<PhaseLiquidGeometryEdit> stock) {
 		if (stock != null && stock.size() != domain.cellCount) throw new IllegalArgumentException("Liquid geometry source stock has the wrong shape");
 		var cells = new CellSnapshot[domain.cellCount]; var components = new Profile[domain.cellCount][];
+		var microPieces = new MicroSnapshot[domain.cellCount][];
 		var faces = new ArrayList<SharedFace>();
 		for (int cell=0;cell<cells.length;cell++) if(phase.liquidFractionExact(cell)>0)
-			cells[cell]=captureCell(domain,phase,cell,faces,stock == null ? domain.markerGrid.exactCellMarkerVolume[cell] : stock.get(cell).volume().toDouble(),components);
-		return new LiquidPressureGeometry(cells,components,domain.geometry.cutCells.copyMicroMasks(),faces);
+			cells[cell]=captureCell(domain,phase,cell,faces,stock == null ? domain.markerGrid.exactCellMarkerVolume[cell] : stock.get(cell).volume().toDouble(),components,microPieces);
+		var interior = new ArrayList<InteriorFace>();
+		for (int cell=0;cell<cells.length;cell++) if(microPieces[cell]!=null) for(int micro=0;micro<8;micro++) {
+			var piece=microPieces[cell][micro]; if(piece==null)continue;
+			for(int axis=0;axis<3;axis++) if((micro&1<<axis)==0 && microPieces[cell][micro|1<<axis]!=null) {
+				var wet=piece.faces.get(2*axis+1).moments();
+				if(wet.area()>0)interior.add(new InteriorFace(cell,micro,micro|1<<axis,axis,wet));
+			}
+		}
+		double h=domain.config.cellSize();
+		return new LiquidPressureGeometry(cells,components,domain.geometry.cutCells.copyMicroMasks(),faces,microPieces,interior,h*h*h);
 	}
 	void forEachGasPiece(java.util.function.IntConsumer accept) {
 		for (var cell : cells) if (cell != null) {
@@ -102,10 +138,58 @@ final class LiquidPressureGeometry {
 	}
 	CellSnapshot cellSnapshot(int cell) { return cells[cell]; }
 	Profile componentSnapshot(int cell, int support) {
+		requireSupport(cell,support);
+		if(support==(~collisionMasks[cell]&255))return cells[cell];
 		int[] masks = CellRemapMicroTopology.components(Byte.toUnsignedInt(collisionMasks[cell]));
 		for (int i=0;i<masks.length;i++) if(masks[i]==support)
 			return components[cell]==null ? cells[cell] : components[cell][i];
-		throw new IllegalArgumentException("Velocity support is not a fixed liquid component");
+		VolumeMoments total=VolumeMoments.EMPTY;
+		for(int micro=0;micro<8;micro++)if((support&1<<micro)!=0 && microPieces[cell]!=null && microPieces[cell][micro]!=null)
+			total=total.add(microPieces[cell][micro].physical);
+		if(!(total.volume()>0))return null;
+		var profile=cells[cell];
+		return new ComponentSnapshot(cell,total.volume(),total.firstMoment(),total.firstMoment().scale(1/total.volume()),
+				profile.sideWet().stream().filter(side->(support&1<<(side.microKey()/6))!=0).toList(),
+				profile.facets().stream().filter(facet->(support&1<<(facet.microKey()/6))!=0).toList(),
+				profile.freeFragments().stream().filter(fragment->(support&1<<fragment.microKey())!=0).toList());
+	}
+	int wetMicroMask(int cell) {
+		int mask=0; if(microPieces[cell]!=null)for(int micro=0;micro<8;micro++)if(microPieces[cell][micro]!=null)mask|=1<<micro;
+		return mask;
+	}
+	List<InteriorFace> interiorFaces() { return interiorFaces; }
+	List<SideWet> microFaces(int cell,int micro) {
+		if(micro<0 || micro>=8)throw new IllegalArgumentException("Invalid liquid microbox");
+		return microPieces[cell]==null || microPieces[cell][micro]==null ? List.of() : microPieces[cell][micro].faces;
+	}
+	double[] microMoments(int cell,int micro) {
+		if(micro<0 || micro>=8)throw new IllegalArgumentException("Invalid liquid microbox");
+		return microPieces[cell]==null || microPieces[cell][micro]==null ? new double[10] : microPieces[cell][micro].moments(micro,cellVolume).clone();
+	}
+	/** SI volume measure of 1, t_x, t_y, t_z and six quadratic terms, t=(x-cellCentre)/h. */
+	double[] supportMoments(int cell,int support) {
+		requireSupport(cell,support); var result=new double[10];
+		for(int micro=0;micro<8;micro++)if((support&1<<micro)!=0 && microPieces[cell]!=null && microPieces[cell][micro]!=null) {
+			var part=microPieces[cell][micro].moments(micro,cellVolume);
+			for(int i=0;i<result.length;i++)result[i]+=part[i];
+		}
+		return result;
+	}
+	boolean needsMicroBlocks(int cell,int support) {
+		requireSupport(cell,support); var wall=new boolean[3][3]; var open=new boolean[3][3];
+		for(int micro=0;micro<8;micro++)if((support&1<<micro)!=0)for(var face:microFaces(cell,micro)) {
+			if(!(face.moments().area()>0))continue;
+			boolean closed=false;
+			for(var facet:cells[cell].facets())if(facet.kind()==FacetKind.WALL && facet.microKey()==face.microKey()) { closed=true; break; }
+			int plane=(micro>>>face.axis()&1)+(face.sign()>0?1:0);
+			(closed?wall:open)[face.axis()][plane]=true;
+			if(wall[face.axis()][plane] && open[face.axis()][plane])return true;
+		}
+		return false;
+	}
+	private void requireSupport(int cell,int support) {
+		if(cell<0 || cell>=cells.length || support<=0 || support>255 || (support&collisionMasks[cell])!=0)
+			throw new IllegalArgumentException("Velocity support must contain open microboxes");
 	}
 	List<SharedFace> sharedFaces() { return sharedFaces; }
 	SurfaceMoments faceMoments(int minus, int plus, int axis) {
@@ -114,12 +198,13 @@ final class LiquidPressureGeometry {
 		return result;
 	}
 
-	private static CellSnapshot captureCell(FluidDomain d,FlipPressurePhaseGeometry plane,int cell,List<SharedFace> shared,double rawVolume,Profile[][] components) {
+	private static CellSnapshot captureCell(FluidDomain d,FlipPressurePhaseGeometry plane,int cell,List<SharedFace> shared,double rawVolume,Profile[][] components,MicroSnapshot[][] microPieces) {
 		var cut=d.geometry.cutCells;
 		double h=d.config.cellSize(), h3=h*h*h;
 		int[] index={cell%d.sizeX,cell/d.sizeX%d.sizeY,cell/(d.sizeX*d.sizeY)};
 		int[] supports=CellRemapMicroTopology.components(cut.mask(cell));
 		VolumeMoments[] pieces=supports.length>1 ? new VolumeMoments[8] : null;
+		microPieces[cell]=new MicroSnapshot[8];
 		double volume=0,mx=0,my=0,mz=0; int open=0;
 		var sides=new ArrayList<SideWet>(); var facets=new ArrayList<Facet>(); var fragments=new ArrayList<FreeFragment>();
 		for(int slot=0;slot<8;slot++) {
@@ -127,18 +212,22 @@ final class LiquidPressureGeometry {
 			open++; double ox=.5*micro[0],oy=.5*micro[1],oz=.5*micro[2]; var integral=unitMicroMoments(plane,cell,slot);
 			double boxVolume=integral[0]/8; volume+=boxVolume;
 			mx+=(ox*integral[0]+.5*integral[1])/8;my+=(oy*integral[0]+.5*integral[2])/8;mz+=(oz*integral[0]+.5*integral[3])/8;
-			if(pieces!=null)pieces[slot]=new VolumeMoments(boxVolume*h3,new Vec3(
+			VolumeMoments physical=boxVolume>0 ? new VolumeMoments(boxVolume*h3,new Vec3(
 					h3*h*(index[0]*integral[0]+ox*integral[0]+.5*integral[1])/8,
 					h3*h*(index[1]*integral[0]+oy*integral[0]+.5*integral[2])/8,
-					h3*h*(index[2]*integral[0]+oz*integral[0]+.5*integral[3])/8));
+					h3*h*(index[2]*integral[0]+oz*integral[0]+.5*integral[3])/8)) : VolumeMoments.EMPTY;
+			if(pieces!=null)pieces[slot]=physical;
+			var microFaces=boxVolume>0 ? new ArrayList<SideWet>(6) : null;
 			double[] areaNormal=new double[3]; double[][] normalFirst=new double[3][3];
 			for(int axis=0;axis<3;axis++)for(int sign:new int[]{-1,1}) {
 				double coordinate=.5*(micro[axis]+(sign>0?1:0)), tangent=.5*micro[(axis+1)%3],other=.5*micro[(axis+2)%3];
 				SurfaceMoments wet=LiquidPressureMoments.integrate(plane.wetFacePolygon(cell,axis,coordinate,tangent,other,.5),axis,coordinate,cell,d);
+				int key=slot*6+2*axis+(sign>0?1:0);
+				SideWet side=wet.area()>0 || microFaces!=null ? new SideWet(axis,sign,key,wet) : null;
+				if(microFaces!=null)microFaces.add(side);
 				areaNormal[axis]-=sign*wet.area;
 				for(int b=0;b<3;b++)normalFirst[axis][b]-=sign*wet.firstMoment.component(b);
 				if(wet.area==0)continue;
-				int key=slot*6+2*axis+(sign>0?1:0);
 				if(micro[axis]+sign>=0 && micro[axis]+sign<2) {
 					int[] neighbor=micro.clone();neighbor[axis]+=sign;
 					if(!cut.microCellOpen(cell,neighbor[0],neighbor[1],neighbor[2]))facets.add(new Facet(FacetKind.WALL,cell,cell,axis,sign,key,wet));
@@ -151,7 +240,7 @@ final class LiquidPressureGeometry {
 					}
 					continue;
 				}
-				sides.add(new SideWet(axis,sign,key,wet));
+				sides.add(side);
 				int[] neighbor=index.clone();neighbor[axis]+=sign;
 				boolean inside=neighbor[0]>=0 && neighbor[0]<d.sizeX && neighbor[1]>=0 && neighbor[1]<d.sizeY && neighbor[2]>=0 && neighbor[2]<d.sizeZ;
 				int peer=inside?d.cellIndex(neighbor[0],neighbor[1],neighbor[2]):-1;
@@ -173,6 +262,10 @@ final class LiquidPressureGeometry {
 				fragments.add(new FreeFragment(cell,slot,slot,new Vec3(areaNormal[0],areaNormal[1],areaNormal[2]),
 						new NormalFirstMoment(vec(normalFirst[0]),vec(normalFirst[1]),vec(normalFirst[2]))));
 			}
+			if(microFaces!=null)microPieces[cell][slot]=new MicroSnapshot(physical,new double[]{boxVolume*h3,
+					h3*((ox-.5)*integral[0]+.5*integral[1])/8,
+					h3*((oy-.5)*integral[0]+.5*integral[2])/8,
+					h3*((oz-.5)*integral[0]+.5*integral[3])/8},wetHalfSpace(plane,cell,slot),microFaces);
 		}
 		double unitVolume=volume;volume*=h3;
 		Vec3 first=new Vec3(h3*h*(index[0]*unitVolume+mx),h3*h*(index[1]*unitVolume+my),h3*h*(index[2]*unitVolume+mz));
@@ -213,9 +306,12 @@ final class LiquidPressureGeometry {
 			var empty = new ExactRational[10]; java.util.Arrays.fill(empty, ExactRational.ZERO); return empty;
 		}
 		if (phase.liquidFractionExact(cell, micro) >= 1) return GasGeometryOverlap.normalizedSecondMoments(micro, List.of());
-		return GasGeometryOverlap.normalizedSecondMoments(micro, List.of(new GasGeometryOverlap.HalfSpace(
-				SignedDyadic.of(phase.planeNormal(cell, micro, 0)).negate(), SignedDyadic.of(phase.planeNormal(cell, micro, 1)).negate(),
-				SignedDyadic.of(phase.planeNormal(cell, micro, 2)).negate(), SignedDyadic.of(phase.planeOffset(cell, micro)).negate())));
+		return GasGeometryOverlap.normalizedSecondMoments(micro, List.of(wetHalfSpace(phase,cell,micro)));
+	}
+	private static GasGeometryOverlap.HalfSpace wetHalfSpace(FlipPressurePhaseGeometry phase,int cell,int micro) {
+		return phase.liquidFractionExact(cell,micro)>=1 ? null : new GasGeometryOverlap.HalfSpace(
+				SignedDyadic.of(phase.planeNormal(cell,micro,0)).negate(),SignedDyadic.of(phase.planeNormal(cell,micro,1)).negate(),
+				SignedDyadic.of(phase.planeNormal(cell,micro,2)).negate(),SignedDyadic.of(phase.planeOffset(cell,micro)).negate());
 	}
 	private static double[] unitMicroMoments(FlipPressurePhaseGeometry plane, int cell, int micro) {
 		var integral = new double[4]; double fraction = plane.liquidFractionExact(cell, micro);

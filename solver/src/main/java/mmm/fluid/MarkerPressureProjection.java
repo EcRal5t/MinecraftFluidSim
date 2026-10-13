@@ -27,6 +27,7 @@ final class MarkerPressureProjection {
 		}
 	}
 	private int[] liquidRows, gasRows;
+	private int sharedStart, sharedEnd;
 	private double[][] originalVelocity, originalPosition, predictor, wallPredictor, wallImpulse, candidate, publishedVelocity, knownImpulse, faceCandidate, knownCellLoad;
 	private double[] originalMass, originalVolume, originalFraction, originalPlaneOffset, pressure, commonPressureMode, rhs, storage, gasInitialPressure, targetVolumeRate, observedPressure;
 	private double[][] originalPlaneNormal;
@@ -102,12 +103,7 @@ final class MarkerPressureProjection {
 			if (basis.blockMarkerCount(block)==0) continue;
 			var profile = blockProfile(block);
 			if (profile == null || !(profile.volume() > 0)) throw blocked("Liquid velocity block lacks positive wet geometry at block " + block);
-			liquidRows[block] = definitions.size(); var blocks = new ArrayList<Block>();
-			for (int axis = 0; axis < 3; axis++) {
-				double[] coefficient = new double[4]; basis.volumeDivergenceWeights(block, axis, profile.volume(), coefficient);
-				blocks.add(new Block(block, axis, coefficient));
-			}
-			definitions.add(new Row(blocks, 0));
+			appendLiquidRows(block, profile, definitions);
 		}
 		// Aggregate only microfaces sharing both actual velocity blocks.
 		var shared = new TreeMap<SharedBlocks, LiquidPressureGeometry.SurfaceMoments>();
@@ -115,14 +111,18 @@ final class MarkerPressureProjection {
 			var key = new SharedBlocks(ownerBlock(face.minusCell(),face.minusMicro()),ownerBlock(face.plusCell(),face.plusMicro()),face.axis());
 			shared.merge(key, face.moments(), LiquidPressureGeometry.SurfaceMoments::add);
 		}
-		int sharedStart = definitions.size();
+		for (var face : geometry.interiorFaces()) {
+			int minus=ownerBlock(face.cell(),face.minusMicro()), plus=ownerBlock(face.cell(),face.plusMicro());
+			if (minus != plus) shared.merge(new SharedBlocks(minus,plus,face.axis()),face.moments(),LiquidPressureGeometry.SurfaceMoments::add);
+		}
+		sharedStart = definitions.size();
 		for (var entry : shared.entrySet()) {
 			var face = entry.getKey();
 			for (int test = 0; test < 3; test++) definitions.add(new Row(List.of(
 					new Block(face.minus(), face.axis(), trace(face.minus(), face.axis(), entry.getValue(), test, 1)),
 					new Block(face.plus(), face.axis(), trace(face.plus(), face.axis(), entry.getValue(), test, -1))), 0));
 		}
-		int sharedEnd = definitions.size();
+		sharedEnd = definitions.size();
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			var profile = geometry.cellSnapshot(cell); if (profile == null) continue;
 			for (var facet : profile.facets()) {
@@ -135,8 +135,7 @@ final class MarkerPressureProjection {
 				int block=ownerBlock(cell,fragment.microKey());
 				var blocks = new ArrayList<Block>();
 				for (int axis = 0; axis < 3; axis++) {
-					double n = fragment.areaNormal().component(axis); double[] coefficient = new double[4]; coefficient[0] = n;
-					for (int b = 0; b < 3; b++) coefficient[b + 1] = (fragment.normalFirstMoment().row(axis).component(b) - n * basis.center(block, b)) / basis.cellSize();
+					double[] coefficient = freeTrace(block, axis, fragment);
 					blocks.add(new Block(block, axis, coefficient));
 				}
 				freeBoundary(cell, gasNode(fragment.gasPiece()), blocks, gasBlocks);
@@ -173,6 +172,67 @@ final class MarkerPressureProjection {
 		active = true; return true;
 	}
 
+	private void appendLiquidRows(int block, LiquidPressureGeometry.Profile profile, List<Row> definitions) {
+		liquidRows[block] = definitions.size();
+		boolean shaped=false;
+		for(int axis=0;axis<3;axis++) shaped |= basis.hasNormalShape(block,axis);
+		var blocks=new ArrayList<Block>();
+		if(!shaped) {
+			for(int axis=0;axis<3;axis++) {
+				double[] coefficient=new double[4]; basis.volumeDivergenceWeights(block,axis,profile.volume(),coefficient);
+				blocks.add(new Block(block,axis,coefficient));
+			}
+			definitions.add(new Row(blocks,0)); return;
+		}
+		double[] moments=geometry.supportMoments(basis.physicalCell(block),basis.blockSupport(block));
+		double[][][] polynomial=new double[3][4][10];
+		for(int axis=0;axis<3;axis++) {
+			double[] coefficient=new double[4];
+			for(int term=0;term<4;term++) {
+				basis.divergencePolynomial(block,axis,term,polynomial[axis][term]);
+				coefficient[term]=dot(polynomial[axis][term],moments)/basis.cellSize();
+			}
+			blocks.add(new Block(block,axis,coefficient));
+		}
+		definitions.add(new Row(blocks,0));
+		// The nonconstant divergence coefficients enforce incompressibility inside the wet volume.
+		for(int monomial=1;monomial<10;monomial++) {
+			blocks=new ArrayList<Block>(); boolean positive=false;
+			for(int axis=0;axis<3;axis++) {
+				double[] coefficient=new double[4];
+				for(int term=0;term<4;term++) {
+					coefficient[term]=profile.volume()/basis.cellSize()*polynomial[axis][term][monomial];
+					positive |= coefficient[term] != 0;
+				}
+				blocks.add(new Block(block,axis,coefficient));
+			}
+			if(positive) definitions.add(new Row(blocks,0));
+		}
+	}
+
+	private double[] freeTrace(int block,int axis,LiquidPressureGeometry.FreeFragment fragment) {
+		double n=fragment.areaNormal().component(axis), h=basis.cellSize();
+		double[] coefficient=new double[4]; coefficient[0]=n;
+		for(int b=0;b<3;b++) coefficient[b+1]=(fragment.normalFirstMoment().row(axis).component(b)-n*basis.center(block,b))/h;
+		if(!basis.hasNormalShape(block,axis)) return coefficient;
+		if(fragment.gasMicro()!=fragment.microKey()) {
+			double shape=n==0 ? 0 : basis.shapeValue(block,axis,fragment.normalFirstMoment().row(axis).component(axis)/n);
+			for(int term=0;term<4;term++) coefficient[term]*=shape;
+			return coefficient;
+		}
+		int cell=basis.physicalCell(block), micro=fragment.microKey();
+		double[] moments=geometry.microMoments(cell,micro), polynomial=new double[10];
+		for(int term=0;term<4;term++) {
+			basis.divergencePolynomial(block,axis,term,polynomial);
+			coefficient[term]=dot(polynomial,moments)/h;
+		}
+		for(var face:geometry.microFaces(cell,micro)) if(face.axis()==axis && face.moments().area()>0) {
+			double[] side=trace(block,axis,face.moments(),0,face.sign());
+			for(int term=0;term<4;term++) coefficient[term]-=side[term];
+		}
+		return coefficient;
+	}
+
 	private void initializeCommonPressure(int sharedStart, int sharedEnd) {
 		commonPressureMode = new double[pressure.length];
 		double largest = 0;
@@ -198,6 +258,8 @@ final class MarkerPressureProjection {
 			int tangent = (axis + test) % 3;
 			for (int b = 0; b < 3; b++) coefficient[b + 1] = sign * face.centralSecondMoment().component(tangent, b) / (h * h);
 		}
+		double shape=basis.shapeValue(cell,axis,face.centroid().component(axis));
+		for(int term=0;term<4;term++) coefficient[term]*=shape;
 		return coefficient;
 	}
 	private int gasNode(int piece) {
@@ -391,6 +453,8 @@ final class MarkerPressureProjection {
 	boolean published() { return published; }
 	double liquidPressure(int cell) { return observedPressure[cell]; }
 	int rowOfLiquidBlock(int block) { return liquidRows[block]; }
+	int sharedRowStart() { return sharedStart; }
+	int sharedRowEnd() { return sharedEnd; }
 	double gasPressure(int node) { return gasRows[node] < 0 ? 0 : pressure[gasRows[node]]; }
 	CellVelocityConstraintOperator operator() { return operator; }
 	CellAffineMacTransfer transfer() { return transfer; }

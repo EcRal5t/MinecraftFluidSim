@@ -1,15 +1,8 @@
 package mmm.fluid;
 
-import mmm.chemistry.ExactRational;
-import mmm.units.SignedDyadic;
-import java.util.ArrayList;
-
-/** Actual-mass projection onto affine fields with zero normal velocity on fixed wall planes. */
+/** Actual-mass projection onto the admitted wall-shaped polynomial fields. */
 final class CellAffineWallProjection {
-	private static final byte FREE = 0, NORMAL_MODE = 1, ZERO = 2;
 	private final CellAffineVelocity basis;
-	private final byte[] kinds;
-	private final double[] centerOffsets, weights;
 
 	/** Enforces fixed walls on the actual remapped velocity, before any later observation. */
 	static double projectTransport(FluidDomain domain) {
@@ -50,82 +43,23 @@ final class CellAffineWallProjection {
 	}
 
 	CellAffineWallProjection(FluidDomain domain, CellAffineVelocity basis, LiquidPressureGeometry geometry) {
+		if (basis == null || geometry == null) throw new IllegalArgumentException("Missing shaped wall space");
 		this.basis = basis;
-		kinds = new byte[3 * basis.blockCount()]; centerOffsets = new double[kinds.length]; weights = new double[4 * kinds.length];
-		for (int cell = 0; cell < basis.blockCount(); cell++) {
-			if (basis.blockMarkerCount(cell) == 0) continue;
-			int physical = basis.physicalCell(cell);
-			var profile = geometry.componentSnapshot(physical, basis.blockSupport(cell)); if (profile == null) continue;
-			int[] planes = CellAffineVelocity.wallPlanes(profile);
-			int[] index = {physical % domain.sizeX, physical / domain.sizeX % domain.sizeY, physical / (domain.sizeX * domain.sizeY)};
-			for (int axis = 0; axis < 3; axis++) {
-				int key = 3 * cell + axis;
-				if (planes[axis] == 0) continue;
-				if (Integer.bitCount(planes[axis]) > 1) { kinds[key] = ZERO; continue; }
-				double wall = (index[axis] + .5 * Integer.numberOfTrailingZeros(planes[axis])) * basis.cellSize();
-				var normal = new double[4];
-				if (!basis.wallNormalWeights(cell, axis, wall, normal)) { kinds[key] = ZERO; continue; }
-				centerOffsets[key] = normal[0];
-				captureMassProjection(cell, axis, key); kinds[key] = NORMAL_MODE;
-			}
-		}
 	}
 
-	private void captureMassProjection(int cell, int axis, int key) {
-		SignedDyadic denominator = SignedDyadic.ZERO;
-		SignedDyadic[] numerator = {SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO};
-		for (int ordinal = 0; ordinal < basis.blockMarkerCount(cell); ordinal++) {
-			int marker = basis.blockMarker(cell, ordinal); double[] feature = new double[4];
-			basis.pointWeights(cell, basis.position(marker, 0), basis.position(marker, 1), basis.position(marker, 2), feature);
-			SignedDyadic q = SignedDyadic.of(centerOffsets[key] + feature[axis + 1]);
-			SignedDyadic massTimesQ = SignedDyadic.of(basis.massKilograms(marker)).multiply(q);
-			denominator = denominator.add(massTimesQ.multiply(q));
-			for (int term = 0; term < 4; term++) numerator[term] = numerator[term].add(massTimesQ.multiply(SignedDyadic.of(feature[term])));
-		}
-		if (denominator.signum() <= 0) throw new FluidDomain.PressureSolveBlockedException("Wall-admissible field lacks actual inertia at cell " + cell);
-		for (int term = 0; term < 4; term++) {
-			int shift = numerator[term].exponent() - denominator.exponent();
-			weights[4 * key + term] = new ExactRational(numerator[term].significand().shiftLeft(Math.max(0, shift)),
-					denominator.significand().shiftLeft(Math.max(0, -shift))).toDouble();
-			if (!Double.isFinite(weights[4 * key + term])) throw new FluidDomain.PressureSolveBlockedException("Unrepresentable wall projection at cell " + cell);
-		}
-	}
+	/** The admitted q fields already satisfy every supported wet wall plane. */
+	CellVelocityConstraintOperator.Row transform(CellVelocityConstraintOperator.Row row) { return row; }
 
-	/** A S, before the fixed cell fit L pulls the row back to actual marker velocities. */
-	CellVelocityConstraintOperator.Row transform(CellVelocityConstraintOperator.Row row) {
-		var blocks = new ArrayList<CellVelocityConstraintOperator.Block>();
-		for (var block : row.blocks()) {
-			int key = 3 * block.velocityBlock() + block.axis(); double[] coefficient = block.coefficients();
-			if (kinds[key] == ZERO) continue;
-			if (kinds[key] == NORMAL_MODE) {
-				double amplitude = Math.fma(coefficient[0], centerOffsets[key], coefficient[block.axis() + 1]);
-				for (int term = 0; term < 4; term++) coefficient[term] = amplitude * weights[4 * key + term];
-			}
-			blocks.add(new CellVelocityConstraintOperator.Block(block.velocityBlock(), block.axis(), coefficient));
-		}
-		return new CellVelocityConstraintOperator.Row(blocks, row.storage());
-	}
-
-	/** Retains the unresolved residual and records the fixed-wall impulse once. */
+	/** Actual-mass orthogonal projection on constrained axes; unconstrained axes retain raw velocity. */
 	void project(double[][] input, double[][] result, double[][] impulse) {
 		var coefficient = new double[3][4 * basis.blockCount()]; basis.fit(input, coefficient);
-		var before = new double[3][basis.markerCount()]; basis.predict(coefficient, before);
-		for (int cell = 0; cell < basis.blockCount(); cell++) for (int axis = 0; axis < 3; axis++) {
-			int key = 3 * cell + axis; if (kinds[key] == FREE) continue;
-			double amplitude = 0;
-			if (kinds[key] == NORMAL_MODE) for (int term = 0; term < 4; term++)
-				amplitude = Math.fma(weights[4 * key + term], coefficient[axis][4 * cell + term], amplitude);
-			for (int term = 0; term < 4; term++) coefficient[axis][4 * cell + term] = 0;
-			coefficient[axis][4 * cell] = amplitude * centerOffsets[key];
-			coefficient[axis][4 * cell + axis + 1] = amplitude;
-		}
-		var after = new double[3][basis.markerCount()]; basis.predict(coefficient, after);
+		var projected = new double[3][basis.markerCount()]; basis.predict(coefficient, projected);
 		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < basis.markerCount(); marker++) {
-			double change = kinds[3 * basis.markerBlock(marker) + axis] == FREE ? 0 : after[axis][marker] - before[axis][marker];
-			result[axis][marker] = input[axis][marker] + change;
-			impulse[axis][marker] = basis.massKilograms(marker) * change;
-			if (!Double.isFinite(result[axis][marker]) || !Double.isFinite(impulse[axis][marker]))
-				throw new FluidDomain.PressureSolveBlockedException("Unrepresentable fixed-wall projection at marker " + marker);
+			double velocity = basis.hasNormalShape(basis.markerBlock(marker), axis) ? projected[axis][marker] : input[axis][marker];
+			double change = velocity - input[axis][marker];
+			result[axis][marker] = velocity; impulse[axis][marker] = basis.massKilograms(marker) * change;
+			if (!Double.isFinite(velocity) || !Double.isFinite(impulse[axis][marker]))
+				throw new FluidDomain.PressureSolveBlockedException("Unrepresentable shaped-wall projection at marker " + marker);
 		}
 	}
 }

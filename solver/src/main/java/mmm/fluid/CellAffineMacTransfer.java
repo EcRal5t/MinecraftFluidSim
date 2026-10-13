@@ -75,6 +75,7 @@ final class CellAffineMacTransfer {
 
 	private void add(ArrayList<Entry>[][] pending, CellAffineVelocity basis, int axis, int face, int block,
 	                 LiquidPressureGeometry.SurfaceMoments part, double scale) {
+		scale *= basis.shapeValue(block, axis, part.centroid().component(axis));
 		if (pending[axis][face] == null) pending[axis][face] = new ArrayList<>();
 		Entry selected = null;
 		for (var entry : pending[axis][face]) if (entry.block == block) { selected = entry; break; }

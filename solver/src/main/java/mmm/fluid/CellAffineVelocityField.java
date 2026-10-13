@@ -50,9 +50,10 @@ final class CellAffineVelocityField {
 			double local = coordinate[a] + (a == axis && positive ? 1 : 0) - basis.center(block, a) / basis.cellSize();
 			intercept = Math.fma(coefficients[axis][4 * block + a + 1], local, intercept);
 		}
-		result[0] = intercept;
-		result[1] = coefficients[axis][4 * block + (axis + 1) % 3 + 1];
-		result[2] = coefficients[axis][4 * block + (axis + 2) % 3 + 1];
+		double shape = basis.shapeValue(block, axis, (coordinate[axis] + (positive ? 1 : 0)) * basis.cellSize());
+		result[0] = shape * intercept;
+		result[1] = shape * coefficients[axis][4 * block + (axis + 1) % 3 + 1];
+		result[2] = shape * coefficients[axis][4 * block + (axis + 2) % 3 + 1];
 	}
 	double value(int axis, int cell, double x, double y, double z) {
 		int block = basis.blockForPoint(cell, x, y, z);

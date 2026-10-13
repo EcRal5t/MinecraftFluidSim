@@ -46,19 +46,33 @@ final class MarkerVelocitySpaceExperiment {
 	}
 
 	private static void closedCirculation(int axis) {
-		var d = cube(); var basis = CellAffineVelocity.capture(d);
+		var d = cube(); var geometry=LiquidPressureGeometry.capture(d); var basis = CellAffineVelocity.capture(d,geometry);
 		var input = new double[3][basis.markerCount()];
 		for (int i = 0; i < basis.markerCount(); i++) {
 			var v = circulation(point(basis, i), axis);
 			for (int a = 0; a < 3; a++) input[a][i] = v[a];
 		}
 		var projected = new double[3][basis.markerCount()]; var impulse = new double[3][basis.markerCount()];
-		new CellAffineWallProjection(d, basis, LiquidPressureGeometry.capture(d)).project(input, projected, impulse);
+		new CellAffineWallProjection(d, basis, geometry).project(input, projected, impulse);
 		double before = energy(basis, input), after = energy(basis, projected);
 		System.out.printf("Closed circulation axis=%d kinetic=%g -> %g J%n", axis, before, after);
 		near(after, before, 1e-12, "An admissible closed circulation lost kinetic energy");
 		for (int a = 0; a < 3; a++) for (int i = 0; i < basis.markerCount(); i++)
 			near(projected[a][i], input[a][i], 1e-14, "Wall response changed admissible circulation");
+		for(int i=0;i<basis.markerCount();i++) {
+			d.particles.setVelocityX(i,(float)input[0][i]); d.particles.setVelocityY(i,(float)input[1][i]); d.particles.setVelocityZ(i,(float)input[2][i]);
+		}
+		d.sealDomainBoundary(); d.ensureGrid(); d.gasTopologyCoordinator.refresh(); d.bodyForceStage.applyGravity(.001F);
+		var plan=d.pressureSystem.markerProjection(); plan.prepare(.001F);
+		var rates=new double[plan.operator().rowCount()]; plan.operator().volumeRate(input,rates);
+		for(double rate:rates)near(rate,0,1e-14,"Admissible circulation has zero production constraint rate");
+		if(!plan.solve(d.config.pressureTolerance()).converged())throw new AssertionError("Closed circulation pressure failed to converge");
+		near(plan.candidateKineticEnergy(),before,1e-12,"Pressure removed an admissible circulation");
+		plan.publish(); var field=d.pressureSystem.markerVelocityField();
+		for(double x:new double[]{.125,.375,.625,.875})for(double y:new double[]{.125,.625})for(double z:new double[]{.375,.875}) {
+			var expected=circulation(new double[]{x,y,z},axis);
+			for(int a=0;a<3;a++)near(field.value(a,0,x,y,z),expected[a],1e-14,"Published field changed closed circulation between markers");
+		}
 	}
 
 	private static void singleMarkerWallMode() {

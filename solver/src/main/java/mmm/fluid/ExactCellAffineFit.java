@@ -114,7 +114,6 @@ final class ExactCellAffineFit {
 			if (row == null || row.length != mass.length) throw new IllegalArgumentException("Invalid exact affine feature shape");
 			for (double value : row) if (!Double.isFinite(value)) throw new IllegalArgumentException("Nonfinite exact affine feature");
 		}
-		for (double value : feature[0]) if (value != 1) throw new IllegalArgumentException("Exact affine constant feature is not one");
 		for (double[] row : directions) {
 			if (row == null || row.length != 3) throw new IllegalArgumentException("Invalid exact affine direction shape");
 			for (double value : row) if (!Double.isFinite(value)) throw new IllegalArgumentException("Nonfinite exact affine direction");

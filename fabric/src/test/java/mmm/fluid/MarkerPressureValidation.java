@@ -68,8 +68,8 @@ public final class MarkerPressureValidation {
 			int row = plan.rowOfLiquidBlock(basis.markerBlock(8 * c));
 			if (row >= 0) { constant[row] = 1; liquidCount++; }
 		}
-		if (cells == 2 && constant.length - liquidCount - 1 != 3) throw new AssertionError("Adjacent partial cells lost their three shared trace rows");
-		for (int row = liquidCount; row < constant.length - 1; row += 3) constant[row] = -1;
+		if (cells == 2 && plan.sharedRowEnd()-plan.sharedRowStart() != 3) throw new AssertionError("Adjacent partial cells lost their three shared trace rows");
+		for (int row = plan.sharedRowStart(); row < plan.sharedRowEnd(); row += 3) constant[row] = -1;
 		constant[constant.length - 1] = 1;
 		var initialized = plan.pressure(); double common = initialized[initialized.length - 1];
 		if (common == 0) throw new AssertionError("Pressure initializer fixture lost its finite reference rounding difference");
@@ -217,12 +217,23 @@ public final class MarkerPressureValidation {
 	static void fixedWallProjectionUsesActualMass() {
 		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
 		d.setVolume(1, 0, 1, 1); d.ensureGrid();
-		var basis = CellAffineVelocity.capture(d); var wall = new CellAffineWallProjection(d, basis, LiquidPressureGeometry.capture(d));
+		var geometry=LiquidPressureGeometry.capture(d); var basis = CellAffineVelocity.capture(d,geometry); var wall = new CellAffineWallProjection(d, basis, geometry);
 		int n = basis.markerCount(); var before = new double[3][n]; var after = new double[3][n]; var impulse = new double[3][n];
 		for (int i = 0; i < n; i++) before[1][i] = 2 + 3 * (basis.position(i, 1) - .5) + 4 * (basis.position(i, 0) - 1.5);
+		var features=new double[n][4]; var gram=new double[4][4]; var right=new double[4];
+		for(int i=0;i<n;i++) {
+			double y=basis.position(i,1);
+			features[i]=new double[]{y,y*(basis.position(i,0)-1.5),y*(y-.5),y*(basis.position(i,2)-1.5)};
+			for(int a=0;a<4;a++) {
+				right[a]+=basis.massKilograms(i)*features[i][a]*before[1][i];
+				for(int b=0;b<4;b++) gram[a][b]+=basis.massKilograms(i)*features[i][a]*features[i][b];
+			}
+		}
+		var reference=MarkerVelocitySpaceExperiment.solve(gram,right);
 		wall.project(before, after, impulse); double removed = 0, energyChange = 0;
 		for (int i = 0; i < n; i++) {
-			near(after[1][i], 3.8 * basis.position(i, 1), 2e-14, "Independent actual-mass wall-admissible normal mode");
+			double expected=0; for(int term=0;term<4;term++) expected+=features[i][term]*reference[term];
+			near(after[1][i], expected, 2e-14, "Independent actual-mass wall-admissible normal mode");
 			double delta = before[1][i] - after[1][i];
 			removed += basis.massKilograms(i) * delta * delta;
 			energyChange += basis.massKilograms(i) * (before[1][i] * before[1][i] - after[1][i] * after[1][i]);
@@ -376,7 +387,12 @@ public final class MarkerPressureValidation {
 			sparseDomain.sealDomainBoundary(); sparseDomain.bootstrapGasState(null); sparseDomain.ensureGrid();
 			sparseDomain.gasTopologyCoordinator.refresh(); sparseDomain.bodyForceStage.applyGravity(.001F);
 			var sparsePlan = sparseDomain.pressureSystem.markerProjection(); sparsePlan.prepare(.001F);
-			var common = new double[sparsePlan.operator().rowCount()]; Arrays.fill(common, 1);
+			var common = new double[sparsePlan.operator().rowCount()];
+			for(int block=0;block<sparsePlan.basis().blockCount();block++) {
+				int row=sparsePlan.rowOfLiquidBlock(block); if(row>=0)common[row]=1;
+			}
+			for(int row=sparsePlan.sharedRowStart();row<sparsePlan.sharedRowEnd();row+=3)common[row]=-1;
+			common[common.length-1]=1;
 			var commonForce = new double[3][lowRank.markerCount()]; sparsePlan.operator().force(common, commonForce);
 			for (double[] axis : commonForce) for (double value : axis) near(value, 0, 2e-13, "Sparse production Gauss force");
 			if (!sparsePlan.solve(sparseDomain.config.pressureTolerance()).converged())

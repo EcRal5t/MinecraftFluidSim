@@ -649,18 +649,18 @@ public final class LiquidVolumeTransportValidation {
 
 	private static void courantUsesOccupiedDonors() {
 		var domain = new FluidDomain(4, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
-		domain.setVolume(0, 0, 0, 1); domain.ensureGrid(); domain.gridToParticleStage.prepareAdvectionCells();
+		domain.setVolume(1, 0, 0, 1); domain.ensureGrid(); domain.gridToParticleStage.prepareAdvectionCells();
 		var transport = new CellLiquidVolumeTransport(domain);
 		domain.mac.velocityX[domain.xFaceIndex(3, 0, 0)] = 100;
-		domain.mac.velocityX[domain.xFaceIndex(1, 0, 0)] = -100;
+		domain.mac.velocityX[domain.xFaceIndex(2, 0, 0)] = -100;
 		if (transport.courantRate(0) != 0) throw new AssertionError("Empty donor constrained liquid volume transport");
 		for (int p = 0; p < domain.particles.count(); p++) domain.particles.setVelocityX(p, 2);
 		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
 		double expectedRate = 2.0 / domain.config.cellSize(), actualRate = transport.courantRate(0);
 		if (actualRate < expectedRate || actualRate - expectedRate > 4 * Math.ulp(expectedRate))
 			throw new AssertionError("Occupied donor lost its liquid outgoing Courant constraint");
-		domain.setVolume(1, 0, 0, 0.125F); domain.setVolume(3, 1, 1, 0.01F); domain.ensureGrid();
-		int connected = domain.cellIndex(1, 0, 0), isolated = domain.cellIndex(3, 1, 1);
+		domain.setVolume(2, 0, 0, 0.125F); domain.setVolume(3, 1, 1, 0.01F); domain.ensureGrid();
+		int connected = domain.cellIndex(2, 0, 0), isolated = domain.cellIndex(3, 1, 1);
 		if (domain.projection.pressureFluid[connected]) throw new AssertionError("Fringe fixture must lie below its pressure cell center");
 		for (int repetition = 0; repetition < 2; repetition++) {
 			domain.gridToParticleStage.prepareAdvectionCells();
@@ -693,7 +693,7 @@ public final class LiquidVolumeTransportValidation {
 				points[4 * bit + 2] = .625F + .25F * (bit >>> 2 & 1);
 				points[4 * bit + 3] = .09375F; velocity[3 * bit] = .1F;
 			}
-			points[32] = 1.125F; points[33] = points[34] = .625F;
+			points[32] = full ? 1.125F : 1.0625F; points[33] = points[34] = .625F;
 			points[35] = full ? .125F : .0625F; velocity[24] = .1F;
 			if (chemical) {
 				double[] masses = new double[9]; for (int p = 0; p < 9; p++) masses[p] = 1000 * points[4 * p + 3];

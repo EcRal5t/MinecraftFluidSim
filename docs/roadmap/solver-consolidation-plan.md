@@ -11,7 +11,7 @@
 | [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)按区域是否存在颗粒或 coherent 库存选择压力路径 | 明确支持范围，形成共用的液体惯性、几何与发布契约 |
 | [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java)接入纯液体路径，压力几何读取当前气腔 frame | 分别验收来源契约、独立离散和完整生产交接 |
 | [CellAffineVelocity](../../solver/src/main/java/mmm/fluid/CellAffineVelocity.java)按固定开放分量拟合；[GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)保留微盒归属 | 继续验收分量内部运动、开放湿面及完整输运交接 |
-| 新压力按实际空间秩拟合，单点湿墙采用实际幅值的线性形状 | 继续验收稀疏流入、壁面约束与内部旋涡的表示能力 |
+| 新压力按实际空间秩拟合，湿墙采用一次或二次零点形状，并约束完整多项式散度 | 继续验收一般 PLIC、稀疏流入与完整生产成本 |
 | [GridToParticleStage](../../solver/src/main/java/mmm/fluid/GridToParticleStage.java)在新压力发布后跳过既有 PIC/FLIP 写回；[CellLiquidVolumeTransport](../../solver/src/main/java/mmm/fluid/CellLiquidVolumeTransport.java)按采样场选择标量或双向输运 | 把载体速度、面流动与输运来源绑定到同一子步结果 |
 | [CellVolumeReplacementPlan](../../solver/src/main/java/mmm/fluid/CellVolumeReplacementPlan.java)、[GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)及 [ThermalDomainState](../../model/src/main/java/mmm/thermal/ThermalDomainState.java)已有完整预检和版本绑定 | 复用具体计划，统一相邻业务的来源检查与发布顺序 |
 | [MarkerPressureValidation](../../fabric/src/test/java/mmm/fluid/MarkerPressureValidation.java)和 [MarkerVelocityTransferValidation](../../fabric/src/test/java/mmm/fluid/MarkerVelocityTransferValidation.java)通过正式选择器运行，压力核与微盒来源另有聚焦入口 | 维护可重复基线，逐项关闭失败与未验证项 |
@@ -101,7 +101,7 @@ M09 的局部改进随对应工作包提交。M07 与 M08 各自验收；恢复 
 | 保持联合矩的正积分规则 | 单点和共线来源重建成八点后，空间秩分别保持 1 和 2 | 用于守恒重建，压力支撑依据实际空间秩验收 |
 | 体积尺度的对称 reseed | 保持原始总量和第一矩，增加的空间二阶矩有既有 `V^(5/3)` 上界；体积目标点数与最大留距拆分轴共同决定输出 | 涉及空间近似，接入前核对湿几何、实际新增空间秩、整数组成和发布精度 |
 | 实际扫掠的缺失空间方向补充 | 一、二点同速流入在三轴正反向的实际 remap 发布后具有秩四支撑；共同原空间投影保留已有剪切与机械矩，质量二阶矩增量有体积尺度上界 | 已接入输运；一般 PLIC、有限气腔、化学表示与完整步成本继续集成验收 |
-| 壁面适配张量候选 | 八个来源点下，零/一/两张法向墙为 24/24/12 个速度自由度；小矩阵及独立分量对照通过 | 部分 PLIC、稀疏来源、共同空间矩和完整生产成本继续验收 |
+| 壁面适配多项式 | `q_axis` 乘实际秩仿射场；完整散度系数约束、实际质量投影与转置；三轴闭合旋涡通过生产求解、发布与点采样 | 一般 PLIC、稀疏来源、共同空间矩和完整生产成本继续验收；局部混合墙面在来源覆盖完整时拆成微盒块 |
 
 共同半空间积分已提供湿体积的精确零至二阶几何矩，空间输入分别保留实际来源矩、PLIC 覆盖矩和孔隙内矩。下一实现以这些测度设计稀疏速度支撑，明确来源协方差与湿几何协方差的差异、空间近似及实际惯性。压力与来源相容条件、静水和内部运动共同决定生产表示。
 
@@ -251,10 +251,10 @@ M09 的局部改进随对应工作包提交。M07 与 M08 各自验收；恢复 
 
 密闭注液的聚焦入口为 `runBoundaryPourDiagnostic --args=--flux`。它已核验原始库存、PLIC、独立到达预留和最终公共面通量一致；后继节点可能跨格，节点容量与原格的局部孔隙变化分别核对。后续修正同时检查压力储存、实际空间去向和量化后的可提交库存。
 
-生产保留既有固定通量格点与容量规则，化学限制禁用零格点面时清除相应舍入预算。完整重建矩、短交接、载体修改、气腔、气体网络与架构校验通过。`components` 与 `chemical-tails` 已能完成稀疏压力准备，合法到达量及低 quanta 的最终份额仍未通过；化学输运包级验收继续开放。
+生产保留既有固定通量格点与容量规则，化学限制禁用零格点面时清除相应舍入预算。完整重建矩、短交接、载体修改、气腔、气体网络与架构校验通过。`components` 的非化学半层合法到达已通过，化学版本在低 quanta 来源的联合矩积分点分配处拒绝；`chemical-tails` 的最终份额和化学输运包级验收继续开放。
 
-M02 已接入实际空间秩的仿射拟合、单点湿墙形状和固定开放分量的独立速度块。拟合、压力拉回、转置及采样共用同一系数；压力核通过。采样场绑定库存与几何代次，CFL 和输运复用本次面速度。`--velocity-space` 的单点壁面与断开分量对照通过，断开分量同时核对点采样与独立生产压力行；三轴闭合旋涡及静态液压四项仍失败。`granular:short` 在析出质量中心断言失败，颗粒独立校验在气腔初始化容量检查失败，M05–M08 的集成继续开放。
+M02 已接入实际空间秩拟合、一次与二次湿墙形状、固定开放分量及有实际来源覆盖的微盒速度块。拟合、压力拉回、转置及采样共用同一系数；完整 Marker 压力入口通过。采样场绑定库存与几何代次，CFL 和输运复用本次面速度。`--velocity-space` 的三轴闭合旋涡、单点壁面、断开分量与独立静液压全部通过，旋涡同时覆盖完整压力求解、发布及载体点之间的采样。`granular:short` 在析出质量中心断言失败，颗粒独立校验在气腔初始化容量检查失败，M05–M08 的集成继续开放。
 
-共同二阶几何积分和空间输入已通过盒体、四面体、极薄层、SI 换算与悬殊质量相消验证。下一增量优先完善稀疏壁面附近的共同面约束与高阶内部速度，覆盖同一面上的局部墙片和开放湿面；流入重建的原始载体速度、扫掠面法向迹及 PLIC 截断误差分别验收。随后关闭有限气腔量化反例与正常密闭注液流程，再按依赖接入 M05–M08。气腔多后继的精确比例、环境绝对截留及完整步预算保留原条件。
+共同二阶几何积分和空间输入已通过盒体、四面体、极薄层、SI 换算与悬殊质量相消验证。后续优先关闭低 quanta 的联合矩份额、有限气腔量化反例与正常密闭注液流程，继续核对流入原始载体速度、扫掠面法向迹及一般 PLIC 截断误差，再按依赖接入 M05–M08。气腔多后继的精确比例、环境绝对截留及完整步预算保留原条件。
 
 M04 继续检查断开分量的合法到达及长轨迹正采样可表示性。局部回归使用 `handoff-short`、`joint-moments` 和 `representation`，包级验收保留 `components`、`chemical-tails`、`handoff` 及原有长场景。M05–M08 按前置条件接续，各包以列出的验收条件关闭。
