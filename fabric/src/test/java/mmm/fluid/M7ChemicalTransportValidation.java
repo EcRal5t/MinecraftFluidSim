@@ -177,8 +177,10 @@ public final class M7ChemicalTransportValidation {
 		domain.setSolid(2, 1, 1, true);
 		domain.setMarkerMaterial(0, MATERIALS, 0);
 		domain.bindChemistry(CHEMISTRY);
-		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, 10_000L), false);
-		domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.NAOH, 10_000L), false);
+		domain.setMarkerChemical(markerInCell(domain, 1, 1, 1),
+				Map.of(BuiltinChemicalDefinitions.HCL, 10_000L), false);
+		domain.setMarkerChemical(markerInCell(domain, 3, 1, 1),
+				Map.of(BuiltinChemicalDefinitions.NAOH, 10_000L), false);
 		domain.step();
 		long[] totals = domain.chemicalParcels().speciesTotals(domain.particleCount());
 		check(totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)] == 10_000L
@@ -322,8 +324,10 @@ public final class M7ChemicalTransportValidation {
 		domain.setVolume(2, 1, 1, 0.125F);
 		domain.setMarkerMaterial(0, MATERIALS, 0);
 		domain.bindChemistry(CHEMISTRY);
-		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, 10_000L), false);
-		domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.NAOH, 10_000L), false);
+		domain.setMarkerChemical(markerInCell(domain, 1, 1, 1),
+				Map.of(BuiltinChemicalDefinitions.HCL, 10_000L), false);
+		domain.setMarkerChemical(markerInCell(domain, 2, 1, 1),
+				Map.of(BuiltinChemicalDefinitions.NAOH, 10_000L), false);
 		domain.step();
 		long[] totals = domain.chemicalParcels().speciesTotals(domain.particleCount());
 		check(totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)] == 10_000L,
@@ -357,6 +361,7 @@ public final class M7ChemicalTransportValidation {
 		domain.setVolume(2, 1, 1, 0.125F);
 		domain.setMarkerMaterial(0, MATERIALS, 0);
 		domain.bindChemistry(CHEMISTRY);
+		int connectedMarkers = domain.particleCount();
 		FluidDomain.IndicatorEditResult rejected = domain.editIndicatorFloodFill(1, 1, 1,
 				true, 64, 0.1);
 		check(!rejected.accepted(), "over-volume indicator fill was partially accepted");
@@ -365,32 +370,43 @@ public final class M7ChemicalTransportValidation {
 		}
 		FluidDomain.IndicatorEditResult added = domain.editIndicatorFloodFill(1, 1, 1,
 				true, 64, 100.0);
-		check(added.accepted() && added.changedMarkers() == 2 && added.affectedBlockVolume() == 0.25,
+		check(added.accepted() && added.changedMarkers() == connectedMarkers && added.affectedBlockVolume() == 0.25,
 				"connected aqueous indicator fill did not cover its exact component");
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(domain.chemicalParcels().indicator(marker), "connected indicated marker was skipped");
 		}
 		FluidDomain.IndicatorEditResult shallowAim = domain.editIndicatorFloodFill(1, 3, 1,
 				false, 64, Double.POSITIVE_INFINITY);
-		check(shallowAim.accepted() && shallowAim.changedMarkers() == 2,
+		check(shallowAim.accepted() && shallowAim.changedMarkers() == connectedMarkers
+				&& shallowAim.affectedBlockVolume() == 0.25,
 				"shallow-surface aim did not snap to nearby chemical marker truth");
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(!domain.chemicalParcels().indicator(marker), "shallow-surface eraser skipped a marker");
 		}
 		added = domain.editIndicatorFloodFill(1, 1, 1, true, 64, 100.0);
-		check(added.accepted() && added.changedMarkers() == 2,
+		check(added.accepted() && added.changedMarkers() == connectedMarkers
+				&& added.affectedBlockVolume() == 0.25,
 				"indicator could not be restored after shallow-aim regression");
 
-		// A marker introduced after the fill keeps its own unmarked provenance.
+		int preservedCell = domain.cellIndex(1, 1, 1);
+		int preservedMarkers = 0;
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			if (domain.particleCellIndex(marker) == preservedCell) preservedMarkers++;
+		}
+		// Replacement carriers keep their new unmarked provenance.
 		domain.setVolume(2, 1, 1, 0.25F);
 		int marked = 0, plain = 0;
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			check(domain.chemicalParcels().indicator(marker) == (domain.particleCellIndex(marker) == preservedCell),
+					"volume replacement changed indicator provenance outside its marker group");
 			if (domain.chemicalParcels().indicator(marker)) marked++; else plain++;
 		}
-		check(marked > 0 && plain > 0, "later mixed markers inherited indicator retroactively");
+		check(marked == preservedMarkers && marked > 0 && plain > 0,
+				"later mixed markers inherited indicator retroactively");
 		FluidDomain.IndicatorEditResult erased = domain.editIndicatorFloodFill(1, 1, 1,
 				false, 64, Double.POSITIVE_INFINITY);
-		check(erased.accepted() && erased.changedMarkers() == marked, "eraser did not clear only current marked provenance");
+		check(erased.accepted() && erased.changedMarkers() == marked && erased.affectedBlockVolume() == 0.375,
+				"eraser did not clear only current marked provenance");
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(!domain.chemicalParcels().indicator(marker), "eraser left an indicated marker");
 		}
@@ -830,7 +846,7 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateTransferResolutionIsAtomic() throws Exception {
-		FluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
+		FluidDomain domain = domainWithCoarseMarkers(1);
 		FluidDomainState coarseState = domain.captureAuthoritativeState();
 		float belowMarkerResolution = 0.75F * (0.125F - Math.nextDown(0.125F));
 		check(!domain.tryExtractExactChemical(1, 1, 1, belowMarkerResolution, 0).transferred(),
@@ -853,7 +869,7 @@ public final class M7ChemicalTransportValidation {
 		FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
 				"unrepresentable insertion");
 
-		FluidDomain alternate = domainWithCell(1, 1, 1, 0.25F);
+		FluidDomain alternate = domainWithCoarseMarkers(2);
 		alternate.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
 		long[] speciesBefore = alternate.exportChemicalParticleState().copySpeciesTotals();
 		var transfer = alternate.tryExtractExactChemical(1, 1, 1, 0.0625F, 0);
@@ -906,6 +922,33 @@ public final class M7ChemicalTransportValidation {
 		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		domain.setVolume(x, y, z, volume);
 		domain.setMarkerMaterial(0, MATERIALS, 0);
+		domain.bindChemistry(CHEMISTRY);
+		return domain;
+	}
+
+	private static int markerInCell(FluidDomain domain, int x, int y, int z) {
+		int cell = domain.cellIndex(x, y, z);
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			if (domain.particleCellIndex(marker) == cell) return marker;
+		}
+		throw new AssertionError("chemical fixture has no marker in the requested cell");
+	}
+
+	private static FluidDomain domainWithCoarseMarkers(int count) {
+		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		float[] positionsAndVolumes = new float[4 * count];
+		double[] masses = new double[count];
+		for (int marker = 0; marker < count; marker++) {
+			positionsAndVolumes[4 * marker] = count == 1 ? 1.5F : 1.25F + 0.5F * marker;
+			positionsAndVolumes[4 * marker + 1] = 1.5F;
+			positionsAndVolumes[4 * marker + 2] = 1.5F;
+			positionsAndVolumes[4 * marker + 3] = 0.125F;
+			masses[marker] = 125.0;
+		}
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
+				4, 4, 4, STATIC_CONFIG.cellSize(), count, 0.125 * count, 125.0 * count,
+				MATERIALS.materials(), positionsAndVolumes, new float[3 * count], new byte[64],
+				masses, new int[count]));
 		domain.bindChemistry(CHEMISTRY);
 		return domain;
 	}

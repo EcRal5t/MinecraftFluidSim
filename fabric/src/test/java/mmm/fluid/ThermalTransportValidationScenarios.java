@@ -86,7 +86,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		var registry = new ThermalRegistry(List.of(water));
 		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F);
 		var domain = new FluidDomain(4, 4, 4, config, 512);
-		domain.setVolume(2, 2, 2, .0625F);
+		restorePhaseTestCarriers(domain, liquids, 2, 2, 2, new float[]{.0625F}, new int[1]);
 		int count = domain.particleCount(); double mass = domain.particles.mass(0);
 		double physicalMass = SolverUnitScale.forCellSize(config.cellSize()).kilograms(mass);
 		double base = physicalMass * water.referenceSpecificEnergyEuPerMu();
@@ -94,12 +94,12 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(physicalMass == 7.8125 && water.referenceTemperatureK() + (modeled - base) / physicalMass < 0,
 				"liquid initialization regression no longer exercises an invalid stored temperature");
 		try {
-			domain.bindThermal(registry, liquids, 300);
+			domain.bindThermal(registry, domain.materialRegistry, 300);
 			throw new AssertionError("liquid initialization published an owner with nonpositive stored temperature");
 		} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
 		require(domain.thermalState == null && domain.particleCount() == count && domain.particles.mass(0) == mass,
 				"rejected liquid initialization changed the carrier or published a thermal binding");
-		domain.bindThermal(registry, liquids, 1900);
+		domain.bindThermal(registry, domain.materialRegistry, 1900);
 		require(domain.thermalState.temperature(0, domain.thermalMarkerContext()) == 1900
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"valid stored-energy initialization failed after the rejected binding");
@@ -311,6 +311,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				mmm.simulation.FullCapabilityTestFixture.bindFull(domain, production, temperature,
 						ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 				domain.setVolume(2, 2, 2, .001F);
+				int initialLiquidCount = domain.particleCount();
 				int sand = production.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 				long parcel = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 				double mass = production.granular().material(sand).referenceDensity() * parcel / SolidVolume.SVQ_PER_CELL;
@@ -357,7 +358,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 								granular.registry, granular.parcels, granular.deposits, granular.compositions))
 						&& Arrays.equals(energy, domain.thermalState.granularColumn().copyActiveEnergy())
 						&& domain.thermalState.matchesThermalRevision(revision) && domain.thermalAudit().equals(audit)
-						&& domain.particles.count() == 1 && domain.carrierMutationRevision() == carrierRevision
+						&& domain.particles.count() == initialLiquidCount && domain.carrierMutationRevision() == carrierRevision
 						&& domain.chemicalParcels.record(0).equals(liquid) && domain.chemicalParcels.externalSource().equals(liquidSource)
 						&& domain.chemicalParcels.escapedSink().equals(liquidSink)
 						&& domain.exactInternalEnergy().equals(actual),

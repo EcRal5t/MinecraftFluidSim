@@ -199,11 +199,11 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 			amounts.put("mmm:h2o", 13L + index);
 			ChemicalRegistry currentChemistry = index % 3 == 0 ? shifted : chemistry;
 			var mixture = ChemicalMixtureRecord.fromStableAmounts(currentChemistry, amounts, index / 128.0);
+			double expected = mass * registry.material(host).referenceSpecificEnergyEuPerMu();
+			for (var entry : amounts.entrySet()) expected += registry.speciesOffset(host, entry.getKey())
+					.referenceInternalEnergyEuPerAu().multiply(entry.getValue())
+					.divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
 			for (int order = 0; order < 2; order++) {
-				double expected = mass * registry.material(host).referenceSpecificEnergyEuPerMu();
-				for (var entry : amounts.entrySet()) expected += registry.speciesOffset(host, entry.getKey())
-						.referenceInternalEnergyEuPerAu().multiply(entry.getValue())
-						.divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
 				for (int repeat = 0; repeat < 2; repeat++) {
 					require(Double.doubleToRawLongBits(function.baseEnergy(host, mass, amounts))
 							== Double.doubleToRawLongBits(expected), "cached thermal terms changed sum order or rounding");

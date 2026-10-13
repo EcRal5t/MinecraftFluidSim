@@ -352,9 +352,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					ExactRational.of(batchMass), ThermalPhaseTransition.InterfaceRequirement.NONE, 10000, 3000000);
 			var domain = new FluidDomain(3, 3, 3,
 					new FluidSolverConfig(.5F, 1.0E20F, 0, .05F, 100, 1.0E-5F, .45F, .002F, 0), 64);
-			domain.setVolume(1, 1, 1, .125F);
-			domain.setMarkerMaterial(0, liquids, 0);
-			domain.bindThermal(new ThermalRegistry(List.of(water, ice), List.of(), List.of(transition), "", ""), liquids, 200);
+			restorePhaseTestCarriers(domain, liquids, new float[]{.125F}, new int[1]);
+			domain.bindThermal(new ThermalRegistry(List.of(water, ice), List.of(), List.of(transition), "", ""), domain.materialRegistry, 200);
 			var before = domain.captureAuthoritativeState();
 			var revision = domain.thermalState.thermalRevision();
 			var energy = domain.exactInternalEnergy();
@@ -400,10 +399,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var registry = new ThermalRegistry(List.of(water, bath, ice), List.of(), List.of(transition), "", "");
 		var domain = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1.0E-5F, .45F, .002F, 0), 64);
-		domain.setVolume(1, 1, 1, .5F);
-		for (int marker = 0; marker < domain.particleCount(); marker++)
-			domain.setMarkerMaterial(marker, fluids, marker < 2 ? 0 : 1);
-		domain.bindThermal(registry, fluids, 300);
+		restorePhaseTestCarriers(domain, fluids, new float[]{.125F, .125F, .125F, .125F}, new int[]{0, 0, 1, 1});
+		domain.bindThermal(registry, domain.materialRegistry, 300);
 		var before = domain.exactInternalEnergy();
 		var audit = domain.thermalAudit();
 		var stats = domain.stepInertPhaseChangeOnly(1);
@@ -499,8 +496,9 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var domain = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
 		domain.sealDomainBoundary();
-		domain.setVolume(1, 1, 1, freezing ? SolidVolume.toCellVolume(2 * batchSvq) : .25F);
-		domain.setMarkerMaterial(0, liquids, freezing ? 0 : 1);
+		restorePhaseTestCarriers(domain, liquids,
+				freezing ? new float[]{SolidVolume.toCellVolume(2 * batchSvq)} : new float[]{.125F, .125F},
+				freezing ? new int[]{0} : new int[]{1, 0});
 		if (freezing) {
 			if (batches == 4) require(domain.tryInsertExactVolume(1, 1, 1,
 					SolidVolume.toCellVolume(2 * batchSvq), 0, 0).transferred(), "second integer-phase water carrier");
@@ -511,7 +509,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
 			if (batches == 4) domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.H2O, 3L), false);
 		}
-		domain.bindThermal(thermal, liquids, freezing ? 200 : 500);
+		domain.bindThermal(thermal, domain.materialRegistry, freezing ? 200 : 500);
 		if (!freezing) {
 			long quanta = batches == 2 ? 1 : 4;
 			double mass = transition.massMuPerBatch().multiply(batches).toDouble();
@@ -555,13 +553,12 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 512);
-		domain.setVolume(1, 1, 1, 1.0F / 4_096);
-		domain.setMarkerMaterial(0, liquids, liquids.handle(target.id()));
+		restorePhaseTestCarriers(domain, liquids, new float[]{1.0F / 4_096}, new int[]{liquids.handle(target.id())});
 		for (int marker = 1; marker < 256; marker++) {
 			require(domain.tryInsertExactVolume(1, 1, 1, 1.0F / 4_096, 1,
 					liquids.handle(other.id()), false).transferred(), "phase heat-bath insertion failed");
 		}
-		domain.bindThermal(registry, liquids, 295.0);
+		domain.bindThermal(registry, domain.materialRegistry, 295.0);
 		SignedDyadic before = domain.exactInternalEnergy();
 		ThermalAuditLedger audit = domain.thermalAudit();
 		double volume = domain.totalVolumeExact(), mass = domain.totalMass();
@@ -776,7 +773,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var thermal = compositionPhaseThermalRegistry(liquids, granular, chemistry);
 		for (int divisor = 1; divisor <= 2; divisor++) {
 			var domain = new FluidDomain(3, 3, 3, config, 256);
-			domain.setVolume(0, 0, 0, 0.25F); domain.bindMaterialRegistry(liquids); domain.bindChemistry(chemistry);
+			restorePhaseTestCarriers(domain, liquids, 0, 0, 0, new float[]{.125F, .125F}, new int[2]);
+			domain.bindChemistry(chemistry);
 			for (int marker = 0; marker < 2; marker++) {
 				domain.particles.setVolume(marker, 0.0625F); domain.particles.setMass(marker, 62.5);
 				var amounts = new java.util.TreeMap<String, Long>();
@@ -789,16 +787,17 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 							300.0, transition.lowerVolumeSvqPerBatch() / divisor, transition.upperVolumeSvqPerBatch() / divisor,
 							transition.massMuPerBatch().divide(divisor), transition.interfaceRequirement(), 0, 200_000)),
 					chemistry.fingerprint(), granular.fingerprint());
-			domain.bindThermal(bounded, liquids, 280.0);
+			domain.bindThermal(bounded, domain.materialRegistry, 280.0);
 			var energy = domain.exactInternalEnergy();
 			require(domain.stepInertPhaseChangeOnly(1).operations() == divisor - 1
 					&& domain.exactInternalEnergy().equals(energy),
 					"cell aggregate and target carrier enforce their own composition capacities");
 		}
 		var domain = new FluidDomain(3, 3, 3, config, 256);
-		domain.setVolume(2, 2, 2, 0.125F); domain.bindMaterialRegistry(liquids); domain.bindChemistry(chemistry);
+		restorePhaseTestCarriers(domain, liquids, 2, 2, 2, new float[]{.125F}, new int[1]);
+		domain.bindChemistry(chemistry);
 		domain.setMarkerChemical(0, Map.of(ids.getFirst(), mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA), false);
-		domain.bindThermal(thermal, liquids, 320.0);
+		domain.bindThermal(thermal, domain.materialRegistry, 320.0);
 		var composition = new CoherentPhaseStore.Composition(List.of(new CoherentPhaseStore.Component(ids.getFirst(), 1L)),
 				Double.doubleToRawLongBits(15.625 - 1.0e-9));
 		domain.addCoherentPhaseExternal(0, 0, 0, "test:thermal/composition_ice", SolidVolume.SVQ_PER_CELL / 8,
