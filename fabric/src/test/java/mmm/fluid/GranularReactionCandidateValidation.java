@@ -253,16 +253,17 @@ public final class GranularReactionCandidateValidation {
 			domain.granularState.parcels.add(original);
 			domain.gridDirty = true;
 			int cell = domain.cellIndex(1, 1, 1);
-			double oldLiquidMass = domain.unitScale.kilograms(domain.particles.mass(0));
-			float[] sourcePosition = {domain.particles.positionX(0), domain.particles.positionY(0), domain.particles.positionZ(0)};
+			var liquidBefore = liquidMassFirstMoment(domain);
 			require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().precipitations() == 1
 					&& domain.granularState.parcels.count() == 1, "mass moment fixture must merge actual precipitation");
 			var merged = domain.granularState.parcels.parcel(0);
 			double[] oldPosition = {original.x(), original.y(), original.z()};
-			double transferredMass = oldLiquidMass - domain.unitScale.kilograms(domain.particles.mass(0));
+			var liquidAfter = liquidMassFirstMoment(domain);
 			float[] finalPosition = {merged.x(), merged.y(), merged.z()};
 			for (int axis = 0; axis < 3; axis++) {
-				double expectedMoment = original.mass() * oldPosition[axis] + transferredMass * sourcePosition[axis];
+				double expectedMoment = mmm.units.SignedDyadic.of(original.mass())
+						.multiply(mmm.units.SignedDyadic.of(oldPosition[axis]))
+						.add(liquidBefore[axis].subtract(liquidAfter[axis])).toDouble();
 				double storageBound = merged.mass() * .5 * Math.ulp(finalPosition[axis])
 						+ 8 * Math.ulp(expectedMoment);
 				require(Math.abs(merged.mass() * finalPosition[axis] - expectedMoment) <= storageBound,
@@ -329,16 +330,19 @@ public final class GranularReactionCandidateValidation {
 		}
 		domain.bindThermal(ThermochemistryValidationScenarios.reactiveGranularThermalRegistry(liquids, granular), liquids, 300);
 		double[] before = spatialMoments(domain);
+		var liquidBefore = liquidMassFirstMoment(domain);
 		var energy = domain.exactInternalEnergy();
 		require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().precipitations() == 1
 				&& domain.granularState.parcels.count() == 1, "spatial moment fixture actually precipitates");
 		var solid = domain.granularState.parcels.parcel(0);
-		require(solid.x() == .75F && solid.y() == .625F && solid.z() == .625F,
-				"available transferred-mass centre is used without sub-cell jitter");
+		var liquidAfter = liquidMassFirstMoment(domain);
 		double[] after = spatialMoments(domain);
 		float[] position = {solid.x(), solid.y(), solid.z()};
 		double[] storageBound = new double[3];
 		for (int axis = 0; axis < 3; axis++) {
+			var transferredMoment = liquidBefore[axis].subtract(liquidAfter[axis]);
+			require(position[axis] == (float) (transferredMoment.toDouble() / solid.mass()),
+					"available transferred-mass centre is used without sub-cell jitter on axis " + axis);
 			storageBound[axis] = solid.mass() * .5 * Math.ulp(position[axis])
 					+ 32 * Math.ulp(Math.max(Math.abs(before[axis]), Math.abs(after[axis])));
 			require(Math.abs(after[axis] - before[axis]) <= storageBound[axis],
@@ -354,6 +358,17 @@ public final class GranularReactionCandidateValidation {
 		require(domain.exactInternalEnergy().equals(energy)
 				&& energy.equals(domain.thermalAudit().expectedInventory()), "spatial transfer preserves actual internal energy");
 		requireCombinedCapacity(domain);
+	}
+
+	private static mmm.units.SignedDyadic[] liquidMassFirstMoment(FluidDomain domain) {
+		var result = new mmm.units.SignedDyadic[]{mmm.units.SignedDyadic.ZERO, mmm.units.SignedDyadic.ZERO, mmm.units.SignedDyadic.ZERO};
+		for (int marker = 0; marker < domain.particleCount(); marker++) {
+			var mass = mmm.units.SignedDyadic.of(domain.unitScale.kilograms(domain.particles.mass(marker)));
+			result[0] = result[0].add(mass.multiply(mmm.units.SignedDyadic.of(domain.particles.positionX(marker))));
+			result[1] = result[1].add(mass.multiply(mmm.units.SignedDyadic.of(domain.particles.positionY(marker))));
+			result[2] = result[2].add(mass.multiply(mmm.units.SignedDyadic.of(domain.particles.positionZ(marker))));
+		}
+		return result;
 	}
 
 	private static double[] spatialMoments(FluidDomain domain) {
@@ -401,6 +416,16 @@ public final class GranularReactionCandidateValidation {
 
 		// A moving parcel releases solid volume across two cells, while dissolved liquid
 		// is produced in its source cell. Saturated local capacity must defer the batch.
+		var future = new mmm.granular.GranularCouplingFields(3, 3, 3, domain.config.cellSize());
+		future.rebuild(domain.granularState.parcels, domain.granularState.deposits,
+				(index, original) -> new mmm.granular.GranularCouplingFields.Position(
+						index == 0 ? .875F : original.x(), original.y(), original.z()));
+		// Prepare a legal joint initial state before publishing the moved sphere's integer kernel.
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) {
+			int cell = domain.cellIndex(x, y, z);
+			if (future.solidSvq(cell) > domain.granularCoupling.solidSvq(cell))
+				domain.setVolume(x, y, z, (float) (1.0 - future.solidSvq(cell) / (double) SolidVolume.SVQ_PER_CELL));
+		}
 		domain.granularState.parcels.overwrite(0, new GranularParcelStore.Parcel(
 				.875F, parcel.y(), parcel.z(), 0, 0, 0, parcel.solidVolumeSvq(), parcel.mass(),
 				parcel.materialHandle(), parcel.solidCompositionHandle(), 0, (byte) 0));

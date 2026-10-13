@@ -207,6 +207,25 @@ final class GranularReactionStage {
 		return activeByCell.getOrDefault(cell, List.of());
 	}
 
+	private boolean fitsActiveSpheres(GranularCouplingFields.Position position, long svq, int excluded) {
+		float h = state.cellSize();
+		int sizeZ = state.cellCount() / (state.sizeX() * state.sizeY());
+		int x = (int) Math.floor(position.x() / (double) h), y = (int) Math.floor(position.y() / (double) h);
+		int z = (int) Math.floor(position.z() / (double) h);
+		float radius = mmm.granular.GranularMechanics.representativeRadius(svq, h);
+		for (int iz = Math.max(0, z - 1); iz <= Math.min(sizeZ - 1, z + 1); iz++)
+			for (int iy = Math.max(0, y - 1); iy <= Math.min(state.sizeY() - 1, y + 1); iy++)
+				for (int ix = Math.max(0, x - 1); ix <= Math.min(state.sizeX() - 1, x + 1); ix++)
+					for (int index : activeParcels((iz * state.sizeY() + iy) * state.sizeX() + ix)) {
+						if (index == excluded) continue;
+						var other = access.granularState().parcels.parcel(index);
+						if (GranularSpawnAdmission.interiorsOverlap(position.x(), position.y(), position.z(), radius,
+								other.x(), other.y(), other.z(),
+								mmm.granular.GranularMechanics.representativeRadius(other.solidVolumeSvq(), h))) return false;
+					}
+		return true;
+	}
+
 	private long matchingSolidExtent(
 			int compositionHandle, long solidSvq, double mass, SolidLiquidReaction rule
 	) {
@@ -242,8 +261,9 @@ final class GranularReactionStage {
 		int x = cell % state.sizeX(), yz = cell / state.sizeX();
 		int y = yz % state.sizeY(), z = yz / state.sizeY();
 		long spawnSequence = ((long) cell << 16) + granular.parcels.count();
-		GranularCouplingFields.Position position = GranularReactionMomentum.precipitationPosition(
+		var massMoment = GranularReactionMomentum.precipitationMoment(
 				state.particles(), chemistry.unitScale(), plan);
+		GranularCouplingFields.Position position = massMoment.position(plan.signedSolidMass());
 		float h = state.cellSize();
 		boolean useMassMomentPosition = position != null && position.x() >= x * h && position.x() < (x + 1) * h
 				&& position.y() >= y * h && position.y() < (y + 1) * h
@@ -252,29 +272,32 @@ final class GranularReactionStage {
 		if (!useMassMomentPosition) {
 			position = access.collision().spawnPosition(x, y, z, plan.signedSolidSvq(), spawnSequence,
 					state.particles().positionX(carrierMarker), state.particles().positionY(carrierMarker),
-					state.particles().positionZ(carrierMarker));
+					state.particles().positionZ(carrierMarker), point -> fitsActiveSpheres(point, plan.signedSolidSvq(), -1));
 		}
 		refreshOccupancy();
 		int material = granular.registry.materialHandle(rule.solidMaterialId());
 		GranularReactionMomentum.Plan momentum = GranularReactionMomentum.plan(
 				state.particles(), chemistry.unitScale(), plan, 0, 0, 0);
 		PrecipitationMerge merge = precipitationMerge(
-				cell, material, plan, position, momentum, capacity);
+				cell, material, plan, position, useMassMomentPosition ? massMoment : null, momentum, capacity);
+		if (useMassMomentPosition && merge == null && !fitsActiveSpheres(position, plan.signedSolidSvq(), -1))
+			return false;
 		if (useMassMomentPosition && merge == null && (!granular.compositions.hasCapacity(1)
 				|| !granular.parcels.hasCapacity(1) || !capacity.fitsReplacement(
 				access.coupling(), null, 0, position, plan.signedSolidSvq()))) {
 			position = access.collision().spawnPosition(x, y, z, plan.signedSolidSvq(), spawnSequence,
 					state.particles().positionX(carrierMarker), state.particles().positionY(carrierMarker),
-					state.particles().positionZ(carrierMarker));
-			merge = precipitationMerge(cell, material, plan, position, momentum, capacity);
+					state.particles().positionZ(carrierMarker), point -> fitsActiveSpheres(point, plan.signedSolidSvq(), -1));
+			merge = precipitationMerge(cell, material, plan, position, null, momentum, capacity);
 		}
 		if (merge == null && (position == null || !capacity.fitsReplacement(
 				access.coupling(), null, 0, position, plan.signedSolidSvq()))) {
 			position = new GranularCouplingFields.Position((x + .5F) * h, (y + .5F) * h, (z + .5F) * h);
 			if (!access.collision().positionValid(position.x(), position.y(), position.z(), plan.signedSolidSvq())
 					|| !capacity.fitsReplacement(access.coupling(), null, 0, position, plan.signedSolidSvq())) return false;
-			merge = precipitationMerge(cell, material, plan, position, momentum, capacity);
+			merge = precipitationMerge(cell, material, plan, position, null, momentum, capacity);
 		}
+		if (merge == null && !fitsActiveSpheres(position, plan.signedSolidSvq(), -1)) return false;
 		ThermalDomainState thermal = access.thermalState();
 		if (merge != null) {
 			ThermalDomainState.ReactionPlan thermalPlan = thermal == null ? null : planThermalReaction(
@@ -330,7 +353,8 @@ final class GranularReactionStage {
 
 	private PrecipitationMerge precipitationMerge(
 			int cell, int material, GranularPhaseTransferEngine.Plan plan,
-			GranularCouplingFields.Position spawned, GranularReactionMomentum.Plan momentum, JointPhaseCapacity capacity
+			GranularCouplingFields.Position spawned, GranularReactionMomentum.MassMoment massMoment,
+			GranularReactionMomentum.Plan momentum, JointPhaseCapacity capacity
 	) {
 		if (spawned == null) return null;
 		GranularDomainState granular = access.granularState();
@@ -357,10 +381,15 @@ final class GranularReactionStage {
 			try { PhaseChangeStageSupport.representedPhysicalMassTransfer(
 					existing.mass(), combinedMass, plan.signedSolidMass()); }
 			catch (PhaseChangeStageSupport.PhaseCandidateUnavailableException unavailable) { continue; }
-			float x = weighted(existing.x(), existing.mass(), spawned.x(), plan.signedSolidMass(), combinedMass);
-			float y = weighted(existing.y(), existing.mass(), spawned.y(), plan.signedSolidMass(), combinedMass);
-			float z = weighted(existing.z(), existing.mass(), spawned.z(), plan.signedSolidMass(), combinedMass);
-			if (!access.collision().positionValid(x, y, z, combinedSvq)) continue;
+			var position = massMoment == null ? new GranularCouplingFields.Position(
+					weighted(existing.x(), existing.mass(), spawned.x(), plan.signedSolidMass(), combinedMass),
+					weighted(existing.y(), existing.mass(), spawned.y(), plan.signedSolidMass(), combinedMass),
+					weighted(existing.z(), existing.mass(), spawned.z(), plan.signedSolidMass(), combinedMass))
+					: massMoment.mergedPosition(existing, combinedMass);
+			if (position == null) continue;
+			float x = position.x(), y = position.y(), z = position.z();
+			if (!access.collision().positionValid(x, y, z, combinedSvq)
+					|| !fitsActiveSpheres(position, combinedSvq, parcelIndex)) continue;
 			SolidCompositionRecord composition = granular.compositions.record(existing.solidCompositionHandle())
 					.plus(plan.transferredComposition());
 			GranularParcelStore.Parcel merged = new GranularParcelStore.Parcel(
