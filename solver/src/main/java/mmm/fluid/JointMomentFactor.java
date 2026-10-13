@@ -14,6 +14,19 @@ final class JointMomentFactor {
 			}
 			joined[a][12] = finite(separation * delta[a]);
 		}
+		compress();
+	}
+
+	void addPositionSpread(int axis, double deviation) {
+		for (int a = 0; a < 6; a++) {
+			System.arraycopy(values[a], 0, joined[a], 0, 6);
+			java.util.Arrays.fill(joined[a], 6, 13, 0);
+		}
+		joined[axis][6] = finite(deviation);
+		compress();
+	}
+
+	private void compress() {
 		// Rotate each row's tail into its pivot. No covariance subtraction or rank truncation.
 		for (int a = 0; a < 6; a++) for (int k = 12; k > a; k--) {
 			double x = joined[a][a], y = joined[a][k];

@@ -80,7 +80,7 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 零时长固体几何排液的来源比例见 [CellRemapMicroPreferences](../../solver/src/main/java/mmm/fluid/CellRemapMicroPreferences.java) 的 `inventory`，同微盒精确矩汇总见 [CellRemapTransportMoments](../../solver/src/main/java/mmm/fluid/CellRemapTransportMoments.java)。聚焦验证分别为 `:fabric:runLiquidTransportValidation --args="geometry-remap"` 与 `:fabric:runRemapMomentsValidation --args="transport-moments"`。
 
-正质量联合矩的合并与输出回验见 [CellRemapSpatialMoments](../../solver/src/main/java/mmm/fluid/CellRemapSpatialMoments.java)，平方根压缩及逐行尺度 QR 在 [JointMomentFactor](../../solver/src/main/java/mmm/fluid/JointMomentFactor.java)。聚焦验证为 `:fabric:runRemapMomentsValidation --args="joint-moments"`；完整逻辑步的分次统计与表示转换预算使用输运选择器 `representation`。
+正质量联合矩的合并、流入法向厚度与输出回验见 [CellRemapSpatialMoments](../../solver/src/main/java/mmm/fluid/CellRemapSpatialMoments.java)，平方根压缩及逐行尺度 QR 在 [JointMomentFactor](../../solver/src/main/java/mmm/fluid/JointMomentFactor.java)。聚焦验证为 `:fabric:runRemapMomentsValidation --args="joint-moments"`；完整逻辑步的分次统计与表示转换预算使用输运选择器 `representation`。
 
 有限体积与独立粒子的步长检查分别在 `CellLiquidVolumeTransport.courantRate`、`FluidDomainStepCoordinator.calculateVolumeTransportSubsteps` 和 `MechanicalStageAssembly.projectedCourant`。密闭注液的压力功与薄层支撑排查使用 [BoundaryPourDiagnostic](../../fabric/src/test/java/mmm/fluid/BoundaryPourDiagnostic.java)，入口 `:fabric:runBoundaryPourDiagnostic`。
 

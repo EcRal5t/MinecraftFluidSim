@@ -315,6 +315,7 @@ final class CellCarrierRemapPlan {
 				if (facePoint != null) {
 					subtractFaceMoment(source, masses[d], pieces[g][d].toDouble(), facePoint);
 					spatial.projectPositionAxis(flux.axis[faces[d]]);
+					spatial.spreadFaceArrival(flux.axis[faces[d]], dt / domain.config.cellSize());
 					spatial.setCentroid(Arrays.copyOf(facePoint, 3));
 				}
 				source.shares.add(new Share(source, destinations[d], supports[d], pieces[g][d], masses[d], transport.kinetic()[d],
@@ -446,7 +447,6 @@ final class CellCarrierRemapPlan {
 				int stride = a == 0 ? 1 : a == 1 ? domain.sizeX : domain.sizeX * domain.sizeY;
 				double shift = (a == 0 ? target.cell % domain.sizeX - source.cell % domain.sizeX
 						: a == 1 ? target.cell / stride % domain.sizeY - source.cell / stride % domain.sizeY : target.cell / stride - source.cell / stride);
-				if (shift != 0) share.spatial.projectPositionAxis(a);
 				target.massMoment[a] += mass * (facePoint[a] - shift); target.volumeMoment[a] += volume * (facePoint[a + 3] - shift);
 				centroid[a] = facePoint[a] - shift;
 			}

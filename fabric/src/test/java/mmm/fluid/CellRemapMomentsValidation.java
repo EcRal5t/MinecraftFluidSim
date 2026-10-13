@@ -11,6 +11,7 @@ public final class CellRemapMomentsValidation {
 			throw new IllegalArgumentException("Unknown remap moments validation entry");
 		if (args.length == 1 && args[0].equals("joint-moments")) {
 			partialCellInitializationHasPositiveWetLayerSupport();
+			faceArrivalRetainsFiniteNormalThickness();
 			thinJointRuleKeepsActualRank(); jointRuleKeepsIndependentVelocityModes(); thinAffineRuleKeepsCrossMoments();
 			unequalSourceMassKeepsFirstMoment();
 			chemicalQuadratureRetainsJointMomentsWithFewQuanta(); smallTransferredGroupsRetainShear();
@@ -36,6 +37,7 @@ public final class CellRemapMomentsValidation {
 		directionalTransportPartitionsActualMomentumAndKineticEnergy();
 		thinJointRuleKeepsActualRank();
 		partialCellInitializationHasPositiveWetLayerSupport();
+		faceArrivalRetainsFiniteNormalThickness();
 		jointRuleKeepsIndependentVelocityModes();
 		thinAffineRuleKeepsCrossMoments(); unequalSourceMassKeepsFirstMoment();
 		geometryRemapUsesPlannedCapacity();
@@ -325,6 +327,37 @@ public final class CellRemapMomentsValidation {
 		}
 	}
 
+	/** Three positive age nodes independently integrate uniform entry over a frozen substep. */
+	private static void faceArrivalRetainsFiniteNormalThickness() {
+		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) for (boolean shear : new boolean[]{false, true}) {
+			var moments = new CellRemapSpatialMoments();
+			double duration = .125, face = -.5 * sign;
+			double[][] reference = new double[24][6]; double[] weights = new double[24];
+			for (int p = 0; p < 8; p++) {
+				double[] position = {(p & 1) == 0 ? -.25 : .25, (p & 2) == 0 ? -.25 : .25, (p & 4) == 0 ? -.25 : .25};
+				double[] velocity = {.125, -.25, .5};
+				velocity[axis] = sign * (shear ? .5 + .25 * position[(axis + 1) % 3] : .5);
+				moments.add(1, position, velocity);
+				for (int age = 0; age < 3; age++) {
+					int node = 3 * p + age;
+					weights[node] = age == 1 ? 4 : 1;
+					for (int a = 0; a < 3; a++) {
+						reference[node][a] = a == axis ? face + age * duration / 2 * velocity[a] : position[a] + duration * velocity[a];
+						reference[node][a + 3] = velocity[a];
+					}
+				}
+			}
+			moments.advancePositions(duration / 2);
+			moments.projectPositionAxis(axis);
+			var centroid = moments.centroid(); centroid[axis] = face; moments.setCentroid(centroid);
+			moments.spreadFaceArrival(axis, duration);
+			moments.advancePositions(duration / 2);
+			check(moments.spatialRank() == 3, "Face arrival lost its finite normal support");
+			verifyJointRule(moments, weights, reference);
+			if (!shear) precise(moments.spatialVariance(axis), duration * duration * .25 / 12, "Uniform swept slab variance");
+		}
+	}
+
 	private static void verifyJointRule(CellRemapSpatialMoments moments, double[] weights, double[][] source) {
 		verifyJointRule(moments, weights, source, weights);
 	}
@@ -360,8 +393,8 @@ public final class CellRemapMomentsValidation {
 						.multiply(rawRational(source[p][b]).subtract(expectedMean[b])));
 			}
 			for (int p = 0; p < weights.length; p++) {
-				observed += outputProbability[p].toDouble() * (jointComponent(result, p, a) - observedMean[a])
-						* (jointComponent(result, p, b) - observedMean[b]);
+				observed += outputProbability[p].toDouble() * (jointComponent(result, p, a) - expectedMean[a].toDouble())
+						* (jointComponent(result, p, b) - expectedMean[b].toDouble());
 			}
 			double limit = 2048 * Math.ulp(Math.sqrt(variance[a]) * Math.sqrt(variance[b]))
 					+ 2048 * Math.ulp(expectedMean[a].toDouble()) * Math.sqrt(variance[b])

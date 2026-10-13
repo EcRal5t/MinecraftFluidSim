@@ -81,6 +81,15 @@ final class CellRemapSpatialMoments {
 		factor.projectPositionAxis(axis);
 		for (int a = 0; a < 6; a++) covariance[axis][a] = covariance[a][axis] = 0;
 	}
+	/** Uniform arrival age adds normal thickness; tangential trajectories retain their full step. */
+	void spreadFaceArrival(int axis, double normalizedDt) {
+		if (axis < 0 || axis >= 3 || !(Double.isFinite(normalizedDt) && normalizedDt >= 0))
+			throw new IllegalArgumentException("Invalid face arrival interval");
+		double rms = Math.hypot(mean[axis + 3], Math.sqrt(covariance[axis + 3][axis + 3]));
+		double deviation = finite(normalizedDt / Math.sqrt(12) * rms);
+		factor.addPositionSpread(axis, deviation);
+		covariance[axis][axis] = finite(covariance[axis][axis] + deviation * deviation);
+	}
 	double mass() { return mass; }
 	double[] centroid() { return new double[]{mean[0], mean[1], mean[2]}; }
 	double spatialVariance(int axis) { return covariance[axis][axis]; }
