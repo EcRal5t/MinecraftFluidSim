@@ -15,7 +15,7 @@ final class MicroFaceVelocitySpaceExperiment {
 	private record Piece(int key, int[] coordinate) { }
 	private record Wall(int piece, int axis, int sign) { }
 	private record Balance(double[] force, double[] torque) { }
-	private record Projection(double[] faceVelocity, double[] liquidPressure, double[] gasPressure) { }
+	record Projection(double[] coefficients, double[] liquidPressure, double[] gasPressure) { }
 	private MicroFaceVelocitySpaceExperiment() { }
 
 	static void validateSupport() {
@@ -82,11 +82,11 @@ final class MicroFaceVelocitySpaceExperiment {
 			var predicted = new double[model.faces.size()];
 			for (int face = 0; face < predicted.length; face++) predicted[face] = Math.sin(.37 * face + mask);
 			var projected = model.project(predicted, .001);
-			for (double residual : multiply(model.divergence, projected.faceVelocity())) near(residual, 0, 1e-11, "Micro projection continuity");
-			var removed = subtract(predicted, projected.faceVelocity());
-			near(energy(model.mass, predicted) - energy(model.mass, projected.faceVelocity()), energy(model.mass, removed), 1e-10,
+			for (double residual : multiply(model.divergence, projected.coefficients())) near(residual, 0, 1e-11, "Micro projection continuity");
+			var removed = subtract(predicted, projected.coefficients());
+			near(energy(model.mass, predicted) - energy(model.mass, projected.coefficients()), energy(model.mass, removed), 1e-10,
 					"Micro actual-mass projection energy identity");
-			model.verifyFaces(projected.faceVelocity());
+			model.verifyFaces(projected.coefficients());
 			model.verifyVirtualWork();
 			var pressure = new double[model.pieces.size()]; for (int i = 0; i < pressure.length; i++) pressure[i] = Math.cos(.39 * i);
 			assertBalance(model.balance(pressure, new double[1]));
@@ -112,14 +112,14 @@ final class MicroFaceVelocitySpaceExperiment {
 		for (double value : balance.torque()) near(value, 0, 1e-10, "Actual pressure torque closes with gas traction and fixed-wall reaction");
 	}
 
-	private static FluidDomain closedMask(int mask) {
+	static FluidDomain closedMask(int mask) {
 		var d = domain(2, 2, 2);
 		for (int cell = 0; cell < d.cellCount; cell++) d.setSolid(cell % 2, cell / 2 % 2, cell / 4, true);
 		d.setSolidMicroMask(0, 0, 0, mask);
 		if (mask != 255) d.setVolume(0, 0, 0, (8 - Integer.bitCount(mask)) / 8F);
 		d.ensureGrid(); return d;
 	}
-	private static FluidDomain domain(int x, int y, int z) {
+	static FluidDomain domain(int x, int y, int z) {
 		return new FluidDomain(x, y, z, new FluidSolverConfig(1, 1000, 0, .001F, 400, 1e-5F, .45F, .002F, 0));
 	}
 
@@ -134,9 +134,9 @@ final class MicroFaceVelocitySpaceExperiment {
 				markerVelocity[b * d.particleCount() + i] = -p[b] * (1 - p[b]) * (1 - 2 * p[a]);
 			}
 			var input = model.fit(markerVelocity); var projected = model.project(input, .001);
-			var sampled = multiply(model.sample, projected.faceVelocity());
+			var sampled = multiply(model.sample, projected.coefficients());
 			for (int i = 0; i < sampled.length; i++) near(sampled[i], markerVelocity[i], 1e-13, "Shared microfaces retain closed circulation");
-			near(energy(model.mass, projected.faceVelocity()), 8.7890625, 1e-12, "Closed circulation retains actual kinetic energy");
+			near(energy(model.mass, projected.coefficients()), 8.7890625, 1e-12, "Closed circulation retains actual kinetic energy");
 		}
 		System.out.println("PASS microface closed circulation: three axes retain 8.7890625 J rather than being cleared by whole-plane walls");
 	}
@@ -160,13 +160,13 @@ final class MicroFaceVelocitySpaceExperiment {
 		}
 		near(result.gasPressure()[first], 50662.5, 1e-5, "First gas pressure");
 		near(result.gasPressure()[second], -25331.25, 1e-5, "Second gas pressure");
-		for (double velocity : result.faceVelocity()) near(velocity, 0, 1e-12, "Independent stationary compartments have zero flow");
-		model.verifyFaces(result.faceVelocity()); model.verifyVirtualWork();
+		for (double velocity : result.coefficients()) near(velocity, 0, 1e-12, "Independent stationary compartments have zero flow");
+		model.verifyFaces(result.coefficients()); model.verifyVirtualWork();
 		assertBalance(model.balance(result.liquidPressure(), result.gasPressure()));
 		System.out.println("PASS partial-wall microface pressure: liquid/gas 50662.5 Pa and -25331.25 Pa, zero velocity, separate quarter-face ports");
 	}
 
-	private static final class Model {
+	static final class Model {
 		final FluidDomain domain;
 		final ArrayList<Piece> pieces = new ArrayList<>();
 		final ArrayList<Face> faces = new ArrayList<>();
@@ -333,22 +333,25 @@ final class MicroFaceVelocitySpaceExperiment {
 		}
 
 		Projection project(double[] predictor, double dt) {
+			return project(predictor, dt, mass, divergence);
+		}
+		Projection project(double[] predictor, double dt, double[][] inertia, double[][] volumeDivergence) {
 			boolean[] anchored = new boolean[componentCount];
 			for (Face face : faces) if (face.gasNode() >= 0) anchored[components[face.minus() >= 0 ? face.minus() : face.plus()]] = true;
 			var rows = new ArrayList<double[]>(); var owners = new ArrayList<Integer>();
 			for (int piece = 0; piece < pieces.size(); piece++) {
 				if (!anchored[components[piece]]) { anchored[components[piece]] = true; continue; }
-				rows.add(divergence[piece].clone()); owners.add(piece);
+				rows.add(volumeDivergence[piece].clone()); owners.add(piece);
 			}
 			int liquidRows = rows.size();
-			for (int i = 0; i < gasRows.size(); i++) rows.add(new double[faces.size()]);
+			for (int i = 0; i < gasRows.size(); i++) rows.add(new double[predictor.length]);
 			for (int f = 0; f < faces.size(); f++) {
 				var face = faces.get(f); if (face.gasNode() < 0) continue;
 				rows.get(liquidRows + gasRows.get(face.gasNode()))[f] = face.minus() >= 0 ? -area : area;
 			}
-			var c = rows.toArray(double[][]::new); var response = new double[c.length][faces.size()];
+			var c = rows.toArray(double[][]::new); var response = new double[c.length][predictor.length];
 			var schur = new double[c.length][c.length]; var right = new double[c.length];
-			for (int row = 0; row < c.length; row++) response[row] = solve(mass, c[row]);
+			for (int row = 0; row < c.length; row++) response[row] = solve(inertia, c[row]);
 			for (int row = 0; row < c.length; row++) {
 				right[row] = -dot(c[row], predictor) / dt;
 				for (int column = 0; column < c.length; column++) schur[row][column] = dot(c[row], response[column]);
@@ -360,7 +363,7 @@ final class MicroFaceVelocitySpaceExperiment {
 				schur[row][row] += storage; right[row] += storage * pressure;
 			}
 			var pressure = solve(schur, right); var velocity = predictor.clone();
-			for (int face = 0; face < faces.size(); face++) for (int row = 0; row < c.length; row++) velocity[face] += dt * response[row][face] * pressure[row];
+			for (int column = 0; column < predictor.length; column++) for (int row = 0; row < c.length; row++) velocity[column] += dt * response[row][column] * pressure[row];
 			var liquid = new double[pieces.size()]; var gas = new double[domain.gasState.network.nodeCount() + 1];
 			for (int row = 0; row < liquidRows; row++) liquid[owners.get(row)] = pressure[row];
 			for (var entry : gasRows.entrySet()) gas[entry.getKey()] = pressure[liquidRows + entry.getValue()];
@@ -453,7 +456,13 @@ final class MicroFaceVelocitySpaceExperiment {
 				var face = faces.get(f);
 				if (face.gasNode() >= 0) load[f] -= (face.minus() >= 0 ? area : -area) * gasPressure[face.gasNode()];
 			}
-			var acceleration = multiply(sample, solve(mass, load)); var actual = new double[3][domain.particleCount()];
+			return balanceActual(multiply(sample, solve(mass, load)), pressure, gasPressure);
+		}
+		void verifyPressureReaction(double[] acceleration, double[] pressure) {
+			assertBalance(balanceActual(acceleration, pressure, new double[domain.gasState.network.nodeCount() + 1]));
+		}
+		private Balance balanceActual(double[] acceleration, double[] pressure, double[] gasPressure) {
+			var actual = new double[3][domain.particleCount()];
 			var force = new double[3]; var torque = new double[3];
 			for (int marker = 0; marker < domain.particleCount(); marker++) {
 				var p = new double[]{domain.particles.positionX(marker), domain.particles.positionY(marker), domain.particles.positionZ(marker)};
