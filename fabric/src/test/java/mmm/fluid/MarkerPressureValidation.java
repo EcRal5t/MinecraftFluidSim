@@ -115,6 +115,7 @@ public final class MarkerPressureValidation {
 		pressureUsesCurrentMicroGasGeometry();
 		cellAffineVelocityPreservesResolvedMotion();
 		cellWetFaceAndConstraintWork();
+		sharedTraceMassConditioning();
 		fixedWallProjectionUsesActualMass();
 		var free = layout(false); verifyIndependentFluxAndGram(free); projectFreeSurface(free);
 		var closed = layout(true); verifyIndependentFluxAndGram(closed); closedPressureKernel(closed);
@@ -582,6 +583,70 @@ public final class MarkerPressureValidation {
 			exactWork = exactWork.add(storage.multiply(load).multiply(load));
 		}
 		near(work, exactWork.toDouble(), 0, "Factored/full-C positive-work equality");
+	}
+
+	private static void sharedTraceMassConditioning() {
+		for (int cells : new int[]{2, 4, 8}) for (float epsilon : new float[]{1 / 16F, 1 / 1024F}) {
+			var config = new FluidSolverConfig(1, 1000, 0, .001F, 64, 1e-6F, .45F, .002F, 0);
+			var domain = new FluidDomain(cells + 2, 3, 3, config, 16 * cells);
+			float[] positions = new float[32 * cells]; double[] mass = new double[8 * cells]; Arrays.fill(mass, 125);
+			for (int cell = 0; cell < cells; cell++) for (int point = 0; point < 8; point++) {
+				int base = 4 * (8 * cell + point); float along = (point & 2) == 0 ? -.25F : .25F, thin = (point & 4) == 0 ? -epsilon : epsilon;
+				positions[base] = cell + 1.5F + ((point & 1) == 0 ? -.25F : .25F);
+				positions[base + 1] = 1.5F + along + thin; positions[base + 2] = 1.5F + along - thin; positions[base + 3] = .125F;
+			}
+			domain.restoreMaterialParticleState(new FlipMaterialParticleState(cells + 2, 3, 3, 1, mass.length, cells, 1000.0 * cells,
+					java.util.List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2)),
+					positions, new float[3 * mass.length], new byte[domain.cellCount], mass, new int[mass.length]));
+			var basis = CellAffineVelocity.capture(domain); var definitions = new java.util.ArrayList<CellVelocityConstraintOperator.Row>();
+			for (int cell = 0; cell < cells; cell++) {
+				var blocks = new java.util.ArrayList<CellVelocityConstraintOperator.Block>();
+				for (int axis = 0; axis < 3; axis++) {
+					double[] declared = new double[4]; declared[axis + 1] = 1;
+					blocks.add(new CellVelocityConstraintOperator.Block(basis.markerBlock(8 * cell), axis, declared));
+				}
+				definitions.add(new CellVelocityConstraintOperator.Row(blocks, 0));
+			}
+			var groups = new java.util.ArrayList<int[]>();
+			for (int face = 0; face < cells - 1; face++) {
+				groups.add(new int[]{definitions.size(), definitions.size() + 1, definitions.size() + 2});
+				for (int test = 0; test < 3; test++) {
+					var left = new double[4]; var right = new double[4];
+					if (test == 0) { left[0] = 1; right[0] = -1; left[1] = right[1] = .5; }
+					else { left[test + 1] = 1.0 / 12; right[test + 1] = -1.0 / 12; }
+					definitions.add(new CellVelocityConstraintOperator.Row(java.util.List.of(
+							new CellVelocityConstraintOperator.Block(basis.markerBlock(8 * face), 0, left),
+							new CellVelocityConstraintOperator.Block(basis.markerBlock(8 * (face + 1)), 0, right)), 0));
+				}
+			}
+			var operator = new CellVelocityConstraintOperator(basis, definitions); int rows = operator.rowCount();
+			double[] mode = new double[rows], image = new double[rows], diagonal = new double[rows]; operator.diagonal(diagonal);
+			var velocity = new double[3][mass.length];
+			for (int marker = 0; marker < mass.length; marker++) velocity[0][marker] = (marker / 8 + 1) * (positions[4 * marker + 1] + positions[4 * marker + 2] - 3);
+			for (int face = 0; face < cells - 1; face++) mode[cells + 3 * face + 1] = mode[cells + 3 * face + 2] = Math.sin(Math.PI * (face + 1) / cells);
+			verifyFactoredConstraint(basis, definitions, velocity, mode); operator.apply(mode, image);
+			// Symmetric sources make the entire mean/normal coarse space mass-orthogonal to this shear mode.
+			for (int row = 0; row < rows; row++) if (row < cells || (row - cells) % 3 == 0)
+				near(image[row] / Math.sqrt(diagonal[row]), 0, 1e-12, "Mean/normal coarse space misses tangent shear");
+			double[] unit = new double[rows], column = new double[rows]; unit[cells + 1] = 1; operator.apply(unit, column);
+			double a = column[cells + 1], b = column[cells + 2], condition = (a - b) / (a + b);
+			near(condition / (.0625 / (epsilon * epsilon)), 1, 1e-9, "Actual tangent Gram follows source covariance");
+			double eigenvalue = (a + b) * (1 - Math.cos(Math.PI / cells));
+			for (int row = cells; row < rows; row++) if ((row - cells) % 3 != 0)
+				near(image[row], eigenvalue * mode[row], 1e-12, "Independent tangent-chain eigenmode");
+			var local = operator.preconditioner(diagonal, new double[rows], groups);
+			if (cells == 2) for (int test = 1; test <= 2; test++) {
+				Arrays.fill(unit, 0); unit[cells + test] = 1; operator.apply(unit, column); local.apply(column, image);
+				for (int row = 0; row < rows; row++) near(image[row], unit[row], config.pressureTolerance(), "Face three-moment inverse removes thin-source conditioning");
+			}
+			double[] rhs = new double[rows]; operator.apply(mode, rhs);
+			double pressureUnit = 1.0 / config.density();
+			var result = PressureConditionValidation.comparePressure(operator, local::apply, rhs, new double[rows],
+					config.maxPressureIterations(), config.pressureTolerance() * pressureUnit, pressureUnit);
+			if (!result.converged()) throw new AssertionError("Shared-trace matrix exceeded the original pressure budget: " + result);
+			System.out.printf("TRACE cells=%d epsilon=%g tangentCondition=%g chainCondition=%g result=%s%n", cells, epsilon, condition,
+					(1 + Math.cos(Math.PI / cells)) / (1 - Math.cos(Math.PI / cells)), result);
+		}
 	}
 
 	private static void verifyAffineRigidMotion(CellAffineVelocity basis) {

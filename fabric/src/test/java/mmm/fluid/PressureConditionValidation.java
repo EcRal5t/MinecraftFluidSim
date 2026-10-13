@@ -61,6 +61,7 @@ final class PressureConditionValidation {
 		double residual = pressureRms(applied) / unit;
 		var production = new PressureProjectionResult(d.lastPressureIterations, residual, Double.isFinite(residual) && residual <= d.config.pressureTolerance());
 		pressurePartition("production-retained", production, operator, rhs, plan.pressure(), kinds, unit, -1);
+		worstSharedTrace(plan, applied, unit);
 		pressureFactorization(plan, rhs, applied, unit);
 		for (int mode = 0; mode < 2; mode++) {
 			started = System.nanoTime();
@@ -68,6 +69,31 @@ final class PressureConditionValidation {
 			double[] pressure = initial.clone();
 			var result = comparePressure(operator, preconditioner::apply, rhs, pressure, d.config.maxPressureIterations(), d.config.pressureTolerance() * unit, unit);
 			pressurePartition(mode == 0 ? "SGS" : "chi-SGS", result, operator, rhs, pressure, kinds, unit, started);
+		}
+	}
+	private static void worstSharedTrace(MarkerPressureProjection plan, double[] residual, double unit) {
+		int worst = -1;
+		for (int row = plan.sharedRowStart(); row < plan.sharedRowEnd(); row++)
+			if (worst < 0 || Math.abs(residual[row]) > Math.abs(residual[worst])) worst = row;
+		if (worst < 0) return;
+		int start = worst - (worst - plan.sharedRowStart()) % 3;
+		System.out.printf("CHEM worstShared row=%d faceStart=%d test=%d residual=%g%n", worst, start, worst - start, residual[worst] / unit);
+		var definitions = value(plan, "rows", java.util.List.class); var basis = plan.basis();
+		var gram = new double[3][3]; double[] direction = new double[residual.length], image = new double[residual.length];
+		for (int test = 0; test < 3; test++) {
+			direction[start + test] = 1; plan.operator().apply(direction, image); direction[start + test] = 0;
+			for (int other = 0; other < 3; other++) gram[other][test] = image[start + other];
+			for (var block : ((CellVelocityConstraintOperator.Row) definitions.get(start + test)).blocks())
+				System.out.printf("CHEM sharedBlock row=%d block=%d cell=%d axis=%d axisRank=%d expanded=%s coefficients=%s%n",
+						start + test, block.velocityBlock(), basis.physicalCell(block.velocityBlock()), block.axis(),
+						basis.axisRank(block.velocityBlock(), block.axis()), basis.expandedCell(block.velocityBlock()), Arrays.toString(block.coefficients()));
+		}
+		for (int test = 0; test < 3; test++) {
+			double[] normalized = new double[3];
+			for (int other = 0; other < 3; other++) normalized[other] = gram[test][test] > 0 && gram[other][other] > 0
+					? gram[test][other] / Math.sqrt(gram[test][test]) / Math.sqrt(gram[other][other]) : 0;
+			System.out.printf("CHEM sharedGram row=%d residual=%g actual=%s correlation=%s%n",
+					start + test, residual[start + test] / unit, Arrays.toString(gram[test]), Arrays.toString(normalized));
 		}
 	}
 	private static double[] chemicalInitialPressure(MarkerPressureProjection plan, double[] common) {
@@ -266,7 +292,7 @@ final class PressureConditionValidation {
 		return rank;
 	}
 
-	private static PressureProjectionResult comparePressure(CellVelocityConstraintOperator operator, java.util.function.BiConsumer<double[], double[]> preconditioner,
+	static PressureProjectionResult comparePressure(CellVelocityConstraintOperator operator, java.util.function.BiConsumer<double[], double[]> preconditioner,
 	                                                       double[] rhs, double[] pressure, int limit, double tolerance, double unit) {
 		int n = rhs.length, iterations = 0;
 		double[] r = new double[n], z = new double[n], direction = new double[n], applied = new double[n];
