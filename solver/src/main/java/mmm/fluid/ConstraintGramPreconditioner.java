@@ -1,12 +1,15 @@
 package mmm.fluid;
 
 import mmm.units.SignedDyadic;
+import mmm.chemistry.ExactRational;
 import java.util.Arrays;
 
 /** Symmetric Gauss-Seidel on the actual pressure Gram, normalized by its positive diagonal. */
 final class ConstraintGramPreconditioner {
 	private final double[] inverseRoot, lower, workspace;
 	private final int[] offsets, columns;
+	private double[] coarseMode, coarseImage, coarseRhs;
+	private SignedDyadic coarseEnergy;
 
 	ConstraintGramPreconditioner(int markerCount, double[] inverseMass, int[] rowOffsets, int[] indices,
 	                            double[] coefficients, double[] coefficientLow, double[] diagonal) {
@@ -62,6 +65,23 @@ final class ConstraintGramPreconditioner {
 	void apply(double[] rhs, double[] result) {
 		if (rhs.length != inverseRoot.length || result.length != rhs.length || rhs == result)
 			throw new IllegalArgumentException("Pressure preconditioner vector shape or alias mismatch");
+		if (coarseMode == null) { applySgs(rhs, result); return; }
+		SignedDyadic coarseLoad = dot(coarseMode, rhs);
+		double coarse = quotient(coarseLoad, coarseEnergy);
+		for (int row = 0; row < rhs.length; row++) coarseRhs[row] = Math.fma(-coarse, coarseImage[row], rhs[row]);
+		applySgs(coarseRhs, result);
+		double correction = quotient(coarseLoad.subtract(dot(coarseImage, result)), coarseEnergy);
+		for (int row = 0; row < rhs.length; row++) result[row] = Math.fma(coarseMode[row], correction, result[row]);
+	}
+
+	/** Q + (I-QA) SGS (I-AQ), Q=chi chi^T/(chi^T A chi). */
+	void balance(double[] mode, double[] image, SignedDyadic energy) {
+		if (mode.length != inverseRoot.length || image.length != mode.length || energy.signum() <= 0)
+			throw new IllegalArgumentException("Invalid pressure coarse mode");
+		coarseMode = mode; coarseImage = image; coarseEnergy = energy; coarseRhs = new double[mode.length];
+	}
+
+	private void applySgs(double[] rhs, double[] result) {
 		for (int row = 0; row < rhs.length; row++) {
 			double value = rhs[row] * inverseRoot[row];
 			for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) value = Math.fma(-lower[entry], workspace[columns[entry]], value);
@@ -72,6 +92,18 @@ final class ConstraintGramPreconditioner {
 			for (int entry = offsets[row]; entry < offsets[row + 1]; entry++)
 				workspace[columns[entry]] = Math.fma(-lower[entry], value, workspace[columns[entry]]);
 		}
+	}
+	static SignedDyadic dot(double[] left, double[] right) {
+		SignedDyadic value = SignedDyadic.ZERO;
+		for (int row = 0; row < left.length; row++) value = value.add(SignedDyadic.of(left[row]).multiply(SignedDyadic.of(right[row])));
+		return value;
+	}
+	private static double quotient(SignedDyadic numerator, SignedDyadic denominator) {
+		int shift = Math.subtractExact(numerator.exponent(), denominator.exponent());
+		double value = new ExactRational(shift >= 0 ? numerator.significand().shiftLeft(shift) : numerator.significand(),
+				shift < 0 ? denominator.significand().shiftLeft(-shift) : denominator.significand()).toDouble();
+		if (!Double.isFinite(value)) throw blocked("Unrepresentable pressure coarse correction");
+		return value;
 	}
 	private static FluidDomain.PressureSolveBlockedException blocked(String message) { return new FluidDomain.PressureSolveBlockedException(message); }
 }

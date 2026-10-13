@@ -105,6 +105,63 @@ final class CellVelocityConstraintOperator {
 		checkRows(diagonal);
 		return new ConstraintGramPreconditioner(markerCount, inverseMass, offsets, indices, coefficients, coefficientLow, diagonal);
 	}
+	ConstraintGramPreconditioner preconditioner(double[] diagonal, double[] commonMode) {
+		var result = preconditioner(diagonal); checkRows(commonMode);
+		boolean compliant = false; for (double value : storage) compliant |= value > 0;
+		if (!compliant) return result;
+		double[] mode = commonMode.clone(), image = new double[rowCount()];
+		for (int row = 0; row < mode.length; row++) if (diagonal[row] == 0) mode[row] = 0;
+		apply(mode, image);
+		for (double value : image) if (!Double.isFinite(value)) throw blocked("Unrepresentable common-pressure image");
+		SignedDyadic energy = ConstraintGramPreconditioner.dot(mode, image);
+		verifyCoarseEnergy(mode, image, energy);
+		if (energy.signum() <= 0) throw blocked("Nonpositive common-pressure coarse energy");
+		result.balance(mode, image, energy); return result;
+	}
+
+	/** Independent positive mass/storage work, with forward rounding of the actual operator. */
+	private void verifyCoarseEnergy(double[] mode, double[] image, SignedDyadic energy) {
+		double[][] force = new double[3][markerCount]; force(mode, force);
+		for (double[] axis : force) for (double value : axis)
+			if (!Double.isFinite(value)) throw blocked("Unrepresentable common-pressure force");
+		SignedDyadic positive = SignedDyadic.ZERO, exactPositive = SignedDyadic.ZERO, bound = SignedDyadic.ZERO;
+		SignedDyadic[] exactForce = new SignedDyadic[response.length]; Arrays.fill(exactForce, SignedDyadic.ZERO);
+		for (int row = 0; row < rowCount(); row++) for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+			SignedDyadic coefficient = exactCoefficients == null ? SignedDyadic.of(coefficients[entry]) : exactCoefficients[entry];
+			exactForce[indices[entry]] = exactForce[indices[entry]].add(coefficient.multiply(SignedDyadic.of(mode[row])));
+		}
+		for (int index = 0; index < response.length; index++) {
+			SignedDyadic f = SignedDyadic.of(force[index / markerCount][index % markerCount]), mass = SignedDyadic.of(inverseMass[index % markerCount]);
+			positive = positive.add(f.multiply(f).multiply(mass));
+			exactPositive = exactPositive.add(exactForce[index].multiply(exactForce[index]).multiply(mass));
+		}
+		for (int row = 0; row < rowCount(); row++) {
+			SignedDyadic weight = SignedDyadic.of(mode[row]), stored = SignedDyadic.of(storage[row]).multiply(weight).multiply(weight);
+			positive = positive.add(stored); exactPositive = exactPositive.add(stored);
+			SignedDyadic rowBound;
+			if (exactCoefficients != null) rowBound = SignedDyadic.of(Math.ulp(image[row])).multiply(SignedDyadic.of(1, -1));
+			else {
+				SignedDyadic magnitude = absolute(SignedDyadic.of(storage[row]).multiply(weight)), propagated = SignedDyadic.ZERO;
+				SignedDyadic underflow = SignedDyadic.of(Double.MIN_VALUE);
+				for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+					int index = indices[entry]; SignedDyadic f = SignedDyadic.of(force[index / markerCount][index % markerCount]);
+					SignedDyadic coefficient = SignedDyadic.of(coefficients[entry]).multiply(SignedDyadic.of(inverseMass[index % markerCount]));
+					magnitude = magnitude.add(absolute(coefficient.multiply(f)));
+					propagated = propagated.add(absolute(coefficient.multiply(f.subtract(exactForce[index]))));
+					underflow = underflow.add(SignedDyadic.of(Double.MIN_VALUE).multiply(absolute(f).add(SignedDyadic.of(1))));
+				}
+				double operations = 3.0 * (offsets[row + 1] - offsets[row]) + 1, error = operations * 0x1.0p-53;
+				rowBound = propagated.add(magnitude.multiply(SignedDyadic.of(Math.nextUp(error / (1 - error))))).add(underflow);
+			}
+			bound = bound.add(absolute(weight).multiply(rowBound));
+		}
+		bound = bound.add(absolute(exactPositive.subtract(positive)));
+		if (absolute(energy.subtract(positive)).compareTo(bound) > 0)
+			throw blocked("Common-pressure work exceeds its rounding bound: work=" + energy.toDouble()
+					+ ", positive=" + positive.toDouble() + ", bound=" + bound.toDouble());
+	}
+	private static SignedDyadic absolute(SignedDyadic value) { return value.signum() < 0 ? value.negate() : value; }
+	private static FluidDomain.PressureSolveBlockedException blocked(String message) { return new FluidDomain.PressureSolveBlockedException(message); }
 
 	/** C v: volume rates and surface-tested normal velocity rates in their declared SI units. */
 	void volumeRate(double[][] velocity, double[] result) {

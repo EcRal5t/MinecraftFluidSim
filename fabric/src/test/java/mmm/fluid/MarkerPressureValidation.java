@@ -318,6 +318,17 @@ public final class MarkerPressureValidation {
 				"Independent two-row backward solve");
 		near(dot(first, secondResult), dot(second, firstResult), 2e-12, "Symmetric actual-Gram preconditioner");
 		if (!(dot(first, firstResult) > 0)) throw new AssertionError("Actual-Gram preconditioner lost positive work");
+		double[] commonMode = {1, -1}; var balanced = constraint.preconditioner(diagonal, commonMode);
+		balanced.apply(first, firstResult); balanced.apply(second, secondResult);
+		near(dot(first, secondResult), dot(second, firstResult), 2e-12, "Balanced common-pressure symmetry");
+		if (!(dot(first, firstResult) > 0)) throw new AssertionError("Balanced common-pressure inverse lost positive work");
+		constraint.apply(commonMode, applied); balanced.apply(applied, firstResult);
+		for (int row = 0; row < 2; row++) near(firstResult[row], commonMode[row], 2e-12, "Exact common-pressure coarse solve");
+		var incompressible = new CellVelocityConstraintOperator(basis, java.util.List.of(definitions.get(0),
+				new CellVelocityConstraintOperator.Row(definitions.get(1).blocks(), 0)));
+		incompressible.diagonal(diagonal); incompressible.preconditioner(diagonal).apply(first, firstResult);
+		incompressible.preconditioner(diagonal, commonMode).apply(first, secondResult);
+		for (int row = 0; row < 2; row++) near(firstResult[row], secondResult[row], 0, "Zero-storage common mode keeps SGS");
 	}
 
 	static void cellAffineVelocityPreservesResolvedMotion() {

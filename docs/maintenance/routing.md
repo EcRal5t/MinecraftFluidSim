@@ -76,6 +76,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 纯液体压力的共同 PLIC 输入在 `GasRuntimeGeometry.liquidPressureGeometry`，湿面气体块编号在 [LiquidPressureGeometry](../../solver/src/main/java/mmm/fluid/LiquidPressureGeometry.java)，路径选择和参考值装配在 [PressureProjectionStage](../../solver/src/main/java/mmm/fluid/PressureProjectionStage.java) 与 [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java)。聚焦验证为 `:fabric:runMarkerPressureValidation --args="--gas-geometry"`。
 
+实际压力 Gram、常压粗模式正能量检查在 [CellVelocityConstraintOperator](../../solver/src/main/java/mmm/fluid/CellVelocityConstraintOperator.java)，SGS 与 balanced 粗空间修正在 [ConstraintGramPreconditioner](../../solver/src/main/java/mmm/fluid/ConstraintGramPreconditioner.java)。对称性、正能量及粗模式解使用 `:fabric:runMarkerPressureValidation --args="--kernel"`。
+
 原始载体矩与 PLIC 的逐微盒、逐固定分量比较在 [LiquidSpatialInput](../../solver/src/main/java/mmm/fluid/LiquidSpatialInput.java)，共享盒积分在 `LiquidPressureGeometry.pieceMoments`。来源检查、孔隙率、单位换算与未解析载体验证使用 `:fabric:runMarkerPressureValidation --args="--spatial-input"`。
 
 零时长固体几何排液的来源比例见 [CellRemapMicroPreferences](../../solver/src/main/java/mmm/fluid/CellRemapMicroPreferences.java) 的 `inventory`，同微盒精确矩汇总见 [CellRemapTransportMoments](../../solver/src/main/java/mmm/fluid/CellRemapTransportMoments.java)。聚焦验证分别为 `:fabric:runLiquidTransportValidation --args="geometry-remap"` 与 `:fabric:runRemapMomentsValidation --args="transport-moments"`。

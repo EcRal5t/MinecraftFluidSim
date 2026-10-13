@@ -21,7 +21,7 @@ final class MarkerPressureProjection {
 	private List<Row> rows;
 	private int[] liquidRows, gasRows;
 	private double[][] originalVelocity, originalPosition, predictor, wallPredictor, wallImpulse, candidate, publishedVelocity, knownImpulse, faceCandidate, knownCellLoad;
-	private double[] originalMass, originalVolume, originalFraction, originalPlaneOffset, pressure, rhs, storage, gasInitialPressure, targetVolumeRate, observedPressure;
+	private double[] originalMass, originalVolume, originalFraction, originalPlaneOffset, pressure, commonPressureMode, rhs, storage, gasInitialPressure, targetVolumeRate, observedPressure;
 	private double[][] originalPlaneNormal;
 	private double[] nodeStorage;
 	private double[] diagnosticGasDiagonal, diagnosticGasRhs;
@@ -164,6 +164,7 @@ final class MarkerPressureProjection {
 	}
 
 	private void initializeCommonPressure(int sharedStart, int sharedEnd) {
+		commonPressureMode = new double[pressure.length];
 		double largest = 0;
 		for (int row : gasRows) if (row >= 0) largest = Math.max(largest, storage[row]);
 		if (largest == 0) return;
@@ -173,9 +174,9 @@ final class MarkerPressureProjection {
 			if (added == 0) continue;
 			mean += added / total * (gasInitialPressure[row] - mean); weight = total;
 		}
-		for (int row : liquidRows) if (row >= 0) pressure[row] = mean;
-		for (int row = sharedStart; row < sharedEnd; row += 3) pressure[row] = -mean;
-		for (int row : gasRows) if (row >= 0) pressure[row] = mean;
+		for (int row : liquidRows) if (row >= 0) { pressure[row] = mean; commonPressureMode[row] = 1; }
+		for (int row = sharedStart; row < sharedEnd; row += 3) { pressure[row] = -mean; commonPressureMode[row] = -1; }
+		for (int row : gasRows) if (row >= 0) { pressure[row] = mean; commonPressureMode[row] = 1; }
 	}
 
 	private double[] trace(int cell, int axis, LiquidPressureGeometry.SurfaceMoments face, int test, double sign) {
@@ -237,7 +238,7 @@ final class MarkerPressureProjection {
 		}
 		operator.apply(pressure, applied);
 		for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
-		var preconditioner = operator.preconditioner(diagonal); preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
+		var preconditioner = operator.preconditioner(diagonal, commonPressureMode); preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
 		double residual = rms(r), rz = dot(r, z); int iterations = 0;
 		for (; residual > tolerance && iterations < domain.config.maxPressureIterations();) {
 			operator.apply(direction, applied); double denominator = dot(direction, applied);
