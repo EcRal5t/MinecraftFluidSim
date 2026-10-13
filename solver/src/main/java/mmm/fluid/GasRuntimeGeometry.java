@@ -62,7 +62,11 @@ final class GasRuntimeGeometry {
 		boolean[] sameLocalStock = matchingLocalStock(captured, cut);
 		phase.rebuildLiquidEdits(solid, phaseIndex.exactCellMarkerVolume, cut, occupancy, new boolean[domain.cellCount],
 				phaseIndex, domain.particles, cellSize, liquidStock, sameLocalStock == null ? null : captured.phase, sameLocalStock);
-		this.geometry = GasComplementGeometry.capture(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize, solid, cut, phase);
+		boolean[] sameGeometry = sameLocalStock == null ? null : new boolean[domain.cellCount];
+		if (sameGeometry != null) for (int cell = 0; cell < sameGeometry.length; cell++)
+			sameGeometry[cell] = phase.sameCellGeometry(cell, captured.phase);
+		this.geometry = GasComplementGeometry.capture(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize, solid, cut, phase,
+				sameGeometry == null ? null : captured.geometry, sameGeometry);
 		this.topology = GasChamberTopology.capture(geometry, sealedExterior);
 		this.capacity = GasChamberCapacity.capture(domain, geometry, topology, this.occupiedSvq, liquidStock,
 				domain.gasState.frame);

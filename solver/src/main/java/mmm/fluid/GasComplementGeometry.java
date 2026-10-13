@@ -18,6 +18,7 @@ final class GasComplementGeometry {
 	private static final ExactRational MICRO_VOLUME = ExactRational.ONE.divide(8);
 	private final int sizeX, sizeY, sizeZ;
 	private final double cellVolumeCubicMeters;
+	private final double cellAreaSquareMeters;
 	private final byte[] collisionMasks;
 	private final SignedDyadic[] poreVolumes;
 	private final Piece[] byId;
@@ -25,10 +26,11 @@ final class GasComplementGeometry {
 	private final List<Port> ports;
 	private final List<ExteriorPort> exteriorPorts;
 
-	private GasComplementGeometry(int sizeX, int sizeY, int sizeZ, double cellVolumeCubicMeters, byte[] collisionMasks, SignedDyadic[] poreVolumes, Piece[] byId,
+	private GasComplementGeometry(int sizeX, int sizeY, int sizeZ, double cellVolumeCubicMeters, double cellAreaSquareMeters, byte[] collisionMasks, SignedDyadic[] poreVolumes, Piece[] byId,
 			List<Piece> pieces, List<Port> ports, List<ExteriorPort> exteriorPorts) {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
 		this.cellVolumeCubicMeters = cellVolumeCubicMeters;
+		this.cellAreaSquareMeters = cellAreaSquareMeters;
 		this.collisionMasks = collisionMasks.clone();
 		this.poreVolumes = poreVolumes.clone();
 		this.byId = byId;
@@ -39,6 +41,13 @@ final class GasComplementGeometry {
 
 	static GasComplementGeometry capture(int sizeX, int sizeY, int sizeZ, double cellSize,
 			boolean[] solid, FlipCutCellGeometry cut, FlipPressurePhaseGeometry phase) {
+		return capture(sizeX, sizeY, sizeZ, cellSize, solid, cut, phase, null, null);
+	}
+
+	/** The runtime frame certifies equal microgeometry and the exact cell-size metric. */
+	static GasComplementGeometry capture(int sizeX, int sizeY, int sizeZ, double cellSize,
+			boolean[] solid, FlipCutCellGeometry cut, FlipPressurePhaseGeometry phase,
+			GasComplementGeometry captured, boolean[] sameGeometry) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(cellSize > 0) || !Double.isFinite(cellSize)
 				|| solid == null || cut == null || phase == null) {
 			throw new IllegalArgumentException("Gas complement dimensions, metric and geometry are required");
@@ -51,6 +60,11 @@ final class GasComplementGeometry {
 		if (!(h2 > 0 && h3 > 0 && Double.isFinite(h2) && Double.isFinite(h3))) {
 			throw new IllegalArgumentException("Gas complement SI area and volume must be representable");
 		}
+		if (captured != null && (captured.sizeX != sizeX || captured.sizeY != sizeY || captured.sizeZ != sizeZ
+				|| Double.doubleToRawLongBits(h3) != Double.doubleToRawLongBits(captured.cellVolumeCubicMeters)
+				|| Double.doubleToRawLongBits(h2) != Double.doubleToRawLongBits(captured.cellAreaSquareMeters)
+				|| sameGeometry == null || sameGeometry.length != count))
+			throw new IllegalArgumentException("Captured gas geometry requires matching shape, metric and cell certificates");
 		ExactRational physicalScale = exact(SignedDyadic.of(h3));
 		var byId = new Piece[Math.multiplyExact(count, 8)];
 		var pieces = new ArrayList<Piece>();
@@ -60,6 +74,13 @@ final class GasComplementGeometry {
 				throw new IllegalArgumentException("Gas complement PLIC collision geometry differs at cell " + cell);
 			poreVolumes[cell] = phase.poreVolume(cell);
 			if (solid[cell]) continue;
+			if (captured != null && sameGeometry[cell]) {
+				for (int slot = 0; slot < 8; slot++) {
+					Piece piece = captured.byId[8 * cell + slot];
+					if (piece != null) { byId[piece.id()] = piece; pieces.add(piece); }
+				}
+				continue;
+			}
 			int[] supports = CellRemapMicroTopology.components(cut.mask(cell));
 			SignedDyadic[] capacities = CellRemapMicroTopology.capacities(cut.mask(cell),poreVolumes[cell]);
 			int positivePores = 0;
@@ -99,21 +120,51 @@ final class GasComplementGeometry {
 				double other = .5 * (slot >>> ((axis + 2) % 3) & 1);
 				if (bit == 0) {
 					Piece neighbor = byId[8 * cell + (slot | 1 << axis)];
-					if (neighbor != null) addPort(ports, piece, neighbor, axis,
+					if (neighbor != null && !reusePort(ports, captured, sameGeometry, piece, neighbor, axis)) addPort(ports, piece, neighbor, axis,
 							GasFaceIntersection.area(phase, cell, -1, axis, .5, 0, tangent, other, .5), h2, true);
-					if (coordinate[axis] == 0) addExterior(exterior, piece, axis, -1,
+					if (coordinate[axis] == 0 && !reuseExterior(exterior, captured, sameGeometry, piece, axis)) addExterior(exterior, piece, axis, -1,
 							GasFaceIntersection.area(phase, cell, -1, axis, 0, 0, tangent, other, .5), h2);
 				} else if (coordinate[axis] + 1 < sizes[axis]) {
 					int peer = cell + strides[axis];
 					Piece neighbor = byId[8 * peer + (slot ^ 1 << axis)];
-					if (neighbor != null) addPort(ports, piece, neighbor, axis,
+					if (neighbor != null && !reusePort(ports, captured, sameGeometry, piece, neighbor, axis)) addPort(ports, piece, neighbor, axis,
 							GasFaceIntersection.area(phase, cell, peer, axis, 1, 0, tangent, other, .5), h2,
 							fullCutFace(cut, solid, cell, peer, axis));
-				} else addExterior(exterior, piece, axis, 1,
+				} else if (!reuseExterior(exterior, captured, sameGeometry, piece, axis)) addExterior(exterior, piece, axis, 1,
 						GasFaceIntersection.area(phase, cell, -1, axis, 1, 0, tangent, other, .5), h2);
 			}
 		}
-		return new GasComplementGeometry(sizeX, sizeY, sizeZ, h3, cut.copyMicroMasks(), poreVolumes, byId, pieces, ports, exterior);
+		return new GasComplementGeometry(sizeX, sizeY, sizeZ, h3, h2, cut.copyMicroMasks(), poreVolumes, byId, pieces, ports, exterior);
+	}
+
+	private static boolean reusePort(List<Port> ports, GasComplementGeometry captured, boolean[] same,
+	                                 Piece first, Piece second, int axis) {
+		if (captured == null || !same[first.cell()] || !same[second.cell()]) return false;
+		int index = captured.faceIndex(first.id(), axis, false);
+		if (index >= 0) ports.add(captured.ports.get(index));
+		return true;
+	}
+
+	private static boolean reuseExterior(List<ExteriorPort> ports, GasComplementGeometry captured, boolean[] same,
+	                                     Piece piece, int axis) {
+		if (captured == null || !same[piece.cell()]) return false;
+		int index = captured.faceIndex(piece.id(), axis, true);
+		if (index >= 0) ports.add(captured.exteriorPorts.get(index));
+		return true;
+	}
+
+	/** Each captured list is ordered by piece then axis; a missing key is a certified zero area. */
+	private int faceIndex(int piece, int axis, boolean exterior) {
+		long target = 3L * piece + axis;
+		int low = 0, high = (exterior ? exteriorPorts.size() : ports.size()) - 1;
+		while (low <= high) {
+			int middle = low + ((high - low) >>> 1);
+			long key = exterior ? 3L * exteriorPorts.get(middle).piece() + exteriorPorts.get(middle).axis()
+					: 3L * ports.get(middle).first() + ports.get(middle).axis();
+			if (key == target) return middle;
+			if (key < target) low = middle + 1; else high = middle - 1;
+		}
+		return -1;
 	}
 
 	private static ExactRational exact(SignedDyadic value) {

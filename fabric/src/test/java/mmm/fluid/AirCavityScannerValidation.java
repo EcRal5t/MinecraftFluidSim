@@ -47,6 +47,19 @@ public final class AirCavityScannerValidation {
 		check(closedTopology.chambers().size()==1 && closedTopology.chambers().getFirst().minimumPiece()==0,
 				"Sealed gas chamber lost canonical micro-piece identity");
 		checkRelative(closedTopology.chambers().getFirst().geometricVolume(),1,"Sealed microgas chamber volume");
+		grid.cutCells.replaceMask(0,8);
+		var partialPhase=new FlipPressurePhaseGeometry(2,2,2);
+		partialPhase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
+		boolean[] equalCells=new boolean[8];for(int cell=0;cell<8;cell++) equalCells[cell]=partialPhase.sameCellGeometry(cell,phase);
+		var partialFresh=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,partialPhase);
+		var partialReuse=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,partialPhase,geometry,equalCells);
+		var originalPort=geometry.ports().stream().filter(port->port.first()==1 && port.axis()==0).findFirst().orElseThrow();
+		var restrictedPort=partialReuse.ports().stream().filter(port->port.first()==1 && port.axis()==0).findFirst().orElseThrow();
+		check(originalPort.fullCutConnection() && !restrictedPort.fullCutConnection() && restrictedPort!=originalPort
+				&& restrictedPort.area()==originalPort.area() && partialReuse.piece(8)==geometry.piece(8)
+				&& partialReuse.pieces().equals(partialFresh.pieces()) && partialReuse.ports().equals(partialFresh.ports())
+				&& partialReuse.exteriorPorts().equals(partialFresh.exteriorPorts()),
+				"A changed peer mask reused a stale full-cut flag or changed the fresh microgeometry");
 		grid.solid[0]=true;grid.cutCells.replaceMask(0,255);phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
 		check(geometry.pieces().size()==64 && geometry.piece(0).volume()==.015625 && geometry.collisionMask(0)==0,"Gas geometry retained mutable input aliases");
 		grid.cutCells.replaceMask(1,126);
@@ -186,6 +199,13 @@ public final class AirCavityScannerValidation {
 		domain.gasState.frame=null;
 		check(repeated.offsetBracket(0,0)==current.offsetBracket(0,0)
 				&& repeated.offsetBracket(1,0)==current.offsetBracket(1,0),"Unchanged PLIC failed to reuse captured inverse-volume certificates");
+		check(repeated.geometry().pieces().getFirst()==current.geometry().pieces().getFirst()
+				&& repeated.geometry().ports().getFirst()==current.geometry().ports().getFirst()
+				&& repeated.geometry().exteriorPorts().getFirst()==current.geometry().exteriorPorts().getFirst(),
+				"Equal runtime microgeometry failed to reuse immutable pieces and face records");
+		check(current.geometry().piece(1)!=null && current.geometry().piece(8)!=null
+				&& repeated.geometry().ports().stream().noneMatch(port->port.first()==1 && port.axis()==0),
+				"Reused gas pieces manufactured a port on their zero-area shared face");
 		checkRuntimePlanesEqual(repeated,current,"Unchanged captured PLIC differs from a complete rebuild");
 		checkRuntimePlanesEqual(editedFromCaptured,future,"Captured PLIC reused a changed gradient neighbor");
 		domain.particles.setVolume(0,.125F);

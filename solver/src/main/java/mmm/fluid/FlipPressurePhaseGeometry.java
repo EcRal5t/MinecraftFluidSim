@@ -49,6 +49,19 @@ final class FlipPressurePhaseGeometry {
 	int collisionMask(int cell) { return Byte.toUnsignedInt(collisionMasks[cell]); }
 	SignedDyadic poreVolume(int cell) { return poreVolumes[cell]; }
 
+	/** Exact inputs read by dry-piece and microface construction, including absent gas pieces. */
+	boolean sameCellGeometry(int cell, FlipPressurePhaseGeometry other) {
+		if (collisionMask(cell) != other.collisionMask(cell) || !poreVolumes[cell].equals(other.poreVolumes[cell])) return false;
+		for (int micro = 0; micro < 8; micro++) {
+			if (Double.doubleToRawLongBits(liquidFractionExact(cell, micro)) != Double.doubleToRawLongBits(other.liquidFractionExact(cell, micro))
+					|| Double.doubleToRawLongBits(planeOffset(cell, micro)) != Double.doubleToRawLongBits(other.planeOffset(cell, micro))
+					|| !java.util.Objects.equals(offsetBracket(cell, micro), other.offsetBracket(cell, micro))) return false;
+			for (int axis = 0; axis < 3; axis++) if (Float.floatToRawIntBits(planeNormal(cell, micro, axis))
+					!= Float.floatToRawIntBits(other.planeNormal(cell, micro, axis))) return false;
+		}
+		return true;
+	}
+
 	void rebuild(
 			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
 			GranularCouplingFields granular, boolean[] pressureFluid
