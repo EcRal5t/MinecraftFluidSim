@@ -671,7 +671,7 @@ public final class M7ChemicalTransportValidation {
 		}
 	}
 
-	private static void validateThermalChemicalExtractionAudit() throws Exception {
+	static FluidDomain thermalChemicalExtractionSource() throws Exception {
 		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 0.05F, 64, 1.0E-6F, 0.45F, 0.002F, 0.0F);
@@ -689,8 +689,11 @@ public final class M7ChemicalTransportValidation {
 			source.setMarkerChemical(marker, Map.of(acid
 					? BuiltinChemicalDefinitions.HCL : BuiltinChemicalDefinitions.NAOH, 1_000_000L), acid);
 		}
-		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
-		boolean refined = false;
+		return source;
+	}
+
+	static mmm.world.MovingBodyFluidCoupling.Request thermalChemicalExtractionImpulse(FluidDomain source) {
+		var config = source.config;
 		// Choose the body speed from its actual grid response so this fixture exercises CFL
 		// subdivision even when velocity interpolation becomes more accurate.
 		FluidDomain couplingProbe = FluidDomain.restoreAuthoritativeState(source.captureAuthoritativeState());
@@ -699,8 +702,16 @@ public final class M7ChemicalTransportValidation {
 		couplingProbe.calculateSubsteps(config.timeStep());
 		double couplingRate = new CellLiquidVolumeTransport(couplingProbe).courantRate(0.0);
 		check(couplingRate > 0.0, "moving-body fixture must produce grid outflow");
-		var impulse = new mmm.world.MovingBodyFluidCoupling.Request(
+		return new mmm.world.MovingBodyFluidCoupling.Request(
 				1.0F, 1.0F, 2.0F, 2.0 / (config.timeStep() * couplingRate), 0.0, 0.0, 0.125);
+	}
+
+	private static void validateThermalChemicalExtractionAudit() throws Exception {
+		FluidDomain source = thermalChemicalExtractionSource();
+		var config = source.config;
+		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
+		boolean refined = false;
+		var impulse = thermalChemicalExtractionImpulse(source);
 		for (int step = 0; step < 40; step++) {
 			int predictedSubsteps = source.calculateSubsteps(config.timeStep());
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(

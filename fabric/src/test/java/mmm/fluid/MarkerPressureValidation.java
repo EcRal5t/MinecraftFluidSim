@@ -30,6 +30,9 @@ public final class MarkerPressureValidation {
 		} else if (args.length == 1 && args[0].equals("--gas-geometry")) {
 			pressureUsesCurrentMicroGasGeometry();
 			System.out.println("MarkerPressureValidation PASS (current micro gas geometry)");
+		} else if (args.length == 1 && args[0].equals("--chemical-pressure")) {
+			fixedWallProjectionUsesActualMass();
+			PressureConditionValidation.validateChemicalSource();
 		} else if (args.length == 1 && args[0].equals("--kernel")) {
 			validateKernel();
 			System.out.println("MarkerPressureValidation PASS (kernel; production capillary/wall transport skipped)");
@@ -242,6 +245,52 @@ public final class MarkerPressureValidation {
 		near(energyChange, removed, 2e-12, "Mass-orthogonal wall projection work");
 		var twice = new double[3][n]; wall.project(after, twice, impulse);
 		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < n; i++) near(twice[axis][i], after[axis][i], 2e-14, "Fixed-wall projection idempotence");
+		meanCompleteLocalPressureUsesActualMass(d, geometry);
+	}
+	private static void meanCompleteLocalPressureUsesActualMass(FluidDomain d, LiquidPressureGeometry geometry) {
+		for (int i = 0; i < d.particleCount(); i++) d.particles.setMass(i, d.particles.mass(i) * (1 + .125 * i));
+		var basis = CellAffineVelocity.capture(d, geometry); int block = basis.markerBlock(0);
+		if (basis.rank(block) != 4 || !basis.hasNormalShape(block, 1) || basis.normalShape(block, 1)[2] != 0)
+			throw new AssertionError("Mean/internal matrix lost its rank-four single-wall space");
+		var mean = new java.util.ArrayList<CellVelocityConstraintOperator.Block>();
+		mean.add(new CellVelocityConstraintOperator.Block(block, 0, new double[]{0, 1, 0, 0}));
+		mean.add(new CellVelocityConstraintOperator.Block(block, 1, new double[]{1, 1.5 - basis.center(block, 0), 1 - basis.center(block, 1), 1.5 - basis.center(block, 2)}));
+		mean.add(new CellVelocityConstraintOperator.Block(block, 2, new double[]{0, 0, 0, 1}));
+		var definitions = new java.util.ArrayList<CellVelocityConstraintOperator.Row>();
+		definitions.add(new CellVelocityConstraintOperator.Row(mean, 0));
+		for (int term = 1; term < 4; term++) {
+			double[] coefficient = new double[4]; coefficient[term] = term == 2 ? 2 : 1;
+			definitions.add(new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 1, coefficient)), 0));
+		}
+		var operator = new CellVelocityConstraintOperator(basis, definitions); var reference = new double[4][4];
+		// Integrate the physical q-aware source features independently of the stored fit and its pullback.
+		for (int axis = 0; axis < 3; axis++) {
+			var massGram = new double[4][4]; var derivative = new double[4][4];
+			for (int i = 0; i < basis.markerCount(); i++) {
+				double[] feature = new double[4];
+				basis.pointWeights(block, basis.position(i, 0), basis.position(i, 1), basis.position(i, 2), feature);
+				double q = axis == 1 ? basis.position(i, 1) : 1;
+				for (int a = 0; a < 4; a++) for (int b = 0; b < 4; b++) massGram[a][b] += basis.massKilograms(i) * q * q * feature[a] * feature[b];
+			}
+			for (int row = 0; row < 4; row++) for (var part : definitions.get(row).blocks())
+				if (part.axis() == axis) derivative[row] = part.coefficients();
+			for (int col = 0; col < 4; col++) {
+				double[] resolved = MarkerVelocitySpaceExperiment.solve(massGram, derivative[col]);
+				for (int row = 0; row < 4; row++) reference[row][col] += dot(derivative[row], resolved);
+			}
+		}
+		double[] diagonal = new double[4], unit = new double[4], applied = new double[4]; operator.diagonal(diagonal);
+		for (int col = 0; col < 4; col++) {
+			Arrays.fill(unit, 0); unit[col] = 1; operator.apply(unit, applied);
+			for (int row = 0; row < 4; row++) near(applied[row], reference[row][col], 2e-12, "Independent mean/internal actual-mass Gram");
+		}
+		var preconditioner = operator.preconditioner(diagonal, new double[4], java.util.List.of(new int[]{0, 1, 2, 3}));
+		double[] first = {2, -3, .7, 1.1}, second = {-.7, 1.1, 2, -3}, firstResult = new double[4], secondResult = new double[4];
+		preconditioner.apply(first, firstResult); preconditioner.apply(second, secondResult);
+		double[] expected = MarkerVelocitySpaceExperiment.solve(reference, first);
+		for (int row = 0; row < 4; row++) near(firstResult[row], expected[row], 2e-10, "Independent complete local divergence inverse");
+		near(dot(first, secondResult), dot(second, firstResult), 2e-10, "Mean/internal balanced symmetry");
+		if (!(dot(first, firstResult) > 0)) throw new AssertionError("Mean/internal inverse lost positive actual-mass work");
 	}
 
 	static void unresolvedCapillaryTractionIsAppliedOnce() {
@@ -443,11 +492,44 @@ public final class MarkerPressureValidation {
 		var translation = new double[3][4]; Arrays.fill(translation[0], 1); double[] translationRate = new double[1];
 		thinConstraint.volumeRate(translation, translationRate);
 		near(translationRate[0], 0, 2e-14, "Expanded constraint preserves its constant-velocity kernel");
+		verifyExpandedConstraintRowRelations(thinBasis, thinCell);
 		double savedMass = basis.massKilograms(0), savedCentre = basis.center(0, 0), savedCoefficient = basis.coefficient(0, 0);
 		domain.particles.setMass(0, 200); domain.particles.setPositionX(0, .25F);
 		near(basis.massKilograms(0), savedMass, 0, "Captured affine mass ownership");
 		near(basis.center(0, 0), savedCentre, 0, "Captured affine centre ownership");
 		near(basis.coefficient(0, 0), savedCoefficient, 0, "Captured affine map ownership");
+	}
+	private static void verifyExpandedConstraintRowRelations(CellAffineVelocity basis, int block) {
+		boolean truncatedRelation = false;
+		for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) {
+			double coefficient = 1 + 0x1.0p-49;
+			var rows = new java.util.ArrayList<CellVelocityConstraintOperator.Row>();
+			for (int multiple = 1; multiple <= 3; multiple++) {
+				var declared = new double[4]; declared[term] = multiple * coefficient;
+				rows.add(new CellVelocityConstraintOperator.Row(java.util.List.of(
+						new CellVelocityConstraintOperator.Block(block, axis, declared)), 0));
+			}
+			var operator = new CellVelocityConstraintOperator(basis, rows);
+			var force = new double[3][basis.markerCount()]; var image = new double[3];
+			operator.force(new double[]{1, 1, -1}, force);
+			for (double[] component : force) for (double value : component) near(value, 0, 0, "Exact declared pressure row relation");
+			near(operator.applyWithWork(new double[]{1, 1, -1}, image), 0, 0, "Dependent pressure rows have zero mass work");
+			for (double value : image) near(value, 0, 0, "Dependent pressure rows have zero operator image");
+			operator.force(new double[]{1, 0, 0}, force);
+			for (int marker = 0; marker < basis.markerCount(); marker++) {
+				var expected = basis.coefficientExact(marker, axis, term).multiply(mmm.units.SignedDyadic.of(coefficient));
+				near(force[axis][marker], expected.toDouble(), 0, "Full constraint product transpose");
+				var defect = mmm.units.SignedDyadic.ZERO;
+				for (int multiple = 1; multiple <= 3; multiple++) {
+					var exact = expected.multiply(mmm.units.SignedDyadic.of(multiple));
+					var high = mmm.units.SignedDyadic.of(exact.toDouble());
+					var rounded = high.add(mmm.units.SignedDyadic.of(exact.subtract(high).toDouble()));
+					defect = multiple == 3 ? defect.subtract(rounded) : defect.add(rounded);
+				}
+				truncatedRelation |= defect.signum() != 0;
+			}
+		}
+		if (!truncatedRelation) throw new AssertionError("Expanded row fixture did not exercise product truncation");
 	}
 
 	private static void verifyAffineRigidMotion(CellAffineVelocity basis) {

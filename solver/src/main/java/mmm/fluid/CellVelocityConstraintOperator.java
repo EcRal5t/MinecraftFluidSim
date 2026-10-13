@@ -39,33 +39,33 @@ final class CellVelocityConstraintOperator {
 		}
 		storage = new double[rows.size()]; offsets = new int[rows.size() + 1];
 		var entryIndices = new ArrayList<Integer>(); var high = new ArrayList<Double>(); var low = new ArrayList<Double>();
-		boolean hasExpandedRows = false;
-		for (int row = 0; row < rows.size(); row++) {
-			Row definition = rows.get(row); storage[row] = definition.storage; boolean expanded = false;
+		boolean expanded = false;
+		for (Row definition : rows) {
 			for (Block block : definition.blocks) {
 				if (block.velocityBlock < 0 || block.velocityBlock >= basis.blockCount() || block.axis < 0 || block.axis >= 3)
 					throw new IllegalArgumentException("Cell constraint references an invalid velocity block");
 				expanded |= basis.expandedCell(block.velocityBlock);
 			}
-			hasExpandedRows |= expanded;
-			if (expanded) appendExpanded(basis, definition, entryIndices, high, low);
+		}
+		var full = expanded ? new ArrayList<SignedDyadic>() : null;
+		for (int row = 0; row < rows.size(); row++) {
+			Row definition = rows.get(row); storage[row] = definition.storage;
+			if (expanded) appendExpanded(basis, definition, entryIndices, high, low, full);
 			else appendFast(basis, definition, entryIndices, high, low);
 			offsets[row + 1] = entryIndices.size();
 		}
 		indices = new int[entryIndices.size()]; coefficients = new double[indices.length]; coefficientLow = new double[indices.length];
-		boolean expanded = hasExpandedRows;
 		for (int entry = 0; entry < indices.length; entry++) {
 			indices[entry] = entryIndices.get(entry); coefficients[entry] = high.get(entry); coefficientLow[entry] = low.get(entry);
-			expanded |= coefficientLow[entry] != 0;
 		}
 		response = new double[Math.multiplyExact(3, markerCount)];
-		exactCoefficients = expanded ? new SignedDyadic[indices.length] : null;
+		// Full D L products define the physical operator; high/low CSR feeds its preconditioner.
+		exactCoefficients = expanded ? full.toArray(SignedDyadic[]::new) : null;
 		exactInverseMass = expanded ? new SignedDyadic[markerCount] : null;
 		exactStorage = expanded ? new SignedDyadic[storage.length] : null;
 		exactResponse = expanded ? new SignedDyadic[response.length] : null;
 		exactMassResponse = expanded ? new SignedDyadic[response.length] : null;
 		if (expanded) {
-			for (int entry = 0; entry < indices.length; entry++) exactCoefficients[entry] = SignedDyadic.of(coefficients[entry]).add(SignedDyadic.of(coefficientLow[entry]));
 			for (int marker = 0; marker < markerCount; marker++) exactInverseMass[marker] = SignedDyadic.of(inverseMass[marker]);
 			for (int row = 0; row < storage.length; row++) exactStorage[row] = SignedDyadic.of(storage[row]);
 		}
@@ -84,7 +84,8 @@ final class CellVelocityConstraintOperator {
 			indices.add(entry.getKey()); high.add(entry.getValue()); low.add(0.0);
 		}
 	}
-	private void appendExpanded(CellAffineVelocity basis, Row row, List<Integer> indices, List<Double> high, List<Double> low) {
+	private void appendExpanded(CellAffineVelocity basis, Row row, List<Integer> indices, List<Double> high, List<Double> low,
+			List<SignedDyadic> full) {
 		var merged = new TreeMap<Integer, SignedDyadic>();
 		for (Block block : row.blocks) for (int ordinal = 0; ordinal < basis.blockMarkerCount(block.velocityBlock); ordinal++) {
 			int marker = basis.blockMarker(block.velocityBlock, ordinal); SignedDyadic value = SignedDyadic.ZERO;
@@ -97,7 +98,7 @@ final class CellVelocityConstraintOperator {
 			if (!Double.isFinite(hi)) throw new IllegalArgumentException("Merged cell constraint is unrepresentable");
 			double lo = entry.getValue().subtract(SignedDyadic.of(hi)).toDouble();
 			if (hi == 0 && lo == 0) throw new IllegalArgumentException("Expanded cell constraint underflows its representation");
-			indices.add(entry.getKey()); high.add(hi); low.add(lo);
+			indices.add(entry.getKey()); high.add(hi); low.add(lo); full.add(entry.getValue());
 		}
 	}
 
