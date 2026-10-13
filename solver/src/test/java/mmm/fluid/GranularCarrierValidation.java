@@ -828,7 +828,70 @@ public final class GranularCarrierValidation {
 		}
 	}
 
+	private static void granularRestoreValidatesPrivateCandidate() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		var material = registry.material(sand);
+		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, 0F);
+		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		double mass = volume / (double) SolidVolume.SVQ_PER_BV * material.referenceDensity();
+		for (int scene = 0; scene < 7; scene++) {
+			var domain = new FluidDomain(4, 4, 4, config, 128);
+			int cell = domain.cellIndex(1, 1, 1);
+			if (scene == 3) domain.geometry.cutCells.replaceMask(cell, 1);
+			domain.setVolume(2, 2, 2, .125F);
+			if (scene == 4) domain.setVolume(1, 1, 1, 1);
+			int count = domain.particles.count();
+			long liquidRevision = domain.carrierMutationRevision();
+			var liquid = domain.materialRegistry == null ? domain.exportParticleState()
+					: domain.exportMaterialParticleState().particles();
+			var liquidMass = domain.particles.copyMass();
+			var liquidMaterials = domain.particles.copyMaterialHandles();
+			var parcel = new mmm.granular.GranularStateSnapshot.ActiveParcel(
+					scene == 0 ? 0 : .75F, scene == 2 ? .52F : .75F, .75F,
+					.1F, -.2F, .3F, volume, mass, sand, 0, 0, (byte) 0);
+			var active = scene == 1 ? java.util.List.of(parcel, parcel) : java.util.List.of(parcel);
+			var beds = scene >= 2 && scene != 4 ? java.util.List.of(new mmm.granular.GranularStateSnapshot.DepositGroup(
+					scene == 6 ? domain.cellIndex(2, 1, 1) : cell,
+					material.restPorosityQ() + (scene == 5 ? 1 : 0), sand, 0, volume, mass)) :
+					java.util.List.<mmm.granular.GranularStateSnapshot.DepositGroup>of();
+			int carriers = active.size() + beds.size();
+			var snapshot = new mmm.granular.GranularStateSnapshot(4, 4, 4, registry.fingerprint(),
+					registry.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
+					active, beds, carriers * volume, Double.doubleToRawLongBits(carriers * mass));
+			boolean rejected = false;
+			try {
+				domain.restoreGranularState(snapshot, registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
+						BuiltinFluidMaterials.createRegistry());
+			} catch (IllegalArgumentException | IllegalStateException expected) { rejected = true; }
+			var after = domain.materialRegistry == null ? domain.exportParticleState()
+					: domain.exportMaterialParticleState().particles();
+			require(domain.particles.count() == count && domain.carrierMutationRevision() == liquidRevision
+					&& java.util.Arrays.equals(liquid.copyPositionVolume(), after.copyPositionVolume())
+					&& java.util.Arrays.equals(liquid.copyParticleVelocities(), after.copyParticleVelocities())
+					&& java.util.Arrays.equals(liquidMass, domain.particles.copyMass())
+					&& java.util.Arrays.equals(liquidMaterials, domain.particles.copyMaterialHandles()),
+					"granular restore changed raw liquid inventory");
+			if (scene < 6) {
+				require(rejected && domain.granularState == null && domain.materialRegistry == null
+						&& domain.materialDefinitions == null && domain.granularCoupling == null
+						&& domain.granularPhaseTransfer == null,
+						"rejected granular restore published partial state, scene=" + scene);
+			} else {
+				require(!rejected, "valid granular restore was rejected");
+				var restored = domain.exportGranularState();
+				require(restored.activeParcels().equals(active) && restored.depositGroups().equals(beds)
+						&& restored.totalSolidVolumeSvq() == snapshot.totalSolidVolumeSvq()
+						&& restored.totalMassBits() == snapshot.totalMassBits()
+						&& restored.externalSource().equals(snapshot.externalSource())
+						&& restored.escapedSink().equals(snapshot.escapedSink()),
+						"valid granular restore changed physical columns or ledgers");
+			}
+		}
+	}
+
 	private static void mechanicalAuditIncludesGranularEnergy() {
+		granularRestoreValidatesPrivateCandidate();
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		var material = registry.material(sand);

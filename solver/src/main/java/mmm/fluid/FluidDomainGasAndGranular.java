@@ -384,6 +384,13 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	 */
 	public void bindGranular(GranularRegistry registry, FluidMaterialRegistry liquidRegistry,
 			MaterialRegistry materialDefinitions) {
+		liquidRegistry = validateGranularBinding(registry, liquidRegistry, materialDefinitions);
+		if (granularState != null) return;
+		installGranularBinding(prepareGranularBinding(registry), liquidRegistry, materialDefinitions);
+	}
+
+	private FluidMaterialRegistry validateGranularBinding(GranularRegistry registry,
+			FluidMaterialRegistry liquidRegistry, MaterialRegistry materialDefinitions) {
 		if (registry == null || liquidRegistry == null || materialDefinitions == null) {
 			throw new IllegalArgumentException("Granular/liquid/material definition registry is missing");
 		}
@@ -405,7 +412,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 			if (!granularState.registry.fingerprint().equals(registry.fingerprint())) {
 				throw new IllegalArgumentException("A domain cannot change its granular registry");
 			}
-			return;
+			return liquidRegistry;
 		}
 		for (FluidMaterial material : liquidRegistry.materials()) {
 			if (!registry.hasCarrier(material.id())) {
@@ -416,17 +423,44 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 				&& !registry.chemicalRegistryFingerprint().equals(chemicalParcels.registry().fingerprint())) {
 			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
 		}
+		return liquidRegistry;
+	}
+
+	private record PreparedGranularBinding(GranularDomainState state, GranularDepositDynamics deposits,
+			GranularCouplingFields coupling, GranularCouplingFields nextCoupling, FlipGranularCollision collision,
+			GranularPhaseTransferEngine phaseTransfer, int[] previousCells) { }
+
+	private PreparedGranularBinding prepareGranularBinding(GranularRegistry registry) {
+		var state = new GranularDomainState(registry, cellCount);
+		GranularPhaseTransferEngine phaseTransfer = null;
+		if (chemicalParcels != null && registry.hasReactiveRules()) {
+			int depositCapacity = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
+					Math.multiplyExact(cellCount, GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
+			state.bindCompositions(new SolidCompositionPool(chemicalParcels.registry(),
+					Math.addExact(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, depositCapacity)));
+			phaseTransfer = new GranularPhaseTransferEngine(chemicalParcels.registry(), unitScale);
+		}
+		return new PreparedGranularBinding(state,
+				new GranularDepositDynamics(registry, state.parcels, state.deposits, state.inventory,
+						sizeX, sizeY, sizeZ, config.cellSize()),
+				new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize()),
+				new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize()),
+				new FlipGranularCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.cutCells, state.deposits,
+						GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION),
+				phaseTransfer, new int[GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION]);
+	}
+
+	private void installGranularBinding(PreparedGranularBinding prepared, FluidMaterialRegistry liquidRegistry,
+			MaterialRegistry materialDefinitions) {
 		bindMaterialRegistry(liquidRegistry);
-		granularState = new GranularDomainState(registry, cellCount);
-		granularDepositDynamics = new GranularDepositDynamics(registry, granularState.parcels, granularState.deposits,
-				granularState.inventory, sizeX, sizeY, sizeZ, config.cellSize());
-		granularCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
-		granularNextCoupling = new GranularCouplingFields(sizeX, sizeY, sizeZ, config.cellSize());
-		granularCollision = new FlipGranularCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.cutCells, granularState.deposits,
-				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
 		LiquidMaterialBinding.bind(domain(), materialDefinitions);
-		granularReactivePreviousCells = new int[GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION];
-		bindSolidCompositionPoolIfReady();
+		granularState = prepared.state();
+		granularDepositDynamics = prepared.deposits();
+		granularCoupling = prepared.coupling();
+		granularNextCoupling = prepared.nextCoupling();
+		granularCollision = prepared.collision();
+		granularPhaseTransfer = prepared.phaseTransfer();
+		granularReactivePreviousCells = prepared.previousCells();
 		gridDirty = true;
 	}
 
@@ -439,20 +473,37 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 			throw new IllegalArgumentException("Granular snapshot dimensions changed");
 		}
 		if (granularState != null) throw new IllegalStateException("Granular state is already bound");
-		if (materialRegistry != null) {
-			if (!materialRegistry.materials().equals(liquidRegistry.materials())) {
-				throw new IllegalArgumentException("Granular snapshot liquid palette changed");
-			}
-			liquidRegistry = materialRegistry;
-		}
-		bindGranular(registry, liquidRegistry, materialDefinitions);
-		snapshot.restoreInto(registry, granularState.parcels, granularState.deposits, granularState.compositions,
+		liquidRegistry = validateGranularBinding(registry, liquidRegistry, materialDefinitions);
+		var prepared = prepareGranularBinding(registry);
+		var state = prepared.state();
+		snapshot.restoreInto(registry, state.parcels, state.deposits, state.compositions,
 				cell -> SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell)));
-		snapshot.externalSource().validateAgainst(registry, granularState.compositions == null ? null : granularState.compositions.registry());
-		snapshot.escapedSink().validateAgainst(registry, granularState.compositions == null ? null : granularState.compositions.registry());
-		granularState.externalSource = snapshot.externalSource(); granularState.escapedSink = snapshot.escapedSink();
-		granularState.deposits.forEachCell((cell, ignoredVolume, ignoredPorosity) -> granularDepositDynamics.disturbCell(cell));
-		gridDirty = true;
+		var collisionGeometry = new GranularCollisionGeometry(sizeX, sizeY, sizeZ, config.cellSize(), geometry.cutCells, state.deposits);
+		state.deposits.forEachCell((cell, ignoredVolume, ignoredPorosity) -> {
+			if (!collisionGeometry.bedGeometryFits(cell, state.deposits.cellBulkVolumeSvq(cell))) {
+				throw new IllegalArgumentException("Granular snapshot bed intersects fixed geometry at cell " + cell);
+			}
+		});
+		var admission = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, config.cellSize(), state.parcels.count());
+		for (int index = 0; index < state.parcels.count(); index++) {
+			var parcel = state.parcels.parcel(index);
+			if (!prepared.collision().positionValid(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq())
+					|| !admission.allows(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq())) {
+				throw new IllegalArgumentException("Granular snapshot sphere has invalid geometry at parcel " + index);
+			}
+			admission.append(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq());
+		}
+		prepared.coupling().rebuild(state.parcels, state.deposits);
+		var liquid = JointPhaseCapacity.collectLiquid(cellCount, particles, domain()::particleCellIndex);
+		for (int cell = 0; cell < cellCount; cell++) {
+			if (liquid[cell].add(SignedDyadic.of(prepared.coupling().solidSvq(cell), -24))
+					.compareTo(SignedDyadic.of(geometry.cutCells.openCellVolume(cell))) > 0) {
+				throw new IllegalArgumentException("Granular snapshot exceeds joint phase capacity at cell " + cell);
+			}
+		}
+		state.externalSource = snapshot.externalSource(); state.escapedSink = snapshot.escapedSink();
+		state.deposits.forEachCell((cell, ignoredVolume, ignoredPorosity) -> prepared.deposits().disturbCell(cell));
+		installGranularBinding(prepared, liquidRegistry, materialDefinitions);
 	}
 
 	/** Inventory-only exact insertion used by fixtures and transactional service adapters. */
