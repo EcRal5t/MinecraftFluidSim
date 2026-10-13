@@ -69,6 +69,9 @@ final class PressureSystem {
 				&& (domain.thermalState == null || domain.thermalState.coherentPhases().groupCount() == 0);
 	}
 	boolean markerPressureActive() { return usesMarkerPressure() && markerProjection.active(); }
+	boolean hasLiquidPressure(int cell) {
+		return usesMarkerPressure() ? domain.markerGrid.exactCellVolumeInventory[cell].signum() > 0 : domain.isFluid(cell);
+	}
 	double liquidPressure(int cell) { return markerPressureActive() ? markerProjection.liquidPressure(cell) : liquidPressure[cell]; }
 	double gasPressure(int node) { return markerPressureActive() ? markerProjection.gasPressure(node) : gasPressure[node]; }
 	boolean projectGranular(float dt) {

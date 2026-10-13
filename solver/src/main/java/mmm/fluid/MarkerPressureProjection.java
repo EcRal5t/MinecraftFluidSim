@@ -53,7 +53,10 @@ final class MarkerPressureProjection {
 		boolean[] gasContacts = new boolean[domain.gasState.network.nodeCount() + 1];
 		geometry.forEachGasPiece(piece -> gasContacts[gasNode(piece)] = true);
 		pressureAnchor = -1;
-		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.isFluid(cell)) { pressureAnchor = cell; break; }
+		for (int cell = 0; cell < domain.cellCount; cell++) {
+			var profile = geometry.cellSnapshot(cell);
+			if (profile != null && profile.volume() > 0) { pressureAnchor = cell; break; }
+		}
 		for (boolean contact : gasContacts) if (contact) { pressureAnchor = -1; break; }
 		pressureReference = boundary.pressureReference(gasContacts);
 		domain.pressureAnchor = pressureAnchor; domain.pressureReference = pressureReference;
@@ -88,9 +91,10 @@ final class MarkerPressureProjection {
 		nodeStorage = new double[gasRows.length]; Arrays.fill(nodeStorage, Double.NaN);
 		var definitions = new ArrayList<Row>(); var gasBlocks = new TreeMap<Integer, List<Block>>();
 		knownCellLoad = cellVectors();
-		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.isFluid(cell)) {
+		for (int cell = 0; cell < domain.cellCount; cell++) {
 			var profile = geometry.cellSnapshot(cell);
-			if (profile == null || basis.rank(cell) != 4 || !basis.hasRepresentableBasis(cell))
+			if (profile == null || !(profile.volume() > 0)) continue;
+			if (basis.rank(cell) != 4 || !basis.hasRepresentableBasis(cell))
 				throw blocked("Active pressure lacks a resolved three-dimensional affine velocity basis at cell " + cell);
 			liquidRows[cell] = definitions.size(); var blocks = new ArrayList<Block>();
 			for (int axis = 0; axis < 3; axis++) { double[] coefficient = new double[4]; coefficient[axis + 1] = profile.volume() / basis.cellSize(); blocks.add(new Block(cell, axis, coefficient)); }

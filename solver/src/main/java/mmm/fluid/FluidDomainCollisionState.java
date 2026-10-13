@@ -457,7 +457,8 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 
 	public float pressure(int x, int y, int z) {
 		int cell = cellIndexChecked(x, y, z);
-		return isFluid(cell) ? pressureReference + projection.pressure[cell] : projection.pressure[cell];
+		ensureInventoryGrid();
+		return pressureSystem.hasLiquidPressure(cell) ? pressureReference + projection.pressure[cell] : projection.pressure[cell];
 	}
 
 	/** Package-private test accessor for the free-surface pressure jump {@code sigma * kappa} at a cell. */

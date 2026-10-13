@@ -108,7 +108,7 @@ G2P 的预测、投影、PIC 与输入载体动能，以及 FLIP 混合的线性
 
 [MarkerVelocityTransfer](../../solver/src/main/java/mmm/fluid/MarkerVelocityTransfer.java) 提供实际 kg 加权的固定稀疏 `J/Jᵀ`，封闭面统一排除，MAC 发布采用双精度归约及一次 float 写入。[MarkerPressureOperator](../../solver/src/main/java/mmm/fluid/MarkerPressureOperator.java) 将共享面面积和相邻压力行组成 `C`，提供体积流率 `Cv`、压力力 `Cᵀp` 和 `CM⁻¹Cᵀ + S_g`；有限气体储存为 `S_g = Vβ_s/Δt²`。压力力先计算共享面压差，封闭常压力保持严格零力；相同压力行的面贡献先合并，再计算对角项。独立离散验证覆盖实际粒子质量下的连续性、压力冲量与功、封闭常压力零空间和气体压缩符号。
 
-纯液体主流程通过 [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java) 使用实际质量的格内仿射拟合与微盒湿面约束，直接发布粒子速度和同一拟合场的 MAC 法向迹。压力几何来自当前气腔 frame 的 PLIC，具体来源校核见[气体压力耦合](gas-state.md#压力与热耦合)。含颗粒或连续固相库存时，主流程使用联合面压力和既有 G2P 写回。稀疏支撑、断开分量及各相共同惯性的完成条件见[求解器整合计划](../roadmap/solver-consolidation-plan.md)。
+纯液体主流程通过 [MarkerPressureProjection](../../solver/src/main/java/mmm/fluid/MarkerPressureProjection.java) 使用实际质量的格内仿射拟合与微盒湿面约束，直接发布粒子速度和同一拟合场的 MAC 法向迹。每个正湿体积格参与 `V div` 体积约束，载体须具有可表示的秩四支撑；部分充液格与有限气腔共同满足恒压载荷的 Gauss 关系，改变数值压力参考保持实际载体力。压力几何来自当前气腔 frame 的 PLIC，具体来源校核见[气体压力耦合](gas-state.md#压力与热耦合)。含颗粒或连续固相库存时，主流程使用联合面压力和既有 G2P 写回。稀疏支撑、断开分量及各相共同惯性的完成条件见[求解器整合计划](../roadmap/solver-consolidation-plan.md)。
 
 [LiquidSpatialInput](../../solver/src/main/java/mmm/fluid/LiquidSpatialInput.java) 按需捕获当前 frame 的 PLIC 与原始载体矩。微盒使用 `8*cell+micro` 编号，按固定连通分量分别汇总；空分量、干微盒及其中的未解析载体保留各自身份。源权重按积分点位置分组，PLIC 保存几何覆盖积分，分量孔隙率将覆盖积分换算为孔隙内液体体积及其第一矩。全干格的分量孔隙率按规范整数 SVQ 分配后的容量计算，与气体块共用容量解释。原始体积和质量保留求解器单位，两种位置第一矩均乘物理米；SI 比较使用捕获的 `SolverUnitScale`。源与几何的差额先精确相减，再舍入为观察值，保留悬殊质量下的小差额。
 
@@ -274,7 +274,7 @@ div((1 / rho) grad(p)) = (div(u*) - target_divergence) / dt
 ```
 
 - 默认有限体积输运按逐格精确库存生成 pressure fraction/PLIC。粒子积分点平流对照模式使用由标准 `2×2×2` 四分之一格点诱导的 C1 紧支撑核，把真实体积守恒分配到开放邻格；该 footprint 决定对照模式的压力几何。`MarkerDistributionExperiment` 也计算这个平滑足迹作为采样误差诊断，测量后恢复默认压力数组。
-- pressure unknown 只包含其重建 PLIC 真正覆盖 cell center 的开放格；满格直接进入，部分格以 plane/center 几何判定。含 marker 但只占据中心以下薄层的格仍是液体 carrier，可参与重力、平流和补充界面力，却不能仅凭 marker 存在强行取得 pressure unknown。这样 pressure 矩阵、ghost-fluid 距离与载体拓扑使用同一界面几何，不再靠极小 `theta` 或 marker override 制造薄压力层。
+- 仿射液体压力的体积未知量覆盖全部正湿体积格，由该格实际湿体积与载体惯性组成。联合面压力路径按 PLIC 是否覆盖 cell center 选择开放格，满格直接进入，部分格以 plane/center 几何判定；中心以下薄层沿用载体平流和补充界面力。两条路径各按对应离散的空间支撑生成约束与界面距离。
 - 重力覆盖开放的正 P2G 质量面与实际 marker occupancy 激活的输运面；正质量面即使相邻格中没有 marker 中心，也接受相同重力加速度。热浮力按载体物性计算，速度支撑沿用实际 P2G 权重。
 - cut-face aperture、界面距离和 `1/rho` 面系数同时进入矩阵、预条件器和最终投影，避免三个路径使用不同几何。
 - 变密度 face coefficient 按两侧界面距离守恒加权；同密度材料必须退化为纯水矩阵。

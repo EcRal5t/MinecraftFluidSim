@@ -53,8 +53,9 @@ final class DomainMetrics {
 	}
 
 	float maximumPressure() {
+		domain.ensureInventoryGrid();
 		float maximum = 0.0F;
-		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.isFluid(cell)) {
+		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.pressureSystem.hasLiquidPressure(cell)) {
 			maximum = Math.max(maximum, domain.pressureReference + domain.projection.pressure[cell]);
 		}
 		return maximum;

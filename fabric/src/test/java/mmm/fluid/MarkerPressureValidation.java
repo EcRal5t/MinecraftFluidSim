@@ -8,7 +8,10 @@ public final class MarkerPressureValidation {
 	                      int[] cells) { }
 	private MarkerPressureValidation() { }
 	public static void main(String[] args) {
-		if (args.length == 1 && args[0].equals("--spatial-input")) {
+		if (args.length == 1 && args[0].equals("--pressure-gauge")) {
+			partiallyFilledPressureRetainsReferenceGauge();
+			System.out.println("MarkerPressureValidation PASS (partial liquid pressure reference)");
+		} else if (args.length == 1 && args[0].equals("--spatial-input")) {
 			validateKernel();
 			LiquidSpatialInputValidation.validate();
 		} else if (args.length == 1 && args[0].equals("--micro-velocity-moments")) {
@@ -36,6 +39,55 @@ public final class MarkerPressureValidation {
 			System.out.println("MarkerPressureValidation PASS");
 		}
 	}
+
+	/** A pressure reference shift preserves physical force on a rank-four, partially filled cell. */
+	private static void partiallyFilledPressureRetainsReferenceGauge() {
+		var points = new float[8][3];
+		for (int p = 0; p < 8; p++) {
+			points[p][0] = .125F + .25F * (p & 1);
+			points[p][1] = .05F + .10F * (p >> 1 & 1);
+			points[p][2] = .125F + .25F * (p >> 2 & 1);
+		}
+		var d = affineDomain(points);
+		d.sealDomainBoundary(); d.bootstrapGasState(null); d.ensureGrid(); d.gasTopologyCoordinator.refresh();
+		d.gasState.network.setStandardVolume(1, 1.25 * d.gasState.network.availableVolume(1));
+		d.bodyForceStage.applyGravity(.001F);
+		var plan = d.pressureSystem.markerProjection(); plan.prepare(.001F);
+		var basis = plan.basis(); int cell = basis.markerCell(0);
+		var profile = plan.geometry().cellSnapshot(cell);
+		if (basis.rank(cell) != 4 || profile == null || !(profile.volume() > 0 && profile.volume() < Math.pow(basis.cellSize(), 3))
+				|| d.gasState.network.nodeCount() != 1 || d.gasState.network.inventory(1).isEmpty())
+			throw new AssertionError("Partial pressure gauge fixture lost its actual rank-four liquid and finite gas");
+		var constant = new double[plan.operator().rowCount()];
+		int liquidRow = plan.rowOfLiquidCell(cell);
+		if (liquidRow >= 0) constant[liquidRow] = 1;
+		constant[constant.length - 1] = 1;
+		var shiftedForce = new double[3][basis.markerCount()]; plan.operator().force(constant, shiftedForce);
+		var bulk = new java.util.ArrayList<CellVelocityConstraintOperator.Block>();
+		for (int axis = 0; axis < 3; axis++) {
+			var coefficient = new double[4]; coefficient[axis + 1] = profile.volume() / basis.cellSize();
+			bulk.add(new CellVelocityConstraintOperator.Block(cell, axis, coefficient));
+		}
+		var wall = new CellAffineWallProjection(d, basis, plan.geometry());
+		var bulkOperator = new CellVelocityConstraintOperator(basis, java.util.List.of(wall.transform(new CellVelocityConstraintOperator.Row(bulk, 0))));
+		var missingBulkForce = new double[3][basis.markerCount()]; bulkOperator.force(new double[]{liquidRow < 0 ? 1 : 0}, missingBulkForce);
+		double magnitude = 0, bulkMagnitude = 0;
+		for (int axis = 0; axis < 3; axis++) for (int p = 0; p < basis.markerCount(); p++) {
+			near(shiftedForce[axis][p] + missingBulkForce[axis][p], 0, 2e-13,
+					"Constant pressure force differs by the omitted partial-liquid volume row");
+			magnitude = Math.hypot(magnitude, shiftedForce[axis][p]);
+			bulkMagnitude = Math.hypot(bulkMagnitude, missingBulkForce[axis][p]);
+		}
+		System.out.printf("Partial pressure gauge: fraction=%g rank=%d liquidRow=%d constantForceNorm=%g missingVolumeForceNorm=%g deltaForceFor1000Pa=%g N%n",
+				profile.volume() / Math.pow(basis.cellSize(), 3), basis.rank(cell), liquidRow, magnitude, bulkMagnitude, 1000 * magnitude);
+		near(magnitude, 0, 2e-13, "Changing only the pressure reference changed actual carrier force");
+		if (!plan.solve(d.config.pressureTolerance()).converged())
+			throw new AssertionError("Stationary partial-liquid pressure did not converge");
+		plan.publish();
+		near(d.pressure(0, 0, 0), d.projection.pressure[cell] + d.pressureReference, 0,
+				"Partial-liquid public pressure includes its reference");
+		near(d.maximumPressure(), d.pressure(0, 0, 0), 0, "Maximum pressure includes partial-liquid observation");
+	}
 	public static void validate() {
 		validateKernel();
 		MarkerVelocitySpaceExperiment.validateProduction();
@@ -44,6 +96,7 @@ public final class MarkerPressureValidation {
 		transportPreservesFixedWallVelocity();
 	}
 	private static void validateKernel() {
+		partiallyFilledPressureRetainsReferenceGauge();
 		cellAffineVelocityPreservesResolvedMotion();
 		cellWetFaceAndConstraintWork();
 		fixedWallProjectionUsesActualMass();

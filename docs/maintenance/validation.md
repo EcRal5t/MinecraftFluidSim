@@ -88,6 +88,8 @@
 
 压力核可通过 `:fabric:runMarkerPressureValidation --args="--kernel"` 单独运行仿射拟合、转置虚功、固定壁面投影、独立通量、实际质量 Gram 矩阵、有限气体储存和极端数值对照；完整 `marker-pressure` 另含生产张力与壁面输运场景。
 
+`--args="--pressure-gauge"` 聚焦部分充液格的压力参考不变性，核对真实湿体积行、有限气体恒压载荷与固定墙投影后的实际载体力。相同断言同时参与 `--kernel`。
+
 密闭控制器注液的有界诊断使用 `:fabric:runBoundaryPourDiagnostic --offline --no-daemon`。它执行真实完整逻辑步及捕获恢复，从首个失败来源重放力学子步，报告实际质量动能、气腔储存功、压力残差功、仿射梯度及薄层载体元组。最多检查四个逻辑步，重放沿用生产累计子步上限；诊断正常退出表示证据采集完成，场景验收继续使用 `gas-liquid:short`。
 
 `--args="--gas-geometry"` 单独校验压力准备和发布中的当前微盒归属：同格两个独立气腔、实际接触气压参考、液体第一矩变化、frame 替换后的几何与候选拒绝。
