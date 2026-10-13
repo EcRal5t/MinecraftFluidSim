@@ -103,12 +103,53 @@ final class MarkerVelocitySpaceExperiment {
 	}
 
 	static void validateCandidate() {
+		sparseAffinePressureCompatibility();
 		for (boolean heterogeneous : new boolean[]{false, true}) {
 			validateCandidate(false, heterogeneous);
 			validateCandidate(true, heterogeneous);
 		}
 		validateTensorSupport();
 		validateComponentCandidate();
+	}
+
+	/** Exact B/D comparison for the retained two-point pour source and its single-point limit. */
+	private static void sparseAffinePressureCompatibility() {
+		double[][] source = {{1.47851717472F, .510141730309F, 2.00144600868F},
+				{1.47851717472F, .510141730309F, 2.00539636612F}};
+		for (int count : new int[]{1, 2}) for (int rotation = 0; rotation < 3; rotation++) {
+			double h = .5, volume = count * Math.scalb(15.0, -26) * h * h * h, mass = 1000 * volume / count;
+			double[][] sample = new double[3 * count][12], gram = new double[12][12];
+			var moments = new CellRemapSpatialMoments();
+			for (int p = 0; p < count; p++) {
+				var position = new double[3];
+				for (int a = 0; a < 3; a++) {
+					int axis = (a + rotation) % 3;
+					position[a] = (source[p][axis] - (source[0][axis] + source[count - 1][axis]) / 2) / h;
+				}
+				moments.add(mass, position, new double[]{-.952395439148F, -.725018322468F, 1.09476661682F});
+				for (int a = 0; a < 3; a++) {
+					sample[3 * p + a][4 * a] = 1;
+					for (int b = 0; b < 3; b++) sample[3 * p + a][4 * a + b + 1] = position[b];
+				}
+			}
+			for (double[] row : sample) for (int a = 0; a < 12; a++) for (int b = 0; b < 12; b++) gram[a][b] += mass * row[a] * row[b];
+			double[][] joint = Arrays.copyOf(sample, sample.length + 1); joint[sample.length] = new double[12];
+			for (int a = 0; a < 3; a++) joint[sample.length][4 * a + a + 1] = volume / h;
+			near(rank(sample), 3 * count, 0, "Actual sparse affine sampling rank");
+			near(rank(gram), rank(sample), 0, "Sparse actual-mass Gram rank");
+			near(rank(joint), rank(sample) + 1, 0, "Volume constraint adds one unsupported affine direction");
+			int hiddenAxis = (3 - rotation) % 3, hiddenColumn = 4 * hiddenAxis + hiddenAxis + 1;
+			for (double[] row : sample) near(row[hiddenColumn], 0, 0, "Unobserved affine gradient has zero sampled velocity");
+			near(joint[sample.length][hiddenColumn], volume / h, 0, "Unobserved affine gradient has positive volume response");
+			var replacement = moments.fit(new double[]{1, 1, 1, 1, 1, 1, 1, 1}, new double[8][3]);
+			var features = new double[8][4];
+			for (int p = 0; p < 8; p++) {
+				features[p][0] = 1; System.arraycopy(replacement.positions()[p], 0, features[p], 1, 3);
+			}
+			near(rank(features), count, 0, "Positive joint-moment refinement retains its actual spatial rank");
+			System.out.printf("Sparse affine compatibility: points=%d rotation=%d sampleRank=%d GramRank=%d jointRank=%d eightNodeRank=%d%n",
+					count, rotation, rank(sample), rank(gram), rank(joint), rank(features));
+		}
 	}
 	private static void validateComponentCandidate() {
 		var fixture = componentFixture(); var d = fixture.domain(); var basis = CellAffineVelocity.capture(d);

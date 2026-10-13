@@ -97,7 +97,7 @@
 
 `--args="--spatial-input"` 先运行压力核及既有湿几何矩对照，再运行 [LiquidSpatialInputValidation](../../fabric/src/test/java/mmm/fluid/LiquidSpatialInputValidation.java)。覆盖原始体积与质量矩、半米格长的 SI 换算、悬殊质量的精确差额、同格断开分量的相反误差、完全干域与零分量、位于 PLIC 干微盒中的未解析载体、来源不可变副本及过期 frame 拒绝；孔隙率用例分别校核几何覆盖、孔隙内液体体积和全干断开分量的整数 SVQ 容量。几何对照复用立方体、薄层、切格、斜面及微面重合接口的既有断言。
 
-`--args="--velocity-space"` 先运行独立候选基底对照，再检查生产速度空间的三轴闭合旋涡、单点近壁模式、断开分量运动和独立液池的静态压力；生产条件不满足时任务失败。`--args="--velocity-candidate"` 运行测试专用的小矩阵原型，比较壁面适配的仿射和张量基底、真实质量支撑、完整多项式散度、投影功及转置虚功。原型通过只证明所列小场景的模型条件，完整生产验收继续使用 `marker-pressure` 和所涉及领域的选择器。代码在 [MarkerVelocitySpaceExperiment](../../fabric/src/test/java/mmm/fluid/MarkerVelocitySpaceExperiment.java)。
+`--args="--velocity-space"` 先运行独立候选基底对照，再检查生产速度空间的三轴闭合旋涡、单点近壁模式、断开分量运动和独立液池的静态压力；生产条件不满足时任务失败。`--args="--velocity-candidate"` 运行测试专用的小矩阵原型，比较壁面适配的仿射和张量基底、真实质量支撑、完整多项式散度、投影功及转置虚功，同时以实际注液的两点来源及其单点情形检查采样、惯性和体积约束秩；八点联合矩重建继续检查空间秩。原型通过只证明所列小场景的模型条件，完整生产验收继续使用 `marker-pressure` 和所涉及领域的选择器。代码在 [MarkerVelocitySpaceExperiment](../../fabric/src/test/java/mmm/fluid/MarkerVelocitySpaceExperiment.java)。
 
 `--args="--micro-velocity-candidate"` 运行 [MicroFaceVelocitySpaceExperiment](../../fabric/src/test/java/mmm/fluid/MicroFaceVelocitySpaceExperiment.java) 的独立微面模型。覆盖 256 种固定微盒掩码、两种实际质量布局、两种粒子位置布局，检查惯性与压力秩、共享法向迹、点态散度、投影能量、转置虚功以及压力冲量和力矩与墙面反力的闭合；另有三轴闭合旋涡及同格两个有限气腔的独立压力对照。模型采用完全湿润的微盒、共享微面平均法向速度和实际粒子惯性；部分充液、稀疏支撑、开放气体、完整输运与生产成本待后续验收。此入口独立运行，生产选择器继续检查当前实现。
 
