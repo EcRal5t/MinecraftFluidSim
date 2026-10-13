@@ -117,13 +117,16 @@ final class GranularContactCompression {
 		}
 		if (initialImpulses != null) {
 			if (initialImpulses.length != rows.length) throw new IllegalArgumentException("Contact impulse input size mismatch");
+			boolean seeded = false;
 			for (int k = 0; k < rows.length; k++) {
 				spend.run(); double impulse = initialImpulses[k];
 				if (!(Double.isFinite(impulse) && impulse >= 0)) throw new IllegalArgumentException("Invalid initial contact impulse");
 				lambda[k] = Math.scalb(impulse, -massExponent);
 				if (!Double.isFinite(lambda[k]) || impulse > 0 && lambda[k] == 0)
 					throw new MechanicalTimeRefinement(2, "Unrepresentable initial contact impulse");
+				seeded |= lambda[k] > 0;
 			}
+			if (seeded) rescaleInitialImpulse(mass, input, rows, lambda, spend);
 		}
 		ActiveFace activeFace = null;
 		while (true) {
@@ -167,6 +170,50 @@ final class GranularContactCompression {
 	static boolean admits(Row row, double[][] values, double[][] error) {
 		double g = gap(row, values), bound = gapError(row, values, error);
 		return Double.isFinite(g) && Double.isFinite(bound) && g >= -bound;
+	}
+
+	/** Minimize the new source's dual energy along the supplied nonnegative impulse ray. */
+	private static void rescaleInitialImpulse(double[] mass, double[][] input, Row[] rows, double[] lambda, Runnable spend) {
+		SignedDyadic[][] force = new SignedDyadic[mass.length][3];
+		for (int k = 0; k < rows.length; k++) {
+			spend.run(); if (lambda[k] == 0) continue;
+			Row row = rows[k]; var impulse = SignedDyadic.of(lambda[k]);
+			for (int a = 0; a < 3; a++) {
+				if (row.normal()[a] == 0) continue;
+				spend.run(); var value = impulse.multiply(SignedDyadic.of(row.normal()[a]));
+				var first = row.second() < 0 ? value : value.negate();
+				force[row.first()][a] = force[row.first()][a] == null ? first : force[row.first()][a].add(first);
+				if (row.second() >= 0) {
+					spend.run(); force[row.second()][a] = force[row.second()][a] == null ? value : force[row.second()][a].add(value);
+				}
+			}
+		}
+		var derivative = SignedDyadic.ZERO; var work = SignedDyadic.ZERO;
+		for (int i = 0; i < mass.length; i++) {
+			spend.run(); var square = SignedDyadic.ZERO;
+			for (int a = 0; a < 3; a++) if (force[i][a] != null && force[i][a].signum() != 0) {
+				spend.run(); var value = force[i][a]; square = square.add(value.multiply(value));
+				derivative = derivative.add(value.multiply(SignedDyadic.of(input[i][a])));
+			}
+			double energy = ratio(square, SignedDyadic.of(mass[i])).toDouble();
+			if (!Double.isFinite(energy)) return;
+			work = work.add(SignedDyadic.of(energy));
+		}
+		if (work.signum() <= 0) return;
+		var factor = derivative.signum() >= 0 ? ExactRational.ZERO : ratio(derivative.negate(), work);
+		double[] seed = new double[lambda.length];
+		for (int k = 0; k < lambda.length; k++) {
+			spend.run(); var candidate = ratio(SignedDyadic.of(lambda[k]), SignedDyadic.of(1)).multiply(factor);
+			seed[k] = candidate.toDouble();
+			if (!Double.isFinite(seed[k]) || candidate.signum() > 0 && seed[k] == 0) return;
+		}
+		System.arraycopy(seed, 0, lambda, 0, lambda.length);
+	}
+
+	private static ExactRational ratio(SignedDyadic numerator, SignedDyadic denominator) {
+		int power = numerator.exponent() - denominator.exponent();
+		return power >= 0 ? new ExactRational(numerator.significand().shiftLeft(power), denominator.significand())
+				: new ExactRational(numerator.significand(), denominator.significand().shiftLeft(-power));
 	}
 
 	/** Bound-constrained PCG uses actual source momentum for every residual refresh. */
@@ -316,11 +363,6 @@ final class GranularContactCompression {
 		}
 		private void add(int k, int source, SignedDyadic delta, Runnable spend) {
 			for (int a : axes[k]) { spend.run(); momentum[source][a] = momentum[source][a].add(normal[k][a].multiply(delta)); }
-		}
-		private static ExactRational ratio(SignedDyadic numerator, SignedDyadic denominator) {
-			int power = numerator.exponent() - denominator.exponent();
-			return power >= 0 ? new ExactRational(numerator.significand().shiftLeft(power), denominator.significand())
-					: new ExactRational(numerator.significand(), denominator.significand().shiftLeft(-power));
 		}
 	}
 

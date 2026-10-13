@@ -864,6 +864,22 @@ public final class GranularCarrierValidation {
 		checkContactCertificate(warm, seededRows);
 		for (int i = 0; i < 2; i++) require(Math.abs(warm.values()[i][1] - cold.values()[i][1])
 				<= warm.arithmeticError()[i][1] + cold.arithmeticError()[i][1], "contact impulse initial guess changed the terminal projection");
+		var supportedRows = new GranularContactCompression.Row[]{pair,
+				new GranularContactCompression.Row(2, -1, new double[]{0, 1, 0}),
+				new GranularContactCompression.Row(0, 2, new double[]{0, -1, 0})};
+		double[] supportedMass = {5.078125, 5.078125, 5.078125};
+		double[][] supportedDrift = {{0, -4.181514439262235, 0}, {0, -3.421239086669101, 0}, {0, 0, 0}};
+		double[][] supportedTerminal = {{0, -4.181514239311219, 0}, {0, -3.4212389230728144, 0}, {0, 2.220446049250313E-16, 0}};
+		var driftSeed = compressContacts(supportedMass, supportedDrift, supportedRows);
+		var supportedCold = compressContacts(supportedMass, supportedTerminal, supportedRows);
+		var supportedWarm = GranularContactCompression.solve(supportedMass, supportedTerminal, supportedRows,
+				contactBudget(), driftSeed.impulses());
+		checkContactCertificate(supportedWarm, supportedRows);
+		for (int i = 0; i < 3; i++) require(Math.abs(supportedWarm.values()[i][1] - supportedCold.values()[i][1])
+				<= supportedWarm.arithmeticError()[i][1] + supportedCold.arithmeticError()[i][1],
+				"a near-proportional source with a resting-contact residual changed the terminal projection");
+		checkContactMechanicalMoments(supportedMass, supportedTerminal, supportedWarm,
+				new double[][]{{0, 1, 0}, {0, 2, 0}, {0, 0, 0}}, new double[]{0, supportedWarm.impulses()[1], 0});
 		double[] masses = {2, 3, 5}; double[][] input = {{1, .25, 0}, {0, .25, 0}, {-1, .25, 0}};
 		var chain = new GranularContactCompression.Row[]{
 				new GranularContactCompression.Row(0, 1, new double[]{1, 0, 0}),
@@ -888,6 +904,18 @@ public final class GranularCarrierValidation {
 					+ Math.abs(normal[a] / masses[i]) * Math.ulp(expectedImpulse), "oblique unequal-mass contact changed the analytic projection");
 		}
 		checkContactMechanicalMoments(masses, input, result, new double[][]{{0, 0, 0}, {1.2, 1.6, 0}});
+		for (double scale : new double[]{.75, 2, -1}) {
+			double[][] scaled = new double[2][3];
+			for (int i = 0; i < 2; i++) for (int a = 0; a < 3; a++) scaled[i][a] = scale * input[i][a];
+			var rows = new GranularContactCompression.Row[]{new GranularContactCompression.Row(0, 1, normal)};
+			var reference = compressContacts(masses, scaled, rows);
+			var seeded = GranularContactCompression.solve(masses, scaled, rows, contactBudget(), result.impulses());
+			checkContactCertificate(seeded, rows);
+			for (int i = 0; i < 2; i++) for (int a = 0; a < 3; a++) require(Math.abs(seeded.values()[i][a] - reference.values()[i][a])
+					<= seeded.arithmeticError()[i][a] + reference.arithmeticError()[i][a],
+					"scaled or opening oblique source changed the independently certified projection");
+			checkContactMechanicalMoments(masses, scaled, seeded, new double[][]{{0, 0, 0}, {1.2, 1.6, 0}});
+		}
 		masses = new double[]{5.078125, 5.078125};
 		input = new double[][]{{-1.5487015249688663, 4.163336342344337e-17, .44733240676988223},
 				{2.127016253372214, -4.842622083303612, -.6143748711545809}};
