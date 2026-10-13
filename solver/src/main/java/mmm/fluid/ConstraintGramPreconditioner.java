@@ -6,22 +6,29 @@ import java.util.Arrays;
 
 /** Symmetric Gauss-Seidel on the actual pressure Gram, normalized by its positive diagonal. */
 final class ConstraintGramPreconditioner {
-	private final double[] inverseRoot, lower, workspace;
+	private final double[] inverseRoot, lower, workspace, gramDiagonal, gramRoot;
 	private final int[] offsets, columns;
 	private double[] coarseMode, coarseImage, coarseRhs;
 	private SignedDyadic coarseEnergy;
+	private ConstraintBlockProjection blocks;
+	private double[] refineRhs, refineDirection, refineLast, refineImage;
 
 	ConstraintGramPreconditioner(int markerCount, double[] inverseMass, int[] rowOffsets, int[] indices,
 	                            double[] coefficients, double[] coefficientLow, double[] diagonal) {
 		int rows = diagonal.length;
+		gramDiagonal = diagonal.clone();
 		boolean expanded = false; for (double value : coefficientLow) expanded |= value != 0;
 		SignedDyadic[] exact = expanded ? new SignedDyadic[coefficients.length] : null;
-		if (expanded) for (int entry = 0; entry < exact.length; entry++)
+		SignedDyadic[] weighted = expanded ? new SignedDyadic[coefficients.length] : null;
+		if (expanded) for (int entry = 0; entry < exact.length; entry++) {
 			exact[entry] = SignedDyadic.of(coefficients[entry]).add(SignedDyadic.of(coefficientLow[entry]));
-		inverseRoot = new double[rows]; workspace = new double[rows]; offsets = new int[rows + 1];
+			weighted[entry] = exact[entry].multiply(SignedDyadic.of(inverseMass[indices[entry] % markerCount]));
+		}
+		inverseRoot = new double[rows]; gramRoot = new double[rows]; workspace = new double[rows]; offsets = new int[rows + 1];
 		for (int row = 0; row < rows; row++) {
 			if (!(diagonal[row] >= 0 && Double.isFinite(diagonal[row]))) throw blocked("Invalid actual pressure diagonal at row " + row);
 			inverseRoot[row] = diagonal[row] == 0 ? 0 : 1 / Math.sqrt(diagonal[row]);
+			gramRoot[row] = inverseRoot[row] == 0 ? 0 : 1 / inverseRoot[row];
 		}
 		int[] heads = new int[Math.multiplyExact(3, markerCount)], next = new int[indices.length], entryRows = new int[indices.length];
 		Arrays.fill(heads, -1);
@@ -38,7 +45,7 @@ final class ConstraintGramPreconditioner {
 				for (int other = heads[index]; other >= 0; other = next[other]) {
 					int column = entryRows[other]; if (column >= row) continue;
 					if (marks[column] != row) { marks[column] = row; sums[column] = 0; if (expanded) exactSums[column] = SignedDyadic.ZERO; touched[touchedCount++] = column; }
-					if (expanded) exactSums[column] = exactSums[column].add(exact[entry].multiply(SignedDyadic.of(massInverse)).multiply(exact[other]));
+					if (expanded) exactSums[column] = exactSums[column].add(weighted[entry].multiply(exact[other]));
 					else sums[column] += MarkerPressureOperator.rescaledResponse(coefficients[entry], massInverse, coefficients[other]);
 				}
 			}
@@ -61,20 +68,130 @@ final class ConstraintGramPreconditioner {
 		columns = Arrays.copyOf(builtColumns, count); lower = Arrays.copyOf(builtLower, count);
 	}
 
-	/** D^-1/2 B^-T B^-1 D^-1/2 r, with B=I+the normalized strict lower Gram. */
+	/** Applies the symmetric fine inverse and the optional actual common-pressure correction. */
 	void apply(double[] rhs, double[] result) {
 		if (rhs.length != inverseRoot.length || result.length != rhs.length || rhs == result)
 			throw new IllegalArgumentException("Pressure preconditioner vector shape or alias mismatch");
-		if (coarseMode == null) { applySgs(rhs, result); return; }
+		if (coarseMode == null) { applyFine(rhs, result); return; }
 		SignedDyadic coarseLoad = dot(coarseMode, rhs);
 		double coarse = quotient(coarseLoad, coarseEnergy);
 		for (int row = 0; row < rhs.length; row++) coarseRhs[row] = Math.fma(-coarse, coarseImage[row], rhs[row]);
-		applySgs(coarseRhs, result);
+		applyFine(coarseRhs, result);
 		double correction = quotient(coarseLoad.subtract(dot(coarseImage, result)), coarseEnergy);
 		for (int row = 0; row < rhs.length; row++) result[row] = Math.fma(coarseMode[row], correction, result[row]);
 	}
+	void blockProjection(ConstraintBlockProjection projection) {
+		blocks = projection.active() ? projection : null;
+	}
+	void refine() {
+		int rows = inverseRoot.length;
+		refineRhs = new double[rows]; refineDirection = new double[rows]; refineLast = new double[rows]; refineImage = new double[rows];
+	}
+	/** Three Richardson corrections give 3B-3BHB+BHBHB, positive for symmetric H and positive B. */
+	private void applyFine(double[] rhs, double[] result) {
+		applyBase(rhs, result); if (refineRhs == null) return;
+		applyGram(result, refineImage);
+		for (int row = 0; row < rhs.length; row++) refineRhs[row] = rhs[row] - refineImage[row];
+		applyBase(refineRhs, refineDirection); applyGram(refineDirection, refineImage);
+		for (int row = 0; row < rhs.length; row++) refineRhs[row] -= refineImage[row];
+		applyBase(refineRhs, refineLast);
+		for (int row = 0; row < rhs.length; row++) result[row] += refineDirection[row] + refineLast[row];
+	}
+	private void applyBase(double[] rhs, double[] result) {
+		if (blocks == null) applySgs(rhs, result); else blocks.apply(rhs, result, this::applySgs);
+	}
 
-	/** Q + (I-QA) SGS (I-AQ), Q=chi chi^T/(chi^T A chi). */
+	/** Sparse HZ columns retain the original normalized coefficients and their two physical scales. */
+	final class GramColumns {
+		private final int[] selected, starts, rowIndices, gramEntries;
+		GramColumns(int[] selected) {
+			this.selected = selected.clone(); starts = new int[selected.length + 1];
+			int[] slots = new int[inverseRoot.length]; Arrays.fill(slots, -1);
+			for (int slot = 0; slot < selected.length; slot++) { slots[selected[slot]] = slot; starts[slot + 1] = 1; }
+			for (int row = 0; row < slots.length; row++) for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+				int column = columns[entry];
+				if (slots[row] >= 0) starts[slots[row] + 1] = Math.addExact(starts[slots[row] + 1], 1);
+				if (slots[column] >= 0) starts[slots[column] + 1] = Math.addExact(starts[slots[column] + 1], 1);
+			}
+			for (int slot = 0; slot < selected.length; slot++) starts[slot + 1] = Math.addExact(starts[slot + 1], starts[slot]);
+			rowIndices = new int[starts[selected.length]]; gramEntries = new int[rowIndices.length];
+			int[] cursor = starts.clone();
+			for (int slot = 0; slot < selected.length; slot++) { int entry = cursor[slot]++; rowIndices[entry] = selected[slot]; gramEntries[entry] = -1; }
+			for (int row = 0; row < slots.length; row++) for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+				int column = columns[entry];
+				if (slots[row] >= 0) { int target = cursor[slots[row]]++; rowIndices[target] = column; gramEntries[target] = entry; }
+				if (slots[column] >= 0) { int target = cursor[slots[column]]++; rowIndices[target] = row; gramEntries[target] = entry; }
+			}
+		}
+		void apply(double[] value, double[] result) { multiply(value, result, false); }
+		void transpose(double[] value, double[] result) { multiply(value, result, true); }
+		private void multiply(double[] value, double[] result, boolean transpose) {
+			Arrays.fill(result, 0);
+			for (int slot = 0; slot < selected.length; slot++) {
+				int source = selected[slot];
+				for (int entry = starts[slot]; entry < starts[slot + 1]; entry++) {
+					int target = rowIndices[entry], gramEntry = gramEntries[entry];
+					double input = value[transpose ? target : source];
+					double term = gramEntry < 0 ? gramDiagonal[source] * input
+							: gramTerm(lower[gramEntry], Math.max(source, target), Math.min(source, target), input);
+					result[transpose ? source : target] += term;
+				}
+			}
+			for (double number : result) if (!Double.isFinite(number)) { multiplyExact(value, result, transpose); break; }
+		}
+		private void multiplyExact(double[] value, double[] result, boolean transpose) {
+			var sums = new SignedDyadic[result.length]; Arrays.fill(sums, SignedDyadic.ZERO);
+			for (int slot = 0; slot < selected.length; slot++) {
+				int source = selected[slot];
+				for (int entry = starts[slot]; entry < starts[slot + 1]; entry++) {
+					int target = rowIndices[entry], gramEntry = gramEntries[entry], output = transpose ? source : target;
+					var coefficient = gramEntry < 0 ? SignedDyadic.of(gramDiagonal[source])
+							: SignedDyadic.of(lower[gramEntry]).multiply(SignedDyadic.of(gramRoot[Math.max(source, target)]))
+							.multiply(SignedDyadic.of(gramRoot[Math.min(source, target)]));
+					sums[output] = sums[output].add(coefficient.multiply(SignedDyadic.of(value[transpose ? target : source])));
+				}
+			}
+			for (int row = 0; row < result.length; row++) {
+				result[row] = sums[row].toDouble();
+				if (!Double.isFinite(result[row])) throw blocked("Unrepresentable cached pressure column response at row " + row);
+			}
+		}
+	}
+	GramColumns captureColumns(int[] selected) { return new GramColumns(selected); }
+
+	/** Reuses the symmetric Gram already captured for SGS; the production operator remains authoritative. */
+	void applyGram(double[] value, double[] result) {
+		for (int row = 0; row < value.length; row++) result[row] = gramDiagonal[row] * value[row];
+		for (int row = 0; row < value.length; row++) for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+			int column = columns[entry];
+			result[row] += gramTerm(lower[entry], row, column, value[column]);
+			result[column] += gramTerm(lower[entry], row, column, value[row]);
+		}
+		for (double number : result) if (!Double.isFinite(number)) { applyGramExact(value, result); break; }
+	}
+	private double gramTerm(double coefficient, int row, int column, double value) {
+		double first = gramRoot[row], second = gramRoot[column];
+		double result = ((coefficient * first) * second) * value;
+		return (!Double.isFinite(result) || result == 0) && coefficient != 0 && value != 0
+				? SignedDyadic.of(coefficient).multiply(SignedDyadic.of(first)).multiply(SignedDyadic.of(second)).multiply(SignedDyadic.of(value)).toDouble()
+				: result;
+	}
+	private void applyGramExact(double[] value, double[] result) {
+		var sum = new SignedDyadic[value.length];
+		for (int row = 0; row < value.length; row++) sum[row] = SignedDyadic.of(gramDiagonal[row]).multiply(SignedDyadic.of(value[row]));
+		for (int row = 0; row < value.length; row++) for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
+			int column = columns[entry];
+			var coefficient = SignedDyadic.of(lower[entry]).multiply(SignedDyadic.of(gramRoot[row])).multiply(SignedDyadic.of(gramRoot[column]));
+			sum[row] = sum[row].add(coefficient.multiply(SignedDyadic.of(value[column])));
+			sum[column] = sum[column].add(coefficient.multiply(SignedDyadic.of(value[row])));
+		}
+		for (int row = 0; row < value.length; row++) {
+			result[row] = sum[row].toDouble();
+			if (!Double.isFinite(result[row])) throw blocked("Unrepresentable cached pressure Gram response at row " + row);
+		}
+	}
+
+	/** Q + (I-QA) B (I-AQ), Q=chi chi^T/(chi^T A chi), B=the symmetric fine inverse. */
 	void balance(double[] mode, double[] image, SignedDyadic energy) {
 		if (mode.length != inverseRoot.length || image.length != mode.length || energy.signum() <= 0)
 			throw new IllegalArgumentException("Invalid pressure coarse mode");

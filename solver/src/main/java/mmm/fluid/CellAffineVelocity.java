@@ -251,6 +251,27 @@ final class CellAffineVelocity {
 		return blockForMicro(physicalCell, micro);
 	}
 	int rank(int cell) { return ranks[cell]; }
+	int axisRank(int block, int axis) {
+		requireRepresentable(block);
+		if (!hasNormalShape(block, axis)) return ranks[block];
+		for (int k = offsets[block]; k < offsets[block + 1]; k++) {
+			int base = 4 * markers[k];
+			if (shapeCoefficients[axis][base] != 0 || shapeLow[axis][base] != 0) return ranks[block];
+		}
+		return 0;
+	}
+	/** Unnormalized exact hull vectors span the admitted gradient space without fit-map rounding. */
+	SignedDyadic[][] sourceDirectionsExact(int block) {
+		var result = new SignedDyadic[ranks[block] - 1][3];
+		int base = 4 * block, origin = hullPoints[base];
+		for (int j = 0; j < result.length; j++) result[j] = vector(origin, hullPoints[base + j + 1]);
+		return result;
+	}
+	ExactRational normalizedCenterOffsetExact(int block, int axis) {
+		SignedDyadic delta = difference(physicalCenter(block, axis), center(block, axis)), size = SignedDyadic.of(h);
+		int shift = delta.exponent() - size.exponent();
+		return new ExactRational(delta.significand().shiftLeft(Math.max(0, shift)), size.significand().shiftLeft(Math.max(0, -shift)));
+	}
 	boolean hasRepresentableBasis(int cell) { return representable[cell]; }
 	boolean expandedCell(int cell) { return expanded[cell]; }
 	double massKilograms(int marker) { return mass[marker]; }

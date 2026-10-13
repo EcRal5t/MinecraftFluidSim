@@ -19,6 +19,7 @@ final class MarkerPressureProjection {
 	private CellAffineWallProjection wallProjection;
 	private CellVelocityConstraintOperator operator;
 	private List<Row> rows;
+	private List<int[]> internalCoarseRows;
 	private record SharedBlocks(int minus, int plus, int axis) implements Comparable<SharedBlocks> {
 		@Override public int compareTo(SharedBlocks other) {
 			int order=Integer.compare(axis,other.axis);
@@ -98,6 +99,7 @@ final class MarkerPressureProjection {
 		Arrays.fill(liquidRows, -1); Arrays.fill(gasRows, -1);
 		nodeStorage = new double[gasRows.length]; Arrays.fill(nodeStorage, Double.NaN);
 		var definitions = new ArrayList<Row>(); var gasBlocks = new TreeMap<Integer, List<Block>>();
+		internalCoarseRows=new ArrayList<>();
 		knownCellLoad = cellVectors();
 		for (int block = 0; block < basis.blockCount(); block++) {
 			if (basis.blockMarkerCount(block)==0) continue;
@@ -196,6 +198,8 @@ final class MarkerPressureProjection {
 			blocks.add(new Block(block,axis,coefficient));
 		}
 		definitions.add(new Row(blocks,0));
+		int[] selected=CellPressurePolynomialSpace.independentMonomials(basis,block);
+		var coarseRows=new ArrayList<Integer>();
 		// The nonconstant divergence coefficients enforce incompressibility inside the wet volume.
 		for(int monomial=1;monomial<10;monomial++) {
 			blocks=new ArrayList<Block>(); boolean positive=false;
@@ -207,8 +211,12 @@ final class MarkerPressureProjection {
 				}
 				blocks.add(new Block(block,axis,coefficient));
 			}
-			if(positive) definitions.add(new Row(blocks,0));
+			if(positive) {
+				if(Arrays.binarySearch(selected,monomial)>=0) coarseRows.add(definitions.size());
+				definitions.add(new Row(blocks,0));
+			}
 		}
+		if(!coarseRows.isEmpty()) internalCoarseRows.add(coarseRows.stream().mapToInt(Integer::intValue).toArray());
 	}
 
 	private double[] boxDivergence(int block,int axis) {
@@ -335,7 +343,7 @@ final class MarkerPressureProjection {
 		}
 		operator.apply(pressure, applied);
 		for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
-		var preconditioner = operator.preconditioner(diagonal, commonPressureMode); preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
+		var preconditioner = operator.preconditioner(diagonal, commonPressureMode,internalCoarseRows); preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
 		double residual = rms(r), rz = dot(r, z); int iterations = 0;
 		for (; residual > tolerance && iterations < domain.config.maxPressureIterations();) {
 			double denominator = operator.applyWithWork(direction, applied);

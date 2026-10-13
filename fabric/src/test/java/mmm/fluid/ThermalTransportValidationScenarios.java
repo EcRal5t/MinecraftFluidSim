@@ -475,15 +475,24 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				&& target.chemicalParcels.record(0).equals(liquid), "invalid thermal restore published a partial target");
 		target.restoreThermalParticleState(snapshot, registry);
 		var restored = target.exportThermalParticleState();
+		var sourceContext = source.thermalMarkerContext();
+		var targetContext = target.thermalMarkerContext();
+		boolean sameTemperatures = source.particleCount() == target.particleCount();
+		for (int marker = 0; sameTemperatures && marker < source.particleCount(); marker++) {
+			sameTemperatures = Double.doubleToRawLongBits(source.thermalState.temperature(marker, sourceContext))
+					== Double.doubleToRawLongBits(target.thermalState.temperature(marker, targetContext));
+		}
 		require(Arrays.equals(snapshot.copyInternalEnergy(), restored.copyInternalEnergy())
 				&& Arrays.equals(snapshot.copyActiveParcelEnergy(), restored.copyActiveParcelEnergy())
 				&& Arrays.equals(snapshot.copyDepositEnergy(), restored.copyDepositEnergy())
 				&& source.exactInternalEnergy().equals(target.exactInternalEnergy()) && source.thermalAudit().equals(target.thermalAudit())
-				&& target.thermalState.temperature(0, target.thermalMarkerContext()) == 1
+				&& sameTemperatures
 				&& function.stateForInternalEnergy(thermal, mass, species,
 						deposited ? restored.copyDepositEnergy()[0] : restored.copyActiveParcelEnergy()[0]).temperatureK() == 400
 				&& target.exactInternalEnergy().equals(target.thermalAudit().expectedInventory()),
-				"thermal restore modeled placeholder grain U instead of preserving the valid snapshot and its temperatures");
+				"thermal restore modeled placeholder grain U instead of preserving the valid snapshot and its temperatures"
+						+ ": sourceFirstT=" + source.thermalState.temperature(0, sourceContext)
+						+ ", targetFirstT=" + target.thermalState.temperature(0, targetContext));
 	}
 
 	static void granularExternalExtractionRounding() {

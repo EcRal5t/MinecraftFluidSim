@@ -27,7 +27,7 @@ final class CellVelocityConstraintOperator {
 	private final double[] inverseMass, storage, coefficients, coefficientLow;
 	private final int[] offsets, indices;
 	private final double[] response;
-	private final SignedDyadic[] exactCoefficients, exactInverseMass, exactStorage, exactResponse;
+	private final SignedDyadic[] exactCoefficients, exactInverseMass, exactStorage, exactResponse, exactMassResponse;
 
 	CellVelocityConstraintOperator(CellAffineVelocity basis, List<Row> rows) {
 		if (basis == null || rows == null) throw new IllegalArgumentException("Constraint snapshot is missing");
@@ -63,6 +63,7 @@ final class CellVelocityConstraintOperator {
 		exactInverseMass = expanded ? new SignedDyadic[markerCount] : null;
 		exactStorage = expanded ? new SignedDyadic[storage.length] : null;
 		exactResponse = expanded ? new SignedDyadic[response.length] : null;
+		exactMassResponse = expanded ? new SignedDyadic[response.length] : null;
 		if (expanded) {
 			for (int entry = 0; entry < indices.length; entry++) exactCoefficients[entry] = SignedDyadic.of(coefficients[entry]).add(SignedDyadic.of(coefficientLow[entry]));
 			for (int marker = 0; marker < markerCount; marker++) exactInverseMass[marker] = SignedDyadic.of(inverseMass[marker]);
@@ -117,6 +118,13 @@ final class CellVelocityConstraintOperator {
 		verifyCoarseEnergy(mode, image, energy);
 		if (energy.signum() <= 0) throw blocked("Nonpositive common-pressure coarse energy");
 		result.balance(mode, image, energy); return result;
+	}
+	ConstraintGramPreconditioner preconditioner(double[] diagonal, double[] commonMode, List<int[]> internalRows) {
+		var result = preconditioner(diagonal, commonMode);
+		if (!internalRows.isEmpty()) result.blockProjection(new ConstraintBlockProjection(result, internalRows, markerCount,
+				inverseMass, offsets, indices, coefficients, coefficientLow, diagonal));
+		result.refine();
+		return result;
 	}
 
 	/** Independent positive mass/storage work, with forward rounding of the actual operator. */
@@ -220,10 +228,12 @@ final class CellVelocityConstraintOperator {
 		if (pressure == result) throw new IllegalArgumentException("Aliased constraint vectors");
 		if (exactCoefficients != null) {
 			prepareExactResponse(pressure);
+			for (int index = 0; index < exactResponse.length; index++)
+				exactMassResponse[index] = exactResponse[index].multiply(exactInverseMass[index % markerCount]);
 			for (int row = 0; row < storage.length; row++) {
 				SignedDyadic value = exactStorage[row].multiply(SignedDyadic.of(pressure[row]));
 				for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
-					int index = indices[entry]; value = value.add(exactCoefficients[entry].multiply(exactInverseMass[index % markerCount]).multiply(exactResponse[index]));
+					int index = indices[entry]; value = value.add(exactCoefficients[entry].multiply(exactMassResponse[index]));
 				}
 				result[row] = value.toDouble();
 			}
@@ -247,7 +257,7 @@ final class CellVelocityConstraintOperator {
 		if(exactCoefficients!=null) {
 			SignedDyadic work=SignedDyadic.ZERO;
 			for(int index=0;index<exactResponse.length;index++)
-				work=work.add(exactResponse[index].multiply(exactResponse[index]).multiply(exactInverseMass[index%markerCount]));
+				work=work.add(exactResponse[index].multiply(exactMassResponse[index]));
 			for(int row=0;row<storage.length;row++) {
 				var value=SignedDyadic.of(pressure[row]); work=work.add(exactStorage[row].multiply(value).multiply(value));
 			}

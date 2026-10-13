@@ -341,6 +341,14 @@ public final class MarkerPressureValidation {
 		incompressible.diagonal(diagonal); incompressible.preconditioner(diagonal).apply(first, firstResult);
 		incompressible.preconditioner(diagonal, commonMode).apply(first, secondResult);
 		for (int row = 0; row < 2; row++) near(firstResult[row], secondResult[row], 0, "Zero-storage common mode keeps SGS");
+		var local = incompressible.preconditioner(diagonal, new double[2], java.util.List.of(new int[]{0, 1}));
+		local.apply(first, firstResult); local.apply(second, secondResult);
+		near(dot(first, secondResult), dot(second, firstResult), 2e-12, "Balanced local pressure symmetry");
+		if (!(dot(first, firstResult) > 0)) throw new AssertionError("Balanced local pressure lost positive work");
+		for (int row = 0; row < 2; row++) {
+			Arrays.fill(unit, 0); unit[row] = 1; incompressible.apply(unit, applied); local.apply(applied, firstResult);
+			for (int other = 0; other < 2; other++) near(firstResult[other], unit[other], 2e-12, "Local coarse pressure exact response");
+		}
 	}
 
 	static void cellAffineVelocityPreservesResolvedMotion() {
