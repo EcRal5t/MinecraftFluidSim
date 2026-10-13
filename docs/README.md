@@ -22,6 +22,7 @@
 
 - [按需求和故障找代码](maintenance/routing.md)：游戏入口、客户端、物理模块和诊断路径。
 - [验证指南](maintenance/validation.md)：按改动选择测试、静态检查与 GPU 验证。
+- [构建输出管理](maintenance/build-outputs.md)：构建缓存、实验输出、本地归档与清理方式。
 - [正常操作 fuzzer](maintenance/fuzz-harness.md)：随机操作与极端状态下的强制中断排查工具、模式与覆盖边界。
 - [命令速查](maintenance/commands.md)：游戏内开发、诊断和恢复命令。
 - [Python 工具](maintenance/pytool.md)：源码规模、import 和 JFR 分析。

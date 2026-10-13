@@ -48,3 +48,5 @@ Minecraft Java 26.2 / Fabric 流体模组。玩家用外壳方块和控制器围
 `--offline` 使用本机 Gradle 缓存；首次构建缺少依赖时，去掉该参数下载依赖。版本配置在 [gradle.properties](gradle.properties)，模块列表在 [settings.gradle](settings.gradle)。
 
 主模组产物位于 `fabric/build/libs/`，可选 GPU probe 产物位于 `gpu-probe/build/libs/`。部署步骤见 [验收与发布](docs/roadmap/acceptance-and-release.md#release)。
+
+构建缓存、实验输出与本地研究归档的保存位置和清理方式见 [构建输出管理](docs/maintenance/build-outputs.md)。

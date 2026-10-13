@@ -6,6 +6,8 @@
 
 ## 保存位置
 
+下表的主目录 `build/` 资产现保存在 `artifacts/research/build-evidence-20261013.zip` 中，归档内沿用原相对路径。逐文件清单与恢复方式见 [构建输出管理](../maintenance/build-outputs.md#本地历史资料)。后期研究 worktree 的位置仍按表中记录查找。
+
 | 资产 | 位置与用途 |
 |---|---|
 | 修复前对照 | `b58984e`；分支 `codex/free-surface-before-unification` |
