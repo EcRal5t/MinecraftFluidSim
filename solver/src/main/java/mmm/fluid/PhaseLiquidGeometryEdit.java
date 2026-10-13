@@ -78,6 +78,26 @@ record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponent
 		return total.edit();
 	}
 
+	/** Complete component tuples from the float positions that wholesale publication will store. */
+	static List<PhaseLiquidGeometryEdit> afterCellRemap(FluidDomain domain, CellRemapMarkerColumns markers) {
+		var totals = new Moments[domain.cellCount];
+		float h = domain.config.cellSize();
+		for (int cell = 0; cell < totals.length; cell++)
+			totals[cell] = new Moments(cell, domain.geometry.cutCells.mask(cell), h, domain.sizeX, domain.sizeY);
+		for (int ordinal = 0; ordinal < markers.size(); ordinal++) {
+			int cell = markers.cell[ordinal];
+			if (cell < 0 || cell >= totals.length) throw new IllegalArgumentException("Future liquid marker cell is outside the domain");
+			int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY, z = cell / (domain.sizeX * domain.sizeY);
+			totals[cell].add(markers.volume[ordinal],
+					(float) ((x + 0.5 + markers.offset[0][ordinal]) * h),
+					(float) ((y + 0.5 + markers.offset[1][ordinal]) * h),
+					(float) ((z + 0.5 + markers.offset[2][ordinal]) * h));
+		}
+		var edits = new ArrayList<PhaseLiquidGeometryEdit>(totals.length);
+		for (var total : totals) edits.add(total.edit());
+		return List.copyOf(edits);
+	}
+
 	static PhaseLiquidGeometryEdit afterBoiling(PhaseChangeStageSupport.Workspace state, int cell, PhaseRemovalPlan removal) {
 		var changes = new HashMap<Integer, PhaseMarkerAllocation>();
 		for (var allocation : removal.allocations()) if (changes.put(allocation.marker(), allocation) != null)

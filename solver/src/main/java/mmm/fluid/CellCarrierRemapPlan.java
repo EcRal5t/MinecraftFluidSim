@@ -25,6 +25,8 @@ final class CellCarrierRemapPlan {
 	final SignedDyadic energyRoundoff;
 	final boolean[] changedSpeciesCells;
 	final CellRemapMoments.Audit momentAudit;
+	final GasTopologyCoordinator.GasTopologyPlan gasTopology;
+	final boolean commitGranularCollision;
 	private final FluidDomain domain;
 	private final ArrayList<Group>[] input, output;
 	private final int[] outgoingHead, outgoingNext;
@@ -46,6 +48,8 @@ final class CellCarrierRemapPlan {
 		this.domain = domain;
 		this.dt = dt;
 		this.geometryRemap = geometryRemap;
+		commitGranularCollision = !geometryRemap && dt > 0
+				&& domain.granularState != null && domain.granularState.parcels.count() > 0;
 		changedSpeciesCells = new boolean[domain.cellCount];
 		input = (ArrayList<Group>[]) new ArrayList<?>[domain.cellCount];
 		output = (ArrayList<Group>[]) new ArrayList<?>[domain.cellCount];
@@ -129,6 +133,11 @@ final class CellCarrierRemapPlan {
 		markers.copyFrom(ballistic.markers, sampledCount + retainedMarkers.size());
 		energyRoundoff = validateInventories(flux, ballistic);
 		momentAudit = momentAudit();
+		long[] occupied = geometryRemap || domain.granularState == null || domain.granularState.parcels.count() == 0
+				? (domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq())
+				: domain.granularNextCoupling.copySolidSvq();
+		gasTopology = domain.gasState.frame == null ? null : domain.gasTopologyCoordinator.planAfterLiquidEdits(
+				PhaseLiquidGeometryEdit.afterCellRemap(domain, markers), occupied, !geometryRemap && dt > 0);
 	}
 
 	/** A cell without any shared transfer keeps its existing spatial integration rule. */

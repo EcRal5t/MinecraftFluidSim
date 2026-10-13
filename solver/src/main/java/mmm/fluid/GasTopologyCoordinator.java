@@ -86,6 +86,11 @@ final class GasTopologyCoordinator {
 		return planAfterLiquidEdits(List.of(edit));
 	}
 	GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits) {
+		return planAfterLiquidEdits(edits, currentOccupied(), false);
+	}
+	/** A mechanical candidate supplies its actual successor solid occupancy before carrier publication. */
+	GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits, long[] occupied,
+	                                  boolean refineMissingSuccessor) {
 		if (edits == null) throw new IllegalArgumentException("Gas liquid edit list is missing");
 		boolean[] selected = new boolean[domain.cellCount];
 		for (var edit : edits) {
@@ -96,8 +101,8 @@ final class GasTopologyCoordinator {
 		}
 		if (domain.gasState.frame == null) return null;
 		domain.ensureInventoryGrid();
-		return plan(GasRuntimeGeometry.captureLiquidEdits(domain, edits, currentOccupied(),
-				domain.gasState.sealedDomainBoundary), false, null);
+		return plan(GasRuntimeGeometry.captureLiquidEdits(domain, edits, occupied,
+				domain.gasState.sealedDomainBoundary), false, null, refineMissingSuccessor);
 	}
 	private GasRuntimeGeometry capture(PhaseLiquidGeometryEdit edit) {
 		domain.ensureInventoryGrid();
@@ -179,6 +184,10 @@ final class GasTopologyCoordinator {
 		return result;
 	}
 	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit) {
+		return plan(next, deferVolumeWork, edit, false);
+	}
+	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit,
+	                             boolean refineMissingSuccessor) {
 		var old = domain.gasState.frame;
 		boolean thermal = domain.thermalState != null && domain.thermalState.gasModelBound();
 		int count = next.nodeCount(); double[] available = volumes(next);
@@ -206,11 +215,13 @@ final class GasTopologyCoordinator {
 				GasInventory stock = inventory(previous, edit);
 				if (destinations.isEmpty()) {
 					if (stock.isEmpty()) continue;
-					throw new GasTopologyBlockedException("Finite gas stock has no positive successor support: node="
+					String reason = "Finite gas stock has no positive successor support: node="
 							+ previous + ", key=" + old.minimumPiece(previous) + ", standardNanos=" + stock.standardVolumeNanos()
 							+ ", oldVolumeM3=" + old.capacity().chambers().get(previous - 1).cubicMeters()
 							+ ", oldCellLiquid=" + old.liquidStock().get(old.minimumPiece(previous) / 8).volume().toDouble()
-							+ ", nextCellLiquid=" + next.liquidStock().get(old.minimumPiece(previous) / 8).volume().toDouble());
+							+ ", nextCellLiquid=" + next.liquidStock().get(old.minimumPiece(previous) / 8).volume().toDouble();
+					if (refineMissingSuccessor) throw new MechanicalTimeRefinement(2, reason);
+					throw new GasTopologyBlockedException(reason);
 				}
 				var weights = List.copyOf(destinations.values()); var parts = stock.partition(weights);
 				double[] energies = !thermal ? null : stock.isEmpty() ? new double[parts.size()] : partitionEnergy(previous, parts, edit);

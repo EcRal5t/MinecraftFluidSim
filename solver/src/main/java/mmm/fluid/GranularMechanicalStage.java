@@ -30,6 +30,7 @@ final class GranularMechanicalStage {
 
 	private final Workspace state;
 	private final Access access;
+	private boolean collisionPending;
 
 	GranularMechanicalStage(Workspace state, Access access) {
 		this.state = state;
@@ -37,6 +38,7 @@ final class GranularMechanicalStage {
 	}
 
 	GranularMechanics.StepStats predictVelocities(float dt) {
+		collisionPending = false;
 		if (!access.hasGranularInventory()) return null;
 		var granular = access.granularState();
 		int submerged = 0;
@@ -72,6 +74,7 @@ final class GranularMechanicalStage {
 	}
 
 	void previewCollision(float dt) {
+		collisionPending = false;
 		if (!access.hasGranularInventory()) return;
 		GranularDomainState state = access.granularState();
 		// Pressure can accelerate a resting parcel beyond the initial velocity-based time step.
@@ -97,13 +100,20 @@ final class GranularMechanicalStage {
 				throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
 			}
 		}
+		collisionPending = true;
 	}
 
-	/** Applies the already-previewed collision capacity after marker advection. */
+	/** Publishes the preview once, with the occupancy used by the joint liquid/gas candidate. */
+	void requireCollisionPreview() {
+		if (!collisionPending) throw new IllegalStateException("Joint transport requires a granular collision preview");
+	}
+
 	void commitCollision() {
-		if (access.hasGranularInventory()) {
-			access.addBoundaryImpulse(access.granularCollision().commit(access.granularState().parcels));
-		}
+		if (!collisionPending) return;
+		var granular = access.granularState();
+		access.addBoundaryImpulse(access.granularCollision().commit(granular.parcels));
+		access.granularCoupling().rebuild(granular.parcels, granular.deposits);
+		collisionPending = false;
 	}
 
 	GranularMechanics.FluidSample sample(float x, float y, float z) {

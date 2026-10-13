@@ -170,8 +170,8 @@ final class MechanicalStepPipeline {
 		double particleKineticEnergy = captureAudit ? access.carrierKineticEnergyJoules() : 0.0;
 		if (captureAudit) audit.gridToParticleTransferJoules +=
 				particleKineticEnergy - stageKineticEnergy;
-		particleAdvectionStage.advect(dt);
 		double granularCollisionBefore = captureAudit ? access.granularKineticEnergyJoules() : 0;
+		particleAdvectionStage.advect(dt);
 		granularMechanicalStage.commitCollision();
 		if (captureAudit) {
 			double transfer = access.carrierKineticEnergyJoules() - particleKineticEnergy;

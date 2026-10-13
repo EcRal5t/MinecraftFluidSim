@@ -124,6 +124,18 @@ final class CarrierMutationCoordinator {
 			chemistry = domain.chemicalParcels.planMarkerRemap(domain.particles.count(), records, indicators);
 		}
 		double[] energies = domain.thermalState == null ? null : candidate.markers.energy;
+		if (candidate.gasTopology != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(candidate.gasTopology);
+		if (energies != null) {
+			var after = domain.thermalState.auditLedger().withRoundoff(candidate.energyRoundoff);
+			var gas = candidate.gasTopology == null ? null : candidate.gasTopology.thermalPlan();
+			if (gas != null) after = after.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
+					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff());
+			after.expectedInventory();
+		}
+		if (candidate.commitGranularCollision) {
+			domain.granularMechanicalStage.requireCollisionPreview();
+			domain.granularMechanicalStage.commitCollision();
+		}
 		float h = domain.config.cellSize();
 		mmm.compute.CpuWorkBatch.run(count, (from, until) -> {
 			for (int ordinal = from; ordinal < until; ordinal++) {
@@ -147,6 +159,7 @@ final class CarrierMutationCoordinator {
 		if (energies != null) domain.thermalState.restoreLiquidEnergies(energies);
 		domain.particles.setCount(count); domain.bumpCarrierMutationRevision(); domain.gridDirty = true;
 		if (energies != null) domain.thermalState.recordRoundoff(candidate.energyRoundoff);
+		if (candidate.gasTopology != null) domain.gasTopologyCoordinator.commit(candidate.gasTopology);
 	}
 
 	/** Clears the liquid marker column together with its chemistry column after a validated plan. */
