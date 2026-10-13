@@ -681,7 +681,8 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	private static void disconnectedMicroComponentsKeepTheirInventory() {
-		for (boolean full : new boolean[] {false, true}) for (boolean chemical : new boolean[] {false, true}) {
+		for (boolean full : new boolean[] {false, true}) for (int quantaPerCarrier : new int[] {0,1,2}) {
+			boolean chemical=quantaPerCarrier>0;
 			var domain = new FluidDomain(4, 3, 3,
 					new FluidSolverConfig(.5F, 1000, 0, .05F, 400, 1e-5F, .4F, .002F, .8F), 256);
 			byte[] masks = new byte[36]; java.util.Arrays.fill(masks, (byte) 255);
@@ -711,13 +712,21 @@ public final class LiquidVolumeTransportValidation {
 								"test:phase", java.util.Map.of(species.id(), 1), java.util.Map.of(product.id(), 1), mmm.chemistry.ExactRational.ZERO)));
 				domain.bindChemistry(registry);
 				for (int p = 0; p < 9; p++) {
-					var mixture = new mmm.chemistry.ChemicalMixtureRecord(new int[] {0}, new long[] {1}, 0);
+					var mixture = new mmm.chemistry.ChemicalMixtureRecord(new int[] {0}, new long[] {quantaPerCarrier}, 0);
 					domain.chemicalParcels.assign(p, mixture.withMassResidualKilograms(domain.unitScale.kilograms(masses[p])
 							- mixture.exactSpeciesMassKilograms(registry).toDouble()), false);
 				}
 			} else domain.restoreParticleState(new FlipParticleState(4, 3, 3, .5F, 9, .75F + points[35], points, velocity, masks));
 			domain.sealDomainBoundary(); double before = domain.totalVolumeExact();
-			var stats = domain.stepMechanicsOnly(); double entered = 0;
+			FluidDomain.StepStats stats;
+			try { stats=domain.stepMechanicsOnly(); }
+			catch(CellRemapSpeciesAllocation.Unavailable unavailable) {
+				if(quantaPerCarrier!=1 || domain.particleCount()!=9 || domain.totalVolumeExact()!=before)throw unavailable;
+				for(int p=0;p<9;p++)if(domain.chemicalParcels.record(p).totalQuanta()!=1)throw new AssertionError("Rejected component sampling changed chemical inventory");
+				System.out.println("Component chemical sampling rejected its insufficient nine-quanta inventory: "+unavailable.getMessage());
+				continue;
+			}
+			double entered = 0;
 			for (int p = 0; p < domain.particleCount(); p++) if (domain.particleCellIndex(p) == 18) {
 				if (CellRemapMicroTopology.markerSupport(domain, p) != 1)
 					throw new AssertionError("Shared liquid crossed a solid micro wall into the isolated corner");
@@ -732,20 +741,55 @@ public final class LiquidVolumeTransportValidation {
 
 	private static void chemicalFloatTailsShareExistingQuanta() {
 		for (long quanta : new long[] {2, 3}) for (float speed : new float[] {.001F, .1F}) {
-			var domain = lowQuantumTailDomain(speed, quanta); double before = domain.totalVolumeExact();
-			var stats = domain.stepMechanicsOnly(); int sourceCount = 0; long sourceQuanta = 0, totalQuanta = 0;
-			SignedDyadic sourceVolume = SignedDyadic.ZERO;
-			for (int p = 0; p < domain.particleCount(); p++) {
-				totalQuanta += domain.chemicalParcels.record(p).totalQuanta();
-				if (domain.particleCellIndex(p) == 17) { sourceCount++; sourceVolume = sourceVolume.add(SignedDyadic.of(domain.particles.volume(p))); sourceQuanta += domain.chemicalParcels.record(p).totalQuanta(); }
-				if (domain.particleCellIndex(p) == 18 && CellRemapMicroTopology.markerSupport(domain, p) != 1)
-					throw new AssertionError("Chemical volume-tail correction crossed the solid micro wall");
+			var domain = lowQuantumTailDomain(speed, quanta); domain.rebuildGridFromParticles();
+			var flux=new ConservativeLiquidFlux(4,3,3); flux.geometry(new LiquidFluxGeometry(domain)); flux.plan(domain.markerGrid.exactCellMarkerVolume,domain.geometry.solid,0,domain.markerGrid.exactCellVolumeInventory);
+			long proposedUnits=speed==.001F ? 1693 : 169300;
+			for(int f=0;f<flux.flux.length;f++)if(flux.left[f]==17 && flux.right[f]==18) {
+				flux.velocity[f]=speed; flux.exactFlux[f]=SignedDyadic.of(proposedUnits,-26);
 			}
-			var amount = SignedDyadic.of(.75).subtract(sourceVolume);
+			var ports=new CellRemapPorts(domain,flux,new BallisticLiquidRemap(36),true,null);
+			var amount=SignedDyadic.of(proposedUnits,-26); var retained=SignedDyadic.of(.75).subtract(amount);
+			if(!CellRemapChemicalSupport.fits(quanta,new SignedDyadic[]{amount,retained}))ports.reduceChemical(17,255,retained,true);
+			amount=SignedDyadic.ZERO; for(var port:ports.outgoing(17,255))amount=amount.add(port.volume);
 			long expectedUnits = speed == .001F ? quanta == 2 ? 1692 : 1693 : 169300;
-			if (domain.totalVolumeExact() != before || totalQuanta != quanta + 1 || sourceCount != quanta - 1 || sourceQuanta != quanta - 1
-					|| !amount.equals(SignedDyadic.of(expectedUnits, -26)) || stats.substeps() != 1)
-				throw new AssertionError("Low-quanta flow did not choose the nearest conservative float-representable retained share");
+			if(!amount.equals(SignedDyadic.of(expectedUnits,-26)) || !CellRemapChemicalSupport.fits(quanta,new SignedDyadic[]{amount,SignedDyadic.of(.75).subtract(amount)}))
+				throw new AssertionError("Chemical ports lost the nearest conservative float-representable retained share");
+			if(expectedUnits<proposedUnits && CellRemapChemicalSupport.fits(quanta,new SignedDyadic[]{SignedDyadic.of(expectedUnits+1,-26),SignedDyadic.of(.75).subtract(SignedDyadic.of(expectedUnits+1,-26))}))
+				throw new AssertionError("Chemical port reduction skipped a closer representable share");
+		}
+		var first=new CellSpeciesInventory(); first.add(new mmm.chemistry.ChemicalMixtureRecord(new int[]{0},new long[]{3},0));
+		var second=new CellSpeciesInventory(); second.add(new mmm.chemistry.ChemicalMixtureRecord(new int[]{1},new long[]{2},0));
+		var allocated=CellRemapSpeciesAllocation.allocate(java.util.List.of(
+				new CellRemapSpeciesAllocation.Source(first,new SignedDyadic[]{SignedDyadic.of(.1),SignedDyadic.of(.9)},new int[]{1,2}),
+				new CellRemapSpeciesAllocation.Source(second,new SignedDyadic[]{SignedDyadic.of(.5),SignedDyadic.of(.5)},new int[]{0,1})),new int[]{2,2,1});
+		long[] totals=new long[3]; int[][] targets={{1,2},{0,1}};
+		for(int s=0;s<2;s++) {
+			long source=0; for(int p=0;p<2;p++)if(allocated[s][p]!=null) {
+				if(allocated[s][p].entryCount()!=1 || allocated[s][p].speciesHandle(0)!=s)throw new AssertionError("Chemical allocation changed source species lineage");
+				source+=allocated[s][p].totalQuanta(); totals[targets[s][p]]+=allocated[s][p].totalQuanta();
+			}
+			if(source!=(s==0 ? 3 : 2))throw new AssertionError("Chemical allocation changed source inventory");
+		}
+		if(!java.util.Arrays.equals(totals,new long[]{2,2,1}))throw new AssertionError("Chemical allocation lost its alternating source path");
+		var rule=CellRemapChemicalSupport.quadrature(SignedDyadic.of(.75),8,5,5);
+		SignedDyadic ruleVolume=SignedDyadic.ZERO; for(float volume:rule) { if(!(volume>0))throw new AssertionError("Chemical rule contains a nonpositive weight"); ruleVolume=ruleVolume.add(SignedDyadic.of(volume)); }
+		if(rule.size()!=5 || !ruleVolume.equals(SignedDyadic.of(.75)))throw new AssertionError("Chemical quadrature discarded a usable fifth node");
+		for(long quanta:new long[]{2,3}) {
+			var domain=lowQuantumTailDomain(.1F,quanta,(byte)0); domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+			long revision=domain.carrierMutationRevision(); var composition=new mmm.chemistry.ChemicalMixtureRecord[]{domain.chemicalParcels.record(0),domain.chemicalParcels.record(1)};
+			var original=new double[2][8];
+			for(int p=0;p<2;p++)original[p]=new double[]{domain.particles.positionX(p),domain.particles.positionY(p),domain.particles.positionZ(p),domain.particles.volume(p),domain.particles.mass(p),domain.particles.velocityX(p),domain.particles.velocityY(p),domain.particles.velocityZ(p)};
+			var flux=new ConservativeLiquidFlux(4,3,3); flux.geometry(new LiquidFluxGeometry(domain));
+			for(int f=0;f<flux.flux.length;f++)if(flux.left[f]==17 && flux.right[f]==18)flux.velocity[f]=.1F;
+			flux.plan(domain.markerGrid.exactCellMarkerVolume,domain.geometry.solid,.05F/domain.config.cellSize(),domain.markerGrid.exactCellVolumeInventory);
+			boolean rejected=false;
+			try { new CellCarrierRemapPlan(domain,flux,.05F,new BallisticLiquidRemap(36)); }
+			catch(CellRemapSpeciesAllocation.Unavailable unavailable) { rejected=true; }
+			if(!rejected || domain.particleCount()!=2 || domain.carrierMutationRevision()!=revision)throw new AssertionError("Insufficient chemical nodes did not reject before publication");
+			for(int p=0;p<2;p++) {
+				var current=new double[]{domain.particles.positionX(p),domain.particles.positionY(p),domain.particles.positionZ(p),domain.particles.volume(p),domain.particles.mass(p),domain.particles.velocityX(p),domain.particles.velocityY(p),domain.particles.velocityZ(p)};
+				if(!java.util.Arrays.equals(original[p],current) || !composition[p].equals(domain.chemicalParcels.record(p)))throw new AssertionError("Rejected chemical node allocation changed source columns");
+			}
 		}
 	}
 

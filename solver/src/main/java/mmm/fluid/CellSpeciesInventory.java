@@ -28,6 +28,11 @@ final class CellSpeciesInventory {
 	void add(ChemicalMixtureRecord incoming) {
 		for (int entry = 0; entry < incoming.entryCount(); entry++) add(incoming.speciesHandle(entry), incoming.amountAt(entry));
 	}
+	void includeHandles(ChemicalMixtureRecord incoming) {
+		for(int entry=0;entry<incoming.entryCount();entry++)
+			if(Arrays.binarySearch(handles,0,count,incoming.speciesHandle(entry))<0) add(incoming.speciesHandle(entry),1);
+	}
+	void clear() { count=0; total=0; record=null; }
 	private void add(int handle, long amount) {
 		int entry = Arrays.binarySearch(handles, 0, count, handle);
 		if (entry >= 0) amounts[entry] = Math.addExact(amounts[entry], amount);

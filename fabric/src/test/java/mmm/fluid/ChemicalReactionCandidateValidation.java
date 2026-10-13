@@ -113,7 +113,9 @@ final class ChemicalReactionCandidateValidation {
 			for (boolean reverse : new boolean[]{false, true}) {
 				var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(
 						cellSize, 1_000, 0, 0.05F, 100, 1e-5F, 0.45F, 0.002F, 0.8F), 216);
-				domain.setVolume(1, 1, 1, 0.25F);
+				domain.restoreParticleState(new FlipParticleState(3,3,3,cellSize,2,.25F,
+						new float[]{1.25F*cellSize,1.5F*cellSize,1.5F*cellSize,.125F,1.75F*cellSize,1.5F*cellSize,1.5F*cellSize,.125F},
+						new float[6],new byte[27]));
 				domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 				domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 				require(domain.particleCount() == 2, "reaction momentum fixture requires two carriers");
