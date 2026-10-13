@@ -46,7 +46,7 @@ final class GranularActiveContacts {
 		driftError = new double[count][3]; velocityError = new double[count][3];
 		sweptCells = new BitSet[sizeX * sizeY * sizeZ]; registrations = new int[count][];
 		sweptMinimum = new double[count][3]; sweptMaximum = new double[count][3];
-		int[] heads = new int[sizeX * sizeY * sizeZ], next = new int[count]; Arrays.fill(heads, -1);
+		var admission = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, h, count);
 		for (int i = 0; i < count; i++) {
 			var p = parcels.parcel(i); position[i] = new double[]{p.x(), p.y(), p.z()};
 			trajectoryOrigin[i] = position[i].clone();
@@ -60,14 +60,9 @@ final class GranularActiveContacts {
 				distanceLimit[i] += .5 * Math.ulp(endpoint);
 			}
 			mass[i] = p.mass(); radius[i] = GranularMechanics.representativeRadius(p.solidVolumeSvq(), h);
-			pointCandidates(p.x(), p.y(), p.z(), heads, next);
-			for (int j = candidates.nextSetBit(0); j >= 0; j = candidates.nextSetBit(j + 1)) {
-				spend();
-				if (overlap(position[i], radius[i], position[j], radius[j]))
-					throw new IllegalStateException("Active granular contact starts with overlapping spheres " + j + "," + i);
-			}
-			int cell = centerCell(p.x(), p.y(), p.z());
-			next[i] = heads[cell]; heads[cell] = i;
+			int overlapping = admission.firstOverlap(p.x(), p.y(), p.z(), p.solidVolumeSvq(), this::spend);
+			if (overlapping >= 0) throw new IllegalStateException("Active granular contact starts with overlapping spheres " + overlapping + "," + i);
+			admission.append(p.x(), p.y(), p.z(), p.solidVolumeSvq());
 		}
 		for (int i = 0; i < count; i++) registerSweep(i, 0);
 	}
@@ -107,7 +102,7 @@ final class GranularActiveContacts {
 			for (int i = projected.nextSetBit(0); i >= 0; i = projected.nextSetBit(i + 1)) {
 				versions[i]++; registerSweep(i, event.time());
 			}
-			for (int i = projected.nextSetBit(0); i >= 0; i = projected.nextSetBit(i + 1)) reschedule(i, event.time());
+			for (int i = projected.nextSetBit(0); i >= 0; i = projected.nextSetBit(i + 1)) reschedule(i, event.time(), projected);
 		}
 		for (int i = 0; i < parcels.count(); i++) advance(i, duration);
 		var endpoints = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, (float) h, parcels.count());
@@ -150,11 +145,11 @@ final class GranularActiveContacts {
 				for (var normal : fixed.contactNormals(position[i], radius[i])) rows.add(new GranularContactCompression.Row(local[i], -1, normal));
 			sweepCandidates(i);
 			for (int j = candidates.nextSetBit(0); j >= 0; j = candidates.nextSetBit(j + 1)) if (j != i) {
+				if (local[j] >= 0 && local[j] < visit || event.second() >= 0
+						&& (i == event.first() && j == event.second() || i == event.second() && j == event.first())) continue;
 				spend(); advance(j, event.time());
 				if (!touching(position[i], radius[i], position[j], radius[j])) continue;
 				if (local[j] < 0) { local[j] = members.size(); members.add(j); }
-				if (i > j || event.second() >= 0
-						&& (i == event.first() && j == event.second() || i == event.second() && j == event.first())) continue;
 				double[] normal = new double[3]; double length = 0;
 				for (int axis = 0; axis < 3; axis++) { normal[axis] = position[j][axis] - position[i][axis]; length = Math.hypot(length, normal[axis]); }
 				if (!(length > 0)) throw new IllegalStateException("Granular contact component has coincident centers");
@@ -166,7 +161,7 @@ final class GranularActiveContacts {
 		for (int i = 0; i < members.size(); i++) { int global = members.get(i); weights[i] = mass[global]; d[i] = drift[global]; v[i] = velocity[global]; }
 		var constraints = rows.toArray(GranularContactCompression.Row[]::new);
 		var compression = GranularContactCompression.solve(weights, d, constraints, this::spend);
-		var response = Arrays.deepEquals(d, v) ? compression : GranularContactCompression.solve(weights, v, constraints, this::spend);
+		var response = Arrays.deepEquals(d, v) ? compression : GranularContactCompression.solve(weights, v, constraints, this::spend, compression.impulses());
 		var fixedRows = new ArrayList<ArrayList<Integer>>(members.size());
 		for (int i = 0; i < members.size(); i++) fixedRows.add(new ArrayList<>());
 		for (int row = 0; row < constraints.length; row++) {
@@ -197,9 +192,9 @@ final class GranularActiveContacts {
 		return projected;
 	}
 
-	private void reschedule(int i, double time) {
+	private void reschedule(int i, double time, BitSet projected) {
 		scheduleFixed(i, time); sweepCandidates(i);
-		for (int j = candidates.nextSetBit(0); j >= 0; j = candidates.nextSetBit(j + 1)) if (j != i) {
+		for (int j = candidates.nextSetBit(0); j >= 0; j = candidates.nextSetBit(j + 1)) if (j != i && (i < j || !projected.get(j))) {
 			spend(); if (sweepsIntersect(i, j)) schedulePair(Math.min(i, j), Math.max(i, j), time);
 		}
 	}
@@ -320,9 +315,6 @@ final class GranularActiveContacts {
 		throw new MechanicalTimeRefinement(2, "Joint granular contact endpoint lacks a binary32 placement: parcel=" + i
 				+ ", position=" + Arrays.toString(position[i]) + ", nearest=" + Arrays.toString(nearest)
 				+ ", radius=" + radius[i] + ", time=" + eventTime + "/" + duration);
-	}
-	private static boolean overlap(double[] p, float r, double[] q, float s) {
-		return GranularSpawnAdmission.interiorsOverlap(p[0], p[1], p[2], r, q[0], q[1], q[2], s);
 	}
 	private static SignedDyadic exactDot(double[] first, double[] second) {
 		SignedDyadic value = SignedDyadic.ZERO;

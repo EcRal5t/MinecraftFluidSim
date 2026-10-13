@@ -847,6 +847,13 @@ public final class GranularCarrierValidation {
 					+ mass[1] * (result.gapError()[0] + result.gapError()[1]) + Math.ulp(expected) + Math.ulp(result.impulses()[1]);
 			require(Math.abs(result.impulses()[1] - expected) <= bound, "scaled contact reaction lost its physical kg unit");
 		}
+		var seededRows = new GranularContactCompression.Row[]{floor, pair};
+		double[][] terminal = {{0, 0, 0}, {0, -3.421238818448203, 0}};
+		var cold = compressContacts(new double[]{2, 3}, terminal, seededRows);
+		var warm = GranularContactCompression.solve(new double[]{2, 3}, terminal, seededRows, contactBudget(), new double[]{2.45, 1.47});
+		checkContactCertificate(warm, seededRows);
+		for (int i = 0; i < 2; i++) require(Math.abs(warm.values()[i][1] - cold.values()[i][1])
+				<= warm.arithmeticError()[i][1] + cold.arithmeticError()[i][1], "contact impulse initial guess changed the terminal projection");
 		double[] masses = {2, 3, 5}; double[][] input = {{1, .25, 0}, {0, .25, 0}, {-1, .25, 0}};
 		var chain = new GranularContactCompression.Row[]{
 				new GranularContactCompression.Row(0, 1, new double[]{1, 0, 0}),
@@ -917,7 +924,7 @@ public final class GranularCarrierValidation {
 		double coneBound = java.util.Arrays.stream(result.gapError()).sum() + java.util.Arrays.stream(reference.gapError()).sum();
 		for (int i = 0; i < mass.length; i++) for (int a = 0; a < 3; a++)
 			require(Math.abs(result.values()[i][a] - reference.values()[i][a]) <= coneBound
-					+ result.arithmeticError()[i][a] + reference.arithmeticError()[i][a], "coordinate and independent exact contact projections disagree");
+					+ result.arithmeticError()[i][a] + reference.arithmeticError()[i][a], "common and independent exact contact projections disagree");
 		return result;
 	}
 

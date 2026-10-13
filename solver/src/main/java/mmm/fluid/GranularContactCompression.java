@@ -69,6 +69,10 @@ final class GranularContactCompression {
 	}
 
 	static Result solve(double[] mass, double[][] input, Row[] rows, Runnable spend) {
+		return solve(mass, input, rows, spend, null);
+	}
+
+	static Result solve(double[] mass, double[][] input, Row[] rows, Runnable spend, double[] initialImpulses) {
 		if (mass.length != input.length) throw new IllegalArgumentException("Contact input size mismatch");
 		double[] physicalMass = mass;
 		double largestMass = 0;
@@ -111,7 +115,17 @@ final class GranularContactCompression {
 			if (!(diagonal > 0 && Double.isFinite(diagonal)))
 				throw new MechanicalTimeRefinement(2, "Unrepresentable contact inverse mass");
 		}
-		Coordinates coordinates = null;
+		if (initialImpulses != null) {
+			if (initialImpulses.length != rows.length) throw new IllegalArgumentException("Contact impulse input size mismatch");
+			for (int k = 0; k < rows.length; k++) {
+				spend.run(); double impulse = initialImpulses[k];
+				if (!(Double.isFinite(impulse) && impulse >= 0)) throw new IllegalArgumentException("Invalid initial contact impulse");
+				lambda[k] = Math.scalb(impulse, -massExponent);
+				if (!Double.isFinite(lambda[k]) || impulse > 0 && lambda[k] == 0)
+					throw new MechanicalTimeRefinement(2, "Unrepresentable initial contact impulse");
+			}
+		}
+		ActiveFace activeFace = null;
 		while (true) {
 			// Each sweep reconstructs from the original input, so roundoff cannot become a new source velocity.
 			progress.phase = "reconstruct";
@@ -143,12 +157,9 @@ final class GranularContactCompression {
 				}
 				return new Result(values, physicalImpulse, gapError, error);
 			}
-			boolean changed = false;
-			progress.phase = "coordinates"; progress.sweeps++;
-			if (coordinates == null) coordinates = new Coordinates(mass, input, rows, spend);
-			for (int k = 0; k < rows.length; k++) {
-				spend.run(); changed |= coordinates.update(k, lambda, spend);
-			}
+			progress.phase = "active-face"; progress.sweeps++;
+			if (activeFace == null) activeFace = new ActiveFace(mass, input, rows, lambda, spend);
+			boolean changed = activeFace.update(lambda, spend);
 			if (!changed) throw new MechanicalTimeRefinement(2, "Contact impulse lattice cannot certify the common cone");
 		}
 	}
@@ -158,15 +169,19 @@ final class GranularContactCompression {
 		return Double.isFinite(g) && Double.isFinite(bound) && g >= -bound;
 	}
 
-	/** Exact source momentum keeps coordinate gradients independent of rounded observed velocities. */
-	private static final class Coordinates {
+	/** Bound-constrained PCG uses actual source momentum for every residual refresh. */
+	private static final class ActiveFace {
 		private final Row[] rows;
 		private final SignedDyadic[] mass;
 		private final SignedDyadic[][] momentum, normal;
 		private final int[][] axes;
 		private final ExactRational[] inverseDiagonal;
+		private boolean[] free;
+		private double[] direction;
+		private SignedDyadic previousRho;
+		private boolean restart = true;
 
-		Coordinates(double[] weights, double[][] input, Row[] rows, Runnable spend) {
+		ActiveFace(double[] weights, double[][] input, Row[] rows, double[] lambda, Runnable spend) {
 			this.rows = rows; mass = new SignedDyadic[weights.length]; momentum = new SignedDyadic[weights.length][3];
 			normal = new SignedDyadic[rows.length][3]; axes = new int[rows.length][];
 			inverseDiagonal = new ExactRational[rows.length];
@@ -185,23 +200,113 @@ final class GranularContactCompression {
 				spend.run(); var diagonal = ratio(norm, mass[rows[k].first()]);
 				if (rows[k].second() >= 0) { spend.run(); diagonal = diagonal.add(ratio(norm, mass[rows[k].second()])); }
 				inverseDiagonal[k] = new ExactRational(diagonal.denominator(), diagonal.numerator());
+				if (lambda[k] > 0) {
+					spend.run(); Row row = rows[k]; var impulse = SignedDyadic.of(lambda[k]);
+					add(k, row.first(), row.second() < 0 ? impulse : impulse.negate(), spend);
+					if (row.second() >= 0) add(k, row.second(), impulse, spend);
+				}
 			}
 		}
 
-		boolean update(int k, double[] lambda, Runnable spend) {
-			Row row = rows[k];
-			var gradient = ratio(dot(k, row.first(), spend), mass[row.first()]);
-			if (row.second() >= 0) gradient = ratio(dot(k, row.second(), spend), mass[row.second()]).subtract(gradient);
-			var old = SignedDyadic.of(lambda[k]);
-			var optimum = ratio(old, SignedDyadic.of(1)).subtract(gradient.multiply(inverseDiagonal[k]));
-			double next = optimum.signum() <= 0 ? 0 : optimum.toDouble();
-			if (!Double.isFinite(next) || optimum.signum() > 0 && next == 0)
-				throw new MechanicalTimeRefinement(2, "Unrepresentable contact coordinate impulse");
-			if (next == lambda[k]) return false;
-			var delta = SignedDyadic.of(next).subtract(old); lambda[k] = next;
-			add(k, row.first(), row.second() < 0 ? delta : delta.negate(), spend);
-			if (row.second() >= 0) add(k, row.second(), delta, spend);
-			return true;
+		boolean update(double[] lambda, Runnable spend) {
+			double[] gradient = new double[rows.length], steepest = new double[rows.length];
+			boolean[] nextFree = new boolean[rows.length]; var rho = SignedDyadic.ZERO;
+			for (int k = 0; k < rows.length; k++) {
+				spend.run(); Row row = rows[k];
+				var g = ratio(dot(k, row.first(), spend), mass[row.first()]);
+				if (row.second() >= 0) g = ratio(dot(k, row.second(), spend), mass[row.second()]).subtract(g);
+				gradient[k] = g.toDouble(); nextFree[k] = lambda[k] > 0 || g.signum() <= 0;
+				if (!Double.isFinite(gradient[k]))
+					throw new MechanicalTimeRefinement(2, "Unrepresentable contact active-face residual");
+				if (nextFree[k]) {
+					steepest[k] = g.multiply(inverseDiagonal[k]).multiply(-1).toDouble();
+					if (!Double.isFinite(steepest[k]))
+						throw new MechanicalTimeRefinement(2, "Unrepresentable contact active-face residual");
+					rho = rho.subtract(SignedDyadic.of(gradient[k]).multiply(SignedDyadic.of(steepest[k])));
+				}
+			}
+			restart |= !java.util.Arrays.equals(free, nextFree); free = nextFree;
+			boolean continued = !restart && previousRho != null && previousRho.signum() > 0;
+			if (!continued) direction = steepest.clone();
+			else {
+				double beta = ratio(rho, previousRho).toDouble();
+				for (int k = 0; k < rows.length; k++) {
+					spend.run(); direction[k] = free[k] ? Math.fma(beta, direction[k], steepest[k]) : 0;
+				}
+			}
+			// A face change or a direction out of a zero bound starts a new conjugate sequence.
+			boolean descending = true; var derivative = SignedDyadic.ZERO;
+			for (int k = 0; k < rows.length; k++) {
+				spend.run(); descending &= Double.isFinite(direction[k]) && !(lambda[k] == 0 && direction[k] < 0);
+				if (Double.isFinite(direction[k])) derivative = derivative.add(SignedDyadic.of(gradient[k]).multiply(SignedDyadic.of(direction[k])));
+			}
+			if (!descending || derivative.signum() >= 0) { direction = steepest.clone(); continued = false; }
+			previousRho = rho; restart = false;
+			double largest = 0;
+			for (double p : direction) { spend.run(); largest = Math.max(largest, Math.abs(p)); }
+			if (!(largest > 0 && Double.isFinite(largest))) return false;
+			int exponent = Math.getExponent(largest);
+			if (largest < Double.MIN_NORMAL) exponent = Math.getExponent(Math.scalb(largest, 54)) - 54;
+			double[] normalized = new double[rows.length]; derivative = SignedDyadic.ZERO;
+			for (int k = 0; k < rows.length; k++) {
+				spend.run(); normalized[k] = Math.scalb(direction[k], -exponent);
+				derivative = derivative.add(SignedDyadic.of(gradient[k]).multiply(SignedDyadic.of(normalized[k])));
+			}
+			var work = work(normalized, spend);
+			if (derivative.signum() >= 0 || work.signum() <= 0) {
+				if (continued) { restart = true; return true; }
+				throw new MechanicalTimeRefinement(2, "Unrepresentable contact active-face descent");
+			}
+			var step = ratio(derivative.negate(), work); ExactRational bound = null;
+			for (int k = 0; k < rows.length; k++) {
+				spend.run(); if (normalized[k] >= 0) continue;
+				var limit = ratio(SignedDyadic.of(lambda[k]), SignedDyadic.of(-normalized[k]));
+				if (bound == null || limit.compareTo(bound) < 0) bound = limit;
+			}
+			if (bound != null && step.compareTo(bound) >= 0) { step = bound; restart = true; }
+			boolean changed = false;
+			for (int k = 0; k < rows.length; k++) {
+				spend.run(); if (normalized[k] == 0) continue;
+				var old = SignedDyadic.of(lambda[k]);
+				var candidate = ratio(old, SignedDyadic.of(1)).add(ratio(SignedDyadic.of(normalized[k]), SignedDyadic.of(1)).multiply(step));
+				double next = candidate.toDouble();
+				if (candidate.signum() < 0 || !Double.isFinite(next) || candidate.signum() > 0 && next == 0)
+					throw new MechanicalTimeRefinement(2, "Unrepresentable contact active-face impulse");
+				if (next == lambda[k]) continue;
+				var delta = SignedDyadic.of(next).subtract(old); lambda[k] = next; changed = true;
+				Row row = rows[k]; add(k, row.first(), row.second() < 0 ? delta : delta.negate(), spend);
+				if (row.second() >= 0) add(k, row.second(), delta, spend);
+			}
+			if (!changed && continued) { restart = true; return true; }
+			return changed;
+		}
+
+		private SignedDyadic work(double[] direction, Runnable spend) {
+			SignedDyadic[][] impulse = new SignedDyadic[mass.length][3];
+			for (int k = 0; k < rows.length; k++) {
+				spend.run(); if (direction[k] == 0) continue;
+				Row row = rows[k]; var p = SignedDyadic.of(direction[k]);
+				for (int a : axes[k]) {
+					spend.run(); var value = p.multiply(normal[k][a]);
+					var first = row.second() < 0 ? value : value.negate();
+					impulse[row.first()][a] = impulse[row.first()][a] == null ? first : impulse[row.first()][a].add(first);
+					if (row.second() >= 0) {
+						spend.run();
+						impulse[row.second()][a] = impulse[row.second()][a] == null ? value : impulse[row.second()][a].add(value);
+					}
+				}
+			}
+			var result = SignedDyadic.ZERO;
+			for (int i = 0; i < mass.length; i++) {
+				spend.run(); var square = SignedDyadic.ZERO;
+				for (int a = 0; a < 3; a++) if (impulse[i][a] != null) {
+					spend.run(); square = square.add(impulse[i][a].multiply(impulse[i][a]));
+				}
+				double value = ratio(square, mass[i]).toDouble();
+				if (!Double.isFinite(value)) throw new MechanicalTimeRefinement(2, "Unrepresentable contact active-face work");
+				result = result.add(SignedDyadic.of(value));
+			}
+			return result;
 		}
 
 		private SignedDyadic dot(int k, int source, Runnable spend) {

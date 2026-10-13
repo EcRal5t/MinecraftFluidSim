@@ -11,6 +11,7 @@ final class GranularSpawnAdmission {
 	private final float h;
 	private final int[] head, next;
 	private final float[] x, y, z, radius;
+	private float largestRadius;
 	private int count;
 
 	GranularSpawnAdmission(int sizeX, int sizeY, int sizeZ, float h,
@@ -31,21 +32,30 @@ final class GranularSpawnAdmission {
 	}
 
 	boolean allows(float px, float py, float pz, long svq) {
+		return firstOverlap(px, py, pz, svq, () -> { }) < 0;
+	}
+
+	int firstOverlap(float px, float py, float pz, long svq, Runnable visit) {
 		float r = GranularMechanics.representativeRadius(svq, h);
-		int cx = coordinate(px, sizeX), cy = coordinate(py, sizeY), cz = coordinate(pz, sizeZ);
-		// Every representative radius is at most .20h, so only adjacent center cells can overlap.
-		for (int iz = Math.max(0, cz - 1); iz <= Math.min(sizeZ - 1, cz + 1); iz++)
-			for (int iy = Math.max(0, cy - 1); iy <= Math.min(sizeY - 1, cy + 1); iy++)
-				for (int ix = Math.max(0, cx - 1); ix <= Math.min(sizeX - 1, cx + 1); ix++)
-					for (int i = head[(iz * sizeY + iy) * sizeX + ix]; i >= 0; i = next[i])
-						if (interiorsOverlap(px, py, pz, r, x[i], y[i], z[i], radius[i])) return false;
-		return true;
+		double reach = (double) r + largestRadius;
+		int loX = coordinate(Math.nextDown(px - reach), sizeX), hiX = coordinate(Math.nextUp(px + reach), sizeX);
+		int loY = coordinate(Math.nextDown(py - reach), sizeY), hiY = coordinate(Math.nextUp(py + reach), sizeY);
+		int loZ = coordinate(Math.nextDown(pz - reach), sizeZ), hiZ = coordinate(Math.nextUp(pz + reach), sizeZ);
+		for (int iz = loZ; iz <= hiZ; iz++)
+			for (int iy = loY; iy <= hiY; iy++)
+				for (int ix = loX; ix <= hiX; ix++)
+					for (int i = head[(iz * sizeY + iy) * sizeX + ix]; i >= 0; i = next[i]) {
+						visit.run();
+						if (interiorsOverlap(px, py, pz, r, x[i], y[i], z[i], radius[i])) return i;
+					}
+		return -1;
 	}
 
 	void append(float px, float py, float pz, long svq) {
 		int cell = (coordinate(pz, sizeZ) * sizeY + coordinate(py, sizeY)) * sizeX + coordinate(px, sizeX);
 		x[count] = px; y[count] = py; z[count] = pz;
 		radius[count] = GranularMechanics.representativeRadius(svq, h);
+		largestRadius = Math.max(largestRadius, radius[count]);
 		next[count] = head[cell]; head[cell] = count++;
 	}
 
@@ -72,7 +82,7 @@ final class GranularSpawnAdmission {
 		double upper = Math.nextUp(rounded);
 		return Math.nextUp(upper * upper);
 	}
-	private int coordinate(float p, int size) {
+	private int coordinate(double p, int size) {
 		return Math.max(0, Math.min(size - 1, (int) Math.floor(p / (double) h)));
 	}
 }
