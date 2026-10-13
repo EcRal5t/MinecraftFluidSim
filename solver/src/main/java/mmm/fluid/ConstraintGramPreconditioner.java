@@ -14,14 +14,15 @@ final class ConstraintGramPreconditioner {
 	private double[] refineRhs, refineDirection, refineLast, refineImage;
 
 	ConstraintGramPreconditioner(int markerCount, double[] inverseMass, int[] rowOffsets, int[] indices,
-	                            double[] coefficients, double[] coefficientLow, double[] diagonal) {
+	                            double[] coefficients, double[] coefficientLow, double[] diagonal, SignedDyadic[] actualCoefficients) {
 		int rows = diagonal.length;
 		gramDiagonal = diagonal.clone();
-		boolean expanded = false; for (double value : coefficientLow) expanded |= value != 0;
+		boolean expanded = actualCoefficients != null; for (double value : coefficientLow) expanded |= value != 0;
 		SignedDyadic[] exact = expanded ? new SignedDyadic[coefficients.length] : null;
 		SignedDyadic[] weighted = expanded ? new SignedDyadic[coefficients.length] : null;
 		if (expanded) for (int entry = 0; entry < exact.length; entry++) {
-			exact[entry] = SignedDyadic.of(coefficients[entry]).add(SignedDyadic.of(coefficientLow[entry]));
+			exact[entry] = actualCoefficients == null
+					? SignedDyadic.of(coefficients[entry]).add(SignedDyadic.of(coefficientLow[entry])) : actualCoefficients[entry];
 			weighted[entry] = exact[entry].multiply(SignedDyadic.of(inverseMass[indices[entry] % markerCount]));
 		}
 		inverseRoot = new double[rows]; gramRoot = new double[rows]; workspace = new double[rows]; offsets = new int[rows + 1];

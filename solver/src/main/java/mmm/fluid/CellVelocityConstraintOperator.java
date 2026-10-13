@@ -105,7 +105,7 @@ final class CellVelocityConstraintOperator {
 	int rowCount() { return storage.length; }
 	ConstraintGramPreconditioner preconditioner(double[] diagonal) {
 		checkRows(diagonal);
-		return new ConstraintGramPreconditioner(markerCount, inverseMass, offsets, indices, coefficients, coefficientLow, diagonal);
+		return new ConstraintGramPreconditioner(markerCount, inverseMass, offsets, indices, coefficients, coefficientLow, diagonal, exactCoefficients);
 	}
 	ConstraintGramPreconditioner preconditioner(double[] diagonal, double[] commonMode) {
 		var result = preconditioner(diagonal); checkRows(commonMode);
