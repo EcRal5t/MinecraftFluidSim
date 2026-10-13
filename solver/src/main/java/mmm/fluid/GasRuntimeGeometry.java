@@ -151,6 +151,16 @@ final class GasRuntimeGeometry {
 	}
 
 	GasComplementGeometry geometry() { return geometry; }
+	float cellSize() { return cellSize; }
+
+	boolean cellDependsOnNeighborFractions(int cell) {
+		return phase.dependsOnNeighborFractions(cell, liquidStock.get(cell), cellSize);
+	}
+
+	double dryMicroFaceArea(int cell, int micro, int axis, int coordinate) {
+		return GasFaceIntersection.area(phase, cell, -1, axis, coordinate, 0,
+				.5 * (micro >>> ((axis + 1) % 3) & 1), .5 * (micro >>> ((axis + 2) % 3) & 1), .5);
+	}
 	LiquidPressureGeometry liquidPressureGeometry(FluidDomain domain) {
 		requireCurrentCarrierGeometry(domain);
 		return LiquidPressureGeometry.capture(domain, phase, liquidStock);

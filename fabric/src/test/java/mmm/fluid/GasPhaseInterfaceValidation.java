@@ -9,6 +9,13 @@ public final class GasPhaseInterfaceValidation {
 	public static void main(String[] args) { validate(); }
 
 	public static void validate() {
+		for (int set = 0; set < 256; set++) {
+			int feasible = set;
+			Integer maximum = GasPhaseBatchSearch.maximum(8, batch -> (feasible & 1 << ((int) batch - 1)) != 0 ? (int) batch : null,
+					(low, high) -> (feasible & ((1 << (int) high) - (1 << ((int) low - 1)))) == 0);
+			check(maximum == null ? set == 0 : maximum == 32 - Integer.numberOfLeadingZeros(set),
+					"Certified interval exclusion changed a disconnected integer feasible set");
+		}
 		for (boolean bothWet : new boolean[]{false, true}) {
 			FluidDomain domain = domain(126, false, bothWet
 					? new float[]{.25F,.25F,.25F,.0625F, .75F,.75F,.75F,.03125F}
@@ -43,6 +50,22 @@ public final class GasPhaseInterfaceValidation {
 				"Full liquid lost its shared wet/dry face contact");
 		for (int piece : sharedContacts.getFirst().pieces()) check(piece / 8 == 1 && (piece & 1) == 0,
 				"Shared-face contact selected an unrelated gas microbox");
+		full.bootstrapGasState("");
+		var source = full.gasState.frame;
+		var envelope = GasPhaseGeometryEnvelope.capture(source, full.gasState.network, null, 0, source.commonCellNode(1));
+		check(envelope != null, "A fixed source gas chamber lost its single-successor capacity certificate");
+		var volume = mmm.units.SignedDyadic.of(.75);
+		var moment = volume.multiply(mmm.units.SignedDyadic.of(.5));
+		var edit = new PhaseLiquidGeometryEdit(0, 0, java.util.List.of(new LiquidComponentMoments(0,255,1,volume,moment,moment,moment)));
+		var future = GasRuntimeGeometry.capture(full, edit, new long[8], true);
+		check(envelope.volumeUpper(edit) >= future.capacity().chambers().getFirst().cubicMeters()
+				&& envelope.volumeUpper(edit) <= Math.nextUp(Math.nextUp(Math.nextUp(1.25))),
+				"Certified future capacity omitted released volume or broadened its rounding budget");
+		var merger = domain(0, true, new float[]{.5F,.5F,.5F,1});
+		merger.geometry.cutCells.replaceMask(2,0); merger.geometry.solid[2]=false; merger.bootstrapGasState("");
+		var mergingSource = merger.gasState.frame;
+		check(mergingSource.nodeCount()==2 && GasPhaseGeometryEnvelope.capture(mergingSource,merger.gasState.network,null,
+				0,mergingSource.commonCellNode(1))==null,"A possible merger reused an isolated gas inventory/energy certificate");
 		System.out.println("Gas phase microcontact validation passed");
 	}
 

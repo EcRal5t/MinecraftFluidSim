@@ -7,6 +7,7 @@ import mmm.fluid.air.GasComponentAmount;
 import mmm.fluid.air.GasInventory;
 import mmm.granular.SolidVolume;
 import mmm.thermal.GasLiquidPhaseModel;
+import mmm.thermal.GasThermalModel;
 import mmm.thermal.LiquidEnergyColumn;
 import mmm.thermal.ThermalDomainState;
 import mmm.thermal.ThermalLimits;
@@ -19,6 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongFunction;
 
 import static mmm.fluid.PhaseChangeStageSupport.PhaseCandidateUnavailableException;
 import static mmm.fluid.PhaseChangeStageSupport.PhaseCellInventory;
@@ -128,14 +130,40 @@ final class GasLiquidPhaseChangeStage {
 				/ phase.gasBatch(transition, 1L).standardVolumeNanos();
 		long high = Math.min(maximumBatches, Math.min(byGas, Math.min(byVolume, byMass)));
 		if (high <= 0L) return null;
-		return GasPhaseBatchSearch.maximum(high, batches -> boilCandidate(
-				cell, node, liquidHandle, gasThermalHandle, transition, inventory, phase,
-				thermalCell, volatileSpecies, liquidTemperature, batches, contact), (low, upper) -> false);
+		var envelope = GasPhaseGeometryEnvelope.forBoiling(support, cell, node);
+		if (envelope == null) return GasPhaseBatchSearch.maximum(high, batches -> completeBoil(cell, node, transition, phase,
+				contact, prepareBoilInventory(cell, node, liquidHandle, transition, phase, thermalCell,
+						volatileSpecies, liquidTemperature, batches, contact)), (low, upper) -> false);
+		GasBoilInventoryPlan[] prepared = new GasBoilInventoryPlan[Math.toIntExact(high) + 1];
+		boolean[] evaluated = new boolean[prepared.length];
+		LongFunction<GasBoilInventoryPlan> caloric = batches -> {
+			int index = Math.toIntExact(batches);
+			if (!evaluated[index]) {
+				prepared[index] = prepareBoilInventory(cell, node, liquidHandle, transition, phase,
+						thermalCell, volatileSpecies, liquidTemperature, batches, contact);
+				evaluated[index] = true;
+			}
+			return prepared[index];
+		};
+		GasThermalModel gasThermal = new GasThermalModel(support.thermal().registry(), network.registry());
+		GasPhaseBatchSearch.Exclusion exclusion = (low, upper) -> {
+			for (long batches = upper; batches >= low; batches--) {
+				GasBoilInventoryPlan candidate = caloric.apply(batches);
+				if (candidate == null) continue;
+				if (!boilingSaturationExcluded(candidate, envelope, transition, phase, gasThermal)) return false;
+				prepared[Math.toIntExact(batches)] = null;
+			}
+			return true;
+		};
+		return GasPhaseBatchSearch.maximum(high, batches -> {
+			GasBoilPlan candidate = completeBoil(cell, node, transition, phase, contact, caloric.apply(batches));
+			prepared[Math.toIntExact(batches)] = null;
+			return candidate;
+		}, exclusion);
 	}
 
-	private GasBoilPlan boilCandidate(
-			int cell, int node, int liquidHandle, int gasThermalHandle,
-			ThermalPhaseTransition transition, PhaseCellInventory before,
+	private GasBoilInventoryPlan prepareBoilInventory(
+			int cell, int node, int liquidHandle, ThermalPhaseTransition transition,
 			GasLiquidPhaseModel phase, ThermalDomainState.PhaseCandidateCell thermalCell,
 			boolean[] volatileSpecies, double liquidTemperature, long batches, GasPhaseInterfaceResolver.Candidate contact
 	) {
@@ -161,13 +189,42 @@ final class GasLiquidPhaseChangeStage {
 					"Boiling gas energy exceeds its finite representation");
 			ThermalDomainState.PhaseCellEnergyPlan thermalPlan = thermal.planPhaseCellEnergy(
 					thermalCell, remainingLiquid, thermal.gasNodeEnergy(node, gasState.network), candidateGasEnergy);
-			double candidateLiquidTemperature = thermalPlan.temperatureK();
 			var liquidGeometry = PhaseLiquidGeometryEdit.afterBoiling(support.state(), cell, removal);
-			var topology = support.planGasGeometry(liquidGeometry, node, gasPlan, candidateGasEnergy, thermalPlan);
-			if (!interfaces.allowsAfter(cell, contact, transition, phase, candidateLiquidTemperature,
+			return new GasBoilInventoryPlan(batches, removedSvq, removal, gasPlan, thermalPlan, candidateGasEnergy, liquidGeometry);
+		} catch (ThermalStateFunction.EnergyOutsideValidityException
+				| ThermalStateFunction.EnergyRepresentationException
+				| ThermalDomainState.EmptyPhaseCandidateEnergyException
+				| AirNetwork.PhaseCapacityExceededException
+				| ThermalDomainState.PhaseCellEnergyUnavailableException
+				| PhaseCandidateUnavailableException unavailable) {
+			return null;
+		}
+	}
+
+	private boolean boilingSaturationExcluded(GasBoilInventoryPlan candidate, GasPhaseGeometryEnvelope envelope,
+	                                         ThermalPhaseTransition transition, GasLiquidPhaseModel phase, GasThermalModel gasThermal) {
+		try {
+			double volume = envelope.volumeUpper(candidate.liquidGeometry());
+			if (!(Double.isFinite(volume) && volume > 0)) return false;
+			var stock = candidate.gasPlan().inventoryAfter();
+			double pressureLower = gasThermal.absolutePressure(stock, volume, candidate.candidateGasEnergy());
+			double temperature = candidate.thermalPlan().temperatureK();
+			if (Double.isNaN(temperature)) temperature = gasThermal.state(stock, candidate.candidateGasEnergy()).temperatureK();
+			double partialLower = phase.saturation(transition, temperature, stock, pressureLower).componentPartialPressurePa();
+			return phase.saturationPressureBound(transition, temperature, true) < Math.max(0, Math.nextDown(partialLower));
+		} catch (IllegalArgumentException | ArithmeticException unresolved) { return false; }
+	}
+
+	private GasBoilPlan completeBoil(int cell, int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
+	                                GasPhaseInterfaceResolver.Candidate contact, GasBoilInventoryPlan candidate) {
+		if (candidate == null) return null;
+		try {
+			var topology = support.planGasGeometry(candidate.liquidGeometry(), node, candidate.gasPlan(),
+					candidate.candidateGasEnergy(), candidate.thermalPlan());
+			if (!interfaces.allowsAfter(cell, contact, transition, phase, candidate.thermalPlan().temperatureK(),
 					topology, GasLiquidPhaseModel.Direction.BOIL, false)) return null;
-			return new GasBoilPlan(
-					batches, removedSvq, removal, gasPlan, thermalPlan, candidateGasEnergy, topology);
+			return new GasBoilPlan(candidate.batches(), candidate.removedSvq(), candidate.removal(), candidate.gasPlan(),
+					candidate.thermalPlan(), candidate.candidateGasEnergy(), topology);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| ThermalStateFunction.EnergyRepresentationException
 				| ThermalDomainState.EmptyPhaseCandidateEnergyException
@@ -608,6 +665,10 @@ final class GasLiquidPhaseChangeStage {
 			long batches, long removedSvq, PhaseRemovalPlan removal, AirNetwork.PhaseMutationPlan gasPlan,
 			ThermalDomainState.PhaseCellEnergyPlan thermalPlan, double candidateGasEnergy, GasTopologyCoordinator.GasTopologyPlan topology
 	) { }
+
+	private record GasBoilInventoryPlan(long batches, long removedSvq, PhaseRemovalPlan removal,
+	                                    AirNetwork.PhaseMutationPlan gasPlan, ThermalDomainState.PhaseCellEnergyPlan thermalPlan,
+	                                    double candidateGasEnergy, PhaseLiquidGeometryEdit liquidGeometry) { }
 
 	private record GasCondensePlan(
 			long batches, AirNetwork.PhaseMutationPlan gasPlan, ThermalDomainState.PhaseCellEnergyPlan thermalPlan,

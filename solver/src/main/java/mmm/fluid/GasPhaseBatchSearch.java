@@ -11,6 +11,7 @@ final class GasPhaseBatchSearch {
 
 	static <P> P maximum(long high, LongFunction<P> candidate, Exclusion exclusion) {
 		if (high <= 0L) return null;
+		if (exclusion.excluded(1L, high)) return null;
 		P last = candidate.apply(high);
 		return last != null ? last : search(1L, high - 1L, candidate, exclusion);
 	}

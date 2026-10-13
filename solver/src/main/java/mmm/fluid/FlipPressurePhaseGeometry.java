@@ -62,6 +62,17 @@ final class FlipPressurePhaseGeometry {
 		return true;
 	}
 
+	/** Full-box nonzero moment normals retain their direction independently of neighbor fractions. */
+	boolean dependsOnNeighborFractions(int cell, PhaseLiquidGeometryEdit stock, float cellSize) {
+		if (!(fraction[cell] > 0 && fraction[cell] < 1)) return false;
+		if (collisionMask(cell) != 0) return true;
+		SignedDyadic metricVolume = stock.volume().multiply(SignedDyadic.of(cellSize));
+		int[] coordinate = {cell % sizeX, cell / sizeX % sizeY, cell / (sizeX * sizeY)};
+		for (int axis = 0; axis < 3; axis++) if (momentDirection(
+				centeredMoment(stock.firstMoment(axis), metricVolume, coordinate[axis]), 4, 8) != 0) return false;
+		return true;
+	}
+
 	void rebuild(
 			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
 			GranularCouplingFields granular, boolean[] pressureFluid

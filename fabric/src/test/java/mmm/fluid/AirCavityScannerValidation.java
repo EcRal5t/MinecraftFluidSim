@@ -176,6 +176,8 @@ public final class AirCavityScannerValidation {
 		long[] occupied=new long[8];long inventoryRevision=domain.markerGrid.inventoryRevision;
 		long phaseRevision=domain.pressurePhaseGeometry.revision(),carrierRevision=domain.carrierMutationRevision();
 		var current=GasRuntimeGeometry.capture(domain,null,occupied,true);
+		check(!current.cellDependsOnNeighborFractions(0) && current.cellDependsOnNeighborFractions(1),
+				"PLIC dependency classification lost the own-moment and centered-gradient cases");
 		var volume=SignedDyadic.of(.125);
 		var edit=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,volume,
 				volume.multiply(SignedDyadic.of(.25)),volume.multiply(SignedDyadic.of(.5)),volume.multiply(SignedDyadic.of(.5)))));
