@@ -55,6 +55,30 @@ final class GranularSphereCollision {
 	boolean supportsAtRest(float x, float y, float z, float radius) {
 		return touching(new double[]{x, y, z}, radius, new ArrayList<>()).stream().anyMatch(hit -> hit.normal[1] > 0);
 	}
+	record Contact(double time, double[][] normals) { }
+	Contact nextContact(double[] position, double[] velocity, double[] responseVelocity, float radius, double duration) {
+		double[] displacement = new double[3];
+		for (int axis = 0; axis < 3; axis++) displacement[axis] = velocity[axis] * duration;
+		var contacts = touching(position, radius, new ArrayList<>());
+		if (contacts.stream().anyMatch(hit -> dot(velocity, hit.normal) < 0 || dot(responseVelocity, hit.normal) < 0))
+			return new Contact(0, contacts.stream().map(Hit::normal).toArray(double[][]::new));
+		var hits = first(position, displacement, radius);
+		if (hits.isEmpty()) return null;
+		double time = hits.stream().mapToDouble(Hit::lower).min().orElseThrow();
+		double[] atHit = new double[3];
+		for (int axis = 0; axis < 3; axis++) atHit[axis] = Math.fma(time, displacement[axis], position[axis]);
+		for (var hit : hits) {
+			double gap = hit.axis >= 0 ? Math.abs(atHit[hit.axis] - hit.minimum[0])
+					: Math.abs(norm2(boxNormal(atHit, hit.minimum, hit.maximum)) - radius * radius);
+			contacts.add(new Hit(0, 0, hit.normal, hit.minimum, hit.maximum, Math.max(hit.envelope, gap), hit.axis));
+		}
+		return new Contact(duration * time, touching(atHit, radius, contacts).stream().map(Hit::normal).toArray(double[][]::new));
+	}
+	double[] compress(double[] velocity, double[][] normals) { return project(velocity, normals); }
+	double[] respond(double[] velocity, double[][] normals, ParticulateMaterial material) {
+		return impulse(velocity, normals, material);
+	}
+	float[] roundContactPoint(double[] position, float radius) { return roundOutside(position, radius); }
 	private void operation() { if (--remainingOperations < 0) throw new MechanicalTimeRefinement(2, "Granular sphere contact operations"); }
 	private List<Hit> first(double[] p, double[] d, double radius) {
 		List<Hit> candidates = new ArrayList<>();

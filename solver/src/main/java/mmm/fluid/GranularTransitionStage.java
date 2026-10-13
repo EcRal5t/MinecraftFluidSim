@@ -45,10 +45,19 @@ final class GranularTransitionStage {
 		if (granular != null && granular.parcels.count() > 1) {
 			coupling.rebuild(granular.parcels, granular.deposits);
 			long[] compactedSolid = coupling.copySolidSvq();
+			int count = granular.parcels.count();
+			var future = new GranularParcelStore.Parcel[count];
+			for (int i = 0; i < count; i++) future[i] = granular.parcels.parcel(i);
+			// Charge the source capture and bound every pair visit plus its full future-sphere scan.
+			int candidateBudget = (GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - count) / (count + 1);
 			granular.inventory.compactActive(
 					index -> access.parcelCell(granular.parcels.parcel(index)),
-					(first, second, merged) -> access.planMerge(compactedSolid, first, second, merged),
-					access.mergeVelocityDelta(), GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP);
+					(firstIndex, secondIndex, first, second, merged) -> {
+						if (!mergeFitsActiveSpheres(future, firstIndex, secondIndex, merged)
+								|| !access.planMerge(compactedSolid, first, second, merged)) return false;
+						future[firstIndex] = merged; future[secondIndex] = null;
+						return true;
+					}, access.mergeVelocityDelta(), candidateBudget);
 			coupling.rebuild(granular.parcels, granular.deposits);
 			if (!coupling.matchesSolidSvq(compactedSolid)) {
 				throw new IllegalStateException("Granular active compaction differs from its exact occupancy plan");
@@ -79,5 +88,18 @@ final class GranularTransitionStage {
 			access.pressureCoupling(null);
 		}
 		return new Outcome(stats, access.commitGeometryTransition(previousSolid));
+	}
+
+	private boolean mergeFitsActiveSpheres(GranularParcelStore.Parcel[] future, int first, int second,
+	                                      GranularParcelStore.Parcel merged) {
+		float h = state.config().cellSize();
+		float radius = mmm.granular.GranularMechanics.representativeRadius(merged.solidVolumeSvq(), h);
+		for (int i = 0; i < future.length; i++) {
+			var other = future[i]; if (i == first || i == second || other == null) continue;
+			if (GranularSpawnAdmission.interiorsOverlap(merged.x(), merged.y(), merged.z(), radius,
+					other.x(), other.y(), other.z(), mmm.granular.GranularMechanics.representativeRadius(other.solidVolumeSvq(), h)))
+				return false;
+		}
+		return true;
 	}
 }

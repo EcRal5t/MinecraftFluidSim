@@ -310,7 +310,7 @@ public final class GranularInventory {
 			float maximumVelocityDelta, int maximumEvaluations
 	) {
 		if (geometryValid == null) throw new IllegalArgumentException("Active granular geometry predicate is missing");
-		return compactActive(cellOfParcel, (first, second, merged) -> geometryValid.test(merged),
+		return compactActive(cellOfParcel, (firstIndex, secondIndex, first, second, merged) -> geometryValid.test(merged),
 				maximumVelocityDelta, maximumEvaluations);
 	}
 
@@ -338,7 +338,7 @@ public final class GranularInventory {
 				ActiveMerge merge = activeMerge(first, second, maximumVelocityDelta);
 				if (merge == null || thermalEnergy != null && !thermalEnergy.canActiveMerge(first, second,
 						merge.parcel(), merge.composition())
-						|| !mergeAcceptance.test(parcels.parcel(first), candidate, merge.parcel())) continue;
+						|| !mergeAcceptance.test(first, second, parcels.parcel(first), candidate, merge.parcel())) continue;
 				mergeFirst[pairs] = first; mergeSecond[pairs] = second; pairs++;
 				plannedMerge[pairs - 1] = merge;
 				mergePaired[first] = true; mergePaired[second] = true;
@@ -482,7 +482,7 @@ public final class GranularInventory {
 	public record CompactionStats(int merges, int evaluations) { }
 	@FunctionalInterface
 	public interface ActiveMergeAcceptance {
-		boolean test(GranularParcelStore.Parcel first, GranularParcelStore.Parcel second,
+		boolean test(int firstIndex, int secondIndex, GranularParcelStore.Parcel first, GranularParcelStore.Parcel second,
 		             GranularParcelStore.Parcel merged);
 	}
 	public interface EnergyAdapter {

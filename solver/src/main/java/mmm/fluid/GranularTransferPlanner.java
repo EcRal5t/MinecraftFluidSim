@@ -54,13 +54,15 @@ final class GranularTransferPlanner {
 		domain.ensureGrid();
 		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
 		long[] plannedSolid = domain.granularCoupling.copySolidSvq();
+		var admission = new GranularSpawnAdmission(domain.sizeX, domain.sizeY, domain.sizeZ,
+				domain.config.cellSize(), granular.parcels, 1);
 		GranularCouplingFields.Position position = null;
 		for (int attempt = 0; attempt < 16 && position == null; attempt++) {
 			GranularCouplingFields.Position candidate = domain.granularCollision.spawnPosition(
 					cellX, cellY, cellZ, solidVolumeSvq, granular.parcels.count() + attempt * 16_384L,
-					Float.NaN, Float.NaN, Float.NaN);
-			if (candidate != null && domain.granularCoupling.tryPlanParcel(plannedSolid, candidate, solidVolumeSvq,
-					this::combinedInsertionCapacity)) position = candidate;
+					Float.NaN, Float.NaN, Float.NaN, point -> admission.allows(point.x(), point.y(), point.z(), solidVolumeSvq)
+							&& domain.granularCoupling.tryPlanParcel(plannedSolid, point, solidVolumeSvq, this::combinedInsertionCapacity));
+			if (candidate != null) position = candidate;
 		}
 		if (position == null) return FluidDomain.GranularInsertion.rejected("Target cell has no collision-valid solid capacity");
 		if (!domain.canAddCarrierVolume(solidVolumeSvq / (double) SolidVolume.SVQ_PER_CELL)) {
@@ -119,6 +121,10 @@ final class GranularTransferPlanner {
 				remainingSvq -= pieceSvq; remainingMass -= pieceMass;
 			}
 		}
+		if (!granular.parcels.hasCapacity(drafts.size())
+				|| reactiveDrafts > 0 && !granular.compositions.hasCapacity(reactiveDrafts)) {
+			return FluidDomain.GranularInsertion.rejected("Active granular parcel/composition budget exceeded");
+		}
 		List<FluidDomain.CellCandidate> insertionCells = domain.nearbyCells(cellX, cellY, cellZ, maxRadius);
 		// A dry pour is a loose release envelope, not a vertical stack of mutually blocking
 		// numerical parcels. Prefer nearby horizontal cells; vertical cells remain bounded
@@ -129,6 +135,8 @@ final class GranularTransferPlanner {
 				.thenComparingInt(FluidDomain.CellCandidate::index));
 		int releaseCellCount = releaseCellCount(insertionCells, ledger);
 		long[] plannedSolid = domain.granularCoupling.copySolidSvq();
+		var admission = new GranularSpawnAdmission(domain.sizeX, domain.sizeY, domain.sizeZ,
+				domain.config.cellSize(), granular.parcels, drafts.size());
 		int[] plannedParcelCounts = new int[domain.cellCount];
 		for (int parcel = 0; parcel < granular.parcels.count(); parcel++) {
 			plannedParcelCounts[domain.granularParcelCell(granular.parcels.parcel(parcel))]++;
@@ -159,9 +167,11 @@ final class GranularTransferPlanner {
 					long sequence = plannedParcelCounts[candidate.index()] + attempt * 16_384L;
 					GranularCouplingFields.Position spawn = domain.granularCollision.spawnPosition(
 							candidateX, candidateY, candidateZ, draft.solidVolumeSvq(), sequence,
-							Float.NaN, Float.NaN, Float.NaN);
-					if (spawn != null && domain.granularCoupling.tryPlanParcel(plannedSolid, spawn, draft.solidVolumeSvq(),
-							this::combinedInsertionCapacity)) {
+							Float.NaN, Float.NaN, Float.NaN, point ->
+									admission.allows(point.x(), point.y(), point.z(), draft.solidVolumeSvq())
+									&& domain.granularCoupling.tryPlanParcel(plannedSolid, point, draft.solidVolumeSvq(),
+									this::combinedInsertionCapacity));
+					if (spawn != null) {
 						selected = candidate.index(); selectedPosition = spawn; break;
 					}
 				}
@@ -169,13 +179,10 @@ final class GranularTransferPlanner {
 			}
 			if (selected < 0) return FluidDomain.GranularInsertion.rejected("Nearby cells have no collision-valid solid capacity");
 			plannedParcelCounts[selected]++;
+			admission.append(selectedPosition.x(), selectedPosition.y(), selectedPosition.z(), draft.solidVolumeSvq());
 			positioned.add(draft.at(selected, selectedPosition));
 		}
 		drafts = positioned;
-		if (!granular.parcels.hasCapacity(drafts.size())
-				|| reactiveDrafts > 0 && !granular.compositions.hasCapacity(reactiveDrafts)) {
-			return FluidDomain.GranularInsertion.rejected("Active granular parcel/composition budget exceeded");
-		}
 		GranularAuditLedger sourceAfter = externalSource ? granular.externalSource.plus(
 				ledger, granular.registry, granular.compositions == null ? null : granular.compositions.registry()) : granular.externalSource;
 		int originalCount = granular.parcels.count();

@@ -651,7 +651,7 @@ public final class M8GranularValidation {
 				0.5F, 0.5F, 0.5F, 0, 0, 0, volume / 4, mass / 4, material, 0, 3, (byte) 3));
 		GranularDepositStore deposits = new GranularDepositStore(registry, 1, 2);
 		GranularInventory inventory = new GranularInventory(store, deposits);
-		var compacted = inventory.compactActive(index -> 0, (left, right, replacement) -> {
+		var compacted = inventory.compactActive(index -> 0, (leftIndex, rightIndex, left, right, replacement) -> {
 			require(replacement.contactAge() == 0 && replacement.flags() == 2,
 					"active compaction preflight must expose invalidated contact geometry");
 			return true;
@@ -693,7 +693,7 @@ public final class M8GranularValidation {
 					&& directResult.x() == directResult.y() && directResult.z() == directResult.y()
 					&& audit.equals(GranularAuditLedger.captureInventory(registry, directMerge, emptyBed, null)),
 					"direct parcel merge must preserve mass first moments and exact stock");
-			var rejected = pairInventory.compactActive(index -> 0, (first, second, candidate) -> {
+			var rejected = pairInventory.compactActive(index -> 0, (firstIndex, secondIndex, first, second, candidate) -> {
 				SignedDyadic error = SignedDyadic.of(totalMass).multiply(SignedDyadic.of((double) candidate.y()))
 						.subtract(momentBefore);
 				require(Math.abs(error.toDouble()) <= totalMass * Math.ulp(candidate.y()) * 0.5,
@@ -1907,9 +1907,15 @@ public final class M8GranularValidation {
 		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
 				BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_BV,
 				density, null)));
-		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted()
-				&& domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
+		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
+				"first bucket granular congestion fixture could not be inserted");
+		var firstRelease = domain.exportGranularState();
+		require(firstRelease.activeParcels().size() == 512 && domain.totalGranularSolidVolumeSvq() == SolidVolume.SVQ_PER_BV
+				&& rawClose(domain.totalGranularMass(), bucket.totalMass()), "whole bucket release lost its 512 carriers or inventory");
+		mmm.fluid.GranularCarrierValidation.requireNonOverlappingRelease(firstRelease, config.cellSize());
+		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
 				"two-bucket granular congestion fixture could not be inserted");
+		mmm.fluid.GranularCarrierValidation.requireNonOverlappingRelease(domain.exportGranularState(), config.cellSize());
 		FullCapabilityTestFixture.Registries production = FullCapabilityTestFixture.load();
 		domain.bindGasRegistry(production.gas());
 		domain.bindThermal(production.thermal(), liquids, 300.0);

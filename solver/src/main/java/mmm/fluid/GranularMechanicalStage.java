@@ -88,7 +88,7 @@ final class GranularMechanicalStage {
 		if (maximum * dt > distance * (1 + 8 * Math.ulp(1.0F))) {
 			throw new MechanicalTimeRefinement((int) Math.ceil(maximum * this.state.config.timeStep() / distance));
 		}
-		access.granularCollision().preview(state.parcels, state.registry, dt);
+		access.granularCollision().preview(state.parcels, state.registry, dt, this.state.config.maxCourantNumber());
 		access.granularNextCoupling().rebuild(state.parcels, state.deposits,
 				access.granularCollision()::previewPosition);
 		if (!access.granularOccupancyFitsGeometry(access.granularNextCoupling())) {

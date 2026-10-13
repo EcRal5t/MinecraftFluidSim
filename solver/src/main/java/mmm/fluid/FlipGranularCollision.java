@@ -10,6 +10,7 @@ import mmm.granular.SolidVolume;
 
 import java.util.Arrays;
 import java.util.function.IntToLongFunction;
+import java.util.function.Predicate;
 
 /** Collision-resolved granular motion preview from pressure-corrected velocities, committed after liquid advection. */
 final class FlipGranularCollision {
@@ -38,9 +39,27 @@ final class FlipGranularCollision {
 	}
 
 	void preview(GranularParcelStore parcels, GranularRegistry registry, float dt) {
+		preview(parcels, registry, dt, 1.0F);
+	}
+
+	void preview(GranularParcelStore parcels, GranularRegistry registry, float dt, float courant) {
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular preview dt is invalid");
 		previewCount = parcels.count();
 		lastCapacityHeld = 0;
+		if (previewCount > 1) {
+			boolean[] supported = new boolean[previewCount];
+			new GranularActiveContacts(parcels, registry, sphereCollision, sizeX, sizeY, sizeZ, cellSize, dt, courant)
+					.preview(nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ, supported);
+			for (int index = 0; index < previewCount; index++) {
+				var parcel = parcels.parcel(index); float restingSpeed = cellSize * .05F;
+				boolean resting = supported[index] && nextVelocityX[index] * nextVelocityX[index]
+						+ nextVelocityY[index] * nextVelocityY[index] + nextVelocityZ[index] * nextVelocityZ[index] <= restingSpeed * restingSpeed;
+				nextContactAge[index] = resting ? incrementContactAge(parcel.contactAge()) : 0;
+				nextFlags[index] = resting ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
+						: (byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED);
+			}
+			return;
+		}
 		int operations = GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP;
 		for (int index = 0; index < previewCount; index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index);
@@ -61,13 +80,22 @@ final class FlipGranularCollision {
 		}
 	}
 
-	/** Deterministic sub-cell placement for representative parcels; no particle-particle contact is implied. */
+	/** Deterministic sub-cell placement against fixed geometry and caller-supplied joint admission. */
 	GranularCouplingFields.Position spawnPosition(
 			int cellX, int cellY, int cellZ, long solidVolumeSvq, long sequence,
 			float preferredX, float preferredY, float preferredZ
 	) {
+		return spawnPosition(cellX, cellY, cellZ, solidVolumeSvq, sequence,
+				preferredX, preferredY, preferredZ, candidate -> true);
+	}
+
+	GranularCouplingFields.Position spawnPosition(
+			int cellX, int cellY, int cellZ, long solidVolumeSvq, long sequence,
+			float preferredX, float preferredY, float preferredZ,
+			Predicate<GranularCouplingFields.Position> admission
+	) {
 		if (cellX < 0 || cellX >= sizeX || cellY < 0 || cellY >= sizeY || cellZ < 0 || cellZ >= sizeZ
-				|| solidVolumeSvq <= 0L || sequence < 0L) {
+				|| solidVolumeSvq <= 0L || sequence < 0L || admission == null) {
 			throw new IllegalArgumentException("Granular spawn request is outside the domain");
 		}
 		float radius = collisionRadius(solidVolumeSvq);
@@ -92,7 +120,10 @@ final class FlipGranularCollision {
 				y = minimumY + (maximumY - minimumY) * unitY;
 				z = minimumZ + (maximumZ - minimumZ) * unitZ;
 			}
-			if (positionValid(x, y, z, solidVolumeSvq)) return new GranularCouplingFields.Position(x, y, z);
+			if (positionValid(x, y, z, solidVolumeSvq)) {
+				var candidate = new GranularCouplingFields.Position(x, y, z);
+				if (admission.test(candidate)) return candidate;
+			}
 		}
 		return null;
 	}
@@ -178,6 +209,7 @@ final class FlipGranularCollision {
 		for (int index = 0; index < previewCount; index++) {
 			if (capacityPending[index]) holdParcel(parcels, index);
 		}
+		requirePairEndpoints(parcels);
 		lastCapacityHeld = pending;
 		return pending;
 	}
@@ -189,6 +221,7 @@ final class FlipGranularCollision {
 
 	BoundaryImpulse commit(GranularParcelStore parcels) {
 		if (parcels.count() != previewCount) throw new IllegalStateException("Granular parcel count changed during preview");
+		requirePairEndpoints(parcels);
 		double impulseX = 0, impulseY = 0, impulseZ = 0;
 		for (int index = 0; index < previewCount; index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index);
@@ -216,6 +249,17 @@ final class FlipGranularCollision {
 	}
 
 	private static int incrementContactAge(int age) { return age == Integer.MAX_VALUE ? age : age + 1; }
+
+	private void requirePairEndpoints(GranularParcelStore parcels) {
+		if (previewCount < 2) return;
+		var admission = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, cellSize, previewCount);
+		for (int index = 0; index < previewCount; index++) {
+			long volume = parcels.parcel(index).solidVolumeSvq();
+			if (!admission.allows(nextX[index], nextY[index], nextZ[index], volume))
+				throw new MechanicalTimeRefinement(2, "Granular capacity hold conflicts with an active contact endpoint");
+			admission.append(nextX[index], nextY[index], nextZ[index], volume);
+		}
+	}
 
 	private boolean sphereTouchesSolid(float x, float y, float z, float radius) {
 		return geometry.sphereTouchesSolid(x, y, z, radius);

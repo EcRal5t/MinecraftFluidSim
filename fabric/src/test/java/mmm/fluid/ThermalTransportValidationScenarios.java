@@ -633,7 +633,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			int[] acceptedGeometry = {0};
 			var result = domain.granularState.inventory.compactActive(
 					index -> (int) (parcels.parcel(index).x() / .5F),
-					(left, right, merged) -> { acceptedGeometry[0]++; return true; }, 0, 16);
+					(leftIndex, rightIndex, left, right, merged) -> { acceptedGeometry[0]++; return true; }, 0, 16);
 			require(result.merges() == (variant == 0 ? 0 : 1) && acceptedGeometry[0] == result.merges(),
 					"unrepresentable thermal merge must defer before reserving candidate geometry");
 			if (variant == 0) require(parcels.count() == count && parcels.mutationRevision() == stockRevision

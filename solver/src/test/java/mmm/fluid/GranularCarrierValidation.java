@@ -9,19 +9,16 @@ import mmm.granular.SolidVolume;
 public final class GranularCarrierValidation {
 	private GranularCarrierValidation() { }
 
+	public static void main(String[] args) {
+		if (args.length == 0) validate();
+		else if (args.length == 1 && args[0].equals("--contacts")) validateContacts();
+		else throw new IllegalArgumentException("Expected no arguments or --contacts");
+		System.out.println("GranularCarrierValidation PASS");
+	}
+
 	public static void validate() {
-		sphereMicroBoxContacts();
-		depositContactsRespectCellGeometry();
-		depositPathsRespectSuspendedBeds();
-		cutBedGeometryMatchesFinalPlan();
-		relaxationRequiresAnActualHorizontalPath();
-		straightSphereContactsAreSymmetric();
-		contactImpulsePreservesSolvedDrift();
-		contactImpulseObeysCoulombCone();
-		committedContactMomentumCloses();
-		capacityHoldRequiresActualSupport();
+		validateContacts();
 		mechanicalAuditIncludesGranularEnergy();
-		contactAgeSaturates();
 		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
 		finitePressureResponse();
@@ -39,7 +36,40 @@ public final class GranularCarrierValidation {
 		thinBedRetainsFreeFlow();
 	}
 
+	private static void validateContacts() {
+		sphereMicroBoxContacts();
+		activeCompactionRespectsThirdSphere();
+		depositContactsRespectCellGeometry();
+		depositPathsRespectSuspendedBeds();
+		cutBedGeometryMatchesFinalPlan();
+		relaxationRequiresAnActualHorizontalPath();
+		straightSphereContactsAreSymmetric();
+		contactImpulsePreservesSolvedDrift();
+		contactImpulseObeysCoulombCone();
+		committedContactMomentumCloses();
+		activePairContactsPreserveMechanicalMoments();
+		capacityHoldRequiresActualSupport();
+		contactAgeSaturates();
+	}
+
 	private static void sphereMicroBoxContacts() {
+		for (float radius : new float[]{.125F, Float.MIN_VALUE}) {
+			float tangent = 2 * radius;
+			for (float distance : new float[]{Math.nextDown(tangent), tangent, Math.nextUp(tangent)}) {
+				var delta = mmm.units.SignedDyadic.of(distance);
+				var sumRadius = mmm.units.SignedDyadic.of(radius).multiply(mmm.units.SignedDyadic.of(2));
+				boolean expected = delta.multiply(delta).compareTo(sumRadius.multiply(sumRadius)) < 0;
+				for (int axis = 0; axis < 3; axis++) {
+					float[] point = new float[3]; point[axis] = distance;
+					require(GranularSpawnAdmission.interiorsOverlap(0, 0, 0, radius, point[0], point[1], point[2], radius)
+							== expected, "sphere admission changed exact float separation or pure tangency");
+				}
+			}
+		}
+		var normal = mmm.units.SignedDyadic.of(.25F); var tiny = mmm.units.SignedDyadic.of(Float.MIN_VALUE);
+		require(normal.multiply(normal).add(tiny.multiply(tiny)).compareTo(normal.multiply(normal)) > 0
+				&& !GranularSpawnAdmission.interiorsOverlap(0, 0, 0, .125F, .25F, Float.MIN_VALUE, 0, .125F),
+				"sphere admission lost an exact sub-ULP positive tangential separation");
 		var geometry = new FlipCutCellGeometry(3, 3, 3);
 		geometry.replaceMask((1 * 3 + 1) * 3 + 1, 1); // [.5,.75]^3
 		require(geometry.sphereTouchesSolid(.46F, .46F, .46F, .08F, .5F),
@@ -96,6 +126,45 @@ public final class GranularCarrierValidation {
 		require(next.x() > .42F && collision.positionValid(next.x(), next.y(), next.z(), svq)
 				&& next.velocityY() < 0 && next.velocityZ() < 0,
 				"sphere corner contact must use its oblique normal and preserve the remaining tangent drift");
+	}
+
+	/** Full-pair check intentionally bypasses the production spatial index. */
+	public static void requireNonOverlappingRelease(mmm.granular.GranularStateSnapshot state, float h) {
+		var parcels = state.activeParcels();
+		float[] radii = new float[parcels.size()];
+		for (int i = 0; i < parcels.size(); i++) {
+			var first = parcels.get(i);
+			radii[i] = mmm.granular.GranularMechanics.representativeRadius(first.solidVolumeSvq(), h);
+			for (int j = 0; j < i; j++) {
+				var second = parcels.get(j);
+				if (GranularSpawnAdmission.interiorsOverlap(first.x(), first.y(), first.z(), radii[i],
+						second.x(), second.y(), second.z(), radii[j]))
+					throw new AssertionError("dry release spheres overlap: first=" + i + ", second=" + j);
+			}
+		}
+	}
+
+	private static void activeCompactionRespectsThirdSphere() {
+		var domain = domain(); var granular = domain.granularState; var parcels = granular.parcels;
+		int sand = granular.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long maximum = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		for (float[] point : new float[][]{{.65F, .6F, .65F}, {.65F, .9F, .65F}, {.79F, .75F, .65F}}) {
+			long svq = parcels.count() < 2 ? maximum / 2 : maximum;
+			parcels.add(new GranularParcelStore.Parcel(point[0], point[1], point[2], 0, 0, 0, svq,
+					2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+		}
+		requireNonOverlappingRelease(domain.exportGranularState(), domain.config.cellSize());
+		var before = java.util.stream.IntStream.range(0, 3).mapToObj(parcels::parcel).toList();
+		long revision = parcels.mutationRevision();
+		var audit = mmm.granular.GranularAuditLedger.captureInventory(granular.registry, parcels, granular.deposits, null);
+		float r = mmm.granular.GranularMechanics.representativeRadius(maximum, domain.config.cellSize());
+		require(GranularSpawnAdmission.interiorsOverlap(.65F, .75F, .65F, r, .79F, .75F, .65F, r),
+				"third-sphere fixture must obstruct the otherwise compatible merged representative");
+		domain.granularTransitionStage.step();
+		require(parcels.count() == 3 && parcels.mutationRevision() == revision
+				&& before.equals(java.util.stream.IntStream.range(0, 3).mapToObj(parcels::parcel).toList())
+				&& audit.equals(mmm.granular.GranularAuditLedger.captureInventory(granular.registry, parcels, granular.deposits, null)),
+				"third-sphere merge rejection changed source carriers or exact inventory");
 	}
 
 	private static void depositContactsRespectCellGeometry() {
@@ -276,9 +345,13 @@ public final class GranularCarrierValidation {
 			double top = state.deposits.cellBulkVolumeSvq(target) * .5 / SolidVolume.SVQ_PER_CELL;
 			float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
 			for (int index = 0; index < (scenario == 2 ? 2 : 1); index++) state.parcels.add(new GranularParcelStore.Parcel(
-					.9F, y, .9F, 0, 0, 0, volume, 2_600.0 * volume / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+					index == 0 ? .9F : .72F, y, .9F, 0, 0, 0, volume, 2_600.0 * volume / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
 			domain.ensureGrid();
-			require(domain.granularCollision.positionValid(.9F, y, .9F, volume), "cut-bed fixture needs a legal supported sphere start");
+			for (int index = 0; index < state.parcels.count(); index++) {
+				var p = state.parcels.parcel(index);
+				require(domain.granularCollision.positionValid(p.x(), p.y(), p.z(), volume), "cut-bed fixture needs a legal supported sphere start");
+			}
+			requireNonOverlappingRelease(domain.exportGranularState(), .5F);
 			for (int step = 0; step < 3; step++) {
 				domain.granularCollision.preview(state.parcels, state.registry, .05F); domain.granularCollision.commit(state.parcels);
 			}
@@ -616,6 +689,85 @@ public final class GranularCarrierValidation {
 		}
 	}
 
+	private static void activePairContactsPreserveMechanicalMoments() {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		int material = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		float radius = mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
+			var parcels = new GranularParcelStore(registry, 4);
+			float[] first = {1.25F, 1.25F, 1.25F}, second = first.clone();
+			second[axis] += sign * .25F;
+			float[] firstVelocity = new float[3], secondVelocity = new float[3];
+			firstVelocity[axis] = sign; secondVelocity[axis] = -sign;
+			firstVelocity[(axis + 1) % 3] = .25F; secondVelocity[(axis + 1) % 3] = -.125F;
+			parcels.add(new GranularParcelStore.Parcel(first[0], first[1], first[2], firstVelocity[0], firstVelocity[1], firstVelocity[2], svq, 2, material, 0, 0, (byte) 0));
+			parcels.add(new GranularParcelStore.Parcel(second[0], second[1], second[2], secondVelocity[0], secondVelocity[1], secondVelocity[2], svq, 3, material, 0, 0, (byte) 0));
+			var original = new GranularParcelStore.Parcel[]{parcels.parcel(0), parcels.parcel(1)};
+			var collision = new FlipGranularCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null, 4);
+			collision.preview(parcels, registry, .1F); var boundary = collision.commit(parcels);
+			require(!GranularSpawnAdmission.interiorsOverlap(parcels.parcel(0).x(), parcels.parcel(0).y(), parcels.parcel(0).z(), radius,
+					parcels.parcel(1).x(), parcels.parcel(1).y(), parcels.parcel(1).z(), radius), "pair collision published overlapping float spheres");
+			double energyBefore = 0, energyAfter = 0, energyRounding = 0;
+			for (int a = 0; a < 3; a++) {
+				double momentumBefore = 0, momentumAfter = 0, momentBefore = 0, momentAfter = 0, momentRounding = 0, velocityRounding = 0;
+				for (int index = 0; index < 2; index++) {
+					var old = original[index]; var next = parcels.parcel(index);
+					float p = a == 0 ? old.x() : a == 1 ? old.y() : old.z(), q = a == 0 ? next.x() : a == 1 ? next.y() : next.z();
+					float v = a == 0 ? old.velocityX() : a == 1 ? old.velocityY() : old.velocityZ(), w = a == 0 ? next.velocityX() : a == 1 ? next.velocityY() : next.velocityZ();
+					momentumBefore += old.mass() * v; momentumAfter += next.mass() * w;
+					momentBefore += old.mass() * (p + v * (double) .1F); momentAfter += next.mass() * q;
+					momentRounding += old.mass() * 2 * Math.ulp(q); velocityRounding += old.mass() * Math.ulp(w);
+					energyBefore += .5 * old.mass() * v * v; energyAfter += .5 * next.mass() * w * w;
+					energyRounding += old.mass() * Math.ulp(w) * (Math.abs(w) + Math.ulp(w));
+				}
+				require(Math.abs(momentumAfter - momentumBefore) <= velocityRounding, "finite-mass pair impulse changed total momentum");
+				require(Math.abs(momentAfter - momentBefore) <= momentRounding, "pair collision changed mass first moment beyond float coordinates");
+				int b = (a + 1) % 3, c = (a + 2) % 3; double oldAngular = 0, nextAngular = 0, angularRounding = 0;
+				for (int index = 0; index < 2; index++) {
+					var old = original[index]; var next = parcels.parcel(index);
+					float[] p = {old.x(), old.y(), old.z()}, q = {next.x(), next.y(), next.z()};
+					float[] v = {old.velocityX(), old.velocityY(), old.velocityZ()}, w = {next.velocityX(), next.velocityY(), next.velocityZ()};
+					oldAngular += old.mass() * ((double) p[b] * v[c] - (double) p[c] * v[b]);
+					nextAngular += next.mass() * ((double) q[b] * w[c] - (double) q[c] * w[b]);
+					angularRounding += old.mass() * (2 * Math.ulp(q[b]) * Math.abs(w[c]) + 2 * Math.ulp(q[c]) * Math.abs(w[b])
+							+ Math.ulp(w[c]) * Math.abs(q[b]) + Math.ulp(w[b]) * Math.abs(q[c]));
+				}
+				require(Math.abs(nextAngular - oldAngular) <= angularRounding, "pair contact changed angular momentum beyond float publication");
+			}
+			require(energyAfter <= energyBefore + energyRounding && Math.abs(boundary.x()) + Math.abs(boundary.y()) + Math.abs(boundary.z()) <= 16 * Math.ulp(1.0F),
+					"internal pair contact gained mechanical energy or generated an external reaction");
+		}
+		var chain = new GranularParcelStore(registry, 3);
+		for (int index = 0; index < 3; index++) chain.add(new GranularParcelStore.Parcel(
+				new float[]{1, 1.25F, 1.45F}[index], 1.25F, 1.25F, index == 0 ? 1 : 0, 0, 0,
+				svq, 2, material, 0, 0, (byte) 0));
+		double expectedMoment = 0;
+		for (int index = 0; index < chain.count(); index++) expectedMoment += 2 * (chain.parcel(index).x() + chain.parcel(index).velocityX() * (double) .2F);
+		var chainCollision = new FlipGranularCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null, 3);
+		chainCollision.preview(chain, registry, .2F); chainCollision.commit(chain);
+		double momentum = 0, moment = 0, energy = 0, momentumBound = 0, momentBound = 0;
+		for (int index = 0; index < chain.count(); index++) {
+			var parcel = chain.parcel(index); momentum += 2 * parcel.velocityX(); moment += 2 * parcel.x(); energy += parcel.velocityX() * (double) parcel.velocityX();
+			momentumBound += 2 * Math.ulp(parcel.velocityX()); momentBound += 4 * Math.ulp(parcel.x());
+		}
+		require(chain.parcel(2).velocityX() > 0 && Math.abs(momentum - 2) <= momentumBound
+				&& Math.abs(moment - expectedMoment) <= momentBound && energy <= 1,
+				"changed swept contact paths must reach the third sphere and preserve mechanical moments");
+		var stack = new GranularParcelStore(registry, 4);
+		stack.add(new GranularParcelStore.Parcel(1.25F, radius, 1.25F, 0, 0, 0, svq, 2, material, 0, 0, (byte) 0));
+		stack.add(new GranularParcelStore.Parcel(1.25F, Math.nextUp(3 * radius), 1.25F, 0, 0, 0, svq, 3, material, 0, 0, (byte) 0));
+		var collision = new FlipGranularCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null, 4);
+		for (int step = 0; step < 3; step++) {
+			for (int index = 0; index < stack.count(); index++) {
+				var p = stack.parcel(index); stack.overwrite(index, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(), p.velocityX(), p.velocityY() - .49F, p.velocityZ(), p.solidVolumeSvq(), p.mass(), p.materialHandle(), p.solidCompositionHandle(), p.contactAge(), p.flags()));
+			}
+			collision.preview(stack, registry, .05F); collision.commit(stack);
+		}
+		require(stack.parcel(1).contactAge() == 3 && (stack.parcel(1).flags() & GranularParcelStore.FLAG_SUPPORTED) != 0,
+				"actual active contact did not transmit the fixed bed support age");
+	}
+
 	private static void capacityHoldRequiresActualSupport() {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
@@ -623,11 +775,10 @@ public final class GranularCarrierValidation {
 		double mass = 2_600.0 * svq / SolidVolume.SVQ_PER_BV;
 		float radius = mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
 		for (boolean bedContact : new boolean[]{false, true}) {
-			var parcels = new GranularParcelStore(registry, 65);
+			var parcels = new GranularParcelStore(registry, 1);
 			var beds = new mmm.granular.GranularDepositStore(registry, 27, 27);
-			float cloudY = bedContact ? .25F : .75F;
-			for (int i = 0; i < 64; i++) parcels.add(new GranularParcelStore.Parcel(.75F, cloudY, .75F,
-					0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
+			// A full fixed condensed-phase cell supplies the same exact SVQ blocker as the old cloud.
+			long[] fixed = new long[27]; fixed[bedContact ? 10 : 13] = 64 * svq;
 			float px = bedContact ? .25F : .75F, py = 1.25F;
 			if (bedContact) {
 				require(beds.tryAdd(9, new mmm.granular.GranularDepositStore.SolidPortion(
@@ -636,22 +787,26 @@ public final class GranularCarrierValidation {
 				py = (float) exactY; if (py < exactY) py = Math.nextUp(py);
 			}
 			parcels.add(new GranularParcelStore.Parcel(px, py, .75F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
-			var collision = new FlipGranularCollision(3, 3, 3, .5F, new FlipCutCellGeometry(3, 3, 3), beds, 65);
+			var collision = new FlipGranularCollision(3, 3, 3, .5F, new FlipCutCellGeometry(3, 3, 3), beds, 1);
 			var coupling = new mmm.granular.GranularCouplingFields(3, 3, 3, .5);
+			coupling.setFixedCellSvq(fixed);
 			if (bedContact) for (int i = 0; i < 3; i++) {
 				collision.preview(parcels, registry, .05F); collision.commit(parcels);
 			}
 			for (int step = 0; step < 3; step++) {
-				var source = parcels.parcel(64);
-				parcels.overwrite(64, new GranularParcelStore.Parcel(px, py, .75F,
+				var source = parcels.parcel(0);
+				parcels.overwrite(0, new GranularParcelStore.Parcel(px, py, .75F,
 						bedContact ? .1F : 0, -.1F, 0, svq, mass, sand, 0, source.contactAge(), source.flags()));
 				coupling.rebuild(parcels, beds);
+				require(fixed[bedContact ? 10 : 13] == SolidVolume.SVQ_PER_CELL
+						&& coupling.totalSolidSvq() == (bedContact ? 66 : 65) * svq,
+						"capacity fixture changed its fixed blocker or total solid inventory");
 				// L1 displacement <= .01 m, inside the default .4 Courant limit of .2 m.
 				collision.preview(parcels, registry, .05F);
 				require(collision.resolveCapacity(parcels, coupling, cell -> SolidVolume.SVQ_PER_CELL) == 1,
 						"full neighboring kernel must reject exactly the moving parcel");
 				collision.commit(parcels);
-				var held = parcels.parcel(64);
+				var held = parcels.parcel(0);
 				require(held.x() == px && held.y() == py && held.velocityX() == 0 && held.velocityY() == 0,
 						"capacity hold must restore the source pose and rest velocity");
 				require(held.contactAge() == (bedContact ? step + 4 : 0)
@@ -667,7 +822,7 @@ public final class GranularCarrierValidation {
 					public boolean horizontalPathOpen(int cell, int dx, int dz) { return true; }
 					public double shields(int cell, mmm.granular.ParticulateMaterial material) { return 0; }
 				}, .05F);
-				require(stats.settledParcels() == 0 && parcels.count() == 65 && beds.groupCount() == 0,
+				require(stats.settledParcels() == 0 && parcels.count() == 1 && beds.groupCount() == 0,
 						"an airborne held parcel must remain active rather than acquire deposit eligibility");
 			}
 		}
