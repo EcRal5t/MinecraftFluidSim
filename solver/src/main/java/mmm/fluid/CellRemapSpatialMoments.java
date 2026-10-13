@@ -101,14 +101,13 @@ final class CellRemapSpatialMoments {
 		double[] probability = new double[count];
 		for (int p = 0; p < count; p++) { checkPositive(weights[p]); probability[p] = weights[p] / total; checkPositive(probability[p]); }
 		var basis = new ArrayList<double[]>();
-		for (int k = 0; k < state.spatialRank(); k++) {
+		for (int k = 0; k < state.rank(); k++) {
 			double[] candidate = new double[count];
 			double norm = 0; for (int a = 0; a < 3; a++) norm = Math.hypot(norm, state.loads()[a][k]);
-			for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++)
+			if (norm > 0) for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++)
 				candidate[p] += finite(preferredOffsets[p][a]) * (state.loads()[a][k] / norm);
 			basis.add(nextBasis(candidate, probability, basis));
 		}
-		for (int k = state.spatialRank(); k < state.rank(); k++) basis.add(nextBasis(new double[count], probability, basis));
 		double[][] positions = new double[count][3], velocities = new double[count][3];
 		for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++) {
 			double x = mean[a], v = mean[a + 3];

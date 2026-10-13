@@ -91,6 +91,18 @@ tasks.register('runCpuValidation', JavaExec) {
 	}
 }
 
+tasks.register('runBoundaryPourDiagnostic', JavaExec) {
+	group = 'verification'
+	description = 'Replays a bounded sealed-controller pour and reports pressure work and velocity support.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	mainClass = 'mmm.fluid.BoundaryPourDiagnostic'
+	enableAssertions = true
+	def diagnosticWorkDir = layout.buildDirectory.dir('boundary-pour-diagnostic').get().asFile
+	workingDir diagnosticWorkDir
+	doFirst { diagnosticWorkDir.mkdirs() }
+}
+
 tasks.register('runStepBenchmark', JavaExec) {
 	group = 'verification'
 	description = 'Measures short offline production steps; no hardware-dependent pass threshold.'

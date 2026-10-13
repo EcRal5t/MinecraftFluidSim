@@ -355,9 +355,13 @@ public final class LiquidVolumeTransportValidation {
 
 	public static void main(String[] args) {
 		if (args.length > 1 || args.length == 1 && !java.util.List.of("--fast", "chemical-tails", "components",
-				"representation", "geometry-remap", "mass", "quantization", "continuity", "handoff").contains(args[0]))
+				"representation", "geometry-remap", "mass", "quantization", "continuity", "handoff", "handoff-short").contains(args[0]))
 			throw new IllegalArgumentException("Unknown liquid transport validation entry");
 		boolean fast = args.length == 1 && args[0].equals("--fast");
+		if (args.length == 1 && args[0].equals("handoff-short")) {
+			validateHandoff(); courantUsesOccupiedDonors();
+			System.out.println("Liquid transport short handoff validation passed"); return;
+		}
 		if (args.length == 1 && args[0].equals("geometry-remap")) {
 			geometryRemapRechecksMicroCapacity(); chemicalGeometryRemapRejectsUnrepresentableCandidate();
 			representationRemapReportsLogicalMoments();
@@ -397,13 +401,7 @@ public final class LiquidVolumeTransportValidation {
 			LiquidHandoffContinuityValidation.main(new String[0]);
 			return;
 		}
-		zeroFluxPreservesCarrierColumns();
-		balancedPositiveFluxStillReconstructs();
-		positiveFluxPreservesFeasibleMoments();
-		ballisticArrivalKeepsItsMomentAtHandoff();
-		boundedMomentProjectionIsObservable();
-		CellRemapMomentsValidation.main(new String[0]);
-		CellPolynomialFieldValidation.main(new String[0]);
+		validateHandoff();
 		if (!fast) LiquidHandoffContinuityValidation.main(new String[0]);
 		if (args.length == 1 && args[0].equals("handoff")) {
 			System.out.println("Liquid transport handoff validation passed");
@@ -451,6 +449,13 @@ public final class LiquidVolumeTransportValidation {
 		}
 	}
 
+	private static void validateHandoff() {
+		zeroFluxPreservesCarrierColumns(); balancedPositiveFluxStillReconstructs();
+		positiveFluxPreservesFeasibleMoments(); ballisticArrivalKeepsItsMomentAtHandoff();
+		boundedMomentProjectionIsObservable(); CellRemapMomentsValidation.main(new String[0]);
+		CellPolynomialFieldValidation.main(new String[0]);
+	}
+
 	private static void zeroFluxPreservesCarrierColumns() {
 		mmm.simulation.FullCapabilityTestFixture.Registries registries;
 		try { registries = mmm.simulation.FullCapabilityTestFixture.load(); }
@@ -469,15 +474,19 @@ public final class LiquidVolumeTransportValidation {
 					domain.particles.setPositionX(p, (2.0F + 0.5F * amount) * config.cellSize());
 					domain.particles.setPositionY(p, (1.2F + 0.2F * slot) * config.cellSize());
 					domain.particles.setPositionZ(p, (1.7F - 0.15F * slot) * config.cellSize());
-					domain.particles.setVelocityY(p, (slot + 1) * 0.03F);
 					slot++;
 				} else if (domain.particleCellIndex(p) == remote) domain.particles.setVelocityX(p, 0.2F);
 			}
 			domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
 			if (!domain.gridToParticleStage.advectionCells()[target] || domain.gridToParticleStage.advectionCells()[remote])
 				throw new AssertionError("Handoff fixture must contain connected and isolated carriers");
-			for (float[] field : new float[][] {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ})
-				java.util.Arrays.fill(field, 0);
+			var trace = domain.pressureSystem.markerVelocityField();
+			double[] normalTrace = new double[3];
+			for (int axis = 0; axis < 3; axis++) for (boolean positive : new boolean[] {false, true}) {
+				trace.faceTrace(target, axis, positive, domain.sizeX, domain.sizeY, normalTrace);
+				for (double coefficient : normalTrace)
+					if (coefficient != 0) throw new AssertionError("Zero-flux fixture has a moving donor trace");
+			}
 			var before = carrierColumns(domain, target);
 			var volumeBefore = SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count());
 			double remoteBefore = 0;
@@ -514,25 +523,29 @@ public final class LiquidVolumeTransportValidation {
 				new FluidSolverConfig(1, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 256);
 		domain.setVolume(1, 1, 1, 1); domain.setVolume(2, 1, 1, 1); domain.setVolume(3, 1, 1, 0.5F);
 		int target = domain.cellIndex(2, 1, 1);
-		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == target)
-			domain.particles.setPositionX(p, domain.particles.positionX(p) + 0.04F);
+		for (int p = 0; p < domain.particles.count(); p++) {
+			if (domain.particleCellIndex(p) == target)
+				domain.particles.setPositionX(p, domain.particles.positionX(p) + 0.04F);
+			domain.particles.setVelocityX(p, 0.1F);
+		}
 		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
-		for (float[] field : new float[][] {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ}) java.util.Arrays.fill(field, 0);
-		domain.mac.velocityX[domain.xFaceIndex(2, 1, 1)] = 0.1F;
-		domain.mac.velocityX[domain.xFaceIndex(3, 1, 1)] = 0.1F;
 		var volumeBefore = domain.markerGrid.exactCellVolumeInventory[target];
-		new CellLiquidVolumeTransport(domain).advect(0.01F);
+		var positionsBefore = new java.util.ArrayList<Float>();
+		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == target)
+			positionsBefore.add(domain.particles.positionX(p));
+		var transport = new CellLiquidVolumeTransport(domain); transport.advect(0.01F);
 		domain.ensureInventoryGrid();
 		if (!volumeBefore.equals(domain.markerGrid.exactCellVolumeInventory[target]))
 			throw new AssertionError("Balanced positive flux changed the target cell inventory");
-		int count = 0;
+		var positionsAfter = new java.util.ArrayList<Float>();
 		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == target) {
-			float x = domain.particles.positionX(p) - 2;
-			if (Math.min(Math.abs(x - 0.25F), Math.abs(x - 0.75F)) > 2 * Math.ulp(2.5F))
-				throw new AssertionError("Balanced full-cell flux displaced saturated quadrature: " + x);
-			count++;
+			positionsAfter.add(domain.particles.positionX(p));
 		}
-		if (count != 8) throw new AssertionError("Balanced positive flux lost the full-cell quadrature");
+		positionsBefore.sort(Float::compare); positionsAfter.sort(Float::compare);
+		if (positionsAfter.size() != 8) throw new AssertionError("Balanced positive flux lost the full-cell quadrature");
+		if (!transport.publishedQuadrature || transport.momentAudit.reconstructedGroups() == 0
+				|| positionsBefore.equals(positionsAfter))
+			throw new AssertionError("Balanced positive flux retained the unchanged source rule");
 	}
 
 	private static void positiveFluxPreservesFeasibleMoments() {
@@ -558,8 +571,6 @@ public final class LiquidVolumeTransportValidation {
 			var transport = new CellLiquidVolumeTransport(domain); int peak = 0;
 			for (int step = 1; step <= Math.round(0.5F / dt); step++) {
 				domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
-				java.util.Arrays.fill(domain.mac.velocityX, 0.2F);
-				java.util.Arrays.fill(domain.mac.velocityY, 0); java.util.Arrays.fill(domain.mac.velocityZ, 0);
 				transport.advect(dt); peak = Math.max(peak, domain.particles.count());
 				double actual = 0;
 				for (int p = 0; p < domain.particles.count(); p++) actual += domain.particles.mass(p) * domain.particles.positionX(p);
@@ -602,7 +613,6 @@ public final class LiquidVolumeTransportValidation {
 		}
 		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
 		if (domain.gridToParticleStage.advectionCells()[start]) throw new AssertionError("Arrival fixture must begin on the ballistic path");
-		java.util.Arrays.fill(domain.mac.velocityX, 0.2F);
 		var inventory = SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count());
 		var transport = new CellLiquidVolumeTransport(domain); transport.advect(0.6F);
 		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
@@ -613,6 +623,7 @@ public final class LiquidVolumeTransportValidation {
 			domain.particles.setVelocityX(p, 0.2F);
 			mass += domain.particles.mass(p); before += domain.particles.mass(p) * domain.particles.positionX(p);
 		}
+		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
 		transport.advect(0.05F);
 		double after = 0;
 		for (int p = 0; p < domain.particles.count(); p++) after += domain.particles.mass(p) * domain.particles.positionX(p);
@@ -635,13 +646,15 @@ public final class LiquidVolumeTransportValidation {
 
 	private static void courantUsesOccupiedDonors() {
 		var domain = new FluidDomain(4, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
-		domain.setVolume(0, 0, 0, 1); domain.ensureGrid();
+		domain.setVolume(0, 0, 0, 1); domain.ensureGrid(); domain.gridToParticleStage.prepareAdvectionCells();
 		var transport = new CellLiquidVolumeTransport(domain);
 		domain.mac.velocityX[domain.xFaceIndex(3, 0, 0)] = 100;
 		domain.mac.velocityX[domain.xFaceIndex(1, 0, 0)] = -100;
 		if (transport.courantRate(0) != 0) throw new AssertionError("Empty donor constrained liquid volume transport");
-		domain.mac.velocityX[domain.xFaceIndex(1, 0, 0)] = 2;
-		if (transport.courantRate(0) != 2.0 / domain.config.cellSize())
+		for (int p = 0; p < domain.particles.count(); p++) domain.particles.setVelocityX(p, 2);
+		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+		double expectedRate = 2.0 / domain.config.cellSize(), actualRate = transport.courantRate(0);
+		if (actualRate < expectedRate || actualRate - expectedRate > 4 * Math.ulp(expectedRate))
 			throw new AssertionError("Occupied donor lost its liquid outgoing Courant constraint");
 		domain.setVolume(1, 0, 0, 0.125F); domain.setVolume(3, 1, 1, 0.01F); domain.ensureGrid();
 		int connected = domain.cellIndex(1, 0, 0), isolated = domain.cellIndex(3, 1, 1);
@@ -652,6 +665,16 @@ public final class LiquidVolumeTransportValidation {
 				throw new AssertionError("Connected fringe and isolated droplet received the same advection classification");
 			domain.particleToGridStage.rebuild();
 		}
+		double eulerianRate = transport.courantRate(0);
+		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == isolated)
+			domain.particles.setVelocityX(p, 100);
+		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
+		if (transport.courantRate(0) != eulerianRate)
+			throw new AssertionError("Ballistic speed changed the Eulerian donor outflow constraint");
+		double ballisticSteps = 100 * (double) domain.config.timeStep()
+				/ (domain.config.cellSize() * domain.config.maxCourantNumber());
+		if (domain.calculateSubsteps(domain.config.timeStep()) < Math.ceil(ballisticSteps))
+			throw new AssertionError("Ballistic motion lost its independent displacement constraint");
 	}
 
 	private static void disconnectedMicroComponentsKeepTheirInventory() {

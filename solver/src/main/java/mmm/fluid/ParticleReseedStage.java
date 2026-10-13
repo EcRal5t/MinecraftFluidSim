@@ -5,7 +5,7 @@ import mmm.thermal.ThermalDomainState;
 import mmm.chemistry.ChemicalParcelStore;
 import mmm.units.SignedDyadic;
 
-/** Performs the logical-step liquid marker merge/split and republishes its derived grid. */
+/** Preserves conservative cell quadrature or merges/splits markers at the logical-step tail. */
 final class ParticleReseedStage {
 	record Workspace(
 			DomainGeometry geometry, LiquidParticleStore particles, FlipParticleReseeder reseeder
@@ -25,7 +25,7 @@ final class ParticleReseedStage {
 		SignedDyadic exactInternalEnergy();
 		void markGridDirty();
 		void rebuildGrid();
-		void ensureGrid();
+		void ensureInventoryGrid();
 	}
 
 	record Outcome(FlipParticleReseeder.Result result, double initialKineticEnergy, double finalKineticEnergy) { }
@@ -41,7 +41,7 @@ final class ParticleReseedStage {
 	Outcome step(boolean captureMechanicalAudit) {
 		double initialKinetic = captureMechanicalAudit ? access.particleKineticEnergyJoules() : 0.0;
 		if (access.hasConservativeCellQuadrature()) {
-			access.ensureGrid();
+			access.ensureInventoryGrid();
 			return new Outcome(new FlipParticleReseeder.Result(state.particles().count(), 0, 0, 0, 0, 0, 0, 0, 0), initialKinetic, initialKinetic);
 		}
 		access.ensureParticleCapacity(state.reseeder().capacityUpperBound(state.particles().count()));

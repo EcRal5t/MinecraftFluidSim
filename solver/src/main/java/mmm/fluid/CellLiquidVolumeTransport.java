@@ -51,6 +51,7 @@ final class CellLiquidVolumeTransport {
 			double velocity = faceVelocity(f) + (scalarTransport.axis[f] == 1 ? verticalPrediction : 0);
 			if (domain.geometry.solid[scalarTransport.left[f]] || domain.geometry.solid[scalarTransport.right[f]]) continue;
 			int donor = velocity >= 0 ? scalarTransport.left[f] : scalarTransport.right[f];
+			if (!domain.gridToParticleStage.advectionCells()[donor]) continue;
 			if (domain.markerGrid.exactCellVolumeInventory[donor].signum() == 0) continue;
 			double open = geometry.aperture(scalarTransport.left[f], scalarTransport.right[f], scalarTransport.axis[f]);
 			if (open == 0) continue;
@@ -71,6 +72,7 @@ final class CellLiquidVolumeTransport {
 			if (!(open > 0)) continue;
 			for (int direction = 0; direction < 2; direction++) {
 				int donor = direction == 0 ? left : right;
+				if (!domain.gridToParticleStage.advectionCells()[donor]) continue;
 				if (domain.markerGrid.exactCellVolumeInventory[donor].signum() == 0) continue;
 				double speed = flow.maximumOutwardSpeed(face, direction == 0, verticalPrediction);
 				outgoing[donor] += speed / h * open / geometry.capacity(donor);

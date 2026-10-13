@@ -406,6 +406,36 @@ public final class CellRemapMomentsValidation {
 		for (double[] point : source) moments.add(1, java.util.Arrays.copyOf(point, 3), java.util.Arrays.copyOfRange(point, 3, 6));
 		check(moments.minimumCount() == 3, "Thin affine rule requires more nodes than its positive source");
 		verifyJointRule(moments, weights, source);
+		double thin = Math.scalb(1.0, -25);
+		double[][] positions = {{-.5, -.5, -.25}, {-thin, -thin, -.25}, {-.25, -.25 - thin, -.25}};
+		for (int sign : new int[] {-1, 1}) {
+			var supported = new CellRemapSpatialMoments();
+			for (int p = 0; p < 3; p++) supported.add(1, positions[p], new double[] {sign * (p == 2 ? 2 : -1), 0, 0});
+			check(supported.spatialRank() == 1 && supported.minimumCount() == 3,
+					"Supported thin rule must retain its second position direction through a joint velocity mode");
+			var domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
+			domain.geometry.cutCells.replaceMask(0, 254);
+			double[] target = supported.centroid(), storage = new double[3], projection = new double[3];
+			for (int a = 0; a < 3; a++) target[a] *= supported.mass();
+			var published = CellRemapSampling.fit(domain, 0, 1, weights, supported, positions, target, storage, 0, .5, projection);
+			double[] storedMoment = new double[3]; double momentum = 0, kinetic = 0;
+			for (int p = 0; p < 3; p++) {
+				float[] point = new float[3];
+				for (int a = 0; a < 3; a++) {
+					point[a] = (float) ((.5 + published.positions()[p][a]) * domain.config.cellSize());
+					storedMoment[a] += published.positions()[p][a];
+				}
+				check(domain.particleCellIndex(point[0], point[1], point[2]) == 0
+						&& CellRemapMicroTopology.positionSupport(254, domain.config.cellSize(), point[0], point[1], point[2]) == 1,
+						"Thin coupled mode left its actual binary32 open micro support");
+				momentum += published.velocities()[p][0]; kinetic += published.velocities()[p][0] * published.velocities()[p][0];
+			}
+			for (int a = 0; a < 3; a++) {
+				precise(storedMoment[a] - target[a], storage[a], "Thin supported position storage audit");
+				check(projection[a] == 0, "A supported thin source required a projected centroid");
+			}
+			precise(momentum, 0, "Thin supported source momentum"); precise(kinetic, 6, "Thin supported source kinetic moment");
+		}
 	}
 
 	private static void unequalSourceMassKeepsFirstMoment() {

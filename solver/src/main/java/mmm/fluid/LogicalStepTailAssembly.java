@@ -70,7 +70,7 @@ final class LogicalStepTailAssembly {
 					@Override public SignedDyadic exactInternalEnergy() { return domain.exactInternalEnergy(); }
 					@Override public void markGridDirty() { domain.gridDirty = true; }
 					@Override public void rebuildGrid() { domain.rebuildGridFromParticles(); }
-					@Override public void ensureGrid() { domain.ensureInventoryGrid(); }
+					@Override public void ensureInventoryGrid() { domain.ensureInventoryGrid(); }
 				});
 		return new Stages(transition, reseed);
 	}
