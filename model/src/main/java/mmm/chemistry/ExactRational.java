@@ -127,6 +127,12 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 
 	/** Rounds the exact quotient once to the final binary64 unit, with ties to even. */
 	public double toDouble() {
+		return roundQuotientToDouble(numerator, denominator);
+	}
+
+	/** Observes an arithmetic quotient without storing a new rational definition. */
+	public static double roundQuotientToDouble(BigInteger numerator, BigInteger denominator) {
+		if (denominator.signum() <= 0) throw new IllegalArgumentException("Quotient denominator must be positive");
 		int sign = numerator.signum();
 		if (sign == 0) return 0.0;
 		BigInteger magnitude = numerator.abs();

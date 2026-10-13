@@ -475,12 +475,49 @@ public final class AirNetworkValidation {
 			checkPartitionColumns(large, parts);
 		}
 		check(large.equals(before), "Read-only rational topology partition changed its source inventory");
+		validateGeometricSumPartition(source);
 		for(boolean reverse:new boolean[]{false,true}) {
 			AirNetwork network=new AirNetwork();int node=network.addNode(3e-10,1e-9);
 			int[] split=network.splitNode(node,reverse?2.99e-10:1e-12,reverse?1e-12:2.99e-10);
 			check(network.inventory(split[reverse?1:0]).isEmpty() && network.inventory(split[reverse?0:1]).standardVolumeNanos()==1
 					&& network.auditClosed(),"Public cavity split replaced sub-nano volume proportions by equal minimum weights");
 		}
+	}
+
+	private static void validateGeometricSumPartition(GasInventory source) {
+		var before = new GasInventory(source.components());
+		BigInteger power = BigInteger.ONE.shiftLeft(8200);
+		BigInteger first = power.subtract(BigInteger.ONE), second = power.add(BigInteger.ONE);
+		var a = new ExactRational(first.subtract(BigInteger.ONE), first);
+		var b = new ExactRational(second.subtract(BigInteger.ONE), second);
+		expectThrow(() -> a.add(b), "Genuinely oversized canonical geometric sum");
+		var different = ExactGasPartitionWeights.ofRationals(List.of(a, b));
+		check(java.util.Arrays.equals(different.allocateNanos(1), new long[] {0, 1}),
+				"Geometric weights equal in binary64 lost their exact largest remainder order");
+		check(java.util.Arrays.equals(ExactGasPartitionWeights.ofRationals(List.of(b, a)).allocateNanos(1), new long[] {1, 0}),
+				"Exact geometric remainder order changed under permutation");
+		var symmetric = ExactGasPartitionWeights.ofTerms(List.of(List.of(a, b), List.of(b, a)));
+		var parts = source.partition(symmetric);
+		checkPartitionColumns(source, parts);
+		check(parts.getFirst().component("test:a").standardVolumeNanos() == 31
+				&& parts.getFirst().component("test:b").standardVolumeNanos() == 9,
+				"Equal geometric sums did not retain ordinal integer ties");
+		check(java.util.Arrays.equals(symmetric.partitionControlVolume(1), new double[] {.5, .5})
+				&& symmetric.weightVolume(0) == 2, "Oversized geometric sum changed binary64 control volume or absolute measure");
+		// The second expression is exactly a+b, with different denominator keys.
+		var equal = ExactGasPartitionWeights.ofTerms(List.of(List.of(a, b), List.of(ExactRational.ONE,
+				new ExactRational(first.subtract(BigInteger.TWO), first.shiftLeft(1)),
+				new ExactRational(second.subtract(BigInteger.TWO), second.shiftLeft(1)))));
+		check(java.util.Arrays.equals(equal.allocateNanos(61), new long[] {31, 30}),
+				"Nonstructural exact geometric tie failed to terminate or changed ordinal allocation");
+		var fraction = new ExactRational(BigInteger.ONE.shiftLeft(53).add(BigInteger.ONE), BigInteger.ONE.shiftLeft(54));
+		var complement = ExactRational.ONE.subtract(fraction);
+		var midpoint = ExactGasPartitionWeights.ofTerms(List.of(List.of(a.multiply(fraction), b.multiply(fraction)),
+				List.of(a.multiply(complement), b.multiply(complement)), List.of(a, b)));
+		var volume = midpoint.partitionControlVolume(1);
+		check(volume[0] == .25 && volume[1] == Math.nextDown(.25) && volume[2] == .5,
+				"Geometric expression at a binary64 midpoint lost ties-to-even or largest-share remainder");
+		check(source.equals(before), "Geometric partition changed its source inventory");
 	}
 
 	private static void validateSplitPreflightsAllOwners() {

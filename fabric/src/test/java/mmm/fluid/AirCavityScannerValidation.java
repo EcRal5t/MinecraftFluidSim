@@ -452,9 +452,9 @@ public final class AirCavityScannerValidation {
 					"Complete gas handoff lost the tiny vacuum volume or its parent's inventory");
 		}
 		var one = mmm.units.SignedDyadic.of(1);
-		var tinyWeight = mmm.units.SignedDyadic.of(1, -60);
-		double[] direct = GasTopologyVolumePartition.partition(1, List.of(one, tinyWeight));
-		double[] reflected = GasTopologyVolumePartition.partition(1, List.of(tinyWeight, one));
+		var tinyWeight = ExactRational.ONE.divide(1L << 60);
+		double[] direct = GasTopologyVolumePartition.partitionRational(1, List.of(ExactRational.ONE, tinyWeight));
+		double[] reflected = GasTopologyVolumePartition.partitionRational(1, List.of(tinyWeight, ExactRational.ONE));
 		check(direct[1] == Math.scalb(1.0, -60) && reflected[0] == direct[1] && reflected[1] == direct[0],
 				"Gas volume remainder placement erased a positive tiny share or changed under permutation");
 		var error = mmm.units.SignedDyadic.of(direct[0]).add(mmm.units.SignedDyadic.of(direct[1])).subtract(one);
@@ -528,7 +528,14 @@ public final class AirCavityScannerValidation {
 		try {
 			var method = GasTopologyCoordinator.class.getDeclaredMethod("overlaps", GasRuntimeGeometry.class, GasRuntimeGeometry.class);
 			method.setAccessible(true);
-			return (java.util.Map<Long, ExactRational>) method.invoke(domain.gasTopologyCoordinator, old, next);
+			var leaves = (java.util.Map<Long, List<ExactRational>>) method.invoke(domain.gasTopologyCoordinator, old, next);
+			var result = new java.util.TreeMap<Long, ExactRational>();
+			for (var entry : leaves.entrySet()) {
+				ExactRational sum = ExactRational.ZERO;
+				for (var leaf : entry.getValue()) sum = sum.add(leaf);
+				result.put(entry.getKey(), sum);
+			}
+			return result;
 		} catch (ReflectiveOperationException failure) { throw new AssertionError("Gas topology weight inspection failed", failure); }
 	}
 

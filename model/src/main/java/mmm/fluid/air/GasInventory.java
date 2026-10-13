@@ -177,21 +177,13 @@ public final class GasInventory {
 
 	/** Exact topology weights retain positive sub-nano proportions without inventing integer shares. */
 	public List<GasInventory> partition(List<ExactRational> weights) {
-		if (weights == null || weights.isEmpty()) throw new IllegalArgumentException("Gas partition needs children");
-		ExactRational sum = ExactRational.ZERO;
-		for (ExactRational weight : weights) {
-			if (weight == null || weight.signum() < 0) throw new IllegalArgumentException("Gas partition weight cannot be negative");
-			sum = sum.add(weight);
-		}
-		if (sum.signum() == 0) throw new IllegalArgumentException("Exact partition weights sum to zero");
-		ArrayList<ExactRational> normalized = new ArrayList<>(weights.size());
-		for (ExactRational weight : weights) {
-			BigInteger first = weight.numerator().gcd(sum.numerator());
-			BigInteger second = sum.denominator().gcd(weight.denominator());
-			normalized.add(new ExactRational(weight.numerator().divide(first).multiply(sum.denominator().divide(second)),
-					weight.denominator().divide(second).multiply(sum.numerator().divide(first))));
-		}
-		return partition(weights.size(), total -> rationalRemainder(total, normalized));
+		return partition(ExactGasPartitionWeights.ofRationals(weights));
+	}
+
+	/** The same immutable geometric measures serve integer stock and physical control volume. */
+	public List<GasInventory> partition(ExactGasPartitionWeights weights) {
+		if (weights == null) throw new IllegalArgumentException("Gas partition weights are missing");
+		return partition(weights.childCount(), weights::allocateNanos);
 	}
 
 	private List<GasInventory> partition(int childCount, LongFunction<long[]> allocation) {
@@ -205,22 +197,6 @@ public final class GasInventory {
 		ArrayList<GasInventory> result = new ArrayList<>(childCount);
 		for (List<GasComponentAmount> child : children) result.add(new GasInventory(child));
 		return List.copyOf(result);
-	}
-
-	private static long[] rationalRemainder(long total, List<ExactRational> normalized) {
-		long[] shares = new long[normalized.size()];
-		ArrayList<RationalRemainder> remainders = new ArrayList<>(normalized.size());
-		long assigned = 0;
-		for (int index = 0; index < normalized.size(); index++) {
-			ExactRational weight = normalized.get(index);
-			BigInteger[] division = weight.numerator().multiply(BigInteger.valueOf(total)).divideAndRemainder(weight.denominator());
-			shares[index] = division[0].longValueExact();
-			assigned = Math.addExact(assigned, shares[index]);
-			remainders.add(new RationalRemainder(index, new ExactRational(division[1], weight.denominator())));
-		}
-		remainders.sort(Comparator.comparing(RationalRemainder::value).reversed().thenComparingInt(RationalRemainder::index));
-		for (long index = 0, left = total - assigned; index < left; index++) shares[remainders.get((int) index).index()]++;
-		return shares;
 	}
 
 	static long[] largestRemainder(long total, List<BigInteger> weights) {
@@ -299,7 +275,6 @@ public final class GasInventory {
 
 	public record Split(GasInventory first, GasInventory second) { }
 	private record Remainder(int index, BigInteger value) { }
-	private record RationalRemainder(int index, ExactRational value) { }
 	private static boolean closeColumn(double first, double second) {
 		return Math.abs(first - second) <= Math.max(1.0E-12,
 				Math.max(Math.ulp(first), Math.ulp(second)) * 16.0);

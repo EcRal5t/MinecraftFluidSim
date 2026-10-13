@@ -3,6 +3,7 @@ package mmm.fluid;
 import mmm.chemistry.ExactRational;
 import mmm.fluid.air.AirEdge;
 import mmm.fluid.air.AirNetwork;
+import mmm.fluid.air.ExactGasPartitionWeights;
 import mmm.fluid.air.GasAuditLedger;
 import mmm.fluid.air.GasInventory;
 import mmm.fluid.air.GasRegistry;
@@ -147,8 +148,8 @@ final class GasTopologyCoordinator {
 	}
 
 	/** Single-successor finite stock needs positive support; splits and ambient capture retain exact physical weights. */
-	private TreeMap<Long, ExactRational> overlaps(GasRuntimeGeometry old, GasRuntimeGeometry next) {
-		var result = new TreeMap<Long, ExactRational>();
+	private TreeMap<Long, List<ExactRational>> overlaps(GasRuntimeGeometry old, GasRuntimeGeometry next) {
+		var result = new TreeMap<Long, List<ExactRational>>();
 		var capacities = old.capacity().pieces();
 		var intersections = new ExactRational[capacities.size()];
 		int[] successor = new int[old.nodeCount() + 1]; Arrays.fill(successor, -1);
@@ -175,20 +176,12 @@ final class GasTopologyCoordinator {
 			int piece = capacity.id(), source = old.nodeOfPiece(piece), destination = next.nodeOfPiece(piece);
 			long pair = (long) source << 32 | (destination & 0xffffffffL);
 			if (source > 0 && successor[source] >= 0) {
-				result.putIfAbsent(pair, ExactRational.ONE);
+				result.putIfAbsent(pair, List.of(ExactRational.ONE));
 				continue;
 			}
 			var before = old.geometry().piece(piece);
 			var weight = exact(SignedDyadic.of(capacity.cubicMeters())).multiply(divide(overlap, before.normalizedVolume()));
-			try { result.merge(pair, weight, ExactRational::add); }
-			catch (IllegalArgumentException unavailable) {
-				var accumulated = result.get(pair);
-				throw new GasTopologyBlockedException("Exact gas overlap sum unavailable: source=" + source
-						+ ", destination=" + destination + ", piece=" + piece
-						+ ", accumulatedBits=" + accumulated.numerator().bitLength() + "/" + accumulated.denominator().bitLength()
-						+ ", weightBits=" + weight.numerator().bitLength() + "/" + weight.denominator().bitLength()
-						+ ": " + unavailable.getMessage());
-			}
+			result.computeIfAbsent(pair, ignored -> new ArrayList<>()).add(weight);
 		}
 		return result;
 	}
@@ -220,7 +213,7 @@ final class GasTopologyCoordinator {
 			var overlap = overlaps(old, next);
 			if (edit == null) retainReachableSingleCavity(old, next, overlap);
 			for (int previous = 1; previous <= old.nodeCount(); previous++) {
-				Map<Long, ExactRational> destinations = overlap.subMap((long) previous << 32, (long) (previous + 1) << 32);
+				Map<Long, List<ExactRational>> destinations = overlap.subMap((long) previous << 32, (long) (previous + 1) << 32);
 				GasInventory stock = inventory(previous, edit);
 				if (destinations.isEmpty()) {
 					if (stock.isEmpty()) continue;
@@ -232,7 +225,7 @@ final class GasTopologyCoordinator {
 					if (refineMissingSuccessor) throw new MechanicalTimeRefinement(2, reason);
 					throw new GasTopologyBlockedException(reason);
 				}
-				var weights = List.copyOf(destinations.values()); var parts = stock.partition(weights);
+				var weights = ExactGasPartitionWeights.ofTerms(List.copyOf(destinations.values())); var parts = stock.partition(weights);
 				double[] energies = !thermal ? null : stock.isEmpty() ? new double[parts.size()] : partitionEnergy(previous, parts, edit);
 				double[] control = !thermal ? null : GasTopologyVolumePartition.partitionRational(
 						domain.gasState.network.availableVolume(previous), weights);
@@ -255,7 +248,8 @@ final class GasTopologyCoordinator {
 			}
 			if (!next.sealedExterior()) for (var entry : overlap.subMap(0L, 1L << 32).entrySet()) {
 				int node = (int) (long) entry.getKey(); if (node == 0) continue;
-				double trappedVolume = entry.getValue().toDouble(); var trapped = ambientInventory(trappedVolume);
+				double trappedVolume = GasTopologyVolumePartition.absoluteRational(entry.getValue());
+				var trapped = ambientInventory(trappedVolume);
 				inventories.set(node - 1, inventories.get(node - 1).merge(trapped));
 				sourceDelta = sourceDelta.add(trapped); contributed[node] = true;
 				if (thermal) {
@@ -295,7 +289,7 @@ final class GasTopologyCoordinator {
 
 	/** A delayed liquid edit can expose a connected path before displacing every original dry piece. */
 	private void retainReachableSingleCavity(GasRuntimeGeometry old, GasRuntimeGeometry next,
-	                                       TreeMap<Long, ExactRational> overlap) {
+	                                       TreeMap<Long, List<ExactRational>> overlap) {
 		long pair = 1L << 32 | 1;
 		if (!old.sealedExterior() || !next.sealedExterior() || old.nodeCount() != 1 || next.nodeCount() != 1
 				|| !overlap.subMap(1L << 32, 2L << 32).isEmpty()) return;
@@ -305,7 +299,7 @@ final class GasTopologyCoordinator {
 			if (old.geometry().collisionMask(cell) != current.geometry().collisionMask(cell)) return;
 		var first = overlaps(old, current).get(pair);
 		var second = overlaps(current, next).get(pair);
-		if (first != null && first.signum() > 0 && second != null && second.signum() > 0)
+		if (first != null && !first.isEmpty() && second != null && !second.isEmpty())
 			// Each positive leg lies in the same fully connected finite gas chamber. Its homogeneous
 			// stock follows that actual path; a single unchanged inventory's isentropes compose by V0/V2.
 			overlap.put(pair, first);
