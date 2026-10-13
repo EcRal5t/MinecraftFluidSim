@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import java.util.Arrays;
+import mmm.units.SignedDyadic;
 
 /** Actual marker inertia, independent cell-flux assembly, pressure work and finite gas storage. */
 public final class MarkerPressureValidation {
@@ -263,6 +264,9 @@ public final class MarkerPressureValidation {
 			definitions.add(new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 1, coefficient)), 0));
 		}
 		var operator = new CellVelocityConstraintOperator(basis, definitions); var reference = new double[4][4];
+		var velocity = new double[3][basis.markerCount()];
+		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < basis.markerCount(); marker++) velocity[axis][marker] = Math.sin(axis + .3 * marker);
+		verifyFactoredConstraint(basis, definitions, velocity, new double[]{.7, -1.3, .25, -.5});
 		// Integrate the physical q-aware source features independently of the stored fit and its pullback.
 		for (int axis = 0; axis < 3; axis++) {
 			var massGram = new double[4][4]; var derivative = new double[4][4];
@@ -356,6 +360,7 @@ public final class MarkerPressureValidation {
 		var velocity = new double[3][count];
 		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < count; i++) velocity[axis][i] = Math.sin(.2 * i + axis);
 		double[] rate = new double[2], pressure = {.7, -1.3}; constraint.volumeRate(velocity, rate);
+		verifyFactoredConstraint(basis, definitions, velocity, pressure);
 		var force = new double[3][count]; constraint.force(pressure, force);
 		near(rate[0] * pressure[0] + rate[1] * pressure[1], work(velocity, force), 2e-12, "Constraint and actual-marker force work");
 		double[] applied = new double[2]; double positiveWork=constraint.applyWithWork(pressure, applied); double kinetic = 0;
@@ -406,6 +411,7 @@ public final class MarkerPressureValidation {
 		FluidDomain domain = affineDomain(cube); CellAffineVelocity basis = CellAffineVelocity.capture(domain);
 		if (basis.rank(0) != 4 || !basis.hasRepresentableBasis(0) || !basis.canRepresentPoint(0, .5, .5, .5))
 			throw new AssertionError("Full spatial quadrature lost its affine velocity capacity");
+		verifyConstraintRowRelations(basis, 0);
 		for (int a = 0; a < 3; a++) {
 			java.math.BigDecimal mass = java.math.BigDecimal.ZERO, first = java.math.BigDecimal.ZERO;
 			for (int i = 0; i < cube.length; i++) {
@@ -492,14 +498,14 @@ public final class MarkerPressureValidation {
 		var translation = new double[3][4]; Arrays.fill(translation[0], 1); double[] translationRate = new double[1];
 		thinConstraint.volumeRate(translation, translationRate);
 		near(translationRate[0], 0, 2e-14, "Expanded constraint preserves its constant-velocity kernel");
-		verifyExpandedConstraintRowRelations(thinBasis, thinCell);
+		verifyConstraintRowRelations(thinBasis, thinCell);
 		double savedMass = basis.massKilograms(0), savedCentre = basis.center(0, 0), savedCoefficient = basis.coefficient(0, 0);
 		domain.particles.setMass(0, 200); domain.particles.setPositionX(0, .25F);
 		near(basis.massKilograms(0), savedMass, 0, "Captured affine mass ownership");
 		near(basis.center(0, 0), savedCentre, 0, "Captured affine centre ownership");
 		near(basis.coefficient(0, 0), savedCoefficient, 0, "Captured affine map ownership");
 	}
-	private static void verifyExpandedConstraintRowRelations(CellAffineVelocity basis, int block) {
+	private static void verifyConstraintRowRelations(CellAffineVelocity basis, int block) {
 		boolean truncatedRelation = false;
 		for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) {
 			double coefficient = 1 + 0x1.0p-49;
@@ -515,6 +521,9 @@ public final class MarkerPressureValidation {
 			for (double[] component : force) for (double value : component) near(value, 0, 0, "Exact declared pressure row relation");
 			near(operator.applyWithWork(new double[]{1, 1, -1}, image), 0, 0, "Dependent pressure rows have zero mass work");
 			for (double value : image) near(value, 0, 0, "Dependent pressure rows have zero operator image");
+			var velocity = new double[3][basis.markerCount()];
+			for (int a = 0; a < 3; a++) for (int marker = 0; marker < basis.markerCount(); marker++) velocity[a][marker] = Math.sin(a + .3 * marker);
+			verifyFactoredConstraint(basis, rows, velocity, new double[]{.7, -1.3, .25});
 			operator.force(new double[]{1, 0, 0}, force);
 			for (int marker = 0; marker < basis.markerCount(); marker++) {
 				var expected = basis.coefficientExact(marker, axis, term).multiply(mmm.units.SignedDyadic.of(coefficient));
@@ -523,13 +532,56 @@ public final class MarkerPressureValidation {
 				for (int multiple = 1; multiple <= 3; multiple++) {
 					var exact = expected.multiply(mmm.units.SignedDyadic.of(multiple));
 					var high = mmm.units.SignedDyadic.of(exact.toDouble());
-					var rounded = high.add(mmm.units.SignedDyadic.of(exact.subtract(high).toDouble()));
+					var rounded = basis.expandedCell(block) ? high.add(mmm.units.SignedDyadic.of(exact.subtract(high).toDouble())) : high;
 					defect = multiple == 3 ? defect.subtract(rounded) : defect.add(rounded);
 				}
 				truncatedRelation |= defect.signum() != 0;
 			}
 		}
-		if (!truncatedRelation) throw new AssertionError("Expanded row fixture did not exercise product truncation");
+		if (!truncatedRelation) throw new AssertionError("Pressure row fixture did not exercise product truncation");
+	}
+
+	/** Independent full C assembly checks the factor action without reading its cached D or H. */
+	private static void verifyFactoredConstraint(CellAffineVelocity basis, java.util.List<CellVelocityConstraintOperator.Row> definitions,
+	                                           double[][] velocity, double[] pressure) {
+		int count = basis.markerCount(), rows = definitions.size();
+		var matrix = new SignedDyadic[rows][3 * count];
+		for (var row : matrix) Arrays.fill(row, SignedDyadic.ZERO);
+		for (int row = 0; row < rows; row++) for (var block : definitions.get(row).blocks()) {
+			double[] declared = block.coefficients();
+			for (int ordinal = 0; ordinal < basis.blockMarkerCount(block.velocityBlock()); ordinal++) {
+				int marker = basis.blockMarker(block.velocityBlock(), ordinal), index = block.axis() * count + marker;
+				for (int term = 0; term < 4; term++) matrix[row][index] = matrix[row][index]
+						.add(SignedDyadic.of(declared[term]).multiply(basis.coefficientExact(marker, block.axis(), term)));
+			}
+		}
+		var operator = new CellVelocityConstraintOperator(basis, definitions);
+		var force = new double[3][count]; var exactForce = new SignedDyadic[3 * count]; Arrays.fill(exactForce, SignedDyadic.ZERO);
+		for (int index = 0; index < exactForce.length; index++) for (int row = 0; row < rows; row++)
+			exactForce[index] = exactForce[index].add(matrix[row][index].multiply(SignedDyadic.of(pressure[row])));
+		operator.force(pressure, force);
+		for (int index = 0; index < exactForce.length; index++)
+			near(force[index / count][index % count], exactForce[index].toDouble(), 0, "Factored/full-C force equality");
+		double[] rate = new double[rows], image = new double[rows], diagonal = new double[rows];
+		operator.volumeRate(velocity, rate); operator.diagonal(diagonal); double work = operator.applyWithWork(pressure, image);
+		SignedDyadic exactWork = SignedDyadic.ZERO;
+		for (int index = 0; index < exactForce.length; index++) exactWork = exactWork.add(exactForce[index].multiply(exactForce[index])
+				.multiply(SignedDyadic.of(1 / basis.massKilograms(index % count))));
+		for (int row = 0; row < rows; row++) {
+			SignedDyadic storage = SignedDyadic.of(definitions.get(row).storage()), load = SignedDyadic.of(pressure[row]);
+			SignedDyadic expectedRate = SignedDyadic.ZERO, expectedImage = storage.multiply(load), expectedDiagonal = storage;
+			for (int index = 0; index < exactForce.length; index++) {
+				SignedDyadic coefficient = matrix[row][index], inertia = SignedDyadic.of(1 / basis.massKilograms(index % count));
+				expectedRate = expectedRate.add(coefficient.multiply(SignedDyadic.of(velocity[index / count][index % count])));
+				expectedImage = expectedImage.add(coefficient.multiply(exactForce[index]).multiply(inertia));
+				expectedDiagonal = expectedDiagonal.add(coefficient.multiply(coefficient).multiply(inertia));
+			}
+			near(rate[row], expectedRate.toDouble(), 0, "Factored/full-C volume equality");
+			near(image[row], expectedImage.toDouble(), 0, "Factored/full-C inertia equality");
+			near(diagonal[row], expectedDiagonal.toDouble(), 0, "Factored/full-C diagonal equality");
+			exactWork = exactWork.add(storage.multiply(load).multiply(load));
+		}
+		near(work, exactWork.toDouble(), 0, "Factored/full-C positive-work equality");
 	}
 
 	private static void verifyAffineRigidMotion(CellAffineVelocity basis) {
