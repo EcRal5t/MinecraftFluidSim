@@ -161,6 +161,24 @@ final class GasTopologyCoordinator {
 	private TreeMap<Long, List<ExactRational>> overlaps(GasRuntimeGeometry old, GasRuntimeGeometry next) {
 		var result = new TreeMap<Long, List<ExactRational>>();
 		var capacities = old.capacity().pieces();
+		int[] potential = new int[old.nodeCount() + 1]; Arrays.fill(potential, -1);
+		boolean[] certified = new boolean[potential.length];
+		for (var capacity : capacities) {
+			int piece = capacity.id(), source = old.nodeOfPiece(piece), destination = next.nodeOfPiece(piece);
+			if (source <= 0 || destination < 0) continue;
+			if (potential[source] == -1) potential[source] = destination;
+			else if (potential[source] >= 0 && potential[source] != destination) potential[source] = -2;
+			var before = old.geometry().piece(piece); var after = next.geometry().piece(piece);
+			if (before.micro() != after.micro()) throw new IllegalStateException("Gas overlap changed its fixed microbox");
+			if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane()))
+				certified[source] |= before.normalizedVolume().signum() > 0;
+			else if (before.dryPlane() == null) certified[source] |= after.normalizedVolume().signum() > 0;
+		}
+		// Potential targets include every positive intersection; one certified microbox proves support.
+		for (int source = 1; source < potential.length; source++) {
+			certified[source] &= potential[source] >= 0;
+			if (certified[source]) result.put((long) source << 32 | (potential[source] & 0xffffffffL), List.of(ExactRational.ONE));
+		}
 		var intersections = new ExactRational[capacities.size()];
 		int[] successor = new int[old.nodeCount() + 1]; Arrays.fill(successor, -1);
 		for (int index = 0; index < capacities.size(); index++) {
@@ -168,6 +186,7 @@ final class GasTopologyCoordinator {
 			int piece = capacity.id(), source = old.nodeOfPiece(piece), destination = next.nodeOfPiece(piece);
 			// Persistent ambient space carries no finite stock, control volume or external transfer.
 			if (destination < 0 || source == 0 && destination == 0) continue;
+			if (source > 0 && certified[source]) continue;
 			var before = old.geometry().piece(piece); var after = next.geometry().piece(piece);
 			if (before.micro() != after.micro()) throw new IllegalStateException("Gas overlap changed its fixed microbox");
 			ExactRational overlap;
