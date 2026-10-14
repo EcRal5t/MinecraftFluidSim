@@ -166,17 +166,46 @@ final class GasFaceIntersection {
 		for (var plane : first) {
 			SignedDyadic[] n = {plane.nx(), plane.ny(), plane.nz()}; int axis = 0;
 			while (axis < 3 && n[axis].signum() == 0) axis++;
-			if (axis == 3 || n[(axis + 1) % 3].signum() != 0 || n[(axis + 2) % 3].signum() != 0) continue;
+			if (axis == 3) continue;
 			var opposite = new GasGeometryOverlap.HalfSpace(plane.nx().negate(), plane.ny().negate(), plane.nz().negate(), plane.threshold().negate());
 			if (!second.contains(opposite)) continue;
-			if (!(n[axis].signum() < 0 ? n[axis].negate() : n[axis]).equals(SignedDyadic.of(1)))
-				throw new GasTopologyBlockedException("Dry box shared face requires an axial unit normal");
-			var coordinate = n[axis].signum() < 0 ? plane.threshold().negate() : plane.threshold();
-			var planes = new ArrayList<Plane>(); planes.addAll(project(first, axis, coordinate)); planes.addAll(project(second, axis, coordinate));
-			if (exactArea(.5 * (micro >>> ((axis + 1) % 3) & 1), .5 * (micro >>> ((axis + 2) % 3) & 1), .5, planes).signum() > 0) return true;
+			if (n[(axis + 1) % 3].signum() == 0 && n[(axis + 2) % 3].signum() == 0
+					&& magnitude(n[axis]).equals(SignedDyadic.of(1))) {
+				var coordinate = n[axis].signum() < 0 ? plane.threshold().negate() : plane.threshold();
+				var planes = new ArrayList<Plane>(); planes.addAll(project(first, axis, coordinate)); planes.addAll(project(second, axis, coordinate));
+				if (exactArea(.5 * (micro >>> ((axis + 1) % 3) & 1), .5 * (micro >>> ((axis + 2) % 3) & 1), .5, planes).signum() > 0) return true;
+			} else if (sharedSlopedFace(micro, plane, n, first, second)) return true;
 		}
 		return false;
 	}
+	private static boolean sharedSlopedFace(int micro, GasGeometryOverlap.HalfSpace face, SignedDyadic[] normal,
+	                                        List<GasGeometryOverlap.HalfSpace> first, List<GasGeometryOverlap.HalfSpace> second) {
+		int axis = 0;
+		for (int a = 1; a < 3; a++) if (magnitude(normal[a]).compareTo(magnitude(normal[axis])) > 0) axis = a;
+		var planes = new ArrayList<Plane>();
+		for (var constraint : first) if (!projectOnFace(planes, constraint, face, normal, axis)) return false;
+		for (var constraint : second) if (!projectOnFace(planes, constraint, face, normal, axis)) return false;
+		// The integration rectangle supplies four microbox faces. These two constrain the eliminated coordinate.
+		var unit = new SignedDyadic[]{SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO}; unit[axis] = SignedDyadic.of(1);
+		var lower = SignedDyadic.of(micro >>> axis & 1, -1); var upper = lower.add(SignedDyadic.of(1, -1));
+		if (!projectOnFace(planes, new GasGeometryOverlap.HalfSpace(unit[0], unit[1], unit[2], lower), face, normal, axis)
+				|| !projectOnFace(planes, new GasGeometryOverlap.HalfSpace(unit[0].negate(), unit[1].negate(), unit[2].negate(), upper.negate()),
+						face, normal, axis)) return false;
+		return exactArea(.5 * (micro >>> ((axis + 1) % 3) & 1), .5 * (micro >>> ((axis + 2) % 3) & 1), .5, planes).signum() > 0;
+	}
+	private static boolean projectOnFace(List<Plane> result, GasGeometryOverlap.HalfSpace constraint,
+	                                     GasGeometryOverlap.HalfSpace face, SignedDyadic[] normal, int axis) {
+		var n = new SignedDyadic[]{constraint.nx(), constraint.ny(), constraint.nz()};
+		var scale = magnitude(normal[axis]); var eliminated = normal[axis].signum() > 0 ? n[axis] : n[axis].negate();
+		var a = scale.multiply(n[(axis + 1) % 3]).subtract(eliminated.multiply(normal[(axis + 1) % 3]));
+		var b = scale.multiply(n[(axis + 2) % 3]).subtract(eliminated.multiply(normal[(axis + 2) % 3]));
+		var threshold = scale.multiply(constraint.threshold()).subtract(eliminated.multiply(face.threshold()));
+		if (a.signum() == 0 && b.signum() == 0) return threshold.signum() <= 0;
+		var projected = new Plane(a, b, threshold);
+		if (!result.contains(projected)) result.add(projected);
+		return true;
+	}
+	private static SignedDyadic magnitude(SignedDyadic value) { return value.signum() < 0 ? value.negate() : value; }
 
 	private static Plane plane(FlipPressurePhaseGeometry phase, int cell, int micro, int axis, double coordinate) {
 		double offset = phase.planeOffset(cell,micro);

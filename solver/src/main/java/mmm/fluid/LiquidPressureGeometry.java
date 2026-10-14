@@ -133,7 +133,12 @@ final class LiquidPressureGeometry {
 		for (int cell=0;cell<cells.length;cell++) if(microPieces[cell]!=null) for(int micro=0;micro<8;micro++) {
 			var piece=microPieces[cell][micro]; if(piece==null)continue;
 			for(int axis=0;axis<3;axis++) if((micro&1<<axis)==0 && microPieces[cell][micro|1<<axis]!=null) {
-				var wet=piece.faces.get(2*axis+1).moments();
+				var wet = phase.liquidShape(cell) == null ? piece.faces.get(2*axis+1).moments()
+						: surface(phase.internalSharedWetPolygons(cell,micro,axis,.5*(micro>>((axis+1)%3)&1),
+								.5*(micro>>((axis+2)%3)&1),.5),axis,.5,cell,domain);
+				if (phase.liquidShape(cell) != null && phase.liquidFractionExact(cell,micro) == 1
+						&& phase.liquidFractionExact(cell,micro|1<<axis) == 1)
+					wet = LiquidPressureMoments.fullMicroFace(wet,axis,.5,.5*(micro>>((axis+1)%3)&1),.5*(micro>>((axis+2)%3)&1),cell,domain);
 				if(wet.area()>0)interior.add(new InteriorFace(cell,micro,micro|1<<axis,axis,wet));
 			}
 		}
@@ -271,12 +276,15 @@ final class LiquidPressureGeometry {
 				if(micro[axis]+sign>=0 && micro[axis]+sign<2) {
 					int[] neighbor=micro.clone();neighbor[axis]+=sign;
 					if(!cut.microCellOpen(cell,neighbor[0],neighbor[1],neighbor[2]))facets.add(new Facet(FacetKind.WALL,cell,cell,axis,sign,key,wet));
-					else if(integral[0]>0 && (plane.liquidShape(cell)!=null || plane.liquidFractionExact(cell,slot)<1) && coincidentFreeFace(plane,cell,slot,axis,sign,coordinate)) {
-						// The closed box Gauss sum already includes this full wet face. Its exposed
-						// counterpart lies on a dry box, so represent the physical PLIC face once.
-						double[] normal=new double[3];normal[axis]=sign*wet.area();
-						Vec3[] first={Vec3.ZERO,Vec3.ZERO,Vec3.ZERO};first[axis]=wet.firstMoment().scale(sign);
-						fragments.add(new FreeFragment(cell,slot,slot^(1<<axis),vec(normal),new NormalFirstMoment(first[0],first[1],first[2])));
+					else if(integral[0]>0) {
+						SurfaceMoments exposed = plane.liquidShape(cell) != null
+								? surface(plane.internalExposedWetPolygons(cell,slot,axis,sign,tangent,other,.5),axis,coordinate,cell,d)
+								: plane.liquidFractionExact(cell,slot)<1 && coincidentFreeFace(plane,cell,slot,axis,sign,coordinate) ? wet : SurfaceMoments.EMPTY;
+						if (exposed.area()>0) {
+							double[] normal=new double[3];normal[axis]=sign*exposed.area();
+							Vec3[] first={Vec3.ZERO,Vec3.ZERO,Vec3.ZERO};first[axis]=exposed.firstMoment().scale(sign);
+							fragments.add(new FreeFragment(cell,slot,slot^(1<<axis),vec(normal),new NormalFirstMoment(first[0],first[1],first[2])));
+						}
 					}
 					continue;
 				}
@@ -369,10 +377,6 @@ final class LiquidPressureGeometry {
 	}
 	/** Exact coincidence of the outward wet side with one open internal microface. */
 	private static boolean coincidentFreeFace(FlipPressurePhaseGeometry plane,int cell,int micro,int axis,int sign,double coordinate) {
-		if (plane.liquidShape(cell) != null) {
-			var box = LiquidShapeGeometry.box(plane.liquidShape(cell));
-			return (sign > 0 ? box.upper(axis) : box.lower(axis)).equals(SignedDyadic.of(coordinate));
-		}
 		double normal=plane.planeNormal(cell,micro,axis);
 		if(!(sign*normal>0) || plane.planeNormal(cell,micro,(axis+1)%3)!=0 || plane.planeNormal(cell,micro,(axis+2)%3)!=0)return false;
 		return SignedDyadic.of(plane.planeOffset(cell,micro)).equals(SignedDyadic.of(normal).multiply(SignedDyadic.of(coordinate)));

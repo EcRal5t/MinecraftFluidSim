@@ -105,6 +105,18 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				new LiquidCellShape.Box(SignedDyadic.of(1, -2), zero, zero, half, half, half));
 		new FlipParticleState(6, 4, 6, .5F, 1, .125F, pure.copyPositionVolume(), new float[3], new byte[144],
 				List.of(new LiquidCellShape(31, touching, first, first, first)));
+		var quarter = SignedDyadic.of(1, -2);
+		var nonConvex = new FlipParticleState(6, 4, 6, .5F, 2, .09375F,
+				new float[]{.625F, .6875F, .625F, .0625F, .6875F, .5625F, .625F, .03125F}, new float[6], new byte[144],
+				List.of(new LiquidCellShape(31, List.of(new LiquidCellShape.Box(zero, quarter, zero, half, half, half),
+						new LiquidCellShape.Box(quarter, zero, zero, half, quarter, half)), SignedDyadic.of(31, -9),
+						SignedDyadic.of(31, -9), SignedDyadic.of(30, -9))));
+		var nonConvexRegion = populatedRegion(new UUID(73, 74)); nonConvexRegion.domain().restoreParticleState(nonConvex);
+		var nonConvexState = RegionCheckpointFixtures.capture(nonConvexRegion, 1);
+		var nonConvexSections = new ArrayList<RegionSectionState>();
+		for (var section : nonConvexState.sections()) nonConvexSections.add(codec.decodeSection(codec.encodeSection(section)));
+		assertParticleStateEquals(nonConvex, restorer(new RegionState(codec.decodeManifest(codec.encodeManifest(nonConvexState.manifest())),
+				nonConvexSections)).reconstruct());
 		try { new LiquidCellShape(31, List.of(box, box), first, first, first); throw new AssertionError("overlapping liquid boxes were accepted"); }
 		catch (IllegalArgumentException expected) { }
 		var cut = new byte[144]; cut[31] = (byte) 128;

@@ -111,6 +111,15 @@ final class GasTopologyCoordinator {
 				? GasAdvectionSuccessor.certify(domain, old, next, flux, ports, dt) : Map.<Integer, Integer>of();
 		return plan(next, false, null, true, -1, successors);
 	}
+	GasTopologyPlan planAfterLiquidTranslation(List<PhaseLiquidGeometryEdit> edits, SignedDyadic[] displacement) {
+		var old = domain.gasState.frame; if (old == null) return null;
+		domain.ensureInventoryGrid();
+		var occupied = currentOccupied();
+		if (!old.matchesCarrierGeometry(domain, occupied)) throw new IllegalStateException("Gas translation source geometry is stale");
+		var next = GasRuntimeGeometry.captureLiquidEdits(domain, edits, occupied, domain.gasState.sealedDomainBoundary);
+		var weights = GasTranslationSuccessor.weights(domain, old, next, displacement);
+		return plan(next, false, null, true, -1, Map.of(), weights);
+	}
 	private GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits, long[] occupied,
 	                                           boolean refineMissingSuccessor, int staticCell) {
 		if (edits == null) throw new IllegalArgumentException("Gas liquid edit list is missing");
@@ -260,6 +269,11 @@ final class GasTopologyCoordinator {
 	}
 	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit,
 	                             boolean refineMissingSuccessor, int staticCell, Map<Integer, Integer> advectionSuccessors) {
+		return plan(next, deferVolumeWork, edit, refineMissingSuccessor, staticCell, advectionSuccessors, null);
+	}
+	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit,
+	                             boolean refineMissingSuccessor, int staticCell, Map<Integer, Integer> advectionSuccessors,
+	                             Map<Long, List<ExactRational>> motionWeights) {
 		var old = domain.gasState.frame;
 		boolean thermal = domain.thermalState != null && domain.thermalState.gasModelBound();
 		int count = next.nodeCount(); double[] available = volumes(next);
@@ -280,7 +294,7 @@ final class GasTopologyCoordinator {
 				}
 			}
 		} else {
-			var overlap = overlaps(old, next);
+			var overlap = motionWeights == null ? overlaps(old, next) : new TreeMap<>(motionWeights);
 			for (var successor : advectionSuccessors.entrySet()) {
 				long source = (long) successor.getKey() << 32;
 				overlap.subMap(source, (long) (successor.getKey() + 1) << 32).clear();
@@ -315,6 +329,8 @@ final class GasTopologyCoordinator {
 				int part = 0;
 				for (var entry : destinations.entrySet()) {
 					int node = (int) (long) entry.getKey();
+					if (motionWeights != null && !stock.isEmpty() && parts.get(part).isEmpty())
+						throw new GasTopologyBlockedException("Translated positive gas successor cannot retain a standard-volume quantum: node=" + node);
 					if (node == 0) {
 						sinkDelta = sinkDelta.add(parts.get(part));
 						if (thermal) sinkEnergy = sinkEnergy.add(SignedDyadic.of(energies[part]));

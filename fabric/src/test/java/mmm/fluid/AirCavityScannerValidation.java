@@ -32,6 +32,7 @@ public final class AirCavityScannerValidation {
 		validateRuntimeGeometryBinding();
 		GasPhaseInterfaceValidation.validate();
 		validateMicroGasOverlap();
+		validateSlopedDryConnectivity();
 		validateComponentLiquidGeometry();
 		validateGasPieceCapacity();
 		validateMicroGasPoreCapacity();
@@ -554,6 +555,34 @@ public final class AirCavityScannerValidation {
 		var error=capacityRational(SignedDyadic.of(volume)).subtract(intended);
 		check((error.signum()<0?error.multiply(-1):error).compareTo(capacityRational(SignedDyadic.of(bound)))<=0,
 				"Gas node capacity rounding error exceeds its SI bound");
+	}
+
+	private static void validateSlopedDryConnectivity() {
+		for (int axis = 0; axis < 3; axis++) {
+			var normal = new SignedDyadic[]{SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO};
+			normal[axis] = normal[(axis + 1) % 3] = SignedDyadic.of(2);
+			var face = new GasGeometryOverlap.HalfSpace(normal[0], normal[1], normal[2], SignedDyadic.of(1));
+			var opposite = new GasGeometryOverlap.HalfSpace(normal[0].negate(), normal[1].negate(), normal[2].negate(), SignedDyadic.of(-1));
+			for (int scene = 0; scene < 3; scene++) {
+				var first = new java.util.ArrayList<GasGeometryOverlap.HalfSpace>(); first.add(face);
+				var second = new java.util.ArrayList<GasGeometryOverlap.HalfSpace>(); second.add(opposite);
+				if (scene > 0) {
+					var band = new SignedDyadic[]{SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO};
+					band[(axis + 2) % 3] = SignedDyadic.of(1);
+					var lower = scene == 1 ? SignedDyadic.of(1, -2) : SignedDyadic.of(1, -3);
+					var upper = scene == 1 ? lower : SignedDyadic.of(3, -3);
+					first.add(new GasGeometryOverlap.HalfSpace(band[0].negate(), band[1].negate(), band[2].negate(), lower.negate()));
+					second.add(new GasGeometryOverlap.HalfSpace(band[0], band[1], band[2], upper));
+				}
+				var expected = ExactRational.ONE.divide(16L << scene);
+				check(GasGeometryOverlap.normalizedVolume(0, first).equals(expected)
+						&& GasGeometryOverlap.normalizedVolume(0, second).equals(expected),
+						"Sloped connectivity fixture changed its two positive analytic volumes");
+				check(GasFaceIntersection.connected(0, List.of(first, second)) == (scene == 0)
+						&& GasFaceIntersection.connected(0, List.of(second, first)) == (scene == 0),
+						"Sloped dry connectivity confused positive area, edge contact or separation");
+			}
+		}
 	}
 
 	private static void validateMicroGasOverlap() {

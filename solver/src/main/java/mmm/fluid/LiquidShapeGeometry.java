@@ -14,35 +14,49 @@ final class LiquidShapeGeometry {
 	static List<List<HalfSpace>> wetSupports(FlipPressurePhaseGeometry phase, int cell, int micro) {
 		var shape = phase.liquidShape(cell);
 		if (shape == null) return plicSupport(phase, cell, micro, true);
-		var box = box(shape);
-		var clipped = intersection(box, microBox(micro));
-		return clipped == null ? List.of() : List.of(microPlanes(clipped, micro));
+		var result = new ArrayList<List<HalfSpace>>();
+		for (var box : shape.boxes()) {
+			var clipped = intersection(box, microBox(micro));
+			if (clipped != null) result.add(microPlanes(clipped, micro));
+		}
+		return List.copyOf(result);
 	}
 	static List<List<HalfSpace>> faceWetSupports(FlipPressurePhaseGeometry phase, int cell, int micro) {
 		var shape = phase.liquidShape(cell);
 		if (shape == null) return plicSupport(phase, cell, micro, true);
-		var clipped = intersection(box(shape), microBox(micro));
-		return clipped == null ? List.of() : clipped.equals(microBox(micro)) ? List.of(List.of()) : List.of(planes(box(shape)));
+		var result = new ArrayList<List<HalfSpace>>();
+		for (var box : shape.boxes()) {
+			var clipped = intersection(box, microBox(micro));
+			if (clipped != null) result.add(clipped.equals(microBox(micro)) ? List.of() : planes(box));
+		}
+		return List.copyOf(result);
 	}
 	static List<List<HalfSpace>> drySupports(FlipPressurePhaseGeometry phase, int cell, int micro) {
 		var shape = phase.liquidShape(cell);
 		if (shape == null) return plicSupport(phase, cell, micro, false);
-		var whole = microBox(micro); var wet = intersection(box(shape), whole);
-		if (wet == null) return List.of(List.of());
-		var result = new ArrayList<List<HalfSpace>>(6);
+		List<LiquidCellShape.Box> dry = List.of(microBox(micro));
+		for (var wet : shape.boxes()) {
+			var remaining = new ArrayList<LiquidCellShape.Box>();
+			for (var part : dry) subtract(part, wet, remaining);
+			dry = remaining;
+		}
+		return dry.stream().map(box -> microPlanes(box, micro)).toList();
+	}
+	private static void subtract(LiquidCellShape.Box whole, LiquidCellShape.Box removed, List<LiquidCellShape.Box> result) {
+		var wet = intersection(whole, removed);
+		if (wet == null) { result.add(whole); return; }
 		var lower = lower(whole); var upper = upper(whole);
-		// Remove the wet box by peeling disjoint slabs in cyclic axis order.
+		// Successive subtraction preserves disjoint positive slabs.
 		for (int axis = 0; axis < 3; axis++) {
 			if (lower[axis].compareTo(wet.lower(axis)) < 0) {
 				var end = upper.clone(); end[axis] = wet.lower(axis);
-				result.add(microPlanes(create(lower, end), micro)); lower[axis] = wet.lower(axis);
+				result.add(create(lower, end)); lower[axis] = wet.lower(axis);
 			}
 			if (upper[axis].compareTo(wet.upper(axis)) > 0) {
 				var start = lower.clone(); start[axis] = wet.upper(axis);
-				result.add(microPlanes(create(start, upper), micro)); upper[axis] = wet.upper(axis);
+				result.add(create(start, upper)); upper[axis] = wet.upper(axis);
 			}
 		}
-		return List.copyOf(result);
 	}
 	static ExactRational[] wetMoments(FlipPressurePhaseGeometry phase, int cell, int micro, boolean second) {
 		var result = new ExactRational[second ? 10 : 4]; java.util.Arrays.fill(result, ExactRational.ZERO);
@@ -61,12 +75,15 @@ final class LiquidShapeGeometry {
 					: support.getFirst().getFirst();
 			return GasGeometryOverlap.maximumLinearValue(micro, plane, function);
 		}
-		var clipped = intersection(box(phase.liquidShape(cell)), microBox(micro));
-		if (clipped == null) return ExactRational.ZERO;
-		SignedDyadic[] normal = {function.nx(), function.ny(), function.nz()}; var maximum = function.threshold().negate();
-		for (int axis = 0; axis < 3; axis++) maximum = maximum.add(normal[axis].multiply(
-				normal[axis].signum() >= 0 ? clipped.upper(axis) : clipped.lower(axis)));
-		return maximum.signum() <= 0 ? ExactRational.ZERO : PlicComponentGeometry.ratio(maximum, ONE);
+		SignedDyadic[] normal = {function.nx(), function.ny(), function.nz()}; var maximum = SignedDyadic.ZERO;
+		for (var box : phase.liquidShape(cell).boxes()) {
+			var clipped = intersection(box, microBox(micro)); if (clipped == null) continue;
+			var value = function.threshold().negate();
+			for (int axis = 0; axis < 3; axis++) value = value.add(normal[axis].multiply(
+					normal[axis].signum() >= 0 ? clipped.upper(axis) : clipped.lower(axis)));
+			if (value.compareTo(maximum) > 0) maximum = value;
+		}
+		return PlicComponentGeometry.ratio(maximum, ONE);
 	}
 	static List<HalfSpace> planes(LiquidCellShape.Box box) {
 		var result = new ArrayList<HalfSpace>(6);
@@ -84,11 +101,6 @@ final class LiquidShapeGeometry {
 			if (!box.upper(axis).equals(whole.upper(axis))) result.add(constraints.get(2 * axis + 1));
 		}
 		return List.copyOf(result);
-	}
-	static LiquidCellShape.Box box(LiquidCellShape shape) {
-		if (shape.boxes().size() != 1)
-			throw new GasTopologyBlockedException("Liquid shape requires connected positive-piece integration at cell " + shape.cell());
-		return shape.boxes().getFirst();
 	}
 	private static List<List<HalfSpace>> plicSupport(FlipPressurePhaseGeometry phase, int cell, int micro, boolean wet) {
 		double fraction = phase.liquidFractionExact(cell, micro);

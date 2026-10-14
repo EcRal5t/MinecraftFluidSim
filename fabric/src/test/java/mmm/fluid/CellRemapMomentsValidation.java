@@ -22,6 +22,7 @@ public final class CellRemapMomentsValidation {
 		if (args.length == 1 && args[0].equals("transport-moments")) {
 			jointTranslationPublishesEdgeAndCornerReceivers();
 			jointTranslationSurvivesCompleteCpuHandoff();
+			jointTranslationKeepsNonConvexReceiver();
 			limitedFluxMixesTheSamePositiveMomentWeights();
 			scalarTransportKeepsUnexcitedSpatialInertia();
 			directionalTransportPartitionsActualMomentumAndKineticEnergy();
@@ -44,6 +45,7 @@ public final class CellRemapMomentsValidation {
 		directionalTransportPartitionsActualMomentumAndKineticEnergy();
 		jointTranslationPublishesEdgeAndCornerReceivers();
 		jointTranslationSurvivesCompleteCpuHandoff();
+		jointTranslationKeepsNonConvexReceiver();
 		thinJointRuleKeepsActualRank();
 		partialCellInitializationHasPositiveWetLayerSupport();
 		faceArrivalRetainsFiniteNormalThickness();
@@ -227,6 +229,52 @@ public final class CellRemapMomentsValidation {
 					"Stationary complete CPU step replaced saved conservative quadrature");
 			check(domain.liquidShapes.equals(shapes), "Stationary complete CPU step changed saved liquid shapes");
 			FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		}
+	}
+	private static void jointTranslationKeepsNonConvexReceiver() {
+		for (float dt : new float[]{.125F, .123F}) for (int signs : new int[]{0, 7}) {
+			var domain = translationDomain(1, 3, signs, 4096, true, dt);
+			domain.setVolume(2, 1, 2, 1);
+			for (int p = 0; p < domain.particleCount(); p++) for (int axis = 0; axis < 3; axis++)
+				setVelocity(domain, p, axis, axis == 2 ? 0 : signs == 0 ? 1 : -1);
+			setTranslationField(domain, 1, 3, signs);
+			domain.sealDomainBoundary(); domain.bootstrapGasState(null);
+			long gas = domain.gasState.network.standardVolumeNanos(1); double capacity = domain.gasState.network.availableVolume(1);
+			if (dt == .125F && signs == 0) {
+				var sparseGas = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState()); sparseGas.setGasNodeStandardVolume(1, 1e-9);
+				setTranslationField(sparseGas, 1, 3, signs); sparseGas.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(sparseGas);
+				var before = sparseGas.exportParticleState(); boolean rejected = false;
+				try { sparseGas.cellLiquidVolumeTransport.advect(dt); } catch (GasTopologyBlockedException expected) { rejected = true; }
+				check(rejected && sparseGas.gasState.network.nodeCount() == 1 && sparseGas.gasState.network.standardVolumeNanos(1) == 1
+						&& java.util.Arrays.equals(before.copyPositionVolume(), sparseGas.exportParticleState().copyPositionVolume()),
+						"Unrepresentable positive gas split changed its original liquid or gas stock");
+			}
+			{
+				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, domain.captureAuthoritativeState(), java.util.List.of(), false, 0));
+				domain = candidate.claimPreparedCpuDomain();
+				check(domain.liquidShapes.stream().anyMatch(shape -> shape.boxes().size() > 1), "Non-convex receiver was filled with its enclosing box");
+				check(domain.gasState.network.nodeCount() > 1, "Non-convex receiver discarded its restricted gas chamber");
+				long gasAfter = 0; double capacityAfter = 0;
+				for (int node = 1; node <= domain.gasState.network.nodeCount(); node++) {
+					long amount = domain.gasState.network.standardVolumeNanos(node);
+					check(amount > 0, "Non-convex receiver created a false vacuum");
+					gasAfter = Math.addExact(gasAfter, amount);
+					double available = domain.gasState.network.availableVolume(node); capacityAfter += available;
+					double reference = mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE;
+					double error = reference * (1e-9 + domain.gasState.frame.capacity().chambers().get(node - 1).roundingErrorBound()
+							+ 2 * Math.ulp(available)) / available + 8 * Math.ulp(reference);
+					check(Math.abs(domain.gasState.network.gaugePressure(node)) <= error,
+							"Non-convex receiver pressure exceeds integer inventory and SI storage error");
+				}
+				check(gasAfter == gas, "Non-convex receiver changed total sealed gas stock");
+				precise(capacityAfter, capacity, "Non-convex receiver total gas capacity");
+				var volume = mmm.units.SignedDyadic.ZERO;
+				for (var shape : domain.liquidShapes) volume = volume.add(shape.volume());
+				check(volume.equals(mmm.units.SignedDyadic.of(3)), "Non-convex receiver changed total liquid inventory");
+				var capturedShapes = domain.liquidShapes;
+				domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+				check(domain.liquidShapes.equals(capturedShapes), "Non-convex receiver lost its shape on restore");
+			}
 		}
 	}
 	private static void setTranslationField(FluidDomain domain, float h, int axes, int signs) {

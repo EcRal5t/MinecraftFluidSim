@@ -95,11 +95,20 @@ final class HeightFunctionCurvature {
         if (d.projection.pressureVolume[cell] != c) return false;
         var plane = d.pressurePhaseGeometry;
         if (plane.liquidShape(cell) != null) {
-            var box = LiquidShapeGeometry.box(plane.liquidShape(cell));
-            if (orientation != 0 && (orientation > 0 ? box.upper(axis).compareTo(mmm.units.SignedDyadic.of(1)) >= 0 : box.lower(axis).signum() == 0)) return false;
-            if (side == 0 ? box.lower(axis).signum() > 0 : box.upper(axis).compareTo(mmm.units.SignedDyadic.of(1)) < 0) return false;
-            for (int a = 0; a < 3; a++) if (a != axis && (box.lower(a).signum() != 0
-                    || !box.upper(a).equals(mmm.units.SignedDyadic.of(1)))) return false;
+            var shape = plane.liquidShape(cell); var lower = new mmm.units.SignedDyadic[3]; var upper = new mmm.units.SignedDyadic[3];
+            for (int a = 0; a < 3; a++) { lower[a] = mmm.units.SignedDyadic.of(1); upper[a] = mmm.units.SignedDyadic.ZERO; }
+            for (var box : shape.boxes()) for (int a = 0; a < 3; a++) {
+                if (box.lower(a).compareTo(lower[a]) < 0) lower[a] = box.lower(a);
+                if (box.upper(a).compareTo(upper[a]) > 0) upper[a] = box.upper(a);
+            }
+            var volume = mmm.units.SignedDyadic.of(1);
+            for (int a = 0; a < 3; a++) volume = volume.multiply(upper[a].subtract(lower[a]));
+            // A disjoint union filling its bounding cuboid has the same single height graph.
+            if (!volume.equals(shape.volume())) return false;
+            if (orientation != 0 && (orientation > 0 ? upper[axis].compareTo(mmm.units.SignedDyadic.of(1)) >= 0 : lower[axis].signum() == 0)) return false;
+            if (side == 0 ? lower[axis].signum() > 0 : upper[axis].compareTo(mmm.units.SignedDyadic.of(1)) < 0) return false;
+            for (int a = 0; a < 3; a++) if (a != axis && (lower[a].signum() != 0
+                    || !upper[a].equals(mmm.units.SignedDyadic.of(1)))) return false;
             return true;
         }
         double normal = plane.planeNormal(cell, axis);
