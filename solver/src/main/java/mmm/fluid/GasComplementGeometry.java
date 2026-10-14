@@ -11,9 +11,9 @@ final class GasComplementGeometry {
 	/** Stable microbox key; normalizedVolume is the exact fraction of one whole cell, volume is its SI observation. */
 	record Piece(int id, int cell, int micro, double volume, ExactRational normalizedVolume,
 	             GasGeometryOverlap.HalfSpace dryPlane, PlicPlaneOffset.Result offsetBracket) { }
-	/** Oriented along the positive axis; a fixed cut restriction retains finite-rate chamber transport. */
+	/** Internal microfaces join one gas volume; complete fixed and dry cell faces join adjacent volumes. */
 	record Port(int first, int second, int axis, double area, boolean fullCutConnection) { }
-	record ExteriorPort(int piece, int axis, int sign, double area) { }
+	record ExteriorPort(int piece, int axis, int sign, double area, boolean fullCutConnection) { }
 
 	private static final ExactRational MICRO_VOLUME = ExactRational.ONE.divide(8);
 	private final int sizeX, sizeY, sizeZ;
@@ -110,6 +110,7 @@ final class GasComplementGeometry {
 		}
 		var ports = new ArrayList<Port>();
 		var exterior = new ArrayList<ExteriorPort>();
+		byte[] fullFaces = new byte[Math.multiplyExact(6, count)];
 		int[] sizes = {sizeX, sizeY, sizeZ}, strides = {1, sizeX, sizeX * sizeY};
 		for (Piece piece : pieces) {
 			int cell = piece.cell(), slot = piece.micro();
@@ -123,15 +124,17 @@ final class GasComplementGeometry {
 					if (neighbor != null && !reusePort(ports, captured, sameGeometry, piece, neighbor, axis)) addPort(ports, piece, neighbor, axis,
 							GasFaceIntersection.area(phase, cell, -1, axis, .5, 0, tangent, other, .5), h2, true);
 					if (coordinate[axis] == 0 && !reuseExterior(exterior, captured, sameGeometry, piece, axis)) addExterior(exterior, piece, axis, -1,
-							GasFaceIntersection.area(phase, cell, -1, axis, 0, 0, tangent, other, .5), h2);
+							GasFaceIntersection.area(phase, cell, -1, axis, 0, 0, tangent, other, .5), h2,
+							fullGasFace(cut, phase, cell, axis, 0, fullFaces));
 				} else if (coordinate[axis] + 1 < sizes[axis]) {
 					int peer = cell + strides[axis];
 					Piece neighbor = byId[8 * peer + (slot ^ 1 << axis)];
 					if (neighbor != null && !reusePort(ports, captured, sameGeometry, piece, neighbor, axis)) addPort(ports, piece, neighbor, axis,
 							GasFaceIntersection.area(phase, cell, peer, axis, 1, 0, tangent, other, .5), h2,
-							fullCutFace(cut, solid, cell, peer, axis));
+							fullGasFace(cut, phase, cell, axis, 1, fullFaces) && fullGasFace(cut, phase, peer, axis, 0, fullFaces));
 				} else if (!reuseExterior(exterior, captured, sameGeometry, piece, axis)) addExterior(exterior, piece, axis, 1,
-						GasFaceIntersection.area(phase, cell, -1, axis, 1, 0, tangent, other, .5), h2);
+							GasFaceIntersection.area(phase, cell, -1, axis, 1, 0, tangent, other, .5), h2,
+							fullGasFace(cut, phase, cell, axis, 1, fullFaces));
 			}
 		}
 		return new GasComplementGeometry(sizeX, sizeY, sizeZ, h3, h2, cut.copyMicroMasks(), poreVolumes, byId, pieces, ports, exterior);
@@ -175,13 +178,18 @@ final class GasComplementGeometry {
 	private static boolean open(FlipCutCellGeometry cut, int cell, int slot) {
 		return cut.microCellOpen(cell, slot & 1, slot >>> 1 & 1, slot >>> 2 & 1);
 	}
-	private static boolean fullCutFace(FlipCutCellGeometry cut, boolean[] solid, int minus, int plus, int axis) {
-		if (solid[minus] || solid[plus]) return false;
+	private static boolean fullGasFace(FlipCutCellGeometry cut, FlipPressurePhaseGeometry phase, int cell,
+	                                   int axis, int coordinate, byte[] cached) {
+		int key = 6 * cell + 2 * axis + coordinate;
+		if (cached[key] != 0) return cached[key] == 2;
+		boolean full = true;
 		for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) {
-			int base = a << ((axis + 1) % 3) | b << ((axis + 2) % 3);
-			if (!open(cut, minus, base | 1 << axis) || !open(cut, plus, base)) return false;
+			int micro = coordinate << axis | a << ((axis + 1) % 3) | b << ((axis + 2) % 3);
+			full &= open(cut, cell, micro);
 		}
-		return true;
+		full = full && GasFaceIntersection.fullDryFace(phase, cell, axis, coordinate);
+		cached[key] = (byte) (full ? 2 : 1);
+		return full;
 	}
 	private static void addPort(List<Port> ports, Piece first, Piece second, int axis,
 			double normalizedArea, double h2, boolean fullCut) {
@@ -189,9 +197,9 @@ final class GasComplementGeometry {
 		if (area > 0) ports.add(new Port(first.id(), second.id(), axis, area, fullCut));
 	}
 	private static void addExterior(List<ExteriorPort> ports, Piece piece, int axis, int sign,
-			double normalizedArea, double h2) {
+	                                 double normalizedArea, double h2, boolean fullCut) {
 		double area = physicalArea(normalizedArea, h2, piece.cell());
-		if (area > 0) ports.add(new ExteriorPort(piece.id(), axis, sign, area));
+		if (area > 0) ports.add(new ExteriorPort(piece.id(), axis, sign, area, fullCut));
 	}
 	private static double physicalArea(double normalizedArea, double h2, int cell) {
 		if (normalizedArea == 0) return 0;

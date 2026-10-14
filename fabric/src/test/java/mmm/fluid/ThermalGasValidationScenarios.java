@@ -1514,15 +1514,46 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			domain.sealDomainBoundary(); domain.setVolume(1, 0, 0, initial);
 			domain.setMarkerMaterial(0, liquids, 0); domain.bindGasRegistry(gas); domain.bootstrapGasState("");
 			domain.bindThermal(thermal, liquids, 600);
-			double oldV = domain.gasBoundary().availableVolume(1); GasInventory stock = domain.gasBoundary().inventory(1);
+			int oldNodes=domain.gasBoundary().nodeCount();GasInventory stock=GasInventory.EMPTY;
+			SignedDyadic oldVolume=SignedDyadic.ZERO,oldEnergy=SignedDyadic.ZERO;
+			for(int node=1;node<=oldNodes;node++) {
+				stock=stock.merge(domain.gasBoundary().inventory(node));
+				oldVolume=oldVolume.add(SignedDyadic.of(domain.gasBoundary().availableVolume(node)));
+				oldEnergy=oldEnergy.add(SignedDyadic.of(domain.thermalState.gasNodeEnergy(node,domain.gasState.network)));
+			}
+			var source=domain.gasBoundary().externalSource();var sink=domain.gasBoundary().escapedSink();
+			var oldWork=domain.thermalAudit().mechanicalWork();
 			double specificR = GasRegistry.STANDARD_PRESSURE_PA * AirNetwork.cubicMeters(stock.standardVolumeNanos())
 					/ (stock.totalMass() * GasRegistry.STANDARD_TEMPERATURE_K);
 			domain.removeVolumeNear(1, 0, 0, .5F, 0); domain.synchronizeGasTopologyForPersistence();
-			double expectedT = 600 * Math.pow(oldV / domain.gasBoundary().availableVolume(1), specificR / 718);
-			require(Math.abs(domain.gasNodeTemperatureK(1) - expectedT) < 2e-9
-					&& domain.gasBoundary().inventory(1).equals(stock) && domain.gasBoundary().auditClosed()
+			if(domain.gasBoundary().nodeCount()==1) {
+				double expectedT=600*Math.pow(oldVolume.toDouble()/domain.gasBoundary().availableVolume(1),specificR/718);
+				require(Math.abs(domain.gasNodeTemperatureK(1)-expectedT)<2e-9 && domain.gasBoundary().inventory(1).equals(stock)
+						&& domain.thermalAudit().mechanicalWork().subtract(oldWork).equals(SignedDyadic.of(
+							domain.thermalState.gasNodeEnergy(1,domain.gasState.network)).subtract(SignedDyadic.of(oldEnergy.toDouble()))),
+						"Complete-face gas expansion lost combined stock, inherited volume or compression work");
+			} else {
+				require(oldNodes==1 && domain.gasBoundary().nodeCount()==2 && domain.gasBoundary().inventory(1).equals(stock)
+						&& domain.gasBoundary().inventory(2).isEmpty() && domain.thermalState.gasNodeEnergy(2,domain.gasState.network)==0
+						&& SignedDyadic.of(domain.gasBoundary().availableVolume(1)).equals(oldVolume)
+						&& SignedDyadic.of(domain.thermalState.gasNodeEnergy(1,domain.gasState.network)).equals(oldEnergy)
+						&& domain.thermalAudit().mechanicalWork().equals(oldWork) && domain.gasState.network.edgeCount()==1,
+						"A partial face instantaneously mixed new vacuum with the finite gas stock or energy");
+				var beforeFlow=domain.thermalAudit();var energyBeforeFlow=domain.exactInternalEnergy();
+				domain.gasTopologyCoordinator.step(.0015625F);
+				require(!domain.gasBoundary().inventory(2).isEmpty() && domain.thermalState.gasNodeEnergy(2,domain.gasState.network)>0
+						&& domain.gasState.network.sealedInventory().standardVolumeNanos()==stock.standardVolumeNanos()
+						&& domain.thermalAudit().mechanicalWork().equals(beforeFlow.mechanicalWork())
+						&& domain.thermalAudit().externalSource().equals(beforeFlow.externalSource())
+						&& domain.thermalAudit().externalSink().equals(beforeFlow.externalSink())
+						&& domain.exactInternalEnergy().subtract(energyBeforeFlow).equals(
+							domain.thermalAudit().roundoffResidual().subtract(beforeFlow.roundoffResidual())),
+						"Finite gas-to-vacuum flow lost its stock, enthalpy energy or separate rounding audit");
+			}
+			require(domain.gasBoundary().externalSource().equals(source) && domain.gasBoundary().escapedSink().equals(sink)
+					&& domain.gasBoundary().auditClosed()
 					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
-					"gas expansion suppressed work when a previously full liquid cell exposed new dry pieces");
+					"Gas expansion or finite filling opened its exact inventory/energy audit or invented an external transfer");
 		}
 		var merged = new FluidDomain(3, 2, 2, config, 64);
 		merged.sealDomainBoundary();
@@ -1583,6 +1614,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				var domain = insertionDomain(config, liquids, gas, thermal, insertion == 3);
 				var stock = domain.gasBoundary().inventory(1);
 				double oldEnergy = domain.thermalState.gasNodeEnergy(1, domain.gasState.network);
+				var source = domain.gasBoundary().externalSource(); var sink = domain.gasBoundary().escapedSink();
 				require(insertGasFixtureLiquid(domain, insertion, .5F), "public liquid insertion was refused");
 				double specificR = GasRegistry.STANDARD_PRESSURE_PA * AirNetwork.cubicMeters(stock.standardVolumeNanos())
 						/ (stock.totalMass() * GasRegistry.STANDARD_TEMPERATURE_K);
@@ -1590,14 +1622,29 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				require(domain.gasBoundary().availableVolume(1) == .0625
 						&& Math.abs(domain.gasNodeTemperatureK(1) - expected) < 2e-9,
 						"insertion did not publish gas compression with its liquid successor");
+				double compressedEnergy = domain.thermalState.gasNodeEnergy(1, domain.gasState.network);
 				if (intermediateSync) domain.synchronizeGasTopologyForPersistence();
 				domain.setSolid(1, 0, 0, false); domain.synchronizeGasTopologyForPersistence();
-				double energy = domain.thermalState.gasNodeEnergy(1, domain.gasState.network);
-				var result = new VacuumOpeningState(domain.gasBoundary().inventory(1), energy,
-						domain.gasNodeTemperatureK(1), domain.thermalAudit().mechanicalWork());
+				int stockNode = 0; SignedDyadic totalCapacity = SignedDyadic.ZERO;
+				for (int node = 1; node <= domain.gasBoundary().nodeCount(); node++) {
+					totalCapacity = totalCapacity.add(SignedDyadic.of(domain.gasBoundary().availableVolume(node)));
+					if (domain.gasBoundary().inventory(node).equals(stock)) {
+						require(stockNode == 0, "wall opening duplicated finite gas inventory"); stockNode = node;
+					} else require(domain.gasBoundary().inventory(node).isEmpty()
+							&& domain.thermalState.gasNodeEnergy(node, domain.gasState.network) == 0,
+							"wall opening gave a vacuum successor inventory or internal energy");
+				}
+				require(stockNode > 0 && totalCapacity.equals(SignedDyadic.of(.3125))
+						&& domain.gasBoundary().availableVolume(stockNode)
+								== (domain.gasBoundary().nodeCount() == 1 ? .3125 : .0625),
+						"wall opening lost actual successor gas capacity");
+				double energy = domain.thermalState.gasNodeEnergy(stockNode, domain.gasState.network);
+				var result = new VacuumOpeningState(domain.gasBoundary().inventory(stockNode), energy,
+						domain.gasNodeTemperatureK(stockNode), domain.thermalAudit().mechanicalWork());
 				require(result.stock().equals(stock) && Math.abs(result.temperature() - expected) < 2e-9
-						&& domain.gasBoundary().availableVolume(1) == .3125
+						&& energy == compressedEnergy
 						&& result.work().equals(SignedDyadic.of(energy).subtract(SignedDyadic.of(oldEnergy)))
+						&& domain.gasBoundary().externalSource().equals(source) && domain.gasBoundary().escapedSink().equals(sink)
 						&& domain.gasBoundary().auditClosed()
 						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 						"fixed wall opening changed already committed liquid compression work");

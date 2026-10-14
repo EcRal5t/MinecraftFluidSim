@@ -265,6 +265,16 @@ public final class AirNetworkValidation {
 			checkLedger(network, "reopened hole step " + steps);
 		}
 		check(delta <= 1.0E-3, "reopened hole must resume and finish equalization, residual " + delta);
+		AirNetwork small=new AirNetwork();int pocket=small.addNode(4.856e-6,4.856e-6);
+		small.updateAvailableVolume(pocket,4.818663001060486e-6);
+		small.addOrMergeEdge(pocket,AirNetwork.AMBIENT_NODE,4.10723e-7,.65);
+		long stock=small.standardVolumeNanos(pocket);small.stepEdges(.0015625);
+		check(small.standardVolumeNanos(pocket)<stock && small.gaugePressure(pocket)>0 && small.auditClosed(),
+				"A narrow ambient port instantaneously vented a finite PLIC-scale pocket");
+		check(small.removeEdge(pocket,AirNetwork.AMBIENT_NODE),"Closing the narrow ambient port lost its edge");
+		GasInventory retained=small.inventory(pocket);small.stepEdges(.0015625);
+		check(small.inventory(pocket).equals(retained) && small.auditClosed(),
+				"Closing a narrow ambient port recreated or deleted the finite pocket inventory");
 	}
 
 	private static void validateSplitMergeVentLedger() {

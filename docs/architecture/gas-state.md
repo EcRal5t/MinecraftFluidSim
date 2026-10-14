@@ -26,7 +26,7 @@
 
 ## 模型边界
 
-- 开放空间连接无限环境节点；密闭空间保存有限气体库存。
+- 完整干面连通的开放空间采用无限环境节点；密闭气腔及通过受限通道交换的气腔保存有限库存。
 - controller 的已验证闭壳 footprint 可声明 sealed domain boundary。命令临时域保持环境开放。
 - `GasRuntimeGeometry` 从原始液体位置、体积和固定连通分量第一矩生成 PLIC，正干微盒形成气腔；部分充液格的干区持有实际归属。
 - 节点 pressure、density、temperature、孔流速度和边均为派生运行态，不作独立库存存储。
@@ -45,7 +45,11 @@ SI 容量以当前 `h³` 换算，各非最大份额一次舍入，最大份额�
 
 未来 frame 逐格核对完整液体元组、固体 SVQ、固定掩码、孔隙容量、SI 尺度和八个微盒的完整 PLIC 证书。全部相同的格子复用已认证的分量与块容量；气腔容量沿未来微盒归属重新汇总，包含拆分、合并及环境归属变化。单固定连通分量的非零自身位置矩完全决定法向时，本格完整输入保持相同即可复用平面证书；居中自身矩及多分量沿用六邻格输入校核。
 
-[GasFaceIntersection](../../solver/src/main/java/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。[GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java) 沿完全开放的固定切格通路建立气腔，部分固定开口形成有限速率连接，环境归属由实际外壳气面决定。密闭节点按最小气体块编号排序。
+[GasFaceIntersection](../../solver/src/main/java/mmm/fluid/GasFaceIntersection.java) 精确求两侧气体半空间的共享面积。纯相切产生零面积，严格正的细条保留其面积；正量超出表示范围时拒绝计算。完整干面由半空间对四个微面各自四角的精确包含关系认证，面积观察值舍入为整面仍须接受该认证。
+
+[GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java) 在格内沿正微面合并连通干区；跨格合并要求双方固定整面完整开放且整面完全干燥。外壳采用相同认证确定环境归属。固定碰撞或液面截断的正通道保留实际面积的有限孔流连接，外壳受限通道连接有限节点与环境。有限节点按最小气体块编号排序。
+
+格内及完整干面气路采用快速均压的集总近似，适用于均压时间远小于关注运动与热学时间的情况；其声传播延迟由后续空间气体模型解析。受限通道使用现有 `Cd=0.65` 孔流，库存、焓和容量功分别结算。
 
 [GasGeometryOverlap](../../solver/src/main/java/mmm/fluid/GasGeometryOverlap.java) 精确积分同一开放微盒与至多两个半空间的交集，返回单元归一化有理数体积。按需还可返回距格中心的一阶矩及六项二阶矩，液体湿几何共用该积分；体积与一阶矩入口仅计算各自需要的阶数。纯相切的交集体积为零，严格正的薄层保留精确量。库存交接仍需结合旧库存归属与实际可达路径；零重叠的有限气腔需要扫掠轨迹或可达性证明才能确定去向。
 
@@ -65,7 +69,7 @@ PLIC 重建先生成全域当前液体比例与孔隙标量。自身完整元组
 
 ## 权威数据
 
-- 每个密闭节点以 canonical minimum-piece key 和完整微盒归属标识。
+- 每个有限节点以 canonical minimum-piece key 和完整微盒归属标识。
 - 每个气体组分保存稳定 component ID、标准体积 nanos、独立质量 kg、可选 species 和 chemical mass residual kg；气体的两个质量列都不使用凝聚相 solver mass weight。
 - source、sink、质量 roundoff 和 residual roundoff 是独立审计列。
 - ambient 节点不持有有限库存；开放域中新密闭腔从环境建立时明确记 external source。已启动闭域内没有旧 owner 的新 cavity 是显式真空节点，其 component 库存、质量和 `U` 均为零，不得伪造 ambient source。

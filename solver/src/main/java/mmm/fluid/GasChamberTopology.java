@@ -7,7 +7,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.TreeMap;
 
-/** Immutable chamber membership on actual gas pieces; fixed partial cuts retain finite-rate ports. */
+/** Immutable gas volumes; partial fixed or PLIC cell faces retain finite-rate ports. */
 final class GasChamberTopology {
 	record Chamber(int node, int minimumPiece, double geometricVolume, double volumeErrorBound) { }
 	record Connection(int firstNode, int secondNode, double area) { }
@@ -28,7 +28,8 @@ final class GasChamberTopology {
 		for (var piece : geometry.pieces()) parent[piece.id()] = piece.id();
 		for (var port : geometry.ports()) if (port.fullCutConnection()) join(parent, port.first(), port.second());
 		boolean[] ambient = new boolean[size];
-		if (!sealedExterior) for (var port : geometry.exteriorPorts()) ambient[root(parent, port.piece())] = true;
+		if (!sealedExterior) for (var port : geometry.exteriorPorts())
+			if (port.fullCutConnection()) ambient[root(parent, port.piece())] = true;
 		var nodeByRoot = new TreeMap<Integer, Integer>();
 		for (var piece : geometry.pieces()) {
 			int root = root(parent, piece.id()); if (!ambient[root]) nodeByRoot.putIfAbsent(root, 0);
@@ -56,6 +57,10 @@ final class GasChamberTopology {
 			int first = pieceNodes[port.first()], second = pieceNodes[port.second()]; if (first == second) continue;
 			int low = Math.min(first, second), high = Math.max(first, second); long key = (long) low << 32 | (high & 0xffffffffL);
 			areaByNodes.merge(key, SignedDyadic.of(port.area()), SignedDyadic::add);
+		}
+		if (!sealedExterior) for (var port : geometry.exteriorPorts()) {
+			int owner = pieceNodes[port.piece()];
+			if (owner > 0) areaByNodes.merge((long) owner, SignedDyadic.of(port.area()), SignedDyadic::add);
 		}
 		var connections = new ArrayList<Connection>(areaByNodes.size());
 		for (var entry : areaByNodes.entrySet()) connections.add(new Connection((int) (entry.getKey() >>> 32), (int) (long) entry.getKey(), positive(entry.getValue(), "Gas chamber port area")));

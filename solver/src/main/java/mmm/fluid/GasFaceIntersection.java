@@ -16,6 +16,33 @@ final class GasFaceIntersection {
 	private record Point(ExactRational x, ExactRational y) { }
 	private GasFaceIntersection() { }
 
+	/** A linear dry half-space covers a rectangle exactly when it contains all four corners. */
+	static boolean coversRectangle(double tangentStart, double otherStart, double width, List<Plane> planes) {
+		if (!Double.isFinite(tangentStart) || !Double.isFinite(otherStart) || !(width > 0 && Double.isFinite(width))
+				|| planes == null || planes.size() > 2 || planes.stream().anyMatch(Objects::isNull))
+			throw new IllegalArgumentException("Invalid complete gas face rectangle");
+		SignedDyadic x = SignedDyadic.of(tangentStart), y = SignedDyadic.of(otherStart), span = SignedDyadic.of(width);
+		for (Plane plane : planes) for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++)
+			if (plane.a().multiply(a == 0 ? x : x.add(span)).add(plane.b().multiply(b == 0 ? y : y.add(span)))
+					.compareTo(plane.threshold()) < 0) return false;
+		return true;
+	}
+
+	/** All four microfaces on one physical cell face must be completely dry. */
+	static boolean fullDryFace(FlipPressurePhaseGeometry phase, int cell, int axis, int coordinate) {
+		if (phase == null || cell < 0 || axis < 0 || axis > 2 || coordinate < 0 || coordinate > 1)
+			throw new IllegalArgumentException("Invalid complete gas cell face");
+		for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) {
+			double tangent = .5 * a, other = .5 * b;
+			int micro = phase.microAtFace(cell, axis, coordinate, tangent, other);
+			double fraction = phase.liquidFractionExact(cell, micro);
+			if (!(fraction >= 0 && fraction <= 1)) throw new IllegalArgumentException("Invalid gas face phase fraction");
+			if (fraction >= 1 || fraction > 0 && !coversRectangle(tangent, other, .5,
+					List.of(plane(phase, cell, micro, axis, coordinate)))) return false;
+		}
+		return true;
+	}
+
 	/** The second cell is -1 for a single-sided outer or internal microface. */
 	static double area(FlipPressurePhaseGeometry phase, int firstCell, int secondCell, int axis,
 			double firstCoordinate, double secondCoordinate, double tangentStart, double otherStart, double width) {

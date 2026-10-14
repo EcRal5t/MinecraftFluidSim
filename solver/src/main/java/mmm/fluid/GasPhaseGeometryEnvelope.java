@@ -114,8 +114,7 @@ final class GasPhaseGeometryEnvelope {
 			count++; fixed &= !variable[piece.cell()];
 			if (first < 0) first = piece.id();
 		}
-		return first >= 0 && (fixed || count == 1 || singleConvexComponent(source, node, first)
-				|| GasPhaseSourceBackbone.retainsSource(source, node, variable));
+		return first >= 0 && (fixed || count == 1 || singleConvexComponent(source, node, first));
 	}
 
 	double volumeUpper(PhaseLiquidGeometryEdit edit) {

@@ -76,10 +76,33 @@ public final class AirCavityScannerValidation {
 				"Two opposite open microboxes acquired a gas connection through solid");
 		checkRelative(separate.pieces().stream().mapToDouble(GasComplementGeometry.Piece::volume).sum(),.25,"Disconnected gas volume");
 		var splitOpen=GasChamberTopology.capture(separate,false);var splitClosed=GasChamberTopology.capture(separate,true);
-		check(splitOpen.chambers().size()==1 && splitOpen.nodeOfPiece(0)==0 && splitOpen.nodeOfPiece(7)==1,
-				"A cell-level ambient label vented its isolated opposite microbox");
+		check(splitOpen.chambers().size()==2 && splitOpen.nodeOfPiece(0)>0 && splitOpen.nodeOfPiece(7)>0
+				&& splitOpen.nodeOfPiece(0)!=splitOpen.nodeOfPiece(7) && splitOpen.connections().size()==1
+				&& splitOpen.connections().getFirst().firstNode()==0
+				&& splitOpen.connections().getFirst().secondNode()==splitOpen.nodeOfPiece(0),
+				"A partial exterior aperture bypassed finite flow or vented its isolated opposite microbox");
 		check(splitClosed.chambers().size()==2 && splitClosed.nodeOfPiece(0)!=splitClosed.nodeOfPiece(7),
 				"Two disjoint same-cell gas chambers acquired one owner");
+		for(int axis=0;axis<3;axis++) {
+			int peer=1<<axis,tangentAxis=(axis+1)%3;byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=masks[peer]=0;
+			float[] pv=new float[8];for(int i=0;i<2;i++) {for(int a=0;a<3;a++)pv[4*i+a]=(a==axis?i:0)+.5F;pv[4*i+tangentAxis]=.25F;pv[4*i+3]=.5F;}
+			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
+			domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6],masks));domain.ensureInventoryGrid();
+			var partial=GasComplementGeometry.capture(2,2,2,1,domain.geometry.solid,domain.geometry.cutCells,domain.pressurePhaseGeometry);
+			var crossing=partial.ports().stream().filter(port->port.first()/8!=port.second()/8).toList();
+			check(crossing.size()==2 && crossing.stream().allMatch(port->!port.fullCutConnection() && port.area()==.25)
+					&& partial.ports().stream().filter(port->port.first()/8==port.second()/8).allMatch(GasComplementGeometry.Port::fullCutConnection),
+					"Complete microfaces manufactured a complete cell face or split a convex within-cell gas volume");
+			var gas=domain.bootstrapGasState("");
+			check(gas.nodes().size()==2 && gas.externalSource().standardVolumeNanos()==1_000_000_000L
+					&& domain.gasState.network.edgeCount()==3 && domain.gasState.network.auditClosed(),
+					"Partial cell/exterior faces lost finite ambient stock or their conservative orifice edges");
+			for(int cell:new int[]{0,peer}) {
+				int owner=PressureBoundaryView.wholeCellGasNode(domain,cell);var pressure=new PressureBoundaryView(domain);
+				check(owner>0 && pressure.gasNodeHasContinuumState(owner) && pressure.gasPressureOfNode(owner)==0
+						&& pressure.gasNodeVolumeCompliance(owner)>0,"Partially open gas did not retain a finite pressure owner");
+			}
+		}
 		var a=mmm.units.SignedDyadic.of((double).1234567F);
 		var b=mmm.units.SignedDyadic.of((double).7654321F);var threshold=mmm.units.SignedDyadic.of(.1);
 		var lower=new GasFaceIntersection.Plane(a,b,threshold);
@@ -92,6 +115,11 @@ public final class AirCavityScannerValidation {
 		var denominator=new java.math.BigDecimal((double).1234567F).multiply(new java.math.BigDecimal((double).7654321F)).multiply(java.math.BigDecimal.valueOf(2));
 		double expected=numerator.divide(denominator,java.math.MathContext.DECIMAL128).doubleValue();
 		check(strip>0 && Double.doubleToLongBits(strip)==Double.doubleToLongBits(expected),"A true narrow gas port lost its exact physical area");
+		var tinyWet=new GasFaceIntersection.Plane(SignedDyadic.of(1),SignedDyadic.ZERO,SignedDyadic.of(Float.MIN_VALUE));
+		check(GasFaceIntersection.area(0,0,.5,List.of(tinyWet))==.25
+				&& !GasFaceIntersection.coversRectangle(0,0,.5,List.of(tinyWet))
+				&& GasFaceIntersection.coversRectangle(0,0,.5,List.of(new GasFaceIntersection.Plane(SignedDyadic.of(1),SignedDyadic.ZERO,SignedDyadic.ZERO))),
+				"Rounded full area hid a true wet strip or rejected an exactly complete dry face");
 	}
 
 	private static void validateMicroGasPoreCapacity() {
@@ -431,8 +459,9 @@ public final class AirCavityScannerValidation {
 			checkPieceCapacityBounds(scaled,scaledGeometry,true);
 		}
 		var open=GasChamberTopology.capture(splitGeometry,false);var openCapacity=GasChamberCapacity.capture(split,splitGeometry,open,null);
-		check(open.nodeOfPiece(0)==0 && open.nodeOfPiece(7)==1 && openCapacity.ambientCubicMeters()==.0625
-				&& openCapacity.chambers().getFirst().cubicMeters()==.09375,"Ambient attribution consumed an isolated same-cell gas capacity");
+		check(open.nodeOfPiece(0)==1 && open.nodeOfPiece(7)==2 && openCapacity.ambientCubicMeters()==0
+				&& openCapacity.chambers().get(0).cubicMeters()==.0625 && openCapacity.chambers().get(1).cubicMeters()==.09375,
+				"A partial exterior aperture lost its finite capacity or consumed the isolated same-cell gas capacity");
 		try { GasChamberCapacity.capture(split,pieceCapacityGeometry(split),closed,null);throw new AssertionError("Gas capacity accepted a topology from another geometry capture"); }
 		catch(IllegalArgumentException expected) { }
 
@@ -669,8 +698,11 @@ public final class AirCavityScannerValidation {
 		double previousVolume = domain.gasState.network.availableVolume(1);
 		check(Double.doubleToRawLongBits(GasTopologyVolumePartition.partitionRational(previousVolume, List.copyOf(weights.values()))[0])
 				== Double.doubleToRawLongBits(previousVolume), "A unique gas successor changed its inherited control volume");
-		var ambient = GasRuntimeGeometry.capture(domain, null, new long[8], false);
-		check(ExactRational.ONE.equals(gasOverlapWeights(domain, old, ambient).get(1L << 32)),
+		var ambientVolume=next.liquidStock().get(0).components().getFirst().volume();
+		var ambientEdit=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,ambientVolume,
+				ambientVolume.multiply(SignedDyadic.of(.75)),ambientVolume.multiply(SignedDyadic.of(.5)),ambientVolume.multiply(SignedDyadic.of(.5)))));
+		var ambient = GasRuntimeGeometry.capture(domain, ambientEdit, new long[8], false);
+		check(ambient.nodeCount()==0 && ExactRational.ONE.equals(gasOverlapWeights(domain, old, ambient).get(1L << 32)),
 				"A unique ambient destination lost the complete finite inventory proportion");
 		domain.gasTopologyCoordinator.refresh(); var after = domain.exportGasState("");
 		check(after.nodes().size() == 1 && after.nodes().getFirst().inventory().equals(before.nodes().getFirst().inventory())
@@ -711,40 +743,36 @@ public final class AirCavityScannerValidation {
 		check(nonconvexSource.nodeCount()==1 && nonconvexSource.geometry().pieces().size()>1
 				&& GasPhaseGeometryEnvelope.capture(nonconvexSource,nonconvex.gasState.network,null,0,1)==null,
 				"A nonconvex fixed component acquired an unsupported unique phase successor certificate");
-		for(int variant=0;variant<4;variant++) {
-			byte[] masks=new byte[8]; java.util.Arrays.fill(masks,(byte)255); masks[0]=masks[1]=masks[2]=0;
-			if(variant!=1) masks[3]=0; if(variant==2) masks[1]=1;
-			float[] markers=variant==3?new float[]{.25F,.25F,.25F,.03125F,1.5F,.5F,.5F,.03125F}
-					:new float[]{.25F,.25F,.25F,.03125F};
-			var backbone=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
-					new FlipParticleState(2,2,2,1,markers.length/4,variant==3?.0625F:.03125F,markers,new float[markers.length/4*3],masks));
-			backbone.sealDomainBoundary(); backbone.bootstrapGasState(""); var captured=backbone.gasState.frame;
-			check(captured.nodeCount()==1,"Backbone fixture lost its original connected gas inventory");
-			var certified=GasPhaseGeometryEnvelope.capture(captured,backbone.gasState.network,null,0,1);
-			check((certified!=null)==(variant==0),"Source backbone ignored a disconnected fixed graph, partial port or gradient-changing peer");
-			if(variant!=0) continue;
-			var remaining=SignedDyadic.of(.015625); var flippedMoment=remaining.multiply(SignedDyadic.of(.75));
-			var flipped=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,remaining,flippedMoment,flippedMoment,flippedMoment)));
-			var changed=GasRuntimeGeometry.capture(backbone,flipped,new long[8],true);
-			backbone.gasState.frame=null; var fresh=GasRuntimeGeometry.capture(backbone,flipped,new long[8],true); backbone.gasState.frame=captured;
-			checkRuntimePlanesEqual(changed,fresh,"Certified backbone future differs from independent full capture");
-			check(changed.nodeCount()==1 && certified.volumeUpper(flipped)>=changed.capacity().chambers().getFirst().cubicMeters(),
-					"A changing light-wet cell detached from its fixed gas backbone or exceeded certified capacity");
-			for(int micro=0;micro<8;micro++) check(GasGeometryOverlap.normalizedVolume(micro,
-					List.of(captured.geometry().piece(micro).dryPlane(),changed.geometry().piece(micro).dryPlane())).signum()>0,
-					"Opposite light-wet planes lost the certified old/new overlap of one gas microbox");
-		}
+		byte[] masks=new byte[8]; java.util.Arrays.fill(masks,(byte)255); masks[0]=masks[1]=masks[2]=masks[3]=0;
+		float[] markers={.25F,.25F,.25F,.03125F};
+		var connected=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
+				new FlipParticleState(2,2,2,1,1,.03125F,markers,new float[3],masks));
+		connected.sealDomainBoundary(); connected.bootstrapGasState(""); var captured=connected.gasState.frame;
+		check(captured.nodeCount()==1 && GasPhaseGeometryEnvelope.capture(captured,connected.gasState.network,null,0,1)==null,
+				"Light wet stock acquired an unproved unique cross-cell gas successor");
+		var remaining=SignedDyadic.of(.015625); var flippedMoment=remaining.multiply(SignedDyadic.of(.75));
+		var flipped=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,remaining,flippedMoment,flippedMoment,flippedMoment)));
+		var changed=GasRuntimeGeometry.capture(connected,flipped,new long[8],true);
+		connected.gasState.frame=null; var fresh=GasRuntimeGeometry.capture(connected,flipped,new long[8],true); connected.gasState.frame=captured;
+		checkRuntimePlanesEqual(changed,fresh,"Split gas future differs from independent full capture");
+		check(changed.nodeCount()==2 && changed.topology().connections().size()==1,
+				"Partial cross-cell gas faces failed to split the old lumped stock into finite-flow owners");
+		for(int micro=0;micro<8;micro++) check(GasGeometryOverlap.normalizedVolume(micro,
+				List.of(captured.geometry().piece(micro).dryPlane(),changed.geometry().piece(micro).dryPlane())).signum()>0,
+				"Gas successor counterexample lost its positive old/new microbox overlaps");
 	}
 
 	private static void validateAmbientSelfRemap() {
-		var domain = pieceCapacityDomain(0, .19F, .24F, .31F, .1875F);
+		var domain = pieceCapacityDomain(0, .8F, .2F, .3F, .1875F);
 		var before = domain.bootstrapGasState(""); var old = domain.gasState.frame;
-		check(old.nodeCount() == 0 && old.capacity().pieces().size() > 1,
+		check(old.nodeCount() == 0 && old.capacity().pieces().size() > 1
+				&& GasFaceIntersection.fullDryFace(domain.pressurePhaseGeometry,0,0,0),
 				"Ambient self-remap fixture requires exterior-connected slanted dry microboxes");
-		domain.particles.setPositionX(0, .27F); domain.particles.setPositionY(0, .22F); domain.particles.setPositionZ(0, .29F);
+		domain.particles.setPositionX(0, .9F); domain.particles.setPositionY(0, .22F); domain.particles.setPositionZ(0, .29F);
 		domain.gridDirty = true; domain.ensureInventoryGrid();
 		var next = GasRuntimeGeometry.capture(domain, null, new long[8], false);
-		check(next.nodeCount() == 0 && gasOverlapWeights(domain, old, next).isEmpty(),
+		check(next.nodeCount() == 0 && GasFaceIntersection.fullDryFace(domain.pressurePhaseGeometry,0,0,0)
+				&& gasOverlapWeights(domain, old, next).isEmpty(),
 				"Persistent ambient space acquired unused exact remap weights");
 		domain.gasTopologyCoordinator.refresh(); var after = domain.exportGasState("");
 		check(after.nodes().isEmpty() && after.externalSource().equals(before.externalSource())
@@ -759,10 +787,11 @@ public final class AirCavityScannerValidation {
 		domain.setSolidMicroMask(0, 0, 0, 126); domain.gasTopologyCoordinator.refresh(); var next = domain.gasState.frame;
 		var weights = gasOverlapWeights(domain, old, next);
 		check(!weights.containsKey(0L), "Ambient capture also accumulated an unused ambient self-weight");
-		check(ExactRational.ONE.divide(64).equals(weights.get(1L)),
-				"Ambient capture lost the actual SI volume of its isolated microbox");
+		check(ExactRational.ONE.divide(64).equals(weights.get(1L)) && ExactRational.ONE.divide(64).equals(weights.get(2L)),
+				"Ambient capture lost the actual SI volume of a partial-exterior or isolated microbox");
 		check(domain.gasBoundary.inventory(1).standardVolumeNanos() == 15_625_000
-				&& domain.gasState.network.externalSource().standardVolumeNanos() == 15_625_000
+				&& domain.gasBoundary.inventory(2).standardVolumeNanos() == 15_625_000
+				&& domain.gasState.network.externalSource().standardVolumeNanos() == 31_250_000
 				&& domain.gasBoundary.auditClosed(), "Ambient capture did not use its actual absolute trapped volume");
 	}
 
