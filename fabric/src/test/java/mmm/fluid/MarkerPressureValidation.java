@@ -566,6 +566,12 @@ public final class MarkerPressureValidation {
 			throw new AssertionError("Certified low-rank principal LU did not satisfy every physical row");
 		double[] actual = new double[3]; operator.apply(pressure, actual); for (int row = 0; row < 3; row++) near(actual[row], rhs[row], 1e-9, "Full-row direct pressure residual");
 		double[] saved = pressure.clone();
+		double[] savedSource = rhs.clone();
+		PressureRowBasis.withWorkLimitForValidation(0, () -> {
+			if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[3], false, velocity, dt, 1e-9)
+					|| !Arrays.equals(saved, pressure) || !Arrays.equals(savedSource, rhs))
+				throw new AssertionError("Unavailable exact work budget changed the iterative fallback pressure or source");
+		});
 		if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[]{true, false, false}, false, velocity, dt, 1e-9))
 			throw new AssertionError("An observation-changing multiplier relation selected an arbitrary gauge");
 		if (!Arrays.equals(saved, pressure)) throw new AssertionError("Rejected pressure gauge changed the iterative fallback input");

@@ -9,13 +9,46 @@ import java.util.*;
 /** Certified pressure coordinates in the actual velocity range, retaining every physical row. */
 final class PressureRowBasis {
 	private static final long PRIME = 2147483647;
+	private static final ThreadLocal<Long> validationWorkLimit = new ThreadLocal<>();
+	private static final class WorkBudget {
+		private long remaining;
+		WorkBudget(long allowance) {
+			Long limited = validationWorkLimit.get(); remaining = limited == null ? allowance : Math.min(allowance, limited);
+		}
+		void charge(long cost) {
+			if (cost > remaining) throw new Unavailable("Pressure dependence certificate exceeds exact work budget");
+			remaining -= cost;
+		}
+		void charge(BigInteger first, BigInteger second) { charge(limbs(first) * limbs(second)); }
+		private static long limbs(BigInteger value) { return Math.max(1, (value.abs().bitLength() + 31L) / 32); }
+	}
+	static void withWorkLimitForValidation(long limit, Runnable action) {
+		if (limit < 0) throw new IllegalArgumentException("Pressure validation work limit is negative");
+		Long previous = validationWorkLimit.get(); validationWorkLimit.set(limit);
+		try { action.run(); } finally { if (previous == null) validationWorkLimit.remove(); else validationWorkLimit.set(previous); }
+	}
+	private static long inputWork(int rows, SignedDyadic[] coefficients, SignedDyadic[][] inertia) {
+		long units = rows + 4L * inertia.length;
+		for (var value : coefficients) units += inputWords(value);
+		for (var gram : inertia) for (var value : gram) units += inputWords(value);
+		// One 2048-bit word-pair operation per input row, nonzero and initial rational limb.
+		return Math.multiplyExact(64L * 64, units);
+	}
+	private static long inputWords(SignedDyadic value) {
+		if (value.signum() == 0) return 0;
+		long numeratorBits = value.significand().abs().bitLength() + Math.max(0L, value.exponent());
+		long denominatorBits = 1 + Math.max(0L, -(long) value.exponent());
+		return 1 + (numeratorBits + 31) / 32 + (denominatorBits + 31) / 32;
+	}
 	static final class Unavailable extends RuntimeException { Unavailable(String message) { super(message); } }
 	private record Pivot(TreeMap<Integer, ExactRational> values, TreeMap<Integer, ExactRational> relation) { }
 	private record Dependency(TreeMap<Integer, ExactRational> relation) { }
 	private final int[] rows, positions;
 	private final List<Dependency> dependencies;
+	private final WorkBudget work;
 
 	PressureRowBasis(int[] starts, int[] indices, SignedDyadic[] coefficients, SignedDyadic[][] inertia, double[] storage, double[] diagonal) {
+		work = new WorkBudget(inputWork(storage.length, coefficients, inertia));
 		int[][] support = new int[inertia.length][];
 		for (int f = 0; f < inertia.length; f++) support[f] = independentColumns(inertia[f]);
 		var features = new ArrayList<TreeMap<Integer, SignedDyadic>>(storage.length);
@@ -28,7 +61,10 @@ final class PressureRowBasis {
 				if (support[factor].length == 4) for (int j = first; j < e; j++) feature.put(indices[j], coefficients[j]);
 				else for (int column : support[factor]) {
 					SignedDyadic value = SignedDyadic.ZERO;
-					for (int j = first; j < e; j++) value = value.add(coefficients[j].multiply(inertia[factor][4 * (indices[j] % 4) + column]));
+					for (int j = first; j < e; j++) {
+						work.charge(coefficients[j].significand(), inertia[factor][4 * (indices[j] % 4) + column].significand());
+						value = value.add(coefficients[j].multiply(inertia[factor][4 * (indices[j] % 4) + column]));
+					}
 					if (value.signum() != 0) feature.put(4 * factor + column, value);
 				}
 			}
@@ -100,17 +136,20 @@ final class PressureRowBasis {
 						divide(multiply(rational(SignedDyadic.of(Math.ulp(rate[row]))), half), time));
 				bound = add(bound, multiply(absolute(coefficient), rounding));
 			}
-			if (absolute(defect).compareTo(bound) > 0) return false;
+			ExactRational magnitude = absolute(defect);
+			work.charge(magnitude.numerator(), bound.denominator()); work.charge(bound.numerator(), magnitude.denominator());
+			if (magnitude.compareTo(bound) > 0) return false;
 		}
 		return true;
 	}
-	private static void subtract(TreeMap<Integer, ExactRational> target, TreeMap<Integer, ExactRational> source, ExactRational scale) {
+	private void subtract(TreeMap<Integer, ExactRational> target, TreeMap<Integer, ExactRational> source, ExactRational scale) {
 		for (var entry : source.entrySet()) {
+			work.charge(1);
 			ExactRational value = add(target.getOrDefault(entry.getKey(), ExactRational.ZERO), negate(multiply(scale, entry.getValue())));
 			if (value.isZero()) target.remove(entry.getKey()); else target.put(entry.getKey(), value);
 		}
 	}
-	private static int[] independentColumns(SignedDyadic[] gram) {
+	private int[] independentColumns(SignedDyadic[] gram) {
 		var candidates = new ArrayList<TreeMap<Integer, SignedDyadic>>();
 		for (int column = 0; column < 4; column++) { var values = new TreeMap<Integer, SignedDyadic>(); for (int row = 0; row < 4; row++) if (gram[4 * row + column].signum() != 0) values.put(row, gram[4 * row + column]); candidates.add(values); }
 		if (modularRank(candidates, new Integer[]{0, 1, 2, 3}) == 4) return new int[]{0, 1, 2, 3};
@@ -125,7 +164,7 @@ final class PressureRowBasis {
 		}
 		return selected.stream().mapToInt(Integer::intValue).toArray();
 	}
-	private static int modularRank(List<TreeMap<Integer, SignedDyadic>> features, Integer[] order) {
+	private int modularRank(List<TreeMap<Integer, SignedDyadic>> features, Integer[] order) {
 		var pivots = new HashMap<Integer, TreeMap<Integer, Long>>(); long entries = 0, available = availableMemory();
 		for (int row : order) {
 			var current = new TreeMap<Integer, Long>(); features.get(row).forEach((column, value) -> { long residue = modular(value); if (residue != 0) current.put(column, residue); });
@@ -134,31 +173,40 @@ final class PressureRowBasis {
 				checkMemory(256L * (entries + current.size()), available);
 				if (pivot == null) { long inverse = power(current.get(column), PRIME - 2); current.replaceAll((key, value) -> value * inverse % PRIME); pivots.put(column, current); entries += current.size(); break; }
 				long scale = current.get(column);
-				for (var entry : pivot.entrySet()) { long value = Math.floorMod(current.getOrDefault(entry.getKey(), 0L) - scale * entry.getValue(), PRIME); if (value == 0) current.remove(entry.getKey()); else current.put(entry.getKey(), value); }
+				for (var entry : pivot.entrySet()) { work.charge(1); long value = Math.floorMod(current.getOrDefault(entry.getKey(), 0L) - scale * entry.getValue(), PRIME); if (value == 0) current.remove(entry.getKey()); else current.put(entry.getKey(), value); }
 			}
 		}
 		return pivots.size();
 	}
-	private static long modular(SignedDyadic value) { return value.significand().mod(BigInteger.valueOf(PRIME)).longValue() * power(value.exponent() >= 0 ? 2 : (PRIME + 1) / 2, Math.abs((long) value.exponent())) % PRIME; }
+	private long modular(SignedDyadic value) { work.charge(value.significand(), BigInteger.valueOf(PRIME)); return value.significand().mod(BigInteger.valueOf(PRIME)).longValue() * power(value.exponent() >= 0 ? 2 : (PRIME + 1) / 2, Math.abs((long) value.exponent())) % PRIME; }
 	private static long power(long base, long exponent) { long result = 1; for (; exponent > 0; exponent >>>= 1, base = base * base % PRIME) if ((exponent & 1) != 0) result = result * base % PRIME; return result; }
-	private static ExactRational rational(SignedDyadic value) { return value.exponent() >= 0 ? rational(value.significand().shiftLeft(value.exponent()), BigInteger.ONE) : rational(value.significand(), BigInteger.ONE.shiftLeft(-value.exponent())); }
-	private static ExactRational rational(BigInteger numerator, BigInteger denominator) {
+	private ExactRational rational(SignedDyadic value) { return value.exponent() >= 0 ? rational(value.significand().shiftLeft(value.exponent()), BigInteger.ONE) : rational(value.significand(), BigInteger.ONE.shiftLeft(-value.exponent())); }
+	private ExactRational rational(BigInteger numerator, BigInteger denominator) {
 		if (numerator.signum() == 0) return ExactRational.ZERO;
-		BigInteger gcd = numerator.gcd(denominator); numerator = numerator.divide(gcd); denominator = denominator.divide(gcd);
+		work.charge(numerator, denominator); BigInteger gcd = numerator.gcd(denominator);
+		work.charge(numerator, gcd); numerator = numerator.divide(gcd);
+		work.charge(denominator, gcd); denominator = denominator.divide(gcd);
 		if (numerator.bitLength() > ChemicalLimits.MAX_RATIONAL_BITS || denominator.bitLength() > ChemicalLimits.MAX_RATIONAL_BITS) throw new Unavailable("Pressure dependence certificate exceeds exact rational bit budget");
-		return new ExactRational(numerator, denominator);
+		work.charge(numerator, denominator); return new ExactRational(numerator, denominator);
 	}
-	private static ExactRational add(ExactRational a, ExactRational b) {
-		BigInteger gcd = a.denominator().gcd(b.denominator()), first = b.denominator().divide(gcd), second = a.denominator().divide(gcd);
+	private ExactRational add(ExactRational a, ExactRational b) {
+		work.charge(a.denominator(), b.denominator()); BigInteger gcd = a.denominator().gcd(b.denominator());
+		work.charge(b.denominator(), gcd); BigInteger first = b.denominator().divide(gcd);
+		work.charge(a.denominator(), gcd); BigInteger second = a.denominator().divide(gcd);
+		work.charge(a.numerator(), first); work.charge(b.numerator(), second); work.charge(a.denominator(), first);
 		return rational(a.numerator().multiply(first).add(b.numerator().multiply(second)), a.denominator().multiply(first));
 	}
-	private static ExactRational multiply(ExactRational a, ExactRational b) {
-		BigInteger first = a.numerator().gcd(b.denominator()), second = b.numerator().gcd(a.denominator());
-		return rational(a.numerator().divide(first).multiply(b.numerator().divide(second)), a.denominator().divide(second).multiply(b.denominator().divide(first)));
+	private ExactRational multiply(ExactRational a, ExactRational b) {
+		work.charge(a.numerator(), b.denominator()); BigInteger first = a.numerator().gcd(b.denominator());
+		work.charge(b.numerator(), a.denominator()); BigInteger second = b.numerator().gcd(a.denominator());
+		work.charge(a.numerator(), first); work.charge(b.numerator(), second); work.charge(a.denominator(), second); work.charge(b.denominator(), first);
+		var an = a.numerator().divide(first); var bn = b.numerator().divide(second);
+		var ad = a.denominator().divide(second); var bd = b.denominator().divide(first);
+		work.charge(an, bn); work.charge(ad, bd); return rational(an.multiply(bn), ad.multiply(bd));
 	}
-	private static ExactRational divide(ExactRational a, ExactRational b) { return multiply(a, rational(b.denominator(), b.numerator())); }
-	private static ExactRational negate(ExactRational value) { return rational(value.numerator().negate(), value.denominator()); }
-	private static ExactRational absolute(ExactRational value) { return value.signum() < 0 ? rational(value.numerator().negate(), value.denominator()) : value; }
+	private ExactRational divide(ExactRational a, ExactRational b) { return multiply(a, rational(b.denominator(), b.numerator())); }
+	private ExactRational negate(ExactRational value) { return rational(value.numerator().negate(), value.denominator()); }
+	private ExactRational absolute(ExactRational value) { return value.signum() < 0 ? rational(value.numerator().negate(), value.denominator()) : value; }
 	private static long bytes(TreeMap<Integer, ExactRational> values) {
 		long result = 0; for (var value : values.values()) result += 256L + 2L * ((value.numerator().bitLength() + value.denominator().bitLength() + 15L) / 8); return result;
 	}
