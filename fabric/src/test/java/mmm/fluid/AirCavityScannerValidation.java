@@ -248,6 +248,22 @@ public final class AirCavityScannerValidation {
 		domain.particles.setCount(0);domain.granularCoupling.setFixedCellSvq(new long[8]);
 		check(clear.matchesCarrierGeometry(domain,new long[8]) && !clear.matchesSourceCarrierGeometry(domain,new long[8]),
 				"Published clear stock failed its target/source geometry distinction");
+		for (int mask : new int[]{254,126}) {
+			var masked = mask == 254 ? pieceCapacityDomain(mask,.125F,.25F,.25F,.0625F)
+					: pieceCapacityDomain(mask,.125F,.25F,.25F,.0625F,.875F,.75F,.75F,.03125F);
+			masked.geometry.cutCells.replaceMask(1,0); masked.geometry.solid[1]=false;
+			var own = GasRuntimeGeometry.capture(masked,null,new long[8],true);
+			check(!own.cellDependsOnNeighborFractions(0),"Masked own-moment planes retained a false neighbor dependency");
+			var neighborVolume=SignedDyadic.of(.125);
+			var neighborEdit=new PhaseLiquidGeometryEdit(1,0,List.of(new LiquidComponentMoments(1,255,1,neighborVolume,
+					neighborVolume.multiply(SignedDyadic.of(1.25)),neighborVolume.multiply(SignedDyadic.of(.5)),neighborVolume.multiply(SignedDyadic.of(.5)))));
+			var neighborChanged=GasRuntimeGeometry.capture(masked,neighborEdit,new long[8],true);
+			for (int micro=0;micro<8;micro++) check(java.util.Objects.equals(own.geometry().piece(micro),neighborChanged.geometry().piece(micro)),
+					"Neighbor fraction changed a masked component's independent own-moment certificate");
+			masked.particles.setPositionX(0,.25F);
+			var centered=GasRuntimeGeometry.capture(masked,null,new long[8],true);
+			check(centered.cellDependsOnNeighborFractions(0),"A centered masked component lost its actual fraction-gradient dependency");
+		}
 	}
 
 	private static void checkRuntimePlanesEqual(GasRuntimeGeometry actual, GasRuntimeGeometry expected, String message) {
@@ -588,6 +604,27 @@ public final class AirCavityScannerValidation {
 				"Vacuum geometry lost its unique successor's control-volume proportion");
 		domain.gasTopologyCoordinator.refresh();
 		check(domain.gasBoundary.inventory(1).isEmpty(), "A surviving vacuum acquired gas inventory during geometry remapping");
+		var single = pieceCapacityDomain(0,.25F,.25F,.25F,Math.nextDown(1F));
+		single.sealDomainBoundary(); single.bootstrapGasState("");
+		var singleSource = single.gasState.frame;
+		check(singleSource.nodeCount()==1 && singleSource.geometry().pieces().size()==1,
+				"Single-piece phase fixture acquired another old dry microbox");
+		var envelope=GasPhaseGeometryEnvelope.capture(singleSource,single.gasState.network,null,0,1);
+		check(envelope!=null,"An edited single gas piece lost its unique valid phase successor certificate");
+		var volume=SignedDyadic.of(.75); var moment=volume.multiply(SignedDyadic.of(.25));
+		var edit=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,volume,moment,moment,moment)));
+		var expanded=GasRuntimeGeometry.capture(single,edit,new long[8],true);
+		check(ExactRational.ONE.equals(gasOverlapWeights(single,singleSource,expanded).get(1L<<32|1))
+				&& envelope.volumeUpper(edit)>=expanded.capacity().chambers().getFirst().cubicMeters(),
+				"Single-piece source split its inventory proportion or escaped its future capacity upper bound");
+		var oppositeMoment=volume.multiply(SignedDyadic.of(.75));
+		var opposite=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,volume,oppositeMoment,oppositeMoment,oppositeMoment)));
+		var noOverlap=GasRuntimeGeometry.capture(single,opposite,new long[8],true);
+		check(gasOverlapWeights(single,singleSource,noOverlap).isEmpty(),"A single old gas piece gained a successor without positive overlap");
+		try { single.gasTopologyCoordinator.planAfterLiquidEdits(List.of(opposite)); throw new AssertionError("Zero-overlap finite single-piece stock gained a remap"); }
+		catch(GasTopologyBlockedException expected) {
+			check(expected.getMessage().contains("no positive successor"),"Zero-overlap single-piece stock failed for another property");
+		}
 	}
 
 	private static void validateAmbientSelfRemap() {

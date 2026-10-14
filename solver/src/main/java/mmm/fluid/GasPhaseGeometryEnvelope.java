@@ -8,7 +8,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** Bounds a phase-edited gas successor while its complete source chamber retains fixed positive paths. */
+/** Bounds future gas capacity when every valid phase remap has one complete source-stock successor. */
 final class GasPhaseGeometryEnvelope {
 	private final GasRuntimeGeometry source;
 	private final List<Integer> variableCells;
@@ -46,14 +46,16 @@ final class GasPhaseGeometryEnvelope {
 				int neighbor = editedCell + sign * strides[axis];
 				variable[neighbor] = source.cellDependsOnNeighborFractions(neighbor);
 			}
-		int first = -1;
+		int first = -1, sourcePieces = 0;
+		boolean fixedSource = true;
 		for (var piece : source.geometry().pieces()) if (source.nodeOfPiece(piece.id()) == sourceNode) {
-			if (variable[piece.cell()]) {
-				return null;
-			}
+			sourcePieces++;
+			if (variable[piece.cell()]) fixedSource = false;
 			if (first < 0) first = piece.id();
 		}
-		if (first < 0) return null;
+		// A single old microbox has at most one positive same-id successor. A phase
+		// candidate lacking that overlap is unavailable before its saturation check.
+		if (first < 0 || !fixedSource && sourcePieces != 1) return null;
 		int[] parent = new int[Math.multiplyExact(8, variable.length)]; Arrays.fill(parent, -1);
 		for (var piece : source.geometry().pieces()) parent[piece.id()] = piece.id();
 		for (int cell = 0; cell < variable.length; cell++) if (variable[cell]) {

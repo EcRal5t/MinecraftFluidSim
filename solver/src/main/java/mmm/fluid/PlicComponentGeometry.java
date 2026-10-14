@@ -25,14 +25,11 @@ final class PlicComponentGeometry {
 			float[] normal = {0,0,0}; PlicPlaneOffset.Result bracket = null;
 			if (fraction > 0 && fraction < 1) {
 				int support = stock.supportMask(), count = Integer.bitCount(support);
-				int[] low = new int[3];
-				for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0)
-					for (int axis = 0; axis < 3; axis++) low[axis] += 1 - (micro >> axis & 1);
 				SignedDyadic metricVolume = stock.volume().multiply(SignedDyadic.of(cellSize));
 				double[] direction = {
-						FlipPressurePhaseGeometry.momentDirection(FlipPressurePhaseGeometry.centeredMoment(stock.firstMomentX(),metricVolume,x),low[0],count),
-						FlipPressurePhaseGeometry.momentDirection(FlipPressurePhaseGeometry.centeredMoment(stock.firstMomentY(),metricVolume,y),low[1],count),
-						FlipPressurePhaseGeometry.momentDirection(FlipPressurePhaseGeometry.centeredMoment(stock.firstMomentZ(),metricVolume,z),low[2],count)};
+						FlipPressurePhaseGeometry.ownMomentDirection(stock.firstMomentX(),metricVolume,x,support,0),
+						FlipPressurePhaseGeometry.ownMomentDirection(stock.firstMomentY(),metricVolume,y,support,1),
+						FlipPressurePhaseGeometry.ownMomentDirection(stock.firstMomentZ(),metricVolume,z,support,2)};
 				double scale = Math.max(Math.abs(direction[0]),Math.max(Math.abs(direction[1]),Math.abs(direction[2])));
 				for (int axis = 0; axis < 3; axis++) normal[axis] = scale == 0 ? axis == 0 ? fallbackX : axis == 1 ? fallbackY : fallbackZ
 						: Double.isInfinite(scale) ? Double.isInfinite(direction[axis]) ? (float)Math.signum(direction[axis]) : 0

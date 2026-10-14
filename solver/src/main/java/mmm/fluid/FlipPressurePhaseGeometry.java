@@ -62,15 +62,21 @@ final class FlipPressurePhaseGeometry {
 		return true;
 	}
 
-	/** Full-box nonzero moment normals retain their direction independently of neighbor fractions. */
+	/** Each partial component with a nonzero own moment retains its plane independently of fraction gradients. */
 	boolean dependsOnNeighborFractions(int cell, PhaseLiquidGeometryEdit stock, float cellSize) {
 		if (!(fraction[cell] > 0 && fraction[cell] < 1)) return false;
-		if (collisionMask(cell) != 0) return true;
-		SignedDyadic metricVolume = stock.volume().multiply(SignedDyadic.of(cellSize));
 		int[] coordinate = {cell % sizeX, cell / sizeX % sizeY, cell / (sizeX * sizeY)};
-		for (int axis = 0; axis < 3; axis++) if (momentDirection(
-				centeredMoment(stock.firstMoment(axis), metricVolume, coordinate[axis]), 4, 8) != 0) return false;
-		return true;
+		for (var component : stock.components()) {
+			int support = component.supportMask();
+			double wet = liquidFractionExact(cell, Integer.numberOfTrailingZeros(support));
+			if (!(wet > 0 && wet < 1)) continue;
+			SignedDyadic metricVolume = component.volume().multiply(SignedDyadic.of(cellSize));
+			boolean ownNormal = false;
+			for (int axis = 0; axis < 3; axis++) if (ownMomentDirection(component.firstMoment(axis),
+					metricVolume, coordinate[axis], support, axis) != 0) ownNormal = true;
+			if (!ownNormal) return true;
+		}
+		return false;
 	}
 
 	void rebuild(
@@ -238,21 +244,11 @@ final class FlipPressurePhaseGeometry {
 		}
 		if (volume.signum() == 0) return false;
 		SignedDyadic metricVolume = volume.multiply(SignedDyadic.of(cellSize));
-		double mx = centeredMoment(first[0], metricVolume, x);
-		double my = centeredMoment(first[1], metricVolume, y);
-		double mz = centeredMoment(first[2], metricVolume, z);
-		int count = 8, lowX = 4, lowY = 4, lowZ = 4;
-		if (cut.mask(cell) != 0) {
-			count = lowX = lowY = lowZ = 0;
-			for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) for (int c = 0; c < 2; c++) {
-				if (!cut.microCellOpen(cell, a, b, c)) continue;
-				count++; lowX += 1 - a; lowY += 1 - b; lowZ += 1 - c;
-			}
-		}
-		if (count == 0) return false;
-		double nx = momentDirection(mx, lowX, count);
-		double ny = momentDirection(my, lowY, count);
-		double nz = momentDirection(mz, lowZ, count);
+		int support = ~cut.mask(cell) & 255;
+		if (support == 0) return false;
+		double nx = ownMomentDirection(first[0], metricVolume, x, support, 0);
+		double ny = ownMomentDirection(first[1], metricVolume, y, support, 1);
+		double nz = ownMomentDirection(first[2], metricVolume, z, support, 2);
 		double scale = Math.max(Math.abs(nx), Math.max(Math.abs(ny), Math.abs(nz)));
 		if (scale == 0) return false;
 		if (Double.isInfinite(scale)) {
@@ -262,6 +258,12 @@ final class FlipPressurePhaseGeometry {
 		} else { nx /= scale; ny /= scale; nz /= scale; }
 		normalX[cell] = (float) nx; normalY[cell] = (float) ny; normalZ[cell] = (float) nz;
 		return true;
+	}
+
+	static double ownMomentDirection(SignedDyadic first, SignedDyadic metricVolume, int coordinate, int support, int axis) {
+		int low = 0;
+		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) low += 1 - (micro >>> axis & 1);
+		return momentDirection(centeredMoment(first, metricVolume, coordinate), low, Integer.bitCount(support));
 	}
 
 	static double centeredMoment(SignedDyadic first, SignedDyadic metricVolume, int coordinate) {
