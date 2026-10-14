@@ -35,6 +35,48 @@ final class GasGeometryOverlap {
 		return integrate(micro, planes, 0)[0];
 	}
 
+	/** Exact positivity only; null denotes the complete microbox. */
+	static boolean hasPositiveOverlap(int micro, HalfSpace before, HalfSpace after) {
+		if (micro < 0 || micro >= 8) throw new IllegalArgumentException("Invalid gas overlap microbox");
+		boolean unrestricted = before == null || zeroNormal(before);
+		if (before != null && unrestricted && before.threshold().signum() > 0) return false;
+		SignedDyadic[] first = new SignedDyadic[8];
+		boolean positiveBefore = unrestricted;
+		for (int corner = 0; corner < 8; corner++) {
+			first[corner] = unrestricted ? SignedDyadic.of(1) : cornerDistance(micro, corner, before);
+			positiveBefore |= first[corner].signum() > 0;
+		}
+		if (!positiveBefore) return false;
+		if (after == null || zeroNormal(after)) return after == null || after.threshold().signum() <= 0;
+		SignedDyadic[] second = new SignedDyadic[8];
+		for (int corner = 0; corner < 8; corner++) {
+			second[corner] = cornerDistance(micro, corner, after);
+			if (first[corner].signum() >= 0 && second[corner].signum() > 0) return true;
+		}
+		// A linear function on the positive-volume clipped box reaches its maximum at a
+		// box corner or a first-plane/box-edge intersection. A strict maximum permits an
+		// interior perturbation into both dry supports; a zero maximum is only tangency.
+		for (int corner = 0; corner < 8; corner++) for (int axis = 0; axis < 3; axis++) {
+			if ((corner & 1 << axis) != 0) continue;
+			int peer = corner | 1 << axis;
+			if (first[corner].signum() * first[peer].signum() >= 0) continue;
+			SignedDyadic numerator = second[corner].multiply(first[peer])
+					.subtract(second[peer].multiply(first[corner]));
+			if (numerator.signum() * first[peer].subtract(first[corner]).signum() > 0) return true;
+		}
+		return false;
+	}
+
+	private static boolean zeroNormal(HalfSpace plane) {
+		return plane.nx().signum() == 0 && plane.ny().signum() == 0 && plane.nz().signum() == 0;
+	}
+	private static SignedDyadic cornerDistance(int micro, int corner, HalfSpace plane) {
+		return plane.nx().multiply(SignedDyadic.of((micro & 1) + (corner & 1), -1))
+				.add(plane.ny().multiply(SignedDyadic.of((micro >>> 1 & 1) + (corner >>> 1 & 1), -1)))
+				.add(plane.nz().multiply(SignedDyadic.of((micro >>> 2 & 1) + (corner >>> 2 & 1), -1)))
+				.subtract(plane.threshold());
+	}
+
 	/** Exact normalized volume and signed first moments about the whole-cell centre. */
 	static ExactRational[] normalizedMoments(int micro, List<HalfSpace> planes) {
 		return integrate(micro, planes, 1);

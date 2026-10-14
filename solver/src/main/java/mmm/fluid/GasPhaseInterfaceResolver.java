@@ -104,8 +104,8 @@ final class GasPhaseInterfaceResolver {
 
 	private static boolean positiveOverlap(GasComplementGeometry.Piece before, GasGeometryOverlap.HalfSpace after, boolean positiveAfter) {
 		if (after == null || after.equals(before.dryPlane())) return true;
-		if (before.dryPlane() == null) return positiveAfter || MicroBoxPlaneVolume.dryVolume(before.micro(), after).signum() > 0;
-		return GasGeometryOverlap.normalizedVolume(before.micro(), List.of(before.dryPlane(), after)).signum() > 0;
+		if (before.dryPlane() == null && positiveAfter) return true;
+		return GasGeometryOverlap.hasPositiveOverlap(before.micro(), before.dryPlane(), after);
 	}
 
 	record Contact(int node, int supportMask, List<Integer> pieces) { }

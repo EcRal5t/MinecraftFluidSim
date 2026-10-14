@@ -561,6 +561,8 @@ public final class AirCavityScannerValidation {
 			check(measured.equals(offset==inverse.lower()?inverse.lowerVolume():inverse.upperVolume()),"PLIC inverse certificate differs from independent polyhedron volume");
 			check(measured.equals(GasGeometryOverlap.normalizedVolume(0,List.of(wet,wet))),
 					"Coincident thin gas planes differ from the certified single-plane volume");
+			check(GasGeometryOverlap.hasPositiveOverlap(0,wet,wet)==(measured.signum()>0),
+					"Coincident extreme-tail planes changed overlap positivity");
 		}
 		check(inverse.lowerVolume().compareTo(tinyTarget)<=0 && inverse.upperVolume().compareTo(tinyTarget)>=0
 				&& Math.nextUp(inverse.lower())==inverse.upper(),"Tiny PLIC volume lacks adjacent enclosing offsets");
@@ -585,9 +587,29 @@ public final class AirCavityScannerValidation {
 						:mmm.chemistry.ExactRational.ZERO;
 				check(GasGeometryOverlap.normalizedVolume(slot,List.of(lower,upper)).equals(expected),"Sub-ULP positive gas overlap was lost");
 				check(GasGeometryOverlap.normalizedVolume(slot,List.of(upper,lower)).equals(expected),"Gas overlap depends on clipping order");
+				check(GasGeometryOverlap.hasPositiveOverlap(slot,lower,upper)==(expected.signum()>0)
+						&& !GasGeometryOverlap.hasPositiveOverlap(slot,lower,tangent),"Exact overlap positivity lost a thin layer or admitted tangency");
 				check(GasGeometryOverlap.normalizedVolume(slot,List.of(lower,lower)).equals(GasGeometryOverlap.normalizedVolume(slot,List.of(lower))),
 						"Repeated gas plane double-counted its overlap");
 			}
+		}
+		var constraints=new java.util.ArrayList<GasGeometryOverlap.HalfSpace>();
+		for(int axis=0;axis<3;axis++) for(int sign:new int[]{-1,1}) {
+			var normal=new SignedDyadic[]{zero,zero,zero};normal[axis]=SignedDyadic.of(sign);
+			constraints.add(new GasGeometryOverlap.HalfSpace(normal[0],normal[1],normal[2],SignedDyadic.of(sign*.25)));
+		}
+		constraints.add(tetra);
+		constraints.add(new GasGeometryOverlap.HalfSpace(one,one,one,SignedDyadic.of(.3)));
+		constraints.add(new GasGeometryOverlap.HalfSpace(one.negate(),one.negate(),one.negate(),SignedDyadic.of(-Math.nextUp(.3))));
+		constraints.add(new GasGeometryOverlap.HalfSpace(one,one.negate(),SignedDyadic.of(.5),SignedDyadic.of(.1)));
+		constraints.add(new GasGeometryOverlap.HalfSpace(one.negate(),one,SignedDyadic.of(-.5),SignedDyadic.of(-.1)));
+		constraints.add(new GasGeometryOverlap.HalfSpace(zero,zero,zero,zero));
+		constraints.add(new GasGeometryOverlap.HalfSpace(zero,zero,zero,one));
+		for(int slot=0;slot<8;slot++) for(var before:constraints) {
+			check(GasGeometryOverlap.hasPositiveOverlap(slot,before,null)
+					==(GasGeometryOverlap.normalizedVolume(slot,List.of(before)).signum()>0),"Single-plane positivity differs from exact volume");
+			for(var after:constraints) check(GasGeometryOverlap.hasPositiveOverlap(slot,before,after)
+					==(GasGeometryOverlap.normalizedVolume(slot,List.of(before,after)).signum()>0),"Two-plane positivity differs from exact volume");
 		}
 	}
 

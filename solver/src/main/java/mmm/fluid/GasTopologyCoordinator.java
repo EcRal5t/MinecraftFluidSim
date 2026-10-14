@@ -173,6 +173,8 @@ final class GasTopologyCoordinator {
 			if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane()))
 				certified[source] |= before.normalizedVolume().signum() > 0;
 			else if (before.dryPlane() == null) certified[source] |= after.normalizedVolume().signum() > 0;
+			else if (!certified[source] && potential[source] >= 0)
+				certified[source] = GasGeometryOverlap.hasPositiveOverlap(before.micro(), before.dryPlane(), after.dryPlane());
 		}
 		// Potential targets include every positive intersection; one certified microbox proves support.
 		for (int source = 1; source < potential.length; source++) {
