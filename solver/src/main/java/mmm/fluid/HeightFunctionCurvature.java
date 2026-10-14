@@ -94,6 +94,14 @@ final class HeightFunctionCurvature {
         int cell = d.cellIndex(reflect(x, d.sizeX), reflect(y, d.sizeY), reflect(z, d.sizeZ));
         if (d.projection.pressureVolume[cell] != c) return false;
         var plane = d.pressurePhaseGeometry;
+        if (plane.liquidShape(cell) != null) {
+            var box = LiquidShapeGeometry.box(plane.liquidShape(cell));
+            if (orientation != 0 && (orientation > 0 ? box.upper(axis).compareTo(mmm.units.SignedDyadic.of(1)) >= 0 : box.lower(axis).signum() == 0)) return false;
+            if (side == 0 ? box.lower(axis).signum() > 0 : box.upper(axis).compareTo(mmm.units.SignedDyadic.of(1)) < 0) return false;
+            for (int a = 0; a < 3; a++) if (a != axis && (box.lower(a).signum() != 0
+                    || !box.upper(a).equals(mmm.units.SignedDyadic.of(1)))) return false;
+            return true;
+        }
         double normal = plane.planeNormal(cell, axis);
         if (orientation != 0 && !(normal * orientation > 0)) return false;
         double maximum = normal * side + Math.max(plane.planeNormal(cell, (axis + 1) % 3), 0)

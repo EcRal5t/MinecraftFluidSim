@@ -118,8 +118,9 @@ final class GasComponentCapacity {
 					for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
 						var piece = geometry.piece(8 * cell + micro);
 						if (piece != null) {
-							if (representative != null && (!java.util.Objects.equals(representative.dryPlane(),piece.dryPlane())
-									|| !java.util.Objects.equals(representative.offsetBracket(),piece.offsetBracket())))
+							if (representative != null && (representative.shaped() != piece.shaped()
+									|| !piece.shaped() && (!java.util.Objects.equals(representative.dryPlane(),piece.dryPlane())
+									|| !java.util.Objects.equals(representative.offsetBracket(),piece.offsetBracket()))))
 								throw blocked("Gas component contains inconsistent PLIC certificates",cell);
 							representative = piece;gas = gas.add(piece.normalizedVolume());
 						}
@@ -163,7 +164,7 @@ final class GasComponentCapacity {
 
 	private static InverseErrorRange inverseRange(GasComplementGeometry.Piece piece,int support,SignedDyadic capacity,SignedDyadic available,
 			ExactRational porosity,ExactRational gas,int cell) {
-		if (piece == null || piece.dryPlane() == null) return new InverseErrorRange(ExactRational.ZERO,ExactRational.ZERO);
+		if (piece == null || piece.shaped() || piece.dryPlane() == null) return new InverseErrorRange(ExactRational.ZERO,ExactRational.ZERO);
 		var bracket = piece.offsetBracket();
 		if (bracket == null) throw blocked("Partial gas component has no exact PLIC inverse certificate",cell);
 		ExactRational open = ExactRational.of(Integer.bitCount(support)).divide(8);

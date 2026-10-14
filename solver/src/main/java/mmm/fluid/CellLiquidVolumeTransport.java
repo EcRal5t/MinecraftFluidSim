@@ -94,8 +94,7 @@ final class CellLiquidVolumeTransport {
 		}
 		try {
 			if (flow != null) flow.prepareVelocities(transport, geometry);
-			var ballistic = new BallisticLiquidRemap(domain, dt);
-			collisionWorkJoules = ballistic.collisionWorkJoules;
+			var ballistic = new BallisticLiquidRemap(domain.cellCount);
 			transport.reserve(ballistic.reserved);
 			transport.carrierShares(chemicalShares());
 			LiquidParticleStore particles = domain.particles;
@@ -109,6 +108,9 @@ final class CellLiquidVolumeTransport {
 						"Liquid transport outgoing Courant=" + maximumOutgoing + ", dt=" + dt);
 			CellRemapCandidate candidate = CellTranslationRemap.prepare(domain, field, dt, ballistic);
 			if (candidate == null) {
+				if (!domain.liquidShapes.isEmpty()) throw new GasTopologyBlockedException("Liquid shape transport requires a positive successor partition for the captured velocity field");
+				ballistic = new BallisticLiquidRemap(domain, dt);
+				collisionWorkJoules = ballistic.collisionWorkJoules; transport.reserve(ballistic.reserved);
 				try {
 					transport.plan(volume, domain.geometry.solid, dt / domain.config.cellSize(), exactVolume);
 				} catch (MechanicalTimeRefinement refinement) {

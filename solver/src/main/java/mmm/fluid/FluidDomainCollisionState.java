@@ -78,6 +78,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		}
 		coordinator.adoptWholesaleCount(
 				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()), restoredCount);
+		liquidShapes = state.liquidShapes();
 		domain().clearThermalBinding();
 		materialRegistry = null;
 		chemicalParcels = null;
@@ -158,6 +159,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 
 	/** Exports an immutable CPU marker/velocity/solid handoff without serializing reconstructed density. */
 	public FlipParticleState exportParticleState() { return carriers.exportParticleState(); }
+	public List<LiquidCellShape> liquidShapes() { return liquidShapes; }
 
 	/** Exports exact multi-material marker state; runtime handles are replaced by the stable ordered palette. */
 	public FlipMaterialParticleState exportMaterialParticleState() { return carriers.exportMaterialParticleState(); }

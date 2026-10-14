@@ -84,7 +84,7 @@ public final class CellRemapMomentsValidation {
 	}
 
 	private static void jointTranslationPublishesEdgeAndCornerReceivers() {
-		for (float h : new float[]{.5F, 1, 2}) for (int axes = 1; axes < 8; axes++) for (int signs = 0; signs < 8; signs++) {
+		for (float h : new float[]{.5F, .75F, 1, 2}) for (int axes = 1; axes < 8; axes++) for (int signs = 0; signs < 8; signs++) {
 			var domain = translationDomain(h, axes, signs, 256, false);
 			domain.cellLiquidVolumeTransport.advect(.125F);
 			check(domain.cellLiquidVolumeTransport.momentAudit.reconstructedGroups() == 1 << Integer.bitCount(axes),
@@ -118,16 +118,52 @@ public final class CellRemapMomentsValidation {
 		var tiled = translationDomain(1, 3, 0, 256, true); tiled.cellLiquidVolumeTransport.advect(.125F);
 		check(tiled.particleCount() == 48, "Translated positive pieces did not compact a fully covered receiving box");
 		var fractional = translationDomain(1, 7, 0, 256, false); fractional.cellLiquidVolumeTransport.advect(.123F);
+		var nonBinary = translationDomain(.75F, 7, 0, 512, false); nonBinary.sealDomainBoundary(); nonBinary.bootstrapGasState(null);
+		double nonBinaryCapacity = nonBinary.gasState.network.availableVolume(1); nonBinary.cellLiquidVolumeTransport.advect(.123F);
+		check(nonBinary.gasState.network.nodeCount() == 1, "Non-binary cell length created a false gas node");
+		precise(nonBinary.gasState.network.availableVolume(1), nonBinaryCapacity, "Non-binary cell length gas capacity");
+		check(nonBinary.liquidShapes.equals(FluidDomain.restoreAuthoritativeState(nonBinary.captureAuthoritativeState()).liquidShapes),
+				"Non-binary cell length lost exact cancellation on restore");
 		var total = mmm.units.SignedDyadic.ZERO;
 		for (int p = 0; p < fractional.particleCount(); p++) total = total.add(mmm.units.SignedDyadic.of(fractional.particles.volume(p)));
 		check(total.equals(mmm.units.SignedDyadic.of(1)), "Joint translation discarded its float expansion tails");
-		var incompatibleGas = translationDomain(1, 7, 0, 256, false); incompatibleGas.sealDomainBoundary(); incompatibleGas.bootstrapGasState(null);
-		CellAffineWallProjection.projectTransport(incompatibleGas); var gasBefore = incompatibleGas.exportParticleState(); boolean gasRejected = false;
-		try { incompatibleGas.cellLiquidVolumeTransport.advect(.125F); } catch (GasTopologyBlockedException expected) { gasRejected = true; }
-		check(gasRejected && incompatibleGas.gasState.network.nodeCount() == 1
-				&& java.util.Arrays.equals(gasBefore.copyPositionVolume(), incompatibleGas.exportParticleState().copyPositionVolume())
-				&& java.util.Arrays.equals(gasBefore.copyParticleVelocities(), incompatibleGas.exportParticleState().copyParticleVelocities()),
-				"Incompatible PLIC gas geometry published a false vacuum or changed source columns");
+		for (float dt : new float[]{.125F, .123F}) for (int axes = 1; axes < 8; axes++) for (int signs = 0; signs < 8; signs++) {
+			var finiteShape = translationDomain(1, axes, signs, 512, false); finiteShape.sealDomainBoundary(); finiteShape.bootstrapGasState(null);
+			long stock = finiteShape.gasState.network.standardVolumeNanos(1); double available = finiteShape.gasState.network.availableVolume(1);
+			finiteShape.cellLiquidVolumeTransport.advect(dt);
+			check(finiteShape.gasState.network.nodeCount() == 1 && finiteShape.gasState.network.standardVolumeNanos(1) == stock,
+					"Joint positive shape created a false vacuum");
+			precise(finiteShape.gasState.network.availableVolume(1), available, "Joint positive shape gas capacity");
+			int source = finiteShape.cellIndex(2, 2, 2);
+			for (int a = 0; a < 3; a++) if ((axes & 1 << a) != 0)
+				check(finiteShape.gasState.frame.fullDryFace(source, a, (signs & 1 << a) == 0 ? 0 : 1), "Translated shape lost its completely dry source face");
+			var geometry = LiquidPressureGeometry.capture(finiteShape);
+			var exact = geometry.supportAffineSecondMoments(source, 255, new mmm.chemistry.ExactRational[]{mmm.chemistry.ExactRational.ONE,
+					mmm.chemistry.ExactRational.ZERO, mmm.chemistry.ExactRational.ZERO, mmm.chemistry.ExactRational.ZERO});
+			var shape = finiteShape.pressurePhaseGeometry.liquidShape(source); var box = shape.boxes().getFirst();
+			check(exact[0].equals(PlicComponentGeometry.ratio(shape.volume(), mmm.units.SignedDyadic.of(1))), "Pressure discarded the published shape volume");
+			for (int a = 0; a < 3; a++) check(exact[a+1].equals(PlicComponentGeometry.ratio(shape.volume().multiply(
+					box.lower(a).add(box.upper(a)).subtract(mmm.units.SignedDyadic.of(1)).multiply(mmm.units.SignedDyadic.of(1,-1))), mmm.units.SignedDyadic.of(1))),
+					"Pressure discarded the published shape first moment");
+			var roundtrip = FluidDomain.restoreAuthoritativeState(finiteShape.captureAuthoritativeState());
+			check(finiteShape.liquidShapes.equals(roundtrip.liquidShapes) && roundtrip.gasState.network.nodeCount() == 1,
+					"Captured positive shape changed gas ownership on restore");
+			if (axes == 7 && signs == 0) {
+				for (int step = 1; step < (dt == .125F ? 8 : 2); step++) {
+					setTranslationField(roundtrip, 1, axes, signs); roundtrip.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(roundtrip);
+					roundtrip.cellLiquidVolumeTransport.advect(dt);
+					check(roundtrip.gasState.network.nodeCount() == 1 && roundtrip.gasState.network.standardVolumeNanos(1) == stock,
+							"Repeated translation lost the restored positive shape");
+					precise(roundtrip.gasState.network.availableVolume(1), available, "Repeated translation gas capacity");
+					roundtrip = FluidDomain.restoreAuthoritativeState(roundtrip.captureAuthoritativeState());
+				}
+				var pressureDomain = FluidDomain.restoreAuthoritativeState(finiteShape.captureAuthoritativeState());
+				var result = pressureDomain.pressureSystem.solveMarker(.001F, pressureDomain.config.pressureTolerance());
+				check(result.converged(), "Published positive shape did not reach its original pressure residual");
+				pressureDomain.pressureSystem.markerProjection().publish();
+				check(pressureDomain.liquidShapes.equals(finiteShape.liquidShapes), "Pressure changed the positive carrier shape");
+			}
+		}
 		var finite = translationDomain(1, 1, 0, 256, false); finite.sealDomainBoundary(); finite.bootstrapGasState(null);
 		long gas = finite.gasState.network.standardVolumeNanos(1); double capacity = finite.gasState.network.availableVolume(1);
 		CellAffineWallProjection.projectTransport(finite); finite.cellLiquidVolumeTransport.advect(.125F);
@@ -150,14 +186,17 @@ public final class CellRemapMomentsValidation {
 		domain.setVolume(2, 2, 2, 1); if (tiled) domain.setVolume(1, 2, 2, 1);
 		for (int p = 0; p < domain.particleCount(); p++) for (int a = 0; a < 3; a++)
 			setVelocity(domain, p, a, (axes & 1 << a) == 0 ? 0 : (signs & 1 << a) == 0 ? h : -h);
+		setTranslationField(domain, h, axes, signs);
+		domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
+		return domain;
+	}
+	private static void setTranslationField(FluidDomain domain, float h, int axes, int signs) {
 		domain.rebuildGridFromParticles(); var basis = CellAffineVelocity.capture(domain);
 		var coefficients = new double[3][4 * basis.blockCount()];
 		for (int block = 0; block < basis.blockCount(); block++) for (int a = 0; a < 3; a++)
 			coefficients[a][4 * block] = (axes & 1 << a) == 0 ? 0 : (signs & 1 << a) == 0 ? h : -h;
 		domain.pressureSystem.updateMarkerVelocityField(new CellAffineVelocityField(basis, coefficients));
 		domain.gridToParticleStage.prepareAdvectionCells();
-		domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
-		return domain;
 	}
 
 	private static void capturedWetVelocityKeepsPhysicalIntegral() {

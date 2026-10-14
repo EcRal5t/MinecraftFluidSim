@@ -37,7 +37,7 @@ final class GasPieceCapacity {
 			var piece = geometry.piece(8 * cell + micro);
 			if (piece == null) continue;
 			ExactRational lo, hi;
-			if (piece.dryPlane() == null) lo = hi = piece.normalizedVolume().multiply(porosity);
+			if (piece.shaped() || piece.dryPlane() == null) lo = hi = piece.normalizedVolume().multiply(porosity);
 			else {
 				var plane = piece.dryPlane(); var bracket = piece.offsetBracket();
 				if (bracket == null) throw blocked("Gas piece has no inverse-volume certificate", cell);

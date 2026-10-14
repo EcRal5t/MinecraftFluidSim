@@ -53,6 +53,8 @@ final class RegionCheckpointValidator {
 	}
 
 	public void validate() throws IOException {
+		if (hasExtension(manifest.extensions(), LiquidShapeRegionStateCodec.SECTION_EXTENSION))
+			throw new IOException("Liquid shape payload is section-only");
 		if (RegionStateIntegrity.manifestChecksum(manifest) != manifest.checksum()) throw new IOException("Manifest checksum mismatch");
 		if (sections.size() != manifest.sections().size()) throw new IOException("Section count mismatch");
 		Map<RegionSectionState.SectionKey, RegionManifest.SectionDescriptor> expected = new HashMap<>();
@@ -71,6 +73,7 @@ final class RegionCheckpointValidator {
 					|| section.layout() != manifest.layout()) throw new IOException("Mixed section ownership or layout");
 			if (RegionStateIntegrity.sectionChecksum(section) != section.checksum()) throw new IOException("Section checksum mismatch");
 			validateSectionOwnership(section);
+			new LiquidShapeRegionStateCodec().decode(section, manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize());
 			RegionManifest.SectionDescriptor descriptor = expected.get(section.key());
 			long volumeBits = Double.doubleToRawLongBits(sumVolumes(section.positionVolume()));
 			long massBits = manifest.layout().hasMaterials() ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L;

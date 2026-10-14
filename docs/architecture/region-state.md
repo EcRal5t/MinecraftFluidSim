@@ -179,6 +179,8 @@ solidMask[]
 
 granular section 保存每份活动颗粒的 `ceilMask` 原始字节。完整重建按该颗粒的位置、SVQ 和域尺寸校验核支撑、floor/ceil 配额及份额精确总量，再恢复同一选择。
 
+共同液体形状使用 `mmm:liquid_shapes` section extension，按全域 cell 递增保存精确二进制盒范围及实际发布载体的三轴体积位置矩；纯液体、材料与化学布局共用该载荷。每格最多八个互不重叠正盒，extension 上限为 16 MiB。读取校核 cell 归属、范围、碰撞掩码、原始体积与位置矩，以及几何位置矩的坐标存储误差界。恢复先安装载体与形状，再重建气体归属和压力几何。
+
 运行时 handle 由 world registry snapshot 重新解析，数组位置不作持久化 stable ID。
 
 section、palette、mixture、deposit group、gas node 和 ledger 都必须采用规范排序。这样 checksum、故障重放和相同状态的重复 capture 不依赖 hash-map 遍历顺序。

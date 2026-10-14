@@ -159,6 +159,7 @@ final class CarrierMutationCoordinator {
 		}
 		if (energies != null) domain.thermalState.restoreLiquidEnergies(energies);
 		domain.particles.setCount(count); domain.bumpCarrierMutationRevision(); domain.gridDirty = true;
+		domain.liquidShapes = candidate.liquidShapes();
 		if (energies != null) domain.thermalState.recordRoundoff(candidate.energyRoundoff());
 		if (gasTopology != null) domain.gasTopologyCoordinator.commit(gasTopology);
 	}
@@ -168,6 +169,7 @@ final class CarrierMutationCoordinator {
 		verify(plan, CarrierMutationPlan.Kind.WHOLESALE_COUNT);
 		if (domain.chemicalParcels != null) domain.chemicalParcels.clear(domain.particles.count());
 		domain.particles.setCount(0);
+		domain.liquidShapes = java.util.List.of();
 		domain.bumpCarrierMutationRevision();
 		domain.gridDirty = true;
 	}

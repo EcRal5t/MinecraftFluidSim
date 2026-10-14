@@ -49,7 +49,8 @@ final class GasPhaseInterfaceResolver {
 		for (int piece : source.contactPieces()) {
 			var before = topology.source().geometry().piece(piece);
 			var after = future.geometry().piece(piece);
-			if (before == null || after == null || !positiveOverlap(before, after.dryPlane(), true)) continue;
+			if (before == null || after == null || !(before.shaped() || after.shaped()
+					? GasTopologyCoordinator.overlapVolume(before, after).signum() > 0 : positiveOverlap(before, after.dryPlane(), true))) continue;
 			int node = future.nodeOfPiece(piece);
 			if (node >= 0) nodes.add(node);
 		}
@@ -89,6 +90,10 @@ final class GasPhaseInterfaceResolver {
 				var before = prepared.source.geometry().piece(piece);
 				if (before == null) continue;
 				int cell = piece / 8, micro = piece & 7;
+				if (before.shaped() || phase.liquidShape(cell) != null) {
+					if (GasGeometryOverlap.unionOverlapVolume(micro, before.drySupports(), LiquidShapeGeometry.drySupports(phase, cell, micro)).signum() > 0) return true;
+					continue;
+				}
 				double fraction = phase.liquidFractionExact(cell, micro);
 				if (fraction >= 1) continue;
 				var plane = fraction == 0 ? null : new GasGeometryOverlap.HalfSpace(
@@ -103,6 +108,8 @@ final class GasPhaseInterfaceResolver {
 	}
 
 	private static boolean positiveOverlap(GasComplementGeometry.Piece before, GasGeometryOverlap.HalfSpace after, boolean positiveAfter) {
+		if (before.shaped()) return GasGeometryOverlap.unionOverlapVolume(before.micro(), before.drySupports(),
+				List.of(after == null ? List.of() : List.of(after))).signum() > 0;
 		if (after == null || after.equals(before.dryPlane())) return true;
 		if (before.dryPlane() == null && positiveAfter) return true;
 		return GasGeometryOverlap.hasPositiveOverlap(before.micro(), before.dryPlane(), after);
@@ -133,6 +140,11 @@ final class GasPhaseInterfaceResolver {
 					if (gas == null) continue;
 					double ownFace = crossing ? (sign > 0 ? 1 : 0) : .5, peerFace = crossing ? (sign > 0 ? 0 : 1) : .5;
 					double tangent = .5 * (micro >>> ((axis + 1) % 3) & 1), other = .5 * (micro >>> ((axis + 2) % 3) & 1);
+					if (frame.phase().liquidShape(cell) != null || frame.phase().liquidShape(peerCell) != null) {
+						if (GasFaceIntersection.wetDryArea(frame.phase(), cell, peerCell, micro, peerMicro, axis, ownFace, peerFace, tangent, other, .5) > 0)
+							add(found, frame, supportMask, gas.id());
+						continue;
+					}
 					var planes = new ArrayList<GasFaceIntersection.Plane>(2);
 					if (frame.liquidFractionExact(cell, micro) < 1) planes.add(facePlane(frame, cell, micro, axis, ownFace, true));
 					if (gas.dryPlane() != null) planes.add(facePlane(frame, peerCell, peerMicro, axis, peerFace, false));

@@ -5,7 +5,7 @@ import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
 import java.math.BigInteger;
 
-/** PLIC reconstructed from current liquid inventory, shared by pressure and cell transport. */
+/** Saved positive shapes and inventory-reconstructed PLIC, shared by pressure and cell transport. */
 final class FlipPressurePhaseGeometry {
 
 	private final int sizeX;
@@ -19,10 +19,11 @@ final class FlipPressurePhaseGeometry {
 	private final PlicPlaneOffset.Result[] offsetBrackets;
 	private final SignedDyadic[] poreVolumes;
 	private final PlicComponentGeometry[] components;
+	private final LiquidCellShape[] liquidShapes;
 	private byte[] collisionMasks;
 	private long revision;
-	private final double[] faceX = new double[8], faceY = new double[8];
-	private final double[] clippedX = new double[8], clippedY = new double[8];
+	private final double[] faceX = new double[16], faceY = new double[16];
+	private final double[] clippedX = new double[16], clippedY = new double[16];
 
 	FlipPressurePhaseGeometry(int sizeX, int sizeY, int sizeZ) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) {
@@ -41,6 +42,7 @@ final class FlipPressurePhaseGeometry {
 		this.poreVolumes = new SignedDyadic[cellCount];
 		java.util.Arrays.fill(poreVolumes,SignedDyadic.ZERO);
 		this.components = new PlicComponentGeometry[cellCount];
+		this.liquidShapes = new LiquidCellShape[cellCount];
 		this.collisionMasks = new byte[cellCount];
 	}
 
@@ -48,9 +50,11 @@ final class FlipPressurePhaseGeometry {
 	long revision() { return revision; }
 	int collisionMask(int cell) { return Byte.toUnsignedInt(collisionMasks[cell]); }
 	SignedDyadic poreVolume(int cell) { return poreVolumes[cell]; }
+	LiquidCellShape liquidShape(int cell) { return liquidShapes[cell]; }
 
 	/** Exact inputs read by dry-piece and microface construction, including absent gas pieces. */
 	boolean sameCellGeometry(int cell, FlipPressurePhaseGeometry other) {
+		if (!java.util.Objects.equals(liquidShapes[cell], other.liquidShapes[cell])) return false;
 		if (collisionMask(cell) != other.collisionMask(cell) || !poreVolumes[cell].equals(other.poreVolumes[cell])) return false;
 		for (int micro = 0; micro < 8; micro++) {
 			if (Double.doubleToRawLongBits(liquidFractionExact(cell, micro)) != Double.doubleToRawLongBits(other.liquidFractionExact(cell, micro))
@@ -64,6 +68,7 @@ final class FlipPressurePhaseGeometry {
 
 	/** Each partial component with a nonzero own moment retains its plane independently of fraction gradients. */
 	boolean dependsOnNeighborFractions(int cell, PhaseLiquidGeometryEdit stock, float cellSize) {
+		if (liquidShapes[cell] != null) return false;
 		if (!(fraction[cell] > 0 && fraction[cell] < 1)) return false;
 		int[] coordinate = {cell % sizeX, cell / sizeX % sizeY, cell / (sizeX * sizeY)};
 		for (var component : stock.components()) {
@@ -140,11 +145,17 @@ final class FlipPressurePhaseGeometry {
 		collisionMasks = cutCells.copyMicroMasks();
 		java.util.Arrays.fill(components,null);
 		java.util.Arrays.fill(offsetBrackets,null);
+		java.util.Arrays.fill(liquidShapes,null);
 		for (int cell = 0; cell < fraction.length; cell++) {
 			float geometricOpen = cutCells.openCellVolume(cell);
 			float openVolume = granular == null ? geometricOpen
 					: granular.effectiveOpenCellVolume(cell, geometricOpen);
 			poreVolumes[cell] = solid[cell] ? SignedDyadic.ZERO : SignedDyadic.of(openVolume);
+			if (overlay != null && overlay[cell] != null && overlay[cell].shape() != null) {
+				if (cutCells.mask(cell) != 0 || !poreVolumes[cell].equals(SignedDyadic.of(1)))
+					throw new GasTopologyBlockedException("Positive cuboid requires complete open pore capacity at cell " + cell);
+				liquidShapes[cell] = overlay[cell].shape(); LiquidShapeGeometry.box(liquidShapes[cell]);
+			}
 			double liquid = overlay != null && overlay[cell] != null ? overlay[cell].volume().toDouble() : reconstructedVolume[cell];
 			fraction[cell] = solid[cell] || openVolume <= 0.0F ? 0.0F : clamp(liquid / openVolume, 0.0, 1.0);
 			pressureFluid[cell] = false;
@@ -154,7 +165,7 @@ final class FlipPressurePhaseGeometry {
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int cell = cellIndex(x, y, z);
 			PhaseLiquidGeometryEdit edit = overlay == null ? null : overlay[cell];
-			if (solid[cell] || !(fraction[cell] > 0.0F) || fraction[cell] >= 1) continue;
+			if (solid[cell] || !(fraction[cell] > 0.0F) || fraction[cell] >= 1 || liquidShapes[cell] != null) continue;
 			if (captured != null && sameLocalStock[cell]
 					&& canReusePlane(captured, cell, x, y, z, solid, cutCells, edit, cellSize)) {
 				copyCell(captured, cell);
@@ -164,7 +175,12 @@ final class FlipPressurePhaseGeometry {
 		}
 		for (int cell = 0; cell < fraction.length; cell++) {
 			if (solid[cell] || !(fraction[cell] > 0.5F)) continue;
-			if (fraction[cell] >= 1) pressureFluid[cell] = true;
+			if (liquidShapes[cell] != null) {
+				var box = LiquidShapeGeometry.box(liquidShapes[cell]);
+				pressureFluid[cell] = true;
+				for (int axis = 0; axis < 3; axis++) pressureFluid[cell] &= box.lower(axis).compareTo(SignedDyadic.of(1, -1)) < 0
+						&& box.upper(axis).compareTo(SignedDyadic.of(1, -1)) > 0;
+			} else if (fraction[cell] >= 1) pressureFluid[cell] = true;
 			else pressureFluid[cell] = planeOffset[cell]
 					> 0.5 * ((double) normalX[cell] + normalY[cell] + normalZ[cell]);
 		}
@@ -210,6 +226,7 @@ final class FlipPressurePhaseGeometry {
 		normalX[cell] = captured.normalX[cell]; normalY[cell] = captured.normalY[cell]; normalZ[cell] = captured.normalZ[cell];
 		planeOffset[cell] = captured.planeOffset[cell]; offsetBrackets[cell] = captured.offsetBrackets[cell];
 		components[cell] = captured.components[cell];
+		liquidShapes[cell] = captured.liquidShapes[cell];
 	}
 
 	/** Scratch owns its scalar arrays; captured component certificates remain immutable. */
@@ -217,6 +234,7 @@ final class FlipPressurePhaseGeometry {
 		var scratch = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
 		System.arraycopy(fraction, 0, scratch.fraction, 0, fraction.length);
 		System.arraycopy(poreVolumes, 0, scratch.poreVolumes, 0, fraction.length);
+		System.arraycopy(liquidShapes, 0, scratch.liquidShapes, 0, fraction.length);
 		scratch.collisionMasks = collisionMasks.clone();
 		return scratch;
 	}
@@ -224,6 +242,9 @@ final class FlipPressurePhaseGeometry {
 	void rebuildContactCells(FlipPressurePhaseGeometry captured, PhaseLiquidGeometryEdit edit,
 	                         java.util.List<Integer> cells, java.util.List<PhaseLiquidGeometryEdit> stock,
 	                         FlipCutCellGeometry cut, boolean[] solid, float cellSize) {
+		if (captured.liquidShapes[edit.cell()] != null && edit.shape() == null && edit.volume().signum() > 0)
+			throw new GasTopologyBlockedException("Liquid contact edit requires a positive successor shape at cell " + edit.cell());
+		liquidShapes[edit.cell()] = edit.shape();
 		double open = poreVolumes[edit.cell()].toDouble();
 		fraction[edit.cell()] = solid[edit.cell()] || open <= 0 ? 0 : clamp(edit.volume().toDouble() / open, 0, 1);
 		var integration = new LiquidFluxGeometry(cut);
@@ -231,7 +252,7 @@ final class FlipPressurePhaseGeometry {
 			int x = cell % sizeX, y = cell / sizeX % sizeY, z = cell / (sizeX * sizeY);
 			normalX[cell] = normalY[cell] = normalZ[cell] = 0; planeOffset[cell] = 0;
 			offsetBrackets[cell] = null; components[cell] = null;
-			if (solid[cell] || !(fraction[cell] > 0) || fraction[cell] >= 1) continue;
+			if (solid[cell] || !(fraction[cell] > 0) || fraction[cell] >= 1 || liquidShapes[cell] != null) continue;
 			if (cell != edit.cell() && canReusePlane(captured, cell, x, y, z, solid, cut, stock.get(cell), cellSize)) copyCell(captured, cell);
 			else solveCell(cell, x, y, z, solid, cut, null, null, cellSize, cell == edit.cell() ? edit : stock.get(cell), integration);
 		}
@@ -328,6 +349,17 @@ final class FlipPressurePhaseGeometry {
 		return components[cell] == null ? offsetBrackets[cell] : plane == null ? null : plane.bracket();
 	}
 	double liquidFractionExact(int cell, int micro) {
+		if (liquidShapes[cell] != null) {
+			var box = LiquidShapeGeometry.box(liquidShapes[cell]); var volume = SignedDyadic.of(8);
+			for (int axis = 0; axis < 3; axis++) {
+				var lower = SignedDyadic.of(micro >>> axis & 1, -1); var upper = lower.add(SignedDyadic.of(1, -1));
+				if (lower.compareTo(box.lower(axis)) < 0) lower = box.lower(axis);
+				if (upper.compareTo(box.upper(axis)) > 0) upper = box.upper(axis);
+				if (lower.compareTo(upper) >= 0) return 0;
+				volume = volume.multiply(upper.subtract(lower));
+			}
+			return volume.toDouble();
+		}
 		var plane = components[cell] == null ? null : components[cell].plane(micro);
 		return components[cell] == null ? fraction[cell] : plane == null ? 0 : plane.fraction();
 	}
@@ -336,6 +368,7 @@ final class FlipPressurePhaseGeometry {
 		return components[cell] == null ? fallback : plane == null ? 0 : plane.porosity();
 	}
 	double geometricLiquidVolume(int cell,FlipCutCellGeometry cut) {
+		if (liquidShapes[cell] != null) return liquidShapes[cell].volume().toDouble();
 		if (components[cell] == null) return fraction[cell]*cut.openCellVolume(cell);
 		double volume = 0;
 		for (int micro=0;micro<8;micro++) if (components[cell].plane(micro)!=null) volume += liquidFractionExact(cell,micro)/8;
@@ -359,6 +392,15 @@ final class FlipPressurePhaseGeometry {
 	}
 
 	private double wetRectangle(int left, int right, int axis, double x, double y, double span) {
+		if (liquidShapes[left] != null || liquidShapes[right] != null) {
+			double area = 0;
+			for (var polygon : sharedWetPolygons(left, right, axis, x, y, span)) {
+				for (int i = 1; i + 1 < polygon[0].length; i++) area += .5 * Math.abs(
+						(polygon[0][i] - polygon[0][0]) * (polygon[1][i + 1] - polygon[1][0])
+						- (polygon[1][i] - polygon[1][0]) * (polygon[0][i + 1] - polygon[0][0]));
+			}
+			return area;
+		}
 		int minus = microAtFace(left,axis,1,x,y), plus = microAtFace(right,axis,0,x,y);
 		if (liquidFractionExact(left,minus) == 0 || liquidFractionExact(right,plus) == 0) return 0;
 		faceX[0] = faceX[3] = x; faceX[1] = faceX[2] = x + span;
@@ -392,6 +434,46 @@ final class FlipPressurePhaseGeometry {
 	}
 
 	/** Copied local face polygon; tangential coordinates use cyclic axis order. */
+	java.util.List<double[][]> wetFacePolygons(int cell, int axis, double coordinate, double tangent, double other, double span) {
+		return wetFacePolygons(cell, microAtFace(cell, axis, coordinate, tangent, other), axis, coordinate, tangent, other, span);
+	}
+	java.util.List<double[][]> wetFacePolygons(int cell, int micro, int axis, double coordinate, double tangent, double other, double span) {
+		if (liquidShapes[cell] == null) return java.util.List.<double[][]>of(wetFacePolygon(cell, axis, coordinate, tangent, other, span));
+		return supportFacePolygons(LiquidShapeGeometry.faceWetSupports(this, cell, micro), java.util.List.of(java.util.List.of()),
+				axis, coordinate, 0, tangent, other, span);
+	}
+	java.util.List<double[][]> sharedWetPolygons(int left, int right, int axis, double tangent, double other, double span) {
+		if (liquidShapes[left] == null && liquidShapes[right] == null) return java.util.List.<double[][]>of(sharedWetPolygon(left, right, axis, tangent, other, span));
+		return supportFacePolygons(LiquidShapeGeometry.faceWetSupports(this, left, microAtFace(left, axis, 1, tangent, other)),
+				LiquidShapeGeometry.faceWetSupports(this, right, microAtFace(right, axis, 0, tangent, other)), axis, 1, 0, tangent, other, span);
+	}
+	java.util.List<double[][]> exposedWetPolygons(int owner, int peer, int axis, int sign, double tangent, double other, double span) {
+		if (liquidShapes[owner] == null && (peer < 0 || liquidShapes[peer] == null))
+			return java.util.List.<double[][]>of(exposedWetPolygon(owner, peer, axis, sign, tangent, other, span));
+		double coordinate = sign > 0 ? 1 : 0, peerCoordinate = 1 - coordinate;
+		var dry = peer < 0 ? java.util.List.<java.util.List<GasGeometryOverlap.HalfSpace>>of(java.util.List.of())
+				: LiquidShapeGeometry.drySupports(this, peer, microAtFace(peer, axis, peerCoordinate, tangent, other));
+		return supportFacePolygons(LiquidShapeGeometry.faceWetSupports(this, owner, microAtFace(owner, axis, coordinate, tangent, other)),
+				dry, axis, coordinate, peerCoordinate, tangent, other, span);
+	}
+	private java.util.List<double[][]> supportFacePolygons(java.util.List<java.util.List<GasGeometryOverlap.HalfSpace>> first,
+	                                                     java.util.List<java.util.List<GasGeometryOverlap.HalfSpace>> second,
+	                                                     int axis, double coordinate, double peerCoordinate, double tangent, double other, double span) {
+		var result = new java.util.ArrayList<double[][]>();
+		for (var a : first) for (var b : second) {
+			rectangle(tangent, other, span); int count = 4;
+			for (var plane : a) count = clipSupportFace(count, plane, axis, coordinate);
+			for (var plane : b) count = clipSupportFace(count, plane, axis, peerCoordinate);
+			if (count >= 3) result.add(polygon(count));
+		}
+		return java.util.List.copyOf(result);
+	}
+	private int clipSupportFace(int count, GasGeometryOverlap.HalfSpace plane, int axis, double coordinate) {
+		SignedDyadic[] n = {plane.nx(), plane.ny(), plane.nz()};
+		return clipFace(count, -n[(axis+1)%3].toDouble(), -n[(axis+2)%3].toDouble(),
+				n[axis].multiply(SignedDyadic.of(coordinate)).subtract(plane.threshold()).toDouble());
+	}
+
 	double[][] wetFacePolygon(int cell, int axis, double coordinate, double tangent, double other, double span) {
 		int micro = microAtFace(cell,axis,coordinate,tangent,other);
 		double wet = liquidFractionExact(cell,micro);

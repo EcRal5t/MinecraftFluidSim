@@ -11,6 +11,7 @@ import mmm.fluid.FluidDomain;
 import mmm.fluid.FlipChemicalParticleState;
 import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FlipParticleState;
+import mmm.fluid.LiquidCellShape;
 import mmm.fluid.FlipThermalParticleState;
 import mmm.fluid.PendingPhaseVolumeState;
 import mmm.fluid.BuiltinFluidMaterials;
@@ -50,6 +51,67 @@ import java.util.List;
 import java.util.UUID;
 
 abstract class RegionCodecValidationScenarios extends RegionPersistenceValidationSupport {
+	static void validateLiquidShapeCodec() throws Exception {
+		var zero = SignedDyadic.ZERO; var half = SignedDyadic.of(1, -1); var first = SignedDyadic.of(5, -6);
+		var box = new LiquidCellShape.Box(zero, zero, zero, half, half, half);
+		var shapes = List.of(new LiquidCellShape(31, List.of(box), first, first, first));
+		var pure = new FlipParticleState(6, 4, 6, .5F, 1, .125F,
+				new float[]{.625F, .625F, .625F, .125F}, new float[3], new byte[144], shapes);
+		require(pure.cpuBytes() > new FlipParticleState(6, 4, 6, .5F, 1, .125F,
+				pure.copyPositionVolume(), pure.copyParticleVelocities(), pure.copySolidMask()).cpuBytes(),
+				"saved liquid shape was omitted from the memory budget");
+		var codec = new RegionStateCodec(); var shapeCodec = new LiquidShapeRegionStateCodec();
+		for (int kind = 0; kind < 3; kind++) {
+			var region = populatedRegion(new UUID(71L, 72L + kind));
+			if (kind == 0) region.domain().restoreParticleState(pure);
+			else region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(6, 4, 6, .5F, 1, .125, 125,
+					BuiltinFluidMaterials.DEFAULT_PALETTE, pure.copyPositionVolume(), pure.copyParticleVelocities(),
+					pure.copySolidMask(), new double[]{125}, new int[]{0}, shapes));
+			if (kind == 2) region.domain().bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+			require(FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState()).liquidShapes().equals(shapes),
+					"backend capture/restore lost the positive liquid shape");
+			var state = kind == 0 ? RegionCheckpointFixtures.capture(region, 1)
+					: kind == 1 ? RegionCheckpointFixtures.captureMaterial(region, 1) : RegionCheckpointFixtures.captureChemical(region, 1);
+			state.validate(); var sections = new ArrayList<RegionSectionState>();
+			for (var section : state.sections()) sections.add(codec.decodeSection(codec.encodeSection(section)));
+			var restored = restorer(new RegionState(codec.decodeManifest(codec.encodeManifest(state.manifest())), sections));
+			if (kind == 0) assertParticleStateEquals(pure, restored.reconstruct());
+			else if (kind == 1) assertMaterialStateEquals(region.domain().exportMaterialParticleState(), restored.reconstructMaterial());
+			else assertChemicalStateEquals(region.domain().exportChemicalParticleState(), restored.reconstructChemical(BuiltinChemicalDefinitions.REGISTRY));
+			var section = sections.stream().filter(s -> s.markerCount() > 0).findFirst().orElseThrow();
+			byte[] payload = shapeCodec.encode(shapes);
+			var malformed = new ArrayList<byte[]>(); malformed.add(Arrays.copyOf(payload, payload.length + 1));
+			byte[] boxes = payload.clone(); java.nio.ByteBuffer.wrap(boxes).putInt(12, 9); malformed.add(boxes);
+			byte[] length = payload.clone(); java.nio.ByteBuffer.wrap(length).putInt(20, Integer.MAX_VALUE); malformed.add(length);
+			byte[] cell = payload.clone(); java.nio.ByteBuffer.wrap(cell).putInt(8, 144); malformed.add(cell);
+			byte[] outside = payload.clone(); java.nio.ByteBuffer.wrap(outside).putInt(52, 1); malformed.add(outside);
+			byte[] volume = payload.clone(); java.nio.ByteBuffer.wrap(volume).putInt(52, -2); malformed.add(volume);
+			malformed.add(shapeCodec.encode(List.of(shapes.getFirst(), shapes.getFirst())));
+			var shifted = new LiquidCellShape(31, List.of(new LiquidCellShape.Box(SignedDyadic.of(1, -3), zero, zero,
+					SignedDyadic.of(5, -3), half, half)), first, first, first);
+			malformed.add(shapeCodec.encode(List.of(shifted)));
+			malformed.add(shapeCodec.encode(List.of(new LiquidCellShape(31, List.of(box), first.add(SignedDyadic.of(1, -20)), first, first))));
+			for (byte[] invalid : malformed) {
+				var changed = new RegionSectionState(section.layout(), section.regionId(), section.dimensionId(), section.checkpointGeneration(),
+						section.sectionX(), section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
+						section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(), section.velocities(),
+						section.markerMass(), section.materialPaletteIndex(), section.solidMask(),
+						List.of(new RegionExtension(LiquidShapeRegionStateCodec.SECTION_EXTENSION, invalid)), section.chemicalMixtureIndex(),
+						section.indicator(), section.chemicalSpeciesTotals(), section.chemicalResidualLedgerBits(), 0);
+				expectIOException(() -> shapeCodec.decode(changed, 6, 4, 6, .5F), "invalid or unbound liquid shape payload was accepted");
+			}
+		}
+		var touching = List.of(new LiquidCellShape.Box(zero, zero, zero, SignedDyadic.of(1, -2), half, half),
+				new LiquidCellShape.Box(SignedDyadic.of(1, -2), zero, zero, half, half, half));
+		new FlipParticleState(6, 4, 6, .5F, 1, .125F, pure.copyPositionVolume(), new float[3], new byte[144],
+				List.of(new LiquidCellShape(31, touching, first, first, first)));
+		try { new LiquidCellShape(31, List.of(box, box), first, first, first); throw new AssertionError("overlapping liquid boxes were accepted"); }
+		catch (IllegalArgumentException expected) { }
+		var cut = new byte[144]; cut[31] = (byte) 128;
+		try { new FlipParticleState(6, 4, 6, .5F, 1, .125F, pure.copyPositionVolume(), new float[3], cut, shapes);
+			throw new AssertionError("saved liquid shape in a cut cell was accepted"); } catch (IllegalArgumentException expected) { }
+	}
+
 	static void validateThermalCodec() throws Exception {
 		validateGasPieceCodec();
 		FluidRegion region = populatedRegion(new UUID(27L, 28L));

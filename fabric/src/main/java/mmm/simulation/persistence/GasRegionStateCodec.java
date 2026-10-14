@@ -235,12 +235,12 @@ final class GasRegionStateCodec {
 		return new GasAuditLedger(entries);
 	}
 
-	private static void writeDyadic(DataOutputStream out, SignedDyadic value) throws IOException {
+	static void writeDyadic(DataOutputStream out, SignedDyadic value) throws IOException {
 		byte[] significand = value.significand().toByteArray();
 		out.writeInt(value.exponent()); out.writeInt(significand.length); out.write(significand);
 	}
 
-	private static SignedDyadic readDyadic(DataInputStream input) throws IOException {
+	static SignedDyadic readDyadic(DataInputStream input) throws IOException {
 		int exponent = input.readInt(), length = input.readInt();
 		if (length <= 0 || length > MAX_DYADIC_BYTES) throw new IOException("Gas dyadic significand length is invalid");
 		byte[] bytes = input.readNBytes(length);

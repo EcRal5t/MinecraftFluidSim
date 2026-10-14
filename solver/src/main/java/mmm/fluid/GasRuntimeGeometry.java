@@ -51,7 +51,12 @@ final class GasRuntimeGeometry {
 		this.sourceLiquidStock = prepared == null ? stock(domain, cut, rawIndex) : prepared.frame.liquidStock;
 		MarkerGridIndex phaseIndex = allDry ? emptyIndex(domain.cellCount, 0) : rawIndex;
 		var target = new ArrayList<>(allDry ? stock(domain, cut, phaseIndex) : sourceLiquidStock);
-		for (var edit : edits) target.set(edit.cell(), edit);
+		for (var edit : edits) {
+			var source = target.get(edit.cell());
+			if (source.shape() != null && edit.shape() == null && edit.volume().signum() > 0)
+				throw new GasTopologyBlockedException("Liquid edit requires a positive successor shape at cell " + edit.cell());
+			target.set(edit.cell(), edit);
+		}
 		this.liquidStock = List.copyOf(target);
 		phaseIndex.exactCellVolumeInventory = new SignedDyadic[domain.cellCount];
 		for (int cell = 0; cell < domain.cellCount; cell++) {
@@ -275,10 +280,15 @@ final class GasRuntimeGeometry {
 		var stock = new ArrayList<PhaseLiquidGeometryEdit>(domain.cellCount);
 		for (int cell = 0; cell < domain.cellCount; cell++)
 			stock.add(PhaseLiquidGeometryEdit.current(cell, cut.mask(cell), domain.config.cellSize(), index, domain.particles));
+		if (index.markerCount != null) for (var shape : domain.liquidShapes) {
+			if (stock.get(shape.cell()).volume().signum() > 0)
+				stock.set(shape.cell(), stock.get(shape.cell()).withShape(shape));
+		}
 		return List.copyOf(stock);
 	}
 
 	GasComplementGeometry geometry() { return geometry; }
+	FlipPressurePhaseGeometry phase() { return phase; }
 	float cellSize() { return cellSize; }
 
 	boolean cellDependsOnNeighborFractions(int cell) {

@@ -185,7 +185,7 @@ final class MechanicalStageAssembly {
 		return new ParticleAdvectionStage.Access() {
 			@Override public boolean advectConservativeVolume(float dt) {
 				if (!CellLiquidVolumeTransport.enabled()) return false;
-				boolean connected = false;
+				boolean connected = !domain.liquidShapes.isEmpty();
 				for (int p = 0; p < domain.particles.count(); p++)
 					if (domain.gridToParticleStage.advectionCells()[domain.particleCellIndex(p)]) { connected = true; break; }
 				if (!connected) {
@@ -236,6 +236,7 @@ final class MechanicalStageAssembly {
 			@Override public void rebuildSurfaceTensionPressure() { domain.rebuildSurfaceTensionPressure(); }
 			@Override public void markGridClean() { domain.gridDirty = false; domain.velocityGridDirty = true; }
 			@Override public void markVelocityGridClean() { domain.velocityGridDirty = false; }
+			@Override public java.util.List<PhaseLiquidGeometryEdit> liquidShapeEdits() { return PhaseLiquidGeometryEdit.shapeEdits(domain); }
 		};
 	}
 

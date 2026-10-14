@@ -4,7 +4,7 @@ import mmm.units.SignedDyadic;
 import java.util.ArrayList;
 import java.util.Arrays;
 
-/** Joint destination volumes for uniform translation of homogeneous full wet cells. */
+/** Joint destination volumes for uniform translation of homogeneous positive liquid boxes. */
 final class CellTranslationRemap implements CellRemapCandidate {
 	private static final SignedDyadic ONE = SignedDyadic.of(1), HALF = SignedDyadic.of(1, -1);
 	private record Box(SignedDyadic volume, SignedDyadic[] centre, SignedDyadic[] width) { }
@@ -37,18 +37,40 @@ final class CellTranslationRemap implements CellRemapCandidate {
 	private final GasTopologyCoordinator.GasTopologyPlan gasTopology;
 	private final CellRemapMoments.Audit momentAudit;
 	private final boolean[] changedSpeciesCells;
+	private final java.util.List<LiquidCellShape> liquidShapes;
 	private CellTranslationRemap(FluidDomain domain, CellRemapMarkerColumns markers, SignedDyadic[] volumes, Target[] targets,
 	                            BallisticLiquidRemap ballistic, CellRemapMoments.Audit audit) {
 		CellRemapInventoryAudit.validate(domain, markers, volumes, ballistic);
 		this.markers = markers; momentAudit = audit; changedSpeciesCells = new boolean[domain.cellCount];
+		var edits = new ArrayList<>(PhaseLiquidGeometryEdit.afterCellRemap(domain, markers));
+		var shapes = new ArrayList<LiquidCellShape>();
+		for (int cell = 0; cell < targets.length; cell++) if (targets[cell] != null) {
+			var target = targets[cell];
+			if (target.boxes.size() != 1) throw new GasTopologyBlockedException("Joint translation requires positive multi-piece successor geometry at cell " + cell);
+			var box = new LiquidCellShape.Box(target.lower[0].add(HALF), target.lower[1].add(HALF), target.lower[2].add(HALF),
+					target.upper[0].add(HALF), target.upper[1].add(HALF), target.upper[2].add(HALF));
+			var edit = edits.get(cell);
+			var shape = new LiquidCellShape(cell, java.util.List.of(box), edit.firstMomentX(), edit.firstMomentY(), edit.firstMomentZ());
+			shapes.add(shape); edits.set(cell, edit.withShape(shape));
+		}
+		liquidShapes = java.util.List.copyOf(shapes);
+		var positionVolume = new float[Math.multiplyExact(markers.size(), 4)];
+		for (int ordinal = 0; ordinal < markers.size(); ordinal++) {
+			var coordinate = coordinate(domain, markers.cell[ordinal]);
+			for (int axis = 0; axis < 3; axis++) positionVolume[4 * ordinal + axis] =
+					(float) ((coordinate[axis] + .5 + markers.offset[axis][ordinal]) * domain.config.cellSize());
+			positionVolume[4 * ordinal + 3] = markers.volume[ordinal];
+		}
+		LiquidCellShape.requireMatches(liquidShapes, domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), positionVolume,
+				cell -> domain.geometry.cutCells.mask(cell));
 		gasTopology = domain.gasState.frame == null ? null : domain.gasTopologyCoordinator.planAfterLiquidEdits(
-				PhaseLiquidGeometryEdit.afterCellRemap(domain, markers), new long[domain.cellCount], true);
+				edits, new long[domain.cellCount], true);
 		if (gasTopology != null) for (int cell = 0; cell < targets.length; cell++) if (targets[cell] != null) {
 			for (int a = 0; a < 3; a++) for (int side = 0; side < 2; side++) {
 				boolean dry = side == 0 ? targets[cell].lower[a].compareTo(HALF.negate()) > 0
 						: targets[cell].upper[a].compareTo(HALF) < 0;
 				if (dry && !gasTopology.frame().fullDryFace(cell, a, side))
-					throw new GasTopologyBlockedException("Joint liquid translation requires gas geometry retaining its completely dry face at cell "
+					throw new GasTopologyBlockedException("Joint liquid translation lost a completely dry face at cell "
 							+ cell + ", axis=" + a + ", side=" + side);
 			}
 		}
@@ -59,6 +81,7 @@ final class CellTranslationRemap implements CellRemapCandidate {
 	public GasTopologyCoordinator.GasTopologyPlan gasTopology() { return gasTopology; }
 	public boolean commitGranularCollision() { return false; }
 	public CellRemapMoments.Audit momentAudit() { return momentAudit; }
+	public java.util.List<LiquidCellShape> liquidShapes() { return liquidShapes; }
 
 	/** Null leaves other source measures with the general transport planner. All checks precede publication. */
 	static CellTranslationRemap prepare(FluidDomain domain, CellAffineVelocityField field, float dt, BallisticLiquidRemap ballistic) {
@@ -67,11 +90,13 @@ final class CellTranslationRemap implements CellRemapCandidate {
 		var sourceVolume = zeros(domain.cellCount); var sourceFirst = new SignedDyadic[domain.cellCount][];
 		var sourceMassFirst = new SignedDyadic[domain.cellCount][];
 		var originalFirst = zeros(3); var originalMass = SignedDyadic.ZERO;
+		var sourceShapes = new LiquidCellShape[domain.cellCount];
+		for (var edit : PhaseLiquidGeometryEdit.shapeEdits(domain)) sourceShapes[edit.cell()] = edit.shape();
 		double[] velocity = null; double density = Double.NaN; int material = -1; double h = domain.config.cellSize();
 		var scale = SignedDyadic.of(h); var shape = new double[3];
 		for (int p = 0; p < domain.particleCount(); p++) {
 			int cell = domain.particleCellIndex(p);
-			if (!domain.gridToParticleStage.advectionCells()[cell] || domain.geometry.cutCells.mask(cell) != 0) return null;
+			if (!domain.gridToParticleStage.advectionCells()[cell] && sourceShapes[cell] == null || domain.geometry.cutCells.mask(cell) != 0) return null;
 			var v = new double[]{domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
 			if (velocity == null) velocity = v;
 			else if (!Arrays.equals(v, velocity)) return null;
@@ -94,24 +119,36 @@ final class CellTranslationRemap implements CellRemapCandidate {
 				shape[a] += domain.particles.mass(p) * Math.pow(offset.toDouble() / h, 2);
 			}
 		}
-		int sources = 0;
+		var geometricSecond = new double[3];
 		if (velocity[0] == 0 && velocity[1] == 0 && velocity[2] == 0) return null;
 		for (int cell = 0; cell < domain.cellCount; cell++) if (sourceVolume[cell].signum() > 0) {
-			if (!sourceVolume[cell].equals(ONE)) return null;
-			for (var first : sourceFirst[cell]) if (first.signum() != 0) return null;
-			for (var first : sourceMassFirst[cell]) if (first.signum() != 0) return null;
-			sources++;
+			if (sourceShapes[cell] == null) {
+				if (!sourceVolume[cell].equals(ONE)) return null;
+				for (var first : sourceFirst[cell]) if (first.signum() != 0) return null;
+				for (var first : sourceMassFirst[cell]) if (first.signum() != 0) return null;
+				for (int a = 0; a < 3; a++) geometricSecond[a] += density / 12;
+			} else for (var box : sourceShapes[cell].boxes()) for (int a = 0; a < 3; a++) {
+				double width = box.upper(a).subtract(box.lower(a)).toDouble();
+				double centre = box.upper(a).add(box.lower(a)).multiply(HALF).subtract(HALF).toDouble();
+				geometricSecond[a] += density * box.volume().toDouble() * (width * width / 12 + centre * centre);
+			}
 		}
 		var displacement = new SignedDyadic[3];
 		for (int a = 0; a < 3; a++) {
-			displacement[a] = SignedDyadic.of((double) dt / h).multiply(SignedDyadic.of(velocity[a]));
+			var delta = PlicComponentGeometry.ratio(SignedDyadic.of(dt).multiply(SignedDyadic.of(velocity[a])), scale);
+			int power = delta.denominator().getLowestSetBit();
+			displacement[a] = power == delta.denominator().bitLength() - 1
+					? new SignedDyadic(delta.numerator(), -power) : SignedDyadic.of(delta.toDouble());
 			if ((displacement[a].signum() < 0 ? displacement[a].negate() : displacement[a]).compareTo(ONE) > 0) return null;
-			shape[a] = domain.unitScale.kilograms(h * h * Math.abs((sources / 12.0) * density - shape[a]));
+			shape[a] = domain.unitScale.kilograms(h * h * Math.abs(geometricSecond[a] - shape[a]));
 		}
-		var partition = LiquidTranslationPartition.fullCell(displacement); var targets = new Target[domain.cellCount];
+		var targets = new Target[domain.cellCount];
 		for (int cell = 0; cell < domain.cellCount; cell++) if (sourceVolume[cell].signum() > 0) {
 			var from = coordinate(domain, cell);
-			for (var piece : partition) {
+			var pieces = new ArrayList<LiquidTranslationPartition.Piece>();
+			if (sourceShapes[cell] == null) pieces.addAll(LiquidTranslationPartition.fullCell(displacement));
+			else for (var box : sourceShapes[cell].boxes()) pieces.addAll(LiquidTranslationPartition.box(box, displacement));
+			for (var piece : pieces) {
 				int x = from[0] + piece.dx(), y = from[1] + piece.dy(), z = from[2] + piece.dz();
 				if (x < 0 || x >= domain.sizeX || y < 0 || y >= domain.sizeY || z < 0 || z >= domain.sizeZ) return null;
 				int receiver = domain.cellIndex(x, y, z); if (domain.geometry.cutCells.mask(receiver) != 0) return null;

@@ -11,6 +11,7 @@ import mmm.units.SignedDyadic;
 import mmm.units.SolverUnitScale;
 
 import java.util.Arrays;
+import java.util.List;
 
 /** Allocates the one mutable domain state and wires its single-purpose collaborators. */
 abstract class FluidDomainStorage {
@@ -68,6 +69,7 @@ abstract class FluidDomainStorage {
 	/** Frozen P2G face mass/volume weights; extrapolation reuses the live weight arrays as scratch. */
 
 	final LiquidParticleStore particles;
+	List<LiquidCellShape> liquidShapes = List.of();
 	long carrierMutationRevision;
 	final CarrierMutationCoordinator coordinator;
 	FluidMaterialRegistry materialRegistry;

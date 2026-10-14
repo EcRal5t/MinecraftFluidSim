@@ -181,7 +181,9 @@ final class GasTopologyCoordinator {
 			else if (potential[source] >= 0 && potential[source] != destination) potential[source] = -2;
 			var before = old.geometry().piece(piece); var after = next.geometry().piece(piece);
 			if (before.micro() != after.micro()) throw new IllegalStateException("Gas overlap changed its fixed microbox");
-			if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane()))
+			if (before.shaped() || after.shaped())
+				certified[source] |= overlapVolume(before, after).signum() > 0;
+			else if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane()))
 				certified[source] |= before.normalizedVolume().signum() > 0;
 			else if (before.dryPlane() == null) certified[source] |= after.normalizedVolume().signum() > 0;
 			else if (!certified[source] && potential[source] >= 0)
@@ -230,6 +232,10 @@ final class GasTopologyCoordinator {
 	static ExactRational overlapVolume(GasComplementGeometry.Piece before, GasComplementGeometry.Piece after) {
 		if (before.id() != after.id() || before.cell() != after.cell() || before.micro() != after.micro())
 			throw new IllegalArgumentException("Gas intersection requires the same fixed microbox");
+		if (before.shaped() || after.shaped()) {
+			if (before.drySupports().equals(after.drySupports())) return before.normalizedVolume();
+			return GasGeometryOverlap.unionOverlapVolume(before.micro(), before.drySupports(), after.drySupports());
+		}
 		if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane()))
 			return before.normalizedVolume();
 		if (before.dryPlane() == null) return after.normalizedVolume();

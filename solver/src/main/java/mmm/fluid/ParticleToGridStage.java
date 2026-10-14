@@ -40,6 +40,7 @@ final class ParticleToGridStage {
 		void constrainClosedLiquidVolume();
 		void markGridClean();
 		void markVelocityGridClean();
+		java.util.List<PhaseLiquidGeometryEdit> liquidShapeEdits();
 	}
 
 	private final Workspace state;
@@ -108,10 +109,10 @@ final class ParticleToGridStage {
 	/** Refreshes pressure-derived views against the current solid occupancy and retained marker footprint. */
 	void rebuildPressureGeometry() {
 		access.constrainClosedLiquidVolume();
-		state.pressurePhaseGeometry.rebuild(
+		state.pressurePhaseGeometry.rebuildLiquidEdits(
 				state.geometry.solid, state.projection.pressureVolume, state.geometry.cutCells,
 				access.pressureGranularCoupling(), state.projection.pressureFluid,
-				state.markerGrid, state.particles, state.cellSize);
+				state.markerGrid, state.particles, state.cellSize, access.liquidShapeEdits());
 		access.rebuildPressureBoundaryLineage();
 		access.rebuildSurfaceTensionPressure();
 	}

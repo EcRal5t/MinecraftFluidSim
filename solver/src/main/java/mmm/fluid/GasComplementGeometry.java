@@ -10,7 +10,15 @@ import java.util.List;
 final class GasComplementGeometry {
 	/** Stable microbox key; normalizedVolume is the exact fraction of one whole cell, volume is its SI observation. */
 	record Piece(int id, int cell, int micro, double volume, ExactRational normalizedVolume,
-	             GasGeometryOverlap.HalfSpace dryPlane, PlicPlaneOffset.Result offsetBracket) { }
+	             GasGeometryOverlap.HalfSpace dryPlane, PlicPlaneOffset.Result offsetBracket,
+	             boolean shaped, List<List<GasGeometryOverlap.HalfSpace>> drySupports) {
+		Piece { drySupports = drySupports.stream().map(List::copyOf).toList(); }
+		Piece(int id, int cell, int micro, double volume, ExactRational normalizedVolume,
+		      GasGeometryOverlap.HalfSpace dryPlane, PlicPlaneOffset.Result offsetBracket) {
+			this(id, cell, micro, volume, normalizedVolume, dryPlane, offsetBracket, false,
+					List.of(dryPlane == null ? List.of() : List.of(dryPlane)));
+		}
+	}
 	/** Internal microfaces join one gas volume; complete fixed and dry cell faces join adjacent volumes. */
 	record Port(int first, int second, int axis, double area, boolean fullCutConnection) { }
 	record ExteriorPort(int piece, int axis, int sign, double area, boolean fullCutConnection) { }
@@ -87,6 +95,16 @@ final class GasComplementGeometry {
 			for(int i=0;i<supports.length;i++) if(capacities[i].signum()>0) positivePores |= supports[i];
 			for (int slot = 0; slot < 8; slot++) {
 				if ((positivePores & 1<<slot)==0) continue;
+				if (phase.liquidShape(cell) != null) {
+					var dry = LiquidShapeGeometry.drySupports(phase, cell, slot);
+					var normalized = GasGeometryOverlap.unionVolume(slot, dry);
+					if (normalized.isZero()) continue;
+					if (!GasFaceIntersection.connected(slot, dry)) throw blocked("Gas microbox dry shape is disconnected", cell);
+					double volume = normalized.multiply(physicalScale).toDouble();
+					if (!(volume > 0 && Double.isFinite(volume))) throw blocked("Positive gas shape volume is not representable", cell);
+					var piece = new Piece(8 * cell + slot, cell, slot, volume, normalized, null, null, true, dry);
+					byId[piece.id()] = piece; pieces.add(piece); continue;
+				}
 				double fraction = phase.liquidFractionExact(cell,slot);
 				double nx = phase.planeNormal(cell,slot,0), ny = phase.planeNormal(cell,slot,1), nz = phase.planeNormal(cell,slot,2);
 				double offset = phase.planeOffset(cell,slot);

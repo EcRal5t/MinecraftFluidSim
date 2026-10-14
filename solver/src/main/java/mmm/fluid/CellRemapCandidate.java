@@ -10,4 +10,5 @@ sealed interface CellRemapCandidate permits CellCarrierRemapPlan, CellTranslatio
 	GasTopologyCoordinator.GasTopologyPlan gasTopology();
 	boolean commitGranularCollision();
 	CellRemapMoments.Audit momentAudit();
+	default java.util.List<LiquidCellShape> liquidShapes() { return java.util.List.of(); }
 }

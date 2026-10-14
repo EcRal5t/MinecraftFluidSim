@@ -31,22 +31,28 @@ final class LiquidTranslationPartition {
 	private LiquidTranslationPartition() { }
 
 	static List<Piece> fullCell(SignedDyadic[] displacement) {
+		return box(new LiquidCellShape.Box(SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO, ONE, ONE, ONE), displacement);
+	}
+	static List<Piece> box(LiquidCellShape.Box box, SignedDyadic[] displacement) {
 		if (displacement == null || displacement.length != 3)
 			throw new IllegalArgumentException("Full-cell translation requires three exact displacements");
 		for (var delta : displacement) if (delta == null || (delta.signum() < 0 ? delta.negate() : delta).compareTo(ONE) > 0)
 			throw new IllegalArgumentException("Full-cell translation displacement exceeds one cell");
-		var x = partition(displacement[0]); var y = partition(displacement[1]); var z = partition(displacement[2]);
+		var x = partition(box, 0, displacement[0]); var y = partition(box, 1, displacement[1]); var z = partition(box, 2, displacement[2]);
 		var result = new ArrayList<Piece>(x.size() * y.size() * z.size());
 		for (var px : x) for (var py : y) for (var pz : z) result.add(new Piece(px, py, pz));
 		return List.copyOf(result);
 	}
-	private static List<AxisPart> partition(SignedDyadic delta) {
-		int sign = delta.signum(); var magnitude = sign < 0 ? delta.negate() : delta;
+	private static List<AxisPart> partition(LiquidCellShape.Box box, int axis, SignedDyadic delta) {
 		var result = new ArrayList<AxisPart>(2);
-		if (magnitude.compareTo(ONE) < 0) result.add(part(0, delta,
-				sign > 0 ? HALF.negate() : HALF.negate().subtract(delta), sign > 0 ? HALF.subtract(delta) : HALF));
-		if (sign != 0) result.add(part(sign, delta,
-				sign > 0 ? HALF.subtract(delta) : HALF.negate(), sign > 0 ? HALF : HALF.negate().subtract(delta)));
+		for (int shift = -1; shift <= 1; shift++) {
+			var lower = SignedDyadic.of(shift).subtract(HALF).subtract(delta);
+			var upper = lower.add(ONE);
+			var sourceLower = box.lower(axis).subtract(HALF); var sourceUpper = box.upper(axis).subtract(HALF);
+			if (lower.compareTo(sourceLower) < 0) lower = sourceLower;
+			if (upper.compareTo(sourceUpper) > 0) upper = sourceUpper;
+			if (lower.compareTo(upper) < 0) result.add(part(shift, delta, lower, upper));
+		}
 		return List.copyOf(result);
 	}
 	private static AxisPart part(int shift, SignedDyadic delta, SignedDyadic lower, SignedDyadic upper) {

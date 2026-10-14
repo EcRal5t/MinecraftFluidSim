@@ -9,7 +9,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
-/** Exact intersection of at most two half-spaces inside one open microbox. */
+/** Exact intersection of at most twelve half-spaces inside one open microbox. */
 final class GasGeometryOverlap {
 	/** Dry support nx*x+ny*y+nz*z >= threshold in cell-local coordinates. */
 	record HalfSpace(SignedDyadic nx, SignedDyadic ny, SignedDyadic nz, SignedDyadic threshold) {
@@ -43,7 +43,7 @@ final class GasGeometryOverlap {
 
 	/** Positive degree-two rule for the clipped microbox, with exact volume weights. */
 	static List<QuadraturePoint> positiveQuadrature(int micro, List<HalfSpace> planes) {
-		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 2 || planes.stream().anyMatch(Objects::isNull))
+		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 12 || planes.stream().anyMatch(Objects::isNull))
 			throw new IllegalArgumentException("Invalid quadrature microbox or half-spaces");
 		try {
 			var origin = new Point(ExactRational.of(micro & 1).divide(2), ExactRational.of(micro >>> 1 & 1).divide(2),
@@ -86,6 +86,20 @@ final class GasGeometryOverlap {
 	}
 	static List<QuadraturePoint> fullCellQuadrature() {
 		return gaussBox(new double[3], .5, ExactRational.ONE);
+	}
+	static ExactRational unionVolume(int micro, List<List<HalfSpace>> supports) {
+		ExactRational result = ExactRational.ZERO;
+		for (var convex : supports) result = result.add(normalizedVolume(micro, convex));
+		return result;
+	}
+	static ExactRational unionOverlapVolume(int micro, List<List<HalfSpace>> before, List<List<HalfSpace>> after) {
+		ExactRational result = ExactRational.ZERO;
+		for (var first : before) for (var second : after) {
+			var intersection = new ArrayList<HalfSpace>(first.size() + second.size());
+			intersection.addAll(first); intersection.addAll(second);
+			result = result.add(normalizedVolume(micro, intersection));
+		}
+		return result;
 	}
 	private static List<QuadraturePoint> gaussBox(double[] centre, double halfWidth, ExactRational volume) {
 		var result = new ArrayList<QuadraturePoint>(8); double offset = halfWidth / Math.sqrt(3);
@@ -199,7 +213,7 @@ final class GasGeometryOverlap {
 
 	private static ExactRational[] integrate(int micro, List<HalfSpace> planes, int order) {
 		boolean moments = order > 0;
-		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 2 || planes.stream().anyMatch(Objects::isNull)) {
+		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 12 || planes.stream().anyMatch(Objects::isNull)) {
 			throw new IllegalArgumentException("Invalid gas overlap microbox or half-spaces");
 		}
 		List<HalfSpace> constraints = List.copyOf(planes);

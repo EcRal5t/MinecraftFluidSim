@@ -114,8 +114,9 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 			int faceMicro = positive ? micro | 1 << axis : micro & ~(1 << axis), peer = faceMicro ^ 1 << axis;
 			if ((support & 1 << micro) == 0 || (support & 1 << faceMicro) == 0
 					|| (cut.mask(donor) & (1 << micro | 1 << faceMicro)) != 0 || (cut.mask(receiver) & 1 << peer) != 0) continue;
-			var value = GasGeometryOverlap.maximumLinearValue(micro,
-					LiquidAffineSweepGeometry.wetSourcePlane(domain, donor, micro), function);
+			var value = domain.pressurePhaseGeometry.liquidShape(donor) == null
+					? GasGeometryOverlap.maximumLinearValue(micro, LiquidAffineSweepGeometry.wetSourcePlane(domain, donor, micro), function)
+					: LiquidShapeGeometry.maximumWetLinear(domain.pressurePhaseGeometry, donor, micro, function);
 			if (value.compareTo(maximum) > 0) maximum = value;
 		}
 		double bound = maximum.toDouble();
@@ -148,7 +149,7 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 			for(int direction=0;direction<2;direction++) {
 				boolean positive=direction==0; int donor=positive ? left : right;
 				var components=trace[face+direction*faces.physicalFaceCount];
-				if(components==null || !domain.gridToParticleStage.advectionCells()[donor])continue;
+				if(components==null || !domain.gridToParticleStage.advectionCells()[donor] && domain.pressurePhaseGeometry.liquidShape(donor)==null)continue;
 				for(var component:components) {
 					double open=geometry.aperture(left,right,faces.axis[face],positive ? component.support() : 255,positive ? 255 : component.support());
 					if(!(open>0))continue;
