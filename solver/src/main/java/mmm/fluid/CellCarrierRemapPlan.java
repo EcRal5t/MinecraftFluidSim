@@ -645,7 +645,7 @@ final class CellCarrierRemapPlan {
 		int minimumCount = minimumQuadratureCount(group);
 		// The complete tensor rule preserves the original full-dimensional carrier geometry.
 		if (mask == 0) {
-			count = Math.max(count, minimumCount <= 1 ? 1 : minimumCount <= 2 ? 2 : minimumCount <= 4 ? 4 : 8);
+			count = minimumCount == 1 ? 1 : Math.max(count, minimumCount <= 2 ? 2 : minimumCount <= 4 ? 4 : 8);
 			if (group.spatial.spatialRank() == 3) count = 8;
 		} else count = Math.max(Integer.bitCount(group.support), minimumCount);
 		var volumes = domain.chemicalParcels==null ? LiquidCellQuadrature.volumes(group.volume,count)

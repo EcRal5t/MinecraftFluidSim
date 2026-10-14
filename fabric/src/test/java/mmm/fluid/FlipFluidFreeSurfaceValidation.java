@@ -731,7 +731,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			domain.particles.setPositionY(p, 0.875F);
 			domain.particles.setPositionZ(p, 0.375F);
 		}
-		domain.gridDirty = true; domain.ensureGrid();
+		domain.gridDirty = true; domain.ensureInventoryGrid();
 		double left = 0, right = 0;
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
 			int c = domain.cellIndex(x, y, z);
@@ -749,11 +749,14 @@ public final class FlipFluidFreeSurfaceValidation {
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) full.setVolume(x, y, z, 1);
 		var state = full.exportParticleState(); int count = state.particleCount() + 1;
 		float[] positions = java.util.Arrays.copyOf(state.copyPositionVolume(), count * 4);
-		for (int p = 0; p < count; p++) { positions[4 * p] = 0.375F; positions[4 * p + 1] = 0.375F; positions[4 * p + 2] = 0.375F; }
+		for (int axis = 0; axis < 3; axis++) positions[4 * (count - 1) + axis] = 0.375F;
 		positions[3] = Math.nextDown(positions[3]);
 		positions[4 * (count - 1) + 3] = Math.nextDown(Math.ulp(0.125F) / 2);
 		full.restoreParticleState(new FlipParticleState(4, 4, 2, full.config.cellSize(), count, 32, positions, new float[count * 3], new byte[32]));
-		full.ensureGrid();
+		for (int p = 0; p < count; p++) {
+			full.particles.setPositionX(p, 0.375F); full.particles.setPositionY(p, 0.375F); full.particles.setPositionZ(p, 0.375F);
+		}
+		full.ensureInventoryGrid();
 		check(!full.projection.pressureFluid[full.cellIndex(3, 3, 1)], "rounded volume equality erased a real capacity deficit");
 	}
 

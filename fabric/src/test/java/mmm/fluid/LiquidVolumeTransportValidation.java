@@ -1014,8 +1014,12 @@ public final class LiquidVolumeTransportValidation {
 			throw new AssertionError("Flux share count merged carriers beyond their sixteen-species representation");
 		for (int quanta : new int[] {3, 5, 6, 7}) {
 			var coarse = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
-			mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(coarse, domain.materialRegistry);
-			coarse.setVolume(0, 0, 0, 0.01F); coarse.bindChemistry(chemistry);
+			float h = coarse.config.cellSize();
+			double initialMass = .01F * (double) coarse.config.density();
+			coarse.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, h, 1, .01F, initialMass,
+					domain.materialRegistry.materials(), new float[]{.5F * h, .5F * h, .5F * h, .01F},
+					new float[3], new byte[8], new double[]{initialMass}, new int[1]));
+			coarse.bindChemistry(chemistry);
 			if (coarse.particles.count() != 1) throw new AssertionError("Coarse chemistry fixture requires one carrier");
 			coarse.particles.setVolume(0, 1); coarse.particles.setMass(0, 1000);
 			var composition = new mmm.chemistry.ChemicalMixtureRecord(new int[] {0}, new long[] {quanta}, 0);
@@ -1026,15 +1030,21 @@ public final class LiquidVolumeTransportValidation {
 			flux.plan(coarse.markerGrid.exactCellMarkerVolume, coarse.geometry.solid, 0,
 					coarse.markerGrid.exactCellVolumeInventory);
 			var candidate = new CellCarrierRemapPlan(coarse, flux, 0, new BallisticLiquidRemap(8), true);
-			if (candidate.markers.size() != Integer.highestOneBit(quanta))
-				throw new AssertionError("Chemical quantum count broke the complete orthogonal quadrature");
-			var points = new java.util.HashSet<java.util.List<Double>>(); double[] centroid = new double[3];
+			if (candidate.markers.size() != 1 || candidate.markers.size() > quanta)
+				throw new AssertionError("Rank-zero chemical remap added redundant nodes or exceeded its integer budget");
+			SignedDyadic volume = SignedDyadic.ZERO, mass = SignedDyadic.ZERO; long[] amounts = new long[definitions.size()];
 			for (var marker : candidate.markers) {
-				points.add(java.util.List.of(marker.offset(0), marker.offset(1), marker.offset(2)));
-				for (int axis = 0; axis < 3; axis++) centroid[axis] += marker.volume() * marker.offset(axis);
+				if (!(Float.isFinite(marker.volume()) && marker.volume() > 0 && Double.isFinite(marker.mass()) && marker.mass() > 0))
+					throw new AssertionError("Coarse chemical remap generated a nonpositive inventory node");
+				volume = volume.add(SignedDyadic.of(marker.volume())); mass = mass.add(SignedDyadic.of(marker.mass()));
+				for (int axis = 0; axis < 3; axis++) if (marker.offset(axis) != 0 || marker.velocity(axis) != 0)
+					throw new AssertionError("Rank-zero chemical remap displaced its center or constant velocity");
+				for (int species = 0; species < amounts.length; species++) amounts[species] = Math.addExact(amounts[species], marker.mixture().amount(species));
 			}
-			if (points.size() != candidate.markers.size() || centroid[0] != 0 || centroid[1] != 0 || centroid[2] != 0)
-				throw new AssertionError("Coarse chemical remap duplicated a quadrature point or displaced the cell centroid");
+			if (!volume.equals(SignedDyadic.of(1)) || !mass.equals(SignedDyadic.of(1000)) || amounts[0] != quanta)
+				throw new AssertionError("Coarse chemical remap changed its exact volume, mass or species inventory");
+			for (int species = 1; species < amounts.length; species++) if (amounts[species] != 0)
+				throw new AssertionError("Coarse chemical remap introduced an unrelated species");
 		}
 
 	}
@@ -1085,26 +1095,47 @@ public final class LiquidVolumeTransportValidation {
 			domain.particles.setVelocityY(p, (float) (-2 + x - 2 * y + z - 2 * x * y + x * z - y * z + x * y * z));
 			domain.particles.setVelocityZ(p, (float) (x + y + z + x * y - x * z + y * z - 2 * x * y * z));
 		}
+		double[] sourceMean = new double[6]; double[][] sourceSecond = new double[6][6];
+		for (int p = 0; p < domain.particleCount(); p++) {
+			double h = domain.config.cellSize();
+			double[] joint = {domain.particles.positionX(p) / h - .5, domain.particles.positionY(p) / h - .5,
+					domain.particles.positionZ(p) / h - .5, domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
+			for (int a = 0; a < 6; a++) {
+				sourceMean[a] += joint[a] / 8;
+				for (int b = a; b < 6; b++) sourceSecond[a][b] += joint[a] * joint[b] / 8;
+			}
+		}
 		domain.rebuildGridFromParticles(); var transport = new ConservativeLiquidFlux(2, 2, 2);
 		transport.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
 		var candidate = new CellCarrierRemapPlan(domain, transport, 0, new BallisticLiquidRemap(8), true);
 		if (candidate.markers.size() != 8) throw new AssertionError("Full-cell quadrature requires the complete tensor rule");
 		double[] firstMoment = new double[3]; double[][] secondMoment = new double[3][3];
+		double[] receivedMean = new double[6]; double[][] receivedSecond = new double[6][6];
 		for (var marker : candidate.markers) {
 			double[] offset = {marker.offsetX(), marker.offsetY(), marker.offsetZ()};
 			for (int a = 0; a < 3; a++) {
 				firstMoment[a] += marker.volume() * offset[a];
 				for (int b = 0; b < 3; b++) secondMoment[a][b] += marker.volume() * offset[a] * offset[b];
 			}
-			double x = offset[0], y = offset[1], z = offset[2];
-			if ((float) marker.velocityX() != (float) (1 + 2 * x + 3 * y + 4 * z + x * y + 2 * x * z + 3 * y * z + 4 * x * y * z)
-					|| (float) marker.velocityY() != (float) (-2 + x - 2 * y + z - 2 * x * y + x * z - y * z + x * y * z)
-					|| (float) marker.velocityZ() != (float) (x + y + z + x * y - x * z + y * z - 2 * x * y * z))
-				throw new AssertionError("Cell quadrature lost a resolved three-dimensional tensor velocity: " + marker);
+			double[] joint = {offset[0], offset[1], offset[2], marker.velocityX(), marker.velocityY(), marker.velocityZ()};
+			for (int a = 0; a < 6; a++) {
+				receivedMean[a] += marker.mass() / 1000 * joint[a];
+				for (int b = a; b < 6; b++) receivedSecond[a][b] += marker.mass() / 1000 * joint[a] * joint[b];
+			}
 		}
 		for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++)
 			if (firstMoment[a] != 0 || secondMoment[a][b] != (a == b ? 1.0 / 16 : 0))
 				throw new AssertionError("Tensor cell quadrature lost its centered isotropic covariance");
+		for (int a = 0; a < 6; a++) {
+			double scale = Math.max(Math.abs(sourceMean[a]), Math.sqrt(sourceSecond[a][a]));
+			if (Math.abs(receivedMean[a] - sourceMean[a]) > 512 * Math.ulp(scale))
+				throw new AssertionError("Cell quadrature lost its joint position/velocity first moment: " + a);
+			for (int b = a; b < 6; b++) {
+				double secondScale = Math.sqrt(sourceSecond[a][a]) * Math.sqrt(sourceSecond[b][b]);
+				if (Math.abs(receivedSecond[a][b] - sourceSecond[a][b]) > 1024 * Math.ulp(secondScale))
+					throw new AssertionError("Cell quadrature lost its joint position/velocity second moment: " + a + "," + b);
+			}
+		}
 
 		var tiny = SignedDyadic.of(Math.scalb(1.0F, -60));
 		var wide = SignedDyadic.of(0.5).add(tiny);
