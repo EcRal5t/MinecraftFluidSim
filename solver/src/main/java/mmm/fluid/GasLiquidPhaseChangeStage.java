@@ -146,7 +146,10 @@ final class GasLiquidPhaseChangeStage {
 			return prepared[index];
 		};
 		GasThermalModel gasThermal = new GasThermalModel(support.thermal().registry(), network.registry());
+		var bounds = GasBoilingBatchBounds.forBoiling(support, cell, node, liquidHandle, transition, thermalCell,
+				liquidTemperature, volatileSpecies, contact.supportMask(), phase, envelope);
 		GasPhaseBatchSearch.Exclusion exclusion = (low, upper) -> {
+			if (bounds != null) return bounds.excluded(low, upper);
 			for (long batches = upper; batches >= low; batches--) {
 				GasBoilInventoryPlan candidate = caloric.apply(batches);
 				if (candidate == null) continue;
@@ -156,7 +159,10 @@ final class GasLiquidPhaseChangeStage {
 			return true;
 		};
 		return GasPhaseBatchSearch.maximum(high, batches -> {
-			GasBoilPlan candidate = completeBoil(cell, node, transition, phase, contact, caloric.apply(batches));
+			GasBoilInventoryPlan inventoryPlan = caloric.apply(batches);
+			GasBoilPlan candidate = bounds != null && inventoryPlan != null
+					&& boilingSaturationExcluded(inventoryPlan, envelope, transition, phase, gasThermal) ? null
+					: completeBoil(cell, node, transition, phase, contact, inventoryPlan);
 			prepared[Math.toIntExact(batches)] = null;
 			return candidate;
 		}, exclusion);

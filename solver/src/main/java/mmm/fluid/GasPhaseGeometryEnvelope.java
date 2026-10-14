@@ -101,12 +101,24 @@ final class GasPhaseGeometryEnvelope {
 	}
 
 	double volumeUpper(PhaseLiquidGeometryEdit edit) {
+		return volumeUpper(edit.cell(), edit.components().stream().map(LiquidComponentMoments::volume).toList());
+	}
+
+	double boilingVolumeUpper(int cell, int supportMask, long removedSvq) {
+		SignedDyadic removed = SignedDyadic.of(removedSvq, -24);
+		return volumeUpper(cell, source.liquidStock().get(cell).components().stream()
+				.map(component -> component.volume().subtract(component.supportMask() == supportMask ? removed : SignedDyadic.ZERO)).toList());
+	}
+
+	private double volumeUpper(int editedCell, List<SignedDyadic> editedVolumes) {
 		SignedDyadic upper = fixedVolume;
 		for (int cell : variableCells) {
-			var stock = cell == edit.cell() ? edit : source.liquidStock().get(cell);
+			var stock = source.liquidStock().get(cell);
 			var capacities = CellRemapMicroTopology.capacities(stock.collisionMask(), source.geometry().poreVolume(cell));
 			for (int component = 0; component < capacities.length; component++) {
-				SignedDyadic available = capacities[component].subtract(stock.components().get(component).volume()).multiply(metric);
+				SignedDyadic liquid = cell == editedCell ? editedVolumes.get(component) : stock.components().get(component).volume();
+				if (liquid.signum() < 0) return Double.POSITIVE_INFINITY;
+				SignedDyadic available = capacities[component].subtract(liquid).multiply(metric);
 				if (available.signum() < 0) return Double.POSITIVE_INFINITY;
 				if (available.signum() == 0) continue;
 				double roundedUpper = Math.nextUp(available.toDouble());

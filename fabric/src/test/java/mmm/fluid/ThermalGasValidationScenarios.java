@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import mmm.thermal.ThermalDomainState;
+import mmm.thermal.ThermalCaloricBounds;
 
 import mmm.thermal.GasEnergyStore;
 
@@ -1909,6 +1910,20 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU), 373.15);
 		require(close(model.internalEnergyAtTemperature(transition, speciesBatch, 373.15), expectedSpeciesEnergy),
 				"gas phase energy omitted component-local species state energy");
+		var caloric=new ThermalCaloricBounds(thermal);
+		var gasRange=new ThermalCaloricBounds.PortionRange(thermal.materialHandle(vapor.id()),.001,4.096,
+				Map.of(BuiltinChemicalDefinitions.H2O,new ThermalCaloricBounds.QuantaRange(0,ChemicalLimits.QUANTA_PER_AU)));
+		var gasThermal=new GasThermalModel(thermal,gas);
+		for(double temperature:new double[]{250,373.15,600,Math.nextUp(600)}) {
+			double error=caloric.forwardRoundingBound(gasRange,temperature);
+			double lower=caloric.temperatureWithEnergyError(List.of(gasRange),temperature,error,false);
+			double upper=caloric.temperatureWithEnergyError(List.of(gasRange),temperature,error,true);
+			for(long extent:new long[]{1,17,4096}) for(long quanta:new long[]{1,ChemicalLimits.QUANTA_PER_AU}) {
+				var actual=model.gasBatch(transition,extent,Map.of(BuiltinChemicalDefinitions.H2O,quanta),0);
+				double derived=gasThermal.state(actual,model.internalEnergyAtTemperature(transition,actual,temperature)).temperatureK();
+				require(lower<=derived && derived<=upper,"Same-inventory forward/inverse rounding escaped its temperature interval");
+			}
+		}
 		GasLiquidPhaseModel.Saturation equilibrium = model.saturation(
 				transition, 373.15, batch, GasRegistry.STANDARD_PRESSURE_PA);
 		require(close(equilibrium.saturationPressurePa(), GasRegistry.STANDARD_PRESSURE_PA)
@@ -2001,6 +2016,31 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				List.of(water, oil, air, vapor), List.of(), List.of(boiling), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+		FluidDomain dense=new FluidDomain(4,4,4,config,256); dense.sealDomainBoundary();
+		for(int z=0;z<4;z++) for(int y=0;y<4;y++) for(int x=0;x<4;x++) dense.setSolid(x,y,z,true);
+		dense.setSolid(1,1,1,false); dense.setVolume(1,1,1,Math.nextDown(1F));
+		for(int marker=0;marker<dense.particleCount();marker++) dense.setMarkerMaterial(marker,liquids,0);
+		dense.bindGasRegistry(BuiltinGasDefinitions.createRegistry()); dense.bootstrapGasState("");
+		dense.bindThermal(thermal,liquids,GasRegistry.STANDARD_TEMPERATURE_K);
+		dense.commitOperatorVentSealedGas(dense.planOperatorVentSealedGas()); dense.stepGasPhaseChangeOnly(0);
+		try {
+			var field=GasLiquidPhaseChangeStage.class.getDeclaredField("support"); field.setAccessible(true);
+			var support=(PhaseChangeStageSupport)field.get(dense.gasLiquidPhaseChangeStage);
+			int cell=21, node=dense.gasState.frame.commonCellNode(cell);
+			var bounds=GasBoilingBatchBounds.forBoiling(support,cell,node,0,boiling,
+					dense.thermalState.preparePhaseCandidateCell(cell,dense.thermalMarkerContext()),GasRegistry.STANDARD_TEMPERATURE_K,
+					new boolean[0],255,dense.thermalState.gasLiquidPhase(dense.gasState.network),GasPhaseGeometryEnvelope.forBoiling(support,cell,node));
+			require(bounds!=null && bounds.excluded(1,ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP),
+					"Vacuum saturation failed to certify the complete integer interval without caloric leaves");
+		} catch(ReflectiveOperationException failure) { throw new AssertionError("Phase support inspection failed",failure); }
+		var denseEnergy=dense.exactInternalEnergy(); var denseColumns=dense.particles.directArrays();
+		var denseStock=denseColumns.volume.clone(); var denseX=denseColumns.positionX.clone();
+		var denseY=denseColumns.positionY.clone(); var denseZ=denseColumns.positionZ.clone(); var denseMass=dense.particles.copyMass();
+		require(dense.stepGasPhaseChangeOnly(ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP).operations()==0
+				&& dense.exactInternalEnergy().equals(denseEnergy) && Arrays.equals(denseStock,dense.particles.directArrays().volume)
+				&& Arrays.equals(denseX,dense.particles.directArrays().positionX) && Arrays.equals(denseY,dense.particles.directArrays().positionY)
+				&& Arrays.equals(denseZ,dense.particles.directArrays().positionZ) && Arrays.equals(denseMass,dense.particles.copyMass())
+				&& dense.gasBoundary().sealedInventory().isEmpty(),"Whole-interval saturation exclusion changed authoritative owners");
 		FluidDomain isolated = new FluidDomain(4, 4, 4, config, 512);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++)
 			isolated.setSolid(x, y, z, true);

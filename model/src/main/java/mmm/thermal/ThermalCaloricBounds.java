@@ -37,6 +37,74 @@ public final class ThermalCaloricBounds {
 		this.thermal = Objects.requireNonNull(thermal);
 	}
 
+	public SignedDyadic specificCurveEnergy(int handle, double temperature) {
+		var material = thermal.material(handle);
+		return SignedDyadic.of(material.referenceSpecificEnergyEuPerMu()).add(ThermalContactExchange.exactEnergyChangeBetween(
+				material, 1.0, material.referenceTemperatureK(), temperature));
+	}
+
+	/** Bounds the raw reference column relative to exact mass and species contributions. */
+	public double referenceRoundingBound(PortionRange portion) {
+		try {
+			var material = thermal.material(portion.materialHandle());
+			SignedDyadic magnitude = SignedDyadic.of(portion.massHigh()).multiply(SignedDyadic.of(Math.abs(material.referenceSpecificEnergyEuPerMu())));
+			SignedDyadic error = rounding(magnitude);
+			for (var entry : portion.species().entrySet()) {
+				double term = Math.nextUp(Math.abs(thermal.referenceEnergyCache().energy(
+						thermal.speciesOffset(portion.materialHandle(), entry.getKey()), entry.getValue().high())));
+				magnitude = magnitude.add(SignedDyadic.of(term));
+				error = error.add(SignedDyadic.of(Math.ulp(term)));
+				error = error.add(rounding(magnitude.add(error)));
+			}
+			return Math.nextUp(error.toDouble());
+		} catch (IllegalArgumentException | ArithmeticException unresolved) { return Double.POSITIVE_INFINITY; }
+	}
+
+	/** The same rounded reference occurs in forward energy and inversion, so it cancels here. */
+	public double forwardRoundingBound(PortionRange portion, double temperature) {
+		try {
+			var material = thermal.material(portion.materialHandle());
+			SignedDyadic mass = SignedDyadic.of(portion.massHigh());
+			SignedDyadic specific = ThermalContactExchange.exactEnergyChangeBetween(material, 1.0, material.referenceTemperatureK(), temperature);
+			double base = Math.max(Math.abs(referenceEnergyBound(portion, false)), Math.abs(referenceEnergyBound(portion, true)));
+			SignedDyadic reference = SignedDyadic.of(base), exactMagnitude = reference.add(mass.multiply(abs(specific)));
+			SignedDyadic fallback = rounding(exactMagnitude);
+			double sensibleValue;
+			try { sensibleValue = material.sensibleSpecificEnergyAt(temperature); }
+			catch (IllegalArgumentException overflow) { return Math.nextUp(fallback.toDouble()); }
+			SignedDyadic sensible = SignedDyadic.of(sensibleValue);
+			SignedDyadic product = mass.multiply(abs(sensible)), productError = rounding(product);
+			SignedDyadic normal = mass.multiply(abs(sensible.subtract(specific))).add(productError)
+					.add(rounding(reference.add(product).add(productError)));
+			return Math.nextUp((normal.compareTo(fallback) > 0 ? normal : fallback).toDouble());
+		} catch (IllegalArgumentException | ArithmeticException unresolved) { return Double.POSITIVE_INFINITY; }
+	}
+
+	/** A global positive caloric slope bounds a same-inventory energy perturbation across every segment. */
+	public double temperatureWithEnergyError(List<PortionRange> portions, double initial, double error, boolean upper) {
+		try {
+			if (!(Double.isFinite(error) && error >= 0 && Double.isFinite(initial)
+					&& initial >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) return unboundedTemperature(upper);
+			SignedDyadic capacity = SignedDyadic.ZERO;
+			for (var portion : portions) {
+				double cv = thermal.material(portion.materialHandle()).caloricSegments().stream()
+						.mapToDouble(ThermalMaterialDefinition.CaloricSegment::specificHeatEuPerMuK).min().orElseThrow();
+				capacity = capacity.add(SignedDyadic.of(portion.massLow()).multiply(SignedDyadic.of(cv)));
+			}
+			if (capacity.signum() == 0) return unboundedTemperature(upper);
+			double delta = Math.nextUp(divide(SignedDyadic.of(error), capacity));
+			// Division is rounded outward first; one neighbour covers the final addition,
+			// then two cover the shared affine/fast inverter's temperature allowance.
+			double result = upper ? up(up(up(initial + delta))) : down(down(down(initial - delta)));
+			return Math.max(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, result);
+		} catch (IllegalArgumentException | ArithmeticException unresolved) { return unboundedTemperature(upper); }
+	}
+
+	private static SignedDyadic abs(SignedDyadic value) { return value.signum() < 0 ? value.negate() : value; }
+	private static SignedDyadic rounding(SignedDyadic magnitude) {
+		return SignedDyadic.of(Math.ulp(Math.nextUp(magnitude.toDouble())));
+	}
+
 	/** Bounds the rounded forward-energy API, including its exact-integral overflow fallback. */
 	public double energyAtTemperature(List<PortionRange> portions, double temperature, boolean upper) {
 		try { return orderedForwardEnergy(portions, temperature, upper); }
