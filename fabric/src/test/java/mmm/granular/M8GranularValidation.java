@@ -1384,6 +1384,33 @@ public final class M8GranularValidation {
 			}
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		var selected = new GranularParcelStore(registry, 4, 4, 4, 4, .5);
+		selected.add(new GranularParcelStore.Parcel(.5F, .75F, .75F, 0, 0, 0, 3, .001, sand, 0, 0, (byte) 0, 2));
+		selected.add(new GranularParcelStore.Parcel(1.25F, 1.25F, 1.25F, 0, 0, 0, 1, .001, sand, 0, 0, (byte) 0));
+		selected.add(new GranularParcelStore.Parcel(1.75F, 1.75F, 1.75F, 0, 0, 0, 1, .001, sand, 0, 0, (byte) 0));
+		var selectedBeds = new GranularDepositStore(registry, 64, 4);
+		var selectedFields = new GranularCouplingFields(4, 4, 4, .5); selectedFields.rebuild(selected, selectedBeds);
+		require(selectedFields.solidSvq(20) == 1 && selectedFields.solidSvq(21) == 2, "Committed ceil choice was replaced by largest remainder");
+		var first = selected.parcel(0);
+		selected.overwrite(0, new GranularParcelStore.Parcel(first.x(), first.y(), first.z(), 1, 0, 0,
+				first.solidVolumeSvq(), first.mass(), sand, 0, 0, (byte) 0));
+		require(selected.parcel(0).ceilMask() == 2, "Velocity-only update changed committed occupancy");
+		long revision = selected.mutationRevision(); var beforeInvalid = selected.parcel(0); boolean invalid = false;
+		try { selected.overwrite(0, beforeInvalid.withCeilMask(0)); } catch (IllegalArgumentException expected) { invalid = true; }
+		require(invalid && selected.mutationRevision() == revision && selected.parcel(0).equals(beforeInvalid),
+				"Invalid ceil selection changed a carrier or its revision");
+		var last = selected.parcel(2); selected.removeSwap(1);
+		require(selected.parcel(1).equals(last), "Swap-remove failed to move the committed occupancy column");
+		var snapshot = GranularStateSnapshot.capture(4, 4, 4, registry, selected, selectedBeds);
+		var restoredSelected = new GranularParcelStore(registry, 4, 4, 4, 4, .5);
+		var restoredBeds = new GranularDepositStore(registry, 64, 4);
+		snapshot.restoreInto(registry, restoredSelected, restoredBeds, cell -> SolidVolume.SVQ_PER_CELL);
+		selectedFields.rebuild(restoredSelected, restoredBeds);
+		require(restoredSelected.parcel(0).ceilMask() == 2 && selectedFields.solidSvq(20) == 1 && selectedFields.solidSvq(21) == 2,
+				"Capture/restore changed a valid noncanonical occupancy selection");
+		long[] chosen = selectedFields.copySolidSvq();
+		selectedFields.removePlannedParcel(chosen, new GranularCouplingFields.Position(.5F, .75F, .75F, 2), 3);
+		require(chosen[20] == 0 && chosen[21] == 0, "Source removal ignored its actual committed shares");
 		GranularParcelStore parcels = new GranularParcelStore(registry, 2);
 		GranularDepositStore deposits = new GranularDepositStore(registry, 4 * 4 * 4, 4);
 		long parcelVolume = GranularLimits.MAX_PARCEL_VOLUME_SVQ - 17L;

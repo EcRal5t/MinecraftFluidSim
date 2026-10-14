@@ -544,7 +544,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	static GranularCouplingFields.Position parcelPosition(GranularParcelStore.Parcel parcel) {
-		return new GranularCouplingFields.Position(parcel.x(), parcel.y(), parcel.z());
+		return new GranularCouplingFields.Position(parcel.x(), parcel.y(), parcel.z(), parcel.ceilMask());
 	}
 
 	void restorePlannedParcel(
@@ -857,12 +857,11 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			GranularParcelStore.Parcel merged
 	) {
 		if (!granularCollision.positionValid(merged.x(), merged.y(), merged.z(), merged.solidVolumeSvq())) return false;
-		GranularCouplingFields.Position firstPosition = new GranularCouplingFields.Position(first.x(), first.y(), first.z());
-		GranularCouplingFields.Position secondPosition = new GranularCouplingFields.Position(second.x(), second.y(), second.z());
+		GranularCouplingFields.Position firstPosition = parcelPosition(first);
+		GranularCouplingFields.Position secondPosition = parcelPosition(second);
 		granularCoupling.removePlannedParcel(planned, firstPosition, first.solidVolumeSvq());
 		granularCoupling.removePlannedParcel(planned, secondPosition, second.solidVolumeSvq());
-		GranularCouplingFields.Position mergedPosition = new GranularCouplingFields.Position(
-				merged.x(), merged.y(), merged.z());
+		GranularCouplingFields.Position mergedPosition = parcelPosition(merged);
 		if (granularCoupling.tryPlanParcel(planned, mergedPosition, merged.solidVolumeSvq(),
 				this::granularGeometricOpenSvq)) return true;
 		if (!granularCoupling.tryPlanParcel(planned, firstPosition, first.solidVolumeSvq(),

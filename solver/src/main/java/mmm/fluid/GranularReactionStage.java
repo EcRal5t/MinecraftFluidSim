@@ -399,7 +399,7 @@ final class GranularReactionStage {
 					weighted(existing.velocityZ(), existing.mass(), velocityZ, plan.signedSolidMass(), combinedMass),
 					combinedSvq, combinedMass, material, existing.solidCompositionHandle(), 0, (byte) 0);
 			if (!capacity.fitsReplacement(access.coupling(),
-					new GranularCouplingFields.Position(existing.x(), existing.y(), existing.z()), existing.solidVolumeSvq(),
+					new GranularCouplingFields.Position(existing.x(), existing.y(), existing.z(), existing.ceilMask()), existing.solidVolumeSvq(),
 					new GranularCouplingFields.Position(x, y, z), combinedSvq)) continue;
 			return new PrecipitationMerge(
 					parcelIndex, existing.solidCompositionHandle(), composition, merged);
@@ -464,9 +464,9 @@ final class GranularReactionStage {
 		if (solid.deposit()) {
 			if (!capacity.fitsDepositRemoval(access.coupling(), cell, removedSvq)) return false;
 		} else {
-			var position = new GranularCouplingFields.Position(donor.x(), donor.y(), donor.z());
+			var position = new GranularCouplingFields.Position(donor.x(), donor.y(), donor.z(), donor.ceilMask());
 			if (!capacity.fitsReplacement(access.coupling(), position, donor.solidVolumeSvq(),
-					position, donor.solidVolumeSvq() - removedSvq)) return false;
+					new GranularCouplingFields.Position(donor.x(), donor.y(), donor.z()), donor.solidVolumeSvq() - removedSvq)) return false;
 		}
 		GranularReactionMomentum.Plan momentum = GranularReactionMomentum.plan(
 				state.particles(), chemistry.unitScale(), plan,

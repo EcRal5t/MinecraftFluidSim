@@ -431,7 +431,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 			GranularPhaseTransferEngine phaseTransfer, int[] previousCells) { }
 
 	private PreparedGranularBinding prepareGranularBinding(GranularRegistry registry) {
-		var state = new GranularDomainState(registry, cellCount);
+		var state = new GranularDomainState(registry, sizeX, sizeY, sizeZ, config.cellSize());
 		GranularPhaseTransferEngine phaseTransfer = null;
 		if (chemicalParcels != null && registry.hasReactiveRules()) {
 			int depositCapacity = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,

@@ -5,6 +5,7 @@ import mmm.granular.GranularDepositStore;
 import mmm.granular.GranularLimits;
 import mmm.granular.GranularParcelStore;
 import mmm.granular.GranularRegistry;
+import mmm.granular.GranularKernel;
 import mmm.granular.ParticulateMaterial;
 import mmm.granular.SolidVolume;
 
@@ -19,7 +20,8 @@ final class FlipGranularCollision {
 	private final GranularCollisionGeometry geometry;
 	private final GranularSphereCollision sphereCollision;
 	private final float[] nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ;
-	private final int[] nextContactAge;
+	private final int[] nextContactAge, nextCeilMask;
+	private final GranularKernel kernel;
 	private final byte[] nextFlags;
 	private final boolean[] capacityPending;
 	private int previewCount;
@@ -35,6 +37,7 @@ final class FlipGranularCollision {
 		this.nextVelocityX = new float[capacity]; this.nextVelocityY = new float[capacity];
 		this.nextVelocityZ = new float[capacity];
 		this.nextContactAge = new int[capacity]; this.nextFlags = new byte[capacity];
+		this.nextCeilMask = new int[capacity]; this.kernel = new GranularKernel(sizeX, sizeY, sizeZ, cellSize);
 		this.capacityPending = new boolean[capacity];
 	}
 
@@ -58,7 +61,7 @@ final class FlipGranularCollision {
 				nextFlags[index] = resting ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
 						: (byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED);
 			}
-			return;
+			prepareMasks(parcels); return;
 		}
 		int operations = GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP;
 		for (int index = 0; index < previewCount; index++) {
@@ -77,6 +80,16 @@ final class FlipGranularCollision {
 			nextContactAge[index] = resting ? incrementContactAge(parcel.contactAge()) : 0;
 			nextFlags[index] = resting ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
 					: (byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED);
+		}
+		prepareMasks(parcels);
+	}
+	private void prepareMasks(GranularParcelStore parcels) {
+		for (int index = 0; index < previewCount; index++) {
+			var parcel = parcels.parcel(index);
+			kernel.capture(nextX[index], nextY[index], nextZ[index], parcel.solidVolumeSvq());
+			nextCeilMask[index] = parcel.ceilMask() >= 0 && parcel.x() == nextX[index] && parcel.y() == nextY[index]
+					&& parcel.z() == nextZ[index] ? parcel.ceilMask() : kernel.canonicalMask();
+			kernel.requireMask(nextCeilMask[index]);
 		}
 	}
 
@@ -165,7 +178,7 @@ final class FlipGranularCollision {
 
 	GranularCouplingFields.Position previewPosition(int index, GranularParcelStore.Parcel ignored) {
 		if (index < 0 || index >= previewCount) throw new IllegalArgumentException("Unknown granular preview index");
-		return new GranularCouplingFields.Position(nextX[index], nextY[index], nextZ[index]);
+		return new GranularCouplingFields.Position(nextX[index], nextY[index], nextZ[index], nextCeilMask[index]);
 	}
 
 	/**
@@ -201,10 +214,10 @@ final class FlipGranularCollision {
 				if (!capacityPending[index]) continue;
 				GranularParcelStore.Parcel parcel = parcels.parcel(index);
 				GranularCouplingFields.Position currentPosition = new GranularCouplingFields.Position(
-						parcel.x(), parcel.y(), parcel.z());
+						parcel.x(), parcel.y(), parcel.z(), parcel.ceilMask());
 				current.removePlannedParcel(planned, currentPosition, parcel.solidVolumeSvq());
 				GranularCouplingFields.Position candidate = new GranularCouplingFields.Position(
-						nextX[index], nextY[index], nextZ[index]);
+						nextX[index], nextY[index], nextZ[index], nextCeilMask[index]);
 				if (current.tryPlanParcel(planned, candidate, parcel.solidVolumeSvq(), geometricCapacity)) {
 					capacityPending[index] = false;
 					pending--; accepted++;
@@ -239,7 +252,7 @@ final class FlipGranularCollision {
 			parcels.overwrite(index, new GranularParcelStore.Parcel(nextX[index], nextY[index], nextZ[index],
 					nextVelocityX[index], nextVelocityY[index], nextVelocityZ[index], parcel.solidVolumeSvq(),
 					parcel.mass(), parcel.materialHandle(), parcel.solidCompositionHandle(),
-					nextContactAge[index], nextFlags[index]));
+					nextContactAge[index], nextFlags[index], nextCeilMask[index]));
 		}
 		previewCount = 0;
 		return new BoundaryImpulse(impulseX, impulseY, impulseZ);
@@ -250,6 +263,8 @@ final class FlipGranularCollision {
 		boolean supported = sphereCollision.supportsAtRest(parcel.x(), parcel.y(), parcel.z(),
 				collisionRadius(parcel.solidVolumeSvq()));
 		nextX[index] = parcel.x(); nextY[index] = parcel.y(); nextZ[index] = parcel.z();
+		if (parcel.ceilMask() >= 0) nextCeilMask[index] = parcel.ceilMask();
+		else { kernel.capture(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()); nextCeilMask[index] = kernel.canonicalMask(); }
 		nextVelocityX[index] = nextVelocityY[index] = nextVelocityZ[index] = 0.0F;
 		nextContactAge[index] = supported ? incrementContactAge(parcel.contactAge()) : 0;
 		nextFlags[index] = supported ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)

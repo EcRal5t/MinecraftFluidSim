@@ -18,6 +18,7 @@ public final class GranularKernel {
 	private final ExactRational[] rationalQuota = new ExactRational[8], rationalRemainder = new ExactRational[8];
 	private final long[] floors = new long[8];
 	private int count;
+	private long quantity;
 
 	public GranularKernel(int sizeX, int sizeY, int sizeZ, double cellSize) {
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || !(Double.isFinite(cellSize) && cellSize > 0))
@@ -38,6 +39,7 @@ public final class GranularKernel {
 		count = 0;
 		if (x == null || y == null || z == null || signedSvq == 0)
 			throw new IllegalArgumentException("Granular kernel position or volume is invalid");
+		quantity = signedSvq;
 		var position = new SignedDyadic[]{x, y, z};
 		// A clipped axis has one positive surviving factor; normalization cancels that factor exactly.
 		for (int axis = 0; axis < 3; axis++) {
@@ -87,6 +89,9 @@ public final class GranularKernel {
 	}
 
 	public int size() { return count; }
+	public boolean sameGeometry(GranularKernel other) {
+		return other != null && java.util.Arrays.equals(size, other.size) && h.equals(other.h);
+	}
 	public int cell(int index) { return cells[Objects.checkIndex(index, count)]; }
 	public SignedDyadic dyadicQuota(int index) {
 		Objects.checkIndex(index, count);
@@ -112,6 +117,35 @@ public final class GranularKernel {
 		floor(first); floor(second);
 		return binary ? binaryRemainder[first].compareTo(binaryRemainder[second])
 				: rationalRemainder[first].compareTo(rationalRemainder[second]);
+	}
+
+	/** One bit per captured in-domain iteration slot selects ceil; the order is bound to dimensions and position. */
+	public int canonicalMask() {
+		if (quantity <= 0 || count == 0) throw new IllegalStateException("Integer occupancy requires positive kernel volume");
+		long assigned = 0; int mask = 0;
+		for (int slot = 0; slot < count; slot++) assigned = Math.addExact(assigned, floor(slot));
+		for (; assigned < quantity; assigned++) {
+			int best = -1;
+			for (int slot = 0; slot < count; slot++) {
+				if ((mask & 1 << slot) != 0 || ceil(slot) == floor(slot)) continue;
+				int order = best < 0 ? 1 : compareRemainder(slot, best);
+				if (order > 0 || order == 0 && cell(slot) < cell(best)) best = slot;
+			}
+			if (best < 0) throw new IllegalStateException("Granular kernel lacks its required integer remainder");
+			mask |= 1 << best;
+		}
+		return mask;
+	}
+	public void requireMask(int mask) {
+		if (quantity <= 0 || count == 0 || mask < 0 || mask >>> count != 0)
+			throw new IllegalArgumentException("Granular occupancy selection lies outside its support");
+		long total = 0;
+		for (int slot = 0; slot < count; slot++) {
+			long low = floor(slot); boolean upper = (mask & 1 << slot) != 0;
+			if (upper && ceil(slot) == low) throw new IllegalArgumentException("Granular occupancy selected ceil of an integer quota");
+			total = Math.addExact(total, low + (upper ? 1 : 0));
+		}
+		if (total != quantity) throw new IllegalArgumentException("Granular occupancy selection changed its exact volume");
 	}
 	private static BigInteger floor(SignedDyadic value) {
 		return value.exponent() >= 0 ? value.significand().shiftLeft(value.exponent()) : value.significand().shiftRight(-value.exponent());

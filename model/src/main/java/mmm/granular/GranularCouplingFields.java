@@ -11,7 +11,6 @@ public final class GranularCouplingFields {
 	private final long[] fixedCellSvq;
 	private final int[] candidateCell = new int[8];
 	private final long[] candidateShare = new long[8];
-	private final boolean[] candidateRoundedUp = new boolean[8];
 	private long totalSolidSvq;
 	private long fixedSolidSvq;
 	private boolean fixedOnly = true;
@@ -52,7 +51,7 @@ public final class GranularCouplingFields {
 	}
 
 	public void rebuild(GranularParcelStore parcels, GranularDepositStore deposits) {
-		rebuild(parcels, deposits, (index, parcel) -> new Position(parcel.x(), parcel.y(), parcel.z()));
+		rebuild(parcels, deposits, (index, parcel) -> new Position(parcel.x(), parcel.y(), parcel.z(), parcel.ceilMask()));
 	}
 
 	public void rebuild(GranularParcelStore parcels, GranularDepositStore deposits, PositionSource positions) {
@@ -60,6 +59,7 @@ public final class GranularCouplingFields {
 			throw new IllegalArgumentException("Granular coupling inventory dimensions differ");
 		}
 		if (positions == null) throw new IllegalArgumentException("Granular position source is missing");
+		parcels.requireGeometry(kernel);
 		if (parcels.count() == 0 && deposits.groupCount() == 0) { rebuildFixed(); return; }
 		fixedOnly = false;
 		System.arraycopy(fixedCellSvq, 0, solidSvq, 0, cellCount);
@@ -69,7 +69,7 @@ public final class GranularCouplingFields {
 			GranularParcelStore.Parcel inventory = parcels.parcel(parcel);
 			Position position = positions.position(parcel, inventory);
 			if (position == null) throw new IllegalStateException("Granular position source returned null");
-			distribute(position.x(), position.y(), position.z(), inventory.solidVolumeSvq());
+			distribute(position, inventory.solidVolumeSvq());
 		}
 		long expected = Math.addExact(fixedSolidSvq,
 				Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq()));
@@ -112,7 +112,7 @@ public final class GranularCouplingFields {
 	) {
 		if (plannedSolidSvq == null || plannedSolidSvq.length != cellCount || position == null
 				|| geometricCapacity == null) throw new IllegalArgumentException("Granular placement plan is incomplete");
-		int candidates = allocate(position.x(), position.y(), position.z(), parcelSvq);
+		int candidates = allocate(position, parcelSvq);
 		for (int candidate = 0; candidate < candidates; candidate++) {
 			int cell = candidateCell[candidate];
 			long capacity = geometricCapacity.applyAsLong(cell);
@@ -131,13 +131,13 @@ public final class GranularCouplingFields {
 		if (replacement == null || geometricCapacity == null || (previous == null) != (previousSvq == 0)) {
 			throw new IllegalArgumentException("Granular replacement plan is incomplete");
 		}
-		int removedCount = previous == null ? 0 : allocate(previous.x(), previous.y(), previous.z(), previousSvq);
+		int removedCount = previous == null ? 0 : allocate(previous, previousSvq);
 		int[] removedCells = Arrays.copyOf(candidateCell, removedCount);
 		long[] removedShares = Arrays.copyOf(candidateShare, removedCount);
 		for (int index = 0; index < removedCount; index++) if (solidSvq[removedCells[index]] < removedShares[index]) {
 			throw new IllegalStateException("Granular replacement plan underflow");
 		}
-		int addedCount = allocate(replacement.x(), replacement.y(), replacement.z(), replacementSvq);
+		int addedCount = allocate(replacement, replacementSvq);
 		for (int index = 0; index < addedCount; index++) {
 			int cell = candidateCell[index];
 			long occupied = solidSvq[cell];
@@ -155,7 +155,7 @@ public final class GranularCouplingFields {
 		if (plannedSolidSvq == null || plannedSolidSvq.length != cellCount || position == null) {
 			throw new IllegalArgumentException("Granular removal plan is incomplete");
 		}
-		int candidates = allocate(position.x(), position.y(), position.z(), parcelSvq);
+		int candidates = allocate(position, parcelSvq);
 		for (int candidate = 0; candidate < candidates; candidate++) {
 			int cell = candidateCell[candidate];
 			if (plannedSolidSvq[cell] < candidateShare[candidate]) {
@@ -172,7 +172,7 @@ public final class GranularCouplingFields {
 	public long parcelShareAtCell(Position position, long parcelSvq, int targetCell) {
 		requireCell(targetCell);
 		if (position == null) throw new IllegalArgumentException("Granular parcel-share position is missing");
-		int candidates = allocate(position.x(), position.y(), position.z(), parcelSvq);
+		int candidates = allocate(position, parcelSvq);
 		for (int candidate = 0; candidate < candidates; candidate++) {
 			if (candidateCell[candidate] == targetCell) return candidateShare[candidate];
 		}
@@ -210,39 +210,26 @@ public final class GranularCouplingFields {
 		return Math.max(0.0F, Math.min(1.0F, effectiveOpenCellVolume(cell, geometricOpen) / geometricOpen));
 	}
 
-	private void distribute(float positionX, float positionY, float positionZ, long parcelSvq) {
-		int candidates = allocate(positionX, positionY, positionZ, parcelSvq);
+	private void distribute(Position position, long parcelSvq) {
+		int candidates = allocate(position, parcelSvq);
 		for (int candidate = 0; candidate < candidates; candidate++) {
 			solidSvq[candidateCell[candidate]] = Math.addExact(
 					solidSvq[candidateCell[candidate]], candidateShare[candidate]);
 		}
 	}
 
-	private int allocate(float positionX, float positionY, float positionZ, long parcelSvq) {
+	private int allocate(Position position, long parcelSvq) {
+		float positionX = position.x(), positionY = position.y(), positionZ = position.z();
 		if (!(Float.isFinite(positionX) && Float.isFinite(positionY) && Float.isFinite(positionZ)) || parcelSvq <= 0L) {
 			throw new IllegalArgumentException("Granular occupancy parcel is invalid");
 		}
 		kernel.capture(positionX, positionY, positionZ, parcelSvq);
 		int candidates = kernel.size();
-		long assigned = 0L;
+		int mask = position.ceilMask() < 0 ? kernel.canonicalMask() : position.ceilMask();
+		kernel.requireMask(mask);
 		for (int candidate = 0; candidate < candidates; candidate++) {
 			candidateCell[candidate] = kernel.cell(candidate);
-			long share = kernel.floor(candidate);
-			candidateShare[candidate] = share;
-			candidateRoundedUp[candidate] = false;
-			assigned = Math.addExact(assigned, share);
-		}
-		long remaining = parcelSvq - assigned;
-		while (remaining-- > 0L) {
-			int best = -1;
-			for (int candidate = 0; candidate < candidates; candidate++) {
-				if (candidateRoundedUp[candidate] || kernel.ceil(candidate) == candidateShare[candidate]) continue;
-				int order = best < 0 ? 1 : kernel.compareRemainder(candidate, best);
-				if (order > 0 || order == 0 && candidateCell[candidate] < candidateCell[best]) best = candidate;
-			}
-			if (best < 0) throw new IllegalStateException("Granular kernel lacks its required integer remainder");
-			candidateShare[best]++;
-			candidateRoundedUp[best] = true;
+			candidateShare[candidate] = kernel.floor(candidate) + (mask >>> candidate & 1);
 		}
 		return candidates;
 	}
@@ -251,9 +238,10 @@ public final class GranularCouplingFields {
 		if (cell < 0 || cell >= cellCount) throw new IllegalArgumentException("Unknown granular coupling cell " + cell);
 	}
 
-	public record Position(float x, float y, float z) {
+	public record Position(float x, float y, float z, int ceilMask) {
+		public Position(float x, float y, float z) { this(x, y, z, -1); }
 		public Position {
-			if (!(Float.isFinite(x) && Float.isFinite(y) && Float.isFinite(z))) {
+			if (!(Float.isFinite(x) && Float.isFinite(y) && Float.isFinite(z)) || ceilMask < -1 || ceilMask > 254) {
 				throw new IllegalArgumentException("Granular coupling position must be finite");
 			}
 		}

@@ -30,7 +30,7 @@ final class GranularRegionStateCodec {
 	static final int KNOWN_CAPABILITIES = CAP_MATERIALS | CAP_GRANULAR | CAP_CHEMISTRY | CAP_PRECIPITATION;
 	private static final int MANIFEST_MAGIC = 0x47524d35;
 	private static final int SECTION_MAGIC = 0x47525335;
-	private static final int PAYLOAD_VERSION = 3;
+	private static final int PAYLOAD_VERSION = 4;
 
 	record MaterialLedger(
 			int activeCount, long activeSvq, long activeMassBits,
@@ -216,6 +216,7 @@ final class GranularRegionStateCodec {
 				out.writeLong(parcel.solidVolumeSvq()); out.writeLong(Double.doubleToRawLongBits(parcel.mass()));
 				out.writeInt(parcel.materialPaletteIndex()); out.writeInt(parcel.solidCompositionIndex());
 				out.writeInt(parcel.contactAge()); out.writeByte(parcel.flags());
+				out.writeByte(parcel.ceilMask());
 			}
 			out.writeInt(data.deposits().size());
 			for (GranularStateSnapshot.DepositGroup group : data.deposits()) {
@@ -240,7 +241,7 @@ final class GranularRegionStateCodec {
 						Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()),
 						Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()),
 						input.readLong(), Double.longBitsToDouble(input.readLong()), input.readInt(), input.readInt(),
-						input.readInt(), input.readByte());
+						input.readInt(), input.readByte(), input.readUnsignedByte());
 				active.add(new ActiveEntry(ordinal, parcel));
 			}
 			int depositCount = bounded(input.readInt(), 0, depositBudget, "section deposit entries");
@@ -251,6 +252,7 @@ final class GranularRegionStateCodec {
 			requireEnd(input);
 			return new SectionData(List.copyOf(active), List.copyOf(deposits));
 		} catch (EOFException truncated) { throw new IOException("Truncated granular section payload", truncated); }
+		catch (IllegalArgumentException invalid) { throw new IOException("Invalid granular section payload", invalid); }
 	}
 
 	private static void writeMaterialLedger(DataOutputStream output, MaterialLedger ledger) throws IOException {

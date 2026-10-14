@@ -399,7 +399,7 @@ public final class GranularInventory {
 				weighted(first.velocityZ(), first.mass(), second.velocityZ(), second.mass(), combinedMass),
 				combinedSvq, combinedMass, first.materialHandle(), first.solidCompositionHandle(),
 				0, (byte) ((first.flags() & second.flags()) & ~GranularParcelStore.FLAG_SUPPORTED));
-		return new ActiveMerge(merged, combinedComposition);
+		return new ActiveMerge(parcels.prepareOverwrite(firstIndex, merged), combinedComposition);
 	}
 
 	private static float weighted(float left, double leftWeight, float right, double rightWeight, double total) {
@@ -446,6 +446,7 @@ public final class GranularInventory {
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(x, y, z,
 				velocityX, velocityY, velocityZ, planned.solidVolumeSvq(), planned.mass(),
 				planned.materialHandle(), planned.solidCompositionHandle(), 0, (byte) 0);
+		parcel = parcels.prepareAppend(parcel);
 		if (!parcels.canAdd(parcel)) return null;
 		GranularDepositStore.Group source = deposits.matchingGroup(cell, materialHandle,
 				group -> group.solidCompositionHandle() == compositionHandle);

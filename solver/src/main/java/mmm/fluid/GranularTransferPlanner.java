@@ -327,6 +327,24 @@ final class GranularTransferPlanner {
 		if (!itemAcceptance.test(transfer)) {
 			return FluidDomain.GranularExtraction.rejected("Accessible granular inventory cannot be represented by the dry container");
 		}
+		domain.ensureInventoryGrid(); domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
+		long[] futureSolid = domain.granularCoupling.copySolidSvq();
+		var remainingParcels = new java.util.HashMap<Integer, GranularParcelStore.Parcel>();
+		for (var removal : removals) {
+			if (removal.deposit()) { futureSolid[removal.cell()] -= removal.solidVolumeSvq(); continue; }
+			var source = granular.parcels.parcel(removal.index());
+			domain.granularCoupling.removePlannedParcel(futureSolid, FluidDomainStepCoordinator.parcelPosition(source), source.solidVolumeSvq());
+			if (removal.solidVolumeSvq() == removal.originalSolidVolumeSvq()) continue;
+			var next = granular.parcels.prepareOverwrite(removal.index(), new GranularParcelStore.Parcel(source.x(), source.y(), source.z(),
+					source.velocityX(), source.velocityY(), source.velocityZ(), source.solidVolumeSvq() - removal.solidVolumeSvq(),
+					ProportionalDoubleSplit.of(source.mass(), removal.solidVolumeSvq(), source.solidVolumeSvq()).remaining(),
+					source.materialHandle(), 0, source.contactAge(), source.flags()));
+			remainingParcels.put(removal.index(), next);
+		}
+		for (var next : remainingParcels.values()) if (!domain.granularCoupling.tryPlanParcel(futureSolid,
+				FluidDomainStepCoordinator.parcelPosition(next), next.solidVolumeSvq(), cell -> domain.granularGeometricOpenSvq(cell)
+						- JointPhaseCapacity.liquidSvqCeil(domain.markerGrid.exactCellVolumeInventory[cell])))
+			return FluidDomain.GranularExtraction.rejected("Remaining granular occupancy cannot share the current liquid capacity");
 		GranularAuditLedger sinkAfter = escapedSink ? granular.escapedSink.plus(
 				transfer, granular.registry, granular.compositions == null ? null : granular.compositions.registry()) : granular.escapedSink;
 		// Match the commit order so every intermediate audit chain is checked before inventory edits.
@@ -367,12 +385,7 @@ final class GranularTransferPlanner {
 		}
 		for (GranularRemoval removal : removals) if (!removal.deposit()
 				&& removal.solidVolumeSvq() != removal.originalSolidVolumeSvq()) {
-			GranularParcelStore.Parcel parcel = granular.parcels.parcel(removal.index());
-			granular.parcels.overwrite(removal.index(), new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(),
-					parcel.velocityX(), parcel.velocityY(), parcel.velocityZ(),
-					parcel.solidVolumeSvq() - removal.solidVolumeSvq(), ProportionalDoubleSplit.of(
-							parcel.mass(), removal.solidVolumeSvq(), parcel.solidVolumeSvq()).remaining(),
-					parcel.materialHandle(), 0, parcel.contactAge(), parcel.flags()));
+			granular.parcels.overwrite(removal.index(), remainingParcels.get(removal.index()));
 			if (domain.thermalState != null) domain.thermalState.commitExternalActiveTake(
 					removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
 		}

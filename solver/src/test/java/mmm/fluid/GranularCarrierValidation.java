@@ -1311,9 +1311,12 @@ public final class GranularCarrierValidation {
 					: domain.exportMaterialParticleState().particles();
 			var liquidMass = domain.particles.copyMass();
 			var liquidMaterials = domain.particles.copyMaterialHandles();
+			var kernel = new mmm.granular.GranularKernel(4, 4, 4, .5F);
+			kernel.capture(scene == 0 ? 0 : .75F, scene == 2 ? .52F : .75F, .75F, volume);
 			var parcel = new mmm.granular.GranularStateSnapshot.ActiveParcel(
 					scene == 0 ? 0 : .75F, scene == 2 ? .52F : .75F, .75F,
-					.1F, -.2F, .3F, volume, mass, sand, 0, 0, (byte) 0);
+					.1F, -.2F, .3F, volume, mass, sand, 0, 0, (byte) 0,
+					kernel.canonicalMask());
 			var active = scene == 1 ? java.util.List.of(parcel, parcel) : java.util.List.of(parcel);
 			var beds = scene >= 2 && scene != 4 ? java.util.List.of(new mmm.granular.GranularStateSnapshot.DepositGroup(
 					scene == 6 ? domain.cellIndex(2, 1, 1) : cell,
@@ -1366,9 +1369,12 @@ public final class GranularCarrierValidation {
 		for (int scene = 0; scene < 3; scene++) {
 			float y = scene == 0 ? 1.25F : scene == 1 ? radius + .01F : radius;
 			float vy = scene == 1 ? -.4F : 0;
+			var kernel = new mmm.granular.GranularKernel(4, 4, 4, .5F);
+			kernel.capture(.75F, y, .75F, volume);
 			var parcel = new mmm.granular.GranularStateSnapshot.ActiveParcel(
 					.75F, y, .75F, 0, vy, 0, volume, mass, sand, 0,
-					scene == 2 ? 3 : 0, scene == 2 ? GranularParcelStore.FLAG_SUPPORTED : (byte) 0);
+					scene == 2 ? 3 : 0, scene == 2 ? GranularParcelStore.FLAG_SUPPORTED : (byte) 0,
+					kernel.canonicalMask());
 			var snapshot = new mmm.granular.GranularStateSnapshot(4, 4, 4, registry.fingerprint(),
 					registry.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
 					java.util.List.of(parcel), java.util.List.of(), volume, Double.doubleToRawLongBits(mass));

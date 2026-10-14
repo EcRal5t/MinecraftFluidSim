@@ -77,7 +77,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				granular.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
 				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F,
 						0.125F, -0.25F, 0.0625F, activeSvq, activeMass, sand, 0,
-						2, mmm.granular.GranularParcelStore.FLAG_SUPPORTED)),
+						2, mmm.granular.GranularParcelStore.FLAG_SUPPORTED, 0)),
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
 						sand, 0, depositSvq, depositMass)), Math.addExact(activeSvq, depositSvq),
 				Double.doubleToRawLongBits(activeMass + depositMass));
@@ -342,7 +342,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				granular.fingerprint(), granular.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
 				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F,
 						0.125F, -0.25F, 0.0625F, activeSvq, activeMass, sand, 0,
-						2, mmm.granular.GranularParcelStore.FLAG_SUPPORTED)),
+						2, mmm.granular.GranularParcelStore.FLAG_SUPPORTED, 0)),
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
 						sand, 0, depositSvq, depositMass)), Math.addExact(activeSvq, depositSvq),
 				Double.doubleToRawLongBits(activeMass + depositMass));
@@ -367,6 +367,13 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 					"granular region section did not round-trip");
 		}
 		GranularRegionStateCodec granularCodec = new GranularRegionStateCodec();
+		var selectedParcel = new GranularStateSnapshot.ActiveParcel(.5F, .75F, .75F, 0, 0, 0, 3, .001, sand, 0, 0, (byte) 0, 2);
+		var selectedSection = new GranularRegionStateCodec.SectionData(
+				List.of(new GranularRegionStateCodec.ActiveEntry(0, selectedParcel)), List.of());
+		byte[] selectedBytes = granularCodec.encodeSection(selectedSection);
+		require(granularCodec.decodeSection(selectedBytes, 1, 0).equals(selectedSection), "Section codec lost the actual noncanonical ceil selection");
+		byte[] invalidSelection = selectedBytes.clone(); invalidSelection[invalidSelection.length - Integer.BYTES - 1] = (byte) 255;
+		expectIOException(() -> granularCodec.decodeSection(invalidSelection, 1, 0), "Invalid persisted ceil selection was accepted");
 		byte[] unsupportedManifestPayload = state.manifest().extensions().stream()
 				.filter(extension -> extension.type().equals(GranularRegionStateCodec.MANIFEST_EXTENSION))
 				.findFirst().orElseThrow().payload();
@@ -413,7 +420,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				java.util.Map.of(BuiltinChemicalDefinitions.CL_MINUS, 640L, BuiltinChemicalDefinitions.NA_PLUS, 640L),
 				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F, 0.0F, 0.0F, 0.0F,
 						10L, composition.totalMass(BuiltinChemicalDefinitions.REGISTRY),
-						granular.materialHandle(BuiltinGranularDefinitions.PRECIPITATE), 1, 0, (byte) 0)), List.of(), 10L,
+						granular.materialHandle(BuiltinGranularDefinitions.PRECIPITATE), 1, 0, (byte) 0, 0)), List.of(), 10L,
 				Double.doubleToRawLongBits(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)));
 		reactiveRegion.domain().restoreGranularState(reactiveFixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
 		var removedReactive = reactiveRegion.domain().tryExtractExactGranular(1, 1, 1, 10L, 0, true);

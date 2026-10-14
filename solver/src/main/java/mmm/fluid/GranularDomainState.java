@@ -25,9 +25,10 @@ final class GranularDomainState {
 	GranularAuditLedger externalSource = GranularAuditLedger.EMPTY;
 	GranularAuditLedger escapedSink = GranularAuditLedger.EMPTY;
 
-	GranularDomainState(GranularRegistry registry, int cellCount) {
+	GranularDomainState(GranularRegistry registry, int sizeX, int sizeY, int sizeZ, float cellSize) {
+		int cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		this.registry = registry;
-		this.parcels = new GranularParcelStore(registry, GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION);
+		this.parcels = new GranularParcelStore(registry, GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, sizeX, sizeY, sizeZ, cellSize);
 		this.deposits = new GranularDepositStore(registry, cellCount,
 				Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 						Math.multiplyExact(cellCount, GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL)));

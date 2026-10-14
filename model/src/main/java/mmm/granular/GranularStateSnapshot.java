@@ -19,8 +19,12 @@ public final class GranularStateSnapshot {
 	public record ActiveParcel(
 			float x, float y, float z, float velocityX, float velocityY, float velocityZ,
 			long solidVolumeSvq, double mass, int materialPaletteIndex, int solidCompositionIndex,
-			int contactAge, byte flags
-	) { }
+			int contactAge, byte flags, int ceilMask
+	) {
+		public ActiveParcel {
+			if (ceilMask < 0 || ceilMask > 254) throw new IllegalArgumentException("Persisted granular occupancy selection is invalid");
+		}
+	}
 
 	public record DepositGroup(
 			int cell, int porosityQ, int materialPaletteIndex, int solidCompositionIndex,
@@ -229,11 +233,16 @@ public final class GranularStateSnapshot {
 		List<StableComposition> table = List.copyOf(unique); Map<StableComposition, Integer> indices = new HashMap<>();
 		for (int index = 0; index < table.size(); index++) indices.put(table.get(index), index + 1);
 		List<ActiveParcel> active = new ArrayList<>(parcels.count());
+		var kernel = new GranularKernel(sizeX, sizeY, sizeZ, .5);
+		parcels.requireGeometry(kernel);
 		for (int index = 0; index < parcels.count(); index++) {
 			GranularParcelStore.Parcel parcel = parcels.parcel(index); StableComposition composition = activeStable[index];
+			int mask = parcel.ceilMask();
+			// Standalone inventory drafts acquire their initial spatial selection at the supplied domain geometry.
+			if (mask < 0) { kernel.capture(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()); mask = kernel.canonicalMask(); }
 			active.add(new ActiveParcel(parcel.x(), parcel.y(), parcel.z(), parcel.velocityX(), parcel.velocityY(),
 					parcel.velocityZ(), parcel.solidVolumeSvq(), parcel.mass(), parcel.materialHandle(),
-					composition == null ? 0 : indices.get(composition), parcel.contactAge(), parcel.flags()));
+					composition == null ? 0 : indices.get(composition), parcel.contactAge(), parcel.flags(), mask));
 		}
 		List<DepositGroup> deposit = new ArrayList<>(drafts.size());
 		for (DepositDraft draft : drafts) deposit.add(new DepositGroup(draft.cell(), draft.porosityQ(), draft.material(),
@@ -259,6 +268,7 @@ public final class GranularStateSnapshot {
 		if (parcels.count() != 0 || deposits.groupCount() != 0 || pool != null && pool.liveCount() != 0) {
 			throw new IllegalStateException("Granular restore target is not empty");
 		}
+		parcels.requireGeometry(new GranularKernel(sizeX, sizeY, sizeZ, .5));
 		if (!registryFingerprint.equals(registry.fingerprint())
 				|| !materialPalette.equals(registry.materials().stream().map(ParticulateMaterial::id).toList())) {
 			throw new IllegalArgumentException("Granular snapshot registry identity mismatch");
@@ -273,7 +283,7 @@ public final class GranularStateSnapshot {
 			int composition = restoreComposition(parcel.solidCompositionIndex(), parcel.mass(), pool);
 			parcels.add(new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(), parcel.velocityX(),
 					parcel.velocityY(), parcel.velocityZ(), parcel.solidVolumeSvq(), parcel.mass(),
-					parcel.materialPaletteIndex(), composition, parcel.contactAge(), parcel.flags()));
+					parcel.materialPaletteIndex(), composition, parcel.contactAge(), parcel.flags(), parcel.ceilMask()));
 		}
 		int previousCell = -1, expectedPorosity = 0;
 		for (DepositGroup group : depositGroups) {
@@ -335,6 +345,7 @@ public final class GranularStateSnapshot {
 	}
 
 	private void validateActive() {
+		var kernel = new GranularKernel(sizeX, sizeY, sizeZ, .5);
 		for (ActiveParcel parcel : activeParcels) {
 			if (!(Float.isFinite(parcel.x()) && Float.isFinite(parcel.y()) && Float.isFinite(parcel.z())
 					&& parcel.x() >= 0.0F && parcel.x() < sizeX * 0.5F && parcel.y() >= 0.0F && parcel.y() < sizeY * 0.5F
@@ -346,6 +357,7 @@ public final class GranularStateSnapshot {
 					&& (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED) == 0)) {
 				throw new IllegalArgumentException("Invalid active granular snapshot parcel");
 			}
+			kernel.capture(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()); kernel.requireMask(parcel.ceilMask());
 		}
 	}
 

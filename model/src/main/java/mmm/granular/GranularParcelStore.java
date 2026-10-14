@@ -12,8 +12,12 @@ public final class GranularParcelStore {
 			float velocityX, float velocityY, float velocityZ,
 			long solidVolumeSvq, double mass,
 			int materialHandle, int solidCompositionHandle,
-			int contactAge, byte flags
+			int contactAge, byte flags, int ceilMask
 	) {
+		public Parcel(float x, float y, float z, float velocityX, float velocityY, float velocityZ,
+		              long solidVolumeSvq, double mass, int materialHandle, int solidCompositionHandle, int contactAge, byte flags) {
+			this(x, y, z, velocityX, velocityY, velocityZ, solidVolumeSvq, mass, materialHandle, solidCompositionHandle, contactAge, flags, -1);
+		}
 		public Parcel {
 			if (!(Float.isFinite(x) && Float.isFinite(y) && Float.isFinite(z)
 					&& Float.isFinite(velocityX) && Float.isFinite(velocityY) && Float.isFinite(velocityZ))) {
@@ -24,6 +28,11 @@ public final class GranularParcelStore {
 			if (materialHandle < 0 || solidCompositionHandle < 0 || contactAge < 0) {
 				throw new IllegalArgumentException("Granular parcel handles and contact age must be non-negative");
 			}
+			if (ceilMask < -1 || ceilMask > 254) throw new IllegalArgumentException("Granular occupancy selection is outside its candidate range");
+		}
+		public Parcel withCeilMask(int mask) {
+			return new Parcel(x, y, z, velocityX, velocityY, velocityZ, solidVolumeSvq, mass,
+					materialHandle, solidCompositionHandle, contactAge, flags, mask);
 		}
 	}
 
@@ -34,25 +43,38 @@ public final class GranularParcelStore {
 	private final double[] mass;
 	private final int[] materialHandle, solidCompositionHandle, contactAge;
 	private final byte[] flags;
+	private final byte[] ceilMask;
+	private final GranularKernel kernel;
 	private int count;
 	private long mutationRevision;
 
 	public GranularParcelStore(GranularRegistry registry, int capacity) {
+		this(registry, capacity, null);
+	}
+	public GranularParcelStore(GranularRegistry registry, int capacity, int sizeX, int sizeY, int sizeZ, double cellSize) {
+		this(registry, capacity, new GranularKernel(sizeX, sizeY, sizeZ, cellSize));
+	}
+	private GranularParcelStore(GranularRegistry registry, int capacity, GranularKernel kernel) {
 		if (registry == null) throw new IllegalArgumentException("Granular registry is missing");
 		if (capacity <= 0 || capacity > GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION) {
 			throw new IllegalArgumentException("Granular parcel capacity is invalid");
 		}
 		this.registry = registry;
+		this.kernel = kernel;
 		this.capacity = capacity;
 		this.x = new float[capacity]; this.y = new float[capacity]; this.z = new float[capacity];
 		this.velocityX = new float[capacity]; this.velocityY = new float[capacity]; this.velocityZ = new float[capacity];
 		this.solidVolumeSvq = new long[capacity]; this.mass = new double[capacity];
 		this.materialHandle = new int[capacity]; this.solidCompositionHandle = new int[capacity];
 		this.contactAge = new int[capacity]; this.flags = new byte[capacity];
+		this.ceilMask = new byte[capacity];
 	}
 
 	public int count() { return count; }
 	public int capacity() { return capacity; }
+	public void requireGeometry(GranularKernel geometry) {
+		if (kernel != null && !kernel.sameGeometry(geometry)) throw new IllegalArgumentException("Granular occupancy domain geometry differs");
+	}
 	public boolean hasCapacity(int additional) { return additional >= 0 && additional <= capacity - count; }
 	/** Monotonic counter over every structural mutation; plan consumers re-verify it before commit. */
 	public long mutationRevision() { return mutationRevision; }
@@ -65,31 +87,42 @@ public final class GranularParcelStore {
 	}
 	/** Inventory plans have already validated the parcel and its unchanged append slot. */
 	int appendPrepared(Parcel parcel) {
+		int mask = prepareMask(parcel, -1);
 		int index = count++;
-		write(index, parcel);
+		write(index, parcel, mask);
 		mutationRevision++;
 		return index;
 	}
 
 	public boolean canAdd(Parcel parcel) {
-		validate(parcel);
+		prepareAppend(parcel);
 		return count < capacity;
+	}
+	/** Resolves the candidate selection before an inventory plan can publish any source column. */
+	public Parcel prepareAppend(Parcel parcel) {
+		validate(parcel); return parcel.withCeilMask(prepareMask(parcel, -1));
 	}
 
 	public Parcel parcel(int index) {
 		requireIndex(index);
 		return new Parcel(x[index], y[index], z[index], velocityX[index], velocityY[index], velocityZ[index],
 				solidVolumeSvq[index], mass[index], materialHandle[index], solidCompositionHandle[index],
-				contactAge[index], flags[index]);
+				contactAge[index], flags[index], (ceilMask[index] & 255) == 255 ? -1 : ceilMask[index] & 255);
 	}
 
 	public void overwrite(int index, Parcel parcel) {
-		requireIndex(index);
-		validate(parcel);
+		parcel = prepareOverwrite(index, parcel);
 		boolean changedGeometry = solidVolumeSvq[index] != parcel.solidVolumeSvq();
-		write(index, parcel);
+		write(index, parcel, parcel.ceilMask());
 		if (changedGeometry) { contactAge[index] = 0; flags[index] &= ~FLAG_SUPPORTED; }
 		mutationRevision++;
+	}
+	/** Prepares the exact future occupancy choice without changing any carrier column. */
+	public Parcel prepareOverwrite(int index, Parcel parcel) {
+		requireIndex(index);
+		validate(parcel);
+		int mask = prepareMask(parcel, index);
+		return parcel.withCeilMask(mask);
 	}
 
 	public Parcel removeSwap(int index) {
@@ -97,7 +130,7 @@ public final class GranularParcelStore {
 		int last = count - 1;
 		Parcel moved = index == last ? null : parcel(last);
 		count--;
-		if (moved != null) write(index, moved);
+		if (moved != null) write(index, moved, moved.ceilMask());
 		clear(last);
 		mutationRevision++;
 		return removed;
@@ -113,13 +146,14 @@ public final class GranularParcelStore {
 		ProportionalDoubleSplit split = ProportionalDoubleSplit.of(original.mass(), takenSvq, original.solidVolumeSvq());
 		double takenMass = split.removed(), remainingMass = split.remaining();
 		if (!(takenMass > 0.0 && remainingMass > 0.0)) throw new IllegalArgumentException("Granular split mass is not representable");
-		write(index, new Parcel(original.x(), original.y(), original.z(), original.velocityX(), original.velocityY(),
+		Parcel remaining = prepareOverwrite(index, new Parcel(original.x(), original.y(), original.z(), original.velocityX(), original.velocityY(),
 				original.velocityZ(), original.solidVolumeSvq() - takenSvq, remainingMass,
 				original.materialHandle(), original.solidCompositionHandle(), 0, (byte) (original.flags() & ~FLAG_SUPPORTED)));
-		mutationRevision++;
-		return add(new Parcel(original.x(), original.y(), original.z(), original.velocityX(), original.velocityY(),
+		Parcel taken = prepareAppend(new Parcel(original.x(), original.y(), original.z(), original.velocityX(), original.velocityY(),
 				original.velocityZ(), takenSvq, takenMass, original.materialHandle(), original.solidCompositionHandle(),
 				0, (byte) (original.flags() & ~FLAG_SUPPORTED)));
+		write(index, remaining, remaining.ceilMask()); mutationRevision++;
+		return appendPrepared(taken);
 	}
 
 	/** Merges two compatible parcels and swap-removes the second index. */
@@ -147,10 +181,11 @@ public final class GranularParcelStore {
 				weighted(left.velocityZ(), left.mass(), right.velocityZ(), right.mass(), combinedMass),
 				combinedVolume, combinedMass, left.materialHandle(), left.solidCompositionHandle(),
 				0, (byte) ((left.flags() | right.flags()) & ~FLAG_SUPPORTED));
-		write(first, merged);
+		merged = prepareOverwrite(first, merged);
+		write(first, merged, merged.ceilMask());
 		int last = count - 1;
 		removeSwap(second);
-		if (first == last && second != last) write(second, merged);
+		if (first == last && second != last) write(second, merged, merged.ceilMask());
 		mutationRevision++;
 	}
 
@@ -181,18 +216,35 @@ public final class GranularParcelStore {
 		}
 	}
 
-	private void write(int index, Parcel parcel) {
+	private void write(int index, Parcel parcel, int mask) {
 		x[index] = parcel.x(); y[index] = parcel.y(); z[index] = parcel.z();
 		velocityX[index] = parcel.velocityX(); velocityY[index] = parcel.velocityY(); velocityZ[index] = parcel.velocityZ();
 		solidVolumeSvq[index] = parcel.solidVolumeSvq(); mass[index] = parcel.mass();
 		materialHandle[index] = parcel.materialHandle(); solidCompositionHandle[index] = parcel.solidCompositionHandle();
 		contactAge[index] = parcel.contactAge(); flags[index] = parcel.flags();
+		ceilMask[index] = (byte) mask;
+	}
+	private int prepareMask(Parcel parcel, int previous) {
+		int mask = parcel.ceilMask();
+		if (previous >= 0 && x[previous] == parcel.x() && y[previous] == parcel.y()
+				&& z[previous] == parcel.z() && solidVolumeSvq[previous] == parcel.solidVolumeSvq()) {
+			int stored = (ceilMask[previous] & 255) == 255 ? -1 : ceilMask[previous] & 255;
+			if (mask < 0) mask = stored;
+			if (kernel != null && stored >= 0 && mask == stored) return mask;
+		}
+		if (kernel != null) {
+			kernel.capture(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq());
+			if (mask < 0) mask = kernel.canonicalMask();
+			kernel.requireMask(mask);
+		}
+		return mask;
 	}
 
 	private void clear(int index) {
 		x[index] = y[index] = z[index] = velocityX[index] = velocityY[index] = velocityZ[index] = 0.0F;
 		solidVolumeSvq[index] = 0L; mass[index] = 0.0;
 		materialHandle[index] = solidCompositionHandle[index] = contactAge[index] = 0; flags[index] = 0;
+		ceilMask[index] = 0;
 	}
 
 	private void requireIndex(int index) {
