@@ -49,7 +49,7 @@ final class GasBoilingBatchBounds {
 	                                      ThermalPhaseTransition transition, ThermalDomainState.PhaseCandidateCell thermalCell,
 	                                      double temperature, boolean[] volatileSpecies, int supportMask,
 	                                      GasLiquidPhaseModel phase, GasPhaseGeometryEnvelope geometry) {
-		if(geometry==null || !support.gasState().network.inventory(node).isEmpty()
+		if(geometry==null || !geometry.possibleStocks().isEmpty() || !support.gasState().network.inventory(node).isEmpty()
 				|| support.thermal().gasNodeEnergy(node,support.gasState().network)!=0) return null;
 		try {
 			var registry=support.thermal().registry(); var state=support.state(); var particles=state.particles(); var chemistry=support.chemistry();

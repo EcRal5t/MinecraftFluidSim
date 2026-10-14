@@ -1534,6 +1534,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		require(merged.gasBoundary().nodeCount() == 2 && merged.gasBoundary().inventory(2).isEmpty(),
 				"liquid barrier did not separate actual gas and vacuum control volumes");
 		GasInventory stock = merged.gasBoundary().inventory(1);
+		var mergeEnvelope = GasPhaseGeometryEnvelope.capture(merged.gasState.frame, merged.gasState.network,
+				merged.thermalState, 1, 2);
+		require(mergeEnvelope != null && mergeEnvelope.possibleStocks().size() == 1
+				&& mergeEnvelope.possibleStocks().getFirst().inventory().equals(stock)
+				&& mergeEnvelope.possibleStocks().getFirst().energy() == merged.thermalState.gasNodeEnergy(1, merged.gasState.network),
+				"A possible complete nonempty gas successor lost its inventory or raw energy certificate");
+		require(GasPhaseGeometryEnvelope.capture(merged.gasState.frame, merged.gasState.network, null, 1, 2) == null,
+				"An unbound thermal owner acquired a nonempty gas merge certificate");
 		double inheritedVolume = merged.gasBoundary().availableVolume(1) + merged.gasBoundary().availableVolume(2);
 		double oldEnergy = merged.thermalState.gasNodeEnergy(1, merged.gasState.network);
 		var source = merged.gasBoundary().externalSource(); var sink = merged.gasBoundary().escapedSink();
@@ -1923,6 +1931,38 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				double derived=gasThermal.state(actual,model.internalEnergyAtTemperature(transition,actual,temperature)).temperatureK();
 				require(lower<=derived && derived<=upper,"Same-inventory forward/inverse rounding escaped its temperature interval");
 			}
+		}
+		var air = new ThermalMaterialDefinition("test:thermal/merge_air", ThermalMaterialDefinition.CarrierKind.GAS,
+				BuiltinGasDefinitions.AIR, GasRegistry.STANDARD_TEMPERATURE_K, 10, .025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(150, 600, 718)));
+		var mergeRegistry = new ThermalRegistry(List.of(liquid, vapor, air), List.of(vaporSpecies),
+				List.of(transition), BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
+		var mergeGas = new GasThermalModel(mergeRegistry, gas);
+		var optionalStocks = List.of(gas.createAmbient((1L << 54) + 3),
+				model.gasBatch(transition, 17, Map.of(BuiltinChemicalDefinitions.H2O, 17L), 0),
+				gas.createAmbient(19));
+		double[] optionalTemperatures = {200, 600, 300};
+		var possible = new java.util.ArrayList<GasPhaseMergeBounds.Stock>();
+		for (int index = 0; index < optionalStocks.size(); index++) possible.add(new GasPhaseMergeBounds.Stock(
+				optionalStocks.get(index), mergeGas.internalEnergyAtTemperature(optionalStocks.get(index), optionalTemperatures[index])));
+		double mandatoryEnergy = mergeGas.internalEnergyAtTemperature(speciesBatch, 373.15);
+		double mergeLower = new GasPhaseMergeBounds(mergeRegistry, mergeGas, possible).temperatureLower(speciesBatch, mandatoryEnergy);
+		require(mergeLower > 0 && mergeLower <= 200, "Optional whole-stock merge failed to retain a positive conservative temperature");
+		require(Double.isNaN(GasPhaseMergeBounds.partialPressureLower(1, Double.MIN_NORMAL, Double.MIN_NORMAL)),
+				"Subnormal intermediate pressure acquired a relative-rounding certificate");
+		for (int subset = 0; subset < 8; subset++) for (boolean reverse : new boolean[]{false, true}) {
+			GasInventory actual = speciesBatch; SignedDyadic actualEnergy = SignedDyadic.of(mandatoryEnergy);
+			for (int ordinal = 0; ordinal < 3; ordinal++) {
+				int index = reverse ? 2 - ordinal : ordinal;
+				if ((subset & 1 << index) == 0) continue;
+				actual = actual.merge(possible.get(index).inventory());
+				actualEnergy = actualEnergy.add(SignedDyadic.of(possible.get(index).energy()));
+			}
+			double actualU = actualEnergy.toDouble(), actualT = mergeGas.state(actual, actualU).temperatureK();
+			double partial = model.saturation(transition, 373.15, actual, mergeGas.absolutePressure(actual, 1, actualU)).componentPartialPressurePa();
+			double lower = GasPhaseMergeBounds.partialPressureLower(speciesBatch.standardVolumeNanos(), mergeLower, 1);
+			require(mergeLower <= actualT && lower > 0 && lower <= partial,
+					"Optional gas subset or sparse species quanta escaped its temperature and vapor pressure bounds");
 		}
 		GasLiquidPhaseModel.Saturation equilibrium = model.saturation(
 				transition, 373.15, batch, GasRegistry.STANDARD_PRESSURE_PA);

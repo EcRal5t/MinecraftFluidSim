@@ -213,10 +213,22 @@ final class GasLiquidPhaseChangeStage {
 			double volume = envelope.volumeUpper(candidate.liquidGeometry());
 			if (!(Double.isFinite(volume) && volume > 0)) return false;
 			var stock = candidate.gasPlan().inventoryAfter();
-			double pressureLower = gasThermal.absolutePressure(stock, volume, candidate.candidateGasEnergy());
 			double temperature = candidate.thermalPlan().temperatureK();
-			if (Double.isNaN(temperature)) temperature = gasThermal.state(stock, candidate.candidateGasEnergy()).temperatureK();
-			double partialLower = phase.saturation(transition, temperature, stock, pressureLower).componentPartialPressurePa();
+			if (envelope.possibleStocks().isEmpty()) {
+				double pressureLower = gasThermal.absolutePressure(stock, volume, candidate.candidateGasEnergy());
+				if (Double.isNaN(temperature)) temperature = gasThermal.state(stock, candidate.candidateGasEnergy()).temperatureK();
+				double partialLower = phase.saturation(transition, temperature, stock, pressureLower).componentPartialPressurePa();
+				return phase.saturationPressureBound(transition, temperature, true) < Math.max(0, Math.nextDown(partialLower));
+			}
+			// An absent LTE liquid carrier follows the actual mixed gas temperature;
+			// its saturation upper bound needs more than the gas-temperature lower bound.
+			if (Double.isNaN(temperature)) return false;
+			double gasTemperature = new GasPhaseMergeBounds(support.thermal().registry(), gasThermal, envelope.possibleStocks())
+					.temperatureLower(stock, candidate.candidateGasEnergy());
+			var vapor = stock.component(support.thermal().registry().material(
+					support.thermal().registry().materialHandle(transition.upperEnergyMaterialId())).carrierId());
+			double partialLower = GasPhaseMergeBounds.partialPressureLower(vapor == null ? 0 : vapor.standardVolumeNanos(), gasTemperature, volume);
+			if (!Double.isFinite(partialLower)) return false;
 			return phase.saturationPressureBound(transition, temperature, true) < Math.max(0, Math.nextDown(partialLower));
 		} catch (IllegalArgumentException | ArithmeticException unresolved) { return false; }
 	}

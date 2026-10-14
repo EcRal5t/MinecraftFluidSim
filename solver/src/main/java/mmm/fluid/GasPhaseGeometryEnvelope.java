@@ -2,6 +2,7 @@ package mmm.fluid;
 
 import mmm.units.SignedDyadic;
 import mmm.fluid.air.AirNetwork;
+import mmm.fluid.air.GasInventory;
 import mmm.thermal.ThermalDomainState;
 
 import java.util.ArrayList;
@@ -13,9 +14,12 @@ final class GasPhaseGeometryEnvelope {
 	private final GasRuntimeGeometry source;
 	private final List<Integer> variableCells;
 	private final SignedDyadic fixedVolume, metric;
+	private final List<GasPhaseMergeBounds.Stock> possibleStocks;
 
-	private GasPhaseGeometryEnvelope(GasRuntimeGeometry source, List<Integer> variableCells, SignedDyadic fixedVolume) {
+	private GasPhaseGeometryEnvelope(GasRuntimeGeometry source, List<Integer> variableCells, SignedDyadic fixedVolume,
+	                                 List<GasPhaseMergeBounds.Stock> possibleStocks) {
 		this.source = source; this.variableCells = List.copyOf(variableCells); this.fixedVolume = fixedVolume;
+		this.possibleStocks = List.copyOf(possibleStocks);
 		this.metric = SignedDyadic.of(source.geometry().cellVolumeCubicMeters());
 	}
 
@@ -46,17 +50,10 @@ final class GasPhaseGeometryEnvelope {
 				int neighbor = editedCell + sign * strides[axis];
 				variable[neighbor] = source.cellDependsOnNeighborFractions(neighbor);
 			}
-		int first = -1, sourcePieces = 0;
-		boolean fixedSource = true;
-		for (var piece : source.geometry().pieces()) if (source.nodeOfPiece(piece.id()) == sourceNode) {
-			sourcePieces++;
-			if (variable[piece.cell()]) fixedSource = false;
-			if (first < 0) first = piece.id();
-		}
+		int first = source.minimumPiece(sourceNode);
 		// A single microbox, or one convex component's dry half-space, has one
 		// positive successor. Missing old/new overlap leaves the phase candidate unavailable.
-		if (first < 0 || !fixedSource && sourcePieces != 1 && !singleConvexComponent(source, sourceNode, first)
-				&& !GasPhaseSourceBackbone.retainsSource(source, sourceNode, variable)) return null;
+		if (!uniqueSuccessor(source, sourceNode, variable)) return null;
 		int[] parent = new int[Math.multiplyExact(8, variable.length)]; Arrays.fill(parent, -1);
 		for (var piece : source.geometry().pieces()) parent[piece.id()] = piece.id();
 		for (int cell = 0; cell < variable.length; cell++) if (variable[cell]) {
@@ -83,11 +80,16 @@ final class GasPhaseGeometryEnvelope {
 				}
 		}
 		int selected = root(parent, first);
+		var possibleStocks = new ArrayList<GasPhaseMergeBounds.Stock>();
+		var checkedNodes = new java.util.HashSet<Integer>();
 		for (var piece : source.geometry().pieces()) if (root(parent, piece.id()) == selected) {
 			int node = source.nodeOfPiece(piece.id());
-			if (node != sourceNode && (!network.inventory(node).isEmpty()
-					|| thermal != null && thermal.gasNodeEnergy(node, network) != 0)) {
-				return null;
+			if (node != sourceNode && checkedNodes.add(node)) {
+				GasInventory stock = network.inventory(node);
+				double energy = thermal == null ? 0 : thermal.gasNodeEnergy(node, network);
+				if (stock.isEmpty() && energy == 0) continue;
+				if (thermal == null || !uniqueSuccessor(source, node, variable)) return null;
+				possibleStocks.add(new GasPhaseMergeBounds.Stock(stock, energy));
 			}
 		}
 		SignedDyadic fixed = SignedDyadic.ZERO;
@@ -98,7 +100,20 @@ final class GasPhaseGeometryEnvelope {
 			for (int micro = 0; micro < 8; micro++) if (parent[8 * cell + micro] >= 0 && root(parent, 8 * cell + micro) == selected) {
 				variableCells.add(cell); break;
 			}
-		return new GasPhaseGeometryEnvelope(source, variableCells, fixed);
+		return new GasPhaseGeometryEnvelope(source, variableCells, fixed, possibleStocks);
+	}
+
+	List<GasPhaseMergeBounds.Stock> possibleStocks() { return possibleStocks; }
+
+	private static boolean uniqueSuccessor(GasRuntimeGeometry source, int node, boolean[] variable) {
+		int first = -1, count = 0;
+		boolean fixed = true;
+		for (var piece : source.geometry().pieces()) if (source.nodeOfPiece(piece.id()) == node) {
+			count++; fixed &= !variable[piece.cell()];
+			if (first < 0) first = piece.id();
+		}
+		return first >= 0 && (fixed || count == 1 || singleConvexComponent(source, node, first)
+				|| GasPhaseSourceBackbone.retainsSource(source, node, variable));
 	}
 
 	double volumeUpper(PhaseLiquidGeometryEdit edit) {
