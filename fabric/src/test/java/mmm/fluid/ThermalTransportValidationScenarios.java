@@ -786,6 +786,10 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 				300.0, 0.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 400.0, 4_000.0)));
+		ThermalMaterialDefinition air = new ThermalMaterialDefinition("mmm:thermal/air",
+				ThermalMaterialDefinition.CarrierKind.GAS, mmm.fluid.air.BuiltinGasDefinitions.AIR,
+				mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(4, 3, 3, config, 512);
@@ -793,7 +797,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		domain.setSolidMicroMask(1, 1, 1, 0x22);
 		domain.setVolume(1, 1, 1, 0.5F);
 		domain.setVolume(2, 1, 1, 1.0F);
-		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 300.0);
+		domain.bindThermal(new ThermalRegistry(List.of(water, air)), liquids, 300.0);
 		domain.setThermalTemperatureInCell(1, 1, 1, 350.0);
 		domain.setThermalTemperatureInCell(2, 1, 1, 250.0);
 		ThermalTransport.Stats transport = domain.stepThermalOnly(1_000.0);
