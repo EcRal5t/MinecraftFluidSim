@@ -1,7 +1,7 @@
 package mmm.fluid;
 
-import mmm.fluid.air.GasRegistry;
 import mmm.thermal.GasLiquidPhaseModel;
+import mmm.thermal.GasThermalModel;
 import mmm.thermal.ThermalCaloricBounds;
 import mmm.thermal.ThermalCaloricBounds.PortionRange;
 import mmm.thermal.ThermalCaloricBounds.QuantaRange;
@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Whole-extent saturation bounds for gas born at one temperature into a certified vacuum successor. */
+/** Whole-extent saturation bounds for gas born into a certified complete-source successor. */
 final class GasBoilingBatchBounds {
 	private record Owner(PortionRange before, Map<String, QuantaRange> remainingSpecies, boolean removable) { }
 	private final ThermalCaloricBounds caloric;
@@ -27,20 +27,28 @@ final class GasBoilingBatchBounds {
 	private final double temperature;
 	private final int cell, supportMask, liquidHandle, gasHandle, donors;
 	private final long nanosPerBatch;
+	private final GasPhaseMergeBounds.Stock sourceGas;
+	private final GasPhaseMergeBounds merged;
+	private final long sourceVaporNanos;
+	private final SignedDyadic vaporSpecific;
 
 	private GasBoilingBatchBounds(ThermalCaloricBounds caloric, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
 	                             GasPhaseGeometryEnvelope geometry, List<Owner> owners, Map<String, QuantaRange> vaporSpecies,
-	                             SignedDyadic sourceEnergy, double temperature, int cell, int supportMask, int liquidHandle, int gasHandle, int donors) {
+	                             SignedDyadic sourceEnergy, double temperature, int cell, int supportMask, int liquidHandle, int gasHandle, int donors,
+	                             GasPhaseMergeBounds.Stock sourceGas, GasPhaseMergeBounds merged, String vaporId) {
 		this.caloric=caloric; this.transition=transition; this.phase=phase; this.geometry=geometry; this.owners=List.copyOf(owners);
 		this.vaporSpecies=Map.copyOf(vaporSpecies); this.sourceEnergy=sourceEnergy; this.temperature=temperature;
 		this.cell=cell; this.supportMask=supportMask; this.liquidHandle=liquidHandle; this.gasHandle=gasHandle; this.donors=donors;
+		this.sourceGas=sourceGas; this.merged=merged;
+		var vapor=sourceGas.inventory().component(vaporId); this.sourceVaporNanos=vapor==null?0:vapor.standardVolumeNanos();
 		var source=owners.stream().map(Owner::before).toList();
 		this.sourceCurveLow=SignedDyadic.of(caloric.curveEnergyAtTemperature(source,temperature,false));
 		SignedDyadic error=SignedDyadic.ZERO;
 		for(var owner:owners) error=error.add(SignedDyadic.of(caloric.referenceRoundingBound(owner.before())));
 		this.sourceReferenceError=error;
 		this.liquidSpecific=caloric.specificCurveEnergy(liquidHandle,temperature);
-		if(caloric.specificCurveEnergy(gasHandle,temperature).compareTo(liquidSpecific)<0)
+		this.vaporSpecific=caloric.specificCurveEnergy(gasHandle,temperature);
+		if(vaporSpecific.compareTo(liquidSpecific)<0)
 			throw new IllegalArgumentException("Same-temperature vapor energy is below its liquid energy");
 		this.nanosPerBatch=phase.gasBatch(transition,1).standardVolumeNanos();
 	}
@@ -49,8 +57,7 @@ final class GasBoilingBatchBounds {
 	                                      ThermalPhaseTransition transition, ThermalDomainState.PhaseCandidateCell thermalCell,
 	                                      double temperature, boolean[] volatileSpecies, int supportMask,
 	                                      GasLiquidPhaseModel phase, GasPhaseGeometryEnvelope geometry) {
-		if(geometry==null || !geometry.possibleStocks().isEmpty() || !support.gasState().network.inventory(node).isEmpty()
-				|| support.thermal().gasNodeEnergy(node,support.gasState().network)!=0) return null;
+		if(geometry==null) return null;
 		try {
 			var registry=support.thermal().registry(); var state=support.state(); var particles=state.particles(); var chemistry=support.chemistry();
 			int liquid=registry.materialHandle(transition.lowerEnergyMaterialId()), gas=registry.materialHandle(transition.upperEnergyMaterialId());
@@ -82,8 +89,14 @@ final class GasBoilingBatchBounds {
 				var portion=new PortionRange(solid.materialHandle(),solid.massMu(),solid.massMu(),species); owners.add(new Owner(portion,species,false));
 			}
 			if(donors==0) return null;
+			var network=support.gasState().network;
+			var sourceGas=new GasPhaseMergeBounds.Stock(network.inventory(node),support.thermal().gasNodeEnergy(node,network),
+					SignedDyadic.of(network.availableVolume(node)));
+			if(sourceGas.inventory().isEmpty() && sourceGas.energy()!=0) return null;
 			return new GasBoilingBatchBounds(new ThermalCaloricBounds(registry),transition,phase,geometry,owners,vapor,
-					thermalCell.cellEnergy(),temperature,cell,supportMask,liquid,gas,donors);
+					thermalCell.cellEnergy(),temperature,cell,supportMask,liquid,gas,donors,sourceGas,
+					new GasPhaseMergeBounds(registry,new GasThermalModel(registry,network.registry()),geometry.possibleStocks()),
+					registry.material(gas).carrierId());
 		} catch(IllegalArgumentException | ArithmeticException unresolved) { return null; }
 	}
 
@@ -94,7 +107,15 @@ final class GasBoilingBatchBounds {
 			var gas=new PortionRange(gasHandle,Math.max(0,Math.nextDown(massLow-PhaseChangeStageSupport.massTolerance(massLow))),
 					Math.nextUp(massHigh+tolerance),vaporSpecies);
 			double forwardError=caloric.forwardRoundingBound(gas,temperature);
-			double gasLower=caloric.temperatureWithEnergyError(List.of(gas),temperature,forwardError,false);
+			if(sourceGas.energy()!=0) {
+				// The liquid assignment subtracts the rounded source-plus-born gas U.
+				SignedDyadic magnitude=abs(SignedDyadic.of(sourceGas.energy())).add(energyMagnitude(List.of(gas),temperature,temperature));
+				forwardError=Math.nextUp(SignedDyadic.of(forwardError)
+						.add(SignedDyadic.of(Math.ulp(Math.nextUp(magnitude.toDouble())))).toDouble());
+			}
+			double gasLower=sourceGas.inventory().isEmpty() && geometry.possibleStocks().isEmpty()
+					?caloric.temperatureWithEnergyError(List.of(gas),temperature,forwardError,false)
+					:merged.temperatureLower(sourceGas.inventory(),sourceGas.energy(),gas,temperature,forwardError);
 			// Each donor's actual kg change, born gas mass and final requested-mass remainder pass the existing
 			// mass check. Each intervening positive remainder subtraction contributes at most one ULP.
 			SignedDyadic massError=SignedDyadic.of(tolerance).multiply(SignedDyadic.of(donors+2L,0))
@@ -111,6 +132,8 @@ final class GasBoilingBatchBounds {
 			// Donor identities can change; their total retained mass has one conserved lower bound.
 			double retained=Math.max(0,Math.nextDown(removableMass.subtract(SignedDyadic.of(massHigh)).subtract(massError).toDouble()));
 			slope.add(new PortionRange(liquidHandle,retained,Math.nextUp(removableMass.toDouble()),Map.of()));
+			// Complete depletion is checked against the future gas temperature by the actual candidate.
+			if(slope.stream().noneMatch(portion->portion.massLow()>0)) return false;
 			// Equal host species offsets cancel by exact integer conservation, even across carrier holes.
 			SignedDyadic error=sourceEnergy.subtract(sourceCurveLow).add(referenceError)
 					.add(SignedDyadic.of(caloric.referenceRoundingBound(gas))).add(SignedDyadic.of(forwardError))
@@ -124,12 +147,18 @@ final class GasBoilingBatchBounds {
 			// The assignment's pivot is requested U minus the exact sum of the other stored columns.
 			double pivotError=Math.ulp(Math.nextUp(magnitude.toDouble()));
 			double liquidUpper=caloric.temperatureWithEnergyError(slope,temperature,Math.nextUp(error.add(SignedDyadic.of(pivotError)).toDouble()),true);
+			SignedDyadic cooling=SignedDyadic.of(gas.massLow()).multiply(vaporSpecific.subtract(liquidSpecific))
+					.subtract(error).subtract(SignedDyadic.of(pivotError));
+			if(cooling.signum()>0) {
+				// Maximum remaining heat capacity bounds cooling across the full caloric curve.
+				var maximumSlope=slope.stream().map(portion->new PortionRange(portion.materialHandle(),portion.massHigh(),portion.massHigh(),Map.of())).toList();
+				double target=Math.nextUp(SignedDyadic.of(caloric.curveEnergyAtTemperature(maximumSlope,temperature,true)).subtract(cooling).toDouble());
+				liquidUpper=Math.min(liquidUpper,caloric.temperatureBound(maximumSlope,target,true,temperature));
+			}
 			double volume=geometry.boilingVolumeUpper(cell,supportMask,Math.multiplyExact(high,transition.lowerVolumeSvqPerBatch()));
 			if(!(Double.isFinite(volume) && volume>0 && Double.isFinite(liquidUpper))) return false;
-			double standard=Math.nextDown(Math.multiplyExact(low,nanosPerBatch)*1.0e-9);
-			double pressure=Math.nextDown(Math.nextDown(Math.nextDown(GasRegistry.STANDARD_PRESSURE_PA*standard)
-					/GasRegistry.STANDARD_TEMPERATURE_K)*gasLower);
-			pressure=Math.max(0,Math.nextDown(pressure/volume));
+			long nanos=Math.addExact(sourceVaporNanos,Math.multiplyExact(low,nanosPerBatch));
+			double pressure=GasPhaseMergeBounds.partialPressureLower(nanos,gasLower,volume);
 			return phase.saturationPressureBound(transition,liquidUpper,true)<pressure;
 		} catch(IllegalArgumentException | ArithmeticException unresolved) { return false; }
 	}

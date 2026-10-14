@@ -66,7 +66,94 @@ public final class GasPhaseInterfaceValidation {
 		var mergingSource = merger.gasState.frame;
 		check(mergingSource.nodeCount()==2 && GasPhaseGeometryEnvelope.capture(mergingSource,merger.gasState.network,null,
 				0,mergingSource.commonCellNode(1))==null,"A possible merger reused an isolated gas inventory/energy certificate");
+		validateFiniteGasBatchBounds();
 		System.out.println("Gas phase microcontact validation passed");
+	}
+
+	private static void validateFiniteGasBatchBounds() {
+		var water=new mmm.thermal.ThermalMaterialDefinition("test:bounds/water",mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.WATER.id(),373.15,0,.1,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(250,300,2000),
+						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(300,800,4180)));
+		var vapor=new mmm.thermal.ThermalMaterialDefinition("test:bounds/vapor",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
+				mmm.fluid.air.BuiltinGasDefinitions.WATER_VAPOR,373.15,2256000,.1,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(250,800,1410)));
+		var air=new mmm.thermal.ThermalMaterialDefinition("test:bounds/air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
+				mmm.fluid.air.BuiltinGasDefinitions.AIR,273.15,0,.025,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(150,800,718)));
+		var transition=new mmm.thermal.ThermalPhaseTransition("test:bounds/boil",water.id(),vapor.id(),373.15,168,168*1700L,
+				mmm.chemistry.ExactRational.of(21000).divide(1<<24),mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS,10000,3000000);
+		var registry=new mmm.thermal.ThermalRegistry(java.util.List.of(water,vapor,air),java.util.List.of(),java.util.List.of(transition),"","");
+		try {
+			for(int sourceCase=0;sourceCase<3;sourceCase++) {
+				boolean existingVapor=sourceCase==1, completeDepletion=sourceCase==2;
+				var definitions=registry;
+				if(completeDepletion) {
+					var equalEnergyWater=new mmm.thermal.ThermalMaterialDefinition(water.id(),water.carrierKind(),water.carrierId(),300,0,.1,water.caloricSegments());
+					var equalEnergyVapor=new mmm.thermal.ThermalMaterialDefinition(vapor.id(),vapor.carrierKind(),vapor.carrierId(),300,0,.1,
+							java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(250,300,7000),
+									new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(300,800,5000)));
+					var hotAir=new mmm.thermal.ThermalMaterialDefinition(air.id(),air.carrierKind(),air.carrierId(),400,0,.025,air.caloricSegments());
+					definitions=new mmm.thermal.ThermalRegistry(java.util.List.of(equalEnergyWater,equalEnergyVapor,hotAir),java.util.List.of(),java.util.List.of(transition),"","");
+				}
+				byte[] masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=0;
+				var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),32);
+				float volume=completeDepletion?mmm.granular.SolidVolume.toCellVolume(8*168):.5F;
+				domain.restoreParticleState(new FlipParticleState(2,2,2,.5F,1,volume,new float[]{.25F,.125F,.25F,volume},new float[3],masks));domain.sealDomainBoundary();
+				domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());domain.bootstrapGasState("");
+				int node=domain.gasState.frame.commonCellNode(0);
+				var phase=new mmm.thermal.GasLiquidPhaseModel(definitions,domain.gasState.network.registry());
+				if(existingVapor) domain.gasState.network.commitPhaseMutation(domain.gasState.network.planPhaseSource(node,phase.gasBatch(transition,1)));
+				domain.bindThermal(definitions,new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)),completeDepletion||existingVapor?400:300);
+				if(completeDepletion||existingVapor)domain.setThermalTemperatureInCell(0,0,0,300);
+				var stage=ThermochemistryStageAssembly.create(domain).gasPhase();
+				var field=GasLiquidPhaseChangeStage.class.getDeclaredField("support");field.setAccessible(true);
+				var support=(PhaseChangeStageSupport)field.get(stage);
+				support.ensureGrid();support.refreshGasTopology();domain.thermalState.preparePhaseScan(domain.thermalMarkerContext());
+				var contact=new GasPhaseInterfaceResolver(support).resolve(0,transition,phase,domain.gasState,300).getFirst();
+				var thermalCell=domain.thermalState.preparePhaseCandidateCell(0,domain.thermalMarkerContext());
+				var envelope=GasPhaseGeometryEnvelope.forBoiling(support,0,node);
+				var bounds=GasBoilingBatchBounds.forBoiling(support,0,node,0,transition,thermalCell,300,new boolean[0],255,phase,envelope);
+				check(bounds!=null,"Finite air lost its complete-source interval bound");
+				var prepare=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("prepareBoilInventory")).findFirst().orElseThrow();prepare.setAccessible(true);
+				var complete=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("completeBoil")).findFirst().orElseThrow();complete.setAccessible(true);
+				var constructor=complete.getParameterTypes()[6].getDeclaredConstructor(GasLiquidPhaseChangeStage.class);constructor.setAccessible(true);
+				var source=constructor.newInstance(stage);var planes=GasRuntimeGeometry.prepareBoilContactPlanes(support,0,contact);
+				Object[] candidates=new Object[9];int largest=0;
+				for(int batch=1;batch<=8;batch++) {
+					var inventory=prepare.invoke(stage,0,node,0,transition,phase,thermalCell,new boolean[0],300.0,(long)batch,contact);
+					candidates[batch]=complete.invoke(stage,0,node,transition,phase,contact,planes,source,inventory);
+					if(candidates[batch]!=null)largest=batch;
+				}
+				check(largest==(completeDepletion?8:existingVapor?0:1),"Finite-air comparison lost its partial/complete physical candidate: source="+sourceCase+" largest="+largest);
+				if(completeDepletion)check(!bounds.excluded(1,8) && !bounds.excluded(8,8),"Complete depletion used a fictitious remaining liquid temperature");
+				int excluded=0;
+				for(int low=1;low<=8;low++)for(int high=low;high<=8;high++)if(bounds.excluded(low,high)) {
+					excluded++;for(int batch=low;batch<=high;batch++)check(candidates[batch]==null,"Finite-air bounds excluded a complete physical batch");
+				}
+				var maximum=GasPhaseBatchSearch.maximum(8,batch->candidates[(int)batch],bounds::excluded);
+				check((completeDepletion?excluded==0:excluded>0) && (largest==0?maximum==null:maximum==candidates[largest]),"Finite-air interval search changed the exhaustive maximum");
+				if(completeDepletion) {
+					var model=new mmm.thermal.GasThermalModel(definitions,domain.gasState.network.registry());
+					var stock=domain.gasState.network.inventory(node);double energy=domain.thermalState.gasNodeEnergy(node,domain.gasState.network);
+					var cold=new GasPhaseMergeBounds.Stock(stock,model.internalEnergyAtTemperature(stock,200),mmm.units.SignedDyadic.of(.125));
+					var born=new mmm.thermal.ThermalCaloricBounds.PortionRange(definitions.materialHandle(vapor.id()),
+							transition.massMuPerBatch().toDouble(),transition.massMuPerBatch().multiply(8).toDouble(),java.util.Map.of());
+					var caloric=new mmm.thermal.ThermalCaloricBounds(definitions);double error=caloric.forwardRoundingBound(born,300);
+					double rise=caloric.temperatureWithEnergyGainLower(java.util.List.of(born),300,
+							mmm.units.SignedDyadic.of(born.massHigh()).multiply(mmm.units.SignedDyadic.of(5000)).toDouble());
+					check(rise==Math.nextDown(Math.nextDown(301.0)),"Energy-gain lower bound lost its actual caloric segment or inverter allowance");
+					for(boolean optional:new boolean[]{false,true}) {
+						var merged=new GasPhaseMergeBounds(definitions,model,optional?java.util.List.of(cold):java.util.List.of());
+						double lower=merged.temperatureLower(stock,energy,born,300,error);
+						check(lower>(optional?200:300),"Mandatory heat surplus did not strengthen the minimum-temperature bound");
+						for(int batch=1;batch<=8;batch++)for(int subset=0;subset<=(optional?1:0);subset++) {
+							var birth=phase.gasBatch(transition,batch);var inventory=stock.merge(birth);
+							var total=mmm.units.SignedDyadic.of(energy).add(mmm.units.SignedDyadic.of(model.internalEnergyAtTemperature(birth,300)));
+							if(subset==1){inventory=inventory.merge(cold.inventory());total=total.add(mmm.units.SignedDyadic.of(cold.energy()));}
+							check(lower<=model.state(inventory,total.toDouble()).temperatureK(),"Mandatory heat surplus exceeded an actual optional-subset mixture temperature");
+						}
+					}
+				}
+			}
+		} catch(ReflectiveOperationException failure) { throw new AssertionError("Finite-air production-candidate comparison failed",failure); }
 	}
 
 	private static FluidDomain domain(int mask, boolean peerOpen, float[] markers) {

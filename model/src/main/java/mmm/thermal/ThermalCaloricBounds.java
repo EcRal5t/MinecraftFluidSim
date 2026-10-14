@@ -100,6 +100,19 @@ public final class ThermalCaloricBounds {
 		} catch (IllegalArgumentException | ArithmeticException unresolved) { return unboundedTemperature(upper); }
 	}
 
+	/** Maximum masses bound the absorbed-energy curve and therefore give a temperature-rise lower bound. */
+	public double temperatureWithEnergyGainLower(List<PortionRange> portions, double initial, double gain) {
+		try {
+			if (!(Double.isFinite(gain) && gain >= 0 && Double.isFinite(initial)
+					&& initial >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) return unboundedTemperature(false);
+			var maximum = portions.stream().map(portion -> new PortionRange(portion.materialHandle(),
+					portion.massHigh(), portion.massHigh(), Map.of())).toList();
+			SignedDyadic anchor = exactCurveEnergy(maximum, initial, false);
+			return anchor == null ? unboundedTemperature(false)
+					: boundedTemperature(maximum, anchor.add(SignedDyadic.of(gain)), false, initial);
+		} catch (IllegalArgumentException | ArithmeticException unresolved) { return unboundedTemperature(false); }
+	}
+
 	private static SignedDyadic abs(SignedDyadic value) { return value.signum() < 0 ? value.negate() : value; }
 	private static SignedDyadic rounding(SignedDyadic magnitude) {
 		return SignedDyadic.of(Math.ulp(Math.nextUp(magnitude.toDouble())));

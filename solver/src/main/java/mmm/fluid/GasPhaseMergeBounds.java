@@ -28,21 +28,41 @@ final class GasPhaseMergeBounds {
 	}
 
 	double temperatureLower(GasInventory mandatory, double energy) {
+		return temperatureLower(mandatory, energy, null, Double.NaN, 0);
+	}
+
+	double temperatureLower(GasInventory mandatory, double energy, PortionRange born, double bornTemperature, double bornError) {
 		try {
-			var stocks = new ArrayList<Stock>(); stocks.add(new Stock(mandatory, energy, SignedDyadic.ZERO)); stocks.addAll(possible);
-			double initial = Double.POSITIVE_INFINITY;
+			var stocks = new ArrayList<Stock>();
+			if (!mandatory.isEmpty()) stocks.add(new Stock(mandatory, energy, SignedDyadic.ZERO));
+			stocks.addAll(possible);
+			double initial = born == null ? Double.POSITIVE_INFINITY : bornTemperature;
 			for (var stock : stocks) initial = Math.min(initial, gas.state(stock.inventory(), stock.energy()).temperatureK());
-			SignedDyadic error = SignedDyadic.ZERO, energyMagnitude = SignedDyadic.ZERO;
+			SignedDyadic error = SignedDyadic.ZERO, energyMagnitude = SignedDyadic.ZERO, gain = SignedDyadic.ZERO;
 			var masses = new TreeMap<Integer, SignedDyadic>();
 			var counts = new TreeMap<Integer, Integer>();
 			var species = new TreeMap<Integer, TreeMap<String, QuantaRange>>();
-			for (var stock : stocks) {
-				var portions = portions(stock.inventory());
+			var ranges = new ArrayList<List<PortionRange>>();
+			for (var stock : stocks) ranges.add(portions(stock.inventory()));
+			if (born != null) ranges.add(List.of(born));
+			for (int index = 0; index < ranges.size(); index++) {
+				var portions = ranges.get(index);
 				// Positive deficits enclose every subset, including none of the optional stocks.
-				SignedDyadic deficit = SignedDyadic.of(caloric.curveEnergyAtTemperature(portions, initial, true))
-						.subtract(SignedDyadic.of(stock.energy()));
-				if (deficit.signum() > 0) error = error.add(deficit);
-				energyMagnitude = energyMagnitude.add(SignedDyadic.of(Math.abs(stock.energy())));
+				if (index < stocks.size()) {
+					var stock = stocks.get(index);
+					SignedDyadic deficit = SignedDyadic.of(caloric.curveEnergyAtTemperature(portions, initial, true))
+							.subtract(SignedDyadic.of(stock.energy()));
+					if (deficit.signum() > 0) error = error.add(deficit);
+					else if (index == 0 && !mandatory.isEmpty()) gain = gain.subtract(deficit);
+					energyMagnitude = energyMagnitude.add(SignedDyadic.of(Math.abs(stock.energy())));
+				} else {
+					gain = gain.add(SignedDyadic.of(born.massLow()).multiply(caloric.specificCurveEnergy(born.materialHandle(), bornTemperature)
+							.subtract(caloric.specificCurveEnergy(born.materialHandle(), initial))));
+					error = error.add(SignedDyadic.of(bornError));
+					energyMagnitude = energyMagnitude.add(SignedDyadic.of(Math.nextUp(Math.max(
+							Math.abs(caloric.energyAtTemperature(portions, bornTemperature, false)),
+							Math.abs(caloric.energyAtTemperature(portions, bornTemperature, true))))));
+				}
 				for (var portion : portions) {
 					int handle = portion.materialHandle();
 					masses.merge(handle, SignedDyadic.of(portion.massHigh()), SignedDyadic::add);
@@ -53,6 +73,8 @@ final class GasPhaseMergeBounds {
 					error = error.add(SignedDyadic.of(caloric.referenceRoundingBound(portion)));
 				}
 			}
+			var mergeErrors = new TreeMap<Integer, Double>();
+			var maximumSlope = new ArrayList<PortionRange>();
 			for (var entry : masses.entrySet()) {
 				int handle = entry.getKey();
 				double sumUpper = Math.nextUp(entry.getValue().toDouble());
@@ -60,8 +82,10 @@ final class GasPhaseMergeBounds {
 				// the exact total; this also covers a rounding across its final binade.
 				SignedDyadic massError = SignedDyadic.of(Math.ulp(2 * sumUpper))
 						.multiply(SignedDyadic.of(counts.get(handle), 0));
+				mergeErrors.put(handle, Math.nextUp(massError.toDouble()));
 				double massUpper = Math.nextUp(entry.getValue().add(massError).toDouble());
 				var combined = new PortionRange(handle, 0, massUpper, species.get(handle));
+				maximumSlope.add(combined);
 				SignedDyadic specific = caloric.specificCurveEnergy(handle, initial);
 				if (specific.signum() < 0) specific = specific.negate();
 				error = error.add(massError.multiply(specific))
@@ -70,7 +94,16 @@ final class GasPhaseMergeBounds {
 			// planAfterPhase defers volume work: complete source energies are summed exactly,
 			// and only the destination raw U is rounded. Whole-stock partition keeps each U.
 			error = error.add(SignedDyadic.of(Math.ulp(Math.nextUp(energyMagnitude.toDouble()))));
-			return caloric.temperatureWithEnergyError(portions(mandatory), initial, Math.nextUp(error.toDouble()), false);
+			var mandatorySlope = new ArrayList<PortionRange>(portions(mandatory));
+			if (born != null) {
+				mandatorySlope.add(born);
+				mandatorySlope.replaceAll(portion -> new PortionRange(portion.materialHandle(), Math.max(0,
+						Math.nextDown(portion.massLow() - mergeErrors.get(portion.materialHandle()))), portion.massHigh(), portion.species()));
+			}
+			double lower = caloric.temperatureWithEnergyError(mandatorySlope, initial, Math.nextUp(error.toDouble()), false);
+			SignedDyadic surplus = gain.subtract(error);
+			return surplus.signum() <= 0 ? lower : Math.max(lower, caloric.temperatureWithEnergyGainLower(
+					maximumSlope, initial, Math.max(0, Math.nextDown(surplus.toDouble()))));
 		} catch (IllegalArgumentException | ArithmeticException unresolved) { return Double.NaN; }
 	}
 
