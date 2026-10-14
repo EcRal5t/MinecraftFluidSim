@@ -561,7 +561,15 @@ public final class FlipFluidFreeSurfaceValidation {
 	private static void liquidPlaneRetainsSmallInventoryGeometry() {
 		for (float amount : new float[] {Float.MIN_VALUE, Math.scalb(1.0F, -25), Math.nextUp(.125F), Math.nextDown(1.0F)}) {
 			var domain = new FluidDomain(2, 2, 2, strictConfig());
-			domain.setVolume(0, 0, 0, amount);
+			int count = ConservativeMarkerSampling.targetMarkers(amount);
+			float[] positions = new float[4 * count]; float h = domain.config.cellSize();
+			for (int p = 0; p < count; p++) {
+				positions[4 * p] = h * (.25F + .5F * (p & 1));
+				positions[4 * p + 1] = h * (.25F + .5F * (p >> 1 & 1));
+				positions[4 * p + 2] = h * (.25F + .5F * (p >> 2 & 1));
+				positions[4 * p + 3] = amount / count;
+			}
+			domain.restoreParticleState(new FlipParticleState(2, 2, 2, h, count, amount, positions, new float[3 * count], new byte[8]));
 			check(domain.particleCount() == ConservativeMarkerSampling.targetMarkers(amount), "Positive initial inventory lost its carrier");
 			check(mmm.units.SignedDyadic.of(amount).equals(mmm.units.SignedDyadic.sum(
 					domain.particles.directArrays().volume, domain.particleCount())), "Cell initialization discarded positive inventory");
@@ -569,11 +577,21 @@ public final class FlipFluidFreeSurfaceValidation {
 			if (amount >= Float.MIN_NORMAL) {
 				for (int p = 0; p < domain.particleCount(); p++) domain.particles.setVelocityY(p, -.5F);
 				domain.rebuildGridFromParticles();
-				for (int f = 0; f < domain.mac.p2gWeightY.length; f++)
+				float[] sums = new float[domain.mac.velocityY.length], weights = new float[sums.length];
+				for (int p = 0; p < domain.particleCount(); p++) {
+					float x = domain.particles.positionX(p), y = domain.particles.positionY(p), z = domain.particles.positionZ(p);
+					domain.splatFaceField(sums, weights, 1, x / h, y / h, z / h, -.5F, domain.particles.volume(p));
+					check(domain.sampleVelocity(x, y, z).y() == -.5F, "Current marker field diluted its positive low-weight source velocity");
+				}
+				FluidDomainStepCoordinator.normalize(sums, weights); boolean observed = false;
+				for (int f = 0; f < weights.length; f++)
 					if (f / domain.sizeX % (domain.sizeY + 1) > 0 && f / domain.sizeX % (domain.sizeY + 1) < domain.sizeY
-							&& domain.mac.p2gWeightY[f] > 0 && domain.geometry.cutCells.openFaceField(1)[f] > 0)
-						check(Math.abs(domain.mac.velocityY[f] + .5F) <= 2 * Math.ulp(.5F),
+							&& weights[f] > 0 && domain.geometry.cutCells.openFaceField(1)[f] > 0) {
+						observed = true;
+						check(Math.abs(sums[f] + .5F) <= 2 * Math.ulp(.5F),
 								"Positive low-weight P2G support diluted a uniform carrier velocity");
+					}
+				check(observed, "Positive low-weight P2G fixture has no open interior face support");
 			}
 		}
 		for (double scale : new double[] {1, 1e-7, 1e-11, 1e-30}) {

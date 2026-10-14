@@ -144,12 +144,13 @@ final class LiquidStratificationValidation {
 		double[] densities = new double[advected.cellCount];
 		var beforeProperties = advected.thermalBuoyancyProperties();
 		for (int cell = 0; cell < densities.length; cell++) densities[cell] = beforeProperties.density(cell);
-		for (int z = 1; z < 3; z++) for (int y = 1; y < 5; y++) for (int x = 1; x <= 5; x++)
-			advected.mac.velocityX[advected.xFaceIndex(x, y, z)] = (float) (-0.1 * Math.sin(Math.PI * (x - 1) / 4)
-					* Math.cos(Math.PI * (y - 0.5) / 4));
-		for (int z = 1; z < 3; z++) for (int y = 1; y <= 5; y++) for (int x = 1; x < 5; x++)
-			advected.mac.velocityY[advected.yFaceIndex(x, y, z)] = (float) (0.1 * Math.cos(Math.PI * (x - 0.5) / 4)
-					* Math.sin(Math.PI * (y - 1) / 4));
+		for (int marker = 0; marker < advected.particleCount(); marker++) {
+			double x = Math.PI * (advected.particles.positionX(marker) / advected.config.cellSize() - 1) / 4;
+			double y = Math.PI * (advected.particles.positionY(marker) / advected.config.cellSize() - 1) / 4;
+			advected.particles.setVelocityX(marker, (float) (-0.1 * Math.sin(x) * Math.cos(y)));
+			advected.particles.setVelocityY(marker, (float) (0.1 * Math.cos(x) * Math.sin(y)));
+		}
+		advected.rebuildGridFromParticles(); advected.gridToParticleStage.prepareAdvectionCells();
 		Inventory advectedInventory = Inventory.capture(advected);
 		double[] energies = advected.exportThermalParticleState().copyInternalEnergy();
 		advected.particleAdvectionStage.advect(0.001F);
