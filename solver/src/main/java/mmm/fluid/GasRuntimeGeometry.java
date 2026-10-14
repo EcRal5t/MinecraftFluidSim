@@ -104,13 +104,25 @@ final class GasRuntimeGeometry {
 		private final FlipCutCellGeometry cut;
 		private final boolean[] solid;
 		private final List<Integer> cells;
+		private final GasPhaseInterfaceResolver.Candidate contact;
+		final boolean unchangedContact;
 
 		private BoilContactPlanes(GasDomainState owner, int editedCell, List<Integer> cells,
-		                          FlipCutCellGeometry cut, boolean[] solid) {
+		                          FlipCutCellGeometry cut, boolean[] solid, GasPhaseInterfaceResolver.Candidate contact) {
 			this.owner = owner; this.source = owner.frame; this.editedCell = editedCell;
 			this.cells = List.copyOf(cells); this.cut = cut; this.solid = solid;
+			this.contact = contact;
+			int[] size = {source.geometry.sizeX(), source.geometry.sizeY(), source.geometry.sizeZ()};
+			// A captured positive piece survives when its own tuple and actual gradient inputs stay unchanged.
+			this.unchangedContact = cells.stream().anyMatch(cell -> cell != editedCell
+					&& (Math.abs(cell % size[0] - editedCell % size[0])
+					+ Math.abs(cell / size[0] % size[1] - editedCell / size[0] % size[1])
+					+ Math.abs(cell / (size[0] * size[1]) - editedCell / (size[0] * size[1])) != 1
+					|| !source.cellDependsOnNeighborFractions(cell)));
 			this.scratch = source.phase.contactScratch();
 		}
+
+		boolean matchesContact(GasPhaseInterfaceResolver.Candidate expected) { return owner.frame == source && contact == expected; }
 
 		FlipPressurePhaseGeometry rebuild(PhaseLiquidGeometryEdit edit) {
 			if (owner.frame != source || edit.cell() != editedCell || edit.collisionMask() != cut.mask(editedCell))
@@ -147,7 +159,7 @@ final class GasRuntimeGeometry {
 			}
 			var cut = new FlipCutCellGeometry(state.sizeX(), state.sizeY(), state.sizeZ());
 			cut.restoreMicroMasks(state.geometry().cutCells.copyMicroMasks());
-			return new BoilContactPlanes(support.gasState(), editedCell, List.copyOf(cells), cut, state.geometry().solid.clone());
+			return new BoilContactPlanes(support.gasState(), editedCell, List.copyOf(cells), cut, state.geometry().solid.clone(), contact);
 		} catch (IllegalArgumentException | ArithmeticException unresolved) { return null; }
 	}
 

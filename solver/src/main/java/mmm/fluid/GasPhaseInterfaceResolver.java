@@ -82,7 +82,7 @@ final class GasPhaseInterfaceResolver {
 
 	boolean mayKeepBoilContact(GasRuntimeGeometry.BoilContactPlanes prepared, PhaseLiquidGeometryEdit edit,
 	                          Candidate source) {
-		if (prepared == null) return true;
+		if (prepared == null || !prepared.matchesContact(source) || prepared.unchangedContact) return true;
 		try {
 			var phase = prepared.rebuild(edit);
 			for (int piece : source.contactPieces()) {

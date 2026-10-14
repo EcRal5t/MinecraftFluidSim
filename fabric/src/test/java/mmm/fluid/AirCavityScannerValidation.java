@@ -295,7 +295,17 @@ public final class AirCavityScannerValidation {
 					}
 				}
 				var resolver=new GasPhaseInterfaceResolver(support);
+				boolean witness=group.getValue().stream().anyMatch(piece->{
+					int cell=piece/8,sx=source.geometry().sizeX(),sy=source.geometry().sizeY();
+					int x=cell%sx,y=cell/sx%sy,z=cell/(sx*sy),ex=edit.cell()%sx,ey=edit.cell()/sx%sy,ez=edit.cell()/(sx*sy);
+					boolean adjacent=x==ex&&y==ey&&Math.abs(z-ez)==1 || x==ex&&z==ez&&Math.abs(y-ey)==1 || y==ey&&z==ez&&Math.abs(x-ex)==1;
+					return cell!=edit.cell()&&(!adjacent||!source.cellDependsOnNeighborFractions(cell));
+				});
+				check(prepared.unchangedContact==witness,"A gradient-dependent or edited contact acquired an unchanged-piece witness");
+				var bracket=local.offsetBracket(group.getValue().getFirst()/8,group.getValue().getFirst()&7);
 				check(resolver.mayKeepBoilContact(prepared,edit,contact)==alive,"Local contact survival differs from full same-micro intersections");
+				if(witness)check(bracket==local.offsetBracket(group.getValue().getFirst()/8,group.getValue().getFirst()&7),
+						"An unchanged positive contact unnecessarily rebuilt the local PLIC scratch");
 				domain.gasState.frame=null;
 				check(resolver.mayKeepBoilContact(prepared,edit,contact),"A changed preparing frame acquired a zero-contact rejection");
 				domain.gasState.frame=source;
