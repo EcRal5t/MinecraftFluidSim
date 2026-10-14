@@ -329,6 +329,25 @@ public final class GranularDepositStore {
 	}
 
 	private SolidPortion takeInternal(int cell, int material, int composition, long requestedSvq, boolean allowReactivePartial) {
+		return commitTake(planTakeInternal(cell, material, composition, requestedSvq, allowReactivePartial));
+	}
+	static final class TakePlan {
+		final GranularDepositStore owner;
+		final long revision;
+		final int cell, entry, previous;
+		final SolidPortion portion;
+		final double remainingMass;
+		final CellPacking packing;
+		TakePlan(GranularDepositStore owner, int cell, int entry, int previous, SolidPortion portion, double remainingMass, CellPacking packing) {
+			this.owner = owner; revision = owner.mutationRevision; this.cell = cell; this.entry = entry; this.previous = previous;
+			this.portion = portion; this.remainingMass = remainingMass; this.packing = packing;
+		}
+		long remainingBulkVolumeSvq() { return packing.bulkVolumeSvq(); }
+	}
+	TakePlan planTake(int cell, int material, int composition, long requestedSvq) {
+		return planTakeInternal(cell, material, composition, requestedSvq, false);
+	}
+	private TakePlan planTakeInternal(int cell, int material, int composition, long requestedSvq, boolean allowReactivePartial) {
 		SolidPortion result = peekTakeInternal(cell, material, composition, requestedSvq, allowReactivePartial);
 		CellPacking remainingPacking = packing(cell, null, result);
 		requireCell(cell);
@@ -337,15 +356,25 @@ public final class GranularDepositStore {
 			previous = entry; entry = next[entry];
 		}
 		if (entry < 0) throw new IllegalArgumentException("Unknown deposit material group");
+		double remainingMass = result.solidVolumeSvq() == solidVolumeSvq[entry] ? 0
+				: ProportionalDoubleSplit.of(mass[entry], result.solidVolumeSvq(), solidVolumeSvq[entry]).remaining();
+		return new TakePlan(this, cell, entry, previous, result, remainingMass, remainingPacking);
+	}
+	void requireCurrent(TakePlan plan) {
+		if (plan == null || plan.owner != this || plan.revision != mutationRevision)
+			throw new IllegalStateException("Deposit take source changed after planning");
+	}
+	SolidPortion commitTake(TakePlan plan) {
+		requireCurrent(plan);
+		int cell = plan.cell, entry = plan.entry; var result = plan.portion;
 		if (result.solidVolumeSvq() == solidVolumeSvq[entry]) {
-			unlinkAndRelease(cell, previous, entry);
+			unlinkAndRelease(cell, plan.previous, entry);
 		} else {
-			double remainingMass = ProportionalDoubleSplit.of(mass[entry], result.solidVolumeSvq(), solidVolumeSvq[entry]).remaining();
 			solidVolumeSvq[entry] -= result.solidVolumeSvq();
-			mass[entry] = remainingMass;
+			mass[entry] = plan.remainingMass;
 		}
-		porosityQByCell[cell] = remainingPacking.porosityQ();
-		bulkVolumeSvqByCell[cell] = remainingPacking.bulkVolumeSvq();
+		porosityQByCell[cell] = plan.packing.porosityQ();
+		bulkVolumeSvqByCell[cell] = plan.packing.bulkVolumeSvq();
 		mutationRevision++;
 		return result;
 	}

@@ -410,24 +410,73 @@ public final class GranularInventory {
 			int cell, int materialHandle, int compositionHandle, long requestedSvq,
 			float x, float y, float z, float velocityX, float velocityY, float velocityZ
 	) {
-		GranularDepositStore.SolidPortion planned = deposits.peekTake(
-				cell, materialHandle, compositionHandle, requestedSvq);
+		WakePlan plan = planWake(cell, materialHandle, compositionHandle, requestedSvq, x, y, z, velocityX, velocityY, velocityZ);
+		if (plan == null) return false;
+		commitWake(plan); return true;
+	}
+	/** Actual removed inventory, final bed packing and append ordinal, before any owner writes. */
+	public static final class WakePlan {
+		private final GranularInventory owner;
+		private final long parcelRevision;
+		private final int appendOrdinal;
+		private final GranularDepositStore.TakePlan take;
+		private final GranularDepositStore.Group source;
+		private final GranularParcelStore.Parcel parcel;
+		private final SolidCompositionPool pool;
+		private final SolidCompositionRecord composition;
+		private final EnergyAdapter adapter;
+		private final EnergyPlan energy;
+		private WakePlan(GranularInventory owner, GranularDepositStore.TakePlan take, GranularDepositStore.Group source,
+		                 GranularParcelStore.Parcel parcel, SolidCompositionRecord composition, EnergyPlan energy) {
+			this.owner = owner; parcelRevision = owner.parcels.mutationRevision(); appendOrdinal = owner.parcels.count();
+			this.take = take; this.source = source; this.parcel = parcel; pool = owner.compositions; this.composition = composition;
+			adapter = owner.thermalEnergy; this.energy = energy;
+		}
+		public int cell() { return take.cell; }
+		public int appendOrdinal() { return appendOrdinal; }
+		public GranularDepositStore.SolidPortion moved() { return take.portion; }
+		public GranularDepositStore.Group source() { return source; }
+		public GranularParcelStore.Parcel parcel() { return parcel; }
+		public long remainingBedBulkVolumeSvq() { return take.remainingBulkVolumeSvq(); }
+	}
+	public WakePlan planWake(int cell, int materialHandle, int compositionHandle, long requestedSvq,
+	                         float x, float y, float z, float velocityX, float velocityY, float velocityZ) {
+		var take = deposits.planTake(cell, materialHandle, compositionHandle, requestedSvq);
+		var planned = take.portion;
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(x, y, z,
 				velocityX, velocityY, velocityZ, planned.solidVolumeSvq(), planned.mass(),
 				planned.materialHandle(), planned.solidCompositionHandle(), 0, (byte) 0);
-		if (!parcels.canAdd(parcel)) return false;
+		if (!parcels.canAdd(parcel)) return null;
 		GranularDepositStore.Group source = deposits.matchingGroup(cell, materialHandle,
 				group -> group.solidCompositionHandle() == compositionHandle);
 		if (source == null) throw new IllegalStateException("Granular wake source changed before commit");
-		if (thermalEnergy != null) thermalEnergy.requireDepositWake(cell, materialHandle, compositionHandle,
+		SolidCompositionRecord composition = null;
+		if (compositionHandle != 0) {
+			if (compositions == null) throw new IllegalStateException("Granular wake composition pool is missing");
+			composition = compositions.record(compositionHandle);
+			if (!compositionMassClose(composition.totalMass(compositions.registry()), planned.mass()))
+				throw new IllegalStateException("Wake source composition does not match its mechanical mass");
+		}
+		EnergyPlan energy = thermalEnergy == null ? null : thermalEnergy.planDepositWake(cell, materialHandle, compositionHandle,
 				planned.solidVolumeSvq(), source.solidVolumeSvq());
-		GranularDepositStore.SolidPortion committed = deposits.take(
-				cell, materialHandle, compositionHandle, requestedSvq);
-		parcels.add(parcel);
-		if (thermalEnergy != null) thermalEnergy.commitDepositWake(cell, materialHandle, compositionHandle,
-				planned.solidVolumeSvq(), source.solidVolumeSvq());
-		if (!committed.equals(planned)) throw new IllegalStateException("Granular wake plan changed before commit");
-		return true;
+		if (thermalEnergy != null && energy == null) return null;
+		return new WakePlan(this, take, source, parcel, composition, energy);
+	}
+	public void requireCurrent(WakePlan plan) {
+		if (plan == null || plan.owner != this || plan.parcelRevision != parcels.mutationRevision()
+				|| plan.appendOrdinal != parcels.count() || plan.pool != compositions || plan.adapter != thermalEnergy)
+			throw new IllegalStateException("Granular wake owners changed after planning");
+		deposits.requireCurrent(plan.take);
+		if (!parcels.canAdd(plan.parcel)) throw new IllegalStateException("Granular wake append capacity changed after planning");
+		if (plan.composition != null && (!compositions.isLive(plan.parcel.solidCompositionHandle())
+				|| !plan.composition.equals(compositions.record(plan.parcel.solidCompositionHandle()))))
+			throw new IllegalStateException("Granular wake composition changed after planning");
+		if (plan.energy != null) plan.energy.requireCurrent();
+	}
+	public void commitWake(WakePlan plan) {
+		requireCurrent(plan);
+		deposits.commitTake(plan.take); parcels.appendPrepared(plan.parcel);
+		if (plan.energy != null) plan.energy.commit();
 	}
 
 	public long totalSolidVolumeSvq() {
@@ -490,8 +539,7 @@ public final class GranularInventory {
 		boolean canActiveMerge(int first, int second, GranularParcelStore.Parcel merged,
 		                       SolidCompositionRecord composition);
 		void commitActiveMerge(int first, int second);
-		void requireDepositWake(int cell, int material, int composition, long takenSvq, long totalSvq);
-		void commitDepositWake(int cell, int material, int composition, long takenSvq, long totalSvq);
+		EnergyPlan planDepositWake(int cell, int material, int composition, long takenSvq, long totalSvq);
 		void clearExternal();
 	}
 	public record DepositTransfer(int active, int cell, int material, int composition) { }

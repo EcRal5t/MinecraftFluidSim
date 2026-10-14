@@ -358,19 +358,21 @@ public final class GranularDepositDynamics {
 			energyDeferred[column] = true;
 			return false;
 		}
+		GranularInventory.WakePlan wake;
+		try { wake = inventory.planWake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion, px, py, pz, 0, 0, 0); }
+		catch (IllegalArgumentException unavailableSplit) { return false; }
+		if (wake == null) return false;
 		if (!admission.spend(environment.wakeGeometryWork())
 				|| !environment.planWake(surfaceCell, erosion, px, py, pz)) return false;
 		try {
 			// Bed material starts at rest; the next coupled mechanical solve supplies acceleration
 			// and its equal liquid reaction. Copying carrier velocity here would create momentum.
-			boolean woken = inventory.wake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion,
-					px, py, pz, 0, 0, 0);
-			if (woken) { admission.append(parcels.count() - 1); environment.onSolidChanged(surfaceCell); }
-			else environment.cancelWake(surfaceCell, erosion, px, py, pz);
-			return woken;
-		} catch (IllegalArgumentException compositionSplitUnavailable) {
+			inventory.commitWake(wake);
+			admission.append(wake.appendOrdinal()); environment.onSolidChanged(surfaceCell);
+			return true;
+		} catch (RuntimeException failure) {
 			environment.cancelWake(surfaceCell, erosion, px, py, pz);
-			return false;
+			throw failure;
 		}
 	}
 

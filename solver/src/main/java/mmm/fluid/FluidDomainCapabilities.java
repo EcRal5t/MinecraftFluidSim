@@ -315,15 +315,10 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			@Override public void commitActiveMerge(int first, int second) {
 				thermalState.commitActiveMerge(first, second);
 			}
-			@Override public void requireDepositWake(
+			@Override public GranularInventory.EnergyPlan planDepositWake(
 					int cell, int material, int composition, long takenSvq, long totalSvq
 			) {
-				thermalState.requireDepositWake(key(cell, material, composition), takenSvq, totalSvq);
-			}
-			@Override public void commitDepositWake(
-					int cell, int material, int composition, long takenSvq, long totalSvq
-			) {
-				thermalState.commitDepositWake(key(cell, material, composition), takenSvq, totalSvq);
+				return thermalState.planDepositWake(key(cell, material, composition), takenSvq, totalSvq);
 			}
 			@Override public void clearExternal() { thermalState.clearGranularExternal(); }
 		};

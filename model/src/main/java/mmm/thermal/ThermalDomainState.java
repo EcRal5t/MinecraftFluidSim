@@ -1,6 +1,7 @@
 package mmm.thermal;
 
 import mmm.chemistry.ChemicalMixtureRecord;
+import mmm.granular.GranularInventory;
 import mmm.fluid.air.AirNetwork;
 import mmm.fluid.air.GasInventory;
 import mmm.fluid.air.GasRegistry;
@@ -522,11 +523,15 @@ public final class ThermalDomainState {
 		return granularState.canActiveMerge(first, second, material, mass, composition);
 	}
 	public void commitActiveMerge(int first, int second) { granularState.commitActiveMerge(first, second); }
-	public void requireDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
-		granularState.requireDepositWake(source, takenSvq, totalSvq);
-	}
-	public void commitDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
-		granularState.commitDepositWake(source, takenSvq, totalSvq);
+	public GranularInventory.EnergyPlan planDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
+		Revision before = thermalRevision(); var plan = granularState.planDepositWake(source, takenSvq, totalSvq);
+		return new GranularInventory.EnergyPlan() {
+			@Override public void requireCurrent() {
+				if (!matchesThermalRevision(before)) throw new IllegalStateException("Thermal inventory changed after wake planning");
+				plan.requireCurrent();
+			}
+			@Override public void commit() { requireCurrent(); plan.commit(); }
+		};
 	}
 	public void requireDepositMove(
 			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,

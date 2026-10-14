@@ -150,17 +150,20 @@ public final class GranularEnergyState {
 		revision++;
 	}
 
-	void requireDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
-		granularEnergy.previewDepositTake(source, takenSvq, totalSvq);
-		granularEnergy.requireAddActive(0.0);
-	}
-
-	void commitDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
-		SignedDyadic before = granularEnergy.exactEnergy();
-		double energy = granularEnergy.takeDeposit(source, takenSvq, totalSvq);
-		granularEnergy.addActive(energy);
-		audit.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
-		revision++;
+	GranularInventory.EnergyPlan planDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
+		var columnPlan = granularEnergy.planDepositWake(source, takenSvq, totalSvq);
+		long baseRevision = revision, auditRevision = audit.revision();
+		var auditAfter = audit.ledger().withRoundoff(columnPlan.roundoff);
+		return new GranularInventory.EnergyPlan() {
+			@Override public void requireCurrent() {
+				if (revision != baseRevision || audit.revision() != auditRevision)
+					throw new IllegalStateException("Granular thermal state changed after wake planning");
+				granularEnergy.requireCurrent(columnPlan);
+			}
+			@Override public void commit() {
+				requireCurrent(); granularEnergy.commitDepositWake(columnPlan); audit.replace(auditAfter); revision++;
+			}
+		};
 	}
 
 	void requireDepositMove(

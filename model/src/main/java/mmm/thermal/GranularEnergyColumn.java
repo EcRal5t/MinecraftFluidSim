@@ -218,6 +218,34 @@ public final class GranularEnergyColumn {
 	double previewDepositTake(DepositKey key, long takenSvq, long totalSvq) {
 		return proportionalSplit(depositEnergy(key), takenSvq, totalSvq).removed();
 	}
+	static final class DepositWakePlan {
+		final GranularEnergyColumn owner;
+		final DepositKey source;
+		final int ordinal;
+		final double before, moved, remaining;
+		final boolean whole;
+		final SignedDyadic roundoff;
+		DepositWakePlan(GranularEnergyColumn owner, DepositKey source, double before, ProportionalDoubleSplit split, boolean whole) {
+			this.owner = owner; this.source = source; ordinal = owner.activeCount; this.before = before;
+			moved = split.removed(); remaining = split.remaining(); this.whole = whole;
+			roundoff = SignedDyadic.of(moved).add(SignedDyadic.of(remaining)).subtract(SignedDyadic.of(before));
+		}
+	}
+	DepositWakePlan planDepositWake(DepositKey key, long takenSvq, long totalSvq) {
+		double energy = depositEnergy(key); var split = proportionalSplit(energy, takenSvq, totalSvq);
+		requireAddActive(split.removed()); ensureActiveCapacity(activeCount + 1);
+		return new DepositWakePlan(this, key, energy, split, takenSvq == totalSvq);
+	}
+	void requireCurrent(DepositWakePlan plan) {
+		if (plan == null || plan.owner != this || plan.ordinal != activeCount
+				|| Double.doubleToRawLongBits(plan.before) != Double.doubleToRawLongBits(depositEnergy(plan.source)))
+			throw new IllegalStateException("Granular thermal wake source changed after planning");
+	}
+	void commitDepositWake(DepositWakePlan plan) {
+		requireCurrent(plan);
+		if (plan.whole) depositEnergy.remove(plan.source); else depositEnergy.put(plan.source, plan.remaining);
+		activeEnergy[activeCount++] = plan.moved;
+	}
 	public double previewDepositRemaining(DepositKey key, long takenSvq, long totalSvq) {
 		return proportionalSplit(depositEnergy(key), takenSvq, totalSvq).remaining();
 	}

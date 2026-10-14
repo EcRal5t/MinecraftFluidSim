@@ -61,6 +61,10 @@ public final class GranularParcelStore {
 	public int add(Parcel parcel) {
 		validate(parcel);
 		if (count == capacity) throw new BudgetExceededException("Active granular parcel budget exceeded");
+		return appendPrepared(parcel);
+	}
+	/** Inventory plans have already validated the parcel and its unchanged append slot. */
+	int appendPrepared(Parcel parcel) {
 		int index = count++;
 		write(index, parcel);
 		mutationRevision++;

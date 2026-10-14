@@ -135,6 +135,32 @@ public final class GranularBedWakeValidation {
 		require(domain.tryInsertExactGranular(1, 0, 1, sand, 0, svq, mass).inserted(), "Occupied wake fixture rejected its retained parcel");
 		domain.ensureGrid();
 		occupiedWakePointKeepsState(domain);
+		var inventory = domain.granularState.inventory; int bedCell = domain.cellIndex(1, 0, 1);
+		require(inventory.depositParcel(0, bedCell, SolidVolume.SVQ_PER_CELL), "thermal wake plan fixture failed to retain its bed energy");
+		var plan = inventory.planWake(bedCell, sand, 0, svq, .75F, .25F, .75F, 0, 0, 0);
+		domain.setThermalTemperatureInCell(1, 1, 1, 303.15);
+		long bedRevision = domain.granularState.deposits.mutationRevision(), parcelRevision = domain.granularState.parcels.mutationRevision();
+		var energy = domain.exactInternalEnergy(); var audit = domain.thermalAudit(); boolean stale = false;
+		try { inventory.commitWake(plan); } catch (IllegalStateException expected) { stale = true; }
+		require(stale && domain.granularState.deposits.mutationRevision() == bedRevision
+				&& domain.granularState.parcels.mutationRevision() == parcelRevision && domain.exactInternalEnergy().equals(energy)
+				&& domain.thermalAudit().equals(audit), "changed liquid thermal generation published a stale bed wake");
+		var fresh = inventory.planWake(bedCell, sand, 0, svq, .75F, .25F, .75F, 0, 0, 0);
+		inventory.requireCurrent(fresh); inventory.commitWake(fresh);
+		require(domain.granularState.parcels.count() == 1 && domain.granularState.deposits.groupCount() == 0
+				&& domain.exactInternalEnergy().equals(energy) && domain.thermalAudit().equals(audit),
+				"fresh thermal wake plan changed whole-source energy or its audit");
+		require(inventory.depositParcel(0, bedCell, SolidVolume.SVQ_PER_CELL), "partial thermal wake fixture failed");
+		var key = new mmm.thermal.GranularEnergyColumn.DepositKey(bedCell, sand, 0); long taken = svq / 3;
+		double movedEnergy = domain.thermalState.previewDepositTake(key, taken, svq);
+		double remainingEnergy = domain.thermalState.granularColumn().previewDepositRemaining(key, taken, svq);
+		energy = domain.exactInternalEnergy(); audit = domain.thermalAudit();
+		inventory.commitWake(inventory.planWake(bedCell, sand, 0, taken, .75F, .25F, .75F, 0, 0, 0));
+		require(Double.doubleToRawLongBits(domain.thermalState.granularColumn().activeEnergy(0)) == Double.doubleToRawLongBits(movedEnergy)
+				&& Double.doubleToRawLongBits(domain.thermalState.granularColumn().depositEnergy(key)) == Double.doubleToRawLongBits(remainingEnergy)
+				&& domain.exactInternalEnergy().subtract(energy).equals(domain.thermalAudit().roundoffResidual().subtract(audit.roundoffResidual()))
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"partial wake changed its prechecked split, append energy or roundoff audit");
 	}
 
 	private static void occupiedWakePointKeepsState(FluidDomain domain) {

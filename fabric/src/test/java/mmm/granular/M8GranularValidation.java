@@ -1160,11 +1160,60 @@ public final class M8GranularValidation {
 		parcels.add(parcel(material, volume, mass));
 		for (int iteration = 0; iteration < iterations; iteration++) {
 			require(inventory.depositParcel(0, 0, SolidVolume.SVQ_PER_CELL), "parcel deposit failed");
-			require(inventory.wake(0, material, 0, volume, 0.5F, 0.5F, 0.5F, 0.0F, 0.0F, 0.0F),
-					"deposit wake failed");
+			long bedRevision = deposits.mutationRevision(), parcelRevision = parcels.mutationRevision();
+			var plan = inventory.planWake(0, material, 0, volume, .5F, .5F, .5F, 0, 0, 0);
+			require(plan != null && plan.appendOrdinal() == 0 && plan.moved().solidVolumeSvq() == volume
+					&& plan.moved().mass() == mass && plan.remainingBedBulkVolumeSvq() == 0
+					&& deposits.mutationRevision() == bedRevision && parcels.mutationRevision() == parcelRevision,
+					"wake planning changed its source inventory or lost the actual removed portion");
+			inventory.requireCurrent(plan); inventory.commitWake(plan);
+			boolean stale = false;
+			try { inventory.commitWake(plan); } catch (IllegalStateException expected) { stale = true; }
+			require(stale && parcels.count() == 1 && deposits.groupCount() == 0,
+					"a committed wake plan must reject replay before changing either inventory");
 		}
 		require(inventory.totalSolidVolumeSvq() == volume, "parcel/deposit cycles changed SVQ");
 		require(rawClose(inventory.totalMass(), mass), "parcel/deposit cycles changed mass");
+		parcels.add(parcel(material, 1, 1));
+		require(deposits.tryAdd(0, new GranularDepositStore.SolidPortion(material, 0, volume, mass), SolidVolume.SVQ_PER_CELL),
+				"wake capacity fixture failed");
+		long bedRevision = deposits.mutationRevision(), parcelRevision = parcels.mutationRevision();
+		require(inventory.planWake(0, material, 0, volume, .5F, .5F, .5F, 0, 0, 0) == null
+				&& deposits.mutationRevision() == bedRevision && parcels.mutationRevision() == parcelRevision,
+				"a full append column must refuse wake planning without changing the bed");
+		parcels.removeSwap(1);
+		for (boolean changeBed : new boolean[]{false, true}) {
+			var plan = inventory.planWake(0, material, 0, volume / 2, .5F, .5F, .5F, 0, 0, 0);
+			if (changeBed) deposits.take(0, material, 0, 1); else parcels.overwrite(0, parcels.parcel(0));
+			bedRevision = deposits.mutationRevision(); parcelRevision = parcels.mutationRevision();
+			boolean stale = false;
+			try { inventory.commitWake(plan); } catch (IllegalStateException expected) { stale = true; }
+			require(stale && deposits.mutationRevision() == bedRevision && parcels.mutationRevision() == parcelRevision,
+					"a changed bed or append source must reject wake before any write");
+		}
+		int reactive = registry.materialHandle(BuiltinGranularDefinitions.PRECIPITATE);
+		var pool = new SolidCompositionPool(BuiltinChemicalDefinitions.REGISTRY, 1);
+		var composition = SolidCompositionRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY,
+				java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 640L, BuiltinChemicalDefinitions.CL_MINUS, 640L), 0);
+		int handle = pool.create(composition); double reactiveMass = composition.totalMass(pool.registry());
+		var reactiveParcels = new GranularParcelStore(registry, 1); var reactiveBed = new GranularDepositStore(registry, 1, 1);
+		require(reactiveBed.tryAdd(0, new GranularDepositStore.SolidPortion(reactive, handle, 10, reactiveMass), SolidVolume.SVQ_PER_CELL),
+				"reactive wake fixture failed");
+		var reactiveInventory = new GranularInventory(reactiveParcels, reactiveBed); reactiveInventory.bindSolidCompositions(pool);
+		bedRevision = reactiveBed.mutationRevision(); boolean rejected = false;
+		try { reactiveInventory.planWake(0, reactive, handle, 5, .5F, .5F, .5F, 0, 0, 0); }
+		catch (IllegalArgumentException expected) { rejected = true; }
+		require(rejected && reactiveBed.mutationRevision() == bedRevision && pool.record(handle).equals(composition),
+				"unavailable reactive partial wake must preserve the sole composition owner");
+		var reactivePlan = reactiveInventory.planWake(0, reactive, handle, 10, .5F, .5F, .5F, 0, 0, 0);
+		pool.overwrite(handle, composition.plus(composition)); rejected = false;
+		try { reactiveInventory.commitWake(reactivePlan); } catch (IllegalStateException expected) { rejected = true; }
+		require(rejected && reactiveBed.mutationRevision() == bedRevision && reactiveParcels.count() == 0,
+				"changed composition must reject wake before either inventory writes");
+		pool.overwrite(handle, composition);
+		reactiveInventory.commitWake(reactiveInventory.planWake(0, reactive, handle, 10, .5F, .5F, .5F, 0, 0, 0));
+		require(reactiveBed.groupCount() == 0 && reactiveParcels.parcel(0).solidCompositionHandle() == handle
+				&& pool.liveCount() == 1 && pool.record(handle).equals(composition), "whole reactive wake lost its existing composition owner");
 	}
 
 	private static GranularParcelStore.Parcel parcel(int material, long volume, double mass) {
