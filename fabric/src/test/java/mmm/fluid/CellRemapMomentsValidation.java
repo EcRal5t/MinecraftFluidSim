@@ -105,6 +105,15 @@ public final class CellRemapMomentsValidation {
 				check(total.equals(first[0]), "Constant-phase low-order and swept measures differ");
 				var second = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, sign > 0,
 						intercept, slope, 0, .5, 255, 255);
+				var q = new double[]{intercept, slope, 0};
+				var lowSecond = LiquidAffineSweepGeometry.lowOrderPhaseSecondMoments(domain, donor, receiver, axis, sign > 0,
+						q, .5, 255, 255, 255);
+				check(lowSecond[0].equals(total), "Low-order spatial measure changed its actual volume");
+				var highArrival = LiquidAffineSweepGeometry.arrivalSecondMoments(second, axis, sign > 0, q, .5, false);
+				var lowArrival = LiquidAffineSweepGeometry.arrivalSecondMoments(lowSecond, axis, sign > 0, q, .5, true);
+				check(java.util.Arrays.equals(highArrival, lowArrival), "Fully wet high and low arrival measures differ");
+				check(highArrival[axis + 1].multiply(8).equals(mmm.chemistry.ExactRational.of(sign * (affine ? 109 : 9)).divide(affine ? 192 : 16)),
+						"Actual arrival omitted its finite normal displacement");
 				var saved = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, receiver, axis, sign > 0,
 						new double[]{intercept, slope, 0}, .5, 255);
 				for (int support : new int[]{255, 0x33, 0xcc, 0x55, 0xaa}) {
@@ -599,6 +608,7 @@ public final class CellRemapMomentsValidation {
 
 	/** Four positive points from the failing representation remap have no independent velocity mode. */
 	private static void thinJointRuleKeepsActualRank() {
+		nearFaceJointRuleUsesPositiveUnequalWeights();
 		double[][] source = {
 				{-.2500079617206558, -.25000802408127815, -.24999999999999994, .10578703880310059, .058233842253685, 0},
 				{.24999203827934421, -.250280105132629, -.25001930988247867, .10578703880310059, .047350600361824036, -7.723952876403928E-4},
@@ -628,6 +638,39 @@ public final class CellRemapMomentsValidation {
 			moments.projectPositionAxis(axis); double[] centroid = moments.centroid();
 			for (double[] point : points) point[axis] = centroid[axis];
 			verifyJointRule(moments, weights, points);
+		}
+	}
+	private static void nearFaceJointRuleUsesPositiveUnequalWeights() {
+		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
+			var moments = new CellRemapSpatialMoments(); var source = new double[8][6]; var weights = new double[8];
+			for (int p = 0; p < 8; p++) {
+				weights[p] = ((p & 4) == 0 ? Math.scalb(1.0, -20) : 1 - Math.scalb(1.0, -20)) / 4;
+				for (int a = 0; a < 3; a++) {
+					int coordinate = (a + axis) % 3;
+					source[p][coordinate] = a == 2 ? sign * ((p & 4) == 0 ? .4 : .5 - Math.scalb(1.0, -24))
+							: ((p & 1 << a) == 0 ? -1 : 1) / Math.sqrt(12);
+					source[p][coordinate + 3] = (a + 1) * source[p][coordinate];
+				}
+				moments.add(weights[p], java.util.Arrays.copyOf(source[p], 3), java.util.Arrays.copyOfRange(source[p], 3, 6));
+			}
+			var volume = mmm.units.SignedDyadic.of(.25);
+			var rule = moments.pairRule(volume, new double[]{-.5, -.5, -.5}, new double[]{.5, .5, .5});
+			check(rule != null && rule.volumes().size() <= 2 * rule.rank() + CellRemapChemicalSupport.MAX_EXPANSION,
+					"Near-face joint measure lost its bounded positive unequal rule");
+			var parts = rule.volumes().stream().map(mmm.units.SignedDyadic::of).toArray(mmm.units.SignedDyadic[]::new);
+			check(mmm.units.SignedDyadic.sum(parts).equals(volume), "Paired rule changed its exact volume");
+			var masses = CellRemapMassAllocation.allocate(moments.mass(), volume, parts);
+			var fitted = moments.fitPairs(masses, rule);
+			for (double[] point : fitted.positions()) for (double coordinate : point)
+				check(coordinate >= -.5 && coordinate <= .5, "Paired rule left its spatial box");
+			verifyJointRule(masses, source, weights, fitted);
+			var domain = new FluidDomain(3, 3, 3, FluidSolverConfig.prototypeDefaults(), 32);
+			var target = moments.centroid(); for (int a = 0; a < 3; a++) target[a] *= moments.mass();
+			var projection = new double[3]; var storage = new double[3];
+			var prepared = CellRemapSampling.prepare(domain, domain.cellIndex(1, 1, 1), 255, volume, moments.mass(), Double.NaN,
+					LiquidCellQuadrature.volumes(volume, 8), moments, new double[8][3], target, storage, 0, .5, projection, 32);
+			checkPublished(domain, domain.cellIndex(1, 1, 1), new ArrayList<>(java.util.Arrays.asList(prepared.result().positions())),
+					prepared.masses(), target, projection, storage);
 		}
 	}
 
@@ -811,6 +854,9 @@ public final class CellRemapMomentsValidation {
 		double[][] preferred = new double[weights.length][3];
 		for (int p = 0; p < weights.length; p++) System.arraycopy(source[p % source.length], 0, preferred[p], 0, 3);
 		var result = moments.fit(weights, preferred);
+		verifyJointRule(weights, source, sourceWeights, result);
+	}
+	private static void verifyJointRule(double[] weights, double[][] source, double[] sourceWeights, CellRemapSpatialMoments.Result result) {
 		var probability = probabilities(sourceWeights); var outputProbability = probabilities(weights);
 		var expectedMean = new mmm.chemistry.ExactRational[6]; double[] observedMean = new double[6];
 		for (int a = 0; a < 6; a++) {

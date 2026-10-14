@@ -28,6 +28,10 @@ final class GasGeometryOverlap {
 	}
 	private static final ExactRational HALF = ExactRational.ONE.divide(2);
 	private static final ExactRational MICRO_VOLUME = ExactRational.ONE.divide(8);
+	private static final int[][] AFFINE_PRODUCTS = {
+			{1,2,3}, {4,5,6}, {5,7,8}, {6,8,9}, {10,11,12},
+			{11,13,14}, {12,14,15}, {13,16,17}, {14,17,18}, {15,18,19}
+	};
 	private GasGeometryOverlap() { }
 
 	/** Exact cell-normalized volume. The caller supplies only microboxes open in both geometries. */
@@ -116,6 +120,25 @@ final class GasGeometryOverlap {
 		return integrate(micro, planes, 2);
 	}
 
+	/** Integrates q, x*q and x*x*q; q=c0+c1*x+c2*y+c3*z about the cell centre. The caller supplies q>=0 support. */
+	static ExactRational[] normalizedAffineSecondMoments(int micro, List<HalfSpace> planes, ExactRational[] coefficients) {
+		if (coefficients == null || coefficients.length != 4 || java.util.Arrays.stream(coefficients).anyMatch(Objects::isNull))
+			throw new IllegalArgumentException("Affine overlap weight needs four exact coefficients");
+		var q = coefficients.clone();
+		int order = q[1].isZero() && q[2].isZero() && q[3].isZero() ? 2 : 3;
+		var moments = integrate(micro, planes, order); var result = new ExactRational[10];
+		try {
+			for (int index = 0; index < result.length; index++) {
+				result[index] = moments[index].multiply(q[0]);
+				for (int axis = 0; axis < 3; axis++) if (!q[axis + 1].isZero())
+					result[index] = result[index].add(moments[AFFINE_PRODUCTS[index][axis]].multiply(q[axis + 1]));
+			}
+			return result;
+		} catch (IllegalArgumentException magnitude) {
+			throw new GasTopologyBlockedException("Exact affine overlap exceeds the rational representation budget: " + magnitude.getMessage());
+		}
+	}
+
 	private static ExactRational[] integrate(int micro, List<HalfSpace> planes, int order) {
 		boolean moments = order > 0;
 		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 2 || planes.stream().anyMatch(Objects::isNull)) {
@@ -124,7 +147,7 @@ final class GasGeometryOverlap {
 		List<HalfSpace> constraints = List.copyOf(planes);
 		try {
 			Point origin = new Point(ExactRational.of(micro & 1).divide(2), ExactRational.of(micro >>> 1 & 1).divide(2), ExactRational.of(micro >>> 2 & 1).divide(2));
-			ExactRational[] result = new ExactRational[order == 2 ? 10 : 4]; java.util.Arrays.fill(result, ExactRational.ZERO);
+			ExactRational[] result = new ExactRational[order == 3 ? 20 : order == 2 ? 10 : 4]; java.util.Arrays.fill(result, ExactRational.ZERO);
 			var active = new ArrayList<Plane>(2);
 			for (HalfSpace halfSpace : constraints) {
 				Plane plane = new Plane(exact(halfSpace.nx), exact(halfSpace.ny), exact(halfSpace.nz), exact(halfSpace.threshold));
@@ -140,9 +163,20 @@ final class GasGeometryOverlap {
 				result[0] = MICRO_VOLUME;
 				if (moments) for (int axis = 0; axis < 3; axis++)
 					result[axis + 1] = MICRO_VOLUME.multiply(origin.component(axis).subtract(HALF.divide(2)));
-				if (order == 2) for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) {
+				if (order >= 2) for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) {
 					var product = origin.component(a).subtract(HALF.divide(2)).multiply(origin.component(b).subtract(HALF.divide(2)));
 					result[index++] = MICRO_VOLUME.multiply(a == b ? product.add(ExactRational.ONE.divide(48)) : product);
+				}
+				if (order == 3) {
+					var centre = new ExactRational[3];
+					for (int axis = 0; axis < 3; axis++) centre[axis] = origin.component(axis).subtract(HALF.divide(2));
+					for (int a = 0, index = 10; a < 3; a++) for (int b = a; b < 3; b++) for (int c = b; c < 3; c++) {
+						var product = centre[a].multiply(centre[b]).multiply(centre[c]);
+						if (a == b) product = product.add(centre[c].divide(48));
+						if (a == c) product = product.add(centre[b].divide(48));
+						if (b == c) product = product.add(centre[a].divide(48));
+						result[index++] = MICRO_VOLUME.multiply(product);
+					}
 				}
 				return result;
 			}
@@ -164,7 +198,7 @@ final class GasGeometryOverlap {
 								.add(face.get(i).component(axis)).add(face.get(i + 1).component(axis)).subtract(ExactRational.of(2));
 						result[axis + 1] = result[axis + 1].add(determinant.multiply(sum).divide(24));
 					}
-					if (order == 2) addSecondMoments(result, determinant, origin, face.getFirst(), face.get(i), face.get(i + 1));
+					if (order >= 2) addHigherMoments(result, determinant, origin, face.getFirst(), face.get(i), face.get(i + 1));
 				}
 			}
 			ExactRational volume = sixVolume.divide(6);
@@ -182,17 +216,26 @@ final class GasGeometryOverlap {
 		}
 	}
 
-	private static void addSecondMoments(ExactRational[] result, ExactRational determinant, Point... vertices) {
+	private static void addHigherMoments(ExactRational[] result, ExactRational determinant, Point... vertices) {
 		var centered = new ExactRational[4][3];
 		var sum = new ExactRational[]{ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
 		for (int p = 0; p < 4; p++) for (int a = 0; a < 3; a++) {
 			centered[p][a] = vertices[p].component(a).subtract(HALF); sum[a] = sum[a].add(centered[p][a]);
 		}
 		// A simplex quadratic mean is (sum(x)*sum(y) + sum(x*y))/20; signed volume is det/6.
+		var pair = result.length == 20 ? new ExactRational[3][3] : null;
 		for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) {
 			var product = sum[a].multiply(sum[b]);
 			for (int p = 0; p < 4; p++) product = product.add(centered[p][a].multiply(centered[p][b]));
 			result[index] = result[index].add(determinant.multiply(product).divide(120)); index++;
+			if (pair != null) pair[a][b] = pair[b][a] = product.subtract(sum[a].multiply(sum[b]));
+		}
+		if (pair != null) for (int a = 0, index = 10; a < 3; a++) for (int b = a; b < 3; b++) for (int c = b; c < 3; c++) {
+			// The symmetric cubic simplex mean has denominator 4*5*6.
+			var product = sum[a].multiply(sum[b]).multiply(sum[c]).add(sum[a].multiply(pair[b][c]))
+					.add(sum[b].multiply(pair[a][c])).add(sum[c].multiply(pair[a][b]));
+			for (int p = 0; p < 4; p++) product = product.add(centered[p][a].multiply(centered[p][b]).multiply(centered[p][c]).multiply(2));
+			result[index] = result[index].add(determinant.multiply(product).divide(720)); index++;
 		}
 	}
 

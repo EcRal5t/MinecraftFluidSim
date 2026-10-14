@@ -222,7 +222,7 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
 		if (components == null) return 0;
 		var open = new ExactRational[8]; var wet = new ExactRational[8]; var dry = new ExactRational[8];
-		double total = 0;
+		ExactRational total = ExactRational.ZERO;
 		for (var component : components) {
 			int support = donorSupport & component.support(); if (support == 0) continue;
 			LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, receiver, axis, positive, component.q(),
@@ -232,10 +232,29 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 					&& (support & 1 << (positive ? m | 1 << axis : m & ~(1 << axis))) != 0) {
 				liquid[m] += wet[m].toDouble(); sum = sum.add(wet[m]);
 			}
-			total += sum.toDouble();
+			total = total.add(sum);
 		}
-		if (!Double.isFinite(total) || total < 0) throw new IllegalStateException("Unrepresentable low-order phase flux");
-		return total;
+		double observed = total.toDouble();
+		if (!Double.isFinite(observed) || observed < 0 || observed == 0 && !total.isZero())
+			throw new IllegalStateException("Unrepresentable low-order phase flux");
+		return observed;
+	}
+	@Override public ExactRational[] arrivalSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
+	                                                     double dtOverH, int donorSupport, int receiverSupport, boolean lowOrder) {
+		var result = new ExactRational[10]; Arrays.fill(result, ExactRational.ZERO);
+		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
+		if (components == null) return result;
+		for (var component : components) {
+			int support = donorSupport & component.support(); if (support == 0) continue;
+			double[] q = component.q();
+			var source = lowOrder ? LiquidAffineSweepGeometry.lowOrderPhaseSecondMoments(domain, donor, receiver, axis, positive,
+					q, dtOverH, component.support(), receiverSupport, support)
+					: LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, positive,
+							q[0], q[1], q[2], dtOverH, support, receiverSupport);
+			var part = LiquidAffineSweepGeometry.arrivalSecondMoments(source, axis, positive, q, dtOverH, lowOrder);
+			for (int i = 0; i < result.length; i++) result[i] = result[i].add(part[i]);
+		}
+		return result;
 	}
 	@Override public void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
 	                                       int donorSupport, int receiverSupport, double[] swept, double[] wet) {

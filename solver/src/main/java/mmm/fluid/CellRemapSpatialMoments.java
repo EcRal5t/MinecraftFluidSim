@@ -75,6 +75,7 @@ final class CellRemapSpatialMoments {
 	}
 
 	void setCentroid(double[] centroid) { for (int a = 0; a < 3; a++) mean[a] = finite(centroid[a]); }
+	double[] meanVelocity() { return new double[]{mean[3], mean[4], mean[5]}; }
 	/** A transported face measure has a constant normal position and retains tangential moments. */
 	void projectPositionAxis(int axis) {
 		if (axis < 0 || axis >= 3) throw new IllegalArgumentException("Unknown spatial axis");
@@ -164,6 +165,36 @@ final class CellRemapSpatialMoments {
 		int axes = 0; for (int a = 0; a < 3; a++) if (covariance[a][a] > 0) axes |= 1 << a; return axes;
 	}
 	int minimumCount() { return 1 + decompose().rank(); }
+	CellRemapPairQuadrature.Rule pairRule(SignedDyadic volume, double[] lower, double[] upper) {
+		var state = decompose();
+		return CellRemapPairQuadrature.create(volume, centroid(), state.loads(), state.rank(), lower, upper);
+	}
+	Result fitPairs(double[] weights, CellRemapPairQuadrature.Rule rule) {
+		var state = decompose();
+		if (weights.length != rule.arms().length || state.rank() != rule.rank())
+			throw new IllegalArgumentException("Liquid paired quadrature differs from its joint factor");
+		double total = SignedDyadic.sum(weights).toDouble(); checkPositive(total);
+		var probability = new double[weights.length]; var pairWeights = new double[2 * state.rank()];
+		for (int p = 0; p < weights.length; p++) {
+			checkPositive(weights[p]); probability[p] = weights[p] / total;
+			if (rule.arms()[p] >= 0) pairWeights[rule.arms()[p]] += probability[p];
+		}
+		var coefficient = new double[pairWeights.length];
+		for (int k = 0; k < state.rank(); k++) {
+			double negative = pairWeights[2 * k], positive = pairWeights[2 * k + 1], sum = negative + positive;
+			checkPositive(negative); checkPositive(positive);
+			coefficient[2 * k] = -Math.sqrt(positive / (negative * sum));
+			coefficient[2 * k + 1] = Math.sqrt(negative / (positive * sum));
+		}
+		var positions = new double[weights.length][3]; var velocities = new double[weights.length][3];
+		for (int p = 0; p < weights.length; p++) for (int a = 0; a < 3; a++) {
+			int arm = rule.arms()[p];
+			positions[p][a] = finite(mean[a] + (arm < 0 ? 0 : state.loads()[a][arm / 2] * coefficient[arm]));
+			velocities[p][a] = finite(mean[a + 3] + (arm < 0 ? 0 : state.loads()[a + 3][arm / 2] * coefficient[arm]));
+		}
+		verify(probability, positions, velocities);
+		return new Result(positions, velocities);
+	}
 
 	/** Rows are nodes, columns are axes. Preferred geometry chooses the latent orientation only. */
 	Result fit(double[] weights, double[][] preferredOffsets) {

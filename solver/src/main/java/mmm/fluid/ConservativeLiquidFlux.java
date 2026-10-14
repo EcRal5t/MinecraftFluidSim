@@ -1,5 +1,6 @@
 package mmm.fluid;
 
+import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
 import mmm.compute.CpuWorkBatch;
 import java.util.Arrays;
@@ -18,6 +19,8 @@ final class ConservativeLiquidFlux {
 		                                                     double dtOverH, int donorSupport, int receiverSupport) {
 			throw new IllegalStateException("Liquid face sweep has no quadratic spatial integration rule");
 		}
+		default ExactRational[] arrivalSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
+		                                           double dtOverH, int donorSupport, int receiverSupport, boolean lowOrder) { return null; }
 		default void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
 		                               int donorSupport, int receiverSupport, double[] swept, double[] wet) {
 			throw new IllegalStateException("Liquid face sweep has no common micro source integration rule");
@@ -108,6 +111,39 @@ final class ConservativeLiquidFlux {
 				velocity[face], 0, 0, dtOverH, donorSupport, receiverSupport)
 				: faceSweep.sweptSecondMoments(face % physicalFaceCount, donor(face), receiver(face), axis[face], positive(face), dtOverH,
 						donorSupport, receiverSupport);
+	}
+	/** Donor-centred FCT arrival moments; the remaining representation fraction uses the allocated raw source. */
+	ExactRational[] transportArrivalSecondMoments(FluidDomain domain, int face, int donorSupport, int receiverSupport) {
+		var result = new ExactRational[10]; Arrays.fill(result, ExactRational.ZERO);
+		var available = ExactRational.ONE.subtract(PlicComponentGeometry.ratio(SignedDyadic.of(representationBlend[face]), SignedDyadic.of(1)));
+		if (available.isZero()) return result;
+		if (available.signum() < 0) throw new IllegalStateException("Invalid liquid representation fraction");
+		ExactRational[] high, low;
+		if (faceSweep == null) {
+			double[] q = {velocity[face], 0, 0};
+			high = LiquidAffineSweepGeometry.arrivalSecondMoments(sweptSecondMoments(domain, face, donorSupport, receiverSupport),
+					axis[face], positive(face), q, dtOverH, false);
+			low = LiquidAffineSweepGeometry.arrivalSecondMoments(LiquidAffineSweepGeometry.lowOrderPhaseSecondMoments(domain,
+					donor(face), receiver(face), axis[face], positive(face), q, dtOverH, donorSupport, receiverSupport, donorSupport),
+					axis[face], positive(face), q, dtOverH, true);
+		} else {
+			high = faceSweep.arrivalSecondMoments(face % physicalFaceCount, donor(face), receiver(face), axis[face], positive(face),
+					dtOverH, donorSupport, receiverSupport, false);
+			low = faceSweep.arrivalSecondMoments(face % physicalFaceCount, donor(face), receiver(face), axis[face], positive(face),
+					dtOverH, donorSupport, receiverSupport, true);
+		}
+		if (high == null || low == null) return null;
+		boolean hasHigh = high[0].signum() > 0, hasLow = low[0].signum() > 0;
+		if (!hasHigh && !hasLow) return null;
+		var geometric = PlicComponentGeometry.ratio(SignedDyadic.of(geometricBlend[face]), SignedDyadic.of(1));
+		if (!hasHigh) geometric = ExactRational.ZERO;
+		else if (!hasLow) geometric = available;
+		else if (geometric.compareTo(available) > 0) geometric = available;
+		var donor = available.subtract(geometric);
+		if (geometric.signum() > 0) geometric = geometric.multiply(new ExactRational(high[0].denominator(), high[0].numerator()));
+		if (donor.signum() > 0) donor = donor.multiply(new ExactRational(low[0].denominator(), low[0].numerator()));
+		for (int i = 0; i < result.length; i++) result[i] = high[i].multiply(geometric).add(low[i].multiply(donor));
+		return result;
 	}
 	void sweptPhaseMoments(PhaseVolumeTransportGeometry phases, int phase, int face,
 	                       int donorSupport, int receiverSupport, double[] result) {

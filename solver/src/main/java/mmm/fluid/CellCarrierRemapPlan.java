@@ -107,7 +107,7 @@ final class CellCarrierRemapPlan {
 				}
 			});
 		}
-		for(var groups:output) if(groups!=null) for(var group:groups) completeArrivalShape(group,flux);
+		for (var groups : output) if (groups != null) for (var group : groups) completeArrivalShape(group, flux);
 		assignShareInventories(flux);
 
 		int sampledCount = 0;
@@ -131,10 +131,16 @@ final class CellCarrierRemapPlan {
 					group.maximumTranslation = Double.isFinite(group.density)
 							? .5 * componentCapacity.subtract(group.volume).toDouble() / componentCapacity.toDouble() : .5;
 				}
-				group.sampleStart = sampledCount;
 				group.sampleVolumes = quadratureVolumes(group);
-				sampledCount = Math.addExact(sampledCount, group.sampleVolumes.size());
 			}
+		}
+		CpuWorkBatch.run(domain.cellCount, (from, until) -> {
+			for (int cell = from; cell < until; cell++) if (output[cell] != null) for (Group group : output[cell]) {
+				prepareSampling(group, group.sampleVolumes); group.sampleVolumes = group.sampling.volumes();
+			}
+		});
+		for (var groups : output) if (groups != null) for (var group : groups) {
+			group.sampleStart = sampledCount; sampledCount = Math.addExact(sampledCount, group.sampleVolumes.size());
 		}
 		if ((long) sampledCount + retainedMarkers.size() + ballistic.markers.size() > domain.maximumParticleCount)
 			throw new IllegalStateException("Cell carrier remap exceeds the marker budget");
@@ -332,14 +338,11 @@ final class CellCarrierRemapPlan {
 				var spatial = new CellRemapSpatialMoments();
 				for (int p = 0; p < transport.ordinals().length; p++)
 					spatial.add(domain, transport.ordinals()[p], transport.markerWeights()[d][p]);
-				double[] facePoint = faces[d] < 0 ? null : faceMoments(flux, faces[d], spatial,
-						masses[d], pieces[g][d].toDouble(), transport.momentum()[d], transport.volumeMoment()[d], transport.volumeMotion()[d]);
-				spatial.advancePositions(.5 * dt / domain.config.cellSize());
+				double[] facePoint = faces[d] < 0 ? null : CellRemapArrival.prepare(spatial, flux.axis[faces[d]], flux.positive(faces[d]),
+						dt / domain.config.cellSize(), pieces[g][d].toDouble(), transport.volumeMoment()[d], transport.volumeMotion()[d]);
+				if (facePoint == null) spatial.advancePositions(.5 * dt / domain.config.cellSize());
 				if (facePoint != null) {
 					subtractFaceMoment(source, masses[d], pieces[g][d].toDouble(), facePoint);
-					spatial.projectPositionAxis(flux.axis[faces[d]]);
-					spatial.spreadFaceArrival(flux.axis[faces[d]], dt / domain.config.cellSize());
-					spatial.setCentroid(Arrays.copyOf(facePoint, 3));
 				}
 				source.shares.add(new Share(source, destinations[d], supports[d], faces[d], pieces[g][d], masses[d], transport.kinetic()[d],
 						transport.momentum()[d], facePoint, spatial, transport.volumeMotion()[d]));
@@ -510,18 +513,6 @@ final class CellCarrierRemapPlan {
 		}
 	}
 
-	/** Tangential transport uses this share's common-source position and velocity moments. */
-	private double[] faceMoments(ConservativeLiquidFlux flux, int face, CellRemapSpatialMoments spatial,
-	                            double mass, double volume, double[] momentum, double[] volumeMoment, double[] volumeMotion) {
-		double[] point = new double[6], centroid = spatial.centroid();
-		double halfDt = .5 * dt / domain.config.cellSize();
-		for (int a = 0; a < 3; a++) {
-			if (a == flux.axis[face]) { point[a] = point[a + 3] = Math.copySign(.5, flux.velocity[face]); continue; }
-			point[a] = centroid[a] + halfDt * momentum[a] / mass;
-			point[a + 3] = volumeMoment[a] / volume + halfDt * volumeMotion[a] / volume;
-		}
-		return point;
-	}
 	private static void subtractFaceMoment(Group source, double mass, double volume, double[] facePoint) {
 		for (int a = 0; a < 3; a++) { source.massMoment[a] -= mass * facePoint[a]; source.volumeMoment[a] -= volume * facePoint[a + 3]; }
 	}
@@ -671,16 +662,12 @@ final class CellCarrierRemapPlan {
 		return Math.max(group.spatial.minimumCount(),CellRemapQuadrature.minimumCount(axes));
 	}
 
-	private void sample(Group group) {
+	private void prepareSampling(Group group, ArrayList<Float> volumes) {
 		int count = group.quadratureCount, mask = ~group.support & 255;
-		ArrayList<Float> volumes = group.sampleVolumes;
 		ArrayList<double[]> offsets = new ArrayList<>();
 		for (int slot = 0; slot < volumes.size(); slot++) offsets.add(slot < count
 				? mask == 0 ? group.quadratureAxes>=0 ? CellRemapQuadrature.offset(slot, group.quadratureAxes) : offset(slot%8,8) : openOffset(mask, slot % Integer.bitCount(group.support))
 				: mask == 0 ? offset(0, 1) : openOffset(mask, 0));
-		SignedDyadic[] weights = new SignedDyadic[volumes.size()];
-		for (int p = 0; p < weights.length; p++) weights[p] = SignedDyadic.of(volumes.get(p));
-		double[] masses = CellRemapMassAllocation.allocate(group.mass, group.volume, weights, group.density);
 		for (int a = 0; a < 3; a++) {
 			group.massMoment[a] += 0.5 * dt / domain.config.cellSize() * group.momentum[a];
 			group.volumeMoment[a] += 0.5 * dt / domain.config.cellSize() * group.volumeMotion[a];
@@ -689,10 +676,18 @@ final class CellCarrierRemapPlan {
 		double[] centroid = new double[3];
 		for (int a = 0; a < 3; a++) centroid[a] = group.massMoment[a] / group.mass;
 		group.spatial.setCentroid(centroid);
-		var fitted = CellRemapSampling.fit(domain, group.cell, group.support, masses, group.spatial,
-				offsets.toArray(double[][]::new), group.massMoment, group.storage,
-				group.movingAxes, group.maximumTranslation, group.projection);
-		offsets = new ArrayList<>(Arrays.asList(fitted.positions()));
+		group.sampling = CellRemapSampling.prepare(domain, group.cell, group.support, group.volume, group.mass, group.density,
+				volumes, group.spatial, offsets.toArray(double[][]::new), group.massMoment, group.storage,
+				group.movingAxes, group.maximumTranslation, group.projection,
+				domain.chemicalParcels == null ? domain.maximumParticleCount : group.species.totalQuanta());
+		if (domain.chemicalParcels != null && group.sampling.volumes().size() > group.species.totalQuanta())
+			throw new CellRemapChemicalSupport.Unavailable("Positive liquid support exceeds its species budget");
+	}
+	private void sample(Group group) {
+		var volumes = group.sampling.volumes(); var masses = group.sampling.masses(); var fitted = group.sampling.result();
+		var offsets = new ArrayList<>(Arrays.asList(fitted.positions()));
+		var weights = new SignedDyadic[volumes.size()];
+		for (int p = 0; p < weights.length; p++) weights[p] = SignedDyadic.of(volumes.get(p));
 		for (int a = 0; a < 3; a++) {
 			double volumeMoment = 0;
 			int coordinate = a == 0 ? group.cell % domain.sizeX : a == 1 ? group.cell / domain.sizeX % domain.sizeY : group.cell / (domain.sizeX * domain.sizeY);
@@ -939,6 +934,7 @@ final class CellCarrierRemapPlan {
 		boolean retained;
 		int sampleStart, quadratureCount, quadratureAxes, movingAxes, speciesTarget; ArrayList<Float> sampleVolumes;
 		ArrayList<Share> shares, arrivals;
+		CellRemapSampling.Prepared sampling;
 		final ArrayList<Integer> original = new ArrayList<>(); final CellSpeciesInventory species = new CellSpeciesInventory();
 		final CellRemapSpatialMoments spatial = new CellRemapSpatialMoments();
 		SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO;
