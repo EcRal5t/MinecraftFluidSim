@@ -581,6 +581,8 @@ public final class AirCavityScannerValidation {
 		domain.sealDomainBoundary(); var before = domain.bootstrapGasState(""); var old = domain.gasState.frame;
 		check(old.nodeCount() == 1 && old.capacity().pieces().size() > 1,
 				"Single-successor fixture requires a cavity spanning multiple dry microboxes");
+		check(GasPhaseGeometryEnvelope.capture(old,domain.gasState.network,null,0,1)!=null,
+				"One fixed convex component lost its unique valid phase successor certificate");
 		domain.particles.setPositionX(0, .27F); domain.particles.setPositionY(0, .22F); domain.particles.setPositionZ(0, .29F);
 		domain.gridDirty = true; domain.ensureInventoryGrid();
 		var next = GasRuntimeGeometry.capture(domain, null, new long[8], true);
@@ -625,6 +627,12 @@ public final class AirCavityScannerValidation {
 		catch(GasTopologyBlockedException expected) {
 			check(expected.getMessage().contains("no positive successor"),"Zero-overlap single-piece stock failed for another property");
 		}
+		var nonconvex=pieceCapacityDomain(8,.25F,.25F,.25F,.125F);
+		nonconvex.sealDomainBoundary(); nonconvex.bootstrapGasState("");
+		var nonconvexSource=nonconvex.gasState.frame;
+		check(nonconvexSource.nodeCount()==1 && nonconvexSource.geometry().pieces().size()>1
+				&& GasPhaseGeometryEnvelope.capture(nonconvexSource,nonconvex.gasState.network,null,0,1)==null,
+				"A nonconvex fixed component acquired an unsupported unique phase successor certificate");
 	}
 
 	private static void validateAmbientSelfRemap() {

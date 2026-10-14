@@ -53,9 +53,9 @@ final class GasPhaseGeometryEnvelope {
 			if (variable[piece.cell()]) fixedSource = false;
 			if (first < 0) first = piece.id();
 		}
-		// A single old microbox has at most one positive same-id successor. A phase
-		// candidate lacking that overlap is unavailable before its saturation check.
-		if (first < 0 || !fixedSource && sourcePieces != 1) return null;
+		// A single microbox, or one convex component's dry half-space, has one
+		// positive successor. Missing old/new overlap leaves the phase candidate unavailable.
+		if (first < 0 || !fixedSource && sourcePieces != 1 && !singleConvexComponent(source, sourceNode, first)) return null;
 		int[] parent = new int[Math.multiplyExact(8, variable.length)]; Arrays.fill(parent, -1);
 		for (var piece : source.geometry().pieces()) parent[piece.id()] = piece.id();
 		for (int cell = 0; cell < variable.length; cell++) if (variable[cell]) {
@@ -117,6 +117,22 @@ final class GasPhaseGeometryEnvelope {
 			}
 		}
 		return Math.nextUp(upper.toDouble());
+	}
+
+	private static boolean singleConvexComponent(GasRuntimeGeometry source, int node, int first) {
+		int cell = first / 8, support = 0;
+		for (var component : source.liquidStock().get(cell).components())
+			if ((component.supportMask() & 1 << (first & 7)) != 0) support = component.supportMask();
+		int[] axes = new int[3];
+		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0)
+			for (int axis = 0; axis < 3; axis++) axes[axis] |= 1 << (micro >>> axis & 1);
+		int box = 0;
+		for (int micro = 0; micro < 8; micro++) if ((axes[0] & 1 << (micro & 1)) != 0
+				&& (axes[1] & 1 << (micro >>> 1 & 1)) != 0 && (axes[2] & 1 << (micro >>> 2 & 1)) != 0) box |= 1 << micro;
+		if (support == 0 || box != support) return false;
+		for (var piece : source.geometry().pieces()) if (source.nodeOfPiece(piece.id()) == node
+				&& (piece.cell() != cell || (support & 1 << piece.micro()) == 0)) return false;
+		return true;
 	}
 
 	private static boolean fullCutFace(GasComplementGeometry geometry, int minus, int plus, int axis) {
