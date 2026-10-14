@@ -55,7 +55,8 @@ final class GasPhaseGeometryEnvelope {
 		}
 		// A single microbox, or one convex component's dry half-space, has one
 		// positive successor. Missing old/new overlap leaves the phase candidate unavailable.
-		if (first < 0 || !fixedSource && sourcePieces != 1 && !singleConvexComponent(source, sourceNode, first)) return null;
+		if (first < 0 || !fixedSource && sourcePieces != 1 && !singleConvexComponent(source, sourceNode, first)
+				&& !GasPhaseSourceBackbone.retainsSource(source, sourceNode, variable)) return null;
 		int[] parent = new int[Math.multiplyExact(8, variable.length)]; Arrays.fill(parent, -1);
 		for (var piece : source.geometry().pieces()) parent[piece.id()] = piece.id();
 		for (int cell = 0; cell < variable.length; cell++) if (variable[cell]) {

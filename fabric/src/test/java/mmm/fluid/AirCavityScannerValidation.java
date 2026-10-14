@@ -633,6 +633,29 @@ public final class AirCavityScannerValidation {
 		check(nonconvexSource.nodeCount()==1 && nonconvexSource.geometry().pieces().size()>1
 				&& GasPhaseGeometryEnvelope.capture(nonconvexSource,nonconvex.gasState.network,null,0,1)==null,
 				"A nonconvex fixed component acquired an unsupported unique phase successor certificate");
+		for(int variant=0;variant<4;variant++) {
+			byte[] masks=new byte[8]; java.util.Arrays.fill(masks,(byte)255); masks[0]=masks[1]=masks[2]=0;
+			if(variant!=1) masks[3]=0; if(variant==2) masks[1]=1;
+			float[] markers=variant==3?new float[]{.25F,.25F,.25F,.03125F,1.5F,.5F,.5F,.03125F}
+					:new float[]{.25F,.25F,.25F,.03125F};
+			var backbone=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
+					new FlipParticleState(2,2,2,1,markers.length/4,variant==3?.0625F:.03125F,markers,new float[markers.length/4*3],masks));
+			backbone.sealDomainBoundary(); backbone.bootstrapGasState(""); var captured=backbone.gasState.frame;
+			check(captured.nodeCount()==1,"Backbone fixture lost its original connected gas inventory");
+			var certified=GasPhaseGeometryEnvelope.capture(captured,backbone.gasState.network,null,0,1);
+			check((certified!=null)==(variant==0),"Source backbone ignored a disconnected fixed graph, partial port or gradient-changing peer");
+			if(variant!=0) continue;
+			var remaining=SignedDyadic.of(.015625); var flippedMoment=remaining.multiply(SignedDyadic.of(.75));
+			var flipped=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,remaining,flippedMoment,flippedMoment,flippedMoment)));
+			var changed=GasRuntimeGeometry.capture(backbone,flipped,new long[8],true);
+			backbone.gasState.frame=null; var fresh=GasRuntimeGeometry.capture(backbone,flipped,new long[8],true); backbone.gasState.frame=captured;
+			checkRuntimePlanesEqual(changed,fresh,"Certified backbone future differs from independent full capture");
+			check(changed.nodeCount()==1 && certified.volumeUpper(flipped)>=changed.capacity().chambers().getFirst().cubicMeters(),
+					"A changing light-wet cell detached from its fixed gas backbone or exceeded certified capacity");
+			for(int micro=0;micro<8;micro++) check(GasGeometryOverlap.normalizedVolume(micro,
+					List.of(captured.geometry().piece(micro).dryPlane(),changed.geometry().piece(micro).dryPlane())).signum()>0,
+					"Opposite light-wet planes lost the certified old/new overlap of one gas microbox");
+		}
 	}
 
 	private static void validateAmbientSelfRemap() {
