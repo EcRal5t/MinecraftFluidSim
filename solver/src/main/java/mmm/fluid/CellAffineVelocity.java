@@ -16,6 +16,8 @@ final class CellAffineVelocity {
 	private final double[] mass, position, center, coefficients, coefficientLow, directions, normalShapes;
 	private final boolean[] representable, expanded, normalAxes;
 	private final double[][] shapeCoefficients = new double[3][], shapeLow = new double[3][];
+	private final SignedDyadic[] exactCoefficients;
+	private final SignedDyadic[][] exactShapeCoefficients = new SignedDyadic[3][];
 
 	static CellAffineVelocity capture(FluidDomain domain) { return new CellAffineVelocity(domain, null); }
 	static CellAffineVelocity capture(FluidDomain domain, LiquidPressureGeometry geometry) {
@@ -76,6 +78,13 @@ final class CellAffineVelocity {
 			captureCenter(c); captureHull(c); representable[c] = fitMap(c) || fitExpandedMap(c);
 			if (geometry != null && representable[c]) captureNormalShapes(geometry, c);
 		}
+		exactCoefficients = exactMap(coefficients, coefficientLow);
+		for (int a = 0; a < 3; a++) if (shapeCoefficients[a] != null) exactShapeCoefficients[a] = exactMap(shapeCoefficients[a], shapeLow[a]);
+	}
+	private static SignedDyadic[] exactMap(double[] high, double[] low) {
+		var result = new SignedDyadic[high.length];
+		for (int i = 0; i < result.length; i++) result[i] = SignedDyadic.of(high[i]).add(SignedDyadic.of(low[i]));
+		return result;
 	}
 	private static boolean splitMicro(LiquidPressureGeometry geometry, int cell, int support, int sourceMicros) {
 		return geometry != null && geometry.needsMicroBlocks(cell, support)
@@ -287,11 +296,11 @@ final class CellAffineVelocity {
 		requireRepresentable(cells[marker]); return storedCoefficientExact(marker, axis, term);
 	}
 	private SignedDyadic storedCoefficientExact(int marker, int axis, int term) {
-		if (hasNormalShape(cells[marker], axis)) return SignedDyadic.of(shapeCoefficients[axis][4 * marker + term]).add(SignedDyadic.of(shapeLow[axis][4 * marker + term]));
+		if (hasNormalShape(cells[marker], axis)) return exactShapeCoefficients[axis][4 * marker + term];
 		return storedCoefficientExact(marker, term);
 	}
 	private SignedDyadic storedCoefficientExact(int marker, int term) {
-		return SignedDyadic.of(coefficients[4 * marker + term]).add(SignedDyadic.of(coefficientLow[4 * marker + term]));
+		return exactCoefficients[4 * marker + term];
 	}
 	double projector(int cell, int first, int second) {
 		double value = 0; for (int j = 0; j < ranks[cell] - 1; j++) value += directions[9 * cell + 3 * j + first] * directions[9 * cell + 3 * j + second]; return value;
@@ -299,18 +308,16 @@ final class CellAffineVelocity {
 	void fit(double[][] markerVelocity, double[][] cellCoefficients) {
 		checkShape(markerVelocity, markerCount); checkShape(cellCoefficients, 4 * blockCount); checkAlias(markerVelocity, cellCoefficients);
 		for (double[] axis : cellCoefficients) Arrays.fill(axis, 0);
-		for (int i = 0; i < markerCount; i++) {
-			int cell = cells[i]; requireRepresentable(cell);
-			if (expanded[cell]) continue;
+		for (int cell = 0; cell < blockCount; cell++) if (offsets[cell] != offsets[cell + 1]) {
+			requireRepresentable(cell);
 			for (int a = 0; a < 3; a++) {
-				double[] map = hasNormalShape(cell, a) ? shapeCoefficients[a] : coefficients;
-				for (int term = 0; term < 4; term++) cellCoefficients[a][4 * cell + term] += map[4 * i + term] * markerVelocity[a][i];
+				var sums = new SignedDyadic[]{SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO};
+				for (int k = offsets[cell]; k < offsets[cell + 1]; k++) {
+					int marker = markers[k]; var velocity = SignedDyadic.of(markerVelocity[a][marker]);
+					for (int term = 0; term < 4; term++) sums[term] = sums[term].add(storedCoefficientExact(marker, a, term).multiply(velocity));
+				}
+				for (int term = 0; term < 4; term++) cellCoefficients[a][4 * cell + term] = sums[term].toDouble();
 			}
-		}
-		for (int cell = 0; cell < blockCount; cell++) if (expanded[cell]) for (int a = 0; a < 3; a++) for (int term = 0; term < 4; term++) {
-			SignedDyadic sum = SignedDyadic.ZERO;
-			for (int k = offsets[cell]; k < offsets[cell + 1]; k++) sum = sum.add(storedCoefficientExact(markers[k], a, term).multiply(SignedDyadic.of(markerVelocity[a][markers[k]])));
-			cellCoefficients[a][4 * cell + term] = sum.toDouble();
 		}
 	}
 	void transposeLoad(double[][] cellLoad, double[][] markerForce) {
@@ -318,17 +325,10 @@ final class CellAffineVelocity {
 		for (double[] axis : markerForce) Arrays.fill(axis, 0);
 		for (int i = 0; i < markerCount; i++) {
 			int cell = cells[i]; requireRepresentable(cell);
-			if (expanded[cell]) {
-				for (int a = 0; a < 3; a++) {
-					SignedDyadic sum = SignedDyadic.ZERO;
-					for (int term = 0; term < 4; term++) sum = sum.add(storedCoefficientExact(i, a, term).multiply(SignedDyadic.of(cellLoad[a][4 * cell + term])));
-					markerForce[a][i] = sum.toDouble();
-				}
-				continue;
-			}
 			for (int a = 0; a < 3; a++) {
-				double[] map = hasNormalShape(cell, a) ? shapeCoefficients[a] : coefficients;
-				for (int term = 0; term < 4; term++) markerForce[a][i] += map[4 * i + term] * cellLoad[a][4 * cell + term];
+				SignedDyadic sum = SignedDyadic.ZERO;
+				for (int term = 0; term < 4; term++) sum = sum.add(storedCoefficientExact(i, a, term).multiply(SignedDyadic.of(cellLoad[a][4 * cell + term])));
+				markerForce[a][i] = sum.toDouble();
 			}
 		}
 	}

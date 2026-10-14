@@ -49,8 +49,8 @@ final class LogicalStepTailAssembly {
 				new ParticleReseedStage.Workspace(domain.geometry, domain.particles, domain.particleReseeder),
 				new ParticleReseedStage.Access() {
 					@Override public boolean hasConservativeCellQuadrature() {
-						return CellLiquidVolumeTransport.enabled() && domain.cellLiquidVolumeTransport != null
-								&& domain.cellLiquidVolumeTransport.publishedQuadrature;
+						return !domain.liquidShapes.isEmpty() || CellLiquidVolumeTransport.enabled()
+								&& domain.cellLiquidVolumeTransport != null && domain.cellLiquidVolumeTransport.publishedQuadrature;
 					}
 					@Override public void ensureParticleCapacity(int required) { domain.ensureParticleCapacity(required); }
 					@Override public mmm.chemistry.ChemicalParcelStore chemicalParcels() {

@@ -413,6 +413,7 @@ public final class MarkerPressureValidation {
 		if (basis.rank(0) != 4 || !basis.hasRepresentableBasis(0) || !basis.canRepresentPoint(0, .5, .5, .5))
 			throw new AssertionError("Full spatial quadrature lost its affine velocity capacity");
 		verifyConstraintRowRelations(basis, 0);
+		verifyAffineDotRounding(basis);
 		for (int a = 0; a < 3; a++) {
 			java.math.BigDecimal mass = java.math.BigDecimal.ZERO, first = java.math.BigDecimal.ZERO;
 			for (int i = 0; i < cube.length; i++) {
@@ -473,6 +474,7 @@ public final class MarkerPressureValidation {
 				7.421645F, 3.3454382F, .49268323F, .0026631951F};
 		closePoints.restoreParticleState(new FlipParticleState(12, 8, 4, 1, 3, .0028607696F, saved, new float[9], new byte[384]));
 		var closeBasis = CellAffineVelocity.capture(closePoints);
+		verifyAffineDotRounding(closeBasis);
 		int closeCell = closeBasis.markerBlock(0);
 		if (closeBasis.rank(closeCell) != 3 || !closeBasis.hasRepresentableBasis(closeCell))
 			throw new AssertionError("Separated binary32 points lost their certified affine map through rounded refinement residuals");
@@ -488,6 +490,7 @@ public final class MarkerPressureValidation {
 				3.733526F, 3.4979026F, 3.4938903F, .08683321F};
 		thinTetrahedron.restoreParticleState(new FlipParticleState(12, 8, 4, 1, 4, .17377433F, thin, new float[12], new byte[384]));
 		var thinBasis = CellAffineVelocity.capture(thinTetrahedron); int thinCell = thinBasis.markerBlock(0);
+		verifyAffineDotRounding(thinBasis);
 		if (thinBasis.rank(thinCell) != 4 || !thinBasis.hasRepresentableBasis(thinCell) || !thinBasis.expandedCell(thinCell))
 			throw new AssertionError("Near-degenerate actual tetrahedron lost the precision required by its affine moment certificate");
 		var thinVelocity = new double[3][4]; var thinCoefficients = new double[3][4 * thinBasis.blockCount()];
@@ -506,6 +509,32 @@ public final class MarkerPressureValidation {
 		near(basis.massKilograms(0), savedMass, 0, "Captured affine mass ownership");
 		near(basis.center(0, 0), savedCentre, 0, "Captured affine centre ownership");
 		near(basis.coefficient(0, 0), savedCoefficient, 0, "Captured affine map ownership");
+	}
+	private static void verifyAffineDotRounding(CellAffineVelocity basis) {
+		var velocity = new double[3][basis.markerCount()]; var fitted = new double[3][4 * basis.blockCount()];
+		var load = new double[3][4 * basis.blockCount()]; var force = new double[3][basis.markerCount()];
+		for (int mode = 0; mode < 2; mode++) {
+			for (int axis = 0; axis < 3; axis++) {
+				for (int i = 0; i < basis.markerCount(); i++) velocity[axis][i] = mode == 0 ? 1 : Math.scalb(Math.sin(.37 * i + axis), 27);
+				for (int i = 0; i < load[axis].length; i++) load[axis][i] = Math.scalb(Math.cos(.23 * i + axis), 27);
+			}
+			basis.fit(velocity, fitted); basis.transposeLoad(load, force);
+			for (int block = 0; block < basis.blockCount(); block++) if (basis.blockMarkerCount(block) > 0)
+				for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) {
+					var sum = SignedDyadic.ZERO;
+					for (int i = 0; i < basis.blockMarkerCount(block); i++) {
+						int marker = basis.blockMarker(block, i);
+						sum = sum.add(basis.coefficientExact(marker, axis, term).multiply(SignedDyadic.of(velocity[axis][marker])));
+					}
+					near(fitted[axis][4 * block + term], sum.toDouble(), 0, "Affine fit uses a single rounded exact dot");
+				}
+			for (int i = 0; i < basis.markerCount(); i++) for (int axis = 0; axis < 3; axis++) {
+				var sum = SignedDyadic.ZERO;
+				for (int term = 0; term < 4; term++) sum = sum.add(basis.coefficientExact(i, axis, term)
+						.multiply(SignedDyadic.of(load[axis][4 * basis.markerBlock(i) + term])));
+				near(force[axis][i], sum.toDouble(), 0, "Affine adjoint uses the same single rounded exact dot");
+			}
+		}
 	}
 	private static void verifyConstraintRowRelations(CellAffineVelocity basis, int block) {
 		boolean truncatedRelation = false, roundedSourceDefect = false;

@@ -21,6 +21,7 @@ public final class CellRemapMomentsValidation {
 		}
 		if (args.length == 1 && args[0].equals("transport-moments")) {
 			jointTranslationPublishesEdgeAndCornerReceivers();
+			jointTranslationSurvivesCompleteCpuHandoff();
 			limitedFluxMixesTheSamePositiveMomentWeights();
 			scalarTransportKeepsUnexcitedSpatialInertia();
 			directionalTransportPartitionsActualMomentumAndKineticEnergy();
@@ -42,6 +43,7 @@ public final class CellRemapMomentsValidation {
 		scalarTransportKeepsUnexcitedSpatialInertia();
 		directionalTransportPartitionsActualMomentumAndKineticEnergy();
 		jointTranslationPublishesEdgeAndCornerReceivers();
+		jointTranslationSurvivesCompleteCpuHandoff();
 		thinJointRuleKeepsActualRank();
 		partialCellInitializationHasPositiveWetLayerSupport();
 		faceArrivalRetainsFiniteNormalThickness();
@@ -181,14 +183,51 @@ public final class CellRemapMomentsValidation {
 				&& java.util.Arrays.equals(before.copyParticleVelocities(), limited.exportParticleState().copyParticleVelocities()), "Joint translation marker-budget rejection changed source columns");
 	}
 	private static FluidDomain translationDomain(float h, int axes, int signs, int budget, boolean tiled) {
+		return translationDomain(h, axes, signs, budget, tiled, .125F);
+	}
+	private static FluidDomain translationDomain(float h, int axes, int signs, int budget, boolean tiled, float dt) {
 		var domain = new FluidDomain(5, 5, 5,
-				new FluidSolverConfig(h, 1000, 0, .125F, 200, 1e-5F, .45F, .002F, 0), budget);
+				new FluidSolverConfig(h, 1000, 0, dt, 200, 1e-5F, .45F, .002F, 0), budget);
 		domain.setVolume(2, 2, 2, 1); if (tiled) domain.setVolume(1, 2, 2, 1);
 		for (int p = 0; p < domain.particleCount(); p++) for (int a = 0; a < 3; a++)
 			setVelocity(domain, p, a, (axes & 1 << a) == 0 ? 0 : (signs & 1 << a) == 0 ? h : -h);
 		setTranslationField(domain, h, axes, signs);
 		domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
 		return domain;
+	}
+	private static void jointTranslationSurvivesCompleteCpuHandoff() {
+		for (float dt : new float[]{.125F, .123F}) for (int axes : new int[]{1, 3, 7}) for (int signs : new int[]{0, 7}) {
+			var domain = translationDomain(1, axes, signs, 2048, false, dt);
+			domain.sealDomainBoundary(); domain.bootstrapGasState(null);
+			long gas = domain.gasState.network.standardVolumeNanos(1); double capacity = domain.gasState.network.availableVolume(1);
+			for (int step = 1; step <= 4; step++) {
+				var source = domain.captureAuthoritativeState();
+				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step - 1, source, java.util.List.of(), false, 0));
+				domain = candidate.claimPreparedCpuDomain();
+				check(!domain.liquidShapes.isEmpty(), "Complete CPU step discarded the common liquid shape");
+				check(domain.gasState.network.nodeCount() == 1 && domain.gasState.network.standardVolumeNanos(1) == gas,
+						"Complete CPU step changed uniform-translation gas ownership");
+				precise(domain.gasState.network.availableVolume(1), capacity, "Complete CPU step gas capacity");
+				for (int p = 0; p < domain.particleCount(); p++) for (int axis = 0; axis < 3; axis++) {
+					double expected = (axes & 1 << axis) == 0 ? 0 : (signs & 1 << axis) == 0 ? 1 : -1;
+					double actual = axis == 0 ? domain.particles.velocityX(p) : axis == 1 ? domain.particles.velocityY(p) : domain.particles.velocityZ(p);
+					check(actual == expected, "Complete CPU step changed a spatially constant physical velocity");
+				}
+				var saved = domain.captureAuthoritativeState(); domain = FluidDomain.restoreAuthoritativeState(saved);
+				var field = domain.pressureSystem.markerVelocityField();
+				check(field == null, "Restore retained a velocity field from an earlier physical state");
+			}
+			for (int p = 0; p < domain.particleCount(); p++) for (int axis = 0; axis < 3; axis++) setVelocity(domain, p, axis, 0);
+			var stopped = domain.captureAuthoritativeState();
+			var positions = domain.exportParticleState().copyPositionVolume();
+			var shapes = domain.liquidShapes;
+			var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(4, stopped, java.util.List.of(), false, 0));
+			domain = candidate.claimPreparedCpuDomain();
+			check(java.util.Arrays.equals(positions, domain.exportParticleState().copyPositionVolume()),
+					"Stationary complete CPU step replaced saved conservative quadrature");
+			check(domain.liquidShapes.equals(shapes), "Stationary complete CPU step changed saved liquid shapes");
+			FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		}
 	}
 	private static void setTranslationField(FluidDomain domain, float h, int axes, int signs) {
 		domain.rebuildGridFromParticles(); var basis = CellAffineVelocity.capture(domain);
