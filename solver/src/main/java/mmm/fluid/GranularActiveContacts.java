@@ -18,8 +18,9 @@ final class GranularActiveContacts {
 	private final GranularRegistry registry;
 	private final GranularSphereCollision fixed;
 	private final double duration;
-	private final int sizeX, sizeY, sizeZ;
-	private final double h;
+	private final int sizeX, sizeY, sizeZ, cellCount;
+	private final int[] sweepSizes;
+	private final double h, sweepCellSize;
 	private final double[][] position, trajectoryOrigin, drift, velocity;
 	private final double[][] driftError, velocityError;
 	private final double[] updated, mass, distanceLimit;
@@ -41,10 +42,16 @@ final class GranularActiveContacts {
 		this.parcels = parcels; this.registry = registry; this.fixed = fixed;
 		if (!(Float.isFinite(courant) && courant > 0)) throw new IllegalArgumentException("Invalid active contact CFL limit");
 		this.duration = duration; this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.h = h;
+		cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		int divisions = FlipCutCellGeometry.MICRO_CELLS_PER_AXIS;
+		// Keep coarse indexing when a diagnostic domain exceeds micro-grid int addressing.
+		if (cellCount > Integer.MAX_VALUE / (divisions * divisions * divisions)) divisions = 1;
+		sweepSizes = new int[]{Math.multiplyExact(sizeX, divisions), Math.multiplyExact(sizeY, divisions), Math.multiplyExact(sizeZ, divisions)};
+		sweepCellSize = h / (double) divisions;
 		int count = parcels.count(); position = new double[count][3]; trajectoryOrigin = new double[count][3]; drift = new double[count][3]; velocity = new double[count][3];
 		updated = new double[count]; mass = new double[count]; distanceLimit = new double[count]; radius = new float[count]; versions = new int[count];
 		driftError = new double[count][3]; velocityError = new double[count][3];
-		sweptCells = new BitSet[sizeX * sizeY * sizeZ]; registrations = new int[count][];
+		sweptCells = new BitSet[Math.multiplyExact(Math.multiplyExact(sweepSizes[0], sweepSizes[1]), sweepSizes[2])]; registrations = new int[count][];
 		sweptMinimum = new double[count][3]; sweptMaximum = new double[count][3];
 		var admission = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, h, count);
 		for (int i = 0; i < count; i++) {
@@ -90,7 +97,7 @@ final class GranularActiveContacts {
 		}
 		for (int i = 0; i < parcels.count(); i++) advance(i, duration);
 		var endpoints = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, (float) h, parcels.count());
-		int[] heads = new int[sweptCells.length], next = new int[parcels.count()], supportQueue = new int[parcels.count()];
+		int[] heads = new int[cellCount], next = new int[parcels.count()], supportQueue = new int[parcels.count()];
 		Arrays.fill(heads, -1); int supportCount = 0;
 		for (int i = 0; i < parcels.count(); i++) {
 			float[] rounded = rounded(i, endpoints);
@@ -247,18 +254,18 @@ final class GranularActiveContacts {
 		for (int axis = 0; axis < 3; axis++) distance += Math.abs(position[i][axis] - initial[axis]) + Math.abs(drift[i][axis]) * (duration - time);
 		if (distance > distanceLimit[i]) throw new MechanicalTimeRefinement(2, "Granular contact drift exceeds CFL support");
 		if (registrations[i] != null) for (int cell : registrations[i]) sweptCells[cell].clear(i);
-		int[] lower = new int[3], upper = new int[3]; int[] sizes = {sizeX, sizeY, sizeZ};
+		int[] lower = new int[3], upper = new int[3];
 		for (int axis = 0; axis < 3; axis++) {
 			double endpoint = Math.fma(duration - time, drift[i][axis], position[i][axis]);
 			sweptMinimum[i][axis] = Math.nextDown(Math.min(position[i][axis], Math.nextDown(endpoint)) - radius[i]);
 			sweptMaximum[i][axis] = Math.nextUp(Math.max(position[i][axis], Math.nextUp(endpoint)) + radius[i]);
-			lower[axis] = coordinate(Math.nextDown(sweptMinimum[i][axis] / h), sizes[axis]);
-			upper[axis] = coordinate(Math.nextUp(sweptMaximum[i][axis] / h), sizes[axis]);
+			lower[axis] = coordinate(Math.nextDown(sweptMinimum[i][axis] / sweepCellSize), sweepSizes[axis]);
+			upper[axis] = coordinate(Math.nextUp(sweptMaximum[i][axis] / sweepCellSize), sweepSizes[axis]);
 		}
 		int[] cells = new int[(upper[0] - lower[0] + 1) * (upper[1] - lower[1] + 1) * (upper[2] - lower[2] + 1)];
 		int count = 0;
 		for (int z = lower[2]; z <= upper[2]; z++) for (int y = lower[1]; y <= upper[1]; y++) for (int x = lower[0]; x <= upper[0]; x++) {
-			int cell = (z * sizeY + y) * sizeX + x; cells[count++] = cell;
+			int cell = (z * sweepSizes[1] + y) * sweepSizes[0] + x; cells[count++] = cell;
 			if (sweptCells[cell] == null) sweptCells[cell] = new BitSet(parcels.count());
 			sweptCells[cell].set(i);
 		}
@@ -268,15 +275,15 @@ final class GranularActiveContacts {
 		candidates.clear(); for (int cell : registrations[i]) candidates.or(sweptCells[cell]);
 	}
 	private void contactCandidates(int i) {
-		candidates.clear(); int[] lower = new int[3], upper = new int[3], sizes = {sizeX, sizeY, sizeZ};
+		candidates.clear(); int[] lower = new int[3], upper = new int[3];
 		for (int axis = 0; axis < 3; axis++) {
 			// A stored-coordinate quantum encloses the binary64 touching test, including neighboring centers.
 			double envelope = Math.ulp((float) (Math.abs(position[i][axis]) + h));
-			lower[axis] = coordinate(Math.nextDown(Math.nextDown(position[i][axis] - radius[i] - envelope) / h), sizes[axis]);
-			upper[axis] = coordinate(Math.nextUp(Math.nextUp(position[i][axis] + radius[i] + envelope) / h), sizes[axis]);
+			lower[axis] = coordinate(Math.nextDown(Math.nextDown(position[i][axis] - radius[i] - envelope) / sweepCellSize), sweepSizes[axis]);
+			upper[axis] = coordinate(Math.nextUp(Math.nextUp(position[i][axis] + radius[i] + envelope) / sweepCellSize), sweepSizes[axis]);
 		}
 		for (int z = lower[2]; z <= upper[2]; z++) for (int y = lower[1]; y <= upper[1]; y++) for (int x = lower[0]; x <= upper[0]; x++) {
-			var occupants = sweptCells[(z * sizeY + y) * sizeX + x];
+			var occupants = sweptCells[(z * sweepSizes[1] + y) * sweepSizes[0] + x];
 			if (occupants != null) candidates.or(occupants);
 		}
 	}
