@@ -130,9 +130,10 @@ final class GasLiquidPhaseChangeStage {
 				/ phase.gasBatch(transition, 1L).standardVolumeNanos();
 		long high = Math.min(maximumBatches, Math.min(byGas, Math.min(byVolume, byMass)));
 		if (high <= 0L) return null;
+		var contactPlanes = GasRuntimeGeometry.prepareBoilContactPlanes(support, cell, contact);
 		var envelope = GasPhaseGeometryEnvelope.forBoiling(support, cell, node);
 		if (envelope == null) return GasPhaseBatchSearch.maximum(high, batches -> completeBoil(cell, node, transition, phase,
-				contact, prepareBoilInventory(cell, node, liquidHandle, transition, phase, thermalCell,
+				contact, contactPlanes, prepareBoilInventory(cell, node, liquidHandle, transition, phase, thermalCell,
 						volatileSpecies, liquidTemperature, batches, contact)), (low, upper) -> false);
 		GasBoilInventoryPlan[] prepared = new GasBoilInventoryPlan[Math.toIntExact(high) + 1];
 		boolean[] evaluated = new boolean[prepared.length];
@@ -162,7 +163,7 @@ final class GasLiquidPhaseChangeStage {
 			GasBoilInventoryPlan inventoryPlan = caloric.apply(batches);
 			GasBoilPlan candidate = bounds != null && inventoryPlan != null
 					&& boilingSaturationExcluded(inventoryPlan, envelope, transition, phase, gasThermal) ? null
-					: completeBoil(cell, node, transition, phase, contact, inventoryPlan);
+					: completeBoil(cell, node, transition, phase, contact, contactPlanes, inventoryPlan);
 			prepared[Math.toIntExact(batches)] = null;
 			return candidate;
 		}, exclusion);
@@ -235,8 +236,10 @@ final class GasLiquidPhaseChangeStage {
 	}
 
 	private GasBoilPlan completeBoil(int cell, int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
-	                                GasPhaseInterfaceResolver.Candidate contact, GasBoilInventoryPlan candidate) {
+	                                GasPhaseInterfaceResolver.Candidate contact, GasRuntimeGeometry.BoilContactPlanes contactPlanes,
+	                                GasBoilInventoryPlan candidate) {
 		if (candidate == null) return null;
+		if (!interfaces.mayKeepBoilContact(contactPlanes, candidate.liquidGeometry(), contact)) return null;
 		try {
 			var topology = support.planGasGeometry(candidate.liquidGeometry(), node, candidate.gasPlan(),
 					candidate.candidateGasEnergy(), candidate.thermalPlan());

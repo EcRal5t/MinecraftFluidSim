@@ -95,6 +95,62 @@ final class GasRuntimeGeometry {
 		return new GasRuntimeGeometry(domain, edits, occupiedSvq, sealedExterior, false);
 	}
 
+	/** Prepared once for one BOIL search; candidates mutate only these private contact-plane arrays. */
+	static final class BoilContactPlanes {
+		final GasRuntimeGeometry source;
+		private final GasDomainState owner;
+		private final int editedCell;
+		private final FlipPressurePhaseGeometry scratch;
+		private final FlipCutCellGeometry cut;
+		private final boolean[] solid;
+		private final List<Integer> cells;
+
+		private BoilContactPlanes(GasDomainState owner, int editedCell, List<Integer> cells,
+		                          FlipCutCellGeometry cut, boolean[] solid) {
+			this.owner = owner; this.source = owner.frame; this.editedCell = editedCell;
+			this.cells = List.copyOf(cells); this.cut = cut; this.solid = solid;
+			this.scratch = source.phase.contactScratch();
+		}
+
+		FlipPressurePhaseGeometry rebuild(PhaseLiquidGeometryEdit edit) {
+			if (owner.frame != source || edit.cell() != editedCell || edit.collisionMask() != cut.mask(editedCell))
+				throw new IllegalArgumentException("BOIL contact planes require their unchanged preparing source");
+			scratch.rebuildContactCells(source.phase, edit, cells, source.liquidStock, cut, solid, source.cellSize);
+			return scratch;
+		}
+	}
+
+	static BoilContactPlanes prepareBoilContactPlanes(PhaseChangeStageSupport support, int editedCell,
+	                                                GasPhaseInterfaceResolver.Candidate contact) {
+		var state = support.state(); var source = support.gasState().frame;
+		if (source == null || source.geometry.sizeX() != state.sizeX() || source.geometry.sizeY() != state.sizeY()
+				|| source.geometry.sizeZ() != state.sizeZ() || Float.floatToRawIntBits(source.cellSize) != Float.floatToRawIntBits(state.cellSize())) return null;
+		try {
+			var cells = new java.util.TreeSet<Integer>();
+			for (int piece : contact.contactPieces()) {
+				if (source.geometry.piece(piece) == null || source.nodeOfPiece(piece) != contact.node()) return null;
+				cells.add(piece / 8);
+			}
+			var inputs = new java.util.TreeSet<Integer>(cells); inputs.add(editedCell);
+			int[] sizes = {state.sizeX(), state.sizeY(), state.sizeZ()}, strides = {1, state.sizeX(), state.sizeX() * state.sizeY()};
+			for (int cell : cells) {
+				int[] coordinate = {cell % sizes[0], cell / sizes[0] % sizes[1], cell / strides[2]};
+				for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1})
+					if (coordinate[axis] + sign >= 0 && coordinate[axis] + sign < sizes[axis]) inputs.add(cell + sign * strides[axis]);
+			}
+			for (int cell : inputs) {
+				long occupied = Math.addExact(support.granularSvq(cell), support.thermal() == null ? 0
+						: support.thermal().coherentPhases().cellOccupiedSvq(cell));
+				if (source.occupiedSvq[cell] != occupied || source.geometry.collisionMask(cell) != state.geometry().cutCells.mask(cell)
+						|| state.geometry().solid[cell] != (source.geometry.collisionMask(cell) == 255)
+						|| !source.liquidStock.get(cell).equals(PhaseLiquidGeometryEdit.current(state, cell))) return null;
+			}
+			var cut = new FlipCutCellGeometry(state.sizeX(), state.sizeY(), state.sizeZ());
+			cut.restoreMicroMasks(state.geometry().cutCells.copyMicroMasks());
+			return new BoilContactPlanes(support.gasState(), editedCell, List.copyOf(cells), cut, state.geometry().solid.clone());
+		} catch (IllegalArgumentException | ArithmeticException unresolved) { return null; }
+	}
+
 	/** Complete future clear: no liquid or solid stock, retaining the captured fixed collision masks. */
 	static GasRuntimeGeometry allDry(FluidDomain domain, boolean sealedExterior) {
 		if (domain == null) throw new IllegalArgumentException("Gas runtime domain is missing");

@@ -156,59 +156,83 @@ final class FlipPressurePhaseGeometry {
 			PhaseLiquidGeometryEdit edit = overlay == null ? null : overlay[cell];
 			if (solid[cell] || !(fraction[cell] > 0.0F) || fraction[cell] >= 1) continue;
 			if (captured != null && sameLocalStock[cell] && sameStencil(captured, cell, x, y, z, solid)) {
-				normalX[cell] = captured.normalX[cell]; normalY[cell] = captured.normalY[cell]; normalZ[cell] = captured.normalZ[cell];
-				planeOffset[cell] = captured.planeOffset[cell]; offsetBrackets[cell] = captured.offsetBrackets[cell];
-				components[cell] = captured.components[cell];
+				copyCell(captured, cell);
 				continue;
 			}
-			double center = fraction[cell];
-			float nx = (float) -(sampleFraction(x + 1, y, z, center, solid)
-					- sampleFraction(x - 1, y, z, center, solid));
-			float ny = (float) -(sampleFraction(x, y + 1, z, center, solid)
-					- sampleFraction(x, y - 1, z, center, solid));
-			float nz = (float) -(sampleFraction(x, y, z + 1, center, solid)
-					- sampleFraction(x, y, z - 1, center, solid));
-			float gradientX = nx, gradientY = ny, gradientZ = nz;
-			if (markers != null && momentNormal(cell, x, y, z, cutCells, markers, particles, cellSize, edit)) {
-				nx = normalX[cell]; ny = normalY[cell]; nz = normalZ[cell];
-			}
-			double lengthSquared = (double) nx * nx + (double) ny * ny + (double) nz * nz;
-			if (lengthSquared == 0) {
-				nx = airDirection(x + 1, y, z, solid) - airDirection(x - 1, y, z, solid);
-				ny = airDirection(x, y + 1, z, solid) - airDirection(x, y - 1, z, solid);
-				nz = airDirection(x, y, z + 1, solid) - airDirection(x, y, z - 1, solid);
-				lengthSquared = (double) nx * nx + (double) ny * ny + (double) nz * nz;
-			}
-			if (lengthSquared == 0) ny = 1.0F;
-			else {
-				double inverseLength = 1.0 / Math.sqrt(lengthSquared);
-				nx = (float) (nx * inverseLength);
-				ny = (float) (ny * inverseLength);
-				nz = (float) (nz * inverseLength);
-			}
-			normalX[cell] = nx;
-			normalY[cell] = ny;
-			normalZ[cell] = nz;
-			var stock = markers == null ? null : edit != null ? edit
-					: PhaseLiquidGeometryEdit.current(cell,cutCells.mask(cell),cellSize,markers,particles);
-			float open = granular == null ? cutCells.openCellVolume(cell)
-					: granular.effectiveOpenCellVolume(cell,cutCells.openCellVolume(cell));
-			offsetBrackets[cell] = stock == null ? null : PlicPlaneOffset.solve(~cutCells.mask(cell)&255,nx,ny,nz,
-						PlicComponentGeometry.ratio(stock.volume(),SignedDyadic.of(open))
-								.multiply(Integer.bitCount(~cutCells.mask(cell)&255)).divide(8));
-			planeOffset[cell] = offsetBrackets[cell] == null ? integration.offset(cell,nx,ny,nz,center*cutCells.openCellVolume(cell))
-					: offsetBrackets[cell].offset();
-			if (markers != null && CellRemapMicroTopology.components(cutCells.mask(cell)).length > 1) {
-				components[cell] = PlicComponentGeometry.capture(stock,
-						CellRemapMicroTopology.capacities(cutCells.mask(cell),SignedDyadic.of(open)),
-						x,y,z,cellSize,gradientX,gradientY,gradientZ);
-			}
+			solveCell(cell, x, y, z, solid, cutCells, markers, particles, cellSize, edit, integration);
 		}
 		for (int cell = 0; cell < fraction.length; cell++) {
 			if (solid[cell] || !(fraction[cell] > 0.5F)) continue;
 			if (fraction[cell] >= 1) pressureFluid[cell] = true;
 			else pressureFluid[cell] = planeOffset[cell]
 					> 0.5 * ((double) normalX[cell] + normalY[cell] + normalZ[cell]);
+		}
+	}
+
+	private void solveCell(int cell, int x, int y, int z, boolean[] solid, FlipCutCellGeometry cutCells,
+	                       MarkerGridIndex markers, LiquidParticleStore particles, float cellSize,
+	                       PhaseLiquidGeometryEdit edit, LiquidFluxGeometry integration) {
+		double center = fraction[cell];
+		float nx = (float) -(sampleFraction(x + 1, y, z, center, solid) - sampleFraction(x - 1, y, z, center, solid));
+		float ny = (float) -(sampleFraction(x, y + 1, z, center, solid) - sampleFraction(x, y - 1, z, center, solid));
+		float nz = (float) -(sampleFraction(x, y, z + 1, center, solid) - sampleFraction(x, y, z - 1, center, solid));
+		float gradientX = nx, gradientY = ny, gradientZ = nz;
+		if ((markers != null || edit != null) && momentNormal(cell, x, y, z, cutCells, markers, particles, cellSize, edit)) {
+			nx = normalX[cell]; ny = normalY[cell]; nz = normalZ[cell];
+		}
+		double lengthSquared = (double) nx * nx + (double) ny * ny + (double) nz * nz;
+		if (lengthSquared == 0) {
+			nx = airDirection(x + 1, y, z, solid) - airDirection(x - 1, y, z, solid);
+			ny = airDirection(x, y + 1, z, solid) - airDirection(x, y - 1, z, solid);
+			nz = airDirection(x, y, z + 1, solid) - airDirection(x, y, z - 1, solid);
+			lengthSquared = (double) nx * nx + (double) ny * ny + (double) nz * nz;
+		}
+		if (lengthSquared == 0) ny = 1.0F;
+		else {
+			double inverseLength = 1.0 / Math.sqrt(lengthSquared);
+			nx = (float) (nx * inverseLength); ny = (float) (ny * inverseLength); nz = (float) (nz * inverseLength);
+		}
+		normalX[cell] = nx; normalY[cell] = ny; normalZ[cell] = nz;
+		var stock = edit != null ? edit : markers == null ? null
+				: PhaseLiquidGeometryEdit.current(cell, cutCells.mask(cell), cellSize, markers, particles);
+		SignedDyadic open = poreVolumes[cell];
+		offsetBrackets[cell] = stock == null ? null : PlicPlaneOffset.solve(~cutCells.mask(cell)&255, nx, ny, nz,
+				PlicComponentGeometry.ratio(stock.volume(), open).multiply(Integer.bitCount(~cutCells.mask(cell)&255)).divide(8));
+		planeOffset[cell] = offsetBrackets[cell] == null ? integration.offset(cell, nx, ny, nz, center * cutCells.openCellVolume(cell))
+				: offsetBrackets[cell].offset();
+		if (stock != null && CellRemapMicroTopology.components(cutCells.mask(cell)).length > 1)
+			components[cell] = PlicComponentGeometry.capture(stock, CellRemapMicroTopology.capacities(cutCells.mask(cell), open),
+					x, y, z, cellSize, gradientX, gradientY, gradientZ);
+	}
+
+	private void copyCell(FlipPressurePhaseGeometry captured, int cell) {
+		normalX[cell] = captured.normalX[cell]; normalY[cell] = captured.normalY[cell]; normalZ[cell] = captured.normalZ[cell];
+		planeOffset[cell] = captured.planeOffset[cell]; offsetBrackets[cell] = captured.offsetBrackets[cell];
+		components[cell] = captured.components[cell];
+	}
+
+	/** Scratch owns its scalar arrays; captured component certificates remain immutable. */
+	FlipPressurePhaseGeometry contactScratch() {
+		var scratch = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
+		System.arraycopy(fraction, 0, scratch.fraction, 0, fraction.length);
+		System.arraycopy(poreVolumes, 0, scratch.poreVolumes, 0, fraction.length);
+		scratch.collisionMasks = collisionMasks.clone();
+		return scratch;
+	}
+
+	void rebuildContactCells(FlipPressurePhaseGeometry captured, PhaseLiquidGeometryEdit edit,
+	                         java.util.List<Integer> cells, java.util.List<PhaseLiquidGeometryEdit> stock,
+	                         FlipCutCellGeometry cut, boolean[] solid, float cellSize) {
+		double open = poreVolumes[edit.cell()].toDouble();
+		fraction[edit.cell()] = solid[edit.cell()] || open <= 0 ? 0 : clamp(edit.volume().toDouble() / open, 0, 1);
+		var integration = new LiquidFluxGeometry(cut);
+		for (int cell : cells) {
+			int x = cell % sizeX, y = cell / sizeX % sizeY, z = cell / (sizeX * sizeY);
+			normalX[cell] = normalY[cell] = normalZ[cell] = 0; planeOffset[cell] = 0;
+			offsetBrackets[cell] = null; components[cell] = null;
+			if (solid[cell] || !(fraction[cell] > 0) || fraction[cell] >= 1) continue;
+			if (cell != edit.cell() && sameStencil(captured, cell, x, y, z, solid)) copyCell(captured, cell);
+			else solveCell(cell, x, y, z, solid, cut, null, null, cellSize, cell == edit.cell() ? edit : stock.get(cell), integration);
 		}
 	}
 

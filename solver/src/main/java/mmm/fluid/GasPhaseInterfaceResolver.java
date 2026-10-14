@@ -49,11 +49,7 @@ final class GasPhaseInterfaceResolver {
 		for (int piece : source.contactPieces()) {
 			var before = topology.source().geometry().piece(piece);
 			var after = future.geometry().piece(piece);
-			if (before == null || after == null) continue;
-			if (before.dryPlane() != null && after.dryPlane() != null
-					&& !before.dryPlane().equals(after.dryPlane())
-					&& GasGeometryOverlap.normalizedVolume(before.micro(),
-							List.of(before.dryPlane(), after.dryPlane())).isZero()) continue;
+			if (before == null || after == null || !positiveOverlap(before, after.dryPlane(), true)) continue;
 			int node = future.nodeOfPiece(piece);
 			if (node >= 0) nodes.add(node);
 		}
@@ -82,6 +78,34 @@ final class GasPhaseInterfaceResolver {
 			throw new PhaseChangeStageSupport.PhaseCandidateUnavailableException(
 					"Future gas interface is outside its pressure or saturation validity range", outsideGasPhaseRange);
 		}
+	}
+
+	boolean mayKeepBoilContact(GasRuntimeGeometry.BoilContactPlanes prepared, PhaseLiquidGeometryEdit edit,
+	                          Candidate source) {
+		if (prepared == null) return true;
+		try {
+			var phase = prepared.rebuild(edit);
+			for (int piece : source.contactPieces()) {
+				var before = prepared.source.geometry().piece(piece);
+				if (before == null) continue;
+				int cell = piece / 8, micro = piece & 7;
+				double fraction = phase.liquidFractionExact(cell, micro);
+				if (fraction >= 1) continue;
+				var plane = fraction == 0 ? null : new GasGeometryOverlap.HalfSpace(
+						SignedDyadic.of(phase.planeNormal(cell, micro, 0)), SignedDyadic.of(phase.planeNormal(cell, micro, 1)),
+						SignedDyadic.of(phase.planeNormal(cell, micro, 2)), SignedDyadic.of(phase.planeOffset(cell, micro)));
+				if (positiveOverlap(before, plane, false)) return true;
+			}
+			return false;
+		} catch (IllegalArgumentException | ArithmeticException | GasTopologyBlockedException | MechanicalTimeRefinement unresolved) {
+			return true;
+		}
+	}
+
+	private static boolean positiveOverlap(GasComplementGeometry.Piece before, GasGeometryOverlap.HalfSpace after, boolean positiveAfter) {
+		if (after == null || after.equals(before.dryPlane())) return true;
+		if (before.dryPlane() == null) return positiveAfter || MicroBoxPlaneVolume.dryVolume(before.micro(), after).signum() > 0;
+		return GasGeometryOverlap.normalizedVolume(before.micro(), List.of(before.dryPlane(), after)).signum() > 0;
 	}
 
 	record Contact(int node, int supportMask, List<Integer> pieces) { }

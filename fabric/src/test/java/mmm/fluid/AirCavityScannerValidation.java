@@ -187,6 +187,7 @@ public final class AirCavityScannerValidation {
 				"Future gas frame lost its complete before/after liquid tuples");
 		check(current.planeNormal(1,0,0)>0 && future.planeNormal(1,0,0)<0,
 				"Future liquid edit failed to rebuild a centered neighbor's PLIC gradient");
+		checkLocalBoilPlanes(domain,current,edit,future);
 		var rebuiltCapacity=GasChamberCapacity.capture(domain,future.geometry(),future.topology(),occupied,future.liquidStock(),current);
 		check(rebuiltCapacity.components().get(1)!=current.capacity().components().get(1)
 				&& rebuiltCapacity.components().equals(future.capacity().components())
@@ -258,12 +259,55 @@ public final class AirCavityScannerValidation {
 			var neighborEdit=new PhaseLiquidGeometryEdit(1,0,List.of(new LiquidComponentMoments(1,255,1,neighborVolume,
 					neighborVolume.multiply(SignedDyadic.of(1.25)),neighborVolume.multiply(SignedDyadic.of(.5)),neighborVolume.multiply(SignedDyadic.of(.5)))));
 			var neighborChanged=GasRuntimeGeometry.capture(masked,neighborEdit,new long[8],true);
+			checkLocalBoilPlanes(masked,own,neighborEdit,neighborChanged);
 			for (int micro=0;micro<8;micro++) check(java.util.Objects.equals(own.geometry().piece(micro),neighborChanged.geometry().piece(micro)),
 					"Neighbor fraction changed a masked component's independent own-moment certificate");
 			masked.particles.setPositionX(0,.25F);
 			var centered=GasRuntimeGeometry.capture(masked,null,new long[8],true);
 			check(centered.cellDependsOnNeighborFractions(0),"A centered masked component lost its actual fraction-gradient dependency");
+			checkLocalBoilPlanes(masked,centered,neighborEdit,GasRuntimeGeometry.capture(masked,neighborEdit,new long[8],true));
 		}
+	}
+
+	private static void checkLocalBoilPlanes(FluidDomain domain,GasRuntimeGeometry source,PhaseLiquidGeometryEdit edit,GasRuntimeGeometry future) {
+		var previous=domain.gasState.frame;
+		try {
+			var field=GasLiquidPhaseChangeStage.class.getDeclaredField("support");field.setAccessible(true);
+			var support=(PhaseChangeStageSupport)field.get(domain.gasLiquidPhaseChangeStage);support.prepareGranularOccupancy();
+			var groups=new java.util.TreeMap<Integer,java.util.List<Integer>>();
+			for(var piece:source.geometry().pieces())groups.computeIfAbsent(source.nodeOfPiece(piece.id()),ignored->new java.util.ArrayList<>()).add(piece.id());
+			for(var group:groups.entrySet()) {
+				domain.gasState.frame=source;
+				var contact=new GasPhaseInterfaceResolver.Candidate(group.getKey(),~edit.collisionMask()&255,group.getValue(),null);
+				var prepared=GasRuntimeGeometry.prepareBoilContactPlanes(support,edit.cell(),contact);
+				check(prepared!=null,"Matching local phase inputs failed to prepare contact-only PLIC");
+				var local=prepared.rebuild(edit);boolean alive=false;
+				for(int piece:group.getValue()) {
+					int cell=piece/8;var before=source.geometry().piece(piece);var after=future.geometry().piece(piece);
+					if(after!=null && (before.dryPlane()==null || after.dryPlane()==null || before.dryPlane().equals(after.dryPlane())
+							||GasGeometryOverlap.normalizedVolume(piece&7,List.of(before.dryPlane(),after.dryPlane())).signum()>0))alive=true;
+					for(int micro=0;micro<8;micro++) {
+						check(Double.doubleToRawLongBits(local.liquidFractionExact(cell,micro))==Double.doubleToRawLongBits(future.liquidFractionExact(cell,micro))
+								&&Double.doubleToRawLongBits(local.planeOffset(cell,micro))==Double.doubleToRawLongBits(future.planeOffset(cell,micro))
+								&&java.util.Objects.equals(local.offsetBracket(cell,micro),future.offsetBracket(cell,micro)),"Local/full contact PLIC certificate differs");
+						for(int axis=0;axis<3;axis++)check(Float.floatToRawIntBits(local.planeNormal(cell,micro,axis))
+								==Float.floatToRawIntBits(future.planeNormal(cell,micro,axis)),"Local/full contact normal differs");
+					}
+				}
+				var resolver=new GasPhaseInterfaceResolver(support);
+				check(resolver.mayKeepBoilContact(prepared,edit,contact)==alive,"Local contact survival differs from full same-micro intersections");
+				domain.gasState.frame=null;
+				check(resolver.mayKeepBoilContact(prepared,edit,contact),"A changed preparing frame acquired a zero-contact rejection");
+				domain.gasState.frame=source;
+				float x=domain.particles.positionX(0);domain.particles.setPositionX(0,Math.nextUp(x));
+				check(GasRuntimeGeometry.prepareBoilContactPlanes(support,edit.cell(),contact)==null,"Changed local moments retained a contact PLIC source");
+				domain.particles.setPositionX(0,x);
+				int mask=domain.geometry.cutCells.mask(edit.cell());domain.geometry.cutCells.replaceMask(edit.cell(),mask^1);
+				check(GasRuntimeGeometry.prepareBoilContactPlanes(support,edit.cell(),contact)==null,"Changed local masks retained a contact PLIC source");
+				domain.geometry.cutCells.replaceMask(edit.cell(),mask);
+			}
+		} catch(ReflectiveOperationException failure) { throw new AssertionError("Local contact fixture binding failed",failure); }
+		finally { domain.gasState.frame=previous; }
 	}
 
 	private static void checkRuntimePlanesEqual(GasRuntimeGeometry actual, GasRuntimeGeometry expected, String message) {
@@ -622,6 +666,7 @@ public final class AirCavityScannerValidation {
 		var oppositeMoment=volume.multiply(SignedDyadic.of(.75));
 		var opposite=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,volume,oppositeMoment,oppositeMoment,oppositeMoment)));
 		var noOverlap=GasRuntimeGeometry.capture(single,opposite,new long[8],true);
+		checkLocalBoilPlanes(single,singleSource,opposite,noOverlap);
 		check(gasOverlapWeights(single,singleSource,noOverlap).isEmpty(),"A single old gas piece gained a successor without positive overlap");
 		try { single.gasTopologyCoordinator.planAfterLiquidEdits(List.of(opposite)); throw new AssertionError("Zero-overlap finite single-piece stock gained a remap"); }
 		catch(GasTopologyBlockedException expected) {
