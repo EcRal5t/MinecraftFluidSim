@@ -97,6 +97,13 @@ public final class FluidDomainStateParityValidation {
 		FluidDomainState base = domain.captureAuthoritativeState();
 		FluidStepCandidate candidate = new CpuFluidSolverBackend().evaluate(
 				new FluidStepRequest(0L, base, List.of(), false, 0, true));
+		var resolution = candidate.mechanicalResolution();
+		if (resolution.reservedSubsteps() < candidate.stats().substeps()
+				|| resolution.reservedSubsteps() > CpuFluidSolverBackend.MAXIMUM_CUMULATIVE_SUBSTEPS
+				|| (resolution.timeRefinements() == 0) != resolution.lastRefinementReason().isEmpty()
+				|| resolution.timeRefinements() == 0 && resolution.reservedSubsteps() != candidate.stats().substeps()) {
+			throw new AssertionError("CPU candidate lost its actual time-refinement budget accounting");
+		}
 		FluidDomain restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 		FluidDomainStateAssertions.assertSameState(
 				candidate.state(), restored.captureAuthoritativeState(), "phase-off candidate/restore/capture");

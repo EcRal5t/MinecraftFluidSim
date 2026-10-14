@@ -51,7 +51,8 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 				}
 				candidate.minimumMechanicalSubsteps = 1;
 				return FluidStepCandidate.preparedCpu(
-						request.baseGeneration(), candidate, stats, movingBodyCoupling);
+						request.baseGeneration(), candidate, stats, movingBodyCoupling,
+						new FluidStepCandidate.MechanicalResolution(refinement, spentSubsteps, refinementReason));
 			}
 		} catch (RuntimeException rejected) {
 			throw candidateFailure("mechanical", rejected);

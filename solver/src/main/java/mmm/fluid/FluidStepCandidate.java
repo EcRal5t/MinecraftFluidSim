@@ -12,12 +12,25 @@ import java.util.Objects;
  * checkpoint, replay or diagnostic actually asks for it. Other backends provide the immutable state eagerly.
  */
 public final class FluidStepCandidate {
+	/** Budget reservations include rejected attempts; zero denotes an unreported backend. */
+	public record MechanicalResolution(int timeRefinements, long reservedSubsteps, String lastRefinementReason) {
+		public MechanicalResolution {
+			Objects.requireNonNull(lastRefinementReason, "lastRefinementReason");
+			if (timeRefinements < 0 || reservedSubsteps < 0
+					|| reservedSubsteps > 0 && reservedSubsteps < timeRefinements + 1L
+					|| reservedSubsteps == 0 && timeRefinements != 0
+					|| (timeRefinements == 0) != lastRefinementReason.isEmpty())
+				throw new IllegalArgumentException("Mechanical resolution counters are inconsistent");
+		}
+		private static final MechanicalResolution UNREPORTED = new MechanicalResolution(0, 0, "");
+	}
 	private final String backendId;
 	private final long baseGeneration;
 	private final long candidateGeneration;
 	private final FluidDomainState.Layout layout;
 	private final FluidDomain.StepStats stats;
 	private final MovingBodyFluidCoupling.Result movingBodyCoupling;
+	private final MechanicalResolution mechanicalResolution;
 	private FluidDomain preparedCpuDomain;
 	private boolean preparedCpuDomainClaimed;
 	private volatile FluidDomainState state;
@@ -27,23 +40,24 @@ public final class FluidStepCandidate {
 			FluidDomain.StepStats stats, MovingBodyFluidCoupling.Result movingBodyCoupling
 	) {
 		this(backendId, baseGeneration, candidateGeneration, Objects.requireNonNull(state, "state"),
-				state.layout(), stats, movingBodyCoupling, null);
+				state.layout(), stats, movingBodyCoupling, null, MechanicalResolution.UNREPORTED);
 	}
 
 	static FluidStepCandidate preparedCpu(
 			long baseGeneration, FluidDomain domain, FluidDomain.StepStats stats,
-			MovingBodyFluidCoupling.Result movingBodyCoupling
+			MovingBodyFluidCoupling.Result movingBodyCoupling, MechanicalResolution mechanicalResolution
 	) {
 		Objects.requireNonNull(domain, "domain");
 		return new FluidStepCandidate(CpuFluidSolverBackend.ID, baseGeneration,
 				Math.addExact(baseGeneration, 1L), null, domain.authoritativeLayout(), stats,
-				movingBodyCoupling, domain);
+				movingBodyCoupling, domain, mechanicalResolution);
 	}
 
 	private FluidStepCandidate(
 			String backendId, long baseGeneration, long candidateGeneration, FluidDomainState state,
 			FluidDomainState.Layout layout, FluidDomain.StepStats stats,
-			MovingBodyFluidCoupling.Result movingBodyCoupling, FluidDomain preparedCpuDomain
+			MovingBodyFluidCoupling.Result movingBodyCoupling, FluidDomain preparedCpuDomain,
+			MechanicalResolution mechanicalResolution
 	) {
 		if (backendId == null || backendId.isBlank()) throw new IllegalArgumentException("Backend id is missing");
 		if (baseGeneration < 0L || candidateGeneration != Math.addExact(baseGeneration, 1L)) {
@@ -56,6 +70,7 @@ public final class FluidStepCandidate {
 		this.layout = Objects.requireNonNull(layout, "layout");
 		this.stats = Objects.requireNonNull(stats, "stats");
 		this.movingBodyCoupling = Objects.requireNonNull(movingBodyCoupling, "movingBodyCoupling");
+		this.mechanicalResolution = Objects.requireNonNull(mechanicalResolution, "mechanicalResolution");
 		this.preparedCpuDomain = preparedCpuDomain;
 		if (preparedCpuDomain != null && (!CpuFluidSolverBackend.ID.equals(backendId)
 				|| !preparedCpuDomain.authoritativeLayout().equals(layout))) {
@@ -69,6 +84,7 @@ public final class FluidStepCandidate {
 	public FluidDomainState.Layout layout() { return layout; }
 	public FluidDomain.StepStats stats() { return stats; }
 	public MovingBodyFluidCoupling.Result movingBodyCoupling() { return movingBodyCoupling; }
+	public MechanicalResolution mechanicalResolution() { return mechanicalResolution; }
 
 	/**
 	 * Transfers the in-process CPU aggregate to the atomic adoption owner. An eager candidate returns
