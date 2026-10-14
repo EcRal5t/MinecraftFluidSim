@@ -9,7 +9,7 @@ import static mmm.fluid.GranularContactCompression.*;
 
 /** Common-source contact response and exact, preview-local reuse of its certified mathematics. */
 final class GranularComponentResponse {
-	record Response(Result drift, Result velocity, Result beforeFriction) { }
+	record Response(Result drift, Result velocity) { }
 	private static final long MAX_WORDS = 1_048_576 / Long.BYTES;
 	private final double h;
 	private final GranularSphereCollision fixed;
@@ -23,7 +23,7 @@ final class GranularComponentResponse {
 
 	Response respond(double[] mass, double[][] d, double[][] v, double[][] driftError, double[][] velocityError,
 	                 int[] handles, ParticulateMaterial[] materials, Row[] rows) {
-		if (3 + 35L * mass.length + 11L * rows.length > MAX_WORDS)
+		if (3 + 29L * mass.length + 9L * rows.length > MAX_WORDS)
 			return calculate(mass, d, v, driftError, velocityError, materials, rows);
 		var key = new Key(3 + 17 * mass.length + 5 * rows.length);
 		key.add(mass.length); key.add(rows.length); key.add(Double.doubleToRawLongBits(h));
@@ -42,14 +42,14 @@ final class GranularComponentResponse {
 		}
 		spend.run(); var cached = entries.get(key);
 		if (cached != null) {
-			auditEnergy(mass, d, cached.drift(), spend); auditEnergy(mass, v, cached.beforeFriction(), spend);
+			// Exact source matching reuses the cold response's completed energy certificates.
 			return copy(cached);
 		}
 		var result = calculate(mass, d, v, driftError, velocityError, materials, rows);
-		long size = footprint(key, result);
+		long size = footprint(key);
 		while (words + size > MAX_WORDS) {
 			spend.run(); var iterator = entries.entrySet().iterator(); var oldest = iterator.next();
-			words -= footprint(oldest.getKey(), oldest.getValue()); iterator.remove();
+			words -= footprint(oldest.getKey()); iterator.remove();
 		}
 		var owned = copy(result); spend.run(); entries.put(key, owned); words += size;
 		return result;
@@ -99,7 +99,6 @@ final class GranularComponentResponse {
 		}
 		var driftResponse = GranularContactCompression.respond(mass, d, rows, compression, driftRestitution, spend, chain);
 		var response = GranularContactCompression.respond(mass, v, rows, normalCompression, restitution, spend, chain);
-		var beforeFriction = response;
 		var frictionInput = response.values().clone(); boolean frictionChanged = false;
 		for (int i = 0; i < mass.length; i++) {
 			var normals = new ArrayList<double[]>(); double[] load = new double[3];
@@ -113,7 +112,7 @@ final class GranularComponentResponse {
 			frictionChanged |= !Arrays.equals(frictionInput[i], response.values()[i]);
 		}
 		if (frictionChanged) response = solve(mass, frictionInput, rows, spend, null, chain);
-		return new Response(driftResponse, response, beforeFriction);
+		return new Response(driftResponse, response);
 	}
 
 	private BitSet loadedSupport(int count, Row[] rows, double[] impulses) {
@@ -139,12 +138,11 @@ final class GranularComponentResponse {
 		return i;
 	}
 
-	private static long footprint(Key key, Response response) {
-		return key.bits.length + (response.velocity() == response.beforeFriction() ? 2 : 3) * (6L * key.bits[0] + 2L * key.bits[1]);
+	private static long footprint(Key key) {
+		return key.bits.length + 2 * (6L * key.bits[0] + 2L * key.bits[1]);
 	}
 	private Response copy(Response source) {
-		var drift = copy(source.drift()); var velocity = copy(source.velocity());
-		return new Response(drift, velocity, source.velocity() == source.beforeFriction() ? velocity : copy(source.beforeFriction()));
+		return new Response(copy(source.drift()), copy(source.velocity()));
 	}
 	private Result copy(Result source) {
 		double[][] values = new double[source.values().length][], error = new double[values.length][];

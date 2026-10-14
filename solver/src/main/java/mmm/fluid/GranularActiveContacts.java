@@ -18,13 +18,14 @@ final class GranularActiveContacts {
 	private final GranularRegistry registry;
 	private final GranularSphereCollision fixed;
 	private final double duration;
-	private final int sizeX, sizeY, sizeZ, cellCount;
+	private final int sizeX, sizeY, sizeZ;
 	private final int[] sweepSizes;
 	private final double h, sweepCellSize;
 	private final double[][] position, trajectoryOrigin, drift, velocity;
 	private final double[][] driftError, velocityError;
 	private final double[] updated, mass, distanceLimit;
 	private final float[] radius;
+	private float largestRadius;
 	private final int[] versions;
 	private final BitSet[] sweptCells;
 	private final int[][] registrations;
@@ -44,7 +45,7 @@ final class GranularActiveContacts {
 		if (!(Float.isFinite(courant) && courant > 0)) throw new IllegalArgumentException("Invalid active contact CFL limit");
 		this.duration = duration; this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.h = h;
 		componentResponse = new GranularComponentResponse(h, fixed, this::spend);
-		cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		int cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		int divisions = FlipCutCellGeometry.MICRO_CELLS_PER_AXIS;
 		// Keep coarse indexing when a diagnostic domain exceeds micro-grid int addressing.
 		if (cellCount > Integer.MAX_VALUE / (divisions * divisions * divisions)) divisions = 1;
@@ -69,6 +70,7 @@ final class GranularActiveContacts {
 				distanceLimit[i] += .5 * Math.ulp(endpoint);
 			}
 			mass[i] = p.mass(); radius[i] = GranularMechanics.representativeRadius(p.solidVolumeSvq(), h);
+			largestRadius = Math.max(largestRadius, radius[i]);
 			int overlapping = admission.firstOverlap(p.x(), p.y(), p.z(), p.solidVolumeSvq(), this::spend);
 			if (overlapping >= 0) throw new IllegalStateException("Active granular contact starts with overlapping spheres " + overlapping + "," + i);
 			admission.append(p.x(), p.y(), p.z(), p.solidVolumeSvq());
@@ -99,25 +101,31 @@ final class GranularActiveContacts {
 		}
 		for (int i = 0; i < parcels.count(); i++) advance(i, duration);
 		var endpoints = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, (float) h, parcels.count());
-		int[] heads = new int[cellCount], next = new int[parcels.count()], supportQueue = new int[parcels.count()];
-		Arrays.fill(heads, -1); int supportCount = 0;
+		// The drained timeline index now holds only final centers still awaiting support.
+		Arrays.fill(sweptCells, null);
+		int[] supportQueue = new int[parcels.count()]; int supportCount = 0;
 		for (int i = 0; i < parcels.count(); i++) {
 			float[] rounded = rounded(i, endpoints);
 			x[i] = rounded[0]; y[i] = rounded[1]; z[i] = rounded[2];
 			endpoints.append(x[i], y[i], z[i], parcels.parcel(i).solidVolumeSvq());
-			int cell = centerCell(x[i], y[i], z[i]); next[i] = heads[cell]; heads[cell] = i;
 			vx[i] = (float) velocity[i][0]; vy[i] = (float) velocity[i][1]; vz[i] = (float) velocity[i][2];
 			if (!Float.isFinite(vx[i]) || !Float.isFinite(vy[i]) || !Float.isFinite(vz[i]))
 				throw new IllegalStateException("Unrepresentable active contact velocity");
 			supported[i] = fixed.supportsAtRest(x[i], y[i], z[i], radius[i]);
 			if (supported[i]) supportQueue[supportCount++] = i;
+			else {
+				int cell = pointCell(x[i], y[i], z[i]);
+				if (sweptCells[cell] == null) sweptCells[cell] = new BitSet(parcels.count());
+				sweptCells[cell].set(i);
+			}
 		}
 		// Only a real contact chain connected to fixed support can carry a resting upper parcel.
 		for (int visit = 0; visit < supportCount; visit++) {
-			int j = supportQueue[visit]; pointCandidates(x[j], y[j], z[j], heads, next);
+			int j = supportQueue[visit]; pointCandidates(x[j], y[j], z[j], radius[j]);
 			for (int i = candidates.nextSetBit(0); i >= 0; i = candidates.nextSetBit(i + 1)) {
 				spend();
 				if (!supported[i] && y[i] > y[j] && touching(x[i], y[i], z[i], radius[i], x[j], y[j], z[j], radius[j])) {
+					sweptCells[pointCell(x[i], y[i], z[i])].clear(i);
 					supported[i] = true; supportQueue[supportCount++] = i;
 				}
 			}
@@ -223,15 +231,25 @@ final class GranularActiveContacts {
 			if (sweptMinimum[i][axis] > sweptMaximum[j][axis] || sweptMinimum[j][axis] > sweptMaximum[i][axis]) return false;
 		return true;
 	}
-	private void pointCandidates(float x, float y, float z, int[] heads, int[] next) {
-		candidates.clear(); int cell = centerCell(x, y, z), cx = cell % sizeX, cy = cell / sizeX % sizeY, cz = cell / (sizeX * sizeY);
-		for (int iz = Math.max(0, cz - 1); iz <= Math.min(sizeZ - 1, cz + 1); iz++)
-			for (int iy = Math.max(0, cy - 1); iy <= Math.min(sizeY - 1, cy + 1); iy++)
-				for (int ix = Math.max(0, cx - 1); ix <= Math.min(sizeX - 1, cx + 1); ix++)
-					for (int index = heads[(iz * sizeY + iy) * sizeX + ix]; index >= 0; index = next[index]) candidates.set(index);
+	private void pointCandidates(float x, float y, float z, float r) {
+		candidates.clear(); double dx = sizeX * h, dy = sizeY * h, dz = sizeZ * h;
+		// Enclose the existing float touching predicate, including its coordinate and hypot rounding.
+		double rounding = Math.hypot(Math.hypot((double) Math.ulp(x) + Math.ulp((float) dx),
+				(double) Math.ulp(y) + Math.ulp((float) dy)), (double) Math.ulp(z) + Math.ulp((float) dz));
+		double reach = Math.nextUp((double) r + largestRadius + rounding + 2 * Math.ulp(Math.hypot(Math.hypot(dx, dy), dz)));
+		int[] lower = new int[3], upper = new int[3]; double[] p = {x, y, z};
+		for (int axis = 0; axis < 3; axis++) {
+			lower[axis] = coordinate(Math.nextDown(Math.nextDown(p[axis] - reach) / sweepCellSize), sweepSizes[axis]);
+			upper[axis] = coordinate(Math.nextUp(Math.nextUp(p[axis] + reach) / sweepCellSize), sweepSizes[axis]);
+		}
+		for (int iz = lower[2]; iz <= upper[2]; iz++) for (int iy = lower[1]; iy <= upper[1]; iy++) for (int ix = lower[0]; ix <= upper[0]; ix++) {
+			var occupants = sweptCells[(iz * sweepSizes[1] + iy) * sweepSizes[0] + ix];
+			if (occupants != null) candidates.or(occupants);
+		}
 	}
-	private int centerCell(float x, float y, float z) {
-		return (coordinate(z / h, sizeZ) * sizeY + coordinate(y / h, sizeY)) * sizeX + coordinate(x / h, sizeX);
+	private int pointCell(float x, float y, float z) {
+		return (coordinate(z / sweepCellSize, sweepSizes[2]) * sweepSizes[1]
+				+ coordinate(y / sweepCellSize, sweepSizes[1])) * sweepSizes[0] + coordinate(x / sweepCellSize, sweepSizes[0]);
 	}
 	private static int coordinate(double normalized, int size) {
 		return Math.max(0, Math.min(size - 1, (int) Math.floor(normalized)));

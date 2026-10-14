@@ -55,6 +55,31 @@ public final class GranularCarrierValidation {
 	}
 
 	private static void sphereMicroBoxContacts() {
+		var admissionRegistry = BuiltinGranularDefinitions.createRegistry();
+		int admissionMaterial = admissionRegistry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long admissionVolume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		float admissionRadius = mmm.granular.GranularMechanics.representativeRadius(admissionVolume, .5F);
+		for (int axis = 0; axis < 3; axis++) {
+			float[] center = {.25F, .25F, .25F}; center[axis] = Math.nextDown(.25F);
+			var live = new GranularParcelStore(admissionRegistry, 1);
+			live.add(new GranularParcelStore.Parcel(center[0], center[1], center[2], 0, 0, 0,
+					admissionVolume, 1, admissionMaterial, 0, 0, (byte) 0));
+			var created = new GranularSpawnAdmission(3, 3, 3, .5F, 1);
+			created.append(center[0], center[1], center[2], admissionVolume);
+			var restored = new GranularSpawnAdmission(3, 3, 3, .5F, live, 0);
+			for (long volume : new long[]{admissionVolume, admissionVolume / 8}) {
+				float r = mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
+				float tangent = (float) (center[axis] + (double) admissionRadius + r);
+				for (float coordinate : new float[]{Math.nextDown(tangent), tangent, Math.nextUp(tangent)}) {
+					float[] point = center.clone(); point[axis] = coordinate;
+					boolean expected = !GranularSpawnAdmission.interiorsOverlap(point[0], point[1], point[2], r,
+							center[0], center[1], center[2], admissionRadius);
+					require(created.allows(point[0], point[1], point[2], volume) == expected
+							&& restored.allows(point[0], point[1], point[2], volume) == expected,
+							"created and restored center indexes lost exact sphere admission across a micro-cell plane");
+				}
+			}
+		}
 		for (float radius : new float[]{.125F, Float.MIN_VALUE}) {
 			float tangent = 2 * radius;
 			for (float distance : new float[]{Math.nextDown(tangent), tangent, Math.nextUp(tangent)}) {
@@ -845,6 +870,7 @@ public final class GranularCarrierValidation {
 		var stack = new GranularParcelStore(registry, 4);
 		stack.add(new GranularParcelStore.Parcel(1.25F, radius, 1.25F, 0, 0, 0, svq, 2, material, 0, 0, (byte) 0));
 		stack.add(new GranularParcelStore.Parcel(1.25F, Math.nextUp(3 * radius), 1.25F, 0, 0, 0, svq, 3, material, 0, 0, (byte) 0));
+		stack.add(new GranularParcelStore.Parcel(1.25F, Math.nextUp(5 * radius), 1.25F, 0, 0, 0, svq, 4, material, 0, 0, (byte) 0));
 		var collision = new FlipGranularCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null, 4);
 		for (int step = 0; step < 3; step++) {
 			for (int index = 0; index < stack.count(); index++) {
@@ -853,7 +879,8 @@ public final class GranularCarrierValidation {
 			collision.preview(stack, registry, .05F); var reaction = collision.commit(stack);
 			require(reaction.y() < 0, "resting contact chain must carry an actual fixed support impulse");
 		}
-		require(stack.parcel(1).contactAge() == 3 && (stack.parcel(1).flags() & GranularParcelStore.FLAG_SUPPORTED) != 0,
+		require(stack.parcel(1).contactAge() == 3 && (stack.parcel(1).flags() & GranularParcelStore.FLAG_SUPPORTED) != 0
+				&& stack.parcel(2).contactAge() == 3 && (stack.parcel(2).flags() & GranularParcelStore.FLAG_SUPPORTED) != 0,
 				"actual active contact did not transmit the fixed bed support age");
 	}
 
@@ -1096,27 +1123,26 @@ public final class GranularCarrierValidation {
 			} catch (MechanicalTimeRefinement refusal) { failAt[0] = 0; }
 			int retryStart = failedOperations[0];
 			checkComponentResponseBits(rejected.respond(mass, d, v, dError, vError, handles, materials, constraints), expected);
-			require(failedOperations[0] - retryStart > (10 + (friction ? 3 : 2)) * mass.length + (2 + (friction ? 3 : 2)) * constraints.length + 2,
+			require(failedOperations[0] - retryStart > 4 * (mass.length + constraints.length) + 2,
 					"an incomplete component calculation must not populate the preview cache");
 			if (friction) {
-				require(!java.util.Arrays.deepEquals(expected.velocity().values(), expected.beforeFriction().values()),
-						"fixed friction fixture must retain a separate pre-friction energy certificate");
 				var compressed = compressContacts(mass, d, constraints);
 				var originalNormal = GranularContactCompression.respond(mass, v, constraints, compressed,
 						new double[]{material.restitution()}, contactBudget());
 				var originalFriction = fixed.friction(originalNormal.values()[0], new double[][]{constraints[0].normal()},
 						originalNormal.impulses()[0] / mass[0], material);
 				var originalTerminal = compressContacts(mass, new double[][]{originalFriction}, constraints);
-				checkComponentResponseBits(expected, new GranularComponentResponse.Response(compressed, originalTerminal, originalNormal));
+				require(!java.util.Arrays.deepEquals(originalTerminal.values(), originalNormal.values()),
+						"fixed friction fixture must exercise a changed terminal response after the normal energy audit");
+				checkComponentResponseBits(expected, new GranularComponentResponse.Response(compressed, originalTerminal));
 			}
 			for (int repeat = 0; repeat < 2; repeat++) {
-				for (var result : new GranularContactCompression.Result[]{actual.drift(), actual.velocity(), actual.beforeFriction()}) {
+				for (var result : new GranularContactCompression.Result[]{actual.drift(), actual.velocity()}) {
 					result.values()[0][1] = 123; result.impulses()[0] = 777; result.gapError()[0] = -999; result.arithmeticError()[0][1] = 999;
 				}
 				int start = operations[0]; actual = processor.respond(mass, d, v, dError, vError, handles, materials, constraints);
-				int copies = friction ? 3 : 2;
-				require(operations[0] - start == (10 + copies) * mass.length + (2 + copies) * constraints.length + 2,
-						"component reuse must charge both original energy audits, exact keys and every copied certificate");
+				require(operations[0] - start == 4 * (mass.length + constraints.length) + 2,
+						"component reuse must charge exact keys and every copied certified result");
 				checkComponentResponseBits(actual, expected);
 			}
 			for (int change = 0; change < 9; change++) {
@@ -1140,7 +1166,7 @@ public final class GranularCarrierValidation {
 				else changedD[0][0] = Math.nextDown(changedD[0][0]);
 				int start = operations[0];
 				var changed = processor.respond(changedMass, changedD, changedV, changedDError, changedVError, changedHandles, changedMaterials, changedRows);
-				require(operations[0] - start > (10 + (friction ? 3 : 2)) * mass.length + (2 + (friction ? 3 : 2)) * constraints.length + 2,
+				require(operations[0] - start > 4 * (mass.length + constraints.length) + 2,
 						"component cache must distinguish each full raw source, error, material and ordered contact input");
 				var fresh = new GranularComponentResponse(.5, fixed, contactBudget()).respond(changedMass, changedD, changedV,
 						changedDError, changedVError, changedHandles, changedMaterials, changedRows);
@@ -1149,8 +1175,8 @@ public final class GranularCarrierValidation {
 		}
 	}
 	private static void checkComponentResponseBits(GranularComponentResponse.Response actual, GranularComponentResponse.Response expected) {
-		var a = new GranularContactCompression.Result[]{actual.drift(), actual.velocity(), actual.beforeFriction()};
-		var b = new GranularContactCompression.Result[]{expected.drift(), expected.velocity(), expected.beforeFriction()};
+		var a = new GranularContactCompression.Result[]{actual.drift(), actual.velocity()};
+		var b = new GranularContactCompression.Result[]{expected.drift(), expected.velocity()};
 		for (int i = 0; i < a.length; i++) {
 			require(java.util.Arrays.deepEquals(a[i].values(), b[i].values()) && java.util.Arrays.deepEquals(a[i].arithmeticError(), b[i].arithmeticError())
 					&& java.util.Arrays.equals(a[i].impulses(), b[i].impulses()) && java.util.Arrays.equals(a[i].gapError(), b[i].gapError()),

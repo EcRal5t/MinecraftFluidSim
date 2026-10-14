@@ -9,6 +9,7 @@ import mmm.units.SignedDyadic;
 final class GranularSpawnAdmission {
 	private final int sizeX, sizeY, sizeZ;
 	private final float h;
+	private final double cellSize;
 	private final int[] head, next;
 	private final float[] x, y, z, radius;
 	private float largestRadius;
@@ -24,8 +25,14 @@ final class GranularSpawnAdmission {
 	}
 
 	GranularSpawnAdmission(int sizeX, int sizeY, int sizeZ, float h, int capacity) {
-		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.h = h;
-		head = new int[Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)];
+		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		int divisions = FlipCutCellGeometry.MICRO_CELLS_PER_AXIS, factor = divisions * divisions * divisions;
+		long available = Runtime.getRuntime().maxMemory() - Runtime.getRuntime().totalMemory() + Runtime.getRuntime().freeMemory();
+		// Large diagnostic domains retain coarse addressing and its original allocation size.
+		if (cells > Integer.MAX_VALUE / factor || 4L * factor * cells + 16 > available / 2) divisions = 1;
+		this.sizeX = sizeX * divisions; this.sizeY = sizeY * divisions; this.sizeZ = sizeZ * divisions;
+		this.h = h; cellSize = h / (double) divisions;
+		head = new int[Math.multiplyExact(Math.multiplyExact(this.sizeX, this.sizeY), this.sizeZ)];
 		Arrays.fill(head, -1);
 		next = new int[capacity]; x = new float[capacity]; y = new float[capacity];
 		z = new float[capacity]; radius = new float[capacity];
@@ -83,6 +90,6 @@ final class GranularSpawnAdmission {
 		return Math.nextUp(upper * upper);
 	}
 	private int coordinate(double p, int size) {
-		return Math.max(0, Math.min(size - 1, (int) Math.floor(p / (double) h)));
+		return Math.max(0, Math.min(size - 1, (int) Math.floor(p / cellSize)));
 	}
 }

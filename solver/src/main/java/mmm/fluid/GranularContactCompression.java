@@ -233,7 +233,7 @@ final class GranularContactCompression {
 		return new Result(values, impulse, bounds, error);
 	}
 
-	static void auditEnergy(double[] mass, double[][] input, Result response, Runnable spend) {
+	private static void auditEnergy(double[] mass, double[][] input, Result response, Runnable spend) {
 		var change = SignedDyadic.ZERO; var bound = SignedDyadic.ZERO;
 		for (int i = 0; i < mass.length; i++) {
 			spend.run(); var weight = SignedDyadic.of(mass[i]);
