@@ -24,15 +24,22 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 		if (numerator.signum() == 0) {
 			denominator = BigInteger.ONE;
 		} else if (!denominator.equals(BigInteger.ONE)) {
-			BigInteger divisor;
-			if (numerator.abs().bitLength() < 64 && denominator.bitLength() < 64) {
-				long a = Math.abs(numerator.longValueExact()), b = denominator.longValueExact();
-				while (b != 0) { long remainder = a % b; a = b; b = remainder; }
-				divisor = BigInteger.valueOf(a);
-			} else divisor = numerator.gcd(denominator);
-			if (!divisor.equals(BigInteger.ONE)) {
-				numerator = numerator.divide(divisor);
-				denominator = denominator.divide(divisor);
+			int power = denominator.getLowestSetBit();
+			if (power == denominator.bitLength() - 1) {
+				int shift = Math.min(numerator.getLowestSetBit(), power);
+				numerator = numerator.shiftRight(shift);
+				denominator = denominator.shiftRight(shift);
+			} else {
+				BigInteger divisor;
+				if (numerator.abs().bitLength() < 64 && denominator.bitLength() < 64) {
+					long a = Math.abs(numerator.longValueExact()), b = denominator.longValueExact();
+					while (b != 0) { long remainder = a % b; a = b; b = remainder; }
+					divisor = BigInteger.valueOf(a);
+				} else divisor = numerator.gcd(denominator);
+				if (!divisor.equals(BigInteger.ONE)) {
+					numerator = numerator.divide(divisor);
+					denominator = denominator.divide(divisor);
+				}
 			}
 		}
 	}

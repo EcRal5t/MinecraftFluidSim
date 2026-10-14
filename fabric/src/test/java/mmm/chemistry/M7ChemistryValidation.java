@@ -82,8 +82,10 @@ public final class M7ChemistryValidation {
 						&& rational.denominator().equals(d.divide(divisor)), "rational canonical form changed");
 			}
 		}
-		for (var n : List.of(java.math.BigInteger.valueOf(Long.MIN_VALUE), java.math.BigInteger.valueOf(Long.MAX_VALUE), java.math.BigInteger.ONE.shiftLeft(100).subtract(java.math.BigInteger.ONE))) {
-			for (var d : List.of(java.math.BigInteger.valueOf(Long.MAX_VALUE - 1), java.math.BigInteger.ONE.shiftLeft(90))) {
+		for (var n : List.of(java.math.BigInteger.valueOf(Long.MIN_VALUE), java.math.BigInteger.valueOf(Long.MAX_VALUE),
+				java.math.BigInteger.ONE.shiftLeft(100).subtract(java.math.BigInteger.ONE), java.math.BigInteger.valueOf(-3).shiftLeft(255))) {
+			for (var d : List.of(java.math.BigInteger.valueOf(Long.MAX_VALUE - 1), java.math.BigInteger.ONE.shiftLeft(90),
+					java.math.BigInteger.ONE.shiftLeft(ChemicalLimits.MAX_RATIONAL_BITS - 1))) {
 				var divisor = n.gcd(d); var rational = new ExactRational(n, d);
 				check(rational.numerator().equals(n.divide(divisor)) && rational.denominator().equals(d.divide(divisor)),
 						"integer rational reduction or wide fallback changed its canonical result");

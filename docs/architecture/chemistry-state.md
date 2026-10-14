@@ -38,7 +38,7 @@
 
 exact rational 只接受整数、有限小数或 `numerator/denominator` 文本。解析前先限制 ID 长度、文本长度、小数 scale 和整数位宽，避免用短文本触发无界 `BigInteger` 工作。registry 校验未知 ID、重复 ID、非正质量、组成/电荷/质量不守恒、无界解离和预算，然后按 stable ID 排序并对 canonical UTF-8 bytes 计算 SHA-256。
 
-共同的 `ExactRational.add` 先按分母最大公约数预约分，再按规范化结果检查原有位数上限；精确相消直接得到零。气体几何权重求和复用该规则，最终结果的表示预算与定义输入限制各自保持原值。
+`ExactRational` 在原输入位数上限内规范化分子与分母；二进制幂分母按分子尾零位精确约分，一般分母沿用整数最大公约数。共同的 `ExactRational.add` 先按分母最大公约数预约分，再按规范化结果检查原有位数上限；精确相消直接得到零。气体几何权重求和复用该规则，最终结果的表示预算与定义输入限制各自保持原值。
 
 当前数量上限包括 256 species、64 phases、512 reactions、每 parcel 16 species、每步 131072 次 reaction evaluation 和每区域 `2e15` quanta。这些上限都在分配内存和修改状态前检查。
 
