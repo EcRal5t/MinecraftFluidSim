@@ -76,6 +76,65 @@ public final class CarrierMutationValidation {
 		catch (IllegalStateException expected) { }
 		requireUnchanged(domain, staleState);
 		cellReplacementRejectsInvalidStoredThermalState();
+		var registries = FullCapabilityTestFixture.load();
+		for (int scene = 0; scene < 3; scene++) {
+			boolean blocked = scene == 0, partial = scene != 2;
+			var extraction = new FluidDomain(3, 3, 3,
+					new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .4F, .002F, 0), 32);
+			byte[] masks = new byte[27]; java.util.Arrays.fill(masks, (byte) 255);
+			int[] cells = {9, 10, 12, 13}; for (int c : cells) masks[c] = 0;
+			float volume = blocked ? Math.nextDown(1F) : .25F; double mass = 1000 * (double) volume;
+			extraction.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 4, 4 * (double) volume, 4 * mass,
+					registries.liquids().materials(), new float[]{.25F, .25F, .75F, volume, .75F, .25F, .75F, volume,
+							.25F, .75F, .75F, volume, .75F, .75F, .75F, volume}, new float[12], masks,
+					new double[]{mass, mass, mass, mass}, new int[4]));
+			extraction.bindGranular(registries.granular(), registries.liquids(), registries.materials());
+			int sand = registries.granular().materialHandle(mmm.granular.BuiltinGranularDefinitions.FINE_SAND);
+			extraction.granularState.parcels.add(new mmm.granular.GranularParcelStore.Parcel(.5F, .5F, .75F, 0, 0, 0, 3, .001, sand, 0, 0, (byte) 0, 13));
+			extraction.markGranularExternalChange(13); extraction.sealDomainBoundary();
+			FullCapabilityTestFixture.bindFull(extraction, registries, 300, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+			extraction.ensureInventoryGrid();
+			var before = replacementState(extraction); var parcel = extraction.granularState.parcels.parcel(0);
+			var dynamics = extraction.granularDepositDynamics.captureState(); var sink = extraction.granularState.escapedSink;
+			long revision = extraction.granularState.parcels.mutationRevision(), gasRevision = extraction.gasState.network.revision();
+			var frame = extraction.gasState.frame; var gas = extraction.exportGasState(registries.chemical().fingerprint());
+			double activeEnergy = extraction.thermalState.granularColumn().activeEnergy(0);
+			if (blocked) {
+				var remaining = extraction.granularState.parcels.prepareOverwrite(0, new mmm.granular.GranularParcelStore.Parcel(
+						parcel.x(), parcel.y(), parcel.z(), 0, 0, 0, 2, .001 * (2.0 / 3), sand, 0, 0, (byte) 0));
+				require(extraction.granularCoupling.parcelShareAtCell(FluidDomainStepCoordinator.parcelPosition(parcel), 3, 10) == 0
+						&& extraction.granularCoupling.parcelShareAtCell(FluidDomainStepCoordinator.parcelPosition(remaining), 2, 10) == 1
+						&& frame.nodeCount() == 1 && !gas.nodes().getFirst().inventory().isEmpty(),
+						"Partial granular extraction fixture must increase one solid share and eliminate its finite gas support");
+				try { extraction.tryExtractExactGranular(1, 1, 1, 1, 0, true); throw new AssertionError("Partial extraction erased finite gas stock"); }
+				catch (GasTopologyBlockedException expected) {
+					require(expected.getMessage().contains("no positive successor"), "Granular extraction lost its geometric refusal cause");
+				}
+				requireUnchanged(extraction, before);
+				var afterDynamics = extraction.granularDepositDynamics.captureState();
+				require(extraction.granularState.parcels.parcel(0).equals(parcel) && extraction.granularState.parcels.mutationRevision() == revision
+						&& extraction.granularState.escapedSink == sink && afterDynamics.logicalStep() == dynamics.logicalStep()
+						&& java.util.Arrays.equals(afterDynamics.stableAge(), dynamics.stableAge()) && java.util.Arrays.equals(afterDynamics.queuedColumns(), dynamics.queuedColumns())
+						&& extraction.thermalState.granularColumn().activeEnergy(0) == activeEnergy && extraction.gasState.frame == frame
+						&& extraction.gasState.network.revision() == gasRevision && !extraction.gridDirty,
+						"Rejected partial granular extraction changed source, dirty state, thermal or gas owners");
+			} else {
+				var result = extraction.tryExtractExactGranular(1, 1, 1, partial ? 1 : 3, 0, true);
+				require(result.transferred() && result.ledger().totalSolidVolumeSvq() == (partial ? 1 : 3)
+						&& extraction.granularState.parcels.count() == (partial ? 1 : 0)
+						&& extraction.thermalState.granularColumn().activeCount() == (partial ? 1 : 0) && extraction.gasState.frame != frame
+						&& extraction.gasState.network.revision() > gasRevision && extraction.gasState.network.auditClosed()
+						&& extraction.exactInternalEnergy().equals(extraction.thermalState.auditLedger().expectedInventory())
+						&& extraction.thermalState.auditLedger().externalSink().subtract(((mmm.thermal.ThermalAuditLedger) before.thermalAudit).externalSink())
+								.equals(mmm.units.SignedDyadic.of(result.internalEnergy())),
+						"Granular extraction failed to publish its gas/thermal successor and close exported energy");
+				var captured = extraction.captureAuthoritativeState(); var restored = FluidDomain.restoreAuthoritativeState(captured);
+				require(restored.totalGranularSolidVolumeSvq() == (partial ? 2 : 0)
+						&& restored.exactInternalEnergy().equals(extraction.exactInternalEnergy())
+						&& restored.exportGasState(registries.chemical().fingerprint()).nodes().equals(captured.gas().nodes()),
+						"Successful granular extraction did not preserve its published gas/thermal successor after restore");
+			}
+		}
 	}
 
 	private static void cellReplacementRequiresRepresentableGeometry() {

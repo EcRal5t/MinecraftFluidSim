@@ -345,6 +345,8 @@ final class GranularTransferPlanner {
 				FluidDomainStepCoordinator.parcelPosition(next), next.solidVolumeSvq(), cell -> domain.granularGeometricOpenSvq(cell)
 						- JointPhaseCapacity.liquidSvqCeil(domain.markerGrid.exactCellVolumeInventory[cell])))
 			return FluidDomain.GranularExtraction.rejected("Remaining granular occupancy cannot share the current liquid capacity");
+		var gas = domain.gasState.frame == null ? null
+				: domain.gasTopologyCoordinator.planAfterLiquidEdits(List.of(), futureSolid, false);
 		GranularAuditLedger sinkAfter = escapedSink ? granular.escapedSink.plus(
 				transfer, granular.registry, granular.compositions == null ? null : granular.compositions.registry()) : granular.escapedSink;
 		// Match the commit order so every intermediate audit chain is checked before inventory edits.
@@ -365,17 +367,34 @@ final class GranularTransferPlanner {
 						removal.cell(), removal.materialHandle(), removal.compositionHandle()),
 						removal.solidVolumeSvq(), removal.originalSolidVolumeSvq())
 						: energy.previewActiveRemaining(removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
+				if (removal.solidVolumeSvq() != removal.originalSolidVolumeSvq()) {
+					var context = domain.thermalMarkerContext();
+					double remainingMass = removal.deposit() ? ProportionalDoubleSplit.of(context.depositMass(new GranularEnergyColumn.DepositKey(
+							removal.cell(), removal.materialHandle(), removal.compositionHandle())), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq()).remaining()
+							: remainingParcels.get(removal.index()).mass();
+					int material = domain.thermalState.registry().materialHandle(mmm.thermal.ThermalMaterialDefinition.CarrierKind.GRANULAR,
+							granular.registry.material(removal.materialHandle()).id());
+					domain.thermalState.stateFunction().stateForInternalEnergy(material, remainingMass, context.solidComposition(removal.compositionHandle()), after);
+				}
 				SignedDyadic actualRemoval = SignedDyadic.of(before).subtract(SignedDyadic.of(after));
 				SignedDyadic exported = SignedDyadic.of(removal.internalEnergy());
 				carrierRemoval = carrierRemoval.add(actualRemoval);
 				bookedEnergy = bookedEnergy.add(exported);
-				thermalAfter = thermalAfter.withExternalSinkEnergy(exported).withRoundoff(exported.subtract(actualRemoval));
+				thermalAfter = thermalAfter.withExternalSinkEnergy(exported)
+						.withRoundoff(SignedDyadic.of(after).add(exported).subtract(SignedDyadic.of(before)));
 			}
 			removedEnergy = carrierRemoval.toDouble();
 			if (!Double.isFinite(removedEnergy)) throw new ArithmeticException("Granular extraction thermal energy overflow");
 			SignedDyadic settlement = SignedDyadic.of(removedEnergy).subtract(bookedEnergy);
-			thermalAfter.withExternalSinkEnergy(settlement).withRoundoff(settlement);
+			thermalAfter = thermalAfter.withExternalSinkEnergy(settlement).withRoundoff(settlement);
+			if (gas != null && gas.thermalPlan() != null) {
+				var remap = gas.thermalPlan();
+				thermalAfter = thermalAfter.withExternalSourceEnergy(remap.sourceEnergy()).withExternalSinkEnergy(remap.sinkEnergy())
+						.withMechanicalWork(remap.mechanicalWork()).withRoundoff(remap.roundoff());
+			}
+			thermalAfter.expectedInventory();
 		}
+		if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
 		for (GranularRemoval removal : removals) if (removal.deposit()) {
 			granular.deposits.take(removal.cell(), removal.materialHandle(), removal.compositionHandle(), removal.solidVolumeSvq());
 			if (domain.thermalState != null) domain.thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
@@ -402,6 +421,7 @@ final class GranularTransferPlanner {
 		for (GranularRemoval removal : removals) if (!changedCells[removal.cell()]) {
 			domain.markGranularExternalChange(removal.cell()); changedCells[removal.cell()] = true;
 		}
+		if (gas != null) domain.gasTopologyCoordinator.commit(gas);
 		granular.escapedSink = sinkAfter;
 		return new FluidDomain.GranularExtraction(true, transfer, removedEnergy, null);
 	}
