@@ -42,6 +42,9 @@ dependencies {
 	include project(':model')
 	include project(':solver')
 	include project(':app')
+	['ejml-core', 'ejml-ddense', 'ejml-dsparse'].each { module ->
+		include implementation("org.ejml:${module}:${project.ejml_version}")
+	}
 
 	testImplementation project(path: ':model', configuration: 'testArtifacts')
 	testImplementation project(path: ':solver', configuration: 'testArtifacts')

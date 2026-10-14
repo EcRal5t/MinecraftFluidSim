@@ -343,29 +343,42 @@ final class MarkerPressureProjection {
 		}
 		operator.apply(pressure, applied);
 		for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
-		var preconditioner = operator.preconditioner(diagonal, commonPressureMode,internalCoarseRows); preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
-		double residual = rms(r), rz = dot(r, z); int iterations = 0;
-		for (; residual > tolerance && iterations < domain.config.maxPressureIterations();) {
-			double denominator = operator.applyWithWork(direction, applied);
-			if (!(denominator > 0 && Double.isFinite(denominator) && rz > 0 && Double.isFinite(rz))) break;
-			double alpha = rz / denominator;
-			if (!Double.isFinite(alpha)) break;
-			for (int i = 0; i < n; i++) { pressure[i] += alpha * direction[i]; r[i] -= alpha * applied[i]; }
-			iterations++; residual = rms(r);
-			if (residual <= tolerance) {
-				operator.apply(pressure, applied);
+		double residual = rms(r); int iterations = 0;
+		if (residual > tolerance) {
+			boolean[] observed = new boolean[n];
+			for (int row : liquidRows) if (row >= 0) observed[row] = true;
+			for (int row : gasRows) if (row >= 0) observed[row] = true;
+			if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, observed, wallPredictor, dt, tolerance)) {
+				iterations = 1; operator.apply(pressure, applied);
 				for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
 				residual = rms(r);
-				if (residual <= tolerance) break;
-				// A fresh residual restarts the compatible-range iteration.
-				preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
-				rz = dot(r, z); continue;
 			}
-			preconditioner.apply(r, z);
-			double nextRz = dot(r, z), beta = nextRz / rz;
-			if (!(nextRz > 0 && Double.isFinite(nextRz) && Double.isFinite(beta))) break;
-			for (int i = 0; i < n; i++) direction[i] = z[i] + beta * direction[i];
-			rz = nextRz;
+		}
+		if (residual > tolerance) {
+			var preconditioner = operator.preconditioner(diagonal, commonPressureMode, internalCoarseRows); preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
+			double rz = dot(r, z);
+			for (; residual > tolerance && iterations < domain.config.maxPressureIterations();) {
+				double denominator = operator.applyWithWork(direction, applied);
+				if (!(denominator > 0 && Double.isFinite(denominator) && rz > 0 && Double.isFinite(rz))) break;
+				double alpha = rz / denominator;
+				if (!Double.isFinite(alpha)) break;
+				for (int i = 0; i < n; i++) { pressure[i] += alpha * direction[i]; r[i] -= alpha * applied[i]; }
+				iterations++; residual = rms(r);
+				if (residual <= tolerance) {
+					operator.apply(pressure, applied);
+					for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
+					residual = rms(r);
+					if (residual <= tolerance) break;
+					// A fresh residual restarts the compatible-range iteration.
+					preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
+					rz = dot(r, z); continue;
+				}
+				preconditioner.apply(r, z);
+				double nextRz = dot(r, z), beta = nextRz / rz;
+				if (!(nextRz > 0 && Double.isFinite(nextRz) && Double.isFinite(beta))) break;
+				for (int i = 0; i < n; i++) direction[i] = z[i] + beta * direction[i];
+				rz = nextRz;
+			}
 		}
 		operator.apply(pressure, applied);
 		for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];

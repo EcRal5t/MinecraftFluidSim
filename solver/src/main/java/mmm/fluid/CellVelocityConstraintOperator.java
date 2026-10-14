@@ -109,6 +109,44 @@ final class CellVelocityConstraintOperator {
 	}
 
 	int rowCount() { return storage.length; }
+	PressureRowBasis rowBasis() {
+		SignedDyadic[][] inertia = new SignedDyadic[factors.length][];
+		for (int factor = 0; factor < factors.length; factor++) inertia[factor] = factors[factor].gram;
+		return new PressureRowBasis(factorOffsets, factorIndices, factorCoefficients, inertia, storage);
+	}
+	record PrincipalGram(int[] rows, int[] columns, SignedDyadic[] values) { }
+	private record FactorRow(int row, SignedDyadic[] coefficients, SignedDyadic[] response) { }
+	/** Sparse principal D H D^T, assembled exactly before its final factorization rounding. */
+	PrincipalGram principalGram(PressureRowBasis selected) {
+		var incidence = new ArrayList<ArrayList<FactorRow>>(factors.length);
+		for (int factor = 0; factor < factors.length; factor++) incidence.add(new ArrayList<>());
+		for (int position = 0; position < selected.size(); position++) {
+			int row = selected.row(position), entry = factorOffsets[row];
+			while (entry < factorOffsets[row + 1]) {
+				int factor = factorIndices[entry] / 4; SignedDyadic[] d = new SignedDyadic[4], response = new SignedDyadic[4];
+				Arrays.fill(d, SignedDyadic.ZERO);
+				while (entry < factorOffsets[row + 1] && factorIndices[entry] / 4 == factor) { d[factorIndices[entry] % 4] = factorCoefficients[entry]; entry++; }
+				for (int first = 0; first < 4; first++) { response[first] = SignedDyadic.ZERO; for (int second = 0; second < 4; second++) response[first] = response[first].add(factors[factor].gram[4 * first + second].multiply(d[second])); }
+				incidence.get(factor).add(new FactorRow(position, d, response));
+			}
+		}
+		var lower = new TreeMap<Long, SignedDyadic>(); long bytes = 0, available = PressureRowBasis.availableMemory();
+		for (var members : incidence) for (int first = 0; first < members.size(); first++) for (int second = 0; second <= first; second++) {
+			FactorRow a = members.get(first), b = members.get(second); SignedDyadic value = SignedDyadic.ZERO;
+			for (int term = 0; term < 4; term++) value = value.add(a.coefficients[term].multiply(b.response[term]));
+			long key = ((long) a.row << 32) | b.row; SignedDyadic previous = lower.get(key);
+			if (previous != null) { bytes -= gramBytes(previous); value = previous.add(value); }
+			if (value.signum() == 0) lower.remove(key); else { lower.put(key, value); bytes += gramBytes(value); }
+			if (bytes > available / 2) throw new PressureRowBasis.Unavailable("Principal pressure Gram exceeds available memory");
+		}
+		for (int position = 0; position < selected.size(); position++) if (exactStorage[selected.row(position)].signum() != 0) {
+			long key = ((long) position << 32) | position; lower.merge(key, exactStorage[selected.row(position)], SignedDyadic::add);
+		}
+		int[] rows = new int[lower.size()], columns = new int[lower.size()]; SignedDyadic[] values = new SignedDyadic[lower.size()]; int entry = 0;
+		for (var value : lower.entrySet()) { rows[entry] = (int) (value.getKey() >>> 32); columns[entry] = value.getKey().intValue(); values[entry++] = value.getValue(); }
+		return new PrincipalGram(rows, columns, values);
+	}
+	private static long gramBytes(SignedDyadic value) { return 256L + 2L * ((value.significand().bitLength() + 7L) / 8); }
 	ConstraintGramPreconditioner preconditioner(double[] diagonal) {
 		checkRows(diagonal);
 		return new ConstraintGramPreconditioner(markerCount, inverseMass, offsets, indices, coefficients, coefficientLow, diagonal, exactCoefficients);

@@ -449,6 +449,7 @@ public final class MarkerPressureValidation {
 					|| lowRank.canRepresentPoint(0, .125, .125, k == 2 ? Math.nextUp(.25) : .375))
 				throw new AssertionError("Sparse actual geometry was assigned an invented affine direction");
 			verifyAffineRigidMotion(lowRank);
+			if (k == 0) verifySparsePressureBasis(lowRank);
 			sparseDomain.sealDomainBoundary(); sparseDomain.bootstrapGasState(null); sparseDomain.ensureGrid();
 			sparseDomain.gasTopologyCoordinator.refresh(); sparseDomain.bodyForceStage.applyGravity(.001F);
 			var sparsePlan = sparseDomain.pressureSystem.markerProjection(); sparsePlan.prepare(.001F);
@@ -517,6 +518,8 @@ public final class MarkerPressureValidation {
 						new CellVelocityConstraintOperator.Block(block, axis, declared)), 0));
 			}
 			var operator = new CellVelocityConstraintOperator(basis, rows);
+			if (operator.rowBasis().size() != 1 || operator.rowBasis().dependencyCount() != 2)
+				throw new AssertionError("Exact product row relations were not retained by the pressure basis");
 			var force = new double[3][basis.markerCount()]; var image = new double[3];
 			operator.force(new double[]{1, 1, -1}, force);
 			for (double[] component : force) for (double value : component) near(value, 0, 0, "Exact declared pressure row relation");
@@ -540,6 +543,30 @@ public final class MarkerPressureValidation {
 			}
 		}
 		if (!truncatedRelation) throw new AssertionError("Pressure row fixture did not exercise product truncation");
+	}
+	private static void verifySparsePressureBasis(CellAffineVelocity basis) {
+		int block = basis.markerBlock(0);
+		var definitions = java.util.List.of(
+				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{1, 0, 0, 0})), 0),
+				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{2, 0, 0, 0})), 0),
+				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{0, 1, 0, 0})), .25));
+		var operator = new CellVelocityConstraintOperator(basis, definitions); var coordinates = operator.rowBasis();
+		if (coordinates.size() != 2 || coordinates.dependencyCount() != 1)
+			throw new AssertionError("Restricted actual inertia and positive storage lost their exact pressure rank");
+		var velocity = new double[3][basis.markerCount()]; Arrays.fill(velocity[0], .125);
+		verifyFactoredConstraint(basis, definitions, velocity, new double[]{1, -2, 3});
+		double[] rhs = new double[3], diagonal = new double[3], pressure = {7, 8, 9}; float dt = .05F;
+		operator.volumeRate(velocity, rhs); for (int row = 0; row < 3; row++) rhs[row] = -rhs[row] / dt; operator.diagonal(diagonal);
+		if (!SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[3], velocity, dt, 1e-9))
+			throw new AssertionError("Certified low-rank principal LU did not satisfy every physical row");
+		double[] actual = new double[3]; operator.apply(pressure, actual); for (int row = 0; row < 3; row++) near(actual[row], rhs[row], 1e-9, "Full-row direct pressure residual");
+		double[] saved = pressure.clone();
+		if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[]{true, false, false}, velocity, dt, 1e-9))
+			throw new AssertionError("An observation-changing multiplier relation selected an arbitrary gauge");
+		if (!Arrays.equals(saved, pressure)) throw new AssertionError("Rejected pressure gauge changed the iterative fallback input");
+		rhs[1] += 1;
+		if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[3], velocity, dt, 1e-9) || !Arrays.equals(saved, pressure))
+			throw new AssertionError("Incompatible source changed the iterative fallback input");
 	}
 
 	/** Independent full C assembly checks the factor action without reading its cached D or H. */
@@ -583,6 +610,17 @@ public final class MarkerPressureValidation {
 			exactWork = exactWork.add(storage.multiply(load).multiply(load));
 		}
 		near(work, exactWork.toDouble(), 0, "Factored/full-C positive-work equality");
+		var coordinates = operator.rowBasis(); var principal = operator.principalGram(coordinates);
+		int entry = 0;
+		for (int row = 0; row < coordinates.size(); row++) for (int column = 0; column <= row; column++) {
+			int first = coordinates.row(row), second = coordinates.row(column);
+			SignedDyadic value = first == second ? SignedDyadic.of(definitions.get(first).storage()) : SignedDyadic.ZERO;
+			for (int index = 0; index < matrix[first].length; index++) value = value.add(matrix[first][index].multiply(matrix[second][index])
+					.multiply(SignedDyadic.of(1 / basis.massKilograms(index % count))));
+			SignedDyadic stored = entry < principal.values().length && principal.rows()[entry] == row && principal.columns()[entry] == column
+					? principal.values()[entry++] : SignedDyadic.ZERO;
+			if (!stored.equals(value)) throw new AssertionError("Principal D/H Gram differs from independent full C mass work");
+		}
 	}
 
 	private static void sharedTraceMassConditioning() {

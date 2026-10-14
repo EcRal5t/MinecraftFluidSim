@@ -15,6 +15,7 @@ repositories {
 
 dependencies {
 	api project(':model')
+	implementation "org.ejml:ejml-dsparse:${project.ejml_version}"
 }
 
 java {
