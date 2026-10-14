@@ -20,7 +20,12 @@ final class ConservativeLiquidFlux {
 			throw new IllegalStateException("Liquid face sweep has no quadratic spatial integration rule");
 		}
 		default ExactRational[] arrivalSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
-		                                           double dtOverH, int donorSupport, int receiverSupport, boolean lowOrder) { return null; }
+		                                           double dtOverH, int donorSupport, int receiverSupport, boolean lowOrder) {
+			return arrivalSecondMoments(face, donor, receiver, axis, positive, dtOverH, donorSupport, receiverSupport, donorSupport, lowOrder);
+		}
+		default ExactRational[] arrivalSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
+		                                           double dtOverH, int donorSupport, int receiverSupport, int selectedSourceSupport,
+		                                           boolean lowOrder) { return null; }
 		default void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
 		                               int donorSupport, int receiverSupport, double[] swept, double[] wet) {
 			throw new IllegalStateException("Liquid face sweep has no common micro source integration rule");

@@ -108,6 +108,21 @@ public final class CellRemapMomentsValidation {
 				var q = new double[]{intercept, slope, 0};
 				var lowSecond = LiquidAffineSweepGeometry.lowOrderPhaseSecondMoments(domain, donor, receiver, axis, sign > 0,
 						q, .5, 255, 255, 255);
+				var selectedHigh = new mmm.chemistry.ExactRational[10]; var selectedLow = selectedHigh.clone();
+				java.util.Arrays.fill(selectedHigh, mmm.chemistry.ExactRational.ZERO);
+				java.util.Arrays.fill(selectedLow, mmm.chemistry.ExactRational.ZERO);
+				for (int micro = 0; micro < 8; micro++) {
+					var highPart = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, sign > 0,
+							intercept, slope, 0, .5, 255, 255, 1 << micro);
+					var lowPart = LiquidAffineSweepGeometry.lowOrderPhaseSecondMoments(domain, donor, receiver, axis, sign > 0,
+							q, .5, 255, 255, 1 << micro);
+					check(lowPart[0].equals(liquid[micro]), "Source selection changed low-order column normalization");
+					for (int i = 0; i < 10; i++) {
+						selectedHigh[i] = selectedHigh[i].add(highPart[i]); selectedLow[i] = selectedLow[i].add(lowPart[i]);
+					}
+				}
+				check(java.util.Arrays.equals(second, selectedHigh) && java.util.Arrays.equals(lowSecond, selectedLow),
+						"Selected source microboxes do not partition the complete quadratic measure");
 				check(lowSecond[0].equals(total), "Low-order spatial measure changed its actual volume");
 				var highArrival = LiquidAffineSweepGeometry.arrivalSecondMoments(second, axis, sign > 0, q, .5, false);
 				var lowArrival = LiquidAffineSweepGeometry.arrivalSecondMoments(lowSecond, axis, sign > 0, q, .5, true);
@@ -173,6 +188,16 @@ public final class CellRemapMomentsValidation {
 		var unretained = new LiquidAffineFaceFlow(domain, faces, field, 0);
 		for (int f = 0; f < faces.physicalFaceCount; f++) if (faces.left[f] == donor) {
 			int receiver = faces.right[f], axis = faces.axis[f];
+			for (boolean lowOrder : new boolean[]{false, true}) {
+				var complete = retained.arrivalSecondMoments(f, donor, receiver, axis, true, .5, 255, 255, lowOrder);
+				var partition = new mmm.chemistry.ExactRational[10]; java.util.Arrays.fill(partition, mmm.chemistry.ExactRational.ZERO);
+				for (int micro = 0; micro < 8; micro++) {
+					var part = retained.arrivalSecondMoments(f, donor, receiver, axis, true, .5, 255, 255, 1 << micro, lowOrder);
+					if (lowOrder) check(part[0].signum() > 0, "Inner source selection lost its complete outgoing path");
+					for (int i = 0; i < 10; i++) partition[i] = partition[i].add(part[i]);
+				}
+				check(java.util.Arrays.equals(complete, partition), "Face producer changed source-conditioned arrival moments");
+			}
 			double[] expected = new double[4], actual = new double[4];
 			retained.sweptMoments(f, donor, receiver, axis, true, .5, 255, 255, actual);
 			double[] swept = new double[8], wet = new double[8];

@@ -241,16 +241,27 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 	}
 	@Override public ExactRational[] arrivalSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
 	                                                     double dtOverH, int donorSupport, int receiverSupport, boolean lowOrder) {
+		return arrivalSecondMoments(face, donor, receiver, axis, positive, dtOverH, donorSupport, receiverSupport, donorSupport, lowOrder);
+	}
+	@Override public ExactRational[] arrivalSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
+	                                                     double dtOverH, int donorSupport, int receiverSupport, int selectedSourceSupport,
+	                                                     boolean lowOrder) {
+		if (selectedSourceSupport < 0 || selectedSourceSupport > 255 || (selectedSourceSupport & ~donorSupport) != 0)
+			throw new IllegalArgumentException("Arrival source selection must belong to donor support");
 		var result = new ExactRational[10]; Arrays.fill(result, ExactRational.ZERO);
 		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
 		if (components == null) return result;
 		for (var component : components) {
 			int support = donorSupport & component.support(); if (support == 0) continue;
+			int selected = support & selectedSourceSupport; if (selected == 0) continue;
+			// The complete donor path remains available even when only its inner source microbox is selected.
+			for (int micro = 0; micro < 8; micro++) if ((support & 1 << (positive ? micro | 1 << axis : micro & ~(1 << axis))) == 0)
+				selected &= ~(1 << micro);
 			double[] q = component.q();
 			var source = lowOrder ? LiquidAffineSweepGeometry.lowOrderPhaseSecondMoments(domain, donor, receiver, axis, positive,
-					q, dtOverH, component.support(), receiverSupport, support)
+					q, dtOverH, component.support(), receiverSupport, selected)
 					: LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, positive,
-							q[0], q[1], q[2], dtOverH, support, receiverSupport);
+							q[0], q[1], q[2], dtOverH, support, receiverSupport, selected);
 			var part = LiquidAffineSweepGeometry.arrivalSecondMoments(source, axis, positive, q, dtOverH, lowOrder);
 			for (int i = 0; i < result.length; i++) result[i] = result[i].add(part[i]);
 		}

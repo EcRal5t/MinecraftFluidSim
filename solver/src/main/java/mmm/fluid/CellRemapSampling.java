@@ -22,7 +22,8 @@ final class CellRemapSampling {
 		if (rule == null && movingAxes != 0) { selected.setCentroid(bounded); rule = selected.pairRule(volume, lower, upper); }
 		if (rule != null && rule.volumes().size() <= maximumNodes) {
 			var actualTarget = new double[3];
-			for (int a = 0; a < 3; a++) actualTarget[a] = mass * selected.centroid()[a];
+			for (int a = 0; a < 3; a++) actualTarget[a] = selected.centroid()[a] == moments.centroid()[a]
+					? target[a] : mass * selected.centroid()[a];
 			var pairMasses = masses(mass, density, volume, rule.volumes());
 			try {
 				result = fitPairs(domain, cell, support, pairMasses, selected, rule, actualTarget, storage);
@@ -90,7 +91,8 @@ final class CellRemapSampling {
 			var projected = new CellRemapSpatialMoments(); projected.add(moments);
 			var lower = new double[3]; var upper = new double[3]; var target = targetMoment.clone();
 			var mean = boundedCentroid(support, moments.centroid(), movingAxes, maximumTranslation, lower, upper);
-			for (int a = 0; a < 3; a++) target[a] = moments.mass() * mean[a];
+			var original = moments.centroid();
+			for (int a = 0; a < 3; a++) if (mean[a] != original[a]) target[a] = moments.mass() * mean[a];
 			projected.setCentroid(mean);
 			result = orientations(domain, cell, support, masses, projected, preferred, target, storage, movingAxes, lower, upper);
 			if (result != null) {

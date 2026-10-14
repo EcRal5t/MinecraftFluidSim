@@ -135,6 +135,7 @@ final class LiquidAffineSweepGeometry {
 		java.util.Arrays.fill(open, ExactRational.ZERO); java.util.Arrays.fill(liquid, ExactRational.ZERO);
 		java.util.Arrays.fill(dry, ExactRational.ZERO);
 		for (int m = 0; m < 8; m++) {
+			if (second != null && (selectedSourceSupport & 1 << m) == 0) continue;
 			int faceMicro = positive ? m | 1 << axis : m & ~(1 << axis), peer = m ^ 1 << axis;
 			if ((donorSupport & 1 << m) == 0 || rates[faceMicro].isZero()) continue;
 			ExactRational local = rational(phase.componentPoreScale(donor, m, fallback));
@@ -149,7 +150,7 @@ final class LiquidAffineSweepGeometry {
 					phase.componentPoreScale(receiver, receiverMicro, receiverFallback));
 			var wet = wetSourcePlane(domain, donor, m);
 			boolean constant = wet.nx().signum() == 0 && wet.ny().signum() == 0 && wet.nz().signum() == 0;
-			boolean selected = (selectedSourceSupport & 1 << m) != 0 && (selectedSourceSupport & 1 << faceMicro) != 0;
+			boolean selected = (selectedSourceSupport & 1 << m) != 0;
 			ExactRational[] weighted = null;
 			if (second != null && selected && (!constant || wet.threshold().signum() == 0)) {
 				weighted = GasGeometryOverlap.normalizedAffineSecondMoments(m,
@@ -251,8 +252,16 @@ final class LiquidAffineSweepGeometry {
 	static ExactRational[] sweptExactSecondMoments(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
 	                                            double intercept, double tangentSlope, double otherSlope, double dtOverH,
 	                                            int donorSupport, int receiverSupport) {
+		return sweptExactSecondMoments(domain, donor, receiver, axis, positive, intercept, tangentSlope, otherSlope,
+				dtOverH, donorSupport, receiverSupport, donorSupport);
+	}
+	static ExactRational[] sweptExactSecondMoments(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
+	                                            double intercept, double tangentSlope, double otherSlope, double dtOverH,
+	                                            int donorSupport, int receiverSupport, int selectedSourceSupport) {
+		if (selectedSourceSupport < 0 || selectedSourceSupport > 255 || (selectedSourceSupport & ~donorSupport) != 0)
+			throw new IllegalArgumentException("Invalid selected affine sweep source support");
 		return sweptExactMoments(domain, donor, receiver, axis, positive, intercept, tangentSlope, otherSlope,
-				dtOverH, donorSupport, receiverSupport, null, true);
+				dtOverH, donorSupport, receiverSupport, null, true, null, selectedSourceSupport);
 	}
 
 	private static ExactRational[] sweptExactMoments(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
@@ -273,6 +282,13 @@ final class LiquidAffineSweepGeometry {
 	                                               double intercept, double tangentSlope, double otherSlope, double dtOverH,
 	                                               int donorSupport, int receiverSupport, GasGeometryOverlap.HalfSpace wetOverride,
 	                                               boolean secondMoments, ExactRational[][] micros) {
+		return sweptExactMoments(domain, donor, receiver, axis, positive, intercept, tangentSlope, otherSlope,
+				dtOverH, donorSupport, receiverSupport, wetOverride, secondMoments, micros, donorSupport);
+	}
+	private static ExactRational[] sweptExactMoments(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
+	                                               double intercept, double tangentSlope, double otherSlope, double dtOverH,
+	                                               int donorSupport, int receiverSupport, GasGeometryOverlap.HalfSpace wetOverride,
+	                                               boolean secondMoments, ExactRational[][] micros, int selectedSourceSupport) {
 		requireInput(domain, donor, receiver, axis, intercept, tangentSlope, otherSlope, dtOverH, donorSupport, receiverSupport);
 		ExactRational[] total = new ExactRational[secondMoments ? 10 : 4];
 		java.util.Arrays.fill(total, ExactRational.ZERO);
@@ -286,7 +302,7 @@ final class LiquidAffineSweepGeometry {
 			for (int micro = 0; micro < 8; micro++) {
 				int faceMicro = (micro & ~(1 << axis)) | (positive ? 1 << axis : 0);
 				int peerMicro = (micro & ~(1 << axis)) | (positive ? 0 : 1 << axis);
-				if ((donorSupport & 1 << micro) == 0 || (donorSupport & 1 << faceMicro) == 0
+				if ((selectedSourceSupport & 1 << micro) == 0 || (donorSupport & 1 << micro) == 0 || (donorSupport & 1 << faceMicro) == 0
 						|| (receiverSupport & 1 << peerMicro) == 0 || (cut.mask(donor) & (1 << micro | 1 << faceMicro)) != 0
 						|| (cut.mask(receiver) & 1 << peerMicro) != 0) continue;
 				var liquid = wetOverride == null ? wetSourcePlane(domain, donor, micro) : wetOverride;

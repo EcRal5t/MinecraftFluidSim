@@ -92,7 +92,7 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 正质量联合矩的合并、流入法向厚度、缺失空间方向的有界形状近似与输出回验见 [CellRemapSpatialMoments](../../solver/src/main/java/mmm/fluid/CellRemapSpatialMoments.java)，接收组装配在 `CellCarrierRemapPlan.completeArrivalShape`，精确扫掠二阶矩在 [LiquidAffineSweepGeometry](../../solver/src/main/java/mmm/fluid/LiquidAffineSweepGeometry.java)。平方根压缩及逐行尺度 QR 在 [JointMomentFactor](../../solver/src/main/java/mmm/fluid/JointMomentFactor.java)。聚焦验证为 `:fabric:runRemapMomentsValidation --args="joint-moments"` 和 `sweep-only`；完整逻辑步的分次统计与表示转换预算使用输运选择器 `representation`。
 
-同次仿射输运的逐微盒一阶扫掠复用在 [LiquidAffineFaceFlow](../../solver/src/main/java/mmm/fluid/LiquidAffineFaceFlow.java) 与 `LiquidAffineSweepGeometry.MicroSweep`，支撑限制、来源原始位及内存额度对照复用 `CellRemapMomentsValidation` 的 `sweep-only`；工作区释放在 `CellLiquidVolumeTransport.advect`。
+同次仿射输运的逐微盒一阶扫掠复用在 [LiquidAffineFaceFlow](../../solver/src/main/java/mmm/fluid/LiquidAffineFaceFlow.java) 与 `LiquidAffineSweepGeometry.MicroSweep`；来源片区的二阶积分在 `sweptExactSecondMoments` / `arrivalSecondMoments` 的 `selectedSourceSupport` 重载。支撑限制、完整柱归一化、片区精确分解及内存额度对照复用 `CellRemapMomentsValidation` 的 `sweep-only`；工作区释放在 `CellLiquidVolumeTransport.advect`。
 
 开放微面与湿源相关积分在 `LiquidAffineSweepGeometry.lowOrderPhaseVolumes`，共同湿半空间在 `wetSourcePlane`；通量限制和实际来源供给检查在 `ConservativeLiquidFlux.provisionalFluxes`，载体权重在 `CellRemapMicroPreferences.create`。湿源线性峰值在 `GasGeometryOverlap.maximumLinearValue`，步长与液体追加上界在 `LiquidAffineFaceFlow.courantRate` / `liquidTransferUpperBound`。正性、三轴薄层、干出口内侧湿源与缓存身份对照复用 `CellRemapMomentsValidation` 的 `sweep-only`。
 
