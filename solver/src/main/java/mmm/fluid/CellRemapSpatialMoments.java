@@ -159,6 +159,12 @@ final class CellRemapSpatialMoments {
 	}
 	double mass() { return mass; }
 	double[] centroid() { return new double[]{mean[0], mean[1], mean[2]}; }
+	double[][] fitMechanical(double[] weights, double[][] positions, double[][] preferredVelocity) {
+		var angular = new double[]{covariance[1][5] - covariance[2][4], covariance[2][3] - covariance[0][5],
+				covariance[0][4] - covariance[1][3]};
+		return CellRemapMechanicalFit.fit(weights, positions, preferredVelocity, centroid(), meanVelocity(), angular,
+				covariance[3][3] + covariance[4][4] + covariance[5][5]);
+	}
 	double spatialVariance(int axis) { return covariance[axis][axis]; }
 	int spatialRank() { return decompose().spatialRank(); }
 	int spatialAxes() {

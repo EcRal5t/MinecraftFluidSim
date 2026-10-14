@@ -731,6 +731,7 @@ public final class CellRemapMomentsValidation {
 	}
 
 	private static void boundedFaceTangentsKeepMechanicalMoments() {
+		supportContractionKeepsAngularMomentumAndEnergy();
 		var domain = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 32);
 		domain.setVolume(1, 1, 1, 1); domain.rebuildGridFromParticles();
@@ -796,6 +797,54 @@ public final class CellRemapMomentsValidation {
 				verifyJointRule(combined, weights, reference);
 			}
 		}
+	}
+	private static void supportContractionKeepsAngularMomentumAndEnergy() {
+		var domain = new FluidDomain(3, 3, 3, FluidSolverConfig.prototypeDefaults(), 32);
+		int cell = domain.cellIndex(1, 1, 1);
+		for (int axis = 0; axis < 3; axis++) for (boolean enoughEnergy : new boolean[]{false, true}) {
+			var moments = new CellRemapSpatialMoments(); var preferred = new double[8][3]; var weights = new double[8];
+			double[] beforeAngular = new double[3]; double beforeEnergy = 0;
+			for (int p = 0; p < 8; p++) {
+				var x = preferred[p]; var v = new double[3]; weights[p] = .125;
+				x[axis] = (p & 1) == 0 ? -.75 : .75;
+				x[(axis + 1) % 3] = (p & 2) == 0 ? -.25 : .25;
+				x[(axis + 2) % 3] = (p & 4) == 0 ? -.125 : .125;
+				v[axis] = -.5 * x[(axis + 1) % 3]; v[(axis + 1) % 3] = .5 * x[axis];
+				for (int a = 0; a < 3; a++) {
+					if (enoughEnergy) v[a] += x[a];
+					beforeEnergy += .5 * weights[p] * v[a] * v[a];
+				}
+				for (int a = 0; a < 3; a++) beforeAngular[a] += weights[p] *
+						(x[(a + 1) % 3] * v[(a + 2) % 3] - x[(a + 2) % 3] * v[(a + 1) % 3]);
+				moments.add(weights[p], x, v);
+			}
+			CellRemapSpatialMoments.Result fitted;
+			try { fitted = CellRemapSampling.fit(domain, cell, 255, weights, moments, preferred,
+					new double[3], new double[3], 1 << axis, .5, new double[3]); }
+			catch (MechanicalTimeRefinement unavailable) { check(!enoughEnergy, "Feasible angular support was refused"); continue; }
+			check(enoughEnergy, "Contraction retained angular momentum with insufficient actual kinetic energy");
+			var angular = new double[3]; var momentum = new double[3]; var rounding = new double[3]; double energy = 0;
+			for (int p = 0; p < 8; p++) for (int a = 0; a < 3; a++) {
+				var x = fitted.positions()[p]; var v = fitted.velocities()[p];
+				momentum[a] += weights[p] * v[a]; energy += .5 * weights[p] * v[a] * v[a];
+				angular[a] += weights[p] * (x[(a + 1) % 3] * v[(a + 2) % 3] - x[(a + 2) % 3] * v[(a + 1) % 3]);
+				rounding[a] += weights[p] * 4 * Math.ulp((float) (2 * domain.config.cellSize())) / domain.config.cellSize()
+						* (Math.abs(v[(a + 1) % 3]) + Math.abs(v[(a + 2) % 3]));
+			}
+			precise(energy, beforeEnergy, "Support contraction kinetic energy");
+			for (int a = 0; a < 3; a++) {
+				precise(momentum[a], 0, "Support contraction momentum");
+				check(Math.abs(angular[a] - beforeAngular[a]) <= rounding[a] + 64 * Math.ulp(Math.abs(beforeAngular[a])),
+						"Support contraction changed angular momentum beyond coordinate storage rounding");
+			}
+		}
+		check(CellRemapMechanicalFit.fit(new double[]{1, 1}, new double[][]{{0, -.25, 0}, {0, .25, 0}},
+				new double[][]{{1, 0, 0}, {1, 0, 0}}, new double[]{0, .125, 0}, new double[]{1, 0, 0},
+				new double[3], 0) == null, "Centroid transfer fabricated rotational energy from a uniform velocity source");
+		var uniform = CellRemapMechanicalFit.fit(new double[]{1, 1}, new double[][]{{0, -.25, 0}, {0, .25, 0}},
+				new double[][]{{1, 0, 0}, {1, 0, 0}}, new double[3], new double[]{1, 0, 0}, new double[3], 0);
+		check(uniform != null && java.util.Arrays.equals(uniform[0], new double[]{1, 0, 0})
+				&& java.util.Arrays.equals(uniform[0], uniform[1]), "Zero-variance source lost its unchanged uniform motion");
 	}
 
 	private static void verifyJointRule(CellRemapSpatialMoments moments, double[] weights, double[][] source) {
