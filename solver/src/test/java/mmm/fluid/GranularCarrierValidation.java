@@ -933,36 +933,7 @@ public final class GranularCarrierValidation {
 				sharedTerminal, sharedRestitution, contactBudget(), sharedChain);
 		var coldResponse = GranularContactCompression.respond(supportedMass, supportedTerminal, supportedRows,
 				supportedCold, sharedRestitution, contactBudget());
-		var memo = new GranularContactMemo(contactBudget());
-		var memoResult = memo.solve(supportedMass, supportedTerminal, supportedRows, null, new GranularContactChainSeed(supportedMass, supportedRows));
-		for (int repeat = 0; repeat < 2; repeat++) {
-			memoResult.values()[0][1] = 123; memoResult.impulses()[0] = 777;
-			memoResult.gapError()[0] = -999; memoResult.arithmeticError()[0][1] = 999;
-			memoResult = memo.solve(supportedMass, supportedTerminal, supportedRows, null, new GranularContactChainSeed(supportedMass, supportedRows));
-			require(java.util.Arrays.deepEquals(memoResult.values(), supportedCold.values())
-					&& java.util.Arrays.deepEquals(memoResult.arithmeticError(), supportedCold.arithmeticError())
-					&& java.util.Arrays.equals(memoResult.impulses(), supportedCold.impulses())
-					&& java.util.Arrays.equals(memoResult.gapError(), supportedCold.gapError()),
-					"preview compression memo must isolate all returned storage and certificate arrays");
-		}
-		var memoWarm = memo.solve(supportedMass, supportedTerminal, supportedRows, driftSeed.impulses(), new GranularContactChainSeed(supportedMass, supportedRows));
-		require(java.util.Arrays.deepEquals(memoWarm.values(), supportedWarm.values())
-				&& java.util.Arrays.equals(memoWarm.impulses(), supportedWarm.impulses()),
-				"preview compression memo must distinguish the exact supplied impulse seed");
-		for (boolean reversedNormal : new boolean[]{false, true}) {
-			var changedRows = supportedRows.clone();
-			changedRows[0] = reversedNormal ? new GranularContactCompression.Row(0, 1, new double[]{0, -1, 0})
-					: new GranularContactCompression.Row(1, 0, new double[]{0, 1, 0});
-			var expected = compressContacts(supportedMass, supportedTerminal, changedRows);
-			var actual = memo.solve(supportedMass, supportedTerminal, changedRows, null, new GranularContactChainSeed(supportedMass, changedRows));
-			require(java.util.Arrays.deepEquals(actual.values(), expected.values()) && java.util.Arrays.equals(actual.impulses(), expected.impulses()),
-					"preview compression memo must distinguish row endpoint order and normal bits");
-		}
-		var changedMass = supportedMass.clone(); changedMass[0] *= 2;
-		var expectedMass = compressContacts(changedMass, supportedTerminal, supportedRows);
-		var actualMass = memo.solve(changedMass, supportedTerminal, supportedRows, null, new GranularContactChainSeed(changedMass, supportedRows));
-		require(java.util.Arrays.deepEquals(actualMass.values(), expectedMass.values()) && java.util.Arrays.equals(actualMass.impulses(), expectedMass.impulses()),
-				"preview compression memo must distinguish actual physical mass");
+		componentResponseCopiesCertifiedArrays(supportedMass, supportedDrift, supportedTerminal, supportedRows);
 		require(java.util.Arrays.deepEquals(sharedDrift.values(), driftSeed.values())
 				&& java.util.Arrays.deepEquals(sharedTerminal.values(), supportedCold.values())
 				&& java.util.Arrays.deepEquals(sharedResponse.values(), coldResponse.values())
@@ -1101,6 +1072,91 @@ public final class GranularCarrierValidation {
 		return result;
 	}
 
+	private static void componentResponseCopiesCertifiedArrays(double[] masses, double[][] drift, double[][] terminal, GranularContactCompression.Row[] rows) {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		var material = registry.material(registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND));
+		var fixed = new GranularSphereCollision(2, 2, 2, .5F, new FlipCutCellGeometry(2, 2, 2), null);
+		for (boolean friction : new boolean[]{false, true}) {
+			double[] mass = friction ? new double[]{1} : masses;
+			double[][] d = friction ? new double[][]{{10, -2, 0}} : drift, v = friction ? d : terminal;
+			var constraints = friction ? new GranularContactCompression.Row[]{new GranularContactCompression.Row(0, -1, new double[]{0, 1, 0})} : rows;
+			double[][] dError = new double[mass.length][3], vError = new double[mass.length][3];
+			int[] handles = new int[mass.length]; var materials = new mmm.granular.ParticulateMaterial[mass.length]; java.util.Arrays.fill(materials, material);
+			int[] operations = {0}; Runnable budget = contactBudget(), measured = () -> { operations[0]++; budget.run(); };
+			var processor = new GranularComponentResponse(.5, fixed, measured);
+			var expected = new GranularComponentResponse(.5, fixed, contactBudget()).respond(mass, d, v, dError, vError, handles, materials, constraints);
+			var actual = processor.respond(mass, d, v, dError, vError, handles, materials, constraints);
+			int[] failedOperations = {0}, failAt = {7};
+			var rejected = new GranularComponentResponse(.5, fixed, () -> {
+				if (++failedOperations[0] == failAt[0]) throw new MechanicalTimeRefinement(2, "Contact response fixture budget");
+			});
+			try {
+				rejected.respond(mass, d, v, dError, vError, handles, materials, constraints);
+				throw new AssertionError("Component response fixture must exercise an incomplete calculation");
+			} catch (MechanicalTimeRefinement refusal) { failAt[0] = 0; }
+			int retryStart = failedOperations[0];
+			checkComponentResponseBits(rejected.respond(mass, d, v, dError, vError, handles, materials, constraints), expected);
+			require(failedOperations[0] - retryStart > (10 + (friction ? 3 : 2)) * mass.length + (2 + (friction ? 3 : 2)) * constraints.length + 2,
+					"an incomplete component calculation must not populate the preview cache");
+			if (friction) {
+				require(!java.util.Arrays.deepEquals(expected.velocity().values(), expected.beforeFriction().values()),
+						"fixed friction fixture must retain a separate pre-friction energy certificate");
+				var compressed = compressContacts(mass, d, constraints);
+				var originalNormal = GranularContactCompression.respond(mass, v, constraints, compressed,
+						new double[]{material.restitution()}, contactBudget());
+				var originalFriction = fixed.friction(originalNormal.values()[0], new double[][]{constraints[0].normal()},
+						originalNormal.impulses()[0] / mass[0], material);
+				var originalTerminal = compressContacts(mass, new double[][]{originalFriction}, constraints);
+				checkComponentResponseBits(expected, new GranularComponentResponse.Response(compressed, originalTerminal, originalNormal));
+			}
+			for (int repeat = 0; repeat < 2; repeat++) {
+				for (var result : new GranularContactCompression.Result[]{actual.drift(), actual.velocity(), actual.beforeFriction()}) {
+					result.values()[0][1] = 123; result.impulses()[0] = 777; result.gapError()[0] = -999; result.arithmeticError()[0][1] = 999;
+				}
+				int start = operations[0]; actual = processor.respond(mass, d, v, dError, vError, handles, materials, constraints);
+				int copies = friction ? 3 : 2;
+				require(operations[0] - start == (10 + copies) * mass.length + (2 + copies) * constraints.length + 2,
+						"component reuse must charge both original energy audits, exact keys and every copied certificate");
+				checkComponentResponseBits(actual, expected);
+			}
+			for (int change = 0; change < 9; change++) {
+				double[] changedMass = mass.clone(); double[][] changedD = java.util.Arrays.stream(d).map(double[]::clone).toArray(double[][]::new);
+				double[][] changedV = java.util.Arrays.stream(v).map(double[]::clone).toArray(double[][]::new);
+				double[][] changedDError = new double[mass.length][3], changedVError = new double[mass.length][3];
+				int[] changedHandles = handles.clone(); var changedMaterials = materials.clone(); var changedRows = constraints.clone();
+				if (change == 0) changedMass[0] *= 2;
+				else if (change == 1) changedD[0][1] = Math.nextDown(changedD[0][1]);
+				else if (change == 2) changedV[0][1] = Math.nextDown(changedV[0][1]);
+				else if (change == 3) changedDError[0][1] = 8;
+				else if (change == 4) changedVError[0][1] = 8;
+				else if (change == 5) changedHandles[0]++;
+				else if (change == 6) changedMaterials[0] = new mmm.granular.ParticulateMaterial(material.id(), material.referenceDensity(),
+						material.primaryGrainDiameterMeters(), material.restPorosityQ(), material.reposeAngleRadians(), 0, 0, 0,
+						material.criticalShields(), material.erosionRateSvqPerSecond(), material.maximumActiveParcelSvq(), material.baseArgb(), material.displayTextureId(), material.reactive());
+				else if (change == 7) {
+					var row = constraints[0]; double[] normal = row.normal().clone(); normal[0] = -0.0;
+					changedRows[0] = new GranularContactCompression.Row(row.first(), row.second(), normal);
+				} else if (!friction) changedRows[0] = new GranularContactCompression.Row(constraints[0].second(), constraints[0].first(), constraints[0].normal());
+				else changedD[0][0] = Math.nextDown(changedD[0][0]);
+				int start = operations[0];
+				var changed = processor.respond(changedMass, changedD, changedV, changedDError, changedVError, changedHandles, changedMaterials, changedRows);
+				require(operations[0] - start > (10 + (friction ? 3 : 2)) * mass.length + (2 + (friction ? 3 : 2)) * constraints.length + 2,
+						"component cache must distinguish each full raw source, error, material and ordered contact input");
+				var fresh = new GranularComponentResponse(.5, fixed, contactBudget()).respond(changedMass, changedD, changedV,
+						changedDError, changedVError, changedHandles, changedMaterials, changedRows);
+				checkComponentResponseBits(changed, fresh);
+			}
+		}
+	}
+	private static void checkComponentResponseBits(GranularComponentResponse.Response actual, GranularComponentResponse.Response expected) {
+		var a = new GranularContactCompression.Result[]{actual.drift(), actual.velocity(), actual.beforeFriction()};
+		var b = new GranularContactCompression.Result[]{expected.drift(), expected.velocity(), expected.beforeFriction()};
+		for (int i = 0; i < a.length; i++) {
+			require(java.util.Arrays.deepEquals(a[i].values(), b[i].values()) && java.util.Arrays.deepEquals(a[i].arithmeticError(), b[i].arithmeticError())
+					&& java.util.Arrays.equals(a[i].impulses(), b[i].impulses()) && java.util.Arrays.equals(a[i].gapError(), b[i].gapError()),
+					"preview component reuse must preserve every response and reconstruction certificate array");
+		}
+	}
 	private static Runnable contactBudget() {
 		int[] operations = {0};
 		return () -> {

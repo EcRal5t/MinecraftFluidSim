@@ -30,7 +30,7 @@ final class GranularActiveContacts {
 	private final int[][] registrations;
 	private final double[][] sweptMinimum, sweptMaximum;
 	private final BitSet candidates = new BitSet();
-	private final GranularContactMemo memo = new GranularContactMemo(this::spend);
+	private final GranularComponentResponse componentResponse;
 	private final PriorityQueue<Event> events = new PriorityQueue<>(Comparator.comparingDouble(Event::time)
 			.thenComparingInt(Event::first).thenComparingInt(Event::second));
 	private int operations;
@@ -43,6 +43,7 @@ final class GranularActiveContacts {
 		this.parcels = parcels; this.registry = registry; this.fixed = fixed;
 		if (!(Float.isFinite(courant) && courant > 0)) throw new IllegalArgumentException("Invalid active contact CFL limit");
 		this.duration = duration; this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.h = h;
+		componentResponse = new GranularComponentResponse(h, fixed, this::spend);
 		cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		int divisions = FlipCutCellGeometry.MICRO_CELLS_PER_AXIS;
 		// Keep coarse indexing when a diagnostic domain exceeds micro-grid int addressing.
@@ -150,72 +151,15 @@ final class GranularActiveContacts {
 			}
 		}
 		double[] weights = new double[members.size()]; double[][] d = new double[members.size()][], v = new double[members.size()][];
-		for (int i = 0; i < members.size(); i++) { int global = members.get(i); weights[i] = mass[global]; d[i] = drift[global]; v[i] = velocity[global]; }
-		var constraints = rows.toArray(GranularContactCompression.Row[]::new);
-		var chain = new GranularContactChainSeed(weights, constraints);
-		var compression = memo.solve(weights, d, constraints, null, chain);
-		var normalCompression = Arrays.deepEquals(d, v) ? compression : memo.solve(weights, v, constraints, compression.impulses(), chain);
-		var fixedRows = new ArrayList<ArrayList<Integer>>(members.size());
-		for (int i = 0; i < members.size(); i++) fixedRows.add(new ArrayList<>());
-		for (int row = 0; row < constraints.length; row++) {
-			spend(); if (constraints[row].second() < 0) {
-				fixedRows.get(constraints[row].first()).add(row);
-			}
-		}
-		var driftSupported = loadedSupport(members.size(), constraints, compression.impulses());
-		boolean sameSupport = normalCompression == compression;
-		if (!sameSupport) {
-			sameSupport = true;
-			for (int row = 0; row < constraints.length; row++) {
-				spend(); if ((compression.impulses()[row] > 0) != (normalCompression.impulses()[row] > 0)) { sameSupport = false; break; }
-			}
-		}
-		var velocitySupported = sameSupport ? driftSupported
-				: loadedSupport(members.size(), constraints, normalCompression.impulses());
-		double[] restitution = new double[constraints.length], driftRestitution = new double[constraints.length];
+		double[][] dError = new double[members.size()][], vError = new double[members.size()][];
+		int[] handles = new int[members.size()]; var materials = new mmm.granular.ParticulateMaterial[members.size()];
 		for (int i = 0; i < members.size(); i++) {
-			int global = members.get(i); var material = registry.material(parcels.parcel(global).materialHandle());
-			double[] change = new double[3];
-			for (int axis = 0; axis < 3; axis++) change[axis] = normalCompression.values()[i][axis] - v[i][axis];
-			double e = material.restitution();
-			if (e * Math.hypot(Math.hypot(change[0], change[1]), change[2]) <= h * .125) e = 0;
-			for (int row : fixedRows.get(i)) {
-				spend(); if (GranularSphereCollision.closing(v[i], constraints[row].normal(), velocityError[global])) restitution[row] = e;
-			}
+			spend(); int global = members.get(i); weights[i] = mass[global]; d[i] = drift[global]; v[i] = velocity[global];
+			dError[i] = driftError[global]; vError[i] = velocityError[global]; handles[i] = parcels.parcel(global).materialHandle();
+			materials[i] = registry.material(handles[i]);
 		}
-		for (int row = 0; row < constraints.length; row++) if (constraints[row].second() >= 0) {
-			spend(); var contact = constraints[row];
-			int first = members.get(contact.first()), second = members.get(contact.second());
-			double e = Math.min(registry.material(parcels.parcel(first).materialHandle()).restitution(),
-					registry.material(parcels.parcel(second).materialHandle()).restitution());
-			double velocityGap = 0, driftGap = 0;
-			for (int axis = 0; axis < 3; axis++) {
-				velocityGap = Math.fma(contact.normal()[axis], velocity[second][axis] - velocity[first][axis], velocityGap);
-				driftGap = Math.fma(contact.normal()[axis], drift[second][axis] - drift[first][axis], driftGap);
-			}
-			boolean velocityLoaded = normalCompression.impulses()[row] > 0 && velocitySupported.get(contact.first());
-			boolean driftLoaded = compression.impulses()[row] > 0 && driftSupported.get(contact.first());
-			if ((!velocityLoaded || -e * velocityGap > h * .125)
-					&& closingPair(first, second, contact.normal(), velocity, velocityError)) restitution[row] = e;
-			if ((!driftLoaded || -e * driftGap > h * .125)
-					&& closingPair(first, second, contact.normal(), drift, driftError)) driftRestitution[row] = e;
-		}
-		var driftResponse = GranularContactCompression.respond(weights, d, constraints, compression, driftRestitution, this::spend, chain, memo);
-		var response = GranularContactCompression.respond(weights, v, constraints, normalCompression, restitution, this::spend, chain, memo);
-		var frictionInput = response.values().clone(); boolean frictionChanged = false;
-		for (int i = 0; i < members.size(); i++) {
-			var normals = new ArrayList<double[]>(); double[] load = new double[3];
-			for (int row : fixedRows.get(i)) {
-				spend(); var normal = constraints[row].normal(); normals.add(normal);
-				for (int axis = 0; axis < 3; axis++) load[axis] = Math.fma(response.impulses()[row] / weights[i], normal[axis], load[axis]);
-			}
-			if (normals.isEmpty()) continue;
-			frictionInput[i] = fixed.friction(response.values()[i], normals.toArray(double[][]::new),
-					Math.hypot(Math.hypot(load[0], load[1]), load[2]), registry.material(parcels.parcel(members.get(i)).materialHandle()));
-			frictionChanged |= !Arrays.equals(frictionInput[i], response.values()[i]);
-		}
-		// Tangential wall impulses can close an oblique pair; recheck the same joint normal constraints.
-		if (frictionChanged) response = memo.solve(weights, frictionInput, constraints, null, chain);
+		var response = componentResponse.respond(weights, d, v, dError, vError, handles, materials,
+				rows.toArray(GranularContactCompression.Row[]::new));
 		BitSet projected = new BitSet(parcels.count());
 		for (int global : members) {
 			trajectoryOrigin[global] = position[global].clone(); updated[global] = event.time();
@@ -223,32 +167,10 @@ final class GranularActiveContacts {
 		for (int i = 0; i < members.size(); i++) {
 			int global = members.get(i);
 			projected.set(global);
-			drift[global] = driftResponse.values()[i]; velocity[global] = response.values()[i];
-			driftError[global] = driftResponse.arithmeticError()[i]; velocityError[global] = response.arithmeticError()[i];
+			drift[global] = response.drift().values()[i]; velocity[global] = response.velocity().values()[i];
+			driftError[global] = response.drift().arithmeticError()[i]; velocityError[global] = response.velocity().arithmeticError()[i];
 		}
 		return projected;
-	}
-	private BitSet loadedSupport(int count, GranularContactCompression.Row[] rows, double[] impulses) {
-		int[] parent = new int[count]; byte[] rank = new byte[count];
-		for (int i = 0; i < count; i++) { spend(); parent[i] = i; }
-		BitSet anchored = new BitSet(count), supported = new BitSet(count);
-		for (int k = 0; k < rows.length; k++) {
-			spend(); if (impulses[k] == 0) continue;
-			var row = rows[k];
-			if (row.second() < 0) { anchored.set(row.first()); continue; }
-			int first = root(parent, row.first()), second = root(parent, row.second());
-			if (first == second) continue;
-			if (rank[first] < rank[second]) parent[first] = second;
-			else { parent[second] = first; if (rank[first] == rank[second]) rank[first]++; }
-		}
-		for (int i = anchored.nextSetBit(0); i >= 0; i = anchored.nextSetBit(i + 1)) { spend(); supported.set(root(parent, i)); }
-		BitSet result = new BitSet(count);
-		for (int i = 0; i < count; i++) { spend(); if (supported.get(root(parent, i))) result.set(i); }
-		return result;
-	}
-	private int root(int[] parent, int i) {
-		while (parent[i] != i) { spend(); parent[i] = parent[parent[i]]; i = parent[i]; }
-		return i;
 	}
 
 	private void reschedule(int i, double time, BitSet projected) {
