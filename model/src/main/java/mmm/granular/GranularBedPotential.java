@@ -59,12 +59,18 @@ public final class GranularBedPotential {
 	/** Release to an active carrier needs modeled work whenever its combined first moment rises. */
 	public static boolean allowsWake(GranularDepositStore store, int cell, GranularDepositStore.SolidPortion moved,
 	                                 float targetY, float cellSize, int sizeX, int sizeY, double gravity) {
+		return wakePotentialChange(store, cell, moved, targetY, cellSize, sizeX, sizeY, gravity).signum() <= 0;
+	}
+
+	/** Actual uniform-bed to active-carrier gravitational work, before either inventory changes. */
+	public static SignedDyadic wakePotentialChange(GranularDepositStore store, int cell, GranularDepositStore.SolidPortion moved,
+	                                              float targetY, float cellSize, int sizeX, int sizeY, double gravity) {
 		if (store == null || moved == null || !(Float.isFinite(targetY) && targetY >= 0)
 				|| !(Float.isFinite(cellSize) && cellSize > 0) || sizeX <= 0 || sizeY <= 0
 				|| !(Double.isFinite(gravity) && gravity >= 0)) {
 			throw new IllegalArgumentException("Bed wake energy input is invalid");
 		}
-		if (gravity == 0) return true;
+		if (gravity == 0) return SignedDyadic.ZERO;
 		if (!moved.equals(store.peekTake(cell, moved.materialHandle(), moved.solidCompositionHandle(), moved.solidVolumeSvq()))) {
 			throw new IllegalArgumentException("Bed wake portion does not match its source");
 		}
@@ -75,6 +81,6 @@ public final class GranularBedPotential {
 		SignedDyadic remainingCenter = h.multiply(SignedDyadic.of(cell / sizeX % sizeY, 0).add(SignedDyadic.of(remainingBulk, -25)));
 		SignedDyadic change = originalMass[0].multiply(h).multiply(SignedDyadic.of(remainingBulk - store.cellBulkVolumeSvq(cell), -25))
 				.add(SignedDyadic.of(moved.mass()).multiply(SignedDyadic.of(targetY).subtract(remainingCenter)));
-		return change.signum() <= 0;
+		return change.multiply(SignedDyadic.of(gravity));
 	}
 }
