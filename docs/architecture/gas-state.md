@@ -39,6 +39,8 @@
 
 单平面微盒体积由 [MicroBoxPlaneVolume](../../solver/src/main/java/mmm/fluid/MicroBoxPlaneVolume.java) 的精确盒积分求得；每块保留捕获时的干侧半空间与 PLIC 求逆证书，几何对象保存碰撞掩码及精确孔隙容量副本。零孔隙容量的固定连通分量省去气体块。[GasComponentCapacity](../../solver/src/main/java/mmm/fluid/GasComponentCapacity.java) 直接读取原始液体库存，按固定连通分量计算扣除固体后的剩余容量，同时保留精确几何气体体积与两者差额。计算校核原始库存目标、捕获孔隙容量及相邻阈值体积区间；捕获的碰撞掩码、孔隙容量或体积目标过期、容量差额超出证书或正库存容量缺少干区时明确拒绝计算。
 
+`PlicPlaneOffset` 在一次求逆内预备同法向各微盒的最低投影、跨度及共同分母。每个偏移先精确合计各块的二进制分子，再统一转为有理数；binary64 偏移格点搜索、相邻端点及选定体积保持原公式与表示额度。
+
 [GasPieceCapacity](../../solver/src/main/java/mmm/fluid/GasPieceCapacity.java) 在每块的相邻偏移体积区间内分配该分量的原始气体容量。令各块容量区间为 `[Lᵢ,Uᵢ]`、原始分量容量为 `G`，使用 `aᵢ=Lᵢ+θ(Uᵢ−Lᵢ)`，其中 `θ=(G−ΣLᵢ)/Σ(Uᵢ−Lᵢ)`。零宽区间保持固定容量；全部块的归一化容量精确和为 `G`。缺少选定几何块时，其容量为零；`G` 超出已有块可承接的区间时拒绝计算。通路由选定 PLIC 几何确定，容量证书按每块保存。
 
 SI 容量以当前 `h³` 换算，各非最大份额一次舍入，最大份额承接原始 SI 总量减去已储存子列后的余数；分量总量误差至多为承接列的半个 ULP。每块另存实际舍入误差上包。[GasChamberCapacity](../../solver/src/main/java/mmm/fluid/GasChamberCapacity.java) 在同一份几何与气腔图上汇总块容量，节点误差上包包含叶子误差及节点最终舍入。规划中的固体占据量以完整 SVQ 副本参与容量计算，包含恢复前的连续固相库存。

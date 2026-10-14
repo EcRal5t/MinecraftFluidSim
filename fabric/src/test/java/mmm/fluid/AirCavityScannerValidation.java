@@ -577,6 +577,30 @@ public final class AirCavityScannerValidation {
 		check(inverse.lowerVolume().compareTo(tinyTarget)<=0 && inverse.upperVolume().compareTo(tinyTarget)>=0
 				&& Math.nextUp(inverse.lower())==inverse.upper(),"Tiny PLIC volume lacks adjacent enclosing offsets");
 		check(inverse.offset()>0 && inverse.offset()<1e-44,"PLIC inversion manufactured a finite layer from an extreme tail");
+		for(float[] normal:new float[][]{{1,0,0},{-1,0,0},{0,-1,0},{0,0,1},{0,1,-.25F},{.1F,-.3F,1},{Float.MIN_VALUE,0,0},
+				{Float.MIN_VALUE,1,0},{Float.MAX_VALUE,-Float.MIN_VALUE,1}})
+			for(int support=1;support<=255;support++)for(int fraction:new int[]{0,1,3}) {
+				var target=ExactRational.of(fraction*Integer.bitCount(support)).divide(24);
+				var result=PlicPlaneOffset.solve(support,normal[0],normal[1],normal[2],target);
+				var coefficients=new SignedDyadic[]{SignedDyadic.of(normal[0]),SignedDyadic.of(normal[1]),SignedDyadic.of(normal[2])};
+				var cdf=new MicroBoxPlaneVolume.SelectedVolume(support,coefficients);
+				var measured=new ExactRational[3]; int index=0;
+				for(double offset:new double[]{result.lower(),result.upper(),.375}) {
+					var plane=new GasGeometryOverlap.HalfSpace(coefficients[0],coefficients[1],coefficients[2],SignedDyadic.of(offset));
+					var sum=ExactRational.ZERO;
+					for(int micro=0;micro<8;micro++)if((support & 1<<micro)!=0)sum=sum.add(MicroBoxPlaneVolume.wetVolume(micro,plane));
+					check(cdf.volume(offset).equals(sum),"Prepared PLIC CDF differs from independent exact leaf integration");
+					measured[index++]=sum;
+				}
+				check(result.lowerVolume().equals(measured[0]) && result.upperVolume().equals(measured[1])
+						&& measured[0].compareTo(target)<=0 && measured[1].compareTo(target)>=0,
+						"Prepared PLIC CDF changed the exact enclosing endpoint volumes");
+				check(result.lower()==result.upper()?measured[0].equals(target):Math.nextUp(result.lower())==result.upper(),
+						"Prepared PLIC CDF changed the binary64 adjacent-offset certificate");
+				double selected=target.multiply(2).compareTo(measured[0].add(measured[1]))<=0?result.lower():result.upper();
+				check(Double.doubleToRawLongBits(selected)==Double.doubleToRawLongBits(result.offset()),
+						"Prepared PLIC CDF changed the selected offset's raw bits");
+			}
 		var tetra=new GasGeometryOverlap.HalfSpace(one.negate(),one.negate(),one.negate(),mmm.units.SignedDyadic.of(-.5));
 		check(GasGeometryOverlap.normalizedVolume(0,List.of(tetra)).equals(exact.divide(48)),
 				"Gas overlap did not retain the exact tetrahedron volume");

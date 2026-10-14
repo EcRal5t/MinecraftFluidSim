@@ -16,6 +16,7 @@ final class PlicPlaneOffset {
 			throw new IllegalArgumentException("Invalid PLIC offset inversion input");
 		try {
 			SignedDyadic[] normal = {SignedDyadic.of(nx), SignedDyadic.of(ny), SignedDyadic.of(nz)};
+			var cdf = new MicroBoxPlaneVolume.SelectedVolume(supportMask, normal);
 			SignedDyadic minimum = null, maximum = null;
 			for (int micro = 0; micro < 8; micro++) if ((supportMask & 1 << micro) != 0) {
 				SignedDyadic low = SignedDyadic.ZERO, high = SignedDyadic.ZERO;
@@ -28,7 +29,7 @@ final class PlicPlaneOffset {
 				if (maximum == null || high.compareTo(maximum) > 0) maximum = high;
 			}
 			double lower = outward(minimum, false), upper = outward(maximum, true);
-			ExactRational lowVolume = volume(supportMask, normal, lower), highVolume = volume(supportMask, normal, upper);
+			ExactRational lowVolume = cdf.volume(lower), highVolume = cdf.volume(upper);
 			if (lowVolume.equals(target)) return exact(lower, lowVolume);
 			if (highVolume.equals(target)) return exact(upper, highVolume);
 			if (lowVolume.compareTo(target) > 0 || highVolume.compareTo(target) < 0)
@@ -40,7 +41,7 @@ final class PlicPlaneOffset {
 				// Signed floor average avoids overflow even when the interval spans both signs.
 				long middleOrdinal = (lowOrdinal & highOrdinal) + ((lowOrdinal ^ highOrdinal) >> 1);
 				double middle = value(middleOrdinal);
-				ExactRational middleVolume = volume(supportMask, normal, middle);
+				ExactRational middleVolume = cdf.volume(middle);
 				int order = middleVolume.compareTo(target);
 				if (order == 0) return exact(middle, middleVolume);
 				if (order < 0) { lowOrdinal = middleOrdinal; lower = middle; lowVolume = middleVolume; }
@@ -51,14 +52,6 @@ final class PlicPlaneOffset {
 		} catch (IllegalArgumentException magnitude) {
 			throw new GasTopologyBlockedException("Exact PLIC offset inversion exceeds its representation budget: " + magnitude.getMessage());
 		}
-	}
-
-	private static ExactRational volume(int supportMask, SignedDyadic[] normal, double offset) {
-		var plane = new GasGeometryOverlap.HalfSpace(normal[0], normal[1], normal[2], SignedDyadic.of(offset));
-		ExactRational sum = ExactRational.ZERO;
-		for (int micro = 0; micro < 8; micro++) if ((supportMask & 1 << micro) != 0)
-			sum = sum.add(MicroBoxPlaneVolume.wetVolume(micro, plane));
-		return sum;
 	}
 
 	private static Result exact(double offset, ExactRational volume) {

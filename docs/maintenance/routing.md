@@ -68,7 +68,7 @@
 
 同格断开液体的空间库存矩见 [LiquidComponentMoments](../../solver/src/main/java/mmm/fluid/LiquidComponentMoments.java)，未来编辑的分量聚合见 [PhaseLiquidGeometryEdit](../../solver/src/main/java/mmm/fluid/PhaseLiquidGeometryEdit.java)，独立 PLIC 见 [PlicComponentGeometry](../../solver/src/main/java/mmm/fluid/PlicComponentGeometry.java)。微面几何入口在 [FlipPressurePhaseGeometry](../../solver/src/main/java/mmm/fluid/FlipPressurePhaseGeometry.java)，共享孔隙容量入口是 `CellRemapMicroTopology.capacities`。速度块归属在 `CellAffineVelocity.blockForMicro`，分量湿面在 `LiquidPressureGeometry.componentSnapshot`，共同面矩与转置在 `CellAffineMacTransfer`。对应验证为 `AirCavityScannerValidation.validateComponentLiquidGeometry` 和 `MarkerVelocitySpaceExperiment.disconnectedComponentMotion`。
 
-PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/src/main/java/mmm/fluid/PlicPlaneOffset.java)，单平面盒积分见 [MicroBoxPlaneVolume](../../solver/src/main/java/mmm/fluid/MicroBoxPlaneVolume.java)。组件气体库存容量及其几何差额见 [GasComponentCapacity](../../solver/src/main/java/mmm/fluid/GasComponentCapacity.java)；环境截留量分辨率检查在 `GasTopologyCoordinator.ambientInventory`，验证为 `AirCavityScannerValidation.validateAmbientCaptureResolution`。
+PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/src/main/java/mmm/fluid/PlicPlaneOffset.java)，单平面盒积分与同法向共同分母求值见 [MicroBoxPlaneVolume](../../solver/src/main/java/mmm/fluid/MicroBoxPlaneVolume.java) 的 `wetVolume` / `SelectedVolume`，独立积分和全部 support 的端点对照复用 `AirCavityScannerValidation.validateMicroGasOverlap`。组件气体库存容量及其几何差额见 [GasComponentCapacity](../../solver/src/main/java/mmm/fluid/GasComponentCapacity.java)；环境截留量分辨率检查在 `GasTopologyCoordinator.ambientInventory`，验证为 `AirCavityScannerValidation.validateAmbientCaptureResolution`。
 
 完整气腔归属恢复前校核在 `GasTopologyCoordinator.restore`，验证为 `AirCavityScannerValidation.validateGasRestoreLineage`；零孔隙容量的气体块过滤验证为 `validateMicroGasPoreCapacity`。几何交集的精确权重叶项在 `GasTopologyCoordinator.overlaps` 汇总，由 [ExactGasPartitionWeights](../../model/src/main/java/mmm/fluid/air/ExactGasPartitionWeights.java) 认证整数份额排序、控制体积舍入与环境绝对截留量；`GasInventory.partition` 复用该结果。普通有理数加法在 [ExactRational.add](../../model/src/main/java/mmm/chemistry/ExactRational.java) 先约分再校验规范结果的规模。
 
@@ -100,7 +100,7 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 颗粒单份合法整数选择在 `GranularIntegerAllocation.admissibleMasks`；插入与取出的未来占容、气腔及热账预检在 [GranularTransferPlanner](../../solver/src/main/java/mmm/fluid/GranularTransferPlanner.java)。相关对照复用 `M8GranularValidation.couplingOccupancyResumsExactly`、`CarrierMutationValidation.defaultInsertionsPreflightStoredThermalState` 与 `cellVolumeReplacementPreflightsAllOwners`。
 
-沸腾来源拆分时的固定接触库存份额在 `GasPhaseGeometryEnvelope.fixedContactShare`，共同温度拆分的舍入包络在 `GasPhaseMergeBounds.partitionTemperatureLower`；`GasLiquidPhaseChangeStage.saturationExcluded` 在完整拓扑前应用逐批必要条件。固定接触与实际整数/能量拆分对照复用 `GasPhaseInterfaceValidation`。
+沸腾来源拆分时的固定接触库存份额在 `GasPhaseGeometryEnvelope.fixedContactShare`，共同温度拆分的舍入包络在 `GasPhaseMergeBounds.partitionTemperatureLower`；`GasLiquidPhaseChangeStage.boilingSaturationExcluded` 在完整拓扑前应用逐批必要条件。固定接触与实际整数/能量拆分对照复用 `GasPhaseInterfaceValidation`。
 
 单格全填的轴向准静态气体去向认证在 [StaticGasPistonSweep](../../solver/src/main/java/mmm/fluid/StaticGasPistonSweep.java)，准备入口为 `GasTopologyCoordinator.planStaticCellReplacement`；部分提取后填格、真空控制体积压缩功及拒绝原子性复用 `CarrierMutationValidation.cellReplacementRefreshesAfterPartialExtraction`。
 
