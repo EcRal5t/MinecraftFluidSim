@@ -211,6 +211,16 @@ public final class AirCavityScannerValidation {
 				"Reused gas pieces manufactured a port on their zero-area shared face");
 		checkRuntimePlanesEqual(repeated,current,"Unchanged captured PLIC differs from a complete rebuild");
 		checkRuntimePlanesEqual(editedFromCaptured,future,"Captured PLIC reused a changed gradient neighbor");
+		var peerEdit=new PhaseLiquidGeometryEdit(1,0,List.of(new LiquidComponentMoments(1,255,1,volume,
+				volume.multiply(SignedDyadic.of(1.5)),volume.multiply(SignedDyadic.of(.5)),volume.multiply(SignedDyadic.of(.5)))));
+		var peerFresh=GasRuntimeGeometry.capture(domain,peerEdit,occupied,true);
+		domain.gasState.frame=current;
+		var peerCaptured=GasRuntimeGeometry.capture(domain,peerEdit,occupied,true);
+		domain.gasState.frame=null;
+		check(peerCaptured.offsetBracket(0,0)==current.offsetBracket(0,0)
+				&& peerCaptured.geometry().piece(0)==current.geometry().piece(0),
+				"A changed neighbor fraction rebuilt an unchanged single-component own-moment PLIC");
+		checkRuntimePlanesEqual(peerCaptured,peerFresh,"Own-moment PLIC reuse differs from independent full capture");
 		domain.particles.setVolume(0,.125F);
 		check(future.matchesCarrierGeometry(domain,occupied) && !future.matchesSourceCarrierGeometry(domain,occupied),
 				"Published phase stock did not match its complete target frame");
@@ -258,14 +268,27 @@ public final class AirCavityScannerValidation {
 			var neighborVolume=SignedDyadic.of(.125);
 			var neighborEdit=new PhaseLiquidGeometryEdit(1,0,List.of(new LiquidComponentMoments(1,255,1,neighborVolume,
 					neighborVolume.multiply(SignedDyadic.of(1.25)),neighborVolume.multiply(SignedDyadic.of(.5)),neighborVolume.multiply(SignedDyadic.of(.5)))));
+			var neighborFresh=GasRuntimeGeometry.capture(masked,neighborEdit,new long[8],true);
+			masked.gasState.frame=own;
 			var neighborChanged=GasRuntimeGeometry.capture(masked,neighborEdit,new long[8],true);
+			masked.gasState.frame=null;
+			checkRuntimePlanesEqual(neighborChanged,neighborFresh,"Masked own-moment PLIC reuse differs from independent capture");
+			if(mask==254)check(neighborChanged.offsetBracket(0,0)==own.offsetBracket(0,0),
+					"An unchanged masked single-component own-moment PLIC lost its captured certificate");
 			checkLocalBoilPlanes(masked,own,neighborEdit,neighborChanged);
 			for (int micro=0;micro<8;micro++) check(java.util.Objects.equals(own.geometry().piece(micro),neighborChanged.geometry().piece(micro)),
 					"Neighbor fraction changed a masked component's independent own-moment certificate");
 			masked.particles.setPositionX(0,.25F);
 			var centered=GasRuntimeGeometry.capture(masked,null,new long[8],true);
 			check(centered.cellDependsOnNeighborFractions(0),"A centered masked component lost its actual fraction-gradient dependency");
-			checkLocalBoilPlanes(masked,centered,neighborEdit,GasRuntimeGeometry.capture(masked,neighborEdit,new long[8],true));
+			var centeredFresh=GasRuntimeGeometry.capture(masked,neighborEdit,new long[8],true);
+			masked.gasState.frame=centered;
+			var centeredCaptured=GasRuntimeGeometry.capture(masked,neighborEdit,new long[8],true);
+			masked.gasState.frame=null;
+			check(centeredCaptured.offsetBracket(0,0)!=centered.offsetBracket(0,0),
+					"A centered own moment reused a PLIC after its actual neighbor-gradient input changed");
+			checkRuntimePlanesEqual(centeredCaptured,centeredFresh,"Centered PLIC rebuild differs from independent capture");
+			checkLocalBoilPlanes(masked,centered,neighborEdit,centeredCaptured);
 		}
 	}
 

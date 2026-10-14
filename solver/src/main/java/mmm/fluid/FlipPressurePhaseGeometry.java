@@ -155,7 +155,8 @@ final class FlipPressurePhaseGeometry {
 			int cell = cellIndex(x, y, z);
 			PhaseLiquidGeometryEdit edit = overlay == null ? null : overlay[cell];
 			if (solid[cell] || !(fraction[cell] > 0.0F) || fraction[cell] >= 1) continue;
-			if (captured != null && sameLocalStock[cell] && sameStencil(captured, cell, x, y, z, solid)) {
+			if (captured != null && sameLocalStock[cell]
+					&& canReusePlane(captured, cell, x, y, z, solid, cutCells, edit, cellSize)) {
 				copyCell(captured, cell);
 				continue;
 			}
@@ -231,17 +232,21 @@ final class FlipPressurePhaseGeometry {
 			normalX[cell] = normalY[cell] = normalZ[cell] = 0; planeOffset[cell] = 0;
 			offsetBrackets[cell] = null; components[cell] = null;
 			if (solid[cell] || !(fraction[cell] > 0) || fraction[cell] >= 1) continue;
-			if (cell != edit.cell() && sameStencil(captured, cell, x, y, z, solid)) copyCell(captured, cell);
+			if (cell != edit.cell() && canReusePlane(captured, cell, x, y, z, solid, cut, stock.get(cell), cellSize)) copyCell(captured, cell);
 			else solveCell(cell, x, y, z, solid, cut, null, null, cellSize, cell == edit.cell() ? edit : stock.get(cell), integration);
 		}
 	}
 
-	private boolean sameStencil(FlipPressurePhaseGeometry captured, int cell, int x, int y, int z, boolean[] solid) {
+	private boolean canReusePlane(FlipPressurePhaseGeometry captured, int cell, int x, int y, int z, boolean[] solid,
+	                            FlipCutCellGeometry cut, PhaseLiquidGeometryEdit stock, float cellSize) {
 		return collisionMask(cell) == captured.collisionMask(cell) && poreVolumes[cell].equals(captured.poreVolumes[cell])
 				&& Double.doubleToRawLongBits(fraction[cell]) == Double.doubleToRawLongBits(captured.fraction[cell])
-				&& sameNeighbor(captured, x + 1, y, z, solid) && sameNeighbor(captured, x - 1, y, z, solid)
+				&& (sameNeighbor(captured, x + 1, y, z, solid) && sameNeighbor(captured, x - 1, y, z, solid)
 				&& sameNeighbor(captured, x, y + 1, z, solid) && sameNeighbor(captured, x, y - 1, z, solid)
-				&& sameNeighbor(captured, x, y, z + 1, solid) && sameNeighbor(captured, x, y, z - 1, solid);
+				&& sameNeighbor(captured, x, y, z + 1, solid) && sameNeighbor(captured, x, y, z - 1, solid)
+				// One component's aggregate own-moment normal replaces every sampled gradient.
+				|| stock != null && stock.components().size() == 1
+				&& momentNormal(cell, x, y, z, cut, null, null, cellSize, stock));
 	}
 
 	private boolean sameNeighbor(FlipPressurePhaseGeometry captured, int x, int y, int z, boolean[] solid) {
