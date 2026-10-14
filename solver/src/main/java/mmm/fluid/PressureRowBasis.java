@@ -15,7 +15,7 @@ final class PressureRowBasis {
 	private final int[] rows, positions;
 	private final List<Dependency> dependencies;
 
-	PressureRowBasis(int[] starts, int[] indices, SignedDyadic[] coefficients, SignedDyadic[][] inertia, double[] storage) {
+	PressureRowBasis(int[] starts, int[] indices, SignedDyadic[] coefficients, SignedDyadic[][] inertia, double[] storage, double[] diagonal) {
 		int[][] support = new int[inertia.length][];
 		for (int f = 0; f < inertia.length; f++) support[f] = independentColumns(inertia[f]);
 		var features = new ArrayList<TreeMap<Integer, SignedDyadic>>(storage.length);
@@ -37,7 +37,9 @@ final class PressureRowBasis {
 			checkMemory(featureBytes, available);
 		}
 		Integer[] order = new Integer[storage.length]; for (int row = 0; row < order.length; row++) order[row] = row;
-		Arrays.sort(order, Comparator.comparingInt(row -> features.get(row).size()));
+		// Strong physical rows keep dependent coordinates from amplifying factorization rounding.
+		Arrays.sort(order, Comparator.<Integer>comparingDouble(row -> diagonal[row]).reversed()
+				.thenComparingInt(row -> features.get(row).size()));
 		int modularRank = modularRank(features, order);
 		var selected = new ArrayList<Integer>(); var dependent = new ArrayList<Dependency>();
 		if (modularRank == storage.length) for (int row = 0; row < storage.length; row++) selected.add(row);

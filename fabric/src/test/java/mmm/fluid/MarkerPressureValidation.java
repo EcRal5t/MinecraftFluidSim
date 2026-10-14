@@ -518,8 +518,11 @@ public final class MarkerPressureValidation {
 						new CellVelocityConstraintOperator.Block(block, axis, declared)), 0));
 			}
 			var operator = new CellVelocityConstraintOperator(basis, rows);
-			if (operator.rowBasis().size() != 1 || operator.rowBasis().dependencyCount() != 2)
+			var coordinates = operator.rowBasis();
+			if (coordinates.size() != 1 || coordinates.dependencyCount() != 2)
 				throw new AssertionError("Exact product row relations were not retained by the pressure basis");
+			if (coordinates.row(0) != 2)
+				throw new AssertionError("Pressure coordinates did not retain the strongest actual-mass row");
 			var force = new double[3][basis.markerCount()]; var image = new double[3];
 			operator.force(new double[]{1, 1, -1}, force);
 			for (double[] component : force) for (double value : component) near(value, 0, 0, "Exact declared pressure row relation");
@@ -553,6 +556,8 @@ public final class MarkerPressureValidation {
 		var operator = new CellVelocityConstraintOperator(basis, definitions); var coordinates = operator.rowBasis();
 		if (coordinates.size() != 2 || coordinates.dependencyCount() != 1)
 			throw new AssertionError("Restricted actual inertia and positive storage lost their exact pressure rank");
+		if (coordinates.position(0) >= 0 || coordinates.position(1) < 0 || coordinates.position(2) < 0)
+			throw new AssertionError("Low-rank pressure coordinates lost the stronger row or positive storage");
 		var velocity = new double[3][basis.markerCount()]; Arrays.fill(velocity[0], .125);
 		verifyFactoredConstraint(basis, definitions, velocity, new double[]{1, -2, 3});
 		double[] rhs = new double[3], diagonal = new double[3], pressure = {7, 8, 9}; float dt = .05F;

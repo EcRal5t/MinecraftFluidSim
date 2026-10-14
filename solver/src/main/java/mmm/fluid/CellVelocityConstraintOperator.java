@@ -112,7 +112,8 @@ final class CellVelocityConstraintOperator {
 	PressureRowBasis rowBasis() {
 		SignedDyadic[][] inertia = new SignedDyadic[factors.length][];
 		for (int factor = 0; factor < factors.length; factor++) inertia[factor] = factors[factor].gram;
-		return new PressureRowBasis(factorOffsets, factorIndices, factorCoefficients, inertia, storage);
+		double[] diagonal = new double[rowCount()]; diagonal(diagonal);
+		return new PressureRowBasis(factorOffsets, factorIndices, factorCoefficients, inertia, storage, diagonal);
 	}
 	record PrincipalGram(int[] rows, int[] columns, SignedDyadic[] values) { }
 	private record FactorRow(int row, SignedDyadic[] coefficients, SignedDyadic[] response) { }
