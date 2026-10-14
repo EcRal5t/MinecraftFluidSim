@@ -16,7 +16,7 @@ import java.util.TreeMap;
 
 /** Bounds any subset of certified whole-stock successors entering the phase source's successor. */
 final class GasPhaseMergeBounds {
-	record Stock(GasInventory inventory, double energy) { }
+	record Stock(GasInventory inventory, double energy, SignedDyadic fixedVolume) { }
 	private final ThermalRegistry registry;
 	private final GasThermalModel gas;
 	private final ThermalCaloricBounds caloric;
@@ -29,7 +29,7 @@ final class GasPhaseMergeBounds {
 
 	double temperatureLower(GasInventory mandatory, double energy) {
 		try {
-			var stocks = new ArrayList<Stock>(); stocks.add(new Stock(mandatory, energy)); stocks.addAll(possible);
+			var stocks = new ArrayList<Stock>(); stocks.add(new Stock(mandatory, energy, SignedDyadic.ZERO)); stocks.addAll(possible);
 			double initial = Double.POSITIVE_INFINITY;
 			for (var stock : stocks) initial = Math.min(initial, gas.state(stock.inventory(), stock.energy()).temperatureK());
 			SignedDyadic error = SignedDyadic.ZERO, energyMagnitude = SignedDyadic.ZERO;
@@ -86,20 +86,36 @@ final class GasPhaseMergeBounds {
 		return List.copyOf(result);
 	}
 
+	double partialPressureLower(GasInventory mandatory, String vaporId, double temperature, double baseVolume) {
+		var vapor = mandatory.component(vaporId);
+		if (vapor == null) return 0;
+		double lower = partialPressureLower(vapor.standardVolumeNanos(), temperature, baseVolume);
+		for (var stock : possible) {
+			var optional = stock.inventory().component(vaporId);
+			if (optional == null || stock.fixedVolume().signum() == 0) continue;
+			double volume = Math.nextUp(stock.fixedVolume().toDouble());
+			lower = Math.min(lower, partialPressureLower(optional.standardVolumeNanos(), temperature, volume));
+		}
+		// A positive weighted mixture's ratio is at least its least component ratio;
+		// zero-vapor fixed capacity is already included in the mandatory base.
+		return lower;
+	}
+
 	static double partialPressureLower(long mandatoryNanos, double temperature, double volume) {
 		if (!(mandatoryNanos > 0 && Double.isFinite(temperature) && temperature > 0
 				&& Double.isFinite(volume) && volume > 0)) return Double.NaN;
-		double partial = down(down(down(down((double) mandatoryNanos * AirNetwork.cubicMeters(1))
+		double partial = down(down(down(down(down((double) mandatoryNanos) * AirNetwork.cubicMeters(1))
 				* GasRegistry.STANDARD_PRESSURE_PA) / GasRegistry.STANDARD_TEMPERATURE_K) * temperature);
 		if (!(Double.isFinite(partial) && partial > 16 * Double.MIN_NORMAL)) return Double.NaN;
 		partial = down(partial / volume);
 		// The actual total-nanos pressure and vapor fraction cancel in exact arithmetic.
 		// The same converted total appears in cubicMeters(total) and vapor/total.
-		// Seven normal binary64 roundings lose at most (1-2^-52)^7. The converted
-		// mandatory vapor count is a lower bound by monotonicity of the long conversion.
+		// Seven normal binary64 roundings lose at most (1-2^-52)^7. One more covers
+		// conversion of the final summed integer vapor count; each paired numerator
+		// above is rounded down against its exact integer before taking the ratio.
 		if (!(Double.isFinite(partial) && partial > 16 * Double.MIN_NORMAL)) return Double.NaN;
 		double factor = 1;
-		for (int operation = 0; operation < 7; operation++) factor = down(factor * (1 - Math.scalb(1.0, -52)));
+		for (int operation = 0; operation < 8; operation++) factor = down(factor * (1 - Math.scalb(1.0, -52)));
 		return down(partial * factor);
 	}
 

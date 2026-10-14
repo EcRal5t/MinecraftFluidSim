@@ -80,6 +80,9 @@ final class GasPhaseGeometryEnvelope {
 				}
 		}
 		int selected = root(parent, first);
+		var fixedByNode = new java.util.TreeMap<Integer, SignedDyadic>();
+		for (var piece : source.capacity().pieces()) if (!variable[piece.id() / 8] && root(parent, piece.id()) == selected)
+			fixedByNode.merge(source.nodeOfPiece(piece.id()), SignedDyadic.of(piece.cubicMeters()), SignedDyadic::add);
 		var possibleStocks = new ArrayList<GasPhaseMergeBounds.Stock>();
 		var checkedNodes = new java.util.HashSet<Integer>();
 		for (var piece : source.geometry().pieces()) if (root(parent, piece.id()) == selected) {
@@ -89,12 +92,11 @@ final class GasPhaseGeometryEnvelope {
 				double energy = thermal == null ? 0 : thermal.gasNodeEnergy(node, network);
 				if (stock.isEmpty() && energy == 0) continue;
 				if (thermal == null || !uniqueSuccessor(source, node, variable)) return null;
-				possibleStocks.add(new GasPhaseMergeBounds.Stock(stock, energy));
+				possibleStocks.add(new GasPhaseMergeBounds.Stock(stock, energy, fixedByNode.getOrDefault(node, SignedDyadic.ZERO)));
 			}
 		}
 		SignedDyadic fixed = SignedDyadic.ZERO;
-		for (var piece : source.capacity().pieces()) if (!variable[piece.id() / 8] && root(parent, piece.id()) == selected)
-			fixed = fixed.add(SignedDyadic.of(piece.cubicMeters()));
+		for (var volume : fixedByNode.values()) fixed = fixed.add(volume);
 		var variableCells = new ArrayList<Integer>();
 		for (int cell = 0; cell < variable.length; cell++) if (variable[cell])
 			for (int micro = 0; micro < 8; micro++) if (parent[8 * cell + micro] >= 0 && root(parent, 8 * cell + micro) == selected) {
@@ -118,6 +120,18 @@ final class GasPhaseGeometryEnvelope {
 
 	double volumeUpper(PhaseLiquidGeometryEdit edit) {
 		return volumeUpper(edit.cell(), edit.components().stream().map(LiquidComponentMoments::volume).toList());
+	}
+
+	double baseVolumeUpper(PhaseLiquidGeometryEdit edit, String vaporId) {
+		double whole = volumeUpper(edit);
+		if (!Double.isFinite(whole)) return whole;
+		SignedDyadic base = SignedDyadic.of(whole);
+		// Retain the whole envelope's pivot and final node-RN allowance in the base.
+		// Each omitted optional fixed piece has unchanged positive overlap, so its
+		// capacity can enter the source successor only together with its whole stock.
+		for (var stock : possibleStocks) if (stock.inventory().component(vaporId) != null)
+			base = base.subtract(stock.fixedVolume());
+		return base.signum() < 0 ? Double.POSITIVE_INFINITY : Math.nextUp(base.toDouble());
 	}
 
 	double boilingVolumeUpper(int cell, int supportMask, long removedSvq) {

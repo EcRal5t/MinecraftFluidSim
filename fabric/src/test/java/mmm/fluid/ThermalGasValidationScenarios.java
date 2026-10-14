@@ -1944,7 +1944,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		double[] optionalTemperatures = {200, 600, 300};
 		var possible = new java.util.ArrayList<GasPhaseMergeBounds.Stock>();
 		for (int index = 0; index < optionalStocks.size(); index++) possible.add(new GasPhaseMergeBounds.Stock(
-				optionalStocks.get(index), mergeGas.internalEnergyAtTemperature(optionalStocks.get(index), optionalTemperatures[index])));
+				optionalStocks.get(index), mergeGas.internalEnergyAtTemperature(optionalStocks.get(index), optionalTemperatures[index]), SignedDyadic.of(.5)));
 		double mandatoryEnergy = mergeGas.internalEnergyAtTemperature(speciesBatch, 373.15);
 		double mergeLower = new GasPhaseMergeBounds(mergeRegistry, mergeGas, possible).temperatureLower(speciesBatch, mandatoryEnergy);
 		require(mergeLower > 0 && mergeLower <= 200, "Optional whole-stock merge failed to retain a positive conservative temperature");
@@ -1963,6 +1963,45 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			double lower = GasPhaseMergeBounds.partialPressureLower(speciesBatch.standardVolumeNanos(), mergeLower, 1);
 			require(mergeLower <= actualT && lower > 0 && lower <= partial,
 					"Optional gas subset or sparse species quanta escaped its temperature and vapor pressure bounds");
+		}
+		var humid = gas.createAmbient(64_000_000_000L).merge(model.gasBatch(transition, 27));
+		var born = model.gasBatch(transition, 9);
+		double humidU = mergeGas.internalEnergyAtTemperature(humid, 388.45), bornU = mergeGas.internalEnergyAtTemperature(born, 293.15);
+		var paired = new GasPhaseMergeBounds(mergeRegistry, mergeGas,
+				List.of(new GasPhaseMergeBounds.Stock(humid, humidU, SignedDyadic.of(31.375))));
+		double pairedT = paired.temperatureLower(born, bornU);
+		double unpairedPressure = GasPhaseMergeBounds.partialPressureLower(born.standardVolumeNanos(), pairedT, 31.5);
+		double pairedPressure = paired.partialPressureLower(born, BuiltinGasDefinitions.WATER_VAPOR, pairedT, .125);
+		double saturationUpper = model.saturationPressureBound(transition, 245, true);
+		require(unpairedPressure < saturationUpper && saturationUpper < pairedPressure,
+				"Complete optional vapor stock lost its fixed-capacity correlation: unpaired="+unpairedPressure
+						+", saturation="+saturationUpper+", paired="+pairedPressure);
+		for (boolean include : new boolean[]{false, true}) {
+			var actual = include ? born.merge(humid) : born;
+			double actualU = include ? SignedDyadic.of(bornU).add(SignedDyadic.of(humidU)).toDouble() : bornU;
+			double actualV = include ? 31.5 : .125;
+			double actualPartial = model.saturation(transition, 245, actual,
+					mergeGas.absolutePressure(actual, actualV, actualU)).componentPartialPressurePa();
+			require(pairedPressure <= actualPartial, "Paired capacity exclusion exceeded an actual optional-stock subset pressure");
+		}
+		for (long nanos : new long[]{(1L << 53) + 1, (1L << 54) + 3, Long.MAX_VALUE / 3}) {
+			var large = new java.util.ArrayList<GasInventory>();
+			for (long count : new long[]{nanos, nanos + 2}) {
+				double mass = AirNetwork.cubicMeters(count) * BuiltinGasDefinitions.WATER_VAPOR_STANDARD_DENSITY;
+				large.add(new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.WATER_VAPOR,
+						count, mass, List.of(), mass))));
+			}
+			double sourceU = mergeGas.internalEnergyAtTemperature(large.getFirst(), 293.15);
+			double optionalU = mergeGas.internalEnergyAtTemperature(large.getLast(), 293.15);
+			var largeBounds = new GasPhaseMergeBounds(mergeRegistry, mergeGas,
+					List.of(new GasPhaseMergeBounds.Stock(large.getLast(), optionalU, SignedDyadic.of(1))));
+			double lowerT = largeBounds.temperatureLower(large.getFirst(), sourceU);
+			double pressureLower = largeBounds.partialPressureLower(large.getFirst(), BuiltinGasDefinitions.WATER_VAPOR, lowerT, 1);
+			var actual = large.getFirst().merge(large.getLast());
+			double actualU = SignedDyadic.of(sourceU).add(SignedDyadic.of(optionalU)).toDouble();
+			require(pressureLower > 0 && pressureLower <= mergeGas.absolutePressure(actual, 2, actualU)
+					&& pressureLower <= mergeGas.absolutePressure(large.getFirst(), 1, sourceU),
+					"Summed vapor integer conversion escaped its paired pressure rounding bound");
 		}
 		GasLiquidPhaseModel.Saturation equilibrium = model.saturation(
 				transition, 373.15, batch, GasRegistry.STANDARD_PRESSURE_PA);
