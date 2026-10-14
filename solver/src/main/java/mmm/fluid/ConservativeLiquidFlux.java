@@ -127,7 +127,8 @@ final class ConservativeLiquidFlux {
 			capacity[c] = solid[c] ? 0 : geometry == null ? 1 : geometry.capacity(c);
 			exactCapacity[c] = SignedDyadic.of(solid[c] ? 0 : geometry == null ? 1 : geometry.finalCapacity(c));
 			if (reserved != null) exactCapacity[c] = exactCapacity[c].subtract(reserved[c]);
-			if (exactCapacity[c].signum() < 0) throw new MechanicalTimeRefinement(2);
+			if (exactCapacity[c].signum() < 0) throw new MechanicalTimeRefinement(2,
+					"Liquid transport reserved volume exceeds future capacity at cell " + c + ": remaining=" + exactCapacity[c].toDouble());
 			finalCapacity[c] = exactCapacity[c].toDouble();
 			if (SignedDyadic.of(finalCapacity[c]).compareTo(exactCapacity[c]) > 0) finalCapacity[c] = Math.nextDown(finalCapacity[c]);
 		}

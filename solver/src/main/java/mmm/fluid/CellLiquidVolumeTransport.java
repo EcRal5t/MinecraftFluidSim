@@ -90,30 +90,36 @@ final class CellLiquidVolumeTransport {
 			}
 			transport = affineTransport;
 			flow = new LiquidAffineFaceFlow(domain, scalarTransport, field);
-			transport.faceSweep(flow); flow.prepareVelocities(transport, geometry);
+			transport.faceSweep(flow);
 		}
-		var ballistic = new BallisticLiquidRemap(domain, dt);
-		collisionWorkJoules = ballistic.collisionWorkJoules;
-		transport.reserve(ballistic.reserved);
-		transport.carrierShares(chemicalShares());
-		LiquidParticleStore particles = domain.particles;
-		for (int c = 0; c < exactVolume.length; c++) exactVolume[c] = domain.gridToParticleStage.advectionCells()[c]
-				? domain.markerGrid.exactCellVolumeInventory[c] : SignedDyadic.ZERO;
-		for (int c = 0; c < volume.length; c++) volume[c] = exactVolume[c].toDouble();
-		if (field == null) for (int f = 0; f < transport.flux.length; f++) transport.velocity[f] = faceVelocity(f);
-		double maximumOutgoing = (flow == null ? courantRate(0) : affineCourantRate(flow, 0)) * dt;
-		if (maximumOutgoing > 1 + 8 * Math.ulp(1.0F))
-			throw new MechanicalTimeRefinement((int) Math.ceil(maximumOutgoing * domain.config.timeStep() / dt));
 		try {
-			transport.plan(volume, domain.geometry.solid, dt / domain.config.cellSize(), exactVolume);
-		} catch (MechanicalTimeRefinement refinement) {
-			throw new MechanicalTimeRefinement((int) Math.ceil(2 * domain.config.timeStep() / dt), refinement.getMessage());
+			if (flow != null) flow.prepareVelocities(transport, geometry);
+			var ballistic = new BallisticLiquidRemap(domain, dt);
+			collisionWorkJoules = ballistic.collisionWorkJoules;
+			transport.reserve(ballistic.reserved);
+			transport.carrierShares(chemicalShares());
+			LiquidParticleStore particles = domain.particles;
+			for (int c = 0; c < exactVolume.length; c++) exactVolume[c] = domain.gridToParticleStage.advectionCells()[c]
+					? domain.markerGrid.exactCellVolumeInventory[c] : SignedDyadic.ZERO;
+			for (int c = 0; c < volume.length; c++) volume[c] = exactVolume[c].toDouble();
+			if (field == null) for (int f = 0; f < transport.flux.length; f++) transport.velocity[f] = faceVelocity(f);
+			double maximumOutgoing = (flow == null ? courantRate(0) : affineCourantRate(flow, 0)) * dt;
+			if (maximumOutgoing > 1 + 8 * Math.ulp(1.0F))
+				throw new MechanicalTimeRefinement((int) Math.ceil(maximumOutgoing * domain.config.timeStep() / dt),
+						"Liquid transport outgoing Courant=" + maximumOutgoing + ", dt=" + dt);
+			try {
+				transport.plan(volume, domain.geometry.solid, dt / domain.config.cellSize(), exactVolume);
+			} catch (MechanicalTimeRefinement refinement) {
+				throw new MechanicalTimeRefinement((int) Math.ceil(2 * domain.config.timeStep() / dt), refinement.getMessage());
+			}
+			var candidate = new CellCarrierRemapPlan(domain, transport, dt, ballistic);
+			domain.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), particles.count()), candidate);
+			publishedQuadrature = true;
+			momentAudit = candidate.momentAudit;
+			if (domain.pressureSystem.usesMarkerPressure()) CellAffineWallProjection.projectTransport(domain);
+		} finally {
+			transport.faceSweep(null);
 		}
-		var candidate = new CellCarrierRemapPlan(domain, transport, dt, ballistic);
-		domain.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), particles.count()), candidate);
-		publishedQuadrature = true;
-		momentAudit = candidate.momentAudit;
-		if (domain.pressureSystem.usesMarkerPressure()) CellAffineWallProjection.projectTransport(domain);
 	}
 
 	private boolean stationary() {

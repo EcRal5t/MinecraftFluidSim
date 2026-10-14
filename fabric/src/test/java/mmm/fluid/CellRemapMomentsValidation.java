@@ -94,6 +94,25 @@ public final class CellRemapMomentsValidation {
 						intercept, slope, 0, .5, 255, 255);
 				var second = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, sign > 0,
 						intercept, slope, 0, .5, 255, 255);
+				var saved = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, receiver, axis, sign > 0,
+						new double[]{intercept, slope, 0}, .5, 255);
+				for (int support : new int[]{255, 0x33, 0xcc, 0x55, 0xaa}) {
+					int peerSupport = support ^ 0x66;
+					var restricted = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, receiver, axis, sign > 0,
+							intercept, slope, 0, .5, support, peerSupport);
+					check(java.util.Arrays.equals(restricted, saved.sum(axis, sign > 0, support, peerSupport)),
+							"Stored micro sweep changed exact support-restricted moments");
+					double[] swept = new double[8], wet = new double[8], stored = new double[8], storedWet = new double[8];
+					LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, axis, sign > 0,
+							intercept, slope, 0, .5, support, peerSupport, swept, wet);
+					LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, axis, sign > 0,
+							intercept, slope, 0, .5, support, peerSupport, stored, storedWet, saved);
+					check(java.util.Arrays.equals(swept, stored) && java.util.Arrays.equals(wet, storedWet),
+							"Stored micro sweep changed volume or donor wet measure");
+				}
+				check(!saved.matches(domain, donor, receiver, axis, sign > 0, new double[]{Math.nextUp(intercept), slope, 0}, .5)
+						&& !saved.matches(domain, donor, receiver, axis, sign > 0, new double[]{intercept, slope, 0}, Math.nextUp(.5)),
+						"Stored sweep accepted changed trace or timestep bits");
 				check(second.length == 10, "Quadratic sweep has incomplete moments");
 				for (int i = 0; i < 4; i++) check(second[i].equals(first[i]), "Quadratic sweep changed its exact prefix");
 				check(second[0].equals(mmm.chemistry.ExactRational.ONE.divide(8)), "Analytic wedge volume differs");
@@ -119,6 +138,43 @@ public final class CellRemapMomentsValidation {
 					sign * .25, 0, 0, 0, 255, 255);
 			for (var value : empty) check(value.isZero(), "Zero-duration quadratic sweep has a nonzero moment");
 		}
+		var basis = CellAffineVelocity.capture(domain);
+		double[][] coefficients = new double[3][4 * basis.blockCount()];
+		for (int a = 0; a < 3; a++) coefficients[a][4 * donor] = .25;
+		var field = new CellAffineVelocityField(basis, coefficients);
+		var faces = new ConservativeLiquidFlux(domain.sizeX, domain.sizeY, domain.sizeZ);
+		var retained = new LiquidAffineFaceFlow(domain, faces, field, 1 << 20);
+		var unretained = new LiquidAffineFaceFlow(domain, faces, field, 0);
+		for (int f = 0; f < faces.physicalFaceCount; f++) if (faces.left[f] == donor) {
+			int receiver = faces.right[f], axis = faces.axis[f];
+			double[] expected = new double[4], actual = new double[4];
+			retained.sweptMoments(f, donor, receiver, axis, true, .5, 255, 255, actual);
+			double[] swept = new double[8], wet = new double[8];
+			unretained.sweptMicroVolumes(f, donor, receiver, axis, true, .5, 0x33, 255, swept, wet);
+			int face = f;
+			mmm.compute.CpuWorkBatch.run(16, 1, (start, end) -> {
+				for (int i = start; i < end; i++) {
+					double[] parallelSwept = new double[8], parallelWet = new double[8];
+					retained.sweptMicroVolumes(face, donor, receiver, axis, true, .5, 0x33, 255, parallelSwept, parallelWet);
+					check(java.util.Arrays.equals(swept, parallelSwept) && java.util.Arrays.equals(wet, parallelWet),
+							"Parallel micro sweep publication changed binary64 measures");
+				}
+			});
+			for (double dt : new double[]{.5, .25}) for (int support : new int[]{255, 0x33, 0xcc}) {
+				unretained.sweptMoments(f, donor, receiver, axis, true, dt, support, 255, expected);
+				retained.sweptMoments(f, donor, receiver, axis, true, dt, support, 255, actual);
+				check(java.util.Arrays.equals(expected, actual), "Retention budget changed binary64 component sum");
+			}
+			domain.geometry.cutCells.replaceMask(receiver, 1);
+			unretained.sweptMoments(f, donor, receiver, axis, true, .25, 255, 255, expected);
+			retained.sweptMoments(f, donor, receiver, axis, true, .25, 255, 255, actual);
+			check(java.util.Arrays.equals(expected, actual), "Stored sweep ignored changed fixed support");
+			domain.geometry.cutCells.replaceMask(receiver, 0);
+		}
+		var saved = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5, 255);
+		domain.setVolume(1, 1, 1, .5F); domain.rebuildGridFromParticles();
+		check(!saved.matches(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5),
+				"Stored sweep accepted an in-place phase geometry rebuild");
 	}
 
 	private static void limitedFluxMixesTheSamePositiveMomentWeights() {
