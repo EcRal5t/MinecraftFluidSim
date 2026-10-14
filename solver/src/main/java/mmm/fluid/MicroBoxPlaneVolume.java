@@ -20,24 +20,26 @@ final class MicroBoxPlaneVolume {
 		SelectedVolume(int supportMask, SignedDyadic[] normal) {
 			if (supportMask <= 0 || supportMask > 255 || normal == null || normal.length != 3)
 				throw new IllegalArgumentException("Invalid selected microbox CDF input");
+			// The eight selected microboxes tile the unit cube.
+			boolean whole = supportMask == 255;
 			SignedDyadic[] extents = new SignedDyadic[3];
-			int count = 0; SignedDyadic sum = SignedDyadic.ZERO, divisor = SignedDyadic.of(8);
+			int count = 0; SignedDyadic sum = SignedDyadic.ZERO, divisor = SignedDyadic.of(whole ? 1 : 8);
 			for (var n : normal) {
 				requireBudget(n);
 				if (n.signum() != 0) {
-					SignedDyadic extent = n.multiply(HALF); if (extent.signum() < 0) extent = extent.negate();
+					SignedDyadic extent = whole ? n : n.multiply(HALF); if (extent.signum() < 0) extent = extent.negate();
 					extents[count++] = extent; sum = sum.add(extent); divisor = divisor.multiply(extent);
 				}
 			}
 			if (count == 0) throw new IllegalArgumentException("Selected microbox CDF needs a nonconstant normal");
 			axes = count; extentSum = sum;
 			denominator = divisor.multiply(SignedDyadic.of(axes == 3 ? 6 : axes));
-			fullNumerator = denominator.multiply(SignedDyadic.of(1, -3));
-			minimum = new SignedDyadic[Integer.bitCount(supportMask)]; int index = 0;
-			for (int micro = 0; micro < 8; micro++) if ((supportMask & 1 << micro) != 0) {
+			fullNumerator = whole ? denominator : denominator.multiply(SignedDyadic.of(1, -3));
+			minimum = new SignedDyadic[whole ? 1 : Integer.bitCount(supportMask)]; int index = 0;
+			for (int micro = 0; micro < (whole ? 1 : 8); micro++) if (whole || (supportMask & 1 << micro) != 0) {
 				SignedDyadic low = SignedDyadic.ZERO;
 				for (int axis = 0; axis < 3; axis++) low = low.add(normal[axis]
-						.multiply(SignedDyadic.of((micro >>> axis & 1) + (normal[axis].signum() < 0 ? 1 : 0), -1)));
+						.multiply(SignedDyadic.of((micro >>> axis & 1) + (normal[axis].signum() < 0 ? 1 : 0), whole ? 0 : -1)));
 				minimum[index++] = low;
 			}
 			shifts = new SignedDyadic[1 << axes];
@@ -46,7 +48,7 @@ final class MicroBoxPlaneVolume {
 				for (int axis = 0; axis < axes; axis++) if ((subset >>> axis & 1) != 0) shift = shift.add(extents[axis]);
 				shifts[subset] = shift;
 			}
-			maximum = ExactRational.of(minimum.length).divide(8);
+			maximum = whole ? ExactRational.ONE : ExactRational.of(minimum.length).divide(8);
 		}
 
 		ExactRational volume(double offset) {
@@ -56,12 +58,7 @@ final class MicroBoxPlaneVolume {
 				SignedDyadic distance = threshold.subtract(low);
 				if (distance.signum() <= 0) continue;
 				if (distance.compareTo(extentSum) >= 0) { numerator = numerator.add(fullNumerator); continue; }
-				for (int subset = 0; subset < shifts.length; subset++) {
-					SignedDyadic span = distance.subtract(shifts[subset]); if (span.signum() <= 0) continue;
-					SignedDyadic term = span;
-					for (int power = 1; power < axes; power++) term = term.multiply(span);
-					numerator = Integer.bitCount(subset) % 2 == 0 ? numerator.add(term) : numerator.subtract(term);
-				}
+				numerator = numerator.add(partialNumerator(distance, axes, null, shifts));
 			}
 			ExactRational result = quotient(numerator, denominator);
 			if (result.signum() < 0 || result.compareTo(maximum) > 0) throw new IllegalStateException("Selected microbox CDF does not close");
@@ -90,15 +87,7 @@ final class MicroBoxPlaneVolume {
 			if (axes == 0) return distance.signum() >= 0 ? MICRO_VOLUME : ExactRational.ZERO;
 			if (distance.signum() <= 0) return ExactRational.ZERO;
 			if (distance.compareTo(extentSum) >= 0) return MICRO_VOLUME;
-			SignedDyadic numerator = SignedDyadic.ZERO;
-			for (int subset = 0; subset < 1 << axes; subset++) {
-				SignedDyadic span = distance;
-				for (int axis = 0; axis < axes; axis++) if ((subset >>> axis & 1) != 0) span = span.subtract(extents[axis]);
-				if (span.signum() <= 0) continue;
-				SignedDyadic term = span;
-				for (int power = 1; power < axes; power++) term = term.multiply(span);
-				numerator = Integer.bitCount(subset) % 2 == 0 ? numerator.add(term) : numerator.subtract(term);
-			}
+			SignedDyadic numerator = partialNumerator(distance, axes, extents, null);
 			int factorial = axes == 3 ? 6 : axes;
 			SignedDyadic denominator = SignedDyadic.of(factorial * 8);
 			for (int axis = 0; axis < axes; axis++) denominator = denominator.multiply(extents[axis]);
@@ -114,6 +103,20 @@ final class MicroBoxPlaneVolume {
 	static ExactRational dryVolume(int micro, GasGeometryOverlap.HalfSpace plane) {
 		if (plane == null) throw new IllegalArgumentException("Missing microbox volume plane");
 		return wetVolume(micro, new GasGeometryOverlap.HalfSpace(plane.nx().negate(), plane.ny().negate(), plane.nz().negate(), plane.threshold().negate()));
+	}
+
+	private static SignedDyadic partialNumerator(SignedDyadic distance, int axes, SignedDyadic[] extents, SignedDyadic[] shifts) {
+		SignedDyadic numerator = SignedDyadic.ZERO;
+		for (int subset = 0; subset < 1 << axes; subset++) {
+			SignedDyadic span = shifts == null ? distance : distance.subtract(shifts[subset]);
+			if (shifts == null) for (int axis = 0; axis < axes; axis++)
+				if ((subset >>> axis & 1) != 0) span = span.subtract(extents[axis]);
+			if (span.signum() <= 0) continue;
+			SignedDyadic term = span;
+			for (int power = 1; power < axes; power++) term = term.multiply(span);
+			numerator = Integer.bitCount(subset) % 2 == 0 ? numerator.add(term) : numerator.subtract(term);
+		}
+		return numerator;
 	}
 
 	private static void requireBudget(SignedDyadic value) {
