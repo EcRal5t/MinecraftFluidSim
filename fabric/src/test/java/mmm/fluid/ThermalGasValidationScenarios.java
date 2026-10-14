@@ -2940,9 +2940,16 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& domain.thermalState.temperature(0, domain.thermalMarkerContext()) == 300,
 				"large-reference phase fixture did not begin with finite raw energies and a valid temperature");
 		var accepted = domain.stepGasPhaseChangeOnly(2);
-		var gas = domain.gasBoundary().inventory(1);
+		int gasNode = -1; GasInventory gas = GasInventory.EMPTY;
+		for (int node = 1; node <= domain.gasState.network.nodeCount(); node++) {
+			var inventory = domain.gasBoundary().inventory(node);
+			if (inventory.isEmpty()) continue;
+			require(gasNode < 0, "smaller gas energy batch left inventory in multiple nodes");
+			gasNode = node; gas = inventory;
+		}
 		require(accepted.operations() == 1 && accepted.boiledCells() == 1 && accepted.condensedCells() == 0
-				&& gas.components().size() == 1 && gas.totalMass() == 1 && gas.components().getFirst().species().isEmpty()
+				&& gasNode > 0 && gas.components().size() == 1 && gas.totalMass() == 1 && gas.components().getFirst().species().isEmpty()
+				&& gas.components().getFirst().componentId().equals(BuiltinGasDefinitions.WATER_VAPOR)
 				&& domain.unitScale.kilograms(domain.totalMass()) + gas.totalMass() == massBefore
 				&& domain.totalVolumeExact() == volumeBefore - SolidVolume.toCellVolume(transition.lowerVolumeSvqPerBatch())
 				&& domain.exactInternalEnergy().subtract(energyBefore).equals(
@@ -2952,7 +2959,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"a non-representable largest gas energy batch prevented its smaller complete batch");
 		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
-				&& restored.thermalAudit().equals(domain.thermalAudit()) && restored.gasBoundary().inventory(1).equals(gas),
+				&& restored.thermalAudit().equals(domain.thermalAudit()) && restored.gasBoundary().inventory(gasNode).equals(gas),
 				"representable phase energy candidate did not preserve its actual owner state through restore");
 	}
 
