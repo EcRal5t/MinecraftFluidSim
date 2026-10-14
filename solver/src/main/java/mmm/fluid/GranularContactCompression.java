@@ -191,6 +191,11 @@ final class GranularContactCompression {
 	}
 
 	static Result respond(double[] mass, double[][] input, Row[] rows, Result compression, double[] restitution, Runnable spend, GranularContactChainSeed chain) {
+		return respond(mass, input, rows, compression, restitution, spend, chain, null);
+	}
+
+	static Result respond(double[] mass, double[][] input, Row[] rows, Result compression, double[] restitution, Runnable spend,
+	                      GranularContactChainSeed chain, GranularContactMemo memo) {
 		if (restitution.length != rows.length) throw new IllegalArgumentException("Contact restitution size mismatch");
 		double[] total = compression.impulses().clone(); boolean expanding = false;
 		for (int k = 0; k < rows.length; k++) {
@@ -205,7 +210,8 @@ final class GranularContactCompression {
 		boolean feasible = true;
 		for (var row : rows) { spend.run(); feasible &= response.admits(row); }
 		if (!feasible) {
-			var correction = solve(mass, response.values(), rows, spend, null, chain);
+			var correction = memo == null ? solve(mass, response.values(), rows, spend, null, chain)
+					: memo.solve(mass, response.values(), rows, null, chain);
 			for (int k = 0; k < rows.length; k++) {
 				spend.run(); total[k] += correction.impulses()[k];
 				if (!Double.isFinite(total[k])) throw new MechanicalTimeRefinement(2, "Unrepresentable total contact impulse");

@@ -933,6 +933,36 @@ public final class GranularCarrierValidation {
 				sharedTerminal, sharedRestitution, contactBudget(), sharedChain);
 		var coldResponse = GranularContactCompression.respond(supportedMass, supportedTerminal, supportedRows,
 				supportedCold, sharedRestitution, contactBudget());
+		var memo = new GranularContactMemo(contactBudget());
+		var memoResult = memo.solve(supportedMass, supportedTerminal, supportedRows, null, new GranularContactChainSeed(supportedMass, supportedRows));
+		for (int repeat = 0; repeat < 2; repeat++) {
+			memoResult.values()[0][1] = 123; memoResult.impulses()[0] = 777;
+			memoResult.gapError()[0] = -999; memoResult.arithmeticError()[0][1] = 999;
+			memoResult = memo.solve(supportedMass, supportedTerminal, supportedRows, null, new GranularContactChainSeed(supportedMass, supportedRows));
+			require(java.util.Arrays.deepEquals(memoResult.values(), supportedCold.values())
+					&& java.util.Arrays.deepEquals(memoResult.arithmeticError(), supportedCold.arithmeticError())
+					&& java.util.Arrays.equals(memoResult.impulses(), supportedCold.impulses())
+					&& java.util.Arrays.equals(memoResult.gapError(), supportedCold.gapError()),
+					"preview compression memo must isolate all returned storage and certificate arrays");
+		}
+		var memoWarm = memo.solve(supportedMass, supportedTerminal, supportedRows, driftSeed.impulses(), new GranularContactChainSeed(supportedMass, supportedRows));
+		require(java.util.Arrays.deepEquals(memoWarm.values(), supportedWarm.values())
+				&& java.util.Arrays.equals(memoWarm.impulses(), supportedWarm.impulses()),
+				"preview compression memo must distinguish the exact supplied impulse seed");
+		for (boolean reversedNormal : new boolean[]{false, true}) {
+			var changedRows = supportedRows.clone();
+			changedRows[0] = reversedNormal ? new GranularContactCompression.Row(0, 1, new double[]{0, -1, 0})
+					: new GranularContactCompression.Row(1, 0, new double[]{0, 1, 0});
+			var expected = compressContacts(supportedMass, supportedTerminal, changedRows);
+			var actual = memo.solve(supportedMass, supportedTerminal, changedRows, null, new GranularContactChainSeed(supportedMass, changedRows));
+			require(java.util.Arrays.deepEquals(actual.values(), expected.values()) && java.util.Arrays.equals(actual.impulses(), expected.impulses()),
+					"preview compression memo must distinguish row endpoint order and normal bits");
+		}
+		var changedMass = supportedMass.clone(); changedMass[0] *= 2;
+		var expectedMass = compressContacts(changedMass, supportedTerminal, supportedRows);
+		var actualMass = memo.solve(changedMass, supportedTerminal, supportedRows, null, new GranularContactChainSeed(changedMass, supportedRows));
+		require(java.util.Arrays.deepEquals(actualMass.values(), expectedMass.values()) && java.util.Arrays.equals(actualMass.impulses(), expectedMass.impulses()),
+				"preview compression memo must distinguish actual physical mass");
 		require(java.util.Arrays.deepEquals(sharedDrift.values(), driftSeed.values())
 				&& java.util.Arrays.deepEquals(sharedTerminal.values(), supportedCold.values())
 				&& java.util.Arrays.deepEquals(sharedResponse.values(), coldResponse.values())
