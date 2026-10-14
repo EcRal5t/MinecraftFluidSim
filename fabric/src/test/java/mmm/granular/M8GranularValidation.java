@@ -1411,6 +1411,35 @@ public final class M8GranularValidation {
 		long[] chosen = selectedFields.copySolidSvq();
 		selectedFields.removePlannedParcel(chosen, new GranularCouplingFields.Position(.5F, .75F, .75F, 2), 3);
 		require(chosen[20] == 0 && chosen[21] == 0, "Source removal ignored its actual committed shares");
+		var integerParcels = new GranularParcelStore(registry, 2, 3, 1, 1, .5);
+		integerParcels.add(new GranularParcelStore.Parcel(1F, .25F, .25F, 0, 0, 0, 1, .001, sand, 0, 0, (byte) 0));
+		integerParcels.add(new GranularParcelStore.Parcel(.5F, .25F, .25F, 0, 0, 0, 1, .001, sand, 0, 0, (byte) 0));
+		var integerKernel = new mmm.granular.GranularKernel(3, 1, 1, .5);
+		GranularCouplingFields.PositionSource endpoints = (i, p) -> new GranularCouplingFields.Position(p.x(), p.y(), p.z(), p.ceilMask());
+		for (int trial = 0; trial < 27; trial++) {
+			long[] capacity = {trial % 3, trial / 3 % 3, trial / 9}; boolean feasible = false;
+			for (int a = 1; a <= 2; a++) for (int b = 0; b <= 1; b++) {
+				long[] occupied = new long[3]; occupied[a]++; occupied[b]++;
+				if (occupied[0] <= capacity[0] && occupied[1] <= capacity[1] && occupied[2] <= capacity[2]) feasible = true;
+			}
+			var allocation = mmm.granular.GranularIntegerAllocation.plan(integerKernel, integerParcels, endpoints,
+					new long[3], c -> capacity[c], 1000);
+			require((allocation.status() == mmm.granular.GranularIntegerAllocation.Status.FEASIBLE) == feasible,
+					"Joint ceil allocation differs from independent complete integer enumeration");
+			if (feasible) {
+				long[] occupied = new long[3];
+				for (int i = 0; i < 2; i++) {
+					var p = integerParcels.parcel(i); integerKernel.capture(p.x(), p.y(), p.z(), p.solidVolumeSvq());
+					integerKernel.requireMask(allocation.masks()[i]);
+					for (int slot = 0; slot < integerKernel.size(); slot++) occupied[integerKernel.cell(slot)] += integerKernel.floor(slot) + (allocation.masks()[i] >>> slot & 1);
+				}
+				for (int c = 0; c < 3; c++) require(occupied[c] <= capacity[c], "Joint ceil allocation exceeded actual cell capacity");
+			}
+		}
+		var limited = mmm.granular.GranularIntegerAllocation.plan(integerKernel, integerParcels, endpoints, new long[3], c -> 1, 1);
+		require(limited.status() == mmm.granular.GranularIntegerAllocation.Status.WORK_LIMIT && limited.masks() == null
+				&& integerParcels.parcel(0).ceilMask() == 1 && integerParcels.parcel(1).ceilMask() == 1,
+				"Integer allocation work exhaustion changed a source or claimed infeasibility");
 		GranularParcelStore parcels = new GranularParcelStore(registry, 2);
 		GranularDepositStore deposits = new GranularDepositStore(registry, 4 * 4 * 4, 4);
 		long parcelVolume = GranularLimits.MAX_PARCEL_VOLUME_SVQ - 17L;

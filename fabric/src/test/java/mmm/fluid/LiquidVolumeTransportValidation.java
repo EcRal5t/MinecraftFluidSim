@@ -195,6 +195,77 @@ public final class LiquidVolumeTransportValidation {
 		if (!budget[domain.cellIndex(1, 1, 1)].equals(expected)
 				|| !budget[domain.cellIndex(2, 1, 1)].equals(expected.negate()) || !total.equals(SignedDyadic.ZERO))
 			throw new AssertionError("Lost sub-ULP motion did not retain its exact signed, conservative kernel error");
+
+		var joint = new FluidDomain(3, 3, 3, domain.config, 128);
+		byte[] masks = new byte[27]; java.util.Arrays.fill(masks, (byte) 255); masks[12] = masks[13] = 0;
+		float leftVolume = 1 - Math.scalb(2F, -24), rightVolume = 1 - Math.scalb(1F, -24);
+		joint.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 2,
+				(double) leftVolume + rightVolume, 1000 * (double) leftVolume + 1000 * (double) rightVolume,
+				BuiltinFluidMaterials.DEFAULT_PALETTE,
+				new float[]{.25F, .75F, .75F, leftVolume, .75F, .75F, .75F, rightVolume}, new float[6], masks,
+				new double[]{1000 * (double) leftVolume, 1000 * (double) rightVolume}, new int[2]));
+		joint.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
+		var chemistry = mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY;
+		joint.bindChemistry(chemistry);
+		for (int p = 0; p < 2; p++) {
+			var mixture = new mmm.chemistry.ChemicalMixtureRecord(new int[]{chemistry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.H2O)}, new long[]{1}, 0);
+			joint.chemicalParcels.assign(p, mixture.withMassResidualKilograms(joint.unitScale.kilograms(joint.particles.mass(p))
+					- mixture.exactSpeciesMassKilograms(chemistry).toDouble()), false);
+		}
+		float dt = .05F, x = .5F, vx = Math.ulp(x) / dt;
+		joint.granularState.parcels.add(new mmm.granular.GranularParcelStore.Parcel(x, .75F, .75F, vx, 0, 0, 3, .001, material, 0, 0, (byte) 0));
+		joint.markGranularExternalChange(12); joint.sealDomainBoundary(); joint.ensureGrid();
+		joint.gridToParticleStage.prepareAdvectionCells(); joint.gasTopologyCoordinator.refresh();
+		var sourceFrame = joint.gasState.frame;
+		var source = joint.granularState.parcels.parcel(0); long revision = joint.granularState.parcels.mutationRevision();
+		var sourceLiquid = joint.exportChemicalParticleState(); long[] occupied = joint.granularCoupling.copySolidSvq();
+		joint.granularMechanicalStage.previewCollision(dt);
+		var endpoint = joint.granularCollision.previewPosition(0, source);
+		var endpointKernel = new mmm.granular.GranularKernel(3, 3, 3, .5);
+		endpointKernel.capture(endpoint.x(), endpoint.y(), endpoint.z(), 3);
+		if (endpoint.x() != Math.nextUp(x) || endpoint.ceilMask() == endpointKernel.canonicalMask()
+				|| !joint.granularNextCoupling.matchesSolidSvq(occupied)
+				|| joint.granularState.parcels.mutationRevision() != revision || !joint.granularState.parcels.parcel(0).equals(source))
+			throw new AssertionError("Full-liquid preview did not select a complete noncanonical feasible allocation without source writes");
+		var rejected = joint.granularCollision.planFixedLiquidCapacity(joint.granularState.parcels, joint.granularCoupling, c -> 0);
+		if (rejected.status() != mmm.granular.GranularIntegerAllocation.Status.INFEASIBLE || rejected.masks() != null
+				|| !joint.granularCollision.previewPosition(0, source).equals(endpoint) || joint.granularState.parcels.mutationRevision() != revision)
+			throw new AssertionError("An infeasible fixed-liquid allocation changed the prepared or live state");
+		new CellLiquidVolumeTransport(joint).advect(dt);
+		joint.granularMechanicalStage.commitCollision();
+		var committed = joint.granularState.parcels.parcel(0);
+		if (committed.x() != endpoint.x() || committed.ceilMask() != endpoint.ceilMask()
+				|| !joint.granularCoupling.matchesSolidSvq(occupied) || joint.particleCount() != 2
+				|| sourceFrame == null || joint.gasState.frame == sourceFrame
+				|| !joint.gasState.frame.matchesSourceCarrierGeometry(joint, occupied)
+				|| !java.util.Arrays.equals(joint.exportChemicalParticleState().materials().particles().copyPositionVolume(),
+						sourceLiquid.materials().particles().copyPositionVolume()))
+			throw new AssertionError("Joint flux/gas publication lost selected occupancy or moved an indivisible chemical source");
+		for (int p = 0; p < 2; p++) if (joint.chemicalParcels.record(p).totalQuanta() != 1
+				|| joint.particles.volume(p) != (p == 0 ? leftVolume : rightVolume))
+			throw new AssertionError("Joint ceil selection changed liquid volume or indivisible species inventory");
+		var captured = joint.captureAuthoritativeState(); var restored = FluidDomain.restoreAuthoritativeState(captured);
+		restored.ensureInventoryGrid();
+		if (!restored.granularState.parcels.parcel(0).equals(committed) || !restored.granularCoupling.matchesSolidSvq(occupied))
+			throw new AssertionError("Joint integer allocation changed its committed capacity interpretation after restore");
+		restored.granularMechanicalStage.previewCollision(dt);
+		var imposter = new mmm.granular.GranularParcelStore(registry, 1, 3, 3, 3, .5); imposter.add(committed);
+		boolean stale = false;
+		try { restored.granularCollision.planFixedLiquidCapacity(imposter, restored.granularCoupling, c -> mmm.granular.SolidVolume.SVQ_PER_CELL); }
+		catch (IllegalStateException expectedStale) { stale = true; }
+		if (!stale || !imposter.parcel(0).equals(committed)) throw new AssertionError("An unrelated granular store reused another source's occupancy preview");
+		restored.granularState.parcels.overwrite(0, new mmm.granular.GranularParcelStore.Parcel(committed.x(), committed.y(), committed.z(),
+				0, 0, 0, committed.solidVolumeSvq(), committed.mass(), material, 0, committed.contactAge(), committed.flags()));
+		var changedSource = restored.granularState.parcels.parcel(0); revision = restored.granularState.parcels.mutationRevision(); stale = false;
+		try { restored.granularMechanicalStage.commitCollision(); } catch (IllegalStateException expectedStale) { stale = true; }
+		if (!stale || restored.granularState.parcels.mutationRevision() != revision || !restored.granularState.parcels.parcel(0).equals(changedSource))
+			throw new AssertionError("A stale occupancy preview overwrote a changed granular source");
+		try { restored.granularCollision.preview(restored.granularState.parcels, registry, 0); }
+		catch (IllegalArgumentException expectedInvalidTime) { }
+		stale = false;
+		try { restored.granularMechanicalStage.commitCollision(); } catch (IllegalStateException expectedIncomplete) { stale = true; }
+		if (!stale || restored.granularState.parcels.mutationRevision() != revision)
+			throw new AssertionError("An incomplete granular collision preview remained publishable");
 	}
 
 	private static void representationRepairReusesOriginalDonorSupply() {

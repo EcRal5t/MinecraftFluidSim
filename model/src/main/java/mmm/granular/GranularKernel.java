@@ -89,6 +89,7 @@ public final class GranularKernel {
 	}
 
 	public int size() { return count; }
+	public int cellCount() { return size[0] * size[1] * size[2]; }
 	public boolean sameGeometry(GranularKernel other) {
 		return other != null && java.util.Arrays.equals(size, other.size) && h.equals(other.h);
 	}

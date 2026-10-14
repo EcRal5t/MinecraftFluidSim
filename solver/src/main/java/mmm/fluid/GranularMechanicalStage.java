@@ -89,11 +89,13 @@ final class GranularMechanicalStage {
 			throw new MechanicalTimeRefinement((int) Math.ceil(maximum * this.state.config.timeStep() / distance));
 		}
 		access.granularCollision().preview(state.parcels, state.registry, dt, this.state.config.maxCourantNumber());
+		planFixedLiquidCapacity(state);
 		access.granularNextCoupling().rebuild(state.parcels, state.deposits,
 				access.granularCollision()::previewPosition);
 		if (!access.granularOccupancyFitsGeometry(access.granularNextCoupling())) {
 			access.granularCollision().resolveCapacity(state.parcels, access.granularCoupling(),
 					cell -> SolidVolume.fromCellVolumeExact(this.state.geometry.cutCells.openCellVolume(cell)));
+			planFixedLiquidCapacity(state);
 			access.granularNextCoupling().rebuild(state.parcels, state.deposits,
 					access.granularCollision()::previewPosition);
 			if (!access.granularOccupancyFitsGeometry(access.granularNextCoupling())) {
@@ -101,6 +103,12 @@ final class GranularMechanicalStage {
 			}
 		}
 		collisionPending = true;
+	}
+
+	private void planFixedLiquidCapacity(GranularDomainState granular) {
+		access.granularCollision().planFixedLiquidCapacity(granular.parcels, access.granularCoupling(),
+				cell -> SolidVolume.fromCellVolumeExact(state.geometry.cutCells.openCellVolume(cell))
+						- JointPhaseCapacity.liquidSvqCeil(state.markerGrid.exactCellVolumeInventory[cell]));
 	}
 
 	/** Publishes the preview once, with the occupancy used by the joint liquid/gas candidate. */

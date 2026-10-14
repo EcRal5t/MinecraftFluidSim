@@ -6,6 +6,7 @@ import mmm.granular.GranularLimits;
 import mmm.granular.GranularParcelStore;
 import mmm.granular.GranularRegistry;
 import mmm.granular.GranularKernel;
+import mmm.granular.GranularIntegerAllocation;
 import mmm.granular.ParticulateMaterial;
 import mmm.granular.SolidVolume;
 
@@ -25,6 +26,9 @@ final class FlipGranularCollision {
 	private final byte[] nextFlags;
 	private final boolean[] capacityPending;
 	private int previewCount;
+	private long previewRevision;
+	private GranularParcelStore previewSource;
+	private boolean previewReady;
 	private int lastCapacityHeld;
 
 	FlipGranularCollision(int sizeX, int sizeY, int sizeZ, float cellSize,
@@ -46,8 +50,11 @@ final class FlipGranularCollision {
 	}
 
 	void preview(GranularParcelStore parcels, GranularRegistry registry, float dt, float courant) {
+		previewReady = false;
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular preview dt is invalid");
 		previewCount = parcels.count();
+		previewRevision = parcels.mutationRevision();
+		previewSource = parcels;
 		lastCapacityHeld = 0;
 		if (previewCount > 1) {
 			boolean[] supported = new boolean[previewCount];
@@ -91,6 +98,7 @@ final class FlipGranularCollision {
 					&& parcel.z() == nextZ[index] ? parcel.ceilMask() : kernel.canonicalMask();
 			kernel.requireMask(nextCeilMask[index]);
 		}
+		previewReady = true;
 	}
 
 	/** Deterministic sub-cell placement against fixed geometry and caller-supplied joint admission. */
@@ -181,6 +189,23 @@ final class FlipGranularCollision {
 		return new GranularCouplingFields.Position(nextX[index], nextY[index], nextZ[index], nextCeilMask[index]);
 	}
 
+	/** Selects the whole endpoint allocation; failed fixed-liquid plans leave every preview mask unchanged. */
+	GranularIntegerAllocation.Result planFixedLiquidCapacity(GranularParcelStore parcels,
+			GranularCouplingFields current, IntToLongFunction capacity) {
+		if (parcels.count() != previewCount) throw new IllegalStateException("Granular parcel count changed during preview");
+		requireSourceRevision(parcels);
+		long[] fixed = current.copySolidSvq();
+		for (int index = 0; index < previewCount; index++) {
+			var p = parcels.parcel(index);
+			current.removePlannedParcel(fixed, new GranularCouplingFields.Position(p.x(), p.y(), p.z(), p.ceilMask()), p.solidVolumeSvq());
+		}
+		var result = GranularIntegerAllocation.plan(kernel, parcels, this::previewPosition, fixed,
+				capacity, GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP);
+		if (result.status() == GranularIntegerAllocation.Status.FEASIBLE)
+			System.arraycopy(result.masks(), 0, nextCeilMask, 0, previewCount);
+		return result;
+	}
+
 	/**
 	 * Resolves exact cell capacity per representative parcel. A failed candidate remains at its current
 	 * position without cancelling unrelated motion; bounded retry passes allow vacated cells to propagate
@@ -193,6 +218,8 @@ final class FlipGranularCollision {
 			throw new IllegalArgumentException("Granular capacity preview is incomplete");
 		}
 		if (previewCount == 0) return 0;
+		requireSourceRevision(parcels);
+		previewReady = false;
 		long[] planned = current.copySolidSvq();
 		for (int cell = 0; cell < planned.length; cell++) {
 			long capacity = geometricCapacity.applyAsLong(cell);
@@ -232,6 +259,7 @@ final class FlipGranularCollision {
 		}
 		requirePairEndpoints(parcels);
 		lastCapacityHeld = pending;
+		previewReady = true;
 		return pending;
 	}
 
@@ -242,6 +270,7 @@ final class FlipGranularCollision {
 
 	BoundaryImpulse commit(GranularParcelStore parcels) {
 		if (parcels.count() != previewCount) throw new IllegalStateException("Granular parcel count changed during preview");
+		requireSourceRevision(parcels);
 		requirePairEndpoints(parcels);
 		double impulseX = 0, impulseY = 0, impulseZ = 0;
 		for (int index = 0; index < previewCount; index++) {
@@ -255,7 +284,13 @@ final class FlipGranularCollision {
 					nextContactAge[index], nextFlags[index], nextCeilMask[index]));
 		}
 		previewCount = 0;
+		previewReady = false;
 		return new BoundaryImpulse(impulseX, impulseY, impulseZ);
+	}
+
+	private void requireSourceRevision(GranularParcelStore parcels) {
+		if (!previewReady || parcels != previewSource || parcels.mutationRevision() != previewRevision)
+			throw new IllegalStateException("Granular source changed during occupancy preview");
 	}
 
 	private void holdParcel(GranularParcelStore parcels, int index) {
