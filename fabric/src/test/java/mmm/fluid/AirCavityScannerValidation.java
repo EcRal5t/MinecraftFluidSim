@@ -227,7 +227,21 @@ public final class AirCavityScannerValidation {
 		domain.gasState.frame=current;
 		var repeated=GasRuntimeGeometry.capture(domain,null,occupied,true);
 		var editedFromCaptured=GasRuntimeGeometry.capture(domain,edit,occupied,true);
+		var phaseSource=GasRuntimeGeometry.preparePhaseSource(domain);
+		check(phaseSource!=null,"Matching raw phase source was not prepared");
+		var preparedTrial=GasRuntimeGeometry.capturePhaseEdit(domain,edit,occupied,true,phaseSource);
+		var preparedReset=GasRuntimeGeometry.capturePhaseEdit(domain,current.liquidStock().get(0),occupied,true,phaseSource);
+		var preparedAgain=GasRuntimeGeometry.capturePhaseEdit(domain,edit,occupied,true,phaseSource);
+		checkRuntimePlanesEqual(preparedTrial,editedFromCaptured,"Prepared phase source changed candidate planes");
+		checkRuntimePlanesEqual(preparedReset,current,"Previous phase trial leaked its target workspace into the next trial");
+		checkRuntimePlanesEqual(preparedAgain,preparedTrial,"Repeated phase trial mutated an already prepared frame");
+		check(java.util.Arrays.equals(preparedTrial.pieceNodes(),editedFromCaptured.pieceNodes())
+				&& preparedTrial.capacity().components().equals(editedFromCaptured.capacity().components())
+				&& preparedTrial.capacity().chambers().equals(editedFromCaptured.capacity().chambers())
+				&& preparedTrial.matchesSourceCarrierGeometry(domain,occupied),"Prepared phase source changed capacities or source binding");
 		domain.gasState.frame=null;
+		try { GasRuntimeGeometry.capturePhaseEdit(domain,edit,occupied,true,phaseSource); throw new AssertionError("Changed phase source owner was reused"); }
+		catch(GasTopologyBlockedException expected) { }
 		check(repeated.offsetBracket(0,0)==current.offsetBracket(0,0)
 				&& repeated.offsetBracket(1,0)==current.offsetBracket(1,0),"Unchanged PLIC failed to reuse captured inverse-volume certificates");
 		check(repeated.geometry().pieces().getFirst()==current.geometry().pieces().getFirst()
@@ -262,6 +276,9 @@ public final class AirCavityScannerValidation {
 				&& moved.matchesCarrierGeometry(domain,occupied) && moved.planeNormal(0,0,0)<0,
 				"Gas frame reused old M1 after a raw marker move with unchanged volume and count");
 		domain.gasState.frame=current;
+		check(GasRuntimeGeometry.preparePhaseSource(domain)==null,"Phase preparation reused raw M1 with unchanged epochs");
+		try { GasRuntimeGeometry.capturePhaseEdit(domain,edit,occupied,true,phaseSource); throw new AssertionError("Raw position change reused a prepared phase source"); }
+		catch(GasTopologyBlockedException expected) { }
 		var movedFromCaptured=GasRuntimeGeometry.capture(domain,null,occupied,true);
 		domain.gasState.frame=null;
 		check(movedFromCaptured.offsetBracket(1,0)==current.offsetBracket(1,0),

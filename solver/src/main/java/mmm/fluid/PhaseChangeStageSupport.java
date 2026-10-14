@@ -48,8 +48,10 @@ final class PhaseChangeStageSupport {
 		SignedDyadic exactInternalEnergy();
 		void ensureGrid();
 		void refreshGasTopology();
+		GasRuntimeGeometry.PhaseSource prepareGasGeometrySource();
 		GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
-				mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal);
+				mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal,
+				GasRuntimeGeometry.PhaseSource source);
 		void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
 				mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal);
 		void commitGasGeometry(GasTopologyCoordinator.GasTopologyPlan topology);
@@ -84,12 +86,14 @@ final class PhaseChangeStageSupport {
 	float[] markerSlotPosition(int cell, int slot) { return access.markerSlotPosition(cell, slot); }
 	void ensureGrid() { access.ensureGrid(); }
 	void refreshGasTopology() { access.refreshGasTopology(); }
+	GasRuntimeGeometry.PhaseSource prepareGasGeometrySource() { return access.prepareGasGeometrySource(); }
 	GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
-			mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal) {
+			mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal,
+			GasRuntimeGeometry.PhaseSource source) {
 		var capacities = CellRemapMicroTopology.capacities(edit.collisionMask(),SignedDyadic.of(access.effectiveOpenCellVolume(edit.cell())));
 		for(int i=0;i<capacities.length;i++) if(edit.components().get(i).volume().compareTo(capacities[i])>0)
 			throw new PhaseCandidateUnavailableException("Phase liquid inventory exceeds its connected pore capacity");
-		return access.planGasGeometry(edit, node, gas, energy, thermal);
+		return access.planGasGeometry(edit, node, gas, energy, thermal, source);
 	}
 	void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
 			mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal) {

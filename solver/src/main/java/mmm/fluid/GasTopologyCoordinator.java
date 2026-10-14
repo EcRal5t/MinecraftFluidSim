@@ -74,10 +74,15 @@ final class GasTopologyCoordinator {
 	void refresh() { commit(plan(capture(null), false, null)); }
 	void refreshDeferringPhaseVolumeWork() { commit(plan(capture(null), true, null)); }
 	GasTopologyPlan planAfterPhase(PhaseLiquidGeometryEdit geometryEdit, int node,
-			AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal) {
+			AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal,
+			GasRuntimeGeometry.PhaseSource source) {
 		domain.gasState.network.requirePhaseMutationCurrent(gas);
 		domain.thermalState.requirePhaseCellEnergyCurrent(thermal);
-		try { return plan(capture(geometryEdit), true, new PhaseEdit(node, gas, energy, thermal)); }
+		try {
+			domain.ensureInventoryGrid();
+			return plan(GasRuntimeGeometry.capturePhaseEdit(domain, geometryEdit, currentOccupied(),
+					domain.gasState.sealedDomainBoundary, source), true, new PhaseEdit(node, gas, energy, thermal));
+		}
 		catch (IllegalArgumentException | ArithmeticException | GasTopologyBlockedException unavailable) {
 			throw new PhaseChangeStageSupport.PhaseCandidateUnavailableException(
 					"Phase-edited gas topology has no complete representable remap", unavailable);

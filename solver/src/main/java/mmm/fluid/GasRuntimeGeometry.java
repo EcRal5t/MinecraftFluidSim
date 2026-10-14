@@ -20,6 +20,10 @@ final class GasRuntimeGeometry {
 
 	private GasRuntimeGeometry(FluidDomain domain, List<PhaseLiquidGeometryEdit> edits, long[] occupiedSvq,
 	                           boolean sealedExterior, boolean allDry) {
+		this(domain, edits, occupiedSvq, sealedExterior, allDry, null);
+	}
+	private GasRuntimeGeometry(FluidDomain domain, List<PhaseLiquidGeometryEdit> edits, long[] occupiedSvq,
+	                           boolean sealedExterior, boolean allDry, PhaseSource prepared) {
 		if (domain == null || occupiedSvq == null || occupiedSvq.length != domain.cellCount || edits == null)
 			throw new IllegalArgumentException("Gas runtime geometry requires a complete candidate");
 		edits = List.copyOf(edits);
@@ -42,8 +46,9 @@ final class GasRuntimeGeometry {
 			if (solid[cell] != domain.geometry.solid[cell])
 				throw new IllegalArgumentException("Gas runtime binary and micro collision geometry disagree");
 		}
-		MarkerGridIndex rawIndex = index(domain);
-		this.sourceLiquidStock = stock(domain, cut, rawIndex);
+		if (prepared != null) prepared.requireCurrent(domain, sourceOccupiedSvq);
+		MarkerGridIndex rawIndex = prepared == null ? index(domain) : prepared.index;
+		this.sourceLiquidStock = prepared == null ? stock(domain, cut, rawIndex) : prepared.frame.liquidStock;
 		MarkerGridIndex phaseIndex = allDry ? emptyIndex(domain.cellCount, 0) : rawIndex;
 		var target = new ArrayList<>(allDry ? stock(domain, cut, phaseIndex) : sourceLiquidStock);
 		for (var edit : edits) target.set(edit.cell(), edit);
@@ -93,6 +98,57 @@ final class GasRuntimeGeometry {
 	static GasRuntimeGeometry captureLiquidEdits(FluidDomain domain, List<PhaseLiquidGeometryEdit> edits,
 	                                          long[] occupiedSvq, boolean sealedExterior) {
 		return new GasRuntimeGeometry(domain, edits, occupiedSvq, sealedExterior, false);
+	}
+
+	/** One BOIL search is read-only; source tuples and marker links are prepared once for its trials. */
+	static final class PhaseSource {
+		private final FluidDomain owner;
+		private final GasRuntimeGeometry frame;
+		private final MarkerGridIndex index;
+		private final float[] positionVolume;
+		private final long inventoryRevision, carrierRevision;
+		private final int markerCount;
+		private PhaseSource(FluidDomain owner, GasRuntimeGeometry frame, MarkerGridIndex index) {
+			this.owner = owner; this.frame = frame; this.index = index;
+			this.inventoryRevision = owner.markerGrid.inventoryRevision;
+			this.carrierRevision = owner.carrierMutationRevision(); this.markerCount = owner.particles.count();
+			this.positionVolume = new float[Math.multiplyExact(4, markerCount)];
+			for (int marker = 0; marker < markerCount; marker++) {
+				positionVolume[4 * marker] = owner.particles.positionX(marker);
+				positionVolume[4 * marker + 1] = owner.particles.positionY(marker);
+				positionVolume[4 * marker + 2] = owner.particles.positionZ(marker);
+				positionVolume[4 * marker + 3] = owner.particles.volume(marker);
+			}
+		}
+		private void requireCurrent(FluidDomain domain, long[] occupied) {
+			if (domain != owner || domain.gasState.frame != frame || domain.gridDirty
+					|| inventoryRevision != domain.markerGrid.inventoryRevision
+					|| carrierRevision != domain.carrierMutationRevision() || markerCount != domain.particles.count()
+					|| !frame.matchesGeometryInputs(domain, occupied, frame.occupiedSvq))
+				throw new GasTopologyBlockedException("BOIL geometry source changed during candidate search");
+			for (int marker = 0; marker < markerCount; marker++)
+				if (Float.floatToRawIntBits(positionVolume[4 * marker]) != Float.floatToRawIntBits(domain.particles.positionX(marker))
+						|| Float.floatToRawIntBits(positionVolume[4 * marker + 1]) != Float.floatToRawIntBits(domain.particles.positionY(marker))
+						|| Float.floatToRawIntBits(positionVolume[4 * marker + 2]) != Float.floatToRawIntBits(domain.particles.positionZ(marker))
+						|| Float.floatToRawIntBits(positionVolume[4 * marker + 3]) != Float.floatToRawIntBits(domain.particles.volume(marker)))
+					throw new GasTopologyBlockedException("BOIL raw marker geometry changed during candidate search");
+		}
+	}
+
+	static PhaseSource preparePhaseSource(FluidDomain domain) {
+		domain.ensureInventoryGrid();
+		var frame = domain.gasState.frame;
+		if (frame == null) return null;
+		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		if (!frame.matchesGeometryInputs(domain, occupied, frame.occupiedSvq)) return null;
+		var index = index(domain);
+		if (!frame.liquidStock.equals(stock(domain, domain.geometry.cutCells, index))) return null;
+		return new PhaseSource(domain, frame, index);
+	}
+
+	static GasRuntimeGeometry capturePhaseEdit(FluidDomain domain, PhaseLiquidGeometryEdit edit,
+	                                          long[] occupied, boolean sealed, PhaseSource source) {
+		return new GasRuntimeGeometry(domain, List.of(edit), occupied, sealed, false, source);
 	}
 
 	/** Prepared once for one BOIL search; candidates mutate only these private contact-plane arrays. */
@@ -185,14 +241,18 @@ final class GasRuntimeGeometry {
 	}
 
 	private boolean matches(FluidDomain domain, long[] occupiedSvq, long[] expectedOccupied, List<PhaseLiquidGeometryEdit> expectedStock) {
+		if (!matchesGeometryInputs(domain, occupiedSvq, expectedOccupied)) return false;
+		try { return expectedStock.equals(stock(domain, domain.geometry.cutCells, index(domain))); }
+		catch (IllegalArgumentException | IllegalStateException | ArithmeticException invalid) { return false; }
+	}
+	private boolean matchesGeometryInputs(FluidDomain domain, long[] occupiedSvq, long[] expectedOccupied) {
 		if (domain == null || geometry.sizeX() != domain.sizeX || geometry.sizeY() != domain.sizeY || geometry.sizeZ() != domain.sizeZ
 				|| Float.floatToRawIntBits(cellSize) != Float.floatToRawIntBits(domain.config.cellSize())
 				|| !Arrays.equals(expectedOccupied, occupiedSvq)) return false;
 		for (int cell = 0; cell < domain.cellCount; cell++)
 			if (geometry.collisionMask(cell) != domain.geometry.cutCells.mask(cell)
 					|| domain.geometry.solid[cell] != (geometry.collisionMask(cell) == 255)) return false;
-		try { return expectedStock.equals(stock(domain, domain.geometry.cutCells, index(domain))); }
-		catch (IllegalArgumentException | IllegalStateException | ArithmeticException invalid) { return false; }
+		return true;
 	}
 
 	private static MarkerGridIndex emptyIndex(int cells, int markers) {
