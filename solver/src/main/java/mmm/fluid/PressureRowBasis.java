@@ -70,8 +70,19 @@ final class PressureRowBasis {
 	int row(int position) { return rows[position]; }
 	int position(int row) { return positions[row]; }
 	int dependencyCount() { return dependencies.size(); }
-	boolean observationNeutral(boolean[] observed, double[] diagonal) {
-		for (var dependency : dependencies) for (int row : dependency.relation.keySet()) if (observed[row] && diagonal[row] > 0) return false;
+	boolean observationNeutral(boolean[] observed, double[] diagonal, boolean commonGauge) {
+		for (var dependency : dependencies) {
+			boolean changesObservation = false;
+			for (int row : dependency.relation.keySet()) changesObservation |= observed[row] && diagonal[row] > 0;
+			if (!changesObservation) continue;
+			if (!commonGauge) return false;
+			ExactRational shift = null;
+			for (int row = 0; row < observed.length; row++) if (observed[row]) {
+				var coefficient = dependency.relation.getOrDefault(row, ExactRational.ZERO);
+				if (shift == null) shift = coefficient;
+				else if (!shift.equals(coefficient)) return false;
+			}
+		}
 		return true;
 	}
 	/** Only volumeRate's final rounding and the builder's division can disturb an exact row relation. */

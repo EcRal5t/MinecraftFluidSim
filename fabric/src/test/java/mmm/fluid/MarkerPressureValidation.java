@@ -557,16 +557,25 @@ public final class MarkerPressureValidation {
 		verifyFactoredConstraint(basis, definitions, velocity, new double[]{1, -2, 3});
 		double[] rhs = new double[3], diagonal = new double[3], pressure = {7, 8, 9}; float dt = .05F;
 		operator.volumeRate(velocity, rhs); for (int row = 0; row < 3; row++) rhs[row] = -rhs[row] / dt; operator.diagonal(diagonal);
-		if (!SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[3], velocity, dt, 1e-9))
+		if (!SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[3], false, velocity, dt, 1e-9))
 			throw new AssertionError("Certified low-rank principal LU did not satisfy every physical row");
 		double[] actual = new double[3]; operator.apply(pressure, actual); for (int row = 0; row < 3; row++) near(actual[row], rhs[row], 1e-9, "Full-row direct pressure residual");
 		double[] saved = pressure.clone();
-		if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[]{true, false, false}, velocity, dt, 1e-9))
+		if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[]{true, false, false}, false, velocity, dt, 1e-9))
 			throw new AssertionError("An observation-changing multiplier relation selected an arbitrary gauge");
 		if (!Arrays.equals(saved, pressure)) throw new AssertionError("Rejected pressure gauge changed the iterative fallback input");
 		rhs[1] += 1;
-		if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[3], velocity, dt, 1e-9) || !Arrays.equals(saved, pressure))
+		if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[3], false, velocity, dt, 1e-9) || !Arrays.equals(saved, pressure))
 			throw new AssertionError("Incompatible source changed the iterative fallback input");
+		if (coordinates.observationNeutral(new boolean[]{true, true, false}, diagonal, true))
+			throw new AssertionError("A nonuniform pressure dependency changed the closed observation gauge");
+		var closed = new CellVelocityConstraintOperator(basis, java.util.List.of(definitions.getFirst(),
+				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{-1, 0, 0, 0})), 0),
+				definitions.get(2)));
+		closed.volumeRate(velocity, rhs); for (int row = 0; row < 3; row++) rhs[row] = -rhs[row] / dt; closed.diagonal(diagonal);
+		if (!SparsePressureFactor.solve(closed, rhs, pressure, diagonal, new boolean[]{true, true, false}, true, velocity, dt, 1e-9))
+			throw new AssertionError("A uniform closed pressure gauge prevented the certified physical solve");
+		near(pressure[0] - pressure[1], rhs[0] / diagonal[0], 1e-9, "Closed pressure difference is independent of the common gauge");
 	}
 
 	/** Independent full C assembly checks the factor action without reading its cached D or H. */

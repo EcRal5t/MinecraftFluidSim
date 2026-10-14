@@ -348,7 +348,7 @@ final class MarkerPressureProjection {
 			boolean[] observed = new boolean[n];
 			for (int row : liquidRows) if (row >= 0) observed[row] = true;
 			for (int row : gasRows) if (row >= 0) observed[row] = true;
-			if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, observed, wallPredictor, dt, tolerance)) {
+			if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, observed, closedObservationGauge(), wallPredictor, dt, tolerance)) {
 				iterations = 1; operator.apply(pressure, applied);
 				for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
 				residual = rms(r);
@@ -410,6 +410,10 @@ final class MarkerPressureProjection {
 		solved = true; return new PressureProjectionResult(iterations, residual / unit, true);
 	}
 
+	private boolean closedObservationGauge() {
+		return !hasFreeSurface && pressureAnchor >= 0 && pressureAnchor < liquidRows.length && liquidRows[pressureAnchor] >= 0;
+	}
+
 	private void preparePressureObservation(double[][] force) {
 		Arrays.fill(observedPressure,0);
 		double[][] traction = new double[3][basis.blockCount()];
@@ -428,7 +432,7 @@ final class MarkerPressureProjection {
 		}
 		for(int cell=0;cell<domain.cellCount;cell++)if(volume[cell]>0)observedPressure[cell]/=volume[cell];
 		// The closed-system pressure gauge changes observation, never the solved force.
-		double gauge = !hasFreeSurface && pressureAnchor >= 0 && pressureAnchor < liquidRows.length && liquidRows[pressureAnchor] >= 0 ? observedPressure[pressureAnchor] : 0;
+		double gauge = closedObservationGauge() ? observedPressure[pressureAnchor] : 0;
 		for (int cell = 0; cell < domain.cellCount; cell++) if (volume[cell] > 0) {
 			observedPressure[cell] -= gauge;
 			if (!Float.isFinite((float) observedPressure[cell])) throw blocked("Unrepresentable resolved cell pressure");

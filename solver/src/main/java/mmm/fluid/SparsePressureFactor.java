@@ -12,13 +12,13 @@ import org.ejml.sparse.csc.factory.LinearSolverFactory_DSCC;
 final class SparsePressureFactor {
 	private SparsePressureFactor() { }
 	static boolean solve(CellVelocityConstraintOperator operator, double[] rhs, double[] pressure,
-			double[] diagonal, boolean[] observed, double[][] predictor, float dt, double tolerance) {
+			double[] diagonal, boolean[] observed, boolean commonGauge, double[][] predictor, float dt, double tolerance) {
 		try {
 			boolean[] reclaimed = {false};
 			// EJML doubles each triangular capacity; one old buffer pair survives during growth.
 			if (!fitsFactorMemory(30.0 * rhs.length * rhs.length + 128.0 * rhs.length, reclaimed)) return false;
 			PressureRowBasis basis = operator.rowBasis();
-			if (!basis.observationNeutral(observed, diagonal)) return false;
+			if (!basis.observationNeutral(observed, diagonal, commonGauge)) return false;
 			double[] rate = new double[rhs.length]; operator.volumeRate(predictor, rate);
 			if (!basis.compatibleSource(rhs, rate, dt)) return false;
 			var gram = operator.principalGram(basis); double[] scale = new double[basis.size()];
