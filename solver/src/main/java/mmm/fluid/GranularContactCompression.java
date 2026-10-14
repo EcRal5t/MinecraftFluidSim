@@ -16,6 +16,24 @@ final class GranularContactCompression {
 	}
 
 	private GranularContactCompression() { }
+	private record MassUnit(double[] values, int exponent) { }
+
+	private static MassUnit massUnit(double[] mass) {
+		double largestMass = 0;
+		for (double m : mass) {
+			if (!(m > 0 && Double.isFinite(m))) throw new IllegalArgumentException("Invalid contact mass");
+			largestMass = Math.max(largestMass, m);
+		}
+		int exponent = Math.getExponent(largestMass);
+		if (largestMass > 0 && largestMass < Double.MIN_NORMAL) exponent = Math.getExponent(Math.scalb(largestMass, 54)) - 54;
+		double[] scaled = new double[mass.length];
+		for (int i = 0; i < mass.length; i++) {
+			scaled[i] = Math.scalb(mass[i], -exponent);
+			if (!(scaled[i] > 0) || Math.scalb(scaled[i], exponent) != mass[i])
+				throw new MechanicalTimeRefinement(2, "Unrepresentable contact mass ratio");
+		}
+		return new MassUnit(scaled, exponent);
+	}
 
 	private static final class Progress {
 		private final Runnable budget;
@@ -75,20 +93,7 @@ final class GranularContactCompression {
 	static Result solve(double[] mass, double[][] input, Row[] rows, Runnable spend, double[] initialImpulses) {
 		if (mass.length != input.length) throw new IllegalArgumentException("Contact input size mismatch");
 		double[] physicalMass = mass;
-		double largestMass = 0;
-		for (double m : mass) {
-			if (!(m > 0 && Double.isFinite(m))) throw new IllegalArgumentException("Invalid contact mass");
-			largestMass = Math.max(largestMass, m);
-		}
-		int massExponent = Math.getExponent(largestMass);
-		if (largestMass > 0 && largestMass < Double.MIN_NORMAL) massExponent = Math.getExponent(Math.scalb(largestMass, 54)) - 54;
-		double[] scaledMass = new double[mass.length];
-		for (int i = 0; i < mass.length; i++) {
-			scaledMass[i] = Math.scalb(mass[i], -massExponent);
-			if (!(scaledMass[i] > 0) || Math.scalb(scaledMass[i], massExponent) != mass[i])
-				throw new MechanicalTimeRefinement(2, "Unrepresentable contact mass ratio");
-		}
-		mass = scaledMass;
+		var unit = massUnit(mass); int massExponent = unit.exponent(); mass = unit.values();
 		double[][] values = new double[mass.length][3];
 		for (int i = 0; i < mass.length; i++) {
 			if (!(mass[i] > 0 && Double.isFinite(mass[i])) || input[i].length != 3)
@@ -170,6 +175,65 @@ final class GranularContactCompression {
 	static boolean admits(Row row, double[][] values, double[][] error) {
 		double g = gap(row, values), bound = gapError(row, values, error);
 		return Double.isFinite(g) && Double.isFinite(bound) && g >= -bound;
+	}
+
+	/** Per-contact expansion is followed by the same cone projection, then one source reconstruction. */
+	static Result respond(double[] mass, double[][] input, Row[] rows, Result compression, double[] restitution, Runnable spend) {
+		if (restitution.length != rows.length) throw new IllegalArgumentException("Contact restitution size mismatch");
+		double[] total = compression.impulses().clone(); boolean expanding = false;
+		for (int k = 0; k < rows.length; k++) {
+			spend.run(); double e = restitution[k];
+			if (!(Double.isFinite(e) && e >= 0 && e <= 1)) throw new IllegalArgumentException("Invalid contact restitution");
+			double expansion = e * total[k]; expanding |= expansion > 0;
+			total[k] += expansion;
+			if (!Double.isFinite(total[k])) throw new MechanicalTimeRefinement(2, "Unrepresentable total contact impulse");
+		}
+		if (!expanding) { auditEnergy(mass, input, compression, spend); return compression; }
+		Result response = rebuild(mass, input, rows, total, spend);
+		boolean feasible = true;
+		for (var row : rows) { spend.run(); feasible &= response.admits(row); }
+		if (!feasible) {
+			var correction = solve(mass, response.values(), rows, spend);
+			for (int k = 0; k < rows.length; k++) {
+				spend.run(); total[k] += correction.impulses()[k];
+				if (!Double.isFinite(total[k])) throw new MechanicalTimeRefinement(2, "Unrepresentable total contact impulse");
+			}
+			response = rebuild(mass, input, rows, total, spend);
+			for (var row : rows) {
+				spend.run(); if (!response.admits(row))
+					throw new MechanicalTimeRefinement(2, "Total contact impulse cannot certify the common cone");
+			}
+		}
+		auditEnergy(mass, input, response, spend); return response;
+	}
+
+	private static Result rebuild(double[] mass, double[][] input, Row[] rows, double[] impulse, Runnable spend) {
+		var unit = massUnit(mass); double[] scaled = new double[impulse.length];
+		for (int k = 0; k < scaled.length; k++) {
+			spend.run(); scaled[k] = Math.scalb(impulse[k], -unit.exponent());
+			if (!Double.isFinite(scaled[k]) || impulse[k] > 0 && scaled[k] == 0)
+				throw new MechanicalTimeRefinement(2, "Unrepresentable total contact impulse");
+		}
+		double[][] values = new double[mass.length][3];
+		var error = reconstruct(unit.values(), input, rows, scaled, values, spend);
+		double[] bounds = new double[rows.length];
+		for (int k = 0; k < rows.length; k++) { spend.run(); bounds[k] = gapError(rows[k], values, error); }
+		return new Result(values, impulse, bounds, error);
+	}
+
+	private static void auditEnergy(double[] mass, double[][] input, Result response, Runnable spend) {
+		var change = SignedDyadic.ZERO; var bound = SignedDyadic.ZERO;
+		for (int i = 0; i < mass.length; i++) {
+			spend.run(); var weight = SignedDyadic.of(mass[i]);
+			for (int a = 0; a < 3; a++) {
+				spend.run(); var old = SignedDyadic.of(input[i][a]); var next = SignedDyadic.of(response.values()[i][a]);
+				var error = SignedDyadic.of(response.arithmeticError()[i][a]);
+				change = change.add(weight.multiply(next.multiply(next).subtract(old.multiply(old))).multiply(SignedDyadic.of(.5)));
+				bound = bound.add(weight.multiply(error).multiply(SignedDyadic.of(Math.abs(response.values()[i][a])).add(error)));
+			}
+		}
+		if (change.compareTo(bound) > 0)
+			throw new MechanicalTimeRefinement(2, "Common contact restitution exceeds its reconstruction energy bound");
 	}
 
 	/** Minimize the new source's dual energy along the supplied nonnegative impulse ray. */

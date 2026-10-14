@@ -661,6 +661,23 @@ public final class GranularCarrierValidation {
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		var material = registry.material(sand); long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		float radius = mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+		float[] freePairVelocity = null;
+		for (boolean touchingFloor : new boolean[]{false, true}) {
+			var parcels = new GranularParcelStore(registry, 2);
+			float height = touchingFloor ? radius : 1.25F;
+			parcels.add(new GranularParcelStore.Parcel(1.25F, height, 1.25F, .1F, 0, 0, svq, 2, sand, 0, 0, (byte) 0));
+			parcels.add(new GranularParcelStore.Parcel(Math.nextUp(1.25F + 2 * radius), height, 1.25F, -.1F, 0, 0, svq, 2, sand, 0, 0, (byte) 0));
+			var collision = new FlipGranularCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null, 2);
+			collision.preview(parcels, registry, .05F); var reaction = collision.commit(parcels);
+			float first = parcels.parcel(0).velocityX(), second = parcels.parcel(1).velocityX();
+			require(first < 0 && second > 0 && Math.abs(second - first - .2F * material.restitution()) <= 2 * Math.ulp(second - first),
+					"an unloaded fixed tangent changed the pair's material restitution");
+			require(reaction.y() == 0 && parcels.parcel(0).velocityY() == 0 && parcels.parcel(1).velocityY() == 0,
+					"horizontal pair impact generated a spurious fixed support load");
+			if (freePairVelocity == null) freePairVelocity = new float[]{first, second};
+			else require(first == freePairVelocity[0] && second == freePairVelocity[1],
+					"geometric floor tangency changed a collision with zero fixed normal impulse");
+		}
 		var fixed = new GranularSphereCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null);
 		for (int axis = 0; axis < 3; axis++) for (int side : new int[]{-1, 1}) for (double fraction : new double[]{.5, 1}) {
 			double plane = side > 0 ? radius : 3 - (double) radius;
@@ -770,6 +787,8 @@ public final class GranularCarrierValidation {
 			parcels.add(new GranularParcelStore.Parcel(first[0], first[1], first[2], firstVelocity[0], firstVelocity[1], firstVelocity[2], svq, 2, material, 0, 0, (byte) 0));
 			parcels.add(new GranularParcelStore.Parcel(second[0], second[1], second[2], secondVelocity[0], secondVelocity[1], secondVelocity[2], svq, 3, material, 0, 0, (byte) 0));
 			var original = new GranularParcelStore.Parcel[]{parcels.parcel(0), parcels.parcel(1)};
+			double approachSquared = 4 + .375 * .375, separationSquared = .25 * .25 - 4 * radius * (double) radius;
+			double contactTime = 2 * separationSquared / (1 + Math.sqrt(1 - 4 * approachSquared * separationSquared));
 			var collision = new FlipGranularCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null, 4);
 			collision.preview(parcels, registry, .1F); var boundary = collision.commit(parcels);
 			require(!GranularSpawnAdmission.interiorsOverlap(parcels.parcel(0).x(), parcels.parcel(0).y(), parcels.parcel(0).z(), radius,
@@ -781,6 +800,9 @@ public final class GranularCarrierValidation {
 					var old = original[index]; var next = parcels.parcel(index);
 					float p = a == 0 ? old.x() : a == 1 ? old.y() : old.z(), q = a == 0 ? next.x() : a == 1 ? next.y() : next.z();
 					float v = a == 0 ? old.velocityX() : a == 1 ? old.velocityY() : old.velocityZ(), w = a == 0 ? next.velocityX() : a == 1 ? next.velocityY() : next.velocityZ();
+					double endpoint = Math.fma(w, (double) .1F - contactTime, Math.fma(v, contactTime, p));
+					require(Math.abs(q - endpoint) <= 2 * Math.ulp(q) + .1F * (double) Math.ulp(w),
+							"pair trajectory must preserve the incoming path and advance its new drift only after contact");
 					momentumBefore += old.mass() * v; momentumAfter += next.mass() * w;
 					momentBefore += old.mass() * (p + v * (double) .1F); momentAfter += next.mass() * q;
 					momentRounding += old.mass() * 2 * Math.ulp(q); velocityRounding += old.mass() * Math.ulp(w);
@@ -828,7 +850,8 @@ public final class GranularCarrierValidation {
 			for (int index = 0; index < stack.count(); index++) {
 				var p = stack.parcel(index); stack.overwrite(index, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(), p.velocityX(), p.velocityY() - .49F, p.velocityZ(), p.solidVolumeSvq(), p.mass(), p.materialHandle(), p.solidCompositionHandle(), p.contactAge(), p.flags()));
 			}
-			collision.preview(stack, registry, .05F); collision.commit(stack);
+			collision.preview(stack, registry, .05F); var reaction = collision.commit(stack);
+			require(reaction.y() < 0, "resting contact chain must carry an actual fixed support impulse");
 		}
 		require(stack.parcel(1).contactAge() == 3 && (stack.parcel(1).flags() & GranularParcelStore.FLAG_SUPPORTED) != 0,
 				"actual active contact did not transmit the fixed bed support age");
@@ -837,6 +860,34 @@ public final class GranularCarrierValidation {
 	private static void commonContactsMatchMassMetricProjection() {
 		var floor = new GranularContactCompression.Row(0, -1, new double[]{0, 1, 0});
 		var pair = new GranularContactCompression.Row(0, 1, new double[]{0, 1, 0});
+		var restitutionRows = new GranularContactCompression.Row[]{
+				new GranularContactCompression.Row(0, -1, new double[]{1, 0, 0}),
+				new GranularContactCompression.Row(0, -1, new double[]{-.6, .8, 0})};
+		double[] restitutionMass = {1}; double[][] restitutionInput = {{-.4, -.8, 0}};
+		for (int[] order : new int[][]{{0, 1}, {1, 0}}) for (double[] coefficients : new double[][]{{0, 0}, {.1, .1}, {0, 1}, {1, 0}, {1, 1}}) {
+			var rows = new GranularContactCompression.Row[]{restitutionRows[order[0]], restitutionRows[order[1]]};
+			var compressed = compressContacts(restitutionMass, restitutionInput, rows);
+			var response = GranularContactCompression.respond(restitutionMass, restitutionInput, rows, compressed,
+					new double[]{coefficients[order[0]], coefficients[order[1]]}, contactBudget());
+			double[] impulse = new double[3];
+			for (int k = 0; k < rows.length; k++) {
+				require(response.admits(rows[k]), "contact expansion escaped the common admissible cone");
+				for (int a = 0; a < 3; a++) impulse[a] = Math.fma(response.impulses()[k], rows[k].normal()[a], impulse[a]);
+			}
+			checkContactMechanicalMoments(restitutionMass, restitutionInput, response, new double[][]{{0, 0, 0}}, impulse);
+			if (coefficients[0] == 0 && coefficients[1] == 1) {
+				require(1 > .4 * .4 + .8 * .8 && Math.abs(response.values()[0][0]) <= response.arithmeticError()[0][0]
+						&& Math.abs(response.values()[0][1] - .8) <= response.arithmeticError()[0][1] + Math.ulp(.8),
+						"unequal restitution must reproject an expansion that exceeds the source kinetic energy");
+			}
+		}
+		var originalRows = new GranularContactCompression.Row[]{
+				new GranularContactCompression.Row(0, -1, new double[]{1, 0, 0}),
+				new GranularContactCompression.Row(0, 1, new double[]{-.6, .8, 0})};
+		double[][] originalSource = {{-1, 0, 0}, {0, 0, 0}};
+		var originalCompression = compressContacts(new double[]{1, 1}, originalSource, originalRows);
+		for (int i = 0; i < 2; i++) for (int a = 0; a < 3; a++) require(Math.abs(originalCompression.values()[i][a])
+				<= originalCompression.arithmeticError()[i][a], "common original-source projection retained a prefix-only impulse");
 		for (double scale : new double[]{1, Math.ulp(1.0F), Float.MIN_VALUE}) {
 			double[][] input = {{0, -.49 * scale, 0}, {0, -.49 * scale, 0}};
 			var result = compressContacts(new double[]{2, 3}, input, new GranularContactCompression.Row[]{pair, floor});
