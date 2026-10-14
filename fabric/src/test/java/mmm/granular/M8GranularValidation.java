@@ -1332,6 +1332,56 @@ public final class M8GranularValidation {
 	}
 
 	private static void couplingOccupancyResumsExactly() {
+		for (double h : new double[]{.5, .1, (double) .3F, 3.0 * Float.MIN_VALUE})
+			for (int trial = 0; trial < 6; trial++) for (long volume : new long[]{3, 262127}) {
+				float[] position = {(float) ((trial == 0 ? .1 : trial == 1 ? 3.8 : 1.0) * h),
+						(float) ((trial % 2 == 0 ? .1 : 1.8) * h), (float) ((trial % 3 == 0 ? 3.8 : 1.2) * h)};
+				if (trial >= 3) position[0] = trial == 3 ? Math.nextDown(position[0]) : Math.nextUp(position[0]);
+				var length = SignedDyadic.of(h);
+				var exactH = length.exponent() >= 0
+						? new ExactRational(length.significand().shiftLeft(length.exponent()), java.math.BigInteger.ONE)
+						: new ExactRational(length.significand(), java.math.BigInteger.ONE.shiftLeft(-length.exponent()));
+				int[] base = new int[3], cells = new int[8]; var fraction = new ExactRational[3];
+				for (int axis = 0; axis < 3; axis++) {
+					var p = ExactRational.ofFloat(position[axis]);
+					var grid = new ExactRational(p.numerator().multiply(exactH.denominator()), p.denominator().multiply(exactH.numerator()))
+							.subtract(ExactRational.ONE.divide(2));
+					var division = grid.numerator().divideAndRemainder(grid.denominator());
+					base[axis] = (division[1].signum() < 0 ? division[0].subtract(java.math.BigInteger.ONE) : division[0]).intValueExact();
+					fraction[axis] = grid.subtract(ExactRational.of(base[axis]));
+				}
+				var weights = new ExactRational[8]; var sum = ExactRational.ZERO; int count = 0;
+				for (int oz = 0; oz < 2; oz++) for (int oy = 0; oy < 2; oy++) for (int ox = 0; ox < 2; ox++) {
+					int x = base[0] + ox, y = base[1] + oy, z = base[2] + oz;
+					if (x < 0 || y < 0 || z < 0 || x >= 4 || y >= 4 || z >= 4) continue;
+					cells[count] = (z * 4 + y) * 4 + x;
+					weights[count] = (ox == 0 ? ExactRational.ONE.subtract(fraction[0]) : fraction[0])
+							.multiply(oy == 0 ? ExactRational.ONE.subtract(fraction[1]) : fraction[1])
+							.multiply(oz == 0 ? ExactRational.ONE.subtract(fraction[2]) : fraction[2]);
+					sum = sum.add(weights[count++]);
+				}
+				var kernel = new GranularKernel(4, 4, 4, h); kernel.capture(position[0], position[1], position[2], volume);
+				long[] expected = new long[64]; var remainder = new ExactRational[count]; long assigned = 0;
+				for (int slot = 0; slot < count; slot++) {
+					var quota = new ExactRational(weights[slot].numerator().multiply(sum.denominator()).multiply(java.math.BigInteger.valueOf(volume)),
+							weights[slot].denominator().multiply(sum.numerator()));
+					long low = quota.numerator().divide(quota.denominator()).longValueExact();
+					remainder[slot] = quota.subtract(ExactRational.of(low)); expected[cells[slot]] = low; assigned += low;
+					require(kernel.cell(slot) == cells[slot] && kernel.floor(slot) == low
+							&& kernel.ceil(slot) == low + (remainder[slot].isZero() ? 0 : 1), "Exact kernel floor/ceil changed its independent normalized quota");
+				}
+				for (; assigned < volume; assigned++) {
+					int best = 0;
+					for (int slot = 1; slot < count; slot++) if (remainder[slot].compareTo(remainder[best]) > 0
+							|| remainder[slot].equals(remainder[best]) && cells[slot] < cells[best]) best = slot;
+					expected[cells[best]]++; remainder[best] = ExactRational.of(-1);
+				}
+				var fields = new GranularCouplingFields(4, 4, 4, h); long[] actual = new long[64];
+				require(fields.tryPlanParcel(actual, new GranularCouplingFields.Position(position[0], position[1], position[2]), volume, cell -> Long.MAX_VALUE)
+						&& Arrays.equals(expected, actual), "Canonical integer kernel allocation differs from independent rational weights");
+				fields.removePlannedParcel(actual, new GranularCouplingFields.Position(position[0], position[1], position[2]), volume);
+				require(Arrays.equals(actual, new long[64]), "Exact kernel removal differs from placement shares");
+			}
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		GranularParcelStore parcels = new GranularParcelStore(registry, 2);

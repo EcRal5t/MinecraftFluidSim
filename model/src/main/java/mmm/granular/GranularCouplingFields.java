@@ -5,14 +5,13 @@ import java.util.function.IntToLongFunction;
 
 /** Exact-SVQ occupancy and derived pressure coupling fields for one bounded solver domain. */
 public final class GranularCouplingFields {
-	private final int sizeX, sizeY, sizeZ, cellCount;
-	private final double cellSize;
+	private final int cellCount;
+	private final GranularKernel kernel;
 	private final long[] solidSvq;
 	private final long[] fixedCellSvq;
 	private final int[] candidateCell = new int[8];
-	private final double[] candidateWeight = new double[8];
 	private final long[] candidateShare = new long[8];
-	private final double[] candidateRemainder = new double[8];
+	private final boolean[] candidateRoundedUp = new boolean[8];
 	private long totalSolidSvq;
 	private long fixedSolidSvq;
 	private boolean fixedOnly = true;
@@ -21,7 +20,7 @@ public final class GranularCouplingFields {
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || !(Double.isFinite(cellSize) && cellSize > 0.0)) {
 			throw new IllegalArgumentException("Granular coupling dimensions are invalid");
 		}
-		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.cellSize = cellSize;
+		this.kernel = new GranularKernel(sizeX, sizeY, sizeZ, cellSize);
 		this.cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		this.solidSvq = new long[cellCount];
 		this.fixedCellSvq = new long[cellCount];
@@ -223,39 +222,27 @@ public final class GranularCouplingFields {
 		if (!(Float.isFinite(positionX) && Float.isFinite(positionY) && Float.isFinite(positionZ)) || parcelSvq <= 0L) {
 			throw new IllegalArgumentException("Granular occupancy parcel is invalid");
 		}
-		double gx = positionX / cellSize - 0.5, gy = positionY / cellSize - 0.5, gz = positionZ / cellSize - 0.5;
-		int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
-		double fx = gx - x0, fy = gy - y0, fz = gz - z0;
-		int candidates = 0;
-		double weightSum = 0.0;
-		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
-			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
-			if (x < 0 || x >= sizeX || y < 0 || y >= sizeY || z < 0 || z >= sizeZ) continue;
-			double weight = (ox == 0 ? 1.0 - fx : fx) * (oy == 0 ? 1.0 - fy : fy) * (oz == 0 ? 1.0 - fz : fz);
-			candidateCell[candidates] = (z * sizeY + y) * sizeX + x;
-			candidateWeight[candidates] = weight;
-			weightSum += weight;
-			candidates++;
-		}
-		if (!(weightSum > 0.0)) throw new IllegalStateException("Granular parcel has no in-domain occupancy support");
+		kernel.capture(positionX, positionY, positionZ, parcelSvq);
+		int candidates = kernel.size();
 		long assigned = 0L;
 		for (int candidate = 0; candidate < candidates; candidate++) {
-			double exact = parcelSvq * candidateWeight[candidate] / weightSum;
-			long share = (long) Math.floor(exact);
+			candidateCell[candidate] = kernel.cell(candidate);
+			long share = kernel.floor(candidate);
 			candidateShare[candidate] = share;
-			candidateRemainder[candidate] = exact - share;
+			candidateRoundedUp[candidate] = false;
 			assigned = Math.addExact(assigned, share);
 		}
 		long remaining = parcelSvq - assigned;
 		while (remaining-- > 0L) {
-			int best = 0;
-			for (int candidate = 1; candidate < candidates; candidate++) {
-				if (candidateRemainder[candidate] > candidateRemainder[best]
-						|| candidateRemainder[candidate] == candidateRemainder[best]
-						&& candidateCell[candidate] < candidateCell[best]) best = candidate;
+			int best = -1;
+			for (int candidate = 0; candidate < candidates; candidate++) {
+				if (candidateRoundedUp[candidate] || kernel.ceil(candidate) == candidateShare[candidate]) continue;
+				int order = best < 0 ? 1 : kernel.compareRemainder(candidate, best);
+				if (order > 0 || order == 0 && candidateCell[candidate] < candidateCell[best]) best = candidate;
 			}
+			if (best < 0) throw new IllegalStateException("Granular kernel lacks its required integer remainder");
 			candidateShare[best]++;
-			candidateRemainder[best] = -1.0;
+			candidateRoundedUp[best] = true;
 		}
 		return candidates;
 	}
