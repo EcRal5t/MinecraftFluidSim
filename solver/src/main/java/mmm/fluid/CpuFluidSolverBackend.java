@@ -46,7 +46,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 				} catch (MechanicalTimeRefinement finer) {
 					refinementReason = finer.getMessage();
 					if (refinement >= MAXIMUM_TIME_REFINEMENTS) throw finer;
-					minimumSubsteps = Math.max(Math.multiplyExact(minimumSubsteps, 2), finer.minimumSubsteps);
+					minimumSubsteps = refinedSubsteps(substeps, finer);
 					continue;
 				}
 				candidate.minimumMechanicalSubsteps = 1;
@@ -57,6 +57,11 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 		} catch (RuntimeException rejected) {
 			throw candidateFailure("mechanical", rejected);
 		}
+	}
+
+	/** Refinement halves the attempted step, including a larger initial CFL count. */
+	static int refinedSubsteps(int attempted, MechanicalTimeRefinement finer) {
+		return Math.max(Math.multiplyExact(attempted, 2), finer.minimumSubsteps);
 	}
 
 	@Override public FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) {

@@ -70,6 +70,9 @@ public final class LiquidVolumeTransportValidation {
 	}
 
 	private static void representationRemapReportsLogicalMoments() {
+		for (int[] counts : new int[][]{{1, 2, 2}, {32, 2, 64}, {32, 96, 96}})
+			if (CpuFluidSolverBackend.refinedSubsteps(counts[0], new MechanicalTimeRefinement(counts[1])) != counts[2])
+				throw new AssertionError("Mechanical refinement repeated an actual CFL-selected step or lost a requested count");
 		var domain = representationRemapDomain(3, 3, 3, true);
 		domain.captureAuthoritativeState();
 		SignedDyadic before = liquidVerticalMassMoment(domain);

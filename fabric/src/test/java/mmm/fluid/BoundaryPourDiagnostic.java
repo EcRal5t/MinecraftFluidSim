@@ -64,7 +64,7 @@ public final class BoundaryPourDiagnostic {
 					if (substep < 4 || substep % 128 == 0) snapshot(domain, attempt, substep, dt, "complete", fluxOnly);
 				} catch (MechanicalTimeRefinement finer) {
 					snapshot(domain, attempt, substep, dt, "refine=" + finer.getMessage(), fluxOnly);
-					minimum = Math.max(Math.multiplyExact(minimum, 2), finer.minimumSubsteps);
+					minimum = CpuFluidSolverBackend.refinedSubsteps(count, finer);
 					refined = true; break;
 				} catch (RuntimeException failed) {
 					snapshot(domain, attempt, substep, dt, "failed=" + failed, fluxOnly);

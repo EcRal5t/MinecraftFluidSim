@@ -28,7 +28,7 @@ final class PressureConditionValidation {
 					break;
 				} catch (MechanicalTimeRefinement finer) {
 					if (attempt == 16) throw finer;
-					minimum = Math.max(Math.multiplyExact(minimum, 2), finer.minimumSubsteps);
+					minimum = CpuFluidSolverBackend.refinedSubsteps(substeps, finer);
 				} catch (FluidDomain.PressureSolveBlockedException failed) {
 					System.out.printf("CHEM logical=%d attempt=%d substeps=%d pressureFailure=%s%n", logical, attempt, substeps, failed);
 					compareChemicalPressure(d, logical, attempt, substeps); throw failed;
