@@ -259,10 +259,10 @@ public final class BoundaryPourDiagnostic {
 				worst < 0 ? 0 : rhs[worst], worst < 0 ? 0 : pressure[worst]);
 		var origin = value(projection, "pressureOrigin", double[].class);
 		if (origin != null) {
-			var rate = new double[rhs.length]; operator.volumeRate(value(projection, "wallPredictor", double[][].class), rate);
-			var source = operator.referencedSource(rate, value(projection, "dt", Float.class),
+			var source = operator.referencedSource(value(projection, "wallPredictor", double[][].class), value(projection, "dt", Float.class),
 					value(projection, "gasInitialPressure", double[].class), origin);
-			var residual = new double[rhs.length]; operator.residual(value(projection, "pressureCorrection", double[].class), source, residual);
+			var residual = new double[rhs.length]; operator.residual(value(projection, "pressureCorrection", double[].class),
+					value(projection, "pressureCorrectionLow", double[].class), source, residual);
 			double actual = 0; for (double value : residual) actual = Math.hypot(actual, value);
 			System.out.printf("POUR pressure referencedResidual=%g%n", actual / Math.sqrt(Math.max(1, rhs.length)));
 		}
@@ -289,14 +289,14 @@ public final class BoundaryPourDiagnostic {
 		var pressure = value(projection, "pressure", double[].class);
 		var origin = value(projection, "pressureOrigin", double[].class);
 		var correction = value(projection, "pressureCorrection", double[].class);
+		var correctionLow = value(projection, "pressureCorrectionLow", double[].class);
 		var storage = value(projection, "storage", double[].class);
 		var initial = value(projection, "gasInitialPressure", double[].class);
 		var operator = projection.operator();
-		var force = new double[3][basis.markerCount()]; operator.force(correction, origin, force);
+		var force = new double[3][basis.markerCount()]; operator.force(correction, origin, correctionLow, force);
 		var rate = new double[pressure.length]; operator.volumeRate(after, rate);
-		var predictorRate = new double[pressure.length]; operator.volumeRate(before, predictorRate);
 		var residual = new double[pressure.length];
-		operator.residual(correction, operator.referencedSource(predictorRate, dt, initial, origin), residual);
+		operator.residual(correction, correctionLow, operator.referencedSource(before, dt, initial, origin), residual);
 		var step = SignedDyadic.of(dt); var stepSquared = step.multiply(step);
 		var change = mmm.units.SignedDyadic.ZERO; var impulseEnergy = mmm.units.SignedDyadic.ZERO;
 		var actualWork = mmm.units.SignedDyadic.ZERO;
@@ -311,7 +311,7 @@ public final class BoundaryPourDiagnostic {
 		var gasWork = mmm.units.SignedDyadic.ZERO; var residualWork = mmm.units.SignedDyadic.ZERO;
 		double maximumPressure = 0, maximumResidual = 0, maximumRateDefect = 0; int worst = -1;
 		for (int row = 0; row < pressure.length; row++) {
-			var p = SignedDyadic.of(origin[row]).add(SignedDyadic.of(correction[row]));
+			var p = SignedDyadic.of(origin[row]).add(SignedDyadic.of(correction[row])).add(SignedDyadic.of(correctionLow[row]));
 			var response = SignedDyadic.of(storage[row]).multiply(SignedDyadic.of(initial[row]).subtract(p));
 			var rowWork = response.multiply(p).multiply(stepSquared);
 			gasWork = gasWork.add(rowWork);

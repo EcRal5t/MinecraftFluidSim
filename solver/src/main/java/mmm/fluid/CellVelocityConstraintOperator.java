@@ -204,6 +204,10 @@ final class CellVelocityConstraintOperator {
 	void volumeRate(double[][] velocity, double[] result) {
 		checkMarkers(velocity); checkRows(result);
 		for (double[] axis : velocity) if (axis == result) throw new IllegalArgumentException("Aliased constraint vectors");
+		prepareVelocityResponse(velocity);
+		for (int row = 0; row < rowCount(); row++) result[row] = rowResponse(row).toDouble();
+	}
+	private void prepareVelocityResponse(double[][] velocity) {
 		Arrays.fill(cellResponse, SignedDyadic.ZERO);
 		for (int slot = 0; slot < factors.length; slot++) {
 			Factor factor = factors[slot];
@@ -213,7 +217,6 @@ final class CellVelocityConstraintOperator {
 						.add(basis.coefficientExact(marker, factor.axis, term).multiply(value));
 			}
 		}
-		for (int row = 0; row < rowCount(); row++) result[row] = rowResponse(row).toDouble();
 	}
 
 	/** L^T D^T p, preserving the same exact virtual-work pairing as volumeRate. */
@@ -221,13 +224,17 @@ final class CellVelocityConstraintOperator {
 		force(pressure, null, result);
 	}
 	void force(double[] pressure, double[] reference, double[][] result) {
+		force(pressure, reference, null, result);
+	}
+	void force(double[] pressure, double[] reference, double[] low, double[][] result) {
 		checkRows(pressure); checkMarkers(result);
 		if (reference != null) checkRows(reference);
+		if (low != null) checkRows(low);
 		for (double[] axis : result) {
-			if (axis == pressure || axis == reference) throw new IllegalArgumentException("Aliased constraint vectors");
+			if (axis == pressure || axis == reference || axis == low) throw new IllegalArgumentException("Aliased constraint vectors");
 			Arrays.fill(axis, 0);
 		}
-		prepareLoad(pressure, reference);
+		prepareLoad(pressure, reference, low);
 		for (int slot = 0; slot < factors.length; slot++) {
 			Factor factor = factors[slot];
 			for (int ordinal = 0; ordinal < basis.blockMarkerCount(factor.velocityBlock); ordinal++) {
@@ -241,10 +248,14 @@ final class CellVelocityConstraintOperator {
 		prepareLoad(pressure, null);
 	}
 	private void prepareLoad(double[] pressure, double[] reference) {
+		prepareLoad(pressure, reference, null);
+	}
+	private void prepareLoad(double[] pressure, double[] reference, double[] low) {
 		Arrays.fill(cellLoad, SignedDyadic.ZERO);
 		for (int row = 0; row < rowCount(); row++) {
 			SignedDyadic value = SignedDyadic.of(pressure[row]);
 			if (reference != null) value = value.add(SignedDyadic.of(reference[row]));
+			if (low != null) value = value.add(SignedDyadic.of(low[row]));
 			for (int entry = factorOffsets[row]; entry < factorOffsets[row + 1]; entry++) {
 				int index = factorIndices[entry]; cellLoad[index] = cellLoad[index].add(factorCoefficients[entry].multiply(value));
 			}
@@ -278,23 +289,35 @@ final class CellVelocityConstraintOperator {
 	}
 
 	/** The affine pressure source is reduced before rounding its small residual. */
-	SignedDyadic[] referencedSource(double[] rate, float dt, double[] initial, double[] reference) {
-		checkRows(rate); checkRows(initial); checkRows(reference);
+	SignedDyadic[] referencedSource(double[][] predictor, float dt, double[] initial, double[] reference) {
+		checkMarkers(predictor); checkRows(initial); checkRows(reference);
 		if (!(dt > 0 && Float.isFinite(dt))) throw new IllegalArgumentException("Invalid pressure source time step");
+		prepareVelocityResponse(predictor);
+		var rate = new SignedDyadic[rowCount()];
+		for (int row = 0; row < rowCount(); row++) rate[row] = rowResponse(row);
+		// A common reciprocal preserves the exact C relations before the source is observed.
+		var inverseTime = SignedDyadic.of(1.0 / dt);
 		prepareLoad(reference); respondToLoad();
 		var result = new SignedDyadic[rowCount()];
 		for (int row = 0; row < rowCount(); row++) result[row] = exactStorage[row]
 				.multiply(SignedDyadic.of(initial[row]).subtract(SignedDyadic.of(reference[row])))
-				.subtract(SignedDyadic.of(rate[row] / dt)).subtract(rowResponse(row));
+				.subtract(rate[row].multiply(inverseTime)).subtract(rowResponse(row));
 		return result;
 	}
 	void residual(double[] pressure, SignedDyadic[] source, double[] result) {
+		residual(pressure, null, source, result);
+	}
+	void residual(double[] pressure, double[] low, SignedDyadic[] source, double[] result) {
 		checkRows(pressure); checkRows(result);
-		if (source == null || source.length != rowCount() || pressure == result)
+		if (low != null) checkRows(low);
+		if (source == null || source.length != rowCount() || pressure == result || result == low)
 			throw new IllegalArgumentException("Invalid exact pressure residual vectors");
-		prepareLoad(pressure); respondToLoad();
-		for (int row = 0; row < rowCount(); row++) result[row] = source[row].subtract(rowResponse(row))
-				.subtract(exactStorage[row].multiply(SignedDyadic.of(pressure[row]))).toDouble();
+		prepareLoad(pressure, low); respondToLoad();
+		for (int row = 0; row < rowCount(); row++) {
+			SignedDyadic value = SignedDyadic.of(pressure[row]);
+			if (low != null) value = value.add(SignedDyadic.of(low[row]));
+			result[row] = source[row].subtract(rowResponse(row)).subtract(exactStorage[row].multiply(value)).toDouble();
+		}
 	}
 
 	/** Exact local mass work equals |L^T D^T p|^2/M, independently of pressure-row cancellation. */
