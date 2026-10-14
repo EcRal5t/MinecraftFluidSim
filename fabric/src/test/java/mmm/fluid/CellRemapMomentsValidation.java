@@ -1010,13 +1010,24 @@ public final class CellRemapMomentsValidation {
 		}
 		double beforePotential = domain.gravitationalPotentialEnergyJoules();
 		domain.rebuildGridFromParticles();
+		domain.bootstrapGasState(""); var sourceGas = domain.gasState.frame;
 		var flux = new ConservativeLiquidFlux(2, 2, 2);
 		java.util.Arrays.fill(flux.exactFlux, mmm.units.SignedDyadic.ZERO);
 		var capacities = new mmm.units.SignedDyadic[domain.cellCount];
 		java.util.Arrays.fill(capacities, mmm.units.SignedDyadic.of(1));
 		capacities[0] = mmm.units.SignedDyadic.of(0.5);
 		flux.geometricResult(domain.markerGrid.exactCellVolumeInventory, capacities);
-		var remap = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true);
+		var occupied = new long[domain.cellCount]; occupied[0] = mmm.granular.SolidVolume.SVQ_PER_CELL / 2;
+		var remap = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true, occupied);
+		domain.gasTopologyCoordinator.requireBeforeCarrierCommit(remap.gasTopology);
+		check(domain.gasState.frame == sourceGas && remap.gasTopology.frame().poreVolume(0).equals(capacities[0]),
+				"Prospective solid remap changed its source or supplied a different gas pore capacity");
+		occupied[0] = 0;
+		check(remap.gasTopology.frame().poreVolume(0).equals(capacities[0]), "Gas successor aliases prospective occupancy");
+		try {
+			new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true, occupied);
+			throw new AssertionError("Remap accepted conflicting liquid and gas pore capacities");
+		} catch (IllegalArgumentException expected) { }
 		var volume = mmm.units.SignedDyadic.ZERO;
 		double[] moment = new double[3], second = new double[3];
 		for (var marker : remap.markers) {

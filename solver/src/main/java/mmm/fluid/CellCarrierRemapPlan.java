@@ -44,8 +44,21 @@ final class CellCarrierRemapPlan {
 		this(domain, flux, dt, ballistic, false);
 	}
 
-	@SuppressWarnings("unchecked")
 	CellCarrierRemapPlan(FluidDomain domain, ConservativeLiquidFlux flux, float dt, BallisticLiquidRemap ballistic, boolean geometryRemap) {
+		this(domain, flux, dt, ballistic, geometryRemap, null);
+	}
+
+	@SuppressWarnings("unchecked")
+	CellCarrierRemapPlan(FluidDomain domain, ConservativeLiquidFlux flux, float dt, BallisticLiquidRemap ballistic,
+	                     boolean geometryRemap, long[] futureOccupied) {
+		if (futureOccupied != null && (!geometryRemap || futureOccupied.length != domain.cellCount))
+			throw new IllegalArgumentException("Future solid occupancy requires a complete geometry remap");
+		if (futureOccupied != null) for (int cell = 0; cell < futureOccupied.length; cell++) {
+			var capacity = SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell))
+					.subtract(SignedDyadic.of(futureOccupied[cell], -24));
+			if (futureOccupied[cell] < 0 || capacity.signum() < 0 || !capacity.equals(flux.finalCapacity(cell)))
+				throw new IllegalArgumentException("Liquid and gas remap require the same future pore capacity at cell " + cell);
+		}
 		this.domain = domain;
 		this.dt = dt;
 		this.geometryRemap = geometryRemap;
@@ -135,7 +148,8 @@ final class CellCarrierRemapPlan {
 		markers.copyFrom(ballistic.markers, sampledCount + retainedMarkers.size());
 		energyRoundoff = validateInventories(flux, ballistic);
 		momentAudit = momentAudit();
-		long[] occupied = geometryRemap || domain.granularState == null || domain.granularState.parcels.count() == 0
+		long[] occupied = futureOccupied;
+		if (occupied == null) occupied = geometryRemap || domain.granularState == null || domain.granularState.parcels.count() == 0
 				? (domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq())
 				: domain.granularNextCoupling.copySolidSvq();
 		gasTopology = domain.gasState.frame == null ? null : domain.gasTopologyCoordinator.planAfterLiquidEdits(

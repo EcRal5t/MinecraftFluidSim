@@ -19,7 +19,20 @@ final class GranularLiquidDisplacement {
 	static FluidDomain.LiquidTransportStats commit(FluidDomain domain, long[] previous) {
 		if (previous == null) return FluidDomain.LiquidTransportStats.INACTIVE;
 		long[] next = domain.granularCoupling.copySolidSvq();
-		if (Arrays.equals(previous, next)) return FluidDomain.LiquidTransportStats.INACTIVE;
+		var candidate = prepare(domain, previous, next);
+		if (candidate == null) return FluidDomain.LiquidTransportStats.INACTIVE;
+		domain.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), domain.particles.count()), candidate);
+		if (domain.cellLiquidVolumeTransport == null) domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
+		domain.cellLiquidVolumeTransport.publishedQuadrature = true;
+		domain.cellLiquidVolumeTransport.momentAudit = candidate.momentAudit;
+		return candidate.momentAudit.stats();
+	}
+
+	/** Prepares liquid and gas successors against the same prospective solid distribution. */
+	static CellCarrierRemapPlan prepare(FluidDomain domain, long[] previous, long[] next) {
+		if (previous == null || next == null || previous.length != domain.cellCount || next.length != domain.cellCount)
+			throw new IllegalArgumentException("Solid representation remap requires complete source and future occupancy");
+		if (Arrays.equals(previous, next)) return null;
 		var budget = new Budget();
 		long faces = (long) (domain.sizeX - 1) * domain.sizeY * domain.sizeZ
 				+ (long) domain.sizeX * (domain.sizeY - 1) * domain.sizeZ
@@ -31,6 +44,7 @@ final class GranularLiquidDisplacement {
 		SignedDyadic[] capacity = new SignedDyadic[domain.cellCount], displaced = new SignedDyadic[domain.cellCount];
 		long totalBefore = 0, totalAfter = 0;
 		for (int c = 0; c < volume.length; c++) {
+			if (previous[c] < 0 || next[c] < 0) throw new IllegalArgumentException("Solid representation occupancy cannot be negative");
 			totalBefore = Math.addExact(totalBefore, previous[c]); totalAfter = Math.addExact(totalAfter, next[c]);
 			SignedDyadic open = SignedDyadic.of(domain.geometry.cutCells.openCellVolume(c));
 			SignedDyadic old = open.subtract(solidVolume(previous[c])); capacity[c] = open.subtract(solidVolume(next[c]));
@@ -83,14 +97,9 @@ final class GranularLiquidDisplacement {
 		}
 		for (int c = 0; c < volume.length; c++) if (volume[c].compareTo(capacity[c]) > 0)
 			throw new IllegalStateException("Solid representation remap exceeds final joint capacity at cell " + c);
-		if (!changed) return FluidDomain.LiquidTransportStats.INACTIVE;
+		if (!changed) return null;
 		flux.geometricResult(volume, capacity);
-		var candidate = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true);
-		domain.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), domain.particles.count()), candidate);
-		if (domain.cellLiquidVolumeTransport == null) domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
-		domain.cellLiquidVolumeTransport.publishedQuadrature = true;
-		domain.cellLiquidVolumeTransport.momentAudit = candidate.momentAudit;
-		return candidate.momentAudit.stats();
+		return new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true, next);
 	}
 
 	private static final class Budget {
