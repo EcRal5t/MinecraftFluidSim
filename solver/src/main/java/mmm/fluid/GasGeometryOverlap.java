@@ -70,6 +70,35 @@ final class GasGeometryOverlap {
 	private static boolean zeroNormal(HalfSpace plane) {
 		return plane.nx().signum() == 0 && plane.ny().signum() == 0 && plane.nz().signum() == 0;
 	}
+
+	/** Positive linear maximum on a positive-volume half-space/box intersection. */
+	static ExactRational maximumLinearValue(int micro, HalfSpace support, HalfSpace function) {
+		if (micro < 0 || micro >= 8 || support == null || function == null)
+			throw new IllegalArgumentException("Invalid linear microbox maximum");
+		boolean unrestricted = zeroNormal(support);
+		if (unrestricted && support.threshold().signum() > 0) return ExactRational.ZERO;
+		SignedDyadic[] distance = new SignedDyadic[8], values = new SignedDyadic[8];
+		boolean positiveVolume = unrestricted;
+		ExactRational maximum = ExactRational.ZERO;
+		for (int corner = 0; corner < 8; corner++) {
+			distance[corner] = unrestricted ? SignedDyadic.of(1) : cornerDistance(micro, corner, support);
+			values[corner] = cornerDistance(micro, corner, function);
+			positiveVolume |= distance[corner].signum() > 0;
+			if (distance[corner].signum() >= 0 && values[corner].signum() > 0) {
+				var value = exact(values[corner]); if (value.compareTo(maximum) > 0) maximum = value;
+			}
+		}
+		if (!positiveVolume) return ExactRational.ZERO;
+		if (!unrestricted) for (int corner = 0; corner < 8; corner++) for (int axis = 0; axis < 3; axis++) {
+			if ((corner & 1 << axis) != 0) continue;
+			int peer = corner | 1 << axis;
+			if (distance[corner].signum() * distance[peer].signum() >= 0) continue;
+			var numerator = values[corner].multiply(distance[peer]).subtract(values[peer].multiply(distance[corner]));
+			var value = PlicComponentGeometry.ratio(numerator, distance[peer].subtract(distance[corner]));
+			if (value.compareTo(maximum) > 0) maximum = value;
+		}
+		return maximum;
+	}
 	private static SignedDyadic cornerDistance(int micro, int corner, HalfSpace plane) {
 		return plane.nx().multiply(SignedDyadic.of((micro & 1) + (corner & 1), -1))
 				.add(plane.ny().multiply(SignedDyadic.of((micro >>> 1 & 1) + (corner >>> 1 & 1), -1)))

@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import mmm.chemistry.ExactRational;
+import mmm.units.SignedDyadic;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -11,9 +12,11 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 	private final CellAffineVelocityField.FaceTrace[][] trace;
 	private final double[] outgoing;
 	private final LiquidAffineSweepGeometry.MicroSweep[][] sweeps;
+	private final double[][] sourceBounds;
 	private final AtomicLong retained = new AtomicLong();
 	private final long retentionLimit;
 	private final long sourceRevision;
+	private final long phaseRevision;
 
 	LiquidAffineFaceFlow(FluidDomain domain, ConservativeLiquidFlux faces, CellAffineVelocityField field) {
 		this(domain, faces, field, availableMemory() / 16);
@@ -21,11 +24,13 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 	LiquidAffineFaceFlow(FluidDomain domain, ConservativeLiquidFlux faces, CellAffineVelocityField field, long retentionLimit) {
 		this.domain = domain; this.faces = faces;
 		sourceRevision = domain.carrierMutationRevision();
+		phaseRevision = domain.pressurePhaseGeometry.revision();
 		if (retentionLimit < 0) throw new IllegalArgumentException("Negative affine sweep retention budget");
 		this.retentionLimit = retentionLimit;
 		outgoing=new double[field.blockCount()];
 		trace = new CellAffineVelocityField.FaceTrace[2 * faces.physicalFaceCount][];
 		sweeps = new LiquidAffineSweepGeometry.MicroSweep[trace.length][];
+		sourceBounds = new double[trace.length][];
 		for (int f = 0; f < faces.physicalFaceCount; f++) for (int direction = 0; direction < 2; direction++) {
 			int donor = direction == 0 ? faces.left[f] : faces.right[f];
 			if (!field.hasCell(donor)) continue;
@@ -34,6 +39,8 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 				throw new FluidDomain.PressureSolveBlockedException("Nonfinite liquid normal trace");
 			trace[f + direction * faces.physicalFaceCount] = components;
 			sweeps[f + direction * faces.physicalFaceCount] = new LiquidAffineSweepGeometry.MicroSweep[components.length];
+			sourceBounds[f + direction * faces.physicalFaceCount] = new double[components.length];
+			Arrays.fill(sourceBounds[f + direction * faces.physicalFaceCount], Double.NaN);
 		}
 	}
 	private static long availableMemory() {
@@ -80,18 +87,58 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		if (components == null) return 0;
 		double maximum = 0;
 		for (var component : components) {
-			maximum=Math.max(maximum,outwardBound(face,positive,verticalPrediction,component.q()));
+			maximum=Math.max(maximum,outwardBound(face,positive,verticalPrediction,component));
 		}
 		return maximum;
 	}
-	private double outwardBound(int face,boolean positive,double prediction,double[] q) {
-		double a=q[0]+(faces.axis[face]==1 ? prediction : 0);
-		double b=positive ? Math.max(0,q[1]) : Math.min(0,q[1]);
-		double c=positive ? Math.max(0,q[2]) : Math.min(0,q[2]);
-		if(a==0 && b==0 && c==0)return 0;
-		double bound=positive ? Math.nextUp(Math.nextUp(a+b)+c) : Math.nextDown(Math.nextDown(a+b)+c);
-		if(!Double.isFinite(bound))throw new FluidDomain.PressureSolveBlockedException("Unrepresentable affine face Courant bound");
-		return Math.max(0,positive ? bound : -bound);
+	private double outwardBound(int face, boolean positive, double prediction, CellAffineVelocityField.FaceTrace component) {
+		int slot = face + (positive ? 0 : faces.physicalFaceCount), cached = -1;
+		if (prediction == 0 && phaseRevision == domain.pressurePhaseGeometry.revision()
+				&& sourceRevision == domain.carrierMutationRevision()) {
+			for (int i = 0; i < trace[slot].length; i++) if (trace[slot][i] == component) { cached = i; break; }
+			if (cached >= 0 && !Double.isNaN(sourceBounds[slot][cached])) return sourceBounds[slot][cached];
+		}
+		int axis = faces.axis[face], donor = positive ? faces.left[face] : faces.right[face];
+		int receiver = positive ? faces.right[face] : faces.left[face], support = component.support();
+		double[] q = component.q();
+		if (q[0] == 0 && q[1] == 0 && q[2] == 0 && (axis != 1 || prediction == 0)) return 0;
+		var sign = SignedDyadic.of(positive ? 1 : -1);
+		SignedDyadic[] normal = {SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO};
+		normal[(axis + 1) % 3] = SignedDyadic.of(q[1]).multiply(sign);
+		normal[(axis + 2) % 3] = SignedDyadic.of(q[2]).multiply(sign);
+		var intercept = SignedDyadic.of(q[0]).add(SignedDyadic.of(axis == 1 ? prediction : 0)).multiply(sign);
+		var function = new GasGeometryOverlap.HalfSpace(normal[0], normal[1], normal[2], intercept.negate());
+		var cut = domain.geometry.cutCells;
+		ExactRational maximum = ExactRational.ZERO;
+		for (int micro = 0; micro < 8; micro++) {
+			int faceMicro = positive ? micro | 1 << axis : micro & ~(1 << axis), peer = faceMicro ^ 1 << axis;
+			if ((support & 1 << micro) == 0 || (support & 1 << faceMicro) == 0
+					|| (cut.mask(donor) & (1 << micro | 1 << faceMicro)) != 0 || (cut.mask(receiver) & 1 << peer) != 0) continue;
+			var value = GasGeometryOverlap.maximumLinearValue(micro,
+					LiquidAffineSweepGeometry.wetSourcePlane(domain, donor, micro), function);
+			if (value.compareTo(maximum) > 0) maximum = value;
+		}
+		double bound = maximum.toDouble();
+		if (!Double.isFinite(bound)) throw new FluidDomain.PressureSolveBlockedException("Unrepresentable affine source Courant bound");
+		if (PlicComponentGeometry.ratio(SignedDyadic.of(bound), SignedDyadic.of(1)).compareTo(maximum) < 0) bound = Math.nextUp(bound);
+		if (!Double.isFinite(bound)) throw new FluidDomain.PressureSolveBlockedException("Unrepresentable affine source Courant bound");
+		if (cached >= 0) sourceBounds[slot][cached] = bound;
+		return bound;
+	}
+	@Override public double sourceCourant(LiquidFluxGeometry geometry, double dtOverH) {
+		return courantRate(geometry, 0) * dtOverH * domain.config.cellSize();
+	}
+	@Override public double liquidTransferUpperBound(int face, boolean positive, double dtOverH) {
+		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
+		if (components == null) return 0;
+		var geometry = new LiquidFluxGeometry(domain); double rate = 0;
+		for (var component : components) {
+			double open = geometry.aperture(faces.left[face], faces.right[face], faces.axis[face],
+					positive ? component.support() : 255, positive ? 255 : component.support());
+			double bound = outwardBound(face, positive, 0, component);
+			if (bound > 0 && open > 0) rate = Math.nextUp(rate + Math.nextUp(bound * open));
+		}
+		return rate == 0 ? 0 : Math.nextUp(rate * dtOverH);
 	}
 	double courantRate(LiquidFluxGeometry geometry,double prediction) {
 		Arrays.fill(outgoing,0); double maximum=0,h=domain.config.cellSize();
@@ -105,7 +152,7 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 				for(var component:components) {
 					double open=geometry.aperture(left,right,faces.axis[face],positive ? component.support() : 255,positive ? 255 : component.support());
 					if(!(open>0))continue;
-					double speed=outwardBound(face,positive,prediction,component.q());
+					double speed=outwardBound(face,positive,prediction,component);
 					// This field belongs to the liquid-only path; each open microbox has its full capacity.
 					double capacity=Integer.bitCount(component.support())*.125;
 					outgoing[component.velocityBlock()]+=speed/h*open/capacity;

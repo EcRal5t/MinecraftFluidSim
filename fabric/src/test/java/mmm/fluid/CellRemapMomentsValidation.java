@@ -228,6 +228,8 @@ public final class CellRemapMomentsValidation {
 					"Actual FCT consumer did not retain the common phase transfer");
 		}
 		domain.setVolume(1, 1, 1, 1);
+		domain.rebuildGridFromParticles();
+		var fullCache = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5, 255);
 		for (int p = 0; p < domain.particleCount(); p++) domain.particles.setVolume(p,
 				p < 3 ? Math.nextDown(Math.scalb(1F, -24 * p)) : Float.MIN_NORMAL);
 		domain.rebuildGridFromParticles();
@@ -239,6 +241,17 @@ public final class CellRemapMomentsValidation {
 				new double[]{.25, 0, 0}, .5, 255, 255, open, liquid, dry); }
 		catch (IllegalStateException lostPlane) { rejected = lostPlane.getMessage().contains("no PLIC plane"); }
 		check(rejected, "Rounded full-phase observation discarded a positive exact dry inventory");
+		check(!fullCache.matches(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5),
+				"Unchanged rounded phase columns hid changed exact stock from the saved sweep");
+		for (boolean micro : new boolean[]{false, true}) {
+			rejected = false;
+			try {
+				if (micro) LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, donor + 1, 0, true,
+						.25, 0, 0, .5, 255, 255, new double[8], new double[8]);
+				else LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, donor + 1, 0, true, .25, 0, 0, .5, 255, 255);
+			} catch (IllegalStateException lostPlane) { rejected = lostPlane.getMessage().contains("no PLIC plane"); }
+			check(rejected, "High-order or wet source measure discarded the positive exact dry inventory");
+		}
 		domain.setVolume(1, 1, 1, .5F);
 		for (int p = 0; p < domain.particleCount(); p++) {
 			domain.particles.setPositionX(p, 1.75F); domain.particles.setPositionY(p, 1.5F); domain.particles.setPositionZ(p, 1.5F);
@@ -264,6 +277,50 @@ public final class CellRemapMomentsValidation {
 		check(refined, "Three-axis low-order overdraw did not request mechanical time refinement");
 		supplyFaces.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, .5, domain.markerGrid.exactCellVolumeInventory);
 		check(supplyFaces.resultingVolumes()[donor].signum() >= 0, "Refined low-order plan lost source positivity");
+		for (int thinAxis = 0; thinAxis < 3; thinAxis++) {
+			domain.setVolume(1, 1, 1, 1F / 64);
+			for (int p = 0; p < domain.particleCount(); p++) {
+				domain.particles.setPositionX(p, thinAxis == 0 ? 1F + 1F / 128 : 1.5F);
+				domain.particles.setPositionY(p, thinAxis == 1 ? 1F + 1F / 128 : 1.5F);
+				domain.particles.setPositionZ(p, thinAxis == 2 ? 1F + 1F / 128 : 1.5F);
+			}
+			domain.rebuildGridFromParticles();
+			int flowAxis = (thinAxis + 1) % 3, stride = flowAxis == 0 ? 1 : flowAxis == 1 ? domain.sizeX : domain.sizeX * domain.sizeY;
+			var thinBasis = CellAffineVelocity.capture(domain);
+			for (int sign : new int[]{-1, 1}) for (int intercept : new int[]{0, -4}) {
+				int next = donor + sign * stride;
+				double[] q = {sign * intercept, 0, sign * 1024};
+				LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, next, flowAxis, sign > 0,
+						q, 1.0 / 2048, 255, 255, open, liquid, dry);
+				var total = mmm.chemistry.ExactRational.ZERO;
+				for (int m = 0; m < 8; m++) {
+					check(open[m].equals(liquid[m].add(dry[m])) && liquid[m].signum() >= 0 && dry[m].signum() >= 0,
+							"Thin partial microbox lost its exact phase flux decomposition");
+					total = total.add(liquid[m]);
+				}
+				check(total.equals(intercept == 0 ? mmm.chemistry.ExactRational.ONE.divide(16384)
+						: mmm.chemistry.ExactRational.of(9).divide(262144)),
+						"Microbox phase/trace correlation was replaced by the dry-corner velocity mean: " + total);
+				var high = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, next, flowAxis, sign > 0,
+						q[0], q[1], q[2], 1.0 / 2048, 255, 255);
+				check(high[0].equals(total), "Tangential thin phase low/high measures disagree");
+				double[][] thinCoefficients = new double[3][4 * thinBasis.blockCount()];
+				thinCoefficients[flowAxis][4 * donor] = sign * (8 + intercept);
+				thinCoefficients[flowAxis][4 * donor + thinAxis + 1] = sign * 1024;
+				thinCoefficients[thinAxis][4 * donor] = .25;
+				var thinFaces = new ConservativeLiquidFlux(3, 3, 3);
+				var thinFlow = new LiquidAffineFaceFlow(domain, thinFaces, new CellAffineVelocityField(thinBasis, thinCoefficients));
+				for (int f = 0; f < thinFaces.physicalFaceCount; f++) {
+					if (thinFaces.axis[f] == flowAxis && (sign > 0 ? thinFaces.left[f] : thinFaces.right[f]) == donor)
+						precise(thinFlow.maximumOutwardSpeed(f, sign > 0, 0), 16 + intercept, "Actual wet projected peak excludes the dry corner");
+					if (thinFaces.axis[f] == thinAxis && thinFaces.left[f] == donor) {
+						check(domain.pressurePhaseGeometry.wetFacePolygon(donor, thinAxis, 1, 0, 0, 1)[0].length == 0,
+								"Interior wet source counterexample has a wet current exit face");
+						precise(thinFlow.maximumOutwardSpeed(f, true, 0), .25, "Interior wet source retains its future exit speed");
+					}
+				}
+			}
+		}
 	}
 
 	private static void limitedFluxMixesTheSamePositiveMomentWeights() {

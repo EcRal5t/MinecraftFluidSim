@@ -8,6 +8,8 @@ import java.util.Arrays;
 final class ConservativeLiquidFlux {
 	@FunctionalInterface
 	interface FaceSweep {
+		default double sourceCourant(LiquidFluxGeometry geometry, double dtOverH) { return Double.NaN; }
+		default double liquidTransferUpperBound(int face, boolean positive, double dtOverH) { return Double.NaN; }
 		void sweptMoments(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
 		                  int donorSupport, int receiverSupport, double[] result);
 		default double lowOrderVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
@@ -39,7 +41,7 @@ final class ConservativeLiquidFlux {
 	private final SignedDyadic[] after;
 	private final double[] capacity, aperture, donorFlux;
 	private final SignedDyadic[] exactCapacity;
-	private final SignedDyadic[] upperFlux, remainingSupply;
+	private final SignedDyadic[] upperFlux, openFluxBound, remainingSupply;
 	private final double[] finalCapacity;
 	private final double[] geometricBlend;
 	private final double[] representationBlend;
@@ -69,7 +71,8 @@ final class ConservativeLiquidFlux {
 		after = new SignedDyadic[cellCount];
 		capacity = new double[cellCount]; aperture = new double[faces]; donorFlux = new double[faces];
 		exactCapacity = new SignedDyadic[cellCount];
-		upperFlux = new SignedDyadic[faces]; remainingSupply = new SignedDyadic[cellCount]; finalCapacity = new double[cellCount];
+		upperFlux = new SignedDyadic[faces]; openFluxBound = new SignedDyadic[faces];
+		remainingSupply = new SignedDyadic[cellCount]; finalCapacity = new double[cellCount];
 		geometricBlend = new double[faces];
 		representationBlend = new double[faces];
 		faceFloorLoss = new SignedDyadic[faces];
@@ -97,7 +100,7 @@ final class ConservativeLiquidFlux {
 		return faceSweep instanceof LiquidAffineFaceFlow flow && flow.belongsTo(domain)
 				&& Double.doubleToRawLongBits(dtOverH) == Double.doubleToRawLongBits(dt / domain.config.cellSize()) ? flow : null;
 	}
-	SignedDyadic openTransferBound(int face) { return upperFlux[face]; }
+	SignedDyadic openTransferBound(int face) { return openFluxBound[face]; }
 	void reserve(SignedDyadic[] reserved) { this.reserved = reserved; }
 	void carrierShares(int[] carrierShares) { this.carrierShares = carrierShares; }
 	mmm.chemistry.ExactRational[] sweptSecondMoments(FluidDomain domain, int face, int donorSupport, int receiverSupport) {
@@ -146,7 +149,13 @@ final class ConservativeLiquidFlux {
 			int donor = positive(f) ? left[f] : right[f];
 			if (capacity[donor] > 0 && volume[donor] > 0) outgoing[donor] += Math.abs(velocity[f]) * dtOverH * aperture[f] / capacity[donor];
 		}
-		for (int c = 0; c < cellCount; c++) if (outgoing[c] > 1 + 8 * Math.ulp(1.0F))
+		double sourceCourant = faceSweep == null ? Double.NaN : faceSweep.sourceCourant(geometry, dtOverH);
+		if (!Double.isNaN(sourceCourant)) {
+			if (!(sourceCourant >= 0 && Double.isFinite(sourceCourant))) throw new IllegalStateException("Invalid liquid source Courant");
+			if (sourceCourant > 1 + 8 * Math.ulp(1.0F))
+				throw new MechanicalTimeRefinement(Math.max(2, (int)Math.ceil(sourceCourant)),
+						"Affine liquid source Courant=" + sourceCourant);
+		} else for (int c = 0; c < cellCount; c++) if (outgoing[c] > 1 + 8 * Math.ulp(1.0F))
 			throw new IllegalArgumentException("Volume transport requires a smaller step: outgoing Courant=" + outgoing[c]);
 	}
 
@@ -250,7 +259,13 @@ final class ConservativeLiquidFlux {
 			// The floor gives stored <= amount < 2*stored when stored > 0: subtraction is exact by Sterbenz.
 			faceFloorLoss[f] = amount == stored ? SignedDyadic.ZERO : SignedDyadic.of(amount - stored);
 			flux[f] = Math.copySign(stored, velocity[f]);
-			upperFlux[f] = SignedDyadic.of(Math.floor(Math.abs(velocity[f]) * dtOverH * aperture[f] / resolution) * resolution);
+			double openBound = Math.abs(velocity[f]) * dtOverH * aperture[f];
+			openFluxBound[f] = SignedDyadic.of(Math.floor(openBound / resolution) * resolution);
+			double liquidBound = faceSweep == null ? Double.NaN
+					: faceSweep.liquidTransferUpperBound(f % physicalFaceCount, positive(f), dtOverH);
+			if (Double.isNaN(liquidBound)) liquidBound = openBound;
+			if (!(liquidBound >= 0 && Double.isFinite(liquidBound))) throw new IllegalStateException("Invalid liquid transfer bound");
+			upperFlux[f] = SignedDyadic.of(Math.floor(Math.min(openBound, liquidBound) / resolution) * resolution);
 		}
 	}
 
@@ -268,13 +283,13 @@ final class ConservativeLiquidFlux {
 				if (selected < 0) continue;
 				incomingNext[selected] = -2;
 				if (incomingHead[c]++ >= carrierShares[c] - 1) {
-					exactFlux[selected] = SignedDyadic.ZERO; upperFlux[selected] = SignedDyadic.ZERO;
+					exactFlux[selected] = SignedDyadic.ZERO; upperFlux[selected] = openFluxBound[selected] = SignedDyadic.ZERO;
 					faceFloorLoss[selected] = SignedDyadic.ZERO;
 				}
 			}
 			for (int f = 0; f < flux.length; f++)
 				if (carrierShares[donor(f)] < 7 && (incomingNext[f] != -2 || exactFlux[f].signum() == 0)) {
-					upperFlux[f] = SignedDyadic.ZERO;
+					upperFlux[f] = openFluxBound[f] = SignedDyadic.ZERO;
 					faceFloorLoss[f] = SignedDyadic.ZERO;
 				}
 		}
@@ -412,7 +427,7 @@ final class ConservativeLiquidFlux {
 				exactFlux[face] = amount.subtract(old);
 				velocity[face] = Math.copySign(Math.max(Double.MIN_VALUE, Math.abs(velocity[face])), (edge & 1) == 0 ? 1 : -1);
 				geometricBlend[face] = 0; representationBlend[face] = 1;
-				upperFlux[face] = SignedDyadic.ZERO;
+				upperFlux[face] = openFluxBound[face] = SignedDyadic.ZERO;
 			}
 			node = previous;
 		}
