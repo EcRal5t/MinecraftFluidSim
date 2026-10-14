@@ -20,6 +20,7 @@ public final class CellRemapMomentsValidation {
 			System.out.println("Positive joint liquid moments validation passed"); return;
 		}
 		if (args.length == 1 && args[0].equals("transport-moments")) {
+			jointTranslationPublishesEdgeAndCornerReceivers();
 			limitedFluxMixesTheSamePositiveMomentWeights();
 			scalarTransportKeepsUnexcitedSpatialInertia();
 			directionalTransportPartitionsActualMomentumAndKineticEnergy();
@@ -40,6 +41,7 @@ public final class CellRemapMomentsValidation {
 		chemicalQuadratureRetainsJointMomentsWithFewQuanta();
 		scalarTransportKeepsUnexcitedSpatialInertia();
 		directionalTransportPartitionsActualMomentumAndKineticEnergy();
+		jointTranslationPublishesEdgeAndCornerReceivers();
 		thinJointRuleKeepsActualRank();
 		partialCellInitializationHasPositiveWetLayerSupport();
 		faceArrivalRetainsFiniteNormalThickness();
@@ -79,6 +81,83 @@ public final class CellRemapMomentsValidation {
 		geometry.sweptMoments(0, 1, 1, .125, true, 0, 0, 0, 0, moments);
 		precise(moments[0], .0625, "Cut swept volume");
 		precise(moments[1] / moments[0], -.25, "Cut tangential centroid");
+	}
+
+	private static void jointTranslationPublishesEdgeAndCornerReceivers() {
+		for (float h : new float[]{.5F, 1, 2}) for (int axes = 1; axes < 8; axes++) for (int signs = 0; signs < 8; signs++) {
+			var domain = translationDomain(h, axes, signs, 256, false);
+			domain.cellLiquidVolumeTransport.advect(.125F);
+			check(domain.cellLiquidVolumeTransport.momentAudit.reconstructedGroups() == 1 << Integer.bitCount(axes),
+					"Production transport omitted an edge or corner receiving cell");
+			var expected = new mmm.units.SignedDyadic[domain.cellCount]; java.util.Arrays.fill(expected, mmm.units.SignedDyadic.ZERO);
+			var delta = new mmm.units.SignedDyadic[3];
+			for (int a = 0; a < 3; a++) delta[a] = mmm.units.SignedDyadic.of((axes & 1 << a) == 0 ? 0 : (signs & 1 << a) == 0 ? .125 : -.125);
+			for (var piece : LiquidTranslationPartition.fullCell(delta)) expected[domain.cellIndex(2 + piece.dx(), 2 + piece.dy(), 2 + piece.dz())] = piece.volume();
+			for (int c = 0; c < domain.cellCount; c++) check(domain.markerGrid.exactCellVolumeInventory[c].equals(expected[c]), "Production translated destination volume changed");
+			var first = new double[3]; var momentum = new double[3]; var angular = new double[3]; double kinetic = 0;
+			for (int p = 0; p < domain.particleCount(); p++) {
+				var x = new double[]{domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
+				var v = new double[]{domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
+				for (int a = 0; a < 3; a++) {
+					first[a] += domain.particles.mass(p) * x[a]; momentum[a] += domain.particles.mass(p) * v[a];
+					kinetic += .5 * domain.particles.mass(p) * v[a] * v[a];
+					int b = (a + 1) % 3, c = (a + 2) % 3;
+					angular[a] += domain.particles.mass(p) * (x[b] * v[c] - x[c] * v[b]);
+				}
+			}
+			for (int a = 0; a < 3; a++) {
+				double v = 8 * delta[a].toDouble() * h;
+				precise(momentum[a], 1000 * v, "Joint translation momentum");
+				check(Math.abs(first[a] - 1000 * h * (2.5 + delta[a].toDouble())) <= 1000 * Math.ulp(3 * h), "Joint translation first moment exceeded float storage");
+				int b = (a + 1) % 3, c = (a + 2) % 3;
+				check(Math.abs(angular[a] - 2500 * h * (8 * delta[c].toDouble() * h - 8 * delta[b].toDouble() * h))
+						<= 2000 * h * Math.ulp(3 * h), "Joint translation angular momentum exceeded coordinate storage");
+			}
+			precise(kinetic, 500 * h * h * Integer.bitCount(axes), "Joint translation kinetic energy");
+		}
+		var tiled = translationDomain(1, 3, 0, 256, true); tiled.cellLiquidVolumeTransport.advect(.125F);
+		check(tiled.particleCount() == 48, "Translated positive pieces did not compact a fully covered receiving box");
+		var fractional = translationDomain(1, 7, 0, 256, false); fractional.cellLiquidVolumeTransport.advect(.123F);
+		var total = mmm.units.SignedDyadic.ZERO;
+		for (int p = 0; p < fractional.particleCount(); p++) total = total.add(mmm.units.SignedDyadic.of(fractional.particles.volume(p)));
+		check(total.equals(mmm.units.SignedDyadic.of(1)), "Joint translation discarded its float expansion tails");
+		var incompatibleGas = translationDomain(1, 7, 0, 256, false); incompatibleGas.sealDomainBoundary(); incompatibleGas.bootstrapGasState(null);
+		CellAffineWallProjection.projectTransport(incompatibleGas); var gasBefore = incompatibleGas.exportParticleState(); boolean gasRejected = false;
+		try { incompatibleGas.cellLiquidVolumeTransport.advect(.125F); } catch (GasTopologyBlockedException expected) { gasRejected = true; }
+		check(gasRejected && incompatibleGas.gasState.network.nodeCount() == 1
+				&& java.util.Arrays.equals(gasBefore.copyPositionVolume(), incompatibleGas.exportParticleState().copyPositionVolume())
+				&& java.util.Arrays.equals(gasBefore.copyParticleVelocities(), incompatibleGas.exportParticleState().copyParticleVelocities()),
+				"Incompatible PLIC gas geometry published a false vacuum or changed source columns");
+		var finite = translationDomain(1, 1, 0, 256, false); finite.sealDomainBoundary(); finite.bootstrapGasState(null);
+		long gas = finite.gasState.network.standardVolumeNanos(1); double capacity = finite.gasState.network.availableVolume(1);
+		CellAffineWallProjection.projectTransport(finite); finite.cellLiquidVolumeTransport.advect(.125F);
+		check(finite.cellLiquidVolumeTransport.momentAudit.reconstructedGroups() == 2 && finite.gasState.network.nodeCount() == 1
+				&& finite.gasState.network.standardVolumeNanos(1) == gas, "Joint translation changed its sealed gas inventory or destination model: groups="
+				+ finite.cellLiquidVolumeTransport.momentAudit.reconstructedGroups() + ", nodes=" + finite.gasState.network.nodeCount()
+				+ ", gas=" + finite.gasState.network.standardVolumeNanos(1) + ", before=" + gas);
+		precise(finite.gasState.network.availableVolume(1), capacity, "Joint translation sealed gas capacity");
+		var restored = FluidDomain.restoreAuthoritativeState(finite.captureAuthoritativeState());
+		check(java.util.Arrays.equals(finite.exportParticleState().copyPositionVolume(), restored.exportParticleState().copyPositionVolume()),
+				"Joint translation source geometry changed on capture and restore");
+		var limited = translationDomain(1, 7, 0, 8, false); var before = limited.exportParticleState(); boolean rejected = false;
+		try { limited.cellLiquidVolumeTransport.advect(.125F); } catch (IllegalStateException expected) { rejected = true; }
+		check(rejected && java.util.Arrays.equals(before.copyPositionVolume(), limited.exportParticleState().copyPositionVolume())
+				&& java.util.Arrays.equals(before.copyParticleVelocities(), limited.exportParticleState().copyParticleVelocities()), "Joint translation marker-budget rejection changed source columns");
+	}
+	private static FluidDomain translationDomain(float h, int axes, int signs, int budget, boolean tiled) {
+		var domain = new FluidDomain(5, 5, 5,
+				new FluidSolverConfig(h, 1000, 0, .125F, 200, 1e-5F, .45F, .002F, 0), budget);
+		domain.setVolume(2, 2, 2, 1); if (tiled) domain.setVolume(1, 2, 2, 1);
+		for (int p = 0; p < domain.particleCount(); p++) for (int a = 0; a < 3; a++)
+			setVelocity(domain, p, a, (axes & 1 << a) == 0 ? 0 : (signs & 1 << a) == 0 ? h : -h);
+		domain.rebuildGridFromParticles(); var basis = CellAffineVelocity.capture(domain);
+		var coefficients = new double[3][4 * basis.blockCount()];
+		for (int block = 0; block < basis.blockCount(); block++) for (int a = 0; a < 3; a++)
+			coefficients[a][4 * block] = (axes & 1 << a) == 0 ? 0 : (signs & 1 << a) == 0 ? h : -h;
+		domain.pressureSystem.updateMarkerVelocityField(new CellAffineVelocityField(basis, coefficients));
+		domain.gridToParticleStage.prepareAdvectionCells();
+		domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
+		return domain;
 	}
 
 	private static void capturedWetVelocityKeepsPhysicalIntegral() {

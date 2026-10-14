@@ -10,12 +10,16 @@ final class CellRemapInventoryAudit {
 
 	static SignedDyadic validate(FluidDomain domain, CellRemapMarkerColumns markers,
 			ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
+		return validate(domain, markers, flux.resultingVolumes(), ballistic);
+	}
+	static SignedDyadic validate(FluidDomain domain, CellRemapMarkerColumns markers,
+			SignedDyadic[] plannedVolumes, BallisticLiquidRemap ballistic) {
 		if (markers.size() > domain.maximumParticleCount) throw new IllegalStateException("Cell remap exceeds its marker budget");
 		SignedDyadic[] energyRoundoff = new SignedDyadic[1];
 		CpuWorkBatch.run(3, markers.size() >= 2_048 ? 1 : 3, (from, until) -> {
 			for (int audit = from; audit < until; audit++) {
 				switch (audit) {
-					case 0 -> volume(domain, markers, flux, ballistic);
+					case 0 -> volume(domain, markers, plannedVolumes, ballistic);
 					case 1 -> energyRoundoff[0] = massAndEnergy(domain, markers);
 					case 2 -> momentumAndKineticEnergy(domain, markers, ballistic);
 					default -> throw new AssertionError("Unknown remap audit");
@@ -26,13 +30,13 @@ final class CellRemapInventoryAudit {
 	}
 
 	private static void volume(FluidDomain domain, CellRemapMarkerColumns markers,
-			ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
+			SignedDyadic[] plannedVolumes, BallisticLiquidRemap ballistic) {
 		int[] heads = new int[domain.cellCount], next = new int[markers.size()]; Arrays.fill(heads, -1);
 		for (int p = 0; p < markers.size(); p++) {
 			next[p] = heads[markers.cell[p]]; heads[markers.cell[p]] = p;
 		}
 		SignedDyadic[] volume = ExactCellVolumeSums.sum(markers.volume, markers.size(), heads, next);
-		for (int c = 0; c < volume.length; c++) if (!volume[c].equals(flux.resultingVolumes()[c].add(ballistic.reserved[c])))
+		for (int c = 0; c < volume.length; c++) if (!volume[c].equals(plannedVolumes[c].add(ballistic.reserved[c])))
 			throw new IllegalStateException("Cell remap changed its shared volume flux");
 	}
 

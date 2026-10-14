@@ -25,6 +25,21 @@ final class CellAffineVelocityField {
 
 	boolean hasCell(int cell) { return cell >= 0 && cell < basis.physicalCellCount() && basis.blockCountForCell(cell) > 0; }
 	int blockCount() { return basis.blockCount(); }
+	/** A uniform complete-component field, or null when spatial or wall modes contribute. */
+	double[] constantVelocity(int cell) {
+		if (!hasCell(cell) || basis.blockCountForCell(cell) != 1) return null;
+		int block = basis.blockForCell(cell, 0);
+		if (basis.blockSupport(block) != 255) return null;
+		var result = new double[3];
+		for (int axis = 0; axis < 3; axis++) {
+			int start = 4 * block;
+			for (int i = 1; i < 4; i++) if (coefficients[axis][start + i] != 0) return null;
+			var shape = basis.normalShape(block, axis);
+			if (coefficients[axis][start] != 0 && (shape[1] != 0 || shape[2] != 0)) return null;
+			result[axis] = shape[0] * coefficients[axis][start];
+		}
+		return result;
+	}
 	/** Volume mean in m/s on captured wet support; t=(x-cellCentre)/h and all integrals are cell-normalized. */
 	double[] meanWetVelocity(LiquidPressureGeometry geometry, int cell, int support) {
 		if (geometry == null || !hasCell(cell)) throw new IllegalArgumentException("Wet velocity mean requires a captured cell field");

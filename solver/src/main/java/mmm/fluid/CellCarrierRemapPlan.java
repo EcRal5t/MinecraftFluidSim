@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.TreeMap;
 
 /** Preflights a common volume, material, momentum, species and energy remap before publication. */
-final class CellCarrierRemapPlan {
+final class CellCarrierRemapPlan implements CellRemapCandidate {
 	private static final double[][][] OFFSETS = new double[4][][];
 	static {
 		for (int level = 0; level < OFFSETS.length; level++) {
@@ -37,6 +37,12 @@ final class CellCarrierRemapPlan {
 	private final float dt;
 	private final boolean geometryRemap;
 	private final CellRemapPorts ports;
+	public CellRemapMarkerColumns markers() { return markers; }
+	public SignedDyadic energyRoundoff() { return energyRoundoff; }
+	public boolean[] changedSpeciesCells() { return changedSpeciesCells; }
+	public GasTopologyCoordinator.GasTopologyPlan gasTopology() { return gasTopology; }
+	public boolean commitGranularCollision() { return commitGranularCollision; }
+	public CellRemapMoments.Audit momentAudit() { return momentAudit; }
 	private static final ThreadLocal<CellPolynomialField.Workspace> FITTING =
 			ThreadLocal.withInitial(CellPolynomialField.Workspace::new);
 
@@ -153,7 +159,7 @@ final class CellCarrierRemapPlan {
 		markers.copyFrom(retainedMarkers, sampledCount);
 		markers.copyFrom(ballistic.markers, sampledCount + retainedMarkers.size());
 		energyRoundoff = validateInventories(flux, ballistic);
-		momentAudit = momentAudit();
+		momentAudit = calculateMomentAudit();
 		long[] occupied = futureOccupied;
 		if (occupied == null) occupied = geometryRemap || domain.granularState == null || domain.granularState.parcels.count() == 0
 				? (domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq())
@@ -812,7 +818,7 @@ final class CellCarrierRemapPlan {
 		return energyRoundoff;
 	}
 
-	private CellRemapMoments.Audit momentAudit() {
+	private CellRemapMoments.Audit calculateMomentAudit() {
 		double[] projection = new double[3], storage = new double[3], volume = new double[3], unadvanced = new double[3], signed = new double[3];
 		double maximum = 0, h = domain.config.cellSize(); var shape = new double[3]; int projected = 0, reconstructed = 0;
 		for (ArrayList<Group> groups : output) if (groups != null) for (Group group : groups) {

@@ -107,15 +107,18 @@ final class CellLiquidVolumeTransport {
 			if (maximumOutgoing > 1 + 8 * Math.ulp(1.0F))
 				throw new MechanicalTimeRefinement((int) Math.ceil(maximumOutgoing * domain.config.timeStep() / dt),
 						"Liquid transport outgoing Courant=" + maximumOutgoing + ", dt=" + dt);
-			try {
-				transport.plan(volume, domain.geometry.solid, dt / domain.config.cellSize(), exactVolume);
-			} catch (MechanicalTimeRefinement refinement) {
-				throw new MechanicalTimeRefinement((int) Math.ceil(2 * domain.config.timeStep() / dt), refinement.getMessage());
+			CellRemapCandidate candidate = CellTranslationRemap.prepare(domain, field, dt, ballistic);
+			if (candidate == null) {
+				try {
+					transport.plan(volume, domain.geometry.solid, dt / domain.config.cellSize(), exactVolume);
+				} catch (MechanicalTimeRefinement refinement) {
+					throw new MechanicalTimeRefinement((int) Math.ceil(2 * domain.config.timeStep() / dt), refinement.getMessage());
+				}
+				candidate = new CellCarrierRemapPlan(domain, transport, dt, ballistic);
 			}
-			var candidate = new CellCarrierRemapPlan(domain, transport, dt, ballistic);
 			domain.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), particles.count()), candidate);
 			publishedQuadrature = true;
-			momentAudit = candidate.momentAudit;
+			momentAudit = candidate.momentAudit();
 			if (domain.pressureSystem.usesMarkerPressure()) CellAffineWallProjection.projectTransport(domain);
 		} finally {
 			transport.faceSweep(null);

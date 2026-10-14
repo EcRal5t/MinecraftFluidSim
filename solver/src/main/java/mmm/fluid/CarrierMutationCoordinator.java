@@ -110,36 +110,36 @@ final class CarrierMutationCoordinator {
 	}
 
 	/** Publishes the preflighted cell quadrature and aligned side columns. */
-	void publishCellRemap(CarrierMutationPlan plan, CellCarrierRemapPlan candidate) {
+	void publishCellRemap(CarrierMutationPlan plan, CellRemapCandidate candidate) {
 		verify(plan, CarrierMutationPlan.Kind.WHOLESALE_COUNT);
-		int count = candidate.markers.size();
+		var markers = candidate.markers(); var gasTopology = candidate.gasTopology();
+		int count = markers.size();
 		if (count > domain.maximumParticleCount) throw new IllegalArgumentException("Cell remap exceeds marker budget");
 		domain.ensureParticleCapacity(count);
 		mmm.chemistry.ChemicalParcelStore.MarkerRemap chemistry = null;
 		if (domain.chemicalParcels != null) {
 			ChemicalMixtureRecord[] records = new ChemicalMixtureRecord[count]; boolean[] indicators = new boolean[count];
 			for (int ordinal = 0; ordinal < count; ordinal++) {
-				records[ordinal] = candidate.markers.mixture[ordinal]; indicators[ordinal] = candidate.markers.indicator[ordinal];
+				records[ordinal] = markers.mixture[ordinal]; indicators[ordinal] = markers.indicator[ordinal];
 			}
 			chemistry = domain.chemicalParcels.planMarkerRemap(domain.particles.count(), records, indicators);
 		}
-		double[] energies = domain.thermalState == null ? null : candidate.markers.energy;
-		if (candidate.gasTopology != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(candidate.gasTopology);
+		double[] energies = domain.thermalState == null ? null : markers.energy;
+		if (gasTopology != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gasTopology);
 		if (energies != null) {
-			var after = domain.thermalState.auditLedger().withRoundoff(candidate.energyRoundoff);
-			var gas = candidate.gasTopology == null ? null : candidate.gasTopology.thermalPlan();
+			var after = domain.thermalState.auditLedger().withRoundoff(candidate.energyRoundoff());
+			var gas = gasTopology == null ? null : gasTopology.thermalPlan();
 			if (gas != null) after = after.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
 					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff());
 			after.expectedInventory();
 		}
-		if (candidate.commitGranularCollision) {
+		if (candidate.commitGranularCollision()) {
 			domain.granularMechanicalStage.requireCollisionPreview();
 			domain.granularMechanicalStage.commitCollision();
 		}
 		float h = domain.config.cellSize();
 		mmm.compute.CpuWorkBatch.run(count, (from, until) -> {
 			for (int ordinal = from; ordinal < until; ordinal++) {
-				var markers = candidate.markers;
 				int x = markers.cell[ordinal] % domain.sizeX, y = markers.cell[ordinal] / domain.sizeX % domain.sizeY, z = markers.cell[ordinal] / (domain.sizeX * domain.sizeY);
 				domain.particles.setPositionX(ordinal, (float) ((x + 0.5 + markers.offset[0][ordinal]) * h));
 				domain.particles.setPositionY(ordinal, (float) ((y + 0.5 + markers.offset[1][ordinal]) * h));
@@ -154,12 +154,13 @@ final class CarrierMutationCoordinator {
 		});
 		if (domain.chemicalParcels != null) {
 			domain.chemicalParcels.commitMarkerRemap(chemistry);
-			for (int c = 0; c < candidate.changedSpeciesCells.length; c++) if (candidate.changedSpeciesCells[c]) domain.chemicalParcels.markDirtyCell(c);
+			var changed = candidate.changedSpeciesCells();
+			for (int c = 0; c < changed.length; c++) if (changed[c]) domain.chemicalParcels.markDirtyCell(c);
 		}
 		if (energies != null) domain.thermalState.restoreLiquidEnergies(energies);
 		domain.particles.setCount(count); domain.bumpCarrierMutationRevision(); domain.gridDirty = true;
-		if (energies != null) domain.thermalState.recordRoundoff(candidate.energyRoundoff);
-		if (candidate.gasTopology != null) domain.gasTopologyCoordinator.commit(candidate.gasTopology);
+		if (energies != null) domain.thermalState.recordRoundoff(candidate.energyRoundoff());
+		if (gasTopology != null) domain.gasTopologyCoordinator.commit(gasTopology);
 	}
 
 	/** Clears the liquid marker column together with its chemistry column after a validated plan. */
