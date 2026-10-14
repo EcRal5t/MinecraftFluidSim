@@ -181,6 +181,19 @@ final class LiquidPressureGeometry {
 		}
 		return result;
 	}
+	/** Signed affine-weighted wet moments, cell-normalized and centred at the physical cell centre. */
+	ExactRational[] supportAffineSecondMoments(int cell, int support, ExactRational[] affine) {
+		requireSupport(cell, support);
+		if (affine == null || affine.length != 4 || java.util.Arrays.stream(affine).anyMatch(java.util.Objects::isNull))
+			throw new IllegalArgumentException("Wet affine moments require four exact coefficients");
+		var result = new ExactRational[10]; java.util.Arrays.fill(result, ExactRational.ZERO);
+		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0 && microPieces[cell] != null && microPieces[cell][micro] != null) {
+			var plane = microPieces[cell][micro].wetPlane;
+			var part = GasGeometryOverlap.normalizedAffineSecondMoments(micro, plane == null ? List.of() : List.of(plane), affine);
+			for (int i = 0; i < result.length; i++) result[i] = result[i].add(part[i]);
+		}
+		return result;
+	}
 	/** Positive normalized PLIC volume rule about the whole-cell centre. */
 	List<GasGeometryOverlap.QuadraturePoint> componentQuadrature(int cell, int support) {
 		requireSupport(cell, support);

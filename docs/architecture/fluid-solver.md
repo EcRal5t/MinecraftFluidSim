@@ -144,6 +144,8 @@ PCG 预条件以实际质量 Gram 的 SGS 为基础。每个速度块从规范�
 
 `LiquidPressureGeometry.componentQuadrature` 提供同份湿几何的正权二阶体积积分规则，权重为归一化原始 PLIC 体积，位置相对格中心。完整开放湿格使用八点 Gauss；裁剪微盒以内部锚点分成正体积四面体，每个四面体使用四个正权节点。体积权重保持精确，节点坐标一次舍入为 double，物理尺度与孔隙率由调用者各换算一次。该规则的精度范围是二阶体积矩，高阶速度惯性按所选速度基底独立验收。
 
+`CellAffineVelocityField.meanWetVelocity` 在同代捕获湿几何上积分 `q_axis * affine_axis`，返回固定支持内的体积平均速度，单位为 `m/s`。一次加权二阶矩覆盖该三次速度多项式的全部项；各实际速度块分别积分后精确汇总，最终商一次舍入。固定分量的均匀孔隙率在平均值中相消。零湿体积、缺失速度支撑和不可表示的基底明确拒绝。`BoundaryPourDiagnostic` 分别比较这份平均值与同代发布载体的原始体积速度和。
+
 该视图保存不可变的 frame 引用、源矩和几何矩，捕获时复用 frame 的完整载体几何检查；质量从原始列读取。普通压力流程沿用现有几何捕获，细分空间比较在显式请求时执行。压力候选发布继续校核完整原始列。均匀密度对照共同检查空间矩、实际惯性积分与压力功，相应入口见[验证指南](../maintenance/validation.md)。
 
 归一化质量权重上的面力作用于实际粒子的加权质心，该力臂一般偏离面中心，刚体旋转可产生额外体积流率与内部压力力矩。令 `Rω = ω×(x−center)`，保持内部角动量要求 `CR = 0`；当前质量映射还须补齐面速度的切向一阶矩。[PressureTransferExperiment](../../fabric/src/test/java/mmm/fluid/PressureTransferExperiment.java) 的 `--rotation` 对照独立面通量、紧支撑压力的实际总力矩与旋转虚功。

@@ -212,6 +212,7 @@ public final class BoundaryPourDiagnostic {
 			return;
 		}
 		pressureWork(projection, basis, value(projection, "dt", Float.class));
+		volumeVelocityMeans(projection, basis, field, geometry);
 		double[][] coefficient = value(field, "coefficients", double[][].class);
 		double largest = 0; int worstBlock = -1, worstAxis = -1, worstTerm = -1;
 		for (int block = 0; block < basis.blockCount(); block++) if (basis.blockMarkerCount(block) > 0)
@@ -254,6 +255,30 @@ public final class BoundaryPourDiagnostic {
 		if (worstBlock >= 0) cell(d, projection, basis, geometry, coefficient, worstBlock);
 		if (wetBlock >= 0 && wetBlock != worstBlock) cell(d, projection, basis, geometry, coefficient, wetBlock);
 		if (traceBlock >= 0 && traceBlock != worstBlock && traceBlock != wetBlock) cell(d, projection, basis, geometry, coefficient, traceBlock);
+	}
+	private static void volumeVelocityMeans(MarkerPressureProjection projection, CellAffineVelocity basis,
+	                                      CellAffineVelocityField field, LiquidPressureGeometry geometry) {
+		if (!value(projection, "published", Boolean.class)) return;
+		var volumes = value(projection, "originalVolume", double[].class);
+		var velocities = value(projection, "publishedVelocity", double[][].class);
+		if (velocities == null) return;
+		double largest = 0; int worstCell = -1, worstSupport = 0, worstAxis = -1;
+		for (int block = 0; block < basis.blockCount(); block++) {
+			if (basis.blockMarkerCount(block) == 0) continue;
+			int cell = basis.physicalCell(block), support = basis.blockSupport(block);
+			var mean = field.meanWetVelocity(geometry, cell, support);
+			var motion = new double[3]; double volume = 0;
+			for (int i = 0; i < basis.blockMarkerCount(block); i++) {
+				int p = basis.blockMarker(block, i); volume += volumes[p];
+				for (int axis = 0; axis < 3; axis++) motion[axis] += volumes[p] * velocities[axis][p];
+			}
+			for (int axis = 0; axis < 3; axis++) {
+				double defect = Math.abs(motion[axis] / volume - mean[axis]);
+				if (defect > largest) { largest = defect; worstCell = cell; worstSupport = support; worstAxis = axis; }
+			}
+		}
+		System.out.printf("POUR bulkVolumeMean largestRawWetVelocityDifferenceMps=%g cell=%d support=%d axis=%d%n",
+				largest, worstCell, worstSupport, worstAxis);
 	}
 
 	private static void inspectPressureFailure(MarkerPressureProjection projection) {

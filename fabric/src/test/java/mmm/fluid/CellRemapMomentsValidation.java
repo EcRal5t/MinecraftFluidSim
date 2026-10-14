@@ -28,6 +28,7 @@ public final class CellRemapMomentsValidation {
 		}
 		sweptLiquidMomentsKeepThinTangentialCentroids();
 		sweptQuadraticMomentsRetainAffineWedgeGeometry();
+		capturedWetVelocityKeepsPhysicalIntegral();
 		limitedFluxMixesTheSamePositiveMomentWeights();
 		thinSlabRemapRetainsItsTangentialMoment();
 		if (args.length == 1 && args[0].equals("sweep-only")) return;
@@ -78,6 +79,52 @@ public final class CellRemapMomentsValidation {
 		geometry.sweptMoments(0, 1, 1, .125, true, 0, 0, 0, 0, moments);
 		precise(moments[0], .0625, "Cut swept volume");
 		precise(moments[1] / moments[0], -.25, "Cut tangential centroid");
+	}
+
+	private static void capturedWetVelocityKeepsPhysicalIntegral() {
+		for (float h : new float[]{.5F, 1, 2}) {
+			var domain = new FluidDomain(3, 3, 3,
+					new FluidSolverConfig(h, 1000, 0, .01F, 200, 1e-5F, .5F, 1e-4F, 0), 64);
+			domain.setVolume(1, 1, 1, 1); domain.rebuildGridFromParticles();
+			var geometry = LiquidPressureGeometry.capture(domain); var basis = CellAffineVelocity.capture(domain, geometry);
+			int cell = domain.cellIndex(1, 1, 1), block = basis.blockForCell(cell, 0);
+			var coefficients = new double[3][4 * basis.blockCount()];
+			coefficients[0][4 * block] = 2; coefficients[0][4 * block + 1] = 3;
+			coefficients[1][4 * block] = -3; coefficients[2][4 * block] = 4;
+			var mean = new CellAffineVelocityField(basis, coefficients).meanWetVelocity(geometry, cell, 255);
+			for (int axis = 0; axis < 3; axis++) precise(mean[axis], new double[]{2, -3, 4}[axis], "Translated wet velocity mean retains SI units");
+		}
+		var closed = new FluidDomain(2, 2, 2,
+				new FluidSolverConfig(1, 1000, 0, .01F, 200, 1e-5F, .5F, 1e-4F, 0), 64);
+		closed.setSolid(1, 0, 0, true); closed.setSolid(0, 1, 0, true); closed.setSolid(0, 0, 1, true);
+		closed.setVolume(0, 0, 0, 1); closed.rebuildGridFromParticles();
+		var geometry = LiquidPressureGeometry.capture(closed); var basis = CellAffineVelocity.capture(closed, geometry);
+		var coefficients = new double[3][4 * basis.blockCount()];
+		coefficients[0][0] = 2; coefficients[0][1] = 3; coefficients[1][0] = -3; coefficients[2][0] = 4;
+		var field = new CellAffineVelocityField(basis, coefficients);
+		var mean = field.meanWetVelocity(geometry, 0, 255);
+		for (int axis = 0; axis < 3; axis++) precise(mean[axis], new double[]{1.0 / 3, -.5, 2.0 / 3}[axis], "Exact quadratic-wall wet velocity mean");
+		double sampled = 0;
+		for (int p = 0; p < closed.particleCount(); p++) sampled += closed.particles.volume(p)
+				* field.value(0, 0, closed.particles.positionX(p), closed.particles.positionY(p), closed.particles.positionZ(p));
+		check(Math.abs(sampled - mean[0]) > .01, "Quarter-cell rule accidentally certified the cubic velocity integral");
+		var signed = geometry.supportAffineSecondMoments(0, 255, new mmm.chemistry.ExactRational[]{
+				mmm.chemistry.ExactRational.of(-2), mmm.chemistry.ExactRational.of(3),
+				mmm.chemistry.ExactRational.ZERO, mmm.chemistry.ExactRational.ZERO});
+		check(signed[0].equals(mmm.chemistry.ExactRational.of(-2))
+				&& signed[1].equals(mmm.chemistry.ExactRational.ONE.divide(4)), "Signed affine wet integral changed");
+		closed.setVolume(0, 0, 0, .25F);
+		for (int p = 0; p < closed.particleCount(); p++) {
+			closed.particles.setPositionX(p, .875F); closed.particles.setPositionY(p, (p & 1) == 0 ? .25F : .75F);
+		}
+		closed.rebuildGridFromParticles(); geometry = LiquidPressureGeometry.capture(closed); basis = CellAffineVelocity.capture(closed, geometry);
+		coefficients = new double[3][4 * basis.blockCount()]; coefficients[0][0] = 2; coefficients[0][1] = 3;
+		coefficients[1][0] = -3; coefficients[2][0] = 4;
+		field = new CellAffineVelocityField(basis, coefficients); mean = field.meanWetVelocity(geometry, 0, 255);
+		for (int axis = 0; axis < 3; axis++) precise(mean[axis], new double[]{-.234375, -.5, 2.0 / 3}[axis], "Partial PLIC wet velocity mean");
+		boolean rejected = false;
+		try { field.meanWetVelocity(geometry, 0, 0x55); } catch (IllegalArgumentException expected) { rejected = true; }
+		check(rejected, "Zero wet volume supplied a velocity mean");
 	}
 
 	private static void sweptQuadraticMomentsRetainAffineWedgeGeometry() {

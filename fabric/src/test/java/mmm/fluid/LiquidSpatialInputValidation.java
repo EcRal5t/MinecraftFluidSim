@@ -55,6 +55,23 @@ final class LiquidSpatialInputValidation {
 	}
 	private static void volumeMomentSupport() {
 		var zero = mmm.chemistry.ExactRational.ZERO; var one = mmm.chemistry.ExactRational.ONE;
+		// Independent face slabs with transverse motion omit the positive corner destination.
+		for (int axis = 0; axis < 3; axis++) for (int tangent = 0; tangent < 3; tangent++) if (axis != tangent)
+		for (int sign : new int[]{-1, 1}) for (int transverse : new int[]{-1, 1}) {
+			var n = new double[3]; n[axis] = -sign; n[tangent] = transverse / 8.0;
+			var direction = new GasGeometryOverlap.HalfSpace(mmm.units.SignedDyadic.of(n[0]), mmm.units.SignedDyadic.of(n[1]),
+					mmm.units.SignedDyadic.of(n[2]), mmm.units.SignedDyadic.of(.375 + .5 * (n[0] + n[1] + n[2])));
+			var incompatible = new mmm.chemistry.ExactRational[]{zero, zero, zero};
+			incompatible[axis] = mmm.chemistry.ExactRational.of(-7L * sign).divide(128);
+			incompatible[tangent] = mmm.chemistry.ExactRational.of(transverse).divide(64);
+			if (LiquidVolumeMomentSupport.evaluate(255, one, one.divide(8), incompatible, direction).excess().signum() <= 0)
+				throw new AssertionError("Single-face diagonal arrival acquired a positive volume representation");
+			var actual = new mmm.chemistry.ExactRational[]{zero, zero, zero};
+			actual[axis] = mmm.chemistry.ExactRational.of(-49L * sign).divide(1024);
+			actual[tangent] = mmm.chemistry.ExactRational.of(7L * transverse).divide(1024);
+			if (LiquidVolumeMomentSupport.evaluate(255, one, mmm.chemistry.ExactRational.of(7).divide(64), actual, direction).excess().signum() > 0)
+				throw new AssertionError("Actual translated rectangle violates its volume moment support");
+		}
 		var plane = new GasGeometryOverlap.HalfSpace(mmm.units.SignedDyadic.of(-1), mmm.units.SignedDyadic.ZERO,
 				mmm.units.SignedDyadic.ZERO, mmm.units.SignedDyadic.of(-1, -3));
 		var first = new mmm.chemistry.ExactRational[]{mmm.chemistry.ExactRational.of(-7).divide(128), zero, zero};

@@ -1,5 +1,8 @@
 package mmm.fluid;
 
+import mmm.chemistry.ExactRational;
+import mmm.units.SignedDyadic;
+
 /** Immutable point samples of the same actual-mass cell field used by wet-face transfer. */
 final class CellAffineVelocityField {
 	private final CellAffineVelocity basis;
@@ -22,6 +25,41 @@ final class CellAffineVelocityField {
 
 	boolean hasCell(int cell) { return cell >= 0 && cell < basis.physicalCellCount() && basis.blockCountForCell(cell) > 0; }
 	int blockCount() { return basis.blockCount(); }
+	/** Volume mean in m/s on captured wet support; t=(x-cellCentre)/h and all integrals are cell-normalized. */
+	double[] meanWetVelocity(LiquidPressureGeometry geometry, int cell, int support) {
+		if (geometry == null || !hasCell(cell)) throw new IllegalArgumentException("Wet velocity mean requires a captured cell field");
+		var volume = geometry.supportAffineSecondMoments(cell, support,
+				new ExactRational[]{ExactRational.ONE, ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO})[0];
+		if (volume.signum() <= 0) throw new IllegalArgumentException("Wet velocity mean requires positive captured volume");
+		var integral = new ExactRational[]{ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO}; int covered = 0;
+		for (int i = 0; i < basis.blockCountForCell(cell); i++) {
+			int block = basis.blockForCell(cell, i), selected = support & basis.blockSupport(block);
+			if (selected == 0) continue;
+			if (!basis.hasRepresentableBasis(block)) throw new FluidDomain.PressureSolveBlockedException("Wet velocity block has no representable source field");
+			covered |= selected;
+			for (int axis = 0; axis < 3; axis++) {
+				var affine = new ExactRational[4]; affine[0] = exact(coefficients[axis][4 * block]);
+				for (int a = 0; a < 3; a++) {
+					affine[a + 1] = exact(coefficients[axis][4 * block + a + 1]);
+					affine[0] = affine[0].add(affine[a + 1].multiply(basis.normalizedCenterOffsetExact(block, a)));
+				}
+				var moments = geometry.supportAffineSecondMoments(cell, selected, affine);
+				var shape = basis.normalShape(block, axis);
+				int squared = axis == 0 ? 4 : axis == 1 ? 7 : 9;
+				integral[axis] = integral[axis].add(exact(shape[0]).multiply(moments[0]))
+						.add(exact(shape[1]).multiply(moments[axis + 1])).add(exact(shape[2]).multiply(moments[squared]));
+			}
+		}
+		if ((geometry.wetMicroMask(cell) & support & ~covered) != 0)
+			throw new FluidDomain.PressureSolveBlockedException("Wet velocity mean has uncovered physical support at cell " + cell);
+		var inverse = new ExactRational(volume.denominator(), volume.numerator()); var result = new double[3];
+		for (int axis = 0; axis < 3; axis++) {
+			result[axis] = integral[axis].multiply(inverse).toDouble();
+			if (!Double.isFinite(result[axis])) throw new FluidDomain.PressureSolveBlockedException("Unrepresentable wet velocity mean");
+		}
+		return result;
+	}
+	private static ExactRational exact(double value) { return PlicComponentGeometry.ratio(SignedDyadic.of(value), SignedDyadic.of(1)); }
 	boolean hasPoint(int cell, double x, double y, double z) { return hasCell(cell) && basis.blockForPoint(cell, x, y, z) >= 0; }
 	FaceTrace[] faceTraces(int cell, int axis, boolean positive, int sizeX, int sizeY) {
 		if (!hasCell(cell) || axis < 0 || axis > 2) throw new IllegalArgumentException("Missing affine normal traces");
