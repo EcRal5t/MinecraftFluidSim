@@ -114,7 +114,7 @@ final class CellVolumeReplacementPlan {
 		var audit = chemistry == null ? null : chemistry.planAuditExchange(source, sink);
 		var thermal = domain.thermalState == null || removed.length == 0 && pieces.isEmpty() ? null : domain.thermalState.planLiquidReplacement(
 				removed, thermalInsertions, domain.thermalMarkerContext());
-		var gasTopology = domain.gasTopologyCoordinator.planAfterLiquidEdit(futureEdit(domain, cell, pieces));
+		var gasTopology = domain.gasTopologyCoordinator.planStaticCellReplacement(futureEdit(domain, cell, pieces));
 		if (thermal != null && gasTopology != null && gasTopology.thermalPlan() != null)
 			domain.thermalState.requireGasRemapAfterLiquidReplacement(thermal, gasTopology.thermalPlan());
 		// Reserve only storage. Ownership, inventory, audit objects and revisions remain unchanged.

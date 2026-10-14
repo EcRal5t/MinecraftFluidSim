@@ -135,7 +135,12 @@ public final class CarrierMutationValidation {
 			}
 			require(domain.removeVolumeNear(1, 0, 0, .0625F, 0) == .0625F
 					&& domain.particleCount() == 16 && domain.carrierMutationRevision() == carrierRevision
-					&& network.revision() > gasRevision && network.availableVolume(1) == .5625
+					&& network.revision() > gasRevision && network.nodeCount() == 2
+					&& network.availableVolume(1) == .5 && network.availableVolume(2) == .0625
+					&& domain.airNodeAt(0, 0, 0) == 1 && domain.airNodeAt(1, 0, 0) == 2
+					&& network.inventory(1).equals(gas.nodes().getFirst().inventory()) && network.inventory(2).isEmpty()
+					&& network.edgeCount() == 1 && network.edges().getFirst().dischargeCoefficient() == .65
+					&& network.auditClosed()
 					&& domain.totalVolumeExact() == 1.4375,
 					"Partial extraction must retain marker ordinals and publish its gas successor");
 			long extractionRevision = network.revision(); var extractedGas = domain.exportGasState("");
@@ -146,7 +151,7 @@ public final class CarrierMutationValidation {
 					require(expected.getMessage().contains("changed after planning"), "Stale inventory rejection lost its cause");
 				}
 				requireUnchanged(domain, before);
-				requireReplacementGasUnchanged(domain, network, extractionRevision, extractedGas, .5625);
+				requireReplacementGasUnchanged(domain, network, extractionRevision, extractedGas, .5);
 			}
 			// A fresh public preview reads the newly created space directly, before any capture refresh.
 			domain.setVolume(0, 0, 0, 1);
@@ -156,6 +161,67 @@ public final class CarrierMutationValidation {
 					&& after.externalSource().equals(gas.externalSource()) && after.escapedSink().equals(gas.escapedSink())
 					&& network.auditClosed(), "Fresh replacement preview reused the partial extraction's old liquid volume");
 		}
+		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
+			var rotated = replacementGasWithFullNeighbour(true, axis, sign);
+			int[] source = new int[3], receiver = new int[3];
+			source[axis] = sign > 0 ? 0 : 1; receiver[axis] = 1 - source[axis];
+			var originalGas = rotated.exportGasState("");
+			var rotatedNetwork = rotated.gasState.network;
+			var trapped = replacementState(rotated); long trappedRevision = rotatedNetwork.revision();
+			try { rotated.setVolume(source[0], source[1], source[2], 1); throw new AssertionError("Piston escaped through a full neighbour"); }
+			catch (GasTopologyBlockedException expected) { }
+			requireUnchanged(rotated, trapped);
+			require(rotatedNetwork.revision() == trappedRevision && rotated.exportGasState("").nodes().equals(originalGas.nodes()),
+					"Rejected rotated piston changed gas stock or revision");
+			require(rotated.removeVolumeNear(receiver[0], receiver[1], receiver[2], .0625F, 0) == .0625F,
+					"Rotated piston fixture changed the extracted amount");
+			int loaded = rotated.airNodeAt(source[0], source[1], source[2]), vacuum = rotated.airNodeAt(receiver[0], receiver[1], receiver[2]);
+			require(loaded > 0 && vacuum > 0 && loaded != vacuum && rotatedNetwork.nodeCount() == 2
+					&& rotatedNetwork.availableVolume(loaded) == .5 && rotatedNetwork.availableVolume(vacuum) == .0625
+					&& rotatedNetwork.inventory(loaded).equals(originalGas.nodes().getFirst().inventory()) && rotatedNetwork.inventory(vacuum).isEmpty(),
+					"Rotated partial extraction lost finite-rate ownership");
+			rotated.setVolume(source[0], source[1], source[2], 1);
+			var result = rotated.exportGasState("");
+			require(rotated.totalVolumeExact() == 1.9375 && rotatedNetwork.nodeCount() == 1 && rotatedNetwork.availableVolume(1) == .0625
+					&& result.nodes().getFirst().inventory().equals(originalGas.nodes().getFirst().inventory())
+					&& result.externalSource().equals(originalGas.externalSource()) && result.escapedSink().equals(originalGas.escapedSink())
+					&& result.massRoundoff().equals(originalGas.massRoundoff()) && result.residualRoundoff().equals(originalGas.residualRoundoff())
+					&& rotated.airNodeAt(source[0], source[1], source[2]) == -1 && rotated.airNodeAt(receiver[0], receiver[1], receiver[2]) == 1
+					&& rotatedNetwork.auditClosed(), "Rotated or reflected piston changed the physical destination or inventory");
+		}
+		// Thermal binding uses h=.5 m; preserve the same raw fractions and piston geometry.
+		var raw = replacementGasWithFullNeighbour().exportParticleState();
+		float[] positions = raw.copyPositionVolume();
+		for (int marker = 0; marker < raw.particleCount(); marker++) for (int axis = 0; axis < 3; axis++) positions[4 * marker + axis] *= .5F;
+		var heated = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .01F, 200, 1e-5F, .5F, 1e-4F, 0));
+		heated.restoreParticleState(new FlipParticleState(2, 2, 2, .5F, 16, 1.5F, positions, new float[48], raw.copyCollisionMicroMasks()));
+		heated.sealDomainBoundary(); heated.bootstrapGasState("");
+		var liquids = new FluidMaterialRegistry(java.util.List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2)));
+		var thermal = new mmm.thermal.ThermalRegistry(java.util.List.of(
+				new mmm.thermal.ThermalMaterialDefinition("test:piston_water", mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
+						"mmm:water", 300, 0, 0, java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1, 10000, 4000))),
+				new mmm.thermal.ThermalMaterialDefinition("test:piston_air", mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
+						"mmm:air", 300, 0, 0, java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1, 10000, 718)))));
+		heated.bindThermal(thermal, liquids, 300);
+		var originalThermalGas = heated.exportGasState("");
+		heated.removeVolumeNear(1, 0, 0, .0625F, 0);
+		var gasNetwork = heated.gasState.network; var thermalStock = gasNetwork.sealedInventory();
+		double initialEnergy = heated.thermalState.gasNodeEnergy(1, gasNetwork);
+		var audit = heated.thermalAudit();
+		var compression = new mmm.thermal.GasThermalModel(thermal, gasNetwork.registry()).compressAdiabatically(
+				gasNetwork.inventory(1), initialEnergy, gasNetwork.availableVolume(1) + gasNetwork.availableVolume(2), gasNetwork.availableVolume(2));
+		require((gasNetwork.availableVolume(1) + gasNetwork.availableVolume(2)) * 8 == .5625
+				&& gasNetwork.availableVolume(2) * 8 == .0625 && compression.workIntoGas() > 0,
+				"Piston work oracle omitted the original receiver vacuum capacity");
+		heated.setVolume(0, 0, 0, 1);
+		require(gasNetwork.nodeCount() == 1 && gasNetwork.availableVolume(1) == .0078125
+				&& gasNetwork.sealedInventory().equals(thermalStock) && gasNetwork.auditClosed()
+				&& heated.exportGasState("").externalSource().equals(originalThermalGas.externalSource())
+				&& heated.exportGasState("").escapedSink().equals(originalThermalGas.escapedSink())
+				&& Double.doubleToRawLongBits(heated.thermalState.gasNodeEnergy(1, gasNetwork)) == Double.doubleToRawLongBits(compression.finalInternalEnergy())
+				&& heated.thermalAudit().mechanicalWork().subtract(audit.mechanicalWork()).equals(mmm.units.SignedDyadic.of(compression.finalInternalEnergy()).subtract(mmm.units.SignedDyadic.of(initialEnergy)))
+				&& heated.exactInternalEnergy().equals(heated.thermalAudit().expectedInventory()),
+				"Quasistatic piston must retain the receiver vacuum control volume and jointly book compression work");
 		var disconnected = replacementGasWithFullNeighbour(false);
 		disconnected.removeVolumeNear(1, 0, 0, .0625F, 0);
 		var before = replacementState(disconnected); var frame = disconnected.gasState.frame;
@@ -172,16 +238,21 @@ public final class CarrierMutationValidation {
 	}
 
 	private static FluidDomain replacementGasWithFullNeighbour(boolean connected) {
-		byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte) 255); masks[0] = masks[1] = 0;
+		return replacementGasWithFullNeighbour(connected, 0, 1);
+	}
+
+	private static FluidDomain replacementGasWithFullNeighbour(boolean connected, int axis, int sign) {
+		byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte) 255); masks[0] = masks[1 << axis] = 0;
 		float[] positions = new float[64];
 		for (int cell = 0; cell < 2; cell++) for (int slot = 0; slot < 8; slot++) {
 			int base = 4 * (8 * cell + slot);
 			// The liquid in cell 0 lies to its left. Reverse the full neighbour's x ordering so
 			// extracting its final marker exposes dry support at the same shared face.
-			positions[base] = !connected ? cell + .25F + .5F * (slot & 1)
+			float along = !connected ? cell + .25F + .5F * (slot & 1)
 					: cell == 0 ? .25F : cell + .25F + .5F * (1 - (slot & 1));
-			positions[base + 1] = .25F + .5F * (slot >> 1 & 1);
-			positions[base + 2] = .25F + .5F * (slot >> 2 & 1);
+			positions[base + axis] = sign > 0 ? along : 2 - along;
+			positions[base + (axis + 1) % 3] = .25F + .5F * (slot >> 1 & 1);
+			positions[base + (axis + 2) % 3] = .25F + .5F * (slot >> 2 & 1);
 			positions[base + 3] = cell == 0 ? .0625F : .125F;
 		}
 		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .01F, 200, 1e-5F, .5F, 1e-4F, 0));

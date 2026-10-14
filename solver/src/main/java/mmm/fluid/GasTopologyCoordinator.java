@@ -83,8 +83,9 @@ final class GasTopologyCoordinator {
 					"Phase-edited gas topology has no complete representable remap", unavailable);
 		}
 	}
-	GasTopologyPlan planAfterLiquidEdit(PhaseLiquidGeometryEdit edit) {
-		return planAfterLiquidEdits(List.of(edit));
+	GasTopologyPlan planStaticCellReplacement(PhaseLiquidGeometryEdit edit) {
+		if (edit == null) throw new IllegalArgumentException("Gas static cell replacement is missing");
+		return planAfterLiquidEdits(List.of(edit), currentOccupied(), false, edit.cell());
 	}
 	GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits) {
 		return planAfterLiquidEdits(edits, currentOccupied(), false);
@@ -92,6 +93,10 @@ final class GasTopologyCoordinator {
 	/** A mechanical candidate supplies its actual successor solid occupancy before carrier publication. */
 	GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits, long[] occupied,
 	                                  boolean refineMissingSuccessor) {
+		return planAfterLiquidEdits(edits, occupied, refineMissingSuccessor, -1);
+	}
+	private GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits, long[] occupied,
+	                                           boolean refineMissingSuccessor, int staticCell) {
 		if (edits == null) throw new IllegalArgumentException("Gas liquid edit list is missing");
 		boolean[] selected = new boolean[domain.cellCount];
 		for (var edit : edits) {
@@ -103,7 +108,7 @@ final class GasTopologyCoordinator {
 		if (domain.gasState.frame == null) return null;
 		domain.ensureInventoryGrid();
 		return plan(GasRuntimeGeometry.captureLiquidEdits(domain, edits, occupied,
-				domain.gasState.sealedDomainBoundary), false, null, refineMissingSuccessor);
+				domain.gasState.sealedDomainBoundary), false, null, refineMissingSuccessor, staticCell);
 	}
 	private GasRuntimeGeometry capture(PhaseLiquidGeometryEdit edit) {
 		domain.ensureInventoryGrid();
@@ -191,10 +196,10 @@ final class GasTopologyCoordinator {
 		return result;
 	}
 	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit) {
-		return plan(next, deferVolumeWork, edit, false);
+		return plan(next, deferVolumeWork, edit, false, -1);
 	}
 	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit,
-	                             boolean refineMissingSuccessor) {
+	                             boolean refineMissingSuccessor, int staticCell) {
 		var old = domain.gasState.frame;
 		boolean thermal = domain.thermalState != null && domain.thermalState.gasModelBound();
 		int count = next.nodeCount(); double[] available = volumes(next);
@@ -216,6 +221,14 @@ final class GasTopologyCoordinator {
 			}
 		} else {
 			var overlap = overlaps(old, next);
+			if (staticCell >= 0 && old.matchesCarrierGeometry(domain, currentOccupied())) {
+				var sweep = StaticGasPistonSweep.certify(old, next, staticCell);
+				if (sweep != null && overlap.subMap((long) sweep.source() << 32, (long) (sweep.source() + 1) << 32).isEmpty())
+					// The external operation first relaxes this isolated pair at sum(U), sum(V),
+					// then compresses quasistatically. The receiver's old vacuum volume is retained
+					// by its ordinary overlap, so the existing thermal plan accounts for both stages.
+					overlap.put((long) sweep.source() << 32 | sweep.destination(), List.of(ExactRational.ONE));
+			}
 			if (edit == null) retainReachableSingleCavity(old, next, overlap);
 			for (int previous = 1; previous <= old.nodeCount(); previous++) {
 				Map<Long, List<ExactRational>> destinations = overlap.subMap((long) previous << 32, (long) (previous + 1) << 32);
