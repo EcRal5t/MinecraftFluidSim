@@ -91,6 +91,10 @@ final class GranularContactCompression {
 	}
 
 	static Result solve(double[] mass, double[][] input, Row[] rows, Runnable spend, double[] initialImpulses) {
+		return solve(mass, input, rows, spend, initialImpulses, new GranularContactChainSeed(mass, rows));
+	}
+
+	static Result solve(double[] mass, double[][] input, Row[] rows, Runnable spend, double[] initialImpulses, GranularContactChainSeed chain) {
 		if (mass.length != input.length) throw new IllegalArgumentException("Contact input size mismatch");
 		double[] physicalMass = mass;
 		var unit = massUnit(mass); int massExponent = unit.exponent(); mass = unit.values();
@@ -167,7 +171,7 @@ final class GranularContactCompression {
 			}
 			if (!chainTried) {
 				chainTried = true; progress.phase = "chain-seed";
-				if (GranularContactChainSeed.apply(mass, input, rows, lambda, spend)) continue;
+				if (chain.apply(physicalMass, mass, input, rows, lambda, spend)) continue;
 			}
 			progress.phase = "active-face"; progress.sweeps++;
 			if (activeFace == null) activeFace = new ActiveFace(mass, input, rows, lambda, spend);
@@ -183,6 +187,10 @@ final class GranularContactCompression {
 
 	/** Per-contact expansion is followed by the same cone projection, then one source reconstruction. */
 	static Result respond(double[] mass, double[][] input, Row[] rows, Result compression, double[] restitution, Runnable spend) {
+		return respond(mass, input, rows, compression, restitution, spend, new GranularContactChainSeed(mass, rows));
+	}
+
+	static Result respond(double[] mass, double[][] input, Row[] rows, Result compression, double[] restitution, Runnable spend, GranularContactChainSeed chain) {
 		if (restitution.length != rows.length) throw new IllegalArgumentException("Contact restitution size mismatch");
 		double[] total = compression.impulses().clone(); boolean expanding = false;
 		for (int k = 0; k < rows.length; k++) {
@@ -197,7 +205,7 @@ final class GranularContactCompression {
 		boolean feasible = true;
 		for (var row : rows) { spend.run(); feasible &= response.admits(row); }
 		if (!feasible) {
-			var correction = solve(mass, response.values(), rows, spend);
+			var correction = solve(mass, response.values(), rows, spend, null, chain);
 			for (int k = 0; k < rows.length; k++) {
 				spend.run(); total[k] += correction.impulses()[k];
 				if (!Double.isFinite(total[k])) throw new MechanicalTimeRefinement(2, "Unrepresentable total contact impulse");

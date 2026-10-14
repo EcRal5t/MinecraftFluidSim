@@ -925,6 +925,19 @@ public final class GranularCarrierValidation {
 		var supportedCold = compressContacts(supportedMass, supportedTerminal, supportedRows);
 		var supportedWarm = GranularContactCompression.solve(supportedMass, supportedTerminal, supportedRows,
 				contactBudget(), driftSeed.impulses());
+		var sharedChain = new GranularContactChainSeed(supportedMass, supportedRows);
+		var sharedDrift = GranularContactCompression.solve(supportedMass, supportedDrift, supportedRows, contactBudget(), null, sharedChain);
+		var sharedTerminal = GranularContactCompression.solve(supportedMass, supportedTerminal, supportedRows, contactBudget(), null, sharedChain);
+		double[] sharedRestitution = {0, 0, .1};
+		var sharedResponse = GranularContactCompression.respond(supportedMass, supportedTerminal, supportedRows,
+				sharedTerminal, sharedRestitution, contactBudget(), sharedChain);
+		var coldResponse = GranularContactCompression.respond(supportedMass, supportedTerminal, supportedRows,
+				supportedCold, sharedRestitution, contactBudget());
+		require(java.util.Arrays.deepEquals(sharedDrift.values(), driftSeed.values())
+				&& java.util.Arrays.deepEquals(sharedTerminal.values(), supportedCold.values())
+				&& java.util.Arrays.deepEquals(sharedResponse.values(), coldResponse.values())
+				&& java.util.Arrays.equals(sharedResponse.impulses(), coldResponse.impulses()),
+				"event-local chain structure must reconstruct each fresh source and correction independently");
 		checkContactCertificate(supportedWarm, supportedRows);
 		for (int i = 0; i < 3; i++) require(Math.abs(supportedWarm.values()[i][1] - supportedCold.values()[i][1])
 				<= supportedWarm.arithmeticError()[i][1] + supportedCold.arithmeticError()[i][1],

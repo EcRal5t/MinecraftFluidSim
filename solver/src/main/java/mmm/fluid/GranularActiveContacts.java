@@ -151,8 +151,9 @@ final class GranularActiveContacts {
 		double[] weights = new double[members.size()]; double[][] d = new double[members.size()][], v = new double[members.size()][];
 		for (int i = 0; i < members.size(); i++) { int global = members.get(i); weights[i] = mass[global]; d[i] = drift[global]; v[i] = velocity[global]; }
 		var constraints = rows.toArray(GranularContactCompression.Row[]::new);
-		var compression = GranularContactCompression.solve(weights, d, constraints, this::spend);
-		var normalCompression = Arrays.deepEquals(d, v) ? compression : GranularContactCompression.solve(weights, v, constraints, this::spend, compression.impulses());
+		var chain = new GranularContactChainSeed(weights, constraints);
+		var compression = GranularContactCompression.solve(weights, d, constraints, this::spend, null, chain);
+		var normalCompression = Arrays.deepEquals(d, v) ? compression : GranularContactCompression.solve(weights, v, constraints, this::spend, compression.impulses(), chain);
 		var fixedRows = new ArrayList<ArrayList<Integer>>(members.size());
 		for (int i = 0; i < members.size(); i++) fixedRows.add(new ArrayList<>());
 		for (int row = 0; row < constraints.length; row++) {
@@ -161,7 +162,14 @@ final class GranularActiveContacts {
 			}
 		}
 		var driftSupported = loadedSupport(members.size(), constraints, compression.impulses());
-		var velocitySupported = normalCompression == compression ? driftSupported
+		boolean sameSupport = normalCompression == compression;
+		if (!sameSupport) {
+			sameSupport = true;
+			for (int row = 0; row < constraints.length; row++) {
+				spend(); if ((compression.impulses()[row] > 0) != (normalCompression.impulses()[row] > 0)) { sameSupport = false; break; }
+			}
+		}
+		var velocitySupported = sameSupport ? driftSupported
 				: loadedSupport(members.size(), constraints, normalCompression.impulses());
 		double[] restitution = new double[constraints.length], driftRestitution = new double[constraints.length];
 		for (int i = 0; i < members.size(); i++) {
@@ -191,8 +199,8 @@ final class GranularActiveContacts {
 			if ((!driftLoaded || -e * driftGap > h * .125)
 					&& closingPair(first, second, contact.normal(), drift, driftError)) driftRestitution[row] = e;
 		}
-		var driftResponse = GranularContactCompression.respond(weights, d, constraints, compression, driftRestitution, this::spend);
-		var response = GranularContactCompression.respond(weights, v, constraints, normalCompression, restitution, this::spend);
+		var driftResponse = GranularContactCompression.respond(weights, d, constraints, compression, driftRestitution, this::spend, chain);
+		var response = GranularContactCompression.respond(weights, v, constraints, normalCompression, restitution, this::spend, chain);
 		var frictionInput = response.values().clone(); boolean frictionChanged = false;
 		for (int i = 0; i < members.size(); i++) {
 			var normals = new ArrayList<double[]>(); double[] load = new double[3];
@@ -206,7 +214,7 @@ final class GranularActiveContacts {
 			frictionChanged |= !Arrays.equals(frictionInput[i], response.values()[i]);
 		}
 		// Tangential wall impulses can close an oblique pair; recheck the same joint normal constraints.
-		if (frictionChanged) response = GranularContactCompression.solve(weights, frictionInput, constraints, this::spend);
+		if (frictionChanged) response = GranularContactCompression.solve(weights, frictionInput, constraints, this::spend, null, chain);
 		BitSet projected = new BitSet(parcels.count());
 		for (int global : members) {
 			trajectoryOrigin[global] = position[global].clone(); updated[global] = event.time();
