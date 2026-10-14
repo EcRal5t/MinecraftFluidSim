@@ -553,34 +553,38 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				"discovery admitted a chemical manifest whose committed section was missing");
 	}
 
+	private static FlipMaterialParticleState materialCodecParticles(FlipParticleState pure, List<FluidMaterial> palette) {
+		float[] positions = pure.copyPositionVolume();
+		double[] mass = new double[pure.particleCount()];
+		int[] materials = new int[pure.particleCount()];
+		double totalMass = 0;
+		for (int ordinal = 0; ordinal < pure.particleCount(); ordinal++) {
+			materials[ordinal] = ordinal & 1;
+			mass[ordinal] = positions[ordinal * 4 + 3] * palette.get(materials[ordinal]).referenceDensity();
+			totalMass += mass[ordinal];
+		}
+		return new FlipMaterialParticleState(pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
+				sumVolumes(positions), totalMass, palette, positions, pure.copyParticleVelocities(), pure.copySolidMask(), mass, materials);
+	}
+
 	static void validateMaterialCodec() throws Exception {
 		FluidRegion region = populatedRegion(new UUID(15L, 16L));
 		List<FluidMaterial> palette = List.of(
 				new FluidMaterial("mmm:water", 1_000.0, "mmm:water", 0.0, Math.PI / 2.0),
 				new FluidMaterial("mmm:oil", 800.0, "mmm:oil", 0.0, Math.PI / 2.0)
 		);
-		FlipParticleState pureParticles = region.domain().exportParticleState();
-		float[] positions = pureParticles.copyPositionVolume();
-		double[] markerMass = new double[pureParticles.particleCount()];
-		int[] materialIndices = new int[pureParticles.particleCount()];
-		double totalMass = 0.0;
-		for (int ordinal = 0; ordinal < pureParticles.particleCount(); ordinal++) {
-			int material = ordinal & 1;
-			materialIndices[ordinal] = material;
-			markerMass[ordinal] = positions[ordinal * 4 + 3] * palette.get(material).referenceDensity();
-			totalMass += markerMass[ordinal];
-		}
-		FlipMaterialParticleState expected = new FlipMaterialParticleState(pureParticles.sizeX(), pureParticles.sizeY(), pureParticles.sizeZ(),
-				pureParticles.cellSize(), pureParticles.particleCount(), sumVolumes(positions), totalMass, palette, positions,
-				pureParticles.copyParticleVelocities(), pureParticles.copySolidMask(), markerMass, materialIndices);
+		FlipMaterialParticleState expected = materialCodecParticles(region.domain().exportParticleState(), palette);
 		region.domain().restoreMaterialParticleState(expected);
 		RegionState state = RegionCheckpointFixtures.captureMaterial(region, 1L);
-		List<Long> sectionChecksums = state.sections().stream().map(RegionSectionState::checksum).toList();
-		// Manifest config includes the explicit viscous wall condition; marker sections are unchanged.
-		require(state.manifest().checksum() == 2_824_632_206L
+		var canonicalRegion = canonicalCodecRegion(new UUID(15L, 16L));
+		canonicalRegion.domain().restoreMaterialParticleState(materialCodecParticles(canonicalRegion.domain().exportParticleState(), palette));
+		var canonical = RegionCheckpointFixtures.captureMaterial(canonicalRegion, 1L);
+		canonical.validate();
+		List<Long> sectionChecksums = canonical.sections().stream().map(RegionSectionState::checksum).toList();
+		require(canonical.manifest().checksum() == 2_824_632_206L
 				&& sectionChecksums.equals(List.of(
 				1_197_279_484L, 3_443_687_331L, 3_791_385_648L, 3_117_281_787L)),
-				"material region canonical bytes changed: manifest=" + state.manifest().checksum()
+				"material region canonical bytes changed: manifest=" + canonical.manifest().checksum()
 						+ " sections=" + sectionChecksums);
 		state.validate();
 		expectIOException(restorer(state)::reconstruct, "material state was silently reconstructed as pure water");
@@ -626,13 +630,18 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				base.materialPalette(), base.totalMassBits(), base.materialLedgers(), changedDescriptors, base.extensions(), 0L));
 		expectIOException(() -> new RegionState(changedManifest, changedSections).validate(),
 				"rechecksummed marker-mass corruption escaped exact material ledgers");
-		RegionState pureState = RegionCheckpointFixtures.capture(populatedRegion(new UUID(17L, 18L)), 1L);
+		var pureRegion = populatedRegion(new UUID(17L, 18L));
+		RegionState pureState = RegionCheckpointFixtures.capture(pureRegion, 1L);
+		pureState.validate();
+		assertParticleStateEquals(pureRegion.domain().exportParticleState(), restorer(pureState).reconstruct());
 		RegionManifest pureManifest = pureState.manifest();
-		List<Long> pureSectionChecksums = pureState.sections().stream().map(RegionSectionState::checksum).toList();
-		require(pureManifest.checksum() == 1_511_261_536L
+		var canonicalPure = RegionCheckpointFixtures.capture(canonicalCodecRegion(new UUID(17L, 18L)), 1L);
+		canonicalPure.validate();
+		List<Long> pureSectionChecksums = canonicalPure.sections().stream().map(RegionSectionState::checksum).toList();
+		require(canonicalPure.manifest().checksum() == 1_511_261_536L
 				&& pureSectionChecksums.equals(List.of(
 				857_091_072L, 3_709_730_368L, 2_608_476_652L, 3_235_751_298L)),
-				"pure region canonical bytes changed: manifest=" + pureManifest.checksum()
+				"pure region canonical bytes changed: manifest=" + canonicalPure.manifest().checksum()
 						+ " sections=" + pureSectionChecksums);
 		CompoundTag encodedPure = codec.encodeManifest(pureManifest);
 		require(encodedPure.get("Materials") == null && encodedPure.get("MassBits") == null,

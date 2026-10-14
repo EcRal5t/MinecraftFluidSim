@@ -44,7 +44,6 @@ abstract class RegionPersistenceValidationSupport {
 			Identifier.fromNamespaceAndPath("mmm", "persistence_validation"));
 
 	static FluidRegion populatedRegion(UUID id) {
-		BlockPos origin = new BlockPos(15, 16, 15);
 		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
@@ -55,6 +54,10 @@ abstract class RegionPersistenceValidationSupport {
 		for (int i = 0; i < velocities.length; i++) velocities[i] = (i % 7 - 3) * 0.03125F;
 		domain.restoreParticleState(new FlipParticleState(state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(),
 				state.particleCount(), state.totalVolume(), state.copyPositionVolume(), velocities, state.copySolidMask()));
+		return fixtureRegion(id, domain);
+	}
+	private static FluidRegion fixtureRegion(UUID id, FluidDomain domain) {
+		BlockPos origin = new BlockPos(15, 16, 15);
 		Set<Long> interior = new HashSet<>();
 		for (int z = 15; z <= 17; z++) for (int y = 16; y <= 17; y++) for (int x = 15; x <= 17; x++) interior.add(new BlockPos(x, y, z).asLong());
 		BlockPos controller = new BlockPos(14, 16, 15);
@@ -62,6 +65,27 @@ abstract class RegionPersistenceValidationSupport {
 		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(17, 17, 17),
 				interior, Set.of(controller.asLong()), chunks);
 		return new FluidRegion(id, DIMENSION, origin, domain, 512L, footprint);
+	}
+
+	/** Fixed codec columns, independent of the runtime cell-fill quadrature. */
+	static FluidRegion canonicalCodecRegion(UUID id) {
+		var domain = new FluidDomain(6, 4, 6, CONFIG, 512);
+		domain.setSolid(0, 0, 0, true);
+		var template = domain.exportParticleState();
+		float[] positions = {
+				.625F, .625F, .625F, .125F, .875F, .625F, .625F, .125F,
+				1.125F, .625F, 1.125F, .125F, 1.375F, .625F, 1.125F, .125F,
+				1.125F, .875F, 1.125F, .125F, 1.375F, .875F, 1.125F, .125F,
+				1.125F, .625F, 1.375F, .125F, 1.375F, .625F, 1.375F, .125F,
+				1.125F, .875F, 1.375F, .125F, 1.375F, .875F, 1.375F, .125F,
+				2.125F, 1.125F, 2.125F, .125F, 2.375F, 1.125F, 2.125F, .125F,
+				2.125F, 1.375F, 2.125F, .125F, 2.375F, 1.375F, 2.125F, .125F,
+				2.125F, 1.125F, 2.375F, .125F};
+		float[] velocities = new float[45];
+		for (int i = 0; i < velocities.length; i++) velocities[i] = (i % 7 - 3) * .03125F;
+		domain.restoreParticleState(new FlipParticleState(template.sizeX(), template.sizeY(), template.sizeZ(),
+				template.cellSize(), 15, 1.875F, positions, velocities, template.copySolidMask()));
+		return fixtureRegion(id, domain);
 	}
 
 	static FluidRegion emptyRegion(UUID id) {
