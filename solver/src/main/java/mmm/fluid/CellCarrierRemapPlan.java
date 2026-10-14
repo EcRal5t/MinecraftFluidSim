@@ -203,10 +203,10 @@ final class CellCarrierRemapPlan {
 					if (domain.thermalState != null) {
 						var fitting = FITTING.get(); fitting.ensureCapacity(group.original.size());
 						for (int p = 0; p < group.original.size(); p++)
-							fitting.values[3][p] = domain.thermalState.liquidInternalEnergy(group.original.get(p));
-						group.energy = SignedDyadic.sum(fitting.values[3], group.original.size());
+						fitting.values[0][p] = domain.thermalState.liquidInternalEnergy(group.original.get(p));
+					group.energy = SignedDyadic.sum(fitting.values[0], group.original.size());
 					}
-					fitFields(group, dt);
+					fitTemperatureField(group, dt);
 				}
 			}
 		});
@@ -392,7 +392,7 @@ final class CellCarrierRemapPlan {
 				if (target.arrivals == null) target.arrivals = new ArrayList<>();
 				target.arrivals.add(share);
 			}
-			addFields(target, source, share.mass, 4);
+			addTemperatureField(target, source, share.mass);
 		}
 	}
 
@@ -471,17 +471,15 @@ final class CellCarrierRemapPlan {
 		else target.density = Double.NaN;
 	}
 
-	private void addFields(Group target, Group source, double weight, int count) {
+	private void addTemperatureField(Group target, Group source, double weight) {
 		if (domain.thermalState == null) return;
-		if (target.field == null) target.field = new double[4][8];
-		for (int a = 0; a < count; a++) {
-			double[] coefficients = source.field[a];
-			if (a == 3 && target.cell != source.cell) coefficients = CellPolynomialField.translate(coefficients,
-					target.cell % domain.sizeX - source.cell % domain.sizeX,
-					target.cell / domain.sizeX % domain.sizeY - source.cell / domain.sizeX % domain.sizeY,
-					target.cell / (domain.sizeX * domain.sizeY) - source.cell / (domain.sizeX * domain.sizeY));
-			for (int b = 0; b < 8; b++) target.field[a][b] += weight * coefficients[b];
-		}
+		if (target.temperatureField == null) target.temperatureField = new double[8];
+		double[] coefficients = source.temperatureField;
+		if (target.cell != source.cell) coefficients = CellPolynomialField.translate(coefficients,
+				target.cell % domain.sizeX - source.cell % domain.sizeX,
+				target.cell / domain.sizeX % domain.sizeY - source.cell / domain.sizeX % domain.sizeY,
+				target.cell / (domain.sizeX * domain.sizeY) - source.cell / (domain.sizeX * domain.sizeY));
+		for (int b = 0; b < 8; b++) target.temperatureField[b] += weight * coefficients[b];
 	}
 
 	private void prepareMoments(Group source) {
@@ -547,7 +545,7 @@ final class CellCarrierRemapPlan {
 		double[] lower = flat ? null : new double[volumes.length], upper = flat ? null : new double[volumes.length];
 		source.energyRounding += caloric(source).roundoff(meanTemperature);
 		var fitting = FITTING.get(); fitting.ensureCapacity(volumes.length);
-		double[] rawEnergy = fitting.values[3]; Arrays.fill(rawEnergy, 0, volumes.length, 0);
+		double[] rawEnergy = fitting.values[0]; Arrays.fill(rawEnergy, 0, volumes.length, 0);
 		for (int d = 0; d <= last; d++) {
 			if (volumes[d].signum() == 0) continue;
 			double mass = masses[d];
@@ -598,11 +596,11 @@ final class CellCarrierRemapPlan {
 			}
 	}
 
-	private void fitFields(Group group, float dt) {
+	private void fitTemperatureField(Group group, float dt) {
 		if (domain.thermalState == null) return;
 		if (!remappedCells[group.cell]) {
 			// Retained carriers need their thermal range for adjacent transfers, but no reconstructed field.
-			if (domain.thermalState != null) for (int p : group.original) {
+			for (int p : group.original) {
 				double temperature = domain.thermalState.temperature(p, domain.thermalMarkerContext());
 				group.localMinimum = Math.min(group.localMinimum, temperature);
 				group.localMaximum = Math.max(group.localMaximum, temperature);
@@ -619,18 +617,12 @@ final class CellCarrierRemapPlan {
 			positions[0][local] = domain.particles.positionX(p) / (double) h - x - 0.5;
 			positions[1][local] = domain.particles.positionY(p) / (double) h - y - 0.5;
 			positions[2][local] = domain.particles.positionZ(p) / (double) h - z - 0.5;
-			values[0][local] = domain.particles.velocityX(p); values[1][local] = domain.particles.velocityY(p); values[2][local] = domain.particles.velocityZ(p);
-			if (domain.thermalState != null) {
-				values[3][local] = domain.thermalState.temperature(p, domain.thermalMarkerContext());
-				group.localMinimum = Math.min(group.localMinimum, values[3][local]);
-				group.localMaximum = Math.max(group.localMaximum, values[3][local]);
-			} else values[3][local] = 0;
+			values[0][local] = domain.thermalState.temperature(p, domain.thermalMarkerContext());
+			group.localMinimum = Math.min(group.localMinimum, values[0][local]);
+			group.localMaximum = Math.max(group.localMaximum, values[0][local]);
 		}
-		group.field = CellPolynomialField.fit(positions, weights, values, count);
-		if (domain.thermalState != null) {
-			group.transportTemperature = group.field[3].clone();
-			group.field[3] = CellPolynomialField.deform(group.field[3], domain, group.cell, dt);
-		}
+		group.transportTemperature = CellPolynomialField.fit(positions, weights, values, count)[0];
+		group.temperatureField = CellPolynomialField.deform(group.transportTemperature, domain, group.cell, dt);
 	}
 
 	private ArrayList<Float> quadratureVolumes(Group group) {
@@ -641,7 +633,7 @@ final class CellCarrierRemapPlan {
 				Math.max(1, (int) Math.floor(amount / ConservativeMarkerSampling.NOMINAL_MARKER_VOLUME))));
 		int mask = domain.geometry.cutCells.mask(group.cell);
 		int requiredAxes = mask == 0 && domain.thermalState != null
-				? CellRemapQuadrature.requiredAxes(new double[][]{group.field[3]}) : 0;
+				? CellRemapQuadrature.requiredAxes(new double[][]{group.temperatureField}) : 0;
 		int minimumCount = minimumQuadratureCount(group);
 		// The complete tensor rule preserves the original full-dimensional carrier geometry.
 		if (mask == 0) {
@@ -659,7 +651,7 @@ final class CellCarrierRemapPlan {
 		return volumes;
 	}
 	private int minimumQuadratureCount(Group group) {
-		int axes=domain.geometry.cutCells.mask(group.cell)==0 && domain.thermalState!=null ? CellRemapQuadrature.requiredAxes(new double[][]{group.field[3]}) : 0;
+		int axes=domain.geometry.cutCells.mask(group.cell)==0 && domain.thermalState!=null ? CellRemapQuadrature.requiredAxes(new double[][]{group.temperatureField}) : 0;
 		return Math.max(group.spatial.minimumCount(),CellRemapQuadrature.minimumCount(axes));
 	}
 
@@ -696,9 +688,9 @@ final class CellCarrierRemapPlan {
 			group.volumeResidual[a] = volumeMoment - group.volumeMoment[a];
 		}
 		ChemicalMixtureRecord[] species = domain.chemicalParcels == null ? null : allocateSpecies(group.species, weights);
-		double[] fieldMean = new double[4];
-		double[][] fieldValues = domain.thermalState == null ? null : evaluateQuadrature(group, offsets, volumes, fieldMean, false);
-		double temperatureScale = domain.thermalState == null ? 1 : temperatureScale(group, fieldMean[3], fieldValues[3]);
+		double[] temperatures = domain.thermalState == null ? null : new double[volumes.size()];
+		double temperatureMean = domain.thermalState == null ? 0 : evaluateTemperature(group, offsets, volumes, temperatures);
+		double temperatureScale = domain.thermalState == null ? 1 : temperatureScale(group, temperatureMean, temperatures);
 		int start = group.sampleStart;
 		var caloric = domain.thermalState == null ? null
 				: new mmm.thermal.LiquidEnergyColumn.CaloricInventory[volumes.size()];
@@ -710,7 +702,7 @@ final class CellCarrierRemapPlan {
 			double vx = fitted.velocities()[p][0], vy = fitted.velocities()[p][1], vz = fitted.velocities()[p][2];
 			double energy = 0;
 			if (domain.thermalState != null) {
-				double t = group.temperature + temperatureScale * (fieldValues[3][p] - fieldMean[3]);
+				double t = group.temperature + temperatureScale * (temperatures[p] - temperatureMean);
 				t = Math.max(group.minimumTemperature, Math.min(group.maximumTemperature, t));
 				for (int earlier = 0; earlier < p; earlier++) {
 					int previous = start + earlier;
@@ -721,32 +713,27 @@ final class CellCarrierRemapPlan {
 						domain.chemicalParcels == null ? null : domain.chemicalParcels.registry());
 				energy = caloric[p].energy(t);
 				// Completed temperature samples become the private energy-reduction workspace.
-				fieldValues[3][p] = energy;
+				temperatures[p] = energy;
 			}
 			markers.set(start + p, group.cell, group.material, group.indicator, volumes.get(p), m,
 					delta[0], delta[1], delta[2], vx, vy, vz, mixture, energy);
 		}
 		if (domain.thermalState != null) {
-			SignedDyadic energyRemaining = group.energy.subtract(SignedDyadic.sum(fieldValues[3], volumes.size()));
+			SignedDyadic energyRemaining = group.energy.subtract(SignedDyadic.sum(temperatures, volumes.size()));
 			CellRemapHeatBalance.complete(markers, start, caloric, group.minimumTemperature, group.maximumTemperature, energyRemaining, group.energyRounding);
 		}
 	}
 
-	private double[][] evaluateQuadrature(Group group, ArrayList<double[]> offsets, ArrayList<Float> volumes, double[] fieldMean, boolean tensor) {
-		int fields = domain.thermalState == null ? 3 : 4;
-		double amount = group.volume.toDouble(); double[][] fieldValues = new double[fields][];
-		for (int a = 0; a < fields; a++) fieldValues[a] = tensor ? CellPolynomialField.tensorValues(group.field[a]) : new double[offsets.size()];
-		for (int p = 0; p < offsets.size(); p++) for (int a = 0; a < fields; a++) {
+	private double evaluateTemperature(Group group, ArrayList<double[]> offsets, ArrayList<Float> volumes, double[] temperatures) {
+		double amount = group.volume.toDouble(), mean = 0;
+		for (int p = 0; p < offsets.size(); p++) {
 			double[] delta = offsets.get(p);
-			fieldValues[a][p] = (tensor ? fieldValues[a][p] : CellPolynomialField.evaluate(group.field[a], delta[0], delta[1], delta[2])) / group.mass;
-			fieldMean[a] += volumes.get(p) / amount * fieldValues[a][p];
+			temperatures[p] = CellPolynomialField.evaluate(group.temperatureField, delta[0], delta[1], delta[2]) / group.mass;
+			mean += volumes.get(p) / amount * temperatures[p];
 		}
-		for (int a = 0; a < fields; a++) {
-			boolean constant = true;
-			for (int p = 1; p < offsets.size(); p++) if (fieldValues[a][p] != fieldValues[a][0]) constant = false;
-			if (constant) fieldMean[a] = fieldValues[a][0];
-		}
-		return fieldValues;
+		boolean constant = true;
+		for (int p = 1; p < offsets.size(); p++) if (temperatures[p] != temperatures[0]) constant = false;
+		return constant ? temperatures[0] : mean;
 	}
 
 	private static double temperatureScale(Group group, double mean, double[] values) {
@@ -941,7 +928,7 @@ final class CellCarrierRemapPlan {
 		SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO;
 		double density = Double.NaN;
 		mmm.thermal.LiquidEnergyColumn.CaloricInventory caloric;
-		double mass, kinetic, temperature, energyRounding, maximumTranslation; double[] transportTemperature; final double[] momentum = new double[3]; double[][] field;
+		double mass, kinetic, temperature, energyRounding, maximumTranslation; double[] transportTemperature, temperatureField; final double[] momentum = new double[3];
 		double lowMassX, lowMassY, lowMassZ, lowVolumeX, lowVolumeY, lowVolumeZ;
 		final double[] massMoment = new double[3], volumeMoment = new double[3], volumeMotion = new double[3];
 		final double[] projection = new double[3], storage = new double[3], volumeResidual = new double[3]; boolean discardedMoment;

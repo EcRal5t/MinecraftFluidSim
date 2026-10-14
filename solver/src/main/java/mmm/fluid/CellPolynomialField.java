@@ -4,10 +4,10 @@ package mmm.fluid;
 final class CellPolynomialField {
 	private CellPolynomialField() { }
 	static final class Workspace {
-		double[][] positions = new double[3][0], values = new double[4][0]; double[] weights = new double[0];
+		double[][] positions = new double[3][0], values = new double[1][0]; double[] weights = new double[0];
 		void ensureCapacity(int count) {
 			if (weights.length >= count) return;
-			positions = new double[3][count]; values = new double[4][count]; weights = new double[count];
+			positions = new double[3][count]; values = new double[1][count]; weights = new double[count];
 		}
 	}
 
@@ -140,17 +140,6 @@ final class CellPolynomialField {
 		x *= 4; y *= 4; z *= 4;
 		return coefficients[0] + coefficients[1] * x + coefficients[2] * y + coefficients[3] * z
 				+ coefficients[4] * (x * y) + coefficients[5] * (x * z) + coefficients[6] * (y * z) + coefficients[7] * (x * y * z);
-	}
-
-	/** Inverse orthogonal transform on the complete standard eight-point tensor rule. */
-	static double[] tensorValues(double[] coefficients) {
-		double[] result = {coefficients[0], coefficients[1], coefficients[2], coefficients[4],
-				coefficients[3], coefficients[5], coefficients[6], coefficients[7]};
-		for (int width = 1; width < 8; width *= 2) for (int block = 0; block < 8; block += 2 * width)
-			for (int i = block; i < block + width; i++) {
-				double a = result[i], b = result[i + width]; result[i] = a - b; result[i + width] = a + b;
-			}
-		return result;
 	}
 
 	/** Expresses a donor field about a new cell center, including mixed-term contributions. */

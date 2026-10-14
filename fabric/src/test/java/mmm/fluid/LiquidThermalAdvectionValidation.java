@@ -81,6 +81,9 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 					weights[p++] = marker.mass();
 				}
 				var field = CellPolynomialField.fit(positions, weights, values, count);
+				var scalar = CellPolynomialField.fit(positions, weights, new double[][]{values[0]}, count)[0];
+				for (int c = 0; c < 8; c++) require(Double.doubleToRawLongBits(scalar[c]) == Double.doubleToRawLongBits(field[0][c]),
+						"Scalar temperature fit differs from the joint field fit");
 				// The energy ledger supplies the mean; analytic translation determines every spatial coefficient.
 				for (int c = 1; c < 8; c++) require(close(field[0][c], field[1][c]),
 						"Thermal remap mixed incompatible reference frames: XYZ=" + xyz + " densityRatio=" + densityRatio + " cellX=" + x
