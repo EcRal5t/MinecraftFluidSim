@@ -152,8 +152,10 @@ final class CellCarrierRemapPlan {
 		if (occupied == null) occupied = geometryRemap || domain.granularState == null || domain.granularState.parcels.count() == 0
 				? (domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq())
 				: domain.granularNextCoupling.copySolidSvq();
-		gasTopology = domain.gasState.frame == null ? null : domain.gasTopologyCoordinator.planAfterLiquidEdits(
-				PhaseLiquidGeometryEdit.afterCellRemap(domain, markers), occupied, !geometryRemap && dt > 0);
+		var gasEdits = domain.gasState.frame == null ? null : PhaseLiquidGeometryEdit.afterCellRemap(domain, markers);
+		gasTopology = gasEdits == null ? null : !geometryRemap && dt > 0 && ballistic.markers.isEmpty() && !commitGranularCollision
+				? domain.gasTopologyCoordinator.planAfterAdvection(gasEdits, occupied, flux, ports, dt)
+				: domain.gasTopologyCoordinator.planAfterLiquidEdits(gasEdits, occupied, !geometryRemap && dt > 0);
 	}
 
 	/** A cell without any shared transfer keeps its existing spatial integration rule. */

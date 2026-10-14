@@ -13,12 +13,14 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 	private final LiquidAffineSweepGeometry.MicroSweep[][] sweeps;
 	private final AtomicLong retained = new AtomicLong();
 	private final long retentionLimit;
+	private final long sourceRevision;
 
 	LiquidAffineFaceFlow(FluidDomain domain, ConservativeLiquidFlux faces, CellAffineVelocityField field) {
 		this(domain, faces, field, availableMemory() / 16);
 	}
 	LiquidAffineFaceFlow(FluidDomain domain, ConservativeLiquidFlux faces, CellAffineVelocityField field, long retentionLimit) {
 		this.domain = domain; this.faces = faces;
+		sourceRevision = domain.carrierMutationRevision();
 		if (retentionLimit < 0) throw new IllegalArgumentException("Negative affine sweep retention budget");
 		this.retentionLimit = retentionLimit;
 		outgoing=new double[field.blockCount()];
@@ -37,6 +39,16 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 	private static long availableMemory() {
 		Runtime runtime = Runtime.getRuntime();
 		return Math.max(0, runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory()));
+	}
+	/** A constant, complete-component endpoint of this actual captured face trace. */
+	boolean belongsTo(FluidDomain domain) { return this.domain == domain && sourceRevision == domain.carrierMutationRevision(); }
+	double constantTrace(int face, int cell) {
+		if (sourceRevision != domain.carrierMutationRevision() || face < 0 || face >= faces.physicalFaceCount
+				|| cell != faces.left[face] && cell != faces.right[face]) return Double.NaN;
+		var components = trace[face + (cell == faces.left[face] ? 0 : faces.physicalFaceCount)];
+		if (components == null || components.length != 1 || components[0].support() != 255) return Double.NaN;
+		double[] q = components[0].q();
+		return q[1] == 0 && q[2] == 0 ? q[0] : Double.NaN;
 	}
 	private LiquidAffineSweepGeometry.MicroSweep sweep(int slot, int componentIndex, int donor, int receiver,
 	                                                   int axis, boolean positive, double dt, int donorSupport, int receiverSupport, boolean capture) {

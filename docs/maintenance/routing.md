@@ -102,6 +102,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 单格全填的轴向准静态气体去向认证在 [StaticGasPistonSweep](../../solver/src/main/java/mmm/fluid/StaticGasPistonSweep.java)，准备入口为 `GasTopologyCoordinator.planStaticCellReplacement`；部分提取后填格、真空控制体积压缩功及拒绝原子性复用 `CarrierMutationValidation.cellReplacementRefreshesAfterPartialExtraction`。
 
+实际液体输运的单出口完整气团迁移在 [GasAdvectionSuccessor](../../solver/src/main/java/mmm/fluid/GasAdvectionSuccessor.java)，捕获面迹在 `LiquidAffineFaceFlow.constantTrace`，最终通量及 ports 从 `CellCarrierRemapPlan` 传入 `GasTopologyCoordinator.planAfterAdvection`；库存、容量功、微量迁移与来源拒绝复用 `AirCavityScannerValidation.validateSingleGasSuccessorWeight`。
+
 | 修改内容 | 首先打开 | 需要了解的数据和算法 |
 |---|---|---|
 | 力学计算顺序 | [MechanicalStepPipeline](../../solver/src/main/java/mmm/fluid/MechanicalStepPipeline.java)、[MechanicalStageAssembly](../../solver/src/main/java/mmm/fluid/MechanicalStageAssembly.java) | [流体求解器](../architecture/fluid-solver.md) |

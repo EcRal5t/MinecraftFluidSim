@@ -91,6 +91,11 @@ final class ConservativeLiquidFlux {
 
 	void geometry(LiquidFluxGeometry geometry) { this.geometry = geometry; }
 	void faceSweep(FaceSweep faceSweep) { this.faceSweep = faceSweep; }
+	LiquidAffineFaceFlow affineFaceFlow(FluidDomain domain, float dt) {
+		return faceSweep instanceof LiquidAffineFaceFlow flow && flow.belongsTo(domain)
+				&& Double.doubleToRawLongBits(dtOverH) == Double.doubleToRawLongBits(dt / domain.config.cellSize()) ? flow : null;
+	}
+	SignedDyadic openTransferBound(int face) { return upperFlux[face]; }
 	void reserve(SignedDyadic[] reserved) { this.reserved = reserved; }
 	void carrierShares(int[] carrierShares) { this.carrierShares = carrierShares; }
 	mmm.chemistry.ExactRational[] sweptSecondMoments(FluidDomain domain, int face, int donorSupport, int receiverSupport) {

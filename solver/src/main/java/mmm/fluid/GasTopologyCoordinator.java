@@ -100,6 +100,17 @@ final class GasTopologyCoordinator {
 	                                  boolean refineMissingSuccessor) {
 		return planAfterLiquidEdits(edits, occupied, refineMissingSuccessor, -1);
 	}
+	GasTopologyPlan planAfterAdvection(List<PhaseLiquidGeometryEdit> edits, long[] occupied,
+	                                   ConservativeLiquidFlux flux, CellRemapPorts ports, float dt) {
+		var old = domain.gasState.frame; if (old == null) return null;
+		domain.ensureInventoryGrid();
+		var next = GasRuntimeGeometry.captureLiquidEdits(domain, edits, occupied, domain.gasState.sealedDomainBoundary);
+		var successors = old.sealedExterior() == next.sealedExterior() && Arrays.equals(occupied, currentOccupied())
+				&& old.matchesCarrierGeometry(domain, occupied)
+				&& next.matchesSourceCarrierGeometry(domain, occupied)
+				? GasAdvectionSuccessor.certify(domain, old, next, flux, ports, dt) : Map.<Integer, Integer>of();
+		return plan(next, false, null, true, -1, successors);
+	}
 	private GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits, long[] occupied,
 	                                           boolean refineMissingSuccessor, int staticCell) {
 		if (edits == null) throw new IllegalArgumentException("Gas liquid edit list is missing");
@@ -239,6 +250,10 @@ final class GasTopologyCoordinator {
 	}
 	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit,
 	                             boolean refineMissingSuccessor, int staticCell) {
+		return plan(next, deferVolumeWork, edit, refineMissingSuccessor, staticCell, Map.of());
+	}
+	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit,
+	                             boolean refineMissingSuccessor, int staticCell, Map<Integer, Integer> advectionSuccessors) {
 		var old = domain.gasState.frame;
 		boolean thermal = domain.thermalState != null && domain.thermalState.gasModelBound();
 		int count = next.nodeCount(); double[] available = volumes(next);
@@ -260,6 +275,11 @@ final class GasTopologyCoordinator {
 			}
 		} else {
 			var overlap = overlaps(old, next);
+			for (var successor : advectionSuccessors.entrySet()) {
+				long source = (long) successor.getKey() << 32;
+				overlap.subMap(source, (long) (successor.getKey() + 1) << 32).clear();
+				overlap.put(source | successor.getValue(), List.of(ExactRational.ONE));
+			}
 			if (staticCell >= 0 && old.matchesCarrierGeometry(domain, currentOccupied())) {
 				var sweep = StaticGasPistonSweep.certify(old, next, staticCell);
 				if (sweep != null && overlap.subMap((long) sweep.source() << 32, (long) (sweep.source() + 1) << 32).isEmpty())
