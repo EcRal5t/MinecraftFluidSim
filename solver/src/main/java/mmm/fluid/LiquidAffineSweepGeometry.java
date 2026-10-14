@@ -12,6 +12,15 @@ final class LiquidAffineSweepGeometry {
 	static double faceOutflowRate(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
 	                              double intercept, double tangentSlope, double otherSlope,
 	                              int donorSupport, int receiverSupport) {
+		ExactRational rate = ExactRational.ZERO;
+		for (var micro : faceMicroRates(domain, donor, receiver, axis, positive, intercept, tangentSlope, otherSlope,
+				donorSupport, receiverSupport)) rate = rate.add(micro);
+		return observeVolume(rate);
+	}
+
+	private static ExactRational[] faceMicroRates(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
+	                                            double intercept, double tangentSlope, double otherSlope,
+	                                            int donorSupport, int receiverSupport) {
 		requireInput(domain, donor, receiver, axis, intercept, tangentSlope, otherSlope, 0, donorSupport, receiverSupport);
 		var phase = domain.pressurePhaseGeometry;
 		var cut = domain.geometry.cutCells;
@@ -23,7 +32,8 @@ final class LiquidAffineSweepGeometry {
 		double donorPore = poreScale(domain, donor), receiverPore = poreScale(domain, receiver);
 		boolean componentPores = phase.hasComponentPlanes(donor) || phase.hasComponentPlanes(receiver);
 		ExactRational a = rational(intercept), b = rational(tangentSlope), c = rational(otherSlope);
-		ExactRational centered = a.add(b.add(c).divide(2)), rate = ExactRational.ZERO;
+		ExactRational centered = a.add(b.add(c).divide(2));
+		ExactRational[] rates = new ExactRational[8]; java.util.Arrays.fill(rates, ExactRational.ZERO);
 		try {
 			for (int micro = 0; micro < 8; micro++) {
 				if ((micro >>> axis & 1) != (positive ? 1 : 0)) continue;
@@ -39,15 +49,58 @@ final class LiquidAffineSweepGeometry {
 				ExactRational integral = centered.multiply(part[0]).add(b.multiply(part[(axis + 1) % 3 + 1]))
 						.add(c.multiply(part[(axis + 2) % 3 + 1])).multiply(2L * sign);
 				if (integral.signum() < 0) throw new IllegalStateException("Affine positive face rate has negative measure");
-				rate = rate.add(integral.multiply(rational(pore)));
+				rates[micro] = integral.multiply(rational(pore));
 			}
-			double observed = rate.toDouble();
-			if (!Double.isFinite(observed) || rate.signum() > 0 && observed == 0)
-				throw new IllegalStateException("Affine face rate cannot be represented in binary64");
-			return observed;
+			return rates;
 		} catch (IllegalArgumentException magnitude) {
 			throw new IllegalStateException("Exact affine liquid face rate exceeds the rational representation budget", magnitude);
 		}
+	}
+
+	/** Donor-cell phase fractions are kept separately for each box in an open normal column. */
+	static void lowOrderPhaseVolumes(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
+	                                 double[] q, double dtOverH, int donorSupport, int receiverSupport,
+	                                 ExactRational[] open, ExactRational[] liquid, ExactRational[] dry) {
+		requireInput(domain, donor, receiver, axis, q[0], q[1], q[2], dtOverH, donorSupport, receiverSupport);
+		donorSupport &= ~domain.geometry.cutCells.mask(donor);
+		var rates = faceMicroRates(domain, donor, receiver, axis, positive, q[0], q[1], q[2], donorSupport, receiverSupport);
+		var phase = domain.pressurePhaseGeometry;
+		double fallback = poreScale(domain, donor);
+		java.util.Arrays.fill(open, ExactRational.ZERO); java.util.Arrays.fill(liquid, ExactRational.ZERO);
+		java.util.Arrays.fill(dry, ExactRational.ZERO);
+		for (int m = 0; m < 8; m++) {
+			int faceMicro = positive ? m | 1 << axis : m & ~(1 << axis), peer = m ^ 1 << axis;
+			if ((donorSupport & 1 << m) == 0 || rates[faceMicro].isZero()) continue;
+			ExactRational local = rational(phase.componentPoreScale(donor, m, fallback));
+			ExactRational column = local;
+			if ((donorSupport & 1 << peer) != 0) column = column.add(rational(phase.componentPoreScale(donor, peer, fallback)));
+			if (column.isZero()) continue;
+			open[m] = rates[faceMicro].multiply(rational(dtOverH)).multiply(local)
+					.multiply(new ExactRational(column.denominator(), column.numerator()));
+			var plane = new GasGeometryOverlap.HalfSpace(SignedDyadic.of(phase.planeNormal(donor, m, 0)),
+					SignedDyadic.of(phase.planeNormal(donor, m, 1)), SignedDyadic.of(phase.planeNormal(donor, m, 2)),
+					SignedDyadic.of(phase.planeOffset(donor, m)));
+			ExactRational wet = plane.nx().signum() == 0 && plane.ny().signum() == 0 && plane.nz().signum() == 0
+					? constantPhaseFraction(domain, donor, m) : MicroBoxPlaneVolume.wetVolume(m, plane).multiply(8);
+			liquid[m] = open[m].multiply(wet); dry[m] = open[m].subtract(liquid[m]);
+			if (dry[m].signum() < 0) throw new IllegalStateException("PLIC low-order phase measure exceeds its open source");
+		}
+	}
+
+	private static ExactRational constantPhaseFraction(FluidDomain domain, int cell, int micro) {
+		var phase = domain.pressurePhaseGeometry;
+		SignedDyadic stock = domain.markerGrid.exactCellVolumeInventory[cell], capacity = phase.poreVolume(cell);
+		if (phase.hasComponentPlanes(cell)) {
+			int mask = domain.geometry.cutCells.mask(cell);
+			var components = PhaseLiquidGeometryEdit.current(cell, mask, domain.config.cellSize(), domain.markerGrid, domain.particles).components();
+			var capacities = CellRemapMicroTopology.capacities(mask, capacity);
+			for (int i = 0; i < components.size(); i++) if ((components.get(i).supportMask() & 1 << micro) != 0) {
+				stock = components.get(i).volume(); capacity = capacities[i]; break;
+			}
+		}
+		if (stock.signum() == 0) return ExactRational.ZERO;
+		if (stock.equals(capacity)) return ExactRational.ONE;
+		throw new IllegalStateException("Partial liquid source has no PLIC plane for its exact inventory");
 	}
 
 	/**

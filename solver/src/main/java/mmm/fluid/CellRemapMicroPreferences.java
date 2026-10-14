@@ -12,9 +12,10 @@ final class CellRemapMicroPreferences {
 	                         int support, int[] faces, int[] receiverSupports) {
 		SignedDyadic[] inventory = rawInventory(domain, original);
 		double[][] result = new double[faces.length - 1][8];
-		double[] swept = new double[8], wet = new double[8];
+		double[] swept = new double[8], wet = new double[8], low = new double[8];
 		for (int d = 0; d < result.length; d++) {
 			flux.sweptMicroVolumes(faces[d], support, receiverSupports[d], swept, wet);
+			boolean phaseLow = flux.lowOrderMicroVolumes(faces[d], support, receiverSupports[d], low);
 			int normalBit = 1 << flux.axis[faces[d]];
 			double[] donorPreference = new double[8];
 			double geometric = 0, donor = 0;
@@ -22,8 +23,15 @@ final class CellRemapMicroPreferences {
 				int peer = m ^ normalBit;
 				double columnSwept = swept[m], columnWet = wet[m];
 				if ((support & 1 << peer) != 0) { columnSwept += swept[peer]; columnWet += wet[peer]; }
-				if (columnSwept == 0) continue;
-				double raw = inventory[m].toDouble(); donorPreference[m] = raw; donor += raw;
+				double columnLow = phaseLow ? low[m] + ((support & 1 << peer) != 0 ? low[peer] : 0) : columnSwept;
+				if (columnSwept == 0 && columnLow == 0) continue;
+				double raw = inventory[m].toDouble();
+				boolean lowRepresented = low[m] > 0 || ((support & 1 << peer) != 0 && inventory[peer].signum() > 0 && low[peer] > 0);
+				double lowMeasure = lowRepresented ? low[m] : columnLow, lowWet = lowRepresented ? wet[m] : columnWet;
+				donorPreference[m] = phaseLow ? lowMeasure == 0 ? 0 : raw * lowMeasure / lowWet : raw;
+				if (!Double.isFinite(donorPreference[m]) || donorPreference[m] < 0)
+					throw new IllegalStateException("Low-order micro preference lacks its wet source measure");
+				donor += donorPreference[m];
 				// The geometric proposal uses represented swept microboxes; donor-cell supply uses the column.
 				boolean represented = swept[m] > 0 || ((support & 1 << peer) != 0 && inventory[peer].signum() > 0 && swept[peer] > 0);
 				double sweptMeasure = represented ? swept[m] : columnSwept, wetMeasure = represented ? wet[m] : columnWet;
@@ -34,10 +42,11 @@ final class CellRemapMicroPreferences {
 				if (!(Double.isFinite(result[d][m]) && result[d][m] > 0))
 					throw new IllegalStateException("Supported liquid micro preference is unrepresentable");
 			}
-			if (geometric == 0) continue;
-			double blend = flux.geometricBlend(faces[d]);
-			for (int m = 0; m < 8; m++) if (donorPreference[m] > 0)
-				result[d][m] = blend * result[d][m] / geometric + (1 - blend) * donorPreference[m] / donor;
+			if (geometric == 0 && donor == 0) continue;
+			double blend = geometric == 0 ? 0 : donor == 0 ? 1 : flux.geometricBlend(faces[d]);
+			for (int m = 0; m < 8; m++)
+				result[d][m] = (geometric == 0 ? 0 : blend * result[d][m] / geometric)
+						+ (donor == 0 ? 0 : (1 - blend) * donorPreference[m] / donor);
 		}
 		return result;
 	}

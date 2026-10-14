@@ -78,6 +78,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 实际压力 Gram、CG 正二次型 `applyWithWork` 与常压粗模式正能量检查在 [CellVelocityConstraintOperator](../../solver/src/main/java/mmm/fluid/CellVelocityConstraintOperator.java)。实际惯性范围内的精确行关系在 [PressureRowBasis](../../solver/src/main/java/mmm/fluid/PressureRowBasis.java)，主矩阵稀疏 LU、完整残差认证及原输入回退在 [SparsePressureFactor](../../solver/src/main/java/mmm/fluid/SparsePressureFactor.java)。SGS、对称 Gram 缓存、残差修正与常压修正在 [ConstraintGramPreconditioner](../../solver/src/main/java/mmm/fluid/ConstraintGramPreconditioner.java)，规范散度独立行在 [CellPressurePolynomialSpace](../../solver/src/main/java/mmm/fluid/CellPressurePolynomialSpace.java)，实际质量 QR 与局部 balanced 修正在 [ConstraintBlockProjection](../../solver/src/main/java/mmm/fluid/ConstraintBlockProjection.java)。对称性、正能量及粗模式解使用 `:fabric:runMarkerPressureValidation --args="--kernel"`。
 
+有限气腔初压的增量换元在 `MarkerPressureProjection.solve`，精确参考源、残差与完整压力转置在 `CellVelocityConstraintOperator.referencedSource` / `residual` / `force`；小于公开压力 ULP 的响应复用 `MarkerPressureValidation.verifySparsePressureBasis`。失败矩阵与来源相容诊断在 `BoundaryPourDiagnostic.inspectPressureFailure`。
+
 输运后压力来源的分区残差、共同 `D L` 因式关系和模素数秩检查在 [PressureConditionValidation](../../fabric/src/test/java/mmm/fluid/PressureConditionValidation.java)，入口为 `runMarkerPressureValidation --args="--chemical-pressure"`；输入复用 `M7ChemicalTransportValidation.thermalChemicalExtractionSource` 与同场景实体冲量。
 
 壁面零点形状、实际空间秩与微盒拆块在 `CellAffineVelocity`，共同加权 QR 在 [CellAffineFit](../../solver/src/main/java/mmm/fluid/CellAffineFit.java)，精度扩展在 `ExactCellAffineFit`。湿体积二阶矩、完整六面和内部共享面在 `LiquidPressureGeometry.supportMoments`、`microFaces` 与 `interiorFaces`；完整湿块六面散度在 `MarkerPressureProjection.boxDivergence`，部分湿块散度多项式和自由面压力功也在该类组装。均匀及非均匀质量的三轴闭合旋涡求解、发布与点采样，以及独立静液压使用 `:fabric:runMarkerPressureValidation --args="--velocity-space"`。
@@ -89,6 +91,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 正质量联合矩的合并、流入法向厚度、缺失空间方向的有界形状近似与输出回验见 [CellRemapSpatialMoments](../../solver/src/main/java/mmm/fluid/CellRemapSpatialMoments.java)，接收组装配在 `CellCarrierRemapPlan.completeArrivalShape`，精确扫掠二阶矩在 [LiquidAffineSweepGeometry](../../solver/src/main/java/mmm/fluid/LiquidAffineSweepGeometry.java)。平方根压缩及逐行尺度 QR 在 [JointMomentFactor](../../solver/src/main/java/mmm/fluid/JointMomentFactor.java)。聚焦验证为 `:fabric:runRemapMomentsValidation --args="joint-moments"` 和 `sweep-only`；完整逻辑步的分次统计与表示转换预算使用输运选择器 `representation`。
 
 同次仿射输运的逐微盒一阶扫掠复用在 [LiquidAffineFaceFlow](../../solver/src/main/java/mmm/fluid/LiquidAffineFaceFlow.java) 与 `LiquidAffineSweepGeometry.MicroSweep`，支撑限制、来源原始位及内存额度对照复用 `CellRemapMomentsValidation` 的 `sweep-only`；工作区释放在 `CellLiquidVolumeTransport.advect`。
+
+开放微面与 PLIC 湿体积的低阶拆分在 `LiquidAffineSweepGeometry.lowOrderPhaseVolumes`，通量限制和实际来源供给检查在 `ConservativeLiquidFlux.provisionalFluxes`，载体权重在 `CellRemapMicroPreferences.create`。相关正性与三轴供给反例复用 `CellRemapMomentsValidation` 的 `sweep-only`。
 
 有限体积与独立粒子的步长检查分别在 `CellLiquidVolumeTransport.courantRate`、`FluidDomainStepCoordinator.calculateVolumeTransportSubsteps` 和 `MechanicalStageAssembly.projectedCourant`。密闭注液的压力功、薄层支撑与通量取整排查使用 [BoundaryPourDiagnostic](../../fabric/src/test/java/mmm/fluid/BoundaryPourDiagnostic.java)，入口 `:fabric:runBoundaryPourDiagnostic`，追加 `--args=--flux` 重放量化各阶段。
 

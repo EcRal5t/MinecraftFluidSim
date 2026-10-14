@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import mmm.thermal.ThermalDomainState;
+import mmm.units.SignedDyadic;
 import mmm.fluid.air.AirNetwork;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -28,6 +29,7 @@ final class MarkerPressureProjection {
 		}
 	}
 	private int[] liquidRows, gasRows;
+	private double[] pressureOrigin, pressureCorrection;
 	private int sharedStart, sharedEnd;
 	private double[][] originalVelocity, originalPosition, predictor, wallPredictor, wallImpulse, candidate, publishedVelocity, knownImpulse, faceCandidate, knownCellLoad;
 	private double[] originalMass, originalVolume, originalFraction, originalPlaneOffset, pressure, commonPressureMode, rhs, storage, gasInitialPressure, targetVolumeRate, observedPressure;
@@ -54,6 +56,7 @@ final class MarkerPressureProjection {
 	boolean prepare(float dt) {
 		if (!(Float.isFinite(dt) && dt > 0)) throw new IllegalArgumentException("Invalid marker pressure timestep");
 		active = solved = published = hasFreeSurface = false; this.dt = dt;
+		pressureOrigin = pressureCorrection = null;
 		if (!domain.pressureSystem.usesMarkerPressure()) throw new IllegalStateException("Cell pressure requires liquid-only spatial inventory");
 		if (domain.particles.count() == 0) return false;
 		gasFrame = domain.gasBoundary.frame();
@@ -335,22 +338,28 @@ final class MarkerPressureProjection {
 		requireCurrent(); solved = false;
 		int n = rhs.length; double[] diagonal = new double[n], r = new double[n], z = new double[n], direction = new double[n], applied = new double[n];
 		operator.diagonal(diagonal);
+		pressureOrigin = pressure.clone(); pressureCorrection = new double[n];
+		for (int row = 0; row < n; row++) {
+			if (!(diagonal[row] >= 0 && Double.isFinite(diagonal[row]))) throw blocked("Nonfinite actual pressure diagonal at row " + row);
+			if (storage[row] > 0) pressureOrigin[row] = gasInitialPressure[row];
+			if (diagonal[row] == 0) pressureOrigin[row] = 0;
+		}
+		double[] rate = new double[n]; operator.volumeRate(wallPredictor, rate);
+		SignedDyadic[] source = operator.referencedSource(rate, dt, gasInitialPressure, pressureOrigin);
+		for (int i = 0; i < n; i++) pressureCorrection[i] = pressure[i] - pressureOrigin[i];
 		double h = domain.config.cellSize(), unit = h * h * h / domain.config.density(), tolerance = target * unit;
 		for (int i = 0; i < n; i++) {
-			if (!(diagonal[i] >= 0 && Double.isFinite(diagonal[i]))) throw blocked("Nonfinite actual pressure diagonal at row " + i);
-			if (diagonal[i] == 0 && rhs[i] != 0) throw blocked("Pressure source has no actual marker velocity support at row " + i);
-			if (diagonal[i] == 0) pressure[i] = 0;
+			if (diagonal[i] == 0 && source[i].signum() != 0) throw blocked("Pressure source has no actual marker velocity support at row " + i);
+			if (diagonal[i] == 0) pressureCorrection[i] = 0;
 		}
-		operator.apply(pressure, applied);
-		for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
+		operator.residual(pressureCorrection, source, r);
 		double residual = rms(r); int iterations = 0;
 		if (residual > tolerance) {
 			boolean[] observed = new boolean[n];
 			for (int row : liquidRows) if (row >= 0) observed[row] = true;
 			for (int row : gasRows) if (row >= 0) observed[row] = true;
-			if (SparsePressureFactor.solve(operator, rhs, pressure, diagonal, observed, closedObservationGauge(), wallPredictor, dt, tolerance)) {
-				iterations = 1; operator.apply(pressure, applied);
-				for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
+			if (SparsePressureFactor.solve(operator, source, pressureCorrection, diagonal, observed, closedObservationGauge(), wallPredictor, dt, tolerance, rhs)) {
+				iterations = 1; operator.residual(pressureCorrection, source, r);
 				residual = rms(r);
 			}
 		}
@@ -362,11 +371,10 @@ final class MarkerPressureProjection {
 				if (!(denominator > 0 && Double.isFinite(denominator) && rz > 0 && Double.isFinite(rz))) break;
 				double alpha = rz / denominator;
 				if (!Double.isFinite(alpha)) break;
-				for (int i = 0; i < n; i++) { pressure[i] += alpha * direction[i]; r[i] -= alpha * applied[i]; }
+				for (int i = 0; i < n; i++) { pressureCorrection[i] += alpha * direction[i]; r[i] -= alpha * applied[i]; }
 				iterations++; residual = rms(r);
 				if (residual <= tolerance) {
-					operator.apply(pressure, applied);
-					for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
+					operator.residual(pressureCorrection, source, r);
 					residual = rms(r);
 					if (residual <= tolerance) break;
 					// A fresh residual restarts the compatible-range iteration.
@@ -380,11 +388,13 @@ final class MarkerPressureProjection {
 				rz = nextRz;
 			}
 		}
-		operator.apply(pressure, applied);
-		for (int i = 0; i < n; i++) r[i] = rhs[i] - applied[i];
+		operator.residual(pressureCorrection, source, r);
+		for (int i = 0; i < n; i++) {
+			pressure[i] = SignedDyadic.of(pressureOrigin[i]).add(SignedDyadic.of(pressureCorrection[i])).toDouble();
+		}
 		residual = rms(r);
 		if (!Double.isFinite(residual) || residual > tolerance) return new PressureProjectionResult(iterations, residual / unit, false);
-		double[][] force = markers(basis.markerCount()); operator.force(pressure, force);
+		double[][] force = markers(basis.markerCount()); operator.force(pressureCorrection, pressureOrigin, force);
 		candidate = markers(basis.markerCount()); publishedVelocity = markers(basis.markerCount());
 		for (int a = 0; a < 3; a++) for (int i = 0; i < basis.markerCount(); i++) {
 			double velocity = wallPredictor[a][i] + dt * force[a][i] / basis.massKilograms(i);
@@ -397,7 +407,9 @@ final class MarkerPressureProjection {
 		for (double[] axis : faceCandidate) for (double value : axis) if (!Float.isFinite((float) value)) throw blocked("Unrepresentable projected MAC velocity");
 		for (int i = 0; i < n; i++) {
 			if (!Double.isFinite(pressure[i])) throw blocked("Unrepresentable projected pressure at row " + i);
-			targetVolumeRate[i] = dt * storage[i] * (gasInitialPressure[i] - pressure[i]);
+			targetVolumeRate[i] = SignedDyadic.of(dt).multiply(SignedDyadic.of(storage[i]))
+					.multiply(SignedDyadic.of(gasInitialPressure[i]).subtract(SignedDyadic.of(pressureOrigin[i]))
+							.subtract(SignedDyadic.of(pressureCorrection[i]))).toDouble();
 		}
 		diagnosticGasDiagonal = new double[gasRows.length]; diagnosticGasRhs = new double[gasRows.length];
 		for (int node = 1; node < gasRows.length; node++) if (gasRows[node] >= 0) {

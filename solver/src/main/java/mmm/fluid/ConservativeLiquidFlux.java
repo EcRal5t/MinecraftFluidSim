@@ -10,6 +10,8 @@ final class ConservativeLiquidFlux {
 	interface FaceSweep {
 		void sweptMoments(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
 		                  int donorSupport, int receiverSupport, double[] result);
+		default double lowOrderVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
+		                               int donorSupport, int receiverSupport, double[] liquid) { return Double.NaN; }
 		default mmm.chemistry.ExactRational[] sweptSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
 		                                                     double dtOverH, int donorSupport, int receiverSupport) {
 			throw new IllegalStateException("Liquid face sweep has no quadratic spatial integration rule");
@@ -171,11 +173,13 @@ final class ConservativeLiquidFlux {
 	}
 
 	private void provisionalFluxes(double[] volume, double dtOverH) {
-		System.arraycopy(volume, 0, low, 0, cellCount);
+		Arrays.fill(low, 0);
 		Arrays.fill(positive, 0); Arrays.fill(negative, 0);
 		CpuWorkBatch.run(flux.length, (from, until) -> {
 			double[] moments = faceSweep == null ? null : new double[4];
+			double[] micro = faceSweep == null ? null : new double[8];
 			for (int f = from; f < until; f++) {
+				donorFlux[f] = 0;
 				double courant = velocity[f] * dtOverH;
 				int donor = positive(f) ? left[f] : right[f];
 				if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) { flux[f] = Math.copySign(0, velocity[f]); continue; }
@@ -183,6 +187,11 @@ final class ConservativeLiquidFlux {
 				if (positive(f)) off -= (axis[f] == 0 ? nx : axis[f] == 1 ? ny : nz) * (1 - width);
 				if (axis[f] == 0) nx *= width; else if (axis[f] == 1) ny *= width; else nz *= width;
 				donorFlux[f] = capacity[donor] == 0 ? 0 : courant * aperture[f] * volume[donor] / capacity[donor];
+				if (faceSweep != null) {
+					double phaseLow = faceSweep.lowOrderVolumes(f % physicalFaceCount, donor, receiver(f), axis[f], positive(f),
+							dtOverH, 255, 255, micro);
+					if (!Double.isNaN(phaseLow)) donorFlux[f] = Math.copySign(phaseLow, courant);
+				}
 				double swept;
 				if (faceSweep != null) {
 					faceSweep.sweptMoments(f % physicalFaceCount, donor, receiver(f), axis[f], positive(f), dtOverH, 255, 255, moments);
@@ -193,14 +202,22 @@ final class ConservativeLiquidFlux {
 				flux[f] = Math.copySign(swept, courant) - donorFlux[f];
 			}
 		});
+		Arrays.fill(outgoing, 0);
 		for (int f = 0; f < flux.length; f++) {
 			double courant = velocity[f] * dtOverH;
 			int donor = positive(f) ? left[f] : right[f];
 			if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) continue;
-			low[left[f]] -= donorFlux[f]; low[right[f]] += donorFlux[f];
+			outgoing[donor] += Math.abs(donorFlux[f]);
+			low[receiver(f)] += Math.abs(donorFlux[f]);
 			double a = flux[f];
 			positive[left[f]] += Math.max(-a, 0); negative[left[f]] += Math.max(a, 0);
 			positive[right[f]] += Math.max(a, 0); negative[right[f]] += Math.max(-a, 0);
+		}
+		for (int c = 0; c < cellCount; c++) {
+			if (outgoing[c] > volume[c])
+				throw new MechanicalTimeRefinement(Math.max(2, (int)Math.ceil(outgoing[c] / volume[c])),
+						"Low-order liquid source exceeds beginning inventory at cell " + c + ": outgoing=" + outgoing[c] + ", volume=" + volume[c]);
+			low[c] += volume[c] - outgoing[c];
 		}
 	}
 
@@ -214,7 +231,7 @@ final class ConservativeLiquidFlux {
 			double a = flux[f];
 			double limiter = a >= 0 ? Math.min(rNegative[left[f]], rPositive[right[f]]) : Math.min(rPositive[left[f]], rNegative[right[f]]);
 			int donor = positive(f) ? left[f] : right[f];
-			flux[f] = (capacity[donor] == 0 ? 0 : velocity[f] * dtOverH * aperture[f] * volume[donor] / capacity[donor]) + a * limiter;
+			flux[f] = donorFlux[f] + a * limiter;
 			geometricBlend[f] = flux[f] == 0 ? 0 : Math.max(0, Math.min(1, limiter * (donorFlux[f] + a) / flux[f]));
 			outgoing[donor] += Math.abs(flux[f]);
 		}
@@ -467,6 +484,10 @@ final class ConservativeLiquidFlux {
 	int donor(int f) { return positive(f) ? left[f] : right[f]; }
 	/** Fraction of the final face transfer assigned to the limited geometric sweep. */
 	double geometricBlend(int face) { return geometricBlend[face]; }
+	boolean lowOrderMicroVolumes(int face, int donorSupport, int receiverSupport, double[] liquid) {
+		return faceSweep != null && !Double.isNaN(faceSweep.lowOrderVolumes(face % physicalFaceCount,
+				donor(face), receiver(face), axis[face], positive(face), dtOverH, donorSupport, receiverSupport, liquid));
+	}
 	double representationBlend(int face) { return representationBlend[face]; }
 	void sweptMoments(int face, double[] result) {
 		int donor = donor(face), neighbor = receiver(face), a = axis[face];

@@ -168,6 +168,28 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 			if (part != result) for (int i = 0; i < 4; i++) result[i] += part[i];
 		}
 	}
+
+	@Override public double lowOrderVolumes(int face, int donor, int receiver, int axis, boolean positive,
+	                                       double dtOverH, int donorSupport, int receiverSupport, double[] liquid) {
+		Arrays.fill(liquid, 0);
+		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
+		if (components == null) return 0;
+		var open = new ExactRational[8]; var wet = new ExactRational[8]; var dry = new ExactRational[8];
+		double total = 0;
+		for (var component : components) {
+			int support = donorSupport & component.support(); if (support == 0) continue;
+			LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, receiver, axis, positive, component.q(),
+					dtOverH, component.support(), receiverSupport, open, wet, dry);
+			ExactRational sum = ExactRational.ZERO;
+			for (int m = 0; m < 8; m++) if ((support & 1 << m) != 0
+					&& (support & 1 << (positive ? m | 1 << axis : m & ~(1 << axis))) != 0) {
+				liquid[m] += wet[m].toDouble(); sum = sum.add(wet[m]);
+			}
+			total += sum.toDouble();
+		}
+		if (!Double.isFinite(total) || total < 0) throw new IllegalStateException("Unrepresentable low-order phase flux");
+		return total;
+	}
 	@Override public void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
 	                                       int donorSupport, int receiverSupport, double[] swept, double[] wet) {
 		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];

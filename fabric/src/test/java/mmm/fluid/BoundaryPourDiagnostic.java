@@ -148,6 +148,8 @@ public final class BoundaryPourDiagnostic {
 	}
 
 	private static void snapshot(FluidDomain d, int attempt, int substep, float dt, String outcome, boolean fluxOnly) {
+		if (outcome.startsWith("failed=") && !value(d.pressureSystem.markerProjection(), "solved", Boolean.class))
+			inspectPressureFailure(d.pressureSystem.markerProjection());
 		if (fluxOnly) {
 			System.out.printf("POUR flux snapshot attempt=%d substep=%d dt=%g %s%n", attempt, substep, dt, outcome);
 			if (outcome.startsWith("failed=")) {
@@ -239,17 +241,63 @@ public final class BoundaryPourDiagnostic {
 		if (traceBlock >= 0 && traceBlock != worstBlock && traceBlock != wetBlock) cell(d, projection, basis, geometry, coefficient, traceBlock);
 	}
 
+	private static void inspectPressureFailure(MarkerPressureProjection projection) {
+		if (!value(projection, "active", Boolean.class)) return;
+		var operator = projection.operator();
+		var rhs = value(projection, "rhs", double[].class);
+		var pressure = value(projection, "pressure", double[].class);
+		var diagonal = new double[rhs.length]; var image = new double[rhs.length];
+		operator.diagonal(diagonal); operator.apply(pressure, image);
+		double norm = 0, largest = 0, lowest = Double.POSITIVE_INFINITY, highest = 0; int worst = -1;
+		for (int row = 0; row < rhs.length; row++) {
+			double residual = Math.abs(rhs[row] - image[row]); norm = Math.hypot(norm, residual);
+			if (residual > largest) { largest = residual; worst = row; }
+			if (diagonal[row] > 0) lowest = Math.min(lowest, diagonal[row]); highest = Math.max(highest, diagonal[row]);
+		}
+		System.out.printf("POUR pressure rows=%d rawResidual=%g worstRow=%d worstResidual=%g diagonalRange=[%g,%g] worstRhs=%g worstPressure=%g%n",
+				rhs.length, norm / Math.sqrt(Math.max(1, rhs.length)), worst, largest, lowest, highest,
+				worst < 0 ? 0 : rhs[worst], worst < 0 ? 0 : pressure[worst]);
+		var origin = value(projection, "pressureOrigin", double[].class);
+		if (origin != null) {
+			var rate = new double[rhs.length]; operator.volumeRate(value(projection, "wallPredictor", double[][].class), rate);
+			var source = operator.referencedSource(rate, value(projection, "dt", Float.class),
+					value(projection, "gasInitialPressure", double[].class), origin);
+			var residual = new double[rhs.length]; operator.residual(value(projection, "pressureCorrection", double[].class), source, residual);
+			double actual = 0; for (double value : residual) actual = Math.hypot(actual, value);
+			System.out.printf("POUR pressure referencedResidual=%g%n", actual / Math.sqrt(Math.max(1, rhs.length)));
+		}
+		try {
+			var basis = operator.rowBasis(); boolean[] observed = new boolean[rhs.length];
+			var liquids = value(projection, "liquidRows", int[].class); var gases = value(projection, "gasRows", int[].class);
+			for (int row : liquids) if (row >= 0) observed[row] = true;
+			for (int row : gases) if (row >= 0) observed[row] = true;
+			int anchor = value(projection, "pressureAnchor", Integer.class);
+			boolean commonGauge = !value(projection, "hasFreeSurface", Boolean.class) && anchor >= 0
+					&& anchor < liquids.length && liquids[anchor] >= 0;
+			var rate = new double[rhs.length]; operator.volumeRate(value(projection, "wallPredictor", double[][].class), rate);
+			System.out.printf("POUR pressure exactRows=%d dependencies=%d observationNeutral=%s compatibleSource=%s%n",
+					basis.size(), basis.dependencyCount(), basis.observationNeutral(observed, diagonal, commonGauge),
+					basis.compatibleSource(rhs, rate, value(projection, "dt", Float.class)));
+		} catch (PressureRowBasis.Unavailable unavailable) {
+			System.out.println("POUR pressure exact certificate unavailable: " + unavailable.getMessage());
+		}
+	}
+
 	private static void pressureWork(MarkerPressureProjection projection, CellAffineVelocity basis, float dt) {
 		var before = value(projection, "wallPredictor", double[][].class);
 		var after = value(projection, "candidate", double[][].class);
 		var pressure = value(projection, "pressure", double[].class);
+		var origin = value(projection, "pressureOrigin", double[].class);
+		var correction = value(projection, "pressureCorrection", double[].class);
 		var storage = value(projection, "storage", double[].class);
 		var initial = value(projection, "gasInitialPressure", double[].class);
-		var rhs = value(projection, "rhs", double[].class);
 		var operator = projection.operator();
-		var force = new double[3][basis.markerCount()]; operator.force(pressure, force);
+		var force = new double[3][basis.markerCount()]; operator.force(correction, origin, force);
 		var rate = new double[pressure.length]; operator.volumeRate(after, rate);
-		var applied = new double[pressure.length]; operator.apply(pressure, applied);
+		var predictorRate = new double[pressure.length]; operator.volumeRate(before, predictorRate);
+		var residual = new double[pressure.length];
+		operator.residual(correction, operator.referencedSource(predictorRate, dt, initial, origin), residual);
+		var step = SignedDyadic.of(dt); var stepSquared = step.multiply(step);
 		var change = mmm.units.SignedDyadic.ZERO; var impulseEnergy = mmm.units.SignedDyadic.ZERO;
 		var actualWork = mmm.units.SignedDyadic.ZERO;
 		for (int a = 0; a < 3; a++) for (int p = 0; p < basis.markerCount(); p++) {
@@ -263,14 +311,16 @@ public final class BoundaryPourDiagnostic {
 		var gasWork = mmm.units.SignedDyadic.ZERO; var residualWork = mmm.units.SignedDyadic.ZERO;
 		double maximumPressure = 0, maximumResidual = 0, maximumRateDefect = 0; int worst = -1;
 		for (int row = 0; row < pressure.length; row++) {
-			var p = mmm.units.SignedDyadic.of(pressure[row]); var s = mmm.units.SignedDyadic.of(storage[row]);
-			gasWork = gasWork.add(s.multiply(p).multiply(mmm.units.SignedDyadic.of(initial[row]).subtract(p)).multiply(mmm.units.SignedDyadic.of((double) dt * dt)));
-			residualWork = residualWork.add(p.multiply(mmm.units.SignedDyadic.of(rhs[row]).subtract(mmm.units.SignedDyadic.of(applied[row]))).multiply(mmm.units.SignedDyadic.of((double) dt * dt)));
-			maximumResidual = Math.max(maximumResidual, Math.abs(rhs[row] - applied[row]));
-			maximumRateDefect = Math.max(maximumRateDefect, Math.abs(rate[row] - dt * storage[row] * (initial[row] - pressure[row])));
+			var p = SignedDyadic.of(origin[row]).add(SignedDyadic.of(correction[row]));
+			var response = SignedDyadic.of(storage[row]).multiply(SignedDyadic.of(initial[row]).subtract(p));
+			var rowWork = response.multiply(p).multiply(stepSquared);
+			gasWork = gasWork.add(rowWork);
+			residualWork = residualWork.add(p.multiply(SignedDyadic.of(residual[row])).multiply(stepSquared));
+			maximumResidual = Math.max(maximumResidual, Math.abs(residual[row]));
+			maximumRateDefect = Math.max(maximumRateDefect, Math.abs(rate[row] - step.multiply(response).toDouble()));
 			if (Math.abs(pressure[row]) > maximumPressure) { maximumPressure = Math.abs(pressure[row]); worst = row; }
 			if (storage[row] > 0) System.out.printf("POUR gasRow=%d storage=%g p0=%g p=%g gasWork=%g%n", row, storage[row], initial[row], pressure[row],
-					(double) dt * dt * storage[row] * pressure[row] * (initial[row] - pressure[row]));
+					rowWork.toDouble());
 		}
 		System.out.printf("POUR pressureWork deltaKE=%g removedImpulseKE=%g gasWork=%g energyDefect=%g actualForceWork=%g pressureTimesResidual=%g maxResidual=%g maxRateDefect=%g maxPressure=%g row=%d%n",
 				change.toDouble(), impulseEnergy.toDouble(), gasWork.toDouble(), change.add(impulseEnergy).subtract(gasWork).toDouble(),

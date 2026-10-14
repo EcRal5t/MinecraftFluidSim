@@ -587,6 +587,29 @@ public final class MarkerPressureValidation {
 		if (!SparsePressureFactor.solve(closed, rhs, pressure, diagonal, new boolean[]{true, true, false}, true, velocity, dt, 1e-9))
 			throw new AssertionError("A uniform closed pressure gauge prevented the certified physical solve");
 		near(pressure[0] - pressure[1], rhs[0] / diagonal[0], 1e-9, "Closed pressure difference is independent of the common gauge");
+		var coupled = new CellVelocityConstraintOperator(basis, java.util.List.of(
+				new CellVelocityConstraintOperator.Row(definitions.getFirst().blocks(), 88182.2),
+				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{-1, 0, 0, 0})), 88182.2)));
+		var initial = new double[]{71915.1, 71915.1}; var correction = new double[2]; var rate = new double[2]; var nativeSource = new double[2];
+		Arrays.fill(velocity[0], 1e-11); coupled.volumeRate(velocity, rate); float coupledDt = 8.60585e-5F;
+		var source = coupled.referencedSource(rate, coupledDt, initial, initial);
+		for (int row = 0; row < 2; row++) nativeSource[row] = 88182.2 * initial[row] - rate[row] / coupledDt;
+		if (nativeSource[0] != nativeSource[1]) throw new AssertionError("Gas storage fixture lost its sub-ULP physical source");
+		var coupledDiagonal = new double[2]; coupled.diagonal(coupledDiagonal);
+		if (!SparsePressureFactor.solve(coupled, source, correction, coupledDiagonal, new boolean[]{true, true}, false,
+				velocity, coupledDt, 1e-16, nativeSource)) throw new AssertionError("Referenced gas storage lost its small pressure response");
+		var residual = new double[2]; coupled.residual(correction, source, residual);
+		for (double value : residual) near(value, 0, 1e-16, "Exact referenced gas storage residual");
+		if (!(correction[0] < 0 && correction[1] > 0) || initial[0] + correction[0] != initial[0]
+				|| initial[1] + correction[1] != initial[1]) throw new AssertionError("Gas storage lost its sub-ULP pressure increment");
+		var pairedForce = new double[3][basis.markerCount()]; var incrementForce = new double[3][basis.markerCount()];
+		coupled.force(correction, initial, pairedForce); coupled.force(correction, incrementForce);
+		double forceNorm = 0;
+		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < basis.markerCount(); marker++) {
+			near(pairedForce[axis][marker], incrementForce[axis][marker], 0, "Pressure reference cancels before force rounding");
+			forceNorm = Math.hypot(forceNorm, pairedForce[axis][marker]);
+		}
+		if (!(forceNorm > 0)) throw new AssertionError("Referenced pressure lost its actual carrier force");
 	}
 
 	/** Independent full C assembly checks the factor action without reading its cached D or H. */
