@@ -10,6 +10,8 @@ import mmm.thermal.ThermalCaloricBounds.QuantaRange;
 import mmm.thermal.ThermalMaterialDefinition;
 import mmm.thermal.ThermalRegistry;
 import mmm.units.SignedDyadic;
+import mmm.chemistry.ExactRational;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
@@ -118,6 +120,53 @@ final class GasPhaseMergeBounds {
 		}
 		return List.copyOf(result);
 	}
+
+	/** Bounds a positive child of the actual common-temperature inventory/U partition. */
+	double partitionTemperatureLower(GasInventory inventory, double energy, ExactRational share, int maximumChildren) {
+		try {
+			if (maximumChildren < 1 || share.signum() <= 0 || share.compareTo(ExactRational.ONE) > 0) return Double.NaN;
+			double temperature = gas.state(inventory, energy).temperatureK();
+			var source = portions(inventory); var minimum = new ArrayList<PortionRange>();
+			SignedDyadic raw = SignedDyadic.of(energy);
+			SignedDyadic error = abs(raw.subtract(SignedDyadic.of(caloric.curveEnergyAtTemperature(source, temperature, false))));
+			SignedDyadic other = abs(raw.subtract(SignedDyadic.of(caloric.curveEnergyAtTemperature(source, temperature, true))));
+			if (other.compareTo(error) > 0) error = other;
+			SignedDyadic magnitude = SignedDyadic.ZERO, hostForward = SignedDyadic.ZERO;
+			for (int index = 0; index < source.size(); index++) {
+				var portion = source.get(index); var component = inventory.components().get(index);
+				long nanos = share.numerator().multiply(BigInteger.valueOf(component.standardVolumeNanos()))
+						.divide(share.denominator()).longValueExact();
+				double massUlp = Math.ulp(2 * component.mass());
+				// Integer casts, division and multiplication each round once; the mass pivot
+				// also carries all other children's observation errors before its final RN.
+				double fraction = Math.max(0, Math.nextDown(Math.nextDown((double) nanos) / Math.nextUp((double) component.standardVolumeNanos())));
+				SignedDyadic massError = SignedDyadic.of(massUlp).multiply(SignedDyadic.of(4L * maximumChildren + 1, 0));
+				double least = Math.max(0, Math.nextDown(SignedDyadic.of(Math.max(0, Math.nextDown(component.mass() * fraction)))
+						.subtract(massError).toDouble()));
+				minimum.add(new PortionRange(portion.materialHandle(), least, 2 * component.mass(), java.util.Map.of()));
+				var species = new TreeMap<String, QuantaRange>();
+				portion.species().forEach((id, q) -> species.put(id, new QuantaRange(0, q.high())));
+				var child = new PortionRange(portion.materialHandle(), 0, 2 * component.mass(), species);
+				hostForward = hostForward.add(SignedDyadic.of(caloric.forwardRoundingBound(child, temperature)));
+				// Species quanta conserve exactly. Only the component's mass-pivot RN
+				// and each child's raw reference column perturb the summed caloric curve.
+				error = error.add(SignedDyadic.of(massUlp).multiply(abs(caloric.specificCurveEnergy(portion.materialHandle(), temperature))))
+						.add(SignedDyadic.of(caloric.referenceRoundingBound(portion)))
+						.add(SignedDyadic.of(caloric.referenceRoundingBound(child)).multiply(SignedDyadic.of(maximumChildren, 0)));
+				magnitude = magnitude.add(SignedDyadic.of(Math.max(Math.abs(caloric.curveEnergyAtTemperature(List.of(child), temperature, false)),
+						Math.abs(caloric.curveEnergyAtTemperature(List.of(child), temperature, true)))));
+			}
+			// Host sensible evaluation and the final forward U each round; the pivot
+			// carries their sum before its exact reduction's final RN.
+			SignedDyadic forward = hostForward.add(SignedDyadic.of(Math.ulp(Math.nextUp(magnitude.add(hostForward).toDouble()))))
+					.multiply(SignedDyadic.of(maximumChildren, 0));
+			error = error.add(forward).add(SignedDyadic.of(Math.ulp(Math.nextUp(abs(raw)
+					.add(magnitude.multiply(SignedDyadic.of(maximumChildren, 0))).add(forward).toDouble()))));
+			return caloric.temperatureWithEnergyError(minimum, temperature, Math.nextUp(error.toDouble()), false);
+		} catch (IllegalArgumentException | ArithmeticException unresolved) { return Double.NaN; }
+	}
+
+	private static SignedDyadic abs(SignedDyadic value) { return value.signum() < 0 ? value.negate() : value; }
 
 	double partialPressureLower(GasInventory mandatory, String vaporId, double temperature, double baseVolume) {
 		var vapor = mandatory.component(vaporId);

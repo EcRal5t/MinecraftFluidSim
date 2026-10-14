@@ -66,6 +66,21 @@ public final class GasPhaseInterfaceValidation {
 		var mergingSource = merger.gasState.frame;
 		check(mergingSource.nodeCount()==2 && GasPhaseGeometryEnvelope.capture(mergingSource,merger.gasState.network,null,
 				0,mergingSource.commonCellNode(1))==null,"A possible merger reused an isolated gas inventory/energy certificate");
+		var branched = domain(0, true, new float[]{.5F,.25F,.5F,.5F});
+		for(int cell:new int[]{2,3}) { branched.geometry.cutCells.replaceMask(cell,0); branched.geometry.solid[cell]=false; }
+		branched.bootstrapGasState("");
+		var branchSource = branched.gasState.frame;
+		var branchContact = GasPhaseInterfaceResolver.contacts(branchSource,0).getFirst();
+		check(GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node())==null,
+				"A changing multi-cell source claimed a complete-stock successor");
+		var branchEnvelope = GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node(),branchContact.pieces());
+		check(branchEnvelope!=null && branchEnvelope.splitSource()
+				&& branchEnvelope.sourceShare().equals(mmm.chemistry.ExactRational.of(6).divide(7)),
+				"Fixed contact backbone lost its exact source-stock share: " + branchContact + " share="
+						+ (branchEnvelope==null?null:branchEnvelope.sourceShare()));
+		check(GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node(),
+				branchContact.pieces().stream().filter(piece->piece/8==0).toList())==null,
+				"Changing contact pieces supplied an unproved persistent gas path");
 		validateFiniteGasBatchBounds();
 		System.out.println("Gas phase microcontact validation passed");
 	}
@@ -81,6 +96,40 @@ public final class GasPhaseInterfaceValidation {
 		var transition=new mmm.thermal.ThermalPhaseTransition("test:bounds/boil",water.id(),vapor.id(),373.15,168,168*1700L,
 				mmm.chemistry.ExactRational.of(21000).divide(1<<24),mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS,10000,3000000);
 		var registry=new mmm.thermal.ThermalRegistry(java.util.List.of(water,vapor,air),java.util.List.of(),java.util.List.of(transition),"","");
+		for(long reference:new long[]{-1_000_000_000_000L,3_000_000_000_000L}) {
+			var offset=new mmm.thermal.ThermalSpeciesOffset("test:bounds/h2o", "mmm:h2o",vapor.id(),mmm.chemistry.ExactRational.of(reference).divide(7));
+			var partitionVapor=new mmm.thermal.ThermalMaterialDefinition(vapor.id(),vapor.carrierKind(),vapor.carrierId(),vapor.referenceTemperatureK(),
+					vapor.referenceSpecificEnergyEuPerMu(),vapor.conductivityEuPerSecondMeterK(),java.util.List.of(
+						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(250,301,1111.17),
+						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(301,500,1410.13001),
+						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(500,800,2000.25)));
+			var partitionAir=new mmm.thermal.ThermalMaterialDefinition(air.id(),air.carrierKind(),air.carrierId(),air.referenceTemperatureK(),
+					air.referenceSpecificEnergyEuPerMu(),air.conductivityEuPerSecondMeterK(),java.util.List.of(
+						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(150,273.15,718.1234567),
+						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(273.15,350,702.25),
+						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(350,800,789.000001)));
+			var definitions=new mmm.thermal.ThermalRegistry(java.util.List.of(water,partitionVapor,partitionAir),java.util.List.of(offset),java.util.List.of(transition),"0".repeat(64),"");
+			var model=new mmm.thermal.GasThermalModel(definitions,mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
+			var stock=new mmm.fluid.air.GasInventory(java.util.List.of(
+					new mmm.fluid.air.GasComponentAmount(air.carrierId(),9_007_199_254_740_991L,72,java.util.List.of(),72),
+					new mmm.fluid.air.GasComponentAmount(vapor.carrierId(),91,.003,java.util.List.of(new mmm.fluid.air.GasComponentAmount.SpeciesAmount("mmm:h2o",37)),.003)));
+			var merged=new GasPhaseMergeBounds(definitions,model,java.util.List.of());
+			for(double temperature:new double[]{293.15,Math.nextDown(301),301,Math.nextUp(301),333.333333,400,Math.nextUp(600)})
+				for(long[] weights:new long[][]{{1,1},{999,1},{1,999},{0,1,3,7},{4095,1,1,1}}) {
+				var children=stock.partition(weights);double energy=model.internalEnergyAtTemperature(stock,temperature);
+				var energies=model.partitionEnergy(stock,energy,children);long sum=Arrays.stream(weights).sum();
+				for(int child=0;child<weights.length;child++)if(weights[child]>0) {
+					var share=mmm.chemistry.ExactRational.of(weights[child]).divide(sum);
+					double lower=merged.partitionTemperatureLower(stock,energy,share,weights.length);
+					check(Double.isFinite(lower) && lower<=model.state(children.get(child),energies[child]).temperatureK(),
+							"Split gas temperature lower bound exceeded an actual common-temperature child");
+					long nanos=share.numerator().multiply(java.math.BigInteger.valueOf(stock.component(vapor.carrierId()).standardVolumeNanos()))
+							.divide(share.denominator()).longValueExact();
+					var amount=children.get(child).component(vapor.carrierId());
+					check(nanos<=(amount==null?0:amount.standardVolumeNanos()),"Split stock bound exceeded a largest-remainder vapor share");
+				}
+			}
+		}
 		try {
 			for(int sourceCase=0;sourceCase<3;sourceCase++) {
 				boolean existingVapor=sourceCase==1, completeDepletion=sourceCase==2;

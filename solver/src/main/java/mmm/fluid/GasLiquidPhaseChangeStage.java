@@ -132,7 +132,7 @@ final class GasLiquidPhaseChangeStage {
 		if (high <= 0L) return null;
 		var contactPlanes = GasRuntimeGeometry.prepareBoilContactPlanes(support, cell, contact);
 		var geometrySource = new BoilGeometrySource();
-		var envelope = GasPhaseGeometryEnvelope.forBoiling(support, cell, node);
+		var envelope = GasPhaseGeometryEnvelope.forBoiling(support, cell, node, contact.contactPieces());
 		if (envelope == null) return GasPhaseBatchSearch.maximum(high, batches -> completeBoil(cell, node, transition, phase,
 				contact, contactPlanes, geometrySource, prepareBoilInventory(cell, node, liquidHandle, transition, phase, thermalCell,
 						volatileSpecies, liquidTemperature, batches, contact)), (low, upper) -> false);
@@ -216,6 +216,20 @@ final class GasLiquidPhaseChangeStage {
 			if (!(Double.isFinite(volume) && volume > 0)) return false;
 			var stock = candidate.gasPlan().inventoryAfter();
 			double temperature = candidate.thermalPlan().temperatureK();
+			if (envelope.splitSource()) {
+				if (!Double.isFinite(temperature)) return false;
+				String vaporId = support.thermal().registry().material(
+						support.thermal().registry().materialHandle(transition.upperEnergyMaterialId())).carrierId();
+				var vapor = stock.component(vaporId);
+				if (vapor == null) return false;
+				long nanos = envelope.sourceShare().numerator().multiply(java.math.BigInteger.valueOf(vapor.standardVolumeNanos()))
+						.divide(envelope.sourceShare().denominator()).longValueExact();
+				var merged = new GasPhaseMergeBounds(support.thermal().registry(), gasThermal, List.of());
+				double gasTemperature = merged.partitionTemperatureLower(stock, candidate.candidateGasEnergy(),
+						envelope.sourceShare(), envelope.maximumChildren());
+				double partial = GasPhaseMergeBounds.partialPressureLower(nanos, gasTemperature, volume);
+				return phase.saturationPressureBound(transition, temperature, true) < partial;
+			}
 			if (envelope.possibleStocks().isEmpty()) {
 				double pressureLower = gasThermal.absolutePressure(stock, volume, candidate.candidateGasEnergy());
 				if (Double.isNaN(temperature)) temperature = gasThermal.state(stock, candidate.candidateGasEnergy()).temperatureK();

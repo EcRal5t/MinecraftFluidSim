@@ -100,6 +100,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 颗粒单份合法整数选择在 `GranularIntegerAllocation.admissibleMasks`；插入与取出的未来占容、气腔及热账预检在 [GranularTransferPlanner](../../solver/src/main/java/mmm/fluid/GranularTransferPlanner.java)。相关对照复用 `M8GranularValidation.couplingOccupancyResumsExactly`、`CarrierMutationValidation.defaultInsertionsPreflightStoredThermalState` 与 `cellVolumeReplacementPreflightsAllOwners`。
 
+沸腾来源拆分时的固定接触库存份额在 `GasPhaseGeometryEnvelope.fixedContactShare`，共同温度拆分的舍入包络在 `GasPhaseMergeBounds.partitionTemperatureLower`；`GasLiquidPhaseChangeStage.saturationExcluded` 在完整拓扑前应用逐批必要条件。固定接触与实际整数/能量拆分对照复用 `GasPhaseInterfaceValidation`。
+
 单格全填的轴向准静态气体去向认证在 [StaticGasPistonSweep](../../solver/src/main/java/mmm/fluid/StaticGasPistonSweep.java)，准备入口为 `GasTopologyCoordinator.planStaticCellReplacement`；部分提取后填格、真空控制体积压缩功及拒绝原子性复用 `CarrierMutationValidation.cellReplacementRefreshesAfterPartialExtraction`。
 
 实际液体输运的单出口完整气团迁移在 [GasAdvectionSuccessor](../../solver/src/main/java/mmm/fluid/GasAdvectionSuccessor.java)，捕获面迹在 `LiquidAffineFaceFlow.constantTrace`，最终通量及 ports 从 `CellCarrierRemapPlan` 传入 `GasTopologyCoordinator.planAfterAdvection`；库存、容量功、微量迁移与来源拒绝复用 `AirCavityScannerValidation.validateSingleGasSuccessorWeight`。
