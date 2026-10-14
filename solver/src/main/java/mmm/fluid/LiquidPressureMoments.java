@@ -1,8 +1,45 @@
 package mmm.fluid;
 
+import java.math.BigInteger;
+import mmm.chemistry.ExactRational;
+import mmm.units.SignedDyadic;
+
 /** Analytic triangle moments of a copied PLIC face polygon, in physical SI coordinates. */
 final class LiquidPressureMoments {
 	private LiquidPressureMoments() { }
+	record FullFace(int axis, int plane, int tangentCell, int otherCell, double h, int mask) {
+		FullFace add(FullFace face) {
+			return face != null && axis == face.axis && plane == face.plane && tangentCell == face.tangentCell
+					&& otherCell == face.otherCell && h == face.h && (mask & face.mask) == 0
+					? new FullFace(axis, plane, tangentCell, otherCell, h, mask | face.mask) : null;
+		}
+	}
+	/** Called only after the captured liquid geometry certifies the entire microface wet. */
+	static LiquidPressureGeometry.SurfaceMoments fullMicroFace(LiquidPressureGeometry.SurfaceMoments moments,
+			int axis, double coordinate, double tangent, double other, int cell, FluidDomain domain) {
+		if ((coordinate != 0 && coordinate != 1) || (tangent != 0 && tangent != .5) || (other != 0 && other != .5))
+			return moments;
+		int[] index = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
+		var face = new FullFace(axis, index[axis] + (int) coordinate, index[(axis + 1) % 3],
+				index[(axis + 2) % 3], domain.config.cellSize(), 1 << ((tangent == .5 ? 1 : 0) + (other == .5 ? 2 : 0)));
+		return new LiquidPressureGeometry.SurfaceMoments(moments.area(), moments.firstMoment(), moments.secondMoment(),
+				moments.centroid(), moments.centralSecondMoment(), face);
+	}
+	static LiquidPressureGeometry.SurfaceMoments fullFace(FullFace face) {
+		var h = SignedDyadic.of(face.h); var area = h.multiply(h); var fourth = area.multiply(area);
+		double variance = (fourth.exponent() >= 0
+				? new ExactRational(fourth.significand().shiftLeft(fourth.exponent()), BigInteger.valueOf(12))
+				: new ExactRational(fourth.significand(), BigInteger.valueOf(12).shiftLeft(-fourth.exponent()))).toDouble();
+		double[] center = new double[3], diagonal = new double[3];
+		center[face.axis] = h.multiply(SignedDyadic.of(face.plane)).toDouble();
+		center[(face.axis + 1) % 3] = h.multiply(SignedDyadic.of(face.tangentCell + .5)).toDouble();
+		center[(face.axis + 2) % 3] = h.multiply(SignedDyadic.of(face.otherCell + .5)).toDouble();
+		diagonal[(face.axis + 1) % 3] = diagonal[(face.axis + 2) % 3] = variance;
+		var centroid = new LiquidPressureGeometry.Vec3(center[0], center[1], center[2]);
+		var central = new LiquidPressureGeometry.SecondMoment(diagonal[0], 0, 0, diagonal[1], 0, diagonal[2]);
+		return new LiquidPressureGeometry.SurfaceMoments(area.toDouble(), centroid.scale(area.toDouble()),
+				central.add(LiquidPressureGeometry.SecondMoment.outer(centroid, area.toDouble())), centroid, central, face);
+	}
 
 	static LiquidPressureGeometry.SurfaceMoments integrate(double[][] polygon, int axis, double coordinate,
 	                                                        int cell, FluidDomain domain) {

@@ -23,14 +23,20 @@ final class LiquidPressureGeometry {
 		SecondMoment add(SecondMoment m) { return new SecondMoment(xx+m.xx,xy+m.xy,xz+m.xz,yy+m.yy,yz+m.yz,zz+m.zz); }
 		static SecondMoment outer(Vec3 v,double scale) { return new SecondMoment(scale*v.x*v.x,scale*v.x*v.y,scale*v.x*v.z,scale*v.y*v.y,scale*v.y*v.z,scale*v.z*v.z); }
 	}
-	record SurfaceMoments(double area, Vec3 firstMoment, SecondMoment secondMoment, Vec3 centroid, SecondMoment centralSecondMoment) {
+	record SurfaceMoments(double area, Vec3 firstMoment, SecondMoment secondMoment, Vec3 centroid, SecondMoment centralSecondMoment,
+	                      LiquidPressureMoments.FullFace fullFace) {
+		SurfaceMoments(double area, Vec3 firstMoment, SecondMoment secondMoment, Vec3 centroid, SecondMoment centralSecondMoment) {
+			this(area, firstMoment, secondMoment, centroid, centralSecondMoment, null);
+		}
 		static final SurfaceMoments EMPTY = new SurfaceMoments(0, Vec3.ZERO, SecondMoment.ZERO,Vec3.ZERO,SecondMoment.ZERO);
 		SurfaceMoments add(SurfaceMoments m) {
 			if(area==0)return m;if(m.area==0)return this;if(area<m.area)return m.add(this);
+			var face = fullFace == null ? null : fullFace.add(m.fullFace);
+			if (face != null && face.mask() == 15) return LiquidPressureMoments.fullFace(face);
 			double total=area+m.area;Vec3 distance=m.centroid.add(centroid.scale(-1));
 			Vec3 center=centroid.add(distance.scale(m.area/total));
 			SecondMoment central=centralSecondMoment.add(m.centralSecondMoment).add(SecondMoment.outer(distance,area*(m.area/total)));
-			return new SurfaceMoments(total,center.scale(total),central.add(SecondMoment.outer(center,total)),center,central);
+			return new SurfaceMoments(total,center.scale(total),central.add(SecondMoment.outer(center,total)),center,central,face);
 		}
 		double centeredSecondMoment(int a, int b, Vec3 origin) {
 			return centralSecondMoment.component(a,b)+area*(centroid.component(a)-origin.component(a))*(centroid.component(b)-origin.component(b));
@@ -222,6 +228,8 @@ final class LiquidPressureGeometry {
 			for(int axis=0;axis<3;axis++)for(int sign:new int[]{-1,1}) {
 				double coordinate=.5*(micro[axis]+(sign>0?1:0)), tangent=.5*micro[(axis+1)%3],other=.5*micro[(axis+2)%3];
 				SurfaceMoments wet=LiquidPressureMoments.integrate(plane.wetFacePolygon(cell,axis,coordinate,tangent,other,.5),axis,coordinate,cell,d);
+				if (plane.liquidFractionExact(cell, slot) == 1)
+					wet = LiquidPressureMoments.fullMicroFace(wet, axis, coordinate, tangent, other, cell, d);
 				int key=slot*6+2*axis+(sign>0?1:0);
 				SideWet side=wet.area()>0 || microFaces!=null ? new SideWet(axis,sign,key,wet) : null;
 				if(microFaces!=null)microFaces.add(side);
@@ -251,6 +259,9 @@ final class LiquidPressureGeometry {
 				int minus=sign>0?cell:peer,plus=sign>0?peer:cell;
 				if(sign>0 || plane.liquidFractionExact(peer)==0) {
 					SurfaceMoments both=LiquidPressureMoments.integrate(plane.sharedWetPolygon(minus,plus,axis,tangent,other,.5),axis,coordinate,cell,d);
+					if (plane.liquidFractionExact(cell, slot) == 1 && plane.liquidFractionExact(peer,
+							peerMicro[0] | peerMicro[1] << 1 | peerMicro[2] << 2) == 1)
+						both = LiquidPressureMoments.fullMicroFace(both, axis, coordinate, tangent, other, cell, d);
 					if(both.area>0)shared.add(new SharedFace(minus,plus,axis,micro[(axis+1)%3]+2*micro[(axis+2)%3],both));
 				}
 				SurfaceMoments gas=LiquidPressureMoments.integrate(plane.exposedWetPolygon(cell,peer,axis,sign,tangent,other,.5),axis,coordinate,cell,d);

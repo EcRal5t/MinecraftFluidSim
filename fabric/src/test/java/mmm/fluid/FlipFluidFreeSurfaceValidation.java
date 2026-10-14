@@ -439,17 +439,71 @@ public final class FlipFluidFreeSurfaceValidation {
 			domain.particles.setVelocityX(p, (float) (-0.02 * Math.sin(x) * Math.cos(y)));
 			domain.particles.setVelocityY(p, (float) (0.02 * Math.cos(x) * Math.sin(y)));
 		}
+		double rawEnergy = domain.particleKineticEnergyJoules();
+		domain.ensureGrid(); domain.gasTopologyCoordinator.refresh();
+		System.arraycopy(domain.mac.velocityX, 0, domain.mac.p2gVelocityX, 0, domain.mac.velocityX.length);
+		System.arraycopy(domain.mac.velocityY, 0, domain.mac.p2gVelocityY, 0, domain.mac.velocityY.length);
+		System.arraycopy(domain.mac.velocityZ, 0, domain.mac.p2gVelocityZ, 0, domain.mac.velocityZ.length);
+		domain.pressureStage.solve(config.timeStep());
+		var admission = domain.pressureSystem.markerProjection();
+		var original = admission.predictor(); var continuous = admission.candidate();
+		for (int p = 0; p < domain.particleCount(); p++)
+			check(original[0][p] == domain.particles.velocityX(p) && original[1][p] == domain.particles.velocityY(p)
+					&& original[2][p] == domain.particles.velocityZ(p), "unforced initial pressure predictor changed the sine source");
+		var target = admission.targetVolumeRate(); var pressure = admission.pressure();
+		double[] rates = new double[target.length];
+		admission.operator().volumeRate(continuous, rates);
+		double residualSquared = 0;
+		var residualWork = mmm.units.SignedDyadic.ZERO;
+		for (int row = 0; row < rates.length; row++) {
+			check(target[row] == 0, "closed unforced admission acquired a volume source");
+			residualSquared += rates[row] * rates[row];
+			residualWork = residualWork.add(mmm.units.SignedDyadic.of(config.timeStep())
+					.multiply(mmm.units.SignedDyadic.of(Math.abs(pressure[row])))
+					.multiply(mmm.units.SignedDyadic.of(Math.abs(rates[row]))));
+		}
+		double unit = Math.pow(config.cellSize(), 3) / config.density();
+		double admissionResidual = Math.sqrt(residualSquared / rates.length) / (config.timeStep() * unit);
+		check(admissionResidual <= config.pressureTolerance(), "initial full pressure residual: " + admissionResidual);
+		domain.pressureStage.projectVelocities(config.timeStep());
+		var rawK = mmm.units.SignedDyadic.ZERO; var projectedK = rawK; var removedK = rawK; var roundingWork = rawK;
+		for (int p = 0; p < domain.particleCount(); p++) {
+			var mass = mmm.units.SignedDyadic.of(domain.unitScale.kilograms(domain.particles.mass(p)));
+			double[] stored = {domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
+			for (int axis = 0; axis < 3; axis++) {
+				var u = mmm.units.SignedDyadic.of(original[axis][p]); var v = mmm.units.SignedDyadic.of(stored[axis]);
+				var difference = u.subtract(v); var halfMass = mass.multiply(mmm.units.SignedDyadic.of(0.5));
+				rawK = rawK.add(halfMass.multiply(u).multiply(u));
+				projectedK = projectedK.add(halfMass.multiply(v).multiply(v));
+				removedK = removedK.add(halfMass.multiply(difference).multiply(difference));
+				// Publication changes v*u-v*v by at most e*(|u|+2|v_continuous|+e).
+				var e = mmm.units.SignedDyadic.of(0.5 * Math.ulp((float) continuous[axis][p]));
+				var scale = mmm.units.SignedDyadic.of(Math.abs(original[axis][p]))
+						.add(mmm.units.SignedDyadic.of(Math.abs(continuous[axis][p])).multiply(mmm.units.SignedDyadic.of(2.0))).add(e);
+				roundingWork = roundingWork.add(mass.multiply(e).multiply(scale));
+			}
+		}
+		var identityError = rawK.subtract(projectedK).subtract(removedK);
+		if (identityError.signum() < 0) identityError = mmm.units.SignedDyadic.ZERO.subtract(identityError);
+		check(identityError.compareTo(residualWork.add(roundingWork)) <= 0,
+				"initial pressure mass-orthogonal energy identity: " + identityError.toDouble());
 		double initial = domain.particleKineticEnergyJoules();
+		check(initial > 0 && initial <= rawEnergy + roundingWork.toDouble(), "initial pressure projection increased kinetic energy");
+		System.out.println("Smooth-motion admission: rawK=" + rawEnergy + ", projectedK=" + initial
+				+ ", removedK=" + removedK.toDouble() + ", fullResidual=" + admissionResidual);
 		double volumeTransfer = 0;
 		for (int step = 0; step < 40; step++) {
 			var audit = domain.stepWithMechanicalAudit(false, 0).mechanicalAudit();
 			volumeTransfer += audit.volumeTransportTransferJoules();
+			check(audit.particleCollisionWorkJoules() == 0 && audit.closureResidualJoules() == 0,
+					"unforced closed transport acquired collision work or lost mechanical closure");
 		}
 		double ratio = domain.particleKineticEnergyJoules() / initial;
 		double transportBound = 2 * 0.02 * (40 * config.timeStep()) / config.cellSize() * Math.pow(Math.PI * config.cellSize() / 4, 2);
 		check(ratio <= 1 + 64 * Math.ulp(1.0F) && Math.abs(ratio - 1 - volumeTransfer / initial) <= 40 * 16 * Math.ulp(1.0F)
 				&& Math.abs(volumeTransfer / initial) <= transportBound,
 				"unforced resolved motion lost energy beyond float transfer error: " + ratio);
+		System.out.println("Smooth-motion 40 steps: energyRatio=" + ratio + ", volumeTransfer=" + volumeTransfer);
 		domain.ensureGrid();
 		float[] raw = new float[domain.particleCount()], projected = new float[raw.length], residual = new float[raw.length];
 		for (int p = 0; p < raw.length; p++) raw[p] = projected[p] = ((p * 17) % 29 - 14) / 14.0F;
@@ -916,6 +970,30 @@ public final class FlipFluidFreeSurfaceValidation {
 	}
 	static void liquidPressureGeometryConservesShapeMoments() {
 		microFaceAlignedInterfacesPreserveTraction();
+		for (float h : new float[]{1, .3F}) for (int axis = 0; axis < 3; axis++) {
+			var full = new FluidDomain(3, 3, 3, new FluidSolverConfig(h, 1000, 0, .05F, 100, 1e-6F, .45F, .002F, 0));
+			int[] peer = {1, 1, 1}; peer[axis] = 2;
+			full.setVolume(1, 1, 1, 1); full.setVolume(peer[0], peer[1], peer[2], 1); full.ensureGrid();
+			var captured = LiquidPressureGeometry.capture(full); int minus = full.cellIndex(1, 1, 1), plus = full.cellIndex(peer[0], peer[1], peer[2]);
+			int mask = 0, pieces = 0; LiquidPressureGeometry.SurfaceMoments first = null;
+			for (var face : captured.sharedFaces()) if (face.minusCell() == minus && face.plusCell() == plus && face.axis() == axis) {
+				mask |= 1 << face.microKey(); pieces++; if (first == null) first = face.moments();
+			}
+			check(mask == 15 && pieces == 4, "Whole physical wet face lacks its four distinct microfaces");
+			var face = captured.faceMoments(minus, plus, axis);
+			var scale = new java.math.BigDecimal((double) h); var area = scale.multiply(scale);
+			double variance = area.multiply(area).divide(java.math.BigDecimal.valueOf(12), java.math.MathContext.DECIMAL128).doubleValue();
+			check(face.area() == area.doubleValue(), "Whole wet face area differs from its exact SI rectangle");
+			for (int a = 0; a < 3; a++) {
+				double center = scale.multiply(java.math.BigDecimal.valueOf(a == axis ? 2 : 1.5)).doubleValue();
+				check(face.centroid().component(a) == center, "Whole wet face centroid differs from its exact SI rectangle");
+				for (int b = a; b < 3; b++) check(face.centralSecondMoment().component(a, b) == (a == b && a != axis ? variance : 0),
+						"Whole wet face covariance differs from its exact SI rectangle");
+			}
+			check(first.add(first).fullFace() == null, "Overlapping microfaces retained a complete-face certificate");
+			var triangle = LiquidPressureMoments.integrate(new double[][]{{0, .1, 0}, {0, 0, .2}}, axis, 1, minus, full);
+			check(face.add(triangle).fullFace() == null, "A partial polygon retained a complete-face certificate");
+		}
 		var cube=pressureGeometryDomain();cube.setVolume(1,1,1,1);cube.setVolume(2,1,1,1);cube.ensureGrid();
 		var geometry=LiquidPressureGeometry.capture(cube);int cell=cube.cellIndex(1,1,1);
 		var whole=geometry.cellSnapshot(cell);geometryClose(whole.volume(),1,"Whole cube volume");

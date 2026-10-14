@@ -113,7 +113,7 @@ final class CellLiquidVolumeTransport {
 		domain.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), particles.count()), candidate);
 		publishedQuadrature = true;
 		momentAudit = candidate.momentAudit;
-		if (domain.pressureSystem.usesMarkerPressure()) collisionWorkJoules += CellAffineWallProjection.projectTransport(domain);
+		if (domain.pressureSystem.usesMarkerPressure()) CellAffineWallProjection.projectTransport(domain);
 	}
 
 	private boolean stationary() {
