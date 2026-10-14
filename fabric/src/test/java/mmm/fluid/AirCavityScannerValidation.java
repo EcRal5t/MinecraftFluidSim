@@ -703,12 +703,31 @@ public final class AirCavityScannerValidation {
 			var tangent = new GasGeometryOverlap.HalfSpace(normal[0].negate(), normal[1].negate(), normal[2].negate(), SignedDyadic.of(-1, -2));
 			for (var value : GasGeometryOverlap.normalizedSecondMoments(0, List.of(lower, tangent)))
 				check(value.isZero(), "Tangential overlap acquired a quadratic measure");
+			check(GasGeometryOverlap.positiveQuadrature(0, List.of(lower, tangent)).isEmpty(), "Tangential overlap acquired positive integration nodes");
 		}
 	}
 	private static void checkQuadraticPrefix(int micro, List<GasGeometryOverlap.HalfSpace> planes, ExactRational[] quadratic) {
 		check(quadratic[0].equals(GasGeometryOverlap.normalizedVolume(micro, planes)), "Quadratic integration changed its volume");
 		var first = GasGeometryOverlap.normalizedMoments(micro, planes);
 		for (int i = 0; i < 4; i++) check(quadratic[i].equals(first[i]), "Quadratic integration changed a retained first moment");
+		var rule = GasGeometryOverlap.positiveQuadrature(micro, planes);
+		var volume = ExactRational.ZERO; var observed = new double[10];
+		for (var point : rule) {
+			check(point.volume().signum() > 0, "Wet quadrature has a nonpositive weight");
+			volume = volume.add(point.volume()); double weight = point.volume().toDouble(); var x = point.position();
+			observed[0] += weight;
+			for (int a = 0; a < 3; a++) {
+				double low = (micro >>> a & 1) * .5 - .5;
+				check(Double.isFinite(x[a]) && x[a] >= low && x[a] <= low + .5, "Wet quadrature leaves its microbox");
+				observed[a + 1] += weight * x[a];
+			}
+			for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) observed[index++] += weight * x[a] * x[b];
+		}
+		check(volume.equals(quadratic[0]), "Positive wet quadrature lost exact clipped volume");
+		for (int i = 0; i < observed.length; i++) {
+			double rounding = 16 * Math.max(1, rule.size()) * Math.ulp(quadratic[0].toDouble());
+			check(Math.abs(observed[i] - quadratic[i].toDouble()) <= rounding, "Positive wet quadrature lost a quadratic moment");
+		}
 	}
 
 	private static void validateExactGasTopologyWeights() {

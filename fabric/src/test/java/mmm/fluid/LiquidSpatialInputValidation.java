@@ -12,6 +12,11 @@ final class LiquidSpatialInputValidation {
 		var centred = MicroFaceVelocitySpaceExperiment.closedMask(0); var initial = capture(centred);
 		if (initial.frame() != centred.gasState.frame) throw new AssertionError("Spatial input lost its captured gas frame identity");
 		var comparison = initial.component(0, 255).comparison();
+		if (LiquidVolumeMomentSupport.evaluate(initial.frame(), 0, 255, centred.sizeX, centred.sizeY).excess().signum() != 0)
+			throw new AssertionError("Centred full volume violates its exact capacity moment");
+		var fullRule = initial.geometry().componentQuadrature(0, 255);
+		if (fullRule.size() != 8 || fullRule.stream().anyMatch(point -> !point.volume().equals(mmm.chemistry.ExactRational.ONE.divide(8))))
+			throw new AssertionError("Full component lost its compact positive Gauss rule");
 		near(comparison.volumeDifference(), 0, 0, "Centred source and PLIC volume agree");
 		vector(comparison.volumeFirstMomentDifference(), 0, 0, 0, "Centred source and PLIC first moment agree");
 		vector(comparison.uniformMassFirstMomentDifference(1000), 0, 0, 0, "Uniform centred actual mass first moment");
@@ -36,6 +41,8 @@ final class LiquidSpatialInputValidation {
 		var shifted = MicroFaceVelocitySpaceExperiment.closedMask(0);
 		for (int marker = 0; marker < shifted.particleCount(); marker++) shifted.particles.setPositionX(marker, shifted.particles.positionX(marker) + 1F / 16);
 		var mismatch = capture(shifted).component(0, 255).comparison();
+		if (LiquidVolumeMomentSupport.evaluate(shifted.gasState.frame, 0, 255, shifted.sizeX, shifted.sizeY).excess().signum() <= 0)
+			throw new AssertionError("Translated full point measure was accepted as a full wet-volume moment");
 		vector(mismatch.volumeFirstMomentDifference(), .0625, 0, 0, "Full source reports raw/PLIC volume moment difference");
 		vector(mismatch.uniformMassFirstMomentDifference(1000), 62.5, 0, 0, "Uniform-density hypothesis reports its mass moment difference");
 		disconnectedCancellation();
@@ -43,7 +50,25 @@ final class LiquidSpatialInputValidation {
 		halfCellUnits();
 		capturedPoreScale();
 		exactResidual();
+		volumeMomentSupport();
 		System.out.println("PASS liquid spatial input: exact raw volume/mass moments, shared PLIC piece integrals, disconnected and unresolved support, source immutability and stale-frame rejection");
+	}
+	private static void volumeMomentSupport() {
+		var zero = mmm.chemistry.ExactRational.ZERO; var one = mmm.chemistry.ExactRational.ONE;
+		var plane = new GasGeometryOverlap.HalfSpace(mmm.units.SignedDyadic.of(-1), mmm.units.SignedDyadic.ZERO,
+				mmm.units.SignedDyadic.ZERO, mmm.units.SignedDyadic.of(-1, -3));
+		var first = new mmm.chemistry.ExactRational[]{mmm.chemistry.ExactRational.of(-7).divide(128), zero, zero};
+		var slab = LiquidVolumeMomentSupport.evaluate(255, one, one.divide(8), first, plane);
+		if (!slab.excess().isZero()) throw new AssertionError("Exact axis slab does not saturate its volume-moment upper bound");
+		first[0] = first[0].divide(2);
+		if (!LiquidVolumeMomentSupport.evaluate(255, one.divide(2), one.divide(16), first, plane).excess().isZero())
+			throw new AssertionError("Capacity porosity was omitted or applied twice in the volume-moment bound");
+		if (!LiquidVolumeMomentSupport.evaluate(0, one, zero, new mmm.chemistry.ExactRational[]{zero, zero, zero}, plane).excess().isZero())
+			throw new AssertionError("Empty support acquired a nonzero volume moment");
+		var corner = oneMarker(0, Math.scalb(1F, -16), Math.nextDown(1F)); var input = capture(corner);
+		var certificate = LiquidVolumeMomentSupport.evaluate(input.frame(), 0, 255, corner.sizeX, corner.sizeY);
+		if (certificate.excess().signum() <= 0 || certificate.excess().toDouble() / Math.scalb(1.0, -16) <= 16 * Math.ulp(1F))
+			throw new AssertionError("Finite volume at a near-corner point did not exceed its physical moment support beyond storage rounding");
 	}
 	private static void disconnectedCancellation() {
 		var d = MicroFaceVelocitySpaceExperiment.closedMask(126);

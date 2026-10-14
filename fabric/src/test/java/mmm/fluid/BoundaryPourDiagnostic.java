@@ -99,6 +99,7 @@ public final class BoundaryPourDiagnostic {
 	}
 
 	private static void inspectInput(FluidDomain d, String stage) {
+		inspectVolumeMoments(d, stage);
 		var basis = CellAffineVelocity.capture(d);
 		var velocity = new double[3][d.particleCount()];
 		for (int p = 0; p < d.particleCount(); p++) {
@@ -126,6 +127,19 @@ public final class BoundaryPourDiagnostic {
 				trace, traceBlock < 0 ? -1 : basis.physicalCell(traceBlock), d.gridDirty, d.velocityGridDirty);
 		if (gradientBlock >= 0) inputCell(d, basis, coefficients, gradientBlock);
 		if (traceBlock >= 0 && traceBlock != gradientBlock) inputCell(d, basis, coefficients, traceBlock);
+	}
+	private static void inspectVolumeMoments(FluidDomain d, String stage) {
+		var frame = d.gasState.frame; if (frame == null) return;
+		int violations = 0, worstCell = -1, worstSupport = 0; double largest = 0;
+		for (var cell : frame.liquidStock()) for (var component : cell.components()) {
+			if (component.volume().signum() == 0) continue;
+			var certificate = LiquidVolumeMomentSupport.evaluate(frame, cell.cell(), component.supportMask(), d.sizeX, d.sizeY);
+			if (certificate.excess().signum() <= 0) continue;
+			violations++; double displacement = certificate.excess().toDouble() / component.volume().toDouble();
+			if (displacement > largest) { largest = displacement; worstCell = cell.cell(); worstSupport = component.supportMask(); }
+		}
+		System.out.printf("POUR volumeMoment stage=%s capturedComponentsOutsideSupport=%d largestNormalizedProjectedExcess=%g cell=%d support=%d%n",
+				stage, violations, largest, worstCell, worstSupport);
 	}
 
 	private static void inputCell(FluidDomain d, CellAffineVelocity basis, double[][] coefficient, int block) {
@@ -164,6 +178,7 @@ public final class BoundaryPourDiagnostic {
 		LiquidPressureGeometry geometry = value(projection, "geometry", LiquidPressureGeometry.class);
 		System.out.printf("POUR snapshot attempt=%d substep=%d dt=%g actualSpeed=%g actualMarkers=%d %s%n",
 				attempt, substep, dt, d.maximumParticleSpeed(), d.particleCount(), outcome);
+		inspectVolumeMoments(d, "snapshot attempt=" + attempt + " substep=" + substep + " " + outcome);
 		if (basis == null) return;
 		if (!value(projection, "active", Boolean.class)) {
 			var coefficient = new double[3][4 * basis.blockCount()];

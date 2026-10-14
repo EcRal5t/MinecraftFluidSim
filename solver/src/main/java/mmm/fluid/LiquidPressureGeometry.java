@@ -181,6 +181,21 @@ final class LiquidPressureGeometry {
 		}
 		return result;
 	}
+	/** Positive normalized PLIC volume rule about the whole-cell centre. */
+	List<GasGeometryOverlap.QuadraturePoint> componentQuadrature(int cell, int support) {
+		requireSupport(cell, support);
+		if (microPieces[cell] == null) return List.of();
+		boolean full = support == 255 && collisionMasks[cell] == 0;
+		for (int micro = 0; micro < 8 && full; micro++)
+			full = microPieces[cell][micro] != null && microPieces[cell][micro].wetPlane == null;
+		if (full) return GasGeometryOverlap.fullCellQuadrature();
+		var result = new ArrayList<GasGeometryOverlap.QuadraturePoint>();
+		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0 && microPieces[cell][micro] != null) {
+			var plane = microPieces[cell][micro].wetPlane;
+			result.addAll(GasGeometryOverlap.positiveQuadrature(micro, plane == null ? List.of() : List.of(plane)));
+		}
+		return List.copyOf(result);
+	}
 	boolean needsMicroBlocks(int cell,int support) {
 		requireSupport(cell,support); var wall=new boolean[3][3]; var open=new boolean[3][3];
 		for(int micro=0;micro<8;micro++)if((support&1<<micro)!=0)for(var face:microFaces(cell,micro)) {

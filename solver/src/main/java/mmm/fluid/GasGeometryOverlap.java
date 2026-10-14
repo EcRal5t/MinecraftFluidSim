@@ -15,6 +15,8 @@ final class GasGeometryOverlap {
 	record HalfSpace(SignedDyadic nx, SignedDyadic ny, SignedDyadic nz, SignedDyadic threshold) {
 		HalfSpace { Objects.requireNonNull(nx); Objects.requireNonNull(ny); Objects.requireNonNull(nz); Objects.requireNonNull(threshold); }
 	}
+	/** Positive normalized volume at a position about the whole-cell centre. */
+	record QuadraturePoint(double[] position, ExactRational volume) { }
 	private record Point(ExactRational x, ExactRational y, ExactRational z) {
 		ExactRational component(int axis) { return axis == 0 ? x : axis == 1 ? y : z; }
 		Point subtract(Point p) { return new Point(x.subtract(p.x), y.subtract(p.y), z.subtract(p.z)); }
@@ -37,6 +39,62 @@ final class GasGeometryOverlap {
 	/** Exact cell-normalized volume. The caller supplies only microboxes open in both geometries. */
 	static ExactRational normalizedVolume(int micro, List<HalfSpace> planes) {
 		return integrate(micro, planes, 0)[0];
+	}
+
+	/** Positive degree-two rule for the clipped microbox, with exact volume weights. */
+	static List<QuadraturePoint> positiveQuadrature(int micro, List<HalfSpace> planes) {
+		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 2 || planes.stream().anyMatch(Objects::isNull))
+			throw new IllegalArgumentException("Invalid quadrature microbox or half-spaces");
+		try {
+			var origin = new Point(ExactRational.of(micro & 1).divide(2), ExactRational.of(micro >>> 1 & 1).divide(2),
+					ExactRational.of(micro >>> 2 & 1).divide(2));
+			var whole = box(origin); List<List<Point>> faces = whole;
+			for (var halfSpace : List.copyOf(planes)) {
+				faces = clip(faces, new Plane(exact(halfSpace.nx), exact(halfSpace.ny), exact(halfSpace.nz), exact(halfSpace.threshold)));
+				if (faces.isEmpty()) return List.of();
+			}
+			if (faces == whole) return gaussBox(new double[]{(micro & 1) * .5 - .25, (micro >>> 1 & 1) * .5 - .25,
+					(micro >>> 2 & 1) * .5 - .25}, .25, MICRO_VOLUME);
+			var vertices = faces.stream().flatMap(List::stream).distinct().toList();
+			var sum = new ExactRational[]{ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
+			for (var vertex : vertices) for (int a = 0; a < 3; a++) sum[a] = sum[a].add(vertex.component(a));
+			var anchor = new Point(sum[0].divide(vertices.size()), sum[1].divide(vertices.size()), sum[2].divide(vertices.size()));
+			var beta = exact(SignedDyadic.of((5 - Math.sqrt(5)) / 20));
+			var result = new ArrayList<QuadraturePoint>();
+			for (var face : faces) for (int i = 1; i + 1 < face.size(); i++) {
+				var determinant = determinant(face.getFirst().subtract(anchor), face.get(i).subtract(anchor), face.get(i + 1).subtract(anchor));
+				if (determinant.isZero()) continue;
+				if (determinant.signum() < 0) throw new IllegalStateException("Quadrature polyhedron orientation does not close");
+				var weight = determinant.divide(24);
+				Point[] tetra = {anchor, face.getFirst(), face.get(i), face.get(i + 1)};
+				for (int selected = 0; selected < 4; selected++) {
+					var position = new double[3];
+					for (int a = 0; a < 3; a++) {
+						var reference = tetra[selected].component(a); var value = reference.subtract(HALF);
+						// alpha=1-3*beta; exact convex interpolation keeps box faces stable under RN.
+						for (int p = 0; p < 4; p++) if (p != selected)
+							value = value.add(tetra[p].component(a).subtract(reference).multiply(beta));
+						position[a] = value.toDouble();
+					}
+					result.add(new QuadraturePoint(position, weight));
+				}
+			}
+			return List.copyOf(result);
+		} catch (IllegalArgumentException magnitude) {
+			throw new GasTopologyBlockedException("Exact quadrature exceeds the rational representation budget: " + magnitude.getMessage());
+		}
+	}
+	static List<QuadraturePoint> fullCellQuadrature() {
+		return gaussBox(new double[3], .5, ExactRational.ONE);
+	}
+	private static List<QuadraturePoint> gaussBox(double[] centre, double halfWidth, ExactRational volume) {
+		var result = new ArrayList<QuadraturePoint>(8); double offset = halfWidth / Math.sqrt(3);
+		for (int corner = 0; corner < 8; corner++) {
+			var position = new double[3];
+			for (int a = 0; a < 3; a++) position[a] = centre[a] + ((corner & 1 << a) == 0 ? -offset : offset);
+			result.add(new QuadraturePoint(position, volume.divide(8)));
+		}
+		return List.copyOf(result);
 	}
 
 	/** Exact positivity only; null denotes the complete microbox. */

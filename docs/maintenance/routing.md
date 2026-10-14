@@ -86,6 +86,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 原始载体矩与 PLIC 的逐微盒、逐固定分量比较及几何协方差在 [LiquidSpatialInput](../../solver/src/main/java/mmm/fluid/LiquidSpatialInput.java)，精确零至二阶盒积分在 `LiquidPressureGeometry.pieceSecondMoments` 与 [GasGeometryOverlap](../../solver/src/main/java/mmm/fluid/GasGeometryOverlap.java)。来源检查、孔隙率、单位换算与未解析载体验证使用 `:fabric:runMarkerPressureValidation --args="--spatial-input"`；积分的盒体、四面体和极薄层对照使用 `air-cavity`。
 
+正湿体积第一矩的方向上界在 [LiquidVolumeMomentSupport](../../solver/src/main/java/mmm/fluid/LiquidVolumeMomentSupport.java)，捕获来源校核复用 `--spatial-input`；湿几何正权二阶规则在 `LiquidPressureGeometry.componentQuadrature` 和 `GasGeometryOverlap.positiveQuadrature`，积分对照复用 `air-cavity`。正常注液的逐来源分量超量由 `BoundaryPourDiagnostic` 的 `POUR volumeMoment` 报告。
+
 零时长固体几何排液的来源比例见 [CellRemapMicroPreferences](../../solver/src/main/java/mmm/fluid/CellRemapMicroPreferences.java) 的 `inventory`，同微盒精确矩汇总见 [CellRemapTransportMoments](../../solver/src/main/java/mmm/fluid/CellRemapTransportMoments.java)。聚焦验证分别为 `:fabric:runLiquidTransportValidation --args="geometry-remap"` 与 `:fabric:runRemapMomentsValidation --args="transport-moments"`。
 
 正质量联合矩的合并、流入法向厚度、缺失空间方向的有界形状近似与输出回验见 [CellRemapSpatialMoments](../../solver/src/main/java/mmm/fluid/CellRemapSpatialMoments.java)，接收组装配在 `CellCarrierRemapPlan.completeArrivalShape`，精确扫掠二阶矩在 [LiquidAffineSweepGeometry](../../solver/src/main/java/mmm/fluid/LiquidAffineSweepGeometry.java)。平方根压缩及逐行尺度 QR 在 [JointMomentFactor](../../solver/src/main/java/mmm/fluid/JointMomentFactor.java)。聚焦验证为 `:fabric:runRemapMomentsValidation --args="joint-moments"` 和 `sweep-only`；完整逻辑步的分次统计与表示转换预算使用输运选择器 `representation`。
