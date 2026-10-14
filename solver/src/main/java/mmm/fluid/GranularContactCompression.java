@@ -133,7 +133,7 @@ final class GranularContactCompression {
 			}
 			if (seeded) rescaleInitialImpulse(mass, input, rows, lambda, spend);
 		}
-		ActiveFace activeFace = null;
+		ActiveFace activeFace = null; boolean chainTried = false;
 		while (true) {
 			// Each sweep reconstructs from the original input, so roundoff cannot become a new source velocity.
 			progress.phase = "reconstruct";
@@ -164,6 +164,10 @@ final class GranularContactCompression {
 						throw new MechanicalTimeRefinement(2, "Unrepresentable physical contact impulse");
 				}
 				return new Result(values, physicalImpulse, gapError, error);
+			}
+			if (!chainTried) {
+				chainTried = true; progress.phase = "chain-seed";
+				if (GranularContactChainSeed.apply(mass, input, rows, lambda, spend)) continue;
 			}
 			progress.phase = "active-face"; progress.sweeps++;
 			if (activeFace == null) activeFace = new ActiveFace(mass, input, rows, lambda, spend);
@@ -274,7 +278,7 @@ final class GranularContactCompression {
 		System.arraycopy(seed, 0, lambda, 0, lambda.length);
 	}
 
-	private static ExactRational ratio(SignedDyadic numerator, SignedDyadic denominator) {
+	static ExactRational ratio(SignedDyadic numerator, SignedDyadic denominator) {
 		int power = numerator.exponent() - denominator.exponent();
 		return power >= 0 ? new ExactRational(numerator.significand().shiftLeft(power), denominator.significand())
 				: new ExactRational(numerator.significand(), denominator.significand().shiftLeft(-power));

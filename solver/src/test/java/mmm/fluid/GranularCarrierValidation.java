@@ -931,6 +931,47 @@ public final class GranularCarrierValidation {
 				"a near-proportional source with a resting-contact residual changed the terminal projection");
 		checkContactMechanicalMoments(supportedMass, supportedTerminal, supportedWarm,
 				new double[][]{{0, 1, 0}, {0, 2, 0}, {0, 0, 0}}, new double[]{0, supportedWarm.impulses()[1], 0});
+		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) for (int anchor = -1; anchor < 2; anchor++) for (boolean separatePools : new boolean[]{false, true}) {
+			double[] chainMass = {1, 2, 3, 4, 5}, source = separatePools ? new double[]{-4, -2, -3, 1, 2} : new double[]{3, 1, -2, 4, 2};
+			double[][] chainInput = new double[5][3], centers = new double[5][3];
+			var rows = new GranularContactCompression.Row[anchor < 0 ? 4 : 5];
+			for (int i = 0; i < 5; i++) {
+				chainInput[i][axis] = sign * source[i]; centers[i][axis] = sign * i;
+				if (i < 4) { double[] direction = new double[3]; direction[axis] = sign; rows[i] = new GranularContactCompression.Row(i, i + 1, direction); }
+			}
+			if (anchor >= 0) {
+				double[] direction = new double[3]; direction[axis] = anchor == 0 ? sign : -sign;
+				rows[4] = new GranularContactCompression.Row(anchor == 0 ? 0 : 4, -1, direction);
+			}
+			for (boolean reverse : new boolean[]{false, true}) {
+				if (reverse) for (int i = 0; i < rows.length / 2; i++) {
+					var swap = rows[i]; rows[i] = rows[rows.length - 1 - i]; rows[rows.length - 1 - i] = swap;
+				}
+				var projected = runContactSolver(chainMass, chainInput, rows); checkContactCertificate(projected, rows);
+				for (int i = 0; i < 5; i++) {
+					double mean = separatePools ? (i == 0 ? -4 : i < 3 ? -2.6 : i == 3 ? 1 : 2) : (i < 3 ? -1.0 / 6 : 26.0 / 9);
+					double expected = sign * (anchor == 0 ? Math.max(0, mean) : anchor == 1 ? Math.min(0, mean) : mean);
+					require(Math.abs(projected.values()[i][axis] - expected) <= projected.arithmeticError()[i][axis] + Math.ulp(expected),
+							"axis chain must retain exact weighted pools, opening gaps and endpoint support under row permutations");
+				}
+				double[] fixedImpulse = new double[3];
+				if (anchor >= 0) fixedImpulse[axis] = sign * (anchor == 0 ? (separatePools ? 17 : 1) : (separatePools ? -14 : -26));
+				checkContactMechanicalMoments(chainMass, chainInput, projected, centers, fixedImpulse);
+			}
+		}
+		var forkRows = new GranularContactCompression.Row[]{
+				new GranularContactCompression.Row(0, 1, new double[]{1, 0, 0}),
+				new GranularContactCompression.Row(0, 2, new double[]{1, 0, 0})};
+		var fork = compressContacts(new double[]{1, 1, 1}, new double[][]{{3, 0, 0}, {0, 0, 0}, {2, 0, 0}}, forkRows);
+		for (int i = 0; i < 3; i++) require(Math.abs(fork.values()[i][0] - (i < 2 ? 1.5 : 2)) <= fork.arithmeticError()[i][0],
+				"a directed fork must retain the general common-cone projection");
+		var interiorFixedRows = new GranularContactCompression.Row[]{
+				new GranularContactCompression.Row(0, 1, new double[]{1, 0, 0}),
+				new GranularContactCompression.Row(1, 2, new double[]{1, 0, 0}),
+				new GranularContactCompression.Row(1, -1, new double[]{1, 0, 0})};
+		var interiorFixed = compressContacts(new double[]{1, 1, 1}, new double[][]{{-3, 0, 0}, {-2, 0, 0}, {-1, 0, 0}}, interiorFixedRows);
+		for (int i = 0; i < 3; i++) require(Math.abs(interiorFixed.values()[i][0] - (i == 0 ? -3 : 0)) <= interiorFixed.arithmeticError()[i][0],
+				"interior fixed contact must retain the opening branch in the general common cone");
 		double[] masses = {2, 3, 5}; double[][] input = {{1, .25, 0}, {0, .25, 0}, {-1, .25, 0}};
 		var chain = new GranularContactCompression.Row[]{
 				new GranularContactCompression.Row(0, 1, new double[]{1, 0, 0}),
