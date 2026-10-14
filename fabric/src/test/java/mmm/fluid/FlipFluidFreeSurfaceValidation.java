@@ -126,14 +126,30 @@ public final class FlipFluidFreeSurfaceValidation {
 				domain.ensureGrid();
 				float[][] fields = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
 				boolean[][] valid = {domain.mac.velocityValidX, domain.mac.velocityValidY, domain.mac.velocityValidZ};
+				var sourceSample = domain.sampleVelocity(point[0], point[1], point[2]);
+				check(sourceSample.x() == velocity[0] && sourceSample.y() == velocity[1] && sourceSample.z() == velocity[2],
+						"Current marker field did not reproduce its source quadrature velocity");
+				float[] wallPoint = point.clone(); wallPoint[normal] = high ? (interior ? 1.5F : 2) : (interior ? .5F : 0);
+				var publicWallSample = domain.sampleVelocity(wallPoint[0], wallPoint[1], wallPoint[2]);
+				check((normal == 0 ? publicWallSample.x() : normal == 1 ? publicWallSample.y() : publicWallSample.z()) == 0,
+						"Public wall sample lost its zero normal velocity");
+				// The exact solid plane can belong to either cell; inspect the open cell's physical trace.
+				var wallSample = domain.pressureSystem.markerVelocityField().sample(
+						domain.particleCellIndex(point[0], point[1], point[2]), wallPoint[0], wallPoint[1], wallPoint[2]);
+				float[] wallVelocity = {wallSample.x(), wallSample.y(), wallSample.z()};
+				for (int a = 0; a < 3; a++) check(wallVelocity[a] == (a == normal ? 0 : velocity[a]),
+						"Current marker wall trace lost zero normal velocity or free-slip tangential velocity: "
+								+ normal + ", high=" + high + ", full=" + full + ", interior=" + interior + ", axis=" + a);
 				for (int a = 0; a < 3; a++) {
 					float[] aperture = domain.geometry.cutCells.openFaceField(a);
 					for (int f = 0; f < aperture.length; f++) if (aperture[f] == 0) check(valid[a][f] == full && fields[a][f] == 0,
 							"Closed face validity disagreed with the free/full transfer space on axis " + a);
 					if (full && a != normal) continue;
-					float sampled = a == 0 ? domain.sampleX(fields[a], point[0], point[1], point[2])
-							: a == 1 ? domain.sampleY(fields[a], point[0], point[1], point[2])
-							: domain.sampleZ(fields[a], point[0], point[1], point[2]);
+					float[] constant = new float[fields[a].length];
+					for (int f = 0; f < aperture.length; f++) if (aperture[f] > 0) constant[f] = velocity[a];
+					float sampled = a == 0 ? domain.sampleX(constant, point[0], point[1], point[2])
+							: a == 1 ? domain.sampleY(constant, point[0], point[1], point[2])
+							: domain.sampleZ(constant, point[0], point[1], point[2]);
 					// Open-stencil constants reproduce themselves. Full space retains the 3/4 known wall-zero weight.
 					float expected = velocity[a] * (full ? .25F : 1);
 					check(sampled == expected, "Wall translation, reflection or axis permutation changed the sampling rule: "
@@ -288,14 +304,25 @@ public final class FlipFluidFreeSurfaceValidation {
 					new FluidSolverConfig(1, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 512);
 			domain.setVolume(4, 2, 2, 1); domain.setVolume(10, 2, 2, 1);
 			if (sealed) { domain.sealDomainBoundary(); domain.bootstrapGasState(null); }
-			domain.ensureGrid(); domain.gridToParticleStage.capturePreProjectionEnergy();
+			domain.ensureGrid(); domain.gasTopologyCoordinator.refresh(); domain.gridToParticleStage.capturePreProjectionEnergy();
 			domain.pressureStage.solve(domain.config.timeStep()); domain.pressureStage.projectVelocities(domain.config.timeStep());
 			domain.gridToParticleStage.extrapolateAndTransfer();
 			check((domain.projection.gasUnknownCount > 0) == sealed, "Finite-gas support fixture did not assemble its gas row");
 			try {
-				var field = GridToParticleStage.class.getDeclaredField("componentBudget"); field.setAccessible(true);
-				check(((MarkerTransferBudget) field.get(domain.gridToParticleStage)).singleComponent() == sealed,
-						"Transfer support did not follow the actual finite-gas pressure coupling");
+				var plan = domain.pressureSystem.markerProjection();
+				var field = MarkerPressureProjection.class.getDeclaredField("gasRows"); field.setAccessible(true);
+				boolean shared = false;
+				for (int row : (int[]) field.get(plan)) if (row >= 0) {
+					double[] pressure = new double[plan.operator().rowCount()]; pressure[row] = 1;
+					double[][] force = new double[3][domain.particleCount()]; plan.operator().force(pressure, force);
+					boolean first = false, second = false;
+					for (int p = 0; p < domain.particleCount(); p++) for (int a = 0; a < 3; a++) if (force[a][p] != 0) {
+						int cell = plan.basis().physicalCell(plan.basis().markerBlock(p));
+						first |= cell == domain.cellIndex(4, 2, 2); second |= cell == domain.cellIndex(10, 2, 2);
+					}
+					shared |= first && second;
+				}
+				check(shared == sealed, "Actual finite-gas pressure row did not retain its common liquid-force support");
 			} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
 		}
 	}
@@ -311,17 +338,20 @@ public final class FlipFluidFreeSurfaceValidation {
 	private static double[] disconnectedTransfer(boolean remote, int remoteX, boolean wall, boolean checkJointBudget) {
 		var domain = new FluidDomain(14, 5, 5,
 				new FluidSolverConfig(1, 1000, 0, 0.05F, 200, 1e-5F, 0.45F, 0.002F, 0.8F), 512);
-		if (wall) for (int y = 0; y < 5; y++) for (int z = 0; z < 5; z++) domain.setSolid(5, y, z, true);
-		domain.setVolume(4, 2, 2, 0.25F);
-		if (remote) domain.setVolume(remoteX, 2, 2, 0.25F);
+		byte[] masks = new byte[14 * 5 * 5];
+		if (wall) for (int y = 0; y < 5; y++) for (int z = 0; z < 5; z++) masks[(z * 5 + y) * 14 + 5] = (byte) 255;
+		int sources = remote ? 4 : 2; float[] positions = new float[4 * sources], velocities = new float[3 * sources];
+		for (int p = 0; p < sources; p++) {
+			positions[4 * p] = (p < 2 ? 4 : remoteX) + ((p & 1) == 0 ? .25F : .75F);
+			positions[4 * p + 1] = 2.5F; positions[4 * p + 2] = 2.5F; positions[4 * p + 3] = .125F;
+			velocities[3 * p + (p < 2 ? 0 : 1)] = (p & 1) == 0 ? 1 : -1;
+		}
+		domain.restoreParticleState(new FlipParticleState(14, 5, 5, 1, sources, sources * .125F, positions, velocities, masks));
 		int[] target = new int[2]; int count = 0;
 		for (int p = 0; p < domain.particles.count(); p++) {
 			if (domain.particleCellIndex(p) == domain.cellIndex(4, 2, 2)) {
-				target[count] = p;
-				domain.particles.setPositionX(p, 4.25F + 0.5F * count);
-				domain.particles.setVelocityX(p, count++ == 0 ? 1 : -1);
-			} else domain.particles.setVelocityY(p, p % 2 == 0 ? 1 : -1);
-			domain.particles.setPositionY(p, 2.5F); domain.particles.setPositionZ(p, 2.5F);
+				target[count++] = p;
+			}
 		}
 		check(count == 2, "Transfer isolation fixture needs two target points");
 		domain.rebuildGridFromParticles();

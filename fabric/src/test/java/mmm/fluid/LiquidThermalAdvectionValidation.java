@@ -105,11 +105,13 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		double volume = domain.totalVolumeExact(), mass = domain.totalMass();
 		var initialAudit = domain.thermalAudit();
 		for (int step = 0; step < 40; step++) {
-			domain.ensureGrid();
-			for (int z = 0; z < 2; z++) for (int y = 0; y < 8; y++) for (int x = 0; x <= 8; x++)
-				domain.mac.velocityX[domain.xFaceIndex(x, y, z)] = (float) (-0.5 * Math.sin(Math.PI * x / 8) * Math.cos(Math.PI * (y + 0.5) / 8));
-			for (int z = 0; z < 2; z++) for (int y = 0; y <= 8; y++) for (int x = 0; x < 8; x++)
-				domain.mac.velocityY[domain.yFaceIndex(x, y, z)] = (float) (0.5 * Math.cos(Math.PI * (x + 0.5) / 8) * Math.sin(Math.PI * y / 8));
+			for (int marker = 0; marker < domain.particleCount(); marker++) {
+				double x = Math.PI * domain.particles.positionX(marker) / (8 * domain.config.cellSize());
+				double y = Math.PI * domain.particles.positionY(marker) / (8 * domain.config.cellSize());
+				domain.particles.setVelocityX(marker, (float) (-0.5 * Math.sin(x) * Math.cos(y)));
+				domain.particles.setVelocityY(marker, (float) (0.5 * Math.cos(x) * Math.sin(y)));
+			}
+			domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
 			domain.particleAdvectionStage.advect(0.05F);
 			double rounding = (step + 1.0) * domain.particleCount() * Math.ulp(599.0);
 			for (int p = 0; p < domain.particleCount(); p++) {
@@ -134,13 +136,13 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				for (int marker = 0; marker < domain.particleCount(); marker++)
 					domain.thermalState.resetMarkerTemperature(marker, 300 + gradient * domain.particles.positionY(marker),
 							domain.thermalMarkerContext(), domain.exactInternalEnergy());
-				domain.ensureGrid();
-				for (int z = 0; z < 2; z++) for (int y = 0; y < n; y++) for (int x = 0; x <= n; x++)
-					domain.mac.velocityX[domain.xFaceIndex(x, y, z)] = (float) (-speed * Math.sin(Math.PI * x / n)
-							* Math.cos(Math.PI * (y + 0.5) / n));
-				for (int z = 0; z < 2; z++) for (int y = 0; y <= n; y++) for (int x = 0; x < n; x++)
-					domain.mac.velocityY[domain.yFaceIndex(x, y, z)] = (float) (speed * Math.cos(Math.PI * (x + 0.5) / n)
-							* Math.sin(Math.PI * y / n));
+				for (int marker = 0; marker < domain.particleCount(); marker++) {
+					double x = Math.PI * domain.particles.positionX(marker) / (n * domain.config.cellSize());
+					double y = Math.PI * domain.particles.positionY(marker) / (n * domain.config.cellSize());
+					domain.particles.setVelocityX(marker, (float) (-speed * Math.sin(x) * Math.cos(y)));
+					domain.particles.setVelocityY(marker, (float) (speed * Math.cos(x) * Math.sin(y)));
+				}
+				domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
 				int cell = domain.cellIndex(n / 4, n / 2 - 1, 0);
 				domain.thermalState.prepareSpatialObservation(domain.thermalMarkerContext());
 				double before = domain.thermalState.spatialTemperatureInCell(cell);
