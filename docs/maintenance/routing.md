@@ -96,7 +96,9 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 拓扑继承控制体积的精确权重分配见 [GasTopologyVolumePartition](../../solver/src/main/java/mmm/fluid/GasTopologyVolumePartition.java)，公开拓扑验证为 `AirCavityScannerValidation.validateExactGasTopologyWeights`。节点拆分的发布前校验为 `AirNetworkValidation.validateSplitPreflightsAllOwners`，公开库存写入、连接请求与累计源汇校验为 `validatePublicMutatorsPreflightAllOwners`；单格替换的气体、分量容量、坐标表示及原位抽取缓存校验为 `CarrierMutationValidation.cellVolumeReplacementPreflightsAllOwners`。
 
-微盒交集的精确包含证书在 `GasTopologyCoordinator.overlapVolume`，PLIC 选定端点体积复用在 [GasPieceCapacity](../../solver/src/main/java/mmm/fluid/GasPieceCapacity.java)；独立精确交集与逐端点容量对照复用 `AirCavityScannerValidation`。颗粒取出的未来占容、气腔及热账预检在 [GranularTransferPlanner](../../solver/src/main/java/mmm/fluid/GranularTransferPlanner.java) 的 `extractExact`，相关失败保留状态和成功恢复对照复用 `CarrierMutationValidation.cellVolumeReplacementPreflightsAllOwners`。
+微盒交集的精确包含证书在 `GasTopologyCoordinator.overlapVolume`，PLIC 选定端点体积复用在 [GasPieceCapacity](../../solver/src/main/java/mmm/fluid/GasPieceCapacity.java)；独立精确交集与逐端点容量对照复用 `AirCavityScannerValidation`。
+
+颗粒单份合法整数选择在 `GranularIntegerAllocation.admissibleMasks`；插入与取出的未来占容、气腔及热账预检在 [GranularTransferPlanner](../../solver/src/main/java/mmm/fluid/GranularTransferPlanner.java)。相关对照复用 `M8GranularValidation.couplingOccupancyResumsExactly`、`CarrierMutationValidation.defaultInsertionsPreflightStoredThermalState` 与 `cellVolumeReplacementPreflightsAllOwners`。
 
 单格全填的轴向准静态气体去向认证在 [StaticGasPistonSweep](../../solver/src/main/java/mmm/fluid/StaticGasPistonSweep.java)，准备入口为 `GasTopologyCoordinator.planStaticCellReplacement`；部分提取后填格、真空控制体积压缩功及拒绝原子性复用 `CarrierMutationValidation.cellReplacementRefreshesAfterPartialExtraction`。
 

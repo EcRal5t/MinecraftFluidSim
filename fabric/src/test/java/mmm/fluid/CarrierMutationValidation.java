@@ -77,13 +77,13 @@ public final class CarrierMutationValidation {
 		requireUnchanged(domain, staleState);
 		cellReplacementRejectsInvalidStoredThermalState();
 		var registries = FullCapabilityTestFixture.load();
-		for (int scene = 0; scene < 3; scene++) {
-			boolean blocked = scene == 0, partial = scene != 2;
+		for (int scene = 0; scene < 4; scene++) {
+			boolean blocked = scene == 3, partial = scene < 2;
 			var extraction = new FluidDomain(3, 3, 3,
 					new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .4F, .002F, 0), 32);
 			byte[] masks = new byte[27]; java.util.Arrays.fill(masks, (byte) 255);
 			int[] cells = {9, 10, 12, 13}; for (int c : cells) masks[c] = 0;
-			float volume = blocked ? Math.nextDown(1F) : .25F; double mass = 1000 * (double) volume;
+			float volume = scene == 0 || blocked ? Math.nextDown(1F) : .25F; double mass = 1000 * (double) volume;
 			extraction.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 4, 4 * (double) volume, 4 * mass,
 					registries.liquids().materials(), new float[]{.25F, .25F, .75F, volume, .75F, .25F, .75F, volume,
 							.25F, .75F, .75F, volume, .75F, .75F, .75F, volume}, new float[12], masks,
@@ -99,14 +99,24 @@ public final class CarrierMutationValidation {
 			long revision = extraction.granularState.parcels.mutationRevision(), gasRevision = extraction.gasState.network.revision();
 			var frame = extraction.gasState.frame; var gas = extraction.exportGasState(registries.chemical().fingerprint());
 			double activeEnergy = extraction.thermalState.granularColumn().activeEnergy(0);
-			if (blocked) {
+			if (scene == 0) {
 				var remaining = extraction.granularState.parcels.prepareOverwrite(0, new mmm.granular.GranularParcelStore.Parcel(
 						parcel.x(), parcel.y(), parcel.z(), 0, 0, 0, 2, .001 * (2.0 / 3), sand, 0, 0, (byte) 0));
 				require(extraction.granularCoupling.parcelShareAtCell(FluidDomainStepCoordinator.parcelPosition(parcel), 3, 10) == 0
 						&& extraction.granularCoupling.parcelShareAtCell(FluidDomainStepCoordinator.parcelPosition(remaining), 2, 10) == 1
 						&& frame.nodeCount() == 1 && !gas.nodes().getFirst().inventory().isEmpty(),
 						"Partial granular extraction fixture must increase one solid share and eliminate its finite gas support");
-				try { extraction.tryExtractExactGranular(1, 1, 1, 1, 0, true); throw new AssertionError("Partial extraction erased finite gas stock"); }
+				long[] canonical = extraction.granularCoupling.copySolidSvq();
+				extraction.granularCoupling.removePlannedParcel(canonical, FluidDomainStepCoordinator.parcelPosition(parcel), 3);
+				require(extraction.granularCoupling.tryPlanParcel(canonical, FluidDomainStepCoordinator.parcelPosition(remaining), 2,
+						c -> extraction.granularGeometricOpenSvq(c) - JointPhaseCapacity.liquidSvqCeil(extraction.markerGrid.exactCellVolumeInventory[c])),
+						"Canonical partial extraction must fit the liquid yet fail its gas successor");
+				try { extraction.gasTopologyCoordinator.planAfterLiquidEdits(java.util.List.of(), canonical, false);
+					throw new AssertionError("Canonical partial extraction erased finite gas stock"); }
+				catch (GasTopologyBlockedException expected) { }
+			}
+			if (blocked) {
+				try { extraction.tryExtractExactGranular(1, 1, 1, 3, 0, true); throw new AssertionError("Extraction with no positive gas successor was published"); }
 				catch (GasTopologyBlockedException expected) {
 					require(expected.getMessage().contains("no positive successor"), "Granular extraction lost its geometric refusal cause");
 				}
@@ -128,8 +138,16 @@ public final class CarrierMutationValidation {
 						&& extraction.thermalState.auditLedger().externalSink().subtract(((mmm.thermal.ThermalAuditLedger) before.thermalAudit).externalSink())
 								.equals(mmm.units.SignedDyadic.of(result.internalEnergy())),
 						"Granular extraction failed to publish its gas/thermal successor and close exported energy");
+				if (scene == 0) {
+					var selected = extraction.granularState.parcels.parcel(0);
+					require(selected.ceilMask() != 3 && extraction.granularCoupling.solidSvq(10) == 0,
+							"Partial extraction failed to select an alternate mask retaining finite gas support");
+					for (int c : cells) require(extraction.granularCoupling.solidSvq(c) <= ((parcel.ceilMask() >>> java.util.Arrays.binarySearch(cells, c)) & 1),
+							"Non-increasing partial extraction seed increased a source cell's solid share");
+				}
 				var captured = extraction.captureAuthoritativeState(); var restored = FluidDomain.restoreAuthoritativeState(captured);
 				require(restored.totalGranularSolidVolumeSvq() == (partial ? 2 : 0)
+						&& (!partial || restored.granularState.parcels.parcel(0).equals(extraction.granularState.parcels.parcel(0)))
 						&& restored.exactInternalEnergy().equals(extraction.exactInternalEnergy())
 						&& restored.exportGasState(registries.chemical().fingerprint()).nodes().equals(captured.gas().nodes()),
 						"Successful granular extraction did not preserve its published gas/thermal successor after restore");
@@ -502,6 +520,43 @@ public final class CarrierMutationValidation {
 			require(valid.chemicalParcels.totalQuanta() - beforeQ == valid.chemicalParcels.externalSource().totalQuanta() - sourceQ,
 					"default insertion chemical source did not close");
 		}
+		FluidDomain granular = emptyMaterialDomain(4096);
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++)
+			granular.setVolume(x, y, z, x + y + z == 0 ? Math.nextDown(1F) : 1F);
+		FullCapabilityTestFixture.bindFull(granular, registries, 300, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		int vacuum = granular.gasState.frame.commonCellNode(0);
+		require(vacuum > 0, "Granular allocation initialization lost its one-SVQ cavity");
+		granular.setGasNodeStandardVolume(vacuum, 0);
+		var source = granular.gasState.frame;
+		var sand = registries.granular().material(registries.granular().materialHandle(mmm.granular.BuiltinGranularDefinitions.FINE_SAND));
+		double mass = sand.referenceDensity() / mmm.granular.SolidVolume.SVQ_PER_BV;
+		var packet = new mmm.granular.GranularTransferLedger(java.util.List.of(
+				new mmm.granular.GranularTransferLedger.Group(sand.id(), 1, mass, null)));
+		require(granular.tryInsertExactGranular(1, 1, 1, packet, 0, true).inserted(),
+				"Granular initialization rejected its available noncanonical floor/ceil choice");
+		var parcel = granular.granularState.parcels.parcel(0);
+		var kernel = new mmm.granular.GranularKernel(4, 4, 4, .5F);
+		kernel.capture(parcel.x(), parcel.y(), parcel.z(), 1);
+		require(parcel.ceilMask() != kernel.canonicalMask() && granular.granularCoupling.solidSvq(0) == 1
+				&& granular.granularCoupling.totalSolidSvq() == 1 && granular.gasState.frame != source
+				&& granular.gasState.frame.commonCellNode(0) == -1 && granular.gasState.network.auditClosed()
+				&& granular.exactInternalEnergy().equals(granular.thermalState.auditLedger().expectedInventory()),
+				"Granular initialization failed to publish the selected occupancy and complete gas/thermal successor");
+		var restored = FluidDomain.restoreAuthoritativeState(granular.captureAuthoritativeState());
+		require(restored.granularState.parcels.parcel(0).equals(parcel)
+				&& restored.exactInternalEnergy().equals(granular.exactInternalEnergy()),
+				"Granular initialization lost its actual integer choice during restore");
+		FluidDomain finite = fullCapabilityDomain(registries);
+		var finiteSource = finite.gasState.frame;
+		double oldVolume = finite.gasState.network.availableVolume(1), oldEnergy = finite.thermalState.gasNodeEnergy(1, finite.gasState.network);
+		long amount = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		packet = new mmm.granular.GranularTransferLedger(java.util.List.of(
+				new mmm.granular.GranularTransferLedger.Group(sand.id(), amount, amount * mass, null)));
+		require(finite.tryInsertExactGranular(1, 1, 1, packet, 0, true).inserted()
+				&& finite.gasState.frame != finiteSource && finite.gasState.network.availableVolume(1) < oldVolume
+				&& finite.thermalState.gasNodeEnergy(1, finite.gasState.network) > oldEnergy
+				&& finite.exactInternalEnergy().equals(finite.thermalState.auditLedger().expectedInventory()),
+				"Granular insertion failed to publish finite-gas compression and its audited work");
 	}
 
 	private static void explicitInsertionsPreflightStoredThermalState() throws Exception {

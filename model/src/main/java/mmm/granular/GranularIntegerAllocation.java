@@ -10,6 +10,33 @@ public final class GranularIntegerAllocation {
 
 	private GranularIntegerAllocation() { }
 
+	/** Complete choices for one captured parcel, ordered with the canonical choice first when feasible. */
+	public static int[] admissibleMasks(GranularKernel kernel, IntToLongFunction parcelCellCapacity) {
+		if (kernel == null || parcelCellCapacity == null) throw new IllegalArgumentException("Granular parcel allocation input is missing");
+		int canonical = kernel.canonicalMask(), needed = Integer.bitCount(canonical), eligible = 0;
+		for (int slot = 0; slot < kernel.size(); slot++) {
+			long capacity = parcelCellCapacity.applyAsLong(kernel.cell(slot)), floor = kernel.floor(slot);
+			if (capacity < floor) return new int[0];
+			if (kernel.ceil(slot) > floor && capacity >= kernel.ceil(slot)) eligible |= 1 << slot;
+		}
+		if (Integer.bitCount(eligible) < needed) return new int[0];
+		int[] choices = new int[1 << kernel.size()];
+		int count = appendMasks(eligible, needed, 0, choices, 0);
+		for (int i = 0; i < count; i++) if (choices[i] == canonical) {
+			choices[i] = choices[0]; choices[0] = canonical; break;
+		}
+		return Arrays.copyOf(choices, count);
+	}
+
+	private static int appendMasks(int eligible, int needed, int mask, int[] choices, int count) {
+		if (needed == 0) { choices[count] = mask; return count + 1; }
+		for (int bits = eligible; Integer.bitCount(bits) >= needed; bits &= bits - 1) {
+			int bit = Integer.lowestOneBit(bits);
+			count = appendMasks(bits ^ bit, needed - 1, mask | bit, choices, count);
+		}
+		return count;
+	}
+
 	public static Result plan(GranularKernel kernel, GranularParcelStore parcels,
 			GranularCouplingFields.PositionSource positions, long[] fixed,
 			IntToLongFunction capacity, int operationLimit) {

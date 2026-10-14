@@ -1418,6 +1418,15 @@ public final class M8GranularValidation {
 		GranularCouplingFields.PositionSource endpoints = (i, p) -> new GranularCouplingFields.Position(p.x(), p.y(), p.z(), p.ceilMask());
 		for (int trial = 0; trial < 27; trial++) {
 			long[] capacity = {trial % 3, trial / 3 % 3, trial / 9}; boolean feasible = false;
+			for (int i = 0; i < 2; i++) {
+				var p = integerParcels.parcel(i); integerKernel.capture(p.x(), p.y(), p.z(), 1);
+				int[] choices = mmm.granular.GranularIntegerAllocation.admissibleMasks(integerKernel, c -> capacity[c]);
+				int firstCell = i == 0 ? 1 : 0;
+				require(choices.length == (capacity[firstCell] > 0 ? 1 : 0) + (capacity[firstCell + 1] > 0 ? 1 : 0)
+						&& java.util.Arrays.stream(choices).anyMatch(mask -> mask == 1) == (capacity[firstCell] > 0)
+						&& java.util.Arrays.stream(choices).anyMatch(mask -> mask == 2) == (capacity[firstCell + 1] > 0)
+						&& (capacity[firstCell] == 0 || choices[0] == 1), "Complete single-parcel choices differ from the integer oracle or canonical order");
+			}
 			for (int a = 1; a <= 2; a++) for (int b = 0; b <= 1; b++) {
 				long[] occupied = new long[3]; occupied[a]++; occupied[b]++;
 				if (occupied[0] <= capacity[0] && occupied[1] <= capacity[1] && occupied[2] <= capacity[2]) feasible = true;
@@ -1440,6 +1449,18 @@ public final class M8GranularValidation {
 		require(limited.status() == mmm.granular.GranularIntegerAllocation.Status.WORK_LIMIT && limited.masks() == null
 				&& integerParcels.parcel(0).ceilMask() == 1 && integerParcels.parcel(1).ceilMask() == 1,
 				"Integer allocation work exhaustion changed a source or claimed infeasibility");
+		var quantityKernel = new mmm.granular.GranularKernel(2, 2, 2, .5); long[] sourceShares = new long[8];
+		quantityKernel.capture(.475F, .475F, .7F, 5); quantityKernel.requireMask(96);
+		for (int slot = 0; slot < quantityKernel.size(); slot++) sourceShares[quantityKernel.cell(slot)] = quantityKernel.floor(slot) + (96 >>> slot & 1);
+		quantityKernel.capture(.475F, .475F, .7F, 4);
+		require(mmm.granular.GranularIntegerAllocation.admissibleMasks(quantityKernel, c -> sourceShares[c]).length == 0
+				&& mmm.granular.GranularIntegerAllocation.admissibleMasks(quantityKernel, c -> 4).length > 0,
+				"An empty non-increasing seed must remain distinct from complete floor/ceil infeasibility");
+		quantityKernel.capture(.5F, .5F, .5F, 4);
+		int[] complete = mmm.granular.GranularIntegerAllocation.admissibleMasks(quantityKernel, c -> 1);
+		require(complete.length == 70 && complete[0] == 15 && java.util.Arrays.stream(complete).distinct().count() == 70,
+				"Eight equal fractional quotas must enumerate all seventy unique four-ceil choices");
+		for (int mask : complete) quantityKernel.requireMask(mask);
 		GranularParcelStore parcels = new GranularParcelStore(registry, 2);
 		GranularDepositStore deposits = new GranularDepositStore(registry, 4 * 4 * 4, 4);
 		long parcelVolume = GranularLimits.MAX_PARCEL_VOLUME_SVQ - 17L;

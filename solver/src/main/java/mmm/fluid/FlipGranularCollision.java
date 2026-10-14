@@ -115,6 +115,16 @@ final class FlipGranularCollision {
 			float preferredX, float preferredY, float preferredZ,
 			Predicate<GranularCouplingFields.Position> admission
 	) {
+		if (admission == null) throw new IllegalArgumentException("Granular spawn admission is missing");
+		return planSpawnPosition(cellX, cellY, cellZ, solidVolumeSvq, sequence, preferredX, preferredY, preferredZ,
+				candidate -> admission.test(candidate) ? candidate : null);
+	}
+
+	GranularCouplingFields.Position planSpawnPosition(
+			int cellX, int cellY, int cellZ, long solidVolumeSvq, long sequence,
+			float preferredX, float preferredY, float preferredZ,
+			java.util.function.Function<GranularCouplingFields.Position, GranularCouplingFields.Position> admission
+	) {
 		if (cellX < 0 || cellX >= sizeX || cellY < 0 || cellY >= sizeY || cellZ < 0 || cellZ >= sizeZ
 				|| solidVolumeSvq <= 0L || sequence < 0L || admission == null) {
 			throw new IllegalArgumentException("Granular spawn request is outside the domain");
@@ -151,7 +161,12 @@ final class FlipGranularCollision {
 			}
 			if (positionValid(x, y, z, solidVolumeSvq)) {
 				var candidate = new GranularCouplingFields.Position(x, y, z);
-				if (admission.test(candidate)) return candidate;
+				var selected = admission.apply(candidate);
+				if (selected != null) {
+					if (Float.compare(selected.x(), x) != 0 || Float.compare(selected.y(), y) != 0 || Float.compare(selected.z(), z) != 0)
+						throw new IllegalArgumentException("Granular spawn allocation changed its collision-checked position");
+					return selected;
+				}
 			}
 		}
 		return null;
