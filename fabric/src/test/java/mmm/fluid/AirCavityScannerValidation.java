@@ -523,6 +523,16 @@ public final class AirCavityScannerValidation {
 		for(var component:GasComponentCapacity.capture(domain,geometry,null)) {
 			var sum=ExactRational.ZERO;var stored=SignedDyadic.ZERO;GasPieceCapacity.Piece pivot=null;
 			for(var piece:component.pieces()) {
+				var geometric=geometry.piece(piece.id());
+				if(geometric.dryPlane()!=null) {
+					var plane=geometric.dryPlane();var bracket=geometric.offsetBracket();
+					var porosity=capacityRational(component.poreVolumeNormalized()).multiply(8).divide(Integer.bitCount(component.supportMask()));
+					var lowerPlane=new GasGeometryOverlap.HalfSpace(plane.nx(),plane.ny(),plane.nz(),SignedDyadic.of(bracket.upper()));
+					var upperPlane=new GasGeometryOverlap.HalfSpace(plane.nx(),plane.ny(),plane.nz(),SignedDyadic.of(bracket.lower()));
+					check(piece.lower().equals(MicroBoxPlaneVolume.dryVolume(geometric.micro(),lowerPlane).multiply(porosity))
+							&& piece.upper().equals(MicroBoxPlaneVolume.dryVolume(geometric.micro(),upperPlane).multiply(porosity)),
+							"Gas piece reused a different PLIC endpoint's exact capacity");
+				}
 				check(piece.normalizedVolume().signum()>0 && piece.normalizedVolume().compareTo(piece.lower())>=0
 						&& piece.normalizedVolume().compareTo(piece.upper())<=0,"Raw leaf capacity escaped its inverse certificate");
 				sum=sum.add(piece.normalizedVolume());stored=stored.add(SignedDyadic.of(piece.cubicMeters()));
@@ -606,10 +616,19 @@ public final class AirCavityScannerValidation {
 		constraints.add(new GasGeometryOverlap.HalfSpace(zero,zero,zero,zero));
 		constraints.add(new GasGeometryOverlap.HalfSpace(zero,zero,zero,one));
 		for(int slot=0;slot<8;slot++) for(var before:constraints) {
+			var beforeVolume=GasGeometryOverlap.normalizedVolume(slot,List.of(before));
 			check(GasGeometryOverlap.hasPositiveOverlap(slot,before,null)
-					==(GasGeometryOverlap.normalizedVolume(slot,List.of(before)).signum()>0),"Single-plane positivity differs from exact volume");
-			for(var after:constraints) check(GasGeometryOverlap.hasPositiveOverlap(slot,before,after)
-					==(GasGeometryOverlap.normalizedVolume(slot,List.of(before,after)).signum()>0),"Two-plane positivity differs from exact volume");
+					==(beforeVolume.signum()>0),"Single-plane positivity differs from exact volume");
+			for(var after:constraints) {
+				var afterVolume=GasGeometryOverlap.normalizedVolume(slot,List.of(after));
+				var exactOverlap=GasGeometryOverlap.normalizedVolume(slot,List.of(before,after));
+				check(GasGeometryOverlap.hasPositiveOverlap(slot,before,after)
+						==(exactOverlap.signum()>0),"Two-plane positivity differs from exact volume");
+				var firstPiece=new GasComplementGeometry.Piece(slot,0,slot,beforeVolume.toDouble(),beforeVolume,before,null);
+				var secondPiece=new GasComplementGeometry.Piece(slot,0,slot,afterVolume.toDouble(),afterVolume,after,null);
+				check(GasTopologyCoordinator.overlapVolume(firstPiece,secondPiece).equals(exactOverlap),
+						"Certified gas containment differs from the independent exact intersection volume");
+			}
 		}
 	}
 

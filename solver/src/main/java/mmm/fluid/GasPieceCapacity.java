@@ -44,8 +44,10 @@ final class GasPieceCapacity {
 				ExactRational wetTarget = PlicComponentGeometry.ratio(pore.subtract(available), pore)
 						.multiply(Integer.bitCount(support)).divide(8);
 				if (!wetTarget.equals(bracket.targetVolume())) throw blocked("Gas piece raw capacity differs from its PLIC target", cell);
-				lo = MicroBoxPlaneVolume.dryVolume(micro, at(plane, bracket.upper())).multiply(porosity);
-				hi = MicroBoxPlaneVolume.dryVolume(micro, at(plane, bracket.lower())).multiply(porosity);
+				lo = (plane.threshold().equals(SignedDyadic.of(bracket.upper())) ? piece.normalizedVolume()
+						: MicroBoxPlaneVolume.dryVolume(micro, at(plane, bracket.upper()))).multiply(porosity);
+				hi = (plane.threshold().equals(SignedDyadic.of(bracket.lower())) ? piece.normalizedVolume()
+						: MicroBoxPlaneVolume.dryVolume(micro, at(plane, bracket.lower()))).multiply(porosity);
 			}
 			if (lo.signum() < 0 || hi.compareTo(lo) < 0) throw blocked("Gas piece capacity interval is invalid", cell);
 			intervals.add(new Interval(piece.id(), lo, hi));

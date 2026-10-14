@@ -191,14 +191,7 @@ final class GasTopologyCoordinator {
 			if (source > 0 && certified[source]) continue;
 			var before = old.geometry().piece(piece); var after = next.geometry().piece(piece);
 			if (before.micro() != after.micro()) throw new IllegalStateException("Gas overlap changed its fixed microbox");
-			ExactRational overlap;
-			if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane())) {
-				overlap = before.normalizedVolume();
-			} else if (before.dryPlane() == null) {
-				overlap = after.normalizedVolume();
-			} else {
-				overlap = GasGeometryOverlap.normalizedVolume(before.micro(), List.of(before.dryPlane(), after.dryPlane()));
-			}
+			ExactRational overlap = overlapVolume(before, after);
 			if (overlap.isZero()) continue;
 			intersections[index] = overlap;
 			if (source > 0) {
@@ -220,6 +213,26 @@ final class GasTopologyCoordinator {
 			result.computeIfAbsent(pair, ignored -> new ArrayList<>()).add(weight);
 		}
 		return result;
+	}
+
+	/** Reuses certified piece volumes when exact positive-volume tests prove containment. */
+	static ExactRational overlapVolume(GasComplementGeometry.Piece before, GasComplementGeometry.Piece after) {
+		if (before.id() != after.id() || before.cell() != after.cell() || before.micro() != after.micro())
+			throw new IllegalArgumentException("Gas intersection requires the same fixed microbox");
+		if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane()))
+			return before.normalizedVolume();
+		if (before.dryPlane() == null) return after.normalizedVolume();
+		int micro = before.micro();
+		if (!GasGeometryOverlap.hasPositiveOverlap(micro, before.dryPlane(), after.dryPlane())) return ExactRational.ZERO;
+		if (!GasGeometryOverlap.hasPositiveOverlap(micro, before.dryPlane(), opposite(after.dryPlane())))
+			return before.normalizedVolume();
+		if (!GasGeometryOverlap.hasPositiveOverlap(micro, after.dryPlane(), opposite(before.dryPlane())))
+			return after.normalizedVolume();
+		return GasGeometryOverlap.normalizedVolume(micro, List.of(before.dryPlane(), after.dryPlane()));
+	}
+
+	private static GasGeometryOverlap.HalfSpace opposite(GasGeometryOverlap.HalfSpace plane) {
+		return new GasGeometryOverlap.HalfSpace(plane.nx().negate(), plane.ny().negate(), plane.nz().negate(), plane.threshold().negate());
 	}
 	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit) {
 		return plan(next, deferVolumeWork, edit, false, -1);
