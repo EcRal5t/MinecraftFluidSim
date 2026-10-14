@@ -922,6 +922,16 @@ public final class FlipFluidFreeSurfaceValidation {
 		var narrow=LiquidPressureMoments.integrate(new double[][]{{.5,.5+delta,.5},{.5,.5,.5+delta}},0,1,cell,cube);
 		double expected=narrow.area()*delta*delta/18;
 		check(Math.abs(narrow.centeredSecondMoment(1,1,narrow.centroid())-expected)<=64*Math.ulp(expected),"Narrow wet trace lost its positive second moment");
+		for(int axis=0;axis<3;axis++) {
+			var polygon=new double[][]{{0,.2893649457745707,0},{0,0,.14825979318469462}};
+			var face=LiquidPressureMoments.integrate(polygon,axis,1,cell,cube);
+			var thin=LiquidPressureMoments.integrate(new double[][]{{.5,.5+delta,.5},{.5,.5,.5+delta}},axis,1,cell,cube);
+			for(var piece:java.util.List.of(face,thin,face.add(thin))) {
+				check(piece.centroid().component(axis)==2,"Planar face centroid left its constant normal coordinate");
+				for(int other=0;other<3;other++) check(piece.centralSecondMoment().component(axis,other)==0,
+						"Planar face introduced an independent normal direction in its tangent trace");
+			}
+		}
 	}
 	private static void microFaceAlignedInterfacesPreserveTraction() {
 		for(int axis=0;axis<3;axis++)for(int sign:new int[]{-1,1}) {

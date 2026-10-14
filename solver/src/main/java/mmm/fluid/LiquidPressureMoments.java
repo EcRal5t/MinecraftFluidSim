@@ -23,10 +23,12 @@ final class LiquidPressureMoments {
 				vertices[v][(axis + 2) % 3] = polygon[1][slots[v]] * h;
 			}
 			area += triangle;
-			for (int a = 0; a < 3; a++) first[a] += triangle * (vertices[0][a] + vertices[1][a] + vertices[2][a]) / 3;
+			for (int a = 0; a < 3; a++) if (a != axis) first[a] += triangle * (vertices[0][a] + vertices[1][a] + vertices[2][a]) / 3;
 		}
 		if(area==0)return LiquidPressureGeometry.SurfaceMoments.EMPTY;
 		double[] center={first[0]/area,first[1]/area,first[2]/area},second=new double[6];
+		// The plane-normal coordinate is constant throughout the integration polygon.
+		center[axis]=coordinate*h;
 		for(int i=1;i+1<n;i++) {
 			double cross=(polygon[0][i]-polygon[0][0])*(polygon[1][i+1]-polygon[1][0])-(polygon[1][i]-polygon[1][0])*(polygon[0][i+1]-polygon[0][0]);
 			double triangle=Math.abs(cross)*.5*h*h;double[][] vertices=new double[3][3];int[] slots={0,i,i+1};
