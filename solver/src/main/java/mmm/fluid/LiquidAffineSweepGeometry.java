@@ -48,51 +48,6 @@ final class LiquidAffineSweepGeometry {
 		}
 	}
 
-	/** Donor-cell normal columns retain the exact correlation of the positive trace and wet source. */
-	static void lowOrderPhaseVolumes(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
-	                                 double[] q, double dtOverH, int donorSupport, int receiverSupport,
-	                                 ExactRational[] open, ExactRational[] liquid, ExactRational[] dry) {
-		requireInput(domain, donor, receiver, axis, q[0], q[1], q[2], dtOverH, donorSupport, receiverSupport);
-		donorSupport &= ~domain.geometry.cutCells.mask(donor);
-		var rates = faceMicroRates(domain, donor, receiver, axis, positive, q[0], q[1], q[2], donorSupport, receiverSupport);
-		var phase = domain.pressurePhaseGeometry;
-		double fallback = poreScale(domain, donor), receiverFallback = poreScale(domain, receiver);
-		int sign = positive ? 1 : -1;
-		SignedDyadic[] normal = {SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO};
-		normal[(axis + 1) % 3] = SignedDyadic.of(q[1]).multiply(SignedDyadic.of(sign));
-		normal[(axis + 2) % 3] = SignedDyadic.of(q[2]).multiply(SignedDyadic.of(sign));
-		var velocity = new GasGeometryOverlap.HalfSpace(normal[0], normal[1], normal[2], SignedDyadic.of(-sign * q[0]));
-		ExactRational b = rational(q[1]), c = rational(q[2]), centered = rational(q[0]).add(b.add(c).divide(2));
-		java.util.Arrays.fill(open, ExactRational.ZERO); java.util.Arrays.fill(liquid, ExactRational.ZERO);
-		java.util.Arrays.fill(dry, ExactRational.ZERO);
-		for (int m = 0; m < 8; m++) {
-			int faceMicro = positive ? m | 1 << axis : m & ~(1 << axis), peer = m ^ 1 << axis;
-			if ((donorSupport & 1 << m) == 0 || rates[faceMicro].isZero()) continue;
-			ExactRational local = rational(phase.componentPoreScale(donor, m, fallback));
-			if (local.isZero()) continue;
-			ExactRational column = local;
-			if ((donorSupport & 1 << peer) != 0) column = column.add(rational(phase.componentPoreScale(donor, peer, fallback)));
-			if (column.isZero()) continue;
-			ExactRational weight = rational(dtOverH).multiply(local).multiply(new ExactRational(column.denominator(), column.numerator()));
-			open[m] = rates[faceMicro].multiply(weight);
-			int receiverMicro = faceMicro ^ 1 << axis;
-			double facePore = Math.min(phase.componentPoreScale(donor, faceMicro, fallback),
-					phase.componentPoreScale(receiver, receiverMicro, receiverFallback));
-			var supports = wetSourceSupports(domain, donor, m, null);
-			boolean full = supports.size() == 1 && supports.getFirst().isEmpty();
-			if (full) liquid[m] = open[m];
-			else {
-				var part = clippedSourceMoments(m, supports, velocity, false);
-				var integral = centered.multiply(part[0]).add(b.multiply(part[(axis + 1) % 3 + 1]))
-						.add(c.multiply(part[(axis + 2) % 3 + 1])).multiply(2L * sign);
-				liquid[m] = integral.multiply(rational(facePore)).multiply(weight);
-			}
-			dry[m] = open[m].subtract(liquid[m]);
-			if (liquid[m].signum() < 0 || dry[m].signum() < 0)
-				throw new IllegalStateException("PLIC low-order phase measure exceeds its open source");
-		}
-	}
-
 	/** Actual wet source as an >= half-space, including certified constant empty and full sources. */
 	static GasGeometryOverlap.HalfSpace wetSourcePlane(FluidDomain domain, int cell, int micro) {
 		var phase = domain.pressurePhaseGeometry;
@@ -298,19 +253,19 @@ final class LiquidAffineSweepGeometry {
 			throw new IllegalStateException("Affine liquid sweep first moment lies outside its donor");
 	}
 
-	/** Micro sweep and wet measures use the same positive source pieces and frozen trace. */
+	/** Micro sweeps restrict the captured positive wet source by the frozen trace and open path. */
 	static void sweptMicroVolumes(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
 	                             double intercept, double tangentSlope, double otherSlope, double dtOverH,
-	                             int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet) {
+	                             int donorSupport, int receiverSupport, double[] sourceWet, double[] swept) {
 		sweptMicroVolumes(domain, donor, receiver, axis, positive, intercept, tangentSlope, otherSlope, dtOverH,
-				donorSupport, receiverSupport, sourceWet, swept, wet, null);
+				donorSupport, receiverSupport, sourceWet, swept, null);
 	}
 	static void sweptMicroVolumes(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
 	                             double intercept, double tangentSlope, double otherSlope, double dtOverH,
-	                             int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet, MicroSweep saved) {
+	                             int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, MicroSweep saved) {
 		requireInput(domain, donor, receiver, axis, intercept, tangentSlope, otherSlope, dtOverH, donorSupport, receiverSupport);
-		if (sourceWet.length != 8 || swept.length != 8 || wet.length != 8) throw new IllegalArgumentException("Missing affine micro volumes");
-		java.util.Arrays.fill(swept, 0); java.util.Arrays.fill(wet, 0);
+		if (sourceWet.length != 8 || swept.length != 8) throw new IllegalArgumentException("Missing affine micro volumes");
+		java.util.Arrays.fill(swept, 0);
 		var phase = domain.pressurePhaseGeometry; var cut = domain.geometry.cutCells;
 		var wedge = wedge(axis, positive, intercept, tangentSlope, otherSlope, dtOverH);
 		double donorPore = poreScale(domain, donor), receiverPore = poreScale(domain, receiver);
@@ -326,7 +281,6 @@ final class LiquidAffineSweepGeometry {
 			if (!(Double.isFinite(localPore) && localPore >= 0 && localPore <= 1
 					&& Double.isFinite(peerPore) && peerPore >= 0 && peerPore <= 1))
 				throw new IllegalStateException("Invalid affine micro sweep pore fraction");
-			wet[micro] = sourceWet[micro];
 			swept[micro] = saved != null ? observeVolume(saved.moments[micro] == null ? ExactRational.ZERO : saved.moments[micro][0])
 					: dtOverH == 0 ? 0 : observeVolume(sweptVolume(micro, wetSourceSupports(domain, donor, micro, null), wedge)
 							.multiply(rational(Math.min(localPore, peerPore))));

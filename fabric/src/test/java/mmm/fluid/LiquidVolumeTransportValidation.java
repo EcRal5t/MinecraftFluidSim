@@ -279,7 +279,6 @@ public final class LiquidVolumeTransportValidation {
 			flux.velocity[0] = -1; flux.velocity[1] = -1;
 			flux.exactFlux[0] = original; flux.exactFlux[1] = SignedDyadic.ZERO;
 			try {
-				((double[][]) privateFluxField(flux,"lowMicroVolumes"))[1] = new double[]{1,1,1,1,1,1,1,1};
 				var capacities = (SignedDyadic[]) privateFluxField(flux, "exactCapacity");
 				capacities[0] = unit.add(original).subtract(correction); capacities[1] = SignedDyadic.ZERO; capacities[2] = original;
 				var field = ConservativeLiquidFlux.class.getDeclaredField("quantizationBudget"); field.setAccessible(true);
@@ -296,9 +295,6 @@ public final class LiquidVolumeTransportValidation {
 							|| !flux.exactFlux[0].equals(SignedDyadic.ZERO) || !flux.exactFlux[1].equals(original)
 							|| flux.representationBlend(1) != 1)
 						throw new AssertionError("Reverse cancellation failed to reassign the same original donor inventory");
-					var low = new double[8]; java.util.Arrays.fill(low,99);
-					if(flux.lowOrderMicroVolumes(1,255,255,low) || java.util.Arrays.stream(low).anyMatch(v->v!=0))
-						throw new AssertionError("Reversed face retained its original donor low-order measure");
 					var domain = new FluidDomain(3, 2, 2, new FluidSolverConfig(1, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 16);
 					domain.setVolume(1, 0, 0, (float) original.toDouble()); var source = new java.util.ArrayList<Integer>();
 					for (int p = 0; p < domain.particleCount(); p++) {
@@ -365,6 +361,9 @@ public final class LiquidVolumeTransportValidation {
 			try {
 				java.util.Arrays.fill((double[]) privateFluxField(flux, "aperture"), 1);
 				((double[]) privateFluxField(flux, "outgoing"))[1] = 4 * quantum;
+				// This isolated rounding fixture starts after the continuous geometric sweep capture.
+				var physicalUpper = (SignedDyadic[]) privateFluxField(flux, "upperFlux");
+				physicalUpper[0] = SignedDyadic.of(3 * quantum); physicalUpper[1] = SignedDyadic.ZERO;
 				var quantize = ConservativeLiquidFlux.class.getDeclaredMethod("quantizeDonorSupply", double[].class, double.class);
 				quantize.setAccessible(true); quantize.invoke(flux, new double[] {0, 1, 0}, 1.0);
 				var losses = (SignedDyadic[]) privateFluxField(flux, "faceFloorLoss");
@@ -391,6 +390,16 @@ public final class LiquidVolumeTransportValidation {
 				if (accepted && (!flux.resultingVolumes()[1].equals(capacities[1])
 						|| !flux.resultingVolumes()[0].add(flux.resultingVolumes()[1]).add(flux.resultingVolumes()[2]).equals(SignedDyadic.of(1))))
 					throw new AssertionError("Pure liquid floor repair changed exact volume or left a capacity excess");
+				if (accepted) {
+					double representation = 0;
+					for (int face = 0; face < flux.exactFlux.length; face++) {
+						double amount = flux.exactFlux[face].toDouble(), fraction = flux.representationBlend(face);
+						representation += amount * fraction;
+						if (amount * (1 - fraction) > physicalUpper[face].toDouble())
+							throw new AssertionError("Floor repair exceeded its captured physical sweep");
+					}
+					if (representation != quantum) throw new AssertionError("Floor repair did not use its exact Q representation budget");
+				}
 				if (!((SignedDyadic[]) privateFluxField(flux, "upperFlux"))[0].equals(mode == 2 ? SignedDyadic.ZERO : SignedDyadic.of(3 * quantum)))
 					throw new AssertionError("Representation repair relaxed the physical velocity allowance");
 			} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }

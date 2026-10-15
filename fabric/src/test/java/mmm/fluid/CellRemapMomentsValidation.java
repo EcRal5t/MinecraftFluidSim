@@ -34,7 +34,7 @@ public final class CellRemapMomentsValidation {
 			jointTranslationPublishesEdgeAndCornerReceivers();
 			jointTranslationSurvivesCompleteCpuHandoff();
 			jointTranslationKeepsNonConvexReceiver();
-			limitedFluxMixesTheSamePositiveMomentWeights();
+			limitedFluxKeepsPositiveSweepSources();
 			scalarTransportKeepsUnexcitedSpatialInertia();
 			directionalTransportPartitionsActualMomentumAndKineticEnergy();
 			System.out.println("Cell remap transport moments validation passed");
@@ -46,7 +46,7 @@ public final class CellRemapMomentsValidation {
 		sweptQuadraticMomentsRetainAffineWedgeGeometry();
 		savedBoxUnionKeepsAffineSweepMoments();
 		capturedWetVelocityKeepsPhysicalIntegral();
-		limitedFluxMixesTheSamePositiveMomentWeights();
+		limitedFluxKeepsPositiveSweepSources();
 		thinSlabRemapRetainsItsTangentialMoment();
 		if (args.length == 1 && args[0].equals("sweep-only")) return;
 		fullHomogeneousReconstructionKeepsMacPatch(false);
@@ -370,70 +370,41 @@ public final class CellRemapMomentsValidation {
 			int receiver = domain.cellIndex(xyz[0], xyz[1], xyz[2]), tangent = (axis + 1) % 3;
 			for (boolean affine : new boolean[]{false, true}) {
 				double intercept = sign * (affine ? .125 : .25), slope = affine ? sign * .25 : 0;
-				var first = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, receiver, axis, sign > 0,
-						intercept, slope, 0, .5, 255, 255);
-				var open = new mmm.chemistry.ExactRational[8]; var liquid = open.clone(); var dry = open.clone();
-				LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, receiver, axis, sign > 0,
-						new double[]{intercept, slope, 0}, .5, 255, 255, open, liquid, dry);
-				var total = mmm.chemistry.ExactRational.ZERO;
-				for (int m = 0; m < 8; m++) {
-					check(open[m].equals(liquid[m].add(dry[m])) && dry[m].isZero(), "Whole-wet low-order phase closure");
-					check(liquid[m].signum() >= 0 && liquid[m].compareTo(mmm.chemistry.ExactRational.ONE.divide(8)) <= 0,
-							"Low-order source exceeds its microbox capacity");
-					total = total.add(liquid[m]);
-				}
-				check(total.equals(first[0]), "Constant-phase low-order and swept measures differ");
 				var second = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, sign > 0,
 						intercept, slope, 0, .5, 255, 255);
 				var q = new double[]{intercept, slope, 0};
-				var lowSecond = LiquidArrivalReference.lowOrderPhaseSecondMoments(domain, donor, receiver, axis, sign > 0,
-						q, .5, 255, 255, 255);
-				var selectedHigh = new mmm.chemistry.ExactRational[10]; var selectedLow = selectedHigh.clone();
-				java.util.Arrays.fill(selectedHigh, mmm.chemistry.ExactRational.ZERO);
-				java.util.Arrays.fill(selectedLow, mmm.chemistry.ExactRational.ZERO);
+				var selected = new mmm.chemistry.ExactRational[10];
+				java.util.Arrays.fill(selected, mmm.chemistry.ExactRational.ZERO);
 				for (int micro = 0; micro < 8; micro++) {
-					var highPart = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, sign > 0,
+					var part = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, sign > 0,
 							intercept, slope, 0, .5, 255, 255, 1 << micro);
-					var lowPart = LiquidArrivalReference.lowOrderPhaseSecondMoments(domain, donor, receiver, axis, sign > 0,
-							q, .5, 255, 255, 1 << micro);
-					check(lowPart[0].equals(liquid[micro]), "Source selection changed low-order column normalization");
-					for (int i = 0; i < 10; i++) {
-						selectedHigh[i] = selectedHigh[i].add(highPart[i]); selectedLow[i] = selectedLow[i].add(lowPart[i]);
-					}
+					for (int i = 0; i < 10; i++) selected[i] = selected[i].add(part[i]);
 				}
-				check(java.util.Arrays.equals(second, selectedHigh) && java.util.Arrays.equals(lowSecond, selectedLow),
-						"Selected source microboxes do not partition the complete quadratic measure");
-				check(lowSecond[0].equals(total), "Low-order spatial measure changed its actual volume");
-				var highArrival = LiquidArrivalReference.arrivalSecondMoments(second, axis, sign > 0, q, .5, false);
-				var lowArrival = LiquidArrivalReference.arrivalSecondMoments(lowSecond, axis, sign > 0, q, .5, true);
-				check(java.util.Arrays.equals(highArrival, lowArrival), "Fully wet high and low arrival measures differ");
-				check(highArrival[axis + 1].multiply(8).equals(mmm.chemistry.ExactRational.of(sign * (affine ? 109 : 9)).divide(affine ? 192 : 16)),
-						"Actual arrival omitted its finite normal displacement");
+				check(java.util.Arrays.equals(second, selected), "Selected source microboxes do not partition the quadratic sweep");
+				var arrival = LiquidArrivalReference.arrivalSecondMoments(second, axis, q, .5);
+				check(arrival[axis + 1].multiply(8).equals(mmm.chemistry.ExactRational.of(sign * (affine ? 109 : 9)).divide(affine ? 192 : 16)),
+						"Geometric arrival omitted its normal displacement");
 				var saved = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, receiver, axis, sign > 0,
 						new double[]{intercept, slope, 0}, .5, 255);
 				for (int support : new int[]{255, 0x33, 0xcc, 0x55, 0xaa}) {
 					int peerSupport = support ^ 0x66;
-					LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, receiver, axis, sign > 0,
-							new double[]{intercept, slope, 0}, .5, support, peerSupport, open, liquid, dry);
-					for (int m = 0; m < 8; m++) {
-						check(open[m].equals(liquid[m]) && dry[m].isZero(), "Restricted whole-wet phase closure");
-						if ((support & 1 << m) == 0) check(open[m].isZero(), "Low-order phase crossed its source support");
-					}
 					var restricted = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, receiver, axis, sign > 0,
 							intercept, slope, 0, .5, support, peerSupport);
 					check(java.util.Arrays.equals(restricted, saved.sum(axis, sign > 0, support, peerSupport)),
 							"Stored micro sweep changed exact support-restricted moments");
-					double[] swept = new double[8], wet = new double[8], stored = new double[8], storedWet = new double[8];
+					double[] swept = new double[8], stored = new double[8];
 					LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, axis, sign > 0,
-							intercept, slope, 0, .5, support, peerSupport, fullWet, swept, wet);
+							intercept, slope, 0, .5, support, peerSupport, fullWet, swept);
 					LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, axis, sign > 0,
-							intercept, slope, 0, .5, support, peerSupport, fullWet, stored, storedWet, saved);
-					check(java.util.Arrays.equals(swept, stored) && java.util.Arrays.equals(wet, storedWet),
-							"Stored micro sweep changed volume or donor wet measure");
+							intercept, slope, 0, .5, support, peerSupport, fullWet, stored, saved);
+					check(java.util.Arrays.equals(swept, stored),
+							"Stored micro sweep changed its source volume");
 				}
 				check(!saved.matches(domain, donor, receiver, axis, sign > 0, new double[]{Math.nextUp(intercept), slope, 0}, .5)
 						&& !saved.matches(domain, donor, receiver, axis, sign > 0, new double[]{intercept, slope, 0}, Math.nextUp(.5)),
 						"Stored sweep accepted changed trace or timestep bits");
+				var first = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, receiver, axis, sign > 0,
+						intercept, slope, 0, .5, 255, 255);
 				check(second.length == 10, "Quadratic sweep has incomplete moments");
 				for (int i = 0; i < 4; i++) check(second[i].equals(first[i]), "Quadratic sweep changed its exact prefix");
 				check(second[0].equals(mmm.chemistry.ExactRational.ONE.divide(8)), "Analytic wedge volume differs");
@@ -473,26 +444,23 @@ public final class CellRemapMomentsValidation {
 				var stored = retained.sweptSecondMoments(f, donor, receiver, axis, true, .5, masks[0], masks[1]);
 				check(java.util.Arrays.equals(uncached, stored), "Second-moment retention changed narrow/wide support V/M1/M2");
 			}
-			for (boolean lowOrder : new boolean[]{false, true}) {
-				var complete = LiquidArrivalReference.arrivalSecondMoments(domain, field, donor, receiver, axis, true, .5, 255, 255, lowOrder);
-				var partition = new mmm.chemistry.ExactRational[10]; java.util.Arrays.fill(partition, mmm.chemistry.ExactRational.ZERO);
-				for (int micro = 0; micro < 8; micro++) {
-					var part = LiquidArrivalReference.arrivalSecondMoments(domain, field, donor, receiver, axis, true, .5, 255, 255, 1 << micro, lowOrder);
-					if (lowOrder) check(part[0].signum() > 0, "Inner source selection lost its complete outgoing path");
-					for (int i = 0; i < 10; i++) partition[i] = partition[i].add(part[i]);
-				}
-				check(java.util.Arrays.equals(complete, partition), "Face producer changed source-conditioned arrival moments");
+			var complete = LiquidArrivalReference.arrivalSecondMoments(domain, field, donor, receiver, axis, true, .5, 255, 255);
+			var partition = new mmm.chemistry.ExactRational[10]; java.util.Arrays.fill(partition, mmm.chemistry.ExactRational.ZERO);
+			for (int micro = 0; micro < 8; micro++) {
+				var part = LiquidArrivalReference.arrivalSecondMoments(domain, field, donor, receiver, axis, true, .5, 255, 255, 1 << micro);
+				for (int i = 0; i < 10; i++) partition[i] = partition[i].add(part[i]);
 			}
+			check(java.util.Arrays.equals(complete, partition), "Geometric arrival changed its source-conditioned moments");
 			double[] expected = new double[4], actual = new double[4];
 			retained.sweptMoments(f, donor, receiver, axis, true, .5, 255, 255, actual);
-			double[] swept = new double[8], wet = new double[8];
-			unretained.sweptMicroVolumes(f, donor, receiver, axis, true, .5, 0x33, 255, fullWet, swept, wet);
+			double[] swept = new double[8];
+			unretained.sweptMicroVolumes(f, donor, receiver, axis, true, .5, 0x33, 255, fullWet, swept);
 			int face = f;
 			mmm.compute.CpuWorkBatch.run(16, 1, (start, end) -> {
 				for (int i = start; i < end; i++) {
-					double[] parallelSwept = new double[8], parallelWet = new double[8];
-					retained.sweptMicroVolumes(face, donor, receiver, axis, true, .5, 0x33, 255, fullWet, parallelSwept, parallelWet);
-					check(java.util.Arrays.equals(swept, parallelSwept) && java.util.Arrays.equals(wet, parallelWet),
+					double[] parallelSwept = new double[8];
+					retained.sweptMicroVolumes(face, donor, receiver, axis, true, .5, 0x33, 255, fullWet, parallelSwept);
+					check(java.util.Arrays.equals(swept, parallelSwept),
 							"Parallel micro sweep publication changed binary64 measures");
 				}
 			});
@@ -515,52 +483,12 @@ public final class CellRemapMomentsValidation {
 			domain.particles.setPositionX(p, 1.25F); domain.particles.setPositionY(p, 1.5F); domain.particles.setPositionZ(p, 1.5F);
 		}
 		domain.rebuildGridFromParticles();
-		var open = new mmm.chemistry.ExactRational[8]; var liquid = open.clone(); var dry = open.clone();
-		LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, donor + domain.sizeX, 1, true,
-				new double[]{.125, 0, .25}, .5, 255, 255, open, liquid, dry);
-		var wetTotal = mmm.chemistry.ExactRational.ZERO;
-		for (int m = 0; m < 8; m++) {
-			check(open[m].equals(liquid[m].add(dry[m])) && liquid[m].signum() >= 0 && dry[m].signum() >= 0,
-					"Partial PLIC low-order phase closure");
-			wetTotal = wetTotal.add(liquid[m]);
-		}
-		check(wetTotal.equals(mmm.chemistry.ExactRational.of(3).divide(64)),
-				"Low-order producer lost correlation between tangential trace and PLIC phase: " + wetTotal);
-		LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, donor + 1, 0, true,
-				new double[]{.25, 0, 0}, .5, 255, 255, open, liquid, dry);
-		var exactExit = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, donor + 1, 0, true, .25, 0, 0, .5, 255, 255);
-		check(exactExit[0].isZero() && java.util.Arrays.stream(liquid).anyMatch(v -> v.signum() > 0),
-				"Donor-cell phase mixing was confused with an exact supported sweep");
-		var partialBasis = CellAffineVelocity.capture(domain);
-		double[][] partialCoefficients = new double[3][4 * partialBasis.blockCount()];
-		partialCoefficients[1][4 * donor] = .1875; partialCoefficients[1][4 * donor + 1] = .25;
-		var partialFaces = new ConservativeLiquidFlux(3, 3, 3, true);
-		var partialFlow = new LiquidAffineFaceFlow(domain, partialFaces, new CellAffineVelocityField(partialBasis, partialCoefficients));
-		var geometry = new LiquidFluxGeometry(domain); partialFaces.geometry(geometry); partialFaces.faceSweep(partialFlow);
-		partialFlow.prepareVelocities(partialFaces, geometry);
-		partialFaces.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, .5, domain.markerGrid.exactCellVolumeInventory);
-		for (int f = 0; f < partialFaces.physicalFaceCount; f++) if (partialFaces.left[f] == donor && partialFaces.axis[f] == 1) {
-			double[] low = new double[8];
-			check(partialFaces.lowOrderMicroVolumes(f, 255, 255, low), "Actual affine flux omitted its micro low-order producer");
-			precise(java.util.Arrays.stream(low).sum(), 3.0 / 64, "Actual affine low-order transfer");
-			for (int sourceMask : new int[]{255,0x33,0x55,0x0f,3}) for (int receiverMask : new int[]{255,0x55,0xcc}) {
-				var selected = new double[8]; check(partialFaces.lowOrderMicroVolumes(f,sourceMask,receiverMask,selected), "Captured low-order source unavailable");
-				for (int m = 0; m < 8; m++) {
-					int faceMicro = m | 2, peer = faceMicro ^ 2;
-					double expected = (sourceMask & 1<<m) != 0 && (sourceMask & 1<<faceMicro) != 0 && (receiverMask & 1<<peer) != 0 ? low[m] : 0;
-					check(Double.doubleToRawLongBits(selected[m]) == Double.doubleToRawLongBits(expected),
-							"Narrow source renormalized its complete component column");
-				}
-			}
-			check(partialFaces.exactFlux[f].equals(mmm.units.SignedDyadic.of(3.0 / 64)),
-					"Actual FCT consumer did not retain the common phase transfer");
-			partialFaces.plan(domain.markerGrid.exactCellMarkerVolume,domain.geometry.solid,.25,domain.markerGrid.exactCellVolumeInventory);
-			var rebuilt = new double[8]; check(partialFaces.lowOrderMicroVolumes(f,255,255,rebuilt), "Rebuilt low-order rule disappeared");
-			for(int m=0;m<8;m++) check(rebuilt[m] == .5*low[m], "New plan retained the old duration's low-order measure");
-			partialFaces.faceSweep(null); java.util.Arrays.fill(rebuilt,99);
-			check(!partialFaces.lowOrderMicroVolumes(f,255,255,rebuilt) && java.util.Arrays.stream(rebuilt).allMatch(v->v==0),
-					"Replaced producer retained an earlier plan measure");
-		}
+		var correlated = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, donor + domain.sizeX, 1, true,
+				.125, 0, .25, .5, 255, 255);
+		check(correlated[0].equals(mmm.chemistry.ExactRational.of(3).divide(64)),
+				"Geometric sweep lost the correlation between tangential trace and wet PLIC");
+		var dryExit = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, donor + 1, 0, true, .25, 0, 0, .5, 255, 255);
+		check(dryExit[0].isZero(), "A dry exit acquired a geometric source");
 		domain.setVolume(1, 1, 1, 1);
 		domain.rebuildGridFromParticles();
 		var fullCache = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5, 255, 255, true);
@@ -575,18 +503,14 @@ public final class CellRemapMomentsValidation {
 		check(domain.pressurePhaseGeometry.liquidFractionExact(donor, 0) == 1
 				&& domain.markerGrid.exactCellVolumeInventory[donor].compareTo(domain.pressurePhaseGeometry.poreVolume(donor)) < 0,
 				"Tiny dry source did not reproduce the rounded full-phase classification");
-		boolean rejected = false;
-		try { LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, donor + 1, 0, true,
-				new double[]{.25, 0, 0}, .5, 255, 255, open, liquid, dry); }
-		catch (IllegalStateException lostPlane) { rejected = lostPlane.getMessage().contains("no PLIC plane"); }
-		check(rejected, "Rounded full-phase observation discarded a positive exact dry inventory");
 		check(!fullCache.matches(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5),
 				"Unchanged rounded phase columns hid changed exact stock from the saved sweep");
+		boolean rejected = false;
 		for (boolean micro : new boolean[]{false, true}) {
 			rejected = false;
 			try {
 				if (micro) LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, donor + 1, 0, true,
-						.25, 0, 0, .5, 255, 255, sourceWet(domain, donor), new double[8], new double[8]);
+						.25, 0, 0, .5, 255, 255, sourceWet(domain, donor), new double[8]);
 				else LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, donor + 1, 0, true, .25, 0, 0, .5, 255, 255);
 			} catch (IllegalStateException lostPlane) { rejected = lostPlane.getMessage().contains("no PLIC plane"); }
 			check(rejected, "High-order or wet source measure discarded the positive exact dry inventory");
@@ -599,23 +523,22 @@ public final class CellRemapMomentsValidation {
 		var supplyBasis = CellAffineVelocity.capture(domain);
 		double[][] supplyCoefficients = new double[3][4 * supplyBasis.blockCount()];
 		supplyCoefficients[0][4 * donor] = .49;
-		for (int a = 1; a < 3; a++) { supplyCoefficients[a][4 * donor] = .375; supplyCoefficients[a][4 * donor + 1] = .5; }
+		for (int a = 1; a < 3; a++) supplyCoefficients[a][4 * donor] = .25;
 		var supplyFaces = new ConservativeLiquidFlux(3, 3, 3, true);
 		var supplyFlow = new LiquidAffineFaceFlow(domain, supplyFaces, new CellAffineVelocityField(supplyBasis, supplyCoefficients));
-		supplyFaces.geometry(geometry); supplyFaces.faceSweep(supplyFlow); supplyFlow.prepareVelocities(supplyFaces, geometry);
-		double openOutgoing = 0, liquidOutgoing = 0;
+		var supplyGeometry = new LiquidFluxGeometry(domain);
+		supplyFaces.geometry(supplyGeometry); supplyFaces.faceSweep(supplyFlow); supplyFlow.prepareVelocities(supplyFaces, supplyGeometry);
+		double sweptOutgoing = 0;
 		for (int f = 0; f < supplyFaces.physicalFaceCount; f++) if (supplyFaces.left[f] == donor) {
-			openOutgoing += supplyFaces.velocity[f]; double[] micro = new double[8];
-			liquidOutgoing += supplyFlow.captureLowOrderVolumes(f, donor, supplyFaces.right[f], supplyFaces.axis[f], true, 1, micro);
+			var moments = new double[4]; supplyFlow.sweptMoments(f, donor, supplyFaces.right[f], supplyFaces.axis[f], true, 1, 255, 255, moments);
+			sweptOutgoing += moments[0];
 		}
-		precise(openOutgoing, .99, "Open-face Courant of the three-axis source counterexample");
-		precise(liquidOutgoing, .62, "PLIC-correlated low-order source demand");
-		boolean refined = false;
-		try { supplyFaces.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 1, domain.markerGrid.exactCellVolumeInventory); }
-		catch (MechanicalTimeRefinement supply) { refined = supply.minimumSubsteps == 2 && supply.getMessage().contains("Low-order liquid source"); }
-		check(refined, "Three-axis low-order overdraw did not request mechanical time refinement");
-		supplyFaces.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, .5, domain.markerGrid.exactCellVolumeInventory);
-		check(supplyFaces.resultingVolumes()[donor].signum() >= 0, "Refined low-order plan lost source positivity");
+		check(sweptOutgoing > domain.markerGrid.exactCellVolumeInventory[donor].toDouble(), "Three-axis fixture has no overlapping source demand");
+		supplyFaces.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 1, domain.markerGrid.exactCellVolumeInventory);
+		var allocated = mmm.units.SignedDyadic.ZERO;
+		for (int f = 0; f < supplyFaces.exactFlux.length; f++) if (supplyFaces.donor(f) == donor) allocated = allocated.add(supplyFaces.exactFlux[f]);
+		check(allocated.compareTo(domain.markerGrid.exactCellVolumeInventory[donor]) <= 0 && supplyFaces.resultingVolumes()[donor].signum() >= 0,
+				"Geometric donor limiting lost its positive retained supply");
 		for (int thinAxis = 0; thinAxis < 3; thinAxis++) {
 			domain.setVolume(1, 1, 1, 1F / 64);
 			for (int p = 0; p < domain.particleCount(); p++) {
@@ -629,20 +552,10 @@ public final class CellRemapMomentsValidation {
 			for (int sign : new int[]{-1, 1}) for (int intercept : new int[]{0, -4}) {
 				int next = donor + sign * stride;
 				double[] q = {sign * intercept, 0, sign * 1024};
-				LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, next, flowAxis, sign > 0,
-						q, 1.0 / 2048, 255, 255, open, liquid, dry);
-				var total = mmm.chemistry.ExactRational.ZERO;
-				for (int m = 0; m < 8; m++) {
-					check(open[m].equals(liquid[m].add(dry[m])) && liquid[m].signum() >= 0 && dry[m].signum() >= 0,
-							"Thin partial microbox lost its exact phase flux decomposition");
-					total = total.add(liquid[m]);
-				}
-				check(total.equals(intercept == 0 ? mmm.chemistry.ExactRational.ONE.divide(16384)
-						: mmm.chemistry.ExactRational.of(9).divide(262144)),
-						"Microbox phase/trace correlation was replaced by the dry-corner velocity mean: " + total);
 				var high = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, next, flowAxis, sign > 0,
 						q[0], q[1], q[2], 1.0 / 2048, 255, 255);
-				check(high[0].equals(total), "Tangential thin phase low/high measures disagree");
+				check(high[0].equals(intercept == 0 ? mmm.chemistry.ExactRational.ONE.divide(16384)
+						: mmm.chemistry.ExactRational.of(9).divide(262144)), "Thin wet geometry lost its affine trace correlation");
 				double[][] thinCoefficients = new double[3][4 * thinBasis.blockCount()];
 				thinCoefficients[flowAxis][4 * donor] = sign * (8 + intercept);
 				thinCoefficients[flowAxis][4 * donor + thinAxis + 1] = sign * 1024;
@@ -655,8 +568,6 @@ public final class CellRemapMomentsValidation {
 				for (int f = 0; f < thinFaces.physicalFaceCount; f++) {
 					if (thinFaces.axis[f] == flowAxis && (sign > 0 ? thinFaces.left[f] : thinFaces.right[f]) == donor) {
 						precise(thinFlow.maximumOutwardSpeed(f, sign > 0, 0), 16 + intercept, "Actual wet projected peak excludes the dry corner");
-						var captured = new double[8]; check(thinFaces.lowOrderMicroVolumes(sign > 0 ? f : f+thinFaces.physicalFaceCount,255,255,captured), "Thin directional plan omitted its low-order rule");
-						for(int m=0;m<8;m++) checkSameObservation(captured[m],liquid[m],"Thin captured component measure");
 					}
 					if (thinFaces.axis[f] == thinAxis && thinFaces.left[f] == donor) {
 						check(domain.pressurePhaseGeometry.wetFacePolygon(donor, thinAxis, 1, 0, 0, 1)[0].length == 0,
@@ -701,23 +612,22 @@ public final class CellRemapMomentsValidation {
 		}
 	}
 
-	private static void limitedFluxMixesTheSamePositiveMomentWeights() {
+	private static void limitedFluxKeepsPositiveSweepSources() {
+		capacityRepairRetainsThinLayerSource();
 		var flux = new ConservativeLiquidFlux(1, 2, 1);
 		double[] volume = {.25, .95};
 		var exact = new mmm.units.SignedDyadic[] {
 				mmm.units.SignedDyadic.of(volume[0]), mmm.units.SignedDyadic.of(volume[1])};
 		flux.velocity[0] = .1;
 		flux.plan(volume, new boolean[2], 1, exact);
-		// B=.025, G=.1, lambda=(1-.975)/.075=1/3: geometric transfer fraction is 2/3.
-		precise(flux.geometricBlend(0), 2.0 / 3, "FCT geometric moment weight");
 		double[] moments = new double[4]; flux.sweptMoments(0, moments);
-		precise(moments[0], .1, "FCT geometric sweep");
+		precise(moments[0], .1, "Capacity-limited geometric sweep");
 		check(flux.exactFlux[0].signum() > 0 && flux.resultingVolumes()[1].compareTo(mmm.units.SignedDyadic.of(1)) <= 0,
-				"FCT moment mixture changed capacity-constrained inventory");
+				"Geometric capacity repair changed inventory");
 		var domain = new FluidDomain(2, 2, 2,
 				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 32);
 		domain.setVolume(0, 0, 0, 1); var source = new ArrayList<Integer>();
-		// Supply quadrature is explicit; the two-cell FCT fixture independently defines the sweep.
+		// Supply quadrature is explicit; capacity repair only reduces the same directional sweep.
 		for (int p = 0; p < domain.particleCount(); p++) {
 			source.add(p); float y = .25F + .5F * (p >> 1 & 1);
 			domain.particles.setPositionY(p, y); domain.particles.setVelocityY(p, y - .5F);
@@ -727,17 +637,54 @@ public final class CellRemapMomentsValidation {
 			@Override public void sweptMoments(int face, int donor, int receiver, int axis, boolean positive, double dt,
 					int donorSupport, int receiverSupport, double[] result) { System.arraycopy(moments, 0, result, 0, 4); }
 			@Override public void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dt,
-					int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet) {
-				for (int micro = 0; micro < 8; micro++) { wet[micro] = .125; swept[micro] = (micro & 2) == 0 ? 0 : .025; }
+					int donorSupport, int receiverSupport, double[] sourceWet, double[] swept) {
+				for (int micro = 0; micro < 8; micro++) swept[micro] = (micro & 2) == 0 ? 0 : .025;
 			}
 		});
 		var preference = new CellRemapMicroPreferences(domain, flux, 0, 255, new int[]{0, -1}, new int[]{255, 255}).forSource(source);
-		for (int micro = 0; micro < 8; micro++) precise(preference[0][micro], (1 - flux.geometricBlend(0)) / 8
-				+ ((micro & 2) == 0 ? 0 : flux.geometricBlend(0) / 4), "Common geometric/donor source mixture");
+		for (int micro = 0; micro < 8; micro++) precise(preference[0][micro], (micro & 2) == 0 ? 0 : .25,
+				"Capacity reduction selected a source outside its geometric sweep");
 		var result = captureTransportMoments(domain, 0, source).allocate(new mmm.units.SignedDyadic[]{flux.exactFlux[0],
 				mmm.units.SignedDyadic.of(1).subtract(flux.exactFlux[0])}, preference);
-		precise(result.momentum()[0][1] / result.mass()[0], .25 * flux.geometricBlend(0), "Mixed normal source velocity");
+		precise(result.momentum()[0][1] / result.mass()[0], .25, "Geometric normal source velocity");
 		compareCarrierMoments(domain, 0, result);
+	}
+
+	private static void capacityRepairRetainsThinLayerSource() {
+		for (boolean upstream : new boolean[]{false, true}) {
+			float thickness = 0x1p-16F; double step = 0x1p-5;
+			var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, (float) step, 120, 1e-4F, .4F, .002F, 0), 128);
+			int cell = domain.cellIndex(1, 1, 1); domain.setVolume(1, 1, 1, thickness);
+			if (upstream) { domain.setVolume(0, 1, 1, 1); domain.setVolume(1, 0, 1, 1); domain.setVolume(1, 1, 0, 1); }
+			var original = new ArrayList<Integer>();
+			for (int p = 0; p < domain.particleCount(); p++) if (domain.particleCellIndex(p) == cell) {
+				boolean upperX = domain.particles.positionX(p) >= 1.5F, upperY = domain.particles.positionY(p) >= 1 + thickness * .5F;
+				domain.particles.setPositionX(p, 1 + (upperX ? .75F : .25F) * thickness);
+				domain.particles.setPositionY(p, upperY ? 1.75F : 1.25F); domain.particles.setVelocityX(p, 1); original.add(p);
+			}
+			domain.rebuildGridFromParticles(); var basis = CellAffineVelocity.capture(domain);
+			var coefficients = new double[3][4 * basis.blockCount()]; coefficients[0][4 * cell] = 1;
+			if (upstream) { coefficients[0][4 * (cell - 1)] = 12; coefficients[1][4 * (cell - 3)] = 12; coefficients[2][4 * (cell - 9)] = 12; }
+			var flux = new ConservativeLiquidFlux(3, 3, 3, true);
+			var flow = new LiquidAffineFaceFlow(domain, flux, new CellAffineVelocityField(basis, coefficients));
+			var geometry = new LiquidFluxGeometry(domain); flux.geometry(geometry); flux.faceSweep(flow); flow.prepareVelocities(flux, geometry);
+			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, step, domain.markerGrid.exactCellVolumeInventory);
+			for (int face = 0; face < flux.exactFlux.length; face++) if (flux.donor(face) == cell && flux.receiver(face) == cell + 1) {
+				var swept = new double[4]; flux.sweptMoments(face, swept);
+				check(swept[0] == 0 && flux.exactFlux[face].signum() == 0, "Capacity repair moved a thin wet layer through its dry opposite exit");
+			}
+			for (var volume : flux.resultingVolumes()) check(volume.signum() >= 0 && volume.compareTo(mmm.units.SignedDyadic.of(1)) <= 0,
+					"Incoming capacity repair lost a cell's positive inventory");
+			check(flux.resultingVolumes()[cell].equals(upstream ? mmm.units.SignedDyadic.of(1) : mmm.units.SignedDyadic.of(thickness)),
+					"Capacity repair did not retain the thin source and reduce excess incoming flow");
+			var source = captureTransportMoments(domain, cell, original);
+			var retained = source.allocate(new mmm.units.SignedDyadic[]{mmm.units.SignedDyadic.ZERO, source.totals().volume()}, new double[][]{new double[8]});
+			compareCarrierMoments(domain, cell, retained);
+			for (var weight : retained.markerWeights()[1]) check(weight.equals(mmm.chemistry.ExactRational.ONE), "Thin retained source lost a positive marker share");
+			retained.spatial(1).advancePositions(step);
+			check(retained.spatial(1).centroid()[0] > -.5 && retained.spatial(1).centroid()[0] < .5,
+					"Retained thin source left its cell after its actual motion");
+		}
 	}
 
 	private static void precise(double actual, double expected, String label) {
@@ -890,8 +837,8 @@ public final class CellRemapMomentsValidation {
 		flux.faceSweep(new LiquidAffineFaceFlow(domain, flux, new CellAffineVelocityField(basis, coefficients))); int face = -1;
 		for (int f = 0; f < flux.physicalFaceCount; f++) if (flux.left[f] == cell && flux.axis[f] == 0) { face = f; flux.velocity[f] = 1; break; }
 		flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, .125, domain.markerGrid.exactCellVolumeInventory);
-		check(face >= 0 && flux.exactFlux[face].signum() > 0 && flux.geometricBlend(face) == 1, "Missing geometric source mismatch fixture");
-		var swept = new double[8]; var wet = new double[8]; flux.sweptMicroVolumes(face, 255, 255, sourceWet(domain, cell), swept, wet);
+		check(face >= 0 && flux.exactFlux[face].signum() > 0, "Missing geometric source mismatch fixture");
+		var swept = new double[8]; flux.sweptMicroVolumes(face, 255, 255, sourceWet(domain, cell), swept);
 		check(swept[1] == 0 && swept[3] > 0, "Geometric outlet overlaps its raw source microbox");
 		var sourceGeometry = new CellRemapMicroPreferences(domain, flux, cell, 255, new int[]{face, -1}, new int[]{255, 255});
 		var preferences = sourceGeometry.forSource(original);
@@ -2004,10 +1951,9 @@ public final class CellRemapMomentsValidation {
 		domain.restoreParticleState(new FlipParticleState(3, 3, 3, 1, 2, .0625F, raw, new float[]{.375F, 0, 0, 1.125F, 0, 0}, new byte[27], java.util.List.of(shape)));
 		domain.rebuildGridFromParticles(); double[] q = {.25, 1, 0}; double dt = .5;
 		var high = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, 0, true, q[0], q[1], q[2], dt, 255, 255);
-		var low = LiquidArrivalReference.lowOrderPhaseSecondMoments(domain, donor, receiver, 0, true, q, dt, 255, 255, 255);
-		var expectedHigh = new mmm.chemistry.ExactRational[10]; var expectedLow = expectedHigh.clone();
-		var reverseHigh = expectedHigh.clone(); var reverseLow = expectedHigh.clone();
-		java.util.Arrays.fill(expectedHigh, mmm.chemistry.ExactRational.ZERO); java.util.Arrays.fill(expectedLow, mmm.chemistry.ExactRational.ZERO);
+		var expectedHigh = new mmm.chemistry.ExactRational[10];
+		var reverseHigh = expectedHigh.clone();
+		java.util.Arrays.fill(expectedHigh, mmm.chemistry.ExactRational.ZERO);
 		int[][] powers = {{0,0,0},{1,0,0},{0,1,0},{0,0,1},{2,0,0},{1,1,0},{1,0,1},{0,2,0},{0,1,1},{0,0,2}};
 		for (var box : boxes) {
 			var integral = new mmm.chemistry.ExactRational[3][4];
@@ -2022,31 +1968,21 @@ public final class CellRemapMomentsValidation {
 				var part = integral[0][x].multiply(integral[1][y]).multiply(integral[2][z]);
 				if (box.lowerY().signum() > 0) {
 					reverseHigh[i] = part;
-					reverseLow[i] = integral[0][x].multiply(integral[1][y + 1]).multiply(integral[2][z]).divide(2);
 				}
 				expectedHigh[i] = expectedHigh[i].add(part);
-				expectedLow[i] = expectedLow[i].add(part.multiply(3).divide(8)
-						.add(integral[0][x].multiply(integral[1][y + 1]).multiply(integral[2][z]).divide(2)));
 			}
 		}
-		check(java.util.Arrays.equals(high, expectedHigh) && java.util.Arrays.equals(low, expectedLow), "Saved wet union affine V/M1/M2 differ from independent box integrals");
+		check(java.util.Arrays.equals(high, expectedHigh), "Saved wet union affine V/M1/M2 differ from independent box integrals");
 		var reversing = new double[]{-.5, 1, 0};
 		check(java.util.Arrays.equals(reverseHigh, LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, 0, true,
-				reversing[0], reversing[1], reversing[2], dt, 255, 255))
-				&& java.util.Arrays.equals(reverseLow, LiquidArrivalReference.lowOrderPhaseSecondMoments(domain, donor, receiver, 0, true,
-						reversing, dt, 255, 255, 255)), "Reversing affine flow mixed opposite wet source pieces");
-		var open = new mmm.chemistry.ExactRational[8]; var liquid = open.clone(); var dry = open.clone();
-		LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, receiver, 0, true, q, dt, 255, 255, open, liquid, dry);
-		var total = mmm.chemistry.ExactRational.ZERO;
-		for (int m = 0; m < 8; m++) { check(open[m].equals(liquid[m].add(dry[m])) && dry[m].signum() >= 0, "Saved wet union low-order open/liquid/dry closure"); total = total.add(liquid[m]); }
-		check(total.equals(low[0]), "Saved wet union low volume and moments disagree");
+				reversing[0], reversing[1], reversing[2], dt, 255, 255)), "Reversing affine flow mixed opposite wet source pieces");
 		var saved = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, receiver, 0, true, q, dt, 255);
 		check(java.util.Arrays.equals(saved.sum(0, true, 255, 255), java.util.Arrays.copyOf(high, 4)), "Saved union micro sweep changed its exact moments");
-		double[] swept = new double[8], wet = new double[8], cached = new double[8], cachedWet = new double[8];
+		double[] swept = new double[8], cached = new double[8];
 		var fullWet = sourceWet(domain, donor);
-		LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, 0, true, q[0], q[1], q[2], dt, 255, 255, fullWet, swept, wet);
-		LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, 0, true, q[0], q[1], q[2], dt, 255, 255, fullWet, cached, cachedWet, saved);
-		check(java.util.Arrays.equals(swept, cached) && java.util.Arrays.equals(wet, cachedWet), "Saved union cached volume differs");
+		LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, 0, true, q[0], q[1], q[2], dt, 255, 255, fullWet, swept);
+		LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, 0, true, q[0], q[1], q[2], dt, 255, 255, fullWet, cached, saved);
+		check(java.util.Arrays.equals(swept, cached), "Saved union cached volume differs");
 		raw[1] = 1.25F;
 		var shifted = java.util.List.of(new LiquidCellShape.Box(mmm.units.SignedDyadic.of(7, -3), mmm.units.SignedDyadic.of(1, -3), zero, one, mmm.units.SignedDyadic.of(3, -3), one), boxes.getLast());
 		var next = new LiquidCellShape(donor, shifted, shape.firstMomentX(), mmm.units.SignedDyadic.of(25, -8), shape.firstMomentZ());

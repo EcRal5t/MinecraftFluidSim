@@ -568,7 +568,7 @@ public final class BoundaryPourDiagnostic {
 			var cells = new java.util.TreeSet<Integer>();
 			for (int piece = 0; piece < 8 * source.cellCount; piece++) if (old.nodeOfPiece(piece) == node) cells.add(piece / 8);
 			for (int cell : cells) {
-				fluxCell(replay, cell, exact[cell], "continuousFCT", continuous, null);
+				fluxCell(replay, cell, exact[cell], "geometricSweep", continuous, null);
 				fluxCell(replay, cell, exact[cell], "scaledUnrounded", scaled, null);
 				fluxCell(replay, cell, exact[cell], "floor", null, floor);
 				fluxCell(replay, cell, exact[cell], "repair", null, replay.exactFlux);

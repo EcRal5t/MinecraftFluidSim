@@ -9,18 +9,14 @@ final class ConservativeLiquidFlux {
 	@FunctionalInterface
 	interface FaceSweep {
 		default double sourceCourant(LiquidFluxGeometry geometry, double dtOverH) { return Double.NaN; }
-		default double liquidTransferUpperBound(int face, boolean positive, double dtOverH) { return Double.NaN; }
 		void sweptMoments(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
 		                  int donorSupport, int receiverSupport, double[] result);
-		/** Captures the complete component-normalized microbox measure; the scalar total is rounded once. */
-		default double captureLowOrderVolumes(int face, int donor, int receiver, int axis, boolean positive,
-		                                     double dtOverH, double[] liquid) { return Double.NaN; }
 		default mmm.chemistry.ExactRational[] sweptSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
 		                                                     double dtOverH, int donorSupport, int receiverSupport) {
 			throw new IllegalStateException("Liquid face sweep has no quadratic spatial integration rule");
 		}
 		default void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
-		                               int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet) {
+		                               int donorSupport, int receiverSupport, double[] sourceWet, double[] swept) {
 			throw new IllegalStateException("Liquid face sweep has no common micro source integration rule");
 		}
 		default void sweptPhaseMoments(PhaseVolumeTransportGeometry phases, int phase, int face, int donor,
@@ -35,19 +31,16 @@ final class ConservativeLiquidFlux {
 	final int[] left, right, axis;
 	final double[] velocity, flux;
 	final SignedDyadic[] exactFlux;
-	private final double[] low, positive, negative, rPositive, rNegative, outgoing;
+	private final double[] outgoing;
 	private final float[] normalX, normalY, normalZ;
 	private final double[] offset;
 	private final int[] incomingHead, incomingNext, predecessor, queue;
 	private final SignedDyadic[] after;
-	private final double[] capacity, aperture, donorFlux;
+	private final double[] capacity, aperture;
 	private final SignedDyadic[] exactCapacity;
 	private final SignedDyadic[] upperFlux, openFluxBound, remainingSupply;
-	private final double[] finalCapacity;
-	private final double[] geometricBlend;
 	private final double[] representationBlend;
 	private final SignedDyadic[] faceFloorLoss;
-	private final double[][] lowMicroVolumes;
 	private SignedDyadic[] quantizationBudget;
 	private double dtOverH;
 	private LiquidFluxGeometry geometry;
@@ -66,19 +59,16 @@ final class ConservativeLiquidFlux {
 		int faces = Math.multiplyExact(physicalFaceCount, bidirectional ? 2 : 1);
 		left = new int[faces]; right = left.clone(); axis = left.clone();
 		velocity = new double[faces]; flux = velocity.clone(); exactFlux = new SignedDyadic[faces];
-		low = new double[cellCount]; positive = low.clone(); negative = low.clone();
-		rPositive = low.clone(); rNegative = low.clone(); outgoing = low.clone();
+		outgoing = new double[cellCount];
 		normalX = new float[cellCount]; normalY = normalX.clone(); normalZ = normalX.clone(); offset = new double[cellCount];
 		incomingHead = new int[cellCount]; incomingNext = new int[faces]; predecessor = incomingHead.clone(); queue = incomingHead.clone();
 		after = new SignedDyadic[cellCount];
-		capacity = new double[cellCount]; aperture = new double[faces]; donorFlux = new double[faces];
+		capacity = new double[cellCount]; aperture = new double[faces];
 		exactCapacity = new SignedDyadic[cellCount];
 		upperFlux = new SignedDyadic[faces]; openFluxBound = new SignedDyadic[faces];
-		remainingSupply = new SignedDyadic[cellCount]; finalCapacity = new double[cellCount];
-		geometricBlend = new double[faces];
+		remainingSupply = new SignedDyadic[cellCount];
 		representationBlend = new double[faces];
 		faceFloorLoss = new SignedDyadic[faces];
-		lowMicroVolumes = new double[faces][];
 		int f = 0;
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 1; x < sizeX; x++) {
 			left[f] = index(x - 1, y, z); right[f] = left[f] + 1; axis[f++] = 0;
@@ -98,10 +88,7 @@ final class ConservativeLiquidFlux {
 	}
 
 	void geometry(LiquidFluxGeometry geometry) { this.geometry = geometry; }
-	void faceSweep(FaceSweep faceSweep) {
-		this.faceSweep = faceSweep;
-		Arrays.fill(lowMicroVolumes, null);
-	}
+	void faceSweep(FaceSweep faceSweep) { this.faceSweep = faceSweep; }
 	LiquidAffineFaceFlow affineFaceFlow(FluidDomain domain, float dt) {
 		return faceSweep instanceof LiquidAffineFaceFlow flow && flow.belongsTo(domain)
 				&& Double.doubleToRawLongBits(dtOverH) == Double.doubleToRawLongBits(dt / domain.config.cellSize()) ? flow : null;
@@ -135,15 +122,13 @@ final class ConservativeLiquidFlux {
 	private void planContinuous(double[] volume, boolean[] solid, double dtOverH, SignedDyadic[] exactVolume) {
 		this.dtOverH = dtOverH;
 		quantizationBudget = null;
-		Arrays.fill(lowMicroVolumes, null);
 		Arrays.fill(representationBlend, 0);
 		prepareGeometry(solid, dtOverH, volume);
 		reconstructPlanes(volume, solid, exactVolume);
 		provisionalFluxes(volume, dtOverH);
-		limitAntidiffusion(volume, dtOverH);
 	}
 
-	/** Intermediate flux snapshots for a separately reconstructed diagnostic replay. */
+	/** Geometry, same-source supply limit and downward quantization before shared capacity repair. */
 	record DiagnosticStages(double[] continuous, double[] supplyScaled, SignedDyadic[] floor,
 	                        SignedDyadic[] floorLoss) { }
 	DiagnosticStages diagnosticPlan(double[] volume, boolean[] solid, double dtOverH, SignedDyadic[] exactVolume) {
@@ -170,8 +155,6 @@ final class ConservativeLiquidFlux {
 			if (reserved != null) exactCapacity[c] = exactCapacity[c].subtract(reserved[c]);
 			if (exactCapacity[c].signum() < 0) throw new MechanicalTimeRefinement(2,
 					"Liquid transport reserved volume exceeds future capacity at cell " + c + ": remaining=" + exactCapacity[c].toDouble());
-			finalCapacity[c] = exactCapacity[c].toDouble();
-			if (SignedDyadic.of(finalCapacity[c]).compareTo(exactCapacity[c]) > 0) finalCapacity[c] = Math.nextDown(finalCapacity[c]);
 		}
 		for (int f = 0; f < flux.length; f++) aperture[f] = geometry == null ? 1 : geometry.aperture(left[f], right[f], axis[f]);
 		Arrays.fill(outgoing, 0);
@@ -196,7 +179,7 @@ final class ConservativeLiquidFlux {
 				int x = c % sizeX, y = c / sizeX % sizeY, z = c / (sizeX * sizeY);
 				if (exactVolume[c].compareTo(SignedDyadic.ZERO) < 0 || exactVolume[c].compareTo(SignedDyadic.of(capacity[c])) > 0)
 					throw new IllegalStateException("Liquid integration cell " + c + " exceeds its geometric capacity: volume="
-							+ volume[c] + ", beginningCapacity=" + capacity[c] + ", finalCapacity=" + finalCapacity[c]);
+							+ volume[c] + ", beginningCapacity=" + capacity[c] + ", finalCapacity=" + exactCapacity[c].toDouble());
 				FlipPressurePhaseGeometry plane = geometry == null ? null : geometry.transportPlane();
 				if (plane != null) {
 					normalX[c] = plane.planeNormal(c, 0); normalY[c] = plane.planeNormal(c, 1); normalZ[c] = plane.planeNormal(c, 2);
@@ -213,71 +196,33 @@ final class ConservativeLiquidFlux {
 	}
 
 	private void provisionalFluxes(double[] volume, double dtOverH) {
-		Arrays.fill(low, 0);
-		Arrays.fill(positive, 0); Arrays.fill(negative, 0);
 		CpuWorkBatch.run(flux.length, (from, until) -> {
 			double[] moments = faceSweep == null ? null : new double[4];
 			for (int f = from; f < until; f++) {
-				donorFlux[f] = 0;
+				upperFlux[f] = SignedDyadic.ZERO;
 				double courant = velocity[f] * dtOverH;
-				int donor = positive(f) ? left[f] : right[f];
+				int donor = donor(f);
 				if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) { flux[f] = Math.copySign(0, velocity[f]); continue; }
-				double width = Math.abs(courant), nx = normalX[donor], ny = normalY[donor], nz = normalZ[donor], off = offset[donor];
-				if (positive(f)) off -= (axis[f] == 0 ? nx : axis[f] == 1 ? ny : nz) * (1 - width);
-				if (axis[f] == 0) nx *= width; else if (axis[f] == 1) ny *= width; else nz *= width;
-				donorFlux[f] = capacity[donor] == 0 ? 0 : courant * aperture[f] * volume[donor] / capacity[donor];
-				if (faceSweep != null) {
-					var micro = new double[8];
-					double phaseLow = faceSweep.captureLowOrderVolumes(f % physicalFaceCount, donor, receiver(f), axis[f], positive(f),
-							dtOverH, micro);
-					if (!Double.isNaN(phaseLow)) {
-						donorFlux[f] = Math.copySign(phaseLow, courant);
-						lowMicroVolumes[f] = micro;
-					}
-				}
 				double swept;
 				if (faceSweep != null) {
 					faceSweep.sweptMoments(f % physicalFaceCount, donor, receiver(f), axis[f], positive(f), dtOverH, 255, 255, moments);
 					swept = moments[0];
-				} else swept = geometry == null ? Math.abs(courant) * FlipFreeSurfaceGeometry.unitCubeLiquidFraction(nx, ny, nz, off)
-						: geometry.swept(donor, receiver(f), axis[f], Math.abs(courant), positive(f),
-								normalX[donor], normalY[donor], normalZ[donor], offset[donor]);
-				flux[f] = Math.copySign(swept, courant) - donorFlux[f];
+				} else if (geometry != null) swept = geometry.swept(donor, receiver(f), axis[f], Math.abs(courant), positive(f),
+						normalX[donor], normalY[donor], normalZ[donor], offset[donor]);
+				else {
+					double width = Math.abs(courant), nx = normalX[donor], ny = normalY[donor], nz = normalZ[donor], off = offset[donor];
+					if (positive(f)) off -= (axis[f] == 0 ? nx : axis[f] == 1 ? ny : nz) * (1 - width);
+					if (axis[f] == 0) nx *= width; else if (axis[f] == 1) ny *= width; else nz *= width;
+					swept = width * FlipFreeSurfaceGeometry.unitCubeLiquidFraction(nx, ny, nz, off);
+				}
+				if (!(swept >= 0 && Double.isFinite(swept))) throw new IllegalStateException("Invalid geometric liquid sweep");
+				flux[f] = Math.copySign(swept, courant);
+				double resolution = ConservativeMarkerSampling.VOLUME_FLUX_RESOLUTION;
+				upperFlux[f] = SignedDyadic.of(Math.floor(swept / resolution) * resolution);
 			}
 		});
 		Arrays.fill(outgoing, 0);
-		for (int f = 0; f < flux.length; f++) {
-			double courant = velocity[f] * dtOverH;
-			int donor = positive(f) ? left[f] : right[f];
-			if (volume[donor] == 0 || courant == 0 || aperture[f] == 0) continue;
-			outgoing[donor] += Math.abs(donorFlux[f]);
-			low[receiver(f)] += Math.abs(donorFlux[f]);
-			double a = flux[f];
-			positive[left[f]] += Math.max(-a, 0); negative[left[f]] += Math.max(a, 0);
-			positive[right[f]] += Math.max(a, 0); negative[right[f]] += Math.max(-a, 0);
-		}
-		for (int c = 0; c < cellCount; c++) {
-			if (outgoing[c] > volume[c])
-				throw new MechanicalTimeRefinement(Math.max(2, (int)Math.ceil(outgoing[c] / volume[c])),
-						"Low-order liquid source exceeds beginning inventory at cell " + c + ": outgoing=" + outgoing[c] + ", volume=" + volume[c]);
-			low[c] += volume[c] - outgoing[c];
-		}
-	}
-
-	private void limitAntidiffusion(double[] volume, double dtOverH) {
-		for (int c = 0; c < cellCount; c++) {
-			rPositive[c] = positive[c] == 0 ? 1 : Math.min(1, Math.max(0, finalCapacity[c] - low[c]) / positive[c]);
-			rNegative[c] = negative[c] == 0 ? 1 : Math.min(1, Math.max(0, low[c]) / negative[c]);
-		}
-		Arrays.fill(outgoing, 0);
-		for (int f = 0; f < flux.length; f++) {
-			double a = flux[f];
-			double limiter = a >= 0 ? Math.min(rNegative[left[f]], rPositive[right[f]]) : Math.min(rPositive[left[f]], rNegative[right[f]]);
-			int donor = positive(f) ? left[f] : right[f];
-			flux[f] = donorFlux[f] + a * limiter;
-			geometricBlend[f] = flux[f] == 0 ? 0 : Math.max(0, Math.min(1, limiter * (donorFlux[f] + a) / flux[f]));
-			outgoing[donor] += Math.abs(flux[f]);
-		}
+		for (int f = 0; f < flux.length; f++) outgoing[donor(f)] += Math.abs(flux[f]);
 	}
 
 	private void quantizeDonorSupply(double[] volume, double dtOverH) {
@@ -295,11 +240,6 @@ final class ConservativeLiquidFlux {
 			flux[f] = Math.copySign(stored, velocity[f]);
 			double openBound = Math.abs(velocity[f]) * dtOverH * aperture[f];
 			openFluxBound[f] = SignedDyadic.of(Math.floor(openBound / resolution) * resolution);
-			double liquidBound = faceSweep == null ? Double.NaN
-					: faceSweep.liquidTransferUpperBound(f % physicalFaceCount, positive(f), dtOverH);
-			if (Double.isNaN(liquidBound)) liquidBound = openBound;
-			if (!(liquidBound >= 0 && Double.isFinite(liquidBound))) throw new IllegalStateException("Invalid liquid transfer bound");
-			upperFlux[f] = SignedDyadic.of(Math.floor(Math.min(openBound, liquidBound) / resolution) * resolution);
 		}
 	}
 
@@ -411,7 +351,6 @@ final class ConservativeLiquidFlux {
 			int f = predecessor[node];
 			SignedDyadic previous = exactFlux[f];
 			exactFlux[f] = previous.add(amount);
-			geometricBlend[f] *= previous.toDouble() / exactFlux[f].toDouble();
 			representationBlend[f] *= previous.toDouble() / exactFlux[f].toDouble();
 			remainingSupply[donor(f)] = remainingSupply[donor(f)].subtract(amount);
 		}
@@ -453,15 +392,13 @@ final class ConservativeLiquidFlux {
 			if (donor(face) == previous) {
 				exactFlux[face] = old.add(amount);
 				double ratio = old.toDouble() / exactFlux[face].toDouble();
-				geometricBlend[face] *= ratio;
 				representationBlend[face] = representationBlend[face] * ratio + 1 - ratio;
 			} else if (old.compareTo(amount) >= 0) exactFlux[face] = old.subtract(amount);
 			else {
 				if (bidirectional) throw new IllegalStateException("Directed liquid channel cannot reverse its geometric sweep");
 				exactFlux[face] = amount.subtract(old);
 				velocity[face] = Math.copySign(Math.max(Double.MIN_VALUE, Math.abs(velocity[face])), (edge & 1) == 0 ? 1 : -1);
-				lowMicroVolumes[face] = null;
-				geometricBlend[face] = 0; representationBlend[face] = 1;
+				representationBlend[face] = 1;
 				upperFlux[face] = openFluxBound[face] = SignedDyadic.ZERO;
 			}
 			node = previous;
@@ -532,19 +469,6 @@ final class ConservativeLiquidFlux {
 
 	boolean positive(int face) { return Double.doubleToRawLongBits(velocity[face]) >= 0; }
 	int donor(int f) { return positive(f) ? left[f] : right[f]; }
-	/** Fraction of the final face transfer assigned to the limited geometric sweep. */
-	double geometricBlend(int face) { return geometricBlend[face]; }
-	boolean lowOrderMicroVolumes(int face, int donorSupport, int receiverSupport, double[] liquid) {
-		var captured = lowMicroVolumes[face];
-		Arrays.fill(liquid, 0);
-		if (captured == null) return false;
-		for (int micro = 0; micro < 8; micro++) {
-			int faceMicro = positive(face) ? micro | 1 << axis[face] : micro & ~(1 << axis[face]);
-			if ((donorSupport & 1 << micro) != 0 && (donorSupport & 1 << faceMicro) != 0
-					&& (receiverSupport & 1 << (faceMicro ^ 1 << axis[face])) != 0) liquid[micro] = captured[micro];
-		}
-		return true;
-	}
 	double representationBlend(int face) { return representationBlend[face]; }
 	void sweptMoments(int face, double[] result) {
 		int donor = donor(face), neighbor = receiver(face), a = axis[face];
@@ -592,27 +516,22 @@ final class ConservativeLiquidFlux {
 				normalX[donor], normalY[donor], normalZ[donor], offset[donor], result, donorSupport, receiverSupport);
 	}
 	/** Separate source micro measures from the same frozen directional sweep used to plan this face. */
-	void sweptMicroVolumes(int face, int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet) {
-		if (sourceWet.length != 8 || swept.length != 8 || wet.length != 8) throw new IllegalArgumentException("Missing liquid micro volumes");
+	void sweptMicroVolumes(int face, int donorSupport, int receiverSupport, double[] sourceWet, double[] swept) {
+		if (sourceWet.length != 8 || swept.length != 8) throw new IllegalArgumentException("Missing liquid micro volumes");
 		if (faceSweep != null) {
 			faceSweep.sweptMicroVolumes(face % physicalFaceCount, donor(face), receiver(face), axis[face], positive(face),
-					dtOverH, donorSupport, receiverSupport, sourceWet, swept, wet); return;
+					dtOverH, donorSupport, receiverSupport, sourceWet, swept); return;
 		}
 		int donor = donor(face); double[] moments = new double[4];
 		for (int m = 0; m < 8; m++) {
-			swept[m] = wet[m] = 0;
+			swept[m] = 0;
 			if ((donorSupport & 1 << m) == 0) continue;
 			if (geometry != null) {
 				geometry.sweptMoments(donor, receiver(face), axis[face], Math.abs(velocity[face]) * dtOverH, positive(face),
 						normalX[donor], normalY[donor], normalZ[donor], offset[donor], moments, 1 << m, receiverSupport);
 				swept[m] = moments[0];
-				geometry.sweptMoments(donor, receiver(face), axis[face], 1, positive(face), normalX[donor], normalY[donor],
-						normalZ[donor], offset[donor], moments, 1 << m, receiverSupport); wet[m] = moments[0];
 			} else {
 				double ox = .5 * (m & 1), oy = .5 * (m >>> 1 & 1), oz = .5 * (m >>> 2 & 1);
-				LiquidFluxGeometry.unitCubeMoments(.5 * normalX[donor], .5 * normalY[donor], .5 * normalZ[donor],
-						offset[donor] - normalX[donor] * ox - normalY[donor] * oy - normalZ[donor] * oz, moments);
-				wet[m] = .125 * moments[0];
 				double lower = axis[face] == 0 ? ox : axis[face] == 1 ? oy : oz;
 				double width = Math.abs(velocity[face]) * dtOverH;
 				double lo = Math.max(lower, positive(face) ? 1 - width : 0), hi = Math.min(lower + .5, positive(face) ? 1 : width);

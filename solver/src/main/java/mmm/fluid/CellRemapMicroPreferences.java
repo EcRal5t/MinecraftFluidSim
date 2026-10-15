@@ -9,15 +9,15 @@ final class CellRemapMicroPreferences {
 	private final FluidDomain domain;
 	private final double[] wet = new double[8];
 	private final double wetTotal;
-	private final double[][] geometricRatio, donorRatio;
-	private final double[] geometricBlend, representationBlend;
+	private final double[][] geometricRatio;
+	private final double[] representationBlend;
 
 	CellRemapMicroPreferences(FluidDomain domain, ConservativeLiquidFlux flux, int cell,
 	                         int support, int[] faces, int[] receiverSupports) {
 		this.domain = domain;
 		int outgoing = faces.length - 1;
-		geometricRatio = new double[outgoing][8]; donorRatio = new double[outgoing][8];
-		geometricBlend = new double[outgoing]; representationBlend = new double[outgoing];
+		geometricRatio = new double[outgoing][8];
+		representationBlend = new double[outgoing];
 		if (outgoing == 0) { wetTotal = 0; return; }
 		LiquidAffineSweepGeometry.sourceWetMicroVolumes(domain, cell, support, wet);
 		double total = 0;
@@ -25,24 +25,15 @@ final class CellRemapMicroPreferences {
 		if (!(total > 0 && Double.isFinite(total)))
 			throw new IllegalStateException("Liquid source coupling requires a positive wet measure");
 		wetTotal = total;
-		double[] faceWet = new double[8];
 		for (int d = 0; d < outgoing; d++) {
-			double[] swept = geometricRatio[d], low = donorRatio[d];
-			flux.sweptMicroVolumes(faces[d], support, receiverSupports[d], wet, swept, faceWet);
-			boolean phaseLow = flux.lowOrderMicroVolumes(faces[d], support, receiverSupports[d], low);
-			if (!phaseLow) {
-				int normalBit = 1 << flux.axis[faces[d]];
-				for (int m = 0; m < 8; m++)
-					low[m] = swept[m] + ((support & 1 << (m ^ normalBit)) != 0 ? swept[m ^ normalBit] : 0) > 0 ? faceWet[m] : 0;
-			}
+			double[] swept = geometricRatio[d];
+			flux.sweptMicroVolumes(faces[d], support, receiverSupports[d], wet, swept);
 			for (int m = 0; m < 8; m++) {
-				if (!(Double.isFinite(swept[m]) && swept[m] >= 0 && Double.isFinite(low[m]) && low[m] >= 0)
-						|| (swept[m] > 0 || low[m] > 0) && !(wet[m] > 0))
+				if (!(Double.isFinite(swept[m]) && swept[m] >= 0) || swept[m] > 0 && !(wet[m] > 0))
 					throw new IllegalStateException("Liquid source proposal lacks its wet source measure");
 				swept[m] = swept[m] == 0 ? 0 : swept[m] / wet[m];
-				low[m] = low[m] == 0 ? 0 : low[m] / wet[m];
 			}
-			geometricBlend[d] = flux.geometricBlend(faces[d]); representationBlend[d] = flux.representationBlend(faces[d]);
+			representationBlend[d] = flux.representationBlend(faces[d]);
 		}
 	}
 
@@ -73,14 +64,11 @@ final class CellRemapMicroPreferences {
 		}
 		for (int d = 0; d < result.length; d++) {
 			double[] geometricPreference = result[d] = couple(geometricRatio[d], diagonal, rowRest, columnRest);
-			double[] donorPreference = couple(donorRatio[d], diagonal, rowRest, columnRest);
-			double geometric = 0, donor = 0;
-			for (int m = 0; m < 8; m++) { geometric += geometricPreference[m]; donor += donorPreference[m]; }
+			double geometric = 0;
+			for (double value : geometricPreference) geometric += value;
 			double representation = representationBlend[d], available = 1 - representation;
-			double blend = geometric == 0 ? 0 : donor == 0 ? available : Math.min(available, geometricBlend[d]);
 			for (int m = 0; m < 8; m++)
-				result[d][m] = (geometric == 0 ? 0 : blend * geometricPreference[m] / geometric)
-						+ (donor == 0 ? 0 : (available - blend) * donorPreference[m] / donor)
+				result[d][m] = (geometric == 0 ? 0 : available * geometricPreference[m] / geometric)
 						+ representation * raw[m];
 		}
 		return result;

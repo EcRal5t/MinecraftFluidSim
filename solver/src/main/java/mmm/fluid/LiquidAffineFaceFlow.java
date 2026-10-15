@@ -137,18 +137,6 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 	@Override public double sourceCourant(LiquidFluxGeometry geometry, double dtOverH) {
 		return courantRate(geometry, 0) * dtOverH * domain.config.cellSize();
 	}
-	@Override public double liquidTransferUpperBound(int face, boolean positive, double dtOverH) {
-		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
-		if (components == null) return 0;
-		var geometry = new LiquidFluxGeometry(domain); double rate = 0;
-		for (var component : components) {
-			double open = geometry.aperture(faces.left[face], faces.right[face], faces.axis[face],
-					positive ? component.support() : 255, positive ? 255 : component.support());
-			double bound = outwardBound(face, positive, 0, component);
-			if (bound > 0 && open > 0) rate = Math.nextUp(rate + Math.nextUp(bound * open));
-		}
-		return rate == 0 ? 0 : Math.nextUp(rate * dtOverH);
-	}
 	double courantRate(LiquidFluxGeometry geometry,double prediction) {
 		Arrays.fill(outgoing,0); double maximum=0,h=domain.config.cellSize();
 		for(int face=0;face<faces.physicalFaceCount;face++) {
@@ -225,44 +213,20 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		}
 	}
 
-	@Override public double captureLowOrderVolumes(int face, int donor, int receiver, int axis, boolean positive,
-	                                              double dtOverH, double[] liquid) {
-		Arrays.fill(liquid, 0);
-		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
-		if (components == null) return 0;
-		var open = new ExactRational[8]; var wet = new ExactRational[8]; var dry = new ExactRational[8];
-		ExactRational total = ExactRational.ZERO;
-		for (var component : components) {
-			int support = component.support();
-			LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, receiver, axis, positive, component.q(),
-					dtOverH, support, 255, open, wet, dry);
-			ExactRational sum = ExactRational.ZERO;
-			for (int m = 0; m < 8; m++) if ((support & 1 << m) != 0
-					&& (support & 1 << (positive ? m | 1 << axis : m & ~(1 << axis))) != 0) {
-				liquid[m] += wet[m].toDouble(); sum = sum.add(wet[m]);
-			}
-			total = total.add(sum);
-		}
-		double observed = total.toDouble();
-		if (!Double.isFinite(observed) || observed < 0 || observed == 0 && !total.isZero())
-			throw new IllegalStateException("Unrepresentable low-order phase flux");
-		return observed;
-	}
 	@Override public void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
-	                                       int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet) {
+	                                       int donorSupport, int receiverSupport, double[] sourceWet, double[] swept) {
 		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
-		Arrays.fill(swept, 0); Arrays.fill(wet, 0);
+		Arrays.fill(swept, 0);
 		if (components == null) return;
 		double[] part = components.length == 1 ? swept : new double[swept.length];
-		double[] partWet = components.length == 1 ? wet : new double[wet.length];
 		for (int c = 0; c < components.length; c++) {
 			var component = components[c];
 			int support = donorSupport & component.support(); if (support == 0) continue;
 			double[] q = component.q();
 			var saved = sweep(face + (positive ? 0 : faces.physicalFaceCount), c, donor, receiver, axis, positive, dtOverH, support, receiverSupport, false);
 			LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dtOverH,
-					support, receiverSupport, sourceWet, part, partWet, saved);
-			if (part != swept) for (int i = 0; i < swept.length; i++) { swept[i] += part[i]; wet[i] += partWet[i]; }
+					support, receiverSupport, sourceWet, part, saved);
+			if (part != swept) for (int i = 0; i < swept.length; i++) swept[i] += part[i];
 		}
 	}
 	@Override public ExactRational[] sweptSecondMoments(int face, int donor, int receiver, int axis, boolean positive,
