@@ -56,13 +56,4 @@ final class ConstraintNumerics {
 			throw new IllegalArgumentException("Mass Gram binary exponent span exceeds the dyadic representation budget");
 		return significand.shiftLeft((int) shift);
 	}
-
-	static double rescaledResponse(double coefficient, double inverseMass, double force) {
-		double result = (coefficient * inverseMass) * force;
-		if ((!Double.isFinite(result) || result == 0) && coefficient != 0 && inverseMass != 0 && force != 0
-				&& Double.isFinite(coefficient) && Double.isFinite(inverseMass) && Double.isFinite(force)) {
-			return SignedDyadic.of(coefficient).multiply(SignedDyadic.of(inverseMass)).multiply(SignedDyadic.of(force)).toDouble();
-		}
-		return result;
-	}
 }

@@ -20,7 +20,6 @@ final class MarkerPressureProjection {
 	private CellAffineWallProjection wallProjection;
 	private CellVelocityConstraintOperator operator;
 	private List<Row> rows;
-	private List<int[]> internalCoarseRows;
 	private record SharedBlocks(int minus, int plus, int axis) implements Comparable<SharedBlocks> {
 		@Override public int compareTo(SharedBlocks other) {
 			int order=Integer.compare(axis,other.axis);
@@ -32,7 +31,7 @@ final class MarkerPressureProjection {
 	private double[] pressureOrigin, pressureCorrection, pressureCorrectionLow;
 	private int sharedStart, sharedEnd;
 	private double[][] originalVelocity, originalPosition, predictor, wallPredictor, wallImpulse, candidate, publishedVelocity, knownImpulse, faceCandidate, knownCellLoad;
-	private double[] originalMass, originalVolume, originalFraction, originalPlaneOffset, pressure, commonPressureMode, rhs, storage, gasInitialPressure, targetVolumeRate, observedPressure;
+	private double[] originalMass, originalVolume, originalFraction, originalPlaneOffset, pressure, rhs, storage, gasInitialPressure, targetVolumeRate, observedPressure;
 	private double[][] originalPlaneNormal;
 	private double[] nodeStorage;
 	private double[] diagnosticGasDiagonal, diagnosticGasRhs;
@@ -124,7 +123,6 @@ final class MarkerPressureProjection {
 		Arrays.fill(liquidRows, -1); Arrays.fill(gasRows, -1);
 		nodeStorage = new double[gasRows.length]; Arrays.fill(nodeStorage, Double.NaN);
 		var definitions = new ArrayList<Row>(); var gasBlocks = new TreeMap<Integer, List<Block>>();
-		internalCoarseRows=new ArrayList<>();
 		knownCellLoad = cellVectors();
 		for (int block = 0; block < basis.blockCount(); block++) {
 			if (basis.blockMarkerCount(block)==0) continue;
@@ -219,7 +217,6 @@ final class MarkerPressureProjection {
 		}
 		definitions.add(new Row(blocks,0));
 		int[] selected=CellPressurePolynomialSpace.independentMonomials(basis,block);
-		var coarseRows=new ArrayList<Integer>();
 		// Independent nonconstant coefficients enforce incompressibility in the admitted modal space.
 		for(int monomial:selected) {
 			blocks=new ArrayList<Block>(); boolean positive=false;
@@ -232,11 +229,9 @@ final class MarkerPressureProjection {
 				blocks.add(new Block(block,axis,coefficient,profile.volume()/basis.cellSize()));
 			}
 			if(positive) {
-				coarseRows.add(definitions.size());
 				definitions.add(new Row(blocks,0));
 			}
 		}
-		if(!coarseRows.isEmpty()) internalCoarseRows.add(coarseRows.stream().mapToInt(Integer::intValue).toArray());
 	}
 
 	private SignedDyadic[] boxDivergence(int block,int axis) {
@@ -299,7 +294,6 @@ final class MarkerPressureProjection {
 	}
 
 	private void initializeCommonPressure(int sharedStart, int sharedEnd) {
-		commonPressureMode = new double[pressure.length];
 		double largest = 0;
 		for (int row : gasRows) if (row >= 0) largest = Math.max(largest, storage[row]);
 		if (largest == 0) return;
@@ -309,9 +303,9 @@ final class MarkerPressureProjection {
 			if (added == 0) continue;
 			mean += added / total * (gasInitialPressure[row] - mean); weight = total;
 		}
-		for (int row : liquidRows) if (row >= 0) { pressure[row] = mean; commonPressureMode[row] = 1; }
-		for (int row = sharedStart; row < sharedEnd; row += 3) { pressure[row] = -mean; commonPressureMode[row] = -1; }
-		for (int row : gasRows) if (row >= 0) { pressure[row] = mean; commonPressureMode[row] = 1; }
+		for (int row : liquidRows) if (row >= 0) pressure[row] = mean;
+		for (int row = sharedStart; row < sharedEnd; row += 3) pressure[row] = -mean;
+		for (int row : gasRows) if (row >= 0) pressure[row] = mean;
 	}
 
 	private double[] trace(int cell, int axis, LiquidPressureGeometry.SurfaceMoments face, int test, double sign) {
@@ -376,7 +370,7 @@ final class MarkerPressureProjection {
 		if (!active) return new PressureProjectionResult(0, 0, true);
 		if (!(target > 0 && Double.isFinite(target))) throw new IllegalArgumentException("Invalid pressure residual target");
 		requireCurrent(); solved = false;
-		int n = rhs.length; double[] diagonal = new double[n], r = new double[n], z = new double[n], direction = new double[n], applied = new double[n];
+		int n = rhs.length; double[] diagonal = new double[n], r = new double[n];
 		operator.diagonal(diagonal);
 		pressureOrigin = pressure.clone(); pressureCorrection = new double[n]; pressureCorrectionLow = new double[n];
 		for (int row = 0; row < n; row++) {
@@ -401,43 +395,10 @@ final class MarkerPressureProjection {
 			boolean[] observed = new boolean[n];
 			for (int row : liquidRows) if (row >= 0) observed[row] = true;
 			for (int row : gasRows) if (row >= 0) observed[row] = true;
-			var direct = SparsePressureFactor.solve(operator, source, pressureCorrection, pressureCorrectionLow, diagonal, observed,
+			var result = SparsePressureFactor.solve(operator, source, pressureCorrection, pressureCorrectionLow, diagonal, observed,
 					closedObservationGauge(), wallPredictor, dt, tolerance, domain.config.maxPressureIterations(), rhs);
-			iterations = direct.iterations();
-			// An improving direct solve starts a fresh Krylov iteration on the full operator.
+			iterations = result.iterations();
 			operator.residual(pressureCorrection, pressureCorrectionLow, source, r); residual = rms(r);
-		}
-		if (residual > tolerance && iterations < domain.config.maxPressureIterations()) {
-			var preconditioner = operator.preconditioner(diagonal, commonPressureMode, internalCoarseRows); preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
-			double rz = dot(r, z);
-			for (; residual > tolerance && iterations < domain.config.maxPressureIterations();) {
-				double denominator = operator.applyWithWork(direction, applied);
-				if (!(denominator > 0 && Double.isFinite(denominator) && rz > 0 && Double.isFinite(rz))) break;
-				double alpha = rz / denominator;
-				if (!Double.isFinite(alpha)) break;
-				for (int i = 0; i < n; i++) {
-					var value = SignedDyadic.of(pressureCorrection[i]).add(SignedDyadic.of(pressureCorrectionLow[i]))
-							.add(SignedDyadic.of(alpha).multiply(SignedDyadic.of(direction[i])));
-					pressureCorrection[i] = value.toDouble();
-					if (!Double.isFinite(pressureCorrection[i])) throw blocked("Unrepresentable pressure correction at row " + i);
-					pressureCorrectionLow[i] = value.subtract(SignedDyadic.of(pressureCorrection[i])).toDouble();
-					r[i] -= alpha * applied[i];
-				}
-				iterations++; residual = rms(r);
-				if (residual <= tolerance) {
-					operator.residual(pressureCorrection, pressureCorrectionLow, source, r);
-					residual = rms(r);
-					if (residual <= tolerance) break;
-					// A fresh residual restarts the compatible-range iteration.
-					preconditioner.apply(r, z); System.arraycopy(z, 0, direction, 0, n);
-					rz = dot(r, z); continue;
-				}
-				preconditioner.apply(r, z);
-				double nextRz = dot(r, z), beta = nextRz / rz;
-				if (!(nextRz > 0 && Double.isFinite(nextRz) && Double.isFinite(beta))) break;
-				for (int i = 0; i < n; i++) direction[i] = z[i] + beta * direction[i];
-				rz = nextRz;
-			}
 		}
 		operator.residual(pressureCorrection, pressureCorrectionLow, source, r);
 		for (int i = 0; i < n; i++) {
@@ -585,7 +546,6 @@ final class MarkerPressureProjection {
 	private static double[][] markers(int count) { return new double[3][count]; }
 	private static double[][] copy(double[][] value) { return new double[][]{value[0].clone(), value[1].clone(), value[2].clone()}; }
 	private static float[][] copy(float[][] value) { return new float[][]{value[0].clone(), value[1].clone(), value[2].clone()}; }
-	private static double dot(double[] first, double[] second) { double result = 0; for (int i = 0; i < first.length; i++) result += first[i] * second[i]; return result; }
 	private static double rms(double[] value) { double norm = 0; for (double v : value) norm = Math.hypot(norm, v); return norm / Math.sqrt(Math.max(1, value.length)); }
 	private static FluidDomain.PressureSolveBlockedException blocked(String message) { return new FluidDomain.PressureSolveBlockedException(message); }
 }

@@ -314,12 +314,11 @@ public final class MarkerPressureValidation {
 			Arrays.fill(unit, 0); unit[col] = 1; operator.apply(unit, applied);
 			for (int row = 0; row < 4; row++) near(applied[row], reference[row][col], 2e-12, "Independent mean/internal actual-mass Gram");
 		}
-		var preconditioner = operator.preconditioner(diagonal, new double[4], java.util.List.of(new int[]{0, 1, 2, 3}));
-		double[] first = {2, -3, .7, 1.1}, second = {-.7, 1.1, 2, -3}, firstResult = new double[4], secondResult = new double[4];
-		preconditioner.apply(first, firstResult); preconditioner.apply(second, secondResult);
+		double[] first = {2, -3, .7, 1.1}, firstResult = new double[4];
+		var result = solveConstraint(operator, basis.markerCount(), first, firstResult, 1e-10, 64);
+		if (!result.converged()) throw new AssertionError("Mean/internal pressure solve failed: " + result);
 		double[] expected = MarkerVelocitySpaceExperiment.solve(reference, first);
 		for (int row = 0; row < 4; row++) near(firstResult[row], expected[row], 2e-10, "Independent complete local divergence inverse");
-		near(dot(first, secondResult), dot(second, firstResult), 2e-10, "Mean/internal balanced symmetry");
 		if (!(dot(first, firstResult) > 0)) throw new AssertionError("Mean/internal inverse lost positive actual-mass work");
 	}
 
@@ -397,37 +396,6 @@ public final class MarkerPressureValidation {
 		for (int row = 0; row < 2; row++) {
 			Arrays.fill(unit, 0); unit[row] = 1; constraint.apply(unit, applied);
 			near(diagonal[row], applied[row], 2e-14, "Merged constraint block diagonal");
-		}
-		unit[0] = 1; unit[1] = 0; constraint.apply(unit, applied);
-		double coupling = applied[1], scale = Math.sqrt(diagonal[0] * diagonal[1]);
-		double normalized = coupling / scale;
-		var preconditioner = constraint.preconditioner(diagonal); double[] first = {2, -3}, second = {-.7, 1.1};
-		double[] firstResult = new double[2], secondResult = new double[2];
-		preconditioner.apply(first, firstResult); preconditioner.apply(second, secondResult);
-		near(firstResult[0], (1 + normalized * normalized) * first[0] / diagonal[0] - normalized * first[1] / scale,
-				2e-12, "Independent two-row symmetric Gauss-Seidel inverse");
-		near(firstResult[1], first[1] / diagonal[1] - normalized * first[0] / scale, 2e-12,
-				"Independent two-row backward solve");
-		near(dot(first, secondResult), dot(second, firstResult), 2e-12, "Symmetric actual-Gram preconditioner");
-		if (!(dot(first, firstResult) > 0)) throw new AssertionError("Actual-Gram preconditioner lost positive work");
-		double[] commonMode = {1, -1}; var balanced = constraint.preconditioner(diagonal, commonMode);
-		balanced.apply(first, firstResult); balanced.apply(second, secondResult);
-		near(dot(first, secondResult), dot(second, firstResult), 2e-12, "Balanced common-pressure symmetry");
-		if (!(dot(first, firstResult) > 0)) throw new AssertionError("Balanced common-pressure inverse lost positive work");
-		constraint.apply(commonMode, applied); balanced.apply(applied, firstResult);
-		for (int row = 0; row < 2; row++) near(firstResult[row], commonMode[row], 2e-12, "Exact common-pressure coarse solve");
-		var incompressible = new CellVelocityConstraintOperator(basis, java.util.List.of(definitions.get(0),
-				new CellVelocityConstraintOperator.Row(definitions.get(1).blocks(), 0)));
-		incompressible.diagonal(diagonal); incompressible.preconditioner(diagonal).apply(first, firstResult);
-		incompressible.preconditioner(diagonal, commonMode).apply(first, secondResult);
-		for (int row = 0; row < 2; row++) near(firstResult[row], secondResult[row], 0, "Zero-storage common mode keeps SGS");
-		var local = incompressible.preconditioner(diagonal, new double[2], java.util.List.of(new int[]{0, 1}));
-		local.apply(first, firstResult); local.apply(second, secondResult);
-		near(dot(first, secondResult), dot(second, firstResult), 2e-12, "Balanced local pressure symmetry");
-		if (!(dot(first, firstResult) > 0)) throw new AssertionError("Balanced local pressure lost positive work");
-		for (int row = 0; row < 2; row++) {
-			Arrays.fill(unit, 0); unit[row] = 1; incompressible.apply(unit, applied); local.apply(applied, firstResult);
-			for (int other = 0; other < 2; other++) near(firstResult[other], unit[other], 2e-12, "Local coarse pressure exact response");
 		}
 	}
 
@@ -699,8 +667,9 @@ public final class MarkerPressureValidation {
 					Math.nextDown(direct.residualRms()), 1, rhs);
 			operator.residual(warmSeed, warmLow, seedSource, actual); double after = 0;
 			for (double value : actual) after = Math.hypot(after, value); after /= Math.sqrt(3);
-			if (incomplete.converged() || incomplete.iterations() != 1 || !(after < before) || after != incomplete.residualRms())
-				throw new AssertionError("Incomplete direct solve lost its certified improving full-row PCG seed or budget");
+			if (incomplete.converged() != (after <= Math.nextDown(direct.residualRms())) || incomplete.iterations() != 1
+					|| !(after < before) || after != incomplete.residualRms())
+				throw new AssertionError("One-iteration pressure solve lost its improving full-row residual or budget");
 		}
 		var pressureLow = new double[3]; var exactRhs = new SignedDyadic[3];
 		for (int row = 0; row < 3; row++) { pressureLow[row] = Math.ulp(pressure[row]) / 4; exactRhs[row] = SignedDyadic.of(rhs[row]); }
@@ -853,28 +822,6 @@ public final class MarkerPressureValidation {
 		double referenceWork = expectedWhitenedWork.toDouble();
 		near(whitenedWork, referenceWork, 256 * Math.max(count, coordinates.size()) * Math.ulp(referenceWork),
 				"Mass-whitened pressure work agrees with independent full C");
-		if (definitions.stream().anyMatch(row -> row.storage() > 0)) operator.preconditioner(diagonal, pressure);
-		else operator.preconditioner(diagonal);
-		var expanded = PressureConditionValidation.expandedConstraint(operator);
-		var offsets = PressureConditionValidation.value(expanded, "offsets", int[].class);
-		var indices = PressureConditionValidation.value(expanded, "indices", int[].class);
-		var high = PressureConditionValidation.value(expanded, "coefficients", double[].class);
-		var low = PressureConditionValidation.value(expanded, "coefficientLow", double[].class);
-		var exact = PressureConditionValidation.value(expanded, "exactCoefficients", SignedDyadic[].class);
-		for (int row = 0; row < rows; row++) {
-			int next = offsets[row];
-			for (int index = 0; index < matrix[row].length; index++) if (matrix[row][index].signum() != 0) {
-				if (next >= offsets[row + 1] || indices[next] != index || !exact[next].equals(matrix[row][index]))
-					throw new AssertionError("Preconditioner C differs from independently assembled physical coefficients");
-				double expectedHigh = matrix[row][index].toDouble();
-				double expectedLow = matrix[row][index].subtract(SignedDyadic.of(expectedHigh)).toDouble();
-				if (Double.doubleToRawLongBits(high[next]) != Double.doubleToRawLongBits(expectedHigh)
-						|| Double.doubleToRawLongBits(low[next]) != Double.doubleToRawLongBits(expectedLow))
-					throw new AssertionError("Preconditioner C high/low rounding differs");
-				next++;
-			}
-			if (next != offsets[row + 1]) throw new AssertionError("Preconditioner C has an extra physical coefficient");
-		}
 	}
 	/** Independent SVD verifies every physical divergence coefficient, including rows omitted by local QR. */
 	private static void verifyDivergenceSpan(CellAffineVelocity basis, int block) {
@@ -1092,9 +1039,7 @@ public final class MarkerPressureValidation {
 				}
 				definitions.add(new CellVelocityConstraintOperator.Row(blocks, 0));
 			}
-			var groups = new java.util.ArrayList<int[]>();
 			for (int face = 0; face < cells - 1; face++) {
-				groups.add(new int[]{definitions.size(), definitions.size() + 1, definitions.size() + 2});
 				for (int test = 0; test < 3; test++) {
 					var left = new double[4]; var right = new double[4];
 					if (test == 0) { left[0] = 1; right[0] = -1; left[1] = right[1] = .5; }
@@ -1119,21 +1064,21 @@ public final class MarkerPressureValidation {
 			double eigenvalue = (a + b) * (1 - Math.cos(Math.PI / cells));
 			for (int row = cells; row < rows; row++) if ((row - cells) % 3 != 0)
 				near(image[row], eigenvalue * mode[row], 1e-12, "Independent tangent-chain eigenmode");
-			var local = operator.preconditioner(diagonal, new double[rows], groups);
-			if (cells == 2) for (int test = 1; test <= 2; test++) {
-				Arrays.fill(unit, 0); unit[cells + test] = 1; operator.apply(unit, column); local.apply(column, image);
-				for (int row = 0; row < rows; row++) near(image[row], unit[row], config.pressureTolerance(), "Face three-moment inverse removes thin-source conditioning");
-			}
 			double[] rhs = new double[rows]; operator.apply(mode, rhs);
 			double pressureUnit = 1.0 / config.density();
-			var result = PressureConditionValidation.comparePressure(operator, local::apply, rhs, new double[rows],
-					config.maxPressureIterations(), config.pressureTolerance() * pressureUnit, pressureUnit);
+			var result = solveConstraint(operator, basis.markerCount(), rhs, new double[rows], config.pressureTolerance() * pressureUnit, config.maxPressureIterations());
 			if (!result.converged()) throw new AssertionError("Shared-trace matrix exceeded the original pressure budget: " + result);
 			System.out.printf("TRACE cells=%d epsilon=%g tangentCondition=%g chainCondition=%g result=%s%n", cells, epsilon, condition,
 					(1 + Math.cos(Math.PI / cells)) / (1 - Math.cos(Math.PI / cells)), result);
 		}
 	}
 
+	private static PressureProjectionResult solveConstraint(CellVelocityConstraintOperator operator, int markers, double[] rhs, double[] pressure,
+	                                                       double tolerance, int maximumIterations) {
+		var diagonal = new double[rhs.length]; operator.diagonal(diagonal);
+		return SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[rhs.length], false,
+				new double[3][markers], 1, tolerance, maximumIterations);
+	}
 	private static void verifyAffineRigidMotion(CellAffineVelocity basis) {
 		for (int mode = 0; mode < 4; mode++) {
 			var velocity = new double[3][basis.markerCount()]; var coefficient = new double[3][4 * basis.blockCount()];
@@ -1377,14 +1322,14 @@ public final class MarkerPressureValidation {
 	private static void pressureExtremeRoundingAndCancellation() {
 		// Independently evaluated exact binary products round to these literal endpoints.
 		for (double sign : new double[]{1,-1}) {
-			near(ConstraintNumerics.rescaledResponse(sign*0x1.b9f88e001b9f8p-77,0x1.04p500,0x1.24p600),
+			near(MarkerPressureOperator.rescaledResponse(sign*0x1.b9f88e001b9f8p-77,0x1.04p500,0x1.24p600),
 					sign*Double.MAX_VALUE,0,"Final pressure response overflow midpoint");
-			near(ConstraintNumerics.rescaledResponse(sign*0x1.e18ce7228170bp24,0x1.04p-1000,0x1.0cp-100),
+			near(MarkerPressureOperator.rescaledResponse(sign*0x1.e18ce7228170bp24,0x1.04p-1000,0x1.0cp-100),
 					sign*Double.MIN_VALUE,0,"Final pressure response underflow midpoint");
 			near(MarkerPressureOperator.scaledPressureDifference(sign*0x1.f07c1f07c1f07p-1,0x1.04p1023,-0x1.0cp1023),
 					sign*Double.MAX_VALUE,0,"Final scaled pressure difference midpoint");
 		}
-		if(ConstraintNumerics.rescaledResponse(1,Double.MAX_VALUE,2)!=Double.POSITIVE_INFINITY
+		if(MarkerPressureOperator.rescaledResponse(1,Double.MAX_VALUE,2)!=Double.POSITIVE_INFINITY
 				||MarkerPressureOperator.scaledPressureDifference(1,Double.MAX_VALUE,-Double.MAX_VALUE)!=Double.POSITIVE_INFINITY)
 			throw new AssertionError("True exact pressure overflow was hidden");
 		if(!Double.isNaN(MarkerPressureOperator.scaledPressureDifference(1,Double.NaN,0)))
