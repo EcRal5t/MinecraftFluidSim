@@ -799,7 +799,8 @@ public final class MarkerPressureValidation {
 			}
 			near(rate[row], expectedRate.toDouble(), 0, "Factored/full-C volume equality");
 			near(image[row], expectedImage.toDouble(), 0, "Factored/full-C inertia equality");
-			near(diagonal[row], expectedDiagonal.toDouble(), 0, "Factored/full-C diagonal equality");
+			if (Double.doubleToRawLongBits(diagonal[row]) != Double.doubleToRawLongBits(expectedDiagonal.toDouble()))
+				throw new AssertionError("Factored/full-C diagonal rounding differs");
 			exactWork = exactWork.add(storage.multiply(load).multiply(load));
 		}
 		near(work, exactWork.toDouble(), 0, "Factored/full-C positive-work equality");
@@ -813,6 +814,27 @@ public final class MarkerPressureValidation {
 			SignedDyadic stored = entry < principal.values().length && principal.rows()[entry] == row && principal.columns()[entry] == column
 					? principal.values()[entry++] : SignedDyadic.ZERO;
 			if (!stored.equals(value)) throw new AssertionError("Principal D/H Gram differs from independent full C mass work");
+		}
+		operator.preconditioner(diagonal);
+		var expanded = PressureConditionValidation.expandedConstraint(operator);
+		var offsets = PressureConditionValidation.value(expanded, "offsets", int[].class);
+		var indices = PressureConditionValidation.value(expanded, "indices", int[].class);
+		var high = PressureConditionValidation.value(expanded, "coefficients", double[].class);
+		var low = PressureConditionValidation.value(expanded, "coefficientLow", double[].class);
+		var exact = PressureConditionValidation.value(expanded, "exactCoefficients", SignedDyadic[].class);
+		for (int row = 0; row < rows; row++) {
+			int next = offsets[row];
+			for (int index = 0; index < matrix[row].length; index++) if (matrix[row][index].signum() != 0) {
+				if (next >= offsets[row + 1] || indices[next] != index || !exact[next].equals(matrix[row][index]))
+					throw new AssertionError("Preconditioner C differs from independently assembled physical coefficients");
+				double expectedHigh = matrix[row][index].toDouble();
+				double expectedLow = matrix[row][index].subtract(SignedDyadic.of(expectedHigh)).toDouble();
+				if (Double.doubleToRawLongBits(high[next]) != Double.doubleToRawLongBits(expectedHigh)
+						|| Double.doubleToRawLongBits(low[next]) != Double.doubleToRawLongBits(expectedLow))
+					throw new AssertionError("Preconditioner C high/low rounding differs");
+				next++;
+			}
+			if (next != offsets[row + 1]) throw new AssertionError("Preconditioner C has an extra physical coefficient");
 		}
 	}
 	/** Independent SVD verifies every physical divergence coefficient, including rows omitted by local QR. */

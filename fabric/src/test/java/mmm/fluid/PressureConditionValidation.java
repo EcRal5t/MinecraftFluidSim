@@ -111,13 +111,13 @@ final class PressureConditionValidation {
 	}
 	private static void pressureFactorization(MarkerPressureProjection plan, double[] rhs, double[] residual, double unit) {
 		var basis = plan.basis(); var operator = plan.operator(); int count = basis.markerCount();
-		int[] offsets = value(operator, "offsets", int[].class), indices = value(operator, "indices", int[].class);
-		double[] high = value(operator, "coefficients", double[].class), low = value(operator, "coefficientLow", double[].class);
+		Object expanded = expandedConstraint(operator);
+		int[] offsets = value(expanded, "offsets", int[].class), indices = value(expanded, "indices", int[].class);
+		double[] high = value(expanded, "coefficients", double[].class), low = value(expanded, "coefficientLow", double[].class);
 		double[] inverseMass = value(operator, "inverseMass", double[].class);
 		var approximate = new SignedDyadic[high.length];
 		for (int i = 0; i < approximate.length; i++) approximate[i] = SignedDyadic.of(high[i]).add(SignedDyadic.of(low[i]));
-		var stored = value(operator, "exactCoefficients", SignedDyadic[].class);
-		if (stored == null) stored = approximate;
+		var stored = value(expanded, "exactCoefficients", SignedDyadic[].class);
 		var velocity = value(plan, "wallPredictor", double[][].class);
 		double[] storage = value(plan, "storage", double[].class), gas = value(plan, "gasInitialPressure", double[].class);
 		var dt = SignedDyadic.of(value(plan, "dt", Float.class)); double normalizedTime = dt.toDouble() * unit;
@@ -343,7 +343,12 @@ final class PressureConditionValidation {
 		double norm = 0; for (double value : values) norm = Math.hypot(norm, value); return norm / Math.sqrt(Math.max(1, values.length));
 	}
 
-	private static <T> T value(Object object, String name, Class<T> type) {
+	static Object expandedConstraint(CellVelocityConstraintOperator operator) {
+		try {
+			var capture = CellVelocityConstraintOperator.class.getDeclaredMethod("expandedC"); capture.setAccessible(true); return capture.invoke(operator);
+		} catch (ReflectiveOperationException invalid) { throw new AssertionError("Full constraint diagnostic could not capture marker coefficients", invalid); }
+	}
+	static <T> T value(Object object, String name, Class<T> type) {
 		try {
 			Field field = object.getClass().getDeclaredField(name); field.setAccessible(true);
 			return type.cast(field.get(object));
