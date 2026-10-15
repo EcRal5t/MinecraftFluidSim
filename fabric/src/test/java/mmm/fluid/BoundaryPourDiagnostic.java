@@ -374,16 +374,10 @@ public final class BoundaryPourDiagnostic {
 			System.out.printf("POUR pressure referencedResidual=%g%n", actual / Math.sqrt(Math.max(1, rhs.length)));
 		}
 		try {
-			var basis = operator.rowBasis(); boolean[] observed = new boolean[rhs.length];
-			var liquids = view.liquidRows(); var gases = view.gasRows();
-			for (int row : liquids) if (row >= 0) observed[row] = true;
-			for (int row : gases) if (row >= 0) observed[row] = true;
-			int anchor = view.pressureAnchor();
-			boolean commonGauge = !view.hasFreeSurface() && anchor >= 0
-					&& anchor < liquids.length && liquids[anchor] >= 0;
+			var basis = operator.rowBasis();
 			var rate = new double[rhs.length]; operator.volumeRate(view.wallPredictor(), rate);
-			System.out.printf("POUR pressure exactRows=%d dependencies=%d observationNeutral=%s compatibleSource=%s%n",
-					basis.size(), basis.dependencyCount(), basis.observationNeutral(observed, diagonal, commonGauge),
+			System.out.printf("POUR pressure exactRows=%d dependencies=%d compatibleSource=%s%n",
+					basis.size(), basis.dependencyCount(),
 					basis.compatibleSource(rhs, rate, view.dt()));
 		} catch (PressureRowBasis.Unavailable unavailable) {
 			System.out.println("POUR pressure exact certificate unavailable: " + unavailable.getMessage());

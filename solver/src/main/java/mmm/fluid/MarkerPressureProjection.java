@@ -392,13 +392,8 @@ final class MarkerPressureProjection {
 		operator.residual(pressureCorrection, pressureCorrectionLow, source, r);
 		double residual = rms(r); int iterations = 0;
 		if (residual > tolerance) {
-			boolean[] observed = new boolean[n];
-			// Liquid multipliers use the selected row coordinates: redundant mean/trace rows
-			// can change their values while leaving the actual force unchanged. Finite gas
-			// pressure is a thermodynamic observation and must remain unique.
-			for (int row : gasRows) if (row >= 0) observed[row] = true;
-			var result = SparsePressureFactor.solve(operator, source, pressureCorrection, pressureCorrectionLow, diagonal, observed,
-					closedObservationGauge(), wallPredictor, dt, tolerance, domain.config.maxPressureIterations(), rhs);
+			var result = SparsePressureFactor.solve(operator, source, pressureCorrection, pressureCorrectionLow, diagonal,
+					wallPredictor, dt, tolerance, domain.config.maxPressureIterations(), rhs);
 			iterations = result.iterations();
 			operator.residual(pressureCorrection, pressureCorrectionLow, source, r); residual = rms(r);
 		}

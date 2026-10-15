@@ -11,11 +11,11 @@ import org.ejml.sparse.csc.misc.TriangularSolver_DSCC;
 final class SparsePressureFactor {
 	private SparsePressureFactor() { }
 	static PressureProjectionResult solve(CellVelocityConstraintOperator operator, double[] rhs, double[] pressure,
-			double[] diagonal, boolean[] observed, boolean commonGauge, double[][] predictor, float dt, double tolerance, int maximumSolves) {
+			double[] diagonal, double[][] predictor, float dt, double tolerance, int maximumSolves) {
 		var exact = new SignedDyadic[rhs.length];
 		for (int row = 0; row < rhs.length; row++) exact[row] = SignedDyadic.of(rhs[row]);
 		var candidate = pressure.clone(); var low = new double[rhs.length];
-		var result = solve(operator, exact, candidate, low, diagonal, observed, commonGauge, predictor, dt, tolerance, maximumSolves, rhs);
+		var result = solve(operator, exact, candidate, low, diagonal, predictor, dt, tolerance, maximumSolves, rhs);
 		if (result.iterations() == 0 && !result.converged()) return result;
 		var image = new double[rhs.length]; operator.residual(pressure, exact, image); double initial = rms(image);
 		for (int row = 0; row < candidate.length; row++) {
@@ -30,7 +30,7 @@ final class SparsePressureFactor {
 		return unavailable(result.iterations(), initial);
 	}
 	static PressureProjectionResult solve(CellVelocityConstraintOperator operator, SignedDyadic[] rhs, double[] pressure, double[] pressureLow,
-			double[] diagonal, boolean[] observed, boolean commonGauge, double[][] predictor, float dt, double tolerance,
+			double[] diagonal, double[][] predictor, float dt, double tolerance,
 			int maximumSolves, double[] physicalSource) {
 		if (pressure == pressureLow) throw new IllegalArgumentException("Aliased pressure accumulator columns");
 		if (maximumSolves < 0) throw new IllegalArgumentException("Negative pressure factor solve budget");
@@ -40,7 +40,6 @@ final class SparsePressureFactor {
 			double[] image = new double[rhs.length]; operator.residual(pressure, pressureLow, rhs, image);
 			initialResidual = rms(image);
 			PressureRowBasis basis = operator.rowBasis();
-			if (!basis.observationNeutral(observed, diagonal, commonGauge)) return unavailable(iterations, initialResidual);
 			double[] rate = new double[rhs.length]; operator.volumeRate(predictor, rate);
 			if (!basis.compatibleSource(physicalSource, rate, dt)) return unavailable(iterations, initialResidual);
 			if (Double.isFinite(initialResidual) && initialResidual <= tolerance)
