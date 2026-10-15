@@ -42,6 +42,7 @@ final class PressureRowBasis {
 	}
 	static final class Unavailable extends RuntimeException { Unavailable(String message) { super(message); } }
 	private record Pivot(TreeMap<Integer, ExactRational> values, TreeMap<Integer, ExactRational> relation) { }
+	private record ModularPivot(int row, int column) { }
 	private record Dependency(TreeMap<Integer, ExactRational> relation) { }
 	private final int[] rows, positions;
 	private final List<Dependency> dependencies;
@@ -64,7 +65,9 @@ final class PressureRowBasis {
 			while (e < starts[row + 1]) {
 				int factor = indices[e] / stride; int first = e;
 				while (e < starts[row + 1] && indices[e] / stride == factor) e++;
-				if (support[factor].length == modes[factor]) for (int j = first; j < e; j++) feature.put(indices[j], coefficients[j]);
+				if (support[factor].length == modes[factor]) {
+					for (int j = first; j < e; j++) if (coefficients[j].signum() != 0) feature.put(indices[j], coefficients[j]);
+				}
 				else for (int column : support[factor]) {
 					SignedDyadic value = SignedDyadic.ZERO;
 					for (int j = first; j < e; j++) {
@@ -78,38 +81,97 @@ final class PressureRowBasis {
 			features.add(feature); for (var value : feature.values()) featureBytes += 256L + 2L * ((value.significand().bitLength() + 7L) / 8);
 			checkMemory(featureBytes, available);
 		}
-		Integer[] order = new Integer[storage.length]; for (int row = 0; row < order.length; row++) order[row] = row;
+		var active = new ArrayList<Integer>(); var dependent = new ArrayList<Dependency>();
+		for (int row = 0; row < features.size(); row++) {
+			if (features.get(row).isEmpty()) {
+				var relation = new TreeMap<Integer, ExactRational>(); relation.put(row, ExactRational.ONE);
+				dependent.add(new Dependency(relation));
+			} else active.add(row);
+		}
+		Integer[] order = active.toArray(Integer[]::new);
 		// Strong physical rows keep dependent coordinates from amplifying factorization rounding.
 		Arrays.sort(order, Comparator.<Integer>comparingDouble(row -> diagonal[row]).reversed()
 				.thenComparingInt(row -> features.get(row).size()));
-		int modularRank = modularRank(features, order);
-		var selected = new ArrayList<Integer>(); var dependent = new ArrayList<Dependency>();
-		if (modularRank == storage.length) for (int row = 0; row < storage.length; row++) selected.add(row);
-		else {
-			var pivots = new TreeMap<Integer, Pivot>(); long liveBytes = featureBytes;
-			for (int row : order) {
-				var current = new TreeMap<Integer, ExactRational>(); features.get(row).forEach((column, value) -> current.put(column, rational(value)));
-				var relation = new TreeMap<Integer, ExactRational>(); relation.put(row, ExactRational.ONE);
-				checkMemory(liveBytes + bytes(current) + bytes(relation), available);
-				while (!current.isEmpty()) {
-					int column = current.firstKey(); Pivot pivot = pivots.get(column);
-					if (pivot == null) {
-						ExactRational inverse = divide(ExactRational.ONE, current.get(column));
-						current.replaceAll((key, value) -> multiply(value, inverse)); relation.replaceAll((key, value) -> multiply(value, inverse));
-						liveBytes += bytes(current) + bytes(relation); checkMemory(liveBytes, available);
-						pivots.put(column, new Pivot(current, relation)); selected.add(row);
-						break;
-					}
-					ExactRational scale = current.get(column); subtract(current, pivot.values, scale); subtract(relation, pivot.relation, scale);
-					checkMemory(liveBytes + bytes(current) + bytes(relation), available);
+		var plan = modularPivots(features, order);
+		var selected = new ArrayList<Integer>(); var independent = new HashSet<Integer>();
+		for (var pivot : plan) { selected.add(pivot.row); independent.add(pivot.row); }
+		if (plan.size() < order.length) {
+			var replay = new PivotReplay(features, plan, featureBytes, available);
+			for (int row : order) if (!independent.contains(row)) {
+				Pivot candidate = replay.capture(row);
+				for (int prior = 0; prior < plan.size(); prior++) {
+					ExactRational scale = candidate.values.get(plan.get(prior).column);
+					if (scale != null) replay.reduce(candidate, replay.get(prior), scale);
 				}
-				if (current.isEmpty()) { liveBytes += bytes(relation); checkMemory(liveBytes, available); dependent.add(new Dependency(relation)); }
+				// Full feature columns remain present throughout replay, including columns outside the minor.
+				if (candidate.values.isEmpty()) dependent.add(new Dependency(candidate.relation));
+				else {
+					// A prime can hide an independent exact row; its remaining column extends the same minor.
+					replay.append(row, candidate); selected.add(row);
+				}
 			}
 		}
 		rows = selected.stream().mapToInt(Integer::intValue).sorted().toArray(); positions = new int[storage.length]; Arrays.fill(positions, -1);
 		for (int i = 0; i < rows.length; i++) positions[rows[i]] = i;
 		dependencies = List.copyOf(dependent);
 	}
+	/** Replays only the exact pivots reached by an unselected row; the modular minor fixes their order. */
+	private final class PivotReplay {
+		private final List<TreeMap<Integer, SignedDyadic>> features;
+		private final List<ModularPivot> plan;
+		private final ArrayList<Pivot> pivots;
+		private final int[] nextPrior;
+		private final long available;
+		private long liveBytes;
+
+		PivotReplay(List<TreeMap<Integer, SignedDyadic>> features, List<ModularPivot> plan, long bytes, long available) {
+			this.features = features; this.plan = plan; this.liveBytes = bytes; this.available = available;
+			pivots = new ArrayList<>(Collections.nCopies(plan.size(), null)); nextPrior = new int[features.size()];
+		}
+		Pivot capture(int row) {
+			var values = new TreeMap<Integer, ExactRational>();
+			features.get(row).forEach((column, value) -> values.put(column, rational(value)));
+			var relation = new TreeMap<Integer, ExactRational>(); relation.put(row, ExactRational.ONE);
+			var pivot = new Pivot(values, relation); account(pivotBytes(pivot)); return pivot;
+		}
+		Pivot get(int index) {
+			if (nextPrior[index] == index + 1) return pivots.get(index);
+			int[] pending = new int[index + 1]; int depth = 1; pending[0] = index;
+			while (depth > 0) {
+				int current = pending[depth - 1]; Pivot pivot = pivots.get(current);
+				if (pivot == null) { pivot = capture(plan.get(current).row); pivots.set(current, pivot); }
+				int prior = nextPrior[current];
+				if (prior < current) {
+					ExactRational scale = pivot.values.get(plan.get(prior).column);
+					if (scale == null) { nextPrior[current]++; continue; }
+					if (nextPrior[prior] != prior + 1) { pending[depth++] = prior; continue; }
+					reduce(pivot, pivots.get(prior), scale); nextPrior[current]++; continue;
+				}
+				normalize(pivot, plan.get(current).column); nextPrior[current] = current + 1; depth--;
+			}
+			return pivots.get(index);
+		}
+		void reduce(Pivot target, Pivot source, ExactRational scale) {
+			long before = pivotBytes(target);
+			subtract(target.values, source.values, scale); subtract(target.relation, source.relation, scale);
+			account(pivotBytes(target) - before);
+		}
+		void append(int row, Pivot pivot) {
+			int column = pivot.values.firstKey(); normalize(pivot, column);
+			nextPrior[plan.size()] = plan.size() + 1; plan.add(new ModularPivot(row, column)); pivots.add(pivot);
+		}
+		private void normalize(Pivot pivot, int column) {
+			ExactRational value = pivot.values.get(column);
+			if (value == null || value.isZero()) throw new IllegalStateException("Modular pressure minor lost its exact pivot");
+			long before = pivotBytes(pivot); ExactRational inverse = divide(ExactRational.ONE, value);
+			pivot.values.replaceAll((key, coefficient) -> multiply(coefficient, inverse));
+			pivot.relation.replaceAll((key, coefficient) -> multiply(coefficient, inverse));
+			account(pivotBytes(pivot) - before);
+		}
+		private void account(long delta) { liveBytes += delta; checkMemory(liveBytes, available); }
+	}
+	private static long pivotBytes(Pivot pivot) { return bytes(pivot.values) + bytes(pivot.relation); }
+
 	int size() { return rows.length; }
 	int row(int position) { return rows[position]; }
 	int position(int row) { return positions[row]; }
@@ -175,19 +237,21 @@ final class PressureRowBasis {
 		}
 		return selected.stream().mapToInt(Integer::intValue).toArray();
 	}
-	private int modularRank(List<TreeMap<Integer, SignedDyadic>> features, Integer[] order) {
+	private int modularRank(List<TreeMap<Integer, SignedDyadic>> features, Integer[] order) { return modularPivots(features, order).size(); }
+	private ArrayList<ModularPivot> modularPivots(List<TreeMap<Integer, SignedDyadic>> features, Integer[] order) {
+		var selected = new ArrayList<ModularPivot>();
 		var pivots = new HashMap<Integer, TreeMap<Integer, Long>>(); long entries = 0, available = availableMemory();
 		for (int row : order) {
 			var current = new TreeMap<Integer, Long>(); features.get(row).forEach((column, value) -> { long residue = modular(value); if (residue != 0) current.put(column, residue); });
 			while (!current.isEmpty()) {
 				int column = current.firstKey(); var pivot = pivots.get(column);
 				checkMemory(256L * (entries + current.size()), available);
-				if (pivot == null) { long inverse = power(current.get(column), PRIME - 2); current.replaceAll((key, value) -> value * inverse % PRIME); pivots.put(column, current); entries += current.size(); break; }
+				if (pivot == null) { long inverse = power(current.get(column), PRIME - 2); current.replaceAll((key, value) -> value * inverse % PRIME); pivots.put(column, current); selected.add(new ModularPivot(row, column)); entries += current.size(); break; }
 				long scale = current.get(column);
 				for (var entry : pivot.entrySet()) { work.charge(1); long value = Math.floorMod(current.getOrDefault(entry.getKey(), 0L) - scale * entry.getValue(), PRIME); if (value == 0) current.remove(entry.getKey()); else current.put(entry.getKey(), value); }
 			}
 		}
-		return pivots.size();
+		return selected;
 	}
 	private long modular(SignedDyadic value) { work.charge(value.significand(), BigInteger.valueOf(PRIME)); return value.significand().mod(BigInteger.valueOf(PRIME)).longValue() * power(value.exponent() >= 0 ? 2 : (PRIME + 1) / 2, Math.abs((long) value.exponent())) % PRIME; }
 	private static long power(long base, long exponent) { long result = 1; for (; exponent > 0; exponent >>>= 1, base = base * base % PRIME) if ((exponent & 1) != 0) result = result * base % PRIME; return result; }

@@ -626,6 +626,33 @@ public final class MarkerPressureValidation {
 	}
 
 	private static void verifySparsePressureBasis(CellAffineVelocity basis) {
+		// A modularly invisible component can change an earlier exact pivot and add a later independent row.
+		long prime = 2147483647L;
+		long[][] values = {{prime, 0, 1}, {1, 1, prime}, {prime + 2, 2, 1 + 2 * prime}, {0, prime, 0}, {prime + 1, prime + 1, prime + 1}, {0, 0, 0}};
+		int[] starts = new int[values.length + 1]; var sparseIndices = new java.util.ArrayList<Integer>(); var sparseValues = new java.util.ArrayList<SignedDyadic>();
+		var inertia = new SignedDyadic[][]{new SignedDyadic[9]}; Arrays.fill(inertia[0], SignedDyadic.ZERO);
+		for (int axis = 0; axis < 3; axis++) inertia[0][4 * axis] = SignedDyadic.of(1);
+		for (int row = 0; row < values.length; row++) {
+			for (int axis = 0; axis < 3; axis++) if (values[row][axis] != 0) {
+				sparseIndices.add(axis); sparseValues.add(SignedDyadic.of(values[row][axis]));
+			}
+			if (row == values.length - 1) { sparseIndices.add(0); sparseValues.add(SignedDyadic.ZERO); }
+			starts[row + 1] = sparseValues.size();
+		}
+		var modular = new PressureRowBasis(starts, sparseIndices.stream().mapToInt(Integer::intValue).toArray(),
+				sparseValues.toArray(SignedDyadic[]::new), inertia, 3, new double[values.length], new double[]{5, 4, 3, 2, 1, 0});
+		if (modular.size() != 3 || modular.dependencyCount() != 3 || modular.position(3) < 0)
+			throw new AssertionError("Prime-hidden pressure row lost its independent exact component");
+		var exactRate = new double[values.length]; var exactSource = new double[values.length];
+		for (int row = 0; row < values.length; row++) {
+			for (int axis = 0; axis < 3; axis++) exactRate[row] += values[row][axis] * (axis + 1.0);
+			exactSource[row] = -exactRate[row];
+		}
+		if (!modular.compatibleSource(exactSource, exactRate, 1))
+			throw new AssertionError("Nonmonotone exact pivots changed a compatible full-column source");
+		exactSource[2] += 1; exactRate[2] -= 1;
+		if (modular.compatibleSource(exactSource, exactRate, 1))
+			throw new AssertionError("Replayed pressure dependency accepted incompatible physical source");
 		int block = basis.markerBlock(0);
 		var definitions = java.util.List.of(
 				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{1, 0, 0, 0})), 0),
@@ -721,6 +748,7 @@ public final class MarkerPressureValidation {
 	/** Independent full C assembly checks the factor action without reading its cached D or H. */
 	private static void verifyFactoredConstraint(CellAffineVelocity basis, java.util.List<CellVelocityConstraintOperator.Row> definitions,
 	                                           double[][] velocity, double[] pressure) {
+		for (int block = 0; block < basis.blockCount(); block++) if (basis.blockMarkerCount(block) > 0) verifyDivergenceSpan(basis, block);
 		int count = basis.markerCount(), rows = definitions.size();
 		var matrix = new SignedDyadic[rows][3 * count];
 		for (var row : matrix) Arrays.fill(row, SignedDyadic.ZERO);
@@ -773,6 +801,44 @@ public final class MarkerPressureValidation {
 			if (!stored.equals(value)) throw new AssertionError("Principal D/H Gram differs from independent full C mass work");
 		}
 	}
+	/** Independent SVD verifies every physical divergence coefficient, including rows omitted by local QR. */
+	private static void verifyDivergenceSpan(CellAffineVelocity basis, int block) {
+		int modes = basis.modeCount(block); if (modes == 0) return;
+		var exact = new SignedDyadic[9][modes]; for (var row : exact) Arrays.fill(row, SignedDyadic.ZERO);
+		var polynomial = new double[10];
+		for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) {
+			basis.divergencePolynomial(block, axis, term, polynomial);
+			for (int monomial = 1; monomial < 10; monomial++) for (int mode = 0; mode < modes; mode++)
+				exact[monomial - 1][mode] = exact[monomial - 1][mode].add(SignedDyadic.of(polynomial[monomial])
+						.multiply(basis.modeCoefficientExact(block, mode, axis, term)));
+		}
+		var all = new double[9][modes];
+		for (int row = 0; row < 9; row++) {
+			double norm = 0;
+			for (int mode = 0; mode < modes; mode++) { all[row][mode] = exact[row][mode].toDouble(); norm = Math.hypot(norm, all[row][mode]); }
+			if (norm > 0) for (int mode = 0; mode < modes; mode++) all[row][mode] /= norm;
+		}
+		int[] selected = CellPressurePolynomialSpace.independentMonomials(basis, block);
+		org.ejml.data.DMatrixRMaj directions = null;
+		if (selected.length > 0) {
+			var matrix = new org.ejml.data.DMatrixRMaj(selected.length, modes);
+			for (int row = 0; row < selected.length; row++) for (int mode = 0; mode < modes; mode++) matrix.set(row, mode, all[selected[row] - 1][mode]);
+			var svd = org.ejml.dense.row.factory.DecompositionFactory_DDRM.svd(selected.length, modes, false, true, false);
+			if (!svd.decompose(matrix)) throw new AssertionError("Independent divergence span decomposition failed");
+			directions = svd.getV(null, false);
+		}
+		for (int monomial = 0; monomial < 9; monomial++) {
+			var residual = all[monomial].clone();
+			for (int k = 0; k < selected.length; k++) {
+				double projection = 0; for (int mode = 0; mode < modes; mode++) projection += all[monomial][mode] * directions.get(mode, k);
+				for (int mode = 0; mode < modes; mode++) residual[mode] -= projection * directions.get(mode, k);
+			}
+			double norm = 0; for (double value : residual) norm = Math.hypot(norm, value);
+			if (norm > 64 * Math.max(9, modes) * Math.ulp(1.0)) throw new AssertionError("Selected pressure rows omitted physical divergence: block="
+					+ block + " monomial=" + (monomial + 1) + " residual=" + norm);
+		}
+	}
+
 	private static void scaledClosedRotationRowsKeepKernel() {
 		for (float fraction : new float[]{.9F, .95F, .99F}) partialClosedRotationRowsKeepKernel(fraction);
 		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(.7F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));

@@ -10,6 +10,7 @@ final class CellRemapSpatialMoments {
 	private final double[] mean = new double[6];
 	private final double[][] covariance = new double[6][6];
 	private final JointMomentFactor factor = new JointMomentFactor();
+	private JointMomentFactor.Decomposition decomposition;
 
 	void add(FluidDomain domain, int ordinal, ExactRational fraction) {
 		add(domain, ordinal, fraction, 0, 0, 0);
@@ -50,6 +51,7 @@ final class CellRemapSpatialMoments {
 		double total = finite(mass + addedMass), ratio = addedMass / total, retained = mass / total;
 		double[] delta = new double[6];
 		for (int a = 0; a < 6; a++) delta[a] = addedMean[a] - mean[a];
+		decomposition = null;
 		factor.merge(addedFactor, retained, ratio, delta);
 		for (int a = 0; a < 6; a++) for (int b = a; b < 6; b++)
 			covariance[b][a] = covariance[a][b] = finite(retained * covariance[a][b] + (addedCovariance == null ? 0 : ratio * addedCovariance[a][b])
@@ -62,6 +64,7 @@ final class CellRemapSpatialMoments {
 	/** Joint affine advection: position += alpha * velocity in normalized cell coordinates. */
 	void advancePositions(double alpha) {
 		finite(alpha);
+		decomposition = null;
 		factor.advancePositions(alpha);
 		for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++) {
 			double value = covariance[a][b] + alpha * (covariance[a][b + 3] + covariance[a + 3][b])
@@ -80,6 +83,7 @@ final class CellRemapSpatialMoments {
 	/** A transported face measure has a constant normal position and retains tangential moments. */
 	void projectPositionAxis(int axis) {
 		if (axis < 0 || axis >= 3) throw new IllegalArgumentException("Unknown spatial axis");
+		decomposition = null;
 		factor.projectPositionAxis(axis);
 		for (int a = 0; a < 6; a++) covariance[axis][a] = covariance[a][axis] = 0;
 	}
@@ -89,6 +93,7 @@ final class CellRemapSpatialMoments {
 			throw new IllegalArgumentException("Invalid face arrival interval");
 		double rms = Math.hypot(mean[axis + 3], Math.sqrt(covariance[axis + 3][axis + 3]));
 		double deviation = finite(normalizedDt / Math.sqrt(12) * rms);
+		decomposition = null;
 		factor.addPositionSpread(axis, deviation);
 		covariance[axis][axis] = finite(covariance[axis][axis] + deviation * deviation);
 	}
@@ -154,6 +159,7 @@ final class CellRemapSpatialMoments {
 		addPositionSpread(direction); for (int a = 0; a < 3; a++) added[a] += direction[a] * direction[a];
 	}
 	private void addPositionSpread(double[] direction) {
+		decomposition = null;
 		factor.addPositionSpread(direction);
 		for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++)
 			covariance[b][a] = covariance[a][b] = finite(covariance[a][b] + direction[a] * direction[b]);
@@ -234,7 +240,8 @@ final class CellRemapSpatialMoments {
 
 	private JointMomentFactor.Decomposition decompose() {
 		checkPositive(mass);
-		return factor.decompose(covariance);
+		if (decomposition == null) decomposition = factor.decompose(covariance);
+		return decomposition;
 	}
 
 	private static double[] nextBasis(double[] preferred, double[] probability, ArrayList<double[]> previous) {

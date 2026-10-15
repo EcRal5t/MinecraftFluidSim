@@ -59,19 +59,27 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 	}
 	private LiquidAffineSweepGeometry.MicroSweep sweep(int slot, int componentIndex, int donor, int receiver,
 	                                                   int axis, boolean positive, double dt, int donorSupport, int receiverSupport, boolean capture) {
+		return sweep(slot, componentIndex, donor, receiver, axis, positive, dt, donorSupport, receiverSupport, capture, false);
+	}
+	private LiquidAffineSweepGeometry.MicroSweep sweep(int slot, int componentIndex, int donor, int receiver,
+	                                                   int axis, boolean positive, double dt, int donorSupport, int receiverSupport,
+	                                                   boolean capture, boolean secondMoments) {
 		var component = trace[slot][componentIndex];
 		double[] q = component.q();
 		LiquidAffineSweepGeometry.requireInput(domain, donor, receiver, axis, q[0], q[1], q[2], dt, donorSupport, receiverSupport);
 		// Each component has its own publication lock; clipping never holds a shared accounting lock.
 		synchronized (component) {
 			var saved = sweeps[slot][componentIndex];
-			if (saved != null && saved.matches(domain, donor, receiver, axis, positive, component.q(), dt)) return saved;
+			if (saved != null && (!secondMoments || saved.secondMoments) && saved.covers(donorSupport, receiverSupport)
+					&& saved.matches(domain, donor, receiver, axis, positive, component.q(), dt)) return saved;
 			if (saved != null) { retained.addAndGet(-saved.retainedBytes); sweeps[slot][componentIndex] = null; }
-			if (!capture || donorSupport != component.support() || receiverSupport != 255) return null;
+			if (!capture || !secondMoments && (donorSupport != component.support() || receiverSupport != 255)) return null;
+			long maximumBytes = secondMoments ? LiquidAffineSweepGeometry.MicroSweep.MAX_SECOND_RETAINED_BYTES
+					: LiquidAffineSweepGeometry.MicroSweep.MAX_RETAINED_BYTES;
 			if (retentionLimit - retained.get() < 1024
-					|| LiquidAffineSweepGeometry.MicroSweep.MAX_RETAINED_BYTES > availableMemory() / 16) return null;
+					|| maximumBytes > availableMemory() / 16) return null;
 			var computed = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, receiver, axis, positive,
-					component.q(), dt, component.support());
+					component.q(), dt, secondMoments ? donorSupport : component.support(), secondMoments ? receiverSupport : 255, secondMoments);
 			long used;
 			do {
 				used = retained.get();
@@ -290,11 +298,14 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
 		if (components == null) throw new IllegalStateException("Positive liquid arrival has no captured affine trace");
 		ExactRational[] result = null;
-		for (var component : components) {
+		for (int c = 0; c < components.length; c++) {
+			var component = components[c];
 			int support = donorSupport & component.support(); if (support == 0) continue;
 			double[] q = component.q();
-			var part = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dtOverH,
-					support, receiverSupport);
+			var saved = sweep(face + (positive ? 0 : faces.physicalFaceCount), c, donor, receiver, axis, positive,
+					dtOverH, support, receiverSupport, true, true);
+			var part = saved == null ? LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, positive,
+					q[0], q[1], q[2], dtOverH, support, receiverSupport) : saved.secondSum(axis, positive, support, receiverSupport);
 			if (result == null) result = part;
 			else for (int i = 0; i < result.length; i++) result[i] = result[i].add(part[i]);
 		}

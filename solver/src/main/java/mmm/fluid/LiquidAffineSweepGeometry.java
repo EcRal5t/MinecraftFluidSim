@@ -409,15 +409,27 @@ final class LiquidAffineSweepGeometry {
 	static final class MicroSweep {
 		static final long MAX_RETAINED_BYTES = 1024 + 8L * (48 + 4L * (160
 				+ 8L * ((mmm.chemistry.ChemicalLimits.MAX_RATIONAL_BITS + 31L) / 32)));
+		static final long MAX_SECOND_RETAINED_BYTES = 1024 + 8L * (48 + 10L * (160
+				+ 8L * ((mmm.chemistry.ChemicalLimits.MAX_RATIONAL_BITS + 31L) / 32)));
 		final long[] source;
 		final ExactRational[][] moments = new ExactRational[8][];
+		final boolean secondMoments;
+		private final SignedDyadic sourceVolume;
+		private final int donorSupport, receiverSupport;
 		private final double[] wet = new double[8];
 		private int wetMask;
 		final long retainedBytes;
 		MicroSweep(FluidDomain domain, int donor, int receiver, int axis, boolean positive, double[] q, double dt, int support) {
+			this(domain, donor, receiver, axis, positive, q, dt, support, 255, false);
+		}
+		MicroSweep(FluidDomain domain, int donor, int receiver, int axis, boolean positive, double[] q, double dt, int support,
+		           int receiverSupport, boolean secondMoments) {
+			this.secondMoments = secondMoments;
+			this.donorSupport = support; this.receiverSupport = receiverSupport;
+			sourceVolume = domain.markerGrid.exactCellVolumeInventory[donor];
 			source = source(domain, donor, receiver, axis, positive, q, dt, null);
-			sweptExactMoments(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dt, support, 255, null, false, moments);
-			long bytes = 208 + 8L * source.length;
+			sweptExactMoments(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dt, support, receiverSupport, null, secondMoments, moments);
+			long bytes = 240 + 8L * source.length;
 			for (var micro : moments) if (micro != null) {
 				bytes += 48;
 				for (var value : micro) bytes += 160 + 4L * ((value.numerator().bitLength() + 31L) / 32
@@ -425,8 +437,12 @@ final class LiquidAffineSweepGeometry {
 			}
 			retainedBytes = bytes;
 		}
+		boolean covers(int donorSupport, int receiverSupport) {
+			return (donorSupport & ~this.donorSupport) == 0 && (receiverSupport & ~this.receiverSupport) == 0;
+		}
 		boolean matches(FluidDomain domain, int donor, int receiver, int axis, boolean positive, double[] q, double dt) {
-			return source(domain, donor, receiver, axis, positive, q, dt, source) != null;
+			return java.util.Objects.equals(sourceVolume, domain.markerGrid.exactCellVolumeInventory[donor])
+					&& source(domain, donor, receiver, axis, positive, q, dt, source) != null;
 		}
 		private synchronized double wetVolume(FluidDomain domain, int donor, int micro, double localPore) {
 			if ((wetMask & 1 << micro) == 0) {
@@ -436,14 +452,21 @@ final class LiquidAffineSweepGeometry {
 			return wet[micro];
 		}
 		ExactRational[] sum(int axis, boolean positive, int donorSupport, int receiverSupport) {
-			ExactRational[] total = new ExactRational[4]; java.util.Arrays.fill(total, ExactRational.ZERO);
+			return sum(axis, positive, donorSupport, receiverSupport, 4);
+		}
+		ExactRational[] secondSum(int axis, boolean positive, int donorSupport, int receiverSupport) {
+			if (!secondMoments) throw new IllegalStateException("Liquid sweep has no captured second moments");
+			return sum(axis, positive, donorSupport, receiverSupport, 10);
+		}
+		private ExactRational[] sum(int axis, boolean positive, int donorSupport, int receiverSupport, int count) {
+			ExactRational[] total = new ExactRational[count]; java.util.Arrays.fill(total, ExactRational.ZERO);
 			try {
 				for (int micro = 0; micro < 8; micro++) {
 					int face = (micro & ~(1 << axis)) | (positive ? 1 << axis : 0);
 					int peer = (micro & ~(1 << axis)) | (positive ? 0 : 1 << axis);
 					if (moments[micro] == null || (donorSupport & 1 << micro) == 0
 							|| (donorSupport & 1 << face) == 0 || (receiverSupport & 1 << peer) == 0) continue;
-					for (int i = 0; i < 4; i++) total[i] = total[i].add(moments[micro][i]);
+					for (int i = 0; i < count; i++) total[i] = total[i].add(moments[micro][i]);
 				}
 				validateMoments(total);
 				return total;

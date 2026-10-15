@@ -3,7 +3,7 @@ package mmm.fluid;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
 
-/** Selects preconditioner rows from D A; every physical divergence row remains in the operator. */
+/** Selects independent nonconstant divergence rows in the admitted physical modal space. */
 final class CellPressurePolynomialSpace {
 	private CellPressurePolynomialSpace() { }
 

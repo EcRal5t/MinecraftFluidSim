@@ -220,8 +220,8 @@ final class MarkerPressureProjection {
 		definitions.add(new Row(blocks,0));
 		int[] selected=CellPressurePolynomialSpace.independentMonomials(basis,block);
 		var coarseRows=new ArrayList<Integer>();
-		// The nonconstant divergence coefficients enforce incompressibility inside the wet volume.
-		for(int monomial=1;monomial<10;monomial++) {
+		// Independent nonconstant coefficients enforce incompressibility in the admitted modal space.
+		for(int monomial:selected) {
 			blocks=new ArrayList<Block>(); boolean positive=false;
 			for(int axis=0;axis<3;axis++) {
 				double[] coefficient=new double[4];
@@ -232,7 +232,7 @@ final class MarkerPressureProjection {
 				blocks.add(new Block(block,axis,coefficient,profile.volume()/basis.cellSize()));
 			}
 			if(positive) {
-				if(Arrays.binarySearch(selected,monomial)>=0) coarseRows.add(definitions.size());
+				coarseRows.add(definitions.size());
 				definitions.add(new Row(blocks,0));
 			}
 		}

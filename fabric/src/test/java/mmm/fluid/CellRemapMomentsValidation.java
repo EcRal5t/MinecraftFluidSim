@@ -467,6 +467,11 @@ public final class CellRemapMomentsValidation {
 		var unretained = new LiquidAffineFaceFlow(domain, faces, field, 0);
 		for (int f = 0; f < faces.physicalFaceCount; f++) if (faces.left[f] == donor) {
 			int receiver = faces.right[f], axis = faces.axis[f];
+			for (int[] masks : new int[][]{{0x33, 0x55}, {255, 255}, {0xcc, 0xaa}, {255, 255}, {0x33, 0x55}}) {
+				var uncached = unretained.sweptSecondMoments(f, donor, receiver, axis, true, .5, masks[0], masks[1]);
+				var stored = retained.sweptSecondMoments(f, donor, receiver, axis, true, .5, masks[0], masks[1]);
+				check(java.util.Arrays.equals(uncached, stored), "Second-moment retention changed narrow/wide support V/M1/M2");
+			}
 			for (boolean lowOrder : new boolean[]{false, true}) {
 				var complete = retained.arrivalSecondMoments(f, donor, receiver, axis, true, .5, 255, 255, lowOrder);
 				var partition = new mmm.chemistry.ExactRational[10]; java.util.Arrays.fill(partition, mmm.chemistry.ExactRational.ZERO);
@@ -542,7 +547,12 @@ public final class CellRemapMomentsValidation {
 		}
 		domain.setVolume(1, 1, 1, 1);
 		domain.rebuildGridFromParticles();
-		var fullCache = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5, 255);
+		var fullCache = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5, 255, 255, true);
+		var stock = domain.markerGrid.exactCellVolumeInventory[donor];
+		domain.markerGrid.exactCellVolumeInventory[donor] = stock.subtract(mmm.units.SignedDyadic.of(1, -60));
+		check(!fullCache.matches(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5),
+				"Quadratic sweep accepted changed exact stock with unchanged geometry observations");
+		domain.markerGrid.exactCellVolumeInventory[donor] = stock;
 		for (int p = 0; p < domain.particleCount(); p++) domain.particles.setVolume(p,
 				p < 3 ? Math.nextDown(Math.scalb(1F, -24 * p)) : Float.MIN_NORMAL);
 		domain.rebuildGridFromParticles();
@@ -929,7 +939,11 @@ public final class CellRemapMomentsValidation {
 				(merged && p >= 2 ? part : moments).add(weights[p], java.util.Arrays.copyOf(points[p], 3),
 						java.util.Arrays.copyOfRange(points[p], 3, 6));
 			}
-			if (merged) moments.add(part);
+			if (merged) {
+				verifyJointRule(moments, java.util.Arrays.copyOf(weights, 2), java.util.Arrays.copyOf(points, 2));
+				part.spatialRank(); part.minimumCount();
+				moments.add(part);
+			}
 			check(moments.spatialRank() == 3 && moments.minimumCount() == 4, "Thin four-point rule gained an artificial velocity mode");
 			boolean refused = false;
 			try { moments.fit(new double[] {1, 1, 1}, new double[3][3]); }
@@ -1001,6 +1015,7 @@ public final class CellRemapMomentsValidation {
 			moments.advancePositions(duration / 2);
 			moments.projectPositionAxis(axis);
 			var centroid = moments.centroid(); centroid[axis] = face; moments.setCentroid(centroid);
+			moments.spatialRank(); moments.minimumCount();
 			moments.spreadFaceArrival(axis, duration);
 			moments.advancePositions(duration / 2);
 			check(moments.spatialRank() == 3, "Face arrival lost its finite normal support");
