@@ -95,6 +95,8 @@
 
 薄层速度拟合可通过 `:fabric:runMarkerPressureValidation --args="--thin-layer"` 单独核对三轴薄层、共面支撑、实际动量与角动量、动能、同速零梯度，以及全输入轴的拟合/转置和压力惯量。相同断言同时参与完整压力核。
 
+`--args="--shared-trace"` 聚焦三轴斜薄共享面，核对面上点值与两切向斜率连续、实际动量和角动量、投影动能、转置虚功及三轴刚体旋转核。相同断言同时参与 `--kernel`。
+
 压力核可通过 `:fabric:runMarkerPressureValidation --args="--kernel"` 单独运行仿射拟合、转置虚功、固定壁面投影、独立通量、实际质量 Gram 矩阵、有限气体储存和极端数值对照；完整 `marker-pressure` 另含生产张力与壁面输运场景。
 
 `--args="--chemical-pressure"` 复用原热化学抽取场景的库存与实体输入，在前四个逻辑步的首个压力失败处报告实际残差分区、拉回系数的精确因式差及速度空间秩。包级验收继续运行 `chemistry:short` 的完整物理断言。

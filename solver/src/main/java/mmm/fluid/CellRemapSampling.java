@@ -7,13 +7,15 @@ import mmm.units.SignedDyadic;
 final class CellRemapSampling {
 	private CellRemapSampling() { }
 	record Prepared(ArrayList<Float> volumes, double[] masses, CellRemapSpatialMoments.Result result) { }
+	private static final class Search { String lastFailure; }
 	static Prepared prepare(FluidDomain domain, int cell, int support, SignedDyadic volume, double mass, double density,
 			ArrayList<Float> volumes, CellRemapSpatialMoments moments, double[][] preferred, double[] target,
 			double[] storage, int movingAxes, double maximumTranslation, double[] projection, long maximumNodes) {
 		if (maximumNodes < 1 || !(Double.isFinite(maximumTranslation) && maximumTranslation >= 0))
 			throw new IllegalArgumentException("Liquid sampling requires positive node budget and finite fill translation");
+		var search = new Search();
 		var masses = masses(mass, density, volume, volumes);
-		var result = orientations(domain, cell, support, masses, moments, moments, preferred, target, storage, 0, null, null);
+		var result = orientations(domain, cell, support, masses, moments, moments, preferred, target, storage, 0, null, null, search);
 		if (result != null) return new Prepared(volumes, masses, result);
 		var lower = new double[3]; var upper = new double[3]; var mean = moments.centroid();
 		var bounded = boundedCentroid(support, mean, movingAxes, maximumTranslation, lower, upper);
@@ -29,17 +31,18 @@ final class CellRemapSampling {
 				result = fitPairs(domain, cell, support, pairMasses, selected, rule, actualTarget, storage);
 				if (!java.util.Arrays.equals(selected.centroid(), moments.centroid())) {
 					var velocity = moments.fitMechanical(pairMasses, result.positions(), result.velocities());
-					if (velocity == null) throw new MechanicalTimeRefinement(2, "Liquid paired support cannot retain angular momentum within its kinetic energy at cell " + cell);
-					result = new CellRemapSpatialMoments.Result(result.positions(), velocity);
+					if (!velocity.successful()) throw new MechanicalTimeRefinement(2, "Liquid paired support at cell " + cell + ": " + velocity.failure().reason);
+					result = new CellRemapSpatialMoments.Result(result.positions(), velocity.velocities());
 				}
 				for (int a = 0; a < 3; a++) projection[a] = actualTarget[a] - target[a];
 				return new Prepared(rule.volumes(), pairMasses, result);
 			} catch (CellRemapSpatialMoments.FitFailure | MechanicalTimeRefinement unavailable) {
 				// Rounded mass and component membership can require the existing support approximation.
+				search.lastFailure = unavailable.getMessage();
 			}
 		}
 		return new Prepared(volumes, masses, fitSupport(domain, cell, support, masses, moments, preferred, target,
-				storage, movingAxes, maximumTranslation, projection));
+				storage, movingAxes, maximumTranslation, projection, search));
 	}
 	private static double[] masses(double mass, double density, SignedDyadic volume, ArrayList<Float> volumes) {
 		var weights = new SignedDyadic[volumes.size()];
@@ -84,13 +87,14 @@ final class CellRemapSampling {
 			int movingAxes, double maximumTranslation, double[] projection) {
 		if (!(Double.isFinite(maximumTranslation) && maximumTranslation >= 0))
 			throw new IllegalArgumentException("Liquid sampling requires finite fill translation");
-		var result = orientations(domain, cell, support, masses, moments, moments, preferred, targetMoment, storage, 0, null, null);
+		var search = new Search();
+		var result = orientations(domain, cell, support, masses, moments, moments, preferred, targetMoment, storage, 0, null, null, search);
 		if (result != null) return result;
-		return fitSupport(domain, cell, support, masses, moments, preferred, targetMoment, storage, movingAxes, maximumTranslation, projection);
+		return fitSupport(domain, cell, support, masses, moments, preferred, targetMoment, storage, movingAxes, maximumTranslation, projection, search);
 	}
 	private static CellRemapSpatialMoments.Result fitSupport(FluidDomain domain, int cell, int support, double[] masses,
 			CellRemapSpatialMoments moments, double[][] preferred, double[] targetMoment, double[] storage,
-			int movingAxes, double maximumTranslation, double[] projection) {
+			int movingAxes, double maximumTranslation, double[] projection, Search search) {
 		CellRemapSpatialMoments.Result result;
 		if (movingAxes != 0) {
 			var projected = new CellRemapSpatialMoments(); projected.add(moments);
@@ -99,7 +103,7 @@ final class CellRemapSampling {
 			var original = moments.centroid();
 			for (int a = 0; a < 3; a++) if (mean[a] != original[a]) target[a] = moments.mass() * mean[a];
 			projected.setCentroid(mean);
-			result = orientations(domain, cell, support, masses, projected, moments, preferred, target, storage, movingAxes, lower, upper);
+			result = orientations(domain, cell, support, masses, projected, moments, preferred, target, storage, movingAxes, lower, upper, search);
 			if (result != null) {
 				for (int axis = 0; axis < 3; axis++) projection[axis] = target[axis] - targetMoment[axis];
 				return result;
@@ -112,18 +116,18 @@ final class CellRemapSampling {
 			if (Math.abs(centroid[axis]) > .5 || variance > availableVariance
 					+ 128 * (Math.ulp(variance) + Math.ulp(Math.abs(availableVariance))))
 				throw new MechanicalTimeRefinement(2, "Liquid spatial mean and variance exceed the receiving cell support on axis " + axis
-						+ " in cell " + cell + ": mean=" + centroid[axis] + ", variance=" + variance + ", availableVariance=" + availableVariance);
+						+ " in cell " + cell + ": mean=" + centroid[axis] + ", variance=" + variance + ", availableVariance=" + availableVariance + failureSuffix(search));
 		}
 		throw new MechanicalTimeRefinement(2, "Liquid joint covariance has no supported positive sampling orientation in cell " + cell
 				+ ": mean=" + java.util.Arrays.toString(centroid) + ", variance="
 				+ java.util.Arrays.toString(new double[]{moments.spatialVariance(0), moments.spatialVariance(1), moments.spatialVariance(2)})
-				+ ", nodes=" + masses.length + ", required=" + moments.minimumCount());
+				+ ", nodes=" + masses.length + ", required=" + moments.minimumCount() + failureSuffix(search));
 	}
 
 	private static CellRemapSpatialMoments.Result orientations(FluidDomain domain, int cell, int support, double[] masses,
 			CellRemapSpatialMoments moments, CellRemapSpatialMoments mechanical, double[][] preferred, double[] targetMoment, double[] storage,
-			int movingAxes, double[] lower, double[] upper) {
-		var result = attempt(domain, cell, support, masses, moments, mechanical, preferred, targetMoment, storage, movingAxes, lower, upper);
+			int movingAxes, double[] lower, double[] upper, Search search) {
+		var result = attempt(domain, cell, support, masses, moments, mechanical, preferred, targetMoment, storage, movingAxes, lower, upper, search);
 		if (result != null) return result;
 		// Orthogonal orientation changes preserve covariance and every velocity moment.
 		// Cyclic subsets include skewed rules with several long arms and a shorter opposite side.
@@ -133,7 +137,7 @@ final class CellRemapSampling {
 			for (int p = 0; p < candidate.length; p++) {
 				candidate[p] = preferred[p].clone(); candidate[p][axis] = (p - node + masses.length) % masses.length < size ? sign : 0;
 			}
-			result = attempt(domain, cell, support, masses, moments, mechanical, candidate, targetMoment, storage, movingAxes, lower, upper);
+			result = attempt(domain, cell, support, masses, moments, mechanical, candidate, targetMoment, storage, movingAxes, lower, upper, search);
 			if (result != null) return result;
 		}
 		return null;
@@ -141,13 +145,13 @@ final class CellRemapSampling {
 
 	private static CellRemapSpatialMoments.Result attempt(FluidDomain domain, int cell, int support, double[] masses,
 			CellRemapSpatialMoments moments, CellRemapSpatialMoments mechanical, double[][] preferred, double[] targetMoment, double[] storage,
-			int movingAxes, double[] lower, double[] upper) {
+			int movingAxes, double[] lower, double[] upper, Search search) {
 		CellRemapSpatialMoments.Result result;
 		try { result = moments.fit(masses, preferred); }
 		catch (CellRemapSpatialMoments.FitFailure failure) {
 			if (failure.failure != CellRemapSpatialMoments.Failure.UNREPRESENTABLE)
 				throw new MechanicalTimeRefinement(2, "Liquid joint quadrature is unrepresentable: " + failure.failure);
-			return null;
+			search.lastFailure = failure.getMessage(); return null;
 		}
 		boolean changed = !java.util.Arrays.equals(moments.centroid(), mechanical.centroid());
 		if (movingAxes != 0) {
@@ -165,15 +169,15 @@ final class CellRemapSampling {
 		}
 		if (changed) {
 			var velocity = mechanical.fitMechanical(masses, result.positions(), result.velocities());
-			if (velocity == null) return null;
-			result = new CellRemapSpatialMoments.Result(result.positions(), velocity);
+			if (!velocity.successful()) { search.lastFailure = velocity.failure().reason; return null; }
+			result = new CellRemapSpatialMoments.Result(result.positions(), velocity.velocities());
 		}
 		int[] coordinate = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
 		double[][] published = new double[masses.length][3]; double[] stored = new double[3];
 		double h = domain.config.cellSize();
 		for (int p = 0; p < masses.length; p++) {
 			float[] point = publishPoint(domain, coordinate, support, result.positions()[p]);
-			if (point == null) return null;
+			if (point == null) { search.lastFailure = "Published node " + p + " leaves its receiving component"; return null; }
 			for (int a = 0; a < 3; a++) {
 				published[p][a] = point[a] / h - coordinate[a] - .5;
 				stored[a] += masses[p] * published[p][a];
@@ -181,6 +185,10 @@ final class CellRemapSampling {
 		}
 		for (int a = 0; a < 3; a++) storage[a] = stored[a] - targetMoment[a];
 		return new CellRemapSpatialMoments.Result(published, result.velocities());
+	}
+
+	private static String failureSuffix(Search search) {
+		return search.lastFailure == null ? "" : "; last fit failure: " + search.lastFailure;
 	}
 
 	private static float[] publishPoint(FluidDomain domain, int[] coordinate, int support, double[] offset) {

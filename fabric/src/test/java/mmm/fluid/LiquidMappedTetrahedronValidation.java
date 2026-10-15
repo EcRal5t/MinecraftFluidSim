@@ -84,7 +84,7 @@ final class LiquidMappedTetrahedronValidation {
 			}
 			for (int a = 0; a < 3; a++) preferred[i][a] = field.value(a, simplex.sourceCell(), before[0], before[1], before[2]);
 		}
-		check(source.fitMechanical(mass, positions, preferred) != null, "Connected L mesh lacks its original mechanical support before quantity allocation");
+		check(source.fitMechanical(mass, positions, preferred).successful(), "Connected L mesh lacks its original mechanical support before quantity allocation");
 	}
 	private static ExactRational exact(double value) { return PlicComponentGeometry.ratio(SignedDyadic.of(value), SignedDyadic.of(1)); }
 

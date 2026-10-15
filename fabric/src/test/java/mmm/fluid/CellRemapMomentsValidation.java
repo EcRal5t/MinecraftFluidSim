@@ -1209,7 +1209,12 @@ public final class CellRemapMomentsValidation {
 			CellRemapSpatialMoments.Result fitted;
 			try { fitted = CellRemapSampling.fit(domain, cell, 255, weights, moments, preferred,
 					new double[3], new double[3], 1 << axis, .5, new double[3]); }
-			catch (MechanicalTimeRefinement unavailable) { check(!enoughEnergy, "Feasible angular support was refused"); continue; }
+			catch (MechanicalTimeRefinement unavailable) {
+				check(!enoughEnergy, "Feasible angular support was refused");
+				check(unavailable.getMessage().contains(CellRemapMechanicalFit.Failure.INSUFFICIENT_ENERGY.reason),
+						"Unsupported contraction concealed its kinetic-energy failure: " + unavailable.getMessage());
+				continue;
+			}
 			check(enoughEnergy, "Contraction retained angular momentum with insufficient actual kinetic energy");
 			var angular = new double[3]; var momentum = new double[3]; var rounding = new double[3]; double energy = 0;
 			for (int p = 0; p < 8; p++) for (int a = 0; a < 3; a++) {
@@ -1228,11 +1233,20 @@ public final class CellRemapMomentsValidation {
 		}
 		check(CellRemapMechanicalFit.fit(new double[]{1, 1}, new double[][]{{0, -.25, 0}, {0, .25, 0}},
 				new double[][]{{1, 0, 0}, {1, 0, 0}}, new double[]{0, .125, 0}, new double[]{1, 0, 0},
-				new double[3], 0) == null, "Centroid transfer fabricated rotational energy from a uniform velocity source");
+				new double[3], 0).failure() == CellRemapMechanicalFit.Failure.INSUFFICIENT_ENERGY, "Centroid transfer fabricated rotational energy from a uniform velocity source");
+		check(CellRemapMechanicalFit.fit(new double[]{1, 1}, new double[][]{{0, -.25, 0}, {0, .25, 0}},
+				new double[2][3], new double[3], new double[3], new double[]{0, 1, 0}, 1).failure()
+				== CellRemapMechanicalFit.Failure.ANGULAR_SUPPORT, "Line support concealed its missing angular direction");
+		check(CellRemapMechanicalFit.fit(new double[]{1}, new double[1][3], new double[1][3], new double[3], new double[3], new double[3], 1).failure()
+				== CellRemapMechanicalFit.Failure.VARIANCE_SUPPORT, "Single node concealed its missing velocity variance");
+		boolean invalid = false;
+		try { CellRemapMechanicalFit.fit(new double[]{0}, new double[1][3], new double[1][3], new double[3], new double[3], new double[3], 0); }
+		catch (IllegalArgumentException expected) { invalid = true; }
+		check(invalid, "Invalid mechanical fit input became a physical support result");
 		var uniform = CellRemapMechanicalFit.fit(new double[]{1, 1}, new double[][]{{0, -.25, 0}, {0, .25, 0}},
 				new double[][]{{1, 0, 0}, {1, 0, 0}}, new double[3], new double[]{1, 0, 0}, new double[3], 0);
-		check(uniform != null && java.util.Arrays.equals(uniform[0], new double[]{1, 0, 0})
-				&& java.util.Arrays.equals(uniform[0], uniform[1]), "Zero-variance source lost its unchanged uniform motion");
+		check(uniform.successful() && java.util.Arrays.equals(uniform.velocities()[0], new double[]{1, 0, 0})
+				&& java.util.Arrays.equals(uniform.velocities()[0], uniform.velocities()[1]), "Zero-variance source lost its unchanged uniform motion");
 	}
 
 	private static void verifyJointRule(CellRemapSpatialMoments moments, double[] weights, double[][] source) {
@@ -1395,8 +1409,9 @@ public final class CellRemapMomentsValidation {
 			for (int p = 0; p < 8; p++) for (int a = 0; a < 3; a++) {
 				positions[p][a] = (p >>> a & 1) == 0 ? -.25 : .25; preferred[p][a] = positions[p][a] * scale;
 			}
-			var fitted = CellRemapMechanicalFit.fit(weights, positions, preferred, new double[3], new double[3], new double[3], 1);
-			check(fitted != null, "Shared mechanical energy scale lost a finite velocity mode");
+			var fit = CellRemapMechanicalFit.fit(weights, positions, preferred, new double[3], new double[3], new double[3], 1);
+			check(fit.successful(), "Shared mechanical energy scale lost a finite velocity mode: " + fit.failure());
+			var fitted = fit.velocities();
 			for (int p = 0; p < 8; p++) for (int a = 0; a < 3; a++)
 				check(Math.abs(fitted[p][a] - Math.copySign(1 / Math.sqrt(3), positions[p][a])) < 2e-15,
 						"Shared mechanical energy scale changed its normalized radial mode");

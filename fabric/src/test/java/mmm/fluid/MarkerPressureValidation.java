@@ -9,7 +9,10 @@ public final class MarkerPressureValidation {
 	                      int[] cells) { }
 	private MarkerPressureValidation() { }
 	public static void main(String[] args) {
-		if (args.length == 1 && args[0].equals("--thin-layer")) {
+		if (args.length == 1 && args[0].equals("--shared-trace")) {
+			thinSharedFacePreservesPhysicalTrace();
+			System.out.println("MarkerPressureValidation PASS (thin shared trace)");
+		} else if (args.length == 1 && args[0].equals("--thin-layer")) {
 			thinLayerFitPreservesPhysicalMoments();
 			System.out.println("MarkerPressureValidation PASS (thin coupled velocity fit)");
 		} else if (args.length == 1 && args[0].equals("--pressure-gauge")) {
@@ -117,6 +120,7 @@ public final class MarkerPressureValidation {
 		pressureUsesCurrentMicroGasGeometry();
 		cellAffineVelocityPreservesResolvedMotion();
 		cellWetFaceAndConstraintWork();
+		thinSharedFacePreservesPhysicalTrace();
 		sharedTraceMassConditioning();
 		fixedWallProjectionUsesActualMass();
 		scaledClosedRotationRowsKeepKernel();
@@ -940,6 +944,69 @@ public final class MarkerPressureValidation {
 		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < basis.markerCount(); marker++) velocity[axis][marker] = Math.sin(axis + .3 * marker);
 		var pressure = new double[rows.size()]; for (int row = 0; row < pressure.length; row++) pressure[row] = Math.cos(.2 * row);
 		verifyFactoredConstraint(basis, rows, velocity, pressure);
+	}
+
+	/** A slanted positive-area strip retains both physical slopes as its transverse width shrinks. */
+	private static void thinSharedFacePreservesPhysicalTrace() {
+		for (int normal = 0; normal < 3; normal++) for (double halfWidth : new double[]{0x1p-4, 0x1p-20}) {
+			var d = new FluidDomain(4, 4, 4, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0), 32);
+			int[] peer = {1, 1, 1}; peer[normal]++;
+			d.setVolume(1, 1, 1, 1); d.setVolume(peer[0], peer[1], peer[2], 1);
+			for (int p = 0; p < d.particleCount(); p++) d.particles.setMass(p, d.particles.mass(p) * (1 + p / 16.0));
+			d.ensureGrid(); d.gasTopologyCoordinator.refresh();
+			var plan = d.pressureSystem.markerProjection(); plan.prepare(.001F); var basis = plan.basis();
+			int first = basis.blockForCell(d.cellIndex(1, 1, 1), 0), second = basis.blockForCell(d.cellIndex(peer[0], peer[1], peer[2]), 0);
+			int tangent = (normal + 1) % 3, other = (normal + 2) % 3;
+			double[] center = {1.5, 1.5, 1.5}; center[normal] = 2;
+			double area = halfWidth, variance = (.0625 + halfWidth * halfWidth) / 6, cross = (.0625 - halfWidth * halfWidth) / 6;
+			var centroid = new LiquidPressureGeometry.Vec3(center[0], center[1], center[2]);
+			var entries = new double[6]; int entry = 0;
+			for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++)
+				entries[entry++] = a == normal || b == normal ? 0 : area * (a == b ? variance : cross);
+			var central = new LiquidPressureGeometry.SecondMoment(entries[0], entries[1], entries[2], entries[3], entries[4], entries[5]);
+			var face = new LiquidPressureGeometry.SurfaceMoments(area, centroid.scale(area),
+					central.add(LiquidPressureGeometry.SecondMoment.outer(centroid, area)), centroid, central);
+			var rows = new java.util.ArrayList<CellVelocityConstraintOperator.Row>();
+			try {
+				var trace = MarkerPressureProjection.class.getDeclaredMethod("trace", int.class, int.class, LiquidPressureGeometry.SurfaceMoments.class, int.class, double.class);
+				trace.setAccessible(true);
+				for (int test = 0; test < 3; test++) rows.add(new CellVelocityConstraintOperator.Row(java.util.List.of(
+						new CellVelocityConstraintOperator.Block(first, normal, (double[]) trace.invoke(plan, first, normal, face, test, 1.0)),
+						new CellVelocityConstraintOperator.Block(second, normal, (double[]) trace.invoke(plan, second, normal, face, test, -1.0))), 0));
+			} catch (ReflectiveOperationException failure) { throw new AssertionError("Cannot inspect production shared traces", failure); }
+			var operator = new CellVelocityConstraintOperator(basis, rows); int count = basis.markerCount();
+			var input = new double[3][count];
+			for (int a = 0; a < 3; a++) for (int p = 0; p < count; p++) input[a][p] = Math.sin(.37 * p + a);
+			verifyFactoredConstraint(basis, rows, input, new double[]{.7, -1.3, .25});
+			var rates = new double[3]; operator.volumeRate(input, rates);
+			var gram = new double[3][3]; var unit = new double[3]; var image = new double[3];
+			for (int column = 0; column < 3; column++) {
+				Arrays.fill(unit, 0); unit[column] = 1; operator.apply(unit, image);
+				for (int row = 0; row < 3; row++) gram[row][column] = image[row];
+			}
+			var pressure = MarkerVelocitySpaceExperiment.solve(gram, rates); var force = new double[3][count];
+			operator.force(pressure, force); near(dot(rates, pressure), work(input, force), 2e-12, "Thin shared trace virtual work");
+			var output = new double[3][count];
+			for (int a = 0; a < 3; a++) for (int p = 0; p < count; p++) output[a][p] = input[a][p] - force[a][p] / basis.massKilograms(p);
+			var before = mechanicalMoments(basis, input); var after = mechanicalMoments(basis, output);
+			for (int quantity = 0; quantity < 6; quantity++) near(after[quantity], before[quantity],
+					128 * count * Math.ulp(Math.max(1, Math.max(Math.abs(before[quantity]), Math.abs(after[quantity])))), "Thin shared projection actual P/L");
+			if (after[6] > before[6] + 128 * count * Math.ulp(Math.max(1, before[6]))) throw new AssertionError("Shared pressure projection created kinetic energy");
+			var coefficients = new double[3][4 * basis.blockCount()]; basis.fit(output, coefficients);
+			for (int axis : new int[]{tangent, other}) near(coefficients[normal][4 * first + axis + 1], coefficients[normal][4 * second + axis + 1], 2e-12, "Thin face physical tangent slope continuity");
+			for (double u : new double[]{-.25, 0, .25}) for (double v : new double[]{-halfWidth, halfWidth}) {
+				var point = center.clone(); point[tangent] += (u + v) / Math.sqrt(2); point[other] += (u - v) / Math.sqrt(2);
+				near(basis.value(coefficients, normal, first, point[0], point[1], point[2]),
+						basis.value(coefficients, normal, second, point[0], point[1], point[2]), 2e-12, "Thin shared face pointwise continuity");
+			}
+			for (int rotation = 0; rotation < 3; rotation++) {
+				var rigid = new double[3][count]; int a = (rotation + 1) % 3, b = (rotation + 2) % 3;
+				for (int p = 0; p < count; p++) { rigid[a][p] = -basis.position(p, b); rigid[b][p] = basis.position(p, a); }
+				operator.volumeRate(rigid, rates);
+				for (double rate : rates) near(rate / area, 0, 2e-12, "Thin shared trace retains rigid rotation kernel");
+			}
+			System.out.printf("THIN_SHARED axis=%d halfWidth=%g covarianceCondition=%g actualDeltaK=%g%n", normal, halfWidth, .0625 / (halfWidth * halfWidth), after[6] - before[6]);
+		}
 	}
 
 	private static void sharedTraceMassConditioning() {

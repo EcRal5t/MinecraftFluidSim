@@ -321,7 +321,10 @@ final class MarkerPressureProjection {
 			for (int b = 0; b < 3; b++) coefficient[b + 1] = sign * face.area() * (face.centroid().component(b) - basis.center(cell, b)) / h;
 		} else {
 			int tangent = (axis + test) % 3;
-			for (int b = 0; b < 3; b++) coefficient[b + 1] = sign * face.centralSecondMoment().component(tangent, b) / (h * h);
+			// A positive-area face admits both affine tangent directions. Matching
+			// their slopes enforces the same trace as its two centered moment tests,
+			// without multiplying those constraints by a thin polygon's covariance.
+			coefficient[tangent + 1] = sign * face.area();
 		}
 		double shape=basis.shapeValue(cell,axis,face.centroid().component(axis));
 		for(int term=0;term<4;term++) coefficient[term]*=shape;
