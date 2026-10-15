@@ -210,7 +210,6 @@ final class CellVelocityConstraintOperator {
 		apply(mode, image);
 		for (double value : image) if (!Double.isFinite(value)) throw blocked("Unrepresentable common-pressure image");
 		SignedDyadic energy = ConstraintGramPreconditioner.dot(mode, image);
-		verifyCoarseEnergy(mode, image, energy);
 		if (energy.signum() <= 0) throw blocked("Nonpositive common-pressure coarse energy");
 		result.balance(mode, image, energy); return result;
 	}
@@ -225,32 +224,6 @@ final class CellVelocityConstraintOperator {
 		return result;
 	}
 
-	/** Independent positive mass/storage work, with forward rounding of the actual operator. */
-	private void verifyCoarseEnergy(double[] mode, double[] image, SignedDyadic energy) {
-		double[][] force = new double[3][markerCount]; force(mode, force);
-		for (double[] axis : force) for (double value : axis)
-			if (!Double.isFinite(value)) throw blocked("Unrepresentable common-pressure force");
-		SignedDyadic positive = SignedDyadic.ZERO, exactPositive = SignedDyadic.ZERO, bound = SignedDyadic.ZERO;
-		SignedDyadic[] exactForce = new SignedDyadic[Math.multiplyExact(3, markerCount)]; Arrays.fill(exactForce, SignedDyadic.ZERO);
-		var c = expandedC();
-		for (int row = 0; row < rowCount(); row++) for (int entry = c.offsets[row]; entry < c.offsets[row + 1]; entry++)
-			exactForce[c.indices[entry]] = exactForce[c.indices[entry]].add(c.exactCoefficients[entry].multiply(SignedDyadic.of(mode[row])));
-		for (int index = 0; index < exactForce.length; index++) {
-			SignedDyadic f = SignedDyadic.of(force[index / markerCount][index % markerCount]), mass = exactInverseMass[index % markerCount];
-			positive = positive.add(f.multiply(f).multiply(mass));
-			exactPositive = exactPositive.add(exactForce[index].multiply(exactForce[index]).multiply(mass));
-		}
-		for (int row = 0; row < rowCount(); row++) {
-			SignedDyadic weight = SignedDyadic.of(mode[row]), stored = exactStorage[row].multiply(weight).multiply(weight);
-			positive = positive.add(stored); exactPositive = exactPositive.add(stored);
-			bound = bound.add(absolute(weight).multiply(SignedDyadic.of(Math.ulp(image[row])).multiply(SignedDyadic.of(1, -1))));
-		}
-		bound = bound.add(absolute(exactPositive.subtract(positive)));
-		if (absolute(energy.subtract(positive)).compareTo(bound) > 0)
-			throw blocked("Common-pressure work exceeds its rounding bound: work=" + energy.toDouble()
-					+ ", positive=" + positive.toDouble() + ", bound=" + bound.toDouble());
-	}
-	private static SignedDyadic absolute(SignedDyadic value) { return value.signum() < 0 ? value.negate() : value; }
 	private static FluidDomain.PressureSolveBlockedException blocked(String message) { return new FluidDomain.PressureSolveBlockedException(message); }
 
 	/** D A F v, with one final rounding per volume or normal-trace row. */

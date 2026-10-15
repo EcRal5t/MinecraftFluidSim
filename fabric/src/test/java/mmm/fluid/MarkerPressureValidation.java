@@ -729,11 +729,13 @@ public final class MarkerPressureValidation {
 		if (!SparsePressureFactor.solve(closed, rhs, pressure, diagonal, new boolean[]{true, true, false}, true, velocity, dt, 1e-9, 64).converged())
 			throw new AssertionError("A uniform closed pressure gauge prevented the certified physical solve");
 		near(pressure[0] - pressure[1], rhs[0] / diagonal[0], 1e-9, "Closed pressure difference is independent of the common gauge");
-		var coupled = new CellVelocityConstraintOperator(basis, java.util.List.of(
+		var coupledRows = java.util.List.of(
 				new CellVelocityConstraintOperator.Row(definitions.getFirst().blocks(), 88182.2),
-				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{-1, 0, 0, 0})), 88182.2)));
+				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{-1, 0, 0, 0})), 88182.2));
+		var coupled = new CellVelocityConstraintOperator(basis, coupledRows);
 		var initial = new double[]{71915.1, 71915.1}; var correction = new double[2]; var correctionLow = new double[2]; var rate = new double[2]; var nativeSource = new double[2];
-		Arrays.fill(velocity[0], 1e-11); coupled.volumeRate(velocity, rate); float coupledDt = 8.60585e-5F;
+		Arrays.fill(velocity[0], 1e-11); verifyFactoredConstraint(basis, coupledRows, velocity, initial);
+		coupled.volumeRate(velocity, rate); float coupledDt = 8.60585e-5F;
 		var source = coupled.referencedSource(velocity, coupledDt, initial, initial);
 		for (int row = 0; row < 2; row++) nativeSource[row] = 88182.2 * initial[row] - rate[row] / coupledDt;
 		if (nativeSource[0] != nativeSource[1]) throw new AssertionError("Gas storage fixture lost its sub-ULP physical source");
@@ -804,6 +806,16 @@ public final class MarkerPressureValidation {
 			exactWork = exactWork.add(storage.multiply(load).multiply(load));
 		}
 		near(work, exactWork.toDouble(), 0, "Factored/full-C positive-work equality");
+		var observedWork = SignedDyadic.ZERO; var roundingBound = SignedDyadic.ZERO;
+		for (int row = 0; row < rows; row++) {
+			var load = SignedDyadic.of(pressure[row]);
+			observedWork = observedWork.add(load.multiply(SignedDyadic.of(image[row])));
+			var magnitude = load.signum() < 0 ? load.negate() : load;
+			roundingBound = roundingBound.add(magnitude.multiply(SignedDyadic.of(Math.ulp(image[row]))).multiply(SignedDyadic.of(1, -1)));
+		}
+		var defect = observedWork.subtract(exactWork);
+		if ((defect.signum() < 0 ? defect.negate() : defect).compareTo(roundingBound) > 0)
+			throw new AssertionError("Rounded pressure image exceeds the independent full-C work rounding bound");
 		var coordinates = operator.rowBasis(); var principal = operator.principalGram(coordinates);
 		int entry = 0;
 		for (int row = 0; row < coordinates.size(); row++) for (int column = 0; column <= row; column++) {
@@ -815,7 +827,8 @@ public final class MarkerPressureValidation {
 					? principal.values()[entry++] : SignedDyadic.ZERO;
 			if (!stored.equals(value)) throw new AssertionError("Principal D/H Gram differs from independent full C mass work");
 		}
-		operator.preconditioner(diagonal);
+		if (definitions.stream().anyMatch(row -> row.storage() > 0)) operator.preconditioner(diagonal, pressure);
+		else operator.preconditioner(diagonal);
 		var expanded = PressureConditionValidation.expandedConstraint(operator);
 		var offsets = PressureConditionValidation.value(expanded, "offsets", int[].class);
 		var indices = PressureConditionValidation.value(expanded, "indices", int[].class);

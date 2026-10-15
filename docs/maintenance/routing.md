@@ -80,6 +80,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 有限气腔初压的增量换元与双列修正在 `MarkerPressureProjection.solve`，实际预测速度的共同源项、完整残差与压力转置在 `CellVelocityConstraintOperator.referencedSource` / `residual` / `force`；同因子残差修正及改善初值在 `SparsePressureFactor`。模素数原行选择、依赖行集合与精确消元在 `PressureRowBasis.modularSelection` / `modularSupport` / `reduceRow`。小于公开压力 ULP 的响应复用 `MarkerPressureValidation.verifySparsePressureBasis`，共同源项行关系复用 `verifyConstraintRowRelations`。失败矩阵与来源相容诊断在 `BoundaryPourDiagnostic.inspectPressureFailure`，实际压力功与湿场外推读 `pressureWork` 和 `snapshot`。
 
+完整载体约束的实际质量功、压力响应点积舍入界及预条件器展开对照在 `MarkerPressureValidation.verifyFactoredConstraint`；有限储存常压修正的正常求解复用同类的压力核场景。
+
 共享面法向速度的面积均值与两切向斜率约束在 `MarkerPressureProjection.trace`；薄湿面出现相关压力行时先检查法向迹与速度模态。机械重建的支撑、能量与速度范围原因在 `CellRemapMechanicalFit.Failure`，方向搜索的最后失败由 `CellRemapSampling` 带入接收格诊断。
 
 输运的十四列来源矩在 `CellRemapTransportMoments` 同次捕获，`Totals` 提供输入分组的共同总量；`Result.spatial` 返回各份额的独立联合矩，`CellRemapSpatialMoments.add` 合并正质量规则。完整湿源体积在 `CellRemapMicroPreferences` 准备，经 `ConservativeLiquidFlux.sweptMicroVolumes` 交给仿射面流。逐载体独立参考见 `CellRemapMomentsValidation.compareCarrierMoments`。
