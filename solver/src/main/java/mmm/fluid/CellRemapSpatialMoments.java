@@ -22,10 +22,11 @@ final class CellRemapSpatialMoments {
 		int cell = domain.particleCellIndex(ordinal);
 		double h = domain.config.cellSize();
 		SignedDyadic sourceMass = SignedDyadic.of(domain.particles.mass(ordinal));
-		var rawMass = sourceMass.exponent() >= 0
-				? new ExactRational(sourceMass.significand().shiftLeft(sourceMass.exponent()), java.math.BigInteger.ONE)
-				: new ExactRational(sourceMass.significand(), java.math.BigInteger.ONE.shiftLeft(-sourceMass.exponent()));
-		double weight = rawMass.multiply(fraction).toDouble();
+		var numerator = sourceMass.significand().multiply(fraction.numerator());
+		var denominator = fraction.denominator();
+		if (sourceMass.exponent() >= 0) numerator = numerator.shiftLeft(sourceMass.exponent());
+		else denominator = denominator.shiftLeft(-sourceMass.exponent());
+		double weight = ExactRational.roundQuotientToDouble(numerator, denominator);
 		add(weight, new double[]{domain.particles.positionX(ordinal) / h - cell % domain.sizeX - .5 + dx,
 				domain.particles.positionY(ordinal) / h - cell / domain.sizeX % domain.sizeY - .5 + dy,
 				domain.particles.positionZ(ordinal) / h - cell / (domain.sizeX * domain.sizeY) - .5 + dz},
