@@ -100,7 +100,7 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 同次仿射输运的逐微盒一阶扫掠复用在 [LiquidAffineFaceFlow](../../solver/src/main/java/mmm/fluid/LiquidAffineFaceFlow.java) 与 `LiquidAffineSweepGeometry.MicroSweep`；来源片区的二阶积分在 `sweptExactSecondMoments` / `arrivalSecondMoments` 的 `selectedSourceSupport` 重载。支撑限制、完整柱归一化、片区精确分解及内存额度对照复用 `CellRemapMomentsValidation` 的 `sweep-only`；工作区释放在 `CellLiquidVolumeTransport.advect`。
 
-开放微面与湿源相关积分在 `LiquidAffineSweepGeometry.lowOrderPhaseVolumes`，共同湿半空间在 `wetSourcePlane`；通量限制和实际来源供给检查在 `ConservativeLiquidFlux.provisionalFluxes`，载体权重在 `CellRemapMicroPreferences.create`。湿源线性峰值在 `GasGeometryOverlap.maximumLinearValue`，步长与液体追加上界在 `LiquidAffineFaceFlow.courantRate` / `liquidTransferUpperBound`。正性、三轴薄层、干出口内侧湿源与缓存身份对照复用 `CellRemapMomentsValidation` 的 `sweep-only`。
+开放微面与湿源相关积分在 `LiquidAffineSweepGeometry.lowOrderPhaseVolumes`，共同湿片区在 `wetSourceSupports`，PLIC 半空间在 `wetSourcePlane`；通量限制和实际来源供给检查在 `ConservativeLiquidFlux.provisionalFluxes`，载体权重在 `CellRemapMicroPreferences.create`。湿源线性峰值在 `GasGeometryOverlap.maximumLinearValue`，步长与液体追加上界在 `LiquidAffineFaceFlow.courantRate` / `liquidTransferUpperBound`。正性、三轴薄层、保存片区的变号面迹及精确 V/M1/M2、干出口内侧湿源与缓存身份对照复用 `CellRemapMomentsValidation` 的 `sweep-only`。
 
 有限体积与独立粒子的步长检查分别在 `CellLiquidVolumeTransport.courantRate`、`FluidDomainStepCoordinator.calculateVolumeTransportSubsteps` 和 `MechanicalStageAssembly.projectedCourant`。密闭注液的压力功、薄层支撑与通量取整排查使用 [BoundaryPourDiagnostic](../../fabric/src/test/java/mmm/fluid/BoundaryPourDiagnostic.java)，入口 `:fabric:runBoundaryPourDiagnostic`，追加 `--args=--flux` 重放量化各阶段。
 

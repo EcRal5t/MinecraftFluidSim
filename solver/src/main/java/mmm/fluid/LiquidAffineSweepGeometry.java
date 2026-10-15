@@ -4,7 +4,7 @@ import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
 import java.util.List;
 
-/** PLIC donor wedges swept by a frozen affine normal trace on a shared open face. */
+/** Positive donor pieces swept by a frozen affine normal trace on a shared open face. */
 final class LiquidAffineSweepGeometry {
 	private LiquidAffineSweepGeometry() { }
 
@@ -148,23 +148,20 @@ final class LiquidAffineSweepGeometry {
 			int receiverMicro = faceMicro ^ 1 << axis;
 			double facePore = Math.min(phase.componentPoreScale(donor, faceMicro, fallback),
 					phase.componentPoreScale(receiver, receiverMicro, receiverFallback));
-			var wet = wetSourcePlane(domain, donor, m);
-			boolean constant = wet.nx().signum() == 0 && wet.ny().signum() == 0 && wet.nz().signum() == 0;
-			boolean selected = (selectedSourceSupport & 1 << m) != 0;
+			var supports = wetSourceSupports(domain, donor, m, null);
+			boolean full = supports.size() == 1 && supports.getFirst().isEmpty();
 			ExactRational[] weighted = null;
-			if (second != null && selected && (!constant || wet.threshold().signum() == 0)) {
-				weighted = GasGeometryOverlap.normalizedAffineSecondMoments(m,
-						constant ? List.of(velocity) : List.of(wet, velocity), affine);
+			if (second != null) {
+				weighted = clippedSourceMoments(m, supports, velocity, true, affine);
 				var scale = rational(facePore).multiply(weight).multiply(2);
 				for (int i = 0; i < weighted.length; i++) weighted[i] = weighted[i].multiply(scale);
 				liquid[m] = weighted[0];
-				if (constant && !liquid[m].equals(open[m]))
+				if (full && !liquid[m].equals(open[m]))
 					throw new IllegalStateException("Full low-order spatial measure differs from its volume");
-			} else if (constant)
-				liquid[m] = wet.threshold().signum() == 0 ? open[m] : ExactRational.ZERO;
+			} else if (full) liquid[m] = open[m];
 			else {
-				var part = GasGeometryOverlap.normalizedMoments(m, List.of(wet, velocity));
-				ExactRational integral = centered.multiply(part[0]).add(b.multiply(part[(axis + 1) % 3 + 1]))
+				var part = clippedSourceMoments(m, supports, velocity, false, null);
+				var integral = centered.multiply(part[0]).add(b.multiply(part[(axis + 1) % 3 + 1]))
 						.add(c.multiply(part[(axis + 2) % 3 + 1])).multiply(2L * sign);
 				liquid[m] = integral.multiply(rational(facePore)).multiply(weight);
 			}
@@ -179,6 +176,7 @@ final class LiquidAffineSweepGeometry {
 	/** Actual wet source as an >= half-space, including certified constant empty and full sources. */
 	static GasGeometryOverlap.HalfSpace wetSourcePlane(FluidDomain domain, int cell, int micro) {
 		var phase = domain.pressurePhaseGeometry;
+		if (phase.liquidShape(cell) != null) throw new IllegalArgumentException("Saved liquid pieces require union source integration");
 		var nx = SignedDyadic.of(phase.planeNormal(cell, micro, 0));
 		var ny = SignedDyadic.of(phase.planeNormal(cell, micro, 1));
 		var nz = SignedDyadic.of(phase.planeNormal(cell, micro, 2));
@@ -186,6 +184,40 @@ final class LiquidAffineSweepGeometry {
 			return new GasGeometryOverlap.HalfSpace(nx, ny, nz,
 					constantPhaseFraction(domain, cell, micro).isZero() ? SignedDyadic.of(1) : SignedDyadic.ZERO);
 		return new GasGeometryOverlap.HalfSpace(nx.negate(), ny.negate(), nz.negate(), SignedDyadic.of(phase.planeOffset(cell, micro)).negate());
+	}
+	private static List<List<GasGeometryOverlap.HalfSpace>> wetSourceSupports(FluidDomain domain, int cell, int micro,
+	                                                                      GasGeometryOverlap.HalfSpace override) {
+		if (override == null && domain.pressurePhaseGeometry.liquidShape(cell) != null)
+			return LiquidShapeGeometry.wetSupports(domain.pressurePhaseGeometry, cell, micro);
+		var plane = override == null ? wetSourcePlane(domain, cell, micro) : override;
+		if (plane.nx().signum() == 0 && plane.ny().signum() == 0 && plane.nz().signum() == 0)
+			return plane.threshold().signum() > 0 ? List.of() : List.of(List.of());
+		return List.of(List.of(plane));
+	}
+	private static List<GasGeometryOverlap.HalfSpace> clipSource(List<GasGeometryOverlap.HalfSpace> source,
+	                                                          GasGeometryOverlap.HalfSpace flow) {
+		if (source.isEmpty()) return List.of(flow);
+		if (source.size() == 1) return List.of(flow, source.getFirst());
+		var result = new java.util.ArrayList<GasGeometryOverlap.HalfSpace>(source.size() + 1);
+		result.add(flow); result.addAll(source); return result;
+	}
+	private static ExactRational[] clippedSourceMoments(int micro, List<List<GasGeometryOverlap.HalfSpace>> supports,
+	                                                  GasGeometryOverlap.HalfSpace flow, boolean second, ExactRational[] affine) {
+		ExactRational[] total = null;
+		for (var support : supports) {
+			var constraints = clipSource(support, flow);
+			var part = affine != null ? GasGeometryOverlap.normalizedAffineSecondMoments(micro, constraints, affine)
+					: second ? GasGeometryOverlap.normalizedSecondMoments(micro, constraints) : GasGeometryOverlap.normalizedMoments(micro, constraints);
+			if (total == null) total = part;
+			else for (int i = 0; i < total.length; i++) total[i] = total[i].add(part[i]);
+		}
+		if (total == null) { total = new ExactRational[second ? 10 : 4]; java.util.Arrays.fill(total, ExactRational.ZERO); }
+		return total;
+	}
+	private static ExactRational sourceWetVolume(FluidDomain domain, int cell, int micro) {
+		return domain.pressurePhaseGeometry.liquidShape(cell) == null
+				? MicroBoxPlaneVolume.dryVolume(micro, wetSourcePlane(domain, cell, micro))
+				: GasGeometryOverlap.unionVolume(micro, LiquidShapeGeometry.wetSupports(domain.pressurePhaseGeometry, cell, micro));
 	}
 
 	private static ExactRational constantPhaseFraction(FluidDomain domain, int cell, int micro) {
@@ -305,17 +337,14 @@ final class LiquidAffineSweepGeometry {
 				if ((selectedSourceSupport & 1 << micro) == 0 || (donorSupport & 1 << micro) == 0 || (donorSupport & 1 << faceMicro) == 0
 						|| (receiverSupport & 1 << peerMicro) == 0 || (cut.mask(donor) & (1 << micro | 1 << faceMicro)) != 0
 						|| (cut.mask(receiver) & 1 << peerMicro) != 0) continue;
-				var liquid = wetOverride == null ? wetSourcePlane(domain, donor, micro) : wetOverride;
-				boolean constant = liquid.nx().signum() == 0 && liquid.ny().signum() == 0 && liquid.nz().signum() == 0;
-				if (constant && liquid.threshold().signum() > 0) continue;
-				List<GasGeometryOverlap.HalfSpace> constraints = constant ? List.of(wedge) : List.of(wedge, liquid);
+				var supports = wetSourceSupports(domain, donor, micro, wetOverride);
+				if (supports.isEmpty()) continue;
 				double pore = componentPores ? Math.min(phase.componentPoreScale(donor, micro, donorPore),
 						phase.componentPoreScale(receiver, peerMicro, receiverPore)) : Math.min(donorPore, receiverPore);
 				if (!Double.isFinite(pore) || pore < 0 || pore > 1) throw new IllegalStateException("Invalid affine sweep pore fraction");
 				if (pore == 0) continue;
 				ExactRational weight = rational(pore);
-				ExactRational[] part = secondMoments ? GasGeometryOverlap.normalizedSecondMoments(micro, constraints)
-						: GasGeometryOverlap.normalizedMoments(micro, constraints);
+				var part = clippedSourceMoments(micro, supports, wedge, secondMoments, null);
 				for (int i = 0; i < total.length; i++) {
 					part[i] = part[i].multiply(weight); total[i] = total[i].add(part[i]);
 				}
@@ -335,7 +364,7 @@ final class LiquidAffineSweepGeometry {
 			throw new IllegalStateException("Affine liquid sweep first moment lies outside its donor");
 	}
 
-	/** Micro sweep and wet measures use the same exact PLIC intersections and frozen trace. */
+	/** Micro sweep and wet measures use the same positive source pieces and frozen trace. */
 	static void sweptMicroVolumes(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
 	                             double intercept, double tangentSlope, double otherSlope, double dtOverH,
 	                             int donorSupport, int receiverSupport, double[] swept, double[] wet) {
@@ -356,21 +385,24 @@ final class LiquidAffineSweepGeometry {
 			if ((donorSupport & 1 << micro) == 0 || (donorSupport & 1 << faceMicro) == 0
 					|| (receiverSupport & 1 << peerMicro) == 0 || (cut.mask(donor) & (1 << micro | 1 << faceMicro)) != 0
 					|| (cut.mask(receiver) & 1 << peerMicro) != 0) continue;
-			var liquid = wetSourcePlane(domain, donor, micro);
-			boolean constant = liquid.nx().signum() == 0 && liquid.ny().signum() == 0 && liquid.nz().signum() == 0;
-			if (constant && liquid.threshold().signum() > 0) continue;
-			List<GasGeometryOverlap.HalfSpace> sweptPlanes = constant ? List.of(wedge) : List.of(wedge, liquid);
+			var supports = wetSourceSupports(domain, donor, micro, null);
+			if (supports.isEmpty()) continue;
 			double localPore = phase.componentPoreScale(donor, micro, donorPore);
 			double peerPore = phase.componentPoreScale(receiver, peerMicro, receiverPore);
 			if (!(Double.isFinite(localPore) && localPore >= 0 && localPore <= 1
 					&& Double.isFinite(peerPore) && peerPore >= 0 && peerPore <= 1))
 				throw new IllegalStateException("Invalid affine micro sweep pore fraction");
-			wet[micro] = saved == null ? observeVolume(MicroBoxPlaneVolume.dryVolume(micro, liquid).multiply(rational(localPore)))
-					: saved.wetVolume(micro, liquid, localPore);
+			wet[micro] = saved == null ? observeVolume(sourceWetVolume(domain, donor, micro).multiply(rational(localPore)))
+					: saved.wetVolume(domain, donor, micro, localPore);
 			swept[micro] = saved != null ? observeVolume(saved.moments[micro] == null ? ExactRational.ZERO : saved.moments[micro][0])
-					: dtOverH == 0 ? 0 : observeVolume(GasGeometryOverlap.normalizedVolume(micro, sweptPlanes)
-							.multiply(rational(Math.min(localPore, peerPore))));
+					: dtOverH == 0 ? 0 : observeVolume(sweptVolume(micro, supports, wedge).multiply(rational(Math.min(localPore, peerPore))));
 		}
+	}
+	private static ExactRational sweptVolume(int micro, List<List<GasGeometryOverlap.HalfSpace>> supports,
+	                                        GasGeometryOverlap.HalfSpace wedge) {
+		var volume = ExactRational.ZERO;
+		for (var support : supports) volume = volume.add(GasGeometryOverlap.normalizedVolume(micro, clipSource(support, wedge)));
+		return volume;
 	}
 
 	/** One frozen component sweep; support restriction selects whole microboxes without reclipping. */
@@ -396,9 +428,9 @@ final class LiquidAffineSweepGeometry {
 		boolean matches(FluidDomain domain, int donor, int receiver, int axis, boolean positive, double[] q, double dt) {
 			return source(domain, donor, receiver, axis, positive, q, dt, source) != null;
 		}
-		private synchronized double wetVolume(int micro, GasGeometryOverlap.HalfSpace plane, double localPore) {
+		private synchronized double wetVolume(FluidDomain domain, int donor, int micro, double localPore) {
 			if ((wetMask & 1 << micro) == 0) {
-				wet[micro] = observeVolume(MicroBoxPlaneVolume.dryVolume(micro, plane).multiply(rational(localPore)));
+				wet[micro] = observeVolume(sourceWetVolume(domain, donor, micro).multiply(rational(localPore)));
 				wetMask |= 1 << micro;
 			}
 			return wet[micro];

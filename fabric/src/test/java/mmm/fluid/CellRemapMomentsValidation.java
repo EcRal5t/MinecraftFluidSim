@@ -31,6 +31,7 @@ public final class CellRemapMomentsValidation {
 		}
 		sweptLiquidMomentsKeepThinTangentialCentroids();
 		sweptQuadraticMomentsRetainAffineWedgeGeometry();
+		savedBoxUnionKeepsAffineSweepMoments();
 		capturedWetVelocityKeepsPhysicalIntegral();
 		limitedFluxMixesTheSamePositiveMomentWeights();
 		thinSlabRemapRetainsItsTangentialMoment();
@@ -1709,6 +1710,66 @@ public final class CellRemapMomentsValidation {
 			check(!domain.geometry.cutCells.pointInsideSolid(point[0], point[1], point[2], domain.config.cellSize()), "Published point entered solid support");
 		}
 		for (int a = 0; a < 3; a++) check(storage[a] == actual[a] - target[a] - projection[a], "Storage audit differs from published first moment");
+	}
+
+	private static void savedBoxUnionKeepsAffineSweepMoments() {
+		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 32);
+		int donor = domain.cellIndex(1, 1, 1), receiver = donor + 1;
+		var zero = mmm.units.SignedDyadic.ZERO; var one = mmm.units.SignedDyadic.of(1);
+		var boxes = java.util.List.of(new LiquidCellShape.Box(mmm.units.SignedDyadic.of(7, -3), zero, zero, one, mmm.units.SignedDyadic.of(1, -2), one),
+				new LiquidCellShape.Box(mmm.units.SignedDyadic.of(7, -3), mmm.units.SignedDyadic.of(3, -2), zero, one, one, one));
+		var shape = new LiquidCellShape(donor, boxes, mmm.units.SignedDyadic.of(31, -8), mmm.units.SignedDyadic.of(3, -5), mmm.units.SignedDyadic.of(3, -5));
+		float[] raw = {1.9375F, 1.125F, 1.5F, .03125F, 1.9375F, 1.875F, 1.5F, .03125F};
+		domain.restoreParticleState(new FlipParticleState(3, 3, 3, 1, 2, .0625F, raw, new float[]{.375F, 0, 0, 1.125F, 0, 0}, new byte[27], java.util.List.of(shape)));
+		domain.rebuildGridFromParticles(); double[] q = {.25, 1, 0}; double dt = .5;
+		var high = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, 0, true, q[0], q[1], q[2], dt, 255, 255);
+		var low = LiquidAffineSweepGeometry.lowOrderPhaseSecondMoments(domain, donor, receiver, 0, true, q, dt, 255, 255, 255);
+		var expectedHigh = new mmm.chemistry.ExactRational[10]; var expectedLow = expectedHigh.clone();
+		var reverseHigh = expectedHigh.clone(); var reverseLow = expectedHigh.clone();
+		java.util.Arrays.fill(expectedHigh, mmm.chemistry.ExactRational.ZERO); java.util.Arrays.fill(expectedLow, mmm.chemistry.ExactRational.ZERO);
+		int[][] powers = {{0,0,0},{1,0,0},{0,1,0},{0,0,1},{2,0,0},{1,1,0},{1,0,1},{0,2,0},{0,1,1},{0,0,2}};
+		for (var box : boxes) {
+			var integral = new mmm.chemistry.ExactRational[3][4];
+			for (int a = 0; a < 3; a++) {
+				var lower = PlicComponentGeometry.ratio(box.lower(a), one).subtract(mmm.chemistry.ExactRational.ONE.divide(2));
+				var upper = PlicComponentGeometry.ratio(box.upper(a), one).subtract(mmm.chemistry.ExactRational.ONE.divide(2));
+				var loPower = mmm.chemistry.ExactRational.ONE; var hiPower = loPower;
+				for (int p = 0; p < 4; p++) { loPower = loPower.multiply(lower); hiPower = hiPower.multiply(upper); integral[a][p] = hiPower.subtract(loPower).divide(p + 1); }
+			}
+			for (int i = 0; i < 10; i++) {
+				int x = powers[i][0], y = powers[i][1], z = powers[i][2];
+				var part = integral[0][x].multiply(integral[1][y]).multiply(integral[2][z]);
+				if (box.lowerY().signum() > 0) {
+					reverseHigh[i] = part;
+					reverseLow[i] = integral[0][x].multiply(integral[1][y + 1]).multiply(integral[2][z]).divide(2);
+				}
+				expectedHigh[i] = expectedHigh[i].add(part);
+				expectedLow[i] = expectedLow[i].add(part.multiply(3).divide(8)
+						.add(integral[0][x].multiply(integral[1][y + 1]).multiply(integral[2][z]).divide(2)));
+			}
+		}
+		check(java.util.Arrays.equals(high, expectedHigh) && java.util.Arrays.equals(low, expectedLow), "Saved wet union affine V/M1/M2 differ from independent box integrals");
+		var reversing = new double[]{-.5, 1, 0};
+		check(java.util.Arrays.equals(reverseHigh, LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, 0, true,
+				reversing[0], reversing[1], reversing[2], dt, 255, 255))
+				&& java.util.Arrays.equals(reverseLow, LiquidAffineSweepGeometry.lowOrderPhaseSecondMoments(domain, donor, receiver, 0, true,
+						reversing, dt, 255, 255, 255)), "Reversing affine flow mixed opposite wet source pieces");
+		var open = new mmm.chemistry.ExactRational[8]; var liquid = open.clone(); var dry = open.clone();
+		LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, receiver, 0, true, q, dt, 255, 255, open, liquid, dry);
+		var total = mmm.chemistry.ExactRational.ZERO;
+		for (int m = 0; m < 8; m++) { check(open[m].equals(liquid[m].add(dry[m])) && dry[m].signum() >= 0, "Saved wet union low-order open/liquid/dry closure"); total = total.add(liquid[m]); }
+		check(total.equals(low[0]), "Saved wet union low volume and moments disagree");
+		var saved = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, receiver, 0, true, q, dt, 255);
+		check(java.util.Arrays.equals(saved.sum(0, true, 255, 255), java.util.Arrays.copyOf(high, 4)), "Saved union micro sweep changed its exact moments");
+		double[] swept = new double[8], wet = new double[8], cached = new double[8], cachedWet = new double[8];
+		LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, 0, true, q[0], q[1], q[2], dt, 255, 255, swept, wet);
+		LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, 0, true, q[0], q[1], q[2], dt, 255, 255, cached, cachedWet, saved);
+		check(java.util.Arrays.equals(swept, cached) && java.util.Arrays.equals(wet, cachedWet), "Saved union cached volume differs");
+		raw[1] = 1.25F;
+		var shifted = java.util.List.of(new LiquidCellShape.Box(mmm.units.SignedDyadic.of(7, -3), mmm.units.SignedDyadic.of(1, -3), zero, one, mmm.units.SignedDyadic.of(3, -3), one), boxes.getLast());
+		var next = new LiquidCellShape(donor, shifted, shape.firstMomentX(), mmm.units.SignedDyadic.of(25, -8), shape.firstMomentZ());
+		domain.restoreParticleState(new FlipParticleState(3, 3, 3, 1, 2, .0625F, raw, new float[6], new byte[27], java.util.List.of(next))); domain.rebuildGridFromParticles();
+		check(!saved.matches(domain, donor, receiver, 0, true, q, dt), "Cached affine sweep accepted changed union with the same micro volumes");
 	}
 
 	private static void check(boolean valid, String message) { if (!valid) throw new AssertionError(message); }
