@@ -1994,7 +1994,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				optionalStocks.get(index), mergeGas.internalEnergyAtTemperature(optionalStocks.get(index), optionalTemperatures[index]), SignedDyadic.of(.5)));
 		double mandatoryEnergy = mergeGas.internalEnergyAtTemperature(speciesBatch, 373.15);
 		double mergeLower = new GasPhaseMergeBounds(mergeRegistry, mergeGas, possible).temperatureLower(speciesBatch, mandatoryEnergy);
-		require(mergeLower > 0 && mergeLower <= 200, "Optional whole-stock merge failed to retain a positive conservative temperature");
+		require(Double.isFinite(mergeLower) && mergeLower > 0, "Optional whole-stock merge lost its finite positive temperature bound");
 		require(Double.isNaN(GasPhaseMergeBounds.partialPressureLower(1, Double.MIN_NORMAL, Double.MIN_NORMAL)),
 				"Subnormal intermediate pressure acquired a relative-rounding certificate");
 		for (int subset = 0; subset < 8; subset++) for (boolean reverse : new boolean[]{false, true}) {

@@ -13,25 +13,20 @@ final class GasPieceCapacity {
 	private record Interval(int id, ExactRational lower, ExactRational upper) { }
 	private GasPieceCapacity() { }
 
-	static List<Piece> capture(int cell, int support, SignedDyadic pore, SignedDyadic available,
-	                           GasComplementGeometry geometry) {
+	/** The component has checked its raw capacity and supplies the common PLIC target and pore scale. */
+	static List<Piece> capture(int cell, int support, SignedDyadic available, ExactRational porosity,
+	                           ExactRational wetTarget, GasComplementGeometry geometry) {
 		if (geometry == null || cell < 0 || cell >= geometry.sizeX() * geometry.sizeY() * geometry.sizeZ()
-				|| pore == null || available == null || available.signum() < 0 || available.compareTo(pore) > 0)
+				|| available == null || available.signum() < 0 || porosity == null || wetTarget == null)
 			throw new IllegalArgumentException("Gas piece capacity input is invalid");
-		int[] supports = CellRemapMicroTopology.components(geometry.collisionMask(cell));
-		SignedDyadic[] capacities = CellRemapMicroTopology.capacities(geometry.collisionMask(cell), geometry.poreVolume(cell));
-		int component = 0; while (component < supports.length && supports[component] != support) component++;
-		if (component == supports.length || !capacities[component].equals(pore))
-			throw new IllegalArgumentException("Gas piece capacity differs from its captured fixed component");
-		try { return allocate(cell, support, pore, available, geometry); }
+		try { return allocate(cell, support, available, porosity, wetTarget, geometry); }
 		catch (IllegalArgumentException | ArithmeticException magnitude) {
 			throw blocked("Gas piece capacity exceeds its exact representation budget", cell);
 		}
 	}
-	private static List<Piece> allocate(int cell, int support, SignedDyadic pore, SignedDyadic available,
-	                                    GasComplementGeometry geometry) {
+	private static List<Piece> allocate(int cell, int support, SignedDyadic available, ExactRational porosity,
+	                                    ExactRational wetTarget, GasComplementGeometry geometry) {
 		var intervals = new ArrayList<Interval>(8);
-		ExactRational porosity = exact(pore).multiply(8).divide(Integer.bitCount(support));
 		ExactRational lower = ExactRational.ZERO, width = ExactRational.ZERO;
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
 			var piece = geometry.piece(8 * cell + micro);
@@ -41,8 +36,6 @@ final class GasPieceCapacity {
 			else {
 				var plane = piece.dryPlane(); var bracket = piece.offsetBracket();
 				if (bracket == null) throw blocked("Gas piece has no inverse-volume certificate", cell);
-				ExactRational wetTarget = PlicComponentGeometry.ratio(pore.subtract(available), pore)
-						.multiply(Integer.bitCount(support)).divide(8);
 				if (!wetTarget.equals(bracket.targetVolume())) throw blocked("Gas piece raw capacity differs from its PLIC target", cell);
 				lo = (plane.threshold().equals(SignedDyadic.of(bracket.upper())) ? piece.normalizedVolume()
 						: MicroBoxPlaneVolume.dryVolume(micro, at(plane, bracket.upper()))).multiply(porosity);
@@ -71,16 +64,20 @@ final class GasPieceCapacity {
 		if (!sum.equals(target)) throw new IllegalStateException("Gas piece capacity allocation does not close");
 		SignedDyadic scale = SignedDyadic.of(geometry.cellVolumeCubicMeters());
 		ExactRational rationalScale = exact(scale);
+		ExactRational[] physical = new ExactRational[capacities.size()];
 		double[] stored = new double[capacities.size()]; SignedDyadic assigned = SignedDyadic.ZERO;
-		for (int i = 0; i < stored.length; i++) if (i != pivot) {
-			stored[i] = positive(capacities.get(i).multiply(rationalScale).toDouble(), cell);
-			assigned = assigned.add(SignedDyadic.of(stored[i]));
+		for (int i = 0; i < stored.length; i++) {
+			physical[i] = capacities.get(i).multiply(rationalScale);
+			if (i != pivot) {
+				stored[i] = positive(physical[i].toDouble(), cell);
+				assigned = assigned.add(SignedDyadic.of(stored[i]));
+			}
 		}
 		SignedDyadic remainder = available.multiply(scale).subtract(assigned);
 		stored[pivot] = positive(remainder.toDouble(), cell);
 		var result = new ArrayList<Piece>(stored.length);
 		for (int i = 0; i < stored.length; i++) {
-			ExactRational error = exact(SignedDyadic.of(stored[i])).subtract(capacities.get(i).multiply(rationalScale));
+			ExactRational error = exact(SignedDyadic.of(stored[i])).subtract(physical[i]);
 			if (error.signum() < 0) error = error.multiply(-1);
 			double bound = error.isZero() ? 0 : Math.nextUp(error.toDouble());
 			if (!Double.isFinite(bound)) throw blocked("Gas piece capacity error is not representable", cell);

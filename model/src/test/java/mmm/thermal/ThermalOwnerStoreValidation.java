@@ -289,6 +289,10 @@ public final class ThermalOwnerStoreValidation {
 						&& grid.observedTemperatureRange().equals(range), "Failed bulk preflight edited inventory or derived cells");
 			}
 		}
+		grid.validateCellInternalEnergies(new double[] {101, 1});
+		require(energies[0] == 100 && energies[1] == 1e18 + 256 && energies[2] == -1e18 - 128
+				&& grid.temperature(0) == 400 && grid.temperature(1) == 364 && grid.observedTemperatureRange().equals(range),
+				"Successful bulk preflight published prospective owner energies or temperatures");
 		grid.setCellInternalEnergies(new double[] {101, 1});
 		require(energies[0] == 101 && SignedDyadic.of(energies[1]).add(SignedDyadic.of(energies[2])).equals(SignedDyadic.ZERO)
 				&& grid.internalEnergy(1) == 0 && grid.temperature(0) == 401 && grid.temperature(1) == 300,
@@ -833,6 +837,7 @@ public final class ThermalOwnerStoreValidation {
 
 	private static void dyadicConversionRoundsInFinalBinary64Unit() {
 		dyadicAuditSumsRetainFinalBudget();
+		caloricQuotientKeepsCanonicalRounding();
 		require(SignedDyadic.of(0.1).multiply(SignedDyadic.of(-3.0)).equals(SignedDyadic.of(0.1).negate()
 				.add(SignedDyadic.of(0.1).negate()).add(SignedDyadic.of(0.1).negate()))
 				&& SignedDyadic.of(Double.MIN_VALUE).multiply(SignedDyadic.of(1, 1074)).equals(SignedDyadic.of(1.0))
@@ -853,6 +858,30 @@ public final class ThermalOwnerStoreValidation {
 		require(Double.isInfinite(maximum.add(overflowHalf).toDouble())
 				&& maximum.add(overflowHalf).subtract(minimum).toDouble() == Double.MAX_VALUE,
 				"overflow midpoint must use the final rounding bit");
+	}
+
+	private static void caloricQuotientKeepsCanonicalRounding() {
+		try {
+			var divide = ThermalCaloricInversion.class.getDeclaredMethod("divide", SignedDyadic.class, SignedDyadic.class);
+			divide.setAccessible(true);
+			var factor = java.math.BigInteger.valueOf(17);
+			var numerator = java.math.BigInteger.ONE.shiftLeft(80).add(java.math.BigInteger.valueOf(3)).multiply(factor);
+			var denominator = java.math.BigInteger.ONE.shiftLeft(53).add(java.math.BigInteger.ONE).multiply(factor);
+			for (int sign : new int[]{-1, 1}) for (int shift : new int[]{-1100, -54, 0, 971}) {
+				var signed = sign < 0 ? numerator.negate() : numerator;
+				double expected = new ExactRational(shift >= 0 ? signed.shiftLeft(shift) : signed,
+						shift >= 0 ? denominator : denominator.shiftLeft(-shift)).toDouble();
+				double actual = (double) divide.invoke(null, new SignedDyadic(signed, shift), new SignedDyadic(denominator, 0));
+				require(Double.doubleToRawLongBits(actual) == Double.doubleToRawLongBits(expected),
+						"Unreduced caloric quotient changed final binary64 rounding");
+			}
+			try {
+				divide.invoke(null, SignedDyadic.of(1, ChemicalLimits.MAX_RATIONAL_BITS), SignedDyadic.of(1, 0));
+				throw new AssertionError("Caloric quotient exceeded its existing raw rational bit budget");
+			} catch (java.lang.reflect.InvocationTargetException unavailable) {
+				require(unavailable.getCause() instanceof IllegalArgumentException, "Caloric quotient lost its magnitude refusal");
+			}
+		} catch (ReflectiveOperationException failure) { throw new AssertionError("Caloric quotient comparison failed", failure); }
 	}
 
 	private static void require(boolean condition, String message) {

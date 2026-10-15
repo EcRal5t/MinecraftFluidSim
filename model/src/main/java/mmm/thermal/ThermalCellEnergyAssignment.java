@@ -18,9 +18,14 @@ final class ThermalCellEnergyAssignment {
 	}
 	private ThermalCellEnergyAssignment() { }
 
-	static Plan prepare(Inventory inventory, SignedDyadic requested, double temperature) {
+	static Plan prepare(Inventory inventory, SignedDyadic requested) {
+		SignedDyadic reference = SignedDyadic.ZERO;
+		for (int item = inventory.first(); item >= 0; item = inventory.next(item))
+			reference = reference.add(inventory.exactBaseEnergy(item));
+		var requestedState = ThermalCaloricInversion.solve(inventory, requested.subtract(reference));
+		double temperature = requestedState.temperatureK();
 		ArrayList<Entry> modeled = new ArrayList<>();
-		SignedDyadic modeledSum = SignedDyadic.ZERO, reference = SignedDyadic.ZERO;
+		SignedDyadic modeledSum = SignedDyadic.ZERO;
 		int preferred = -1, soleOverflow = -1;
 		double largestCapacity = Double.NEGATIVE_INFINITY;
 		for (int item = inventory.first(); item >= 0; item = inventory.next(item)) {
@@ -36,7 +41,6 @@ final class ThermalCellEnergyAssignment {
 			if (capacity > largestCapacity) { largestCapacity = capacity; preferred = modeled.size(); }
 			modeled.add(new Entry(item, material, mass, base, energy));
 			modeledSum = modeledSum.add(SignedDyadic.of(energy));
-			reference = reference.add(inventory.exactBaseEnergy(item));
 		}
 		if (modeled.isEmpty()) throw new IllegalArgumentException("Thermal assignment has no carriers");
 		UnavailableException failure = null;
@@ -59,14 +63,14 @@ final class ThermalCellEnergyAssignment {
 				failure = new UnavailableException(unavailable.getMessage(), unavailable);
 				continue;
 			}
-			try { return prepareActual(inventory, modeled, pivot, remainder, reference); }
+			try { return prepareActual(inventory, modeled, pivot, remainder, reference, requested, requestedState); }
 			catch (UnavailableException unavailable) { failure = unavailable; }
 		}
 		throw failure;
 	}
 
 	private static Plan prepareActual(Inventory inventory, List<Entry> modeled, int pivot,
-			double remainder, SignedDyadic reference) {
+			double remainder, SignedDyadic reference, SignedDyadic requested, ThermalStateFunction.State requestedState) {
 		ArrayList<Entry> actual = new ArrayList<>(modeled.size());
 		SignedDyadic actualSum = SignedDyadic.ZERO;
 		for (int index = 0; index < modeled.size(); index++) {
@@ -83,7 +87,7 @@ final class ThermalCellEnergyAssignment {
 		}
 		if (!Double.isFinite(actualSum.toDouble())) throw new UnavailableException("Thermal assigned cell energy is not finite", null);
 		try {
-			var state = ThermalCaloricInversion.solve(inventory, actualSum.subtract(reference));
+			var state = actualSum.equals(requested) ? requestedState : ThermalCaloricInversion.solve(inventory, actualSum.subtract(reference));
 			return new Plan(List.copyOf(actual), actualSum, state);
 		} catch (IllegalArgumentException invalid) {
 			throw new UnavailableException("Thermal assigned cell state is invalid", invalid);

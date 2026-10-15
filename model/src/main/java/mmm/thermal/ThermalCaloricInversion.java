@@ -1,6 +1,7 @@
 package mmm.thermal;
 
 import mmm.chemistry.ExactRational;
+import mmm.chemistry.ChemicalLimits;
 import mmm.units.SignedDyadic;
 
 /** Exact piecewise caloric coordinates shared by real owners and derived common-temperature inventories. */
@@ -176,7 +177,10 @@ final class ThermalCaloricInversion {
 		if (Double.isFinite(a) && Double.isFinite(b) && b > 0 && numerator.equals(SignedDyadic.of(a)) && denominator.equals(SignedDyadic.of(b)))
 			return a / b;
 		int shift = numerator.exponent() - denominator.exponent();
-		return new ExactRational(shift >= 0 ? numerator.significand().shiftLeft(shift) : numerator.significand(),
-				shift >= 0 ? denominator.significand() : denominator.significand().shiftLeft(-shift)).toDouble();
+		var rawNumerator = shift >= 0 ? numerator.significand().shiftLeft(shift) : numerator.significand();
+		var rawDenominator = shift >= 0 ? denominator.significand() : denominator.significand().shiftLeft(-shift);
+		if (rawNumerator.bitLength() > ChemicalLimits.MAX_RATIONAL_BITS || rawDenominator.bitLength() > ChemicalLimits.MAX_RATIONAL_BITS)
+			throw new IllegalArgumentException("Rational magnitude is over budget");
+		return ExactRational.roundQuotientToDouble(rawNumerator, rawDenominator);
 	}
 }

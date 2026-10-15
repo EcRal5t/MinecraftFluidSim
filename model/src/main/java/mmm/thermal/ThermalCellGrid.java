@@ -141,8 +141,7 @@ public final class ThermalCellGrid {
 			conductivity[cell] /= totalVolume[cell];
 			if (cell == targetCell) {
 				internalEnergy[cell] = targetEnergy.toDouble();
-				solveCell(cell, targetEnergy);
-				assignSolvedCellEnergy(cell, targetEnergy);
+				assignCellEnergy(cell, targetEnergy);
 			} else {
 				if (previousCarrierCount[cell] == 0 || !Double.isFinite(previousTemperature[cell])) {
 					throw new IllegalArgumentException("Untouched thermal phase cell has no prepared LTE state");
@@ -199,8 +198,7 @@ public final class ThermalCellGrid {
 		}
 		conductivity[targetCell] /= totalVolume[targetCell];
 		internalEnergy[targetCell] = targetEnergy.toDouble();
-		solveCell(targetCell, targetEnergy);
-		assignSolvedCellEnergy(targetCell, targetEnergy);
+		assignCellEnergy(targetCell, targetEnergy);
 		updateObservedTemperatureRange();
 	}
 
@@ -279,16 +277,8 @@ public final class ThermalCellGrid {
 	}
 
 	public void setCellInternalEnergies(double[] targetEnergy) {
-		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
-		validateCellInternalEnergies(targetEnergy);
-		for (int cell = 0; cell < cellCount; cell++) {
-			if (carrierCount[cell] == 0) {
-				continue;
-			}
-			double requested = targetEnergy[cell];
-			solveCell(cell, requested);
-			assignSolvedCellEnergy(cell, requested);
-		}
+		var plans = prepareCellInternalEnergies(targetEnergy);
+		for (int cell = 0; cell < cellCount; cell++) if (plans[cell] != null) applyCellEnergy(cell, plans[cell]);
 		updateObservedTemperatureRange();
 	}
 
@@ -298,10 +288,9 @@ public final class ThermalCellGrid {
 	}
 
 	public void setCellInternalEnergy(int cell, SignedDyadic targetEnergy) {
-		validateCellInternalEnergy(cell, targetEnergy);
-		if (carrierCount[cell] == 0) return;
-		solveCell(cell, targetEnergy);
-		assignSolvedCellEnergy(cell, targetEnergy);
+		var plan = prepareCellInternalEnergy(cell, targetEnergy);
+		if (plan == null) return;
+		applyCellEnergy(cell, plan);
 		updateObservedTemperatureRange();
 	}
 
@@ -310,10 +299,11 @@ public final class ThermalCellGrid {
 	int nextCarrier(int carrier) { return carrierNext[carrier]; }
 	double carrierVolume(int cell) { return totalVolume[cell]; }
 
-	private void assignSolvedCellEnergy(int cell, double requested) { assignSolvedCellEnergy(cell, SignedDyadic.of(requested)); }
+	private void assignCellEnergy(int cell, SignedDyadic requested) {
+		applyCellEnergy(cell, prepareCellEnergy(cell, requested));
+	}
 
-	private void assignSolvedCellEnergy(int cell, SignedDyadic requested) {
-		ThermalCellEnergyAssignment.Plan plan = prepareSolvedCellEnergy(cell, requested);
+	private void applyCellEnergy(int cell, ThermalCellEnergyAssignment.Plan plan) {
 		for (ThermalCellEnergyAssignment.Entry entry : plan.entries()) carriers.setInternalEnergy(entry.item(), entry.energy());
 		internalEnergy[cell] = plan.actualEnergy().toDouble();
 		temperature[cell] = plan.actualState().temperatureK();
@@ -321,11 +311,7 @@ public final class ThermalCellGrid {
 		updateLinearTemperatureInterval(cell);
 	}
 
-	private ThermalCellEnergyAssignment.Plan prepareSolvedCellEnergy(int cell, double requested) {
-		return prepareSolvedCellEnergy(cell, SignedDyadic.of(requested));
-	}
-
-	private ThermalCellEnergyAssignment.Plan prepareSolvedCellEnergy(int cell, SignedDyadic requested) {
+	private ThermalCellEnergyAssignment.Plan prepareCellEnergy(int cell, SignedDyadic requested) {
 		return ThermalCellEnergyAssignment.prepare(new ThermalCellEnergyAssignment.Inventory() {
 			public int first() { return cellHead[cell]; }
 			public int next(int carrier) { return carrierNext[carrier]; }
@@ -334,38 +320,34 @@ public final class ThermalCellGrid {
 			public SignedDyadic exactMass(int carrier) { return carriers.exactMass(carrier); }
 			public double baseEnergy(int carrier) { return cachedBaseEnergy(carrier); }
 			public SignedDyadic exactBaseEnergy(int carrier) { return carriers.exactBaseEnergy(carrier); }
-		}, requested, temperature[cell]);
+		}, requested);
 	}
 
 	/** Preflights one exact LTE target while preserving carriers and the current derived cell state. */
 	void validateCellInternalEnergy(int cell, SignedDyadic targetEnergy) {
+		prepareCellInternalEnergy(cell, targetEnergy);
+	}
+
+	private ThermalCellEnergyAssignment.Plan prepareCellInternalEnergy(int cell, SignedDyadic targetEnergy) {
 		if (carriers == null || cell < 0 || cell >= cellCount || targetEnergy == null
 				|| !Double.isFinite(targetEnergy.toDouble())) throw new IllegalArgumentException("Thermal cell energy edit is invalid");
 		if (carrierCount[cell] == 0) {
 			if (!targetEnergy.equals(SignedDyadic.ZERO)) throw new IllegalArgumentException("Empty thermal cell received energy");
-			return;
+			return null;
 		}
-		double oldTemperature = temperature[cell], oldCapacity = heatCapacity[cell];
-		double oldMinimum = minimumTemperature[cell], oldMaximum = maximumTemperature[cell];
-		try {
-			solveCell(cell, targetEnergy);
-			prepareSolvedCellEnergy(cell, targetEnergy);
-		} finally {
-			temperature[cell] = oldTemperature; heatCapacity[cell] = oldCapacity;
-			minimumTemperature[cell] = oldMinimum; maximumTemperature[cell] = oldMaximum;
-		}
+		return prepareCellEnergy(cell, targetEnergy);
 	}
 
 	/** Validates a complete prospective LTE energy assignment without changing any authoritative carrier. */
-	public void validateCellInternalEnergies(double[] targetEnergy) {
+	public void validateCellInternalEnergies(double[] targetEnergy) { prepareCellInternalEnergies(targetEnergy); }
+
+	private ThermalCellEnergyAssignment.Plan[] prepareCellInternalEnergies(double[] targetEnergy) {
 		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
-		if (targetEnergy == null || targetEnergy.length != cellCount) {
+		if (targetEnergy == null || targetEnergy.length != cellCount)
 			throw new IllegalArgumentException("Thermal cell energy array length changed");
-		}
-		// Validate the entire candidate before changing any authoritative marker energy.
-		for (int cell = 0; cell < cellCount; cell++) {
-			validateCellInternalEnergy(cell, SignedDyadic.of(targetEnergy[cell]));
-		}
+		var plans = new ThermalCellEnergyAssignment.Plan[cellCount];
+		for (int cell = 0; cell < cellCount; cell++) plans[cell] = prepareCellInternalEnergy(cell, SignedDyadic.of(targetEnergy[cell]));
+		return plans;
 	}
 
 	public int cellCount() { return cellCount; }

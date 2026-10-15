@@ -345,7 +345,6 @@ final class ThermalCellOperations {
 	private PhaseCellAssignment prepareRawCellEnergy(int cell,
 			List<ThermalStateFunction.InventoryPortion> portions, SignedDyadic requested) {
 		if (portions.isEmpty() && !requested.equals(SignedDyadic.ZERO)) throw new ThermalDomainState.EmptyPhaseCandidateEnergyException();
-		double requestedTemperature = portions.isEmpty() ? Double.NaN : stateFunction.stateForInventory(portions, requested).temperatureK();
 		ThermalMaterialDefinition[] materials = new ThermalMaterialDefinition[portions.size()];
 		double[] mass = new double[portions.size()], base = new double[portions.size()];
 		for (int index = 0; index < portions.size(); index++) {
@@ -362,7 +361,7 @@ final class ThermalCellOperations {
 			public ThermalMaterialDefinition material(int item) { return materials[item]; }
 			public double mass(int item) { return mass[item]; }
 			public double baseEnergy(int item) { return base[item]; }
-		}, requested, requestedTemperature);
+		}, requested);
 		ThermalAuditLedger before = audit.ledger(), after;
 		try {
 			after = before.withRoundoff(raw.actualEnergy().subtract(requested));
