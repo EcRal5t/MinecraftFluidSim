@@ -1032,15 +1032,17 @@ public final class AirCavityScannerValidation {
 		var nonconvex=pieceCapacityDomain(8,.25F,.25F,.25F,.125F);
 		nonconvex.sealDomainBoundary(); nonconvex.bootstrapGasState("");
 		var nonconvexSource=nonconvex.gasState.frame;
+		var nonconvexEnvelope=GasPhaseGeometryEnvelope.capture(nonconvexSource,nonconvex.gasState.network,null,0,1);
 		check(nonconvexSource.nodeCount()==1 && nonconvexSource.geometry().pieces().size()>1
-				&& GasPhaseGeometryEnvelope.capture(nonconvexSource,nonconvex.gasState.network,null,0,1)==null,
+				&& !nonconvexEnvelope.hasWholeStock() && nonconvexEnvelope.sourceShare().signum()==0,
 				"A nonconvex fixed component acquired an unsupported unique phase successor certificate");
 		byte[] masks=new byte[8]; java.util.Arrays.fill(masks,(byte)255); masks[0]=masks[1]=masks[2]=masks[3]=0;
 		float[] markers={.25F,.25F,.25F,.03125F};
 		var connected=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
 				new FlipParticleState(2,2,2,1,1,.03125F,markers,new float[3],masks));
 		connected.sealDomainBoundary(); connected.bootstrapGasState(""); var captured=connected.gasState.frame;
-		check(captured.nodeCount()==1 && GasPhaseGeometryEnvelope.capture(captured,connected.gasState.network,null,0,1)==null,
+		var changingEnvelope=GasPhaseGeometryEnvelope.capture(captured,connected.gasState.network,null,0,1);
+		check(captured.nodeCount()==1 && !changingEnvelope.hasWholeStock() && changingEnvelope.sourceShare().signum()==0,
 				"Light wet stock acquired an unproved unique cross-cell gas successor");
 		var remaining=SignedDyadic.of(.015625); var flippedMoment=remaining.multiply(SignedDyadic.of(.75));
 		var flipped=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,remaining,flippedMoment,flippedMoment,flippedMoment)));

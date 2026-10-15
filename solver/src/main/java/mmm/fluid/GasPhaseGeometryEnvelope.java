@@ -12,24 +12,26 @@ import java.util.List;
 
 /** Bounds a complete-stock successor or an observed persistent gas-contact backbone. */
 final class GasPhaseGeometryEnvelope {
+	record Merged(GasInventory inventory, double energy) { }
 	private final GasRuntimeGeometry source;
 	private final List<Integer> variableCells;
 	private final SignedDyadic fixedVolume, metric;
 	private final List<GasPhaseMergeBounds.Stock> possibleStocks;
 	private final ExactRational sourceShare;
 	private final int maximumChildren;
-	private final boolean splitSource;
+	private final boolean hasWholeStock;
 	private final Paths paths;
+	private final int[] mergedNodes;
 
 	private GasPhaseGeometryEnvelope(GasRuntimeGeometry source, List<Integer> variableCells, SignedDyadic fixedVolume,
 	                                 List<GasPhaseMergeBounds.Stock> possibleStocks, ExactRational sourceShare, int maximumChildren,
-	                                 boolean splitSource, Paths paths) {
+	                                 boolean hasWholeStock, Paths paths, int[] mergedNodes) {
 		this.source = source; this.variableCells = List.copyOf(variableCells); this.fixedVolume = fixedVolume;
 		this.possibleStocks = List.copyOf(possibleStocks);
 		this.metric = SignedDyadic.of(source.geometry().cellVolumeCubicMeters());
 		this.sourceShare = sourceShare; this.maximumChildren = maximumChildren;
-		this.splitSource = splitSource;
-		this.paths = paths;
+		this.hasWholeStock = hasWholeStock;
+		this.paths = paths; this.mergedNodes = mergedNodes;
 	}
 
 	static GasPhaseGeometryEnvelope forBoiling(PhaseChangeStageSupport support, int editedCell, int sourceNode) {
@@ -63,19 +65,33 @@ final class GasPhaseGeometryEnvelope {
 				topology, GasChamberCapacity.prepare(source, topology)).capture(null);
 	}
 
-	/** Same full-stock successor, with cross-cell paths restricted by this candidate's actual PLIC. */
+	/** Restricts cross-cell paths by this candidate's actual PLIC and checks complete stock contributors. */
 	GasPhaseGeometryEnvelope forCandidate(FlipPressurePhaseGeometry phase) {
-		return splitSource ? this : paths.capture(phase);
+		var candidate = paths.capture(phase);
+		return candidate.mergedNodes != null || hasWholeStock ? candidate : this;
+	}
+
+	/** Complete contributors follow the same ascending-node merge and exact U reduction as the topology planner. */
+	Merged merged(GasInventory sourceAfter, double sourceEnergy) {
+		if (mergedNodes == null) return null;
+		GasInventory inventory = GasInventory.EMPTY; SignedDyadic energy = SignedDyadic.ZERO;
+		for (int node : mergedNodes) {
+			var stock = node == paths.sourceNode ? sourceAfter : paths.network.inventory(node);
+			inventory = inventory.merge(stock);
+			if (!stock.isEmpty()) energy = energy.add(SignedDyadic.of(node == paths.sourceNode ? sourceEnergy
+					: paths.thermal.gasNodeEnergy(node, paths.network)));
+		}
+		return new Merged(inventory, energy.toDouble());
 	}
 
 	List<GasPhaseMergeBounds.Stock> possibleStocks() { return possibleStocks; }
-	boolean splitSource() { return splitSource; }
+	boolean hasWholeStock() { return hasWholeStock; }
 	ExactRational sourceShare() { return sourceShare; }
 	int maximumChildren() { return maximumChildren; }
 
 	/** Fixed roots and open collision components enclose all future dry paths without microface integration. */
 	private static final class Paths {
-		private record Vertex(int cell, SignedDyadic fixedVolume, int[] oldNodes) { }
+		private record Vertex(int cell, int support, SignedDyadic fixedVolume, int[] oldNodes) { }
 		private record Face(int first, int second, int minus, int plus, int axis) { }
 		private final GasRuntimeGeometry source;
 		private final AirNetwork network;
@@ -88,7 +104,7 @@ final class GasPhaseGeometryEnvelope {
 		private final int[] variableOrdinals;
 		private final List<Vertex> vertices;
 		private final List<Face> faces;
-		private final int[][] incident;
+		private final int[][] incident, nodeVertices;
 
 		Paths(GasRuntimeGeometry source, AirNetwork network, ThermalDomainState thermal, int editedCell, int sourceNode,
 		      List<Integer> contacts, GasComplementGeometry.Region region, GasChamberTopology.Prepared topology,
@@ -108,7 +124,7 @@ final class GasPhaseGeometryEnvelope {
 			var points = new ArrayList<Vertex>();
 			for (var part : capacity.fixedCapacities()) {
 				byRoot[part.root()] = points.size();
-				points.add(new Vertex(-1, part.volume(), new int[]{source.nodeOfPiece(part.root())}));
+				points.add(new Vertex(-1, 0, part.volume(), new int[]{source.nodeOfPiece(part.root())}));
 			}
 			for (var piece : source.geometry().pieces()) if (!variable[piece.cell()])
 				byPiece[piece.id()] = byRoot[topology.fixedRoot(piece.id())];
@@ -123,10 +139,16 @@ final class GasPhaseGeometryEnvelope {
 						byPiece[piece] = points.size();
 						if (source.geometry().piece(piece) != null) nodes.add(source.nodeOfPiece(piece));
 					}
-					points.add(new Vertex(cell, SignedDyadic.ZERO, nodes.stream().mapToInt(Integer::intValue).toArray()));
+					points.add(new Vertex(cell, supports[component], SignedDyadic.ZERO, nodes.stream().mapToInt(Integer::intValue).toArray()));
 				}
 			}
 			vertices = List.copyOf(points); anchor = byPiece[source.minimumPiece(sourceNode)];
+			var memberships = new ArrayList<ArrayList<Integer>>(source.nodeCount() + 1);
+			for (int node = 0; node <= source.nodeCount(); node++) memberships.add(new ArrayList<>());
+			for (int vertex = 0; vertex < vertices.size(); vertex++)
+				for (int node : vertices.get(vertex).oldNodes()) memberships.get(node).add(vertex);
+			nodeVertices = new int[memberships.size()][];
+			for (int node = 0; node < nodeVertices.length; node++) nodeVertices[node] = memberships.get(node).stream().mapToInt(Integer::intValue).toArray();
 			int[] sizes = {source.geometry().sizeX(), source.geometry().sizeY(), source.geometry().sizeZ()};
 			int[] strides = {1, sizes[0], sizes[0] * sizes[1]};
 			var edges = new ArrayList<Face>();
@@ -161,7 +183,7 @@ final class GasPhaseGeometryEnvelope {
 		}
 
 		GasPhaseGeometryEnvelope capture(FlipPressurePhaseGeometry phase) {
-			if (share == null || anchor < 0) return null;
+			if (anchor < 0) throw new IllegalArgumentException("Gas phase source has no graph anchor");
 			boolean[] visited = new boolean[vertices.size()];
 			int[] pending = new int[vertices.size()]; int head = 0, tail = 0;
 			visited[anchor] = true; pending[tail++] = anchor;
@@ -169,11 +191,14 @@ final class GasPhaseGeometryEnvelope {
 			var variableCells = new java.util.TreeSet<Integer>();
 			var nodes = new java.util.TreeSet<Integer>();
 			var fixedByNode = new java.util.TreeMap<Integer, SignedDyadic>();
+			boolean connected = phase != null && thermal != null;
 			while (head < tail) {
 				int vertex = pending[head++]; var point = vertices.get(vertex);
 				for (int node : point.oldNodes()) nodes.add(node);
-				if (point.cell() >= 0) variableCells.add(point.cell());
-				else fixedByNode.merge(point.oldNodes()[0], point.fixedVolume(), SignedDyadic::add);
+				if (point.cell() >= 0) {
+					variableCells.add(point.cell());
+					connected &= rectangularSupport(point.support()) && phase != null && phase.liquidShape(point.cell()) == null;
+				} else fixedByNode.merge(point.oldNodes()[0], point.fixedVolume(), SignedDyadic::add);
 				for (int edge : incident[vertex]) {
 					var face = faces.get(edge); int peer = face.first() == vertex ? face.second() : face.first();
 					if (visited[peer] || phase != null && (!fullFace(phase, face.minus(), face.axis(), 1, fullFaces)
@@ -182,16 +207,26 @@ final class GasPhaseGeometryEnvelope {
 				}
 			}
 			var possible = new ArrayList<GasPhaseMergeBounds.Stock>();
+			boolean bounded = share != null;
 			for (int node : nodes) if (node != sourceNode) {
 				GasInventory stock = network.inventory(node);
 				double energy = thermal == null ? 0 : thermal.gasNodeEnergy(node, network);
 				if (stock.isEmpty() && energy == 0) continue;
-				if (!wholeSource || thermal == null || !uniqueSuccessor(node)) return null;
+				if (!wholeSource || thermal == null || !uniqueSuccessor(node)) bounded = false;
 				possible.add(new GasPhaseMergeBounds.Stock(stock, energy, fixedByNode.getOrDefault(node, SignedDyadic.ZERO)));
 			}
 			SignedDyadic fixed = SignedDyadic.ZERO;
 			for (var volume : fixedByNode.values()) fixed = fixed.add(volume);
-			return new GasPhaseGeometryEnvelope(source, List.copyOf(variableCells), fixed, possible, share, children, !wholeSource, this);
+			if (connected) for (int node : nodes) {
+				if (node != sourceNode && network.inventory(node).isEmpty()) continue;
+				for (int vertex : nodeVertices[node]) connected &= visited[vertex];
+				// Unchanged positive leaves prove that every other finite contributor actually enters this node.
+				if (node != sourceNode) connected &= fixedByNode.getOrDefault(node, SignedDyadic.ZERO).signum() > 0;
+			}
+			int[] mandatory = connected ? nodes.stream().mapToInt(Integer::intValue).toArray() : null;
+			return new GasPhaseGeometryEnvelope(source, List.copyOf(variableCells), fixed, possible,
+					connected ? ExactRational.ONE : bounded ? share : ExactRational.ZERO,
+					connected ? 1 : children, connected || wholeSource && bounded, this, mandatory);
 		}
 
 		private boolean uniqueSuccessor(int node) {
@@ -279,16 +314,20 @@ final class GasPhaseGeometryEnvelope {
 		int cell = first / 8, support = 0;
 		for (var component : source.liquidStock().get(cell).components())
 			if ((component.supportMask() & 1 << (first & 7)) != 0) support = component.supportMask();
+		if (!rectangularSupport(support)) return false;
+		for (var piece : source.geometry().pieces()) if (source.nodeOfPiece(piece.id()) == node
+				&& (piece.cell() != cell || (support & 1 << piece.micro()) == 0)) return false;
+		return true;
+	}
+
+	private static boolean rectangularSupport(int support) {
 		int[] axes = new int[3];
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0)
 			for (int axis = 0; axis < 3; axis++) axes[axis] |= 1 << (micro >>> axis & 1);
 		int box = 0;
 		for (int micro = 0; micro < 8; micro++) if ((axes[0] & 1 << (micro & 1)) != 0
 				&& (axes[1] & 1 << (micro >>> 1 & 1)) != 0 && (axes[2] & 1 << (micro >>> 2 & 1)) != 0) box |= 1 << micro;
-		if (support == 0 || box != support) return false;
-		for (var piece : source.geometry().pieces()) if (source.nodeOfPiece(piece.id()) == node
-				&& (piece.cell() != cell || (support & 1 << piece.micro()) == 0)) return false;
-		return true;
+		return support != 0 && box == support;
 	}
 
 	private static boolean fullCutFace(GasComplementGeometry geometry, int minus, int plus, int axis) {

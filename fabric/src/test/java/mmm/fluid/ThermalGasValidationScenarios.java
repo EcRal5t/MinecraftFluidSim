@@ -1571,7 +1571,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& mergeEnvelope.possibleStocks().getFirst().inventory().equals(stock)
 				&& mergeEnvelope.possibleStocks().getFirst().energy() == merged.thermalState.gasNodeEnergy(1, merged.gasState.network),
 				"A possible complete nonempty gas successor lost its inventory or raw energy certificate");
-		require(GasPhaseGeometryEnvelope.capture(merged.gasState.frame, merged.gasState.network, null, 1, 2) == null,
+		var unboundEnvelope=GasPhaseGeometryEnvelope.capture(merged.gasState.frame, merged.gasState.network, null, 1, 2);
+		require(!unboundEnvelope.hasWholeStock() && unboundEnvelope.sourceShare().signum()==0,
 				"An unbound thermal owner acquired a nonempty gas merge certificate");
 		double inheritedVolume = merged.gasBoundary().availableVolume(1) + merged.gasBoundary().availableVolume(2);
 		double oldEnergy = merged.thermalState.gasNodeEnergy(1, merged.gasState.network);

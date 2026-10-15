@@ -214,8 +214,12 @@ final class GasLiquidPhaseChangeStage {
 			double volume = envelope.volumeUpper(candidate.liquidGeometry());
 			if (!(Double.isFinite(volume) && volume > 0)) return false;
 			var stock = candidate.gasPlan().inventoryAfter();
+			double gasEnergy = candidate.candidateGasEnergy();
+			var complete = envelope.merged(stock, gasEnergy);
+			if (complete != null) { stock = complete.inventory(); gasEnergy = complete.energy(); }
+			else if (envelope.sourceShare().isZero()) return false;
 			double temperature = candidate.thermalPlan().temperatureK();
-			if (envelope.splitSource()) {
+			if (!envelope.hasWholeStock()) {
 				if (!Double.isFinite(temperature)) return false;
 				String vaporId = support.thermal().registry().material(
 						support.thermal().registry().materialHandle(transition.upperEnergyMaterialId())).carrierId();
@@ -224,14 +228,14 @@ final class GasLiquidPhaseChangeStage {
 				long nanos = envelope.sourceShare().numerator().multiply(java.math.BigInteger.valueOf(vapor.standardVolumeNanos()))
 						.divide(envelope.sourceShare().denominator()).longValueExact();
 				var merged = new GasPhaseMergeBounds(support.thermal().registry(), gasThermal, List.of());
-				double gasTemperature = merged.partitionTemperatureLower(stock, candidate.candidateGasEnergy(),
+				double gasTemperature = merged.partitionTemperatureLower(stock, gasEnergy,
 						envelope.sourceShare(), envelope.maximumChildren());
 				double partial = GasPhaseMergeBounds.partialPressureLower(nanos, gasTemperature, volume);
 				return phase.saturationPressureBound(transition, temperature, true) < partial;
 			}
-			if (envelope.possibleStocks().isEmpty()) {
-				double pressureLower = gasThermal.absolutePressure(stock, volume, candidate.candidateGasEnergy());
-				if (Double.isNaN(temperature)) temperature = gasThermal.state(stock, candidate.candidateGasEnergy()).temperatureK();
+			if (complete != null || envelope.possibleStocks().isEmpty()) {
+				double pressureLower = gasThermal.absolutePressure(stock, volume, gasEnergy);
+				if (Double.isNaN(temperature)) temperature = gasThermal.state(stock, gasEnergy).temperatureK();
 				double partialLower = phase.saturation(transition, temperature, stock, pressureLower).componentPartialPressurePa();
 				return phase.saturationPressureBound(transition, temperature, true) < Math.max(0, Math.nextDown(partialLower));
 			}
@@ -239,7 +243,7 @@ final class GasLiquidPhaseChangeStage {
 			// its saturation upper bound needs more than the gas-temperature lower bound.
 			if (Double.isNaN(temperature)) return false;
 			var merged = new GasPhaseMergeBounds(support.thermal().registry(), gasThermal, envelope.possibleStocks());
-			double gasTemperature = merged.temperatureLower(stock, candidate.candidateGasEnergy());
+			double gasTemperature = merged.temperatureLower(stock, gasEnergy);
 			String vaporId = support.thermal().registry().material(
 					support.thermal().registry().materialHandle(transition.upperEnergyMaterialId())).carrierId();
 			double partialLower = merged.partialPressureLower(stock, vaporId, gasTemperature,
@@ -255,9 +259,9 @@ final class GasLiquidPhaseChangeStage {
 		if (candidate == null) return null;
 		if (!interfaces.mayKeepBoilContact(source, candidate.liquidGeometry(), contact)) return null;
 		try {
-			if (envelope != null && !envelope.splitSource()) {
+			if (envelope != null && source != null) {
 				var actualPaths = envelope.forCandidate(source.phase(candidate.liquidGeometry()));
-				if (actualPaths != null && boilingSaturationExcluded(candidate, actualPaths, transition, phase,
+				if (boilingSaturationExcluded(candidate, actualPaths, transition, phase,
 						new GasThermalModel(support.thermal().registry(), support.gasState().network.registry()))) return null;
 			}
 			var topology = support.planGasGeometry(candidate.liquidGeometry(), node, candidate.gasPlan(),

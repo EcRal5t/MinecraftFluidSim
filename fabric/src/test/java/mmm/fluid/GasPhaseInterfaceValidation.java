@@ -64,22 +64,25 @@ public final class GasPhaseInterfaceValidation {
 		var merger = domain(0, true, new float[]{.5F,.5F,.5F,1});
 		merger.geometry.cutCells.replaceMask(2,0); merger.geometry.solid[2]=false; merger.bootstrapGasState("");
 		var mergingSource = merger.gasState.frame;
-		check(mergingSource.nodeCount()==2 && GasPhaseGeometryEnvelope.capture(mergingSource,merger.gasState.network,null,
-				0,mergingSource.commonCellNode(1))==null,"A possible merger reused an isolated gas inventory/energy certificate");
+		var mergingEnvelope=GasPhaseGeometryEnvelope.capture(mergingSource,merger.gasState.network,null,0,mergingSource.commonCellNode(1));
+		check(mergingSource.nodeCount()==2 && (mergingEnvelope==null || !mergingEnvelope.hasWholeStock()),
+				"A possible merger reused an isolated gas inventory/energy certificate");
 		var branched = domain(0, true, new float[]{.5F,.25F,.5F,.5F});
 		for(int cell:new int[]{2,3}) { branched.geometry.cutCells.replaceMask(cell,0); branched.geometry.solid[cell]=false; }
 		branched.bootstrapGasState("");
 		var branchSource = branched.gasState.frame;
 		var branchContact = GasPhaseInterfaceResolver.contacts(branchSource,0).getFirst();
-		check(GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node())==null,
+		var unprovedBranch=GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node());
+		check(unprovedBranch==null || !unprovedBranch.hasWholeStock() && unprovedBranch.sourceShare().signum()==0,
 				"A changing multi-cell source claimed a complete-stock successor");
 		var branchEnvelope = GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node(),branchContact.pieces());
-		check(branchEnvelope!=null && branchEnvelope.splitSource()
+		check(branchEnvelope!=null && !branchEnvelope.hasWholeStock()
 				&& branchEnvelope.sourceShare().equals(mmm.chemistry.ExactRational.of(6).divide(7)),
 				"Fixed contact backbone lost its exact source-stock share: " + branchContact + " share="
 						+ (branchEnvelope==null?null:branchEnvelope.sourceShare()));
-		check(GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node(),
-				branchContact.pieces().stream().filter(piece->piece/8==0).toList())==null,
+		var changingContact=GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node(),
+				branchContact.pieces().stream().filter(piece->piece/8==0).toList());
+		check(changingContact==null || !changingContact.hasWholeStock() && changingContact.sourceShare().signum()==0,
 				"Changing contact pieces supplied an unproved persistent gas path");
 		validateFiniteGasBatchBounds();
 		System.out.println("Gas phase microcontact validation passed");
@@ -131,8 +134,9 @@ public final class GasPhaseInterfaceValidation {
 			}
 		}
 		try {
-			for(int sourceCase=0;sourceCase<4;sourceCase++) {
-				boolean existingVapor=sourceCase==1, completeDepletion=sourceCase==2, partialNeighbor=sourceCase==3;
+			for(int sourceCase=0;sourceCase<5;sourceCase++) {
+				boolean existingVapor=sourceCase==1, mergingPeers=sourceCase==4;
+				boolean completeDepletion=sourceCase==2 || mergingPeers, partialNeighbor=sourceCase==3;
 				var definitions=registry;
 				if(completeDepletion) {
 					var equalEnergyWater=new mmm.thermal.ThermalMaterialDefinition(water.id(),water.carrierKind(),water.carrierId(),300,0,.1,water.caloricSegments());
@@ -142,7 +146,7 @@ public final class GasPhaseInterfaceValidation {
 					var hotAir=new mmm.thermal.ThermalMaterialDefinition(air.id(),air.carrierKind(),air.carrierId(),400,0,.025,air.caloricSegments());
 					definitions=new mmm.thermal.ThermalRegistry(java.util.List.of(equalEnergyWater,equalEnergyVapor,hotAir),java.util.List.of(),java.util.List.of(transition),"","");
 				}
-				byte[] masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=0;if(partialNeighbor)masks[1]=0;
+				byte[] masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=0;if(partialNeighbor)masks[1]=0;if(mergingPeers)for(int peer:new int[]{1,2,4})masks[peer]=0;
 				var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),32);
 				float volume=completeDepletion?mmm.granular.SolidVolume.toCellVolume(8*168):.5F;
 				float[] positions=partialNeighbor?new float[]{.25F,.125F,.25F,volume, .75F,.125F,.25F,.5F}
@@ -151,6 +155,7 @@ public final class GasPhaseInterfaceValidation {
 						new float[positions.length/4*3],masks));domain.sealDomainBoundary();
 				domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());domain.bootstrapGasState("");
 				int node=domain.gasState.frame.commonCellNode(0);
+				if(mergingPeers)check(domain.gasState.frame.nodeCount()==3,"Complete-depletion merge fixture lost its three separate gas stocks");
 				var phase=new mmm.thermal.GasLiquidPhaseModel(definitions,domain.gasState.network.registry());
 				if(existingVapor) domain.gasState.network.commitPhaseMutation(domain.gasState.network.planPhaseSource(node,phase.gasBatch(transition,1)));
 				domain.bindThermal(definitions,new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)),completeDepletion||existingVapor?400:300);
@@ -163,21 +168,24 @@ public final class GasPhaseInterfaceValidation {
 				var thermalCell=domain.thermalState.preparePhaseCandidateCell(0,domain.thermalMarkerContext());
 				var envelope=GasPhaseGeometryEnvelope.forBoiling(support,0,node);
 				var bounds=GasBoilingBatchBounds.forBoiling(support,0,node,0,transition,thermalCell,300,new boolean[0],255,phase,envelope);
-				check(bounds!=null,"Finite air lost its complete-source interval bound");
+				check(bounds!=null || mergingPeers,"Finite air lost its complete-source interval bound");
 				if(partialNeighbor) {
 					var frame=domain.gasState.frame;int peer=frame.commonCellNode(1);
 					check(peer>0 && peer!=node && !frame.fullDryFace(1,0,0)
 							&& frame.topology().connections().stream().anyMatch(edge->edge.area()>0
 							&& (edge.firstNode()==node && edge.secondNode()==peer || edge.firstNode()==peer && edge.secondNode()==node)),
 							"Partially dry fixed face lost its separate finite-rate gas connection");
-					check(!envelope.splitSource() && envelope.possibleStocks().isEmpty(),
+					check(envelope.hasWholeStock() && envelope.possibleStocks().isEmpty(),
 							"A permanent finite-rate face entered the source chamber's merge envelope");
 				}
 				var prepare=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("prepareBoilInventory")).findFirst().orElseThrow();prepare.setAccessible(true);
 				var geometryGetter=prepare.getReturnType().getDeclaredMethod("liquidGeometry");geometryGetter.setAccessible(true);
+				var gasGetter=prepare.getReturnType().getDeclaredMethod("gasPlan");gasGetter.setAccessible(true);
+				var energyGetter=prepare.getReturnType().getDeclaredMethod("candidateGasEnergy");energyGetter.setAccessible(true);
+				var thermalGetter=prepare.getReturnType().getDeclaredMethod("thermalPlan");thermalGetter.setAccessible(true);
 				var complete=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("completeBoil")).findFirst().orElseThrow();complete.setAccessible(true);
 				var source=GasRuntimeGeometry.preparePhaseSource(domain,0);
-				Object[] candidates=new Object[9];int largest=0;
+				Object[] candidates=new Object[9];int largest=0,mergedCandidates=0;
 				for(int batch=1;batch<=8;batch++) {
 					var inventory=prepare.invoke(stage,0,node,0,transition,phase,thermalCell,new boolean[0],300.0,(long)batch,contact);
 					if(partialNeighbor && inventory!=null) {
@@ -190,20 +198,23 @@ public final class GasPhaseInterfaceValidation {
 					}
 					if(inventory!=null) {
 						var edit=(PhaseLiquidGeometryEdit)geometryGetter.invoke(inventory);
-						checkCandidateEnvelope(domain,node,contact,source,envelope,edit);
+						if(checkCandidateEnvelope(domain,node,contact,source,envelope,edit,support,
+								(mmm.fluid.air.AirNetwork.PhaseMutationPlan)gasGetter.invoke(inventory),(double)energyGetter.invoke(inventory),
+								(mmm.thermal.ThermalDomainState.PhaseCellEnergyPlan)thermalGetter.invoke(inventory)))mergedCandidates++;
 					}
 					candidates[batch]=complete.invoke(stage,0,node,transition,phase,contact,source,inventory,envelope);
 					var fullCandidate=complete.invoke(stage,0,node,transition,phase,contact,source,inventory,null);
 					check((candidates[batch]!=null)==(fullCandidate!=null),"Candidate gas paths changed the complete physical batch: source="+sourceCase+" batch="+batch);
 					if(candidates[batch]!=null)largest=batch;
 				}
+				if(mergingPeers)check(mergedCandidates>0,"Complete depletion never proved its actual merged gas inventory/U");
 				check(largest==(completeDepletion?8:existingVapor?0:1),"Finite-air comparison lost its partial/complete physical candidate: source="+sourceCase+" largest="+largest);
-				if(completeDepletion)check(!bounds.excluded(1,8) && !bounds.excluded(8,8),"Complete depletion used a fictitious remaining liquid temperature");
+				if(completeDepletion && bounds!=null)check(!bounds.excluded(1,8) && !bounds.excluded(8,8),"Complete depletion used a fictitious remaining liquid temperature");
 				int excluded=0;
-				for(int low=1;low<=8;low++)for(int high=low;high<=8;high++)if(bounds.excluded(low,high)) {
+				for(int low=1;low<=8;low++)for(int high=low;high<=8;high++)if(bounds!=null && bounds.excluded(low,high)) {
 					excluded++;for(int batch=low;batch<=high;batch++)check(candidates[batch]==null,"Finite-air bounds excluded a complete physical batch");
 				}
-				var maximum=GasPhaseBatchSearch.maximum(8,batch->candidates[(int)batch],bounds::excluded);
+				var maximum=GasPhaseBatchSearch.maximum(8,batch->candidates[(int)batch],(low,high)->bounds!=null && bounds.excluded(low,high));
 				check((completeDepletion?excluded==0:excluded>0) && (largest==0?maximum==null:maximum==candidates[largest]),"Finite-air interval search changed the exhaustive maximum");
 				if(completeDepletion) {
 					var model=new mmm.thermal.GasThermalModel(definitions,domain.gasState.network.registry());
@@ -232,11 +243,13 @@ public final class GasPhaseInterfaceValidation {
 	}
 
 
-	private static void checkCandidateEnvelope(FluidDomain domain,int sourceNode,GasPhaseInterfaceResolver.Candidate contact,
+	private static boolean checkCandidateEnvelope(FluidDomain domain,int sourceNode,GasPhaseInterfaceResolver.Candidate contact,
 	                                          GasRuntimeGeometry.PhaseSource prepared,GasPhaseGeometryEnvelope envelope,
-	                                          PhaseLiquidGeometryEdit edit) {
+	                                          PhaseLiquidGeometryEdit edit,PhaseChangeStageSupport support,
+	                                          mmm.fluid.air.AirNetwork.PhaseMutationPlan gas,double energy,
+	                                          mmm.thermal.ThermalDomainState.PhaseCellEnergyPlan thermal) {
 		var candidate=envelope.forCandidate(prepared.phase(edit));
-		if(candidate==null)return;
+		if(candidate==null)return false;
 		var before=prepared.frame();
 		var full=GasRuntimeGeometry.capture(domain,edit,before.occupiedSvq(),before.sealedExterior());
 		var successors=new java.util.TreeSet<Integer>();
@@ -250,6 +263,15 @@ public final class GasPhaseInterfaceValidation {
 		for(var chamber:full.capacity().chambers())if(successors.contains(chamber.node()))
 			check(chamber.cubicMeters()<=upper,"Candidate gas volume bound omitted an actual contact successor");
 		check(envelope.possibleStocks().containsAll(candidate.possibleStocks()),"Candidate gas paths introduced a foreign optional stock");
+		var merged=candidate.merged(gas.inventoryAfter(),energy);
+		if(merged!=null) {
+			var actual=support.planGasGeometry(edit,sourceNode,gas,energy,thermal,null);
+			check(successors.size()==1,"A complete merged inventory has multiple actual contact successors");
+			int successor=successors.first();
+			check(merged.inventory().equals(actual.gasPlan().inventory(successor))
+					&& Double.doubleToRawLongBits(merged.energy())==Double.doubleToRawLongBits(actual.thermalPlan().nodeEnergy(successor)),
+					"Merged gas inventory/U differs from independent complete topology planning");
+		}
 		for(var old:before.geometry().pieces()) {
 			var next=full.geometry().piece(old.id());int oldNode=before.nodeOfPiece(old.id());
 			if(oldNode==sourceNode || next==null || !successors.contains(full.nodeOfPiece(old.id()))
@@ -258,6 +280,7 @@ public final class GasPhaseInterfaceValidation {
 			if(!stock.isEmpty())check(candidate.possibleStocks().stream().anyMatch(optional->optional.inventory().equals(stock)),
 					"Candidate gas paths omitted a contributing old chamber stock");
 		}
+		return merged!=null;
 	}
 
 	private static FluidDomain domain(int mask, boolean peerOpen, float[] markers) {
