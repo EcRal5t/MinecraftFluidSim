@@ -1,14 +1,12 @@
 package mmm.fluid;
 
 import mmm.units.SignedDyadic;
-import org.ejml.data.DMatrixRMaj;
 import org.ejml.data.DMatrixSparseCSC;
-import org.ejml.data.DMatrixSparseTriplet;
-import org.ejml.ops.DConvertMatrixStruct;
 import org.ejml.sparse.FillReducing;
-import org.ejml.sparse.csc.factory.LinearSolverFactory_DSCC;
+import org.ejml.sparse.csc.factory.DecompositionFactory_DSCC;
+import org.ejml.sparse.csc.misc.TriangularSolver_DSCC;
 
-/** Certified principal coordinates, with full-operator refinement and a strictly improved PCG seed. */
+/** Mass-whitened constraint QR, with exact full-row refinement and an improving PCG seed. */
 final class SparsePressureFactor {
 	private SparsePressureFactor() { }
 	static PressureProjectionResult solve(CellVelocityConstraintOperator operator, double[] rhs, double[] pressure,
@@ -41,8 +39,6 @@ final class SparsePressureFactor {
 			double[] image = new double[rhs.length]; operator.residual(pressure, pressureLow, rhs, image);
 			initialResidual = rms(image);
 			boolean[] reclaimed = {false};
-			// EJML doubles each triangular capacity; one old buffer pair survives during growth.
-			if (!fitsFactorMemory(30.0 * rhs.length * rhs.length + 128.0 * rhs.length, reclaimed)) return unavailable(iterations, initialResidual);
 			PressureRowBasis basis = operator.rowBasis();
 			if (!basis.observationNeutral(observed, diagonal, commonGauge)) return unavailable(iterations, initialResidual);
 			double[] rate = new double[rhs.length]; operator.volumeRate(predictor, rate);
@@ -50,51 +46,57 @@ final class SparsePressureFactor {
 			if (!basis.compatibleSource(physicalSource, rate, dt)) return unavailable(iterations, initialResidual);
 			if (Double.isFinite(initialResidual) && initialResidual <= tolerance)
 				return new PressureProjectionResult(0, initialResidual, true);
-			var gram = operator.principalGram(basis); double[] scale = new double[basis.size()];
-			long nonzeros = 2L * gram.values().length;
-			if (nonzeros > (Integer.MAX_VALUE - basis.size()) / 4L) return unavailable(iterations, initialResidual);
-			double triangle = (double) basis.size() * (basis.size() + 1L) / 2;
-			double capacity = Math.max(4 * nonzeros + basis.size(), 2 * triangle + 3 * basis.size());
-			if (!fitsFactorMemory(24 * capacity + 12 * triangle + 36 * nonzeros + 128.0 * basis.size(), reclaimed)) return unavailable(iterations, initialResidual);
+			if (basis.size() == 0) return unavailable(iterations, initialResidual);
+			double[] scale = new double[basis.size()];
 			for (int row = 0; row < scale.length; row++) {
 				scale[row] = 1 / Math.sqrt(diagonal[basis.row(row)]);
 				if (!(scale[row] > 0 && Double.isFinite(scale[row]))) return unavailable(iterations, initialResidual);
 			}
-			var entries = new DMatrixSparseTriplet(basis.size(), basis.size(), (int) nonzeros);
-			for (int entry = 0; entry < gram.values().length; entry++) {
-				int row = gram.rows()[entry], column = gram.columns()[entry];
-				double value = gram.values()[entry].multiply(SignedDyadic.of(scale[row])).multiply(SignedDyadic.of(scale[column])).toDouble();
-				if (value == 0 || !Double.isFinite(value)) return unavailable(iterations, initialResidual);
-				entries.addItem(row, column, value); if (row != column) entries.addItem(column, row, value);
-			}
-			var solver = LinearSolverFactory_DSCC.lu(FillReducing.NONE);
-			if (!solver.setA(DConvertMatrixStruct.convert(entries, (DMatrixSparseCSC) null))) return unavailable(iterations, initialResidual);
-			var source = new DMatrixRMaj(basis.size(), 1); var solution = new DMatrixRMaj(basis.size(), 1);
+			var size = operator.whitenedSize(basis);
+			// V can fill the selected constraint rectangle; R fills its upper triangle.
+			double rectangle = (double) size.features() * basis.size();
+			double triangle = (double) basis.size() * (basis.size() + 1L) / 2;
+			if (rectangle > Integer.MAX_VALUE || triangle > Integer.MAX_VALUE
+					|| !fitsFactorMemory(36 * (rectangle + triangle) + 48.0 * size.maximumEntries()
+							+ size.localBytes() + 128.0 * (size.features() + basis.size()), reclaimed))
+				return unavailable(iterations, initialResidual);
+			var transpose = operator.massWhitenedTranspose(basis, scale);
+			var qr = DecompositionFactory_DSCC.qr(FillReducing.NONE);
+			if (!qr.decompose(transpose)) return unavailable(iterations, initialResidual);
+			var triangular = qr.getR(null, true);
 			for (int row = 0; row < basis.size(); row++) {
-				source.data[row] = rhs[basis.row(row)].multiply(SignedDyadic.of(scale[row])).toDouble();
-				if (!Double.isFinite(source.data[row])) return unavailable(iterations, initialResidual);
+				double pivot = triangular.get(row, row);
+				if (pivot == 0 || !Double.isFinite(pivot)) return unavailable(iterations, initialResidual);
 			}
-			iterations++; solver.solve(source, solution);
+			var solution = new double[basis.size()];
+			for (int row = 0; row < basis.size(); row++) {
+				solution[row] = rhs[basis.row(row)].multiply(SignedDyadic.of(scale[row])).toDouble();
+				if (!Double.isFinite(solution[row])) return unavailable(iterations, initialResidual);
+			}
+			iterations++; solveTriangular(triangular, solution);
 			double[] candidate = new double[rhs.length], candidateLow = new double[rhs.length];
 			for (int row = 0; row < basis.size(); row++) {
-				candidate[basis.row(row)] = solution.data[row] * scale[row];
+				if (!Double.isFinite(solution[row])) return unavailable(iterations, initialResidual);
+				var value = SignedDyadic.of(solution[row]).multiply(SignedDyadic.of(scale[row]));
+				candidate[basis.row(row)] = value.toDouble();
 				if (!Double.isFinite(candidate[basis.row(row)])) return unavailable(iterations, initialResidual);
+				candidateLow[basis.row(row)] = value.subtract(SignedDyadic.of(candidate[basis.row(row)])).toDouble();
 			}
 			operator.residual(candidate, candidateLow, rhs, image); double residual = rms(image);
 			if (!(Double.isFinite(residual) && residual < initialResidual)) return unavailable(iterations, initialResidual);
 			while (residual > tolerance && iterations < maximumSolves) {
 				boolean finite = true;
 				for (int row = 0; row < basis.size(); row++) {
-					source.data[row] = image[basis.row(row)] * scale[row]; finite &= Double.isFinite(source.data[row]);
+					solution[row] = image[basis.row(row)] * scale[row]; finite &= Double.isFinite(solution[row]);
 				}
 				if (!finite) break;
-				iterations++; solver.solve(source, solution);
+				iterations++; solveTriangular(triangular, solution);
 				var trial = candidate.clone(); var trialLow = candidateLow.clone();
 				for (int row = 0; row < basis.size(); row++) {
-					if (!Double.isFinite(solution.data[row])) { finite = false; break; }
+					if (!Double.isFinite(solution[row])) { finite = false; break; }
 					int fine = basis.row(row);
 					var update = SignedDyadic.of(candidate[fine]).add(SignedDyadic.of(candidateLow[fine]))
-							.add(SignedDyadic.of(solution.data[row]).multiply(SignedDyadic.of(scale[row])));
+							.add(SignedDyadic.of(solution[row]).multiply(SignedDyadic.of(scale[row])));
 					trial[fine] = update.toDouble();
 					if (!Double.isFinite(trial[fine])) { finite = false; break; }
 					trialLow[fine] = update.subtract(SignedDyadic.of(trial[fine])).toDouble(); finite &= Double.isFinite(trialLow[fine]);
@@ -112,6 +114,19 @@ final class SparsePressureFactor {
 			if ("Thermal dyadic significand is over budget".equals(unavailable.getMessage())) return unavailable(iterations, initialResidual);
 			throw unavailable;
 		}
+	}
+	/** B^T = QR gives B B^T = R^T R; no explicit Q or rounded pressure Gram is needed. */
+	private static void solveTriangular(DMatrixSparseCSC triangular, double[] solution) {
+		for (int column = 0; column < triangular.numCols; column++) {
+			double value = solution[column], pivot = 0;
+			for (int entry = triangular.col_idx[column]; entry < triangular.col_idx[column + 1]; entry++) {
+				int row = triangular.nz_rows[entry];
+				if (row < column) value = Math.fma(-triangular.nz_values[entry], solution[row], value);
+				else if (row == column) pivot = triangular.nz_values[entry];
+			}
+			solution[column] = value / pivot;
+		}
+		TriangularSolver_DSCC.solveU(triangular, solution);
 	}
 	private static PressureProjectionResult unavailable(int iterations, double residual) { return new PressureProjectionResult(iterations, residual, false); }
 	private static double rms(double[] values) {

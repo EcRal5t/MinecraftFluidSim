@@ -5,6 +5,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.TreeMap;
+import org.ejml.data.DMatrixRMaj;
+import org.ejml.data.DMatrixSparseCSC;
+import org.ejml.data.DMatrixSparseTriplet;
+import org.ejml.dense.row.factory.DecompositionFactory_DDRM;
+import org.ejml.ops.DConvertMatrixStruct;
 
 /** Fixed volume and normal-trace constraints pulled back through the actual-mass cell basis. */
 final class CellVelocityConstraintOperator {
@@ -156,46 +161,80 @@ final class CellVelocityConstraintOperator {
 		for (int factor = 0; factor < factors.length; factor++) inertia[factor] = factors[factor].gram;
 		return new PressureRowBasis(factorOffsets, factorIndices, factorCoefficients, inertia, MODAL_STRIDE, storage, canonicalDiagonal);
 	}
-	record PrincipalGram(int[] rows, int[] columns, SignedDyadic[] values) { }
-	private record FactorRow(int row, SignedDyadic[] coefficients, SignedDyadic[] response) { }
-	/** Sparse principal (D A) H (D A)^T, assembled exactly before final factorization rounding. */
-	PrincipalGram principalGram(PressureRowBasis selected) {
-		var incidence = new ArrayList<ArrayList<FactorRow>>(factors.length);
-		for (int factor = 0; factor < factors.length; factor++) incidence.add(new ArrayList<>());
+	record WhitenedSize(int features, int maximumEntries, long localBytes) { }
+	/** Local QR compresses actual F sqrt(M^-1), without forming a rounded modal Gram. */
+	WhitenedSize whitenedSize(PressureRowBasis selected) {
+		long features = 0, entries = 0, localBytes = 0, rootBytes = 0;
+		for (Factor factor : factors) {
+			int width = whitenedFeatures(factor);
+			features += width;
+			localBytes = Math.max(localBytes, 48L * basis.blockMarkerCount(factor.velocityBlock) * factor.modeCount);
+			rootBytes += 24L * width * factor.modeCount;
+		}
 		for (int position = 0; position < selected.size(); position++) {
 			int row = selected.row(position), entry = factorOffsets[row];
 			while (entry < factorOffsets[row + 1]) {
-				int factor = factorIndices[entry] / MODAL_STRIDE, modes = factors[factor].modeCount;
-				SignedDyadic[] d = new SignedDyadic[modes], response = new SignedDyadic[modes];
-				Arrays.fill(d, SignedDyadic.ZERO);
-				while (entry < factorOffsets[row + 1] && factorIndices[entry] / MODAL_STRIDE == factor) {
-					d[factorIndices[entry] % MODAL_STRIDE] = factorCoefficients[entry]; entry++;
+				int slot = factorIndices[entry] / MODAL_STRIDE; entries += whitenedFeatures(factors[slot]);
+				do { entry++; } while (entry < factorOffsets[row + 1] && factorIndices[entry] / MODAL_STRIDE == slot);
+			}
+			if (storage[row] > 0) { features++; entries++; }
+		}
+		if (features > Integer.MAX_VALUE || entries > Integer.MAX_VALUE)
+			throw new PressureRowBasis.Unavailable("Whitened pressure constraint exceeds sparse index capacity");
+		return new WhitenedSize((int) features, (int) entries, localBytes + rootBytes);
+	}
+	/** Solver-owned B^T, where B = scale D A R_local^T plus the finite-gas storage columns. */
+	DMatrixSparseCSC massWhitenedTranspose(PressureRowBasis selected, double[] scale) {
+		if (scale.length != selected.size()) throw new IllegalArgumentException("Whitened pressure scale shape mismatch");
+		var size = whitenedSize(selected); int[] starts = new int[factors.length + 1];
+		for (int slot = 0; slot < factors.length; slot++) starts[slot + 1] = starts[slot] + whitenedFeatures(factors[slot]);
+		var roots = new DMatrixRMaj[factors.length];
+		var entries = new DMatrixSparseTriplet(size.features, selected.size(), size.maximumEntries);
+		int storageFeature = starts[factors.length];
+		for (int position = 0; position < selected.size(); position++) {
+			int row = selected.row(position), first = factorOffsets[row];
+			var scaling = SignedDyadic.of(scale[position]);
+			while (first < factorOffsets[row + 1]) {
+				int slot = factorIndices[first] / MODAL_STRIDE, end = first + 1; Factor factor = factors[slot];
+				while (end < factorOffsets[row + 1] && factorIndices[end] / MODAL_STRIDE == slot) end++;
+				if (roots[slot] == null) roots[slot] = whitenedRoot(factor);
+				for (int feature = 0; feature < whitenedFeatures(factor); feature++) {
+					SignedDyadic value = SignedDyadic.ZERO;
+					for (int entry = first; entry < end; entry++) value = value.add(factorCoefficients[entry]
+							.multiply(SignedDyadic.of(roots[slot].get(feature, factorIndices[entry] % MODAL_STRIDE))));
+					double observed = value.multiply(scaling).toDouble();
+					if (!Double.isFinite(observed)) throw new PressureRowBasis.Unavailable("Unrepresentable whitened pressure constraint");
+					if (observed != 0) entries.addItem(starts[slot] + feature, position, observed);
 				}
-				for (int first = 0; first < modes; first++) {
-					response[first] = SignedDyadic.ZERO;
-					for (int second = 0; second < modes; second++) response[first] = response[first]
-							.add(factors[factor].gram[modes * first + second].multiply(d[second]));
-				}
-				incidence.get(factor).add(new FactorRow(position, d, response));
+				first = end;
+			}
+			if (storage[row] > 0) {
+				double value = SignedDyadic.of(Math.sqrt(storage[row])).multiply(scaling).toDouble();
+				if (!(value > 0 && Double.isFinite(value))) throw new PressureRowBasis.Unavailable("Unrepresentable whitened gas storage");
+				entries.addItem(storageFeature++, position, value);
 			}
 		}
-		var lower = new TreeMap<Long, SignedDyadic>(); long bytes = 0, available = PressureRowBasis.availableMemory();
-		for (var members : incidence) for (int first = 0; first < members.size(); first++) for (int second = 0; second <= first; second++) {
-			FactorRow a = members.get(first), b = members.get(second); SignedDyadic value = SignedDyadic.ZERO;
-			for (int mode = 0; mode < a.coefficients.length; mode++) value = value.add(a.coefficients[mode].multiply(b.response[mode]));
-			long key = ((long) a.row << 32) | b.row; SignedDyadic previous = lower.get(key);
-			if (previous != null) { bytes -= gramBytes(previous); value = previous.add(value); }
-			if (value.signum() == 0) lower.remove(key); else { lower.put(key, value); bytes += gramBytes(value); }
-			if (bytes > available / 2) throw new PressureRowBasis.Unavailable("Principal pressure Gram exceeds available memory");
-		}
-		for (int position = 0; position < selected.size(); position++) if (exactStorage[selected.row(position)].signum() != 0) {
-			long key = ((long) position << 32) | position; lower.merge(key, exactStorage[selected.row(position)], SignedDyadic::add);
-		}
-		int[] rows = new int[lower.size()], columns = new int[lower.size()]; SignedDyadic[] values = new SignedDyadic[lower.size()]; int entry = 0;
-		for (var value : lower.entrySet()) { rows[entry] = (int) (value.getKey() >>> 32); columns[entry] = value.getKey().intValue(); values[entry++] = value.getValue(); }
-		return new PrincipalGram(rows, columns, values);
+		return DConvertMatrixStruct.convert(entries, (DMatrixSparseCSC) null);
 	}
-	private static long gramBytes(SignedDyadic value) { return 256L + 2L * ((value.significand().bitLength() + 7L) / 8); }
+	private int whitenedFeatures(Factor factor) {
+		return Math.min(3 * basis.blockMarkerCount(factor.velocityBlock), factor.modeCount);
+	}
+	private DMatrixRMaj whitenedRoot(Factor factor) {
+		int count = basis.blockMarkerCount(factor.velocityBlock), modes = factor.modeCount;
+		var transpose = new DMatrixRMaj(3 * count, modes);
+		for (int axis = 0; axis < 3; axis++) for (int ordinal = 0; ordinal < count; ordinal++) {
+			int marker = basis.blockMarker(factor.velocityBlock, ordinal);
+			var rootMass = SignedDyadic.of(Math.sqrt(inverseMass[marker]));
+			for (int mode = 0; mode < modes; mode++) {
+				double value = basis.modeWeightExact(marker, mode, axis).multiply(rootMass).toDouble();
+				if (!Double.isFinite(value)) throw new PressureRowBasis.Unavailable("Unrepresentable mass-whitened velocity mode");
+				transpose.set(axis * count + ordinal, mode, value);
+			}
+		}
+		var qr = DecompositionFactory_DDRM.qr(transpose.numRows, modes);
+		if (!qr.decompose(transpose)) throw new PressureRowBasis.Unavailable("Mass-whitened velocity modes lack a QR factor");
+		return qr.getR(null, true);
+	}
 	ConstraintGramPreconditioner preconditioner(double[] diagonal) {
 		checkRows(diagonal);
 		var c = expandedC();

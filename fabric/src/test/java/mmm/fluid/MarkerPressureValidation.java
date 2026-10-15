@@ -683,7 +683,7 @@ public final class MarkerPressureValidation {
 		operator.volumeRate(velocity, rhs); for (int row = 0; row < 3; row++) rhs[row] = -rhs[row] / dt; operator.diagonal(diagonal);
 		var direct = SparsePressureFactor.solve(operator, rhs, pressure, diagonal, new boolean[3], false, velocity, dt, 1e-9, 64);
 		if (!direct.converged() || direct.iterations() != 1 || direct.residualRms() > 1e-9)
-			throw new AssertionError("Certified low-rank principal LU did not satisfy every physical row");
+			throw new AssertionError("Low-rank mass-whitened pressure solve did not satisfy every physical row");
 		double[] actual = new double[3]; operator.apply(pressure, actual); for (int row = 0; row < 3; row++) near(actual[row], rhs[row], 1e-9, "Full-row direct pressure residual");
 		double[] saved = pressure.clone();
 		double[] savedSource = rhs.clone();
@@ -759,6 +759,24 @@ public final class MarkerPressureValidation {
 			forceNorm = Math.hypot(forceNorm, pairedForce[axis][marker]);
 		}
 		if (!(forceNorm > 0)) throw new AssertionError("Referenced pressure lost its actual carrier force");
+		// These independent normal traces differ below the precision of their squared Gram.
+		double separation = Math.scalb(1.0, -28);
+		var closeRows = java.util.List.of(definitions.getFirst(),
+				new CellVelocityConstraintOperator.Row(java.util.List.of(
+						new CellVelocityConstraintOperator.Block(block, 0, new double[]{1, 0, 0, 0}),
+						new CellVelocityConstraintOperator.Block(block, 1, new double[]{separation, 0, 0, 0})), 0));
+		var close = new CellVelocityConstraintOperator(basis, closeRows);
+		Arrays.fill(velocity[0], .125); Arrays.fill(velocity[1], .25);
+		var closeSource = close.referencedSource(velocity, dt, new double[2], new double[2]);
+		var closeNative = new double[2]; close.volumeRate(velocity, closeNative);
+		for (int row = 0; row < 2; row++) closeNative[row] = -closeNative[row] / dt;
+		var closeDiagonal = new double[2]; close.diagonal(closeDiagonal);
+		var closePressure = new double[2]; var closeLow = new double[2];
+		var closeResult = SparsePressureFactor.solve(close, closeSource, closePressure, closeLow, closeDiagonal,
+				new boolean[2], false, velocity, dt, 1e-9, 64, closeNative);
+		if (!closeResult.converged()) throw new AssertionError("Nearly dependent normal traces did not reach the physical residual target");
+		close.residual(closePressure, closeLow, closeSource, residual);
+		for (double value : residual) near(value, 0, 1e-9, "Nearly dependent full-row pressure residual");
 	}
 
 	/** Independent full C assembly checks the factor action without reading its cached D or H. */
@@ -816,17 +834,25 @@ public final class MarkerPressureValidation {
 		var defect = observedWork.subtract(exactWork);
 		if ((defect.signum() < 0 ? defect.negate() : defect).compareTo(roundingBound) > 0)
 			throw new AssertionError("Rounded pressure image exceeds the independent full-C work rounding bound");
-		var coordinates = operator.rowBasis(); var principal = operator.principalGram(coordinates);
-		int entry = 0;
-		for (int row = 0; row < coordinates.size(); row++) for (int column = 0; column <= row; column++) {
-			int first = coordinates.row(row), second = coordinates.row(column);
-			SignedDyadic value = first == second ? SignedDyadic.of(definitions.get(first).storage()) : SignedDyadic.ZERO;
-			for (int index = 0; index < matrix[first].length; index++) value = value.add(matrix[first][index].multiply(matrix[second][index])
-					.multiply(SignedDyadic.of(1 / basis.massKilograms(index % count))));
-			SignedDyadic stored = entry < principal.values().length && principal.rows()[entry] == row && principal.columns()[entry] == column
-					? principal.values()[entry++] : SignedDyadic.ZERO;
-			if (!stored.equals(value)) throw new AssertionError("Principal D/H Gram differs from independent full C mass work");
+		var coordinates = operator.rowBasis(); var scale = new double[coordinates.size()]; Arrays.fill(scale, 1);
+		var whitened = operator.massWhitenedTranspose(coordinates, scale);
+		var whitenedLoad = new double[whitened.numRows]; var expectedWhitenedWork = SignedDyadic.ZERO;
+		for (int row = 0; row < coordinates.size(); row++) {
+			int first = coordinates.row(row);
+			for (int index = whitened.col_idx[row]; index < whitened.col_idx[row + 1]; index++)
+				whitenedLoad[whitened.nz_rows[index]] += whitened.nz_values[index] * pressure[first];
+			for (int column = 0; column < coordinates.size(); column++) {
+				int second = coordinates.row(column);
+				var value = first == second ? SignedDyadic.of(definitions.get(first).storage()) : SignedDyadic.ZERO;
+				for (int index = 0; index < matrix[first].length; index++) value = value.add(matrix[first][index].multiply(matrix[second][index])
+						.multiply(SignedDyadic.of(1 / basis.massKilograms(index % count))));
+				expectedWhitenedWork = expectedWhitenedWork.add(value.multiply(SignedDyadic.of(pressure[first])).multiply(SignedDyadic.of(pressure[second])));
+			}
 		}
+		double whitenedWork = 0; for (double value : whitenedLoad) whitenedWork += value * value;
+		double referenceWork = expectedWhitenedWork.toDouble();
+		near(whitenedWork, referenceWork, 256 * Math.max(count, coordinates.size()) * Math.ulp(referenceWork),
+				"Mass-whitened pressure work agrees with independent full C");
 		if (definitions.stream().anyMatch(row -> row.storage() > 0)) operator.preconditioner(diagonal, pressure);
 		else operator.preconditioner(diagonal);
 		var expanded = PressureConditionValidation.expandedConstraint(operator);

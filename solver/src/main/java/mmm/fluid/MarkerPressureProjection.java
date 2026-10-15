@@ -404,7 +404,7 @@ final class MarkerPressureProjection {
 			var direct = SparsePressureFactor.solve(operator, source, pressureCorrection, pressureCorrectionLow, diagonal, observed,
 					closedObservationGauge(), wallPredictor, dt, tolerance, domain.config.maxPressureIterations(), rhs);
 			iterations = direct.iterations();
-			// A certified improving seed starts a fresh Krylov iteration on the full operator.
+			// An improving direct solve starts a fresh Krylov iteration on the full operator.
 			operator.residual(pressureCorrection, pressureCorrectionLow, source, r); residual = rms(r);
 		}
 		if (residual > tolerance && iterations < domain.config.maxPressureIterations()) {
