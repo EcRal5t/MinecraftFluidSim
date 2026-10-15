@@ -5,7 +5,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import mmm.chemistry.ExactRational;
-import mmm.fluid.GasGeometryOverlap.Point;
+import mmm.fluid.GasGeometryReference.Point;
 
 /** Exact reference certification of disjoint arrival interiors using homogeneous integer SAT. */
 final class LiquidMeshEmbedding {

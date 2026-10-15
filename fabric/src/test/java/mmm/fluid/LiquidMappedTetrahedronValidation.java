@@ -3,7 +3,7 @@ package mmm.fluid;
 import java.util.ArrayList;
 import java.util.List;
 import mmm.chemistry.ExactRational;
-import mmm.fluid.GasGeometryOverlap.Point;
+import mmm.fluid.GasGeometryReference.Point;
 import mmm.units.SignedDyadic;
 
 /** Independent inverse-image and inertia checks for positive moving-simplex intersections. */
@@ -21,7 +21,7 @@ final class LiquidMappedTetrahedronValidation {
 						"Moving simplex has a nonpositive piece");
 				var independent = zeros();
 				for (int micro = 0; micro < 8; micro++) add(independent,
-						GasGeometryOverlap.normalizedSecondMoments(micro, piece.sourceSupport()));
+						GasGeometryReference.normalizedSecondMoments(micro, piece.sourceSupport()));
 				check(List.of(independent).equals(piece.sourceMoments()), "Inverse-image moments differ from independent source clipping");
 				add(before, independent);
 				add(after, global(piece.arrivalMoments(), piece.receiver()));
@@ -97,7 +97,7 @@ final class LiquidMappedTetrahedronValidation {
 		for (int[] order : new int[][]{{0,1,2},{0,2,1},{1,0,2},{1,2,0},{2,0,1},{2,1,0}}) {
 			var source = new ArrayList<Point>(); var coordinate = new long[]{2, 2, 2}; source.add(point(2, 2, 2));
 			for (int a : order) { coordinate[a]++; source.add(point(coordinate[0], coordinate[1], coordinate[2])); }
-			if (GasGeometryOverlap.determinant(source.get(1).subtract(source.get(0)), source.get(2).subtract(source.get(0)),
+			if (GasGeometryReference.determinant(source.get(1).subtract(source.get(0)), source.get(2).subtract(source.get(0)),
 					source.get(3).subtract(source.get(0))).signum() < 0) java.util.Collections.swap(source, 1, 2);
 			var simplex = new LiquidMappedTetrahedron(source, source.stream().map(p -> move(p, 2)).toList());
 			for (var piece : simplex.partition(86, 6, 6, 6, 4096)) {
@@ -171,7 +171,7 @@ final class LiquidMappedTetrahedronValidation {
 		var second = new ArrayList<>(List.of(point(0, -1, 1), point(0, -2, -3), point(-3, -1, -1), point(-1, -3, 2)));
 		var pair = new ArrayList<LiquidMappedTetrahedron>();
 		for (var vertices : List.of(first, second)) {
-			if (GasGeometryOverlap.determinant(vertices.get(1).subtract(vertices.get(0)), vertices.get(2).subtract(vertices.get(0)),
+			if (GasGeometryReference.determinant(vertices.get(1).subtract(vertices.get(0)), vertices.get(2).subtract(vertices.get(0)),
 					vertices.get(3).subtract(vertices.get(0))).signum() < 0) java.util.Collections.swap(vertices, 1, 2);
 			pair.add(new LiquidMappedTetrahedron(vertices, vertices));
 		}

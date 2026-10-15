@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Objects;
 import mmm.chemistry.ExactRational;
 import mmm.fluid.GasGeometryOverlap.HalfSpace;
-import mmm.fluid.GasGeometryOverlap.Point;
+import mmm.fluid.GasGeometryReference.Point;
 import mmm.units.SignedDyadic;
 
 /** Positive receiver intersections and their inverse images under one affine moving simplex. */
@@ -26,8 +26,8 @@ final class LiquidMappedTetrahedron {
 	LiquidMappedTetrahedron(List<Point> source, List<Point> arrival) {
 		this.source = vertices(source); this.arrival = vertices(arrival);
 		var before = edges(this.source); var after = edges(this.arrival);
-		sourceDeterminant = GasGeometryOverlap.determinant(before[0], before[1], before[2]);
-		arrivalDeterminant = GasGeometryOverlap.determinant(after[0], after[1], after[2]);
+		sourceDeterminant = GasGeometryReference.determinant(before[0], before[1], before[2]);
+		arrivalDeterminant = GasGeometryReference.determinant(after[0], after[1], after[2]);
 		if (sourceDeterminant.signum() <= 0 || arrivalDeterminant.signum() <= 0)
 			throw new GasTopologyBlockedException("Moving liquid simplex has zero volume or reversed orientation");
 	}
@@ -81,7 +81,7 @@ final class LiquidMappedTetrahedron {
 		for (int z = low[2]; z <= high[2]; z++) for (int y = low[1]; y <= high[1]; y++) for (int x = low[0]; x <= high[0]; x++) {
 			int[] receiver = {x, y, z}; var arrivalSupport = support(arrival, receiver);
 			for (int micro = 0; micro < 8; micro++) {
-				var moments = GasGeometryOverlap.normalizedSecondMoments(micro, arrivalSupport);
+				var moments = GasGeometryReference.normalizedSecondMoments(micro, arrivalSupport);
 				if (moments[0].isZero()) continue;
 				var sourceMoments = pullbackMoments(moments, origin, receiver);
 				result.add(new Piece(x + sizeX * (y + sizeY * z), micro, sourceSupport(origin, receiver, micro),

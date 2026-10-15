@@ -5,121 +5,52 @@ import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
 import java.math.BigInteger;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-/** Exact intersection of at most twelve half-spaces inside one open microbox. */
+/** Microbox intersections: analytic boxes and single planes, numerical convex clipping otherwise. */
 final class GasGeometryOverlap {
 	/** Dry support nx*x+ny*y+nz*z >= threshold in cell-local coordinates. */
 	record HalfSpace(SignedDyadic nx, SignedDyadic ny, SignedDyadic nz, SignedDyadic threshold) {
 		HalfSpace { Objects.requireNonNull(nx); Objects.requireNonNull(ny); Objects.requireNonNull(nz); Objects.requireNonNull(threshold); }
 	}
-	/** Positive normalized volume at a position about the whole-cell centre. */
-	record QuadraturePoint(double[] position, ExactRational volume) { }
-	record Point(ExactRational x, ExactRational y, ExactRational z) {
-		Point { Objects.requireNonNull(x); Objects.requireNonNull(y); Objects.requireNonNull(z); }
-		ExactRational component(int axis) { return axis == 0 ? x : axis == 1 ? y : z; }
-		Point add(Point p) { return new Point(x.add(p.x), y.add(p.y), z.add(p.z)); }
-		Point multiply(ExactRational scale) { return new Point(x.multiply(scale), y.multiply(scale), z.multiply(scale)); }
-		Point subtract(Point p) { return new Point(x.subtract(p.x), y.subtract(p.y), z.subtract(p.z)); }
-		Point interpolate(Point p, ExactRational t) {
-			return new Point(x.add(t.multiply(p.x.subtract(x))), y.add(t.multiply(p.y.subtract(y))), z.add(t.multiply(p.z.subtract(z))));
-		}
-	}
-	private record Plane(ExactRational nx, ExactRational ny, ExactRational nz, ExactRational threshold) {
-		ExactRational normal(int axis) { return axis == 0 ? nx : axis == 1 ? ny : nz; }
-		ExactRational distance(Point p) { return nx.multiply(p.x).add(ny.multiply(p.y)).add(nz.multiply(p.z)).subtract(threshold); }
-	}
-	private record Polyhedron(List<Point> vertices, List<int[]> faces) { }
-	private static final Polyhedron EMPTY = new Polyhedron(List.of(), List.of());
 	private static final ExactRational HALF = ExactRational.ONE.divide(2);
-	private static final ExactRational MICRO_VOLUME = ExactRational.ONE.divide(8);
+	private static final int[][] POWERS = {
+			{0,0,0}, {1,0,0}, {0,1,0}, {0,0,1}, {2,0,0}, {1,1,0}, {1,0,1}, {0,2,0}, {0,1,1}, {0,0,2},
+			{3,0,0}, {2,1,0}, {2,0,1}, {1,2,0}, {1,1,1}, {1,0,2}, {0,3,0}, {0,2,1}, {0,1,2}, {0,0,3}
+	};
 	private static final int[][] AFFINE_PRODUCTS = {
 			{1,2,3}, {4,5,6}, {5,7,8}, {6,8,9}, {10,11,12},
 			{11,13,14}, {12,14,15}, {13,16,17}, {14,17,18}, {15,18,19}
 	};
+	private record Workspace(ConvexPolyhedron polyhedron, ConvexPolyhedron.Moments moments) { }
+	private static final ThreadLocal<Workspace> WORKSPACE = ThreadLocal.withInitial(
+			() -> new Workspace(new ConvexPolyhedron(), new ConvexPolyhedron.Moments()));
 	private GasGeometryOverlap() { }
 
-	/** Exact cell-normalized volume. The caller supplies only microboxes open in both geometries. */
-	static ExactRational normalizedVolume(int micro, List<HalfSpace> planes) {
-		return integrate(micro, planes, 0)[0];
-	}
+	/** Cell-normalized volume. The caller supplies microboxes open in both geometries. */
+	static ExactRational normalizedVolume(int micro, List<HalfSpace> planes) { return integrate(micro, planes, 0)[0]; }
 
-	/** Positive degree-two rule for the clipped microbox, with exact volume weights. */
-	static List<QuadraturePoint> positiveQuadrature(int micro, List<HalfSpace> planes) {
-		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 12 || planes.stream().anyMatch(Objects::isNull))
-			throw new IllegalArgumentException("Invalid quadrature microbox or half-spaces");
-		try {
-			var origin = new Point(ExactRational.of(micro & 1).divide(2), ExactRational.of(micro >>> 1 & 1).divide(2),
-					ExactRational.of(micro >>> 2 & 1).divide(2));
-			var whole = box(origin); var polyhedron = whole;
-			for (var halfSpace : List.copyOf(planes)) {
-				polyhedron = clip(polyhedron, new Plane(exact(halfSpace.nx), exact(halfSpace.ny), exact(halfSpace.nz), exact(halfSpace.threshold)));
-				if (polyhedron.faces.isEmpty()) return List.of();
-			}
-			if (polyhedron == whole) return gaussBox(new double[]{(micro & 1) * .5 - .25, (micro >>> 1 & 1) * .5 - .25,
-					(micro >>> 2 & 1) * .5 - .25}, .25, MICRO_VOLUME);
-			var vertices = polyhedron.vertices; var used = new boolean[vertices.size()]; int vertexCount = 0;
-			var sum = new ExactRational[]{ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
-			for (var face : polyhedron.faces) for (int id : face) if (!used[id]) {
-				used[id] = true; vertexCount++;
-				for (int a = 0; a < 3; a++) sum[a] = sum[a].add(vertices.get(id).component(a));
-			}
-			var anchor = new Point(sum[0].divide(vertexCount), sum[1].divide(vertexCount), sum[2].divide(vertexCount));
-			var beta = exact(SignedDyadic.of((5 - Math.sqrt(5)) / 20));
-			var result = new ArrayList<QuadraturePoint>();
-			for (var face : polyhedron.faces) for (int i = 1; i + 1 < face.length; i++) {
-				var first = vertices.get(face[0]); var second = vertices.get(face[i]); var third = vertices.get(face[i + 1]);
-				var determinant = determinant(first.subtract(anchor), second.subtract(anchor), third.subtract(anchor));
-				if (determinant.isZero()) continue;
-				if (determinant.signum() < 0) throw new IllegalStateException("Quadrature polyhedron orientation does not close");
-				var weight = determinant.divide(24);
-				Point[] tetra = {anchor, first, second, third};
-				for (int selected = 0; selected < 4; selected++) {
-					var position = new double[3];
-					for (int a = 0; a < 3; a++) {
-						var reference = tetra[selected].component(a); var value = reference.subtract(HALF);
-						// alpha=1-3*beta; exact convex interpolation keeps box faces stable under RN.
-						for (int p = 0; p < 4; p++) if (p != selected)
-							value = value.add(tetra[p].component(a).subtract(reference).multiply(beta));
-						position[a] = value.toDouble();
-					}
-					result.add(new QuadraturePoint(position, weight));
-				}
-			}
-			return List.copyOf(result);
-		} catch (IllegalArgumentException magnitude) {
-			throw new GasTopologyBlockedException("Exact quadrature exceeds the rational representation budget: " + magnitude.getMessage());
-		}
-	}
-	static List<QuadraturePoint> fullCellQuadrature() {
-		return gaussBox(new double[3], .5, ExactRational.ONE);
-	}
+	/** V, X, Y, Z about the whole-cell centre. */
+	static ExactRational[] normalizedMoments(int micro, List<HalfSpace> planes) { return integrate(micro, planes, 1); }
+
+	/** V, X, Y, Z, XX, XY, XZ, YY, YZ, ZZ about the whole-cell centre. */
+	static ExactRational[] normalizedSecondMoments(int micro, List<HalfSpace> planes) { return integrate(micro, planes, 2); }
+
 	static ExactRational unionVolume(int micro, List<List<HalfSpace>> supports) {
-		ExactRational result = ExactRational.ZERO;
+		var result = ExactRational.ZERO;
 		for (var convex : supports) result = result.add(normalizedVolume(micro, convex));
 		return result;
 	}
 	static ExactRational unionOverlapVolume(int micro, List<List<HalfSpace>> before, List<List<HalfSpace>> after) {
-		ExactRational result = ExactRational.ZERO;
+		var result = ExactRational.ZERO;
 		for (var first : before) for (var second : after) {
 			var intersection = new ArrayList<HalfSpace>(first.size() + second.size());
 			intersection.addAll(first); intersection.addAll(second);
 			result = result.add(normalizedVolume(micro, intersection));
 		}
 		return result;
-	}
-	private static List<QuadraturePoint> gaussBox(double[] centre, double halfWidth, ExactRational volume) {
-		var result = new ArrayList<QuadraturePoint>(8); double offset = halfWidth / Math.sqrt(3);
-		for (int corner = 0; corner < 8; corner++) {
-			var position = new double[3];
-			for (int a = 0; a < 3; a++) position[a] = centre[a] + ((corner & 1 << a) == 0 ? -offset : offset);
-			result.add(new QuadraturePoint(position, volume.divide(8)));
-		}
-		return List.copyOf(result);
 	}
 
 	/** Exact positivity only; null denotes the complete microbox. */
@@ -193,16 +124,6 @@ final class GasGeometryOverlap {
 				.subtract(plane.threshold());
 	}
 
-	/** Exact normalized volume and signed first moments about the whole-cell centre. */
-	static ExactRational[] normalizedMoments(int micro, List<HalfSpace> planes) {
-		return integrate(micro, planes, 1);
-	}
-
-	/** V, X, Y, Z, XX, XY, XZ, YY, YZ, ZZ, with coordinates about the whole-cell centre. */
-	static ExactRational[] normalizedSecondMoments(int micro, List<HalfSpace> planes) {
-		return integrate(micro, planes, 2);
-	}
-
 	/** Integrates q, x*q and x*x*q; q=c0+c1*x+c2*y+c3*z about the cell centre. The caller supplies q>=0 support. */
 	static ExactRational[] normalizedAffineSecondMoments(int micro, List<HalfSpace> planes, ExactRational[] coefficients) {
 		if (coefficients == null || coefficients.length != 4 || java.util.Arrays.stream(coefficients).anyMatch(Objects::isNull))
@@ -223,214 +144,80 @@ final class GasGeometryOverlap {
 	}
 
 	private static ExactRational[] integrate(int micro, List<HalfSpace> planes, int order) {
-		boolean moments = order > 0;
-		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 12 || planes.stream().anyMatch(Objects::isNull)) {
+		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 12)
 			throw new IllegalArgumentException("Invalid gas overlap microbox or half-spaces");
+		var active = new ArrayList<HalfSpace>(planes.size());
+		boolean axial = true;
+		for (var plane : planes) {
+			Objects.requireNonNull(plane, "Null overlap half-space");
+			var low = cornerDistance(micro, 0, plane);
+			var high = low;
+			int axes = 0;
+			for (int a = 0; a < 3; a++) {
+				var coefficient = normal(plane, a);
+				var spread = coefficient.multiply(SignedDyadic.of(1, -1));
+				if (coefficient.signum() < 0) low = low.add(spread); else high = high.add(spread);
+				if (coefficient.signum() != 0) axes++;
+			}
+			if (high.signum() <= 0 && low.signum() < 0) return zero(order);
+			if (low.signum() >= 0) continue;
+			boolean duplicate = false;
+			for (var previous : active) if (samePlane(previous, plane)) { duplicate = true; break; }
+			if (!duplicate) { active.add(plane); axial &= axes == 1; }
 		}
-		if (planes.size() == 1) return MicroBoxPlaneVolume.dryMoments(micro, planes.getFirst(), order);
-		List<HalfSpace> constraints = List.copyOf(planes);
-		try {
-			Point origin = new Point(ExactRational.of(micro & 1).divide(2), ExactRational.of(micro >>> 1 & 1).divide(2), ExactRational.of(micro >>> 2 & 1).divide(2));
-			ExactRational[] result = new ExactRational[order == 3 ? 20 : order == 2 ? 10 : 4]; java.util.Arrays.fill(result, ExactRational.ZERO);
-			var active = new ArrayList<Plane>(2);
-			HalfSpace singleActive = null;
-			for (HalfSpace halfSpace : constraints) {
-				Plane plane = new Plane(exact(halfSpace.nx), exact(halfSpace.ny), exact(halfSpace.nz), exact(halfSpace.threshold));
-				ExactRational low = plane.distance(origin), high = low;
-				for (int axis = 0; axis < 3; axis++) {
-					ExactRational spread = plane.normal(axis).multiply(HALF);
-					if (spread.signum() < 0) low = low.add(spread); else high = high.add(spread);
-				}
-				if (low.signum() < 0 && high.signum() <= 0) return result;
-				if (low.signum() < 0) { active.add(plane); singleActive = halfSpace; }
-			}
-			if (active.isEmpty()) {
-				result[0] = MICRO_VOLUME;
-				if (moments) for (int axis = 0; axis < 3; axis++)
-					result[axis + 1] = MICRO_VOLUME.multiply(origin.component(axis).subtract(HALF.divide(2)));
-				if (order >= 2) for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) {
-					var product = origin.component(a).subtract(HALF.divide(2)).multiply(origin.component(b).subtract(HALF.divide(2)));
-					result[index++] = MICRO_VOLUME.multiply(a == b ? product.add(ExactRational.ONE.divide(48)) : product);
-				}
-				if (order == 3) {
-					var centre = new ExactRational[3];
-					for (int axis = 0; axis < 3; axis++) centre[axis] = origin.component(axis).subtract(HALF.divide(2));
-					for (int a = 0, index = 10; a < 3; a++) for (int b = a; b < 3; b++) for (int c = b; c < 3; c++) {
-						var product = centre[a].multiply(centre[b]).multiply(centre[c]);
-						if (a == b) product = product.add(centre[c].divide(48));
-						if (a == c) product = product.add(centre[b].divide(48));
-						if (b == c) product = product.add(centre[a].divide(48));
-						result[index++] = MICRO_VOLUME.multiply(product);
-					}
-				}
-				return result;
-			}
-			if (active.size() == 1) return MicroBoxPlaneVolume.dryMoments(micro, singleActive, order);
-			var polyhedron = box(origin);
-			for (Plane plane : active) {
-				polyhedron = clip(polyhedron, plane);
-				if (polyhedron.faces.isEmpty()) return result;
-			}
-			ExactRational sixVolume = ExactRational.ZERO;
-			for (var face : polyhedron.faces) {
-				Point first = polyhedron.vertices.get(face[0]), relative = first.subtract(origin);
-				for (int i = 1; i + 1 < face.length; i++) {
-					Point second = polyhedron.vertices.get(face[i]), third = polyhedron.vertices.get(face[i + 1]);
-					ExactRational determinant = determinant(relative, second.subtract(origin), third.subtract(origin));
-					if (determinant.isZero()) continue;
-					sixVolume = sixVolume.add(determinant);
-					if (moments) for (int axis = 0; axis < 3; axis++) {
-						// A tetrahedron's centroid is the average of its four vertices.
-						ExactRational sum = origin.component(axis).add(first.component(axis))
-								.add(second.component(axis)).add(third.component(axis)).subtract(ExactRational.of(2));
-						result[axis + 1] = result[axis + 1].add(determinant.multiply(sum).divide(24));
-					}
-					if (order >= 2) addHigherMoments(result, determinant, origin, first, second, third);
-				}
-			}
-			ExactRational volume = sixVolume.divide(6);
-			if (volume.signum() < 0 || volume.compareTo(MICRO_VOLUME) > 0) throw new IllegalStateException("Gas overlap polyhedron orientation does not close");
-			result[0] = volume;
-			if (moments) for (int axis = 0; axis < 3; axis++) {
-				ExactRational low = origin.component(axis).subtract(HALF).multiply(volume);
-				ExactRational high = origin.component(axis).multiply(volume);
-				if (result[axis + 1].compareTo(low) < 0 || result[axis + 1].compareTo(high) > 0)
-					throw new IllegalStateException("Overlap first moment lies outside its microbox");
-			}
-			return result;
-		} catch (IllegalArgumentException magnitude) {
-			throw new GasTopologyBlockedException("Exact gas overlap exceeds the rational representation budget: " + magnitude.getMessage());
-		}
+		if (active.size() == 1) return MicroBoxPlaneVolume.dryMoments(micro, active.getFirst(), order);
+		if (axial) return boxMoments(micro, active, order);
+		var work = WORKSPACE.get();
+		work.polyhedron.resetBox(micro, active);
+		work.polyhedron.integrate(order, work.moments);
+		return work.moments.globalMoments(order);
 	}
 
-	private static void addHigherMoments(ExactRational[] result, ExactRational determinant, Point... vertices) {
-		var centered = new ExactRational[4][3];
-		var sum = new ExactRational[]{ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
-		for (int p = 0; p < 4; p++) for (int a = 0; a < 3; a++) {
-			centered[p][a] = vertices[p].component(a).subtract(HALF); sum[a] = sum[a].add(centered[p][a]);
-		}
-		// A simplex quadratic mean is (sum(x)*sum(y) + sum(x*y))/20; signed volume is det/6.
-		var pair = result.length == 20 ? new ExactRational[3][3] : null;
-		for (int a = 0, index = 4; a < 3; a++) for (int b = a; b < 3; b++) {
-			var product = sum[a].multiply(sum[b]);
-			for (int p = 0; p < 4; p++) product = product.add(centered[p][a].multiply(centered[p][b]));
-			result[index] = result[index].add(determinant.multiply(product).divide(120)); index++;
-			if (pair != null) pair[a][b] = pair[b][a] = product.subtract(sum[a].multiply(sum[b]));
-		}
-		if (pair != null) for (int a = 0, index = 10; a < 3; a++) for (int b = a; b < 3; b++) for (int c = b; c < 3; c++) {
-			// The symmetric cubic simplex mean has denominator 4*5*6.
-			var product = sum[a].multiply(sum[b]).multiply(sum[c]).add(sum[a].multiply(pair[b][c]))
-					.add(sum[b].multiply(pair[a][c])).add(sum[c].multiply(pair[a][b]));
-			for (int p = 0; p < 4; p++) product = product.add(centered[p][a].multiply(centered[p][b]).multiply(centered[p][c]).multiply(2));
-			result[index] = result[index].add(determinant.multiply(product).divide(720)); index++;
-		}
+	/** Equal half-spaces may carry different positive normal scales. */
+	private static boolean samePlane(HalfSpace first, HalfSpace second) {
+		int pivot = 0;
+		while (pivot < 3 && normal(first, pivot).signum() == 0) pivot++;
+		if (pivot == 3) return zeroNormal(second) && first.threshold.equals(second.threshold);
+		var a = normal(first, pivot); var b = normal(second, pivot);
+		if (a.signum() != b.signum()) return false;
+		for (int axis = 0; axis < 3; axis++)
+			if (!normal(first, axis).multiply(b).equals(normal(second, axis).multiply(a))) return false;
+		return first.threshold.multiply(b).equals(second.threshold.multiply(a));
+	}
+	private static SignedDyadic normal(HalfSpace plane, int axis) {
+		return axis == 0 ? plane.nx : axis == 1 ? plane.ny : plane.nz;
+	}
+	private static ExactRational[] zero(int order) {
+		var result = new ExactRational[order == 3 ? 20 : order == 2 ? 10 : 4];
+		Arrays.fill(result, ExactRational.ZERO);
+		return result;
 	}
 
-	/** Six outward-oriented rectangles sharing the eight exact box corners. */
-	private static Polyhedron box(Point origin) {
-		var vertices = new ArrayList<Point>(8);
-		for (int corner = 0; corner < 8; corner++) vertices.add(new Point(
-				(corner & 1) == 0 ? origin.x : origin.x.add(HALF),
-				(corner & 2) == 0 ? origin.y : origin.y.add(HALF),
-				(corner & 4) == 0 ? origin.z : origin.z.add(HALF)));
-		var faces = new ArrayList<int[]>(6);
-		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
-			int[] face = new int[4]; int slot = 0;
-			for (int corner : new int[]{0, 1, 3, 2}) face[slot++] = (sign > 0 ? 1 << axis : 0)
-					| (corner & 1) << (axis + 1) % 3 | (corner >>> 1) << (axis + 2) % 3;
-			if (sign < 0) reverse(face);
-			faces.add(face);
+	/** Axis cuts retain exact bounds, including slabs thinner than a global double ULP. */
+	private static ExactRational[] boxMoments(int micro, List<HalfSpace> planes, int order) {
+		var low = new ExactRational[3]; var high = new ExactRational[3];
+		for (int a = 0; a < 3; a++) { low[a] = ExactRational.of(micro >> a & 1).divide(2); high[a] = low[a].add(HALF); }
+		for (var plane : planes) {
+			int a = 0; while (normal(plane, a).signum() == 0) a++;
+			var bound = PlicComponentGeometry.ratio(plane.threshold, normal(plane, a));
+			if (normal(plane, a).signum() > 0) {
+				if (bound.compareTo(low[a]) > 0) low[a] = bound;
+			} else if (bound.compareTo(high[a]) < 0) high[a] = bound;
 		}
-		return new Polyhedron(vertices, faces);
-	}
-
-	private static Polyhedron clip(Polyhedron source, Plane plane) {
-		var distance = new ExactRational[source.vertices.size()]; boolean outside = false, inside = false;
-		for (var face : source.faces) for (int id : face) if (distance[id] == null) {
-			distance[id] = plane.distance(source.vertices.get(id));
-			outside |= distance[id].signum() < 0; inside |= distance[id].signum() > 0;
-		}
-		if (!outside) return source;
-		if (!inside) return EMPTY; // Retaining only a plane has zero three-dimensional measure.
-		var vertices = new ArrayList<>(source.vertices);
-		var vertexIds = new HashMap<Point, Integer>();
-		for (int id = 0; id < vertices.size(); id++) vertexIds.put(vertices.get(id), id);
-		var intersections = new HashMap<Long, Integer>();
-		var faces = new ArrayList<int[]>(source.faces.size() + 1); var boundary = new LinkedHashSet<Integer>();
-		for (var face : source.faces) {
-			var clipped = new ArrayList<Integer>(face.length + 1); int previous = face[face.length - 1];
-			for (int id : face) {
-				if ((distance[id].signum() >= 0) != (distance[previous].signum() >= 0)) {
-					int intersection;
-					if (distance[id].isZero()) intersection = id;
-					else if (distance[previous].isZero()) intersection = previous;
-					else {
-						int first = Math.min(previous, id), second = Math.max(previous, id);
-						long edge = (long) first << 32 | second; Integer saved = intersections.get(edge);
-						if (saved != null) intersection = saved;
-						else {
-							var point = vertices.get(previous).interpolate(vertices.get(id), divide(distance[previous], distance[previous].subtract(distance[id])));
-							Integer existing = vertexIds.get(point);
-							if (existing != null) intersection = existing;
-							else { intersection = vertices.size(); vertices.add(point); vertexIds.put(point, intersection); }
-							intersections.put(edge, intersection);
-						}
-					}
-					append(clipped, intersection); boundary.add(intersection);
-				}
-				if (distance[id].signum() >= 0) append(clipped, id);
-				if (distance[id].isZero()) boundary.add(id);
-				previous = id;
+		var result = zero(order);
+		for (int a = 0; a < 3; a++) if (high[a].compareTo(low[a]) <= 0) return result;
+		var axis = new ExactRational[3][order + 1];
+		for (int a = 0; a < 3; a++) {
+			var lo = low[a].subtract(HALF); var hi = high[a].subtract(HALF);
+			var loPower = ExactRational.ONE; var hiPower = ExactRational.ONE;
+			for (int degree = 0; degree <= order; degree++) {
+				loPower = loPower.multiply(lo); hiPower = hiPower.multiply(hi);
+				axis[a][degree] = hiPower.subtract(loPower).divide(degree + 1);
 			}
-			if (clipped.size() > 1 && clipped.getFirst().equals(clipped.getLast())) clipped.removeLast();
-			if (clipped.size() >= 3) faces.add(clipped.stream().mapToInt(Integer::intValue).toArray());
 		}
-		int axis = 0; while (plane.normal(axis).isZero()) axis++;
-		int[] cap = hull(boundary, vertices, axis);
-		if (cap.length < 3) throw new IllegalStateException("A gas overlap cut lacks its closing face");
-		if (plane.normal(axis).signum() > 0) reverse(cap); // Retained support is +n; the outward cap is -n.
-		faces.add(cap);
-		return new Polyhedron(vertices, faces);
-	}
-
-	/** Coplanar projected convex hull, with exact orientation and no angular sorting. */
-	private static int[] hull(LinkedHashSet<Integer> boundary, List<Point> vertices, int axis) {
-		int tangent = (axis + 1) % 3, other = (axis + 2) % 3;
-		var points = new ArrayList<>(boundary);
-		points.sort(Comparator.comparing((Integer id) -> vertices.get(id).component(tangent))
-				.thenComparing(id -> vertices.get(id).component(other)));
-		var lower = new ArrayList<Integer>(); var upper = new ArrayList<Integer>();
-		for (int id : points) hullAppend(lower, id, vertices, tangent, other);
-		for (int i = points.size() - 1; i >= 0; i--) hullAppend(upper, points.get(i), vertices, tangent, other);
-		if (!lower.isEmpty()) lower.removeLast();
-		if (!upper.isEmpty()) upper.removeLast();
-		lower.addAll(upper);
-		return lower.stream().mapToInt(Integer::intValue).toArray();
-	}
-	private static void hullAppend(List<Integer> hull, int id, List<Point> vertices, int tangent, int other) {
-		while (hull.size() >= 2 && turn(vertices.get(hull.get(hull.size() - 2)), vertices.get(hull.getLast()), vertices.get(id), tangent, other).signum() <= 0)
-			hull.removeLast();
-		hull.add(id);
-	}
-	private static ExactRational turn(Point a, Point b, Point c, int tangent, int other) {
-		return b.component(tangent).subtract(a.component(tangent)).multiply(c.component(other).subtract(a.component(other)))
-				.subtract(b.component(other).subtract(a.component(other)).multiply(c.component(tangent).subtract(a.component(tangent))));
-	}
-	private static void append(List<Integer> polygon, int id) {
-		if (polygon.isEmpty() || polygon.getLast() != id) polygon.add(id);
-	}
-	private static void reverse(int[] polygon) {
-		for (int first = 0, last = polygon.length - 1; first < last; first++, last--) {
-			int saved = polygon[first]; polygon[first] = polygon[last]; polygon[last] = saved;
-		}
-	}
-	static ExactRational determinant(Point a, Point b, Point c) {
-		return a.x.multiply(b.y.multiply(c.z).subtract(b.z.multiply(c.y)))
-				.add(a.y.multiply(b.z.multiply(c.x).subtract(b.x.multiply(c.z))))
-				.add(a.z.multiply(b.x.multiply(c.y).subtract(b.y.multiply(c.x))));
-	}
-	private static ExactRational divide(ExactRational a, ExactRational b) {
-		return new ExactRational(a.numerator().multiply(b.denominator()), a.denominator().multiply(b.numerator()));
+		for (int i = 0; i < (order == 0 ? 1 : result.length); i++)
+			result[i] = axis[0][POWERS[i][0]].multiply(axis[1][POWERS[i][1]]).multiply(axis[2][POWERS[i][2]]);
+		return result;
 	}
 	private static ExactRational exact(SignedDyadic value) {
 		long exponent = value.exponent();

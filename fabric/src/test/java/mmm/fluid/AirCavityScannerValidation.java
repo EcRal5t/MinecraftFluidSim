@@ -575,9 +575,8 @@ public final class AirCavityScannerValidation {
 					second.add(new GasGeometryOverlap.HalfSpace(band[0], band[1], band[2], upper));
 				}
 				var expected = ExactRational.ONE.divide(16L << scene);
-				check(GasGeometryOverlap.normalizedVolume(0, first).equals(expected)
-						&& GasGeometryOverlap.normalizedVolume(0, second).equals(expected),
-						"Sloped connectivity fixture changed its two positive analytic volumes");
+				checkGeometryMoment(GasGeometryOverlap.normalizedVolume(0, first), expected, expected, "First sloped analytic volume");
+				checkGeometryMoment(GasGeometryOverlap.normalizedVolume(0, second), expected, expected, "Second sloped analytic volume");
 				check(GasFaceIntersection.connected(0, List.of(first, second)) == (scene == 0)
 						&& GasFaceIntersection.connected(0, List.of(second, first)) == (scene == 0),
 						"Sloped dry connectivity confused positive area, edge contact or separation");
@@ -587,6 +586,7 @@ public final class AirCavityScannerValidation {
 
 	private static void validateMicroGasOverlap() {
 		validateQuadraticMicroMoments();
+		validateThinObliqueIntersections();
 		var zero=mmm.units.SignedDyadic.ZERO;
 		var one=mmm.units.SignedDyadic.of(1);
 		var quarter=mmm.units.SignedDyadic.of(.25);
@@ -598,7 +598,7 @@ public final class AirCavityScannerValidation {
 			var wet=new GasGeometryOverlap.HalfSpace(tinyNormal.negate(),one.negate(),zero,mmm.units.SignedDyadic.of(-offset));
 			var measured=GasGeometryOverlap.normalizedVolume(0,List.of(wet));
 			check(measured.equals(offset==inverse.lower()?inverse.lowerVolume():inverse.upperVolume()),"PLIC inverse certificate differs from independent polyhedron volume");
-			check(measured.equals(GasGeometryOverlap.normalizedVolume(0,List.of(wet,wet))),
+			checkGeometryMoment(GasGeometryOverlap.normalizedVolume(0,List.of(wet,wet)), measured, measured,
 					"Coincident thin gas planes differ from the certified single-plane volume");
 			check(GasGeometryOverlap.hasPositiveOverlap(0,wet,wet)==(measured.signum()>0),
 					"Coincident extreme-tail planes changed overlap positivity");
@@ -669,20 +669,56 @@ public final class AirCavityScannerValidation {
 		constraints.add(new GasGeometryOverlap.HalfSpace(zero,zero,zero,zero));
 		constraints.add(new GasGeometryOverlap.HalfSpace(zero,zero,zero,one));
 		for(int slot=0;slot<8;slot++) for(var before:constraints) {
-			var beforeVolume=GasGeometryOverlap.normalizedVolume(slot,List.of(before));
+			var beforeVolume=GasGeometryReference.normalizedVolume(slot,List.of(before));
 			check(GasGeometryOverlap.hasPositiveOverlap(slot,before,null)
 					==(beforeVolume.signum()>0),"Single-plane positivity differs from exact volume");
 			for(var after:constraints) {
-				var afterVolume=GasGeometryOverlap.normalizedVolume(slot,List.of(after));
-				var exactOverlap=GasGeometryOverlap.normalizedVolume(slot,List.of(before,after));
+				var afterVolume=GasGeometryReference.normalizedVolume(slot,List.of(after));
+				var exactOverlap=GasGeometryReference.normalizedVolume(slot,List.of(before,after));
+				checkGeometryMoment(GasGeometryOverlap.normalizedVolume(slot,List.of(before,after)), exactOverlap, exactOverlap,
+						"Numerical gas intersection differs from the independent exact volume");
 				check(GasGeometryOverlap.hasPositiveOverlap(slot,before,after)
 						==(exactOverlap.signum()>0),"Two-plane positivity differs from exact volume");
 				var firstPiece=new GasComplementGeometry.Piece(slot,0,slot,beforeVolume.toDouble(),beforeVolume,before,null);
 				var secondPiece=new GasComplementGeometry.Piece(slot,0,slot,afterVolume.toDouble(),afterVolume,after,null);
-				check(GasTopologyCoordinator.overlapVolume(firstPiece,secondPiece).equals(exactOverlap),
-						"Certified gas containment differs from the independent exact intersection volume");
+				checkGeometryMoment(GasTopologyCoordinator.overlapVolume(firstPiece,secondPiece), exactOverlap, exactOverlap,
+						"Gas containment differs from the independent exact intersection volume");
 			}
 		}
+	}
+
+	private static void validateThinObliqueIntersections() {
+		var width = SignedDyadic.of(1, -80);
+		var threshold = SignedDyadic.of(.875).subtract(width);
+		var corner = List.of(new GasGeometryOverlap.HalfSpace(SignedDyadic.of(1), SignedDyadic.of(.5), SignedDyadic.of(.25), threshold),
+				new GasGeometryOverlap.HalfSpace(SignedDyadic.of(.5), SignedDyadic.of(1), SignedDyadic.of(.25), threshold));
+		var cornerVolume = GasGeometryReference.normalizedVolume(0, corner);
+		check(cornerVolume.signum() > 0, "Thin upper-corner fixture lacks positive volume");
+		checkGeometryMoment(GasGeometryOverlap.normalizedVolume(0, corner), cornerVolume, cornerVolume,
+				"Two oblique cuts lost their sub-ULP upper-corner volume");
+		var normal = new SignedDyadic[]{SignedDyadic.of((double) .1F), SignedDyadic.of((double) .3F), SignedDyadic.of((double) .7F)};
+		var lower = SignedDyadic.of(.3);
+		var slab = List.of(new GasGeometryOverlap.HalfSpace(normal[0], normal[1], normal[2], lower),
+				new GasGeometryOverlap.HalfSpace(normal[0].negate(), normal[1].negate(), normal[2].negate(), lower.add(width).negate()));
+		var actual = GasGeometryOverlap.normalizedSecondMoments(0, slab);
+		var expected = GasGeometryReference.normalizedSecondMoments(0, slab);
+		var inverseWidthSquared = capacityRational(SignedDyadic.of(1, 160));
+		var referenceVariance = projectedVariance(expected, normal).multiply(inverseWidthSquared);
+		check(referenceVariance.signum() > 0, "Oblique thin-slab fixture lacks positive normal variance");
+		checkGeometryMoment(projectedVariance(actual, normal).multiply(inverseWidthSquared), referenceVariance, referenceVariance,
+				"Global moments lost the thin variance along a non-binary oblique normal");
+	}
+	private static ExactRational projectedVariance(ExactRational[] moments, SignedDyadic[] normal) {
+		var inverse = new ExactRational(moments[0].denominator(), moments[0].numerator());
+		var mean = ExactRational.ZERO; var square = ExactRational.ZERO;
+		for (int a = 0; a < 3; a++) {
+			var n = capacityRational(normal[a]); mean = mean.add(n.multiply(moments[a + 1]).multiply(inverse));
+			for (int b = 0; b < 3; b++) {
+				int i = Math.min(a, b), j = Math.max(a, b), index = i == 0 ? j + 4 : i == 1 ? j + 6 : 9;
+				square = square.add(n.multiply(capacityRational(normal[b])).multiply(moments[index]).multiply(inverse));
+			}
+		}
+		return square.subtract(mean.multiply(mean));
 	}
 
 	private static void validateQuadraticMicroMoments() {
@@ -733,10 +769,10 @@ public final class AirCavityScannerValidation {
 			var tangent = new GasGeometryOverlap.HalfSpace(normal[0].negate(), normal[1].negate(), normal[2].negate(), SignedDyadic.of(-1, -2));
 			for (var value : GasGeometryOverlap.normalizedSecondMoments(0, List.of(lower, tangent)))
 				check(value.isZero(), "Tangential overlap acquired a quadratic measure");
-			check(GasGeometryOverlap.positiveQuadrature(0, List.of(lower, tangent)).isEmpty(), "Tangential overlap acquired positive integration nodes");
+			check(GasGeometryReference.positiveQuadrature(0, List.of(lower, tangent)).isEmpty(), "Tangential overlap acquired positive integration nodes");
 		}
 	}
-	/** Equivalent active planes force the independent generic polyhedron path through degree three. */
+	/** The test-side rational polyhedron independently checks the exact single-plane formula through degree three. */
 	static void validateSinglePlaneMoments() {
 		double[][] normals = {{0,0,0},{1,0,0},{0,-2,0},{1,-2,0},{0,1,-3},{1,-2,3},{-1,2,-3},
 				{Float.MIN_VALUE,1,0},{Float.MAX_VALUE,-Float.MIN_VALUE,1}};
@@ -766,16 +802,24 @@ public final class AirCavityScannerValidation {
 				}
 				check(java.util.Arrays.equals(java.util.Arrays.copyOf(expected,10), GasGeometryOverlap.normalizedSecondMoments(micro,List.of(plane))),
 						"Single-plane overlap integration changed its quadratic prefix");
-				check(java.util.Arrays.equals(GasGeometryOverlap.normalizedAffineSecondMoments(micro,List.of(plane),affine),
-						GasGeometryOverlap.normalizedAffineSecondMoments(micro,genericPlanes,affine)), "Single-plane affine-weighted moments differ from polyhedron");
+				var expectedAffine = GasGeometryReference.normalizedAffineSecondMoments(micro,genericPlanes,affine);
+				check(java.util.Arrays.equals(GasGeometryOverlap.normalizedAffineSecondMoments(micro,List.of(plane),affine), expectedAffine),
+						"Single-plane affine-weighted moments differ from polyhedron");
+				var numerical = GasGeometryOverlap.normalizedSecondMoments(micro,genericPlanes);
+				var numericalAffine = GasGeometryOverlap.normalizedAffineSecondMoments(micro,genericPlanes,affine);
+				for (int i = 0; i < numerical.length; i++) {
+					checkGeometryMoment(numerical[i], expected[i], expected[0], "Generic quadratic moment " + i);
+					// |2+x/3-2y/5+3z/7| < 4 on the centered unit cube.
+					checkGeometryMoment(numericalAffine[i], expectedAffine[i], expected[0].multiply(4), "Generic affine-weighted moment " + i);
+				}
 			}
 		}
 	}
 	private static ExactRational[] genericCubicMoments(int micro, List<GasGeometryOverlap.HalfSpace> planes) {
-		var quadratic = GasGeometryOverlap.normalizedSecondMoments(micro, planes); var result = java.util.Arrays.copyOf(quadratic,20);
+		var quadratic = GasGeometryReference.normalizedSecondMoments(micro, planes); var result = java.util.Arrays.copyOf(quadratic,20);
 		for (int a = 0, index = 10; a < 3; a++) {
 			var q = new ExactRational[]{ExactRational.of(2),ExactRational.ZERO,ExactRational.ZERO,ExactRational.ZERO}; q[a+1] = ExactRational.ONE;
-			var weighted = GasGeometryOverlap.normalizedAffineSecondMoments(micro, planes, q);
+			var weighted = GasGeometryReference.normalizedAffineSecondMoments(micro, planes, q);
 			for (int b = a; b < 3; b++) for (int c = b; c < 3; c++) {
 				int second = b == 0 ? 4+c : b == 1 ? 6+c : 9;
 				result[index++] = weighted[second].subtract(quadratic[second].multiply(2));
@@ -783,12 +827,20 @@ public final class AirCavityScannerValidation {
 		}
 		return result;
 	}
+	/** The numerical polyhedron contract is O(1e-14 V); positivity and exact zero remain separate assertions. */
+	private static void checkGeometryMoment(ExactRational actual, ExactRational expected, ExactRational volume, String what) {
+		if (volume.isZero()) { check(actual.isZero(), what + ": empty geometry acquired a moment"); return; }
+		double scale = volume.toDouble(), error = Math.abs(actual.subtract(expected).toDouble());
+		double bound = 128 * Math.ulp(scale);
+		check(Double.isFinite(error) && error <= bound,
+				what + ": error=" + error + ", volume=" + scale + ", bound=" + bound);
+	}
 
 	private static void checkQuadraticPrefix(int micro, List<GasGeometryOverlap.HalfSpace> planes, ExactRational[] quadratic) {
 		check(quadratic[0].equals(GasGeometryOverlap.normalizedVolume(micro, planes)), "Quadratic integration changed its volume");
 		var first = GasGeometryOverlap.normalizedMoments(micro, planes);
 		for (int i = 0; i < 4; i++) check(quadratic[i].equals(first[i]), "Quadratic integration changed a retained first moment");
-		var rule = GasGeometryOverlap.positiveQuadrature(micro, planes);
+		var rule = GasGeometryReference.positiveQuadrature(micro, planes);
 		var volume = ExactRational.ZERO; var observed = new double[10];
 		for (var point : rule) {
 			check(point.volume().signum() > 0, "Wet quadrature has a nonpositive weight");

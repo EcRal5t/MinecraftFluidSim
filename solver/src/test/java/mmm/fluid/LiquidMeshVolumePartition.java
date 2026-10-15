@@ -3,7 +3,7 @@ package mmm.fluid;
 import java.util.ArrayList;
 import java.util.List;
 import mmm.chemistry.ExactRational;
-import mmm.fluid.GasGeometryOverlap.Point;
+import mmm.fluid.GasGeometryReference.Point;
 
 /** Exact reference remapping between positive tetrahedral decompositions of equal volume. */
 final class LiquidMeshVolumePartition {
@@ -64,6 +64,6 @@ final class LiquidMeshVolumePartition {
 		if (bound.compareTo(exactBound) < 0) bound = PlicComponentGeometry.ratio(mmm.units.SignedDyadic.of(Math.nextUp(observed)), mmm.units.SignedDyadic.of(1));
 		return bound;
 	}
-	private static ExactRational determinant(List<Point> vertices) { return GasGeometryOverlap.determinant(vertices.get(1).subtract(vertices.get(0)), vertices.get(2).subtract(vertices.get(0)), vertices.get(3).subtract(vertices.get(0))); }
+	private static ExactRational determinant(List<Point> vertices) { return GasGeometryReference.determinant(vertices.get(1).subtract(vertices.get(0)), vertices.get(2).subtract(vertices.get(0)), vertices.get(3).subtract(vertices.get(0))); }
 	private static ExactRational divide(ExactRational a, ExactRational b) { return new ExactRational(a.numerator().multiply(b.denominator()), a.denominator().multiply(b.numerator())); }
 }

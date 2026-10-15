@@ -554,8 +554,10 @@ public final class CellRemapMomentsValidation {
 				double[] q = {sign * intercept, 0, sign * 1024};
 				var high = LiquidAffineSweepGeometry.sweptExactMoments(domain, donor, next, flowAxis, sign > 0,
 						q[0], q[1], q[2], 1.0 / 2048, 255, 255);
-				check(high[0].equals(intercept == 0 ? mmm.chemistry.ExactRational.ONE.divide(16384)
-						: mmm.chemistry.ExactRational.of(9).divide(262144)), "Thin wet geometry lost its affine trace correlation");
+				var expectedThin = intercept == 0 ? mmm.chemistry.ExactRational.ONE.divide(16384)
+						: mmm.chemistry.ExactRational.of(9).divide(262144);
+				check(Math.abs(high[0].subtract(expectedThin).toDouble()) <= 128 * Math.ulp(expectedThin.toDouble()),
+						"Thin wet geometry lost its affine trace correlation");
 				double[][] thinCoefficients = new double[3][4 * thinBasis.blockCount()];
 				thinCoefficients[flowAxis][4 * donor] = sign * (8 + intercept);
 				thinCoefficients[flowAxis][4 * donor + thinAxis + 1] = sign * 1024;
@@ -1972,10 +1974,10 @@ public final class CellRemapMomentsValidation {
 				expectedHigh[i] = expectedHigh[i].add(part);
 			}
 		}
-		check(java.util.Arrays.equals(high, expectedHigh), "Saved wet union affine V/M1/M2 differ from independent box integrals");
+		checkGeometryMoments(high, expectedHigh, "Saved wet union affine V/M1/M2 differ from independent box integrals");
 		var reversing = new double[]{-.5, 1, 0};
-		check(java.util.Arrays.equals(reverseHigh, LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, 0, true,
-				reversing[0], reversing[1], reversing[2], dt, 255, 255)), "Reversing affine flow mixed opposite wet source pieces");
+		checkGeometryMoments(LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, 0, true,
+				reversing[0], reversing[1], reversing[2], dt, 255, 255), reverseHigh, "Reversing affine flow mixed opposite wet source pieces");
 		var saved = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, receiver, 0, true, q, dt, 255);
 		check(java.util.Arrays.equals(saved.sum(0, true, 255, 255), java.util.Arrays.copyOf(high, 4)), "Saved union micro sweep changed its exact moments");
 		double[] swept = new double[8], cached = new double[8];
@@ -1992,6 +1994,11 @@ public final class CellRemapMomentsValidation {
 
 	private static double[] sourceWet(FluidDomain domain, int donor) {
 		var result = new double[8]; LiquidAffineSweepGeometry.sourceWetMicroVolumes(domain, donor, 255, result); return result;
+	}
+	private static void checkGeometryMoments(mmm.chemistry.ExactRational[] actual, mmm.chemistry.ExactRational[] expected, String message) {
+		double bound = 128 * Math.ulp(expected[0].toDouble());
+		for (int i = 0; i < expected.length; i++) check(expected[0].isZero() ? actual[i].isZero()
+				: Math.abs(actual[i].subtract(expected[i]).toDouble()) <= bound, message + " at moment " + i);
 	}
 	private static void check(boolean valid, String message) { if (!valid) throw new AssertionError(message); }
 }

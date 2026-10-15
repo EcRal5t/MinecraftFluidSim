@@ -176,7 +176,7 @@ final class LiquidSpatialInput {
 	LiquidPressureGeometry geometry() { return geometry; }
 	GasRuntimeGeometry frame() { return frame; }
 	/** Independent positive volume rule about the whole-cell centre. */
-	List<GasGeometryOverlap.QuadraturePoint> componentQuadrature(int cell, int support) {
+	List<GasGeometryReference.QuadraturePoint> componentQuadrature(int cell, int support) {
 		if (cell < 0 || cell >= components.length || support <= 0 || support > 255
 				|| (support & frame.geometry().collisionMask(cell)) != 0)
 			throw new IllegalArgumentException("Quadrature support must contain open microboxes");
@@ -184,11 +184,11 @@ final class LiquidSpatialInput {
 		boolean full = support == 255;
 		for (int micro = 0; micro < 8 && full; micro++)
 			full = LiquidShapeGeometry.wetSupports(phase, cell, micro).equals(List.of(List.of()));
-		if (full) return GasGeometryOverlap.fullCellQuadrature();
-		var result = new ArrayList<GasGeometryOverlap.QuadraturePoint>();
+		if (full) return GasGeometryReference.fullCellQuadrature();
+		var result = new ArrayList<GasGeometryReference.QuadraturePoint>();
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0)
 			for (var planes : LiquidShapeGeometry.wetSupports(phase, cell, micro))
-				result.addAll(GasGeometryOverlap.positiveQuadrature(micro, planes));
+				result.addAll(GasGeometryReference.positiveQuadrature(micro, planes));
 		return List.copyOf(result);
 	}
 	Piece piece(int key) {

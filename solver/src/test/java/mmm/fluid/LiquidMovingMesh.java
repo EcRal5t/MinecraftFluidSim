@@ -6,7 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.TreeSet;
 import mmm.chemistry.ExactRational;
-import mmm.fluid.GasGeometryOverlap.Point;
+import mmm.fluid.GasGeometryReference.Point;
 
 /** Exact reference for common wet-box meshes, affine face traces, and positive local remapping. */
 final class LiquidMovingMesh {
@@ -174,12 +174,12 @@ final class LiquidMovingMesh {
 	private static ExactRational sweptVolume(Face face, HashMap<Point, Point> moved) {
 		var before = face.corners; var after = before.stream().map(moved::get).toList();
 		var volume = ExactRational.ZERO;
-		for (var triangle : triangles(face, moved)) volume = volume.add(GasGeometryOverlap.determinant(triangle.get(0), triangle.get(1), triangle.get(2)).divide(6));
+		for (var triangle : triangles(face, moved)) volume = volume.add(GasGeometryReference.determinant(triangle.get(0), triangle.get(1), triangle.get(2)).divide(6));
 		for (int i = 0; i < 4; i++) {
 			int next = (i + 1) % 4;
-			volume = volume.subtract(GasGeometryOverlap.determinant(mean(before), before.get(i), before.get(next)).divide(6));
+			volume = volume.subtract(GasGeometryReference.determinant(mean(before), before.get(i), before.get(next)).divide(6));
 			var side = List.of(before.get(i), before.get(next), after.get(next), after.get(i)); var anchor = mean(side);
-			for (int e = 0; e < 4; e++) volume = volume.add(GasGeometryOverlap.determinant(anchor, side.get(e), side.get((e + 1) % 4)).divide(6));
+			for (int e = 0; e < 4; e++) volume = volume.add(GasGeometryReference.determinant(anchor, side.get(e), side.get((e + 1) % 4)).divide(6));
 		}
 		return volume;
 	}
