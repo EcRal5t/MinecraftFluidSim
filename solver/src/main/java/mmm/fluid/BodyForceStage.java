@@ -1,7 +1,6 @@
 package mmm.fluid;
 
 import java.util.Map;
-import java.util.Arrays;
 
 import mmm.granular.GranularDepositStore;
 import mmm.granular.GranularLimits;
@@ -50,17 +49,30 @@ final class BodyForceStage {
 
 	private final Workspace state;
 	private final Access access;
-	private double[] markerVerticalIncrement = new double[0];
-	private final double[] faceVerticalIncrement;
+	private double[][] markerIncrement;
+	private double[][] faceIncrement;
 	private boolean markerPredictionReady;
 
 	/** Physical marker acceleration and the MAC increments already applied for observation. */
-	record MarkerPrediction(double[] verticalIncrement, double[] faceVerticalIncrement) { }
+	record MarkerPrediction(double[][] markerIncrement, double[][] faceIncrement) { }
 
 	BodyForceStage(Workspace state, Access access) {
 		this.state = state;
 		this.access = access;
-		faceVerticalIncrement = new double[state.mac.velocityY.length];
+	}
+	void beginMarkerPrediction() {
+		markerIncrement = new double[3][state.particles.count()];
+		faceIncrement = new double[][]{new double[state.mac.velocityX.length], new double[state.mac.velocityY.length], new double[state.mac.velocityZ.length]};
+		markerPredictionReady = true;
+	}
+	void addMarkerPrediction(double[][] markers, double[][] faces) {
+		if (!markerPredictionReady) beginMarkerPrediction();
+		for (int axis = 0; axis < 3; axis++) {
+			if (markers[axis].length != markerIncrement[axis].length || faces[axis].length != faceIncrement[axis].length)
+				throw new IllegalArgumentException("Mechanical prediction layout changed");
+			for (int i = 0; i < markers[axis].length; i++) markerIncrement[axis][i] += markers[axis][i];
+			for (int i = 0; i < faces[axis].length; i++) faceIncrement[axis][i] += faces[axis][i];
+		}
 	}
 
 	void applyGranularPorousDamping(float dt) {
@@ -119,10 +131,8 @@ final class BodyForceStage {
 	}
 
 	void applyGravity(float dt) {
-		markerVerticalIncrement = new double[state.particles.count()];
-		Arrays.fill(markerVerticalIncrement, -state.config.gravity() * (double) dt);
-		Arrays.fill(faceVerticalIncrement, 0);
-		markerPredictionReady = true;
+		if (!markerPredictionReady) beginMarkerPrediction();
+		for (int marker = 0; marker < state.particles.count(); marker++) markerIncrement[1][marker] -= state.config.gravity() * (double) dt;
 		float impulse = state.config.gravity() * dt;
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
@@ -131,7 +141,7 @@ final class BodyForceStage {
 			if (open > 0 && (state.mac.p2gWeightY[face] > 0 || access.carrierFaceActive(below, above, open))) {
 				float before = state.mac.velocityY[face];
 				state.mac.velocityY[face] -= impulse;
-				faceVerticalIncrement[face] = (double) state.mac.velocityY[face] - before;
+				faceIncrement[1][face] += (double) state.mac.velocityY[face] - before;
 			}
 		}
 	}
@@ -141,8 +151,8 @@ final class BodyForceStage {
 		if (!access.thermalActive() || state.particles.count() == 0 || state.config.gravity() == 0.0F) return;
 		LiquidCarrierProperties properties = access.thermalBuoyancyProperties();
 		double scale = state.config.gravity() * (double) dt;
-		if (markerPredictionReady) for (int marker = 0; marker < markerVerticalIncrement.length; marker++)
-			markerVerticalIncrement[marker] += scale * access.thermalMarkerRelativeBuoyancy(marker);
+		if (markerPredictionReady) for (int marker = 0; marker < markerIncrement[1].length; marker++)
+			markerIncrement[1][marker] += scale * access.thermalMarkerRelativeBuoyancy(marker);
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
 			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
 			int face = access.yFaceIndex(x, y, z);
@@ -154,16 +164,16 @@ final class BodyForceStage {
 			else continue;
 			float before = state.mac.velocityY[face];
 			state.mac.velocityY[face] += (float) (scale * relative);
-			if (markerPredictionReady) faceVerticalIncrement[face] += (double) state.mac.velocityY[face] - before;
+			if (markerPredictionReady) faceIncrement[1][face] += (double) state.mac.velocityY[face] - before;
 		}
 	}
 
 	/** Each pressure preparation receives the current body-force prediction once. */
 	MarkerPrediction takeMarkerPrediction() {
-		if (!markerPredictionReady) return new MarkerPrediction(new double[state.particles.count()], new double[faceVerticalIncrement.length]);
-		if (markerVerticalIncrement.length != state.particles.count()) throw new IllegalStateException("Body-force marker layout changed");
+		if (!markerPredictionReady) beginMarkerPrediction();
+		if (markerIncrement[0].length != state.particles.count()) throw new IllegalStateException("Body-force marker layout changed");
 		markerPredictionReady = false;
-		return new MarkerPrediction(markerVerticalIncrement.clone(), faceVerticalIncrement.clone());
+		return new MarkerPrediction(markerIncrement, faceIncrement);
 	}
 
 	/** Mass average on the same trilinear P2G support for faces beyond the cell-centred carrier footprint. */

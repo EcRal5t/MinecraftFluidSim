@@ -70,6 +70,7 @@ final class MechanicalStepPipeline {
 	SubstepOutcome substep(float dt, int substep, boolean captureAudit, MechanicalAuditAccumulator audit) {
 		diagnosticStage = Stage.GRID_REBUILD;
 		access.ensureGrid();
+		bodyForceStage.beginMarkerPrediction();
 		double stageKineticEnergy = captureAudit ? access.gridAndGranularKineticEnergyJoules() : 0.0;
 		if (captureAudit) audit.particleToGridTransferJoules +=
 				stageKineticEnergy - access.carrierKineticEnergyJoules();

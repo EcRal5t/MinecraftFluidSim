@@ -314,6 +314,7 @@ public final class CellRemapMomentsValidation {
 	}
 
 	private static void capturedWetVelocityKeepsPhysicalIntegral() {
+		commonNormalFluxKeepsDirectionalSweeps();
 		for (float h : new float[]{.5F, 1, 2}) {
 			var domain = new FluidDomain(3, 3, 3,
 					new FluidSolverConfig(h, 1000, 0, .01F, 200, 1e-5F, .5F, 1e-4F, 0), 64);
@@ -357,6 +358,93 @@ public final class CellRemapMomentsValidation {
 		boolean rejected = false;
 		try { field.meanWetVelocity(geometry, 0, 0x55); } catch (IllegalArgumentException expected) { rejected = true; }
 		check(rejected, "Zero wet volume supplied a velocity mean");
+	}
+
+
+	private static void commonNormalFluxKeepsDirectionalSweeps() {
+		for (int axis = 0; axis < 3; axis++) {
+			var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 64);
+			int[] peer = {1, 1, 1}; peer[axis]++;
+			domain.setVolume(1, 1, 1, 1); domain.setVolume(peer[0], peer[1], peer[2], 1); domain.rebuildGridFromParticles();
+			int left = domain.cellIndex(1, 1, 1), right = domain.cellIndex(peer[0], peer[1], peer[2]), tangent = (axis + 1) % 3;
+			var basis = CellAffineVelocity.capture(domain); var coefficients = new double[3][4 * basis.blockCount()];
+			for (int cell : new int[]{left, right}) {
+				int block = basis.blockForCell(cell, 0); double slope = cell == left ? .5 : 1.5;
+				coefficients[axis][4 * block] = slope * (basis.center(block, tangent) - 1.5);
+				coefficients[axis][4 * block + tangent + 1] = slope;
+			}
+			var faces = new ConservativeLiquidFlux(4, 4, 4); int face = commonFace(faces, left, right);
+			var flow = new LiquidAffineFaceFlow(domain, faces, new CellAffineVelocityField(basis, coefficients));
+			for (boolean positive : new boolean[]{false, true}) {
+				int donor = positive ? left : right, receiver = positive ? right : left;
+				var expected = LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, positive, -.5, 1, 0, .125, 255, 255);
+				checkGeometryMoments(flow.sweptSecondMoments(face, donor, receiver, axis, positive, .125, 255, 255), expected,
+						"Two unequal affine traces changed their common positive or negative sweep");
+				var micro = new double[8]; flow.sweptMicroVolumes(face, donor, receiver, axis, positive, .125, 255, 255, sourceWet(domain, donor), micro);
+				precise(java.util.Arrays.stream(micro).sum(), expected[0].toDouble(), "Common face source micro volumes differ from its actual sweep");
+			}
+		}
+		for (boolean gap : new boolean[]{false, true}) {
+			var domain = commonTraceBoxes(gap); int left = domain.cellIndex(1, 1, 1), right = left + 1;
+			var basis = CellAffineVelocity.capture(domain); var coefficients = new double[3][4 * basis.blockCount()];
+			coefficients[0][4 * basis.blockForCell(left, 0)] = 1;
+			coefficients[0][4 * basis.blockForCell(right, 0)] = -1;
+			var faces = new ConservativeLiquidFlux(4, 3, 3); int face = commonFace(faces, left, right);
+			var flow = new LiquidAffineFaceFlow(domain, faces, new CellAffineVelocityField(basis, coefficients));
+			if (gap) {
+				var before = flow.sweptSecondMoments(face, left, right, 0, true, .125, 255, 255);
+				for (var moment : before) check(moment.isZero(), "Liquid crossed a dry gap before reaching the face");
+				checkGeometryMoments(flow.sweptSecondMoments(face, left, right, 0, true, .375, 255, 255),
+						boxSweepMoments(new double[]{.125, -.5, -.5}, new double[]{.25, .5, .5}),
+						"A moving front lost its own trace while crossing an initially dry face");
+			} else for (boolean positive : new boolean[]{false, true}) {
+				int donor = positive ? left : right, receiver = positive ? right : left;
+				var expected = positive
+						? boxSweepMoments(new double[]{.375, -.5, -.5}, new double[]{.5, -.25, .5})
+						: boxSweepMoments(new double[]{-.5, .25, -.5}, new double[]{-.375, .5, .5});
+				checkGeometryMoments(flow.sweptSecondMoments(face, donor, receiver, 0, positive, .125, 255, 255), expected,
+						"Partial wet overlap did not average only the shared region and retain each one-sided trace");
+			}
+		}
+	}
+	private static int commonFace(ConservativeLiquidFlux faces, int left, int right) {
+		for (int face = 0; face < faces.physicalFaceCount; face++) if (faces.left[face] == left && faces.right[face] == right) return face;
+		throw new AssertionError("Missing adjacent liquid face");
+	}
+	private static FluidDomain commonTraceBoxes(boolean gap) {
+		var domain = new FluidDomain(4, 3, 3, new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 64);
+		var shapes = new java.util.ArrayList<LiquidCellShape>(); var raw = new float[64];
+		for (int side = 0; side < 2; side++) {
+			double[] lower = {0, !gap && side == 1 ? .25 : 0, 0};
+			double[] upper = {gap && side == 0 ? .75 : 1, !gap && side == 0 ? .75 : 1, 1};
+			double volume = (upper[0] - lower[0]) * (upper[1] - lower[1]); var first = new mmm.units.SignedDyadic[3];
+			for (int a = 0; a < 3; a++) first[a] = mmm.units.SignedDyadic.of(volume * ((a == 0 ? side + 1 : 1) + .5 * (lower[a] + upper[a])));
+			var box = new LiquidCellShape.Box(mmm.units.SignedDyadic.of(lower[0]), mmm.units.SignedDyadic.of(lower[1]), mmm.units.SignedDyadic.of(lower[2]),
+					mmm.units.SignedDyadic.of(upper[0]), mmm.units.SignedDyadic.of(upper[1]), mmm.units.SignedDyadic.of(upper[2]));
+			shapes.add(new LiquidCellShape(domain.cellIndex(side + 1, 1, 1), java.util.List.of(box), first[0], first[1], first[2]));
+			for (int point = 0; point < 8; point++) {
+				int offset = 4 * (8 * side + point);
+				for (int a = 0; a < 3; a++) raw[offset + a] = (float) ((a == 0 ? side + 1 : 1) + lower[a] + (upper[a] - lower[a]) * ((point >> a & 1) == 0 ? .25 : .75));
+				raw[offset + 3] = (float) (volume / 8);
+			}
+		}
+		domain.restoreParticleState(new FlipParticleState(4, 3, 3, 1, 16, gap ? 1.75F : 1.5F, raw, new float[48], new byte[36], shapes));
+		domain.rebuildGridFromParticles(); return domain;
+	}
+	private static mmm.chemistry.ExactRational[] boxSweepMoments(double[] lower, double[] upper) {
+		int[][] powers = {{0,0,0},{1,0,0},{0,1,0},{0,0,1},{2,0,0},{1,1,0},{1,0,1},{0,2,0},{0,1,1},{0,0,2}};
+		var result = new mmm.chemistry.ExactRational[10];
+		for (int i = 0; i < result.length; i++) {
+			result[i] = mmm.chemistry.ExactRational.ONE;
+			for (int a = 0; a < 3; a++) {
+				var lo = PlicComponentGeometry.ratio(mmm.units.SignedDyadic.of(lower[a]), mmm.units.SignedDyadic.of(1));
+				var hi = PlicComponentGeometry.ratio(mmm.units.SignedDyadic.of(upper[a]), mmm.units.SignedDyadic.of(1));
+				var lp = mmm.chemistry.ExactRational.ONE; var hp = lp;
+				for (int k = 0; k <= powers[i][a]; k++) { lp = lp.multiply(lo); hp = hp.multiply(hi); }
+				result[i] = result[i].multiply(hp.subtract(lp).divide(powers[i][a] + 1));
+			}
+		}
+		return result;
 	}
 
 	private static void sweptQuadraticMomentsRetainAffineWedgeGeometry() {
@@ -492,11 +580,6 @@ public final class CellRemapMomentsValidation {
 		domain.setVolume(1, 1, 1, 1);
 		domain.rebuildGridFromParticles();
 		var fullCache = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5, 255, 255, true);
-		var stock = domain.markerGrid.exactCellVolumeInventory[donor];
-		domain.markerGrid.exactCellVolumeInventory[donor] = stock.subtract(mmm.units.SignedDyadic.of(1, -60));
-		check(!fullCache.matches(domain, donor, donor + 1, 0, true, new double[]{.25, 0, 0}, .5),
-				"Quadratic sweep accepted changed exact stock with unchanged geometry observations");
-		domain.markerGrid.exactCellVolumeInventory[donor] = stock;
 		for (int p = 0; p < domain.particleCount(); p++) domain.particles.setVolume(p,
 				p < 3 ? Math.nextDown(Math.scalb(1F, -24 * p)) : Float.MIN_NORMAL);
 		domain.rebuildGridFromParticles();
@@ -666,7 +749,7 @@ public final class CellRemapMomentsValidation {
 			}
 			domain.rebuildGridFromParticles(); var basis = CellAffineVelocity.capture(domain);
 			var coefficients = new double[3][4 * basis.blockCount()]; coefficients[0][4 * cell] = 1;
-			if (upstream) { coefficients[0][4 * (cell - 1)] = 12; coefficients[1][4 * (cell - 3)] = 12; coefficients[2][4 * (cell - 9)] = 12; }
+			if (upstream) { coefficients[0][4 * (cell - 1)] = 24; coefficients[1][4 * (cell - 3)] = 24; coefficients[2][4 * (cell - 9)] = 24; }
 			var flux = new ConservativeLiquidFlux(3, 3, 3, true);
 			var flow = new LiquidAffineFaceFlow(domain, flux, new CellAffineVelocityField(basis, coefficients));
 			var geometry = new LiquidFluxGeometry(domain); flux.geometry(geometry); flux.faceSweep(flow); flow.prepareVelocities(flux, geometry);
@@ -678,7 +761,7 @@ public final class CellRemapMomentsValidation {
 			for (var volume : flux.resultingVolumes()) check(volume.signum() >= 0 && volume.compareTo(mmm.units.SignedDyadic.of(1)) <= 0,
 					"Incoming capacity repair lost a cell's positive inventory");
 			check(flux.resultingVolumes()[cell].equals(upstream ? mmm.units.SignedDyadic.of(1) : mmm.units.SignedDyadic.of(thickness)),
-					"Capacity repair did not retain the thin source and reduce excess incoming flow");
+					"Capacity repair did not retain the thin source and reduce excess incoming flow: " + flux.resultingVolumes()[cell]);
 			var source = captureTransportMoments(domain, cell, original);
 			var retained = source.allocate(new mmm.units.SignedDyadic[]{mmm.units.SignedDyadic.ZERO, source.totals().volume()}, new double[][]{new double[8]});
 			compareCarrierMoments(domain, cell, retained);

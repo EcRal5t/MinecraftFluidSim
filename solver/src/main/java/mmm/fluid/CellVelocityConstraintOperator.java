@@ -256,20 +256,31 @@ final class CellVelocityConstraintOperator {
 		}
 		return work ? energy.toDouble() : 0;
 	}
-	SignedDyadic[] referencedSource(double[][] predictor, float dt, double[] initial, double[] reference) {
-		checkMarkers(predictor); checkRows(initial); checkRows(reference);
+	/** Original physical source, captured before choosing the pressure reference. */
+	SignedDyadic[] captureSource(double[][] predictor, float dt, double[] initial) {
+		checkMarkers(predictor); checkRows(initial);
 		if (!(dt > 0 && Float.isFinite(dt))) throw new IllegalArgumentException("Invalid pressure source time step");
-		prepareVelocity(predictor); var rate = new SignedDyadic[rowCount()];
-		for (int row = 0; row < rowCount(); row++) rate[row] = rowResponse(row);
-		// A common reciprocal preserves the exact C relations before the source is observed.
-		var inverseTime = SignedDyadic.of(1.0 / dt);
-		prepareLoad(reference, null, null); weightLoad(false);
-		var result = new SignedDyadic[rowCount()];
-		for (int row = 0; row < rowCount(); row++) result[row] = exactStorage[row]
-				.multiply(SignedDyadic.of(initial[row]).subtract(SignedDyadic.of(reference[row])))
-				.subtract(rate[row].multiply(inverseTime)).subtract(rowResponse(row));
+		prepareVelocity(predictor);
+		// A common reciprocal preserves exact row relations before the source is observed.
+		var inverseTime = SignedDyadic.of(1.0 / dt); var result = new SignedDyadic[rowCount()];
+		for (int row = 0; row < rowCount(); row++) result[row] = exactStorage[row].multiply(SignedDyadic.of(initial[row]))
+				.subtract(rowResponse(row).multiply(inverseTime));
 		return result;
 	}
+	SignedDyadic[] referencedSource(double[][] predictor, float dt, double[] initial, double[] reference) {
+		return referencedSource(captureSource(predictor, dt, initial), reference);
+	}
+	/** Change coordinates from the captured physical source to p = reference + correction. */
+	SignedDyadic[] referencedSource(SignedDyadic[] source, double[] reference) {
+		checkRows(reference);
+		if (source == null || source.length != rowCount()) throw new IllegalArgumentException("Invalid captured pressure source");
+		prepareLoad(reference, null, null); weightLoad(false);
+		var result = new SignedDyadic[rowCount()];
+		for (int row = 0; row < rowCount(); row++) result[row] = source[row].subtract(rowResponse(row))
+				.subtract(exactStorage[row].multiply(SignedDyadic.of(reference[row])));
+		return result;
+	}
+
 	void residual(double[] pressure, SignedDyadic[] source, double[] result) { residual(pressure, null, source, result); }
 	void residual(double[] pressure, double[] low, SignedDyadic[] source, double[] result) {
 		checkRows(pressure); checkRows(result);

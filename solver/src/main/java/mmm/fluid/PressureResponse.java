@@ -67,15 +67,16 @@ final class PressureResponse {
 		for (int row = 0; row < transpose.numCols; row++)
 			for (int entry = transpose.col_idx[row]; entry < transpose.col_idx[row + 1]; entry++) {
 				int feature = transpose.nz_rows[entry]; double coefficient = transpose.nz_values[entry], tail = tails[entry];
-				ConstraintNumerics.accumulateProduct(load, loadLow, feature, coefficient, high[row]);
-				ConstraintNumerics.accumulateProduct(load, loadLow, feature, coefficient, low[row]);
-				ConstraintNumerics.accumulateProduct(load, loadLow, feature, tail, high[row]);
-				ConstraintNumerics.accumulateProduct(load, loadLow, feature, tail, low[row]);
+				double product = coefficient * high[row];
+				double error = Math.fma(coefficient, high[row], -product) + coefficient * low[row]
+						+ tail * high[row] + tail * low[row];
+				ConstraintNumerics.accumulate(load, loadLow, feature, product);
+				ConstraintNumerics.accumulate(load, loadLow, feature, error);
 			}
-		Arrays.fill(weighted, 0); Arrays.fill(weightedLow, 0);
 		for (int feature = 0; feature < load.length; feature++) {
-			ConstraintNumerics.accumulateProduct(weighted, weightedLow, feature, load[feature], inertia[feature]);
-			ConstraintNumerics.accumulateProduct(weighted, weightedLow, feature, loadLow[feature], inertia[feature]);
+			double product = load[feature] * inertia[feature];
+			weighted[feature] = product;
+			weightedLow[feature] = Math.fma(load[feature], inertia[feature], -product) + loadLow[feature] * inertia[feature];
 		}
 		for (int row = 0; row < result.length; row++) {
 			double sum = 0, correction = 0;

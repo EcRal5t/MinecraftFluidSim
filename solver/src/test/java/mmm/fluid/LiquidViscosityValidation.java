@@ -14,7 +14,8 @@ final class LiquidViscosityValidation {
 		freeSurfaceHasNoWallDrag();
 		sealedGasKeepsFreeSurfaceTraction();
 		materialBindingSurvivesHandoff();
-		privateCandidateRefinesOrRejects();
+		highViscosityCommitsAndRestores();
+		actualAffineStressKeepsRigidMotion();
 		double shearCoarse = analyticalShearError(16), shearFine = analyticalShearError(32);
 		require(shearFine < shearCoarse / 3, "shear layer diffusion must converge: " + shearCoarse + " -> " + shearFine);
 		double coarse = analyticalVortexError(8), fine = analyticalVortexError(16);
@@ -144,11 +145,12 @@ final class LiquidViscosityValidation {
 			var domain = new FluidDomain(4, 4, 4, config);
 			domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 			domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
-			for (int z = 0; z < 4; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 4; x++) domain.setVolume(x, y, z, 1);
+			for (int z = 1; z < 3; z++) for (int y = 1; y < 3; y++) for (int x = 1; x < 3; x++) domain.setVolume(x, y, z, 1);
 			if (sealed) domain.sealDomainBoundary();
+			for (int marker = 0; marker < domain.particleCount(); marker++) domain.particles.setVelocityX(marker, 1);
 			domain.bootstrapGasState(""); domain.ensureGrid(); domain.derivedCarrierState();
+			MarkerGridBuilder.scatterVelocities(domain);
 			if (sealed) require(domain.airNodeAt(2, 3, 2) > 0, "sealed gas fixture must own a finite cavity");
-			Arrays.fill(domain.mac.velocityX, 1);
 			new LiquidViscosityStage(domain).apply(.001F);
 			close(domain.mac.velocityX[domain.xFaceIndex(2, 1, 2)], 1, 0, "gas surface must not acquire wall drag");
 			if (reference == null) reference = domain.mac.velocityX.clone();
@@ -174,26 +176,68 @@ final class LiquidViscosityValidation {
 				"production pipeline must execute viscosity for a liquid-only domain");
 	}
 
-	private static void privateCandidateRefinesOrRejects() {
-		for (double mu : new double[]{1e4, 1e15}) {
-			var base = BuiltinFluidMaterials.createRegistry();
-			var definitions = new MaterialRegistry(base.entries().stream().map(entry ->
-					new MaterialRegistry.MaterialEntry(entry.material(), java.util.List.of(
-							new MaterialRegistry.ViscositySegment(200, 400, mu, mu)))).toList(), base.pairTensions());
-			var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .1F, 200, 1e-5F, .45F, .002F, .8F));
-			domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
-			domain.bindMaterialDefinitions(definitions);
-			for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) domain.setVolume(x, y, z, 1);
-			var state = domain.captureAuthoritativeState();
-			try {
-				var result = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, state, java.util.List.of(), false, 0));
-				require(mu == 1e4 && result.stats().substeps() > 1, "assembled viscosity must refine the private request");
-			} catch (FluidSolverBackend.MechanicalWorkBudgetExceededException expected) {
-				require(mu == 1e15, "moderate viscosity must fit the work budget");
-			}
-			require(domain.particleCount() == state.materials().particles().particleCount(), "private viscosity must leave the committed owner untouched");
-		}
-	}
+	private static void highViscosityCommitsAndRestores() {
+        for (double mu : new double[]{1e4, 1e15}) {
+            System.out.println("High-viscosity liquid mu="+mu+" Pa.s");
+            var base = BuiltinFluidMaterials.createRegistry();
+            var definitions = new MaterialRegistry(base.entries().stream().map(entry ->
+                    new MaterialRegistry.MaterialEntry(entry.material(), java.util.List.of(
+                            new MaterialRegistry.ViscositySegment(200, 400, mu, mu)))).toList(), base.pairTensions());
+            var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .1F, 200, 1e-5F, .45F, .002F, .8F));
+            domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+            domain.bindMaterialDefinitions(definitions);
+            for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) domain.setVolume(x, y, z, 1);
+            for (int marker = 0; marker < domain.particleCount(); marker++)
+                domain.particles.setVelocityY(marker, .01F * (domain.particles.positionX(marker) - .5F));
+            var state = domain.captureAuthoritativeState(); double volume=domain.totalVolume(),mass=domain.totalMass();
+            var result = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, state, java.util.List.of(), false, 0, true));
+            var committed=result.claimPreparedCpuDomain();
+            require(result.stats().viscosity().dissipatedJoules() >= 0, "Implicit high viscosity must dissipate actual kinetic energy");
+            close(committed.totalVolume(),volume,0,"High viscosity preserves liquid volume");
+            close(committed.totalMass(),mass,1e-10,"High viscosity preserves material mass");
+            var restored=FluidDomain.restoreAuthoritativeState(committed.captureAuthoritativeState());
+            restored.stepWithMechanicalAudit(false,0);
+            close(restored.totalVolume(),volume,0,"Restored high-viscosity liquid advances normally");
+            close(restored.totalMass(),mass,1e-10,"Restored high-viscosity liquid preserves material mass");
+            require(domain.particleCount()==state.materials().particles().particleCount(),"Private viscosity leaves the source owner unchanged");
+        }
+    }
+
+    private static void actualAffineStressKeepsRigidMotion() {
+        for (boolean unequal : new boolean[]{false,true}) for (int mode=0;mode<3;mode++) {
+            var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.01F,300,1e-7F,.4F,.002F,0));
+            domain.setVolume(1,1,1,1);
+            domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+            var base=BuiltinFluidMaterials.createRegistry();
+            domain.bindMaterialDefinitions(new MaterialRegistry(base.entries().stream().map(entry ->
+                    new MaterialRegistry.MaterialEntry(entry.material(),java.util.List.of(new MaterialRegistry.ViscositySegment(200,400,1000,1000)))).toList(),base.pairTensions()));
+            int count=domain.particleCount();var before=new double[3][count];
+            for(int marker=0;marker<count;marker++){
+                if(unequal && marker==0)domain.particles.setMass(marker,Math.scalb(domain.particles.mass(marker),-40));
+                double x=domain.particles.positionX(marker)-1.5,y=domain.particles.positionY(marker)-1.5;
+                before[0][marker]=mode==0?.25*y:mode==1?-.25*y:1;
+                before[1][marker]=mode==0?.25*x:mode==1?.25*x:-.5;
+                before[2][marker]=mode==2?.25:0;
+                domain.particles.setVelocityX(marker,(float)before[0][marker]);domain.particles.setVelocityY(marker,(float)before[1][marker]);domain.particles.setVelocityZ(marker,(float)before[2][marker]);
+            }
+            domain.gridDirty=true;domain.ensureGrid();domain.derivedCarrierState();
+            var viscosity=new CellAffineViscosity(domain,domain.pressureSystem.spatialInput());
+            var stats=viscosity.advance(.1F);var increment=viscosity.increment();var after=new double[3][count];
+            for(int axis=0;axis<3;axis++)for(int marker=0;marker<count;marker++)after[axis][marker]=(float)(before[axis][marker]+increment[axis][marker]);
+            var initial=actualMomentum(domain,before);var result=actualMomentum(domain,after);
+            if(mode==0)require(result[6]<initial[6] && stats.dissipatedJoules()>0,"Symmetric affine shear with zero mean face flux must lose actual kinetic energy");
+            else for(int value=0;value<7;value++)close(result[value],initial[value],64*Math.ulp(Math.max(1,Math.abs(initial[value]))),"Free rigid motion preserves actual momentum, angular momentum and kinetic energy");
+        }
+    }
+    private static double[] actualMomentum(FluidDomain domain,double[][] velocity){
+        var result=new double[7];
+        for(int marker=0;marker<domain.particleCount();marker++){
+            double mass=domain.unitScale.kilograms(domain.particles.mass(marker));
+            double[] point={domain.particles.positionX(marker)-1.5,domain.particles.positionY(marker)-1.5,domain.particles.positionZ(marker)-1.5};
+            for(int a=0;a<3;a++){int b=(a+1)%3,c=(a+2)%3;result[a]+=mass*velocity[a][marker];result[a+3]+=mass*(point[b]*velocity[c][marker]-point[c]*velocity[b][marker]);result[6]+=.5*mass*velocity[a][marker]*velocity[a][marker];}
+        }
+        return result;
+    }
 
 	private static double analyticalVortexError(int n) {
 		Grid grid = new Grid(n, 2 * n, 2, 1.0 / n);

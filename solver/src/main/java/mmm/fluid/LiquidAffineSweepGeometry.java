@@ -18,6 +18,30 @@ final class LiquidAffineSweepGeometry {
 		return observeVolume(rate);
 	}
 
+	static double faceOutflowRate(FluidDomain domain,int donor,int receiver,int axis,boolean positive,double intercept,
+			double tangentSlope,double otherSlope,int donorSupport,int receiverSupport,List<GasGeometryOverlap.HalfSpace> faceClip) {
+		if (faceClip.isEmpty()) return faceOutflowRate(domain,donor,receiver,axis,positive,intercept,tangentSlope,otherSlope,donorSupport,receiverSupport);
+		requireInput(domain,donor,receiver,axis,intercept,tangentSlope,otherSlope,0,donorSupport,receiverSupport);
+		var phase=domain.pressurePhaseGeometry; var cut=domain.geometry.cutCells;
+		double local=poreScale(domain,donor),peer=poreScale(domain,receiver); int sign=positive?1:-1;
+		var normal=new SignedDyadic[]{SignedDyadic.ZERO,SignedDyadic.ZERO,SignedDyadic.ZERO};
+		normal[(axis+1)%3]=SignedDyadic.of(sign*tangentSlope); normal[(axis+2)%3]=SignedDyadic.of(sign*otherSlope);
+		var clip=new java.util.ArrayList<GasGeometryOverlap.HalfSpace>(faceClip);
+		clip.add(new GasGeometryOverlap.HalfSpace(normal[0],normal[1],normal[2],SignedDyadic.of(-sign*intercept)));
+		var rate=ExactRational.ZERO;
+		for(int micro=0;micro<8;micro++) if((micro>>axis&1)==(positive?1:0)) {
+			int other=micro^1<<axis;
+			if((donorSupport&1<<micro)==0 || (receiverSupport&1<<other)==0 || (cut.mask(donor)&1<<micro)!=0 || (cut.mask(receiver)&1<<other)!=0)continue;
+			double pore=Math.min(phase.componentPoreScale(donor,micro,local),phase.componentPoreScale(receiver,other,peer));
+			var m=GasGeometryOverlap.normalizedMoments(micro,clip);
+			var integral=m[0].multiply(rational(intercept)).add(m[(axis+1)%3+1].add(m[0].divide(2)).multiply(rational(tangentSlope)))
+					.add(m[(axis+2)%3+1].add(m[0].divide(2)).multiply(rational(otherSlope))).multiply(2*sign).multiply(rational(pore));
+			if(integral.signum()<0)throw new IllegalStateException("Clipped positive face rate has negative measure");
+			rate=rate.add(integral);
+		}
+		return observeVolume(rate);
+	}
+
 	private static ExactRational[] faceMicroRates(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
 	                                            double intercept, double tangentSlope, double otherSlope,
 	                                            int donorSupport, int receiverSupport) {
@@ -76,11 +100,18 @@ final class LiquidAffineSweepGeometry {
 		var result = new java.util.ArrayList<GasGeometryOverlap.HalfSpace>(source.size() + 1);
 		result.add(flow); result.addAll(source); return result;
 	}
+	private static List<List<GasGeometryOverlap.HalfSpace>> restrict(List<List<GasGeometryOverlap.HalfSpace>> supports,List<GasGeometryOverlap.HalfSpace> clip) {
+		if (clip.isEmpty()) return supports;
+		var result = new java.util.ArrayList<List<GasGeometryOverlap.HalfSpace>>(supports.size());
+		for (var support : supports) { var part=new java.util.ArrayList<GasGeometryOverlap.HalfSpace>(support); part.addAll(clip); result.add(part); }
+		return result;
+	}
 	private static ExactRational[] clippedSourceMoments(int micro, List<List<GasGeometryOverlap.HalfSpace>> supports,
 	                                                  GasGeometryOverlap.HalfSpace flow, boolean second) {
 		ExactRational[] total = null;
 		for (var support : supports) {
 			var constraints = clipSource(support, flow);
+			if(constraints.size()>12) { constraints=LiquidFaceFluxTrace.reduce(micro,constraints); if(constraints==null)continue; }
 			var part = second ? GasGeometryOverlap.normalizedSecondMoments(micro, constraints) : GasGeometryOverlap.normalizedMoments(micro, constraints);
 			if (total == null) total = part;
 			else for (int i = 0; i < total.length; i++) total[i] = total[i].add(part[i]);
@@ -143,13 +174,18 @@ final class LiquidAffineSweepGeometry {
 	                              double intercept, double tangentSlope, double otherSlope, double dtOverH,
 	                              int donorSupport, int receiverSupport, double nx, double ny, double nz,
 	                              double offset, double[] result) {
+		sweptPlaneMoments(domain,donor,receiver,axis,positive,intercept,tangentSlope,otherSlope,dtOverH,donorSupport,receiverSupport,nx,ny,nz,offset,result,List.of());
+	}
+	static void sweptPlaneMoments(FluidDomain domain,int donor,int receiver,int axis,boolean positive,
+			double intercept,double tangentSlope,double otherSlope,double dtOverH,int donorSupport,int receiverSupport,
+			double nx,double ny,double nz,double offset,double[] result,List<GasGeometryOverlap.HalfSpace> faceClip) {
 		if (result == null || result.length < 4 || !Double.isFinite(nx) || !Double.isFinite(ny)
 				|| !Double.isFinite(nz) || !Double.isFinite(offset))
 			throw new IllegalArgumentException("Invalid phase PLIC sweep input");
 		var wet = new GasGeometryOverlap.HalfSpace(SignedDyadic.of(nx).negate(), SignedDyadic.of(ny).negate(),
 				SignedDyadic.of(nz).negate(), SignedDyadic.of(offset).negate());
 		observe(sweptExactMoments(domain, donor, receiver, axis, positive, intercept, tangentSlope, otherSlope,
-				dtOverH, donorSupport, receiverSupport, wet), result);
+				dtOverH, donorSupport, receiverSupport, wet, false, null, donorSupport, faceClip), result);
 	}
 
 	static void observe(ExactRational[] exact, double[] result) {
@@ -210,6 +246,13 @@ final class LiquidAffineSweepGeometry {
 	                                               double intercept, double tangentSlope, double otherSlope, double dtOverH,
 	                                               int donorSupport, int receiverSupport, GasGeometryOverlap.HalfSpace wetOverride,
 	                                               boolean secondMoments, ExactRational[][] micros, int selectedSourceSupport) {
+		return sweptExactMoments(domain,donor,receiver,axis,positive,intercept,tangentSlope,otherSlope,dtOverH,
+				donorSupport,receiverSupport,wetOverride,secondMoments,micros,selectedSourceSupport,List.of());
+	}
+	private static ExactRational[] sweptExactMoments(FluidDomain domain,int donor,int receiver,int axis,boolean positive,
+			double intercept,double tangentSlope,double otherSlope,double dtOverH,int donorSupport,int receiverSupport,
+			GasGeometryOverlap.HalfSpace wetOverride,boolean secondMoments,ExactRational[][] micros,int selectedSourceSupport,
+			List<GasGeometryOverlap.HalfSpace> faceClip) {
 		requireInput(domain, donor, receiver, axis, intercept, tangentSlope, otherSlope, dtOverH, donorSupport, receiverSupport);
 		ExactRational[] total = new ExactRational[secondMoments ? 10 : 4];
 		java.util.Arrays.fill(total, ExactRational.ZERO);
@@ -226,7 +269,7 @@ final class LiquidAffineSweepGeometry {
 				if ((selectedSourceSupport & 1 << micro) == 0 || (donorSupport & 1 << micro) == 0 || (donorSupport & 1 << faceMicro) == 0
 						|| (receiverSupport & 1 << peerMicro) == 0 || (cut.mask(donor) & (1 << micro | 1 << faceMicro)) != 0
 						|| (cut.mask(receiver) & 1 << peerMicro) != 0) continue;
-				var supports = wetSourceSupports(domain, donor, micro, wetOverride);
+				var supports = restrict(wetSourceSupports(domain, donor, micro, wetOverride),faceClip);
 				if (supports.isEmpty()) continue;
 				double pore = componentPores ? Math.min(phase.componentPoreScale(donor, micro, donorPore),
 						phase.componentPoreScale(receiver, peerMicro, receiverPore)) : Math.min(donorPore, receiverPore);
@@ -299,10 +342,14 @@ final class LiquidAffineSweepGeometry {
 				+ 8L * ((mmm.chemistry.ChemicalLimits.MAX_RATIONAL_BITS + 31L) / 32)));
 		static final long MAX_SECOND_RETAINED_BYTES = 1024 + 8L * (48 + 10L * (160
 				+ 8L * ((mmm.chemistry.ChemicalLimits.MAX_RATIONAL_BITS + 31L) / 32)));
-		final long[] source;
+		private final FluidDomain owner;
+		private final long inventoryRevision, phaseRevision, carrierRevision;
+		private final int donor, receiver, axis, donorMask, receiverMask;
+		private final boolean positive;
+		private final double intercept, tangentSlope, otherSlope, duration, donorPore, receiverPore;
+		private final List<GasGeometryOverlap.HalfSpace> faceClip;
 		final ExactRational[][] moments = new ExactRational[8][];
 		final boolean secondMoments;
-		private final SignedDyadic sourceVolume;
 		private final int donorSupport, receiverSupport;
 		final long retainedBytes;
 		MicroSweep(FluidDomain domain, int donor, int receiver, int axis, boolean positive, double[] q, double dt, int support) {
@@ -310,12 +357,21 @@ final class LiquidAffineSweepGeometry {
 		}
 		MicroSweep(FluidDomain domain, int donor, int receiver, int axis, boolean positive, double[] q, double dt, int support,
 		           int receiverSupport, boolean secondMoments) {
+			this(domain,donor,receiver,axis,positive,q,dt,support,receiverSupport,secondMoments,List.of());
+		}
+		MicroSweep(FluidDomain domain,int donor,int receiver,int axis,boolean positive,double[] q,double dt,int support,
+				int receiverSupport,boolean secondMoments,List<GasGeometryOverlap.HalfSpace> faceClip) {
+			this.faceClip=List.copyOf(faceClip);
 			this.secondMoments = secondMoments;
 			this.donorSupport = support; this.receiverSupport = receiverSupport;
-			sourceVolume = domain.markerGrid.exactCellVolumeInventory[donor];
-			source = source(domain, donor, receiver, axis, positive, q, dt, null);
-			sweptExactMoments(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dt, support, receiverSupport, null, secondMoments, moments);
-			long bytes = 240 + 8L * source.length;
+			owner = domain; inventoryRevision = domain.markerGrid.inventoryRevision;
+			phaseRevision = domain.pressurePhaseGeometry.revision(); carrierRevision = domain.carrierMutationRevision();
+			this.donor = donor; this.receiver = receiver; this.axis = axis; this.positive = positive;
+			intercept = q[0]; tangentSlope = q[1]; otherSlope = q[2]; duration = dt;
+			donorMask = domain.geometry.cutCells.mask(donor); receiverMask = domain.geometry.cutCells.mask(receiver);
+			donorPore = poreScale(domain,donor); receiverPore = poreScale(domain,receiver);
+			sweptExactMoments(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dt, support, receiverSupport, null, secondMoments, moments, support,faceClip);
+			long bytes = 320;
 			for (var micro : moments) if (micro != null) {
 				bytes += 48;
 				for (var value : micro) bytes += 160 + 4L * ((value.numerator().bitLength() + 31L) / 32
@@ -327,8 +383,24 @@ final class LiquidAffineSweepGeometry {
 			return (donorSupport & ~this.donorSupport) == 0 && (receiverSupport & ~this.receiverSupport) == 0;
 		}
 		boolean matches(FluidDomain domain, int donor, int receiver, int axis, boolean positive, double[] q, double dt) {
-			return java.util.Objects.equals(sourceVolume, domain.markerGrid.exactCellVolumeInventory[donor])
-					&& source(domain, donor, receiver, axis, positive, q, dt, source) != null;
+			return matches(domain,donor,receiver,axis,positive,q,dt,List.of());
+		}
+		boolean matches(FluidDomain domain,int donor,int receiver,int axis,boolean positive,double[] q,double dt,List<GasGeometryOverlap.HalfSpace> faceClip) {
+			return this.faceClip == faceClip && owner == domain && inventoryRevision == domain.markerGrid.inventoryRevision
+					&& phaseRevision == domain.pressurePhaseGeometry.revision() && carrierRevision == domain.carrierMutationRevision()
+					&& this.donor == donor && this.receiver == receiver && this.axis == axis && this.positive == positive
+					&& same(intercept,q[0]) && same(tangentSlope,q[1]) && same(otherSlope,q[2]) && same(duration,dt)
+					&& donorMask == domain.geometry.cutCells.mask(donor) && receiverMask == domain.geometry.cutCells.mask(receiver)
+					&& same(donorPore,poreScale(domain,donor)) && same(receiverPore,poreScale(domain,receiver));
+		}
+		void volumes(int axis,boolean positive,int donorSupport,int receiverSupport,double[] sourceWet,double[] result) {
+			if(sourceWet.length!=8 || result.length!=8)throw new IllegalArgumentException("Missing affine micro volumes");
+			java.util.Arrays.fill(result,0);
+			for(int micro=0;micro<8;micro++) {
+				int face=(micro&~(1<<axis))|(positive?1<<axis:0),peer=(micro&~(1<<axis))|(positive?0:1<<axis);
+				if(sourceWet[micro]>0 && moments[micro]!=null && (donorSupport&1<<micro)!=0
+						&& (donorSupport&1<<face)!=0 && (receiverSupport&1<<peer)!=0)result[micro]=observeVolume(moments[micro][0]);
+			}
 		}
 		ExactRational[] sum(int axis, boolean positive, int donorSupport, int receiverSupport) {
 			return sum(axis, positive, donorSupport, receiverSupport, 4);
@@ -353,35 +425,8 @@ final class LiquidAffineSweepGeometry {
 				throw new IllegalStateException("Exact affine liquid sweep exceeds the rational representation budget", magnitude);
 			}
 		}
-		private static long[] source(FluidDomain domain, int donor, int receiver, int axis, boolean positive, double[] q, double dt, long[] expected) {
-			var phase = domain.pressurePhaseGeometry;
-			double local = poreScale(domain, donor), peer = poreScale(domain, receiver);
-			long[] result = expected == null ? new long[71] : expected; int n = 0;
-			boolean checking = expected != null, same = true;
-			same &= sourceBit(result, n++, phase.revision(), checking);
-			same &= sourceBit(result, n++, domain.carrierMutationRevision(), checking);
-			same &= sourceBit(result, n++, donor, checking); same &= sourceBit(result, n++, receiver, checking);
-			same &= sourceBit(result, n++, axis, checking); same &= sourceBit(result, n++, positive ? 1 : 0, checking);
-			for (int a = 0; a < 3; a++) same &= sourceBit(result, n++, Double.doubleToRawLongBits(q[a]), checking);
-			same &= sourceBit(result, n++, Double.doubleToRawLongBits(dt), checking);
-			same &= sourceBit(result, n++, domain.geometry.cutCells.mask(donor), checking);
-			same &= sourceBit(result, n++, domain.geometry.cutCells.mask(receiver), checking);
-			same &= sourceBit(result, n++, Double.doubleToRawLongBits(local), checking);
-			same &= sourceBit(result, n++, Double.doubleToRawLongBits(peer), checking);
-			same &= sourceBit(result, n++, phase.hasComponentPlanes(donor) || phase.hasComponentPlanes(receiver) ? 1 : 0, checking);
-			for (int micro = 0; micro < 8; micro++) {
-				same &= sourceBit(result, n++, Double.doubleToRawLongBits(phase.liquidFractionExact(donor, micro)), checking);
-				for (int a = 0; a < 3; a++) same &= sourceBit(result, n++, Double.doubleToRawLongBits(phase.planeNormal(donor, micro, a)), checking);
-				same &= sourceBit(result, n++, Double.doubleToRawLongBits(phase.planeOffset(donor, micro)), checking);
-				same &= sourceBit(result, n++, Double.doubleToRawLongBits(phase.componentPoreScale(donor, micro, local)), checking);
-				int peerMicro = (micro & ~(1 << axis)) | (positive ? 0 : 1 << axis);
-				same &= sourceBit(result, n++, Double.doubleToRawLongBits(phase.componentPoreScale(receiver, peerMicro, peer)), checking);
-			}
-			return same ? result : null;
-		}
-		private static boolean sourceBit(long[] values, int index, long value, boolean checking) {
-			if (checking) return values[index] == value;
-			values[index] = value; return true;
+		private static boolean same(double first,double second) {
+			return Double.doubleToRawLongBits(first) == Double.doubleToRawLongBits(second);
 		}
 	}
 

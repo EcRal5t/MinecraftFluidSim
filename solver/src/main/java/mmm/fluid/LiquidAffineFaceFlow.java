@@ -5,11 +5,11 @@ import mmm.units.SignedDyadic;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Captured normal traces of the pressure velocity field, with separate positive and negative donor sweeps. */
+/** Common normal numerical traces, with positive donor sweeps over disjoint shared and one-sided regions. */
 final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 	private final FluidDomain domain;
 	private final ConservativeLiquidFlux faces;
-	private final CellAffineVelocityField.FaceTrace[][] trace;
+	private final LiquidFaceFluxTrace.Piece[][] trace;
 	private final double[] outgoing;
 	private final LiquidAffineSweepGeometry.MicroSweep[][] sweeps;
 	private final double[][] sourceBounds;
@@ -29,19 +29,12 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		if (retentionLimit < 0) throw new IllegalArgumentException("Negative affine sweep retention budget");
 		this.retentionLimit = retentionLimit;
 		outgoing=new double[field.blockCount()];
-		trace = new CellAffineVelocityField.FaceTrace[2 * faces.physicalFaceCount][];
+		trace = LiquidFaceFluxTrace.capture(domain,faces,field);
 		sweeps = new LiquidAffineSweepGeometry.MicroSweep[trace.length][];
 		sourceBounds = new double[trace.length][];
-		for (int f = 0; f < faces.physicalFaceCount; f++) for (int direction = 0; direction < 2; direction++) {
-			int donor = direction == 0 ? faces.left[f] : faces.right[f];
-			if (!field.hasCell(donor)) continue;
-			var components = field.faceTraces(donor, faces.axis[f], direction == 0, domain.sizeX, domain.sizeY);
-			for (var component : components) for (double value : component.q()) if (!Double.isFinite(value))
-				throw new FluidDomain.PressureSolveBlockedException("Nonfinite liquid normal trace");
-			trace[f + direction * faces.physicalFaceCount] = components;
-			sweeps[f + direction * faces.physicalFaceCount] = new LiquidAffineSweepGeometry.MicroSweep[components.length];
-			sourceBounds[f + direction * faces.physicalFaceCount] = new double[components.length];
-			Arrays.fill(sourceBounds[f + direction * faces.physicalFaceCount], Double.NaN);
+		for (int slot=0;slot<trace.length;slot++) if(trace[slot]!=null) {
+			sweeps[slot] = new LiquidAffineSweepGeometry.MicroSweep[trace[slot].length];
+			sourceBounds[slot] = new double[trace[slot].length]; Arrays.fill(sourceBounds[slot],Double.NaN);
 		}
 	}
 	private static long availableMemory() {
@@ -57,9 +50,14 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		if (sourceRevision != domain.carrierMutationRevision() || face < 0 || face >= faces.physicalFaceCount
 				|| cell != faces.left[face] && cell != faces.right[face]) return Double.NaN;
 		var components = trace[face + (cell == faces.left[face] ? 0 : faces.physicalFaceCount)];
-		if (components == null || components.length != 1 || components[0].support() != 255) return Double.NaN;
-		double[] q = components[0].q();
-		return q[1] == 0 && q[2] == 0 ? q[0] : Double.NaN;
+		if (components == null) return Double.NaN;
+		double constant=Double.NaN; int support=0;
+		for(var component:components) {
+			var q=component.q(); if(q[1]!=0 || q[2]!=0)return Double.NaN;
+			if(Double.isNaN(constant))constant=q[0];else if(constant!=q[0])return Double.NaN;
+			support|=component.support();
+		}
+		return support==255 ? constant : Double.NaN;
 	}
 	private LiquidAffineSweepGeometry.MicroSweep sweep(int slot, int componentIndex, int donor, int receiver,
 	                                                   int axis, boolean positive, double dt, int donorSupport, int receiverSupport, boolean capture) {
@@ -75,15 +73,15 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		synchronized (component) {
 			var saved = sweeps[slot][componentIndex];
 			if (saved != null && (!secondMoments || saved.secondMoments) && saved.covers(donorSupport, receiverSupport)
-					&& saved.matches(domain, donor, receiver, axis, positive, component.q(), dt)) return saved;
+					&& saved.matches(domain, donor, receiver, axis, positive, component.q(), dt,component.clip())) return saved;
 			if (saved != null) { retained.addAndGet(-saved.retainedBytes); sweeps[slot][componentIndex] = null; }
-			if (!capture || !secondMoments && (donorSupport != component.support() || receiverSupport != 255)) return null;
 			long maximumBytes = secondMoments ? LiquidAffineSweepGeometry.MicroSweep.MAX_SECOND_RETAINED_BYTES
 					: LiquidAffineSweepGeometry.MicroSweep.MAX_RETAINED_BYTES;
-			if (retentionLimit - retained.get() < 1024
-					|| maximumBytes > availableMemory() / 16) return null;
+			boolean retain=capture && (secondMoments || donorSupport==component.support() && receiverSupport==255)
+					&& retentionLimit-retained.get()>=1024 && maximumBytes<=availableMemory()/16;
 			var computed = new LiquidAffineSweepGeometry.MicroSweep(domain, donor, receiver, axis, positive,
-					component.q(), dt, secondMoments ? donorSupport : component.support(), secondMoments ? receiverSupport : 255, secondMoments);
+					component.q(), dt, donorSupport,receiverSupport,secondMoments,component.clip());
+			if(!retain)return computed;
 			long used;
 			do {
 				used = retained.get();
@@ -103,7 +101,7 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		}
 		return maximum;
 	}
-	private double outwardBound(int face, boolean positive, double prediction, CellAffineVelocityField.FaceTrace component) {
+	private double outwardBound(int face, boolean positive, double prediction, LiquidFaceFluxTrace.Piece component) {
 		int slot = face + (positive ? 0 : faces.physicalFaceCount), cached = -1;
 		if (prediction == 0 && phaseRevision == domain.pressurePhaseGeometry.revision()
 				&& sourceRevision == domain.carrierMutationRevision()) {
@@ -151,11 +149,14 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 				var components=trace[face+direction*faces.physicalFaceCount];
 				if(components==null || !domain.gridToParticleStage.advectionCells()[donor] && domain.pressurePhaseGeometry.liquidShape(donor)==null)continue;
 				for(var component:components) {
-					double open=geometry.aperture(left,right,faces.axis[face],positive ? component.support() : 255,positive ? 255 : component.support());
+					double open=component.clip().isEmpty()
+							? geometry.aperture(left,right,faces.axis[face],positive?component.support():255,positive?255:component.support())
+							: LiquidAffineSweepGeometry.faceOutflowRate(domain,donor,positive?right:left,faces.axis[face],positive,
+									positive?1:-1,0,0,component.support(),255,component.clip());
 					if(!(open>0))continue;
 					double speed=outwardBound(face,positive,prediction,component);
 					// This field belongs to the liquid-only path; each open microbox has its full capacity.
-					double capacity=Integer.bitCount(component.support())*.125;
+					double capacity=Integer.bitCount(component.blockSupport())*.125;
 					outgoing[component.velocityBlock()]+=speed/h*open/capacity;
 					if(geometry.partialFace(left,right))maximum=Math.max(maximum,2*speed/h);
 				}
@@ -179,7 +180,7 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 					for (var component : components) {
 						double[] q = component.q();
 						speed += LiquidAffineSweepGeometry.faceOutflowRate(domain, donor, receiver, faces.axis[face], direction == 0,
-								q[0], q[1], q[2], component.support(), 255) / aperture;
+								q[0], q[1], q[2], component.support(), 255,component.clip()) / aperture;
 					}
 				}
 				if (!(Double.isFinite(speed) && speed >= 0))
@@ -208,11 +209,8 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		for (int c = 0; c < components.length; c++) {
 			var component = components[c];
 			int support = donorSupport & component.support(); if (support == 0) continue;
-			double[] q = component.q();
 			var saved = sweep(face + (positive ? 0 : faces.physicalFaceCount), c, donor, receiver, axis, positive, dtOverH, support, receiverSupport, true);
-			if (saved == null) LiquidAffineSweepGeometry.sweptMoments(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dtOverH,
-					support, receiverSupport, part);
-			else LiquidAffineSweepGeometry.observe(saved.sum(axis, positive, support, receiverSupport), part);
+			LiquidAffineSweepGeometry.observe(saved.sum(axis, positive, support, receiverSupport), part);
 			if (part != result) for (int i = 0; i < 4; i++) result[i] += part[i];
 		}
 	}
@@ -226,10 +224,8 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		for (int c = 0; c < components.length; c++) {
 			var component = components[c];
 			int support = donorSupport & component.support(); if (support == 0) continue;
-			double[] q = component.q();
 			var saved = sweep(face + (positive ? 0 : faces.physicalFaceCount), c, donor, receiver, axis, positive, dtOverH, support, receiverSupport, false);
-			LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dtOverH,
-					support, receiverSupport, sourceWet, part, saved);
+			saved.volumes(axis,positive,support,receiverSupport,sourceWet,part);
 			if (part != swept) for (int i = 0; i < swept.length; i++) swept[i] += part[i];
 		}
 	}
@@ -241,11 +237,9 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		for (int c = 0; c < components.length; c++) {
 			var component = components[c];
 			int support = donorSupport & component.support(); if (support == 0) continue;
-			double[] q = component.q();
 			var saved = sweep(face + (positive ? 0 : faces.physicalFaceCount), c, donor, receiver, axis, positive,
 					dtOverH, support, receiverSupport, true, true);
-			var part = saved == null ? LiquidAffineSweepGeometry.sweptExactSecondMoments(domain, donor, receiver, axis, positive,
-					q[0], q[1], q[2], dtOverH, support, receiverSupport) : saved.secondSum(axis, positive, support, receiverSupport);
+			var part = saved.secondSum(axis, positive, support, receiverSupport);
 			if (result == null) result = part;
 			else for (int i = 0; i < result.length; i++) result[i] = result[i].add(part[i]);
 		}
@@ -264,7 +258,7 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 			int support = donorSupport & component.support(); if (support == 0) continue;
 			double[] q = component.q();
 			phases.sweptAffineMoments(phase, donor, receiver, axis, positive, q[0], q[1], q[2], dtOverH,
-					support, receiverSupport, part);
+					support, receiverSupport, part,component.clip());
 			if (part != result) for (int i = 0; i < 4; i++) result[i] += part[i];
 		}
 	}

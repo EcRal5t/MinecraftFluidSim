@@ -16,6 +16,7 @@ final class MarkerPressureProjection {
 	private CellAffineVelocity basis;
 	private LiquidPressureGeometry geometry;
 	private CellAffineMacTransfer transfer;
+	private PressureSystem.SpatialInput sourceSpatial;
 	private CellAffineVelocityField candidateField;
 	private CellAffineWallProjection wallProjection;
 	private CellVelocityConstraintOperator operator;
@@ -29,14 +30,12 @@ final class MarkerPressureProjection {
 	}
 	private int[] liquidRows, gasRows;
 	private double[] pressureOrigin, pressureCorrection, pressureCorrectionLow;
+	private SignedDyadic[] capturedSource;
 	private int sharedStart, sharedEnd;
 	private double[][] originalVelocity, originalPosition, predictor, wallPredictor, wallImpulse, candidate, publishedVelocity, knownImpulse, faceCandidate, knownCellLoad;
-	private double[] originalMass, originalVolume, originalFraction, originalPlaneOffset, pressure, rhs, storage, gasInitialPressure, targetVolumeRate, observedPressure;
-	private double[][] originalPlaneNormal;
+	private double[] originalMass, originalVolume, pressure, rhs, storage, gasInitialPressure, targetVolumeRate, observedPressure;
 	private double[] nodeStorage;
 	private double[] diagnosticGasDiagonal, diagnosticGasRhs;
-	private boolean[] originalPressureFluid;
-	private float[][] originalMacVelocity, originalP2gVelocity;
 	private byte[] geometryMasks;
 	private long carrierRevision, gasRevision;
 	private AirNetwork gasNetworkOwner;
@@ -78,10 +77,10 @@ final class MarkerPressureProjection {
 		domain.ensurePressureGeometry();
 		if (!(Float.isFinite(dt) && dt > 0)) throw new IllegalArgumentException("Invalid marker pressure timestep");
 		active = solved = published = hasFreeSurface = false; this.dt = dt;
-		pressureOrigin = pressureCorrection = pressureCorrectionLow = null;
+		pressureOrigin = pressureCorrection = pressureCorrectionLow = null; capturedSource = null;
 		if (!domain.pressureSystem.usesMarkerPressure()) throw new IllegalStateException("Cell pressure requires liquid-only spatial inventory");
 		if (domain.particles.count() == 0) return false;
-		var spatial = domain.pressureSystem.spatialInput();
+		var spatial = sourceSpatial = domain.pressureSystem.spatialInput();
 		gasFrame = domain.gasBoundary.frame();
 		if (gasFrame == null) throw blocked("Marker pressure requires current gas geometry");
 		geometry = spatial.geometry(); basis = spatial.basis();
@@ -104,12 +103,6 @@ final class MarkerPressureProjection {
 			originalVelocity[0][i] = domain.particles.velocityX(i); originalVelocity[1][i] = domain.particles.velocityY(i); originalVelocity[2][i] = domain.particles.velocityZ(i);
 			originalMass[i] = domain.particles.mass(i); originalVolume[i] = domain.particles.volume(i);
 		}
-		originalFraction = new double[domain.cellCount]; originalPlaneOffset = new double[domain.cellCount]; originalPlaneNormal = new double[3][domain.cellCount];
-		originalPressureFluid = domain.projection.pressureFluid.clone();
-		for (int cell = 0; cell < domain.cellCount; cell++) {
-			originalFraction[cell] = domain.pressurePhaseGeometry.liquidFractionExact(cell); originalPlaneOffset[cell] = domain.pressurePhaseGeometry.planeOffset(cell);
-			for (int axis = 0; axis < 3; axis++) originalPlaneNormal[axis][cell] = domain.pressurePhaseGeometry.planeNormal(cell, axis);
-		}
 		carrierRevision = domain.carrierMutationRevision; gasRevision = domain.gasState.network.revision();
 		gasNetworkOwner = domain.gasState.network; gasFrame = domain.gasBoundary.frame();
 		pressurePhaseRevision = domain.pressurePhaseGeometry.revision();
@@ -118,7 +111,6 @@ final class MarkerPressureProjection {
 		gridDirty = domain.gridDirty; pressureGeometryDirty = domain.pressureGeometryDirty; velocityGridDirty = domain.velocityGridDirty; geometryMasks = domain.geometry.cutCells.copyMicroMasks();
 		float[][] current = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
 		float[][] previous = {domain.mac.p2gVelocityX, domain.mac.p2gVelocityY, domain.mac.p2gVelocityZ};
-		originalMacVelocity = copy(current); originalP2gVelocity = copy(previous);
 		int gasNodeCount = domain.gasState.network.nodeCount();
 		domain.projection.ensureGasCapacity(gasNodeCount);
 		liquidRows = new int[basis.blockCount()]; gasRows = new int[gasNodeCount + 1];
@@ -182,7 +174,7 @@ final class MarkerPressureProjection {
 		var body = domain.bodyForceStage.takeMarkerPrediction();
 		double[][] external = faces(); double[][] weights = {domain.mac.p2gWeightX, domain.mac.p2gWeightY, domain.mac.p2gWeightZ};
 		for (int axis = 0; axis < 3; axis++) for (int face = 0; face < current[axis].length; face++) {
-			double delta = (double) current[axis][face] - previous[axis][face] - (axis == 1 ? body.faceVerticalIncrement()[face] : 0);
+			double delta = (double) current[axis][face] - previous[axis][face] - body.faceIncrement()[axis][face];
 			external[axis][face] = domain.unitScale.kilograms(weights[axis][face]) * delta;
 			if (!Double.isFinite(external[axis][face])) throw blocked("Unrepresentable pre-pressure face impulse");
 		}
@@ -190,15 +182,15 @@ final class MarkerPressureProjection {
 		knownImpulse = markers(count); basis.transposeLoad(knownCellLoad, knownImpulse); predictor = markers(count);
 		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < count; marker++) {
 			knownImpulse[axis][marker] *= dt;
-			predictor[axis][marker] = originalVelocity[axis][marker] + (axis == 1 ? body.verticalIncrement()[marker] : 0)
+			predictor[axis][marker] = originalVelocity[axis][marker] + body.markerIncrement()[axis][marker]
 					+ (impulse[axis][marker] + knownImpulse[axis][marker]) / basis.massKilograms(marker);
 			if (!Double.isFinite(predictor[axis][marker])) throw blocked("Unrepresentable actual marker predictor");
 		}
 		pressure = new double[rowCount]; rhs = new double[rowCount]; targetVolumeRate = new double[rowCount]; observedPressure = new double[domain.cellCount];
 		initializeCommonPressure(sharedStart, sharedEnd);
 		wallPredictor = markers(count); wallImpulse = markers(count); wallProjection.project(predictor, wallPredictor, wallImpulse);
-		operator.volumeRate(wallPredictor, rhs);
-		for (int row = 0; row < rowCount; row++) { rhs[row] = storage[row] * gasInitialPressure[row] - rhs[row] / dt; if (!Double.isFinite(rhs[row])) throw blocked("Unrepresentable cell pressure source"); }
+		capturedSource = operator.captureSource(wallPredictor, dt, gasInitialPressure);
+		for (int row = 0; row < rowCount; row++) { rhs[row] = capturedSource[row].toDouble(); if (!Double.isFinite(rhs[row])) throw blocked("Unrepresentable cell pressure source"); }
 		active = true; return true;
 	}
 
@@ -383,7 +375,7 @@ final class MarkerPressureProjection {
 			if (storage[row] > 0) pressureOrigin[row] = gasInitialPressure[row];
 			if (diagonal[row] == 0) pressureOrigin[row] = 0;
 		}
-		SignedDyadic[] source = operator.referencedSource(wallPredictor, dt, gasInitialPressure, pressureOrigin);
+		SignedDyadic[] source = operator.referencedSource(capturedSource, pressureOrigin);
 		for (int i = 0; i < n; i++) {
 			var value = SignedDyadic.of(pressure[i]).subtract(SignedDyadic.of(pressureOrigin[i]));
 			pressureCorrection[i] = value.toDouble();
@@ -495,26 +487,14 @@ final class MarkerPressureProjection {
 	}
 
 	private void requireCurrent() {
-		float[][] current = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
-		float[][] previous = {domain.mac.p2gVelocityX, domain.mac.p2gVelocityY, domain.mac.p2gVelocityZ};
-		if (!Arrays.deepEquals(current, originalMacVelocity) || !Arrays.deepEquals(previous, originalP2gVelocity))
-			throw new IllegalStateException("Marker pressure input velocity field changed");
 		if (carrierRevision != domain.carrierMutationRevision || gasNetworkOwner != domain.gasState.network
 				|| gasFrame != domain.gasBoundary.frame() || gasRevision != domain.gasState.network.revision()
 				|| thermalOwner != domain.thermalState || thermalOwner != null && !thermalRevision.equals(thermalOwner.thermalRevision())
+				|| sourceSpatial != domain.pressureSystem.currentSpatialInput()
+				|| pressurePhaseRevision != domain.pressurePhaseGeometry.revision()
 				|| gridDirty != domain.gridDirty || pressureGeometryDirty != domain.pressureGeometryDirty || velocityGridDirty != domain.velocityGridDirty
 				|| pressureAnchor != domain.pressureAnchor || pressureReference != domain.pressureReference
-				|| basis.markerCount() != domain.particles.count()
-				|| !Arrays.equals(geometryMasks, domain.geometry.cutCells.copyMicroMasks())) throw new IllegalStateException("Stale marker pressure candidate");
-		if (!Arrays.equals(originalPressureFluid, domain.projection.pressureFluid)) throw new IllegalStateException("Pressure classification changed");
-		for (int cell = 0; cell < domain.cellCount; cell++) {
-			if (pressurePhaseRevision != domain.pressurePhaseGeometry.revision() || originalFraction[cell] != domain.pressurePhaseGeometry.liquidFractionExact(cell) || originalPlaneOffset[cell] != domain.pressurePhaseGeometry.planeOffset(cell)) throw new IllegalStateException("Pressure spatial profile changed");
-			for (int axis = 0; axis < 3; axis++) if (originalPlaneNormal[axis][cell] != domain.pressurePhaseGeometry.planeNormal(cell, axis)) throw new IllegalStateException("Pressure spatial normal changed");
-		}
-		for (int i = 0; i < basis.markerCount(); i++) if (originalMass[i] != domain.particles.mass(i) || originalVolume[i] != domain.particles.volume(i)
-				|| originalPosition[0][i] != domain.particles.positionX(i) || originalPosition[1][i] != domain.particles.positionY(i) || originalPosition[2][i] != domain.particles.positionZ(i)
-				|| originalVelocity[0][i] != domain.particles.velocityX(i) || originalVelocity[1][i] != domain.particles.velocityY(i) || originalVelocity[2][i] != domain.particles.velocityZ(i))
-			throw new IllegalStateException("Marker pressure source changed at marker " + i);
+				|| basis.markerCount() != domain.particles.count()) throw new IllegalStateException("Stale marker pressure candidate");
 	}
 	boolean active() { return active; }
 	boolean published() { return published; }
@@ -545,7 +525,6 @@ final class MarkerPressureProjection {
 	private double[][] cellVectors() { return new double[3][4 * basis.blockCount()]; }
 	private static double[][] markers(int count) { return new double[3][count]; }
 	private static double[][] copy(double[][] value) { return new double[][]{value[0].clone(), value[1].clone(), value[2].clone()}; }
-	private static float[][] copy(float[][] value) { return new float[][]{value[0].clone(), value[1].clone(), value[2].clone()}; }
 	private static double rms(double[] value) { double norm = 0; for (double v : value) norm = Math.hypot(norm, v); return norm / Math.sqrt(Math.max(1, value.length)); }
 	private static FluidDomain.PressureSolveBlockedException blocked(String message) { return new FluidDomain.PressureSolveBlockedException(message); }
 }

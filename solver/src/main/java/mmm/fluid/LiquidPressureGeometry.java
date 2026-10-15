@@ -85,8 +85,11 @@ final class LiquidPressureGeometry {
 	private final List<SharedFace> sharedFaces;
 	private final MicroSnapshot[][] microPieces;
 	private final List<InteriorFace> interiorFaces;
-	private final double cellVolume;
-	private static final class MicroSnapshot {
+	private final double cellVolume, cellSize;
+	private final java.util.Map<Object, List<double[][]>> surfacePolygons;
+	private LiquidViscousQuadrature viscousQuadrature;
+	record Quadrature(double[] x, double[] y, double[] z, double[] weight) { }
+	static final class MicroSnapshot {
 		final VolumeMoments physical;
 		final double[] first;
 		final List<List<GasGeometryOverlap.HalfSpace>> wetSupports;
@@ -112,9 +115,10 @@ final class LiquidPressureGeometry {
 	}
 
 	private LiquidPressureGeometry(CellSnapshot[] cells, Profile[][] components, byte[] masks, List<SharedFace> faces,
-	                                MicroSnapshot[][] microPieces, List<InteriorFace> interiorFaces, double cellVolume) {
+	                                MicroSnapshot[][] microPieces, List<InteriorFace> interiorFaces, double cellSize, java.util.Map<Object, List<double[][]>> surfacePolygons) {
 		this.cells=cells; this.components=components; collisionMasks=masks; sharedFaces=List.copyOf(faces);
-		this.microPieces=microPieces; this.interiorFaces=List.copyOf(interiorFaces); this.cellVolume=cellVolume;
+		this.microPieces=microPieces; this.interiorFaces=List.copyOf(interiorFaces); this.cellSize=cellSize;
+		this.cellVolume=cellSize*cellSize*cellSize; this.surfacePolygons=surfacePolygons;
 	}
 	static LiquidPressureGeometry capture(FluidDomain domain) {
 		domain.ensurePressureGeometry();
@@ -128,24 +132,36 @@ final class LiquidPressureGeometry {
 		var cells = new CellSnapshot[domain.cellCount]; var components = new Profile[domain.cellCount][];
 		var microPieces = new MicroSnapshot[domain.cellCount][];
 		var faces = new ArrayList<SharedFace>();
+		var polygons = new java.util.IdentityHashMap<Object, List<double[][]>>();
 		for (int cell=0;cell<cells.length;cell++) if(phase.liquidFractionExact(cell)>0)
-			cells[cell]=captureCell(domain,phase,cell,faces,stock == null ? domain.markerGrid.exactCellMarkerVolume[cell] : stock.get(cell).volume().toDouble(),components,microPieces);
+			cells[cell]=captureCell(domain,phase,cell,faces,stock == null ? domain.markerGrid.exactCellMarkerVolume[cell] : stock.get(cell).volume().toDouble(),components,microPieces,polygons);
 		var interior = new ArrayList<InteriorFace>();
 		for (int cell=0;cell<cells.length;cell++) if(microPieces[cell]!=null) for(int micro=0;micro<8;micro++) {
 			var piece=microPieces[cell][micro]; if(piece==null)continue;
 			for(int axis=0;axis<3;axis++) if((micro&1<<axis)==0 && microPieces[cell][micro|1<<axis]!=null) {
-				var wet = phase.liquidShape(cell) == null ? piece.faces.get(2*axis+1).moments()
-						: surface(phase.internalSharedWetPolygons(cell,micro,axis,.5*(micro>>((axis+1)%3)&1),
-								.5*(micro>>((axis+2)%3)&1),.5),axis,.5,cell,domain);
+				var facePolygons = phase.internalSharedWetPolygons(cell,micro,axis,.5*(micro>>((axis+1)%3)&1),
+						.5*(micro>>((axis+2)%3)&1),.5);
+				var wet = surface(facePolygons,axis,.5,cell,domain);
 				if (phase.liquidShape(cell) != null && phase.liquidFractionExact(cell,micro) == 1
 						&& phase.liquidFractionExact(cell,micro|1<<axis) == 1)
 					wet = LiquidPressureMoments.fullMicroFace(wet,axis,.5,.5*(micro>>((axis+1)%3)&1),.5*(micro>>((axis+2)%3)&1),cell,domain);
-				if(wet.area()>0)interior.add(new InteriorFace(cell,micro,micro|1<<axis,axis,wet));
+				if(wet.area()>0) {
+					var face = new InteriorFace(cell,micro,micro|1<<axis,axis,wet); interior.add(face); polygons.put(face, facePolygons);
+				}
 			}
 		}
 		double h=domain.config.cellSize();
-		return new LiquidPressureGeometry(cells,components,domain.geometry.cutCells.copyMicroMasks(),faces,microPieces,interior,h*h*h);
+		return new LiquidPressureGeometry(cells,components,domain.geometry.cutCells.copyMicroMasks(),faces,microPieces,interior,h,polygons);
 	}
+	private LiquidViscousQuadrature viscousQuadrature() {
+		if (viscousQuadrature == null) viscousQuadrature = new LiquidViscousQuadrature(microPieces, surfacePolygons, cellSize);
+		return viscousQuadrature;
+	}
+	Quadrature volumeQuadrature(int cell, int support, int degree) { requireSupport(cell,support); return viscousQuadrature().volume(cell,support,degree); }
+	Quadrature sharedQuadrature(List<SharedFace> faces, int degree) { return viscousQuadrature().shared(faces,degree); }
+	Quadrature interiorQuadrature(InteriorFace face, int degree) { return viscousQuadrature().surface(face, face.axis(), .5,degree); }
+	Quadrature wallQuadrature(List<Facet> facets, int degree) { return viscousQuadrature().wall(facets,degree); }
+
 	void forEachGasPiece(java.util.function.IntConsumer accept) {
 		for (var cell : cells) if (cell != null) {
 			for (var facet : cell.facets()) if (facet.kind() == FacetKind.GAS) accept.accept(facet.gasPiece());
@@ -228,7 +244,7 @@ final class LiquidPressureGeometry {
 		return result;
 	}
 
-	private static CellSnapshot captureCell(FluidDomain d,FlipPressurePhaseGeometry plane,int cell,List<SharedFace> shared,double rawVolume,Profile[][] components,MicroSnapshot[][] microPieces) {
+	private static CellSnapshot captureCell(FluidDomain d,FlipPressurePhaseGeometry plane,int cell,List<SharedFace> shared,double rawVolume,Profile[][] components,MicroSnapshot[][] microPieces, java.util.Map<Object, List<double[][]>> polygons) {
 		var cut=d.geometry.cutCells;
 		double h=d.config.cellSize(), h3=h*h*h;
 		int[] index={cell%d.sizeX,cell/d.sizeX%d.sizeY,cell/(d.sizeX*d.sizeY)};
@@ -251,7 +267,8 @@ final class LiquidPressureGeometry {
 			double[] areaNormal=new double[3]; double[][] normalFirst=new double[3][3];
 			for(int axis=0;axis<3;axis++)for(int sign:new int[]{-1,1}) {
 				double coordinate=.5*(micro[axis]+(sign>0?1:0)), tangent=.5*micro[(axis+1)%3],other=.5*micro[(axis+2)%3];
-				SurfaceMoments wet=surface(plane.wetFacePolygons(cell,slot,axis,coordinate,tangent,other,.5),axis,coordinate,cell,d);
+				var facePolygons = plane.wetFacePolygons(cell,slot,axis,coordinate,tangent,other,.5);
+				SurfaceMoments wet=surface(facePolygons,axis,coordinate,cell,d);
 				if (plane.liquidFractionExact(cell, slot) == 1)
 					wet = LiquidPressureMoments.fullMicroFace(wet, axis, coordinate, tangent, other, cell, d);
 				int key=slot*6+2*axis+(sign>0?1:0);
@@ -262,7 +279,9 @@ final class LiquidPressureGeometry {
 				if(wet.area==0)continue;
 				if(micro[axis]+sign>=0 && micro[axis]+sign<2) {
 					int[] neighbor=micro.clone();neighbor[axis]+=sign;
-					if(!cut.microCellOpen(cell,neighbor[0],neighbor[1],neighbor[2]))facets.add(new Facet(FacetKind.WALL,cell,cell,axis,sign,key,wet));
+					if(!cut.microCellOpen(cell,neighbor[0],neighbor[1],neighbor[2])) {
+						var facet = new Facet(FacetKind.WALL,cell,cell,axis,sign,key,wet); facets.add(facet); polygons.put(facet,facePolygons);
+					}
 					else if(integral[0]>0) {
 						SurfaceMoments exposed = plane.liquidShape(cell) != null
 								? surface(plane.internalExposedWetPolygons(cell,slot,axis,sign,tangent,other,.5),axis,coordinate,cell,d)
@@ -281,15 +300,18 @@ final class LiquidPressureGeometry {
 				int peer=inside?d.cellIndex(neighbor[0],neighbor[1],neighbor[2]):-1;
 				int[] peerMicro=micro.clone();peerMicro[axis]=sign>0?0:1;
 				if(!inside || !cut.microCellOpen(peer,peerMicro[0],peerMicro[1],peerMicro[2])) {
-					facets.add(new Facet(FacetKind.WALL,cell,peer,axis,sign,key,wet));continue;
+					var facet = new Facet(FacetKind.WALL,cell,peer,axis,sign,key,wet); facets.add(facet); polygons.put(facet,facePolygons); continue;
 				}
 				int minus=sign>0?cell:peer,plus=sign>0?peer:cell;
 				if(sign>0 || plane.liquidFractionExact(peer)==0) {
-					SurfaceMoments both=surface(plane.sharedWetPolygons(minus,plus,axis,tangent,other,.5),axis,coordinate,cell,d);
+					var sharedPolygons = plane.sharedWetPolygons(minus,plus,axis,tangent,other,.5);
+					SurfaceMoments both=surface(sharedPolygons,axis,coordinate,cell,d);
 					if (plane.liquidFractionExact(cell, slot) == 1 && plane.liquidFractionExact(peer,
 							peerMicro[0] | peerMicro[1] << 1 | peerMicro[2] << 2) == 1)
 						both = LiquidPressureMoments.fullMicroFace(both, axis, coordinate, tangent, other, cell, d);
-					if(both.area>0)shared.add(new SharedFace(minus,plus,axis,micro[(axis+1)%3]+2*micro[(axis+2)%3],both));
+					if(both.area>0) {
+						var face = new SharedFace(minus,plus,axis,micro[(axis+1)%3]+2*micro[(axis+2)%3],both); shared.add(face); polygons.put(face,sharedPolygons);
+					}
 				}
 				SurfaceMoments gas=surface(plane.exposedWetPolygons(cell,peer,axis,sign,tangent,other,.5),axis,coordinate,cell,d);
 				if(gas.area>0)facets.add(new Facet(FacetKind.GAS,cell,peer,axis,sign,key,gas));

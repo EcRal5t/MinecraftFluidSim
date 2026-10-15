@@ -48,6 +48,11 @@ final class PhaseVolumeTransportGeometry {
 	void sweptAffineMoments(int phase, int cell, int neighbor, int axis, boolean positive,
 	                        double intercept, double tangentSlope, double otherSlope, double dtOverH,
 	                        int donorSupport, int receiverSupport, double[] result) {
+		sweptAffineMoments(phase,cell,neighbor,axis,positive,intercept,tangentSlope,otherSlope,dtOverH,donorSupport,receiverSupport,result,java.util.List.of());
+	}
+	void sweptAffineMoments(int phase,int cell,int neighbor,int axis,boolean positive,
+			double intercept,double tangentSlope,double otherSlope,double dtOverH,int donorSupport,int receiverSupport,
+			double[] result,java.util.List<GasGeometryOverlap.HalfSpace> faceClip) {
 		double fraction = volumes[phase][cell];
 		if (!(fraction > 0)) { java.util.Arrays.fill(result, 0, 4, 0); return; }
 		double a = nx[phase][cell], b = ny[phase][cell], c = nz[phase][cell], off = offsets[phase][cell];
@@ -55,7 +60,7 @@ final class PhaseVolumeTransportGeometry {
 		boolean full = fraction >= geometry.capacity(cell);
 		LiquidAffineSweepGeometry.sweptPlaneMoments(domain, cell, neighbor, axis, positive, intercept, tangentSlope,
 				otherSlope, dtOverH, donorSupport, receiverSupport, full || uniform ? 0 : a,
-				full || uniform ? 0 : b, full || uniform ? 0 : c, full || uniform ? 1 : off, result);
+				full || uniform ? 0 : b, full || uniform ? 0 : c, full || uniform ? 1 : off, result,faceClip);
 		if (uniform && !full) for (int i = 0; i < 4; i++) result[i] *= fraction / geometry.capacity(cell);
 	}
 

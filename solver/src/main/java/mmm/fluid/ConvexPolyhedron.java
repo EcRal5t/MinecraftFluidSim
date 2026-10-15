@@ -429,34 +429,65 @@ final class ConvexPolyhedron {
 		return Math.fma(ab, ac, -product) - Math.fma(ba, ca, -product);
 	}
 
-	void integrate(int order, Moments result) {
-		if (order < 0 || order > 3) throw new IllegalArgumentException("Unsupported convex moment degree");
-		result.clear(order);
-		if (faceCount == 0) return;
-		collectVertices();
-		double cx = 0, cy = 0, cz = 0;
-		for (int i = 0; i < vertexCount; i++) { int v = activeVertices[i]; cx += x[v]; cy += y[v]; cz += z[v]; }
-		cx /= vertexCount; cy /= vertexCount; cz /= vertexCount;
-		captureFrame(result, cx, cy, cz);
+	@FunctionalInterface interface PointConsumer { void accept(double x, double y, double z, double weight); }
+	@FunctionalInterface private interface TetraConsumer { void accept(double volume); }
+	private double[] interiorAnchor() {
+		collectVertices(); var anchor = new double[3];
+		for (int i = 0; i < vertexCount; i++) for (int a = 0; a < 3; a++) anchor[a] += coordinate(activeVertices[i], a) / vertexCount;
+		return anchor;
+	}
+	private void visitTetrahedra(double[] anchor, boolean coordinates, TetraConsumer accept) {
 		for (int i = 0; i < faceCount; i++) {
 			int f = activeFaces[i], axis = faceAxis[f], first = (axis + 1) % 3, second = (axis + 2) % 3;
 			var normal = faceNormal[f];
-			double height = planeDistance(cx, cy, cz, normal[0], normal[1], normal[2], faceOffsetHigh[f], faceOffsetLow[f]);
+			double height = planeDistance(anchor[0], anchor[1], anchor[2], normal[0], normal[1], normal[2], faceOffsetHigh[f], faceOffsetLow[f]);
 			for (int k = 1; k + 1 < faceSize[f]; k++) {
 				triangle[0] = face[f][0]; triangle[1] = face[f][k]; triangle[2] = face[f][k + 1];
 				double volume = projectedArea(triangle[0], triangle[1], triangle[2], axis) * (-height / normal[axis]) * jacobian / 6;
 				if (volume < 0) throw new IllegalStateException("Inward convex face");
 				if (volume == 0) continue;
-				if (order > 0) for (int p = 0; p < 3; p++) {
+				if (coordinates) for (int p = 0; p < 3; p++) {
 					int v = triangle[p];
-					tetra[p + 1][first] = coordinate(v, first) - (first == 0 ? cx : first == 1 ? cy : cz);
-					tetra[p + 1][second] = coordinate(v, second) - (second == 0 ? cx : second == 1 ? cy : cz);
+					tetra[p + 1][first] = coordinate(v, first) - anchor[first];
+					tetra[p + 1][second] = coordinate(v, second) - anchor[second];
 					tetra[p + 1][axis] = (-height - normal[first] * tetra[p + 1][first]
 							- normal[second] * tetra[p + 1][second]) / normal[axis];
 				}
-				addTetraMoments(result.raw, volume, order);
+				accept.accept(volume);
 			}
 		}
+	}
+	void integrate(int order, Moments result) {
+		if (order < 0 || order > 3) throw new IllegalArgumentException("Unsupported convex moment degree");
+		result.clear(order); if (faceCount == 0) return;
+		var anchor = interiorAnchor(); captureFrame(result, anchor[0], anchor[1], anchor[2]);
+		visitTetrahedra(anchor, order > 0, volume -> addTetraMoments(result.raw, volume, order));
+	}
+	/** Positive polynomial rule in whole-cell-centred coordinates, sharing the moment tetrahedra. */
+	void quadrature(int degree, PointConsumer accept) {
+		if (degree < 0 || degree > 4) throw new IllegalArgumentException("Unsupported convex quadrature degree");
+		if (faceCount == 0) return;
+		var anchor = interiorAnchor(); var frame = new Moments(); captureFrame(frame, anchor[0], anchor[1], anchor[2]);
+		var origin = new double[3]; var axes = new double[3][3];
+		for (int a = 0; a < 3; a++) {
+			origin[a] = rational(frame.originNumerator[a], frame.denominator).toDouble();
+			for (int b = 0; b < 3; b++) axes[a][b] = rational(frame.axesNumerator[a][b], frame.denominator).toDouble();
+		}
+		int nr = (degree + 4) / 2, ns = (degree + 3) / 2, nt = (degree + 2) / 2;
+		var rn = LiquidViscousQuadrature.nodes(nr); var sn = LiquidViscousQuadrature.nodes(ns); var tn = LiquidViscousQuadrature.nodes(nt);
+		var rw = LiquidViscousQuadrature.weights(nr); var sw = LiquidViscousQuadrature.weights(ns); var tw = LiquidViscousQuadrature.weights(nt);
+		visitTetrahedra(anchor, true, volume -> {
+			for (int i = 0; i < nr; i++) for (int j = 0; j < ns; j++) for (int k = 0; k < nt; k++) {
+				double r = rn[i], s = sn[j], t = tn[k];
+				double first = r, second = (1 - r) * s, third = (1 - r) * (1 - s) * t;
+				var point = origin.clone();
+				for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++)
+					point[a] += axes[a][b] * (first * tetra[1][b] + second * tetra[2][b] + third * tetra[3][b]);
+				double weight = 6 * volume * (1 - r) * (1 - r) * (1 - s)
+						* rw[i] * sw[j] * tw[k];
+				accept.accept(point[0], point[1], point[2], weight);
+			}
+		});
 	}
 
 	private void captureFrame(Moments result, double cx, double cy, double cz) {

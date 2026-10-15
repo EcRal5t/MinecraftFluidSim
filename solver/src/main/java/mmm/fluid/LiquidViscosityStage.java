@@ -1,9 +1,11 @@
 package mmm.fluid;
 
-/** Diffuses incoming flow before body-force prediction; retries the private step when dt is too large. */
+/** Advances actual-mass wet fields or the mixed-solid MAC stress before body forces. */
 final class LiquidViscosityStage {
 	private final FluidDomain domain;
 	private ViscousMacDiscretization discretization;
+	private PressureSystem.SpatialInput spatial;
+	private CellAffineViscosity affine;
 	private final float[][] velocity;
 
 	LiquidViscosityStage(FluidDomain domain) {
@@ -35,6 +37,13 @@ final class LiquidViscosityStage {
 
 	FluidDomain.ViscousStepStats apply(float dt) {
 		if (domain.materialDefinitions == null) return FluidDomain.ViscousStepStats.INACTIVE;
+		if (domain.pressureSystem.usesMarkerPressure()) {
+			var input = domain.pressureSystem.spatialInput();
+			if (input != spatial) { spatial = input; affine = new CellAffineViscosity(domain, input); }
+			var stats = affine.advance(dt);
+			domain.bodyForceStage.addMarkerPrediction(affine.increment(), affine.faceIncrement());
+			return stats;
+		}
 		if (discretization == null) discretization = createDiscretization();
 		discretization.assemble(velocity);
 		double stable = discretization.operator.stableTimeStep();
