@@ -340,10 +340,6 @@ final class GasRuntimeGeometry {
 		return variable;
 	}
 
-	double dryMicroFaceArea(int cell, int micro, int axis, int coordinate) {
-		return GasFaceIntersection.area(phase, cell, -1, axis, coordinate, 0,
-				.5 * (micro >>> ((axis + 1) % 3) & 1), .5 * (micro >>> ((axis + 2) % 3) & 1), .5);
-	}
 	boolean fullDryFace(int cell, int axis, int coordinate) {
 		return GasFaceIntersection.fullDryFace(phase, cell, axis, coordinate);
 	}

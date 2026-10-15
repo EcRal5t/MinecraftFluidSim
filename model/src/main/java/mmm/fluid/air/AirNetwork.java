@@ -659,9 +659,10 @@ public final class AirNetwork {
 		ArrayList<GasInventory> baseline = new ArrayList<>(nodes.size());
 		for (AirNode node : nodes.values()) baseline.add(phase != null && node == phase.mutation.sourceNode()
 				? phase.inventoryAfter : node.inventory());
-		MassColumns before = massColumns(baseline);
-		GasRegionAudit.requireClosure(GasRegionAudit.aggregate(baseline), GasRegionAudit.aggregate(inventories), sourceDelta, sinkDelta);
-		MassColumns after = massColumns(inventories);
+		GasAuditLedger beforeInventory = GasRegionAudit.aggregate(baseline);
+		GasAuditLedger afterInventory = GasRegionAudit.aggregate(inventories);
+		GasRegionAudit.requireClosure(beforeInventory, afterInventory, sourceDelta, sinkDelta);
+		MassColumns before = massColumns(beforeInventory), after = massColumns(afterInventory);
 		MassColumns source = massColumns(sourceDelta), sink = massColumns(sinkDelta);
 		MassColumns delta = mutationDelta(before, after, source, sink);
 		return new RemapPlan(this, phase == null ? revision : Math.addExact(revision, 1), phase, replacementNodes, aggregateEdges(plannedEdges), inventories.size() + 1,

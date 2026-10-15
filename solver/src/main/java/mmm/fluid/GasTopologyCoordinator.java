@@ -295,18 +295,22 @@ final class GasTopologyCoordinator {
 		int count = next.nodeCount(); double[] available = volumes(next);
 		var inventories = new ArrayList<GasInventory>(count);
 		for (int node = 0; node < count; node++) inventories.add(GasInventory.EMPTY);
-		SignedDyadic[] mixed = thermal ? new SignedDyadic[count] : null, inherited = thermal ? new SignedDyadic[count] : null;
-		if (thermal) { Arrays.fill(mixed, SignedDyadic.ZERO); Arrays.fill(inherited, SignedDyadic.ZERO); }
+		boolean retainControlVolumes = thermal && !deferVolumeWork;
+		SignedDyadic[] mixed = thermal ? new SignedDyadic[count] : null;
+		SignedDyadic[] inherited = retainControlVolumes ? new SignedDyadic[count] : null;
+		if (thermal) Arrays.fill(mixed, SignedDyadic.ZERO);
+		if (retainControlVolumes) Arrays.fill(inherited, SignedDyadic.ZERO);
 		GasAuditLedger sourceDelta = GasAuditLedger.EMPTY, sinkDelta = GasAuditLedger.EMPTY;
 		SignedDyadic sourceEnergy = SignedDyadic.ZERO, sinkEnergy = SignedDyadic.ZERO;
-		boolean[] contributed = new boolean[count + 1];
+		boolean[] contributed = retainControlVolumes ? new boolean[count + 1] : null;
 		if (old == null) {
 			for (int node = 1; node <= count; node++) {
 				GasInventory created = ambientInventory(available[node - 1]);
 				inventories.set(node - 1, created); sourceDelta = sourceDelta.add(created);
 				if (thermal) {
 					mixed[node - 1] = SignedDyadic.of(domain.thermalState.ambientGasEnergy(created));
-					inherited[node - 1] = SignedDyadic.of(available[node - 1]); sourceEnergy = sourceEnergy.add(mixed[node - 1]);
+					if (retainControlVolumes) inherited[node - 1] = SignedDyadic.of(available[node - 1]);
+					sourceEnergy = sourceEnergy.add(mixed[node - 1]);
 				}
 			}
 		} else {
@@ -338,10 +342,14 @@ final class GasTopologyCoordinator {
 					if (refineMissingSuccessor) throw new MechanicalTimeRefinement(2, reason);
 					throw new GasTopologyBlockedException(reason);
 				}
-				var weights = ExactGasPartitionWeights.ofTerms(List.copyOf(destinations.values())); var parts = stock.partition(weights);
-				double[] energies = !thermal ? null : stock.isEmpty() ? new double[parts.size()] : partitionEnergy(previous, parts, edit);
-				double[] control = !thermal ? null : GasTopologyVolumePartition.partitionRational(
-						domain.gasState.network.availableVolume(previous), weights);
+				boolean split = destinations.size() > 1;
+				var weights = split ? ExactGasPartitionWeights.ofTerms(List.copyOf(destinations.values())) : null;
+				var parts = split ? stock.partition(weights) : List.of(stock);
+				double[] energies = !thermal ? null : stock.isEmpty() ? new double[parts.size()]
+						: split ? partitionEnergy(previous, parts, edit) : new double[]{energy(previous, edit)};
+				double[] control = !retainControlVolumes ? null : split
+						? GasTopologyVolumePartition.partitionRational(domain.gasState.network.availableVolume(previous), weights)
+						: new double[]{domain.gasState.network.availableVolume(previous)};
 				int part = 0;
 				for (var entry : destinations.entrySet()) {
 					int node = (int) (long) entry.getKey();
@@ -351,11 +359,12 @@ final class GasTopologyCoordinator {
 						sinkDelta = sinkDelta.add(parts.get(part));
 						if (thermal) sinkEnergy = sinkEnergy.add(SignedDyadic.of(energies[part]));
 					} else {
-						inventories.set(node - 1, inventories.get(node - 1).merge(parts.get(part))); contributed[node] = true;
+						inventories.set(node - 1, inventories.get(node - 1).merge(parts.get(part)));
+						if (retainControlVolumes) contributed[node] = true;
 						if (thermal) {
 							mixed[node - 1] = mixed[node - 1].add(SignedDyadic.of(energies[part]));
 							// Existing vacuum carries its old control volume through a free-expansion merge.
-							inherited[node - 1] = inherited[node - 1].add(SignedDyadic.of(control[part]));
+							if (retainControlVolumes) inherited[node - 1] = inherited[node - 1].add(SignedDyadic.of(control[part]));
 						}
 					}
 					part++;
@@ -366,29 +375,30 @@ final class GasTopologyCoordinator {
 				double trappedVolume = GasTopologyVolumePartition.absoluteRational(entry.getValue());
 				var trapped = ambientInventory(trappedVolume);
 				inventories.set(node - 1, inventories.get(node - 1).merge(trapped));
-				sourceDelta = sourceDelta.add(trapped); contributed[node] = true;
+				sourceDelta = sourceDelta.add(trapped);
+				if (retainControlVolumes) contributed[node] = true;
 				if (thermal) {
 					var trappedEnergy = SignedDyadic.of(domain.thermalState.ambientGasEnergy(trapped));
 					mixed[node - 1] = mixed[node - 1].add(trappedEnergy);
-					inherited[node - 1] = inherited[node - 1].add(SignedDyadic.of(trappedVolume));
+					if (retainControlVolumes) inherited[node - 1] = inherited[node - 1].add(SignedDyadic.of(trappedVolume));
 					sourceEnergy = sourceEnergy.add(trappedEnergy);
 				}
 			}
 			if (next.sealedExterior() && (!sourceDelta.isEmpty() || !sinkDelta.isEmpty()))
 				throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
-			if (thermal) for (var piece : next.capacity().pieces()) {
+			if (retainControlVolumes) for (var piece : next.capacity().pieces()) {
 				int node = next.nodeOfPiece(piece.id()), micro = piece.id() & 7, cell = piece.id() / 8;
 				// Removing a fixed wall exposes vacuum without a moving liquid interface doing volume work.
 				if (node > 0 && contributed[node] && (old.geometry().collisionMask(cell) & 1 << micro) != 0)
 					inherited[node - 1] = inherited[node - 1].add(SignedDyadic.of(piece.cubicMeters()));
 			}
-			if (thermal) for (int node = 1; node <= count; node++)
+			if (retainControlVolumes) for (int node = 1; node <= count; node++)
 				// New space inside a surviving finite cavity performs work on its old control volume.
 				// A whole new unowned cavity starts as vacuum at its actual current volume.
 				if (!contributed[node]) inherited[node - 1] = SignedDyadic.of(available[node - 1]);
 		}
-		if (thermal && deferVolumeWork) for (int node = 0; node < count; node++) inherited[node] = SignedDyadic.of(available[node]);
-		double[] mixedEnergy = doubles(mixed), inheritedVolume = doubles(inherited);
+		double[] mixedEnergy = doubles(mixed);
+		double[] inheritedVolume = retainControlVolumes ? doubles(inherited) : thermal ? available.clone() : null;
 		GasEnergyStore.GasRemapPlan thermalPlan = !thermal ? null : edit == null
 				? domain.thermalState.planGasRemap(domain.gasState.network, inventories, available,
 						mixedEnergy, inheritedVolume, sourceEnergy, sinkEnergy)

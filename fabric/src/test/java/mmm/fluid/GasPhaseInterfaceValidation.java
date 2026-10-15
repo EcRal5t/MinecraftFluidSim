@@ -131,8 +131,8 @@ public final class GasPhaseInterfaceValidation {
 			}
 		}
 		try {
-			for(int sourceCase=0;sourceCase<3;sourceCase++) {
-				boolean existingVapor=sourceCase==1, completeDepletion=sourceCase==2;
+			for(int sourceCase=0;sourceCase<4;sourceCase++) {
+				boolean existingVapor=sourceCase==1, completeDepletion=sourceCase==2, partialNeighbor=sourceCase==3;
 				var definitions=registry;
 				if(completeDepletion) {
 					var equalEnergyWater=new mmm.thermal.ThermalMaterialDefinition(water.id(),water.carrierKind(),water.carrierId(),300,0,.1,water.caloricSegments());
@@ -142,10 +142,13 @@ public final class GasPhaseInterfaceValidation {
 					var hotAir=new mmm.thermal.ThermalMaterialDefinition(air.id(),air.carrierKind(),air.carrierId(),400,0,.025,air.caloricSegments());
 					definitions=new mmm.thermal.ThermalRegistry(java.util.List.of(equalEnergyWater,equalEnergyVapor,hotAir),java.util.List.of(),java.util.List.of(transition),"","");
 				}
-				byte[] masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=0;
+				byte[] masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=0;if(partialNeighbor)masks[1]=0;
 				var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),32);
 				float volume=completeDepletion?mmm.granular.SolidVolume.toCellVolume(8*168):.5F;
-				domain.restoreParticleState(new FlipParticleState(2,2,2,.5F,1,volume,new float[]{.25F,.125F,.25F,volume},new float[3],masks));domain.sealDomainBoundary();
+				float[] positions=partialNeighbor?new float[]{.25F,.125F,.25F,volume, .75F,.125F,.25F,.5F}
+						:new float[]{.25F,.125F,.25F,volume};
+				domain.restoreParticleState(new FlipParticleState(2,2,2,.5F,positions.length/4,volume+(partialNeighbor?.5F:0),positions,
+						new float[positions.length/4*3],masks));domain.sealDomainBoundary();
 				domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());domain.bootstrapGasState("");
 				int node=domain.gasState.frame.commonCellNode(0);
 				var phase=new mmm.thermal.GasLiquidPhaseModel(definitions,domain.gasState.network.registry());
@@ -161,13 +164,31 @@ public final class GasPhaseInterfaceValidation {
 				var envelope=GasPhaseGeometryEnvelope.forBoiling(support,0,node);
 				var bounds=GasBoilingBatchBounds.forBoiling(support,0,node,0,transition,thermalCell,300,new boolean[0],255,phase,envelope);
 				check(bounds!=null,"Finite air lost its complete-source interval bound");
+				if(partialNeighbor) {
+					var frame=domain.gasState.frame;int peer=frame.commonCellNode(1);
+					check(peer>0 && peer!=node && !frame.fullDryFace(1,0,0)
+							&& frame.topology().connections().stream().anyMatch(edge->edge.area()>0
+							&& (edge.firstNode()==node && edge.secondNode()==peer || edge.firstNode()==peer && edge.secondNode()==node)),
+							"Partially dry fixed face lost its separate finite-rate gas connection");
+					check(!envelope.splitSource() && envelope.possibleStocks().isEmpty(),
+							"A permanent finite-rate face entered the source chamber's merge envelope");
+				}
 				var prepare=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("prepareBoilInventory")).findFirst().orElseThrow();prepare.setAccessible(true);
+				var geometryGetter=prepare.getReturnType().getDeclaredMethod("liquidGeometry");geometryGetter.setAccessible(true);
 				var complete=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("completeBoil")).findFirst().orElseThrow();complete.setAccessible(true);
 				var constructor=complete.getParameterTypes()[6].getDeclaredConstructor(GasLiquidPhaseChangeStage.class,int.class);constructor.setAccessible(true);
 				var source=constructor.newInstance(stage,0);var planes=GasRuntimeGeometry.prepareBoilContactPlanes(support,0,contact);
 				Object[] candidates=new Object[9];int largest=0;
 				for(int batch=1;batch<=8;batch++) {
 					var inventory=prepare.invoke(stage,0,node,0,transition,phase,thermalCell,new boolean[0],300.0,(long)batch,contact);
+					if(partialNeighbor && inventory!=null) {
+						var edit=(PhaseLiquidGeometryEdit)geometryGetter.invoke(inventory);
+						double released=mmm.units.SignedDyadic.of(1).subtract(edit.volume())
+								.multiply(mmm.units.SignedDyadic.of(domain.gasState.frame.geometry().cellVolumeCubicMeters())).toDouble();
+						double upper=envelope.volumeUpper(edit);
+						check(upper>=released && upper<=Math.nextUp(Math.nextUp(Math.nextUp(released))),
+								"Fixed partial neighbor capacity entered the edited chamber's volume upper bound");
+					}
 					candidates[batch]=complete.invoke(stage,0,node,transition,phase,contact,planes,source,inventory);
 					if(candidates[batch]!=null)largest=batch;
 				}

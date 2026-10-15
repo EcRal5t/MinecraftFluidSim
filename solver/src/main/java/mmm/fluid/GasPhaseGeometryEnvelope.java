@@ -86,9 +86,9 @@ final class GasPhaseGeometryEnvelope {
 					boolean crossing = (micro >>> axis & 1) == (sign > 0 ? 1 : 0);
 					if (crossing && (coordinate[axis] + sign < 0 || coordinate[axis] + sign >= sizes[axis])) continue;
 					int peer = crossing ? cell + sign * strides[axis] : cell, peerPiece = 8 * peer + (micro ^ 1 << axis);
+					// A fixed partial dry face remains a finite-rate port for every candidate.
 					if (parent[peerPiece] >= 0 && (!crossing || fullCutFace(source.geometry(), sign > 0 ? cell : peer, sign > 0 ? peer : cell, axis))
-							&& (variable[peer] || source.dryMicroFaceArea(peer, peerPiece & 7, axis,
-									crossing ? sign > 0 ? 0 : 1 : 0) > 0))
+							&& (!crossing || variable[peer] || source.fullDryFace(peer, axis, sign > 0 ? 0 : 1)))
 						join(parent, 8 * cell + micro, peerPiece);
 				}
 		}
