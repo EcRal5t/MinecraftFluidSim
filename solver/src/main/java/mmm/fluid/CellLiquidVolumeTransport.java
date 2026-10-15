@@ -11,6 +11,8 @@ final class CellLiquidVolumeTransport {
 	private ConservativeLiquidFlux transport;
 	private final ConservativeLiquidFlux scalarTransport;
 	private ConservativeLiquidFlux affineTransport;
+	private CellAffineVelocityField flowField;
+	private LiquidAffineFaceFlow capturedFlow;
 	private final LiquidFluxGeometry geometry;
 	private final double[] volume;
 	private final SignedDyadic[] exactVolume;
@@ -49,7 +51,7 @@ final class CellLiquidVolumeTransport {
 	/** Eulerian donor outflow and partial-micro-box sweep rate; prediction is used only for step estimation. */
 	double courantRate(double verticalPrediction) {
 		var field = domain.pressureSystem.markerVelocityField();
-		if (field != null) return affineCourantRate(new LiquidAffineFaceFlow(domain, scalarTransport, field), verticalPrediction);
+		if (field != null) return affineCourantRate(captureFlow(field), verticalPrediction);
 		double maximum = 0; Arrays.fill(outgoing, 0);
 		for (int f = 0; f < scalarTransport.flux.length; f++) {
 			double velocity = faceVelocity(f) + (scalarTransport.axis[f] == 1 ? verticalPrediction : 0);
@@ -69,6 +71,13 @@ final class CellLiquidVolumeTransport {
 
 	private double affineCourantRate(LiquidAffineFaceFlow flow, double verticalPrediction) {
 		return flow.courantRate(geometry,verticalPrediction);
+	}
+	private LiquidAffineFaceFlow captureFlow(CellAffineVelocityField field) {
+		if (flowField != field || capturedFlow == null || !capturedFlow.belongsTo(domain)) {
+			capturedFlow = new LiquidAffineFaceFlow(domain, scalarTransport, field);
+			flowField = field;
+		}
+		return capturedFlow;
 	}
 
 	private float faceVelocity(int face) {
@@ -93,7 +102,7 @@ final class CellLiquidVolumeTransport {
 				affineTransport.geometry(geometry);
 			}
 			transport = affineTransport;
-			flow = new LiquidAffineFaceFlow(domain, scalarTransport, field);
+			flow = captureFlow(field);
 			transport.faceSweep(flow);
 		}
 		try {
@@ -128,6 +137,8 @@ final class CellLiquidVolumeTransport {
 			if (domain.pressureSystem.usesMarkerPressure()) CellAffineWallProjection.projectTransport(domain);
 		} finally {
 			transport.faceSweep(null);
+			capturedFlow = null;
+			flowField = null;
 		}
 	}
 

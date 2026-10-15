@@ -48,7 +48,10 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		return Math.max(0, runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory()));
 	}
 	/** A constant, complete-component endpoint of this actual captured face trace. */
-	boolean belongsTo(FluidDomain domain) { return this.domain == domain && sourceRevision == domain.carrierMutationRevision(); }
+	boolean belongsTo(FluidDomain domain) {
+		return this.domain == domain && sourceRevision == domain.carrierMutationRevision()
+				&& phaseRevision == domain.pressurePhaseGeometry.revision();
+	}
 	double constantTrace(int face, int cell) {
 		if (sourceRevision != domain.carrierMutationRevision() || face < 0 || face >= faces.physicalFaceCount
 				|| cell != faces.left[face] && cell != faces.right[face]) return Double.NaN;
