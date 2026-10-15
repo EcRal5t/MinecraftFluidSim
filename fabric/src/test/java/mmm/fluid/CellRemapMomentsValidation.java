@@ -1342,13 +1342,13 @@ public final class CellRemapMomentsValidation {
 			check(shapeTrace > 0 && shapeTrace <= bound + 128 * Math.ulp(bound), "Sparse arrival exceeded its spatial second-moment bound");
 			var published = publishRemapForSupport(domain, remap);
 			var basis = CellAffineVelocity.capture(published);
-			check(basis.rank(receiver) == 4 && basis.hasRepresentableBasis(receiver), "Sparse arrival lacks actual published affine pressure support");
+			check(MarkerVelocitySpaceExperiment.rank(basis, receiver) == 4 && basis.hasRepresentableBasis(receiver), "Sparse arrival lacks actual published affine pressure support");
 			var zero = new ConservativeLiquidFlux(3, 3, 3); zero.geometry(new LiquidFluxGeometry(domain));
 			zero.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
 			for (boolean geometric : new boolean[]{false, true}) {
 				var unchanged = new CellCarrierRemapPlan(domain, zero, geometric ? 0 : dt, new BallisticLiquidRemap(27), geometric);
 				for (double component : unchanged.momentAudit.shapeApproximation()) check(component == 0, "Unmoved liquid gained a spatial shape approximation");
-				check(CellAffineVelocity.capture(publishRemapForSupport(domain, unchanged)).rank(donor) == count,
+				check(MarkerVelocitySpaceExperiment.rank(CellAffineVelocity.capture(publishRemapForSupport(domain, unchanged)), donor) == count,
 						"Zero-time or zero-flux remap changed its actual source rank");
 			}
 		}
@@ -1460,7 +1460,7 @@ public final class CellRemapMomentsValidation {
 		domain.setVolume(0, 0, 0, .25F);
 		var basis = CellAffineVelocity.capture(domain);
 		var volume = mmm.units.SignedDyadic.ZERO; var firstY = mmm.units.SignedDyadic.ZERO;
-		check(domain.particleCount() == 8 && basis.rank(0) == 4 && basis.hasRepresentableBasis(0),
+		check(domain.particleCount() == 8 && MarkerVelocitySpaceExperiment.rank(basis, 0) == 4 && basis.hasRepresentableBasis(0),
 				"Partial wet-layer initialization lacks positive three-dimensional affine support");
 		for (int p = 0; p < domain.particleCount(); p++) {
 			var weight = mmm.units.SignedDyadic.of(domain.particles.volume(p));

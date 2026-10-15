@@ -81,9 +81,10 @@ final class MarkerPressureProjection {
 		pressureOrigin = pressureCorrection = pressureCorrectionLow = null;
 		if (!domain.pressureSystem.usesMarkerPressure()) throw new IllegalStateException("Cell pressure requires liquid-only spatial inventory");
 		if (domain.particles.count() == 0) return false;
+		var spatial = domain.pressureSystem.spatialInput();
 		gasFrame = domain.gasBoundary.frame();
 		if (gasFrame == null) throw blocked("Marker pressure requires current gas geometry");
-		geometry = gasFrame.liquidPressureGeometry(domain); basis = CellAffineVelocity.capture(domain, geometry);
+		geometry = spatial.geometry(); basis = spatial.basis();
 		boolean[] gasContacts = new boolean[domain.gasState.network.nodeCount() + 1];
 		geometry.forEachGasPiece(piece -> gasContacts[gasNode(piece)] = true);
 		pressureAnchor = -1;
@@ -95,7 +96,7 @@ final class MarkerPressureProjection {
 		pressureReference = boundary.pressureReference(gasContacts);
 		domain.pressureAnchor = pressureAnchor; domain.pressureReference = pressureReference;
 		wallProjection = new CellAffineWallProjection(basis);
-		transfer = CellAffineMacTransfer.capture(domain, basis, geometry);
+		transfer = spatial.transfer();
 		int count = basis.markerCount();
 		originalVelocity = markers(count); originalPosition = markers(count); originalMass = new double[count]; originalVolume = new double[count];
 		for (int i = 0; i < count; i++) {
@@ -142,8 +143,10 @@ final class MarkerPressureProjection {
 			if (minus != plus) shared.merge(new SharedBlocks(minus,plus,face.axis()),face.moments(),LiquidPressureGeometry.SurfaceMoments::add);
 		}
 		sharedStart = definitions.size();
+		var coarseFaces = new ArrayList<PressureCoarsening.Face>();
 		for (var entry : shared.entrySet()) {
 			var face = entry.getKey();
+			coarseFaces.add(new PressureCoarsening.Face(definitions.size(), face.minus(), face.plus()));
 			for (int test = 0; test < 3; test++) definitions.add(new Row(List.of(
 					new Block(face.minus(), face.axis(), trace(face.minus(), face.axis(), entry.getValue(), test, 1)),
 					new Block(face.plus(), face.axis(), trace(face.plus(), face.axis(), entry.getValue(), test, -1))), 0));
@@ -172,6 +175,7 @@ final class MarkerPressureProjection {
 			gasRows[node] = definitions.size(); definitions.add(new Row(entry.getValue(), s));
 		}
 		rows = List.copyOf(definitions); operator = new CellVelocityConstraintOperator(basis, rows);
+		PressureCoarsening.prepare(operator, basis, liquidRows, coarseFaces, gasRows, domain.sizeX, domain.sizeY);
 		int rowCount = rows.size(); storage = new double[rowCount]; gasInitialPressure = new double[rowCount];
 		for (int row = 0; row < rowCount; row++) storage[row] = rows.get(row).storage();
 		for (int node = 1; node < gasRows.length; node++) if (gasRows[node] >= 0) gasInitialPressure[gasRows[node]] = boundary.gasPressureOfNode(node) - pressureReference;
@@ -396,14 +400,12 @@ final class MarkerPressureProjection {
 			var result = SparsePressureFactor.solve(operator, source, pressureCorrection, pressureCorrectionLow, diagonal,
 					tolerance, domain.config.maxPressureIterations());
 			iterations = result.iterations();
-			operator.residual(pressureCorrection, pressureCorrectionLow, source, r); residual = rms(r);
+			residual = result.residualRms();
 		}
-		operator.residual(pressureCorrection, pressureCorrectionLow, source, r);
 		for (int i = 0; i < n; i++) {
 			pressure[i] = SignedDyadic.of(pressureOrigin[i]).add(SignedDyadic.of(pressureCorrection[i]))
 					.add(SignedDyadic.of(pressureCorrectionLow[i])).toDouble();
 		}
-		residual = rms(r);
 		if (!Double.isFinite(residual) || residual > tolerance) return new PressureProjectionResult(iterations, residual / unit, false);
 		double[][] force = markers(basis.markerCount()); operator.force(pressureCorrection, pressureOrigin, pressureCorrectionLow, force);
 		candidate = markers(basis.markerCount()); publishedVelocity = markers(basis.markerCount());

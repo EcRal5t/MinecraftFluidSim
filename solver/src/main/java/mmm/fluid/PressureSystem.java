@@ -10,6 +10,9 @@ final class PressureSystem {
 	private final MarkerPressureProjection markerProjection;
 	private CellAffineVelocityField samplingField;
 	private long samplingInventoryRevision, samplingGeometryRevision;
+	private SpatialInput spatialInput;
+	private long spatialInventoryRevision, spatialGeometryRevision, spatialCarrierRevision;
+	record SpatialInput(LiquidPressureGeometry geometry, CellAffineVelocity basis, CellAffineMacTransfer transfer) { }
 	private final double[] liquidPressure;
 	private double[] gasPressure;
 	/** Per-projection pressure source: liquid, fixed zero, or a positive gas node id. */
@@ -58,6 +61,27 @@ final class PressureSystem {
 	}
 	void forEachGranularGasNode(float dt, java.util.function.IntConsumer accept) { granular.forEachGasNode(dt, accept); }
 	MarkerPressureProjection markerProjection() { return markerProjection; }
+	/** One immutable wet space serves velocity fitting, pressure and transported-wall publication. */
+	SpatialInput spatialInput() {
+		domain.ensurePressureGeometry();
+		if (!usesMarkerPressure()) throw new IllegalStateException("Marker spatial input requires liquid-only inventory");
+		var current = currentSpatialInput(); if (current != null) return current;
+		spatialInput = null;
+		var geometry = GasRuntimeGeometry.captureLiquidPressureGeometry(domain);
+		var basis = CellAffineVelocity.capture(domain, geometry);
+		var transfer = CellAffineMacTransfer.capture(domain, basis, geometry);
+		spatialInventoryRevision = domain.markerGrid.inventoryRevision;
+		spatialGeometryRevision = domain.pressurePhaseGeometry.revision();
+		spatialCarrierRevision = domain.carrierMutationRevision;
+		return spatialInput = new SpatialInput(geometry, basis, transfer);
+	}
+	SpatialInput currentSpatialInput() {
+		return !domain.gridDirty && !domain.pressureGeometryDirty && spatialInput != null
+				&& spatialInventoryRevision == domain.markerGrid.inventoryRevision
+				&& spatialGeometryRevision == domain.pressurePhaseGeometry.revision()
+				&& spatialCarrierRevision == domain.carrierMutationRevision ? spatialInput : null;
+	}
+	void clearSpatialInput() { spatialInput = null; samplingField = null; }
 	void updateMarkerVelocityField(CellAffineVelocityField field) {
 		samplingField = field;
 		samplingInventoryRevision = domain.markerGrid.inventoryRevision;

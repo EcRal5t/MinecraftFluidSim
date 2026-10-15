@@ -80,9 +80,8 @@ final class MarkerGridBuilder {
 
 	/** Uses the pressure map for both the incoming velocity and subsequent marker publications. */
 	private static void scatterMarkerVelocities(FluidDomain domain) {
-		var geometry = LiquidPressureGeometry.capture(domain);
-		CellAffineVelocity basis = CellAffineVelocity.capture(domain, geometry);
-		CellAffineMacTransfer transfer = CellAffineMacTransfer.capture(domain, basis, geometry);
+		var spatial = domain.pressureSystem.spatialInput();
+		var basis = spatial.basis(); var transfer = spatial.transfer();
 		double[][] markerVelocity = new double[3][domain.particles.count()];
 		for (int marker = 0; marker < domain.particles.count(); marker++) {
 			markerVelocity[0][marker] = domain.particles.velocityX(marker);

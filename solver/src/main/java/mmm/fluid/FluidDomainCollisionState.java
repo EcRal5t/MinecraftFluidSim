@@ -59,6 +59,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		int restoredCount = state.particleCount();
 		if (restoredCount > maximumParticleCount) throw new IllegalArgumentException("Particle state exceeds domain marker budget");
 		CellRemapMicroTopology.requireRestoreCapacity(state);
+		pressureSystem.clearSpatialInput();
 		ensureParticleCapacity(restoredCount);
 		float[] positionVolume = state.positionVolume();
 		float[] particleVelocities = state.particleVelocities();

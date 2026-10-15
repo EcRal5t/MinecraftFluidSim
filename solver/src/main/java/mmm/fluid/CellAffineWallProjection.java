@@ -7,9 +7,8 @@ final class CellAffineWallProjection {
 
 	/** Enforces fixed walls on the actual remapped velocity, before any later observation. */
 	static double projectTransport(FluidDomain domain) {
-		domain.ensureInventoryGrid();
-		var geometry = LiquidPressureGeometry.capture(domain);
-		var basis = CellAffineVelocity.capture(domain, geometry);
+		var spatial = domain.pressureSystem.spatialInput();
+		var basis = spatial.basis();
 		var projection = new CellAffineWallProjection(basis);
 		var before = new double[3][basis.markerCount()];
 		for (int marker = 0; marker < basis.markerCount(); marker++) {
@@ -28,7 +27,7 @@ final class CellAffineWallProjection {
 		if (!Double.isFinite(work)) throw new FluidDomain.PressureSolveBlockedException("Unrepresentable transported wall work");
 		var coefficient = new double[3][4 * basis.blockCount()]; basis.fit(after, coefficient);
 		var field = new CellAffineVelocityField(basis, coefficient);
-		var transfer = CellAffineMacTransfer.capture(domain, basis, geometry);
+		var transfer = spatial.transfer();
 		var mapped = new double[][]{new double[transfer.faceCount(0)], new double[transfer.faceCount(1)], new double[transfer.faceCount(2)]};
 		transfer.apply(coefficient, mapped);
 		for (double[] axis : mapped) for (double value : axis)

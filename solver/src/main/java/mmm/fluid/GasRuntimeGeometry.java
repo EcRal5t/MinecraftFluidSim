@@ -76,20 +76,9 @@ final class GasRuntimeGeometry {
 			this.capacity = prepared.capacity().capture(domain, geometry, topology, this.occupiedSvq, liquidStock);
 		} else {
 			MarkerGridIndex phaseIndex = allDry ? emptyIndex(domain.cellCount, 0) : rawIndex == null ? index(domain) : rawIndex;
-			phaseIndex.exactCellVolumeInventory = new SignedDyadic[domain.cellCount];
-			for (int cell = 0; cell < domain.cellCount; cell++) {
-				var tuple = liquidStock.get(cell);
-				phaseIndex.exactCellVolumeInventory[cell] = tuple.volume();
-				phaseIndex.exactCellMarkerVolume[cell] = tuple.volume().toDouble();
-				phaseIndex.markerCount[cell] = tuple.markerCount();
-			}
-			var occupancy = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize);
-			occupancy.setFixedCellSvq(this.occupiedSvq);
-			this.phase = new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
 			GasRuntimeGeometry captured = domain.gasState.frame;
-			boolean[] sameLocalStock = matchingLocalStock(captured, cut);
-			phase.rebuildLiquidEdits(solid, phaseIndex.exactCellMarkerVolume, cut, occupancy, new boolean[domain.cellCount],
-					phaseIndex, domain.particles, cellSize, liquidStock, sameLocalStock == null ? null : captured.phase, sameLocalStock);
+			boolean[] sameLocalStock = matchingLocalStock(captured, cut, liquidStock, this.occupiedSvq, cellSize);
+			this.phase = capturePhase(domain, cut, solid, this.occupiedSvq, liquidStock, phaseIndex, captured, sameLocalStock);
 			if (sameLocalStock == null) {
 				this.geometry = GasComplementGeometry.capture(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize, solid, cut, phase);
 			} else {
@@ -107,7 +96,8 @@ final class GasRuntimeGeometry {
 		for (var chamber : topology.chambers()) minimumPieceKeys[chamber.node()] = chamber.minimumPiece();
 	}
 
-	private boolean[] matchingLocalStock(GasRuntimeGeometry captured, FlipCutCellGeometry cut) {
+	private static boolean[] matchingLocalStock(GasRuntimeGeometry captured, FlipCutCellGeometry cut,
+			List<PhaseLiquidGeometryEdit> liquidStock, long[] occupiedSvq, float cellSize) {
 		if (captured == null || !cut.matchesShape(captured.geometry.sizeX(), captured.geometry.sizeY(), captured.geometry.sizeZ())
 				|| Float.floatToRawIntBits(cellSize) != Float.floatToRawIntBits(captured.cellSize)
 				|| captured.liquidStock.size() != liquidStock.size()) return null;
@@ -115,6 +105,35 @@ final class GasRuntimeGeometry {
 		for (int cell = 0; cell < same.length; cell++) same[cell] = occupiedSvq[cell] == captured.occupiedSvq[cell]
 				&& cut.mask(cell) == captured.geometry.collisionMask(cell) && liquidStock.get(cell).equals(captured.liquidStock.get(cell));
 		return same;
+	}
+	private static FlipPressurePhaseGeometry capturePhase(FluidDomain domain, FlipCutCellGeometry cut, boolean[] solid,
+			long[] occupied, List<PhaseLiquidGeometryEdit> stock, MarkerGridIndex index,
+			GasRuntimeGeometry captured, boolean[] sameLocalStock) {
+		index.exactCellVolumeInventory = new SignedDyadic[domain.cellCount];
+		for (int cell = 0; cell < domain.cellCount; cell++) {
+			var tuple = stock.get(cell);
+			index.exactCellVolumeInventory[cell] = tuple.volume();
+			index.exactCellMarkerVolume[cell] = tuple.volume().toDouble(); index.markerCount[cell] = tuple.markerCount();
+		}
+		var occupancy = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
+		occupancy.setFixedCellSvq(occupied);
+		var phase = new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
+		phase.rebuildLiquidEdits(solid, index.exactCellMarkerVolume, cut, occupancy, new boolean[domain.cellCount],
+				index, domain.particles, domain.config.cellSize(), stock, sameLocalStock == null ? null : captured.phase, sameLocalStock);
+		return phase;
+	}
+	/** The same raw-stock PLIC as gas capture, without topology or inventory publication. */
+	static LiquidPressureGeometry captureLiquidPressureGeometry(FluidDomain domain) {
+		domain.ensureInventoryGrid();
+		var cut = domain.geometry.cutCells; var index = index(domain); var stock = stock(domain, cut, index);
+		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		var captured = domain.gasState.frame;
+		var same = matchingLocalStock(captured, cut, stock, occupied, domain.config.cellSize());
+		boolean unchanged = same != null;
+		if (same != null) for (boolean cell : same) unchanged &= cell;
+		if (unchanged) return captured.liquidPressureGeometry(domain);
+		var phase = capturePhase(domain, cut, domain.geometry.solid, occupied, stock, index, captured, same);
+		return LiquidPressureGeometry.capture(domain, phase, stock);
 	}
 
 	static GasRuntimeGeometry capture(FluidDomain domain, PhaseLiquidGeometryEdit edit, long[] occupiedSvq, boolean sealedExterior) {
@@ -320,9 +339,13 @@ final class GasRuntimeGeometry {
 	boolean fullDryFace(int cell, int axis, int coordinate) {
 		return GasFaceIntersection.fullDryFace(phase, cell, axis, coordinate);
 	}
+	private LiquidPressureGeometry pressureGeometry;
 	LiquidPressureGeometry liquidPressureGeometry(FluidDomain domain) {
 		requireCurrentCarrierGeometry(domain);
-		return LiquidPressureGeometry.capture(domain, phase, liquidStock);
+		var spatial = domain.pressureSystem.currentSpatialInput();
+		if (spatial != null) return spatial.geometry();
+		if (pressureGeometry == null) pressureGeometry = LiquidPressureGeometry.capture(domain, phase, liquidStock);
+		return pressureGeometry;
 	}
 	private void requireCurrentCarrierGeometry(FluidDomain domain) {
 		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();

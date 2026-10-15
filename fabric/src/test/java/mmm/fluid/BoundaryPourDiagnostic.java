@@ -201,7 +201,7 @@ public final class BoundaryPourDiagnostic {
 			int p = basis.blockMarker(block, k); mass += basis.massKilograms(p); volume += d.particles.volume(p);
 		}
 		System.out.printf("POUR source cell=%d rank=%d reliableRank=%d modeCount=%d count=%d kg=%g rawV=%g fraction=%g normal=[%g,%g,%g] offset=%g%n", cell,
-				basis.rank(block), basis.reliableRank(block), basis.modeCount(block), basis.blockMarkerCount(block), mass, volume,
+				MarkerVelocitySpaceExperiment.rank(basis, block), basis.reliableRank(block), basis.modeCount(block), basis.blockMarkerCount(block), mass, volume,
 				d.pressurePhaseGeometry.liquidFractionExact(cell), d.pressurePhaseGeometry.planeNormal(cell, 0),
 				d.pressurePhaseGeometry.planeNormal(cell, 1), d.pressurePhaseGeometry.planeNormal(cell, 2), d.pressurePhaseGeometry.planeOffset(cell));
 		for (int a = 0; a < 3; a++) System.out.printf("POUR source cell=%d axis=%d coefficients=%s%n", cell, a, Arrays.toString(Arrays.copyOfRange(coefficient[a], 4 * block, 4 * block + 4)));
@@ -245,7 +245,7 @@ public final class BoundaryPourDiagnostic {
 			}
 			basis.fit(velocity, coefficient);
 			for (int block = 0, shown = 0; block < basis.blockCount() && shown < 4; block++) if (basis.blockMarkerCount(block) > 0
-					&& (basis.reliableRank(block) + 1 < basis.rank(block) || !basis.hasRepresentableBasis(block))) {
+					&& (basis.reliableRank(block) + 1 < MarkerVelocitySpaceExperiment.rank(basis, block) || !basis.hasRepresentableBasis(block))) {
 				inputCell(d, basis, coefficient, block); shown++;
 			}
 			return;
@@ -374,8 +374,9 @@ public final class BoundaryPourDiagnostic {
 			System.out.printf("POUR pressure referencedResidual=%g%n", actual / Math.sqrt(Math.max(1, rhs.length)));
 		}
 		try {
-			var basis = operator.rowBasis();
-			System.out.printf("POUR pressure independentRows=%d dependentRows=%d%n", basis.size(), basis.dependencyCount());
+			var patches = operator.rowPatches();
+			System.out.printf("POUR pressure patches=%d summedPatchRows=%d maxPatchRows=%d%n", patches.size(),
+					patches.stream().mapToInt(PressureRowBasis::size).sum(), patches.stream().mapToInt(PressureRowBasis::size).max().orElse(0));
 		} catch (PressureRowBasis.Unavailable unavailable) {
 			System.out.println("POUR pressure row selection unavailable: " + unavailable.getMessage());
 		}
@@ -438,7 +439,7 @@ public final class BoundaryPourDiagnostic {
 			for (int a = 0; a < 3; a++) { minimum[a] = Math.min(minimum[a], basis.position(marker, a)); maximum[a] = Math.max(maximum[a], basis.position(marker, a)); }
 		}
 		System.out.printf("POUR cell=%d rank=%d reliableRank=%d modeCount=%d count=%d massKg=%g geometricVolume=%g centroid=%s positionMin=%s max=%s%n",
-				cell, basis.rank(block), basis.reliableRank(block), basis.modeCount(block), basis.blockMarkerCount(block), totalMass,
+				cell, MarkerVelocitySpaceExperiment.rank(basis, block), basis.reliableRank(block), basis.modeCount(block), basis.blockMarkerCount(block), totalMass,
 				profile == null ? 0 : profile.volume(), profile == null ? "none" : profile.centroid(), Arrays.toString(minimum), Arrays.toString(maximum));
 		for (int a = 0; a < 3; a++) System.out.printf("POUR cell=%d axis=%d coefficients=%s%n", cell, a, Arrays.toString(Arrays.copyOfRange(coefficients[a], 4 * block, 4 * block + 4)));
 		double[] rawMass = view.originalMass(), rawVolume = view.originalVolume();

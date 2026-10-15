@@ -410,6 +410,38 @@ final class MarkerVelocitySpaceExperiment {
 		}
 		var result = new double[n]; for (int i = 0; i < n; i++) result[i] = a[i][n]; return result;
 	}
+	/** Independent exact affine support of the captured physical positions. */
+	static int rank(CellAffineVelocity basis, int block) {
+		return rank(hullCoordinates(basis, block, false));
+	}
+	static boolean canRepresentPoint(CellAffineVelocity basis, int block, double x, double y, double z) {
+		if (!(Double.isFinite(x) && Double.isFinite(y) && Double.isFinite(z)) || basis.blockMarkerCount(block) == 0) return false;
+		var coordinates = hullCoordinates(basis, block, true); int last = coordinates.length - 1;
+		int sourceRank = rank(Arrays.copyOf(coordinates, last));
+		coordinates[last] = new ExactRational[]{ExactRational.ONE, exact(x), exact(y), exact(z)};
+		return rank(coordinates) == sourceRank;
+	}
+	private static ExactRational[][] hullCoordinates(CellAffineVelocity basis, int block, boolean append) {
+		int count = basis.blockMarkerCount(block); var coordinates = new ExactRational[count + (append ? 1 : 0)][];
+		for (int i = 0; i < count; i++) {
+			int marker = basis.blockMarker(block, i);
+			coordinates[i] = new ExactRational[]{ExactRational.ONE, exact(basis.position(marker, 0)),
+					exact(basis.position(marker, 1)), exact(basis.position(marker, 2))};
+		}
+		return coordinates;
+	}
+	static void pointWeights(CellAffineVelocity basis, int block, double x, double y, double z, double[] result) {
+		if (result.length != 4) throw new IllegalArgumentException("Expected four affine weights");
+		result[0] = 1; result[1] = (x - basis.center(block, 0)) / basis.cellSize();
+		result[2] = (y - basis.center(block, 1)) / basis.cellSize(); result[3] = (z - basis.center(block, 2)) / basis.cellSize();
+	}
+	/** Expand A F independently when checking the production fit and transpose. */
+	static SignedDyadic coefficientExact(CellAffineVelocity basis, int marker, int outputAxis, int inputAxis, int term) {
+		int block = basis.markerBlock(marker); var sum = SignedDyadic.ZERO;
+		for (int mode = 0; mode < basis.modeCount(block); mode++) sum = sum.add(
+				basis.modeCoefficientExact(block, mode, outputAxis, term).multiply(basis.modeWeightExact(marker, mode, inputAxis)));
+		return sum;
+	}
 	/** Exact rank for these small dyadic matrices, including every real input direction. */
 	static int rank(double[][] input) {
 		var a = new ExactRational[input.length][];

@@ -6,12 +6,12 @@ import java.util.Arrays;
 
 /**
  * Actual-mass fit and adjoint for q_axis times affine fields on each supported open block.
- * Wet walls determine q; reliable support admits strain while actual positions retain rotation.
+ * Wet walls determine q; position-storage uncertainty selects resolvable coupled fields.
  */
 final class CellAffineVelocity {
 	private final int physicalCellCount, blockCount, markerCount, sizeX, sizeY;
 	private final double h;
-	private final int[] cells, offsets, markers, ranks, hullPoints;
+	private final int[] cells, offsets, markers;
 	private final int[] blockCells, supports, extraOffsets, localOrdinals;
 	private final double[] mass, position, center, normalShapes;
 	private final boolean[] normalAxes;
@@ -56,11 +56,10 @@ final class CellAffineVelocity {
 				} while (remaining != 0);
 			}
 		}
-		offsets = new int[blockCount + 1]; markers = new int[markerCount]; ranks = new int[blockCount];
+		offsets = new int[blockCount + 1]; markers = new int[markerCount];
 		center = new double[3 * blockCount]; normalShapes = new double[9 * blockCount];
 		normalAxes = new boolean[3 * blockCount];
 		for (int key = 0; key < normalAxes.length; key++) normalShapes[3 * key] = 1;
-		hullPoints = new int[4 * blockCount]; Arrays.fill(hullPoints, -1);
 		models = new CellAffineFit.Model[blockCount]; localOrdinals = new int[markerCount];
 		for (int i = 0; i < markerCount; i++) {
 			int micro = CellRemapMicroTopology.positionMicro((float) h, (float) position[3 * i], (float) position[3 * i + 1], (float) position[3 * i + 2]);
@@ -83,9 +82,11 @@ final class CellAffineVelocity {
 	private CellAffineFit.Model captureModel(int block) {
 		int n = blockMarkerCount(block);
 		var localMass = new double[n]; var relative = new double[n][3]; var error = new double[n][3];
-		var shape = new double[3][n]; var shaped = new boolean[3]; var centerOffset = new double[3];
+		var shape = new double[3][n]; var shapeDerivative = new double[3][n]; var shapeCurvature = new double[3];
+		var shaped = new boolean[3]; var centerOffset = new double[3];
 		for (int axis = 0; axis < 3; axis++) {
 			shaped[axis] = hasNormalShape(block, axis);
+			shapeCurvature[axis] = normalShapes[9 * block + 3 * axis + 2];
 			centerOffset[axis] = (center(block, axis) - physicalCenter(block, axis)) / h;
 		}
 		for (int i = 0; i < n; i++) {
@@ -95,9 +96,12 @@ final class CellAffineVelocity {
 				relative[i][axis] = (coordinate - center(block, axis)) / h;
 				error[i][axis] = .5 * Math.ulp((float) coordinate) / h;
 				shape[axis][i] = shapeValue(block, axis, coordinate);
+				int base = 9 * block + 3 * axis;
+				double t = (coordinate - physicalCenter(block, axis)) / h;
+				shapeDerivative[axis][i] = Math.fma(2 * normalShapes[base + 2], t, normalShapes[base + 1]);
 			}
 		}
-		return CellAffineFit.capture(localMass, relative, error, shape, shaped, centerOffset);
+		return CellAffineFit.capture(localMass, relative, error, shape, shapeDerivative, shapeCurvature, shaped, centerOffset);
 	}
 
 	private static boolean splitMicro(LiquidPressureGeometry geometry, int cell, int support, int sourceMicros) {
@@ -142,20 +146,6 @@ final class CellAffineVelocity {
 		}
 	}
 
-	/** On-demand diagnostic hull; production modes use the reliable support captured by CellAffineFit. */
-	private void captureHull(int cell) {
-		int base = 4 * cell, origin = markers[offsets[cell]]; hullPoints[base] = origin;
-		int rank = 1;
-		for (int k = offsets[cell] + 1; k < offsets[cell + 1] && rank < 4; k++) {
-			int i = markers[k];
-			boolean independent = rank == 1 ? !samePoint(origin, i) : rank == 2
-					? !collinear(origin, hullPoints[base + 1], i)
-					: determinant(origin, hullPoints[base + 1], hullPoints[base + 2], i).signum() != 0;
-			if (independent) hullPoints[base + rank++] = i;
-		}
-		ranks[cell] = rank;
-	}
-
 	int markerCount() { return markerCount; }
 	int blockCount() { return blockCount; }
 	int physicalCellCount() { return physicalCellCount; }
@@ -190,10 +180,6 @@ final class CellAffineVelocity {
 				| (z >= (physicalCell / (sizeX * sizeY) + .5) * h ? 4 : 0);
 		return blockForMicro(physicalCell, micro);
 	}
-	int rank(int cell) {
-		if (ranks[cell] == 0 && blockMarkerCount(cell) > 0) captureHull(cell);
-		return ranks[cell];
-	}
 	int reliableRank(int block) { return models[block] == null ? 0 : models[block].reliableRank(); }
 	int modeCount(int block) { return models[block] == null ? 0 : models[block].modeCount(); }
 	SignedDyadic modeCoefficientExact(int block, int mode, int axis, int term) {
@@ -213,13 +199,6 @@ final class CellAffineVelocity {
 	double massKilograms(int marker) { return mass[marker]; }
 	double position(int marker, int axis) { return position[3 * marker + axis]; }
 	double center(int cell, int axis) { return center[3 * cell + axis]; }
-	/** On-demand observation of A F for independent diagnostics. Production retains both factors. */
-	SignedDyadic coefficientExact(int marker, int outputAxis, int inputAxis, int term) {
-		int block = cells[marker]; requireRepresentable(block); SignedDyadic sum = SignedDyadic.ZERO;
-		for (int mode = 0; mode < modeCount(block); mode++)
-			sum = sum.add(modeCoefficientExact(block, mode, outputAxis, term).multiply(modeWeightExact(marker, mode, inputAxis)));
-		return sum;
-	}
 	void fit(double[][] markerVelocity, double[][] cellCoefficients) {
 		checkShape(markerVelocity, markerCount); checkShape(cellCoefficients, 4 * blockCount); checkAlias(markerVelocity, cellCoefficients);
 		for (double[] axis : cellCoefficients) Arrays.fill(axis, 0);
@@ -279,10 +258,6 @@ final class CellAffineVelocity {
 		}
 		return value / h;
 	}
-	void pointWeights(int cell, double x, double y, double z, double[] result) {
-		requireRepresentable(cell); if (result.length != 4) throw new IllegalArgumentException("Expected four affine weights");
-		result[0] = 1; result[1] = (x - center[3 * cell]) / h; result[2] = (y - center[3 * cell + 1]) / h; result[3] = (z - center[3 * cell + 2]) / h;
-	}
 	/** Integral of the derivative of the same restricted polynomial used by every surface trace. */
 	void volumeDivergenceWeights(int cell, int axis, double volume, double[] result) {
 		requireRepresentable(cell);
@@ -316,30 +291,7 @@ final class CellAffineVelocity {
 		if (direction == axis) { result[0] += q0; result[axis + 1] += q1; result[quadratic] += q2; }
 	}
 
-	/** Exact membership in the source affine hull, independently of the chosen field extension. */
-	boolean canRepresentPoint(int cell, double x, double y, double z) {
-		if (!(Double.isFinite(x) && Double.isFinite(y) && Double.isFinite(z)) || rank(cell) == 0) return false;
-		int base = 4 * cell, origin = hullPoints[base];
-		SignedDyadic[] point = {difference(x, position[3 * origin]), difference(y, position[3 * origin + 1]), difference(z, position[3 * origin + 2])};
-		return switch (ranks[cell]) {
-			case 1 -> point[0].signum() == 0 && point[1].signum() == 0 && point[2].signum() == 0;
-			case 2 -> crossZero(vector(origin, hullPoints[base + 1]), point);
-			case 3 -> determinant(vector(origin, hullPoints[base + 1]), vector(origin, hullPoints[base + 2]), point).signum() == 0;
-			default -> true;
-		};
-	}
-	private boolean samePoint(int a, int b) { return position[3 * a] == position[3 * b] && position[3 * a + 1] == position[3 * b + 1] && position[3 * a + 2] == position[3 * b + 2]; }
-	private boolean collinear(int origin, int a, int b) { return crossZero(vector(origin, a), vector(origin, b)); }
-	private SignedDyadic determinant(int origin, int a, int b, int c) { return determinant(vector(origin, a), vector(origin, b), vector(origin, c)); }
-	private SignedDyadic[] vector(int origin, int point) { return new SignedDyadic[]{difference(position[3 * point], position[3 * origin]), difference(position[3 * point + 1], position[3 * origin + 1]), difference(position[3 * point + 2], position[3 * origin + 2])}; }
 	private static SignedDyadic difference(double a, double b) { return SignedDyadic.of(a).subtract(SignedDyadic.of(b)); }
-	private static boolean crossZero(SignedDyadic[] a, SignedDyadic[] b) {
-		for (int i = 0; i < 3; i++) if (!a[(i + 1) % 3].multiply(b[(i + 2) % 3]).equals(a[(i + 2) % 3].multiply(b[(i + 1) % 3]))) return false; return true;
-	}
-	private static SignedDyadic determinant(SignedDyadic[] a, SignedDyadic[] b, SignedDyadic[] c) {
-		SignedDyadic value = SignedDyadic.ZERO;
-		for (int i = 0; i < 3; i++) value = value.add(a[i].multiply(b[(i + 1) % 3].multiply(c[(i + 2) % 3]).subtract(b[(i + 2) % 3].multiply(c[(i + 1) % 3])))); return value;
-	}
 	private void requireRepresentable(int cell) {
 		if (models[cell] == null) throw new IllegalStateException("Missing cell velocity model at block " + cell);
 	}

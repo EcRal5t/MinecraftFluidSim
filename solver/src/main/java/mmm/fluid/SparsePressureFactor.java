@@ -1,15 +1,20 @@
 package mmm.fluid;
 
 import mmm.units.SignedDyadic;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import org.ejml.data.DMatrixSparseCSC;
 import org.ejml.sparse.FillReducing;
 import org.ejml.sparse.csc.factory.DecompositionFactory_DSCC;
 import org.ejml.sparse.csc.misc.TriangularSolver_DSCC;
 
-/** Raw mass-whitened QR preconditions a full-row residual-minimizing pressure solve. */
+/** Overlapping local mass-whitened QR patches and full-row diagonal response precondition the actual solve. */
 final class SparsePressureFactor {
 	private SparsePressureFactor() { }
+	private record Patch(PressureRowBasis basis, double[] scale, DMatrixSparseCSC triangular, double[] solution) { }
+	private record Coarse(CellVelocityConstraintOperator.CoarseSpace space, Patch patch, double[] restricted, double[] restrictedLow) { }
+	private record FactorSize(double retained, double workspace) { }
 	static PressureProjectionResult solve(CellVelocityConstraintOperator operator, double[] rhs, double[] pressure,
 			double[] diagonal, double tolerance, int maximumSolves) {
 		var exact = new SignedDyadic[rhs.length];
@@ -42,76 +47,75 @@ final class SparsePressureFactor {
 			if (Double.isFinite(initialResidual) && initialResidual <= tolerance)
 				return new PressureProjectionResult(0, initialResidual, true);
 			if (!Double.isFinite(initialResidual)) return unavailable(iterations, initialResidual);
-			PressureRowBasis basis = operator.rowBasis();
-			if (basis.size() == 0) return unavailable(iterations, initialResidual);
-			double[] scale = new double[basis.size()];
-			for (int row = 0; row < scale.length; row++) {
-				scale[row] = 1 / Math.sqrt(diagonal[basis.row(row)]);
-				if (!(scale[row] > 0 && Double.isFinite(scale[row]))) return unavailable(iterations, initialResidual);
+			var coordinates = operator.rowPatches();
+			var coarseSpace = operator.coarseSpace();
+			var coarseBasis = coarseSpace == null ? null : coarseSpace.operator().coarseBasis();
+			var diagonalScale = new double[rhs.length];
+			for (int row = 0; row < diagonalScale.length; row++) if (diagonal[row] > 0) {
+				diagonalScale[row] = 1 / Math.sqrt(diagonal[row]);
+				if (!(diagonalScale[row] > 0 && Double.isFinite(diagonalScale[row]))) return unavailable(iterations, initialResidual);
 			}
-			int limit = Math.min(maximumSolves, basis.size());
-			var size = operator.whitenedSize(basis);
-			// Sparse QR can fill its input rectangle and R triangle; Arnoldi stores at most the solve budget.
-			double rectangle = (double) size.features() * basis.size();
-			double triangle = (double) basis.size() * (basis.size() + 1L) / 2;
-			double krylovBytes = 8 * ((3.0 * limit + 16) * rhs.length + (limit + 1.0) * limit + 5.0 * limit);
-			if (rectangle > Integer.MAX_VALUE || triangle > Integer.MAX_VALUE
-					|| !fitsFactorMemory(36 * (rectangle + triangle) + 48.0 * size.maximumEntries()
-							+ krylovBytes + 128.0 * (size.features() + basis.size()), new boolean[]{false}))
+			double iterationBytes = 8 * 20.0 * rhs.length;
+			double retainedBytes = operator.whitenedBytes(), workspaceBytes = 0;
+			if (coarseSpace != null) retainedBytes += coarseSpace.operator().whitenedBytes();
+			for (var basis : coordinates) {
+				var size = factorSize(operator, basis); retainedBytes += size.retained;
+				workspaceBytes = Math.max(workspaceBytes, size.workspace);
+			}
+			if (coarseBasis != null && coarseBasis.size() > 0) {
+				var size = factorSize(coarseSpace.operator(), coarseBasis); retainedBytes += size.retained;
+				workspaceBytes = Math.max(workspaceBytes, size.workspace);
+			}
+			// Only one patch's QR workspace is live; all retained local R factors and CG vectors count together.
+			if (retainedBytes + workspaceBytes + iterationBytes > PressureRowBasis.availableMemory())
 				return unavailable(iterations, initialResidual);
-			var qr = DecompositionFactory_DSCC.qr(FillReducing.NONE);
-			if (!qr.decompose(operator.massWhitenedTranspose(basis, scale))) return unavailable(iterations, initialResidual);
-			var triangular = qr.getR(null, true);
-			for (int row = 0; row < basis.size(); row++) {
-				double pivot = triangular.get(row, row);
-				if (pivot == 0 || !Double.isFinite(pivot)) return unavailable(iterations, initialResidual);
+			var patches = new ArrayList<Patch>(coordinates.size());
+			for (var basis : coordinates) patches.add(factor(operator, basis, diagonalScale));
+			Coarse coarse = null;
+			if (coarseBasis != null && coarseBasis.size() > 0) {
+				var scale = new double[coarseSpace.operator().rowCount()]; coarseSpace.operator().diagonal(scale);
+				for (int row = 0; row < scale.length; row++) scale[row] = scale[row] > 0 ? 1 / Math.sqrt(scale[row]) : 0;
+				coarse = new Coarse(coarseSpace, factor(coarseSpace.operator(), coarseBasis, scale),
+						new double[scale.length], new double[scale.length]);
 			}
-			double[] origin = pressure.clone(), originLow = pressureLow.clone();
-			double[] best = origin, bestLow = originLow; double residual = initialResidual;
-			var vectors = new double[limit + 1][]; var directions = new double[limit][][];
-			var hessenberg = new double[limit + 1][limit];
-			double[] cosine = new double[limit], sine = new double[limit], transformed = new double[limit + 1];
-			transformed[0] = norm(image); vectors[0] = image;
-			for (int row = 0; row < image.length; row++) image[row] /= transformed[0];
-			for (int column = 0; column < limit; column++) {
+			double[] candidate = pressure.clone(), candidateLow = pressureLow.clone();
+			double[] best = candidate.clone(), bestLow = candidateLow.clone(); double residual = initialResidual;
+			var response = new double[2][rhs.length]; var direction = new double[2][rhs.length];
+			if (!precondition(patches, coarse, diagonalScale, image, response)) return unavailable(iterations, initialResidual);
+			double product = dot(image, response);
+			if (!(product > 0 && Double.isFinite(product))) return unavailable(iterations, initialResidual);
+			copy(response, direction);
+			var actual = new double[rhs.length]; var action = new double[rhs.length];
+			double cycleResidual = initialResidual;
+			while (iterations < maximumSolves) {
 				iterations++;
-				directions[column] = new double[2][rhs.length];
-				if (!precondition(triangular, basis, scale, vectors[column], directions[column])) break;
-				var next = new double[rhs.length]; operator.apply(directions[column][0], directions[column][1], next);
-				if (!finite(next)) break;
-				// Modified Gram-Schmidt with reorthogonalization keeps the Arnoldi basis usable near null directions.
-				for (int pass = 0; pass < 2; pass++) for (int prior = 0; prior <= column; prior++) {
-					double projection = dot(next, vectors[prior]); hessenberg[prior][column] += projection;
-					for (int row = 0; row < next.length; row++) next[row] = Math.fma(-projection, vectors[prior][row], next[row]);
-				}
-				double length = norm(next); hessenberg[column + 1][column] = length;
-				for (int prior = 0; prior < column; prior++) {
-					double upper = hessenberg[prior][column], lower = hessenberg[prior + 1][column];
-					hessenberg[prior][column] = cosine[prior] * upper + sine[prior] * lower;
-					hessenberg[prior + 1][column] = -sine[prior] * upper + cosine[prior] * lower;
-				}
-				double pivot = Math.hypot(hessenberg[column][column], length);
-				if (!(pivot > 0 && Double.isFinite(pivot))) break;
-				cosine[column] = hessenberg[column][column] / pivot; sine[column] = length / pivot;
-				hessenberg[column][column] = pivot; hessenberg[column + 1][column] = 0;
-				transformed[column + 1] = -sine[column] * transformed[column]; transformed[column] *= cosine[column];
-				// Arnoldi's residual estimate decides when to form a candidate; publication always checks actual A.
-				double estimated = Math.abs(transformed[column + 1]) / Math.sqrt(Math.max(1, rhs.length));
-				if (estimated <= tolerance || column + 1 == limit || length == 0) {
-					int count = column + 1; double[] coefficients = Arrays.copyOf(transformed, count);
-					for (int row = column; row >= 0; row--) {
-						for (int later = row + 1; later < count; later++) coefficients[row] = Math.fma(-hessenberg[row][later], coefficients[later], coefficients[row]);
-						coefficients[row] /= hessenberg[row][row];
+				// The cached mass-whitened transpose supplies both the image and its positive norm.
+				double work = operator.applyWhitened(direction[0], direction[1], action);
+				if (!(work > 0 && Double.isFinite(work))) break;
+				double alpha = product / work;
+				if (!(alpha > 0 && Double.isFinite(alpha)) || !advance(candidate, candidateLow, direction, alpha)) break;
+				for (int row = 0; row < image.length; row++) image[row] = Math.fma(-alpha, action[row], image[row]);
+				double estimated = rms(image);
+				if (!Double.isFinite(estimated) || estimated <= tolerance || iterations == maximumSolves) {
+					operator.residual(candidate, candidateLow, rhs, actual); double observed = rms(actual);
+					if (Double.isFinite(observed) && observed < residual) {
+						best = candidate.clone(); bestLow = candidateLow.clone(); residual = observed;
 					}
-					if (!finite(coefficients)) break;
-					var candidate = new double[rhs.length]; var candidateLow = new double[rhs.length];
-					if (!combine(origin, originLow, directions, coefficients, candidate, candidateLow)) break;
-					var actual = new double[rhs.length]; operator.residual(candidate, candidateLow, rhs, actual); double actualResidual = rms(actual);
-					if (Double.isFinite(actualResidual) && actualResidual < residual) { best = candidate; bestLow = candidateLow; residual = actualResidual; }
-					if (residual <= tolerance || length == 0) break;
+					if (residual <= tolerance || iterations == maximumSolves || !(residual < cycleResidual)) break;
+					// The recursive residual has lost accuracy: restart from the best actual state within the same budget.
+					System.arraycopy(best, 0, candidate, 0, candidate.length);
+					System.arraycopy(bestLow, 0, candidateLow, 0, candidateLow.length);
+					operator.residual(best, bestLow, rhs, image); cycleResidual = residual;
+					if (!precondition(patches, coarse, diagonalScale, image, response)) break;
+					product = dot(image, response);
+					if (!(product > 0 && Double.isFinite(product))) break;
+					copy(response, direction); continue;
 				}
-				vectors[column + 1] = next;
-				for (int row = 0; row < next.length; row++) next[row] /= length;
+				if (!precondition(patches, coarse, diagonalScale, image, response)) break;
+				double next = dot(image, response), beta = next / product;
+				if (!(next > 0 && Double.isFinite(next) && beta > 0 && Double.isFinite(beta))) break;
+				if (!combine(response, direction, beta)) break;
+				product = next;
 			}
 			System.arraycopy(best, 0, pressure, 0, pressure.length);
 			System.arraycopy(bestLow, 0, pressureLow, 0, pressureLow.length);
@@ -122,36 +126,110 @@ final class SparsePressureFactor {
 			throw unavailable;
 		}
 	}
-	private static boolean precondition(DMatrixSparseCSC triangular, PressureRowBasis basis, double[] scale,
-	                                   double[] rhs, double[][] result) {
-		var solution = new double[basis.size()];
-		for (int row = 0; row < solution.length; row++) solution[row] = rhs[basis.row(row)] * scale[row];
-		if (!finite(solution)) return false;
-		solveTriangular(triangular, solution);
-		if (!finite(solution)) return false;
-		for (int row = 0; row < solution.length; row++) {
-			int selected = basis.row(row); var value = SignedDyadic.of(solution[row]).multiply(SignedDyadic.of(scale[row]));
-			result[0][selected] = value.toDouble();
-			if (!Double.isFinite(result[0][selected])) return false;
-			result[1][selected] = value.subtract(SignedDyadic.of(result[0][selected])).toDouble();
+	private static FactorSize factorSize(CellVelocityConstraintOperator operator, PressureRowBasis basis) {
+		var size = operator.whitenedSize(basis);
+		double rectangle = (double) size.features() * basis.size();
+		double triangle = (double) basis.size() * (basis.size() + 1L) / 2;
+		if (rectangle > Integer.MAX_VALUE || triangle > Integer.MAX_VALUE)
+			throw new PressureRowBasis.Unavailable("Pressure QR exceeds sparse index capacity");
+		return new FactorSize(36 * triangle + 128.0 * basis.size(),
+				36 * rectangle + 48.0 * size.maximumEntries() + 128.0 * size.features());
+	}
+	private static Patch factor(CellVelocityConstraintOperator operator, PressureRowBasis basis, double[] diagonalScale) {
+		var scale = new double[basis.size()];
+		for (int row = 0; row < scale.length; row++) {
+			scale[row] = diagonalScale[basis.row(row)];
+			if (!(scale[row] > 0 && Double.isFinite(scale[row])))
+				throw new PressureRowBasis.Unavailable("Unrepresentable pressure QR scale");
+		}
+		var qr = DecompositionFactory_DSCC.qr(FillReducing.NONE);
+		if (!qr.decompose(operator.massWhitenedTranspose(basis, scale)))
+			throw new PressureRowBasis.Unavailable("Pressure QR factorization is unavailable");
+		var triangular = qr.getR(null, true);
+		for (int row = 0; row < basis.size(); row++) {
+			double pivot = triangular.get(row, row);
+			if (pivot == 0 || !Double.isFinite(pivot)) throw new PressureRowBasis.Unavailable("Singular pressure QR factor");
+		}
+		return new Patch(basis, scale, triangular, new double[basis.size()]);
+	}
+	private static boolean precondition(List<Patch> patches, Coarse coarse, double[] diagonalScale, double[] rhs, double[][] result) {
+		Arrays.fill(result[0], 0); Arrays.fill(result[1], 0);
+		for (int row = 0; row < rhs.length; row++) {
+			double scale = diagonalScale[row], product = rhs[row] * scale;
+			ConstraintNumerics.accumulateProduct(result[0], result[1], row, product, scale);
+			ConstraintNumerics.accumulateProduct(result[0], result[1], row, Math.fma(rhs[row], scale, -product), scale);
+		}
+		for (var patch : patches) {
+			var solution = response(patch, rhs);
+			if (!finite(solution)) return false;
+			for (int row = 0; row < solution.length; row++) {
+				int global = patch.basis.row(row);
+				ConstraintNumerics.accumulateProduct(result[0], result[1], global, solution[row], patch.scale[row]);
+			}
+		}
+		if (coarse != null) {
+			int[][] rows = coarse.space.fineRows(); double[][] weights = coarse.space.weights();
+			var restricted = coarse.restricted; var restrictedLow = coarse.restrictedLow;
+			Arrays.fill(restricted, 0); Arrays.fill(restrictedLow, 0);
+			for (int column = 0; column < rows.length; column++) {
+				for (int entry = 0; entry < rows[column].length; entry++)
+					ConstraintNumerics.accumulateProduct(restricted, restrictedLow, column,
+							weights[column][entry], rhs[rows[column][entry]]);
+				restricted[column] += restrictedLow[column];
+			}
+			var solution = response(coarse.patch, restricted);
+			if (!finite(solution)) return false;
+			for (int row = 0; row < solution.length; row++) {
+				int column = coarse.patch.basis.row(row);
+				double value = solution[row] * coarse.patch.scale[row];
+				double low = Math.fma(solution[row], coarse.patch.scale[row], -value);
+				for (int entry = 0; entry < rows[column].length; entry++) {
+					int fine = rows[column][entry];
+					ConstraintNumerics.accumulateProduct(result[0], result[1], fine, value, weights[column][entry]);
+					ConstraintNumerics.accumulateProduct(result[0], result[1], fine, low, weights[column][entry]);
+				}
+			}
+		}
+		return finite(result[0]) && finite(result[1]);
+	}
+	private static double[] response(Patch patch, double[] rhs) {
+		var solution = patch.solution;
+		for (int row = 0; row < solution.length; row++) solution[row] = rhs[patch.basis.row(row)] * patch.scale[row];
+		if (finite(solution)) solveTriangular(patch.triangular, solution);
+		return solution;
+	}
+	private static boolean advance(double[] high, double[] low, double[][] direction, double scale) {
+		for (int row = 0; row < high.length; row++) {
+			ConstraintNumerics.accumulateProduct(high, low, row, scale, direction[0][row]);
+			ConstraintNumerics.accumulateProduct(high, low, row, scale, direction[1][row]);
+			if (!(Double.isFinite(high[row]) && Double.isFinite(low[row]))) return false;
 		}
 		return true;
 	}
-	private static boolean combine(double[] origin, double[] originLow, double[][][] directions, double[] coefficients,
-	                               double[] result, double[] low) {
-		for (int row = 0; row < result.length; row++) {
-			var value = SignedDyadic.of(origin[row]).add(SignedDyadic.of(originLow[row]));
-			for (int column = 0; column < coefficients.length; column++) value = value.add(SignedDyadic.of(coefficients[column])
-					.multiply(SignedDyadic.of(directions[column][0][row]).add(SignedDyadic.of(directions[column][1][row]))));
-			result[row] = value.toDouble(); if (!Double.isFinite(result[row])) return false;
-			low[row] = value.subtract(SignedDyadic.of(result[row])).toDouble();
+	private static boolean combine(double[][] response, double[][] direction, double beta) {
+		for (int row = 0; row < direction[0].length; row++) {
+			double high = direction[0][row], low = direction[1][row];
+			direction[0][row] = response[0][row]; direction[1][row] = response[1][row];
+			ConstraintNumerics.accumulateProduct(direction[0], direction[1], row, beta, high);
+			ConstraintNumerics.accumulateProduct(direction[0], direction[1], row, beta, low);
+			if (!(Double.isFinite(direction[0][row]) && Double.isFinite(direction[1][row]))) return false;
 		}
 		return true;
 	}
-	private static double dot(double[] first, double[] second) {
-		double result = 0; for (int row = 0; row < first.length; row++) result = Math.fma(first[row], second[row], result); return result;
+	private static double dot(double[] residual, double[][] response) {
+		double sum = 0, correction = 0;
+		for (int row = 0; row < residual.length; row++) for (int column = 0; column < 2; column++) {
+			double product = residual[row] * response[column][row], next = sum + product;
+			double virtual = next - sum;
+			correction += (sum - (next - virtual)) + (product - virtual)
+					+ Math.fma(residual[row], response[column][row], -product);
+			sum = next;
+		}
+		return sum + correction;
 	}
-	private static double norm(double[] values) { double result = 0; for (double value : values) result = Math.hypot(result, value); return result; }
+	private static void copy(double[][] source, double[][] target) {
+		for (int axis = 0; axis < 2; axis++) System.arraycopy(source[axis], 0, target[axis], 0, source[axis].length);
+	}
 	private static boolean finite(double[] values) { for (double value : values) if (!Double.isFinite(value)) return false; return true; }
 	/** B^T = QR gives B B^T = R^T R; no explicit Q or rounded pressure Gram is needed. */
 	private static void solveTriangular(DMatrixSparseCSC triangular, double[] solution) {
@@ -170,12 +248,5 @@ final class SparsePressureFactor {
 	private static double rms(double[] values) {
 		double norm = 0; for (double value : values) norm = Math.hypot(norm, value);
 		return norm / Math.sqrt(Math.max(1, values.length));
-	}
-	private static boolean fitsFactorMemory(double required, boolean[] reclaimed) {
-		if (required > Runtime.getRuntime().maxMemory()) return false;
-		if (required <= PressureRowBasis.availableMemory()) return true;
-		if (reclaimed[0]) return false;
-		reclaimed[0] = true; System.gc();
-		return required <= PressureRowBasis.availableMemory();
 	}
 }

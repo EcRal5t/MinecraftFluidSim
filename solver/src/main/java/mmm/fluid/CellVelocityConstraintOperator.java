@@ -49,20 +49,22 @@ final class CellVelocityConstraintOperator {
 
 	private final CellAffineVelocity basis;
 	private final int markerCount;
-	private final double[] inverseMass, storage, canonicalDiagonal;
+	private final double[] storage, canonicalDiagonal;
 	private final int[] factorOffsets, factorIndices;
 	private final Factor[] factors;
-	private final SignedDyadic[] exactInverseMass, exactStorage, factorCoefficients, cellLoad, cellResponse;
+	private final SignedDyadic[] exactInverseMass, rootInverseMass, exactStorage, factorCoefficients, cellLoad, cellResponse;
 
 	CellVelocityConstraintOperator(CellAffineVelocity basis, List<Row> rows) {
 		if (basis == null || rows == null) throw new IllegalArgumentException("Constraint snapshot is missing");
 		this.basis = basis;
-		markerCount = basis.markerCount(); inverseMass = new double[markerCount]; exactInverseMass = new SignedDyadic[markerCount];
+		markerCount = basis.markerCount(); exactInverseMass = new SignedDyadic[markerCount];
+		rootInverseMass = new SignedDyadic[markerCount];
 		for (int marker = 0; marker < markerCount; marker++) {
-			inverseMass[marker] = 1 / basis.massKilograms(marker);
-			if (!(inverseMass[marker] > 0 && Double.isFinite(inverseMass[marker])))
+			double inverseMass = 1 / basis.massKilograms(marker);
+			if (!(inverseMass > 0 && Double.isFinite(inverseMass)))
 				throw new IllegalArgumentException("Actual marker inertia is unrepresentable");
-			exactInverseMass[marker] = SignedDyadic.of(inverseMass[marker]);
+			exactInverseMass[marker] = SignedDyadic.of(inverseMass);
+			rootInverseMass[marker] = SignedDyadic.of(Math.sqrt(inverseMass));
 		}
 		var factorSlots = new TreeMap<Integer, Integer>();
 		for (Row definition : rows) for (Block block : definition.blocks) {
@@ -102,6 +104,59 @@ final class CellVelocityConstraintOperator {
 		canonicalDiagonal = captureDiagonal();
 	}
 
+
+	/** Sparse physical-pressure interpolation; each column owns its fine rows and weights. */
+	record CoarseSpace(CellVelocityConstraintOperator operator, int[][] fineRows, double[][] weights) { }
+	private CoarseSpace coarseSpace;
+	private int[][] coarseRows;
+	private double[][] coarseWeights;
+	CoarseSpace coarseSpace() {
+		if (coarseSpace == null && coarseRows != null)
+			coarseSpace = new CoarseSpace(new CellVelocityConstraintOperator(this, coarseRows, coarseWeights), coarseRows, coarseWeights);
+		return coarseSpace;
+	}
+	void coarseRows(int[][] fineRows, double[][] weights) {
+		coarseRows = fineRows; coarseWeights = weights; coarseSpace = null;
+	}
+	/** Reuses the captured actual inertia; only the pressure constraints are restricted. */
+	private CellVelocityConstraintOperator(CellVelocityConstraintOperator source, int[][] rows, double[][] weights) {
+		if (rows.length != weights.length) throw new IllegalArgumentException("Coarse pressure interpolation shape mismatch");
+		basis = source.basis; markerCount = source.markerCount; factors = source.factors;
+		exactInverseMass = source.exactInverseMass; rootInverseMass = source.rootInverseMass;
+		storage = new double[rows.length]; exactStorage = new SignedDyadic[rows.length];
+		factorOffsets = new int[rows.length + 1];
+		var indices = new ArrayList<Integer>(); var coefficients = new ArrayList<SignedDyadic>();
+		int[] storageOwner = new int[source.rowCount()]; Arrays.fill(storageOwner, -1);
+		for (int coarse = 0; coarse < rows.length; coarse++) {
+			if (rows[coarse].length != weights[coarse].length) throw new IllegalArgumentException("Coarse pressure column shape mismatch");
+			var merged = new TreeMap<Integer, SignedDyadic>(); var gas = SignedDyadic.ZERO;
+			for (int i = 0; i < rows[coarse].length; i++) {
+				int row = rows[coarse][i]; var weight = SignedDyadic.of(weights[coarse][i]);
+				if (weight.signum() == 0) continue;
+				for (int e = source.factorOffsets[row]; e < source.factorOffsets[row + 1]; e++)
+					merged.merge(source.factorIndices[e], source.factorCoefficients[e].multiply(weight), SignedDyadic::add);
+				if (source.storage[row] > 0) {
+					// Finite gas pressure has its own coordinate, retaining diagonal storage under T^T S T.
+					if (storageOwner[row] >= 0) throw new IllegalArgumentException("Finite gas storage needs an independent coarse coordinate");
+					storageOwner[row] = coarse;
+					gas = gas.add(source.exactStorage[row].multiply(weight).multiply(weight));
+				}
+			}
+			for (var entry : merged.entrySet()) if (entry.getValue().signum() != 0) {
+				indices.add(entry.getKey()); coefficients.add(entry.getValue());
+			}
+			factorOffsets[coarse + 1] = indices.size(); exactStorage[coarse] = gas; storage[coarse] = gas.toDouble();
+		}
+		factorIndices = indices.stream().mapToInt(Integer::intValue).toArray(); factorCoefficients = coefficients.toArray(SignedDyadic[]::new);
+		cellLoad = new SignedDyadic[MODAL_STRIDE * factors.length]; cellResponse = new SignedDyadic[cellLoad.length];
+		canonicalDiagonal = captureDiagonal();
+	}
+	PressureRowBasis coarseBasis() {
+		SignedDyadic[][] inertia = new SignedDyadic[factors.length][];
+		for (int factor = 0; factor < factors.length; factor++) inertia[factor] = factors[factor].gram;
+		return PressureRowBasis.coarse(factorOffsets, factorIndices, factorCoefficients, inertia, MODAL_STRIDE, storage, canonicalDiagonal);
+	}
+
 	private Factor captureFactor(int block) {
 		int count = basis.blockMarkerCount(block), modes = basis.modeCount(block);
 		if (modes < 0 || modes > MODAL_STRIDE) throw new IllegalArgumentException("Invalid cell mode count");
@@ -116,42 +171,49 @@ final class CellVelocityConstraintOperator {
 	}
 
 	int rowCount() { return storage.length; }
-	PressureRowBasis rowBasis() {
+	List<PressureRowBasis> rowPatches() {
 		SignedDyadic[][] inertia = new SignedDyadic[factors.length][];
 		for (int factor = 0; factor < factors.length; factor++) inertia[factor] = factors[factor].gram;
-		return new PressureRowBasis(factorOffsets, factorIndices, factorCoefficients, inertia, MODAL_STRIDE, storage, canonicalDiagonal);
+		return PressureRowBasis.patches(factorOffsets, factorIndices, factorCoefficients, inertia, MODAL_STRIDE, storage, canonicalDiagonal);
 	}
 	record WhitenedSize(int features, int maximumEntries) { }
-	WhitenedSize whitenedSize(PressureRowBasis selected) {
-		long features = 0, entries = 0;
-		for (Factor factor : factors) features += 3L * basis.blockMarkerCount(factor.velocityBlock);
-		for (int position = 0; position < selected.size(); position++) {
-			int row = selected.row(position), entry = factorOffsets[row];
+	private PressureResponse pressureResponse;
+	private PressureResponse pressureResponse() {
+		if (pressureResponse == null) pressureResponse = new PressureResponse(captureWhitenedTranspose());
+		return pressureResponse;
+	}
+	long whitenedBytes() { return pressureResponse().bytes(); }
+	WhitenedSize whitenedSize(PressureRowBasis selected) { return pressureResponse().size(selected); }
+	DMatrixSparseCSC massWhitenedTranspose(PressureRowBasis selected, double[] scale) {
+		return pressureResponse().restrict(selected, scale);
+	}
+	double applyWhitened(double[] high, double[] low, double[] result) {
+		checkRows(high); checkRows(low); checkRows(result);
+		if (high == result || low == result) throw new IllegalArgumentException("Aliased constraint vectors");
+		return pressureResponse().apply(high, low, result);
+	}
+	/** Capture actual marker inertia once; QR patches and all CG products share these columns. */
+	private DMatrixSparseCSC captureWhitenedTranspose() {
+		int[] starts = new int[factors.length + 1];
+		for (int slot = 0; slot < factors.length; slot++) starts[slot + 1] = Math.addExact(starts[slot],
+				Math.multiplyExact(3, basis.blockMarkerCount(factors[slot].velocityBlock)));
+		int features = starts[factors.length]; long entries = 0;
+		for (int row = 0; row < rowCount(); row++) {
+			int entry = factorOffsets[row];
 			while (entry < factorOffsets[row + 1]) {
 				int slot = factorIndices[entry] / MODAL_STRIDE;
-				entries += 3L * basis.blockMarkerCount(factors[slot].velocityBlock);
+				entries += starts[slot + 1] - starts[slot];
 				do { entry++; } while (entry < factorOffsets[row + 1] && factorIndices[entry] / MODAL_STRIDE == slot);
 			}
-			if (storage[row] > 0) { features++; entries++; }
+			if (storage[row] > 0) { features = Math.addExact(features, 1); entries++; }
 		}
-		if (features > Integer.MAX_VALUE || entries > Integer.MAX_VALUE)
-			throw new PressureRowBasis.Unavailable("Whitened pressure constraint exceeds sparse index capacity");
-		return new WhitenedSize((int) features, (int) entries);
-	}
-	/** Solver-owned (scale D A F sqrt(M^-1))^T, with an independent column for each finite-gas storage. */
-	DMatrixSparseCSC massWhitenedTranspose(PressureRowBasis selected, double[] scale) {
-		if (scale.length != selected.size()) throw new IllegalArgumentException("Whitened pressure scale shape mismatch");
-		var size = whitenedSize(selected); int[] starts = new int[factors.length + 1];
-		for (int slot = 0; slot < factors.length; slot++) starts[slot + 1] = starts[slot]
-				+ 3 * basis.blockMarkerCount(factors[slot].velocityBlock);
-		var rootInverseMass = new SignedDyadic[markerCount];
-		for (int marker = 0; marker < markerCount; marker++)
-			rootInverseMass[marker] = SignedDyadic.of(Math.sqrt(inverseMass[marker]));
-		var entries = new DMatrixSparseTriplet(size.features, selected.size(), size.maximumEntries);
+		if (entries > Integer.MAX_VALUE) throw new PressureRowBasis.Unavailable("Whitened pressure constraint exceeds sparse index capacity");
+		if (24.0 * entries + 16.0 * features + 8.0 * (rowCount() + 1L) > PressureRowBasis.availableMemory())
+			throw new PressureRowBasis.Unavailable("Whitened pressure constraint exceeds available memory");
+		var matrix = new DMatrixSparseTriplet(features, rowCount(), (int) entries);
 		int storageFeature = starts[factors.length];
-		for (int position = 0; position < selected.size(); position++) {
-			int row = selected.row(position), first = factorOffsets[row];
-			var scaling = SignedDyadic.of(scale[position]);
+		for (int row = 0; row < rowCount(); row++) {
+			int first = factorOffsets[row];
 			while (first < factorOffsets[row + 1]) {
 				int slot = factorIndices[first] / MODAL_STRIDE, end = first + 1; Factor factor = factors[slot];
 				while (end < factorOffsets[row + 1] && factorIndices[end] / MODAL_STRIDE == slot) end++;
@@ -160,19 +222,15 @@ final class CellVelocityConstraintOperator {
 					int marker = basis.blockMarker(factor.velocityBlock, ordinal); SignedDyadic value = SignedDyadic.ZERO;
 					for (int entry = first; entry < end; entry++) value = value.add(factorCoefficients[entry]
 							.multiply(basis.modeWeightExact(marker, factorIndices[entry] % MODAL_STRIDE, axis)));
-					double observed = value.multiply(rootInverseMass[marker]).multiply(scaling).toDouble();
+					double observed = value.multiply(rootInverseMass[marker]).toDouble();
 					if (!Double.isFinite(observed)) throw new PressureRowBasis.Unavailable("Unrepresentable whitened pressure constraint");
-					if (observed != 0) entries.addItem(starts[slot] + axis * count + ordinal, position, observed);
+					if (observed != 0) matrix.addItem(starts[slot] + axis * count + ordinal, row, observed);
 				}
 				first = end;
 			}
-			if (storage[row] > 0) {
-				double value = SignedDyadic.of(Math.sqrt(storage[row])).multiply(scaling).toDouble();
-				if (!(value > 0 && Double.isFinite(value))) throw new PressureRowBasis.Unavailable("Unrepresentable whitened gas storage");
-				entries.addItem(storageFeature++, position, value);
-			}
+			if (storage[row] > 0) matrix.addItem(storageFeature++, row, Math.sqrt(storage[row]));
 		}
-		return DConvertMatrixStruct.convert(entries, (DMatrixSparseCSC) null);
+		return DConvertMatrixStruct.convert(matrix, (DMatrixSparseCSC) null);
 	}
 
 	/** D A F v, with one final rounding per volume or normal-trace row. */
@@ -248,6 +306,7 @@ final class CellVelocityConstraintOperator {
 	void apply(double[] pressure, double[] result) { apply(pressure, null, result, false); }
 	void apply(double[] pressure, double[] low, double[] result) { apply(pressure, low, result, false); }
 	double applyWithWork(double[] pressure, double[] result) { return apply(pressure, null, result, true); }
+	double applyWithWork(double[] pressure, double[] low, double[] result) { return apply(pressure, low, result, true); }
 	private double apply(double[] pressure, double[] low, double[] result, boolean work) {
 		checkRows(pressure); checkRows(result);
 		if (low != null) checkRows(low);
