@@ -12,16 +12,16 @@ final class PressureRowBasis {
 	int row(int position) { return rows[position]; }
 
 	/** Numerical reliability is determined from the actual mass-whitened patch, retaining every fine row. */
-	static List<PressureRowBasis> patches(int[] starts, int[] indices, int factorCount, int stride,
+	static List<PressureRowBasis> patches(int[] starts, int[] indices, int factorCount,
 	                                     double[] storage, double[] diagonal) {
-		if (stride <= 0 || factorCount < 0 || starts.length != storage.length + 1 || diagonal.length != storage.length)
+		if (factorCount < 0 || starts.length != storage.length + 1 || diagonal.length != storage.length)
 			throw new IllegalArgumentException("Invalid pressure patch layout");
 		var incident = new ArrayList<ArrayList<Integer>>(factorCount);
 		for (int factor = 0; factor < factorCount; factor++) incident.add(new ArrayList<>());
 		for (int row = 0; row < storage.length; row++) if (storage[row] == 0 && diagonal[row] > 0) {
 			int previous = -1;
 			for (int entry = starts[row]; entry < starts[row + 1]; entry++) {
-				int factor = indices[entry] / stride;
+				int factor = indices[entry];
 				if (factor != previous) { incident.get(factor).add(row); previous = factor; }
 			}
 		}

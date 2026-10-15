@@ -1,6 +1,5 @@
 package mmm.fluid;
 
-import java.util.TreeMap;
 import java.util.Arrays;
 import org.ejml.data.DMatrixSparseCSC;
 import org.ejml.data.DMatrixSparseTriplet;
@@ -10,39 +9,45 @@ import org.ejml.ops.DConvertMatrixStruct;
 final class PressureResponse {
 	private final DMatrixSparseCSC transpose;
 	private final double[] tails, inertia, load, loadLow, weighted, weightedLow;
+	private final int[] featureOrdinals, activeFeatures;
+	private int featureCount;
 
 	PressureResponse(DMatrixSparseCSC transpose, double[] tails, double[] inertia) {
 		this.transpose = transpose; this.tails = tails; this.inertia = inertia;
 		load = new double[transpose.numRows]; loadLow = new double[load.length];
 		weighted = new double[load.length]; weightedLow = new double[load.length];
+		featureOrdinals = new int[load.length]; Arrays.fill(featureOrdinals, -1); activeFeatures = new int[load.length];
 	}
-	long bytes() { return 20L * transpose.nz_values.length + 4L * (transpose.numCols + 1L) + 40L * load.length; }
-	private TreeMap<Integer, Integer> features(PressureRowBasis selected) {
-		var features = new TreeMap<Integer, Integer>();
+	long bytes() { return 20L * transpose.nz_values.length + 4L * (transpose.numCols + 1L) + 48L * load.length; }
+	private void features(PressureRowBasis selected) {
+		for (int i = 0; i < featureCount; i++) featureOrdinals[activeFeatures[i]] = -1;
+		featureCount = 0;
 		for (int column = 0; column < selected.size(); column++) {
 			int row = selected.row(column);
-			for (int entry = transpose.col_idx[row]; entry < transpose.col_idx[row + 1]; entry++)
-				features.put(transpose.nz_rows[entry], 0);
+			for (int entry = transpose.col_idx[row]; entry < transpose.col_idx[row + 1]; entry++) {
+				int feature = transpose.nz_rows[entry];
+				if (featureOrdinals[feature] < 0) { featureOrdinals[feature] = featureCount; activeFeatures[featureCount++] = feature; }
+			}
 		}
-		int next = 0; for (var entry : features.entrySet()) entry.setValue(next++);
-		return features;
 	}
+
 	CellVelocityConstraintOperator.WhitenedSize size(PressureRowBasis selected) {
 		int entries = 0;
 		for (int column = 0; column < selected.size(); column++) {
 			int row = selected.row(column);
 			entries = Math.addExact(entries, transpose.col_idx[row + 1] - transpose.col_idx[row]);
 		}
-		return new CellVelocityConstraintOperator.WhitenedSize(features(selected).size(), entries);
+		features(selected);
+		return new CellVelocityConstraintOperator.WhitenedSize(featureCount, entries);
 	}
 	DMatrixSparseCSC restrict(PressureRowBasis selected, double[] scale) {
 		if (scale.length != selected.size()) throw new IllegalArgumentException("Whitened pressure scale shape mismatch");
-		var features = features(selected);
+		features(selected);
 		int entries = 0;
 		for (int column = 0; column < selected.size(); column++) {
 			int row = selected.row(column); entries = Math.addExact(entries, transpose.col_idx[row + 1] - transpose.col_idx[row]);
 		}
-		var result = new DMatrixSparseTriplet(features.size(), selected.size(), entries);
+		var result = new DMatrixSparseTriplet(featureCount, selected.size(), entries);
 		for (int column = 0; column < selected.size(); column++) {
 			int row = selected.row(column);
 			for (int entry = transpose.col_idx[row]; entry < transpose.col_idx[row + 1]; entry++) {
@@ -51,7 +56,7 @@ final class PressureResponse {
 				double whitened = coefficient * root;
 				double value = (whitened + (Math.fma(coefficient, root, -whitened) + tails[entry] * root)) * scale[column];
 				if (!Double.isFinite(value)) throw new PressureRowBasis.Unavailable("Unrepresentable whitened pressure scale");
-				if (value != 0) result.addItem(features.get(transpose.nz_rows[entry]), column, value);
+				if (value != 0) result.addItem(featureOrdinals[transpose.nz_rows[entry]], column, value);
 			}
 		}
 		return DConvertMatrixStruct.convert(result, (DMatrixSparseCSC) null);
