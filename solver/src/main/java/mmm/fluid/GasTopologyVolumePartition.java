@@ -14,14 +14,14 @@ final class GasTopologyVolumePartition {
 	}
 	static double[] partitionRational(double total, ExactGasPartitionWeights weights) {
 		try { return weights.partitionControlVolume(total); }
-		catch (IllegalArgumentException | ArithmeticException unavailable) {
-			throw new GasTopologyBlockedException("Gas topology volume partition unavailable: " + unavailable.getMessage());
+		catch (ExactGasPartitionWeights.UnrepresentableVolumeException unavailable) {
+			throw new GasTopologyBlockedException("Gas topology volume partition unavailable: " + unavailable.getMessage(), unavailable);
 		}
 	}
 	static double absoluteRational(List<ExactRational> leaves) {
 		try { return ExactGasPartitionWeights.ofTerms(List.of(leaves)).weightVolume(0); }
-		catch (IllegalArgumentException | ArithmeticException unavailable) {
-			throw new GasTopologyBlockedException("Ambient capture volume unavailable: " + unavailable.getMessage());
+		catch (ExactGasPartitionWeights.UnrepresentableVolumeException unavailable) {
+			throw new GasTopologyBlockedException("Ambient capture volume unavailable: " + unavailable.getMessage(), unavailable);
 		}
 	}
 

@@ -659,6 +659,23 @@ public final class ThermalOwnerStoreValidation {
 			require(residualError.compareTo(SignedDyadic.of(Math.ulp(large.composition().massResidual()) * .5)) <= 0,
 					"Chemical residual exceeded one large-share rounding");
 		}
+		var limited = new CoherentPhaseStore(2, 1);
+		var inert = new CoherentPhaseStore.Group(0, "test:thermal/solid", 1, 1, null, 1);
+		limited.add(inert);
+		try {
+			limited.previewAdd(new CoherentPhaseStore.Group(1, inert.phaseId(), 1, 1, null, 1));
+			throw new AssertionError("Coherent group capacity accepted a new group");
+		} catch (CoherentPhaseStore.InventoryUnavailableException expected) {
+			require(limited.snapshot().equals(List.of(inert)), "Unavailable coherent addition changed inventory");
+		}
+		try {
+			limited.previewAdd(new CoherentPhaseStore.Group(0, inert.phaseId(), 1, 1, first, 1));
+			throw new AssertionError("Inert and chemical coherent inventories merged");
+		} catch (CoherentPhaseStore.InventoryUnavailableException swallowedBug) {
+			throw new AssertionError("Invalid coherent capability was classified as a smaller physical candidate", swallowedBug);
+		} catch (IllegalArgumentException expected) {
+			require(limited.snapshot().equals(List.of(inert)), "Invalid coherent addition changed inventory");
+		}
 	}
 
 	private static void granularColumnTransactionsConserveEnergy() {
@@ -753,7 +770,7 @@ public final class ThermalOwnerStoreValidation {
 		var original = new CoherentPhaseStore.Group(0, ice.id(), 2, Double.MIN_VALUE, null, 1);
 		subnormal.add(original);
 		try { subnormal.take(0, ice.id(), 1, null); throw new AssertionError("Unrepresentable positive coherent share accepted"); }
-		catch (IllegalArgumentException expected) { require(subnormal.group(0).equals(original), "Rejected coherent split changed original columns"); }
+		catch (CoherentPhaseStore.InventoryUnavailableException expected) { require(subnormal.group(0).equals(original), "Rejected coherent split changed original columns"); }
 	}
 
 	private static void granularBatchDepositPreflightIsAtomic() {

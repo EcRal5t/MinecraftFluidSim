@@ -8,13 +8,23 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.TreeMap;
 import java.util.function.LongFunction;
 
 /** Canonical immutable component inventory used by gas nodes and persistence. */
 public final class GasInventory {
 	public static final GasInventory EMPTY = new GasInventory(List.of());
+
+	/** A valid transfer cannot fit the finite gas quantity columns. */
+	public static final class RepresentationException extends IllegalArgumentException {
+		RepresentationException(String message) { super(message); }
+	}
+
+	static long addColumn(long first, long second, String column) {
+		if (first < 0 || second < 0) throw new IllegalArgumentException("Negative gas " + column);
+		if (first > Long.MAX_VALUE - second) throw new RepresentationException("Gas " + column + " exceeds its integer representation");
+		return first + second;
+	}
 
 	private final List<GasComponentAmount> components;
 	private final long standardVolumeNanos;
@@ -78,12 +88,15 @@ public final class GasInventory {
 	public GasInventory merge(GasInventory other) {
 		if (other.isEmpty()) return this;
 		if (isEmpty()) return other;
+		addColumn(standardVolumeNanos, other.standardVolumeNanos, "inventory standard volume");
 		TreeMap<String, GasComponentAmount> merged = new TreeMap<>();
 		for (GasComponentAmount component : components) merged.put(component.componentId(), component);
 		for (GasComponentAmount right : other.components) {
 			GasComponentAmount left = merged.get(right.componentId());
 			merged.put(right.componentId(), left == null ? right : merge(left, right));
 		}
+		if (merged.size() > GasLimits.MAX_COMPONENTS_PER_NODE)
+			throw new RepresentationException("Gas inventory exceeds its component slots");
 		return new GasInventory(List.copyOf(merged.values()));
 	}
 
@@ -143,14 +156,14 @@ public final class GasInventory {
 		if (selectedNanos == selected.standardVolumeNanos()) {
 			if (!closeColumn(selectedMass, selected.mass())
 					|| !closeColumn(selectedMassResidual, selected.massResidual())) {
-				throw new IllegalArgumentException("A complete gas component take must preserve all columns");
+				throw new RepresentationException("A complete gas component take must preserve all columns");
 			}
 			return proportional;
 		}
 		double remainingMass = selected.mass() - selectedMass;
 		double remainingResidual = selected.massResidual() - selectedMassResidual;
 		if (!(remainingMass > 0.0) || !Double.isFinite(remainingResidual)) {
-			throw new IllegalArgumentException("Gas component phase remainder is invalid");
+			throw new RepresentationException("Gas component phase remainder cannot store the requested mass/residual");
 		}
 		GasComponentAmount exactFirst = new GasComponentAmount(componentId, first.standardVolumeNanos(),
 				selectedMass, first.species(), selectedMassResidual);
@@ -225,12 +238,17 @@ public final class GasInventory {
 		TreeMap<String, Long> species = new TreeMap<>();
 		for (GasComponentAmount.SpeciesAmount amount : first.species()) species.put(amount.speciesId(), amount.amountQuanta());
 		for (GasComponentAmount.SpeciesAmount amount : second.species()) {
-			species.merge(amount.speciesId(), amount.amountQuanta(), Math::addExact);
+			species.merge(amount.speciesId(), amount.amountQuanta(), (left, right) -> addColumn(left, right, "species quantity"));
 		}
+		if (species.size() > GasLimits.MAX_SPECIES_PER_COMPONENT)
+			throw new RepresentationException("Gas component exceeds its species slots");
+		double mass = first.mass() + second.mass(), residual = first.massResidual() + second.massResidual();
+		if (!Double.isFinite(mass) || !Double.isFinite(residual))
+			throw new RepresentationException("Gas component mass/residual exceeds its finite representation");
 		return new GasComponentAmount(first.componentId(),
-				Math.addExact(first.standardVolumeNanos(), second.standardVolumeNanos()), first.mass() + second.mass(),
+				addColumn(first.standardVolumeNanos(), second.standardVolumeNanos(), "component standard volume"), mass,
 				species.entrySet().stream().map(entry -> new GasComponentAmount.SpeciesAmount(entry.getKey(), entry.getValue())).toList(),
-				first.massResidual() + second.massResidual());
+				residual);
 	}
 
 	private static GasComponentAmount[] splitComponent(GasComponentAmount source, long[] nanos) {
@@ -264,6 +282,8 @@ public final class GasInventory {
 				assignedMass = assignedMass.add(SignedDyadic.of(mass));
 				assignedResidual = assignedResidual.add(SignedDyadic.of(residual));
 			}
+			if (!(Double.isFinite(mass) && mass > 0) || !Double.isFinite(residual))
+				throw new RepresentationException("Positive gas share cannot store its mass/residual columns");
 			ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>();
 			for (int entry = 0; entry < source.species().size(); entry++) if (speciesShares[entry][child] > 0L) {
 				species.add(new GasComponentAmount.SpeciesAmount(source.species().get(entry).speciesId(), speciesShares[entry][child]));

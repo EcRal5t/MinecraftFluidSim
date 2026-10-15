@@ -103,9 +103,9 @@ final class GasTopologyCoordinator {
 			return plan(GasRuntimeGeometry.capturePhaseEdit(domain, geometryEdit, currentOccupied(),
 					domain.gasState.sealedDomainBoundary, source), true, new PhaseEdit(node, gas, energy, thermal));
 		}
-		catch (IllegalArgumentException | ArithmeticException | GasTopologyBlockedException unavailable) {
+		catch (GasTopologyBlockedException | GasInventory.RepresentationException unavailable) {
 			throw new PhaseChangeStageSupport.PhaseCandidateUnavailableException(
-					"Phase-edited gas topology has no complete representable remap", unavailable);
+					"Phase-edited gas topology: " + unavailable.getMessage(), unavailable);
 		}
 	}
 	GasTopologyPlan planStaticCellReplacement(PhaseLiquidGeometryEdit edit) {
@@ -194,7 +194,7 @@ final class GasTopologyCoordinator {
 	}
 
 	/** Single-successor finite stock needs positive support; splits and ambient capture retain exact physical weights. */
-	private TreeMap<Long, List<ExactRational>> overlaps(GasRuntimeGeometry old, GasRuntimeGeometry next) {
+	private TreeMap<Long, List<ExactRational>> overlaps(GasRuntimeGeometry old, GasRuntimeGeometry next, GasGeometryTransition transition) {
 		var result = new TreeMap<Long, List<ExactRational>>();
 		var capacities = old.capacity().pieces();
 		int[] potential = new int[old.nodeCount() + 1]; Arrays.fill(potential, -1);
@@ -204,15 +204,7 @@ final class GasTopologyCoordinator {
 			if (source <= 0 || destination < 0) continue;
 			if (potential[source] == -1) potential[source] = destination;
 			else if (potential[source] >= 0 && potential[source] != destination) potential[source] = -2;
-			var before = old.geometry().piece(piece); var after = next.geometry().piece(piece);
-			if (before.micro() != after.micro()) throw new IllegalStateException("Gas overlap changed its fixed microbox");
-			if (before.shaped() || after.shaped())
-				certified[source] |= overlapVolume(before, after).signum() > 0;
-			else if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane()))
-				certified[source] |= before.normalizedVolume().signum() > 0;
-			else if (before.dryPlane() == null) certified[source] |= after.normalizedVolume().signum() > 0;
-			else if (!certified[source] && potential[source] >= 0)
-				certified[source] = GasGeometryOverlap.hasPositiveOverlap(before.micro(), before.dryPlane(), after.dryPlane());
+			if (!certified[source] && potential[source] >= 0) certified[source] = transition.positive(piece);
 		}
 		// Potential targets include every positive intersection; one certified microbox proves support.
 		for (int source = 1; source < potential.length; source++) {
@@ -227,9 +219,7 @@ final class GasTopologyCoordinator {
 			// Persistent ambient space carries no finite stock, control volume or external transfer.
 			if (destination < 0 || source == 0 && destination == 0) continue;
 			if (source > 0 && certified[source]) continue;
-			var before = old.geometry().piece(piece); var after = next.geometry().piece(piece);
-			if (before.micro() != after.micro()) throw new IllegalStateException("Gas overlap changed its fixed microbox");
-			ExactRational overlap = overlapVolume(before, after);
+			ExactRational overlap = transition.volume(piece);
 			if (overlap.isZero()) continue;
 			intersections[index] = overlap;
 			if (source > 0) {
@@ -253,29 +243,6 @@ final class GasTopologyCoordinator {
 		return result;
 	}
 
-	/** Reuses certified piece volumes when exact positive-volume tests prove containment. */
-	static ExactRational overlapVolume(GasComplementGeometry.Piece before, GasComplementGeometry.Piece after) {
-		if (before.id() != after.id() || before.cell() != after.cell() || before.micro() != after.micro())
-			throw new IllegalArgumentException("Gas intersection requires the same fixed microbox");
-		if (before.shaped() || after.shaped()) {
-			if (before.drySupports().equals(after.drySupports())) return before.normalizedVolume();
-			return GasGeometryOverlap.unionOverlapVolume(before.micro(), before.drySupports(), after.drySupports());
-		}
-		if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane()))
-			return before.normalizedVolume();
-		if (before.dryPlane() == null) return after.normalizedVolume();
-		int micro = before.micro();
-		if (!GasGeometryOverlap.hasPositiveOverlap(micro, before.dryPlane(), after.dryPlane())) return ExactRational.ZERO;
-		if (!GasGeometryOverlap.hasPositiveOverlap(micro, before.dryPlane(), opposite(after.dryPlane())))
-			return before.normalizedVolume();
-		if (!GasGeometryOverlap.hasPositiveOverlap(micro, after.dryPlane(), opposite(before.dryPlane())))
-			return after.normalizedVolume();
-		return GasGeometryOverlap.normalizedVolume(micro, List.of(before.dryPlane(), after.dryPlane()));
-	}
-
-	private static GasGeometryOverlap.HalfSpace opposite(GasGeometryOverlap.HalfSpace plane) {
-		return new GasGeometryOverlap.HalfSpace(plane.nx().negate(), plane.ny().negate(), plane.nz().negate(), plane.threshold().negate());
-	}
 	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit) {
 		return plan(next, deferVolumeWork, edit, false, -1);
 	}
@@ -291,6 +258,7 @@ final class GasTopologyCoordinator {
 	                             boolean refineMissingSuccessor, int staticCell, Map<Integer, Integer> advectionSuccessors,
 	                             Map<Long, List<ExactRational>> motionWeights) {
 		var old = domain.gasState.frame;
+		var transition = old == null ? null : next.transitionFrom(old);
 		boolean thermal = domain.thermalState != null && domain.thermalState.gasModelBound();
 		int count = next.nodeCount(); double[] available = volumes(next);
 		var inventories = new ArrayList<GasInventory>(count);
@@ -314,7 +282,7 @@ final class GasTopologyCoordinator {
 				}
 			}
 		} else {
-			var overlap = motionWeights == null ? overlaps(old, next) : new TreeMap<>(motionWeights);
+			var overlap = motionWeights == null ? overlaps(old, next, transition) : new TreeMap<>(motionWeights);
 			for (var successor : advectionSuccessors.entrySet()) {
 				long source = (long) successor.getKey() << 32;
 				overlap.subMap(source, (long) (successor.getKey() + 1) << 32).clear();
@@ -409,7 +377,7 @@ final class GasTopologyCoordinator {
 		AirNetwork.RemapPlan gasPlan = edit == null
 				? domain.gasState.network.planRemapNodes(available, inventories, sourceDelta, sinkDelta, edges)
 				: domain.gasState.network.planRemapAfterPhase(edit.gas(), available, inventories, sourceDelta, sinkDelta, edges);
-		return new GasTopologyPlan(next, old, gasPlan, thermalPlan);
+		return new GasTopologyPlan(next, old, gasPlan, thermalPlan, transition);
 	}
 
 	/** A delayed liquid edit can expose a connected path before displacing every original dry piece. */
@@ -422,8 +390,8 @@ final class GasTopologyCoordinator {
 		if (current.nodeCount() != 1 || !Arrays.equals(old.occupiedSvq(), current.occupiedSvq())) return;
 		for (int cell = 0; cell < domain.cellCount; cell++)
 			if (old.geometry().collisionMask(cell) != current.geometry().collisionMask(cell)) return;
-		var first = overlaps(old, current).get(pair);
-		var second = overlaps(current, next).get(pair);
+		var first = overlaps(old, current, new GasGeometryTransition(old, current)).get(pair);
+		var second = overlaps(current, next, new GasGeometryTransition(current, next)).get(pair);
 		if (first != null && !first.isEmpty() && second != null && !second.isEmpty())
 			// Each positive leg lies in the same fully connected finite gas chamber. Its homogeneous
 			// stock follows that actual path; a single unchanged inventory's isentropes compose by V0/V2.
@@ -499,5 +467,6 @@ final class GasTopologyCoordinator {
 	}
 	void synchronizeForPersistence() { refresh(); }
 	record GasTopologyPlan(GasRuntimeGeometry frame, GasRuntimeGeometry source,
-	                       AirNetwork.RemapPlan gasPlan, GasEnergyStore.GasRemapPlan thermalPlan) { }
+	                       AirNetwork.RemapPlan gasPlan, GasEnergyStore.GasRemapPlan thermalPlan,
+	                       GasGeometryTransition transition) { }
 }

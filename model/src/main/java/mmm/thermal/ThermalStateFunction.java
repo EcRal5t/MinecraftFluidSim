@@ -20,8 +20,9 @@ public final class ThermalStateFunction {
 	/** A well-formed prospective inventory exceeds the finite thermal column representation. */
 	public static final class EnergyRepresentationException extends IllegalArgumentException {
 		public EnergyRepresentationException() {
-			super("Thermal energy or derived state exceeds its finite representation");
+			this("Thermal energy or derived state exceeds its finite representation");
 		}
+		public EnergyRepresentationException(String message) { super(message); }
 	}
 	public record InventoryPortion(int materialHandle, double massMu, Map<String, Long> speciesQuanta) {
 		public InventoryPortion {

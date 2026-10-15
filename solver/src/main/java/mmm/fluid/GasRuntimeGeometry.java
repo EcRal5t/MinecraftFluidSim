@@ -16,6 +16,7 @@ final class GasRuntimeGeometry {
 	private final GasComplementGeometry geometry;
 	private final GasChamberTopology topology;
 	private final GasChamberCapacity capacity;
+	private final GasGeometryTransition phaseTransition;
 	private final int[] minimumPieceKeys;
 	private float[] currentMarkerGeometry;
 	private List<LiquidCellShape> currentShapes;
@@ -38,18 +39,18 @@ final class GasRuntimeGeometry {
 		}
 		this.cellSize = domain.config.cellSize(); this.sealedExterior = sealedExterior;
 		this.occupiedSvq = occupiedSvq.clone();
-		this.sourceOccupiedSvq = domain.granularCoupling == null ? new long[domain.cellCount]
-				: domain.granularCoupling.copySolidSvq();
+		this.sourceOccupiedSvq = prepared != null ? prepared.frame.occupiedSvq
+				: domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
 		if (prepared != null) {
-			prepared.requireCurrent(domain, sourceOccupiedSvq);
+			prepared.requireCurrent(domain);
 			if (edits.size() != 1 || edits.getFirst().cell() != prepared.editedCell)
 				throw new IllegalArgumentException("BOIL geometry source requires its prepared edited cell");
 		}
 		var cut = prepared == null ? new FlipCutCellGeometry(domain.sizeX, domain.sizeY, domain.sizeZ) : prepared.cut;
 		if (prepared == null) cut.restoreMicroMasks(domain.geometry.cutCells.copyMicroMasks());
 		boolean[] solid = prepared == null ? new boolean[domain.cellCount] : prepared.solid;
-		for (int cell = 0; cell < solid.length; cell++) {
-			if (prepared == null) solid[cell] = cut.fullySolid(cell);
+		if (prepared == null) for (int cell = 0; cell < solid.length; cell++) {
+			solid[cell] = cut.fullySolid(cell);
 			if (solid[cell] != domain.geometry.solid[cell])
 				throw new IllegalArgumentException("Gas runtime binary and micro collision geometry disagree");
 		}
@@ -100,6 +101,8 @@ final class GasRuntimeGeometry {
 			this.topology = GasChamberTopology.capture(geometry, sealedExterior);
 			this.capacity = GasChamberCapacity.capture(domain, geometry, topology, this.occupiedSvq, liquidStock, captured);
 		}
+		phaseTransition = local ? prepared.transition(edits.getFirst()) : null;
+		if (phaseTransition != null) phaseTransition.complete(geometry);
 		this.minimumPieceKeys = new int[topology.chambers().size() + 1]; Arrays.fill(minimumPieceKeys, -1);
 		for (var chamber : topology.chambers()) minimumPieceKeys[chamber.node()] = chamber.minimumPiece();
 	}
@@ -123,7 +126,7 @@ final class GasRuntimeGeometry {
 		return new GasRuntimeGeometry(domain, edits, occupiedSvq, sealedExterior, false);
 	}
 
-	/** One BOIL search shares its source tuples, fixed geometry and local PLIC workspace. */
+	/** One synchronous phase search shares its validated source and local PLIC workspace. */
 	static final class PhaseSource {
 		private final FluidDomain owner;
 		private final GasRuntimeGeometry frame;
@@ -134,9 +137,9 @@ final class GasRuntimeGeometry {
 		private GasChamberCapacity.Prepared capacity;
 		private FlipPressurePhaseGeometry scratch;
 		private PhaseLiquidGeometryEdit scratchEdit;
+		private GasGeometryTransition trialTransition;
 		private final FlipCutCellGeometry cut;
 		private final boolean[] solid;
-		private final float[] positionVolume;
 		private final long inventoryRevision, carrierRevision;
 		private final int markerCount;
 		private PhaseSource(FluidDomain owner, GasRuntimeGeometry frame, int editedCell) {
@@ -148,7 +151,6 @@ final class GasRuntimeGeometry {
 			solid = owner.geometry.solid.clone();
 			this.inventoryRevision = owner.markerGrid.inventoryRevision;
 			this.carrierRevision = owner.carrierMutationRevision(); this.markerCount = owner.particles.count();
-			this.positionVolume = frame.currentMarkerGeometry;
 		}
 		GasRuntimeGeometry frame() { return frame; }
 		GasComplementGeometry.Region region() { return region; }
@@ -168,28 +170,28 @@ final class GasRuntimeGeometry {
 		FlipPressurePhaseGeometry phase(PhaseLiquidGeometryEdit edit) {
 			if (edit == null || edit.cell() != editedCell || edit.collisionMask() != cut.mask(editedCell))
 				throw new IllegalArgumentException("BOIL PLIC requires its prepared edited cell and collision mask");
-			if (owner.gasState.frame != frame) throw new GasTopologyBlockedException("BOIL phase source changed during candidate search");
+			if (owner.gasState.frame != frame) throw new IllegalStateException("Phase geometry source changed during candidate search");
 			if (scratchEdit != edit) {
 				if (scratch == null) scratch = frame.phase.copy();
-				scratchEdit = null;
+				scratchEdit = null; trialTransition = null;
 				scratch.rebuildEditedCells(frame.phase, edit, region.cells(), frame.liquidStock, cut, solid, frame.cellSize);
 				scratchEdit = edit;
 			}
 			return scratch;
 		}
 
-		private void requireCurrent(FluidDomain domain, long[] occupied) {
+		GasGeometryTransition transition(PhaseLiquidGeometryEdit edit) {
+			var candidate = phase(edit);
+			if (trialTransition == null) trialTransition = new GasGeometryTransition(frame, candidate);
+			return trialTransition;
+		}
+
+		// The synchronous search does not mutate source carriers. Publication checks actual source stock.
+		private void requireCurrent(FluidDomain domain) {
 			if (domain != owner || domain.gasState.frame != frame || domain.gridDirty
 					|| inventoryRevision != domain.markerGrid.inventoryRevision
-					|| carrierRevision != domain.carrierMutationRevision() || markerCount != domain.particles.count()
-					|| !frame.matchesGeometryInputs(domain, occupied, frame.occupiedSvq))
-				throw new GasTopologyBlockedException("BOIL geometry source changed during candidate search");
-			for (int marker = 0; marker < markerCount; marker++)
-				if (Float.floatToRawIntBits(positionVolume[4 * marker]) != Float.floatToRawIntBits(domain.particles.positionX(marker))
-						|| Float.floatToRawIntBits(positionVolume[4 * marker + 1]) != Float.floatToRawIntBits(domain.particles.positionY(marker))
-						|| Float.floatToRawIntBits(positionVolume[4 * marker + 2]) != Float.floatToRawIntBits(domain.particles.positionZ(marker))
-						|| Float.floatToRawIntBits(positionVolume[4 * marker + 3]) != Float.floatToRawIntBits(domain.particles.volume(marker)))
-					throw new GasTopologyBlockedException("BOIL raw marker geometry changed during candidate search");
+					|| carrierRevision != domain.carrierMutationRevision() || markerCount != domain.particles.count())
+				throw new IllegalStateException("Phase geometry source changed during candidate search");
 		}
 	}
 
@@ -252,8 +254,7 @@ final class GasRuntimeGeometry {
 
 	private boolean matches(FluidDomain domain, long[] occupiedSvq, long[] expectedOccupied, List<PhaseLiquidGeometryEdit> expectedStock) {
 		if (!matchesGeometryInputs(domain, occupiedSvq, expectedOccupied)) return false;
-		try { return expectedStock.equals(stock(domain, domain.geometry.cutCells, index(domain))); }
-		catch (IllegalArgumentException | IllegalStateException | ArithmeticException invalid) { return false; }
+		return expectedStock.equals(stock(domain, domain.geometry.cutCells, index(domain)));
 	}
 	private boolean matchesGeometryInputs(FluidDomain domain, long[] occupiedSvq, long[] expectedOccupied) {
 		if (domain == null || geometry.sizeX() != domain.sizeX || geometry.sizeY() != domain.sizeY || geometry.sizeZ() != domain.sizeZ
@@ -292,6 +293,9 @@ final class GasRuntimeGeometry {
 		return List.copyOf(stock);
 	}
 
+	GasGeometryTransition transitionFrom(GasRuntimeGeometry source) {
+		return phaseTransition != null && phaseTransition.startsAt(source) ? phaseTransition : new GasGeometryTransition(source, this);
+	}
 	GasComplementGeometry geometry() { return geometry; }
 	FlipPressurePhaseGeometry phase() { return phase; }
 	float cellSize() { return cellSize; }

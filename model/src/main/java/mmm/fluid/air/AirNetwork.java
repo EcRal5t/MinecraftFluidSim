@@ -189,7 +189,7 @@ public final class AirNetwork {
 		try {
 			GasInventory after = node.inventory().merge(addition);
 			return planPhaseMutation(node, after, addition, GasInventory.EMPTY);
-		} catch (ArithmeticException | IllegalArgumentException capacity) {
+		} catch (GasInventory.RepresentationException capacity) {
 			throw new PhaseCapacityExceededException(capacity);
 		}
 	}
@@ -211,7 +211,7 @@ public final class AirNetwork {
 		if (!split.first().equals(expectedRemoval)) throw new IllegalStateException("Gas phase sink preview changed");
 		try {
 			return planPhaseMutation(node, split.second(), GasInventory.EMPTY, split.first());
-		} catch (ArithmeticException | IllegalArgumentException capacity) {
+		} catch (GasInventory.RepresentationException capacity) {
 			throw new PhaseCapacityExceededException(capacity);
 		}
 	}
@@ -224,8 +224,8 @@ public final class AirNetwork {
 	private PhaseMutationPlan planPhaseMutation(AirNode node, GasInventory after, GasInventory source, GasInventory sink) {
 		TransferMutation mutation = planTransferMutation(liveMassColumns(), node, after, null, null, source, sink);
 		long total = 0L;
-		for (AirNode current : nodes.values()) total = Math.addExact(total,
-				(current == node ? after : current.inventory()).standardVolumeNanos());
+		for (AirNode current : nodes.values()) total = GasInventory.addColumn(total,
+				(current == node ? after : current.inventory()).standardVolumeNanos(), "regional standard volume");
 		return new PhaseMutationPlan(this, revision, after, mutation);
 	}
 

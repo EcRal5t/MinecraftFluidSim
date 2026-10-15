@@ -339,14 +339,9 @@ final class ThermalCellOperations {
 		var raw = trial == null ? new ThermalCellEnergyAssignment.Plan(List.of(), SignedDyadic.ZERO, null)
 				: ThermalCellEnergyAssignment.prepare(trial);
 		SignedDyadic requested = trial == null ? emptyEnergyRemainder : trial.requested;
-		ThermalAuditLedger before = audit.ledger(), after;
-		try {
-			after = before.withRoundoff(raw.actualEnergy().subtract(requested));
-			after.expectedInventory();
-		} catch (IllegalArgumentException | ArithmeticException unavailable) {
-			throw new ThermalCellEnergyAssignment.UnavailableException("Thermal phase roundoff ledger is not representable",
-					new IllegalArgumentException(unavailable));
-		}
+		ThermalAuditLedger before = audit.ledger();
+		ThermalAuditLedger after = before.withRoundoff(raw.actualEnergy().subtract(requested));
+		after.expectedInventory();
 		return new PhaseCellAssignment(cell, raw, before, after);
 	}
 

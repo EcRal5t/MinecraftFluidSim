@@ -255,7 +255,7 @@ public final class AirCavityScannerValidation {
 				&& preparedTrial.matchesSourceCarrierGeometry(domain,occupied),"Prepared phase source changed capacities or source binding");
 		domain.gasState.frame=null;
 		try { GasRuntimeGeometry.capturePhaseEdit(domain,edit,occupied,true,phaseSource); throw new AssertionError("Changed phase source owner was reused"); }
-		catch(GasTopologyBlockedException expected) { }
+		catch(IllegalStateException expected) { check(!(expected instanceof GasTopologyBlockedException),"Stale phase source was treated as an unavailable candidate"); }
 		check(repeated.offsetBracket(0,0)==current.offsetBracket(0,0)
 				&& repeated.offsetBracket(1,0)==current.offsetBracket(1,0),"Unchanged PLIC failed to reuse captured inverse-volume certificates");
 		check(repeated.geometry().pieces().getFirst()==current.geometry().pieces().getFirst()
@@ -291,8 +291,7 @@ public final class AirCavityScannerValidation {
 				"Gas frame reused old M1 after a raw marker move with unchanged volume and count");
 		domain.gasState.frame=current;
 		check(GasRuntimeGeometry.preparePhaseSource(domain,0)==null,"Phase preparation reused raw M1 with unchanged epochs");
-		try { GasRuntimeGeometry.capturePhaseEdit(domain,edit,occupied,true,phaseSource); throw new AssertionError("Raw position change reused a prepared phase source"); }
-		catch(GasTopologyBlockedException expected) { }
+		check(!preparedTrial.matchesSourceCarrierGeometry(domain,occupied),"Phase publication accepted changed source positions");
 		var movedFromCaptured=GasRuntimeGeometry.capture(domain,null,occupied,true);
 		domain.gasState.frame=null;
 		check(movedFromCaptured.offsetBracket(1,0)==current.offsetBracket(1,0),
@@ -403,44 +402,30 @@ public final class AirCavityScannerValidation {
 			domain.gasState.frame=source;
 			var geometrySource=GasRuntimeGeometry.preparePhaseSource(domain,edit.cell());
 			check(geometrySource!=null,"Matching phase geometry source was not prepared");
+			var transition = geometrySource.transition(edit);
+			var overlaps = new java.util.TreeMap<Integer, ExactRational>();
+			for (int cell : geometrySource.region().cells()) for (int micro = 0; micro < 8; micro++) {
+				int piece = 8 * cell + micro;
+				var before = source.geometry().piece(piece); var after = future.geometry().piece(piece);
+				var expected = before == null || after == null ? ExactRational.ZERO
+						: GasGeometryReference.unionOverlapVolume(micro, before.drySupports(), after.drySupports());
+				overlaps.put(piece, expected);
+				check(transition.positive(piece) == (expected.signum() > 0), "Phase contact preparation differs from the exact old/new intersection");
+			}
 			var trial=GasRuntimeGeometry.capturePhaseEdit(domain,edit,source.occupiedSvq(),source.sealedExterior(),geometrySource);
 			checkRuntimePlanesEqual(trial,future,"Prepared fixed gas subgraph differs from complete capture");
-			var field=GasLiquidPhaseChangeStage.class.getDeclaredField("support");field.setAccessible(true);
-			var support=(PhaseChangeStageSupport)field.get(domain.gasLiquidPhaseChangeStage);support.prepareGranularOccupancy();
-			var groups=new java.util.TreeMap<Integer,java.util.List<Integer>>();
-			for(var piece:source.geometry().pieces())groups.computeIfAbsent(source.nodeOfPiece(piece.id()),ignored->new java.util.ArrayList<>()).add(piece.id());
-			for(var group:groups.entrySet()) {
-				domain.gasState.frame=source;
-				var contact=new GasPhaseInterfaceResolver.Candidate(group.getKey(),~edit.collisionMask()&255,group.getValue(),null);
-				var prepared=GasRuntimeGeometry.preparePhaseSource(domain,edit.cell());
-				check(prepared!=null,"Matching local phase inputs failed to prepare shared PLIC");
-				var local=prepared.phase(edit);boolean alive=false;
-				for(int piece:group.getValue()) {
-					int cell=piece/8;var before=source.geometry().piece(piece);var after=future.geometry().piece(piece);
-					if(after!=null && (before.dryPlane()==null || after.dryPlane()==null || before.dryPlane().equals(after.dryPlane())
-							||GasGeometryOverlap.normalizedVolume(piece&7,List.of(before.dryPlane(),after.dryPlane())).signum()>0))alive=true;
-					for(int micro=0;micro<8;micro++) {
-						check(Double.doubleToRawLongBits(local.liquidFractionExact(cell,micro))==Double.doubleToRawLongBits(future.liquidFractionExact(cell,micro))
-								&&Double.doubleToRawLongBits(local.planeOffset(cell,micro))==Double.doubleToRawLongBits(future.planeOffset(cell,micro))
-								&&java.util.Objects.equals(local.offsetBracket(cell,micro),future.offsetBracket(cell,micro)),"Local/full contact PLIC certificate differs");
-						for(int axis=0;axis<3;axis++)check(Float.floatToRawIntBits(local.planeNormal(cell,micro,axis))
-								==Float.floatToRawIntBits(future.planeNormal(cell,micro,axis)),"Local/full contact normal differs");
-					}
-				}
-				var resolver=new GasPhaseInterfaceResolver(support);
-				check(resolver.mayKeepBoilContact(prepared,edit,contact)==alive,"Local contact survival differs from full same-micro intersections");
-				domain.gasState.frame=null;
-				check(resolver.mayKeepBoilContact(prepared,edit,contact),"A changed preparing frame acquired a zero-contact rejection");
-				domain.gasState.frame=source;
-				float x=domain.particles.positionX(0);domain.particles.setPositionX(0,Math.nextUp(x));
-				check(GasRuntimeGeometry.preparePhaseSource(domain,edit.cell())==null,"Changed local moments retained a contact PLIC source");
-				domain.particles.setPositionX(0,x);
-				int mask=domain.geometry.cutCells.mask(edit.cell());domain.geometry.cutCells.replaceMask(edit.cell(),mask^1);
-				check(GasRuntimeGeometry.preparePhaseSource(domain,edit.cell())==null,"Changed local masks retained a contact PLIC source");
-				domain.geometry.cutCells.replaceMask(edit.cell(),mask);
+			for (var overlap : overlaps.entrySet()) {
+				int piece = overlap.getKey(); var expected = overlap.getValue();
+				check(transition.positive(piece) == (expected.signum() > 0), "Completed phase contact lost its prepared overlap");
+				checkGeometryMoment(transition.volume(piece), expected, expected, "Shared phase volume differs from the exact old/new intersection");
 			}
-		} catch(ReflectiveOperationException failure) { throw new AssertionError("Local contact fixture binding failed",failure); }
-		finally { domain.gasState.frame=previous; }
+			float x=domain.particles.positionX(0);domain.particles.setPositionX(0,Math.nextUp(x));
+			check(GasRuntimeGeometry.preparePhaseSource(domain,edit.cell())==null,"Changed local moments retained a phase source");
+			domain.particles.setPositionX(0,x);
+			int mask=domain.geometry.cutCells.mask(edit.cell());domain.geometry.cutCells.replaceMask(edit.cell(),mask^1);
+			check(GasRuntimeGeometry.preparePhaseSource(domain,edit.cell())==null,"Changed local masks retained a phase source");
+			domain.geometry.cutCells.replaceMask(edit.cell(),mask);
+		} finally { domain.gasState.frame=previous; }
 	}
 
 	private static void checkRuntimePlanesEqual(GasRuntimeGeometry actual, GasRuntimeGeometry expected, String message) {
@@ -751,7 +736,7 @@ public final class AirCavityScannerValidation {
 						==(exactOverlap.signum()>0),"Two-plane positivity differs from exact volume");
 				var firstPiece=new GasComplementGeometry.Piece(slot,0,slot,beforeVolume.toDouble(),beforeVolume,before,null);
 				var secondPiece=new GasComplementGeometry.Piece(slot,0,slot,afterVolume.toDouble(),afterVolume,after,null);
-				checkGeometryMoment(GasTopologyCoordinator.overlapVolume(firstPiece,secondPiece), exactOverlap, exactOverlap,
+				checkGeometryMoment(GasGeometryTransition.intersectionVolume(firstPiece,secondPiece), exactOverlap, exactOverlap,
 						"Gas containment differs from the independent exact intersection volume");
 			}
 		}
@@ -1168,9 +1153,9 @@ public final class AirCavityScannerValidation {
 	@SuppressWarnings("unchecked")
 	private static java.util.Map<Long, ExactRational> gasOverlapWeights(FluidDomain domain, GasRuntimeGeometry old, GasRuntimeGeometry next) {
 		try {
-			var method = GasTopologyCoordinator.class.getDeclaredMethod("overlaps", GasRuntimeGeometry.class, GasRuntimeGeometry.class);
+			var method = GasTopologyCoordinator.class.getDeclaredMethod("overlaps", GasRuntimeGeometry.class, GasRuntimeGeometry.class, GasGeometryTransition.class);
 			method.setAccessible(true);
-			var leaves = (java.util.Map<Long, List<ExactRational>>) method.invoke(domain.gasTopologyCoordinator, old, next);
+			var leaves = (java.util.Map<Long, List<ExactRational>>) method.invoke(domain.gasTopologyCoordinator, old, next, new GasGeometryTransition(old, next));
 			var result = new java.util.TreeMap<Long, ExactRational>();
 			for (var entry : leaves.entrySet()) {
 				ExactRational sum = ExactRational.ZERO;

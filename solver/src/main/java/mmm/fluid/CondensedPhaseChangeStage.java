@@ -277,7 +277,7 @@ final class CondensedPhaseChangeStage {
 					removal.movedComposition().toCoherent(), 0.0);
 			try {
 				coherentFinal = thermal.coherentPhases().previewAdd(coherentTransfer);
-			} catch (IllegalArgumentException | IllegalStateException | ArithmeticException unavailable) {
+			} catch (CoherentPhaseStore.InventoryUnavailableException unavailable) {
 				throw new PhaseCandidateUnavailableException(
 						"Freeze cannot represent another coherent carrier group", unavailable);
 			}
@@ -293,7 +293,7 @@ final class CondensedPhaseChangeStage {
 				var split = thermal.coherentPhases().previewSplit(
 						cell, transition.lowerEnergyMaterialId(), lowerDelta, chemistry == null ? null : chemistry.registry());
 				coherentTransfer = split.removed(); coherentFinal = split.remaining();
-			} catch (IllegalArgumentException | ArithmeticException unavailable) {
+			} catch (CoherentPhaseStore.InventoryUnavailableException unavailable) {
 				throw new PhaseCandidateUnavailableException(
 						"Melt cannot represent the coherent carrier split", unavailable);
 			}

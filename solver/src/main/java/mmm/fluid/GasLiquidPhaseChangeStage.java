@@ -154,7 +154,7 @@ final class GasLiquidPhaseChangeStage {
 							removal.plan().movedComposition().massResidual());
 			GasInventory candidateGas;
 			try { candidateGas = gasState.network.inventory(node).merge(batch); }
-			catch (ArithmeticException | IllegalArgumentException capacity) {
+			catch (GasInventory.RepresentationException capacity) {
 				throw new PhaseCandidateUnavailableException("Boiling gas inventory exceeds its carrier representation", capacity);
 			}
 			support.representedGasMassTransfer(node, candidateGas, batch.components().getFirst().componentId(), removedMass);
@@ -184,7 +184,7 @@ final class GasLiquidPhaseChangeStage {
 	                                GasBoilTrial candidate) {
 		if (candidate == null) return null;
 		try {
-			if (!interfaces.mayKeepBoilContact(source, candidate.liquidGeometry(), contact)) return null;
+			if (source != null && !source.transition(candidate.liquidGeometry()).hasContact(contact.contactPieces())) return null;
 			var gasPlan = support.gasState().network.planPhaseSource(node, candidate.batch());
 			var thermalPlan = support.thermal().planPhaseCellEnergy(candidate.thermalTrial());
 			var topology = support.planGasGeometry(candidate.liquidGeometry(), node, gasPlan,
@@ -281,7 +281,7 @@ final class GasLiquidPhaseChangeStage {
 				take = gasState.network.previewComponentTake(
 						node, componentId, requestedBatch.standardVolumeNanos(),
 						requestedMass, requestedResidual);
-			} catch (IllegalArgumentException unrepresentableColumns) {
+			} catch (GasInventory.RepresentationException unrepresentableColumns) {
 				throw new PhaseCandidateUnavailableException(
 						"Condensation has no complete representable gas column quantum", unrepresentableColumns);
 			}
@@ -392,7 +392,7 @@ final class GasLiquidPhaseChangeStage {
 				try {
 					momentum = CarrierMassMomentum.plan(particles, new int[]{candidate.target()}, new double[]{candidate.targetMass()},
 							candidate.targetMass() - particles.mass(candidate.target()), 0, 0, 0);
-				} catch (IllegalArgumentException unrepresentableMomentum) {
+				} catch (CarrierMassMomentum.RepresentationException unrepresentableMomentum) {
 					throw new PhaseCandidateUnavailableException(
 							"Condensation momentum exceeds liquid carrier representation", unrepresentableMomentum);
 				}

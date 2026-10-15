@@ -146,35 +146,31 @@ final class GasComponentCapacity {
 				: liquid.components().get(i).volume();
 			SignedDyadic available = capacities[i].subtract(volume);
 			if (available.signum() < 0) throw blocked("Liquid inventory exceeds its open component capacity", cell);
-			try {
-				ExactRational gas = ExactRational.ZERO;
-				GasComplementGeometry.Piece representative = null;
-				for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
-					var piece = geometry.piece(8 * cell + micro);
-					if (piece != null) {
-						if (representative != null && (representative.shaped() != piece.shaped()
-								|| !piece.shaped() && (!java.util.Objects.equals(representative.dryPlane(),piece.dryPlane())
-								|| !java.util.Objects.equals(representative.offsetBracket(),piece.offsetBracket()))))
-							throw blocked("Gas component contains inconsistent PLIC certificates",cell);
-						representative = piece;gas = gas.add(piece.normalizedVolume());
-					}
+			ExactRational gas = ExactRational.ZERO;
+			GasComplementGeometry.Piece representative = null;
+			for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
+				var piece = geometry.piece(8 * cell + micro);
+				if (piece != null) {
+					if (representative != null && (representative.shaped() != piece.shaped()
+							|| !piece.shaped() && (!java.util.Objects.equals(representative.dryPlane(),piece.dryPlane())
+							|| !java.util.Objects.equals(representative.offsetBracket(),piece.offsetBracket()))))
+						throw blocked("Gas component contains inconsistent PLIC certificates",cell);
+					representative = piece;gas = gas.add(piece.normalizedVolume());
 				}
-				if (available.signum() > 0 && gas.isZero())
-					throw blocked("Positive component capacity has no gas geometry", cell);
-				ExactRational porosity = exact(capacities[i]).multiply(8).divide(Integer.bitCount(support));
-				ExactRational wetTarget = representative != null && !representative.shaped() && representative.dryPlane() != null
-						? PlicComponentGeometry.ratio(volume, capacities[i]).multiply(Integer.bitCount(support)).divide(8)
-						: ExactRational.ZERO;
-				gas = gas.multiply(porosity);
-				ExactRational difference = exact(available).subtract(gas);
-				InverseErrorRange range = inverseRange(representative,support,porosity,wetTarget,gas,cell);
-				if (difference.compareTo(range.lower())<0 || difference.compareTo(range.upper())>0)
-					throw blocked("Gas component inventory differs beyond its PLIC inverse certificate",cell);
-				result.add(new Component(cell, support, capacities[i], available, gas, difference,range,
-						GasPieceCapacity.capture(cell,support,available,porosity,wetTarget,geometry)));
-			} catch (IllegalArgumentException | ArithmeticException magnitude) {
-				throw blocked("Gas component capacity exceeds exact representation budget", cell);
 			}
+			if (available.signum() > 0 && gas.isZero())
+				throw blocked("Positive component capacity has no gas geometry", cell);
+			ExactRational porosity = exact(capacities[i]).multiply(8).divide(Integer.bitCount(support));
+			ExactRational wetTarget = representative != null && !representative.shaped() && representative.dryPlane() != null
+					? PlicComponentGeometry.ratio(volume, capacities[i]).multiply(Integer.bitCount(support)).divide(8)
+					: ExactRational.ZERO;
+			gas = gas.multiply(porosity);
+			ExactRational difference = exact(available).subtract(gas);
+			InverseErrorRange range = inverseRange(representative,support,porosity,wetTarget,gas,cell);
+			if (difference.compareTo(range.lower())<0 || difference.compareTo(range.upper())>0)
+				throw blocked("Gas component inventory differs beyond its PLIC inverse certificate",cell);
+			result.add(new Component(cell, support, capacities[i], available, gas, difference,range,
+					GasPieceCapacity.capture(cell,support,available,porosity,wetTarget,geometry)));
 		}
 	}
 

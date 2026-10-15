@@ -61,7 +61,7 @@ public final class GasLiquidPhaseModel {
 		pair.liquid().specificHeatAt(liquidTemperatureK);
 		double saturation = GasRegistry.STANDARD_PRESSURE_PA * saturationExponential(pair, liquidTemperatureK);
 		if (!(Double.isFinite(saturation) && saturation >= 0.0)) {
-			throw new IllegalArgumentException("Saturation pressure is outside the phase model");
+			throw new ThermalStateFunction.EnergyRepresentationException("Saturation pressure is outside the phase model");
 		}
 		Direction direction = saturation > partial ? Direction.BOIL
 				: saturation < partial ? Direction.CONDENSE : Direction.EQUILIBRIUM;

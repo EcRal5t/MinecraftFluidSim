@@ -76,6 +76,8 @@ public final class GasAuditLedger {
 		if (entries.isEmpty()) return other;
 		TreeMap<String, Mutable> totals = mutable(entries);
 		for (Entry entry : other.entries) totals.computeIfAbsent(entry.componentId(), ignored -> new Mutable()).add(entry);
+		if (totals.size() > GasLimits.MAX_COMPONENTS)
+			throw new GasInventory.RepresentationException("Gas audit exceeds its component slots");
 		ArrayList<Entry> result = new ArrayList<>(totals.size());
 		for (Map.Entry<String, Mutable> entry : totals.entrySet()) result.add(entry.getValue().freeze(entry.getKey()));
 		return new GasAuditLedger(result);
@@ -93,13 +95,15 @@ public final class GasAuditLedger {
 		private SignedDyadic residual = SignedDyadic.ZERO;
 		private final TreeMap<String, Long> species = new TreeMap<>();
 		void add(Entry entry) {
-			nanos = Math.addExact(nanos, entry.standardVolumeNanos()); mass = mass.add(entry.mass());
+			nanos = GasInventory.addColumn(nanos, entry.standardVolumeNanos(), "audit standard volume"); mass = mass.add(entry.mass());
 			residual = residual.add(entry.massResidual());
 			for (GasComponentAmount.SpeciesAmount amount : entry.species()) {
-				species.merge(amount.speciesId(), amount.amountQuanta(), Math::addExact);
+				species.merge(amount.speciesId(), amount.amountQuanta(), (left, right) -> GasInventory.addColumn(left, right, "audit species quantity"));
 			}
 		}
 		Entry freeze(String id) {
+			if (species.size() > GasLimits.MAX_SPECIES_PER_COMPONENT)
+				throw new GasInventory.RepresentationException("Gas audit exceeds its species slots");
 			return new Entry(id, nanos, mass, species.entrySet().stream()
 					.map(entry -> new GasComponentAmount.SpeciesAmount(entry.getKey(), entry.getValue())).toList(), residual);
 		}

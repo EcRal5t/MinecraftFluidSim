@@ -121,7 +121,7 @@ public final class GasThermalModel {
 				/ GasRegistry.STANDARD_TEMPERATURE_K;
 		double pressure = gasConstant * thermal.temperatureK() / availableVolume;
 		if (!(Double.isFinite(pressure) && pressure >= 0.0)) {
-			throw new IllegalArgumentException("Gas pressure is outside the thermal model");
+			throw new ThermalStateFunction.EnergyRepresentationException("Gas pressure is outside the thermal model");
 		}
 		return pressure;
 	}

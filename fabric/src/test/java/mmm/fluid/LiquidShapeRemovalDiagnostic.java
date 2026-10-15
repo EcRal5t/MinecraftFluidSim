@@ -139,7 +139,7 @@ public final class LiquidShapeRemovalDiagnostic {
 		int[] parents = new int[next.nodeCount() + 1];
 		for (var piece : old.capacity().pieces()) {
 			int source = old.nodeOfPiece(piece.id()), target = next.nodeOfPiece(piece.id());
-			if (source <= 0 || target <= 0 || GasTopologyCoordinator.overlapVolume(
+			if (source <= 0 || target <= 0 || GasGeometryTransition.intersectionVolume(
 					old.geometry().piece(piece.id()), next.geometry().piece(piece.id())).isZero()) continue;
 			if (parents[target] != 0 && parents[target] != source)
 				throw new IllegalArgumentException("New gas node has multiple old sources: " + target);
@@ -182,7 +182,8 @@ public final class LiquidShapeRemovalDiagnostic {
 		var edges = next.topology().connections().stream().map(e -> new AirEdge(e.firstNode(), e.secondNode(), e.area(), .65)).toList();
 		return new GasTopologyCoordinator.GasTopologyPlan(next, old,
 				d.gasState.network.planRemapNodes(available, inventories, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, edges),
-				d.thermalState.planGasRemap(d.gasState.network, inventories, available, energy, inherited, SignedDyadic.ZERO, SignedDyadic.ZERO));
+				d.thermalState.planGasRemap(d.gasState.network, inventories, available, energy, inherited, SignedDyadic.ZERO, SignedDyadic.ZERO),
+				new GasGeometryTransition(old, next));
 	}
 
 	private static int reportPorts(GasRuntimeGeometry old, GasRuntimeGeometry next, int[] parents, String label) {

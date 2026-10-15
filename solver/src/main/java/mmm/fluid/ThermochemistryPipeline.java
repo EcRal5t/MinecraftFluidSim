@@ -44,14 +44,10 @@ final class ThermochemistryPipeline {
 		FluidDomain.PhaseTransferStats granularStats = granularReaction.step(granularPhaseCells);
 		FluidDomain.ThermalPhaseStats condensedStats = new FluidDomain.ThermalPhaseStats(0, 0, 0, 0L);
 		FluidDomain.GasThermalPhaseStats gasStats = new FluidDomain.GasThermalPhaseStats(0, 0, 0);
-		if (phaseChangeEnabled) try {
+		if (phaseChangeEnabled) {
 			boolean phaseGridPrepared = chemicalStats.changedMarkers() == 0 && granularStats.transfers() == 0;
 			condensedStats = condensedPhase.step(maximumPhaseOperations, phaseGridPrepared);
 			gasStats = gasPhase.step(maximumPhaseOperations - condensedStats.operations(), true);
-		} catch (FluidDomain.ThermalPhaseBlockedException blocked) {
-			throw blocked;
-		} catch (IllegalArgumentException invalid) {
-			throw new FluidDomain.ThermalPhaseBlockedException(invalid.getMessage(), invalid);
 		}
 		return new FluidDomain.ThermalAxisStats(
 				transportStats, chemicalStats, granularStats, condensedStats, gasStats);

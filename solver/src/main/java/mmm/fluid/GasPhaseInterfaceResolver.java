@@ -4,7 +4,6 @@ import mmm.chemistry.ExactRational;
 import mmm.thermal.GasLiquidPhaseModel;
 import mmm.thermal.GasThermalModel;
 import mmm.thermal.ThermalPhaseTransition;
-import mmm.thermal.ThermalStateFunction;
 import mmm.units.SignedDyadic;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,75 +46,31 @@ final class GasPhaseInterfaceResolver {
 		if (!Double.isFinite(liquidTemperature) && !allVapor) return Double.NaN;
 		var nodes = new TreeSet<Integer>();
 		for (int piece : source.contactPieces()) {
-			var before = topology.source().geometry().piece(piece);
-			var after = future.geometry().piece(piece);
-			if (before == null || after == null || !(before.shaped() || after.shaped()
-					? GasTopologyCoordinator.overlapVolume(before, after).signum() > 0 : positiveOverlap(before, after.dryPlane(), true))) continue;
+			if (!topology.transition().positive(piece)) continue;
 			int node = future.nodeOfPiece(piece);
 			if (node >= 0) nodes.add(node);
 		}
 		if (nodes.isEmpty()) return direction == GasLiquidPhaseModel.Direction.CONDENSE && sourceGasEmpty
 				? Double.POSITIVE_INFINITY : Double.NaN;
 		GasThermalModel thermal = new GasThermalModel(support.thermal().registry(), support.gasState().network.registry());
-		try {
-			double residual = Double.POSITIVE_INFINITY;
-			for (int node : nodes) {
-				GasLiquidPhaseModel.Saturation saturation;
-				if (node == 0) saturation = phase.ambientSaturation(transition,
-						allVapor ? mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K : liquidTemperature);
-				else {
-					var inventory = topology.gasPlan().inventory(node);
-					double energy = topology.thermalPlan().nodeEnergy(node);
-					double pressure = thermal.absolutePressure(inventory, topology.gasPlan().availableVolume(node), energy);
-					double temperature = allVapor ? inventory.isEmpty()
-							? mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K : thermal.state(inventory, energy).temperatureK()
-							: liquidTemperature;
-					saturation = phase.saturation(transition, temperature, inventory, pressure);
-				}
-				double imbalance = saturation.pressureImbalancePa();
-				residual = Math.min(residual, direction == GasLiquidPhaseModel.Direction.BOIL ? imbalance : -imbalance);
+		double residual = Double.POSITIVE_INFINITY;
+		for (int node : nodes) {
+			GasLiquidPhaseModel.Saturation saturation;
+			if (node == 0) saturation = phase.ambientSaturation(transition,
+					allVapor ? mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K : liquidTemperature);
+			else {
+				var inventory = topology.gasPlan().inventory(node);
+				double energy = topology.thermalPlan().nodeEnergy(node);
+				double pressure = thermal.absolutePressure(inventory, topology.gasPlan().availableVolume(node), energy);
+				double temperature = allVapor ? inventory.isEmpty()
+						? mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K : thermal.state(inventory, energy).temperatureK()
+						: liquidTemperature;
+				saturation = phase.saturation(transition, temperature, inventory, pressure);
 			}
-			return residual;
-		} catch (ThermalStateFunction.EnergyOutsideValidityException outsideThermalRange) {
-			throw outsideThermalRange;
-		} catch (IllegalArgumentException outsideGasPhaseRange) {
-			throw new PhaseChangeStageSupport.PhaseCandidateUnavailableException(
-					"Future gas interface is outside its pressure or saturation validity range", outsideGasPhaseRange);
+			double imbalance = saturation.pressureImbalancePa();
+			residual = Math.min(residual, direction == GasLiquidPhaseModel.Direction.BOIL ? imbalance : -imbalance);
 		}
-	}
-
-	boolean mayKeepBoilContact(GasRuntimeGeometry.PhaseSource prepared, PhaseLiquidGeometryEdit edit,
-	                          Candidate source) {
-		if (prepared == null) return true;
-		try {
-			var phase = prepared.phase(edit);
-			for (int piece : source.contactPieces()) {
-				var before = prepared.frame().geometry().piece(piece);
-				if (before == null) continue;
-				int cell = piece / 8, micro = piece & 7;
-				if (before.shaped() || phase.liquidShape(cell) != null) {
-					if (GasGeometryOverlap.unionOverlapVolume(micro, before.drySupports(), LiquidShapeGeometry.drySupports(phase, cell, micro)).signum() > 0) return true;
-					continue;
-				}
-				double fraction = phase.liquidFractionExact(cell, micro);
-				if (fraction >= 1) continue;
-				var plane = fraction == 0 ? null : new GasGeometryOverlap.HalfSpace(
-						SignedDyadic.of(phase.planeNormal(cell, micro, 0)), SignedDyadic.of(phase.planeNormal(cell, micro, 1)),
-						SignedDyadic.of(phase.planeNormal(cell, micro, 2)), SignedDyadic.of(phase.planeOffset(cell, micro)));
-				if (positiveOverlap(before, plane, false)) return true;
-			}
-			return false;
-		} catch (ArithmeticException | GasTopologyBlockedException | MechanicalTimeRefinement unresolved) {
-			return true;
-		}
-	}
-
-	private static boolean positiveOverlap(GasComplementGeometry.Piece before, GasGeometryOverlap.HalfSpace after, boolean positiveAfter) {
-		if (before.shaped()) return GasGeometryOverlap.unionOverlapVolume(before.micro(), before.drySupports(),
-				List.of(after == null ? List.of() : List.of(after))).signum() > 0;
-		if (after == null || after.equals(before.dryPlane())) return true;
-		if (before.dryPlane() == null && positiveAfter) return true;
-		return GasGeometryOverlap.hasPositiveOverlap(before.micro(), before.dryPlane(), after);
+		return residual;
 	}
 
 	record Contact(int node, int supportMask, List<Integer> pieces) { }

@@ -17,6 +17,11 @@ import java.util.TreeMap;
 
 /** Bounded cell-local continuous solid inventory. Temperature and phase fraction are never stored. */
 public final class CoherentPhaseStore {
+	/** A valid inventory edit exceeds finite storage or integer composition capacity. */
+	public static final class InventoryUnavailableException extends IllegalArgumentException {
+		private InventoryUnavailableException(String message) { super(message); }
+	}
+
 	public record Component(String speciesId, long amountQuanta) {
 		public Component {
 			ThermalIds.requireId(speciesId, "coherent species id");
@@ -120,10 +125,12 @@ public final class CoherentPhaseStore {
 		validateGroup(addition);
 		int found = find(addition.cell(), addition.phaseId());
 		if (found < 0) {
-			if (groups.size() == maximumGroups) throw new IllegalStateException("Coherent phase group budget exceeded");
+			if (groups.size() == maximumGroups) throw new InventoryUnavailableException("Coherent phase group budget exceeded");
 			return addition;
 		}
 		Group current = groups.get(found);
+		if (addition.occupiedVolumeSvq() > Long.MAX_VALUE - current.occupiedVolumeSvq())
+			throw new InventoryUnavailableException("Coherent occupied volume exceeds the SVQ range");
 		return new Group(current.cell(), current.phaseId(),
 				Math.addExact(current.occupiedVolumeSvq(), addition.occupiedVolumeSvq()),
 				finiteAdd(current.mass(), addition.mass(), "coherent mass"),
@@ -157,7 +164,7 @@ public final class CoherentPhaseStore {
 		double removedEnergy = energies.removed(), remainingEnergy = energies.remaining();
 		if (!(removedMass > 0.0 && remainingMass > 0.0)
 				|| !Double.isFinite(removedEnergy) || !Double.isFinite(remainingEnergy)) {
-			throw new IllegalArgumentException("Coherent phase split is not representable");
+			throw new InventoryUnavailableException("Coherent phase split has no finite positive mass shares");
 		}
 		Composition[] split = split(current.composition(), remainingSvq, requestedSvq, remainingMass, removedMass, chemistry);
 		return new TakeSplit(new Group(cell, phaseId, requestedSvq, removedMass, split[1], removedEnergy),
@@ -244,6 +251,12 @@ public final class CoherentPhaseStore {
 		TreeMap<String, Long> amounts = new TreeMap<>();
 		for (Component component : first.components()) amounts.put(component.speciesId(), component.amountQuanta());
 		for (Component component : second.components()) amounts.merge(component.speciesId(), component.amountQuanta(), Math::addExact);
+		if (amounts.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL)
+			throw new InventoryUnavailableException("Coherent merge exceeds the species slot capacity");
+		long total = 0;
+		for (long amount : amounts.values()) total += amount;
+		if (total > ChemicalLimits.MAX_REGION_TOTAL_QUANTA)
+			throw new InventoryUnavailableException("Coherent merge exceeds the chemical quantum capacity");
 		ArrayList<Component> components = new ArrayList<>(amounts.size());
 		for (Map.Entry<String, Long> entry : amounts.entrySet()) components.add(new Component(entry.getKey(), entry.getValue()));
 		double residual = finiteAdd(first.massResidual(), second.massResidual(), "coherent mass residual");
@@ -253,6 +266,7 @@ public final class CoherentPhaseStore {
 	private static Composition[] split(Composition composition, long remainingSvq, long removedSvq,
 	                                   double remainingMass, double removedMass, ChemicalRegistry chemistry) {
 		if (composition == null) return new Composition[]{null, null};
+		if (chemistry == null) throw new IllegalArgumentException("Coherent chemical split requires its registry");
 		ArrayList<Component> remaining = new ArrayList<>(), removed = new ArrayList<>();
 		for (Component component : composition.components()) {
 			long[] amounts = allocate(component.amountQuanta(), remainingSvq, removedSvq);
@@ -260,9 +274,8 @@ public final class CoherentPhaseStore {
 			if (amounts[1] > 0L) removed.add(new Component(component.speciesId(), amounts[1]));
 		}
 		if (remaining.isEmpty() || removed.isEmpty()) {
-			throw new IllegalArgumentException("Coherent split is below chemical quantum resolution");
+			throw new InventoryUnavailableException("Coherent split is below chemical quantum resolution");
 		}
-		if (chemistry == null) throw new IllegalArgumentException("Coherent chemical split requires its registry");
 		boolean removedIsSmaller = removedSvq <= remainingSvq;
 		TreeMap<String, Long> smallerAmounts = new TreeMap<>();
 		for (Component component : removedIsSmaller ? removed : remaining) smallerAmounts.put(component.speciesId(), component.amountQuanta());
@@ -273,7 +286,9 @@ public final class CoherentPhaseStore {
 		// Species quanta close exactly. Put residual rounding on the larger volume share too.
 		double smallerResidual = exactMass.subtract(ChemicalMixtureRecord.fromStableAmounts(chemistry, smallerAmounts, 0.0)
 				.exactSpeciesMassKilograms(chemistry)).toDouble();
+		if (!Double.isFinite(smallerResidual)) throw new InventoryUnavailableException("Coherent split mass residual exceeds binary64 range");
 		double largerResidual = SignedDyadic.of(composition.massResidual()).subtract(SignedDyadic.of(smallerResidual)).toDouble();
+		if (!Double.isFinite(largerResidual)) throw new InventoryUnavailableException("Coherent split mass residual exceeds binary64 range");
 		double removedResidual = removedIsSmaller ? smallerResidual : largerResidual;
 		double remainingResidual = removedIsSmaller ? largerResidual : smallerResidual;
 		return new Composition[]{
@@ -294,7 +309,7 @@ public final class CoherentPhaseStore {
 
 	private static double finiteAdd(double first, double second, String label) {
 		double result = first + second;
-		if (!Double.isFinite(result)) throw new ArithmeticException(label + " overflow");
+		if (!Double.isFinite(result)) throw new InventoryUnavailableException(label + " overflow");
 		return result;
 	}
 

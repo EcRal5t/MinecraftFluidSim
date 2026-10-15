@@ -460,6 +460,19 @@ public final class AirNetworkValidation {
 	}
 
 	private static void validateExactTopologyPartition() {
+		for (Runnable invalid : List.<Runnable>of(
+				() -> ExactGasPartitionWeights.ofRationals(List.of(ExactRational.ONE)).partitionControlVolume(Double.NaN),
+				() -> ExactGasPartitionWeights.ofRationals(List.of(ExactRational.of(-1))))) {
+			try { invalid.run(); throw new AssertionError("Invalid gas partition input was accepted"); }
+			catch (ExactGasPartitionWeights.UnrepresentableVolumeException physical) {
+				throw new AssertionError("Invalid gas partition input was classified as a physical limit", physical);
+			} catch (IllegalArgumentException expected) { }
+		}
+		try {
+			ExactGasPartitionWeights.ofRationals(List.of(ExactRational.ONE, ExactRational.of(2)))
+					.partitionControlVolume(Double.MIN_VALUE);
+			throw new AssertionError("Positive unrepresentable gas child volume was accepted");
+		} catch (ExactGasPartitionWeights.UnrepresentableVolumeException expected) { }
 		GasInventory source = new GasInventory(List.of(
 				new GasComponentAmount("test:a", 61, .125, List.of(
 						new GasComponentAmount.SpeciesAmount("test:s", 101)), -.03125),
@@ -471,6 +484,17 @@ public final class AirNetworkValidation {
 		checkPartitionColumns(source, normal);
 		GasInventory large = new GasInventory(List.of(new GasComponentAmount("test:a", Long.MAX_VALUE,
 				.125, List.of(new GasComponentAmount.SpeciesAmount("test:s", 7)), -.03125)));
+		try {
+			large.merge(new GasInventory(List.of(new GasComponentAmount("test:a", 1, .125, List.of(), 0))));
+			throw new AssertionError("Overflowing gas merge was accepted");
+		} catch (GasInventory.RepresentationException expected) { }
+		AirNetwork invalidSource = new AirNetwork();
+		try {
+			invalidSource.planPhaseSource(-1, GasInventory.EMPTY);
+			throw new AssertionError("Invalid gas source node was accepted");
+		} catch (GasInventory.RepresentationException physical) {
+			throw new AssertionError("Invalid gas source node was classified as a physical limit", physical);
+		} catch (IllegalArgumentException expected) { }
 		var before = new GasInventory(large.components());
 		for (int power : new int[] {60, 1074}) {
 			BigInteger denominator = BigInteger.ONE.shiftLeft(power);

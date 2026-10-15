@@ -12,6 +12,10 @@ import java.util.TreeMap;
 
 /** Positive geometric sums retained as bounded rational leaves, with certified final decisions. */
 public final class ExactGasPartitionWeights {
+	/** Valid positive measures whose binary64 control volumes cannot be stored. */
+	public static final class UnrepresentableVolumeException extends IllegalArgumentException {
+		private UnrepresentableVolumeException(String message) { super(message); }
+	}
 	private static final int INITIAL_PRECISION = 2 * Long.SIZE;
 	private record Term(BigInteger numerator, BigInteger denominator) { }
 	private record Bounds(BigInteger lower, BigInteger upper) { }
@@ -101,7 +105,7 @@ public final class ExactGasPartitionWeights {
 			assigned = assigned.add(SignedDyadic.of(result[i]));
 		}
 		var remainder = source.subtract(assigned);
-		if (remainder.signum() <= 0) throw new IllegalArgumentException("Gas volume rounding exhausted its largest share");
+		if (remainder.signum() <= 0) throw new UnrepresentableVolumeException("Gas volume rounding exhausted its largest share");
 		result[pivot] = remainder.toDouble(); requirePositive(result[pivot]);
 		return result;
 	}
@@ -235,6 +239,6 @@ public final class ExactGasPartitionWeights {
 		return joined.entrySet().stream().map(entry -> new Term(entry.getValue(), entry.getKey())).toList();
 	}
 	private static void requirePositive(double value) {
-		if (!(Double.isFinite(value) && value > 0)) throw new IllegalArgumentException("Positive gas volume has no finite positive representation");
+		if (!(Double.isFinite(value) && value > 0)) throw new UnrepresentableVolumeException("Positive gas volume has no finite positive representation");
 	}
 }
