@@ -225,17 +225,17 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		}
 	}
 
-	@Override public double lowOrderVolumes(int face, int donor, int receiver, int axis, boolean positive,
-	                                       double dtOverH, int donorSupport, int receiverSupport, double[] liquid) {
+	@Override public double captureLowOrderVolumes(int face, int donor, int receiver, int axis, boolean positive,
+	                                              double dtOverH, double[] liquid) {
 		Arrays.fill(liquid, 0);
 		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
 		if (components == null) return 0;
 		var open = new ExactRational[8]; var wet = new ExactRational[8]; var dry = new ExactRational[8];
 		ExactRational total = ExactRational.ZERO;
 		for (var component : components) {
-			int support = donorSupport & component.support(); if (support == 0) continue;
+			int support = component.support();
 			LiquidAffineSweepGeometry.lowOrderPhaseVolumes(domain, donor, receiver, axis, positive, component.q(),
-					dtOverH, component.support(), receiverSupport, open, wet, dry);
+					dtOverH, support, 255, open, wet, dry);
 			ExactRational sum = ExactRational.ZERO;
 			for (int m = 0; m < 8; m++) if ((support & 1 << m) != 0
 					&& (support & 1 << (positive ? m | 1 << axis : m & ~(1 << axis))) != 0) {

@@ -543,8 +543,23 @@ public final class CellRemapMomentsValidation {
 			double[] low = new double[8];
 			check(partialFaces.lowOrderMicroVolumes(f, 255, 255, low), "Actual affine flux omitted its micro low-order producer");
 			precise(java.util.Arrays.stream(low).sum(), 3.0 / 64, "Actual affine low-order transfer");
+			for (int sourceMask : new int[]{255,0x33,0x55,0x0f,3}) for (int receiverMask : new int[]{255,0x55,0xcc}) {
+				var selected = new double[8]; check(partialFaces.lowOrderMicroVolumes(f,sourceMask,receiverMask,selected), "Captured low-order source unavailable");
+				for (int m = 0; m < 8; m++) {
+					int faceMicro = m | 2, peer = faceMicro ^ 2;
+					double expected = (sourceMask & 1<<m) != 0 && (sourceMask & 1<<faceMicro) != 0 && (receiverMask & 1<<peer) != 0 ? low[m] : 0;
+					check(Double.doubleToRawLongBits(selected[m]) == Double.doubleToRawLongBits(expected),
+							"Narrow source renormalized its complete component column");
+				}
+			}
 			check(partialFaces.exactFlux[f].equals(mmm.units.SignedDyadic.of(3.0 / 64)),
 					"Actual FCT consumer did not retain the common phase transfer");
+			partialFaces.plan(domain.markerGrid.exactCellMarkerVolume,domain.geometry.solid,.25,domain.markerGrid.exactCellVolumeInventory);
+			var rebuilt = new double[8]; check(partialFaces.lowOrderMicroVolumes(f,255,255,rebuilt), "Rebuilt low-order rule disappeared");
+			for(int m=0;m<8;m++) check(rebuilt[m] == .5*low[m], "New plan retained the old duration's low-order measure");
+			partialFaces.faceSweep(null); java.util.Arrays.fill(rebuilt,99);
+			check(!partialFaces.lowOrderMicroVolumes(f,255,255,rebuilt) && java.util.Arrays.stream(rebuilt).allMatch(v->v==0),
+					"Replaced producer retained an earlier plan measure");
 		}
 		domain.setVolume(1, 1, 1, 1);
 		domain.rebuildGridFromParticles();
@@ -591,7 +606,7 @@ public final class CellRemapMomentsValidation {
 		double openOutgoing = 0, liquidOutgoing = 0;
 		for (int f = 0; f < supplyFaces.physicalFaceCount; f++) if (supplyFaces.left[f] == donor) {
 			openOutgoing += supplyFaces.velocity[f]; double[] micro = new double[8];
-			liquidOutgoing += supplyFlow.lowOrderVolumes(f, donor, supplyFaces.right[f], supplyFaces.axis[f], true, 1, 255, 255, micro);
+			liquidOutgoing += supplyFlow.captureLowOrderVolumes(f, donor, supplyFaces.right[f], supplyFaces.axis[f], true, 1, micro);
 		}
 		precise(openOutgoing, .99, "Open-face Courant of the three-axis source counterexample");
 		precise(liquidOutgoing, .62, "PLIC-correlated low-order source demand");
@@ -632,11 +647,17 @@ public final class CellRemapMomentsValidation {
 				thinCoefficients[flowAxis][4 * donor] = sign * (8 + intercept);
 				thinCoefficients[flowAxis][4 * donor + thinAxis + 1] = sign * 1024;
 				thinCoefficients[thinAxis][4 * donor] = .25;
-				var thinFaces = new ConservativeLiquidFlux(3, 3, 3);
+				var thinFaces = new ConservativeLiquidFlux(3, 3, 3, true);
 				var thinFlow = new LiquidAffineFaceFlow(domain, thinFaces, new CellAffineVelocityField(thinBasis, thinCoefficients));
+				var thinGeometry = new LiquidFluxGeometry(domain); thinFaces.geometry(thinGeometry); thinFaces.faceSweep(thinFlow);
+				thinFlow.prepareVelocities(thinFaces,thinGeometry);
+				thinFaces.plan(domain.markerGrid.exactCellMarkerVolume,domain.geometry.solid,1.0/2048,domain.markerGrid.exactCellVolumeInventory);
 				for (int f = 0; f < thinFaces.physicalFaceCount; f++) {
-					if (thinFaces.axis[f] == flowAxis && (sign > 0 ? thinFaces.left[f] : thinFaces.right[f]) == donor)
+					if (thinFaces.axis[f] == flowAxis && (sign > 0 ? thinFaces.left[f] : thinFaces.right[f]) == donor) {
 						precise(thinFlow.maximumOutwardSpeed(f, sign > 0, 0), 16 + intercept, "Actual wet projected peak excludes the dry corner");
+						var captured = new double[8]; check(thinFaces.lowOrderMicroVolumes(sign > 0 ? f : f+thinFaces.physicalFaceCount,255,255,captured), "Thin directional plan omitted its low-order rule");
+						for(int m=0;m<8;m++) checkSameObservation(captured[m],liquid[m],"Thin captured component measure");
+					}
 					if (thinFaces.axis[f] == thinAxis && thinFaces.left[f] == donor) {
 						check(domain.pressurePhaseGeometry.wetFacePolygon(donor, thinAxis, 1, 0, 0, 1)[0].length == 0,
 								"Interior wet source counterexample has a wet current exit face");

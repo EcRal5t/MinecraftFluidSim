@@ -276,9 +276,10 @@ public final class LiquidVolumeTransportValidation {
 			flux.carrierShares(new int[] {7, 2, 0});
 			SignedDyadic unit = SignedDyadic.of(1, -24), original = SignedDyadic.of(amount, -24), correction = SignedDyadic.of(repair, -24);
 			SignedDyadic[] volume = {unit, original, SignedDyadic.ZERO};
-			flux.velocity[0] = -1; flux.velocity[1] = 1;
+			flux.velocity[0] = -1; flux.velocity[1] = -1;
 			flux.exactFlux[0] = original; flux.exactFlux[1] = SignedDyadic.ZERO;
 			try {
+				((double[][]) privateFluxField(flux,"lowMicroVolumes"))[1] = new double[]{1,1,1,1,1,1,1,1};
 				var capacities = (SignedDyadic[]) privateFluxField(flux, "exactCapacity");
 				capacities[0] = unit.add(original).subtract(correction); capacities[1] = SignedDyadic.ZERO; capacities[2] = original;
 				var field = ConservativeLiquidFlux.class.getDeclaredField("quantizationBudget"); field.setAccessible(true);
@@ -295,6 +296,9 @@ public final class LiquidVolumeTransportValidation {
 							|| !flux.exactFlux[0].equals(SignedDyadic.ZERO) || !flux.exactFlux[1].equals(original)
 							|| flux.representationBlend(1) != 1)
 						throw new AssertionError("Reverse cancellation failed to reassign the same original donor inventory");
+					var low = new double[8]; java.util.Arrays.fill(low,99);
+					if(flux.lowOrderMicroVolumes(1,255,255,low) || java.util.Arrays.stream(low).anyMatch(v->v!=0))
+						throw new AssertionError("Reversed face retained its original donor low-order measure");
 					var domain = new FluidDomain(3, 2, 2, new FluidSolverConfig(1, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 16);
 					domain.setVolume(1, 0, 0, (float) original.toDouble()); var source = new java.util.ArrayList<Integer>();
 					for (int p = 0; p < domain.particleCount(); p++) {
