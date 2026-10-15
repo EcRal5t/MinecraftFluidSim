@@ -65,7 +65,7 @@ final class MarkerVelocitySpaceExperiment {
 			for (int a = 0; a < 3; a++) input[a][i] = v[a];
 		}
 		var projected = new double[3][basis.markerCount()]; var impulse = new double[3][basis.markerCount()];
-		new CellAffineWallProjection(d, basis, geometry).project(input, projected, impulse);
+		new CellAffineWallProjection(basis).project(input, projected, impulse);
 		double before = energy(basis, input), after = energy(basis, projected);
 		System.out.printf("Closed circulation axis=%d kinetic=%g -> %g J%n", axis, before, after);
 		near(after, before, 1e-12, "An admissible closed circulation lost kinetic energy");
@@ -95,7 +95,7 @@ final class MarkerVelocitySpaceExperiment {
 				new float[]{.25F, 1.5F, 1.5F, .125F}, new float[]{1, 0, 0}, new byte[27]));
 		d.ensureGrid(); var geometry = LiquidPressureGeometry.capture(d); var basis = CellAffineVelocity.capture(d, geometry);
 		double[][] input = {{1}, {0}, {0}}, result = new double[3][1], impulse = new double[3][1];
-		new CellAffineWallProjection(d, basis, geometry).project(input, result, impulse);
+		new CellAffineWallProjection(basis).project(input, result, impulse);
 		// u=4x represents this value with actual mass and vanishes on x=0. This is a space check, before pressure.
 		near(result[0][0], 1, 1e-14, "A supported one-amplitude wall mode was removed");
 	}

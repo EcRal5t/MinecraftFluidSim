@@ -94,7 +94,7 @@ final class MarkerPressureProjection {
 		for (boolean contact : gasContacts) if (contact) { pressureAnchor = -1; break; }
 		pressureReference = boundary.pressureReference(gasContacts);
 		domain.pressureAnchor = pressureAnchor; domain.pressureReference = pressureReference;
-		wallProjection = new CellAffineWallProjection(domain, basis, geometry);
+		wallProjection = new CellAffineWallProjection(basis);
 		transfer = CellAffineMacTransfer.capture(domain, basis, geometry);
 		int count = basis.markerCount();
 		originalVelocity = markers(count); originalPosition = markers(count); originalMass = new double[count]; originalVolume = new double[count];
@@ -172,7 +172,7 @@ final class MarkerPressureProjection {
 			int node = entry.getKey(); double s = nodeStorage[node];
 			gasRows[node] = definitions.size(); definitions.add(new Row(entry.getValue(), s));
 		}
-		rows = definitions.stream().map(wallProjection::transform).toList(); operator = new CellVelocityConstraintOperator(basis, rows);
+		rows = List.copyOf(definitions); operator = new CellVelocityConstraintOperator(basis, rows);
 		int rowCount = rows.size(); storage = new double[rowCount]; gasInitialPressure = new double[rowCount];
 		for (int row = 0; row < rowCount; row++) storage[row] = rows.get(row).storage();
 		for (int node = 1; node < gasRows.length; node++) if (gasRows[node] >= 0) gasInitialPressure[gasRows[node]] = boundary.gasPressureOfNode(node) - pressureReference;

@@ -10,7 +10,7 @@ final class CellAffineWallProjection {
 		domain.ensureInventoryGrid();
 		var geometry = LiquidPressureGeometry.capture(domain);
 		var basis = CellAffineVelocity.capture(domain, geometry);
-		var projection = new CellAffineWallProjection(domain, basis, geometry);
+		var projection = new CellAffineWallProjection(basis);
 		var before = new double[3][basis.markerCount()];
 		for (int marker = 0; marker < basis.markerCount(); marker++) {
 			before[0][marker] = domain.particles.velocityX(marker);
@@ -43,13 +43,9 @@ final class CellAffineWallProjection {
 		return work;
 	}
 
-	CellAffineWallProjection(FluidDomain domain, CellAffineVelocity basis, LiquidPressureGeometry geometry) {
-		if (basis == null || geometry == null) throw new IllegalArgumentException("Missing shaped wall space");
+	CellAffineWallProjection(CellAffineVelocity basis) {
 		this.basis = basis;
 	}
-
-	/** The admitted q fields already satisfy every supported wet wall plane. */
-	CellVelocityConstraintOperator.Row transform(CellVelocityConstraintOperator.Row row) { return row; }
 
 	/** Projects coupled wall blocks; only constrained normal components contribute wall impulse. */
 	void project(double[][] input, double[][] result, double[][] impulse) {

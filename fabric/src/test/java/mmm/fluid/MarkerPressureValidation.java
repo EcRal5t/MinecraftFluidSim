@@ -87,8 +87,7 @@ public final class MarkerPressureValidation {
 			var coefficient = new double[4]; coefficient[axis + 1] = profile.volume() / basis.cellSize();
 			bulk.add(new CellVelocityConstraintOperator.Block(block, axis, coefficient));
 		}
-		var wall = new CellAffineWallProjection(d, basis, plan.geometry());
-		var bulkOperator = new CellVelocityConstraintOperator(basis, java.util.List.of(wall.transform(new CellVelocityConstraintOperator.Row(bulk, 0))));
+		var bulkOperator = new CellVelocityConstraintOperator(basis, java.util.List.of(new CellVelocityConstraintOperator.Row(bulk, 0)));
 		var missingBulkForce = new double[3][basis.markerCount()]; bulkOperator.force(new double[]{liquidRow < 0 ? 1 : 0}, missingBulkForce);
 		double magnitude = 0, bulkMagnitude = 0;
 		for (int axis = 0; axis < 3; axis++) for (int p = 0; p < basis.markerCount(); p++) {
@@ -226,7 +225,7 @@ public final class MarkerPressureValidation {
 	static void fixedWallProjectionUsesActualMass() {
 		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
 		d.setVolume(1, 0, 1, 1); d.ensureGrid();
-		var geometry=LiquidPressureGeometry.capture(d); var basis = CellAffineVelocity.capture(d,geometry); var wall = new CellAffineWallProjection(d, basis, geometry);
+		var geometry=LiquidPressureGeometry.capture(d); var basis = CellAffineVelocity.capture(d,geometry); var wall = new CellAffineWallProjection(basis);
 		int n = basis.markerCount(); var before = new double[3][n]; var after = new double[3][n]; var impulse = new double[3][n];
 		for (int i = 0; i < n; i++) {
 			before[0][i] = Math.sin(.3 * i + .2);
@@ -653,6 +652,17 @@ public final class MarkerPressureValidation {
 		exactSource[2] += 1; exactRate[2] -= 1;
 		if (modular.compatibleSource(exactSource, exactRate, 1))
 			throw new AssertionError("Replayed pressure dependency accepted incompatible physical source");
+		// The modular relation uses only row 0; its exact completion also needs selected row 1.
+		var local = new PressureRowBasis(new int[]{0, 2, 3, 4}, new int[]{0, 1, 1, 0},
+				new SignedDyadic[]{SignedDyadic.of(1), SignedDyadic.of(prime), SignedDyadic.of(1), SignedDyadic.of(1)},
+				new SignedDyadic[][]{{SignedDyadic.of(1), SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.of(1)}},
+				2, new double[3], new double[]{3, 2, 1});
+		var localRate = new double[]{1 + 2 * prime, 2, 1}; var localSource = new double[]{-localRate[0], -2, -1};
+		if (local.size() != 2 || local.dependencyCount() != 1 || !local.compatibleSource(localSource, localRate, 1))
+			throw new AssertionError("Local modular support failed to expand to its complete exact pressure relation");
+		localRate[2] += 1; localSource[2] -= 1;
+		if (local.compatibleSource(localSource, localRate, 1))
+			throw new AssertionError("Expanded local pressure relation accepted an incompatible full-column source");
 		int block = basis.markerBlock(0);
 		var definitions = java.util.List.of(
 				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{1, 0, 0, 0})), 0),
