@@ -61,61 +61,6 @@ final class LiquidAffineSweepGeometry {
 	static void lowOrderPhaseVolumes(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
 	                                 double[] q, double dtOverH, int donorSupport, int receiverSupport,
 	                                 ExactRational[] open, ExactRational[] liquid, ExactRational[] dry) {
-		lowOrderPhaseMoments(domain, donor, receiver, axis, positive, q, dtOverH, donorSupport, receiverSupport,
-				open, liquid, dry, null, donorSupport);
-	}
-	/** The requested source mask selects moments after the complete component's column normalization. */
-	static ExactRational[] lowOrderPhaseSecondMoments(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
-	                                                double[] q, double dtOverH, int donorSupport, int receiverSupport,
-	                                                int selectedSourceSupport) {
-		if (selectedSourceSupport < 0 || selectedSourceSupport > 255)
-			throw new IllegalArgumentException("Invalid low-order source moment support");
-		var result = new ExactRational[10]; java.util.Arrays.fill(result, ExactRational.ZERO);
-		lowOrderPhaseMoments(domain, donor, receiver, axis, positive, q, dtOverH, donorSupport, receiverSupport,
-				new ExactRational[8], new ExactRational[8], new ExactRational[8], result, selectedSourceSupport);
-		return result;
-	}
-	/** Donor-centred arrival moments under the same frozen normal trace. */
-	static ExactRational[] arrivalSecondMoments(ExactRational[] source, int axis, boolean positive,
-	                                          double[] q, double dtOverH, boolean uniformAge) {
-		if (source == null || source.length != 10 || axis < 0 || axis > 2 || q == null || q.length != 3
-				|| !(Double.isFinite(dtOverH) && dtOverH >= 0))
-			throw new IllegalArgumentException("Invalid liquid arrival moments");
-		var result = source.clone();
-		ExactRational[] affine = {rational(q[0]).add(rational(q[1]).add(rational(q[2])).divide(2)),
-				ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
-		affine[(axis + 1) % 3 + 1] = rational(q[1]); affine[(axis + 2) % 3 + 1] = rational(q[2]);
-		var velocity = affine[0].multiply(source[0]); var squared = affine[0].multiply(affine[0]).multiply(source[0]);
-		for (int a = 0; a < 3; a++) {
-			velocity = velocity.add(affine[a + 1].multiply(source[a + 1]));
-			squared = squared.add(affine[0].multiply(affine[a + 1]).multiply(source[a + 1]).multiply(2));
-			for (int b = 0; b < 3; b++) squared = squared.add(affine[a + 1].multiply(affine[b + 1]).multiply(source[secondIndex(a, b)]));
-		}
-		var time = rational(dtOverH);
-		var face = ExactRational.of(positive ? 1 : -1).divide(2);
-		result[axis + 1] = uniformAge ? face.multiply(source[0]).add(time.multiply(velocity).divide(2))
-				: source[axis + 1].add(time.multiply(velocity));
-		for (int a = 0; a < 3; a++) {
-			var cross = affine[0].multiply(source[a + 1]);
-			for (int b = 0; b < 3; b++) cross = cross.add(affine[b + 1].multiply(source[secondIndex(a, b)]));
-			int entry = secondIndex(axis, a);
-			result[entry] = a == axis ? uniformAge
-					? face.multiply(face).multiply(source[0]).add(face.multiply(time).multiply(velocity))
-							.add(time.multiply(time).multiply(squared).divide(3))
-					: source[entry].add(time.multiply(cross).multiply(2)).add(time.multiply(time).multiply(squared))
-					: uniformAge ? face.multiply(source[a + 1]).add(time.multiply(cross).divide(2))
-					: source[entry].add(time.multiply(cross));
-		}
-		return result;
-	}
-	private static int secondIndex(int a, int b) {
-		int low = Math.min(a, b), high = Math.max(a, b);
-		return low == 0 ? 4 + high : low == 1 ? 6 + high : 9;
-	}
-	private static void lowOrderPhaseMoments(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
-	                                        double[] q, double dtOverH, int donorSupport, int receiverSupport,
-	                                        ExactRational[] open, ExactRational[] liquid, ExactRational[] dry,
-	                                        ExactRational[] second, int selectedSourceSupport) {
 		requireInput(domain, donor, receiver, axis, q[0], q[1], q[2], dtOverH, donorSupport, receiverSupport);
 		donorSupport &= ~domain.geometry.cutCells.mask(donor);
 		var rates = faceMicroRates(domain, donor, receiver, axis, positive, q[0], q[1], q[2], donorSupport, receiverSupport);
@@ -127,15 +72,9 @@ final class LiquidAffineSweepGeometry {
 		normal[(axis + 2) % 3] = SignedDyadic.of(q[2]).multiply(SignedDyadic.of(sign));
 		var velocity = new GasGeometryOverlap.HalfSpace(normal[0], normal[1], normal[2], SignedDyadic.of(-sign * q[0]));
 		ExactRational b = rational(q[1]), c = rational(q[2]), centered = rational(q[0]).add(b.add(c).divide(2));
-		ExactRational[] affine = null;
-		if (second != null) {
-			affine = new ExactRational[]{centered.multiply(sign), ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
-			affine[(axis + 1) % 3 + 1] = b.multiply(sign); affine[(axis + 2) % 3 + 1] = c.multiply(sign);
-		}
 		java.util.Arrays.fill(open, ExactRational.ZERO); java.util.Arrays.fill(liquid, ExactRational.ZERO);
 		java.util.Arrays.fill(dry, ExactRational.ZERO);
 		for (int m = 0; m < 8; m++) {
-			if (second != null && (selectedSourceSupport & 1 << m) == 0) continue;
 			int faceMicro = positive ? m | 1 << axis : m & ~(1 << axis), peer = m ^ 1 << axis;
 			if ((donorSupport & 1 << m) == 0 || rates[faceMicro].isZero()) continue;
 			ExactRational local = rational(phase.componentPoreScale(donor, m, fallback));
@@ -150,17 +89,9 @@ final class LiquidAffineSweepGeometry {
 					phase.componentPoreScale(receiver, receiverMicro, receiverFallback));
 			var supports = wetSourceSupports(domain, donor, m, null);
 			boolean full = supports.size() == 1 && supports.getFirst().isEmpty();
-			ExactRational[] weighted = null;
-			if (second != null) {
-				weighted = clippedSourceMoments(m, supports, velocity, true, affine);
-				var scale = rational(facePore).multiply(weight).multiply(2);
-				for (int i = 0; i < weighted.length; i++) weighted[i] = weighted[i].multiply(scale);
-				liquid[m] = weighted[0];
-				if (full && !liquid[m].equals(open[m]))
-					throw new IllegalStateException("Full low-order spatial measure differs from its volume");
-			} else if (full) liquid[m] = open[m];
+			if (full) liquid[m] = open[m];
 			else {
-				var part = clippedSourceMoments(m, supports, velocity, false, null);
+				var part = clippedSourceMoments(m, supports, velocity, false);
 				var integral = centered.multiply(part[0]).add(b.multiply(part[(axis + 1) % 3 + 1]))
 						.add(c.multiply(part[(axis + 2) % 3 + 1])).multiply(2L * sign);
 				liquid[m] = integral.multiply(rational(facePore)).multiply(weight);
@@ -168,8 +99,6 @@ final class LiquidAffineSweepGeometry {
 			dry[m] = open[m].subtract(liquid[m]);
 			if (liquid[m].signum() < 0 || dry[m].signum() < 0)
 				throw new IllegalStateException("PLIC low-order phase measure exceeds its open source");
-			if (weighted != null)
-				for (int i = 0; i < second.length; i++) second[i] = second[i].add(weighted[i]);
 		}
 	}
 
@@ -202,12 +131,11 @@ final class LiquidAffineSweepGeometry {
 		result.add(flow); result.addAll(source); return result;
 	}
 	private static ExactRational[] clippedSourceMoments(int micro, List<List<GasGeometryOverlap.HalfSpace>> supports,
-	                                                  GasGeometryOverlap.HalfSpace flow, boolean second, ExactRational[] affine) {
+	                                                  GasGeometryOverlap.HalfSpace flow, boolean second) {
 		ExactRational[] total = null;
 		for (var support : supports) {
 			var constraints = clipSource(support, flow);
-			var part = affine != null ? GasGeometryOverlap.normalizedAffineSecondMoments(micro, constraints, affine)
-					: second ? GasGeometryOverlap.normalizedSecondMoments(micro, constraints) : GasGeometryOverlap.normalizedMoments(micro, constraints);
+			var part = second ? GasGeometryOverlap.normalizedSecondMoments(micro, constraints) : GasGeometryOverlap.normalizedMoments(micro, constraints);
 			if (total == null) total = part;
 			else for (int i = 0; i < total.length; i++) total[i] = total[i].add(part[i]);
 		}
@@ -218,6 +146,21 @@ final class LiquidAffineSweepGeometry {
 		return domain.pressurePhaseGeometry.liquidShape(cell) == null
 				? MicroBoxPlaneVolume.dryVolume(micro, wetSourcePlane(domain, cell, micro))
 				: GasGeometryOverlap.unionVolume(micro, LiquidShapeGeometry.wetSupports(domain.pressurePhaseGeometry, cell, micro));
+	}
+	/** Complete component's wet source measure, before any outgoing face or receiver restriction. */
+	static void sourceWetMicroVolumes(FluidDomain domain, int cell, int support, double[] result) {
+		if (domain == null || cell < 0 || cell >= domain.cellCount || support < 0 || support > 255
+				|| result == null || result.length != 8)
+			throw new IllegalArgumentException("Invalid liquid wet source support");
+		java.util.Arrays.fill(result, 0);
+		support &= ~domain.geometry.cutCells.mask(cell);
+		double fallback = poreScale(domain, cell);
+		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
+			double pore = domain.pressurePhaseGeometry.componentPoreScale(cell, micro, fallback);
+			if (!(Double.isFinite(pore) && pore >= 0 && pore <= 1))
+				throw new IllegalStateException("Invalid liquid source pore fraction");
+			if (pore > 0) result[micro] = observeVolume(sourceWetVolume(domain, cell, micro).multiply(rational(pore)));
+		}
 	}
 
 	private static ExactRational constantPhaseFraction(FluidDomain domain, int cell, int micro) {
@@ -344,7 +287,7 @@ final class LiquidAffineSweepGeometry {
 				if (!Double.isFinite(pore) || pore < 0 || pore > 1) throw new IllegalStateException("Invalid affine sweep pore fraction");
 				if (pore == 0) continue;
 				ExactRational weight = rational(pore);
-				var part = clippedSourceMoments(micro, supports, wedge, secondMoments, null);
+				var part = clippedSourceMoments(micro, supports, wedge, secondMoments);
 				for (int i = 0; i < total.length; i++) {
 					part[i] = part[i].multiply(weight); total[i] = total[i].add(part[i]);
 				}

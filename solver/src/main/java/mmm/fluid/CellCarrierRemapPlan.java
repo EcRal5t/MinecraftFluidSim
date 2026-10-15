@@ -327,16 +327,21 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		}
 		destinations[share] = cell; supports[share] = groups.getFirst().support; faces[share] = -1;
 		SignedDyadic[][] pieces = volumePieces(cell, flux, groups, transfers);
+		var sourceGeometry = geometryRemap ? null : new CellRemapMicroPreferences(domain, flux, cell,
+				groups.getFirst().support, faces, supports);
 		for (int g = 0; g < groups.size(); g++) {
 			Group source = groups.get(g);
 			prepareMoments(source);
 			source.shares = new ArrayList<>(shares);
 			var preferences = geometryRemap
 					? CellRemapMicroPreferences.inventory(domain, source.original, shares - 1)
-					: CellRemapMicroPreferences.create(domain, flux, source.original, source.support, faces, supports);
+					: sourceGeometry.forSource(source.original);
 			CellRemapTransportMoments.Result transport;
 			try { transport = new CellRemapTransportMoments(domain, source.cell, source.original).allocate(pieces[g], preferences); }
-			catch (CellRemapTransportMoments.AllocationFailure infeasible) { throw new MechanicalTimeRefinement(2, infeasible.getMessage()); }
+			catch (CellRemapTransportMoments.AllocationFailure infeasible) {
+				throw new MechanicalTimeRefinement(2, "Liquid transport source at cell=" + source.cell
+						+ ", support=" + source.support + ", material=" + source.material + ": " + infeasible.getMessage());
+			}
 			double[] masses = transport.mass();
 			for (int d = 0; d < transfers.size(); d++) if (pieces[g][d].signum() > 0) source.movingAxes |= 1 << flux.axis[faces[d]];
 			for (int d = 0; d < shares; d++) {

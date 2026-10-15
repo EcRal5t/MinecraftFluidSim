@@ -4,50 +4,98 @@ import mmm.units.SignedDyadic;
 import java.util.Arrays;
 import java.util.List;
 
-/** Supported raw source proposals for the geometric and donor-cell parts of one face plan. */
+/** One positive coupling between a component's raw quadrature and its continuous wet geometry. */
 final class CellRemapMicroPreferences {
-	private CellRemapMicroPreferences() { }
+	private final FluidDomain domain;
+	private final double[] wet = new double[8];
+	private final double wetTotal;
+	private final double[][] geometricRatio, donorRatio;
+	private final double[] geometricBlend, representationBlend;
 
-	static double[][] create(FluidDomain domain, ConservativeLiquidFlux flux, List<Integer> original,
+	CellRemapMicroPreferences(FluidDomain domain, ConservativeLiquidFlux flux, int cell,
 	                         int support, int[] faces, int[] receiverSupports) {
-		SignedDyadic[] inventory = rawInventory(domain, original);
-		double[][] result = new double[faces.length - 1][8];
-		double[] swept = new double[8], wet = new double[8], low = new double[8];
-		for (int d = 0; d < result.length; d++) {
-			flux.sweptMicroVolumes(faces[d], support, receiverSupports[d], swept, wet);
+		this.domain = domain;
+		int outgoing = faces.length - 1;
+		geometricRatio = new double[outgoing][8]; donorRatio = new double[outgoing][8];
+		geometricBlend = new double[outgoing]; representationBlend = new double[outgoing];
+		if (outgoing == 0) { wetTotal = 0; return; }
+		LiquidAffineSweepGeometry.sourceWetMicroVolumes(domain, cell, support, wet);
+		double total = 0;
+		for (double value : wet) total += value;
+		if (!(total > 0 && Double.isFinite(total)))
+			throw new IllegalStateException("Liquid source coupling requires a positive wet measure");
+		wetTotal = total;
+		double[] faceWet = new double[8];
+		for (int d = 0; d < outgoing; d++) {
+			double[] swept = geometricRatio[d], low = donorRatio[d];
+			flux.sweptMicroVolumes(faces[d], support, receiverSupports[d], swept, faceWet);
 			boolean phaseLow = flux.lowOrderMicroVolumes(faces[d], support, receiverSupports[d], low);
-			int normalBit = 1 << flux.axis[faces[d]];
-			double[] donorPreference = new double[8];
-			double geometric = 0, donor = 0;
-			for (int m = 0; m < 8; m++) if (inventory[m].signum() > 0) {
-				int peer = m ^ normalBit;
-				double columnSwept = swept[m], columnWet = wet[m];
-				if ((support & 1 << peer) != 0) { columnSwept += swept[peer]; columnWet += wet[peer]; }
-				double columnLow = phaseLow ? low[m] + ((support & 1 << peer) != 0 ? low[peer] : 0) : columnSwept;
-				if (columnSwept == 0 && columnLow == 0) continue;
-				double raw = inventory[m].toDouble();
-				boolean lowRepresented = low[m] > 0 || ((support & 1 << peer) != 0 && inventory[peer].signum() > 0 && low[peer] > 0);
-				double lowMeasure = lowRepresented ? low[m] : columnLow, lowWet = lowRepresented ? wet[m] : columnWet;
-				donorPreference[m] = phaseLow ? lowMeasure == 0 ? 0 : raw * lowMeasure / lowWet : raw;
-				if (!Double.isFinite(donorPreference[m]) || donorPreference[m] < 0)
-					throw new IllegalStateException("Low-order micro preference lacks its wet source measure");
-				donor += donorPreference[m];
-				// The geometric proposal uses represented swept microboxes; donor-cell supply uses the column.
-				boolean represented = swept[m] > 0 || ((support & 1 << peer) != 0 && inventory[peer].signum() > 0 && swept[peer] > 0);
-				double sweptMeasure = represented ? swept[m] : columnSwept, wetMeasure = represented ? wet[m] : columnWet;
-				if (sweptMeasure == 0) continue;
-				if (!(Double.isFinite(wetMeasure) && wetMeasure > 0 && Double.isFinite(sweptMeasure)))
-					throw new IllegalStateException("Positive liquid micro sweep lacks its wet source measure");
-				result[d][m] = raw * (sweptMeasure / wetMeasure); geometric += result[d][m];
-				if (!(Double.isFinite(result[d][m]) && result[d][m] > 0))
-					throw new IllegalStateException("Supported liquid micro preference is unrepresentable");
+			if (!phaseLow) {
+				int normalBit = 1 << flux.axis[faces[d]];
+				for (int m = 0; m < 8; m++)
+					low[m] = swept[m] + ((support & 1 << (m ^ normalBit)) != 0 ? swept[m ^ normalBit] : 0) > 0 ? faceWet[m] : 0;
 			}
-			if (geometric == 0 && donor == 0) continue;
-			double blend = geometric == 0 ? 0 : donor == 0 ? 1 : flux.geometricBlend(faces[d]);
-			for (int m = 0; m < 8; m++)
-				result[d][m] = (geometric == 0 ? 0 : blend * result[d][m] / geometric)
-						+ (donor == 0 ? 0 : (1 - blend) * donorPreference[m] / donor);
+			for (int m = 0; m < 8; m++) {
+				if (!(Double.isFinite(swept[m]) && swept[m] >= 0 && Double.isFinite(low[m]) && low[m] >= 0)
+						|| (swept[m] > 0 || low[m] > 0) && !(wet[m] > 0))
+					throw new IllegalStateException("Liquid source proposal lacks its wet source measure");
+				swept[m] = swept[m] == 0 ? 0 : swept[m] / wet[m];
+				low[m] = low[m] == 0 ? 0 : low[m] / wet[m];
+			}
+			geometricBlend[d] = flux.geometricBlend(faces[d]); representationBlend[d] = flux.representationBlend(faces[d]);
 		}
+	}
+
+	double[][] forSource(List<Integer> original) {
+		double[][] result = new double[geometricRatio.length][];
+		if (result.length == 0) return result;
+		SignedDyadic[] inventory = rawInventory(domain, original);
+		double[] raw = new double[8], diagonal = new double[8], rowRest = new double[8], columnRest = new double[8];
+		double rawTotal = 0;
+		for (int m = 0; m < 8; m++) rawTotal += raw[m] = inventory[m].toDouble();
+		if (!(rawTotal > 0 && Double.isFinite(rawTotal)))
+			throw new IllegalStateException("Liquid source coupling requires a positive raw measure");
+		double remainder = 0;
+		for (int m = 0; m < 8; m++) {
+			double otherRaw = 0, otherWet = 0;
+			for (int k = 0; k < 8; k++) if (k != m) { otherRaw += raw[k]; otherWet += wet[k]; }
+			double row = raw[m] / rawTotal;
+			double column = wet[m] / wetTotal;
+			diagonal[m] = Math.min(row, column);
+			// Excluding this item preserves a small unmatched measure beside a dominant one.
+			double difference = row * (otherWet / wetTotal) - column * (otherRaw / rawTotal);
+			rowRest[m] = Math.max(difference, 0); columnRest[m] = Math.max(-difference, 0);
+			remainder += columnRest[m];
+		}
+		for (int m = 0; m < 8; m++) {
+			raw[m] /= rawTotal;
+			if (remainder > 0) columnRest[m] /= remainder;
+		}
+		for (int d = 0; d < result.length; d++) {
+			double[] geometricPreference = result[d] = couple(geometricRatio[d], diagonal, rowRest, columnRest);
+			double[] donorPreference = couple(donorRatio[d], diagonal, rowRest, columnRest);
+			double geometric = 0, donor = 0;
+			for (int m = 0; m < 8; m++) { geometric += geometricPreference[m]; donor += donorPreference[m]; }
+			double representation = representationBlend[d], available = 1 - representation;
+			double blend = geometric == 0 ? 0 : donor == 0 ? available : Math.min(available, geometricBlend[d]);
+			for (int m = 0; m < 8; m++)
+				result[d][m] = (geometric == 0 ? 0 : blend * geometricPreference[m] / geometric)
+						+ (donor == 0 ? 0 : (available - blend) * donorPreference[m] / donor)
+						+ representation * raw[m];
+		}
+		return result;
+	}
+
+	/** T = diag + rowRest * residual column probabilities, shared by every outgoing measure. */
+	private static double[] couple(double[] ratio, double[] diagonal, double[] rowRest,
+	                               double[] columnRest) {
+		double[] result = new double[8]; double residual = 0;
+		for (int m = 0; m < 8; m++) {
+			result[m] = diagonal[m] * ratio[m];
+			residual += columnRest[m] * ratio[m];
+		}
+		for (int m = 0; m < 8; m++)
+			result[m] += rowRest[m] * residual;
 		return result;
 	}
 

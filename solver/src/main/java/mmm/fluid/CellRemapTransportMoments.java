@@ -98,8 +98,12 @@ final class CellRemapTransportMoments {
 			ExactRational missing = demand[d].subtract(sum(allocation[d]));
 			while (missing.signum() > 0) {
 				ExactRational advanced = augment(d, missing, allowed, allocation, remaining);
-				if (advanced.isZero()) throw new AllocationFailure(Failure.SOURCE_SUPPORT_EXHAUSTED,
-						"Directional liquid transport exceeds its positive raw source support");
+				if (advanced.isZero()) {
+					int mask = 0; for (int m = 0; m < 8; m++) if (allowed[d][m]) mask |= 1 << m;
+					throw new AllocationFailure(Failure.SOURCE_SUPPORT_EXHAUSTED,
+							"Directional liquid transport exceeds its positive raw source support: share=" + d
+									+ ", demand=" + demand[d].toDouble() + ", missing=" + missing.toDouble() + ", allowedMicroMask=" + mask);
+				}
 				missing = missing.subtract(advanced);
 			}
 		}
