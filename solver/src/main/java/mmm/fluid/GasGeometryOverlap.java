@@ -17,7 +17,8 @@ final class GasGeometryOverlap {
 	}
 	/** Positive normalized volume at a position about the whole-cell centre. */
 	record QuadraturePoint(double[] position, ExactRational volume) { }
-	private record Point(ExactRational x, ExactRational y, ExactRational z) {
+	record Point(ExactRational x, ExactRational y, ExactRational z) {
+		Point { Objects.requireNonNull(x); Objects.requireNonNull(y); Objects.requireNonNull(z); }
 		ExactRational component(int axis) { return axis == 0 ? x : axis == 1 ? y : z; }
 		Point subtract(Point p) { return new Point(x.subtract(p.x), y.subtract(p.y), z.subtract(p.z)); }
 		Point interpolate(Point p, ExactRational t) {
@@ -385,7 +386,7 @@ final class GasGeometryOverlap {
 	private static void append(List<Point> polygon, Point point) {
 		if (polygon.isEmpty() || !polygon.getLast().equals(point)) polygon.add(point);
 	}
-	private static ExactRational determinant(Point a, Point b, Point c) {
+	static ExactRational determinant(Point a, Point b, Point c) {
 		return a.x.multiply(b.y.multiply(c.z).subtract(b.z.multiply(c.y)))
 				.add(a.y.multiply(b.z.multiply(c.x).subtract(b.x.multiply(c.z))))
 				.add(a.z.multiply(b.x.multiply(c.y).subtract(b.y.multiply(c.x))));

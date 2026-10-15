@@ -30,6 +30,8 @@ public final class CellRemapMomentsValidation {
 			return;
 		}
 		sweptLiquidMomentsKeepThinTangentialCentroids();
+		LiquidMappedTetrahedronValidation.run();
+		LiquidGeometricAllocationValidation.run();
 		sweptQuadraticMomentsRetainAffineWedgeGeometry();
 		savedBoxUnionKeepsAffineSweepMoments();
 		capturedWetVelocityKeepsPhysicalIntegral();
