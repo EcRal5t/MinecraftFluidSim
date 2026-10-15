@@ -144,6 +144,9 @@ final class CellVelocityConstraintOperator {
 		var size = whitenedSize(selected); int[] starts = new int[factors.length + 1];
 		for (int slot = 0; slot < factors.length; slot++) starts[slot + 1] = starts[slot]
 				+ 3 * basis.blockMarkerCount(factors[slot].velocityBlock);
+		var rootInverseMass = new SignedDyadic[markerCount];
+		for (int marker = 0; marker < markerCount; marker++)
+			rootInverseMass[marker] = SignedDyadic.of(Math.sqrt(inverseMass[marker]));
 		var entries = new DMatrixSparseTriplet(size.features, selected.size(), size.maximumEntries);
 		int storageFeature = starts[factors.length];
 		for (int position = 0; position < selected.size(); position++) {
@@ -157,7 +160,7 @@ final class CellVelocityConstraintOperator {
 					int marker = basis.blockMarker(factor.velocityBlock, ordinal); SignedDyadic value = SignedDyadic.ZERO;
 					for (int entry = first; entry < end; entry++) value = value.add(factorCoefficients[entry]
 							.multiply(basis.modeWeightExact(marker, factorIndices[entry] % MODAL_STRIDE, axis)));
-					double observed = value.multiply(SignedDyadic.of(Math.sqrt(inverseMass[marker]))).multiply(scaling).toDouble();
+					double observed = value.multiply(rootInverseMass[marker]).multiply(scaling).toDouble();
 					if (!Double.isFinite(observed)) throw new PressureRowBasis.Unavailable("Unrepresentable whitened pressure constraint");
 					if (observed != 0) entries.addItem(starts[slot] + axis * count + ordinal, position, observed);
 				}
