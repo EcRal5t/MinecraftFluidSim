@@ -851,15 +851,6 @@ public final class CellRemapMomentsValidation {
 		precise(preferences[0][1], 1, "Connected wet source coupling");
 		var pieces = new mmm.units.SignedDyadic[]{flux.exactFlux[face], mmm.units.SignedDyadic.of(1).subtract(flux.exactFlux[face])};
 		var result = new CellRemapTransportMoments(domain, cell, original).allocate(pieces, preferences); compareCarrierMoments(domain, cell, result);
-		for (int share = 0; share < pieces.length; share++) {
-			var joint = new CellRemapSpatialMoments(); var jointWeights = new double[original.size()]; var source = new double[original.size()][6];
-			for (int p = 0; p < original.size(); p++) {
-				joint.add(domain, p, result.markerWeights()[share][p]); jointWeights[p] = domain.particles.mass(p) * result.markerWeights()[share][p].toDouble();
-				source[p] = new double[]{domain.particles.positionX(p) - 1.5, domain.particles.positionY(p) - 1.5, domain.particles.positionZ(p) - 1.5,
-						domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
-			}
-			verifyJointRule(joint, jointWeights, source);
-		}
 		for (int p = 0; p < original.size(); p++) check(result.markerWeights()[0][p].equals(PlicComponentGeometry.ratio(pieces[0], mmm.units.SignedDyadic.of(1))),
 				"Source mismatch changed the common nonuniform positive allocation weights");
 		for (int[] masks : new int[][]{{255, 0xbb}, {2, 255}}) {
@@ -976,19 +967,37 @@ public final class CellRemapMomentsValidation {
 			var mass = mmm.chemistry.ExactRational.ZERO; var kinetic = mass;
 			var momentum = new mmm.chemistry.ExactRational[] {mass, mass, mass};
 			var position = momentum.clone(); var motion = momentum.clone();
+			var source = new double[result.ordinals().length][6];
+			var sourceMass = new mmm.chemistry.ExactRational[source.length];
 			for (int i = 0; i < result.ordinals().length; i++) {
 				int p = result.ordinals()[i]; var weight = result.markerWeights()[d][i];
 				check(weight.signum() >= 0, "Aggregate moment used a negative carrier weight");
-				var wm = rawRational(domain.particles.mass(p)).multiply(weight);
+				var wm = rawRational(domain.particles.mass(p)).multiply(weight); sourceMass[i] = wm;
 				var wv = rawRational(domain.particles.volume(p)).multiply(weight); mass = mass.add(wm);
 				double[] xyz = {domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
 				double[] uvw = {domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
 				for (int a = 0; a < 3; a++) {
+					source[i][a] = xyz[a] / domain.config.cellSize() - coordinate[a] - .5;
+					source[i][a + 3] = uvw[a];
 					var u = rawRational(uvw[a]);
 					momentum[a] = momentum[a].add(wm.multiply(u)); kinetic = kinetic.add(wm.multiply(u.multiply(u)));
 					position[a] = position[a].add(wv.multiply(rawRational(xyz[a] / domain.config.cellSize() - coordinate[a] - .5)));
 					motion[a] = motion[a].add(wv.multiply(u));
 				}
+			}
+			var spatial = result.spatial(d);
+			if (mass.isZero()) check(spatial.mass() == 0, "Empty share acquired joint mass");
+			else {
+				check(Math.abs(spatial.mass() - mass.toDouble()) <= 64 * Math.ulp(mass.toDouble()), "Aggregate joint mass changed");
+				var probability = new mmm.chemistry.ExactRational[source.length];
+				for (int p = 0; p < source.length; p++) probability[p] = new mmm.chemistry.ExactRational(
+						sourceMass[p].numerator().multiply(mass.denominator()), sourceMass[p].denominator().multiply(mass.numerator()));
+				var outputWeights = new double[8]; java.util.Arrays.fill(outputWeights, 1);
+				var preferred = new double[8][3];
+				for (int p = 0; p < 8; p++) System.arraycopy(source[p % source.length], 0, preferred[p], 0, 3);
+				var fitted = spatial.fit(outputWeights, preferred);
+				verifyJointRule(outputWeights, source, probability, fitted);
+				verifyJointMechanicalMoments(source, probability, fitted);
 			}
 			checkSameObservation(result.mass()[d], mass, "Aggregate mass"); checkSameObservation(result.kinetic()[d], kinetic, "Aggregate kinetic moment");
 			check(result.massRounding()[d].equals(rawRational(result.mass()[d]).subtract(mass)), "Aggregate mass rounding changed");
@@ -1333,7 +1342,10 @@ public final class CellRemapMomentsValidation {
 		verifyJointRule(weights, source, sourceWeights, result);
 	}
 	private static void verifyJointRule(double[] weights, double[][] source, double[] sourceWeights, CellRemapSpatialMoments.Result result) {
-		var probability = probabilities(sourceWeights); var outputProbability = probabilities(weights);
+		verifyJointRule(weights, source, probabilities(sourceWeights), result);
+	}
+	private static void verifyJointRule(double[] weights, double[][] source, mmm.chemistry.ExactRational[] probability, CellRemapSpatialMoments.Result result) {
+		var outputProbability = probabilities(weights);
 		var expectedMean = new mmm.chemistry.ExactRational[6]; double[] observedMean = new double[6];
 		for (int a = 0; a < 6; a++) {
 			expectedMean[a] = mmm.chemistry.ExactRational.ZERO;
@@ -1369,6 +1381,29 @@ public final class CellRemapMomentsValidation {
 			check(Math.abs(observed - expected.toDouble()) <= limit, "Joint rule changed a source covariance: axes=" + a + "," + b
 					+ " expected=" + expected.toDouble() + " actual=" + observed + " bound=" + limit);
 		}
+	}
+
+	/** Actual angular momentum and energy of the published joint rule, independent of the micro aggregation. */
+	private static void verifyJointMechanicalMoments(double[][] source, mmm.chemistry.ExactRational[] probability,
+			CellRemapSpatialMoments.Result result) {
+		for (int axis = 0; axis < 3; axis++) {
+			int b = (axis + 1) % 3, c = (axis + 2) % 3;
+			var expected = mmm.chemistry.ExactRational.ZERO; double scale = 0, actual = 0;
+			for (int p = 0; p < source.length; p++) {
+				var first = rawRational(source[p][b]).multiply(rawRational(source[p][c + 3]));
+				var second = rawRational(source[p][c]).multiply(rawRational(source[p][b + 3]));
+				expected = expected.add(probability[p].multiply(first.subtract(second)));
+				scale += probability[p].toDouble() * (Math.abs(first.toDouble()) + Math.abs(second.toDouble()));
+			}
+			for (int p = 0; p < result.positions().length; p++) actual += (result.positions()[p][b] * result.velocities()[p][c]
+					- result.positions()[p][c] * result.velocities()[p][b]) / result.positions().length;
+			check(Math.abs(actual - expected.toDouble()) <= 4096 * Math.ulp(scale), "Aggregate joint rule changed actual angular momentum on axis " + axis);
+		}
+		var expected = mmm.chemistry.ExactRational.ZERO; double actual = 0;
+		for (int p = 0; p < source.length; p++) for (int a = 3; a < 6; a++)
+			expected = expected.add(probability[p].multiply(rawRational(source[p][a]).multiply(rawRational(source[p][a]))));
+		for (var velocity : result.velocities()) for (double value : velocity) actual += value * value / result.velocities().length;
+		check(Math.abs(actual - expected.toDouble()) <= 4096 * Math.ulp(expected.toDouble()), "Aggregate joint rule changed actual kinetic moment");
 	}
 
 	private static mmm.chemistry.ExactRational[] probabilities(double[] weights) {

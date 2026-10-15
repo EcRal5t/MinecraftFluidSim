@@ -13,6 +13,7 @@ final class CellRemapTransportMoments {
 	private static final int MASS = 0, KINETIC = 1, MOMENTUM = 2, VOLUME_MOMENT = 5, VOLUME_MOTION = 8, MOMENTS = 11;
 	private final BigInteger[][] sourceMoments = new BigInteger[MOMENTS][8];
 	private final int[] momentExponents = new int[MOMENTS];
+	private final CellRemapSpatialMoments[] sourceSpatial = new CellRemapSpatialMoments[8];
 	private final ExactRational volume;
 
 	CellRemapTransportMoments(FluidDomain domain, int cell, List<Integer> original) {
@@ -21,20 +22,24 @@ final class CellRemapTransportMoments {
 		var moments = new SignedDyadic[MOMENTS][8];
 		for (var row : moments) Arrays.fill(row, SignedDyadic.ZERO);
 		ExactRational total = ExactRational.ZERO;
+		double h = domain.config.cellSize();
 		for (int i = 0; i < ordinals.length; i++) {
 			int p = ordinals[i];
 			if (domain.particleCellIndex(p) != cell) throw new IllegalArgumentException("Transport source belongs to another cell");
 			micro[i] = CellRemapMicroTopology.positionMicro(domain.config.cellSize(), domain.particles.positionX(p),
 					domain.particles.positionY(p), domain.particles.positionZ(p));
 			var v = SignedDyadic.of(domain.particles.volume(p)); var mass = SignedDyadic.of(domain.particles.mass(p));
-			var velocity = new SignedDyadic[]{SignedDyadic.of(domain.particles.velocityX(p)), SignedDyadic.of(domain.particles.velocityY(p)), SignedDyadic.of(domain.particles.velocityZ(p))};
-			double h = domain.config.cellSize();
-			var position = new SignedDyadic[]{SignedDyadic.of(domain.particles.positionX(p) / h - cell % domain.sizeX - .5),
-					SignedDyadic.of(domain.particles.positionY(p) / h - cell / domain.sizeX % domain.sizeY - .5),
-					SignedDyadic.of(domain.particles.positionZ(p) / h - cell / (domain.sizeX * domain.sizeY) - .5)};
+			var velocityValues = new double[]{domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
+			var positionValues = new double[]{domain.particles.positionX(p) / h - cell % domain.sizeX - .5,
+					domain.particles.positionY(p) / h - cell / domain.sizeX % domain.sizeY - .5,
+					domain.particles.positionZ(p) / h - cell / (domain.sizeX * domain.sizeY) - .5};
+			var velocity = new SignedDyadic[3]; var position = new SignedDyadic[3];
+			for (int a = 0; a < 3; a++) { velocity[a] = SignedDyadic.of(velocityValues[a]); position[a] = SignedDyadic.of(positionValues[a]); }
 			if (v.signum() <= 0 || mass.signum() <= 0)
 				throw new IllegalArgumentException("Transport requires positive raw source volume and mass");
 			int m = micro[i]; var amount = rational(v);
+			if (sourceSpatial[m] == null) sourceSpatial[m] = new CellRemapSpatialMoments();
+			sourceSpatial[m].add(mass.toDouble(), positionValues, velocityValues);
 			supply[m] = supply[m].add(amount); total = total.add(amount);
 			moments[MASS][m] = moments[MASS][m].add(mass);
 			for (int a = 0; a < 3; a++) {
@@ -118,17 +123,17 @@ final class CellRemapTransportMoments {
 			if (retained.signum() < 0) throw new IllegalStateException("Transport overdrew a source marker");
 			microWeights[outgoing][m] = retained;
 		}
-		ExactRational[][] weights = new ExactRational[pieces.length][ordinals.length];
-		for (int d = 0; d < pieces.length; d++) for (int p = 0; p < ordinals.length; p++) weights[d][p] = microWeights[d][micro[p]];
-		return moments(weights, microWeights);
+		return moments(microWeights);
 	}
 
-	private Result moments(ExactRational[][] weights, ExactRational[][] microWeights) {
-		double[][] momentum = new double[weights.length][3]; double[] kinetic = new double[weights.length];
-		double[][] volumeMoment = new double[weights.length][3], volumeMotion = new double[weights.length][3];
-		double[] mass = new double[weights.length];
-		ExactRational[][] mechanical = new ExactRational[weights.length][5];
-		for (int d = 0; d < weights.length; d++) {
+	private Result moments(ExactRational[][] microWeights) {
+		int count = microWeights.length;
+		double[][] momentum = new double[count][3]; double[] kinetic = new double[count];
+		double[][] volumeMoment = new double[count][3], volumeMotion = new double[count][3];
+		double[] mass = new double[count]; var spatial = new CellRemapSpatialMoments[count];
+		ExactRational[][] mechanical = new ExactRational[count][5];
+		for (int d = 0; d < count; d++) {
+			spatial[d] = new CellRemapSpatialMoments();
 			// All eleven moments share these eight positive allocation weights. Form their
 			// common integer ratio once, then apply it to the captured binary source moments.
 			BigInteger denominator = BigInteger.ONE;
@@ -137,6 +142,13 @@ final class CellRemapTransportMoments {
 			var numerators = new BigInteger[8];
 			for (int m = 0; m < 8; m++) numerators[m] = microWeights[d][m].isZero() ? BigInteger.ZERO
 					: microWeights[d][m].numerator().multiply(denominator.divide(microWeights[d][m].denominator()));
+			var massDenominator = denominator.shiftLeft(-momentExponents[MASS]);
+			for (int m = 0; m < 8; m++) if (sourceSpatial[m] != null && numerators[m].signum() > 0) {
+				double addedMass = ExactRational.roundQuotientToDouble(sourceMoments[MASS][m].multiply(numerators[m]), massDenominator);
+				if (!(Double.isFinite(addedMass) && addedMass > 0))
+					throw new AllocationFailure(Failure.UNREPRESENTABLE_MOMENTS, "Liquid source joint mass is unrepresentable in binary64");
+				spatial[d].add(sourceSpatial[m], addedMass);
+			}
 			mass[d] = observe(mechanical[d][MASS] = weightedMoment(MASS, numerators, denominator));
 			kinetic[d] = observe(mechanical[d][KINETIC] = weightedMoment(KINETIC, numerators, denominator));
 			for (int a = 0; a < 3; a++) {
@@ -145,7 +157,7 @@ final class CellRemapTransportMoments {
 				volumeMotion[d][a] = observe(weightedMoment(VOLUME_MOTION + a, numerators, denominator));
 			}
 		}
-		return new Result(ordinals.clone(), weights, mass, momentum, kinetic, volumeMoment, volumeMotion, mechanical);
+		return new Result(ordinals, micro, microWeights, spatial, mass, momentum, kinetic, volumeMoment, volumeMotion, mechanical);
 	}
 
 	private ExactRational weightedMoment(int row, BigInteger[] weights, BigInteger denominator) {
@@ -191,17 +203,28 @@ final class CellRemapTransportMoments {
 
 	/** K is the unhalved raw mass-weighted velocity square, matching the remap budget. */
 	static final class Result {
-		private final int[] ordinals;
-		private final ExactRational[][] markerWeights, mechanical;
+		private final int[] ordinals, micro;
+		private final ExactRational[][] microWeights, mechanical;
+		private ExactRational[][] markerWeights;
+		private final CellRemapSpatialMoments[] spatial;
 		private final double[] mass, kinetic;
 		private final double[][] momentum, volumeMoment, volumeMotion;
-		private Result(int[] ordinals, ExactRational[][] markerWeights, double[] mass, double[][] momentum,
+		private Result(int[] ordinals, int[] micro, ExactRational[][] microWeights, CellRemapSpatialMoments[] spatial, double[] mass, double[][] momentum,
 		               double[] kinetic, double[][] volumeMoment, double[][] volumeMotion, ExactRational[][] mechanical) {
-			this.ordinals = ordinals; this.markerWeights = markerWeights; this.mass = mass; this.momentum = momentum;
+			this.ordinals = ordinals; this.micro = micro; this.microWeights = microWeights; this.spatial = spatial;
+			this.mass = mass; this.momentum = momentum;
 			this.kinetic = kinetic; this.volumeMoment = volumeMoment; this.volumeMotion = volumeMotion; this.mechanical = mechanical;
 		}
 		int[] ordinals() { return ordinals; }
-		ExactRational[][] markerWeights() { return markerWeights; }
+		/** Expanded only for independent references; production uses the captured micro rules. */
+		ExactRational[][] markerWeights() {
+			if (markerWeights == null) {
+				markerWeights = new ExactRational[microWeights.length][ordinals.length];
+				for (int d = 0; d < microWeights.length; d++) for (int p = 0; p < ordinals.length; p++) markerWeights[d][p] = microWeights[d][micro[p]];
+			}
+			return markerWeights;
+		}
+		CellRemapSpatialMoments spatial(int share) { return spatial[share]; }
 		double[] mass() { return mass; }
 		double[][] momentum() { return momentum; }
 		double[] kinetic() { return kinetic; }

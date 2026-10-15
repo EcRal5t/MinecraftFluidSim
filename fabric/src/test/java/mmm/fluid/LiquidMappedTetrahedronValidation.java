@@ -70,8 +70,12 @@ final class LiquidMappedTetrahedronValidation {
 	private static void checkMechanicalSupport(FluidDomain domain, LiquidMovingMesh.Mesh mesh) {
 		var source = new CellRemapSpatialMoments();
 		for (int p = 0; p < domain.particleCount(); p++) {
-			int cell = domain.particleCellIndex(p);
-			source.add(domain, p, ExactRational.ONE, cell % domain.sizeX + .5, cell / domain.sizeX % domain.sizeY + .5, cell / (domain.sizeX * domain.sizeY) + .5);
+			int cell = domain.particleCellIndex(p); double h = domain.config.cellSize();
+			int[] coordinate = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
+			double[] position = {domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p)};
+			for (int a = 0; a < 3; a++) position[a] = position[a] / h - coordinate[a] - .5 + (coordinate[a] + .5);
+			source.add(domain.particles.mass(p), position,
+					new double[]{domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)});
 		}
 		var mass = new double[mesh.simplices().size()]; var positions = new double[mass.length][3]; var preferred = new double[mass.length][3];
 		var field = domain.pressureSystem.markerVelocityField();

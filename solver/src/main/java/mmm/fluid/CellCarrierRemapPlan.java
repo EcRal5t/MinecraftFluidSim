@@ -346,9 +346,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			for (int d = 0; d < transfers.size(); d++) if (pieces[g][d].signum() > 0) source.movingAxes |= 1 << flux.axis[faces[d]];
 			for (int d = 0; d < shares; d++) {
 				if (pieces[g][d].signum() == 0) continue;
-				var spatial = new CellRemapSpatialMoments();
-				for (int p = 0; p < transport.ordinals().length; p++)
-					spatial.add(domain, transport.ordinals()[p], transport.markerWeights()[d][p]);
+				var spatial = transport.spatial(d);
 				double[] facePoint = faces[d] < 0 ? null : CellRemapArrival.prepare(spatial, flux.axis[faces[d]], flux.positive(faces[d]),
 						dt / domain.config.cellSize(), pieces[g][d].toDouble(), transport.volumeMoment()[d], transport.volumeMotion()[d]);
 				if (facePoint == null) spatial.advancePositions(.5 * dt / domain.config.cellSize());

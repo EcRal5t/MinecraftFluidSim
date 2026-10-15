@@ -5,6 +5,13 @@ final class JointMomentFactor {
 	private final double[][] values = new double[6][6];
 	private final double[][] joined = new double[6][13];
 
+	void set(JointMomentFactor other) {
+		for (int a = 0; a < 6; a++) {
+			if (other == null) java.util.Arrays.fill(values[a], 0);
+			else System.arraycopy(other.values[a], 0, values[a], 0, 6);
+		}
+	}
+
 	void merge(JointMomentFactor other, double retained, double ratio, double[] delta) {
 		double oldScale = Math.sqrt(retained), addedScale = Math.sqrt(ratio), separation = oldScale * addedScale;
 		for (int a = 0; a < 6; a++) {

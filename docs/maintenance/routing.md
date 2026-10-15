@@ -82,6 +82,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 共享面法向速度的面积均值与两切向斜率约束在 `MarkerPressureProjection.trace`；薄湿面出现相关压力行时先检查法向迹与速度模态。机械重建的支撑、能量与速度范围原因在 `CellRemapMechanicalFit.Failure`，方向搜索的最后失败由 `CellRemapSampling` 带入接收格诊断。
 
+输运的原始微盒库存及六维联合矩在 `CellRemapTransportMoments` 同次捕获；`Result.spatial` 返回各份额的独立联合矩，`CellRemapSpatialMoments.add` 合并正质量规则。逐载体独立参考见 `CellRemapMomentsValidation.compareCarrierMoments`。
+
 输运后压力来源的分区残差、共同 `(D A) F` 因式关系和模素数秩检查在 [PressureConditionValidation](../../fabric/src/test/java/mmm/fluid/PressureConditionValidation.java)，入口为 `runMarkerPressureValidation --args="--chemical-pressure"`；输入复用 `M7ChemicalTransportValidation.thermalChemicalExtractionSource` 与同场景实体冲量。
 
 壁面零点形状、实际空间秩与微盒拆块在 `CellAffineVelocity`；可靠支撑方向、原始平移/旋转/应变模态与共同拟合因子在 [CellAffineFit](../../solver/src/main/java/mmm/fluid/CellAffineFit.java)。湿墙法向冲量与自由方向重建功在 `CellAffineWallProjection`，即时功观察见 `MarkerPressureProjection.DiagnosticView`。湿体积二阶矩、完整六面和内部共享面在 `LiquidPressureGeometry.supportMoments`、`microFaces` 与 `interiorFaces`；完整湿块六面散度在 `MarkerPressureProjection.boxDivergence`；部分湿块与自由面共用 `integratedDivergence` 的微盒积分及精确系数，散度多项式和自由面压力功也在该类组装。均匀及非均匀质量的三轴闭合旋涡求解、发布与点采样，以及独立静液压使用 `:fabric:runMarkerPressureValidation --args="--velocity-space"`。

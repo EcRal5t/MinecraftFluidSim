@@ -12,28 +12,6 @@ final class CellRemapSpatialMoments {
 	private final JointMomentFactor factor = new JointMomentFactor();
 	private JointMomentFactor.Decomposition decomposition;
 
-	void add(FluidDomain domain, int ordinal, ExactRational fraction) {
-		add(domain, ordinal, fraction, 0, 0, 0);
-	}
-
-	/** The translation is in cell-normalized coordinates, relative to the source cell center. */
-	void add(FluidDomain domain, int ordinal, ExactRational fraction, double dx, double dy, double dz) {
-		if (fraction.signum() < 0) throw new IllegalArgumentException("Negative source share");
-		if (fraction.isZero()) return;
-		int cell = domain.particleCellIndex(ordinal);
-		double h = domain.config.cellSize();
-		SignedDyadic sourceMass = SignedDyadic.of(domain.particles.mass(ordinal));
-		var numerator = sourceMass.significand().multiply(fraction.numerator());
-		var denominator = fraction.denominator();
-		if (sourceMass.exponent() >= 0) numerator = numerator.shiftLeft(sourceMass.exponent());
-		else denominator = denominator.shiftLeft(-sourceMass.exponent());
-		double weight = ExactRational.roundQuotientToDouble(numerator, denominator);
-		add(weight, new double[]{domain.particles.positionX(ordinal) / h - cell % domain.sizeX - .5 + dx,
-				domain.particles.positionY(ordinal) / h - cell / domain.sizeX % domain.sizeY - .5 + dy,
-				domain.particles.positionZ(ordinal) / h - cell / (domain.sizeX * domain.sizeY) - .5 + dz},
-				new double[]{domain.particles.velocityX(ordinal), domain.particles.velocityY(ordinal), domain.particles.velocityZ(ordinal)});
-	}
-
 	void add(double weight, double[] position, double[] velocity) {
 		checkPositive(weight);
 		double[] point = new double[6];
@@ -44,10 +22,23 @@ final class CellRemapSpatialMoments {
 	/** Parallel-axis merge uses centered moments, retaining small spreads around large velocities. */
 	void add(CellRemapSpatialMoments other) {
 		if (other.mass == 0) return;
-		merge(other.mass, other.mean, other.covariance, other.factor);
+		add(other, other.mass);
+	}
+
+	/** Reweights a captured positive rule; its normalized joint moments remain unchanged. */
+	void add(CellRemapSpatialMoments other, double addedMass) {
+		checkPositive(addedMass);
+		if (!(other.mass > 0)) throw new IllegalArgumentException("Cannot reweight an empty joint rule");
+		merge(addedMass, other.mean, other.covariance, other.factor);
 	}
 
 	private void merge(double addedMass, double[] addedMean, double[][] addedCovariance, JointMomentFactor addedFactor) {
+		if (mass == 0) {
+			mass = addedMass; decomposition = null;
+			System.arraycopy(addedMean, 0, mean, 0, 6);
+			if (addedCovariance != null) for (int a = 0; a < 6; a++) System.arraycopy(addedCovariance[a], 0, covariance[a], 0, 6);
+			factor.set(addedFactor); return;
+		}
 		double total = finite(mass + addedMass), ratio = addedMass / total, retained = mass / total;
 		double[] delta = new double[6];
 		for (int a = 0; a < 6; a++) delta[a] = addedMean[a] - mean[a];
