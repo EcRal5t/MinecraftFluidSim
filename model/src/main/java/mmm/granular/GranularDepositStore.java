@@ -66,6 +66,27 @@ public final class GranularDepositStore {
 		return packing(cell, portion).bulkVolumeSvq();
 	}
 
+	/** One candidate reuses the exact existing packing while its incoming cohort grows. */
+	final class AdditionPacking {
+		private final long revision = mutationRevision;
+		private long skeleton;
+		private ExactRational bulk = ExactRational.ZERO;
+		private AdditionPacking(int cell) {
+			for (int entry = headByCell[cell]; entry >= 0; entry = next[entry]) add(solidVolumeSvq[entry], materialHandle[entry]);
+		}
+		private void add(long volume, int material) {
+			skeleton = Math.addExact(skeleton, volume); bulk = bulk.add(restBulk(volume, material));
+		}
+		void add(SolidPortion portion) {
+			requireCurrent(); validate(portion); add(portion.solidVolumeSvq(), portion.materialHandle());
+		}
+		long bulkVolumeSvq() { requireCurrent(); return mixedPacking(skeleton, bulk).bulkVolumeSvq(); }
+		private void requireCurrent() {
+			if (revision != mutationRevision) throw new IllegalStateException("Deposit inventory changed during settlement closure");
+		}
+	}
+	AdditionPacking additionPacking(int cell) { requireCell(cell); return new AdditionPacking(cell); }
+
 	/** Exact mixed packing after a whole-group or inert partial take; inventory stays unchanged. */
 	public long previewCellBulkVolumeAfterTake(int cell, int material, int composition, long requestedSvq) {
 		SolidPortion removed = peekTake(cell, material, composition, requestedSvq);

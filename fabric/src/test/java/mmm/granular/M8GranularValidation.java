@@ -1966,18 +1966,42 @@ public final class M8GranularValidation {
 				GranularParcelStore.FLAG_SUPPORTED));
 		var reactiveInventory = new GranularInventory(reactiveParcels, reactiveBeds);
 		reactiveInventory.bindSolidCompositions(compositions);
+		int[] thermalPlans = {0}, thermalCommits = {0};
+		reactiveInventory.bindThermalEnergy(new GranularInventory.EnergyAdapter() {
+			@Override public GranularInventory.EnergyPlan planActiveToDeposits(List<GranularInventory.DepositTransfer> transfers) {
+				thermalPlans[0]++;
+				require(transfers.size() == 2, "thermal planning must receive the complete reactive cohort");
+				return new GranularInventory.EnergyPlan() {
+					@Override public void requireCurrent() { }
+					@Override public void commit() { thermalCommits[0]++; }
+				};
+			}
+			@Override public boolean canActiveMerge(int first, int second, GranularParcelStore.Parcel merged, SolidCompositionRecord composition) { throw new AssertionError("Closure attempted an active merge"); }
+			@Override public void commitActiveMerge(int first, int second) { throw new AssertionError("Closure committed an active merge"); }
+			@Override public GranularInventory.EnergyPlan planDepositWake(int cell, int material, int composition, long taken, long total) { throw new AssertionError("Closure attempted a wake"); }
+			@Override public void clearExternal() { throw new AssertionError("Closure cleared thermal inventory"); }
+		});
 		var reactiveIndex = new GranularBedAdmission(reactiveParcels, reactiveBeds, 1, 1, 1, .5F);
-		var closure = new GranularSettlementGeometryPlan(reactiveInventory, reactiveIndex, reactiveParcels.capacity());
+		var closure = new GranularSettlementGeometryPlan(reactiveInventory, reactiveParcels, reactiveBeds, reactiveIndex, reactiveParcels.capacity());
 		long[] species = compositions.speciesTotals(); var originalSources = List.of(reactiveParcels.parcel(0), reactiveParcels.parcel(1));
 		reactiveIndex.rebuild(); reactiveIndex.reserveLogicalOperations(GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - 8);
 		require(closure.find(0, 0, ignored -> 0, ignored -> SolidVolume.SVQ_PER_CELL) == null && reactiveIndex.budgetBlocked()
 				&& reactiveBeds.totalSolidVolumeSvq() == 10 && compositions.liveCount() == 3
 				&& Arrays.equals(species, compositions.speciesTotals()) && reactiveParcels.count() == 2
-				&& reactiveParcels.parcel(0).equals(originalSources.get(0)) && reactiveParcels.parcel(1).equals(originalSources.get(1)),
+				&& reactiveParcels.parcel(0).equals(originalSources.get(0)) && reactiveParcels.parcel(1).equals(originalSources.get(1))
+				&& thermalPlans[0] == 0 && thermalCommits[0] == 0,
 				"reactive ownership scan must consume the shared quota before changing any cohort participant");
 		reactiveIndex.rebuild();
-		require(closure.find(0, 0, ignored -> 0, ignored -> SolidVolume.SVQ_PER_CELL) != null && reactiveIndex.visits() > 8,
-				"renewed work quota must permit the same reactive closure with all ownership checks included");
+		var reactiveMass = reactiveInventory.exactMass();
+		var reactivePlan = closure.find(0, 0, ignored -> 0, ignored -> SolidVolume.SVQ_PER_CELL);
+		require(reactivePlan != null && reactiveIndex.visits() > 8 && reactivePlan.parcelIndices().length == 2
+				&& thermalPlans[0] == 1 && thermalCommits[0] == 0 && reactiveParcels.count() == 2,
+				"the growing closure must plan the complete thermal transfer once and retain inventory until commit");
+		reactiveInventory.commitSettlement(reactivePlan);
+		require(reactiveParcels.count() == 0 && reactiveBeds.totalSolidVolumeSvq() == 30 && compositions.liveCount() == 1
+				&& Arrays.equals(species, compositions.speciesTotals()) && thermalCommits[0] == 1
+				&& reactiveInventory.exactMass().subtract(reactiveMass).equals(reactivePlan.massStorageDelta()),
+				"reactive closure must commit all participants, one thermal plan, species and quantified mass together");
 
 		parcels = new GranularParcelStore(registry, 8); deposits = new GranularDepositStore(registry, 3, 8);
 		var untouched = new GranularParcelStore.Parcel(1.25F, .1F, .25F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0);
