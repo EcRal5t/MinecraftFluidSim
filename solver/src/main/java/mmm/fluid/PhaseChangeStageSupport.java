@@ -48,7 +48,7 @@ final class PhaseChangeStageSupport {
 		SignedDyadic exactInternalEnergy();
 		void ensureGrid();
 		void refreshGasTopology();
-		GasRuntimeGeometry.PhaseSource prepareGasGeometrySource();
+		GasRuntimeGeometry.PhaseSource prepareGasGeometrySource(int editedCell);
 		GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
 				mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal,
 				GasRuntimeGeometry.PhaseSource source);
@@ -86,7 +86,7 @@ final class PhaseChangeStageSupport {
 	float[] markerSlotPosition(int cell, int slot) { return access.markerSlotPosition(cell, slot); }
 	void ensureGrid() { access.ensureGrid(); }
 	void refreshGasTopology() { access.refreshGasTopology(); }
-	GasRuntimeGeometry.PhaseSource prepareGasGeometrySource() { return access.prepareGasGeometrySource(); }
+	GasRuntimeGeometry.PhaseSource prepareGasGeometrySource(int editedCell) { return access.prepareGasGeometrySource(editedCell); }
 	GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
 			mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal,
 			GasRuntimeGeometry.PhaseSource source) {

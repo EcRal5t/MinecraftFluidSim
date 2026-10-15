@@ -121,6 +121,17 @@ public final class AirCavityScannerValidation {
 				&& !GasFaceIntersection.coversRectangle(0,0,.5,List.of(tinyWet))
 				&& GasFaceIntersection.coversRectangle(0,0,.5,List.of(new GasFaceIntersection.Plane(SignedDyadic.of(1),SignedDyadic.ZERO,SignedDyadic.ZERO))),
 				"Rounded full area hid a true wet strip or rejected an exactly complete dry face");
+		var epsilon=SignedDyadic.of(1,-80);
+		var cornerDenominator=capacityRational(a.multiply(b));
+		var cornerArea=capacityRational(epsilon.multiply(epsilon)).multiply(new ExactRational(
+				cornerDenominator.denominator(),cornerDenominator.numerator())).divide(2);
+		var upperCorner=new GasFaceIntersection.Plane(a,b,a.add(b).subtract(epsilon));
+		var lowerCorner=new GasFaceIntersection.Plane(a.negate(),b.negate(),epsilon.negate());
+		check(GasFaceIntersection.exactArea(0,0,1,List.of(upperCorner)).equals(cornerArea)
+				&& GasFaceIntersection.exactArea(0,0,1,List.of(lowerCorner)).equals(cornerArea),
+				"A positive gas corner lost its exact area under coefficient reflection");
+		check(GasFaceIntersection.exactArea(0,0,1,List.of(new GasFaceIntersection.Plane(SignedDyadic.ZERO,SignedDyadic.ZERO,SignedDyadic.ZERO)))
+				.equals(ExactRational.ONE),"A coplanar constraint removed its complete gas face");
 	}
 
 	private static void validateMicroGasPoreCapacity() {
@@ -198,6 +209,7 @@ public final class AirCavityScannerValidation {
 	}
 
 	private static void validateRuntimeGeometryBinding() {
+		validatePreparedGasBridge();
 		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=masks[1]=0;
 		float[] markers={.25F,.5F,.5F,.5F,1.5F,.5F,.5F,.25F};
 		var domain=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
@@ -228,7 +240,7 @@ public final class AirCavityScannerValidation {
 		domain.gasState.frame=current;
 		var repeated=GasRuntimeGeometry.capture(domain,null,occupied,true);
 		var editedFromCaptured=GasRuntimeGeometry.capture(domain,edit,occupied,true);
-		var phaseSource=GasRuntimeGeometry.preparePhaseSource(domain);
+		var phaseSource=GasRuntimeGeometry.preparePhaseSource(domain,0);
 		check(phaseSource!=null,"Matching raw phase source was not prepared");
 		var preparedTrial=GasRuntimeGeometry.capturePhaseEdit(domain,edit,occupied,true,phaseSource);
 		var preparedReset=GasRuntimeGeometry.capturePhaseEdit(domain,current.liquidStock().get(0),occupied,true,phaseSource);
@@ -277,7 +289,7 @@ public final class AirCavityScannerValidation {
 				&& moved.matchesCarrierGeometry(domain,occupied) && moved.planeNormal(0,0,0)<0,
 				"Gas frame reused old M1 after a raw marker move with unchanged volume and count");
 		domain.gasState.frame=current;
-		check(GasRuntimeGeometry.preparePhaseSource(domain)==null,"Phase preparation reused raw M1 with unchanged epochs");
+		check(GasRuntimeGeometry.preparePhaseSource(domain,0)==null,"Phase preparation reused raw M1 with unchanged epochs");
 		try { GasRuntimeGeometry.capturePhaseEdit(domain,edit,occupied,true,phaseSource); throw new AssertionError("Raw position change reused a prepared phase source"); }
 		catch(GasTopologyBlockedException expected) { }
 		var movedFromCaptured=GasRuntimeGeometry.capture(domain,null,occupied,true);
@@ -338,9 +350,39 @@ public final class AirCavityScannerValidation {
 		}
 	}
 
+	private static void validatePreparedGasBridge() {
+		var grid=new Grid(5,3,3,1);java.util.Arrays.fill(grid.solid,true);
+		for(int cell=0;cell<45;cell++)grid.cutCells.replaceMask(cell,255);
+		for(int x=0;x<4;x++){grid.solid[20+x]=false;grid.cutCells.replaceMask(20+x,0);}
+		var dry=new FlipPressurePhaseGeometry(5,3,3);
+		dry.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[45]);
+		var source=GasComplementGeometry.capture(5,3,3,1,grid.solid,grid.cutCells,dry);
+		grid.liquidVolume[21]=1;
+		var wet=new FlipPressurePhaseGeometry(5,3,3);
+		wet.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[45]);
+		boolean[] same=new boolean[45],variable=new boolean[45];variable[21]=true;
+		for(int cell=0;cell<45;cell++)same[cell]=wet.sameCellGeometry(cell,dry);
+		var target=GasComplementGeometry.capture(5,3,3,1,grid.solid,grid.cutCells,wet,source,same);
+		for(boolean sealed:new boolean[]{false,true}) {
+			var prepared=GasChamberTopology.prepare(source,sealed,variable);
+			var split=prepared.capture(target);var full=GasChamberTopology.capture(target,sealed);
+			check(split.chambers().size()==(sealed?2:1) && split.chambers().equals(full.chambers())
+					&& split.connections().equals(full.connections()),"A closing gas bridge lost fixed components or ambient ownership");
+			for(var piece:target.pieces())check(split.nodeOfPiece(piece.id())==full.nodeOfPiece(piece.id()),"A closing gas bridge changed fixed-piece lineage");
+			var restored=prepared.capture(source);
+			check(restored.chambers().size()==(sealed?1:0) && restored.chambers().equals(GasChamberTopology.capture(source,sealed).chambers()),
+					"A reopened gas bridge failed to merge its fixed components");
+		}
+	}
+
 	private static void checkLocalBoilPlanes(FluidDomain domain,GasRuntimeGeometry source,PhaseLiquidGeometryEdit edit,GasRuntimeGeometry future) {
 		var previous=domain.gasState.frame;
 		try {
+			domain.gasState.frame=source;
+			var geometrySource=GasRuntimeGeometry.preparePhaseSource(domain,edit.cell());
+			check(geometrySource!=null,"Matching phase geometry source was not prepared");
+			var trial=GasRuntimeGeometry.capturePhaseEdit(domain,edit,source.occupiedSvq(),source.sealedExterior(),geometrySource);
+			checkRuntimePlanesEqual(trial,future,"Prepared fixed gas subgraph differs from complete capture");
 			var field=GasLiquidPhaseChangeStage.class.getDeclaredField("support");field.setAccessible(true);
 			var support=(PhaseChangeStageSupport)field.get(domain.gasLiquidPhaseChangeStage);support.prepareGranularOccupancy();
 			var groups=new java.util.TreeMap<Integer,java.util.List<Integer>>();
@@ -390,7 +432,10 @@ public final class AirCavityScannerValidation {
 	}
 
 	private static void checkRuntimePlanesEqual(GasRuntimeGeometry actual, GasRuntimeGeometry expected, String message) {
-		check(actual.liquidStock().equals(expected.liquidStock()) && actual.geometry().pieces().equals(expected.geometry().pieces())
+		check(java.util.Arrays.equals(actual.pieceNodes(),expected.pieceNodes())
+				&& actual.topology().chambers().equals(expected.topology().chambers())
+				&& actual.topology().connections().equals(expected.topology().connections())
+				&& actual.liquidStock().equals(expected.liquidStock()) && actual.geometry().pieces().equals(expected.geometry().pieces())
 				&& actual.geometry().ports().equals(expected.geometry().ports()) && actual.geometry().exteriorPorts().equals(expected.geometry().exteriorPorts())
 				&& actual.capacity().components().equals(expected.capacity().components()) && actual.capacity().chambers().equals(expected.capacity().chambers()),message);
 		for(int cell=0;cell<actual.liquidStock().size();cell++) for(int micro=0;micro<8;micro++) {

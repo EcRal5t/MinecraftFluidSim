@@ -59,14 +59,8 @@ final class GasPhaseGeometryEnvelope {
 	static GasPhaseGeometryEnvelope capture(GasRuntimeGeometry source, AirNetwork network, ThermalDomainState thermal,
 	                                                int editedCell, int sourceNode, List<Integer> contactPieces) {
 		if (source == null || !source.sealedExterior()) return null;
-		boolean[] variable = new boolean[source.liquidStock().size()]; variable[editedCell] = true;
+		boolean[] variable = source.phaseEditCells(editedCell);
 		int[] sizes = {source.geometry().sizeX(), source.geometry().sizeY(), source.geometry().sizeZ()}, strides = {1, sizes[0], sizes[0] * sizes[1]};
-		int[] position = {editedCell % sizes[0], editedCell / sizes[0] % sizes[1], editedCell / strides[2]};
-		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1})
-			if (position[axis] + sign >= 0 && position[axis] + sign < sizes[axis]) {
-				int neighbor = editedCell + sign * strides[axis];
-				variable[neighbor] = source.cellDependsOnNeighborFractions(neighbor);
-			}
 		int first = source.minimumPiece(sourceNode);
 		// A single microbox, or one convex component's dry half-space, has one
 		// positive successor. Missing old/new overlap leaves the phase candidate unavailable.

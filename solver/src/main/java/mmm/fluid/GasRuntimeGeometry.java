@@ -38,7 +38,11 @@ final class GasRuntimeGeometry {
 		this.occupiedSvq = occupiedSvq.clone();
 		this.sourceOccupiedSvq = domain.granularCoupling == null ? new long[domain.cellCount]
 				: domain.granularCoupling.copySolidSvq();
-		if (prepared != null) prepared.requireCurrent(domain, sourceOccupiedSvq);
+		if (prepared != null) {
+			prepared.requireCurrent(domain, sourceOccupiedSvq);
+			if (edits.size() != 1 || edits.getFirst().cell() != prepared.editedCell)
+				throw new IllegalArgumentException("BOIL geometry source requires its prepared edited cell");
+		}
 		var cut = prepared == null ? new FlipCutCellGeometry(domain.sizeX, domain.sizeY, domain.sizeZ) : prepared.cut;
 		if (prepared == null) cut.restoreMicroMasks(domain.geometry.cutCells.copyMicroMasks());
 		boolean[] solid = prepared == null ? new boolean[domain.cellCount] : prepared.solid;
@@ -82,7 +86,9 @@ final class GasRuntimeGeometry {
 			sameGeometry[cell] = phase.sameCellGeometry(cell, captured.phase);
 		this.geometry = GasComplementGeometry.capture(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize, solid, cut, phase,
 				sameGeometry == null ? null : captured.geometry, sameGeometry);
-		this.topology = GasChamberTopology.capture(geometry, sealedExterior);
+		this.topology = prepared != null && sealedExterior == prepared.frame.sealedExterior
+				&& Arrays.equals(this.occupiedSvq, prepared.frame.occupiedSvq)
+				? prepared.topology.capture(geometry) : GasChamberTopology.capture(geometry, sealedExterior);
 		this.capacity = GasChamberCapacity.capture(domain, geometry, topology, this.occupiedSvq, liquidStock,
 				domain.gasState.frame);
 		this.pieceNodes = new int[Math.multiplyExact(8, domain.cellCount)]; Arrays.fill(pieceNodes, -1);
@@ -115,14 +121,17 @@ final class GasRuntimeGeometry {
 		private final FluidDomain owner;
 		private final GasRuntimeGeometry frame;
 		private final MarkerGridIndex index;
+		private final int editedCell;
+		private final GasChamberTopology.Prepared topology;
 		private final FlipCutCellGeometry cut;
 		private final boolean[] solid;
 		private final GranularCouplingFields occupancy;
 		private final float[] positionVolume;
 		private final long inventoryRevision, carrierRevision;
 		private final int markerCount;
-		private PhaseSource(FluidDomain owner, GasRuntimeGeometry frame, MarkerGridIndex index) {
-			this.owner = owner; this.frame = frame; this.index = index;
+		private PhaseSource(FluidDomain owner, GasRuntimeGeometry frame, MarkerGridIndex index, int editedCell) {
+			this.owner = owner; this.frame = frame; this.index = index; this.editedCell = editedCell;
+			this.topology = GasChamberTopology.prepare(frame.geometry, frame.sealedExterior, frame.phaseEditCells(editedCell));
 			// Every trial changes liquid stock only. PLIC reads these private fixed inputs;
 			// each candidate still owns its fraction, plane and component arrays.
 			cut = new FlipCutCellGeometry(owner.sizeX, owner.sizeY, owner.sizeZ);
@@ -155,7 +164,8 @@ final class GasRuntimeGeometry {
 		}
 	}
 
-	static PhaseSource preparePhaseSource(FluidDomain domain) {
+	static PhaseSource preparePhaseSource(FluidDomain domain, int editedCell) {
+		if (editedCell < 0 || editedCell >= domain.cellCount) throw new IllegalArgumentException("BOIL edited cell is outside the domain");
 		domain.ensureInventoryGrid();
 		var frame = domain.gasState.frame;
 		if (frame == null) return null;
@@ -163,7 +173,7 @@ final class GasRuntimeGeometry {
 		if (!frame.matchesGeometryInputs(domain, occupied, frame.occupiedSvq)) return null;
 		var index = index(domain);
 		if (!frame.liquidStock.equals(stock(domain, domain.geometry.cutCells, index))) return null;
-		return new PhaseSource(domain, frame, index);
+		return new PhaseSource(domain, frame, index, editedCell);
 	}
 
 	static GasRuntimeGeometry capturePhaseEdit(FluidDomain domain, PhaseLiquidGeometryEdit edit,
@@ -308,6 +318,19 @@ final class GasRuntimeGeometry {
 
 	boolean cellDependsOnNeighborFractions(int cell) {
 		return phase.dependsOnNeighborFractions(cell, liquidStock.get(cell), cellSize);
+	}
+
+	/** A stock edit changes its own geometry and only direct neighbors reading its fraction. */
+	boolean[] phaseEditCells(int editedCell) {
+		boolean[] variable = new boolean[liquidStock.size()]; variable[editedCell] = true;
+		int[] sizes = {geometry.sizeX(), geometry.sizeY(), geometry.sizeZ()}, strides = {1, sizes[0], sizes[0] * sizes[1]};
+		int[] coordinate = {editedCell % sizes[0], editedCell / sizes[0] % sizes[1], editedCell / strides[2]};
+		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1})
+			if (coordinate[axis] + sign >= 0 && coordinate[axis] + sign < sizes[axis]) {
+				int neighbor = editedCell + sign * strides[axis];
+				variable[neighbor] = cellDependsOnNeighborFractions(neighbor);
+			}
+		return variable;
 	}
 
 	double dryMicroFaceArea(int cell, int micro, int axis, int coordinate) {

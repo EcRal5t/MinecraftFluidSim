@@ -88,10 +88,27 @@ final class GasFaceIntersection {
 			throw new IllegalArgumentException("Invalid exact gas face primitive");
 		if (width == 0) return ExactRational.ZERO;
 		try {
-			ExactRational x = exact(tangentStart), y = exact(otherStart), span = exact(width);
+			SignedDyadic startX = SignedDyadic.of(tangentStart), startY = SignedDyadic.of(otherStart), extent = SignedDyadic.of(width);
+			var active = new ArrayList<Plane>(planes.size());
+			SignedDyadic firstA = SignedDyadic.ZERO, firstB = SignedDyadic.ZERO, firstThreshold = SignedDyadic.ZERO;
+			for (Plane plane : planes) {
+				SignedDyadic a = plane.a().multiply(extent), b = plane.b().multiply(extent);
+				SignedDyadic minimum = plane.a().multiply(startX).add(plane.b().multiply(startY));
+				if (a.signum() < 0) minimum = minimum.add(a);
+				if (b.signum() < 0) minimum = minimum.add(b);
+				SignedDyadic threshold = plane.threshold().subtract(minimum);
+				a = magnitude(a); b = magnitude(b);
+				if (threshold.signum() <= 0) continue;
+				if (threshold.compareTo(a.add(b)) >= 0) return ExactRational.ZERO;
+				if (active.contains(plane)) continue;
+				active.add(plane); firstA = a; firstB = b; firstThreshold = threshold;
+			}
+			if (active.isEmpty()) return exact(extent.multiply(extent));
+			if (active.size() == 1) return singlePlaneArea(extent, firstA, firstB, firstThreshold);
+			ExactRational x = exact(startX), y = exact(startY), span = exact(extent);
 			ExactRational endX = x.add(span), endY = y.add(span);
 			List<Point> polygon = List.of(new Point(x, y), new Point(endX, y), new Point(endX, endY), new Point(x, endY));
-			for (Plane plane : planes) polygon = clip(polygon, plane);
+			for (Plane plane : active) polygon = clip(polygon, plane);
 			if (polygon.size() < 3) return ExactRational.ZERO;
 			ExactRational twiceArea = ExactRational.ZERO;
 			Point previous = polygon.getLast();
@@ -106,6 +123,18 @@ final class GasFaceIntersection {
 			// Inputs have been validated; rational arithmetic owns its bounded magnitude failure.
 			throw new GasTopologyBlockedException("Exact gas face intersection exceeds the rational representation budget: " + magnitude.getMessage());
 		}
+	}
+	/** Rectangle coordinates reflect negative coefficients; A and B are their full-width increments. */
+	private static ExactRational singlePlaneArea(SignedDyadic width, SignedDyadic a, SignedDyadic b, SignedDyadic threshold) {
+		SignedDyadic area = width.multiply(width);
+		if (a.signum() == 0) return divide(exact(area.multiply(b.subtract(threshold))), exact(b));
+		if (b.signum() == 0) return divide(exact(area.multiply(a.subtract(threshold))), exact(a));
+		SignedDyadic height = a.add(b).subtract(threshold);
+		SignedDyadic numerator = height.multiply(height);
+		SignedDyadic cutA = a.subtract(threshold), cutB = b.subtract(threshold);
+		if (cutA.signum() > 0) numerator = numerator.subtract(cutA.multiply(cutA));
+		if (cutB.signum() > 0) numerator = numerator.subtract(cutB.multiply(cutB));
+		return divide(exact(area.multiply(numerator)), exact(a.multiply(b).multiply(SignedDyadic.of(2))));
 	}
 	private static double observedArea(ExactRational value) { return value.isZero() ? 0 : positiveArea(value.toDouble()); }
 	static List<Plane> project(List<GasGeometryOverlap.HalfSpace> planes, int axis, double coordinate) {

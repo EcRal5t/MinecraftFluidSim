@@ -163,8 +163,8 @@ public final class GasPhaseInterfaceValidation {
 				check(bounds!=null,"Finite air lost its complete-source interval bound");
 				var prepare=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("prepareBoilInventory")).findFirst().orElseThrow();prepare.setAccessible(true);
 				var complete=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("completeBoil")).findFirst().orElseThrow();complete.setAccessible(true);
-				var constructor=complete.getParameterTypes()[6].getDeclaredConstructor(GasLiquidPhaseChangeStage.class);constructor.setAccessible(true);
-				var source=constructor.newInstance(stage);var planes=GasRuntimeGeometry.prepareBoilContactPlanes(support,0,contact);
+				var constructor=complete.getParameterTypes()[6].getDeclaredConstructor(GasLiquidPhaseChangeStage.class,int.class);constructor.setAccessible(true);
+				var source=constructor.newInstance(stage,0);var planes=GasRuntimeGeometry.prepareBoilContactPlanes(support,0,contact);
 				Object[] candidates=new Object[9];int largest=0;
 				for(int batch=1;batch<=8;batch++) {
 					var inventory=prepare.invoke(stage,0,node,0,transition,phase,thermalCell,new boolean[0],300.0,(long)batch,contact);

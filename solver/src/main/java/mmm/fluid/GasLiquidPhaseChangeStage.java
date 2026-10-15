@@ -131,7 +131,7 @@ final class GasLiquidPhaseChangeStage {
 		long high = Math.min(maximumBatches, Math.min(byGas, Math.min(byVolume, byMass)));
 		if (high <= 0L) return null;
 		var contactPlanes = GasRuntimeGeometry.prepareBoilContactPlanes(support, cell, contact);
-		var geometrySource = new BoilGeometrySource();
+		var geometrySource = new BoilGeometrySource(cell);
 		var envelope = GasPhaseGeometryEnvelope.forBoiling(support, cell, node, contact.contactPieces());
 		if (envelope == null) return GasPhaseBatchSearch.maximum(high, batches -> completeBoil(cell, node, transition, phase,
 				contact, contactPlanes, geometrySource, prepareBoilInventory(cell, node, liquidHandle, transition, phase, thermalCell,
@@ -251,10 +251,12 @@ final class GasLiquidPhaseChangeStage {
 	}
 
 	private final class BoilGeometrySource {
+		private final int editedCell;
+		BoilGeometrySource(int editedCell) { this.editedCell = editedCell; }
 		private boolean prepared;
 		private GasRuntimeGeometry.PhaseSource source;
 		GasRuntimeGeometry.PhaseSource get() {
-			if (!prepared) { source = support.prepareGasGeometrySource(); prepared = true; }
+			if (!prepared) { source = support.prepareGasGeometrySource(editedCell); prepared = true; }
 			return source;
 		}
 	}

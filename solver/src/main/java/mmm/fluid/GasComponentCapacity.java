@@ -76,7 +76,6 @@ final class GasComponentCapacity {
 				var row=liquidStock.get(cell);
 				if (row.cell()!=cell || row.collisionMask()!=geometry.collisionMask(cell))
 					throw new IllegalArgumentException("Planned gas liquid stock differs from its geometry");
-				for (var component:row.components()) stock.put(key(cell,component.supportMask()),component.volume());
 			}
 		} else for (int marker = 0; marker < domain.particles.count(); marker++) {
 			int cell = domain.particleCellIndex(marker);
@@ -95,6 +94,10 @@ final class GasComponentCapacity {
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			int previousStart = previousEnd;
 			while (previousEnd < previous.size() && previous.get(previousEnd).cell() == cell) previousEnd++;
+			if (sameCertifiedCell(cell, geometry, occupiedSvq, liquidStock, source, previousOccupied)) {
+				for (int component = previousStart; component < previousEnd; component++) result.add(previous.get(component));
+				continue;
+			}
 			int mask = domain.geometry.cutCells.mask(cell);
 			int[] supports = CellRemapMicroTopology.components(mask);
 			SignedDyadic open = SignedDyadic.of(Integer.bitCount(~mask & 255), -3);
@@ -103,14 +106,12 @@ final class GasComponentCapacity {
 				throw blocked("Solid inventory exceeds fixed open capacity", cell);
 			if (!geometry.poreVolume(cell).equals(open.subtract(solid)))
 				throw blocked("Gas geometry pore capacity differs from current occupancy",cell);
-			if (sameCertifiedCell(cell, geometry, occupiedSvq, liquidStock, source, previousOccupied)) {
-				for (int component = previousStart; component < previousEnd; component++) result.add(previous.get(component));
-				continue;
-			}
 			SignedDyadic[] capacities = CellRemapMicroTopology.capacities(mask, open.subtract(solid));
 			for (int i = 0; i < supports.length; i++) {
 				int support = supports[i];
-				SignedDyadic available = capacities[i].subtract(stock.getOrDefault(key(cell, support), SignedDyadic.ZERO));
+				SignedDyadic liquid = liquidStock == null ? stock.getOrDefault(key(cell, support), SignedDyadic.ZERO)
+						: liquidStock.get(cell).components().get(i).volume();
+				SignedDyadic available = capacities[i].subtract(liquid);
 				if (available.signum() < 0) throw blocked("Liquid inventory exceeds its open component capacity", cell);
 				try {
 					ExactRational gas = ExactRational.ZERO;
