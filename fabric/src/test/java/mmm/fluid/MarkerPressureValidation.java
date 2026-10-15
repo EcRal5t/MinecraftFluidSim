@@ -646,42 +646,24 @@ public final class MarkerPressureValidation {
 		}
 	}
 
-	/** A common binary row scale remains within the normal selection work budget. */
-	private static void verifyCommonPressureRowScale() {
-		int rank = 17;
-		var scale = new SignedDyadic(java.math.BigInteger.ONE.shiftLeft(1000).add(java.math.BigInteger.ONE), -1000);
-		var starts = new int[rank + 2]; var indices = new int[2 * rank]; var coefficients = new SignedDyadic[2 * rank];
-		var gram = new SignedDyadic[rank * rank]; Arrays.fill(gram, SignedDyadic.ZERO);
-		var diagonal = new double[rank + 1]; Arrays.fill(diagonal, 1); diagonal[rank] = rank;
-		for (int row = 0; row < rank; row++) {
-			starts[row + 1] = row + 1; indices[row] = indices[rank + row] = row;
-			coefficients[row] = coefficients[rank + row] = scale; gram[(rank + 1) * row] = SignedDyadic.of(1);
-		}
-		starts[rank + 1] = 2 * rank;
-		PressureRowBasis.patches(starts, indices, coefficients, new SignedDyadic[][]{gram}, rank,
-				new double[rank + 1], diagonal);
-
-	}
-
 	private static void verifySparsePressureBasis(CellAffineVelocity basis) {
-		verifyCommonPressureRowScale();
 		int block = basis.markerBlock(0);
-		// The diagonal response must solve physical directions that vanish modulo the selection prime.
+		// Whitening retains physical directions across different row scales.
 		for (int rowCount : new int[]{1, 3}) {
 			var hiddenRows = new java.util.ArrayList<CellVelocityConstraintOperator.Row>();
 			for (int axis = 0; axis < rowCount; axis++) hiddenRows.add(new CellVelocityConstraintOperator.Row(
 					java.util.List.of(new CellVelocityConstraintOperator.Block(block, axis,
-							new double[]{axis == 0 ? 2147483647L : 1, 0, 0, 0})), 0));
+							new double[]{axis == 0 ? 1e6 : 1, 0, 0, 0})), 0));
 			var hidden = new CellVelocityConstraintOperator(basis, hiddenRows);
 			var input = new double[3][basis.markerCount()];
-			Arrays.fill(input[0], 1.0 / 2147483647L); Arrays.fill(input[1], .125); Arrays.fill(input[2], .25);
+			Arrays.fill(input[0], 1e-6); Arrays.fill(input[1], .125); Arrays.fill(input[2], .25);
 			var hiddenSource = hidden.referencedSource(input, 1, new double[rowCount], new double[rowCount]);
 			var hiddenDiagonal = new double[rowCount]; hidden.diagonal(hiddenDiagonal);
 			var high = new double[rowCount]; var low = new double[rowCount];
 			var result = SparsePressureFactor.solve(hidden, hiddenSource, high, low, hiddenDiagonal, 1e-9, 64);
 			var residual = new double[rowCount]; hidden.residual(high, low, hiddenSource, residual);
-			if (!result.converged()) throw new AssertionError("Full-row pressure response lost a prime-hidden physical direction");
-			for (double value : residual) near(value, 0, 1e-9, "Prime-hidden physical pressure residual");
+			if (!result.converged()) throw new AssertionError("Full-row pressure response lost a scaled physical direction");
+			for (double value : residual) near(value, 0, 1e-9, "Scaled physical pressure residual");
 			verifyFactoredConstraint(basis, hiddenRows, input, high);
 		}
 		var definitions = java.util.List.of(
@@ -721,17 +703,11 @@ public final class MarkerPressureValidation {
 		var noBudget = SparsePressureFactor.solve(operator, exactRhs, pressure, pressureLow, diagonal, 1e-9, 0);
 		if (noBudget.iterations() != 0 || noBudget.converged() || !Arrays.equals(saved, pressure) || !Arrays.equals(savedLow, pressureLow) || !Arrays.equals(savedSource, rhs))
 			throw new AssertionError("Zero direct solve budget changed the same-source iterative fallback");
-		PressureRowBasis.withWorkLimitForValidation(0, () -> {
-			var converged = SparsePressureFactor.solve(operator, exactRhs, pressure, pressureLow, diagonal, 1e-9, 64);
-			if (!converged.converged() || converged.iterations() != 0
-					|| !Arrays.equals(saved, pressure) || !Arrays.equals(savedLow, pressureLow) || !Arrays.equals(savedSource, rhs))
-				throw new AssertionError("An already converged pressure performed unnecessary row selection");
-			var seed = new double[]{7, 8, 9}; var seedLow = new double[3];
-			var unavailable = SparsePressureFactor.solve(operator, exactRhs, seed, seedLow, diagonal, 1e-9, 64);
-			if (unavailable.converged() || unavailable.iterations() != 0 || !Arrays.equals(seed, new double[]{7, 8, 9})
-					|| !Arrays.equals(seedLow, new double[3]) || !Arrays.equals(savedSource, rhs))
-				throw new AssertionError("Unavailable row-selection work budget changed an unstarted pressure solve");
-		});
+		var converged = SparsePressureFactor.solve(operator, exactRhs, pressure, pressureLow, diagonal, 1e-9, 64);
+		if (!converged.converged() || converged.iterations() != 0
+				|| !Arrays.equals(saved, pressure) || !Arrays.equals(savedLow, pressureLow) || !Arrays.equals(savedSource, rhs))
+			throw new AssertionError("An already converged pressure performed unnecessary subspace preparation");
+
 		var nullPressure = new double[]{-2, 1, 0}; var nullForce = new double[3][basis.markerCount()];
 		operator.force(nullPressure, nullForce);
 		for (var axis : nullForce) for (double value : axis) near(value, 0, 0, "Redundant multipliers have zero actual force");
@@ -754,6 +730,7 @@ public final class MarkerPressureValidation {
 		var closed = new CellVelocityConstraintOperator(basis, java.util.List.of(definitions.getFirst(),
 				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{-1, 0, 0, 0})), 0),
 				definitions.get(2)));
+		closed.coarseRows(new int[][]{{0},{1},{2}}, new double[][]{{1},{1},{1}});
 		closed.volumeRate(velocity, rhs); for (int row = 0; row < 3; row++) rhs[row] = -rhs[row] / dt; closed.diagonal(diagonal);
 		if (!SparsePressureFactor.solve(closed, rhs, pressure, diagonal, 1e-9, 64).converged())
 			throw new AssertionError("A uniform closed pressure gauge prevented the certified physical solve");

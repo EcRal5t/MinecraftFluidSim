@@ -6,16 +6,17 @@ import org.ejml.data.DMatrixSparseCSC;
 import org.ejml.data.DMatrixSparseTriplet;
 import org.ejml.ops.DConvertMatrixStruct;
 
-/** One captured actual-mass constraint transpose shared by QR patches and pressure iteration. */
+/** Captured physical constraint coefficients and actual inertia shared by iteration and local whitening. */
 final class PressureResponse {
 	private final DMatrixSparseCSC transpose;
-	private final double[] load, loadLow;
+	private final double[] tails, inertia, load, loadLow, weighted, weightedLow;
 
-	PressureResponse(DMatrixSparseCSC transpose) {
-		this.transpose = transpose;
+	PressureResponse(DMatrixSparseCSC transpose, double[] tails, double[] inertia) {
+		this.transpose = transpose; this.tails = tails; this.inertia = inertia;
 		load = new double[transpose.numRows]; loadLow = new double[load.length];
+		weighted = new double[load.length]; weightedLow = new double[load.length];
 	}
-	long bytes() { return 12L * transpose.nz_length + 4L * (transpose.numCols + 1L) + 16L * load.length; }
+	long bytes() { return 20L * transpose.nz_values.length + 4L * (transpose.numCols + 1L) + 40L * load.length; }
 	private TreeMap<Integer, Integer> features(PressureRowBasis selected) {
 		var features = new TreeMap<Integer, Integer>();
 		for (int column = 0; column < selected.size(); column++) {
@@ -45,28 +46,39 @@ final class PressureResponse {
 		for (int column = 0; column < selected.size(); column++) {
 			int row = selected.row(column);
 			for (int entry = transpose.col_idx[row]; entry < transpose.col_idx[row + 1]; entry++) {
-				double value = transpose.nz_values[entry] * scale[column];
+				int feature = transpose.nz_rows[entry];
+				double root = Math.sqrt(inertia[feature]), coefficient = transpose.nz_values[entry];
+				double whitened = coefficient * root;
+				double value = (whitened + (Math.fma(coefficient, root, -whitened) + tails[entry] * root)) * scale[column];
 				if (!Double.isFinite(value)) throw new PressureRowBasis.Unavailable("Unrepresentable whitened pressure scale");
 				if (value != 0) result.addItem(features.get(transpose.nz_rows[entry]), column, value);
 			}
 		}
 		return DConvertMatrixStruct.convert(result, (DMatrixSparseCSC) null);
 	}
-	/** B B^T pressure and |B^T pressure| squared, without forming a rounded Gram matrix. */
+	/** C M^-1 C^T pressure and its positive work, using the same original coefficient columns. */
 	double apply(double[] high, double[] low, double[] result) {
 		Arrays.fill(load, 0); Arrays.fill(loadLow, 0);
 		for (int row = 0; row < transpose.numCols; row++)
 			for (int entry = transpose.col_idx[row]; entry < transpose.col_idx[row + 1]; entry++) {
-				int feature = transpose.nz_rows[entry]; double weight = transpose.nz_values[entry];
-				ConstraintNumerics.accumulateProduct(load, loadLow, feature, weight, high[row]);
-				ConstraintNumerics.accumulateProduct(load, loadLow, feature, weight, low[row]);
+				int feature = transpose.nz_rows[entry]; double coefficient = transpose.nz_values[entry], tail = tails[entry];
+				ConstraintNumerics.accumulateProduct(load, loadLow, feature, coefficient, high[row]);
+				ConstraintNumerics.accumulateProduct(load, loadLow, feature, coefficient, low[row]);
+				ConstraintNumerics.accumulateProduct(load, loadLow, feature, tail, high[row]);
+				ConstraintNumerics.accumulateProduct(load, loadLow, feature, tail, low[row]);
 			}
+		Arrays.fill(weighted, 0); Arrays.fill(weightedLow, 0);
+		for (int feature = 0; feature < load.length; feature++) {
+			ConstraintNumerics.accumulateProduct(weighted, weightedLow, feature, load[feature], inertia[feature]);
+			ConstraintNumerics.accumulateProduct(weighted, weightedLow, feature, loadLow[feature], inertia[feature]);
+		}
 		for (int row = 0; row < result.length; row++) {
 			double sum = 0, correction = 0;
 			for (int entry = transpose.col_idx[row]; entry < transpose.col_idx[row + 1]; entry++) {
-				int feature = transpose.nz_rows[entry]; double weight = transpose.nz_values[entry];
-				double product = weight * load[feature];
-				double error = Math.fma(weight, load[feature], -product) + weight * loadLow[feature];
+				int feature = transpose.nz_rows[entry]; double coefficient = transpose.nz_values[entry];
+				double product = coefficient * weighted[feature];
+				double error = Math.fma(coefficient, weighted[feature], -product) + coefficient * weightedLow[feature]
+						+ tails[entry] * weighted[feature] + tails[entry] * weightedLow[feature];
 				double next = sum + product;
 				correction += (Math.abs(sum) >= Math.abs(product) ? (sum - next) + product : (product - next) + sum) + error;
 				sum = next;
@@ -75,12 +87,15 @@ final class PressureResponse {
 		}
 		double work = 0, correction = 0;
 		for (int feature = 0; feature < load.length; feature++) {
-			double square = load[feature] * load[feature];
-			double error = Math.fma(load[feature], load[feature], -square) + 2 * load[feature] * loadLow[feature] + loadLow[feature] * loadLow[feature];
-			double next = work + square;
-			correction += (Math.abs(work) >= Math.abs(square) ? (work - next) + square : (square - next) + work) + error;
+			double product = load[feature] * weighted[feature];
+			double error = Math.fma(load[feature], weighted[feature], -product)
+					+ load[feature] * weightedLow[feature] + loadLow[feature] * weighted[feature]
+					+ loadLow[feature] * weightedLow[feature];
+			double next = work + product;
+			correction += (Math.abs(work) >= Math.abs(product) ? (work - next) + product : (product - next) + work) + error;
 			work = next;
 		}
 		return work + correction;
 	}
+
 }

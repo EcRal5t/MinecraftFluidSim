@@ -4,15 +4,14 @@ import mmm.units.SignedDyadic;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import org.ejml.data.DMatrixSparseCSC;
-import org.ejml.sparse.FillReducing;
-import org.ejml.sparse.csc.factory.DecompositionFactory_DSCC;
-import org.ejml.sparse.csc.misc.TriangularSolver_DSCC;
+import org.ejml.data.DMatrixRMaj;
+import org.ejml.dense.row.factory.DecompositionFactory_DDRM;
+import org.ejml.ops.DConvertMatrixStruct;
 
-/** Overlapping local mass-whitened QR patches and full-row diagonal response precondition the actual solve. */
+/** Reliable mass-whitened local subspaces and a physical coarse space precondition the actual solve. */
 final class SparsePressureFactor {
 	private SparsePressureFactor() { }
-	private record Patch(PressureRowBasis basis, double[] scale, DMatrixSparseCSC triangular, double[] solution) { }
+	private record Patch(PressureRowBasis basis, double[] scale, double[][] inverseModes, double[] solution) { }
 	private record Coarse(CellVelocityConstraintOperator.CoarseSpace space, Patch patch, double[] restricted, double[] restrictedLow) { }
 	private record FactorSize(double retained, double workspace) { }
 	static PressureProjectionResult solve(CellVelocityConstraintOperator operator, double[] rhs, double[] pressure,
@@ -56,8 +55,8 @@ final class SparsePressureFactor {
 				if (!(diagonalScale[row] > 0 && Double.isFinite(diagonalScale[row]))) return unavailable(iterations, initialResidual);
 			}
 			double iterationBytes = 8 * 20.0 * rhs.length;
-			double retainedBytes = operator.whitenedBytes(), workspaceBytes = 0;
-			if (coarseSpace != null) retainedBytes += coarseSpace.operator().whitenedBytes();
+			double retainedBytes = operator.pressureResponseBytes(), workspaceBytes = 0;
+			if (coarseSpace != null) retainedBytes += coarseSpace.operator().pressureResponseBytes();
 			for (var basis : coordinates) {
 				var size = factorSize(operator, basis); retainedBytes += size.retained;
 				workspaceBytes = Math.max(workspaceBytes, size.workspace);
@@ -66,7 +65,7 @@ final class SparsePressureFactor {
 				var size = factorSize(coarseSpace.operator(), coarseBasis); retainedBytes += size.retained;
 				workspaceBytes = Math.max(workspaceBytes, size.workspace);
 			}
-			// Only one patch's QR workspace is live; all retained local R factors and CG vectors count together.
+			// Only one patch's dense decomposition is live; retained subspace modes and CG vectors count together.
 			if (retainedBytes + workspaceBytes + iterationBytes > PressureRowBasis.availableMemory())
 				return unavailable(iterations, initialResidual);
 			var patches = new ArrayList<Patch>(coordinates.size());
@@ -89,14 +88,16 @@ final class SparsePressureFactor {
 			double cycleResidual = initialResidual;
 			while (iterations < maximumSolves) {
 				iterations++;
-				// The cached mass-whitened transpose supplies both the image and its positive norm.
-				double work = operator.applyWhitened(direction[0], direction[1], action);
+				// The captured physical constraint and inertia supply the actual image and positive work.
+				double work = operator.applyCachedResponse(direction[0], direction[1], action);
 				if (!(work > 0 && Double.isFinite(work))) break;
 				double alpha = product / work;
 				if (!(alpha > 0 && Double.isFinite(alpha)) || !advance(candidate, candidateLow, direction, alpha)) break;
 				for (int row = 0; row < image.length; row++) image[row] = Math.fma(-alpha, action[row], image[row]);
 				double estimated = rms(image);
-				if (!Double.isFinite(estimated) || estimated <= tolerance || iterations == maximumSolves) {
+				// Recompute before cancellation against the cycle's original residual consumes half the working precision.
+				if (!Double.isFinite(estimated) || estimated <= Math.max(tolerance, Math.sqrt(Math.ulp(1.0)) * cycleResidual)
+						|| iterations == maximumSolves) {
 					operator.residual(candidate, candidateLow, rhs, actual); double observed = rms(actual);
 					if (Double.isFinite(observed) && observed < residual) {
 						best = candidate.clone(); bestLow = candidateLow.clone(); residual = observed;
@@ -131,8 +132,8 @@ final class SparsePressureFactor {
 		double rectangle = (double) size.features() * basis.size();
 		double triangle = (double) basis.size() * (basis.size() + 1L) / 2;
 		if (rectangle > Integer.MAX_VALUE || triangle > Integer.MAX_VALUE)
-			throw new PressureRowBasis.Unavailable("Pressure QR exceeds sparse index capacity");
-		return new FactorSize(36 * triangle + 128.0 * basis.size(),
+			throw new PressureRowBasis.Unavailable("Pressure subspace exceeds matrix index capacity");
+		return new FactorSize(16 * triangle + 128.0 * basis.size(),
 				36 * rectangle + 48.0 * size.maximumEntries() + 128.0 * size.features());
 	}
 	private static Patch factor(CellVelocityConstraintOperator operator, PressureRowBasis basis, double[] diagonalScale) {
@@ -140,18 +141,24 @@ final class SparsePressureFactor {
 		for (int row = 0; row < scale.length; row++) {
 			scale[row] = diagonalScale[basis.row(row)];
 			if (!(scale[row] > 0 && Double.isFinite(scale[row])))
-				throw new PressureRowBasis.Unavailable("Unrepresentable pressure QR scale");
+				throw new PressureRowBasis.Unavailable("Unrepresentable pressure subspace scale");
 		}
-		var qr = DecompositionFactory_DSCC.qr(FillReducing.NONE);
-		if (!qr.decompose(operator.massWhitenedTranspose(basis, scale)))
-			throw new PressureRowBasis.Unavailable("Pressure QR factorization is unavailable");
-		var triangular = qr.getR(null, true);
-		for (int row = 0; row < basis.size(); row++) {
-			double pivot = triangular.get(row, row);
-			if (pivot == 0 || !Double.isFinite(pivot)) throw new PressureRowBasis.Unavailable("Singular pressure QR factor");
+		var sparse = operator.massWhitenedTranspose(basis, scale);
+		var matrix = DConvertMatrixStruct.convert(sparse, (DMatrixRMaj) null);
+		var svd = DecompositionFactory_DDRM.svd(matrix.numRows, matrix.numCols, false, true, true);
+		if (!svd.decompose(matrix)) throw new PressureRowBasis.Unavailable("Pressure subspace SVD is unavailable");
+		var singular = svd.getSingularValues(); var directions = svd.getV(null, false); double maximum = 0;
+		for (int mode = 0; mode < svd.numberOfSingularValues(); mode++) maximum = Math.max(maximum, singular[mode]);
+		double resolution = Math.max(matrix.numRows, matrix.numCols) * Math.ulp(1.0) * maximum;
+		var inverseModes = new ArrayList<double[]>();
+		for (int mode = 0; mode < svd.numberOfSingularValues(); mode++) if (singular[mode] > resolution) {
+			var inverse = new double[basis.size()];
+			for (int row = 0; row < inverse.length; row++) inverse[row] = directions.get(row, mode) / singular[mode];
+			inverseModes.add(inverse);
 		}
-		return new Patch(basis, scale, triangular, new double[basis.size()]);
+		return new Patch(basis, scale, inverseModes.toArray(double[][]::new), new double[basis.size()]);
 	}
+
 	private static boolean precondition(List<Patch> patches, Coarse coarse, double[] diagonalScale, double[] rhs, double[][] result) {
 		Arrays.fill(result[0], 0); Arrays.fill(result[1], 0);
 		for (int row = 0; row < rhs.length; row++) {
@@ -193,11 +200,21 @@ final class SparsePressureFactor {
 		return finite(result[0]) && finite(result[1]);
 	}
 	private static double[] response(Patch patch, double[] rhs) {
-		var solution = patch.solution;
-		for (int row = 0; row < solution.length; row++) solution[row] = rhs[patch.basis.row(row)] * patch.scale[row];
-		if (finite(solution)) solveTriangular(patch.triangular, solution);
+		var solution = patch.solution; Arrays.fill(solution, 0);
+		for (var mode : patch.inverseModes) {
+			double projection = 0, correction = 0;
+			for (int row = 0; row < solution.length; row++) {
+				double input = rhs[patch.basis.row(row)] * patch.scale[row], product = mode[row] * input;
+				double next = projection + product, virtual = next - projection;
+				correction += (projection - (next - virtual)) + (product - virtual) + Math.fma(mode[row], input, -product);
+				projection = next;
+			}
+			projection += correction;
+			for (int row = 0; row < solution.length; row++) solution[row] = Math.fma(mode[row], projection, solution[row]);
+		}
 		return solution;
 	}
+
 	private static boolean advance(double[] high, double[] low, double[][] direction, double scale) {
 		for (int row = 0; row < high.length; row++) {
 			ConstraintNumerics.accumulateProduct(high, low, row, scale, direction[0][row]);
@@ -231,19 +248,7 @@ final class SparsePressureFactor {
 		for (int axis = 0; axis < 2; axis++) System.arraycopy(source[axis], 0, target[axis], 0, source[axis].length);
 	}
 	private static boolean finite(double[] values) { for (double value : values) if (!Double.isFinite(value)) return false; return true; }
-	/** B^T = QR gives B B^T = R^T R; no explicit Q or rounded pressure Gram is needed. */
-	private static void solveTriangular(DMatrixSparseCSC triangular, double[] solution) {
-		for (int column = 0; column < triangular.numCols; column++) {
-			double value = solution[column], pivot = 0;
-			for (int entry = triangular.col_idx[column]; entry < triangular.col_idx[column + 1]; entry++) {
-				int row = triangular.nz_rows[entry];
-				if (row < column) value = Math.fma(-triangular.nz_values[entry], solution[row], value);
-				else if (row == column) pivot = triangular.nz_values[entry];
-			}
-			solution[column] = value / pivot;
-		}
-		TriangularSolver_DSCC.solveU(triangular, solution);
-	}
+
 	private static PressureProjectionResult unavailable(int iterations, double residual) { return new PressureProjectionResult(iterations, residual, false); }
 	private static double rms(double[] values) {
 		double norm = 0; for (double value : values) norm = Math.hypot(norm, value);
