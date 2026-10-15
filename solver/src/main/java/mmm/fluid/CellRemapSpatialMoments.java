@@ -169,37 +169,12 @@ final class CellRemapSpatialMoments {
 		int axes = 0; for (int a = 0; a < 3; a++) if (covariance[a][a] > 0) axes |= 1 << a; return axes;
 	}
 	int minimumCount() { return 1 + decompose().rank(); }
-	CellRemapPairQuadrature.Rule pairRule(SignedDyadic volume, double[] lower, double[] upper) {
+	CellRemapBoxQuadrature.Rule boxRule(SignedDyadic volume, double[] lower, double[] upper) {
 		var state = decompose();
-		return CellRemapPairQuadrature.create(volume, centroid(), state.loads(), state.rank(), lower, upper);
-	}
-	Result fitPairs(double[] weights, CellRemapPairQuadrature.Rule rule) {
-		var state = decompose();
-		if (weights.length != rule.arms().length || state.rank() != rule.rank())
-			throw new IllegalArgumentException("Liquid paired quadrature differs from its joint factor");
-		double total = SignedDyadic.sum(weights).toDouble(); checkPositive(total);
-		var probability = new double[weights.length]; var pairWeights = new double[2 * state.rank()];
-		for (int p = 0; p < weights.length; p++) {
-			checkPositive(weights[p]); probability[p] = weights[p] / total;
-			if (rule.arms()[p] >= 0) pairWeights[rule.arms()[p]] += probability[p];
-		}
-		var coefficient = new double[pairWeights.length];
-		for (int k = 0; k < state.rank(); k++) {
-			double negative = pairWeights[2 * k], positive = pairWeights[2 * k + 1], sum = negative + positive;
-			checkPositive(negative); checkPositive(positive);
-			coefficient[2 * k] = -Math.sqrt(positive / (negative * sum));
-			coefficient[2 * k + 1] = Math.sqrt(negative / (positive * sum));
-		}
-		var positions = new double[weights.length][3]; var velocities = new double[weights.length][3];
-		for (int p = 0; p < weights.length; p++) for (int a = 0; a < 3; a++) {
-			int arm = rule.arms()[p];
-			positions[p][a] = finite(mean[a] + (arm < 0 ? 0 : state.loads()[a][arm / 2] * coefficient[arm]));
-			velocities[p][a] = finite(mean[a + 3] + (arm < 0 ? 0 : state.loads()[a + 3][arm / 2] * coefficient[arm]));
-		}
-		return new Result(positions, velocities);
+		return CellRemapBoxQuadrature.create(volume, centroid(), state.loads(), state.spatialRank(), 1 + state.rank(), lower, upper);
 	}
 
-	/** Weights and latent loads stay fixed throughout one support-orientation search. */
+	/** Prepare the actual positive weights and the source joint loads for one spatial rule. */
 	PreparedFit prepareFit(double[] weights) {
 		checkPositive(mass);
 		var state = decompose();
@@ -218,24 +193,20 @@ final class CellRemapSpatialMoments {
 	final class PreparedFit {
 		private final JointMomentFactor.Decomposition state;
 		private final double[] probability;
-		private final double[][] spatialDirections;
 		private PreparedFit(JointMomentFactor.Decomposition state, double[] probability) {
 			this.state = state; this.probability = probability;
-			spatialDirections = new double[state.rank()][3];
-			for (int k = 0; k < state.rank(); k++) {
-				double norm = 0; for (int a = 0; a < 3; a++) norm = Math.hypot(norm, state.loads()[a][k]);
-				if (norm > 0) for (int a = 0; a < 3; a++) spatialDirections[k][a] = state.loads()[a][k] / norm;
-			}
 		}
-		/** Rows are nodes, columns are axes. Preferred geometry chooses the latent orientation only. */
+
+		/** Rows are nodes, columns are axes; the source spatial row order preserves the supplied geometry. */
 		Result fit(double[][] preferredOffsets) {
 			int count = probability.length;
 			if (count != preferredOffsets.length) throw new IllegalArgumentException("Quadrature layout differs");
 			var basis = new ArrayList<double[]>();
 			for (int k = 0; k < state.rank(); k++) {
 				var candidate = new double[count];
-				for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++)
-					candidate[p] += finite(preferredOffsets[p][a]) * spatialDirections[k][a];
+				// Match the source factor's positive-diagonal spatial row order: a supported rule keeps its geometry.
+				if (k < state.spatialRank()) for (int p = 0; p < count; p++)
+					candidate[p] = finite(preferredOffsets[p][state.spatialAxes()[k]]);
 				basis.add(nextBasis(candidate, probability, basis));
 			}
 			var positions = new double[count][3]; var velocities = new double[count][3];

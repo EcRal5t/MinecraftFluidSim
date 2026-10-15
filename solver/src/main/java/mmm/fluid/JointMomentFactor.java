@@ -65,7 +65,7 @@ final class JointMomentFactor {
 		double[][] remaining = new double[6][], loads = new double[6][6];
 		double[] rowScale = new double[6];
 		for (int a = 0; a < 6; a++) { remaining[a] = values[a].clone(); rowScale[a] = length(values[a]); }
-		int rank = 0, spatialRank = 0;
+		int rank = 0, spatialRank = 0; int[] spatialAxes = new int[3];
 		for (int block = 0; block < 2; block++) {
 			boolean[] used = new boolean[3];
 			for (int step = 0; step < 3; step++) {
@@ -79,6 +79,7 @@ final class JointMomentFactor {
 				}
 				if (pivot < 0) break;
 				used[pivot] = true;
+				if (block == 0) spatialAxes[rank] = pivot;
 				double[] direction = remaining[3 * block + pivot].clone();
 				for (int k = 0; k < 6; k++) direction[k] /= norm;
 				// Reorthogonalize every remaining row, matching the existing weighted row QR.
@@ -91,7 +92,7 @@ final class JointMomentFactor {
 			}
 			if (block == 0) spatialRank = rank;
 		}
-		return new Decomposition(loads, spatialRank, rank);
+		return new Decomposition(loads, java.util.Arrays.copyOf(spatialAxes, spatialRank), spatialRank, rank);
 	}
 
 	private static double length(double[] row) {
@@ -105,5 +106,5 @@ final class JointMomentFactor {
 				CellRemapSpatialMoments.Failure.UNREPRESENTABLE, "Liquid joint square root is unrepresentable in binary64");
 		return value;
 	}
-	record Decomposition(double[][] loads, int spatialRank, int rank) { }
+	record Decomposition(double[][] loads, int[] spatialAxes, int spatialRank, int rank) { }
 }

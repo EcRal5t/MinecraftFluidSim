@@ -1109,15 +1109,15 @@ public final class CellRemapMomentsValidation {
 				moments.add(weights[p], java.util.Arrays.copyOf(source[p], 3), java.util.Arrays.copyOfRange(source[p], 3, 6));
 			}
 			var volume = mmm.units.SignedDyadic.of(.25);
-			var rule = moments.pairRule(volume, new double[]{-.5, -.5, -.5}, new double[]{.5, .5, .5});
-			check(rule != null && rule.volumes().size() <= 2 * rule.rank() + CellRemapChemicalSupport.MAX_EXPANSION,
+			var rule = moments.boxRule(volume, new double[]{-.5, -.5, -.5}, new double[]{.5, .5, .5});
+			check(rule != null && rule.volumes().size() >= moments.minimumCount(),
 					"Near-face joint measure lost its bounded positive unequal rule");
 			var parts = rule.volumes().stream().map(mmm.units.SignedDyadic::of).toArray(mmm.units.SignedDyadic[]::new);
-			check(mmm.units.SignedDyadic.sum(parts).equals(volume), "Paired rule changed its exact volume");
+			check(mmm.units.SignedDyadic.sum(parts).equals(volume), "Positive spatial rule changed its exact volume");
 			var masses = CellRemapMassAllocation.allocate(moments.mass(), volume, parts);
-			var fitted = moments.fitPairs(masses, rule);
+			var fitted = moments.fit(masses, rule.positions());
 			for (double[] point : fitted.positions()) for (double coordinate : point)
-				check(coordinate >= -.5 && coordinate <= .5, "Paired rule left its spatial box");
+				check(coordinate >= -.5 && coordinate <= .5, "Positive spatial rule left its spatial box");
 			verifyJointRule(masses, source, weights, fitted);
 			var domain = new FluidDomain(3, 3, 3, FluidSolverConfig.prototypeDefaults(), 32);
 			var target = moments.centroid(); for (int a = 0; a < 3; a++) target[a] *= moments.mass();
@@ -1250,8 +1250,13 @@ public final class CellRemapMomentsValidation {
 				moments.add(weights[p], x, v);
 			}
 			CellRemapSpatialMoments.Result fitted;
-			try { fitted = CellRemapSampling.fit(domain, cell, 255, weights, moments, preferred,
-					new double[3], new double[3], 1 << axis, .5, new double[3]); }
+			try {
+				var volume = mmm.units.SignedDyadic.of(1);
+				var prepared = CellRemapSampling.prepare(domain, cell, 255, volume, moments.mass(), Double.NaN,
+						LiquidCellQuadrature.volumes(volume, 8), moments, preferred, new double[3], new double[3],
+						1 << axis, .5, new double[3], 32);
+				fitted = prepared.result(); weights = prepared.masses();
+			}
 			catch (MechanicalTimeRefinement unavailable) {
 				check(!enoughEnergy, "Feasible angular support was refused");
 				check(unavailable.getMessage().contains(CellRemapMechanicalFit.Failure.INSUFFICIENT_ENERGY.reason),
@@ -1260,7 +1265,7 @@ public final class CellRemapMomentsValidation {
 			}
 			check(enoughEnergy, "Contraction retained angular momentum with insufficient actual kinetic energy");
 			var angular = new double[3]; var momentum = new double[3]; var rounding = new double[3]; double energy = 0;
-			for (int p = 0; p < 8; p++) for (int a = 0; a < 3; a++) {
+			for (int p = 0; p < weights.length; p++) for (int a = 0; a < 3; a++) {
 				var x = fitted.positions()[p]; var v = fitted.velocities()[p];
 				momentum[a] += weights[p] * v[a]; energy += .5 * weights[p] * v[a] * v[a];
 				angular[a] += weights[p] * (x[(a + 1) % 3] * v[(a + 2) % 3] - x[(a + 2) % 3] * v[(a + 1) % 3]);
@@ -1517,18 +1522,22 @@ public final class CellRemapMomentsValidation {
 			domain.geometry.cutCells.replaceMask(0, 254);
 			double[] target = supported.centroid(), storage = new double[3], projection = new double[3];
 			for (int a = 0; a < 3; a++) target[a] *= supported.mass();
-			var published = CellRemapSampling.fit(domain, 0, 1, weights, supported, positions, target, storage, 0, .5, projection);
+			var volume = mmm.units.SignedDyadic.of(.09375);
+			var prepared = CellRemapSampling.prepare(domain, 0, 1, volume, supported.mass(), Double.NaN,
+					new ArrayList<>(java.util.List.of(.03125F, .03125F, .03125F)), supported, positions, target, storage,
+					0, .5, projection, 64);
+			var published = prepared.result(); var actualMass = prepared.masses();
 			double[] storedMoment = new double[3]; double momentum = 0, kinetic = 0;
-			for (int p = 0; p < 3; p++) {
+			for (int p = 0; p < actualMass.length; p++) {
 				float[] point = new float[3];
 				for (int a = 0; a < 3; a++) {
 					point[a] = (float) ((.5 + published.positions()[p][a]) * domain.config.cellSize());
-					storedMoment[a] += published.positions()[p][a];
+					storedMoment[a] += actualMass[p] * published.positions()[p][a];
 				}
 				check(domain.particleCellIndex(point[0], point[1], point[2]) == 0
 						&& CellRemapMicroTopology.positionSupport(254, domain.config.cellSize(), point[0], point[1], point[2]) == 1,
 						"Thin coupled mode left its actual binary32 open micro support");
-				momentum += published.velocities()[p][0]; kinetic += published.velocities()[p][0] * published.velocities()[p][0];
+				momentum += actualMass[p] * published.velocities()[p][0]; kinetic += actualMass[p] * published.velocities()[p][0] * published.velocities()[p][0];
 			}
 			for (int a = 0; a < 3; a++) {
 				precise(storedMoment[a] - target[a], storage[a], "Thin supported position storage audit");
