@@ -64,14 +64,13 @@ final class GasRuntimeGeometry {
 		boolean local = prepared != null && sealedExterior == prepared.frame.sealedExterior
 				&& Arrays.equals(this.occupiedSvq, prepared.frame.occupiedSvq);
 		if (local) {
-			this.phase = prepared.frame.phase.copy();
+			this.phase = prepared.phase(edits.getFirst()).copy();
 			int[] cells = prepared.region.cells();
-			phase.rebuildEditedCells(prepared.frame.phase, edits.getFirst(), cells, sourceLiquidStock, cut, solid, cellSize);
 			boolean[] changed = new boolean[domain.cellCount];
 			for (int cell : cells) changed[cell] = !phase.sameCellGeometry(cell, prepared.frame.phase);
-			this.geometry = prepared.geometry.capture(solid, cut, phase, changed);
-			this.topology = prepared.topology.capture(geometry);
-			this.capacity = prepared.capacity.capture(domain, geometry, topology, this.occupiedSvq, liquidStock);
+			this.geometry = prepared.geometry().capture(solid, cut, phase, changed);
+			this.topology = prepared.topology().capture(geometry);
+			this.capacity = prepared.capacity().capture(domain, geometry, topology, this.occupiedSvq, liquidStock);
 		} else {
 			MarkerGridIndex phaseIndex = allDry ? emptyIndex(domain.cellCount, 0) : rawIndex == null ? index(domain) : rawIndex;
 			phaseIndex.exactCellVolumeInventory = new SignedDyadic[domain.cellCount];
@@ -122,15 +121,17 @@ final class GasRuntimeGeometry {
 		return new GasRuntimeGeometry(domain, edits, occupiedSvq, sealedExterior, false);
 	}
 
-	/** One BOIL search shares its source tuples and fixed geometry; every trial owns its successor. */
+	/** One BOIL search shares its source tuples, fixed geometry and local PLIC workspace. */
 	static final class PhaseSource {
 		private final FluidDomain owner;
 		private final GasRuntimeGeometry frame;
 		private final int editedCell;
 		private final GasComplementGeometry.Region region;
-		private final GasComplementGeometry.Prepared geometry;
-		private final GasChamberTopology.Prepared topology;
-		private final GasChamberCapacity.Prepared capacity;
+		private GasComplementGeometry.Prepared geometry;
+		private GasChamberTopology.Prepared topology;
+		private GasChamberCapacity.Prepared capacity;
+		private FlipPressurePhaseGeometry scratch;
+		private PhaseLiquidGeometryEdit scratchEdit;
 		private final FlipCutCellGeometry cut;
 		private final boolean[] solid;
 		private final float[] positionVolume;
@@ -139,10 +140,7 @@ final class GasRuntimeGeometry {
 		private PhaseSource(FluidDomain owner, GasRuntimeGeometry frame, int editedCell) {
 			this.owner = owner; this.frame = frame; this.editedCell = editedCell;
 			this.region = new GasComplementGeometry.Region(owner.sizeX, owner.sizeY, owner.sizeZ, frame.phaseEditCells(editedCell));
-			this.geometry = GasComplementGeometry.prepare(frame.geometry, region);
-			this.topology = GasChamberTopology.prepare(frame.geometry, frame.sealedExterior, region);
-			this.capacity = GasChamberCapacity.prepare(frame, topology);
-			// Trials share fixed geometry; each candidate owns its complete phase arrays and local successor records.
+			// Trials share collision inputs; complete runtime frames copy the local PLIC workspace.
 			cut = new FlipCutCellGeometry(owner.sizeX, owner.sizeY, owner.sizeZ);
 			cut.restoreMicroMasks(owner.geometry.cutCells.copyMicroMasks());
 			solid = owner.geometry.solid.clone();
@@ -156,6 +154,34 @@ final class GasRuntimeGeometry {
 				positionVolume[4 * marker + 3] = owner.particles.volume(marker);
 			}
 		}
+		GasRuntimeGeometry frame() { return frame; }
+		GasComplementGeometry.Region region() { return region; }
+		private GasComplementGeometry.Prepared geometry() {
+			if (geometry == null) geometry = GasComplementGeometry.prepare(frame.geometry, region);
+			return geometry;
+		}
+		GasChamberTopology.Prepared topology() {
+			if (topology == null) topology = GasChamberTopology.prepare(frame.geometry, frame.sealedExterior, region);
+			return topology;
+		}
+		GasChamberCapacity.Prepared capacity() {
+			if (capacity == null) capacity = GasChamberCapacity.prepare(frame, topology());
+			return capacity;
+		}
+		/** Borrowed local phase workspace; an admitted runtime frame takes its own copy. */
+		FlipPressurePhaseGeometry phase(PhaseLiquidGeometryEdit edit) {
+			if (edit == null || edit.cell() != editedCell || edit.collisionMask() != cut.mask(editedCell))
+				throw new IllegalArgumentException("BOIL PLIC requires its prepared edited cell and collision mask");
+			if (owner.gasState.frame != frame) throw new GasTopologyBlockedException("BOIL phase source changed during candidate search");
+			if (scratchEdit != edit) {
+				if (scratch == null) scratch = frame.phase.copy();
+				scratchEdit = null;
+				scratch.rebuildEditedCells(frame.phase, edit, region.cells(), frame.liquidStock, cut, solid, frame.cellSize);
+				scratchEdit = edit;
+			}
+			return scratch;
+		}
+
 		private void requireCurrent(FluidDomain domain, long[] occupied) {
 			if (domain != owner || domain.gasState.frame != frame || domain.gridDirty
 					|| inventoryRevision != domain.markerGrid.inventoryRevision
@@ -186,74 +212,6 @@ final class GasRuntimeGeometry {
 	static GasRuntimeGeometry capturePhaseEdit(FluidDomain domain, PhaseLiquidGeometryEdit edit,
 	                                          long[] occupied, boolean sealed, PhaseSource source) {
 		return new GasRuntimeGeometry(domain, List.of(edit), occupied, sealed, false, source);
-	}
-
-	/** Prepared once for one BOIL search; candidates mutate only these private contact-plane arrays. */
-	static final class BoilContactPlanes {
-		final GasRuntimeGeometry source;
-		private final GasDomainState owner;
-		private final int editedCell;
-		private final FlipPressurePhaseGeometry scratch;
-		private final FlipCutCellGeometry cut;
-		private final boolean[] solid;
-		private final int[] cells;
-		private final GasPhaseInterfaceResolver.Candidate contact;
-		final boolean unchangedContact;
-
-		private BoilContactPlanes(GasDomainState owner, int editedCell, List<Integer> cells,
-		                          FlipCutCellGeometry cut, boolean[] solid, GasPhaseInterfaceResolver.Candidate contact) {
-			this.owner = owner; this.source = owner.frame; this.editedCell = editedCell;
-			this.cells = cells.stream().mapToInt(Integer::intValue).toArray(); this.cut = cut; this.solid = solid;
-			this.contact = contact;
-			int[] size = {source.geometry.sizeX(), source.geometry.sizeY(), source.geometry.sizeZ()};
-			// A captured positive piece survives when its own tuple and actual gradient inputs stay unchanged.
-			this.unchangedContact = cells.stream().anyMatch(cell -> cell != editedCell
-					&& (Math.abs(cell % size[0] - editedCell % size[0])
-					+ Math.abs(cell / size[0] % size[1] - editedCell / size[0] % size[1])
-					+ Math.abs(cell / (size[0] * size[1]) - editedCell / (size[0] * size[1])) != 1
-					|| !source.cellDependsOnNeighborFractions(cell)));
-			this.scratch = source.phase.copy();
-		}
-
-		boolean matchesContact(GasPhaseInterfaceResolver.Candidate expected) { return owner.frame == source && contact == expected; }
-
-		FlipPressurePhaseGeometry rebuild(PhaseLiquidGeometryEdit edit) {
-			if (owner.frame != source || edit.cell() != editedCell || edit.collisionMask() != cut.mask(editedCell))
-				throw new IllegalArgumentException("BOIL contact planes require their unchanged preparing source");
-			scratch.rebuildEditedCells(source.phase, edit, cells, source.liquidStock, cut, solid, source.cellSize);
-			return scratch;
-		}
-	}
-
-	static BoilContactPlanes prepareBoilContactPlanes(PhaseChangeStageSupport support, int editedCell,
-	                                                GasPhaseInterfaceResolver.Candidate contact) {
-		var state = support.state(); var source = support.gasState().frame;
-		if (source == null || source.geometry.sizeX() != state.sizeX() || source.geometry.sizeY() != state.sizeY()
-				|| source.geometry.sizeZ() != state.sizeZ() || Float.floatToRawIntBits(source.cellSize) != Float.floatToRawIntBits(state.cellSize())) return null;
-		try {
-			var cells = new java.util.TreeSet<Integer>();
-			for (int piece : contact.contactPieces()) {
-				if (source.geometry.piece(piece) == null || source.nodeOfPiece(piece) != contact.node()) return null;
-				cells.add(piece / 8);
-			}
-			var inputs = new java.util.TreeSet<Integer>(cells); inputs.add(editedCell);
-			int[] sizes = {state.sizeX(), state.sizeY(), state.sizeZ()}, strides = {1, state.sizeX(), state.sizeX() * state.sizeY()};
-			for (int cell : cells) {
-				int[] coordinate = {cell % sizes[0], cell / sizes[0] % sizes[1], cell / strides[2]};
-				for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1})
-					if (coordinate[axis] + sign >= 0 && coordinate[axis] + sign < sizes[axis]) inputs.add(cell + sign * strides[axis]);
-			}
-			for (int cell : inputs) {
-				long occupied = Math.addExact(support.granularSvq(cell), support.thermal() == null ? 0
-						: support.thermal().coherentPhases().cellOccupiedSvq(cell));
-				if (source.occupiedSvq[cell] != occupied || source.geometry.collisionMask(cell) != state.geometry().cutCells.mask(cell)
-						|| state.geometry().solid[cell] != (source.geometry.collisionMask(cell) == 255)
-						|| !source.liquidStock.get(cell).equals(PhaseLiquidGeometryEdit.current(state, cell))) return null;
-			}
-			var cut = new FlipCutCellGeometry(state.sizeX(), state.sizeY(), state.sizeZ());
-			cut.restoreMicroMasks(state.geometry().cutCells.copyMicroMasks());
-			return new BoilContactPlanes(support.gasState(), editedCell, List.copyOf(cells), cut, state.geometry().solid.clone(), contact);
-		} catch (IllegalArgumentException | ArithmeticException unresolved) { return null; }
 	}
 
 	/** Complete future clear: no liquid or solid stock, retaining the captured fixed collision masks. */

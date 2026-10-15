@@ -245,6 +245,7 @@ public final class AirCavityScannerValidation {
 		var preparedTrial=GasRuntimeGeometry.capturePhaseEdit(domain,edit,occupied,true,phaseSource);
 		var preparedReset=GasRuntimeGeometry.capturePhaseEdit(domain,current.liquidStock().get(0),occupied,true,phaseSource);
 		var preparedAgain=GasRuntimeGeometry.capturePhaseEdit(domain,edit,occupied,true,phaseSource);
+		phaseSource.phase(current.liquidStock().get(0));phaseSource.phase(edit);
 		checkRuntimePlanesEqual(preparedTrial,editedFromCaptured,"Prepared phase source changed candidate planes");
 		checkRuntimePlanesEqual(preparedReset,current,"Previous phase trial leaked its target workspace into the next trial");
 		checkRuntimePlanesEqual(preparedAgain,preparedTrial,"Repeated phase trial mutated an already prepared frame");
@@ -411,9 +412,9 @@ public final class AirCavityScannerValidation {
 			for(var group:groups.entrySet()) {
 				domain.gasState.frame=source;
 				var contact=new GasPhaseInterfaceResolver.Candidate(group.getKey(),~edit.collisionMask()&255,group.getValue(),null);
-				var prepared=GasRuntimeGeometry.prepareBoilContactPlanes(support,edit.cell(),contact);
-				check(prepared!=null,"Matching local phase inputs failed to prepare contact-only PLIC");
-				var local=prepared.rebuild(edit);boolean alive=false;
+				var prepared=GasRuntimeGeometry.preparePhaseSource(domain,edit.cell());
+				check(prepared!=null,"Matching local phase inputs failed to prepare shared PLIC");
+				var local=prepared.phase(edit);boolean alive=false;
 				for(int piece:group.getValue()) {
 					int cell=piece/8;var before=source.geometry().piece(piece);var after=future.geometry().piece(piece);
 					if(after!=null && (before.dryPlane()==null || after.dryPlane()==null || before.dryPlane().equals(after.dryPlane())
@@ -427,25 +428,15 @@ public final class AirCavityScannerValidation {
 					}
 				}
 				var resolver=new GasPhaseInterfaceResolver(support);
-				boolean witness=group.getValue().stream().anyMatch(piece->{
-					int cell=piece/8,sx=source.geometry().sizeX(),sy=source.geometry().sizeY();
-					int x=cell%sx,y=cell/sx%sy,z=cell/(sx*sy),ex=edit.cell()%sx,ey=edit.cell()/sx%sy,ez=edit.cell()/(sx*sy);
-					boolean adjacent=x==ex&&y==ey&&Math.abs(z-ez)==1 || x==ex&&z==ez&&Math.abs(y-ey)==1 || y==ey&&z==ez&&Math.abs(x-ex)==1;
-					return cell!=edit.cell()&&(!adjacent||!source.cellDependsOnNeighborFractions(cell));
-				});
-				check(prepared.unchangedContact==witness,"A gradient-dependent or edited contact acquired an unchanged-piece witness");
-				var bracket=local.offsetBracket(group.getValue().getFirst()/8,group.getValue().getFirst()&7);
 				check(resolver.mayKeepBoilContact(prepared,edit,contact)==alive,"Local contact survival differs from full same-micro intersections");
-				if(witness)check(bracket==local.offsetBracket(group.getValue().getFirst()/8,group.getValue().getFirst()&7),
-						"An unchanged positive contact unnecessarily rebuilt the local PLIC scratch");
 				domain.gasState.frame=null;
 				check(resolver.mayKeepBoilContact(prepared,edit,contact),"A changed preparing frame acquired a zero-contact rejection");
 				domain.gasState.frame=source;
 				float x=domain.particles.positionX(0);domain.particles.setPositionX(0,Math.nextUp(x));
-				check(GasRuntimeGeometry.prepareBoilContactPlanes(support,edit.cell(),contact)==null,"Changed local moments retained a contact PLIC source");
+				check(GasRuntimeGeometry.preparePhaseSource(domain,edit.cell())==null,"Changed local moments retained a contact PLIC source");
 				domain.particles.setPositionX(0,x);
 				int mask=domain.geometry.cutCells.mask(edit.cell());domain.geometry.cutCells.replaceMask(edit.cell(),mask^1);
-				check(GasRuntimeGeometry.prepareBoilContactPlanes(support,edit.cell(),contact)==null,"Changed local masks retained a contact PLIC source");
+				check(GasRuntimeGeometry.preparePhaseSource(domain,edit.cell())==null,"Changed local masks retained a contact PLIC source");
 				domain.geometry.cutCells.replaceMask(edit.cell(),mask);
 			}
 		} catch(ReflectiveOperationException failure) { throw new AssertionError("Local contact fixture binding failed",failure); }

@@ -19,15 +19,17 @@ final class GasPhaseGeometryEnvelope {
 	private final ExactRational sourceShare;
 	private final int maximumChildren;
 	private final boolean splitSource;
+	private final Paths paths;
 
 	private GasPhaseGeometryEnvelope(GasRuntimeGeometry source, List<Integer> variableCells, SignedDyadic fixedVolume,
 	                                 List<GasPhaseMergeBounds.Stock> possibleStocks, ExactRational sourceShare, int maximumChildren,
-	                                 boolean splitSource) {
+	                                 boolean splitSource, Paths paths) {
 		this.source = source; this.variableCells = List.copyOf(variableCells); this.fixedVolume = fixedVolume;
 		this.possibleStocks = List.copyOf(possibleStocks);
 		this.metric = SignedDyadic.of(source.geometry().cellVolumeCubicMeters());
 		this.sourceShare = sourceShare; this.maximumChildren = maximumChildren;
 		this.splitSource = splitSource;
+		this.paths = paths;
 	}
 
 	static GasPhaseGeometryEnvelope forBoiling(PhaseChangeStageSupport support, int editedCell, int sourceNode) {
@@ -36,19 +38,14 @@ final class GasPhaseGeometryEnvelope {
 
 	static GasPhaseGeometryEnvelope forBoiling(PhaseChangeStageSupport support, int editedCell, int sourceNode,
 	                                          List<Integer> contactPieces) {
-		GasRuntimeGeometry source = support.gasState().frame;
-		var state = support.state();
-		if (source == null || !source.sealedExterior()
-				|| Float.floatToRawIntBits(source.cellSize()) != Float.floatToRawIntBits(state.cellSize())
-				|| source.geometry().sizeX() != state.sizeX() || source.geometry().sizeY() != state.sizeY()
-				|| source.geometry().sizeZ() != state.sizeZ()) return null;
-		long[] occupied = source.occupiedSvq();
-		for (int cell = 0; cell < state.cellCount(); cell++)
-			if (source.geometry().collisionMask(cell) != state.geometry().cutCells.mask(cell)
-					|| occupied[cell] != Math.addExact(support.granularSvq(cell), support.thermal().coherentPhases().cellOccupiedSvq(cell))
-					|| !source.liquidStock().get(cell).equals(PhaseLiquidGeometryEdit.current(state, cell))) return null;
-		try { return capture(source, support.gasState().network, support.thermal(), editedCell, sourceNode, contactPieces); }
-		catch (IllegalArgumentException | ArithmeticException | GasTopologyBlockedException unresolved) { return null; }
+		return forBoiling(support, editedCell, sourceNode, contactPieces, support.prepareGasGeometrySource(editedCell));
+	}
+
+	static GasPhaseGeometryEnvelope forBoiling(PhaseChangeStageSupport support, int editedCell, int sourceNode,
+	                                          List<Integer> contactPieces, GasRuntimeGeometry.PhaseSource prepared) {
+		if (prepared == null || !prepared.frame().sealedExterior()) return null;
+		return new Paths(prepared.frame(), support.gasState().network, support.thermal(), editedCell, sourceNode,
+				contactPieces, prepared.region(), prepared.topology(), prepared.capacity()).capture(null);
 	}
 
 	static GasPhaseGeometryEnvelope capture(GasRuntimeGeometry source, AirNetwork network, ThermalDomainState thermal,
@@ -57,72 +54,18 @@ final class GasPhaseGeometryEnvelope {
 	}
 
 	static GasPhaseGeometryEnvelope capture(GasRuntimeGeometry source, AirNetwork network, ThermalDomainState thermal,
-	                                                int editedCell, int sourceNode, List<Integer> contactPieces) {
+	                                        int editedCell, int sourceNode, List<Integer> contactPieces) {
 		if (source == null || !source.sealedExterior()) return null;
-		boolean[] variable = source.phaseEditCells(editedCell);
-		int[] sizes = {source.geometry().sizeX(), source.geometry().sizeY(), source.geometry().sizeZ()}, strides = {1, sizes[0], sizes[0] * sizes[1]};
-		int first = source.minimumPiece(sourceNode);
-		// A single microbox, or one convex component's dry half-space, has one
-		// positive successor. Missing old/new overlap leaves the phase candidate unavailable.
-		boolean wholeSource = uniqueSuccessor(source, sourceNode, variable);
-		ExactRational share = wholeSource ? ExactRational.ONE : fixedContactShare(source, sourceNode, variable, contactPieces);
-		if (share == null) return null;
-		int[] parent = new int[Math.multiplyExact(8, variable.length)]; Arrays.fill(parent, -1);
-		for (var piece : source.geometry().pieces()) parent[piece.id()] = piece.id();
-		for (int cell = 0; cell < variable.length; cell++) if (variable[cell]) {
-			int mask = source.geometry().collisionMask(cell);
-			int[] supports = CellRemapMicroTopology.components(mask);
-			var capacities = CellRemapMicroTopology.capacities(mask, source.geometry().poreVolume(cell));
-			for (int component = 0; component < supports.length; component++) if (capacities[component].signum() > 0)
-				for (int micro = 0; micro < 8; micro++) if ((supports[component] & 1 << micro) != 0)
-					parent[8 * cell + micro] = 8 * cell + micro;
-		}
-		for (var port : source.geometry().ports()) if (port.fullCutConnection()) join(parent, port.first(), port.second());
-		// Filling every potentially changing open microbox with gas encloses every future positive path.
-		for (int cell = 0; cell < variable.length; cell++) if (variable[cell]) {
-			int[] coordinate = {cell % sizes[0], cell / sizes[0] % sizes[1], cell / strides[2]};
-			for (int micro = 0; micro < 8; micro++) if (parent[8 * cell + micro] >= 0)
-				for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
-					boolean crossing = (micro >>> axis & 1) == (sign > 0 ? 1 : 0);
-					if (crossing && (coordinate[axis] + sign < 0 || coordinate[axis] + sign >= sizes[axis])) continue;
-					int peer = crossing ? cell + sign * strides[axis] : cell, peerPiece = 8 * peer + (micro ^ 1 << axis);
-					// A fixed partial dry face remains a finite-rate port for every candidate.
-					if (parent[peerPiece] >= 0 && (!crossing || fullCutFace(source.geometry(), sign > 0 ? cell : peer, sign > 0 ? peer : cell, axis))
-							&& (!crossing || variable[peer] || source.fullDryFace(peer, axis, sign > 0 ? 0 : 1)))
-						join(parent, 8 * cell + micro, peerPiece);
-				}
-		}
-		int selected = root(parent, first);
-		var fixedByNode = new java.util.TreeMap<Integer, SignedDyadic>();
-		for (var piece : source.capacity().pieces()) if (!variable[piece.id() / 8] && root(parent, piece.id()) == selected)
-			fixedByNode.merge(source.nodeOfPiece(piece.id()), SignedDyadic.of(piece.cubicMeters()), SignedDyadic::add);
-		var possibleStocks = new ArrayList<GasPhaseMergeBounds.Stock>();
-		var checkedNodes = new java.util.HashSet<Integer>();
-		for (var piece : source.geometry().pieces()) if (root(parent, piece.id()) == selected) {
-			int node = source.nodeOfPiece(piece.id());
-			if (node != sourceNode && checkedNodes.add(node)) {
-				GasInventory stock = network.inventory(node);
-				double energy = thermal == null ? 0 : thermal.gasNodeEnergy(node, network);
-				if (stock.isEmpty() && energy == 0) continue;
-				// Split-source temperature certification currently requires every other possible contributor to be vacuum.
-				if (!wholeSource) return null;
-				if (thermal == null || !uniqueSuccessor(source, node, variable)) return null;
-				possibleStocks.add(new GasPhaseMergeBounds.Stock(stock, energy, fixedByNode.getOrDefault(node, SignedDyadic.ZERO)));
-			}
-		}
-		SignedDyadic fixed = SignedDyadic.ZERO;
-		for (var volume : fixedByNode.values()) fixed = fixed.add(volume);
-		var variableCells = new ArrayList<Integer>();
-		for (int cell = 0; cell < variable.length; cell++) if (variable[cell])
-			for (int micro = 0; micro < 8; micro++) if (parent[8 * cell + micro] >= 0 && root(parent, 8 * cell + micro) == selected) {
-				variableCells.add(cell); break;
-			}
-		int children = 1;
-		if (!wholeSource) {
-			children = 0;
-			for (var piece : source.geometry().pieces()) if (source.nodeOfPiece(piece.id()) == sourceNode) children++;
-		}
-		return new GasPhaseGeometryEnvelope(source, variableCells, fixed, possibleStocks, share, children, !wholeSource);
+		var geometry = source.geometry();
+		var region = new GasComplementGeometry.Region(geometry.sizeX(), geometry.sizeY(), geometry.sizeZ(), source.phaseEditCells(editedCell));
+		var topology = GasChamberTopology.prepare(geometry, true, region);
+		return new Paths(source, network, thermal, editedCell, sourceNode, contactPieces, region,
+				topology, GasChamberCapacity.prepare(source, topology)).capture(null);
+	}
+
+	/** Same full-stock successor, with cross-cell paths restricted by this candidate's actual PLIC. */
+	GasPhaseGeometryEnvelope forCandidate(FlipPressurePhaseGeometry phase) {
+		return splitSource ? this : paths.capture(phase);
 	}
 
 	List<GasPhaseMergeBounds.Stock> possibleStocks() { return possibleStocks; }
@@ -130,26 +73,151 @@ final class GasPhaseGeometryEnvelope {
 	ExactRational sourceShare() { return sourceShare; }
 	int maximumChildren() { return maximumChildren; }
 
-	private static ExactRational fixedContactShare(GasRuntimeGeometry source, int node, boolean[] variable, List<Integer> contacts) {
-		int[] parent = new int[Math.multiplyExact(8, variable.length)]; Arrays.fill(parent, -1);
-		for (var piece : source.geometry().pieces()) if (!variable[piece.cell()]) parent[piece.id()] = piece.id();
-		for (var port : source.geometry().ports()) if (port.fullCutConnection()
-				&& parent[port.first()] >= 0 && parent[port.second()] >= 0) join(parent, port.first(), port.second());
-		var contactRoots = new java.util.HashSet<Integer>();
-		for (int piece : contacts) if (piece >= 0 && piece < parent.length && parent[piece] >= 0
-				&& source.nodeOfPiece(piece) == node) contactRoots.add(root(parent, piece));
-		var fixed = new java.util.TreeMap<Integer, SignedDyadic>();
-		SignedDyadic total = SignedDyadic.ZERO;
-		for (var piece : source.capacity().pieces()) if (source.nodeOfPiece(piece.id()) == node) {
-			SignedDyadic volume = SignedDyadic.of(piece.cubicMeters()); total = total.add(volume);
-			if (parent[piece.id()] >= 0 && contactRoots.contains(root(parent, piece.id())))
-				fixed.merge(root(parent, piece.id()), volume, SignedDyadic::add);
+	/** Fixed roots and open collision components enclose all future dry paths without microface integration. */
+	private static final class Paths {
+		private record Vertex(int cell, SignedDyadic fixedVolume, int[] oldNodes) { }
+		private record Face(int first, int second, int minus, int plus, int axis) { }
+		private final GasRuntimeGeometry source;
+		private final AirNetwork network;
+		private final ThermalDomainState thermal;
+		private final int sourceNode, anchor, variableCount, children;
+		private final ExactRational share;
+		private final boolean wholeSource;
+		private final boolean[] variable;
+		private final byte[] uniqueSuccessors;
+		private final int[] variableOrdinals;
+		private final List<Vertex> vertices;
+		private final List<Face> faces;
+		private final int[][] incident;
+
+		Paths(GasRuntimeGeometry source, AirNetwork network, ThermalDomainState thermal, int editedCell, int sourceNode,
+		      List<Integer> contacts, GasComplementGeometry.Region region, GasChamberTopology.Prepared topology,
+		      GasChamberCapacity.Prepared capacity) {
+			this.source = source; this.network = network; this.thermal = thermal; this.sourceNode = sourceNode;
+			variable = source.phaseEditCells(editedCell);
+			uniqueSuccessors = new byte[source.nodeCount() + 1];
+			wholeSource = GasPhaseGeometryEnvelope.uniqueSuccessor(source, sourceNode, variable);
+			share = wholeSource ? ExactRational.ONE : fixedContactShare(source, sourceNode, contacts, topology, capacity);
+			int count = variable.length;
+			variableOrdinals = new int[count]; Arrays.fill(variableOrdinals, -1);
+			int ordinal = 0;
+			for (int cell : region.cells()) variableOrdinals[cell] = ordinal++;
+			variableCount = ordinal;
+			int[] byPiece = new int[8 * count], byRoot = new int[8 * count];
+			Arrays.fill(byPiece, -1); Arrays.fill(byRoot, -1);
+			var points = new ArrayList<Vertex>();
+			for (var part : capacity.fixedCapacities()) {
+				byRoot[part.root()] = points.size();
+				points.add(new Vertex(-1, part.volume(), new int[]{source.nodeOfPiece(part.root())}));
+			}
+			for (var piece : source.geometry().pieces()) if (!variable[piece.cell()])
+				byPiece[piece.id()] = byRoot[topology.fixedRoot(piece.id())];
+			for (int cell : region.cells()) {
+				int mask = source.geometry().collisionMask(cell);
+				int[] supports = CellRemapMicroTopology.components(mask);
+				var volumes = CellRemapMicroTopology.capacities(mask, source.geometry().poreVolume(cell));
+				for (int component = 0; component < supports.length; component++) if (volumes[component].signum() > 0) {
+					var nodes = new java.util.TreeSet<Integer>();
+					for (int micro = 0; micro < 8; micro++) if ((supports[component] & 1 << micro) != 0) {
+						int piece = 8 * cell + micro;
+						byPiece[piece] = points.size();
+						if (source.geometry().piece(piece) != null) nodes.add(source.nodeOfPiece(piece));
+					}
+					points.add(new Vertex(cell, SignedDyadic.ZERO, nodes.stream().mapToInt(Integer::intValue).toArray()));
+				}
+			}
+			vertices = List.copyOf(points); anchor = byPiece[source.minimumPiece(sourceNode)];
+			int[] sizes = {source.geometry().sizeX(), source.geometry().sizeY(), source.geometry().sizeZ()};
+			int[] strides = {1, sizes[0], sizes[0] * sizes[1]};
+			var edges = new ArrayList<Face>();
+			for (int cell : region.cells()) {
+				int[] coordinate = {cell % sizes[0], cell / sizes[0] % sizes[1], cell / strides[2]};
+				for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
+					if (coordinate[axis] + sign < 0 || coordinate[axis] + sign >= sizes[axis]) continue;
+					int peer = cell + sign * strides[axis];
+					if (variable[peer] && peer < cell) continue;
+					int minus = sign > 0 ? cell : peer, plus = sign > 0 ? peer : cell;
+					if (!fullCutFace(source.geometry(), minus, plus, axis)
+							|| !variable[minus] && !source.fullDryFace(minus, axis, 1)
+							|| !variable[plus] && !source.fullDryFace(plus, axis, 0)) continue;
+					int first = byPiece[8 * minus + (1 << axis)], second = byPiece[8 * plus];
+					if (first >= 0 && second >= 0) edges.add(new Face(first, second, minus, plus, axis));
+				}
+			}
+			faces = List.copyOf(edges);
+			int[] degrees = new int[vertices.size()];
+			for (var face : faces) { degrees[face.first()]++; degrees[face.second()]++; }
+			incident = new int[degrees.length][];
+			for (int vertex = 0; vertex < degrees.length; vertex++) incident[vertex] = new int[degrees[vertex]];
+			Arrays.fill(degrees, 0);
+			for (int edge = 0; edge < faces.size(); edge++) {
+				var face = faces.get(edge);
+				incident[face.first()][degrees[face.first()]++] = edge;
+				incident[face.second()][degrees[face.second()]++] = edge;
+			}
+			int pieces = 0;
+			if (!wholeSource) for (var piece : source.geometry().pieces()) if (source.nodeOfPiece(piece.id()) == sourceNode) pieces++;
+			children = wholeSource ? 1 : pieces;
 		}
-		SignedDyadic greatest = fixed.values().stream().max(SignedDyadic::compareTo).orElse(SignedDyadic.ZERO);
+
+		GasPhaseGeometryEnvelope capture(FlipPressurePhaseGeometry phase) {
+			if (share == null || anchor < 0) return null;
+			boolean[] visited = new boolean[vertices.size()];
+			int[] pending = new int[vertices.size()]; int head = 0, tail = 0;
+			visited[anchor] = true; pending[tail++] = anchor;
+			byte[] fullFaces = new byte[6 * variableCount];
+			var variableCells = new java.util.TreeSet<Integer>();
+			var nodes = new java.util.TreeSet<Integer>();
+			var fixedByNode = new java.util.TreeMap<Integer, SignedDyadic>();
+			while (head < tail) {
+				int vertex = pending[head++]; var point = vertices.get(vertex);
+				for (int node : point.oldNodes()) nodes.add(node);
+				if (point.cell() >= 0) variableCells.add(point.cell());
+				else fixedByNode.merge(point.oldNodes()[0], point.fixedVolume(), SignedDyadic::add);
+				for (int edge : incident[vertex]) {
+					var face = faces.get(edge); int peer = face.first() == vertex ? face.second() : face.first();
+					if (visited[peer] || phase != null && (!fullFace(phase, face.minus(), face.axis(), 1, fullFaces)
+							|| !fullFace(phase, face.plus(), face.axis(), 0, fullFaces))) continue;
+					visited[peer] = true; pending[tail++] = peer;
+				}
+			}
+			var possible = new ArrayList<GasPhaseMergeBounds.Stock>();
+			for (int node : nodes) if (node != sourceNode) {
+				GasInventory stock = network.inventory(node);
+				double energy = thermal == null ? 0 : thermal.gasNodeEnergy(node, network);
+				if (stock.isEmpty() && energy == 0) continue;
+				if (!wholeSource || thermal == null || !uniqueSuccessor(node)) return null;
+				possible.add(new GasPhaseMergeBounds.Stock(stock, energy, fixedByNode.getOrDefault(node, SignedDyadic.ZERO)));
+			}
+			SignedDyadic fixed = SignedDyadic.ZERO;
+			for (var volume : fixedByNode.values()) fixed = fixed.add(volume);
+			return new GasPhaseGeometryEnvelope(source, List.copyOf(variableCells), fixed, possible, share, children, !wholeSource, this);
+		}
+
+		private boolean uniqueSuccessor(int node) {
+			if (uniqueSuccessors[node] == 0)
+				uniqueSuccessors[node] = (byte) (GasPhaseGeometryEnvelope.uniqueSuccessor(source, node, variable) ? 2 : 1);
+			return uniqueSuccessors[node] == 2;
+		}
+
+		private boolean fullFace(FlipPressurePhaseGeometry phase, int cell, int axis, int coordinate, byte[] cache) {
+			int ordinal = variableOrdinals[cell]; if (ordinal < 0) return true;
+			int key = 6 * ordinal + 2 * axis + coordinate;
+			if (cache[key] == 0) cache[key] = (byte) (GasFaceIntersection.fullDryFace(phase, cell, axis, coordinate) ? 2 : 1);
+			return cache[key] == 2;
+		}
+	}
+
+	private static ExactRational fixedContactShare(GasRuntimeGeometry source, int node, List<Integer> contacts,
+	                                              GasChamberTopology.Prepared topology, GasChamberCapacity.Prepared capacity) {
+		var roots = new java.util.HashSet<Integer>();
+		for (int piece : contacts) if (source.nodeOfPiece(piece) == node && topology.fixedRoot(piece) >= 0)
+			roots.add(topology.fixedRoot(piece));
+		SignedDyadic greatest = SignedDyadic.ZERO, total = SignedDyadic.ZERO;
+		for (var part : capacity.fixedCapacities()) if (roots.contains(part.root()) && part.volume().compareTo(greatest) > 0) greatest = part.volume();
+		for (var piece : source.capacity().pieces()) if (source.nodeOfPiece(piece.id()) == node) total = total.add(SignedDyadic.of(piece.cubicMeters()));
 		if (greatest.signum() == 0 || total.signum() <= 0) return null;
 		int exponent = Math.min(greatest.exponent(), total.exponent());
-		// Every fixed piece has unchanged positive overlap into its persistent contact backbone.
-		// All overlap leaves together are bounded above by the original raw leaf capacities.
 		return new ExactRational(greatest.significand().shiftLeft(greatest.exponent() - exponent),
 				total.significand().shiftLeft(total.exponent() - exponent));
 	}
@@ -232,12 +300,4 @@ final class GasPhaseGeometryEnvelope {
 		return true;
 	}
 
-	private static int root(int[] parent, int piece) {
-		int result = piece; while (parent[result] != result) result = parent[result];
-		while (parent[piece] != piece) { int next = parent[piece]; parent[piece] = result; piece = next; }
-		return result;
-	}
-	private static void join(int[] parent, int first, int second) {
-		int a = root(parent, first), b = root(parent, second); if (a != b) parent[Math.max(a, b)] = Math.min(a, b);
-	}
 }

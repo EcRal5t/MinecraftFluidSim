@@ -55,7 +55,7 @@ final class GasChamberCapacity {
 	static Prepared prepare(GasRuntimeGeometry source, GasChamberTopology.Prepared topologySource) {
 		return new Prepared(source, topologySource);
 	}
-	private record FixedCapacity(int root, SignedDyadic volume, SignedDyadic error) { }
+	record FixedCapacity(int root, SignedDyadic volume, SignedDyadic error) { }
 	static final class Prepared {
 		private final GasRuntimeGeometry source;
 		private final GasComplementGeometry sourceGeometry;
@@ -65,6 +65,8 @@ final class GasChamberCapacity {
 		private final int[] cells, componentStarts, pieceStarts;
 		private final List<FixedCapacity> fixed;
 		private final int variablePieceCount;
+
+		List<FixedCapacity> fixedCapacities() { return fixed; }
 
 		private Prepared(GasRuntimeGeometry source, GasChamberTopology.Prepared topologySource) {
 			if (source == null || topologySource == null || source.capacity().geometry != source.geometry())

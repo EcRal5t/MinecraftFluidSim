@@ -81,13 +81,13 @@ final class GasPhaseInterfaceResolver {
 		}
 	}
 
-	boolean mayKeepBoilContact(GasRuntimeGeometry.BoilContactPlanes prepared, PhaseLiquidGeometryEdit edit,
+	boolean mayKeepBoilContact(GasRuntimeGeometry.PhaseSource prepared, PhaseLiquidGeometryEdit edit,
 	                          Candidate source) {
-		if (prepared == null || !prepared.matchesContact(source) || prepared.unchangedContact) return true;
+		if (prepared == null) return true;
 		try {
-			var phase = prepared.rebuild(edit);
+			var phase = prepared.phase(edit);
 			for (int piece : source.contactPieces()) {
-				var before = prepared.source.geometry().piece(piece);
+				var before = prepared.frame().geometry().piece(piece);
 				if (before == null) continue;
 				int cell = piece / 8, micro = piece & 7;
 				if (before.shaped() || phase.liquidShape(cell) != null) {
@@ -102,7 +102,7 @@ final class GasPhaseInterfaceResolver {
 				if (positiveOverlap(before, plane, false)) return true;
 			}
 			return false;
-		} catch (IllegalArgumentException | ArithmeticException | GasTopologyBlockedException | MechanicalTimeRefinement unresolved) {
+		} catch (ArithmeticException | GasTopologyBlockedException | MechanicalTimeRefinement unresolved) {
 			return true;
 		}
 	}

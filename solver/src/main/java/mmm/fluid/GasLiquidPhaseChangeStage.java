@@ -130,12 +130,11 @@ final class GasLiquidPhaseChangeStage {
 				/ phase.gasBatch(transition, 1L).standardVolumeNanos();
 		long high = Math.min(maximumBatches, Math.min(byGas, Math.min(byVolume, byMass)));
 		if (high <= 0L) return null;
-		var contactPlanes = GasRuntimeGeometry.prepareBoilContactPlanes(support, cell, contact);
-		var geometrySource = new BoilGeometrySource(cell);
-		var envelope = GasPhaseGeometryEnvelope.forBoiling(support, cell, node, contact.contactPieces());
+		var geometrySource = support.prepareGasGeometrySource(cell);
+		var envelope = GasPhaseGeometryEnvelope.forBoiling(support, cell, node, contact.contactPieces(), geometrySource);
 		if (envelope == null) return GasPhaseBatchSearch.maximum(high, batches -> completeBoil(cell, node, transition, phase,
-				contact, contactPlanes, geometrySource, prepareBoilInventory(cell, node, liquidHandle, transition, phase, thermalCell,
-						volatileSpecies, liquidTemperature, batches, contact)), (low, upper) -> false);
+				contact, geometrySource, prepareBoilInventory(cell, node, liquidHandle, transition, phase, thermalCell,
+						volatileSpecies, liquidTemperature, batches, contact), null), (low, upper) -> false);
 		GasBoilInventoryPlan[] prepared = new GasBoilInventoryPlan[Math.toIntExact(high) + 1];
 		boolean[] evaluated = new boolean[prepared.length];
 		LongFunction<GasBoilInventoryPlan> caloric = batches -> {
@@ -164,7 +163,7 @@ final class GasLiquidPhaseChangeStage {
 			GasBoilInventoryPlan inventoryPlan = caloric.apply(batches);
 			GasBoilPlan candidate = bounds != null && inventoryPlan != null
 					&& boilingSaturationExcluded(inventoryPlan, envelope, transition, phase, gasThermal) ? null
-					: completeBoil(cell, node, transition, phase, contact, contactPlanes, geometrySource, inventoryPlan);
+					: completeBoil(cell, node, transition, phase, contact, geometrySource, inventoryPlan, envelope);
 			prepared[Math.toIntExact(batches)] = null;
 			return candidate;
 		}, exclusion);
@@ -250,26 +249,19 @@ final class GasLiquidPhaseChangeStage {
 		} catch (IllegalArgumentException | ArithmeticException unresolved) { return false; }
 	}
 
-	private final class BoilGeometrySource {
-		private final int editedCell;
-		BoilGeometrySource(int editedCell) { this.editedCell = editedCell; }
-		private boolean prepared;
-		private GasRuntimeGeometry.PhaseSource source;
-		GasRuntimeGeometry.PhaseSource get() {
-			if (!prepared) { source = support.prepareGasGeometrySource(editedCell); prepared = true; }
-			return source;
-		}
-	}
-
 	private GasBoilPlan completeBoil(int cell, int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
-	                                GasPhaseInterfaceResolver.Candidate contact, GasRuntimeGeometry.BoilContactPlanes contactPlanes,
-	                                BoilGeometrySource source,
-	                                GasBoilInventoryPlan candidate) {
+	                                GasPhaseInterfaceResolver.Candidate contact, GasRuntimeGeometry.PhaseSource source,
+	                                GasBoilInventoryPlan candidate, GasPhaseGeometryEnvelope envelope) {
 		if (candidate == null) return null;
-		if (!interfaces.mayKeepBoilContact(contactPlanes, candidate.liquidGeometry(), contact)) return null;
+		if (!interfaces.mayKeepBoilContact(source, candidate.liquidGeometry(), contact)) return null;
 		try {
+			if (envelope != null && !envelope.splitSource()) {
+				var actualPaths = envelope.forCandidate(source.phase(candidate.liquidGeometry()));
+				if (actualPaths != null && boilingSaturationExcluded(candidate, actualPaths, transition, phase,
+						new GasThermalModel(support.thermal().registry(), support.gasState().network.registry()))) return null;
+			}
 			var topology = support.planGasGeometry(candidate.liquidGeometry(), node, candidate.gasPlan(),
-					candidate.candidateGasEnergy(), candidate.thermalPlan(), source.get());
+					candidate.candidateGasEnergy(), candidate.thermalPlan(), source);
 			if (!interfaces.allowsAfter(cell, contact, transition, phase, candidate.thermalPlan().temperatureK(),
 					topology, GasLiquidPhaseModel.Direction.BOIL, false)) return null;
 			return new GasBoilPlan(candidate.batches(), candidate.removedSvq(), candidate.removal(), candidate.gasPlan(),

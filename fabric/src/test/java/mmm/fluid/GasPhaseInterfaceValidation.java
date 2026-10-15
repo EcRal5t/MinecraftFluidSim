@@ -176,8 +176,7 @@ public final class GasPhaseInterfaceValidation {
 				var prepare=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("prepareBoilInventory")).findFirst().orElseThrow();prepare.setAccessible(true);
 				var geometryGetter=prepare.getReturnType().getDeclaredMethod("liquidGeometry");geometryGetter.setAccessible(true);
 				var complete=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("completeBoil")).findFirst().orElseThrow();complete.setAccessible(true);
-				var constructor=complete.getParameterTypes()[6].getDeclaredConstructor(GasLiquidPhaseChangeStage.class,int.class);constructor.setAccessible(true);
-				var source=constructor.newInstance(stage,0);var planes=GasRuntimeGeometry.prepareBoilContactPlanes(support,0,contact);
+				var source=GasRuntimeGeometry.preparePhaseSource(domain,0);
 				Object[] candidates=new Object[9];int largest=0;
 				for(int batch=1;batch<=8;batch++) {
 					var inventory=prepare.invoke(stage,0,node,0,transition,phase,thermalCell,new boolean[0],300.0,(long)batch,contact);
@@ -189,7 +188,13 @@ public final class GasPhaseInterfaceValidation {
 						check(upper>=released && upper<=Math.nextUp(Math.nextUp(Math.nextUp(released))),
 								"Fixed partial neighbor capacity entered the edited chamber's volume upper bound");
 					}
-					candidates[batch]=complete.invoke(stage,0,node,transition,phase,contact,planes,source,inventory);
+					if(inventory!=null) {
+						var edit=(PhaseLiquidGeometryEdit)geometryGetter.invoke(inventory);
+						checkCandidateEnvelope(domain,node,contact,source,envelope,edit);
+					}
+					candidates[batch]=complete.invoke(stage,0,node,transition,phase,contact,source,inventory,envelope);
+					var fullCandidate=complete.invoke(stage,0,node,transition,phase,contact,source,inventory,null);
+					check((candidates[batch]!=null)==(fullCandidate!=null),"Candidate gas paths changed the complete physical batch: source="+sourceCase+" batch="+batch);
 					if(candidates[batch]!=null)largest=batch;
 				}
 				check(largest==(completeDepletion?8:existingVapor?0:1),"Finite-air comparison lost its partial/complete physical candidate: source="+sourceCase+" largest="+largest);
@@ -224,6 +229,35 @@ public final class GasPhaseInterfaceValidation {
 				}
 			}
 		} catch(ReflectiveOperationException failure) { throw new AssertionError("Finite-air production-candidate comparison failed",failure); }
+	}
+
+
+	private static void checkCandidateEnvelope(FluidDomain domain,int sourceNode,GasPhaseInterfaceResolver.Candidate contact,
+	                                          GasRuntimeGeometry.PhaseSource prepared,GasPhaseGeometryEnvelope envelope,
+	                                          PhaseLiquidGeometryEdit edit) {
+		var candidate=envelope.forCandidate(prepared.phase(edit));
+		if(candidate==null)return;
+		var before=prepared.frame();
+		var full=GasRuntimeGeometry.capture(domain,edit,before.occupiedSvq(),before.sealedExterior());
+		var successors=new java.util.TreeSet<Integer>();
+		for(int id:contact.contactPieces()) {
+			var old=before.geometry().piece(id);var next=full.geometry().piece(id);
+			if(old!=null && next!=null && GasGeometryOverlap.unionOverlapVolume(id&7,old.drySupports(),next.drySupports()).signum()>0)
+				successors.add(full.nodeOfPiece(id));
+		}
+		double upper=candidate.volumeUpper(edit);
+		check(Double.isFinite(upper) && upper<=envelope.volumeUpper(edit),"Candidate gas paths enlarged their complete envelope");
+		for(var chamber:full.capacity().chambers())if(successors.contains(chamber.node()))
+			check(chamber.cubicMeters()<=upper,"Candidate gas volume bound omitted an actual contact successor");
+		check(envelope.possibleStocks().containsAll(candidate.possibleStocks()),"Candidate gas paths introduced a foreign optional stock");
+		for(var old:before.geometry().pieces()) {
+			var next=full.geometry().piece(old.id());int oldNode=before.nodeOfPiece(old.id());
+			if(oldNode==sourceNode || next==null || !successors.contains(full.nodeOfPiece(old.id()))
+					|| GasGeometryOverlap.unionOverlapVolume(old.micro(),old.drySupports(),next.drySupports()).signum()==0)continue;
+			var stock=domain.gasState.network.inventory(oldNode);
+			if(!stock.isEmpty())check(candidate.possibleStocks().stream().anyMatch(optional->optional.inventory().equals(stock)),
+					"Candidate gas paths omitted a contributing old chamber stock");
+		}
 	}
 
 	private static FluidDomain domain(int mask, boolean peerOpen, float[] markers) {
