@@ -8,6 +8,14 @@ public final class M9ThermalValidation {
 	private M9ThermalValidation() { }
 
 	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("--gas-topology")) {
+			ThermalGasValidationScenarios.persistenceBarrierSynchronizesGasTopology();
+			ThermalGasValidationScenarios.gasRuntimeTransfersEnergyAndWork();
+			ThermalGasValidationScenarios.operatorVentClearsGasAndEnergyTogether();
+			ThermalGasValidationScenarios.sealedInterfaceBoilingCommitsJointInventory();
+			System.out.println("M9 gas topology and thermal handoff validation passed");
+			return;
+		}
 		if (args.length == 1 && args[0].equals("--phase-volume")) {
 			ThermalPhaseValidationScenarios.phaseVolumeWorkWaitsForMechanicalProjection();
 			ThermalPhaseValidationScenarios.operatorEmptyClearsAuditedCondensedCarriers();

@@ -130,27 +130,37 @@ final class GasComplementGeometry {
 		var exterior = new ArrayList<ExteriorPort>();
 		byte[] fullFaces = new byte[Math.multiplyExact(6, count)];
 		int[] sizes = {sizeX, sizeY, sizeZ}, strides = {1, sizeX, sizeX * sizeY};
+		int portCursor = 0, exteriorCursor = 0;
 		for (Piece piece : pieces) {
 			int cell = piece.cell(), slot = piece.micro();
 			int[] coordinate = {cell % sizeX, cell / sizeX % sizeY, cell / (sizeX * sizeY)};
 			for (int axis = 0; axis < 3; axis++) {
+				// Both old lists and this traversal use piece-id then axis order. Advance even
+				// when geometry changed or a neighbor vanished, so absent ports stay absent.
+				long key = 3L * piece.id() + axis;
+				if (captured != null) {
+					while (portCursor < captured.ports.size()
+							&& 3L * captured.ports.get(portCursor).first() + captured.ports.get(portCursor).axis() < key) portCursor++;
+					while (exteriorCursor < captured.exteriorPorts.size()
+							&& 3L * captured.exteriorPorts.get(exteriorCursor).piece() + captured.exteriorPorts.get(exteriorCursor).axis() < key) exteriorCursor++;
+				}
 				int bit = slot >>> axis & 1;
 				double tangent = .5 * (slot >>> ((axis + 1) % 3) & 1);
 				double other = .5 * (slot >>> ((axis + 2) % 3) & 1);
 				if (bit == 0) {
 					Piece neighbor = byId[8 * cell + (slot | 1 << axis)];
-					if (neighbor != null && !reusePort(ports, captured, sameGeometry, piece, neighbor, axis)) addPort(ports, piece, neighbor, axis,
+					if (neighbor != null && !reusePort(ports, captured, sameGeometry, portCursor, piece, neighbor, axis)) addPort(ports, piece, neighbor, axis,
 							GasFaceIntersection.area(phase, cell, -1, axis, .5, 0, tangent, other, .5), h2, true);
-					if (coordinate[axis] == 0 && !reuseExterior(exterior, captured, sameGeometry, piece, axis)) addExterior(exterior, piece, axis, -1,
+					if (coordinate[axis] == 0 && !reuseExterior(exterior, captured, sameGeometry, exteriorCursor, piece, axis)) addExterior(exterior, piece, axis, -1,
 							GasFaceIntersection.area(phase, cell, -1, axis, 0, 0, tangent, other, .5), h2,
 							fullGasFace(cut, phase, cell, axis, 0, fullFaces));
 				} else if (coordinate[axis] + 1 < sizes[axis]) {
 					int peer = cell + strides[axis];
 					Piece neighbor = byId[8 * peer + (slot ^ 1 << axis)];
-					if (neighbor != null && !reusePort(ports, captured, sameGeometry, piece, neighbor, axis)) addPort(ports, piece, neighbor, axis,
+					if (neighbor != null && !reusePort(ports, captured, sameGeometry, portCursor, piece, neighbor, axis)) addPort(ports, piece, neighbor, axis,
 							GasFaceIntersection.area(phase, cell, peer, axis, 1, 0, tangent, other, .5), h2,
 							fullGasFace(cut, phase, cell, axis, 1, fullFaces) && fullGasFace(cut, phase, peer, axis, 0, fullFaces));
-				} else if (!reuseExterior(exterior, captured, sameGeometry, piece, axis)) addExterior(exterior, piece, axis, 1,
+				} else if (!reuseExterior(exterior, captured, sameGeometry, exteriorCursor, piece, axis)) addExterior(exterior, piece, axis, 1,
 							GasFaceIntersection.area(phase, cell, -1, axis, 1, 0, tangent, other, .5), h2,
 							fullGasFace(cut, phase, cell, axis, 1, fullFaces));
 			}
@@ -159,33 +169,23 @@ final class GasComplementGeometry {
 	}
 
 	private static boolean reusePort(List<Port> ports, GasComplementGeometry captured, boolean[] same,
-	                                 Piece first, Piece second, int axis) {
+	                                 int cursor, Piece first, Piece second, int axis) {
 		if (captured == null || !same[first.cell()] || !same[second.cell()]) return false;
-		int index = captured.faceIndex(first.id(), axis, false);
-		if (index >= 0) ports.add(captured.ports.get(index));
+		if (cursor < captured.ports.size()) {
+			Port old = captured.ports.get(cursor);
+			if (old.first() == first.id() && old.axis() == axis) ports.add(old);
+		}
 		return true;
 	}
 
 	private static boolean reuseExterior(List<ExteriorPort> ports, GasComplementGeometry captured, boolean[] same,
-	                                     Piece piece, int axis) {
+	                                     int cursor, Piece piece, int axis) {
 		if (captured == null || !same[piece.cell()]) return false;
-		int index = captured.faceIndex(piece.id(), axis, true);
-		if (index >= 0) ports.add(captured.exteriorPorts.get(index));
-		return true;
-	}
-
-	/** Each captured list is ordered by piece then axis; a missing key is a certified zero area. */
-	private int faceIndex(int piece, int axis, boolean exterior) {
-		long target = 3L * piece + axis;
-		int low = 0, high = (exterior ? exteriorPorts.size() : ports.size()) - 1;
-		while (low <= high) {
-			int middle = low + ((high - low) >>> 1);
-			long key = exterior ? 3L * exteriorPorts.get(middle).piece() + exteriorPorts.get(middle).axis()
-					: 3L * ports.get(middle).first() + ports.get(middle).axis();
-			if (key == target) return middle;
-			if (key < target) low = middle + 1; else high = middle - 1;
+		if (cursor < captured.exteriorPorts.size()) {
+			ExteriorPort old = captured.exteriorPorts.get(cursor);
+			if (old.piece() == piece.id() && old.axis() == axis) ports.add(old);
 		}
-		return -1;
+		return true;
 	}
 
 	private static ExactRational exact(SignedDyadic value) {

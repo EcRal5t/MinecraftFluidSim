@@ -232,6 +232,8 @@ CPU 性能问题先从 [ProductionFluidReplayValidation](../../fabric/src/test/j
 
 注液与三格 L 形的首次失败重放见 [BoundaryPourDiagnostic](../../fabric/src/test/java/mmm/fluid/BoundaryPourDiagnostic.java)。阶段标记位于 `MechanicalStepPipeline.diagnosticStage`，压力和输运视图分别在 `MarkerPressureProjection.diagnosticView` 与 `CellLiquidVolumeTransport.diagnosticView`，中间通量使用 `ConservativeLiquidFlux.diagnosticPlan`；参数及计时含义见[验证指南](validation.md#cpu)。
 
+专用形状撤除的容量、气体库存、压力功与孔口对照在 [LiquidShapeRemovalDiagnostic](../../fabric/src/test/java/mmm/fluid/LiquidShapeRemovalDiagnostic.java)。重复气腔刷新从 `GasTopologyCoordinator.refresh` 定位，同次沸腾固定输入看 `GasRuntimeGeometry.PhaseSource`，按序复用端口看 `GasComplementGeometry.capture`。
+
 独立数值计算的范围批次与异常等待位于 [CpuWorkBatch](../../model/src/main/java/mmm/compute/CpuWorkBatch.java)。库存几何与速度重建看 [ParticleToGridStage](../../solver/src/main/java/mmm/fluid/ParticleToGridStage.java)，三轴 P2G 看 [MarkerGridBuilder](../../solver/src/main/java/mmm/fluid/MarkerGridBuilder.java)，单元分组与接收格归并看 [CellCarrierRemapPlan](../../solver/src/main/java/mmm/fluid/CellCarrierRemapPlan.java)，热接触区间看 [ThermalTransport](../../model/src/main/java/mmm/thermal/ThermalTransport.java) 和 [ThermalCarrierContacts](../../model/src/main/java/mmm/thermal/ThermalCarrierContacts.java)。
 
 化学状态交接的捕获、规范排序和恢复复用位于 [FlipChemicalParticleState](../../model/src/main/java/mmm/fluid/FlipChemicalParticleState.java)、[FluidDomainCollisionState](../../solver/src/main/java/mmm/fluid/FluidDomainCollisionState.java)；精确质量复用位于 [ChemicalMixtureRecord](../../model/src/main/java/mmm/chemistry/ChemicalMixtureRecord.java)。热参考能重复计算从 [ThermalStateFunction](../../model/src/main/java/mmm/thermal/ThermalStateFunction.java) 和 [ThermalReferenceEnergyCache](../../model/src/main/java/mmm/thermal/ThermalReferenceEnergyCache.java) 排查。

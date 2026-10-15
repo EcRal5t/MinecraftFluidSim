@@ -38,15 +38,15 @@ final class GasRuntimeGeometry {
 		this.occupiedSvq = occupiedSvq.clone();
 		this.sourceOccupiedSvq = domain.granularCoupling == null ? new long[domain.cellCount]
 				: domain.granularCoupling.copySolidSvq();
-		var cut = new FlipCutCellGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
-		cut.restoreMicroMasks(domain.geometry.cutCells.copyMicroMasks());
-		boolean[] solid = new boolean[domain.cellCount];
+		if (prepared != null) prepared.requireCurrent(domain, sourceOccupiedSvq);
+		var cut = prepared == null ? new FlipCutCellGeometry(domain.sizeX, domain.sizeY, domain.sizeZ) : prepared.cut;
+		if (prepared == null) cut.restoreMicroMasks(domain.geometry.cutCells.copyMicroMasks());
+		boolean[] solid = prepared == null ? new boolean[domain.cellCount] : prepared.solid;
 		for (int cell = 0; cell < solid.length; cell++) {
-			solid[cell] = cut.fullySolid(cell);
+			if (prepared == null) solid[cell] = cut.fullySolid(cell);
 			if (solid[cell] != domain.geometry.solid[cell])
 				throw new IllegalArgumentException("Gas runtime binary and micro collision geometry disagree");
 		}
-		if (prepared != null) prepared.requireCurrent(domain, sourceOccupiedSvq);
 		MarkerGridIndex rawIndex = prepared == null ? index(domain) : prepared.index;
 		this.sourceLiquidStock = prepared == null ? stock(domain, cut, rawIndex) : prepared.frame.liquidStock;
 		MarkerGridIndex phaseIndex = allDry ? emptyIndex(domain.cellCount, 0) : rawIndex;
@@ -65,8 +65,13 @@ final class GasRuntimeGeometry {
 			phaseIndex.exactCellMarkerVolume[cell] = tuple.volume().toDouble();
 			phaseIndex.markerCount[cell] = tuple.markerCount();
 		}
-		var occupancy = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize);
-		occupancy.setFixedCellSvq(this.occupiedSvq);
+		GranularCouplingFields occupancy;
+		if (prepared != null && Arrays.equals(this.occupiedSvq, prepared.frame.occupiedSvq)) {
+			occupancy = prepared.occupancy;
+		} else {
+			occupancy = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, cellSize);
+			occupancy.setFixedCellSvq(this.occupiedSvq);
+		}
 		this.phase = new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
 		GasRuntimeGeometry captured = domain.gasState.frame;
 		boolean[] sameLocalStock = matchingLocalStock(captured, cut);
@@ -110,11 +115,21 @@ final class GasRuntimeGeometry {
 		private final FluidDomain owner;
 		private final GasRuntimeGeometry frame;
 		private final MarkerGridIndex index;
+		private final FlipCutCellGeometry cut;
+		private final boolean[] solid;
+		private final GranularCouplingFields occupancy;
 		private final float[] positionVolume;
 		private final long inventoryRevision, carrierRevision;
 		private final int markerCount;
 		private PhaseSource(FluidDomain owner, GasRuntimeGeometry frame, MarkerGridIndex index) {
 			this.owner = owner; this.frame = frame; this.index = index;
+			// Every trial changes liquid stock only. PLIC reads these private fixed inputs;
+			// each candidate still owns its fraction, plane and component arrays.
+			cut = new FlipCutCellGeometry(owner.sizeX, owner.sizeY, owner.sizeZ);
+			cut.restoreMicroMasks(owner.geometry.cutCells.copyMicroMasks());
+			solid = owner.geometry.solid.clone();
+			occupancy = new GranularCouplingFields(owner.sizeX, owner.sizeY, owner.sizeZ, owner.config.cellSize());
+			occupancy.setFixedCellSvq(frame.occupiedSvq);
 			this.inventoryRevision = owner.markerGrid.inventoryRevision;
 			this.carrierRevision = owner.carrierMutationRevision(); this.markerCount = owner.particles.count();
 			this.positionVolume = new float[Math.multiplyExact(4, markerCount)];

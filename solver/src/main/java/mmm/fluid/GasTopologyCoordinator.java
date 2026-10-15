@@ -23,6 +23,9 @@ import java.util.TreeMap;
 /** Joint inventory and energy remapping on captured positive PLIC microbox supports. */
 final class GasTopologyCoordinator {
 	private final FluidDomain domain;
+	private GasRuntimeGeometry committedFrame;
+	private AirNetwork committedNetwork;
+	private long committedNetworkRevision;
 	private record PhaseEdit(int node, AirNetwork.PhaseMutationPlan gas, double energy,
 	                         ThermalDomainState.PhaseCellEnergyPlan thermal) { }
 	GasTopologyCoordinator(FluidDomain domain) { this.domain = domain; }
@@ -69,10 +72,27 @@ final class GasTopologyCoordinator {
 		domain.gasState.network = restored; domain.gasState.frame = frame;
 		domain.gasState.pressureActive = frame.nodeCount() > 0;
 		domain.rebuildPressureBoundaryLineage();
+		rememberCommittedTopology();
 	}
 
-	void refresh() { commit(plan(capture(null), false, null)); }
-	void refreshDeferringPhaseVolumeWork() { commit(plan(capture(null), true, null)); }
+	void refresh() { refresh(false); }
+	void refreshDeferringPhaseVolumeWork() { refresh(true); }
+	private void refresh(boolean deferVolumeWork) {
+		domain.ensureInventoryGrid();
+		var frame = domain.gasState.frame;
+		var occupied = currentOccupied();
+		if (frame != null && frame == committedFrame && domain.gasState.network == committedNetwork
+				&& committedNetworkRevision == committedNetwork.revision()
+				&& frame.sealedExterior() == domain.gasState.sealedDomainBoundary
+				&& frame.matchesCarrierGeometry(domain, occupied)) return;
+		commit(plan(GasRuntimeGeometry.capture(domain, null, occupied, domain.gasState.sealedDomainBoundary),
+				deferVolumeWork, null));
+	}
+	private void rememberCommittedTopology() {
+		committedFrame = domain.gasState.frame;
+		committedNetwork = domain.gasState.network;
+		committedNetworkRevision = committedNetwork.revision();
+	}
 	GasTopologyPlan planAfterPhase(PhaseLiquidGeometryEdit geometryEdit, int node,
 			AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal,
 			GasRuntimeGeometry.PhaseSource source) {
@@ -134,10 +154,6 @@ final class GasTopologyCoordinator {
 		domain.ensureInventoryGrid();
 		return plan(GasRuntimeGeometry.captureLiquidEdits(domain, edits, occupied,
 				domain.gasState.sealedDomainBoundary), false, null, refineMissingSuccessor, staticCell);
-	}
-	private GasRuntimeGeometry capture(PhaseLiquidGeometryEdit edit) {
-		domain.ensureInventoryGrid();
-		return GasRuntimeGeometry.capture(domain, edit, currentOccupied(), domain.gasState.sealedDomainBoundary);
 	}
 	private long[] currentOccupied() {
 		return domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
@@ -452,6 +468,7 @@ final class GasTopologyCoordinator {
 		domain.gasState.network.commitRemapNodes(plan.gasPlan()); domain.gasState.frame = plan.frame();
 		domain.gasState.pressureActive = plan.frame().nodeCount() > 0;
 		domain.rebuildPressureBoundaryLineage();
+		rememberCommittedTopology();
 	}
 	private void requireOwnersCurrent(GasTopologyPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Gas topology plan is missing");

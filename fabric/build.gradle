@@ -86,7 +86,8 @@ tasks.register('runCpuValidation', JavaExec) {
  'runThermalValidation': 'mmm.fluid.M9ThermalValidation',
  'runCarrierMutationValidation': 'mmm.fluid.CarrierMutationValidation',
  'runLiquidTransportValidation': 'mmm.fluid.LiquidVolumeTransportValidation',
- 'runRemapMomentsValidation': 'mmm.fluid.CellRemapMomentsValidation'].each { taskName, validationClass ->
+ 'runRemapMomentsValidation': 'mmm.fluid.CellRemapMomentsValidation',
+ 'runShapeRemovalDiagnostic': 'mmm.fluid.LiquidShapeRemovalDiagnostic'].each { taskName, validationClass ->
 	tasks.register(taskName, JavaExec) {
 		group = 'verification'
 		description = "Runs ${validationClass} (use --args for a retained focused entry)."
