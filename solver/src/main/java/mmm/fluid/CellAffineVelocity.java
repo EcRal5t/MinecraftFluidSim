@@ -202,37 +202,65 @@ final class CellAffineVelocity {
 	void fit(double[][] markerVelocity, double[][] cellCoefficients) {
 		checkShape(markerVelocity, markerCount); checkShape(cellCoefficients, 4 * blockCount); checkAlias(markerVelocity, cellCoefficients);
 		for (double[] axis : cellCoefficients) Arrays.fill(axis, 0);
+		var modal = new double[12]; var modalLow = new double[12];
+		var coefficient = new double[12]; var coefficientLow = new double[12];
 		for (int block = 0; block < blockCount; block++) if (models[block] != null) {
-			var modal = new SignedDyadic[modeCount(block)]; Arrays.fill(modal, SignedDyadic.ZERO);
-			for (int mode = 0; mode < modal.length; mode++)
-				for (int k = offsets[block]; k < offsets[block + 1]; k++) {
-					int marker = markers[k];
-					for (int axis = 0; axis < 3; axis++) modal[mode] = modal[mode].add(
-							modeWeightExact(marker, mode, axis).multiply(SignedDyadic.of(markerVelocity[axis][marker])));
+			var model = models[block]; int count = blockMarkerCount(block), pivot = model.pivot();
+			Arrays.fill(modal, 0); Arrays.fill(modalLow, 0);
+			for (int mode = 0; mode < model.modeCount(); mode++) for (int axis = 0; axis < 3; axis++) {
+				double anchor = model.shaped(axis) ? 0 : markerVelocity[axis][markers[offsets[block] + pivot]];
+				if (model.translation(mode, axis)) ConstraintNumerics.accumulate(modal, modalLow, mode, anchor);
+				for (int ordinal = 0; ordinal < count; ordinal++) {
+					if (!model.shaped(axis) && ordinal == pivot) continue;
+					double value = markerVelocity[axis][markers[offsets[block] + ordinal]], difference = value - anchor;
+					double virtual = value - difference, error = (value - (difference + virtual)) + (virtual - anchor);
+					double weight = model.weight(mode, axis, ordinal), low = model.weightLow(mode, axis, ordinal);
+					ConstraintNumerics.accumulateProduct(modal, modalLow, mode, weight, difference);
+					ConstraintNumerics.accumulate(modal, modalLow, mode, Math.fma(weight, error, low * difference));
 				}
+			}
+			Arrays.fill(coefficient, 0); Arrays.fill(coefficientLow, 0);
 			for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) {
-				SignedDyadic sum = SignedDyadic.ZERO;
-				for (int mode = 0; mode < modal.length; mode++)
-					sum = sum.add(modeCoefficientExact(block, mode, axis, term).multiply(modal[mode]));
-				cellCoefficients[axis][4 * block + term] = sum.toDouble();
+				int index = 4 * axis + term;
+				for (int mode = 0; mode < model.modeCount(); mode++) {
+					double field = model.field(mode, axis, term);
+					ConstraintNumerics.accumulateProduct(coefficient, coefficientLow, index, field, modal[mode]);
+					ConstraintNumerics.accumulate(coefficient, coefficientLow, index, field * modalLow[mode]);
+				}
+				cellCoefficients[axis][4 * block + term] = coefficient[index] + coefficientLow[index];
 			}
 		}
 	}
 	void transposeLoad(double[][] cellLoad, double[][] markerForce) {
 		checkShape(cellLoad, 4 * blockCount); checkShape(markerForce, markerCount); checkAlias(cellLoad, markerForce);
 		for (double[] axis : markerForce) Arrays.fill(axis, 0);
+		var modal = new double[12]; var modalLow = new double[12];
+		int maximum = 0;
+		for (int block = 0; block < blockCount; block++) maximum = Math.max(maximum, blockMarkerCount(block));
+		var force = new double[maximum]; var forceLow = new double[maximum];
 		for (int block = 0; block < blockCount; block++) if (models[block] != null) {
-			var modal = new SignedDyadic[modeCount(block)]; Arrays.fill(modal, SignedDyadic.ZERO);
-			for (int mode = 0; mode < modal.length; mode++) for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++)
-				modal[mode] = modal[mode].add(modeCoefficientExact(block, mode, axis, term)
-						.multiply(SignedDyadic.of(cellLoad[axis][4 * block + term])));
-			for (int k = offsets[block]; k < offsets[block + 1]; k++) {
-				int marker = markers[k];
-				for (int axis = 0; axis < 3; axis++) {
-					SignedDyadic sum = SignedDyadic.ZERO;
-					for (int mode = 0; mode < modal.length; mode++) sum = sum.add(modeWeightExact(marker, mode, axis).multiply(modal[mode]));
-					markerForce[axis][marker] = sum.toDouble();
+			var model = models[block]; int count = blockMarkerCount(block), pivot = model.pivot();
+			Arrays.fill(modal, 0); Arrays.fill(modalLow, 0);
+			for (int mode = 0; mode < model.modeCount(); mode++) for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++)
+				ConstraintNumerics.accumulateProduct(modal, modalLow, mode, model.field(mode, axis, term), cellLoad[axis][4 * block + term]);
+			for (int axis = 0; axis < 3; axis++) {
+				Arrays.fill(force, 0); Arrays.fill(forceLow, 0);
+				for (int ordinal = 0; ordinal < count; ordinal++) if (model.shaped(axis) || ordinal != pivot) {
+					for (int mode = 0; mode < model.modeCount(); mode++) {
+						double weight = model.weight(mode, axis, ordinal), low = model.weightLow(mode, axis, ordinal);
+						ConstraintNumerics.accumulateProduct(force, forceLow, ordinal, weight, modal[mode]);
+						ConstraintNumerics.accumulate(force, forceLow, ordinal, Math.fma(weight, modalLow[mode], low * modal[mode]));
+					}
+					if (!model.shaped(axis)) {
+						ConstraintNumerics.accumulate(force, forceLow, pivot, -force[ordinal]);
+						ConstraintNumerics.accumulate(force, forceLow, pivot, -forceLow[ordinal]);
+					}
 				}
+				if (!model.shaped(axis)) for (int mode = 0; mode < model.modeCount(); mode++) if (model.translation(mode, axis)) {
+					ConstraintNumerics.accumulate(force, forceLow, pivot, modal[mode]);
+					ConstraintNumerics.accumulate(force, forceLow, pivot, modalLow[mode]);
+				}
+				for (int ordinal = 0; ordinal < count; ordinal++) markerForce[axis][markers[offsets[block] + ordinal]] = force[ordinal] + forceLow[ordinal];
 			}
 		}
 	}

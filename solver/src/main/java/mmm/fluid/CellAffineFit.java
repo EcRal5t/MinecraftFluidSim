@@ -14,9 +14,24 @@ final class CellAffineFit {
 		private final int reliableRank;
 		private final SignedDyadic[][] exactFields;
 		private final SignedDyadic[][][] weights;
+		private final double[][] fields;
+		private final double[][][] weight, weightLow;
+		private final int[] translationAxis;
+		private final boolean[] shaped;
+		private final int pivot;
 
-		private Model(int reliableRank, double[][] fields, SignedDyadic[][][] weights) {
+		private Model(int reliableRank, double[][] fields, SignedDyadic[][][] weights, int[] translationAxis, boolean[] shaped, int pivot) {
 			this.reliableRank = reliableRank; this.weights = weights;
+			this.fields = fields; this.translationAxis = translationAxis; this.shaped = shaped.clone(); this.pivot = pivot;
+			weight = new double[weights.length][3][]; weightLow = new double[weights.length][3][];
+			for (int mode = 0; mode < weights.length; mode++) for (int axis = 0; axis < 3; axis++) {
+				int count = weights[mode][axis].length;
+				weight[mode][axis] = new double[count]; weightLow[mode][axis] = new double[count];
+				for (int p = 0; p < count; p++) {
+					double value = weights[mode][axis][p].toDouble(); weight[mode][axis][p] = value;
+					weightLow[mode][axis][p] = weights[mode][axis][p].subtract(SignedDyadic.of(value)).toDouble();
+				}
+			}
 			exactFields = new SignedDyadic[fields.length][12];
 			for (int mode = 0; mode < fields.length; mode++) for (int term = 0; term < 12; term++)
 				exactFields[mode][term] = SignedDyadic.of(fields[mode][term]);
@@ -25,6 +40,12 @@ final class CellAffineFit {
 		int reliableRank() { return reliableRank; }
 		SignedDyadic fieldExact(int mode, int axis, int term) { return exactFields[mode][4 * axis + term]; }
 		SignedDyadic weightExact(int mode, int inputAxis, int localOrdinal) { return weights[mode][inputAxis][localOrdinal]; }
+		double weight(int mode, int axis, int ordinal) { return weight[mode][axis][ordinal]; }
+		double weightLow(int mode, int axis, int ordinal) { return weightLow[mode][axis][ordinal]; }
+		double field(int mode, int axis, int term) { return fields[mode][4 * axis + term]; }
+		int pivot() { return pivot; }
+		boolean shaped(int axis) { return shaped[axis]; }
+		boolean translation(int mode, int axis) { return mode < translationAxis.length && translationAxis[mode] == axis; }
 	}
 
 	/** Positions and their storage errors are in cell-size units relative to the actual mass centre. */
@@ -139,7 +160,7 @@ final class CellAffineFit {
 				rawWeights[k][p] = value;
 			}
 		}
-		return new Model(directions.length, fields, pairedWeights(rawWeights, meanWeight, shaped, translationAxis, pivot));
+		return new Model(directions.length, fields, pairedWeights(rawWeights, meanWeight, shaped, translationAxis, pivot), translationAxis, shaped, pivot);
 	}
 
 	private static SignedDyadic[][][] pairedWeights(double[][] raw, double[] mean, boolean[] shaped, int[] translationAxis, int pivot) {
