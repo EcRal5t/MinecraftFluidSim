@@ -2,6 +2,7 @@ package mmm.fluid;
 
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
+import static mmm.fluid.ConstraintNumerics.rescaledResponse;
 
 /** SI volume-rate constraint C = face incidence * area * J, and C M^-1 C^T + gas storage. */
 final class MarkerPressureOperator {
@@ -126,15 +127,6 @@ final class MarkerPressureOperator {
 				result[rows[axis][start + slot]] += rescale ? rescaledResponse(coefficient, inverseMass[marker], force) : coefficient * acceleration;
 			}
 		}
-	}
-
-	static double rescaledResponse(double coefficient, double inverseMass, double force) {
-		double result = (coefficient * inverseMass) * force;
-		if ((!Double.isFinite(result) || result == 0) && coefficient != 0 && inverseMass != 0 && force != 0
-				&& Double.isFinite(coefficient) && Double.isFinite(inverseMass) && Double.isFinite(force)) {
-			return SignedDyadic.of(coefficient).multiply(SignedDyadic.of(inverseMass)).multiply(SignedDyadic.of(force)).toDouble();
-		}
-		return result;
 	}
 
 	static double scaledPressureDifference(double coefficient, double pFirst, double pSecond) {

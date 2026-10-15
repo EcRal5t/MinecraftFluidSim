@@ -161,6 +161,13 @@ final class ConservativeLiquidFlux {
 
 	/** Volumes and capacities are in this grid's cell-volume units; velocities are m/s. */
 	void plan(double[] volume, boolean[] solid, double dtOverH, SignedDyadic[] exactVolume) {
+		planContinuous(volume, solid, dtOverH, exactVolume);
+		quantizeDonorSupply(volume, dtOverH);
+		limitChemicalShares();
+		repairSharedFluxes(exactVolume, solid);
+	}
+
+	private void planContinuous(double[] volume, boolean[] solid, double dtOverH, SignedDyadic[] exactVolume) {
 		this.dtOverH = dtOverH;
 		quantizationBudget = null;
 		Arrays.fill(representationBlend, 0);
@@ -168,10 +175,27 @@ final class ConservativeLiquidFlux {
 		reconstructPlanes(volume, solid, exactVolume);
 		provisionalFluxes(volume, dtOverH);
 		limitAntidiffusion(volume, dtOverH);
+	}
+
+	/** Intermediate flux snapshots for a separately reconstructed diagnostic replay. */
+	record DiagnosticStages(double[] continuous, double[] supplyScaled, SignedDyadic[] floor,
+	                        SignedDyadic[] floorLoss) { }
+	DiagnosticStages diagnosticPlan(double[] volume, boolean[] solid, double dtOverH, SignedDyadic[] exactVolume) {
+		planContinuous(volume, solid, dtOverH, exactVolume);
+		double[] continuous = flux.clone(), scaled = continuous.clone();
+		for (int face = 0; face < scaled.length; face++) {
+			int donor = donor(face);
+			scaled[face] *= outgoing[donor] <= volume[donor] ? 1 : volume[donor] / outgoing[donor];
+		}
 		quantizeDonorSupply(volume, dtOverH);
 		limitChemicalShares();
+		SignedDyadic[] floor = exactFlux.clone(), floorLoss = faceFloorLoss.clone();
 		repairSharedFluxes(exactVolume, solid);
+		return new DiagnosticStages(continuous, scaled, floor, floorLoss);
 	}
+
+	SignedDyadic diagnosticCapacity(int cell) { return exactCapacity[cell]; }
+	SignedDyadic[] diagnosticReservedVolume() { return reserved == null ? null : reserved.clone(); }
 
 	private void prepareGeometry(boolean[] solid, double dtOverH, double[] volume) {
 		for (int c = 0; c < cellCount; c++) {

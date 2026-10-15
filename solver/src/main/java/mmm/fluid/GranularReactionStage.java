@@ -29,7 +29,7 @@ import java.util.TreeMap;
 final class GranularReactionStage {
 	record Workspace(
 			int sizeX, int sizeY, int cellCount, float cellSize,
-			LiquidParticleStore particles, SignedDyadic[] pendingPhaseCellVolume,
+			LiquidParticleStore particles, PendingPhaseVolumeWork pendingPhaseVolume,
 			ThermalCarrierContext thermalMarkers
 	) { }
 
@@ -564,7 +564,7 @@ final class GranularReactionStage {
 
 	private void commitPendingPhaseVolume(int cell, SignedDyadic signedCellVolume) {
 		if (access.thermalState() != null && !signedCellVolume.equals(SignedDyadic.ZERO)) {
-			state.pendingPhaseCellVolume()[cell] = state.pendingPhaseCellVolume()[cell].add(signedCellVolume);
+			state.pendingPhaseVolume().add(cell, signedCellVolume);
 		}
 	}
 

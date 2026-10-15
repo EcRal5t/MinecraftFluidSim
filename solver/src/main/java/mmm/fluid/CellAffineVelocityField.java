@@ -25,6 +25,11 @@ final class CellAffineVelocityField {
 
 	boolean hasCell(int cell) { return cell >= 0 && cell < basis.physicalCellCount() && basis.blockCountForCell(cell) > 0; }
 	int blockCount() { return basis.blockCount(); }
+	boolean usesBasis(CellAffineVelocity expected) { return basis == expected; }
+	/** Independent coefficient snapshot for offline gradient diagnostics. */
+	double[][] diagnosticCoefficients() {
+		return new double[][]{coefficients[0].clone(), coefficients[1].clone(), coefficients[2].clone()};
+	}
 	/** A uniform complete-component field, or null when spatial or wall modes contribute. */
 	double[] constantVelocity(int cell) {
 		if (!hasCell(cell) || basis.blockCountForCell(cell) != 1) return null;

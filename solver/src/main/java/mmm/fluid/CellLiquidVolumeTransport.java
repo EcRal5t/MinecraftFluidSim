@@ -42,6 +42,10 @@ final class CellLiquidVolumeTransport {
 		return ENABLED;
 	}
 
+	/** Read synchronously while the failed transport attempt is retained. */
+	record DiagnosticView(ConservativeLiquidFlux transport, SignedDyadic[] exactVolume) { }
+	DiagnosticView diagnosticView() { return new DiagnosticView(transport, exactVolume); }
+
 	/** Eulerian donor outflow and partial-micro-box sweep rate; prediction is used only for step estimation. */
 	double courantRate(double verticalPrediction) {
 		var field = domain.pressureSystem.markerVelocityField();

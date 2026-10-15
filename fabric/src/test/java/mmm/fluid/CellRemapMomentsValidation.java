@@ -11,9 +11,7 @@ public final class CellRemapMomentsValidation {
 			throw new IllegalArgumentException("Unknown remap moments validation entry");
 		if (args.length == 1 && args[0].equals("common-mesh")) {
 			LiquidMappedTetrahedronValidation.run();
-			var domain = translationDomain(1, 3, 0, 4096, true, .125F); domain.setVolume(2, 1, 2, 1);
-			for (int p = 0; p < domain.particleCount(); p++) for (int axis = 0; axis < 3; axis++) setVelocity(domain, p, axis, axis == 2 ? 0 : 1);
-			domain.sealDomainBoundary(); domain.bootstrapGasState(null);
+			var domain = lShapedTranslationSource();
 			domain = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, domain.captureAuthoritativeState(), java.util.List.of(), false, 0)).claimPreparedCpuDomain();
 			boolean rejected = false;
 			try { domain.mechanicalPipeline.substep(.125F, 0, false, null); }
@@ -200,6 +198,19 @@ public final class CellRemapMomentsValidation {
 		check(rejected && java.util.Arrays.equals(before.copyPositionVolume(), limited.exportParticleState().copyPositionVolume())
 				&& java.util.Arrays.equals(before.copyParticleVelocities(), limited.exportParticleState().copyParticleVelocities()), "Joint translation marker-budget rejection changed source columns");
 	}
+	/** Original three-cell source shared by the moving-mesh reference and failure replay. */
+	static FluidDomain lShapedTranslationSource() {
+		var domain = translationDomain(1, 3, 0, 4096, true, .125F);
+		domain.setVolume(2, 1, 2, 1);
+		for (int p = 0; p < domain.particleCount(); p++) {
+			domain.particles.setVelocityX(p, 1);
+			domain.particles.setVelocityY(p, 1);
+			domain.particles.setVelocityZ(p, 0);
+		}
+		domain.sealDomainBoundary(); domain.bootstrapGasState(null);
+		return domain;
+	}
+
 	private static FluidDomain translationDomain(float h, int axes, int signs, int budget, boolean tiled) {
 		return translationDomain(h, axes, signs, budget, tiled, .125F);
 	}

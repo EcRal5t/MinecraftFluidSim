@@ -68,7 +68,7 @@ final class GasLiquidPhaseChangeStage {
 			int gasThermalHandle = thermal.registry().materialHandle(gas.id());
 			boolean[] volatileSpecies = gasVolatileSpecies(gasThermalHandle);
 			for (int cell = 0; cell < support.state().cellCount() && operations < maximumOperations; cell++) {
-				if (!support.state().pendingPhaseCellVolume()[cell].equals(SignedDyadic.ZERO)) continue;
+				if (support.state().pendingPhaseVolume().isPending(cell)) continue;
 				if (!gasLiquidCellMatches(cell, liquidHandle)) continue;
 				double liquidTemperature = thermal.phaseScanTemperatureInCell(cell);
 				ThermalDomainState.PhaseCandidateCell thermalCell = null;

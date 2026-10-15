@@ -53,6 +53,26 @@ final class MarkerPressureProjection {
 
 	MarkerPressureProjection(FluidDomain domain) { this.domain = domain; boundary = new PressureBoundaryView(domain); }
 
+	/** On-demand view of the current prepare attempt. Arrays stay owned by this projection;
+	 * diagnostics read them synchronously before the next prepare, solve or publication. */
+	record DiagnosticView(CellAffineVelocity basis, LiquidPressureGeometry geometry,
+	                      CellAffineVelocityField candidateField, boolean active, boolean solved, boolean published,
+	                      double[][] originalVelocity, double[][] predictor, double[][] wallPredictor,
+	                      double[][] candidate, double[][] publishedVelocity, double[][] originalPosition,
+	                      double[] originalMass, double[] originalVolume, double[] rhs, double[] pressure,
+	                      double[] pressureOrigin, double[] pressureCorrection, double[] pressureCorrectionLow,
+	                      double[] storage, double[] gasInitialPressure, int[] liquidRows, int[] gasRows,
+	                      int pressureAnchor, float pressureReference, boolean hasFreeSurface, float dt,
+	                      GasRuntimeGeometry gasFrame, AirNetwork gasNetworkOwner, byte[] geometryMasks) { }
+
+	DiagnosticView diagnosticView() {
+		return new DiagnosticView(basis, geometry, candidateField, active, solved, published,
+				originalVelocity, predictor, wallPredictor, candidate, publishedVelocity, originalPosition,
+				originalMass, originalVolume, rhs, pressure, pressureOrigin, pressureCorrection, pressureCorrectionLow,
+				storage, gasInitialPressure, liquidRows, gasRows, pressureAnchor, pressureReference, hasFreeSurface,
+				dt, gasFrame, gasNetworkOwner, geometryMasks);
+	}
+
 	boolean prepare(float dt) {
 		if (!(Float.isFinite(dt) && dt > 0)) throw new IllegalArgumentException("Invalid marker pressure timestep");
 		active = solved = published = hasFreeSurface = false; this.dt = dt;

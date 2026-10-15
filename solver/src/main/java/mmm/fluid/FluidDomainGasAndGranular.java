@@ -161,7 +161,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	public int coherentPhaseGroupCount() {
 		return thermalState == null ? 0 : thermalState.coherentPhases().groupCount();
 	}
-	public boolean hasPendingPhaseVolumeWork() { return metrics.hasPendingPhaseVolumeWork(); }
+	public boolean hasPendingPhaseVolumeWork() { return pendingPhaseVolume.hasWork(); }
 	/** Derived local mass/volume density for observation and acceptance; dry cells return NaN. */
 	public double densityInCell(int x, int y, int z) { return metrics.densityInCell(x, y, z); }
 
@@ -179,7 +179,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 
 	public PendingPhaseVolumeState exportPendingPhaseVolumeState() {
 		if (thermalState == null) throw new IllegalStateException("Pending phase volume requires thermal state");
-		return PendingPhaseVolumeState.capture(pendingPhaseCellVolume);
+		return pendingPhaseVolume.capture();
 	}
 
 	/**
@@ -203,22 +203,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 
 	boolean collisionTransactionActive() { return activeCollisionPlan != null; }
 	public void restorePendingPhaseVolumeState(PendingPhaseVolumeState state) {
-		if (thermalState == null || state == null || state.cellCount() != cellCount
-				|| hasPendingPhaseVolumeWork()) {
-			throw new IllegalArgumentException("Pending phase-volume restore is incompatible");
-		}
-		SignedDyadic[] restored = state.toDense();
-		thermalState.requirePendingPhaseCells(restored, thermalMarkerContext());
-		for (int cell = 0; cell < restored.length; cell++) if (restored[cell].signum() < 0
-				&& Double.isNaN(thermalState.phaseScanTemperatureInCell(cell))) {
-			boolean gasStock = false;
-			if (gasState.frame != null) for (int micro = 0; micro < 8; micro++) {
-				int node = gasState.frame.nodeOfPiece(8 * cell + micro);
-				if (node > 0 && !gasState.network.inventory(node).isEmpty()) { gasStock = true; break; }
-			}
-			if (!gasStock) throw new IllegalArgumentException("Depleted phase cell has no finite gas successor inventory");
-		}
-		System.arraycopy(restored, 0, pendingPhaseCellVolume, 0, cellCount);
+		pendingPhaseVolume.restore(state, thermalState, thermalMarkerContext(), gasState);
 	}
 	public ThermalTransport.Stats lastThermalTransportStats() {
 		return thermalState == null

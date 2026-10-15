@@ -722,7 +722,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	void clearThermalBinding() {
 		thermalState = null;
 		thermalBoundaryTemperatureK = null;
-		Arrays.fill(pendingPhaseCellVolume, SignedDyadic.ZERO);
+		pendingPhaseVolume.clear();
 		if (granularState == null) {
 			granularCoupling = null; granularNextCoupling = null; pressureGranularCoupling = null;
 		}

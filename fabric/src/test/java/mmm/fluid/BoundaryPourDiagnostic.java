@@ -1,82 +1,134 @@
 package mmm.fluid;
 
-import java.lang.reflect.Field;
 import java.util.Arrays;
 import mmm.units.SignedDyadic;
 
-/** Bounded first-pour diagnostic using the production mechanical substep and private pressure snapshots. */
+/** Bounded first-pour diagnostic using the production mechanical substep and explicit pressure diagnostic views. */
 public final class BoundaryPourDiagnostic {
 	private BoundaryPourDiagnostic() { }
 
 	public static void main(String[] args) {
-		if (args.length > 1 || args.length == 1 && !args[0].equals("--flux"))
-			throw new IllegalArgumentException("Boundary pour diagnostic accepts --flux");
-		run(args.length == 1);
+		boolean fluxOnly = false, lShape = false;
+		for (String arg : args) {
+			if (arg.equals("--flux") && !fluxOnly) fluxOnly = true;
+			else if (arg.equals("--l-shape") && !lShape) lShape = true;
+			else throw new IllegalArgumentException("Boundary pour diagnostic accepts --flux and --l-shape");
+		}
+		run(fluxOnly, lShape);
 	}
 
-	private static void run(boolean fluxOnly) {
-		var config = new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 120, 1e-4F, .40F, .002F, .80F);
-		var initial = new FluidDomain(8, 8, 8, config, 4096);
-		initial.sealDomainBoundary(); initial.bootstrapGasState(null); initial.setGasNodeStandardVolume(1, 34);
-		var addition = initial.addVolumeNearBudgeted(6, 0, 0, 128, 6);
-		if (addition.addedVolume() != 128 || addition.markerBudgetLimited()) throw new AssertionError("Pour diagnostic fixture differs");
+	private static void run(boolean fluxOnly, boolean lShape) {
+		var initial = lShape ? CellRemapMomentsValidation.lShapedTranslationSource() : pouredSource();
+		var config = initial.config();
+		System.out.println("POUR fixture=" + (lShape ? "l-shape" : "sealed-pour"));
 		FluidDomainState saved = null;
 		GasRuntimeGeometry previousGas = null;
+		RuntimeException firstFailure = null;
 		for (int logical = 0; logical < 4; logical++) {
 			if (!fluxOnly) inspectInput(initial, "logical=" + logical + " before-capture");
+			long captureStarted = System.nanoTime();
 			saved = initial.captureAuthoritativeState();
+			long captureNanos = System.nanoTime() - captureStarted;
 			if (!fluxOnly) inspectGas(initial, previousGas, logical);
 			previousGas = initial.gasState.frame;
 			if (!fluxOnly) inspectInput(initial, "logical=" + logical + " after-capture");
+			long restoreStarted = System.nanoTime();
 			var restored = FluidDomain.restoreAuthoritativeState(saved);
+			long restoreNanos = System.nanoTime() - restoreStarted;
 			if (!fluxOnly) inspectInput(restored, "logical=" + logical + " restored-input");
+			long evaluationStarted = System.nanoTime();
+			FluidStepCandidate candidate;
 			try {
-				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, saved, java.util.List.of(), false, 0));
-				initial = candidate.claimPreparedCpuDomain();
-				System.out.printf("POUR full logical=%d complete actualSpeed=%g markers=%d%n", logical, initial.maximumParticleSpeed(), initial.particleCount());
-				snapshot(initial, logical, -1, config.timeStep(), "after-full-step", fluxOnly);
-				initial = FluidDomain.restoreAuthoritativeState(initial.captureAuthoritativeState());
+				candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, saved, java.util.List.of(), false, 0));
 			} catch (RuntimeException failed) {
-				System.out.printf("POUR full logical=%d failure=%s%n", logical, failed);
+				firstFailure = failed;
+				System.out.printf("POUR full logical=%d stage=FULL_STEP captureMs=%.3f restoreMs=%.3f evaluateMs=%.3f failure=%s%n",
+						logical, captureNanos / 1e6, restoreNanos / 1e6, (System.nanoTime() - evaluationStarted) / 1e6, failed);
 				break;
 			}
-			if (logical == 3) { System.out.println("POUR diagnostic completed four logical steps without reproducing the retained failure"); return; }
+			double evaluateMs = (System.nanoTime() - evaluationStarted) / 1e6;
+			initial = candidate.claimPreparedCpuDomain();
+			System.out.printf("POUR full logical=%d stage=COMPLETE completed=%d reserved=%d captureMs=%.3f restoreMs=%.3f evaluateMs=%.3f actualSpeed=%g markers=%d%n",
+					logical, candidate.stats().substeps(), candidate.mechanicalResolution().reservedSubsteps(), captureNanos / 1e6,
+					restoreNanos / 1e6, evaluateMs, initial.maximumParticleSpeed(), initial.particleCount());
+			snapshot(initial, logical, -1, config.timeStep(), "after-full-step", fluxOnly);
+			initial = FluidDomain.restoreAuthoritativeState(initial.captureAuthoritativeState());
+			if (logical == 3) { System.out.println("POUR diagnostic completed four logical steps"); return; }
 		}
-		int minimum = 1; long spent = 0;
+		int minimum = 1; long spent = 0, completed = 0, computeNanos = 0;
+		String lastRefinement = "";
 		for (int attempt = 0; attempt < 16; attempt++) {
+			long preparationStarted = System.nanoTime();
 			var domain = FluidDomain.restoreAuthoritativeState(saved);
 			domain.minimumMechanicalSubsteps = minimum;
-			if (!fluxOnly) inspectInput(domain, "failed-source before-CFL attempt=" + attempt);
 			int count = domain.calculateSubsteps(config.timeStep());
+			computeNanos += System.nanoTime() - preparationStarted;
 			spent += count;
-			System.out.printf("POUR attempt=%d count=%d cumulative=%d sourceMarkers=%d gasPa=%g%n",
-					attempt, count, spent, domain.particleCount(), domain.gasBoundary().gaugePressure(1));
+			System.out.printf("POUR attempt=%d stage=SUBSTEP_RESERVATION count=%d completed=%d reserved=%d computeMs=%.3f sourceMarkers=%d gasPa=%g lastRefinement=%s%n",
+					attempt, count, completed, spent, computeNanos / 1e6, domain.particleCount(), domain.gasBoundary().gaugePressure(1), lastRefinement);
 			if (spent > CpuFluidSolverBackend.MAXIMUM_CUMULATIVE_SUBSTEPS) {
-				System.out.println("POUR diagnostic stopped at the production cumulative substep budget");
-				return;
+				System.out.printf("POUR replay stage=SUBSTEP_BUDGET completed=%d reserved=%d computeMs=%.3f originalFailure=%s%n", completed, spent, computeNanos / 1e6, firstFailure);
+				throw firstFailure;
 			}
+			if (!fluxOnly) inspectInput(domain, "failed-source before-substeps attempt=" + attempt);
 			float dt = config.timeStep() / count;
 			domain.carrierPropertiesWorkspace.beginStep();
 			boolean refined = false;
 			for (int substep = 0; substep < count; substep++) {
+				long started = System.nanoTime();
 				try {
 					domain.mechanicalPipeline.substep(dt, substep, false, null);
-					if (substep < 4 || substep % 128 == 0) snapshot(domain, attempt, substep, dt, "complete", fluxOnly);
 				} catch (MechanicalTimeRefinement finer) {
-					snapshot(domain, attempt, substep, dt, "refine=" + finer.getMessage(), fluxOnly);
+					long elapsed = System.nanoTime() - started; computeNanos += elapsed;
+					replayProgress(domain, attempt, substep, completed, spent, elapsed, computeNanos, finer);
+					failureSnapshot(domain, attempt, substep, dt, "refine=" + finer.getMessage(), fluxOnly, finer);
 					minimum = CpuFluidSolverBackend.refinedSubsteps(count, finer);
+					lastRefinement = finer.getMessage();
 					refined = true; break;
 				} catch (RuntimeException failed) {
-					snapshot(domain, attempt, substep, dt, "failed=" + failed, fluxOnly);
+					long elapsed = System.nanoTime() - started; computeNanos += elapsed;
+					replayProgress(domain, attempt, substep, completed, spent, elapsed, computeNanos, failed);
+					failureSnapshot(domain, attempt, substep, dt, "failed=" + failed, fluxOnly, failed);
 					throw failed;
+				}
+				long elapsed = System.nanoTime() - started; computeNanos += elapsed; completed++;
+				if (substep < 4 || substep % 128 == 0 || substep == count - 1) {
+					replayProgress(domain, attempt, substep, completed, spent, elapsed, computeNanos, null);
+					snapshot(domain, attempt, substep, dt, "complete", fluxOnly);
 				}
 			}
 			if (!refined) {
-				System.out.println("POUR first mechanical logical step completed");
-				return;
+				System.out.println("POUR mechanical replay completed; full-step failure retained: " + firstFailure);
+				throw firstFailure;
 			}
 		}
-		throw new AssertionError("Pour diagnostic reached its attempt limit");
+		System.out.printf("POUR replay stage=ATTEMPT_LIMIT completed=%d reserved=%d computeMs=%.3f originalFailure=%s%n", completed, spent, computeNanos / 1e6, firstFailure);
+		throw firstFailure;
+	}
+
+	private static FluidDomain pouredSource() {
+		var config = new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 120, 1e-4F, .40F, .002F, .80F);
+		var domain = new FluidDomain(8, 8, 8, config, 4096);
+		domain.sealDomainBoundary(); domain.bootstrapGasState(null); domain.setGasNodeStandardVolume(1, 34);
+		var addition = domain.addVolumeNearBudgeted(6, 0, 0, 128, 6);
+		if (addition.addedVolume() != 128 || addition.markerBudgetLimited()) throw new AssertionError("Pour diagnostic fixture differs");
+		return domain;
+	}
+
+	private static void replayProgress(FluidDomain domain, int attempt, int substep, long completed,
+	                                   long reserved, long elapsedNanos, long computeNanos, RuntimeException failure) {
+		System.out.printf("POUR replay attempt=%d substep=%d stage=%s completed=%d reserved=%d substepMs=%.3f computeMs=%.3f outcome=%s%n",
+				attempt, substep, domain.mechanicalPipeline.diagnosticStage(), completed, reserved,
+				elapsedNanos / 1e6, computeNanos / 1e6, failure == null ? "complete" : failure);
+	}
+
+	private static void failureSnapshot(FluidDomain domain, int attempt, int substep, float dt,
+	                                    String outcome, boolean fluxOnly, RuntimeException original) {
+		try { snapshot(domain, attempt, substep, dt, outcome, fluxOnly); }
+		catch (RuntimeException | AssertionError diagnosticFailure) {
+			original.addSuppressed(diagnosticFailure);
+			System.out.println("POUR additional snapshot failed: " + diagnosticFailure);
+		}
 	}
 
 	private static void inspectGas(FluidDomain d, GasRuntimeGeometry previous, int logical) {
@@ -162,25 +214,30 @@ public final class BoundaryPourDiagnostic {
 	}
 
 	private static void snapshot(FluidDomain d, int attempt, int substep, float dt, String outcome, boolean fluxOnly) {
-		if (outcome.startsWith("failed=") && !value(d.pressureSystem.markerProjection(), "solved", Boolean.class))
+		if (outcome.startsWith("failed=") && !d.pressureSystem.markerProjection().diagnosticView().solved())
 			inspectPressureFailure(d.pressureSystem.markerProjection());
 		if (fluxOnly) {
 			System.out.printf("POUR flux snapshot attempt=%d substep=%d dt=%g %s%n", attempt, substep, dt, outcome);
 			if (outcome.startsWith("failed=")) {
-				try { fluxReplay(d, dt); }
-				catch (RuntimeException | AssertionError failure) { System.out.println("POUR flux replay unverified; interpretation stopped: " + failure); }
+				if (!d.liquidShapes.isEmpty()) {
+					System.out.println("POUR flux unavailable: saved-shape transport prepares a successor partition before general face-flux planning");
+				} else {
+					try { fluxReplay(d, dt); }
+					catch (RuntimeException | AssertionError failure) { System.out.println("POUR flux replay unverified; interpretation stopped: " + failure); }
+				}
 			}
 			return;
 		}
 		var projection = d.pressureSystem.markerProjection();
-		CellAffineVelocity basis = value(projection, "basis", CellAffineVelocity.class);
-		CellAffineVelocityField field = value(projection, "candidateField", CellAffineVelocityField.class);
-		LiquidPressureGeometry geometry = value(projection, "geometry", LiquidPressureGeometry.class);
+		var view = projection.diagnosticView();
+		CellAffineVelocity basis = view.basis();
+		CellAffineVelocityField field = view.candidateField();
+		LiquidPressureGeometry geometry = view.geometry();
 		System.out.printf("POUR snapshot attempt=%d substep=%d dt=%g actualSpeed=%g actualMarkers=%d %s%n",
 				attempt, substep, dt, d.maximumParticleSpeed(), d.particleCount(), outcome);
 		inspectVolumeMoments(d, "snapshot attempt=" + attempt + " substep=" + substep + " " + outcome);
 		if (basis == null) return;
-		if (!value(projection, "active", Boolean.class)) {
+		if (!view.active()) {
 			var coefficient = new double[3][4 * basis.blockCount()];
 			var velocity = new double[3][basis.markerCount()];
 			for (int p = 0; p < basis.markerCount(); p++) {
@@ -193,10 +250,17 @@ public final class BoundaryPourDiagnostic {
 			}
 			return;
 		}
-		boolean hasCandidate = value(projection, "solved", Boolean.class) || value(projection, "published", Boolean.class);
+		boolean hasCandidate = view.solved() || view.published();
 		for (String name : new String[]{"originalVelocity", "predictor", "wallPredictor", "candidate", "publishedVelocity"}) {
 			if (!hasCandidate && (name.equals("candidate") || name.equals("publishedVelocity"))) continue;
-			double[][] velocity = value(projection, name, double[][].class);
+			double[][] velocity = switch (name) {
+				case "originalVelocity" -> view.originalVelocity();
+				case "predictor" -> view.predictor();
+				case "wallPredictor" -> view.wallPredictor();
+				case "candidate" -> view.candidate();
+				case "publishedVelocity" -> view.publishedVelocity();
+				default -> throw new AssertionError(name);
+			};
 			if (velocity == null) continue;
 			double maximum = 0, energy = 0; int marker = -1;
 			for (int p = 0; p < velocity[0].length; p++) {
@@ -207,13 +271,13 @@ public final class BoundaryPourDiagnostic {
 			System.out.printf("POUR velocity=%s max=%g KE=%g marker=%d cell=%d%n", name, maximum, energy, marker, marker < 0 ? -1 : basis.physicalCell(basis.markerBlock(marker)));
 		}
 		if (!hasCandidate || field == null || geometry == null) return;
-		if (value(field, "basis", CellAffineVelocity.class) != basis) {
+		if (!field.usesBasis(basis)) {
 			System.out.println("POUR candidate field belongs to an earlier prepare; stopping snapshot before field comparison");
 			return;
 		}
-		pressureWork(projection, basis, value(projection, "dt", Float.class));
+		pressureWork(projection, basis, view.dt());
 		volumeVelocityMeans(projection, basis, field, geometry);
-		double[][] coefficient = value(field, "coefficients", double[][].class);
+		double[][] coefficient = field.diagnosticCoefficients();
 		double largest = 0; int worstBlock = -1, worstAxis = -1, worstTerm = -1;
 		for (int block = 0; block < basis.blockCount(); block++) if (basis.blockMarkerCount(block) > 0)
 			for (int axis = 0; axis < 3; axis++) for (int term = 1; term < 4; term++) {
@@ -258,9 +322,10 @@ public final class BoundaryPourDiagnostic {
 	}
 	private static void volumeVelocityMeans(MarkerPressureProjection projection, CellAffineVelocity basis,
 	                                      CellAffineVelocityField field, LiquidPressureGeometry geometry) {
-		if (!value(projection, "published", Boolean.class)) return;
-		var volumes = value(projection, "originalVolume", double[].class);
-		var velocities = value(projection, "publishedVelocity", double[][].class);
+		var view = projection.diagnosticView();
+		if (!view.published()) return;
+		var volumes = view.originalVolume();
+		var velocities = view.publishedVelocity();
 		if (velocities == null) return;
 		double largest = 0; int worstCell = -1, worstSupport = 0, worstAxis = -1;
 		for (int block = 0; block < basis.blockCount(); block++) {
@@ -282,10 +347,11 @@ public final class BoundaryPourDiagnostic {
 	}
 
 	private static void inspectPressureFailure(MarkerPressureProjection projection) {
-		if (!value(projection, "active", Boolean.class)) return;
+		var view = projection.diagnosticView();
+		if (!view.active()) return;
 		var operator = projection.operator();
-		var rhs = value(projection, "rhs", double[].class);
-		var pressure = value(projection, "pressure", double[].class);
+		var rhs = view.rhs();
+		var pressure = view.pressure();
 		var diagonal = new double[rhs.length]; var image = new double[rhs.length];
 		operator.diagonal(diagonal); operator.apply(pressure, image);
 		double norm = 0, largest = 0, lowest = Double.POSITIVE_INFINITY, highest = 0; int worst = -1;
@@ -297,41 +363,42 @@ public final class BoundaryPourDiagnostic {
 		System.out.printf("POUR pressure rows=%d rawResidual=%g worstRow=%d worstResidual=%g diagonalRange=[%g,%g] worstRhs=%g worstPressure=%g%n",
 				rhs.length, norm / Math.sqrt(Math.max(1, rhs.length)), worst, largest, lowest, highest,
 				worst < 0 ? 0 : rhs[worst], worst < 0 ? 0 : pressure[worst]);
-		var origin = value(projection, "pressureOrigin", double[].class);
+		var origin = view.pressureOrigin();
 		if (origin != null) {
-			var source = operator.referencedSource(value(projection, "wallPredictor", double[][].class), value(projection, "dt", Float.class),
-					value(projection, "gasInitialPressure", double[].class), origin);
-			var residual = new double[rhs.length]; operator.residual(value(projection, "pressureCorrection", double[].class),
-					value(projection, "pressureCorrectionLow", double[].class), source, residual);
+			var source = operator.referencedSource(view.wallPredictor(), view.dt(),
+					view.gasInitialPressure(), origin);
+			var residual = new double[rhs.length]; operator.residual(view.pressureCorrection(),
+					view.pressureCorrectionLow(), source, residual);
 			double actual = 0; for (double value : residual) actual = Math.hypot(actual, value);
 			System.out.printf("POUR pressure referencedResidual=%g%n", actual / Math.sqrt(Math.max(1, rhs.length)));
 		}
 		try {
 			var basis = operator.rowBasis(); boolean[] observed = new boolean[rhs.length];
-			var liquids = value(projection, "liquidRows", int[].class); var gases = value(projection, "gasRows", int[].class);
+			var liquids = view.liquidRows(); var gases = view.gasRows();
 			for (int row : liquids) if (row >= 0) observed[row] = true;
 			for (int row : gases) if (row >= 0) observed[row] = true;
-			int anchor = value(projection, "pressureAnchor", Integer.class);
-			boolean commonGauge = !value(projection, "hasFreeSurface", Boolean.class) && anchor >= 0
+			int anchor = view.pressureAnchor();
+			boolean commonGauge = !view.hasFreeSurface() && anchor >= 0
 					&& anchor < liquids.length && liquids[anchor] >= 0;
-			var rate = new double[rhs.length]; operator.volumeRate(value(projection, "wallPredictor", double[][].class), rate);
+			var rate = new double[rhs.length]; operator.volumeRate(view.wallPredictor(), rate);
 			System.out.printf("POUR pressure exactRows=%d dependencies=%d observationNeutral=%s compatibleSource=%s%n",
 					basis.size(), basis.dependencyCount(), basis.observationNeutral(observed, diagonal, commonGauge),
-					basis.compatibleSource(rhs, rate, value(projection, "dt", Float.class)));
+					basis.compatibleSource(rhs, rate, view.dt()));
 		} catch (PressureRowBasis.Unavailable unavailable) {
 			System.out.println("POUR pressure exact certificate unavailable: " + unavailable.getMessage());
 		}
 	}
 
 	private static void pressureWork(MarkerPressureProjection projection, CellAffineVelocity basis, float dt) {
-		var before = value(projection, "wallPredictor", double[][].class);
-		var after = value(projection, "candidate", double[][].class);
-		var pressure = value(projection, "pressure", double[].class);
-		var origin = value(projection, "pressureOrigin", double[].class);
-		var correction = value(projection, "pressureCorrection", double[].class);
-		var correctionLow = value(projection, "pressureCorrectionLow", double[].class);
-		var storage = value(projection, "storage", double[].class);
-		var initial = value(projection, "gasInitialPressure", double[].class);
+		var view = projection.diagnosticView();
+		var before = view.wallPredictor();
+		var after = view.candidate();
+		var pressure = view.pressure();
+		var origin = view.pressureOrigin();
+		var correction = view.pressureCorrection();
+		var correctionLow = view.pressureCorrectionLow();
+		var storage = view.storage();
+		var initial = view.gasInitialPressure();
 		var operator = projection.operator();
 		var force = new double[3][basis.markerCount()]; operator.force(correction, origin, correctionLow, force);
 		var rate = new double[pressure.length]; operator.volumeRate(after, rate);
@@ -369,6 +436,7 @@ public final class BoundaryPourDiagnostic {
 
 	private static void cell(FluidDomain d, MarkerPressureProjection projection, CellAffineVelocity basis,
 	                         LiquidPressureGeometry geometry, double[][] coefficients, int block) {
+		var view = projection.diagnosticView();
 		int cell = basis.physicalCell(block); var profile = geometry.componentSnapshot(cell, basis.blockSupport(block));
 		double[] minimum = {Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY, Double.POSITIVE_INFINITY};
 		double[] maximum = {Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY, Double.NEGATIVE_INFINITY};
@@ -381,8 +449,8 @@ public final class BoundaryPourDiagnostic {
 				cell, basis.rank(block), basis.expandedCell(block), basis.blockMarkerCount(block), totalMass,
 				profile == null ? 0 : profile.volume(), profile == null ? "none" : profile.centroid(), Arrays.toString(minimum), Arrays.toString(maximum));
 		for (int a = 0; a < 3; a++) System.out.printf("POUR cell=%d axis=%d coefficients=%s%n", cell, a, Arrays.toString(Arrays.copyOfRange(coefficients[a], 4 * block, 4 * block + 4)));
-		double[] rawMass = value(projection, "originalMass", double[].class), rawVolume = value(projection, "originalVolume", double[].class);
-		double[][] velocity = value(projection, "publishedVelocity", double[][].class);
+		double[] rawMass = view.originalMass(), rawVolume = view.originalVolume();
+		double[][] velocity = view.publishedVelocity();
 		for (int k = 0; k < Math.min(12, basis.blockMarkerCount(block)); k++) {
 			int marker = basis.blockMarker(block, k);
 			System.out.printf("POUR marker=%d position=[%g,%g,%g] rawV=%g rawM=%g velocity=[%g,%g,%g]%n", marker,
@@ -395,17 +463,18 @@ public final class BoundaryPourDiagnostic {
 		if (failed.chemicalParcels != null || failed.thermalState != null || failed.granularState != null)
 			throw new IllegalStateException("Pure-liquid flux replay requires matching side-column reconstruction");
 		var projection = failed.pressureSystem.markerProjection();
-		var field = value(projection, "candidateField", CellAffineVelocityField.class);
-		var basis = value(projection, "basis", CellAffineVelocity.class);
-		var old = value(projection, "gasFrame", GasRuntimeGeometry.class);
-		var network = value(projection, "gasNetworkOwner", mmm.fluid.air.AirNetwork.class);
-		if (!value(projection, "published", Boolean.class) || field == null || value(field, "basis", CellAffineVelocity.class) != basis)
+		var view = projection.diagnosticView();
+		var field = view.candidateField();
+		var basis = view.basis();
+		var old = view.gasFrame();
+		var network = view.gasNetworkOwner();
+		if (!view.published() || field == null || !field.usesBasis(basis))
 			throw new IllegalStateException("Failed substep has no current published pressure field");
-		if (value(projection, "dt", Float.class) != dt) throw new IllegalStateException("Pressure snapshot timestep differs from failure");
-		var position = value(projection, "originalPosition", double[][].class);
-		var velocity = value(projection, "publishedVelocity", double[][].class);
-		var mass = value(projection, "originalMass", double[].class);
-		var volume = value(projection, "originalVolume", double[].class);
+		if (view.dt() != dt) throw new IllegalStateException("Pressure snapshot timestep differs from failure");
+		var position = view.originalPosition();
+		var velocity = view.publishedVelocity();
+		var mass = view.originalMass();
+		var volume = view.originalVolume();
 		int count = volume.length; float[] points = new float[4 * count], speeds = new float[3 * count];
 		SignedDyadic total = SignedDyadic.ZERO;
 		for (int p = 0; p < count; p++) {
@@ -420,7 +489,7 @@ public final class BoundaryPourDiagnostic {
 		}
 		var source = new FluidDomain(failed.sizeX, failed.sizeY, failed.sizeZ, failed.config, Math.max(1, count));
 		source.restoreParticleState(new FlipParticleState(source.sizeX, source.sizeY, source.sizeZ, source.config.cellSize(), count,
-				(float) total.toDouble(), points, speeds, value(projection, "geometryMasks", byte[].class)));
+				(float) total.toDouble(), points, speeds, view.geometryMasks()));
 		for (int p = 0; p < count; p++) source.particles.setMass(p, mass[p]);
 		source.ensureInventoryGrid();
 		if (!old.matchesCarrierGeometry(source, new long[source.cellCount]))
@@ -432,8 +501,9 @@ public final class BoundaryPourDiagnostic {
 			for (int a = 0; a < 3; a++) if (source.pressurePhaseGeometry.planeNormal(cell, micro, a) != old.planeNormal(cell, micro, a))
 				throw new IllegalStateException("Replay PLIC normal differs from the pressure frame at cell " + cell);
 		}
-		var actual = value(failed.cellLiquidVolumeTransport, "transport", ConservativeLiquidFlux.class);
-		var actualVolume = value(failed.cellLiquidVolumeTransport, "exactVolume", SignedDyadic[].class);
+		var transportView = failed.cellLiquidVolumeTransport.diagnosticView();
+		var actual = transportView.transport();
+		var actualVolume = transportView.exactVolume();
 		System.arraycopy(failed.gridToParticleStage.advectionCells(), 0, source.gridToParticleStage.advectionCells(), 0, source.cellCount);
 		source.gasState.frame = old; source.gasState.network = network;
 		// Transport saved its source classification before remap and wall projection rebuilt it.
@@ -457,22 +527,11 @@ public final class BoundaryPourDiagnostic {
 			observed[cell] = exact[cell].toDouble();
 		}
 		requireSameCells("source inventory", actualVolume, exact);
-		requireSameCells("ballistic reservation", value(actual, "reserved", SignedDyadic[].class), ballistic.reserved);
+		requireSameCells("ballistic reservation", actual.diagnosticReservedVolume(), ballistic.reserved);
 		double normalizedDt = dt / source.config.cellSize();
-		replay.plan(observed, source.geometry.solid, normalizedDt, exact);
-		invokeStage(replay, "prepareGeometry", new Class<?>[]{boolean[].class, double.class, double[].class}, source.geometry.solid, normalizedDt, observed);
-		invokeStage(replay, "reconstructPlanes", new Class<?>[]{double[].class, boolean[].class, SignedDyadic[].class}, observed, source.geometry.solid, exact);
-		invokeStage(replay, "provisionalFluxes", new Class<?>[]{double[].class, double.class}, observed, normalizedDt);
-		invokeStage(replay, "limitAntidiffusion", new Class<?>[]{double[].class, double.class}, observed, normalizedDt);
-		double[] continuous = replay.flux.clone(), scaled = continuous.clone();
-		double[] outgoing = value(replay, "outgoing", double[].class);
-		for (int face = 0; face < scaled.length; face++) {
-			int donor = replay.donor(face); scaled[face] *= outgoing[donor] <= observed[donor] ? 1 : observed[donor] / outgoing[donor];
-		}
-		invokeStage(replay, "quantizeDonorSupply", new Class<?>[]{double[].class, double.class}, observed, normalizedDt);
-		invokeStage(replay, "limitChemicalShares", new Class<?>[0]);
-		SignedDyadic[] floor = replay.exactFlux.clone(), floorLoss = value(replay, "faceFloorLoss", SignedDyadic[].class).clone();
-		invokeStage(replay, "repairSharedFluxes", new Class<?>[]{SignedDyadic[].class, boolean[].class}, exact, source.geometry.solid);
+		var stages = replay.diagnosticPlan(observed, source.geometry.solid, normalizedDt, exact);
+		double[] continuous = stages.continuous(), scaled = stages.supplyScaled();
+		SignedDyadic[] floor = stages.floor(), floorLoss = stages.floorLoss();
 		if (actual.exactFlux.length != replay.exactFlux.length) throw new IllegalStateException("Replay transport channel count differs");
 		for (int face = 0; face < replay.exactFlux.length; face++)
 			if (actual.left[face] != replay.left[face] || actual.right[face] != replay.right[face] || actual.axis[face] != replay.axis[face]
@@ -480,13 +539,13 @@ public final class BoundaryPourDiagnostic {
 				throw new IllegalStateException("Replay final exact flux differs on channel " + face);
 		System.out.printf("POUR flux replay verified sourceV/M1+PLIC channels=%d markers=%d%n", replay.exactFlux.length, count);
 		var next = GasRuntimeGeometry.capture(failed, null, old.occupiedSvq(), old.sealedExterior());
-		var gasRows = value(projection, "gasRows", int[].class);
-		var storage = value(projection, "storage", double[].class);
-		var initialPressure = value(projection, "gasInitialPressure", double[].class);
-		var pressure = value(projection, "pressure", double[].class);
-		double reference = value(projection, "pressureReference", Float.class);
+		var gasRows = view.gasRows();
+		var storage = view.storage();
+		var initialPressure = view.gasInitialPressure();
+		var pressure = view.pressure();
+		double reference = view.pressureReference();
 		double[] candidateRate = new double[pressure.length], publishedRate = new double[pressure.length];
-		projection.operator().volumeRate(value(projection, "candidate", double[][].class), candidateRate);
+		projection.operator().volumeRate(view.candidate(), candidateRate);
 		projection.operator().volumeRate(velocity, publishedRate);
 		int closed = 0;
 		for (int node = 1; node <= old.nodeCount(); node++) {
@@ -540,19 +599,10 @@ public final class BoundaryPourDiagnostic {
 			if (flux.donor(face) == cell) net = net.subtract(amount);
 			if (flux.receiver(face) == cell) net = net.add(amount);
 		}
-		var capacity = value(flux, "exactCapacity", SignedDyadic[].class)[cell];
+		var capacity = flux.diagnosticCapacity(cell);
 		var remaining = capacity.subtract(initial).subtract(net);
 		System.out.printf("POUR fluxCell cell=%d stage=%s initial=%s net=%s remainingGap=%s gapValue=%.17g%n",
 				cell, stage, initial, net, remaining, remaining.toDouble());
-	}
-
-	private static void invokeStage(Object target, String name, Class<?>[] types, Object... arguments) {
-		try {
-			var method = target.getClass().getDeclaredMethod(name, types); method.setAccessible(true); method.invoke(target, arguments);
-		} catch (java.lang.reflect.InvocationTargetException failure) {
-			if (failure.getCause() instanceof RuntimeException cause) throw cause;
-			throw new AssertionError("Flux replay stage failed: " + name, failure.getCause());
-		} catch (ReflectiveOperationException failure) { throw new AssertionError("Missing flux replay stage: " + name, failure); }
 	}
 
 	private static void requireSameCells(String label, SignedDyadic[] expected, SignedDyadic[] replay) {
@@ -562,10 +612,4 @@ public final class BoundaryPourDiagnostic {
 					+ ", replay=" + replay[cell] + ", actualValue=" + expected[cell].toDouble() + ", replayValue=" + replay[cell].toDouble());
 	}
 
-	private static <T> T value(Object object, String name, Class<T> type) {
-		try {
-			Field field = object.getClass().getDeclaredField(name); field.setAccessible(true);
-			return type.cast(field.get(object));
-		} catch (ReflectiveOperationException failure) { throw new AssertionError("Missing pressure diagnostic snapshot: " + name, failure); }
-	}
 }

@@ -77,8 +77,8 @@ final class ConstraintBlockProjection {
 			for (int entry = offsets[row]; entry < offsets[row + 1]; entry++) {
 				int index = indices[entry], column = Arrays.binarySearch(columns, 0, size, index);
 				double rootMass = Math.sqrt(inverseMass[index % markerCount]);
-				q[i][column] = MarkerPressureOperator.rescaledResponse(coefficients[entry], rootMass, roots[i])
-						+ MarkerPressureOperator.rescaledResponse(coefficientLow[entry], rootMass, roots[i]);
+				q[i][column] = ConstraintNumerics.rescaledResponse(coefficients[entry], rootMass, roots[i])
+						+ ConstraintNumerics.rescaledResponse(coefficientLow[entry], rootMass, roots[i]);
 				if (!Double.isFinite(q[i][column])) return null;
 			}
 			for (int pass = 0; pass < 2; pass++) for (int j = 0; j < i; j++) {

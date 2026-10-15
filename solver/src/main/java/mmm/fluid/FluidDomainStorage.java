@@ -7,10 +7,8 @@ import mmm.chemistry.ChemicalParcelStore;
 import mmm.granular.GranularCouplingFields;
 import mmm.granular.GranularDepositDynamics;
 import mmm.granular.GranularPhaseTransferEngine;
-import mmm.units.SignedDyadic;
 import mmm.units.SolverUnitScale;
 
-import java.util.Arrays;
 import java.util.List;
 
 /** Allocates the one mutable domain state and wires its single-purpose collaborators. */
@@ -114,7 +112,7 @@ abstract class FluidDomainStorage {
 	final ThermalCarrierContext thermalMarkers;
 	/** Runtime world-derived fixed-reservoir temperatures; NaN is the canonical adiabatic face. */
 	double[] thermalBoundaryTemperatureK;
-	final SignedDyadic[] pendingPhaseCellVolume;
+	final PendingPhaseVolumeWork pendingPhaseVolume;
 	final DomainMetrics metrics;
 	final CellInventoryReader cellInventory;
 	final CarrierInventoryReader carriers;
@@ -146,8 +144,7 @@ abstract class FluidDomainStorage {
 		this.mac = new MacVelocityGrid(sizeX, sizeY, sizeZ);
 		this.projection = new PressureProjectionWorkspace(cellCount);
 		this.tension = new SurfaceTensionWorkspace(cellCount);
-		this.pendingPhaseCellVolume = new SignedDyadic[cellCount];
-		Arrays.fill(this.pendingPhaseCellVolume, SignedDyadic.ZERO);
+		this.pendingPhaseVolume = new PendingPhaseVolumeWork(cellCount);
 		this.thermalMarkers = domain.createThermalMarkerContext();
 		this.metrics = new DomainMetrics(domain);
 		this.cellInventory = new CellInventoryReader(domain);

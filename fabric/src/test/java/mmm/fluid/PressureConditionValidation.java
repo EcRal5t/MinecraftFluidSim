@@ -226,8 +226,8 @@ final class PressureConditionValidation {
 					int index = indices[entry];
 					force[column][index] = force[column][index].add(exact[entry].multiply(SignedDyadic.of(z[column][rows[i]])));
 					double rootMass = Math.sqrt(inverseMass[index % count]);
-					double feature = MarkerPressureOperator.rescaledResponse(high[entry], rootMass, roots[i])
-							+ MarkerPressureOperator.rescaledResponse(low[entry], rootMass, roots[i]);
+					double feature = ConstraintNumerics.rescaledResponse(high[entry], rootMass, roots[i])
+							+ ConstraintNumerics.rescaledResponse(low[entry], rootMass, roots[i]);
 					fitForce[column][index] = fitForce[column][index].add(SignedDyadic.of(feature).multiply(SignedDyadic.of(y[i])));
 				}
 				var massForce = new SignedDyadic[3 * count];

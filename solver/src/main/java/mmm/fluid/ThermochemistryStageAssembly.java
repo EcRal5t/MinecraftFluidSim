@@ -52,7 +52,7 @@ final class ThermochemistryStageAssembly {
 		GranularReactionStage granular = new GranularReactionStage(
 				new GranularReactionStage.Workspace(
 						domain.sizeX, domain.sizeY, domain.cellCount, domain.config.cellSize(),
-						domain.particles, domain.pendingPhaseCellVolume, domain.thermalMarkerContext()),
+						domain.particles, domain.pendingPhaseVolume, domain.thermalMarkerContext()),
 				new GranularReactionStage.Access() {
 					@Override public boolean enabled() { return domain.precipitationEnabled(); }
 					@Override public ChemicalParcelStore chemistry() { return domain.chemicalParcels; }
@@ -80,7 +80,7 @@ final class ThermochemistryStageAssembly {
 						domain.sizeX, domain.sizeY, domain.sizeZ, domain.cellCount,
 						domain.maximumParticleCount, domain.config.cellSize(), domain.unitScale, domain.geometry,
 						domain.markerGrid, domain.projection, domain.particles, domain.gasState,
-						domain.pendingPhaseCellVolume, domain.thermalMarkerContext()),
+						domain.pendingPhaseVolume, domain.thermalMarkerContext()),
 				new PhaseChangeStageSupport.Access() {
 					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 					@Override public ChemicalParcelStore chemistry() { return domain.chemicalParcels; }

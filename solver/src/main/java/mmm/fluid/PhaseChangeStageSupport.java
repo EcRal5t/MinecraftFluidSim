@@ -27,7 +27,7 @@ final class PhaseChangeStageSupport {
 			int sizeX, int sizeY, int sizeZ, int cellCount, int maximumParticleCount,
 			float cellSize, SolverUnitScale unitScale, DomainGeometry geometry, MarkerGridIndex markerGrid,
 			PressureProjectionWorkspace projection, LiquidParticleStore particles,
-			GasDomainState gasState, SignedDyadic[] pendingPhaseCellVolume,
+			GasDomainState gasState, PendingPhaseVolumeWork pendingPhaseVolume,
 			ThermalCarrierContext thermalMarkers
 	) { }
 
@@ -158,7 +158,7 @@ final class PhaseChangeStageSupport {
 	void commitPendingVolume(int cell, long signedSvq) {
 		if (access.thermalState() == null || signedSvq == 0L) return;
 		SignedDyadic delta = new SignedDyadic(java.math.BigInteger.valueOf(signedSvq), -24);
-		state.pendingPhaseCellVolume()[cell] = state.pendingPhaseCellVolume()[cell].add(delta);
+		state.pendingPhaseVolume().add(cell, delta);
 	}
 
 	LiquidEnergyColumn.Truncation planThermalTruncate(

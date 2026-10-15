@@ -10,6 +10,7 @@
 | 热浮力有效范围与分层 | [LiquidThermalExpansion](../../model/src/main/java/mmm/thermal/LiquidThermalExpansion.java)、[LiquidCarrierProperties](../../solver/src/main/java/mmm/fluid/LiquidCarrierProperties.java)、[LiquidStratificationValidation](../../fabric/src/test/java/mmm/fluid/LiquidStratificationValidation.java) | `materials,thermal` |
 | 传热与反应顺序 | [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)、[ThermalCarrierTransport](../../model/src/main/java/mmm/thermal/ThermalCarrierTransport.java)、[LiquidThermalConduction](../../solver/src/main/java/mmm/fluid/LiquidThermalConduction.java)、[ThermalTransport](../../model/src/main/java/mmm/thermal/ThermalTransport.java) | `thermal` |
 | 固液和气液相变 | [CondensedPhaseChangeStage](../../solver/src/main/java/mmm/fluid/CondensedPhaseChangeStage.java)、[GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java)、[GasPhaseInterfaceResolver](../../solver/src/main/java/mmm/fluid/GasPhaseInterfaceResolver.java) | `thermal` |
+| 相变体积的累计、恢复与力学同步 | [PendingPhaseVolumeWork](../../solver/src/main/java/mmm/fluid/PendingPhaseVolumeWork.java) | `runThermalValidation --args="--phase-volume"`、`region-state` |
 | 有限热容量设备 | [FiniteThermalDeviceInventory](../../model/src/main/java/mmm/thermal/FiniteThermalDeviceInventory.java)、[FiniteThermalExchange](../../model/src/main/java/mmm/thermal/FiniteThermalExchange.java)、[FiniteThermalDeviceCodec](../../fabric/src/main/java/mmm/simulation/persistence/FiniteThermalDeviceCodec.java) | `thermal,region-state` |
 | 恒温源调节 | [ThermalReservoirUseCase](../../app/src/main/java/mmm/application/ThermalReservoirUseCase.java)、[ThermalReservoirScreen](../../fabric/src/client/java/mmm/client/ThermalReservoirScreen.java) | `protocol,thermal` |
 | 气体热力学与定义 | [GasThermalModel](../../model/src/main/java/mmm/thermal/GasThermalModel.java)、[ThermalRegistryCodec](../../fabric/src/main/java/mmm/thermal/ThermalRegistryCodec.java) | `thermal` |
@@ -403,6 +404,8 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 该重建联合搬运 gas inventory/U 与微盒归属，保持相变两相总内能不变。节点混合的原始内能精确汇总，最终节点存储列只舍入一次；外部源与逸出汇直接保留精确二进制汇总量，容量由精确账本表示。热重建计划绑定所属热域，外域或过期计划在写入前拒绝。固定区域内的相界位移属于内部交换，不计入外部机械功。随后液体和颗粒真实运动改变气腔容量时，仍按新旧几何执行气体等熵功；相变记录只要求力学同步。
 
 完整汽化后，负的待同步体积可以属于已无凝聚相载体的单元；恢复校核该单元仍具有实际的有限气体后继库存。正的待同步体积继续要求实际凝聚相载体。最后一个液体载体耗尽时，未来饱和条件从对应气体的实际温度和压力求得。
+
+`PendingPhaseVolumeWork` 集中保存逐格待同步体积，固液、气液与颗粒反应通过同一入口精确累加。零值相消同步更新待处理单元数，活动查询直接读取该计数；快照使用不可变的稀疏 `PendingPhaseVolumeState`。恢复先校核全部载体及气体后继，再发布整列。下一次力学投影与颗粒碰撞预览通过后清除记录；完整后端候选失败时仍保留请求中的原始记录。清除热学绑定时一并清空。
 
 力学 P2G、pressure footprint/PLIC、表面张力和速度外推统一在 logical step 末重建一次，capture 前也从完整 geometry 重扫。这样任何可发布 logical state 都不会出现 marker 已变而 gas node 仍属于上一拓扑的半代次，也不会因容量快路提前结算一次、projection 再重复结算一次体积功。
 

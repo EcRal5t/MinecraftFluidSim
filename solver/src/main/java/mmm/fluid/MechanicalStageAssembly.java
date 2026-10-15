@@ -51,7 +51,7 @@ final class MechanicalStageAssembly {
 				particleToGridAccess(domain), bodyForce, gridToParticle);
 		MechanicalStepPipeline pipeline = new MechanicalStepPipeline(
 				new MechanicalStepPipeline.Workspace(
-						domain.gasTopologyCoordinator, domain.mac, domain.pendingPhaseCellVolume,
+						domain.gasTopologyCoordinator, domain.mac, domain.pendingPhaseVolume,
 						domain.config),
 				pipelineAccess(domain), granular, bodyForce, pressure, new LiquidViscosityStage(domain), gridToParticle, advection);
 		return new Stages(pressure, granular, bodyForce, gridToParticle, advection, particleToGrid, pipeline);
@@ -272,7 +272,6 @@ final class MechanicalStageAssembly {
 			@Override public double granularKineticEnergyJoules() { return domain.granularKineticEnergyJoules(); }
 			@Override public int lastPressureIterations() { return domain.lastPressureIterations; }
 			@Override public ThermalDomainState thermalState() { return domain.thermalState; }
-			@Override public boolean hasPendingPhaseVolumeWork() { return domain.hasPendingPhaseVolumeWork(); }
 			@Override public boolean markerPressureActive() { return domain.pressureSystem.markerPressureActive(); }
 			@Override public double markerPressurePredictorKineticEnergyJoules() {
 				return domain.pressureSystem.markerProjection().predictorKineticEnergy();

@@ -949,7 +949,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			double[] beforeGasVolume = {domain.gasState.network.availableVolume(1), domain.gasState.network.availableVolume(2)};
 			var beforeSource = domain.gasState.network.externalSource();
 			var beforeSink = domain.gasState.network.escapedSink();
-			var beforePending = domain.pendingPhaseCellVolume.clone();
+			var beforePending = domain.exportPendingPhaseVolumeState().entries();
 			var thermalRevision = domain.thermalState.thermalRevision();
 			var transition = domain.thermalState.registry().transitions().getFirst();
 			var phase = domain.thermalState.gasLiquidPhase(domain.gasState.network);
@@ -979,8 +979,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						&& domain.gasState.network.availableVolume(2) == beforeGasVolume[1]
 						&& domain.gasState.network.externalSource().equals(beforeSource)
 						&& domain.gasState.network.escapedSink().equals(beforeSink)
-						&& domain.thermalAudit().equals(beforeAudit) && domain.pendingPhaseCellVolume[bridgeCell].equals(SignedDyadic.ZERO)
-						&& Arrays.equals(beforePending, domain.pendingPhaseCellVolume)
+						&& domain.thermalAudit().equals(beforeAudit) && !domain.pendingPhaseVolume.isPending(bridgeCell)
+						&& beforePending.equals(domain.exportPendingPhaseVolumeState().entries())
 						&& Arrays.equals(beforeMarkers.copyPositionVolume(), domain.exportMaterialParticleState().copyPositionVolume())
 						&& Arrays.equals(beforeMarkers.copyParticleMass(), domain.exportMaterialParticleState().copyParticleMass())
 						&& Arrays.equals(beforeThermal.copyInternalEnergy(), afterThermal.copyInternalEnergy())
@@ -990,7 +990,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			} else {
 				require(stats.operations() == 1 && stats.boiledCells() == 1 && domain.particleCount() == 0
 						&& domain.gasState.network.nodeCount() == 1
-						&& domain.pendingPhaseCellVolume[bridgeCell].equals(SignedDyadic.of(-1, 0)),
+						&& domain.exportPendingPhaseVolumeState().entries().contains(new PendingPhaseVolumeState.Entry(bridgeCell, SignedDyadic.of(-1, 0))),
 						"a complete 32-component phase successor was not committed");
 				require(phase.saturation(transition, domain.gasNodeTemperatureK(1),
 						domain.gasState.network.inventory(1), domain.thermalState.requireGasNodeState(1,
@@ -1054,7 +1054,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& domain.gasState.network.sealedInventory().equals(separate.gasState.network.sealedInventory())
 				&& domain.gasState.network.externalSource().equals(separate.gasState.network.externalSource())
 				&& domain.gasState.network.escapedSink().equals(separate.gasState.network.escapedSink())
-				&& Arrays.equals(domain.pendingPhaseCellVolume, separate.pendingPhaseCellVolume)
+				&& domain.exportPendingPhaseVolumeState().entries().equals(separate.exportPendingPhaseVolumeState().entries())
 				&& Arrays.equals(joinedThermal.copyInternalEnergy(), separateThermal.copyInternalEnergy())
 				&& Arrays.equals(joinedThermal.copyActiveParcelEnergy(), separateThermal.copyActiveParcelEnergy())
 				&& Arrays.equals(joinedThermal.copyGasNodeEnergy(), separateThermal.copyGasNodeEnergy()),
@@ -2235,17 +2235,17 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		double oilVolumeBefore = domain.exactVolumeNear(1, 1, 1, 0, 1);
 		double boiledSolverMass = SolverUnitScale.forCellSize(config.cellSize())
 				.solverMass(batchMass.toDouble());
-		long gasNanosBefore = domain.gasBoundary().standardVolumeNanos(1);
+		long gasNanosBefore = domain.gasBoundary().sealedInventory().standardVolumeNanos();
 		SignedDyadic energyBefore = domain.exactInternalEnergy();
 		ThermalAuditLedger auditBefore = domain.thermalAudit();
 		domain.step(true, 128);
 		FluidDomain.GasThermalPhaseStats stats = domain.lastGasThermalPhaseStats();
-		GasComponentAmount vaporAmount = domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
+		var vaporAmount = domain.gasBoundary().sealedInventory().component(BuiltinGasDefinitions.WATER_VAPOR);
 		require(stats.operations() > 1 && stats.operations() <= 128
 				&& stats.boiledCells() == 1 && stats.condensedCells() == 0
 				&& close(domain.totalMass(), liquidMassBefore - boiledSolverMass * stats.operations())
-				&& vaporAmount != null && close(vaporAmount.mass(), batchMass.toDouble() * stats.operations())
-				&& domain.gasBoundary().standardVolumeNanos(1) > gasNanosBefore
+				&& vaporAmount != null && close(vaporAmount.mass().toDouble(), batchMass.toDouble() * stats.operations())
+				&& domain.gasBoundary().sealedInventory().standardVolumeNanos() > gasNanosBefore
 				&& domain.gasBoundary().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().equals(auditBefore.mechanicalWork())
 				&& domain.hasPendingPhaseVolumeWork()
@@ -2256,7 +2256,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					+ " expectedLiquidMass=" + (liquidMassBefore - boiledSolverMass * stats.operations())
 					+ " oilVolume=" + domain.exactVolumeNear(1, 1, 1, 0, 1) + "/" + oilVolumeBefore
 					+ " vapor=" + vaporAmount + " expectedVaporMass=" + (batchMass.toDouble() * stats.operations())
-					+ " nanos=" + domain.gasBoundary().standardVolumeNanos(1)
+					+ " nanos=" + domain.gasBoundary().sealedInventory().standardVolumeNanos()
 					+ "/" + gasNanosBefore + " deltaU="
 					+ domain.exactInternalEnergy().subtract(energyBefore)
 					+ " gasAudit=" + domain.gasBoundary().auditClosed()
@@ -2264,7 +2264,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					+ " pending=" + domain.hasPendingPhaseVolumeWork()
 					+ " thermalAudit=" + domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
 		FluidDomain referenceBoilingProjection = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		java.util.Arrays.fill(referenceBoilingProjection.pendingPhaseCellVolume, SignedDyadic.ZERO);
+		referenceBoilingProjection.pendingPhaseVolume.clear();
 		referenceBoilingProjection.step(false, 0);
 		domain.step(false, 0);
 		require(!domain.hasPendingPhaseVolumeWork()
@@ -2278,20 +2278,20 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		ThermalAuditLedger auditBeforeCondensation = domain.thermalAudit();
 		FlipThermalParticleState beforeCondensationState = domain.exportThermalParticleState();
 		FluidDomain.GasThermalPhaseStats condensed = domain.stepGasPhaseChangeOnly(stats.operations());
-		GasComponentAmount vaporAfterCondensation = domain.gasBoundary().inventory(1)
+		var vaporAfterCondensation = domain.gasBoundary().sealedInventory()
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
 		long remainingBatches = stats.operations() - condensed.operations();
 		double condensedPhysicalMass = (domain.totalMass() - liquidMassAfterBoiling)
 				* SolverUnitScale.forCellSize(config.cellSize()).cubicMetersPerNormalizedVolume();
-		double removedVaporMass = vaporAmount.mass()
-				- (vaporAfterCondensation == null ? 0.0 : vaporAfterCondensation.mass());
+		double removedVaporMass = vaporAmount.mass().toDouble()
+				- (vaporAfterCondensation == null ? 0.0 : vaporAfterCondensation.mass().toDouble());
 		require(condensed.operations() > 1 && condensed.operations() <= stats.operations()
 				&& condensed.boiledCells() == 0 && condensed.condensedCells() == 1
 				&& Math.abs(condensedPhysicalMass - removedVaporMass) <= 1.0E-9
 				&& vaporAfterCondensation != null
-				&& Math.abs(vaporAfterCondensation.mass()
+				&& Math.abs(vaporAfterCondensation.mass().toDouble()
 						- batchMass.toDouble() * remainingBatches) <= 1.0E-9
-				&& domain.gasBoundary().standardVolumeNanos(1)
+				&& domain.gasBoundary().sealedInventory().standardVolumeNanos()
 						== gasNanosBefore + vaporAfterCondensation.standardVolumeNanos()
 				&& domain.gasBoundary().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().equals(
@@ -2303,7 +2303,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						+ " mass=" + domain.totalMass() + " vapor=" + vaporAfterCondensation
 						+ " condensedKg=" + condensedPhysicalMass + "/" + removedVaporMass
 						+ " expectedVapor=" + (batchMass.toDouble() * remainingBatches)
-						+ " nanos=" + domain.gasBoundary().standardVolumeNanos(1) + "/" + gasNanosBefore
+						+ " nanos=" + domain.gasBoundary().sealedInventory().standardVolumeNanos() + "/" + gasNanosBefore
 						+ " workCmp=" + domain.thermalAudit().mechanicalWork().compareTo(
 						auditBeforeCondensation.mechanicalWork())
 						+ " audit=" + domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
@@ -2313,7 +2313,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						+ " liquid=" + SignedDyadic.sum(beforeCondensationState.copyInternalEnergy()) + "->"
 						+ SignedDyadic.sum(domain.exportThermalParticleState().copyInternalEnergy()));
 		FluidDomain referenceCondensationProjection = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		java.util.Arrays.fill(referenceCondensationProjection.pendingPhaseCellVolume, SignedDyadic.ZERO);
+		referenceCondensationProjection.pendingPhaseVolume.clear();
 		referenceCondensationProjection.step(false, 0);
 		domain.step(false, 0);
 		require(!domain.hasPendingPhaseVolumeWork()
@@ -2659,7 +2659,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						&& java.util.Arrays.equals(domain.exportMaterialParticleState().copyParticleMass(), beforeMaterials.copyParticleMass())
 						&& java.util.Arrays.equals(domain.exportMaterialParticleState().copyPositionVolume(), beforeMaterials.copyPositionVolume())
 						&& java.util.Arrays.equals(domain.exportThermalParticleState().copyInternalEnergy(), beforeThermal.copyInternalEnergy())
-						&& domain.pendingPhaseCellVolume[13].equals(SignedDyadic.ZERO),
+						&& !domain.pendingPhaseVolume.isPending(13),
 						"unrepresentable gas phase candidate wrote a carrier, ledger or pending volume");
 			}
 			require(FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState()).particleCount() == 1,

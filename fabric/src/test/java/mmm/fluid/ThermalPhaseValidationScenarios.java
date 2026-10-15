@@ -880,6 +880,17 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	) { }
 
 	static void phaseVolumeWorkWaitsForMechanicalProjection() {
+		var work = new PendingPhaseVolumeWork(8);
+		work.add(0, SignedDyadic.of(.125));
+		work.add(1, SignedDyadic.of(-.25));
+		var captured = work.capture();
+		work.add(0, SignedDyadic.of(-.125));
+		require(work.hasWork() && !work.isPending(0) && work.isPending(1)
+				&& captured.entries().size() == 2,
+				"phase-volume cancellation changed another cell or its captured state");
+		work.add(1, SignedDyadic.of(.25));
+		require(!work.hasWork() && work.capture().isEmpty(),
+				"exactly cancelled phase-volume work remained pending");
 		phaseLiquidGeometryMatchesPublishedMarkers();
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:pending_liquid", 1.0,
 				"test:miscible", 0.0, 90.0);
@@ -960,7 +971,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			d.restoreParticleState(new FlipParticleState(3,3,3,1,24,1,positions,new float[72],new byte[27]));
 			d.ensureInventoryGrid(); int cell = d.cellIndex(1,1,1), neighbor = d.cellIndex(2,1,1);
 			var state = new PhaseChangeStageSupport.Workspace(d.sizeX,d.sizeY,d.sizeZ,d.cellCount,d.maximumParticleCount,
-					d.config.cellSize(),d.unitScale,d.geometry,d.markerGrid,d.projection,d.particles,d.gasState,d.pendingPhaseCellVolume,null);
+					d.config.cellSize(),d.unitScale,d.geometry,d.markerGrid,d.projection,d.particles,d.gasState,d.pendingPhaseVolume,null);
 			var before = PhaseLiquidGeometryEdit.current(state,cell);
 			float neighborNormal = d.pressurePhaseGeometry.planeNormal(neighbor,0);
 			PhaseLiquidGeometryEdit edit;

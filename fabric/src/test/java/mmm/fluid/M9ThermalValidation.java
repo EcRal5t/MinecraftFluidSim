@@ -8,6 +8,13 @@ public final class M9ThermalValidation {
 	private M9ThermalValidation() { }
 
 	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("--phase-volume")) {
+			ThermalPhaseValidationScenarios.phaseVolumeWorkWaitsForMechanicalProjection();
+			ThermalPhaseValidationScenarios.operatorEmptyClearsAuditedCondensedCarriers();
+			ThermalGasValidationScenarios.sealedInterfaceBoilingCommitsJointInventory();
+			System.out.println("M9 pending phase-volume validation passed");
+			return;
+		}
 		if (args.length == 1 && args[0].equals("--granular-energy")) {
 			ThermalTransportValidationScenarios.granularEnergyColumnTransactions();
 			System.out.println("M9 granular thermal carrier validation passed");

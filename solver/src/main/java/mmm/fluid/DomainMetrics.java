@@ -150,10 +150,6 @@ final class DomainMetrics {
 		return result;
 	}
 
-	boolean hasPendingPhaseVolumeWork() {
-		for (SignedDyadic value : domain.pendingPhaseCellVolume) if (!value.equals(SignedDyadic.ZERO)) return true;
-		return false;
-	}
 
 	boolean hasAmbientGasCells() {
 		var frame = domain.gasState.frame;

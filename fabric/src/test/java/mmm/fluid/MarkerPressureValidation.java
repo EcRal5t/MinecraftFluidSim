@@ -1049,14 +1049,14 @@ public final class MarkerPressureValidation {
 	private static void pressureExtremeRoundingAndCancellation() {
 		// Independently evaluated exact binary products round to these literal endpoints.
 		for (double sign : new double[]{1,-1}) {
-			near(MarkerPressureOperator.rescaledResponse(sign*0x1.b9f88e001b9f8p-77,0x1.04p500,0x1.24p600),
+			near(ConstraintNumerics.rescaledResponse(sign*0x1.b9f88e001b9f8p-77,0x1.04p500,0x1.24p600),
 					sign*Double.MAX_VALUE,0,"Final pressure response overflow midpoint");
-			near(MarkerPressureOperator.rescaledResponse(sign*0x1.e18ce7228170bp24,0x1.04p-1000,0x1.0cp-100),
+			near(ConstraintNumerics.rescaledResponse(sign*0x1.e18ce7228170bp24,0x1.04p-1000,0x1.0cp-100),
 					sign*Double.MIN_VALUE,0,"Final pressure response underflow midpoint");
 			near(MarkerPressureOperator.scaledPressureDifference(sign*0x1.f07c1f07c1f07p-1,0x1.04p1023,-0x1.0cp1023),
 					sign*Double.MAX_VALUE,0,"Final scaled pressure difference midpoint");
 		}
-		if(MarkerPressureOperator.rescaledResponse(1,Double.MAX_VALUE,2)!=Double.POSITIVE_INFINITY
+		if(ConstraintNumerics.rescaledResponse(1,Double.MAX_VALUE,2)!=Double.POSITIVE_INFINITY
 				||MarkerPressureOperator.scaledPressureDifference(1,Double.MAX_VALUE,-Double.MAX_VALUE)!=Double.POSITIVE_INFINITY)
 			throw new AssertionError("True exact pressure overflow was hidden");
 		if(!Double.isNaN(MarkerPressureOperator.scaledPressureDifference(1,Double.NaN,0)))

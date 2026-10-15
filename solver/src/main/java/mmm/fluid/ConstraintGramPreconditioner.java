@@ -47,7 +47,7 @@ final class ConstraintGramPreconditioner {
 					int column = entryRows[other]; if (column >= row) continue;
 					if (marks[column] != row) { marks[column] = row; sums[column] = 0; if (expanded) exactSums[column] = SignedDyadic.ZERO; touched[touchedCount++] = column; }
 					if (expanded) exactSums[column] = exactSums[column].add(weighted[entry].multiply(exact[other]));
-					else sums[column] += MarkerPressureOperator.rescaledResponse(coefficients[entry], massInverse, coefficients[other]);
+					else sums[column] += ConstraintNumerics.rescaledResponse(coefficients[entry], massInverse, coefficients[other]);
 				}
 			}
 			Arrays.sort(touched, 0, touchedCount);
