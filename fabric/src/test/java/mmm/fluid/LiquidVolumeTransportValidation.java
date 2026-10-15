@@ -856,7 +856,33 @@ public final class LiquidVolumeTransportValidation {
 					|| stats.substeps() > 4) throw new AssertionError("Legal connected liquid arrival failed to advance conservatively: full="
 					+ full + ", chemical=" + chemical + ", entered=" + entered + ", volume=" + domain.totalVolumeExact()
 					+ ", before=" + before + ", substeps=" + stats.substeps());
+			if (!chemical) {
+				long gas = domain.gasState.network.sealedInventoryNanos();
+				var gasSource = domain.gasState.network.externalSource(); var gasSink = domain.gasState.network.escapedSink();
+				double dryCapacity = totalGasCapacity(domain);
+				for (int step = 2; step <= 3; step++) {
+					domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+					stats = domain.stepMechanicsOnly(); entered = 0;
+					for (int p = 0; p < domain.particleCount(); p++) if (domain.particleCellIndex(p) == 18) {
+						if (CellRemapMicroTopology.markerSupport(domain, p) != 1)
+							throw new AssertionError("Restored liquid entered the isolated micro component");
+						entered += domain.particles.volume(p);
+					}
+					if (domain.totalVolumeExact() != before || entered > .125 || stats.substeps() > 4
+							|| domain.gasState.network.sealedInventoryNanos() != gas || !domain.gasState.network.auditClosed()
+							|| !domain.gasState.network.externalSource().equals(gasSource) || !domain.gasState.network.escapedSink().equals(gasSink)
+							|| Math.abs(totalGasCapacity(domain) - dryCapacity) > 8 * Math.ulp(dryCapacity))
+						throw new AssertionError("Restored component cycle changed liquid inventory, gas stock or capacity at step " + step);
+				}
+			}
 		}
+	}
+
+	private static double totalGasCapacity(FluidDomain domain) {
+		var volume = SignedDyadic.ZERO;
+		for (int node = 1; node <= domain.gasState.network.nodeCount(); node++)
+			volume = volume.add(SignedDyadic.of(domain.gasState.network.availableVolume(node)));
+		return volume.toDouble();
 	}
 
 	private static void chemicalFloatTailsShareExistingQuanta() {
