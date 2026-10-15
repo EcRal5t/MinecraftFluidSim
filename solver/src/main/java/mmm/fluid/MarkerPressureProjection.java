@@ -393,7 +393,7 @@ final class MarkerPressureProjection {
 		double residual = rms(r); int iterations = 0;
 		if (residual > tolerance) {
 			var result = SparsePressureFactor.solve(operator, source, pressureCorrection, pressureCorrectionLow, diagonal,
-					wallPredictor, dt, tolerance, domain.config.maxPressureIterations(), rhs);
+					tolerance, domain.config.maxPressureIterations());
 			iterations = result.iterations();
 			operator.residual(pressureCorrection, pressureCorrectionLow, source, r); residual = rms(r);
 		}

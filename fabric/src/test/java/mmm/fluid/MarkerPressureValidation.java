@@ -315,7 +315,7 @@ public final class MarkerPressureValidation {
 			for (int row = 0; row < 4; row++) near(applied[row], reference[row][col], 2e-12, "Independent mean/internal actual-mass Gram");
 		}
 		double[] first = {2, -3, .7, 1.1}, firstResult = new double[4];
-		var result = solveConstraint(operator, basis.markerCount(), first, firstResult, 1e-10, 64);
+		var result = solveConstraint(operator, first, firstResult, 1e-10, 64);
 		if (!result.converged()) throw new AssertionError("Mean/internal pressure solve failed: " + result);
 		double[] expected = MarkerVelocitySpaceExperiment.solve(reference, first);
 		for (int row = 0; row < 4; row++) near(firstResult[row], expected[row], 2e-10, "Independent complete local divergence inverse");
@@ -614,27 +614,13 @@ public final class MarkerPressureValidation {
 				sparseValues.toArray(SignedDyadic[]::new), inertia, 3, new double[values.length], new double[]{5, 4, 3, 2, 1, 0});
 		if (modular.size() != 3 || modular.dependencyCount() != 3 || modular.position(3) < 0)
 			throw new AssertionError("Prime-hidden pressure row lost its independent exact component");
-		var exactRate = new double[values.length]; var exactSource = new double[values.length];
-		for (int row = 0; row < values.length; row++) {
-			for (int axis = 0; axis < 3; axis++) exactRate[row] += values[row][axis] * (axis + 1.0);
-			exactSource[row] = -exactRate[row];
-		}
-		if (!modular.compatibleSource(exactSource, exactRate, 1))
-			throw new AssertionError("Nonmonotone exact pivots changed a compatible full-column source");
-		exactSource[2] += 1; exactRate[2] -= 1;
-		if (modular.compatibleSource(exactSource, exactRate, 1))
-			throw new AssertionError("Replayed pressure dependency accepted incompatible physical source");
 		// The modular relation uses only row 0; its exact completion also needs selected row 1.
 		var local = new PressureRowBasis(new int[]{0, 2, 3, 4}, new int[]{0, 1, 1, 0},
 				new SignedDyadic[]{SignedDyadic.of(1), SignedDyadic.of(prime), SignedDyadic.of(1), SignedDyadic.of(1)},
 				new SignedDyadic[][]{{SignedDyadic.of(1), SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.of(1)}},
 				2, new double[3], new double[]{3, 2, 1});
-		var localRate = new double[]{1 + 2 * prime, 2, 1}; var localSource = new double[]{-localRate[0], -2, -1};
-		if (local.size() != 2 || local.dependencyCount() != 1 || !local.compatibleSource(localSource, localRate, 1))
-			throw new AssertionError("Local modular support failed to expand to its complete exact pressure relation");
-		localRate[2] += 1; localSource[2] -= 1;
-		if (local.compatibleSource(localSource, localRate, 1))
-			throw new AssertionError("Expanded local pressure relation accepted an incompatible full-column source");
+		if (local.size() != 2 || local.dependencyCount() != 1)
+			throw new AssertionError("Local modular support failed to retain its complete integer pressure rank");
 		int block = basis.markerBlock(0);
 		var definitions = java.util.List.of(
 				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{1, 0, 0, 0})), 0),
@@ -649,13 +635,13 @@ public final class MarkerPressureValidation {
 		verifyFactoredConstraint(basis, definitions, velocity, new double[]{1, -2, 3});
 		double[] rhs = new double[3], diagonal = new double[3], pressure = {7, 8, 9}; float dt = .05F;
 		operator.volumeRate(velocity, rhs); for (int row = 0; row < 3; row++) rhs[row] = -rhs[row] / dt; operator.diagonal(diagonal);
-		var direct = SparsePressureFactor.solve(operator, rhs, pressure, diagonal, velocity, dt, 1e-9, 64);
+		var direct = SparsePressureFactor.solve(operator, rhs, pressure, diagonal, 1e-9, 64);
 		if (!direct.converged() || direct.iterations() != 1 || direct.residualRms() > 1e-9)
 			throw new AssertionError("Low-rank mass-whitened pressure solve did not satisfy every physical row");
 		double[] actual = new double[3]; operator.apply(pressure, actual); for (int row = 0; row < 3; row++) near(actual[row], rhs[row], 1e-9, "Full-row direct pressure residual");
 		double[] saved = pressure.clone();
 		double[] savedSource = rhs.clone();
-		var settled = SparsePressureFactor.solve(operator, rhs, pressure, diagonal, velocity, dt, 1e-9, 64);
+		var settled = SparsePressureFactor.solve(operator, rhs, pressure, diagonal, 1e-9, 64);
 		if (!settled.converged() || settled.iterations() != 0 || !Arrays.equals(saved, pressure))
 			throw new AssertionError("Certified converged pressure spent another direct solve or changed its reference");
 		if (direct.residualRms() > Double.MIN_VALUE) {
@@ -663,8 +649,8 @@ public final class MarkerPressureValidation {
 			for (int row = 0; row < 3; row++) seedSource[row] = SignedDyadic.of(rhs[row]);
 			operator.residual(warmSeed, seedSource, actual); double before = 0;
 			for (double value : actual) before = Math.hypot(before, value); before /= Math.sqrt(3);
-			var incomplete = SparsePressureFactor.solve(operator, seedSource, warmSeed, warmLow, diagonal, velocity, dt,
-					Math.nextDown(direct.residualRms()), 1, rhs);
+			var incomplete = SparsePressureFactor.solve(operator, seedSource, warmSeed, warmLow, diagonal,
+					Math.nextDown(direct.residualRms()), 1);
 			operator.residual(warmSeed, warmLow, seedSource, actual); double after = 0;
 			for (double value : actual) after = Math.hypot(after, value); after /= Math.sqrt(3);
 			if (incomplete.converged() != (after <= Math.nextDown(direct.residualRms())) || incomplete.iterations() != 1
@@ -674,13 +660,19 @@ public final class MarkerPressureValidation {
 		var pressureLow = new double[3]; var exactRhs = new SignedDyadic[3];
 		for (int row = 0; row < 3; row++) { pressureLow[row] = Math.ulp(pressure[row]) / 4; exactRhs[row] = SignedDyadic.of(rhs[row]); }
 		var savedLow = pressureLow.clone();
-		var noBudget = SparsePressureFactor.solve(operator, exactRhs, pressure, pressureLow, diagonal, velocity, dt, 1e-9, 0, rhs);
+		var noBudget = SparsePressureFactor.solve(operator, exactRhs, pressure, pressureLow, diagonal, 1e-9, 0);
 		if (noBudget.iterations() != 0 || noBudget.converged() || !Arrays.equals(saved, pressure) || !Arrays.equals(savedLow, pressureLow) || !Arrays.equals(savedSource, rhs))
 			throw new AssertionError("Zero direct solve budget changed the same-source iterative fallback");
 		PressureRowBasis.withWorkLimitForValidation(0, () -> {
-			if (SparsePressureFactor.solve(operator, exactRhs, pressure, pressureLow, diagonal, velocity, dt, 1e-9, 64, rhs).converged()
+			var converged = SparsePressureFactor.solve(operator, exactRhs, pressure, pressureLow, diagonal, 1e-9, 64);
+			if (!converged.converged() || converged.iterations() != 0
 					|| !Arrays.equals(saved, pressure) || !Arrays.equals(savedLow, pressureLow) || !Arrays.equals(savedSource, rhs))
-				throw new AssertionError("Unavailable exact work budget changed the iterative fallback pressure or source");
+				throw new AssertionError("An already converged pressure performed unnecessary row selection");
+			var seed = new double[]{7, 8, 9}; var seedLow = new double[3];
+			var unavailable = SparsePressureFactor.solve(operator, exactRhs, seed, seedLow, diagonal, 1e-9, 64);
+			if (unavailable.converged() || unavailable.iterations() != 0 || !Arrays.equals(seed, new double[]{7, 8, 9})
+					|| !Arrays.equals(seedLow, new double[3]) || !Arrays.equals(savedSource, rhs))
+				throw new AssertionError("Unavailable row-selection work budget changed an unstarted pressure solve");
 		});
 		var nullPressure = new double[]{-2, 1, 0}; var nullForce = new double[3][basis.markerCount()];
 		operator.force(nullPressure, nullForce);
@@ -688,20 +680,23 @@ public final class MarkerPressureValidation {
 		near(operator.applyWithWork(nullPressure, actual), 0, 0, "Redundant multipliers have zero mechanical and gas-storage work");
 		for (double value : actual) near(value, 0, 0, "Redundant multipliers leave every constraint unchanged");
 		var shiftedPressure = new double[]{5, 9, 9};
-		if (!SparsePressureFactor.solve(operator, rhs, shiftedPressure, diagonal, velocity, dt, 1e-9, 64).converged())
+		if (!SparsePressureFactor.solve(operator, rhs, shiftedPressure, diagonal, 1e-9, 64).converged())
 			throw new AssertionError("A zero-force multiplier shift prevented the complete physical solve");
 		operator.apply(shiftedPressure, actual);
 		for (int row = 0; row < actual.length; row++) near(actual[row], rhs[row], 1e-9, "Shifted multipliers satisfy the full-row residual");
 		near(shiftedPressure[2], saved[2], 0, "Positive gas storage retains its unique pressure");
 		rhs[1] += 1; exactRhs[1] = SignedDyadic.of(rhs[1]);
-		if (SparsePressureFactor.solve(operator, exactRhs, pressure, pressureLow, diagonal, velocity, dt, 1e-9, 64, rhs).converged()
-				|| !Arrays.equals(saved, pressure) || !Arrays.equals(savedLow, pressureLow))
-			throw new AssertionError("Incompatible source changed the iterative fallback input");
+		var incompatible = SparsePressureFactor.solve(operator, exactRhs, pressure, pressureLow, diagonal, 1e-9, 64);
+		operator.residual(pressure, pressureLow, exactRhs, actual);
+		double incompatibleResidual = 0; for (double value : actual) incompatibleResidual = Math.hypot(incompatibleResidual, value);
+		incompatibleResidual /= Math.sqrt(actual.length);
+		if (incompatible.converged() || incompatibleResidual <= 1e-9 || incompatibleResidual != incompatible.residualRms())
+			throw new AssertionError("Incompatible pressure source escaped the actual full-row residual");
 		var closed = new CellVelocityConstraintOperator(basis, java.util.List.of(definitions.getFirst(),
 				new CellVelocityConstraintOperator.Row(java.util.List.of(new CellVelocityConstraintOperator.Block(block, 0, new double[]{-1, 0, 0, 0})), 0),
 				definitions.get(2)));
 		closed.volumeRate(velocity, rhs); for (int row = 0; row < 3; row++) rhs[row] = -rhs[row] / dt; closed.diagonal(diagonal);
-		if (!SparsePressureFactor.solve(closed, rhs, pressure, diagonal, velocity, dt, 1e-9, 64).converged())
+		if (!SparsePressureFactor.solve(closed, rhs, pressure, diagonal, 1e-9, 64).converged())
 			throw new AssertionError("A uniform closed pressure gauge prevented the certified physical solve");
 		near(pressure[0] - pressure[1], rhs[0] / diagonal[0], 1e-9, "Closed pressure difference is independent of the common gauge");
 		var coupledRows = java.util.List.of(
@@ -717,11 +712,11 @@ public final class MarkerPressureValidation {
 		var coupledDiagonal = new double[2]; coupled.diagonal(coupledDiagonal);
 		boolean aliased = false; var beforeAlias = correction.clone();
 		try { SparsePressureFactor.solve(coupled, source, correction, correction, coupledDiagonal,
-				velocity, coupledDt, 1e-16, 0, nativeSource); }
+				1e-16, 0); }
 		catch (IllegalArgumentException alias) { aliased = alias.getMessage().contains("Aliased pressure accumulator"); }
 		if (!aliased || !Arrays.equals(beforeAlias, correction)) throw new AssertionError("Aliased pressure accumulators changed the fallback source");
 		if (!SparsePressureFactor.solve(coupled, source, correction, correctionLow, coupledDiagonal,
-				velocity, coupledDt, 1e-16, 64, nativeSource).converged()) throw new AssertionError("Referenced gas storage lost its small pressure response");
+				1e-16, 64).converged()) throw new AssertionError("Referenced gas storage lost its small pressure response");
 		var residual = new double[2]; coupled.residual(correction, correctionLow, source, residual);
 		for (double value : residual) near(value, 0, 1e-16, "Exact referenced gas storage residual");
 		if (!(correction[0] < 0 && correction[1] > 0) || initial[0] + correction[0] != initial[0]
@@ -743,12 +738,10 @@ public final class MarkerPressureValidation {
 		var close = new CellVelocityConstraintOperator(basis, closeRows);
 		Arrays.fill(velocity[0], .125); Arrays.fill(velocity[1], .25);
 		var closeSource = close.referencedSource(velocity, dt, new double[2], new double[2]);
-		var closeNative = new double[2]; close.volumeRate(velocity, closeNative);
-		for (int row = 0; row < 2; row++) closeNative[row] = -closeNative[row] / dt;
 		var closeDiagonal = new double[2]; close.diagonal(closeDiagonal);
 		var closePressure = new double[2]; var closeLow = new double[2];
 		var closeResult = SparsePressureFactor.solve(close, closeSource, closePressure, closeLow, closeDiagonal,
-				velocity, dt, 1e-9, 64, closeNative);
+				1e-9, 64);
 		if (!closeResult.converged()) throw new AssertionError("Nearly dependent normal traces did not reach the physical residual target");
 		close.residual(closePressure, closeLow, closeSource, residual);
 		for (double value : residual) near(value, 0, 1e-9, "Nearly dependent full-row pressure residual");
@@ -1072,18 +1065,18 @@ public final class MarkerPressureValidation {
 				near(image[row], eigenvalue * mode[row], 1e-12, "Independent tangent-chain eigenmode");
 			double[] rhs = new double[rows]; operator.apply(mode, rhs);
 			double pressureUnit = 1.0 / config.density();
-			var result = solveConstraint(operator, basis.markerCount(), rhs, new double[rows], config.pressureTolerance() * pressureUnit, config.maxPressureIterations());
+			var result = solveConstraint(operator, rhs, new double[rows], config.pressureTolerance() * pressureUnit, config.maxPressureIterations());
 			if (!result.converged()) throw new AssertionError("Shared-trace matrix exceeded the original pressure budget: " + result);
 			System.out.printf("TRACE cells=%d epsilon=%g tangentCondition=%g chainCondition=%g result=%s%n", cells, epsilon, condition,
 					(1 + Math.cos(Math.PI / cells)) / (1 - Math.cos(Math.PI / cells)), result);
 		}
 	}
 
-	private static PressureProjectionResult solveConstraint(CellVelocityConstraintOperator operator, int markers, double[] rhs, double[] pressure,
+	private static PressureProjectionResult solveConstraint(CellVelocityConstraintOperator operator, double[] rhs, double[] pressure,
 	                                                       double tolerance, int maximumIterations) {
 		var diagonal = new double[rhs.length]; operator.diagonal(diagonal);
 		return SparsePressureFactor.solve(operator, rhs, pressure, diagonal,
-				new double[3][markers], 1, tolerance, maximumIterations);
+				tolerance, maximumIterations);
 	}
 	private static void verifyAffineRigidMotion(CellAffineVelocity basis) {
 		for (int mode = 0; mode < 4; mode++) {

@@ -375,12 +375,9 @@ public final class BoundaryPourDiagnostic {
 		}
 		try {
 			var basis = operator.rowBasis();
-			var rate = new double[rhs.length]; operator.volumeRate(view.wallPredictor(), rate);
-			System.out.printf("POUR pressure exactRows=%d dependencies=%d compatibleSource=%s%n",
-					basis.size(), basis.dependencyCount(),
-					basis.compatibleSource(rhs, rate, view.dt()));
+			System.out.printf("POUR pressure independentRows=%d dependentRows=%d%n", basis.size(), basis.dependencyCount());
 		} catch (PressureRowBasis.Unavailable unavailable) {
-			System.out.println("POUR pressure exact certificate unavailable: " + unavailable.getMessage());
+			System.out.println("POUR pressure row selection unavailable: " + unavailable.getMessage());
 		}
 	}
 

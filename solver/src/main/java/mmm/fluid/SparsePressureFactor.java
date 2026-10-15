@@ -11,11 +11,11 @@ import org.ejml.sparse.csc.misc.TriangularSolver_DSCC;
 final class SparsePressureFactor {
 	private SparsePressureFactor() { }
 	static PressureProjectionResult solve(CellVelocityConstraintOperator operator, double[] rhs, double[] pressure,
-			double[] diagonal, double[][] predictor, float dt, double tolerance, int maximumSolves) {
+			double[] diagonal, double tolerance, int maximumSolves) {
 		var exact = new SignedDyadic[rhs.length];
 		for (int row = 0; row < rhs.length; row++) exact[row] = SignedDyadic.of(rhs[row]);
 		var candidate = pressure.clone(); var low = new double[rhs.length];
-		var result = solve(operator, exact, candidate, low, diagonal, predictor, dt, tolerance, maximumSolves, rhs);
+		var result = solve(operator, exact, candidate, low, diagonal, tolerance, maximumSolves);
 		if (result.iterations() == 0 && !result.converged()) return result;
 		var image = new double[rhs.length]; operator.residual(pressure, exact, image); double initial = rms(image);
 		for (int row = 0; row < candidate.length; row++) {
@@ -30,8 +30,8 @@ final class SparsePressureFactor {
 		return unavailable(result.iterations(), initial);
 	}
 	static PressureProjectionResult solve(CellVelocityConstraintOperator operator, SignedDyadic[] rhs, double[] pressure, double[] pressureLow,
-			double[] diagonal, double[][] predictor, float dt, double tolerance,
-			int maximumSolves, double[] physicalSource) {
+			double[] diagonal, double tolerance,
+			int maximumSolves) {
 		if (pressure == pressureLow) throw new IllegalArgumentException("Aliased pressure accumulator columns");
 		if (maximumSolves < 0) throw new IllegalArgumentException("Negative pressure factor solve budget");
 		int iterations = 0; double initialResidual = Double.POSITIVE_INFINITY;
@@ -39,12 +39,11 @@ final class SparsePressureFactor {
 		try {
 			double[] image = new double[rhs.length]; operator.residual(pressure, pressureLow, rhs, image);
 			initialResidual = rms(image);
-			PressureRowBasis basis = operator.rowBasis();
-			double[] rate = new double[rhs.length]; operator.volumeRate(predictor, rate);
-			if (!basis.compatibleSource(physicalSource, rate, dt)) return unavailable(iterations, initialResidual);
 			if (Double.isFinite(initialResidual) && initialResidual <= tolerance)
 				return new PressureProjectionResult(0, initialResidual, true);
-			if (!Double.isFinite(initialResidual) || basis.size() == 0) return unavailable(iterations, initialResidual);
+			if (!Double.isFinite(initialResidual)) return unavailable(iterations, initialResidual);
+			PressureRowBasis basis = operator.rowBasis();
+			if (basis.size() == 0) return unavailable(iterations, initialResidual);
 			double[] scale = new double[basis.size()];
 			for (int row = 0; row < scale.length; row++) {
 				scale[row] = 1 / Math.sqrt(diagonal[basis.row(row)]);
