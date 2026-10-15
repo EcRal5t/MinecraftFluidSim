@@ -24,15 +24,9 @@ final class LiquidAffineSweepGeometry {
 		requireInput(domain, donor, receiver, axis, intercept, tangentSlope, otherSlope, 0, donorSupport, receiverSupport);
 		var phase = domain.pressurePhaseGeometry;
 		var cut = domain.geometry.cutCells;
-		int sign = positive ? 1 : -1;
-		SignedDyadic[] normal = {SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO};
-		normal[(axis + 1) % 3] = SignedDyadic.of(tangentSlope).multiply(SignedDyadic.of(sign));
-		normal[(axis + 2) % 3] = SignedDyadic.of(otherSlope).multiply(SignedDyadic.of(sign));
-		var velocity = new GasGeometryOverlap.HalfSpace(normal[0], normal[1], normal[2], SignedDyadic.of(-sign * intercept));
+		var faceIntegral = new MicroFaceAffineIntegral(intercept, tangentSlope, otherSlope, positive);
 		double donorPore = poreScale(domain, donor), receiverPore = poreScale(domain, receiver);
 		boolean componentPores = phase.hasComponentPlanes(donor) || phase.hasComponentPlanes(receiver);
-		ExactRational a = rational(intercept), b = rational(tangentSlope), c = rational(otherSlope);
-		ExactRational centered = a.add(b.add(c).divide(2));
 		ExactRational[] rates = new ExactRational[8]; java.util.Arrays.fill(rates, ExactRational.ZERO);
 		try {
 			for (int micro = 0; micro < 8; micro++) {
@@ -44,10 +38,7 @@ final class LiquidAffineSweepGeometry {
 						phase.componentPoreScale(receiver, peerMicro, receiverPore)) : Math.min(donorPore, receiverPore);
 				if (!Double.isFinite(pore) || pore < 0 || pore > 1) throw new IllegalStateException("Invalid affine face pore fraction");
 				if (pore == 0) continue;
-				ExactRational[] part = GasGeometryOverlap.normalizedMoments(micro, List.of(velocity));
-				// The selected box has normal thickness 1/2; its tangential velocity is constant along that axis.
-				ExactRational integral = centered.multiply(part[0]).add(b.multiply(part[(axis + 1) % 3 + 1]))
-						.add(c.multiply(part[(axis + 2) % 3 + 1])).multiply(2L * sign);
+				ExactRational integral = faceIntegral.integrate(micro >>> (axis + 1) % 3 & 1, micro >>> (axis + 2) % 3 & 1);
 				if (integral.signum() < 0) throw new IllegalStateException("Affine positive face rate has negative measure");
 				rates[micro] = integral.multiply(rational(pore));
 			}

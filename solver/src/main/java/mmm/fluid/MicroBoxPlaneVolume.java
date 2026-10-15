@@ -127,6 +127,19 @@ final class MicroBoxPlaneVolume {
 		return wetVolume(micro, new GasGeometryOverlap.HalfSpace(plane.nx().negate(), plane.ny().negate(), plane.nz().negate(), plane.threshold().negate()));
 	}
 
+	/** Exact degree-zero through degree-three moments of n dot x >= threshold, about the whole-cell centre. */
+	static ExactRational[] dryMoments(int micro, GasGeometryOverlap.HalfSpace plane, int order) {
+		if (micro < 0 || micro >= 8 || plane == null || order < 0 || order > 3)
+			throw new IllegalArgumentException("Invalid microbox plane moment input");
+		requireBudget(plane.nx()); requireBudget(plane.ny()); requireBudget(plane.nz()); requireBudget(plane.threshold());
+		if (order == 0) return new ExactRational[]{dryVolume(micro, plane), ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
+		try {
+			return MicroBoxPlaneMoments.integrate(micro, plane, order);
+		} catch (IllegalArgumentException magnitude) {
+			throw new GasTopologyBlockedException("Exact microbox plane moments exceed their representation budget: " + magnitude.getMessage());
+		}
+	}
+
 	private static SignedDyadic partialNumerator(SignedDyadic distance, int axes, SignedDyadic[] extents) {
 		SignedDyadic numerator = SignedDyadic.ZERO;
 		for (int subset = 0; subset < 1 << axes; subset++) {
@@ -148,13 +161,13 @@ final class MicroBoxPlaneVolume {
 			throw new GasTopologyBlockedException("Microbox half-space exceeds the rational representation budget");
 		}
 	}
-	private static ExactRational quotient(SignedDyadic numerator, SignedDyadic denominator) {
+	static ExactRational quotient(SignedDyadic numerator, SignedDyadic denominator) {
 		if (numerator.signum() == 0) return ExactRational.ZERO;
 		long shift = (long) numerator.exponent() - denominator.exponent();
 		var n = numerator.significand(); var d = denominator.significand();
 		if (n.abs().bitLength() + Math.max(shift, 0) > ChemicalLimits.MAX_RATIONAL_BITS
 				|| d.bitLength() + Math.max(-shift, 0) > ChemicalLimits.MAX_RATIONAL_BITS) {
-			throw new GasTopologyBlockedException("Microbox volume quotient exceeds the rational representation budget");
+			throw new GasTopologyBlockedException("Microbox integral quotient exceeds the rational representation budget");
 		}
 		return shift >= 0 ? new ExactRational(n.shiftLeft((int) shift), d) : new ExactRational(n, d.shiftLeft((int) -shift));
 	}

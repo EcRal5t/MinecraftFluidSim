@@ -360,6 +360,7 @@ public final class CellRemapMomentsValidation {
 	}
 
 	private static void sweptQuadraticMomentsRetainAffineWedgeGeometry() {
+		faceAffineRatesMatchPolyhedra();
 		var domain = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 32);
 		domain.setVolume(1, 1, 1, 1); domain.rebuildGridFromParticles();
@@ -642,6 +643,39 @@ public final class CellRemapMomentsValidation {
 						precise(thinFlow.maximumOutwardSpeed(f, true, 0), .25, "Interior wet source retains its future exit speed");
 					}
 				}
+			}
+		}
+	}
+
+	/** Independent 3-D clipping integrates the same tangential positive affine rate. */
+	static void faceAffineRatesMatchPolyhedra() {
+		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.05F,200,1e-5F,.45F,.002F,0),32);
+		domain.rebuildGridFromParticles(); int donor = domain.cellIndex(1,1,1);
+		double tiny = Math.scalb(1.0,-100), large = Double.MAX_VALUE / 16;
+		double[][] traces = {{0,0,0},{.25,0,0},{-.25,0,0},{0,1,0},{.25,-1,0},{0,0,-1},{-.25,0,1},
+				{-.375,1,.5},{.375,-1,-.5},{tiny,1,-1},{Math.nextUp(-.5),1,0},{-tiny,1,1},{tiny,-1,-1},
+				{large,-2*large,large},{Double.MIN_VALUE,2*Double.MIN_VALUE,-Double.MIN_VALUE}};
+		for (int axis = 0; axis < 3; axis++) for (boolean positive : new boolean[]{false,true}) for (var q : traces) {
+			int sign = positive ? 1 : -1, tangent = (axis+1)%3, other = (axis+2)%3;
+			int[] xyz = {1,1,1}; xyz[axis] += sign; int receiver = domain.cellIndex(xyz[0],xyz[1],xyz[2]);
+			var n = new mmm.units.SignedDyadic[]{mmm.units.SignedDyadic.ZERO,mmm.units.SignedDyadic.ZERO,mmm.units.SignedDyadic.ZERO};
+			n[tangent] = mmm.units.SignedDyadic.of(q[1]).multiply(mmm.units.SignedDyadic.of(sign)); n[other] = mmm.units.SignedDyadic.of(q[2]).multiply(mmm.units.SignedDyadic.of(sign));
+			var plane = new GasGeometryOverlap.HalfSpace(n[0],n[1],n[2],mmm.units.SignedDyadic.of(-sign*q[0]));
+			var centered = rawRational(q[0]).add(rawRational(q[1]).add(rawRational(q[2])).divide(2));
+			var direct = new MicroFaceAffineIntegral(q[0],q[1],q[2],positive);
+			for (int micro = 0; micro < 8; micro++) if ((micro >> axis & 1) == (positive ? 1 : 0)) {
+				var moments = GasGeometryOverlap.normalizedMoments(micro,java.util.List.of(plane,plane));
+				var expected = centered.multiply(moments[0]).add(rawRational(q[1]).multiply(moments[tangent+1]))
+						.add(rawRational(q[2]).multiply(moments[other+1])).multiply(2L*sign);
+				check(direct.integrate(micro >> tangent & 1,micro >> other & 1).equals(expected),
+						"Direct face integral differs from exact polyhedron: axis="+axis+" positive="+positive+" micro="+micro+" q="+java.util.Arrays.toString(q));
+				int peer = micro ^ 1 << axis;
+				if (expected.isZero() || expected.toDouble() > 0) {
+					double actual = LiquidAffineSweepGeometry.faceOutflowRate(domain,donor,receiver,axis,positive,q[0],q[1],q[2],1<<micro,1<<peer);
+					checkSameObservation(actual,expected,"Supported face rate");
+				}
+				check(LiquidAffineSweepGeometry.faceOutflowRate(domain,donor,receiver,axis,positive,q[0],q[1],q[2],1<<micro,0) == 0,
+						"Face rate crossed an unsupported receiver");
 			}
 		}
 	}

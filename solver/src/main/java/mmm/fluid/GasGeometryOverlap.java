@@ -219,11 +219,13 @@ final class GasGeometryOverlap {
 		if (micro < 0 || micro >= 8 || planes == null || planes.size() > 12 || planes.stream().anyMatch(Objects::isNull)) {
 			throw new IllegalArgumentException("Invalid gas overlap microbox or half-spaces");
 		}
+		if (planes.size() == 1) return MicroBoxPlaneVolume.dryMoments(micro, planes.getFirst(), order);
 		List<HalfSpace> constraints = List.copyOf(planes);
 		try {
 			Point origin = new Point(ExactRational.of(micro & 1).divide(2), ExactRational.of(micro >>> 1 & 1).divide(2), ExactRational.of(micro >>> 2 & 1).divide(2));
 			ExactRational[] result = new ExactRational[order == 3 ? 20 : order == 2 ? 10 : 4]; java.util.Arrays.fill(result, ExactRational.ZERO);
 			var active = new ArrayList<Plane>(2);
+			HalfSpace singleActive = null;
 			for (HalfSpace halfSpace : constraints) {
 				Plane plane = new Plane(exact(halfSpace.nx), exact(halfSpace.ny), exact(halfSpace.nz), exact(halfSpace.threshold));
 				ExactRational low = plane.distance(origin), high = low;
@@ -232,7 +234,7 @@ final class GasGeometryOverlap {
 					if (spread.signum() < 0) low = low.add(spread); else high = high.add(spread);
 				}
 				if (low.signum() < 0 && high.signum() <= 0) return result;
-				if (low.signum() < 0) active.add(plane);
+				if (low.signum() < 0) { active.add(plane); singleActive = halfSpace; }
 			}
 			if (active.isEmpty()) {
 				result[0] = MICRO_VOLUME;
@@ -255,6 +257,7 @@ final class GasGeometryOverlap {
 				}
 				return result;
 			}
+			if (active.size() == 1) return MicroBoxPlaneVolume.dryMoments(micro, singleActive, order);
 			List<List<Point>> faces = box(origin);
 			for (Plane plane : active) {
 				faces = clip(faces, plane);
