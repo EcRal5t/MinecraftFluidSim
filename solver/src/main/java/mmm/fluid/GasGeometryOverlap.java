@@ -6,6 +6,8 @@ import mmm.units.SignedDyadic;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 
@@ -31,6 +33,8 @@ final class GasGeometryOverlap {
 		ExactRational normal(int axis) { return axis == 0 ? nx : axis == 1 ? ny : nz; }
 		ExactRational distance(Point p) { return nx.multiply(p.x).add(ny.multiply(p.y)).add(nz.multiply(p.z)).subtract(threshold); }
 	}
+	private record Polyhedron(List<Point> vertices, List<int[]> faces) { }
+	private static final Polyhedron EMPTY = new Polyhedron(List.of(), List.of());
 	private static final ExactRational HALF = ExactRational.ONE.divide(2);
 	private static final ExactRational MICRO_VOLUME = ExactRational.ONE.divide(8);
 	private static final int[][] AFFINE_PRODUCTS = {
@@ -51,25 +55,29 @@ final class GasGeometryOverlap {
 		try {
 			var origin = new Point(ExactRational.of(micro & 1).divide(2), ExactRational.of(micro >>> 1 & 1).divide(2),
 					ExactRational.of(micro >>> 2 & 1).divide(2));
-			var whole = box(origin); List<List<Point>> faces = whole;
+			var whole = box(origin); var polyhedron = whole;
 			for (var halfSpace : List.copyOf(planes)) {
-				faces = clip(faces, new Plane(exact(halfSpace.nx), exact(halfSpace.ny), exact(halfSpace.nz), exact(halfSpace.threshold)));
-				if (faces.isEmpty()) return List.of();
+				polyhedron = clip(polyhedron, new Plane(exact(halfSpace.nx), exact(halfSpace.ny), exact(halfSpace.nz), exact(halfSpace.threshold)));
+				if (polyhedron.faces.isEmpty()) return List.of();
 			}
-			if (faces == whole) return gaussBox(new double[]{(micro & 1) * .5 - .25, (micro >>> 1 & 1) * .5 - .25,
+			if (polyhedron == whole) return gaussBox(new double[]{(micro & 1) * .5 - .25, (micro >>> 1 & 1) * .5 - .25,
 					(micro >>> 2 & 1) * .5 - .25}, .25, MICRO_VOLUME);
-			var vertices = faces.stream().flatMap(List::stream).distinct().toList();
+			var vertices = polyhedron.vertices; var used = new boolean[vertices.size()]; int vertexCount = 0;
 			var sum = new ExactRational[]{ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO};
-			for (var vertex : vertices) for (int a = 0; a < 3; a++) sum[a] = sum[a].add(vertex.component(a));
-			var anchor = new Point(sum[0].divide(vertices.size()), sum[1].divide(vertices.size()), sum[2].divide(vertices.size()));
+			for (var face : polyhedron.faces) for (int id : face) if (!used[id]) {
+				used[id] = true; vertexCount++;
+				for (int a = 0; a < 3; a++) sum[a] = sum[a].add(vertices.get(id).component(a));
+			}
+			var anchor = new Point(sum[0].divide(vertexCount), sum[1].divide(vertexCount), sum[2].divide(vertexCount));
 			var beta = exact(SignedDyadic.of((5 - Math.sqrt(5)) / 20));
 			var result = new ArrayList<QuadraturePoint>();
-			for (var face : faces) for (int i = 1; i + 1 < face.size(); i++) {
-				var determinant = determinant(face.getFirst().subtract(anchor), face.get(i).subtract(anchor), face.get(i + 1).subtract(anchor));
+			for (var face : polyhedron.faces) for (int i = 1; i + 1 < face.length; i++) {
+				var first = vertices.get(face[0]); var second = vertices.get(face[i]); var third = vertices.get(face[i + 1]);
+				var determinant = determinant(first.subtract(anchor), second.subtract(anchor), third.subtract(anchor));
 				if (determinant.isZero()) continue;
 				if (determinant.signum() < 0) throw new IllegalStateException("Quadrature polyhedron orientation does not close");
 				var weight = determinant.divide(24);
-				Point[] tetra = {anchor, face.getFirst(), face.get(i), face.get(i + 1)};
+				Point[] tetra = {anchor, first, second, third};
 				for (int selected = 0; selected < 4; selected++) {
 					var position = new double[3];
 					for (int a = 0; a < 3; a++) {
@@ -258,25 +266,26 @@ final class GasGeometryOverlap {
 				return result;
 			}
 			if (active.size() == 1) return MicroBoxPlaneVolume.dryMoments(micro, singleActive, order);
-			List<List<Point>> faces = box(origin);
+			var polyhedron = box(origin);
 			for (Plane plane : active) {
-				faces = clip(faces, plane);
-				if (faces.isEmpty()) return result;
+				polyhedron = clip(polyhedron, plane);
+				if (polyhedron.faces.isEmpty()) return result;
 			}
 			ExactRational sixVolume = ExactRational.ZERO;
-			for (List<Point> face : faces) {
-				Point first = face.getFirst().subtract(origin);
-				for (int i = 1; i + 1 < face.size(); i++) {
-					ExactRational determinant = determinant(first, face.get(i).subtract(origin), face.get(i + 1).subtract(origin));
+			for (var face : polyhedron.faces) {
+				Point first = polyhedron.vertices.get(face[0]), relative = first.subtract(origin);
+				for (int i = 1; i + 1 < face.length; i++) {
+					Point second = polyhedron.vertices.get(face[i]), third = polyhedron.vertices.get(face[i + 1]);
+					ExactRational determinant = determinant(relative, second.subtract(origin), third.subtract(origin));
 					if (determinant.isZero()) continue;
 					sixVolume = sixVolume.add(determinant);
 					if (moments) for (int axis = 0; axis < 3; axis++) {
 						// A tetrahedron's centroid is the average of its four vertices.
-						ExactRational sum = origin.component(axis).add(face.getFirst().component(axis))
-								.add(face.get(i).component(axis)).add(face.get(i + 1).component(axis)).subtract(ExactRational.of(2));
+						ExactRational sum = origin.component(axis).add(first.component(axis))
+								.add(second.component(axis)).add(third.component(axis)).subtract(ExactRational.of(2));
 						result[axis + 1] = result[axis + 1].add(determinant.multiply(sum).divide(24));
 					}
-					if (order >= 2) addHigherMoments(result, determinant, origin, face.getFirst(), face.get(i), face.get(i + 1));
+					if (order >= 2) addHigherMoments(result, determinant, origin, first, second, third);
 				}
 			}
 			ExactRational volume = sixVolume.divide(6);
@@ -317,79 +326,103 @@ final class GasGeometryOverlap {
 		}
 	}
 
-	/** Six outward-oriented rectangles; cyclic tangent order has positive normal along the chosen axis. */
-	private static List<List<Point>> box(Point origin) {
-		var faces = new ArrayList<List<Point>>(6);
+	/** Six outward-oriented rectangles sharing the eight exact box corners. */
+	private static Polyhedron box(Point origin) {
+		var vertices = new ArrayList<Point>(8);
+		for (int corner = 0; corner < 8; corner++) vertices.add(new Point(
+				(corner & 1) == 0 ? origin.x : origin.x.add(HALF),
+				(corner & 2) == 0 ? origin.y : origin.y.add(HALF),
+				(corner & 4) == 0 ? origin.z : origin.z.add(HALF)));
+		var faces = new ArrayList<int[]>(6);
 		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
-			var face = new ArrayList<Point>(4);
-			for (int corner : new int[]{0, 1, 3, 2}) {
-				ExactRational[] p = {origin.x, origin.y, origin.z};
-				if (sign > 0) p[axis] = p[axis].add(HALF);
-				if ((corner & 1) != 0) p[(axis + 1) % 3] = p[(axis + 1) % 3].add(HALF);
-				if ((corner & 2) != 0) p[(axis + 2) % 3] = p[(axis + 2) % 3].add(HALF);
-				face.add(new Point(p[0], p[1], p[2]));
-			}
-			if (sign < 0) java.util.Collections.reverse(face);
+			int[] face = new int[4]; int slot = 0;
+			for (int corner : new int[]{0, 1, 3, 2}) face[slot++] = (sign > 0 ? 1 << axis : 0)
+					| (corner & 1) << (axis + 1) % 3 | (corner >>> 1) << (axis + 2) % 3;
+			if (sign < 0) reverse(face);
 			faces.add(face);
 		}
-		return faces;
+		return new Polyhedron(vertices, faces);
 	}
 
-	private static List<List<Point>> clip(List<List<Point>> faces, Plane plane) {
-		boolean outside = false, inside = false;
-		for (List<Point> face : faces) for (Point p : face) {
-			int sign = plane.distance(p).signum(); outside |= sign < 0; inside |= sign > 0;
+	private static Polyhedron clip(Polyhedron source, Plane plane) {
+		var distance = new ExactRational[source.vertices.size()]; boolean outside = false, inside = false;
+		for (var face : source.faces) for (int id : face) if (distance[id] == null) {
+			distance[id] = plane.distance(source.vertices.get(id));
+			outside |= distance[id].signum() < 0; inside |= distance[id].signum() > 0;
 		}
-		if (!outside) return faces;
-		if (!inside) return List.of(); // Retaining only a plane has zero three-dimensional measure.
-		var result = new ArrayList<List<Point>>(8);
-		var boundary = new ArrayList<Point>();
-		for (List<Point> face : faces) {
-			var clipped = new ArrayList<Point>(face.size() + 1);
-			Point previous = face.getLast(); ExactRational previousDistance = plane.distance(previous);
-			for (Point point : face) {
-				ExactRational distance = plane.distance(point);
-				if ((distance.signum() >= 0) != (previousDistance.signum() >= 0)) {
-					Point intersection = previous.interpolate(point, divide(previousDistance, previousDistance.subtract(distance)));
+		if (!outside) return source;
+		if (!inside) return EMPTY; // Retaining only a plane has zero three-dimensional measure.
+		var vertices = new ArrayList<>(source.vertices);
+		var vertexIds = new HashMap<Point, Integer>();
+		for (int id = 0; id < vertices.size(); id++) vertexIds.put(vertices.get(id), id);
+		var intersections = new HashMap<Long, Integer>();
+		var faces = new ArrayList<int[]>(source.faces.size() + 1); var boundary = new LinkedHashSet<Integer>();
+		for (var face : source.faces) {
+			var clipped = new ArrayList<Integer>(face.length + 1); int previous = face[face.length - 1];
+			for (int id : face) {
+				if ((distance[id].signum() >= 0) != (distance[previous].signum() >= 0)) {
+					int intersection;
+					if (distance[id].isZero()) intersection = id;
+					else if (distance[previous].isZero()) intersection = previous;
+					else {
+						int first = Math.min(previous, id), second = Math.max(previous, id);
+						long edge = (long) first << 32 | second; Integer saved = intersections.get(edge);
+						if (saved != null) intersection = saved;
+						else {
+							var point = vertices.get(previous).interpolate(vertices.get(id), divide(distance[previous], distance[previous].subtract(distance[id])));
+							Integer existing = vertexIds.get(point);
+							if (existing != null) intersection = existing;
+							else { intersection = vertices.size(); vertices.add(point); vertexIds.put(point, intersection); }
+							intersections.put(edge, intersection);
+						}
+					}
 					append(clipped, intersection); boundary.add(intersection);
 				}
-				if (distance.signum() >= 0) append(clipped, point);
-				if (distance.isZero()) boundary.add(point);
-				previous = point; previousDistance = distance;
+				if (distance[id].signum() >= 0) append(clipped, id);
+				if (distance[id].isZero()) boundary.add(id);
+				previous = id;
 			}
 			if (clipped.size() > 1 && clipped.getFirst().equals(clipped.getLast())) clipped.removeLast();
-			if (clipped.size() >= 3) result.add(clipped);
+			if (clipped.size() >= 3) faces.add(clipped.stream().mapToInt(Integer::intValue).toArray());
 		}
 		int axis = 0; while (plane.normal(axis).isZero()) axis++;
-		List<Point> cap = hull(boundary, axis);
-		if (cap.size() < 3) throw new IllegalStateException("A gas overlap cut lacks its closing face");
-		if (plane.normal(axis).signum() > 0) java.util.Collections.reverse(cap); // Retained half-space points along +n; outward cap is -n.
-		result.add(cap);
-		return result;
+		int[] cap = hull(boundary, vertices, axis);
+		if (cap.length < 3) throw new IllegalStateException("A gas overlap cut lacks its closing face");
+		if (plane.normal(axis).signum() > 0) reverse(cap); // Retained support is +n; the outward cap is -n.
+		faces.add(cap);
+		return new Polyhedron(vertices, faces);
 	}
 
 	/** Coplanar projected convex hull, with exact orientation and no angular sorting. */
-	private static List<Point> hull(List<Point> boundary, int axis) {
+	private static int[] hull(LinkedHashSet<Integer> boundary, List<Point> vertices, int axis) {
 		int tangent = (axis + 1) % 3, other = (axis + 2) % 3;
-		List<Point> points = boundary.stream().distinct().sorted(Comparator.comparing((Point p) -> p.component(tangent)).thenComparing(p -> p.component(other))).toList();
-		var lower = new ArrayList<Point>(); var upper = new ArrayList<Point>();
-		for (Point p : points) hullAppend(lower, p, tangent, other);
-		for (int i = points.size() - 1; i >= 0; i--) hullAppend(upper, points.get(i), tangent, other);
+		var points = new ArrayList<>(boundary);
+		points.sort(Comparator.comparing((Integer id) -> vertices.get(id).component(tangent))
+				.thenComparing(id -> vertices.get(id).component(other)));
+		var lower = new ArrayList<Integer>(); var upper = new ArrayList<Integer>();
+		for (int id : points) hullAppend(lower, id, vertices, tangent, other);
+		for (int i = points.size() - 1; i >= 0; i--) hullAppend(upper, points.get(i), vertices, tangent, other);
 		if (!lower.isEmpty()) lower.removeLast();
 		if (!upper.isEmpty()) upper.removeLast();
 		lower.addAll(upper);
-		return lower;
+		return lower.stream().mapToInt(Integer::intValue).toArray();
 	}
-	private static void hullAppend(List<Point> hull, Point p, int tangent, int other) {
-		while (hull.size() >= 2 && turn(hull.get(hull.size() - 2), hull.getLast(), p, tangent, other).signum() <= 0) hull.removeLast();
-		hull.add(p);
+	private static void hullAppend(List<Integer> hull, int id, List<Point> vertices, int tangent, int other) {
+		while (hull.size() >= 2 && turn(vertices.get(hull.get(hull.size() - 2)), vertices.get(hull.getLast()), vertices.get(id), tangent, other).signum() <= 0)
+			hull.removeLast();
+		hull.add(id);
 	}
 	private static ExactRational turn(Point a, Point b, Point c, int tangent, int other) {
 		return b.component(tangent).subtract(a.component(tangent)).multiply(c.component(other).subtract(a.component(other)))
 				.subtract(b.component(other).subtract(a.component(other)).multiply(c.component(tangent).subtract(a.component(tangent))));
 	}
-	private static void append(List<Point> polygon, Point point) {
-		if (polygon.isEmpty() || !polygon.getLast().equals(point)) polygon.add(point);
+	private static void append(List<Integer> polygon, int id) {
+		if (polygon.isEmpty() || polygon.getLast() != id) polygon.add(id);
+	}
+	private static void reverse(int[] polygon) {
+		for (int first = 0, last = polygon.length - 1; first < last; first++, last--) {
+			int saved = polygon[first]; polygon[first] = polygon[last]; polygon[last] = saved;
+		}
 	}
 	static ExactRational determinant(Point a, Point b, Point c) {
 		return a.x.multiply(b.y.multiply(c.z).subtract(b.z.multiply(c.y)))
