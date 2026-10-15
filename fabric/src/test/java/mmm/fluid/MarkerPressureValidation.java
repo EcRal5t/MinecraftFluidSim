@@ -596,7 +596,26 @@ public final class MarkerPressureValidation {
 		}
 	}
 
+	/** A common row scale changes neither rank nor the work needed for an elementary dependence. */
+	private static void verifyCommonPressureRowScale() {
+		int rank = 17;
+		var scale = new SignedDyadic(java.math.BigInteger.ONE.shiftLeft(1000).add(java.math.BigInteger.ONE), -1000);
+		var starts = new int[rank + 2]; var indices = new int[2 * rank]; var coefficients = new SignedDyadic[2 * rank];
+		var gram = new SignedDyadic[rank * rank]; Arrays.fill(gram, SignedDyadic.ZERO);
+		var diagonal = new double[rank + 1]; Arrays.fill(diagonal, 1); diagonal[rank] = rank;
+		for (int row = 0; row < rank; row++) {
+			starts[row + 1] = row + 1; indices[row] = indices[rank + row] = row;
+			coefficients[row] = coefficients[rank + row] = scale; gram[(rank + 1) * row] = SignedDyadic.of(1);
+		}
+		starts[rank + 1] = 2 * rank;
+		var coordinates = new PressureRowBasis(starts, indices, coefficients, new SignedDyadic[][]{gram}, rank,
+				new double[rank + 1], diagonal);
+		if (coordinates.size() != rank || coordinates.dependencyCount() != 1)
+			throw new AssertionError("A common pressure row scale exhausted the budget or changed its physical rank");
+	}
+
 	private static void verifySparsePressureBasis(CellAffineVelocity basis) {
+		verifyCommonPressureRowScale();
 		// A modularly invisible component can change an earlier exact pivot and add a later independent row.
 		long prime = 2147483647L;
 		long[][] values = {{prime, 0, 1}, {1, 1, prime}, {prime + 2, 2, 1 + 2 * prime}, {0, prime, 0}, {prime + 1, prime + 1, prime + 1}, {0, 0, 0}};

@@ -161,6 +161,15 @@ final class PressureRowBasis {
 			work.charge(1 + (shift + 31) / 32);
 			row.put(entry.getKey(), value.significand().shiftLeft((int) shift));
 		}
+		// Remove the input row's common integer scale before forming determinant minors.
+		BigInteger content = BigInteger.ZERO;
+		for (var value : row.values()) {
+			work.charge(content, value); content = content.gcd(value);
+			if (content.equals(BigInteger.ONE)) break;
+		}
+		if (content.compareTo(BigInteger.ONE) > 0) for (var entry : row.entrySet()) {
+			work.charge(entry.getValue(), content); entry.setValue(entry.getValue().divide(content));
+		}
 		return row;
 	}
 	private int[] independentColumns(SignedDyadic[] gram, int modes) {
