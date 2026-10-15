@@ -79,17 +79,12 @@ final class CellVelocityConstraintOperator {
 	}
 
 	private Factor captureFactor(int block, int axis) {
-		int count = basis.blockMarkerCount(block); var fit = new SignedDyadic[4 * count]; var gram = new SignedDyadic[16];
-		for (int ordinal = 0; ordinal < count; ordinal++) for (int term = 0; term < 4; term++)
-			fit[4 * ordinal + term] = basis.coefficientExact(basis.blockMarker(block, ordinal), axis, term);
-		for (int first = 0; first < 4; first++) for (int second = 0; second <= first; second++) {
-			SignedDyadic value = SignedDyadic.ZERO;
-			for (int ordinal = 0; ordinal < count; ordinal++)
-				value = value.add(fit[4 * ordinal + first].multiply(fit[4 * ordinal + second])
-						.multiply(exactInverseMass[basis.blockMarker(block, ordinal)]));
-			gram[4 * first + second] = gram[4 * second + first] = value;
+		int count = basis.blockMarkerCount(block); var fit = new SignedDyadic[4][count]; var inertia = new SignedDyadic[count];
+		for (int ordinal = 0; ordinal < count; ordinal++) {
+			int marker = basis.blockMarker(block, ordinal); inertia[ordinal] = exactInverseMass[marker];
+			for (int term = 0; term < 4; term++) fit[term][ordinal] = basis.coefficientExact(marker, axis, term);
 		}
-		return new Factor(block, axis, gram);
+		return new Factor(block, axis, ConstraintNumerics.massGram(fit, inertia));
 	}
 	private void appendCoefficients(Row row, List<Integer> indices, List<Double> high, List<Double> low, List<SignedDyadic> full) {
 		var merged = new TreeMap<Integer, SignedDyadic>();
