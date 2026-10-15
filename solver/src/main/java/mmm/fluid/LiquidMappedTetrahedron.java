@@ -21,7 +21,7 @@ final class LiquidMappedTetrahedron {
 	}
 	private final List<Point> source, arrival;
 	private final ExactRational sourceDeterminant, arrivalDeterminant;
-	private final ExactRational[][] forward, inverse;
+	private volatile ExactRational[][] forward, inverse;
 
 	LiquidMappedTetrahedron(List<Point> source, List<Point> arrival) {
 		this.source = vertices(source); this.arrival = vertices(arrival);
@@ -30,12 +30,21 @@ final class LiquidMappedTetrahedron {
 		arrivalDeterminant = GasGeometryOverlap.determinant(after[0], after[1], after[2]);
 		if (sourceDeterminant.signum() <= 0 || arrivalDeterminant.signum() <= 0)
 			throw new GasTopologyBlockedException("Moving liquid simplex has zero volume or reversed orientation");
-		forward = transform(after, before, sourceDeterminant);
-		inverse = transform(before, after, arrivalDeterminant);
 	}
 	ExactRational sourceVolume() { return sourceDeterminant.divide(6); }
 	ExactRational arrivalVolume() { return arrivalDeterminant.divide(6); }
 	ExactRational jacobian() { return divide(arrivalDeterminant, sourceDeterminant); }
+	List<Point> sourceVertices() { return source; }
+	List<Point> arrivalVertices() { return arrival; }
+	Point mapSource(Point point) {
+		var forward = forward();
+		var offset = point.subtract(source.getFirst()); var value = new ExactRational[3];
+		for (int a = 0; a < 3; a++) {
+			value[a] = arrival.getFirst().component(a);
+			for (int b = 0; b < 3; b++) value[a] = value[a].add(forward[a][b].multiply(offset.component(b)));
+		}
+		return new Point(value[0], value[1], value[2]);
+	}
 
 	List<Piece> partition(int sourceCell, int sizeX, int sizeY, int sizeZ, int maximumMicroboxes) {
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || maximumMicroboxes <= 0)
@@ -86,6 +95,7 @@ final class LiquidMappedTetrahedron {
 	}
 
 	private List<HalfSpace> sourceSupport(int[] sourceOrigin, int[] receiver, int micro) {
+		var forward = forward();
 		var result = new ArrayList<>(support(source, sourceOrigin));
 		for (int a = 0; a < 3; a++) {
 			var intercept = arrival.getFirst().component(a);
@@ -99,6 +109,7 @@ final class LiquidMappedTetrahedron {
 		return List.copyOf(result);
 	}
 	private ExactRational[] pullbackMoments(ExactRational[] moments, int[] sourceOrigin, int[] receiver) {
+		var inverse = inverse();
 		var shift = new ExactRational[3];
 		for (int a = 0; a < 3; a++) {
 			shift[a] = source.getFirst().component(a).subtract(ExactRational.of(2L * sourceOrigin[a] + 1).divide(2));
@@ -154,6 +165,16 @@ final class LiquidMappedTetrahedron {
 			result[a][b] = divide(value, determinant);
 		}
 		return result;
+	}
+	private ExactRational[][] forward() {
+		var cached = forward;
+		if (cached == null) forward = cached = transform(edges(arrival), edges(source), sourceDeterminant);
+		return cached;
+	}
+	private ExactRational[][] inverse() {
+		var cached = inverse;
+		if (cached == null) inverse = cached = transform(edges(source), edges(arrival), arrivalDeterminant);
+		return cached;
 	}
 	private static List<Point> vertices(List<Point> vertices) {
 		if (vertices == null || vertices.size() != 4 || vertices.stream().anyMatch(Objects::isNull))

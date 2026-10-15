@@ -83,7 +83,9 @@
 ./gradlew.bat :fabric:runRemapMomentsValidation --args="joint-moments" --offline --no-daemon
 ```
 
-液体输运参数为 `--fast`、`components`、`chemical-tails`、`geometry-remap`、`representation`、`mass`、`quantization`、`continuity`、`handoff`、`handoff-short`；空间矩参数为 `transport-moments`、`joint-moments`、`sweep-only`、`footprint-only`。省略参数执行完整入口，未知参数直接拒绝。`handoff-short` 从实际载体速度构建流场，检查零通量、正向进出抵消、均匀平移、独立粒子到达、矩重建及两条平流路径的步长约束；长轨迹使用 `handoff` 与 `continuity`。`geometry-remap` 复用零时长正出流、断开分量容量、低 quanta 拒绝与完整逻辑步矩统计用例。`transport-moments` 同时用逐载体精确参考检查微盒汇总结果，覆盖非二进制份额、供给重分配、零出流和完全流出，逐位核对最终观察及舍入差额。
+液体输运参数为 `--fast`、`components`、`chemical-tails`、`geometry-remap`、`representation`、`mass`、`quantization`、`continuity`、`handoff`、`handoff-short`；空间矩参数为 `transport-moments`、`joint-moments`、`sweep-only`、`footprint-only`、`common-mesh`。省略参数执行完整入口，未知参数直接拒绝。`handoff-short` 从实际载体速度构建流场，检查零通量、正向进出抵消、均匀平移、独立粒子到达、矩重建及两条平流路径的步长约束；长轨迹使用 `handoff` 与 `continuity`。`geometry-remap` 复用零时长正出流、断开分量容量、低 quanta 拒绝与完整逻辑步矩统计用例。`transport-moments` 同时用逐载体精确参考检查微盒汇总结果，覆盖非二进制份额、供给重分配、零出流和完全流出，逐位核对最终观察及舍入差额。
+
+`common-mesh` 单独运行真实 L 形来源首步之后的压力场，检查共同运动网格的正体积、无全局重叠、时间减半的第一矩一致性及数量分配前的机械支撑，并报告参考几何成本。该参考处于测试代码中，一般场 advection、最终库存及后续 CPU 步按整合计划继续验收。解析的共享面切向流量矩与交叠检查同时属于默认及 `sweep-only`。
 
 `joint-moments` 覆盖四点薄三维支撑、三轴排列、分组合并、位置推进、面法向投影、节点不足拒绝、独立小速度模式、悬殊质量的第一矩及位置—速度交叉矩。原始正来源的一、二阶矩用精确有理数独立计算；同时复用低 quanta 旋转与小份额剪切。有界流入形状对照检查原支撑正交补、多个质量份额的共同投影、完整机械矩及原线性剪切；三轴正反向的一、二点同速来源通过实际 remap 发布后检查接收格的秩四支撑、正权重、精确库存、动量、动能与 `kg·m²` 增量上界，零时和零通量保持原秩。`sweep-only` 用矩形和仿射楔体的解析二阶矩检查精确扫掠前缀及完整协方差。`representation` 组合完整逻辑步中的分次输运、静止饱和液体的压缩排液以及私有候选预算拒绝；分次累计用例用固壁隔开的液体分区分别提供力学输运与末段排液。
 

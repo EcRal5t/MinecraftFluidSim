@@ -35,8 +35,58 @@ final class LiquidMappedTetrahedronValidation {
 					"Moving simplex concealed its local volume change");
 		}
 		rigidRotationKeepsGeometricInertia(); invalidGeometryRejects(source);
+		commonMeshKeepsVolumeAndFaceMomentRate(); exactMeshEmbeddingChecksEdgeAxes();
 	}
 	public static void main(String[] args) { run(); System.out.println("Positive mapped liquid simplex validation passed"); }
+	static void capturedField(FluidDomain domain) {
+		var field = domain.pressureSystem.markerVelocityField(); var geometry = LiquidPressureGeometry.capture(domain);
+		var boxes = new ArrayList<LiquidMovingMesh.SourceBox>(); var first = new double[3]; var bulk = new double[3];
+		for (var shape : domain.liquidShapes) {
+			for (var box : shape.boxes()) {
+				boxes.add(new LiquidMovingMesh.SourceBox(shape.cell(), box));
+				int[] cell = {shape.cell() % domain.sizeX, shape.cell() / domain.sizeX % domain.sizeY, shape.cell() / (domain.sizeX * domain.sizeY)};
+				for (int a = 0; a < 3; a++) first[a] += box.volume().toDouble() * (cell[a] + box.lower(a).add(box.upper(a)).toDouble() / 2);
+			}
+			var mean = field.meanWetVelocity(geometry, shape.cell(), 255);
+			for (int a = 0; a < 3; a++) bulk[a] += shape.volume().toDouble() * mean[a];
+		}
+		double previous = Double.POSITIVE_INFINITY;
+		for (int halves = 0; halves < 3; halves++) {
+			var time = ExactRational.ONE.divide(128L << halves); long start = System.nanoTime();
+			var mesh = LiquidMovingMesh.prepare(boxes, domain.sizeX, domain.sizeY, domain.sizeZ,
+					(cell, p) -> new Point(exact(field.value(0, cell, p.x().toDouble(), p.y().toDouble(), p.z().toDouble())),
+							exact(field.value(1, cell, p.x().toDouble(), p.y().toDouble(), p.z().toDouble())),
+							exact(field.value(2, cell, p.x().toDouble(), p.y().toDouble(), p.z().toDouble()))), time, 4096, 131072);
+			checkMeshVolume(mesh, 3); var error = first.clone();
+			for (int a = 0; a < 3; a++) error[a] = -error[a] - time.toDouble() * bulk[a];
+			for (var simplex : mesh.simplices()) for (var p : simplex.map().arrivalVertices()) for (int a = 0; a < 3; a++)
+				error[a] += simplex.map().arrivalVolume().toDouble() * p.component(a).toDouble() / 4;
+			double maximum = 0; for (double value : error) maximum = Math.max(maximum, Math.abs(value));
+			check(maximum * 3 < previous, "Actual captured field lost first-moment time consistency"); previous = maximum;
+			System.out.printf("Common mesh reference dt=%g maps=%d M1=%g geometryMs=%g%n", time.toDouble(), mesh.simplices().size(), maximum, (System.nanoTime() - start) / 1e6);
+			if (halves == 0) checkMechanicalSupport(domain, mesh);
+		}
+	}
+	private static void checkMechanicalSupport(FluidDomain domain, LiquidMovingMesh.Mesh mesh) {
+		var source = new CellRemapSpatialMoments();
+		for (int p = 0; p < domain.particleCount(); p++) {
+			int cell = domain.particleCellIndex(p);
+			source.add(domain, p, ExactRational.ONE, cell % domain.sizeX + .5, cell / domain.sizeX % domain.sizeY + .5, cell / (domain.sizeX * domain.sizeY) + .5);
+		}
+		var mass = new double[mesh.simplices().size()]; var positions = new double[mass.length][3]; var preferred = new double[mass.length][3];
+		var field = domain.pressureSystem.markerVelocityField();
+		for (int i = 0; i < mass.length; i++) {
+			var simplex = mesh.simplices().get(i); var before = new double[3]; mass[i] = simplex.map().arrivalVolume().toDouble() * 1000;
+			for (int a = 0; a < 3; a++) {
+				for (var p : simplex.map().arrivalVertices()) positions[i][a] += p.component(a).toDouble() / 4;
+				positions[i][a] = (float) positions[i][a];
+				for (var p : simplex.map().sourceVertices()) before[a] += p.component(a).toDouble() / 4;
+			}
+			for (int a = 0; a < 3; a++) preferred[i][a] = field.value(a, simplex.sourceCell(), before[0], before[1], before[2]);
+		}
+		check(source.fitMechanical(mass, positions, preferred) != null, "Connected L mesh lacks its original mechanical support before quantity allocation");
+	}
+	private static ExactRational exact(double value) { return PlicComponentGeometry.ratio(SignedDyadic.of(value), SignedDyadic.of(1)); }
 
 	private static void rigidRotationKeepsGeometricInertia() {
 		var moments = zeros(); var geometric = new ArrayList<LiquidGeometricAllocation.Piece>();
@@ -70,6 +120,64 @@ final class LiquidMappedTetrahedronValidation {
 		try { new LiquidMappedTetrahedron(source, source).partition(86, 6, 6, 6, 1); }
 		catch (GasTopologyBlockedException expected) { rejected = true; }
 		check(rejected, "Moving tetrahedron must respect its explicit intersection budget");
+	}
+	private static void commonMeshKeepsVolumeAndFaceMomentRate() {
+		var one = SignedDyadic.of(1); var zero = SignedDyadic.ZERO;
+		var box = new LiquidCellShape.Box(zero, zero, zero, one, one, one);
+		for (int motion = 0; motion < 4; motion++) {
+			int mode = motion;
+			var mesh = LiquidMovingMesh.prepare(List.of(new LiquidMovingMesh.SourceBox(86, box)), 6, 6, 6, (cell, p) -> {
+				var x = p.x().subtract(ExactRational.of(5).divide(2)); var y = p.y().subtract(ExactRational.of(5).divide(2));
+				return switch (mode) {
+					case 0 -> point(1, 1, 0);
+					case 1 -> new Point(y, ExactRational.ZERO, ExactRational.ZERO);
+					case 2 -> new Point(x, y.multiply(-1), ExactRational.ZERO);
+					default -> new Point(y.multiply(-1), x, ExactRational.ZERO);
+				};
+			}, ExactRational.ONE.divide(8), 128, 4096);
+			checkMeshVolume(mesh, 1);
+			check(mesh.maximumFluxCorrection().isZero(), "Exact divergence-free motion required a source flux correction");
+		}
+		double previous = Double.POSITIVE_INFINITY;
+		for (int halves = 0; halves < 3; halves++) {
+			var time = ExactRational.ONE.divide(64L << halves);
+			var mesh = LiquidMovingMesh.prepare(List.of(new LiquidMovingMesh.SourceBox(86, box),
+					new LiquidMovingMesh.SourceBox(85, box), new LiquidMovingMesh.SourceBox(80, box)), 6, 6, 6,
+					(cell, p) -> point(cell == 80 ? -1 : 1, cell == 85 ? -1 : 1, 0), time, 512, 16384);
+			checkMeshVolume(mesh, 3);
+			var first = new double[]{-6.5 - time.toDouble(), -6.5 - time.toDouble(), -7.5};
+			for (var simplex : mesh.simplices()) for (var vertex : simplex.map().arrivalVertices()) for (int a = 0; a < 3; a++)
+				first[a] += simplex.map().arrivalVolume().toDouble() * vertex.component(a).toDouble() / 4;
+			double error = Math.max(Math.abs(first[0]), Math.abs(first[1]));
+			check(error * 3 < previous && Math.abs(first[2]) < 1e-12,
+					"Shared face geometry lost first-moment time consistency at a tangential velocity jump");
+			previous = error;
+		}
+	}
+	private static void checkMeshVolume(LiquidMovingMesh.Mesh mesh, long expected) {
+		var source = ExactRational.ZERO; var arrival = ExactRational.ZERO;
+		for (var simplex : mesh.simplices()) {
+			source = source.add(simplex.map().sourceVolume()); arrival = arrival.add(simplex.map().arrivalVolume());
+			check(simplex.map().jacobian().equals(ExactRational.ONE), "Local conservative remapping changed volume");
+		}
+		check(source.equals(ExactRational.of(expected)) && arrival.equals(source), "Common moving mesh lost positive volume");
+	}
+	private static void exactMeshEmbeddingChecksEdgeAxes() {
+		var first = new ArrayList<>(List.of(point(-2, 1, -3), point(-1, 2, -1), point(1, -2, 0), point(-1, 2, -3)));
+		var second = new ArrayList<>(List.of(point(0, -1, 1), point(0, -2, -3), point(-3, -1, -1), point(-1, -3, 2)));
+		var pair = new ArrayList<LiquidMappedTetrahedron>();
+		for (var vertices : List.of(first, second)) {
+			if (GasGeometryOverlap.determinant(vertices.get(1).subtract(vertices.get(0)), vertices.get(2).subtract(vertices.get(0)),
+					vertices.get(3).subtract(vertices.get(0))).signum() < 0) java.util.Collections.swap(vertices, 1, 2);
+			pair.add(new LiquidMappedTetrahedron(vertices, vertices));
+		}
+		LiquidMeshEmbedding.requireDisjoint(pair, 1);
+		boolean rejected = false;
+		try { LiquidMeshEmbedding.requireDisjoint(pair, 0); } catch (GasTopologyBlockedException expected) { rejected = true; }
+		check(rejected, "Exact mesh embedding ignored its pair budget"); rejected = false;
+		try { LiquidMeshEmbedding.requireDisjoint(List.of(pair.getFirst(), pair.getFirst()), 1); }
+		catch (GasTopologyBlockedException expected) { rejected = true; }
+		check(rejected, "Exact mesh embedding allowed a positive-volume overlap");
 	}
 	private static Point move(Point p, int motion) {
 		var x = p.x().subtract(ExactRational.of(2)); var y = p.y().subtract(ExactRational.of(2));

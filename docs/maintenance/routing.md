@@ -96,6 +96,8 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 一般运动单纯形的正接收片区、来源逆像及 Jacobian 矩变换在 [LiquidMappedTetrahedron](../../solver/src/main/java/mmm/fluid/LiquidMappedTetrahedron.java)；几何份额的联合原始数量分配在 [LiquidGeometricAllocation](../../solver/src/main/java/mmm/fluid/LiquidGeometricAllocation.java)。剪切、伸缩、几何旋转惯量、满容量反向重排及最小正份额复用 `runRemapMomentsValidation --args="sweep-only"`；一般场完整交接按整合计划验收。
 
+共同运动网格的精确参考在测试侧 [LiquidMovingMesh](../../solver/src/test/java/mmm/fluid/LiquidMovingMesh.java)，正体积再分配在 `LiquidMeshVolumePartition`，全局交叠检查在 `LiquidMeshEmbedding`。共享面切向流量矩的解析对照复用 `sweep-only`；真实 L 场、时间减半、预分配机械支撑和参考成本使用 `runRemapMomentsValidation --args="common-mesh"`。
+
 零时长固体几何排液的来源比例见 [CellRemapMicroPreferences](../../solver/src/main/java/mmm/fluid/CellRemapMicroPreferences.java) 的 `inventory`，同微盒精确矩汇总见 [CellRemapTransportMoments](../../solver/src/main/java/mmm/fluid/CellRemapTransportMoments.java)。聚焦验证分别为 `:fabric:runLiquidTransportValidation --args="geometry-remap"` 与 `:fabric:runRemapMomentsValidation --args="transport-moments"`。
 
 正质量联合矩的合并、流入法向厚度、缺失空间方向的有界形状近似与输出回验见 [CellRemapSpatialMoments](../../solver/src/main/java/mmm/fluid/CellRemapSpatialMoments.java)，接收组装配在 `CellCarrierRemapPlan.completeArrivalShape`，精确扫掠二阶矩在 [LiquidAffineSweepGeometry](../../solver/src/main/java/mmm/fluid/LiquidAffineSweepGeometry.java)。平方根压缩及逐行尺度 QR 在 [JointMomentFactor](../../solver/src/main/java/mmm/fluid/JointMomentFactor.java)。聚焦验证为 `:fabric:runRemapMomentsValidation --args="joint-moments"` 和 `sweep-only`；完整逻辑步的分次统计与表示转换预算使用输运选择器 `representation`。

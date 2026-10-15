@@ -7,8 +7,21 @@ public final class CellRemapMomentsValidation {
 	private CellRemapMomentsValidation() { }
 
 	public static void main(String[] args) {
-		if (args.length > 1 || args.length == 1 && !java.util.List.of("transport-moments", "joint-moments", "sweep-only", "footprint-only").contains(args[0]))
+		if (args.length > 1 || args.length == 1 && !java.util.List.of("transport-moments", "joint-moments", "sweep-only", "footprint-only", "common-mesh").contains(args[0]))
 			throw new IllegalArgumentException("Unknown remap moments validation entry");
+		if (args.length == 1 && args[0].equals("common-mesh")) {
+			LiquidMappedTetrahedronValidation.run();
+			var domain = translationDomain(1, 3, 0, 4096, true, .125F); domain.setVolume(2, 1, 2, 1);
+			for (int p = 0; p < domain.particleCount(); p++) for (int axis = 0; axis < 3; axis++) setVelocity(domain, p, axis, axis == 2 ? 0 : 1);
+			domain.sealDomainBoundary(); domain.bootstrapGasState(null);
+			domain = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, domain.captureAuthoritativeState(), java.util.List.of(), false, 0)).claimPreparedCpuDomain();
+			boolean rejected = false;
+			try { domain.mechanicalPipeline.substep(.125F, 0, false, null); }
+			catch (GasTopologyBlockedException expected) { rejected = expected.getMessage().contains("positive successor partition"); }
+			check(rejected, "Common mesh reference no longer reproduces the captured L-field transport input");
+			LiquidMappedTetrahedronValidation.capturedField(domain);
+			System.out.println("Common liquid mesh reference validation passed; general advection integration remains open"); return;
+		}
 		if (args.length == 1 && args[0].equals("joint-moments")) {
 			partialCellInitializationHasPositiveWetLayerSupport();
 			faceArrivalRetainsFiniteNormalThickness();

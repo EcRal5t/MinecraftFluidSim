@@ -20,6 +20,8 @@ final class GasGeometryOverlap {
 	record Point(ExactRational x, ExactRational y, ExactRational z) {
 		Point { Objects.requireNonNull(x); Objects.requireNonNull(y); Objects.requireNonNull(z); }
 		ExactRational component(int axis) { return axis == 0 ? x : axis == 1 ? y : z; }
+		Point add(Point p) { return new Point(x.add(p.x), y.add(p.y), z.add(p.z)); }
+		Point multiply(ExactRational scale) { return new Point(x.multiply(scale), y.multiply(scale), z.multiply(scale)); }
 		Point subtract(Point p) { return new Point(x.subtract(p.x), y.subtract(p.y), z.subtract(p.z)); }
 		Point interpolate(Point p, ExactRational t) {
 			return new Point(x.add(t.multiply(p.x.subtract(x))), y.add(t.multiply(p.y.subtract(y))), z.add(t.multiply(p.z.subtract(z))));
