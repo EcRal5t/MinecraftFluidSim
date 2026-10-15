@@ -29,10 +29,10 @@ final class PlicPlaneOffset {
 				if (maximum == null || high.compareTo(maximum) > 0) maximum = high;
 			}
 			double lower = outward(minimum, false), upper = outward(maximum, true);
-			ExactRational lowVolume = cdf.volume(lower), highVolume = cdf.volume(upper);
-			if (lowVolume.equals(target)) return exact(lower, lowVolume);
-			if (highVolume.equals(target)) return exact(upper, highVolume);
-			if (lowVolume.compareTo(target) > 0 || highVolume.compareTo(target) < 0)
+			int lowOrder = cdf.compareVolume(lower, target), highOrder = cdf.compareVolume(upper, target);
+			if (lowOrder == 0) return exact(lower, cdf.volume(lower));
+			if (highOrder == 0) return exact(upper, cdf.volume(upper));
+			if (lowOrder > 0 || highOrder < 0)
 				throw new IllegalStateException("PLIC offset extrema do not enclose the target volume");
 			long lowOrdinal = ordinal(lower), highOrdinal = ordinal(upper);
 			int iterations = 0;
@@ -41,12 +41,12 @@ final class PlicPlaneOffset {
 				// Signed floor average avoids overflow even when the interval spans both signs.
 				long middleOrdinal = (lowOrdinal & highOrdinal) + ((lowOrdinal ^ highOrdinal) >> 1);
 				double middle = value(middleOrdinal);
-				ExactRational middleVolume = cdf.volume(middle);
-				int order = middleVolume.compareTo(target);
-				if (order == 0) return exact(middle, middleVolume);
-				if (order < 0) { lowOrdinal = middleOrdinal; lower = middle; lowVolume = middleVolume; }
-				else { highOrdinal = middleOrdinal; upper = middle; highVolume = middleVolume; }
+				int order = cdf.compareVolume(middle, target);
+				if (order == 0) return exact(middle, cdf.volume(middle));
+				if (order < 0) { lowOrdinal = middleOrdinal; lower = middle; }
+				else { highOrdinal = middleOrdinal; upper = middle; }
 			}
+			ExactRational lowVolume = cdf.volume(lower), highVolume = cdf.volume(upper);
 			double selected = target.multiply(2).compareTo(lowVolume.add(highVolume)) <= 0 ? lower : upper;
 			return new Result(selected, lower, upper, lowVolume, highVolume,target);
 		} catch (IllegalArgumentException magnitude) {
