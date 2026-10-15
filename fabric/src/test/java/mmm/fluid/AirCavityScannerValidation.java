@@ -1000,6 +1000,16 @@ public final class AirCavityScannerValidation {
 		check(GasAdvectionSuccessor.certify(d,old,next,flux,actualPorts,dt).get(previous)==destination,
 				"Gas migration failed to bind actual complete-support liquid port totals");
 		var inlet=actualPorts.outgoing(source-1,255).getFirst(); var original=inlet.volume;
+		if (scenario==2) try {
+			var field=ConservativeLiquidFlux.class.getDeclaredField("openFluxBound"); field.setAccessible(true);
+			var open=(SignedDyadic[])field.get(flux); int reverse=inlet.face+flux.physicalFaceCount;
+			var saved=open[reverse]; check(saved.signum()==0 && flux.exactFlux[reverse].signum()==0,"Reverse gas-admission fixture has an existing transfer");
+			try {
+				open[reverse]=SignedDyadic.of(ConservativeMarkerSampling.VOLUME_FLUX_RESOLUTION);
+				check(!GasAdvectionSuccessor.certify(d,old,next,flux,actualPorts,dt).containsKey(previous),
+						"Gas migration ignored a reverse open transfer after its liquid port was cancelled");
+			} finally { open[reverse]=saved; }
+		} catch (ReflectiveOperationException failure) { throw new AssertionError("Reverse gas-admission fixture could not set its open transfer",failure); }
 		inlet.volume=original.subtract(SignedDyadic.of(ConservativeMarkerSampling.VOLUME_FLUX_RESOLUTION));
 		check(!GasAdvectionSuccessor.certify(d,old,next,flux,actualPorts,dt).containsKey(previous),
 				"Gas migration ignored a final indivisible-chemistry port reduction");

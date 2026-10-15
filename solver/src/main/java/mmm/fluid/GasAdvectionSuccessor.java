@@ -41,14 +41,16 @@ final class GasAdvectionSuccessor {
 			if (u != 0) { if (velocityAxis >= 0) return -1; velocityAxis = axis; }
 			for (int f : new int[]{minus, plus}) {
 				int peer = flux.left[f] == cell ? flux.right[f] : flux.left[f];
-				if (flow.constantTrace(f, peer) != u || old.geometry().collisionMask(peer) != 0
+				if (old.geometry().collisionMask(peer) != 0
 						|| next.geometry().collisionMask(peer) != 0 || !pore.equals(old.poreVolume(peer))
 						|| !pore.equals(next.poreVolume(peer)) || !samePlane(d, old, peer)) return -1;
 				int channel = f + (u >= 0 ? 0 : flux.physicalFaceCount), reverse = f + (u >= 0 ? flux.physicalFaceCount : 0);
 				var span = SignedDyadic.of(Math.abs(u)).multiply(SignedDyadic.of(dt));
 				// The common open-trace floor loss cancels across this cell; the wet inlet carries no old gas.
 				var open = floor(span.multiply(pore));
-				if (!open.equals(flux.openTransferBound(channel)) || flux.exactFlux[reverse].signum() != 0) return -1;
+				// A reverse open transfer can carry gas after its liquid port is cancelled.
+				if (!open.equals(flux.openTransferBound(channel)) || flux.openTransferBound(reverse).signum() != 0
+						|| flux.exactFlux[reverse].signum() != 0) return -1;
 				if (ports != null && (!portVolume(ports, flux, channel).equals(flux.exactFlux[channel])
 						|| !portVolume(ports, flux, reverse).equals(flux.exactFlux[reverse]))) return -1;
 				var dry = open.subtract(flux.exactFlux[channel]);
