@@ -1,78 +1,180 @@
 package mmm.fluid;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import mmm.units.SignedDyadic;
+import org.ejml.data.DMatrixRMaj;
+import org.ejml.dense.row.factory.DecompositionFactory_DDRM;
 
-/** Weighted row QR for the fixed scalar feature space; the exact fit is the fallback. */
+/** Coupled actual-mass velocity modes with literal translation, rotation and supported strain fields. */
 final class CellAffineFit {
 	private CellAffineFit() { }
-	static double[] fit(double[] mass, double[][] feature, double[][] directions, boolean closeConstant) {
-		int n = mass.length, rank = feature.length;
-		double maximum = 0; for (double value : mass) maximum = Math.max(maximum, value);
-		double[] root = new double[n]; double[][] q = new double[rank][n], lower = new double[rank][rank];
-		for (int i = 0; i < n; i++) {
-			root[i] = Math.sqrt(mass[i] / maximum);
-			if (!(root[i] > 0 && Double.isFinite(root[i]))) return null;
+
+	static final class Model {
+		private final int reliableRank;
+		private final SignedDyadic[][] exactFields;
+		private final SignedDyadic[][][] weights;
+
+		private Model(int reliableRank, double[][] fields, SignedDyadic[][][] weights) {
+			this.reliableRank = reliableRank; this.weights = weights;
+			exactFields = new SignedDyadic[fields.length][12];
+			for (int mode = 0; mode < fields.length; mode++) for (int term = 0; term < 12; term++)
+				exactFields[mode][term] = SignedDyadic.of(fields[mode][term]);
 		}
-		for (int row = 0; row < rank; row++) {
-			for (int i = 0; i < n; i++) q[row][i] = root[i] * feature[row][i];
-			for (int pass = 0; pass < 2; pass++) for (int prior = 0; prior < row; prior++) {
-				double projection = dot(q[row], q[prior]); lower[row][prior] += projection;
-				for (int i = 0; i < n; i++) q[row][i] -= projection * q[prior][i];
-			}
-			double norm = 0; for (double value : q[row]) norm = Math.hypot(norm, value);
-			if (!(norm > 0 && Double.isFinite(norm))) return null;
-			lower[row][row] = norm; for (int i = 0; i < n; i++) q[row][i] /= norm;
-		}
-		double[][] local = new double[rank][n];
-		for (int i = 0; i < n; i++) for (int row = rank - 1; row >= 0; row--) {
-			double value = q[row][i] * root[i];
-			for (int later = row + 1; later < rank; later++) value -= lower[later][row] * local[later][i];
-			local[row][i] = value / lower[row][row];
-		}
-		for (int row = 0; row < rank; row++) {
-			for (int pass = 0; pass < 2; pass++) {
-				double[] z = new double[rank];
-				for (int j = 0; j < rank; j++) {
-					double residual = SignedDyadic.of(j == row ? 1 : 0).subtract(exactDot(local[row], feature[j])).toDouble();
-					for (int prior = 0; prior < j; prior++) residual -= lower[j][prior] * z[prior];
-					z[j] = residual / lower[j][j];
-				}
-				for (int i = 0; i < n; i++) for (int j = 0; j < rank; j++) local[row][i] += root[i] * q[j][i] * z[j];
-			}
-			for (double value : local[row]) if (!Double.isFinite(value)) return null;
-			for (int j = 0; j < rank; j++) if (!near(exactDot(local[row], feature[j]), j == row ? 1 : 0, n + 32.0)) return null;
-		}
-		double[] result = new double[4 * n];
-		for (int i = 0; i < n; i++) {
-			result[4 * i] = local[0][i];
-			for (int axis = 0; axis < 3; axis++) {
-				SignedDyadic sum = SignedDyadic.ZERO;
-				for (int j = 1; j < rank; j++) sum = sum.add(SignedDyadic.of(directions[j - 1][axis]).multiply(SignedDyadic.of(local[j][i])));
-				result[4 * i + axis + 1] = sum.toDouble();
-			}
-		}
-		if (closeConstant) for (int term = 0; term < 4; term++) {
-			int pivot = 0; for (int i = 1; i < n; i++) if (Math.ulp(result[4 * i + term]) < Math.ulp(result[4 * pivot + term])) pivot = i;
-			SignedDyadic others = SignedDyadic.ZERO;
-			for (int i = 0; i < n; i++) if (i != pivot) others = others.add(SignedDyadic.of(result[4 * i + term]));
-			result[4 * pivot + term] = SignedDyadic.of(term == 0 ? 1 : 0).subtract(others).toDouble();
-		}
-		for (int term = 0; term < 4; term++) for (int j = 0; j < rank; j++) {
-			SignedDyadic actual = SignedDyadic.ZERO;
-			for (int i = 0; i < n; i++) actual = actual.add(SignedDyadic.of(result[4 * i + term]).multiply(SignedDyadic.of(feature[j][i])));
-			double expected = term == 0 ? (j == 0 ? 1 : 0) : j == 0 ? 0 : directions[j - 1][term - 1];
-			if (!near(actual, expected, n + 64.0)) return null;
-		}
-		return result;
+		int modeCount() { return exactFields.length; }
+		int reliableRank() { return reliableRank; }
+		SignedDyadic fieldExact(int mode, int axis, int term) { return exactFields[mode][4 * axis + term]; }
+		SignedDyadic weightExact(int mode, int inputAxis, int localOrdinal) { return weights[mode][inputAxis][localOrdinal]; }
 	}
-	private static boolean near(SignedDyadic actual, double expected, double ulps) {
-		SignedDyadic error = actual.subtract(SignedDyadic.of(expected));
-		return (error.signum() < 0 ? error.negate() : error).compareTo(SignedDyadic.of(ulps * Math.ulp(1.0))) <= 0;
+
+	/** Positions and their storage errors are in cell-size units relative to the actual mass centre. */
+	static Model capture(double[] mass, double[][] relativePosition, double[][] storageError,
+			double[][] shape, boolean[] shaped, double[] centerOffset) {
+		validate(mass, relativePosition, storageError, shape, shaped, centerOffset);
+		int n = mass.length;
+		double maximumRoot = 0;
+		for (double value : mass) maximumRoot = Math.max(maximumRoot, Math.sqrt(value));
+		double[] root = new double[n], meanWeight = new double[n]; double total = 0;
+		for (int p = 0; p < n; p++) {
+			root[p] = Math.sqrt(mass[p]) / maximumRoot;
+			total += root[p] * root[p];
+		}
+		for (int p = 0; p < n; p++) meanWeight[p] = root[p] * root[p] / total;
+		var directions = reliableDirections(relativePosition, storageError, root, total);
+		int translations = 0;
+		for (boolean value : shaped) if (!value) translations++;
+		int[] translationAxis = new int[translations];
+		for (int axis = 0, k = 0; axis < 3; axis++) if (!shaped[axis]) translationAxis[k++] = axis;
+
+		var original = new ArrayList<double[]>();
+		for (int axis = 0; axis < 3; axis++) if (shaped[axis]) {
+			double[] field = new double[12]; field[4 * axis] = 1; original.add(field);
+		}
+		for (int axis = 0; axis < 3; axis++) {
+			double[] field = new double[12]; int i = (axis + 1) % 3, j = (axis + 2) % 3;
+			field[4 * j + i + 1] = 1; field[4 * i + j + 1] = -1; original.add(field);
+		}
+		for (int i = 0; i < directions.length; i++) for (int j = i; j < directions.length; j++) {
+			double[] field = new double[12];
+			for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++)
+				field[4 * a + b + 1] = directions[i][a] * directions[j][b]
+						+ (i == j ? 0 : directions[j][a] * directions[i][b]);
+			original.add(field);
+		}
+		for (double[] field : original) {
+			// Literal rotations are about the physical cell centre, including on fully shaped blocks.
+			for (int axis = 0; axis < 3; axis++) for (int j = 0; j < 3; j++)
+				field[4 * axis] += field[4 * axis + j + 1] * centerOffset[j];
+			for (int axis : translationAxis) {
+				double anchor = evaluate(field, relativePosition[0], axis), mean = anchor;
+				for (int p = 1; p < n; p++) mean += meanWeight[p] * (evaluate(field, relativePosition[p], axis) - anchor);
+				field[4 * axis] -= mean;
+			}
+		}
+
+		var active = new ArrayList<double[]>(); var samples = new ArrayList<double[]>(); var scales = new ArrayList<Double>();
+		for (double[] field : original) {
+			double[] sample = new double[3 * n]; double norm = 0;
+			for (int p = 0; p < n; p++) for (int axis = 0; axis < 3; axis++) {
+				double value = root[p] * shape[axis][p] * evaluate(field, relativePosition[p], axis);
+				if (!Double.isFinite(value)) throw new IllegalArgumentException("Nonfinite coupled velocity sample");
+				sample[3 * p + axis] = value; norm = Math.hypot(norm, value);
+			}
+			if (norm > 0) { active.add(field); samples.add(sample); scales.add(norm); }
+		}
+		int count = active.size(), selectedCount = 0; int[] pivots = new int[0];
+		var normalized = new DMatrixRMaj(3 * n, count);
+		for (int k = 0; k < count; k++) for (int p = 0; p < 3 * n; p++) normalized.set(p, k, samples.get(k)[p] / scales.get(k));
+		if (count > 0) {
+			var qr = DecompositionFactory_DDRM.qrp(3 * n, count);
+			qr.setSingularThreshold(Math.max(3 * n, count) * Math.ulp(1.0));
+			if (!qr.decompose(normalized.copy())) throw new IllegalStateException("Coupled velocity QR failed");
+			selectedCount = qr.getRank(); pivots = qr.getColPivots();
+		}
+		double[][] fields = new double[translations + selectedCount][12], rawWeights = new double[selectedCount][3 * n];
+		for (int k = 0; k < translations; k++) fields[k][4 * translationAxis[k]] = 1;
+		for (int k = 0; k < selectedCount; k++) fields[translations + k] = active.get(pivots[k]);
+		if (selectedCount > 0) {
+			var selected = new DMatrixRMaj(3 * n, selectedCount);
+			for (int k = 0; k < selectedCount; k++) for (int p = 0; p < 3 * n; p++) selected.set(p, k, normalized.get(p, pivots[k]));
+			var svd = DecompositionFactory_DDRM.svd(3 * n, selectedCount, true, true, true);
+			if (!svd.decompose(selected)) throw new IllegalStateException("Coupled velocity SVD failed");
+			var u = svd.getU(null, false); var v = svd.getV(null, false); var singular = svd.getSingularValues();
+			for (int j = 0; j < selectedCount; j++) if (!(singular[j] > 0 && Double.isFinite(singular[j])))
+				throw new IllegalStateException("Selected coupled velocity modes are singular");
+			for (int k = 0; k < selectedCount; k++) for (int p = 0; p < 3 * n; p++) {
+				double value = 0;
+				for (int j = 0; j < selectedCount; j++) value += v.get(k, j) * u.get(p, j) / singular[j];
+				value = value * root[p / 3] / scales.get(pivots[k]);
+				if (!Double.isFinite(value)) throw new IllegalArgumentException("Unrepresentable coupled velocity weight");
+				rawWeights[k][p] = value;
+			}
+		}
+		return new Model(directions.length, fields, pairedWeights(rawWeights, meanWeight, shaped, translationAxis));
 	}
-	private static double dot(double[] a, double[] b) { double value = 0; for (int i = 0; i < a.length; i++) value += a[i] * b[i]; return value; }
-	private static SignedDyadic exactDot(double[] a, double[] b) {
-		SignedDyadic value = SignedDyadic.ZERO;
-		for (int i = 0; i < a.length; i++) value = value.add(SignedDyadic.of(a[i]).multiply(SignedDyadic.of(b[i])));
+
+	private static SignedDyadic[][][] pairedWeights(double[][] raw, double[] mean, boolean[] shaped, int[] translationAxis) {
+		int translations = translationAxis.length, n = mean.length;
+		var weights = new SignedDyadic[translations + raw.length][3][n];
+		for (int mode = 0; mode < weights.length; mode++) for (int axis = 0; axis < 3; axis++) {
+			boolean translation = mode < translations && translationAxis[mode] == axis;
+			SignedDyadic sum = SignedDyadic.ZERO;
+			if (mode >= translations) for (int p = 0; p < n; p++) sum = sum.add(SignedDyadic.of(raw[mode - translations][3 * p + axis]));
+			SignedDyadic reference = translation ? SignedDyadic.of(1) : SignedDyadic.ZERO;
+			for (int p = 1; p < n; p++) {
+				SignedDyadic value = mode < translations ? SignedDyadic.ZERO : SignedDyadic.of(raw[mode - translations][3 * p + axis]);
+				if (!shaped[axis]) value = value.subtract(SignedDyadic.of(mean[p]).multiply(sum))
+						.add(translation ? SignedDyadic.of(mean[p]) : SignedDyadic.ZERO);
+				weights[mode][axis][p] = value; reference = reference.subtract(value);
+			}
+			weights[mode][axis][0] = shaped[axis]
+					? mode < translations ? SignedDyadic.ZERO : SignedDyadic.of(raw[mode - translations][axis]) : reference;
+		}
+		return weights;
+	}
+
+	private static double[][] reliableDirections(double[][] position, double[][] error, double[] root, double total) {
+		int n = root.length; double totalRoot = Math.sqrt(total), radius = 0, perturbation = 0;
+		var geometry = new DMatrixRMaj(n, 3);
+		for (int p = 0; p < n; p++) for (int axis = 0; axis < 3; axis++) {
+			double value = root[p] / totalRoot * position[p][axis]; geometry.set(p, axis, value);
+			radius = Math.hypot(radius, value); perturbation = Math.hypot(perturbation, root[p] / totalRoot * error[p][axis]);
+		}
+		// Centring adds another storage perturbation. The covariance bound is 2 R E + E squared.
+		perturbation *= 2; double bound = 2 * radius * perturbation + perturbation * perturbation;
+		if (radius == 0) return new double[0][3];
+		var svd = DecompositionFactory_DDRM.svd(n, 3, false, true, true);
+		if (!svd.decompose(geometry)) throw new IllegalStateException("Velocity support SVD failed");
+		var v = svd.getV(null, false); var singular = svd.getSingularValues();
+		Integer[] order = new Integer[svd.numberOfSingularValues()];
+		for (int k = 0; k < order.length; k++) order[k] = k;
+		Arrays.sort(order, (a, b) -> Double.compare(singular[b], singular[a]));
+		var directions = new ArrayList<double[]>();
+		for (int k : order) if (singular[k] * singular[k] > bound) {
+			double[] direction = new double[3]; for (int axis = 0; axis < 3; axis++) direction[axis] = v.get(axis, k);
+			directions.add(direction);
+		}
+		return directions.toArray(double[][]::new);
+	}
+
+	private static double evaluate(double[] field, double[] position, int axis) {
+		double value = field[4 * axis];
+		for (int j = 0; j < 3; j++) value += field[4 * axis + j + 1] * position[j];
 		return value;
+	}
+	private static void validate(double[] mass, double[][] position, double[][] error, double[][] shape, boolean[] shaped, double[] offset) {
+		if (mass == null || mass.length == 0 || position == null || position.length != mass.length
+				|| error == null || error.length != mass.length || shape == null || shape.length != 3
+				|| shaped == null || shaped.length != 3 || offset == null || offset.length != 3)
+			throw new IllegalArgumentException("Invalid coupled velocity input dimensions");
+		for (int axis = 0; axis < 3; axis++) if (shape[axis] == null || shape[axis].length != mass.length || !Double.isFinite(offset[axis]))
+			throw new IllegalArgumentException("Invalid coupled velocity shape or centre");
+		for (int p = 0; p < mass.length; p++) {
+			if (!(mass[p] > 0 && Double.isFinite(mass[p])) || position[p] == null || position[p].length != 3
+					|| error[p] == null || error[p].length != 3) throw new IllegalArgumentException("Invalid coupled velocity source");
+			for (int axis = 0; axis < 3; axis++) if (!Double.isFinite(position[p][axis]) || !(error[p][axis] >= 0 && Double.isFinite(error[p][axis]))
+					|| !Double.isFinite(shape[axis][p]) || !shaped[axis] && shape[axis][p] != 1)
+				throw new IllegalArgumentException("Invalid coupled velocity position, storage error or shape");
+		}
 	}
 }

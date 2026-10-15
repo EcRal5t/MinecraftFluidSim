@@ -27,8 +27,8 @@ final class PressureRowBasis {
 		Long previous = validationWorkLimit.get(); validationWorkLimit.set(limit);
 		try { action.run(); } finally { if (previous == null) validationWorkLimit.remove(); else validationWorkLimit.set(previous); }
 	}
-	private static long inputWork(int rows, SignedDyadic[] coefficients, SignedDyadic[][] inertia) {
-		long units = rows + 4L * inertia.length;
+	private static long inputWork(int rows, SignedDyadic[] coefficients, SignedDyadic[][] inertia, int stride) {
+		long units = rows + (long) stride * inertia.length;
 		for (var value : coefficients) units += inputWords(value);
 		for (var gram : inertia) for (var value : gram) units += inputWords(value);
 		// One 2048-bit word-pair operation per input row, nonzero and initial rational limb.
@@ -47,28 +47,34 @@ final class PressureRowBasis {
 	private final List<Dependency> dependencies;
 	private final WorkBudget work;
 
-	PressureRowBasis(int[] starts, int[] indices, SignedDyadic[] coefficients, SignedDyadic[][] inertia, double[] storage, double[] diagonal) {
-		work = new WorkBudget(inputWork(storage.length, coefficients, inertia));
-		int[][] support = new int[inertia.length][];
-		for (int f = 0; f < inertia.length; f++) support[f] = independentColumns(inertia[f]);
+	PressureRowBasis(int[] starts, int[] indices, SignedDyadic[] coefficients, SignedDyadic[][] inertia, int stride, double[] storage, double[] diagonal) {
+		if (stride <= 0) throw new IllegalArgumentException("Invalid pressure factor stride");
+		work = new WorkBudget(inputWork(storage.length, coefficients, inertia, stride));
+		int[][] support = new int[inertia.length][]; int[] modes = new int[inertia.length];
+		for (int f = 0; f < inertia.length; f++) {
+			modes[f] = (int) Math.sqrt(inertia[f].length);
+			if (modes[f] > stride || modes[f] * modes[f] != inertia[f].length)
+				throw new IllegalArgumentException("Invalid pressure factor Gram shape");
+			support[f] = independentColumns(inertia[f], modes[f]);
+		}
 		var features = new ArrayList<TreeMap<Integer, SignedDyadic>>(storage.length);
 		long featureBytes = 0, available = availableMemory();
 		for (int row = 0; row < storage.length; row++) {
 			var feature = new TreeMap<Integer, SignedDyadic>(); int e = starts[row];
 			while (e < starts[row + 1]) {
-				int factor = indices[e] / 4; int first = e;
-				while (e < starts[row + 1] && indices[e] / 4 == factor) e++;
-				if (support[factor].length == 4) for (int j = first; j < e; j++) feature.put(indices[j], coefficients[j]);
+				int factor = indices[e] / stride; int first = e;
+				while (e < starts[row + 1] && indices[e] / stride == factor) e++;
+				if (support[factor].length == modes[factor]) for (int j = first; j < e; j++) feature.put(indices[j], coefficients[j]);
 				else for (int column : support[factor]) {
 					SignedDyadic value = SignedDyadic.ZERO;
 					for (int j = first; j < e; j++) {
-						work.charge(coefficients[j].significand(), inertia[factor][4 * (indices[j] % 4) + column].significand());
-						value = value.add(coefficients[j].multiply(inertia[factor][4 * (indices[j] % 4) + column]));
+						work.charge(coefficients[j].significand(), inertia[factor][modes[factor] * (indices[j] % stride) + column].significand());
+						value = value.add(coefficients[j].multiply(inertia[factor][modes[factor] * (indices[j] % stride) + column]));
 					}
-					if (value.signum() != 0) feature.put(4 * factor + column, value);
+					if (value.signum() != 0) feature.put(stride * factor + column, value);
 				}
 			}
-			if (storage[row] > 0) feature.put(Math.addExact(Math.multiplyExact(4, inertia.length), row), SignedDyadic.of(1));
+			if (storage[row] > 0) feature.put(Math.addExact(Math.multiplyExact(stride, inertia.length), row), SignedDyadic.of(1));
 			features.add(feature); for (var value : feature.values()) featureBytes += 256L + 2L * ((value.significand().bitLength() + 7L) / 8);
 			checkMemory(featureBytes, available);
 		}
@@ -149,12 +155,17 @@ final class PressureRowBasis {
 			if (value.isZero()) target.remove(entry.getKey()); else target.put(entry.getKey(), value);
 		}
 	}
-	private int[] independentColumns(SignedDyadic[] gram) {
-		var candidates = new ArrayList<TreeMap<Integer, SignedDyadic>>();
-		for (int column = 0; column < 4; column++) { var values = new TreeMap<Integer, SignedDyadic>(); for (int row = 0; row < 4; row++) if (gram[4 * row + column].signum() != 0) values.put(row, gram[4 * row + column]); candidates.add(values); }
-		if (modularRank(candidates, new Integer[]{0, 1, 2, 3}) == 4) return new int[]{0, 1, 2, 3};
+	private int[] independentColumns(SignedDyadic[] gram, int modes) {
+		var candidates = new ArrayList<TreeMap<Integer, SignedDyadic>>(); var order = new Integer[modes];
+		for (int column = 0; column < modes; column++) {
+			order[column] = column; var values = new TreeMap<Integer, SignedDyadic>();
+			for (int row = 0; row < modes; row++) if (gram[modes * row + column].signum() != 0)
+				values.put(row, gram[modes * row + column]);
+			candidates.add(values);
+		}
+		if (modularRank(candidates, order) == modes) return java.util.stream.IntStream.range(0, modes).toArray();
 		var pivots = new TreeMap<Integer, TreeMap<Integer, ExactRational>>(); var selected = new ArrayList<Integer>();
-		for (int column = 0; column < 4; column++) {
+		for (int column = 0; column < modes; column++) {
 			var values = new TreeMap<Integer, ExactRational>(); candidates.get(column).forEach((row, value) -> values.put(row, rational(value)));
 			while (!values.isEmpty()) {
 				int row = values.firstKey(); var pivot = pivots.get(row);

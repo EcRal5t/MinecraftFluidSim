@@ -9,7 +9,10 @@ public final class MarkerPressureValidation {
 	                      int[] cells) { }
 	private MarkerPressureValidation() { }
 	public static void main(String[] args) {
-		if (args.length == 1 && args[0].equals("--pressure-gauge")) {
+		if (args.length == 1 && args[0].equals("--thin-layer")) {
+			thinLayerFitPreservesPhysicalMoments();
+			System.out.println("MarkerPressureValidation PASS (thin coupled velocity fit)");
+		} else if (args.length == 1 && args[0].equals("--pressure-gauge")) {
 			partiallyFilledPressureRetainsReferenceGauge();
 			System.out.println("MarkerPressureValidation PASS (partial liquid pressure reference)");
 		} else if (args.length == 1 && args[0].equals("--spatial-input")) {
@@ -44,7 +47,7 @@ public final class MarkerPressureValidation {
 		}
 	}
 
-	/** A pressure reference shift preserves physical force on a rank-four, partially filled cell. */
+	/** A pressure reference shift preserves physical force on the admitted partially filled space. */
 	private static void partiallyFilledPressureRetainsReferenceGauge() {
 		for (int cells = 1; cells <= 2; cells++) partiallyFilledPressureRetainsReferenceGauge(cells);
 	}
@@ -62,9 +65,9 @@ public final class MarkerPressureValidation {
 		var plan = d.pressureSystem.markerProjection(); plan.prepare(.001F);
 		var basis = plan.basis(); int block = basis.markerBlock(0), cell = basis.physicalCell(block);
 		var profile = plan.geometry().cellSnapshot(cell);
-		if (basis.rank(block) != 4 || profile == null || !(profile.volume() > 0 && profile.volume() < Math.pow(basis.cellSize(), 3))
+		if (!basis.hasRepresentableBasis(block) || profile == null || !(profile.volume() > 0 && profile.volume() < Math.pow(basis.cellSize(), 3))
 				|| d.gasState.network.nodeCount() != 1 || d.gasState.network.inventory(1).isEmpty())
-			throw new AssertionError("Partial pressure gauge fixture lost its actual rank-four liquid and finite gas");
+			throw new AssertionError("Partial pressure gauge fixture lost its supported liquid and finite gas");
 		var constant = new double[plan.operator().rowCount()];
 		int liquidRow = plan.rowOfLiquidBlock(block);
 		int liquidCount = 0;
@@ -117,6 +120,7 @@ public final class MarkerPressureValidation {
 		cellWetFaceAndConstraintWork();
 		sharedTraceMassConditioning();
 		fixedWallProjectionUsesActualMass();
+		scaledClosedRotationRowsKeepKernel();
 		var free = layout(false); verifyIndependentFluxAndGram(free); projectFreeSurface(free);
 		var closed = layout(true); verifyIndependentFluxAndGram(closed); closedPressureKernel(closed);
 		finiteGasStorage();
@@ -224,7 +228,11 @@ public final class MarkerPressureValidation {
 		d.setVolume(1, 0, 1, 1); d.ensureGrid();
 		var geometry=LiquidPressureGeometry.capture(d); var basis = CellAffineVelocity.capture(d,geometry); var wall = new CellAffineWallProjection(d, basis, geometry);
 		int n = basis.markerCount(); var before = new double[3][n]; var after = new double[3][n]; var impulse = new double[3][n];
-		for (int i = 0; i < n; i++) before[1][i] = 2 + 3 * (basis.position(i, 1) - .5) + 4 * (basis.position(i, 0) - 1.5);
+		for (int i = 0; i < n; i++) {
+			before[0][i] = Math.sin(.3 * i + .2);
+			before[1][i] = 2 + 3 * (basis.position(i, 1) - .5) + 4 * (basis.position(i, 0) - 1.5);
+			before[2][i] = Math.cos(.4 * i);
+		}
 		var features=new double[n][4]; var gram=new double[4][4]; var right=new double[4];
 		for(int i=0;i<n;i++) {
 			double y=basis.position(i,1);
@@ -239,12 +247,26 @@ public final class MarkerPressureValidation {
 		for (int i = 0; i < n; i++) {
 			double expected=0; for(int term=0;term<4;term++) expected+=features[i][term]*reference[term];
 			near(after[1][i], expected, 2e-14, "Independent actual-mass wall-admissible normal mode");
-			double delta = before[1][i] - after[1][i];
-			removed += basis.massKilograms(i) * delta * delta;
-			energyChange += basis.massKilograms(i) * (before[1][i] * before[1][i] - after[1][i] * after[1][i]);
-			near(impulse[1][i], -basis.massKilograms(i) * delta, 2e-13, "Actual fixed-wall impulse");
+			for (int axis = 0; axis < 3; axis++) {
+				double delta = before[axis][i] - after[axis][i];
+				removed += basis.massKilograms(i) * delta * delta;
+				energyChange += basis.massKilograms(i) * (before[axis][i] * before[axis][i] - after[axis][i] * after[axis][i]);
+				near(impulse[axis][i], axis == 1 ? -basis.massKilograms(i) * delta : 0, axis == 1 ? 2e-13 : 0,
+						"Wall impulse contains only constrained normal response");
+			}
 		}
 		near(energyChange, removed, 2e-12, "Mass-orthogonal wall projection work");
+		near(wall.normalWork() + wall.representationWork(), -.5 * energyChange, 2e-12,
+				"Wall and representation work sum to the actual total kinetic change");
+		for (int mode = 0; mode < basis.modeCount(basis.markerBlock(0)); mode++) {
+			int block = basis.markerBlock(0); var direction = new double[3][4 * basis.blockCount()];
+			for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++)
+				direction[axis][4 * block + term] = basis.modeCoefficientExact(block, mode, axis, term).toDouble();
+			var sampled = new double[3][n]; basis.predict(direction, sampled); double virtualWork = 0;
+			for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < n; marker++)
+				virtualWork += basis.massKilograms(marker) * (before[axis][marker] - after[axis][marker]) * sampled[axis][marker];
+			near(virtualWork, 0, 2e-12, "Wall projection residual is orthogonal to every admitted coupled mode");
+		}
 		var twice = new double[3][n]; wall.project(after, twice, impulse);
 		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < n; i++) near(twice[axis][i], after[axis][i], 2e-14, "Fixed-wall projection idempotence");
 		meanCompleteLocalPressureUsesActualMass(d, geometry);
@@ -252,8 +274,8 @@ public final class MarkerPressureValidation {
 	private static void meanCompleteLocalPressureUsesActualMass(FluidDomain d, LiquidPressureGeometry geometry) {
 		for (int i = 0; i < d.particleCount(); i++) d.particles.setMass(i, d.particles.mass(i) * (1 + .125 * i));
 		var basis = CellAffineVelocity.capture(d, geometry); int block = basis.markerBlock(0);
-		if (basis.rank(block) != 4 || !basis.hasNormalShape(block, 1) || basis.normalShape(block, 1)[2] != 0)
-			throw new AssertionError("Mean/internal matrix lost its rank-four single-wall space");
+		if (!basis.hasRepresentableBasis(block) || !basis.hasNormalShape(block, 1) || basis.normalShape(block, 1)[2] != 0)
+			throw new AssertionError("Mean/internal matrix lost its single-wall velocity space");
 		var mean = new java.util.ArrayList<CellVelocityConstraintOperator.Block>();
 		mean.add(new CellVelocityConstraintOperator.Block(block, 0, new double[]{0, 1, 0, 0}));
 		mean.add(new CellVelocityConstraintOperator.Block(block, 1, new double[]{1, 1.5 - basis.center(block, 0), 1 - basis.center(block, 1), 1.5 - basis.center(block, 2)}));
@@ -410,7 +432,7 @@ public final class MarkerPressureValidation {
 		float[][] cube = new float[8][3];
 		for (int i = 0; i < 8; i++) for (int a = 0; a < 3; a++) cube[i][a] = (i >> a & 1) == 0 ? .125F : .375F;
 		FluidDomain domain = affineDomain(cube); CellAffineVelocity basis = CellAffineVelocity.capture(domain);
-		if (basis.rank(0) != 4 || !basis.hasRepresentableBasis(0) || !basis.canRepresentPoint(0, .5, .5, .5))
+		if (!basis.hasRepresentableBasis(0) || !basis.canRepresentPoint(0, .5, .5, .5))
 			throw new AssertionError("Full spatial quadrature lost its affine velocity capacity");
 		verifyConstraintRowRelations(basis, 0);
 		verifyAffineDotRounding(basis);
@@ -465,50 +487,14 @@ public final class MarkerPressureValidation {
 			if (!sparsePlan.solve(sparseDomain.config.pressureTolerance()).converged())
 				throw new AssertionError("Stationary restricted-hull pressure did not converge at rank " + lowRank.rank(0));
 		}
-		var tilted = new float[][]{{.125F, .125F, .125F}, {.375F, .125F, .125F}, {.125F, .375F, .125F}, {.375F, .375F, Math.nextUp(.125F)}};
-		if (CellAffineVelocity.capture(affineDomain(tilted)).rank(0) != 4)
-			throw new AssertionError("Exact geometric rank discarded a real binary32 spatial direction");
-		var closePoints = new FluidDomain(12, 8, 4, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
-		float[] saved = {7.9979296F, 3.0201921F, .5030171F, 1.6467273e-4F,
-				7.9978232F, 3.0137305F, .50301975F, 3.2901764e-5F,
-				7.421645F, 3.3454382F, .49268323F, .0026631951F};
-		closePoints.restoreParticleState(new FlipParticleState(12, 8, 4, 1, 3, .0028607696F, saved, new float[9], new byte[384]));
-		var closeBasis = CellAffineVelocity.capture(closePoints);
-		verifyAffineDotRounding(closeBasis);
-		int closeCell = closeBasis.markerBlock(0);
-		if (closeBasis.rank(closeCell) != 3 || !closeBasis.hasRepresentableBasis(closeCell))
-			throw new AssertionError("Separated binary32 points lost their certified affine map through rounded refinement residuals");
-		var affineVelocity = new double[3][3]; var closeCoefficients = new double[3][4 * closeBasis.blockCount()];
-		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 3; i++) affineVelocity[axis][i] = 1 + closeBasis.position(i, axis);
-		closeBasis.fit(affineVelocity, closeCoefficients); var closePrediction = new double[3][3]; closeBasis.predict(closeCoefficients, closePrediction);
-		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 3; i++)
-			near(closePrediction[axis][i], affineVelocity[axis][i], 2e-12, "Certified affine field on separated near-collinear points");
-		var thinTetrahedron = new FluidDomain(12, 8, 4, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
-		float[] thin = {3.880811F, 3.0868871F, 3.0868871F, 2.6449561e-5F,
-				3.852336F, 3.086874F, 3.086874F, 8.146465e-5F,
-				3.2086852F, 3.4979026F, 3.4938903F, .08683321F,
-				3.733526F, 3.4979026F, 3.4938903F, .08683321F};
-		thinTetrahedron.restoreParticleState(new FlipParticleState(12, 8, 4, 1, 4, .17377433F, thin, new float[12], new byte[384]));
-		var thinBasis = CellAffineVelocity.capture(thinTetrahedron); int thinCell = thinBasis.markerBlock(0);
-		verifyAffineDotRounding(thinBasis);
-		if (thinBasis.rank(thinCell) != 4 || !thinBasis.hasRepresentableBasis(thinCell) || !thinBasis.expandedCell(thinCell))
-			throw new AssertionError("Near-degenerate actual tetrahedron lost the precision required by its affine moment certificate");
-		var thinVelocity = new double[3][4]; var thinCoefficients = new double[3][4 * thinBasis.blockCount()];
-		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 4; i++) thinVelocity[axis][i] = 1 + thinBasis.position(i, axis);
-		thinBasis.fit(thinVelocity, thinCoefficients); var thinPrediction = new double[3][4]; thinBasis.predict(thinCoefficients, thinPrediction);
-		for (int axis = 0; axis < 3; axis++) for (int i = 0; i < 4; i++)
-			near(thinPrediction[axis][i], thinVelocity[axis][i], 2e-14, "Expanded affine fit reproduces the actual resolved field");
-		var thinConstraint = new CellVelocityConstraintOperator(thinBasis, java.util.List.of(new CellVelocityConstraintOperator.Row(
-				java.util.List.of(new CellVelocityConstraintOperator.Block(thinCell, 0, new double[]{0, 1, 0, 0})), 0)));
-		var translation = new double[3][4]; Arrays.fill(translation[0], 1); double[] translationRate = new double[1];
-		thinConstraint.volumeRate(translation, translationRate);
-		near(translationRate[0], 0, 2e-14, "Expanded constraint preserves its constant-velocity kernel");
-		verifyConstraintRowRelations(thinBasis, thinCell);
-		double savedMass = basis.massKilograms(0), savedCentre = basis.center(0, 0), savedCoefficient = basis.coefficient(0, 0);
+		thinLayerFitPreservesPhysicalMoments();
+		double savedMass = basis.massKilograms(0), savedCentre = basis.center(0, 0);
+		var savedCoefficient = basis.coefficientExact(0, 0, 0, 0);
 		domain.particles.setMass(0, 200); domain.particles.setPositionX(0, .25F);
 		near(basis.massKilograms(0), savedMass, 0, "Captured affine mass ownership");
 		near(basis.center(0, 0), savedCentre, 0, "Captured affine centre ownership");
-		near(basis.coefficient(0, 0), savedCoefficient, 0, "Captured affine map ownership");
+		if (!basis.coefficientExact(0, 0, 0, 0).equals(savedCoefficient))
+			throw new AssertionError("Captured coupled affine map changed with its source");
 	}
 	private static void verifyAffineDotRounding(CellAffineVelocity basis) {
 		var velocity = new double[3][basis.markerCount()]; var fitted = new double[3][4 * basis.blockCount()];
@@ -520,24 +506,81 @@ public final class MarkerPressureValidation {
 			}
 			basis.fit(velocity, fitted); basis.transposeLoad(load, force);
 			for (int block = 0; block < basis.blockCount(); block++) if (basis.blockMarkerCount(block) > 0)
-				for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) {
+				for (int outputAxis = 0; outputAxis < 3; outputAxis++) for (int term = 0; term < 4; term++) {
 					var sum = SignedDyadic.ZERO;
 					for (int i = 0; i < basis.blockMarkerCount(block); i++) {
 						int marker = basis.blockMarker(block, i);
-						sum = sum.add(basis.coefficientExact(marker, axis, term).multiply(SignedDyadic.of(velocity[axis][marker])));
+						for (int inputAxis = 0; inputAxis < 3; inputAxis++)
+							sum = sum.add(basis.coefficientExact(marker, outputAxis, inputAxis, term)
+								.multiply(SignedDyadic.of(velocity[inputAxis][marker])));
 					}
-					near(fitted[axis][4 * block + term], sum.toDouble(), 0, "Affine fit uses a single rounded exact dot");
+					near(fitted[outputAxis][4 * block + term], sum.toDouble(), 0, "Coupled affine fit exact dot");
+					if (mode == 0 && term > 0) near(fitted[outputAxis][4 * block + term], 0, 0, "Constant velocity has exactly zero gradient");
 				}
-			for (int i = 0; i < basis.markerCount(); i++) for (int axis = 0; axis < 3; axis++) {
+			for (int marker = 0; marker < basis.markerCount(); marker++) for (int inputAxis = 0; inputAxis < 3; inputAxis++) {
 				var sum = SignedDyadic.ZERO;
-				for (int term = 0; term < 4; term++) sum = sum.add(basis.coefficientExact(i, axis, term)
-						.multiply(SignedDyadic.of(load[axis][4 * basis.markerBlock(i) + term])));
-				near(force[axis][i], sum.toDouble(), 0, "Affine adjoint uses the same single rounded exact dot");
+				for (int outputAxis = 0; outputAxis < 3; outputAxis++) for (int term = 0; term < 4; term++)
+					sum = sum.add(basis.coefficientExact(marker, outputAxis, inputAxis, term)
+							.multiply(SignedDyadic.of(load[outputAxis][4 * basis.markerBlock(marker) + term])));
+				near(force[inputAxis][marker], sum.toDouble(), 0, "Coupled affine transpose exact dot");
 			}
 		}
 	}
+	static void thinLayerFitPreservesPhysicalMoments() {
+		for (int normal = 0; normal < 3; normal++) for (float half : new float[]{.125F, 0x1p-22F, 0}) {
+			var points = new float[8][3];
+			for (int p = 0; p < points.length; p++) for (int axis = 0; axis < 3; axis++)
+				points[p][axis] = .25F + ((p >>> axis & 1) == 0 ? -1 : 1) * (axis == normal ? half : .125F);
+			var basis = CellAffineVelocity.capture(affineDomain(points)); int block = basis.markerBlock(0);
+			if (!basis.hasRepresentableBasis(block)) throw new AssertionError("Thin source lost its actual velocity support");
+			if (half < .125F && basis.reliableRank(block) != 2)
+				throw new AssertionError("Storage-scale normal thickness retained an unreliable strain direction");
+			verifyAffineDotRounding(basis); verifyAffineRigidMotion(basis);
+			for (int mode = 0; mode < 6; mode++) {
+				var input = new double[3][basis.markerCount()];
+				for (int p = 0; p < basis.markerCount(); p++) {
+					for (int axis = 0; axis < 3; axis++) input[axis][p] = mode == 0 ? new double[]{1.25, -.75, .125}[axis]
+							: mode <= 3 ? (axis == mode % 3 ? -(basis.position(p, (axis + 1) % 3) - basis.center(block, (axis + 1) % 3))
+							: axis == (mode + 1) % 3 ? basis.position(p, (axis + 2) % 3) - basis.center(block, (axis + 2) % 3) : 0)
+							: axis == normal ? ((p >>> normal & 1) == 0 ? -1e-4 : 1e-4) : mode == 5 ? .2 * (basis.position(p, axis) - basis.center(block, axis)) : 0;
+				}
+				var coefficient = new double[3][4 * basis.blockCount()]; var output = new double[3][basis.markerCount()];
+				basis.fit(input, coefficient); basis.predict(coefficient, output);
+				var before = mechanicalMoments(basis, input); var after = mechanicalMoments(basis, output);
+				for (int quantity = 0; quantity < 6; quantity++) {
+					double budget = 128 * basis.markerCount() * Math.ulp(Math.max(1, Math.max(Math.abs(before[quantity]), Math.abs(after[quantity]))));
+					near(after[quantity], before[quantity], budget, "Thin fitted actual momentum/angular momentum");
+				}
+				double energyBudget = 128 * basis.markerCount() * Math.ulp(Math.max(1, before[6]));
+				if (after[6] > before[6] + energyBudget) throw new AssertionError("Thin fitted velocity increased actual kinetic energy");
+				if (mode == 0) for (int axis = 0; axis < 3; axis++) for (int term = 1; term < 4; term++)
+					near(coefficient[axis][4 * block + term], 0, 0, "Thin constant velocity generated a gradient");
+				if (half < .125F && mode >= 4) {
+					double speed = 0; for (double[] component : input) for (double value : component) speed = Math.max(speed, Math.abs(value));
+					double resolvedScale = .125 / basis.cellSize();
+					if (Math.abs(coefficient[normal][4 * block + normal + 1]) > 2 * speed / resolvedScale)
+						throw new AssertionError("Thin normal strain grew with the inverse layer thickness");
+				}
+				var row = new CellVelocityConstraintOperator.Row(java.util.List.of(
+						new CellVelocityConstraintOperator.Block(block, normal, new double[]{.7, -.3, .4, .2})), .125);
+				verifyFactoredConstraint(basis, java.util.List.of(row), input, new double[]{.75});
+			}
+			System.out.printf("Thin coupled fit normal=%d half=%g rawRank=%d reliableRank=%d modes=%d%n",
+					normal, half, basis.rank(block), basis.reliableRank(block), basis.modeCount(block));
+		}
+	}
+	private static double[] mechanicalMoments(CellAffineVelocity basis, double[][] velocity) {
+		var result = new double[7];
+		for (int p = 0; p < basis.markerCount(); p++) for (int axis = 0; axis < 3; axis++) {
+			double m = basis.massKilograms(p), v = velocity[axis][p];
+			result[axis] += m * v; result[6] += .5 * m * v * v;
+			int next = (axis + 1) % 3, last = (axis + 2) % 3;
+			result[3 + axis] += m * (basis.position(p, next) * velocity[last][p] - basis.position(p, last) * velocity[next][p]);
+		}
+		return result;
+	}
+
 	private static void verifyConstraintRowRelations(CellAffineVelocity basis, int block) {
-		boolean truncatedRelation = false, roundedSourceDefect = false;
 		for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) {
 			double coefficient = 1 + 0x1.0p-49;
 			var rows = new java.util.ArrayList<CellVelocityConstraintOperator.Row>();
@@ -546,12 +589,9 @@ public final class MarkerPressureValidation {
 				rows.add(new CellVelocityConstraintOperator.Row(java.util.List.of(
 						new CellVelocityConstraintOperator.Block(block, axis, declared)), 0));
 			}
-			var operator = new CellVelocityConstraintOperator(basis, rows);
-			var coordinates = operator.rowBasis();
-			if (coordinates.size() != 1 || coordinates.dependencyCount() != 2)
-				throw new AssertionError("Exact product row relations were not retained by the pressure basis");
-			if (coordinates.row(0) != 2)
-				throw new AssertionError("Pressure coordinates did not retain the strongest actual-mass row");
+			var operator = new CellVelocityConstraintOperator(basis, rows); var coordinates = operator.rowBasis();
+			if (coordinates.size() > 0 && (coordinates.size() != 1 || coordinates.dependencyCount() != 2))
+				throw new AssertionError("Declared pressure row relations were not retained by the physical mode basis");
 			var force = new double[3][basis.markerCount()]; var image = new double[3];
 			operator.force(new double[]{1, 1, -1}, force);
 			for (double[] component : force) for (double value : component) near(value, 0, 0, "Exact declared pressure row relation");
@@ -560,7 +600,7 @@ public final class MarkerPressureValidation {
 			var velocity = new double[3][basis.markerCount()];
 			for (int a = 0; a < 3; a++) for (int marker = 0; marker < basis.markerCount(); marker++) velocity[a][marker] = Math.sin(a + .3 * marker);
 			verifyFactoredConstraint(basis, rows, velocity, new double[]{.7, -1.3, .25});
-			float dt = .03F; var inverseDt = SignedDyadic.of(1.0 / (double)dt);
+			float dt = .03F; var inverseDt = SignedDyadic.of(1.0 / (double) dt);
 			var source = operator.referencedSource(velocity, dt, new double[3], new double[3]);
 			if (!source[0].add(source[1]).equals(source[2])) throw new AssertionError("Common predictor source broke an exact pressure row relation");
 			int otherTerm = (term + 1) % 4; double epsilon = 0x1.0p-50;
@@ -571,30 +611,20 @@ public final class MarkerPressureValidation {
 			var nearSource = nearOperator.referencedSource(velocity, dt, new double[3], new double[3]);
 			var sourceRelation = SignedDyadic.ZERO;
 			for (int marker = 0; marker < basis.markerCount(); marker++) if (basis.markerBlock(marker) == block)
-				sourceRelation = sourceRelation.add(basis.coefficientExact(marker, axis, otherTerm).multiply(SignedDyadic.of(velocity[axis][marker])));
+				for (int inputAxis = 0; inputAxis < 3; inputAxis++) sourceRelation = sourceRelation.add(
+						basis.coefficientExact(marker, axis, inputAxis, otherTerm).multiply(SignedDyadic.of(velocity[inputAxis][marker])));
 			sourceRelation = sourceRelation.multiply(SignedDyadic.of(epsilon)).multiply(inverseDt);
 			if (!nearSource[0].add(nearSource[1]).subtract(nearSource[2]).equals(sourceRelation))
-				throw new AssertionError("Common predictor source lost its small independent physical row component");
-			var observedRate = new double[3]; nearOperator.volumeRate(velocity, observedRate);
-			var roundedSourceRelation = SignedDyadic.of(-observedRate[0] / dt).add(SignedDyadic.of(-observedRate[1] / dt)).subtract(SignedDyadic.of(-observedRate[2] / dt));
-			roundedSourceDefect |= !roundedSourceRelation.equals(sourceRelation);
+				throw new AssertionError("Common predictor source lost its independent physical row component");
 			operator.force(new double[]{1, 0, 0}, force);
-			for (int marker = 0; marker < basis.markerCount(); marker++) {
-				var expected = basis.coefficientExact(marker, axis, term).multiply(mmm.units.SignedDyadic.of(coefficient));
-				near(force[axis][marker], expected.toDouble(), 0, "Full constraint product transpose");
-				var defect = mmm.units.SignedDyadic.ZERO;
-				for (int multiple = 1; multiple <= 3; multiple++) {
-					var exact = expected.multiply(mmm.units.SignedDyadic.of(multiple));
-					var high = mmm.units.SignedDyadic.of(exact.toDouble());
-					var rounded = basis.expandedCell(block) ? high.add(mmm.units.SignedDyadic.of(exact.subtract(high).toDouble())) : high;
-					defect = multiple == 3 ? defect.subtract(rounded) : defect.add(rounded);
-				}
-				truncatedRelation |= defect.signum() != 0;
+			for (int marker = 0; marker < basis.markerCount(); marker++) for (int inputAxis = 0; inputAxis < 3; inputAxis++) {
+				var expected = basis.markerBlock(marker) == block ? basis.coefficientExact(marker, axis, inputAxis, term)
+						.multiply(SignedDyadic.of(coefficient)) : SignedDyadic.ZERO;
+				near(force[inputAxis][marker], expected.toDouble(), 0, "Full coupled constraint transpose");
 			}
 		}
-		if (!truncatedRelation) throw new AssertionError("Pressure row fixture did not exercise product truncation");
-		if (!roundedSourceDefect) throw new AssertionError("Pressure source fixture did not exercise independent row rounding");
 	}
+
 	private static void verifySparsePressureBasis(CellAffineVelocity basis) {
 		int block = basis.markerBlock(0);
 		var definitions = java.util.List.of(
@@ -695,11 +725,13 @@ public final class MarkerPressureValidation {
 		var matrix = new SignedDyadic[rows][3 * count];
 		for (var row : matrix) Arrays.fill(row, SignedDyadic.ZERO);
 		for (int row = 0; row < rows; row++) for (var block : definitions.get(row).blocks()) {
-			double[] declared = block.coefficients();
 			for (int ordinal = 0; ordinal < basis.blockMarkerCount(block.velocityBlock()); ordinal++) {
-				int marker = basis.blockMarker(block.velocityBlock(), ordinal), index = block.axis() * count + marker;
-				for (int term = 0; term < 4; term++) matrix[row][index] = matrix[row][index]
-						.add(SignedDyadic.of(declared[term]).multiply(basis.coefficientExact(marker, block.axis(), term)));
+				int marker = basis.blockMarker(block.velocityBlock(), ordinal);
+				for (int inputAxis = 0; inputAxis < 3; inputAxis++) for (int term = 0; term < 4; term++) {
+					int index = inputAxis * count + marker;
+					matrix[row][index] = matrix[row][index].add(block.coefficientExact(term)
+							.multiply(basis.coefficientExact(marker, block.axis(), inputAxis, term)));
+				}
 			}
 		}
 		var operator = new CellVelocityConstraintOperator(basis, definitions);
@@ -740,6 +772,98 @@ public final class MarkerPressureValidation {
 					? principal.values()[entry++] : SignedDyadic.ZERO;
 			if (!stored.equals(value)) throw new AssertionError("Principal D/H Gram differs from independent full C mass work");
 		}
+	}
+	private static void scaledClosedRotationRowsKeepKernel() {
+		for (float fraction : new float[]{.9F, .95F, .99F}) partialClosedRotationRowsKeepKernel(fraction);
+		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(.7F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
+		for (int cell = 0; cell < d.cellCount; cell++) d.setSolid(cell % 3, cell / 3 % 3, cell / 9, cell != 13);
+		d.setVolume(1, 1, 1, 1);
+		for (int marker = 0; marker < d.particleCount(); marker++) d.particles.setMass(marker, d.particles.mass(marker) * (1 + .125 * marker));
+		d.ensureInventoryGrid(); var geometry = LiquidPressureGeometry.capture(d); var basis = CellAffineVelocity.capture(d, geometry);
+		int block = basis.markerBlock(0); var rows = new java.util.ArrayList<CellVelocityConstraintOperator.Row>();
+		double scale = geometry.componentSnapshot(13, basis.blockSupport(block)).volume() / basis.cellSize();
+		if (basis.center(block, 0) == 1.5 * basis.cellSize()) throw new AssertionError("Closed rotation fixture has no mass-centre offset");
+		var polynomial = new double[3][4][10];
+		for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) basis.divergencePolynomial(block, axis, term, polynomial[axis][term]);
+		for (int monomial = 1; monomial < 10; monomial++) {
+			var parts = new java.util.ArrayList<CellVelocityConstraintOperator.Block>();
+			for (int axis = 0; axis < 3; axis++) {
+				var coefficient = new double[4]; for (int term = 0; term < 4; term++) coefficient[term] = polynomial[axis][term][monomial];
+				parts.add(new CellVelocityConstraintOperator.Block(block, axis, coefficient, scale));
+			}
+			rows.add(new CellVelocityConstraintOperator.Row(parts, 0));
+		}
+		int rotations = 0;
+		for (int mode = 0; mode < basis.modeCount(block); mode++) {
+			boolean skew = true, nonzero = false;
+			for (int axis = 0; axis < 3; axis++) for (int other = 0; other < 3; other++) {
+				var a = basis.modeCoefficientExact(block, mode, axis, other + 1);
+				var b = basis.modeCoefficientExact(block, mode, other, axis + 1);
+				skew &= a.add(b).signum() == 0; nonzero |= a.signum() != 0;
+			}
+			if (!skew || !nonzero) continue;
+			rotations++;
+			for (var row : rows) {
+				var exact = SignedDyadic.ZERO;
+				for (var part : row.blocks()) for (int term = 0; term < 4; term++)
+					exact = exact.add(part.coefficientExact(term).multiply(basis.modeCoefficientExact(block, mode, part.axis(), term)));
+				if (exact.signum() != 0) throw new AssertionError("Literal closed q rotation has a polynomial divergence");
+			}
+		}
+		if (rotations < 3) throw new AssertionError("Closed q space lost a physical rotation");
+		var velocity = new double[3][basis.markerCount()];
+		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < basis.markerCount(); marker++) velocity[axis][marker] = Math.sin(axis + .3 * marker);
+		var pressure = new double[rows.size()]; for (int row = 0; row < pressure.length; row++) pressure[row] = Math.cos(.2 * row);
+		verifyFactoredConstraint(basis, rows, velocity, pressure);
+	}
+
+
+	/** Real partial PLIC support must retain the exact rotation kernel through its volume integral. */
+	private static void partialClosedRotationRowsKeepKernel(float fraction) {
+		var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
+		for (int cell = 0; cell < d.cellCount; cell++) d.setSolid(cell % 3, cell / 3 % 3, cell / 9, cell != 13);
+		d.setVolume(1, 1, 1, fraction);
+		for (int marker = 0; marker < d.particleCount(); marker++) {
+			d.particles.setMass(marker, d.particles.mass(marker) * (1 + .0137 * marker));
+			d.particles.setPositionX(marker, d.particles.positionX(marker) + .043F);
+			d.particles.setPositionZ(marker, d.particles.positionZ(marker) - .027F);
+		}
+		d.ensureGrid(); d.gasTopologyCoordinator.refresh();
+		var plan = d.pressureSystem.markerProjection(); plan.prepare(.001F);
+		var basis = plan.basis(); int block = basis.markerBlock(0);
+		var profile = plan.geometry().componentSnapshot(13, basis.blockSupport(block));
+		if (profile.freeFragments().isEmpty() || plan.rowOfLiquidBlock(block) < 0)
+			throw new AssertionError("Partial rotation fixture lost its PLIC volume row");
+		java.util.List<CellVelocityConstraintOperator.Row> rows;
+		try {
+			var field = MarkerPressureProjection.class.getDeclaredField("rows"); field.setAccessible(true);
+			@SuppressWarnings("unchecked") var declared = (java.util.List<CellVelocityConstraintOperator.Row>) field.get(plan);
+			rows = declared;
+		} catch (ReflectiveOperationException failed) { throw new AssertionError("Cannot inspect actual pressure rows", failed); }
+		int rotations = 0;
+		for (int mode = 0; mode < basis.modeCount(block); mode++) {
+			boolean skew = true, nonzero = false;
+			for (int axis = 0; axis < 3; axis++) for (int other = 0; other < 3; other++) {
+				var a = basis.modeCoefficientExact(block, mode, axis, other + 1);
+				var b = basis.modeCoefficientExact(block, mode, other, axis + 1);
+				skew &= a.add(b).signum() == 0; nonzero |= a.signum() != 0;
+			}
+			if (!skew || !nonzero) continue;
+			rotations++;
+			for (int row = 0; row < rows.size(); row++) {
+				var residual = SignedDyadic.ZERO;
+				for (var part : rows.get(row).blocks()) if (part.velocityBlock() == block)
+					for (int term = 0; term < 4; term++) residual = residual.add(part.coefficientExact(term)
+							.multiply(basis.modeCoefficientExact(block, mode, part.axis(), term)));
+				if (residual.signum() != 0) throw new AssertionError("Partial PLIC pressure row changed literal rotation: fraction="
+						+ fraction + " row=" + row + " mode=" + mode + " residual=" + residual);
+			}
+		}
+		if (rotations < 3) throw new AssertionError("Partial q space lost a physical rotation");
+		var velocity = new double[3][basis.markerCount()];
+		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < basis.markerCount(); marker++) velocity[axis][marker] = Math.sin(axis + .3 * marker);
+		var pressure = new double[rows.size()]; for (int row = 0; row < pressure.length; row++) pressure[row] = Math.cos(.2 * row);
+		verifyFactoredConstraint(basis, rows, velocity, pressure);
 	}
 
 	private static void sharedTraceMassConditioning() {
@@ -816,8 +940,8 @@ public final class MarkerPressureValidation {
 			for (int a = 0; a < 3; a++) for (int i = 0; i < basis.markerCount(); i++)
 				near(reconstructed[a][i], velocity[a][i], 2e-14, "Constant/rigid rotation on actual affine support");
 			near(basis.divergence(coefficient, 0), 0, 2e-14, "Rigid rotation affine divergence");
-			if (basis.rank(0) == 4) {
-				double[] point = {.45, .3, .2};
+			double[] point = {.45, .3, .2};
+			if (basis.canRepresentPoint(0, point[0], point[1], point[2])) {
 				for (int a = 0; a < 3; a++) {
 					double expected = mode == 0 ? new double[]{1.25, -.75, .125}[a] : a == mode % 3 ? -point[(a + 1) % 3]
 							: a == (mode + 1) % 3 ? point[(a + 2) % 3] : 0;

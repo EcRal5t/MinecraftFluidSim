@@ -80,11 +80,11 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 有限气腔初压的增量换元与双列修正在 `MarkerPressureProjection.solve`，实际预测速度的共同源项、完整残差与压力转置在 `CellVelocityConstraintOperator.referencedSource` / `residual` / `force`；同因子残差修正及改善初值在 `SparsePressureFactor`。小于公开压力 ULP 的响应复用 `MarkerPressureValidation.verifySparsePressureBasis`，共同源项行关系复用 `verifyConstraintRowRelations`。失败矩阵与来源相容诊断在 `BoundaryPourDiagnostic.inspectPressureFailure`，实际压力功与湿场外推读 `pressureWork` 和 `snapshot`。
 
-输运后压力来源的分区残差、共同 `D L` 因式关系和模素数秩检查在 [PressureConditionValidation](../../fabric/src/test/java/mmm/fluid/PressureConditionValidation.java)，入口为 `runMarkerPressureValidation --args="--chemical-pressure"`；输入复用 `M7ChemicalTransportValidation.thermalChemicalExtractionSource` 与同场景实体冲量。
+输运后压力来源的分区残差、共同 `(D A) F` 因式关系和模素数秩检查在 [PressureConditionValidation](../../fabric/src/test/java/mmm/fluid/PressureConditionValidation.java)，入口为 `runMarkerPressureValidation --args="--chemical-pressure"`；输入复用 `M7ChemicalTransportValidation.thermalChemicalExtractionSource` 与同场景实体冲量。
 
-壁面零点形状、实际空间秩与微盒拆块在 `CellAffineVelocity`，共同加权 QR 在 [CellAffineFit](../../solver/src/main/java/mmm/fluid/CellAffineFit.java)，精度扩展在 `ExactCellAffineFit`。湿体积二阶矩、完整六面和内部共享面在 `LiquidPressureGeometry.supportMoments`、`microFaces` 与 `interiorFaces`；完整湿块六面散度在 `MarkerPressureProjection.boxDivergence`，部分湿块散度多项式和自由面压力功也在该类组装。均匀及非均匀质量的三轴闭合旋涡求解、发布与点采样，以及独立静液压使用 `:fabric:runMarkerPressureValidation --args="--velocity-space"`。
+壁面零点形状、实际空间秩与微盒拆块在 `CellAffineVelocity`；可靠支撑方向、原始平移/旋转/应变模态与共同拟合因子在 [CellAffineFit](../../solver/src/main/java/mmm/fluid/CellAffineFit.java)。湿墙法向冲量与自由方向重建功在 `CellAffineWallProjection`，即时功观察见 `MarkerPressureProjection.DiagnosticView`。湿体积二阶矩、完整六面和内部共享面在 `LiquidPressureGeometry.supportMoments`、`microFaces` 与 `interiorFaces`；完整湿块六面散度在 `MarkerPressureProjection.boxDivergence`；部分湿块与自由面共用 `integratedDivergence` 的微盒积分及精确系数，散度多项式和自由面压力功也在该类组装。均匀及非均匀质量的三轴闭合旋涡求解、发布与点采样，以及独立静液压使用 `:fabric:runMarkerPressureValidation --args="--velocity-space"`。
 
-同速场出现虚假梯度时检查 `CellAffineVelocity.fit` 与 `transposeLoad` 的同系数精确归约，逐位对照在 `MarkerPressureValidation.verifyAffineDotRounding`。保存形状后的完整 CPU 推进与静止恢复在 `CellRemapMomentsValidation.jointTranslationSurvivesCompleteCpuHandoff`；步末正积分规则保护在 `LogicalStepTailAssembly.hasConservativeCellQuadrature`。
+同速场出现虚假梯度时检查 `CellAffineFit.pairedWeights` 的平移及锚点差分，以及 `CellAffineVelocity.fit` 与 `transposeLoad` 的同因子精确归约，逐位对照在 `MarkerPressureValidation.verifyAffineDotRounding`。保存形状后的完整 CPU 推进与静止恢复在 `CellRemapMomentsValidation.jointTranslationSurvivesCompleteCpuHandoff`；步末正积分规则保护在 `LogicalStepTailAssembly.hasConservativeCellQuadrature`。
 
 原始载体矩与 PLIC 的逐微盒、逐固定分量比较及几何协方差在 [LiquidSpatialInput](../../solver/src/main/java/mmm/fluid/LiquidSpatialInput.java)，精确零至二阶盒积分在 `LiquidPressureGeometry.pieceSecondMoments` 与 [GasGeometryOverlap](../../solver/src/main/java/mmm/fluid/GasGeometryOverlap.java)。来源检查、孔隙率、单位换算与未解析载体验证使用 `:fabric:runMarkerPressureValidation --args="--spatial-input"`；积分的盒体、四面体和极薄层对照使用 `air-cavity`。
 

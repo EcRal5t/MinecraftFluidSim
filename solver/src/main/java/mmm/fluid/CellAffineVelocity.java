@@ -6,18 +6,16 @@ import java.util.Arrays;
 
 /**
  * Actual-mass fit and adjoint for q_axis times affine fields on each supported open block.
- * Wet walls determine q; the source hull determines the admitted affine gradient directions.
+ * Wet walls determine q; reliable support admits strain while actual positions retain rotation.
  */
 final class CellAffineVelocity {
 	private final int physicalCellCount, blockCount, markerCount, sizeX, sizeY;
 	private final double h;
 	private final int[] cells, offsets, markers, ranks, hullPoints;
-	private final int[] blockCells, supports, extraOffsets;
-	private final double[] mass, position, center, coefficients, coefficientLow, directions, normalShapes;
-	private final boolean[] representable, expanded, normalAxes;
-	private final double[][] shapeCoefficients = new double[3][], shapeLow = new double[3][];
-	private final SignedDyadic[] exactCoefficients;
-	private final SignedDyadic[][] exactShapeCoefficients = new SignedDyadic[3][];
+	private final int[] blockCells, supports, extraOffsets, localOrdinals;
+	private final double[] mass, position, center, normalShapes;
+	private final boolean[] normalAxes;
+	private final CellAffineFit.Model[] models;
 
 	static CellAffineVelocity capture(FluidDomain domain) { return new CellAffineVelocity(domain, null); }
 	static CellAffineVelocity capture(FluidDomain domain, LiquidPressureGeometry geometry) {
@@ -59,12 +57,11 @@ final class CellAffineVelocity {
 			}
 		}
 		offsets = new int[blockCount + 1]; markers = new int[markerCount]; ranks = new int[blockCount];
-		center = new double[3 * blockCount]; directions = new double[9 * blockCount]; normalShapes = new double[9 * blockCount];
+		center = new double[3 * blockCount]; normalShapes = new double[9 * blockCount];
 		normalAxes = new boolean[3 * blockCount];
 		for (int key = 0; key < normalAxes.length; key++) normalShapes[3 * key] = 1;
 		hullPoints = new int[4 * blockCount]; Arrays.fill(hullPoints, -1);
-		coefficients = new double[4 * markerCount]; representable = new boolean[blockCount];
-		coefficientLow = new double[4 * markerCount]; expanded = new boolean[blockCount];
+		models = new CellAffineFit.Model[blockCount]; localOrdinals = new int[markerCount];
 		for (int i = 0; i < markerCount; i++) {
 			int micro = CellRemapMicroTopology.positionMicro((float) h, (float) position[3 * i], (float) position[3 * i + 1], (float) position[3 * i + 2]);
 			cells[i] = blockForMicro(cells[i], micro);
@@ -73,19 +70,36 @@ final class CellAffineVelocity {
 		}
 		for (int c = 0; c < blockCount; c++) offsets[c + 1] += offsets[c];
 		int[] cursor = offsets.clone();
-		for (int i = 0; i < markerCount; i++) markers[cursor[cells[i]]++] = i;
-		for (int c = 0; c < blockCount; c++) if (offsets[c] != offsets[c + 1]) {
-			captureCenter(c); captureHull(c); representable[c] = fitMap(c) || fitExpandedMap(c);
-			if (geometry != null && representable[c]) captureNormalShapes(geometry, c);
+		for (int i = 0; i < markerCount; i++) {
+			localOrdinals[i] = cursor[cells[i]] - offsets[cells[i]];
+			markers[cursor[cells[i]]++] = i;
 		}
-		exactCoefficients = exactMap(coefficients, coefficientLow);
-		for (int a = 0; a < 3; a++) if (shapeCoefficients[a] != null) exactShapeCoefficients[a] = exactMap(shapeCoefficients[a], shapeLow[a]);
+		for (int c = 0; c < blockCount; c++) if (offsets[c] != offsets[c + 1]) {
+			captureCenter(c);
+			if (geometry != null) captureNormalShapes(geometry, c);
+			models[c] = captureModel(c);
+		}
 	}
-	private static SignedDyadic[] exactMap(double[] high, double[] low) {
-		var result = new SignedDyadic[high.length];
-		for (int i = 0; i < result.length; i++) result[i] = SignedDyadic.of(high[i]).add(SignedDyadic.of(low[i]));
-		return result;
+	private CellAffineFit.Model captureModel(int block) {
+		int n = blockMarkerCount(block);
+		var localMass = new double[n]; var relative = new double[n][3]; var error = new double[n][3];
+		var shape = new double[3][n]; var shaped = new boolean[3]; var centerOffset = new double[3];
+		for (int axis = 0; axis < 3; axis++) {
+			shaped[axis] = hasNormalShape(block, axis);
+			centerOffset[axis] = (center(block, axis) - physicalCenter(block, axis)) / h;
+		}
+		for (int i = 0; i < n; i++) {
+			int marker = blockMarker(block, i); localMass[i] = mass[marker];
+			for (int axis = 0; axis < 3; axis++) {
+				double coordinate = position[3 * marker + axis];
+				relative[i][axis] = (coordinate - center(block, axis)) / h;
+				error[i][axis] = .5 * Math.ulp((float) coordinate) / h;
+				shape[axis][i] = shapeValue(block, axis, coordinate);
+			}
+		}
+		return CellAffineFit.capture(localMass, relative, error, shape, shaped, centerOffset);
 	}
+
 	private static boolean splitMicro(LiquidPressureGeometry geometry, int cell, int support, int sourceMicros) {
 		return geometry != null && geometry.needsMicroBlocks(cell, support)
 				&& (sourceMicros & support) == (geometry.wetMicroMask(cell) & support);
@@ -103,39 +117,7 @@ final class CellAffineVelocity {
 				double hi = .5 * (31 - Integer.numberOfLeadingZeros(planes[axis])) - .5;
 				normalShapes[base] = -lo * hi; normalShapes[base + 1] = lo + hi; normalShapes[base + 2] = -1;
 			}
-			if (!fitNormalShape(cell, axis)) representable[cell] = false;
 		}
-	}
-	private boolean fitNormalShape(int block, int axis) {
-		if (shapeCoefficients[axis] == null) { shapeCoefficients[axis] = new double[4 * markerCount]; shapeLow[axis] = new double[4 * markerCount]; }
-		int n = blockMarkerCount(block); var localMass = new double[n]; boolean nonzero = false;
-		for (int i = 0; i < n; i++) { int marker = blockMarker(block, i); localMass[i] = mass[marker]; nonzero |= shapeValue(block, axis, position[3 * marker + axis]) != 0; }
-		if (!nonzero) return true;
-		var frame = localDirections(block, false); var feature = shapeFeatures(block, axis, frame);
-		var ordinary = CellAffineFit.fit(localMass, feature, frame, false);
-		double[][] fitted = null;
-		if (ordinary == null) {
-			frame = localDirections(block, true); feature = shapeFeatures(block, axis, frame);
-			fitted = ExactCellAffineFit.fit(localMass, feature, frame); if (fitted == null) return false;
-			expanded[block] = true;
-		}
-		for (int i = 0; i < n; i++) for (int term = 0; term < 4; term++) {
-			int target = 4 * blockMarker(block, i) + term;
-			shapeCoefficients[axis][target] = ordinary == null ? fitted[0][4 * i + term] : ordinary[4 * i + term];
-			shapeLow[axis][target] = ordinary == null ? fitted[1][4 * i + term] : 0;
-		}
-		return true;
-	}
-	private double[][] shapeFeatures(int block, int axis, double[][] frame) {
-		var feature = new double[frame.length + 1][blockMarkerCount(block)];
-		for (int i = 0; i < feature[0].length; i++) {
-			int marker = blockMarker(block, i); double q = shapeValue(block, axis, position[3 * marker + axis]); feature[0][i] = q;
-			for (int j = 0; j < frame.length; j++) {
-				double value = 0; for (int a = 0; a < 3; a++) value += frame[j][a] * ((position[3 * marker + a] - center[3 * block + a]) / h);
-				feature[j + 1][i] = q * value;
-			}
-		}
-		return feature;
 	}
 	static int[] wallPlanes(LiquidPressureGeometry.Profile profile) {
 		int[] planes = new int[3];
@@ -160,7 +142,7 @@ final class CellAffineVelocity {
 		}
 	}
 
-	/** Geometric independence uses exact raw coordinates, separately from numerical QR rank. */
+	/** On-demand diagnostic hull; production modes use the reliable support captured by CellAffineFit. */
 	private void captureHull(int cell) {
 		int base = 4 * cell, origin = markers[offsets[cell]]; hullPoints[base] = origin;
 		int rank = 1;
@@ -172,57 +154,6 @@ final class CellAffineVelocity {
 			if (independent) hullPoints[base + rank++] = i;
 		}
 		ranks[cell] = rank;
-		for (int j = 0; j < rank - 1; j++) {
-			double[] e = new double[3]; int i = hullPoints[base + j + 1];
-			for (int a = 0; a < 3; a++) e[a] = (position[3 * i + a] - position[3 * origin + a]) / h;
-			for (int pass = 0; pass < 2; pass++) for (int prior = 0; prior < j; prior++) {
-				double dot = 0; for (int a = 0; a < 3; a++) dot += e[a] * directions[9 * cell + 3 * prior + a];
-				for (int a = 0; a < 3; a++) e[a] -= dot * directions[9 * cell + 3 * prior + a];
-			}
-			double norm = Math.hypot(Math.hypot(e[0], e[1]), e[2]);
-			if (!(norm > 0 && Double.isFinite(norm))) return;
-			for (int a = 0; a < 3; a++) directions[9 * cell + 3 * j + a] = e[a] / norm;
-		}
-	}
-
-	private boolean fitMap(int cell) {
-		int n = blockMarkerCount(cell), rank = ranks[cell];
-		var localMass = new double[n]; var feature = new double[rank][n]; var frame = localDirections(cell, false);
-		for (int i = 0; i < n; i++) {
-			int marker = blockMarker(cell, i); localMass[i] = mass[marker]; feature[0][i] = 1;
-			for (int j = 1; j < rank; j++) for (int axis = 0; axis < 3; axis++)
-				feature[j][i] += frame[j - 1][axis] * ((position[3 * marker + axis] - center[3 * cell + axis]) / h);
-		}
-		var fitted = CellAffineFit.fit(localMass, feature, frame, true); if (fitted == null) return false;
-		for (int i = 0; i < n; i++) for (int term = 0; term < 4; term++)
-			coefficients[4 * blockMarker(cell, i) + term] = fitted[4 * i + term];
-		return true;
-	}
-	private double[][] localDirections(int block, boolean cartesian) {
-		var frame = new double[ranks[block] - 1][3];
-		for (int j = 0; j < frame.length; j++) for (int axis = 0; axis < 3; axis++)
-			frame[j][axis] = cartesian && ranks[block] == 4 ? (j == axis ? 1 : 0) : directions[9 * block + 3 * j + axis];
-		return frame;
-	}
-	private boolean fitExpandedMap(int cell) {
-		int n = blockMarkerCount(cell), rank = ranks[cell];
-		var localMass = new double[n]; var feature = new double[rank][n]; var localDirections = new double[rank - 1][3];
-		for (int j = 0; j < rank - 1; j++) for (int a = 0; a < 3; a++) localDirections[j][a] = rank == 4
-				? (j == a ? 1 : 0) : directions[9 * cell + 3 * j + a];
-		for (int i = 0; i < n; i++) {
-			int marker = blockMarker(cell, i); localMass[i] = mass[marker]; feature[0][i] = 1;
-			for (int j = 1; j < rank; j++) for (int a = 0; a < 3; a++) feature[j][i] += localDirections[j - 1][a]
-					* ((position[3 * marker + a] - center[3 * cell + a]) / h);
-		}
-		var fitted = ExactCellAffineFit.fit(localMass, feature, localDirections);
-		if (fitted == null) return false;
-		for (int i = 0; i < n; i++) {
-			int marker = blockMarker(cell, i);
-			for (int term = 0; term < 4; term++) {
-				coefficients[4 * marker + term] = fitted[0][4 * i + term]; coefficientLow[4 * marker + term] = fitted[1][4 * i + term];
-			}
-		}
-		expanded[cell] = true; return true;
 	}
 
 	int markerCount() { return markerCount; }
@@ -259,79 +190,74 @@ final class CellAffineVelocity {
 				| (z >= (physicalCell / (sizeX * sizeY) + .5) * h ? 4 : 0);
 		return blockForMicro(physicalCell, micro);
 	}
-	int rank(int cell) { return ranks[cell]; }
-	int axisRank(int block, int axis) {
-		requireRepresentable(block);
-		if (!hasNormalShape(block, axis)) return ranks[block];
-		for (int k = offsets[block]; k < offsets[block + 1]; k++) {
-			int base = 4 * markers[k];
-			if (shapeCoefficients[axis][base] != 0 || shapeLow[axis][base] != 0) return ranks[block];
-		}
-		return 0;
+	int rank(int cell) {
+		if (ranks[cell] == 0 && blockMarkerCount(cell) > 0) captureHull(cell);
+		return ranks[cell];
 	}
-	/** Unnormalized exact hull vectors span the admitted gradient space without fit-map rounding. */
-	SignedDyadic[][] sourceDirectionsExact(int block) {
-		var result = new SignedDyadic[ranks[block] - 1][3];
-		int base = 4 * block, origin = hullPoints[base];
-		for (int j = 0; j < result.length; j++) result[j] = vector(origin, hullPoints[base + j + 1]);
-		return result;
+	int reliableRank(int block) { return models[block] == null ? 0 : models[block].reliableRank(); }
+	int modeCount(int block) { return models[block] == null ? 0 : models[block].modeCount(); }
+	SignedDyadic modeCoefficientExact(int block, int mode, int axis, int term) {
+		requireRepresentable(block); return models[block].fieldExact(mode, axis, term);
 	}
+	SignedDyadic modeWeightExact(int marker, int mode, int inputAxis) {
+		int block = cells[marker]; requireRepresentable(block);
+		return models[block].weightExact(mode, inputAxis, localOrdinals[marker]);
+	}
+
 	ExactRational normalizedCenterOffsetExact(int block, int axis) {
 		SignedDyadic delta = difference(physicalCenter(block, axis), center(block, axis)), size = SignedDyadic.of(h);
 		int shift = delta.exponent() - size.exponent();
 		return new ExactRational(delta.significand().shiftLeft(Math.max(0, shift)), size.significand().shiftLeft(Math.max(0, -shift)));
 	}
-	boolean hasRepresentableBasis(int cell) { return representable[cell]; }
-	boolean expandedCell(int cell) { return expanded[cell]; }
+	boolean hasRepresentableBasis(int cell) { return models[cell] != null; }
 	double massKilograms(int marker) { return mass[marker]; }
 	double position(int marker, int axis) { return position[3 * marker + axis]; }
 	double center(int cell, int axis) { return center[3 * cell + axis]; }
-	double coefficient(int marker, int term) { requireRepresentable(cells[marker]); return coefficients[4 * marker + term]; }
-	SignedDyadic coefficientExact(int marker, int term) { requireRepresentable(cells[marker]); return storedCoefficientExact(marker, term); }
-	double coefficient(int marker, int axis, int term) {
-		requireRepresentable(cells[marker]);
-		return hasNormalShape(cells[marker], axis) ? shapeCoefficients[axis][4 * marker + term] : coefficients[4 * marker + term];
-	}
-	SignedDyadic coefficientExact(int marker, int axis, int term) {
-		requireRepresentable(cells[marker]); return storedCoefficientExact(marker, axis, term);
-	}
-	private SignedDyadic storedCoefficientExact(int marker, int axis, int term) {
-		if (hasNormalShape(cells[marker], axis)) return exactShapeCoefficients[axis][4 * marker + term];
-		return storedCoefficientExact(marker, term);
-	}
-	private SignedDyadic storedCoefficientExact(int marker, int term) {
-		return exactCoefficients[4 * marker + term];
-	}
-	double projector(int cell, int first, int second) {
-		double value = 0; for (int j = 0; j < ranks[cell] - 1; j++) value += directions[9 * cell + 3 * j + first] * directions[9 * cell + 3 * j + second]; return value;
+	/** On-demand observation of A F for independent diagnostics. Production retains both factors. */
+	SignedDyadic coefficientExact(int marker, int outputAxis, int inputAxis, int term) {
+		int block = cells[marker]; requireRepresentable(block); SignedDyadic sum = SignedDyadic.ZERO;
+		for (int mode = 0; mode < modeCount(block); mode++)
+			sum = sum.add(modeCoefficientExact(block, mode, outputAxis, term).multiply(modeWeightExact(marker, mode, inputAxis)));
+		return sum;
 	}
 	void fit(double[][] markerVelocity, double[][] cellCoefficients) {
 		checkShape(markerVelocity, markerCount); checkShape(cellCoefficients, 4 * blockCount); checkAlias(markerVelocity, cellCoefficients);
 		for (double[] axis : cellCoefficients) Arrays.fill(axis, 0);
-		for (int cell = 0; cell < blockCount; cell++) if (offsets[cell] != offsets[cell + 1]) {
-			requireRepresentable(cell);
-			for (int a = 0; a < 3; a++) {
-				var sums = new SignedDyadic[]{SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO};
-				for (int k = offsets[cell]; k < offsets[cell + 1]; k++) {
-					int marker = markers[k]; var velocity = SignedDyadic.of(markerVelocity[a][marker]);
-					for (int term = 0; term < 4; term++) sums[term] = sums[term].add(storedCoefficientExact(marker, a, term).multiply(velocity));
+		for (int block = 0; block < blockCount; block++) if (models[block] != null) {
+			var modal = new SignedDyadic[modeCount(block)]; Arrays.fill(modal, SignedDyadic.ZERO);
+			for (int mode = 0; mode < modal.length; mode++)
+				for (int k = offsets[block]; k < offsets[block + 1]; k++) {
+					int marker = markers[k];
+					for (int axis = 0; axis < 3; axis++) modal[mode] = modal[mode].add(
+							modeWeightExact(marker, mode, axis).multiply(SignedDyadic.of(markerVelocity[axis][marker])));
 				}
-				for (int term = 0; term < 4; term++) cellCoefficients[a][4 * cell + term] = sums[term].toDouble();
+			for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) {
+				SignedDyadic sum = SignedDyadic.ZERO;
+				for (int mode = 0; mode < modal.length; mode++)
+					sum = sum.add(modeCoefficientExact(block, mode, axis, term).multiply(modal[mode]));
+				cellCoefficients[axis][4 * block + term] = sum.toDouble();
 			}
 		}
 	}
 	void transposeLoad(double[][] cellLoad, double[][] markerForce) {
 		checkShape(cellLoad, 4 * blockCount); checkShape(markerForce, markerCount); checkAlias(cellLoad, markerForce);
 		for (double[] axis : markerForce) Arrays.fill(axis, 0);
-		for (int i = 0; i < markerCount; i++) {
-			int cell = cells[i]; requireRepresentable(cell);
-			for (int a = 0; a < 3; a++) {
-				SignedDyadic sum = SignedDyadic.ZERO;
-				for (int term = 0; term < 4; term++) sum = sum.add(storedCoefficientExact(i, a, term).multiply(SignedDyadic.of(cellLoad[a][4 * cell + term])));
-				markerForce[a][i] = sum.toDouble();
+		for (int block = 0; block < blockCount; block++) if (models[block] != null) {
+			var modal = new SignedDyadic[modeCount(block)]; Arrays.fill(modal, SignedDyadic.ZERO);
+			for (int mode = 0; mode < modal.length; mode++) for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++)
+				modal[mode] = modal[mode].add(modeCoefficientExact(block, mode, axis, term)
+						.multiply(SignedDyadic.of(cellLoad[axis][4 * block + term])));
+			for (int k = offsets[block]; k < offsets[block + 1]; k++) {
+				int marker = markers[k];
+				for (int axis = 0; axis < 3; axis++) {
+					SignedDyadic sum = SignedDyadic.ZERO;
+					for (int mode = 0; mode < modal.length; mode++) sum = sum.add(modeWeightExact(marker, mode, axis).multiply(modal[mode]));
+					markerForce[axis][marker] = sum.toDouble();
+				}
 			}
 		}
 	}
+
 	void predict(double[][] cellCoefficients, double[][] markerVelocity) {
 		checkShape(cellCoefficients, 4 * blockCount); checkShape(markerVelocity, markerCount); checkAlias(cellCoefficients, markerVelocity);
 		for (int i = 0; i < markerCount; i++) for (int a = 0; a < 3; a++) markerVelocity[a][i] = value(cellCoefficients, a, cells[i], position[3 * i], position[3 * i + 1], position[3 * i + 2]);
@@ -392,7 +318,7 @@ final class CellAffineVelocity {
 
 	/** Exact membership in the source affine hull, independently of the chosen field extension. */
 	boolean canRepresentPoint(int cell, double x, double y, double z) {
-		if (!(Double.isFinite(x) && Double.isFinite(y) && Double.isFinite(z)) || ranks[cell] == 0) return false;
+		if (!(Double.isFinite(x) && Double.isFinite(y) && Double.isFinite(z)) || rank(cell) == 0) return false;
 		int base = 4 * cell, origin = hullPoints[base];
 		SignedDyadic[] point = {difference(x, position[3 * origin]), difference(y, position[3 * origin + 1]), difference(z, position[3 * origin + 2])};
 		return switch (ranks[cell]) {
@@ -415,7 +341,7 @@ final class CellAffineVelocity {
 		for (int i = 0; i < 3; i++) value = value.add(a[i].multiply(b[(i + 1) % 3].multiply(c[(i + 2) % 3]).subtract(b[(i + 2) % 3].multiply(c[(i + 1) % 3])))); return value;
 	}
 	private void requireRepresentable(int cell) {
-		if (!representable[cell]) throw new FluidDomain.PressureSolveBlockedException("Cell affine velocity is not representable at cell " + cell + ", geometric rank " + ranks[cell]);
+		if (models[cell] == null) throw new IllegalStateException("Missing cell velocity model at block " + cell);
 	}
 	private static void checkShape(double[][] vectors, int count) {
 		if (vectors.length != 3) throw new IllegalArgumentException("Expected three affine axes");

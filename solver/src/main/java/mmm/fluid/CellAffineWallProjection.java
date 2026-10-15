@@ -3,6 +3,7 @@ package mmm.fluid;
 /** Actual-mass projection onto the admitted wall-shaped polynomial fields. */
 final class CellAffineWallProjection {
 	private final CellAffineVelocity basis;
+	private double normalWork, representationWork;
 
 	/** Enforces fixed walls on the actual remapped velocity, before any later observation. */
 	static double projectTransport(FluidDomain domain) {
@@ -50,16 +51,25 @@ final class CellAffineWallProjection {
 	/** The admitted q fields already satisfy every supported wet wall plane. */
 	CellVelocityConstraintOperator.Row transform(CellVelocityConstraintOperator.Row row) { return row; }
 
-	/** Actual-mass orthogonal projection on constrained axes; unconstrained axes retain raw velocity. */
+	/** Projects coupled wall blocks; only constrained normal components contribute wall impulse. */
 	void project(double[][] input, double[][] result, double[][] impulse) {
+		normalWork = representationWork = 0;
 		var coefficient = new double[3][4 * basis.blockCount()]; basis.fit(input, coefficient);
 		var projected = new double[3][basis.markerCount()]; basis.predict(coefficient, projected);
 		for (int axis = 0; axis < 3; axis++) for (int marker = 0; marker < basis.markerCount(); marker++) {
-			double velocity = basis.hasNormalShape(basis.markerBlock(marker), axis) ? projected[axis][marker] : input[axis][marker];
+			int block = basis.markerBlock(marker);
+			boolean shaped = basis.hasNormalShape(block, 0) || basis.hasNormalShape(block, 1) || basis.hasNormalShape(block, 2);
+			boolean normal = basis.hasNormalShape(block, axis);
+			double velocity = shaped ? projected[axis][marker] : input[axis][marker];
 			double change = velocity - input[axis][marker];
-			result[axis][marker] = velocity; impulse[axis][marker] = basis.massKilograms(marker) * change;
+			double work = .5 * basis.massKilograms(marker) * change * (velocity + input[axis][marker]);
+			if (normal) normalWork += work; else representationWork += work;
+			result[axis][marker] = velocity;
+			impulse[axis][marker] = normal ? basis.massKilograms(marker) * change : 0;
 			if (!Double.isFinite(velocity) || !Double.isFinite(impulse[axis][marker]))
 				throw new FluidDomain.PressureSolveBlockedException("Unrepresentable shaped-wall projection at marker " + marker);
 		}
 	}
+	double normalWork() { return normalWork; }
+	double representationWork() { return representationWork; }
 }

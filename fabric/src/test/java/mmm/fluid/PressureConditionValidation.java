@@ -49,13 +49,13 @@ final class PressureConditionValidation {
 		for (int row : value(plan, "liquidRows", int[].class)) if (row >= 0) kinds[row] = 0;
 		Arrays.fill(kinds, plan.sharedRowStart(), plan.sharedRowEnd(), 2);
 		for (int row : value(plan, "gasRows", int[].class)) if (row >= 0) kinds[row] = 3;
-		int[] ranks = new int[5]; int expanded = 0;
+		int[] ranks = new int[5], reliableRanks = new int[5]; int modes = 0;
 		for (int block = 0; block < plan.basis().blockCount(); block++) if (plan.basis().blockMarkerCount(block) > 0) {
-			ranks[plan.basis().rank(block)]++; if (plan.basis().expandedCell(block)) expanded++;
+			ranks[plan.basis().rank(block)]++; reliableRanks[plan.basis().reliableRank(block)]++; modes += plan.basis().modeCount(block);
 		}
 		double h = d.config.cellSize(), unit = h * h * h / d.config.density();
-		System.out.printf("CHEM pressure source logical=%d attempt=%d substeps=%d dt=%g markers=%d rows=%d rankCounts=%s expanded=%d%n",
-				logical, attempt, substeps, value(plan, "dt", Float.class), d.particleCount(), rows, Arrays.toString(ranks), expanded);
+		System.out.printf("CHEM pressure source logical=%d attempt=%d substeps=%d dt=%g markers=%d rows=%d rankCounts=%s reliableRankCounts=%s modes=%d%n",
+				logical, attempt, substeps, value(plan, "dt", Float.class), d.particleCount(), rows, Arrays.toString(ranks), Arrays.toString(reliableRanks), modes);
 		long started = System.nanoTime(); double[] applied = new double[rows]; operator.apply(plan.pressure(), applied);
 		for (int row = 0; row < rows; row++) applied[row] = rhs[row] - applied[row];
 		double residual = pressureRms(applied) / unit;
@@ -84,9 +84,9 @@ final class PressureConditionValidation {
 			direction[start + test] = 1; plan.operator().apply(direction, image); direction[start + test] = 0;
 			for (int other = 0; other < 3; other++) gram[other][test] = image[start + other];
 			for (var block : ((CellVelocityConstraintOperator.Row) definitions.get(start + test)).blocks())
-				System.out.printf("CHEM sharedBlock row=%d block=%d cell=%d axis=%d axisRank=%d expanded=%s coefficients=%s%n",
+				System.out.printf("CHEM sharedBlock row=%d block=%d cell=%d axis=%d reliableRank=%d modes=%d coefficients=%s%n",
 						start + test, block.velocityBlock(), basis.physicalCell(block.velocityBlock()), block.axis(),
-						basis.axisRank(block.velocityBlock(), block.axis()), basis.expandedCell(block.velocityBlock()), Arrays.toString(block.coefficients()));
+						basis.reliableRank(block.velocityBlock()), basis.modeCount(block.velocityBlock()), Arrays.toString(block.coefficients()));
 		}
 		for (int test = 0; test < 3; test++) {
 			double[] normalized = new double[3];
@@ -132,25 +132,24 @@ final class PressureConditionValidation {
 		}
 		System.out.printf("CHEM source rhsRoundRms=%g rhsRoundMax=%g%n", sourceNorm / Math.sqrt(rhs.length), sourceMaximum);
 		var definitions = value(plan, "rows", java.util.List.class); var selected = new java.util.TreeSet<Integer>();
-		for (int block = 0; block < basis.blockCount(); block++) if (basis.blockMarkerCount(block) > 0 && basis.expandedCell(block)) selected.add(block);
+		for (int block = 0; block < basis.blockCount(); block++)
+			if (basis.blockMarkerCount(block) > 0 && basis.reliableRank(block) + 1 < basis.rank(block)) selected.add(block);
 		int worst = -1;
 		for (int row = plan.sharedRowStart(); row < plan.sharedRowEnd(); row++)
 			if (worst < 0 || Math.abs(residual[row]) > Math.abs(residual[worst])) worst = row;
 		if (worst >= 0) for (var part : ((CellVelocityConstraintOperator.Row) definitions.get(worst)).blocks()) selected.add(part.velocityBlock());
 		int physicalDofs = 0;
 		for (int block = 0; block < basis.blockCount(); block++) if (basis.blockMarkerCount(block) > 0)
-			for (int axis = 0; axis < 3; axis++) physicalDofs += basis.axisRank(block, axis);
+			physicalDofs += basis.modeCount(block);
 		System.out.printf("CHEM rank physicalDofs=%d rows=%d auditedBlocks=%d prime=65537%n", physicalDofs, rhs.length, selected.size());
 		for (int block : selected) {
-			int n = basis.blockMarkerCount(block), physical = 0, columns = 0, mismatches = 0;
-			// The stored bracket map has at most four columns per active axis; sparse hulls admit fewer.
-			// Exceeding this larger upper bound certifies extra directions, independently of D's modular rank.
-			for (int axis = 0; axis < 3; axis++) { physical += basis.axisRank(block, axis); if (basis.axisRank(block, axis) > 0) columns += 4; }
+			int n = basis.blockMarkerCount(block), physical = basis.modeCount(block), columns = physical, mismatches = 0;
 			int[] ordinal = new int[count]; Arrays.fill(ordinal, -1);
-			var fit = new SignedDyadic[12][n]; double[] rootMass = new double[n];
+			var fit = new SignedDyadic[12][3 * n]; double[] rootMass = new double[n];
 			for (int i = 0; i < n; i++) {
 				int marker = basis.blockMarker(block, i); ordinal[marker] = i; rootMass[i] = Math.sqrt(inverseMass[marker]);
-				for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) fit[4 * axis + term][i] = basis.coefficientExact(marker, axis, term);
+				for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++) for (int inputAxis = 0; inputAxis < 3; inputAxis++)
+					fit[4 * axis + term][inputAxis * n + i] = basis.coefficientExact(marker, axis, inputAxis, term);
 			}
 			var cRows = new java.util.ArrayList<int[]>(); var approximateRows = new java.util.ArrayList<int[]>(); var dRows = new java.util.ArrayList<int[]>();
 			double coefficientMax = 0, defectMax = 0, sourceDefectMax = 0;
@@ -158,8 +157,9 @@ final class PressureConditionValidation {
 				var definition = (CellVelocityConstraintOperator.Row) definitions.get(row); boolean touches = false;
 				var declared = new SignedDyadic[12]; Arrays.fill(declared, SignedDyadic.ZERO);
 				for (var part : definition.blocks()) if (part.velocityBlock() == block) {
-					touches = true; double[] coefficient = part.coefficients();
-					for (int term = 0; term < 4; term++) declared[4 * part.axis() + term] = declared[4 * part.axis() + term].add(SignedDyadic.of(coefficient[term]));
+					touches = true;
+					for (int term = 0; term < 4; term++) declared[4 * part.axis() + term] = declared[4 * part.axis() + term]
+							.add(part.coefficientExact(term));
 				}
 				if (!touches) continue;
 				var actual = new SignedDyadic[3 * n]; Arrays.fill(actual, SignedDyadic.ZERO);
@@ -171,11 +171,16 @@ final class PressureConditionValidation {
 						approximateRow[index / count * n + local] = modular(approximate[entry]);
 					}
 				}
-				int[] c = new int[3 * n], d = new int[12]; var sourceDefect = SignedDyadic.ZERO;
-				for (int term = 0; term < 12; term++) d[term] = modular(declared[term]);
+				int[] c = new int[3 * n], d = new int[physical]; var sourceDefect = SignedDyadic.ZERO;
+				for (int mode = 0; mode < physical; mode++) {
+					var load = SignedDyadic.ZERO;
+					for (int axis = 0; axis < 3; axis++) for (int term = 0; term < 4; term++)
+						load = load.add(declared[4 * axis + term].multiply(basis.modeCoefficientExact(block, mode, axis, term)));
+					d[mode] = modular(load);
+				}
 				for (int axis = 0; axis < 3; axis++) for (int i = 0; i < n; i++) {
 					int local = axis * n + i; var factored = SignedDyadic.ZERO;
-					for (int term = 0; term < 4; term++) factored = factored.add(declared[4 * axis + term].multiply(fit[4 * axis + term][i]));
+					for (int term = 0; term < 12; term++) factored = factored.add(declared[term].multiply(fit[term][local]));
 					var defect = actual[local].subtract(factored); if (defect.signum() != 0) mismatches++;
 					coefficientMax = Math.max(coefficientMax, Math.abs(actual[local].toDouble() * rootMass[i]));
 					defectMax = Math.max(defectMax, Math.abs(defect.toDouble() * rootMass[i])); c[local] = modular(actual[local]);

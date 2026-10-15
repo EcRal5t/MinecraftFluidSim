@@ -8,13 +8,32 @@ import java.util.TreeMap;
 
 /** Fixed volume and normal-trace constraints pulled back through the actual-mass cell basis. */
 final class CellVelocityConstraintOperator {
-	record Block(int velocityBlock, int axis, double[] coefficients) {
-		Block {
-			if (coefficients == null || coefficients.length != 4) throw new IllegalArgumentException("Invalid cell constraint block");
-			coefficients = coefficients.clone();
-			for (double value : coefficients) if (!Double.isFinite(value)) throw new IllegalArgumentException("Nonfinite cell constraint coefficient");
+	record Block(int velocityBlock, int axis, SignedDyadic[] exactCoefficients) {
+		Block(int velocityBlock, int axis, double[] coefficients) { this(velocityBlock, axis, coefficients, 1); }
+		Block(int velocityBlock, int axis, double[] coefficients, double scale) {
+			this(velocityBlock, axis, scaled(coefficients, scale));
 		}
-		@Override public double[] coefficients() { return coefficients.clone(); }
+		Block {
+			if (exactCoefficients == null || exactCoefficients.length != 4)
+				throw new IllegalArgumentException("Invalid cell constraint block");
+			exactCoefficients = exactCoefficients.clone();
+			for (var value : exactCoefficients) if (value == null)
+				throw new IllegalArgumentException("Missing cell constraint coefficient");
+		}
+		@Override public SignedDyadic[] exactCoefficients() { return exactCoefficients.clone(); }
+		SignedDyadic coefficientExact(int term) { return exactCoefficients[term]; }
+		double[] coefficients() {
+			var result = new double[4];
+			for (int term = 0; term < 4; term++) result[term] = exactCoefficients[term].toDouble();
+			return result;
+		}
+		private static SignedDyadic[] scaled(double[] coefficients, double scale) {
+			if (coefficients == null || coefficients.length != 4 || !Double.isFinite(scale))
+				throw new IllegalArgumentException("Invalid cell constraint block or scale");
+			var result = new SignedDyadic[4]; var weight = SignedDyadic.of(scale);
+			for (int term = 0; term < 4; term++) result[term] = SignedDyadic.of(coefficients[term]).multiply(weight);
+			return result;
+		}
 	}
 	record Row(List<Block> blocks, double storage) {
 		Row {
@@ -22,7 +41,8 @@ final class CellVelocityConstraintOperator {
 			blocks = List.copyOf(blocks);
 		}
 	}
-	private record Factor(int velocityBlock, int axis, SignedDyadic[] gram) { }
+	private static final int MODAL_STRIDE = 12;
+	private record Factor(int velocityBlock, int modeCount, SignedDyadic[] gram) { }
 
 	private final CellAffineVelocity basis;
 	private final int markerCount;
@@ -45,13 +65,13 @@ final class CellVelocityConstraintOperator {
 		for (Row definition : rows) for (Block block : definition.blocks) {
 			if (block.velocityBlock < 0 || block.velocityBlock >= basis.blockCount() || block.axis < 0 || block.axis >= 3)
 				throw new IllegalArgumentException("Cell constraint references an invalid velocity block");
-			for (double value : block.coefficients) if (value != 0) factorSlots.put(3 * block.velocityBlock + block.axis, 0);
+			for (var value : block.exactCoefficients) if (value.signum() != 0) factorSlots.put(block.velocityBlock, 0);
 		}
 		factors = new Factor[factorSlots.size()]; int slot = 0;
 		for (var entry : factorSlots.entrySet()) {
-			entry.setValue(slot); factors[slot++] = captureFactor(entry.getKey() / 3, entry.getKey() % 3);
+			entry.setValue(slot); factors[slot++] = captureFactor(entry.getKey());
 		}
-		cellLoad = new SignedDyadic[Math.multiplyExact(4, factors.length)]; cellResponse = new SignedDyadic[cellLoad.length];
+		cellLoad = new SignedDyadic[Math.multiplyExact(MODAL_STRIDE, factors.length)]; cellResponse = new SignedDyadic[cellLoad.length];
 		storage = new double[rows.size()]; exactStorage = new SignedDyadic[rows.size()];
 		offsets = new int[rows.size() + 1]; factorOffsets = new int[rows.size() + 1];
 		var entryIndices = new ArrayList<Integer>(); var high = new ArrayList<Double>(); var low = new ArrayList<Double>();
@@ -59,14 +79,23 @@ final class CellVelocityConstraintOperator {
 		for (int row = 0; row < rows.size(); row++) {
 			Row definition = rows.get(row); storage[row] = definition.storage; exactStorage[row] = SignedDyadic.of(storage[row]);
 			var merged = new TreeMap<Integer, SignedDyadic>();
-			for (Block block : definition.blocks) for (int term = 0; term < 4; term++) if (block.coefficients[term] != 0)
-				merged.merge(4 * factorSlots.get(3 * block.velocityBlock + block.axis) + term,
-						SignedDyadic.of(block.coefficients[term]), SignedDyadic::add);
+			for (Block block : definition.blocks) {
+				boolean active = false; for (var value : block.exactCoefficients) active |= value.signum() != 0;
+				if (!active) continue;
+				int factor = factorSlots.get(block.velocityBlock);
+				for (int mode = 0; mode < factors[factor].modeCount; mode++) {
+					SignedDyadic value = SignedDyadic.ZERO;
+					for (int term = 0; term < 4; term++) if (block.exactCoefficients[term].signum() != 0)
+						value = value.add(block.exactCoefficients[term]
+								.multiply(basis.modeCoefficientExact(block.velocityBlock, mode, block.axis, term)));
+					if (value.signum() != 0) merged.merge(MODAL_STRIDE * factor + mode, value, SignedDyadic::add);
+				}
+			}
 			for (var entry : merged.entrySet()) if (entry.getValue().signum() != 0) {
 				declaredIndices.add(entry.getKey()); declared.add(entry.getValue());
 			}
 			factorOffsets[row + 1] = declaredIndices.size();
-			appendCoefficients(definition, entryIndices, high, low, full);
+			appendCoefficients(merged, entryIndices, high, low, full);
 			offsets[row + 1] = entryIndices.size();
 		}
 		factorIndices = declaredIndices.stream().mapToInt(Integer::intValue).toArray(); factorCoefficients = declared.toArray(SignedDyadic[]::new);
@@ -74,25 +103,32 @@ final class CellVelocityConstraintOperator {
 		for (int entry = 0; entry < indices.length; entry++) {
 			indices[entry] = entryIndices.get(entry); coefficients[entry] = high.get(entry); coefficientLow[entry] = low.get(entry);
 		}
-		// Full C remains the preconditioner input; the physical action retains D and L separately.
+		// Full C remains the preconditioner input; physical action retains D A and F separately.
 		exactCoefficients = full.toArray(SignedDyadic[]::new);
 	}
 
-	private Factor captureFactor(int block, int axis) {
-		int count = basis.blockMarkerCount(block); var fit = new SignedDyadic[4][count]; var inertia = new SignedDyadic[count];
-		for (int ordinal = 0; ordinal < count; ordinal++) {
-			int marker = basis.blockMarker(block, ordinal); inertia[ordinal] = exactInverseMass[marker];
-			for (int term = 0; term < 4; term++) fit[term][ordinal] = basis.coefficientExact(marker, axis, term);
+	private Factor captureFactor(int block) {
+		int count = basis.blockMarkerCount(block), modes = basis.modeCount(block);
+		if (modes < 0 || modes > MODAL_STRIDE) throw new IllegalArgumentException("Invalid cell mode count");
+		if (modes == 0) return new Factor(block, 0, new SignedDyadic[0]);
+		var fit = new SignedDyadic[modes][3 * count]; var inertia = new SignedDyadic[3 * count];
+		for (int axis = 0; axis < 3; axis++) for (int ordinal = 0; ordinal < count; ordinal++) {
+			int marker = basis.blockMarker(block, ordinal), column = axis * count + ordinal;
+			inertia[column] = exactInverseMass[marker];
+			for (int mode = 0; mode < modes; mode++) fit[mode][column] = basis.modeWeightExact(marker, mode, axis);
 		}
-		return new Factor(block, axis, ConstraintNumerics.massGram(fit, inertia));
+		return new Factor(block, modes, ConstraintNumerics.massGram(fit, inertia));
 	}
-	private void appendCoefficients(Row row, List<Integer> indices, List<Double> high, List<Double> low, List<SignedDyadic> full) {
+	private void appendCoefficients(TreeMap<Integer, SignedDyadic> modal, List<Integer> indices,
+			List<Double> high, List<Double> low, List<SignedDyadic> full) {
 		var merged = new TreeMap<Integer, SignedDyadic>();
-		for (Block block : row.blocks) for (int ordinal = 0; ordinal < basis.blockMarkerCount(block.velocityBlock); ordinal++) {
-			int marker = basis.blockMarker(block.velocityBlock, ordinal); SignedDyadic value = SignedDyadic.ZERO;
-			for (int term = 0; term < 4; term++) if (block.coefficients[term] != 0)
-				value = value.add(SignedDyadic.of(block.coefficients[term]).multiply(basis.coefficientExact(marker, block.axis, term)));
-			if (value.signum() != 0) merged.merge(block.axis * markerCount + marker, value, SignedDyadic::add);
+		for (var entry : modal.entrySet()) if (entry.getValue().signum() != 0) {
+			Factor factor = factors[entry.getKey() / MODAL_STRIDE]; int mode = entry.getKey() % MODAL_STRIDE;
+			for (int axis = 0; axis < 3; axis++) for (int ordinal = 0; ordinal < basis.blockMarkerCount(factor.velocityBlock); ordinal++) {
+				int marker = basis.blockMarker(factor.velocityBlock, ordinal);
+				SignedDyadic value = entry.getValue().multiply(basis.modeWeightExact(marker, mode, axis));
+				if (value.signum() != 0) merged.merge(axis * markerCount + marker, value, SignedDyadic::add);
+			}
 		}
 		for (var entry : merged.entrySet()) if (entry.getValue().signum() != 0) {
 			double hi = entry.getValue().toDouble();
@@ -108,28 +144,35 @@ final class CellVelocityConstraintOperator {
 		SignedDyadic[][] inertia = new SignedDyadic[factors.length][];
 		for (int factor = 0; factor < factors.length; factor++) inertia[factor] = factors[factor].gram;
 		double[] diagonal = new double[rowCount()]; diagonal(diagonal);
-		return new PressureRowBasis(factorOffsets, factorIndices, factorCoefficients, inertia, storage, diagonal);
+		return new PressureRowBasis(factorOffsets, factorIndices, factorCoefficients, inertia, MODAL_STRIDE, storage, diagonal);
 	}
 	record PrincipalGram(int[] rows, int[] columns, SignedDyadic[] values) { }
 	private record FactorRow(int row, SignedDyadic[] coefficients, SignedDyadic[] response) { }
-	/** Sparse principal D H D^T, assembled exactly before its final factorization rounding. */
+	/** Sparse principal (D A) H (D A)^T, assembled exactly before final factorization rounding. */
 	PrincipalGram principalGram(PressureRowBasis selected) {
 		var incidence = new ArrayList<ArrayList<FactorRow>>(factors.length);
 		for (int factor = 0; factor < factors.length; factor++) incidence.add(new ArrayList<>());
 		for (int position = 0; position < selected.size(); position++) {
 			int row = selected.row(position), entry = factorOffsets[row];
 			while (entry < factorOffsets[row + 1]) {
-				int factor = factorIndices[entry] / 4; SignedDyadic[] d = new SignedDyadic[4], response = new SignedDyadic[4];
+				int factor = factorIndices[entry] / MODAL_STRIDE, modes = factors[factor].modeCount;
+				SignedDyadic[] d = new SignedDyadic[modes], response = new SignedDyadic[modes];
 				Arrays.fill(d, SignedDyadic.ZERO);
-				while (entry < factorOffsets[row + 1] && factorIndices[entry] / 4 == factor) { d[factorIndices[entry] % 4] = factorCoefficients[entry]; entry++; }
-				for (int first = 0; first < 4; first++) { response[first] = SignedDyadic.ZERO; for (int second = 0; second < 4; second++) response[first] = response[first].add(factors[factor].gram[4 * first + second].multiply(d[second])); }
+				while (entry < factorOffsets[row + 1] && factorIndices[entry] / MODAL_STRIDE == factor) {
+					d[factorIndices[entry] % MODAL_STRIDE] = factorCoefficients[entry]; entry++;
+				}
+				for (int first = 0; first < modes; first++) {
+					response[first] = SignedDyadic.ZERO;
+					for (int second = 0; second < modes; second++) response[first] = response[first]
+							.add(factors[factor].gram[modes * first + second].multiply(d[second]));
+				}
 				incidence.get(factor).add(new FactorRow(position, d, response));
 			}
 		}
 		var lower = new TreeMap<Long, SignedDyadic>(); long bytes = 0, available = PressureRowBasis.availableMemory();
 		for (var members : incidence) for (int first = 0; first < members.size(); first++) for (int second = 0; second <= first; second++) {
 			FactorRow a = members.get(first), b = members.get(second); SignedDyadic value = SignedDyadic.ZERO;
-			for (int term = 0; term < 4; term++) value = value.add(a.coefficients[term].multiply(b.response[term]));
+			for (int mode = 0; mode < a.coefficients.length; mode++) value = value.add(a.coefficients[mode].multiply(b.response[mode]));
 			long key = ((long) a.row << 32) | b.row; SignedDyadic previous = lower.get(key);
 			if (previous != null) { bytes -= gramBytes(previous); value = previous.add(value); }
 			if (value.signum() == 0) lower.remove(key); else { lower.put(key, value); bytes += gramBytes(value); }
@@ -195,7 +238,7 @@ final class CellVelocityConstraintOperator {
 	private static SignedDyadic absolute(SignedDyadic value) { return value.signum() < 0 ? value.negate() : value; }
 	private static FluidDomain.PressureSolveBlockedException blocked(String message) { return new FluidDomain.PressureSolveBlockedException(message); }
 
-	/** D L v, with one final rounding per volume or normal-trace row. */
+	/** D A F v, with one final rounding per volume or normal-trace row. */
 	void volumeRate(double[][] velocity, double[] result) {
 		checkMarkers(velocity); checkRows(result);
 		for (double[] axis : velocity) if (axis == result) throw new IllegalArgumentException("Aliased constraint vectors");
@@ -206,15 +249,15 @@ final class CellVelocityConstraintOperator {
 		Arrays.fill(cellResponse, SignedDyadic.ZERO);
 		for (int slot = 0; slot < factors.length; slot++) {
 			Factor factor = factors[slot];
-			for (int ordinal = 0; ordinal < basis.blockMarkerCount(factor.velocityBlock); ordinal++) {
-				int marker = basis.blockMarker(factor.velocityBlock, ordinal); SignedDyadic value = SignedDyadic.of(velocity[factor.axis][marker]);
-				for (int term = 0; term < 4; term++) cellResponse[4 * slot + term] = cellResponse[4 * slot + term]
-						.add(basis.coefficientExact(marker, factor.axis, term).multiply(value));
+			for (int axis = 0; axis < 3; axis++) for (int ordinal = 0; ordinal < basis.blockMarkerCount(factor.velocityBlock); ordinal++) {
+				int marker = basis.blockMarker(factor.velocityBlock, ordinal); SignedDyadic value = SignedDyadic.of(velocity[axis][marker]);
+				for (int mode = 0; mode < factor.modeCount; mode++) cellResponse[MODAL_STRIDE * slot + mode] = cellResponse[MODAL_STRIDE * slot + mode]
+						.add(basis.modeWeightExact(marker, mode, axis).multiply(value));
 			}
 		}
 	}
 
-	/** L^T D^T p, preserving the same exact virtual-work pairing as volumeRate. */
+	/** F^T A^T D^T p, preserving the same exact virtual-work pairing as volumeRate. */
 	void force(double[] pressure, double[][] result) {
 		force(pressure, null, result);
 	}
@@ -232,10 +275,11 @@ final class CellVelocityConstraintOperator {
 		prepareLoad(pressure, reference, low);
 		for (int slot = 0; slot < factors.length; slot++) {
 			Factor factor = factors[slot];
-			for (int ordinal = 0; ordinal < basis.blockMarkerCount(factor.velocityBlock); ordinal++) {
+			for (int axis = 0; axis < 3; axis++) for (int ordinal = 0; ordinal < basis.blockMarkerCount(factor.velocityBlock); ordinal++) {
 				int marker = basis.blockMarker(factor.velocityBlock, ordinal); SignedDyadic value = SignedDyadic.ZERO;
-				for (int term = 0; term < 4; term++) value = value.add(basis.coefficientExact(marker, factor.axis, term).multiply(cellLoad[4 * slot + term]));
-				result[factor.axis][marker] = value.toDouble();
+				for (int mode = 0; mode < factor.modeCount; mode++) value = value.add(basis.modeWeightExact(marker, mode, axis)
+						.multiply(cellLoad[MODAL_STRIDE * slot + mode]));
+				result[axis][marker] = value.toDouble();
 			}
 		}
 	}
@@ -263,7 +307,7 @@ final class CellVelocityConstraintOperator {
 		return value;
 	}
 
-	/** D (L M_actual^-1 L^T) D^T plus finite gas storage; every intermediate retains all bits. */
+	/** (D A) (F M_actual^-1 F^T) (D A)^T plus finite gas storage; every intermediate retains all bits. */
 	void apply(double[] pressure, double[] result) { apply(pressure, result, false); }
 	double applyWithWork(double[] pressure, double[] result) { return apply(pressure, result, true); }
 	private double apply(double[] pressure, double[] result, boolean work) {
@@ -276,10 +320,15 @@ final class CellVelocityConstraintOperator {
 		return work ? positiveWork(pressure) : 0;
 	}
 	private void respondToLoad() {
-		for (int slot = 0; slot < factors.length; slot++) for (int first = 0; first < 4; first++) {
-			SignedDyadic value = SignedDyadic.ZERO;
-			for (int second = 0; second < 4; second++) value = value.add(factors[slot].gram[4 * first + second].multiply(cellLoad[4 * slot + second]));
-			cellResponse[4 * slot + first] = value;
+		Arrays.fill(cellResponse, SignedDyadic.ZERO);
+		for (int slot = 0; slot < factors.length; slot++) {
+			Factor factor = factors[slot];
+			for (int first = 0; first < factor.modeCount; first++) {
+				SignedDyadic value = SignedDyadic.ZERO;
+				for (int second = 0; second < factor.modeCount; second++) value = value
+						.add(factor.gram[factor.modeCount * first + second].multiply(cellLoad[MODAL_STRIDE * slot + second]));
+				cellResponse[MODAL_STRIDE * slot + first] = value;
+			}
 		}
 	}
 
@@ -315,7 +364,7 @@ final class CellVelocityConstraintOperator {
 		}
 	}
 
-	/** Exact local mass work equals |L^T D^T p|^2/M, independently of pressure-row cancellation. */
+	/** Exact local mass work equals |F^T A^T D^T p|^2/M, independently of pressure-row cancellation. */
 	private double positiveWork(double[] pressure) {
 		SignedDyadic work = SignedDyadic.ZERO;
 		for (int index = 0; index < cellLoad.length; index++) work = work.add(cellLoad[index].multiply(cellResponse[index]));

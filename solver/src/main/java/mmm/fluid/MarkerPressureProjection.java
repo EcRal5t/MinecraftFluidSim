@@ -63,14 +63,16 @@ final class MarkerPressureProjection {
 	                      double[] pressureOrigin, double[] pressureCorrection, double[] pressureCorrectionLow,
 	                      double[] storage, double[] gasInitialPressure, int[] liquidRows, int[] gasRows,
 	                      int pressureAnchor, float pressureReference, boolean hasFreeSurface, float dt,
-	                      GasRuntimeGeometry gasFrame, AirNetwork gasNetworkOwner, byte[] geometryMasks) { }
+	                      GasRuntimeGeometry gasFrame, AirNetwork gasNetworkOwner, byte[] geometryMasks,
+	                      double wallNormalWork, double wallRepresentationWork) { }
 
 	DiagnosticView diagnosticView() {
 		return new DiagnosticView(basis, geometry, candidateField, active, solved, published,
 				originalVelocity, predictor, wallPredictor, candidate, publishedVelocity, originalPosition,
 				originalMass, originalVolume, rhs, pressure, pressureOrigin, pressureCorrection, pressureCorrectionLow,
 				storage, gasInitialPressure, liquidRows, gasRows, pressureAnchor, pressureReference, hasFreeSurface,
-				dt, gasFrame, gasNetworkOwner, geometryMasks);
+				dt, gasFrame, gasNetworkOwner, geometryMasks,
+				wallProjection == null ? 0 : wallProjection.normalWork(), wallProjection == null ? 0 : wallProjection.representationWork());
 	}
 
 	boolean prepare(float dt) {
@@ -160,7 +162,7 @@ final class MarkerPressureProjection {
 				int block=ownerBlock(cell,fragment.microKey());
 				var blocks = new ArrayList<Block>();
 				for (int axis = 0; axis < 3; axis++) {
-					double[] coefficient = freeTrace(block, axis, fragment);
+					SignedDyadic[] coefficient = freeTrace(block, axis, fragment);
 					blocks.add(new Block(block, axis, coefficient));
 				}
 				freeBoundary(cell, gasNode(fragment.gasPiece()), blocks, gasBlocks);
@@ -210,15 +212,10 @@ final class MarkerPressureProjection {
 			definitions.add(new Row(blocks,0)); return;
 		}
 		boolean completeMicroBoxes=profile.freeFragments().isEmpty();
-		double[] moments=completeMicroBoxes ? null : geometry.supportMoments(basis.physicalCell(block),basis.blockSupport(block));
 		double[][][] polynomial=new double[3][4][10];
 		for(int axis=0;axis<3;axis++) {
-			double[] coefficient=completeMicroBoxes ? boxDivergence(block,axis) : new double[4];
-			for(int term=0;term<4;term++) {
-				basis.divergencePolynomial(block,axis,term,polynomial[axis][term]);
-				if(!completeMicroBoxes) coefficient[term]=dot(polynomial[axis][term],moments)/basis.cellSize();
-			}
-			blocks.add(new Block(block,axis,coefficient));
+			for(int term=0;term<4;term++) basis.divergencePolynomial(block,axis,term,polynomial[axis][term]);
+			blocks.add(new Block(block,axis,completeMicroBoxes ? boxDivergence(block,axis) : supportDivergence(block,axis)));
 		}
 		definitions.add(new Row(blocks,0));
 		int[] selected=CellPressurePolynomialSpace.independentMonomials(basis,block);
@@ -229,10 +226,10 @@ final class MarkerPressureProjection {
 			for(int axis=0;axis<3;axis++) {
 				double[] coefficient=new double[4];
 				for(int term=0;term<4;term++) {
-					coefficient[term]=profile.volume()/basis.cellSize()*polynomial[axis][term][monomial];
+					coefficient[term]=polynomial[axis][term][monomial];
 					positive |= coefficient[term] != 0;
 				}
-				blocks.add(new Block(block,axis,coefficient));
+				blocks.add(new Block(block,axis,coefficient,profile.volume()/basis.cellSize()));
 			}
 			if(positive) {
 				if(Arrays.binarySearch(selected,monomial)>=0) coarseRows.add(definitions.size());
@@ -242,43 +239,63 @@ final class MarkerPressureProjection {
 		if(!coarseRows.isEmpty()) internalCoarseRows.add(coarseRows.stream().mapToInt(Integer::intValue).toArray());
 	}
 
-	private double[] boxDivergence(int block,int axis) {
+	private SignedDyadic[] boxDivergence(int block,int axis) {
 		int cell=basis.physicalCell(block), bit=1<<axis;
 		int support=basis.blockSupport(block)&geometry.wetMicroMask(cell);
-		double[] coefficient=new double[4];
+		SignedDyadic[] coefficient=zeroCoefficients();
 		// Internal microfaces cancel geometrically; wall traces retain their exact shape zeros.
 		for(int micro=0;micro<8;micro++) if((support&(1<<micro))!=0) {
 			for(var face:geometry.microFaces(cell,micro)) if(face.axis()==axis && face.moments().area()>0) {
 				boolean inside=(micro&bit)==0 ? face.sign()>0 : face.sign()<0;
 				if(inside && (support&(1<<(micro^bit)))!=0) continue;
 				double[] side=trace(block,axis,face.moments(),0,face.sign());
-				for(int term=0;term<4;term++) coefficient[term]+=side[term];
+				for(int term=0;term<4;term++) coefficient[term]=coefficient[term].add(SignedDyadic.of(side[term]));
 			}
 		}
 		return coefficient;
 	}
 
-	private double[] freeTrace(int block,int axis,LiquidPressureGeometry.FreeFragment fragment) {
+	private SignedDyadic[] freeTrace(int block,int axis,LiquidPressureGeometry.FreeFragment fragment) {
 		double n=fragment.areaNormal().component(axis), h=basis.cellSize();
-		double[] coefficient=new double[4]; coefficient[0]=n;
-		for(int b=0;b<3;b++) coefficient[b+1]=(fragment.normalFirstMoment().row(axis).component(b)-n*basis.center(block,b))/h;
+		SignedDyadic[] coefficient=zeroCoefficients(); coefficient[0]=SignedDyadic.of(n);
+		for(int b=0;b<3;b++) coefficient[b+1]=SignedDyadic.of((fragment.normalFirstMoment().row(axis).component(b)-n*basis.center(block,b))/h);
 		if(!basis.hasNormalShape(block,axis)) return coefficient;
 		if(fragment.gasMicro()!=fragment.microKey()) {
-			double shape=n==0 ? 0 : basis.shapeValue(block,axis,fragment.normalFirstMoment().row(axis).component(axis)/n);
-			for(int term=0;term<4;term++) coefficient[term]*=shape;
+			var shape=SignedDyadic.of(n==0 ? 0 : basis.shapeValue(block,axis,fragment.normalFirstMoment().row(axis).component(axis)/n));
+			for(int term=0;term<4;term++) coefficient[term]=coefficient[term].multiply(shape);
 			return coefficient;
 		}
 		int cell=basis.physicalCell(block), micro=fragment.microKey();
-		double[] moments=geometry.microMoments(cell,micro), polynomial=new double[10];
-		for(int term=0;term<4;term++) {
-			basis.divergencePolynomial(block,axis,term,polynomial);
-			coefficient[term]=dot(polynomial,moments)/h;
-		}
+		coefficient=integratedDivergence(block,axis,geometry.microMoments(cell,micro));
 		for(var face:geometry.microFaces(cell,micro)) if(face.axis()==axis && face.moments().area()>0) {
 			double[] side=trace(block,axis,face.moments(),0,face.sign());
-			for(int term=0;term<4;term++) coefficient[term]-=side[term];
+			for(int term=0;term<4;term++) coefficient[term]=coefficient[term].subtract(SignedDyadic.of(side[term]));
 		}
 		return coefficient;
+	}
+	private SignedDyadic[] supportDivergence(int block,int axis) {
+		int cell=basis.physicalCell(block), support=basis.blockSupport(block)&geometry.wetMicroMask(cell);
+		var coefficient=zeroCoefficients();
+		for(int micro=0;micro<8;micro++) if((support&(1<<micro))!=0) {
+			var part=integratedDivergence(block,axis,geometry.microMoments(cell,micro));
+			for(int term=0;term<4;term++) coefficient[term]=coefficient[term].add(part[term]);
+		}
+		return coefficient;
+	}
+
+	/** Preserve the polynomial's linear relations through integration and the common length scale. */
+	private SignedDyadic[] integratedDivergence(int block,int axis,double[] moments) {
+		var coefficient=zeroCoefficients(); var polynomial=new double[10]; var inverseSize=SignedDyadic.of(1 / basis.cellSize());
+		for(int term=0;term<4;term++) {
+			basis.divergencePolynomial(block,axis,term,polynomial);
+			for(int monomial=0;monomial<polynomial.length;monomial++) if(polynomial[monomial]!=0 && moments[monomial]!=0)
+				coefficient[term]=coefficient[term].add(SignedDyadic.of(polynomial[monomial]).multiply(SignedDyadic.of(moments[monomial])));
+			coefficient[term]=coefficient[term].multiply(inverseSize);
+		}
+		return coefficient;
+	}
+	private static SignedDyadic[] zeroCoefficients() {
+		var result=new SignedDyadic[4]; Arrays.fill(result,SignedDyadic.ZERO); return result;
 	}
 
 	private void initializeCommonPressure(int sharedStart, int sharedEnd) {
@@ -329,10 +346,10 @@ final class MarkerPressureProjection {
 		boolean finite = finiteGasRow(node);
 		double known = jump + (finite ? 0 : node > 0 ? boundary.gasPressureOfNode(node) - pressureReference : -pressureReference);
 		for (var block : blocks) {
-			double[] coefficient = block.coefficients();
-			for (int term = 0; term < 4; term++) knownCellLoad[block.axis()][4 * block.velocityBlock() + term] -= known * coefficient[term];
+			SignedDyadic[] coefficient = block.exactCoefficients();
+			for (int term = 0; term < 4; term++) knownCellLoad[block.axis()][4 * block.velocityBlock() + term] -= SignedDyadic.of(known).multiply(coefficient[term]).toDouble();
 			if (finite) {
-				for (int term = 0; term < 4; term++) coefficient[term] = -coefficient[term];
+				for (int term = 0; term < 4; term++) coefficient[term] = coefficient[term].negate();
 				gasBlocks.computeIfAbsent(node, ignored -> new ArrayList<>()).add(new Block(block.velocityBlock(), block.axis(), coefficient));
 			}
 		}
