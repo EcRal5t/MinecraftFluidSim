@@ -6,7 +6,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.TreeMap;
-import java.util.TreeSet;
 
 /** Immutable gas volumes; partial fixed or PLIC cell faces retain finite-rate ports. */
 final class GasChamberTopology {
@@ -32,32 +31,31 @@ final class GasChamberTopology {
 	}
 
 	/** One read-only phase search supplies unchanged geometry outside its complete variable-cell set. */
-	static Prepared prepare(GasComplementGeometry source, boolean sealedExterior, boolean[] variableCells) {
-		return new Prepared(source, sealedExterior, variableCells);
+	static Prepared prepare(GasComplementGeometry source, boolean sealedExterior, GasComplementGeometry.Region region) {
+		return new Prepared(source, sealedExterior, region);
 	}
 	static final class Prepared {
 		private final GasComplementGeometry source;
 		private final boolean sealedExterior;
-		private final boolean[] variable;
-		private final int[] parent, variablePieces;
-		private final long[] portKeys, exteriorKeys;
+		private final GasComplementGeometry.Region region;
+		private final int[] parent;
 		private final List<FixedPart> parts;
 		private final List<FixedLink> links;
 
-		private Prepared(GasComplementGeometry source, boolean sealedExterior, boolean[] variableCells) {
-			if (source == null || variableCells == null || variableCells.length != cellCount(source))
+		private Prepared(GasComplementGeometry source, boolean sealedExterior, GasComplementGeometry.Region region) {
+			if (source == null || region == null || !region.matches(source))
 				throw new IllegalArgumentException("Fixed gas region requires its complete source and variable cells");
-			this.source = source; this.sealedExterior = sealedExterior; variable = variableCells.clone();
+			this.source = source; this.sealedExterior = sealedExterior; this.region = region;
 			parent = emptyParents(source);
-			for (var piece : source.pieces()) if (!variable[piece.cell()]) parent[piece.id()] = piece.id();
+			for (var piece : source.pieces()) if (!region.selected(piece.cell())) parent[piece.id()] = piece.id();
 			for (var port : source.ports()) if (parent[port.first()] >= 0 && parent[port.second()] >= 0 && port.fullCutConnection())
 				join(parent, port.first(), port.second());
 			var totals = new TreeMap<Integer, Totals>();
-			for (var piece : source.pieces()) if (!variable[piece.cell()]) {
+			for (var piece : source.pieces()) if (!region.selected(piece.cell())) {
 				int root = root(parent, piece.id()); parent[piece.id()] = root;
 				totals.computeIfAbsent(root, ignored -> new Totals()).add(piece);
 			}
-			if (!sealedExterior) for (var port : source.exteriorPorts()) if (!variable[port.piece() / 8] && port.fullCutConnection())
+			if (!sealedExterior) for (var port : source.exteriorPorts()) if (!region.selected(port.piece() / 8) && port.fullCutConnection())
 				totals.get(root(parent, port.piece())).ambient = true;
 			var fixedParts = new ArrayList<FixedPart>(totals.size());
 			for (var entry : totals.entrySet()) {
@@ -67,44 +65,32 @@ final class GasChamberTopology {
 			var areas = new TreeMap<Long, SignedDyadic>();
 			for (var port : source.ports()) if (parent[port.first()] >= 0 && parent[port.second()] >= 0)
 				addArea(areas, root(parent, port.first()), root(parent, port.second()), port.area());
-			if (!sealedExterior) for (var port : source.exteriorPorts()) if (!variable[port.piece() / 8])
+			if (!sealedExterior) for (var port : source.exteriorPorts()) if (!region.selected(port.piece() / 8))
 				addArea(areas, -1, root(parent, port.piece()), port.area());
 			var fixedLinks = new ArrayList<FixedLink>(areas.size());
 			for (var entry : areas.entrySet()) fixedLinks.add(new FixedLink((int) (entry.getKey() >>> 32), (int) (long) entry.getKey(), entry.getValue()));
 			links = List.copyOf(fixedLinks);
-			var pieces = new ArrayList<Integer>(); var ports = new TreeSet<Long>(); var exterior = new TreeSet<Long>();
-			int[] sizes = {source.sizeX(), source.sizeY(), source.sizeZ()}, strides = {1, source.sizeX(), source.sizeX() * source.sizeY()};
-			for (int cell = 0; cell < variable.length; cell++) if (variable[cell]) {
-				int[] coordinate = {cell % sizes[0], cell / sizes[0] % sizes[1], cell / strides[2]};
-				for (int micro = 0; micro < 8; micro++) {
-					int piece = 8 * cell + micro; pieces.add(piece);
-					for (int axis = 0; axis < 3; axis++) {
-						long key = 3L * piece + axis; ports.add(key); exterior.add(key);
-						// Incoming cross-cell ports are stored at the previous cell's positive microface.
-						if ((micro & 1 << axis) == 0 && coordinate[axis] > 0)
-							ports.add(3L * (8 * (cell - strides[axis]) + (micro | 1 << axis)) + axis);
-					}
-				}
-			}
-			variablePieces = pieces.stream().mapToInt(Integer::intValue).toArray();
-			portKeys = ports.stream().mapToLong(Long::longValue).toArray(); exteriorKeys = exterior.stream().mapToLong(Long::longValue).toArray();
 		}
+
+		int[] variableCells() { return region.cells(); }
+		int fixedRoot(int piece) { return parent[piece]; }
 
 		GasChamberTopology capture(GasComplementGeometry candidate) {
 			if (candidate == null || source.sizeX() != candidate.sizeX() || source.sizeY() != candidate.sizeY() || source.sizeZ() != candidate.sizeZ()
 					|| Double.doubleToRawLongBits(source.cellVolumeCubicMeters()) != Double.doubleToRawLongBits(candidate.cellVolumeCubicMeters()))
 				throw new IllegalArgumentException("Fixed gas region candidate differs in shape or metric");
-			// Check absent pieces too: a new or vanished fixed piece changes the prepared graph.
-			for (int piece = 0; piece < parent.length; piece++) if (!variable[piece / 8] && source.piece(piece) != candidate.piece(piece))
-				throw new IllegalArgumentException("Fixed gas region changed outside its variable cells");
-			var pieces = new ArrayList<GasComplementGeometry.Piece>(variablePieces.length);
-			for (int id : variablePieces) { var piece = candidate.piece(id); if (piece != null) pieces.add(piece); }
-			var ports = new ArrayList<GasComplementGeometry.Port>(portKeys.length);
-			for (long key : portKeys) {
+			// A local capture carries the immutable source/region identity. Independent captures check absent pieces too.
+			if (!candidate.reusesFixedGeometry(source, region)) for (int piece = 0; piece < parent.length; piece++)
+				if (!region.selected(piece / 8) && source.piece(piece) != candidate.piece(piece))
+					throw new IllegalArgumentException("Fixed gas region changed outside its variable cells");
+			var pieces = new ArrayList<GasComplementGeometry.Piece>(region.pieceIds.length);
+			for (int id : region.pieceIds) { var piece = candidate.piece(id); if (piece != null) pieces.add(piece); }
+			var ports = new ArrayList<GasComplementGeometry.Port>(region.portKeys.length);
+			for (long key : region.portKeys) {
 				int index = findPort(candidate.ports(), key); if (index >= 0) ports.add(candidate.ports().get(index));
 			}
-			var exterior = new ArrayList<GasComplementGeometry.ExteriorPort>(exteriorKeys.length);
-			if (!sealedExterior) for (long key : exteriorKeys) {
+			var exterior = new ArrayList<GasComplementGeometry.ExteriorPort>(region.exteriorKeys.length);
+			if (!sealedExterior) for (long key : region.exteriorKeys) {
 				int index = findExterior(candidate.exteriorPorts(), key); if (index >= 0) exterior.add(candidate.exteriorPorts().get(index));
 			}
 			return assemble(candidate, sealedExterior, parent.clone(), parts, links, pieces, ports, exterior);
@@ -200,6 +186,7 @@ final class GasChamberTopology {
 		if (!(result > 0 && Double.isFinite(result))) throw new GasTopologyBlockedException(name + " is not representable");
 		return result;
 	}
+	int[] copyPieceNodes() { return pieceNodes.clone(); }
 	int nodeOfPiece(int piece) { return pieceNodes[piece]; }
 	boolean matchesGeometry(GasComplementGeometry candidate) { return geometry == candidate; }
 	List<Chamber> chambers() { return chambers; }

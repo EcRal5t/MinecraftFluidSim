@@ -51,9 +51,9 @@ public final class AirCavityScannerValidation {
 		grid.cutCells.replaceMask(0,8);
 		var partialPhase=new FlipPressurePhaseGeometry(2,2,2);
 		partialPhase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
-		boolean[] equalCells=new boolean[8];for(int cell=0;cell<8;cell++) equalCells[cell]=partialPhase.sameCellGeometry(cell,phase);
+		boolean[] changedCells=new boolean[8];for(int cell=0;cell<8;cell++) changedCells[cell]=!partialPhase.sameCellGeometry(cell,phase);
 		var partialFresh=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,partialPhase);
-		var partialReuse=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,partialPhase,geometry,equalCells);
+		var partialReuse=GasComplementGeometry.prepare(geometry,new GasComplementGeometry.Region(2,2,2,changedCells)).capture(grid.solid,grid.cutCells,partialPhase,changedCells);
 		var originalPort=geometry.ports().stream().filter(port->port.first()==1 && port.axis()==0).findFirst().orElseThrow();
 		var restrictedPort=partialReuse.ports().stream().filter(port->port.first()==1 && port.axis()==0).findFirst().orElseThrow();
 		check(originalPort.fullCutConnection() && !restrictedPort.fullCutConnection() && restrictedPort!=originalPort
@@ -307,6 +307,7 @@ public final class AirCavityScannerValidation {
 		check(equalFractionCaptured.offsetBracket(1,0)==current.offsetBracket(1,0),
 				"Neighbor SVQ and volume changes invalidated an unchanged actual fraction-gradient input");
 		checkRuntimePlanesEqual(equalFractionCaptured,equalFractionFresh,"Pore-edited captured PLIC differs from a complete rebuild");
+		validatePhaseShapeCapacity(domain,equalFractionFresh);
 		var clear=GasRuntimeGeometry.allDry(domain,true);
 		check(clear.matchesSourceCarrierGeometry(domain,occupied) && !clear.matchesSourceCarrierGeometry(domain,new long[8])
 				&& !clear.matchesCarrierGeometry(domain,new long[8]) && clear.capacity().chambers().getFirst().cubicMeters()==2,
@@ -350,6 +351,26 @@ public final class AirCavityScannerValidation {
 		}
 	}
 
+	private static void validatePhaseShapeCapacity(FluidDomain domain,GasRuntimeGeometry source) {
+		var tuple=source.liquidStock().get(0);var previous=domain.gasState.frame;
+		var box=new LiquidCellShape.Box(SignedDyadic.of(.5),SignedDyadic.of(.125),SignedDyadic.ZERO,
+				SignedDyadic.of(1),SignedDyadic.of(.875),SignedDyadic.of(1));
+		var edit=tuple.withShape(new LiquidCellShape(0,List.of(box),tuple.firstMomentX(),tuple.firstMomentY(),tuple.firstMomentZ()));
+		try {
+			domain.gasState.frame=source;var prepared=GasRuntimeGeometry.preparePhaseSource(domain,0);
+			check(prepared!=null,"Matching partially occupied phase source was not prepared");
+			for(boolean local:new boolean[]{false,true}) {
+				try {
+					if(local)GasRuntimeGeometry.capturePhaseEdit(domain,edit,source.occupiedSvq(),true,prepared);
+					else GasRuntimeGeometry.capture(domain,edit,source.occupiedSvq(),true);
+					throw new AssertionError("A liquid cuboid bypassed its complete-pore support requirement");
+				} catch(GasTopologyBlockedException expected) {
+					check(expected.getMessage().contains("Positive cuboid requires complete open pore capacity"),"Local/full cuboid support checks differ");
+				}
+			}
+		} finally { domain.gasState.frame=previous; }
+	}
+
 	private static void validatePreparedGasBridge() {
 		var grid=new Grid(5,3,3,1);java.util.Arrays.fill(grid.solid,true);
 		for(int cell=0;cell<45;cell++)grid.cutCells.replaceMask(cell,255);
@@ -360,11 +381,11 @@ public final class AirCavityScannerValidation {
 		grid.liquidVolume[21]=1;
 		var wet=new FlipPressurePhaseGeometry(5,3,3);
 		wet.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[45]);
-		boolean[] same=new boolean[45],variable=new boolean[45];variable[21]=true;
-		for(int cell=0;cell<45;cell++)same[cell]=wet.sameCellGeometry(cell,dry);
-		var target=GasComplementGeometry.capture(5,3,3,1,grid.solid,grid.cutCells,wet,source,same);
+		boolean[] variable=new boolean[45];variable[21]=true;
+		var region=new GasComplementGeometry.Region(5,3,3,variable);
+		var target=GasComplementGeometry.prepare(source,region).capture(grid.solid,grid.cutCells,wet,variable);
 		for(boolean sealed:new boolean[]{false,true}) {
-			var prepared=GasChamberTopology.prepare(source,sealed,variable);
+			var prepared=GasChamberTopology.prepare(source,sealed,region);
 			var split=prepared.capture(target);var full=GasChamberTopology.capture(target,sealed);
 			check(split.chambers().size()==(sealed?2:1) && split.chambers().equals(full.chambers())
 					&& split.connections().equals(full.connections()),"A closing gas bridge lost fixed components or ambient ownership");
@@ -437,7 +458,11 @@ public final class AirCavityScannerValidation {
 				&& actual.topology().connections().equals(expected.topology().connections())
 				&& actual.liquidStock().equals(expected.liquidStock()) && actual.geometry().pieces().equals(expected.geometry().pieces())
 				&& actual.geometry().ports().equals(expected.geometry().ports()) && actual.geometry().exteriorPorts().equals(expected.geometry().exteriorPorts())
-				&& actual.capacity().components().equals(expected.capacity().components()) && actual.capacity().chambers().equals(expected.capacity().chambers()),message);
+				&& actual.capacity().components().equals(expected.capacity().components())
+				&& actual.capacity().pieces().equals(expected.capacity().pieces())
+				&& actual.capacity().chambers().equals(expected.capacity().chambers())
+				&& Double.doubleToRawLongBits(actual.capacity().ambientCubicMeters()) == Double.doubleToRawLongBits(expected.capacity().ambientCubicMeters())
+				&& Double.doubleToRawLongBits(actual.capacity().ambientRoundingErrorBound()) == Double.doubleToRawLongBits(expected.capacity().ambientRoundingErrorBound()),message);
 		for(int cell=0;cell<actual.liquidStock().size();cell++) for(int micro=0;micro<8;micro++) {
 			check(Double.doubleToRawLongBits(actual.liquidFractionExact(cell,micro))==Double.doubleToRawLongBits(expected.liquidFractionExact(cell,micro))
 					&& Double.doubleToRawLongBits(actual.planeOffset(cell,micro))==Double.doubleToRawLongBits(expected.planeOffset(cell,micro))

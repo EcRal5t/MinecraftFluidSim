@@ -151,11 +151,7 @@ final class FlipPressurePhaseGeometry {
 			float openVolume = granular == null ? geometricOpen
 					: granular.effectiveOpenCellVolume(cell, geometricOpen);
 			poreVolumes[cell] = solid[cell] ? SignedDyadic.ZERO : SignedDyadic.of(openVolume);
-			if (overlay != null && overlay[cell] != null && overlay[cell].shape() != null) {
-				if (cutCells.mask(cell) != 0 || !poreVolumes[cell].equals(SignedDyadic.of(1)))
-					throw new GasTopologyBlockedException("Positive cuboid requires complete open pore capacity at cell " + cell);
-				liquidShapes[cell] = overlay[cell].shape();
-			}
+			if (overlay != null && overlay[cell] != null) assignLiquidShape(cell, overlay[cell].shape(), cutCells);
 			double liquid = overlay != null && overlay[cell] != null ? overlay[cell].volume().toDouble() : reconstructedVolume[cell];
 			fraction[cell] = solid[cell] || openVolume <= 0.0F ? 0.0F : clamp(liquid / openVolume, 0.0, 1.0);
 			pressureFluid[cell] = false;
@@ -238,22 +234,30 @@ final class FlipPressurePhaseGeometry {
 		liquidShapes[cell] = captured.liquidShapes[cell];
 	}
 
-	/** Scratch owns its scalar arrays; captured component certificates remain immutable. */
-	FlipPressurePhaseGeometry contactScratch() {
-		var scratch = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
-		System.arraycopy(fraction, 0, scratch.fraction, 0, fraction.length);
-		System.arraycopy(poreVolumes, 0, scratch.poreVolumes, 0, fraction.length);
-		System.arraycopy(liquidShapes, 0, scratch.liquidShapes, 0, fraction.length);
-		scratch.collisionMasks = collisionMasks.clone();
-		return scratch;
+	/** Scalar arrays belong to this copy; immutable component certificates can be shared. */
+	private FlipPressurePhaseGeometry(FlipPressurePhaseGeometry source) {
+		sizeX = source.sizeX; sizeY = source.sizeY; sizeZ = source.sizeZ;
+		fraction = source.fraction.clone();
+		normalX = source.normalX.clone(); normalY = source.normalY.clone(); normalZ = source.normalZ.clone();
+		planeOffset = source.planeOffset.clone(); offsetBrackets = source.offsetBrackets.clone();
+		poreVolumes = source.poreVolumes.clone(); components = source.components.clone();
+		liquidShapes = source.liquidShapes.clone(); collisionMasks = source.collisionMasks.clone();
+		revision = source.revision;
+	}
+	FlipPressurePhaseGeometry copy() { return new FlipPressurePhaseGeometry(this); }
+	private void assignLiquidShape(int cell, LiquidCellShape shape, FlipCutCellGeometry cut) {
+		if (shape != null && (cut.mask(cell) != 0 || !poreVolumes[cell].equals(SignedDyadic.of(1))))
+			throw new GasTopologyBlockedException("Positive cuboid requires complete open pore capacity at cell " + cell);
+		liquidShapes[cell] = shape;
 	}
 
-	void rebuildContactCells(FlipPressurePhaseGeometry captured, PhaseLiquidGeometryEdit edit,
-	                         java.util.List<Integer> cells, java.util.List<PhaseLiquidGeometryEdit> stock,
+	void rebuildEditedCells(FlipPressurePhaseGeometry captured, PhaseLiquidGeometryEdit edit,
+	                         int[] cells, java.util.List<PhaseLiquidGeometryEdit> stock,
 	                         FlipCutCellGeometry cut, boolean[] solid, float cellSize) {
 		if (captured.liquidShapes[edit.cell()] != null && edit.shape() == null && edit.volume().signum() > 0)
 			throw new GasTopologyBlockedException("Liquid contact edit requires a positive successor shape at cell " + edit.cell());
-		liquidShapes[edit.cell()] = edit.shape();
+		revision = Math.addExact(revision, 1);
+		assignLiquidShape(edit.cell(), edit.shape(), cut);
 		double open = poreVolumes[edit.cell()].toDouble();
 		fraction[edit.cell()] = solid[edit.cell()] || open <= 0 ? 0 : clamp(edit.volume().toDouble() / open, 0, 1);
 		var integration = new LiquidFluxGeometry(cut);
