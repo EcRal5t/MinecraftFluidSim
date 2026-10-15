@@ -196,37 +196,59 @@ final class CellRemapSpatialMoments {
 			positions[p][a] = finite(mean[a] + (arm < 0 ? 0 : state.loads()[a][arm / 2] * coefficient[arm]));
 			velocities[p][a] = finite(mean[a + 3] + (arm < 0 ? 0 : state.loads()[a + 3][arm / 2] * coefficient[arm]));
 		}
-		verify(probability, positions, velocities);
 		return new Result(positions, velocities);
 	}
 
-	/** Rows are nodes, columns are axes. Preferred geometry chooses the latent orientation only. */
-	Result fit(double[] weights, double[][] preferredOffsets) {
+	/** Weights and latent loads stay fixed throughout one support-orientation search. */
+	PreparedFit prepareFit(double[] weights) {
 		checkPositive(mass);
-		if (weights.length != preferredOffsets.length) throw new IllegalArgumentException("Quadrature layout differs");
-		var state = decompose(); int count = weights.length;
-		if (count < 1 + state.rank())
+		var state = decompose();
+		if (weights.length < 1 + state.rank())
 			throw failure(Failure.INSUFFICIENT_NODES, "Positive liquid quadrature cannot retain its joint moment rank");
 		double total = SignedDyadic.sum(weights).toDouble(); checkPositive(total);
-		double[] probability = new double[count];
-		for (int p = 0; p < count; p++) { checkPositive(weights[p]); probability[p] = weights[p] / total; checkPositive(probability[p]); }
-		var basis = new ArrayList<double[]>();
-		for (int k = 0; k < state.rank(); k++) {
-			double[] candidate = new double[count];
-			double norm = 0; for (int a = 0; a < 3; a++) norm = Math.hypot(norm, state.loads()[a][k]);
-			if (norm > 0) for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++)
-				candidate[p] += finite(preferredOffsets[p][a]) * (state.loads()[a][k] / norm);
-			basis.add(nextBasis(candidate, probability, basis));
+		var probability = new double[weights.length];
+		for (int p = 0; p < weights.length; p++) {
+			checkPositive(weights[p]); probability[p] = weights[p] / total; checkPositive(probability[p]);
 		}
-		double[][] positions = new double[count][3], velocities = new double[count][3];
-		for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++) {
-			double x = mean[a], v = mean[a + 3];
-			for (int k = 0; k < state.rank(); k++) x += state.loads()[a][k] * basis.get(k)[p];
-			for (int k = 0; k < state.rank(); k++) v += state.loads()[a + 3][k] * basis.get(k)[p];
-			positions[p][a] = finite(x); velocities[p][a] = finite(v);
+		return new PreparedFit(state, probability);
+	}
+
+	Result fit(double[] weights, double[][] preferredOffsets) { return prepareFit(weights).fit(preferredOffsets); }
+
+	final class PreparedFit {
+		private final JointMomentFactor.Decomposition state;
+		private final double[] probability;
+		private final double[][] spatialDirections;
+		private PreparedFit(JointMomentFactor.Decomposition state, double[] probability) {
+			this.state = state; this.probability = probability;
+			spatialDirections = new double[state.rank()][3];
+			for (int k = 0; k < state.rank(); k++) {
+				double norm = 0; for (int a = 0; a < 3; a++) norm = Math.hypot(norm, state.loads()[a][k]);
+				if (norm > 0) for (int a = 0; a < 3; a++) spatialDirections[k][a] = state.loads()[a][k] / norm;
+			}
 		}
-		verify(probability, positions, velocities);
-		return new Result(positions, velocities);
+		/** Rows are nodes, columns are axes. Preferred geometry chooses the latent orientation only. */
+		Result fit(double[][] preferredOffsets) {
+			int count = probability.length;
+			if (count != preferredOffsets.length) throw new IllegalArgumentException("Quadrature layout differs");
+			var basis = new ArrayList<double[]>();
+			for (int k = 0; k < state.rank(); k++) {
+				var candidate = new double[count];
+				for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++)
+					candidate[p] += finite(preferredOffsets[p][a]) * spatialDirections[k][a];
+				basis.add(nextBasis(candidate, probability, basis));
+			}
+			var positions = new double[count][3]; var velocities = new double[count][3];
+			for (int p = 0; p < count; p++) for (int a = 0; a < 3; a++) {
+				double x = mean[a], v = mean[a + 3];
+				for (int k = 0; k < state.rank(); k++) {
+					x += state.loads()[a][k] * basis.get(k)[p];
+					v += state.loads()[a + 3][k] * basis.get(k)[p];
+				}
+				positions[p][a] = finite(x); velocities[p][a] = finite(v);
+			}
+			return new Result(positions, velocities);
+		}
 	}
 
 	private JointMomentFactor.Decomposition decompose() {
@@ -238,15 +260,18 @@ final class CellRemapSpatialMoments {
 	private static double[] nextBasis(double[] preferred, double[] probability, ArrayList<double[]> previous) {
 		double norm = orthogonalize(preferred, probability, previous);
 		if (norm <= 1e-24) {
-			// Centered coordinate indicators span every remaining positive-weight mode.
-			double best = 0; double[] selected = null;
+			// The diagonal of the remaining weighted projector selects a coordinate in O(nodes * rank).
+			// Only the selected indicator is formed and reorthogonalized.
+			double best = -1; int selected = -1;
 			for (int p = 0; p < probability.length; p++) {
-				double[] candidate = new double[probability.length]; candidate[p] = 1 / Math.sqrt(probability[p]);
-				double length = orthogonalize(candidate, probability, previous);
-				if (length > best) { best = length; selected = candidate; }
+				double resolved = 1;
+				for (double[] q : previous) resolved += q[p] * q[p];
+				double remaining = Math.fma(-probability[p], resolved, 1);
+				if (remaining > best) { best = remaining; selected = p; }
 			}
-			if (!(best > 1e-24)) throw failure(Failure.UNREPRESENTABLE, "Positive quadrature has no representable orthogonal moment mode");
-			preferred = selected; norm = best;
+			preferred = new double[probability.length]; preferred[selected] = 1 / Math.sqrt(probability[selected]);
+			norm = orthogonalize(preferred, probability, previous);
+			if (!(norm > 1e-24)) throw failure(Failure.UNREPRESENTABLE, "Positive quadrature has no representable orthogonal moment mode");
 		}
 		for (int p = 0; p < preferred.length; p++) preferred[p] = finite(preferred[p] / Math.sqrt(norm));
 		return preferred;
@@ -266,27 +291,6 @@ final class CellRemapSpatialMoments {
 		return finite(norm);
 	}
 
-	private void verify(double[] probability, double[][] positions, double[][] velocities) {
-		double[] observed = new double[6]; double[][] second = new double[6][6];
-		for (int p = 0; p < probability.length; p++) {
-			double[] value = {positions[p][0], positions[p][1], positions[p][2], velocities[p][0], velocities[p][1], velocities[p][2]};
-			for (int a = 0; a < 6; a++) {
-				observed[a] += probability[p] * value[a];
-				for (int b = a; b < 6; b++) second[a][b] += probability[p] * (value[a] - mean[a]) * (value[b] - mean[b]);
-			}
-		}
-		for (int a = 0; a < 6; a++) {
-			if (Math.abs(observed[a] - mean[a]) > 512 * Math.ulp(Math.max(Math.abs(mean[a]), Math.sqrt(Math.abs(covariance[a][a])))))
-				throw failure(Failure.UNREPRESENTABLE, "Liquid quadrature cannot represent its first moment");
-			for (int b = a; b < 6; b++) {
-				double scale = Math.sqrt(Math.abs(covariance[a][a])) * Math.sqrt(Math.abs(covariance[b][b]));
-				double tolerance = 1024 * Math.ulp(scale) + 1024 * Math.ulp(Math.abs(mean[a])) * Math.sqrt(Math.abs(covariance[b][b]))
-						+ 1024 * Math.ulp(Math.abs(mean[b])) * Math.sqrt(Math.abs(covariance[a][a]));
-				if (Math.abs(second[a][b] - covariance[a][b]) > tolerance)
-					throw failure(Failure.UNREPRESENTABLE, "Liquid quadrature cannot represent its joint second moment");
-			}
-		}
-	}
 	private static void checkPositive(double value) {
 		if (!(Double.isFinite(value) && value > 0)) throw failure(Failure.UNREPRESENTABLE, "Liquid moment mass must be finite and positive");
 	}

@@ -2,10 +2,7 @@ package mmm.fluid;
 
 import mmm.units.SignedDyadic;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import static mmm.fluid.PhaseChangeStageSupport.PhaseMarkerAllocation;
-import static mmm.fluid.PhaseChangeStageSupport.PhaseRemovalPlan;
 
 /** Future actual liquid stock in every open collision component of one phase-edited cell. */
 record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponentMoments> components, LiquidCellShape shape) {
@@ -69,11 +66,6 @@ record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponent
 		return current(cell, state.geometry().cutCells.mask(cell), state.cellSize(), state.markerGrid(), state.particles());
 	}
 
-	static PhaseLiquidGeometryEdit current(PhaseChangeStageSupport.Workspace state, int cell, float[] futureMarkerVolumes) {
-		if (cell < 0 || cell >= state.cellCount()) throw new IllegalArgumentException("Invalid phase liquid cell");
-		return current(cell, state.geometry().cutCells.mask(cell), state.cellSize(), state.markerGrid(), state.particles(), futureMarkerVolumes);
-	}
-
 	static PhaseLiquidGeometryEdit current(
 			int cell, int collisionMask, float cellSize, MarkerGridIndex markers, LiquidParticleStore particles) {
 		return current(cell, collisionMask, cellSize, markers, particles, null);
@@ -116,22 +108,13 @@ record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponent
 		return List.copyOf(edits);
 	}
 
-	static PhaseLiquidGeometryEdit afterBoiling(PhaseChangeStageSupport.Workspace state, int cell, PhaseRemovalPlan removal) {
-		var changes = new HashMap<Integer, PhaseMarkerAllocation>();
-		for (var allocation : removal.allocations()) if (changes.put(allocation.marker(), allocation) != null)
-			throw new IllegalArgumentException("Repeated phase liquid donor");
+	record InsertedMarker(float volume, float x, float y, float z) { }
+
+	static PhaseLiquidGeometryEdit fromMarkers(PhaseChangeStageSupport.Workspace state, int cell, List<InsertedMarker> markers) {
 		var total = new Moments(state, cell);
-		for (int marker = state.markerGrid().cellMarkerHead[cell]; marker >= 0; marker = state.markerGrid().particleCellNext[marker]) {
-			var allocation = changes.remove(marker);
-			if (allocation != null && allocation.fullRemoval()) continue;
-			total.add(state.particles(), marker, allocation == null ? state.particles().volume(marker) : allocation.newVolume());
-		}
-		if (!changes.isEmpty()) throw new IllegalArgumentException("Phase liquid donor belongs to another cell");
-		// removeSwap changes ordinals; it leaves the surviving positions and their physical cell ownership intact.
+		for (var marker : markers) total.add(marker.volume(), marker.x(), marker.y(), marker.z());
 		return total.edit();
 	}
-
-	record InsertedMarker(float volume, float x, float y, float z) { }
 
 	/** Adds actual published marker positions to the complete existing component tuples. */
 	static PhaseLiquidGeometryEdit afterInsertion(FluidDomain domain, int cell, List<InsertedMarker> appended) {
@@ -139,21 +122,6 @@ record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponent
 		for (int marker = domain.markerGrid.cellMarkerHead[cell]; marker >= 0; marker = domain.markerGrid.particleCellNext[marker])
 			if (domain.particles.volume(marker) > 0) total.add(domain.particles, marker, domain.particles.volume(marker));
 		for (var marker : appended) total.add(marker.volume(), marker.x(), marker.y(), marker.z());
-		return total.edit();
-	}
-
-	static PhaseLiquidGeometryEdit afterCondensation(
-			PhaseChangeStageSupport.Workspace state, int cell, int target, float targetVolume, float appendedVolume, float[] appendedPosition) {
-		var total = new Moments(state, cell); boolean found = target < 0;
-		for (int marker = state.markerGrid().cellMarkerHead[cell]; marker >= 0; marker = state.markerGrid().particleCellNext[marker]) {
-			if (marker == target) found = true;
-			total.add(state.particles(), marker, marker == target ? targetVolume : state.particles().volume(marker));
-		}
-		if (!found) throw new IllegalArgumentException("Phase liquid receiver belongs to another cell");
-		if (target < 0) {
-			if (appendedPosition == null || appendedPosition.length != 3) throw new IllegalArgumentException("Missing published phase marker position");
-			total.add(appendedVolume, appendedPosition[0], appendedPosition[1], appendedPosition[2]);
-		}
 		return total.edit();
 	}
 

@@ -259,7 +259,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		int fluidDirectionZ = firstFluid ? directionZ : -directionZ;
 		PressureFaceCoupling liquidToGas = PressureFaceCoupling.oneSided(
 				densityScale,
-				pressureInterfaceTheta(fluid, fluidDirectionX, fluidDirectionY, fluidDirectionZ),
+				pressurePhaseGeometry.interfaceTheta(fluid, fluidDirectionX, fluidDirectionY, fluidDirectionZ),
 				tension.surfaceTensionPressure[fluid]);
 		return firstFluid ? liquidToGas : liquidToGas.reversed();
 	}
@@ -678,10 +678,14 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 	}
 
 	void ensureGrid() {
-		ensureInventoryGrid();
+		ensurePressureGeometry();
 		if (velocityGridDirty) particleToGridStage.rebuildVelocity();
 	}
 	void ensureInventoryGrid() { if (gridDirty) particleToGridStage.rebuildInventory(); }
+	void ensurePressureGeometry() {
+		ensureInventoryGrid();
+		if (pressureGeometryDirty) particleToGridStage.rebuildPressureGeometry();
+	}
 	long carrierMutationRevision() { return carrierMutationRevision; }
 	void bumpCarrierMutationRevision() { carrierMutationRevision++; }
 	CarrierMutationCoordinator carrierMutations() { return coordinator; }
@@ -704,6 +708,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 	}
 
 	float pressureInterfaceTheta(int fluid, int directionX, int directionY, int directionZ) {
+		ensurePressureGeometry();
 		return pressurePhaseGeometry.interfaceTheta(fluid, directionX, directionY, directionZ);
 	}
 	boolean inside(int x, int y, int z) { return x >= 0 && x < sizeX && y >= 0 && y < sizeY && z >= 0 && z < sizeZ; }

@@ -117,6 +117,7 @@ final class LiquidPressureGeometry {
 		this.microPieces=microPieces; this.interiorFaces=List.copyOf(interiorFaces); this.cellVolume=cellVolume;
 	}
 	static LiquidPressureGeometry capture(FluidDomain domain) {
+		domain.ensurePressureGeometry();
 		return capture(domain, domain.pressurePhaseGeometry);
 	}
 	static LiquidPressureGeometry capture(FluidDomain domain, FlipPressurePhaseGeometry phase) {

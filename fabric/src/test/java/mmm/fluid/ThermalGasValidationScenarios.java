@@ -1565,15 +1565,6 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		require(merged.gasBoundary().nodeCount() == 2 && merged.gasBoundary().inventory(2).isEmpty(),
 				"liquid barrier did not separate actual gas and vacuum control volumes");
 		GasInventory stock = merged.gasBoundary().inventory(1);
-		var mergeEnvelope = GasPhaseGeometryEnvelope.capture(merged.gasState.frame, merged.gasState.network,
-				merged.thermalState, 1, 2);
-		require(mergeEnvelope != null && mergeEnvelope.possibleStocks().size() == 1
-				&& mergeEnvelope.possibleStocks().getFirst().inventory().equals(stock)
-				&& mergeEnvelope.possibleStocks().getFirst().energy() == merged.thermalState.gasNodeEnergy(1, merged.gasState.network),
-				"A possible complete nonempty gas successor lost its inventory or raw energy certificate");
-		var unboundEnvelope=GasPhaseGeometryEnvelope.capture(merged.gasState.frame, merged.gasState.network, null, 1, 2);
-		require(!unboundEnvelope.hasWholeStock() && unboundEnvelope.sourceShare().signum()==0,
-				"An unbound thermal owner acquired a nonempty gas merge certificate");
 		double inheritedVolume = merged.gasBoundary().availableVolume(1) + merged.gasBoundary().availableVolume(2);
 		double oldEnergy = merged.thermalState.gasNodeEnergy(1, merged.gasState.network);
 		var source = merged.gasBoundary().externalSource(); var sink = merged.gasBoundary().escapedSink();
@@ -1980,77 +1971,6 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				require(lower<=derived && derived<=upper,"Same-inventory forward/inverse rounding escaped its temperature interval");
 			}
 		}
-		var air = new ThermalMaterialDefinition("test:thermal/merge_air", ThermalMaterialDefinition.CarrierKind.GAS,
-				BuiltinGasDefinitions.AIR, GasRegistry.STANDARD_TEMPERATURE_K, 10, .025,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(150, 600, 718)));
-		var mergeRegistry = new ThermalRegistry(List.of(liquid, vapor, air), List.of(vaporSpecies),
-				List.of(transition), BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
-		var mergeGas = new GasThermalModel(mergeRegistry, gas);
-		var optionalStocks = List.of(gas.createAmbient((1L << 54) + 3),
-				model.gasBatch(transition, 17, Map.of(BuiltinChemicalDefinitions.H2O, 17L), 0),
-				gas.createAmbient(19));
-		double[] optionalTemperatures = {200, 600, 300};
-		var possible = new java.util.ArrayList<GasPhaseMergeBounds.Stock>();
-		for (int index = 0; index < optionalStocks.size(); index++) possible.add(new GasPhaseMergeBounds.Stock(
-				optionalStocks.get(index), mergeGas.internalEnergyAtTemperature(optionalStocks.get(index), optionalTemperatures[index]), SignedDyadic.of(.5)));
-		double mandatoryEnergy = mergeGas.internalEnergyAtTemperature(speciesBatch, 373.15);
-		double mergeLower = new GasPhaseMergeBounds(mergeRegistry, mergeGas, possible).temperatureLower(speciesBatch, mandatoryEnergy);
-		require(Double.isFinite(mergeLower) && mergeLower > 0, "Optional whole-stock merge lost its finite positive temperature bound");
-		require(Double.isNaN(GasPhaseMergeBounds.partialPressureLower(1, Double.MIN_NORMAL, Double.MIN_NORMAL)),
-				"Subnormal intermediate pressure acquired a relative-rounding certificate");
-		for (int subset = 0; subset < 8; subset++) for (boolean reverse : new boolean[]{false, true}) {
-			GasInventory actual = speciesBatch; SignedDyadic actualEnergy = SignedDyadic.of(mandatoryEnergy);
-			for (int ordinal = 0; ordinal < 3; ordinal++) {
-				int index = reverse ? 2 - ordinal : ordinal;
-				if ((subset & 1 << index) == 0) continue;
-				actual = actual.merge(possible.get(index).inventory());
-				actualEnergy = actualEnergy.add(SignedDyadic.of(possible.get(index).energy()));
-			}
-			double actualU = actualEnergy.toDouble(), actualT = mergeGas.state(actual, actualU).temperatureK();
-			double partial = model.saturation(transition, 373.15, actual, mergeGas.absolutePressure(actual, 1, actualU)).componentPartialPressurePa();
-			double lower = GasPhaseMergeBounds.partialPressureLower(speciesBatch.standardVolumeNanos(), mergeLower, 1);
-			require(mergeLower <= actualT && lower > 0 && lower <= partial,
-					"Optional gas subset or sparse species quanta escaped its temperature and vapor pressure bounds");
-		}
-		var humid = gas.createAmbient(64_000_000_000L).merge(model.gasBatch(transition, 27));
-		var born = model.gasBatch(transition, 9);
-		double humidU = mergeGas.internalEnergyAtTemperature(humid, 388.45), bornU = mergeGas.internalEnergyAtTemperature(born, 293.15);
-		var paired = new GasPhaseMergeBounds(mergeRegistry, mergeGas,
-				List.of(new GasPhaseMergeBounds.Stock(humid, humidU, SignedDyadic.of(31.375))));
-		double pairedT = paired.temperatureLower(born, bornU);
-		double unpairedPressure = GasPhaseMergeBounds.partialPressureLower(born.standardVolumeNanos(), pairedT, 31.5);
-		double pairedPressure = paired.partialPressureLower(born, BuiltinGasDefinitions.WATER_VAPOR, pairedT, .125);
-		double saturationUpper = model.saturationPressureBound(transition, 245, true);
-		require(unpairedPressure < saturationUpper && saturationUpper < pairedPressure,
-				"Complete optional vapor stock lost its fixed-capacity correlation: unpaired="+unpairedPressure
-						+", saturation="+saturationUpper+", paired="+pairedPressure);
-		for (boolean include : new boolean[]{false, true}) {
-			var actual = include ? born.merge(humid) : born;
-			double actualU = include ? SignedDyadic.of(bornU).add(SignedDyadic.of(humidU)).toDouble() : bornU;
-			double actualV = include ? 31.5 : .125;
-			double actualPartial = model.saturation(transition, 245, actual,
-					mergeGas.absolutePressure(actual, actualV, actualU)).componentPartialPressurePa();
-			require(pairedPressure <= actualPartial, "Paired capacity exclusion exceeded an actual optional-stock subset pressure");
-		}
-		for (long nanos : new long[]{(1L << 53) + 1, (1L << 54) + 3, Long.MAX_VALUE / 3}) {
-			var large = new java.util.ArrayList<GasInventory>();
-			for (long count : new long[]{nanos, nanos + 2}) {
-				double mass = AirNetwork.cubicMeters(count) * BuiltinGasDefinitions.WATER_VAPOR_STANDARD_DENSITY;
-				large.add(new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.WATER_VAPOR,
-						count, mass, List.of(), mass))));
-			}
-			double sourceU = mergeGas.internalEnergyAtTemperature(large.getFirst(), 293.15);
-			double optionalU = mergeGas.internalEnergyAtTemperature(large.getLast(), 293.15);
-			var largeBounds = new GasPhaseMergeBounds(mergeRegistry, mergeGas,
-					List.of(new GasPhaseMergeBounds.Stock(large.getLast(), optionalU, SignedDyadic.of(1))));
-			double lowerT = largeBounds.temperatureLower(large.getFirst(), sourceU);
-			double pressureLower = largeBounds.partialPressureLower(large.getFirst(), BuiltinGasDefinitions.WATER_VAPOR, lowerT, 1);
-			var actual = large.getFirst().merge(large.getLast());
-			double actualU = SignedDyadic.of(sourceU).add(SignedDyadic.of(optionalU)).toDouble();
-			require(pressureLower > 0 && pressureLower <= mergeGas.absolutePressure(actual, 2, actualU)
-					&& pressureLower <= mergeGas.absolutePressure(large.getFirst(), 1, sourceU),
-					"Summed vapor integer conversion escaped its paired pressure rounding bound");
-		}
 		GasLiquidPhaseModel.Saturation equilibrium = model.saturation(
 				transition, 373.15, batch, GasRegistry.STANDARD_PRESSURE_PA);
 		require(close(equilibrium.saturationPressurePa(), GasRegistry.STANDARD_PRESSURE_PA)
@@ -2113,6 +2033,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	static void sealedInterfaceBoilingCommitsJointInventory() {
+		hotLiquidVaporizesCompletely();
+		compressedVaporCondensesCompletely();
 		phaseGasCapacityIsAtomicAndRetainsSmallerBatch();
 		massOnlyCondensationUsesExistingReceiver();
 		FluidMaterial waterCarrier = FluidMaterial.withSurfaceTension(
@@ -2150,16 +2072,6 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		dense.bindGasRegistry(BuiltinGasDefinitions.createRegistry()); dense.bootstrapGasState("");
 		dense.bindThermal(thermal,liquids,GasRegistry.STANDARD_TEMPERATURE_K);
 		dense.commitOperatorVentSealedGas(dense.planOperatorVentSealedGas()); dense.stepGasPhaseChangeOnly(0);
-		try {
-			var field=GasLiquidPhaseChangeStage.class.getDeclaredField("support"); field.setAccessible(true);
-			var support=(PhaseChangeStageSupport)field.get(dense.gasLiquidPhaseChangeStage);
-			int cell=21, node=dense.gasState.frame.commonCellNode(cell);
-			var bounds=GasBoilingBatchBounds.forBoiling(support,cell,node,0,boiling,
-					dense.thermalState.preparePhaseCandidateCell(cell,dense.thermalMarkerContext()),GasRegistry.STANDARD_TEMPERATURE_K,
-					new boolean[0],255,dense.thermalState.gasLiquidPhase(dense.gasState.network),GasPhaseGeometryEnvelope.forBoiling(support,cell,node));
-			require(bounds!=null && bounds.excluded(1,ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP),
-					"Vacuum saturation failed to certify the complete integer interval without caloric leaves");
-		} catch(ReflectiveOperationException failure) { throw new AssertionError("Phase support inspection failed",failure); }
 		var denseEnergy=dense.exactInternalEnergy(); var denseColumns=dense.particles.directArrays();
 		var denseStock=denseColumns.volume.clone(); var denseX=denseColumns.positionX.clone();
 		var denseY=denseColumns.positionY.clone(); var denseZ=denseColumns.positionZ.clone(); var denseMass=dense.particles.copyMass();
@@ -2167,7 +2079,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& dense.exactInternalEnergy().equals(denseEnergy) && Arrays.equals(denseStock,dense.particles.directArrays().volume)
 				&& Arrays.equals(denseX,dense.particles.directArrays().positionX) && Arrays.equals(denseY,dense.particles.directArrays().positionY)
 				&& Arrays.equals(denseZ,dense.particles.directArrays().positionZ) && Arrays.equals(denseMass,dense.particles.copyMass())
-				&& dense.gasBoundary().sealedInventory().isEmpty(),"Whole-interval saturation exclusion changed authoritative owners");
+				&& dense.gasBoundary().sealedInventory().isEmpty(),"A rejected saturated candidate changed authoritative owners");
 		FluidDomain isolated = new FluidDomain(4, 4, 4, config, 512);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++)
 			isolated.setSolid(x, y, z, true);
@@ -2209,10 +2121,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var emptyCandidateBeforeAudit = domain.thermalAudit();
 		var emptyCandidateBeforeRevision = domain.thermalState.thermalRevision();
 		try {
-			domain.thermalState.requirePhaseCandidateState(emptyCandidate, List.of(), 1.0E20, Math.nextDown(1.0E20));
+			domain.thermalState.trialPhaseCellEnergy(emptyCandidate, List.of(), 1.0E20, Math.nextDown(1.0E20)).temperatureK();
 			throw new AssertionError("empty candidate discarded exact energy after rounded gas transfer");
 		} catch (ThermalDomainState.EmptyPhaseCandidateEnergyException expected) { }
-		require(Double.isNaN(domain.thermalState.requirePhaseCandidateState(emptyCandidate, List.of(), 1.0, 1.0)),
+		require(Double.isNaN(domain.thermalState.trialPhaseCellEnergy(emptyCandidate, List.of(), 1.0, 1.0).temperatureK()),
 				"exactly empty candidate acquired a fictitious temperature");
 		require(domain.exactInternalEnergy().equals(emptyCandidateBeforeEnergy)
 				&& domain.thermalAudit() == emptyCandidateBeforeAudit
@@ -2267,6 +2179,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		FluidDomain referenceBoilingProjection = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		referenceBoilingProjection.pendingPhaseVolume.clear();
 		referenceBoilingProjection.step(false, 0);
+		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		domain.step(false, 0);
 		require(!domain.hasPendingPhaseVolumeWork()
 				&& domain.exactInternalEnergy().equals(referenceBoilingProjection.exactInternalEnergy())
@@ -2316,6 +2229,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		FluidDomain referenceCondensationProjection = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		referenceCondensationProjection.pendingPhaseVolume.clear();
 		referenceCondensationProjection.step(false, 0);
+		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		domain.step(false, 0);
 		require(!domain.hasPendingPhaseVolumeWork()
 				&& domain.exactInternalEnergy().equals(referenceCondensationProjection.exactInternalEnergy())
@@ -2369,6 +2283,104 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			require(Math.abs(after - before) <= rounding,
 					"zero-momentum condensation created receiver momentum on axis " + axis + ": " + before + " -> " + after);
 		}
+	}
+
+	private static void hotLiquidVaporizesCompletely() {
+		try {
+			var registries = mmm.simulation.FullCapabilityTestFixture.load();
+			var transition = registries.thermal().transitions().stream().filter(t -> {
+				var upper = registries.thermal().material(registries.thermal().materialHandle(t.upperEnergyMaterialId()));
+				return upper.carrierKind() == ThermalMaterialDefinition.CarrierKind.GAS
+						&& upper.carrierId().equals(BuiltinGasDefinitions.WATER_VAPOR);
+			}).findFirst().orElseThrow();
+			var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,200,1e-5F,.45F,.002F,0),128);
+			domain.sealDomainBoundary();
+			float volume = SolidVolume.toCellVolume(8*transition.lowerVolumeSvqPerBatch());
+			double solverMass = domain.unitScale.solverMass(transition.massMuPerBatch().multiply(8).toDouble());
+			domain.restoreMaterialParticleState(new FlipMaterialParticleState(3,3,3,.5F,1,volume,solverMass,
+					registries.liquids().materials(),new float[]{.75F,.75F,.75F,volume},new float[3],new byte[27],
+					new double[]{solverMass},new int[]{registries.liquids().handle(BuiltinFluidMaterials.WATER.id())}));
+			mmm.simulation.FullCapabilityTestFixture.bindFull(domain,registries,300,4);
+			domain.setThermalTemperatureInCell(1,1,1,1500);
+			domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
+			double mass = domain.unitScale.kilograms(domain.totalMass());
+			var energy = domain.exactInternalEnergy(); var audit = domain.thermalAudit();
+			var phase = domain.stepGasPhaseChangeOnly(8);
+			var vapor = domain.gasBoundary().sealedInventory().component(BuiltinGasDefinitions.WATER_VAPOR);
+			double gasTemperature = domain.gasNodeTemperatureK(1);
+			require(phase.operations()==8 && domain.particleCount()==0 && vapor!=null
+					&& Math.abs(vapor.mass().toDouble()-mass)<=4*Math.ulp(mass)
+					&& Double.isFinite(gasTemperature) && gasTemperature>0 && Math.abs(gasTemperature-1500)>1
+					&& domain.exactInternalEnergy().subtract(energy).equals(domain.thermalAudit().roundoffResidual().subtract(audit.roundoffResidual()))
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()) && domain.gasBoundary().auditClosed(),
+					"Hot liquid did not publish its complete vaporized mass and pair energy: "+phase+" Tgas="+gasTemperature);
+			var model = new GasLiquidPhaseModel(registries.thermal(),registries.gas());
+			var saturation = model.saturation(transition,gasTemperature,domain.gasBoundary().inventory(1),GasRegistry.STANDARD_PRESSURE_PA+domain.gasNodeGaugePressurePa(1));
+			require(saturation.direction()!=GasLiquidPhaseModel.Direction.CONDENSE,"Complete hot vaporization reversed saturation");
+			domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			domain.step(true,8);
+			require(domain.particleCount()==0 && domain.gasBoundary().auditClosed()
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"Restored complete vaporization could not finish its next full step");
+		} catch (Exception failure) { throw new AssertionError("Production-registry complete vaporization failed",failure); }
+	}
+
+	private static void compressedVaporCondensesCompletely() {
+		try {
+			var registries = mmm.simulation.FullCapabilityTestFixture.load();
+			var transition = registries.thermal().transitions().stream().filter(t -> {
+				var upper = registries.thermal().material(registries.thermal().materialHandle(t.upperEnergyMaterialId()));
+				return upper.carrierKind() == ThermalMaterialDefinition.CarrierKind.GAS
+						&& upper.carrierId().equals(BuiltinGasDefinitions.WATER_VAPOR);
+			}).findFirst().orElseThrow();
+			for (boolean retainAir : new boolean[]{false, true}) {
+				var domain = new FluidDomain(3, 3, 3,
+						new FluidSolverConfig(.5F, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 128);
+				domain.sealDomainBoundary();
+				var masks = new byte[27]; Arrays.fill(masks, (byte) 255); masks[13] = 0;
+				float volume = 1 - SolidVolume.toCellVolume(8 * transition.lowerVolumeSvqPerBatch());
+				double mass = .125 * 1000 - transition.massMuPerBatch().multiply(8).toDouble();
+				double solverMass = domain.unitScale.solverMass(mass);
+				domain.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 1, volume, solverMass,
+						registries.liquids().materials(), new float[]{.75F, .75F, .75F, volume}, new float[3], masks,
+						new double[]{solverMass}, new int[]{registries.liquids().handle(BuiltinFluidMaterials.WATER.id())}));
+				domain.bindGasRegistry(registries.gas()); domain.bootstrapGasState("");
+				domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
+				var phaseModel = new GasLiquidPhaseModel(registries.thermal(), registries.gas());
+				var batch = phaseModel.gasBatch(transition, 8);
+				var air = retainAir ? domain.gasState.network.ambientInventory(1) : GasInventory.EMPTY;
+				domain.gasState.network.commitPhaseSource(1, batch.merge(air));
+				domain.bindThermal(registries.thermal(), domain.materialRegistry, 300);
+				double gasEnergy = domain.thermalState.gasNodeEnergy(1, domain.gasState.network);
+				double storedEnergy = Math.nextUp(gasEnergy);
+				domain.thermalState.commitGasNodeEnergy(1, storedEnergy);
+				domain.thermalState.recordRoundoff(SignedDyadic.of(storedEnergy).subtract(SignedDyadic.of(gasEnergy)));
+				var physicalMass = actualPhaseMass(domain);
+				var energy = domain.exactInternalEnergy(); var audit = domain.thermalAudit();
+				var result = domain.stepGasPhaseChangeOnly(8);
+				require(result.condensedCells() == 1
+						&& Math.abs(actualPhaseMass(domain).subtract(physicalMass).toDouble()) <= 4 * Math.ulp(physicalMass.toDouble())
+						&& domain.exactInternalEnergy().subtract(energy).equals(domain.thermalAudit().roundoffResidual().subtract(audit.roundoffResidual()))
+						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()) && domain.gasBoundary().auditClosed(),
+						"Compressed vapor condensation changed total mass or energy: retainAir=" + retainAir + " result=" + result);
+				if (retainAir) {
+					require(result.operations() > 0 && result.operations() < 8 && domain.totalVolumeExact() < 1
+							&& domain.gasBoundary().availableVolume(1) > 0
+							&& air.component(BuiltinGasDefinitions.AIR).equals(domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.AIR)),
+							"Condensation did not retain positive capacity and the complete non-condensable air stock: " + result);
+					continue;
+				}
+				require(result.operations() == 8 && domain.gasBoundary().sealedInventory().isEmpty()
+						&& domain.exactGasInternalEnergy().signum() == 0 && domain.totalVolumeExact() == 1,
+						"Pure vapor did not fully condense into its liquid-filled successor: " + result);
+				domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+				domain.step(false, 0);
+				require(!domain.hasPendingPhaseVolumeWork() && domain.exactGasInternalEnergy().signum() == 0
+						&& domain.gasBoundary().sealedInventory().isEmpty() && domain.totalVolumeExact() == 1
+						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()) && domain.gasBoundary().auditClosed(),
+						"Restored complete condensation could not finish its next full mechanical step");
+			}
+		} catch (Exception failure) { throw new AssertionError("Production-registry complete condensation failed", failure); }
 	}
 
 	/**

@@ -256,19 +256,6 @@ final class ThermalCellOperations {
 				: stateFunction.stateForInventory(inventory, energy).temperatureK();
 	}
 
-	double phaseCandidateTemperature(
-			int cell, List<ThermalStateFunction.InventoryPortion> phaseInventory, ThermalCarrierContext markers
-	) {
-		if (cell < 0 || cell >= cellGrid.cellCount() || phaseInventory == null || phaseInventory.isEmpty()) {
-			throw new IllegalArgumentException("Thermal phase candidate inventory is invalid");
-		}
-		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
-		SignedDyadic cellEnergy = SignedDyadic.ZERO;
-		for (int carrier = 0; carrier < current.carrierCount(); carrier++) if (current.cell(carrier) == cell) {
-			cellEnergy = cellEnergy.add(SignedDyadic.of(current.internalEnergy(carrier)));
-		}
-		return phaseCandidateState(cell, phaseInventory, cellEnergy, markers).temperatureK();
-	}
 
 	ThermalDomainState.PhaseCandidateCell preparePhaseCandidateCell(int cell, ThermalCarrierContext markers,
 			ThermalDomainState owner, ThermalDomainState.Revision revision) {
@@ -291,77 +278,67 @@ final class ThermalCellOperations {
 			granular.addGranularPortion(unchangedSolids, key.materialHandle(), markers.depositMass(key),
 					markers.solidComposition(key.compositionHandle()));
 		}
-		return new ThermalDomainState.PhaseCandidateCell(owner, revision, cell, cellEnergy, unchangedSolids);
-	}
-
-	double requirePhaseCandidateState(
-			ThermalDomainState.PhaseCandidateCell current,
-			List<ThermalStateFunction.InventoryPortion> liquidInventory, double gasEnergyBefore, double gasEnergyAfter
-	) {
-		if (current == null || liquidInventory == null
-				|| !Double.isFinite(gasEnergyBefore) || !Double.isFinite(gasEnergyAfter)) {
-			throw new IllegalArgumentException("Thermal gas/liquid candidate is invalid");
-		}
-		ArrayList<ThermalStateFunction.InventoryPortion> finalInventory = new ArrayList<>(
-				liquidInventory.size() + current.unchangedSolids().size());
-		finalInventory.addAll(liquidInventory);
-		finalInventory.addAll(current.unchangedSolids());
-		SignedDyadic energy = current.cellEnergy().add(SignedDyadic.of(gasEnergyBefore))
-				.subtract(SignedDyadic.of(gasEnergyAfter));
-		if (finalInventory.isEmpty()) {
-			if (!energy.equals(SignedDyadic.ZERO)) {
-				throw new ThermalDomainState.EmptyPhaseCandidateEnergyException();
-			}
-			return Double.NaN;
-		}
-		return stateFunction.stateForInventory(finalInventory, energy).temperatureK();
+		return new ThermalDomainState.PhaseCandidateCell(owner, revision, cell, cellEnergy, unchangedSolids, prepareInventory(unchangedSolids).owners());
 	}
 
 	record PhaseCellAssignment(int cell, ThermalCellEnergyAssignment.Plan raw,
 			ThermalAuditLedger beforeAudit, ThermalAuditLedger afterAudit) { }
 
-	PhaseCellAssignment preparePhaseCellEnergy(ThermalDomainState.PhaseCandidateCell current,
-			List<ThermalStateFunction.InventoryPortion> liquidInventory, double gasEnergyBefore, double gasEnergyAfter) {
-		return preparePhaseCellEnergy(current, liquidInventory, gasEnergyBefore, gasEnergyAfter, false);
+	record PhaseOwner(ThermalMaterialDefinition material, double mass, double base) { }
+	private record PhaseInventory(PhaseOwner[] owners) implements ThermalCellEnergyAssignment.Inventory {
+		public int first() { return owners.length == 0 ? -1 : 0; }
+		public int next(int item) { return item + 1 < owners.length ? item + 1 : -1; }
+		public ThermalMaterialDefinition material(int item) { return owners[item].material(); }
+		public double mass(int item) { return owners[item].mass(); }
+		public double baseEnergy(int item) { return owners[item].base(); }
 	}
 
-	PhaseCellAssignment preparePhaseCellEnergy(ThermalDomainState.PhaseCandidateCell current,
-			List<ThermalStateFunction.InventoryPortion> liquidAndCoherentInventory) {
-		return preparePhaseCellEnergy(current, liquidAndCoherentInventory, 0.0, 0.0, true);
-	}
-
-	private PhaseCellAssignment preparePhaseCellEnergy(ThermalDomainState.PhaseCandidateCell current,
+	ThermalCellEnergyAssignment.Trial trialPhaseCellEnergy(ThermalDomainState.PhaseCandidateCell current,
 			List<ThermalStateFunction.InventoryPortion> prospectiveInventory,
 			double gasEnergyBefore, double gasEnergyAfter, boolean replaceCoherent) {
-		if (current == null || prospectiveInventory == null || !Double.isFinite(gasEnergyBefore) || !Double.isFinite(gasEnergyAfter))
+		if (prospectiveInventory == null || !Double.isFinite(gasEnergyBefore) || !Double.isFinite(gasEnergyAfter))
 			throw new IllegalArgumentException("Thermal phase candidate is invalid");
-		ArrayList<ThermalStateFunction.InventoryPortion> portions = new ArrayList<>(prospectiveInventory);
-		for (var solid : current.unchangedSolids()) if (!replaceCoherent
-				|| registry.material(solid.materialHandle()).carrierKind() == ThermalMaterialDefinition.CarrierKind.GRANULAR) portions.add(solid);
+		PhaseOwner[] solids = current.unchangedOwners();
+		int count = prospectiveInventory.size();
+		for (var solid : solids) if (!replaceCoherent
+				|| solid.material().carrierKind() == ThermalMaterialDefinition.CarrierKind.GRANULAR) count++;
+		PhaseOwner[] owners = new PhaseOwner[count];
+		int index = 0;
+		for (var portion : prospectiveInventory) owners[index++] = prepareOwner(portion);
+		for (var solid : solids) if (!replaceCoherent
+				|| solid.material().carrierKind() == ThermalMaterialDefinition.CarrierKind.GRANULAR) owners[index++] = solid;
 		SignedDyadic requested = current.cellEnergy().add(SignedDyadic.of(gasEnergyBefore)).subtract(SignedDyadic.of(gasEnergyAfter));
-		return prepareRawCellEnergy(current.cell(), portions, requested);
+		return trialRawCellEnergy(new PhaseInventory(owners), requested);
+	}
+
+	private PhaseOwner prepareOwner(ThermalStateFunction.InventoryPortion portion) {
+		return new PhaseOwner(registry.material(portion.materialHandle()), portion.massMu(),
+				stateFunction.baseEnergy(portion.materialHandle(), portion.massMu(), portion.speciesQuanta()));
+	}
+
+	private PhaseInventory prepareInventory(List<ThermalStateFunction.InventoryPortion> portions) {
+		PhaseOwner[] owners = new PhaseOwner[portions.size()];
+		for (int index = 0; index < owners.length; index++) owners[index] = prepareOwner(portions.get(index));
+		return new PhaseInventory(owners);
+	}
+
+	private ThermalCellEnergyAssignment.Trial trialRawCellEnergy(PhaseInventory inventory, SignedDyadic requested) {
+		if (inventory.owners().length == 0) {
+			if (!requested.equals(SignedDyadic.ZERO)) throw new ThermalDomainState.EmptyPhaseCandidateEnergyException();
+			return null;
+		}
+		return new ThermalCellEnergyAssignment.Trial(inventory, requested);
 	}
 
 	private PhaseCellAssignment prepareRawCellEnergy(int cell,
 			List<ThermalStateFunction.InventoryPortion> portions, SignedDyadic requested) {
-		if (portions.isEmpty() && !requested.equals(SignedDyadic.ZERO)) throw new ThermalDomainState.EmptyPhaseCandidateEnergyException();
-		ThermalMaterialDefinition[] materials = new ThermalMaterialDefinition[portions.size()];
-		double[] mass = new double[portions.size()], base = new double[portions.size()];
-		for (int index = 0; index < portions.size(); index++) {
-			var portion = portions.get(index);
-			materials[index] = registry.material(portion.materialHandle());
-			mass[index] = portion.massMu();
-			base[index] = stateFunction.baseEnergy(portion.materialHandle(), mass[index], portion.speciesQuanta());
-		}
-		ThermalCellEnergyAssignment.Plan raw;
-		if (portions.isEmpty()) raw = new ThermalCellEnergyAssignment.Plan(List.of(), SignedDyadic.ZERO, null);
-		else raw = ThermalCellEnergyAssignment.prepare(new ThermalCellEnergyAssignment.Inventory() {
-			public int first() { return 0; }
-			public int next(int item) { return item + 1 < portions.size() ? item + 1 : -1; }
-			public ThermalMaterialDefinition material(int item) { return materials[item]; }
-			public double mass(int item) { return mass[item]; }
-			public double baseEnergy(int item) { return base[item]; }
-		}, requested);
+		return preparePhaseCellEnergy(cell, trialRawCellEnergy(prepareInventory(portions), requested), SignedDyadic.ZERO);
+	}
+
+	PhaseCellAssignment preparePhaseCellEnergy(int cell, ThermalCellEnergyAssignment.Trial trial, SignedDyadic emptyEnergyRemainder) {
+		var raw = trial == null ? new ThermalCellEnergyAssignment.Plan(List.of(), SignedDyadic.ZERO, null)
+				: ThermalCellEnergyAssignment.prepare(trial);
+		SignedDyadic requested = trial == null ? emptyEnergyRemainder : trial.requested;
 		ThermalAuditLedger before = audit.ledger(), after;
 		try {
 			after = before.withRoundoff(raw.actualEnergy().subtract(requested));
@@ -426,25 +403,6 @@ final class ThermalCellOperations {
 		audit.update(ledger -> ledger.withRoundoff(exactEnergy(markers.markerCount()).subtract(inventoryBefore)));
 	}
 
-	void repartitionPhaseCellAndGasEnergyConserving(
-			ThermalDomainState.PhaseCandidateCell beforeCell, double gasEnergyBefore, double gasEnergyAfter,
-			ThermalCarrierContext markers, boolean carrierTopologyChanged
-	) {
-		if (beforeCell == null || !Double.isFinite(gasEnergyBefore) || !Double.isFinite(gasEnergyAfter)) {
-			throw new IllegalArgumentException("Gas/liquid thermal closure is invalid");
-		}
-		SignedDyadic beforePair = beforeCell.cellEnergy().add(SignedDyadic.of(gasEnergyBefore));
-		SignedDyadic targetCellEnergy = beforePair.subtract(SignedDyadic.of(gasEnergyAfter));
-		ThermalCellGrid.CarrierAccess current = carrierAccess(markers);
-		if (carrierTopologyChanged) {
-			cellGrid.rebuildPhaseCellWithEnergy(current, beforeCell.cell(), targetCellEnergy);
-		} else {
-			cellGrid.refreshPhaseCellWithEnergy(current, beforeCell.cell(), targetCellEnergy);
-		}
-		SignedDyadic afterPair = cellGrid.exactCarrierEnergyInCell(beforeCell.cell())
-				.add(SignedDyadic.of(gasEnergyAfter));
-		audit.update(ledger -> ledger.withRoundoff(afterPair.subtract(beforePair)));
-	}
 
 	ThermalDisplaySnapshot displaySnapshot(ThermalCarrierContext markers, AirNetwork network) {
 		cellGrid.rebuild(carrierAccess(markers));
@@ -487,29 +445,6 @@ final class ThermalCellOperations {
 		return (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, decaPascal));
 	}
 
-	private ThermalStateFunction.State phaseCandidateState(
-			int cell, List<ThermalStateFunction.InventoryPortion> phaseInventory,
-			SignedDyadic cellEnergy, ThermalCarrierContext markers
-	) {
-		ArrayList<ThermalStateFunction.InventoryPortion> finalInventory = new ArrayList<>(phaseInventory);
-		for (int active = 0; active < markers.activeParcelCount(); active++) {
-			if (markers.activeParcelCell(active) == cell) granular.addGranularPortion(finalInventory,
-					markers.activeParcelMaterial(active), markers.activeParcelMass(active),
-					markers.solidComposition(markers.activeParcelComposition(active)));
-		}
-		for (GranularEnergyColumn.DepositKey key : markers.depositKeys(cell)) {
-			granular.addGranularPortion(finalInventory, key.materialHandle(), markers.depositMass(key),
-					markers.solidComposition(key.compositionHandle()));
-		}
-		if (finalInventory.isEmpty()) {
-			double energy = cellEnergy.toDouble();
-			if (Math.abs(energy) > Math.max(1.0E-9, Math.ulp(energy) * 16.0)) {
-				throw new IllegalArgumentException("Empty phase cell retains internal energy");
-			}
-			return null;
-		}
-		return stateFunction.stateForInventory(finalInventory, cellEnergy);
-	}
 
 	private double modeledCellEnergy(int cell, double temperatureK, ThermalCarrierContext markers) {
 		double total = 0.0;

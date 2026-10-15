@@ -5,7 +5,7 @@ final class LiquidFluxGeometry {
 	private final FlipCutCellGeometry cut;
 	private final FluidDomain domain;
 	LiquidFluxGeometry(FlipCutCellGeometry cut) { this.cut = cut; domain = null; }
-	LiquidFluxGeometry(FluidDomain domain) { this.domain = domain; cut = domain.geometry.cutCells; }
+	LiquidFluxGeometry(FluidDomain domain) { domain.ensurePressureGeometry(); this.domain = domain; cut = domain.geometry.cutCells; }
 
 	FlipPressurePhaseGeometry transportPlane() { return domain == null ? null : domain.pressurePhaseGeometry; }
 

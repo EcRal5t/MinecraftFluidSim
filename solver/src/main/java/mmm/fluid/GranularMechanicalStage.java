@@ -120,7 +120,7 @@ final class GranularMechanicalStage {
 		if (!collisionPending) return;
 		var granular = access.granularState();
 		access.addBoundaryImpulse(access.granularCollision().commit(granular.parcels));
-		access.granularCoupling().rebuild(granular.parcels, granular.deposits);
+		access.granularCoupling().copyFrom(access.granularNextCoupling());
 		collisionPending = false;
 	}
 

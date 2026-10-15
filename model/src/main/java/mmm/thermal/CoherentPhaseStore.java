@@ -140,16 +140,9 @@ public final class CoherentPhaseStore {
 		return split.removed();
 	}
 
-	/** Validates and computes a proportional take without changing authoritative inventory. */
-	public Group previewTake(int cell, String phaseId, long requestedSvq, ChemicalRegistry chemistry) {
-		return previewSplit(cell, phaseId, requestedSvq, chemistry).removed();
-	}
-	/** Remaining authoritative columns of the same take; null means the whole group is removed. */
-	public Group previewRemaining(int cell, String phaseId, long requestedSvq, ChemicalRegistry chemistry) {
-		return previewSplit(cell, phaseId, requestedSvq, chemistry).remaining();
-	}
-	private record TakeSplit(Group removed, Group remaining) { }
-	private TakeSplit previewSplit(int cell, String phaseId, long requestedSvq, ChemicalRegistry chemistry) {
+	/** The removed and retained columns of one proportional take, prepared together. */
+	public record TakeSplit(Group removed, Group remaining) { }
+	public TakeSplit previewSplit(int cell, String phaseId, long requestedSvq, ChemicalRegistry chemistry) {
 		int index = find(cell, phaseId);
 		if (index < 0) throw new IllegalArgumentException("Unknown coherent phase group");
 		Group current = groups.get(index);

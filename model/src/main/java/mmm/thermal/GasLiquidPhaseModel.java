@@ -68,19 +68,6 @@ public final class GasLiquidPhaseModel {
 		return new Saturation(saturation, partial, direction);
 	}
 
-	/** Envelope for the production pressure expression at an outward-facing temperature endpoint. */
-	public double saturationPressureBound(ThermalPhaseTransition transition, double temperatureK, boolean upper) {
-		PhasePair pair = requirePair(transition);
-		pair.liquid().specificHeatAt(temperatureK);
-		double exponential = saturationExponential(pair, temperatureK);
-		// The raw exponent operations preserve temperature order. Four neighbours cover the
-		// two Math.exp one-ULP errors, including a change of exponent, before positive scaling.
-		for (int rounding = 0; rounding < 4; rounding++) exponential = upper
-				? Math.nextUp(exponential) : Math.max(0.0, Math.nextDown(exponential));
-		double pressure = GasRegistry.STANDARD_PRESSURE_PA * exponential;
-		return upper ? Math.nextUp(pressure) : Math.max(0.0, Math.nextDown(pressure));
-	}
-
 	private static double saturationExponential(PhasePair pair, double temperatureK) {
 		double exponent = -pair.latentEnthalpyPerMass() / pair.gasConstantPerMass()
 				* (1.0 / temperatureK - 1.0 / pair.referenceTemperatureK());

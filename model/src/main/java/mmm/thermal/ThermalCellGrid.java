@@ -155,53 +155,6 @@ public final class ThermalCellGrid {
 		updateObservedTemperatureRange();
 	}
 
-	/** Refreshes one edited cell when phase transfer retained every carrier ordinal and cell membership. */
-	public void refreshPhaseCellWithEnergy(CarrierAccess carrierAccess, int targetCell, double targetEnergy) {
-		refreshPhaseCellWithEnergy(carrierAccess, targetCell, SignedDyadic.of(targetEnergy));
-	}
-
-	public void refreshPhaseCellWithEnergy(CarrierAccess carrierAccess, int targetCell, SignedDyadic targetEnergy) {
-		if (carrierAccess == null || targetCell < 0 || targetCell >= cellCount
-				|| targetEnergy == null || !Double.isFinite(targetEnergy.toDouble())) {
-			throw new IllegalArgumentException("Thermal phase-cell refresh override is invalid");
-		}
-		if (carrierAccess.carrierCount() != topologyCarrierCount || carrierCount[targetCell] == 0) {
-			throw new IllegalArgumentException("Thermal phase-cell refresh changed carrier topology");
-		}
-		this.carriers = carrierAccess;
-		internalEnergy[targetCell] = 0.0;
-		conductivity[targetCell] = 0.0;
-		totalVolume[targetCell] = 0.0;
-		int refreshed = 0;
-		for (int carrier = cellHead[targetCell]; carrier >= 0; carrier = carrierNext[carrier]) {
-			if (carrierAccess.cell(carrier) != targetCell) {
-				throw new IllegalArgumentException("Thermal phase-cell refresh changed carrier membership");
-			}
-			ThermalMaterialDefinition material = carrierAccess.material(carrier);
-			double mass = carrierAccess.mass(carrier);
-			double energy = carrierAccess.internalEnergy(carrier);
-			double volume = carrierAccess.volume(carrier);
-			if (!(Double.isFinite(mass) && mass > 0.0) || !Double.isFinite(energy)
-					|| !(Double.isFinite(volume) && volume > 0.0)) {
-				throw new IllegalArgumentException("Thermal phase-cell carrier inventory is invalid");
-			}
-			carrierMaterial[carrier] = material;
-			carrierMass[carrier] = mass;
-			carrierBaseEnergy[carrier] = Double.NaN;
-			internalEnergy[targetCell] += energy;
-			totalVolume[targetCell] += volume;
-			conductivity[targetCell] += volume * material.conductivityEuPerSecondMeterK();
-			refreshed++;
-		}
-		if (refreshed != carrierCount[targetCell]) {
-			throw new IllegalArgumentException("Thermal phase-cell refresh changed carrier cardinality");
-		}
-		conductivity[targetCell] /= totalVolume[targetCell];
-		internalEnergy[targetCell] = targetEnergy.toDouble();
-		assignCellEnergy(targetCell, targetEnergy);
-		updateObservedTemperatureRange();
-	}
-
 	/** Publishes derived state for an already prevalidated phase assignment; remote LTE states are retained. */
 	void rebuildAssignedPhaseCell(CarrierAccess carrierAccess, int targetCell,
 			SignedDyadic actualEnergy, ThermalStateFunction.State actualState) {

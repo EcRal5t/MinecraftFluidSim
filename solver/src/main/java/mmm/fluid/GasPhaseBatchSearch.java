@@ -1,27 +1,64 @@
 package mmm.fluid;
 
+import java.util.HashMap;
 import java.util.function.LongFunction;
+import java.util.function.LongPredicate;
 
-/** Searches the complete integer batch set; only interval proofs can omit candidates. */
+/** Brackets actual saturation samples and selects an admissible, representable integer extent. */
 final class GasPhaseBatchSearch {
-	@FunctionalInterface
-	interface Exclusion { boolean excluded(long low, long high); }
-
 	private GasPhaseBatchSearch() { }
 
-	static <P> P maximum(long high, LongFunction<P> candidate, Exclusion exclusion) {
-		if (high <= 0L) return null;
-		if (exclusion.excluded(1L, high)) return null;
-		P last = candidate.apply(high);
-		return last != null ? last : search(1L, high - 1L, candidate, exclusion);
+	/** Positive residual retains the source phase direction; null samples are representation holes. */
+	record Sample<P>(double residual, P plan) {
+		Sample {
+			if (Double.isNaN(residual) || residual >= 0 && plan == null)
+				throw new IllegalArgumentException("A phase residual requires an actual admissible plan");
+		}
 	}
 
-	private static <P> P search(long low, long high, LongFunction<P> candidate, Exclusion exclusion) {
-		if (low > high) return null;
-		if (low == high) return candidate.apply(low);
-		if (exclusion.excluded(low, high)) return null;
-		long middle = low + ((high - low) >>> 1);
-		P upper = search(middle + 1L, high, candidate, exclusion);
-		return upper != null ? upper : search(low, middle, candidate, exclusion);
+	static <P> P equilibrium(long high, LongFunction<Sample<P>> candidate) {
+		if (high <= 0) return null;
+		// Each allowed integer extent is evaluated at most once, including representation holes.
+		long budget = high;
+		var samples = new HashMap<Long, Sample<P>>();
+		Sample<P> end = candidate.apply(high);
+		samples.put(high, end);
+		if (end != null && end.residual() >= 0) return end.plan();
+		long low = 0, upper = high;
+		P best = null;
+		while (low + 1 < upper && samples.size() < budget) {
+			long middle = low == 0 ? 1 : low + (upper - low) / 2;
+			long found = -1;
+			Sample<P> sample = null;
+			// A missing chemical/owner quantum has no residual sign. Inspect neighbours of the root query.
+			for (long distance = 0; samples.size() < budget; distance++) {
+				boolean inRange = false;
+				for (int side = 0; side < (distance == 0 ? 1 : 2); side++) {
+					long point = side == 0 ? middle + distance : middle - distance;
+					if (point <= low || point >= upper) continue;
+					inRange = true;
+					if (!samples.containsKey(point)) samples.put(point, candidate.apply(point));
+					sample = samples.get(point);
+					if (sample != null) { found = point; break; }
+					if (samples.size() >= budget) break;
+				}
+				if (found >= 0 || !inRange && middle + distance >= upper && middle - distance <= low) break;
+			}
+			if (found < 0) break;
+			if (sample.residual() >= 0) { low = found; best = sample.plan(); }
+			else upper = found;
+		}
+		return best;
+	}
+
+	/** The supplied physical necessary condition must be nonincreasing over the whole extent. */
+	static long upperBound(long high, LongPredicate possible) {
+		long low = 0;
+		while (low < high) {
+			long span = high - low, middle = low + (span >>> 1) + (span & 1);
+			if (possible.test(middle)) low = middle;
+			else high = middle - 1;
+		}
+		return low;
 	}
 }

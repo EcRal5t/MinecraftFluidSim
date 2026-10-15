@@ -459,12 +459,15 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 
 	public float pressure(int x, int y, int z) {
 		int cell = cellIndexChecked(x, y, z);
-		ensureInventoryGrid();
+		ensurePressureGeometry();
 		return pressureSystem.hasLiquidPressure(cell) ? pressureReference + projection.pressure[cell] : projection.pressure[cell];
 	}
 
 	/** Package-private test accessor for the free-surface pressure jump {@code sigma * kappa} at a cell. */
-	float surfaceTensionPressureAt(int x, int y, int z) { return tension.surfaceTensionPressure[cellIndexChecked(x, y, z)]; }
+	float surfaceTensionPressureAt(int x, int y, int z) {
+		ensurePressureGeometry();
+		return tension.surfaceTensionPressure[cellIndexChecked(x, y, z)];
+	}
 
 	public float totalVolume() { return metrics.totalVolume(); }
 

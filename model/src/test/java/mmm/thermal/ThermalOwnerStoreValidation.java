@@ -64,8 +64,8 @@ public final class ThermalOwnerStoreValidation {
 				state.preparePhaseScan(context);
 				require(Math.abs(state.phaseScanTemperatureInCell(0) - expected) <= tolerance
 						&& Math.abs(state.observeTemperatureInCell(0, context) - expected) <= tolerance
-						&& Math.abs(state.phaseCandidateTemperature(0, inventory, context) - expected) <= tolerance
-						&& Math.abs(state.requirePhaseCandidateState(state.preparePhaseCandidateCell(0, context), inventory, 0, 0) - expected) <= tolerance,
+						&& Math.abs(state.trialPhaseCellEnergy(state.preparePhaseCandidateCell(0, context), inventory).temperatureK() - expected) <= tolerance
+						&& Math.abs(state.trialPhaseCellEnergy(state.preparePhaseCandidateCell(0, context), inventory, 0, 0).temperatureK() - expected) <= tolerance,
 						"Actual cell, observation and phase candidates used different sensible energy");
 				require(state.exactEnergy(2).equals(before) && state.auditLedger().equals(audit) && state.thermalRevision().equals(revision),
 						"Read-only caloric handoff changed owner energy or audit");
@@ -190,14 +190,15 @@ public final class ThermalOwnerStoreValidation {
 		var foreign = new ThermalDomainState(registry, new int[] {0, 1}, new int[0], 300, 2, 1, 1, 1, .5F, context, null, 1);
 		state.preparePhaseScan(context); foreign.preparePhaseScan(context);
 		var stale = state.preparePhaseCandidateCell(0, context); var other = foreign.preparePhaseCandidateCell(0, context);
-		state.setTemperatureInCell(0, 301, context);
-		SignedDyadic energy = state.exactEnergy(2); var audit = state.auditLedger(); var revision = state.thermalRevision();
 		var inventory = List.of(new ThermalStateFunction.InventoryPortion(0, 1, Map.of()),
 				new ThermalStateFunction.InventoryPortion(1, 1, Map.of()));
+		var staleTrial = state.trialPhaseCellEnergy(stale, inventory);
+		var foreignTrial = foreign.trialPhaseCellEnergy(other, inventory);
+		state.setTemperatureInCell(0, 301, context);
+		SignedDyadic energy = state.exactEnergy(2); var audit = state.auditLedger(); var revision = state.thermalRevision();
 		for (var snapshot : List.of(stale, other)) for (Runnable request : new Runnable[] {
-				() -> state.planPhaseCellEnergy(snapshot, inventory),
-				() -> state.planPhaseCellEnergy(snapshot, inventory, 0, 0),
-				() -> state.requirePhaseCandidateState(snapshot, inventory, 0, 0)}) {
+				() -> state.trialPhaseCellEnergy(snapshot, inventory),
+				() -> state.trialPhaseCellEnergy(snapshot, inventory, 0, 0)}) {
 			try { request.run(); throw new AssertionError("A stale or foreign phase-cell snapshot accepted"); }
 			catch (IllegalStateException expected) {
 				require(state.exactEnergy(2).equals(energy) && state.auditLedger().equals(audit)
@@ -205,9 +206,20 @@ public final class ThermalOwnerStoreValidation {
 						"Rejected phase-cell snapshot changed its current owner energy or audit");
 			}
 		}
+		for (var trial : List.of(staleTrial, foreignTrial)) {
+			try { state.planPhaseCellEnergy(trial); throw new AssertionError("A stale or foreign thermal trial accepted"); }
+			catch (IllegalStateException expected) {
+				require(state.exactEnergy(2).equals(energy) && state.auditLedger().equals(audit)
+						&& state.thermalRevision().equals(revision), "Rejected thermal trial changed its current owners");
+			}
+		}
 		var current = state.preparePhaseCandidateCell(0, context);
-		state.requirePhaseCellEnergyCurrent(state.planPhaseCellEnergy(current, inventory));
-		state.requirePhaseCellEnergyCurrent(state.planPhaseCellEnergy(current, inventory, 0, 0));
+		for (var trial : List.of(state.trialPhaseCellEnergy(current, inventory), state.trialPhaseCellEnergy(current, inventory, 0, 0))) {
+			var plan = state.planPhaseCellEnergy(trial);
+			state.requirePhaseCellEnergyCurrent(plan);
+			require(plan.temperatureK() >= trial.temperatureLowerK() && plan.temperatureK() <= trial.temperatureUpperK(),
+					"Actual stored-owner temperature escaped its shared thermal trial envelope");
+		}
 	}
 
 	private static void finiteCellExchangeRetainsExactBaseline() {
@@ -632,7 +644,7 @@ public final class ThermalOwnerStoreValidation {
 			var source = new CoherentPhaseStore.Group(0, "test:thermal/solid", total, quanta + residual, composition, 1.0);
 			var portions = new CoherentPhaseStore(1, 1); portions.add(source);
 			long take = tinyRemoved ? 1 : total - 1;
-			var previewRemaining = portions.previewRemaining(0, source.phaseId(), take, chemistry);
+			var previewRemaining = portions.previewSplit(0, source.phaseId(), take, chemistry).remaining();
 			var piece = portions.take(0, source.phaseId(), take, chemistry);
 			require(portions.group(0).equals(previewRemaining), "Chemical remaining preview differs from committed columns");
 			var tiny = tinyRemoved ? piece : portions.group(0);
@@ -689,8 +701,8 @@ public final class ThermalOwnerStoreValidation {
 			for (long taken : new long[] {1, total - 1, total}) {
 				var store = new CoherentPhaseStore(1, 1);
 				store.add(new CoherentPhaseStore.Group(0, material.id(), total, mass, null, energy));
-				var preview = store.previewTake(0, material.id(), taken, null);
-				var expectedRemainingGroup = store.previewRemaining(0, material.id(), taken, null);
+				var split = store.previewSplit(0, material.id(), taken, null);
+				var preview = split.removed(); var expectedRemainingGroup = split.remaining();
 				var removed = store.take(0, material.id(), taken, null);
 				require(removed.equals(preview), "Coherent preview and commit split differ");
 				SignedDyadic sum = SignedDyadic.of(removed.internalEnergy());

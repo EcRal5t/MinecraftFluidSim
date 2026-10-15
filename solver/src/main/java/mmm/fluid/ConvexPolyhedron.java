@@ -25,7 +25,10 @@ final class ConvexPolyhedron {
 	}
 
 	private final double[] x = new double[MAX_VERTICES], y = new double[MAX_VERTICES], z = new double[MAX_VERTICES];
-	private final double[] distance = new double[MAX_VERTICES], angle = new double[MAX_VERTICES];
+	private final double[] distance = new double[MAX_VERTICES];
+	private final double[][] faceNormal = new double[MAX_FACES][3];
+	private final double[] faceOffsetHigh = new double[MAX_FACES], faceOffsetLow = new double[MAX_FACES];
+	private final int[] faceAxis = new int[MAX_FACES], hull = new int[2 * MAX_VERTICES];
 	private final int[][] face = new int[MAX_FACES][FACE_VERTICES];
 	private final int[] faceSize = new int[MAX_FACES], activeFaces = new int[MAX_FACES], nextFaces = new int[MAX_FACES];
 	private final int[] activeVertices = new int[MAX_VERTICES], freeVertices = new int[MAX_VERTICES], cap = new int[MAX_VERTICES];
@@ -247,6 +250,10 @@ final class ConvexPolyhedron {
 		for (int f = 0; f < 6; f++) {
 			activeFaces[f] = f; faceUsed[f] = true; faceSize[f] = 4;
 			System.arraycopy(BOX_FACES[f], 0, face[f], 0, 4);
+			Arrays.fill(faceNormal[f], 0);
+			faceNormal[f][f / 2] = f % 2 == 0 ? 1 : -1;
+			faceOffsetHigh[f] = f % 2 == 0 ? 0 : -1; faceOffsetLow[f] = 0;
+			faceAxis[f] = f / 2;
 		}
 	}
 
@@ -290,8 +297,12 @@ final class ConvexPolyhedron {
 	}
 
 	private double signedDistance(int v, double nx, double ny, double nz, double high, double low) {
-		double a = nx * x[v], b = ny * y[v], c = nz * z[v], s = a + b, t = s + c, u = t - high;
-		return u + (Math.fma(nx, x[v], -a) + Math.fma(ny, y[v], -b) + Math.fma(nz, z[v], -c)
+		return planeDistance(x[v], y[v], z[v], nx, ny, nz, high, low);
+	}
+
+	private static double planeDistance(double px, double py, double pz, double nx, double ny, double nz, double high, double low) {
+		double a = nx * px, b = ny * py, c = nz * pz, s = a + b, t = s + c, u = t - high;
+		return u + (Math.fma(nx, px, -a) + Math.fma(ny, py, -b) + Math.fma(nz, pz, -c)
 				+ sumError(a, b, s) + sumError(s, c, t) + sumError(t, -high, u) - low);
 	}
 
@@ -324,12 +335,17 @@ final class ConvexPolyhedron {
 			}
 			if (output > 1 && scratch[0] == scratch[output - 1]) output--;
 			if (output >= 3) {
-				faceSize[f] = output;
 				System.arraycopy(scratch, 0, face[f], 0, output);
-				nextFaces[nextCount++] = f;
+				faceSize[f] = projectedHull(face[f], output, faceAxis[f], faceNormal[f][faceAxis[f]]);
+				if (faceSize[f] >= 3) nextFaces[nextCount++] = f;
+				else faceUsed[f] = false;
 			} else faceUsed[f] = false;
 		}
-		if (capCount >= 3) nextFaces[nextCount++] = closeCap(nx, ny, nz);
+		if (capCount >= 3) {
+			int capFace = closeCap(nx, ny, nz, high, low);
+			if (faceSize[capFace] >= 3) nextFaces[nextCount++] = capFace;
+			else faceUsed[capFace] = false;
+		}
 		faceCount = nextCount;
 		System.arraycopy(nextFaces, 0, activeFaces, 0, faceCount);
 	}
@@ -357,35 +373,60 @@ final class ConvexPolyhedron {
 		return v;
 	}
 
-	private int closeCap(double nx, double ny, double nz) {
-		double cx = 0, cy = 0, cz = 0;
-		for (int i = 0; i < capCount; i++) { cx += x[cap[i]]; cy += y[cap[i]]; cz += z[cap[i]]; }
-		cx /= capCount; cy /= capCount; cz /= capCount;
+	private int closeCap(double nx, double ny, double nz, double high, double low) {
 		int axis = Math.abs(nx) >= Math.abs(ny) && Math.abs(nx) >= Math.abs(nz) ? 0 : Math.abs(ny) >= Math.abs(nz) ? 1 : 2;
-		for (int i = 0; i < capCount; i++) {
-			int v = cap[i];
-			angle[i] = axis == 0 ? Math.atan2(z[v] - cz, y[v] - cy)
-					: axis == 1 ? Math.atan2(x[v] - cx, z[v] - cz) : Math.atan2(y[v] - cy, x[v] - cx);
-		}
-		for (int i = 1; i < capCount; i++) {
-			double value = angle[i]; int v = cap[i], j = i;
-			while (j > 0 && angle[j - 1] > value) { angle[j] = angle[j - 1]; cap[j] = cap[j - 1]; j--; }
-			angle[j] = value; cap[j] = v;
-		}
-		double ox = 0, oy = 0, oz = 0;
-		for (int i = 0; i < capCount; i++) {
-			int a = cap[i], b = cap[(i + 1) % capCount];
-			ox += (y[a] - cy) * (z[b] - cz) - (z[a] - cz) * (y[b] - cy);
-			oy += (z[a] - cz) * (x[b] - cx) - (x[a] - cx) * (z[b] - cz);
-			oz += (x[a] - cx) * (y[b] - cy) - (y[a] - cy) * (x[b] - cx);
-		}
 		int f = 0;
 		while (f < MAX_FACES && faceUsed[f]) f++;
 		if (f == MAX_FACES) throw new IllegalStateException("Clipped face workspace exhausted");
-		faceUsed[f] = true; faceSize[f] = capCount;
-		boolean reverse = ox * nx + oy * ny + oz * nz > 0;
-		for (int i = 0; i < capCount; i++) face[f][i] = cap[reverse ? capCount - 1 - i : i];
+		faceUsed[f] = true; faceAxis[f] = axis;
+		faceNormal[f][0] = nx; faceNormal[f][1] = ny; faceNormal[f][2] = nz;
+		faceOffsetHigh[f] = high; faceOffsetLow[f] = low;
+		faceSize[f] = projectedHull(cap, capCount, axis, faceNormal[f][axis]);
+		System.arraycopy(cap, 0, face[f], 0, faceSize[f]);
 		return f;
+	}
+
+	/** A face is the convex polygon in its supporting plane's two independent coordinates. */
+	private int projectedHull(int[] vertices, int length, int axis, double inwardNormal) {
+		int first = (axis + 1) % 3, second = (axis + 2) % 3;
+		for (int index = 1; index < length; index++) {
+			int v = vertices[index], place = index;
+			while (place > 0 && compareProjected(vertices[place - 1], v, first, second) > 0) {
+				vertices[place] = vertices[place - 1]; place--;
+			}
+			vertices[place] = v;
+		}
+		int unique = 0;
+		for (int index = 0; index < length; index++)
+			if (unique == 0 || compareProjected(vertices[unique - 1], vertices[index], first, second) != 0)
+				vertices[unique++] = vertices[index];
+		if (unique < 3) return unique;
+		int size = 0;
+		for (int index = 0; index < unique; index++) {
+			while (size >= 2 && projectedArea(hull[size - 2], hull[size - 1], vertices[index], axis) <= 0) size--;
+			hull[size++] = vertices[index];
+		}
+		int lowerSize = size;
+		for (int index = unique - 2; index >= 0; index--) {
+			while (size > lowerSize && projectedArea(hull[size - 2], hull[size - 1], vertices[index], axis) <= 0) size--;
+			hull[size++] = vertices[index];
+		}
+		size--;
+		for (int index = 0; index < size; index++) vertices[index] = hull[inwardNormal > 0 ? size - 1 - index : index];
+		return size;
+	}
+
+	private int compareProjected(int a, int b, int first, int second) {
+		int comparison = Double.compare(coordinate(a, first), coordinate(b, first));
+		return comparison != 0 ? comparison : Double.compare(coordinate(a, second), coordinate(b, second));
+	}
+	private double coordinate(int vertex, int axis) { return axis == 0 ? x[vertex] : axis == 1 ? y[vertex] : z[vertex]; }
+	private double projectedArea(int a, int b, int c, int axis) {
+		int first = (axis + 1) % 3, second = (axis + 2) % 3;
+		double ab = coordinate(b, first) - coordinate(a, first), ac = coordinate(c, second) - coordinate(a, second);
+		double ba = coordinate(b, second) - coordinate(a, second), ca = coordinate(c, first) - coordinate(a, first);
+		double product = ba * ca;
+		return Math.fma(ab, ac, -product) - Math.fma(ba, ca, -product);
 	}
 
 	void integrate(int order, Moments result) {
@@ -398,16 +439,22 @@ final class ConvexPolyhedron {
 		cx /= vertexCount; cy /= vertexCount; cz /= vertexCount;
 		captureFrame(result, cx, cy, cz);
 		for (int i = 0; i < faceCount; i++) {
-			int f = activeFaces[i];
+			int f = activeFaces[i], axis = faceAxis[f], first = (axis + 1) % 3, second = (axis + 2) % 3;
+			var normal = faceNormal[f];
+			double height = planeDistance(cx, cy, cz, normal[0], normal[1], normal[2], faceOffsetHigh[f], faceOffsetLow[f]);
 			for (int k = 1; k + 1 < faceSize[f]; k++) {
 				triangle[0] = face[f][0]; triangle[1] = face[f][k]; triangle[2] = face[f][k + 1];
-				for (int p = 0; p < 3; p++) {
-					int v = triangle[p];
-					tetra[p + 1][0] = x[v] - cx; tetra[p + 1][1] = y[v] - cy; tetra[p + 1][2] = z[v] - cz;
-				}
-				double volume = determinant(tetra[1], tetra[2], tetra[3]) * jacobian / 6;
+				double volume = projectedArea(triangle[0], triangle[1], triangle[2], axis) * (-height / normal[axis]) * jacobian / 6;
 				if (volume < 0) throw new IllegalStateException("Inward convex face");
-				if (volume > 0) addTetraMoments(result.raw, volume, order);
+				if (volume == 0) continue;
+				if (order > 0) for (int p = 0; p < 3; p++) {
+					int v = triangle[p];
+					tetra[p + 1][first] = coordinate(v, first) - (first == 0 ? cx : first == 1 ? cy : cz);
+					tetra[p + 1][second] = coordinate(v, second) - (second == 0 ? cx : second == 1 ? cy : cz);
+					tetra[p + 1][axis] = (-height - normal[first] * tetra[p + 1][first]
+							- normal[second] * tetra[p + 1][second]) / normal[axis];
+				}
+				addTetraMoments(result.raw, volume, order);
 			}
 		}
 	}
@@ -475,9 +522,7 @@ final class ConvexPolyhedron {
 				shift >= 0 ? denominator.significand() : denominator.significand().shiftLeft(-shift));
 	}
 	private static double sumError(double a, double b, double sum) { double q = sum - a; return a - (sum - q) + (b - q); }
-	private static double determinant(double[] a, double[] b, double[] c) {
-		return a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2]) + a[2] * (b[0] * c[1] - b[1] * c[0]);
-	}
+
 	private static int powerCode(int[] powers) { return 16 * powers[0] + 4 * powers[1] + powers[2]; }
 	private static int momentCount(int order) { return order <= 1 ? 4 : order == 2 ? 10 : 20; }
 }

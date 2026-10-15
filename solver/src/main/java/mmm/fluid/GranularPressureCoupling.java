@@ -14,6 +14,11 @@ final class GranularPressureCoupling {
 	private float[] gasDiagonal;
 	private static final int SUPPORT = SweptGranularVolumeGradient.MAX_SUPPORT;
 	private final SweptGranularVolumeGradient gradient;
+	private GranularParcelStore supportSource;
+	private long supportRevision;
+	private float supportDt;
+	private int[] supportCounts = new int[0], supportCells = new int[0];
+	private double[] supportX = new double[0], supportY = new double[0], supportZ = new double[0];
 
 
 	GranularPressureCoupling(FluidDomain domain) {
@@ -23,21 +28,41 @@ final class GranularPressureCoupling {
 	}
 
 	void forEachGasNode(float dt, java.util.function.IntConsumer accept) {
-		if (domain.granularState == null) return;
-		for (int parcel = 0; parcel < domain.granularState.parcels.count(); parcel++) {
-			int entries = gradient.build(domain.granularState.parcels.parcel(parcel), dt);
-			for (int slot = 0; slot < entries; slot++) {
-				int cell = gradient.cells[slot];
+		prepareSupport(dt);
+		for (int parcel = 0; parcel < count; parcel++) {
+			for (int slot = 0; slot < supportCounts[parcel]; slot++) {
+				int cell = supportCells[parcel * SUPPORT + slot];
 				int node = PressureBoundaryView.wholeCellGasNode(domain, cell);
 				if (domain.isAir(cell) && node >= 0) accept.accept(node);
 			}
 		}
 	}
 
+	/** The swept gradient depends only on the predictor parcels and the substep duration. */
+	private void prepareSupport(float dt) {
+		GranularParcelStore source = domain.granularState == null ? null : domain.granularState.parcels;
+		count = source == null ? 0 : source.count();
+		if (source == null) { supportSource = null; return; }
+		long revision = source.mutationRevision();
+		if (supportSource == source && supportRevision == revision && supportDt == dt) return;
+		supportSource = null;
+		ensureCapacity(count);
+		for (int parcel = 0; parcel < count; parcel++) {
+			int entries = gradient.build(source.parcel(parcel), dt), base = parcel * SUPPORT;
+			supportCounts[parcel] = entries;
+			System.arraycopy(gradient.cells, 0, supportCells, base, entries);
+			System.arraycopy(gradient.x, 0, supportX, base, entries);
+			System.arraycopy(gradient.y, 0, supportY, base, entries);
+			System.arraycopy(gradient.z, 0, supportZ, base, entries);
+		}
+		supportRevision = revision;
+		supportDt = dt;
+		supportSource = source;
+	}
+
 	/** Geometry and pressure row identities stay fixed throughout PCG. Negative rows encode gas nodes. */
 	void prepare(float dt) {
-		count = domain.granularState == null ? 0 : domain.granularState.parcels.count();
-		ensureCapacity(count);
+		prepareSupport(dt);
 		int gasNodes = domain.gasState.network.nodeCount();
 		domain.projection.ensureGasCapacity(gasNodes);
 		if (gasDiagonal.length <= gasNodes) gasDiagonal = new float[gasNodes + 1];
@@ -46,14 +71,14 @@ final class GranularPressureCoupling {
 			var p = domain.granularState.parcels.parcel(parcel);
 			inverseMass[parcel] = cellVolume / p.mass();
 			boundaryX[parcel] = boundaryY[parcel] = boundaryZ[parcel] = 0;
-			int entries = gradient.build(p, dt);
+			int entries = supportCounts[parcel];
 			int base = parcel * SUPPORT;
 			for (int slot = 0; slot < SUPPORT; slot++) {
 				int index = base + slot;
 				rows[index] = Integer.MAX_VALUE;
 				gx[index] = gy[index] = gz[index] = 0;
 				if (slot >= entries) continue;
-				int cell = gradient.cells[slot];
+				int cell = supportCells[index];
 				int node = PressureBoundaryView.wholeCellGasNode(domain, cell);
 				if (!domain.isAir(cell)) node = -1;
 				int row = domain.isFluid(cell) && cell != domain.pressureAnchor ? cell
@@ -61,15 +86,15 @@ final class GranularPressureCoupling {
 				if (row == Integer.MAX_VALUE) {
 					double pressure = node >= 0
 							? domain.gasBoundary.nodeGaugePressurePa(node) - domain.pressureReference : 0;
-					boundaryX[parcel] += gradient.x[slot] * pressure;
-					boundaryY[parcel] += gradient.y[slot] * pressure;
-					boundaryZ[parcel] += gradient.z[slot] * pressure;
+					boundaryX[parcel] += supportX[index] * pressure;
+					boundaryY[parcel] += supportY[index] * pressure;
+					boundaryZ[parcel] += supportZ[index] * pressure;
 				} else {
 					// Several support cells may belong to the same lumped gas pressure.
 					int target = index;
 					for (int prior = base; prior < index; prior++) if (rows[prior] == row) { target = prior; break; }
 					rows[target] = row;
-					gx[target] += gradient.x[slot]; gy[target] += gradient.y[slot]; gz[target] += gradient.z[slot];
+					gx[target] += supportX[index]; gy[target] += supportY[index]; gz[target] += supportZ[index];
 				}
 			}
 			double scale = dt * inverseMass[parcel];
@@ -212,5 +237,8 @@ final class GranularPressureCoupling {
 		gy = new double[requested * SUPPORT]; gz = new double[requested * SUPPORT];
 		inverseMass = new double[requested]; boundaryX = new double[requested];
 		boundaryY = new double[requested]; boundaryZ = new double[requested];
+		supportCounts = new int[requested]; supportCells = new int[requested * SUPPORT];
+		supportX = new double[requested * SUPPORT]; supportY = new double[requested * SUPPORT];
+		supportZ = new double[requested * SUPPORT];
 	}
 }

@@ -2,7 +2,6 @@ package mmm.fluid;
 
 import mmm.chemistry.ChemicalParcelStore;
 import mmm.fluid.air.AirNetwork;
-import mmm.granular.GranularCarrier;
 import mmm.granular.GranularCouplingFields;
 import mmm.granular.GranularDepositDynamics;
 import mmm.granular.GranularInventory;
@@ -239,42 +238,13 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 
 	void rebuildGridFromParticles() { particleToGridStage.rebuild(); }
 
-	/** Rebuilds only the derived carrier geometry consumed by an in-progress gas phase scan. */
-	void rebuildGasPhaseGeometryFromParticles() {
-		Arrays.fill(volume, 0.0F);
-		Arrays.fill(markerGrid.markerCount, 0);
-		Arrays.fill(markerGrid.cellMarkerHead, -1);
-		Arrays.fill(markerGrid.cellMarkerTail, -1);
-		Arrays.fill(markerGrid.exactCellMarkerVolume, 0.0);
-		for (int marker = 0; marker < particles.count(); marker++) {
-			int cell = particleCellIndex(marker);
-			int previous = markerGrid.cellMarkerTail[cell];
-			markerGrid.particleCellPrevious[marker] = previous;
-			markerGrid.particleCellNext[marker] = -1;
-			if (previous < 0) markerGrid.cellMarkerHead[cell] = marker;
-			else markerGrid.particleCellNext[previous] = marker;
-			markerGrid.cellMarkerTail[cell] = marker;
-			markerGrid.markerCount[cell]++;
-			markerGrid.exactCellMarkerVolume[cell] += particles.volume(marker);
-			if (!CellLiquidVolumeTransport.enabled())
-				splatCenter(particles.positionX(marker), particles.positionY(marker), particles.positionZ(marker), particles.volume(marker));
-		}
-		if (CellLiquidVolumeTransport.enabled()) {
-			markerGrid.exactCellVolumeInventory = ExactCellVolumeSums.sum(particles.directArrays().volume,
-					particles.count(), markerGrid.cellMarkerHead, markerGrid.particleCellNext);
-			for (int cell = 0; cell < cellCount; cell++) {
-				markerGrid.exactCellMarkerVolume[cell] = markerGrid.exactCellVolumeInventory[cell].toDouble();
-				volume[cell] = (float) markerGrid.exactCellMarkerVolume[cell];
-			}
-		}
-	}
 
 	void refreshGasPhaseGeometry() {
 		// A surviving marker ordinal does not prove stable gas membership: condensation can fill a
 		// retained partial-cell cavity, and either direction can cross the gas-centred interface
 		// threshold. Rebuild from carrier truth before jointly remapping gas inventory and U so the
 		// next checkpoint can be reconstructed from its persisted markers alone.
-		rebuildGasPhaseGeometryFromParticles();
+		ensureInventoryGrid();
 		gasTopologyCoordinator.refreshDeferringPhaseVolumeWork();
 	}
 
@@ -287,7 +257,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		}
 		ThermalAxisStats result = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
 		gridDirty = true;
-		rebuildGridFromParticles();
+		ensureInventoryGrid();
 		return result;
 	}
 

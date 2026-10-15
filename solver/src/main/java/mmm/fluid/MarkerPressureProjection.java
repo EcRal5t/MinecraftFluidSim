@@ -46,7 +46,7 @@ final class MarkerPressureProjection {
 	private ThermalDomainState.Revision thermalRevision;
 	private int pressureAnchor;
 	private float pressureReference;
-	private boolean gridDirty, velocityGridDirty;
+	private boolean gridDirty, pressureGeometryDirty, velocityGridDirty;
 	private float dt;
 	private boolean active, solved, published, hasFreeSurface;
 
@@ -75,6 +75,7 @@ final class MarkerPressureProjection {
 	}
 
 	boolean prepare(float dt) {
+		domain.ensurePressureGeometry();
 		if (!(Float.isFinite(dt) && dt > 0)) throw new IllegalArgumentException("Invalid marker pressure timestep");
 		active = solved = published = hasFreeSurface = false; this.dt = dt;
 		pressureOrigin = pressureCorrection = pressureCorrectionLow = null;
@@ -113,7 +114,7 @@ final class MarkerPressureProjection {
 		pressurePhaseRevision = domain.pressurePhaseGeometry.revision();
 		thermalOwner = domain.thermalState; thermalRevision = thermalOwner == null ? null : thermalOwner.thermalRevision();
 		pressureAnchor = domain.pressureAnchor; pressureReference = domain.pressureReference;
-		gridDirty = domain.gridDirty; velocityGridDirty = domain.velocityGridDirty; geometryMasks = domain.geometry.cutCells.copyMicroMasks();
+		gridDirty = domain.gridDirty; pressureGeometryDirty = domain.pressureGeometryDirty; velocityGridDirty = domain.velocityGridDirty; geometryMasks = domain.geometry.cutCells.copyMicroMasks();
 		float[][] current = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
 		float[][] previous = {domain.mac.p2gVelocityX, domain.mac.p2gVelocityY, domain.mac.p2gVelocityZ};
 		originalMacVelocity = copy(current); originalP2gVelocity = copy(previous);
@@ -499,7 +500,7 @@ final class MarkerPressureProjection {
 		if (carrierRevision != domain.carrierMutationRevision || gasNetworkOwner != domain.gasState.network
 				|| gasFrame != domain.gasBoundary.frame() || gasRevision != domain.gasState.network.revision()
 				|| thermalOwner != domain.thermalState || thermalOwner != null && !thermalRevision.equals(thermalOwner.thermalRevision())
-				|| gridDirty != domain.gridDirty || velocityGridDirty != domain.velocityGridDirty
+				|| gridDirty != domain.gridDirty || pressureGeometryDirty != domain.pressureGeometryDirty || velocityGridDirty != domain.velocityGridDirty
 				|| pressureAnchor != domain.pressureAnchor || pressureReference != domain.pressureReference
 				|| basis.markerCount() != domain.particles.count()
 				|| !Arrays.equals(geometryMasks, domain.geometry.cutCells.copyMicroMasks())) throw new IllegalStateException("Stale marker pressure candidate");

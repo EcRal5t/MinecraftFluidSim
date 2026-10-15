@@ -634,7 +634,7 @@ public final class CellRemapMomentsValidation {
 			source.add(p); float y = .25F + .5F * (p >> 1 & 1);
 			domain.particles.setPositionY(p, y); domain.particles.setVelocityY(p, y - .5F);
 		}
-		domain.ensureInventoryGrid();
+		domain.ensurePressureGeometry();
 		flux.faceSweep(new ConservativeLiquidFlux.FaceSweep() {
 			@Override public void sweptMoments(int face, int donor, int receiver, int axis, boolean positive, double dt,
 					int donorSupport, int receiverSupport, double[] result) { System.arraycopy(moments, 0, result, 0, 4); }
@@ -910,7 +910,7 @@ public final class CellRemapMomentsValidation {
 				domain.particles.setVelocityY(p, axis == 1 ? normal : 0);
 				domain.particles.setVelocityZ(p, axis == 2 ? normal : 0);
 			}
-			domain.gridDirty = true; domain.ensureInventoryGrid(); int cell = domain.cellIndex(1, 1, 1);
+			domain.gridDirty = true; domain.ensurePressureGeometry(); int cell = domain.cellIndex(1, 1, 1);
 			var flux = new ConservativeLiquidFlux(3, 3, 3); flux.geometry(new LiquidFluxGeometry(domain)); int face = -1;
 			for (int f = 0; f < flux.physicalFaceCount; f++) if (flux.axis[f] == axis && (sign > 0 ? flux.left[f] : flux.right[f]) == cell) {
 				face = f; flux.velocity[f] = sign * .5; break;

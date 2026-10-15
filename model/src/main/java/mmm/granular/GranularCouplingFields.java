@@ -84,6 +84,17 @@ public final class GranularCouplingFields {
 		return expected != null && expected.length == cellCount && Arrays.equals(solidSvq, expected);
 	}
 	public long totalSolidSvq() { return totalSolidSvq; }
+	/** Publishes a prepared occupancy from the same domain without redistributing parcels. */
+	public void copyFrom(GranularCouplingFields prepared) {
+		if (prepared == null || !kernel.sameGeometry(prepared.kernel)) {
+			throw new IllegalArgumentException("Granular coupling inventory dimensions differ");
+		}
+		System.arraycopy(prepared.solidSvq, 0, solidSvq, 0, cellCount);
+		System.arraycopy(prepared.fixedCellSvq, 0, fixedCellSvq, 0, cellCount);
+		totalSolidSvq = prepared.totalSolidSvq;
+		fixedSolidSvq = prepared.fixedSolidSvq;
+		fixedOnly = prepared.fixedOnly;
+	}
 	public void clear() {
 		rebuildFixed();
 	}

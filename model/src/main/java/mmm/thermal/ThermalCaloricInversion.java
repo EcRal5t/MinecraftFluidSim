@@ -4,6 +4,10 @@ import mmm.chemistry.ExactRational;
 import mmm.chemistry.ChemicalLimits;
 import mmm.units.SignedDyadic;
 
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.TreeMap;
+
 /** Exact piecewise caloric coordinates shared by real owners and derived common-temperature inventories. */
 final class ThermalCaloricInversion {
 	interface Inventory {
@@ -25,8 +29,6 @@ final class ThermalCaloricInversion {
 		return single(material, mass, SignedDyadic.of(energy).subtract(SignedDyadic.of(base)));
 	}
 	static ThermalStateFunction.State single(ThermalMaterialDefinition material, double mass, SignedDyadic sensible) {
-		var fast = singleFast(material, mass, sensible);
-		if (fast != null) return fast;
 		return solve(new Single(material, mass), sensible);
 	}
 	static ThermalStateFunction.State single(ThermalMaterialDefinition material, SignedDyadic mass, SignedDyadic sensible) {
@@ -71,80 +73,122 @@ final class ThermalCaloricInversion {
 	}
 
 	static ThermalStateFunction.State solve(Inventory inventory, SignedDyadic target) {
-		int first = inventory.first();
-		if (inventory.next(first) < 0 && inventory.exactMass(first).equals(SignedDyadic.of(inventory.mass(first)))) {
-			var fast = singleFast(inventory.material(first), inventory.mass(first), target);
-			if (fast != null) return fast;
-		}
-		double cursor = inventory.material(first).referenceTemperatureK();
-		SignedDyadic cursorEnergy = SignedDyadic.ZERO;
-		if (inventory.next(first) >= 0) for (int item = first; item >= 0; item = inventory.next(item)) {
-			var material = inventory.material(item);
-			cursorEnergy = cursorEnergy.add(ThermalContactExchange.exactEnergyChangeBetween(material, inventory.exactMass(item),
-					material.referenceTemperatureK(), cursor));
-		}
-		int direction = target.compareTo(cursorEnergy);
-		if (direction == 0) return state(inventory, cursor);
-		while (true) {
-			double next = direction > 0 ? Double.POSITIVE_INFINITY : ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
-			for (int item = first; item >= 0; item = inventory.next(item))
-				for (var segment : inventory.material(item).caloricSegments()) {
-					double endpoint = segment.maximumTemperatureK();
-					if (direction > 0 ? endpoint > cursor && endpoint < next : endpoint < cursor && endpoint > next)
-						next = endpoint;
+		return new Curve(inventory).solve(target);
+	}
+
+	/** One common piecewise-affine caloric curve; equal materials share their exact mass. */
+	static final class Curve {
+		private final ThermalMaterialDefinition[] materials;
+		private final SignedDyadic[] masses;
+		private final double[] knots;
+		private final SignedDyadic[] energies, capacities;
+		private final SignedDyadic coldCapacity, minimumCapacity;
+
+		Curve(Inventory inventory) {
+			var positions = new IdentityHashMap<ThermalMaterialDefinition, Integer>();
+			var groupedMaterials = new ArrayList<ThermalMaterialDefinition>();
+			var groupedMass = new ArrayList<SignedDyadic>();
+			for (int item = inventory.first(); item >= 0; item = inventory.next(item)) {
+				var material = inventory.material(item);
+				SignedDyadic mass = inventory.exactMass(item);
+				if (material == null || mass == null || mass.signum() <= 0
+						|| !(Double.isFinite(inventory.mass(item)) && inventory.mass(item) > 0))
+					throw new IllegalArgumentException("Thermal caloric inventory is invalid");
+				Integer index = positions.get(material);
+				if (index == null) {
+					positions.put(material, groupedMaterials.size());
+					groupedMaterials.add(material); groupedMass.add(mass);
+				} else groupedMass.set(index, groupedMass.get(index).add(mass));
+			}
+			if (groupedMaterials.isEmpty()) throw new IllegalArgumentException("Thermal caloric inventory is empty");
+			materials = groupedMaterials.toArray(ThermalMaterialDefinition[]::new);
+			masses = groupedMass.toArray(SignedDyadic[]::new);
+			var changes = new TreeMap<Double, SignedDyadic>();
+			SignedDyadic capacity = SignedDyadic.ZERO;
+			for (int group = 0; group < materials.length; group++) {
+				var material = materials[group]; var segments = material.caloricSegments();
+				capacity = capacity.add(masses[group].multiply(SignedDyadic.of(segments.getFirst().specificHeatEuPerMuK())));
+				for (int segment = 1; segment < segments.size(); segment++) {
+					SignedDyadic change = SignedDyadic.of(segments.get(segment).specificHeatEuPerMuK())
+							.subtract(SignedDyadic.of(segments.get(segment - 1).specificHeatEuPerMuK())).multiply(masses[group]);
+					changes.merge(segments.get(segment).minimumTemperatureK(), change, SignedDyadic::add);
 				}
-			double probe = next == Double.POSITIVE_INFINITY ? cursor : Math.min(cursor, next) + Math.abs(next - cursor) * .5;
-			SignedDyadic capacity = capacity(inventory, probe);
-			if (next == Double.POSITIVE_INFINITY) return state(inventory, divide(SignedDyadic.of(cursor).multiply(capacity)
-					.add(target.subtract(cursorEnergy)), capacity));
-			// The initial anchor uses each original reference. Exact accumulation then follows
-			// the same affine segments without rounding away energy at a neighbouring knot.
-			SignedDyadic nextEnergy = cursorEnergy.add(SignedDyadic.of(next).subtract(SignedDyadic.of(cursor)).multiply(capacity));
-			int comparison = target.compareTo(nextEnergy);
-			if (direction > 0 ? comparison <= 0 : comparison >= 0) {
-				double low = Math.min(cursor, next), high = Math.max(cursor, next);
-				SignedDyadic lower = target.subtract(direction > 0 ? cursorEnergy : nextEnergy);
-				SignedDyadic upper = (direction > 0 ? nextEnergy : cursorEnergy).subtract(target);
-				double temperature = lower.compareTo(upper) <= 0 ? divide(SignedDyadic.of(low).multiply(capacity).add(lower), capacity)
-						: divide(SignedDyadic.of(high).multiply(capacity).subtract(upper), capacity);
-				return state(inventory, Math.max(low, Math.min(high, temperature)));
 			}
-			if (next == ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K) {
-				double minimumEnergy = nextEnergy.toDouble();
-				if (Double.isFinite(minimumEnergy) && target.compareTo(nextEnergy.subtract(SignedDyadic.of(16 * Math.ulp(minimumEnergy)))) >= 0)
-					return state(inventory, next);
-				throw new ThermalStateFunction.EnergyOutsideValidityException();
+			changes.values().removeIf(value -> value.signum() == 0);
+			// A real reference anchors the common curve, keeping ordinary constant-cv
+			// arithmetic compact even though endpoint extensions reach MIN_NORMAL.
+			changes.putIfAbsent(materials[0].referenceTemperatureK(), SignedDyadic.ZERO);
+			knots = new double[changes.size()]; energies = new SignedDyadic[knots.length]; capacities = new SignedDyadic[knots.length];
+			coldCapacity = capacity;
+			SignedDyadic minimum = capacity, energy = SignedDyadic.ZERO;
+			double firstKnot = changes.firstKey();
+			for (int group = 0; group < materials.length; group++) energy = energy.add(
+					ThermalContactExchange.exactEnergyChangeBetween(materials[group], masses[group],
+							materials[group].referenceTemperatureK(), firstKnot));
+			int index = 0;
+			for (var change : changes.entrySet()) {
+				knots[index] = change.getKey();
+				if (index > 0) energy = energy.add(SignedDyadic.of(knots[index]).subtract(SignedDyadic.of(knots[index - 1])).multiply(capacity));
+				capacity = capacity.add(change.getValue());
+				energies[index] = energy; capacities[index] = capacity;
+				if (capacity.compareTo(minimum) < 0) minimum = capacity;
+				index++;
 			}
-			cursor = next; cursorEnergy = nextEnergy;
+			minimumCapacity = minimum;
+		}
+
+		ThermalStateFunction.State solve(SignedDyadic target) {
+			int low = 0, high = knots.length;
+			while (low + 1 < high) {
+				int middle = (low + high) >>> 1;
+				if (target.compareTo(energies[middle]) >= 0) low = middle; else high = middle;
+			}
+			SignedDyadic capacity = target.compareTo(energies[0]) < 0 ? coldCapacity : capacities[low];
+			SignedDyadic numerator = SignedDyadic.of(knots[low]).multiply(capacity).add(target.subtract(energies[low]));
+			double temperature = divide(numerator, capacity);
+			if (temperature < ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K) {
+				SignedDyadic minimumEnergy = energies[0].add(SignedDyadic.of(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)
+						.subtract(SignedDyadic.of(knots[0])).multiply(coldCapacity));
+				double minimum = minimumEnergy.toDouble();
+				if (!Double.isFinite(minimum) || target.compareTo(minimumEnergy.subtract(SignedDyadic.of(16 * Math.ulp(minimum)))) < 0)
+					throw new ThermalStateFunction.EnergyOutsideValidityException();
+				return stateAt(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+			}
+			if (high < knots.length) temperature = Math.min(knots[high], temperature);
+			return stateAt(temperature);
+		}
+
+		ThermalStateFunction.State stateAt(double temperature) {
+			if (!Double.isFinite(temperature)) throw new ThermalStateFunction.EnergyRepresentationException();
+			if (temperature < ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)
+				throw new IllegalArgumentException("Thermal state inversion left the positive-temperature domain");
+			int index = java.util.Arrays.binarySearch(knots, temperature);
+			if (index < 0) index = -index - 2;
+			double capacity = (index < 0 ? coldCapacity : capacities[index]).toDouble();
+			if (!Double.isFinite(capacity)) throw new ThermalStateFunction.EnergyRepresentationException();
+			if (!(capacity > 0)) throw new IllegalArgumentException("Thermal heat capacity is invalid");
+			return new ThermalStateFunction.State(temperature, capacity);
+		}
+
+		/** Bounds the final conservation-pivot storage error without preparing owner energies. */
+		double assignmentTemperatureTolerance(SignedDyadic requested, SignedDyadic absoluteReference, int owners, double temperature) {
+			SignedDyadic magnitude = absoluteReference;
+			for (int group = 0; group < materials.length; group++) magnitude = magnitude.add(abs(
+					ThermalContactExchange.exactEnergyChangeBetween(materials[group], masses[group],
+							materials[group].referenceTemperatureK(), temperature)));
+			// Each rounded non-pivot energy is bounded by twice its exact magnitude plus
+			// one subnormal quantum. The pivot is requested minus their exact stored sum.
+			SignedDyadic pivotBound = abs(requested).add(magnitude.multiply(SignedDyadic.of(2L, 0)))
+					.add(SignedDyadic.of((long) owners, -1074));
+			int exponent = pivotBound.signum() == 0 ? -1074
+					: Math.max(-1074, pivotBound.exponent() + pivotBound.significand().abs().bitLength() - 53);
+			double tolerance = divide(SignedDyadic.of(1L, exponent), minimumCapacity);
+			return Math.nextUp(tolerance + 2 * Math.ulp(temperature));
 		}
 	}
 
-	/** Hardware arithmetic is sufficient only when the exact coefficient/target fit binary64,
-	 * and an outward-rounded interval proves the result stays in one segment within one temperature ULP. */
-	private static ThermalStateFunction.State singleFast(ThermalMaterialDefinition material, double mass, SignedDyadic target) {
-		double energy = target.toDouble();
-		if (!Double.isFinite(energy) || !target.equals(SignedDyadic.of(energy))) return null;
-		double reference = material.referenceTemperatureK(); int index = 0;
-		var segments = material.caloricSegments();
-		while (index + 1 < segments.size() && (reference > segments.get(index).maximumTemperatureK()
-				|| reference == segments.get(index).maximumTemperatureK() && energy >= 0)) index++;
-		double cv = energy == 0 ? material.specificHeatAt(reference) : segments.get(index).specificHeatEuPerMuK();
-		double capacity = mass * cv;
-		if (!(Double.isFinite(capacity) && capacity >= Double.MIN_NORMAL) || significandBits(mass) + significandBits(cv) > 53) return null;
-		if (energy == 0) return new ThermalStateFunction.State(reference, capacity);
-		double delta = energy / capacity, temperature = reference + delta;
-		if (!Double.isFinite(temperature)) return null;
-		double lower = Math.nextDown(reference + Math.nextDown(delta)), upper = Math.nextUp(reference + Math.nextUp(delta));
-		double minimum = index == 0 ? ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K : segments.get(index).minimumTemperatureK();
-		double maximum = index + 1 == segments.size() ? Double.POSITIVE_INFINITY : segments.get(index).maximumTemperatureK();
-		if (lower > minimum && upper < maximum && temperature - lower <= Math.ulp(temperature) && upper - temperature <= Math.ulp(temperature))
-			return new ThermalStateFunction.State(temperature, capacity);
-		return null;
-	}
-	private static int significandBits(double value) {
-		long bits = Double.doubleToRawLongBits(value), significand = bits & 0x000f_ffff_ffff_ffffL;
-		if ((bits & 0x7ff0_0000_0000_0000L) != 0) significand |= 0x0010_0000_0000_0000L;
-		return 64 - Long.numberOfLeadingZeros(significand) - Long.numberOfTrailingZeros(significand);
+	private static SignedDyadic abs(SignedDyadic value) {
+		return value.signum() < 0 ? SignedDyadic.ZERO.subtract(value) : value;
 	}
 
 	private static ThermalStateFunction.State state(Inventory inventory, double temperature) {

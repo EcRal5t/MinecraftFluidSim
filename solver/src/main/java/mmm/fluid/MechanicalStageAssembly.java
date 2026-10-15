@@ -234,7 +234,8 @@ final class MechanicalStageAssembly {
 			@Override public GranularCouplingFields pressureGranularCoupling() { return domain.pressureGranularCoupling; }
 			@Override public void rebuildPressureBoundaryLineage() { domain.rebuildPressureBoundaryLineage(); }
 			@Override public void rebuildSurfaceTensionPressure() { domain.rebuildSurfaceTensionPressure(); }
-			@Override public void markGridClean() { domain.gridDirty = false; domain.velocityGridDirty = true; }
+			@Override public void markInventoryClean() { domain.gridDirty = false; domain.pressureGeometryDirty = true; domain.velocityGridDirty = true; }
+			@Override public void markPressureGeometryClean() { domain.pressureGeometryDirty = false; }
 			@Override public void markVelocityGridClean() { domain.velocityGridDirty = false; }
 			@Override public java.util.List<PhaseLiquidGeometryEdit> liquidShapeEdits() { return PhaseLiquidGeometryEdit.shapeEdits(domain); }
 		};

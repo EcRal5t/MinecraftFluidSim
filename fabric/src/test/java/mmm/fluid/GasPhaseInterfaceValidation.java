@@ -9,13 +9,15 @@ public final class GasPhaseInterfaceValidation {
 	public static void main(String[] args) { validate(); }
 
 	public static void validate() {
-		for (int set = 0; set < 256; set++) {
-			int feasible = set;
-			Integer maximum = GasPhaseBatchSearch.maximum(8, batch -> (feasible & 1 << ((int) batch - 1)) != 0 ? (int) batch : null,
-					(low, high) -> (feasible & ((1 << (int) high) - (1 << ((int) low - 1)))) == 0);
-			check(maximum == null ? set == 0 : maximum == 32 - Integer.numberOfLeadingZeros(set),
-					"Certified interval exclusion changed a disconnected integer feasible set");
+		for(int root=0;root<=8;root++)for(int mask=0;mask<256;mask++) {
+			int equilibrium=root,representable=mask;
+			var selected=GasPhaseBatchSearch.equilibrium(8,batch->(representable & 1<<((int)batch-1))==0 ? null
+					: new GasPhaseBatchSearch.Sample<Integer>(equilibrium-batch,batch<=equilibrium?(int)batch:null));
+			int admissible=mask & ((1<<root)-1), expected=32-Integer.numberOfLeadingZeros(admissible);
+			check(expected==0?selected==null:selected!=null && selected==expected,
+					"Saturation-root search lost a representable integer extent: root="+root+" mask="+mask);
 		}
+
 		for (boolean bothWet : new boolean[]{false, true}) {
 			FluidDomain domain = domain(126, false, bothWet
 					? new float[]{.25F,.25F,.25F,.0625F, .75F,.75F,.75F,.03125F}
@@ -50,89 +52,21 @@ public final class GasPhaseInterfaceValidation {
 				"Full liquid lost its shared wet/dry face contact");
 		for (int piece : sharedContacts.getFirst().pieces()) check(piece / 8 == 1 && (piece & 1) == 0,
 				"Shared-face contact selected an unrelated gas microbox");
-		full.bootstrapGasState("");
-		var source = full.gasState.frame;
-		var envelope = GasPhaseGeometryEnvelope.capture(source, full.gasState.network, null, 0, source.commonCellNode(1));
-		check(envelope != null, "A fixed source gas chamber lost its single-successor capacity certificate");
-		var volume = mmm.units.SignedDyadic.of(.75);
-		var moment = volume.multiply(mmm.units.SignedDyadic.of(.5));
-		var edit = new PhaseLiquidGeometryEdit(0, 0, java.util.List.of(new LiquidComponentMoments(0,255,1,volume,moment,moment,moment)));
-		var future = GasRuntimeGeometry.capture(full, edit, new long[8], true);
-		check(envelope.volumeUpper(edit) >= future.capacity().chambers().getFirst().cubicMeters()
-				&& envelope.volumeUpper(edit) <= Math.nextUp(Math.nextUp(Math.nextUp(1.25))),
-				"Certified future capacity omitted released volume or broadened its rounding budget");
-		var merger = domain(0, true, new float[]{.5F,.5F,.5F,1});
-		merger.geometry.cutCells.replaceMask(2,0); merger.geometry.solid[2]=false; merger.bootstrapGasState("");
-		var mergingSource = merger.gasState.frame;
-		var mergingEnvelope=GasPhaseGeometryEnvelope.capture(mergingSource,merger.gasState.network,null,0,mergingSource.commonCellNode(1));
-		check(mergingSource.nodeCount()==2 && (mergingEnvelope==null || !mergingEnvelope.hasWholeStock()),
-				"A possible merger reused an isolated gas inventory/energy certificate");
-		var branched = domain(0, true, new float[]{.5F,.25F,.5F,.5F});
-		for(int cell:new int[]{2,3}) { branched.geometry.cutCells.replaceMask(cell,0); branched.geometry.solid[cell]=false; }
-		branched.bootstrapGasState("");
-		var branchSource = branched.gasState.frame;
-		var branchContact = GasPhaseInterfaceResolver.contacts(branchSource,0).getFirst();
-		var unprovedBranch=GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node());
-		check(unprovedBranch==null || !unprovedBranch.hasWholeStock() && unprovedBranch.sourceShare().signum()==0,
-				"A changing multi-cell source claimed a complete-stock successor");
-		var branchEnvelope = GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node(),branchContact.pieces());
-		check(branchEnvelope!=null && !branchEnvelope.hasWholeStock()
-				&& branchEnvelope.sourceShare().equals(mmm.chemistry.ExactRational.of(6).divide(7)),
-				"Fixed contact backbone lost its exact source-stock share: " + branchContact + " share="
-						+ (branchEnvelope==null?null:branchEnvelope.sourceShare()));
-		var changingContact=GasPhaseGeometryEnvelope.capture(branchSource,branched.gasState.network,null,0,branchContact.node(),
-				branchContact.pieces().stream().filter(piece->piece/8==0).toList());
-		check(changingContact==null || !changingContact.hasWholeStock() && changingContact.sourceShare().signum()==0,
-				"Changing contact pieces supplied an unproved persistent gas path");
-		validateFiniteGasBatchBounds();
+		validateFiniteGasBatches();
 		System.out.println("Gas phase microcontact validation passed");
 	}
 
-	private static void validateFiniteGasBatchBounds() {
-		var water=new mmm.thermal.ThermalMaterialDefinition("test:bounds/water",mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
+	private static void validateFiniteGasBatches() {
+		var water=new mmm.thermal.ThermalMaterialDefinition("test:finite-air/water",mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
 				BuiltinFluidMaterials.WATER.id(),373.15,0,.1,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(250,300,2000),
 						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(300,800,4180)));
-		var vapor=new mmm.thermal.ThermalMaterialDefinition("test:bounds/vapor",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
+		var vapor=new mmm.thermal.ThermalMaterialDefinition("test:finite-air/vapor",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
 				mmm.fluid.air.BuiltinGasDefinitions.WATER_VAPOR,373.15,2256000,.1,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(250,800,1410)));
-		var air=new mmm.thermal.ThermalMaterialDefinition("test:bounds/air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
+		var air=new mmm.thermal.ThermalMaterialDefinition("test:finite-air/air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
 				mmm.fluid.air.BuiltinGasDefinitions.AIR,273.15,0,.025,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(150,800,718)));
-		var transition=new mmm.thermal.ThermalPhaseTransition("test:bounds/boil",water.id(),vapor.id(),373.15,168,168*1700L,
+		var transition=new mmm.thermal.ThermalPhaseTransition("test:finite-air/boil",water.id(),vapor.id(),373.15,168,168*1700L,
 				mmm.chemistry.ExactRational.of(21000).divide(1<<24),mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS,10000,3000000);
 		var registry=new mmm.thermal.ThermalRegistry(java.util.List.of(water,vapor,air),java.util.List.of(),java.util.List.of(transition),"","");
-		for(long reference:new long[]{-1_000_000_000_000L,3_000_000_000_000L}) {
-			var offset=new mmm.thermal.ThermalSpeciesOffset("test:bounds/h2o", "mmm:h2o",vapor.id(),mmm.chemistry.ExactRational.of(reference).divide(7));
-			var partitionVapor=new mmm.thermal.ThermalMaterialDefinition(vapor.id(),vapor.carrierKind(),vapor.carrierId(),vapor.referenceTemperatureK(),
-					vapor.referenceSpecificEnergyEuPerMu(),vapor.conductivityEuPerSecondMeterK(),java.util.List.of(
-						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(250,301,1111.17),
-						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(301,500,1410.13001),
-						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(500,800,2000.25)));
-			var partitionAir=new mmm.thermal.ThermalMaterialDefinition(air.id(),air.carrierKind(),air.carrierId(),air.referenceTemperatureK(),
-					air.referenceSpecificEnergyEuPerMu(),air.conductivityEuPerSecondMeterK(),java.util.List.of(
-						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(150,273.15,718.1234567),
-						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(273.15,350,702.25),
-						new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(350,800,789.000001)));
-			var definitions=new mmm.thermal.ThermalRegistry(java.util.List.of(water,partitionVapor,partitionAir),java.util.List.of(offset),java.util.List.of(transition),"0".repeat(64),"");
-			var model=new mmm.thermal.GasThermalModel(definitions,mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
-			var stock=new mmm.fluid.air.GasInventory(java.util.List.of(
-					new mmm.fluid.air.GasComponentAmount(air.carrierId(),9_007_199_254_740_991L,72,java.util.List.of(),72),
-					new mmm.fluid.air.GasComponentAmount(vapor.carrierId(),91,.003,java.util.List.of(new mmm.fluid.air.GasComponentAmount.SpeciesAmount("mmm:h2o",37)),.003)));
-			var merged=new GasPhaseMergeBounds(definitions,model,java.util.List.of());
-			for(double temperature:new double[]{293.15,Math.nextDown(301),301,Math.nextUp(301),333.333333,400,Math.nextUp(600)})
-				for(long[] weights:new long[][]{{1,1},{999,1},{1,999},{0,1,3,7},{4095,1,1,1}}) {
-				var children=stock.partition(weights);double energy=model.internalEnergyAtTemperature(stock,temperature);
-				var energies=model.partitionEnergy(stock,energy,children);long sum=Arrays.stream(weights).sum();
-				for(int child=0;child<weights.length;child++)if(weights[child]>0) {
-					var share=mmm.chemistry.ExactRational.of(weights[child]).divide(sum);
-					double lower=merged.partitionTemperatureLower(stock,energy,share,weights.length);
-					check(Double.isFinite(lower) && lower<=model.state(children.get(child),energies[child]).temperatureK(),
-							"Split gas temperature lower bound exceeded an actual common-temperature child");
-					long nanos=share.numerator().multiply(java.math.BigInteger.valueOf(stock.component(vapor.carrierId()).standardVolumeNanos()))
-							.divide(share.denominator()).longValueExact();
-					var amount=children.get(child).component(vapor.carrierId());
-					check(nanos<=(amount==null?0:amount.standardVolumeNanos()),"Split stock bound exceeded a largest-remainder vapor share");
-				}
-			}
-		}
 		try {
 			for(int sourceCase=0;sourceCase<5;sourceCase++) {
 				boolean existingVapor=sourceCase==1, mergingPeers=sourceCase==4;
@@ -163,125 +97,54 @@ public final class GasPhaseInterfaceValidation {
 				var stage=ThermochemistryStageAssembly.create(domain).gasPhase();
 				var field=GasLiquidPhaseChangeStage.class.getDeclaredField("support");field.setAccessible(true);
 				var support=(PhaseChangeStageSupport)field.get(stage);
-				support.ensureGrid();support.refreshGasTopology();domain.thermalState.preparePhaseScan(domain.thermalMarkerContext());
+				support.ensureInventoryGrid();support.refreshGasTopology();domain.thermalState.preparePhaseScan(domain.thermalMarkerContext());
 				var contact=new GasPhaseInterfaceResolver(support).resolve(0,transition,phase,domain.gasState,300).getFirst();
 				var thermalCell=domain.thermalState.preparePhaseCandidateCell(0,domain.thermalMarkerContext());
-				var envelope=GasPhaseGeometryEnvelope.forBoiling(support,0,node);
-				var bounds=GasBoilingBatchBounds.forBoiling(support,0,node,0,transition,thermalCell,300,new boolean[0],255,phase,envelope);
-				check(bounds!=null || mergingPeers,"Finite air lost its complete-source interval bound");
 				if(partialNeighbor) {
 					var frame=domain.gasState.frame;int peer=frame.commonCellNode(1);
 					check(peer>0 && peer!=node && !frame.fullDryFace(1,0,0)
 							&& frame.topology().connections().stream().anyMatch(edge->edge.area()>0
 							&& (edge.firstNode()==node && edge.secondNode()==peer || edge.firstNode()==peer && edge.secondNode()==node)),
 							"Partially dry fixed face lost its separate finite-rate gas connection");
-					check(envelope.hasWholeStock() && envelope.possibleStocks().isEmpty(),
-							"A permanent finite-rate face entered the source chamber's merge envelope");
 				}
-				var prepare=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("prepareBoilInventory")).findFirst().orElseThrow();prepare.setAccessible(true);
-				var geometryGetter=prepare.getReturnType().getDeclaredMethod("liquidGeometry");geometryGetter.setAccessible(true);
-				var gasGetter=prepare.getReturnType().getDeclaredMethod("gasPlan");gasGetter.setAccessible(true);
-				var energyGetter=prepare.getReturnType().getDeclaredMethod("candidateGasEnergy");energyGetter.setAccessible(true);
-				var thermalGetter=prepare.getReturnType().getDeclaredMethod("thermalPlan");thermalGetter.setAccessible(true);
+				var prepare=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("prepareBoilTrial")).findFirst().orElseThrow();prepare.setAccessible(true);
 				var complete=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("completeBoil")).findFirst().orElseThrow();complete.setAccessible(true);
 				var source=GasRuntimeGeometry.preparePhaseSource(domain,0);
-				Object[] candidates=new Object[9];int largest=0,mergedCandidates=0;
+				var liquidSource=new PhaseLiquidInventory(support,0);
+				double sourceEnergy=domain.thermalState.gasNodeEnergy(node,domain.gasState.network);
+				@SuppressWarnings("unchecked")
+				GasPhaseBatchSearch.Sample<Object>[] candidates = new GasPhaseBatchSearch.Sample[9];
+				int largest=0;
 				for(int batch=1;batch<=8;batch++) {
-					var inventory=prepare.invoke(stage,0,node,0,transition,phase,thermalCell,new boolean[0],300.0,(long)batch,contact);
-					if(partialNeighbor && inventory!=null) {
-						var edit=(PhaseLiquidGeometryEdit)geometryGetter.invoke(inventory);
-						double released=mmm.units.SignedDyadic.of(1).subtract(edit.volume())
-								.multiply(mmm.units.SignedDyadic.of(domain.gasState.frame.geometry().cellVolumeCubicMeters())).toDouble();
-						double upper=envelope.volumeUpper(edit);
-						check(upper>=released && upper<=Math.nextUp(Math.nextUp(Math.nextUp(released))),
-								"Fixed partial neighbor capacity entered the edited chamber's volume upper bound");
+					var trial=prepare.invoke(stage,0,node,0,transition,phase,thermalCell,new boolean[0],300.0,(long)batch,contact,liquidSource,sourceEnergy);
+					var prepared=(GasPhaseBatchSearch.Sample<?>)complete.invoke(stage,0,node,transition,phase,contact,source,trial);
+					var full=(GasPhaseBatchSearch.Sample<?>)complete.invoke(stage,0,node,transition,phase,contact,null,trial);
+					check((prepared==null)==(full==null),"Prepared gas geometry changed a representable complete physical candidate");
+					if(prepared!=null) {
+						check((prepared.residual()>=0)==(full.residual()>=0),"Prepared gas geometry changed the actual successor saturation direction");
+						candidates[batch]=new GasPhaseBatchSearch.Sample<>(prepared.residual(),prepared.plan());
+						if(prepared.residual()>=0)largest=batch;
 					}
-					if(inventory!=null) {
-						var edit=(PhaseLiquidGeometryEdit)geometryGetter.invoke(inventory);
-						if(checkCandidateEnvelope(domain,node,contact,source,envelope,edit,support,
-								(mmm.fluid.air.AirNetwork.PhaseMutationPlan)gasGetter.invoke(inventory),(double)energyGetter.invoke(inventory),
-								(mmm.thermal.ThermalDomainState.PhaseCellEnergyPlan)thermalGetter.invoke(inventory)))mergedCandidates++;
-					}
-					candidates[batch]=complete.invoke(stage,0,node,transition,phase,contact,source,inventory,envelope);
-					var fullCandidate=complete.invoke(stage,0,node,transition,phase,contact,source,inventory,null);
-					check((candidates[batch]!=null)==(fullCandidate!=null),"Candidate gas paths changed the complete physical batch: source="+sourceCase+" batch="+batch);
-					if(candidates[batch]!=null)largest=batch;
 				}
-				if(mergingPeers)check(mergedCandidates>0,"Complete depletion never proved its actual merged gas inventory/U");
 				check(largest==(completeDepletion?8:existingVapor?0:1),"Finite-air comparison lost its partial/complete physical candidate: source="+sourceCase+" largest="+largest);
-				if(completeDepletion && bounds!=null)check(!bounds.excluded(1,8) && !bounds.excluded(8,8),"Complete depletion used a fictitious remaining liquid temperature");
-				int excluded=0;
-				for(int low=1;low<=8;low++)for(int high=low;high<=8;high++)if(bounds!=null && bounds.excluded(low,high)) {
-					excluded++;for(int batch=low;batch<=high;batch++)check(candidates[batch]==null,"Finite-air bounds excluded a complete physical batch");
+				var maximum=GasPhaseBatchSearch.equilibrium(8,batch->candidates[(int)batch]);
+				check(largest==0?maximum==null:maximum==candidates[largest].plan(),"Finite-air search changed the exhaustive physical maximum");
+				if(largest>0) {
+					var beforeVolume=domain.markerGrid.exactCellVolumeInventory[0];
+					domain.stepGasPhaseChangeOnly(8);
+					domain.ensureInventoryGrid();
+					check(beforeVolume.subtract(domain.markerGrid.exactCellVolumeInventory[0]).equals(
+							mmm.units.SignedDyadic.of(Math.multiplyExact((long)largest,transition.lowerVolumeSvqPerBatch()),-24)),
+							"Actual phase search pruned a physically admissible largest batch: source="+sourceCase);
+					check(domain.gasBoundary().auditClosed() && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+							"Actual finite-air batch publication broke its gas or thermal audit");
 				}
-				var maximum=GasPhaseBatchSearch.maximum(8,batch->candidates[(int)batch],(low,high)->bounds!=null && bounds.excluded(low,high));
-				check((completeDepletion?excluded==0:excluded>0) && (largest==0?maximum==null:maximum==candidates[largest]),"Finite-air interval search changed the exhaustive maximum");
-				if(completeDepletion) {
-					var model=new mmm.thermal.GasThermalModel(definitions,domain.gasState.network.registry());
-					var stock=domain.gasState.network.inventory(node);double energy=domain.thermalState.gasNodeEnergy(node,domain.gasState.network);
-					var cold=new GasPhaseMergeBounds.Stock(stock,model.internalEnergyAtTemperature(stock,200),mmm.units.SignedDyadic.of(.125));
-					var born=new mmm.thermal.ThermalCaloricBounds.PortionRange(definitions.materialHandle(vapor.id()),
-							transition.massMuPerBatch().toDouble(),transition.massMuPerBatch().multiply(8).toDouble(),java.util.Map.of());
-					var caloric=new mmm.thermal.ThermalCaloricBounds(definitions);double error=caloric.forwardRoundingBound(born,300);
-					double rise=caloric.temperatureWithEnergyGainLower(java.util.List.of(born),300,
-							mmm.units.SignedDyadic.of(born.massHigh()).multiply(mmm.units.SignedDyadic.of(5000)).toDouble());
-					check(rise==Math.nextDown(Math.nextDown(301.0)),"Energy-gain lower bound lost its actual caloric segment or inverter allowance");
-					for(boolean optional:new boolean[]{false,true}) {
-						var merged=new GasPhaseMergeBounds(definitions,model,optional?java.util.List.of(cold):java.util.List.of());
-						double lower=merged.temperatureLower(stock,energy,born,300,error);
-						check(lower>(optional?200:300),"Mandatory heat surplus did not strengthen the minimum-temperature bound");
-						for(int batch=1;batch<=8;batch++)for(int subset=0;subset<=(optional?1:0);subset++) {
-							var birth=phase.gasBatch(transition,batch);var inventory=stock.merge(birth);
-							var total=mmm.units.SignedDyadic.of(energy).add(mmm.units.SignedDyadic.of(model.internalEnergyAtTemperature(birth,300)));
-							if(subset==1){inventory=inventory.merge(cold.inventory());total=total.add(mmm.units.SignedDyadic.of(cold.energy()));}
-							check(lower<=model.state(inventory,total.toDouble()).temperatureK(),"Mandatory heat surplus exceeded an actual optional-subset mixture temperature");
-						}
-					}
-				}
+
+
 			}
 		} catch(ReflectiveOperationException failure) { throw new AssertionError("Finite-air production-candidate comparison failed",failure); }
 	}
 
-
-	private static boolean checkCandidateEnvelope(FluidDomain domain,int sourceNode,GasPhaseInterfaceResolver.Candidate contact,
-	                                          GasRuntimeGeometry.PhaseSource prepared,GasPhaseGeometryEnvelope envelope,
-	                                          PhaseLiquidGeometryEdit edit,PhaseChangeStageSupport support,
-	                                          mmm.fluid.air.AirNetwork.PhaseMutationPlan gas,double energy,
-	                                          mmm.thermal.ThermalDomainState.PhaseCellEnergyPlan thermal) {
-		var candidate=envelope.forCandidate(prepared.phase(edit));
-		if(candidate==null)return false;
-		var before=prepared.frame();
-		var full=GasRuntimeGeometry.capture(domain,edit,before.occupiedSvq(),before.sealedExterior());
-		var successors=new java.util.TreeSet<Integer>();
-		for(int id:contact.contactPieces()) {
-			var old=before.geometry().piece(id);var next=full.geometry().piece(id);
-			if(old!=null && next!=null && GasGeometryOverlap.unionOverlapVolume(id&7,old.drySupports(),next.drySupports()).signum()>0)
-				successors.add(full.nodeOfPiece(id));
-		}
-		double upper=candidate.volumeUpper(edit);
-		check(Double.isFinite(upper) && upper<=envelope.volumeUpper(edit),"Candidate gas paths enlarged their complete envelope");
-		for(var chamber:full.capacity().chambers())if(successors.contains(chamber.node()))
-			check(chamber.cubicMeters()<=upper,"Candidate gas volume bound omitted an actual contact successor");
-		check(envelope.possibleStocks().containsAll(candidate.possibleStocks()),"Candidate gas paths introduced a foreign optional stock");
-		var merged=candidate.merged(gas.inventoryAfter(),energy);
-		if(merged!=null) {
-			var actual=support.planGasGeometry(edit,sourceNode,gas,energy,thermal,null);
-			check(successors.size()==1,"A complete merged inventory has multiple actual contact successors");
-			int successor=successors.first();
-			check(merged.inventory().equals(actual.gasPlan().inventory(successor))
-					&& Double.doubleToRawLongBits(merged.energy())==Double.doubleToRawLongBits(actual.thermalPlan().nodeEnergy(successor)),
-					"Merged gas inventory/U differs from independent complete topology planning");
-		}
-		for(var old:before.geometry().pieces()) {
-			var next=full.geometry().piece(old.id());int oldNode=before.nodeOfPiece(old.id());
-			if(oldNode==sourceNode || next==null || !successors.contains(full.nodeOfPiece(old.id()))
-					|| GasGeometryOverlap.unionOverlapVolume(old.micro(),old.drySupports(),next.drySupports()).signum()==0)continue;
-			var stock=domain.gasState.network.inventory(oldNode);
-			if(!stock.isEmpty())check(candidate.possibleStocks().stream().anyMatch(optional->optional.inventory().equals(stock)),
-					"Candidate gas paths omitted a contributing old chamber stock");
-		}
-		return merged!=null;
-	}
 
 	private static FluidDomain domain(int mask, boolean peerOpen, float[] markers) {
 		byte[] masks = new byte[8]; Arrays.fill(masks, (byte)255); masks[0] = (byte) mask;

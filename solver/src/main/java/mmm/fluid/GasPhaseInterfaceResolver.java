@@ -39,12 +39,12 @@ final class GasPhaseInterfaceResolver {
 	}
 
 	/** Complete depletion follows the old contact's gas pieces even when the future liquid interface vanishes. */
-	boolean allowsAfter(int cell, Candidate source, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
+	double saturationResidualAfter(Candidate source, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
 	                    double liquidTemperature, GasTopologyCoordinator.GasTopologyPlan topology,
 	                    GasLiquidPhaseModel.Direction direction, boolean sourceGasEmpty) {
 		var future = topology.frame();
 		boolean allVapor = direction == GasLiquidPhaseModel.Direction.BOIL && Double.isNaN(liquidTemperature);
-		if (!Double.isFinite(liquidTemperature) && !allVapor) return false;
+		if (!Double.isFinite(liquidTemperature) && !allVapor) return Double.NaN;
 		var nodes = new TreeSet<Integer>();
 		for (int piece : source.contactPieces()) {
 			var before = topology.source().geometry().piece(piece);
@@ -54,9 +54,11 @@ final class GasPhaseInterfaceResolver {
 			int node = future.nodeOfPiece(piece);
 			if (node >= 0) nodes.add(node);
 		}
-		if (nodes.isEmpty()) return direction == GasLiquidPhaseModel.Direction.CONDENSE && sourceGasEmpty;
+		if (nodes.isEmpty()) return direction == GasLiquidPhaseModel.Direction.CONDENSE && sourceGasEmpty
+				? Double.POSITIVE_INFINITY : Double.NaN;
 		GasThermalModel thermal = new GasThermalModel(support.thermal().registry(), support.gasState().network.registry());
 		try {
+			double residual = Double.POSITIVE_INFINITY;
 			for (int node : nodes) {
 				GasLiquidPhaseModel.Saturation saturation;
 				if (node == 0) saturation = phase.ambientSaturation(transition,
@@ -70,9 +72,10 @@ final class GasPhaseInterfaceResolver {
 							: liquidTemperature;
 					saturation = phase.saturation(transition, temperature, inventory, pressure);
 				}
-				if (saturation.direction() != direction && saturation.direction() != GasLiquidPhaseModel.Direction.EQUILIBRIUM) return false;
+				double imbalance = saturation.pressureImbalancePa();
+				residual = Math.min(residual, direction == GasLiquidPhaseModel.Direction.BOIL ? imbalance : -imbalance);
 			}
-			return true;
+			return residual;
 		} catch (ThermalStateFunction.EnergyOutsideValidityException outsideThermalRange) {
 			throw outsideThermalRange;
 		} catch (IllegalArgumentException outsideGasPhaseRange) {

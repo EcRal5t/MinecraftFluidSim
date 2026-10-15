@@ -4,13 +4,7 @@ import mmm.granular.GranularCouplingFields;
 
 import java.util.Arrays;
 
-/**
- * The particle-to-grid stage: clears and rescatters the marker grid, normalizes the PIC
- * velocity with its weights, snapshots the P2G weights, rebuilds the free-surface, pressure
- * classification, granular-coupling, gas-lineage and surface-tension-pressure derived views
- * and finishes with solid-face enforcement and air extrapolation. Pressure views also
- * refresh after granular motion previews change the occupancy used by projection.
- */
+/** Rebuilds marker inventory, pressure geometry and MAC velocity at their respective use sites. */
 final class ParticleToGridStage {
 	record Workspace(
 			float[] volume, PressureProjectionWorkspace projection,
@@ -38,7 +32,8 @@ final class ParticleToGridStage {
 		void rebuildPressureBoundaryLineage();
 		void rebuildSurfaceTensionPressure();
 		void constrainClosedLiquidVolume();
-		void markGridClean();
+		void markInventoryClean();
+		void markPressureGeometryClean();
 		void markVelocityGridClean();
 		java.util.List<PhaseLiquidGeometryEdit> liquidShapeEdits();
 	}
@@ -58,8 +53,9 @@ final class ParticleToGridStage {
 		this.gridToParticleStage = gridToParticleStage;
 	}
 
-	void rebuild() { rebuildInventory(); rebuildVelocity(); }
+	void rebuild() { rebuildInventory(); rebuildPressureGeometry(); rebuildVelocity(); }
 
+	/** Current marker indices, exact cell quantities, material columns and occupied volume. */
 	void rebuildInventory() {
 		PressureProjectionWorkspace projection = state.projection;
 		Arrays.fill(state.volume, 0.0F);
@@ -84,8 +80,7 @@ final class ParticleToGridStage {
 			state.freeSurfaceGeometry.rebuild(
 					geometry.solid, markerGrid.markerCount, geometry.cutCells, granularCoupling);
 		}
-		rebuildPressureGeometry();
-		access.markGridClean();
+		access.markInventoryClean();
 		markerGrid.inventoryRevision++;
 	}
 
@@ -115,5 +110,6 @@ final class ParticleToGridStage {
 				state.markerGrid, state.particles, state.cellSize, access.liquidShapeEdits());
 		access.rebuildPressureBoundaryLineage();
 		access.rebuildSurfaceTensionPressure();
+		access.markPressureGeometryClean();
 	}
 }

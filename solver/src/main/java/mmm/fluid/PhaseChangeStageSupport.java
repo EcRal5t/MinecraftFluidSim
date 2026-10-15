@@ -11,7 +11,6 @@ import mmm.fluid.air.GasComponentAmount;
 import mmm.granular.GranularCouplingFields;
 import mmm.granular.SolidVolume;
 import mmm.thermal.CoherentPhaseStore;
-import mmm.thermal.LiquidEnergyColumn;
 import mmm.thermal.ThermalCarrierContext;
 import mmm.units.SignedDyadic;
 import mmm.units.SolverUnitScale;
@@ -45,8 +44,7 @@ final class PhaseChangeStageSupport {
 				int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle,
 				double mass, ChemicalMixtureRecord mixture
 		);
-		SignedDyadic exactInternalEnergy();
-		void ensureGrid();
+		void ensureInventoryGrid();
 		void refreshGasTopology();
 		GasRuntimeGeometry.PhaseSource prepareGasGeometrySource(int editedCell);
 		GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
@@ -58,7 +56,6 @@ final class PhaseChangeStageSupport {
 		void refreshCoherentOccupancy();
 		void markGridDirty();
 		boolean canAddCarrierVolume(double volume);
-		long gasGeometrySolidSvq();
 		double effectiveOpenCellVolume(int cell);
 	}
 
@@ -79,12 +76,11 @@ final class PhaseChangeStageSupport {
 	FluidMaterialRegistry materialRegistry() { return access.materialRegistry(); }
 	GasDomainState gasState() { return state.gasState(); }
 	float pressureReference() { return access.pressureReference(); }
-	long gasGeometrySolidSvq() { return access.gasGeometrySolidSvq(); }
 	int particleCell(int marker) { return access.particleCell(marker); }
 	int firstOpenSlot(int cell) { return access.firstOpenSlot(cell, 0); }
 	int firstOpenSlot(int cell, int first) { return access.firstOpenSlot(cell, first); }
 	float[] markerSlotPosition(int cell, int slot) { return access.markerSlotPosition(cell, slot); }
-	void ensureGrid() { access.ensureGrid(); }
+	void ensureInventoryGrid() { access.ensureInventoryGrid(); }
 	void refreshGasTopology() { access.refreshGasTopology(); }
 	GasRuntimeGeometry.PhaseSource prepareGasGeometrySource(int editedCell) { return access.prepareGasGeometrySource(editedCell); }
 	GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
@@ -105,7 +101,6 @@ final class PhaseChangeStageSupport {
 	boolean canExpandCondensedVolume(long svq) {
 		return svq <= 0 || access.canAddCarrierVolume(svq / (double) SolidVolume.SVQ_PER_CELL);
 	}
-	SignedDyadic exactInternalEnergy() { return access.exactInternalEnergy(); }
 
 	int fluidMaterialHandle(String stableId) {
 		FluidMaterialRegistry registry = access.materialRegistry();
@@ -139,7 +134,6 @@ final class PhaseChangeStageSupport {
 				}
 				state.particles().setVolume(allocation.marker(), allocation.newVolume());
 				state.particles().setMass(allocation.marker(), allocation.newMass());
-				access.thermalState().commitInternalTruncate(allocation.marker(), allocation.thermalPlan());
 			}
 		}
 	}
@@ -159,22 +153,6 @@ final class PhaseChangeStageSupport {
 		if (access.thermalState() == null || signedSvq == 0L) return;
 		SignedDyadic delta = new SignedDyadic(java.math.BigInteger.valueOf(signedSvq), -24);
 		state.pendingPhaseVolume().add(cell, delta);
-	}
-
-	LiquidEnergyColumn.Truncation planThermalTruncate(
-			int marker, double newMass, ChemicalMixtureRecord keptMixture, double previousTemperatureK
-	) {
-		return access.thermalState().planTruncate(
-				marker, newMass, keptMixture, previousTemperatureK, state.thermalMarkers());
-	}
-
-	boolean inside(int x, int y, int z) {
-		return x >= 0 && y >= 0 && z >= 0
-				&& x < state.sizeX() && y < state.sizeY() && z < state.sizeZ();
-	}
-
-	int cellIndex(int x, int y, int z) {
-		return x + state.sizeX() * (y + state.sizeY() * z);
 	}
 
 	/** Validates the actual stored SI mass change at the transferred mass scale. */
@@ -223,17 +201,16 @@ final class PhaseChangeStageSupport {
 
 	record PhaseCellInventory(
 			long lowerVolumeSvq, long upperVolumeSvq, double lowerMass, double upperMass,
-			double internalEnergy, PhaseComposition lowerComposition, PhaseComposition upperComposition,
 			long freezableUpperSvq, double freezableUpperMass
 	) { }
 
 	record PhaseMarkerAllocation(
 			int marker, float newVolume, double newMass, boolean fullRemoval,
-			ChemicalParcelStore.SplitPlan chemicalPlan, LiquidEnergyColumn.Truncation thermalPlan
+			ChemicalParcelStore.SplitPlan chemicalPlan
 	) { }
 
 	record PhaseRemovalPlan(
-			List<PhaseMarkerAllocation> allocations, PhaseComposition movedComposition, double movedEnergy
+			List<PhaseMarkerAllocation> allocations, PhaseComposition movedComposition
 	) {
 		boolean carrierTopologyChanged() {
 			for (PhaseMarkerAllocation allocation : allocations) {

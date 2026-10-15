@@ -17,6 +17,8 @@ final class GasRuntimeGeometry {
 	private final GasChamberTopology topology;
 	private final GasChamberCapacity capacity;
 	private final int[] minimumPieceKeys;
+	private float[] currentMarkerGeometry;
+	private List<LiquidCellShape> currentShapes;
 
 	private GasRuntimeGeometry(FluidDomain domain, List<PhaseLiquidGeometryEdit> edits, long[] occupiedSvq,
 	                           boolean sealedExterior, boolean allDry) {
@@ -146,13 +148,7 @@ final class GasRuntimeGeometry {
 			solid = owner.geometry.solid.clone();
 			this.inventoryRevision = owner.markerGrid.inventoryRevision;
 			this.carrierRevision = owner.carrierMutationRevision(); this.markerCount = owner.particles.count();
-			this.positionVolume = new float[Math.multiplyExact(4, markerCount)];
-			for (int marker = 0; marker < markerCount; marker++) {
-				positionVolume[4 * marker] = owner.particles.positionX(marker);
-				positionVolume[4 * marker + 1] = owner.particles.positionY(marker);
-				positionVolume[4 * marker + 2] = owner.particles.positionZ(marker);
-				positionVolume[4 * marker + 3] = owner.particles.volume(marker);
-			}
+			this.positionVolume = frame.currentMarkerGeometry;
 		}
 		GasRuntimeGeometry frame() { return frame; }
 		GasComplementGeometry.Region region() { return region; }
@@ -203,9 +199,7 @@ final class GasRuntimeGeometry {
 		var frame = domain.gasState.frame;
 		if (frame == null) return null;
 		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
-		if (!frame.matchesGeometryInputs(domain, occupied, frame.occupiedSvq)) return null;
-		var index = index(domain);
-		if (!frame.liquidStock.equals(stock(domain, domain.geometry.cutCells, index))) return null;
+		if (!frame.matchesCarrierGeometry(domain, occupied)) return null;
 		return new PhaseSource(domain, frame, editedCell);
 	}
 
@@ -227,7 +221,28 @@ final class GasRuntimeGeometry {
 
 	/** Compares physical markers after publication with the complete captured target, including zero components. */
 	boolean matchesCarrierGeometry(FluidDomain domain, long[] occupiedSvq) {
-		return matches(domain, occupiedSvq, this.occupiedSvq, liquidStock);
+		if (!matchesGeometryInputs(domain, occupiedSvq, this.occupiedSvq)) return false;
+		if (matchesRawMarkers(domain)) return true;
+		if (!matches(domain, occupiedSvq, this.occupiedSvq, liquidStock)) return false;
+		currentMarkerGeometry = new float[Math.multiplyExact(4, domain.particles.count())];
+		for (int marker = 0; marker < domain.particles.count(); marker++) {
+			currentMarkerGeometry[4 * marker] = domain.particles.positionX(marker);
+			currentMarkerGeometry[4 * marker + 1] = domain.particles.positionY(marker);
+			currentMarkerGeometry[4 * marker + 2] = domain.particles.positionZ(marker);
+			currentMarkerGeometry[4 * marker + 3] = domain.particles.volume(marker);
+		}
+		currentShapes = List.copyOf(domain.liquidShapes);
+		return true;
+	}
+	private boolean matchesRawMarkers(FluidDomain domain) {
+		if (currentMarkerGeometry == null || currentMarkerGeometry.length != 4 * domain.particles.count()
+				|| !currentShapes.equals(domain.liquidShapes)) return false;
+		for (int marker = 0; marker < domain.particles.count(); marker++)
+			if (Float.floatToRawIntBits(currentMarkerGeometry[4 * marker]) != Float.floatToRawIntBits(domain.particles.positionX(marker))
+					|| Float.floatToRawIntBits(currentMarkerGeometry[4 * marker + 1]) != Float.floatToRawIntBits(domain.particles.positionY(marker))
+					|| Float.floatToRawIntBits(currentMarkerGeometry[4 * marker + 2]) != Float.floatToRawIntBits(domain.particles.positionZ(marker))
+					|| Float.floatToRawIntBits(currentMarkerGeometry[4 * marker + 3]) != Float.floatToRawIntBits(domain.particles.volume(marker))) return false;
+		return true;
 	}
 
 	/** Compares all source markers and occupancy before committing a prepared phase or clear candidate. */

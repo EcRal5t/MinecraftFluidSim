@@ -9,7 +9,6 @@ import mmm.granular.GranularDepositDynamics;
 import mmm.granular.GranularParcelStore;
 import mmm.granular.GranularPhaseTransferEngine;
 import mmm.thermal.ThermalTransport;
-import mmm.units.SignedDyadic;
 
 /** Constructs the thermochemistry pipeline from stage-specific state and capability seams. */
 final class ThermochemistryStageAssembly {
@@ -104,16 +103,10 @@ final class ThermochemistryStageAssembly {
 								cellX, cellY, cellZ, slot, volume, materialHandle, mass,
 								mixture, false, false);
 					}
-					@Override public SignedDyadic exactInternalEnergy() {
-						return domain.exactInternalEnergy();
-					}
-					@Override public void ensureGrid() { domain.ensureInventoryGrid(); }
+					@Override public void ensureInventoryGrid() { domain.ensureInventoryGrid(); }
 					@Override public void refreshGasTopology() { domain.gasTopologyCoordinator.refresh(); }
 					@Override public GasRuntimeGeometry.PhaseSource prepareGasGeometrySource(int editedCell) {
 						return GasRuntimeGeometry.preparePhaseSource(domain, editedCell);
-					}
-					@Override public long gasGeometrySolidSvq() {
-						return domain.pressureGranularCoupling == null ? 0L : domain.pressureGranularCoupling.totalSolidSvq();
 					}
 					@Override public double effectiveOpenCellVolume(int cell) { return domain.effectiveOpenCellVolume(cell); }
 					@Override public GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
@@ -126,7 +119,6 @@ final class ThermochemistryStageAssembly {
 						domain.gasTopologyCoordinator.requireAfterPhaseCurrent(topology, gas, thermal);
 					}
 					@Override public void commitGasGeometry(GasTopologyCoordinator.GasTopologyPlan topology) {
-						domain.rebuildGasPhaseGeometryFromParticles();
 						domain.gasTopologyCoordinator.commit(topology);
 					}
 					@Override public void refreshCoherentOccupancy() { domain.refreshCoherentOccupancy(); }

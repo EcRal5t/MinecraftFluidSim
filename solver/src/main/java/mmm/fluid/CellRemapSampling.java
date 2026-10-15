@@ -15,7 +15,7 @@ final class CellRemapSampling {
 			throw new IllegalArgumentException("Liquid sampling requires positive node budget and finite fill translation");
 		var search = new Search();
 		var masses = masses(mass, density, volume, volumes);
-		var result = orientations(domain, cell, support, masses, moments, moments, preferred, target, storage, 0, null, null, search);
+		var result = attempt(domain, cell, support, masses, prepareFit(moments, masses), moments, moments, preferred, target, storage, 0, null, null, search);
 		if (result != null) return new Prepared(volumes, masses, result);
 		var lower = new double[3]; var upper = new double[3]; var mean = moments.centroid();
 		var bounded = boundedCentroid(support, mean, movingAxes, maximumTranslation, lower, upper);
@@ -41,6 +41,8 @@ final class CellRemapSampling {
 				search.lastFailure = unavailable.getMessage();
 			}
 		}
+		result = orientations(domain, cell, support, masses, moments, moments, preferred, target, storage, 0, null, null, search);
+		if (result != null) return new Prepared(volumes, masses, result);
 		return new Prepared(volumes, masses, fitSupport(domain, cell, support, masses, moments, preferred, target,
 				storage, movingAxes, maximumTranslation, projection, search));
 	}
@@ -124,10 +126,18 @@ final class CellRemapSampling {
 				+ ", nodes=" + masses.length + ", required=" + moments.minimumCount() + failureSuffix(search));
 	}
 
+	private static CellRemapSpatialMoments.PreparedFit prepareFit(CellRemapSpatialMoments moments, double[] masses) {
+		try { return moments.prepareFit(masses); }
+		catch (CellRemapSpatialMoments.FitFailure failure) {
+			throw new MechanicalTimeRefinement(2, "Liquid joint quadrature is unrepresentable: " + failure.failure);
+		}
+	}
+
 	private static CellRemapSpatialMoments.Result orientations(FluidDomain domain, int cell, int support, double[] masses,
 			CellRemapSpatialMoments moments, CellRemapSpatialMoments mechanical, double[][] preferred, double[] targetMoment, double[] storage,
 			int movingAxes, double[] lower, double[] upper, Search search) {
-		var result = attempt(domain, cell, support, masses, moments, mechanical, preferred, targetMoment, storage, movingAxes, lower, upper, search);
+		var fit = prepareFit(moments, masses);
+		var result = attempt(domain, cell, support, masses, fit, moments, mechanical, preferred, targetMoment, storage, movingAxes, lower, upper, search);
 		if (result != null) return result;
 		// Orthogonal orientation changes preserve covariance and every velocity moment.
 		// Cyclic subsets include skewed rules with several long arms and a shorter opposite side.
@@ -137,17 +147,17 @@ final class CellRemapSampling {
 			for (int p = 0; p < candidate.length; p++) {
 				candidate[p] = preferred[p].clone(); candidate[p][axis] = (p - node + masses.length) % masses.length < size ? sign : 0;
 			}
-			result = attempt(domain, cell, support, masses, moments, mechanical, candidate, targetMoment, storage, movingAxes, lower, upper, search);
+			result = attempt(domain, cell, support, masses, fit, moments, mechanical, candidate, targetMoment, storage, movingAxes, lower, upper, search);
 			if (result != null) return result;
 		}
 		return null;
 	}
 
 	private static CellRemapSpatialMoments.Result attempt(FluidDomain domain, int cell, int support, double[] masses,
-			CellRemapSpatialMoments moments, CellRemapSpatialMoments mechanical, double[][] preferred, double[] targetMoment, double[] storage,
+			CellRemapSpatialMoments.PreparedFit fit, CellRemapSpatialMoments moments, CellRemapSpatialMoments mechanical, double[][] preferred, double[] targetMoment, double[] storage,
 			int movingAxes, double[] lower, double[] upper, Search search) {
 		CellRemapSpatialMoments.Result result;
-		try { result = moments.fit(masses, preferred); }
+		try { result = fit.fit(preferred); }
 		catch (CellRemapSpatialMoments.FitFailure failure) {
 			if (failure.failure != CellRemapSpatialMoments.Failure.UNREPRESENTABLE)
 				throw new MechanicalTimeRefinement(2, "Liquid joint quadrature is unrepresentable: " + failure.failure);

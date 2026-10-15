@@ -259,6 +259,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& phaseDomain.exactInternalEnergy().equals(phaseDomain.thermalAudit().expectedInventory()),
 				"domain freeze commit did not conserve exact mass, volume and energy inventories");
 
+		phaseDomain = FluidDomain.restoreAuthoritativeState(phaseDomain.captureAuthoritativeState());
 		phaseDomain.setThermalTemperatureInCell(0, 0, 0, 305.0);
 		SignedDyadic hotEnergy = phaseDomain.exactInternalEnergy();
 		FluidDomain.ThermalPhaseStats meltStats = phaseDomain.stepInertPhaseChangeOnly(16);
@@ -271,6 +272,12 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& phaseDomain.exactInternalEnergy().equals(hotEnergy)
 				&& phaseDomain.exactInternalEnergy().equals(phaseDomain.thermalAudit().expectedInventory()),
 				"domain melt commit did not conserve exact mass, volume and energy inventories");
+
+		phaseDomain = FluidDomain.restoreAuthoritativeState(phaseDomain.captureAuthoritativeState());
+		phaseDomain.step(false, 0);
+		require(close(phaseDomain.totalVolumeExact(), 1.0) && phaseDomain.totalCoherentSolidVolumeSvq() == 0
+				&& phaseDomain.exactInternalEnergy().equals(phaseDomain.thermalAudit().expectedInventory()),
+				"Restored melt could not continue through a complete mechanical step");
 
 		FluidMaterial roundoffLiquid = FluidMaterial.withSurfaceTension("test:roundoff_liquid", 1_000.0,
 				"test:miscible", 0.0, 90.0);
@@ -969,19 +976,22 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				positions[base+3] = group == 0 ? .0625F : .03125F;
 			}
 			d.restoreParticleState(new FlipParticleState(3,3,3,1,24,1,positions,new float[72],new byte[27]));
-			d.ensureInventoryGrid(); int cell = d.cellIndex(1,1,1), neighbor = d.cellIndex(2,1,1);
+			d.ensurePressureGeometry(); int cell = d.cellIndex(1,1,1), neighbor = d.cellIndex(2,1,1);
 			var state = new PhaseChangeStageSupport.Workspace(d.sizeX,d.sizeY,d.sizeZ,d.cellCount,d.maximumParticleCount,
 					d.config.cellSize(),d.unitScale,d.geometry,d.markerGrid,d.projection,d.particles,d.gasState,d.pendingPhaseVolume,null);
 			var before = PhaseLiquidGeometryEdit.current(state,cell);
 			float neighborNormal = d.pressurePhaseGeometry.planeNormal(neighbor,0);
-			PhaseLiquidGeometryEdit edit;
-			if (kind == 0 || kind == 3) {
-				var allocation = new PhaseChangeStageSupport.PhaseMarkerAllocation(7,kind == 0 ? .03125F : 0,
-						kind == 0 ? 31.25 : 0,kind == 3,null,null);
-				edit = PhaseLiquidGeometryEdit.afterBoiling(state,cell,new PhaseChangeStageSupport.PhaseRemovalPlan(
-						List.of(allocation),PhaseChangeStageSupport.PhaseComposition.EMPTY,0));
-			} else edit = PhaseLiquidGeometryEdit.afterCondensation(state,cell,kind == 1 ? 0 : -1,
-					kind == 1 ? .09375F : 0,.03125F,kind == 2 ? d.markerSlotPosition(1,1,1,0) : null);
+			var future = new java.util.ArrayList<PhaseLiquidGeometryEdit.InsertedMarker>();
+			for (int raw = d.markerGrid.cellMarkerHead[cell]; raw >= 0; raw = d.markerGrid.particleCellNext[raw]) {
+				if (kind == 3 && raw == 7) continue;
+				float volume = kind == 0 && raw == 7 ? .03125F : kind == 1 && raw == 0 ? .09375F : d.particles.volume(raw);
+				future.add(new PhaseLiquidGeometryEdit.InsertedMarker(volume,d.particles.positionX(raw),d.particles.positionY(raw),d.particles.positionZ(raw)));
+			}
+			if (kind == 2) {
+				float[] position = d.markerSlotPosition(1,1,1,0);
+				future.add(new PhaseLiquidGeometryEdit.InsertedMarker(.03125F,position[0],position[1],position[2]));
+			}
+			var edit = PhaseLiquidGeometryEdit.fromMarkers(state,cell,future);
 			var planned = new FlipPressurePhaseGeometry(3,3,3); var active = new boolean[27];
 			planned.rebuild(d.geometry.solid,d.projection.pressureVolume,d.geometry.cutCells,d.pressureGranularCoupling,
 					active,d.markerGrid,d.particles,1,edit);

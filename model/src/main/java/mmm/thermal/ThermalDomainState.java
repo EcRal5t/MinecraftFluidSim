@@ -40,14 +40,16 @@ public final class ThermalDomainState {
 		private final int cell;
 		private final SignedDyadic cellEnergy;
 		private final List<ThermalStateFunction.InventoryPortion> unchangedSolids;
+		private final ThermalCellOperations.PhaseOwner[] unchangedOwners;
 		PhaseCandidateCell(ThermalDomainState owner, Revision revision, int cell, SignedDyadic cellEnergy,
-				List<ThermalStateFunction.InventoryPortion> unchangedSolids) {
+				List<ThermalStateFunction.InventoryPortion> unchangedSolids, ThermalCellOperations.PhaseOwner[] unchangedOwners) {
 			this.owner = owner; this.revision = revision; this.cell = cell; this.cellEnergy = cellEnergy;
-			this.unchangedSolids = List.copyOf(unchangedSolids);
+			this.unchangedSolids = List.copyOf(unchangedSolids); this.unchangedOwners = unchangedOwners;
 		}
 		public int cell() { return cell; }
 		public SignedDyadic cellEnergy() { return cellEnergy; }
 		public List<ThermalStateFunction.InventoryPortion> unchangedSolids() { return unchangedSolids; }
+		ThermalCellOperations.PhaseOwner[] unchangedOwners() { return unchangedOwners; }
 	}
 
 	private final ThermalRegistry registry;
@@ -380,9 +382,6 @@ public final class ThermalDomainState {
 	}
 
 	public void commitTruncate(int marker, LiquidEnergyColumn.Truncation plan) { liquidEnergy.commitTruncate(marker, plan); }
-	public void commitInternalTruncate(int marker, LiquidEnergyColumn.Truncation plan) {
-		liquidEnergy.commitInternalTruncate(marker, plan);
-	}
 
 	public void resetMarkerTemperature(int marker, double temperatureK, ThermalCarrierContext markers, SignedDyadic inventoryBefore) {
 		liquidEnergy.resetMarkerTemperature(marker, temperatureK, markers);
@@ -681,16 +680,19 @@ public final class ThermalDomainState {
 		return cellOperations.observeTemperatureInCell(cell, markers);
 	}
 
-	/** Solves a prospective liquid/coherent phase edit while retaining every same-cell granular heat-bath carrier. */
-	public double phaseCandidateTemperature(
-			int cell, List<ThermalStateFunction.InventoryPortion> phaseInventory, ThermalCarrierContext markers
-	) {
-		return cellOperations.phaseCandidateTemperature(cell, phaseInventory, markers);
-	}
 
 	/** Freezes exact same-cell energy and unchanged solid heat baths for a gas/liquid candidate search. */
 	public PhaseCandidateCell preparePhaseCandidateCell(int cell, ThermalCarrierContext markers) {
 		return cellOperations.preparePhaseCandidateCell(cell, markers, this, thermalRevision());
+	}
+
+	/** Prepares the equilibrium-energy line used to order actual solid/liquid integer extents. */
+	public ThermalPhaseExtentCurve preparePhaseExtentCurve(PhaseCandidateCell current,
+			List<ThermalStateFunction.InventoryPortion> initialLiquid, int oldMaterial, int newMaterial,
+			double equilibrium, double maximumMovedMass, double massError) {
+		requirePhaseCandidateCurrent(current);
+		return ThermalPhaseExtentCurve.prepare(registry, stateFunction, current, initialLiquid, oldMaterial, newMaterial,
+				equilibrium, maximumMovedMass, massError);
 	}
 
 	/** A cell-local raw-energy assignment and its complete audit, prepared before either phase writes. */
@@ -709,20 +711,59 @@ public final class ThermalDomainState {
 		private PhaseCellEnergyUnavailableException(ThermalCellEnergyAssignment.UnavailableException cause) { super(cause.getMessage(), cause); }
 	}
 
-	public PhaseCellEnergyPlan planPhaseCellEnergy(PhaseCandidateCell current,
-			List<ThermalStateFunction.InventoryPortion> liquidInventory, double gasEnergyBefore, double gasEnergyAfter) {
-		requirePhaseCandidateCurrent(current);
-		try { return new PhaseCellEnergyPlan(this, thermalRevision(),
-				cellOperations.preparePhaseCellEnergy(current, liquidInventory, gasEnergyBefore, gasEnergyAfter)); }
-		catch (ThermalCellEnergyAssignment.UnavailableException unavailable) { throw new PhaseCellEnergyUnavailableException(unavailable); }
+	/** Common-temperature evaluation of the future real owner set, before energy publication. */
+	public static final class PhaseCellTrial {
+		private final ThermalDomainState owner;
+		private final Revision revision;
+		private final int cell;
+		private final ThermalCellEnergyAssignment.Trial raw;
+		private final SignedDyadic emptyEnergyRemainder;
+		private PhaseCellTrial(ThermalDomainState owner, Revision revision, int cell,
+				ThermalCellEnergyAssignment.Trial raw, SignedDyadic emptyEnergyRemainder) {
+			this.owner = owner; this.revision = revision; this.cell = cell; this.raw = raw;
+			this.emptyEnergyRemainder = emptyEnergyRemainder;
+		}
+		public double temperatureK() { return raw == null ? Double.NaN : raw.state.temperatureK(); }
+		/** Storage-rounding temperature envelope; infinity leaves the final direction check in charge. */
+		public double temperatureToleranceK() { return raw == null ? 0 : raw.temperatureTolerance(); }
+		public double temperatureLowerK() { return Math.max(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, temperatureK() - temperatureToleranceK()); }
+		public double temperatureUpperK() { return temperatureK() + temperatureToleranceK(); }
 	}
 
-	/** Plans complete future liquid/coherent owners at the current cell energy, retaining its granular heat baths. */
-	public PhaseCellEnergyPlan planPhaseCellEnergy(PhaseCandidateCell current,
+	public PhaseCellTrial trialPhaseCellEnergy(PhaseCandidateCell current,
+			List<ThermalStateFunction.InventoryPortion> liquidInventory, double gasEnergyBefore, double gasEnergyAfter) {
+		requirePhaseCandidateCurrent(current);
+		return new PhaseCellTrial(this, current.revision, current.cell(),
+				cellOperations.trialPhaseCellEnergy(current, liquidInventory, gasEnergyBefore, gasEnergyAfter, false), SignedDyadic.ZERO);
+	}
+
+	/** Replaces liquid/coherent owners while keeping the prepared granular heat baths. */
+	public PhaseCellTrial trialPhaseCellEnergy(PhaseCandidateCell current,
 			List<ThermalStateFunction.InventoryPortion> liquidAndCoherentInventory) {
 		requirePhaseCandidateCurrent(current);
-		try { return new PhaseCellEnergyPlan(this, thermalRevision(),
-				cellOperations.preparePhaseCellEnergy(current, liquidAndCoherentInventory)); }
+		return new PhaseCellTrial(this, current.revision, current.cell(),
+				cellOperations.trialPhaseCellEnergy(current, liquidAndCoherentInventory, 0, 0, true), SignedDyadic.ZERO);
+	}
+
+	public record VaporizedCellEnergyTrial(double gasEnergyAfter, PhaseCellTrial thermalTrial) { }
+
+	/** The final liquid heat bath transfers its whole U to gas, followed by one storage rounding. */
+	public VaporizedCellEnergyTrial trialVaporizedCellEnergy(PhaseCandidateCell current, double gasEnergyBefore) {
+		requirePhaseCandidateCurrent(current);
+		if (!current.unchangedSolids().isEmpty() || !Double.isFinite(gasEnergyBefore))
+			throw new IllegalArgumentException("Complete vaporization requires an empty final condensed cell");
+		SignedDyadic total = current.cellEnergy().add(SignedDyadic.of(gasEnergyBefore));
+		double gasEnergyAfter = total.toDouble();
+		if (!Double.isFinite(gasEnergyAfter)) throw new ThermalStateFunction.EnergyRepresentationException();
+		var trial = new PhaseCellTrial(this, current.revision, current.cell(), null,
+				total.subtract(SignedDyadic.of(gasEnergyAfter)));
+		return new VaporizedCellEnergyTrial(gasEnergyAfter, trial);
+	}
+
+	public PhaseCellEnergyPlan planPhaseCellEnergy(PhaseCellTrial trial) {
+		if (trial == null || trial.owner != this || !matchesThermalRevision(trial.revision))
+			throw new IllegalStateException("Thermal phase trial is stale or belongs to another domain");
+		try { return new PhaseCellEnergyPlan(this, trial.revision, cellOperations.preparePhaseCellEnergy(trial.cell, trial.raw, trial.emptyEnergyRemainder)); }
 		catch (ThermalCellEnergyAssignment.UnavailableException unavailable) { throw new PhaseCellEnergyUnavailableException(unavailable); }
 	}
 
@@ -742,14 +783,6 @@ public final class ThermalDomainState {
 		cellOperations.commitPhaseCellEnergy(plan.assignment, markers);
 	}
 
-	/** Validates one prospective liquid inventory against a saved same-cell energy/solid context. */
-	public double requirePhaseCandidateState(
-			PhaseCandidateCell current, List<ThermalStateFunction.InventoryPortion> liquidInventory,
-			double gasEnergyBefore, double gasEnergyAfter
-	) {
-		requirePhaseCandidateCurrent(current);
-		return cellOperations.requirePhaseCandidateState(current, liquidInventory, gasEnergyBefore, gasEnergyAfter);
-	}
 
 	public void setTemperatureInCell(int cell, double temperatureK, ThermalCarrierContext markers) {
 		cellOperations.setTemperatureInCell(cell, temperatureK, markers);
@@ -768,14 +801,6 @@ public final class ThermalDomainState {
 		cellOperations.repartitionCellEnergyConserving(cell, markers, inventoryBefore);
 	}
 
-	/** Closes a gas/liquid transfer over its exact two-owner energy boundary without rescanning the region. */
-	public void repartitionPhaseCellAndGasEnergyConserving(
-			PhaseCandidateCell beforeCell, double gasEnergyBefore, double gasEnergyAfter,
-			ThermalCarrierContext markers, boolean carrierTopologyChanged
-	) {
-		cellOperations.repartitionPhaseCellAndGasEnergyConserving(
-				beforeCell, gasEnergyBefore, gasEnergyAfter, markers, carrierTopologyChanged);
-	}
 
 	// ---- display ----
 

@@ -358,11 +358,6 @@ public final class LiquidEnergyColumn {
 		revision++;
 	}
 
-	void commitInternalTruncate(int marker, Truncation plan) {
-		if (plan == null) return;
-		internalEnergy[marker] = plan.newEnergy();
-		revision++;
-	}
 
 	void resetMarkerTemperature(int marker, double temperatureK, ThermalCarrierContext markers) {
 		internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker), temperatureK, markers);

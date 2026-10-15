@@ -22,6 +22,7 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		this(domain, faces, field, availableMemory() / 16);
 	}
 	LiquidAffineFaceFlow(FluidDomain domain, ConservativeLiquidFlux faces, CellAffineVelocityField field, long retentionLimit) {
+		domain.ensurePressureGeometry();
 		this.domain = domain; this.faces = faces;
 		sourceRevision = domain.carrierMutationRevision();
 		phaseRevision = domain.pressurePhaseGeometry.revision();

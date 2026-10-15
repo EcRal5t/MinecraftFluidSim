@@ -88,7 +88,7 @@ public final class AirCavityScannerValidation {
 			int peer=1<<axis,tangentAxis=(axis+1)%3;byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=masks[peer]=0;
 			float[] pv=new float[8];for(int i=0;i<2;i++) {for(int a=0;a<3;a++)pv[4*i+a]=(a==axis?i:0)+.5F;pv[4*i+tangentAxis]=.25F;pv[4*i+3]=.5F;}
 			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
-			domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6],masks));domain.ensureInventoryGrid();
+			domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6],masks));domain.ensurePressureGeometry();
 			var partial=GasComplementGeometry.capture(2,2,2,1,domain.geometry.solid,domain.geometry.cutCells,domain.pressurePhaseGeometry);
 			var crossing=partial.ports().stream().filter(port->port.first()/8!=port.second()/8).toList();
 			check(crossing.size()==2 && crossing.stream().allMatch(port->!port.fullCutConnection() && port.area()==.25)
@@ -163,7 +163,7 @@ public final class AirCavityScannerValidation {
 			}
 			byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)(255^(1<<corner)^(1<<opposite));
 			var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
-			d.restoreParticleState(new FlipParticleState(2,2,2,1,count,stock[0]+stock[1],pv,new float[3*count],masks));d.ensureInventoryGrid();
+			d.restoreParticleState(new FlipParticleState(2,2,2,1,count,stock[0]+stock[1],pv,new float[3*count],masks));d.ensurePressureGeometry();
 			var phase=d.pressurePhaseGeometry;
 			var gas=GasComplementGeometry.capture(2,2,2,1,d.geometry.solid,d.geometry.cutCells,phase);
 			var capacities=GasComponentCapacity.capture(d,gas,null);
@@ -190,7 +190,7 @@ public final class AirCavityScannerValidation {
 			float[] pv=new float[8];
 			for(int i=0;i<2;i++) {int bit=i==0?corner:opposite,b=4*i;pv[b]=.25F+.5F*(bit&1);pv[b+1]=.25F+.5F*(bit>>1&1);pv[b+2]=.25F+.5F*(bit>>2&1);pv[b+3]=i==0?.0625F:.03125F;}
 			var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
-			d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09375F,pv,new float[6],masks));d.ensureInventoryGrid();
+			d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09375F,pv,new float[6],masks));d.ensurePressureGeometry();
 			var phase=d.pressurePhaseGeometry;double[] swept=new double[4];
 			new LiquidFluxGeometry(d).sweptMoments(0,peer,axis,.5,true,phase.planeNormal(0,0),phase.planeNormal(0,1),phase.planeNormal(0,2),phase.planeOffset(0),swept,1<<corner,1);
 			check(Math.abs(swept[0]-.0625)<2e-15,"Shared-face swept volume used another component's PLIC");
@@ -198,7 +198,7 @@ public final class AirCavityScannerValidation {
 		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=126;
 		var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
 		float[] pv={.125F,.2F,.3F,.03F,.8F,.875F,.7F,.06F};
-		d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09F,pv,new float[6],masks));d.ensureInventoryGrid();
+		d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09F,pv,new float[6],masks));d.ensurePressureGeometry();
 		var gas=GasComplementGeometry.capture(2,2,2,1,d.geometry.solid,d.geometry.cutCells,d.pressurePhaseGeometry);
 		var capacities=GasComponentCapacity.capture(d,gas,null);
 		check(capacities.stream().anyMatch(c->!c.geometricDifferenceNormalized().isZero()),"PLIC capacity certificate lacked an inexact-root control");
@@ -213,7 +213,7 @@ public final class AirCavityScannerValidation {
 		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=masks[1]=0;
 		float[] markers={.25F,.5F,.5F,.5F,1.5F,.5F,.5F,.25F};
 		var domain=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
-				new FlipParticleState(2,2,2,1,2,.75F,markers,new float[6],masks));domain.ensureInventoryGrid();
+				new FlipParticleState(2,2,2,1,2,.75F,markers,new float[6],masks));domain.ensurePressureGeometry();
 		long[] occupied=new long[8];long inventoryRevision=domain.markerGrid.inventoryRevision;
 		long phaseRevision=domain.pressurePhaseGeometry.revision(),carrierRevision=domain.carrierMutationRevision();
 		var current=GasRuntimeGeometry.capture(domain,null,occupied,true);
@@ -567,7 +567,7 @@ public final class AirCavityScannerValidation {
 		for(int i=0;i<count;i++)for(int axis=0;axis<3;axis++)positions[4*i+axis]*=h;
 		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)mask;
 		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(h,1000,0,.01F,200,1e-5F,.5F,1e-4F,0));
-		domain.restoreParticleState(new FlipParticleState(2,2,2,h,count,volume,positions,new float[3*count],masks));domain.ensureInventoryGrid();return domain;
+		domain.restoreParticleState(new FlipParticleState(2,2,2,h,count,volume,positions,new float[3*count],masks));domain.ensurePressureGeometry();return domain;
 	}
 	private static GasComplementGeometry pieceCapacityGeometry(FluidDomain domain) {
 		domain.pressurePhaseGeometry.rebuild(domain.geometry.solid,domain.markerGrid.exactCellMarkerVolume,domain.geometry.cutCells,
@@ -648,6 +648,15 @@ public final class AirCavityScannerValidation {
 	private static void validateMicroGasOverlap() {
 		validateQuadraticMicroMoments();
 		validateThinObliqueIntersections();
+		var closeCorner = List.of(new GasGeometryOverlap.HalfSpace(SignedDyadic.of(6123013,-33),SignedDyadic.of(8373585,-23),
+				SignedDyadic.of(-1003565,-24),SignedDyadic.of(130548012587901L,-47)),
+				new GasGeometryOverlap.HalfSpace(SignedDyadic.of(8693229,-25),SignedDyadic.of(15796223,-24),
+						SignedDyadic.of(903509,-22),SignedDyadic.of(5133690104305101L,-52)));
+		var cornerMoments = GasGeometryOverlap.normalizedSecondMoments(2,closeCorner);
+		var cornerReference = GasGeometryReference.normalizedSecondMoments(2,closeCorner);
+		for(int moment=0;moment<10;moment++)checkGeometryMoment(cornerMoments[moment],cornerReference[moment],cornerReference[0],
+				"Near-coincident convex corner moment "+moment);
+
 		var zero=mmm.units.SignedDyadic.ZERO;
 		var one=mmm.units.SignedDyadic.of(1);
 		var quarter=mmm.units.SignedDyadic.of(.25);
@@ -979,10 +988,8 @@ public final class AirCavityScannerValidation {
 		domain.sealDomainBoundary(); var before = domain.bootstrapGasState(""); var old = domain.gasState.frame;
 		check(old.nodeCount() == 1 && old.capacity().pieces().size() > 1,
 				"Single-successor fixture requires a cavity spanning multiple dry microboxes");
-		check(GasPhaseGeometryEnvelope.capture(old,domain.gasState.network,null,0,1)!=null,
-				"One fixed convex component lost its unique valid phase successor certificate");
 		domain.particles.setPositionX(0, .27F); domain.particles.setPositionY(0, .22F); domain.particles.setPositionZ(0, .29F);
-		domain.gridDirty = true; domain.ensureInventoryGrid();
+		domain.gridDirty = true; domain.ensurePressureGeometry();
 		var next = GasRuntimeGeometry.capture(domain, null, new long[8], true);
 		var weights = gasOverlapWeights(domain, old, next);
 		check(weights.size() == 1 && ExactRational.ONE.equals(weights.get(1L << 32 | 1)),
@@ -1002,7 +1009,7 @@ public final class AirCavityScannerValidation {
 				&& domain.gasBoundary.auditClosed(), "Single-successor remapping changed finite stock or its external ledgers");
 		domain.setGasNodeStandardVolume(1, 0); old = domain.gasState.frame;
 		domain.particles.setPositionZ(0, Math.nextUp(domain.particles.positionZ(0)));
-		domain.gridDirty = true; domain.ensureInventoryGrid(); next = GasRuntimeGeometry.capture(domain, null, new long[8], true);
+		domain.gridDirty = true; domain.ensurePressureGeometry(); next = GasRuntimeGeometry.capture(domain, null, new long[8], true);
 		check(ExactRational.ONE.equals(gasOverlapWeights(domain, old, next).get(1L << 32 | 1)),
 				"Vacuum geometry lost its unique successor's control-volume proportion");
 		domain.gasTopologyCoordinator.refresh();
@@ -1012,14 +1019,11 @@ public final class AirCavityScannerValidation {
 		var singleSource = single.gasState.frame;
 		check(singleSource.nodeCount()==1 && singleSource.geometry().pieces().size()==1,
 				"Single-piece phase fixture acquired another old dry microbox");
-		var envelope=GasPhaseGeometryEnvelope.capture(singleSource,single.gasState.network,null,0,1);
-		check(envelope!=null,"An edited single gas piece lost its unique valid phase successor certificate");
 		var volume=SignedDyadic.of(.75); var moment=volume.multiply(SignedDyadic.of(.25));
 		var edit=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,volume,moment,moment,moment)));
 		var expanded=GasRuntimeGeometry.capture(single,edit,new long[8],true);
-		check(ExactRational.ONE.equals(gasOverlapWeights(single,singleSource,expanded).get(1L<<32|1))
-				&& envelope.volumeUpper(edit)>=expanded.capacity().chambers().getFirst().cubicMeters(),
-				"Single-piece source split its inventory proportion or escaped its future capacity upper bound");
+		check(ExactRational.ONE.equals(gasOverlapWeights(single,singleSource,expanded).get(1L<<32|1)),
+				"Single-piece source split its complete inventory proportion");
 		var oppositeMoment=volume.multiply(SignedDyadic.of(.75));
 		var opposite=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,volume,oppositeMoment,oppositeMoment,oppositeMoment)));
 		var noOverlap=GasRuntimeGeometry.capture(single,opposite,new long[8],true);
@@ -1029,27 +1033,17 @@ public final class AirCavityScannerValidation {
 		catch(GasTopologyBlockedException expected) {
 			check(expected.getMessage().contains("no positive successor"),"Zero-overlap single-piece stock failed for another property");
 		}
-		var nonconvex=pieceCapacityDomain(8,.25F,.25F,.25F,.125F);
-		nonconvex.sealDomainBoundary(); nonconvex.bootstrapGasState("");
-		var nonconvexSource=nonconvex.gasState.frame;
-		var nonconvexEnvelope=GasPhaseGeometryEnvelope.capture(nonconvexSource,nonconvex.gasState.network,null,0,1);
-		check(nonconvexSource.nodeCount()==1 && nonconvexSource.geometry().pieces().size()>1
-				&& !nonconvexEnvelope.hasWholeStock() && nonconvexEnvelope.sourceShare().signum()==0,
-				"A nonconvex fixed component acquired an unsupported unique phase successor certificate");
 		byte[] masks=new byte[8]; java.util.Arrays.fill(masks,(byte)255); masks[0]=masks[1]=masks[2]=masks[3]=0;
 		float[] markers={.25F,.25F,.25F,.03125F};
 		var connected=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
 				new FlipParticleState(2,2,2,1,1,.03125F,markers,new float[3],masks));
 		connected.sealDomainBoundary(); connected.bootstrapGasState(""); var captured=connected.gasState.frame;
-		var changingEnvelope=GasPhaseGeometryEnvelope.capture(captured,connected.gasState.network,null,0,1);
-		check(captured.nodeCount()==1 && !changingEnvelope.hasWholeStock() && changingEnvelope.sourceShare().signum()==0,
-				"Light wet stock acquired an unproved unique cross-cell gas successor");
 		var remaining=SignedDyadic.of(.015625); var flippedMoment=remaining.multiply(SignedDyadic.of(.75));
 		var flipped=new PhaseLiquidGeometryEdit(0,0,List.of(new LiquidComponentMoments(0,255,1,remaining,flippedMoment,flippedMoment,flippedMoment)));
 		var changed=GasRuntimeGeometry.capture(connected,flipped,new long[8],true);
 		connected.gasState.frame=null; var fresh=GasRuntimeGeometry.capture(connected,flipped,new long[8],true); connected.gasState.frame=captured;
 		checkRuntimePlanesEqual(changed,fresh,"Split gas future differs from independent full capture");
-		check(changed.nodeCount()==2 && changed.topology().connections().size()==1,
+		check(captured.nodeCount()==1 && changed.nodeCount()==2 && changed.topology().connections().size()==1,
 				"Partial cross-cell gas faces failed to split the old lumped stock into finite-flow owners");
 		for(int micro=0;micro<8;micro++) check(GasGeometryOverlap.normalizedVolume(micro,
 				List.of(captured.geometry().piece(micro).dryPlane(),changed.geometry().piece(micro).dryPlane())).signum()>0,
@@ -1145,7 +1139,7 @@ public final class AirCavityScannerValidation {
 				&& GasFaceIntersection.fullDryFace(domain.pressurePhaseGeometry,0,0,0),
 				"Ambient self-remap fixture requires exterior-connected slanted dry microboxes");
 		domain.particles.setPositionX(0, .9F); domain.particles.setPositionY(0, .22F); domain.particles.setPositionZ(0, .29F);
-		domain.gridDirty = true; domain.ensureInventoryGrid();
+		domain.gridDirty = true; domain.ensurePressureGeometry();
 		var next = GasRuntimeGeometry.capture(domain, null, new long[8], false);
 		check(next.nodeCount() == 0 && GasFaceIntersection.fullDryFace(domain.pressurePhaseGeometry,0,0,0)
 				&& gasOverlapWeights(domain, old, next).isEmpty(),
