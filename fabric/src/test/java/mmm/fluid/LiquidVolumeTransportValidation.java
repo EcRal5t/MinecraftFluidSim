@@ -546,7 +546,24 @@ public final class LiquidVolumeTransportValidation {
 		CellPolynomialFieldValidation.main(new String[0]);
 	}
 
-	private static void zeroFluxPreservesCarrierColumns() {
+	static void zeroFluxPreservesCarrierColumns() {
+		var retained = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(1, 1000, 0, .125F, 200, 1e-5F, .45F, .002F, 0), 32);
+		retained.setVolume(1, 1, 1, 1);
+		for (int p = 0; p < retained.particleCount(); p++) {
+			retained.particles.setVelocityX(p, .25F); retained.particles.setVelocityY(p, -.125F); retained.particles.setVelocityZ(p, .0625F);
+		}
+		retained.rebuildGridFromParticles(); java.util.Arrays.fill(retained.gridToParticleStage.advectionCells(), true);
+		var zero = new ConservativeLiquidFlux(3, 3, 3); zero.geometry(new LiquidFluxGeometry(retained));
+		zero.plan(retained.markerGrid.exactCellMarkerVolume, retained.geometry.solid, .125, retained.markerGrid.exactCellVolumeInventory);
+		var plan = new CellCarrierRemapPlan(retained, zero, .125F, new BallisticLiquidRemap(retained.cellCount));
+		double[] velocity = {.25, -.125, .0625};
+		for (int axis = 0; axis < 3; axis++) {
+			double missed = retained.unitScale.signedKilograms(.125 * 1000 * velocity[axis]);
+			if (plan.momentAudit.unadvancedMassMoment()[axis] != Math.abs(missed)
+					|| plan.momentAudit.signedMassResidual()[axis] != -missed || plan.momentAudit.reconstructedGroups() != 0)
+				throw new AssertionError("Retained source omitted its unadvanced momentum on axis " + axis);
+		}
 		mmm.simulation.FullCapabilityTestFixture.Registries registries;
 		try { registries = mmm.simulation.FullCapabilityTestFixture.load(); }
 		catch (Exception failure) { throw new IllegalStateException("Could not load carrier handoff definitions", failure); }
@@ -1168,12 +1185,38 @@ public final class LiquidVolumeTransportValidation {
 		var ordinals = new java.util.ArrayList<Integer>();
 		for (int p = 0; p < domain.particleCount(); p++) ordinals.add(p);
 		var volume = domain.markerGrid.exactCellVolumeInventory[0];
-		double mass = CellRemapMassAllocation.inventory(domain, ordinals);
+		double mass = new CellRemapTransportMoments(domain, 0, ordinals).totals().mass();
 		if (!Double.isFinite(CellRemapMassAllocation.density(domain, ordinals, volume, mass)))
 			throw new AssertionError("Exact uniform source density was rejected");
 		domain.particles.setMass(0, Math.nextUp(domain.particles.mass(0)));
-		if (Double.isFinite(CellRemapMassAllocation.density(domain, ordinals, volume, CellRemapMassAllocation.inventory(domain, ordinals))))
+		if (Double.isFinite(CellRemapMassAllocation.density(domain, ordinals, volume, new CellRemapTransportMoments(domain, 0, ordinals).totals().mass())))
 			throw new AssertionError("Unequal source density was accepted");
+		var mixed = new FluidDomain(3, 3, 3,
+				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 64);
+		mixed.setVolume(1, 1, 1, 1);
+		var materials = new FluidMaterialRegistry(java.util.List.of(
+				new FluidMaterial("test:dense", 1000, "test:liquid", 0, Math.PI / 2),
+				new FluidMaterial("test:light", 2.5, "test:liquid", 0, Math.PI / 2)));
+		for (int p = 0; p < mixed.particleCount(); p++) {
+			mixed.setMarkerMaterial(p, materials, p & 1);
+			mixed.particles.setVelocityX(p, .25F); mixed.particles.setVelocityY(p, -.125F); mixed.particles.setVelocityZ(p, .0625F);
+		}
+		mixed.rebuildGridFromParticles(); var flux = new ConservativeLiquidFlux(3, 3, 3);
+		flux.plan(mixed.markerGrid.exactCellMarkerVolume, mixed.geometry.solid, 0, mixed.markerGrid.exactCellVolumeInventory);
+		var remap = new CellCarrierRemapPlan(mixed, flux, 0, new BallisticLiquidRemap(mixed.cellCount), true);
+		var observed = new double[2][5]; double[] density = {1000, 2.5};
+		for (var marker : remap.markers) {
+			int material = marker.material(); observed[material][0] += marker.volume(); observed[material][1] += marker.mass();
+			if (marker.mass() != density[material] * marker.volume() || marker.velocityX() != .25 || marker.velocityY() != -.125 || marker.velocityZ() != .0625)
+				throw new AssertionError("Mixed-density zero-time remap changed a material density or velocity");
+			for (int axis = 0; axis < 3; axis++) observed[material][axis + 2] += marker.mass() * marker.offset(axis);
+		}
+		for (int material = 0; material < 2; material++) {
+			double expectedMass = density[material] * .5;
+			if (observed[material][0] != .5 || observed[material][1] != expectedMass
+					|| observed[material][2] != (material == 0 ? -.25 : .25) * expectedMass || observed[material][3] != 0 || observed[material][4] != 0)
+				throw new AssertionError("Mixed-density zero-time remap changed per-material inventory or centroid");
+		}
 	}
 
 	private static void quadratureAndMassKeepSmallShares() {

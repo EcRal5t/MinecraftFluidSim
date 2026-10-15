@@ -6,27 +6,6 @@ import mmm.units.SignedDyadic;
 final class CellRemapMassAllocation {
 	private CellRemapMassAllocation() { }
 
-	static double inventory(FluidDomain domain, java.util.ArrayList<Integer> ordinals) {
-		int exponent = Integer.MAX_VALUE;
-		for (int p : ordinals) {
-			long bits = Double.doubleToRawLongBits(domain.particles.mass(p)), fraction = bits & 0x000fffffffffffffL;
-			int rawExponent = (int) (bits >>> 52 & 0x7ff);
-			if (rawExponent != 0) fraction |= 0x0010000000000000L;
-			exponent = Math.min(exponent, (rawExponent == 0 ? -1074 : rawExponent - 1075) + Long.numberOfTrailingZeros(fraction));
-		}
-		long sum = 0;
-		for (int p : ordinals) {
-			double scaled = Math.scalb(domain.particles.mass(p), -exponent);
-			if (scaled >= Long.MAX_VALUE || sum > Long.MAX_VALUE - (long) scaled) {
-				double[] values = new double[ordinals.size()];
-				for (int i = 0; i < values.length; i++) values[i] = domain.particles.mass(ordinals.get(i));
-				return SignedDyadic.sum(values).toDouble();
-			}
-			sum += (long) scaled;
-		}
-		return SignedDyadic.of(sum, exponent).toDouble();
-	}
-
 	static double[] allocate(double mass, SignedDyadic volume, SignedDyadic[] weights) {
 		return allocate(mass, volume, weights, Double.NaN);
 	}

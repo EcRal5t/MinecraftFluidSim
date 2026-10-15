@@ -34,6 +34,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 
 	/** Uniform advection carries one global tensor temperature through unequal-mass source shares. */
 	static void crossCellTensorTemperatureFrame() {
+		unchangedNeighborKeepsThermalRange();
 		if (!CellLiquidVolumeTransport.enabled()) return;
 		for (boolean xyz : new boolean[] {false, true}) for (double densityRatio : new double[] {1, 3}) {
 			var domain = new FluidDomain(8, 8, 8,
@@ -89,6 +90,41 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 						"Thermal remap mixed incompatible reference frames: XYZ=" + xyz + " densityRatio=" + densityRatio + " cellX=" + x
 								+ " coefficient=" + c + " actual=" + field[0][c] + " expected=" + field[1][c]);
 			}
+		}
+	}
+
+	/** A retained same-material neighbor still supplies the temperature range for a nearby transfer. */
+	static void unchangedNeighborKeepsThermalRange() {
+		for (double neighborTemperature : new double[]{325, 400}) {
+			var domain = new FluidDomain(4, 3, 3,
+					new FluidSolverConfig(.5F, 1000, 0, .125F, 100, 1e-5F, .45F, .002F, 0), 128);
+			domain.setVolume(0, 1, 1, 1); domain.setVolume(1, 1, 1, 1);
+			var caloric = new ThermalMaterialDefinition("test:thermal/neighbor", ThermalMaterialDefinition.CarrierKind.LIQUID,
+					"mmm:water", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 600, 4000)));
+			domain.bindThermal(new ThermalRegistry(List.of(caloric)), new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 300);
+			int neighbor = domain.cellIndex(0, 1, 1), donor = domain.cellIndex(1, 1, 1), receiver = domain.cellIndex(2, 1, 1);
+			for (int p = 0; p < domain.particleCount(); p++) {
+				boolean retained = domain.particleCellIndex(p) == neighbor;
+				domain.particles.setVelocityX(p, retained ? 0 : .5F);
+				double temperature = retained ? neighborTemperature : 300 + 100 * (domain.particles.positionX(p) / .5 - 1.5);
+				domain.thermalState.resetMarkerTemperature(p, temperature, domain.thermalMarkerContext(), domain.exactInternalEnergy());
+			}
+			domain.rebuildGridFromParticles(); Arrays.fill(domain.gridToParticleStage.advectionCells(), true);
+			var flux = new ConservativeLiquidFlux(4, 3, 3); flux.geometry(new LiquidFluxGeometry(domain));
+			for (int face = 0; face < flux.physicalFaceCount; face++) if (flux.left[face] == donor && flux.right[face] == receiver) flux.velocity[face] = .5;
+			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, .25, domain.markerGrid.exactCellVolumeInventory);
+			var remap = new CellCarrierRemapPlan(domain, flux, .125F, new BallisticLiquidRemap(domain.cellCount));
+			var energy = SignedDyadic.ZERO; double receivedEnergy = 0, receivedMass = 0;
+			for (var marker : remap.markers) {
+				energy = energy.add(SignedDyadic.of(marker.energy()));
+				if (marker.cell() == receiver) { receivedEnergy += marker.energy(); receivedMass += marker.mass(); }
+				if (marker.cell() == neighbor) require(domain.thermalState.liquid().caloricInventory(marker.material(), marker.mass(), null, null)
+						.temperature(marker.energy()) == neighborTemperature, "Unchanged neighbor lost its temperature");
+			}
+			require(energy.equals(domain.exactInternalEnergy()), "Neighbor-limited remap changed exact internal energy");
+			double receivedTemperature = domain.thermalState.liquid().caloricInventory(0, receivedMass, null, null).temperature(receivedEnergy);
+			require(Math.abs(receivedTemperature - Math.min(neighborTemperature, 343.75)) < 1e-9,
+					"Retained neighbor was omitted from the transfer temperature range: neighbor=" + neighborTemperature + " arrival=" + receivedTemperature);
 		}
 	}
 

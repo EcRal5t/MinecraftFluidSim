@@ -321,10 +321,6 @@ final class GasRuntimeGeometry {
 		requireCurrentCarrierGeometry(domain);
 		return LiquidPressureGeometry.capture(domain, phase, liquidStock);
 	}
-	LiquidSpatialInput liquidSpatialInput(FluidDomain domain) {
-		requireCurrentCarrierGeometry(domain);
-		return LiquidSpatialInput.capture(domain, phase, this);
-	}
 	private void requireCurrentCarrierGeometry(FluidDomain domain) {
 		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
 		if (domain.gasState.frame != this || sealedExterior != domain.gasState.sealedDomainBoundary || !matchesCarrierGeometry(domain, occupied))

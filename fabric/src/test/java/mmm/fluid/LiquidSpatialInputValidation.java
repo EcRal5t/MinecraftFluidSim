@@ -14,7 +14,7 @@ final class LiquidSpatialInputValidation {
 		var comparison = initial.component(0, 255).comparison();
 		if (LiquidVolumeMomentSupport.evaluate(initial.frame(), 0, 255, centred.sizeX, centred.sizeY).excess().signum() != 0)
 			throw new AssertionError("Centred full volume violates its exact capacity moment");
-		var fullRule = initial.geometry().componentQuadrature(0, 255);
+		var fullRule = initial.componentQuadrature(0, 255);
 		if (fullRule.size() != 8 || fullRule.stream().anyMatch(point -> !point.volume().equals(mmm.chemistry.ExactRational.ONE.divide(8))))
 			throw new AssertionError("Full component lost its compact positive Gauss rule");
 		near(comparison.volumeDifference(), 0, 0, "Centred source and PLIC volume agree");

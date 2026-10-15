@@ -10,18 +10,24 @@ import java.util.List;
 final class CellRemapTransportMoments {
 	private final int[] ordinals, micro;
 	private final ExactRational[] supply = zeros(8);
-	private static final int MASS = 0, KINETIC = 1, MOMENTUM = 2, VOLUME_MOMENT = 5, VOLUME_MOTION = 8, MOMENTS = 11;
+	private static final int MASS = 0, KINETIC = 1, MOMENTUM = 2, VOLUME_MOMENT = 5, VOLUME_MOTION = 8, MASS_MOMENT = 11, MOMENTS = 14;
 	private final BigInteger[][] sourceMoments = new BigInteger[MOMENTS][8];
 	private final int[] momentExponents = new int[MOMENTS];
-	private final CellRemapSpatialMoments[] sourceSpatial = new CellRemapSpatialMoments[8];
+	private final double[] rawMass;
+	private final double[][] rawPosition, rawVelocity;
+	private CellRemapSpatialMoments[] sourceSpatial;
+	private final SignedDyadic rawVolume;
 	private final ExactRational volume;
+	private Totals totals;
 
 	CellRemapTransportMoments(FluidDomain domain, int cell, List<Integer> original) {
 		ordinals = original.stream().mapToInt(Integer::intValue).toArray();
 		micro = new int[ordinals.length];
+		rawMass = new double[ordinals.length];
+		rawPosition = new double[ordinals.length][]; rawVelocity = new double[ordinals.length][];
 		var moments = new SignedDyadic[MOMENTS][8];
 		for (var row : moments) Arrays.fill(row, SignedDyadic.ZERO);
-		ExactRational total = ExactRational.ZERO;
+		SignedDyadic total = SignedDyadic.ZERO;
 		double h = domain.config.cellSize();
 		for (int i = 0; i < ordinals.length; i++) {
 			int p = ordinals[i];
@@ -38,15 +44,15 @@ final class CellRemapTransportMoments {
 			if (v.signum() <= 0 || mass.signum() <= 0)
 				throw new IllegalArgumentException("Transport requires positive raw source volume and mass");
 			int m = micro[i]; var amount = rational(v);
-			if (sourceSpatial[m] == null) sourceSpatial[m] = new CellRemapSpatialMoments();
-			sourceSpatial[m].add(mass.toDouble(), positionValues, velocityValues);
-			supply[m] = supply[m].add(amount); total = total.add(amount);
+			rawMass[i] = mass.toDouble(); rawPosition[i] = positionValues; rawVelocity[i] = velocityValues;
+			supply[m] = supply[m].add(amount); total = total.add(v);
 			moments[MASS][m] = moments[MASS][m].add(mass);
 			for (int a = 0; a < 3; a++) {
 				moments[MOMENTUM + a][m] = moments[MOMENTUM + a][m].add(mass.multiply(velocity[a]));
 				moments[KINETIC][m] = moments[KINETIC][m].add(mass.multiply(velocity[a].multiply(velocity[a])));
 				moments[VOLUME_MOMENT + a][m] = moments[VOLUME_MOMENT + a][m].add(v.multiply(position[a]));
 				moments[VOLUME_MOTION + a][m] = moments[VOLUME_MOTION + a][m].add(v.multiply(velocity[a]));
+				moments[MASS_MOMENT + a][m] = moments[MASS_MOMENT + a][m].add(mass.multiply(position[a]));
 			}
 		}
 		for (int row = 0; row < MOMENTS; row++) {
@@ -56,7 +62,34 @@ final class CellRemapTransportMoments {
 			momentExponents[row] = exponent;
 			for (int m = 0; m < 8; m++) sourceMoments[row][m] = moments[row][m].significand().shiftLeft(moments[row][m].exponent() - exponent);
 		}
-		volume = total;
+		rawVolume = total; volume = rational(total);
+	}
+
+	/** Source-wide observations share the captured micro columns; no spatial factor is needed. */
+	record Totals(SignedDyadic volume, double mass, double kinetic, double[] momentum,
+	              double[] massMoment, double[] volumeMoment, double[] volumeMotion) { }
+	Totals totals() {
+		if (totals == null) totals = new Totals(rawVolume, totalMoment(MASS), totalMoment(KINETIC), totalVector(MOMENTUM),
+				totalVector(MASS_MOMENT), totalVector(VOLUME_MOMENT), totalVector(VOLUME_MOTION));
+		return totals;
+	}
+	private double totalMoment(int row) {
+		BigInteger value = BigInteger.ZERO;
+		for (var microMoment : sourceMoments[row]) value = value.add(microMoment);
+		return observe(rational(new SignedDyadic(value, momentExponents[row])));
+	}
+	private double[] totalVector(int start) {
+		return new double[]{totalMoment(start), totalMoment(start + 1), totalMoment(start + 2)};
+	}
+	private void prepareSpatial() {
+		if (sourceSpatial != null) return;
+		var spatial = new CellRemapSpatialMoments[8];
+		for (int i = 0; i < ordinals.length; i++) {
+			int m = micro[i];
+			if (spatial[m] == null) spatial[m] = new CellRemapSpatialMoments();
+			spatial[m].add(rawMass[i], rawPosition[i], rawVelocity[i]);
+		}
+		sourceSpatial = spatial;
 	}
 
 	/**
@@ -127,6 +160,7 @@ final class CellRemapTransportMoments {
 	}
 
 	private Result moments(ExactRational[][] microWeights) {
+		prepareSpatial();
 		int count = microWeights.length;
 		double[][] momentum = new double[count][3]; double[] kinetic = new double[count];
 		double[][] volumeMoment = new double[count][3], volumeMotion = new double[count][3];

@@ -310,14 +310,15 @@ final class LiquidAffineSweepGeometry {
 	/** Micro sweep and wet measures use the same positive source pieces and frozen trace. */
 	static void sweptMicroVolumes(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
 	                             double intercept, double tangentSlope, double otherSlope, double dtOverH,
-	                             int donorSupport, int receiverSupport, double[] swept, double[] wet) {
+	                             int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet) {
 		sweptMicroVolumes(domain, donor, receiver, axis, positive, intercept, tangentSlope, otherSlope, dtOverH,
-				donorSupport, receiverSupport, swept, wet, null);
+				donorSupport, receiverSupport, sourceWet, swept, wet, null);
 	}
 	static void sweptMicroVolumes(FluidDomain domain, int donor, int receiver, int axis, boolean positive,
 	                             double intercept, double tangentSlope, double otherSlope, double dtOverH,
-	                             int donorSupport, int receiverSupport, double[] swept, double[] wet, MicroSweep saved) {
+	                             int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet, MicroSweep saved) {
 		requireInput(domain, donor, receiver, axis, intercept, tangentSlope, otherSlope, dtOverH, donorSupport, receiverSupport);
+		if (sourceWet.length != 8 || swept.length != 8 || wet.length != 8) throw new IllegalArgumentException("Missing affine micro volumes");
 		java.util.Arrays.fill(swept, 0); java.util.Arrays.fill(wet, 0);
 		var phase = domain.pressurePhaseGeometry; var cut = domain.geometry.cutCells;
 		var wedge = wedge(axis, positive, intercept, tangentSlope, otherSlope, dtOverH);
@@ -328,17 +329,16 @@ final class LiquidAffineSweepGeometry {
 			if ((donorSupport & 1 << micro) == 0 || (donorSupport & 1 << faceMicro) == 0
 					|| (receiverSupport & 1 << peerMicro) == 0 || (cut.mask(donor) & (1 << micro | 1 << faceMicro)) != 0
 					|| (cut.mask(receiver) & 1 << peerMicro) != 0) continue;
-			var supports = wetSourceSupports(domain, donor, micro, null);
-			if (supports.isEmpty()) continue;
+			if (sourceWet[micro] == 0) continue;
 			double localPore = phase.componentPoreScale(donor, micro, donorPore);
 			double peerPore = phase.componentPoreScale(receiver, peerMicro, receiverPore);
 			if (!(Double.isFinite(localPore) && localPore >= 0 && localPore <= 1
 					&& Double.isFinite(peerPore) && peerPore >= 0 && peerPore <= 1))
 				throw new IllegalStateException("Invalid affine micro sweep pore fraction");
-			wet[micro] = saved == null ? observeVolume(sourceWetVolume(domain, donor, micro).multiply(rational(localPore)))
-					: saved.wetVolume(domain, donor, micro, localPore);
+			wet[micro] = sourceWet[micro];
 			swept[micro] = saved != null ? observeVolume(saved.moments[micro] == null ? ExactRational.ZERO : saved.moments[micro][0])
-					: dtOverH == 0 ? 0 : observeVolume(sweptVolume(micro, supports, wedge).multiply(rational(Math.min(localPore, peerPore))));
+					: dtOverH == 0 ? 0 : observeVolume(sweptVolume(micro, wetSourceSupports(domain, donor, micro, null), wedge)
+							.multiply(rational(Math.min(localPore, peerPore))));
 		}
 	}
 	private static ExactRational sweptVolume(int micro, List<List<GasGeometryOverlap.HalfSpace>> supports,
@@ -359,8 +359,6 @@ final class LiquidAffineSweepGeometry {
 		final boolean secondMoments;
 		private final SignedDyadic sourceVolume;
 		private final int donorSupport, receiverSupport;
-		private final double[] wet = new double[8];
-		private int wetMask;
 		final long retainedBytes;
 		MicroSweep(FluidDomain domain, int donor, int receiver, int axis, boolean positive, double[] q, double dt, int support) {
 			this(domain, donor, receiver, axis, positive, q, dt, support, 255, false);
@@ -386,13 +384,6 @@ final class LiquidAffineSweepGeometry {
 		boolean matches(FluidDomain domain, int donor, int receiver, int axis, boolean positive, double[] q, double dt) {
 			return java.util.Objects.equals(sourceVolume, domain.markerGrid.exactCellVolumeInventory[donor])
 					&& source(domain, donor, receiver, axis, positive, q, dt, source) != null;
-		}
-		private synchronized double wetVolume(FluidDomain domain, int donor, int micro, double localPore) {
-			if ((wetMask & 1 << micro) == 0) {
-				wet[micro] = observeVolume(sourceWetVolume(domain, donor, micro).multiply(rational(localPore)));
-				wetMask |= 1 << micro;
-			}
-			return wet[micro];
 		}
 		ExactRational[] sum(int axis, boolean positive, int donorSupport, int receiverSupport) {
 			return sum(axis, positive, donorSupport, receiverSupport, 4);

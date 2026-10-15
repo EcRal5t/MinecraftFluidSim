@@ -28,7 +28,7 @@ final class CellRemapMicroPreferences {
 		double[] faceWet = new double[8];
 		for (int d = 0; d < outgoing; d++) {
 			double[] swept = geometricRatio[d], low = donorRatio[d];
-			flux.sweptMicroVolumes(faces[d], support, receiverSupports[d], swept, faceWet);
+			flux.sweptMicroVolumes(faces[d], support, receiverSupports[d], wet, swept, faceWet);
 			boolean phaseLow = flux.lowOrderMicroVolumes(faces[d], support, receiverSupports[d], low);
 			if (!phaseLow) {
 				int normalBit = 1 << flux.axis[faces[d]];

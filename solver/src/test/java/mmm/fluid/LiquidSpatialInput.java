@@ -121,12 +121,12 @@ final class LiquidSpatialInput {
 	private LiquidSpatialInput(LiquidPressureGeometry geometry, GasRuntimeGeometry frame, Piece[] pieces, List<Component>[] components) {
 		this.geometry = geometry; this.frame = frame; this.pieces = pieces; this.components = components;
 	}
-	static LiquidSpatialInput capture(FluidDomain domain) {
-		if (domain.gasState.frame == null) throw new GasTopologyBlockedException("Liquid spatial input requires a current gas frame");
-		return domain.gasState.frame.liquidSpatialInput(domain);
-	}
 	@SuppressWarnings("unchecked")
-	static LiquidSpatialInput capture(FluidDomain domain, FlipPressurePhaseGeometry phase, GasRuntimeGeometry frame) {
+	static LiquidSpatialInput capture(FluidDomain domain) {
+		var frame = domain.gasState.frame;
+		if (frame == null) throw new GasTopologyBlockedException("Liquid spatial input requires a current gas frame");
+		var geometry = frame.liquidPressureGeometry(domain);
+		var phase = frame.phase();
 		var source = new Accumulator[Math.multiplyExact(8, domain.cellCount)];
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			int cell = domain.particleCellIndex(marker), micro = CellRemapMicroTopology.positionMicro(domain.config.cellSize(),
@@ -136,7 +136,7 @@ final class LiquidSpatialInput {
 			int key = 8 * cell + micro; if (source[key] == null) source[key] = new Accumulator();
 			source[key].add(domain, marker);
 		}
-		var geometry = LiquidPressureGeometry.capture(domain, phase, frame.liquidStock()); var pieces = new Piece[source.length];
+		var pieces = new Piece[source.length];
 		var components = (List<Component>[]) new List<?>[domain.cellCount];
 		var scale = SignedDyadic.of(domain.unitScale.cubicMetersPerNormalizedVolume());
 		var h = SignedDyadic.of(domain.config.cellSize()); var firstScale = rational(scale.multiply(h));
@@ -156,7 +156,7 @@ final class LiquidSpatialInput {
 						capacities[componentIndex].toDouble() * 8 / Integer.bitCount(support));
 				for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
 					int key = 8 * cell + micro; var value = source[key] == null ? CarrierMoments.EMPTY : source[key].snapshot();
-					var quadratic = LiquidPressureGeometry.pieceSecondMoments(domain, phase, cell, micro);
+					var quadratic = LiquidShapeGeometry.wetMoments(phase, cell, micro, true);
 					var coveredSecond = quadratic[0].isZero() ? QuadraticMoments.ZERO
 							: new QuadraticMoments(Arrays.asList(Arrays.copyOfRange(quadratic, 4, 10))).scale(secondScale);
 					var integrated = quadratic[0].isZero() ? GeometricMoments.ZERO : new GeometricMoments(quadratic[0].multiply(rational(scale)),
@@ -175,6 +175,22 @@ final class LiquidSpatialInput {
 	}
 	LiquidPressureGeometry geometry() { return geometry; }
 	GasRuntimeGeometry frame() { return frame; }
+	/** Independent positive volume rule about the whole-cell centre. */
+	List<GasGeometryOverlap.QuadraturePoint> componentQuadrature(int cell, int support) {
+		if (cell < 0 || cell >= components.length || support <= 0 || support > 255
+				|| (support & frame.geometry().collisionMask(cell)) != 0)
+			throw new IllegalArgumentException("Quadrature support must contain open microboxes");
+		var phase = frame.phase();
+		boolean full = support == 255;
+		for (int micro = 0; micro < 8 && full; micro++)
+			full = LiquidShapeGeometry.wetSupports(phase, cell, micro).equals(List.of(List.of()));
+		if (full) return GasGeometryOverlap.fullCellQuadrature();
+		var result = new ArrayList<GasGeometryOverlap.QuadraturePoint>();
+		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0)
+			for (var planes : LiquidShapeGeometry.wetSupports(phase, cell, micro))
+				result.addAll(GasGeometryOverlap.positiveQuadrature(micro, planes));
+		return List.copyOf(result);
+	}
 	Piece piece(int key) {
 		if (key < 0 || key >= pieces.length) throw new IllegalArgumentException("Invalid liquid spatial piece");
 		return pieces[key];

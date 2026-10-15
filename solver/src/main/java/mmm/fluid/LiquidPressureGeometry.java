@@ -204,20 +204,6 @@ final class LiquidPressureGeometry {
 		}
 		return result;
 	}
-	/** Positive normalized PLIC volume rule about the whole-cell centre. */
-	List<GasGeometryOverlap.QuadraturePoint> componentQuadrature(int cell, int support) {
-		requireSupport(cell, support);
-		if (microPieces[cell] == null) return List.of();
-		boolean full = support == 255 && collisionMasks[cell] == 0;
-		for (int micro = 0; micro < 8 && full; micro++)
-			full = microPieces[cell][micro] != null && microPieces[cell][micro].wetSupports.equals(List.of(List.of()));
-		if (full) return GasGeometryOverlap.fullCellQuadrature();
-		var result = new ArrayList<GasGeometryOverlap.QuadraturePoint>();
-		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0 && microPieces[cell][micro] != null) {
-			for (var planes : microPieces[cell][micro].wetSupports) result.addAll(GasGeometryOverlap.positiveQuadrature(micro, planes));
-		}
-		return List.copyOf(result);
-	}
 	boolean needsMicroBlocks(int cell,int support) {
 		requireSupport(cell,support); var wall=new boolean[3][3]; var open=new boolean[3][3];
 		for(int micro=0;micro<8;micro++)if((support&1<<micro)!=0)for(var face:microFaces(cell,micro)) {
@@ -339,24 +325,6 @@ final class LiquidPressureGeometry {
 		}
 		return new CellSnapshot(cell,volume,first,first.scale(1/volume),admitted,rawVolume*h3,
 				d.projection.pressureVolume[cell]*h3,error,sides,facets,fragments);
-	}
-	static VolumeMoments pieceMoments(FluidDomain domain, FlipPressurePhaseGeometry phase, int cell, int micro) {
-		if (cell < 0 || cell >= domain.cellCount || micro < 0 || micro >= 8) throw new IllegalArgumentException("Invalid liquid geometry piece");
-		if ((domain.geometry.cutCells.mask(cell) & 1 << micro) != 0) return VolumeMoments.EMPTY;
-		var integral = unitMicroMoments(phase, cell, micro);
-		double h = domain.config.cellSize(), h3 = h*h*h, volume = integral[0] / 8;
-		return new VolumeMoments(volume*h3, new Vec3(
-				h3*h*((cell%domain.sizeX + .5*(micro&1))*integral[0] + .5*integral[1])/8,
-				h3*h*((cell/domain.sizeX%domain.sizeY + .5*(micro>>1&1))*integral[0] + .5*integral[2])/8,
-				h3*h*((cell/(domain.sizeX*domain.sizeY) + .5*(micro>>2&1))*integral[0] + .5*integral[3])/8));
-	}
-	/** Exact normalized coverage moments through degree two, about the whole-cell centre. */
-	static ExactRational[] pieceSecondMoments(FluidDomain domain, FlipPressurePhaseGeometry phase, int cell, int micro) {
-		if (cell < 0 || cell >= domain.cellCount || micro < 0 || micro >= 8) throw new IllegalArgumentException("Invalid liquid geometry piece");
-		if ((domain.geometry.cutCells.mask(cell) & 1 << micro) != 0) {
-			var empty = new ExactRational[10]; java.util.Arrays.fill(empty, ExactRational.ZERO); return empty;
-		}
-		return LiquidShapeGeometry.wetMoments(phase, cell, micro, true);
 	}
 	private static double[] unitMicroMoments(FlipPressurePhaseGeometry plane, int cell, int micro) {
 		if (plane.liquidShape(cell) != null) {

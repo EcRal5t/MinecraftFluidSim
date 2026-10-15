@@ -203,19 +203,6 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 					ChemicalMixtureRecord mixture = domain.chemicalParcels == null ? null : domain.chemicalParcels.record(p);
 					Group group = find(input, cell, material, indicator, mixture, CellRemapMicroTopology.markerSupport(domain, p));
 					group.original.add(p);
-					group.kinetic += domain.particles.mass(p) * (square(domain.particles.velocityX(p)) + square(domain.particles.velocityY(p)) + square(domain.particles.velocityZ(p)));
-					group.momentum[0] += domain.particles.mass(p) * domain.particles.velocityX(p);
-					group.momentum[1] += domain.particles.mass(p) * domain.particles.velocityY(p);
-					group.momentum[2] += domain.particles.mass(p) * domain.particles.velocityZ(p);
-					for (int a = 0; a < 3; a++) {
-						int coordinate = a == 0 ? cell % domain.sizeX : a == 1 ? cell / domain.sizeX % domain.sizeY : cell / (domain.sizeX * domain.sizeY);
-						double position = a == 0 ? domain.particles.positionX(p) : a == 1 ? domain.particles.positionY(p) : domain.particles.positionZ(p);
-						double velocity = a == 0 ? domain.particles.velocityX(p) : a == 1 ? domain.particles.velocityY(p) : domain.particles.velocityZ(p);
-						double offset = position / domain.config.cellSize() - coordinate - 0.5;
-						group.massMoment[a] += domain.particles.mass(p) * offset;
-						group.volumeMoment[a] += domain.particles.volume(p) * offset;
-						group.volumeMotion[a] += domain.particles.volume(p) * velocity;
-					}
 					if (mixture != null) group.species.add(mixture);
 					if (domain.thermalState != null) {
 						double energy = domain.thermalState.liquidInternalEnergy(p);
@@ -224,9 +211,13 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 				}
 				ArrayList<Group> groups = input[cell];
 				if (groups != null) for (Group group : groups) {
-					if (groups.size() == 1) group.volume = domain.markerGrid.exactCellVolumeInventory[group.cell];
-					else for (int p : group.original) group.volume = group.volume.add(SignedDyadic.of(domain.particles.volume(p)));
-					group.mass = CellRemapMassAllocation.inventory(domain, group.original);
+					group.transportMoments = new CellRemapTransportMoments(domain, cell, group.original);
+					var totals = group.transportMoments.totals();
+					group.volume = totals.volume(); group.mass = totals.mass(); group.kinetic = totals.kinetic();
+					System.arraycopy(totals.momentum(), 0, group.momentum, 0, 3);
+					System.arraycopy(totals.massMoment(), 0, group.massMoment, 0, 3);
+					System.arraycopy(totals.volumeMoment(), 0, group.volumeMoment, 0, 3);
+					System.arraycopy(totals.volumeMotion(), 0, group.volumeMotion, 0, 3);
 					group.density = CellRemapMassAllocation.density(domain, group.original, group.volume, group.mass);
 					if (domain.thermalState != null) {
 						var fitting = FITTING.get(); fitting.ensureCapacity(group.original.size());
@@ -337,7 +328,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 					? CellRemapMicroPreferences.inventory(domain, source.original, shares - 1)
 					: sourceGeometry.forSource(source.original);
 			CellRemapTransportMoments.Result transport;
-			try { transport = new CellRemapTransportMoments(domain, source.cell, source.original).allocate(pieces[g], preferences); }
+			try { transport = source.transportMoments.allocate(pieces[g], preferences); }
 			catch (CellRemapTransportMoments.AllocationFailure infeasible) {
 				throw new MechanicalTimeRefinement(2, "Liquid transport source at cell=" + source.cell
 						+ ", support=" + source.support + ", material=" + source.material + ": " + infeasible.getMessage());
@@ -910,7 +901,6 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 	private static void add(TreeMap<Integer, Long> destination, ChemicalMixtureRecord mixture) {
 		for (int i = 0; i < mixture.entryCount(); i++) destination.merge(mixture.speciesHandle(i), mixture.amountAt(i), Math::addExact);
 	}
-	private static double square(double value) { return value * value; }
 	private int phase(int material) { return domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(material); }
 	private static double[] offset(int slot, int count) {
 		return OFFSETS[Integer.numberOfTrailingZeros(count)][slot];
@@ -944,6 +934,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		int sampleStart, quadratureCount, quadratureAxes, movingAxes, speciesTarget; ArrayList<Float> sampleVolumes;
 		ArrayList<Share> shares, arrivals;
 		CellRemapSampling.Prepared sampling;
+		CellRemapTransportMoments transportMoments;
 		final ArrayList<Integer> original = new ArrayList<>(); final CellSpeciesInventory species = new CellSpeciesInventory();
 		final CellRemapSpatialMoments spatial = new CellRemapSpatialMoments();
 		SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO;

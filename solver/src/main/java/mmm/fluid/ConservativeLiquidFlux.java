@@ -19,7 +19,7 @@ final class ConservativeLiquidFlux {
 			throw new IllegalStateException("Liquid face sweep has no quadratic spatial integration rule");
 		}
 		default void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
-		                               int donorSupport, int receiverSupport, double[] swept, double[] wet) {
+		                               int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet) {
 			throw new IllegalStateException("Liquid face sweep has no common micro source integration rule");
 		}
 		default void sweptPhaseMoments(PhaseVolumeTransportGeometry phases, int phase, int face, int donor,
@@ -574,11 +574,11 @@ final class ConservativeLiquidFlux {
 				normalX[donor], normalY[donor], normalZ[donor], offset[donor], result, donorSupport, receiverSupport);
 	}
 	/** Separate source micro measures from the same frozen directional sweep used to plan this face. */
-	void sweptMicroVolumes(int face, int donorSupport, int receiverSupport, double[] swept, double[] wet) {
-		if (swept.length != 8 || wet.length != 8) throw new IllegalArgumentException("Missing liquid micro volumes");
+	void sweptMicroVolumes(int face, int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet) {
+		if (sourceWet.length != 8 || swept.length != 8 || wet.length != 8) throw new IllegalArgumentException("Missing liquid micro volumes");
 		if (faceSweep != null) {
 			faceSweep.sweptMicroVolumes(face % physicalFaceCount, donor(face), receiver(face), axis[face], positive(face),
-					dtOverH, donorSupport, receiverSupport, swept, wet); return;
+					dtOverH, donorSupport, receiverSupport, sourceWet, swept, wet); return;
 		}
 		int donor = donor(face); double[] moments = new double[4];
 		for (int m = 0; m < 8; m++) {

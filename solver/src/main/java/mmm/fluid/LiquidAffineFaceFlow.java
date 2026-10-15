@@ -249,7 +249,7 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 		return observed;
 	}
 	@Override public void sweptMicroVolumes(int face, int donor, int receiver, int axis, boolean positive, double dtOverH,
-	                                       int donorSupport, int receiverSupport, double[] swept, double[] wet) {
+	                                       int donorSupport, int receiverSupport, double[] sourceWet, double[] swept, double[] wet) {
 		var components = trace[face + (positive ? 0 : faces.physicalFaceCount)];
 		Arrays.fill(swept, 0); Arrays.fill(wet, 0);
 		if (components == null) return;
@@ -261,7 +261,7 @@ final class LiquidAffineFaceFlow implements ConservativeLiquidFlux.FaceSweep {
 			double[] q = component.q();
 			var saved = sweep(face + (positive ? 0 : faces.physicalFaceCount), c, donor, receiver, axis, positive, dtOverH, support, receiverSupport, false);
 			LiquidAffineSweepGeometry.sweptMicroVolumes(domain, donor, receiver, axis, positive, q[0], q[1], q[2], dtOverH,
-					support, receiverSupport, part, partWet, saved);
+					support, receiverSupport, sourceWet, part, partWet, saved);
 			if (part != swept) for (int i = 0; i < swept.length; i++) { swept[i] += part[i]; wet[i] += partWet[i]; }
 		}
 	}
