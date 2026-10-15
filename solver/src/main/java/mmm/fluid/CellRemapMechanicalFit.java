@@ -2,6 +2,7 @@ package mmm.fluid;
 
 import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
+import java.math.BigInteger;
 import java.util.Arrays;
 
 /** Minimum-energy angular response and zero-momentum residual on actual positive mass nodes. */
@@ -27,11 +28,31 @@ final class CellRemapMechanicalFit {
 		}
 		try {
 			int n = masses.length;
-			var weight = new ExactRational[n]; var r = new ExactRational[n][3]; var preferred = new ExactRational[n][3];
-			var total = ExactRational.ZERO;
-			for (int i = 0; i < n; i++) { weight[i] = exact(masses[i]); total = total.add(weight[i]); }
-			for (int i = 0; i < n; i++) { weight[i] = divide(weight[i], total); r[i] = vector(positions[i]); preferred[i] = vector(preferredVelocities[i]); }
-			var centroid = mean(weight, r); var meanVelocity = vector(sourceMeanVelocity);
+			var mass = new SignedDyadic[n]; var position = new SignedDyadic[n][3]; var preferred = new SignedDyadic[n][3];
+			var total = SignedDyadic.ZERO; var first = dyadics(3); var second = new SignedDyadic[3][3];
+			for (var row : second) Arrays.fill(row, SignedDyadic.ZERO);
+			var preferredFirst = dyadics(3); var preferredAngular = dyadics(3); var preferredSquared = SignedDyadic.ZERO;
+			for (int i = 0; i < n; i++) {
+				mass[i] = SignedDyadic.of(masses[i]); total = total.add(mass[i]);
+				var weightedPosition = dyadics(3);
+				for (int a = 0; a < 3; a++) {
+					position[i][a] = SignedDyadic.of(positions[i][a]); weightedPosition[a] = mass[i].multiply(position[i][a]);
+					first[a] = first[a].add(weightedPosition[a]);
+				}
+				if (sourceVelocityVarianceTrace == 0) continue;
+				for (int a = 0; a < 3; a++) preferred[i][a] = SignedDyadic.of(preferredVelocities[i][a]);
+				for (int a = 0; a < 3; a++) {
+					for (int b = a; b < 3; b++) second[a][b] = second[a][b].add(weightedPosition[a].multiply(position[i][b]));
+					var weightedPreferred = mass[i].multiply(preferred[i][a]);
+					preferredFirst[a] = preferredFirst[a].add(weightedPreferred);
+					preferredSquared = preferredSquared.add(weightedPreferred.multiply(preferred[i][a]));
+					int b = (a + 1) % 3, c = (a + 2) % 3;
+					preferredAngular[a] = preferredAngular[a].add(weightedPosition[b].multiply(preferred[i][c])
+							.subtract(weightedPosition[c].multiply(preferred[i][b])));
+				}
+			}
+			var centroid = zeros(); for (int a = 0; a < 3; a++) centroid[a] = ratio(first[a], total);
+			var meanVelocity = vector(sourceMeanVelocity);
 			var shift = vector(sourceCentroid);
 			for (int a = 0; a < 3; a++) shift[a] = shift[a].subtract(centroid[a]);
 			var required = cross(shift, meanVelocity); var sourceAngular = vector(sourceCentralAngularMoment);
@@ -42,46 +63,46 @@ final class CellRemapMechanicalFit {
 				for (int i = 0; i < n; i++) result[i] = sourceMeanVelocity.clone();
 				return result;
 			}
-			var inertia = new ExactRational[3][3]; for (var row : inertia) Arrays.fill(row, ExactRational.ZERO);
-			for (int i = 0; i < n; i++) {
-				for (int a = 0; a < 3; a++) r[i][a] = r[i][a].subtract(centroid[a]);
-				var squared = dot(r[i], r[i]);
-				for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++)
-					inertia[a][b] = inertia[a][b].add(weight[i].multiply(
-							(a == b ? squared : ExactRational.ZERO).subtract(r[i][a].multiply(r[i][b]))));
+			var covariance = new ExactRational[3][3]; var trace = ExactRational.ZERO;
+			for (int a = 0; a < 3; a++) for (int b = a; b < 3; b++) {
+				covariance[a][b] = ratio(second[a][b], total).subtract(centroid[a].multiply(centroid[b]));
+				covariance[b][a] = covariance[a][b];
+				if (a == b) trace = trace.add(covariance[a][b]);
 			}
+			var inertia = new ExactRational[3][3];
+			for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++)
+				inertia[a][b] = (a == b ? trace : ExactRational.ZERO).subtract(covariance[a][b]);
 			var rotation = solve(inertia, required); if (rotation == null) return null;
 			var available = exact(sourceVelocityVarianceTrace).subtract(dot(required, rotation));
 			if (available.signum() < 0) return null;
-			var residual = preferred; var preferredMean = mean(weight, preferred);
-			for (var row : residual) for (int a = 0; a < 3; a++) row[a] = row[a].subtract(preferredMean[a]);
-			var residualRotation = solve(inertia, angular(weight, r, residual)); if (residualRotation == null) return null;
-			for (int i = 0; i < n; i++) {
-				var rigid = cross(residualRotation, r[i]);
-				for (int a = 0; a < 3; a++) residual[i][a] = residual[i][a].subtract(rigid[a]);
-			}
-			var residualEnergy = energy(weight, residual);
+			var preferredMean = zeros(); var angular = zeros();
+			for (int a = 0; a < 3; a++) preferredMean[a] = ratio(preferredFirst[a], total);
+			var centreAngular = cross(centroid, preferredMean);
+			for (int a = 0; a < 3; a++) angular[a] = ratio(preferredAngular[a], total).subtract(centreAngular[a]);
+			var residualRotation = solve(inertia, angular); if (residualRotation == null) return null;
+			var residualEnergy = ratio(preferredSquared, total).subtract(dot(preferredMean, preferredMean)).subtract(dot(angular, residualRotation));
+			if (residualEnergy.signum() < 0) return null;
 			if (residualEnergy.isZero() && !available.isZero()) {
 				// Radial motion carries variance with exactly zero momentum and angular moment.
-				for (int i = 0; i < n; i++) residual[i] = r[i].clone();
-				residualEnergy = energy(weight, residual);
+				preferred = position; preferredMean = centroid; residualRotation = zeros(); residualEnergy = trace;
 				if (residualEnergy.isZero()) {
 					if (n == 1) return null;
-					residual[0][0] = weight[1]; residual[1][0] = weight[0].multiply(-1);
-					residualEnergy = energy(weight, residual);
+					preferred = new SignedDyadic[n][3]; for (var row : preferred) Arrays.fill(row, SignedDyadic.ZERO);
+					preferred[0][0] = mass[1]; preferred[1][0] = mass[0].negate(); preferredMean = zeros();
+					residualEnergy = ratio(mass[0].multiply(mass[1]).multiply(mass[1])
+							.add(mass[1].multiply(mass[0]).multiply(mass[0])), total);
 				}
 			}
+			var residualScale = available.isZero() ? ExactRational.ZERO : sqrtScale(divide(available, residualEnergy));
+			var spin = zeros(); for (int a = 0; a < 3; a++) spin[a] = rotation[a].subtract(residualScale.multiply(residualRotation[a]));
+			var centreSpin = cross(spin, centroid); var equations = new Equation[3];
+			for (int a = 0; a < 3; a++) equations[a] = equation(new ExactRational[]{
+					meanVelocity[a].subtract(residualScale.multiply(preferredMean[a])).subtract(centreSpin[a]),
+					spin[(a + 1) % 3], spin[(a + 2) % 3].multiply(-1), residualScale});
 			var result = new double[n][3];
-			for (int i = 0; i < n; i++) {
-				var rigid = cross(rotation, r[i]);
-				for (int a = 0; a < 3; a++) {
-					double extra = available.isZero() || residual[i][a].isZero() ? 0
-							: sqrt(divide(available.multiply(residual[i][a].multiply(residual[i][a])), residualEnergy));
-					if (!Double.isFinite(extra)) return null;
-					if (residual[i][a].signum() < 0) extra = -extra;
-					result[i][a] = meanVelocity[a].add(rigid[a]).add(exact(extra)).toDouble();
-					if (!Double.isFinite(result[i][a])) return null;
-				}
+			for (int i = 0; i < n; i++) for (int a = 0; a < 3; a++) {
+				result[i][a] = evaluate(equations[a], position[i][(a + 2) % 3], position[i][(a + 1) % 3], preferred[i][a]);
+				if (!Double.isFinite(result[i][a])) return null;
 			}
 			return result;
 		} catch (IllegalArgumentException magnitude) {
@@ -109,23 +130,20 @@ final class CellRemapMechanicalFit {
 		var result = zeros(); for (int row = 0; row < rank; row++) result[pivots[row]] = matrix[row][3];
 		return result;
 	}
-	private static ExactRational[] mean(ExactRational[] weight, ExactRational[][] values) {
-		var result = zeros();
-		for (int i = 0; i < weight.length; i++) for (int a = 0; a < 3; a++) result[a] = result[a].add(weight[i].multiply(values[i][a]));
-		return result;
+	private record Equation(SignedDyadic[] coefficients, BigInteger denominator) { }
+	private static Equation equation(ExactRational[] values) {
+		var denominator = BigInteger.ONE;
+		for (var value : values) denominator = denominator.divide(denominator.gcd(value.denominator())).multiply(value.denominator());
+		var coefficients = new SignedDyadic[values.length];
+		for (int i = 0; i < values.length; i++) coefficients[i] = new SignedDyadic(values[i].numerator().multiply(denominator.divide(values[i].denominator())), 0);
+		return new Equation(coefficients, denominator);
 	}
-	private static ExactRational[] angular(ExactRational[] weight, ExactRational[][] r, ExactRational[][] velocity) {
-		var result = zeros();
-		for (int i = 0; i < weight.length; i++) {
-			var moment = cross(r[i], velocity[i]);
-			for (int a = 0; a < 3; a++) result[a] = result[a].add(weight[i].multiply(moment[a]));
-		}
-		return result;
-	}
-	private static ExactRational energy(ExactRational[] weight, ExactRational[][] velocity) {
-		var result = ExactRational.ZERO;
-		for (int i = 0; i < weight.length; i++) result = result.add(weight[i].multiply(dot(velocity[i], velocity[i])));
-		return result;
+	private static double evaluate(Equation equation, SignedDyadic first, SignedDyadic second, SignedDyadic preferred) {
+		var c = equation.coefficients;
+		var value = c[0].add(c[1].multiply(first)).add(c[2].multiply(second)).add(c[3].multiply(preferred));
+		return value.exponent() >= 0
+				? ExactRational.roundQuotientToDouble(value.significand().shiftLeft(value.exponent()), equation.denominator)
+				: ExactRational.roundQuotientToDouble(value.significand(), equation.denominator.shiftLeft(-value.exponent()));
 	}
 	private static ExactRational dot(ExactRational[] a, ExactRational[] b) {
 		var result = ExactRational.ZERO; for (int i = 0; i < 3; i++) result = result.add(a[i].multiply(b[i])); return result;
@@ -136,17 +154,22 @@ final class CellRemapMechanicalFit {
 		return result;
 	}
 	private static ExactRational[] zeros() { return new ExactRational[]{ExactRational.ZERO, ExactRational.ZERO, ExactRational.ZERO}; }
+	private static SignedDyadic[] dyadics(int count) { var values = new SignedDyadic[count]; Arrays.fill(values, SignedDyadic.ZERO); return values; }
 	private static ExactRational[] vector(double[] values) { return new ExactRational[]{exact(values[0]), exact(values[1]), exact(values[2])}; }
 	private static ExactRational exact(double value) { return PlicComponentGeometry.ratio(SignedDyadic.of(value), SignedDyadic.of(1)); }
+	private static ExactRational ratio(SignedDyadic numerator, SignedDyadic denominator) { return PlicComponentGeometry.ratio(numerator, denominator); }
 	private static ExactRational divide(ExactRational a, ExactRational b) {
-		return new ExactRational(a.numerator().multiply(b.denominator()), a.denominator().multiply(b.numerator()));
+		var numeratorCommon = a.numerator().gcd(b.numerator()); var denominatorCommon = a.denominator().gcd(b.denominator());
+		return new ExactRational(a.numerator().divide(numeratorCommon).multiply(b.denominator().divide(denominatorCommon)),
+				a.denominator().divide(denominatorCommon).multiply(b.numerator().divide(numeratorCommon)));
 	}
-	private static double sqrt(ExactRational value) {
-		if (value.isZero()) return 0;
+	private static ExactRational sqrtScale(ExactRational value) {
+		if (value.isZero()) return ExactRational.ZERO;
 		int scale = Math.floorDiv(value.numerator().bitLength() - value.denominator().bitLength(), 2);
 		var normalized = scale >= 0 ? new ExactRational(value.numerator(), value.denominator().shiftLeft(2 * scale))
 				: new ExactRational(value.numerator().shiftLeft(-2 * scale), value.denominator());
-		return Math.scalb(Math.sqrt(normalized.toDouble()), scale);
+		var root = SignedDyadic.of(Math.sqrt(normalized.toDouble()));
+		return PlicComponentGeometry.ratio(new SignedDyadic(root.significand(), Math.addExact(root.exponent(), scale)), SignedDyadic.of(1));
 	}
 	private static void validate(double[] vector) {
 		if (vector == null || vector.length != 3) throw new IllegalArgumentException("Mechanical fit requires three components");

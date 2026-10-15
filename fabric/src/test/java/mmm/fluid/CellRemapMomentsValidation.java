@@ -1257,6 +1257,17 @@ public final class CellRemapMomentsValidation {
 	}
 
 	private static void jointRuleKeepsIndependentVelocityModes() {
+		for (double scale : new double[]{1e-310, 1e308}) {
+			var positions = new double[8][3]; var preferred = new double[8][3]; var weights = new double[8]; java.util.Arrays.fill(weights, 1);
+			for (int p = 0; p < 8; p++) for (int a = 0; a < 3; a++) {
+				positions[p][a] = (p >>> a & 1) == 0 ? -.25 : .25; preferred[p][a] = positions[p][a] * scale;
+			}
+			var fitted = CellRemapMechanicalFit.fit(weights, positions, preferred, new double[3], new double[3], new double[3], 1);
+			check(fitted != null, "Shared mechanical energy scale lost a finite velocity mode");
+			for (int p = 0; p < 8; p++) for (int a = 0; a < 3; a++)
+				check(Math.abs(fitted[p][a] - Math.copySign(1 / Math.sqrt(3), positions[p][a])) < 2e-15,
+						"Shared mechanical energy scale changed its normalized radial mode");
+		}
 		for (int exponent : new int[] {-900, 0, 900}) for (boolean unequalVelocity : new boolean[] {false, true}) {
 			var moments = new CellRemapSpatialMoments(); double[][] source = new double[8][6];
 			double mass = Math.scalb(1.0, exponent); double[] sourceWeights = new double[8]; java.util.Arrays.fill(sourceWeights, mass);
