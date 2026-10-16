@@ -4,6 +4,7 @@
 
 | 资料 | 用途 |
 |---|---|
+| [求解器整合计划：2026-10-17 调整前备份](proposals/solver-consolidation-plan-2026-10-17.md) | 原文保留旧的高阶矩精度要求与工作包依赖，供追溯；当前精度取舍和执行路线见[整合计划](../roadmap/solver-consolidation-plan.md) |
 | [自由面统一算法探索](free-surface-unification-research.md) | 各路线的有效成果、失败限制、保存位置与现行双路径修复的离线对照 |
 | [代码架构重整实施记录](progress/code-architecture-restructuring-implement.md) | 按 S00–S21 切片和提交号追溯结构变化 |
 | [架构重整基线](maintenance/architecture-baseline.md) | 查看重整完成时的源码规模与本机性能数据 |
