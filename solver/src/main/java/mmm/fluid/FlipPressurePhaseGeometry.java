@@ -245,39 +245,6 @@ final class FlipPressurePhaseGeometry {
 				|| Double.doubleToRawLongBits(fraction[cell]) == Double.doubleToRawLongBits(captured.fraction[cell]));
 	}
 
-	/** Monotone moment estimate: a centred phase retains the fraction-gradient direction. */
-	private boolean momentNormal(
-			int cell, int x, int y, int z, FlipCutCellGeometry cut,
-			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize, PhaseLiquidGeometryEdit edit
-	) {
-		SignedDyadic volume = edit == null ? SignedDyadic.ZERO : edit.volume();
-		SignedDyadic[] first = edit == null ? new SignedDyadic[] {SignedDyadic.ZERO, SignedDyadic.ZERO, SignedDyadic.ZERO}
-				: new SignedDyadic[] {edit.firstMomentX(), edit.firstMomentY(), edit.firstMomentZ()};
-		if (edit == null) for (int p = markers.cellMarkerHead[cell]; p >= 0; p = markers.particleCellNext[p]) {
-			SignedDyadic weight = SignedDyadic.of(particles.volume(p));
-			volume = volume.add(weight);
-			first[0] = first[0].add(weight.multiply(SignedDyadic.of(particles.positionX(p))));
-			first[1] = first[1].add(weight.multiply(SignedDyadic.of(particles.positionY(p))));
-			first[2] = first[2].add(weight.multiply(SignedDyadic.of(particles.positionZ(p))));
-		}
-		if (volume.signum() == 0) return false;
-		SignedDyadic metricVolume = volume.multiply(SignedDyadic.of(cellSize));
-		int support = ~cut.mask(cell) & 255;
-		if (support == 0) return false;
-		double nx = ownMomentDirection(first[0], metricVolume, x, support, 0);
-		double ny = ownMomentDirection(first[1], metricVolume, y, support, 1);
-		double nz = ownMomentDirection(first[2], metricVolume, z, support, 2);
-		double scale = Math.max(Math.abs(nx), Math.max(Math.abs(ny), Math.abs(nz)));
-		if (scale == 0) return false;
-		if (Double.isInfinite(scale)) {
-			nx = Double.isInfinite(nx) ? Math.signum(nx) : 0;
-			ny = Double.isInfinite(ny) ? Math.signum(ny) : 0;
-			nz = Double.isInfinite(nz) ? Math.signum(nz) : 0;
-		} else { nx /= scale; ny /= scale; nz /= scale; }
-		normalX[cell] = (float) nx; normalY[cell] = (float) ny; normalZ[cell] = (float) nz;
-		return true;
-	}
-
 	static double ownMomentDirection(SignedDyadic first, SignedDyadic metricVolume, int coordinate, int support, int axis) {
 		int low = 0;
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) low += 1 - (micro >>> axis & 1);
@@ -394,12 +361,12 @@ final class FlipPressurePhaseGeometry {
 	}
 	java.util.List<double[][]> internalExposedWetPolygons(int cell, int micro, int axis, int sign, double tangent, double other, double span) {
 		double coordinate = .5 * ((micro >>> axis & 1) + (sign > 0 ? 1 : 0));
-		return supportFacePolygons(PlicSupportGeometry.faceWetSupports(this, cell, micro),
+		return supportFacePolygons(PlicSupportGeometry.wetSupports(this, cell, micro),
 				PlicSupportGeometry.drySupports(this, cell, micro ^ 1 << axis), axis, coordinate, coordinate, tangent, other, span);
 	}
 	java.util.List<double[][]> internalSharedWetPolygons(int cell, int minusMicro, int axis, double tangent, double other, double span) {
-		return supportFacePolygons(PlicSupportGeometry.faceWetSupports(this, cell, minusMicro),
-				PlicSupportGeometry.faceWetSupports(this, cell, minusMicro | 1 << axis), axis, .5, .5, tangent, other, span);
+		return supportFacePolygons(PlicSupportGeometry.wetSupports(this, cell, minusMicro),
+				PlicSupportGeometry.wetSupports(this, cell, minusMicro | 1 << axis), axis, .5, .5, tangent, other, span);
 	}
 	java.util.List<double[][]> exposedWetPolygons(int owner, int peer, int axis, int sign, double tangent, double other, double span) {
 		return java.util.List.<double[][]>of(exposedWetPolygon(owner, peer, axis, sign, tangent, other, span));

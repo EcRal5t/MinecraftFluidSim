@@ -70,7 +70,7 @@ M00–M10 是职责与验收索引。每轮交付一个完整生产模块或一�
 
 ## M02 共同动量表示与低耗散传递
 
-**当前入口：** `CellAffineVelocity`、`CellAffineFit`、`CellAffineMacTransfer`、`CellAffineWallProjection`、`CellVelocityConstraintOperator` 及速度传递消费者。
+**当前入口：** `GridToParticleStage`、`MarkerTransferBudget`、`CellRemapVelocity` 及速度传递消费者。
 
 选择与共同几何、质量分配和压力算子相容的速度/动量表示，生产数据流明确权威速度及各采样视图。低耗散机制以常量流、旋转、射流和分层的实际表现决定复杂度。近壁和薄层处理采用成本可控的离散，清理为保留不可解析亚格运动而增加的自由度、求逆和认证。
 
@@ -78,7 +78,7 @@ M00–M10 是职责与验收索引。每轮交付一个完整生产模块或一�
 
 ## M03 共同压力、黏性与气腔耦合
 
-**当前入口：** `PressureSystem`、`MarkerPressureProjection`、`PressureProjectionStage`、`LiquidViscosityStage`、`MechanicalStepPipeline`、`MechanicalStageAssembly`、`PressureBoundaryView`。
+**当前入口：** `PressureSystem`、`PressureProjectionStage`、`LiquidViscosityStage`、`MechanicalStepPipeline`、`MechanicalStageAssembly`、`PressureBoundaryView`。
 
 同代几何、质量与速度组装液体压力及黏性，固相惯性、阻力、占容和有限气腔响应按实际物理加入。纯液体与含固相区域共用主干及结果写回；远处加入无关固体保持局部液体的离散选择一致。
 
@@ -88,7 +88,7 @@ M00–M10 是职责与验收索引。每轮交付一个完整生产模块或一�
 
 ## M04 守恒输运与重采样
 
-**当前入口：** `CellLiquidVolumeTransport`、`LiquidAffineFaceFlow`、`LiquidAffineSweepGeometry`、`ConservativeLiquidFlux`、`CellCarrierRemapPlan`、`BallisticLiquidRemap`、`FlipParticleReseeder`。
+**当前入口：** `CellLiquidVolumeTransport`、`ConservativeLiquidFlux`、`CellCarrierRemapPlan`、`BallisticLiquidRemap`、`FlipParticleReseeder`。
 
 供体扣除、出口、到达与保留份额由共同通量分配产生，质量与动量一致输运，物种及内能随实际物质交接。几何采样与整数账本解耦，统一处理微量尾数、完全流出、同时进出、跨格到达及切格排液。
 

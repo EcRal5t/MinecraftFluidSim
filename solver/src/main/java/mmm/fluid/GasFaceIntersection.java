@@ -2,7 +2,6 @@ package mmm.fluid;
 
 import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
-import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -115,39 +114,6 @@ final class GasFaceIntersection {
 		}
 		return result;
 	}
-	private static List<List<Plane>> wet(FlipPressurePhaseGeometry phase, int cell, int micro, int axis, double coordinate) {
-		if (cell < 0) return List.of();
-		return PlicSupportGeometry.faceWetSupports(phase, cell, micro).stream().map(p -> project(p, axis, coordinate)).toList();
-	}
-	private static ExactRational unionArea(double tangent, double other, double width, List<List<Plane>> supports) {
-		ExactRational result = ExactRational.ZERO;
-		for (var convex : supports) result = result.add(exactArea(tangent, other, width, convex));
-		return result;
-	}
-	private static ExactRational intersectionArea(double tangent, double other, double width, List<List<Plane>> first, List<List<Plane>> second) {
-		ExactRational result = ExactRational.ZERO;
-		for (var a : first) for (var b : second) {
-			var planes = new ArrayList<Plane>(a.size() + b.size()); planes.addAll(a); planes.addAll(b);
-			result = result.add(exactArea(tangent, other, width, planes));
-		}
-		return result;
-	}
-	private static ExactRational dryArea(FlipPressurePhaseGeometry phase, int firstCell, int secondCell, int firstMicro, int secondMicro,
-	                                   int axis, double firstCoordinate, double secondCoordinate, double tangent, double other, double width) {
-		var first = wet(phase, firstCell, firstMicro, axis, firstCoordinate);
-		var second = wet(phase, secondCell, secondMicro, axis, secondCoordinate);
-		var rectangle = exact(width).multiply(exact(width));
-		var area = rectangle.subtract(unionArea(tangent, other, width, first)).subtract(unionArea(tangent, other, width, second))
-				.add(intersectionArea(tangent, other, width, first, second));
-		if (area.signum() < 0 || area.compareTo(rectangle) > 0) throw new GasTopologyBlockedException("Dry shape face union does not close");
-		return area;
-	}
-	static double wetDryArea(FlipPressurePhaseGeometry phase, int firstCell, int secondCell, int firstMicro, int secondMicro,
-	                         int axis, double firstCoordinate, double secondCoordinate, double tangent, double other, double width) {
-		var first = wet(phase, firstCell, firstMicro, axis, firstCoordinate);
-		var second = wet(phase, secondCell, secondMicro, axis, secondCoordinate);
-		return observedArea(unionArea(tangent, other, width, first).subtract(intersectionArea(tangent, other, width, first, second)));
-	}
 	/** Every positive convex dry part must have a positive shared face path. */
 	static boolean connected(int micro, List<List<GasGeometryOverlap.HalfSpace>> supports) {
 		if (supports.isEmpty()) return false;
@@ -208,14 +174,6 @@ final class GasFaceIntersection {
 		for (int a = 0; a < 3; a++) if (!Float.isFinite(phase.planeNormal(cell,micro,a))) throw new IllegalArgumentException("Nonfinite gas face phase normal");
 		SignedDyadic threshold = SignedDyadic.of(offset).subtract(SignedDyadic.of(phase.planeNormal(cell,micro,axis)).multiply(SignedDyadic.of(coordinate)));
 		return new Plane(SignedDyadic.of(phase.planeNormal(cell,micro,(axis+1)%3)),SignedDyadic.of(phase.planeNormal(cell,micro,(axis+2)%3)),threshold);
-	}
-	private static ExactRational exact(double value) {
-		return exact(SignedDyadic.of(value));
-	}
-	private static ExactRational exact(SignedDyadic dyadic) {
-		return dyadic.exponent() >= 0
-				? new ExactRational(dyadic.significand().shiftLeft(dyadic.exponent()), BigInteger.ONE)
-				: new ExactRational(dyadic.significand(), BigInteger.ONE.shiftLeft(-dyadic.exponent()));
 	}
 	private static double positiveArea(double value) {
 		if (!(value > 0 && Double.isFinite(value))) throw new GasTopologyBlockedException("Positive dry face area is not representable");

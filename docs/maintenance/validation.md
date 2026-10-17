@@ -87,33 +87,13 @@
 ./gradlew.bat :fabric:runRemapMomentsValidation --args="joint-moments" --offline --no-daemon
 ```
 
-液体输运参数为 `--fast`、`components`、`chemical-tails`、`geometry-remap`、`representation`、`mass`、`quantization`、`continuity`、`handoff`、`handoff-short`；空间矩参数为 `transport-moments`、`joint-moments`、`sweep-only`、`footprint-only`、`common-mesh`。省略参数执行完整入口，未知参数直接拒绝。`handoff-short` 从实际载体速度构建流场，检查零通量、正向进出抵消、均匀平移、独立粒子到达、矩重建及两条平流路径的步长约束；长轨迹使用 `handoff` 与 `continuity`。`geometry-remap` 复用零时长正出流、断开分量容量、低 quanta 拒绝与完整逻辑步矩统计用例。`transport-moments` 同时用逐载体精确参考检查微盒汇总结果，覆盖非二进制份额、供给重分配、零出流和完全流出，逐位核对最终观察及舍入差额。
+液体输运参数为 `--fast`、`components`、`chemical-tails`、`geometry-remap`、`representation`、`mass`、`quantization`、`continuity`、`handoff`、`handoff-short`；空间矩参数为 `transport-moments`、`joint-moments`、`sweep-only`、`footprint-only`、`common-mesh`。省略参数执行完整入口，未知参数直接拒绝。`handoff-short` 从实际载体速度构建流场，检查零通量、正向进出抵消、均匀平移、独立粒子到达、矩重建及两条平流路径的步长约束；长轨迹使用 `handoff` 与 `continuity`。`geometry-remap` 复用零时长正出流、断开分量容量、低 quanta 拒绝与完整逻辑步矩统计用例。
 
-`common-mesh` 单独运行真实 L 形来源首步之后的压力场，检查共同运动网格的正体积、无全局重叠、时间减半的第一矩一致性及数量分配前的机械支撑，并报告参考几何成本。该参考处于测试代码中，一般场 advection、最终库存及后续 CPU 步按整合计划继续验收。解析的共享面切向流量矩与交叠检查同时属于默认及 `sweep-only`。
+`common-mesh` 运行三格 L 形连续 8 步并逐步恢复，检查库存、宏观位移和动能。`transport-moments` 追加多方向平移和多密度库存；`joint-moments` 与 `footprint-only` 保留为宏观旋转和材料输运的选择器。具体通过状态见[共同主干收尾记录](#共同主干收尾记录)。
 
-`joint-moments` 覆盖四点薄三维支撑、三轴排列、分组合并、位置推进、面法向投影、节点不足拒绝、独立小速度模式、悬殊质量的第一矩及位置—速度交叉矩。原始正来源的一、二阶矩用精确有理数独立计算；同时复用低 quanta 旋转与小份额剪切。有界流入形状对照检查原支撑正交补、多个质量份额的共同投影、完整机械矩及原线性剪切；三轴正反向的一、二点同速来源通过实际 remap 发布后检查接收格的秩四支撑、正权重、精确库存、动量、动能与 `kg·m²` 增量上界，零时和零通量保持原秩。`sweep-only` 用矩形和仿射楔体的解析二阶矩检查精确扫掠前缀及完整协方差。`representation` 组合完整逻辑步中的分次输运、静止饱和液体的压缩排液以及私有候选预算拒绝；分次累计用例用固壁隔开的液体分区分别提供力学输运与末段排液。
+压力短回归使用 `:fabric:runMarkerPressureValidation`；`--args="--thin-layer"` 聚焦同速和薄层梯度，`--args="--kernel"` 运行共同压力与 L 形流程。
 
-薄层速度拟合可通过 `:fabric:runMarkerPressureValidation --args="--thin-layer"` 单独核对三轴薄层、共面支撑、实际动量与角动量、动能、同速零梯度，以及全输入轴的拟合/转置和压力惯量。相同断言同时参与完整压力核。
-
-`--args="--shared-trace"` 聚焦三轴斜薄共享面，核对面上点值与两切向斜率连续、实际动量和角动量、投影动能、转置虚功及三轴刚体旋转核。相同断言同时参与 `--kernel`。
-
-压力核可通过 `:fabric:runMarkerPressureValidation --args="--kernel"` 单独运行仿射拟合、转置虚功、固定壁面投影、独立通量、实际质量 Gram 矩阵、有限气体储存和极端数值对照；完整 `marker-pressure` 另含生产张力与壁面输运场景。
-
-`--args="--chemical-pressure"` 复用原热化学抽取场景的库存与实体输入，在前四个逻辑步的首个压力失败处报告实际残差分区、拉回系数的精确因式差及速度空间秩。包级验收继续运行 `chemistry:short` 的完整物理断言。
-
-`--args="--pressure-gauge"` 聚焦部分充液格的压力参考不变性，核对真实湿体积行、有限气体恒压载荷与固定墙投影后的实际载体力。相同断言同时参与 `--kernel`。
-
-密闭控制器注液的有界诊断使用 `:fabric:runBoundaryPourDiagnostic --offline --no-daemon`。它执行真实完整逻辑步及捕获恢复，从首个失败来源重放力学子步，报告实际质量动能、气腔储存功、压力残差功、仿射梯度及薄层载体元组。压力与输运数据通过各模块的包内诊断视图读取；通量重放在独立实例上执行既有规划阶段。追加 `--args=--flux` 聚焦有限气腔的连续通量、供给缩放、逐面舍入与容量修正；先核验原始库存、PLIC、独立到达预留和全部最终面通量相同，再报告各阶段差额。
-
-`POUR full` 分别报告捕获、独立恢复与完整后端计算耗时，成功时列出完成和累计预留子步数。`POUR replay` 保留原始异常，列出失败阶段、完成和累计预留子步数、当前子步耗时及累计计算耗时；累计计算包含来源恢复、子步选择和力学计算，详细快照与日志输出单独执行。完成子步包含此前细化后丢弃的尝试，预留子步遵循生产累计上限。最多检查四个逻辑步；全步已失败时，即使力学短重放完成或达到预算，诊断仍以失败退出。完整场景验收使用 `gas-liquid:short`。
-
-追加 `--args="--l-shape --flux"` 可复用三格 L 形输入快速重放第二步的输运失败；去掉 `--flux` 可查看详细压力和空间矩。该输入与 `common-mesh` 共用来源夹具，逐次尝试完整步，发生失败时保存来源并重放，继续使用非零退出码报告失败。
-
-`--args="--gas-geometry"` 单独校验压力准备和发布中的当前微盒归属：同格两个独立气腔、实际接触气压参考、液体第一矩变化、frame 替换后的几何与候选拒绝。
-
-`--args="--micro-velocity-support"` 检查该模型的单点、共线、共面及相邻 float 近共面布局，分别报告采样、舍入惯性、压力和联合矩阵的秩。实际采样的零空间必须保持零液体体积通量；另复用每个断开微盒有八个粒子的旋涡场景，检查内部运动的表示能力。入口汇总全部不满足项后失败，候选模型满足所有条件时通过。
-
-`--args="--micro-velocity-moments"` 在上述对照后，按体积加权平均速度的精确零空间选择内部旋涡基底，再检查实际粒子质量支撑。覆盖 256 种掩码、两种质量和位置布局，以及两粒子共线、稠密和断开微盒；校验空间基底与采样矩阵一致、压力连续性、虚功和墙面反力，并比较准备前后的原始状态。静水对照先校核实际质量积分与几何压力功的相容性；偏移输入另输出原始体积第一矩与 PLIC 的差额。该入口在来源或积分条件不满足时失败，支持范围与后续处理按 M01、M02 的完成要求确定。
+注液使用 `:fabric:runBoundaryPourDiagnostic`，默认执行 4 个完整步及捕获恢复；`--args="--steps=200"` 指定步数，`--args="--l-shape"` 切换 L 形来源，`--flux` 追加输运统计。每步报告完整耗时、捕获与计算耗时、子步、压力迭代、残差和动能；失败保留异常并以非零状态退出。
 
 自然对流增长率随 `thermal` 选择器常驻校验：两级网格、临界 Ra 两侧、两倍线性振幅，以及体积、材料质量、species、壁面 source/sink、舍入与载体内能闭合。单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[线性对流有效域](../architecture/thermal-state.md#自然对流的线性有效域)。
 

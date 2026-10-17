@@ -171,7 +171,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 				: domain.granularNextCoupling.copySolidSvq();
 		var gasEdits = domain.gasState.frame == null ? null : PhaseLiquidGeometryEdit.afterCellRemap(domain, markers);
 		gasTopology = gasEdits == null ? null : !geometryRemap && dt > 0 && ballistic.markers.isEmpty() && !commitGranularCollision
-				? domain.gasTopologyCoordinator.planAfterAdvection(gasEdits, occupied, flux, ports, dt)
+				? domain.gasTopologyCoordinator.planAfterAdvection(gasEdits, occupied)
 				: domain.gasTopologyCoordinator.planAfterLiquidEdits(gasEdits, occupied, !geometryRemap && dt > 0);
 	}
 

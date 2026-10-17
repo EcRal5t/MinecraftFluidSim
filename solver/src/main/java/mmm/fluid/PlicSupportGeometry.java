@@ -6,7 +6,6 @@ import static mmm.fluid.GasGeometryOverlap.HalfSpace;
 final class PlicSupportGeometry {
     private PlicSupportGeometry() { }
     static List<List<HalfSpace>> wetSupports(FlipPressurePhaseGeometry phase,int cell,int micro) { return plicSupport(phase,cell,micro,true); }
-    static List<List<HalfSpace>> faceWetSupports(FlipPressurePhaseGeometry phase,int cell,int micro) { return plicSupport(phase,cell,micro,true); }
     static List<List<HalfSpace>> drySupports(FlipPressurePhaseGeometry phase,int cell,int micro) { return plicSupport(phase,cell,micro,false); }
 	private static List<List<HalfSpace>> plicSupport(FlipPressurePhaseGeometry phase, int cell, int micro, boolean wet) {
 		double fraction = phase.liquidFractionExact(cell, micro);
