@@ -234,7 +234,7 @@ u[n+1] = u* - dt * (1/rho) * grad(p[n+1])
 - 世界碰撞变化挤出的液体必须从 marker 账本得到实际量；不能用格密度推断 escaped volume。
 - granular、deposit 和 coherent solid occupancy 与 liquid 共享容量和压力排水路径。
 
-`FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 按微单元平面的相交时刻遍历 marker 直线轨迹，取首个固体接触，随后沿墙面推进剩余切向位移。角落的同时接触按实际阻挡微单元确定法向；碰撞去除指向固体的法向速度，切向分量保持。
+`FlipCutCellGeometry` 从每格 `2×2×2` unsigned micro mask 得到 cell solid volume 和三轴 face aperture。checkpoint 与后端 handoff 保存 raw mask，不能退化为“整格固体/整格空气”；恢复后必须得到相同 aperture。`FlipParticleCollision` 按微单元平面的相交时刻遍历 marker 直线轨迹，取首个固体接触，随后沿墙面推进剩余切向位移。角落的同时接触按实际阻挡微单元确定法向；碰撞去除指向固体的法向速度，切向分量保持。碰撞点转为 binary32 时，各坐标保持在扫掠确认的开放微格内，随后从该点继续切向扫掠，防止近角落舍入跨墙。
 
 粒子 handoff 的格长必须有限且与接收域逐位一致，保持 solver 体积、质量与 SI 单位换算相同。恢复在首次状态修改前，按实际 binary32 位置与固定微盒的面连通分量精确汇总体积；所有材料共用分量的开放容量。超量候选保留原载体、碰撞几何和修订号。该预检守护体积容量，空间第一矩的可表示性仍按共同空间表示的完成条件推进。
 

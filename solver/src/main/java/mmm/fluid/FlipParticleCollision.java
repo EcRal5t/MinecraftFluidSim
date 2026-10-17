@@ -46,7 +46,12 @@ final class FlipParticleCollision {
 						displacement[a] = 0;
 						velocity[a][particle] = positive ? Math.min(0, velocity[a][particle]) : Math.max(0, velocity[a][particle]);
 					} else {
-						point[a] = (float) point[a];
+						// Rounding a tangential impact coordinate must retain the swept open box.
+						// Otherwise the next sweep can start beyond a second wall at a near corner.
+						float stored = (float) point[a];
+						while (microCoordinate(stored) < cell[a]) stored = Math.nextUp(stored);
+						while (microCoordinate(stored) > cell[a]) stored = Math.nextDown(stored);
+						point[a] = stored;
 						displacement[a] = (double) (float) endpoint - point[a];
 					}
 				}

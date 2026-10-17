@@ -26,11 +26,22 @@ public final class FlipCutCellValidation {
 		straightSweepResolvesDiagonalContacts();
 		simultaneousContactsRespectSpatialSymmetry();
 		contactPositionsFollowFloatMicroGeometry();
+		nearCornerRoundingKeepsMarkersInside();
 		exactMarkerDisplacementUsesMicroOccupancy();
 		cutCellCapacityDisplacesMergedMarkerVolume();
 		checkpointPreservesCutCellGeometry();
 		if (!fast) partialObstacleFlowRemainsFiniteAndConservative();
 		System.out.println("FlipFluid cut-cell validation passed" + (fast ? " (short; 600-step obstacle flow skipped)" : ""));
+	}
+
+	private static void nearCornerRoundingKeepsMarkersInside() {
+		var geometry = new FlipCutCellGeometry(8, 8, 8);
+		float[] x = {3.9999F}, y = {2}, z = {3.9999F};
+		float[] vx = {.001F}, vy = {.1F}, vz = {.001001F};
+		new FlipParticleCollision(8, 8, 8, .5F, geometry).advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
+		check(x[0] < 4 && z[0] < 4, "Near-corner rounding let a liquid marker escape the outer walls");
+		checkClose(y[0], 2.1F, 1e-6F, "Corner collision lost tangential motion");
+		check(vx[0] == 0 && vz[0] == 0, "Corner collision retained outward normal velocity");
 	}
 
 	private static void solverConfigRejectsNonfiniteCoefficients() {

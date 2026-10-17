@@ -143,7 +143,7 @@ record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponent
 			if (sizeX > 0 && ((int) Math.floor(x / h) != cell % sizeX
 					|| (int) Math.floor(y / h) != cell / sizeX % sizeY
 					|| (int) Math.floor(z / h) != cell / (sizeX * sizeY)))
-				throw new IllegalArgumentException("Future phase liquid marker belongs to another cell");
+				throw new IllegalArgumentException("Future phase liquid marker belongs to another cell: cell=" + cell + ", position=" + x + "," + y + "," + z + ", h=" + h);
 			int selected = CellRemapMicroTopology.positionSupport(mask, h, x, y, z), index = 0;
 			while (index < support.length && support[index] != selected) index++;
 			if (index == support.length) throw new IllegalArgumentException("Missing future phase liquid component");
