@@ -258,3 +258,5 @@ initial + external source - escaped sink
 ```
 
 等式分别对 SVQ、逐材料质量和可选 species/composition 成立；冲量和热能在各自账本中闭合。`status` 的 active 数、deposit group 数、solid SVQ、bulk occupancy 和休眠列数都是从权威列聚合的只读摘要，不得作为恢复来源。
+
+颗粒创建、恢复与运动落点共用 `GranularSpawnAdmission` 的浮点球体分离判定。中心间隙采用两侧 binary32 坐标 ULP 合成的距离误差，与接触检测保持一致；可解析的内部重叠继续拒绝。

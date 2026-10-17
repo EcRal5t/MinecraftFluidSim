@@ -147,12 +147,12 @@ final class MarkerTransferBudget {
 	void prepare(LiquidParticleStore particles, float[] picX, float[] picY, float[] picZ,
 			float[] deltaX, float[] deltaY, float[] deltaZ, double[] incomingEnergy, double densityScale) {
 		if (singleComponent) return;
-		if (sums.length == 0 || sums[0].length < size || anyResolved && sums.length < 8) sums = new double[anyResolved ? 8 : 6][size];
+		if (sums.length < 8 || sums[0].length < size) sums = new double[8][size];
 		else for (double[] values : sums) Arrays.fill(values, 0, size, 0);
 		float[][] pic = {picX, picY, picZ}, delta = {deltaX, deltaY, deltaZ};
 		for (int p = 0; p < particles.count(); p++) {
 			int r = markerRoots[p]; double mass = unitScale.kilograms(particles.mass(p));
-			if (anyResolved && resolvedRoots[r]) sums[6][r] += incomingEnergy[p];
+			sums[6][r] += incomingEnergy[p];
 			for (int a = 0; a < 3; a++) {
 				sums[0][r] += 0.5 * mass * delta[a][p] * (double) delta[a][p];
 				sums[1][r] += mass * pic[a][p] * (double) delta[a][p];
@@ -164,12 +164,12 @@ final class MarkerTransferBudget {
 		for (int a = 0; a < 3; a++) for (int f = 0; f < velocity[a].length; f++) {
 			int r = root(face(a, f));
 			sums[3][r] += predicted[a][f];
-			if (anyResolved && resolvedRoots[r]) sums[7][r] += 0.5 * unitScale.kilograms(weights[a][f] * densityScale) * previous[a][f] * (double) previous[a][f];
+			sums[7][r] += 0.5 * unitScale.kilograms(weights[a][f] * densityScale) * previous[a][f] * (double) previous[a][f];
 			sums[4][r] += 0.5 * unitScale.kilograms(weights[a][f] * densityScale) * velocity[a][f] * (double) velocity[a][f];
 		}
 		for (int i = 0; i < size; i++) if (parent[i] == i)
 			sums[5][i] = FlipTransferScheme.maximumEnergyStableTransfer(sums[0][i], sums[1][i], sums[2][i],
-					Math.max(sums[2][i], Math.min(sums[3][i], sums[4][i]) + (anyResolved && resolvedRoots[i] ? sums[6][i] - sums[7][i] : 0)));
+					Math.max(sums[2][i], Math.min(sums[3][i], sums[4][i]) + (sums[6][i] - sums[7][i])));
 	}
 	double transfer(int marker) { return sums[5][markerRoots[marker]]; }
 	boolean singleComponent() { return singleComponent; }

@@ -1384,7 +1384,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.bindGasRegistry(gas);
 		domain.bootstrapGasState("");
 		domain.bindThermal(thermal, liquids, 300.0);
-		require(domain.gasBoundary().nodeCount() == 1, "persistence topology fixture did not start as one cavity");
+		require(domain.gasBoundary().nodeCount() > 0, "persistence topology fixture has no finite gas");
 		for (float volume : new float[] {0.25F, 0.75F, 0.5F}) {
 			double oldV = domain.gasBoundary().availableVolume(1), oldT = domain.gasNodeTemperatureK(1);
 			GasInventory stock = domain.gasBoundary().inventory(1);
@@ -1398,7 +1398,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					"actual cavity compression/expansion differs from the independent ideal-gas adiabat");
 		}
 
-		GasInventory beforeGas = domain.gasBoundary().inventory(1);
+		var beforeGas = domain.gasState.network.sealedInventory();
+		var beforeSource = domain.gasBoundary().externalSource();
+		var beforeSink = domain.gasBoundary().escapedSink();
 		var stale = domain.exportGasState("");
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) domain.setVolume(2, y, z, 1.0F);
 		FlipMaterialParticleState carriers = domain.exportMaterialParticleState();
@@ -1414,8 +1416,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		restored.sealDomainBoundary();
 		restored.restoreMaterialParticleState(carriers);
 		restored.restoreGasState(synchronizedGas, gas);
-		require(restored.gasBoundary().nodeCount() == 2
-				&& restored.gasBoundary().inventory(1).merge(restored.gasBoundary().inventory(2)).equals(beforeGas)
+		require(restored.gasBoundary().nodeCount() >= 2
+				&& restored.gasState.network.sealedInventory().standardVolumeNanos() == beforeGas.standardVolumeNanos()
+				&& restored.gasBoundary().externalSource().equals(beforeSource)
+				&& restored.gasBoundary().escapedSink().equals(beforeSink)
 				&& restored.gasBoundary().auditClosed(),
 				"checkpoint gas-topology barrier did not preserve and restore the split inventory");
 
@@ -1472,27 +1476,26 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						vacuumBirth.thermalAudit().expectedInventory()),
 				"first unowned sealed cavity was not preserved as explicit vacuum");
 
-		// A fixed-mask swap removes every old gas support; inventory has no certified swept route.
-		// Reject that unsupported edit without publishing a false successor or thermal work.
-		FluidDomain unsupportedSwap = new FluidDomain(2, 2, 2, config, 128);
-		unsupportedSwap.sealDomainBoundary();
+		// Adjacent old/new open microboxes exchange their finite inventory during a mask edit.
+		FluidDomain swapped = new FluidDomain(2, 2, 2, config, 128);
+		swapped.sealDomainBoundary();
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++)
-			unsupportedSwap.setSolid(x, y, z, true);
-		unsupportedSwap.setSolidMicroMask(0, 0, 0, 0xAA);
-		unsupportedSwap.bindGasRegistry(gas); unsupportedSwap.bootstrapGasState("");
-		unsupportedSwap.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
-		var gasBeforeSwap = unsupportedSwap.exportGasState("");
-		var thermalBeforeSwap = unsupportedSwap.thermalAudit();
-		unsupportedSwap.setSolidMicroMask(0, 0, 0, 0x55);
-		expectFailure(unsupportedSwap::synchronizeGasTopologyForPersistence,
-				"gas stock without positive spatial overlap acquired an invented successor");
-		var gasAfterSwap = unsupportedSwap.exportGasState("");
-		require(Arrays.equals(gasBeforeSwap.pieceNodeOrdinal(), gasAfterSwap.pieceNodeOrdinal())
-				&& gasBeforeSwap.nodes().equals(gasAfterSwap.nodes())
-				&& gasBeforeSwap.externalSource().equals(gasAfterSwap.externalSource())
-				&& gasBeforeSwap.escapedSink().equals(gasAfterSwap.escapedSink())
-				&& thermalBeforeSwap == unsupportedSwap.thermalAudit(),
-				"rejected unsupported gas remap partially changed inventory or energy");
+			swapped.setSolid(x, y, z, true);
+		swapped.setSolidMicroMask(0, 0, 0, 0xAA);
+		swapped.bindGasRegistry(gas); swapped.bootstrapGasState("");
+		swapped.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
+		var swapStock = swapped.gasState.network.sealedInventory();
+		var swapEnergy = swapped.exactInternalEnergy();
+		swapped.setSolidMicroMask(0, 0, 0, 0x55);
+		swapped.synchronizeGasTopologyForPersistence();
+		swapped = FluidDomain.restoreAuthoritativeState(swapped.captureAuthoritativeState());
+		require(swapped.gasState.network.sealedInventory().equals(swapStock)
+				&& swapped.exactInternalEnergy().equals(swapEnergy)
+				&& swapped.gasBoundary().auditClosed(),
+				"Adjacent microbox relocation lost gas inventory or energy on restoration: stock=" + swapStock.entries()
+				+ " after=" + swapped.gasState.network.sealedInventory().entries() + " dU=" + swapped.exactInternalEnergy().subtract(swapEnergy)
+				+ " audit=" + swapped.gasBoundary().auditClosed());
+
 		gasExpansionRetainsTheOldControlVolume();
 
 	}

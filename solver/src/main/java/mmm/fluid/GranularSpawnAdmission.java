@@ -3,7 +3,6 @@ package mmm.fluid;
 import java.util.Arrays;
 import mmm.granular.GranularMechanics;
 import mmm.granular.GranularParcelStore;
-import mmm.units.SignedDyadic;
 
 /** Private center-cell index for live parcels and accepted dry-pour positions. */
 final class GranularSpawnAdmission {
@@ -66,29 +65,15 @@ final class GranularSpawnAdmission {
 		next[count] = head[cell]; head[cell] = count++;
 	}
 
-	/** Strict sphere intersection; outward arithmetic intervals defer only ambiguous cases to exact dyadics. */
+	/** Stored sphere centers have binary32 resolution, shared with contact detection. */
 	static boolean interiorsOverlap(double x, double y, double z, double r,
 	                                double ox, double oy, double oz, double otherRadius) {
-		double dx = Math.abs(x - ox), dy = Math.abs(y - oy), dz = Math.abs(z - oz), sum = r + otherRadius;
-		double distanceLower = Math.nextDown(Math.nextDown(squareLower(dx) + squareLower(dy)) + squareLower(dz));
-		double distanceUpper = Math.nextUp(Math.nextUp(squareUpper(dx) + squareUpper(dy)) + squareUpper(dz));
-		if (distanceLower >= squareUpper(sum)) return false;
-		if (distanceUpper < squareLower(sum)) return true;
-		var ex = SignedDyadic.of(x).subtract(SignedDyadic.of(ox));
-		var ey = SignedDyadic.of(y).subtract(SignedDyadic.of(oy));
-		var ez = SignedDyadic.of(z).subtract(SignedDyadic.of(oz));
-		var er = SignedDyadic.of(r).add(SignedDyadic.of(otherRadius));
-		return ex.multiply(ex).add(ey.multiply(ey)).add(ez.multiply(ez)).compareTo(er.multiply(er)) < 0;
+		double rounding = Math.hypot(Math.hypot((double) Math.ulp((float) x) + Math.ulp((float) ox),
+				(double) Math.ulp((float) y) + Math.ulp((float) oy)),
+				(double) Math.ulp((float) z) + Math.ulp((float) oz));
+		return Math.hypot(Math.hypot(x - ox, y - oy), z - oz) < r + otherRadius - rounding;
 	}
 
-	private static double squareLower(double rounded) {
-		double lower = Math.max(0, Math.nextDown(rounded));
-		return Math.max(0, Math.nextDown(lower * lower));
-	}
-	private static double squareUpper(double rounded) {
-		double upper = Math.nextUp(rounded);
-		return Math.nextUp(upper * upper);
-	}
 	private int coordinate(double p, int size) {
 		return Math.max(0, Math.min(size - 1, (int) Math.floor(p / cellSize)));
 	}

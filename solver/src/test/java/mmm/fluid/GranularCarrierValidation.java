@@ -80,23 +80,14 @@ public final class GranularCarrierValidation {
 				}
 			}
 		}
-		for (float radius : new float[]{.125F, Float.MIN_VALUE}) {
-			float tangent = 2 * radius;
-			for (float distance : new float[]{Math.nextDown(tangent), tangent, Math.nextUp(tangent)}) {
-				var delta = mmm.units.SignedDyadic.of(distance);
-				var sumRadius = mmm.units.SignedDyadic.of(radius).multiply(mmm.units.SignedDyadic.of(2));
-				boolean expected = delta.multiply(delta).compareTo(sumRadius.multiply(sumRadius)) < 0;
-				for (int axis = 0; axis < 3; axis++) {
-					float[] point = new float[3]; point[axis] = distance;
-					require(GranularSpawnAdmission.interiorsOverlap(0, 0, 0, radius, point[0], point[1], point[2], radius)
-							== expected, "sphere admission changed exact float separation or pure tangency");
-				}
-			}
+		for (int axis = 0; axis < 3; axis++) {
+			float[] point = new float[3]; point[axis] = Math.nextDown(.25F);
+			require(!GranularSpawnAdmission.interiorsOverlap(0, 0, 0, .125F, point[0], point[1], point[2], .125F),
+					"Stored contact must admit coordinate-rounding penetration");
+			point[axis] = .249F;
+			require(GranularSpawnAdmission.interiorsOverlap(0, 0, 0, .125F, point[0], point[1], point[2], .125F),
+					"Resolved sphere penetration must remain blocked");
 		}
-		var normal = mmm.units.SignedDyadic.of(.25F); var tiny = mmm.units.SignedDyadic.of(Float.MIN_VALUE);
-		require(normal.multiply(normal).add(tiny.multiply(tiny)).compareTo(normal.multiply(normal)) > 0
-				&& !GranularSpawnAdmission.interiorsOverlap(0, 0, 0, .125F, .25F, Float.MIN_VALUE, 0, .125F),
-				"sphere admission lost an exact sub-ULP positive tangential separation");
 		var geometry = new FlipCutCellGeometry(3, 3, 3);
 		geometry.replaceMask((1 * 3 + 1) * 3 + 1, 1); // [.5,.75]^3
 		require(geometry.sphereTouchesSolid(.46F, .46F, .46F, .08F, .5F),

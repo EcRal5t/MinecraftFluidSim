@@ -146,7 +146,7 @@ final class GridToParticleStage {
 			throw new IllegalStateException("G2P transfer energy was not captured before pressure projection");
 		}
 		double transferBudget = Math.min(preProjectionEnergy, transferGridKineticEnergy());
-		if (componentBudget.singleComponent() && componentBudget.anyResolved()) transferBudget += incomingEnergy
+		if (componentBudget.singleComponent()) transferBudget += incomingEnergy
 				- transferGridKineticEnergy(mac.p2gVelocityX, mac.p2gVelocityY, mac.p2gVelocityZ);
 		preProjectionEnergy = Double.NaN;
 		double transfer = FlipTransferScheme.maximumEnergyStableTransfer(

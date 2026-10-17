@@ -285,7 +285,8 @@ final class GasTopologyCoordinator {
 					overlap.put((long) sweep.source() << 32 | sweep.destination(), List.of(ExactRational.ONE));
 			}
 			if (edit == null) retainReachableSingleCavity(old, next, overlap);
-			if (edit == null) transferDisplacedGas(old, next, overlap);
+			var displaced = edit == null ? transferDisplacedGas(old, next, overlap) : java.util.Set.<Long>of();
+			var relocated = new SignedDyadic[count]; Arrays.fill(relocated, SignedDyadic.ZERO);
 			for (int previous = 1; previous <= old.nodeCount(); previous++) {
 				Map<Long, List<ExactRational>> destinations = overlap.subMap((long) previous << 32, (long) (previous + 1) << 32);
 				GasInventory stock = inventory(previous, edit);
@@ -321,7 +322,10 @@ final class GasTopologyCoordinator {
 						if (thermal) {
 							mixed[node - 1] = mixed[node - 1].add(SignedDyadic.of(energies[part]));
 							// Existing vacuum carries its old control volume through a free-expansion merge.
-							if (retainControlVolumes) inherited[node - 1] = inherited[node - 1].add(SignedDyadic.of(control[part]));
+							if (retainControlVolumes) {
+							inherited[node - 1] = inherited[node - 1].add(SignedDyadic.of(control[part]));
+							if (displaced.contains(entry.getKey())) relocated[node - 1] = relocated[node - 1].add(SignedDyadic.of(control[part]));
+						}
 						}
 					}
 					part++;
@@ -346,8 +350,13 @@ final class GasTopologyCoordinator {
 			if (retainControlVolumes) for (var piece : next.capacity().pieces()) {
 				int node = next.nodeOfPiece(piece.id()), micro = piece.id() & 7, cell = piece.id() / 8;
 				// Removing a fixed wall exposes vacuum without a moving liquid interface doing volume work.
-				if (node > 0 && contributed[node] && (old.geometry().collisionMask(cell) & 1 << micro) != 0)
-					inherited[node - 1] = inherited[node - 1].add(SignedDyadic.of(piece.cubicMeters()));
+				if (node > 0 && contributed[node] && (old.geometry().collisionMask(cell) & 1 << micro) != 0) {
+					var opened = SignedDyadic.of(piece.cubicMeters());
+					var occupied = opened.compareTo(relocated[node - 1]) < 0 ? opened : relocated[node - 1];
+					// A relocated cavity already brought its control volume into this newly open space.
+					relocated[node - 1] = relocated[node - 1].subtract(occupied);
+					inherited[node - 1] = inherited[node - 1].add(opened.subtract(occupied));
+				}
 			}
 			if (retainControlVolumes) for (int node = 1; node <= count; node++)
 				// New space inside a surviving finite cavity performs work on its old control volume.
@@ -387,7 +396,7 @@ final class GasTopologyCoordinator {
 			overlap.put(pair, first);
 	}
 	/** A swept-away dry pocket follows the connected old/new dry support to its nearest surviving chamber. */
-	private void transferDisplacedGas(GasRuntimeGeometry old, GasRuntimeGeometry next,
+	private java.util.Set<Long> transferDisplacedGas(GasRuntimeGeometry old, GasRuntimeGeometry next,
 	                                  TreeMap<Long, List<ExactRational>> overlap) {
         boolean missing = false;
         for (int node = 1; node <= old.nodeCount(); node++) {
@@ -396,7 +405,8 @@ final class GasTopologyCoordinator {
                 break;
             }
         }
-        if (!missing) return;
+        if (!missing) return java.util.Set.of();
+		var displaced = new java.util.HashSet<Long>();
 		int count = domain.cellCount * 8;
 		var links = new int[count][6];
 		for (var row : links) Arrays.fill(row, -1);
@@ -471,9 +481,12 @@ final class GasTopologyCoordinator {
 				}
 				Arrays.fill(seen, 0);
 			}
-			for (var destination : destinations.entrySet()) overlap.put(key | destination.getKey(),
-					List.of(MicroBoxPlaneVolume.rational(destination.getValue())));
+			for (var destination : destinations.entrySet()) {
+				long pair = key | destination.getKey(); displaced.add(pair);
+				overlap.put(pair, List.of(MicroBoxPlaneVolume.rational(destination.getValue())));
+			}
 		}
+		return displaced;
 	}
 	private static void addDryFacePlane(List<GasFaceIntersection.Plane> planes, GasGeometryOverlap.HalfSpace plane,
 	                                   int axis, double coordinate) {

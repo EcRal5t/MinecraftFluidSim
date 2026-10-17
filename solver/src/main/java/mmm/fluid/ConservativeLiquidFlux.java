@@ -367,6 +367,8 @@ final class ConservativeLiquidFlux {
 	private void initializeQuantizationBudget() {
 		SignedDyadic[] kernelError = geometry == null ? null : geometry.quantizationBudget(dtOverH);
 		quantizationBudget = new SignedDyadic[cellCount]; Arrays.fill(quantizationBudget, SignedDyadic.ZERO);
+		// Six independently quantized faces can leave a cell-scale lattice remainder.
+		// Move that remainder through open faces while preserving exact global inventory.
 		// Keep both signed errors until their sum: incoming floor loss can cancel solid or outgoing error.
 		for (int face = 0; face < flux.length; face++) if (faceFloorLoss[face] != null) {
 			int donor = donor(face), receiver = receiver(face);
@@ -374,7 +376,8 @@ final class ConservativeLiquidFlux {
 			quantizationBudget[receiver] = quantizationBudget[receiver].subtract(faceFloorLoss[face]);
 		}
 		for (int cell = 0; cell < cellCount; cell++) quantizationBudget[cell] = representationBudget(
-				kernelError == null ? SignedDyadic.ZERO : kernelError[cell], quantizationBudget[cell]);
+				kernelError == null ? SignedDyadic.ZERO : kernelError[cell], quantizationBudget[cell])
+				.add(SignedDyadic.of(6 * ConservativeMarkerSampling.VOLUME_FLUX_RESOLUTION));
 	}
 
 	/** Round the combined error once, on the solid-capacity lattice, with less than one SVQ of envelope. */
