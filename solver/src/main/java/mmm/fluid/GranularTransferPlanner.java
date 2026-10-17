@@ -441,7 +441,6 @@ final class GranularTransferPlanner {
 						gas = prepareExtractionGas(futureSolid, thermalAfter);
 						remainingParcels.put(ordinal, candidate); selected = true; break;
 					} catch (GasTopologyBlockedException | IllegalArgumentException | ArithmeticException unavailable) {
-						if (unavailable instanceof mmm.thermal.GasEnergyStore.TransferSearchBudgetExceededException) throw unavailable;
 						lastFailure = unavailable;
 					}
 					domain.granularCoupling.removePlannedParcel(futureSolid, FluidDomainStepCoordinator.parcelPosition(candidate), candidate.solidVolumeSvq());

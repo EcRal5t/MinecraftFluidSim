@@ -127,7 +127,7 @@ final class CarrierMutationCoordinator {
 		double[] energies = domain.thermalState == null ? null : markers.energy;
 		if (gasTopology != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gasTopology);
 		if (energies != null) {
-			var after = domain.thermalState.auditLedger().withRoundoff(candidate.energyRoundoff());
+			var after = domain.thermalState.auditLedger().withMechanicalWork(candidate.dissipatedEnergy()).withRoundoff(candidate.energyRoundoff());
 			var gas = gasTopology == null ? null : gasTopology.thermalPlan();
 			if (gas != null) after = after.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
 					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff());
@@ -159,8 +159,8 @@ final class CarrierMutationCoordinator {
 		}
 		if (energies != null) domain.thermalState.restoreLiquidEnergies(energies);
 		domain.particles.setCount(count); domain.bumpCarrierMutationRevision(); domain.gridDirty = true;
-		domain.liquidShapes = candidate.liquidShapes();
-		if (energies != null) domain.thermalState.recordRoundoff(candidate.energyRoundoff());
+		if (energies != null) domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger()
+				.withMechanicalWork(candidate.dissipatedEnergy()).withRoundoff(candidate.energyRoundoff()));
 		if (gasTopology != null) domain.gasTopologyCoordinator.commit(gasTopology);
 	}
 
@@ -169,7 +169,6 @@ final class CarrierMutationCoordinator {
 		verify(plan, CarrierMutationPlan.Kind.WHOLESALE_COUNT);
 		if (domain.chemicalParcels != null) domain.chemicalParcels.clear(domain.particles.count());
 		domain.particles.setCount(0);
-		domain.liquidShapes = java.util.List.of();
 		domain.bumpCarrierMutationRevision();
 		domain.gridDirty = true;
 	}

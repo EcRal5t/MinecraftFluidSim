@@ -80,13 +80,9 @@ public final class GasTransferValidation {
 		energy.commitNodeEnergy(1, sourceEnergy); energy.commitNodeEnergy(2, targetEnergy);
 		long revision = network.revision(), energyRevision = energy.revision();
 		SignedDyadic before = energy.exactGasEnergy();
-		try {
-			long amount = energy.thermodynamics(network).limitTransferNanos(1, 2, Long.MAX_VALUE);
-			require(amount > 0L && amount <= Long.MAX_VALUE - target.standardVolumeNanos(),
-					"large mixture search silently reported equilibrium or exceeded exact target capacity");
-		} catch (GasEnergyStore.TransferSearchBudgetExceededException boundedSearch) {
-			// A flat binary64 pressure interval retains the original state for a numerical pause.
-		}
+        long amount = energy.thermodynamics(network).limitTransferNanos(1, 2, Long.MAX_VALUE);
+        require(amount > 0L && amount <= Long.MAX_VALUE - target.standardVolumeNanos(),
+                "large mixture flow must progress within its exact capacity");
 		require(network.hasPressureDrivenFlow(energy.thermodynamics(network)),
 				"unresolved large mixture activity escaped the read-only query or authorized sleep");
 		require(network.revision() == revision && energy.revision() == energyRevision

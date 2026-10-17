@@ -7,13 +7,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/** Exact dry-half-space intersection on one local open-face rectangle. */
+/** Floating-point dry-half-space intersection on a local open-face rectangle. */
 final class GasFaceIntersection {
 	/** The dry half-space a*tangent+b*other >= threshold, before any binary64 rounding. */
 	record Plane(SignedDyadic a, SignedDyadic b, SignedDyadic threshold) {
 		Plane { Objects.requireNonNull(a); Objects.requireNonNull(b); Objects.requireNonNull(threshold); }
 	}
-	private record Point(ExactRational x, ExactRational y) { }
 	private GasFaceIntersection() { }
 
 	/** A linear dry half-space covers a rectangle exactly when it contains all four corners. */
@@ -21,10 +20,9 @@ final class GasFaceIntersection {
 		if (!Double.isFinite(tangentStart) || !Double.isFinite(otherStart) || !(width > 0 && Double.isFinite(width))
 				|| planes == null || planes.size() > 12 || planes.stream().anyMatch(Objects::isNull))
 			throw new IllegalArgumentException("Invalid complete gas face rectangle");
-		SignedDyadic x = SignedDyadic.of(tangentStart), y = SignedDyadic.of(otherStart), span = SignedDyadic.of(width);
 		for (Plane plane : planes) for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++)
-			if (plane.a().multiply(a == 0 ? x : x.add(span)).add(plane.b().multiply(b == 0 ? y : y.add(span)))
-					.compareTo(plane.threshold()) < 0) return false;
+			if (plane.a().toDouble() * (tangentStart + a * width) + plane.b().toDouble() * (otherStart + b * width)
+					< plane.threshold().toDouble()) return false;
 		return true;
 	}
 
@@ -35,11 +33,7 @@ final class GasFaceIntersection {
 		for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) {
 			double tangent = .5 * a, other = .5 * b;
 			int micro = phase.microAtFace(cell, axis, coordinate, tangent, other);
-			if (phase.liquidShape(cell) != null) {
-				if (!dryArea(phase, cell, -1, micro, 0, axis, coordinate, 0, tangent, other, .5)
-						.equals(ExactRational.ONE.divide(4))) return false;
-				continue;
-			}
+
 			double fraction = phase.liquidFractionExact(cell, micro);
 			if (!(fraction >= 0 && fraction <= 1)) throw new IllegalArgumentException("Invalid gas face phase fraction");
 			if (fraction >= 1 || fraction > 0 && !coversRectangle(tangent, other, .5,
@@ -57,12 +51,8 @@ final class GasFaceIntersection {
 				|| !(width >= 0 && Double.isFinite(width))) throw new IllegalArgumentException("Invalid gas face rectangle");
 		int firstMicro = phase.microAtFace(firstCell,axis,firstCoordinate,tangentStart,otherStart);
 		int secondMicro = secondCell < 0 ? 0 : phase.microAtFace(secondCell,axis,secondCoordinate,tangentStart,otherStart);
-		if (secondCell < 0 && firstCoordinate == .5 && phase.liquidShape(firstCell) != null) {
-			secondCell = firstCell; secondMicro = firstMicro ^ 1 << axis; secondCoordinate = firstCoordinate;
-		}
-		if (phase.liquidShape(firstCell) != null || secondCell >= 0 && phase.liquidShape(secondCell) != null)
-			return observedArea(dryArea(phase, firstCell, secondCell, firstMicro, secondMicro, axis,
-					firstCoordinate, secondCoordinate, tangentStart, otherStart, width));
+
+
 		double firstFraction = phase.liquidFractionExact(firstCell,firstMicro);
 		double secondFraction = secondCell < 0 ? 0 : phase.liquidFractionExact(secondCell,secondMicro);
 		if (!(firstFraction >= 0 && firstFraction <= 1 && secondFraction >= 0 && secondFraction <= 1))
@@ -83,58 +73,34 @@ final class GasFaceIntersection {
 		return planes.isEmpty() ? positiveArea(width * width) : observedArea(exactArea(tangentStart, otherStart, width, planes));
 	}
 	static ExactRational exactArea(double tangentStart, double otherStart, double width, List<Plane> planes) {
-		if (!Double.isFinite(tangentStart) || !Double.isFinite(otherStart) || !(width >= 0 && Double.isFinite(width))
-				|| planes == null || planes.size() > 12 || planes.stream().anyMatch(Objects::isNull))
-			throw new IllegalArgumentException("Invalid exact gas face primitive");
-		if (width == 0) return ExactRational.ZERO;
-		try {
-			SignedDyadic startX = SignedDyadic.of(tangentStart), startY = SignedDyadic.of(otherStart), extent = SignedDyadic.of(width);
-			var active = new ArrayList<Plane>(planes.size());
-			SignedDyadic firstA = SignedDyadic.ZERO, firstB = SignedDyadic.ZERO, firstThreshold = SignedDyadic.ZERO;
-			for (Plane plane : planes) {
-				SignedDyadic a = plane.a().multiply(extent), b = plane.b().multiply(extent);
-				SignedDyadic minimum = plane.a().multiply(startX).add(plane.b().multiply(startY));
-				if (a.signum() < 0) minimum = minimum.add(a);
-				if (b.signum() < 0) minimum = minimum.add(b);
-				SignedDyadic threshold = plane.threshold().subtract(minimum);
-				a = magnitude(a); b = magnitude(b);
-				if (threshold.signum() <= 0) continue;
-				if (threshold.compareTo(a.add(b)) >= 0) return ExactRational.ZERO;
-				if (active.contains(plane)) continue;
-				active.add(plane); firstA = a; firstB = b; firstThreshold = threshold;
+		if (!(width >= 0 && Double.isFinite(width))) throw new IllegalArgumentException("Invalid face width");
+		List<double[]> polygon = List.of(new double[]{0,0}, new double[]{width,0}, new double[]{width,width}, new double[]{0,width});
+		for (var plane : planes) {
+			if (polygon.isEmpty()) break;
+			double nx = plane.a().toDouble(), ny = plane.b().toDouble();
+			double offset = plane.threshold().toDouble() - nx * tangentStart - ny * otherStart;
+			var clipped = new ArrayList<double[]>(polygon.size() + 1);
+			var previous = polygon.getLast(); double dp = nx * previous[0] + ny * previous[1] - offset;
+			for (var point : polygon) {
+				double dc = nx * point[0] + ny * point[1] - offset;
+				if ((dc >= 0) != (dp >= 0)) {
+					double t = dp / (dp - dc);
+					clipped.add(new double[]{Math.fma(t, point[0] - previous[0], previous[0]), Math.fma(t, point[1] - previous[1], previous[1])});
+				}
+				if (dc >= 0) clipped.add(point);
+				previous = point; dp = dc;
 			}
-			if (active.isEmpty()) return exact(extent.multiply(extent));
-			if (active.size() == 1) return singlePlaneArea(extent, firstA, firstB, firstThreshold);
-			ExactRational x = exact(startX), y = exact(startY), span = exact(extent);
-			ExactRational endX = x.add(span), endY = y.add(span);
-			List<Point> polygon = List.of(new Point(x, y), new Point(endX, y), new Point(endX, endY), new Point(x, endY));
-			for (Plane plane : active) polygon = clip(polygon, plane);
-			if (polygon.size() < 3) return ExactRational.ZERO;
-			ExactRational twiceArea = ExactRational.ZERO;
-			Point previous = polygon.getLast();
-			for (Point point : polygon) {
-				twiceArea = twiceArea.add(previous.x.multiply(point.y).subtract(previous.y.multiply(point.x)));
-				previous = point;
-			}
-			if (twiceArea.isZero()) return ExactRational.ZERO;
-			if (twiceArea.signum() < 0) twiceArea = twiceArea.multiply(-1);
-			return twiceArea.divide(2);
-		} catch (IllegalArgumentException magnitude) {
-			// Inputs have been validated; rational arithmetic owns its bounded magnitude failure.
-			throw new GasTopologyBlockedException("Exact gas face intersection exceeds the rational representation budget: " + magnitude.getMessage());
+			polygon = clipped;
 		}
-	}
-	/** Rectangle coordinates reflect negative coefficients; A and B are their full-width increments. */
-	private static ExactRational singlePlaneArea(SignedDyadic width, SignedDyadic a, SignedDyadic b, SignedDyadic threshold) {
-		SignedDyadic area = width.multiply(width);
-		if (a.signum() == 0) return divide(exact(area.multiply(b.subtract(threshold))), exact(b));
-		if (b.signum() == 0) return divide(exact(area.multiply(a.subtract(threshold))), exact(a));
-		SignedDyadic height = a.add(b).subtract(threshold);
-		SignedDyadic numerator = height.multiply(height);
-		SignedDyadic cutA = a.subtract(threshold), cutB = b.subtract(threshold);
-		if (cutA.signum() > 0) numerator = numerator.subtract(cutA.multiply(cutA));
-		if (cutB.signum() > 0) numerator = numerator.subtract(cutB.multiply(cutB));
-		return divide(exact(area.multiply(numerator)), exact(a.multiply(b).multiply(SignedDyadic.of(2))));
+		double twice = 0;
+		if (polygon.size() >= 3) {
+			var origin = polygon.getFirst();
+			for (int i = 1; i + 1 < polygon.size(); i++) {
+				var a = polygon.get(i); var b = polygon.get(i + 1);
+				twice += (a[0] - origin[0]) * (b[1] - origin[1]) - (a[1] - origin[1]) * (b[0] - origin[0]);
+			}
+		}
+		return MicroBoxPlaneVolume.rational(Math.clamp(Math.abs(twice) * .5, 0, width * width));
 	}
 	private static double observedArea(ExactRational value) { return value.isZero() ? 0 : positiveArea(value.toDouble()); }
 	static List<Plane> project(List<GasGeometryOverlap.HalfSpace> planes, int axis, double coordinate) {
@@ -151,7 +117,7 @@ final class GasFaceIntersection {
 	}
 	private static List<List<Plane>> wet(FlipPressurePhaseGeometry phase, int cell, int micro, int axis, double coordinate) {
 		if (cell < 0) return List.of();
-		return LiquidShapeGeometry.faceWetSupports(phase, cell, micro).stream().map(p -> project(p, axis, coordinate)).toList();
+		return PlicSupportGeometry.faceWetSupports(phase, cell, micro).stream().map(p -> project(p, axis, coordinate)).toList();
 	}
 	private static ExactRational unionArea(double tangent, double other, double width, List<List<Plane>> supports) {
 		ExactRational result = ExactRational.ZERO;
@@ -242,28 +208,6 @@ final class GasFaceIntersection {
 		for (int a = 0; a < 3; a++) if (!Float.isFinite(phase.planeNormal(cell,micro,a))) throw new IllegalArgumentException("Nonfinite gas face phase normal");
 		SignedDyadic threshold = SignedDyadic.of(offset).subtract(SignedDyadic.of(phase.planeNormal(cell,micro,axis)).multiply(SignedDyadic.of(coordinate)));
 		return new Plane(SignedDyadic.of(phase.planeNormal(cell,micro,(axis+1)%3)),SignedDyadic.of(phase.planeNormal(cell,micro,(axis+2)%3)),threshold);
-	}
-	private static List<Point> clip(List<Point> polygon, Plane plane) {
-		if (polygon.isEmpty()) return polygon;
-		ExactRational nx = exact(plane.a()), ny = exact(plane.b()), offset = exact(plane.threshold());
-		var result = new ArrayList<Point>(polygon.size() + 2);
-		Point previous = polygon.getLast(); ExactRational previousDistance = distance(previous, nx, ny, offset);
-		for (Point point : polygon) {
-			ExactRational currentDistance = distance(point, nx, ny, offset);
-			if ((currentDistance.signum() >= 0) != (previousDistance.signum() >= 0)) {
-				ExactRational t = divide(previousDistance, previousDistance.subtract(currentDistance));
-				result.add(new Point(previous.x.add(t.multiply(point.x.subtract(previous.x))), previous.y.add(t.multiply(point.y.subtract(previous.y)))));
-			}
-			if (currentDistance.signum() >= 0) result.add(point);
-			previous = point; previousDistance = currentDistance;
-		}
-		return result;
-	}
-	private static ExactRational distance(Point point, ExactRational nx, ExactRational ny, ExactRational offset) {
-		return nx.multiply(point.x).add(ny.multiply(point.y)).subtract(offset);
-	}
-	private static ExactRational divide(ExactRational a, ExactRational b) {
-		return new ExactRational(a.numerator().multiply(b.denominator()), a.denominator().multiply(b.numerator()));
 	}
 	private static ExactRational exact(double value) {
 		return exact(SignedDyadic.of(value));

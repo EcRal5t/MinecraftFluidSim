@@ -63,6 +63,9 @@ public final class GranularDepositDynamics {
 		/** Upper bound for building and querying the current active-sphere release index. */
 		default int wakeGeometryWork() { return 0; }
 		default boolean planWake(int cell, long solidSvq, float x, float y, float z) { return true; }
+		/** The carrier flow supplies the gravitational work required to lift the released material. */
+		default boolean planWakeWork(int cell, double joules) { return joules <= 0; }
+		default void commitWakeWork() { }
 		default void cancelWake(int cell, long solidSvq, float x, float y, float z) { }
 		default void onSolidChanged(int cell) { }
 	}
@@ -353,21 +356,24 @@ public final class GranularDepositDynamics {
 		GranularDepositStore.SolidPortion moved;
 		try { moved = deposits.peekTake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion); }
 		catch (IllegalArgumentException unavailableSplit) { return false; }
-		if (!GranularBedPotential.allowsWake(deposits, surfaceCell, moved, py,
-				cellSize, sizeX, sizeY, environment.gravity())) {
-			energyDeferred[column] = true;
-			return false;
-		}
+		double liftWork = GranularBedPotential.wakePotentialChange(deposits, surfaceCell, moved, py,
+				cellSize, sizeX, sizeY, environment.gravity()).toDouble();
 		GranularInventory.WakePlan wake;
 		try { wake = inventory.planWake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion, px, py, pz, 0, 0, 0); }
 		catch (IllegalArgumentException unavailableSplit) { return false; }
 		if (wake == null) return false;
 		if (!admission.spend(environment.wakeGeometryWork())
 				|| !environment.planWake(surfaceCell, erosion, px, py, pz)) return false;
+		if (!environment.planWakeWork(surfaceCell, liftWork)) {
+			environment.cancelWake(surfaceCell, erosion, px, py, pz);
+			energyDeferred[column] = true;
+			return false;
+		}
 		try {
 			// Bed material starts at rest; the next coupled mechanical solve supplies acceleration
 			// and its equal liquid reaction. Copying carrier velocity here would create momentum.
 			inventory.commitWake(wake);
+			environment.commitWakeWork();
 			admission.append(wake.appendOrdinal()); environment.onSolidChanged(surfaceCell);
 			return true;
 		} catch (RuntimeException failure) {

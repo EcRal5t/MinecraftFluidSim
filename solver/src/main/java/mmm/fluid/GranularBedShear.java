@@ -7,6 +7,40 @@ import mmm.granular.SolidVolume;
 final class GranularBedShear {
 	private GranularBedShear() { }
 
+	/** Bed traction removes horizontal carrier energy to pay for the resolved parcel's lift. */
+	static LiftWork planLift(FluidDomain domain, int cell, double joules) {
+		if (!Double.isFinite(joules)) throw new IllegalArgumentException("Non-finite bed lift work");
+		if (joules <= 0) return new LiftWork(new int[0], 1);
+		int y = cell / domain.sizeX % domain.sizeY;
+		var markers = new java.util.ArrayList<Integer>();
+		double kinetic = 0;
+		for (int c : new int[]{cell, y + 1 < domain.sizeY ? cell + domain.sizeX : -1}) {
+			if (c < 0) continue;
+			for (int p = domain.markerGrid.cellMarkerHead[c]; p >= 0; p = domain.markerGrid.particleCellNext[p]) {
+				double u = domain.particles.velocityX(p), w = domain.particles.velocityZ(p);
+				kinetic += .5 * domain.unitScale.kilograms(domain.particles.mass(p)) * (u * u + w * w);
+				markers.add(p);
+			}
+		}
+		if (joules > kinetic) return null;
+		return new LiftWork(markers.stream().mapToInt(Integer::intValue).toArray(), Math.sqrt(1 - joules / kinetic));
+	}
+
+	record LiftWork(int[] markers, double scale) {
+		double[] apply(FluidDomain domain) {
+			var impulse = new double[3];
+			for (int p : markers) {
+				double mass = domain.unitScale.kilograms(domain.particles.mass(p));
+				float x = domain.particles.velocityX(p), z = domain.particles.velocityZ(p);
+				float nextX = (float) (scale * x), nextZ = (float) (scale * z);
+				impulse[0] += mass * (x - nextX); impulse[2] += mass * (z - nextZ);
+				domain.particles.setVelocityX(p, nextX); domain.particles.setVelocityZ(p, nextZ);
+			}
+			domain.gridDirty = true;
+			return impulse;
+		}
+	}
+
 	static double shields(FluidDomain domain, int cell, ParticulateMaterial material) {
 		int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY;
 		int z = cell / (domain.sizeX * domain.sizeY);

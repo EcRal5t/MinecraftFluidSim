@@ -35,7 +35,6 @@ final class ParticleToGridStage {
 		void markInventoryClean();
 		void markPressureGeometryClean();
 		void markVelocityGridClean();
-		java.util.List<PhaseLiquidGeometryEdit> liquidShapeEdits();
 	}
 
 	private final Workspace state;
@@ -107,7 +106,7 @@ final class ParticleToGridStage {
 		state.pressurePhaseGeometry.rebuildLiquidEdits(
 				state.geometry.solid, state.projection.pressureVolume, state.geometry.cutCells,
 				access.pressureGranularCoupling(), state.projection.pressureFluid,
-				state.markerGrid, state.particles, state.cellSize, access.liquidShapeEdits());
+				state.markerGrid, state.particles, state.cellSize, java.util.List.of());
 		access.rebuildPressureBoundaryLineage();
 		access.rebuildSurfaceTensionPressure();
 		access.markPressureGeometryClean();

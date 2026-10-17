@@ -3,72 +3,36 @@ package mmm.fluid;
 import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
 
-/** Inverts the exact selected-microbox volume CDF on the binary64 offset lattice. */
+/** Bounded floating-point inversion of the selected open-box volume. */
 final class PlicPlaneOffset {
 	record Result(double offset, double lower, double upper, ExactRational lowerVolume, ExactRational upperVolume,
 	              ExactRational targetVolume) { }
 	private PlicPlaneOffset() { }
-
 	static Result solve(int supportMask, float nx, float ny, float nz, ExactRational target) {
 		if (supportMask <= 0 || supportMask > 255 || !Float.isFinite(nx) || !Float.isFinite(ny) || !Float.isFinite(nz)
 				|| nx == 0 && ny == 0 && nz == 0 || target == null || target.signum() < 0
 				|| target.compareTo(ExactRational.of(Integer.bitCount(supportMask)).divide(8)) > 0)
 			throw new IllegalArgumentException("Invalid PLIC offset inversion input");
-		try {
-			SignedDyadic[] normal = {SignedDyadic.of(nx), SignedDyadic.of(ny), SignedDyadic.of(nz)};
-			var cdf = new MicroBoxPlaneVolume.SelectedVolume(supportMask, normal);
-			SignedDyadic minimum = null, maximum = null;
-			for (int micro = 0; micro < 8; micro++) if ((supportMask & 1 << micro) != 0) {
-				SignedDyadic low = SignedDyadic.ZERO, high = SignedDyadic.ZERO;
-				for (int axis = 0; axis < 3; axis++) {
-					int bit = micro >>> axis & 1, negative = normal[axis].signum() < 0 ? 1 : 0;
-					low = low.add(normal[axis].multiply(SignedDyadic.of(bit + negative, -1)));
-					high = high.add(normal[axis].multiply(SignedDyadic.of(bit + 1 - negative, -1)));
-				}
-				if (minimum == null || low.compareTo(minimum) < 0) minimum = low;
-				if (maximum == null || high.compareTo(maximum) > 0) maximum = high;
+		double[] normal = {nx,ny,nz};
+		var cdf = new MicroBoxPlaneVolume.SelectedVolume(supportMask,new SignedDyadic[]{SignedDyadic.of(nx),SignedDyadic.of(ny),SignedDyadic.of(nz)});
+		double lower = Double.POSITIVE_INFINITY, upper = Double.NEGATIVE_INFINITY;
+		for (int micro=0;micro<8;micro++) if ((supportMask & 1<<micro)!=0) {
+			double low=0,high=0;
+			for(int axis=0;axis<3;axis++) {
+				double n=normal[axis]; int bit=micro>>>axis&1;
+				low+=n*(bit+(n<0?1:0))*.5; high+=n*(bit+(n<0?0:1))*.5;
 			}
-			double lower = outward(minimum, false), upper = outward(maximum, true);
-			int lowOrder = cdf.compareVolume(lower, target), highOrder = cdf.compareVolume(upper, target);
-			if (lowOrder == 0) return exact(lower, cdf.volume(lower));
-			if (highOrder == 0) return exact(upper, cdf.volume(upper));
-			if (lowOrder > 0 || highOrder < 0)
-				throw new IllegalStateException("PLIC offset extrema do not enclose the target volume");
-			long lowOrdinal = ordinal(lower), highOrdinal = ordinal(upper);
-			int iterations = 0;
-			while (lowOrdinal + 1 < highOrdinal) {
-				if (++iterations > Long.SIZE) throw new GasTopologyBlockedException("PLIC offset inversion exceeds its search budget");
-				// Signed floor average avoids overflow even when the interval spans both signs.
-				long middleOrdinal = (lowOrdinal & highOrdinal) + ((lowOrdinal ^ highOrdinal) >> 1);
-				double middle = value(middleOrdinal);
-				int order = cdf.compareVolume(middle, target);
-				if (order == 0) return exact(middle, cdf.volume(middle));
-				if (order < 0) { lowOrdinal = middleOrdinal; lower = middle; }
-				else { highOrdinal = middleOrdinal; upper = middle; }
-			}
-			ExactRational lowVolume = cdf.volume(lower), highVolume = cdf.volume(upper);
-			double selected = target.multiply(2).compareTo(lowVolume.add(highVolume)) <= 0 ? lower : upper;
-			return new Result(selected, lower, upper, lowVolume, highVolume,target);
-		} catch (IllegalArgumentException magnitude) {
-			throw new GasTopologyBlockedException("Exact PLIC offset inversion exceeds its representation budget: " + magnitude.getMessage());
+			lower=Math.min(lower,low); upper=Math.max(upper,high);
 		}
-	}
-
-	private static Result exact(double offset, ExactRational volume) {
-		return new Result(offset, offset, offset, volume, volume,volume);
-	}
-	private static double outward(SignedDyadic exact, boolean upper) {
-		double rounded = exact.toDouble();
-		int order = SignedDyadic.of(rounded).compareTo(exact);
-		if (upper && order < 0) rounded = Math.nextUp(rounded);
-		if (!upper && order > 0) rounded = Math.nextDown(rounded);
-		return rounded == 0 ? 0 : rounded;
-	}
-	private static long ordinal(double value) {
-		long bits = Double.doubleToRawLongBits(value);
-		return bits < 0 ? Long.MIN_VALUE - bits : bits;
-	}
-	private static double value(long ordinal) {
-		return Double.longBitsToDouble(ordinal < 0 ? Long.MIN_VALUE - ordinal : ordinal);
+		double volume=target.toDouble();
+		if (volume==0) upper=lower;
+		else if(volume==Integer.bitCount(supportMask)*.125) lower=upper;
+		else for(int iteration=0;iteration<48;iteration++) {
+			double middle=lower+(upper-lower)*.5;
+			if(middle==lower || middle==upper) break;
+			if(cdf.measure(middle)<volume) lower=middle; else upper=middle;
+		}
+		double offset=lower+(upper-lower)*.5;
+		return new Result(offset,lower,upper,cdf.volume(lower),cdf.volume(upper),target);
 	}
 }

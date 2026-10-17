@@ -67,7 +67,6 @@ abstract class FluidDomainStorage {
 	/** Frozen P2G face mass/volume weights; extrapolation reuses the live weight arrays as scratch. */
 
 	final LiquidParticleStore particles;
-	List<LiquidCellShape> liquidShapes = List.of();
 	long carrierMutationRevision;
 	final CarrierMutationCoordinator coordinator;
 	FluidMaterialRegistry materialRegistry;

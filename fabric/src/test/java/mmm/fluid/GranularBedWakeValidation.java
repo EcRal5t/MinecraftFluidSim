@@ -14,7 +14,34 @@ import java.util.List;
 public final class GranularBedWakeValidation {
 	private GranularBedWakeValidation() { }
 
-	public static void main(String[] args) throws Exception { validate(); }
+	public static void main(String[] args) throws Exception {
+		if (args.length == 0) validate();
+		else if (args.length == 1 && args[0].equals("--startup")) startupContinuesAfterRestore();
+		else throw new IllegalArgumentException("Bed validation accepts --startup");
+	}
+
+	private static void startupContinuesAfterRestore() throws Exception {
+		var domain = fixture(); var backend = new CpuFluidSolverBackend();
+		long solid = domain.totalGranularSolidVolumeSvq(); double mass = domain.totalGranularMass();
+		for (int step = 0; step < 3; step++) {
+			long started = System.nanoTime();
+			var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(), List.of(),
+					true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+			domain = candidate.claimPreparedCpuDomain();
+			domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+			double fullMs = (System.nanoTime() - started) / 1e6;
+			jointCapacity(domain);
+			require(domain.totalGranularSolidVolumeSvq() == solid && domain.totalGranularMass() == mass,
+					"Bed startup changed solid inventory");
+			require(domain.gasBoundary().auditClosed() && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"Bed startup broke gas/energy audit");
+			System.out.printf("BED startup step=%d fullMs=%.3f substeps=%d pressureIterations=%d markers=%d phaseOperations=%d active=%d deposits=%d%n",
+					step, fullMs, candidate.stats().substeps(), candidate.stats().pressureIterations(), domain.particleCount(),
+					candidate.stats().gasPhase().operations() + candidate.stats().condensedPhase().operations(),
+					domain.granularParcelCount(), domain.granularDepositCellCount());
+		}
+		System.out.println("Bed startup completed three phase-on backend steps and restoration");
+	}
 
 	public static void validate() throws Exception {
 		carrierTemperatureRefreshAndDiagnostics();

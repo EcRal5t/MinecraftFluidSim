@@ -142,7 +142,6 @@ final class MechanicalStageAssembly {
 			}
 			@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
 			@Override public boolean liquidGasTensionActive() { return domain.surfaceTensionActive; }
-			@Override public boolean usesCellLiquidPressure() { return domain.pressureSystem.usesMarkerPressure(); }
 			@Override public boolean liquidPairTensionActive() { return domain.liquidPairTensionActive; }
 			@Override public double phaseFraction(int cell, int phase) { return domain.phaseFraction(cell, phase); }
 			@Override public void smoothSurfaceTensionColor() { domain.smoothSurfaceTensionColor(); }
@@ -175,9 +174,6 @@ final class MechanicalStageAssembly {
 			@Override public int granularParcelCount() { return domain.granularParcelCount(); }
 			@Override public void connectTransferSupport(MarkerTransferBudget budget) { pressureSystem.connectTransferSupport(budget); }
 			@Override public boolean completelyFilled(int cell) { return domain.closedLiquidVolume.completelyFilled(cell); }
-			@Override public boolean markerPressurePublished() {
-				return pressureSystem.markerPressureActive() && pressureSystem.markerProjection().published();
-			}
 		};
 	}
 
@@ -185,7 +181,7 @@ final class MechanicalStageAssembly {
 		return new ParticleAdvectionStage.Access() {
 			@Override public boolean advectConservativeVolume(float dt) {
 				if (!CellLiquidVolumeTransport.enabled()) return false;
-				boolean connected = !domain.liquidShapes.isEmpty();
+				boolean connected = false;
 				for (int p = 0; p < domain.particles.count(); p++)
 					if (domain.gridToParticleStage.advectionCells()[domain.particleCellIndex(p)]) { connected = true; break; }
 				if (!connected) {
@@ -213,7 +209,7 @@ final class MechanicalStageAssembly {
 			@Override public void setVariableDensityActive(boolean active) { domain.variableDensityActive = active; }
 			@Override public void setSurfaceTensionActive(boolean active) { domain.surfaceTensionActive = active; }
 			@Override public void setLiquidPairTensionActive(boolean active) { domain.liquidPairTensionActive = active; }
-			@Override public boolean usesMassWeightedP2G() { return domain.pressureSystem.usesMarkerPressure() || domain.usesMassWeightedP2G(); }
+			@Override public boolean usesMassWeightedP2G() { return domain.usesMassWeightedP2G(); }
 			@Override public boolean hasAnySurfaceTension() { return domain.hasAnySurfaceTension(); }
 			@Override public boolean hasAnyLiquidPairTension() { return domain.hasAnyLiquidPairTension(); }
 			@Override public void buildMarkerGrid() { MarkerGridBuilder.build(domain); }
@@ -235,12 +231,10 @@ final class MechanicalStageAssembly {
 			@Override public void rebuildPressureBoundaryLineage() { domain.rebuildPressureBoundaryLineage(); }
 			@Override public void rebuildSurfaceTensionPressure() { domain.rebuildSurfaceTensionPressure(); }
 			@Override public void markInventoryClean() {
-				domain.pressureSystem.clearSpatialInput();
 				domain.gridDirty = false; domain.pressureGeometryDirty = true; domain.velocityGridDirty = true;
 			}
 			@Override public void markPressureGeometryClean() { domain.pressureGeometryDirty = false; }
 			@Override public void markVelocityGridClean() { domain.velocityGridDirty = false; }
-			@Override public java.util.List<PhaseLiquidGeometryEdit> liquidShapeEdits() { return PhaseLiquidGeometryEdit.shapeEdits(domain); }
 		};
 	}
 
@@ -276,10 +270,6 @@ final class MechanicalStageAssembly {
 			@Override public double granularKineticEnergyJoules() { return domain.granularKineticEnergyJoules(); }
 			@Override public int lastPressureIterations() { return domain.lastPressureIterations; }
 			@Override public ThermalDomainState thermalState() { return domain.thermalState; }
-			@Override public boolean markerPressureActive() { return domain.pressureSystem.markerPressureActive(); }
-			@Override public double markerPressurePredictorKineticEnergyJoules() {
-				return domain.pressureSystem.markerProjection().predictorKineticEnergy();
-			}
 		};
 	}
 }

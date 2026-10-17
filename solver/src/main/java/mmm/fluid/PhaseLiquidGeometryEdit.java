@@ -5,10 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Future actual liquid stock in every open collision component of one phase-edited cell. */
-record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponentMoments> components, LiquidCellShape shape) {
-	PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponentMoments> components) {
-		this(cell, collisionMask, components, null);
-	}
+record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponentMoments> components) {
+
 	PhaseLiquidGeometryEdit {
 		if (cell < 0 || collisionMask < 0 || collisionMask > 255 || components == null)
 			throw new IllegalArgumentException("Invalid phase liquid geometry edit");
@@ -21,21 +19,7 @@ record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponent
 			if (component.cell() != cell || component.supportMask() != support[i])
 				throw new IllegalArgumentException("Phase liquid component geometry disagrees with its collision mask");
 		}
-		if (shape != null) {
-			var tuple = components.getFirst();
-			if (collisionMask != 0 || shape.cell() != cell || !shape.volume().equals(tuple.volume())
-					|| !shape.firstMomentX().equals(tuple.firstMomentX()) || !shape.firstMomentY().equals(tuple.firstMomentY())
-					|| !shape.firstMomentZ().equals(tuple.firstMomentZ()))
-				throw new IllegalArgumentException("Liquid shape differs from the complete actual carrier stock at cell " + cell);
-		}
-	}
-	PhaseLiquidGeometryEdit withShape(LiquidCellShape shape) { return new PhaseLiquidGeometryEdit(cell, collisionMask, components, shape); }
 
-	static List<PhaseLiquidGeometryEdit> shapeEdits(FluidDomain domain) {
-		var result = new ArrayList<PhaseLiquidGeometryEdit>(domain.liquidShapes.size());
-		for (var shape : domain.liquidShapes) result.add(current(shape.cell(), domain.geometry.cutCells.mask(shape.cell()),
-				domain.config.cellSize(), domain.markerGrid, domain.particles).withShape(shape));
-		return List.copyOf(result);
 	}
 
 	int markerCount() {

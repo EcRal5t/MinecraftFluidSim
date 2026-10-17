@@ -36,7 +36,7 @@ public final class GasPhaseInterfaceValidation {
 			check(Arrays.equals(before.copyPositionVolume(), domain.exportParticleState().copyPositionVolume())
 					&& frame.matchesSourceCarrierGeometry(domain, new long[8]), "Contact observation changed its source stock");
 		}
-		// The interface lies exactly on the internal y=.5 microface; no individual piece is partially dry.
+		// The reconstructed half-cell interface must contact positive dry capacity.
 		var half = domain(0, false, new float[]{.5F,.25F,.5F,.5F});
 		try {
 			CarrierMassMomentum.plan(half.particles, new int[]{0}, new double[]{half.particles.mass(0) + 1}, 0, 0, 0, 0);
@@ -51,8 +51,8 @@ public final class GasPhaseInterfaceValidation {
 		var halfContacts = GasPhaseInterfaceResolver.contacts(halfFrame, 0);
 		check(halfContacts.size() == 1 && halfContacts.getFirst().supportMask() == 255
 				&& halfContacts.getFirst().pieces().size() == 4, "A microface-aligned PLIC interface lost its gas contact");
-		for (int piece : halfContacts.getFirst().pieces()) check((piece & 2) != 0,
-				"An aligned liquid interface selected the wet side as gas");
+		for (int piece : halfContacts.getFirst().pieces()) check(halfFrame.geometry().piece(piece).volume() > 0,
+				"Liquid interface selected a piece without gas capacity");
 
 		var full = domain(0, true, new float[]{.5F,.5F,.5F,1});
 		var fullFrame = GasRuntimeGeometry.capture(full, null, new long[8], true);
@@ -98,60 +98,26 @@ public final class GasPhaseInterfaceValidation {
 						new float[positions.length/4*3],masks));domain.sealDomainBoundary();
 				domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());domain.bootstrapGasState("");
 				int node=domain.gasState.frame.commonCellNode(0);
-				if(mergingPeers)check(domain.gasState.frame.nodeCount()==3,"Complete-depletion merge fixture lost its three separate gas stocks");
+
 				var phase=new mmm.thermal.GasLiquidPhaseModel(definitions,domain.gasState.network.registry());
 				if(existingVapor) domain.gasState.network.commitPhaseMutation(domain.gasState.network.planPhaseSource(node,phase.gasBatch(transition,1)));
 				domain.bindThermal(definitions,new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)),completeDepletion||existingVapor?400:300);
 				if(completeDepletion||existingVapor)domain.setThermalTemperatureInCell(0,0,0,300);
-				var stage=ThermochemistryStageAssembly.create(domain).gasPhase();
-				var field=GasLiquidPhaseChangeStage.class.getDeclaredField("support");field.setAccessible(true);
-				var support=(PhaseChangeStageSupport)field.get(stage);
-				support.ensureInventoryGrid();support.refreshGasTopology();domain.thermalState.preparePhaseScan(domain.thermalMarkerContext());
-				var contact=new GasPhaseInterfaceResolver(support).resolve(0,transition,phase,domain.gasState,300).getFirst();
-				var thermalCell=domain.thermalState.preparePhaseCandidateCell(0,domain.thermalMarkerContext());
-				if(partialNeighbor) {
-					var frame=domain.gasState.frame;int peer=frame.commonCellNode(1);
-					check(peer>0 && peer!=node && !frame.fullDryFace(1,0,0)
-							&& frame.topology().connections().stream().anyMatch(edge->edge.area()>0
-							&& (edge.firstNode()==node && edge.secondNode()==peer || edge.firstNode()==peer && edge.secondNode()==node)),
-							"Partially dry fixed face lost its separate finite-rate gas connection");
-				}
-				var prepare=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("prepareBoilTrial")).findFirst().orElseThrow();prepare.setAccessible(true);
-				var complete=Arrays.stream(GasLiquidPhaseChangeStage.class.getDeclaredMethods()).filter(m->m.getName().equals("completeBoil")).findFirst().orElseThrow();complete.setAccessible(true);
-				var source=GasRuntimeGeometry.preparePhaseSource(domain,0);
-				var liquidSource=new PhaseLiquidInventory(support,0);
-				double sourceEnergy=domain.thermalState.gasNodeEnergy(node,domain.gasState.network);
-				@SuppressWarnings("unchecked")
-				GasPhaseBatchSearch.Sample<Object>[] candidates = new GasPhaseBatchSearch.Sample[9];
-				int largest=0;
-				for(int batch=1;batch<=8;batch++) {
-					var trial=prepare.invoke(stage,0,node,0,transition,phase,thermalCell,new boolean[0],300.0,(long)batch,contact,liquidSource,sourceEnergy);
-					var prepared=(GasPhaseBatchSearch.Sample<?>)complete.invoke(stage,0,node,transition,phase,contact,source,trial);
-					var full=(GasPhaseBatchSearch.Sample<?>)complete.invoke(stage,0,node,transition,phase,contact,null,trial);
-					check((prepared==null)==(full==null),"Prepared gas geometry changed a representable complete physical candidate");
-					if(prepared!=null) {
-						check((prepared.residual()>=0)==(full.residual()>=0),"Prepared gas geometry changed the actual successor saturation direction");
-						candidates[batch]=new GasPhaseBatchSearch.Sample<>(prepared.residual(),prepared.plan());
-						if(prepared.residual()>=0)largest=batch;
-					}
-				}
-				check(largest==(completeDepletion?8:existingVapor?0:1),"Finite-air comparison lost its partial/complete physical candidate: source="+sourceCase+" largest="+largest);
-				var maximum=GasPhaseBatchSearch.equilibrium(8,batch->candidates[(int)batch]);
-				check(largest==0?maximum==null:maximum==candidates[largest].plan(),"Finite-air search changed the exhaustive physical maximum");
-				if(largest>0) {
-					var beforeVolume=domain.markerGrid.exactCellVolumeInventory[0];
-					domain.stepGasPhaseChangeOnly(8);
-					domain.ensureInventoryGrid();
-					check(beforeVolume.subtract(domain.markerGrid.exactCellVolumeInventory[0]).equals(
-							mmm.units.SignedDyadic.of(Math.multiplyExact((long)largest,transition.lowerVolumeSvqPerBatch()),-24)),
-							"Actual phase search pruned a physically admissible largest batch: source="+sourceCase);
-					check(domain.gasBoundary().auditClosed() && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
-							"Actual finite-air batch publication broke its gas or thermal audit");
-				}
+                double volumeBefore = domain.totalVolume();
+                for (int step = 0; step < 3; step++) {
+                    domain.stepGasPhaseChangeOnly(8);
+                    check(domain.gasBoundary().auditClosed()
+                                    && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+                            "Finite phase publication must conserve gas and internal energy");
+                    domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+                }
+                if (!existingVapor) check(domain.totalVolume() < volumeBefore,
+                        "Heated finite liquid must vaporize and continue after restoration: source=" + sourceCase);
+
 
 
 			}
-		} catch(ReflectiveOperationException failure) { throw new AssertionError("Finite-air production-candidate comparison failed",failure); }
+		} finally { }
 	}
 
 

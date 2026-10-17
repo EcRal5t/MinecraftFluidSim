@@ -35,8 +35,6 @@ final class MechanicalStepPipeline {
 		double granularKineticEnergyJoules();
 		int lastPressureIterations();
 		ThermalDomainState thermalState();
-		boolean markerPressureActive();
-		double markerPressurePredictorKineticEnergyJoules();
 	}
 
 	private final Workspace state;
@@ -70,7 +68,6 @@ final class MechanicalStepPipeline {
 	SubstepOutcome substep(float dt, int substep, boolean captureAudit, MechanicalAuditAccumulator audit) {
 		diagnosticStage = Stage.GRID_REBUILD;
 		access.ensureGrid();
-		bodyForceStage.beginMarkerPrediction();
 		double stageKineticEnergy = captureAudit ? access.gridAndGranularKineticEnergyJoules() : 0.0;
 		if (captureAudit) audit.particleToGridTransferJoules +=
 				stageKineticEnergy - access.carrierKineticEnergyJoules();
@@ -152,12 +149,6 @@ final class MechanicalStepPipeline {
 		diagnosticStage = Stage.PRESSURE_SOLVE;
 		gridToParticleStage.capturePreProjectionEnergy();
 		pressureStage.solve(dt);
-		boolean markerPressure = access.markerPressureActive();
-		if (captureAudit && markerPressure) {
-			double predictorEnergy = access.markerPressurePredictorKineticEnergyJoules();
-			audit.gridToParticleTransferJoules += predictorEnergy - stageKineticEnergy;
-			stageKineticEnergy = predictorEnergy;
-		}
 		int pressureIterations = access.lastPressureIterations();
 		boolean phaseGeometryPending = substep == 0 && state.pendingPhaseVolume.hasWork();
 		diagnosticStage = Stage.PRESSURE_PUBLICATION;
@@ -168,7 +159,7 @@ final class MechanicalStepPipeline {
 		granularMechanicalStage.previewCollision(dt);
 		granularMechanicalStage.validateVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = markerPressure ? access.carrierKineticEnergyJoules() : access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
@@ -179,7 +170,7 @@ final class MechanicalStepPipeline {
 		}
 		bodyForceStage.enforceSolidFaceVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = markerPressure ? access.carrierKineticEnergyJoules() : access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}

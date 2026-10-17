@@ -1,99 +1,96 @@
 package mmm.fluid;
 
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import mmm.chemistry.ExactRational;
-import mmm.units.SignedDyadic;
 
-/** Box finite differences of simplex monomials; each output uses one final exact quotient. */
+/** Double-precision convex clipping and tetrahedral moments about the cell centre. */
 final class MicroBoxPlaneMoments {
-	private static final SignedDyadic ONE = SignedDyadic.of(1), HALF = SignedDyadic.of(1, -1);
-	private static final int[] FACTORIAL = {1, 1, 2, 6, 24, 120, 720};
-	private static final int[][] POWERS = {
-			{0,0,0}, {1,0,0}, {0,1,0}, {0,0,1}, {2,0,0}, {1,1,0}, {1,0,1}, {0,2,0}, {0,1,1}, {0,0,2},
-			{3,0,0}, {2,1,0}, {2,0,1}, {1,2,0}, {1,1,1}, {1,0,2}, {0,3,0}, {0,2,1}, {0,1,2}, {0,0,3}
-	};
+	private static final int[][] AXES={{},{0},{1},{2},{0,0},{0,1},{0,2},{1,1},{1,2},{2,2},
+			{0,0,0},{0,0,1},{0,0,2},{0,1,1},{0,1,2},{0,2,2},{1,1,1},{1,1,2},{1,2,2},{2,2,2}};
+	private static final int[][] FACES={{0,2,6,4},{1,5,7,3},{0,4,5,1},{2,3,7,6},{0,1,3,2},{4,6,7,5}};
 	private MicroBoxPlaneMoments() { }
-
-	static ExactRational[] integrate(int micro, GasGeometryOverlap.HalfSpace plane, int order) {
-		SignedDyadic[] normal = {plane.nx(), plane.ny(), plane.nz()};
-		SignedDyadic[] magnitude = new SignedDyadic[3], centre = new SignedDyadic[3], extent = new SignedDyadic[3];
-		int[] direction = new int[3], active = new int[3]; int axes = 0;
-		SignedDyadic maximum = SignedDyadic.ZERO, totalExtent = SignedDyadic.ZERO;
-		for (int a = 0; a < 3; a++) {
-			int bit = micro >>> a & 1, sign = normal[a].signum();
-			var corner = SignedDyadic.of(bit + (sign > 0 ? 1 : 0), -1);
-			maximum = maximum.add(normal[a].multiply(corner)); centre[a] = corner.subtract(HALF);
-			magnitude[a] = sign < 0 ? normal[a].negate() : normal[a]; direction[a] = sign > 0 ? -1 : 1;
-			extent[a] = magnitude[a].multiply(HALF);
-			if (sign != 0) { active[axes++] = a; totalExtent = totalExtent.add(extent[a]); }
+	static ExactRational[] integrate(int micro,GasGeometryOverlap.HalfSpace plane,int order) {
+		return integrate(micro,List.of(plane),order);
+	}
+	static ExactRational[] integrate(int micro,List<GasGeometryOverlap.HalfSpace> planes,int order) {
+		if(micro<0 || micro>7 || order<0 || order>3) throw new IllegalArgumentException("Invalid clipped box integral");
+		List<List<double[]>> faces=box(micro);
+		for(var plane:planes) {
+			faces=clip(faces,new double[]{plane.nx().toDouble(),plane.ny().toDouble(),plane.nz().toDouble()},plane.threshold().toDouble());
+			if(faces.isEmpty()) break;
 		}
-		var distance = maximum.subtract(plane.threshold());
-		var result = new ExactRational[order == 3 ? 20 : order == 2 ? 10 : 4]; Arrays.fill(result, ExactRational.ZERO);
-		if (axes == 0 ? distance.signum() < 0 : distance.signum() <= 0) return result;
-		if (distance.compareTo(totalExtent) >= 0) {
-			for (int index = 0; index < result.length; index++) {
-				int degree = 0, divisor = 1, sign = 1;
-				for (int a = 0; a < 3; a++) {
-					int p = POWERS[index][a]; degree += p; divisor *= p + 1;
-					if ((micro >>> a & 1) == 0 && (p & 1) != 0) sign = -sign;
+		int count=order==3?20:order==2?10:4;
+		double[] moments=new double[count];
+		if(!faces.isEmpty()) {
+			double[] centre=new double[3]; int vertices=0;
+			for(var face:faces) for(var point:face) { for(int a=0;a<3;a++) centre[a]+=point[a]; vertices++; }
+			for(int a=0;a<3;a++) centre[a]/=vertices;
+			for(var face:faces) for(int i=1;i+1<face.size();i++)
+				addTetra(moments,new double[][]{centre,face.getFirst(),face.get(i),face.get(i+1)},order);
+		}
+		var result=new ExactRational[count];
+		for(int i=0;i<count;i++) result[i]=MicroBoxPlaneVolume.rational(moments[i]);
+		return result;
+	}
+	private static List<List<double[]>> box(int micro) {
+		double[][] points=new double[8][3];
+		for(int p=0;p<8;p++) for(int a=0;a<3;a++) points[p][a]=((micro>>>a&1)+(p>>>a&1))*.5;
+		var faces=new ArrayList<List<double[]>>(6);
+		for(var indices:FACES) { var face=new ArrayList<double[]>(4); for(int i:indices) face.add(points[i]); faces.add(face); }
+		return faces;
+	}
+	private static List<List<double[]>> clip(List<List<double[]>> faces,double[] n,double threshold) {
+		double scale=Math.max(Math.abs(n[0]),Math.max(Math.abs(n[1]),Math.abs(n[2])));
+		if(scale==0) return threshold<=0?faces:List.of();
+		for(int a=0;a<3;a++) n[a]/=scale; threshold/=scale;
+		var result=new ArrayList<List<double[]>>(faces.size()+1); var cap=new ArrayList<double[]>();
+		for(var face:faces) {
+			var output=new ArrayList<double[]>(); double[] previous=face.getLast(); double dp=dot(n,previous)-threshold;
+			for(var current:face) {
+				double dc=dot(n,current)-threshold;
+				if((dp<0)!=(dc<0)) {
+					double t=dp/(dp-dc); double[] point=new double[3];
+					for(int a=0;a<3;a++) point[a]=Math.fma(t,current[a]-previous[a],previous[a]);
+					output.add(point); cap.add(point);
 				}
-				result[index] = MicroBoxPlaneVolume.quotient(SignedDyadic.of(sign, -3 - degree), SignedDyadic.of(divisor));
+				if(dc>=0) output.add(current);
+				previous=current; dp=dc;
 			}
-			return result;
+			if(output.size()>=3) result.add(output);
 		}
-		// Reflect from the maximizing corner. z_a=|n_a|*distance_a gives z>=0, sum(z)<=distance.
-		var spans = new SignedDyadic[1 << axes][];
-		var bases = new SignedDyadic[1 << axes][3][];
-		for (int subset = 0; subset < spans.length; subset++) {
-			var span = distance;
-			for (int i = 0; i < axes; i++) if ((subset >>> i & 1) != 0) span = span.subtract(extent[active[i]]);
-			if (span.signum() <= 0) continue;
-			spans[subset] = powers(span, axes + order);
-			for (int i = 0; i < axes; i++) {
-				int a = active[i]; var base = magnitude[a].multiply(centre[a]);
-				if ((subset >>> i & 1) != 0) base = base.add(extent[a].multiply(SignedDyadic.of(direction[a])));
-				bases[subset][a] = powers(base, order);
-			}
+		if(cap.size()>=3) {
+			double[] centre=new double[3]; for(var p:cap) for(int a=0;a<3;a++) centre[a]+=p[a]/cap.size();
+			int axis=Math.abs(n[0])<Math.abs(n[1])?0:1; if(Math.abs(n[2])<Math.abs(n[axis])) axis=2;
+			double[] seed=new double[3]; seed[axis]=1; double[] u=cross(n,seed),v=cross(n,u);
+			cap.sort(Comparator.comparingDouble(p->Math.atan2(dotDifference(v,p,centre),dotDifference(u,p,centre))));
+			result.add(cap);
 		}
-		for (int index = 0; index < result.length; index++) {
-			int[] p = POWERS[index]; int degree = 0;
-			var independent = ONE; int divisor = 1;
-			for (int a = 0; a < 3; a++) {
-				if (normal[a].signum() != 0) degree += p[a];
+		return result;
+	}
+	private static void addTetra(double[] moments,double[][] p,int order) {
+		double[][] d=new double[3][3]; for(int i=0;i<3;i++) for(int a=0;a<3;a++) d[i][a]=p[i+1][a]-p[0][a];
+		double volume=Math.abs(dot(d[0],cross(d[1],d[2])))/6;
+		moments[0]+=volume; if(volume==0 || order==0) return;
+		double[][] x=new double[4][3]; double[] sums=new double[3];
+		for(int i=0;i<4;i++) for(int a=0;a<3;a++) { x[i][a]=p[i][a]-.5; sums[a]+=x[i][a]; }
+		for(int k=1;k<moments.length;k++) {
+			int[] axes=AXES[k]; int a=axes[0]; double value;
+			if(axes.length==1) value=sums[a]/4;
+			else {
+				int b=axes[1]; double ab=0; for(int i=0;i<4;i++) ab+=x[i][a]*x[i][b];
+				if(axes.length==2) value=(sums[a]*sums[b]+ab)/20;
 				else {
-					int sign = (micro >>> a & 1) == 0 && (p[a] & 1) != 0 ? -1 : 1;
-					independent = independent.multiply(SignedDyadic.of(sign, -p[a] - 1)); divisor *= p[a] + 1;
+					int c=axes[2]; double ac=0,bc=0,abc=0;
+					for(int i=0;i<4;i++) { ac+=x[i][a]*x[i][c]; bc+=x[i][b]*x[i][c]; abc+=x[i][a]*x[i][b]*x[i][c]; }
+					value=(sums[a]*sums[b]*sums[c]+ab*sums[c]+ac*sums[b]+bc*sums[a]+2*abc)/120;
 				}
 			}
-			int factorial = FACTORIAL[axes + degree]; var denominator = SignedDyadic.of((long) factorial * divisor);
-			for (int i = 0; i < axes; i++) {
-				int a = active[i];
-				for (int power = 0; power <= p[a]; power++) denominator = denominator.multiply(magnitude[a]);
-			}
-			SignedDyadic numerator = SignedDyadic.ZERO;
-			int px = normal[0].signum() == 0 ? 0 : p[0], py = normal[1].signum() == 0 ? 0 : p[1], pz = normal[2].signum() == 0 ? 0 : p[2];
-			for (int subset = 0; subset < spans.length; subset++) if (spans[subset] != null) {
-				for (int x = 0; x <= px; x++) for (int y = 0; y <= py; y++) for (int z = 0; z <= pz; z++) {
-					int[] j = {x, y, z}; int coefficient = factorial / FACTORIAL[axes + x + y + z];
-					if ((Integer.bitCount(subset) & 1) != 0) coefficient = -coefficient;
-					var term = spans[subset][axes + x + y + z];
-					for (int i = 0; i < axes; i++) {
-						int a = active[i];
-						// binomial(p,j)*j! is the falling factorial p!/(p-j)!.
-						coefficient *= FACTORIAL[p[a]] / FACTORIAL[p[a] - j[a]];
-						if (direction[a] < 0 && (j[a] & 1) != 0) coefficient = -coefficient;
-						term = term.multiply(bases[subset][a][p[a] - j[a]]);
-					}
-					numerator = numerator.add(term.multiply(SignedDyadic.of(coefficient)));
-				}
-			}
-			result[index] = MicroBoxPlaneVolume.quotient(numerator.multiply(independent), denominator);
+			moments[k]+=volume*value;
 		}
-		return result;
 	}
-	private static SignedDyadic[] powers(SignedDyadic base, int degree) {
-		var result = new SignedDyadic[degree + 1]; result[0] = ONE;
-		for (int i = 1; i < result.length; i++) result[i] = result[i - 1].multiply(base);
-		return result;
-	}
+	private static double dot(double[] a,double[] b) { return Math.fma(a[0],b[0],Math.fma(a[1],b[1],a[2]*b[2])); }
+	private static double dotDifference(double[] a,double[] p,double[] c) { return a[0]*(p[0]-c[0])+a[1]*(p[1]-c[1])+a[2]*(p[2]-c[2]); }
+	private static double[] cross(double[] a,double[] b) { return new double[]{a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]}; }
 }

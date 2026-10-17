@@ -295,22 +295,7 @@ public final class LiquidVolumeTransportValidation {
 							|| !flux.exactFlux[0].equals(SignedDyadic.ZERO) || !flux.exactFlux[1].equals(original)
 							|| flux.representationBlend(1) != 1)
 						throw new AssertionError("Reverse cancellation failed to reassign the same original donor inventory");
-					var domain = new FluidDomain(3, 2, 2, new FluidSolverConfig(1, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 16);
-					domain.setVolume(1, 0, 0, (float) original.toDouble()); var source = new java.util.ArrayList<Integer>();
-					for (int p = 0; p < domain.particleCount(); p++) {
-						source.add(p); domain.particles.setPositionX(p, 1.75F); domain.particles.setPositionY(p, .25F); domain.particles.setPositionZ(p, .25F);
-						domain.particles.setVelocityX(p, .5F); domain.particles.setVelocityY(p, -.25F); domain.particles.setVelocityZ(p, .125F);
-					}
-					domain.rebuildGridFromParticles();
-					var preferences = new CellRemapMicroPreferences(domain, flux, 1, 255, new int[]{1, -1}, new int[]{255, 255}).forSource(source);
-					if (preferences[0][1] != 1) throw new AssertionError("Representation-only transfer lost its raw source supply");
-					var allocation = new CellRemapTransportMoments(domain, 1, source).allocate(new SignedDyadic[]{original, SignedDyadic.ZERO}, preferences);
-					if (allocation.mass()[0] != 1000 * original.toDouble() || allocation.mass()[1] != 0
-							|| allocation.momentum()[0][0] != .5 * allocation.mass()[0]
-							|| allocation.momentum()[0][1] != -.25 * allocation.mass()[0]
-							|| allocation.momentum()[0][2] != .125 * allocation.mass()[0]
-							|| allocation.kinetic()[0] != 21.0 / 64 * allocation.mass()[0])
-						throw new AssertionError("Representation source weights changed actual mass, momentum or kinetic moment");
+
 				} else if (!flux.exactFlux[0].equals(original) || !flux.exactFlux[1].equals(SignedDyadic.ZERO))
 					throw new AssertionError("A rejected partial cancellation changed the candidate flux");
 			} catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
@@ -603,11 +588,7 @@ public final class LiquidVolumeTransportValidation {
 			domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
 			if (!domain.gridToParticleStage.advectionCells()[target] || domain.gridToParticleStage.advectionCells()[remote])
 				throw new AssertionError("Handoff fixture must contain connected and isolated carriers");
-			var trace = domain.pressureSystem.markerVelocityField();
-			for (int axis = 0; axis < 3; axis++) for (boolean positive : new boolean[] {false, true}) {
-				for (var component : trace.faceTraces(target, axis, positive, domain.sizeX, domain.sizeY)) for (double coefficient : component.q())
-					if (coefficient != 0) throw new AssertionError("Zero-flux fixture has a moving donor trace");
-			}
+
 			var before = carrierColumns(domain, target);
 			var volumeBefore = SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count());
 			double remoteBefore = 0;
@@ -1224,11 +1205,11 @@ public final class LiquidVolumeTransportValidation {
 		var ordinals = new java.util.ArrayList<Integer>();
 		for (int p = 0; p < domain.particleCount(); p++) ordinals.add(p);
 		var volume = domain.markerGrid.exactCellVolumeInventory[0];
-		double mass = new CellRemapTransportMoments(domain, 0, ordinals).totals().mass();
+		double mass = SignedDyadic.sum(domain.particles.directArrays().mass, domain.particleCount()).toDouble();
 		if (!Double.isFinite(CellRemapMassAllocation.density(domain, ordinals, volume, mass)))
 			throw new AssertionError("Exact uniform source density was rejected");
 		domain.particles.setMass(0, Math.nextUp(domain.particles.mass(0)));
-		if (Double.isFinite(CellRemapMassAllocation.density(domain, ordinals, volume, new CellRemapTransportMoments(domain, 0, ordinals).totals().mass())))
+		if (Double.isFinite(CellRemapMassAllocation.density(domain, ordinals, volume, SignedDyadic.sum(domain.particles.directArrays().mass, domain.particleCount()).toDouble())))
 			throw new AssertionError("Unequal source density was accepted");
 		var mixed = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 64);

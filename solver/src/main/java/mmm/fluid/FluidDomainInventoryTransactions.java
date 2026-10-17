@@ -116,8 +116,6 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 	}
 
 	private VelocitySample sampleStoredVelocity(float localX, float localY, float localZ) {
-		VelocitySample resolved = pressureSystem.sampleMarkerVelocity(localX, localY, localZ);
-		if (resolved != null) return resolved;
 		return new VelocitySample(
 				sampleX(mac.velocityX, localX, localY, localZ),
 				sampleY(mac.velocityY, localX, localY, localZ),

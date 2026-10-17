@@ -6,7 +6,6 @@ public final class RegionRepositoryAdapterValidation {
 
 	public static void main(String[] args) throws Exception {
 		RegionGenerationValidationScenarios.validateExactRoundTripAndMetadataUnload();
-		RegionCodecValidationScenarios.validateLiquidShapeCodec();
 		RegionCodecValidationScenarios.validateMaterialCodec();
 		RegionCodecValidationScenarios.validateChemicalCodec();
 		RegionCodecValidationScenarios.validateGranularCodec();

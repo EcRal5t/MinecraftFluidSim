@@ -15,20 +15,12 @@ public final class FlipMaterialParticleState {
 	private final double[] particleMass;
 	private final int[] materialPaletteIndex;
 
+
 	public FlipMaterialParticleState(
 			int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
 			double volumeLedger, double massLedger, List<FluidMaterial> materials,
 			float[] positionVolume, float[] particleVelocities, byte[] solidMask,
 			double[] particleMass, int[] materialPaletteIndex
-	) {
-		this(sizeX, sizeY, sizeZ, cellSize, particleCount, volumeLedger, massLedger, materials,
-				positionVolume, particleVelocities, solidMask, particleMass, materialPaletteIndex, List.of());
-	}
-	public FlipMaterialParticleState(
-			int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
-			double volumeLedger, double massLedger, List<FluidMaterial> materials,
-			float[] positionVolume, float[] particleVelocities, byte[] solidMask,
-			double[] particleMass, int[] materialPaletteIndex, List<LiquidCellShape> liquidShapes
 	) {
 		if (!(Double.isFinite(volumeLedger) && volumeLedger >= 0.0)
 				|| !(Double.isFinite(massLedger) && massLedger >= 0.0)) {
@@ -61,7 +53,7 @@ public final class FlipMaterialParticleState {
 		}
 		particles = new FlipParticleState(
 				sizeX, sizeY, sizeZ, cellSize, particleCount, (float) volume,
-				positionVolume, particleVelocities, solidMask, liquidShapes
+				positionVolume, particleVelocities, solidMask
 		);
 		totalVolume = volume;
 		totalMass = mass;
@@ -77,7 +69,6 @@ public final class FlipMaterialParticleState {
 	public double totalVolume() { return totalVolume; }
 	public double totalMass() { return totalMass; }
 	public List<FluidMaterial> materials() { return materials; }
-	public List<LiquidCellShape> liquidShapes() { return particles.liquidShapes(); }
 	public float[] copyPositionVolume() { return particles.copyPositionVolume(); }
 	public float[] copyParticleVelocities() { return particles.copyParticleVelocities(); }
 	public byte[] copySolidMask() { return particles.copySolidMask(); }

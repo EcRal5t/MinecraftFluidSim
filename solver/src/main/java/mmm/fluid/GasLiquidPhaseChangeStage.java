@@ -7,6 +7,7 @@ import mmm.fluid.air.GasComponentAmount;
 import mmm.fluid.air.GasInventory;
 import mmm.granular.SolidVolume;
 import mmm.thermal.GasLiquidPhaseModel;
+import mmm.thermal.GasThermalModel;
 import mmm.thermal.ThermalDomainState;
 import mmm.thermal.ThermalLimits;
 import mmm.thermal.ThermalMaterialDefinition;
@@ -123,7 +124,7 @@ final class GasLiquidPhaseChangeStage {
 		var liquidSource = new PhaseLiquidInventory(support, cell);
 		var geometrySource = support.prepareGasGeometrySource(cell);
 		double sourceGasEnergy = support.thermal().gasNodeEnergy(node, network);
-		return GasPhaseBatchSearch.equilibrium(high, batches -> {
+		GasBoilTrial selected = GasPhaseBatchSearch.equilibrium(high, batches -> {
 			GasBoilTrial trial;
 			try {
 				trial = prepareBoilTrial(cell, node, liquidHandle, transition, phase, thermalCell,
@@ -132,8 +133,12 @@ final class GasLiquidPhaseChangeStage {
 				// Removing latent heat has crossed the positive-temperature end of this source curve.
 				return new GasPhaseBatchSearch.Sample<>(Double.NEGATIVE_INFINITY, null);
 			}
-			return completeBoil(cell, node, transition, phase, contact, geometrySource, trial);
+			if (trial == null) return null;
+			double residual = saturationResidual(node, transition, phase, trial.thermalTrial(),
+					network.inventory(node).merge(trial.batch()), trial.candidateGasEnergy(), trial.removedSvq(), true);
+			return new GasPhaseBatchSearch.Sample<>(residual, residual >= 0 ? trial : null);
 		});
+		return completeBoil(node, contact, geometrySource, selected);
 	}
 
 	private GasBoilTrial prepareBoilTrial(
@@ -179,7 +184,7 @@ final class GasLiquidPhaseChangeStage {
 		}
 	}
 
-	private GasPhaseBatchSearch.Sample<GasBoilPlan> completeBoil(int cell, int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
+	private GasBoilPlan completeBoil(int node,
 	                                GasPhaseInterfaceResolver.Candidate contact, GasRuntimeGeometry.PhaseSource source,
 	                                GasBoilTrial candidate) {
 		if (candidate == null) return null;
@@ -189,12 +194,8 @@ final class GasLiquidPhaseChangeStage {
 			var thermalPlan = support.thermal().planPhaseCellEnergy(candidate.thermalTrial());
 			var topology = support.planGasGeometry(candidate.liquidGeometry(), node, gasPlan,
 					candidate.candidateGasEnergy(), thermalPlan, source);
-			double residual = interfaces.saturationResidualAfter(contact, transition, phase, thermalPlan.temperatureK(),
-					topology, GasLiquidPhaseModel.Direction.BOIL, false);
-			if (Double.isNaN(residual)) return null;
-			if (residual < 0) return new GasPhaseBatchSearch.Sample<>(residual, null);
-			return new GasPhaseBatchSearch.Sample<>(residual, new GasBoilPlan(candidate.batches(), candidate.removedSvq(), candidate.removal(), gasPlan,
-					thermalPlan, candidate.candidateGasEnergy(), topology));
+			return new GasBoilPlan(candidate.batches(), candidate.removedSvq(), candidate.removal(), gasPlan,
+					thermalPlan, candidate.candidateGasEnergy(), topology);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| ThermalStateFunction.EnergyRepresentationException
 				| ThermalDomainState.EmptyPhaseCandidateEnergyException
@@ -247,9 +248,33 @@ final class GasLiquidPhaseChangeStage {
 		var geometrySource = support.prepareGasGeometrySource(cell);
 		double sourceGasEnergy = support.thermal().gasNodeEnergy(node, gasState.network);
 		double sourceGasTemperature = support.thermal().gasTemperature(node, gasState.network);
-		return GasPhaseBatchSearch.equilibrium(high, batches -> completeCondense(cell, node, transition, phase, contact,
-				geometrySource, prepareCondenseTrial(cell, node, liquidHandle, transition, phase, thermalCell, batches,
-						contact, liquidSource, sourceGasEnergy, sourceGasTemperature)));
+		GasCondenseTrial selected = GasPhaseBatchSearch.equilibrium(high, batches -> {
+			var trial = prepareCondenseTrial(cell, node, liquidHandle, transition, phase, thermalCell, batches,
+					contact, liquidSource, sourceGasEnergy, sourceGasTemperature);
+			if (trial == null) return null;
+			var remaining = gasState.network.planPhaseSink(node, trial.removedGas()).inventoryAfter();
+			double residual = saturationResidual(node, transition, phase, trial.thermalTrial(), remaining,
+					trial.candidateGasEnergy(), -trial.addedSvq(), false);
+			return new GasPhaseBatchSearch.Sample<>(residual, residual >= 0 ? trial : null);
+		});
+		return completeCondense(node, geometrySource, selected);
+	}
+
+	/** Phase equilibrium uses the current contact's control volume; topology is remapped once afterwards. */
+	private double saturationResidual(int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
+	                                  ThermalDomainState.PhaseCellTrial liquid, GasInventory gas, double energy,
+	                                  long gasVolumeDeltaSvq, boolean boiling) {
+		if (!boiling && gas.isEmpty()) return Double.POSITIVE_INFINITY;
+		double h = support.state().cellSize();
+		double volume = support.gasState().network.availableVolume(node)
+				+ (double) gasVolumeDeltaSvq / SolidVolume.SVQ_PER_BV * h * h * h;
+		if (volume <= 0) return Double.NEGATIVE_INFINITY;
+		var thermal = new GasThermalModel(support.thermal().registry(), support.gasState().network.registry());
+		double temperature = liquid.temperatureK();
+		if (Double.isNaN(temperature)) temperature = thermal.state(gas, energy).temperatureK();
+		double pressure = thermal.absolutePressure(gas, volume, energy);
+		double residual = phase.saturation(transition, temperature, gas, pressure).pressureImbalancePa();
+		return boiling ? residual : -residual;
 	}
 
 	private GasCondenseTrial prepareCondenseTrial(
@@ -373,8 +398,7 @@ final class GasLiquidPhaseChangeStage {
 		}
 	}
 
-	private GasPhaseBatchSearch.Sample<GasCondensePlan> completeCondense(int cell, int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
-	                                        GasPhaseInterfaceResolver.Candidate contact, GasRuntimeGeometry.PhaseSource source,
+	private GasCondensePlan completeCondense(int node, GasRuntimeGeometry.PhaseSource source,
 	                                        GasCondenseTrial candidate) {
 		if (candidate == null) return null;
 		try {
@@ -382,10 +406,6 @@ final class GasLiquidPhaseChangeStage {
 			var thermalPlan = support.thermal().planPhaseCellEnergy(candidate.thermalTrial());
 			var topology = support.planGasGeometry(candidate.liquidGeometry(), node, gasPlan,
 					candidate.candidateGasEnergy(), thermalPlan, source);
-			double residual = interfaces.saturationResidualAfter(contact, transition, phase, thermalPlan.temperatureK(),
-					topology, GasLiquidPhaseModel.Direction.CONDENSE, gasPlan.inventoryAfter().isEmpty());
-			if (Double.isNaN(residual)) return null;
-			if (residual < 0) return new GasPhaseBatchSearch.Sample<>(residual, null);
 			CarrierMassMomentum.Plan momentum = null;
 			if (candidate.target() >= 0) {
 				var particles = support.state().particles();
@@ -397,9 +417,9 @@ final class GasLiquidPhaseChangeStage {
 							"Condensation momentum exceeds liquid carrier representation", unrepresentableMomentum);
 				}
 			}
-			return new GasPhaseBatchSearch.Sample<>(residual, new GasCondensePlan(candidate.batches(), gasPlan, thermalPlan, candidate.candidateGasEnergy(),
+			return new GasCondensePlan(candidate.batches(), gasPlan, thermalPlan, candidate.candidateGasEnergy(),
 					candidate.target(), candidate.condensedMixture(), candidate.targetVolume(), candidate.targetMass(), momentum,
-					candidate.slot(), candidate.addedSvq(), candidate.movedMass(), topology));
+					candidate.slot(), candidate.addedSvq(), candidate.movedMass(), topology);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| ThermalStateFunction.EnergyRepresentationException
 				| AirNetwork.PhaseCapacityExceededException

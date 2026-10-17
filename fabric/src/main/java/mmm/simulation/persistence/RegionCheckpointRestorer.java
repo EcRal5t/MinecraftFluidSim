@@ -12,7 +12,6 @@ import mmm.fluid.FlipChemicalParticleState;
 import mmm.fluid.FlipThermalParticleState;
 import mmm.fluid.PendingPhaseVolumeState;
 import mmm.fluid.FluidMaterial;
-import mmm.fluid.LiquidCellShape;
 import mmm.fluid.air.AirNetwork;
 import mmm.fluid.air.GasComponentAmount;
 import mmm.fluid.air.GasInventory;
@@ -61,7 +60,7 @@ public final class RegionCheckpointRestorer {
 		ReconstructedParticles particles = reconstructParticles();
 		double volume = sumVolumes(particles.positionVolume());
 		return new FlipParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
-				manifest.totalMarkerCount(), (float) volume, particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.liquidShapes());
+				manifest.totalMarkerCount(), (float) volume, particles.positionVolume(), particles.velocities(), particles.solidMask());
 	}
 
 	public FlipMaterialParticleState reconstructMaterial() throws IOException {
@@ -74,7 +73,7 @@ public final class RegionCheckpointRestorer {
 		return new FlipMaterialParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
 				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMass(), manifest.materialPalette(),
 				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMass(),
-				particles.materialPaletteIndex(), particles.liquidShapes());
+				particles.materialPaletteIndex());
 	}
 
 	public GasStateSnapshot reconstructGas(GasRegistry registry, ChemicalRegistry chemicalRegistry) throws IOException {
@@ -220,7 +219,7 @@ public final class RegionCheckpointRestorer {
 				manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
 				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMass(), manifest.materialPalette(),
 				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMass(),
-				particles.materialPaletteIndex(), particles.liquidShapes());
+				particles.materialPaletteIndex());
 		ChemicalAuditLedgerCodec.AuditLedgers audit = decodeChemicalAuditExtension();
 		return new FlipChemicalParticleState(materials, registry, manifest.chemicalMixtures(),
 				particles.chemicalMixtureIndex(), particles.indicator(), manifest.chemicalSpeciesTotals(),
@@ -315,9 +314,7 @@ public final class RegionCheckpointRestorer {
 		byte[] solids = new byte[Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ())];
 		boolean[] seenMarkers = new boolean[count];
 		boolean[] seenSolids = new boolean[solids.length];
-		var shapes = new ArrayList<LiquidCellShape>();
 		for (RegionSectionState section : sections) {
-			shapes.addAll(new LiquidShapeRegionStateCodec().decode(section, manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize()));
 			int[] ordinals = section.markerOrdinals();
 			float[] sectionPositions = section.positionVolume();
 			float[] sectionVelocities = section.velocities();
@@ -357,7 +354,7 @@ public final class RegionCheckpointRestorer {
 		double volume = sumVolumes(positions);
 		if (Double.doubleToRawLongBits(volume) != manifest.totalVolumeBits()) throw new IOException("Marker volume ledger mismatch");
 		return new ReconstructedParticles(positions, velocities, solids, markerMass, materialPaletteIndex,
-				chemicalMixtureIndex, indicator, shapes.stream().sorted(Comparator.comparingInt(LiquidCellShape::cell)).toList());
+				chemicalMixtureIndex, indicator);
 	}
 
 	private GasStateSnapshot reconstructGasPayload(GasRegistry registry, ChemicalRegistry chemicalRegistry) throws IOException {
@@ -530,7 +527,6 @@ public final class RegionCheckpointRestorer {
 			double[] markerMass,
 			int[] materialPaletteIndex,
 			int[] chemicalMixtureIndex,
-			byte[] indicator,
-			List<LiquidCellShape> liquidShapes
+			byte[] indicator
 	) { }
 }

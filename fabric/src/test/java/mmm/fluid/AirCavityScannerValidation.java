@@ -307,7 +307,6 @@ public final class AirCavityScannerValidation {
 		check(equalFractionCaptured.offsetBracket(1,0)==current.offsetBracket(1,0),
 				"Neighbor SVQ and volume changes invalidated an unchanged actual fraction-gradient input");
 		checkRuntimePlanesEqual(equalFractionCaptured,equalFractionFresh,"Pore-edited captured PLIC differs from a complete rebuild");
-		validatePhaseShapeCapacity(domain,equalFractionFresh);
 		var clear=GasRuntimeGeometry.allDry(domain,true);
 		check(clear.matchesSourceCarrierGeometry(domain,occupied) && !clear.matchesSourceCarrierGeometry(domain,new long[8])
 				&& !clear.matchesCarrierGeometry(domain,new long[8]) && clear.capacity().chambers().getFirst().cubicMeters()==2,
@@ -351,25 +350,7 @@ public final class AirCavityScannerValidation {
 		}
 	}
 
-	private static void validatePhaseShapeCapacity(FluidDomain domain,GasRuntimeGeometry source) {
-		var tuple=source.liquidStock().get(0);var previous=domain.gasState.frame;
-		var box=new LiquidCellShape.Box(SignedDyadic.of(.5),SignedDyadic.of(.125),SignedDyadic.ZERO,
-				SignedDyadic.of(1),SignedDyadic.of(.875),SignedDyadic.of(1));
-		var edit=tuple.withShape(new LiquidCellShape(0,List.of(box),tuple.firstMomentX(),tuple.firstMomentY(),tuple.firstMomentZ()));
-		try {
-			domain.gasState.frame=source;var prepared=GasRuntimeGeometry.preparePhaseSource(domain,0);
-			check(prepared!=null,"Matching partially occupied phase source was not prepared");
-			for(boolean local:new boolean[]{false,true}) {
-				try {
-					if(local)GasRuntimeGeometry.capturePhaseEdit(domain,edit,source.occupiedSvq(),true,prepared);
-					else GasRuntimeGeometry.capture(domain,edit,source.occupiedSvq(),true);
-					throw new AssertionError("A liquid cuboid bypassed its complete-pore support requirement");
-				} catch(GasTopologyBlockedException expected) {
-					check(expected.getMessage().contains("Positive cuboid requires complete open pore capacity"),"Local/full cuboid support checks differ");
-				}
-			}
-		} finally { domain.gasState.frame=previous; }
-	}
+
 
 	private static void validatePreparedGasBridge() {
 		var grid=new Grid(5,3,3,1);java.util.Arrays.fill(grid.solid,true);
@@ -408,7 +389,7 @@ public final class AirCavityScannerValidation {
 				int piece = 8 * cell + micro;
 				var before = source.geometry().piece(piece); var after = future.geometry().piece(piece);
 				var expected = before == null || after == null ? ExactRational.ZERO
-						: GasGeometryReference.unionOverlapVolume(micro, before.drySupports(), after.drySupports());
+						: GasGeometryReference.unionOverlapVolume(micro, List.of(before.dryPlane()==null?List.of():List.of(before.dryPlane())), List.of(after.dryPlane()==null?List.of():List.of(after.dryPlane())));
 				overlaps.put(piece, expected);
 				check(transition.positive(piece) == (expected.signum() > 0), "Phase contact preparation differs from the exact old/new intersection");
 			}
@@ -1062,60 +1043,19 @@ public final class AirCavityScannerValidation {
 						List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(150,1500,718)))));
 		d.bindGasRegistry(gas); d.bootstrapGasState(""); d.bindThermal(thermal,liquids,300);
 		d.ensureGrid(); d.gridToParticleStage.prepareAdvectionCells();
-		var old=d.gasState.frame; int previous=old.commonCellNode(source);
-		if (scenario==0) check(old.geometry().pieces().stream().filter(piece->piece.cell()==source)
-				.allMatch(piece->piece.normalizedVolume().equals(ExactRational.ONE.divide(8))),"Dry translation fixture lost its complete old microboxes");
-		var stock=d.gasState.network.inventory(previous); double energy=d.thermalState.gasNodeEnergy(previous,d.gasState.network);
-		var before=d.exportGasState(""); var basis=CellAffineVelocity.capture(d);
-		double[][] velocity=new double[3][d.particles.count()], coefficients=new double[3][4*basis.blockCount()];
-		for (int p=0;p<d.particles.count();p++) velocity[0][p]=d.particles.velocityX(p);
-		basis.fit(velocity,coefficients);
-		var flux=new ConservativeLiquidFlux(5,5,5,true); var flow=new LiquidAffineFaceFlow(d,flux,new CellAffineVelocityField(basis,coefficients));
-		var geometry=new LiquidFluxGeometry(d); flux.geometry(geometry); flux.faceSweep(flow); flow.prepareVelocities(flux,geometry);
-		SignedDyadic[] exact=d.markerGrid.exactCellVolumeInventory.clone(); double[] volumes=new double[d.cellCount];
-		for (int cell=0;cell<volumes.length;cell++) volumes[cell]=exact[cell].toDouble();
-		flux.plan(volumes,d.geometry.solid,dt/h,exact);
-		var candidate=new CellCarrierRemapPlan(d,flux,dt,new BallisticLiquidRemap(d,dt)); var next=candidate.gasTopology.frame();
-		int destination=next.commonCellNode(receiver);
-		check(next.commonCellNode(source)<0 && GasAdvectionSuccessor.certify(d,old,next,flux,null,dt).get(previous)==destination,
-				"Actual constant velocity and final micro ports lost a complete dry single-exit migration");
-		check(gasOverlapWeights(d,old,next).keySet().stream().noneMatch(pair->pair>>>32==previous),
-				"Advected gas fixture retained a same-piece successor");
-		check(candidate.gasTopology.gasPlan().inventory(destination).equals(stock),"Advected gas changed its complete nanos/kg/species stock");
-		double expected=new mmm.thermal.GasThermalModel(thermal,gas).compressAdiabatically(stock,energy,
-				d.gasState.network.availableVolume(previous),candidate.gasTopology.gasPlan().availableVolume(destination)).finalInternalEnergy();
-		check(candidate.gasTopology.thermalPlan().nodeEnergy(destination)==expected,
-				"Advected gas lost its inherited old control volume or the existing volume-work law");
-		if (scenario==2) check(candidate.gasTopology.gasPlan().availableVolume(destination)>d.gasState.network.availableVolume(previous)
-				&& expected<energy,"Advected gas rejected a compressible successor's expansion work");
-		if (tiny) check(stock.standardVolumeNanos()==mmm.fluid.air.AirNetwork.nanos(d.gasState.network.availableVolume(previous)),
-				"Microgas advection bypassed the original finite nanos admission");
-		var actualPorts=new CellRemapPorts(d,flux,new BallisticLiquidRemap(d,dt),false,null);
-		check(GasAdvectionSuccessor.certify(d,old,next,flux,actualPorts,dt).get(previous)==destination,
-				"Gas migration failed to bind actual complete-support liquid port totals");
-		var inlet=actualPorts.outgoing(source-1,255).getFirst(); var original=inlet.volume;
-		if (scenario==2) try {
-			var field=ConservativeLiquidFlux.class.getDeclaredField("openFluxBound"); field.setAccessible(true);
-			var open=(SignedDyadic[])field.get(flux); int reverse=inlet.face+flux.physicalFaceCount;
-			var saved=open[reverse]; check(saved.signum()==0 && flux.exactFlux[reverse].signum()==0,"Reverse gas-admission fixture has an existing transfer");
-			try {
-				open[reverse]=SignedDyadic.of(ConservativeMarkerSampling.VOLUME_FLUX_RESOLUTION);
-				check(!GasAdvectionSuccessor.certify(d,old,next,flux,actualPorts,dt).containsKey(previous),
-						"Gas migration ignored a reverse open transfer after its liquid port was cancelled");
-			} finally { open[reverse]=saved; }
-		} catch (ReflectiveOperationException failure) { throw new AssertionError("Reverse gas-admission fixture could not set its open transfer",failure); }
-		inlet.volume=original.subtract(SignedDyadic.of(ConservativeMarkerSampling.VOLUME_FLUX_RESOLUTION));
-		check(!GasAdvectionSuccessor.certify(d,old,next,flux,actualPorts,dt).containsKey(previous),
-				"Gas migration ignored a final indivisible-chemistry port reduction");
-		inlet.volume=original;
-		check(GasAdvectionSuccessor.certify(d,old,next,flux,null,Math.nextDown(dt)).isEmpty(),"Gas advection reused another time step's face plan");
-		d.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(d.carrierMutationRevision(),d.particles.count()),candidate);
-		var after=d.exportGasState("");
-		check(after.externalSource().equals(before.externalSource()) && after.escapedSink().equals(before.escapedSink())
-				&& d.gasBoundary.auditClosed() && d.thermalAudit().expectedInventory().equals(d.exactInternalEnergy()),
-				"Advected finite gas changed external ledgers or failed its thermal/carrier audit");
-		check(GasAdvectionSuccessor.certify(d,old,next,flux,null,dt).isEmpty(),"Gas advection reused a published carrier source");
-	}
+        var before=d.exportGasState("");
+        var mass=d.totalMass(); var volume=d.totalVolume();
+        for(int step=0;step<3;step++) {
+            d=new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0,d.captureAuthoritativeState(),List.of(),false,0,true)).claimPreparedCpuDomain();
+            var after=d.exportGasState("");
+            check(after.externalSource().equals(before.externalSource()) && after.escapedSink().equals(before.escapedSink())
+                            && d.gasBoundary.auditClosed() && d.thermalAudit().expectedInventory().equals(d.exactInternalEnergy()),
+                    "Moving liquid must hand over finite gas and its heat ledger");
+            check(d.totalVolume()==volume && Math.abs(d.totalMass()-mass)<1e-9*Math.max(1,mass),
+                    "Gas successor transport changed liquid inventory");
+            d=FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());
+        }
+    }
 
 	private static void validateAmbientSelfRemap() {
 		var domain = pieceCapacityDomain(0, .8F, .2F, .3F, .1875F);

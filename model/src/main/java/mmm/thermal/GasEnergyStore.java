@@ -13,11 +13,6 @@ import java.util.List;
  * their audit booking, and the gas revision token. Gas node ordinals change only here.
  */
 public final class GasEnergyStore {
-	public static final class TransferSearchBudgetExceededException extends IllegalArgumentException {
-		public TransferSearchBudgetExceededException() {
-			super("Gas mixture transfer search exceeded its caloric interval budget");
-		}
-	}
 	private final GasThermalModel gasModel;
 	private final double insertionTemperatureK;
 	private final ThermalAuditState audit;
@@ -125,23 +120,20 @@ public final class GasEnergyStore {
 				return maximumTransfer(source, target, requested, network);
 			}
 			@Override public long activityTransferNanos(int source, int target, long available) {
-				try { return maximumTransfer(source, target, available, network); }
-				catch (TransferSearchBudgetExceededException unresolvedActivity) { return 1L; }
+				return maximumTransfer(source, target, available, network);
 			}
 		};
 	}
 
-	/** Finds the greatest thermodynamically executable exact portion within the requested amount. */
+	/** Selects a pressure-directed exact portion using a bounded equilibrium search. */
 	private long maximumTransfer(int source, int target, long requested, AirNetwork network) {
 		if (requested <= 0L) return 0L;
 		if (source != AirNetwork.AMBIENT_NODE) requested = Math.min(requested, network.standardVolumeNanos(source));
 		if (target != AirNetwork.AMBIENT_NODE) requested = Math.min(requested, Long.MAX_VALUE - network.standardVolumeNanos(target));
 		double sourceTemperature = source == AirNetwork.AMBIENT_NODE
 				? insertionTemperatureK : temperature(source, network);
-		return new GasTransferSearch(gasModel.thermalRegistry(), network, source, target, sourceTemperature,
-				source == AirNetwork.AMBIENT_NODE ? 0.0 : nodeEnergy[source - 1],
-				target == AirNetwork.AMBIENT_NODE ? 0.0 : nodeEnergy[target - 1],
-				amount -> permitsTransfer(source, target, amount, sourceTemperature, network)).maximum(requested);
+		return GasTransferSearch.maximum(requested,
+                amount -> permitsTransfer(source, target, amount, sourceTemperature, network));
 	}
 
 	private boolean permitsTransfer(int source, int target, long amount, double sourceTemperature, AirNetwork network) {

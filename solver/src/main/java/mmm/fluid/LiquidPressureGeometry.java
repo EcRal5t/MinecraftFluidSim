@@ -142,9 +142,7 @@ final class LiquidPressureGeometry {
 				var facePolygons = phase.internalSharedWetPolygons(cell,micro,axis,.5*(micro>>((axis+1)%3)&1),
 						.5*(micro>>((axis+2)%3)&1),.5);
 				var wet = surface(facePolygons,axis,.5,cell,domain);
-				if (phase.liquidShape(cell) != null && phase.liquidFractionExact(cell,micro) == 1
-						&& phase.liquidFractionExact(cell,micro|1<<axis) == 1)
-					wet = LiquidPressureMoments.fullMicroFace(wet,axis,.5,.5*(micro>>((axis+1)%3)&1),.5*(micro>>((axis+2)%3)&1),cell,domain);
+
 				if(wet.area()>0) {
 					var face = new InteriorFace(cell,micro,micro|1<<axis,axis,wet); interior.add(face); polygons.put(face, facePolygons);
 				}
@@ -283,9 +281,7 @@ final class LiquidPressureGeometry {
 						var facet = new Facet(FacetKind.WALL,cell,cell,axis,sign,key,wet); facets.add(facet); polygons.put(facet,facePolygons);
 					}
 					else if(integral[0]>0) {
-						SurfaceMoments exposed = plane.liquidShape(cell) != null
-								? surface(plane.internalExposedWetPolygons(cell,slot,axis,sign,tangent,other,.5),axis,coordinate,cell,d)
-								: plane.liquidFractionExact(cell,slot)<1 && coincidentFreeFace(plane,cell,slot,axis,sign,coordinate) ? wet : SurfaceMoments.EMPTY;
+						SurfaceMoments exposed = plane.liquidFractionExact(cell,slot)<1 && coincidentFreeFace(plane,cell,slot,axis,sign,coordinate) ? wet : SurfaceMoments.EMPTY;
 						if (exposed.area()>0) {
 							double[] normal=new double[3];normal[axis]=sign*exposed.area();
 							Vec3[] first={Vec3.ZERO,Vec3.ZERO,Vec3.ZERO};first[axis]=exposed.firstMoment().scale(sign);
@@ -325,7 +321,7 @@ final class LiquidPressureGeometry {
 			if(microFaces!=null)microPieces[cell][slot]=new MicroSnapshot(physical,new double[]{boxVolume*h3,
 					h3*((ox-.5)*integral[0]+.5*integral[1])/8,
 					h3*((oy-.5)*integral[0]+.5*integral[2])/8,
-					h3*((oz-.5)*integral[0]+.5*integral[3])/8},LiquidShapeGeometry.wetSupports(plane,cell,slot),microFaces);
+					h3*((oz-.5)*integral[0]+.5*integral[3])/8},PlicSupportGeometry.wetSupports(plane,cell,slot),microFaces);
 		}
 		double unitVolume=volume;volume*=h3;
 		Vec3 first=new Vec3(h3*h*(index[0]*unitVolume+mx),h3*h*(index[1]*unitVolume+my),h3*h*(index[2]*unitVolume+mz));
@@ -350,13 +346,7 @@ final class LiquidPressureGeometry {
 				d.projection.pressureVolume[cell]*h3,error,sides,facets,fragments);
 	}
 	private static double[] unitMicroMoments(FlipPressurePhaseGeometry plane, int cell, int micro) {
-		if (plane.liquidShape(cell) != null) {
-			var exact = LiquidShapeGeometry.wetMoments(plane, cell, micro, false); var result = new double[4];
-			result[0] = exact[0].multiply(8).toDouble();
-			for (int axis = 0; axis < 3; axis++) result[axis+1] = exact[axis+1]
-					.add(exact[0].multiply((micro >>> axis & 1) == 0 ? 1 : 0).divide(2)).multiply(16).toDouble();
-			return result;
-		}
+
 		var integral = new double[4]; double fraction = plane.liquidFractionExact(cell, micro);
 		if (fraction >= 1) { integral[0] = 1; integral[1] = integral[2] = integral[3] = .5; }
 		else if (fraction > 0) {

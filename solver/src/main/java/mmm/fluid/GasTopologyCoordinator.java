@@ -125,21 +125,9 @@ final class GasTopologyCoordinator {
 		var old = domain.gasState.frame; if (old == null) return null;
 		domain.ensureInventoryGrid();
 		var next = GasRuntimeGeometry.captureLiquidEdits(domain, edits, occupied, domain.gasState.sealedDomainBoundary);
-		var successors = old.sealedExterior() == next.sealedExterior() && Arrays.equals(occupied, currentOccupied())
-				&& old.matchesCarrierGeometry(domain, occupied)
-				&& next.matchesSourceCarrierGeometry(domain, occupied)
-				? GasAdvectionSuccessor.certify(domain, old, next, flux, ports, dt) : Map.<Integer, Integer>of();
-		return plan(next, false, null, true, -1, successors);
-	}
-	GasTopologyPlan planAfterLiquidTranslation(List<PhaseLiquidGeometryEdit> edits, SignedDyadic[] displacement) {
-		var old = domain.gasState.frame; if (old == null) return null;
-		domain.ensureInventoryGrid();
-		var occupied = currentOccupied();
-		if (!old.matchesCarrierGeometry(domain, occupied)) throw new IllegalStateException("Gas translation source geometry is stale");
-		var next = GasRuntimeGeometry.captureLiquidEdits(domain, edits, occupied, domain.gasState.sealedDomainBoundary);
-		var weights = GasTranslationSuccessor.weights(domain, old, next, displacement);
-		return plan(next, false, null, true, -1, Map.of(), weights);
-	}
+        return plan(next, false, null, true, -1);
+    }
+
 	private GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits, long[] occupied,
 	                                           boolean refineMissingSuccessor, int staticCell) {
 		if (edits == null) throw new IllegalArgumentException("Gas liquid edit list is missing");
@@ -297,6 +285,7 @@ final class GasTopologyCoordinator {
 					overlap.put((long) sweep.source() << 32 | sweep.destination(), List.of(ExactRational.ONE));
 			}
 			if (edit == null) retainReachableSingleCavity(old, next, overlap);
+			if (edit == null) transferDisplacedGas(old, next, overlap);
 			for (int previous = 1; previous <= old.nodeCount(); previous++) {
 				Map<Long, List<ExactRational>> destinations = overlap.subMap((long) previous << 32, (long) (previous + 1) << 32);
 				GasInventory stock = inventory(previous, edit);
@@ -396,6 +385,102 @@ final class GasTopologyCoordinator {
 			// Each positive leg lies in the same fully connected finite gas chamber. Its homogeneous
 			// stock follows that actual path; a single unchanged inventory's isentropes compose by V0/V2.
 			overlap.put(pair, first);
+	}
+	/** A swept-away dry pocket follows the connected old/new dry support to its nearest surviving chamber. */
+	private void transferDisplacedGas(GasRuntimeGeometry old, GasRuntimeGeometry next,
+	                                  TreeMap<Long, List<ExactRational>> overlap) {
+        boolean missing = false;
+        for (int node = 1; node <= old.nodeCount(); node++) {
+            if (overlap.subMap((long) node << 32, (long) (node + 1) << 32).isEmpty()) {
+                missing = true;
+                break;
+            }
+        }
+        if (!missing) return;
+		int count = domain.cellCount * 8;
+		var links = new int[count][6];
+		for (var row : links) Arrays.fill(row, -1);
+		for (var geometry : List.of(old.geometry(), next.geometry())) for (var port : geometry.ports()) {
+			links[port.first()][2 * port.axis() + 1] = port.second();
+			links[port.second()][2 * port.axis()] = port.first();
+		}
+		int[] strides = {1, domain.sizeX, domain.sizeX * domain.sizeY}, sizes = {domain.sizeX, domain.sizeY, domain.sizeZ};
+		for (var source : old.geometry().pieces()) if (next.geometry().piece(source.id()) == null) {
+			int cell = source.cell(), micro = source.micro();
+			int[] coordinates = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
+			for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
+				boolean across = (micro >>> axis & 1) == (sign > 0 ? 1 : 0);
+				if (across && (coordinates[axis] + sign < 0 || coordinates[axis] + sign >= sizes[axis])) continue;
+				int receiverCell = cell + (across ? sign * strides[axis] : 0), receiverMicro = micro ^ 1 << axis;
+				var receiver = next.geometry().piece(8 * receiverCell + receiverMicro);
+				if (receiver == null) continue;
+				double firstCoordinate = across ? sign > 0 ? 1 : 0 : .5;
+				double secondCoordinate = across ? 1 - firstCoordinate : .5;
+				var planes = new ArrayList<GasFaceIntersection.Plane>(2);
+				addDryFacePlane(planes, source.dryPlane(), axis, firstCoordinate);
+				addDryFacePlane(planes, receiver.dryPlane(), axis, secondCoordinate);
+				if (GasFaceIntersection.area(.5 * (micro >>> ((axis + 1) % 3) & 1),
+						.5 * (micro >>> ((axis + 2) % 3) & 1), .5, planes) > 0) {
+					links[source.id()][2 * axis + (sign > 0 ? 1 : 0)] = receiver.id();
+					links[receiver.id()][2 * axis + (sign > 0 ? 0 : 1)] = source.id();
+				}
+			}
+		}
+		int[] queue = new int[count], seen = new int[count];
+		for (int node = 1; node <= old.nodeCount(); node++) {
+			long key = (long) node << 32;
+			if (!overlap.subMap(key, (long) (node + 1) << 32).isEmpty()) continue;
+			int head = 0, tail = 0;
+			for (var piece : old.capacity().pieces()) if (old.nodeOfPiece(piece.id()) == node) {
+				queue[tail++] = piece.id(); seen[piece.id()] = node;
+			}
+			var destinations = new TreeMap<Integer, Double>();
+			while (head < tail && destinations.isEmpty()) {
+				int end = tail;
+				while (head < end) {
+					int piece = queue[head++];
+					int destination = next.nodeOfPiece(piece);
+					if (destination > 0) destinations.merge(destination, next.geometry().piece(piece).volume(), Double::sum);
+					for (int peer : links[piece]) if (peer >= 0 && seen[peer] != node) { seen[peer] = node; queue[tail++] = peer; }
+				}
+			}
+			// Pockets below one percent of a cell are transported as unresolved gas through
+			// the local open collision component. Their inventory and energy move together.
+			if (destinations.isEmpty() && old.capacity().chambers().get(node - 1).cubicMeters()
+					<= .01 * old.geometry().cellVolumeCubicMeters()) {
+				Arrays.fill(seen, 0); head = tail = 0;
+				for (var piece : old.capacity().pieces()) if (old.nodeOfPiece(piece.id()) == node) {
+					queue[tail++] = piece.id(); seen[piece.id()] = 1;
+				}
+				for (int distance = 0; distance < 2 && destinations.isEmpty(); distance++) {
+					int end = tail;
+					while (head < end) {
+						int piece = queue[head++], cell = piece / 8, micro = piece & 7;
+						int[] coordinate = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
+						for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
+							boolean across = (micro >>> axis & 1) == (sign > 0 ? 1 : 0);
+							if (across && (coordinate[axis] + sign < 0 || coordinate[axis] + sign >= sizes[axis])) continue;
+							int peerCell = cell + (across ? sign * strides[axis] : 0), peerMicro = micro ^ 1 << axis;
+							int peer = 8 * peerCell + peerMicro;
+							if (seen[peer] != 0 || (next.geometry().collisionMask(peerCell) & 1 << peerMicro) != 0) continue;
+							seen[peer] = 1; queue[tail++] = peer;
+							int destination = next.nodeOfPiece(peer);
+							if (destination > 0) destinations.merge(destination, next.geometry().piece(peer).volume(), Double::sum);
+						}
+					}
+				}
+				Arrays.fill(seen, 0);
+			}
+			for (var destination : destinations.entrySet()) overlap.put(key | destination.getKey(),
+					List.of(MicroBoxPlaneVolume.rational(destination.getValue())));
+		}
+	}
+	private static void addDryFacePlane(List<GasFaceIntersection.Plane> planes, GasGeometryOverlap.HalfSpace plane,
+	                                   int axis, double coordinate) {
+		if (plane == null) return;
+		SignedDyadic[] n = {plane.nx(), plane.ny(), plane.nz()};
+		planes.add(new GasFaceIntersection.Plane(n[(axis + 1) % 3], n[(axis + 2) % 3],
+				plane.threshold().subtract(n[axis].multiply(SignedDyadic.of(coordinate)))));
 	}
 	private GasInventory ambientInventory(double volume) {
 		if (!(volume > 0 && Double.isFinite(volume))) throw new GasTopologyBlockedException("Ambient capture has no positive finite volume");

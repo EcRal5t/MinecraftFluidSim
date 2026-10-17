@@ -108,7 +108,6 @@ abstract class RegionPersistenceValidationSupport {
 		require(Arrays.equals(floatBits(expected.copyParticleVelocities()), floatBits(actual.copyParticleVelocities())),
 				"marker velocity changed across persistence");
 		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()), "solid mask changed across persistence");
-		require(expected.liquidShapes().equals(actual.liquidShapes()), "positive liquid shape changed across persistence");
 	}
 
 	static void assertGasStateEquals(GasStateSnapshot expected, GasStateSnapshot actual) {
@@ -137,7 +136,6 @@ abstract class RegionPersistenceValidationSupport {
 				&& Arrays.equals(expected.copyMaterialPaletteIndex(), actual.copyMaterialPaletteIndex()),
 				"material marker mass or palette index changed across persistence");
 		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()), "material solid mask changed across persistence");
-		require(expected.liquidShapes().equals(actual.liquidShapes()), "material positive liquid shape changed across persistence");
 	}
 
 	static void assertThermalStateEquals(FlipThermalParticleState expected, FlipThermalParticleState actual) {

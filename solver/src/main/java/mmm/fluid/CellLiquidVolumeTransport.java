@@ -8,11 +8,7 @@ import java.util.Arrays;
 final class CellLiquidVolumeTransport {
 	private static final boolean ENABLED = Boolean.parseBoolean(System.getProperty("mmm.cellVolumeTransport", "true"));
 	private final FluidDomain domain;
-	private ConservativeLiquidFlux transport;
-	private final ConservativeLiquidFlux scalarTransport;
-	private ConservativeLiquidFlux affineTransport;
-	private CellAffineVelocityField flowField;
-	private LiquidAffineFaceFlow capturedFlow;
+	private final ConservativeLiquidFlux transport;
 	private final LiquidFluxGeometry geometry;
 	private final double[] volume;
 	private final SignedDyadic[] exactVolume;
@@ -25,7 +21,6 @@ final class CellLiquidVolumeTransport {
 	CellLiquidVolumeTransport(FluidDomain domain) {
 		this.domain = domain;
 		transport = new ConservativeLiquidFlux(domain.sizeX, domain.sizeY, domain.sizeZ);
-		scalarTransport = transport;
 		geometry = new LiquidFluxGeometry(domain); transport.geometry(geometry);
 		volume = new double[domain.cellCount];
 		exactVolume = new SignedDyadic[domain.cellCount];
@@ -50,38 +45,25 @@ final class CellLiquidVolumeTransport {
 
 	/** Eulerian donor outflow and partial-micro-box sweep rate; prediction is used only for step estimation. */
 	double courantRate(double verticalPrediction) {
-		var field = domain.pressureSystem.markerVelocityField();
-		if (field != null) return affineCourantRate(captureFlow(field), verticalPrediction);
 		double maximum = 0; Arrays.fill(outgoing, 0);
-		for (int f = 0; f < scalarTransport.flux.length; f++) {
-			double velocity = faceVelocity(f) + (scalarTransport.axis[f] == 1 ? verticalPrediction : 0);
-			if (domain.geometry.solid[scalarTransport.left[f]] || domain.geometry.solid[scalarTransport.right[f]]) continue;
-			int donor = velocity >= 0 ? scalarTransport.left[f] : scalarTransport.right[f];
+		for (int f = 0; f < transport.flux.length; f++) {
+			double velocity = faceVelocity(f) + (transport.axis[f] == 1 ? verticalPrediction : 0);
+			if (domain.geometry.solid[transport.left[f]] || domain.geometry.solid[transport.right[f]]) continue;
+			int donor = velocity >= 0 ? transport.left[f] : transport.right[f];
 			if (!domain.gridToParticleStage.advectionCells()[donor]) continue;
 			if (domain.markerGrid.exactCellVolumeInventory[donor].signum() == 0) continue;
-			double open = geometry.aperture(scalarTransport.left[f], scalarTransport.right[f], scalarTransport.axis[f]);
+			double open = geometry.aperture(transport.left[f], transport.right[f], transport.axis[f]);
 			if (open == 0) continue;
 			outgoing[donor] += Math.abs(velocity) / domain.config.cellSize() * open / geometry.capacity(donor);
-			if (geometry.partialFace(scalarTransport.left[f], scalarTransport.right[f]))
+			if (geometry.partialFace(transport.left[f], transport.right[f]))
 				maximum = Math.max(maximum, 2 * Math.abs(velocity) / domain.config.cellSize());
 		}
 		for (double rate : outgoing) maximum = Math.max(maximum, rate);
 		return maximum;
 	}
 
-	private double affineCourantRate(LiquidAffineFaceFlow flow, double verticalPrediction) {
-		return flow.courantRate(geometry,verticalPrediction);
-	}
-	private LiquidAffineFaceFlow captureFlow(CellAffineVelocityField field) {
-		if (flowField != field || capturedFlow == null || !capturedFlow.belongsTo(domain)) {
-			capturedFlow = new LiquidAffineFaceFlow(domain, scalarTransport, field);
-			flowField = field;
-		}
-		return capturedFlow;
-	}
-
 	private float faceVelocity(int face) {
-		return switch (scalarTransport.axis[face]) {
+		return switch (transport.axis[face]) {
 			case 0 -> domain.mac.velocityX[macFace[face]];
 			case 1 -> domain.mac.velocityY[macFace[face]];
 			default -> domain.mac.velocityZ[macFace[face]];
@@ -93,53 +75,21 @@ final class CellLiquidVolumeTransport {
 		publishedQuadrature = false;
 		momentAudit = CellRemapMoments.Audit.empty();
 		if (stationary()) return;
-		var field = domain.pressureSystem.markerVelocityField();
-		LiquidAffineFaceFlow flow = null;
-		if (field == null) transport = scalarTransport;
-		else {
-			if (affineTransport == null) {
-				affineTransport = new ConservativeLiquidFlux(domain.sizeX, domain.sizeY, domain.sizeZ, true);
-				affineTransport.geometry(geometry);
-			}
-			transport = affineTransport;
-			flow = captureFlow(field);
-			transport.faceSweep(flow);
-		}
-		try {
-			if (flow != null) flow.prepareVelocities(transport, geometry);
-			var ballistic = new BallisticLiquidRemap(domain.cellCount);
-			transport.reserve(ballistic.reserved);
-			transport.carrierShares(chemicalShares());
-			LiquidParticleStore particles = domain.particles;
-			for (int c = 0; c < exactVolume.length; c++) exactVolume[c] = domain.gridToParticleStage.advectionCells()[c]
-					? domain.markerGrid.exactCellVolumeInventory[c] : SignedDyadic.ZERO;
-			for (int c = 0; c < volume.length; c++) volume[c] = exactVolume[c].toDouble();
-			if (field == null) for (int f = 0; f < transport.flux.length; f++) transport.velocity[f] = faceVelocity(f);
-			double maximumOutgoing = (flow == null ? courantRate(0) : affineCourantRate(flow, 0)) * dt;
-			if (maximumOutgoing > 1 + 8 * Math.ulp(1.0F))
-				throw new MechanicalTimeRefinement((int) Math.ceil(maximumOutgoing * domain.config.timeStep() / dt),
-						"Liquid transport outgoing Courant=" + maximumOutgoing + ", dt=" + dt);
-			CellRemapCandidate candidate = CellTranslationRemap.prepare(domain, field, dt, ballistic);
-			if (candidate == null) {
-				if (!domain.liquidShapes.isEmpty()) throw new GasTopologyBlockedException("Liquid shape transport requires a positive successor partition for the captured velocity field");
-				ballistic = new BallisticLiquidRemap(domain, dt);
-				collisionWorkJoules = ballistic.collisionWorkJoules; transport.reserve(ballistic.reserved);
-				try {
-					transport.plan(volume, domain.geometry.solid, dt / domain.config.cellSize(), exactVolume);
-				} catch (MechanicalTimeRefinement refinement) {
-					throw new MechanicalTimeRefinement((int) Math.ceil(2 * domain.config.timeStep() / dt), refinement.getMessage());
-				}
-				candidate = new CellCarrierRemapPlan(domain, transport, dt, ballistic);
-			}
-			domain.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), particles.count()), candidate);
-			publishedQuadrature = true;
-			momentAudit = candidate.momentAudit();
-			if (domain.pressureSystem.usesMarkerPressure()) CellAffineWallProjection.projectTransport(domain);
-		} finally {
-			transport.faceSweep(null);
-			capturedFlow = null;
-			flowField = null;
-		}
+		var ballistic = new BallisticLiquidRemap(domain, dt);
+		collisionWorkJoules = ballistic.collisionWorkJoules;
+		transport.reserve(ballistic.reserved); transport.carrierShares(chemicalShares());
+		for (int c = 0; c < exactVolume.length; c++) exactVolume[c] = domain.gridToParticleStage.advectionCells()[c]
+				? domain.markerGrid.exactCellVolumeInventory[c] : SignedDyadic.ZERO;
+		for (int c = 0; c < volume.length; c++) volume[c] = exactVolume[c].toDouble();
+		for (int f = 0; f < transport.flux.length; f++) transport.velocity[f] = faceVelocity(f);
+		double maximumOutgoing = courantRate(0) * dt;
+		if (maximumOutgoing > 1 + 8 * Math.ulp(1.0F))
+			throw new MechanicalTimeRefinement((int) Math.ceil(maximumOutgoing * domain.config.timeStep() / dt),
+					"Liquid transport outgoing Courant=" + maximumOutgoing + ", dt=" + dt);
+		transport.plan(volume, domain.geometry.solid, dt / domain.config.cellSize(), exactVolume);
+		var candidate = new CellCarrierRemapPlan(domain, transport, dt, ballistic);
+		domain.coordinator.publishCellRemap(CarrierMutationPlan.wholesaleCount(domain.carrierMutationRevision(), domain.particles.count()), candidate);
+		publishedQuadrature = true; momentAudit = candidate.momentAudit();
 	}
 
 	private boolean stationary() {

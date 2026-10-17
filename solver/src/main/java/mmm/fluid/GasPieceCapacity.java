@@ -27,41 +27,26 @@ final class GasPieceCapacity {
 	private static List<Piece> allocate(int cell, int support, SignedDyadic available, ExactRational porosity,
 	                                    ExactRational wetTarget, GasComplementGeometry geometry) {
 		var intervals = new ArrayList<Interval>(8);
-		ExactRational lower = ExactRational.ZERO, width = ExactRational.ZERO;
+		double total = 0;
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
 			var piece = geometry.piece(8 * cell + micro);
 			if (piece == null) continue;
-			ExactRational lo, hi;
-			if (piece.shaped() || piece.dryPlane() == null) lo = hi = piece.normalizedVolume().multiply(porosity);
-			else {
-				var plane = piece.dryPlane(); var bracket = piece.offsetBracket();
-				if (bracket == null) throw blocked("Gas piece has no inverse-volume certificate", cell);
-				if (!wetTarget.equals(bracket.targetVolume())) throw blocked("Gas piece raw capacity differs from its PLIC target", cell);
-				lo = (plane.threshold().equals(SignedDyadic.of(bracket.upper())) ? piece.normalizedVolume()
-						: MicroBoxPlaneVolume.dryVolume(micro, at(plane, bracket.upper()))).multiply(porosity);
-				hi = (plane.threshold().equals(SignedDyadic.of(bracket.lower())) ? piece.normalizedVolume()
-						: MicroBoxPlaneVolume.dryVolume(micro, at(plane, bracket.lower()))).multiply(porosity);
-			}
-			if (lo.signum() < 0 || hi.compareTo(lo) < 0) throw blocked("Gas piece capacity interval is invalid", cell);
-			intervals.add(new Interval(piece.id(), lo, hi));
-			lower = lower.add(lo); width = width.add(hi.subtract(lo));
+			var value = piece.normalizedVolume().multiply(porosity);
+			intervals.add(new Interval(piece.id(), value, value)); total += value.toDouble();
 		}
-		ExactRational target = exact(available), remaining = target.subtract(lower);
-		if (remaining.signum() < 0 || remaining.compareTo(width) > 0)
-			throw blocked("Raw gas capacity cannot fit its selected positive pieces", cell);
-		if (intervals.isEmpty()) return List.of();
-		ExactRational fraction = width.isZero() ? ExactRational.ZERO
-				: remaining.multiply(new ExactRational(width.denominator(), width.numerator()));
+		if (available.signum() == 0) return List.of();
+		if (!(total > 0)) throw blocked("Positive gas capacity has no dry geometry", cell);
 		var capacities = new ArrayList<ExactRational>(intervals.size()); int pivot = 0;
-		ExactRational sum = ExactRational.ZERO;
+		ExactRational assignedNormalized = ExactRational.ZERO, target = exact(available);
 		for (int i = 0; i < intervals.size(); i++) {
-			var interval = intervals.get(i);
-			ExactRational capacity = interval.lower().add(interval.upper().subtract(interval.lower()).multiply(fraction));
-			if (capacity.signum() <= 0) throw blocked("Positive gas piece has no raw capacity", cell);
-			capacities.add(capacity); sum = sum.add(capacity);
-			if (capacity.compareTo(capacities.get(pivot)) > 0) pivot = i;
+			capacities.add(ExactRational.ZERO);
+			if (intervals.get(i).lower().compareTo(intervals.get(pivot).lower()) > 0) pivot = i;
 		}
-		if (!sum.equals(target)) throw new IllegalStateException("Gas piece capacity allocation does not close");
+		for (int i = 0; i < intervals.size(); i++) if (i != pivot) {
+			var value = MicroBoxPlaneVolume.rational(available.toDouble() * (intervals.get(i).lower().toDouble() / total));
+			capacities.set(i, value); assignedNormalized = assignedNormalized.add(value);
+		}
+		capacities.set(pivot, target.subtract(assignedNormalized));
 		SignedDyadic scale = SignedDyadic.of(geometry.cellVolumeCubicMeters());
 		ExactRational rationalScale = exact(scale);
 		ExactRational[] physical = new ExactRational[capacities.size()];

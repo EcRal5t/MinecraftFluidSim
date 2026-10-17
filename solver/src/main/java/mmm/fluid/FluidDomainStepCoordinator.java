@@ -379,6 +379,16 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 
 	GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid) {
 		return new GranularDepositDynamics.Environment() {
+			private GranularBedShear.LiftWork liftWork;
+			@Override public boolean planWakeWork(int cell, double joules) {
+				liftWork = GranularBedShear.planLift(domain(), cell, joules);
+				return liftWork != null;
+			}
+			@Override public void commitWakeWork() {
+				var impulse = liftWork.apply(domain());
+				receiveContactImpulse(impulse[0], impulse[1], impulse[2]);
+				liftWork = null;
+			}
 			@Override public double gravity() { return config.gravity(); }
 			@Override public long geometricOpenSvq(int cell) {
 				return SolidVolume.fromCellVolumeExact(geometry.cutCells.openCellVolume(cell));

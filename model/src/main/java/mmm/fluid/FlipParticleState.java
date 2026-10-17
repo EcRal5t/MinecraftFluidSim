@@ -20,16 +20,11 @@ public final class FlipParticleState {
 	private final float[] positionVolume;
 	private final float[] particleVelocities;
 	private final byte[] collisionMicroMasks;
-	private final List<LiquidCellShape> liquidShapes;
+
 
 	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
 	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
 	                         byte[] collisionMicroMasks) {
-		this(sizeX, sizeY, sizeZ, cellSize, particleCount, volumeLedger, positionVolume, particleVelocities, collisionMicroMasks, List.of());
-	}
-	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
-	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
-	                         byte[] collisionMicroMasks, List<LiquidCellShape> liquidShapes) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(cellSize > 0.0F) || !Float.isFinite(cellSize)) {
 			throw new IllegalArgumentException("Invalid particle-state grid");
 		}
@@ -100,9 +95,6 @@ public final class FlipParticleState {
 		this.positionVolume = positionVolume.clone();
 		this.particleVelocities = particleVelocities.clone();
 		this.collisionMicroMasks = collisionMicroMasks.clone();
-		this.liquidShapes = List.copyOf(liquidShapes);
-		LiquidCellShape.requireMatches(this.liquidShapes, sizeX, sizeY, sizeZ, cellSize, this.positionVolume,
-				cell -> Byte.toUnsignedInt(this.collisionMicroMasks[cell]));
 	}
 
 	public int sizeX() { return sizeX; }
@@ -116,10 +108,8 @@ public final class FlipParticleState {
 	public long cpuBytes() {
 		long bytes = (long) positionVolume.length * Float.BYTES
 				+ (long) particleVelocities.length * Float.BYTES + collisionMicroMasks.length;
-		for (var shape : liquidShapes) bytes += shape.cpuBytes();
 		return bytes;
 	}
-	public List<LiquidCellShape> liquidShapes() { return liquidShapes; }
 
 	public void requireCompatible(int expectedX, int expectedY, int expectedZ, float expectedCellSize) {
 		if (sizeX != expectedX || sizeY != expectedY || sizeZ != expectedZ

@@ -1,11 +1,9 @@
 package mmm.fluid;
 
-/** Advances actual-mass wet fields or the mixed-solid MAC stress before body forces. */
+/** Shared implicit MAC stress for pure liquid and locally coupled solid phases. */
 final class LiquidViscosityStage {
 	private final FluidDomain domain;
 	private ViscousMacDiscretization discretization;
-	private PressureSystem.SpatialInput spatial;
-	private CellAffineViscosity affine;
 	private final float[][] velocity;
 
 	LiquidViscosityStage(FluidDomain domain) {
@@ -37,24 +35,8 @@ final class LiquidViscosityStage {
 
 	FluidDomain.ViscousStepStats apply(float dt) {
 		if (domain.materialDefinitions == null) return FluidDomain.ViscousStepStats.INACTIVE;
-		if (domain.pressureSystem.usesMarkerPressure()) {
-			var input = domain.pressureSystem.spatialInput();
-			if (input != spatial) { spatial = input; affine = new CellAffineViscosity(domain, input); }
-			var stats = affine.advance(dt);
-			domain.bodyForceStage.addMarkerPrediction(affine.increment(), affine.faceIncrement());
-			return stats;
-		}
 		if (discretization == null) discretization = createDiscretization();
 		discretization.assemble(velocity);
-		double stable = discretization.operator.stableTimeStep();
-		if (!(stable > 0)) throw new IllegalStateException("Viscous stable time step is not representable");
-		if (dt > stable) {
-			double count = Math.ceil(domain.config.timeStep() / stable);
-			if (!Double.isFinite(count) || count > CpuFluidSolverBackend.MAXIMUM_CUMULATIVE_SUBSTEPS) {
-				throw new FluidSolverBackend.MechanicalWorkBudgetExceededException("Viscous spectral bound exceeds mechanical substep budget: " + count);
-			}
-			throw new MechanicalTimeRefinement((int) count, "Viscous stress matrix");
-		}
 		FluidDomain.ViscousStepStats stats = discretization.operator.advance(dt);
 		return discretization.copyVelocityTo(velocity, stats);
 	}

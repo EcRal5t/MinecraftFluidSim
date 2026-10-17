@@ -1,18 +1,12 @@
 package mmm.fluid;
 
-/** Selects actual-mass liquid pressure or the mixed-solid pressure/drag system. */
+/** Shared MAC pressure with finite gas storage, granular inertia and implicit drag. */
 final class PressureSystem {
 	private static final int LIQUID_PRESSURE = -1;
 	private static final int FIXED_PRESSURE = 0;
 	private final FluidDomain domain;
 	private final GranularPressureCoupling granular;
 	private final GranularImplicitDrag drag;
-	private final MarkerPressureProjection markerProjection;
-	private CellAffineVelocityField samplingField;
-	private long samplingInventoryRevision, samplingGeometryRevision;
-	private SpatialInput spatialInput;
-	private long spatialInventoryRevision, spatialGeometryRevision, spatialCarrierRevision;
-	record SpatialInput(LiquidPressureGeometry geometry, CellAffineVelocity basis, CellAffineMacTransfer transfer) { }
 	private final double[] liquidPressure;
 	private double[] gasPressure;
 	/** Per-projection pressure source: liquid, fixed zero, or a positive gas node id. */
@@ -25,7 +19,6 @@ final class PressureSystem {
 		neighborPressureSource = new int[domain.cellCount];
 		this.granular = new GranularPressureCoupling(domain);
 		this.drag = new GranularImplicitDrag(domain, granular);
-		this.markerProjection = new MarkerPressureProjection(domain);
 	}
 	void prepareGranular(float dt) {
 		substepDuration = dt;
@@ -60,74 +53,17 @@ final class PressureSystem {
 		granular.connectTransferSupport(budget);
 	}
 	void forEachGranularGasNode(float dt, java.util.function.IntConsumer accept) { granular.forEachGasNode(dt, accept); }
-	MarkerPressureProjection markerProjection() { return markerProjection; }
-	/** One immutable wet space serves velocity fitting, pressure and transported-wall publication. */
-	SpatialInput spatialInput() {
-		domain.ensurePressureGeometry();
-		if (!usesMarkerPressure()) throw new IllegalStateException("Marker spatial input requires liquid-only inventory");
-		var current = currentSpatialInput(); if (current != null) return current;
-		spatialInput = null;
-		var geometry = GasRuntimeGeometry.captureLiquidPressureGeometry(domain);
-		var basis = CellAffineVelocity.capture(domain, geometry);
-		var transfer = CellAffineMacTransfer.capture(domain, basis, geometry);
-		spatialInventoryRevision = domain.markerGrid.inventoryRevision;
-		spatialGeometryRevision = domain.pressurePhaseGeometry.revision();
-		spatialCarrierRevision = domain.carrierMutationRevision;
-		return spatialInput = new SpatialInput(geometry, basis, transfer);
-	}
-	SpatialInput currentSpatialInput() {
-		return !domain.gridDirty && !domain.pressureGeometryDirty && spatialInput != null
-				&& spatialInventoryRevision == domain.markerGrid.inventoryRevision
-				&& spatialGeometryRevision == domain.pressurePhaseGeometry.revision()
-				&& spatialCarrierRevision == domain.carrierMutationRevision ? spatialInput : null;
-	}
-	void clearSpatialInput() { spatialInput = null; samplingField = null; }
-	void updateMarkerVelocityField(CellAffineVelocityField field) {
-		samplingField = field;
-		samplingInventoryRevision = domain.markerGrid.inventoryRevision;
-		samplingGeometryRevision = domain.pressurePhaseGeometry.revision();
-	}
-	CellAffineVelocityField markerVelocityField() {
-		if (domain.gridDirty || samplingInventoryRevision != domain.markerGrid.inventoryRevision
-				|| samplingGeometryRevision != domain.pressurePhaseGeometry.revision()) samplingField = null;
-		return usesMarkerPressure() ? samplingField : null;
-	}
-	FluidDomain.VelocitySample sampleMarkerVelocity(float x, float y, float z) {
-		var field = markerVelocityField();
-		if (field == null) return null;
-		int cell = domain.particleCellIndex(x, y, z);
-		return field.hasPoint(cell, x, y, z) ? field.sample(cell, x, y, z) : null;
-	}
-	boolean usesMarkerPressure() {
-		return !domain.hasGranularInventory()
-				&& (domain.thermalState == null || domain.thermalState.coherentPhases().groupCount() == 0);
-	}
-	boolean markerPressureActive() { return usesMarkerPressure() && markerProjection.active(); }
-	boolean hasLiquidPressure(int cell) {
-		return usesMarkerPressure() ? domain.markerGrid.exactCellVolumeInventory[cell].signum() > 0 : domain.isFluid(cell);
-	}
-	double liquidPressure(int cell) { return markerPressureActive() ? markerProjection.liquidPressure(cell) : liquidPressure[cell]; }
-	double gasPressure(int node) { return markerPressureActive() ? markerProjection.gasPressure(node) : gasPressure[node]; }
+	boolean hasLiquidPressure(int cell) { return domain.isFluid(cell); }
+	double liquidPressure(int cell) { return liquidPressure[cell]; }
+	double gasPressure(int node) { return gasPressure[node]; }
 	boolean projectGranular(float dt) {
-		if (markerPressureActive()) { markerProjection.publish(); return true; }
 		if (drag.active()) { drag.project(); return true; }
 		granular.project(dt, liquidPressure, gasPressure);
 		return false;
 	}
 
-	/** Runs PCG on the assembled right-hand side; the pressure vector mutates in the workspace. */
-	PressureProjectionResult solveMarker(float dt, double target) {
-		if (!markerProjection.prepare(dt)) {
-			samplingField = null;
-			domain.pressureAnchor = -1;
-			domain.pressureReference = 0;
-		}
-		return markerProjection.solve(target);
-	}
+	/** Runs the shared pressure system with the locally present phase couplings. */
 	PressureProjectionResult solve(int unknownCount, double target) {
-		if (usesMarkerPressure()) {
-			return solveMarker(substepDuration, target);
-		}
 		if (unknownCount == 0 && !drag.active()) return new PressureProjectionResult(0, 0, true);
 		assembleMatrix();
 		int totalIterations = 0;

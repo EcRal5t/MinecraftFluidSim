@@ -14,13 +14,17 @@ final class CellRemapInventoryAudit {
 	}
 	static SignedDyadic validate(FluidDomain domain, CellRemapMarkerColumns markers,
 			SignedDyadic[] plannedVolumes, BallisticLiquidRemap ballistic) {
+		return validate(domain, markers, plannedVolumes, ballistic, SignedDyadic.ZERO);
+	}
+	static SignedDyadic validate(FluidDomain domain, CellRemapMarkerColumns markers,
+			SignedDyadic[] plannedVolumes, BallisticLiquidRemap ballistic, SignedDyadic dissipatedEnergy) {
 		if (markers.size() > domain.maximumParticleCount) throw new IllegalStateException("Cell remap exceeds its marker budget");
 		SignedDyadic[] energyRoundoff = new SignedDyadic[1];
 		CpuWorkBatch.run(3, markers.size() >= 2_048 ? 1 : 3, (from, until) -> {
 			for (int audit = from; audit < until; audit++) {
 				switch (audit) {
 					case 0 -> volume(domain, markers, plannedVolumes, ballistic);
-					case 1 -> energyRoundoff[0] = massAndEnergy(domain, markers);
+					case 1 -> energyRoundoff[0] = massAndEnergy(domain, markers, dissipatedEnergy);
 					case 2 -> momentumAndKineticEnergy(domain, markers, ballistic);
 					default -> throw new AssertionError("Unknown remap audit");
 				}
@@ -40,7 +44,7 @@ final class CellRemapInventoryAudit {
 			throw new IllegalStateException("Cell remap changed its shared volume flux");
 	}
 
-	private static SignedDyadic massAndEnergy(FluidDomain domain, CellRemapMarkerColumns markers) {
+	private static SignedDyadic massAndEnergy(FluidDomain domain, CellRemapMarkerColumns markers, SignedDyadic dissipatedEnergy) {
 		int materialCount = domain.materialRegistry == null ? 1 : domain.materialRegistry.materials().size();
 		double[][] before = new double[materialCount][], after = new double[materialCount][];
 		int[] beforeCount = new int[materialCount], afterCount = new int[materialCount];
@@ -68,7 +72,7 @@ final class CellRemapInventoryAudit {
 			if (Math.abs(difference.toDouble()) > rounding[material])
 				throw new IllegalStateException("Cell remap changed material mass beyond binary64 storage roundoff");
 		}
-		SignedDyadic difference = energyBefore == null ? SignedDyadic.ZERO : SignedDyadic.sum(energyAfter).subtract(SignedDyadic.sum(energyBefore));
+		SignedDyadic difference = energyBefore == null ? SignedDyadic.ZERO : SignedDyadic.sum(energyAfter).subtract(SignedDyadic.sum(energyBefore)).subtract(dissipatedEnergy);
 		if (Math.abs(difference.toDouble()) > energyRounding)
 			throw new IllegalStateException("Cell remap changed heat inventory beyond binary64 storage roundoff");
 		return difference;

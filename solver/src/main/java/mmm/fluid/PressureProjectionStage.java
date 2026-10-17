@@ -64,10 +64,6 @@ final class PressureProjectionStage {
 		state.projection.gasUnknownCount = 0;
 		Arrays.fill(state.projection.pressure, 0.0F);
 		Arrays.fill(state.projection.divergence, 0.0F);
-		if (system.usesMarkerPressure()) {
-			acceptResult(system.solveMarker(dt, state.config.pressureTolerance()));
-			return;
-		}
 		pressureAnchor = findPressureAnchor();
 		access.pressureAnchor(pressureAnchor);
 		access.pressureReference(pressureAnchor < 0 ? pressureBoundaryReference(dt) : 0.0F);
@@ -109,10 +105,6 @@ final class PressureProjectionStage {
 	}
 
 	void projectVelocities(float dt) {
-		if (system.usesMarkerPressure()) {
-			if (system.markerPressureActive()) system.projectGranular(dt);
-			return;
-		}
 		boolean coupled = system.projectGranular(dt);
 		double scale = dt / (state.config.density() * (double) state.config.cellSize());
 		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {

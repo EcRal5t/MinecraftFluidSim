@@ -2,7 +2,6 @@ package mmm.fluid;
 
 import mmm.chemistry.ExactRational;
 import mmm.thermal.GasLiquidPhaseModel;
-import mmm.thermal.GasThermalModel;
 import mmm.thermal.ThermalPhaseTransition;
 import mmm.units.SignedDyadic;
 import java.util.ArrayList;
@@ -37,41 +36,6 @@ final class GasPhaseInterfaceResolver {
 		return List.copyOf(result);
 	}
 
-	/** Complete depletion follows the old contact's gas pieces even when the future liquid interface vanishes. */
-	double saturationResidualAfter(Candidate source, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
-	                    double liquidTemperature, GasTopologyCoordinator.GasTopologyPlan topology,
-	                    GasLiquidPhaseModel.Direction direction, boolean sourceGasEmpty) {
-		var future = topology.frame();
-		boolean allVapor = direction == GasLiquidPhaseModel.Direction.BOIL && Double.isNaN(liquidTemperature);
-		if (!Double.isFinite(liquidTemperature) && !allVapor) return Double.NaN;
-		var nodes = new TreeSet<Integer>();
-		for (int piece : source.contactPieces()) {
-			if (!topology.transition().positive(piece)) continue;
-			int node = future.nodeOfPiece(piece);
-			if (node >= 0) nodes.add(node);
-		}
-		if (nodes.isEmpty()) return direction == GasLiquidPhaseModel.Direction.CONDENSE && sourceGasEmpty
-				? Double.POSITIVE_INFINITY : Double.NaN;
-		GasThermalModel thermal = new GasThermalModel(support.thermal().registry(), support.gasState().network.registry());
-		double residual = Double.POSITIVE_INFINITY;
-		for (int node : nodes) {
-			GasLiquidPhaseModel.Saturation saturation;
-			if (node == 0) saturation = phase.ambientSaturation(transition,
-					allVapor ? mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K : liquidTemperature);
-			else {
-				var inventory = topology.gasPlan().inventory(node);
-				double energy = topology.thermalPlan().nodeEnergy(node);
-				double pressure = thermal.absolutePressure(inventory, topology.gasPlan().availableVolume(node), energy);
-				double temperature = allVapor ? inventory.isEmpty()
-						? mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K : thermal.state(inventory, energy).temperatureK()
-						: liquidTemperature;
-				saturation = phase.saturation(transition, temperature, inventory, pressure);
-			}
-			double imbalance = saturation.pressureImbalancePa();
-			residual = Math.min(residual, direction == GasLiquidPhaseModel.Direction.BOIL ? imbalance : -imbalance);
-		}
-		return residual;
-	}
 
 	record Contact(int node, int supportMask, List<Integer> pieces) { }
 
@@ -98,11 +62,7 @@ final class GasPhaseInterfaceResolver {
 					if (gas == null) continue;
 					double ownFace = crossing ? (sign > 0 ? 1 : 0) : .5, peerFace = crossing ? (sign > 0 ? 0 : 1) : .5;
 					double tangent = .5 * (micro >>> ((axis + 1) % 3) & 1), other = .5 * (micro >>> ((axis + 2) % 3) & 1);
-					if (frame.phase().liquidShape(cell) != null || frame.phase().liquidShape(peerCell) != null) {
-						if (GasFaceIntersection.wetDryArea(frame.phase(), cell, peerCell, micro, peerMicro, axis, ownFace, peerFace, tangent, other, .5) > 0)
-							add(found, frame, supportMask, gas.id());
-						continue;
-					}
+
 					var planes = new ArrayList<GasFaceIntersection.Plane>(2);
 					if (frame.liquidFractionExact(cell, micro) < 1) planes.add(facePlane(frame, cell, micro, axis, ownFace, true));
 					if (gas.dryPlane() != null) planes.add(facePlane(frame, peerCell, peerMicro, axis, peerFace, false));

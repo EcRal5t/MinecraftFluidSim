@@ -24,6 +24,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 	}
 	final CellRemapMarkerColumns markers;
 	final SignedDyadic energyRoundoff;
+	final SignedDyadic dissipatedEnergy;
 	final boolean[] changedSpeciesCells;
 	final CellRemapMoments.Audit momentAudit;
 	final GasTopologyCoordinator.GasTopologyPlan gasTopology;
@@ -39,6 +40,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 	private final CellRemapPorts ports;
 	public CellRemapMarkerColumns markers() { return markers; }
 	public SignedDyadic energyRoundoff() { return energyRoundoff; }
+	public SignedDyadic dissipatedEnergy() { return dissipatedEnergy; }
 	public boolean[] changedSpeciesCells() { return changedSpeciesCells; }
 	public GasTopologyCoordinator.GasTopologyPlan gasTopology() { return gasTopology; }
 	public boolean commitGranularCollision() { return commitGranularCollision; }
@@ -113,7 +115,6 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 				}
 			});
 		}
-		for (var groups : output) if (groups != null) for (var group : groups) completeArrivalShape(group, flux);
 		assignShareInventories(flux);
 
 		int sampledCount = 0;
@@ -140,9 +141,10 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 				group.sampleVolumes = quadratureVolumes(group);
 			}
 		}
+		for (var groups : output) if (groups != null) for (var group : groups) advanceSamplingMoments(group);
 		CpuWorkBatch.run(domain.cellCount, (from, until) -> {
 			for (int cell = from; cell < until; cell++) if (output[cell] != null) for (Group group : output[cell]) {
-				prepareSampling(group, group.sampleVolumes); group.sampleVolumes = group.sampling.volumes();
+				prepareSampling(group, group.sampleVolumes);
 			}
 		});
 		for (var groups : output) if (groups != null) for (var group : groups) {
@@ -158,6 +160,9 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		});
 		markers.copyFrom(retainedMarkers, sampledCount);
 		markers.copyFrom(ballistic.markers, sampledCount + retainedMarkers.size());
+		SignedDyadic heat = SignedDyadic.ZERO;
+		for (var groups : output) if (groups != null) for (var group : groups) heat = heat.add(SignedDyadic.of(group.dissipatedEnergy));
+		dissipatedEnergy = heat;
 		energyRoundoff = validateInventories(flux, ballistic);
 		momentAudit = calculateMomentAudit();
 		long[] occupied = futureOccupied;
@@ -211,13 +216,20 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 				}
 				ArrayList<Group> groups = input[cell];
 				if (groups != null) for (Group group : groups) {
-					group.transportMoments = new CellRemapTransportMoments(domain, cell, group.original);
-					var totals = group.transportMoments.totals();
-					group.volume = totals.volume(); group.mass = totals.mass(); group.kinetic = totals.kinetic();
-					System.arraycopy(totals.momentum(), 0, group.momentum, 0, 3);
-					System.arraycopy(totals.massMoment(), 0, group.massMoment, 0, 3);
-					System.arraycopy(totals.volumeMoment(), 0, group.volumeMoment, 0, 3);
-					System.arraycopy(totals.volumeMotion(), 0, group.volumeMotion, 0, 3);
+					for (int p : group.original) {
+						double v = domain.particles.volume(p), m = domain.particles.mass(p);
+						group.volume = group.volume.add(SignedDyadic.of(v)); group.mass += m;
+						double h = domain.config.cellSize();
+						double[] position = {domain.particles.positionX(p) / h - cell % domain.sizeX - .5,
+							domain.particles.positionY(p) / h - cell / domain.sizeX % domain.sizeY - .5,
+							domain.particles.positionZ(p) / h - cell / (domain.sizeX * domain.sizeY) - .5};
+						double[] velocity = {domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
+						for (int a = 0; a < 3; a++) {
+							group.momentum[a] += m * velocity[a]; group.kinetic += m * velocity[a] * velocity[a];
+							group.massMoment[a] += m * position[a]; group.volumeMoment[a] += v * position[a]; group.volumeMotion[a] += v * velocity[a];
+						}
+					}
+					group.gradient = CellRemapVelocity.gradient(domain, group.original, group.mass, group.massMoment, group.momentum);
 					group.density = CellRemapMassAllocation.density(domain, group.original, group.volume, group.mass);
 					if (domain.thermalState != null) {
 						var fitting = FITTING.get(); fitting.ensureCapacity(group.original.size());
@@ -318,34 +330,26 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		}
 		destinations[share] = cell; supports[share] = groups.getFirst().support; faces[share] = -1;
 		SignedDyadic[][] pieces = volumePieces(cell, flux, groups, transfers);
-		var sourceGeometry = geometryRemap ? null : new CellRemapMicroPreferences(domain, flux, cell,
-				groups.getFirst().support, faces, supports);
 		for (int g = 0; g < groups.size(); g++) {
-			Group source = groups.get(g);
-			prepareMoments(source);
+			Group source = groups.get(g); prepareMoments(source);
 			source.shares = new ArrayList<>(shares);
-			var preferences = geometryRemap
-					? CellRemapMicroPreferences.inventory(domain, source.original, shares - 1)
-					: sourceGeometry.forSource(source.original);
-			CellRemapTransportMoments.Result transport;
-			try { transport = source.transportMoments.allocate(pieces[g], preferences); }
-			catch (CellRemapTransportMoments.AllocationFailure infeasible) {
-				throw new MechanicalTimeRefinement(2, "Liquid transport source at cell=" + source.cell
-						+ ", support=" + source.support + ", material=" + source.material + ": " + infeasible.getMessage());
-			}
-			double[] masses = transport.mass();
+			double[] masses = CellRemapMassAllocation.allocate(source.mass, source.volume, pieces[g], source.density);
 			for (int d = 0; d < transfers.size(); d++) if (pieces[g][d].signum() > 0) source.movingAxes |= 1 << flux.axis[faces[d]];
 			for (int d = 0; d < shares; d++) {
 				if (pieces[g][d].signum() == 0) continue;
-				var spatial = transport.spatial(d);
-				double[] facePoint = faces[d] < 0 ? null : CellRemapArrival.prepare(spatial, flux.axis[faces[d]], flux.positive(faces[d]),
-						dt / domain.config.cellSize(), pieces[g][d].toDouble(), transport.volumeMoment()[d], transport.volumeMotion()[d]);
-				if (facePoint == null) spatial.advancePositions(.5 * dt / domain.config.cellSize());
-				if (facePoint != null) {
-					subtractFaceMoment(source, masses[d], pieces[g][d].toDouble(), facePoint);
+				double ratio = masses[d] / source.mass, volumeRatio = pieces[g][d].toDouble() / source.volume.toDouble();
+				var momentum = new double[3]; var motion = new double[3]; double[] point = faces[d] < 0 ? null : new double[6];
+				for (int a = 0; a < 3; a++) {
+					momentum[a] = ratio * source.momentum[a]; motion[a] = volumeRatio * source.volumeMotion[a];
+					if (point != null) {
+						point[a] = (a == 0 ? source.lowMassX : a == 1 ? source.lowMassY : source.lowMassZ) + .5 * dt / domain.config.cellSize() * source.momentum[a] / source.mass;
+						point[a + 3] = (a == 0 ? source.lowVolumeX : a == 1 ? source.lowVolumeY : source.lowVolumeZ) + .5 * dt / domain.config.cellSize() * source.volumeMotion[a] / source.volume.toDouble();
+						if (a == flux.axis[faces[d]]) point[a] = point[a + 3] = flux.positive(faces[d]) ? .5 : -.5;
+					}
 				}
-				source.shares.add(new Share(source, destinations[d], supports[d], faces[d], pieces[g][d], masses[d], transport.kinetic()[d],
-						transport.momentum()[d], facePoint, spatial, transport.volumeMotion()[d]));
+				if (point != null) subtractFaceMoment(source, masses[d], pieces[g][d].toDouble(), point);
+				source.shares.add(new Share(source, destinations[d], supports[d], faces[d], pieces[g][d], masses[d],
+						ratio * source.kinetic, momentum, point, motion));
 			}
 			if (pieces[g][shares - 1].signum() == 0) source.discardedMoment = true;
 		}
@@ -407,10 +411,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			if (domain.chemicalParcels != null) target.species.includeHandles(source.species.record());
 			for (int a = 0; a < 3; a++) target.momentum[a] += share.momentum[a];
 			addMoments(target, share);
-			if (share.face >= 0 && !geometryRemap) {
-				if (target.arrivals == null) target.arrivals = new ArrayList<>();
-				target.arrivals.add(share);
-			}
+			for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) target.gradient[a][b] += share.mass * source.gradient[a][b];
 			addTemperatureField(target, source, share.mass);
 		}
 	}
@@ -469,17 +470,6 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		}
 		for (var groups : output) if (groups != null) for (var group : groups) group.temperature = temperature(group);
 	}
-	/** Complete only unresolved arriving shapes; the independent position spread preserves velocity and cross moments. */
-	private void completeArrivalShape(Group group, ConservativeLiquidFlux flux) {
-		if (group.arrivals == null || group.spatial.spatialRank() == 3) return;
-		var span = group.spatial.spatialSpan();
-		for (Share share : group.arrivals) {
-			var swept = flux.sweptSecondMoments(domain, share.face, share.source.support, share.support);
-			var added = group.spatial.completeFaceTangents(flux.axis[share.face], swept, share.volume.toDouble(), share.mass / group.mass, span);
-			for (int a = 0; a < 3; a++) group.shapeApproximation[a] += group.mass * added[a];
-		}
-	}
-
 	private static void mergeMass(Group target, Group source, SignedDyadic volume, double mass) {
 		if (target.volume.signum() == 0) target.density = source.density;
 		else if (target.density != source.density) target.density = Double.NaN;
@@ -534,8 +524,6 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			}
 			target.volumeMotion[a] += share.volumeMotion[a];
 		}
-		share.spatial.setCentroid(centroid);
-		target.spatial.add(share.spatial);
 	}
 
 	/** Limits the high-order heat flux against neighboring temperatures, retaining exact total U. */
@@ -639,53 +627,48 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		if (output[group.cell].size() > 1) count = Integer.highestOneBit(Math.min(8,
 				Math.max(1, (int) Math.floor(amount / ConservativeMarkerSampling.NOMINAL_MARKER_VOLUME))));
 		int mask = domain.geometry.cutCells.mask(group.cell);
-		int requiredAxes = mask == 0 && domain.thermalState != null
-				? CellRemapQuadrature.requiredAxes(new double[][]{group.temperatureField}) : 0;
+		int requiredAxes = 0;
 		int minimumCount = minimumQuadratureCount(group);
 		// The complete tensor rule preserves the original full-dimensional carrier geometry.
 		if (mask == 0) {
-			count = minimumCount == 1 ? 1 : Math.max(count, minimumCount <= 2 ? 2 : minimumCount <= 4 ? 4 : 8);
-			if (group.spatial.spatialRank() == 3) count = 8;
+			count = Math.max(count, minimumCount <= 2 ? minimumCount : minimumCount <= 4 ? 4 : 8);
 		} else count = Math.max(Integer.bitCount(group.support), minimumCount);
 		var volumes = domain.chemicalParcels==null ? LiquidCellQuadrature.volumes(group.volume,count)
 				: CellRemapChemicalSupport.quadrature(group.volume,count,minimumCount,group.species.totalQuanta());
-		if(domain.chemicalParcels!=null)count=volumes.size();
 		group.quadratureCount = count;
-		int spatialAxes = group.spatial.spatialAxes();
+		int spatialAxes = 0;
 		boolean tensor=(count&(count-1))==0 && count<=8;
 		if (mask == 0 && tensor && Integer.bitCount(requiredAxes | spatialAxes) <= Integer.numberOfTrailingZeros(count)) requiredAxes |= spatialAxes;
 		group.quadratureAxes = mask == 0 && tensor ? CellRemapQuadrature.samplingAxes(count, requiredAxes) : -1;
 		return volumes;
 	}
-	private int minimumQuadratureCount(Group group) {
-		int axes=domain.geometry.cutCells.mask(group.cell)==0 && domain.thermalState!=null ? CellRemapQuadrature.requiredAxes(new double[][]{group.temperatureField}) : 0;
-		return Math.max(group.spatial.minimumCount(),CellRemapQuadrature.minimumCount(axes));
-	}
+	private int minimumQuadratureCount(Group group) { return 1; }
 
-	private void prepareSampling(Group group, ArrayList<Float> volumes) {
-		int count = group.quadratureCount, mask = ~group.support & 255;
-		ArrayList<double[]> offsets = new ArrayList<>();
-		for (int slot = 0; slot < volumes.size(); slot++) offsets.add(slot < count
-				? mask == 0 ? group.quadratureAxes>=0 ? CellRemapQuadrature.offset(slot, group.quadratureAxes) : offset(slot%8,8) : openOffset(mask, slot % Integer.bitCount(group.support))
-				: mask == 0 ? offset(0, 1) : openOffset(mask, 0));
+	private void advanceSamplingMoments(Group group) {
 		for (int a = 0; a < 3; a++) {
 			group.massMoment[a] += 0.5 * dt / domain.config.cellSize() * group.momentum[a];
 			group.volumeMoment[a] += 0.5 * dt / domain.config.cellSize() * group.volumeMotion[a];
 		}
-		group.spatial.advancePositions(.5 * dt / domain.config.cellSize());
-		double[] centroid = new double[3];
-		for (int a = 0; a < 3; a++) centroid[a] = group.massMoment[a] / group.mass;
-		group.spatial.setCentroid(centroid);
-		group.sampling = CellRemapSampling.prepare(domain, group.cell, group.support, group.volume, group.mass, group.density,
-				volumes, group.spatial, offsets.toArray(double[][]::new), group.massMoment, group.storage,
-				group.movingAxes, group.maximumTranslation, group.projection,
-				domain.chemicalParcels == null ? domain.maximumParticleCount : group.species.totalQuanta());
-		if (domain.chemicalParcels != null && group.sampling.volumes().size() > group.species.totalQuanta())
-			throw new CellRemapChemicalSupport.Unavailable("Positive liquid support exceeds its species budget");
+	}
+
+	private void prepareSampling(Group group, ArrayList<Float> volumes) {
+		int count = group.quadratureCount, mask = ~group.support & 255;
+		var weights = new SignedDyadic[volumes.size()];
+		var offsets = new ArrayList<double[]>();
+		for (int slot = 0; slot < volumes.size(); slot++) {
+			weights[slot] = SignedDyadic.of(volumes.get(slot));
+			offsets.add((mask == 0 ? offset(slot % count, count) : openOffset(mask, slot % Integer.bitCount(group.support))).clone());
+		}
+		group.sampleMasses = CellRemapMassAllocation.allocate(group.mass, group.volume, weights, group.density);
+		CellRemapMoments.fit(domain, group.cell, offsets, group.sampleMasses, group.massMoment,
+				group.projection, group.storage, group.maximumTranslation, group.support);
+		group.samplePositions = offsets.toArray(double[][]::new);
+		group.sampleVelocity = CellRemapVelocity.sample(group.sampleMasses, group.samplePositions,
+				group.mass, group.momentum, group.gradient, group.kinetic);
 	}
 	private void sample(Group group) {
-		var volumes = group.sampling.volumes(); var masses = group.sampling.masses(); var fitted = group.sampling.result();
-		var offsets = new ArrayList<>(Arrays.asList(fitted.positions()));
+		var volumes = group.sampleVolumes; var masses = group.sampleMasses;
+		var offsets = new ArrayList<>(Arrays.asList(group.samplePositions));
 		var weights = new SignedDyadic[volumes.size()];
 		for (int p = 0; p < weights.length; p++) weights[p] = SignedDyadic.of(volumes.get(p));
 		for (int a = 0; a < 3; a++) {
@@ -710,7 +693,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			if (!(Double.isFinite(m) && m > 0)) throw new IllegalStateException("Carrier remap produced invalid mass");
 			ChemicalMixtureRecord mixture = domain.chemicalParcels == null ? null : mixture(species[p], m);
 			double[] delta = offsets.get(p);
-			double vx = fitted.velocities()[p][0], vy = fitted.velocities()[p][1], vz = fitted.velocities()[p][2];
+			double vx = group.sampleVelocity[p][0], vy = group.sampleVelocity[p][1], vz = group.sampleVelocity[p][2];
 			double energy = 0;
 			if (domain.thermalState != null) {
 				double t = group.temperature + temperatureScale * (temperatures[p] - temperatureMean);
@@ -732,6 +715,11 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		if (domain.thermalState != null) {
 			SignedDyadic energyRemaining = group.energy.subtract(SignedDyadic.sum(temperatures, volumes.size()));
 			CellRemapHeatBalance.complete(markers, start, caloric, group.minimumTemperature, group.maximumTemperature, energyRemaining, group.energyRounding);
+			// Only the explicit cell-scale velocity projection supplies this heat.
+			double kinetic = 0;
+			for (int p = 0; p < volumes.size(); p++) for (int a = 0; a < 3; a++) kinetic += masses[p] * group.sampleVelocity[p][a] * group.sampleVelocity[p][a];
+			group.dissipatedEnergy = .5 * domain.unitScale.kilograms(Math.max(0, group.kinetic - kinetic));
+			for (int p = 0; p < volumes.size(); p++) markers.energy[start + p] += group.dissipatedEnergy * masses[p] / group.mass;
 		}
 	}
 
@@ -777,7 +765,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 	private ChemicalMixtureRecord speciesRecord(Group group) { return group.species.record(); }
 
 	private SignedDyadic validateInventories(ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
-		SignedDyadic energyRoundoff = CellRemapInventoryAudit.validate(domain, markers, flux, ballistic);
+		SignedDyadic energyRoundoff = CellRemapInventoryAudit.validate(domain, markers, flux.resultingVolumes(), ballistic, dissipatedEnergy);
 		if (domain.chemicalParcels == null) return energyRoundoff;
 		int speciesCount = domain.chemicalParcels.registry().species().size();
 		long[] before = new long[speciesCount], after = new long[speciesCount];
@@ -920,23 +908,22 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 	private record Transfer(int face, int destination, int support, SignedDyadic volume) { }
 	private static final class Share {
 		final Group source; final int destination,support,face; final SignedDyadic volume; final double mass,kinetic;
-		final double[] momentum,facePoint,volumeMotion; final CellRemapSpatialMoments spatial;
+		final double[] momentum,facePoint,volumeMotion;
 		Group target; SignedDyadic energy=SignedDyadic.ZERO; ChemicalMixtureRecord species; double rounding;
 		Share(Group source,int destination,int support,int face,SignedDyadic volume,double mass,double kinetic,
-				double[] momentum,double[] facePoint,CellRemapSpatialMoments spatial,double[] volumeMotion) {
+				double[] momentum,double[] facePoint,double[] volumeMotion) {
 			this.source=source; this.destination=destination; this.support=support; this.face=face; this.volume=volume;
-			this.mass=mass; this.kinetic=kinetic; this.momentum=momentum; this.facePoint=facePoint; this.spatial=spatial; this.volumeMotion=volumeMotion;
+			this.mass=mass; this.kinetic=kinetic; this.momentum=momentum; this.facePoint=facePoint; this.volumeMotion=volumeMotion;
 		}
 	}
 	private static final class Group {
 		final int cell, material, support; final boolean indicator;
 		boolean retained;
 		int sampleStart, quadratureCount, quadratureAxes, movingAxes, speciesTarget; ArrayList<Float> sampleVolumes;
-		ArrayList<Share> shares, arrivals;
-		CellRemapSampling.Prepared sampling;
-		CellRemapTransportMoments transportMoments;
+		ArrayList<Share> shares;
+		double[] sampleMasses; double[][] samplePositions, sampleVelocity;
+		double[][] gradient = new double[3][3]; double dissipatedEnergy;
 		final ArrayList<Integer> original = new ArrayList<>(); final CellSpeciesInventory species = new CellSpeciesInventory();
-		final CellRemapSpatialMoments spatial = new CellRemapSpatialMoments();
 		SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO;
 		double density = Double.NaN;
 		mmm.thermal.LiquidEnergyColumn.CaloricInventory caloric;

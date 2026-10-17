@@ -36,7 +36,6 @@ final class GasGeometryTransition {
 		if (after == null) return phasePositive(piece);
 		var first = before.piece(piece); var second = after.piece(piece);
 		boolean present = first != null && second != null;
-		if (present && (first.shaped() || second.shaped())) return volume(piece).signum() > 0;
 		if (present && first.dryPlane() != null && second.dryPlane() != null
 				&& !first.dryPlane().equals(second.dryPlane()))
 			present = GasGeometryOverlap.hasPositiveOverlap(first.micro(), first.dryPlane(), second.dryPlane());
@@ -49,11 +48,7 @@ final class GasGeometryTransition {
 		var first = before.piece(piece); int cell = piece / 8, micro = piece & 7;
 		boolean present = false;
 		if (first != null) {
-			if (first.shaped() || phase.liquidShape(cell) != null) {
-				intersections[piece] = GasGeometryOverlap.unionOverlapVolume(micro, first.drySupports(),
-						LiquidShapeGeometry.drySupports(phase, cell, micro));
-				present = intersections[piece].signum() > 0;
-			} else {
+			{
 				double fraction = phase.liquidFractionExact(cell, micro);
 				if (fraction == 0) present = true;
 				else if (fraction < 1) {
@@ -87,10 +82,7 @@ final class GasGeometryTransition {
 	private static ExactRational intersectionVolume(GasComplementGeometry.Piece before, GasComplementGeometry.Piece after, boolean positiveKnown) {
 		if (before.id() != after.id() || before.cell() != after.cell() || before.micro() != after.micro())
 			throw new IllegalArgumentException("Gas intersection requires the same fixed microbox");
-		if (before.shaped() || after.shaped()) {
-			if (before.drySupports().equals(after.drySupports())) return before.normalizedVolume();
-			return GasGeometryOverlap.unionOverlapVolume(before.micro(), before.drySupports(), after.drySupports());
-		}
+
 		if (after.dryPlane() == null || java.util.Objects.equals(before.dryPlane(), after.dryPlane()))
 			return before.normalizedVolume();
 		if (before.dryPlane() == null) return after.normalizedVolume();

@@ -19,7 +19,6 @@ final class GasRuntimeGeometry {
 	private final GasGeometryTransition phaseTransition;
 	private final int[] minimumPieceKeys;
 	private float[] currentMarkerGeometry;
-	private List<LiquidCellShape> currentShapes;
 
 	private GasRuntimeGeometry(FluidDomain domain, List<PhaseLiquidGeometryEdit> edits, long[] occupiedSvq,
 	                           boolean sealedExterior, boolean allDry) {
@@ -59,8 +58,7 @@ final class GasRuntimeGeometry {
 		var target = new ArrayList<>(allDry ? stock(domain, cut, emptyIndex(domain.cellCount, 0)) : sourceLiquidStock);
 		for (var edit : edits) {
 			var source = target.get(edit.cell());
-			if (source.shape() != null && edit.shape() == null && edit.volume().signum() > 0)
-				throw new GasTopologyBlockedException("Liquid edit requires a positive successor shape at cell " + edit.cell());
+
 			target.set(edit.cell(), edit);
 		}
 		this.liquidStock = List.copyOf(target);
@@ -252,12 +250,10 @@ final class GasRuntimeGeometry {
 			currentMarkerGeometry[4 * marker + 2] = domain.particles.positionZ(marker);
 			currentMarkerGeometry[4 * marker + 3] = domain.particles.volume(marker);
 		}
-		currentShapes = List.copyOf(domain.liquidShapes);
 		return true;
 	}
 	private boolean matchesRawMarkers(FluidDomain domain) {
-		if (currentMarkerGeometry == null || currentMarkerGeometry.length != 4 * domain.particles.count()
-				|| !currentShapes.equals(domain.liquidShapes)) return false;
+		if (currentMarkerGeometry == null || currentMarkerGeometry.length != 4 * domain.particles.count()) return false;
 		for (int marker = 0; marker < domain.particles.count(); marker++)
 			if (Float.floatToRawIntBits(currentMarkerGeometry[4 * marker]) != Float.floatToRawIntBits(domain.particles.positionX(marker))
 					|| Float.floatToRawIntBits(currentMarkerGeometry[4 * marker + 1]) != Float.floatToRawIntBits(domain.particles.positionY(marker))
@@ -305,10 +301,7 @@ final class GasRuntimeGeometry {
 		var stock = new ArrayList<PhaseLiquidGeometryEdit>(domain.cellCount);
 		for (int cell = 0; cell < domain.cellCount; cell++)
 			stock.add(PhaseLiquidGeometryEdit.current(cell, cut.mask(cell), domain.config.cellSize(), index, domain.particles));
-		if (index.markerCount != null) for (var shape : domain.liquidShapes) {
-			if (stock.get(shape.cell()).volume().signum() > 0)
-				stock.set(shape.cell(), stock.get(shape.cell()).withShape(shape));
-		}
+
 		return List.copyOf(stock);
 	}
 
@@ -342,8 +335,6 @@ final class GasRuntimeGeometry {
 	private LiquidPressureGeometry pressureGeometry;
 	LiquidPressureGeometry liquidPressureGeometry(FluidDomain domain) {
 		requireCurrentCarrierGeometry(domain);
-		var spatial = domain.pressureSystem.currentSpatialInput();
-		if (spatial != null) return spatial.geometry();
 		if (pressureGeometry == null) pressureGeometry = LiquidPressureGeometry.capture(domain, phase, liquidStock);
 		return pressureGeometry;
 	}
