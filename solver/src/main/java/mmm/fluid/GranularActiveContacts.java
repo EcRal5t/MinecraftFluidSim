@@ -301,15 +301,20 @@ final class GranularActiveContacts {
 	}
 	private float[] rounded(int i, GranularSpawnAdmission endpoints) {
 		float[] nearest = fixed.roundContactPoint(position[i], radius[i]);
+		int blockedBy = -1, fixedValid = 0;
 		for (int candidate = 0; candidate < 27; candidate++) {
 			float[] point = nearest.clone(); int key = candidate;
 			for (int axis = 0; axis < 3; axis++) { int side = key % 3; key /= 3; if (side == 1) point[axis] = Math.nextDown(point[axis]); else if (side == 2) point[axis] = Math.nextUp(point[axis]); }
-			if (!Arrays.equals(point, fixed.roundContactPoint(new double[]{point[0], point[1], point[2]}, radius[i]))) continue;
-			if (endpoints.allows(point[0], point[1], point[2], parcels.parcel(i).solidVolumeSvq())) return point;
+			if (!fixed.validEndpoint(point, radius[i])) continue;
+			fixedValid++;
+			blockedBy = endpoints.firstOverlap(point[0], point[1], point[2], parcels.parcel(i).solidVolumeSvq(), this::spend);
+			if (blockedBy < 0) return point;
 		}
 		throw new MechanicalTimeRefinement(2, "Joint granular contact endpoint lacks a binary32 placement: parcel=" + i
 				+ ", position=" + Arrays.toString(position[i]) + ", nearest=" + Arrays.toString(nearest)
-				+ ", radius=" + radius[i] + ", time=" + eventTime + "/" + duration);
+				+ ", radius=" + radius[i] + ", time=" + eventTime + "/" + duration
+				+ ", fixedValid=" + fixedValid + ", blockedBy=" + blockedBy
+				+ (blockedBy < 0 ? "" : ", otherPosition=" + Arrays.toString(position[blockedBy]) + ", otherRadius=" + radius[blockedBy]));
 	}
 	private static SignedDyadic exactDot(double[] first, double[] second) {
 		SignedDyadic value = SignedDyadic.ZERO;
