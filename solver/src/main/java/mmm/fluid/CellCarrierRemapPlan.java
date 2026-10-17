@@ -624,14 +624,9 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		int count = requested <= 1 ? 1 : requested <= 2 ? 2 : requested <= 4 ? 4 : 8;
 		if (output[group.cell].size() > 1) count = Integer.highestOneBit(Math.min(8,
 				Math.max(1, (int) Math.floor(amount / ConservativeMarkerSampling.NOMINAL_MARKER_VOLUME))));
-		int mask = domain.geometry.cutCells.mask(group.cell);
-		int minimumCount = 1;
-		// The complete tensor rule preserves the original full-dimensional carrier geometry.
-		if (mask == 0) {
-			count = Math.max(count, minimumCount <= 2 ? minimumCount : minimumCount <= 4 ? 4 : 8);
-		} else count = Math.max(Integer.bitCount(group.support), minimumCount);
+		if (domain.geometry.cutCells.mask(group.cell) != 0) count = Math.max(Integer.bitCount(group.support), 1);
 		var volumes = domain.chemicalParcels==null ? LiquidCellQuadrature.volumes(group.volume,count)
-				: CellRemapChemicalSupport.quadrature(group.volume,count,minimumCount,group.species.totalQuanta());
+				: CellRemapChemicalSupport.quadrature(group.volume,count,1,group.species.totalQuanta());
 		group.quadratureCount = count;
 		return volumes;
 	}
