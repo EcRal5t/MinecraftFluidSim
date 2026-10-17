@@ -51,6 +51,7 @@ public final class GranularBedWakeValidation {
 		long inventory = domain.totalGranularSolidVolumeSvq();
 		long massBits = Double.doubleToRawLongBits(domain.totalGranularMass());
 		long settled = 0, woken = 0, contacts = 0;
+		double totalStepMs = 0, maximumStepMs = 0; int completedSteps = 0;
 		int peakActive = 0;
 		FluidDomainState sleeping = null;
 		double initialMoment = 0;
@@ -60,9 +61,12 @@ public final class GranularBedWakeValidation {
 			double speed = phase == 1 ? .03 : phase == 2 ? 3.0 : 0;
 			var requests = phase == 0 ? List.<MovingBodyFluidCoupling.Request>of()
 					: List.of(new MovingBodyFluidCoupling.Request(2, .75F, 2, speed, 0, 0, .75));
+			long stepStarted = System.nanoTime();
 			var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(), requests,
 					true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
 			domain = candidate.claimPreparedCpuDomain();
+			double fullMs = (System.nanoTime() - stepStarted) / 1e6;
+			totalStepMs += fullMs; maximumStepMs = Math.max(maximumStepMs, fullMs); completedSteps++;
 			jointCapacity(domain);
 			settled += candidate.stats().granularTransition().settledParcels();
 			woken += candidate.stats().granularTransition().wokenParcels();
@@ -92,9 +96,9 @@ public final class GranularBedWakeValidation {
 			double maxShields = 0;
 			for (var deposit : domain.exportGranularState().depositGroups()) maxShields = Math.max(maxShields,
 					GranularBedShear.shields(domain, deposit.cell(), domain.granularState.registry.material(domain.granularState.deposits.dominantGroup(deposit.cell()).materialHandle())));
-			if (step % 20 == 19) System.out.printf("bed step=%d speed=%.2f active=%d deposits=%d sleeping=%d settled=%d woken=%d theta=%.6f contacts=%d%n",
+			if (step % 20 == 19) System.out.printf("bed step=%d speed=%.2f active=%d deposits=%d sleeping=%d settled=%d woken=%d theta=%.6f contacts=%d fullMs=%.3f%n",
 					step, speed, domain.granularState.parcels.count(), domain.granularState.deposits.groupCount(),
-					domain.granularDepositDynamics().sleepingColumnCount(), settled, woken, maxShields, candidate.movingBodyCoupling().coupledMarkers());
+					domain.granularDepositDynamics().sleepingColumnCount(), settled, woken, maxShields, candidate.movingBodyCoupling().coupledMarkers(), fullMs);
 		}
 		require(sleeping != null, "Initial bed exceeded the physical settling budget");
 		require(woken > 0 && peakActive > 0, "Real water never woke deposited sand");
@@ -102,8 +106,8 @@ public final class GranularBedWakeValidation {
 				"Sand did not re-settle and sleep after reducing flow");
 		require(Math.abs(depositMoment(domain) - initialMoment) > .01, "Released sand did not move horizontally");
 		wakeStartsAtRest(sleeping);
-		System.out.printf("Bed lifecycle passed: wakes=%d peakActive=%d horizontalMomentChange=%.6f kg*m%n",
-				woken, peakActive, depositMoment(domain) - initialMoment);
+		System.out.printf("Bed lifecycle passed: wakes=%d peakActive=%d horizontalMomentChange=%.6f kg*m steps=%d meanMs=%.3f maxMs=%.3f%n",
+				woken, peakActive, depositMoment(domain) - initialMoment, completedSteps, totalStepMs / completedSteps, maximumStepMs);
 	}
 
 	private static int settlingStepLimit(FluidDomain domain) {
@@ -230,11 +234,14 @@ public final class GranularBedWakeValidation {
 		var stats = domain.granularTransitionStage.step().depositStats();
 		require(stats.wokenParcels() > 0, "Sleeping bed ignored actual liquid velocity");
 		require(domain.exactInternalEnergy().subtract(beforeU).equals(
-				domain.thermalAudit().roundoffResidual().subtract(beforeAudit.roundoffResidual()))
+				domain.thermalAudit().mechanicalWork().subtract(beforeAudit.mechanicalWork())
+						.add(domain.thermalAudit().roundoffResidual().subtract(beforeAudit.roundoffResidual())))
+				&& domain.thermalAudit().finiteDeviceExchange().equals(beforeAudit.finiteDeviceExchange())
 				&& domain.thermalAudit().externalSource().equals(beforeAudit.externalSource())
 				&& domain.thermalAudit().externalSink().equals(beforeAudit.externalSink())
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
-				&& domain.particleKineticEnergyJoules() <= beforeK + (beforeCount + domain.particles.count()) * Math.ulp(beforeK)
+				&& domain.particleKineticEnergyJoules() + domain.thermalAudit().mechanicalWork().subtract(beforeAudit.mechanicalWork()).toDouble()
+						<= beforeK + (beforeCount + domain.particles.count()) * Math.ulp(beforeK)
 				&& domain.totalGranularMass() == beforeMass, "Bed release created energy or changed inventory: dU=" + domain.exactInternalEnergy().subtract(beforeU)
 						+ " dK=" + (domain.particleKineticEnergyJoules() - beforeK) + " dMass=" + (domain.totalGranularMass() - beforeMass));
 		domain.ensureGrid();

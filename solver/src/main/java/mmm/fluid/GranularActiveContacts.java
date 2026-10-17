@@ -100,14 +100,13 @@ final class GranularActiveContacts {
 			for (int i = projected.nextSetBit(0); i >= 0; i = projected.nextSetBit(i + 1)) reschedule(i, event.time(), projected);
 		}
 		for (int i = 0; i < parcels.count(); i++) advance(i, duration);
-		var endpoints = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, (float) h, parcels.count());
+		var endpoints = roundEndpoints();
 		// The drained timeline index now holds only final centers still awaiting support.
 		Arrays.fill(sweptCells, null);
 		int[] supportQueue = new int[parcels.count()]; int supportCount = 0;
 		for (int i = 0; i < parcels.count(); i++) {
-			float[] rounded = rounded(i, endpoints);
+			float[] rounded = endpoints[i];
 			x[i] = rounded[0]; y[i] = rounded[1]; z[i] = rounded[2];
-			endpoints.append(x[i], y[i], z[i], parcels.parcel(i).solidVolumeSvq());
 			vx[i] = (float) velocity[i][0]; vy[i] = (float) velocity[i][1]; vz[i] = (float) velocity[i][2];
 			if (!Float.isFinite(vx[i]) || !Float.isFinite(vy[i]) || !Float.isFinite(vz[i]))
 				throw new IllegalStateException("Unrepresentable active contact velocity");
@@ -299,22 +298,44 @@ final class GranularActiveContacts {
 		// Queries of an unchanged trajectory must not accumulate position-rounding drift.
 		for (int axis = 0; axis < 3; axis++) position[i][axis] = Math.fma(time - updated[i], drift[i][axis], trajectoryOrigin[i][axis]);
 	}
-	private float[] rounded(int i, GranularSpawnAdmission endpoints) {
-		float[] nearest = fixed.roundContactPoint(position[i], radius[i]);
-		int blockedBy = -1, fixedValid = 0;
-		for (int candidate = 0; candidate < 27; candidate++) {
-			float[] point = nearest.clone(); int key = candidate;
-			for (int axis = 0; axis < 3; axis++) { int side = key % 3; key /= 3; if (side == 1) point[axis] = Math.nextDown(point[axis]); else if (side == 2) point[axis] = Math.nextUp(point[axis]); }
-			if (!fixed.validEndpoint(point, radius[i])) continue;
-			fixedValid++;
-			blockedBy = endpoints.firstOverlap(point[0], point[1], point[2], parcels.parcel(i).solidVolumeSvq(), this::spend);
-			if (blockedBy < 0) return point;
+	/** Resolve storage-scale contacts jointly; an earlier parcel remains movable until all endpoints fit. */
+	private float[][] roundEndpoints() {
+		float[][] points = new float[parcels.count()][];
+		for (int i = 0; i < points.length; i++) points[i] = fixed.roundContactPoint(position[i], radius[i]);
+		var index = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, (float) h, points.length);
+		while (true) {
+			index.clear(); boolean adjusted = false;
+			for (int i = 0; i < points.length; i++) {
+				spend(); float[] p = points[i];
+				int j = index.firstOverlap(p[0], p[1], p[2], parcels.parcel(i).solidVolumeSvq(), this::spend);
+				if (j >= 0) {
+					separateEndpoints(i, j, points); adjusted = true; break;
+				}
+				index.append(p[0], p[1], p[2], parcels.parcel(i).solidVolumeSvq());
+			}
+			if (!adjusted) return points;
 		}
-		throw new MechanicalTimeRefinement(2, "Joint granular contact endpoint lacks a binary32 placement: parcel=" + i
-				+ ", position=" + Arrays.toString(position[i]) + ", nearest=" + Arrays.toString(nearest)
-				+ ", radius=" + radius[i] + ", time=" + eventTime + "/" + duration
-				+ ", fixedValid=" + fixedValid + ", blockedBy=" + blockedBy
-				+ (blockedBy < 0 ? "" : ", otherPosition=" + Arrays.toString(position[blockedBy]) + ", otherRadius=" + radius[blockedBy]));
+	}
+	private void separateEndpoints(int i, int j, float[][] points) {
+		double[] p = {points[i][0], points[i][1], points[i][2]}, q = {points[j][0], points[j][1], points[j][2]};
+		double[] n = new double[3]; double length = 0, rounding = 0;
+		for (int a = 0; a < 3; a++) {
+			n[a] = p[a] - q[a]; length = Math.hypot(length, n[a]);
+			rounding = Math.hypot(rounding, (double) Math.ulp(points[i][a]) + Math.ulp(points[j][a]));
+		}
+		if (!(length > 0)) throw new IllegalStateException("Coincident granular endpoints");
+		for (int a = 0; a < 3; a++) n[a] /= length;
+		double[] reverse = {-n[0], -n[1], -n[2]};
+		var first = fixed.compress(n, fixed.contactNormals(p, radius[i]));
+		var second = fixed.compress(reverse, fixed.contactNormals(q, radius[j]));
+		double firstWeight = mass[j] / (mass[i] + mass[j]), secondWeight = mass[i] / (mass[i] + mass[j]);
+		double mobility = 0;
+		for (int a = 0; a < 3; a++) mobility += n[a] * (firstWeight * first[a] - secondWeight * second[a]);
+		if (!(mobility > 0)) throw new MechanicalTimeRefinement(2, "Granular endpoints trapped between fixed supports: " + i + "," + j);
+		// Separate to the physical radii plus the coordinate rounding distance in one correction.
+		double shift = ((double) radius[i] + radius[j] - length + rounding) / mobility;
+		for (int a = 0; a < 3; a++) { p[a] += shift * firstWeight * first[a]; q[a] += shift * secondWeight * second[a]; }
+		points[i] = fixed.roundContactPoint(p, radius[i]); points[j] = fixed.roundContactPoint(q, radius[j]);
 	}
 	private static SignedDyadic exactDot(double[] first, double[] second) {
 		SignedDyadic value = SignedDyadic.ZERO;

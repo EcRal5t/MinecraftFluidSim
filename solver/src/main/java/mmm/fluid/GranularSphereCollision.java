@@ -287,7 +287,7 @@ final class GranularSphereCollision {
 		if (best == null) throw new MechanicalTimeRefinement(2, "No representable granular sphere endpoint");
 		return best;
 	}
-	boolean validEndpoint(float[] p, float radius) {
+	private boolean validEndpoint(float[] p, float radius) {
 		for (int a = 0; a < 3; a++) if (!(p[a] >= radius && p[a] <= sizes[a] * h - radius)) return false;
 		if (geometry.sphereTouchesSolid(p[0], p[1], p[2], radius)) return false;
 		return true;

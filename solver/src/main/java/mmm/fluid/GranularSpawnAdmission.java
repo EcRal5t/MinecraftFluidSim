@@ -37,6 +37,8 @@ final class GranularSpawnAdmission {
 		z = new float[capacity]; radius = new float[capacity];
 	}
 
+	void clear() { Arrays.fill(head, -1); count = 0; largestRadius = 0; }
+
 	boolean allows(float px, float py, float pz, long svq) {
 		return firstOverlap(px, py, pz, svq, () -> { }) < 0;
 	}

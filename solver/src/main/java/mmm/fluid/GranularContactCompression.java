@@ -10,7 +10,7 @@ final class GranularContactCompression {
 		Row { normal = normal.clone(); }
 	}
 
-	/** Errors describe this binary64 reconstruction and its stored impulse resolution. */
+	/** Velocity errors include reconstruction roundoff and convergence at binary32 carrier precision. */
 	record Result(double[][] values, double[] impulses, double[] gapError, double[][] arithmeticError) {
 		boolean admits(Row row) { return GranularContactCompression.admits(row, values, arithmeticError); }
 	}
@@ -140,7 +140,7 @@ final class GranularContactCompression {
 			if (seeded) rescaleInitialImpulse(mass, input, rows, lambda, spend);
 		}
 		// Complementarity is solved at component velocity precision, including nearly unloaded supports.
-		double complementarityTolerance = 32 * Math.ulp(speedScale);
+		double complementarityTolerance = velocityResolution(speedScale);
 		ActiveFace activeFace = null; boolean chainTried = false;
 		while (true) {
 			// Each sweep reconstructs from the original input, so roundoff cannot become a new source velocity.
@@ -447,6 +447,12 @@ final class GranularContactCompression {
 		}
 	}
 
+	private static double velocityResolution(double speed) {
+		// Production carrier velocities are binary32; subnormal and diagnostic binary64 inputs retain their scale.
+		float stored = (float) speed;
+		return stored > 0 && Float.isFinite(stored) ? .5 * (double) Math.ulp(stored) : 32 * Math.ulp(speed);
+	}
+
 	static double[][] reconstruct(double[] mass, double[][] input, Row[] rows, double[] lambda,
 	                                     double[][] values, Runnable spend) {
 		double[][] force = new double[mass.length][3], low = new double[mass.length][3], high = new double[mass.length][3];
@@ -458,6 +464,9 @@ final class GranularContactCompression {
 			accumulate(row.first(), row.second() < 0 ? 1 : -1, row.normal(), l, lower, upper, force, low, high);
 			if (row.second() >= 0) accumulate(row.second(), 1, row.normal(), l, lower, upper, force, low, high);
 		}
+		double speedScale = 0;
+		for (double[] source : input) for (double value : source) speedScale = Math.max(speedScale, Math.abs(value));
+		double resolution = velocityResolution(speedScale);
 		double[][] error = new double[mass.length][3];
 		for (int i = 0; i < mass.length; i++) {
 			spend.run();
@@ -465,7 +474,7 @@ final class GranularContactCompression {
 				values[i][a] = input[i][a] + force[i][a] / mass[i];
 				double lower = Math.nextDown(input[i][a] + Math.nextDown(low[i][a] / mass[i]));
 				double upper = Math.nextUp(input[i][a] + Math.nextUp(high[i][a] / mass[i]));
-				error[i][a] = Math.nextUp(Math.max(values[i][a] - lower, upper - values[i][a]));
+				error[i][a] = Math.max(resolution, Math.nextUp(Math.max(values[i][a] - lower, upper - values[i][a])));
 				if (!(Double.isFinite(values[i][a]) && Double.isFinite(error[i][a])))
 					throw new MechanicalTimeRefinement(2, "Unrepresentable common contact reconstruction");
 			}
