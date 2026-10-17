@@ -99,12 +99,14 @@ final class GranularContactCompression {
 		double[] physicalMass = mass;
 		var unit = massUnit(mass); int massExponent = unit.exponent(); mass = unit.values();
 		double[][] values = new double[mass.length][3];
+		double speedScale = 0;
 		for (int i = 0; i < mass.length; i++) {
 			if (!(mass[i] > 0 && Double.isFinite(mass[i])) || input[i].length != 3)
 				throw new IllegalArgumentException("Invalid contact mass or velocity");
 			for (int a = 0; a < 3; a++) {
 				if (!Double.isFinite(input[i][a])) throw new IllegalArgumentException("Nonfinite contact velocity");
 				values[i][a] = input[i][a];
+				speedScale = Math.max(speedScale, Math.abs(input[i][a]));
 			}
 		}
 		double[] lambda = new double[rows.length];
@@ -137,6 +139,8 @@ final class GranularContactCompression {
 			}
 			if (seeded) rescaleInitialImpulse(mass, input, rows, lambda, spend);
 		}
+		// Complementarity is solved at component velocity precision, including nearly unloaded supports.
+		double complementarityTolerance = 32 * Math.ulp(speedScale);
 		ActiveFace activeFace = null; boolean chainTried = false;
 		while (true) {
 			// Each sweep reconstructs from the original input, so roundoff cannot become a new source velocity.
@@ -152,8 +156,9 @@ final class GranularContactCompression {
 				if (gaps != null) gaps[k] = g;
 				if (!(Double.isFinite(g) && Double.isFinite(gapError[k])))
 					throw new MechanicalTimeRefinement(2, "Unrepresentable contact normal velocity");
-				accepted &= g >= -gapError[k] && (lambda[k] == 0 || Math.abs(g) <= gapError[k]);
-				double violation = (lambda[k] == 0 ? Math.max(0, -g) : Math.abs(g)) - gapError[k];
+				double activeTolerance = Math.max(gapError[k], complementarityTolerance);
+				accepted &= g >= -gapError[k] && (lambda[k] == 0 || Math.abs(g) <= activeTolerance);
+				double violation = Math.max(-g - gapError[k], lambda[k] == 0 ? 0 : Math.abs(g) - activeTolerance);
 				if (violation > excess) { worst = k; excess = violation; worstGap = g; worstBound = gapError[k]; worstLambda = lambda[k]; }
 			}
 			progress.lastGapError = gapError;

@@ -876,6 +876,19 @@ public final class GranularCarrierValidation {
 	}
 
 	private static void commonContactsMatchMassMetricProjection() {
+		// Sand-bed replay: an almost unloaded floor contact must not exhaust the iteration budget.
+		var bedRows = new GranularContactCompression.Row[]{
+				new GranularContactCompression.Row(0, 1, new double[]{.20888656668864386, -2.493463032734969e-24, .977939876606446}),
+				new GranularContactCompression.Row(0, -1, new double[]{0, 1, 0}),
+				new GranularContactCompression.Row(0, 2, new double[]{.4875959120177746, .571086288017617, -.6603867641176753}),
+				new GranularContactCompression.Row(1, -1, new double[]{0, 1, 0})};
+		double[][] bedInput = {{.010269979720757626, 1.5855788550920235e-21, .015052886201167891},
+				{.00733965307455005, 0, .01432856088190732}, {.059622514993053405, -.10899491287079932, -.04276446421725932}};
+		int[] bedWork = {0};
+		var bed = GranularContactCompression.solve(new double[]{5.078125, 5.078125, 5.078125}, bedInput, bedRows,
+				() -> { require(++bedWork[0] < 10000, "Nearly unloaded bed contact exhausted its work budget"); });
+		for (var row : bedRows) require(bed.admits(row), "Bed contact permits penetration");
+
 		var floor = new GranularContactCompression.Row(0, -1, new double[]{0, 1, 0});
 		var pair = new GranularContactCompression.Row(0, 1, new double[]{0, 1, 0});
 		var restitutionRows = new GranularContactCompression.Row[]{
