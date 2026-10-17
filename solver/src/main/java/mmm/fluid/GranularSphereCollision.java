@@ -84,9 +84,6 @@ final class GranularSphereCollision {
 				new double[][]{velocity}, new double[][]{error});
 	}
 	double[] compress(double[] velocity, double[][] normals) { return project(velocity, normals); }
-	double[] respondNormal(double[] velocity, double[][] normals, ParticulateMaterial material) {
-		return normalImpulse(velocity, normals, material);
-	}
 	double[] friction(double[] velocity, double[][] normals, double load, ParticulateMaterial material) {
 		double[] result = velocity.clone(), tangent = tangent(result, normals);
 		double speed = Math.sqrt(norm2(tangent));

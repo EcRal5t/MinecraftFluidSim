@@ -292,12 +292,6 @@ final class FlipPressurePhaseGeometry {
 		var plane = components[cell] == null ? null : components[cell].plane(micro);
 		return components[cell] == null ? fallback : plane == null ? 0 : plane.porosity();
 	}
-	double geometricLiquidVolume(int cell,FlipCutCellGeometry cut) {
-		if (components[cell] == null) return fraction[cell]*cut.openCellVolume(cell);
-		double volume = 0;
-		for (int micro=0;micro<8;micro++) if (components[cell].plane(micro)!=null) volume += liquidFractionExact(cell,micro)/8;
-		return volume;
-	}
 
 	/** Area occupied by both PLICs on their shared open face; left is the negative-axis cell. */
 	double sharedLiquidFaceArea(int left, int right, int axis, FlipCutCellGeometry cut) {
@@ -349,79 +343,6 @@ final class FlipPressurePhaseGeometry {
 		return next;
 	}
 
-	/** Copied local face polygon; tangential coordinates use cyclic axis order. */
-	java.util.List<double[][]> wetFacePolygons(int cell, int axis, double coordinate, double tangent, double other, double span) {
-		return wetFacePolygons(cell, microAtFace(cell, axis, coordinate, tangent, other), axis, coordinate, tangent, other, span);
-	}
-	java.util.List<double[][]> wetFacePolygons(int cell, int micro, int axis, double coordinate, double tangent, double other, double span) {
-		return java.util.List.<double[][]>of(wetFacePolygon(cell, axis, coordinate, tangent, other, span));
-	}
-	java.util.List<double[][]> sharedWetPolygons(int left, int right, int axis, double tangent, double other, double span) {
-		return java.util.List.<double[][]>of(sharedWetPolygon(left, right, axis, tangent, other, span));
-	}
-	java.util.List<double[][]> internalExposedWetPolygons(int cell, int micro, int axis, int sign, double tangent, double other, double span) {
-		double coordinate = .5 * ((micro >>> axis & 1) + (sign > 0 ? 1 : 0));
-		return supportFacePolygons(PlicSupportGeometry.wetSupports(this, cell, micro),
-				PlicSupportGeometry.drySupports(this, cell, micro ^ 1 << axis), axis, coordinate, coordinate, tangent, other, span);
-	}
-	java.util.List<double[][]> internalSharedWetPolygons(int cell, int minusMicro, int axis, double tangent, double other, double span) {
-		return supportFacePolygons(PlicSupportGeometry.wetSupports(this, cell, minusMicro),
-				PlicSupportGeometry.wetSupports(this, cell, minusMicro | 1 << axis), axis, .5, .5, tangent, other, span);
-	}
-	java.util.List<double[][]> exposedWetPolygons(int owner, int peer, int axis, int sign, double tangent, double other, double span) {
-		return java.util.List.<double[][]>of(exposedWetPolygon(owner, peer, axis, sign, tangent, other, span));
-	}
-	private java.util.List<double[][]> supportFacePolygons(java.util.List<java.util.List<GasGeometryOverlap.HalfSpace>> first,
-	                                                     java.util.List<java.util.List<GasGeometryOverlap.HalfSpace>> second,
-	                                                     int axis, double coordinate, double peerCoordinate, double tangent, double other, double span) {
-		var result = new java.util.ArrayList<double[][]>();
-		for (var a : first) for (var b : second) {
-			rectangle(tangent, other, span); int count = 4;
-			for (var plane : a) count = clipSupportFace(count, plane, axis, coordinate);
-			for (var plane : b) count = clipSupportFace(count, plane, axis, peerCoordinate);
-			if (count >= 3) result.add(polygon(count));
-		}
-		return java.util.List.copyOf(result);
-	}
-	private int clipSupportFace(int count, GasGeometryOverlap.HalfSpace plane, int axis, double coordinate) {
-		SignedDyadic[] n = {plane.nx(), plane.ny(), plane.nz()};
-		return clipFace(count, -n[(axis+1)%3].toDouble(), -n[(axis+2)%3].toDouble(),
-				n[axis].multiply(SignedDyadic.of(coordinate)).subtract(plane.threshold()).toDouble());
-	}
-
-	double[][] wetFacePolygon(int cell, int axis, double coordinate, double tangent, double other, double span) {
-		int micro = microAtFace(cell,axis,coordinate,tangent,other);
-		double wet = liquidFractionExact(cell,micro);
-		if (!(wet > 0)) return new double[2][0];
-		rectangle(tangent, other, span);
-		int count = wet >= 1 ? 4 : clipFace(4, planeNormal(cell,micro,(axis+1)%3), planeNormal(cell,micro,(axis+2)%3),
-				planeOffset(cell,micro) - coordinate * planeNormal(cell,micro,axis));
-		return polygon(count);
-	}
-
-	/** Both positive liquid profiles on one shared open microface. */
-	double[][] sharedWetPolygon(int left, int right, int axis, double tangent, double other, double span) {
-		int minus = microAtFace(left,axis,1,tangent,other), plus = microAtFace(right,axis,0,tangent,other);
-		if (!(liquidFractionExact(left,minus) > 0) || !(liquidFractionExact(right,plus) > 0)) return new double[2][0];
-		rectangle(tangent, other, span);
-		int count = liquidFractionExact(left,minus) >= 1 ? 4 : clipFace(4,planeNormal(left,minus,(axis+1)%3),planeNormal(left,minus,(axis+2)%3),planeOffset(left,minus)-planeNormal(left,minus,axis));
-		if(liquidFractionExact(right,plus)<1)count=clipFace(count,planeNormal(right,plus,(axis+1)%3),planeNormal(right,plus,(axis+2)%3),planeOffset(right,plus));
-		return polygon(count);
-	}
-
-	/** Owner liquid intersected with the peer's dry half-space, retaining actual gas-facing geometry. */
-	double[][] exposedWetPolygon(int owner, int peer, int axis, int sign, double tangent, double other, double span) {
-		int micro = microAtFace(owner,axis,sign>0?1:0,tangent,other);
-		int peerMicro = peer<0 ? 0 : microAtFace(peer,axis,sign>0?0:1,tangent,other);
-		if (!(liquidFractionExact(owner,micro) > 0) || peer>=0 && liquidFractionExact(peer,peerMicro)>=1) return new double[2][0];
-		rectangle(tangent,other,span);
-		int count=liquidFractionExact(owner,micro)>=1?4:clipFace(4,planeNormal(owner,micro,(axis+1)%3),planeNormal(owner,micro,(axis+2)%3),
-				planeOffset(owner,micro)-(sign>0?1:0)*planeNormal(owner,micro,axis));
-		if(peer>=0 && liquidFractionExact(peer,peerMicro)>0)count=clipFace(count,-planeNormal(peer,peerMicro,(axis+1)%3),-planeNormal(peer,peerMicro,(axis+2)%3),
-				-planeOffset(peer,peerMicro)+(sign>0?0:1)*planeNormal(peer,peerMicro,axis));
-		return polygon(count);
-	}
-
 	double liquidFractionExact(int cell) { return fraction[cell]; }
 	int microAtFace(int cell,int axis,double coordinate,double tangent,double other) {
 		int base = (tangent >= .5 ? 1 : 0) << ((axis+1)%3) | (other >= .5 ? 1 : 0) << ((axis+2)%3);
@@ -433,9 +354,6 @@ final class FlipPressurePhaseGeometry {
 	private void rectangle(double x,double y,double span) {
 		faceX[0]=faceX[3]=x;faceX[1]=faceX[2]=x+span;
 		faceY[0]=faceY[1]=y;faceY[2]=faceY[3]=y+span;
-	}
-	private double[][] polygon(int count) {
-		return new double[][]{java.util.Arrays.copyOf(faceX,count),java.util.Arrays.copyOf(faceY,count)};
 	}
 
 	float interfaceTheta(int fluid, int directionX, int directionY, int directionZ) {

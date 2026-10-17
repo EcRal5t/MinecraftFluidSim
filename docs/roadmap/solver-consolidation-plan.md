@@ -60,7 +60,7 @@ M00–M10 是职责与验收索引。每轮交付一个完整生产模块或一�
 
 ## M01 共同空间输入与状态身份
 
-**当前入口：** `PhaseLiquidGeometryEdit`、`PlicComponentGeometry`、`LiquidPressureGeometry`、`GasRuntimeGeometry`、`CellRemapMicroTopology`、`CellRemapPorts`。
+**当前入口：** `PhaseLiquidGeometryEdit`、`PlicComponentGeometry`、`GasRuntimeGeometry`、`CellRemapMicroTopology`、`CellRemapPorts`。
 
 统一压力湿面、气体干面、输运开孔和固体占容的几何来源，明确库存、位置、组成和碰撞改变后的失效规则。库存与数值采样采用各自合适的表示，数值节点可增减、合并；第一矩等几何信息按选定离散需要保留，删除将完整高阶矩正可表示性作为普通操作前提的约束。
 

@@ -120,19 +120,6 @@ final class GasRuntimeGeometry {
 				index, domain.particles, domain.config.cellSize(), stock, sameLocalStock == null ? null : captured.phase, sameLocalStock);
 		return phase;
 	}
-	/** The same raw-stock PLIC as gas capture, without topology or inventory publication. */
-	static LiquidPressureGeometry captureLiquidPressureGeometry(FluidDomain domain) {
-		domain.ensureInventoryGrid();
-		var cut = domain.geometry.cutCells; var index = index(domain); var stock = stock(domain, cut, index);
-		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
-		var captured = domain.gasState.frame;
-		var same = matchingLocalStock(captured, cut, stock, occupied, domain.config.cellSize());
-		boolean unchanged = same != null;
-		if (same != null) for (boolean cell : same) unchanged &= cell;
-		if (unchanged) return captured.liquidPressureGeometry(domain);
-		var phase = capturePhase(domain, cut, domain.geometry.solid, occupied, stock, index, captured, same);
-		return LiquidPressureGeometry.capture(domain, phase, stock);
-	}
 
 	static GasRuntimeGeometry capture(FluidDomain domain, PhaseLiquidGeometryEdit edit, long[] occupiedSvq, boolean sealedExterior) {
 		return captureLiquidEdits(domain, edit == null ? List.of() : List.of(edit), occupiedSvq, sealedExterior);
@@ -331,17 +318,6 @@ final class GasRuntimeGeometry {
 
 	boolean fullDryFace(int cell, int axis, int coordinate) {
 		return GasFaceIntersection.fullDryFace(phase, cell, axis, coordinate);
-	}
-	private LiquidPressureGeometry pressureGeometry;
-	LiquidPressureGeometry liquidPressureGeometry(FluidDomain domain) {
-		requireCurrentCarrierGeometry(domain);
-		if (pressureGeometry == null) pressureGeometry = LiquidPressureGeometry.capture(domain, phase, liquidStock);
-		return pressureGeometry;
-	}
-	private void requireCurrentCarrierGeometry(FluidDomain domain) {
-		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
-		if (domain.gasState.frame != this || sealedExterior != domain.gasState.sealedDomainBoundary || !matchesCarrierGeometry(domain, occupied))
-			throw new GasTopologyBlockedException("Pressure gas frame no longer matches carrier geometry");
 	}
 	float planeNormal(int cell, int micro, int axis) { return phase.planeNormal(cell, micro, axis); }
 	double planeOffset(int cell, int micro) { return phase.planeOffset(cell, micro); }

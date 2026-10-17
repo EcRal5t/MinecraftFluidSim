@@ -259,6 +259,7 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 |---|---|
 | `MarkerPressureValidation` | 通过同速、薄层梯度、静止满液体恢复及 L 形 8 步 |
 | `CellRemapMomentsValidation` | 全部通过：L 形、不同格长及方向平移、两种密度库存、三轴旋转；旋转保留原 80% 角动量要求 |
+| `FlipFluidFreeSurfaceValidation --geometry` | 检查 PLIC 体积求逆、小库存体积、共享湿面及未解析液体的体积守恒和开放支撑；单粒子形状允许按格尺度简化 |
 | `GasPhaseInterfaceValidation` | 通过断开接触、5 类有限气体相变各 3 步及恢复；库存和热账闭合 |
 | `LiquidViscosityValidation` | 通过隐式衰减、墙面动量、气侧自由表面、高黏度完整步与恢复；剪切／旋涡误差随网格加密约降为四分之一 |
 | `M9ThermalValidation --gas-topology` | 气腔持久化恢复、压缩／膨胀和通风流程通过；综合入口随后停在相变用例 `phaseGeometryRemapIsPreparedBeforeCarrierCommit` 的单次完全汽化断言，仍未全部通过 |

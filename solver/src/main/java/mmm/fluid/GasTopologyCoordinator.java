@@ -75,9 +75,7 @@ final class GasTopologyCoordinator {
 		rememberCommittedTopology();
 	}
 
-	void refresh() { refresh(false); }
-	void refreshDeferringPhaseVolumeWork() { refresh(true); }
-	private void refresh(boolean deferVolumeWork) {
+	void refresh() {
 		domain.ensureInventoryGrid();
 		var frame = domain.gasState.frame;
 		var occupied = currentOccupied();
@@ -86,7 +84,7 @@ final class GasTopologyCoordinator {
 				&& frame.sealedExterior() == domain.gasState.sealedDomainBoundary
 				&& frame.matchesCarrierGeometry(domain, occupied)) return;
 		commit(plan(GasRuntimeGeometry.capture(domain, null, occupied, domain.gasState.sealedDomainBoundary),
-				deferVolumeWork, null));
+				false, null));
 	}
 	private void rememberCommittedTopology() {
 		committedFrame = domain.gasState.frame;

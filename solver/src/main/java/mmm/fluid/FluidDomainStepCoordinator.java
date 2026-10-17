@@ -239,14 +239,6 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	void rebuildGridFromParticles() { particleToGridStage.rebuild(); }
 
 
-	void refreshGasPhaseGeometry() {
-		// A surviving marker ordinal does not prove stable gas membership: condensation can fill a
-		// retained partial-cell cavity, and either direction can cross the gas-centred interface
-		// threshold. Rebuild from carrier truth before jointly remapping gas inventory and U so the
-		// next checkpoint can be reconstructed from its persisted markers alone.
-		ensureInventoryGrid();
-		gasTopologyCoordinator.refreshDeferringPhaseVolumeWork();
-	}
 
 	/** Runs the non-motion logical axis while a region is hydrostatically asleep. */
 	public ThermalAxisStats stepThermalAxis(boolean phaseChangeEnabled, int maximumPhaseOperations) {

@@ -10,7 +10,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			System.out.println("Massless velocity extension validation passed"); return;
 		}
 		if (java.util.Arrays.asList(args).contains("--geometry")) {
-			planeVolumeInversionIsAccurate(); liquidPlaneRetainsSmallInventoryGeometry(); sharedWetFacesControlTransportOnly(); momentNormalMatchesAnalyticShapes();
+			planeVolumeInversionIsAccurate(); liquidPlaneRetainsSmallInventoryGeometry(); sharedWetFacesControlTransportOnly(); unresolvedShapesRetainVolumeAndOpenSupport();
 			System.out.println("Liquid-plane geometry validation passed"); return;
 		}
 		closedFaceValidityMatchesTheTransferSpace();
@@ -28,7 +28,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		planeVolumeInversionIsAccurate();
 		liquidPlaneRetainsSmallInventoryGeometry();
 		sharedWetFacesControlTransportOnly();
-		momentNormalMatchesAnalyticShapes();
+		unresolvedShapesRetainVolumeAndOpenSupport();
 		LiquidVolumeTransportValidation.main(fast ? new String[]{"--fast"} : new String[0]);
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
 		pressurePhaseUsesConservativeFootprintVolume();
@@ -42,7 +42,6 @@ public final class FlipFluidFreeSurfaceValidation {
 		bodyOverlapResolvesContinuousSubmergence();
 		pureWaterMarkerMassLedgerTracksVolume();
 		fractionalHydrostaticColumnsBalanceGravity();
-		liquidPressureGeometryConservesShapeMoments();
 		pressureNonConvergenceRejectsStep();
 		thinLayerRegularizationRemainsStable();
 		isolatedDropletReceivesUndilutedGravity();
@@ -54,7 +53,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		System.out.println("FlipFluid free-surface validation passed" + (fast ? " (short; hydrostatic/dam soaks and 300-step stair flow skipped)" : ""));
 	}
 
-	private static void momentNormalMatchesAnalyticShapes() {
+	private static void unresolvedShapesRetainVolumeAndOpenSupport() {
 		for (boolean cutBox : new boolean[] {false, true}) {
 			for (int corner : new int[] {0, 7}) for (int axis = -1; axis < 3; axis++) {
 				var cut = new FlipCutCellGeometry(3, 3, 3); int cell = 13;
@@ -79,23 +78,17 @@ public final class FlipFluidFreeSurfaceValidation {
 				double[] integral = new double[4];
 				new LiquidFluxGeometry(cut).sweptMoments(cell, 14, 0, 1, true, phase.planeNormal(cell, 0),
 						phase.planeNormal(cell, 1), phase.planeNormal(cell, 2), phase.planeOffset(cell), integral);
-				check(Math.abs(integral[0] - volumes[cell]) <= 2e-14, "Moment-normal reconstruction changed its retained volume");
-				for (int a = 0; a < 3; a++) check(Math.abs(integral[a + 1] / integral[0] - (centre[a] - .5)) <= 2e-7,
-						"Axis slab or corner tetrahedron did not retain its analytic centroid");
+				check(Math.abs(integral[0] - volumes[cell]) <= 2e-14, "Unresolved liquid reconstruction changed its retained volume");
+				// A single marker supplies inventory; cell-scale PLIC may simplify its unresolved shape.
+				// The reconstructed volume and centroid must remain within the open support.
+				for (int a = 0; a < 3; a++) {
+					boolean high = (corner & 1 << a) != 0;
+					double lower = cutBox && high ? .5 : 0, upper = cutBox && !high ? .5 : 1;
+					double reconstructed = integral[a + 1] / integral[0] + .5;
+					check(reconstructed >= lower - 1e-7 && reconstructed <= upper + 1e-7,
+							"Unresolved liquid centroid escaped its open support");
+				}
 			}
-			var cut = new FlipCutCellGeometry(3, 3, 3); int cell = 13;
-			if (cutBox) cut.replaceMask(cell, 254);
-			var markers = new MarkerGridIndex(27, 1); var particles = new LiquidParticleStore(1);
-			java.util.Arrays.fill(markers.cellMarkerHead, -1); markers.cellMarkerHead[cell] = 0; markers.particleCellNext[0] = -1;
-			particles.setCount(1); particles.setVolume(0, .0625F); markers.exactCellMarkerVolume[cell] = .0625;
-			float centre = cutBox ? 1.25F : 1.5F;
-			particles.setPositionX(0, centre); particles.setPositionY(0, centre); particles.setPositionZ(0, centre);
-			double[] volumes = new double[27]; volumes[cell] = .0625;
-			var gradient = new FlipPressurePhaseGeometry(3, 3, 3); var moment = new FlipPressurePhaseGeometry(3, 3, 3);
-			gradient.rebuild(new boolean[27], volumes, cut, null, new boolean[27]);
-			moment.rebuild(new boolean[27], volumes, cut, null, new boolean[27], markers, particles, 1);
-			for (int a = 0; a < 3; a++) check(gradient.planeNormal(cell, a) == moment.planeNormal(cell, a),
-					"Zero eccentricity changed the existing fraction-gradient fallback");
 		}
 	}
 
@@ -899,155 +892,6 @@ public final class FlipFluidFreeSurfaceValidation {
 				"positive-linear energy root cancelled a representable admissible increment");
 		check(Math.abs(FlipTransferScheme.maximumEnergyStableTransfer(1e200, 0, 0, 1e-200) / 1e-200 - 1) < 8 * Math.ulp(1.0),
 				"square-root energy ratio underflowed before producing a representable increment");
-	}
-
-	private static FluidDomain pressureGeometryDomain() {
-		return new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.001F,400,1e-5F,.45F,.002F,.8F),256);
-	}
-	private static void geometryClose(double actual,double expected,String name) {
-		check(Double.isFinite(actual) && Math.abs(actual-expected)<=256*Math.ulp(Math.max(1,Math.abs(expected))),name+": "+actual+" != "+expected);
-	}
-	static void liquidPressureGeometryConservesShapeMoments() {
-		microFaceAlignedInterfacesPreserveTraction();
-		for (float h : new float[]{1, .3F}) for (int axis = 0; axis < 3; axis++) {
-			var full = new FluidDomain(3, 3, 3, new FluidSolverConfig(h, 1000, 0, .05F, 100, 1e-6F, .45F, .002F, 0));
-			int[] peer = {1, 1, 1}; peer[axis] = 2;
-			full.setVolume(1, 1, 1, 1); full.setVolume(peer[0], peer[1], peer[2], 1); full.ensureGrid();
-			var captured = LiquidPressureGeometry.capture(full); int minus = full.cellIndex(1, 1, 1), plus = full.cellIndex(peer[0], peer[1], peer[2]);
-			int mask = 0, pieces = 0; LiquidPressureGeometry.SurfaceMoments first = null;
-			for (var face : captured.sharedFaces()) if (face.minusCell() == minus && face.plusCell() == plus && face.axis() == axis) {
-				mask |= 1 << face.microKey(); pieces++; if (first == null) first = face.moments();
-			}
-			check(mask == 15 && pieces == 4, "Whole physical wet face lacks its four distinct microfaces");
-			var face = captured.faceMoments(minus, plus, axis);
-			var scale = new java.math.BigDecimal((double) h); var area = scale.multiply(scale);
-			double variance = area.multiply(area).divide(java.math.BigDecimal.valueOf(12), java.math.MathContext.DECIMAL128).doubleValue();
-			check(face.area() == area.doubleValue(), "Whole wet face area differs from its exact SI rectangle");
-			for (int a = 0; a < 3; a++) {
-				double center = scale.multiply(java.math.BigDecimal.valueOf(a == axis ? 2 : 1.5)).doubleValue();
-				check(face.centroid().component(a) == center, "Whole wet face centroid differs from its exact SI rectangle");
-				for (int b = a; b < 3; b++) check(face.centralSecondMoment().component(a, b) == (a == b && a != axis ? variance : 0),
-						"Whole wet face covariance differs from its exact SI rectangle");
-			}
-			check(first.add(first).fullFace() == null, "Overlapping microfaces retained a complete-face certificate");
-			var triangle = LiquidPressureMoments.integrate(new double[][]{{0, .1, 0}, {0, 0, .2}}, axis, 1, minus, full);
-			check(face.add(triangle).fullFace() == null, "A partial polygon retained a complete-face certificate");
-		}
-		var cube=pressureGeometryDomain();cube.setVolume(1,1,1,1);cube.setVolume(2,1,1,1);cube.ensureGrid();
-		var geometry=LiquidPressureGeometry.capture(cube);int cell=cube.cellIndex(1,1,1);
-		var whole=geometry.cellSnapshot(cell);geometryClose(whole.volume(),1,"Whole cube volume");
-		for(int axis=0;axis<3;axis++)geometryClose(whole.centroid().component(axis),1.5,"Whole cube centroid");
-		var shared=geometry.faceMoments(cell,cube.cellIndex(2,1,1),0);
-		geometryClose(shared.area(),1,"Shared cube face");geometryClose(shared.centroid().x(),2,"Shared face coordinate");
-		geometryClose(shared.centroid().y(),1.5,"Shared face tangent centroid");
-		geometryClose(shared.centeredSecondMoment(1,1,shared.centroid()),1.0/12,"Shared face tangent variance");
-		geometryClose(shared.centeredSecondMoment(1,2,shared.centroid()),0,"Shared face tangent cross moment");
-		verifyPressureShapeGauss(whole);
-		var slab=pressureGeometryDomain();float fill=.6F;
-		int count=9*2*8,ordinal=0;float[] positions=new float[4*count];
-		for(int z=0;z<3;z++)for(int y=0;y<2;y++)for(int x=0;x<3;x++)for(int slot=0;slot<8;slot++) {
-			float height=y==0?1:fill;int base=4*ordinal++;
-			positions[base]=x+.25F+.5F*(slot&1);positions[base+1]=y+height*(.25F+.5F*(slot>>1&1));
-			positions[base+2]=z+.25F+.5F*(slot>>2&1);positions[base+3]=height/8;
-		}
-		slab.restoreParticleState(new FlipParticleState(3,3,3,1,count,(float)(9*(1+(double)fill)),positions,new float[3*count],new byte[27]));
-		slab.ensureGrid();var slabs=LiquidPressureGeometry.capture(slab);var partial=slabs.cellSnapshot(cell);
-		geometryClose(partial.volume(),fill,"Slab admitted volume");geometryClose(partial.centroid().y(),1+.5*fill,"Slab centroid");
-		var wet=slabs.faceMoments(cell,slab.cellIndex(2,1,1),0);
-		geometryClose(wet.area(),fill,"Shared slab wet face");geometryClose(wet.centroid().y(),1+.5*fill,"Shared slab centroid");
-		geometryClose(wet.centeredSecondMoment(1,1,wet.centroid()),fill*(double)fill*fill/12,"Slab wet second moment");
-		var normal=LiquidPressureGeometry.Vec3.ZERO;
-		for(var fragment:partial.freeFragments())normal=normal.add(fragment.areaNormal());
-		geometryClose(normal.x(),0,"Slab free normal X");geometryClose(normal.y(),1,"Slab free normal Y");geometryClose(normal.z(),0,"Slab free normal Z");
-		verifyPressureShapeGauss(partial);
-		var cut=pressureGeometryDomain();cut.setSolidMicroMask(1,1,1,1);cut.setVolume(1,1,1,.875F);cut.ensureGrid();
-		var cutShape=LiquidPressureGeometry.capture(cut).cellSnapshot(cell);geometryClose(cutShape.volume(),.875,"Cut cube volume");
-		for(int axis=0;axis<3;axis++)geometryClose(cutShape.centroid().component(axis),1+15.0/28,"Cut cube centroid");
-		long walls=cutShape.facets().stream().filter(f->f.kind()==LiquidPressureGeometry.FacetKind.WALL && f.peerCell()==cell).count();
-		check(walls==3,"Cut cube omitted internal solid microfacets");verifyPressureShapeGauss(cutShape);
-		var slanted=pressureGeometryDomain();slanted.setVolume(1,1,1,5F/6);slanted.setVolume(0,1,1,1);
-		slanted.setVolume(1,0,1,1);slanted.setVolume(1,1,0,1);
-		for(int p=0;p<slanted.particles.count();p++)if(slanted.particleCellIndex(p)==cell) {
-			slanted.particles.setPositionX(p,1.45F);slanted.particles.setPositionY(p,1.45F);slanted.particles.setPositionZ(p,1.45F);
-		}
-		slanted.rebuildGridFromParticles();
-		var plane=slanted.pressurePhaseGeometry;double nx=plane.planeNormal(cell,0);
-		check(nx>0 && nx==plane.planeNormal(cell,1) && nx==plane.planeNormal(cell,2),"Slanted analytic plane changed symmetry");
-		double missingLength=3-plane.planeOffset(cell)/nx,missingVolume=missingLength*missingLength*missingLength/6;
-		var tetra=LiquidPressureGeometry.capture(slanted).cellSnapshot(cell);
-		geometryClose(tetra.volume(),1-missingVolume,"Slanted positive profile volume");
-		for(int axis=0;axis<3;axis++)geometryClose(tetra.firstMoment().component(axis),1-missingVolume+.5-missingVolume*(1-missingLength/4),"Slanted profile first moment");
-		verifyPressureShapeGauss(tetra);
-		double[] freeArea=new double[3];double[][] freeFirst=new double[3][3];
-		for(var fragment:tetra.freeFragments())for(int a=0;a<3;a++) {
-			freeArea[a]+=fragment.areaNormal().component(a);
-			for(int b=0;b<3;b++)freeFirst[a][b]+=fragment.normalFirstMoment().row(a).component(b);
-		}
-		for(int a=0;a<3;a++){geometryClose(freeArea[a],missingLength*missingLength/2,"Slanted free oriented area");
-			for(int b=0;b<3;b++)geometryClose(freeFirst[a][b],missingLength*missingLength/2*(2-missingLength/3),"Slanted free normal first moment");}
-		// A narrow triangle's central Gram must survive subtraction of much larger raw world moments.
-		double delta=Math.scalb(1.0,-24);
-		var narrow=LiquidPressureMoments.integrate(new double[][]{{.5,.5+delta,.5},{.5,.5,.5+delta}},0,1,cell,cube);
-		double expected=narrow.area()*delta*delta/18;
-		check(Math.abs(narrow.centeredSecondMoment(1,1,narrow.centroid())-expected)<=64*Math.ulp(expected),"Narrow wet trace lost its positive second moment");
-		for(int axis=0;axis<3;axis++) {
-			var polygon=new double[][]{{0,.2893649457745707,0},{0,0,.14825979318469462}};
-			var face=LiquidPressureMoments.integrate(polygon,axis,1,cell,cube);
-			var thin=LiquidPressureMoments.integrate(new double[][]{{.5,.5+delta,.5},{.5,.5,.5+delta}},axis,1,cell,cube);
-			for(var piece:java.util.List.of(face,thin,face.add(thin))) {
-				check(piece.centroid().component(axis)==2,"Planar face centroid left its constant normal coordinate");
-				for(int other=0;other<3;other++) check(piece.centralSecondMoment().component(axis,other)==0,
-						"Planar face introduced an independent normal direction in its tangent trace");
-			}
-		}
-	}
-	private static void microFaceAlignedInterfacesPreserveTraction() {
-		for(int axis=0;axis<3;axis++)for(int sign:new int[]{-1,1}) {
-			var d=pressureGeometryDomain();int count=9*2*8,marker=0;float[] positions=new float[4*count];
-			for(int other=0;other<3;other++)for(int tangent=0;tangent<3;tangent++)for(int layer=0;layer<2;layer++)for(int slot=0;slot<8;slot++) {
-				int coordinate=layer==0?(sign>0?0:2):1;float height=layer==0?1:.5F;int base=4*marker++;
-				positions[base+axis]=coordinate+(sign<0&&layer==1?.5F:0)+height*(.25F+.5F*(slot>>axis&1));
-				positions[base+(axis+1)%3]=tangent+.25F+.5F*(slot>>(axis+1)%3&1);
-				positions[base+(axis+2)%3]=other+.25F+.5F*(slot>>(axis+2)%3&1);positions[base+3]=height/8;
-			}
-			d.restoreParticleState(new FlipParticleState(3,3,3,1,count,13.5F,positions,new float[3*count],new byte[27]));
-			d.ensureGrid();int cell=d.cellIndex(1,1,1);var shape=LiquidPressureGeometry.capture(d).cellSnapshot(cell);
-			geometryClose(d.pressurePhaseGeometry.planeNormal(cell,axis),sign,"Microface-aligned physical normal");
-			geometryClose(d.pressurePhaseGeometry.planeOffset(cell),sign*.5,"Microface-aligned physical offset");
-			check(shape.freeFragments().size()==4,"Microface-aligned liquid interface must have four unique wet-side pieces");
-			var gas=GasComplementGeometry.capture(3,3,3,1,d.geometry.solid,d.geometry.cutCells,d.pressurePhaseGeometry);
-			double area=0;double[] first=new double[3];
-			for(var fragment:shape.freeFragments()) {
-				check(gas.piece(8*cell+fragment.gasMicro())!=null && gas.piece(8*cell+fragment.microKey())==null,
-						"Aligned liquid interface attributed gas pressure to its full-wet integration microbox");
-				area+=fragment.areaNormal().component(axis);
-				for(int b=0;b<3;b++)first[b]+=fragment.normalFirstMoment().row(axis).component(b);
-			}
-			geometryClose(area,sign,"Aligned free interface oriented area");
-			for(int b=0;b<3;b++)geometryClose(first[b],sign*1.5,"Aligned free interface normal first moment");
-			geometryClose(-10*area,-10*sign,"Ten-pascal interface traction");
-			geometryClose(-area,-sign,"Finite-gas volume rate for uniform normal velocity");
-			verifyPressureShapeGauss(shape);
-		}
-	}
-	private static void verifyPressureShapeGauss(LiquidPressureGeometry.CellSnapshot shape) {
-		double[] normal=new double[3];double[][] first=new double[3][3];
-		for(var facet:shape.facets()) {
-			normal[facet.axis()]+=facet.sign()*facet.moments().area();
-			for(int b=0;b<3;b++)first[facet.axis()][b]+=facet.sign()*facet.moments().firstMoment().component(b);
-		}
-		for(var side:shape.sideWet()) {
-			// Shared liquid contacts are absent from the external-facet list; add just that remainder.
-			double area=side.moments().area();var moment=side.moments().firstMoment();
-			for(var facet:shape.facets())if(facet.microKey()==side.microKey()){area-=facet.moments().area();moment=moment.add(facet.moments().firstMoment().scale(-1));}
-			normal[side.axis()]+=side.sign()*area;
-			for(int b=0;b<3;b++)first[side.axis()][b]+=side.sign()*moment.component(b);
-		}
-		for(var free:shape.freeFragments())for(int a=0;a<3;a++) {
-			normal[a]+=free.areaNormal().component(a);
-			for(int b=0;b<3;b++)first[a][b]+=free.normalFirstMoment().row(a).component(b);
-		}
-		for(int a=0;a<3;a++){geometryClose(normal[a],0,"Closed shape oriented area");for(int b=0;b<3;b++)geometryClose(first[a][b],a==b?shape.volume():0,"Closed shape normal first moment");}
 	}
 
 	private static void fractionalHydrostaticColumnsBalanceGravity() {

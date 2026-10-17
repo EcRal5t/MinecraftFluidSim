@@ -595,16 +595,6 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		return removed;
 	}
 
-	int particleCountInCell(int cellX, int cellY, int cellZ) {
-		float h = config.cellSize();
-		int count = 0;
-		for (int particle = 0; particle < particles.count(); particle++) {
-			if ((int) Math.floor(particles.positionX(particle) / h) == cellX
-					&& (int) Math.floor(particles.positionY(particle) / h) == cellY
-					&& (int) Math.floor(particles.positionZ(particle) / h) == cellZ) count++;
-		}
-		return count;
-	}
 
 	float exactVolumeInCell(int cellX, int cellY, int cellZ) {
 		float h = config.cellSize(), result = 0.0F;
@@ -707,10 +697,6 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 				&& (isFluid(first) || isFluid(second) || carrierFaceActive(first, second, open));
 	}
 
-	float pressureInterfaceTheta(int fluid, int directionX, int directionY, int directionZ) {
-		ensurePressureGeometry();
-		return pressurePhaseGeometry.interfaceTheta(fluid, directionX, directionY, directionZ);
-	}
 	boolean inside(int x, int y, int z) { return x >= 0 && x < sizeX && y >= 0 && y < sizeY && z >= 0 && z < sizeZ; }
 	int cellIndex(int x, int y, int z) { return (z * sizeY + y) * sizeX + x; }
 	int xFaceIndex(int x, int y, int z) { return (z * sizeY + y) * (sizeX + 1) + x; }
@@ -808,9 +794,6 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		} else {
 			materialRegistry.material(portion.materialHandle());
 		}
-	}
-	static int particlesRequired(float amount) {
-		return ConservativeMarkerSampling.targetMarkers(amount);
 	}
 	static float clamp01(float value) { return clamp(value, 0.0F, 1.0F); }
 	static float clamp(float value, float min, float max) { return Math.max(min, Math.min(max, value)); }

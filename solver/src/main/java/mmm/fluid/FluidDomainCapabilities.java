@@ -487,19 +487,6 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		return thermalState == null ? 0.0 : thermalState.coherentPhases().totalMass();
 	}
 
-	long phaseGranularSvq(int cell) {
-		long total = 0L;
-		if (granularState != null) {
-			for (int parcel = 0; parcel < granularState.parcels.count(); parcel++) {
-				GranularParcelStore.Parcel carrier = granularState.parcels.parcel(parcel);
-				if (granularParcelCell(carrier) == cell) {
-					total = Math.addExact(total, carrier.solidVolumeSvq());
-				}
-			}
-			total = Math.addExact(total, granularState.deposits.cellSolidVolumeSvq(cell));
-		}
-		return total;
-	}
 
 	/** Replaces the bounded world-derived face field; the field is geometry, not persisted thermal inventory. */
 	public boolean replaceThermalBoundaryTemperatures(double[] temperaturesK) {
