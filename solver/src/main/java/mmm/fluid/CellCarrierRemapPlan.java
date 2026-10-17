@@ -334,7 +334,6 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			Group source = groups.get(g); prepareMoments(source);
 			source.shares = new ArrayList<>(shares);
 			double[] masses = CellRemapMassAllocation.allocate(source.mass, source.volume, pieces[g], source.density);
-			for (int d = 0; d < transfers.size(); d++) if (pieces[g][d].signum() > 0) source.movingAxes |= 1 << flux.axis[faces[d]];
 			for (int d = 0; d < shares; d++) {
 				if (pieces[g][d].signum() == 0) continue;
 				double ratio = masses[d] / source.mass, volumeRatio = pieces[g][d].toDouble() / source.volume.toDouble();
@@ -404,7 +403,6 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			Group target = find(output, share.destination, source.material, source.indicator,
 					domain.chemicalParcels==null ? null : source.species.record(), share.support);
 			share.target=target;
-			target.movingAxes |= source.movingAxes;
 			target.minimumTemperature = Math.min(target.minimumTemperature, source.minimumTemperature);
 			target.maximumTemperature = Math.max(target.maximumTemperature, source.maximumTemperature);
 			mergeMass(target, source, share.volume, share.mass); target.kinetic += share.kinetic;
@@ -429,7 +427,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			int[] required = new int[targets.size()];
 			for (int i = 0; i < required.length; i++) {
 				var group = targets.get(i);
-				required[i] = CellRemapChemicalSupport.minimumCarriers(group.volume, minimumQuadratureCount(group));
+				required[i] = CellRemapChemicalSupport.minimumCarriers(group.volume, 1);
 			}
 			var definitions = new ArrayList<CellRemapSpeciesAllocation.Source>();
 			for (var source : sources) {
@@ -627,8 +625,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		if (output[group.cell].size() > 1) count = Integer.highestOneBit(Math.min(8,
 				Math.max(1, (int) Math.floor(amount / ConservativeMarkerSampling.NOMINAL_MARKER_VOLUME))));
 		int mask = domain.geometry.cutCells.mask(group.cell);
-		int requiredAxes = 0;
-		int minimumCount = minimumQuadratureCount(group);
+		int minimumCount = 1;
 		// The complete tensor rule preserves the original full-dimensional carrier geometry.
 		if (mask == 0) {
 			count = Math.max(count, minimumCount <= 2 ? minimumCount : minimumCount <= 4 ? 4 : 8);
@@ -636,13 +633,8 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		var volumes = domain.chemicalParcels==null ? LiquidCellQuadrature.volumes(group.volume,count)
 				: CellRemapChemicalSupport.quadrature(group.volume,count,minimumCount,group.species.totalQuanta());
 		group.quadratureCount = count;
-		int spatialAxes = 0;
-		boolean tensor=(count&(count-1))==0 && count<=8;
-		if (mask == 0 && tensor && Integer.bitCount(requiredAxes | spatialAxes) <= Integer.numberOfTrailingZeros(count)) requiredAxes |= spatialAxes;
-		group.quadratureAxes = mask == 0 && tensor ? CellRemapQuadrature.samplingAxes(count, requiredAxes) : -1;
 		return volumes;
 	}
-	private int minimumQuadratureCount(Group group) { return 1; }
 
 	private void advanceSamplingMoments(Group group) {
 		for (int a = 0; a < 3; a++) {
@@ -807,7 +799,6 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			reconstructed++;
 			double worst = 0;
 			for (int a = 0; a < 3; a++) {
-				shape[a] += domain.unitScale.kilograms(h * h * group.shapeApproximation[a]);
 				projection[a] += domain.unitScale.kilograms(h * Math.abs(group.projection[a])); storage[a] += domain.unitScale.kilograms(h * Math.abs(group.storage[a]));
 				signed[a] += domain.unitScale.signedKilograms(h * (group.projection[a] + group.storage[a]));
 				volume[a] += h * Math.abs(group.volumeResidual[a]); worst = Math.max(worst, h * Math.abs(group.projection[a]) / group.mass);
@@ -919,7 +910,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 	private static final class Group {
 		final int cell, material, support; final boolean indicator;
 		boolean retained;
-		int sampleStart, quadratureCount, quadratureAxes, movingAxes, speciesTarget; ArrayList<Float> sampleVolumes;
+		int sampleStart, quadratureCount, speciesTarget; ArrayList<Float> sampleVolumes;
 		ArrayList<Share> shares;
 		double[] sampleMasses; double[][] samplePositions, sampleVelocity;
 		double[][] gradient = new double[3][3]; double dissipatedEnergy;
@@ -931,7 +922,6 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		double lowMassX, lowMassY, lowMassZ, lowVolumeX, lowVolumeY, lowVolumeZ;
 		final double[] massMoment = new double[3], volumeMoment = new double[3], volumeMotion = new double[3];
 		final double[] projection = new double[3], storage = new double[3], volumeResidual = new double[3]; boolean discardedMoment;
-		final double[] shapeApproximation = new double[3];
 		double localMinimum = Double.POSITIVE_INFINITY, localMaximum = Double.NEGATIVE_INFINITY;
 		double minimumTemperature = Double.POSITIVE_INFINITY, maximumTemperature = Double.NEGATIVE_INFINITY;
 		Group(int cell, int material, boolean indicator, int support) { this.cell = cell; this.material = material; this.indicator = indicator; this.support = support; }

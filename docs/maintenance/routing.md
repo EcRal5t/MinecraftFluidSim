@@ -76,8 +76,6 @@ PLIC 精确体积求逆与相邻阈值范围见 [PlicPlaneOffset](../../solver/s
 
 完整载体约束的实际质量功、压力响应点积舍入界及独立展开对照在 `MarkerPressureValidation.verifyFactoredConstraint`；有限储存的正常求解复用同类的压力核场景。
 
-一般运动单纯形的正接收片区、来源逆像及 Jacobian 矩变换在 [LiquidMappedTetrahedron](../../solver/src/test/java/mmm/fluid/LiquidMappedTetrahedron.java)；几何份额的联合原始数量分配在 [LiquidGeometricAllocation](../../solver/src/test/java/mmm/fluid/LiquidGeometricAllocation.java)。剪切、伸缩、几何旋转惯量、满容量反向重排及最小正份额复用 `runRemapMomentsValidation --args="sweep-only"`；一般场完整交接按整合计划验收。
-
 有限体积与独立粒子的步长检查分别在 `CellLiquidVolumeTransport.courantRate`、`FluidDomainStepCoordinator.calculateVolumeTransportSubsteps` 和 `MechanicalStageAssembly.projectedCourant`。密闭注液的压力功、薄层支撑与通量取整排查使用 [BoundaryPourDiagnostic](../../fabric/src/test/java/mmm/fluid/BoundaryPourDiagnostic.java)，入口 `:fabric:runBoundaryPourDiagnostic`，追加 `--args=--flux` 重放量化各阶段。
 
 外部液体提取与清空的多格气腔后继在 [LiquidExtractionGasPlan](../../solver/src/main/java/mmm/fluid/LiquidExtractionGasPlan.java)，注液后继在 [LiquidInsertionGasPlan](../../solver/src/main/java/mmm/fluid/LiquidInsertionGasPlan.java)；未来 count/V/M1 覆盖在 `FlipPressurePhaseGeometry.rebuildLiquidEdits`、`PhaseLiquidGeometryEdit.afterInsertion` 与 `afterCellRemap`。输运的联合液体/颗粒/气腔发布在 `CarrierMutationCoordinator.publishCellRemap`，碰撞预览的一次提交在 `GranularMechanicalStage.commitCollision`，预览占容安装在 `GranularCouplingFields.copyFrom`；同预测状态的扫掠梯度共用在 `GranularPressureCoupling.prepareSupport`。保留颗粒的凝聚相清空后继在 `GasTopologyCoordinator.planAfterCondensedClear`。移液、注液、撤墙与中途同步的热力学顺序对照在 `ThermalGasValidationScenarios.gasExpansionRetainsTheOldControlVolume`。
