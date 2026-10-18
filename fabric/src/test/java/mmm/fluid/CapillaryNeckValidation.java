@@ -24,7 +24,7 @@ public final class CapillaryNeckValidation {
 	private static Result run(int resolution, float dt) {
 		long caseStart = System.nanoTime(); FluidDomain d = initialize(resolution, dt); Observer observer = new Observer(d.cellCount);
 		SignedDyadic v0 = SignedDyadic.sum(d.particles.directArrays().volume, d.particleCount());
-		SignedDyadic m0 = SignedDyadic.sum(d.particles.directArrays().mass, d.particleCount()), previousM = m0;
+		SignedDyadic m0 = SignedDyadic.of(mmm.units.Mass.sum(d.particles.directArrays().massUnits, d.particleCount()), 0), previousM = m0;
 		System.out.printf("fixed wall neck initialPhysicalStateHash=%s excludesDt=true rawPositionsVolumesVelocitiesMassMaterialPhase=true%n", initialHash(d));
 		int factor = dt == BASE_DT ? 1 : 2, search = (int) Math.floor(8 * TC / BASE_DT) * factor, confirmation = 32 * factor;
 		int limit = search + confirmation, candidateStart = -1, first = -1, episodes = 0, reconnections = 0, longest = 0;
@@ -36,7 +36,7 @@ public final class CapillaryNeckValidation {
 		for (int step = 0; step <= limit; step++) {
 			completed = step;
 			check(v0.equals(SignedDyadic.sum(d.particles.directArrays().volume, d.particleCount())), "Neck exact V changed at logical step " + step);
-			SignedDyadic mass = SignedDyadic.sum(d.particles.directArrays().mass, d.particleCount());
+			SignedDyadic mass = SignedDyadic.of(mmm.units.Mass.sum(d.particles.directArrays().massUnits, d.particleCount()), 0);
 			check(Math.abs(mass.subtract(previousM).toDouble()) <= stepBound && Math.abs(mass.subtract(m0).toDouble()) <= bound,
 					"Neck M exceeded its per-step or cumulative storage bound");
 			check(bound < m0.toDouble() && d.particleCount() <= d.maximumParticleCount(), "Neck exhausted mass premise or actual carrier budget");
@@ -67,7 +67,7 @@ public final class CapillaryNeckValidation {
 			check(bound < m0.toDouble(), "Neck cumulative storage bound exhausted total-mass premise");
 		}
 		cost(resolution, dt, "all", costs, 0, completed); cost(resolution, dt, "first5LogicalSteps", costs, 0, Math.min(5, completed)); cost(resolution, dt, "afterFirst5LogicalSteps", costs, Math.min(5, completed), completed);
-		SignedDyadic deltaM = SignedDyadic.sum(d.particles.directArrays().mass, d.particleCount()).subtract(m0);
+		SignedDyadic deltaM = SignedDyadic.of(mmm.units.Mass.sum(d.particles.directArrays().massUnits, d.particleCount()), 0).subtract(m0);
 		System.out.printf("fixed wall neck result R/h=%d dt=%g persistent=%s firstStep=%d persistentStart=%d confirmationStep=%d episodes=%d reconnections=%d longestCompleteSteps=%d markers=%d peakMarkers=%d peakOccupied=%d peakCellMarkers=%d deltaM=%g kg cumulativeMbound=%g kg acceptedSubstepHistogram=%s caseWallMs=%g snapshotAndRetriesIncludedInStepCost=true observerExcludedFromStepCost=true discardedAttemptSubstepsUnavailable=true%n",
 				resolution, dt, persistent, first, candidateStart, completed, episodes, reconnections, longest, d.particleCount(), peakMarkers, peakCells, peakCellMarkers,
 				d.unitScale.signedKilograms(deltaM.toDouble()), d.unitScale.kilograms(bound), substeps, (System.nanoTime() - caseStart) / 1e6);
@@ -86,7 +86,7 @@ public final class CapillaryNeckValidation {
 			integrated += m[0]; raw += v;
 		}
 		float[] pv = new float[4 * points.size()]; for (int p = 0; p < points.size(); p++) System.arraycopy(points.get(p), 0, pv, 4 * p, 4);
-		d.restoreParticleState(new FlipParticleState(nx, ny, ny, h, points.size(), (float) raw, pv, new float[3 * points.size()], new byte[d.cellCount]));
+		d.restoreParticleState(new FlipParticleState(nx, ny, ny, h, points.size(), (float) raw, pv, new float[3 * points.size()], mmm.units.Mass.createLiquid(h, 1000.0, pv), new byte[d.cellCount]));
 		var water = new FluidMaterial("mmm:water", RHO, "mmm:aqueous", SIGMA, Math.PI / 2);
 		var entry = BuiltinFluidMaterials.createRegistry().entries().stream().filter(e -> e.material().id().equals(water.id())).findFirst().orElseThrow();
 		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(water)));

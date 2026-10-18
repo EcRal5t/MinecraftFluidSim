@@ -15,10 +15,10 @@ public record GranularTransferLedger(List<Group> groups) {
 			throw new IllegalArgumentException("Granular transfer groups are empty or over budget");
 		}
 		ArrayList<Group> canonical = new ArrayList<>(groups); canonical.sort(Comparator.comparing(Group::materialId));
-		Set<String> materials = new HashSet<>(); long totalSvq = 0L; double totalMass = 0.0;
+		Set<String> materials = new HashSet<>(); long totalSvq = 0L; long totalMass = 0;
 		for (Group group : canonical) {
 			if (!materials.add(group.materialId())) throw new IllegalArgumentException("Duplicate granular transfer material");
-			totalSvq = Math.addExact(totalSvq, group.solidVolumeSvq()); totalMass += group.mass();
+			totalSvq = Math.addExact(totalSvq, group.solidVolumeSvq()); totalMass = Math.addExact(totalMass, group.massUnits());
 		}
 		if (totalSvq > SolidVolume.SVQ_PER_CUBIC_METER || !(Double.isFinite(totalMass) && totalMass > 0.0)) {
 			throw new IllegalArgumentException("Granular transfer exceeds one dry container");
@@ -29,21 +29,21 @@ public record GranularTransferLedger(List<Group> groups) {
 	public long totalSolidVolumeSvq() {
 		long result = 0L; for (Group group : groups) result = Math.addExact(result, group.solidVolumeSvq()); return result;
 	}
-	public double totalMass() {
-		double result = 0.0; for (Group group : groups) result += group.mass(); return result;
+	public long totalMassUnits() {
+		long total = 0;
+		for (Group value : groups) total = Math.addExact(total, value.massUnits());
+		return total;
 	}
+	public double totalMass() { return mmm.units.Mass.kilograms(totalMassUnits()); }
 
-	public record Group(String materialId, long solidVolumeSvq, long massBits, SolidCompositionRecord composition) {
-		public Group(String materialId, long solidVolumeSvq, double mass, SolidCompositionRecord composition) {
-			this(materialId, solidVolumeSvq, Double.doubleToRawLongBits(mass), composition);
-		}
+	public record Group(String materialId, long solidVolumeSvq, long massUnits, SolidCompositionRecord composition) {
 		public Group {
 			if (solidVolumeSvq <= 0L
-					|| !(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)) {
+					|| !(massUnits > 0)) {
 				throw new IllegalArgumentException("Invalid granular transfer group");
 			}
 			GranularIds.requireId(materialId, "granular transfer material id");
 		}
-		public double mass() { return Double.longBitsToDouble(massBits); }
+		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
 	}
 }

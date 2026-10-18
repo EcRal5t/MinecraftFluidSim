@@ -99,9 +99,9 @@ final class ControllerInventoryDurabilityValidation {
 
 			mutate(region, persistence, candidate -> check(candidate.tryInsertExactMixture(7, 7, 0,
 					List.of(
-							new FluidDomain.MaterialPortion(water, 2.0, 2_000.0),
-							new FluidDomain.MaterialPortion(oil, 2.0, 1_600.0),
-							new FluidDomain.MaterialPortion(mercury, 2.0, 27_200.0)),
+							new FluidDomain.MaterialPortion(water, 2.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(2_000.0)),
+							new FluidDomain.MaterialPortion(oil, 2.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1_600.0)),
+							new FluidDomain.MaterialPortion(mercury, 2.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(27_200.0))),
 					6, true).transferred(), "mixed-material container was rejected"));
 			mutate(region, persistence, candidate -> check(
 					candidate.tryExtractExactMixture(7, 7, 7, 4.0F, 7).transferred(),
@@ -124,7 +124,7 @@ final class ControllerInventoryDurabilityValidation {
 			double sandMass = registries.granular().material(sand).referenceDensity();
 			GranularTransferLedger sandBucket = new GranularTransferLedger(List.of(
 					new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND,
-							SolidVolume.SVQ_PER_CUBIC_METER, sandMass, null)));
+							SolidVolume.SVQ_PER_CUBIC_METER, mmm.units.Mass.fromKilograms(sandMass), null)));
 			for (int bucket = 0; bucket < 4; bucket++) mutate(region, persistence, candidate -> check(
 					candidate.tryInsertExactGranular(7, 7, 7, sandBucket, 6, true).inserted(),
 					"fine-sand container was rejected"));
@@ -263,14 +263,14 @@ final class ControllerInventoryDurabilityValidation {
 				reagent, 1_000_000_000L);
 		double mass = 1_000.0;
 		ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(
-				registries.chemical(), amounts, 0.0);
+				registries.chemical(), amounts, 0L);
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registries.chemical(), amounts,
-				mass - withoutResidual.exactSpeciesMassKilograms(registries.chemical()).toDouble());
+				mmm.units.Mass.fromKilograms(mass - withoutResidual.exactSpeciesMassKilograms(registries.chemical()).toDouble()));
 		double bucketVolume = 1.0 / SolverUnitScale.forCellSize(
 				productionConfig().cellSize()).cubicMetersPerNormalizedVolume();
 		return new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				BuiltinFluidMaterials.WATER.id(), false, bucketVolume, mass,
-				mixture.massResidualKilogramsBits(), mixture.stableAmounts(registries.chemical()))));
+				BuiltinFluidMaterials.WATER.id(), false, bucketVolume, mmm.units.Mass.fromKilograms(mass),
+				mixture.massResidualUnits(), mixture.stableAmounts(registries.chemical()))));
 	}
 
 	private static double reagentEnergy(
@@ -493,7 +493,7 @@ final class ControllerInventoryDurabilityValidation {
 			int sandHandle = registries.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 			double mass = registries.granular().material(sandHandle).referenceDensity();
 			sand = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
-					BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_CUBIC_METER, mass, null)));
+					BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_CUBIC_METER, mmm.units.Mass.fromKilograms(mass), null)));
 			if (FUZZ_DISK) {
 				diskRoot = Files.createTempDirectory("mmm-fuzz-disk");
 				persistence = new RegionRepositoryAdapter(diskRoot, TestProfiles.full(), registries.chemical(),
@@ -801,9 +801,9 @@ final class ControllerInventoryDurabilityValidation {
 			FluidDomainState before = snapshot();
 			double portion = FUZZ_PARTIAL ? partialVolume(x, y, z) : 2.0;
 			List<FluidDomain.MaterialPortion> portions = List.of(
-					new FluidDomain.MaterialPortion(water, portion, 2_000.0),
-					new FluidDomain.MaterialPortion(mercury, 1.0, 13_600.0),
-					new FluidDomain.MaterialPortion(oil, 1.0, 900.0));
+					new FluidDomain.MaterialPortion(water, portion, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(2_000.0)),
+					new FluidDomain.MaterialPortion(mercury, 1.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(13_600.0)),
+					new FluidDomain.MaterialPortion(oil, 1.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(900.0)));
 			if (!domain.tryInsertExactMixture(x, y, z, portions, 6, true).transferred()) {
 				assertUnchanged(before, "mixture insertion at " + x + "," + y + "," + z);
 				return false;

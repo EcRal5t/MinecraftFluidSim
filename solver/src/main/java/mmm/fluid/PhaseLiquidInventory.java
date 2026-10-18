@@ -15,7 +15,7 @@ import static mmm.fluid.PhaseChangeStageSupport.*;
 
 /** One cell's actual liquid source, shared by phase trials and their final publication. */
 final class PhaseLiquidInventory {
-	private record Marker(int ordinal, int material, int thermal, int support, float volume, double mass,
+	private record Marker(int ordinal, int material, int thermal, int support, float volume, long massUnits,
 	                      double kilograms, float x, float y, float z, long wholeSvq, long upperSvq,
 	                      ChemicalMixtureRecord mixture, boolean indicator,
 	                      ThermalStateFunction.InventoryPortion portion) { }
@@ -32,7 +32,7 @@ final class PhaseLiquidInventory {
 		for (int ordinal = 0; ordinal < count; ordinal++) if (support.particleCell(ordinal) == cell) {
 			int material = particles.materialHandle(ordinal), thermal = support.thermal().thermalMaterialHandleForFluid(material);
 			float volume = particles.volume(ordinal), x = particles.positionX(ordinal), y = particles.positionY(ordinal), z = particles.positionZ(ordinal);
-			double mass = particles.mass(ordinal), kilograms = state.unitScale().kilograms(mass);
+			long mass = particles.massUnits(ordinal); double kilograms = mmm.units.Mass.kilograms(mass);
 			var mixture = chemistry == null ? null : chemistry.record(ordinal);
 			var portion = new ThermalStateFunction.InventoryPortion(thermal, kilograms,
 					mixture == null ? Map.of() : mixture.stableAmounts(chemistry.registry()));
@@ -45,15 +45,15 @@ final class PhaseLiquidInventory {
 	}
 	List<ThermalStateFunction.InventoryPortion> inventory() { return markers.stream().map(Marker::portion).toList(); }
 
-	Removal remove(int liquidHandle, int supportMask, long requestedSvq, double requestedMass,
+	Removal remove(int liquidHandle, int supportMask, long requestedSvq, long requestedMass,
 	               boolean[] volatileSpecies, boolean selective) {
 		var chemistry = support.chemistry();
 		var allocations = new ArrayList<PhaseMarkerAllocation>();
 		var moved = chemistry == null ? null : new PhaseCompositionBuilder(chemistry);
 		var changes = new PhaseMarkerAllocation[markers.size()];
-		SignedDyadic actualRemovedMass = SignedDyadic.ZERO;
+		long actualRemovedMass = 0;
 		long remainingSvq = requestedSvq;
-		double remainingMass = requestedMass;
+		long remainingMass = requestedMass;
 		for (int index = markers.size() - 1; index >= 0 && remainingSvq > 0; index--) {
 			var marker = markers.get(index);
 			if (marker.material() != liquidHandle || supportMask >= 0 && marker.support() != supportMask
@@ -71,19 +71,18 @@ final class PhaseLiquidInventory {
 					takeSvq--;
 				}
 			}
-			double takeMass = takeSvq == remainingSvq ? remainingMass : marker.kilograms() * ((double) takeSvq / marker.wholeSvq());
+			long takeMass = takeSvq == remainingSvq ? remainingMass : mmm.units.Mass.portion(marker.massUnits(), takeSvq, marker.wholeSvq());
 			if (!(Double.isFinite(takeMass) && takeMass > 0 && takeMass <= remainingMass))
 				throw new PhaseCandidateUnavailableException("Phase batch mass cannot be allocated across its liquid donors");
-			double takeSolverMass = support.state().unitScale().solverMass(takeMass);
+			long takeSolverMass = takeMass;
 			boolean full = takeSvq == marker.wholeSvq() && marker.wholeSvq() == marker.upperSvq();
 			float volume = full ? 0 : adjustedMarkerVolume(marker.volume(), -takeSvq, "Phase removal");
-			double mass = marker.mass() - takeSolverMass;
-			if (full ? Math.abs(mass) > massTolerance(marker.mass()) : !(mass > 0))
+			long mass = Math.subtractExact(marker.massUnits(), takeSolverMass);
+			if (full ? mass != 0 : !(mass > 0))
 				throw new PhaseCandidateUnavailableException("Phase batch mass/volume split is not representable");
 			if (full) mass = 0;
-			support.representedMassTransfer(marker.mass(), mass, -takeMass);
-			if (!selective) actualRemovedMass = actualRemovedMass.add(SignedDyadic.of(marker.kilograms())
-					.subtract(SignedDyadic.of(support.state().unitScale().kilograms(mass))));
+			support.representedMassTransfer(marker.massUnits(), mass, -takeMass);
+			if (!selective) actualRemovedMass = Math.addExact(actualRemovedMass, takeMass);
 			ChemicalParcelStore.SplitPlan chemical;
 			try {
 				chemical = chemistry == null ? null : selective
@@ -97,9 +96,9 @@ final class PhaseLiquidInventory {
 			changes[index] = allocation; allocations.add(allocation);
 			remainingSvq -= takeSvq; remainingMass -= takeMass;
 		}
-		if (remainingSvq != 0 || Math.abs(remainingMass) > massTolerance(requestedMass))
+		if (remainingSvq != 0 || remainingMass != 0)
 			throw new PhaseCandidateUnavailableException("Phase batch cannot be allocated to its liquid inventory");
-		if (!selective) representedPhysicalMassTransfer(0, actualRemovedMass.toDouble(), requestedMass);
+		if (!selective) representedPhysicalMassTransfer(0L, actualRemovedMass, requestedMass);
 		var plan = new PhaseRemovalPlan(List.copyOf(allocations), chemistry == null ? PhaseComposition.EMPTY : moved.build());
 		int[] ordinals = new int[markers.size()];
 		float[] volumes = new float[markers.size()];
@@ -117,7 +116,7 @@ final class PhaseLiquidInventory {
 		for (int index = 0; index < markers.size(); index++) if (ordinals[index] >= 0) {
 			var marker = markers.get(index); var allocation = changes[index];
 			future.add(new Future(ordinals[index], allocation == null ? marker.portion() : portion(marker,
-					allocation.newMass(), chemistry == null ? null : allocation.chemicalPlan().kept())));
+					allocation.newMassUnits(), chemistry == null ? null : allocation.chemicalPlan().kept())));
 		}
 		future.sort(Comparator.comparingInt(Future::ordinal));
 		return new Removal(plan, future.stream().map(Future::portion).toList(), volumes);
@@ -146,8 +145,8 @@ final class PhaseLiquidInventory {
 		}
 	}
 
-	List<ThermalStateFunction.InventoryPortion> afterCondensation(int liquidHandle, int target, double targetMass,
-	                                                           ChemicalMixtureRecord mixture, double appendedPhysicalMass) {
+	List<ThermalStateFunction.InventoryPortion> afterCondensation(int liquidHandle, int target, long targetMass,
+	                                                           ChemicalMixtureRecord mixture, long appendedPhysicalMass) {
 		var result = new ArrayList<ThermalStateFunction.InventoryPortion>();
 		boolean found = target < 0;
 		for (var marker : markers) {
@@ -156,7 +155,7 @@ final class PhaseLiquidInventory {
 		}
 		if (!found) throw new IllegalArgumentException("Phase liquid receiver belongs to another source cell");
 		if (target < 0) result.add(new ThermalStateFunction.InventoryPortion(support.thermal().thermalMaterialHandleForFluid(liquidHandle),
-				support.state().unitScale().kilograms(support.state().unitScale().solverMass(appendedPhysicalMass)),
+				mmm.units.Mass.kilograms(appendedPhysicalMass),
 				mixture == null ? Map.of() : mixture.stableAmounts(support.chemistry().registry())));
 		return List.copyOf(result);
 	}
@@ -175,8 +174,8 @@ final class PhaseLiquidInventory {
 		return PhaseLiquidGeometryEdit.fromMarkers(support.state(), cell, future);
 	}
 
-	private ThermalStateFunction.InventoryPortion portion(Marker marker, double solverMass, ChemicalMixtureRecord mixture) {
-		return new ThermalStateFunction.InventoryPortion(marker.thermal(), support.state().unitScale().kilograms(solverMass),
+	private ThermalStateFunction.InventoryPortion portion(Marker marker, long massUnits, ChemicalMixtureRecord mixture) {
+		return new ThermalStateFunction.InventoryPortion(marker.thermal(), mmm.units.Mass.kilograms(massUnits),
 				mixture == null ? Map.of() : mixture.stableAmounts(support.chemistry().registry()));
 	}
 }

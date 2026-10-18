@@ -37,12 +37,12 @@ final class GranularTransferPlanner {
 	/** Inventory-only exact insertion used by fixtures and transactional service adapters. */
 	FluidDomain.GranularInsertion insertExactInventory(
 			int cellX, int cellY, int cellZ, int materialHandle, int compositionHandle,
-			long solidVolumeSvq, double mass
+			long solidVolumeSvq, long massUnits
 	) {
 		GranularDomainState granular = domain.granularState;
 		if (granular == null) return FluidDomain.GranularInsertion.rejected("Granular state is not bound");
 		int cell = domain.cellIndexChecked(cellX, cellY, cellZ);
-		if (solidVolumeSvq <= 0L || !(Double.isFinite(mass) && mass > 0.0)) {
+		if (solidVolumeSvq <= 0L || !(Double.isFinite(massUnits) && massUnits > 0.0)) {
 			throw new IllegalArgumentException("Granular insertion inventory is invalid");
 		}
 		granular.registry.material(materialHandle);
@@ -68,16 +68,16 @@ final class GranularTransferPlanner {
 		}
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(
 				position.x(), position.y(), position.z(), 0.0F, 0.0F, 0.0F,
-				solidVolumeSvq, mass, materialHandle, compositionHandle, 0, (byte) 0, position.ceilMask());
+				solidVolumeSvq, massUnits, materialHandle, compositionHandle, 0, (byte) 0, position.ceilMask());
 		if (!granular.parcels.canAdd(parcel)) return FluidDomain.GranularInsertion.rejected("Active granular parcel budget exceeded");
 		double thermalEnergy = domain.thermalState == null ? 0.0 : domain.thermalState.planExternalGranularEnergy(
-				materialHandle, compositionHandle, mass, domain.thermalMarkerContext());
+				materialHandle, compositionHandle, mmm.units.Mass.kilograms(massUnits), domain.thermalMarkerContext());
 		var gas = prepareInsertionGas(plannedSolid, domain.thermalState == null ? null : new double[]{thermalEnergy});
 		granular.parcels.add(parcel);
 		if (domain.thermalState != null) domain.thermalState.commitExternalActiveInsertions(new double[]{thermalEnergy});
 		domain.markGranularExternalChange(cell);
 		if (gas != null) domain.gasTopologyCoordinator.commit(gas);
-		return new FluidDomain.GranularInsertion(true, solidVolumeSvq, mass, null);
+		return new FluidDomain.GranularInsertion(true, solidVolumeSvq, massUnits, null);
 	}
 
 	/** All-or-nothing dry-container insertion. The ledger is already stable-ID validated by the item adapter. */
@@ -90,7 +90,7 @@ final class GranularTransferPlanner {
 		if (maxRadius < 0) throw new IllegalArgumentException("Granular insertion radius is invalid");
 		domain.cellIndexChecked(cellX, cellY, cellZ); domain.ensureGrid();
 		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
-		long insertedSvq = ledger.totalSolidVolumeSvq(); double insertedMass = ledger.totalMass();
+		long insertedSvq = ledger.totalSolidVolumeSvq(); long insertedMass = ledger.totalMassUnits();
 		if (!domain.canAddCarrierVolume(insertedSvq / (double) SolidVolume.SVQ_PER_CELL)) {
 			return FluidDomain.GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
 		}
@@ -102,17 +102,17 @@ final class GranularTransferPlanner {
 				throw new IllegalArgumentException("Granular transfer material/composition kind mismatch");
 			}
 			if (group.composition() != null) {
-				if (granular.compositions == null || !FluidDomain.massClose(group.composition().totalMass(granular.compositions.registry()), group.mass())) {
-					throw new IllegalArgumentException("Granular transfer composition/mass mismatch");
+				if (granular.compositions == null || group.composition().massUnits(granular.compositions.registry()) != group.massUnits()) {
+					throw new IllegalArgumentException("Granular transfer composition/massUnits mismatch");
 				}
 			}
-			long remainingSvq = group.solidVolumeSvq(); double remainingMass = group.mass();
+			long remainingSvq = group.solidVolumeSvq(); long remainingMass = group.massUnits();
 			while (remainingSvq > 0L) {
 				long pieceSvq = Math.min(remainingSvq, material.maximumActiveParcelSvq());
-				double pieceMass = pieceSvq == remainingSvq ? remainingMass
-						: group.mass() * ((double) pieceSvq / group.solidVolumeSvq());
+				long pieceMass = pieceSvq == remainingSvq ? remainingMass
+						: mmm.units.Mass.portion(group.massUnits(), pieceSvq, group.solidVolumeSvq());
 				if (!(Double.isFinite(pieceMass) && pieceMass > 0.0 && pieceMass <= remainingMass)) {
-					return FluidDomain.GranularInsertion.rejected("Granular transfer mass split is not representable");
+					return FluidDomain.GranularInsertion.rejected("Granular transfer massUnits split is not representable");
 				}
 				SolidCompositionRecord pieceComposition = group.composition() == null ? null
 						: splitSolidComposition(group.composition(), group.solidVolumeSvq(), pieceSvq, pieceMass);
@@ -217,7 +217,7 @@ final class GranularTransferPlanner {
 			GranularParcelDraft draft = drafts.get(index);
 			granular.parcels.add(new GranularParcelStore.Parcel(
 					draft.x(), draft.y(), draft.z(), 0.0F, 0.0F, 0.0F,
-					draft.solidVolumeSvq(), draft.mass(), draft.materialHandle(), compositionByDraft[index], 0, (byte) 0, draft.ceilMask()));
+					draft.solidVolumeSvq(), draft.massUnits(), draft.materialHandle(), compositionByDraft[index], 0, (byte) 0, draft.ceilMask()));
 		}
 		if (domain.thermalState != null) domain.thermalState.commitExternalActiveInsertions(thermalInsertions);
 		boolean[] changedCells = new boolean[domain.cellCount];
@@ -322,17 +322,17 @@ final class GranularTransferPlanner {
 			if (!near[parcelCell] || !ledger.canAccept(granular.registry.material(parcel.materialHandle()).id())) continue;
 			long taken = Math.min(remaining, parcel.solidVolumeSvq());
 			if (parcel.solidCompositionHandle() != 0 && taken != parcel.solidVolumeSvq()) continue;
-			ProportionalDoubleSplit split = ProportionalDoubleSplit.of(parcel.mass(), taken, parcel.solidVolumeSvq());
-			double mass = split.removed();
-			if (!(mass > 0.0) || taken != parcel.solidVolumeSvq() && !(split.remaining() > 0.0)) {
-				return FluidDomain.GranularExtraction.rejected("Granular extraction mass split is not representable");
+			long massUnits = mmm.units.Mass.portion(parcel.massUnits(), taken, parcel.solidVolumeSvq());
+			long remainingMass = Math.subtractExact(parcel.massUnits(), massUnits);
+			if (!(massUnits > 0.0) || taken != parcel.solidVolumeSvq() && !(remainingMass > 0.0)) {
+				return FluidDomain.GranularExtraction.rejected("Granular extraction massUnits split is not representable");
 			}
 			SolidCompositionRecord composition = parcel.solidCompositionHandle() == 0 ? null
 					: granular.compositions.record(parcel.solidCompositionHandle());
-			ledger.add(granular.registry.material(parcel.materialHandle()).id(), taken, mass, composition);
+			ledger.add(granular.registry.material(parcel.materialHandle()).id(), taken, massUnits, composition);
 			double energy = domain.thermalState == null ? 0.0
 					: domain.thermalState.previewActiveTake(parcelIndex, taken, parcel.solidVolumeSvq());
-			removals.add(GranularRemoval.parcel(parcelIndex, parcelCell, parcel, taken, mass, energy)); remaining -= taken;
+			removals.add(GranularRemoval.parcel(parcelIndex, parcelCell, parcel, taken, massUnits, energy)); remaining -= taken;
 		}
 		for (FluidDomain.CellCandidate candidate : extractionCells) if (remaining > 0L) {
 			int cell = candidate.index(); GranularDepositStore.Group exposed = granular.deposits.dominantGroup(cell);
@@ -343,11 +343,11 @@ final class GranularTransferPlanner {
 							exposed.solidCompositionHandle(), taken);
 					SolidCompositionRecord composition = exposed.solidCompositionHandle() == 0 ? null
 							: granular.compositions.record(exposed.solidCompositionHandle());
-					ledger.add(granular.registry.material(exposed.materialHandle()).id(), taken, preview.mass(), composition);
+					ledger.add(granular.registry.material(exposed.materialHandle()).id(), taken, preview.massUnits(), composition);
 					double energy = domain.thermalState == null ? 0.0 : domain.thermalState.previewDepositTake(
 							new GranularEnergyColumn.DepositKey(cell, exposed.materialHandle(),
 									exposed.solidCompositionHandle()), taken, exposed.solidVolumeSvq());
-					removals.add(GranularRemoval.deposit(cell, exposed, taken, preview.mass(), energy));
+					removals.add(GranularRemoval.deposit(cell, exposed, taken, preview.massUnits(), energy));
 					remaining -= taken;
 				}
 			}
@@ -367,7 +367,7 @@ final class GranularTransferPlanner {
 			if (removal.solidVolumeSvq() == removal.originalSolidVolumeSvq()) continue;
 			var next = granular.parcels.prepareOverwrite(removal.index(), new GranularParcelStore.Parcel(source.x(), source.y(), source.z(),
 					source.velocityX(), source.velocityY(), source.velocityZ(), source.solidVolumeSvq() - removal.solidVolumeSvq(),
-					ProportionalDoubleSplit.of(source.mass(), removal.solidVolumeSvq(), source.solidVolumeSvq()).remaining(),
+					Math.subtractExact(source.massUnits(), removal.massUnits()),
 					source.materialHandle(), 0, source.contactAge(), source.flags()));
 			remainingParcels.put(removal.index(), next);
 		}
@@ -394,8 +394,7 @@ final class GranularTransferPlanner {
 						: energy.previewActiveRemaining(removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
 				if (removal.solidVolumeSvq() != removal.originalSolidVolumeSvq()) {
 					var context = domain.thermalMarkerContext();
-					double remainingMass = removal.deposit() ? ProportionalDoubleSplit.of(context.depositMass(new GranularEnergyColumn.DepositKey(
-							removal.cell(), removal.materialHandle(), removal.compositionHandle())), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq()).remaining()
+					double remainingMass = removal.deposit() ? mmm.units.Mass.kilograms(Math.subtractExact(granular.deposits.matchingGroup(removal.cell(), removal.materialHandle(), group -> group.solidCompositionHandle() == removal.compositionHandle()).massUnits(), removal.massUnits()))
 							: remainingParcels.get(removal.index()).mass();
 					int material = domain.thermalState.registry().materialHandle(mmm.thermal.ThermalMaterialDefinition.CarrierKind.GRANULAR,
 							granular.registry.material(removal.materialHandle()).id());
@@ -496,7 +495,7 @@ final class GranularTransferPlanner {
 	}
 
 	private SolidCompositionRecord splitSolidComposition(
-			SolidCompositionRecord source, long sourceSvq, long pieceSvq, double pieceMass
+			SolidCompositionRecord source, long sourceSvq, long pieceSvq, long pieceMass
 	) {
 		int[] species = source.copySpeciesHandles(); long[] amounts = source.copyAmounts();
 		for (int entry = 0; entry < amounts.length; entry++) {
@@ -508,19 +507,19 @@ final class GranularTransferPlanner {
 			amounts[entry] = division[0].longValueExact();
 		}
 		SolidCompositionRecord exact = new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(0.0));
-		double residual = pieceMass - exact.exactSpeciesMass(domain.granularState.compositions.registry()).toDouble();
-		return new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(residual));
+		long residual = Math.subtractExact(pieceMass, exact.speciesMassUnits(domain.granularState.compositions.registry()));
+		return new SolidCompositionRecord(species, amounts, residual);
 	}
 
 	private record GranularParcelDraft(
-			int materialHandle, long solidVolumeSvq, double mass, SolidCompositionRecord composition,
+			int materialHandle, long solidVolumeSvq, long massUnits, SolidCompositionRecord composition,
 			int cell, float x, float y, float z, int ceilMask
 	) {
-		GranularParcelDraft(int materialHandle, long solidVolumeSvq, double mass, SolidCompositionRecord composition) {
-			this(materialHandle, solidVolumeSvq, mass, composition, -1, Float.NaN, Float.NaN, Float.NaN, -1);
+		GranularParcelDraft(int materialHandle, long solidVolumeSvq, long massUnits, SolidCompositionRecord composition) {
+			this(materialHandle, solidVolumeSvq, massUnits, composition, -1, Float.NaN, Float.NaN, Float.NaN, -1);
 		}
 		GranularParcelDraft at(int cell, GranularCouplingFields.Position position) {
-			return new GranularParcelDraft(materialHandle, solidVolumeSvq, mass, composition,
+			return new GranularParcelDraft(materialHandle, solidVolumeSvq, massUnits, composition,
 					cell, position.x(), position.y(), position.z(), position.ceilMask());
 		}
 	}
@@ -530,8 +529,8 @@ final class GranularTransferPlanner {
 		boolean canAccept(String materialId) {
 			return groups.containsKey(materialId) || groups.size() < GranularTransferLedger.MAX_GROUPS;
 		}
-		void add(String materialId, long svq, double mass, SolidCompositionRecord composition) {
-			groups.computeIfAbsent(materialId, ignored -> new MutableGranularGroup()).add(svq, mass, composition);
+		void add(String materialId, long svq, long massUnits, SolidCompositionRecord composition) {
+			groups.computeIfAbsent(materialId, ignored -> new MutableGranularGroup()).add(svq, massUnits, composition);
 		}
 		GranularTransferLedger build() {
 			ArrayList<GranularTransferLedger.Group> result = new ArrayList<>(groups.size());
@@ -544,16 +543,16 @@ final class GranularTransferPlanner {
 
 	private static final class MutableGranularGroup {
 		private long svq;
-		private SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
+		private long massUnits, residual;
 		private TreeMap<Integer, Long> species;
-		void add(long addedSvq, double addedMass, SolidCompositionRecord composition) {
-			svq = Math.addExact(svq, addedSvq); mass = mass.add(SignedDyadic.of(addedMass));
+		void add(long addedSvq, long addedMass, SolidCompositionRecord composition) {
+			svq = Math.addExact(svq, addedSvq); massUnits = Math.addExact(massUnits, addedMass);
 			if (composition == null) {
 				if (species != null) throw new IllegalArgumentException("Mixed inert/reactive granular material group");
 				return;
 			}
 			if (species == null) species = new TreeMap<>();
-			residual = residual.add(SignedDyadic.of(composition.massResidual()));
+			residual = Math.addExact(residual, composition.massResidualUnits());
 			for (int entry = 0; entry < composition.entryCount(); entry++) species.merge(
 					composition.speciesHandle(entry), composition.amountAt(entry), Math::addExact);
 		}
@@ -565,9 +564,9 @@ final class GranularTransferPlanner {
 					handles[index] = entry.getKey(); amounts[index++] = entry.getValue();
 				}
 				composition = new SolidCompositionRecord(
-						handles, amounts, Double.doubleToRawLongBits(residual.toDouble()));
+						handles, amounts, residual);
 			}
-			return new GranularTransferLedger.Group(materialId, svq, mass.toDouble(), composition);
+			return new GranularTransferLedger.Group(materialId, svq, massUnits, composition);
 		}
 	}
 
@@ -615,7 +614,7 @@ final class GranularTransferPlanner {
 		}
 		@Override public double activeParcelMass(int ordinal) {
 			return ordinal < base.activeParcelCount() ? base.activeParcelMass(ordinal)
-					: drafts.get(draftOrdinal(ordinal)).mass();
+					: mmm.units.Mass.kilograms(drafts.get(draftOrdinal(ordinal)).massUnits());
 		}
 		@Override public List<GranularEnergyColumn.DepositKey> depositKeys() { return base.depositKeys(); }
 		@Override public long depositSvq(GranularEnergyColumn.DepositKey key) { return base.depositSvq(key); }
@@ -627,19 +626,19 @@ final class GranularTransferPlanner {
 
 	private record GranularRemoval(
 			boolean deposit, int index, int cell, int materialHandle, int compositionHandle,
-			long solidVolumeSvq, long originalSolidVolumeSvq, double mass, double internalEnergy
+			long solidVolumeSvq, long originalSolidVolumeSvq, long massUnits, double internalEnergy
 	) {
 		static GranularRemoval parcel(
-				int index, int cell, GranularParcelStore.Parcel parcel, long svq, double mass, double energy
+				int index, int cell, GranularParcelStore.Parcel parcel, long svq, long massUnits, double energy
 		) {
 			return new GranularRemoval(false, index, cell, parcel.materialHandle(), parcel.solidCompositionHandle(),
-					svq, parcel.solidVolumeSvq(), mass, energy);
+					svq, parcel.solidVolumeSvq(), massUnits, energy);
 		}
 		static GranularRemoval deposit(
-				int cell, GranularDepositStore.Group group, long svq, double mass, double energy
+				int cell, GranularDepositStore.Group group, long svq, long massUnits, double energy
 		) {
 			return new GranularRemoval(true, -1, cell, group.materialHandle(), group.solidCompositionHandle(),
-					svq, group.solidVolumeSvq(), mass, energy);
+					svq, group.solidVolumeSvq(), massUnits, energy);
 		}
 	}
 }

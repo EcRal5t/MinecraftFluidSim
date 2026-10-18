@@ -10,21 +10,23 @@ final class CellRemapMarkerColumns implements Iterable<CellCarrierRemapPlan.Mark
 	final int[] cell, material;
 	final boolean[] indicator;
 	final float[] volume;
+	final long[] massUnits;
 	final double[] mass, energy;
+	private final mmm.units.SolverUnitScale units;
 	final double[][] offset, velocity;
 	final ChemicalMixtureRecord[] mixture;
 
-	CellRemapMarkerColumns(int count) {
+	CellRemapMarkerColumns(mmm.units.SolverUnitScale units, int count) {
 		cell = new int[count]; material = new int[count]; indicator = new boolean[count]; volume = new float[count];
-		mass = new double[count]; energy = new double[count]; offset = new double[3][count]; velocity = new double[3][count];
+		this.units = units; massUnits = new long[count]; mass = new double[count]; energy = new double[count]; offset = new double[3][count]; velocity = new double[3][count];
 		mixture = new ChemicalMixtureRecord[count];
 	}
 
 	int size() { return cell.length; }
 
-	void set(int p, int c, int m, boolean i, float v, double rawMass,
+	void set(int p, int c, int m, boolean i, float v, long rawMassUnits,
 			double x, double y, double z, double vx, double vy, double vz, ChemicalMixtureRecord composition, double u) {
-		cell[p] = c; material[p] = m; indicator[p] = i; volume[p] = v; mass[p] = rawMass;
+		cell[p] = c; material[p] = m; indicator[p] = i; volume[p] = v; massUnits[p] = rawMassUnits; mass[p] = units.normalizedMass(rawMassUnits);
 		offset[0][p] = x; offset[1][p] = y; offset[2][p] = z;
 		velocity[0][p] = vx; velocity[1][p] = vy; velocity[2][p] = vz; mixture[p] = composition; energy[p] = u;
 	}
@@ -32,7 +34,7 @@ final class CellRemapMarkerColumns implements Iterable<CellCarrierRemapPlan.Mark
 	void copyFrom(List<CellCarrierRemapPlan.Marker> source, int start) {
 		for (int p = 0; p < source.size(); p++) {
 			var marker = source.get(p);
-			set(start + p, marker.cell(), marker.material(), marker.indicator(), marker.volume(), marker.mass(),
+			set(start + p, marker.cell(), marker.material(), marker.indicator(), marker.volume(), marker.massUnits(),
 					marker.offsetX(), marker.offsetY(), marker.offsetZ(), marker.velocityX(), marker.velocityY(), marker.velocityZ(), marker.mixture(), marker.energy());
 		}
 	}
@@ -45,7 +47,7 @@ final class CellRemapMarkerColumns implements Iterable<CellCarrierRemapPlan.Mark
 			@Override public CellCarrierRemapPlan.Marker next() {
 				if (!hasNext()) throw new NoSuchElementException();
 				int n = p++;
-				return new CellCarrierRemapPlan.Marker(cell[n], material[n], indicator[n], volume[n], mass[n],
+				return new CellCarrierRemapPlan.Marker(cell[n], material[n], indicator[n], volume[n], massUnits[n],
 						offset[0][n], offset[1][n], offset[2][n], velocity[0][n], velocity[1][n], velocity[2][n], mixture[n], energy[n]);
 			}
 		};

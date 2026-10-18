@@ -33,13 +33,13 @@ final class GranularRegionStateCodec {
 	private static final int PAYLOAD_VERSION = 4;
 
 	record MaterialLedger(
-			int activeCount, long activeSvq, long activeMassBits,
-			int depositGroupCount, long depositSvq, long depositMassBits
+			int activeCount, long activeSvq, long activeMassUnits,
+			int depositGroupCount, long depositSvq, long depositMassUnits
 	) { }
 
 	record SectionLedger(
 			RegionSectionState.SectionKey key, int activeCount, int depositGroupCount, int depositCellCount,
-			long activeSvq, long activeMassBits, long depositSvq, long depositMassBits
+			long activeSvq, long activeMassUnits, long depositSvq, long depositMassUnits
 	) { }
 
 	record ManifestData(
@@ -48,7 +48,7 @@ final class GranularRegionStateCodec {
 			String chemicalRegistryFingerprint, List<GranularStateSnapshot.StableComposition> solidCompositions,
 			Map<String, Long> solidSpeciesTotals, GranularAuditLedger externalSource, GranularAuditLedger escapedSink,
 			int activeCount, int depositGroupCount, int depositCellCount,
-			long activeSvq, long activeMassBits, long depositSvq, long depositMassBits,
+			long activeSvq, long activeMassUnits, long depositSvq, long depositMassUnits,
 			List<MaterialLedger> materialLedgers, List<SectionLedger> sectionLedgers
 	) { }
 
@@ -65,7 +65,7 @@ final class GranularRegionStateCodec {
 			out.writeUTF(data.chemicalRegistryFingerprint());
 			out.writeInt(data.solidCompositions().size());
 			for (GranularStateSnapshot.StableComposition composition : data.solidCompositions()) {
-				out.writeLong(composition.massResidualBits()); out.writeInt(composition.components().size());
+				out.writeLong(composition.massResidualUnits()); out.writeInt(composition.components().size());
 				for (GranularStateSnapshot.CompositionComponent component : composition.components()) {
 					out.writeUTF(component.speciesId()); out.writeLong(component.amountQuanta());
 				}
@@ -76,16 +76,16 @@ final class GranularRegionStateCodec {
 			}
 			writeAudit(out, data.externalSource()); writeAudit(out, data.escapedSink());
 			out.writeInt(data.activeCount()); out.writeInt(data.depositGroupCount()); out.writeInt(data.depositCellCount());
-			out.writeLong(data.activeSvq()); out.writeLong(data.activeMassBits());
-			out.writeLong(data.depositSvq()); out.writeLong(data.depositMassBits());
+			out.writeLong(data.activeSvq()); out.writeLong(data.activeMassUnits());
+			out.writeLong(data.depositSvq()); out.writeLong(data.depositMassUnits());
 			out.writeInt(data.materialLedgers().size());
 			for (MaterialLedger ledger : data.materialLedgers()) writeMaterialLedger(out, ledger);
 			out.writeInt(data.sectionLedgers().size());
 			for (SectionLedger ledger : data.sectionLedgers()) {
 				out.writeInt(ledger.key().x()); out.writeInt(ledger.key().y()); out.writeInt(ledger.key().z());
 				out.writeInt(ledger.activeCount()); out.writeInt(ledger.depositGroupCount()); out.writeInt(ledger.depositCellCount());
-				out.writeLong(ledger.activeSvq()); out.writeLong(ledger.activeMassBits());
-				out.writeLong(ledger.depositSvq()); out.writeLong(ledger.depositMassBits());
+				out.writeLong(ledger.activeSvq()); out.writeLong(ledger.activeMassUnits());
+				out.writeLong(ledger.depositSvq()); out.writeLong(ledger.depositMassUnits());
 			}
 		});
 	}
@@ -175,8 +175,8 @@ final class GranularRegionStateCodec {
 	private static void writeAudit(DataOutputStream output, GranularAuditLedger ledger) throws IOException {
 		output.writeInt(ledger.entries().size());
 		for (GranularAuditLedger.Entry entry : ledger.entries()) {
-			output.writeUTF(entry.materialId()); output.writeLong(entry.solidVolumeSvq()); output.writeLong(entry.massBits());
-			output.writeLong(entry.massResidualBits()); output.writeInt(entry.composition().size());
+			output.writeUTF(entry.materialId()); output.writeLong(entry.solidVolumeSvq()); output.writeLong(entry.massUnits());
+			output.writeLong(entry.massResidualUnits()); output.writeInt(entry.composition().size());
 			for (GranularAuditLedger.SpeciesAmount amount : entry.composition()) {
 				output.writeUTF(amount.speciesId()); output.writeLong(amount.amountQuanta());
 			}
@@ -188,17 +188,17 @@ final class GranularRegionStateCodec {
 		ArrayList<GranularAuditLedger.Entry> entries = new ArrayList<>(count);
 		for (int index = 0; index < count; index++) {
 			String materialId = input.readUTF(); long svq = positive(input.readLong(), "granular audit SVQ");
-			long massBits = input.readLong();
-			if (!(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)) {
+			long massUnits = input.readLong();
+			if (!(massUnits > 0)) {
 				throw new IOException("Invalid granular audit mass");
 			}
-			long residualBits = input.readLong();
+			long residualUnits = input.readLong();
 			int speciesCount = bounded(input.readInt(), 0, GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES,
 					"granular audit composition entries");
 			ArrayList<GranularAuditLedger.SpeciesAmount> composition = new ArrayList<>(speciesCount);
 			for (int species = 0; species < speciesCount; species++) composition.add(
 					new GranularAuditLedger.SpeciesAmount(input.readUTF(), positive(input.readLong(), "granular audit species amount")));
-			entries.add(new GranularAuditLedger.Entry(materialId, svq, massBits, residualBits, composition));
+			entries.add(new GranularAuditLedger.Entry(materialId, svq, massUnits, residualUnits, composition));
 		}
 		return new GranularAuditLedger(entries);
 	}
@@ -213,7 +213,7 @@ final class GranularRegionStateCodec {
 				out.writeInt(Float.floatToRawIntBits(parcel.x())); out.writeInt(Float.floatToRawIntBits(parcel.y()));
 				out.writeInt(Float.floatToRawIntBits(parcel.z())); out.writeInt(Float.floatToRawIntBits(parcel.velocityX()));
 				out.writeInt(Float.floatToRawIntBits(parcel.velocityY())); out.writeInt(Float.floatToRawIntBits(parcel.velocityZ()));
-				out.writeLong(parcel.solidVolumeSvq()); out.writeLong(Double.doubleToRawLongBits(parcel.mass()));
+				out.writeLong(parcel.solidVolumeSvq()); out.writeLong(parcel.massUnits());
 				out.writeInt(parcel.materialPaletteIndex()); out.writeInt(parcel.solidCompositionIndex());
 				out.writeInt(parcel.contactAge()); out.writeByte(parcel.flags());
 				out.writeByte(parcel.ceilMask());
@@ -222,7 +222,7 @@ final class GranularRegionStateCodec {
 			for (GranularStateSnapshot.DepositGroup group : data.deposits()) {
 				out.writeInt(group.cell()); out.writeInt(group.porosityQ()); out.writeInt(group.materialPaletteIndex());
 				out.writeInt(group.solidCompositionIndex()); out.writeLong(group.solidVolumeSvq());
-				out.writeLong(Double.doubleToRawLongBits(group.mass()));
+				out.writeLong(group.massUnits());
 			}
 		});
 	}
@@ -240,7 +240,7 @@ final class GranularRegionStateCodec {
 				GranularStateSnapshot.ActiveParcel parcel = new GranularStateSnapshot.ActiveParcel(
 						Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()),
 						Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()), Float.intBitsToFloat(input.readInt()),
-						input.readLong(), Double.longBitsToDouble(input.readLong()), input.readInt(), input.readInt(),
+						input.readLong(), input.readLong(), input.readInt(), input.readInt(),
 						input.readInt(), input.readByte(), input.readUnsignedByte());
 				active.add(new ActiveEntry(ordinal, parcel));
 			}
@@ -248,7 +248,7 @@ final class GranularRegionStateCodec {
 			List<GranularStateSnapshot.DepositGroup> deposits = new ArrayList<>(depositCount);
 			for (int index = 0; index < depositCount; index++) deposits.add(new GranularStateSnapshot.DepositGroup(
 					input.readInt(), input.readInt(), input.readInt(), input.readInt(), input.readLong(),
-					Double.longBitsToDouble(input.readLong())));
+					input.readLong()));
 			requireEnd(input);
 			return new SectionData(List.copyOf(active), List.copyOf(deposits));
 		} catch (EOFException truncated) { throw new IOException("Truncated granular section payload", truncated); }
@@ -256,8 +256,8 @@ final class GranularRegionStateCodec {
 	}
 
 	private static void writeMaterialLedger(DataOutputStream output, MaterialLedger ledger) throws IOException {
-		output.writeInt(ledger.activeCount()); output.writeLong(ledger.activeSvq()); output.writeLong(ledger.activeMassBits());
-		output.writeInt(ledger.depositGroupCount()); output.writeLong(ledger.depositSvq()); output.writeLong(ledger.depositMassBits());
+		output.writeInt(ledger.activeCount()); output.writeLong(ledger.activeSvq()); output.writeLong(ledger.activeMassUnits());
+		output.writeInt(ledger.depositGroupCount()); output.writeLong(ledger.depositSvq()); output.writeLong(ledger.depositMassUnits());
 	}
 
 	private static MaterialLedger readMaterialLedger(DataInputStream input) throws IOException {
@@ -298,10 +298,8 @@ final class GranularRegionStateCodec {
 		if (value <= 0L) throw new IOException("Non-positive " + label); return value;
 	}
 
-	private static void requireMass(long bits, int count, String label) throws IOException {
-		double mass = Double.longBitsToDouble(bits);
-		if (!Double.isFinite(mass) || mass < 0.0 || count == 0 && bits != Double.doubleToRawLongBits(0.0)
-				|| count > 0 && !(mass > 0.0)) throw new IOException("Invalid " + label);
+	private static void requireMass(long units, int count, String label) throws IOException {
+		if (units < 0 || count == 0 && units != 0 || count > 0 && units == 0) throw new IOException("Invalid " + label);
 	}
 
 	private static void requireEnd(DataInputStream input) throws IOException {

@@ -293,7 +293,7 @@ final class MinecraftContainerTransferOperations {
 					"空间、颗粒 parcel 或组成预算不足，未能注入：" + inserted.failure());
 		}
 		if (inserted.solidVolumeSvq() != contents.totalSolidVolumeSvq()
-				|| Double.doubleToRawLongBits(inserted.mass()) != Double.doubleToRawLongBits(contents.totalMass())) {
+				|| inserted.massUnits() != contents.totalMassUnits()) {
 			throw new IllegalStateException("颗粒注入没有结算完整独立库存");
 		}
 		region.wakeForActivity();
@@ -347,7 +347,7 @@ final class MinecraftContainerTransferOperations {
 					Math.round(remainingNanos * portion.volume() / remainingVolume)));
 			String materialId = domain.materialRegistry().material(portion.materialHandle()).id();
 			components.add(new FluidMixture.Component(
-					materialId, nanos, domain.physicalMassKilograms(portion.mass())));
+					materialId, nanos, portion.massUnits()));
 			remainingNanos -= nanos;
 			remainingVolume -= portion.volume();
 		}
@@ -364,11 +364,9 @@ final class MinecraftContainerTransferOperations {
 			long plannedNanos = cellVolumeToNanos(domain.unitScale(), plannedVolume);
 			if (plannedNanos <= 0L) throw new IllegalArgumentException(
 					"材料组分小于 solver 可表示体积：" + component.materialId());
-			double plannedMassKilograms = plannedNanos == component.volumeNanos()
-					? component.mass()
-					: component.mass() * plannedNanos / component.volumeNanos();
+			long plannedMassUnits = mmm.units.Mass.portion(component.massUnits(), plannedNanos, component.volumeNanos());
 			portions.add(new FluidDomain.MaterialPortion(
-					handle, plannedVolume, domain.solverMassForKilograms(plannedMassKilograms)));
+					handle, plannedVolume, plannedMassUnits));
 		}
 		return java.util.List.copyOf(portions);
 	}
@@ -389,11 +387,11 @@ final class MinecraftContainerTransferOperations {
 			long componentNanos = settledNanos(domain.unitScale(), actual.volume(), source.volumeNanos());
 			insertedNanos = Math.addExact(insertedNanos, componentNanos);
 			long remainingNanos = source.volumeNanos() - componentNanos;
-			double actualMassKilograms = domain.physicalMassKilograms(actual.mass());
-			inserted.add(new FluidMixture.Component(source.materialId(), componentNanos, actualMassKilograms));
-			double remainingMass = source.mass() - actualMassKilograms;
+			long actualMassUnits = actual.massUnits();
+			inserted.add(new FluidMixture.Component(source.materialId(), componentNanos, actualMassUnits));
+			long remainingMass = Math.subtractExact(source.massUnits(), actualMassUnits);
 			if (remainingNanos == 0L) {
-				if (Double.doubleToRawLongBits(actualMassKilograms) != source.massBits()) {
+				if (actualMassUnits != source.massUnits()) {
 					throw new IllegalStateException("完整材料组分注入未结算其全部质量：" + source.materialId());
 				}
 			} else {

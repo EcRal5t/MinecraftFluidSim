@@ -4,14 +4,17 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/** Immutable independent state columns for one component portion; both mass columns use kilograms. */
+/** Immutable independent state columns for one component portion; both mass columns use integer 100 ng counts. */
 public record GasComponentAmount(
 		String componentId,
 		long standardVolumeNanos,
-		double mass,
+		long massUnits,
 		List<SpeciesAmount> species,
-		double massResidual
+		long massResidualUnits
 ) {
+	public double mass() { return mmm.units.Mass.kilograms(massUnits); }
+	public double massResidual() { return mmm.units.Mass.kilograms(massResidualUnits); }
+
 	public record SpeciesAmount(String speciesId, long amountQuanta) {
 		public SpeciesAmount {
 			GasIds.require(speciesId, "gas species id");
@@ -22,7 +25,7 @@ public record GasComponentAmount(
 	public GasComponentAmount {
 		GasIds.require(componentId, "gas component id");
 		if (standardVolumeNanos <= 0L) throw new IllegalArgumentException("Gas component volume must be positive");
-		if (!(Double.isFinite(mass) && mass > 0.0) || !Double.isFinite(massResidual)) {
+		if (massUnits <= 0) {
 			throw new IllegalArgumentException("Gas component mass columns are invalid");
 		}
 		if (species == null || species.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) {

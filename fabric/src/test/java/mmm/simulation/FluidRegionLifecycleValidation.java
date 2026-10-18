@@ -304,7 +304,10 @@ public final class FluidRegionLifecycleValidation {
 						0.25F, 0.25F, 0.25F, 0.125F,
 						1.25F, 0.75F, 0.75F, 0.0625F
 				},
-				new float[] {0.5F, -0.25F, 0.125F, -0.125F, 0.25F, -0.5F},
+				new float[] {0.5F, -0.25F, 0.125F, -0.125F, 0.25F, -0.5F}, mmm.units.Mass.createLiquid(config.cellSize(), 1000.0, new float[] {
+						0.25F, 0.25F, 0.25F, 0.125F,
+						1.25F, 0.75F, 0.75F, 0.0625F
+				}),
 				new byte[6 * 5 * 4]
 		));
 		double volume = domain.totalVolumeExact();
@@ -359,7 +362,7 @@ public final class FluidRegionLifecycleValidation {
 		region.enableThermalActivity();
 		var thermal = registries.thermal();
 		var stateFunction = new ThermalStateFunction(thermal);
-		var body = new FiniteThermalBodyState(0L, thermal.fingerprint(), "mmm:copper_heat_exchanger", 2.0,
+		var body = new FiniteThermalBodyState(0L, thermal.fingerprint(), "mmm:copper_heat_exchanger", mmm.units.Mass.fromKilograms(2.0),
 				stateFunction.internalEnergyAtTemperature(thermal.materialHandle("mmm:copper_heat_exchanger"),
 						2.0, java.util.Map.of(), 350.0));
 		var devices = new FiniteThermalDeviceInventory(thermal.fingerprint(), List.of(

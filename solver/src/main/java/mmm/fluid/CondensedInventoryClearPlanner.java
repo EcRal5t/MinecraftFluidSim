@@ -30,14 +30,14 @@ final class CondensedInventoryClearPlanner {
 			for (int marker = 0; marker < domain.particles.count(); marker++) builder.add(
 					domain.materialRegistry.material(domain.particles.materialHandle(marker)).id(),
 					domain.chemicalParcels.indicator(marker),
-					domain.particles.volume(marker), domain.unitScale.kilograms(domain.particles.mass(marker)),
+					domain.particles.volume(marker), domain.particles.massUnits(marker),
 					domain.chemicalParcels.record(marker));
 			drained = builder.build();
 			domain.chemicalParcels.requireCanRecordEscapedSink(drained);
 		}
 		return new FluidDomain.WaterClearPlan(domain.particles.count(),
 				Double.doubleToRawLongBits(domain.totalVolumeExact()),
-				Double.doubleToRawLongBits(domain.totalMass()), drained,
+				domain.totalMassUnits(), drained,
 				domain.thermalState == null ? SignedDyadic.ZERO
 						: domain.thermalState.exactLiquidEnergy(domain.particles.count()),
 				domain.carrierMutationRevision(),
@@ -61,8 +61,8 @@ final class CondensedInventoryClearPlanner {
 				builder.add(new ChemicalTransferLedger.Group(
 						coherentLiquidMaterialId(group.phaseId()), false,
 						SolidVolume.toCellVolume(group.occupiedVolumeSvq()),
-						group.mass(),
-						group.composition().massResidualBits(), group.composition().stableAmounts()));
+						group.massUnits(),
+						group.composition().massResidualUnits(), group.composition().stableAmounts()));
 			}
 			if (builder != null) coherentChemistry = builder.build();
 		}
@@ -71,9 +71,9 @@ final class CondensedInventoryClearPlanner {
 		SignedDyadic coherentEnergy = domain.thermalState == null
 				? SignedDyadic.ZERO : domain.thermalState.coherentPhases().exactEnergy();
 		long coherentSvq = domain.thermalState == null ? 0L : domain.thermalState.coherentPhases().totalOccupiedSvq();
-		double coherentMass = domain.thermalState == null ? 0.0 : domain.thermalState.coherentPhases().totalMass();
+		long coherentMass = domain.thermalState == null ? 0L : domain.thermalState.coherentPhases().totalMassUnits();
 		return new FluidDomain.CondensedClearPlan(liquid, groups, drained, coherentEnergy, coherentSvq,
-				Double.doubleToRawLongBits(coherentMass),
+				coherentMass,
 				domain.carrierMutationRevision(),
 				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision());
 	}

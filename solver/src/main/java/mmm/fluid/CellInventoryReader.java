@@ -44,7 +44,7 @@ final class CellInventoryReader {
 		if (domain.granularState != null) domain.granularState.deposits.forEachGroup(
 				(cell, ignoredPorosity, material, ignoredComposition, svq, mass) -> {
 			if (cell == requested) addObservedSolid(accumulated, CellCarrierInventoryView.SolidKind.DEPOSIT,
-					domain.granularState.registry.material(material).id(), svq, mass);
+					domain.granularState.registry.material(material).id(), svq, mmm.units.Mass.kilograms(mass));
 		});
 		if (domain.thermalState != null) {
 			for (CoherentPhaseStore.Group group : domain.thermalState.coherentPhases().snapshot()) {

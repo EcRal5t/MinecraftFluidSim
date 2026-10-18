@@ -119,7 +119,7 @@ public final class GasRegistry {
 			long nanos = shares[index];
 			if (nanos == 0L) continue;
 			GasComponentDefinition definition = component(ambient.get(index).componentId());
-			double mass = definition.standardDensityKgPerCubicMeter() * AirNetwork.cubicMeters(nanos);
+			long mass = mmm.units.Mass.fromKilograms(definition.standardDensityKgPerCubicMeter() * AirNetwork.cubicMeters(nanos));
 			ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>();
 			for (GasComponentDefinition.DefaultSpecies entry : definition.defaultSpeciesConcentrations()) {
 				BigInteger numerator = entry.concentrationMolPerStandardCubicMeter().numerator().multiply(BigInteger.valueOf(nanos))
@@ -128,14 +128,14 @@ public final class GasRegistry {
 				long quanta = numerator.divide(denominator).longValueExact();
 				if (quanta > 0L) species.add(new GasComponentAmount.SpeciesAmount(entry.speciesId(), quanta));
 			}
-			double residual = definition.defaultResidualDensityKgPerCubicMeter() * AirNetwork.cubicMeters(nanos);
+			long residual = mmm.units.Mass.fromKilograms(definition.defaultResidualDensityKgPerCubicMeter() * AirNetwork.cubicMeters(nanos));
 			amounts.add(new GasComponentAmount(definition.id(), nanos, mass, species, residual));
 		}
 		return new GasInventory(amounts);
 	}
 
 	private byte[] encodeCanonical() {
-		StringBuilder out = new StringBuilder(1024).append("mmm-gas-registry\n")
+		StringBuilder out = new StringBuilder(1024).append("massEncoding=").append(mmm.units.Mass.ENCODING).append('\n').append("mmm-gas-registry\n")
 				.append("units=").append(UNIT_SYSTEM_ID).append('\n')
 				.append("pressure=").append(Long.toUnsignedString(Double.doubleToRawLongBits(STANDARD_PRESSURE_PA))).append('\n')
 				.append("temperature=").append(Long.toUnsignedString(Double.doubleToRawLongBits(STANDARD_TEMPERATURE_K))).append('\n');

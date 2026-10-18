@@ -76,19 +76,19 @@ public final class GasLiquidPhaseModel {
 
 	/** Creates a gas-side batch with exact phase mass and stable standard-volume nanos. */
 	public GasInventory gasBatch(ThermalPhaseTransition transition, long batches) {
-		double mass = transition.massKgPerBatch().multiply(batches).toDouble();
-		return gasBatch(transition, batches, Map.of(), mass);
+		long massUnits = mmm.units.Mass.exactUnits(transition.massKgPerBatch().multiply(batches).numerator(), transition.massKgPerBatch().multiply(batches).denominator());
+		return gasBatch(transition, batches, Map.of(), massUnits);
 	}
 
 	/** Creates a phase batch carrying already-conserved species and a physical-kilogram mass residual. */
 	public GasInventory gasBatch(
 			ThermalPhaseTransition transition, long batches,
-			Map<String, Long> speciesQuanta, double massResidual
+			Map<String, Long> speciesQuanta, long massResidualUnits
 	) {
 		if (batches <= 0L || batches > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) {
 			throw new IllegalArgumentException("Gas phase batch count is invalid");
 		}
-		if (speciesQuanta == null || !Double.isFinite(massResidual)) {
+		if (speciesQuanta == null) {
 			throw new IllegalArgumentException("Gas phase chemical columns are invalid");
 		}
 		PhasePair pair = requirePair(transition);
@@ -114,9 +114,9 @@ public final class GasLiquidPhaseModel {
 			}
 			canonical.merge(entry.getKey(), entry.getValue(), Math::addExact);
 		}
-		return new GasInventory(List.of(new GasComponentAmount(component.id(), nanos, mass,
+		return new GasInventory(List.of(new GasComponentAmount(component.id(), nanos, mmm.units.Mass.exactUnits(transition.massKgPerBatch().multiply(batches).numerator(), transition.massKgPerBatch().multiply(batches).denominator()),
 				canonical.entrySet().stream().map(entry -> new GasComponentAmount.SpeciesAmount(
-						entry.getKey(), entry.getValue())).toList(), massResidual)));
+						entry.getKey(), entry.getValue())).toList(), massResidualUnits)));
 	}
 
 	public double internalEnergyAtTemperature(

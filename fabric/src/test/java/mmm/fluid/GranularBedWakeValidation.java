@@ -49,7 +49,7 @@ public final class GranularBedWakeValidation {
 		var domain = fixture();
 		var backend = new CpuFluidSolverBackend();
 		long inventory = domain.totalGranularSolidVolumeSvq();
-		long massBits = Double.doubleToRawLongBits(domain.totalGranularMass());
+		long massUnits = Double.doubleToRawLongBits(domain.totalGranularMass());
 		long settled = 0, woken = 0, contacts = 0;
 		double totalStepMs = 0, maximumStepMs = 0; int completedSteps = 0;
 		int peakActive = 0;
@@ -73,7 +73,7 @@ public final class GranularBedWakeValidation {
 			contacts += candidate.movingBodyCoupling().coupledMarkers();
 			if (phase >= 2) peakActive = Math.max(peakActive, domain.granularState.parcels.count());
 			require(domain.totalGranularSolidVolumeSvq() == inventory, "Bed transport changed solid volume");
-			require(Double.doubleToRawLongBits(domain.totalGranularMass()) == massBits, "Bed transport changed sand mass");
+			require(Double.doubleToRawLongBits(domain.totalGranularMass()) == massUnits, "Bed transport changed sand mass");
 			require(domain.gasBoundary().auditClosed() && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"Bed transport broke gas/energy audit");
 			boolean atRest = domain.granularState.parcels.count() == 0
@@ -122,7 +122,7 @@ public final class GranularBedWakeValidation {
 			if (resistance > stokesSpeed) high = speed; else low = speed;
 		}
 		// Allow a grain to traverse the entire water depth at its registry-derived terminal speed.
-		return (int) Math.ceil(4 * domain.config.cellSize() / high / domain.config.timeStep());
+		return (int) Math.ceil(4 * domain.config().cellSize() / high / domain.config.timeStep());
 	}
 	private static void carrierTemperatureRefreshAndDiagnostics() throws Exception {
 		var domain = new FluidDomain(4, 4, 4,
@@ -163,7 +163,7 @@ public final class GranularBedWakeValidation {
 		int sand = registries.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		double mass = registries.granular().material(sand).referenceDensity() * svq / SolidVolume.SVQ_PER_CUBIC_METER;
-		require(domain.tryInsertExactGranular(1, 0, 1, sand, 0, svq, mass).inserted(), "Occupied wake fixture rejected its retained parcel");
+		require(domain.tryInsertExactGranular(1, 0, 1, sand, 0, svq, mmm.units.Mass.fromKilograms(mass)).inserted(), "Occupied wake fixture rejected its retained parcel");
 		domain.ensureGrid();
 		occupiedWakePointKeepsState(domain);
 		var inventory = domain.granularState.inventory; int bedCell = domain.cellIndex(1, 0, 1);
@@ -214,7 +214,7 @@ public final class GranularBedWakeValidation {
 	private static double depositMoment(FluidDomain domain) {
 		double[] moment = {0};
 		domain.granularState.deposits.forEachGroup((cell, porosity, material, composition, svq, mass) ->
-				moment[0] += mass * (cell % domain.sizeX + .5) * domain.config.cellSize());
+				moment[0] += mass * (cell % domain.sizeX + .5) * domain.config().cellSize());
 		return moment[0];
 	}
 
@@ -253,7 +253,7 @@ public final class GranularBedWakeValidation {
 			require(domain.granularCollision.positionValid(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()),
 					"Released parcel overlaps collision geometry");
 		}
-		GranularCarrierValidation.requireNonOverlappingRelease(domain.exportGranularState(), domain.config.cellSize());
+		GranularCarrierValidation.requireNonOverlappingRelease(domain.exportGranularState(), domain.config().cellSize());
 		var group = domain.exportGranularState().depositGroups().getFirst();
 		int cell = group.cell(), above = cell + domain.sizeX;
 		var material = domain.granularState.registry.material(domain.granularState.deposits.dominantGroup(cell).materialHandle());
@@ -281,7 +281,7 @@ public final class GranularBedWakeValidation {
 		long svq = SolidVolume.SVQ_PER_CELL / 4;
 		double density = r.granular().material(r.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND)).referenceDensity();
 		var ledger = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
-				BuiltinGranularDefinitions.FINE_SAND, svq, density * svq / SolidVolume.SVQ_PER_CUBIC_METER, null)));
+				BuiltinGranularDefinitions.FINE_SAND, svq, mmm.units.Mass.fromKilograms(density * svq / SolidVolume.SVQ_PER_CUBIC_METER), null)));
 		for (int z = 2; z < 6; z++) for (int x = 2; x < 6; x++) {
 			require(domain.tryInsertExactGranular(x, 0, z, ledger, 0, true).inserted(), "Sand rejected");
 		}

@@ -117,6 +117,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 	private float recordingTimeStep;
 	private int particleCount;
 	private float particleVolumeLedger;
+	private long massUnits;
 	private volatile Diagnostics lastDiagnostics = new Diagnostics(
 			0.0F, 0.0F, 0.0F, 0.0F, 0.0F, Float.NaN, 0, 0, 0.0F, true);
 	private volatile long lastStepNanos;
@@ -261,6 +262,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			}
 		}
 		particleVolumeLedger = particleCount * 0.125F;
+		massUnits = Math.multiplyExact(particleCount, mmm.units.SolverUnitScale.forCellSize(config.cellSize()).massUnitsForNormalized(0.125 * config.density()));
 		if (memoryMode == MemoryMode.DEVICE_LOCAL_STAGING) uploadInitialState(uploadSlot);
 		GpuStepScheduler.SubmissionSlot solidUploadSlot = memoryMode == MemoryMode.HOST_VISIBLE ? null : scheduler.acquire();
 		GpuBuffer solidUpload = memoryMode == MemoryMode.HOST_VISIBLE ? buffer(SOLIDS) : readback.transferBuffer();
@@ -305,7 +307,7 @@ final class VulkanFlipPipeline implements AutoCloseable {
 			solidMask[cell] = (byte) solid;
 		}
 		return new GpuProbeCheckpoint(generation, config.nx(), config.ny(), config.nz(), config.cellSize(),
-				particleCount, particleVolumeLedger, positionVolume, particleVelocities, solidMask);
+				particleCount, particleVolumeLedger, positionVolume, particleVelocities, mmm.units.Mass.distributeLiquid(massUnits, positionVolume), solidMask);
 	}
 
 	int markerCellCountFromParticles() {

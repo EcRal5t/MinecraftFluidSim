@@ -44,10 +44,10 @@ final class ChemicalReactionStage {
 		var result = chemistry.reactDirtyCells(
 				state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(),
 				arrays.positionX, arrays.positionY, arrays.positionZ,
-				arrays.mass, arrays.materialHandle,
+				arrays.massUnits, arrays.materialHandle,
 				handle -> access.materialRegistry().material(handle).id(), state.particles().count(),
 				thermal == null ? (marker, mixture, mass) -> { }
-						: (marker, mixture, mass) -> requireThermalCandidate(thermal, marker, mixture, mass, state.thermalMarkers()),
+						: (marker, mixture, mass) -> requireThermalCandidate(thermal, marker, mixture, chemistry.unitScale().normalizedMass(mass), state.thermalMarkers()),
 				(markers, masses) -> {
 					try {
 						momentum.add(CarrierMassMomentum.plan(state.particles(), markers, masses, 0, 0, 0, 0));

@@ -15,9 +15,7 @@ public record GasStateSnapshot(
 		List<Node> nodes,
 		int[] pieceNodeOrdinal,
 		GasAuditLedger externalSource,
-		GasAuditLedger escapedSink,
-		SignedDyadic massRoundoff,
-		SignedDyadic residualRoundoff
+		GasAuditLedger escapedSink
 ) {
 	public record Node(int topologyKey, GasInventory inventory) {
 		public Node {
@@ -34,7 +32,7 @@ public record GasStateSnapshot(
 				|| !(chemicalRegistryFingerprint.isEmpty() || chemicalRegistryFingerprint.matches("[0-9a-f]{64}"))
 				|| nodes == null || nodes.size() > GasLimits.MAX_NODES_PER_REGION
 				|| pieceNodeOrdinal == null || pieceNodeOrdinal.length != pieceCount(sizeX, sizeY, sizeZ)
-				|| externalSource == null || escapedSink == null || massRoundoff == null || residualRoundoff == null) {
+				|| externalSource == null || escapedSink == null) {
 			throw new IllegalArgumentException("Invalid gas state identity or dimensions");
 		}
 		nodes = List.copyOf(nodes);
@@ -108,8 +106,7 @@ public record GasStateSnapshot(
 			nodes.add(new Node(keys[node], network.inventory(node))); previousKey = keys[node];
 		}
 		return new GasStateSnapshot(sizeX, sizeY, sizeZ, network.registry().fingerprint(), chemicalRegistryFingerprint,
-				List.copyOf(nodes), runtimePieceNodeId, network.externalSource(), network.escapedSink(),
-				network.massRoundoff(), network.residualRoundoff());
+				List.copyOf(nodes), runtimePieceNodeId, network.externalSource(), network.escapedSink());
 	}
 
 	private static int pieceCount(int x, int y, int z) {

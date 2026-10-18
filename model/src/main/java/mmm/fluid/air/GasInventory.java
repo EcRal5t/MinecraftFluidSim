@@ -49,15 +49,12 @@ public final class GasInventory {
 	public long standardVolumeNanos() { return standardVolumeNanos; }
 	public boolean isEmpty() { return components.isEmpty(); }
 
-	/** Derived physical mass in kg, summed in canonical component order. */
-	public double totalMass() {
-		double result = 0.0;
-		for (GasComponentAmount component : components) result += component.mass();
-		if (!(Double.isFinite(result) && result >= 0.0)) {
-			throw new IllegalStateException("Gas inventory mass is not finite");
-		}
+	public long totalMassUnits() {
+		long result = 0;
+		for (GasComponentAmount component : components) result = Math.addExact(result, component.massUnits());
 		return result;
 	}
+	public double totalMass() { return mmm.units.Mass.kilograms(totalMassUnits()); }
 
 	/** Physical kg/m³: exact component sum divided by volume, rounded once in the final unit. */
 	public double density(double availableVolume) {
@@ -66,14 +63,7 @@ public final class GasInventory {
 			throw new IllegalArgumentException("Gas density needs a valid available volume");
 		}
 		if (isEmpty()) return 0.0;
-		SignedDyadic mass = SignedDyadic.ZERO;
-		for (GasComponentAmount component : components) mass = mass.add(SignedDyadic.of(component.mass()));
-		SignedDyadic volume = SignedDyadic.of(availableVolume);
-		int power = mass.exponent() - volume.exponent();
-		BigInteger numerator = mass.significand(), denominator = volume.significand();
-		if (power >= 0) numerator = numerator.shiftLeft(power);
-		else denominator = denominator.shiftLeft(-power);
-		double result = new ExactRational(numerator, denominator).toDouble();
+		double result = totalMass() / availableVolume;
 		if (!(Double.isFinite(result) && result >= 0.0)) {
 			throw new IllegalStateException("Gas inventory density is not finite");
 		}
@@ -144,25 +134,24 @@ public final class GasInventory {
 	 * proportional to the transition's mass quantum.
 	 */
 	public Split splitComponent(
-			String componentId, long selectedNanos, double selectedMass, double selectedMassResidual
+			String componentId, long selectedNanos, long selectedMass, long selectedMassResidual
 	) {
 		GasComponentAmount selected = component(componentId);
-		if (selected == null || selectedNanos <= 0L || !Double.isFinite(selectedMass) || selectedMass <= 0.0
-				|| !Double.isFinite(selectedMassResidual)) {
+		if (selected == null || selectedNanos <= 0L || selectedMass <= 0) {
 			throw new IllegalArgumentException("Gas component phase columns are invalid");
 		}
 		Split proportional = splitComponent(componentId, selectedNanos);
 		GasComponentAmount first = proportional.first().components().getFirst();
 		if (selectedNanos == selected.standardVolumeNanos()) {
-			if (!closeColumn(selectedMass, selected.mass())
-					|| !closeColumn(selectedMassResidual, selected.massResidual())) {
+			if (selectedMass != selected.massUnits()
+					|| selectedMassResidual != selected.massResidualUnits()) {
 				throw new RepresentationException("A complete gas component take must preserve all columns");
 			}
 			return proportional;
 		}
-		double remainingMass = selected.mass() - selectedMass;
-		double remainingResidual = selected.massResidual() - selectedMassResidual;
-		if (!(remainingMass > 0.0) || !Double.isFinite(remainingResidual)) {
+		long remainingMass = Math.subtractExact(selected.massUnits(), selectedMass);
+		long remainingResidual = Math.subtractExact(selected.massResidualUnits(), selectedMassResidual);
+		if (remainingMass <= 0) {
 			throw new RepresentationException("Gas component phase remainder cannot store the requested mass/residual");
 		}
 		GasComponentAmount exactFirst = new GasComponentAmount(componentId, first.standardVolumeNanos(),
@@ -242,7 +231,7 @@ public final class GasInventory {
 		}
 		if (species.size() > GasLimits.MAX_SPECIES_PER_COMPONENT)
 			throw new RepresentationException("Gas component exceeds its species slots");
-		double mass = first.mass() + second.mass(), residual = first.massResidual() + second.massResidual();
+		long mass = Math.addExact(first.massUnits(), second.massUnits()), residual = Math.addExact(first.massResidualUnits(), second.massResidualUnits());
 		if (!Double.isFinite(mass) || !Double.isFinite(residual))
 			throw new RepresentationException("Gas component mass/residual exceeds its finite representation");
 		return new GasComponentAmount(first.componentId(),
@@ -264,25 +253,24 @@ public final class GasInventory {
 			speciesShares[species] = largestRemainder(source.species().get(species).amountQuanta(), weights);
 		}
 		GasComponentAmount[] result = new GasComponentAmount[nanos.length];
-		SignedDyadic assignedMass = SignedDyadic.ZERO, assignedResidual = SignedDyadic.ZERO;
+		long assignedMass = 0, assignedResidual = 0;
 		int pivot = 0;
 		for (int child = 1; child < nanos.length; child++) if (nanos[child] > nanos[pivot]) pivot = child;
-		// The largest share absorbs the source reduction error; tiny children retain their own scale.
+		// The largest share retains all integer division remainders.
 		for (int ordinal = 0; ordinal < nanos.length; ordinal++) {
 			int child = ordinal == nanos.length - 1 ? pivot : ordinal < pivot ? ordinal : ordinal + 1;
 			if (nanos[child] == 0L) continue;
-			double mass, residual;
+			long mass, residual;
 			if (child == pivot) {
-				mass = SignedDyadic.of(source.mass()).subtract(assignedMass).toDouble();
-				residual = SignedDyadic.of(source.massResidual()).subtract(assignedResidual).toDouble();
+				mass = Math.subtractExact(source.massUnits(), assignedMass);
+				residual = Math.subtractExact(source.massResidualUnits(), assignedResidual);
 			} else {
-				double fraction = (double) nanos[child] / source.standardVolumeNanos();
-				mass = source.mass() * fraction;
-				residual = source.massResidual() * fraction;
-				assignedMass = assignedMass.add(SignedDyadic.of(mass));
-				assignedResidual = assignedResidual.add(SignedDyadic.of(residual));
+				mass = mmm.units.Mass.portion(source.massUnits(), nanos[child], source.standardVolumeNanos());
+				residual = mmm.units.Mass.portion(source.massResidualUnits(), nanos[child], source.standardVolumeNanos());
+				assignedMass = Math.addExact(assignedMass, mass);
+				assignedResidual = Math.addExact(assignedResidual, residual);
 			}
-			if (!(Double.isFinite(mass) && mass > 0) || !Double.isFinite(residual))
+			if (mass <= 0)
 				throw new RepresentationException("Positive gas share cannot store its mass/residual columns");
 			ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>();
 			for (int entry = 0; entry < source.species().size(); entry++) if (speciesShares[entry][child] > 0L) {
@@ -295,10 +283,6 @@ public final class GasInventory {
 
 	public record Split(GasInventory first, GasInventory second) { }
 	private record Remainder(int index, BigInteger value) { }
-	private static boolean closeColumn(double first, double second) {
-		return Math.abs(first - second) <= Math.max(1.0E-12,
-				Math.max(Math.ulp(first), Math.ulp(second)) * 16.0);
-	}
 
 	@Override public boolean equals(Object other) {
 		return other instanceof GasInventory inventory && components.equals(inventory.components);

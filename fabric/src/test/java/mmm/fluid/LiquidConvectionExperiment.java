@@ -127,7 +127,7 @@ public final class LiquidConvectionExperiment {
 
 	private static double temperatureMode(FluidDomain domain, int n) {
 		double sum = 0, norm = 0;
-		double height = domain.config.cellSize() * n;
+		double height = domain.config().cellSize() * n;
 		for (int p = 0; p < domain.particleCount(); p++) {
 			double x = domain.particles.positionX(p) / height, y = domain.particles.positionY(p) / height;
 			double mode = Math.cos(Math.PI * x / 2) * Math.sin(Math.PI * y);

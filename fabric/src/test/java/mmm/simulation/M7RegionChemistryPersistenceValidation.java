@@ -296,20 +296,18 @@ public final class M7RegionChemistryPersistenceValidation {
 			totalMass += mass[marker];
 		}
 		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
-				totalMass, BuiltinFluidMaterials.DEFAULT_PALETTE, positions, pure.copyParticleVelocities(), pure.copySolidMask(),
-				mass, new int[pure.particleCount()]));
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalMass), BuiltinFluidMaterials.DEFAULT_PALETTE, positions, pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[pure.particleCount()]));
 	}
 
 	private static void assertChemicalStateEquals(FlipChemicalParticleState expected, FlipChemicalParticleState actual) {
 		check(expected.materials().materials().equals(actual.materials().materials())
 				&& Arrays.equals(expected.materials().copyPositionVolume(), actual.materials().copyPositionVolume())
-				&& Arrays.equals(expected.materials().copyParticleMass(), actual.materials().copyParticleMass())
+				&& Arrays.equals(expected.materials().copyParticleMassUnits(), actual.materials().copyParticleMassUnits())
 				&& expected.mixtures().equals(actual.mixtures())
 				&& Arrays.equals(expected.copyMarkerMixtureIndex(), actual.copyMarkerMixtureIndex())
 				&& Arrays.equals(expected.copyIndicator(), actual.copyIndicator())
 				&& Arrays.equals(expected.copySpeciesTotals(), actual.copySpeciesTotals())
-				&& expected.residualLedgerBits() == actual.residualLedgerBits()
+				&& expected.residualLedgerUnits() == actual.residualLedgerUnits()
 				&& expected.externalSource().groups().equals(actual.externalSource().groups())
 				&& expected.escapedSink().groups().equals(actual.escapedSink().groups()),
 				"chemical state changed across persistence");

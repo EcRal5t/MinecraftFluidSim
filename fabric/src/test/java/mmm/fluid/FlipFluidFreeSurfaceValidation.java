@@ -67,7 +67,7 @@ public final class FlipFluidFreeSurfaceValidation {
 					centre[a] = axis < 0 ? (high ? upper - height / 4 : lower + height / 4)
 							: axis == a ? (high ? upper - height / 2 : lower + height / 2) : (lower + upper) / 2;
 				}
-				var markers = new MarkerGridIndex(27, 1); var particles = new LiquidParticleStore(1);
+				var markers = new MarkerGridIndex(27, 1); var particles = new LiquidParticleStore(1, mmm.units.SolverUnitScale.forCellSize(1));
 				java.util.Arrays.fill(markers.cellMarkerHead, -1); markers.cellMarkerHead[cell] = 0; markers.particleCellNext[0] = -1;
 				particles.setCount(1); particles.setVolume(0, (float) volume);
 				particles.setPositionX(0, (float) (1 + centre[0])); particles.setPositionY(0, (float) (1 + centre[1]));
@@ -107,7 +107,7 @@ public final class FlipFluidFreeSurfaceValidation {
 				velocity[(normal + 1) % 3] = 2; velocity[(normal + 2) % 3] = -.5F;
 				var domain = new FluidDomain(4, 4, 4, config, 512);
 				domain.restoreParticleState(new FlipParticleState(4, 4, 4, .5F, 1, .125F,
-						new float[] {point[0], point[1], point[2], .125F}, velocity, masks));
+						new float[] {point[0], point[1], point[2], .125F}, velocity, mmm.units.Mass.createLiquid(.5F, 1000.0, new float[] {point[0], point[1], point[2], .125F}), masks));
 				domain.sealDomainBoundary();
 				if (full) {
 					for (int c = 0; c < 64; c++) if (masks[c] == 0) domain.setVolume(c % 4, c / 4 % 4, c / 16, 1);
@@ -214,7 +214,7 @@ public final class FlipFluidFreeSurfaceValidation {
 					float original = positions[3]; positions[3] = Math.nextDown(original);
 					System.arraycopy(positions, 0, positions, 4 * (count - 1), 3);
 					positions[4 * (count - 1) + 3] = Math.nextDown(original - positions[3]);
-					domain.restoreParticleState(new FlipParticleState(2, 2, 2, 1, count, 8 * fill, positions, new float[count * 3], new byte[8]));
+					domain.restoreParticleState(new FlipParticleState(2, 2, 2, 1, count, 8 * fill, positions, new float[count * 3], mmm.units.Mass.createLiquid(1, 1000.0, positions), new byte[8]));
 				}
 				domain.rebuildGridFromParticles();
 				// Exercise the same pressure refresh used by previewed granular occupancy.
@@ -240,7 +240,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		transferCurrentGrid(domain);
 		var support = transferBudget(domain);
 		var projection = new ResolvedMarkerVelocity(domain.sizeX, domain.sizeY, domain.sizeZ,
-				domain.config.cellSize(), domain.geometry.cutCells);
+				domain.config().cellSize(), domain.geometry.cutCells);
 		float[] velocity = new float[domain.particleCount()];
 		int resolved = 0, unresolved = 0;
 		for (int p = 0; p < velocity.length; p++) {
@@ -318,7 +318,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			positions[4 * p + 1] = 2.5F; positions[4 * p + 2] = 2.5F; positions[4 * p + 3] = .125F;
 			velocities[3 * p + (p < 2 ? 0 : 1)] = (p & 1) == 0 ? 1 : -1;
 		}
-		domain.restoreParticleState(new FlipParticleState(14, 5, 5, 1, sources, sources * .125F, positions, velocities, masks));
+		domain.restoreParticleState(new FlipParticleState(14, 5, 5, 1, sources, sources * .125F, positions, velocities, mmm.units.Mass.createLiquid(1, 1000.0, positions), masks));
 		int[] target = new int[2]; int count = 0;
 		for (int p = 0; p < domain.particles.count(); p++) {
 			if (domain.particleCellIndex(p) == domain.cellIndex(4, 2, 2)) {
@@ -548,14 +548,14 @@ public final class FlipFluidFreeSurfaceValidation {
 		for (float amount : new float[] {Float.MIN_VALUE, Math.scalb(1.0F, -25), Math.nextUp(.125F), Math.nextDown(1.0F)}) {
 			var domain = new FluidDomain(2, 2, 2, strictConfig());
 			int count = ConservativeMarkerSampling.targetMarkers(amount);
-			float[] positions = new float[4 * count]; float h = domain.config.cellSize();
+			float[] positions = new float[4 * count]; float h = domain.config().cellSize();
 			for (int p = 0; p < count; p++) {
 				positions[4 * p] = h * (.25F + .5F * (p & 1));
 				positions[4 * p + 1] = h * (.25F + .5F * (p >> 1 & 1));
 				positions[4 * p + 2] = h * (.25F + .5F * (p >> 2 & 1));
 				positions[4 * p + 3] = amount / count;
 			}
-			domain.restoreParticleState(new FlipParticleState(2, 2, 2, h, count, amount, positions, new float[3 * count], new byte[8]));
+			domain.restoreParticleState(new FlipParticleState(2, 2, 2, h, count, amount, positions, new float[3 * count], mmm.units.Mass.createLiquid(h, 1000.0, positions), new byte[8]));
 			check(domain.particleCount() == ConservativeMarkerSampling.targetMarkers(amount), "Positive initial inventory lost its carrier");
 			check(mmm.units.SignedDyadic.of(amount).equals(mmm.units.SignedDyadic.sum(
 					domain.particles.directArrays().volume, domain.particleCount())), "Cell initialization discarded positive inventory");
@@ -738,7 +738,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		for (int axis = 0; axis < 3; axis++) positions[4 * (count - 1) + axis] = 0.375F;
 		positions[3] = Math.nextDown(positions[3]);
 		positions[4 * (count - 1) + 3] = Math.nextDown(Math.ulp(0.125F) / 2);
-		full.restoreParticleState(new FlipParticleState(4, 4, 2, full.config.cellSize(), count, 32, positions, new float[count * 3], new byte[32]));
+		full.restoreParticleState(new FlipParticleState(4, 4, 2, full.config.cellSize(), count, 32, positions, new float[count * 3], mmm.units.Mass.createLiquid(full.config.cellSize(), 1000.0, positions), new byte[32]));
 		for (int p = 0; p < count; p++) {
 			full.particles.setPositionX(p, 0.375F); full.particles.setPositionY(p, 0.375F); full.particles.setPositionZ(p, 0.375F);
 		}
@@ -763,7 +763,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		}
 		// Move an admissible point next to the completely closed shared face.
 		positions[4] = 0.98F;
-		domain.restoreParticleState(new FlipParticleState(2, 2, 2, 1, 28, 3.5F, positions, new float[28 * 3], masks));
+		domain.restoreParticleState(new FlipParticleState(2, 2, 2, 1, 28, 3.5F, positions, new float[28 * 3], mmm.units.Mass.createLiquid(1, 1000.0, positions), masks));
 		domain.ensureGrid(); double left = 0, right = 0;
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) {
 			int a = domain.cellIndex(0, y, z), b = domain.cellIndex(1, y, z);
@@ -912,7 +912,7 @@ public final class FlipFluidFreeSurfaceValidation {
 				}
 			}
 			domain.restoreParticleState(new FlipParticleState(2, 5, 2, config.cellSize(), count,
-					4 * (2 + surfaceFraction), positions, new float[count * 3], new byte[20]));
+					4 * (2 + surfaceFraction), positions, new float[count * 3], mmm.units.Mass.createLiquid(config.cellSize(), 1000.0, positions), new byte[20]));
 			float exactVolume = domain.totalVolume();
 			for (int step = 0; step < 200; step++) domain.step();
 			float theta = surfaceFraction >= 1.0F - 1.0E-6F ? 0.5F : surfaceFraction - 0.5F;
@@ -1002,7 +1002,7 @@ public final class FlipFluidFreeSurfaceValidation {
 
 	private static float dropletCenterAbovePool(FluidDomain domain) {
 		double weighted = 0, volume = 0;
-		for (int p = 0; p < domain.particleCount(); p++) if (domain.particles.positionY(p) > 6 * domain.config.cellSize()) {
+		for (int p = 0; p < domain.particleCount(); p++) if (domain.particles.positionY(p) > 6 * domain.config().cellSize()) {
 			weighted += domain.particles.positionY(p) * domain.particles.volume(p); volume += domain.particles.volume(p);
 		}
 		check(volume > 0, "isolated droplet disappeared above its pool");

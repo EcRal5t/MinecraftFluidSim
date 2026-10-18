@@ -358,7 +358,7 @@ public final class ThermalOwnerStoreValidation {
 						&& Math.abs(state.observeTemperatureInCell(0, context) - actualTemperature) <= tolerance,
 						"Caloric knot used a preceding interval's energy magnitude or accumulated cancellation");
 				var contacts = state.finiteDeviceContacts(List.of(new FiniteDeviceExchangeCoordinator.CellContactRequest(0, 0, 1)), context);
-				var body = new FiniteThermalBodyState(0, registry.fingerprint(), device.id(), 1, energy);
+				var body = new FiniteThermalBodyState(0, registry.fingerprint(), device.id(), mmm.units.Mass.fromKilograms(1), energy);
 				var exchange = FiniteThermalExchange.plan(registry, body, contacts, .01, 8);
 				require(!exchange.changed() && exchange.contacts().getFirst().internalEnergyDeltaJ() == 0,
 						"Caloric knot created a finite-device heat flow between equal actual temperatures");
@@ -474,8 +474,12 @@ public final class ThermalOwnerStoreValidation {
 		require(Math.abs(caloric.temperature(SignedDyadic.of(raw)) - actual) <= tolerance
 				&& Double.isFinite(caloric.energy(actual)) && Double.isFinite(caloric.roundoff(actual)),
 				"Prospective liquid caloric state or roundoff retained an overflowing specific intermediate");
+		long bodyMass;
+		try { bodyMass = mmm.units.Mass.fromKilograms(mass); }
+		catch (ArithmeticException outsideInventoryRange) { return; }
+		if (bodyMass == 0L || mmm.units.Mass.kilograms(bodyMass) != mass) return;
 		var contacts = state.finiteDeviceContacts(List.of(new FiniteDeviceExchangeCoordinator.CellContactRequest(0, 0, 1)), context);
-		var body = new FiniteThermalBodyState(0, registry.fingerprint(), device.id(), mass, raw);
+		var body = new FiniteThermalBodyState(0, registry.fingerprint(), device.id(), bodyMass, raw);
 		var exchange = FiniteThermalExchange.plan(registry, body, contacts, .01, 8);
 		require(!exchange.changed() && exchange.contacts().getFirst().internalEnergyDeltaJ() == 0, "Equivalent caloric paths created equal-temperature device heat flow");
 	}
@@ -514,7 +518,7 @@ public final class ThermalOwnerStoreValidation {
 				chemistry.fingerprint(), ""));
 		var canonical = new java.util.TreeMap<String, Long>();
 		for (String id : ids) canonical.put(id, ChemicalLimits.QUANTA_PER_MOL);
-		var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry, canonical, 0);
+		var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry, canonical, 0L);
 		long expected = Double.doubleToRawLongBits(function.baseEnergy(0, 1, mixture, chemistry));
 		for (int[] order : new int[][]{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}) {
 			var map = new java.util.LinkedHashMap<String, Long>();
@@ -581,7 +585,7 @@ public final class ThermalOwnerStoreValidation {
 		require(close(column.temperature(0, markers), 315), "An evicted input is recomputed exactly");
 		for (long amount : new long[] {1_000_000_000L, 2_000_000_000L, 1_000_000_000L}) {
 			markers.composition = ChemicalMixtureRecord.fromStableAmounts(chemistry,
-					Map.of(BuiltinChemicalDefinitions.H2O, amount), 0);
+					Map.of(BuiltinChemicalDefinitions.H2O, amount), 0L);
 			double energy = function.internalEnergyAtTemperature(0, markers.mass, markers.composition, chemistry, 330);
 			var prospective = column.caloricInventory(0, markers.mass, markers.composition, chemistry);
 			require(Double.doubleToRawLongBits(prospective.energy(330)) == Double.doubleToRawLongBits(energy)
@@ -618,16 +622,16 @@ public final class ThermalOwnerStoreValidation {
 		CoherentPhaseStore store = new CoherentPhaseStore(8, 8);
 		CoherentPhaseStore.Composition first = new CoherentPhaseStore.Composition(List.of(
 				new CoherentPhaseStore.Component("test:a", 8L),
-				new CoherentPhaseStore.Component("test:b", 4L)), Double.doubleToRawLongBits(-12.0));
+				new CoherentPhaseStore.Component("test:b", 4L)), mmm.units.Mass.fromKilograms(-12.0));
 		CoherentPhaseStore.Composition second = new CoherentPhaseStore.Composition(List.of(
 				new CoherentPhaseStore.Component("test:a", 8L),
-				new CoherentPhaseStore.Component("test:b", 4L)), Double.doubleToRawLongBits(-12.0));
-		store.add(new CoherentPhaseStore.Group(3, "test:thermal/solid", 8L, 4.0, first, 32.0));
-		store.add(new CoherentPhaseStore.Group(3, "test:thermal/solid", 8L, 4.0, second, 32.0));
+				new CoherentPhaseStore.Component("test:b", 4L)), mmm.units.Mass.fromKilograms(-12.0));
+		store.add(new CoherentPhaseStore.Group(3, "test:thermal/solid", 8L, mmm.units.Mass.fromKilograms(4.0), first, 32.0));
+		store.add(new CoherentPhaseStore.Group(3, "test:thermal/solid", 8L, mmm.units.Mass.fromKilograms(4.0), second, 32.0));
 		CoherentPhaseStore.Group removed = store.take(3, "test:thermal/solid", 5L, chemistry);
 		for (CoherentPhaseStore.Group part : List.of(removed, store.group(0))) {
 			double represented = ChemicalMixtureRecord.fromStableAmounts(chemistry,
-					part.composition().stableAmounts(), part.composition().massResidual()).massKilograms(chemistry);
+					part.composition().stableAmounts(), part.composition().massResidualUnits()).massKilograms(chemistry);
 			require(close(represented, part.mass()), "coherent split closes each physical mass column");
 		}
 		require(store.groupCount() == 1 && store.group(0).occupiedVolumeSvq() == 11L
@@ -640,8 +644,8 @@ public final class ThermalOwnerStoreValidation {
 			long total = 10_401_812;
 			long quanta = total - 1;
 			var composition = new CoherentPhaseStore.Composition(List.of(new CoherentPhaseStore.Component("test:a", quanta)),
-					Double.doubleToRawLongBits(residual));
-			var source = new CoherentPhaseStore.Group(0, "test:thermal/solid", total, quanta + residual, composition, 1.0);
+					mmm.units.Mass.fromKilograms(residual));
+			var source = new CoherentPhaseStore.Group(0, "test:thermal/solid", total, mmm.units.Mass.fromKilograms(quanta + residual), composition, 1.0);
 			var portions = new CoherentPhaseStore(1, 1); portions.add(source);
 			long take = tinyRemoved ? 1 : total - 1;
 			var previewRemaining = portions.previewSplit(0, source.phaseId(), take, chemistry).remaining();
@@ -651,25 +655,22 @@ public final class ThermalOwnerStoreValidation {
 			var large = tinyRemoved ? portions.group(0) : piece;
 			require(tiny.composition().stableAmounts().equals(Map.of("test:a", 1L))
 					&& large.composition().stableAmounts().equals(Map.of("test:a", quanta - 1)), "Chemical split changed integer species totals");
-			SignedDyadic representedTiny = SignedDyadic.of(1.0).add(SignedDyadic.of(tiny.composition().massResidual()));
-			require(representedTiny.equals(SignedDyadic.of(tiny.mass())), "Tiny chemical residual amplified the large mass ULP");
-			SignedDyadic residualError = SignedDyadic.of(piece.composition().massResidual())
-					.add(SignedDyadic.of(portions.group(0).composition().massResidual())).subtract(SignedDyadic.of(residual));
-			if (residualError.signum() < 0) residualError = residualError.negate();
-			require(residualError.compareTo(SignedDyadic.of(Math.ulp(large.composition().massResidual()) * .5)) <= 0,
-					"Chemical residual exceeded one large-share rounding");
+			require(Math.addExact(mmm.units.Mass.fromKilograms(1.0), tiny.composition().massResidualUnits()) == tiny.massUnits(),
+					"Tiny coherent composition does not close its integer mass");
+			require(Math.addExact(piece.composition().massResidualUnits(), portions.group(0).composition().massResidualUnits())
+					== mmm.units.Mass.fromKilograms(residual), "Coherent split changed integer mass residual");
 		}
 		var limited = new CoherentPhaseStore(2, 1);
-		var inert = new CoherentPhaseStore.Group(0, "test:thermal/solid", 1, 1, null, 1);
+		var inert = new CoherentPhaseStore.Group(0, "test:thermal/solid", 1, mmm.units.Mass.fromKilograms(1), null, 1);
 		limited.add(inert);
 		try {
-			limited.previewAdd(new CoherentPhaseStore.Group(1, inert.phaseId(), 1, 1, null, 1));
+			limited.previewAdd(new CoherentPhaseStore.Group(1, inert.phaseId(), 1, mmm.units.Mass.fromKilograms(1), null, 1));
 			throw new AssertionError("Coherent group capacity accepted a new group");
 		} catch (CoherentPhaseStore.InventoryUnavailableException expected) {
 			require(limited.snapshot().equals(List.of(inert)), "Unavailable coherent addition changed inventory");
 		}
 		try {
-			limited.previewAdd(new CoherentPhaseStore.Group(0, inert.phaseId(), 1, 1, first, 1));
+			limited.previewAdd(new CoherentPhaseStore.Group(0, inert.phaseId(), 1, mmm.units.Mass.fromKilograms(1), first, 1));
 			throw new AssertionError("Inert and chemical coherent inventories merged");
 		} catch (CoherentPhaseStore.InventoryUnavailableException swallowedBug) {
 			throw new AssertionError("Invalid coherent capability was classified as a smaller physical candidate", swallowedBug);
@@ -711,13 +712,13 @@ public final class ThermalOwnerStoreValidation {
 		var registry = new ThermalRegistry(List.of(sand, ice)); var function = new ThermalStateFunction(registry);
 		for (var material : List.of(sand, ice)) for (double temperature : new double[] {1e-9, 1e-6, 300, 900}) {
 			long total = 10_401_873;
-			double density = material == sand ? 2600 : 916.7, mass = density * Math.scalb((double) total, -27);
+			double density = material == sand ? 2600 : 916.7, mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(density * Math.scalb((double) total, -27)));
 			int handle = registry.materialHandle(material.id());
 			double energy = function.internalEnergyAtTemperature(handle, mass, Map.of(), temperature);
 			double sourceK = function.stateForInternalEnergy(handle, mass, Map.of(), energy).temperatureK();
 			for (long taken : new long[] {1, total - 1, total}) {
 				var store = new CoherentPhaseStore(1, 1);
-				store.add(new CoherentPhaseStore.Group(0, material.id(), total, mass, null, energy));
+				store.add(new CoherentPhaseStore.Group(0, material.id(), total, mmm.units.Mass.fromKilograms(mass), null, energy));
 				var split = store.previewSplit(0, material.id(), taken, null);
 				var preview = split.removed(); var expectedRemainingGroup = split.remaining();
 				var removed = store.take(0, material.id(), taken, null);
@@ -734,10 +735,8 @@ public final class ThermalOwnerStoreValidation {
 				} else require(store.groupCount() == 0 && removed.internalEnergy() == energy, "Whole coherent take changed raw energy");
 				SignedDyadic error = sum.subtract(SignedDyadic.of(energy)); if (error.signum() < 0) error = error.negate();
 				require(error.compareTo(SignedDyadic.of(Math.ulp(energy) * .5)) <= 0, "Coherent energy exceeded single large-share rounding");
-				SignedDyadic massSum = SignedDyadic.of(removed.mass());
-				if (taken != total) massSum = massSum.add(SignedDyadic.of(store.group(0).mass()));
-				SignedDyadic massError = massSum.subtract(SignedDyadic.of(mass)); if (massError.signum() < 0) massError = massError.negate();
-				require(massError.compareTo(SignedDyadic.of(Math.ulp(mass) * .5)) <= 0, "Coherent mass exceeded single large-share rounding");
+				require(Math.addExact(removed.massUnits(), taken == total ? 0L : store.group(0).massUnits()) == mmm.units.Mass.fromKilograms(mass),
+						"Coherent take changed integer mass inventory");
 				if (material != sand) continue;
 				var column = new GranularEnergyColumn(1, 1); var key = new GranularEnergyColumn.DepositKey(0, 0, 0);
 				column.addActive(energy); column.addDeposit(key, energy);
@@ -767,7 +766,7 @@ public final class ThermalOwnerStoreValidation {
 			}
 		}
 		var subnormal = new CoherentPhaseStore(1, 1);
-		var original = new CoherentPhaseStore.Group(0, ice.id(), 2, Double.MIN_VALUE, null, 1);
+		var original = new CoherentPhaseStore.Group(0, ice.id(), 2, 1L, null, 1);
 		subnormal.add(original);
 		try { subnormal.take(0, ice.id(), 1, null); throw new AssertionError("Unrepresentable positive coherent share accepted"); }
 		catch (CoherentPhaseStore.InventoryUnavailableException expected) { require(subnormal.group(0).equals(original), "Rejected coherent split changed original columns"); }

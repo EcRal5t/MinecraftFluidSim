@@ -10,9 +10,9 @@ import java.util.TreeMap;
 final class ChemicalReactionAllocation {
 	private ChemicalReactionAllocation() { }
 
-	record Plan(int[] markers, ChemicalMixtureRecord[] mixtures, double[] masses, long quantaDelta, int changed) { }
+	record Plan(int[] markers, ChemicalMixtureRecord[] mixtures, long[] masses, long quantaDelta, int changed) { }
 
-	static Plan plan(ChemicalParcelStore store, List<Integer> markers, long[] inventory, double[] markerMass) {
+	static Plan plan(ChemicalParcelStore store, List<Integer> markers, long[] inventory, long[] markerMassUnits) {
 		ChemicalRegistry registry = store.registry();
 		double[] weights = new double[markers.size()];
 		int[] ordinals = new int[markers.size()];
@@ -29,8 +29,8 @@ final class ChemicalReactionAllocation {
 		}
 		repairEmptyParcels(distributed, ordinals);
 		ChemicalMixtureRecord[] replacements = new ChemicalMixtureRecord[markers.size()];
-		double[] masses = new double[markers.size()];
-		double previousMass = 0.0, candidateMass = 0.0;
+		long[] masses = new long[markers.size()];
+		long previousMass = 0, candidateMass = 0;
 		long delta = 0L;
 		int changed = 0;
 		for (int i = 0; i < markers.size(); i++) {
@@ -39,7 +39,7 @@ final class ChemicalReactionAllocation {
 				throw new ChemicalReactionEngine.BudgetExceededException("Reaction allocation exceeds parcel species capacity");
 			}
 			replacements[i] = new ChemicalMixtureRecord(distributed[i].keySet().stream().mapToInt(Integer::intValue).toArray(),
-					distributed[i].values().stream().mapToLong(Long::longValue).toArray(), store.record(marker).massResidualKilogramsBits());
+					distributed[i].values().stream().mapToLong(Long::longValue).toArray(), store.record(marker).massResidualUnits());
 			double kilograms = replacements[i].massKilograms(registry);
 			if (!(Double.isFinite(kilograms) && kilograms > 0.0)) {
 				throw new ChemicalReactionEngine.BudgetExceededException("Reaction allocation requires positive carrier mass");
@@ -47,22 +47,20 @@ final class ChemicalReactionAllocation {
 			ExactRational speciesDelta = replacements[i].exactSpeciesMassKilograms(registry)
 					.subtract(store.record(marker).exactSpeciesMassKilograms(registry));
 			try {
-				masses[i] = ChemicalMixtureRecord.solverMassAfterSpeciesChange(markerMass[marker], speciesDelta, store.unitScale());
+				masses[i] = ChemicalMixtureRecord.massUnitsAfterSpeciesChange(markerMassUnits[marker], speciesDelta);
 			} catch (IllegalArgumentException | ArithmeticException unavailable) {
 				throw new ChemicalReactionEngine.BudgetExceededException("Reaction mass update exceeds representation precision");
 			}
 			if (!(Double.isFinite(masses[i]) && masses[i] > 0.0)) {
 				throw new ChemicalReactionEngine.BudgetExceededException("Reaction allocation requires positive solver mass");
 			}
-			previousMass += markerMass[marker];
-			candidateMass += masses[i];
+			previousMass = Math.addExact(previousMass, markerMassUnits[marker]);
+			candidateMass = Math.addExact(candidateMass, masses[i]);
 			delta = Math.addExact(delta, replacements[i].totalQuanta() - store.record(marker).totalQuanta());
 			if (!replacements[i].equals(store.record(marker))) changed++;
 		}
-		double tolerance = Math.max(1.0E-9, Math.max(Math.ulp(previousMass), Math.ulp(candidateMass)) * 8.0);
-		if (!Double.isFinite(previousMass) || !Double.isFinite(candidateMass) || Math.abs(previousMass - candidateMass) > tolerance) {
-			throw new ChemicalReactionEngine.BudgetExceededException("Reaction marker-mass allocation exceeds representation precision");
-		}
+		if (previousMass != candidateMass) throw new IllegalStateException("Reaction mass counts do not close");
+
 		return new Plan(ordinals, replacements, masses, delta, changed);
 	}
 

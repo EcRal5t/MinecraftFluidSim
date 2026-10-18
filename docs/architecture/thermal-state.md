@@ -78,7 +78,7 @@
 
 `ThermalDomainState` 统一管理各载体内能、审计和派生热网格。
 `ThermalCellOperations` 处理局部平衡与能量分配，`FluidThermalBinding` 连接流体候选和热状态。
-只有液体 marker 的 solver mass 需要乘 `cellSize³` 换算为 kg；其他载体与设备直接保存 kg。
+全部载体与有限设备保存[统一质量整数](system-overview.md#units)，热学计算从中派生 kg。液体求解质量权重由 kg 除 `cellSize³` 得到。
 
 单位约定统一见[设计书](system-overview.md#units)。
 物种参考能字段为 `reference_internal_energy_j_per_mol`，材料参考能、比热、导热率分别使用 `reference_specific_energy_j_per_kg`、`specific_heat_j_per_kg_k`、`conductivity_w_per_m_k`。

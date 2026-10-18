@@ -62,7 +62,7 @@ final class GranularSettlementGeometryPlan {
 		if (target.open != capacity) throw new IllegalStateException("Settlement target capacity changed during closure");
 		var parcel = parcels.parcel(index);
 		target.packing.add(new GranularDepositStore.SolidPortion(parcel.materialHandle(), parcel.solidCompositionHandle(),
-				parcel.solidVolumeSvq(), parcel.mass()));
+				parcel.solidVolumeSvq(), parcel.massUnits()));
 		included[index] = true; members[count] = index; targets[count] = cell; open[count++] = capacity;
 		return target.packing.bulkVolumeSvq() <= capacity;
 	}

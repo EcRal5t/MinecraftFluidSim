@@ -399,8 +399,6 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 				+ "/" + domain.gasBoundary().externalSource().entries()
 				+ " sink=" + domain.gasBoundary().escapedSink().standardVolumeNanos()
 				+ "/" + domain.gasBoundary().escapedSink().entries()
-				+ " massRoundoff=" + domain.gasBoundary().massRoundoff()
-				+ " residualRoundoff=" + domain.gasBoundary().residualRoundoff()
 				+ " audit=" + domain.gasBoundary().auditClosed() + nodes;
 	}
 

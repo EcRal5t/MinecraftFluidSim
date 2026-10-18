@@ -141,8 +141,6 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	public int markerCellCount() { return metrics.markerCellCount(); }
 	public FluidSolverConfig config() { return config; }
 	public SolverUnitScale unitScale() { return unitScale; }
-	public double physicalMassKilograms(double solverMass) { return unitScale.kilograms(solverMass); }
-	public double solverMassForKilograms(double kilograms) { return unitScale.solverMass(kilograms); }
 	public double physicalVolumeCubicMetres(double normalizedVolume) { return unitScale.cubicMeters(normalizedVolume); }
 	public boolean hasMaterialState() { return materialRegistry != null; }
 	public boolean hasChemistryState() { return chemicalParcels != null; }
@@ -318,18 +316,18 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		}
 		granularState.inventory.requireCanClear();
 		if (granularState.inventory.totalSolidVolumeSvq() != plan.solidVolumeSvq()
-				|| Double.doubleToRawLongBits(granularState.inventory.totalMass()) != plan.totalMassBits()
+				|| granularState.inventory.totalMassUnits() != plan.totalMassUnits()
 				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.granularColumn().exactEnergy())
 				.equals(plan.internalEnergy())
 				|| granularState.parcels.count() != plan.activeParcels()
 				|| granularState.deposits.groupCount() != plan.depositGroups()) {
 			throw new IllegalStateException("Granular inventory changed after clear planning");
 		}
-		long auditSvq = 0L; double auditMass = 0.0;
+		long auditSvq = 0L; long auditMass = 0L;
 		for (GranularAuditLedger.Entry entry : plan.removed().entries()) {
-			auditSvq = Math.addExact(auditSvq, entry.solidVolumeSvq()); auditMass += entry.mass();
+			auditSvq = Math.addExact(auditSvq, entry.solidVolumeSvq()); auditMass = Math.addExact(auditMass, entry.massUnits());
 		}
-		if (auditSvq != plan.solidVolumeSvq() || !massClose(auditMass, Double.longBitsToDouble(plan.totalMassBits()))) {
+		if (auditSvq != plan.solidVolumeSvq() || auditMass != plan.totalMassUnits()) {
 			throw new IllegalStateException("Granular clear audit differs from removed inventory");
 		}
 	}
@@ -337,7 +335,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	public record GranularClear(long solidVolumeSvq, double mass, int activeParcels, int depositGroups) { }
 	public record GranularClearPlan(
 			GranularAuditLedger removed, GranularAuditLedger sinkAfter,
-			long solidVolumeSvq, long totalMassBits, int activeParcels, int depositGroups,
+			long solidVolumeSvq, long totalMassUnits, int activeParcels, int depositGroups,
 			SignedDyadic internalEnergy, long granularRevision
 	) { }
 	/** Read-only cell inventory used to aim the dry-container scoop at particle/deposit truth. */
@@ -496,10 +494,10 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	/** Inventory-only exact insertion used by fixtures and transactional service adapters. */
 	public GranularInsertion tryInsertExactGranular(
 			int cellX, int cellY, int cellZ, int materialHandle, int compositionHandle,
-			long solidVolumeSvq, double mass
+			long solidVolumeSvq, long massUnits
 	) {
 		return granularTransferPlanner.insertExactInventory(cellX, cellY, cellZ, materialHandle,
-				compositionHandle, solidVolumeSvq, mass);
+				compositionHandle, solidVolumeSvq, massUnits);
 	}
 
 	/** All-or-nothing dry-container insertion. The ledger is already stable-ID validated by the item adapter. */
@@ -555,8 +553,8 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		gridDirty = true;
 	}
 
-	public record GranularInsertion(boolean inserted, long solidVolumeSvq, double mass, String failure) {
-		static GranularInsertion rejected(String reason) { return new GranularInsertion(false, 0L, 0.0, reason); }
+	public record GranularInsertion(boolean inserted, long solidVolumeSvq, long massUnits, String failure) {
+		static GranularInsertion rejected(String reason) { return new GranularInsertion(false, 0L, 0L, reason); }
 	}
 	public record GranularExtraction(
 			boolean transferred, GranularTransferLedger ledger, double internalEnergy, String failure

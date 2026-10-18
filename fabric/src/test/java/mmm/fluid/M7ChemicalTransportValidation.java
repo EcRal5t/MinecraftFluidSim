@@ -66,9 +66,9 @@ public final class M7ChemicalTransportValidation {
 		check(maximum.pool().speciesEntryCapacity() == 16 * 73_729, "species entry cap is not 16 * handle cap");
 		check(maximum.pool().cpuBytes() < 32_768, "empty mixture pool allocates only its initial storage");
 		var growing = new mmm.chemistry.ChemicalMixturePool(130);
-		var record = new ChemicalMixtureRecord(new int[] {0}, new long[] {1}, 0);
+		var record = new ChemicalMixtureRecord(new int[] {0}, new long[] {1}, 0L);
 		try {
-			growing.create(new ChemicalMixtureRecord(new int[] {ChemicalLimits.MAX_SPECIES}, new long[] {1}, 0));
+			growing.create(new ChemicalMixtureRecord(new int[] {ChemicalLimits.MAX_SPECIES}, new long[] {1}, 0L));
 			throw new AssertionError("out-of-budget species was accepted");
 		} catch (IllegalArgumentException expected) { }
 		check(growing.liveCount() == 0, "invalid insertion preserves the pool budget");
@@ -85,7 +85,7 @@ public final class M7ChemicalTransportValidation {
 			check(growing.create(record) == handle, "released handles retain stack order");
 		}
 		var replacement = new ChemicalMixtureRecord(new int[] {0, 1}, new long[] {2, 3},
-				Double.doubleToRawLongBits(-0.0));
+				mmm.units.Mass.fromKilograms(-0.0));
 		growing.overwrite(1, replacement);
 		check(growing.record(1) == replacement && growing.record(2) == record,
 				"replacing one owner preserves other handles sharing its previous immutable record");
@@ -95,8 +95,8 @@ public final class M7ChemicalTransportValidation {
 		catch (IllegalArgumentException expected) { }
 		try { growing.release(1); throw new AssertionError("double release was accepted"); }
 		catch (IllegalArgumentException expected) { }
-		check(growing.create(replacement) == 1 && growing.record(1).massResidualKilogramsBits()
-				== Double.doubleToRawLongBits(-0.0), "reused handle retains raw residual bits");
+		check(growing.create(replacement) == 1 && growing.record(1).massResidualUnits()
+				== 0L, "reused handle retains integer mass residual");
 		long[] equal = BinaryVolumeAllocator.allocate(5L, new float[]{0.125F, 0.125F}, new int[]{7, 3});
 		check(Arrays.equals(equal, new long[]{2L, 3L}), "largest remainder did not use marker ordinal tie-break");
 		long[] unequal = BinaryVolumeAllocator.allocate(10L, new float[]{0.1F, 0.2F, 0.3F}, new int[]{0, 1, 2});
@@ -107,7 +107,7 @@ public final class M7ChemicalTransportValidation {
 		java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
 		for (int index = 0; index < 32; index++) species.put("test:species_" + index, 1L);
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				"mmm:water", false, 1.0, 1.0, Double.doubleToRawLongBits(0.0), species)));
+				"mmm:water", false, 1.0, mmm.units.Mass.fromKilograms(1.0), mmm.units.Mass.fromKilograms(0.0), species)));
 		try {
 			ChemicalAuditLedgerCodec.AuditLedgers decoded = ChemicalAuditLedgerCodec.decode(
 					ChemicalAuditLedgerCodec.encode(ledger, ChemicalTransferLedger.EMPTY));
@@ -118,16 +118,16 @@ public final class M7ChemicalTransportValidation {
 		}
 
 		ChemicalTransferLedger.Builder demo = ChemicalTransferLedger.builder(CHEMISTRY);
-		double markerMass = 15.625;
+		long markerMassUnits = mmm.units.Mass.fromKilograms(15.625);
 		ChemicalMixtureRecord acid = chemicalRecordAtMarkerMass(
-				Map.of(BuiltinChemicalDefinitions.HCL, 1_000_000L), markerMass);
+				Map.of(BuiltinChemicalDefinitions.HCL, 1_000_000L), markerMassUnits);
 		ChemicalMixtureRecord base = chemicalRecordAtMarkerMass(
-				Map.of(BuiltinChemicalDefinitions.NAOH, 1_000_000L), markerMass);
+				Map.of(BuiltinChemicalDefinitions.NAOH, 1_000_000L), markerMassUnits);
 		for (int marker = 0; marker < 11_520; marker++) {
-			demo.add(BuiltinFluidMaterials.WATER.id(), true, 0.125, markerMass, acid);
+			demo.add(BuiltinFluidMaterials.WATER.id(), true, 0.125, markerMassUnits, acid);
 		}
 		for (int marker = 0; marker < 9_216; marker++) {
-			demo.add(BuiltinFluidMaterials.WATER.id(), false, 0.125, markerMass, base);
+			demo.add(BuiltinFluidMaterials.WATER.id(), false, 0.125, markerMassUnits, base);
 		}
 		ChemicalParcelStore audit = new ChemicalParcelStore(CHEMISTRY,
 				SolverUnitScale.forCellSize(0.5F), 1, 1);
@@ -135,12 +135,12 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static ChemicalMixtureRecord chemicalRecordAtMarkerMass(
-			Map<String, Long> stableAmounts, double markerMassKilograms
+			Map<String, Long> stableAmounts, long markerMassUnits
 	) {
 		ChemicalMixtureRecord zeroResidual = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, stableAmounts, 0.0);
+				CHEMISTRY, stableAmounts, 0L);
 		return ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY, stableAmounts,
-				markerMassKilograms - zeroResidual.exactSpeciesMassKilograms(CHEMISTRY).toDouble());
+				Math.subtractExact(markerMassUnits, zeroResidual.speciesMassUnits(CHEMISTRY)));
 	}
 
 	private static void validateMissingPhaseRejectedBeforeBinding() {
@@ -227,7 +227,7 @@ public final class M7ChemicalTransportValidation {
 		int markerCount = domain.particleCount();
 		long[] residualBits = new long[markerCount];
 		for (int marker = 0; marker < markerCount; marker++) {
-			residualBits[marker] = domain.chemicalParcels().record(marker).massResidualKilogramsBits();
+			residualBits[marker] = domain.chemicalParcels().record(marker).massResidualUnits();
 		}
 		double massBefore = domain.totalMass();
 		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
@@ -243,7 +243,7 @@ public final class M7ChemicalTransportValidation {
 				"logical chemistry did not run exactly on the dirty cell");
 		check(domain.particleCount() == markerCount, "reaction-only step changed marker ownership");
 		for (int marker = 0; marker < markerCount; marker++) {
-			check(domain.chemicalParcels().record(marker).massResidualKilogramsBits() == residualBits[marker],
+			check(domain.chemicalParcels().record(marker).massResidualUnits() == residualBits[marker],
 					"same-cell reaction rewrote marker mass residual truth");
 		}
 		check(Math.abs(domain.totalMass() - massBefore) <= Math.max(1.0E-9, Math.ulp(massBefore) * 8.0),
@@ -262,17 +262,17 @@ public final class M7ChemicalTransportValidation {
 		ChemicalParcelStore parcels = new ChemicalParcelStore(
 				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), markerCount, 64);
 		ChemicalMixtureRecord acid = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.HCL, 1_000_000L), 0.0);
+				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.HCL, 1_000_000L), 0L);
 		ChemicalMixtureRecord base = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.NAOH, 1L), 0.0);
+				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.NAOH, 1L), 0L);
 		ChemicalMixtureRecord water = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 1L), 0.0);
+				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 1L), 0L);
 		parcels.assign(0, acid, false);
 		parcels.assign(1, base, true);
 		parcels.assign(2, water, false);
 		parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
 		float[] positions = {1.5F, 1.5F, 1.5F};
-		double[] masses = {acid.massKilograms(CHEMISTRY), base.massKilograms(CHEMISTRY), water.massKilograms(CHEMISTRY)};
+		long[] masses = {acid.massUnits(CHEMISTRY), base.massUnits(CHEMISTRY), water.massUnits(CHEMISTRY)};
 		int[] material = new int[markerCount];
 		ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
 				positions, positions, positions, masses, material,
@@ -295,15 +295,15 @@ public final class M7ChemicalTransportValidation {
 		ChemicalParcelStore parcels = new ChemicalParcelStore(
 				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), markerCount, 64);
 		ChemicalMixtureRecord first = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 1_001L), 0.125);
+				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 1_001L), mmm.units.Mass.fromKilograms(0.125));
 		ChemicalMixtureRecord second = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 2_003L), -0.25);
+				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 2_003L), mmm.units.Mass.fromKilograms(-0.25));
 		parcels.assign(0, first, true);
 		parcels.assign(1, second, false);
 		parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
 		float[] positions = {1.5F, 1.5F};
-		double[] masses = {first.massKilograms(CHEMISTRY), second.massKilograms(CHEMISTRY)};
-		double[] beforeMasses = masses.clone();
+		long[] masses = {first.massUnits(CHEMISTRY), second.massUnits(CHEMISTRY)};
+		long[] beforeMasses = masses.clone();
 		int[] validations = {0};
 		ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
 				positions, positions, positions, masses, new int[markerCount],
@@ -339,9 +339,8 @@ public final class M7ChemicalTransportValidation {
 	private static void validateSplitAndIndicator() {
 		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				4, 4, 4, STATIC_CONFIG.cellSize(), 1, 0.25, 250.0, MATERIALS.materials(),
-				new float[] {1.5F, 1.5F, 1.5F, 0.25F}, new float[3], new byte[64],
-				new double[] {250.0}, new int[] {0}));
+				4, 4, 4, STATIC_CONFIG.cellSize(), 1, 0.25, mmm.units.SolverUnitScale.forCellSize(STATIC_CONFIG.cellSize()).massUnitsForNormalized(250.0), MATERIALS.materials(),
+				new float[] {1.5F, 1.5F, 1.5F, 0.25F}, new float[3], new byte[64], java.util.Arrays.stream(new double[] {250.0}).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(STATIC_CONFIG.cellSize()).massUnitsForNormalized(m)).toArray(), new int[] {0}));
 		domain.bindChemistry(CHEMISTRY);
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1_001L), true);
 		long before = domain.chemicalParcels().totalQuanta();
@@ -426,7 +425,7 @@ public final class M7ChemicalTransportValidation {
 		float[] x = new float[capacity], y = new float[capacity], z = new float[capacity];
 		float[] vx = new float[capacity], vy = new float[capacity], vz = new float[capacity];
 		float[] volume = new float[capacity];
-		double[] mass = new double[capacity];
+		long[] mass = new long[capacity];
 		int[] material = new int[capacity], phase = new int[capacity];
 		boolean[] solid = new boolean[64];
 		ChemicalParcelStore parcels = new ChemicalParcelStore(
@@ -436,7 +435,7 @@ public final class M7ChemicalTransportValidation {
 			y[marker] = 1.1F + 0.18F * ((marker >>> 2) & 3);
 			z[marker] = 1.2F + 0.03F * (marker & 1);
 			volume[marker] = 0.03F;
-			mass[marker] = 30.0;
+			mass[marker] = mmm.units.Mass.fromKilograms(30.0);
 			parcels.assignDefault(marker, BuiltinFluidMaterials.WATER.id(), volume[marker], 1.0F, mass[marker],
 					(marker & 1) != 0);
 		}
@@ -494,16 +493,16 @@ public final class M7ChemicalTransportValidation {
 		check(state.mixtures().size() < mixtureIndices.length && mixtureIndices[0] != mixtureIndices[1],
 				"handoff fixture must include shared and distinct compositions");
 		FlipMaterialParticleState material = state.materials();
-		double[] alteredMass = material.copyParticleMass();
+		long[] alteredMass = material.copyParticleMassUnits();
 		alteredMass[1] += 1.0;
 		alteredMass[2] -= 1.0;
 		FlipMaterialParticleState altered = new FlipMaterialParticleState(
 				material.sizeX(), material.sizeY(), material.sizeZ(), material.cellSize(), material.particleCount(),
-				material.totalVolume(), material.totalMass(), material.materials(), material.copyPositionVolume(),
+				material.totalVolume(), mmm.units.SolverUnitScale.forCellSize(material.cellSize()).massUnitsForNormalized(material.totalMass()), material.materials(), material.copyPositionVolume(),
 				material.copyParticleVelocities(), material.copySolidMask(), alteredMass, material.copyMaterialPaletteIndex());
 		try {
 			new FlipChemicalParticleState(altered, CHEMISTRY, state.mixtures(), mixtureIndices,
-					state.copyIndicator(), state.copySpeciesTotals(), state.residualLedgerBits(),
+					state.copyIndicator(), state.copySpeciesTotals(), state.residualLedgerUnits(),
 					state.externalSource(), state.escapedSink());
 			throw new AssertionError("Per-marker mass validation must detect redistributed mass");
 		} catch (IllegalArgumentException expected) {
@@ -511,7 +510,7 @@ public final class M7ChemicalTransportValidation {
 		}
 		FlipChemicalParticleState decoded = new FlipChemicalParticleState(material, CHEMISTRY,
 				state.mixtures(), mixtureIndices, state.copyIndicator(), state.copySpeciesTotals(),
-				state.residualLedgerBits(), state.externalSource(), state.escapedSink());
+				state.residualLedgerUnits(), state.externalSource(), state.escapedSink());
 		var equivalent = new ChemicalRegistry(CHEMISTRY.species(), CHEMISTRY.phases(), CHEMISTRY.reactions());
 		check(decoded.runtimeMixtures(equivalent).equals(state.runtimeMixtures(CHEMISTRY)),
 				"decoded and captured chemical records disagree");
@@ -519,7 +518,7 @@ public final class M7ChemicalTransportValidation {
 		java.util.Collections.reverse(reversed);
 		try {
 			new FlipChemicalParticleState(material, CHEMISTRY, reversed, mixtureIndices,
-					state.copyIndicator(), state.copySpeciesTotals(), state.residualLedgerBits(),
+					state.copyIndicator(), state.copySpeciesTotals(), state.residualLedgerUnits(),
 					state.externalSource(), state.escapedSink());
 			throw new AssertionError("Unsorted chemical handoff was accepted");
 		} catch (IllegalArgumentException expected) { }
@@ -532,7 +531,7 @@ public final class M7ChemicalTransportValidation {
 				"chemical handoff changed indicator bits");
 		check(state.mixtures().equals(restored.exportChemicalParticleState().mixtures()),
 				"chemical handoff changed canonical mixture table");
-		check(state.residualLedgerBits() == restored.exportChemicalParticleState().residualLedgerBits(),
+		check(state.residualLedgerUnits() == restored.exportChemicalParticleState().residualLedgerUnits(),
 				"chemical handoff changed raw residual ledger");
 		check(state.externalSource().groups().equals(restored.exportChemicalParticleState().externalSource().groups())
 				&& state.escapedSink().groups().equals(restored.exportChemicalParticleState().escapedSink().groups()),
@@ -560,7 +559,7 @@ public final class M7ChemicalTransportValidation {
 		source.setMarkerMaterial(0, MATERIALS, 0);
 		source.bindChemistry(CHEMISTRY);
 		FlipMaterialParticleState original = source.exportMaterialParticleState();
-		double[] mass = original.copyParticleMass();
+		long[] mass = original.copyParticleMassUnits();
 		float[] positionVolume = original.copyPositionVolume();
 		SolverUnitScale unitScale = SolverUnitScale.forCellSize(config.cellSize());
 		java.util.ArrayList<ChemicalMixtureRecord> mixtures = new java.util.ArrayList<>(original.particleCount());
@@ -570,16 +569,16 @@ public final class M7ChemicalTransportValidation {
 			java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>(initial.stableAmounts(CHEMISTRY));
 			int cellX = (int) Math.floor(positionVolume[marker * 4] / config.cellSize());
 			if (cellX == 2) {
-				long saltQuanta = Math.round(unitScale.kilograms(mass[marker]) * 0.10
+				long saltQuanta = Math.round(mmm.units.Mass.kilograms(mass[marker]) * 0.10
 						* ChemicalLimits.QUANTA_PER_MOL / CHEMISTRY.species(CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.NACL)).molarMassKgPerMol().toDouble());
 				amounts.merge(BuiltinChemicalDefinitions.NACL, saltQuanta, Math::addExact);
 			}
 			ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(
-					CHEMISTRY, amounts, initial.massResidualKilograms());
+					CHEMISTRY, amounts, initial.massResidualUnits());
 			mixtures.add(mixture);
-			mass[marker] = unitScale.solverMass(mixture.massKilograms(CHEMISTRY));
+			mass[marker] = mixture.massUnits(CHEMISTRY);
 		}
-		double totalMass = mmm.units.SignedDyadic.sum(mass).toDouble();
+		long totalMass = mmm.units.Mass.sum(mass);
 		FlipMaterialParticleState materials = new FlipMaterialParticleState(
 				original.sizeX(), original.sizeY(), original.sizeZ(), original.cellSize(), original.particleCount(),
 				original.totalVolume(), totalMass, original.materials(), positionVolume,
@@ -612,8 +611,8 @@ public final class M7ChemicalTransportValidation {
 					BuiltinChemicalDefinitions.NACL, 456_789L + marker), true);
 		}
 		long[] expectedSpecies = source.chemicalParcels().speciesTotals(source.particleCount());
-		long expectedResidual = source.exportChemicalParticleState().residualLedgerBits();
-		double expectedMass = source.totalMass();
+		long expectedResidual = source.exportChemicalParticleState().residualLedgerUnits();
+		long expectedMass = source.totalMassUnits();
 
 		FluidDomain.ExactChemicalTransfer extracted = source.tryExtractExactChemical(1, 1, 1, 0.25F, 0);
 		check(extracted.transferred() && source.particleCount() == 0,
@@ -639,9 +638,9 @@ public final class M7ChemicalTransportValidation {
 		check(inserted.transferred(), "canonical chemical bucket could not be inserted");
 		check(Arrays.equals(expectedSpecies, restored.chemicalParcels().speciesTotals(restored.particleCount())),
 				"chemical bucket round-trip changed species inventory");
-		check(restored.exportChemicalParticleState().residualLedgerBits() == expectedResidual,
+		check(restored.exportChemicalParticleState().residualLedgerUnits() == expectedResidual,
 				"chemical bucket round-trip changed raw mass residual ledger");
-		check(Double.doubleToRawLongBits(restored.totalMass()) == Double.doubleToRawLongBits(expectedMass),
+		check(restored.totalMassUnits() == expectedMass,
 				"chemical bucket round-trip changed exact mass");
 		for (int marker = 0; marker < restored.particleCount(); marker++) {
 			check(restored.chemicalParcels().indicator(marker), "chemical bucket round-trip lost indicator provenance");
@@ -659,8 +658,8 @@ public final class M7ChemicalTransportValidation {
 		ChemicalContents incompatible = new ChemicalContents(CHEMISTRY.fingerprint(),
 				mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL, List.of(new ChemicalContents.Group(
 				BuiltinFluidMaterials.OIL.id(), false, 1L,
-				Double.doubleToRawLongBits(CHEMISTRY.species(CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H2O))
-						.molarMassKgPerMol().toDouble()), Double.doubleToRawLongBits(0.0),
+				mmm.units.Mass.fromKilograms(CHEMISTRY.species(CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H2O))
+						.molarMassKgPerMol().toDouble()), mmm.units.Mass.fromKilograms(0.0),
 				List.of(new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O,
 						mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL)))));
 		try {
@@ -805,19 +804,19 @@ public final class M7ChemicalTransportValidation {
 		ChemicalParcelStore parcels = new ChemicalParcelStore(
 				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), markers, cells);
 		float[] x = new float[markers], y = new float[markers], z = new float[markers];
-		double[] mass = new double[markers];
+		long[] mass = new long[markers];
 		int[] material = new int[markers];
 		ChemicalMixtureRecord acid = ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,
-				Map.of(BuiltinChemicalDefinitions.HCL, 1_000_003L), 0.0);
+				Map.of(BuiltinChemicalDefinitions.HCL, 1_000_003L), 0L);
 		ChemicalMixtureRecord base = ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,
-				Map.of(BuiltinChemicalDefinitions.NAOH, 1_000_003L), 0.0);
+				Map.of(BuiltinChemicalDefinitions.NAOH, 1_000_003L), 0L);
 		Arrays.fill(x, 1.5F); Arrays.fill(y, 1.5F); Arrays.fill(z, 1.5F);
 		long[] samples = new long[100];
 		for (int iteration = -20; iteration < samples.length; iteration++) {
 			for (int marker = 0; marker < markers; marker++) {
 				ChemicalMixtureRecord input = (marker & 1) == 0 ? acid : base;
 				parcels.assign(marker, input, false);
-				mass[marker] = input.massKilograms(CHEMISTRY);
+				mass[marker] = input.massUnits(CHEMISTRY);
 			}
 			parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
 			long start = System.nanoTime();
@@ -871,7 +870,7 @@ public final class M7ChemicalTransportValidation {
 		FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
 				"unrepresentable extraction");
 		check(!domain.tryInsertExactMixture(1, 1, 1,
-				List.of(new FluidDomain.MaterialPortion(0, Math.scalb(1.0, -100), Math.scalb(1_000.0, -100))),
+				List.of(new FluidDomain.MaterialPortion(0, Math.scalb(1.0, -100), 1L)),
 				0, true).transferred(), "subquantum source formed a carrier without species");
 		FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
 				"unrepresentable insertion");
@@ -913,13 +912,13 @@ public final class M7ChemicalTransportValidation {
 		FluidDomain domain = new FluidDomain(2, 2, 2, STATIC_CONFIG, 256);
 		domain.setVolume(0, 0, 0, 1.0F);
 		domain.particles.setVolume(0, 6.0F);
-		domain.particles.setMass(0, 6_000.0);
+		domain.particles.setMassUnits(0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(6_000.0));
 		domain.gridDirty = true;
 		domain.setMarkerMaterial(0, MATERIALS, 0);
 		domain.bindChemistry(CHEMISTRY);
 		FluidDomainState before = domain.captureAuthoritativeState();
 		check(!domain.tryInsertExactMixture(1, 1, 1,
-				List.of(new FluidDomain.MaterialPortion(0, 2.0, 2_000.0)), 2, true).transferred(),
+				List.of(new FluidDomain.MaterialPortion(0, 2.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(2_000.0))), 2, true).transferred(),
 				"local empty cells hid globally displaced liquid from insertion capacity");
 		FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
 				"global capacity rejection");
@@ -944,18 +943,17 @@ public final class M7ChemicalTransportValidation {
 	private static FluidDomain domainWithCoarseMarkers(int count) {
 		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		float[] positionsAndVolumes = new float[4 * count];
-		double[] masses = new double[count];
+		long[] masses = new long[count];
 		for (int marker = 0; marker < count; marker++) {
 			positionsAndVolumes[4 * marker] = count == 1 ? 1.5F : 1.25F + 0.5F * marker;
 			positionsAndVolumes[4 * marker + 1] = 1.5F;
 			positionsAndVolumes[4 * marker + 2] = 1.5F;
 			positionsAndVolumes[4 * marker + 3] = 0.125F;
-			masses[marker] = 125.0;
+			masses[marker] = mmm.units.SolverUnitScale.forCellSize(STATIC_CONFIG.cellSize()).massUnitsForNormalized(125.0);
 		}
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				4, 4, 4, STATIC_CONFIG.cellSize(), count, 0.125 * count, 125.0 * count,
-				MATERIALS.materials(), positionsAndVolumes, new float[3 * count], new byte[64],
-				masses, new int[count]));
+				4, 4, 4, STATIC_CONFIG.cellSize(), count, 0.125 * count, mmm.units.SolverUnitScale.forCellSize(STATIC_CONFIG.cellSize()).massUnitsForNormalized(125.0 * count),
+				MATERIALS.materials(), positionsAndVolumes, new float[3 * count], new byte[64], masses, new int[count]));
 		domain.bindChemistry(CHEMISTRY);
 		return domain;
 	}

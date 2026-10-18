@@ -22,7 +22,7 @@ public final class MmmComponents {
 	/** Stable material id carried by a Matter, Motion & Mechanics material container. */
 	public static final DataComponentType<String> MATERIAL_ID = registerString("material_id");
 	/** Raw IEEE-754 double bits of the independent material-mass ledger. */
-	public static final DataComponentType<Long> FLUID_MASS_BITS = register("fluid_mass_bits");
+	public static final DataComponentType<Long> FLUID_MASS_UNITS = register("fluid_mass_units");
 	/** Canonical encoded per-material nanovolume/mass inventory for multi-component buckets. */
 	public static final DataComponentType<String> MIXTURE_COMPONENTS = registerString("mixture_components");
 	/** Canonical chemical contents; mutually exclusive with material_id/mixture_components. */

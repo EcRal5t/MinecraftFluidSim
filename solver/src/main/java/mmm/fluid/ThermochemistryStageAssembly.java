@@ -97,7 +97,7 @@ final class ThermochemistryStageAssembly {
 					@Override public void removeParticle(int marker) { domain.removeParticleInternalPhase(marker); }
 					@Override public void spawnParticle(
 							int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle,
-							double mass, ChemicalMixtureRecord mixture
+							long mass, ChemicalMixtureRecord mixture
 					) {
 						domain.spawnParticle(
 								cellX, cellY, cellZ, slot, volume, materialHandle, mass,

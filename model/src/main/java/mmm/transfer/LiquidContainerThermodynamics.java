@@ -151,11 +151,11 @@ public final class LiquidContainerThermodynamics {
 		for (FluidMixture.Component component : source.components()) {
 			FluidMixture.Component selectedPart = chosen.remove(component.materialId());
 			FluidMixture.Component remainingPart = left.remove(component.materialId());
-			validatePartition(component.volumeNanos(), component.mass(),
+			validatePartition(component.volumeNanos(), component.massUnits(),
 					selectedPart == null ? 0L : selectedPart.volumeNanos(),
-					selectedPart == null ? 0.0 : selectedPart.mass(),
+					selectedPart == null ? 0L : selectedPart.massUnits(),
 					remainingPart == null ? 0L : remainingPart.volumeNanos(),
-					remainingPart == null ? 0.0 : remainingPart.mass());
+					remainingPart == null ? 0L : remainingPart.massUnits());
 		}
 		if (!chosen.isEmpty() || !left.isEmpty()) throw new IllegalArgumentException("Material split added inventory");
 	}
@@ -174,11 +174,11 @@ public final class LiquidContainerThermodynamics {
 			String key = chemicalKey(group);
 			ChemicalContents.Group selectedPart = chosen.remove(key);
 			ChemicalContents.Group remainingPart = left.remove(key);
-			validatePartition(group.volumeNanos(), group.massKilograms(),
+			validatePartition(group.volumeNanos(), group.massUnits(),
 					selectedPart == null ? 0L : selectedPart.volumeNanos(),
-					selectedPart == null ? 0.0 : selectedPart.massKilograms(),
+					selectedPart == null ? 0L : selectedPart.massUnits(),
 					remainingPart == null ? 0L : remainingPart.volumeNanos(),
-					remainingPart == null ? 0.0 : remainingPart.massKilograms());
+					remainingPart == null ? 0L : remainingPart.massUnits());
 			Map<String, Long> sourceSpecies = speciesMap(group);
 			Map<String, Long> selectedSpecies = selectedPart == null ? Map.of() : speciesMap(selectedPart);
 			Map<String, Long> remainingSpecies = remainingPart == null ? Map.of() : speciesMap(remainingPart);
@@ -197,25 +197,15 @@ public final class LiquidContainerThermodynamics {
 	}
 
 	private static void validatePartition(
-			long sourceVolume, double sourceMass, long selectedVolume, double selectedMass,
-			long remainingVolume, double remainingMass
+			long sourceVolume, long sourceMass, long selectedVolume, long selectedMass,
+			long remainingVolume, long remainingMass
 	) {
 		if (Math.addExact(selectedVolume, remainingVolume) != sourceVolume) {
 			throw new IllegalArgumentException("Container split changed nanovolume inventory");
 		}
-		if (selectedVolume == 0L) {
-			if (selectedMass != 0.0 || Double.doubleToRawLongBits(remainingMass)
-					!= Double.doubleToRawLongBits(sourceMass)) {
-				throw new IllegalArgumentException("Container split changed unsplit mass inventory");
-			}
-		} else if (remainingVolume == 0L) {
-			if (remainingMass != 0.0 || Double.doubleToRawLongBits(selectedMass)
-					!= Double.doubleToRawLongBits(sourceMass)) {
-				throw new IllegalArgumentException("Container split changed fully selected mass inventory");
-			}
-		} else if (Double.doubleToRawLongBits(sourceMass - selectedMass)
-				!= Double.doubleToRawLongBits(remainingMass)) {
-			throw new IllegalArgumentException("Container split did not preserve subtraction-settled mass");
+		if (Math.addExact(selectedMass, remainingMass) != sourceMass
+				|| selectedVolume == 0L && selectedMass != 0L || remainingVolume == 0L && remainingMass != 0L) {
+			throw new IllegalArgumentException("Container split changed integer mass inventory");
 		}
 	}
 

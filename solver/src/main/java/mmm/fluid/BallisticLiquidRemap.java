@@ -43,7 +43,7 @@ final class BallisticLiquidRemap {
 			int p = original.get(i), cell = domain.particleCellIndex(position[0][i], position[1][i], position[2][i]);
 			var chemical = domain.chemicalParcels;
 			markers.add(new CellCarrierRemapPlan.Marker(cell, domain.particles.materialHandle(p), chemical != null && chemical.indicator(p),
-					domain.particles.volume(p), domain.particles.mass(p),
+					domain.particles.volume(p), domain.particles.massUnits(p),
 					position[0][i] / (double) h - cell % domain.sizeX - 0.5,
 					position[1][i] / (double) h - cell / domain.sizeX % domain.sizeY - 0.5,
 					position[2][i] / (double) h - cell / (domain.sizeX * domain.sizeY) - 0.5,

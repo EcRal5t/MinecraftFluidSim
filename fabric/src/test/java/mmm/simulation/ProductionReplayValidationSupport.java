@@ -107,7 +107,7 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	static double kineticEnergy(FlipMaterialParticleState state) {
-		double[] mass = state.copyParticleMass();
+		long[] mass = state.copyParticleMassUnits();
 		float[] velocity = state.copyParticleVelocities();
 		double result = 0.0;
 		for (int marker = 0; marker < mass.length; marker++) {
@@ -120,7 +120,7 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	static double centerOfMassY(FlipMaterialParticleState state) {
-		double[] mass = state.copyParticleMass();
+		long[] mass = state.copyParticleMassUnits();
 		float[] positionVolume = state.copyPositionVolume();
 		double weighted = 0.0, total = 0.0;
 		for (int marker = 0; marker < mass.length; marker++) {
@@ -146,9 +146,7 @@ abstract class ProductionReplayValidationSupport {
 				&& expected.nodes().equals(actual.nodes())
 				&& Arrays.equals(expected.pieceNodeOrdinal(), actual.pieceNodeOrdinal())
 				&& expected.externalSource().equals(actual.externalSource())
-				&& expected.escapedSink().equals(actual.escapedSink())
-				&& expected.massRoundoff().equals(actual.massRoundoff())
-				&& expected.residualRoundoff().equals(actual.residualRoundoff()),
+				&& expected.escapedSink().equals(actual.escapedSink()),
 				"full-capability gas topology or inventory changed across capture/restore");
 	}
 

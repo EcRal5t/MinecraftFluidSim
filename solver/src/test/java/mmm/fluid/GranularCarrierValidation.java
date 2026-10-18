@@ -63,7 +63,7 @@ public final class GranularCarrierValidation {
 			float[] center = {.25F, .25F, .25F}; center[axis] = Math.nextDown(.25F);
 			var live = new GranularParcelStore(admissionRegistry, 1);
 			live.add(new GranularParcelStore.Parcel(center[0], center[1], center[2], 0, 0, 0,
-					admissionVolume, 1, admissionMaterial, 0, 0, (byte) 0));
+					admissionVolume, mmm.units.Mass.fromKilograms(1), admissionMaterial, 0, 0, (byte) 0));
 			var created = new GranularSpawnAdmission(3, 3, 3, .5F, 1);
 			created.append(center[0], center[1], center[2], admissionVolume);
 			var restored = new GranularSpawnAdmission(3, 3, 3, .5F, live, 0);
@@ -137,7 +137,7 @@ public final class GranularCarrierValidation {
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		var parcels = new GranularParcelStore(registry, 1);
 		parcels.add(new GranularParcelStore.Parcel(.42F, .46F, .46F, .8F, 0, 0,
-				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
+				svq, mmm.units.Mass.fromKilograms(2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
 		collision.preview(parcels, registry, .05F);
 		collision.commit(parcels);
 		var next = parcels.parcel(0);
@@ -169,7 +169,7 @@ public final class GranularCarrierValidation {
 		for (float[] point : new float[][]{{.65F, .6F, .65F}, {.65F, .9F, .65F}, {.79F, .75F, .65F}}) {
 			long svq = parcels.count() < 2 ? maximum / 2 : maximum;
 			parcels.add(new GranularParcelStore.Parcel(point[0], point[1], point[2], 0, 0, 0, svq,
-					2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
+					mmm.units.Mass.fromKilograms(2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
 		}
 		requireNonOverlappingRelease(domain.exportGranularState(), domain.config.cellSize());
 		var before = java.util.stream.IntStream.range(0, 3).mapToObj(parcels::parcel).toList();
@@ -195,12 +195,12 @@ public final class GranularCarrierValidation {
 		for (int cell : new int[]{9, 10}) {
 			long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62 * (cell == 9 ? .1 : .6));
 			require(beds.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
-					sand, 0, skeleton, 2_600.0 * skeleton / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "bed fixture must fit its cell capacity");
+					sand, 0, skeleton, mmm.units.Mass.fromKilograms(2_600.0 * skeleton / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "bed fixture must fit its cell capacity");
 		}
 		for (float vy : new float[]{0, -.4905F}) {
 			var parcels = new GranularParcelStore(registry, 1);
 			parcels.add(new GranularParcelStore.Parcel(.4F, .25F, .75F, 3.2F, vy, 0,
-					svq, 2_600.0 * svq / SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
+					svq, mmm.units.Mass.fromKilograms(2_600.0 * svq / SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
 			var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, beds, 1);
 			require((3.2 + Math.abs(vy)) * .05 <= .5 * .4 && collision.positionValid(.4F, .25F, .75F, svq),
 					"rising-bed fixture must have a legal start and default Courant drift");
@@ -219,13 +219,13 @@ public final class GranularCarrierValidation {
 		for (int cell : new int[]{9, 15}) {
 			long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62 * .6);
 			require(beds.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
-					sand, 0, skeleton, 2_600.0 * skeleton / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "separated beds must fit their cells");
+					sand, 0, skeleton, mmm.units.Mass.fromKilograms(2_600.0 * skeleton / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "separated beds must fit their cells");
 		}
 		geometry.replaceMask(12, 255); // [.0,.5] x [.5,1] x [.5,1], upper bed rests above it.
 		double top = beds.cellBulkVolumeSvq(9) * .5 / SolidVolume.SVQ_PER_CELL;
 		var parcels = new GranularParcelStore(registry, 1);
 		parcels.add(new GranularParcelStore.Parcel(.25F, (float) (top + radius + .01), .75F, 0, -.4F, 0,
-				svq, 2_600.0 * svq / SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
+				svq, mmm.units.Mass.fromKilograms(2_600.0 * svq / SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
 		var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, beds, 1);
 		var initial = parcels.parcel(0);
 		require(collision.positionValid(initial.x(), initial.y(), initial.z(), svq)
@@ -237,7 +237,7 @@ public final class GranularCarrierValidation {
 				"the actual lower bed must support its cavity without lifting the parcel to the column maximum");
 		for (int step = 0; step < 2; step++) {
 			var p = parcels.parcel(0); parcels.overwrite(0, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(), 0, -1.0e-8F, 0,
-					p.solidVolumeSvq(), p.mass(), sand, 0, p.contactAge(), p.flags()));
+					p.solidVolumeSvq(), p.massUnits(), sand, 0, p.contactAge(), p.flags()));
 			collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, beds, 1);
 			collision.preview(parcels, registry, .05F); collision.commit(parcels);
 			require(parcels.parcel(0).y() == resting.y() && parcels.parcel(0).velocityY() == 0
@@ -245,7 +245,7 @@ public final class GranularCarrierValidation {
 		}
 		var p = parcels.parcel(0); long remaining = svq / 8;
 		parcels.overwrite(0, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(), 0, -.4F, 0,
-				remaining, p.mass() / 8, sand, 0, p.contactAge(), p.flags()));
+				remaining, mmm.units.Mass.fromKilograms(p.mass() / 8), sand, 0, p.contactAge(), p.flags()));
 		require(parcels.parcel(0).contactAge() == 0 && parcels.parcel(0).flags() == 0, "changed representative radius must invalidate the old contact");
 		collision.preview(parcels, registry, .05F); collision.commit(parcels);
 		require(parcels.parcel(0).contactAge() == 0 && parcels.parcel(0).velocityY() < 0, "a shrunken sphere must fall through its newly vacated gap");
@@ -266,13 +266,13 @@ public final class GranularCarrierValidation {
 		long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62);
 		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) require(state.deposits.tryAdd(domain.cellIndex(x, 1, z),
 				new mmm.granular.GranularDepositStore.SolidPortion(sand, 0, skeleton,
-						2_600.0 * skeleton / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "suspended bed must fit each cell");
+						mmm.units.Mass.fromKilograms(2_600.0 * skeleton / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "suspended bed must fit each cell");
 		int barrier = domain.cellIndex(1, 1, 1);
 		double top = (1 + state.deposits.cellBulkVolumeSvq(barrier) / (double) SolidVolume.SVQ_PER_CELL) * .5;
 		float radius = mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
 		float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
 		state.parcels.add(new GranularParcelStore.Parcel(.75F, y, .75F, 0, 0, 0, volume,
-				2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
+				mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
 		domain.ensureGrid();
 		require(domain.granularCollision.positionValid(.75F, y, .75F, volume), "bed support must start outside the actual bed");
 		for (int step = 0; step < 3; step++) {
@@ -322,7 +322,7 @@ public final class GranularCarrierValidation {
 		long tower = (long) (SolidVolume.SVQ_PER_CELL * .62 * .8);
 		require(state.deposits.tryAdd(domain.cellIndex(1, 2, 1),
 				new mmm.granular.GranularDepositStore.SolidPortion(sand, 0, tower,
-						2_600.0 * tower / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "upper source bed must fit its layer");
+						mmm.units.Mass.fromKilograms(2_600.0 * tower / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "upper source bed must fit its layer");
 		domain.granularCoupling.rebuild(state.parcels, state.deposits);
 		domain.granularDepositDynamics().disturbCell(domain.cellIndex(1, 2, 1));
 		var relaxed = domain.granularDepositDynamics().step(domain.granularDepositEnvironment(domain.granularCoupling.copySolidSvq()), .05F);
@@ -356,14 +356,14 @@ public final class GranularCarrierValidation {
 			if (scenario == 2) {
 				long oldSkeleton = (long) (SolidVolume.SVQ_PER_CELL * .62 * .46);
 				require(state.deposits.tryAdd(target, new mmm.granular.GranularDepositStore.SolidPortion(sand, 0,
-						oldSkeleton, 2_600.0 * oldSkeleton / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL * 7 / 8),
+						oldSkeleton, mmm.units.Mass.fromKilograms(2_600.0 * oldSkeleton / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL * 7 / 8),
 						"initial mixed-space bed must fit below the upper cut micro box");
 			}
 			float radius = mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
 			double top = state.deposits.cellBulkVolumeSvq(target) * .5 / SolidVolume.SVQ_PER_CELL;
 			float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
 			for (int index = 0; index < (scenario == 2 ? 2 : 1); index++) state.parcels.add(new GranularParcelStore.Parcel(
-					index == 0 ? .9F : .72F, y, .9F, 0, 0, 0, volume, 2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
+					index == 0 ? .9F : .72F, y, .9F, 0, 0, 0, volume, mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
 			domain.ensureGrid();
 			for (int index = 0; index < state.parcels.count(); index++) {
 				var p = state.parcels.parcel(index);
@@ -424,7 +424,7 @@ public final class GranularCarrierValidation {
 			for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) {
 				long floor = (long) (SolidVolume.SVQ_PER_CELL * .62);
 				require(state.deposits.tryAdd(domain.cellIndex(x, 0, z), new mmm.granular.GranularDepositStore.SolidPortion(
-						sand, 0, floor, 2_600.0 * floor / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "floor bed must fit its cell");
+						sand, 0, floor, mmm.units.Mass.fromKilograms(2_600.0 * floor / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "floor bed must fit its cell");
 				domain.geometry.cutCells.replaceMask(domain.cellIndex(x, 2, z), 255);
 				int cell = domain.cellIndex(x, 1, z);
 				if (cell != source && cell != portal && cell != receiver) domain.geometry.cutCells.replaceMask(cell, 255);
@@ -434,12 +434,12 @@ public final class GranularCarrierValidation {
 				domain.geometry.cutCells.replaceMask(domain.cellIndex(1, 1, 2), 0);
 				long side = (long) (SolidVolume.SVQ_PER_CELL * .62 * .3);
 				require(state.deposits.tryAdd(domain.cellIndex(1, 1, 2), new mmm.granular.GranularDepositStore.SolidPortion(
-						sand, 0, side, 2_600.0 * side / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "open diagonal corridor must clear both adjacent corners");
+						sand, 0, side, mmm.units.Mass.fromKilograms(2_600.0 * side / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "open diagonal corridor must clear both adjacent corners");
 			}
 			for (int cell : new int[]{source, domain.cellIndex(2, 3, 1)}) {
 				long volume = (long) (SolidVolume.SVQ_PER_CELL * .62 * (cell == source ? .885 : .1));
 				require(state.deposits.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
-						sand, 0, volume, 2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "supported upper beds must fit");
+						sand, 0, volume, mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "supported upper beds must fit");
 			}
 			domain.ensureGrid();
 			long[] planned = domain.granularCoupling.copySolidSvq(), before = planned.clone();
@@ -546,13 +546,13 @@ public final class GranularCarrierValidation {
 		geometry.replaceMask(10, 0); geometry.replaceMask(12, 0); geometry.replaceMask(13, 1);
 		var parcels = new GranularParcelStore(registry, 1);
 		parcels.add(new GranularParcelStore.Parcel(.625F, .75F + radius + .01F, .625F, 0, -.2F, 0,
-				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
+				svq, mmm.units.Mass.fromKilograms(2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
 		var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, null, 1);
 		collision.preview(parcels, registry, .1F); collision.commit(parcels);
 		for (int step = 1; step <= 8; step++) {
 			var p = parcels.parcel(0);
 			parcels.overwrite(0, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(), 0, -.0001F, 0,
-					p.solidVolumeSvq(), p.mass(), p.materialHandle(), p.solidCompositionHandle(), p.contactAge(), p.flags()));
+					p.solidVolumeSvq(), p.massUnits(), p.materialHandle(), p.solidCompositionHandle(), p.contactAge(), p.flags()));
 			// A fresh collision object proves support is derived from the stored pose.
 			collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, null, 1);
 			collision.preview(parcels, registry, .0001F); var impulse = collision.commit(parcels);
@@ -581,7 +581,7 @@ public final class GranularCarrierValidation {
 			}
 			var parcels = new GranularParcelStore(registry, 1);
 			parcels.add(new GranularParcelStore.Parcel(x, y, z, vx, vy, vz,
-					svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
+					svq, mmm.units.Mass.fromKilograms(2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
 			var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, null, 1);
 			require(collision.positionValid(x, y, z, svq), "contact drift fixture starts inside solid geometry");
 			collision.preview(parcels, registry, dt);
@@ -619,7 +619,7 @@ public final class GranularCarrierValidation {
 						"first-contact fixture must start clear of the internal and outer geometry");
 				var parcels = new GranularParcelStore(registry, 1);
 				parcels.add(new GranularParcelStore.Parcel(position[0], position[1], position[2],
-						velocity[0], velocity[1], velocity[2], svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER,
+						velocity[0], velocity[1], velocity[2], svq, mmm.units.Mass.fromKilograms(2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER),
 						sand, 0, 0, (byte) 0));
 				collision.preview(parcels, registry, step);
 				var impulse = collision.commit(parcels);
@@ -681,8 +681,8 @@ public final class GranularCarrierValidation {
 		for (boolean touchingFloor : new boolean[]{false, true}) {
 			var parcels = new GranularParcelStore(registry, 2);
 			float height = touchingFloor ? radius : 1.25F;
-			parcels.add(new GranularParcelStore.Parcel(1.25F, height, 1.25F, .1F, 0, 0, svq, 2, sand, 0, 0, (byte) 0));
-			parcels.add(new GranularParcelStore.Parcel(Math.nextUp(1.25F + 2 * radius), height, 1.25F, -.1F, 0, 0, svq, 2, sand, 0, 0, (byte) 0));
+			parcels.add(new GranularParcelStore.Parcel(1.25F, height, 1.25F, .1F, 0, 0, svq, mmm.units.Mass.fromKilograms(2), sand, 0, 0, (byte) 0));
+			parcels.add(new GranularParcelStore.Parcel(Math.nextUp(1.25F + 2 * radius), height, 1.25F, -.1F, 0, 0, svq, mmm.units.Mass.fromKilograms(2), sand, 0, 0, (byte) 0));
 			var collision = new FlipGranularCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null, 2);
 			collision.preview(parcels, registry, .05F); var reaction = collision.commit(parcels);
 			float first = parcels.parcel(0).velocityX(), second = parcels.parcel(1).velocityX();
@@ -710,14 +710,14 @@ public final class GranularCarrierValidation {
 			for (int count : new int[]{1, 2}) {
 				var parcels = new GranularParcelStore(registry, 2);
 				parcels.add(new GranularParcelStore.Parcel(1.25F, radius, 1.25F, .6F, incomingNormal, .8F,
-						svq, 2, sand, 0, 0, (byte) 0));
+						svq, mmm.units.Mass.fromKilograms(2), sand, 0, 0, (byte) 0));
 				if (count == 2) parcels.add(new GranularParcelStore.Parcel(2.25F, 1.25F, 2.25F, 0, 0, 0,
-						svq, 3, sand, 0, 0, (byte) 0));
+						svq, mmm.units.Mass.fromKilograms(3), sand, 0, 0, (byte) 0));
 				var collision = new FlipGranularCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null, 2);
 				for (int step = 0; step < steps; step++) {
 					var before = parcels.parcel(0);
 					parcels.overwrite(0, new GranularParcelStore.Parcel(before.x(), before.y(), before.z(), before.velocityX(),
-							incomingNormal, before.velocityZ(), svq, 2, sand, 0, before.contactAge(), before.flags()));
+							incomingNormal, before.velocityZ(), svq, mmm.units.Mass.fromKilograms(2), sand, 0, before.contactAge(), before.flags()));
 					before = parcels.parcel(0); collision.preview(parcels, registry, .025F); var reaction = collision.commit(parcels);
 					var after = parcels.parcel(0);
 					float expectedNormal = (float) (-incomingNormal * material.restitution());
@@ -800,8 +800,8 @@ public final class GranularCarrierValidation {
 			float[] firstVelocity = new float[3], secondVelocity = new float[3];
 			firstVelocity[axis] = sign; secondVelocity[axis] = -sign;
 			firstVelocity[(axis + 1) % 3] = .25F; secondVelocity[(axis + 1) % 3] = -.125F;
-			parcels.add(new GranularParcelStore.Parcel(first[0], first[1], first[2], firstVelocity[0], firstVelocity[1], firstVelocity[2], svq, 2, material, 0, 0, (byte) 0));
-			parcels.add(new GranularParcelStore.Parcel(second[0], second[1], second[2], secondVelocity[0], secondVelocity[1], secondVelocity[2], svq, 3, material, 0, 0, (byte) 0));
+			parcels.add(new GranularParcelStore.Parcel(first[0], first[1], first[2], firstVelocity[0], firstVelocity[1], firstVelocity[2], svq, mmm.units.Mass.fromKilograms(2), material, 0, 0, (byte) 0));
+			parcels.add(new GranularParcelStore.Parcel(second[0], second[1], second[2], secondVelocity[0], secondVelocity[1], secondVelocity[2], svq, mmm.units.Mass.fromKilograms(3), material, 0, 0, (byte) 0));
 			var original = new GranularParcelStore.Parcel[]{parcels.parcel(0), parcels.parcel(1)};
 			double approachSquared = 4 + .375 * .375, separationSquared = .25 * .25 - 4 * radius * (double) radius;
 			double contactTime = 2 * separationSquared / (1 + Math.sqrt(1 - 4 * approachSquared * separationSquared));
@@ -845,7 +845,7 @@ public final class GranularCarrierValidation {
 		var chain = new GranularParcelStore(registry, 3);
 		for (int index = 0; index < 3; index++) chain.add(new GranularParcelStore.Parcel(
 				new float[]{1, 1.25F, 1.45F}[index], 1.25F, 1.25F, index == 0 ? 1 : 0, 0, 0,
-				svq, 2, material, 0, 0, (byte) 0));
+				svq, mmm.units.Mass.fromKilograms(2), material, 0, 0, (byte) 0));
 		double expectedMoment = 0;
 		for (int index = 0; index < chain.count(); index++) expectedMoment += 2 * (chain.parcel(index).x() + chain.parcel(index).velocityX() * (double) .2F);
 		var chainCollision = new FlipGranularCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null, 3);
@@ -859,13 +859,13 @@ public final class GranularCarrierValidation {
 				&& Math.abs(moment - expectedMoment) <= momentBound && energy <= 1,
 				"changed swept contact paths must reach the third sphere and preserve mechanical moments");
 		var stack = new GranularParcelStore(registry, 4);
-		stack.add(new GranularParcelStore.Parcel(1.25F, radius, 1.25F, 0, 0, 0, svq, 2, material, 0, 0, (byte) 0));
-		stack.add(new GranularParcelStore.Parcel(1.25F, Math.nextUp(3 * radius), 1.25F, 0, 0, 0, svq, 3, material, 0, 0, (byte) 0));
-		stack.add(new GranularParcelStore.Parcel(1.25F, Math.nextUp(5 * radius), 1.25F, 0, 0, 0, svq, 4, material, 0, 0, (byte) 0));
+		stack.add(new GranularParcelStore.Parcel(1.25F, radius, 1.25F, 0, 0, 0, svq, mmm.units.Mass.fromKilograms(2), material, 0, 0, (byte) 0));
+		stack.add(new GranularParcelStore.Parcel(1.25F, Math.nextUp(3 * radius), 1.25F, 0, 0, 0, svq, mmm.units.Mass.fromKilograms(3), material, 0, 0, (byte) 0));
+		stack.add(new GranularParcelStore.Parcel(1.25F, Math.nextUp(5 * radius), 1.25F, 0, 0, 0, svq, mmm.units.Mass.fromKilograms(4), material, 0, 0, (byte) 0));
 		var collision = new FlipGranularCollision(6, 6, 6, .5F, new FlipCutCellGeometry(6, 6, 6), null, 4);
 		for (int step = 0; step < 3; step++) {
 			for (int index = 0; index < stack.count(); index++) {
-				var p = stack.parcel(index); stack.overwrite(index, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(), p.velocityX(), p.velocityY() - .49F, p.velocityZ(), p.solidVolumeSvq(), p.mass(), p.materialHandle(), p.solidCompositionHandle(), p.contactAge(), p.flags()));
+				var p = stack.parcel(index); stack.overwrite(index, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(), p.velocityX(), p.velocityY() - .49F, p.velocityZ(), p.solidVolumeSvq(), p.massUnits(), p.materialHandle(), p.solidCompositionHandle(), p.contactAge(), p.flags()));
 			}
 			collision.preview(stack, registry, .05F); var reaction = collision.commit(stack);
 			require(reaction.y() < 0, "resting contact chain must carry an actual fixed support impulse");
@@ -1250,11 +1250,11 @@ public final class GranularCarrierValidation {
 			float px = bedContact ? .25F : .75F, py = 1.25F;
 			if (bedContact) {
 				require(beds.tryAdd(9, new mmm.granular.GranularDepositStore.SolidPortion(
-						sand, 0, svq, mass), SolidVolume.SVQ_PER_CELL), "support bed must fit");
+						sand, 0, svq, mmm.units.Mass.fromKilograms(mass)), SolidVolume.SVQ_PER_CELL), "support bed must fit");
 				double exactY = beds.cellBulkVolumeSvq(9) / (double) SolidVolume.SVQ_PER_CELL * .5 + radius;
 				py = (float) exactY; if (py < exactY) py = Math.nextUp(py);
 			}
-			parcels.add(new GranularParcelStore.Parcel(px, py, .75F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
+			parcels.add(new GranularParcelStore.Parcel(px, py, .75F, 0, 0, 0, svq, mmm.units.Mass.fromKilograms(mass), sand, 0, 0, (byte) 0));
 			var collision = new FlipGranularCollision(3, 3, 3, .5F, new FlipCutCellGeometry(3, 3, 3), beds, 1);
 			var coupling = new mmm.granular.GranularCouplingFields(3, 3, 3, .5);
 			coupling.setFixedCellSvq(fixed);
@@ -1264,7 +1264,7 @@ public final class GranularCarrierValidation {
 			for (int step = 0; step < 3; step++) {
 				var source = parcels.parcel(0);
 				parcels.overwrite(0, new GranularParcelStore.Parcel(px, py, .75F,
-						bedContact ? .1F : 0, -.1F, 0, svq, mass, sand, 0, source.contactAge(), source.flags()));
+						bedContact ? .1F : 0, -.1F, 0, svq, mmm.units.Mass.fromKilograms(mass), sand, 0, source.contactAge(), source.flags()));
 				coupling.rebuild(parcels, beds);
 				require(fixed[bedContact ? 10 : 13] == SolidVolume.SVQ_PER_CELL
 						&& coupling.totalSolidSvq() == (bedContact ? 66 : 65) * svq,
@@ -1313,18 +1313,18 @@ public final class GranularCarrierValidation {
 			long liquidRevision = domain.carrierMutationRevision();
 			var liquid = domain.materialRegistry == null ? domain.exportParticleState()
 					: domain.exportMaterialParticleState().particles();
-			var liquidMass = domain.particles.copyMass();
+			var liquidMass = domain.particles.copyMassUnits();
 			var liquidMaterials = domain.particles.copyMaterialHandles();
 			var kernel = new mmm.granular.GranularKernel(4, 4, 4, .5F);
 			kernel.capture(scene == 0 ? 0 : .75F, scene == 2 ? .52F : .75F, .75F, volume);
 			var parcel = new mmm.granular.GranularStateSnapshot.ActiveParcel(
 					scene == 0 ? 0 : .75F, scene == 2 ? .52F : .75F, .75F,
-					.1F, -.2F, .3F, volume, mass, sand, 0, 0, (byte) 0,
+					.1F, -.2F, .3F, volume, mmm.units.Mass.fromKilograms(mass), sand, 0, 0, (byte) 0,
 					kernel.canonicalMask());
 			var active = scene == 1 ? java.util.List.of(parcel, parcel) : java.util.List.of(parcel);
 			var beds = scene >= 2 && scene != 4 ? java.util.List.of(new mmm.granular.GranularStateSnapshot.DepositGroup(
 					scene == 6 ? domain.cellIndex(2, 1, 1) : cell,
-					material.restPorosityQ() + (scene == 5 ? 1 : 0), sand, 0, volume, mass)) :
+					material.restPorosityQ() + (scene == 5 ? 1 : 0), sand, 0, volume, mmm.units.Mass.fromKilograms(mass))) :
 					java.util.List.<mmm.granular.GranularStateSnapshot.DepositGroup>of();
 			int carriers = active.size() + beds.size();
 			var snapshot = new mmm.granular.GranularStateSnapshot(4, 4, 4, registry.fingerprint(),
@@ -1340,7 +1340,7 @@ public final class GranularCarrierValidation {
 			require(domain.particles.count() == count && domain.carrierMutationRevision() == liquidRevision
 					&& java.util.Arrays.equals(liquid.copyPositionVolume(), after.copyPositionVolume())
 					&& java.util.Arrays.equals(liquid.copyParticleVelocities(), after.copyParticleVelocities())
-					&& java.util.Arrays.equals(liquidMass, domain.particles.copyMass())
+					&& java.util.Arrays.equals(liquidMass, domain.particles.copyMassUnits())
 					&& java.util.Arrays.equals(liquidMaterials, domain.particles.copyMaterialHandles()),
 					"granular restore changed raw liquid inventory");
 			if (scene < 6) {
@@ -1353,7 +1353,7 @@ public final class GranularCarrierValidation {
 				var restored = domain.exportGranularState();
 				require(restored.activeParcels().equals(active) && restored.depositGroups().equals(beds)
 						&& restored.totalSolidVolumeSvq() == snapshot.totalSolidVolumeSvq()
-						&& restored.totalMassBits() == snapshot.totalMassBits()
+						&& restored.totalMassUnits() == snapshot.totalMassUnits()
 						&& restored.externalSource().equals(snapshot.externalSource())
 						&& restored.escapedSink().equals(snapshot.escapedSink()),
 						"valid granular restore changed physical columns or ledgers");
@@ -1376,7 +1376,7 @@ public final class GranularCarrierValidation {
 			var kernel = new mmm.granular.GranularKernel(4, 4, 4, .5F);
 			kernel.capture(.75F, y, .75F, volume);
 			var parcel = new mmm.granular.GranularStateSnapshot.ActiveParcel(
-					.75F, y, .75F, 0, vy, 0, volume, mass, sand, 0,
+					.75F, y, .75F, 0, vy, 0, volume, mmm.units.Mass.fromKilograms(mass), sand, 0,
 					scene == 2 ? 3 : 0, scene == 2 ? GranularParcelStore.FLAG_SUPPORTED : (byte) 0,
 					kernel.canonicalMask());
 			var snapshot = new mmm.granular.GranularStateSnapshot(4, 4, 4, registry.fingerprint(),
@@ -1434,7 +1434,7 @@ public final class GranularCarrierValidation {
 		long svq = 1_024;
 		float radius = mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
 		parcels.add(new GranularParcelStore.Parcel(.5F, radius, .5F, 0, -.01F, 0,
-				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0,
+				svq, mmm.units.Mass.fromKilograms(2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), sand, 0,
 				Integer.MAX_VALUE, GranularParcelStore.FLAG_SUPPORTED));
 		var collision = new FlipGranularCollision(2, 2, 2, .5F, new FlipCutCellGeometry(2, 2, 2), deposits, 1);
 		collision.preview(parcels, registry, .05F);
@@ -1472,7 +1472,7 @@ public final class GranularCarrierValidation {
 		long volume = SolidVolume.SVQ_PER_CELL / 4;
 		for (int x = 2; x <= 3; x++) require(domain.granularState.deposits.tryAdd(domain.cellIndex(x, 1, 2),
 				new mmm.granular.GranularDepositStore.SolidPortion(sand, 0, volume,
-						2600 * volume / (double) SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "Thin bed rejected");
+						mmm.units.Mass.fromKilograms(2600 * volume / (double) SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "Thin bed rejected");
 		int face = domain.xFaceIndex(3, 1, 2), vertical = domain.yFaceIndex(2, 1, 2);
 		java.util.Arrays.fill(domain.mac.velocityX, 1);
 		java.util.Arrays.fill(domain.mac.velocityY, 1);
@@ -1566,14 +1566,14 @@ public final class GranularCarrierValidation {
 		double mass = volume / (double) SolidVolume.SVQ_PER_CUBIC_METER
 				* domain.granularState.registry.material(sand).referenceDensity();
 		domain.granularState.parcels.add(new GranularParcelStore.Parcel(x, y, z, vx, vy, vz,
-				volume, mass, sand, 0, 0, (byte) 0));
+				volume, mmm.units.Mass.fromKilograms(mass), sand, 0, 0, (byte) 0));
 	}
 
 	private static void sharedCarrierExchange(boolean massWeighted) {
 		var domain = domain();
 		domain.setVolume(2, 2, 2, 0.001F);
 		if (massWeighted) for (int p = 0; p < domain.particles.count(); p++) {
-			domain.particles.setMass(p, domain.particles.mass(p) * 13.6);
+			domain.particles.setMassUnits(p, domain.unitScale.massUnitsForNormalized(domain.particles.mass(p) * 13.6));
 		}
 		for (int p = 0; p < 32; p++) addParcel(domain,
 				1.26F + 0.005F * (p % 4), 1.28F + 0.005F * (p % 3), 1.29F,
@@ -1750,7 +1750,7 @@ public final class GranularCarrierValidation {
 			for (int coordinate = 0; coordinate < 3; coordinate++) position[coordinate] = (reflection & 1 << coordinate) == 0 ? .75F : 2.25F;
 			double[] velocity = new double[3]; velocity[axis] = (reflection & 1 << axis) == 0 ? .5 : -.5;
 			var parcel = new GranularParcelStore.Parcel(position[0], position[1], position[2], (float) velocity[0], (float) velocity[1], (float) velocity[2],
-					svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0);
+					svq, mmm.units.Mass.fromKilograms(2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0);
 			for (int power = 3; power <= 20; power++) {
 				double dt = Math.scalb(1, -power);
 				int count = gradient.build(parcel, dt);

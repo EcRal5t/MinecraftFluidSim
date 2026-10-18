@@ -8,19 +8,18 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Immutable absolute parcel inventory; runtime species handles are sorted and unique. */
-/** Immutable species-quanta inventory whose exact and residual mass columns are both kilograms. */
+/** Immutable micromole species inventory and integer 100 ng mass residual. */
 public final class ChemicalMixtureRecord {
 	private final int[] speciesHandles;
 	private final long[] amounts;
-	private final long massResidualKilogramsBits;
+	private final long massResidualUnits;
 	private final int hash;
 	private final long totalQuanta;
 	// A single immutable memo keeps registry identity and value atomically paired across readers.
 	private volatile SpeciesMass speciesMass;
 	private record SpeciesMass(ChemicalRegistry registry, ExactRational kilograms) { }
 
-	public ChemicalMixtureRecord(int[] speciesHandles, long[] amounts, long massResidualKilogramsBits) {
+	public ChemicalMixtureRecord(int[] speciesHandles, long[] amounts, long massResidualUnits) {
 		if (speciesHandles == null || amounts == null
 				|| speciesHandles.length != amounts.length
 				|| speciesHandles.length > ChemicalLimits.MAX_SPECIES_PER_PARCEL) {
@@ -36,28 +35,27 @@ public final class ChemicalMixtureRecord {
 		if (total > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 			throw new IllegalArgumentException("Chemical parcel amount is over budget");
 		}
-		double residual = Double.longBitsToDouble(massResidualKilogramsBits);
-		if (!Double.isFinite(residual)) throw new IllegalArgumentException("Chemical mass residual is not finite");
+
 		this.speciesHandles = speciesHandles.clone();
 		this.amounts = amounts.clone();
-		this.massResidualKilogramsBits = massResidualKilogramsBits;
+		this.massResidualUnits = massResidualUnits;
 		this.totalQuanta = total;
 		this.hash = 31 * (31 * Arrays.hashCode(this.speciesHandles) + Arrays.hashCode(this.amounts))
-				+ Long.hashCode(massResidualKilogramsBits);
+				+ Long.hashCode(massResidualUnits);
 	}
 
-	private ChemicalMixtureRecord(ChemicalMixtureRecord source, long residualBits) {
-		if (!Double.isFinite(Double.longBitsToDouble(residualBits))) throw new IllegalArgumentException("Chemical mass residual is not finite");
+	private ChemicalMixtureRecord(ChemicalMixtureRecord source, long residualUnits) {
+
 		speciesHandles = source.speciesHandles;
 		amounts = source.amounts;
 		totalQuanta = source.totalQuanta;
-		massResidualKilogramsBits = residualBits;
-		hash = source.hash - Long.hashCode(source.massResidualKilogramsBits) + Long.hashCode(residualBits);
+		massResidualUnits = residualUnits;
+		hash = source.hash - Long.hashCode(source.massResidualUnits) + Long.hashCode(residualUnits);
 		speciesMass = source.speciesMass;
 	}
 
 	public static ChemicalMixtureRecord fromStableAmounts(
-			ChemicalRegistry registry, Map<String, Long> stableAmounts, double massResidualKilograms
+			ChemicalRegistry registry, Map<String, Long> stableAmounts, long massResidualUnits
 	) {
 		TreeMap<Integer, Long> handles = new TreeMap<>();
 		for (Map.Entry<String, Long> entry : stableAmounts.entrySet()) {
@@ -72,19 +70,19 @@ public final class ChemicalMixtureRecord {
 			species[index] = entry.getKey();
 			amounts[index++] = entry.getValue();
 		}
-		return new ChemicalMixtureRecord(species, amounts, Double.doubleToRawLongBits(massResidualKilograms));
+		return new ChemicalMixtureRecord(species, amounts, massResidualUnits);
 	}
 
 	public int entryCount() { return speciesHandles.length; }
 	public int speciesHandle(int entry) { return speciesHandles[entry]; }
 	public long amountAt(int entry) { return amounts[entry]; }
-	public long massResidualKilogramsBits() { return massResidualKilogramsBits; }
-	public double massResidualKilograms() { return Double.longBitsToDouble(massResidualKilogramsBits); }
+	public long massResidualUnits() { return massResidualUnits; }
+	public double massResidualKilograms() { return mmm.units.Mass.kilograms(massResidualUnits); }
 
 	/** Preserves the immutable species inventory and its registry-specific exact-mass memo. */
-	public ChemicalMixtureRecord withMassResidualKilograms(double residual) {
-		long bits = Double.doubleToRawLongBits(residual);
-		return bits == massResidualKilogramsBits ? this : new ChemicalMixtureRecord(this, bits);
+	public ChemicalMixtureRecord withMassResidualUnits(long residual) {
+		long bits = residual;
+		return bits == massResidualUnits ? this : new ChemicalMixtureRecord(this, bits);
 	}
 	public int[] copySpeciesHandles() { return speciesHandles.clone(); }
 	public long[] copyAmounts() { return amounts.clone(); }
@@ -109,26 +107,14 @@ public final class ChemicalMixtureRecord {
 		return result;
 	}
 
-	public double massKilograms(ChemicalRegistry registry) {
-		return exactSpeciesMassKilograms(registry).toDouble() + massResidualKilograms();
+	public long speciesMassUnits(ChemicalRegistry registry) { return mmm.units.Mass.exactUnits(exactSpeciesMassKilograms(registry).numerator(), exactSpeciesMassKilograms(registry).denominator()); }
+	public long massUnits(ChemicalRegistry registry) {
+		return Math.addExact(mmm.units.Mass.exactUnits(exactSpeciesMassKilograms(registry).numerator(), exactSpeciesMassKilograms(registry).denominator()), massResidualUnits);
 	}
+	public double massKilograms(ChemicalRegistry registry) { return mmm.units.Mass.kilograms(massUnits(registry)); }
 
-	/** Updates the authoritative solver mass by an exact species delta, preserving its residual. */
-	public static double solverMassAfterSpeciesChange(
-			double previous, ExactRational speciesDeltaKilograms, SolverUnitScale unitScale
-	) {
-		if (speciesDeltaKilograms.isZero()) return previous;
-		ExactRational scale = exactDouble(unitScale.cubicMetersPerNormalizedVolume());
-		ExactRational increment = new ExactRational(
-				speciesDeltaKilograms.numerator().multiply(scale.denominator()),
-				speciesDeltaKilograms.denominator().multiply(scale.numerator()));
-		return exactDouble(previous).add(increment).toDouble();
-	}
-
-	private static ExactRational exactDouble(double value) {
-		SignedDyadic exact = SignedDyadic.of(value);
-		return exact.exponent() >= 0 ? new ExactRational(exact.significand().shiftLeft(exact.exponent()), BigInteger.ONE)
-				: new ExactRational(exact.significand(), BigInteger.ONE.shiftLeft(-exact.exponent()));
+	public static long massUnitsAfterSpeciesChange(long previous, ExactRational speciesDeltaKilograms) {
+		return Math.addExact(previous, mmm.units.Mass.exactUnits(speciesDeltaKilograms.numerator(), speciesDeltaKilograms.denominator()));
 	}
 
 	public long chargeQuanta(ChemicalRegistry registry) {
@@ -147,7 +133,7 @@ public final class ChemicalMixtureRecord {
 
 	@Override public boolean equals(Object other) {
 		return this == other || other instanceof ChemicalMixtureRecord record
-				&& massResidualKilogramsBits == record.massResidualKilogramsBits
+				&& massResidualUnits == record.massResidualUnits
 				&& Arrays.equals(speciesHandles, record.speciesHandles)
 				&& Arrays.equals(amounts, record.amounts);
 	}

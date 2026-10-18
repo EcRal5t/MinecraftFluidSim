@@ -14,7 +14,7 @@ import java.util.List;
 
 /** Cell-local external replacement, with all storage and side-column rejections before publication. */
 final class CellVolumeReplacementPlan {
-	record Piece(float x, float y, float z, float volume, double mass, ChemicalMixtureRecord mixture) { }
+	record Piece(float x, float y, float z, float volume, long massUnits, ChemicalMixtureRecord mixture) { }
 	private record SlotVolume(int slot, float volume) { }
 	final CarrierMutationPlan mutation;
 	final int cell;
@@ -76,7 +76,7 @@ final class CellVolumeReplacementPlan {
 				var record = chemistry.record(p);
 				quanta = Math.subtractExact(quanta, record.totalQuanta());
 				sinkBuilder.add(domain.materialRegistry.material(domain.particles.materialHandle(p)).id(),
-						chemistry.indicator(p), domain.particles.volume(p), chemistry.unitScale().kilograms(domain.particles.mass(p)), record);
+						chemistry.indicator(p), domain.particles.volume(p), domain.particles.massUnits(p), record);
 			}
 		}
 		ArrayList<Piece> pieces = new ArrayList<>(volumes.size());
@@ -86,7 +86,7 @@ final class CellVolumeReplacementPlan {
 		double depth = layer ? amount / pore(domain, cell).toDouble() : 1;
 		for (var entry : volumes) {
 			float volume = entry.volume();
-			double mass = volume * density;
+			long mass = domain.unitScale.massUnitsForNormalized(volume * density);
 			if (!(Float.isFinite(volume) && volume > 0 && Double.isFinite(mass) && mass > 0))
 				throw new IllegalArgumentException("Cell marker volume and mass must be finite and positive");
 			ChemicalMixtureRecord mixture = null;
@@ -95,7 +95,7 @@ final class CellVolumeReplacementPlan {
 				mixture = chemistry.defaultRecord(material, volume, domain.config.cellSize(), mass, false);
 				chemistry.requireCompatible(mixture, material, false);
 				quanta = Math.addExact(quanta, mixture.totalQuanta());
-				sourceBuilder.add(material, false, volume, chemistry.unitScale().kilograms(mass), mixture);
+				sourceBuilder.add(material, false, volume, mass, mixture);
 			}
 			float[] position = domain.markerSlotPosition(x, y, z, entry.slot());
 			if (layer) {
@@ -105,7 +105,7 @@ final class CellVolumeReplacementPlan {
 					throw new IllegalArgumentException("Cell liquid layer exceeds its binary32 coordinate representation");
 			}
 			pieces.add(new Piece(position[0], position[1], position[2], volume, mass, mixture));
-			thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(0, mass, mixture));
+			thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(0, domain.unitScale.normalizedMass(mass), mixture));
 		}
 		if (quanta > ChemicalLimits.MAX_REGION_TOTAL_QUANTA)
 			throw new IllegalArgumentException("Region chemical inventory is over budget");

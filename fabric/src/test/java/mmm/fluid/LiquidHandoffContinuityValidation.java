@@ -36,7 +36,7 @@ public final class LiquidHandoffContinuityValidation {
 				}
 		check(p == count, "Aligned join fixture changed its marker count");
 		domain.restoreParticleState(new FlipParticleState(nx, ny, ny, h, count, count * 0.125F,
-				points, velocities, new byte[domain.cellCount]));
+				points, velocities, mmm.units.Mass.createLiquid(h, 1000.0, points), new byte[domain.cellCount]));
 		FluidMaterial builtin = BuiltinFluidMaterials.WATER;
 		var water = new FluidMaterial(builtin.id(), builtin.referenceDensity(), builtin.miscibilityGroup(), 0.0728, Math.PI / 2);
 		var liquids = new FluidMaterialRegistry(List.of(water));
@@ -54,7 +54,7 @@ public final class LiquidHandoffContinuityValidation {
 	private static JoinResult runJoin(float h, float dt) {
 		FluidDomain domain = joiningWater(h, dt); var topology = new JoinTopology(domain);
 		SignedDyadic initialV = SignedDyadic.sum(domain.particles.directArrays().volume, domain.particleCount());
-		SignedDyadic initialM = SignedDyadic.sum(domain.particles.directArrays().mass, domain.particleCount());
+		SignedDyadic initialM = SignedDyadic.of(mmm.units.Mass.sum(domain.particles.directArrays().massUnits, domain.particleCount()), 0);
 		check(domain.unitScale.cubicMeters(initialV.toDouble()) == 2 && domain.unitScale.kilograms(initialM.toDouble()) == 2000,
 				"Two water cubes changed their analytic inventory");
 		int steps = Math.round(2.5F / dt), peak = domain.particleCount(), separations = 0, finalJoinStep = steps + 1;
@@ -64,7 +64,7 @@ public final class LiquidHandoffContinuityValidation {
 		long stepNanos = 0;
 		for (int step = 0; step <= steps; step++) {
 			check(initialV.equals(SignedDyadic.sum(domain.particles.directArrays().volume, domain.particleCount())), "Joining water changed exact volume at step " + step);
-			massDelta = SignedDyadic.sum(domain.particles.directArrays().mass, domain.particleCount()).subtract(initialM);
+			massDelta = SignedDyadic.of(mmm.units.Mass.sum(domain.particles.directArrays().massUnits, domain.particleCount()), 0).subtract(initialM);
 			exactMass &= massDelta.signum() == 0;
 			check(Math.abs(massDelta.toDouble()) <= massBound, "Joining water exceeded its accumulated mass storage bound");
 			check(domain.particleCount() <= domain.maximumParticleCount, "Joining water exceeded its hard carrier budget");
@@ -108,7 +108,7 @@ public final class LiquidHandoffContinuityValidation {
 		}
 		JoinObservation observe() {
 			Arrays.fill(component, -1); Arrays.fill(volume, 0); Arrays.fill(leftVolume, 0); Arrays.fill(rightVolume, 0);
-			int count = 0; double centerArea = 0, h = domain.config.cellSize();
+			int count = 0; double centerArea = 0, h = domain.config().cellSize();
 			for (int p = 0; p < domain.particleCount(); p++) {
 				int seed = domain.particleCellIndex(p); if (component[seed] >= 0) continue;
 				int head = 0, tail = 0; queue[tail++] = seed; component[seed] = count;

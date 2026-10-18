@@ -79,7 +79,7 @@ public final class GranularMechanics {
 			float nextY = finiteFloat(newY, "parcel velocity y");
 			float nextZ = finiteFloat(newZ, "parcel velocity z");
 			parcels.overwrite(index, new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(),
-					nextX, nextY, nextZ, parcel.solidVolumeSvq(), parcel.mass(), parcel.materialHandle(),
+					nextX, nextY, nextZ, parcel.solidVolumeSvq(), parcel.massUnits(), parcel.materialHandle(),
 					parcel.solidCompositionHandle(), parcel.contactAge(), parcel.flags()));
 			if (fluid.hasLiquid() && fraction > 0.0) {
 				FluidImpulseApplication application = environment.addFluidImpulse(

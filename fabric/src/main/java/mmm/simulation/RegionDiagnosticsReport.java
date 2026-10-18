@@ -188,8 +188,8 @@ public final class RegionDiagnosticsReport {
 				.append(" generation ").append(region.checkpointGeneration())
 				.append(" fingerprint ").append(world.chemicalRegistry().fingerprint())
 				.append(" totalQuanta ").append(region.domain().chemicalParcels().totalQuanta())
-				.append(" residualBits 0x").append(Long.toUnsignedString(
-						region.domain().exportChemicalParticleState().residualLedgerBits(), 16));
+				.append(" residualUnits 0x").append(Long.toUnsignedString(
+						region.domain().exportChemicalParticleState().residualLedgerUnits(), 16));
 		for (int handle = 0; handle < totals.length; handle++) if (totals[handle] != 0L) {
 			text.append('\n').append(world.chemicalRegistry().species(handle).id()).append('=').append(totals[handle]);
 		}

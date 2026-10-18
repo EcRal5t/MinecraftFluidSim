@@ -23,7 +23,7 @@ final class M3MaterialDynamicsValidation {
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 128);
 		domain.setVolume(1, 1, 1, 1.0F);
 		FlipParticleState before = domain.exportParticleState();
-		double massBefore = domain.totalMass();
+		long massBefore = domain.totalMassUnits();
 		MovingBodyFluidCoupling.Result result = domain.applyMovingBodyCoupling(
 				new MovingBodyFluidCoupling.Request(0.75F, 0.75F, 0.75F, 2.0, -0.5, 0.25, 0.025));
 		FlipParticleState after = domain.exportParticleState();
@@ -33,7 +33,7 @@ final class M3MaterialDynamicsValidation {
 				&& result.impulseZKilogramMetresPerSecond() > 0.0,
 				"moving body did not commit a three-axis marker impulse");
 		check(Arrays.equals(before.copyPositionVolume(), after.copyPositionVolume())
-				&& Double.doubleToRawLongBits(massBefore) == Double.doubleToRawLongBits(domain.totalMass()),
+				&& massBefore == domain.totalMassUnits(),
 				"moving-body coupling changed authoritative volume or mass");
 		float[] velocityBefore = before.copyParticleVelocities();
 		float[] velocityAfter = after.copyParticleVelocities();
@@ -41,12 +41,12 @@ final class M3MaterialDynamicsValidation {
 		double cellVolumeCubicMetres = (double) config.cellSize() * config.cellSize() * config.cellSize();
 		float[] positionVolume = after.copyPositionVolume();
 		for (int marker = 0; marker < after.particleCount(); marker++) {
-			double markerMass = config.density() * positionVolume[marker * 4 + 3];
-			momentumX += markerMass * (velocityAfter[marker * 3] - velocityBefore[marker * 3])
+			double markerMassUnits = config.density() * positionVolume[marker * 4 + 3];
+			momentumX += markerMassUnits * (velocityAfter[marker * 3] - velocityBefore[marker * 3])
 					* cellVolumeCubicMetres;
-			momentumY += markerMass * (velocityAfter[marker * 3 + 1] - velocityBefore[marker * 3 + 1])
+			momentumY += markerMassUnits * (velocityAfter[marker * 3 + 1] - velocityBefore[marker * 3 + 1])
 					* cellVolumeCubicMetres;
-			momentumZ += markerMass * (velocityAfter[marker * 3 + 2] - velocityBefore[marker * 3 + 2])
+			momentumZ += markerMassUnits * (velocityAfter[marker * 3 + 2] - velocityBefore[marker * 3 + 2])
 					* cellVolumeCubicMetres;
 		}
 		check(Double.doubleToRawLongBits(momentumX)

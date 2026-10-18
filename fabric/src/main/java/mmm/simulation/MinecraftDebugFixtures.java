@@ -316,22 +316,22 @@ public final class MinecraftDebugFixtures {
 		FlipParticleState pure = domain.exportParticleState();
 		float[] positionVolume = pure.copyPositionVolume();
 		float[] velocities = pure.copyParticleVelocities();
-		double[] markerMass = new double[pure.particleCount()];
+		long[] markerMassUnits = new long[pure.particleCount()];
 		int[] material = new int[pure.particleCount()];
 		FluidMaterial tensionWater = new FluidMaterial("mmm:tension_water", domain.config().density(),
 				"mmm:tension_water", 100.0, Math.toRadians(angleDegrees));
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(tensionWater));
-		double totalMass = 0.0;
+		long totalMass = 0;
 		for (int marker = 0; marker < pure.particleCount(); marker++) {
 			double volume = positionVolume[marker * 4 + 3];
-			markerMass[marker] = volume * tensionWater.referenceDensity();
-			totalMass += markerMass[marker];
+			markerMassUnits[marker] = mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(volume * tensionWater.referenceDensity());
+			totalMass = Math.addExact(totalMass, markerMassUnits[marker]);
 			material[marker] = 0;
 		}
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
 				pure.totalVolume(), totalMass, registry.materials(), positionVolume, velocities,
-				pure.copySolidMask(), markerMass, material
+				pure.copySolidMask(), markerMassUnits, material
 		));
 	}
 
@@ -437,7 +437,7 @@ public final class MinecraftDebugFixtures {
 		}
 		domain.restoreParticleState(new FlipParticleState(
 				sx, sy, sz, cellSize, particleCount, totalVolume, positionVolume, velocities,
-				domain.copyCollisionMicroMasks()
+				mmm.units.Mass.createLiquid(cellSize, domain.config().density(), positionVolume), domain.copyCollisionMicroMasks()
 		));
 	}
 
@@ -522,19 +522,19 @@ public final class MinecraftDebugFixtures {
 	private static void assignLayeredDemoMaterials(FluidDomain domain, float interfaceY) {
 		FlipMaterialParticleState state = domain.exportMaterialParticleState();
 		float[] positionVolume = state.copyPositionVolume();
-		double[] markerMass = state.copyParticleMass();
+		long[] markerMassUnits = state.copyParticleMassUnits();
 		int[] materials = state.copyMaterialPaletteIndex();
-		double totalMass = 0.0;
+		long totalMass = 0;
 		for (int marker = 0; marker < state.particleCount(); marker++) {
 			int material = positionVolume[marker * 4 + 1] >= interfaceY ? 1 : 0;
 			materials[marker] = material;
-			markerMass[marker] = positionVolume[marker * 4 + 3]
-					* BuiltinFluidMaterials.DEFAULT_PALETTE.get(material).referenceDensity();
-			totalMass += markerMass[marker];
+			markerMassUnits[marker] = mmm.units.SolverUnitScale.forCellSize(state.cellSize()).massUnitsForNormalized(positionVolume[marker * 4 + 3]
+					* BuiltinFluidMaterials.DEFAULT_PALETTE.get(material).referenceDensity());
+			totalMass = Math.addExact(totalMass, markerMassUnits[marker]);
 		}
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(), state.particleCount(), state.totalVolume(), totalMass,
-				state.materials(), positionVolume, state.copyParticleVelocities(), state.copySolidMask(), markerMass, materials
+				state.materials(), positionVolume, state.copyParticleVelocities(), state.copySolidMask(), markerMassUnits, materials
 		));
 	}
 

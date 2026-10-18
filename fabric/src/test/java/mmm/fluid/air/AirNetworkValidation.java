@@ -94,7 +94,7 @@ public final class AirNetworkValidation {
 	private static void validateEquationOfState() {
 		AirNetwork network = new AirNetwork();
 		int node = network.addNode(8.0, 8.0);
-		check(network.gaugePressure(node) == 0.0 && network.density(node) == AirNetwork.AIR_DENSITY,
+		check(network.gaugePressure(node) == 0.0 && network.density(node) == mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(8 * AirNetwork.AIR_DENSITY)) / 8,
 				"ambient-balanced cavity must start at the registry standard state");
 		network.updateAvailableVolume(node, 4.0);
 		checkRelative(network.gaugePressure(node), AirNetwork.REFERENCE_PRESSURE, "halved volume must double absolute pressure");
@@ -147,8 +147,7 @@ public final class AirNetworkValidation {
 		AirNetwork restored = new AirNetwork(network.registry());
 		restored.restoreNodes(new double[]{1.0, 1.0},
 				snapshot.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
-				snapshot.externalSource(), snapshot.escapedSink(),
-				snapshot.massRoundoff(), snapshot.residualRoundoff());
+				snapshot.externalSource(), snapshot.escapedSink());
 		check(restored.inventory(2).isEmpty() && restored.auditClosed(),
 				"vacuum node did not survive complete gas handoff");
 		restored.addOrMergeEdge(AirNetwork.AMBIENT_NODE, 2, 0.01, 0.65);
@@ -194,13 +193,12 @@ public final class AirNetworkValidation {
 		expectThrow(() -> pieceSnapshot(state, List.of(state.nodes().getLast(), state.nodes().getFirst()),
 				state.pieceNodeOrdinal()), "noncanonical node key order");
 		expectThrow(() -> new GasStateSnapshot(Integer.MAX_VALUE, 1, 1, state.registryFingerprint(), "",
-				state.nodes(), state.pieceNodeOrdinal(), state.externalSource(), state.escapedSink(),
-				state.massRoundoff(), state.residualRoundoff()), "piece dimension overflow");
+				state.nodes(), state.pieceNodeOrdinal(), state.externalSource(), state.escapedSink()), "piece dimension overflow");
 	}
 
 	private static GasStateSnapshot pieceSnapshot(GasStateSnapshot state, List<GasStateSnapshot.Node> nodes, int[] pieces) {
 		return new GasStateSnapshot(state.sizeX(), state.sizeY(), state.sizeZ(), state.registryFingerprint(), "",
-				nodes, pieces, state.externalSource(), state.escapedSink(), state.massRoundoff(), state.residualRoundoff());
+				nodes, pieces, state.externalSource(), state.escapedSink());
 	}
 
 	private static void validateOrificeEqualization() {
@@ -413,7 +411,7 @@ public final class AirNetworkValidation {
 
 	private static void validateTinyPartitionColumns() {
 		GasRegistry registry = BuiltinGasDefinitions.createRegistry();
-		for (long nanos : new long[] {1_000_000_000L, 2_000_000_000_000_000L, 1L << 54, Long.MAX_VALUE}) {
+		for (long nanos : new long[] {1_000_000_000L, 2_000_000_000_000_000L, 1L << 54, Long.MAX_VALUE / 32}) {
 			GasInventory inventory = registry.createAmbient(nanos);
 			GasInventory.Split tinyFirst = inventory.splitTotal(1), tinyLast = inventory.splitTotal(nanos - 1);
 			var first = tinyFirst.first().components().getFirst();
@@ -423,30 +421,25 @@ public final class AirNetworkValidation {
 			check(Double.doubleToRawLongBits(first.mass()) == Double.doubleToRawLongBits(last.mass())
 					&& Double.doubleToRawLongBits(first.massResidual()) == Double.doubleToRawLongBits(last.massResidual()),
 					"gas take direction changed the tiny mass/residual columns");
-			var column = new GasComponentAmount("test:alpha", nanos, inventory.totalMass(),
-					List.of(new GasComponentAmount.SpeciesAmount("test:a", 17)), -inventory.totalMass() / 3);
+			var column = new GasComponentAmount("test:alpha", nanos, mmm.units.Mass.fromKilograms(inventory.totalMass()),
+					List.of(new GasComponentAmount.SpeciesAmount("test:a", 17)), mmm.units.Mass.fromKilograms(-inventory.totalMass() / 3));
 			GasInventory composed = new GasInventory(List.of(column));
 			List<GasInventory> forward = composed.partition(new long[] {nanos - 3, 0, 1, 2});
 			List<GasInventory> reverse = composed.partition(new long[] {2, 1, 0, nanos - 3});
-			SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO; long quanta = 0;
+			long mass = 0L, residual = 0L; long quanta = 0;
 			for (int child = 0; child < forward.size(); child++) {
 				check(forward.get(child).components().equals(reverse.get(3 - child).components()),
 						"unique gas share permutation changed independent columns");
 				for (var amount : forward.get(child).components()) {
-					mass = mass.add(SignedDyadic.of(amount.mass())); residual = residual.add(SignedDyadic.of(amount.massResidual()));
+					mass = Math.addExact(mass, amount.massUnits()); residual = Math.addExact(residual, amount.massResidualUnits());
 					for (var species : amount.species()) quanta += species.amountQuanta();
 				}
 			}
 			var pivot = forward.getFirst().components().getFirst();
 			check(quanta == 17 && forward.get(2).standardVolumeNanos() == 1 && forward.get(3).standardVolumeNanos() == 2,
 					"gas tiny partition changed exact species or nanos");
-			SignedDyadic massError = mass.subtract(SignedDyadic.of(column.mass()));
-			SignedDyadic residualError = residual.subtract(SignedDyadic.of(column.massResidual()));
-			if (massError.signum() < 0) massError = massError.negate();
-			if (residualError.signum() < 0) residualError = residualError.negate();
-			check(massError.compareTo(SignedDyadic.of(Math.ulp(pivot.mass()) * .5)) <= 0
-					&& residualError.compareTo(SignedDyadic.of(Math.ulp(pivot.massResidual()) * .5)) <= 0,
-					"gas partition exceeds its single pivot rounding");
+			check(mass == column.massUnits() && residual == column.massResidualUnits(),
+					"Gas partition changed integer mass or residual inventory");
 		}
 		for (boolean reverse : new boolean[] {false, true}) {
 			AirNetwork network = new AirNetwork(registry); int source = network.addNode(1, 1);
@@ -455,7 +448,7 @@ public final class AirNetworkValidation {
 					"production tiny topology split failed its exact mass ledger");
 		}
 		GasInventory subQuantumMass = new GasInventory(List.of(
-				new GasComponentAmount(BuiltinGasDefinitions.AIR, 2, Double.MIN_VALUE, List.of(), 0)));
+				new GasComponentAmount(BuiltinGasDefinitions.AIR, 2, 1L, List.of(), 0L)));
 		expectThrow(() -> subQuantumMass.splitTotal(1), "unrepresentable positive gas child mass");
 	}
 
@@ -474,18 +467,18 @@ public final class AirNetworkValidation {
 			throw new AssertionError("Positive unrepresentable gas child volume was accepted");
 		} catch (ExactGasPartitionWeights.UnrepresentableVolumeException expected) { }
 		GasInventory source = new GasInventory(List.of(
-				new GasComponentAmount("test:a", 61, .125, List.of(
-						new GasComponentAmount.SpeciesAmount("test:s", 101)), -.03125),
-				new GasComponentAmount("test:b", 17, 1.5, List.of(
-						new GasComponentAmount.SpeciesAmount("test:s", 13)), .25)));
+				new GasComponentAmount("test:a", 61, mmm.units.Mass.fromKilograms(.125), List.of(
+						new GasComponentAmount.SpeciesAmount("test:s", 101)), mmm.units.Mass.fromKilograms(-.03125)),
+				new GasComponentAmount("test:b", 17, mmm.units.Mass.fromKilograms(1.5), List.of(
+						new GasComponentAmount.SpeciesAmount("test:s", 13)), mmm.units.Mass.fromKilograms(.25))));
 		var normal = source.partition(List.of(ExactRational.ZERO, ExactRational.ONE.divide(4), ExactRational.of(3).divide(4)));
 		check(normal.equals(source.partition(new long[] {0, 1, 3})),
 				"Dyadic topology weights changed a normal partition's stored columns");
 		checkPartitionColumns(source, normal);
 		GasInventory large = new GasInventory(List.of(new GasComponentAmount("test:a", Long.MAX_VALUE,
-				.125, List.of(new GasComponentAmount.SpeciesAmount("test:s", 7)), -.03125)));
+				mmm.units.Mass.fromKilograms(.125), List.of(new GasComponentAmount.SpeciesAmount("test:s", 7)), mmm.units.Mass.fromKilograms(-.03125))));
 		try {
-			large.merge(new GasInventory(List.of(new GasComponentAmount("test:a", 1, .125, List.of(), 0))));
+			large.merge(new GasInventory(List.of(new GasComponentAmount("test:a", 1, mmm.units.Mass.fromKilograms(.125), List.of(), 0L))));
 			throw new AssertionError("Overflowing gas merge was accepted");
 		} catch (GasInventory.RepresentationException expected) { }
 		AirNetwork invalidSource = new AirNetwork();
@@ -498,11 +491,16 @@ public final class AirNetworkValidation {
 		var before = new GasInventory(large.components());
 		for (int power : new int[] {60, 1074}) {
 			BigInteger denominator = BigInteger.ONE.shiftLeft(power);
-			var parts = large.partition(List.of(new ExactRational(BigInteger.ONE, denominator), ExactRational.ONE));
+			var weights = List.of(new ExactRational(BigInteger.ONE, denominator), ExactRational.ONE);
 			// The first quota is Long.MAX_VALUE/(2^power+1); the second has the complementary remainder.
 			BigInteger divisor = denominator.add(BigInteger.ONE);
 			BigInteger[] quota = BigInteger.valueOf(Long.MAX_VALUE).divideAndRemainder(divisor);
 			long expected = quota[0].longValueExact() + (quota[1].shiftLeft(1).compareTo(divisor) >= 0 ? 1 : 0);
+			if (expected > 0 && mmm.units.Mass.portion(large.totalMassUnits(), expected, Long.MAX_VALUE) == 0) {
+				expectThrow(() -> large.partition(weights), "Positive gas child below the integer mass resolution");
+				continue;
+			}
+			var parts = large.partition(weights);
 			check(parts.getFirst().standardVolumeNanos() == expected
 						&& parts.getLast().standardVolumeNanos() == Long.MAX_VALUE - expected,
 					"Positive tiny topology weight was replaced by a minimum integer weight");
@@ -559,13 +557,13 @@ public final class AirNetworkValidation {
 		double[] volumes = new double[GasLimits.MAX_NODES_PER_REGION];
 		java.util.Arrays.fill(volumes, 1);
 		full.restoreNodes(volumes, java.util.Collections.nCopies(volumes.length, GasInventory.EMPTY),
-				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO);
+				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY);
 		AirNetwork oversized = new AirNetwork();
 		double[] excessVolumes = new double[volumes.length + 1];
 		java.util.Arrays.fill(excessVolumes, 1);
 		checkNodeMutationRejectsUnchanged(oversized, () -> oversized.restoreNodes(excessVolumes,
 				java.util.Collections.nCopies(excessVolumes.length, GasInventory.EMPTY), GasAuditLedger.EMPTY,
-				GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO));
+				GasAuditLedger.EMPTY));
 		checkNodeMutationRejectsUnchanged(oversized, () -> oversized.remapNodes(excessVolumes,
 				java.util.Collections.nCopies(excessVolumes.length, GasInventory.EMPTY), GasInventory.EMPTY, GasInventory.EMPTY));
 		full.addOrMergeEdge(1, 2, .01, .65);
@@ -577,7 +575,6 @@ public final class AirNetworkValidation {
 
 		// A zero net mass change leaves this exact, closed ledger representable despite its wide stored roundoff.
 		AirNetwork wide = restoredWideLedger(false);
-		SignedDyadic roundoff = wide.massRoundoff();
 		GasAuditLedger source = wide.externalSource();
 		wide.addOrMergeEdge(1, AirNetwork.AMBIENT_NODE, .01, .65);
 		check(wide.auditClosed() && Double.isFinite(wide.gaugePressure(1)) && wide.density(1) == 3,
@@ -586,42 +583,31 @@ public final class AirNetworkValidation {
 		var edges = wide.edges();
 		int[] exactChildren = wide.splitNode(1, .5, .5);
 		check(exactChildren[0] == 1 && exactChildren[1] == 2 && wide.revision() == revision + 1
-				&& wide.massRoundoff().equals(roundoff) && wide.residualRoundoff().equals(SignedDyadic.ZERO)
 				&& wide.externalSource().equals(source) && wide.escapedSink().equals(GasAuditLedger.EMPTY)
 				&& wide.edges().equals(edges) && wide.availableVolume(1) == .5 && wide.availableVolume(2) == .5 && wide.auditClosed(),
 				"Zero-delta split changed the wide audit or rejected a representable final ledger");
 
-		// The unequal split of binary64 mass 3.2 adds exactly 2^-52 kg; the final stored roundoff exceeds its budget.
-		GasInventory rounded = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR, 3, 3.2, List.of(), 0)));
+		GasInventory rounded = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR,
+				3, mmm.units.Mass.fromKilograms(3.2), List.of(), 0L)));
 		var parts = rounded.partition(new long[] {1, 2});
-		SignedDyadic delta = SignedDyadic.of(parts.getFirst().totalMass()).add(SignedDyadic.of(parts.getLast().totalMass()))
-				.subtract(SignedDyadic.of(3.2));
-		check(delta.equals(SignedDyadic.of(1, -52)), "Audit-budget rejection fixture has no actual rounding delta");
-		GasAuditLedger roundedSource = new GasAuditLedger(List.of(new GasAuditLedger.Entry(BuiltinGasDefinitions.AIR,
-				3, SignedDyadic.of(3.2).subtract(roundoff), List.of(), SignedDyadic.ZERO)));
-		AirNetwork unrepresentable = new AirNetwork();
-		unrepresentable.restoreNodes(new double[] {1}, List.of(rounded), roundedSource, GasAuditLedger.EMPTY, roundoff, SignedDyadic.ZERO);
-		check(unrepresentable.auditClosed() && Double.isFinite(unrepresentable.gaugePressure(1)),
-				"Final-roundoff rejection fixture is not a valid restored gas owner");
-		checkSplitRejectsUnchanged(unrepresentable, 1, 2);
+		check(Math.addExact(parts.getFirst().totalMassUnits(), parts.getLast().totalMassUnits()) == rounded.totalMassUnits(),
+				"Unequal gas split changed integer mass inventory");
 	}
 
 	private static AirNetwork restoredWideLedger(boolean twoNodes) {
-		int span = SignedDyadic.MAX_SIGNIFICAND_BITS - 1;
-		SignedDyadic sourceMass = new SignedDyadic(BigInteger.ONE.shiftLeft(span).add(BigInteger.ONE), -span);
-		SignedDyadic roundoff = new SignedDyadic(BigInteger.ONE.shiftLeft(span + 1).subtract(BigInteger.ONE), -span);
 		GasInventory inventory = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR,
-				twoNodes ? 500_000_000L : 1_000_000_000L, twoNodes ? 1.5 : 3, List.of(), 0)));
+				twoNodes ? 500_000_000L : 1_000_000_000L, mmm.units.Mass.fromKilograms(twoNodes ? 1.5 : 3), List.of(), 0L)));
 		GasAuditLedger source = new GasAuditLedger(List.of(new GasAuditLedger.Entry(
-				BuiltinGasDefinitions.AIR, 1_000_000_000L, sourceMass, List.of(), SignedDyadic.ZERO)));
+				BuiltinGasDefinitions.AIR, 1_000_000_000L, mmm.units.Mass.fromKilograms(3), List.of(), 0L)));
 		AirNetwork network = new AirNetwork();
 		network.restoreNodes(twoNodes ? new double[] {.5, .5} : new double[] {1},
-				twoNodes ? List.of(inventory, inventory) : List.of(inventory), source, GasAuditLedger.EMPTY, roundoff, SignedDyadic.ZERO);
+				twoNodes ? List.of(inventory, inventory) : List.of(inventory), source, GasAuditLedger.EMPTY);
 		return network;
 	}
 
 	private static void validatePublicMutatorsPreflightAllOwners() {
-		AirNetwork cumulative = new AirNetwork();
+		AirNetwork cumulative = new AirNetwork(new GasRegistry(List.of(new GasComponentDefinition(
+				BuiltinGasDefinitions.AIR, .01, .01, List.of(), List.of())), List.of(new GasRegistry.AmbientFraction(BuiltinGasDefinitions.AIR, ExactRational.ONE))));
 		int sourceNode = cumulative.addNode(1, AirNetwork.cubicMeters(Long.MAX_VALUE));
 		cumulative.setStandardVolume(sourceNode, 0);
 		check(cumulative.auditClosed() && cumulative.drawnFromAmbientNanos() == Long.MAX_VALUE
@@ -631,8 +617,8 @@ public final class AirNetworkValidation {
 		checkNodeMutationRejectsUnchanged(cumulative, () -> cumulative.addNode(Double.NaN, 0));
 		check(cumulative.addNode(1, 0) == 2 && cumulative.auditClosed(), "Rejected creation consumed a node id");
 		GasRegistry mixture = new GasRegistry(List.of(
-				new GasComponentDefinition("test:a", 1, 1, List.of(), List.of()),
-				new GasComponentDefinition("test:b", 1, 1, List.of(), List.of())), List.of(
+				new GasComponentDefinition("test:a", .01, .01, List.of(), List.of()),
+				new GasComponentDefinition("test:b", .01, .01, List.of(), List.of())), List.of(
 				new GasRegistry.AmbientFraction("test:a", ExactRational.ONE.divide(2)),
 				new GasRegistry.AmbientFraction("test:b", ExactRational.ONE.divide(2))));
 		AirNetwork mixed = new AirNetwork(mixture);
@@ -648,7 +634,6 @@ public final class AirNetworkValidation {
 			network.addOrMergeEdge(1, AirNetwork.AMBIENT_NODE, .01, .65);
 			if (action == 1) network.addOrMergeEdge(2, AirNetwork.AMBIENT_NODE, .02, .65);
 			GasAuditLedger source = network.externalSource();
-			SignedDyadic roundoff = network.massRoundoff();
 			long revision = network.revision();
 			switch (action) {
 				case 0 -> check(network.addNode(1, 0) == 2 && network.inventory(2).isEmpty(), "Vacuum creation changed identity");
@@ -659,25 +644,23 @@ public final class AirNetworkValidation {
 						&& network.edgeCount() == 1, "Explicit removal changed physical capacity or edge identity"); }
 			}
 			check(network.revision() == revision + 1 && network.externalSource().equals(source)
-					&& network.massRoundoff().equals(roundoff) && network.residualRoundoff().equals(SignedDyadic.ZERO)
 					&& network.ventedNanos() == (action >= 2 ? 1_000_000_000L : 0) && network.auditClosed(),
 					"Zero-delta public edit rejected or changed its wide audit");
 		}
 		AirNetwork phase = restoredWideLedger(false);
-		SignedDyadic roundoff = phase.massRoundoff();
 		phase.commitPhaseSource(1, new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR,
-				500_000_000L, .5, List.of(), 0))));
-		check(phase.inventory(1).totalMass() == 3.5 && phase.massRoundoff().equals(roundoff) && phase.auditClosed(),
+				500_000_000L, mmm.units.Mass.fromKilograms(.5), List.of(), 0L))));
+		check(phase.inventory(1).totalMass() == 3.5 && phase.auditClosed(),
 				"Zero-delta phase source rejected a representable wide ledger");
 		phase = restoredWideLedger(false);
 		phase.commitPhaseSink(1, phase.inventory(1).splitTotal(500_000_000L).first());
-		check(phase.inventory(1).totalMass() == 1.5 && phase.massRoundoff().equals(roundoff) && phase.auditClosed(),
+		check(phase.inventory(1).totalMass() == 1.5 && phase.auditClosed(),
 				"Zero-delta phase sink rejected a representable wide ledger");
 		AirNetwork pore = restoredWideLedger(true);
 		pore.updateAvailableVolume(1, .25); pore.updateAvailableVolume(2, .75);
 		pore.addOrMergeEdge(1, 2, .01, .65);
 		pore.stepEdges(1);
-		check(pore.standardVolumeNanos(1) == 250_000_000L && pore.massRoundoff().equals(roundoff) && pore.auditClosed(),
+		check(pore.standardVolumeNanos(1) == 250_000_000L && pore.auditClosed(),
 				"Zero-delta finite-rate transfer rejected a representable wide ledger");
 
 		AirNetwork edges = new AirNetwork(); edges.addNode(1, 1); edges.addNode(1, 1);
@@ -758,7 +741,6 @@ public final class AirNetworkValidation {
 		double[] capacities = ids.stream().mapToDouble(network::availableVolume).toArray();
 		var edges = List.copyOf(network.edges());
 		GasAuditLedger source = network.externalSource(), sink = network.escapedSink();
-		SignedDyadic mass = network.massRoundoff(), residual = network.residualRoundoff();
 		long revision = network.revision();
 		int clamps = network.transferClampEvents();
 		boolean rejected = false;
@@ -769,8 +751,7 @@ public final class AirNetworkValidation {
 		catch (IllegalStateException stale) { if (!stalePlan) throw stale; rejected = true; }
 		check(rejected, "Unrepresentable gas mutation did not reject its complete candidate");
 		check(network.nodeIds().equals(ids) && network.edges().equals(edges) && network.revision() == revision && network.transferClampEvents() == clamps
-				&& network.externalSource().equals(source) && network.escapedSink().equals(sink)
-				&& network.massRoundoff().equals(mass) && network.residualRoundoff().equals(residual) && network.auditClosed(),
+				&& network.externalSource().equals(source) && network.escapedSink().equals(sink) && network.auditClosed(),
 				"Rejected gas mutation changed node identity, edges, audit or revision");
 		for (int slot = 0; slot < ids.size(); slot++) check(network.inventory(ids.get(slot)).equals(inventories.get(slot))
 				&& Double.doubleToRawLongBits(network.availableVolume(ids.get(slot))) == Double.doubleToRawLongBits(capacities[slot]),
@@ -818,8 +799,8 @@ public final class AirNetworkValidation {
 		AirNetwork network = new AirNetwork(registry);
 		int node = network.addNode(1.0, 1.0);
 		GasInventory wrongComponent = new GasInventory(List.of(new GasComponentAmount(
-				"test:alpha", 1L, 1.0E-9,
-				List.of(new GasComponentAmount.SpeciesAmount("test:b", 1L)), 0.0)));
+				"test:alpha", 1L, mmm.units.Mass.fromKilograms(1.0E-9),
+				List.of(new GasComponentAmount.SpeciesAmount("test:b", 1L)), 0L)));
 		long before = network.standardVolumeNanos(node);
 		expectThrow(() -> network.commitPhaseSource(node, wrongComponent), "species attached to wrong component");
 		check(network.standardVolumeNanos(node) == before && network.auditClosed(),
@@ -830,10 +811,10 @@ public final class AirNetworkValidation {
 		AirNetwork network = new AirNetwork();
 		int node = network.addNode(2.0, 2.0);
 		GasInventory groupedVapor = new GasInventory(List.of(new GasComponentAmount(
-				BuiltinGasDefinitions.WATER_VAPOR, 4_005_761L, 0.003, List.of(), 0.003)));
+				BuiltinGasDefinitions.WATER_VAPOR, 4_005_761L, mmm.units.Mass.fromKilograms(0.003), List.of(), mmm.units.Mass.fromKilograms(0.003))));
 		network.commitPhaseSource(node, groupedVapor);
 		GasInventory.Split take = network.previewComponentTake(node, BuiltinGasDefinitions.WATER_VAPOR,
-				2_670_508L, 0.002, 0.002);
+				2_670_508L, mmm.units.Mass.fromKilograms(0.002), mmm.units.Mass.fromKilograms(0.002));
 		GasComponentAmount moved = take.first().components().getFirst();
 		GasComponentAmount remainder = take.second().component(BuiltinGasDefinitions.WATER_VAPOR);
 		check(moved.standardVolumeNanos() == 2_670_508L && moved.mass() == 0.002
@@ -848,9 +829,11 @@ public final class AirNetworkValidation {
 	}
 
 	private static void validatePhaseMutationPlans() {
-		AirNetwork network = new AirNetwork();
+		AirNetwork network = new AirNetwork(new GasRegistry(List.of(new GasComponentDefinition(
+				BuiltinGasDefinitions.AIR, .01, .01, List.of(), List.of())),
+				List.of(new GasRegistry.AmbientFraction(BuiltinGasDefinitions.AIR, ExactRational.ONE))));
 		int first = network.addNode(1.0, 0.0), second = network.addNode(1.0, 0.0);
-		GasInventory oneNano = network.registry().createAmbient(1L);
+		GasInventory oneNano = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR, 1L, 1L, List.of(), 1L)));
 		AirNetwork.PhaseMutationPlan plan = network.planPhaseSource(first, oneNano);
 		check(network.standardVolumeNanos(first) == 0L, "phase planning changed live gas");
 		AirNetwork other = new AirNetwork();
@@ -887,7 +870,7 @@ public final class AirNetworkValidation {
 		for (int component = 0; component < 33; component++) {
 			String id = "test:regional_" + component;
 			definitions.add(new GasComponentDefinition(id, 1.0, 0.0, List.of(), List.of()));
-			(component < 17 ? first : second).add(new GasComponentAmount(id, 1L, 1.0, List.of(), 0.0));
+			(component < 17 ? first : second).add(new GasComponentAmount(id, 1L, mmm.units.Mass.fromKilograms(1.0), List.of(), 0L));
 		}
 		GasRegistry registry = new GasRegistry(definitions, List.of(new GasRegistry.AmbientFraction("test:regional_0", ExactRational.ONE)));
 		AirNetwork network = new AirNetwork(registry);
@@ -898,7 +881,7 @@ public final class AirNetworkValidation {
 		var snapshot = GasStateSnapshot.capture(2, 1, 1, pieces, network, "");
 		AirNetwork restored = new AirNetwork(registry);
 		restored.restoreNodes(new double[]{1, 1}, snapshot.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
-				snapshot.externalSource(), snapshot.escapedSink(), snapshot.massRoundoff(), snapshot.residualRoundoff());
+				snapshot.externalSource(), snapshot.escapedSink());
 		check(restored.auditClosed() && restored.sealedInventory().equals(network.sealedInventory()), "33-component region failed restore");
 		var identity = restored.planRemapNodes(new double[]{1, 1}, List.of(restored.inventory(1), restored.inventory(2)),
 				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, List.of());
@@ -913,30 +896,26 @@ public final class AirNetworkValidation {
 		AirNetwork rejected = new AirNetwork(registry);
 		GasAuditLedger source = rejected.externalSource(), sink = rejected.escapedSink();
 		expectThrow(() -> rejected.restoreNodes(new double[]{1, 1}, List.of(network.inventory(a), network.inventory(b)),
-				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO), "nonclosing regional restore");
+				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY), "nonclosing regional restore");
 		check(rejected.nodeCount() == 0 && rejected.revision() == 0 && rejected.externalSource() == source
 				&& rejected.escapedSink() == sink, "failed restore published nodes or ledger");
-		GasInventory hugeFirst = new GasInventory(List.of(new GasComponentAmount("test:regional_0", Long.MAX_VALUE, 1, List.of(), 0)));
-		GasInventory hugeSecond = new GasInventory(List.of(new GasComponentAmount("test:regional_1", 1, 1, List.of(), 0)));
+		GasInventory hugeFirst = new GasInventory(List.of(new GasComponentAmount("test:regional_0", Long.MAX_VALUE, mmm.units.Mass.fromKilograms(1), List.of(), 0L)));
+		GasInventory hugeSecond = new GasInventory(List.of(new GasComponentAmount("test:regional_1", 1, mmm.units.Mass.fromKilograms(1), List.of(), 0L)));
 		try {
 			rejected.restoreNodes(new double[]{1, 1}, List.of(hugeFirst, hugeSecond), GasAuditLedger.EMPTY,
-					GasAuditLedger.EMPTY, SignedDyadic.ZERO, SignedDyadic.ZERO);
+					GasAuditLedger.EMPTY);
 			throw new AssertionError("regional nanos overflow was accepted");
 		} catch (ArithmeticException expected) { }
 		check(rejected.nodeCount() == 0 && rejected.revision() == 0 && rejected.externalSource() == source
 				&& rejected.escapedSink() == sink, "throwing restore published partial state");
 
-		GasInventory hugeMass = new GasInventory(List.of(new GasComponentAmount("test:regional_0", 1, 1e308, List.of(), 0)));
+		GasInventory hugeMass = new GasInventory(List.of(new GasComponentAmount("test:regional_0", 1, Long.MAX_VALUE, List.of(), 0L)));
 		AirNetwork massive = new AirNetwork(registry);
-		massive.commitPhaseSource(massive.addNode(1, 0), hugeMass); massive.commitPhaseSource(massive.addNode(1, 0), hugeMass);
-		check(massive.auditClosed() && massive.sealedInventory().component("test:regional_0").mass()
-				.equals(SignedDyadic.of(1e308).add(SignedDyadic.of(1e308))), "finite node masses overflowed exact regional audit");
-		GasInventory positive = new GasInventory(List.of(new GasComponentAmount("test:regional_0", 1, 1, List.of(), 1e308)));
-		GasInventory negative = new GasInventory(List.of(new GasComponentAmount("test:regional_0", 1, 1, List.of(), -1e308)));
-		AirNetwork residual = new AirNetwork(registry);
-		for (GasInventory inventory : List.of(positive, positive, negative)) residual.commitPhaseSource(residual.addNode(1, 0), inventory);
-		check(residual.auditClosed() && residual.sealedInventory().component("test:regional_0").massResidual().equals(SignedDyadic.of(1e308)),
-				"intermediate floating residual overflow rejected a finite regional sum");
+		massive.commitPhaseSource(massive.addNode(1, 0), hugeMass);
+		int secondNode = massive.addNode(1, 0);
+		checkNodeMutationRejectsUnchanged(massive, () -> massive.commitPhaseSource(secondNode, hugeMass));
+		check(massive.auditClosed() && massive.sealedInventory().component("test:regional_0").massUnits() == Long.MAX_VALUE,
+				"Rejected integer mass overflow changed the gas inventory");
 	}
 
 	private static void checkLedger(AirNetwork network, String context) {

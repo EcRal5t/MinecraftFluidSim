@@ -46,21 +46,21 @@ public final class ContainerItemStacks {
 			mixture = FluidMixture.decode(encoded);
 			if (mixture.components().size() < 2 || !mixture.encode().equals(encoded)) return null;
 		} else {
-			Long massBits = stack.get(MmmComponents.FLUID_MASS_BITS);
-			if (materialId == null || massBits == null) return null;
-			mixture = new FluidMixture(List.of(new FluidMixture.Component(materialId, volume, massBits)));
+			Long massUnits = stack.get(MmmComponents.FLUID_MASS_UNITS);
+			if (materialId == null || massUnits == null) return null;
+			mixture = new FluidMixture(List.of(new FluidMixture.Component(materialId, volume, massUnits)));
 		}
-		Long persistedMassBits = stack.get(MmmComponents.FLUID_MASS_BITS);
+		Long persistedMassUnits = stack.get(MmmComponents.FLUID_MASS_UNITS);
 		return mixture.totalVolumeNanos() == volume
-				&& persistedMassBits != null
-				&& Double.doubleToRawLongBits(mixture.totalMass()) == persistedMassBits
+				&& persistedMassUnits != null
+				&& mixture.totalMassUnits() == persistedMassUnits
 				? mixture : null;
 	}
 
 	public static ItemStack toStack(FluidMixture mixture) {
 		ItemStack stack = new ItemStack(MmmItems.MATERIAL_BUCKET);
 		stack.set(MmmComponents.FLUID_VOLUME, mixture.totalVolumeNanos());
-		stack.set(MmmComponents.FLUID_MASS_BITS, Double.doubleToRawLongBits(mixture.totalMass()));
+		stack.set(MmmComponents.FLUID_MASS_UNITS, mixture.totalMassUnits());
 		if (mixture.components().size() == 1) {
 			stack.set(MmmComponents.MATERIAL_ID, mixture.components().getFirst().materialId());
 		} else {
@@ -76,15 +76,15 @@ public final class ContainerItemStacks {
 				|| stack.get(MmmComponents.MIXTURE_COMPONENTS) != null) return null;
 		ChemicalContents contents = ChemicalContents.decode(encoded);
 		contents.validateAgainst(registry);
-		Long massBits = stack.get(MmmComponents.FLUID_MASS_BITS);
-		return MaterialBucketItem.volume(stack) == contents.totalVolumeNanos() && massBits != null
-				&& massBits == Double.doubleToRawLongBits(contents.totalMass()) ? contents : null;
+		Long massUnits = stack.get(MmmComponents.FLUID_MASS_UNITS);
+		return MaterialBucketItem.volume(stack) == contents.totalVolumeNanos() && massUnits != null
+				&& massUnits == contents.totalMassUnits() ? contents : null;
 	}
 
 	public static ItemStack toStack(ChemicalContents contents) {
 		ItemStack stack = new ItemStack(MmmItems.MATERIAL_BUCKET);
 		stack.set(MmmComponents.FLUID_VOLUME, contents.totalVolumeNanos());
-		stack.set(MmmComponents.FLUID_MASS_BITS, Double.doubleToRawLongBits(contents.totalMass()));
+		stack.set(MmmComponents.FLUID_MASS_UNITS, contents.totalMassUnits());
 		stack.set(MmmComponents.CHEMICAL_CONTENTS, contents.encode());
 		return stack;
 	}
@@ -131,7 +131,7 @@ public final class ContainerItemStacks {
 		return stack.get(MmmComponents.WATER_VOLUME) != null
 				|| stack.get(MmmComponents.FLUID_VOLUME) != null
 				|| stack.get(MmmComponents.MATERIAL_ID) != null
-				|| stack.get(MmmComponents.FLUID_MASS_BITS) != null
+				|| stack.get(MmmComponents.FLUID_MASS_UNITS) != null
 				|| stack.get(MmmComponents.MIXTURE_COMPONENTS) != null
 				|| stack.get(MmmComponents.CHEMICAL_CONTENTS) != null
 				|| stack.get(MmmComponents.THERMAL_CONTENTS) != null;
@@ -158,9 +158,9 @@ public final class ContainerItemStacks {
 			String chemical = stack.get(MmmComponents.CHEMICAL_CONTENTS);
 			if (chemical != null) {
 				ChemicalContents contents = ChemicalContents.decode(chemical);
-				Long mass = stack.get(MmmComponents.FLUID_MASS_BITS);
+				Long mass = stack.get(MmmComponents.FLUID_MASS_UNITS);
 				if (MaterialBucketItem.volume(stack) != contents.totalVolumeNanos() || mass == null
-						|| mass != Double.doubleToRawLongBits(contents.totalMass())
+						|| mass != contents.totalMassUnits()
 						|| stack.get(MmmComponents.MATERIAL_ID) != null
 						|| stack.get(MmmComponents.MIXTURE_COMPONENTS) != null) {
 					throw new IllegalArgumentException("Chemical container ledgers disagree");
@@ -177,7 +177,7 @@ public final class ContainerItemStacks {
 	private static void requireNoMaterialLedger(ItemStack stack) {
 		if (stack.get(MmmComponents.FLUID_VOLUME) != null
 				|| stack.get(MmmComponents.MATERIAL_ID) != null
-				|| stack.get(MmmComponents.FLUID_MASS_BITS) != null
+				|| stack.get(MmmComponents.FLUID_MASS_UNITS) != null
 				|| stack.get(MmmComponents.MIXTURE_COMPONENTS) != null
 				|| stack.get(MmmComponents.CHEMICAL_CONTENTS) != null) {
 			throw new IllegalArgumentException("Pure-water container has conflicting material ledgers");

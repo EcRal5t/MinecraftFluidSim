@@ -153,7 +153,7 @@ public record ContainerTransferJournal(
 			long nanos,
 			long solidVolumeSvq,
 			String contents,
-			long massBits,
+			long massUnits,
 			String thermalContents,
 			String profileFingerprint
 	) {
@@ -172,17 +172,17 @@ public record ContainerTransferJournal(
 			this(kind, nanos, -1L, contents, -1L, null, null);
 		}
 
-		public ItemFingerprint(ItemKind kind, long nanos, String contents, long massBits) {
-			this(kind, nanos, -1L, contents, massBits, null, null);
+		public ItemFingerprint(ItemKind kind, long nanos, String contents, long massUnits) {
+			this(kind, nanos, -1L, contents, massUnits, null, null);
 		}
 
-		public ItemFingerprint(ItemKind kind, long nanos, long solidVolumeSvq, String contents, long massBits) {
-			this(kind, nanos, solidVolumeSvq, contents, massBits, null, null);
+		public ItemFingerprint(ItemKind kind, long nanos, long solidVolumeSvq, String contents, long massUnits) {
+			this(kind, nanos, solidVolumeSvq, contents, massUnits, null, null);
 		}
 
 		public ItemFingerprint(ItemKind kind, long nanos, long solidVolumeSvq, String contents,
-				long massBits, String thermalContents) {
-			this(kind, nanos, solidVolumeSvq, contents, massBits, thermalContents, null);
+				long massUnits, String thermalContents) {
+			this(kind, nanos, solidVolumeSvq, contents, massUnits, thermalContents, null);
 		}
 
 		public boolean requiresChemicalRegistry() {

@@ -19,13 +19,15 @@ final class LiquidParticleStore {
 	private float[] velocityY;
 	private float[] velocityZ;
 	private float[] volume;
-	private double[] mass;
+	private long[] massUnits;
+	private final mmm.units.SolverUnitScale units;
 	private int[] materialHandle;
 	private int[] phaseLabel;
 
-	LiquidParticleStore(int maximumParticleCount) {
+	LiquidParticleStore(int maximumParticleCount, mmm.units.SolverUnitScale units) {
 		if (maximumParticleCount <= 0) throw new IllegalArgumentException("Maximum particle count must be positive");
 		this.maximumParticleCount = maximumParticleCount;
+		this.units = java.util.Objects.requireNonNull(units);
 		int initialCapacity = Math.min(16_384, maximumParticleCount);
 		this.positionX = new float[initialCapacity];
 		this.positionY = new float[initialCapacity];
@@ -34,7 +36,7 @@ final class LiquidParticleStore {
 		this.velocityY = new float[initialCapacity];
 		this.velocityZ = new float[initialCapacity];
 		this.volume = new float[initialCapacity];
-		this.mass = new double[initialCapacity];
+		this.massUnits = new long[initialCapacity];
 		this.materialHandle = new int[initialCapacity];
 		this.phaseLabel = new int[initialCapacity];
 	}
@@ -73,9 +75,10 @@ final class LiquidParticleStore {
 
 	void setVolume(int index, float value) { volume[index] = value; }
 
-	double mass(int index) { return mass[index]; }
+	double mass(int index) { return units.normalizedMass(massUnits[index]); }
+	long massUnits(int index) { return massUnits[index]; }
 
-	void setMass(int index, double value) { mass[index] = value; }
+	void setMassUnits(int index, long value) { if (value < 0) throw new IllegalArgumentException("Negative liquid mass"); massUnits[index] = value; }
 
 	int materialHandle(int index) { return materialHandle[index]; }
 
@@ -104,7 +107,7 @@ final class LiquidParticleStore {
 		velocityY[index] = velocityY[count];
 		velocityZ[index] = velocityZ[count];
 		volume[index] = volume[count];
-		mass[index] = mass[count];
+		massUnits[index] = massUnits[count];
 		materialHandle[index] = materialHandle[count];
 		phaseLabel[index] = phaseLabel[count];
 	}
@@ -123,13 +126,13 @@ final class LiquidParticleStore {
 		velocityY = Arrays.copyOf(velocityY, capacity);
 		velocityZ = Arrays.copyOf(velocityZ, capacity);
 		volume = Arrays.copyOf(volume, capacity);
-		mass = Arrays.copyOf(mass, capacity);
+		massUnits = Arrays.copyOf(massUnits, capacity);
 		materialHandle = Arrays.copyOf(materialHandle, capacity);
 		phaseLabel = Arrays.copyOf(phaseLabel, capacity);
 		return capacity;
 	}
 
-	double[] copyMass() { return Arrays.copyOf(mass, count); }
+	long[] copyMassUnits() { return Arrays.copyOf(massUnits, count); }
 
 	int[] copyMaterialHandles() { return Arrays.copyOf(materialHandle, count); }
 
@@ -140,7 +143,7 @@ final class LiquidParticleStore {
 	 */
 	DirectArrays directArrays() {
 		return new DirectArrays(positionX, positionY, positionZ, velocityX, velocityY, velocityZ,
-				volume, mass, materialHandle, phaseLabel);
+				volume, massUnits, materialHandle, phaseLabel);
 	}
 
 	static final class DirectArrays {
@@ -151,13 +154,13 @@ final class LiquidParticleStore {
 		final float[] velocityY;
 		final float[] velocityZ;
 		final float[] volume;
-		final double[] mass;
+		final long[] massUnits;
 		final int[] materialHandle;
 		final int[] phaseLabel;
 
 		private DirectArrays(float[] positionX, float[] positionY, float[] positionZ,
 		                     float[] velocityX, float[] velocityY, float[] velocityZ,
-		                     float[] volume, double[] mass, int[] materialHandle, int[] phaseLabel) {
+		                     float[] volume, long[] massUnits, int[] materialHandle, int[] phaseLabel) {
 			this.positionX = positionX;
 			this.positionY = positionY;
 			this.positionZ = positionZ;
@@ -165,7 +168,7 @@ final class LiquidParticleStore {
 			this.velocityY = velocityY;
 			this.velocityZ = velocityZ;
 			this.volume = volume;
-			this.mass = mass;
+			this.massUnits = massUnits;
 			this.materialHandle = materialHandle;
 			this.phaseLabel = phaseLabel;
 		}

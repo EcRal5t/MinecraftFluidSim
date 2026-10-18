@@ -10,7 +10,7 @@ final class GpuProbeCheckpoint {
 	private final FlipParticleState particles;
 
 	GpuProbeCheckpoint(long generation, int nx, int ny, int nz, float cellSize, int particleCount,
-	                   float volumeLedger, float[] positionVolume, float[] particleVelocities, byte[] solidMask) {
+	                   float volumeLedger, float[] positionVolume, float[] particleVelocities, long[] massUnits, byte[] solidMask) {
 		if (generation < 0L) throw new IllegalArgumentException("Checkpoint generation must not be negative");
 		byte[] collisionMicroMasks = new byte[solidMask.length];
 		for (int cell = 0; cell < solidMask.length; cell++) {
@@ -22,7 +22,7 @@ final class GpuProbeCheckpoint {
 		}
 		this.generation = generation;
 		this.particles = new FlipParticleState(nx, ny, nz, cellSize, particleCount,
-				volumeLedger, positionVolume, particleVelocities, collisionMicroMasks);
+				volumeLedger, positionVolume, particleVelocities, massUnits, collisionMicroMasks);
 	}
 
 	FluidDomain restore(FluidSolverConfig config) {

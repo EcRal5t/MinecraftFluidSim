@@ -41,7 +41,7 @@ final class FlipParticleReseeder {
 			boolean[] solid,
 			float[] particleX, float[] particleY, float[] particleZ,
 			float[] velocityX, float[] velocityY, float[] velocityZ,
-			float[] particleVolume, double[] particleMass,
+			float[] particleVolume, long[] particleMass,
 			int[] particleMaterialHandle, int[] particlePhaseLabel,
 			ChemicalParcelStore chemicalParcels, int particleCount,
 			boolean massWeightedDynamics, PositionValidator positionValidator
@@ -60,7 +60,7 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
-			double[] particleMass,
+			long[] particleMass,
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
 			ChemicalParcelStore chemicalParcels,
@@ -71,7 +71,7 @@ final class FlipParticleReseeder {
 	) {
 		ensureScratchCapacity(particleX.length);
 		double volumeBefore = totalVolume(particleVolume, particleCount);
-		double massBefore = totalMass(particleMass, particleCount);
+		long massBefore = totalMass(particleMass, particleCount);
 		double energyBefore = thermal == null ? 0.0 : thermal.totalEnergy(particleCount);
 		buildCellLists(particleX, particleY, particleZ, particleVolume, particleCount);
 		MergeResult mergeResult = mergeOverpopulatedCells(
@@ -124,7 +124,8 @@ final class FlipParticleReseeder {
 		}
 
 		double volumeAfter = totalVolume(particleVolume, particleCount);
-		double massAfter = totalMass(particleMass, particleCount);
+		long massAfter = totalMass(particleMass, particleCount);
+		if (massBefore != massAfter) throw new IllegalStateException("Reseeding changed integer mass inventory");
 		double energyAfter = thermal == null ? 0.0 : thermal.totalEnergy(particleCount);
 		double ledgerError = volumeAfter - volumeBefore;
 		return new Result(particleCount, merged, split, budgetSkipped, geometrySkipped, conservationSkipped,
@@ -139,7 +140,7 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
-			double[] particleMass,
+			long[] particleMass,
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
 			ChemicalParcelStore chemicalParcels,
@@ -244,7 +245,7 @@ final class FlipParticleReseeder {
 			int target,
 			int source,
 			float[] particleVolume,
-			double[] particleMass,
+			long[] particleMass,
 			ChemicalParcelStore chemicalParcels,
 			ThermalAdapter thermal
 	) {
@@ -253,7 +254,7 @@ final class FlipParticleReseeder {
 		double mergedVolume = targetVolume + sourceVolume;
 		if (!exactlyMergeable(targetVolume, sourceVolume, mergedVolume)) throw new IllegalStateException("Preflighted quadrature merge changed its exact volume");
 		particleVolume[target] = (float) mergedVolume;
-		particleMass[target] += particleMass[source];
+		particleMass[target] = Math.addExact(particleMass[target], particleMass[source]);
 		if (chemicalParcels != null) chemicalParcels.merge(target, source, particleMass[target]);
 		if (thermal != null) thermal.merge(target, source);
 	}
@@ -275,7 +276,7 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
-			double[] particleMass,
+			long[] particleMass,
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
 			ChemicalParcelStore chemicalParcels,
@@ -345,7 +346,7 @@ final class FlipParticleReseeder {
 		particleZ[destination] = destinationZ;
 		particleVolume[destination] = secondVolume;
 		particleVolume[source] = firstVolume;
-		double firstMass = particleMass[source] * 0.5;
+		long firstMass = particleMass[source] / 2;
 		particleMass[destination] = particleMass[source] - firstMass;
 		particleMass[source] = firstMass;
 		if (chemicalParcels != null) chemicalParcels.split(
@@ -381,13 +382,13 @@ final class FlipParticleReseeder {
 		return solid[cellIndex(nx, ny, nz)];
 	}
 
-	private int largestMarker(int cell, float[] particleVolume, double[] particleMass) {
+	private int largestMarker(int cell, float[] particleVolume, long[] particleMass) {
 		int best = -1;
 		float bestVolume = -1.0F;
 		for (int particle = cellHead[cell]; particle >= 0; particle = nextParticle[particle]) {
 			// Symmetric positions require exactly equal positive stored mass and volume shares.
 			float volume = particleVolume[particle], halfVolume = volume * .5F;
-			double mass = particleMass[particle], halfMass = mass * .5;
+			long mass = particleMass[particle], halfMass = mass / 2;
 			if (!(halfVolume > 0 && Float.isFinite(halfVolume) && halfVolume == volume - halfVolume
 					&& halfMass > 0 && Double.isFinite(halfMass) && halfMass == mass - halfMass)) continue;
 			if (particleVolume[particle] > bestVolume) {
@@ -421,7 +422,7 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
-			double[] particleMass,
+			long[] particleMass,
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel,
 			ChemicalParcelStore chemicalParcels,
@@ -453,7 +454,7 @@ final class FlipParticleReseeder {
 			float[] velocityY,
 			float[] velocityZ,
 			float[] particleVolume,
-			double[] particleMass,
+			long[] particleMass,
 			int[] particleMaterialHandle,
 			int[] particlePhaseLabel
 	) {
@@ -495,11 +496,7 @@ final class FlipParticleReseeder {
 		return total;
 	}
 
-	private static double totalMass(double[] particleMass, int particleCount) {
-		double total = 0.0;
-		for (int particle = 0; particle < particleCount; particle++) total += particleMass[particle];
-		return total;
-	}
+	private static long totalMass(long[] particleMass, int particleCount) { return mmm.units.Mass.sum(particleMass, particleCount); }
 
 	private void ensureScratchCapacity(int particleCapacity) {
 		if (nextParticle.length < particleCapacity) nextParticle = new int[particleCapacity];

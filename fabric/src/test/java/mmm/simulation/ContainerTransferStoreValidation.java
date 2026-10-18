@@ -277,9 +277,9 @@ public final class ContainerTransferStoreValidation {
 		ContainerTransferJournal.ItemFingerprint materialBefore = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET, 1_000_000_000L, -1L,
 				new FluidMixture(List.of(
-						new FluidMixture.Component("mmm:oil", 400_000_000L, 320.0),
-						new FluidMixture.Component("mmm:water", 600_000_000L, 600.0))).encode(),
-				Double.doubleToRawLongBits(920.0), null, PROFILE);
+						new FluidMixture.Component("mmm:oil", 400_000_000L, mmm.units.Mass.fromKilograms(320.0)),
+						new FluidMixture.Component("mmm:water", 600_000_000L, mmm.units.Mass.fromKilograms(600.0)))).encode(),
+				mmm.units.Mass.fromKilograms(920.0), null, PROFILE);
 		ContainerTransferJournal.ItemFingerprint materialAfter = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.EMPTY_MATERIAL_BUCKET, -1L, null);
 		ContainerTransferJournal material = new ContainerTransferJournal(
@@ -296,7 +296,7 @@ public final class ContainerTransferStoreValidation {
 				"foreign-profile material WAL was accepted by the world admission check");
 		ContainerTransferJournal.ItemFingerprint incompleteMaterial = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.MATERIAL_BUCKET, 1_000_000_000L, -1L,
-				"mmm:water", Double.doubleToRawLongBits(1_000.0), null, PROFILE);
+				"mmm:water", mmm.units.Mass.fromKilograms(1_000.0), null, PROFILE);
 		ContainerTransferJournal incompleteMaterialJournal = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 3L, 4L,
 				ContainerTransferJournal.Operation.INSERT, 1_000_000_000L,
@@ -319,12 +319,12 @@ public final class ContainerTransferStoreValidation {
 		ChemicalContents chemicalContents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
 				ChemicalLimits.QUANTA_PER_MOL, List.of(new ChemicalContents.Group(
 						"mmm:water", true, ContainerFluidLedger.NANOS_PER_BLOCK,
-						Double.doubleToRawLongBits(18.0), Double.doubleToRawLongBits(0.0),
+						mmm.units.Mass.fromKilograms(18.0), mmm.units.Mass.fromKilograms(0.0),
 						List.of(new ChemicalContents.SpeciesAmount(
 								BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
 		ContainerTransferJournal.ItemFingerprint chemicalBefore = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, ContainerFluidLedger.NANOS_PER_BLOCK, -1L,
-				chemicalContents.encode(), Double.doubleToRawLongBits(chemicalContents.totalMass()), null, PROFILE);
+				chemicalContents.encode(), chemicalContents.totalMassUnits(), null, PROFILE);
 		UUID tx5 = UUID.randomUUID();
 		ContainerTransferJournal chemical = new ContainerTransferJournal(
 				tx5, region, "minecraft:overworld", 4L, 5L,
@@ -339,7 +339,7 @@ public final class ContainerTransferStoreValidation {
 				chemicalContents.groups());
 		ContainerTransferJournal.ItemFingerprint foreignChemical = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, ContainerFluidLedger.NANOS_PER_BLOCK, -1L,
-				foreignContents.encode(), Double.doubleToRawLongBits(foreignContents.totalMass()), null, PROFILE);
+				foreignContents.encode(), foreignContents.totalMassUnits(), null, PROFILE);
 		ContainerTransferJournal foreignJournal = new ContainerTransferJournal(
 				UUID.randomUUID(), region, "minecraft:overworld", 4L, 5L,
 				ContainerTransferJournal.Operation.INSERT, ContainerFluidLedger.NANOS_PER_BLOCK,
@@ -352,7 +352,7 @@ public final class ContainerTransferStoreValidation {
 				BuiltinChemicalDefinitions.REGISTRY);
 		ContainerTransferJournal.ItemFingerprint chemicalAfter = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, chemicalPartial.remaining().totalVolumeNanos(), -1L,
-				chemicalPartial.remaining().encode(), Double.doubleToRawLongBits(chemicalPartial.remaining().totalMass()),
+				chemicalPartial.remaining().encode(), chemicalPartial.remaining().totalMassUnits(),
 				null, PROFILE);
 		UUID tx6 = UUID.randomUUID();
 		ContainerTransferJournal chemicalPartialJournal = new ContainerTransferJournal(
@@ -377,20 +377,20 @@ public final class ContainerTransferStoreValidation {
 		SolidCompositionRecord reactive = SolidCompositionRecord.fromStableAmounts(
 				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
 						BuiltinChemicalDefinitions.NA_PLUS, 64L,
-						BuiltinChemicalDefinitions.CL_MINUS, 64L), 0.0);
+						BuiltinChemicalDefinitions.CL_MINUS, 64L), 0L);
 		GranularContents granularContents = new GranularContents(granularRegistry.fingerprint(),
 				SolidVolume.SVQ_PER_CUBIC_METER, List.of(
-				new GranularContents.Group(BuiltinGranularDefinitions.FINE_SAND, inertSvq, 650.0),
+				new GranularContents.Group(BuiltinGranularDefinitions.FINE_SAND, inertSvq, mmm.units.Mass.fromKilograms(650.0)),
 				new GranularContents.Group(BuiltinGranularDefinitions.PRECIPITATE, reactiveSvq,
-						Double.doubleToRawLongBits(reactive.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
-						reactive.massResidualBits(), reactive.stableAmounts(BuiltinChemicalDefinitions.REGISTRY)
+						mmm.units.Mass.fromKilograms(reactive.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
+						reactive.massResidualUnits(), reactive.stableAmounts(BuiltinChemicalDefinitions.REGISTRY)
 						.entrySet().stream().sorted(java.util.Map.Entry.comparingByKey())
 						.map(entry -> new GranularContents.SpeciesAmount(
 								entry.getKey(), entry.getValue())).toList())));
 		ContainerTransferJournal.ItemFingerprint granularBefore = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER, -1L,
 				granularContents.totalSolidVolumeSvq(), granularContents.encode(),
-				Double.doubleToRawLongBits(granularContents.totalMass()), null, PROFILE);
+				granularContents.totalMassUnits(), null, PROFILE);
 		ContainerTransferJournal.ItemFingerprint granularAfter = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.EMPTY_GRANULAR_CONTAINER, -1L, -1L, null, -1L);
 		UUID tx7 = UUID.randomUUID();
@@ -662,14 +662,13 @@ public final class ContainerTransferStoreValidation {
 				new FluidMaterial("mmm:oil", 800.0, "mmm:oil", 0.0, Math.PI / 2.0));
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
-				domain.totalVolumeExact(), 125.0, materials, pure.copyPositionVolume(),
-				pure.copyParticleVelocities(), pure.copySolidMask(), java.util.stream.IntStream.range(0, pure.particleCount())
-						.mapToDouble(i -> pure.copyPositionVolume()[4 * i + 3] * config.density()).toArray(), new int[pure.particleCount()]));
+				domain.totalVolumeExact(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(125.0), materials, pure.copyPositionVolume(),
+				pure.copyParticleVelocities(), pure.copySolidMask(), pure.copyMassUnits(), new int[pure.particleCount()]));
 		domain.removeAllWaterExact();
 
 		FluidMixture source = new FluidMixture(List.of(
-				new FluidMixture.Component("mmm:oil", 333_333_333L, 266.6666664),
-				new FluidMixture.Component("mmm:water", 666_666_666L, 666.666666)));
+				new FluidMixture.Component("mmm:oil", 333_333_333L, mmm.units.Mass.fromKilograms(266.6666664)),
+				new FluidMixture.Component("mmm:water", 666_666_666L, mmm.units.Mass.fromKilograms(666.666666))));
 		List<FluidDomain.MaterialPortion> planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source);
 		FluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(3, 2, 3, planned, 3);
 		check(inserted.transferred(), "non-float-friendly material insertion failed");
@@ -705,7 +704,7 @@ public final class ContainerTransferStoreValidation {
 		var state = new ThermalStateFunction(registry);
 		var domain = new FluidDomain(3, 3, 3, config, 216);
 		domain.bindThermal(registry, liquids, 300.0);
-		var source = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", 999_999_999L, 999.0)));
+		var source = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", 999_999_999L, mmm.units.Mass.fromKilograms(999.0))));
 		var planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source);
 		var settlement = MinecraftContainerTransferOperations.settleMaterialInsertion(domain, source, planned);
 		check(settlement.remaining().totalVolumeNanos() == 59L, "normal float insertion no longer leaves the covered tiny remainder");
@@ -719,12 +718,10 @@ public final class ContainerTransferStoreValidation {
 		check(inserted.transferred(), "legal cold thermal insertion failed");
 		check(MinecraftContainerTransferOperations.settleMaterialInsertion(domain, source, inserted.portions()).equals(settlement),
 				"actual inventory diverged from the thermal split plan");
-		double[] markerMass = domain.exportMaterialParticleState().copyParticleMass();
-		SignedDyadic actualMass = SignedDyadic.sum(markerMass);
-		double largestMass = java.util.Arrays.stream(markerMass).max().orElseThrow();
-		check(actualMass.toDouble() == planned.getFirst().mass()
-				&& Math.abs(actualMass.subtract(SignedDyadic.of(planned.getFirst().mass())).toDouble()) <= 0.5 * Math.ulp(largestMass),
-				"raw marker mass differs beyond the single largest-piece rounding bound");
+		long[] markerMassUnits = domain.exportMaterialParticleState().copyParticleMassUnits();
+		check(mmm.units.Mass.sum(markerMassUnits) == planned.getFirst().massUnits(),
+				"Marker insertion changed integer mass inventory");
+
 		double debit = split.coupledEnergy(sourceEnergy);
 		var before = domain.thermalAudit();
 		var actualEnergy = domain.exactInternalEnergy();
@@ -748,31 +745,23 @@ public final class ContainerTransferStoreValidation {
 			double sourceResidual = sourceMass - 18.0;
 			var contents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(), ChemicalLimits.QUANTA_PER_MOL,
 					List.of(new ChemicalContents.Group("mmm:water", true, 999_999_999L,
-							Double.doubleToRawLongBits(sourceMass), Double.doubleToRawLongBits(sourceResidual),
+							mmm.units.Mass.fromKilograms(sourceMass), mmm.units.Mass.fromKilograms(sourceResidual),
 							List.of(new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
 			contents.validateAgainst(BuiltinChemicalDefinitions.REGISTRY);
 			var requested = contents.toLedger(BuiltinChemicalDefinitions.REGISTRY, domain.unitScale());
 			var result = domain.tryInsertExactChemical(1, 1, 1, requested, 3, false);
 			check(result.transferred(), "representable chemical insertion was refused");
-			double[] mass = domain.exportMaterialParticleState().copyParticleMass();
-			double largestMass = java.util.Arrays.stream(mass).max().orElseThrow();
-			SignedDyadic exactMass = SignedDyadic.sum(mass);
-			double requestedMass = domain.solverMassForKilograms(sourceMass);
-			check(exactMass.toDouble() == requestedMass
-					&& Math.abs(exactMass.subtract(SignedDyadic.of(requestedMass)).toDouble()) <= 0.5 * Math.ulp(largestMass),
-					"chemical carrier mass retained sequential subtraction error");
-			SignedDyadic residual = SignedDyadic.ZERO;
-			double largestResidual = 0.0;
-			long species = 0;
+			long[] mass = domain.exportMaterialParticleState().copyParticleMassUnits();
+			check(mmm.units.Mass.sum(mass) == mmm.units.Mass.fromKilograms(sourceMass),
+					"Chemical insertion changed integer mass inventory");
+			long residual = 0L, species = 0L;
 			for (int i = 0; i < mass.length; i++) {
 				var record = domain.chemicalParcels().record(i);
-				residual = residual.add(SignedDyadic.of(record.massResidualKilograms()));
-				largestResidual = Math.max(largestResidual, Math.abs(record.massResidualKilograms()));
+				residual = Math.addExact(residual, record.massResidualUnits());
 				species = Math.addExact(species, record.totalQuanta());
 			}
-			check(species == 1_000 * ChemicalLimits.QUANTA_PER_MOL
-					&& Math.abs(residual.subtract(SignedDyadic.of(sourceResidual)).toDouble()) <= 0.5 * Math.ulp(largestResidual),
-					"chemical species or complete residual exceeded its single rounding bound");
+			check(species == 1_000 * ChemicalLimits.QUANTA_PER_MOL && residual == mmm.units.Mass.fromKilograms(sourceResidual),
+					"Chemical insertion changed species or integer mass residual");
 		}
 	}
 
@@ -895,9 +884,9 @@ public final class ContainerTransferStoreValidation {
 			}
 			FluidDomain base = new FluidDomain(2, 2, 2, config, 64);
 			base.restoreMaterialParticleState(new FlipMaterialParticleState(
-					2, 2, 2, config.cellSize(), particles.particleCount(), particles.totalVolume(), totalMass,
+					2, 2, 2, config.cellSize(), particles.particleCount(), particles.totalVolume(), mmm.units.SolverUnitScale.forCellSize(config.cellSize()).massUnitsForNormalized(totalMass),
 					BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, particles.copyParticleVelocities(),
-					particles.copySolidMask(), masses, materials));
+					particles.copySolidMask(), java.util.Arrays.stream(masses).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(config.cellSize()).massUnitsForNormalized(m)).toArray(), materials));
 			FluidRegion region = new FluidRegion(regionId, DIMENSION, origin, base, 64L, footprint);
 			base.sealDomainBoundary();
 			base.bootstrapGasState("");

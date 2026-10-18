@@ -173,7 +173,7 @@ root.putString(prefix + "Kind", itemKindName(item.kind()));
 root.putLong(prefix + "Nanos", item.nanos());
 root.putLong(prefix + "SolidVolumeSvq", item.solidVolumeSvq());
 if (item.contents() != null) root.putString(prefix + "MaterialId", item.contents());
-root.putLong(prefix + "MassBits", item.massBits());
+root.putLong(prefix + "MassUnits", item.massUnits());
 if (item.profileFingerprint() != null) root.putString(prefix + "ProfileFingerprint", item.profileFingerprint());
 if (layout == Layout.THERMAL && item.thermalContents() != null) {
 root.putString(prefix + "ThermalContents", item.thermalContents());
@@ -188,8 +188,8 @@ long nanos = root.getLongOr(prefix + "Nanos", 0L);
 requireType(root, prefix + "SolidVolumeSvq", Tag.TAG_LONG);
 long solidVolumeSvq = root.getLongOr(prefix + "SolidVolumeSvq", -1L);
 String materialId = root.getStringOr(prefix + "MaterialId", null);
-requireType(root, prefix + "MassBits", Tag.TAG_LONG);
-long massBits = root.getLongOr(prefix + "MassBits", -1L);
+requireType(root, prefix + "MassUnits", Tag.TAG_LONG);
+long massUnits = root.getLongOr(prefix + "MassUnits", -1L);
 String profileFingerprint = root.getStringOr(prefix + "ProfileFingerprint", null);
 String thermalContents = null;
 if (layout == Layout.THERMAL) thermalContents = root.getStringOr(prefix + "ThermalContents", null);
@@ -198,11 +198,11 @@ throw new IOException("Material-only item fingerprint carries thermal contents")
 }
 if (kind == ContainerTransferJournal.ItemKind.PARTIAL) {
 if (!mmm.transfer.ContainerFluidLedger.isPartialBucket(nanos)
-|| materialId != null || solidVolumeSvq != -1L || massBits != -1L) {
+|| materialId != null || solidVolumeSvq != -1L || massUnits != -1L) {
 throw new IOException(prefix + " partial bucket nanovolume is invalid: " + nanos);
 }
 } else if (kind == ContainerTransferJournal.ItemKind.MATERIAL_BUCKET) {
-double mass = Double.longBitsToDouble(massBits);
+double mass = mmm.units.Mass.kilograms(massUnits);
 if (materialId == null || nanos <= 0L
 || nanos > mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK
 || solidVolumeSvq != -1L
@@ -213,7 +213,7 @@ throw new IOException(prefix + " material bucket fingerprint is invalid");
 try {
 mmm.transfer.FluidMixture mixture = mmm.transfer.FluidMixture.decode(materialId);
 if (mixture.totalVolumeNanos() != nanos
-|| Double.doubleToRawLongBits(mixture.totalMass()) != massBits) {
+|| mixture.totalMassUnits() != massUnits) {
 throw new IllegalArgumentException("mixture totals disagree with fingerprint");
 }
 } catch (IllegalArgumentException invalidMixture) {
@@ -223,7 +223,7 @@ throw new IOException(prefix + " material bucket mixture is invalid", invalidMix
 try {
 if (profileFingerprint == null || !profileFingerprint.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("profile");
 mmm.transfer.ChemicalContents contents = mmm.transfer.ChemicalContents.decode(materialId);
-if (contents.totalVolumeNanos() != nanos || Double.doubleToRawLongBits(contents.totalMass()) != massBits
+if (contents.totalVolumeNanos() != nanos || contents.totalMassUnits() != massUnits
 || solidVolumeSvq != -1L) {
 throw new IllegalArgumentException("chemical totals disagree with fingerprint");
 }
@@ -235,7 +235,7 @@ try {
 if (profileFingerprint == null || !profileFingerprint.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("profile");
 mmm.transfer.GranularContents contents = mmm.transfer.GranularContents.decode(materialId);
 if (contents.totalSolidVolumeSvq() != solidVolumeSvq
-|| Double.doubleToRawLongBits(contents.totalMass()) != massBits || nanos != -1L) {
+|| contents.totalMassUnits() != massUnits || nanos != -1L) {
 throw new IllegalArgumentException("granular totals disagree with fingerprint");
 }
 } catch (RuntimeException invalidGranular) {
@@ -244,18 +244,18 @@ throw new IOException(prefix + " granular container fingerprint is invalid", inv
 } else if (kind == ContainerTransferJournal.ItemKind.CREATIVE_SOURCE) {
 try {
 mmm.transfer.CreativeSourceDescriptor.decode(materialId);
-if (nanos != -1L || solidVolumeSvq != -1L || massBits != -1L || profileFingerprint != null) {
+if (nanos != -1L || solidVolumeSvq != -1L || massUnits != -1L || profileFingerprint != null) {
 throw new IllegalArgumentException("inventory fields");
 }
 } catch (RuntimeException invalidSource) {
 throw new IOException(prefix + " creative source fingerprint is invalid", invalidSource);
 }
-} else if (materialId != null || nanos != -1L || solidVolumeSvq != -1L || massBits != -1L
+} else if (materialId != null || nanos != -1L || solidVolumeSvq != -1L || massUnits != -1L
 || profileFingerprint != null) {
 throw new IOException(prefix + " non-material bucket must not carry material id or nanovolume");
 }
 ContainerTransferJournal.ItemFingerprint result = new ContainerTransferJournal.ItemFingerprint(
-kind, nanos, solidVolumeSvq, materialId, massBits, thermalContents, profileFingerprint);
+kind, nanos, solidVolumeSvq, materialId, massUnits, thermalContents, profileFingerprint);
 if (thermalContents != null) {
 try {
 result.validateThermalRegistry(mmm.transfer.ThermalContents.decode(thermalContents).registryFingerprint());
@@ -317,7 +317,7 @@ Set<String> allowed, String prefix, ContainerTransferJournal.ItemFingerprint ite
 allowed.add(prefix + "Kind");
 allowed.add(prefix + "Nanos");
 allowed.add(prefix + "SolidVolumeSvq");
-allowed.add(prefix + "MassBits");
+allowed.add(prefix + "MassUnits");
 if (item.contents() != null) allowed.add(prefix + "MaterialId");
 if (item.profileFingerprint() != null) allowed.add(prefix + "ProfileFingerprint");
 if (layout == Layout.THERMAL && item.thermalContents() != null) allowed.add(prefix + "ThermalContents");

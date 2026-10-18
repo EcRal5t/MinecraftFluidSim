@@ -52,7 +52,7 @@ final class ParticleReseedStage {
 				state.geometry().solid,
 				markers.positionX, markers.positionY, markers.positionZ,
 				markers.velocityX, markers.velocityY, markers.velocityZ,
-				markers.volume, markers.mass, markers.materialHandle, markers.phaseLabel,
+				markers.volume, markers.massUnits, markers.materialHandle, markers.phaseLabel,
 				access.chemicalParcels(), thermal == null ? null : access.thermalAdapter(),
 				state.particles().count(), access.massWeightedDynamics(), access::markerPositionAllowed);
 		access.carrierMutations().adoptWholesaleCount(

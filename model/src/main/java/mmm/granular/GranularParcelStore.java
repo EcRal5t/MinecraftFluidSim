@@ -3,35 +3,36 @@ package mmm.granular;
 import mmm.units.SignedDyadic;
 import mmm.units.ProportionalDoubleSplit;
 
-/** Fixed-capacity primitive SoA for active granular parcels; every mass column is kilograms. */
+/** Fixed-capacity primitive SoA for active granular parcels; mass columns use integer 100 ng counts. */
 public final class GranularParcelStore {
 	public static final byte FLAG_SUPPORTED = 1;
 
 	public record Parcel(
 			float x, float y, float z,
 			float velocityX, float velocityY, float velocityZ,
-			long solidVolumeSvq, double mass,
+			long solidVolumeSvq, long massUnits,
 			int materialHandle, int solidCompositionHandle,
 			int contactAge, byte flags, int ceilMask
 	) {
 		public Parcel(float x, float y, float z, float velocityX, float velocityY, float velocityZ,
-		              long solidVolumeSvq, double mass, int materialHandle, int solidCompositionHandle, int contactAge, byte flags) {
-			this(x, y, z, velocityX, velocityY, velocityZ, solidVolumeSvq, mass, materialHandle, solidCompositionHandle, contactAge, flags, -1);
+		              long solidVolumeSvq, long massUnits, int materialHandle, int solidCompositionHandle, int contactAge, byte flags) {
+			this(x, y, z, velocityX, velocityY, velocityZ, solidVolumeSvq, massUnits, materialHandle, solidCompositionHandle, contactAge, flags, -1);
 		}
+		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
 		public Parcel {
 			if (!(Float.isFinite(x) && Float.isFinite(y) && Float.isFinite(z)
 					&& Float.isFinite(velocityX) && Float.isFinite(velocityY) && Float.isFinite(velocityZ))) {
 				throw new IllegalArgumentException("Granular parcel position and velocity must be finite");
 			}
 			if (solidVolumeSvq <= 0L) throw new IllegalArgumentException("Granular parcel volume must be positive");
-			if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Granular parcel mass must be positive");
+			if (!(massUnits > 0)) throw new IllegalArgumentException("Granular parcel massUnits must be positive");
 			if (materialHandle < 0 || solidCompositionHandle < 0 || contactAge < 0) {
 				throw new IllegalArgumentException("Granular parcel handles and contact age must be non-negative");
 			}
 			if (ceilMask < -1 || ceilMask > 254) throw new IllegalArgumentException("Granular occupancy selection is outside its candidate range");
 		}
 		public Parcel withCeilMask(int mask) {
-			return new Parcel(x, y, z, velocityX, velocityY, velocityZ, solidVolumeSvq, mass,
+			return new Parcel(x, y, z, velocityX, velocityY, velocityZ, solidVolumeSvq, massUnits,
 					materialHandle, solidCompositionHandle, contactAge, flags, mask);
 		}
 	}
@@ -40,7 +41,7 @@ public final class GranularParcelStore {
 	private final int capacity;
 	private final float[] x, y, z, velocityX, velocityY, velocityZ;
 	private final long[] solidVolumeSvq;
-	private final double[] mass;
+	private final long[] massUnits;
 	private final int[] materialHandle, solidCompositionHandle, contactAge;
 	private final byte[] flags;
 	private final byte[] ceilMask;
@@ -64,7 +65,7 @@ public final class GranularParcelStore {
 		this.capacity = capacity;
 		this.x = new float[capacity]; this.y = new float[capacity]; this.z = new float[capacity];
 		this.velocityX = new float[capacity]; this.velocityY = new float[capacity]; this.velocityZ = new float[capacity];
-		this.solidVolumeSvq = new long[capacity]; this.mass = new double[capacity];
+		this.solidVolumeSvq = new long[capacity]; this.massUnits = new long[capacity];
 		this.materialHandle = new int[capacity]; this.solidCompositionHandle = new int[capacity];
 		this.contactAge = new int[capacity]; this.flags = new byte[capacity];
 		this.ceilMask = new byte[capacity];
@@ -106,7 +107,7 @@ public final class GranularParcelStore {
 	public Parcel parcel(int index) {
 		requireIndex(index);
 		return new Parcel(x[index], y[index], z[index], velocityX[index], velocityY[index], velocityZ[index],
-				solidVolumeSvq[index], mass[index], materialHandle[index], solidCompositionHandle[index],
+				solidVolumeSvq[index], massUnits[index], materialHandle[index], solidCompositionHandle[index],
 				contactAge[index], flags[index], (ceilMask[index] & 255) == 255 ? -1 : ceilMask[index] & 255);
 	}
 
@@ -136,16 +137,16 @@ public final class GranularParcelStore {
 		return removed;
 	}
 
-	/** Splits an exact positive SVQ amount into a new parcel, preserving mass and velocity. */
+	/** Splits an exact positive SVQ amount into a new parcel, preserving massUnits and velocity. */
 	public int split(int index, long takenSvq) {
 		Parcel original = parcel(index);
 		if (takenSvq <= 0L || takenSvq >= original.solidVolumeSvq()) {
 			throw new IllegalArgumentException("Granular split amount must be a strict parcel subset");
 		}
 		if (!hasCapacity(1)) throw new BudgetExceededException("Active granular parcel budget exceeded");
-		ProportionalDoubleSplit split = ProportionalDoubleSplit.of(original.mass(), takenSvq, original.solidVolumeSvq());
-		double takenMass = split.removed(), remainingMass = split.remaining();
-		if (!(takenMass > 0.0 && remainingMass > 0.0)) throw new IllegalArgumentException("Granular split mass is not representable");
+		long takenMass = mmm.units.Mass.portion(original.massUnits(), takenSvq, original.solidVolumeSvq());
+		long remainingMass = Math.subtractExact(original.massUnits(), takenMass);
+		if (!(takenMass > 0.0 && remainingMass > 0.0)) throw new IllegalArgumentException("Granular split massUnits is not representable");
 		Parcel remaining = prepareOverwrite(index, new Parcel(original.x(), original.y(), original.z(), original.velocityX(), original.velocityY(),
 				original.velocityZ(), original.solidVolumeSvq() - takenSvq, remainingMass,
 				original.materialHandle(), original.solidCompositionHandle(), 0, (byte) (original.flags() & ~FLAG_SUPPORTED)));
@@ -170,15 +171,15 @@ public final class GranularParcelStore {
 		long combinedVolume = Math.addExact(left.solidVolumeSvq(), right.solidVolumeSvq());
 		long maximum = registry.material(left.materialHandle()).maximumActiveParcelSvq();
 		if (combinedVolume > maximum) throw new IllegalArgumentException("Merged granular parcel exceeds its material limit");
-		double combinedMass = left.mass() + right.mass();
-		if (!Double.isFinite(combinedMass)) throw new ArithmeticException("Merged granular parcel mass overflow");
+		long combinedMass = Math.addExact(left.massUnits(), right.massUnits());
+		if (!Double.isFinite(combinedMass)) throw new ArithmeticException("Merged granular parcel massUnits overflow");
 		Parcel merged = new Parcel(
-				weighted(left.x(), left.mass(), right.x(), right.mass(), combinedMass),
-				weighted(left.y(), left.mass(), right.y(), right.mass(), combinedMass),
-				weighted(left.z(), left.mass(), right.z(), right.mass(), combinedMass),
-				weighted(left.velocityX(), left.mass(), right.velocityX(), right.mass(), combinedMass),
-				weighted(left.velocityY(), left.mass(), right.velocityY(), right.mass(), combinedMass),
-				weighted(left.velocityZ(), left.mass(), right.velocityZ(), right.mass(), combinedMass),
+				weighted(left.x(), left.massUnits(), right.x(), right.massUnits(), combinedMass),
+				weighted(left.y(), left.massUnits(), right.y(), right.massUnits(), combinedMass),
+				weighted(left.z(), left.massUnits(), right.z(), right.massUnits(), combinedMass),
+				weighted(left.velocityX(), left.massUnits(), right.velocityX(), right.massUnits(), combinedMass),
+				weighted(left.velocityY(), left.massUnits(), right.velocityY(), right.massUnits(), combinedMass),
+				weighted(left.velocityZ(), left.massUnits(), right.velocityZ(), right.massUnits(), combinedMass),
 				combinedVolume, combinedMass, left.materialHandle(), left.solidCompositionHandle(),
 				0, (byte) ((left.flags() | right.flags()) & ~FLAG_SUPPORTED));
 		merged = prepareOverwrite(first, merged);
@@ -196,11 +197,11 @@ public final class GranularParcelStore {
 	}
 
 	public double totalMass() {
-		return exactMass().toDouble();
+		return mmm.units.Mass.kilograms(totalMassUnits());
 	}
 
-	/** Order-independent exact aggregate of the authoritative binary64 mass column. */
-	public SignedDyadic exactMass() { return SignedDyadic.sum(mass, count); }
+	/** Order-independent exact aggregate of the authoritative binary64 massUnits column. */
+	public long totalMassUnits() { return mmm.units.Mass.sum(massUnits, count); }
 
 	private void validate(Parcel parcel) {
 		if (parcel == null) throw new IllegalArgumentException("Granular parcel is missing");
@@ -219,7 +220,7 @@ public final class GranularParcelStore {
 	private void write(int index, Parcel parcel, int mask) {
 		x[index] = parcel.x(); y[index] = parcel.y(); z[index] = parcel.z();
 		velocityX[index] = parcel.velocityX(); velocityY[index] = parcel.velocityY(); velocityZ[index] = parcel.velocityZ();
-		solidVolumeSvq[index] = parcel.solidVolumeSvq(); mass[index] = parcel.mass();
+		solidVolumeSvq[index] = parcel.solidVolumeSvq(); massUnits[index] = parcel.massUnits();
 		materialHandle[index] = parcel.materialHandle(); solidCompositionHandle[index] = parcel.solidCompositionHandle();
 		contactAge[index] = parcel.contactAge(); flags[index] = parcel.flags();
 		ceilMask[index] = (byte) mask;
@@ -242,7 +243,7 @@ public final class GranularParcelStore {
 
 	private void clear(int index) {
 		x[index] = y[index] = z[index] = velocityX[index] = velocityY[index] = velocityZ[index] = 0.0F;
-		solidVolumeSvq[index] = 0L; mass[index] = 0.0;
+		solidVolumeSvq[index] = 0L; massUnits[index] = 0L;
 		materialHandle[index] = solidCompositionHandle[index] = contactAge[index] = 0; flags[index] = 0;
 		ceilMask[index] = 0;
 	}

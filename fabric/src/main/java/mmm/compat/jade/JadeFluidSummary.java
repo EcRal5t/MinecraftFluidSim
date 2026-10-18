@@ -56,7 +56,7 @@ record JadeFluidSummary(
 	CompoundTag encode() {
 		CompoundTag tag = new CompoundTag();
 		tag.putLong("VolumeBits", Double.doubleToRawLongBits(volumeCubicMetres));
-		tag.putLong("MassBits", Double.doubleToRawLongBits(massKilograms));
+		tag.putLong("MassKilogramsBits", Double.doubleToRawLongBits(massKilograms));
 		tag.putLong("DensityBits", Double.doubleToRawLongBits(densityKilogramsPerCubicMetre));
 		if (temperatureKelvin != null) tag.putLong("TemperatureBits", Double.doubleToRawLongBits(temperatureKelvin));
 		tag.putInt("MaterialCount", materialCount);
@@ -83,7 +83,7 @@ record JadeFluidSummary(
 	static Optional<JadeFluidSummary> decode(CompoundTag root) {
 		try {
 			double volume = value(root, "VolumeBits");
-			double mass = value(root, "MassBits");
+			double mass = value(root, "MassKilogramsBits");
 			double density = value(root, "DensityBits");
 			Double temperature = root.contains("TemperatureBits") ? value(root, "TemperatureBits") : null;
 			List<Material> materials = new ArrayList<>();

@@ -54,7 +54,7 @@ final class GranularMechanicalStage {
 			float vy = (float) predictedY;
 			roundingY += p.mass() * (predictedY - vy);
 			granular.parcels.overwrite(index, new mmm.granular.GranularParcelStore.Parcel(
-					p.x(), p.y(), p.z(), p.velocityX(), vy, p.velocityZ(), p.solidVolumeSvq(), p.mass(),
+					p.x(), p.y(), p.z(), p.velocityX(), vy, p.velocityZ(), p.solidVolumeSvq(), p.massUnits(),
 					p.materialHandle(), p.solidCompositionHandle(), p.contactAge(), p.flags()));
 			maximum = Math.max(maximum, Math.sqrt(p.velocityX() * (double) p.velocityX()
 					+ vy * (double) vy + p.velocityZ() * (double) p.velocityZ()));

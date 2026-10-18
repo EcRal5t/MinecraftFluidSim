@@ -25,7 +25,7 @@ public final class LiquidEnergyColumn {
 	private final ThermalAuditState audit;
 	private double[] internalEnergy;
 	private double[] cachedBaseEnergy;
-	private long[] cachedMassBits;
+	private long[] cachedMassKilogramsBits;
 	private int[] cachedMaterial;
 	private ChemicalMixtureRecord[] cachedMixture;
 	private ChemicalRegistry cachedChemistry;
@@ -53,7 +53,7 @@ public final class LiquidEnergyColumn {
 		this.audit = audit;
 		this.internalEnergy = new double[initialCapacity];
 		cachedBaseEnergy = new double[initialCapacity]; Arrays.fill(cachedBaseEnergy, Double.NaN);
-		cachedMassBits = new long[initialCapacity]; cachedMaterial = new int[initialCapacity];
+		cachedMassKilogramsBits = new long[initialCapacity]; cachedMaterial = new int[initialCapacity];
 		cachedMixture = new ChemicalMixtureRecord[initialCapacity];
 		if (restoredEnergy != null) {
 			if (restoredEnergy.length != markers.markerCount()) {
@@ -128,7 +128,7 @@ public final class LiquidEnergyColumn {
 		internalEnergy = Arrays.copyOf(internalEnergy, capacity);
 		cachedBaseEnergy = Arrays.copyOf(cachedBaseEnergy, capacity);
 		Arrays.fill(cachedBaseEnergy, previous, capacity, Double.NaN);
-		cachedMassBits = Arrays.copyOf(cachedMassBits, capacity);
+		cachedMassKilogramsBits = Arrays.copyOf(cachedMassKilogramsBits, capacity);
 		cachedMaterial = Arrays.copyOf(cachedMaterial, capacity);
 		cachedMixture = Arrays.copyOf(cachedMixture, capacity);
 	}
@@ -392,12 +392,12 @@ public final class LiquidEnergyColumn {
 		if (cachedChemistry != chemistry) {
 			Arrays.fill(cachedBaseEnergy, Double.NaN); cachedChemistry = chemistry;
 		}
-		long massBits = Double.doubleToRawLongBits(mass);
-		if (!Double.isNaN(cachedBaseEnergy[marker]) && cachedMassBits[marker] == massBits
+		long massKilogramsBits = Double.doubleToRawLongBits(mass);
+		if (!Double.isNaN(cachedBaseEnergy[marker]) && cachedMassKilogramsBits[marker] == massKilogramsBits
 				&& cachedMaterial[marker] == material && Objects.equals(cachedMixture[marker], mixture))
 			return cachedBaseEnergy[marker];
 		double value = baseEnergy(material, mass, mixture, chemistry);
-		cachedBaseEnergy[marker] = value; cachedMassBits[marker] = massBits;
+		cachedBaseEnergy[marker] = value; cachedMassKilogramsBits[marker] = massKilogramsBits;
 		cachedMaterial[marker] = material; cachedMixture[marker] = mixture;
 		return value;
 	}

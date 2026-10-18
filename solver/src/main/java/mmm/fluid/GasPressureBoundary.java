@@ -50,8 +50,6 @@ public final class GasPressureBoundary {
 	}
 	public GasAuditLedger externalSource() { return domain.gasState.network.externalSource(); }
 	public GasAuditLedger escapedSink() { return domain.gasState.network.escapedSink(); }
-	public mmm.units.SignedDyadic massRoundoff() { return domain.gasState.network.massRoundoff(); }
-	public mmm.units.SignedDyadic residualRoundoff() { return domain.gasState.network.residualRoundoff(); }
 
 	/** Thermal-aware node pressure source; standard-temperature fallback before the gas model binds. */
 	public double nodeGaugePressurePa(int node) {

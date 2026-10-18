@@ -17,22 +17,22 @@ final class CarrierMassMomentum {
 		}
 	}
 
-	static Plan plan(LiquidParticleStore particles, int[] markers, double[] masses,
-	                 double externalDonorMass, float donorX, float donorY, float donorZ) {
+	static Plan plan(LiquidParticleStore particles, int[] markers, long[] masses,
+	                 long externalDonorMass, float donorX, float donorY, float donorZ) {
 		if (particles == null || markers == null || masses == null || markers.length != masses.length
 				|| !Double.isFinite(externalDonorMass) || externalDonorMass < 0
 				|| !Float.isFinite(donorX) || !Float.isFinite(donorY) || !Float.isFinite(donorZ))
 			throw new IllegalArgumentException("Mass momentum transfer input is invalid");
-		double donorMass = externalDonorMass, vx = donorX, vy = donorY, vz = donorZ;
+		long donorMass = externalDonorMass; double vx = donorX, vy = donorY, vz = donorZ;
 		for (int index = 0; index < markers.length; index++) {
 			int marker = markers[index];
 			if (!Double.isFinite(masses[index]) || masses[index] < 0)
 				throw new IllegalArgumentException("Transferred carrier mass is invalid");
-			double removed = particles.mass(marker) - masses[index];
+			long removed = particles.massUnits(marker) - masses[index];
 			if (removed <= 0) continue;
-			double total = donorMass + removed;
+			long total = Math.addExact(donorMass, removed);
 			if (!Double.isFinite(total)) throw new RepresentationException("Transferred mass exceeds momentum representation");
-			double fraction = removed / total;
+			double fraction = (double) removed / total;
 			vx += fraction * (particles.velocityX(marker) - vx);
 			vy += fraction * (particles.velocityY(marker) - vy);
 			vz += fraction * (particles.velocityZ(marker) - vz);
@@ -41,9 +41,9 @@ final class CarrierMassMomentum {
 		float[] x = new float[markers.length], y = new float[markers.length], z = new float[markers.length];
 		for (int index = 0; index < markers.length; index++) {
 			int marker = markers[index];
-			double received = Math.max(0, masses[index] - particles.mass(marker));
+			long received = Math.max(0, masses[index] - particles.massUnits(marker));
 			if (received > 0 && donorMass == 0) throw new IllegalArgumentException("Mass transfer has no momentum donor");
-			double fraction = received == 0 ? 0 : received / masses[index];
+			double fraction = received == 0 ? 0 : (double) received / masses[index];
 			x[index] = mix(particles.velocityX(marker), fraction, vx);
 			y[index] = mix(particles.velocityY(marker), fraction, vy);
 			z[index] = mix(particles.velocityZ(marker), fraction, vz);

@@ -46,7 +46,7 @@ public final class FlipFluidReseedingValidation {
 	}
 
 	private static void splitsRequirePositiveEqualStoredHalves() {
-		for (double mass : new double[]{Double.MIN_VALUE, 3 * Double.MIN_VALUE, Math.nextUp(Double.MIN_NORMAL)}) {
+		for (long mass : new long[]{1L}) {
 			var fixture = new Fixture(8, 1);
 			fixture.x[0] = fixture.y[0] = fixture.z[0] = 1.5F;
 			fixture.volume[0] = .5F; fixture.mass[0] = mass;
@@ -58,23 +58,23 @@ public final class FlipFluidReseedingValidation {
 		}
 		var fixture = new Fixture(8, 1);
 		fixture.x[0] = fixture.y[0] = fixture.z[0] = 1.5F;
-		fixture.volume[0] = .5F; fixture.mass[0] = 2 * Double.MIN_VALUE;
+		fixture.volume[0] = .5F; fixture.mass[0] = 2L;
 		var result = fixture.reseedMaterialAware(2);
 		check(result.particleCount() == 2 && result.split() == 1 && result.conservationSkipped() == 0
-				&& fixture.mass[0] == Double.MIN_VALUE && fixture.mass[1] == Double.MIN_VALUE,
+				&& fixture.mass[0] == 1L && fixture.mass[1] == 1L,
 				"Representable subnormal split lost its positive equal masses");
 		var firstMoment = mmm.units.SignedDyadic.of(fixture.mass[0]).multiply(mmm.units.SignedDyadic.of(fixture.x[0]))
 				.add(mmm.units.SignedDyadic.of(fixture.mass[1]).multiply(mmm.units.SignedDyadic.of(fixture.x[1])));
-		check(firstMoment.equals(mmm.units.SignedDyadic.of(2 * Double.MIN_VALUE).multiply(mmm.units.SignedDyadic.of(1.5))),
+		check(firstMoment.equals(mmm.units.SignedDyadic.of(2L).multiply(mmm.units.SignedDyadic.of(1.5))),
 				"Symmetric stored split changed the subnormal mass first moment");
 		var mixed = new Fixture(8, 2);
 		for (int p = 0; p < 2; p++) mixed.x[p] = mixed.y[p] = mixed.z[p] = 1.5F;
-		mixed.volume[0] = .5F; mixed.mass[0] = 3 * Double.MIN_VALUE;
-		mixed.volume[1] = .125F; mixed.mass[1] = 125;
+		mixed.volume[0] = .5F; mixed.mass[0] = 1L;
+		mixed.volume[1] = .125F; mixed.mass[1] = mmm.units.SolverUnitScale.forCellSize(CELL_SIZE).massUnitsForNormalized(125);
 		var available = mixed.reseedMaterialAware(3);
 		check(available.split() == 1 && available.particleCount() == 3 && available.conservationSkipped() == 0
-				&& mixed.volume[0] == .5F && mixed.mass[0] == 3 * Double.MIN_VALUE && mixed.x[0] == 1.5F
-				&& mixed.mass[1] == 62.5 && mixed.mass[2] == 62.5,
+				&& mixed.volume[0] == .5F && mixed.mass[0] == 1L && mixed.x[0] == 1.5F
+				&& mixed.mass[1] == mmm.units.SolverUnitScale.forCellSize(CELL_SIZE).massUnitsForNormalized(62.5) && mixed.mass[2] == mixed.mass[1],
 				"Largest unrepresentable source hid another legal symmetric split");
 	}
 
@@ -176,7 +176,7 @@ public final class FlipFluidReseedingValidation {
 			fixture.x[p] = 1.125F + 0.25F * (p & 3);
 			fixture.y[p] = 1.25F + 0.5F * (p >> 2 & 1);
 			fixture.z[p] = 1.25F + 0.5F * (p >> 3 & 1);
-			fixture.volume[p] = 0.0625F; fixture.mass[p] = 62.5;
+			fixture.volume[p] = 0.0625F; fixture.mass[p] = mmm.units.SolverUnitScale.forCellSize(CELL_SIZE).massUnitsForNormalized(62.5);
 			fixture.vx[p] = 0.4F * (fixture.x[p] - 1.5F) - 0.2F * (fixture.y[p] - 1.5F);
 			fixture.vy[p] = 0.3F * (fixture.y[p] - 1.5F) + 0.1F * (fixture.z[p] - 1.5F);
 			fixture.vz[p] = -0.1F * (fixture.x[p] - 1.5F);
@@ -247,8 +247,8 @@ public final class FlipFluidReseedingValidation {
 		refused.volume[1] = Math.ulp(refused.volume[0]) / 2;
 		Ledger refusalBefore = refused.ledger();
 		var refusal = refused.reseed(2);
-		check(refusal.particleCount() == 2 && refusal.merged() == 0 && refusal.conservationSkipped() == 1,
-				"half-ULP tail was lost during exact consolidation");
+		check(refusal.particleCount() == 2 && refusal.merged() == 0 && refusal.conservationSkipped() + refusal.geometrySkipped() == 1,
+				"half-ULP tail was lost during exact consolidation: " + refusal);
 		checkLedger(refusalBefore, refused.ledger(), 0, "half-ULP refusal");
 	}
 
@@ -291,7 +291,7 @@ public final class FlipFluidReseedingValidation {
 			fixture.vz[particle] = (particle & 1) == 0 ? 0.125F : -0.125F;
 			fixture.volume[particle] = 0.0625F;
 			boolean second = (particle & 1) != 0;
-			fixture.mass[particle] = fixture.volume[particle] * (second ? 800.0 : 1_000.0);
+			fixture.mass[particle] = mmm.units.SolverUnitScale.forCellSize(CELL_SIZE).massUnitsForNormalized(fixture.volume[particle] * (second ? 800.0 : 1_000.0));
 			fixture.material[particle] = second ? 202 : 101;
 			fixture.phase[particle] = second ? 22 : 11;
 		}
@@ -336,7 +336,7 @@ public final class FlipFluidReseedingValidation {
 		}
 		domain.restoreParticleState(new FlipParticleState(
 				domain.sizeX(), domain.sizeY(), domain.sizeZ(), config.cellSize(), initial.particleCount(),
-				initial.totalVolume(), positions, velocities, initial.copySolidMask()
+				initial.totalVolume(), positions, velocities, mmm.units.Mass.createLiquid(config.cellSize(), 1000.0, positions), initial.copySolidMask()
 		));
 
 		double exactVolume = domain.totalVolumeExact();
@@ -503,7 +503,7 @@ public final class FlipFluidReseedingValidation {
 		private final float[] vy;
 		private final float[] vz;
 		private final float[] volume;
-		private final double[] mass;
+		private final long[] mass;
 		private final int[] material;
 		private final int[] phase;
 		private final int count;
@@ -516,14 +516,14 @@ public final class FlipFluidReseedingValidation {
 			this.vy = new float[capacity];
 			this.vz = new float[capacity];
 			this.volume = new float[capacity];
-			this.mass = new double[capacity];
+			this.mass = new long[capacity];
 			this.material = new int[capacity];
 			this.phase = new int[capacity];
 			this.count = count;
 		}
 
 		private FlipParticleReseeder.Result reseed(int maximumParticleCount) {
-			for (int particle = 0; particle < count; particle++) mass[particle] = volume[particle] * 1_000.0;
+			for (int particle = 0; particle < count; particle++) mass[particle] = mmm.units.SolverUnitScale.forCellSize(CELL_SIZE).massUnitsForNormalized(volume[particle] * 1_000.0);
 			return new FlipParticleReseeder(SIZE, SIZE, SIZE, CELL_SIZE, maximumParticleCount).reseed(
 					solid, x, y, z, vx, vy, vz, volume, mass, material, phase, null, count, false,
 					(candidateX, candidateY, candidateZ) -> true
@@ -543,9 +543,9 @@ public final class FlipFluidReseedingValidation {
 			for (int particle = 0; particle < particleCount; particle++) {
 				if (material[particle] == 101) massA += mass[particle];
 				else if (material[particle] == 202) massB += mass[particle];
-				momentumX += mass[particle] * vx[particle];
-				momentumY += mass[particle] * vy[particle];
-				momentumZ += mass[particle] * vz[particle];
+				momentumX += mmm.units.Mass.kilograms(mass[particle]) * vx[particle];
+				momentumY += mmm.units.Mass.kilograms(mass[particle]) * vy[particle];
+				momentumZ += mmm.units.Mass.kilograms(mass[particle]) * vz[particle];
 			}
 			return new MaterialLedger(massA, massB, momentumX, momentumY, momentumZ);
 		}

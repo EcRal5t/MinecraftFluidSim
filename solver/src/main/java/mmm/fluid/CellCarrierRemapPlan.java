@@ -152,7 +152,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		}
 		if ((long) sampledCount + retainedMarkers.size() + ballistic.markers.size() > domain.maximumParticleCount)
 			throw new IllegalStateException("Cell carrier remap exceeds the marker budget");
-		markers = new CellRemapMarkerColumns(sampledCount + retainedMarkers.size() + ballistic.markers.size());
+		markers = new CellRemapMarkerColumns(domain.unitScale, sampledCount + retainedMarkers.size() + ballistic.markers.size());
 		CpuWorkBatch.run(domain.cellCount, (from, until) -> {
 			for (int cell = from; cell < until; cell++) {
 				if (output[cell] != null) for (Group group : output[cell]) sample(group);
@@ -186,7 +186,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 	private Marker originalMarker(int p, int cell) {
 		double h = domain.config.cellSize(); var chemical = domain.chemicalParcels;
 		return new Marker(cell, domain.particles.materialHandle(p), chemical != null && chemical.indicator(p),
-					domain.particles.volume(p), domain.particles.mass(p),
+					domain.particles.volume(p), domain.particles.massUnits(p),
 					domain.particles.positionX(p) / h - cell % domain.sizeX - 0.5,
 					domain.particles.positionY(p) / h - cell / domain.sizeX % domain.sizeY - 0.5,
 					domain.particles.positionZ(p) / h - cell / (domain.sizeX * domain.sizeY) - 0.5,
@@ -218,7 +218,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 				if (groups != null) for (Group group : groups) {
 					for (int p : group.original) {
 						double v = domain.particles.volume(p), m = domain.particles.mass(p);
-						group.volume = group.volume.add(SignedDyadic.of(v)); group.mass += m;
+						group.volume = group.volume.add(SignedDyadic.of(v)); group.massUnits = Math.addExact(group.massUnits, domain.particles.massUnits(p)); group.mass = domain.unitScale.normalizedMass(group.massUnits);
 						double h = domain.config.cellSize();
 						double[] position = {domain.particles.positionX(p) / h - cell % domain.sizeX - .5,
 							domain.particles.positionY(p) / h - cell / domain.sizeX % domain.sizeY - .5,
@@ -230,7 +230,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 						}
 					}
 					group.gradient = CellRemapVelocity.gradient(domain, group.original, group.mass, group.massMoment, group.momentum);
-					group.density = CellRemapMassAllocation.density(domain, group.original, group.volume, group.mass);
+
 					if (domain.thermalState != null) {
 						var fitting = FITTING.get(); fitting.ensureCapacity(group.original.size());
 						for (int p = 0; p < group.original.size(); p++)
@@ -333,7 +333,8 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		for (int g = 0; g < groups.size(); g++) {
 			Group source = groups.get(g); prepareMoments(source);
 			source.shares = new ArrayList<>(shares);
-			double[] masses = CellRemapMassAllocation.allocate(source.mass, source.volume, pieces[g], source.density);
+			long[] massUnits = CellRemapMassAllocation.allocate(source.massUnits, source.volume, pieces[g]);
+			double[] masses = normalizedMasses(massUnits);
 			for (int d = 0; d < shares; d++) {
 				if (pieces[g][d].signum() == 0) continue;
 				double ratio = masses[d] / source.mass, volumeRatio = pieces[g][d].toDouble() / source.volume.toDouble();
@@ -347,7 +348,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 					}
 				}
 				if (point != null) subtractFaceMoment(source, masses[d], pieces[g][d].toDouble(), point);
-				source.shares.add(new Share(source, destinations[d], supports[d], faces[d], pieces[g][d], masses[d],
+				source.shares.add(new Share(source, destinations[d], supports[d], faces[d], pieces[g][d], masses[d], massUnits[d],
 						ratio * source.kinetic, momentum, point, motion));
 			}
 			if (pieces[g][shares - 1].signum() == 0) source.discardedMoment = true;
@@ -405,7 +406,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			share.target=target;
 			target.minimumTemperature = Math.min(target.minimumTemperature, source.minimumTemperature);
 			target.maximumTemperature = Math.max(target.maximumTemperature, source.maximumTemperature);
-			mergeMass(target, source, share.volume, share.mass); target.kinetic += share.kinetic;
+			mergeMass(target, share.volume, share.massUnits); target.kinetic += share.kinetic;
 			if (domain.chemicalParcels != null) target.species.includeHandles(source.species.record());
 			for (int a = 0; a < 3; a++) target.momentum[a] += share.momentum[a];
 			addMoments(target, share);
@@ -468,14 +469,10 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		}
 		for (var groups : output) if (groups != null) for (var group : groups) group.temperature = temperature(group);
 	}
-	private static void mergeMass(Group target, Group source, SignedDyadic volume, double mass) {
-		if (target.volume.signum() == 0) target.density = source.density;
-		else if (target.density != source.density) target.density = Double.NaN;
-		if (CellRemapMassAllocation.exactMass(target.density, volume) != mass) target.density = Double.NaN;
-		target.volume = target.volume.add(volume); target.mass += mass;
-		double exact = CellRemapMassAllocation.exactMass(target.density, target.volume);
-		if (Double.isFinite(exact)) target.mass = exact;
-		else target.density = Double.NaN;
+	private void mergeMass(Group target, SignedDyadic volume, long massUnits) {
+		target.volume = target.volume.add(volume);
+		target.massUnits = Math.addExact(target.massUnits, massUnits);
+		target.mass = domain.unitScale.normalizedMass(target.massUnits);
 	}
 
 	private void addTemperatureField(Group target, Group source, double weight) {
@@ -646,7 +643,8 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			weights[slot] = SignedDyadic.of(volumes.get(slot));
 			offsets.add((mask == 0 ? offset(slot % count, count) : openOffset(mask, slot % Integer.bitCount(group.support))).clone());
 		}
-		group.sampleMasses = CellRemapMassAllocation.allocate(group.mass, group.volume, weights, group.density);
+		group.sampleMassUnits = CellRemapMassAllocation.allocate(group.massUnits, group.volume, weights);
+		group.sampleMasses = normalizedMasses(group.sampleMassUnits);
 		CellRemapMoments.fit(domain, group.cell, offsets, group.sampleMasses, group.massMoment,
 				group.projection, group.storage, group.maximumTranslation, group.support);
 		group.samplePositions = offsets.toArray(double[][]::new);
@@ -678,7 +676,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		for (int p = 0; p < volumes.size(); p++) {
 			double m = masses[p];
 			if (!(Double.isFinite(m) && m > 0)) throw new IllegalStateException("Carrier remap produced invalid mass");
-			ChemicalMixtureRecord mixture = domain.chemicalParcels == null ? null : mixture(species[p], m);
+			ChemicalMixtureRecord mixture = domain.chemicalParcels == null ? null : mixture(species[p], group.sampleMassUnits[p]);
 			double[] delta = offsets.get(p);
 			double vx = group.sampleVelocity[p][0], vy = group.sampleVelocity[p][1], vz = group.sampleVelocity[p][2];
 			double energy = 0;
@@ -696,7 +694,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 				// Completed temperature samples become the private energy-reduction workspace.
 				temperatures[p] = energy;
 			}
-			markers.set(start + p, group.cell, group.material, group.indicator, volumes.get(p), m,
+			markers.set(start + p, group.cell, group.material, group.indicator, volumes.get(p), group.sampleMassUnits[p],
 					delta[0], delta[1], delta[2], vx, vy, vz, mixture, energy);
 		}
 		if (domain.thermalState != null) {
@@ -744,9 +742,15 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 	}
 
 
-	private ChemicalMixtureRecord mixture(ChemicalMixtureRecord species, double mass) {
-		double residual = domain.unitScale.kilograms(mass) - species.exactSpeciesMassKilograms(domain.chemicalParcels.registry()).toDouble();
-		return species.withMassResidualKilograms(residual);
+	private double[] normalizedMasses(long[] units) {
+		double[] result = new double[units.length];
+		for (int i = 0; i < units.length; i++) result[i] = domain.unitScale.normalizedMass(units[i]);
+		return result;
+	}
+
+	private ChemicalMixtureRecord mixture(ChemicalMixtureRecord species, long massUnits) {
+		long residual = Math.subtractExact(massUnits, species.speciesMassUnits(domain.chemicalParcels.registry()));
+		return species.withMassResidualUnits(residual);
 	}
 
 	private ChemicalMixtureRecord speciesRecord(Group group) { return group.species.record(); }
@@ -885,7 +889,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		throw new IllegalStateException("Cell quadrature has no open micro box");
 	}
 
-	record Marker(int cell, int material, boolean indicator, float volume, double mass,
+	record Marker(int cell, int material, boolean indicator, float volume, long massUnits,
 			double offsetX, double offsetY, double offsetZ, double velocityX, double velocityY, double velocityZ,
 			ChemicalMixtureRecord mixture, double energy) {
 		double offset(int axis) { return switch (axis) { case 0 -> offsetX; case 1 -> offsetY; case 2 -> offsetZ; default -> throw new IllegalArgumentException("Unknown axis"); }; }
@@ -893,13 +897,13 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 	}
 	private record Transfer(int face, int destination, int support, SignedDyadic volume) { }
 	private static final class Share {
-		final Group source; final int destination,support,face; final SignedDyadic volume; final double mass,kinetic;
+		final Group source; final int destination,support,face; final SignedDyadic volume; final double mass,kinetic; final long massUnits;
 		final double[] momentum,facePoint,volumeMotion;
 		Group target; SignedDyadic energy=SignedDyadic.ZERO; ChemicalMixtureRecord species; double rounding;
-		Share(Group source,int destination,int support,int face,SignedDyadic volume,double mass,double kinetic,
+		Share(Group source,int destination,int support,int face,SignedDyadic volume,double mass,long massUnits,double kinetic,
 				double[] momentum,double[] facePoint,double[] volumeMotion) {
 			this.source=source; this.destination=destination; this.support=support; this.face=face; this.volume=volume;
-			this.mass=mass; this.kinetic=kinetic; this.momentum=momentum; this.facePoint=facePoint; this.volumeMotion=volumeMotion;
+			this.mass=mass; this.massUnits=massUnits; this.kinetic=kinetic; this.momentum=momentum; this.facePoint=facePoint; this.volumeMotion=volumeMotion;
 		}
 	}
 	private static final class Group {
@@ -907,13 +911,13 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		boolean retained;
 		int sampleStart, quadratureCount, speciesTarget; ArrayList<Float> sampleVolumes;
 		ArrayList<Share> shares;
-		double[] sampleMasses; double[][] samplePositions, sampleVelocity;
+		long[] sampleMassUnits; double[] sampleMasses; double[][] samplePositions, sampleVelocity;
 		double[][] gradient = new double[3][3]; double dissipatedEnergy;
 		final ArrayList<Integer> original = new ArrayList<>(); final CellSpeciesInventory species = new CellSpeciesInventory();
 		SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO;
 		double density = Double.NaN;
 		mmm.thermal.LiquidEnergyColumn.CaloricInventory caloric;
-		double mass, kinetic, temperature, energyRounding, maximumTranslation; double[] transportTemperature, temperatureField; final double[] momentum = new double[3];
+		long massUnits; double mass, kinetic, temperature, energyRounding, maximumTranslation; double[] transportTemperature, temperatureField; final double[] momentum = new double[3];
 		double lowMassX, lowMassY, lowMassZ, lowVolumeX, lowVolumeY, lowVolumeZ;
 		final double[] massMoment = new double[3], volumeMoment = new double[3], volumeMotion = new double[3];
 		final double[] projection = new double[3], storage = new double[3], volumeResidual = new double[3]; boolean discardedMoment;

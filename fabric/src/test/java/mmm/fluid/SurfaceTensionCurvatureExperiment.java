@@ -65,7 +65,7 @@ final class SurfaceTensionCurvatureExperiment {
 		float[] pv = new float[points.size() * 4];
 		for (int i = 0; i < points.size(); i++) System.arraycopy(points.get(i), 0, pv, 4 * i, 4);
 		d.restoreParticleState(new FlipParticleState(size, size, size, h, points.size(), (float) total,
-				pv, new float[points.size() * 3], new byte[size * size * size]));
+				pv, new float[points.size() * 3], mmm.units.Mass.createLiquid(h, 1000.0, pv), new byte[size * size * size]));
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:test", 1000, "mmm:test", .0728, Math.PI / 2)));
 		for (int p = 0; p < d.particleCount(); p++) d.setMarkerMaterial(p, registry, 0);
 		d.particleToGridStage.rebuild();
@@ -150,7 +150,7 @@ final class SurfaceTensionCurvatureExperiment {
 		float[] pv = new float[4 * points.size()];
 		for (int p = 0; p < points.size(); p++) System.arraycopy(points.get(p), 0, pv, 4 * p, 4);
 		d.restoreParticleState(new FlipParticleState(12, 12, 12, 1, points.size(), total,
-				pv, new float[3 * points.size()], new byte[d.cellCount]));
+				pv, new float[3 * points.size()], mmm.units.Mass.createLiquid(1, 1000.0, pv), new byte[d.cellCount]));
 		var registry = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:height", 1000, "mmm:height", .0728, Math.PI / 2)));
 		for (int p = 0; p < d.particleCount(); p++) d.setMarkerMaterial(p, registry, 0);
 		d.particleToGridStage.rebuildInventory();
@@ -205,7 +205,7 @@ final class SurfaceTensionCurvatureExperiment {
 		float[] pv = new float[4 * points.size()];
 		for (int p = 0; p < points.size(); p++) System.arraycopy(points.get(p), 0, pv, 4 * p, 4);
 		d.restoreParticleState(new FlipParticleState(size, size, size, h, points.size(), (float) total,
-				pv, new float[3 * points.size()], new byte[d.cellCount]));
+				pv, new float[3 * points.size()], mmm.units.Mass.createLiquid(h, 1000.0, pv), new byte[d.cellCount]));
 		var registry = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:wall", 1000, "mmm:wall", .0728, angle)));
 		for (int p = 0; p < d.particleCount(); p++) d.setMarkerMaterial(p, registry, 0);
 		d.particleToGridStage.rebuild();

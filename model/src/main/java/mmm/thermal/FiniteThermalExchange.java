@@ -65,8 +65,7 @@ public final class FiniteThermalExchange {
 			contacts = List.copyOf(contacts);
 			if (!before.thermalRegistryFingerprint().equals(after.thermalRegistryFingerprint())
 					|| !before.thermalMaterialId().equals(after.thermalMaterialId())
-					|| Double.doubleToRawLongBits(before.massKilograms())
-					!= Double.doubleToRawLongBits(after.massKilograms())
+					|| before.massUnits() != after.massUnits()
 					|| after.generation() != before.generation()
 					&& after.generation() != Math.addExact(before.generation(), 1L)) {
 				throw new IllegalArgumentException("Finite thermal exchange changed body identity");
@@ -196,7 +195,7 @@ public final class FiniteThermalExchange {
 		for (double delta : fluidDelta) changed |= delta != 0.0;
 		long generation = changed ? Math.addExact(body.generation(), 1L) : body.generation();
 		FiniteThermalBodyState after = new FiniteThermalBodyState(generation,
-				body.thermalRegistryFingerprint(), body.thermalMaterialId(), body.massKilograms(), bodyEnergy);
+				body.thermalRegistryFingerprint(), body.thermalMaterialId(), body.massUnits(), bodyEnergy);
 		ArrayList<ContactDelta> deltas = new ArrayList<>(canonical.size());
 		SignedDyadic exactChange = SignedDyadic.of(after.internalEnergyJ()).subtract(
 				SignedDyadic.of(body.internalEnergyJ()));

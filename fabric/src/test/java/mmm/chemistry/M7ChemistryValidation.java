@@ -32,8 +32,8 @@ public final class M7ChemistryValidation {
 		var registry = BuiltinChemicalDefinitions.REGISTRY;
 		var scale = mmm.units.SolverUnitScale.forCellSize(1.0F);
 		var store = new ChemicalParcelStore(registry, scale, 2, 1);
-		var original = store.defaultRecord("mmm:water", 0.125F, 1.0F, 125.0, false);
-		check(original == store.defaultRecord(new String("mmm:water"), 0.125F, 1.0F, 125.0, false),
+		var original = store.defaultRecord("mmm:water", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false);
+		check(original == store.defaultRecord(new String("mmm:water"), 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false),
 				"identical default inputs did not reuse immutable inventory");
 		String[] materials = {"mmm:water", "mmm:water", "mmm:water", "mmm:water", "mmm:oil", "mmm:mercury"};
 		for (int index = 0; index < materials.length; index++) {
@@ -41,26 +41,24 @@ public final class M7ChemistryValidation {
 			float size = index == 1 ? Math.nextUp(1.0F) : 1.0F;
 			double mass = index == 2 ? Math.nextUp(125.0) : 125.0;
 			boolean indicator = index == 3;
-			var actual = store.defaultRecord(materials[index], volume, size, mass, indicator);
+			var actual = store.defaultRecord(materials[index], volume, size, mmm.units.SolverUnitScale.forCellSize(size).massUnitsForNormalized(mass), indicator);
 			var fresh = new ChemicalParcelStore(registry, scale, 1, 1)
-					.defaultRecord(materials[index], volume, size, mass, indicator);
+					.defaultRecord(materials[index], volume, size, mmm.units.SolverUnitScale.forCellSize(size).massUnitsForNormalized(mass), indicator);
 			check(actual.equals(fresh), "default reuse mixed an input field at index " + index);
 		}
-		check(store.tryDefaultRecord("mmm:water", Float.MIN_VALUE, 1.0F, Double.MIN_VALUE, false) == null
-				&& store.tryDefaultRecord("mmm:water", 0.125F, Float.MIN_VALUE, 125.0, false) == null,
+		check(store.tryDefaultRecord("mmm:water", Float.MIN_VALUE, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(Double.MIN_VALUE), false) == null
+				&& store.tryDefaultRecord("mmm:water", 0.125F, Float.MIN_VALUE, mmm.units.SolverUnitScale.forCellSize(Float.MIN_VALUE).massUnitsForNormalized(125.0), false) == null,
 				"subnormal default volume acquired a species quantum");
-		check(store.defaultRecord("mmm:water", 0.125F, 1.0F, Double.MIN_VALUE, false)
-				.equals(new ChemicalParcelStore(registry, scale, 1, 1)
-						.defaultRecord("mmm:water", 0.125F, 1.0F, Double.MIN_VALUE, false)),
-				"subnormal mass reused a different default residual");
-		expectFailure(() -> store.defaultRecord("mmm:oil", 0.125F, 1.0F, 125.0, true), "default reuse accepted a rejected indicator");
-		expectFailure(() -> store.defaultRecord("mmm:missing", 0.125F, 1.0F, 125.0, false), "default reuse accepted an unknown material");
-		expectFailure(() -> store.defaultRecord("mmm:water", Float.NaN, 1.0F, 125.0, false), "default reuse accepted non-finite volume");
-		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, Float.POSITIVE_INFINITY, 125.0, false), "default reuse accepted non-finite cell size");
-		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, 1.0F, Double.NaN, false), "default reuse accepted non-finite mass");
-		store.assignDefault(0, "mmm:water", 20_000.0F, 1.0F, 20_000_000.0, false);
+		check(store.tryDefaultRecord("mmm:water", 0.125F, 1.0F, 0L, false) == null,
+				"Zero integer mass acquired a live default parcel");
+		expectFailure(() -> store.defaultRecord("mmm:oil", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), true), "default reuse accepted a rejected indicator");
+		expectFailure(() -> store.defaultRecord("mmm:missing", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false), "default reuse accepted an unknown material");
+		expectFailure(() -> store.defaultRecord("mmm:water", Float.NaN, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false), "default reuse accepted non-finite volume");
+		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, Float.POSITIVE_INFINITY, mmm.units.SolverUnitScale.forCellSize(Float.POSITIVE_INFINITY).massUnitsForNormalized(125.0), false), "default reuse accepted non-finite cell size");
+		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(Double.NaN), false), "default reuse accepted non-finite mass");
+		store.assignDefault(0, "mmm:water", 20_000.0F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(20_000_000.0), false);
 		long inventory = store.totalQuanta(), revision = store.mutationRevision();
-		expectFailure(() -> store.assignDefault(1, "mmm:water", 20_000.0F, 1.0F, 20_000_000.0, false),
+		expectFailure(() -> store.assignDefault(1, "mmm:water", 20_000.0F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(20_000_000.0), false),
 				"default reuse bypassed the region inventory limit");
 		check(store.totalQuanta() == inventory && store.mutationRevision() == revision && !store.isAssigned(1),
 				"rejected default assignment changed inventory ownership");
@@ -176,18 +174,18 @@ public final class M7ChemistryValidation {
 						value.molarMassKgPerMol().multiply(2), value.baseArgb())).toList(),
 				reference.phases(), reference.reactions());
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(reference,
-				Map.of(BuiltinChemicalDefinitions.H2O, 123_457L), 0.125);
+				Map.of(BuiltinChemicalDefinitions.H2O, 123_457L), mmm.units.Mass.fromKilograms(0.125));
 		ExactRational expected = reference.species(reference.speciesHandle(BuiltinChemicalDefinitions.H2O))
 				.molarMassKgPerMol().multiply(123_457L).divide(ChemicalLimits.QUANTA_PER_MOL);
-		ChemicalMixtureRecord adjusted = record.withMassResidualKilograms(-0.25);
+		ChemicalMixtureRecord adjusted = record.withMassResidualUnits(mmm.units.Mass.fromKilograms(-0.25));
 		ChemicalMixtureRecord rebuilt = ChemicalMixtureRecord.fromStableAmounts(reference,
-				Map.of(BuiltinChemicalDefinitions.H2O, 123_457L), -0.25);
+				Map.of(BuiltinChemicalDefinitions.H2O, 123_457L), mmm.units.Mass.fromKilograms(-0.25));
 		check(adjusted.equals(rebuilt) && adjusted.hashCode() == rebuilt.hashCode()
 				&& adjusted.totalQuanta() == record.totalQuanta(), "residual replacement changed canonical inventory or hash");
 		adjusted.copyAmounts()[0] = 1;
 		check(adjusted.amountAt(0) == 123_457L && record.amountAt(0) == 123_457L,
 				"residual replacement exposed mutable inventory");
-		expectFailure(() -> record.withMassResidualKilograms(Double.NaN), "residual replacement accepted non-finite mass");
+		expectFailure(() -> record.withMassResidualUnits(mmm.units.Mass.fromKilograms(Double.NaN)), "residual replacement accepted non-finite mass");
 		java.util.stream.IntStream.range(0, 256).parallel().forEach(index -> {
 			ChemicalRegistry target = (index & 1) == 0 ? reference : heavier;
 			check(adjusted.exactSpeciesMassKilograms(target).equals((index & 1) == 0 ? expected : expected.multiply(2)),
@@ -195,11 +193,8 @@ public final class M7ChemistryValidation {
 		});
 		ExactRational wideMass = new ExactRational(java.math.BigInteger.ONE,
 				java.math.BigInteger.ONE.shiftLeft(ChemicalLimits.MAX_RATIONAL_BITS - 30).add(java.math.BigInteger.valueOf(3)));
-		var wideSpecies = new ChemicalSpecies("test:wide", Map.of("X", 1), 0, wideMass, 0xff000000);
-		var wideDefinitions = new ArrayList<>(reference.species()); wideDefinitions.add(wideSpecies);
-		var wideRegistry = new ChemicalRegistry(wideDefinitions, reference.phases(), reference.reactions());
-		check(ChemicalMixtureRecord.fromStableAmounts(wideRegistry, Map.of(wideSpecies.id(), ChemicalLimits.QUANTA_PER_MOL), 0)
-				.exactSpeciesMassKilograms(wideRegistry).equals(wideMass), "mass-factor cache rejected a valid wide rational definition");
+		expectFailure(() -> new ChemicalSpecies("test:wide", Map.of("X", 1), 0, wideMass, 0xff000000),
+				"Species accepted a molar mass below the fixed-point mass resolution");
 	}
 
 	private static void validateBundledDataDefinitions() throws Exception {
@@ -232,10 +227,10 @@ public final class M7ChemistryValidation {
 	private static void validateAuditLedgerCodec() throws Exception {
 		ChemicalRegistry registry = BuiltinChemicalDefinitions.REGISTRY;
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry,
-				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), 856.0);
+				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), mmm.units.Mass.fromKilograms(856.0));
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				"mmm:water", true, 1.0, 1_000.0,
-				mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry))));
+				"mmm:water", true, 1.0, mmm.units.Mass.fromKilograms(1_000.0),
+				mixture.massResidualUnits(), mixture.stableAmounts(registry))));
 		byte[] encoded = ChemicalAuditLedgerCodec.encode(ledger, ChemicalTransferLedger.EMPTY);
 		ChemicalAuditLedgerCodec.AuditLedgers decoded = ChemicalAuditLedgerCodec.decode(encoded);
 		check(decoded.externalSource().groups().equals(ledger.groups()) && decoded.escapedSink().isEmpty(),
@@ -435,7 +430,7 @@ public final class M7ChemistryValidation {
 	}
 
 	private static ChemicalMixtureRecord record(Map<String, Long> amounts) {
-		return ChemicalMixtureRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY, amounts, 0.0);
+		return ChemicalMixtureRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY, amounts, 0L);
 	}
 
 	private static void expectFailure(Runnable action, String message) {

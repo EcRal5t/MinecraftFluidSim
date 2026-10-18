@@ -395,12 +395,12 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 	}
 
 	void spawnParticle(
-			int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, double mass,
+			int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, long massUnits,
 			ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal
 	) {
 		if (particles.count() >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
 		if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
-		if (!(Double.isFinite(mass) && mass > 0.0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
+		if (!(massUnits > 0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
 		if (materialRegistry != null) materialRegistry.material(materialHandle);
 		else if (materialHandle != 0) throw new IllegalArgumentException("Material handle requires a bound material registry");
 		if (chemicalParcels != null && chemicalMixture != null)
@@ -409,7 +409,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		coordinator.appendMarker(
 				CarrierMutationPlan.append(carrierMutationRevision(), particles.count()),
 				cellIndex(cellX, cellY, cellZ), position[0], position[1], position[2],
-				amount, materialHandle, mass, chemicalMixture, indicator, thermalExternal);
+				amount, materialHandle, massUnits, chemicalMixture, indicator, thermalExternal);
 	}
 
 	float[] markerSlotPosition(int cellX, int cellY, int cellZ, int slot) {
@@ -433,7 +433,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 
 	/** Planned per-marker truncation for one cell, applied later without re-deciding anything. */
 	record MarkerTruncation(
-			int marker, float take, float newVolume, double newMass,
+			int marker, float take, float newVolume, long newMassUnits,
 			ChemicalParcelStore.SplitPlan chemicalPlan, LiquidEnergyColumn.Truncation thermalPlan
 	) { }
 
@@ -450,23 +450,23 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 			if ((int) Math.floor(particles.positionX(i) / h) != cellX || (int) Math.floor(particles.positionY(i) / h) != cellY || (int) Math.floor(particles.positionZ(i) / h) != cellZ) continue;
 			float previousVolume = particles.volume(i);
 			float take = Math.min(previousVolume, maximum - removed);
-			double previousMass = particles.mass(i);
+			long previousMass = particles.massUnits(i);
 			double previousTemperature = thermalState == null ? Double.NaN : domain().thermalMarkerTemperature(i);
 			float newVolume = previousVolume - take;
 			if (newVolume <= 1.0E-6F) {
 				take = previousVolume;
 				newVolume = 0.0F;
 			}
-			double newMass = previousMass * newVolume / previousVolume;
+			long newMass = mmm.units.Mass.portion(previousMass, newVolume, previousVolume);
 			ChemicalParcelStore.SplitPlan chemicalPlan = null;
 			if (chemicalParcels != null) {
 				chemicalPlan = chemicalParcels.planTruncate(
 						i, newVolume, take, newMass, previousMass - newMass);
 				if (removedChemistry != null) removedChemistry.add(
 						materialRegistry.material(particles.materialHandle(i)).id(), chemicalParcels.indicator(i),
-						take, unitScale.kilograms(previousMass - newMass), chemicalPlan.removed());
+						take, Math.subtractExact(previousMass, newMass), chemicalPlan.removed());
 			}
-			LiquidEnergyColumn.Truncation thermalPlan = domain().planThermalTruncate(i, newMass,
+			LiquidEnergyColumn.Truncation thermalPlan = domain().planThermalTruncate(i, unitScale.normalizedMass(newMass),
 					chemicalPlan == null ? null : chemicalPlan.kept(), previousTemperature);
 			if (removedMaterials != null) removedMaterials.add(
 					particles.materialHandle(i), take, previousMass - newMass);
@@ -485,7 +485,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 				if (entry.newVolume() > 0.0F) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
 			}
 			particles.setVolume(i, entry.newVolume());
-			particles.setMass(i, entry.newMass());
+			particles.setMassUnits(i, entry.newMassUnits());
 			domain().commitThermalTruncate(i, entry.thermalPlan());
 			if (particles.volume(i) <= 1.0E-6F) removeParticle(i);
 		}
@@ -525,7 +525,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 					if (entry.newVolume() > 0.0F) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
 				}
 				particles.setVolume(i, entry.newVolume());
-				particles.setMass(i, entry.newMass());
+				particles.setMassUnits(i, entry.newMassUnits());
 				domain().commitThermalTruncate(i, entry.thermalPlan());
 			}
 		}
@@ -582,10 +582,10 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 			if ((microMask & bit) == 0) continue;
 			if (chemicalParcels != null && removedChemistry != null) removedChemistry.add(
 					materialRegistry.material(particles.materialHandle(particle)).id(), chemicalParcels.indicator(particle),
-					particles.volume(particle), unitScale.kilograms(particles.mass(particle)),
+					particles.volume(particle), particles.massUnits(particle),
 					chemicalParcels.record(particle));
 			if (removedMaterials != null) removedMaterials.add(particles.materialHandle(particle),
-					particles.volume(particle), particles.mass(particle));
+					particles.volume(particle), particles.massUnits(particle));
 			if (removedThermal != null && thermalState != null) {
 				removedThermal.add(thermalState.liquidInternalEnergy(particle));
 			}
@@ -648,7 +648,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 	}
 
 	void setDefaultMaterialState(int particle) {
-		particles.setMass(particle, (double) particles.volume(particle) * config.density());
+		particles.setMassUnits(particle, unitScale.massUnitsForNormalized((double) particles.volume(particle) * config.density()));
 		particles.setMaterialHandle(particle, 0);
 		particles.setPhaseLabel(particle, 0);
 	}
@@ -784,7 +784,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 	void validateMaterialPortion(FluidDomain.MaterialPortion portion) {
 		if (portion == null || !(Double.isFinite(portion.volume()) && portion.volume() > 0.0
 				&& portion.volume() <= Float.MAX_VALUE && (float) portion.volume() > 0.0F)
-				|| !(Double.isFinite(portion.mass()) && portion.mass() > 0.0)) {
+				|| !(Double.isFinite(portion.massUnits()) && portion.massUnits() > 0.0)) {
 			throw new IllegalArgumentException("Material portion ledgers must be finite, positive and float-representable");
 		}
 		if (materialRegistry == null) {

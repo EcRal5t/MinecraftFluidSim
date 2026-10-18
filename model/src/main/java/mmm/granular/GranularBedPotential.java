@@ -45,8 +45,8 @@ public final class GranularBedPotential {
 		long sourceBulk = store.previewCellBulkVolumeAfterTake(from, moved.materialHandle(), moved.solidCompositionHandle(), moved.solidVolumeSvq());
 		long targetBulk = store.previewCellBulkVolumeAfterAdd(to, moved);
 		SignedDyadic[] masses = {SignedDyadic.ZERO, SignedDyadic.ZERO};
-		store.forEachGroupInCell(from, (cell, porosity, material, composition, volume, mass) -> masses[0] = masses[0].add(SignedDyadic.of(mass)));
-		store.forEachGroupInCell(to, (cell, porosity, material, composition, volume, mass) -> masses[1] = masses[1].add(SignedDyadic.of(mass)));
+		store.forEachGroupInCell(from, (cell, porosity, material, composition, volume, mass) -> masses[0] = masses[0].add(SignedDyadic.of(mmm.units.Mass.kilograms(mass))));
+		store.forEachGroupInCell(to, (cell, porosity, material, composition, volume, mass) -> masses[1] = masses[1].add(SignedDyadic.of(mmm.units.Mass.kilograms(mass))));
 		SignedDyadic h = SignedDyadic.of(cellSize), mass = SignedDyadic.of(moved.mass());
 		SignedDyadic sourceCenter = h.multiply(SignedDyadic.of(from / sizeX % sizeY, 0).add(SignedDyadic.of(sourceBulk, -25)));
 		SignedDyadic targetCenter = h.multiply(SignedDyadic.of(to / sizeX % sizeY, 0).add(SignedDyadic.of(targetBulk, -25)));
@@ -76,7 +76,7 @@ public final class GranularBedPotential {
 		}
 		long remainingBulk = store.previewCellBulkVolumeAfterTake(cell, moved.materialHandle(), moved.solidCompositionHandle(), moved.solidVolumeSvq());
 		SignedDyadic[] originalMass = {SignedDyadic.ZERO};
-		store.forEachGroupInCell(cell, (ignored, porosity, material, composition, volume, mass) -> originalMass[0] = originalMass[0].add(SignedDyadic.of(mass)));
+		store.forEachGroupInCell(cell, (ignored, porosity, material, composition, volume, mass) -> originalMass[0] = originalMass[0].add(SignedDyadic.of(mmm.units.Mass.kilograms(mass))));
 		SignedDyadic h = SignedDyadic.of(cellSize);
 		SignedDyadic remainingCenter = h.multiply(SignedDyadic.of(cell / sizeX % sizeY, 0).add(SignedDyadic.of(remainingBulk, -25)));
 		SignedDyadic change = originalMass[0].multiply(h).multiply(SignedDyadic.of(remainingBulk - store.cellBulkVolumeSvq(cell), -25))

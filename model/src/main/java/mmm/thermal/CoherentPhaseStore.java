@@ -30,11 +30,10 @@ public final class CoherentPhaseStore {
 	}
 
 	/** Null on a group means chemically inert; an instantiated composition is always non-empty. */
-	public record Composition(List<Component> components, long massResidualBits) {
+	public record Composition(List<Component> components, long massResidualUnits) {
 		public Composition {
 			components = List.copyOf(components);
-			if (components.isEmpty() || components.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL
-					|| !Double.isFinite(Double.longBitsToDouble(massResidualBits))) {
+			if (components.isEmpty() || components.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL) {
 				throw new IllegalArgumentException("Invalid coherent composition");
 			}
 			String previous = null;
@@ -51,7 +50,7 @@ public final class CoherentPhaseStore {
 			}
 		}
 
-		public double massResidual() { return Double.longBitsToDouble(massResidualBits); }
+		public double massResidual() { return mmm.units.Mass.kilograms(massResidualUnits); }
 
 		public Map<String, Long> stableAmounts() {
 			TreeMap<String, Long> result = new TreeMap<>();
@@ -61,13 +60,14 @@ public final class CoherentPhaseStore {
 	}
 
 	public record Group(
-			int cell, String phaseId, long occupiedVolumeSvq, double mass,
+			int cell, String phaseId, long occupiedVolumeSvq, long massUnits,
 			Composition composition, double internalEnergy
 	) {
+		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
 		public Group {
 			if (cell < 0) throw new IllegalArgumentException("Coherent phase cell is invalid");
 			ThermalIds.requireId(phaseId, "coherent phase id");
-			if (occupiedVolumeSvq <= 0L || !(Double.isFinite(mass) && mass > 0.0)
+			if (occupiedVolumeSvq <= 0L || massUnits <= 0
 					|| !Double.isFinite(internalEnergy)) {
 				throw new IllegalArgumentException("Coherent phase inventory is invalid");
 			}
@@ -133,7 +133,7 @@ public final class CoherentPhaseStore {
 			throw new InventoryUnavailableException("Coherent occupied volume exceeds the SVQ range");
 		return new Group(current.cell(), current.phaseId(),
 				Math.addExact(current.occupiedVolumeSvq(), addition.occupiedVolumeSvq()),
-				finiteAdd(current.mass(), addition.mass(), "coherent mass"),
+				Math.addExact(current.massUnits(), addition.massUnits()),
 				merge(current.composition(), addition.composition()),
 				finiteAdd(current.internalEnergy(), addition.internalEnergy(), "coherent energy"));
 	}
@@ -158,9 +158,10 @@ public final class CoherentPhaseStore {
 		}
 		if (requestedSvq == current.occupiedVolumeSvq()) return new TakeSplit(current, null);
 		long remainingSvq = current.occupiedVolumeSvq() - requestedSvq;
-		ProportionalDoubleSplit masses = ProportionalDoubleSplit.of(current.mass(), requestedSvq, current.occupiedVolumeSvq());
-		ProportionalDoubleSplit energies = ProportionalDoubleSplit.of(current.internalEnergy(), requestedSvq, current.occupiedVolumeSvq());
-		double removedMass = masses.removed(), remainingMass = masses.remaining();
+
+		long removedMass = mmm.units.Mass.portion(current.massUnits(), requestedSvq, current.occupiedVolumeSvq());
+		long remainingMass = Math.subtractExact(current.massUnits(), removedMass);
+		ProportionalDoubleSplit energies = ProportionalDoubleSplit.of(current.internalEnergy(), removedMass, current.massUnits());
 		double removedEnergy = energies.removed(), remainingEnergy = energies.remaining();
 		if (!(removedMass > 0.0 && remainingMass > 0.0)
 				|| !Double.isFinite(removedEnergy) || !Double.isFinite(remainingEnergy)) {
@@ -174,7 +175,7 @@ public final class CoherentPhaseStore {
 	void setInternalEnergy(int index, double internalEnergy) {
 		if (!Double.isFinite(internalEnergy)) throw new IllegalArgumentException("Coherent internal energy is not finite");
 		Group group = groups.get(index);
-		groups.set(index, new Group(group.cell(), group.phaseId(), group.occupiedVolumeSvq(), group.mass(),
+		groups.set(index, new Group(group.cell(), group.phaseId(), group.occupiedVolumeSvq(), group.massUnits(),
 				group.composition(), internalEnergy));
 	}
 
@@ -195,11 +196,12 @@ public final class CoherentPhaseStore {
 		return total;
 	}
 
-	public double totalMass() {
-		double total = 0.0;
-		for (Group group : groups) total += group.mass();
+	public long totalMassUnits() {
+		long total = 0;
+		for (Group group : groups) total = Math.addExact(total, group.massUnits());
 		return total;
 	}
+	public double totalMass() { return mmm.units.Mass.kilograms(totalMassUnits()); }
 
 	public SignedDyadic exactEnergy() {
 		SignedDyadic total = SignedDyadic.ZERO;
@@ -259,12 +261,12 @@ public final class CoherentPhaseStore {
 			throw new InventoryUnavailableException("Coherent merge exceeds the chemical quantum capacity");
 		ArrayList<Component> components = new ArrayList<>(amounts.size());
 		for (Map.Entry<String, Long> entry : amounts.entrySet()) components.add(new Component(entry.getKey(), entry.getValue()));
-		double residual = finiteAdd(first.massResidual(), second.massResidual(), "coherent mass residual");
-		return new Composition(components, Double.doubleToRawLongBits(residual));
+		long residual = Math.addExact(first.massResidualUnits(), second.massResidualUnits());
+		return new Composition(components, residual);
 	}
 
 	private static Composition[] split(Composition composition, long remainingSvq, long removedSvq,
-	                                   double remainingMass, double removedMass, ChemicalRegistry chemistry) {
+	                                   long remainingMass, long removedMass, ChemicalRegistry chemistry) {
 		if (composition == null) return new Composition[]{null, null};
 		if (chemistry == null) throw new IllegalArgumentException("Coherent chemical split requires its registry");
 		ArrayList<Component> remaining = new ArrayList<>(), removed = new ArrayList<>();
@@ -279,21 +281,13 @@ public final class CoherentPhaseStore {
 		boolean removedIsSmaller = removedSvq <= remainingSvq;
 		TreeMap<String, Long> smallerAmounts = new TreeMap<>();
 		for (Component component : removedIsSmaller ? removed : remaining) smallerAmounts.put(component.speciesId(), component.amountQuanta());
-		SignedDyadic smallerMass = SignedDyadic.of(removedIsSmaller ? removedMass : remainingMass);
-		ExactRational exactMass = smallerMass.exponent() >= 0
-				? new ExactRational(smallerMass.significand().shiftLeft(smallerMass.exponent()), BigInteger.ONE)
-				: new ExactRational(smallerMass.significand(), BigInteger.ONE.shiftLeft(-smallerMass.exponent()));
-		// Species quanta close exactly. Put residual rounding on the larger volume share too.
-		double smallerResidual = exactMass.subtract(ChemicalMixtureRecord.fromStableAmounts(chemistry, smallerAmounts, 0.0)
-				.exactSpeciesMassKilograms(chemistry)).toDouble();
-		if (!Double.isFinite(smallerResidual)) throw new InventoryUnavailableException("Coherent split mass residual exceeds binary64 range");
-		double largerResidual = SignedDyadic.of(composition.massResidual()).subtract(SignedDyadic.of(smallerResidual)).toDouble();
-		if (!Double.isFinite(largerResidual)) throw new InventoryUnavailableException("Coherent split mass residual exceeds binary64 range");
-		double removedResidual = removedIsSmaller ? smallerResidual : largerResidual;
-		double remainingResidual = removedIsSmaller ? largerResidual : smallerResidual;
+		long smallerMass = removedIsSmaller ? removedMass : remainingMass;
+		long smallerResidual = Math.subtractExact(smallerMass,
+				ChemicalMixtureRecord.fromStableAmounts(chemistry, smallerAmounts, 0L).speciesMassUnits(chemistry));
+		long largerResidual = Math.subtractExact(composition.massResidualUnits(), smallerResidual);
 		return new Composition[]{
-				new Composition(remaining, Double.doubleToRawLongBits(remainingResidual)),
-				new Composition(removed, Double.doubleToRawLongBits(removedResidual))};
+				new Composition(remaining, (removedIsSmaller ? largerResidual : smallerResidual)),
+				new Composition(removed, (removedIsSmaller ? smallerResidual : largerResidual))};
 	}
 
 	private static long[] allocate(long total, long firstWeight, long secondWeight) {

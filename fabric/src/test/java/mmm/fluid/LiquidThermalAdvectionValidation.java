@@ -45,7 +45,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 			domain.bindThermal(new ThermalRegistry(List.of(caloric)), new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 300);
 			double minimum = Double.POSITIVE_INFINITY, maximum = Double.NEGATIVE_INFINITY;
 			for (int p = 0; p < domain.particleCount(); p++) {
-				if (domain.particleCellIndex(p) % domain.sizeX == 2) domain.particles.setMass(p, domain.particles.mass(p) * densityRatio);
+				if (domain.particleCellIndex(p) % domain.sizeX == 2) domain.particles.setMassUnits(p, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(domain.particles.mass(p) * densityRatio));
 				domain.particles.setVelocityX(p, 0.125F); domain.particles.setVelocityY(p, 0.0625F); domain.particles.setVelocityZ(p, 0.09375F);
 				double temperature = tensorTemperature(xyz, domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p));
 				minimum = Math.min(minimum, temperature); maximum = Math.max(maximum, temperature);
@@ -57,13 +57,13 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 			var flux = new ConservativeLiquidFlux(domain.sizeX, domain.sizeY, domain.sizeZ); flux.geometry(new LiquidFluxGeometry(domain));
 			for (int f = 0; f < flux.velocity.length; f++) flux.velocity[f] = flux.axis[f] == 0 ? 0.125 : flux.axis[f] == 1 ? 0.0625 : 0.09375;
 			float dt = 0.125F;
-			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, dt / domain.config.cellSize(), domain.markerGrid.exactCellVolumeInventory);
+			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, dt / domain.config().cellSize(), domain.markerGrid.exactCellVolumeInventory);
 			var plan = new CellCarrierRemapPlan(domain, flux, dt, new BallisticLiquidRemap(domain.cellCount));
 			// Construction runs the common exact-volume, material-mass, momentum and marker-budget audits.
 			SignedDyadic energy = SignedDyadic.ZERO;
 			for (var marker : plan.markers) {
 				energy = energy.add(SignedDyadic.of(marker.energy()));
-				double temperature = domain.thermalState.liquid().caloricInventory(marker.material(), marker.mass(), marker.mixture(), null).temperature(marker.energy());
+				double temperature = domain.thermalState.liquid().caloricInventory(marker.material(), domain.unitScale.normalizedMass(marker.massUnits()), marker.mixture(), null).temperature(marker.energy());
 				require(temperature >= minimum - 8 * Math.ulp(minimum) && temperature <= maximum + 8 * Math.ulp(maximum),
 						"Tensor temperature remap introduced a new extremum");
 			}
@@ -76,10 +76,10 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				double[][] positions = new double[3][count], values = new double[2][count]; double[] weights = new double[count]; int p = 0;
 				for (var marker : plan.markers) if (marker.cell() == cell) {
 					for (int a = 0; a < 3; a++) positions[a][p] = marker.offset(a);
-					values[0][p] = domain.thermalState.liquid().caloricInventory(marker.material(), marker.mass(), marker.mixture(), null).temperature(marker.energy());
+					values[0][p] = domain.thermalState.liquid().caloricInventory(marker.material(), domain.unitScale.normalizedMass(marker.massUnits()), marker.mixture(), null).temperature(marker.energy());
 					values[1][p] = tensorTemperature(xyz, (x + 0.5 + marker.offsetX()) * 0.5 - dt * 0.125,
 							(3.5 + marker.offsetY()) * 0.5 - dt * 0.0625, (3.5 + marker.offsetZ()) * 0.5 - dt * 0.09375);
-					weights[p++] = marker.mass();
+					weights[p++] = domain.unitScale.normalizedMass(marker.massUnits());
 				}
 				var field = CellPolynomialField.fit(positions, weights, values, count);
 				var scalar = CellPolynomialField.fit(positions, weights, new double[][]{values[0]}, count)[0];
@@ -117,8 +117,8 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 			var energy = SignedDyadic.ZERO; double receivedEnergy = 0, receivedMass = 0;
 			for (var marker : remap.markers) {
 				energy = energy.add(SignedDyadic.of(marker.energy()));
-				if (marker.cell() == receiver) { receivedEnergy += marker.energy(); receivedMass += marker.mass(); }
-				if (marker.cell() == neighbor) require(domain.thermalState.liquid().caloricInventory(marker.material(), marker.mass(), null, null)
+				if (marker.cell() == receiver) { receivedEnergy += marker.energy(); receivedMass += domain.unitScale.normalizedMass(marker.massUnits()); }
+				if (marker.cell() == neighbor) require(domain.thermalState.liquid().caloricInventory(marker.material(), domain.unitScale.normalizedMass(marker.massUnits()), null, null)
 						.temperature(marker.energy()) == neighborTemperature, "Unchanged neighbor lost its temperature");
 			}
 			require(energy.equals(domain.exactInternalEnergy()), "Neighbor-limited remap changed exact internal energy");
@@ -145,8 +145,8 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		var initialAudit = domain.thermalAudit();
 		for (int step = 0; step < 40; step++) {
 			for (int marker = 0; marker < domain.particleCount(); marker++) {
-				double x = Math.PI * domain.particles.positionX(marker) / (8 * domain.config.cellSize());
-				double y = Math.PI * domain.particles.positionY(marker) / (8 * domain.config.cellSize());
+				double x = Math.PI * domain.particles.positionX(marker) / (8 * domain.config().cellSize());
+				double y = Math.PI * domain.particles.positionY(marker) / (8 * domain.config().cellSize());
 				domain.particles.setVelocityX(marker, (float) (-0.5 * Math.sin(x) * Math.cos(y)));
 				domain.particles.setVelocityY(marker, (float) (0.5 * Math.cos(x) * Math.sin(y)));
 			}
@@ -176,8 +176,8 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 					domain.thermalState.resetMarkerTemperature(marker, 300 + gradient * domain.particles.positionY(marker),
 							domain.thermalMarkerContext(), domain.exactInternalEnergy());
 				for (int marker = 0; marker < domain.particleCount(); marker++) {
-					double x = Math.PI * domain.particles.positionX(marker) / (n * domain.config.cellSize());
-					double y = Math.PI * domain.particles.positionY(marker) / (n * domain.config.cellSize());
+					double x = Math.PI * domain.particles.positionX(marker) / (n * domain.config().cellSize());
+					double y = Math.PI * domain.particles.positionY(marker) / (n * domain.config().cellSize());
 					domain.particles.setVelocityX(marker, (float) (-speed * Math.sin(x) * Math.cos(y)));
 					domain.particles.setVelocityY(marker, (float) (speed * Math.cos(x) * Math.sin(y)));
 				}
@@ -261,8 +261,8 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				new ThermalSpeciesOffset("test:offset/second", BuiltinChemicalDefinitions.H2O, second.id(), ExactRational.of(-200000))),
 				List.of(), chemistry.fingerprint(), "");
 		var mixtures = new ChemicalMixtureRecord[] {
-				ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), 0),
-				ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, 2 * ChemicalLimits.QUANTA_PER_MOL), 0)};
+				ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), 0L),
+				ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, 2 * ChemicalLimits.QUANTA_PER_MOL), 0L)};
 		var markers = new ThermalCarrierContext() {
 			@Override public int markerCount() { return 2; }
 			@Override public int cell(int marker) { return marker; }
@@ -384,7 +384,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 			var domain = new FluidDomain(2, 2, 2,
 					new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-7F, .4F, .002F, 0), 128);
 			domain.setVolume(0, 0, 0, 1);
-			for (int p = 0; p < domain.particleCount(); p++) domain.particles.setMass(p, 2);
+			for (int p = 0; p < domain.particleCount(); p++) domain.particles.setMassUnits(p, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(2));
 			var material = new ThermalMaterialDefinition("test:thermal/remap_reference", ThermalMaterialDefinition.CarrierKind.LIQUID,
 					"mmm:water", 300, reference, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)));
 			domain.bindThermal(new ThermalRegistry(List.of(material)), new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 300);
@@ -395,7 +395,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
 			var plan = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true);
 			for (var marker : plan.markers) require(domain.thermalState.liquid().caloricInventory(
-					marker.material(), marker.mass(), null, null).temperature(marker.energy()) == (marker.offsetX() < 0 ? 428 : 556),
+					marker.material(), domain.unitScale.normalizedMass(marker.massUnits()), null, null).temperature(marker.energy()) == (marker.offsetX() < 0 ? 428 : 556),
 					"stationary liquid remap changed the caloric spatial field under a reference offset");
 		}
 	}
@@ -549,7 +549,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		for (int n : new int[] {8, 16}) {
 			var domain = pool(4, n, 2, 4e6); // alpha = 1 m^2/s from the actual rho, cv and k.
 			var context = domain.thermalMarkerContext();
-			double h = domain.config.cellSize(), height = h * n, before = 0, norm = 0;
+			double h = domain.config().cellSize(), height = h * n, before = 0, norm = 0;
 			for (int p = 0; p < domain.particleCount(); p++) {
 				double mode = Math.cos(Math.PI * domain.particles.positionY(p) / height);
 				domain.thermalState.resetMarkerTemperature(p, 300 + 2 * mode, context, domain.exactInternalEnergy());
@@ -571,7 +571,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 
 	static void conductingLinearWallProfileIsStationary() {
 		var domain = pool(4, 6, 2, 4e6);
-		double height = domain.sizeY * domain.config.cellSize();
+		double height = domain.sizeY * domain.config().cellSize();
 		var context = domain.thermalMarkerContext();
 		double[] boundary = new double[domain.cellCount * 6]; Arrays.fill(boundary, Double.NaN);
 		for (int p = 0; p < domain.particleCount(); p++) domain.thermalState.resetMarkerTemperature(p,

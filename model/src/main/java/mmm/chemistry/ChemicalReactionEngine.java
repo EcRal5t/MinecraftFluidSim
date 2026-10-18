@@ -17,7 +17,7 @@ public final class ChemicalReactionEngine {
 			inventory[input.speciesHandle(entry)] = input.amountAt(entry);
 		}
 		InventoryResult result = reactInventory(phaseHandle, inventory);
-		return new Result(canonical(result.inventory, input.massResidualKilogramsBits()), result.evaluations);
+		return new Result(canonical(result.inventory, input.massResidualUnits()), result.evaluations);
 	}
 
 	/** Reacts one complete cell/phase inventory without applying the per-parcel 16-entry budget. */
@@ -75,7 +75,7 @@ public final class ChemicalReactionEngine {
 			int handle = registry.speciesHandle(addition.getKey());
 			inventory[handle] = Math.addExact(inventory[handle], amount);
 		}
-		return react(phaseHandle, canonical(inventory, base.massResidualKilogramsBits())).mixture();
+		return react(phaseHandle, canonical(inventory, base.massResidualUnits())).mixture();
 	}
 
 	public double ph(ChemicalMixtureRecord mixture) {
@@ -94,7 +94,7 @@ public final class ChemicalReactionEngine {
 		return acid > base ? 7.0 - strength : 7.0 + strength;
 	}
 
-	private ChemicalMixtureRecord canonical(long[] inventory, long residualBits) {
+	private ChemicalMixtureRecord canonical(long[] inventory, long residualUnits) {
 		int count = 0;
 		for (long amount : inventory) {
 			if (amount < 0L) throw new IllegalArgumentException("Chemical inventory became negative");
@@ -109,7 +109,7 @@ public final class ChemicalReactionEngine {
 			species[entry] = handle;
 			amounts[entry++] = inventory[handle];
 		}
-		return new ChemicalMixtureRecord(species, amounts, residualBits);
+		return new ChemicalMixtureRecord(species, amounts, residualUnits);
 	}
 
 	public record Result(ChemicalMixtureRecord mixture, int evaluations) { }

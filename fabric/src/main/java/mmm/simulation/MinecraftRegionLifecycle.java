@@ -375,7 +375,7 @@ public final class MinecraftRegionLifecycle {
 		LifecycleOperationPreview.Removal removal = switch (operation) {
 			case EMPTY_CONDENSED -> new LifecycleOperationPreview.Removal(
 					AirNetwork.nanos(domain.physicalVolumeCubicMetres(domain.totalVolumeExact())),
-					domain.physicalMassKilograms(domain.totalMass()), domain.totalChemicalSpeciesQuanta(),
+					mmm.units.Mass.kilograms(domain.totalMassUnits()), domain.totalChemicalSpeciesQuanta(),
 					domain.totalGranularSolidVolumeSvq(), domain.totalGranularMass(),
 					domain.totalCoherentSolidVolumeSvq(), domain.totalCoherentMass(),
 					0L, 0.0, 0L, domain.hasThermalState(), domain.hasThermalState()
@@ -395,7 +395,7 @@ public final class MinecraftRegionLifecycle {
 		mmm.units.SignedDyadic exactMass = mmm.units.SignedDyadic.ZERO;
 		for (var component : domain.gasBoundary().sealedInventory().entries()) {
 			nanos = Math.addExact(nanos, component.standardVolumeNanos());
-			exactMass = exactMass.add(component.mass());
+			exactMass = exactMass.add(mmm.units.SignedDyadic.of(mmm.units.Mass.kilograms(component.massUnits())));
 			for (var amount : component.species()) species = Math.addExact(species, amount.amountQuanta());
 		}
 		double mass = exactMass.toDouble();

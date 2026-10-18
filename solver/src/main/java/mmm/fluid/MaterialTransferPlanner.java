@@ -70,7 +70,7 @@ final class MaterialTransferPlanner {
 				if (allocate <= 0.0) continue;
 				if (domain.chemicalParcels != null && domain.chemicalParcels.tryDefaultRecord(
 						domain.materialRegistry.material(portion.materialHandle()).id(), (float) allocate,
-						domain.config.cellSize(), portion.mass() * allocate / portion.volume(), false) == null) continue;
+						domain.config.cellSize(), mmm.units.Mass.portion(portion.massUnits(), allocate, portion.volume()), false) == null) continue;
 				requiredMarkers += (long) Math.ceil(allocate / domain.PARTICLE_VOLUME);
 				if (domain.particles.count() + requiredMarkers > domain.maximumParticleCount) {
 					return new FluidDomain.ExactMixtureTransfer(false, List.of());
@@ -85,10 +85,10 @@ final class MaterialTransferPlanner {
 
 		double[] inserted = new double[portions.size()];
 		double[] volumeLeft = new double[portions.size()];
-		double[] massLeft = new double[portions.size()];
+		long[] massLeft = new long[portions.size()];
 		for (int i = 0; i < portions.size(); i++) {
 			volumeLeft[i] = portions.get(i).volume();
-			massLeft[i] = portions.get(i).mass();
+			massLeft[i] = portions.get(i).massUnits();
 		}
 		List<MaterialInsertPiece> insertPieces = new ArrayList<>();
 		long plannedChemicalQuanta = 0L;
@@ -105,8 +105,8 @@ final class MaterialTransferPlanner {
 				}
 				if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
 				boolean finalPortionPiece = volumeLeft[portionIndex] == piece;
-				double pieceMass = finalPortionPiece ? massLeft[portionIndex]
-						: massLeft[portionIndex] * piece / volumeLeft[portionIndex];
+				long pieceMass = finalPortionPiece ? massLeft[portionIndex]
+						: mmm.units.Mass.portion(massLeft[portionIndex], piece, volumeLeft[portionIndex]);
 				ChemicalMixtureRecord chemical = domain.chemicalParcels == null ? null : domain.chemicalParcels.tryDefaultRecord(
 						domain.materialRegistry.material(allocation.materialHandle()).id(), piece, domain.config.cellSize(), pieceMass, false);
 				if (domain.chemicalParcels != null && chemical == null) {
@@ -118,7 +118,7 @@ final class MaterialTransferPlanner {
 				left = allocationRemainder ? 0.0 : left - piece;
 				if (finalPortionPiece) {
 					volumeLeft[portionIndex] = 0.0;
-					massLeft[portionIndex] = 0.0;
+					massLeft[portionIndex] = 0L;
 				} else {
 					volumeLeft[portionIndex] -= piece;
 					massLeft[portionIndex] -= pieceMass;
@@ -126,7 +126,7 @@ final class MaterialTransferPlanner {
 				slot = domain.firstOpenSlot(domain.cellIndex(allocation.x(), allocation.y(), allocation.z()), slot + 1);
 			}
 		}
-		double[] insertedMass = settleMaterialPieceMasses(insertPieces, portions);
+		long[] insertedMass = settleMaterialPieceMasses(insertPieces, portions);
 		if (insertedMass == null) return new FluidDomain.ExactMixtureTransfer(false, List.of());
 		for (MaterialInsertPiece piece : insertPieces) if (piece.chemical() != null) {
 			plannedChemicalQuanta = Math.addExact(plannedChemicalQuanta, piece.chemical().totalQuanta());
@@ -141,7 +141,7 @@ final class MaterialTransferPlanner {
 				ChemicalTransferLedger.Builder source = ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
 				for (MaterialInsertPiece piece : insertPieces) source.add(
 						domain.materialRegistry.material(piece.materialHandle()).id(), false,
-						piece.volume(), domain.unitScale.kilograms(piece.mass()), piece.chemical());
+						piece.volume(), piece.massUnits(), piece.chemical());
 				externalAddition = source.build();
 				domain.chemicalParcels.requireCanRecordExternalSource(externalAddition);
 			} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
@@ -155,7 +155,7 @@ final class MaterialTransferPlanner {
 			if (domain.thermalState != null) {
 				List<LiquidEnergyColumn.LiquidInsertion> thermalInsertions = new ArrayList<>(insertPieces.size());
 				for (MaterialInsertPiece piece : insertPieces) thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(
-						piece.materialHandle(), piece.mass(), piece.chemical()));
+						piece.materialHandle(), domain.unitScale.normalizedMass(piece.massUnits()), piece.chemical()));
 				if (internalEnergy != null) thermalPlan = domain.thermalState.planExternalLiquidInsertions(
 						thermalInsertions, internalEnergy, domain.thermalMarkerContext());
 				else defaultThermalPlan = domain.thermalState.planLiquidReplacement(
@@ -171,7 +171,7 @@ final class MaterialTransferPlanner {
 		int firstInsertedOrdinal = domain.particles.count();
 		for (MaterialInsertPiece piece : insertPieces) {
 			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.chemical(), false, false);
+					piece.materialHandle(), piece.massUnits(), piece.chemical(), false, false);
 		}
 		if (thermalPlan != null) domain.thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
 		if (defaultThermalPlan != null) domain.thermalState.commitLiquidReplacement(firstInsertedOrdinal, defaultThermalPlan);
@@ -184,51 +184,16 @@ final class MaterialTransferPlanner {
 		return new FluidDomain.ExactMixtureTransfer(true, List.copyOf(result), internalEnergy == null ? 0.0 : internalEnergy);
 	}
 
-	/** One large carrier owns each material's final mass rounding; return the actual rounded sum. */
-	private double[] settleMaterialPieceMasses(List<MaterialInsertPiece> pieces, List<FluidDomain.MaterialPortion> portions) {
-		int materialCount = 1;
-		for (var portion : portions) materialCount = Math.max(materialCount, portion.materialHandle() + 1);
-		int[] portionByMaterial = new int[materialCount];
-		java.util.Arrays.fill(portionByMaterial, -1);
-		for (int i = 0; i < portions.size(); i++) portionByMaterial[portions.get(i).materialHandle()] = i;
-		int[] pivot = new int[portions.size()];
-		java.util.Arrays.fill(pivot, -1);
-		SignedDyadic[] sums = new SignedDyadic[portions.size()];
-		java.util.Arrays.fill(sums, SignedDyadic.ZERO);
-		for (int i = 0; i < pieces.size(); i++) {
-			MaterialInsertPiece piece = pieces.get(i);
-			if (!(Double.isFinite(piece.mass()) && piece.mass() > 0.0)) return null;
-			int portion = portionByMaterial[piece.materialHandle()];
-			sums[portion] = sums[portion].add(SignedDyadic.of(piece.mass()));
-			if (pivot[portion] < 0 || piece.mass() > pieces.get(pivot[portion]).mass()) pivot[portion] = i;
+	private long[] settleMaterialPieceMasses(List<MaterialInsertPiece> pieces, List<FluidDomain.MaterialPortion> portions) {
+		long[] totals = new long[portions.size()];
+		for (var piece : pieces) {
+			if (piece.massUnits() <= 0) return null;
+			for (int p = 0; p < portions.size(); p++) if (portions.get(p).materialHandle() == piece.materialHandle())
+				totals[p] = Math.addExact(totals[p], piece.massUnits());
 		}
-		double[] actualMass = new double[portions.size()];
-		for (int portion = 0; portion < portions.size(); portion++) {
-			MaterialInsertPiece old = pieces.get(pivot[portion]);
-			SignedDyadic others = sums[portion].subtract(SignedDyadic.of(old.mass()));
-			double mass = largestShareRemainder(portions.get(portion).mass(), sums[portion], old.mass());
-			if (!(Double.isFinite(mass) && mass > 0.0)) return null;
-			ChemicalMixtureRecord chemical = domain.chemicalParcels == null ? null : domain.chemicalParcels.tryDefaultRecord(
-					domain.materialRegistry.material(old.materialHandle()).id(), old.volume(), domain.config.cellSize(), mass, false);
-			if (domain.chemicalParcels != null && chemical == null) return null;
-			pieces.set(pivot[portion], new MaterialInsertPiece(old.cellX(), old.cellY(), old.cellZ(), old.slot(),
-					old.volume(), old.materialHandle(), mass, chemical));
-			actualMass[portion] = others.add(SignedDyadic.of(mass)).toDouble();
-			if (Double.doubleToRawLongBits(actualMass[portion]) != Double.doubleToRawLongBits(portions.get(portion).mass())) return null;
-		}
-		return actualMass;
-	}
-
-	private static double largestShareRemainder(double source, SignedDyadic sum, double oldLargest) {
-		return SignedDyadic.of(source).subtract(sum.subtract(SignedDyadic.of(oldLargest))).toDouble();
-	}
-
-	private double chemicalMassResidual(double kilograms, ChemicalMixtureRecord record) {
-		SignedDyadic mass = SignedDyadic.of(kilograms);
-		ExactRational exact = mass.exponent() >= 0
-				? new ExactRational(mass.significand().shiftLeft(mass.exponent()), java.math.BigInteger.ONE)
-				: new ExactRational(mass.significand(), java.math.BigInteger.ONE.shiftLeft(-mass.exponent()));
-		return exact.subtract(record.exactSpeciesMassKilograms(domain.chemicalParcels.registry())).toDouble();
+		for (int p = 0; p < totals.length; p++) if (totals[p] != portions.get(p).massUnits())
+			throw new IllegalStateException("Material insertion mass counts do not close");
+		return totals;
 	}
 
 	/**
@@ -272,8 +237,8 @@ final class MaterialTransferPlanner {
 						slot = domain.firstOpenSlot(cell, slot + 1)) {
 					if (slot < 0) throw new IllegalStateException("Cut-cell open volume was exhausted while spawning markers");
 					float piece = (float) Math.min(domain.PARTICLE_VOLUME, left);
-					double pieceMass = (double) piece * (domain.materialRegistry == null
-							? domain.config.density() : domain.materialRegistry.material(0).referenceDensity());
+					long pieceMass = domain.unitScale.massUnitsForNormalized((double) piece * (domain.materialRegistry == null
+							? domain.config.density() : domain.materialRegistry.material(0).referenceDensity()));
 					ChemicalMixtureRecord chemical = domain.chemicalParcels == null ? null
 							: domain.chemicalParcels.tryDefaultRecord(
 									domain.materialRegistry.material(0).id(), piece, domain.config.cellSize(), pieceMass, false);
@@ -310,7 +275,7 @@ final class MaterialTransferPlanner {
 				ChemicalTransferLedger.Builder source = ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
 				for (MaterialInsertPiece piece : insertPieces) source.add(
 						domain.materialRegistry.material(piece.materialHandle()).id(), false,
-						piece.volume(), domain.unitScale.kilograms(piece.mass()), piece.chemical());
+						piece.volume(), piece.massUnits(), piece.chemical());
 				externalAddition = source.build();
 				domain.chemicalParcels.requireCanRecordExternalSource(externalAddition);
 			} catch (IllegalArgumentException | ArithmeticException refusedAudit) {
@@ -323,7 +288,7 @@ final class MaterialTransferPlanner {
 			if (domain.thermalState != null && !insertPieces.isEmpty()) {
 				List<LiquidEnergyColumn.LiquidInsertion> thermalInsertions = new ArrayList<>(insertPieces.size());
 				for (MaterialInsertPiece piece : insertPieces) thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(
-						piece.materialHandle(), piece.mass(), piece.chemical()));
+						piece.materialHandle(), domain.unitScale.normalizedMass(piece.massUnits()), piece.chemical()));
 				thermalPlan = domain.thermalState.planLiquidReplacement(new int[0], thermalInsertions,
 						domain.thermalMarkerContext());
 				domain.thermalState.requireCurrentLiquidReplacement(thermalPlan);
@@ -337,7 +302,7 @@ final class MaterialTransferPlanner {
 		int firstInsertedOrdinal = domain.particles.count();
 		for (MaterialInsertPiece piece : insertPieces) {
 			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), piece.slot(), piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.chemical(), false, false);
+					piece.materialHandle(), piece.massUnits(), piece.chemical(), false, false);
 		}
 		if (thermalPlan != null) domain.thermalState.commitLiquidReplacement(firstInsertedOrdinal, thermalPlan);
 		if (!externalAddition.isEmpty()) domain.chemicalParcels.recordExternalSource(externalAddition);
@@ -387,17 +352,17 @@ final class MaterialTransferPlanner {
 					markerTolerance = Math.ulp(previousVolume);
 				}
 				if (actual <= 0.0) continue;
-				double previousMass = domain.particles.mass(marker);
-				double newMass = newVolume == 0.0F ? 0.0 : previousMass * ((double) newVolume / previousVolume);
+				long previousMass = domain.particles.massUnits(marker);
+				long newMass = newVolume == 0.0F ? 0L : mmm.units.Mass.portion(previousMass, newVolume, previousVolume);
 				if (newVolume > 0.0F && !(newMass > 0.0)) continue;
-				double removedMass = previousMass - newMass;
+				long removedMass = previousMass - newMass;
 				if (!(removedMass > 0.0)) continue;
 				ChemicalParcelStore.SplitPlan chemicalPlan = domain.chemicalParcels.tryPlanTruncate(
 						marker, newVolume, previousVolume - newVolume, newMass, removedMass);
 				if (chemicalPlan == null) continue;
 				ledger.add(domain.materialRegistry.material(domain.particles.materialHandle(marker)).id(), domain.chemicalParcels.indicator(marker),
-						actual, domain.unitScale.kilograms(removedMass), chemicalPlan.removed());
-				LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(marker, newMass,
+						actual, removedMass, chemicalPlan.removed());
+				LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(marker, domain.unitScale.normalizedMass(newMass),
 						chemicalPlan.kept(), domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(marker));
 				plan.add(new ExtractionAllocation(marker, newVolume, newMass, chemicalPlan, thermalPlan));
 				settlementTolerance = Math.max(settlementTolerance, markerTolerance);
@@ -420,7 +385,7 @@ final class MaterialTransferPlanner {
 				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
 			}
 			domain.particles.setVolume(allocation.particle(), allocation.newVolume());
-			domain.particles.setMass(allocation.particle(), allocation.newMass());
+			domain.particles.setMassUnits(allocation.particle(), allocation.newMassUnits());
 			domain.commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
 		}
 		for (int marker = domain.particles.count() - 1; marker >= 0; marker--) if (domain.particles.volume(marker) == 0.0F) domain.removeParticle(marker);
@@ -456,9 +421,9 @@ final class MaterialTransferPlanner {
 		java.util.List<ExtractionAllocation> plan = new java.util.ArrayList<>();
 		int ledgerSize = domain.materialRegistry == null ? 1 : domain.materialRegistry.size();
 		SignedDyadic[] removedVolumes = new SignedDyadic[ledgerSize];
-		SignedDyadic[] removedMasses = new SignedDyadic[ledgerSize];
+		long[] removedMasses = new long[ledgerSize];
 		java.util.Arrays.fill(removedVolumes, SignedDyadic.ZERO);
-		java.util.Arrays.fill(removedMasses, SignedDyadic.ZERO);
+
 		java.util.Set<Integer> changedHandles = new java.util.TreeSet<>();
 		for (FluidDomain.CellCandidate candidate : cells) {
 			if (remaining <= 0.0) break;
@@ -483,8 +448,8 @@ final class MaterialTransferPlanner {
 					markerTolerance = Math.ulp(previousVolume);
 				}
 				if (actual <= 0.0) continue;
-				double previousMass = domain.particles.mass(i);
-				double newMass = newVolume == 0.0F ? 0.0 : previousMass * ((double) newVolume / previousVolume);
+				long previousMass = domain.particles.massUnits(i);
+				long newMass = newVolume == 0.0F ? 0L : mmm.units.Mass.portion(previousMass, newVolume, previousVolume);
 				if (newVolume > 0.0F && !(newMass > 0.0)) continue;
 				if (!(previousMass - newMass > 0.0)) continue;
 				int handle = domain.particles.materialHandle(i);
@@ -492,15 +457,14 @@ final class MaterialTransferPlanner {
 						: domain.chemicalParcels.tryPlanTruncate(i, newVolume, previousVolume - newVolume,
 						newMass, previousMass - newMass);
 				if (domain.chemicalParcels != null && chemicalPlan == null) continue;
-				LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(i, newMass,
+				LiquidEnergyColumn.Truncation thermalPlan = domain.planThermalTruncate(i, domain.unitScale.normalizedMass(newMass),
 						chemicalPlan == null ? null : chemicalPlan.kept(),
 						domain.thermalState == null ? Double.NaN : domain.thermalMarkerTemperature(i));
 				plan.add(new ExtractionAllocation(i, newVolume, newMass, chemicalPlan, thermalPlan));
 				changedHandles.add(handle);
 				removedVolumes[handle] = removedVolumes[handle].add(SignedDyadic.of(previousVolume)
 						.subtract(SignedDyadic.of(newVolume)));
-				removedMasses[handle] = removedMasses[handle].add(SignedDyadic.of(previousMass)
-						.subtract(SignedDyadic.of(newMass)));
+				removedMasses[handle] = Math.addExact(removedMasses[handle], Math.subtractExact(previousMass, newMass));
 				settlementTolerance = Math.max(settlementTolerance, markerTolerance);
 				remaining -= actual;
 			}
@@ -511,7 +475,7 @@ final class MaterialTransferPlanner {
 		List<FluidDomain.MaterialPortion> result = new ArrayList<>(changedHandles.size());
 		for (int handle : changedHandles) {
 			double removedVolume = removedVolumes[handle].toDouble();
-			double removedMass = removedMasses[handle].toDouble();
+			long removedMass = removedMasses[handle];
 			if (!(Double.isFinite(removedVolume) && removedVolume > 0.0
 					&& Double.isFinite(removedMass) && removedMass > 0.0)) {
 				return new FluidDomain.ExactMixtureTransfer(false, List.of());
@@ -526,7 +490,7 @@ final class MaterialTransferPlanner {
 				domain.chemicalParcels.commitTruncate(allocation.particle(), allocation.chemicalPlan());
 			}
 			domain.particles.setVolume(allocation.particle(), allocation.newVolume());
-			domain.particles.setMass(allocation.particle(), allocation.newMass());
+			domain.particles.setMassUnits(allocation.particle(), allocation.newMassUnits());
 			domain.commitThermalTruncate(allocation.particle(), allocation.thermalPlan());
 		}
 		// Do not compact during indexed writes: removeParticle swaps the last marker into the current
@@ -634,45 +598,40 @@ final class MaterialTransferPlanner {
 					distributed[piece].put(species.getKey(), allocation[piece]);
 				}
 			}
-			double sourceMass = domain.unitScale.solverMass(group.massKilograms());
-			double volumeLeft = group.normalizedVolume(), massLeft = sourceMass;
-			double[] masses = new double[groupPieces.size()];
+			long sourceMass = group.massUnits();
+			double volumeLeft = group.normalizedVolume(); long massLeft = sourceMass;
+			long[] masses = new long[groupPieces.size()];
 			int massPivot = 0;
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
 				if (distributed[piece].isEmpty() && !group.speciesQuanta().isEmpty()) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 				ChemicalPieceDraft draft = groupPieces.get(piece);
 				boolean last = piece + 1 == groupPieces.size();
-				double mass = last ? massLeft : massLeft * draft.volume() / volumeLeft;
+				long mass = last ? massLeft : mmm.units.Mass.portion(massLeft, draft.volume(), volumeLeft);
 				masses[piece] = mass;
 				if (mass > masses[massPivot]) massPivot = piece;
 				volumeLeft -= draft.volume();
 				massLeft -= mass;
 			}
-			masses[massPivot] = largestShareRemainder(sourceMass, SignedDyadic.sum(masses), masses[massPivot]);
-			if (Double.doubleToRawLongBits(SignedDyadic.sum(masses).toDouble()) != Double.doubleToRawLongBits(sourceMass))
-				return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+			if (mmm.units.Mass.sum(masses) != sourceMass) throw new IllegalStateException("Chemical insertion mass counts do not close");
 			ChemicalMixtureRecord[] records = new ChemicalMixtureRecord[groupPieces.size()];
-			SignedDyadic residualSum = SignedDyadic.ZERO;
+			long residualSum = 0;
 			int residualPivot = 0;
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
 				if (!(Double.isFinite(masses[piece]) && masses[piece] > 0.0))
 					return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 				ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(
-						domain.chemicalParcels.registry(), distributed[piece], 0.0);
-				records[piece] = withoutResidual.withMassResidualKilograms(
-						chemicalMassResidual(domain.unitScale.kilograms(masses[piece]), withoutResidual));
-				residualSum = residualSum.add(SignedDyadic.of(records[piece].massResidualKilograms()));
+						domain.chemicalParcels.registry(), distributed[piece], 0L);
+				records[piece] = withoutResidual.withMassResidualUnits(Math.subtractExact(masses[piece], withoutResidual.speciesMassUnits(domain.chemicalParcels.registry())));
+				residualSum = Math.addExact(residualSum, records[piece].massResidualUnits());
 				if (Math.abs(records[piece].massResidualKilograms()) > Math.abs(records[residualPivot].massResidualKilograms()))
 					residualPivot = piece;
 			}
-			records[residualPivot] = records[residualPivot].withMassResidualKilograms(largestShareRemainder(
-					group.massResidualKilograms(), residualSum, records[residualPivot].massResidualKilograms()));
+			if (residualSum != group.massResidualUnits()) throw new IllegalStateException("Chemical insertion residual counts do not close");
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
 				ChemicalPieceDraft draft = groupPieces.get(piece);
 				ChemicalMixtureRecord record = records[piece];
 				domain.chemicalParcels.requireCompatible(record, group.materialId(), group.indicator());
-				if (!FluidDomain.massClose(record.exactSpeciesMassKilograms(domain.chemicalParcels.registry()).toDouble()
-						+ record.massResidualKilograms(), domain.unitScale.kilograms(masses[piece])))
+				if (record.massUnits(domain.chemicalParcels.registry()) != masses[piece])
 					return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 				pieces.add(new ChemicalInsertPiece(draft.cellX(), draft.cellY(), draft.cellZ(),
 						draft.volume(), draft.materialHandle(), masses[piece], record, group.indicator()));
@@ -694,7 +653,7 @@ final class MaterialTransferPlanner {
 			if (domain.thermalState != null) {
 				List<LiquidEnergyColumn.LiquidInsertion> thermalInsertions = new ArrayList<>(pieces.size());
 				for (ChemicalInsertPiece piece : pieces) thermalInsertions.add(new LiquidEnergyColumn.LiquidInsertion(
-						piece.materialHandle(), piece.mass(), piece.mixture()));
+						piece.materialHandle(), domain.unitScale.normalizedMass(piece.massUnits()), piece.mixture()));
 				if (internalEnergy != null) thermalPlan = domain.thermalState.planExternalLiquidInsertions(
 						thermalInsertions, internalEnergy, domain.thermalMarkerContext());
 				else defaultThermalPlan = domain.thermalState.planLiquidReplacement(
@@ -716,7 +675,7 @@ final class MaterialTransferPlanner {
 			int slot = domain.firstOpenSlot(domain.cellIndex(piece.cellX(), piece.cellY(), piece.cellZ()), 0);
 			if (slot < 0) throw new IllegalStateException("Chemical insertion lost its planned open slot");
 			domain.spawnParticle(piece.cellX(), piece.cellY(), piece.cellZ(), slot, piece.volume(),
-					piece.materialHandle(), piece.mass(), piece.mixture(), piece.indicator(), false);
+					piece.materialHandle(), piece.massUnits(), piece.mixture(), piece.indicator(), false);
 		}
 		if (thermalPlan != null) domain.thermalState.commitExternalLiquidInsertions(firstInsertedOrdinal, thermalPlan);
 		if (defaultThermalPlan != null) domain.thermalState.commitLiquidReplacement(firstInsertedOrdinal, defaultThermalPlan);
@@ -726,13 +685,13 @@ final class MaterialTransferPlanner {
 	}
 
 	private record ExtractionAllocation(
-			int particle, float newVolume, double newMass, ChemicalParcelStore.SplitPlan chemicalPlan,
+			int particle, float newVolume, long newMassUnits, ChemicalParcelStore.SplitPlan chemicalPlan,
 			LiquidEnergyColumn.Truncation thermalPlan
 	) { }
 
 	private record ChemicalPieceDraft(int cellX, int cellY, int cellZ, float volume, int materialHandle) { }
 	private record ChemicalInsertPiece(
-			int cellX, int cellY, int cellZ, float volume, int materialHandle, double mass,
+			int cellX, int cellY, int cellZ, float volume, int materialHandle, long massUnits,
 			ChemicalMixtureRecord mixture, boolean indicator
 	) { }
 
@@ -742,6 +701,6 @@ final class MaterialTransferPlanner {
 
 	private record MaterialInsertPiece(
 			int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle,
-			double mass, ChemicalMixtureRecord chemical
+			long massUnits, ChemicalMixtureRecord chemical
 	) { }
 }

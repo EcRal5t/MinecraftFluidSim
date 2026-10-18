@@ -59,7 +59,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		ChemicalTransferLedger.Builder result = ChemicalTransferLedger.builder(chemicalParcels.registry());
 		for (int marker = fromInclusive; marker < toExclusive; marker++) {
 			result.add(materialRegistry.material(particles.materialHandle(marker)).id(), chemicalParcels.indicator(marker),
-					particles.volume(marker), unitScale.kilograms(particles.mass(marker)), chemicalParcels.record(marker));
+					particles.volume(marker), particles.massUnits(marker), chemicalParcels.record(marker));
 		}
 		return result.build();
 	}
@@ -237,7 +237,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		for (FluidMaterial material : materialRegistry.materials()) registry.phaseHandleForMaterial(material.id());
 		for (int marker = 0; marker < particles.count(); marker++) {
 			candidate.assignDefault(marker, materialRegistry.material(particles.materialHandle(marker)).id(),
-					particles.volume(marker), config.cellSize(), particles.mass(marker), false);
+					particles.volume(marker), config.cellSize(), particles.massUnits(marker), false);
 		}
 		chemicalParcels = candidate;
 		chemicalPreviousCells = new int[maximumParticleCount];
@@ -457,7 +457,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	/** Explicit external coherent inventory insertion used before the phase planner owns liquid/solid conversion. */
 	public void addCoherentPhaseExternal(
 			int cellX, int cellY, int cellZ, String phaseId, long occupiedVolumeSvq,
-			double mass, CoherentPhaseStore.Composition composition, double internalEnergy
+			long massUnits, CoherentPhaseStore.Composition composition, double internalEnergy
 	) {
 		if (thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		int cell = cellIndexChecked(cellX, cellY, cellZ);
@@ -474,7 +474,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			throw new IllegalStateException("Sealed region has no combined liquid/solid capacity");
 		}
 		thermalState.addCoherentExternal(new CoherentPhaseStore.Group(
-				cell, phaseId, occupiedVolumeSvq, mass, composition, internalEnergy));
+				cell, phaseId, occupiedVolumeSvq, massUnits, composition, internalEnergy));
 		refreshCoherentOccupancy();
 		gridDirty = true;
 	}

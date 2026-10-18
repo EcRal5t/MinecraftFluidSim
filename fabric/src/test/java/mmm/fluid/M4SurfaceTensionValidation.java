@@ -58,7 +58,7 @@ pure.step();
 zeroTension.step();
 check(Float.floatToRawIntBits(pure.totalVolume()) == Float.floatToRawIntBits(zeroTension.totalVolume()),
 "zero surface tension changed exact marker volume");
-check(Double.doubleToRawLongBits(pure.totalMass()) == Double.doubleToRawLongBits(zeroTension.totalMass()),
+check(pure.totalMassUnits() == zeroTension.totalMassUnits(),
 "zero surface tension changed exact marker mass");
 for (int z = 0; z < pure.sizeZ(); z++) for (int y = 0; y < pure.sizeY(); y++) {
 for (int x = 0; x < pure.sizeX(); x++) {
@@ -178,7 +178,7 @@ particle++;
 }
 }
 domain.restoreParticleState(new FlipParticleState(16, 6, 4, config.cellSize(), particleCount,
-totalVolume, positionVolume, velocities, domain.copyCollisionMicroMasks()));
+totalVolume, positionVolume, velocities, mmm.units.Mass.createLiquid(config.cellSize(), 1000.0, positionVolume), domain.copyCollisionMicroMasks()));
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", config.density(), "mmm:test", sigma, contactAngleRadians)));
 for (int marker = 0; marker < domain.particleCount(); marker++) {
@@ -284,7 +284,7 @@ private record DropletMetrics(double varianceX, float maximumSpeed) { }
 			}
 		}
 		domain.restoreParticleState(new FlipParticleState(size, size, size, h, particleCount,
-				totalVolume, positionVolume, velocities, domain.copyCollisionMicroMasks()));
+				totalVolume, positionVolume, velocities, mmm.units.Mass.createLiquid(h, 1000.0, positionVolume), domain.copyCollisionMicroMasks()));
 		FluidMaterial a = new FluidMaterial("mmm:a", config.density(), "mmm:a", 0.0, Math.PI / 2.0);
 		FluidMaterial b = new FluidMaterial("mmm:b", config.density(), "mmm:b", 0.0, Math.PI / 2.0);
 		FluidMaterial c = new FluidMaterial("mmm:c", config.density(), "mmm:c", 0, Math.PI / 2);
@@ -399,7 +399,7 @@ particle++;
 }
 }
 domain.restoreParticleState(new FlipParticleState(size, size, size, h, particleCount,
-totalVolume, positionVolume, velocities, domain.copyCollisionMicroMasks()));
+totalVolume, positionVolume, velocities, mmm.units.Mass.createLiquid(h, 1000.0, positionVolume), domain.copyCollisionMicroMasks()));
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", config.density(), "mmm:test", sigma, Math.PI / 2.0)));
 for (int marker = 0; marker < domain.particleCount(); marker++) {

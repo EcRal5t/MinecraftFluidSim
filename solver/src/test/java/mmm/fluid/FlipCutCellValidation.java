@@ -245,7 +245,7 @@ public final class FlipCutCellValidation {
 		domain.restoreParticleState(new FlipParticleState(
 				5, 5, 5, domain.config().cellSize(), 1, 1.0F,
 				new float[] {coordinate, coordinate, coordinate, 1.0F},
-				new float[] {0.0F, 0.0F, 0.0F}, new byte[5 * 5 * 5]
+				new float[] {0.0F, 0.0F, 0.0F}, mmm.units.Mass.createLiquid(domain.config().cellSize(), 1000.0, new float[] {coordinate, coordinate, coordinate, 1.0F}), new byte[5 * 5 * 5]
 		));
 		float displaced = domain.setSolidMicroMask(2, 2, 2, LOWER_HALF);
 		checkClose(displaced, 0.5F, 1.0E-7F,

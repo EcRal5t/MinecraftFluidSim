@@ -204,7 +204,7 @@ public final class M5GasLiquidCouplingValidation {
 		domain.setGasNodeStandardVolume(1, 1.5 * volume);
 		double absolutePressure = AirNetwork.REFERENCE_PRESSURE + domain.gasBoundary().gaugePressure(1);
 		double dt = domain.config.timeStep();
-		double h = domain.config.cellSize();
+		double h = domain.config().cellSize();
 		float expectedStorage = (float) (domain.config.density() * volume / absolutePressure
 				/ (dt * dt * h * h * h));
 		domain.step();

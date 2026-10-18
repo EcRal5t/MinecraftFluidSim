@@ -137,7 +137,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			source.setVolume(2, 2, 2, .001F);
 			int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 			long svq = 262144; double mass = 5.078125;
-			require(source.tryInsertExactGranular(1, 1, 1, sand, 0, svq, mass).inserted(),
+			require(source.tryInsertExactGranular(1, 1, 1, sand, 0, svq, mmm.units.Mass.fromKilograms(mass)).inserted(),
 					"thermal handoff could not create its initial grain");
 			source.bindThermal(registry, liquids, 300);
 			var snapshot = source.exportThermalParticleState();
@@ -170,12 +170,12 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					&& !changed.authoritativeLayout().equals(source.captureAuthoritativeState().layout()),
 					"backend configuration identity omitted the external insertion temperature");
 			SignedDyadic before = source.thermalAudit().externalSource();
-			require(source.tryInsertExactGranular(2, 1, 1, sand, 0, svq, mass).inserted(), "source handoff insertion failed");
+			require(source.tryInsertExactGranular(2, 1, 1, sand, 0, svq, mmm.units.Mass.fromKilograms(mass)).inserted(), "source handoff insertion failed");
 			SignedDyadic added = source.thermalAudit().externalSource().subtract(before);
 			int thermal = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, BuiltinGranularDefinitions.FINE_SAND);
 			for (var restored : List.of(target, backend)) {
 				SignedDyadic restoredBefore = restored.thermalAudit().externalSource();
-				require(restored.tryInsertExactGranular(2, 1, 1, sand, 0, svq, mass).inserted()
+				require(restored.tryInsertExactGranular(2, 1, 1, sand, 0, svq, mmm.units.Mass.fromKilograms(mass)).inserted()
 						&& restored.thermalAudit().externalSource().subtract(restoredBefore).equals(added)
 						&& Double.doubleToRawLongBits(restored.thermalState.granularColumn().activeEnergy(1))
 						== Double.doubleToRawLongBits(source.thermalState.granularColumn().activeEnergy(1))
@@ -274,7 +274,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		double parcelMass = parcelSvq / (double) SolidVolume.SVQ_PER_CUBIC_METER
 				* granular.material(sand).referenceDensity();
 		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
-				BuiltinGranularDefinitions.FINE_SAND, parcelSvq, parcelMass, null)));
+				BuiltinGranularDefinitions.FINE_SAND, parcelSvq, mmm.units.Mass.fromKilograms(parcelMass), null)));
 		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
 				"granular thermal domain fixture could not insert its parcel");
 		ThermalRegistry productionThermal = granularThermalRegistry(productionLiquids, granular);
@@ -319,7 +319,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				int sand = production.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 				long parcel = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 				double mass = production.granular().material(sand).referenceDensity() * parcel / SolidVolume.SVQ_PER_CELL;
-				require(domain.tryInsertExactGranular(2, 1, 1, sand, 0, parcel, mass).inserted(),
+				require(domain.tryInsertExactGranular(2, 1, 1, sand, 0, parcel, mmm.units.Mass.fromKilograms(mass)).inserted(),
 						"granular source-budget fixture could not create its retained parcel");
 				var actual = domain.exactInternalEnergy();
 				var audit = new ThermalAuditLedger(SignedDyadic.ZERO, huge, huge, actual, SignedDyadic.ZERO, SignedDyadic.ZERO);
@@ -339,14 +339,14 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				mmm.granular.SolidCompositionRecord composition = mode != 2 ? null
 						: mmm.granular.SolidCompositionRecord.fromStableAmounts(production.chemical(), Map.of(
 								mmm.chemistry.BuiltinChemicalDefinitions.NA_PLUS, 17_984L,
-								mmm.chemistry.BuiltinChemicalDefinitions.CL_MINUS, 17_984L), 0);
+								mmm.chemistry.BuiltinChemicalDefinitions.CL_MINUS, 17_984L), 0L);
 				var group = mode != 2
-						? new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND, parcel * 2, mass * 2, null)
+						? new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND, parcel * 2, mmm.units.Mass.fromKilograms(mass * 2), null)
 						: new GranularTransferLedger.Group(BuiltinGranularDefinitions.PRECIPITATE, 50,
-								composition.totalMass(production.chemical()), composition);
+								mmm.units.Mass.fromKilograms(composition.totalMass(production.chemical())), composition);
 				var packet = new GranularTransferLedger(List.of(group));
 				java.util.function.Supplier<FluidDomain.GranularInsertion> insertion = mode == 0
-						? () -> domain.tryInsertExactGranular(1, 1, 1, sand, 0, parcel, mass)
+						? () -> domain.tryInsertExactGranular(1, 1, 1, sand, 0, parcel, mmm.units.Mass.fromKilograms(mass))
 						: () -> domain.tryInsertExactGranular(1, 1, 1, packet, 0);
 				try {
 					insertion.get();
@@ -400,9 +400,9 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				var reactiveSpecies = Map.of(mmm.chemistry.BuiltinChemicalDefinitions.NA_PLUS, 17_984L,
 						mmm.chemistry.BuiltinChemicalDefinitions.CL_MINUS, 17_984L);
 				double speciesMass = mmm.granular.SolidCompositionRecord.fromStableAmounts(
-						production.chemical(), reactiveSpecies, 0).totalMass(production.chemical());
+						production.chemical(), reactiveSpecies, 0L).totalMass(production.chemical());
 				var composition = mode != 2 ? null : mmm.granular.SolidCompositionRecord.fromStableAmounts(
-						production.chemical(), reactiveSpecies, mass - speciesMass);
+						production.chemical(), reactiveSpecies, mmm.units.Mass.fromKilograms(mass - speciesMass));
 				var function = new ThermalStateFunction(registry);
 				int thermal = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, materialId);
 				var species = composition == null ? Map.<String, Long>of() : composition.stableAmounts(production.chemical());
@@ -414,9 +414,9 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				var audit = domain.thermalAudit(); var revision = domain.thermalState.thermalRevision();
 				long structural = domain.granularState.mutationRevision();
 				try {
-					if (mode == 0) domain.tryInsertExactGranular(1, 1, 1, material, 0, svq, mass);
+					if (mode == 0) domain.tryInsertExactGranular(1, 1, 1, material, 0, svq, mmm.units.Mass.fromKilograms(mass));
 					else domain.tryInsertExactGranular(1, 1, 1,
-							new GranularTransferLedger(List.of(new GranularTransferLedger.Group(materialId, svq, mass, composition))), 0);
+							new GranularTransferLedger(List.of(new GranularTransferLedger.Group(materialId, svq, mmm.units.Mass.fromKilograms(mass), composition))), 0);
 					throw new AssertionError("granular insertion accepted a nonpositive stored owner temperature");
 				} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
 				require(domain.granularState.parcels.count() == 0 && domain.granularState.deposits.groupCount() == 0
@@ -426,7 +426,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 						"invalid stored granular energy changed an inventory, composition, audit or generation");
 				int beads = production.granular().materialHandle(BuiltinGranularDefinitions.LIGHT_BEADS);
 				double beadMass = production.granular().material(beads).referenceDensity() * svq / SolidVolume.SVQ_PER_CELL;
-				require(domain.tryInsertExactGranular(1, 1, 1, beads, 0, svq, beadMass).inserted()
+				require(domain.tryInsertExactGranular(1, 1, 1, beads, 0, svq, mmm.units.Mass.fromKilograms(beadMass)).inserted()
 						&& function.stateForInternalEnergy(registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,
 								BuiltinGranularDefinitions.LIGHT_BEADS), beadMass, Map.of(), domain.thermalState.granularColumn().activeEnergy(0)).temperatureK() == 1,
 						"valid cold granular owner was rejected after invalid stored energy");
@@ -445,7 +445,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		source.bindGasRegistry(production.gas()); source.setVolume(2, 2, 2, .001F);
 		int material = production.granular().materialHandle(materialId);
 		int handle = composition == null ? 0 : source.granularState.compositions.create(composition);
-		require(source.tryInsertExactGranular(1, 1, 1, material, handle, svq, mass).inserted(), "snapshot grain could not be inserted");
+		require(source.tryInsertExactGranular(1, 1, 1, material, handle, svq, mmm.units.Mass.fromKilograms(mass)).inserted(), "snapshot grain could not be inserted");
 		if (deposited) require(source.granularState.inventory.depositParcel(0, source.cellIndex(1, 1, 1), SolidVolume.SVQ_PER_CELL),
 				"snapshot grain could not be deposited");
 		source.bindThermal(registry, liquids, 400);
@@ -510,7 +510,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
 			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			for (int parcel = 0; parcel < 3; parcel++) require(domain.tryInsertExactGranular(
-					1, 1, 1, sand, 0, 3, 3.0 / SolidVolume.SVQ_PER_CUBIC_METER * granular.material(sand).referenceDensity()).inserted(),
+					1, 1, 1, sand, 0, 3, mmm.units.Mass.fromKilograms(3.0 / SolidVolume.SVQ_PER_CUBIC_METER * granular.material(sand).referenceDensity())).inserted(),
 					"granular extraction rounding fixture could not insert its parcel");
 			domain.bindThermal(granularThermalRegistry(liquids, granular), liquids, 300.0);
 			domain.thermalState.restoreThermalGranular(energies, List.of());
@@ -535,7 +535,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
 			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, 3,
-					3.0 / SolidVolume.SVQ_PER_CUBIC_METER * granular.material(sand).referenceDensity()).inserted(),
+					mmm.units.Mass.fromKilograms(3.0 / SolidVolume.SVQ_PER_CUBIC_METER * granular.material(sand).referenceDensity())).inserted(),
 					"partial granular extraction fixture could not insert its parcel");
 			domain.bindThermal(granularThermalRegistry(liquids, granular), liquids, 300.0);
 			domain.thermalState.restoreThermalGranular(new double[]{1.0}, List.of());
@@ -567,9 +567,9 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			double mass = production.granular().material(sand).referenceDensity() * Math.scalb((double) svq, -27)
 					* (variant == 0 ? 1 : 1 + 1e-9);
 			if (active) domain.granularState.parcels.add(new mmm.granular.GranularParcelStore.Parcel(
-					.75F, .75F, .75F, 0, 0, 0, svq, mass, sand, 0, 0, (byte) 0));
+					.75F, .75F, .75F, 0, 0, 0, svq, mmm.units.Mass.fromKilograms(mass), sand, 0, 0, (byte) 0));
 			else require(domain.granularState.deposits.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
-					sand, 0, svq, mass), SolidVolume.SVQ_PER_CELL), "Cold remainder bed exceeds packing capacity");
+					sand, 0, svq, mmm.units.Mass.fromKilograms(mass)), SolidVolume.SVQ_PER_CELL), "Cold remainder bed exceeds packing capacity");
 			domain.bindThermal(production.thermal(), liquids, 293.15); domain.setThermalTemperatureInCell(1, 1, 1, 1e-8);
 			var function = new mmm.thermal.ThermalStateFunction(production.thermal());
 			var material = production.thermal().materials().stream().filter(entry -> entry.carrierId().equals(BuiltinGranularDefinitions.FINE_SAND)).findFirst().orElseThrow();
@@ -621,7 +621,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				boolean invalid = index >= invalidStart && index < invalidStart + 2;
 				double mass = invalid ? invalidMass[index - invalidStart] : .25;
 				energies[index] = invalid ? invalidEnergy[index - invalidStart] : 2.5e17;
-				require(domain.tryInsertExactGranular(index / 2 + 1, 1, 1, sand, 0, 3, mass).inserted(),
+				require(domain.tryInsertExactGranular(index / 2 + 1, 1, 1, sand, 0, 3, mmm.units.Mass.fromKilograms(mass)).inserted(),
 						"thermal merge fixture could not insert its legal mass inventory");
 			}
 			domain.bindThermal(registry, liquids, 300);
@@ -825,7 +825,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		double initialEnergy = stateFunction.internalEnergyAtTemperature(
 				registry.materialHandle(wall.id()), 10.0, Map.of(), 400.0);
 		FiniteThermalBodyState body = new FiniteThermalBodyState(
-				7L, registry.fingerprint(), wall.id(), 10.0, initialEnergy);
+				7L, registry.fingerprint(), wall.id(), mmm.units.Mass.fromKilograms(10.0), initialEnergy);
 		FiniteThermalExchange.Plan plan = FiniteThermalExchange.plan(registry, body, List.of(
 				new FiniteThermalExchange.Contact(0, 300.0, 2_000.0, 100.0, 250.0, 500.0),
 				new FiniteThermalExchange.Contact(1, 350.0, 1_000.0, 50.0, 250.0, 500.0)
@@ -850,7 +850,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		double equilibriumEnergy = stateFunction.internalEnergyAtTemperature(
 				registry.materialHandle(wall.id()), 10.0, Map.of(), 350.0);
 		FiniteThermalBodyState equilibrium = new FiniteThermalBodyState(
-				9L, registry.fingerprint(), wall.id(), 10.0, equilibriumEnergy);
+				9L, registry.fingerprint(), wall.id(), mmm.units.Mass.fromKilograms(10.0), equilibriumEnergy);
 		FiniteThermalExchange.Plan noOp = FiniteThermalExchange.plan(registry, equilibrium, List.of(
 				new FiniteThermalExchange.Contact(0, 350.0, 2_000.0, 100.0, 250.0, 500.0),
 				new FiniteThermalExchange.Contact(1, 350.0, 1_000.0, 50.0, 250.0, 500.0)
@@ -867,7 +867,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		ThermalRegistry segmentedRegistry = new ThermalRegistry(List.of(segmented));
 		ThermalStateFunction segmentedState = new ThermalStateFunction(segmentedRegistry);
 		FiniteThermalBodyState segmentedBody = new FiniteThermalBodyState(1L,
-				segmentedRegistry.fingerprint(), segmented.id(), 1.0,
+				segmentedRegistry.fingerprint(), segmented.id(), mmm.units.Mass.fromKilograms(1.0),
 				segmentedState.internalEnergyAtTemperature(0, 1.0, Map.of(), 400.0));
 		double[] segmentedCellEnergy = {segmentedBody.internalEnergyJ()};
 		ThermalCellGrid segmentedCell = new ThermalCellGrid(1);
@@ -895,7 +895,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			var material = new ThermalMaterialDefinition("test:scaled_device", ThermalMaterialDefinition.CarrierKind.DEVICE,
 					"test:scaled_device", 300, 0, 1, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, capacity)));
 			var registry = new ThermalRegistry(List.of(material)); var state = new ThermalStateFunction(registry);
-			var body = new FiniteThermalBodyState(0, registry.fingerprint(), material.id(), 1,
+			var body = new FiniteThermalBodyState(0, registry.fingerprint(), material.id(), mmm.units.Mass.fromKilograms(1),
 					state.internalEnergyAtTemperature(0, 1, Map.of(), 400));
 			var plan = FiniteThermalExchange.plan(registry, body, List.of(
 					new FiniteThermalExchange.Contact(0, 300, capacity, capacity, 1, 1000)), 1, 8);
@@ -914,7 +914,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				"test:wide_device", 1, 0, 1, List.of(new ThermalMaterialDefinition.CaloricSegment(1, hot, capacity)));
 		var registry = new ThermalRegistry(List.of(material)); var state = new ThermalStateFunction(registry);
 		for (boolean cooling : new boolean[] {true, false}) {
-			var body = new FiniteThermalBodyState(0, registry.fingerprint(), material.id(), 1,
+			var body = new FiniteThermalBodyState(0, registry.fingerprint(), material.id(), mmm.units.Mass.fromKilograms(1),
 					state.internalEnergyAtTemperature(0, 1, Map.of(), cooling ? hot : cold));
 			var plan = FiniteThermalExchange.plan(registry, body, List.of(new FiniteThermalExchange.Contact(
 					0, cooling ? cold : hot, capacity, Math.scalb(1.0, 700), 1, hot)), Math.scalb(1.0, -1000), 8);
@@ -1163,7 +1163,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			@Override public void move(int source, int destination) { energy[destination] = energy[source]; }
 		};
 		FlipParticleReseeder.Result result = new FlipParticleReseeder(4, 4, 4, 1.0F, capacity).reseed(
-				solid, x, y, z, vx, vy, vz, volume, mass, material, phase, null, adapter, count, false,
+				solid, x, y, z, vx, vy, vz, volume, java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.Mass.fromKilograms(m)).toArray(), material, phase, null, adapter, count, false,
 				(candidateX, candidateY, candidateZ) -> true);
 		SignedDyadic after = SignedDyadic.sum(java.util.Arrays.copyOf(energy, result.particleCount()));
 		require(result.merged() > 0 && result.split() > 0 && before.equals(after),

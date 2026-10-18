@@ -86,7 +86,7 @@ public final class MarkerDistributionExperiment {
 				positions[ordinal++] = 1.0F / (samples * samples * samples);
 			}
 		domain.restoreParticleState(new FlipParticleState(n, n, 2, h, count, cells,
-				positions, new float[count * 3], new byte[cells]));
+				positions, new float[count * 3], mmm.units.Mass.createLiquid(h, 1000.0, positions), new byte[cells]));
 		// r'=r, theta'=theta+omega(r)*t has determinant one analytically. Compact
 		// support leaves every outer wall fixed; no velocity interpolation or integration runs.
 		for (int p = 0; p < count; p++) {
@@ -148,7 +148,7 @@ public final class MarkerDistributionExperiment {
 				int slot = 0;
 				for (int axis = 0; axis < 3; axis++) {
 					double position = switch (axis) { case 0 -> domain.particles.positionX(p); case 1 -> domain.particles.positionY(p); default -> domain.particles.positionZ(p); };
-					double offset = position / domain.config.cellSize() - Math.floor(position / domain.config.cellSize()) - 0.5;
+					double offset = position / domain.config().cellSize() - Math.floor(position / domain.config().cellSize()) - 0.5;
 					if (Math.abs(offset) != 0.25) throw new AssertionError("Saturated-cell quadrature left its geometric rule");
 					if (offset > 0) slot |= 1 << axis;
 				}
@@ -184,7 +184,7 @@ public final class MarkerDistributionExperiment {
 				positions[ordinal++] = 1.0F / (2 * samples * samples);
 			}
 		domain.restoreParticleState(new FlipParticleState(n, n, 2, h, count, cells * 0.5F,
-				positions, new float[count * 3], new byte[cells]));
+				positions, new float[count * 3], mmm.units.Mass.createLiquid(h, 1000.0, positions), new byte[cells]));
 		domain.closedLiquidVolume.prepare(); Arrays.fill(domain.projection.pressureVolume, 0);
 		for (int p = 0; p < count; p++) domain.splatPressureVolume(positions[4 * p], positions[4 * p + 1], positions[4 * p + 2], positions[4 * p + 3]);
 		double error = 0, maximum = 0, total = 0, referenceDifference = 0; int referenceSamples = 128;
@@ -250,7 +250,7 @@ public final class MarkerDistributionExperiment {
 			double dx = domain.particles.positionX(p) - x[c] / volume[c], dy = domain.particles.positionY(p) - y[c] / volume[c], dz = domain.particles.positionZ(p) - z[c] / volume[c];
 			moment += v * (dx * dx + dy * dy + dz * dz);
 		}
-		double total = domain.totalVolumeExact(), h = domain.config.cellSize();
+		double total = domain.totalVolumeExact(), h = domain.config().cellSize();
 		domain.closedLiquidVolume.apply(domain.projection.pressureVolume, domain.particles, domain.pressureGranularCoupling, domain.markerGrid);
 		double constrainedMin = Double.POSITIVE_INFINITY, constrainedMax = 0, constrainedTotal = 0;
 		int constrainedSubcentre = 0;
@@ -271,10 +271,10 @@ public final class MarkerDistributionExperiment {
 	private static void reseedMoment() {
 		int count = 16, capacity = 32;
 		float[] x = new float[capacity], y = new float[capacity], z = new float[capacity], volume = new float[capacity];
-		double[] mass = new double[capacity];
+		long[] mass = new long[capacity];
 		for (int p = 0; p < count; p++) {
 			x[p] = 1.125F + 0.25F * (p & 3); y[p] = 1.25F + 0.5F * (p >> 2 & 1); z[p] = 1.25F + 0.5F * (p >> 3 & 1);
-			volume[p] = 0.0625F; mass[p] = 1000 * volume[p];
+			volume[p] = 0.0625F; mass[p] = mmm.units.Mass.fromKilograms(1000 * volume[p]);
 		}
 		double before = secondMoment(x, y, z, volume, count);
 		var result = new FlipParticleReseeder(4, 4, 4, 1, capacity).reseed(new boolean[64], x, y, z,

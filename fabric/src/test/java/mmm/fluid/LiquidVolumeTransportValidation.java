@@ -45,7 +45,7 @@ public final class LiquidVolumeTransportValidation {
 		long volume = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ / 2;
 		for (double mass : new double[] {2.5625, 2.5}) {
 			var group = new mmm.granular.GranularTransferLedger.Group(
-					mmm.granular.BuiltinGranularDefinitions.FINE_SAND, volume, mass, null);
+					mmm.granular.BuiltinGranularDefinitions.FINE_SAND, volume, mmm.units.Mass.fromKilograms(mass), null);
 			if (!domain.tryInsertExactGranular(1, 1, 1, new mmm.granular.GranularTransferLedger(
 					java.util.List.of(group)), 0, true).inserted()) throw new AssertionError("Granular remap setup failed");
 		}
@@ -55,7 +55,7 @@ public final class LiquidVolumeTransportValidation {
 			for (int cell = 0; cell < domain.cellCount; cell++) {
 				float amount = (float) (1 - solid[cell] / (double) mmm.granular.SolidVolume.SVQ_PER_CELL);
 				if (!domain.tryInsertExactMaterial(cell % nx, cell / nx % ny, cell / (nx * ny),
-						amount, 1000 * amount, 0, 0).transferred()) throw new AssertionError("Liquid remap setup failed");
+						amount, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1000 * amount), 0, 0).transferred()) throw new AssertionError("Liquid remap setup failed");
 			}
 		}
 		return domain;
@@ -109,7 +109,7 @@ public final class LiquidVolumeTransportValidation {
 		if (!dryCandidate.stats().liquidTransport().equals(FluidDomain.LiquidTransportStats.INACTIVE)
 				|| dryCandidate.state().granular().activeParcels().size() != 1)
 			throw new AssertionError("A dry granular compaction needlessly searched for liquid displacement");
-		if (!domain.tryInsertExactMaterial(1, 1, 1, .25F, 250, 0, 0).transferred())
+		if (!domain.tryInsertExactMaterial(1, 1, 1, .25F, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(250), 0, 0).transferred())
 			throw new AssertionError("Wet displacement budget setup failed");
 		var before = domain.captureAuthoritativeState();
 		long revision = domain.carrierMutationRevision();
@@ -142,7 +142,7 @@ public final class LiquidVolumeTransportValidation {
 				int x = cell % 7; if (x == 3) continue;
 				float volume = x > 3 ? .5F : (float) (1 - solid[cell] / (double) mmm.granular.SolidVolume.SVQ_PER_CELL);
 				if (cell == domain.cellIndex(5, 1, 1)) volume = 1;
-				if (!domain.tryInsertExactMaterial(x, cell / 7 % 3, cell / 21, volume, 1000 * volume, 0, 0).transferred())
+				if (!domain.tryInsertExactMaterial(x, cell / 7 % 3, cell / 21, volume, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1000 * volume), 0, 0).transferred())
 					throw new AssertionError("Partially filled transport and saturated compaction setup failed");
 			}
 			for (int marker = 0; marker < domain.particles.count(); marker++)
@@ -170,7 +170,7 @@ public final class LiquidVolumeTransportValidation {
 		domain.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 		int material = registry.materialHandle(mmm.granular.BuiltinGranularDefinitions.FINE_SAND);
 		var parcel = new mmm.granular.GranularParcelStore.Parcel(.875F, .75F, .75F,
-				0, 0, 0, 262144, .001, material, 0, 0, (byte) 0);
+				0, 0, 0, 262144, mmm.units.Mass.fromKilograms(.001), material, 0, 0, (byte) 0);
 		domain.granularState.parcels.add(parcel);
 		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
 		domain.granularCollision.preview(domain.granularState.parcels, registry, .001F);
@@ -180,7 +180,7 @@ public final class LiquidVolumeTransportValidation {
 			throw new AssertionError("A stationary granular kernel created a rounding budget");
 		domain.granularState.parcels.overwrite(0, new mmm.granular.GranularParcelStore.Parcel(
 				parcel.x(), parcel.y(), parcel.z(), Math.scalb(1F, -20), 0, 0,
-				parcel.solidVolumeSvq(), parcel.mass(), material, 0, 0, (byte) 0));
+				parcel.solidVolumeSvq(), mmm.units.Mass.fromKilograms(parcel.mass()), material, 0, 0, (byte) 0));
 		domain.granularCollision.preview(domain.granularState.parcels, registry, .001F);
 		domain.granularNextCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits,
 				domain.granularCollision::previewPosition);
@@ -200,20 +200,19 @@ public final class LiquidVolumeTransportValidation {
 		byte[] masks = new byte[27]; java.util.Arrays.fill(masks, (byte) 255); masks[12] = masks[13] = 0;
 		float leftVolume = 1 - Math.scalb(2F, -24), rightVolume = 1 - Math.scalb(1F, -24);
 		joint.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 2,
-				(double) leftVolume + rightVolume, 1000 * (double) leftVolume + 1000 * (double) rightVolume,
+				(double) leftVolume + rightVolume, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(1000 * (double) leftVolume + 1000 * (double) rightVolume),
 				BuiltinFluidMaterials.DEFAULT_PALETTE,
-				new float[]{.25F, .75F, .75F, leftVolume, .75F, .75F, .75F, rightVolume}, new float[6], masks,
-				new double[]{1000 * (double) leftVolume, 1000 * (double) rightVolume}, new int[2]));
+				new float[]{.25F, .75F, .75F, leftVolume, .75F, .75F, .75F, rightVolume}, new float[6], masks, java.util.Arrays.stream(new double[]{1000 * (double) leftVolume, 1000 * (double) rightVolume}).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[2]));
 		joint.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 		var chemistry = mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY;
 		joint.bindChemistry(chemistry);
 		for (int p = 0; p < 2; p++) {
 			var mixture = new mmm.chemistry.ChemicalMixtureRecord(new int[]{chemistry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.H2O)}, new long[]{1}, 0);
-			joint.chemicalParcels.assign(p, mixture.withMassResidualKilograms(joint.unitScale.kilograms(joint.particles.mass(p))
-					- mixture.exactSpeciesMassKilograms(chemistry).toDouble()), false);
+			joint.chemicalParcels.assign(p, mixture.withMassResidualUnits(mmm.units.Mass.fromKilograms(joint.unitScale.kilograms(joint.particles.mass(p))
+					- mixture.exactSpeciesMassKilograms(chemistry).toDouble())), false);
 		}
 		float dt = .05F, x = .5F, vx = Math.ulp(x) / dt;
-		joint.granularState.parcels.add(new mmm.granular.GranularParcelStore.Parcel(x, .75F, .75F, vx, 0, 0, 3, .001, material, 0, 0, (byte) 0));
+		joint.granularState.parcels.add(new mmm.granular.GranularParcelStore.Parcel(x, .75F, .75F, vx, 0, 0, 3, mmm.units.Mass.fromKilograms(.001), material, 0, 0, (byte) 0));
 		joint.markGranularExternalChange(12); joint.sealDomainBoundary(); joint.ensureGrid();
 		joint.gridToParticleStage.prepareAdvectionCells(); joint.gasTopologyCoordinator.refresh();
 		var sourceFrame = joint.gasState.frame;
@@ -255,7 +254,7 @@ public final class LiquidVolumeTransportValidation {
 		catch (IllegalStateException expectedStale) { stale = true; }
 		if (!stale || !imposter.parcel(0).equals(committed)) throw new AssertionError("An unrelated granular store reused another source's occupancy preview");
 		restored.granularState.parcels.overwrite(0, new mmm.granular.GranularParcelStore.Parcel(committed.x(), committed.y(), committed.z(),
-				0, 0, 0, committed.solidVolumeSvq(), committed.mass(), material, 0, committed.contactAge(), committed.flags()));
+				0, 0, 0, committed.solidVolumeSvq(), mmm.units.Mass.fromKilograms(committed.mass()), material, 0, committed.contactAge(), committed.flags()));
 		var changedSource = restored.granularState.parcels.parcel(0); revision = restored.granularState.parcels.mutationRevision(); stale = false;
 		try { restored.granularMechanicalStage.commitCollision(); } catch (IllegalStateException expectedStale) { stale = true; }
 		if (!stale || restored.granularState.parcels.mutationRevision() != revision || !restored.granularState.parcels.parcel(0).equals(changedSource))
@@ -398,7 +397,7 @@ public final class LiquidVolumeTransportValidation {
 		domain.bindGranular(registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 		int material = registry.materialHandle(mmm.granular.BuiltinGranularDefinitions.FINE_SAND);
 		domain.granularState.parcels.add(new mmm.granular.GranularParcelStore.Parcel(
-				64.125F, .75F, .75F, 1, 0, 0, 262144, .001, material, 0, 0, (byte) 0));
+				64.125F, .75F, .75F, 1, 0, 0, 262144, mmm.units.Mass.fromKilograms(.001), material, 0, 0, (byte) 0));
 		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
 		domain.granularCollision.preview(domain.granularState.parcels, registry, .0015F);
 		domain.granularNextCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits, domain.granularCollision::previewPosition);
@@ -757,7 +756,7 @@ public final class LiquidVolumeTransportValidation {
 		if (transport.courantRate(0) != 0) throw new AssertionError("Empty donor constrained liquid volume transport");
 		for (int p = 0; p < domain.particles.count(); p++) domain.particles.setVelocityX(p, 2);
 		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
-		double expectedRate = 2.0 / domain.config.cellSize(), actualRate = transport.courantRate(0);
+		double expectedRate = 2.0 / domain.config().cellSize(), actualRate = transport.courantRate(0);
 		if (actualRate < expectedRate || actualRate - expectedRate > 4 * Math.ulp(expectedRate))
 			throw new AssertionError("Occupied donor lost its liquid outgoing Courant constraint");
 		domain.setVolume(2, 0, 0, 0.125F); domain.setVolume(3, 1, 1, 0.01F); domain.ensureGrid();
@@ -776,7 +775,7 @@ public final class LiquidVolumeTransportValidation {
 		if (transport.courantRate(0) != eulerianRate)
 			throw new AssertionError("Ballistic speed changed the Eulerian donor outflow constraint");
 		double ballisticSteps = 100 * (double) domain.config.timeStep()
-				/ (domain.config.cellSize() * domain.config.maxCourantNumber());
+				/ (domain.config().cellSize() * domain.config.maxCourantNumber());
 		if (domain.calculateSubsteps(domain.config.timeStep()) < Math.ceil(ballisticSteps))
 			throw new AssertionError("Ballistic motion lost its independent displacement constraint");
 	}
@@ -800,8 +799,8 @@ public final class LiquidVolumeTransportValidation {
 			if (chemical) {
 				double[] masses = new double[9]; for (int p = 0; p < 9; p++) masses[p] = 1000 * points[4 * p + 3];
 				domain.restoreMaterialParticleState(new FlipMaterialParticleState(4, 3, 3, .5F, 9,
-						.75 + points[35], 1000 * (.75 + points[35]), BuiltinFluidMaterials.DEFAULT_PALETTE.stream()
-						.filter(material -> material.id().equals("mmm:water")).toList(), points, velocity, masks, masses, new int[9]));
+						.75 + points[35], mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(1000 * (.75 + points[35])), BuiltinFluidMaterials.DEFAULT_PALETTE.stream()
+						.filter(material -> material.id().equals("mmm:water")).toList(), points, velocity, masks, java.util.Arrays.stream(masses).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[9]));
 				var species = new mmm.chemistry.ChemicalSpecies("test:solute", java.util.Map.of("X", 1), 0,
 						mmm.chemistry.ExactRational.ONE, 0xff000000);
 				var product = new mmm.chemistry.ChemicalSpecies("test:product", java.util.Map.of("X", 1), 0,
@@ -814,10 +813,10 @@ public final class LiquidVolumeTransportValidation {
 				domain.bindChemistry(registry);
 				for (int p = 0; p < 9; p++) {
 					var mixture = new mmm.chemistry.ChemicalMixtureRecord(new int[] {0}, new long[] {quantaPerCarrier}, 0);
-					domain.chemicalParcels.assign(p, mixture.withMassResidualKilograms(domain.unitScale.kilograms(masses[p])
-							- mixture.exactSpeciesMassKilograms(registry).toDouble()), false);
+					domain.chemicalParcels.assign(p, mixture.withMassResidualUnits(mmm.units.Mass.fromKilograms(domain.unitScale.kilograms(masses[p])
+							- mixture.exactSpeciesMassKilograms(registry).toDouble())), false);
 				}
-			} else domain.restoreParticleState(new FlipParticleState(4, 3, 3, .5F, 9, .75F + points[35], points, velocity, masks));
+			} else domain.restoreParticleState(new FlipParticleState(4, 3, 3, .5F, 9, .75F + points[35], points, velocity, mmm.units.Mass.createLiquid(.5F, 1000.0, points), masks));
 			domain.sealDomainBoundary(); double before = domain.totalVolumeExact();
 			FluidDomain.StepStats stats;
 			try { stats=domain.stepMechanicsOnly(); }
@@ -908,7 +907,7 @@ public final class LiquidVolumeTransportValidation {
 			for(int p=0;p<2;p++)original[p]=new double[]{domain.particles.positionX(p),domain.particles.positionY(p),domain.particles.positionZ(p),domain.particles.volume(p),domain.particles.mass(p),domain.particles.velocityX(p),domain.particles.velocityY(p),domain.particles.velocityZ(p)};
 			var flux=new ConservativeLiquidFlux(4,3,3); flux.geometry(new LiquidFluxGeometry(domain));
 			for(int f=0;f<flux.flux.length;f++)if(flux.left[f]==17 && flux.right[f]==18)flux.velocity[f]=.1F;
-			flux.plan(domain.markerGrid.exactCellMarkerVolume,domain.geometry.solid,.05F/domain.config.cellSize(),domain.markerGrid.exactCellVolumeInventory);
+			flux.plan(domain.markerGrid.exactCellMarkerVolume,domain.geometry.solid,.05F/domain.config().cellSize(),domain.markerGrid.exactCellVolumeInventory);
 			boolean rejected=false;
 			try { new CellCarrierRemapPlan(domain,flux,.05F,new BallisticLiquidRemap(36)); }
 			catch(CellRemapSpeciesAllocation.Unavailable unavailable) { rejected=true; }
@@ -980,10 +979,10 @@ public final class LiquidVolumeTransportValidation {
 	private static FluidDomain lowQuantumTailDomain(float speed, long quanta, byte targetMask) {
 		var domain = new FluidDomain(4, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 400, 1e-5F, .4F, .002F, .8F), 256);
 		byte[] masks = new byte[36]; java.util.Arrays.fill(masks, (byte) 255); masks[16] = masks[17] = 0; masks[18] = targetMask;
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(4, 3, 3, .5F, 2, .8125, 812.5,
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(4, 3, 3, .5F, 2, .8125, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(812.5),
 				BuiltinFluidMaterials.DEFAULT_PALETTE.stream().filter(material -> material.id().equals("mmm:water")).toList(),
 				new float[] {.75F, .75F, .75F, .75F, 1.125F, .625F, .625F, .0625F}, new float[] {speed, 0, 0, speed, 0, 0},
-				masks, new double[] {750, 62.5}, new int[2]));
+				masks, java.util.Arrays.stream(new double[] {750, 62.5}).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[2]));
 		var a = new mmm.chemistry.ChemicalSpecies("test:a", java.util.Map.of("X", 1), 0, mmm.chemistry.ExactRational.ONE, 0xff000000);
 		var b = new mmm.chemistry.ChemicalSpecies("test:b", java.util.Map.of("X", 1), 0, mmm.chemistry.ExactRational.ONE, 0xff000000);
 		var registry = new mmm.chemistry.ChemicalRegistry(java.util.List.of(a, b), java.util.List.of(
@@ -994,8 +993,8 @@ public final class LiquidVolumeTransportValidation {
 		domain.bindChemistry(registry);
 		for (int p = 0; p < 2; p++) {
 			var mixture = new mmm.chemistry.ChemicalMixtureRecord(new int[] {0}, new long[] {p == 0 ? quanta : 1}, 0);
-			domain.chemicalParcels.assign(p, mixture.withMassResidualKilograms(domain.unitScale.kilograms(domain.particles.mass(p))
-					- mixture.exactSpeciesMassKilograms(registry).toDouble()), false);
+			domain.chemicalParcels.assign(p, mixture.withMassResidualUnits(mmm.units.Mass.fromKilograms(domain.unitScale.kilograms(domain.particles.mass(p))
+					- mixture.exactSpeciesMassKilograms(registry).toDouble())), false);
 		}
 		domain.sealDomainBoundary(); return domain;
 	}
@@ -1018,7 +1017,7 @@ public final class LiquidVolumeTransportValidation {
 				new float[] {.125F, .125F, .125F, .5F, .625F, .125F, .125F, .125F});
 		var flux = microPortFlux(domain, .0625);
 		var independent = new BallisticLiquidRemap(8);
-		independent.markers.add(new CellCarrierRemapPlan.Marker(1, 0, false, .03125F, 31.25,
+		independent.markers.add(new CellCarrierRemapPlan.Marker(1, 0, false, .03125F, domain.unitScale.massUnitsForNormalized(31.25),
 				.25, .25, .25, 0, 0, 0, null, 0));
 		independent.reserved[1] = SignedDyadic.of(.03125); flux.reserve(independent.reserved);
 		var capacities = new SignedDyadic[8]; java.util.Arrays.fill(capacities, SignedDyadic.ZERO);
@@ -1041,7 +1040,7 @@ public final class LiquidVolumeTransportValidation {
 		transfer.geometricResult(result, capacities);
 		var before = moving.exportParticleState();
 		var raw = moving.particles.directArrays();
-		var masses = raw.mass.clone(); var materials = raw.materialHandle.clone(); var phases = raw.phaseLabel.clone();
+		var masses = raw.massUnits.clone(); var materials = raw.materialHandle.clone(); var phases = raw.phaseLabel.clone();
 		var relocated = new CellCarrierRemapPlan(moving, transfer, 0, new BallisticLiquidRemap(8), true);
 		SignedDyadic isolated = SignedDyadic.ZERO, received = SignedDyadic.ZERO;
 		for (var marker : relocated.markers) if (marker.cell() == 1) {
@@ -1056,7 +1055,7 @@ public final class LiquidVolumeTransportValidation {
 				|| !java.util.Arrays.equals(before.positionVolume(), after.positionVolume())
 				|| !java.util.Arrays.equals(before.particleVelocities(), after.particleVelocities())
 				|| !java.util.Arrays.equals(before.collisionMicroMasks(), after.collisionMicroMasks())
-				|| !java.util.Arrays.equals(masses, moving.particles.directArrays().mass)
+				|| !java.util.Arrays.equals(masses, moving.particles.directArrays().massUnits)
 				|| !java.util.Arrays.equals(materials, moving.particles.directArrays().materialHandle)
 				|| !java.util.Arrays.equals(phases, moving.particles.directArrays().phaseLabel))
 			throw new AssertionError("Zero-duration geometry relocation lost source stock or isolated component inventory");
@@ -1078,10 +1077,10 @@ public final class LiquidVolumeTransportValidation {
 		var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.1F, 1000, 0, .05F, 200, 1e-5F, .4F, .002F, .8F), 64);
 		byte[] masks = new byte[64]; java.util.Arrays.fill(masks, (byte) 255); masks[42] = 126;
 		domain.restoreParticleState(new FlipParticleState(4, 4, 4, .1F, 1, .0625F,
-				new float[] {.25F, .25F, .25F, .0625F}, new float[3], masks));
+				new float[] {.25F, .25F, .25F, .0625F}, new float[3], mmm.units.Mass.createLiquid(.1F, 1000.0, new float[] {.25F, .25F, .25F, .0625F}), masks));
 		domain.rebuildGridFromParticles(); java.util.Arrays.fill(domain.gridToParticleStage.advectionCells(), false);
-		double offset = .25 / (double) domain.config.cellSize() - 2.5;
-		var marker = new CellCarrierRemapPlan.Marker(42, 0, false, .0625F, 62.5, offset, offset, offset, 0, 0, 0, null, 0);
+		double offset = .25 / (double) domain.config().cellSize() - 2.5;
+		var marker = new CellCarrierRemapPlan.Marker(42, 0, false, .0625F, domain.unitScale.massUnitsForNormalized(62.5), offset, offset, offset, 0, 0, 0, null, 0);
 		if (!(offset < 0) || CellRemapMicroTopology.markerSupport(domain, 0) != 128
 				|| CellRemapMicroTopology.markerSupport(domain, marker) != 128)
 			throw new AssertionError("Independent arrival classification differs from its actual binary32 physical position");
@@ -1099,7 +1098,7 @@ public final class LiquidVolumeTransportValidation {
 		int count = points.length / 4; float total = 0; for (int p = 0; p < count; p++) total += points[4 * p + 3];
 		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 200, 1e-5F, .4F, .002F, .8F), 64);
 		byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte) 255); masks[0] = leftMask; masks[1] = rightMask;
-		domain.restoreParticleState(new FlipParticleState(2, 2, 2, .5F, count, total, points, new float[3 * count], masks));
+		domain.restoreParticleState(new FlipParticleState(2, 2, 2, .5F, count, total, points, new float[3 * count], mmm.units.Mass.createLiquid(.5F, 1000.0, points), masks));
 		domain.rebuildGridFromParticles(); java.util.Arrays.fill(domain.gridToParticleStage.advectionCells(), true); return domain;
 	}
 	private static ConservativeLiquidFlux microPortFlux(FluidDomain domain, double amount) {
@@ -1134,8 +1133,8 @@ public final class LiquidVolumeTransportValidation {
 			int[] handles = new int[entries]; long[] amounts = new long[entries];
 			for (int entry = 0; entry < entries; entry++) { handles[entry] = handle++; amounts[entry] = 1; }
 			var mixture = new mmm.chemistry.ChemicalMixtureRecord(handles, amounts, 0);
-			domain.chemicalParcels.assign(marker, mixture.withMassResidualKilograms(domain.unitScale.kilograms(domain.particles.mass(marker))
-					- mixture.exactSpeciesMassKilograms(chemistry).toDouble()), false);
+			domain.chemicalParcels.assign(marker, mixture.withMassResidualUnits(mmm.units.Mass.fromKilograms(domain.unitScale.kilograms(domain.particles.mass(marker))
+					- mixture.exactSpeciesMassKilograms(chemistry).toDouble())), false);
 		}
 		if (CellCarrierRemapPlan.chemicalShares(domain)[0] != 2)
 			throw new AssertionError("Flux share count merged carriers beyond their sixteen-species representation");
@@ -1143,15 +1142,15 @@ public final class LiquidVolumeTransportValidation {
 			var coarse = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
 			float h = coarse.config.cellSize();
 			double initialMass = .01F * (double) coarse.config.density();
-			coarse.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, h, 1, .01F, initialMass,
+			coarse.restoreMaterialParticleState(new FlipMaterialParticleState(2, 2, 2, h, 1, .01F, mmm.units.SolverUnitScale.forCellSize(h).massUnitsForNormalized(initialMass),
 					domain.materialRegistry.materials(), new float[]{.5F * h, .5F * h, .5F * h, .01F},
-					new float[3], new byte[8], new double[]{initialMass}, new int[1]));
+					new float[3], new byte[8], java.util.Arrays.stream(new double[]{initialMass}).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(h).massUnitsForNormalized(m)).toArray(), new int[1]));
 			coarse.bindChemistry(chemistry);
 			if (coarse.particles.count() != 1) throw new AssertionError("Coarse chemistry fixture requires one carrier");
-			coarse.particles.setVolume(0, 1); coarse.particles.setMass(0, 1000);
+			coarse.particles.setVolume(0, 1); coarse.particles.setMassUnits(0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1000));
 			var composition = new mmm.chemistry.ChemicalMixtureRecord(new int[] {0}, new long[] {quanta}, 0);
-			coarse.chemicalParcels.assign(0, composition.withMassResidualKilograms(coarse.unitScale.kilograms(1000)
-					- composition.exactSpeciesMassKilograms(chemistry).toDouble()), false);
+			coarse.chemicalParcels.assign(0, composition.withMassResidualUnits(mmm.units.Mass.fromKilograms(coarse.unitScale.kilograms(1000)
+					- composition.exactSpeciesMassKilograms(chemistry).toDouble())), false);
 			coarse.rebuildGridFromParticles();
 			var flux = new ConservativeLiquidFlux(2, 2, 2);
 			flux.plan(coarse.markerGrid.exactCellMarkerVolume, coarse.geometry.solid, 0,
@@ -1161,9 +1160,9 @@ public final class LiquidVolumeTransportValidation {
 				throw new AssertionError("Rank-zero chemical remap added redundant nodes or exceeded its integer budget");
 			SignedDyadic volume = SignedDyadic.ZERO, mass = SignedDyadic.ZERO; long[] amounts = new long[definitions.size()];
 			for (var marker : candidate.markers) {
-				if (!(Float.isFinite(marker.volume()) && marker.volume() > 0 && Double.isFinite(marker.mass()) && marker.mass() > 0))
+				if (!(Float.isFinite(marker.volume()) && marker.volume() > 0 && Double.isFinite(domain.unitScale.normalizedMass(marker.massUnits())) && domain.unitScale.normalizedMass(marker.massUnits()) > 0))
 					throw new AssertionError("Coarse chemical remap generated a nonpositive inventory node");
-				volume = volume.add(SignedDyadic.of(marker.volume())); mass = mass.add(SignedDyadic.of(marker.mass()));
+				volume = volume.add(SignedDyadic.of(marker.volume())); mass = mass.add(SignedDyadic.of(domain.unitScale.normalizedMass(marker.massUnits())));
 				for (int axis = 0; axis < 3; axis++) if (marker.offset(axis) != 0 || marker.velocity(axis) != 0)
 					throw new AssertionError("Rank-zero chemical remap displaced its center or constant velocity");
 				for (int species = 0; species < amounts.length; species++) amounts[species] = Math.addExact(amounts[species], marker.mixture().amount(species));
@@ -1179,38 +1178,11 @@ public final class LiquidVolumeTransportValidation {
 	private static void uniformDensityMassAllocation() {
 		SignedDyadic[] equalWeights = new SignedDyadic[8]; java.util.Arrays.fill(equalWeights, SignedDyadic.of(.125));
 		for (double source : new double[] {999.999999, Math.nextUp(1000.0), 1.0000001}) {
-			double[] shares = CellRemapMassAllocation.allocate(source, SignedDyadic.of(1.0), equalWeights);
-			double error = SignedDyadic.sum(shares).subtract(SignedDyadic.of(source)).toDouble();
-			if (Math.abs(error) > .5 * Math.ulp(shares[0]))
-				throw new AssertionError("Nonuniform-density mass remainder accumulated repeated subtraction roundoff");
+			long massUnits = mmm.units.Mass.fromKilograms(source);
+			long[] shares = CellRemapMassAllocation.allocate(massUnits, SignedDyadic.of(1.0), equalWeights);
+			if (mmm.units.Mass.sum(shares) != massUnits)
+				throw new AssertionError("Mass allocation changed integer inventory");
 		}
-		if (CellRemapMassAllocation.exactMass(Double.MIN_VALUE, SignedDyadic.of(1.0)) != Double.MIN_VALUE
-				|| !Double.isNaN(CellRemapMassAllocation.exactMass(Double.MIN_VALUE, SignedDyadic.of(0.5)))
-				|| CellRemapMassAllocation.exactMass(Double.MAX_VALUE, SignedDyadic.of(1.0)) != Double.MAX_VALUE
-				|| !Double.isNaN(CellRemapMassAllocation.exactMass(Double.MAX_VALUE, SignedDyadic.of(2.0)))
-				|| !Double.isNaN(CellRemapMassAllocation.exactMass(1, SignedDyadic.of((1L << 53) + 1, 0))))
-			throw new AssertionError("Exact density product crossed the binary64 precision or exponent range");
-		for (double density : new double[] {1000, 2.5}) {
-			SignedDyadic[] weights = {SignedDyadic.of(0.1234567F), SignedDyadic.of(0.2345678F), SignedDyadic.of(0.3456789F)};
-			SignedDyadic volume = SignedDyadic.ZERO;
-			for (SignedDyadic weight : weights) volume = volume.add(weight);
-			double mass = CellRemapMassAllocation.exactMass(density, volume);
-			double[] parts = CellRemapMassAllocation.allocate(mass, volume, weights, density);
-			if (!SignedDyadic.sum(parts).equals(SignedDyadic.of(mass))) throw new AssertionError("Representable density changed exact mass");
-			for (int i = 0; i < parts.length; i++) if (parts[i] != density * weights[i].toDouble())
-				throw new AssertionError("Representable density changed a mass/volume ratio");
-		}
-		var domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
-		domain.setVolume(0, 0, 0, 1); domain.rebuildGridFromParticles();
-		var ordinals = new java.util.ArrayList<Integer>();
-		for (int p = 0; p < domain.particleCount(); p++) ordinals.add(p);
-		var volume = domain.markerGrid.exactCellVolumeInventory[0];
-		double mass = SignedDyadic.sum(domain.particles.directArrays().mass, domain.particleCount()).toDouble();
-		if (!Double.isFinite(CellRemapMassAllocation.density(domain, ordinals, volume, mass)))
-			throw new AssertionError("Exact uniform source density was rejected");
-		domain.particles.setMass(0, Math.nextUp(domain.particles.mass(0)));
-		if (Double.isFinite(CellRemapMassAllocation.density(domain, ordinals, volume, SignedDyadic.sum(domain.particles.directArrays().mass, domain.particleCount()).toDouble())))
-			throw new AssertionError("Unequal source density was accepted");
 		var mixed = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 64);
 		mixed.setVolume(1, 1, 1, 1);
@@ -1226,10 +1198,10 @@ public final class LiquidVolumeTransportValidation {
 		var remap = new CellCarrierRemapPlan(mixed, flux, 0, new BallisticLiquidRemap(mixed.cellCount), true);
 		var observed = new double[2][5]; double[] density = {1000, 2.5};
 		for (var marker : remap.markers) {
-			int material = marker.material(); observed[material][0] += marker.volume(); observed[material][1] += marker.mass();
-			if (marker.mass() != density[material] * marker.volume() || marker.velocityX() != .25 || marker.velocityY() != -.125 || marker.velocityZ() != .0625)
+			int material = marker.material(); observed[material][0] += marker.volume(); observed[material][1] += mixed.unitScale.normalizedMass(marker.massUnits());
+			if (mixed.unitScale.normalizedMass(marker.massUnits()) != density[material] * marker.volume() || marker.velocityX() != .25 || marker.velocityY() != -.125 || marker.velocityZ() != .0625)
 				throw new AssertionError("Mixed-density zero-time remap changed a material density or velocity");
-			for (int axis = 0; axis < 3; axis++) observed[material][axis + 2] += marker.mass() * marker.offset(axis);
+			for (int axis = 0; axis < 3; axis++) observed[material][axis + 2] += mixed.unitScale.normalizedMass(marker.massUnits()) * marker.offset(axis);
 		}
 		for (int material = 0; material < 2; material++) {
 			double expectedMass = density[material] * .5;
@@ -1243,14 +1215,14 @@ public final class LiquidVolumeTransportValidation {
 		var domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults(), 64);
 		domain.setVolume(0, 0, 0, 1);
 		for (int p = 0; p < domain.particleCount(); p++) {
-			double x = domain.particles.positionX(p) / domain.config.cellSize() - 0.5, y = domain.particles.positionY(p) / domain.config.cellSize() - 0.5, z = domain.particles.positionZ(p) / domain.config.cellSize() - 0.5;
+			double x = domain.particles.positionX(p) / domain.config().cellSize() - 0.5, y = domain.particles.positionY(p) / domain.config().cellSize() - 0.5, z = domain.particles.positionZ(p) / domain.config().cellSize() - 0.5;
 			domain.particles.setVelocityX(p, (float) (1 + 2 * x + 3 * y + 4 * z + x * y + 2 * x * z + 3 * y * z + 4 * x * y * z));
 			domain.particles.setVelocityY(p, (float) (-2 + x - 2 * y + z - 2 * x * y + x * z - y * z + x * y * z));
 			domain.particles.setVelocityZ(p, (float) (x + y + z + x * y - x * z + y * z - 2 * x * y * z));
 		}
 		double[] sourceMean = new double[6]; double[][] sourceSecond = new double[6][6];
 		for (int p = 0; p < domain.particleCount(); p++) {
-			double h = domain.config.cellSize();
+			double h = domain.config().cellSize();
 			double[] joint = {domain.particles.positionX(p) / h - .5, domain.particles.positionY(p) / h - .5,
 					domain.particles.positionZ(p) / h - .5, domain.particles.velocityX(p), domain.particles.velocityY(p), domain.particles.velocityZ(p)};
 			for (int a = 0; a < 6; a++) {
@@ -1272,8 +1244,8 @@ public final class LiquidVolumeTransportValidation {
 			}
 			double[] joint = {offset[0], offset[1], offset[2], marker.velocityX(), marker.velocityY(), marker.velocityZ()};
 			for (int a = 0; a < 6; a++) {
-				receivedMean[a] += marker.mass() / 1000 * joint[a];
-				for (int b = a; b < 6; b++) receivedSecond[a][b] += marker.mass() / 1000 * joint[a] * joint[b];
+				receivedMean[a] += domain.unitScale.normalizedMass(marker.massUnits()) / 1000 * joint[a];
+				for (int b = a; b < 6; b++) receivedSecond[a][b] += domain.unitScale.normalizedMass(marker.massUnits()) / 1000 * joint[a] * joint[b];
 			}
 		}
 		for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++)
@@ -1293,7 +1265,7 @@ public final class LiquidVolumeTransportValidation {
 		var tiny = SignedDyadic.of(Math.scalb(1.0F, -60));
 		var wide = SignedDyadic.of(0.5).add(tiny);
 		var masses = CellRemapMassAllocation.allocate(500, wide, new SignedDyadic[] {SignedDyadic.of(0.5), tiny});
-		if (masses[1] != 1000 * tiny.toDouble() || SignedDyadic.sum(masses).toDouble() != 500)
+		if (masses[1] != domain.unitScale.massUnitsForNormalized(1000 * tiny.toDouble()) || mmm.units.Mass.kilograms(mmm.units.Mass.sum(masses)) != 500)
 			throw new AssertionError("Mass allocation lost a positive small share or its once-rounded total");
 		var expanded = LiquidCellQuadrature.volumes(wide, 4);
 		var sum = SignedDyadic.ZERO;

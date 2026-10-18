@@ -22,14 +22,14 @@ public record RegionSectionState(
 		int[] markerOrdinals,
 		float[] positionVolume,
 		float[] velocities,
-		double[] markerMass,
+		long[] markerMassUnits,
 		int[] materialPaletteIndex,
 		byte[] solidMask,
 		List<RegionExtension> extensions,
 		int[] chemicalMixtureIndex,
 		byte[] indicator,
 		long[] chemicalSpeciesTotals,
-		long chemicalResidualLedgerBits,
+		long chemicalResidualLedgerUnits,
 		long checksum
 ) {
 	public RegionSectionState {
@@ -39,7 +39,7 @@ public record RegionSectionState(
 		Objects.requireNonNull(markerOrdinals, "markerOrdinals");
 		Objects.requireNonNull(positionVolume, "positionVolume");
 		Objects.requireNonNull(velocities, "velocities");
-		Objects.requireNonNull(markerMass, "markerMass");
+		Objects.requireNonNull(markerMassUnits, "markerMassUnits");
 		Objects.requireNonNull(materialPaletteIndex, "materialPaletteIndex");
 		Objects.requireNonNull(solidMask, "solidMask");
 		Objects.requireNonNull(chemicalMixtureIndex, "chemicalMixtureIndex");
@@ -56,18 +56,20 @@ public record RegionSectionState(
 		if (solidMask.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)) {
 			throw new IllegalArgumentException("Section solid slice has the wrong size");
 		}
+		if (markerMassUnits.length != markerOrdinals.length) throw new IllegalArgumentException("Section mass column is incomplete");
+		for (long value : markerMassUnits) if (value <= 0) throw new IllegalArgumentException("Non-positive section mass");
 		if (!layout.hasMaterials()) {
-			if (markerMass.length != 0 || materialPaletteIndex.length != 0
+			if (materialPaletteIndex.length != 0
 					|| chemicalMixtureIndex.length != 0 || indicator.length != 0
-					|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerBits != 0L) {
+					|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerUnits != 0L) {
 				throw new IllegalArgumentException("Pure region state cannot contain material state");
 			}
 		} else {
-			if (markerMass.length != markerOrdinals.length || materialPaletteIndex.length != markerOrdinals.length) {
+			if (markerMassUnits.length != markerOrdinals.length || materialPaletteIndex.length != markerOrdinals.length) {
 				throw new IllegalArgumentException("Section material arrays disagree");
 			}
-			for (int marker = 0; marker < markerMass.length; marker++) {
-				if (!(Double.isFinite(markerMass[marker]) && markerMass[marker] > 0.0)
+			for (int marker = 0; marker < markerMassUnits.length; marker++) {
+				if (!(Double.isFinite(markerMassUnits[marker]) && markerMassUnits[marker] > 0.0)
 						|| materialPaletteIndex[marker] < 0) {
 					throw new IllegalArgumentException("Invalid section marker material state");
 				}
@@ -76,13 +78,12 @@ public record RegionSectionState(
 					|| layout.permitsOptionalChemistry() && chemicalSpeciesTotals.length > 0;
 			if (!chemicalState) {
 				if (chemicalMixtureIndex.length != 0 || indicator.length != 0
-						|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerBits != 0L) {
+						|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerUnits != 0L) {
 					throw new IllegalArgumentException("Non-chemical region state cannot contain chemical state");
 				}
 			} else {
 				if (chemicalMixtureIndex.length != markerOrdinals.length || indicator.length != markerOrdinals.length
-						|| chemicalSpeciesTotals.length == 0
-						|| !Double.isFinite(Double.longBitsToDouble(chemicalResidualLedgerBits))) {
+						|| chemicalSpeciesTotals.length == 0) {
 					throw new IllegalArgumentException("Section chemical arrays disagree");
 				}
 				for (int marker = 0; marker < markerOrdinals.length; marker++) {
@@ -95,7 +96,7 @@ public record RegionSectionState(
 		markerOrdinals = markerOrdinals.clone();
 		positionVolume = positionVolume.clone();
 		velocities = velocities.clone();
-		markerMass = markerMass.clone();
+		markerMassUnits = markerMassUnits.clone();
 		materialPaletteIndex = materialPaletteIndex.clone();
 		chemicalMixtureIndex = chemicalMixtureIndex.clone();
 		indicator = indicator.clone();
@@ -107,12 +108,12 @@ public record RegionSectionState(
 	public RegionSectionState(
 			UUID regionId, String dimensionId, long checkpointGeneration, int sectionX, int sectionY, int sectionZ,
 			int localStartX, int localStartY, int localStartZ, int sizeX, int sizeY, int sizeZ,
-			int[] markerOrdinals, float[] positionVolume, float[] velocities, byte[] solidMask,
+			int[] markerOrdinals, float[] positionVolume, float[] velocities, long[] markerMassUnits, byte[] solidMask,
 			List<RegionExtension> extensions, long checksum
 	) {
 		this(RegionStateLayout.PURE, regionId, dimensionId, checkpointGeneration, sectionX, sectionY, sectionZ,
 				localStartX, localStartY, localStartZ, sizeX, sizeY, sizeZ, markerOrdinals, positionVolume, velocities,
-				new double[0], new int[0], solidMask, extensions, new int[0], new byte[0], new long[0], 0L, checksum);
+				markerMassUnits, new int[0], solidMask, extensions, new int[0], new byte[0], new long[0], 0L, checksum);
 	}
 
 	/** Convenience constructor for non-chemical feature layouts. */
@@ -120,18 +121,18 @@ public record RegionSectionState(
 			RegionStateLayout layout, UUID regionId, String dimensionId, long checkpointGeneration,
 			int sectionX, int sectionY, int sectionZ, int localStartX, int localStartY, int localStartZ,
 			int sizeX, int sizeY, int sizeZ, int[] markerOrdinals, float[] positionVolume, float[] velocities,
-			double[] markerMass, int[] materialPaletteIndex, byte[] solidMask,
+			long[] markerMassUnits, int[] materialPaletteIndex, byte[] solidMask,
 			List<RegionExtension> extensions, long checksum
 	) {
 		this(layout, regionId, dimensionId, checkpointGeneration, sectionX, sectionY, sectionZ,
 				localStartX, localStartY, localStartZ, sizeX, sizeY, sizeZ, markerOrdinals, positionVolume, velocities,
-				markerMass, materialPaletteIndex, solidMask, extensions, new int[0], new byte[0], new long[0], 0L, checksum);
+				markerMassUnits, materialPaletteIndex, solidMask, extensions, new int[0], new byte[0], new long[0], 0L, checksum);
 	}
 
 	@Override public int[] markerOrdinals() { return markerOrdinals.clone(); }
 	@Override public float[] positionVolume() { return positionVolume.clone(); }
 	@Override public float[] velocities() { return velocities.clone(); }
-	@Override public double[] markerMass() { return markerMass.clone(); }
+	@Override public long[] markerMassUnits() { return markerMassUnits.clone(); }
 	@Override public int[] materialPaletteIndex() { return materialPaletteIndex.clone(); }
 	@Override public int[] chemicalMixtureIndex() { return chemicalMixtureIndex.clone(); }
 	@Override public byte[] indicator() { return indicator.clone(); }

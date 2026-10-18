@@ -27,12 +27,12 @@ final class ChemicalReactionCandidateValidation {
 		checkDeferred(builtin, List.of(
 				mixture(builtin, BuiltinChemicalDefinitions.HCL, 1_500_000_000_000_000L, 0)));
 		checkDeferred(builtin, List.of(
-				mixture(builtin, BuiltinChemicalDefinitions.H_PLUS, 2, -1.999e-9),
-				mixture(builtin, BuiltinChemicalDefinitions.OH_MINUS, 1, -1.6999e-8)));
+				mixture(builtin, BuiltinChemicalDefinitions.H_PLUS, 2, -1.9e-9),
+				mixture(builtin, BuiltinChemicalDefinitions.OH_MINUS, 1, -1.69e-8)));
 		ChemicalRegistry wide = products(17, ExactRational.ONE);
 		checkDeferred(wide, List.of(mixture(wide, "test:source", 1, 0)));
 
-		ChemicalRegistry tiny = products(2, ExactRational.parse("1/10000000000000000000000000000000000000000"));
+		ChemicalRegistry tiny = products(2, ExactRational.parse("0.0001"));
 		Fixture small = new Fixture(tiny, List.of(mixture(tiny, "test:source", 1, 0)), new float[]{0.5F});
 		require(small.step().changedMarkers() == 1 && small.store.record(0).entryCount() == 2,
 				"binary64 mass weights retain representable reaction progress");
@@ -43,7 +43,7 @@ final class ChemicalReactionCandidateValidation {
 		require(region.step().changedMarkers() == 0, "combined region capacity preserves both candidates");
 		// Reducing another cell's inventory makes the deferred result representable on the next call.
 		region.store.assign(1, mixture(builtin, BuiltinChemicalDefinitions.H2O, 1, 0), false);
-		region.mass[1] = region.store.record(1).massKilograms(builtin);
+		region.mass[1] = region.store.record(1).massUnits(builtin);
 		require(region.step().changedMarkers() == 1 && !region.store.hasDirtyCells(),
 				"region capacity retry commits after capacity becomes available");
 	}
@@ -76,7 +76,7 @@ final class ChemicalReactionCandidateValidation {
 							energyUnavailable ? ExactRational.parse("1" + "0".repeat(308)) : ExactRational.ZERO)),
 					List.of(), chemistry.fingerprint(), "");
 			domain.bindThermal(thermal, liquids, 300); domain.captureAuthoritativeState();
-			long massBits = Double.doubleToRawLongBits(domain.particles.mass(0));
+			long massUnits = Double.doubleToRawLongBits(domain.particles.mass(0));
 			var initial = domain.chemicalParcels.record(0); var energy = domain.exactInternalEnergy(); var audit = domain.thermalAudit();
 			for (int pass = 0; pass < 2; pass++) {
 				var result = domain.runThermalReactionPhaseAxis(false, 0).chemistry();
@@ -84,8 +84,8 @@ final class ChemicalReactionCandidateValidation {
 				require(result.changedMarkers() == (energyUnavailable || pass == 1 ? 0 : 1)
 						&& domain.chemicalParcels.hasDirtyCells() == energyUnavailable,
 						"Reaction representation changed progress or lost its retry state");
-				require(Double.doubleToRawLongBits(domain.particles.mass(0)) == massBits
-						&& actual.massResidualKilogramsBits() == initial.massResidualKilogramsBits()
+				require(Double.doubleToRawLongBits(domain.particles.mass(0)) == massUnits
+						&& actual.massResidualUnits() == initial.massResidualUnits()
 						&& actual.exactSpeciesMassKilograms(chemistry).equals(initial.exactSpeciesMassKilograms(chemistry))
 						&& actual.amount(chemistry.speciesHandle(energyUnavailable ? a : b)) == amount
 						&& domain.exactInternalEnergy().equals(energy) && domain.thermalAudit().equals(audit),
@@ -115,7 +115,7 @@ final class ChemicalReactionCandidateValidation {
 						cellSize, 1_000, 0, 0.05F, 100, 1e-5F, 0.45F, 0.002F, 0.8F), 216);
 				domain.restoreParticleState(new FlipParticleState(3,3,3,cellSize,2,.25F,
 						new float[]{1.25F*cellSize,1.5F*cellSize,1.5F*cellSize,.125F,1.75F*cellSize,1.5F*cellSize,1.5F*cellSize,.125F},
-						new float[6],new byte[27]));
+						new float[6], mmm.units.Mass.createLiquid(cellSize, 1000.0, new float[]{1.25F*cellSize,1.5F*cellSize,1.5F*cellSize,.125F,1.75F*cellSize,1.5F*cellSize,1.5F*cellSize,.125F}),new byte[27]));
 				domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 				domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 				require(domain.particleCount() == 2, "reaction momentum fixture requires two carriers");
@@ -125,7 +125,7 @@ final class ChemicalReactionCandidateValidation {
 							source == 0 ? BuiltinChemicalDefinitions.H_PLUS : BuiltinChemicalDefinitions.OH_MINUS,
 							source == 0 ? acid : base, sample % 2 == 0 ? 0 : source * 0.001);
 					domain.chemicalParcels.assign(marker, record, false);
-					domain.particles.setMass(marker, domain.unitScale.solverMass(record.massKilograms(BuiltinChemicalDefinitions.REGISTRY)));
+					domain.particles.setMassUnits(marker, mmm.units.Mass.fromKilograms(record.massKilograms(BuiltinChemicalDefinitions.REGISTRY)));
 					domain.particles.setVelocityX(marker, velocity[source][0]);
 					domain.particles.setVelocityY(marker, velocity[source][1]);
 					domain.particles.setVelocityZ(marker, velocity[source][2]);
@@ -174,10 +174,10 @@ final class ChemicalReactionCandidateValidation {
 		int count = ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP / reactions.size() + 1;
 		ChemicalParcelStore store = new ChemicalParcelStore(registry, SolverUnitScale.forCellSize(1), count, count);
 		float[] x = new float[count], zero = new float[count];
-		double[] mass = new double[count];
+		long[] mass = new long[count];
 		for (int i = 0; i < count; i++) {
 			store.assign(i, mixture(registry, "test:s0", 1, 0), false);
-			x[i] = i + 0.5F; mass[i] = store.record(i).massKilograms(registry); store.markDirtyCell(i);
+			x[i] = i + 0.5F; mass[i] = store.record(i).massUnits(registry); store.markDirtyCell(i);
 		}
 		var first = store.reactDirtyCells(count, 1, 1, 1, x, zero, zero, mass, new int[count], h -> "test:liquid", count);
 		require(first.changedMarkers() == count - 1 && store.reactionCursor() == count - 1,
@@ -196,7 +196,7 @@ final class ChemicalReactionCandidateValidation {
 		boolean builtin = registry == BuiltinChemicalDefinitions.REGISTRY;
 		input.add(mixture(registry, builtin ? BuiltinChemicalDefinitions.HCL : "test:p0", 10, 0));
 		Fixture fixture = new Fixture(registry, input, positions);
-		double[] originalMass = fixture.mass.clone();
+		long[] originalMass = fixture.mass.clone();
 		for (int pass = 0; pass < 2; pass++) {
 			ChemicalParcelStore.ReactionStats stats = fixture.step();
 			require(stats.changedMarkers() == (builtin && pass == 0 ? 1 : 0), "independent cell makes progress");
@@ -208,7 +208,7 @@ final class ChemicalReactionCandidateValidation {
 	}
 
 	private static ChemicalMixtureRecord mixture(ChemicalRegistry registry, String id, long amount, double residual) {
-		return ChemicalMixtureRecord.fromStableAmounts(registry, Map.of(id, amount), residual);
+		return ChemicalMixtureRecord.fromStableAmounts(registry, Map.of(id, amount), mmm.units.Mass.fromKilograms(residual));
 	}
 
 	private static ChemicalRegistry products(int count, ExactRational mass) {
@@ -233,15 +233,15 @@ final class ChemicalReactionCandidateValidation {
 		final ChemicalRegistry registry;
 		final ChemicalParcelStore store;
 		final float[] x;
-		final double[] mass;
+		final long[] mass;
 		Fixture(ChemicalRegistry registry, List<ChemicalMixtureRecord> input, float[] x) {
 			this.registry = registry;
 			this.x = x;
-			mass = new double[input.size()];
+			mass = new long[input.size()];
 			store = new ChemicalParcelStore(registry, SolverUnitScale.forCellSize(1), input.size(), 2);
 			for (int i = 0; i < input.size(); i++) {
 				store.assign(i, input.get(i), false);
-				mass[i] = input.get(i).massKilograms(registry);
+				mass[i] = input.get(i).massUnits(registry);
 				store.markDirtyCell((int) x[i]);
 			}
 		}

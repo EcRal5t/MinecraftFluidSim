@@ -35,7 +35,7 @@ final class GasRegionStateCodec {
 	record ManifestData(
 			int capabilities, String registryFingerprint, String chemicalRegistryFingerprint,
 			List<NodeData> nodes, GasAuditLedger externalSource, GasAuditLedger escapedSink,
-			SignedDyadic massRoundoff, SignedDyadic residualRoundoff, List<SectionLedger> sectionLedgers
+			List<SectionLedger> sectionLedgers
 	) {
 		ManifestData { nodes = List.copyOf(nodes); sectionLedgers = List.copyOf(sectionLedgers); }
 	}
@@ -61,7 +61,7 @@ final class GasRegionStateCodec {
 			out.writeInt(data.nodes().size());
 			for (NodeData node : data.nodes()) { out.writeInt(node.topologyKey()); writeInventory(out, node.inventory()); }
 			writeAudit(out, data.externalSource()); writeAudit(out, data.escapedSink());
-			writeDyadic(out, data.massRoundoff()); writeDyadic(out, data.residualRoundoff());
+
 			out.writeInt(data.sectionLedgers().size());
 			for (SectionLedger ledger : data.sectionLedgers()) {
 				out.writeInt(ledger.key().x()); out.writeInt(ledger.key().y()); out.writeInt(ledger.key().z());
@@ -84,7 +84,7 @@ final class GasRegionStateCodec {
 			ArrayList<NodeData> nodes = new ArrayList<>(nodeCount);
 			for (int node = 0; node < nodeCount; node++) nodes.add(new NodeData(input.readInt(), readInventory(input)));
 			GasAuditLedger source = readAudit(input), sink = readAudit(input);
-			SignedDyadic massRoundoff = readDyadic(input), residualRoundoff = readDyadic(input);
+
 			int sectionCount = count(input.readInt(), RegionStateCodec.MAX_SECTIONS, "section ledgers");
 			if (sectionCount == 0) throw new IOException("Gas manifest has no section ledgers");
 			ArrayList<SectionLedger> ledgers = new ArrayList<>(sectionCount);
@@ -93,7 +93,7 @@ final class GasRegionStateCodec {
 					count(input.readInt(), Integer.MAX_VALUE, "sealed pieces")));
 			requireEnd(input);
 			ManifestData result = new ManifestData(capabilities, registry, chemistry, nodes, source, sink,
-					massRoundoff, residualRoundoff, ledgers);
+					ledgers);
 			validateManifest(result);
 			return result;
 		} catch (EOFException truncated) {
@@ -149,7 +149,6 @@ final class GasRegionStateCodec {
 				|| ((data.capabilities() & CAP_CHEMISTRY) != 0) != !data.chemicalRegistryFingerprint().isEmpty()
 				|| data.nodes() == null || data.nodes().size() > GasLimits.MAX_NODES_PER_REGION
 				|| data.externalSource() == null || data.escapedSink() == null
-				|| data.massRoundoff() == null || data.residualRoundoff() == null
 				|| data.sectionLedgers() == null || data.sectionLedgers().isEmpty()
 				|| data.sectionLedgers().size() > RegionStateCodec.MAX_SECTIONS) {
 			throw new IllegalArgumentException("Gas manifest identity/capability is invalid");
@@ -183,7 +182,7 @@ final class GasRegionStateCodec {
 		out.writeInt(inventory.components().size());
 		for (GasComponentAmount amount : inventory.components()) {
 			out.writeUTF(amount.componentId()); out.writeLong(amount.standardVolumeNanos());
-			out.writeLong(Double.doubleToRawLongBits(amount.mass())); out.writeLong(Double.doubleToRawLongBits(amount.massResidual()));
+			out.writeLong(amount.massUnits()); out.writeLong(amount.massResidualUnits());
 			out.writeInt(amount.species().size());
 			for (GasComponentAmount.SpeciesAmount species : amount.species()) {
 				out.writeUTF(species.speciesId()); out.writeLong(species.amountQuanta());
@@ -196,7 +195,7 @@ final class GasRegionStateCodec {
 		ArrayList<GasComponentAmount> amounts = new ArrayList<>(count);
 		for (int component = 0; component < count; component++) {
 			String id = input.readUTF(); long nanos = input.readLong();
-			double mass = Double.longBitsToDouble(input.readLong()), residual = Double.longBitsToDouble(input.readLong());
+			long mass = input.readLong(), residual = input.readLong();
 			int speciesCount = count(input.readInt(), GasLimits.MAX_SPECIES_PER_COMPONENT, "component species");
 			ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>(speciesCount);
 			for (int entry = 0; entry < speciesCount; entry++) {
@@ -211,7 +210,7 @@ final class GasRegionStateCodec {
 		out.writeInt(ledger.entries().size());
 		for (GasAuditLedger.Entry entry : ledger.entries()) {
 			out.writeUTF(entry.componentId()); out.writeLong(entry.standardVolumeNanos());
-			writeDyadic(out, entry.mass()); writeDyadic(out, entry.massResidual());
+			out.writeLong(entry.massUnits()); out.writeLong(entry.massResidualUnits());
 			out.writeInt(entry.species().size());
 			for (GasComponentAmount.SpeciesAmount species : entry.species()) {
 				out.writeUTF(species.speciesId()); out.writeLong(species.amountQuanta());
@@ -224,7 +223,7 @@ final class GasRegionStateCodec {
 		ArrayList<GasAuditLedger.Entry> entries = new ArrayList<>(count);
 		for (int component = 0; component < count; component++) {
 			String id = input.readUTF(); long nanos = input.readLong();
-			SignedDyadic mass = readDyadic(input), residual = readDyadic(input);
+			long mass = input.readLong(), residual = input.readLong();
 			int speciesCount = count(input.readInt(), GasLimits.MAX_SPECIES_PER_COMPONENT, "audit species");
 			ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>(speciesCount);
 			for (int entry = 0; entry < speciesCount; entry++) {

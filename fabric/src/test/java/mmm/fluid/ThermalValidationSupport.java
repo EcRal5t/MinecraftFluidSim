@@ -29,15 +29,14 @@ abstract class ThermalValidationSupport {
 	}
 	static void restorePhaseTestCarriers(FluidDomain domain, FluidMaterialRegistry materials, int x, int y, int z,
 	                                     float[] volumes, int[] materialHandles) {
-		float[] positions = new float[4 * volumes.length]; double[] masses = new double[volumes.length];
+		float[] positions = new float[4 * volumes.length]; long[] masses = new long[volumes.length];
 		for (int marker = 0; marker < volumes.length; marker++) {
 			float[] position = domain.markerSlotPosition(x, y, z, marker);
 			System.arraycopy(position, 0, positions, 4 * marker, 3); positions[4 * marker + 3] = volumes[marker];
-			masses[marker] = volumes[marker] * materials.material(materialHandles[marker]).referenceDensity();
+			masses[marker] = domain.unitScale.massUnitsForNormalized(volumes[marker] * materials.material(materialHandles[marker]).referenceDensity());
 		}
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(domain.sizeX, domain.sizeY, domain.sizeZ,
-				domain.config.cellSize(), volumes.length, SignedDyadic.sum(volumes, volumes.length).toDouble(),
-				SignedDyadic.sum(masses).toDouble(), materials.materials(), positions, new float[3 * volumes.length],
+				domain.config().cellSize(), volumes.length, SignedDyadic.sum(volumes, volumes.length).toDouble(), mmm.units.Mass.sum(masses), materials.materials(), positions, new float[3 * volumes.length],
 				domain.geometry.cutCells.copyMicroMasks(), masses, materialHandles));
 	}
 

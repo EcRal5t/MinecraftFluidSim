@@ -116,7 +116,7 @@ final class GranularReactionStage {
 				if (perStepExtent <= 0L) continue;
 				List<GranularPhaseTransferEngine.LiquidParcel> liquid = new ArrayList<>(markers.size());
 				for (int marker : markers) liquid.add(new GranularPhaseTransferEngine.LiquidParcel(
-						marker, state.particles().volume(marker), state.particles().mass(marker), chemistry.record(marker)));
+						marker, state.particles().volume(marker), state.particles().massUnits(marker), chemistry.record(marker)));
 				GranularPhaseTransferEngine.Plan plan = access.transferEngine().plan(
 						rule, liquid, existingExtent, perStepExtent);
 				if (plan.changed() && !plan.precipitation() && accessible != null
@@ -178,7 +178,7 @@ final class GranularReactionStage {
 			GranularParcelStore.Parcel parcel = granular.parcels.parcel(parcelIndex);
 			if (parcel.materialHandle() != material) continue;
 			long extent = matchingSolidExtent(
-					parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.mass(), rule);
+					parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.massUnits(), rule);
 			if (extent <= 0L) continue;
 			total = Math.addExact(total, extent);
 			if (selected == null) selected = SolidEntity.parcel(parcelIndex, parcel, extent);
@@ -186,7 +186,7 @@ final class GranularReactionStage {
 		GranularDepositStore.Group exposed = granular.deposits.dominantGroup(cell);
 		if (exposed != null && exposed.materialHandle() == material) {
 			long extent = matchingSolidExtent(
-					exposed.solidCompositionHandle(), exposed.solidVolumeSvq(), exposed.mass(), rule);
+					exposed.solidCompositionHandle(), exposed.solidVolumeSvq(), exposed.massUnits(), rule);
 			if (extent > 0L) {
 				total = Math.addExact(total, extent);
 				if (selected == null) selected = SolidEntity.deposit(cell, exposed, extent);
@@ -227,14 +227,14 @@ final class GranularReactionStage {
 	}
 
 	private long matchingSolidExtent(
-			int compositionHandle, long solidSvq, double mass, SolidLiquidReaction rule
+			int compositionHandle, long solidSvq, long mass, SolidLiquidReaction rule
 	) {
 		GranularDomainState granular = access.granularState();
 		ChemicalParcelStore chemistry = access.chemistry();
 		if (compositionHandle == 0 || !granular.compositions.isLive(compositionHandle)) return 0L;
 		SolidCompositionRecord composition = granular.compositions.record(compositionHandle);
-		if (composition.massResidual() != 0.0 || composition.entryCount() != rule.solidComposition().size()
-				|| !FluidDomain.massClose(composition.totalMass(chemistry.registry()), mass)) return 0L;
+		if (composition.massResidualUnits() != 0L || composition.entryCount() != rule.solidComposition().size()
+				|| composition.massUnits(chemistry.registry()) != mass) return 0L;
 		long extent = -1L;
 		for (Map.Entry<String, Integer> term : rule.solidComposition().entrySet()) {
 			long amount = composition.amount(chemistry.registry().speciesHandle(term.getKey()));
@@ -330,7 +330,7 @@ final class GranularReactionStage {
 		GranularParcelStore.Parcel parcel;
 		try {
 			parcel = new GranularParcelStore.Parcel(position.x(), position.y(), position.z(),
-					momentum.solidX(), momentum.solidY(), momentum.solidZ(), plan.signedSolidSvq(), plan.signedSolidMass(),
+					momentum.solidX(), momentum.solidY(), momentum.solidZ(), plan.signedSolidSvq(), plan.signedSolidMassUnits(),
 					material, composition, 0, (byte) 0);
 			if (!granular.parcels.canAdd(parcel)) throw new GranularPhaseTransferEngine.BlockedException(
 					"Precipitation active parcel budget exceeded");
@@ -377,9 +377,10 @@ final class GranularReactionStage {
 					> maximumVelocityDelta * maximumVelocityDelta) continue;
 			if (!GranularMergeKinematics.preservesAngularMomentum(existing,
 					spawned.x(), spawned.y(), spawned.z(), velocityX, velocityY, velocityZ)) continue;
-			double combinedMass = existing.mass() + plan.signedSolidMass();
+			long combinedMassUnits = Math.addExact(existing.massUnits(), plan.signedSolidMassUnits());
+			double combinedMass = mmm.units.Mass.kilograms(combinedMassUnits);
 			try { PhaseChangeStageSupport.representedPhysicalMassTransfer(
-					existing.mass(), combinedMass, plan.signedSolidMass()); }
+					existing.massUnits(), combinedMassUnits, plan.signedSolidMassUnits()); }
 			catch (PhaseChangeStageSupport.PhaseCandidateUnavailableException unavailable) { continue; }
 			var position = massMoment == null ? new GranularCouplingFields.Position(
 					weighted(existing.x(), existing.mass(), spawned.x(), plan.signedSolidMass(), combinedMass),
@@ -397,7 +398,7 @@ final class GranularReactionStage {
 					weighted(existing.velocityX(), existing.mass(), velocityX, plan.signedSolidMass(), combinedMass),
 					weighted(existing.velocityY(), existing.mass(), velocityY, plan.signedSolidMass(), combinedMass),
 					weighted(existing.velocityZ(), existing.mass(), velocityZ, plan.signedSolidMass(), combinedMass),
-					combinedSvq, combinedMass, material, existing.solidCompositionHandle(), 0, (byte) 0);
+					combinedSvq, combinedMassUnits, material, existing.solidCompositionHandle(), 0, (byte) 0);
 			if (!capacity.fitsReplacement(access.coupling(),
 					new GranularCouplingFields.Position(existing.x(), existing.y(), existing.z(), existing.ceilMask()), existing.solidVolumeSvq(),
 					new GranularCouplingFields.Position(x, y, z), combinedSvq)) continue;
@@ -440,18 +441,19 @@ final class GranularReactionStage {
 		boolean full = removedSvq == solid.solidSvq();
 		SolidCompositionRecord remaining = full ? null : subtractComposition(
 				original, plan.transferredComposition());
-		double remainingMass = solid.mass() - removedMass;
+		long remainingMassUnits = Math.addExact(solid.massUnits(), plan.signedSolidMassUnits());
+		double remainingMass = mmm.units.Mass.kilograms(remainingMassUnits);
 		try { PhaseChangeStageSupport.representedPhysicalMassTransfer(
-				solid.mass(), full ? 0.0 : remainingMass, -removedMass); }
+				solid.massUnits(), full ? 0L : remainingMassUnits, plan.signedSolidMassUnits()); }
 		catch (PhaseChangeStageSupport.PhaseCandidateUnavailableException unavailable) { return false; }
 		if (!full && (!(remainingMass > 0.0)
-				|| !FluidDomain.massClose(remaining.totalMass(chemistry.registry()), remainingMass))) {
+				|| remaining.massUnits(chemistry.registry()) != remainingMassUnits)) {
 			return false;
 		}
 		if (solid.deposit()) {
 			GranularDepositStore.SolidPortion preview = granular.deposits.peekTakeCompositionAware(
 					cell, solid.materialHandle(), solid.compositionHandle(), removedSvq);
-			if (!FluidDomain.massClose(preview.mass(), removedMass)) {
+			if (preview.massUnits() != -plan.signedSolidMassUnits()) {
 				return false;
 			}
 		}
@@ -500,7 +502,7 @@ final class GranularReactionStage {
 			GranularParcelStore.Parcel parcel = granular.parcels.parcel(solid.index());
 			granular.parcels.overwrite(solid.index(), new GranularParcelStore.Parcel(
 					parcel.x(), parcel.y(), parcel.z(), parcel.velocityX(), parcel.velocityY(), parcel.velocityZ(),
-					parcel.solidVolumeSvq() - removedSvq, remainingMass, parcel.materialHandle(),
+					parcel.solidVolumeSvq() - removedSvq, remainingMassUnits, parcel.materialHandle(),
 					parcel.solidCompositionHandle(), parcel.contactAge(), parcel.flags()));
 		}
 		if (thermalPlan != null) {
@@ -588,7 +590,7 @@ final class GranularReactionStage {
 		if (remaining.isEmpty()) throw new GranularPhaseTransferEngine.BlockedException(
 				"Partial dissolution emptied solid composition");
 		return SolidCompositionRecord.fromStableAmounts(
-				chemistry.registry(), remaining, original.massResidual());
+				chemistry.registry(), remaining, original.massResidualUnits());
 	}
 
 	private static int[] updateMarkers(GranularPhaseTransferEngine.Plan plan) {
@@ -603,12 +605,12 @@ final class GranularReactionStage {
 		return result;
 	}
 
-	private static List<GranularEnergyState.ReactionMarker> thermalReactionMarkers(
+	private List<GranularEnergyState.ReactionMarker> thermalReactionMarkers(
 			GranularPhaseTransferEngine.Plan plan
 	) {
 		ArrayList<GranularEnergyState.ReactionMarker> result = new ArrayList<>(plan.markerUpdates().size());
 		for (GranularPhaseTransferEngine.MarkerUpdate update : plan.markerUpdates()) {
-			result.add(new GranularEnergyState.ReactionMarker(update.marker(), update.mass(), update.mixture()));
+			result.add(new GranularEnergyState.ReactionMarker(update.marker(), access.chemistry().unitScale().normalizedMass(update.massUnits()), update.mixture()));
 		}
 		return List.copyOf(result);
 	}
@@ -617,7 +619,7 @@ final class GranularReactionStage {
 		for (int index = 0; index < plan.markerUpdates().size(); index++) {
 			GranularPhaseTransferEngine.MarkerUpdate update = plan.markerUpdates().get(index);
 			state.particles().setVolume(update.marker(), update.cellVolume());
-			state.particles().setMass(update.marker(), update.mass());
+			state.particles().setMassUnits(update.marker(), update.massUnits());
 			state.particles().setVelocityX(update.marker(), momentum.x()[index]);
 			state.particles().setVelocityY(update.marker(), momentum.y()[index]);
 			state.particles().setVelocityZ(update.marker(), momentum.z()[index]);
@@ -643,15 +645,16 @@ final class GranularReactionStage {
 	) { }
 	private record SolidEntity(
 			boolean deposit, int index, int materialHandle, int compositionHandle,
-			long solidSvq, double mass, long extent
+			long solidSvq, long massUnits, long extent
 	) {
+		double mass() { return mmm.units.Mass.kilograms(massUnits); }
 		static SolidEntity parcel(int index, GranularParcelStore.Parcel parcel, long extent) {
 			return new SolidEntity(false, index, parcel.materialHandle(), parcel.solidCompositionHandle(),
-					parcel.solidVolumeSvq(), parcel.mass(), extent);
+					parcel.solidVolumeSvq(), parcel.massUnits(), extent);
 		}
 		static SolidEntity deposit(int cell, GranularDepositStore.Group group, long extent) {
 			return new SolidEntity(true, cell, group.materialHandle(), group.solidCompositionHandle(),
-					group.solidVolumeSvq(), group.mass(), extent);
+					group.solidVolumeSvq(), group.massUnits(), extent);
 		}
 	}
 }

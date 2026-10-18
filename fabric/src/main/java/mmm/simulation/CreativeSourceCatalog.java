@@ -47,8 +47,8 @@ final class CreativeSourceCatalog {
 			FluidMaterial oil = world.resolveMaterial(BuiltinFluidMaterials.OIL.id());
 			long first = LIQUID_AMOUNT / 2L;
 			mixture = new FluidMixture(List.of(
-					new FluidMixture.Component(water.id(), first, 0.5 * water.referenceDensity()),
-					new FluidMixture.Component(oil.id(), LIQUID_AMOUNT - first, 0.5 * oil.referenceDensity())));
+					new FluidMixture.Component(water.id(), first, mmm.units.Mass.fromKilograms(0.5 * water.referenceDensity())),
+					new FluidMixture.Component(oil.id(), LIQUID_AMOUNT - first, mmm.units.Mass.fromKilograms(0.5 * oil.referenceDensity()))));
 		} else {
 			String materialId = switch (name) {
 				case "water" -> BuiltinFluidMaterials.WATER.id();
@@ -58,7 +58,7 @@ final class CreativeSourceCatalog {
 			};
 			FluidMaterial material = world.resolveMaterial(materialId);
 			mixture = new FluidMixture(List.of(new FluidMixture.Component(
-					material.id(), LIQUID_AMOUNT, material.referenceDensity())));
+					material.id(), LIQUID_AMOUNT, mmm.units.Mass.fromKilograms(material.referenceDensity()))));
 		}
 		ItemStack stack = world.bindActualContainerProfile(ContainerItemStacks.toStack(mixture));
 		world.attachLiquidThermalContents(stack, temperature(descriptor));
@@ -88,11 +88,11 @@ final class CreativeSourceCatalog {
 		}
 		FluidMaterial carrier = world.resolveMaterial(BuiltinFluidMaterials.WATER.id());
 		double mass = carrier.referenceDensity();
-		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);
+		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
-				mass - exact.exactSpeciesMassKilograms(registry).toDouble());
+				Math.subtractExact(mmm.units.Mass.fromKilograms(mass), exact.speciesMassUnits(registry)));
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				carrier.id(), false, 1.0, mass, mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry))));
+				carrier.id(), false, 1.0, mmm.units.Mass.fromKilograms(mass), mixture.massResidualUnits(), mixture.stableAmounts(registry))));
 		ItemStack stack = world.bindActualContainerProfile(ContainerItemStacks.toStack(
 				ChemicalContents.fromLedger(ledger, registry, LIQUID_AMOUNT)));
 		world.attachLiquidThermalContents(stack, temperature(descriptor));
@@ -115,7 +115,7 @@ final class CreativeSourceCatalog {
 		var material = registry.material(registry.materialHandle(materialId));
 		if (material.reactive()) throw new IllegalArgumentException("reactive granular source is not allowed");
 		GranularTransferLedger ledger = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
-				material.id(), GRANULAR_AMOUNT, material.referenceDensity(), null)));
+				material.id(), GRANULAR_AMOUNT, mmm.units.Mass.fromKilograms(material.referenceDensity()), null)));
 		GranularContents contents = GranularContents.fromLedger(ledger, registry,
 				world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null);
 		ItemStack stack = world.bindActualContainerProfile(ContainerItemStacks.toStack(contents));

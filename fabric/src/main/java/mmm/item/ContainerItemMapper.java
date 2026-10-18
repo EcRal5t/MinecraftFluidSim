@@ -68,23 +68,23 @@ public final class ContainerItemMapper {
 		String chemicalEncoded = stack.get(MmmComponents.CHEMICAL_CONTENTS);
 		if (chemicalEncoded != null) {
 			ChemicalContents contents = ChemicalContents.decode(chemicalEncoded);
-			Long persistedMass = stack.get(MmmComponents.FLUID_MASS_BITS);
+			Long persistedMass = stack.get(MmmComponents.FLUID_MASS_UNITS);
 			if (stack.get(MmmComponents.MATERIAL_ID) != null
 					|| stack.get(MmmComponents.MIXTURE_COMPONENTS) != null
 					|| nanos != contents.totalVolumeNanos() || persistedMass == null
-					|| persistedMass != Double.doubleToRawLongBits(contents.totalMass())) {
+					|| persistedMass != contents.totalMassUnits()) {
 				throw new IllegalArgumentException("Chemical bucket has conflicting or mismatched ledgers");
 			}
 			return withThermal(stack, actualFingerprint(stack, ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET,
 					nanos, -1L, chemicalEncoded, persistedMass));
 		}
 		FluidMixture mixture = MaterialBucketItem.mixture(stack);
-		double mass = MaterialBucketItem.mass(stack);
+		double mass = MaterialBucketItem.massKilograms(stack);
 		if (nanos <= 0L || mixture == null || !(mass > 0.0)) {
 			throw new IllegalArgumentException("Material bucket has no valid volume/material/mass ledger");
 		}
 		return withThermal(stack, actualFingerprint(stack, ContainerTransferJournal.ItemKind.MATERIAL_BUCKET,
-				nanos, -1L, mixture.encode(), Double.doubleToRawLongBits(mass)));
+				nanos, -1L, mixture.encode(), mixture.totalMassUnits()));
 	}
 
 	private static ContainerTransferJournal.ItemFingerprint granularFingerprint(ItemStack stack) {
@@ -96,15 +96,15 @@ public final class ContainerItemMapper {
 			throw new IllegalArgumentException("Granular container has invalid or conflicting contents");
 		}
 		return withThermal(stack, actualFingerprint(stack, ContainerTransferJournal.ItemKind.GRANULAR_CONTAINER,
-				-1L, contents.totalSolidVolumeSvq(), contents.encode(), Double.doubleToRawLongBits(contents.totalMass())));
+				-1L, contents.totalSolidVolumeSvq(), contents.encode(), contents.totalMassUnits()));
 	}
 
 	private static ContainerTransferJournal.ItemFingerprint actualFingerprint(
-			ItemStack stack, ContainerTransferJournal.ItemKind kind, long nanos, long svq, String contents, long massBits
+			ItemStack stack, ContainerTransferJournal.ItemKind kind, long nanos, long svq, String contents, long massUnits
 	) {
 		String profile = ContainerItemStacks.profileFingerprint(stack);
 		if (profile == null) throw new IllegalArgumentException("Filled typed container lacks world profile identity");
-		return new ContainerTransferJournal.ItemFingerprint(kind, nanos, svq, contents, massBits, null, profile);
+		return new ContainerTransferJournal.ItemFingerprint(kind, nanos, svq, contents, massUnits, null, profile);
 	}
 
 	private static ContainerTransferJournal.ItemFingerprint withThermal(
@@ -114,7 +114,7 @@ public final class ContainerItemMapper {
 		if (encoded == null) return base;
 		ContainerItemStacks.thermalContents(stack);
 		return new ContainerTransferJournal.ItemFingerprint(base.kind(), base.nanos(), base.solidVolumeSvq(),
-				base.contents(), base.massBits(), encoded, base.profileFingerprint());
+				base.contents(), base.massUnits(), encoded, base.profileFingerprint());
 	}
 
 	private static ContainerTransferJournal.ItemFingerprint snapshot(ContainerTransferJournal.ItemKind kind) {
@@ -124,7 +124,7 @@ public final class ContainerItemMapper {
 	private static ItemStack materialStack(ContainerTransferJournal.ItemFingerprint snapshot) {
 		FluidMixture mixture = FluidMixture.decode(snapshot.contents());
 		if (mixture.totalVolumeNanos() != snapshot.nanos()
-				|| Double.doubleToRawLongBits(mixture.totalMass()) != snapshot.massBits()) {
+				|| mixture.totalMassUnits() != snapshot.massUnits()) {
 			throw new IllegalStateException("Material WAL fingerprint ledgers disagree");
 		}
 		return ContainerItemStacks.toStack(mixture);
@@ -133,7 +133,7 @@ public final class ContainerItemMapper {
 	private static ItemStack chemicalStack(ContainerTransferJournal.ItemFingerprint snapshot) {
 		ChemicalContents contents = ChemicalContents.decode(snapshot.contents());
 		if (contents.totalVolumeNanos() != snapshot.nanos()
-				|| Double.doubleToRawLongBits(contents.totalMass()) != snapshot.massBits()) {
+				|| contents.totalMassUnits() != snapshot.massUnits()) {
 			throw new IllegalStateException("Chemical WAL fingerprint ledgers disagree");
 		}
 		return ContainerItemStacks.toStack(contents);
@@ -142,7 +142,7 @@ public final class ContainerItemMapper {
 	private static ItemStack granularStack(ContainerTransferJournal.ItemFingerprint snapshot) {
 		GranularContents contents = GranularContents.decode(snapshot.contents());
 		if (contents.totalSolidVolumeSvq() != snapshot.solidVolumeSvq()
-				|| Double.doubleToRawLongBits(contents.totalMass()) != snapshot.massBits()) {
+				|| contents.totalMassUnits() != snapshot.massUnits()) {
 			throw new IllegalStateException("Granular WAL fingerprint ledgers disagree");
 		}
 		return ContainerItemStacks.toStack(contents);

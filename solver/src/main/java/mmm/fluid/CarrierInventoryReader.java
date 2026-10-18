@@ -41,7 +41,7 @@ final class CarrierInventoryReader {
 		}
 		return new FlipParticleState(
 				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), particleCount,
-				domain.totalVolume(), positionVolume, velocities, solidMask
+				domain.totalVolume(), positionVolume, velocities, domain.particles.copyMassUnits(), solidMask
 		);
 	}
 
@@ -65,9 +65,9 @@ final class CarrierInventoryReader {
 		}
 		return new FlipMaterialParticleState(
 				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), particleCount,
-				domain.totalVolumeExact(), domain.totalMass(), domain.materialRegistry.materials(),
+				domain.totalVolumeExact(), domain.totalMassUnits(), domain.materialRegistry.materials(),
 				positionVolume, velocities, domain.geometry.cutCells.copyMicroMasks(),
-				domain.particles.copyMass(),
+				domain.particles.copyMassUnits(),
 				domain.particles.copyMaterialHandles()
 		);
 	}

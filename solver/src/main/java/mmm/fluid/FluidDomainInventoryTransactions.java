@@ -154,7 +154,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 				|| carrierMutationRevision() != plan.mutationRevision()
 				|| (chemicalParcels == null ? 0L : chemicalParcels.mutationRevision()) != plan.chemicalRevision()
 				|| Double.doubleToRawLongBits(domain().totalVolumeExact()) != plan.totalVolumeBits()
-				|| Double.doubleToRawLongBits(domain().totalMass()) != plan.totalMassBits()
+				|| domain().totalMassUnits() != plan.totalMassUnits()
 				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()))
 				.equals(plan.internalEnergy())) {
 			throw new IllegalStateException("Liquid inventory changed after clear planning");
@@ -198,7 +198,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 		WaterClearPlan liquid = plan.liquid();
 		if (particles.count() != liquid.markerCount()
 				|| Double.doubleToRawLongBits(domain().totalVolumeExact()) != liquid.totalVolumeBits()
-				|| Double.doubleToRawLongBits(domain().totalMass()) != liquid.totalMassBits()
+				|| domain().totalMassUnits() != liquid.totalMassUnits()
 				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()))
 				.equals(liquid.internalEnergy())) {
 			throw new IllegalStateException("Liquid inventory changed after condensed clear planning");
@@ -210,8 +210,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 				.compareTo(plan.coherentEnergy()) != 0
 				|| (thermalState == null ? 0L : thermalState.coherentPhases().totalOccupiedSvq())
 				!= plan.coherentVolumeSvq()
-				|| Double.doubleToRawLongBits(thermalState == null ? 0.0
-				: thermalState.coherentPhases().totalMass()) != plan.coherentMassBits()) {
+				|| (thermalState == null ? 0L : thermalState.coherentPhases().totalMassUnits()) != plan.coherentMassUnits()) {
 			throw new IllegalStateException("Coherent phase inventory changed after condensed clear planning");
 		}
 	}
@@ -230,7 +229,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 		domain().refreshCoherentOccupancy();
 		gridDirty = true;
 		return new CondensedClear(plan.coherentVolumeSvq(),
-				Double.longBitsToDouble(plan.coherentMassBits()), plan.coherentGroups().size());
+				mmm.units.Mass.kilograms(plan.coherentMassUnits()), plan.coherentGroups().size());
 	}
 
 	/** Prevalidates every truth removed by the operator-level condensed inventory reset. */
@@ -272,14 +271,14 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 	}
 
 	public record WaterClearPlan(
-			int markerCount, long totalVolumeBits, long totalMassBits, ChemicalTransferLedger drained,
+			int markerCount, long totalVolumeBits, long totalMassUnits, ChemicalTransferLedger drained,
 			SignedDyadic internalEnergy, long mutationRevision, long chemicalRevision
 	) { }
 	public record CondensedClear(long coherentVolumeSvq, double coherentMass, int coherentGroups) { }
 	public record CondensedClearPlan(
 			WaterClearPlan liquid, List<CoherentPhaseStore.Group> coherentGroups,
 			ChemicalTransferLedger drained, SignedDyadic coherentEnergy,
-			long coherentVolumeSvq, long coherentMassBits, long mutationRevision, long chemicalRevision
+			long coherentVolumeSvq, long coherentMassUnits, long mutationRevision, long chemicalRevision
 	) {
 		public CondensedClearPlan { coherentGroups = List.copyOf(coherentGroups); }
 	}
@@ -318,20 +317,20 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 		final int[] previousMasks;
 		final int planMarkerCount;
 		final long totalVolumeBits;
-		final long totalMassBits;
+		final long totalMassUnits;
 		final GranularCollisionPlan granular;
 		boolean consumed;
 
 		CollisionEditPlan(
 				FluidDomain owner, List<CollisionEdit> edits, int[] previousMasks,
-				int planMarkerCount, long totalVolumeBits, long totalMassBits, GranularCollisionPlan granular
+				int planMarkerCount, long totalVolumeBits, long totalMassUnits, GranularCollisionPlan granular
 		) {
 			this.owner = owner;
 			this.edits = edits;
 			this.previousMasks = previousMasks.clone();
 			this.planMarkerCount = planMarkerCount;
 			this.totalVolumeBits = totalVolumeBits;
-			this.totalMassBits = totalMassBits;
+			this.totalMassUnits = totalMassUnits;
 			this.granular = granular;
 		}
 	}
@@ -340,7 +339,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 	record GranularCollisionPlan(
 			boolean[] selectedParcels, List<CollisionDeposit> depositGroups,
 			GranularAuditLedger sinkAfter, boolean[] affectedCells,
-			int parcelCount, long totalSvq, long totalMassBits
+			int parcelCount, long totalSvq, long totalMassUnits
 	) { }
 
 	public static final class CollisionEditBlockedException extends IllegalStateException {
@@ -382,40 +381,40 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 			boolean externalSource, Double internalEnergy
 	) {
 		validateVolumeEdit(volume, maxRadius);
-		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0, 0.0);
-		double mass = materialRegistry == null
-				? (double) volume * config.density()
-				: (double) volume * materialRegistry.material(materialHandle).referenceDensity();
-		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, mass, maxRadius, materialHandle,
+		if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0, 0L);
+		long massUnits = unitScale.massUnitsForNormalized((double) volume * (materialRegistry == null
+				? config.density() : materialRegistry.material(materialHandle).referenceDensity()));
+		if (massUnits == 0) return new ExactVolumeTransfer(false, 0, 0L);
+		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, massUnits, maxRadius, materialHandle,
 				externalSource, internalEnergy);
 	}
 
 	/** Inserts independent material volume and mass ledgers without deriving either from the other. */
 	public ExactVolumeTransfer tryInsertExactMaterial(
-			int centerX, int centerY, int centerZ, float volume, double mass, int maxRadius, int materialHandle
+			int centerX, int centerY, int centerZ, float volume, long massUnits, int maxRadius, int materialHandle
 	) {
-		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, mass, maxRadius, materialHandle, false);
+		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, massUnits, maxRadius, materialHandle, false);
 	}
 
 	ExactVolumeTransfer tryInsertExactMaterial(
-			int centerX, int centerY, int centerZ, float volume, double mass, int maxRadius, int materialHandle,
+			int centerX, int centerY, int centerZ, float volume, long massUnits, int maxRadius, int materialHandle,
 			boolean externalSource
 	) {
-		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, mass, maxRadius, materialHandle,
+		return tryInsertExactMaterial(centerX, centerY, centerZ, volume, massUnits, maxRadius, materialHandle,
 				externalSource, null);
 	}
 
 	ExactVolumeTransfer tryInsertExactMaterial(
-			int centerX, int centerY, int centerZ, float volume, double mass, int maxRadius, int materialHandle,
+			int centerX, int centerY, int centerZ, float volume, long massUnits, int maxRadius, int materialHandle,
 			boolean externalSource, Double internalEnergy
 	) {
-		if (volume == 0.0F && mass == 0.0) return new ExactVolumeTransfer(true, 0.0, 0.0);
+		if (volume == 0.0F && massUnits == 0) return new ExactVolumeTransfer(true, 0.0, 0L);
 		ExactMixtureTransfer transfer = tryInsertExactMixture(centerX, centerY, centerZ,
-				List.of(new MaterialPortion(materialHandle, volume, mass)), maxRadius, externalSource, internalEnergy);
+				List.of(new MaterialPortion(materialHandle, volume, massUnits)), maxRadius, externalSource, internalEnergy);
 		return transfer.transferred()
 				? new ExactVolumeTransfer(true, transfer.portions().getFirst().volume(),
-						transfer.portions().getFirst().mass(), transfer.internalEnergy())
-				: new ExactVolumeTransfer(false, 0.0, 0.0);
+						transfer.portions().getFirst().massUnits(), transfer.internalEnergy())
+				: new ExactVolumeTransfer(false, 0.0, 0L);
 	}
 
 	/** Plans every mixture component against shared capacity before inserting any marker. */
@@ -506,12 +505,12 @@ return tryExtractExactVolume(centerX, centerY, centerZ, volume, maxRadius, 0);
 
 public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int centerZ, float volume, int maxRadius, int materialHandle) {
 	validateVolumeEdit(volume, maxRadius);
-	if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0, 0.0);
+	if (volume <= 0.0F) return new ExactVolumeTransfer(volume == 0.0F, 0.0, 0L);
 	ExactMixtureTransfer transfer = transferPlanner.extractMixture(
 			centerX, centerY, centerZ, volume, maxRadius, materialHandle);
-	if (!transfer.transferred()) return new ExactVolumeTransfer(false, 0.0, 0.0);
+	if (!transfer.transferred()) return new ExactVolumeTransfer(false, 0.0, 0L);
 	MaterialPortion portion = transfer.portions().getFirst();
-	return new ExactVolumeTransfer(true, portion.volume(), portion.mass(), transfer.internalEnergy());
+	return new ExactVolumeTransfer(true, portion.volume(), portion.massUnits(), transfer.internalEnergy());
 }
 
 	/** Extracts nearby materials in deterministic cell/marker order and returns every component. */
@@ -525,12 +524,12 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 
 	static final class RemovedMaterialLedger {
 		final double[] volume;
-		final double[] mass;
+		final long[] mass;
 		RemovedMaterialLedger(int materialCount) {
-			volume = new double[materialCount]; mass = new double[materialCount];
+			volume = new double[materialCount]; mass = new long[materialCount];
 		}
-		void add(int material, double addedVolume, double addedMass) {
-			volume[material] += addedVolume; mass[material] += addedMass;
+		void add(int material, double addedVolume, long addedMass) {
+			volume[material] += addedVolume; mass[material] = Math.addExact(mass[material], addedMass);
 		}
 		List<MaterialPortion> build() {
 			ArrayList<MaterialPortion> result = new ArrayList<>();
@@ -550,9 +549,9 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		SignedDyadic value() { return value; }
 	}
 
-	public record ExactVolumeTransfer(boolean transferred, double volume, double mass, double internalEnergy) {
-		public ExactVolumeTransfer(boolean transferred, double volume, double mass) {
-			this(transferred, volume, mass, 0.0);
+	public record ExactVolumeTransfer(boolean transferred, double volume, long massUnits, double internalEnergy) {
+		public ExactVolumeTransfer(boolean transferred, double volume, long massUnits) {
+			this(transferred, volume, massUnits, 0.0);
 		}
 	}
 	public record ExactMixtureTransfer(boolean transferred, List<MaterialPortion> portions, double internalEnergy) {
@@ -569,6 +568,6 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		public ChemicalDisplacement(float volume, ChemicalTransferLedger ledger) { this(volume, ledger, 0.0); }
 	}
 	public record MaterialDisplacement(float volume, List<MaterialPortion> portions, double internalEnergy) { }
-	public record MaterialPortion(int materialHandle, double volume, double mass) { }
+	public record MaterialPortion(int materialHandle, double volume, long massUnits) { }
 
 }

@@ -87,7 +87,7 @@ final class CondensedPhaseChangeStage {
 
 	private CondensedCellInventory phaseCellInventory(int cell, int liquidHandle, String coherentPhaseId) {
 		var particles = support.state().particles(); var chemistry = support.chemistry();
-		double liquidMass = 0, coherentMass = 0, freezableMass = 0;
+		long liquidMass = 0, coherentMass = 0, freezableMass = 0;
 		long liquidSvq = 0, coherentSvq = 0, freezableSvq = 0, unchangedSvq = 0;
 		boolean found = false, coherentFound = false;
 		for (int marker = 0; marker < particles.count(); marker++) if (support.particleCell(marker) == cell) {
@@ -96,10 +96,10 @@ final class CondensedPhaseChangeStage {
 				continue;
 			}
 			liquidSvq = Math.addExact(liquidSvq, SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker)));
-			liquidMass += support.state().unitScale().kilograms(particles.mass(marker)); found = true;
+			liquidMass = Math.addExact(liquidMass, particles.massUnits(marker)); found = true;
 			if (chemistry == null || !chemistry.indicator(marker)) {
 				freezableSvq = Math.addExact(freezableSvq, SolidVolume.cellVolumeSvqAtMost(particles.volume(marker)));
-				freezableMass += support.state().unitScale().kilograms(particles.mass(marker));
+				freezableMass = Math.addExact(freezableMass, particles.massUnits(marker));
 			}
 		}
 		for (var group : support.thermal().coherentPhases().snapshot()) if (group.cell() == cell) {
@@ -110,7 +110,7 @@ final class CondensedPhaseChangeStage {
 			if (chemistry != null && group.composition() == null || chemistry == null && group.composition() != null)
 				throw new FluidDomain.ThermalPhaseBlockedException("Coherent composition/chemistry capability mismatch");
 			coherentFound = true; found = true;
-			coherentSvq = group.occupiedVolumeSvq(); coherentMass = group.mass();
+			coherentSvq = group.occupiedVolumeSvq(); coherentMass = group.massUnits();
 		}
 		return found ? new CondensedCellInventory(new PhaseCellInventory(coherentSvq, liquidSvq,
 				coherentMass, liquidMass, freezableSvq, freezableMass), unchangedSvq) : null;
@@ -133,7 +133,8 @@ final class CondensedPhaseChangeStage {
 				: transition.lowerVolumeSvqPerBatch();
 		double massInventory = freezing ? before.freezableUpperMass() : before.lowerMass();
 		long byVolume = volumeInventory / volumeBatch;
-		long byMass = (long) Math.floor((massInventory + massTolerance(massInventory)) / batchMass);
+		long byMass = (freezing ? before.freezableUpperMassUnits() : before.lowerMassUnits())
+				/ mmm.units.Mass.exactUnits(transition.massKgPerBatch().numerator(), transition.massKgPerBatch().denominator());
 		long high = Math.min(maximumBatches, Math.min(byVolume, byMass));
 		long signedVolumePerBatch = freezing
 				? transition.lowerVolumeSvqPerBatch() - transition.upperVolumeSvqPerBatch()
@@ -251,7 +252,8 @@ final class CondensedPhaseChangeStage {
 		if (!support.canExpandCondensedVolume(freezing ? lowerDelta - upperDelta : upperDelta - lowerDelta)) {
 			throw new PhaseCandidateUnavailableException("Condensed phase expansion exceeds region carrier capacity");
 		}
-		double requestedMass = transition.massKgPerBatch().multiply(batches).toDouble();
+		long requestedMassUnits = mmm.units.Mass.exactUnits(transition.massKgPerBatch().multiply(batches).numerator(), transition.massKgPerBatch().multiply(batches).denominator());
+		double requestedMass = mmm.units.Mass.kilograms(requestedMassUnits);
 		if (!(Double.isFinite(requestedMass) && requestedMass > 0.0)) {
 			throw new FluidDomain.ThermalPhaseBlockedException(
 					"Condensed phase extent mass is not representable");
@@ -264,16 +266,16 @@ final class CondensedPhaseChangeStage {
 		int meltSlot = -1;
 		if (freezing) {
 			if (upperDelta > before.freezableUpperSvq()
-					|| requestedMass > before.freezableUpperMass() + massTolerance(before.freezableUpperMass())) {
+					|| requestedMassUnits > before.freezableUpperMassUnits()) {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Freeze extent exceeds non-indicator liquid inventory");
 			}
-			var liquidRemoval = liquid.remove(liquidHandle, -1, upperDelta, requestedMass, null, false);
+			var liquidRemoval = liquid.remove(liquidHandle, -1, upperDelta, requestedMassUnits, null, false);
 			removal = liquidRemoval.plan(); remainingLiquid = liquidRemoval.inventory();
 			finalLowerSvq = Math.addExact(before.lowerVolumeSvq(), lowerDelta);
 			finalUpperSvq = before.upperVolumeSvq() - upperDelta;
 			coherentTransfer = new CoherentPhaseStore.Group(
-					cell, transition.lowerEnergyMaterialId(), lowerDelta, requestedMass,
+					cell, transition.lowerEnergyMaterialId(), lowerDelta, requestedMassUnits,
 					removal.movedComposition().toCoherent(), 0.0);
 			try {
 				coherentFinal = thermal.coherentPhases().previewAdd(coherentTransfer);
@@ -282,10 +284,10 @@ final class CondensedPhaseChangeStage {
 						"Freeze cannot represent another coherent carrier group", unavailable);
 			}
 			PhaseChangeStageSupport.representedPhysicalMassTransfer(
-					before.lowerMass(), coherentFinal.mass(), requestedMass);
+					before.lowerMassUnits(), coherentFinal.massUnits(), requestedMassUnits);
 		} else {
 			if (lowerDelta > before.lowerVolumeSvq()
-					|| requestedMass > before.lowerMass() + massTolerance(before.lowerMass())) {
+					|| requestedMassUnits > before.lowerMassUnits()) {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Melt extent exceeds coherent inventory");
 			}
@@ -297,15 +299,14 @@ final class CondensedPhaseChangeStage {
 				throw new PhaseCandidateUnavailableException(
 						"Melt cannot represent the coherent carrier split", unavailable);
 			}
-			if (!FluidDomain.massClose(coherentTransfer.mass(), requestedMass)) {
+			if (coherentTransfer.massUnits() != requestedMassUnits) {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Melt exact batch mass differs from coherent inventory");
 			}
-			PhaseChangeStageSupport.representedPhysicalMassTransfer(0.0, coherentTransfer.mass(), requestedMass);
-			PhaseChangeStageSupport.representedPhysicalMassTransfer(before.lowerMass(),
-					coherentFinal == null ? 0.0 : coherentFinal.mass(), -coherentTransfer.mass());
-			support.representedMassTransfer(0.0, support.state().unitScale().solverMass(coherentTransfer.mass()),
-					coherentTransfer.mass());
+			PhaseChangeStageSupport.representedPhysicalMassTransfer(0L, coherentTransfer.massUnits(), requestedMassUnits);
+			PhaseChangeStageSupport.representedPhysicalMassTransfer(before.lowerMassUnits(),
+					coherentFinal == null ? 0L : coherentFinal.massUnits(), -coherentTransfer.massUnits());
+			support.representedMassTransfer(0L, coherentTransfer.massUnits(), coherentTransfer.massUnits());
 			PhaseComposition moved = PhaseComposition.fromCoherent(coherentTransfer.composition());
 			finalLowerSvq = before.lowerVolumeSvq() - lowerDelta;
 			finalUpperSvq = Math.addExact(before.upperVolumeSvq(), upperDelta);
@@ -336,7 +337,7 @@ final class CondensedPhaseChangeStage {
 		if (occupied > capacity) throw new FluidDomain.ThermalPhaseBlockedException(
 				"Condensed phase extent exceeds joint cell capacity");
 		var phaseInventory = condensedInventoryAfter(cell, transition.lowerEnergyMaterialId(), coherentFinal,
-				freezing ? remainingLiquid : liquid.afterCondensation(liquidHandle, -1, 0, meltedMixture, coherentTransfer.mass()));
+				freezing ? remainingLiquid : liquid.afterCondensation(liquidHandle, -1, 0, meltedMixture, coherentTransfer.massUnits()));
 		var thermalPlan = thermal.trialPhaseCellEnergy(thermalCell, phaseInventory);
 		long signedVolumeSvq = freezing ? lowerDelta - upperDelta : upperDelta - lowerDelta;
 		return new JointPhaseTrial(
@@ -391,7 +392,7 @@ final class CondensedPhaseChangeStage {
 		int marker = support.state().particles().count();
 		support.spawnParticle(
 				cell, plan.meltSlot(), SolidVolume.toCellVolume(addedSvq), liquidHandle,
-				support.state().unitScale().solverMass(removed.mass()), plan.meltedMixture());
+				removed.massUnits(), plan.meltedMixture());
 		support.thermal().addLiquidEnergy(marker, removed.internalEnergy());
 		support.commitPendingVolume(cell, plan.signedVolumeSvq());
 		support.refreshCoherentOccupancy();

@@ -60,7 +60,7 @@ public final class RegionCheckpointRestorer {
 		ReconstructedParticles particles = reconstructParticles();
 		double volume = sumVolumes(particles.positionVolume());
 		return new FlipParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
-				manifest.totalMarkerCount(), (float) volume, particles.positionVolume(), particles.velocities(), particles.solidMask());
+				manifest.totalMarkerCount(), (float) volume, particles.positionVolume(), particles.velocities(), particles.markerMassUnits(), particles.solidMask());
 	}
 
 	public FlipMaterialParticleState reconstructMaterial() throws IOException {
@@ -71,8 +71,8 @@ public final class RegionCheckpointRestorer {
 		}
 		ReconstructedParticles particles = reconstructParticles();
 		return new FlipMaterialParticleState(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
-				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMass(), manifest.materialPalette(),
-				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMass(),
+				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMassUnits(), manifest.materialPalette(),
+				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMassUnits(),
 				particles.materialPaletteIndex());
 	}
 
@@ -139,7 +139,7 @@ public final class RegionCheckpointRestorer {
 					granularSection.deposits().get(index), Double.longBitsToDouble(depositBits[index])));
 			for (ThermalRegionStateCodec.CoherentEntry group : data.coherentGroups()) {
 				coherent.add(new CoherentPhaseStore.Group(group.cell(), group.phaseId(),
-						group.occupiedVolumeSvq(), group.mass(), group.composition(), group.internalEnergy()));
+						group.occupiedVolumeSvq(), group.massUnits(), group.composition(), group.internalEnergy()));
 			}
 		}
 		for (boolean value : seen) if (!value) throw new IOException("Missing thermal marker ordinal");
@@ -217,13 +217,13 @@ public final class RegionCheckpointRestorer {
 		ReconstructedParticles particles = reconstructParticles();
 		FlipMaterialParticleState materials = new FlipMaterialParticleState(
 				manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig().cellSize(),
-				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMass(), manifest.materialPalette(),
-				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMass(),
+				manifest.totalMarkerCount(), manifest.totalVolume(), manifest.totalMassUnits(), manifest.materialPalette(),
+				particles.positionVolume(), particles.velocities(), particles.solidMask(), particles.markerMassUnits(),
 				particles.materialPaletteIndex());
 		ChemicalAuditLedgerCodec.AuditLedgers audit = decodeChemicalAuditExtension();
 		return new FlipChemicalParticleState(materials, registry, manifest.chemicalMixtures(),
 				particles.chemicalMixtureIndex(), particles.indicator(), manifest.chemicalSpeciesTotals(),
-				manifest.chemicalResidualLedgerBits(), audit.externalSource(), audit.escapedSink());
+				manifest.chemicalResidualLedgerUnits(), audit.externalSource(), audit.escapedSink());
 	}
 
 	public GranularStateSnapshot reconstructGranular(GranularRegistry registry) throws IOException {
@@ -273,12 +273,12 @@ public final class RegionCheckpointRestorer {
 				.thenComparingInt(GranularStateSnapshot.DepositGroup::materialPaletteIndex)
 				.thenComparingInt(GranularStateSnapshot.DepositGroup::solidCompositionIndex));
 		long totalSvq = Math.addExact(granular.activeSvq(), granular.depositSvq());
-		long totalMassBits = GranularStateSnapshot.canonicalTotalMassBits(Arrays.asList(active), deposits);
+		long totalMassUnits = GranularStateSnapshot.canonicalTotalMassUnits(Arrays.asList(active), deposits);
 		try {
 			return new GranularStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
 					granular.registryFingerprint(), granular.chemicalRegistryFingerprint(), granular.materialPalette(),
 					granular.solidCompositions(), granular.solidSpeciesTotals(), Arrays.asList(active), deposits,
-					totalSvq, totalMassBits, granular.externalSource(), granular.escapedSink());
+					totalSvq, totalMassUnits, granular.externalSource(), granular.escapedSink());
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid region-state granular inventory: " + invalid.getMessage(), invalid);
 		}
@@ -307,7 +307,7 @@ public final class RegionCheckpointRestorer {
 		int count = manifest.totalMarkerCount();
 		float[] positions = new float[Math.multiplyExact(count, 4)];
 		float[] velocities = new float[Math.multiplyExact(count, 3)];
-		double[] markerMass = manifest.layout().hasMaterials() ? new double[count] : new double[0];
+		long[] markerMassUnits = new long[count];
 		int[] materialPaletteIndex = manifest.layout().hasMaterials() ? new int[count] : new int[0];
 		int[] chemicalMixtureIndex = manifest.hasChemicalState() ? new int[count] : new int[0];
 		byte[] indicator = manifest.hasChemicalState() ? new byte[count] : new byte[0];
@@ -318,7 +318,7 @@ public final class RegionCheckpointRestorer {
 			int[] ordinals = section.markerOrdinals();
 			float[] sectionPositions = section.positionVolume();
 			float[] sectionVelocities = section.velocities();
-			double[] sectionMass = section.markerMass();
+			long[] sectionMass = section.markerMassUnits();
 			int[] sectionMaterials = section.materialPaletteIndex();
 			int[] sectionMixtures = section.chemicalMixtureIndex();
 			byte[] sectionIndicator = section.indicator();
@@ -328,8 +328,8 @@ public final class RegionCheckpointRestorer {
 				seenMarkers[ordinal] = true;
 				System.arraycopy(sectionPositions, i * 4, positions, ordinal * 4, 4);
 				System.arraycopy(sectionVelocities, i * 3, velocities, ordinal * 3, 3);
+				markerMassUnits[ordinal] = sectionMass[i];
 				if (manifest.layout().hasMaterials()) {
-					markerMass[ordinal] = sectionMass[i];
 					materialPaletteIndex[ordinal] = sectionMaterials[i];
 				}
 				if (manifest.hasChemicalState()) {
@@ -353,7 +353,7 @@ public final class RegionCheckpointRestorer {
 		for (boolean seen : seenSolids) if (!seen) throw new IOException("Incomplete solid-mask coverage");
 		double volume = sumVolumes(positions);
 		if (Double.doubleToRawLongBits(volume) != manifest.totalVolumeBits()) throw new IOException("Marker volume ledger mismatch");
-		return new ReconstructedParticles(positions, velocities, solids, markerMass, materialPaletteIndex,
+		return new ReconstructedParticles(positions, velocities, solids, markerMassUnits, materialPaletteIndex,
 				chemicalMixtureIndex, indicator);
 	}
 
@@ -403,13 +403,12 @@ public final class RegionCheckpointRestorer {
 		try {
 			snapshot = new GasStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
 					data.registryFingerprint(), data.chemicalRegistryFingerprint(), nodes, memberships,
-					data.externalSource(), data.escapedSink(),
-					data.massRoundoff(), data.residualRoundoff());
+					data.externalSource(), data.escapedSink());
 			AirNetwork audit = new AirNetwork(registry == null
 					? mmm.fluid.air.BuiltinGasDefinitions.createRegistry() : registry);
 			double[] available = new double[nodes.size()]; java.util.Arrays.fill(available, 1.0);
 			audit.restoreNodes(available, nodes.stream().map(GasStateSnapshot.Node::inventory).toList(),
-					snapshot.externalSource(), snapshot.escapedSink(), snapshot.massRoundoff(), snapshot.residualRoundoff());
+					snapshot.externalSource(), snapshot.escapedSink());
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid gas inventory/topology: " + invalid.getMessage(), invalid);
 		}
@@ -522,7 +521,7 @@ public final class RegionCheckpointRestorer {
 			float[] positionVolume,
 			float[] velocities,
 			byte[] solidMask,
-			double[] markerMass,
+			long[] markerMassUnits,
 			int[] materialPaletteIndex,
 			int[] chemicalMixtureIndex,
 			byte[] indicator

@@ -295,7 +295,7 @@ final class FlipGranularCollision {
 			impulseZ += parcel.mass() * ((double) parcel.velocityZ() - nextVelocityZ[index]);
 			parcels.overwrite(index, new GranularParcelStore.Parcel(nextX[index], nextY[index], nextZ[index],
 					nextVelocityX[index], nextVelocityY[index], nextVelocityZ[index], parcel.solidVolumeSvq(),
-					parcel.mass(), parcel.materialHandle(), parcel.solidCompositionHandle(),
+					parcel.massUnits(), parcel.materialHandle(), parcel.solidCompositionHandle(),
 					nextContactAge[index], nextFlags[index], nextCeilMask[index]));
 		}
 		previewCount = 0;

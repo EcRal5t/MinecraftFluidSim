@@ -100,14 +100,14 @@ public final class FluidDomainStateAssertions {
 				context + ": grid changed");
 		require(expected.particleCount() == actual.particleCount(), context + ": marker count changed");
 		require(expected.totalVolume() == actual.totalVolume(), context + ": total volume changed");
-		require(Double.doubleToRawLongBits(expected.totalMass()) == Double.doubleToRawLongBits(actual.totalMass()),
+		require(expected.totalMassUnits() == actual.totalMassUnits(),
 				context + ": total mass changed");
 		require(expected.materials().equals(actual.materials()), context + ": material palette changed");
 		requireRawFloats(expected.copyPositionVolume(), actual.copyPositionVolume(), context + " position/volume");
 		requireRawFloats(expected.copyParticleVelocities(), actual.copyParticleVelocities(), context + " velocity");
 		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()),
 				context + ": collision micro mask changed");
-		requireRawDoubles(expected.copyParticleMass(), actual.copyParticleMass(), context + " marker mass");
+		require(java.util.Arrays.equals(expected.copyParticleMassUnits(), actual.copyParticleMassUnits()), context + " marker mass");
 		require(Arrays.equals(expected.copyMaterialPaletteIndex(), actual.copyMaterialPaletteIndex()),
 				context + ": material palette index changed");
 	}
@@ -126,7 +126,7 @@ public final class FluidDomainStateAssertions {
 		require(Arrays.equals(expected.copyIndicator(), actual.copyIndicator()), context + ": indicator column changed");
 		require(Arrays.equals(expected.copySpeciesTotals(), actual.copySpeciesTotals()),
 				context + ": species totals changed");
-		require(expected.residualLedgerBits() == actual.residualLedgerBits(),
+		require(expected.residualLedgerUnits() == actual.residualLedgerUnits(),
 				context + ": mass residual ledger changed");
 		require(expected.externalSource().groups().equals(actual.externalSource().groups()),
 				context + ": chemical source changed");
@@ -151,7 +151,7 @@ public final class FluidDomainStateAssertions {
 		require(expected.depositGroups().equals(actual.depositGroups()), context + ": deposit groups changed");
 		require(expected.totalSolidVolumeSvq() == actual.totalSolidVolumeSvq(),
 				context + ": granular total SVQ changed");
-		require(expected.totalMassBits() == actual.totalMassBits(), context + ": granular total mass changed");
+		require(expected.totalMassUnits() == actual.totalMassUnits(), context + ": granular total mass changed");
 		require(expected.externalSource().equals(actual.externalSource()), context + ": granular source changed");
 		require(expected.escapedSink().equals(actual.escapedSink()), context + ": granular sink changed");
 	}
@@ -185,9 +185,6 @@ public final class FluidDomainStateAssertions {
 				context + ": gas microbox ownership changed");
 		require(expected.externalSource().equals(actual.externalSource()), context + ": gas source changed");
 		require(expected.escapedSink().equals(actual.escapedSink()), context + ": gas sink changed");
-		require(expected.massRoundoff().equals(actual.massRoundoff()), context + ": gas mass roundoff changed");
-		require(expected.residualRoundoff().equals(actual.residualRoundoff()),
-				context + ": gas residual roundoff changed");
 	}
 
 	private static void compareThermal(FlipThermalParticleState expected, FlipThermalParticleState actual,

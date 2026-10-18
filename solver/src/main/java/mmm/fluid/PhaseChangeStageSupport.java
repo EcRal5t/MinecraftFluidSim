@@ -42,7 +42,7 @@ final class PhaseChangeStageSupport {
 		void removeParticle(int marker);
 		void spawnParticle(
 				int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle,
-				double mass, ChemicalMixtureRecord mixture
+				long massUnits, ChemicalMixtureRecord mixture
 		);
 		void ensureInventoryGrid();
 		void refreshGasTopology();
@@ -133,20 +133,20 @@ final class PhaseChangeStageSupport {
 					chemistry.commitTruncate(allocation.marker(), allocation.chemicalPlan());
 				}
 				state.particles().setVolume(allocation.marker(), allocation.newVolume());
-				state.particles().setMass(allocation.marker(), allocation.newMass());
+				state.particles().setMassUnits(allocation.marker(), allocation.newMassUnits());
 			}
 		}
 	}
 
 	void spawnParticle(
-			int cell, int slot, float volume, int materialHandle, double mass,
+			int cell, int slot, float volume, int materialHandle, long massUnits,
 			ChemicalMixtureRecord mixture
 	) {
 		int x = cell % state.sizeX();
 		int yz = cell / state.sizeX();
 		int y = yz % state.sizeY();
 		int z = yz / state.sizeY();
-		access.spawnParticle(x, y, z, slot, volume, materialHandle, mass, mixture);
+		access.spawnParticle(x, y, z, slot, volume, materialHandle, massUnits, mixture);
 	}
 
 	void commitPendingVolume(int cell, long signedSvq) {
@@ -155,31 +155,19 @@ final class PhaseChangeStageSupport {
 		state.pendingPhaseVolume().add(cell, delta);
 	}
 
-	/** Validates the actual stored SI mass change at the transferred mass scale. */
-	double representedMassTransfer(double beforeSolverMass, double afterSolverMass, double requestedKilograms) {
-		return representedPhysicalMassTransfer(state.unitScale().kilograms(beforeSolverMass),
-				state.unitScale().kilograms(afterSolverMass), requestedKilograms);
+	void representedMassTransfer(long beforeUnits, long afterUnits, long requestedUnits) {
+		representedPhysicalMassTransfer(beforeUnits, afterUnits, requestedUnits);
 	}
-
 	void representedGasMassTransfer(int node, mmm.fluid.air.GasInventory after,
-			String componentId, double requestedKg) {
+			String componentId, long requestedUnits) {
 		GasComponentAmount beforeComponent = gasState().network.inventory(node).component(componentId);
 		GasComponentAmount afterComponent = after.component(componentId);
-		representedPhysicalMassTransfer(beforeComponent == null ? 0.0 : beforeComponent.mass(),
-				afterComponent == null ? 0.0 : afterComponent.mass(), requestedKg);
+		representedPhysicalMassTransfer(beforeComponent == null ? 0L : beforeComponent.massUnits(),
+				afterComponent == null ? 0L : afterComponent.massUnits(), requestedUnits);
 	}
-
-	static double representedPhysicalMassTransfer(double beforeKilograms, double afterKilograms, double requestedKilograms) {
-		if (!Double.isFinite(beforeKilograms) || beforeKilograms < 0 || !Double.isFinite(afterKilograms)
-				|| afterKilograms < 0 || !Double.isFinite(requestedKilograms) || requestedKilograms == 0.0)
-			throw new IllegalArgumentException("Phase transfer mass is invalid");
-		SignedDyadic actual = SignedDyadic.of(afterKilograms).subtract(SignedDyadic.of(beforeKilograms));
-		SignedDyadic error = actual.subtract(SignedDyadic.of(requestedKilograms));
-		if (actual.signum() != (requestedKilograms > 0 ? 1 : -1)
-				|| (error.signum() < 0 ? error.negate() : error).compareTo(
-						SignedDyadic.of(massTolerance(Math.abs(requestedKilograms)))) > 0)
-			throw new PhaseCandidateUnavailableException("Phase transfer changed a different actual mass");
-		return actual.toDouble();
+	static void representedPhysicalMassTransfer(long beforeUnits, long afterUnits, long requestedUnits) {
+		if (beforeUnits < 0 || afterUnits < 0 || Math.subtractExact(afterUnits, beforeUnits) != requestedUnits)
+			throw new PhaseCandidateUnavailableException("Phase transfer mass counts do not close");
 	}
 
 	static double massTolerance(double mass) {
@@ -198,12 +186,16 @@ final class PhaseChangeStageSupport {
 	}
 
 	record PhaseCellInventory(
-			long lowerVolumeSvq, long upperVolumeSvq, double lowerMass, double upperMass,
-			long freezableUpperSvq, double freezableUpperMass
-	) { }
+			long lowerVolumeSvq, long upperVolumeSvq, long lowerMassUnits, long upperMassUnits,
+			long freezableUpperSvq, long freezableUpperMassUnits
+	) {
+		double lowerMass() { return mmm.units.Mass.kilograms(lowerMassUnits); }
+		double upperMass() { return mmm.units.Mass.kilograms(upperMassUnits); }
+		double freezableUpperMass() { return mmm.units.Mass.kilograms(freezableUpperMassUnits); }
+	}
 
 	record PhaseMarkerAllocation(
-			int marker, float newVolume, double newMass, boolean fullRemoval,
+			int marker, float newVolume, long newMassUnits, boolean fullRemoval,
 			ChemicalParcelStore.SplitPlan chemicalPlan
 	) { }
 
@@ -219,12 +211,11 @@ final class PhaseChangeStageSupport {
 	}
 
 	/** Exact species quanta plus the independently carried mass residual across a phase boundary. */
-	record PhaseComposition(Map<String, Long> amounts, double massResidual) {
-		static final PhaseComposition EMPTY = new PhaseComposition(Map.of(), 0.0);
+	record PhaseComposition(Map<String, Long> amounts, long massResidualUnits) {
+		static final PhaseComposition EMPTY = new PhaseComposition(Map.of(), 0L);
 
 		PhaseComposition {
-			if (amounts == null || amounts.size() > ChemicalLimits.MAX_SPECIES
-					|| !Double.isFinite(massResidual)) {
+			if (amounts == null || amounts.size() > ChemicalLimits.MAX_SPECIES) {
 				throw new IllegalArgumentException("Condensed phase composition is invalid");
 			}
 			TreeMap<String, Long> canonical = new TreeMap<>();
@@ -239,6 +230,7 @@ final class PhaseChangeStageSupport {
 			amounts = Map.copyOf(canonical);
 		}
 
+		double massResidual() { return mmm.units.Mass.kilograms(massResidualUnits); }
 		boolean isEmpty() { return amounts.isEmpty(); }
 
 		PhaseComposition plus(PhaseComposition other) {
@@ -246,7 +238,7 @@ final class PhaseChangeStageSupport {
 			for (Map.Entry<String, Long> entry : other.amounts.entrySet()) {
 				combined.merge(entry.getKey(), entry.getValue(), Math::addExact);
 			}
-			double residual = massResidual + other.massResidual;
+			long residual = Math.addExact(massResidualUnits, other.massResidualUnits);
 			if (!Double.isFinite(residual)) throw new ArithmeticException("Condensed phase residual overflow");
 			return combined.isEmpty() && residual == 0.0 ? EMPTY : new PhaseComposition(combined, residual);
 		}
@@ -261,11 +253,10 @@ final class PhaseChangeStageSupport {
 				if (result == 0L) remaining.remove(entry.getKey());
 				else remaining.put(entry.getKey(), result);
 			}
-			double residual = massResidual - other.massResidual;
+			long residual = Math.subtractExact(massResidualUnits, other.massResidualUnits);
 			if (!Double.isFinite(residual)) throw new ArithmeticException("Condensed phase residual overflow");
 			if (remaining.isEmpty()) {
-				if (Math.abs(residual) > massTolerance(
-						Math.max(Math.abs(massResidual), Math.abs(other.massResidual)))) {
+				if (residual != 0) {
 					throw new FluidDomain.ThermalPhaseBlockedException(
 							"Empty condensed phase retains a mass residual");
 				}
@@ -282,14 +273,14 @@ final class PhaseChangeStageSupport {
 				components.add(new CoherentPhaseStore.Component(entry.getKey(), entry.getValue()));
 			}
 			return new CoherentPhaseStore.Composition(
-					components, Double.doubleToRawLongBits(massResidual));
+					components, massResidualUnits);
 		}
 
 		ChemicalMixtureRecord toMixture(ChemicalRegistry registry) {
 			if (isEmpty()) throw new FluidDomain.ThermalPhaseBlockedException(
 					"Chemical melt produced an empty liquid parcel");
 			requireParcelCapacity();
-			return ChemicalMixtureRecord.fromStableAmounts(registry, amounts, massResidual);
+			return ChemicalMixtureRecord.fromStableAmounts(registry, amounts, massResidualUnits);
 		}
 
 		private void requireParcelCapacity() {
@@ -303,14 +294,14 @@ final class PhaseChangeStageSupport {
 
 		static PhaseComposition fromCoherent(CoherentPhaseStore.Composition composition) {
 			return composition == null ? EMPTY
-					: new PhaseComposition(composition.stableAmounts(), composition.massResidual());
+					: new PhaseComposition(composition.stableAmounts(), composition.massResidualUnits());
 		}
 
 		static PhaseComposition fromMixture(ChemicalMixtureRecord mixture, ChemicalRegistry registry) {
 			if (mixture == null || registry == null) {
 				throw new IllegalArgumentException("Liquid phase composition is missing");
 			}
-			return new PhaseComposition(mixture.stableAmounts(registry), mixture.massResidualKilograms());
+			return new PhaseComposition(mixture.stableAmounts(registry), mixture.massResidualUnits());
 		}
 
 		static PhaseComposition fromGas(GasComponentAmount component) {
@@ -319,7 +310,7 @@ final class PhaseChangeStageSupport {
 			for (GasComponentAmount.SpeciesAmount amount : component.species()) {
 				amounts.put(amount.speciesId(), amount.amountQuanta());
 			}
-			double residual = component.massResidual();
+			long residual = component.massResidualUnits();
 			return amounts.isEmpty() && residual == 0.0 ? EMPTY : new PhaseComposition(amounts, residual);
 		}
 
@@ -336,7 +327,7 @@ final class PhaseChangeStageSupport {
 	static final class PhaseCompositionBuilder {
 		private final ChemicalParcelStore chemistry;
 		private final TreeMap<String, Long> amounts = new TreeMap<>();
-		private double massResidual;
+		private long massResidualUnits;
 
 		PhaseCompositionBuilder(ChemicalParcelStore chemistry) {
 			if (chemistry == null) throw new IllegalArgumentException("Chemical phase state is missing");
@@ -348,13 +339,13 @@ final class PhaseChangeStageSupport {
 			for (Map.Entry<String, Long> entry : record.stableAmounts(chemistry.registry()).entrySet()) {
 				amounts.merge(entry.getKey(), entry.getValue(), Math::addExact);
 			}
-			massResidual += record.massResidualKilograms();
-			if (!Double.isFinite(massResidual)) throw new ArithmeticException("Condensed phase residual overflow");
+			massResidualUnits = Math.addExact(massResidualUnits, record.massResidualUnits());
+
 		}
 
 		PhaseComposition build() {
-			return amounts.isEmpty() && massResidual == 0.0
-					? PhaseComposition.EMPTY : new PhaseComposition(amounts, massResidual);
+			return amounts.isEmpty() && massResidualUnits == 0
+					? PhaseComposition.EMPTY : new PhaseComposition(amounts, massResidualUnits);
 		}
 	}
 

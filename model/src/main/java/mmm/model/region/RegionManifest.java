@@ -20,7 +20,7 @@ public record RegionManifest(
 		int totalMarkerCount,
 		long totalVolumeBits,
 		List<FluidMaterial> materialPalette,
-		long totalMassBits,
+		long totalMassUnits,
 		List<MaterialLedger> materialLedgers,
 		List<SectionDescriptor> sections,
 		List<RegionExtension> extensions,
@@ -29,7 +29,7 @@ public record RegionManifest(
 		List<String> speciesPalette,
 		List<FlipChemicalParticleState.StableMixture> chemicalMixtures,
 		long[] chemicalSpeciesTotals,
-		long chemicalResidualLedgerBits,
+		long chemicalResidualLedgerUnits,
 		long checksum
 ) {
 	public RegionManifest {
@@ -48,11 +48,13 @@ public record RegionManifest(
 		if (totalMarkerCount < 0 || totalMarkerCount > geometry.reservedMarkerCapacity() || sections.isEmpty()) {
 			throw new IllegalArgumentException("Invalid region manifest");
 		}
+		if (totalMassUnits < 0 || mmm.units.Mass.sum(sections.stream().mapToLong(SectionDescriptor::massUnits).toArray()) != totalMassUnits)
+			throw new IllegalArgumentException("Manifest mass counts do not close");
 		double totalVolume = Double.longBitsToDouble(totalVolumeBits);
 		if (!Double.isFinite(totalVolume) || totalVolume < 0.0) throw new IllegalArgumentException("Invalid total marker volume");
-		validateFeatureLedger(layout, geometry, totalMarkerCount, totalMassBits, materialPalette,
+		validateFeatureLedger(layout, geometry, totalMarkerCount, totalMassUnits, materialPalette,
 				materialLedgers, sections, registryFingerprint, quantaPerMol, speciesPalette,
-				chemicalMixtures, chemicalSpeciesTotals, chemicalResidualLedgerBits);
+				chemicalMixtures, chemicalSpeciesTotals, chemicalResidualLedgerUnits);
 	}
 
 	/** Flattened constructor used by assemblers and strict codecs at the adapter boundary. */
@@ -61,17 +63,17 @@ public record RegionManifest(
 			long networkGeneration, RegionGeometry.BlockPosition origin, int sizeX, int sizeY, int sizeZ,
 			FluidSolverConfig solverConfig, long reservedMarkerCapacity, RegionRuntimeIntent runtime,
 			RegionGeometry.ControllerFootprint footprint, int totalMarkerCount, long totalVolumeBits,
-			List<FluidMaterial> materialPalette, long totalMassBits, List<MaterialLedger> materialLedgers,
+			List<FluidMaterial> materialPalette, long totalMassUnits, List<MaterialLedger> materialLedgers,
 			List<SectionDescriptor> sections, List<RegionExtension> extensions, String registryFingerprint,
 			long quantaPerMol, List<String> speciesPalette,
 			List<FlipChemicalParticleState.StableMixture> chemicalMixtures, long[] chemicalSpeciesTotals,
-			long chemicalResidualLedgerBits, long checksum
+			long chemicalResidualLedgerUnits, long checksum
 	) {
 		this(layout, new RegionIdentity(regionId, dimensionId, checkpointGeneration, networkGeneration),
 				new RegionGeometry(origin, sizeX, sizeY, sizeZ, solverConfig, reservedMarkerCapacity, footprint),
-				runtime, totalMarkerCount, totalVolumeBits, materialPalette, totalMassBits, materialLedgers,
+				runtime, totalMarkerCount, totalVolumeBits, materialPalette, totalMassUnits, materialLedgers,
 				sections, extensions, registryFingerprint, quantaPerMol, speciesPalette, chemicalMixtures,
-				chemicalSpeciesTotals, chemicalResidualLedgerBits, checksum);
+				chemicalSpeciesTotals, chemicalResidualLedgerUnits, checksum);
 	}
 
 	/** Convenience constructor for the pure-water feature layout. */
@@ -84,7 +86,7 @@ public record RegionManifest(
 	) {
 		this(RegionStateLayout.PURE, regionId, dimensionId, checkpointGeneration, networkGeneration, origin,
 				sizeX, sizeY, sizeZ, solverConfig, reservedMarkerCapacity, runtime, footprint,
-				totalMarkerCount, totalVolumeBits, List.of(), 0L, List.of(), sections, extensions,
+				totalMarkerCount, totalVolumeBits, List.of(), mmm.units.Mass.sum(sections.stream().mapToLong(SectionDescriptor::massUnits).toArray()), List.of(), sections, extensions,
 				"", 0L, List.of(), List.of(), new long[0], 0L, checksum);
 	}
 
@@ -94,28 +96,27 @@ public record RegionManifest(
 			long networkGeneration, RegionGeometry.BlockPosition origin, int sizeX, int sizeY, int sizeZ,
 			FluidSolverConfig solverConfig, long reservedMarkerCapacity, RegionRuntimeIntent runtime,
 			RegionGeometry.ControllerFootprint footprint, int totalMarkerCount, long totalVolumeBits,
-			List<FluidMaterial> materialPalette, long totalMassBits, List<MaterialLedger> materialLedgers,
+			List<FluidMaterial> materialPalette, long totalMassUnits, List<MaterialLedger> materialLedgers,
 			List<SectionDescriptor> sections, List<RegionExtension> extensions, long checksum
 	) {
 		this(layout, regionId, dimensionId, checkpointGeneration, networkGeneration, origin, sizeX, sizeY, sizeZ,
 				solverConfig, reservedMarkerCapacity, runtime, footprint, totalMarkerCount, totalVolumeBits,
-				materialPalette, totalMassBits, materialLedgers, sections, extensions,
+				materialPalette, totalMassUnits, materialLedgers, sections, extensions,
 				"", 0L, List.of(), List.of(), new long[0], 0L, checksum);
 	}
 
 	private static void validateFeatureLedger(
-			RegionStateLayout layout, RegionGeometry geometry, int totalMarkerCount, long totalMassBits,
+			RegionStateLayout layout, RegionGeometry geometry, int totalMarkerCount, long totalMassUnits,
 			List<FluidMaterial> materialPalette, List<MaterialLedger> materialLedgers,
 			List<SectionDescriptor> sections, String registryFingerprint, long quantaPerMol,
 			List<String> speciesPalette, List<FlipChemicalParticleState.StableMixture> chemicalMixtures,
-			long[] chemicalSpeciesTotals, long chemicalResidualLedgerBits
+			long[] chemicalSpeciesTotals, long chemicalResidualLedgerUnits
 	) {
 		if (!layout.hasMaterials()) {
-			if (!materialPalette.isEmpty() || !materialLedgers.isEmpty() || totalMassBits != 0L
-					|| sections.stream().anyMatch(section -> section.massBits() != 0L)
+			if (!materialPalette.isEmpty() || !materialLedgers.isEmpty()
 					|| !registryFingerprint.isEmpty() || quantaPerMol != 0L || !speciesPalette.isEmpty()
 					|| !chemicalMixtures.isEmpty() || chemicalSpeciesTotals.length != 0
-					|| chemicalResidualLedgerBits != 0L) {
+					|| chemicalResidualLedgerUnits != 0L) {
 				throw new IllegalArgumentException("Pure region state cannot contain material state");
 			}
 			return;
@@ -128,8 +129,7 @@ public record RegionManifest(
 		if (materialLedgers.size() != materialPalette.size()) {
 			throw new IllegalArgumentException("Material palette and ledger counts disagree");
 		}
-		double totalMass = Double.longBitsToDouble(totalMassBits);
-		if (!Double.isFinite(totalMass) || totalMass < 0.0) throw new IllegalArgumentException("Invalid total marker mass");
+		if (totalMassUnits < 0) throw new IllegalArgumentException("Invalid total marker mass");
 		int ledgerMarkers = 0;
 		for (MaterialLedger ledger : materialLedgers) ledgerMarkers = Math.addExact(ledgerMarkers, ledger.markerCount());
 		if (ledgerMarkers != totalMarkerCount) throw new IllegalArgumentException("Material marker counts do not match manifest total");
@@ -139,7 +139,7 @@ public record RegionManifest(
 		if (!chemicalState) {
 			if (!registryFingerprint.isEmpty() || quantaPerMol != 0L || !speciesPalette.isEmpty()
 					|| !chemicalMixtures.isEmpty() || chemicalSpeciesTotals.length != 0
-					|| chemicalResidualLedgerBits != 0L) {
+					|| chemicalResidualLedgerUnits != 0L) {
 				throw new IllegalArgumentException("Non-chemical region state cannot contain chemical state");
 			}
 			return;
@@ -148,8 +148,7 @@ public record RegionManifest(
 				|| speciesPalette.isEmpty() || speciesPalette.size() > ChemicalLimits.MAX_SPECIES
 				|| chemicalSpeciesTotals.length != speciesPalette.size()
 				|| chemicalMixtures.size() > totalMarkerCount
-				|| totalMarkerCount > 0 && chemicalMixtures.isEmpty()
-				|| !Double.isFinite(Double.longBitsToDouble(chemicalResidualLedgerBits))) {
+				|| totalMarkerCount > 0 && chemicalMixtures.isEmpty()) {
 			throw new IllegalArgumentException("Invalid chemical region manifest");
 		}
 		long quanta = 0L;
@@ -180,8 +179,8 @@ public record RegionManifest(
 		if (this == other) return true;
 		if (!(other instanceof RegionManifest that)) return false;
 		return totalMarkerCount == that.totalMarkerCount && totalVolumeBits == that.totalVolumeBits
-				&& totalMassBits == that.totalMassBits && quantaPerMol == that.quantaPerMol
-				&& chemicalResidualLedgerBits == that.chemicalResidualLedgerBits && checksum == that.checksum
+				&& totalMassUnits == that.totalMassUnits && quantaPerMol == that.quantaPerMol
+				&& chemicalResidualLedgerUnits == that.chemicalResidualLedgerUnits && checksum == that.checksum
 				&& layout == that.layout && identity.equals(that.identity) && geometry.equals(that.geometry)
 				&& runtime.equals(that.runtime) && materialPalette.equals(that.materialPalette)
 				&& materialLedgers.equals(that.materialLedgers) && sections.equals(that.sections)
@@ -193,13 +192,13 @@ public record RegionManifest(
 	@Override
 	public int hashCode() {
 		int result = Objects.hash(layout, identity, geometry, runtime, totalMarkerCount, totalVolumeBits,
-				materialPalette, totalMassBits, materialLedgers, sections, extensions, registryFingerprint,
-				quantaPerMol, speciesPalette, chemicalMixtures, chemicalResidualLedgerBits, checksum);
+				materialPalette, totalMassUnits, materialLedgers, sections, extensions, registryFingerprint,
+				quantaPerMol, speciesPalette, chemicalMixtures, chemicalResidualLedgerUnits, checksum);
 		return 31 * result + Arrays.hashCode(chemicalSpeciesTotals);
 	}
 
 	public double totalVolume() { return Double.longBitsToDouble(totalVolumeBits); }
-	public double totalMass() { return Double.longBitsToDouble(totalMassBits); }
+	public double totalMass() { return mmm.units.Mass.kilograms(totalMassUnits); }
 	public boolean hasChemicalState() {
 		return layout.requiresChemistry() || layout.permitsOptionalChemistry() && !registryFingerprint.isEmpty();
 	}
@@ -210,26 +209,26 @@ public record RegionManifest(
 	public boolean hasThermalState() { return layout.requiresThermal(); }
 	private boolean hasExtension(String type) { return extensions.stream().anyMatch(value -> type.equals(value.type())); }
 
-	public record MaterialLedger(int markerCount, long volumeBits, long massBits) {
+	public record MaterialLedger(int markerCount, long volumeBits, long massUnits) {
 		public MaterialLedger {
 			if (markerCount < 0) throw new IllegalArgumentException("Negative material marker count");
-			double volume = Double.longBitsToDouble(volumeBits), mass = Double.longBitsToDouble(massBits);
-			if (!Double.isFinite(volume) || volume < 0.0 || !Double.isFinite(mass) || mass < 0.0) {
+			double volume = Double.longBitsToDouble(volumeBits);
+			if (!Double.isFinite(volume) || volume < 0.0 || massUnits < 0) {
 				throw new IllegalArgumentException("Invalid material ledger");
 			}
 		}
 		public double volume() { return Double.longBitsToDouble(volumeBits); }
-		public double mass() { return Double.longBitsToDouble(massBits); }
+		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
 	}
 
 	public record SectionDescriptor(
 			int sectionX, int sectionY, int sectionZ, int markerCount,
-			long volumeBits, long massBits, long checksum
+			long volumeBits, long massUnits, long checksum
 	) implements Comparable<SectionDescriptor> {
 		public SectionDescriptor {
 			if (markerCount < 0) throw new IllegalArgumentException("Negative marker count");
-			double volume = Double.longBitsToDouble(volumeBits), mass = Double.longBitsToDouble(massBits);
-			if (!Double.isFinite(volume) || volume < 0.0 || !Double.isFinite(mass) || mass < 0.0) {
+			double volume = Double.longBitsToDouble(volumeBits);
+			if (!Double.isFinite(volume) || volume < 0.0 || massUnits < 0) {
 				throw new IllegalArgumentException("Invalid section ledger");
 			}
 		}

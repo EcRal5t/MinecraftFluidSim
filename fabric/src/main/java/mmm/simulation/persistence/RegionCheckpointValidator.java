@@ -73,9 +73,9 @@ final class RegionCheckpointValidator {
 			validateSectionOwnership(section);
 			RegionManifest.SectionDescriptor descriptor = expected.get(section.key());
 			long volumeBits = Double.doubleToRawLongBits(sumVolumes(section.positionVolume()));
-			long massBits = manifest.layout().hasMaterials() ? Double.doubleToRawLongBits(sum(section.markerMass())) : 0L;
+			long massUnits = mmm.units.Mass.sum(section.markerMassUnits());
 			if (descriptor == null || descriptor.markerCount() != section.markerCount()
-					|| descriptor.volumeBits() != volumeBits || descriptor.massBits() != massBits
+					|| descriptor.volumeBits() != volumeBits || descriptor.massUnits() != massUnits
 					|| descriptor.checksum() != section.checksum()) {
 				throw new IOException("Section does not match its manifest descriptor");
 			}
@@ -264,7 +264,7 @@ final class RegionCheckpointValidator {
 		}
 		for (RegionSectionState section : sections) {
 			long[] sectionTotals = new long[manifest.speciesPalette().size()];
-			double sectionResidual = 0.0;
+			long sectionResidual = 0;
 			int[] ordinals = section.markerOrdinals(), mixtures = section.chemicalMixtureIndex();
 			for (int marker = 0; marker < ordinals.length; marker++) {
 				int ordinal = ordinals[marker], mixtureIndex = mixtures[marker];
@@ -274,7 +274,7 @@ final class RegionCheckpointValidator {
 				}
 				seen[ordinal] = true; mixtureByOrdinal[ordinal] = mixtureIndex;
 				FlipChemicalParticleState.StableMixture mixture = manifest.chemicalMixtures().get(mixtureIndex);
-				sectionResidual += Double.longBitsToDouble(mixture.massResidualBits());
+				sectionResidual = Math.addExact(sectionResidual, mixture.massResidualUnits());
 				for (FlipChemicalParticleState.Component component : mixture.components()) {
 					Integer species = speciesHandles.get(component.speciesId());
 					if (species == null) throw new IOException("Mixture references species outside stable palette");
@@ -282,23 +282,23 @@ final class RegionCheckpointValidator {
 				}
 			}
 			if (!Arrays.equals(sectionTotals, section.chemicalSpeciesTotals())
-					|| Double.doubleToRawLongBits(sectionResidual) != section.chemicalResidualLedgerBits()) {
+					|| sectionResidual != section.chemicalResidualLedgerUnits()) {
 				throw new IOException("Section chemical ledger mismatch");
 			}
 		}
 		long[] totals = new long[manifest.speciesPalette().size()];
-		double residual = 0.0;
+		long residual = 0;
 		for (int ordinal = 0; ordinal < count; ordinal++) {
 			if (!seen[ordinal]) throw new IOException("Missing chemical marker ordinal");
 			FlipChemicalParticleState.StableMixture mixture = manifest.chemicalMixtures().get(mixtureByOrdinal[ordinal]);
-			residual += Double.longBitsToDouble(mixture.massResidualBits());
+			residual = Math.addExact(residual, mixture.massResidualUnits());
 			for (FlipChemicalParticleState.Component component : mixture.components()) {
 				int species = speciesHandles.get(component.speciesId());
 				totals[species] = Math.addExact(totals[species], component.amountQuanta());
 			}
 		}
 		if (!Arrays.equals(totals, manifest.chemicalSpeciesTotals())
-				|| Double.doubleToRawLongBits(residual) != manifest.chemicalResidualLedgerBits()) {
+				|| residual != manifest.chemicalResidualLedgerUnits()) {
 			throw new IOException("Manifest chemical ledger mismatch");
 		}
 	}
@@ -331,13 +331,13 @@ final class RegionCheckpointValidator {
 		int materialCount = expected.materialPalette().size();
 		int[] activeCounts = new int[materialCount], depositCounts = new int[materialCount];
 		long[] activeSvq = new long[materialCount], depositSvq = new long[materialCount];
-		double[] activeMass = new double[materialCount], depositMass = new double[materialCount];
+		long[] activeMass = new long[materialCount], depositMass = new long[materialCount];
 		for (RegionSectionState section : sections) {
 			GranularRegionStateCodec.SectionData data = codec.decodeSection(
 					requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
 					expected.activeBudget(), expected.depositGroupBudget());
 			long sectionActiveSvq = 0L, sectionDepositSvq = 0L;
-			double sectionActiveMass = 0.0, sectionDepositMass = 0.0;
+			long sectionActiveMass = 0, sectionDepositMass = 0;
 			int depositCells = 0, previousCell = -1;
 			for (GranularRegionStateCodec.ActiveEntry entry : data.active()) {
 				if (entry.ordinal() < 0 || entry.ordinal() >= active.length || seenActive[entry.ordinal()]) {
@@ -348,7 +348,7 @@ final class RegionCheckpointValidator {
 				int material = entry.parcel().materialPaletteIndex();
 				if (material < 0 || material >= materialCount) throw new IOException("Granular active material is outside palette");
 				sectionActiveSvq = Math.addExact(sectionActiveSvq, entry.parcel().solidVolumeSvq());
-				sectionActiveMass += entry.parcel().mass();
+				sectionActiveMass = Math.addExact(sectionActiveMass, entry.parcel().massUnits());
 			}
 			GranularStateSnapshot.DepositGroup previousGroup = null;
 			for (GranularStateSnapshot.DepositGroup group : data.deposits()) {
@@ -363,15 +363,15 @@ final class RegionCheckpointValidator {
 				int material = group.materialPaletteIndex();
 				if (material < 0 || material >= materialCount) throw new IOException("Granular deposit material is outside palette");
 				sectionDepositSvq = Math.addExact(sectionDepositSvq, group.solidVolumeSvq());
-				sectionDepositMass += group.mass();
+				sectionDepositMass = Math.addExact(sectionDepositMass, group.massUnits());
 				if (group.cell() != previousCell) { depositCells++; previousCell = group.cell(); }
 			}
 			GranularRegionStateCodec.SectionLedger ledger = sectionLedgers.remove(section.key());
 			if (ledger == null || ledger.activeCount() != data.active().size()
 					|| ledger.depositGroupCount() != data.deposits().size() || ledger.depositCellCount() != depositCells
 					|| ledger.activeSvq() != sectionActiveSvq || ledger.depositSvq() != sectionDepositSvq
-					|| ledger.activeMassBits() != Double.doubleToRawLongBits(sectionActiveMass)
-					|| ledger.depositMassBits() != Double.doubleToRawLongBits(sectionDepositMass)) {
+					|| ledger.activeMassUnits() != sectionActiveMass
+					|| ledger.depositMassUnits() != sectionDepositMass) {
 				throw new IOException("Granular section does not match its ledger");
 			}
 		}
@@ -383,31 +383,31 @@ final class RegionCheckpointValidator {
 		for (GranularStateSnapshot.ActiveParcel parcel : active) {
 			int material = parcel.materialPaletteIndex(); activeCounts[material]++;
 			activeSvq[material] = Math.addExact(activeSvq[material], parcel.solidVolumeSvq());
-			activeMass[material] += parcel.mass();
+			activeMass[material] = Math.addExact(activeMass[material], parcel.massUnits());
 		}
 		for (GranularStateSnapshot.DepositGroup group : deposits) {
 			int material = group.materialPaletteIndex(); depositCounts[material]++;
 			depositSvq[material] = Math.addExact(depositSvq[material], group.solidVolumeSvq());
-			depositMass[material] += group.mass();
+			depositMass[material] = Math.addExact(depositMass[material], group.massUnits());
 		}
 		long totalActiveSvq = 0L, totalDepositSvq = 0L;
 		for (int material = 0; material < materialCount; material++) {
 			GranularRegionStateCodec.MaterialLedger ledger = expected.materialLedgers().get(material);
 			if (ledger.activeCount() != activeCounts[material] || ledger.activeSvq() != activeSvq[material]
-					|| ledger.activeMassBits() != Double.doubleToRawLongBits(activeMass[material])
+					|| ledger.activeMassUnits() != activeMass[material]
 					|| ledger.depositGroupCount() != depositCounts[material] || ledger.depositSvq() != depositSvq[material]
-					|| ledger.depositMassBits() != Double.doubleToRawLongBits(depositMass[material])) {
+					|| ledger.depositMassUnits() != depositMass[material]) {
 				throw new IOException("Granular material ledger mismatch at palette index " + material);
 			}
 			totalActiveSvq = Math.addExact(totalActiveSvq, activeSvq[material]);
 			totalDepositSvq = Math.addExact(totalDepositSvq, depositSvq[material]);
 		}
-		double totalActiveMass = 0.0, totalDepositMass = 0.0;
-		for (GranularStateSnapshot.ActiveParcel parcel : active) totalActiveMass += parcel.mass();
-		for (GranularStateSnapshot.DepositGroup group : deposits) totalDepositMass += group.mass();
+		long totalActiveMass = 0, totalDepositMass = 0;
+		for (GranularStateSnapshot.ActiveParcel parcel : active) totalActiveMass = Math.addExact(totalActiveMass, parcel.massUnits());
+		for (GranularStateSnapshot.DepositGroup group : deposits) totalDepositMass = Math.addExact(totalDepositMass, group.massUnits());
 		if (expected.activeSvq() != totalActiveSvq || expected.depositSvq() != totalDepositSvq
-				|| expected.activeMassBits() != Double.doubleToRawLongBits(totalActiveMass)
-				|| expected.depositMassBits() != Double.doubleToRawLongBits(totalDepositMass)) {
+				|| expected.activeMassUnits() != totalActiveMass
+				|| expected.depositMassUnits() != totalDepositMass) {
 			throw new IOException("Granular manifest total ledger mismatch");
 		}
 		try {
@@ -415,7 +415,7 @@ final class RegionCheckpointValidator {
 					expected.chemicalRegistryFingerprint(), expected.materialPalette(), expected.solidCompositions(),
 					expected.solidSpeciesTotals(), Arrays.asList(active), deposits,
 					Math.addExact(totalActiveSvq, totalDepositSvq),
-					GranularStateSnapshot.canonicalTotalMassBits(Arrays.asList(active), deposits),
+					GranularStateSnapshot.canonicalTotalMassUnits(Arrays.asList(active), deposits),
 					expected.externalSource(), expected.escapedSink());
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid granular region state: " + invalid.getMessage(), invalid);
@@ -424,13 +424,13 @@ final class RegionCheckpointValidator {
 
 	private void validateMaterialLedgers() throws IOException {
 		int count = manifest.totalMarkerCount(), paletteSize = manifest.materialPalette().size();
-		double[] volumesByOrdinal = new double[count], massByOrdinal = new double[count];
+		double[] volumesByOrdinal = new double[count]; long[] massByOrdinal = new long[count];
 		int[] materialByOrdinal = new int[count];
 		boolean[] seen = new boolean[count];
 		for (RegionSectionState section : sections) {
 			int[] ordinals = section.markerOrdinals(), materials = section.materialPaletteIndex();
 			float[] positionVolume = section.positionVolume();
-			double[] mass = section.markerMass();
+			long[] mass = section.markerMassUnits();
 			for (int marker = 0; marker < ordinals.length; marker++) {
 				int ordinal = ordinals[marker], material = materials[marker];
 				if (ordinal < 0 || ordinal >= count || seen[ordinal]) throw new IOException("Duplicate or invalid marker ordinal");
@@ -442,28 +442,28 @@ final class RegionCheckpointValidator {
 			}
 		}
 		int[] markerCounts = new int[paletteSize];
-		SignedDyadic[] volumes = new SignedDyadic[paletteSize], masses = new SignedDyadic[paletteSize];
+		SignedDyadic[] volumes = new SignedDyadic[paletteSize]; long[] masses = new long[paletteSize];
 		java.util.Arrays.fill(volumes, SignedDyadic.ZERO);
-		java.util.Arrays.fill(masses, SignedDyadic.ZERO);
-		SignedDyadic totalVolume = SignedDyadic.ZERO, totalMass = SignedDyadic.ZERO;
+
+		SignedDyadic totalVolume = SignedDyadic.ZERO; long totalMass = 0;
 		for (int ordinal = 0; ordinal < count; ordinal++) {
 			if (!seen[ordinal]) throw new IOException("Missing marker ordinal");
 			int material = materialByOrdinal[ordinal];
 			markerCounts[material]++;
 			volumes[material] = volumes[material].add(SignedDyadic.of(volumesByOrdinal[ordinal]));
-			masses[material] = masses[material].add(SignedDyadic.of(massByOrdinal[ordinal]));
+			masses[material] = Math.addExact(masses[material], massByOrdinal[ordinal]);
 			totalVolume = totalVolume.add(SignedDyadic.of(volumesByOrdinal[ordinal]));
-			totalMass = totalMass.add(SignedDyadic.of(massByOrdinal[ordinal]));
+			totalMass = Math.addExact(totalMass, massByOrdinal[ordinal]);
 		}
 		if (Double.doubleToRawLongBits(totalVolume.toDouble()) != manifest.totalVolumeBits()
-				|| Double.doubleToRawLongBits(totalMass.toDouble()) != manifest.totalMassBits()) {
+				|| totalMass != manifest.totalMassUnits()) {
 			throw new IOException("Material manifest total ledger mismatch");
 		}
 		for (int material = 0; material < paletteSize; material++) {
 			RegionManifest.MaterialLedger expected = manifest.materialLedgers().get(material);
 			if (expected.markerCount() != markerCounts[material]
 					|| expected.volumeBits() != Double.doubleToRawLongBits(volumes[material].toDouble())
-					|| expected.massBits() != Double.doubleToRawLongBits(masses[material].toDouble())) {
+					|| expected.massUnits() != masses[material]) {
 				throw new IOException("Material marker ledger mismatch at palette index " + material);
 			}
 		}

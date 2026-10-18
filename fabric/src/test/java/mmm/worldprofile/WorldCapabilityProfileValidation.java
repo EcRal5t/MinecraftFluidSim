@@ -49,7 +49,7 @@ public final class WorldCapabilityProfileValidation {
 		}
 		require(first.aggregateFingerprint().equals("921c99a7f2b80662e8f91038f3f929d967fe9c9ca773f2d609536c7c754f5c21"),
 				"full-default aggregate fingerprint drifted from the pinned canonical form");
-		require(first.profileFingerprint().equals("2836a072eacb089651ae9a7154629f1334ef8f555949712b38c7fbcda256a1e0"),
+		require(first.profileFingerprint().equals("f5c963fe881960940fb188d815eab2477b41e5f9849919b7a35ae679a3ed4d79"),
 				"full-default profile fingerprint drifted from the pinned canonical form: "
 						+ first.profileFingerprint());
 		System.out.println("full-default aggregate=" + first.aggregateFingerprint()

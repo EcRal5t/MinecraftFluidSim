@@ -16,6 +16,9 @@ public record SolverUnitScale(double cubicMetersPerNormalizedVolume) {
 		return new SolverUnitScale(h * h * h);
 	}
 
+	public long massUnitsForNormalized(double normalizedMass) { return Mass.fromKilograms(kilograms(normalizedMass)); }
+	public double normalizedMass(long massUnits) { return solverMass(Mass.kilograms(massUnits)); }
+
 	public double kilograms(double solverMass) {
 		double result = solverMass * cubicMetersPerNormalizedVolume;
 		if (!(Double.isFinite(result) && result >= 0.0)) {

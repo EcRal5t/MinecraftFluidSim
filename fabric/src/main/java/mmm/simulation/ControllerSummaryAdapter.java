@@ -150,7 +150,7 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 				: ControllerSummary.TemperatureRange.available(minimumTemperature, maximumTemperature);
 		return new ControllerSummary.Inventory(true,
 				domain.physicalVolumeCubicMetres(domain.totalVolumeExact()),
-				domain.physicalMassKilograms(domain.totalMass()), domain.totalChemicalSpeciesQuanta(),
+				mmm.units.Mass.kilograms(domain.totalMassUnits()), domain.totalChemicalSpeciesQuanta(),
 				domain.totalGranularSolidVolumeSvq(), domain.totalGranularMass(),
 				domain.totalCoherentSolidVolumeSvq(), domain.totalCoherentMass(), gasNanos, gasMass,
 				domain.hasThermalState(), totalInternalEnergy, temperatureRange);

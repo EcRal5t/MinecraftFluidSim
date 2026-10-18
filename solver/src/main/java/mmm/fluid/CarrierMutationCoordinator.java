@@ -23,7 +23,7 @@ final class CarrierMutationCoordinator {
 	int appendMarker(
 			CarrierMutationPlan plan, int cell,
 			float positionX, float positionY, float positionZ,
-			float amount, int materialHandle, double mass,
+			float amount, int materialHandle, long massUnits,
 			ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal
 	) {
 		verify(plan, CarrierMutationPlan.Kind.APPEND);
@@ -36,7 +36,7 @@ final class CarrierMutationCoordinator {
 		domain.particles.setVelocityY(marker, 0.0F);
 		domain.particles.setVelocityZ(marker, 0.0F);
 		domain.particles.setVolume(marker, amount);
-		domain.particles.setMass(marker, mass);
+		domain.particles.setMassUnits(marker, massUnits);
 		domain.particles.setMaterialHandle(marker, materialHandle);
 		domain.particles.setPhaseLabel(marker,
 				domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(materialHandle));
@@ -44,7 +44,7 @@ final class CarrierMutationCoordinator {
 			if (chemicalMixture == null) {
 				domain.chemicalParcels.assignDefault(marker,
 						domain.materialRegistry.material(materialHandle).id(), amount,
-						domain.config.cellSize(), mass, false);
+						domain.config.cellSize(), massUnits, false);
 			} else {
 				domain.chemicalParcels.assign(marker, chemicalMixture, indicator);
 			}
@@ -90,7 +90,7 @@ final class CarrierMutationCoordinator {
 		int firstOrdinal = domain.particles.count();
 		for (var piece : candidate.pieces) appendMarker(
 				CarrierMutationPlan.append(domain.carrierMutationRevision(), domain.particles.count()), candidate.cell,
-				piece.x(), piece.y(), piece.z(), piece.volume(), 0, piece.mass(), piece.mixture(), false, false);
+				piece.x(), piece.y(), piece.z(), piece.volume(), 0, piece.massUnits(), piece.mixture(), false, false);
 		if (domain.chemicalParcels != null) {
 			domain.chemicalParcels.commitAuditExchange(candidate.chemistryAudit);
 		}
@@ -144,7 +144,7 @@ final class CarrierMutationCoordinator {
 				domain.particles.setPositionX(ordinal, (float) ((x + 0.5 + markers.offset[0][ordinal]) * h));
 				domain.particles.setPositionY(ordinal, (float) ((y + 0.5 + markers.offset[1][ordinal]) * h));
 				domain.particles.setPositionZ(ordinal, (float) ((z + 0.5 + markers.offset[2][ordinal]) * h));
-				domain.particles.setVolume(ordinal, markers.volume[ordinal]); domain.particles.setMass(ordinal, markers.mass[ordinal]);
+				domain.particles.setVolume(ordinal, markers.volume[ordinal]); domain.particles.setMassUnits(ordinal, markers.massUnits[ordinal]);
 				domain.particles.setVelocityX(ordinal, (float) markers.velocity[0][ordinal]);
 				domain.particles.setVelocityY(ordinal, (float) markers.velocity[1][ordinal]);
 				domain.particles.setVelocityZ(ordinal, (float) markers.velocity[2][ordinal]);

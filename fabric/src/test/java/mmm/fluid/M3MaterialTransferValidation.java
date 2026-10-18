@@ -37,17 +37,17 @@ final class M3MaterialTransferValidation {
 	private static void validatePartialExtractionMassResolution() {
 		FluidDomain domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(
 				1, 1_000, 0, 0.05F, 100, 1e-5F, 0.45F, 0.002F, 0.8F), 216);
-		domain.setVolume(1, 1, 1, 0.125F);
+		domain.restoreParticleState(new FlipParticleState(3,3,3,1,1,.125F, new float[]{1.5F,1.5F,1.5F,.125F},new float[3],new long[]{mmm.units.Mass.fromKilograms(125)},new byte[27]));
 		domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
-		domain.particles.setMass(0, Double.MIN_VALUE);
+		domain.particles.setMassUnits(0, 1L);
 		check(!domain.tryExtractExactMixture(1, 1, 1, 0.0625F, 0).transferred()
-				&& domain.particles.volume(0) == 0.125F && domain.particles.mass(0) == Double.MIN_VALUE,
+				&& domain.particles.volume(0) == 0.125F && domain.particles.massUnits(0) == 1L,
 				"partial extraction cannot leave positive volume with zero mass");
-		domain.particles.setMass(0, 4 * Double.MIN_VALUE);
+		domain.particles.setMassUnits(0, 4L);
 		var transfer = domain.tryExtractExactMixture(1, 1, 1, 0.0625F, 0);
 		check(transfer.transferred() && domain.particles.volume(0) == 0.0625F
-				&& domain.particles.mass(0) == 2 * Double.MIN_VALUE
-				&& transfer.portions().getFirst().mass() == 2 * Double.MIN_VALUE,
+				&& domain.particles.massUnits(0) == 2L
+				&& transfer.portions().getFirst().massUnits() == 2L,
 				"representable subnormal partial extraction must preserve both masses");
 	}
 
@@ -88,8 +88,8 @@ final class M3MaterialTransferValidation {
 		expectIllegalState(restored::exportParticleState);
 		expectIllegal(() -> new FlipMaterialParticleState(
 				handoff.sizeX(), handoff.sizeY(), handoff.sizeZ(), handoff.cellSize(), handoff.particleCount(),
-				handoff.totalVolume(), handoff.totalMass() + 1.0, handoff.materials(), handoff.copyPositionVolume(),
-				handoff.copyParticleVelocities(), handoff.copySolidMask(), handoff.copyParticleMass(),
+				handoff.totalVolume(), mmm.units.SolverUnitScale.forCellSize(handoff.cellSize()).massUnitsForNormalized(handoff.totalMass() + 1.0), handoff.materials(), handoff.copyPositionVolume(),
+				handoff.copyParticleVelocities(), handoff.copySolidMask(), handoff.copyParticleMassUnits(),
 				handoff.copyMaterialPaletteIndex()));
 	}
 
@@ -109,7 +109,7 @@ final class M3MaterialTransferValidation {
 		}
 		domain.restoreParticleState(new FlipParticleState(
 				domain.sizeX(), domain.sizeY(), domain.sizeZ(), config.cellSize(), initial.particleCount(),
-				initial.totalVolume(), positionVolume, velocity, initial.copySolidMask()
+				initial.totalVolume(), positionVolume, velocity, mmm.units.Mass.createLiquid(config.cellSize(), 1000.0, positionVolume), initial.copySolidMask()
 		));
 		return domain;
 	}

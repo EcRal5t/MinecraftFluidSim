@@ -25,7 +25,7 @@ public record WorldCapabilityProfile(
 		String profileFingerprint) {
 
 	public static final String SCHEMA = "mmm:world-capability-profile";
-	public static final String UNIT_IDENTITY = "mmm:canonical-units";
+	public static final String UNIT_IDENTITY = "mmm:canonical-units;" + mmm.units.Mass.ENCODING;
 	private static final Set<String> LAYOUT_IDS = Set.of("pure", "material", "chemical", "granular", "thermal");
 	private static final Comparator<WorldCapability> CANONICAL_ORDER = Comparator.comparing(WorldCapability::stableId);
 

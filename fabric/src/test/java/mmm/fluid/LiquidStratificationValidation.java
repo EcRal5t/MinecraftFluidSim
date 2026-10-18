@@ -235,7 +235,7 @@ final class LiquidStratificationValidation {
 		seed.bindChemistry(CHEMISTRY);
 		var original = seed.exportMaterialParticleState();
 		float[] positions = original.copyPositionVolume();
-		double[] mass = original.copyParticleMass();
+		long[] mass = original.copyParticleMassUnits();
 		var mixtures = new ArrayList<ChemicalMixtureRecord>();
 		for (int marker = 0; marker < seed.particleCount(); marker++) {
 			int x = (int) (positions[4 * marker] / 0.5), y = (int) (positions[4 * marker + 1] / 0.5);
@@ -248,11 +248,11 @@ final class LiquidStratificationValidation {
 				amounts.merge(BuiltinChemicalDefinitions.NA_PLUS, salt, Math::addExact);
 				amounts.merge(BuiltinChemicalDefinitions.CL_MINUS, salt, Math::addExact);
 			}
-			var mixture = ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY, amounts, initial.massResidualKilograms());
+			var mixture = ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY, amounts, initial.massResidualUnits());
 			mixtures.add(mixture);
-			mass[marker] = seed.unitScale.solverMass(mixture.massKilograms(CHEMISTRY));
+			mass[marker] = mixture.massUnits(CHEMISTRY);
 		}
-		double total = mmm.units.SignedDyadic.sum(mass).toDouble();
+		long total = mmm.units.Mass.sum(mass);
 		var materials = new FlipMaterialParticleState(6, 6, 4, 0.5F, seed.particleCount(), original.totalVolume(), total,
 				original.materials(), positions, original.copyParticleVelocities(), original.copySolidMask(), mass,
 				original.copyMaterialPaletteIndex());

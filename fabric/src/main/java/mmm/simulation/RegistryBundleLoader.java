@@ -124,16 +124,16 @@ public final class RegistryBundleLoader {
 			registry.speciesOffset(liquidHost, pair.speciesId());
 			double mappedGasKilograms = component.standardDensityKgPerCubicMeter()
 					* AirNetwork.cubicMeters(pair.gasStandardVolumeNanosPerBatch());
-			if (Double.doubleToRawLongBits(mappedGasKilograms)
-					!= Double.doubleToRawLongBits(pair.gasKilogramsPerBatch())) {
+			if (mmm.units.Mass.fromKilograms(mappedGasKilograms)
+					!= mmm.units.Mass.fromKilograms(pair.gasKilogramsPerBatch())) {
 				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()
 						+ " gas nanos and kilograms do not close at the gas standard state");
 			}
 			double mappedLiquidKilograms = chemicalRegistry.species(
 					chemicalRegistry.speciesHandle(pair.speciesId())).molarMassKgPerMol()
 					.multiply(pair.liquidQuantaPerBatch()).divide(ChemicalLimits.QUANTA_PER_MOL).toDouble();
-			if (Double.doubleToRawLongBits(mappedLiquidKilograms)
-					!= Double.doubleToRawLongBits(pair.liquidKilogramsPerBatch())) {
+			if (mmm.units.Mass.fromKilograms(mappedLiquidKilograms)
+					!= mmm.units.Mass.fromKilograms(pair.liquidKilogramsPerBatch())) {
 				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()
 						+ " liquid quanta and kilograms do not close against the chemical species mass");
 			}

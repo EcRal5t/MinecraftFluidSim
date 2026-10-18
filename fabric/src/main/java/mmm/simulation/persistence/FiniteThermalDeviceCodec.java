@@ -32,6 +32,7 @@ final class FiniteThermalDeviceCodec {
 		try (DataOutputStream output = new DataOutputStream(bytes)) {
 			output.writeInt(MAGIC);
 			output.writeInt(FORMAT);
+			output.writeUTF(mmm.units.Mass.ENCODING);
 			output.writeUTF(inventory.thermalRegistryFingerprint());
 			output.writeInt(inventory.devices().size());
 			writeAudit(output, inventory.audit());
@@ -42,7 +43,7 @@ final class FiniteThermalDeviceCodec {
 				output.writeUTF(device.deviceTypeId());
 				output.writeLong(body.generation());
 				output.writeUTF(body.thermalMaterialId());
-				output.writeLong(Double.doubleToRawLongBits(body.massKilograms()));
+				output.writeLong(body.massUnits());
 				output.writeLong(Double.doubleToRawLongBits(body.internalEnergyJ()));
 			}
 		}
@@ -62,6 +63,7 @@ final class FiniteThermalDeviceCodec {
 			if (input.readInt() != MAGIC || input.readInt() != FORMAT) {
 				throw new IOException("Unknown finite thermal device payload");
 			}
+			if (!mmm.units.Mass.ENCODING.equals(input.readUTF())) throw new IOException("Unsupported device mass encoding");
 			String fingerprint = input.readUTF();
 			int count = input.readInt();
 			if (count <= 0 || count > ThermalLimits.MAX_FINITE_DEVICES_PER_REGION) {
@@ -75,7 +77,7 @@ final class FiniteThermalDeviceCodec {
 				String deviceTypeId = input.readUTF();
 				long generation = input.readLong();
 				String materialId = input.readUTF();
-				double mass = Double.longBitsToDouble(input.readLong());
+				long mass = input.readLong();
 				double energy = Double.longBitsToDouble(input.readLong());
 				devices.add(new FiniteThermalDeviceState(providerId, objectId, deviceTypeId,
 						new FiniteThermalBodyState(generation, fingerprint, materialId, mass, energy)));

@@ -66,7 +66,7 @@ final class GasTopologyCoordinator {
 				throw new IllegalArgumentException("Restored gas topology key mismatch");
 		AirNetwork restored = new AirNetwork(registry);
 		restored.restoreNodes(volumes(frame), state.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
-				state.externalSource(), state.escapedSink(), state.massRoundoff(), state.residualRoundoff());
+				state.externalSource(), state.escapedSink());
 		for (var edge : frame.topology().connections())
 			restored.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.area(), 0.65);
 		domain.gasState.network = restored; domain.gasState.frame = frame;

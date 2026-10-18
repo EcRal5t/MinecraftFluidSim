@@ -46,32 +46,21 @@ final class CellRemapInventoryAudit {
 
 	private static SignedDyadic massAndEnergy(FluidDomain domain, CellRemapMarkerColumns markers, SignedDyadic dissipatedEnergy) {
 		int materialCount = domain.materialRegistry == null ? 1 : domain.materialRegistry.materials().size();
-		double[][] before = new double[materialCount][], after = new double[materialCount][];
-		int[] beforeCount = new int[materialCount], afterCount = new int[materialCount];
-		double[] rounding = new double[materialCount];
+		long[] before = new long[materialCount], after = new long[materialCount];
 		double[] energyBefore = domain.thermalState == null ? null : new double[domain.particles.count()];
 		double[] energyAfter = domain.thermalState == null ? null : markers.energy;
 		double energyRounding = 0;
 		for (int p = 0; p < domain.particles.count(); p++) {
-			int material = domain.particles.materialHandle(p); double mass = domain.particles.mass(p);
-			if (before[material] == null) before[material] = new double[domain.particles.count()];
-			before[material][beforeCount[material]++] = mass; rounding[material] += Math.ulp(mass);
+			int material = domain.particles.materialHandle(p);
+			before[material] = Math.addExact(before[material], domain.particles.massUnits(p));
 			if (energyBefore != null) energyBefore[p] = domain.thermalState.liquidInternalEnergy(p);
 		}
 		for (int p = 0; p < markers.size(); p++) {
 			int material = markers.material[p];
-			if (after[material] == null) after[material] = new double[markers.size()];
-			after[material][afterCount[material]++] = markers.mass[p]; rounding[material] += Math.ulp(markers.mass[p]);
+			after[material] = Math.addExact(after[material], markers.massUnits[p]);
 			if (energyAfter != null) energyRounding += Math.ulp(markers.energy[p]);
 		}
-		for (int material = 0; material < materialCount; material++) {
-			if ((before[material] == null) != (after[material] == null)) throw new IllegalStateException("Cell remap changed its material inventory");
-			if (before[material] == null) continue;
-			SignedDyadic difference = SignedDyadic.sum(after[material], afterCount[material])
-					.subtract(SignedDyadic.sum(before[material], beforeCount[material]));
-			if (Math.abs(difference.toDouble()) > rounding[material])
-				throw new IllegalStateException("Cell remap changed material mass beyond binary64 storage roundoff");
-		}
+		if (!Arrays.equals(before, after)) throw new IllegalStateException("Cell remap changed material mass counts");
 		SignedDyadic difference = energyBefore == null ? SignedDyadic.ZERO : SignedDyadic.sum(energyAfter).subtract(SignedDyadic.sum(energyBefore)).subtract(dissipatedEnergy);
 		if (Math.abs(difference.toDouble()) > energyRounding)
 			throw new IllegalStateException("Cell remap changed heat inventory beyond binary64 storage roundoff");

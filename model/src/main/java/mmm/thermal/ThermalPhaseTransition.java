@@ -54,6 +54,7 @@ public record ThermalPhaseTransition(
 		if (massKgPerBatch == null || massKgPerBatch.signum() <= 0) {
 			throw new IllegalArgumentException("Thermal transition mass batch must be positive");
 		}
+		mmm.units.Mass.exactUnits(massKgPerBatch.numerator(), massKgPerBatch.denominator());
 		if (interfaceRequirement == null) throw new IllegalArgumentException("Thermal transition interface is missing");
 		if (equilibriumCurve == null || equilibriumCurve.size() < 2
 				|| equilibriumCurve.size() > ThermalLimits.MAX_EQUILIBRIUM_CURVE_POINTS) {

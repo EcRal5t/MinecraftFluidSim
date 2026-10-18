@@ -116,7 +116,7 @@ final class ThermalRegionStateCodec {
 			out.writeInt(data.coherentGroups().size());
 			for (CoherentEntry group : data.coherentGroups()) {
 				out.writeInt(group.cell()); out.writeUTF(group.phaseId()); out.writeLong(group.occupiedVolumeSvq());
-				out.writeLong(group.massBits()); writeComposition(out, group.composition());
+				out.writeLong(group.massUnits()); writeComposition(out, group.composition());
 				out.writeLong(group.internalEnergyBits());
 			}
 			writeDyadic(out, data.energy());
@@ -222,7 +222,7 @@ final class ThermalRegionStateCodec {
 	) throws IOException {
 		out.writeBoolean(composition != null);
 		if (composition == null) return;
-		out.writeLong(composition.massResidualBits());
+		out.writeLong(composition.massResidualUnits());
 		out.writeInt(composition.components().size());
 		for (CoherentPhaseStore.Component component : composition.components()) {
 			out.writeUTF(component.speciesId()); out.writeLong(component.amountQuanta());
@@ -230,7 +230,7 @@ final class ThermalRegionStateCodec {
 	}
 	private static CoherentPhaseStore.Composition readComposition(DataInputStream input) throws IOException {
 		if (!input.readBoolean()) return null;
-		long residualBits = input.readLong();
+		long residualUnits = input.readLong();
 		int count = count(input.readInt(), mmm.chemistry.ChemicalLimits.MAX_SPECIES_PER_PARCEL,
 				"coherent composition components");
 		if (count == 0) throw new IOException("Empty coherent composition");
@@ -238,7 +238,7 @@ final class ThermalRegionStateCodec {
 		for (int index = 0; index < count; index++) {
 			components.add(new CoherentPhaseStore.Component(input.readUTF(), input.readLong()));
 		}
-		return new CoherentPhaseStore.Composition(components, residualBits);
+		return new CoherentPhaseStore.Composition(components, residualUnits);
 	}
 	private static ThermalAuditLedger readAudit(DataInputStream input) throws IOException {
 		return new ThermalAuditLedger(readDyadic(input), readDyadic(input), readDyadic(input),
@@ -319,7 +319,7 @@ final class ThermalRegionStateCodec {
 	}
 
 	record CoherentEntry(
-			int cell, String phaseId, long occupiedVolumeSvq, long massBits,
+			int cell, String phaseId, long occupiedVolumeSvq, long massUnits,
 			CoherentPhaseStore.Composition composition, long internalEnergyBits
 	) {
 		static final Comparator<CoherentEntry> ORDER = Comparator.comparingInt(CoherentEntry::cell)
@@ -327,12 +327,12 @@ final class ThermalRegionStateCodec {
 		CoherentEntry {
 			ThermalIdsProxy.require(phaseId);
 			if (cell < 0 || occupiedVolumeSvq <= 0L
-					|| !(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)
+					|| !(massUnits > 0)
 					|| !Double.isFinite(Double.longBitsToDouble(internalEnergyBits))) {
 				throw new IllegalArgumentException("Invalid coherent thermal entry");
 			}
 		}
-		double mass() { return Double.longBitsToDouble(massBits); }
+		double mass() { return mmm.units.Mass.kilograms(massUnits); }
 		double internalEnergy() { return Double.longBitsToDouble(internalEnergyBits); }
 	}
 

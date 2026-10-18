@@ -158,7 +158,7 @@ public final class CompositeStepBenchmark {
         long svq = SolidVolume.SVQ_PER_CELL / 4;
         double density = r.granular().material(r.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND)).referenceDensity();
         var ledger = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
-                BuiltinGranularDefinitions.FINE_SAND, svq, density * (svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), null)));
+                BuiltinGranularDefinitions.FINE_SAND, svq, mmm.units.Mass.fromKilograms(density * (svq / (double) SolidVolume.SVQ_PER_CUBIC_METER)), null)));
         for (int z = 2; z < 6; z++) for (int x = 2; x < 6; x++) {
             require(d.tryInsertExactGranular(x, elevated ? 3 : 0, z, ledger, 0, true).inserted(), "Sand injection rejected");
         }
@@ -170,7 +170,7 @@ public final class CompositeStepBenchmark {
         long svq = SolidVolume.SVQ_PER_CELL / 4;
         double density = r.granular().material(r.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND)).referenceDensity();
         var ledger = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND,
-                svq, density * (svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), null)));
+                svq, mmm.units.Mass.fromKilograms(density * (svq / (double) SolidVolume.SVQ_PER_CUBIC_METER)), null)));
         for (int i = 0; i < 96; i++) require(domain.tryInsertExactGranular(2 + i % 6, 8 + i / 36 % 2,
                 3 + i / 6 % 6, ledger, 1, true).inserted(), "Large sand injection rejected");
         return domain;
@@ -187,9 +187,9 @@ public final class CompositeStepBenchmark {
                 BuiltinChemicalDefinitions.OH_MINUS, 1_000_000L,
                 BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L, BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L);
         double volume = .125, mass = volume * .125 * 1000;
-        double speciesMass = ChemicalMixtureRecord.fromStableAmounts(r.chemical(), amounts, 0).exactSpeciesMassKilograms(r.chemical()).toDouble();
+        double speciesMass = ChemicalMixtureRecord.fromStableAmounts(r.chemical(), amounts, 0L).exactSpeciesMassKilograms(r.chemical()).toDouble();
         var ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group("mmm:water", false,
-                volume, mass, Double.doubleToRawLongBits(mass - speciesMass), amounts)));
+                volume, mmm.units.Mass.fromKilograms(mass), mmm.units.Mass.fromKilograms(mass - speciesMass), amounts)));
         require(region.domain().tryInsertExactChemical(2 + step % 4, 4, 2 + step / 4 % 4, ledger, 2, true).transferred(), "Reactant feed rejected");
     }
 

@@ -26,16 +26,16 @@ final class GasRegionAudit {
 	}
 	private static final class Accumulator {
 		long nanos;
-		SignedDyadic mass = SignedDyadic.ZERO, residual = SignedDyadic.ZERO;
+		long massUnits, residualUnits;
 		final TreeMap<String, Long> species = new TreeMap<>();
 		void add(GasComponentAmount amount) {
 			nanos = Math.addExact(nanos, amount.standardVolumeNanos());
-			mass = mass.add(SignedDyadic.of(amount.mass())); residual = residual.add(SignedDyadic.of(amount.massResidual()));
+			massUnits = Math.addExact(massUnits, amount.massUnits()); residualUnits = Math.addExact(residualUnits, amount.massResidualUnits());
 			for (var entry : amount.species()) species.merge(entry.speciesId(), entry.amountQuanta(), Math::addExact);
 		}
 		GasAuditLedger.Entry entry(String id) {
-			return new GasAuditLedger.Entry(id, nanos, mass, species.entrySet().stream().map(entry ->
-					new GasComponentAmount.SpeciesAmount(entry.getKey(), entry.getValue())).toList(), residual);
+			return new GasAuditLedger.Entry(id, nanos, massUnits, species.entrySet().stream().map(entry ->
+					new GasComponentAmount.SpeciesAmount(entry.getKey(), entry.getValue())).toList(), residualUnits);
 		}
 	}
 	static void requireClosure(GasAuditLedger before, GasAuditLedger after, GasAuditLedger source, GasAuditLedger sink) {
@@ -43,38 +43,30 @@ final class GasRegionAudit {
 		merge(left, columns(source)); merge(right, columns(sink));
 		if (!left.equals(right)) throw new IllegalArgumentException("Gas topology remap does not close component nanos/species");
 	}
-	static boolean closed(GasAuditLedger live, GasAuditLedger source, GasAuditLedger sink,
-	                      SignedDyadic massRoundoff, SignedDyadic residualRoundoff) {
+	static boolean closed(GasAuditLedger live, GasAuditLedger source, GasAuditLedger sink) {
 		source.standardVolumeNanos(); sink.standardVolumeNanos();
 		TreeMap<String, Columns> left = columns(live), right = columns(source);
 		merge(left, columns(sink));
-		if (!left.equals(right)) return false;
-		return mass(live, false).add(mass(sink, false)).equals(mass(source, false).add(massRoundoff))
-				&& mass(live, true).add(mass(sink, true)).equals(mass(source, true).add(residualRoundoff));
-	}
-	static SignedDyadic mass(GasAuditLedger ledger, boolean residual) {
-		SignedDyadic result = SignedDyadic.ZERO;
-		for (var entry : ledger.entries()) result = result.add(residual ? entry.massResidual() : entry.mass());
-		return result;
+		return left.equals(right);
 	}
 	private static TreeMap<String, Columns> columns(GasAuditLedger ledger) {
 		TreeMap<String, Columns> result = new TreeMap<>();
 		for (var entry : ledger.entries()) {
 			TreeMap<String, Long> species = new TreeMap<>();
 			for (var amount : entry.species()) species.put(amount.speciesId(), amount.amountQuanta());
-			result.put(entry.componentId(), new Columns(entry.standardVolumeNanos(), species));
+			result.put(entry.componentId(), new Columns(entry.standardVolumeNanos(), entry.massUnits(), entry.massResidualUnits(), species));
 		}
 		return result;
 	}
 	private static void merge(TreeMap<String, Columns> target, TreeMap<String, Columns> values) {
 		values.forEach((id, value) -> target.merge(id, value, Columns::add));
 	}
-	private record Columns(long nanos, Map<String, Long> species) {
+	private record Columns(long nanos, long massUnits, long residualUnits, Map<String, Long> species) {
 		private Columns { species = Map.copyOf(species); }
 		static Columns add(Columns first, Columns second) {
 			TreeMap<String, Long> species = new TreeMap<>(first.species);
 			second.species.forEach((id, value) -> species.merge(id, value, Math::addExact));
-			return new Columns(Math.addExact(first.nanos, second.nanos), species);
+			return new Columns(Math.addExact(first.nanos, second.nanos), Math.addExact(first.massUnits, second.massUnits), Math.addExact(first.residualUnits, second.residualUnits), species);
 		}
 	}
 }

@@ -180,7 +180,7 @@ public final class ThermalRegistryCodec {
 			CompoundTag tag = new CompoundTag();
 			tag.putString("Id", device.id());
 			tag.putString("ThermalMaterial", device.thermalMaterialId());
-			tag.putLong("BodyMassBits", bits(device.bodyMassKilograms()));
+			tag.putLong("BodyMassUnits", bits(device.bodyMassKilograms()));
 			tag.putLong("InitialTemperatureBits", bits(device.initialTemperatureK()));
 			ListTag ports = new ListTag();
 			for (FiniteThermalDeviceDefinition.Port port : device.ports()) {
@@ -336,7 +336,7 @@ public final class ThermalRegistryCodec {
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "finite thermal device");
 			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "ThermalMaterial", Tag.TAG_STRING,
-					"BodyMassBits", Tag.TAG_LONG, "InitialTemperatureBits", Tag.TAG_LONG,
+					"BodyMassUnits", Tag.TAG_LONG, "InitialTemperatureBits", Tag.TAG_LONG,
 					"Ports", Tag.TAG_LIST));
 			ListTag encodedPorts = tag.getListOrEmpty("Ports");
 			if (encodedPorts.isEmpty() || encodedPorts.size() > ThermalLimits.MAX_FINITE_DEVICE_CONTACTS) {
@@ -354,7 +354,7 @@ public final class ThermalRegistryCodec {
 						value(value, "WallThicknessBits"), value(value, "FluidFilmThicknessBits")));
 			}
 			result.add(new FiniteThermalDeviceDefinition(tag.getStringOr("Id", ""),
-					tag.getStringOr("ThermalMaterial", ""), value(tag, "BodyMassBits"),
+					tag.getStringOr("ThermalMaterial", ""), value(tag, "BodyMassUnits"),
 					value(tag, "InitialTemperatureBits"), ports));
 		}
 		return List.copyOf(result);

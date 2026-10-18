@@ -162,7 +162,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			granularState.deposits.forEachGroup((cell, porosity, material, composition, volume, mass) -> {
 				double centre = config.cellSize() * (cell / sizeX % sizeY
 						+ .5 * granularState.deposits.cellBulkVolumeSvq(cell) / SolidVolume.SVQ_PER_CELL);
-				energy[0] += mass * config.gravity() * centre;
+				energy[0] += mmm.units.Mass.kilograms(mass) * config.gravity() * centre;
 			});
 		}
 		return checkedMechanicalEnergy(energy[0]);
@@ -807,9 +807,6 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		return cellIndex(x, y, z);
 	}
 
-	static boolean massClose(double left, double right) {
-		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
-	}
 
 	float granularMergeVelocityDelta() {
 		return Math.max(config.cellSize() * 0.5F, config.gravity() * config.timeStep() * 1.25F);

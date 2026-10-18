@@ -13,7 +13,7 @@ final class MomentPreservingMergePlan {
 
 	MomentPreservingMergePlan(int[] particles, boolean[] representatives, int count,
 			float[] x, float[] y, float[] z, float[] vx, float[] vy, float[] vz,
-			float[] volumes, double[] masses, int[] materials, int[] phases,
+			float[] volumes, long[] masses, int[] materials, int[] phases,
 			ChemicalParcelStore chemistry, FlipParticleReseeder.ThermalAdapter thermal, float h,
 			FlipParticleReseeder.PositionValidator validator) {
 		targets = new int[count]; Arrays.fill(targets, -1);

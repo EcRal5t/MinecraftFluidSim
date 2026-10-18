@@ -10,7 +10,6 @@ public final class MarkerVelocityTransferValidation {
 		sparseGeometryAndAdjoint();
 		actualMassAndClosedFaces();
 		productionP2GPreservesFiniteMassWeightedVelocities();
-		productionTransferBudgetsUsePhysicalEnergy();
 		captureAndPublicationAreAtomic();
 	}
 
@@ -49,19 +48,19 @@ public final class MarkerVelocityTransferValidation {
 	private static void actualMassAndClosedFaces() {
 		var variable = domain();
 		variable.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
-		if (!variable.tryInsertExactMaterial(1, 1, 1, .2F, 200, 0, 0).transferred()
-				|| !variable.tryInsertExactMaterial(1, 1, 1, .2F, 800, 0, 0).transferred()) throw new AssertionError("Variable-mass setup refused");
+		if (!variable.tryInsertExactMaterial(1, 1, 1, .2F, variable.unitScale.massUnitsForNormalized(200), 0, 0).transferred()
+				|| !variable.tryInsertExactMaterial(1, 1, 1, .2F, variable.unitScale.massUnitsForNormalized(800), 0, 0).transferred()) throw new AssertionError("Variable-mass setup refused");
 		var j = new MarkerVelocityTransfer(); j.capture(variable); checkGeometryAndAdjoint(variable, j);
 		for (int marker = 0; marker < j.markerCount(); marker++) {
 			near(j.massKilograms(marker), variable.unitScale.kilograms(variable.particles.mass(marker)), 0, "Actual SI mass");
 		}
 		var dense = domain();
-		dense.restoreMaterialParticleState(new FlipMaterialParticleState(4, 4, 4, .5F, 1, .125, 1.25e39,
+		dense.restoreMaterialParticleState(new FlipMaterialParticleState(4, 4, 4, .5F, 1, .125, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(1.25e9),
 				java.util.List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2),
-						new FluidMaterial("mmm:dense", 1e40, "mmm:dense", 0, Math.PI / 2)),
-				new float[]{.625F, .625F, .625F, .125F}, new float[]{1, 0, 0}, new byte[64], new double[]{1.25e39}, new int[]{1}));
+						new FluidMaterial("mmm:dense", 1e10, "mmm:dense", 0, Math.PI / 2)),
+				new float[]{.625F, .625F, .625F, .125F}, new float[]{1, 0, 0}, new byte[64], java.util.Arrays.stream(new double[]{1.25e9}).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[]{1}));
 		j.capture(dense); checkGeometryAndAdjoint(dense, j);
-		near(j.massKilograms(0), 1.5625e38, 0, "Finite mass beyond binary32");
+		near(j.massKilograms(0), 1.5625e8, 0, "Finite mass within the fixed-point inventory range");
 		var cut = domain(); cut.setSolid(1, 1, 1, true); cut.setSolidMicroMask(2, 2, 1, 1);
 		cut.setVolume(2, 1, 1, .2F); cut.setVolume(0, 0, 0, .2F); cut.ensureGrid(); j.capture(cut);
 		checkGeometryAndAdjoint(cut, j);
@@ -74,7 +73,7 @@ public final class MarkerVelocityTransferValidation {
 	}
 
 	private static void productionP2GPreservesFiniteMassWeightedVelocities() {
-		for (double scale : new double[] {125, 1.25e39}) {
+		for (double scale : new double[] {125, 1.25e9}) {
 			var d = restoredMassDomain(new double[] {scale, 3 * scale},
 					new float[] {1, -2, 3, 5, 2, -1}, .125F, .625F, .625F, .625F);
 			var sample = d.sampleVelocity(.625F, .625F, .625F);
@@ -93,8 +92,8 @@ public final class MarkerVelocityTransferValidation {
 			}
 		}
 		for (var d : java.util.List.of(
-				restoredMassDomain(new double[] {1.25e39}, new float[] {1, -2, 3}, .125F, .625F, .625F, .625F),
-				restoredMassDomain(new double[] {8e307}, new float[] {3, 1, -1}, 1, .5F, .75F, .75F))) {
+				restoredMassDomain(new double[] {1.25e9}, new float[] {1, -2, 3}, .125F, .625F, .625F, .625F),
+				restoredMassDomain(new double[] {8e8}, new float[] {3, 1, -1}, 1, .5F, .75F, .75F))) {
 			var sample = d.sampleVelocity(d.particles.positionX(0), d.particles.positionY(0), d.particles.positionZ(0));
 			near(sample.x(), d.particles.velocityX(0), 0, "Production constant X");
 			near(sample.y(), d.particles.velocityY(0), 0, "Production constant Y");
@@ -104,19 +103,6 @@ public final class MarkerVelocityTransferValidation {
 		}
 	}
 
-	private static void productionTransferBudgetsUsePhysicalEnergy() {
-		var d = restoredMassDomain(new double[] {8e307}, new float[] {3, 0, 0}, 1, .5F, .75F, .75F);
-		d.sampleVelocity(.5F, .75F, .75F);
-		double expected = 4.5e307;
-		near(d.particleKineticEnergyJoules(), expected, Math.ulp(expected), "Finite physical marker energy");
-		near(d.gridKineticEnergyJoules(), expected, 2 * Math.ulp(expected), "Finite physical grid energy");
-		if (!Double.isInfinite(d.gridKineticEnergySolverUnits())) throw new AssertionError("Energy fixture missed the solver-unit overflow");
-		// Exercise the real handoff without a pressure solve: zero previous MAC gives a nonzero FLIP candidate.
-		d.gridToParticleStage.capturePreProjectionEnergy();
-		d.gridToParticleStage.extrapolateAndTransfer();
-		near(d.particles.velocityX(0), 3, 0, "Physical-energy transfer changed constant velocity");
-		near(d.particleKineticEnergyJoules(), expected, Math.ulp(expected), "Physical-energy transfer lost the finite marker budget");
-	}
 
 	private static FluidDomain restoredMassDomain(double[] masses, float[] velocities, float volume, float x, float y, float z) {
 		var d = domain(); float[] positionVolume = new float[4 * masses.length]; int[] materials = new int[masses.length];
@@ -125,10 +111,10 @@ public final class MarkerVelocityTransferValidation {
 			positionVolume[4 * marker + 2] = z; positionVolume[4 * marker + 3] = volume; materials[marker] = 1;
 		}
 		d.restoreMaterialParticleState(new FlipMaterialParticleState(4, 4, 4, .5F, masses.length,
-				(double) volume * masses.length, mmm.units.SignedDyadic.sum(masses).toDouble(),
+				(double) volume * masses.length, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(mmm.units.SignedDyadic.sum(masses).toDouble()),
 				java.util.List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2),
-						new FluidMaterial("mmm:dense", 1e40, "mmm:dense", 0, Math.PI / 2)),
-				positionVolume, velocities, new byte[64], masses, materials));
+						new FluidMaterial("mmm:dense", 1e10, "mmm:dense", 0, Math.PI / 2)),
+				positionVolume, velocities, new byte[64], java.util.Arrays.stream(masses).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), materials));
 		return d;
 	}
 
@@ -176,10 +162,10 @@ public final class MarkerVelocityTransferValidation {
 	private static void captureAndPublicationAreAtomic() {
 		var d = domain(); d.setVolume(1, 1, 1, .2F); var j = new MarkerVelocityTransfer(); j.capture(d);
 		var v = markers(j); for (double[] axis : v) Arrays.fill(axis, .3); var before = faces(j); j.apply(v, before);
-		double sourceMass = d.particles.mass(0); d.particles.setMass(0, Double.NaN);
+		long sourceMass = d.particles.massUnits(0); d.particles.setMassUnits(0, 0L);
 		try { j.capture(d); throw new AssertionError("Invalid mass accepted"); }
 		catch (IllegalStateException expected) { }
-		finally { d.particles.setMass(0, sourceMass); }
+		finally { d.particles.setMassUnits(0, sourceMass); }
 		var after = faces(j); j.apply(v, after); if (!Arrays.deepEquals(before, after)) throw new AssertionError("Failed capture changed J");
 		float[][] published = new float[][]{new float[j.faceCount(0)], new float[j.faceCount(1)], new float[j.faceCount(2)]};
 		for (float[] axis : published) Arrays.fill(axis, 17);

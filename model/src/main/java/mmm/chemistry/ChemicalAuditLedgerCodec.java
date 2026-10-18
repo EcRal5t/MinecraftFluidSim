@@ -26,6 +26,7 @@ public final class ChemicalAuditLedgerCodec {
 			try (DataOutputStream output = new DataOutputStream(bytes)) {
 				output.writeInt(MAGIC);
 				output.writeInt(VERSION);
+				output.writeUTF(mmm.units.Mass.ENCODING);
 				writeLedger(output, externalSource);
 				writeLedger(output, escapedSink);
 			}
@@ -43,6 +44,7 @@ public final class ChemicalAuditLedgerCodec {
 		}
 		try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(encoded))) {
 			if (input.readInt() != MAGIC || input.readInt() != VERSION) throw new IOException("Unknown chemical audit payload");
+			if (!mmm.units.Mass.ENCODING.equals(input.readUTF())) throw new IOException("Unsupported mass encoding");
 			ChemicalTransferLedger source = readLedger(input);
 			ChemicalTransferLedger sink = readLedger(input);
 			if (input.read() != -1) throw new IOException("Trailing chemical audit payload bytes");
@@ -63,8 +65,8 @@ public final class ChemicalAuditLedgerCodec {
 			output.writeUTF(group.materialId());
 			output.writeBoolean(group.indicator());
 			output.writeLong(Double.doubleToRawLongBits(group.normalizedVolume()));
-			output.writeLong(Double.doubleToRawLongBits(group.massKilograms()));
-			output.writeLong(group.massResidualKilogramsBits());
+			output.writeLong(group.massUnits());
+			output.writeLong(group.massResidualUnits());
 			output.writeInt(group.speciesQuanta().size());
 			for (Map.Entry<String, Long> species : new TreeMap<>(group.speciesQuanta()).entrySet()) {
 				output.writeUTF(species.getKey());
@@ -81,8 +83,8 @@ public final class ChemicalAuditLedgerCodec {
 			String material = input.readUTF();
 			boolean indicator = input.readBoolean();
 			double normalizedVolume = Double.longBitsToDouble(input.readLong());
-			double mass = Double.longBitsToDouble(input.readLong());
-			long residualBits = input.readLong();
+			long mass = input.readLong();
+			long residualUnits = input.readLong();
 			int entries = input.readInt();
 			if (entries < 0 || entries > ChemicalLimits.MAX_TRANSFER_SPECIES_PER_GROUP) {
 				throw new IOException("Invalid chemical audit species count");
@@ -91,7 +93,7 @@ public final class ChemicalAuditLedgerCodec {
 			for (int entry = 0; entry < entries; entry++) {
 				if (species.put(input.readUTF(), input.readLong()) != null) throw new IOException("Duplicate chemical audit species");
 			}
-			result.add(new ChemicalTransferLedger.Group(material, indicator, normalizedVolume, mass, residualBits, species));
+			result.add(new ChemicalTransferLedger.Group(material, indicator, normalizedVolume, mass, residualUnits, species));
 		}
 		return result.isEmpty() ? ChemicalTransferLedger.EMPTY : new ChemicalTransferLedger(result);
 	}

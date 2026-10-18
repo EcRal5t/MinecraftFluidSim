@@ -275,7 +275,7 @@ public final class GranularDepositDynamics {
 	/** Lowest bulk-capable, vertically reachable layer; later admission cannot select an upper void. */
 	private int settlementTarget(GranularParcelStore.Parcel parcel, Environment environment) {
 		int x = coordinate(parcel.x(), sizeX), z = coordinate(parcel.z(), sizeZ);
-		var addition = new GranularDepositStore.SolidPortion(parcel.materialHandle(), parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.mass());
+		var addition = new GranularDepositStore.SolidPortion(parcel.materialHandle(), parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.massUnits());
 		for (int y = 0; y <= coordinate(parcel.y(), sizeY); y++) {
 			if (!admission.spend(1)) return -1;
 			int target = cell(x, y, z); long open = environment.geometricOpenSvq(target);
@@ -512,7 +512,7 @@ public final class GranularDepositDynamics {
 		// by mechanics; adding a prescribed rolling speed here would create kinetic energy.
 		parcels.overwrite(parcelIndex, new GranularParcelStore.Parcel(
 				parcel.x(), parcel.y(), parcel.z(), (float) (dx * inverseLength * speed), 0.0F,
-				(float) (dz * inverseLength * speed), parcel.solidVolumeSvq(), parcel.mass(), parcel.materialHandle(),
+				(float) (dz * inverseLength * speed), parcel.solidVolumeSvq(), parcel.massUnits(), parcel.materialHandle(),
 				parcel.solidCompositionHandle(), 0,
 				(byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED)));
 		GranularParcelStore.Parcel redirected = parcels.parcel(parcelIndex);

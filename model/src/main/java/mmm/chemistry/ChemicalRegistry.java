@@ -242,7 +242,7 @@ public final class ChemicalRegistry {
 	}
 
 	private byte[] encodeCanonical() {
-		StringBuilder out = new StringBuilder(4096).append("mmm-chemistry-registry|SI|kg/mol|mol/m3|quanta-per-mol=1000000\n");
+		StringBuilder out = new StringBuilder(4096).append("massEncoding=").append(mmm.units.Mass.ENCODING).append('\n').append("mmm-chemistry-registry|SI|kg/mol|mol/m3|quanta-per-mol=1000000\n");
 		for (ChemicalSpecies definition : species) {
 			out.append("S|").append(definition.id()).append('|').append(definition.charge()).append('|')
 					.append(definition.molarMassKgPerMol().canonical()).append('|')

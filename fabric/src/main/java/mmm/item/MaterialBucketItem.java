@@ -39,12 +39,15 @@ public final class MaterialBucketItem extends Item {
 		return value;
 	}
 
-	/** Returns the independent exact material mass, or -1 when missing/invalid. */
-	public static double mass(ItemStack stack) {
-		Long bits = stack.get(MmmComponents.FLUID_MASS_BITS);
-		if (bits == null) return -1.0;
-		double value = Double.longBitsToDouble(bits);
-		return Double.isFinite(value) && value > 0.0 ? value : -1.0;
+	/** Returns the authoritative integer mass, or -1 when missing/invalid. */
+	public static long massUnits(ItemStack stack) {
+		Long units = stack.get(MmmComponents.FLUID_MASS_UNITS);
+		return units != null && units > 0 ? units : -1L;
+	}
+
+	public static double massKilograms(ItemStack stack) {
+		long units = massUnits(stack);
+		return units < 0 ? -1.0 : mmm.units.Mass.kilograms(units);
 	}
 
 	public static FluidMixture mixture(ItemStack stack) {
@@ -65,7 +68,7 @@ public final class MaterialBucketItem extends Item {
 		return stack.getItem() instanceof MaterialBucketItem
 				&& volume(stack) < 0L
 				&& materialId(stack) == null
-				&& mass(stack) < 0.0
+				&& massUnits(stack) < 0L
 				&& stack.get(MmmComponents.MIXTURE_COMPONENTS) == null
 				&& stack.get(MmmComponents.CHEMICAL_CONTENTS) == null
 				&& stack.get(MmmComponents.THERMAL_CONTENTS) == null
@@ -106,9 +109,9 @@ public final class MaterialBucketItem extends Item {
 				&& stack.get(MmmComponents.MIXTURE_COMPONENTS) == null) {
 			try {
 				ChemicalContents decoded = ChemicalContents.decode(chemicalEncoded);
-				Long massBits = stack.get(MmmComponents.FLUID_MASS_BITS);
-				if (decoded.totalVolumeNanos() == nanos && massBits != null
-						&& massBits == Double.doubleToRawLongBits(decoded.totalMass())) chemical = decoded;
+				Long massUnits = stack.get(MmmComponents.FLUID_MASS_UNITS);
+				if (decoded.totalVolumeNanos() == nanos && massUnits != null
+						&& massUnits == decoded.totalMassUnits()) chemical = decoded;
 			} catch (IllegalArgumentException ignored) { }
 		}
 		if (nanos > 0L && chemical != null) {
@@ -130,7 +133,7 @@ public final class MaterialBucketItem extends Item {
 			Component material = mixture.components().size() == 1
 					? Component.literal(mixture.components().getFirst().materialId())
 					: Component.translatable("item.mmm.material_bucket.mixture", mixture.components().size());
-			double mass = mass(stack);
+			double mass = massKilograms(stack);
 			tooltip.accept(Component.translatable("item.mmm.material_bucket.volume",
 					material, String.format("%.2f%% (%s)", 100.0 * nanos / ContainerFluidLedger.NANOS_PER_BLOCK,
 							mmm.units.UnitFormat.volumeNanos(nanos)))

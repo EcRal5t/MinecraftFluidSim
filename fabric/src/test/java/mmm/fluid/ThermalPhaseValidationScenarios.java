@@ -106,8 +106,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			mixedCell.setVolume(0, 0, 0, fill);
 			mixedCell.setMaterialInCell(0, 0, 0, waterAndMercury,
 					waterAndMercury.handle(BuiltinFluidMaterials.WATER.id()));
-			require(mixedCell.tryInsertExactMaterial(0, 0, 0, fill,
-					fill * BuiltinFluidMaterials.MERCURY.referenceDensity(), 0,
+			require(mixedCell.tryInsertExactMaterial(0, 0, 0, fill, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(fill * BuiltinFluidMaterials.MERCURY.referenceDensity()), 0,
 					waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id())).transferred(),
 					"mixed condensed-phase fixture could not insert mercury");
 			mixedCell.bindThermal(mixedRegistry, waterAndMercury, 273.15);
@@ -164,7 +163,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		ThermalDomainState coupled = FluidThermalBinding.create(registry, liquids, 300.0,
 				1, 2, 2, 2, 0.5F, carriers);
 		coupled.addCoherentExternal(new CoherentPhaseStore.Group(
-				0, lower.id(), 1L, 0.5, null, 0.0));
+				0, lower.id(), 1L, mmm.units.Mass.fromKilograms(0.5), null, 0.0));
 		require(close(coupled.temperatureInCell(0, carriers), 300.0),
 				"liquid/coherent LTE did not derive a shared temperature");
 		coupled.setTemperatureInCell(0, 310.0, carriers);
@@ -187,7 +186,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				List.of(), List.of(transition), "", "");
 		coherentCavity.bindThermal(cavityThermal, liquids, 300.0);
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) {
-			coherentCavity.addCoherentPhaseExternal(1, y, z, lower.id(), SolidVolume.SVQ_PER_CELL, 0.125, null, 0);
+			coherentCavity.addCoherentPhaseExternal(1, y, z, lower.id(), SolidVolume.SVQ_PER_CELL, mmm.units.Mass.fromKilograms(0.125), null, 0);
 		}
 		FluidDomainState coherentSnapshot = coherentCavity.captureAuthoritativeState();
 		int[] cavityMembership = coherentSnapshot.gas().pieceNodeOrdinal();
@@ -204,7 +203,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		domain.setVolume(0, 0, 0, 0.5F);
 		domain.bindThermal(registry, liquids, 300.0);
 		domain.addCoherentPhaseExternal(0, 0, 0, lower.id(),
-				SolidVolume.SVQ_PER_CELL / 2L, 0.5, null, 0.0);
+				SolidVolume.SVQ_PER_CELL / 2L, mmm.units.Mass.fromKilograms(0.5), null, 0.0);
 		boolean collisionBlocked = false;
 		try {
 			domain.planCollisionEdits(List.of(
@@ -319,7 +318,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		double quantizedIceEnergy = new ThermalStateFunction(roundoffRegistry).internalEnergyAtTemperature(
 				roundoffRegistry.materialHandle(roundoffIce.id()), 0.001, Map.of(), 273.16);
 		quantizedDomain.addCoherentPhaseExternal(0, 0, 0, roundoffIce.id(), 146L,
-				0.001, null, quantizedIceEnergy);
+				mmm.units.Mass.fromKilograms(0.001), null, quantizedIceEnergy);
 		SignedDyadic quantizedEnergy = quantizedDomain.exactInternalEnergy();
 		FluidDomain.ThermalPhaseStats unavailableMelt = quantizedDomain.stepInertPhaseChangeOnly(16);
 		require(unavailableMelt.operations() == 0
@@ -333,7 +332,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		double markerBoundEnergy = new ThermalStateFunction(cellRegistry).internalEnergyAtTemperature(
 				cellRegistry.materialHandle(lower.id()), 0.015625, Map.of(), 305.0);
 		markerBoundMelt.addCoherentPhaseExternal(0, 0, 0, lower.id(), batchSvq,
-				0.015625, null, markerBoundEnergy);
+				mmm.units.Mass.fromKilograms(0.015625), null, markerBoundEnergy);
 		SignedDyadic markerBoundInventory = markerBoundMelt.exactInternalEnergy();
 		FluidDomain.ThermalPhaseStats markerBound = markerBoundMelt.stepInertPhaseChangeOnly(16);
 		require(markerBound.operations() == 0 && markerBoundMelt.particleCount() == 8
@@ -527,10 +526,10 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					.molarMassKgPerMol().multiply(quanta).divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL).toDouble();
 			var composition = new CoherentPhaseStore.Composition(
 					List.of(new CoherentPhaseStore.Component(BuiltinChemicalDefinitions.H2O, quanta)),
-					Double.doubleToRawLongBits(mass - speciesMass));
+					mmm.units.Mass.fromKilograms(mass - speciesMass));
 			double energy = new ThermalStateFunction(thermal).internalEnergyAtTemperature(
 					thermal.materialHandle(ice.id()), mass, Map.of(BuiltinChemicalDefinitions.H2O, quanta), 500);
-			domain.addCoherentPhaseExternal(1, 1, 1, ice.id(), batchSvq * batches, mass, composition, energy);
+			domain.addCoherentPhaseExternal(1, 1, 1, ice.id(), batchSvq * batches, mmm.units.Mass.fromKilograms(mass), composition, energy);
 		}
 		domain.captureAuthoritativeState();
 		return domain;
@@ -593,7 +592,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& restored.totalCoherentMass() == domain.totalCoherentMass()
 				&& restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
 				&& restored.thermalAudit().equals(domain.thermalAudit())
-				&& java.util.Arrays.equals(restoredSnapshot.materials().copyParticleMass(), snapshot.materials().copyParticleMass())
+				&& java.util.Arrays.equals(restoredSnapshot.materials().copyParticleMassUnits(), snapshot.materials().copyParticleMassUnits())
 				&& java.util.Arrays.equals(restoredSnapshot.materials().copyPositionVolume(), snapshot.materials().copyPositionVolume())
 				&& java.util.Arrays.equals(restoredThermal.copyInternalEnergy(), snapshot.thermal().copyInternalEnergy())
 				&& restoredThermal.coherentGroups().equals(snapshot.thermal().coherentGroups())
@@ -605,15 +604,13 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var components = List.of(new CoherentPhaseStore.Component("test:a", 1));
 		for (double residual : new double[]{Double.NaN, Double.NEGATIVE_INFINITY, Double.POSITIVE_INFINITY}) {
 			boolean rejected = false;
-			try { new CoherentPhaseStore.Composition(components, Double.doubleToRawLongBits(residual)); }
+			try { new CoherentPhaseStore.Composition(components, mmm.units.Mass.fromKilograms(residual)); }
 			catch (IllegalArgumentException expected) { rejected = true; }
 			require(rejected, "coherent composition accepted a non-finite residual before record field initialization");
 		}
-		for (double residual : new double[]{0.0, -0.0, Double.MIN_VALUE, -Double.MIN_VALUE, Double.MAX_VALUE, -1.25}) {
-			long raw = Double.doubleToRawLongBits(residual);
-			var composition = new CoherentPhaseStore.Composition(components, raw);
-			require(composition.massResidualBits() == raw && Double.doubleToRawLongBits(composition.massResidual()) == raw,
-					"coherent composition changed finite residual raw bits");
+		for (long residual : new long[]{0L, 1L, -1L, Long.MAX_VALUE, -12_500_000_000L}) {
+			var composition = new CoherentPhaseStore.Composition(components, residual);
+			require(composition.massResidualUnits() == residual, "Coherent composition changed integer mass residual");
 		}
 		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var chemistry = new ChemicalRegistry(List.of(
@@ -640,16 +637,16 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			domain.bindThermal(registry, liquids, 300);
 			double firstMass = 0.24999999999999914, secondMass = 1.2999999999999952;
 			CoherentPhaseStore.Composition first = compositionCase == 0 ? null : new CoherentPhaseStore.Composition(
-					List.of(new CoherentPhaseStore.Component("test:a", 1)), Double.doubleToRawLongBits(firstMass - 1e-9));
+					List.of(new CoherentPhaseStore.Component("test:a", 1)), mmm.units.Mass.fromKilograms(firstMass - 1e-9));
 			CoherentPhaseStore.Composition second = compositionCase == 0 ? null : new CoherentPhaseStore.Composition(
 					List.of(new CoherentPhaseStore.Component(compositionCase == 1 ? "test:a" : "test:b", 1)),
-					Double.doubleToRawLongBits(secondMass - 1e-9));
-			domain.addCoherentPhaseExternal(1, 1, 1, phase, 3, firstMass, first, 2.4999999999999907e17);
+					mmm.units.Mass.fromKilograms(secondMass - 1e-9));
+			domain.addCoherentPhaseExternal(1, 1, 1, phase, 3, mmm.units.Mass.fromKilograms(firstMass), first, 2.4999999999999907e17);
 			var before = domain.thermalState.coherentPhases().snapshot();
 			var revision = domain.thermalState.thermalRevision();
 			var audit = domain.thermalAudit();
 			boolean rejected = false;
-			try { domain.addCoherentPhaseExternal(1, 1, 1, phase, 3, secondMass, second, 1.299999999999995e18); }
+			try { domain.addCoherentPhaseExternal(1, 1, 1, phase, 3, mmm.units.Mass.fromKilograms(secondMass), second, 1.299999999999995e18); }
 			catch (ThermalStateFunction.EnergyOutsideValidityException expected) { rejected = true; }
 			require(rejected && domain.thermalState.coherentPhases().snapshot().equals(before)
 					&& domain.thermalState.thermalRevision().equals(revision) && domain.thermalAudit().equals(audit)
@@ -666,9 +663,9 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			var accepted = new FluidDomain(3, 3, 3, config, 216);
 			accepted.bindMaterialRegistry(liquids); accepted.bindChemistry(chemistry);
 			accepted.bindThermal(ordinary, liquids, 300);
-			accepted.addCoherentPhaseExternal(1, 1, 1, phase, 3, firstMass, first, 128);
+			accepted.addCoherentPhaseExternal(1, 1, 1, phase, 3, mmm.units.Mass.fromKilograms(firstMass), first, 128);
 			double additionEnergy = compositionCase == 2 ? -1 + 1e-15 : 1e-15;
-			accepted.addCoherentPhaseExternal(1, 1, 1, phase, 3, secondMass, second, additionEnergy);
+			accepted.addCoherentPhaseExternal(1, 1, 1, phase, 3, mmm.units.Mass.fromKilograms(secondMass), second, additionEnergy);
 			var groups = accepted.thermalState.coherentPhases().snapshot();
 			var importedEnergy = SignedDyadic.of(128).add(SignedDyadic.of(additionEnergy));
 			require(groups.size() == 1 && groups.getFirst().internalEnergy() == 128 + additionEnergy
@@ -712,7 +709,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		long sandSvq = granular.material(sand).maximumActiveParcelSvq();
 		double sandMass = sandSvq / (double) SolidVolume.SVQ_PER_CUBIC_METER
 				* granular.material(sand).referenceDensity();
-		require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, sandSvq, sandMass).inserted(),
+		require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, sandSvq, mmm.units.Mass.fromKilograms(sandMass)).inserted(),
 				"joint phase fixture could not insert its granular heat bath");
 		domain.bindThermal(compositionPhaseThermalRegistry(liquids, granular, chemistry), liquids, 295.0);
 
@@ -786,7 +783,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			restorePhaseTestCarriers(domain, liquids, 0, 0, 0, new float[]{.125F, .125F}, new int[2]);
 			domain.bindChemistry(chemistry);
 			for (int marker = 0; marker < 2; marker++) {
-				domain.particles.setVolume(marker, 0.0625F); domain.particles.setMass(marker, 62.5);
+				domain.particles.setVolume(marker, 0.0625F); domain.particles.setMassUnits(marker, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(62.5));
 				var amounts = new java.util.TreeMap<String, Long>();
 				for (int i = marker * 8; i < (marker == 0 ? 8 : 17); i++) amounts.put(ids.get(i), 10L);
 				domain.setMarkerChemical(marker, amounts, false);
@@ -809,9 +806,9 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		domain.setMarkerChemical(0, Map.of(ids.getFirst(), mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA), false);
 		domain.bindThermal(thermal, domain.materialRegistry, 320.0);
 		var composition = new CoherentPhaseStore.Composition(List.of(new CoherentPhaseStore.Component(ids.getFirst(), 1L)),
-				Double.doubleToRawLongBits(15.625 - 1.0e-9));
+				mmm.units.Mass.fromKilograms(15.625 - 1.0e-9));
 		domain.addCoherentPhaseExternal(0, 0, 0, "test:thermal/composition_ice", SolidVolume.SVQ_PER_CELL / 8,
-				15.625, composition, 3125.0);
+				mmm.units.Mass.fromKilograms(15.625), composition, 3125.0);
 		var energy = domain.exactInternalEnergy();
 		require(domain.stepInertPhaseChangeOnly(1).operations() == 0 && domain.exactInternalEnergy().equals(energy),
 				"melt reserves liquid chemical capacity before transferring solid inventory");
@@ -875,7 +872,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		}
 		byte[] indicators = liquid.copyIndicator();
 		float[] positionVolume = liquid.materials().copyPositionVolume();
-		double[] mass = liquid.materials().copyParticleMass();
+		long[] mass = liquid.materials().copyParticleMassUnits();
 		int indicatorCount = 0; float indicatorVolume = 0.0F; double indicatorMass = 0.0;
 		for (int marker = 0; marker < indicators.length; marker++) if (indicators[marker] != 0) {
 			indicatorCount++; indicatorVolume += positionVolume[marker * 4 + 3]; indicatorMass += mass[marker];
@@ -978,7 +975,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				positions[base+2] = 1.25F + .5F * (slot >> 2 & 1);
 				positions[base+3] = group == 0 ? .0625F : .03125F;
 			}
-			d.restoreParticleState(new FlipParticleState(3,3,3,1,24,1,positions,new float[72],new byte[27]));
+			d.restoreParticleState(new FlipParticleState(3,3,3,1,24,1,positions,new float[72], mmm.units.Mass.createLiquid(1, 1000.0, positions),new byte[27]));
 			d.ensurePressureGeometry(); int cell = d.cellIndex(1,1,1), neighbor = d.cellIndex(2,1,1);
 			var state = new PhaseChangeStageSupport.Workspace(d.sizeX,d.sizeY,d.sizeZ,d.cellCount,d.maximumParticleCount,
 					d.config.cellSize(),d.unitScale,d.geometry,d.markerGrid,d.projection,d.particles,d.gasState,d.pendingPhaseVolume,null);
@@ -1005,8 +1002,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			require(planned.planeNormal(neighbor,0) != neighborNormal,"Future phase volume failed to rebuild neighboring gradient normals");
 			if (kind == 0 || kind == 1) {
 				int target = kind == 0 ? 7 : 0; d.particles.setVolume(target,kind == 0 ? .03125F : .09375F);
-				d.particles.setMass(target,kind == 0 ? 31.25 : 93.75);
-			} else if (kind == 2) d.spawnParticle(1,1,1,0,.03125F,0,31.25,null,false,false);
+				d.particles.setMassUnits(target, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(kind == 0 ? 31.25 : 93.75));
+			} else if (kind == 2) d.spawnParticle(1,1,1,0,.03125F,0,d.unitScale.massUnitsForNormalized(31.25),null,false,false);
 			else d.removeParticle(7);
 			d.rebuildGridFromParticles();
 			require(edit.equals(PhaseLiquidGeometryEdit.current(state,cell)),"Planned phase moments differ from published markers");

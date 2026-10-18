@@ -33,8 +33,8 @@ final class RegionStateIntegrity {
 			writeInts(out, section.markerOrdinals());
 			writeFloats(out, section.positionVolume());
 			writeFloats(out, section.velocities());
+			writeLongs(out, section.markerMassUnits());
 			if (section.layout().hasMaterials()) {
-				writeDoubles(out, section.markerMass());
 				writeInts(out, section.materialPaletteIndex());
 			}
 			if (section.layout().permitsOptionalChemistry()) {
@@ -44,7 +44,7 @@ final class RegionStateIntegrity {
 				writeInts(out, section.chemicalMixtureIndex());
 				writeBytes(out, section.indicator());
 				writeLongs(out, section.chemicalSpeciesTotals());
-				out.writeLong(section.chemicalResidualLedgerBits());
+				out.writeLong(section.chemicalResidualLedgerUnits());
 			}
 			writeBytes(out, section.solidMask());
 			writeExtensions(out, section.extensions());
@@ -64,12 +64,12 @@ final class RegionStateIntegrity {
 			writeFootprint(out, manifest.footprint());
 			out.writeInt(manifest.totalMarkerCount());
 			out.writeLong(manifest.totalVolumeBits());
+			out.writeLong(manifest.totalMassUnits());
 			if (manifest.layout().hasMaterials()) {
 				writeMaterials(out, manifest.materialPalette());
-				out.writeLong(manifest.totalMassBits());
 				out.writeInt(manifest.materialLedgers().size());
 				for (RegionManifest.MaterialLedger ledger : manifest.materialLedgers()) {
-					out.writeInt(ledger.markerCount()); out.writeLong(ledger.volumeBits()); out.writeLong(ledger.massBits());
+					out.writeInt(ledger.markerCount()); out.writeLong(ledger.volumeBits()); out.writeLong(ledger.massUnits());
 				}
 			}
 			if (manifest.layout().permitsOptionalChemistry()) {
@@ -86,10 +86,10 @@ final class RegionStateIntegrity {
 					for (mmm.fluid.FlipChemicalParticleState.Component component : mixture.components()) {
 						out.writeUTF(component.speciesId()); out.writeLong(component.amountQuanta());
 					}
-					out.writeLong(mixture.massResidualBits());
+					out.writeLong(mixture.massResidualUnits());
 				}
 				writeLongs(out, manifest.chemicalSpeciesTotals());
-				out.writeLong(manifest.chemicalResidualLedgerBits());
+				out.writeLong(manifest.chemicalResidualLedgerUnits());
 			}
 			List<RegionManifest.SectionDescriptor> descriptors = new ArrayList<>(manifest.sections());
 			descriptors.sort(Comparator.naturalOrder());
@@ -97,7 +97,7 @@ final class RegionStateIntegrity {
 			for (RegionManifest.SectionDescriptor descriptor : descriptors) {
 				out.writeInt(descriptor.sectionX()); out.writeInt(descriptor.sectionY()); out.writeInt(descriptor.sectionZ());
 				out.writeInt(descriptor.markerCount()); out.writeLong(descriptor.volumeBits());
-				if (manifest.layout().hasMaterials()) out.writeLong(descriptor.massBits());
+				out.writeLong(descriptor.massUnits());
 				out.writeLong(descriptor.checksum());
 			}
 			writeExtensions(out, manifest.extensions());
@@ -120,6 +120,7 @@ final class RegionStateIntegrity {
 			DataOutputStream out, long most, long least, String dimension, long generation, RegionStateLayout layout
 	) throws IOException {
 		out.writeUTF(layout.persistedId());
+		out.writeUTF(mmm.units.Mass.ENCODING);
 		out.writeLong(most); out.writeLong(least); out.writeUTF(dimension); out.writeLong(generation);
 	}
 

@@ -15,7 +15,7 @@ public final class GranularReactionCandidateValidation {
 	public static void validate() {
 		allocationCases();
 		phaseTransferPreservesUnchangedMass();
-		phaseTransferRequiresActualMassChange();
+		phaseTransferPreservesIntegerMass();
 		phaseTransferPreservesMomentum();
 		precipitationPreservesAvailableMassMoment();
 		precipitationUsesCompleteThermalInventory();
@@ -35,16 +35,14 @@ public final class GranularReactionCandidateValidation {
 		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		var scale = SolverUnitScale.forCellSize(.5F);
 		var first = ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(
-				BuiltinChemicalDefinitions.NA_PLUS, 10_000_000_000L, BuiltinChemicalDefinitions.CL_MINUS, 10_000_000_000L), 0);
+				BuiltinChemicalDefinitions.NA_PLUS, 10_000_000_000L, BuiltinChemicalDefinitions.CL_MINUS, 10_000_000_000L), 0L);
 		double firstMass = scale.solverMass(first.massKilograms(chemistry));
 		double unchangedMass = 57.426859368108516;
 		var palette = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		var domain = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 2, .25,
-				mmm.units.SignedDyadic.sum(new double[]{firstMass, unchangedMass}).toDouble(), palette.materials(),
-				new float[]{.75F, .75F, .75F, .125F, .75F, .75F, .75F, .125F}, new float[6], new byte[27],
-				new double[]{firstMass, unchangedMass}, new int[]{0, 0}));
+		domain.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 2, .25, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(mmm.units.SignedDyadic.sum(new double[]{firstMass, unchangedMass}).toDouble()), palette.materials(),
+				new float[]{.75F, .75F, .75F, .125F, .75F, .75F, .75F, .125F}, new float[6], new byte[27], java.util.Arrays.stream(new double[]{firstMass, unchangedMass}).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[]{0, 0}));
 		domain.bindGranular(BuiltinGranularDefinitions.createRegistry(), domain.materialRegistry(),
 				BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(chemistry);
@@ -59,48 +57,44 @@ public final class GranularReactionCandidateValidation {
 				Map.of(BuiltinChemicalDefinitions.NA_PLUS, 1, BuiltinChemicalDefinitions.CL_MINUS, 1),
 				ExactRational.ZERO, 1, 1, 1, true);
 		var plan = new GranularPhaseTransferEngine(chemistry, scale).plan(rule, List.of(
-				new GranularPhaseTransferEngine.LiquidParcel(0, .125F, firstMass, domain.chemicalParcels.record(0)),
-				new GranularPhaseTransferEngine.LiquidParcel(1, .125F, unchangedMass, second)), 0, 1);
+				new GranularPhaseTransferEngine.LiquidParcel(0, .125F, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(firstMass), domain.chemicalParcels.record(0)),
+				new GranularPhaseTransferEngine.LiquidParcel(1, .125F, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(unchangedMass), second)), 0, 1);
 		require(plan.changed() && plan.markerUpdates().get(1).mixture().equals(second)
-				&& Double.doubleToRawLongBits(plan.markerUpdates().get(1).mass()) == Double.doubleToRawLongBits(unchangedMass),
+				&& plan.markerUpdates().get(1).massUnits() == domain.particles.massUnits(1),
 				"zero species mass delta preserves the authoritative solver mass bit for bit");
 		var delta = plan.markerUpdates().getFirst().mixture().exactSpeciesMassKilograms(chemistry)
 				.subtract(domain.chemicalParcels.record(0).exactSpeciesMassKilograms(chemistry));
-		var exactIncrement = new java.math.BigDecimal(delta.numerator()).divide(
-				new java.math.BigDecimal(delta.denominator()).multiply(
-						new java.math.BigDecimal(scale.cubicMetersPerNormalizedVolume())), new java.math.MathContext(100));
-		double expectedMass = new java.math.BigDecimal(firstMass).add(exactIncrement).doubleValue();
-		require(plan.markerUpdates().getFirst().mass() == expectedMass && domain.particles.mass(0) == firstMass
-				&& domain.particles.mass(1) == unchangedMass && domain.chemicalParcels.record(1).equals(second),
-				"nonzero species delta is rounded once in solver units without changing the source during planning");
+		long expectedMass = Math.addExact(domain.particles.massUnits(0), mmm.units.Mass.exactUnits(delta.numerator(), delta.denominator()));
+		require(plan.markerUpdates().getFirst().massUnits() == expectedMass
+				&& domain.chemicalParcels.record(1).equals(second), "Phase allocation changed integer mass or source composition");
 	}
 
-	private static void phaseTransferRequiresActualMassChange() {
+	private static void phaseTransferPreservesIntegerMass() {
 		var granular = BuiltinGranularDefinitions.createRegistry();
 		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
-		for (double initialKg : new double[]{1.0E18, Math.scalb(1.0, 48)}) {
+		for (double initialKg : new double[]{1.0E8, 2.0E8}) {
 			var domain = new FluidDomain(3, 3, 3,
 					new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 216);
 			domain.restoreParticleState(new FlipParticleState(3, 3, 3, .5F, 1, .125F,
-					new float[]{.75F, .75F, .75F, .125F}, new float[3], new byte[27]));
+					new float[]{.75F, .75F, .75F, .125F}, new float[3], mmm.units.Mass.createLiquid(.5F, 1000.0, new float[]{.75F, .75F, .75F, .125F}), new byte[27]));
 			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 			domain.setPrecipitationEnabled(true);
-			domain.particles.setMass(0, domain.unitScale.solverMass(initialKg));
+			domain.particles.setMassUnits(0, mmm.units.Mass.fromKilograms(initialKg));
 			domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
 					BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), false);
 			domain.captureAuthoritativeState();
 			var original = domain.chemicalParcels.record(0);
-			double originalMass = domain.particles.mass(0);
+			long originalMass = domain.particles.massUnits(0);
 			float originalVolume = domain.particles.volume(0);
 			var stats = domain.runThermalReactionPhaseAxis(false, 0);
-			require(stats.granularPhase().precipitations() == 0 && domain.granularState.parcels.count() == 0
-					&& domain.particles.mass(0) == originalMass && domain.particles.volume(0) == originalVolume
-					&& domain.chemicalParcels.record(0).equals(original),
-					"precipitation defers when its actual liquid mass change cannot represent the solid transfer");
+			require(stats.granularPhase().precipitations() > 0
+					&& Math.addExact(domain.totalMassUnits(), domain.granularState.inventory.totalMassUnits()) == originalMass,
+					"Precipitation changed the combined integer mass inventory");
 			var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-			require(restored.particles.mass(0) == originalMass && restored.chemicalParcels.record(0).equals(original),
-					"deferred mass transfer preserves a valid, restorable inventory");
+			require(restored.totalMassUnits() == domain.totalMassUnits()
+					&& restored.granularState.inventory.totalMassUnits() == domain.granularState.inventory.totalMassUnits(),
+					"Phase transfer changed integer mass across restoration");
 		}
 	}
 
@@ -110,10 +104,9 @@ public final class GranularReactionCandidateValidation {
 			var granular = BuiltinGranularDefinitions.createRegistry();
 			var domain = new FluidDomain(3, 3, 3,
 					new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
-			domain.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 3, .375,
-					mmm.units.SignedDyadic.sum(new double[]{.8, .8, .8}).toDouble(), liquids.materials(),
+			domain.restoreMaterialParticleState(new FlipMaterialParticleState(3, 3, 3, .5F, 3, .375, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(mmm.units.SignedDyadic.sum(new double[]{.8, .8, .8}).toDouble()), liquids.materials(),
 					new float[]{.75F, .75F, .75F, .125F, .75F, .75F, .75F, .125F, .75F, .75F, .75F, .125F},
-					new float[9], new byte[27], new double[]{.8, .8, .8}, new int[]{0, 1, 2}));
+					new float[9], new byte[27], java.util.Arrays.stream(new double[]{.8, .8, .8}).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[]{0, 1, 2}));
 			liquids = domain.materialRegistry();
 			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
@@ -180,7 +173,7 @@ public final class GranularReactionCandidateValidation {
 				Arrays.fill(velocities, 3 * marker, 3 * marker + 3, .01F);
 			}
 			domain.restoreParticleState(new FlipParticleState(3, 3, 3, .5F, count, count / 1_024F,
-					positions, velocities, new byte[27]));
+					positions, velocities, mmm.units.Mass.createLiquid(.5F, 1000.0, positions), new byte[27]));
 			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 			domain.setPrecipitationEnabled(true);
@@ -233,7 +226,7 @@ public final class GranularReactionCandidateValidation {
 		var species = Map.of(BuiltinChemicalDefinitions.NA_PLUS, extent * 64,
 				BuiltinChemicalDefinitions.CL_MINUS, extent * 64);
 		double reactionMass = SolidCompositionRecord.fromStableAmounts(
-				BuiltinChemicalDefinitions.REGISTRY, species, 0).totalMass(BuiltinChemicalDefinitions.REGISTRY);
+				BuiltinChemicalDefinitions.REGISTRY, species, 0L).totalMass(BuiltinChemicalDefinitions.REGISTRY);
 		for (double residualScale : new double[]{0, 2, -.5}) {
 			var domain = new FluidDomain(3, 3, 3,
 					new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, .8F), 216);
@@ -245,9 +238,9 @@ public final class GranularReactionCandidateValidation {
 			domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
 					BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), false);
 			var composition = SolidCompositionRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY,
-					species, residualScale * reactionMass);
+					species, mmm.units.Mass.fromKilograms(residualScale * reactionMass));
 			var original = new GranularParcelStore.Parcel(.625F, .7F, .8F, 0, 0, 0,
-					svq, composition.totalMass(BuiltinChemicalDefinitions.REGISTRY),
+					svq, mmm.units.Mass.fromKilograms(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
 					registry.materialHandle(BuiltinGranularDefinitions.PRECIPITATE),
 					domain.granularState.compositions.create(composition), 0, (byte) 0);
 			domain.granularState.parcels.add(original);
@@ -289,9 +282,9 @@ public final class GranularReactionCandidateValidation {
 		long svq = 4_050, extent = svq / 50 * 281;
 		var composition = SolidCompositionRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY,
 				Map.of(BuiltinChemicalDefinitions.NA_PLUS, extent * 64,
-						BuiltinChemicalDefinitions.CL_MINUS, extent * 64), 0);
+						BuiltinChemicalDefinitions.CL_MINUS, extent * 64), 0L);
 		var existing = new GranularParcelStore.Parcel(.625F, .7F, .8F, 0, .001F, 0,
-				svq, composition.totalMass(BuiltinChemicalDefinitions.REGISTRY),
+				svq, mmm.units.Mass.fromKilograms(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
 				registry.materialHandle(BuiltinGranularDefinitions.PRECIPITATE),
 				domain.granularState.compositions.create(composition), 0, (byte) 0);
 		domain.granularState.parcels.add(existing);
@@ -415,7 +408,7 @@ public final class GranularReactionCandidateValidation {
 
 		// A moving parcel releases solid volume across two cells, while dissolved liquid
 		// is produced in its source cell. Saturated local capacity must defer the batch.
-		var future = new mmm.granular.GranularCouplingFields(3, 3, 3, domain.config.cellSize());
+		var future = new mmm.granular.GranularCouplingFields(3, 3, 3, domain.config().cellSize());
 		future.rebuild(domain.granularState.parcels, domain.granularState.deposits,
 				(index, original) -> new mmm.granular.GranularCouplingFields.Position(
 						index == 0 ? .875F : original.x(), original.y(), original.z()));
@@ -426,7 +419,7 @@ public final class GranularReactionCandidateValidation {
 				domain.setVolume(x, y, z, (float) (1.0 - future.solidSvq(cell) / (double) SolidVolume.SVQ_PER_CELL));
 		}
 		domain.granularState.parcels.overwrite(0, new GranularParcelStore.Parcel(
-				.875F, parcel.y(), parcel.z(), 0, 0, 0, parcel.solidVolumeSvq(), parcel.mass(),
+				.875F, parcel.y(), parcel.z(), 0, 0, 0, parcel.solidVolumeSvq(), parcel.massUnits(),
 				parcel.materialHandle(), parcel.solidCompositionHandle(), 0, (byte) 0));
 		domain.gridDirty = true;
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) domain.setVolume(x, y, z, 1);
@@ -499,9 +492,9 @@ public final class GranularReactionCandidateValidation {
 		domain.thermalBuoyancyProperties();
 		// A planned composition replacement also changes the state function while retaining U and structure.
 		var water = ChemicalMixtureRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY,
-				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), 0);
-		water = water.withMassResidualKilograms(domain.unitScale.kilograms(domain.particles.mass(0))
-				- water.exactSpeciesMassKilograms(BuiltinChemicalDefinitions.REGISTRY).toDouble());
+				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), 0L);
+		water = water.withMassResidualUnits(mmm.units.Mass.fromKilograms(domain.unitScale.kilograms(domain.particles.mass(0))
+				- water.exactSpeciesMassKilograms(BuiltinChemicalDefinitions.REGISTRY).toDouble()));
 		domain.chemicalParcels.commitPlannedReplacements(new int[]{0}, new ChemicalMixtureRecord[]{water});
 		var replaced = domain.thermalBuoyancyProperties();
 		require(replaced.viscosityPascalSeconds(cell) == previousViscosity && replaced.relativeBuoyancy(cell) == previousBuoyancy
@@ -533,7 +526,7 @@ public final class GranularReactionCandidateValidation {
 		for (int marker = 0; marker < domain.particleCount(); marker++) setWater(domain, marker, 100_000L);
 		var solid = domain.granularState.parcels.parcel(0);
 		domain.granularState.parcels.overwrite(0, new GranularParcelStore.Parcel(
-				solid.x(), solid.y(), solid.z(), -4, 3, 2, solid.solidVolumeSvq(), solid.mass(),
+				solid.x(), solid.y(), solid.z(), -4, 3, 2, solid.solidVolumeSvq(), solid.massUnits(),
 				solid.materialHandle(), solid.solidCompositionHandle(), 0, (byte) 0));
 		before = momentumAndEnergy(domain);
 		require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().dissolutions() == 1,
@@ -597,11 +590,11 @@ public final class GranularReactionCandidateValidation {
 				: mode.equals("region-budget") ? ChemicalLimits.MAX_REGION_TOTAL_QUANTA / 2 : 100_000L;
 		for (int marker = 0; marker < domain.particleCount(); marker++) setWater(domain, marker, amount);
 		var composition = SolidCompositionRecord.fromStableAmounts(chemistry, Map.of(
-				BuiltinChemicalDefinitions.NA_PLUS, 17_984L, BuiltinChemicalDefinitions.CL_MINUS, 17_984L), 0.0);
+				BuiltinChemicalDefinitions.NA_PLUS, 17_984L, BuiltinChemicalDefinitions.CL_MINUS, 17_984L), 0L);
 		int handle = domain.granularState.compositions.create(composition);
 		int material = registry.materialHandle(rule.solidMaterialId());
 		domain.granularState.parcels.add(new GranularParcelStore.Parcel(0.75F, 0.75F, 0.75F, 0, 0, 0,
-				50L, composition.totalMass(chemistry), material, handle, 0, (byte) 0));
+				50L, mmm.units.Mass.fromKilograms(composition.totalMass(chemistry)), material, handle, 0, (byte) 0));
 		domain.chemicalParcels.markDirtyCell(13);
 		var before = domain.chemicalParcels.record(0);
 		var result = domain.runThermalReactionPhaseAxis(false, 0);
@@ -629,9 +622,9 @@ public final class GranularReactionCandidateValidation {
 
 	private static void setWater(FluidDomain domain, int marker, long amount) {
 		var mixture = ChemicalMixtureRecord.fromStableAmounts(domain.chemicalParcels.registry(),
-				Map.of(BuiltinChemicalDefinitions.H2O, amount), 0.0);
+				Map.of(BuiltinChemicalDefinitions.H2O, amount), 0L);
 		domain.chemicalParcels.assign(marker, mixture, false);
-		domain.particles.setMass(marker, domain.unitScale.solverMass(mixture.massKilograms(domain.chemicalParcels.registry())));
+		domain.particles.setMassUnits(marker, mmm.units.Mass.fromKilograms(mixture.massKilograms(domain.chemicalParcels.registry())));
 	}
 
 	private static void allocationCases() {
@@ -639,7 +632,7 @@ public final class GranularReactionCandidateValidation {
 		ChemicalMixtureRecord clusteredMixture = ChemicalMixtureRecord.fromStableAmounts(
 				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
 						BuiltinChemicalDefinitions.NA_PLUS, 10_000_000L,
-						BuiltinChemicalDefinitions.CL_MINUS, 10_000_000L), 0.0);
+						BuiltinChemicalDefinitions.CL_MINUS, 10_000_000L), 0L);
 		SolidLiquidReaction clusteredRule = new SolidLiquidReaction("test:clustered_precipitation",
 				BuiltinChemicalDefinitions.AQUEOUS, java.util.Map.of(
 						BuiltinChemicalDefinitions.NA_PLUS, 64,
@@ -651,9 +644,9 @@ public final class GranularReactionCandidateValidation {
 		GranularPhaseTransferEngine.Plan clusteredPlan = new GranularPhaseTransferEngine(
 				BuiltinChemicalDefinitions.REGISTRY, unitScale).plan(clusteredRule, List.of(
 				new GranularPhaseTransferEngine.LiquidParcel(
-						0, 1.1F, unitScale.solverMass(clusteredMass), clusteredMixture),
+						0, 1.1F, mmm.units.Mass.fromKilograms(clusteredMass), clusteredMixture),
 				new GranularPhaseTransferEngine.LiquidParcel(
-						1, 1.1F, unitScale.solverMass(clusteredMass), clusteredMixture)), 0L, 22_761L);
+						1, 1.1F, mmm.units.Mass.fromKilograms(clusteredMass), clusteredMixture)), 0L, 22_761L);
 		long clusteredLiquidDelta = clusteredPlan.markerUpdates().stream().mapToLong(update ->
 				Math.round(Math.scalb(1.1 - update.cellVolume(), 24))).sum();
 		require(clusteredPlan.changed() && clusteredPlan.markerUpdates().stream().allMatch(update -> {
@@ -664,7 +657,7 @@ public final class GranularReactionCandidateValidation {
 				"clustered liquid did not choose an exact marker-representable precipitation allocation");
 		ChemicalMixtureRecord oneSodium = ChemicalMixtureRecord.fromStableAmounts(
 				BuiltinChemicalDefinitions.REGISTRY,
-				java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 1L), 0.0);
+				java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 1L), 0L);
 		SolidLiquidReaction sparseRule = new SolidLiquidReaction("test:sparse_precipitation",
 				BuiltinChemicalDefinitions.AQUEOUS,
 				java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 1),
@@ -675,9 +668,9 @@ public final class GranularReactionCandidateValidation {
 		GranularPhaseTransferEngine.Plan sparsePlan = new GranularPhaseTransferEngine(
 				BuiltinChemicalDefinitions.REGISTRY, unitScale).plan(sparseRule, List.of(
 				new GranularPhaseTransferEngine.LiquidParcel(
-						0, 0.125F, unitScale.solverMass(sodiumMass), oneSodium),
+						0, 0.125F, mmm.units.Mass.fromKilograms(sodiumMass), oneSodium),
 				new GranularPhaseTransferEngine.LiquidParcel(
-						1, 0.125F, unitScale.solverMass(sodiumMass), oneSodium)), 0L, 1L);
+						1, 0.125F, mmm.units.Mass.fromKilograms(sodiumMass), oneSodium)), 0L, 1L);
 		require(!sparsePlan.changed() && sparsePlan.retryRequired(),
 				"quanta-starved phase-transfer candidate should defer without pausing the valid base");
  }

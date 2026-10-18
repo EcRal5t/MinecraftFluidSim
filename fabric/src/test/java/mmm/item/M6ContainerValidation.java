@@ -79,8 +79,8 @@ public final class M6ContainerValidation {
 		ThermalRegistry registry = new ThermalRegistry(List.of(heavy, light));
 		ThermalStateFunction state = new ThermalStateFunction(registry);
 		FluidMixture mixture = new FluidMixture(List.of(
-				new FluidMixture.Component("test:heavy", 500_000_000L, 100.0),
-				new FluidMixture.Component("test:light", 500_000_000L, 1.0)));
+				new FluidMixture.Component("test:heavy", 500_000_000L, mmm.units.Mass.fromKilograms(100.0)),
+				new FluidMixture.Component("test:light", 500_000_000L, mmm.units.Mass.fromKilograms(1.0))));
 		double energy = state.internalEnergyAtTemperature(
 				registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, "test:heavy"),
 				100.0, java.util.Map.of(), 320.0)
@@ -91,11 +91,11 @@ public final class M6ContainerValidation {
 		check(ThermalContents.decode(contents.encode()).equals(contents),
 				"thermal contents canonical round-trip changed identity or raw U");
 		FluidMixture selected = new FluidMixture(List.of(
-				new FluidMixture.Component("test:heavy", 125_000_000L, 25.0),
-				new FluidMixture.Component("test:light", 375_000_000L, 0.75)));
+				new FluidMixture.Component("test:heavy", 125_000_000L, mmm.units.Mass.fromKilograms(25.0)),
+				new FluidMixture.Component("test:light", 375_000_000L, mmm.units.Mass.fromKilograms(0.75))));
 		FluidMixture remaining = new FluidMixture(List.of(
-				new FluidMixture.Component("test:heavy", 375_000_000L, 75.0),
-				new FluidMixture.Component("test:light", 125_000_000L, 0.25)));
+				new FluidMixture.Component("test:heavy", 375_000_000L, mmm.units.Mass.fromKilograms(75.0)),
+				new FluidMixture.Component("test:light", 125_000_000L, mmm.units.Mass.fromKilograms(0.25))));
 		ThermalContents.EnergySplit split = LiquidContainerThermodynamics.split(
 				registry, contents, mixture, selected, remaining);
 		check(split.selectedEnergy() == 15_500.0 && split.remainingEnergy() == 6_500.0,
@@ -120,8 +120,8 @@ public final class M6ContainerValidation {
 				== Double.doubleToRawLongBits(pure.internalEnergy()),
 				"homogeneous thermal split did not return the raw U remainder");
 		FluidMixture changed = new FluidMixture(List.of(
-				new FluidMixture.Component("test:heavy", 500_000_001L, 100.0),
-				new FluidMixture.Component("test:light", 499_999_999L, 1.0)));
+				new FluidMixture.Component("test:heavy", 500_000_001L, mmm.units.Mass.fromKilograms(100.0)),
+				new FluidMixture.Component("test:light", 499_999_999L, mmm.units.Mass.fromKilograms(1.0))));
 		check(!ThermalContents.forMixture(registry.fingerprint(), changed, contents.internalEnergy()).underlyingHash()
 					.equals(contents.underlyingHash()), "thermal contents hash ignored an exact liquid-ledger change");
 	}
@@ -145,14 +145,14 @@ public final class M6ContainerValidation {
 					List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
 			var registry = new ThermalRegistry(List.of(definition));
 			var state = new ThermalStateFunction(registry);
-			var source = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", total, 999.0)));
+			var source = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", total, mmm.units.Mass.fromKilograms(999.0))));
 			double energy = state.internalEnergyAtTemperature(0, 999.0, java.util.Map.of(), reference == 0 ? 1.0E-8 : 300.0);
 			var contents = ThermalContents.forMixture(registry.fingerprint(), source, energy);
 			double sourceT = LiquidContainerThermodynamics.temperatureK(registry, contents, source);
 			for (long selectedNanos : new long[] {59, total - 59}) {
 				double selectedMass = 999.0 * ((double) selectedNanos / total);
-				var selected = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", selectedNanos, selectedMass)));
-				var remaining = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", total - selectedNanos, 999.0 - selectedMass)));
+				var selected = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", selectedNanos, mmm.units.Mass.fromKilograms(selectedMass))));
+				var remaining = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", total - selectedNanos, mmm.units.Mass.fromKilograms(999.0 - selectedMass))));
 				var split = LiquidContainerThermodynamics.split(registry, contents, source, selected, remaining);
 				boolean smallSelected = selectedNanos == 59;
 				double direct = state.internalEnergyAtTemperature(0, smallSelected ? selected.totalMass() : remaining.totalMass(),
@@ -174,7 +174,7 @@ public final class M6ContainerValidation {
 				List.of(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
 		ChemicalContents source = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
 				ChemicalLimits.QUANTA_PER_MOL, List.of(new ChemicalContents.Group("mmm:water", true, BUCKET,
-				Double.doubleToRawLongBits(18.0), Double.doubleToRawLongBits(0.0), List.of(
+				mmm.units.Mass.fromKilograms(18.0), mmm.units.Mass.fromKilograms(0.0), List.of(
 				new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
 		ChemicalContents.Split inventory = source.split(333_333_333L, BuiltinChemicalDefinitions.REGISTRY);
 		ThermalStateFunction state = new ThermalStateFunction(registry);
@@ -215,16 +215,16 @@ public final class M6ContainerValidation {
 		SolidCompositionRecord solid = SolidCompositionRecord.fromStableAmounts(
 				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(
 						BuiltinChemicalDefinitions.CL_MINUS, 640L,
-						BuiltinChemicalDefinitions.NA_PLUS, 640L), 0.0);
+						BuiltinChemicalDefinitions.NA_PLUS, 640L), 0L);
 		List<GranularContents.SpeciesAmount> species = java.util.Map.of(
 				BuiltinChemicalDefinitions.CL_MINUS, 640L,
 				BuiltinChemicalDefinitions.NA_PLUS, 640L).entrySet().stream()
 				.sorted(java.util.Map.Entry.comparingByKey())
 				.map(entry -> new GranularContents.SpeciesAmount(entry.getKey(), entry.getValue())).toList();
 		GranularContents contents = new GranularContents(registry.fingerprint(), SolidVolume.SVQ_PER_CUBIC_METER, List.of(
-				new GranularContents.Group(BuiltinGranularDefinitions.FINE_SAND, 65_536L, 127.5),
+				new GranularContents.Group(BuiltinGranularDefinitions.FINE_SAND, 65_536L, mmm.units.Mass.fromKilograms(127.5)),
 				new GranularContents.Group(BuiltinGranularDefinitions.PRECIPITATE, 10L,
-						Double.doubleToRawLongBits(solid.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
+						mmm.units.Mass.fromKilograms(solid.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
 						Double.doubleToRawLongBits(0.0), species)));
 		contents.validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
 		GranularContents decoded = GranularContents.decode(contents.encode());
@@ -463,11 +463,11 @@ public final class M6ContainerValidation {
 				"insufficient fine extraction did not commit its partial plan");
 
 		// A small marker remains extractable even when the same request cannot shrink a large one.
-		float fineVolume = Math.scalb(1.0F, -60);
+		float fineVolume = Math.scalb(1.0F, -30);
 		check(coarse.tryInsertExactVolume(2, 1, 1, fineVolume, 0).transferred(), "fine marker setup");
 		var fineState = coarse.captureAuthoritativeState();
 		var fine = coarse.tryExtractExactVolume(1, 1, 1, fineVolume, 1);
-		check(fine.transferred() && fine.volume() == fineVolume && fine.mass() == fineVolume * 1_000.0,
+		check(fine.transferred() && fine.volume() == fineVolume && fine.massUnits() == mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).massUnitsForNormalized(fineVolume * 1_000.0),
 				"whole fine marker disappeared from the settlement next to a larger inventory");
 		FluidDomainStateAssertions.assertSameState(unchanged, coarse.captureAuthoritativeState(),
 				"fine extraction left the coarse inventory intact");
@@ -475,7 +475,7 @@ public final class M6ContainerValidation {
 		var fineMixture = mixture.tryExtractExactMixture(2, 1, 1, fineVolume, 0);
 		check(fineMixture.transferred() && fineMixture.portions().size() == 1
 				&& fineMixture.portions().getFirst().volume() == fineVolume
-				&& fineMixture.portions().getFirst().mass() == fine.mass(),
+				&& fineMixture.portions().getFirst().massUnits() == fine.massUnits(),
 				"mixture settlement lost a fine carrier delta to whole-domain cancellation");
 	}
 
@@ -500,15 +500,15 @@ public final class M6ContainerValidation {
 		for (int i = 0; i < pure.particleCount(); i++) initialMass[i] = pure.copyPositionVolume()[4 * i + 3] * CONFIG.density();
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
-				domain.totalVolumeExact(), 125.0, materials, pure.copyPositionVolume(),
-				pure.copyParticleVelocities(), pure.copySolidMask(), initialMass, initialMaterial));
+				domain.totalVolumeExact(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(125.0), materials, pure.copyPositionVolume(),
+				pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(initialMass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), initialMaterial));
 		domain.removeAllWaterExact();
 
 		double insertedMass = 123.456789012345;
 		FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactMaterial(
-				2, 2, 2, 0.375F, insertedMass, 1, 1);
+				2, 2, 2, 0.375F, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(insertedMass), 1, 1);
 		check(inserted.transferred()
-				&& Double.doubleToRawLongBits(inserted.mass()) == Double.doubleToRawLongBits(domain.totalMass()),
+				&& inserted.massUnits() == domain.totalMassUnits(),
 				"material insert did not preserve its independent mass ledger");
 		check(Math.abs(domain.totalMass() - 0.375 * 800.0) > 100.0,
 				"material insert silently reconstructed mass from reference density");
@@ -519,9 +519,9 @@ public final class M6ContainerValidation {
 		FluidDomainStateAssertions.assertSameState(materialBefore, domain.captureAuthoritativeState(),
 				"default-carrier extraction preserved non-default material");
 		FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(2, 2, 2, 0.125F, 1, 1);
-		check(extracted.transferred() && extracted.mass() > 0.0,
+		check(extracted.transferred() && mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).normalizedMass(extracted.massUnits()) > 0.0,
 				"material extraction did not return removed mass");
-		check(Math.abs(massBefore - (domain.totalMass() + extracted.mass())) <= 1.0E-12,
+		check(Math.abs(massBefore - (domain.totalMass() + mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).normalizedMass(extracted.massUnits()))) <= 1.0E-12,
 				"material extraction failed to close the mass ledger");
 		// This call exercises the strict double volume sum used by the material region handoff.
 		domain.exportMaterialParticleState();
@@ -529,8 +529,8 @@ public final class M6ContainerValidation {
 
 	private static void testMixtureTransfer() {
 		FluidMixture expected = new FluidMixture(List.of(
-				new FluidMixture.Component("mmm:oil", 400_000_000L, 320.0),
-				new FluidMixture.Component("mmm:water", 600_000_000L, 600.0)));
+				new FluidMixture.Component("mmm:oil", 400_000_000L, mmm.units.Mass.fromKilograms(320.0)),
+				new FluidMixture.Component("mmm:water", 600_000_000L, mmm.units.Mass.fromKilograms(600.0))));
 		check(FluidMixture.decode(expected.encode()).equals(expected)
 				&& expected.totalVolumeNanos() == BUCKET && expected.totalMass() == 920.0,
 				"canonical fluid-mixture handle did not round-trip exact ledgers");
@@ -549,17 +549,16 @@ public final class M6ContainerValidation {
 				new FluidMaterial("mmm:oil", 800.0, "mmm:oil", 0.0, Math.PI / 2.0));
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
-				domain.totalVolumeExact(), 125.0, materials, pure.copyPositionVolume(),
-				pure.copyParticleVelocities(), pure.copySolidMask(), java.util.stream.IntStream.range(0, pure.particleCount())
-						.mapToDouble(i -> pure.copyPositionVolume()[4 * i + 3] * CONFIG.density()).toArray(), new int[pure.particleCount()]));
+				domain.totalVolumeExact(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(125.0), materials, pure.copyPositionVolume(),
+				pure.copyParticleVelocities(), pure.copySolidMask(), pure.copyMassUnits(), new int[pure.particleCount()]));
 		domain.removeAllWaterExact();
 
 		List<FluidDomain.MaterialPortion> portions = List.of(
-				new FluidDomain.MaterialPortion(1, 3.2, 256.125),
-				new FluidDomain.MaterialPortion(0, 4.8, 480.875));
+				new FluidDomain.MaterialPortion(1, 3.2, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(256.125)),
+				new FluidDomain.MaterialPortion(0, 4.8, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(480.875)));
 		FluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(2, 2, 2, portions, 2);
 		double insertedVolume = inserted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum();
-		double insertedMass = inserted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::mass).sum();
+		double insertedMass = inserted.portions().stream().mapToDouble((FluidDomain.MaterialPortion p) -> mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).normalizedMass(p.massUnits())).sum();
 		check(inserted.transferred() && inserted.portions().size() == 2
 				&& Math.abs(domain.totalVolumeExact() - insertedVolume) <= 1.0E-15
 				&& Math.abs(domain.totalMass() - insertedMass) <= 1.0E-12
@@ -570,13 +569,13 @@ public final class M6ContainerValidation {
 						+ ", mass=" + domain.totalMass());
 		double volumeBeforeRefusal = domain.totalVolumeExact(), massBeforeRefusal = domain.totalMass();
 		check(!domain.tryInsertExactMixture(2, 2, 2,
-				List.of(new FluidDomain.MaterialPortion(0, 100.0, 100.0)), 1).transferred()
+				List.of(new FluidDomain.MaterialPortion(0, 100.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(100.0))), 1).transferred()
 				&& domain.totalVolumeExact() == volumeBeforeRefusal && domain.totalMass() == massBeforeRefusal,
 				"refused mixture insert left partial markers");
 
 		FluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(2, 2, 2, 8.0F, 2);
 		double extractedVolume = extracted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum();
-		double extractedMass = extracted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::mass).sum();
+		double extractedMass = extracted.portions().stream().mapToDouble((FluidDomain.MaterialPortion p) -> mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).normalizedMass(p.massUnits())).sum();
 		check(extracted.transferred() && extracted.portions().size() == 2
 				&& Math.abs(extractedVolume - 8.0) <= 1.0E-12
 				&& Math.abs(insertedVolume - (domain.totalVolumeExact() + extractedVolume)) <= 1.0E-15
@@ -592,17 +591,17 @@ public final class M6ContainerValidation {
 	private static void testMixtureHardening() {
 		try {
 			new FluidMixture(List.of(
-					new FluidMixture.Component("mmm:oil", 1L, Double.MAX_VALUE),
-					new FluidMixture.Component("mmm:water", 1L, Double.MAX_VALUE)));
-			throw new AssertionError("Expected non-finite mixture total-mass rejection");
-		} catch (IllegalArgumentException expected) {
+					new FluidMixture.Component("mmm:oil", 1L, Long.MAX_VALUE),
+					new FluidMixture.Component("mmm:water", 1L, Long.MAX_VALUE)));
+			throw new AssertionError("Expected integer mixture total-mass overflow rejection");
+		} catch (IllegalArgumentException | ArithmeticException expected) {
 			// A malformed item must be rejected during construction, before tooltip/WAL callers.
 		}
 
 		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG, 64);
 		try {
 			domain.tryInsertExactMixture(2, 2, 2,
-					List.of(new FluidDomain.MaterialPortion(0, 1.0E-300, 1.0)), 1);
+					List.of(new FluidDomain.MaterialPortion(0, 1.0E-300, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1.0))), 1);
 			throw new AssertionError("Expected sub-float material volume rejection");
 		} catch (IllegalArgumentException expected) {
 			check(domain.particleCount() == 0 && domain.totalVolumeExact() == 0.0,

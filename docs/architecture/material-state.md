@@ -44,7 +44,7 @@
 
 - 每个 marker 独立保存体积、质量和稳定材料身份。
 - 区域总量与逐材料体积/质量账本必须由 marker 精确和闭合。
-- 全域液体体积、质量观察与材料 handoff 按指数分桶精确汇总原始 binary32 体积和 binary64 质量，在 binary64 接口处统一舍入一次，保持大小不同的载体与 ordinal 排列变化下的总量一致。
+- 液体体积按原始 binary32 精确汇总；质量使用统一整数列，逐材料和全域总账受检求和。handoff 原样携带质量整数。
 - 注液计划从逐格原始体积的精确和扣除开放容量，计划内各材料共同抵扣这份精确剩余空间。请求剩余量也按实际片段精确扣减，保证跨格注入量不超过请求。转成 binary64 观察量及 binary32 注入片段时向下舍入；操作回执将实际接受量在 binary32 接口处舍入一次。化学量子不足以表示的片段留在请求剩余量中。
 - `FluidMaterialRegistry` 是运行时材料定义入口；持久化和容器使用稳定 ID，不保存运行时 handle。
 - 当前机械定义包含 stable ID、参考密度、miscibility group、液气表面张力和接触角；液液张力由 registry 的 phase 无序对表给出。
@@ -87,7 +87,8 @@ handle 用于数组索引。checkpoint 保存 canonical material palette，容�
 ```text
 rho_cell = sum(marker_solver_mass) / sum(marker_normalized_volume)
 
-mass_kg   = marker_solver_mass * cellSize^3
+mass_kg   = massUnits / Mass.UNITS_PER_KILOGRAM
+marker_solver_mass = mass_kg / cellSize^3
 volume_m3 = marker_normalized_volume * cellSize^3
 ```
 
@@ -95,7 +96,7 @@ volume_m3 = marker_normalized_volume * cellSize^3
 外壳附近归一化，partial cut-cell 和含多相单元保留所属单元采样。该字段按载体位置与热状态代次重建，保持所有质量和体积库存原样。
 无热状态的压力密度沿用所属单元的组成密度。
 
-质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的闭合式为 `particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg`；
+chemical marker 的整数闭合式为 `massUnits = speciesMassUnits + massResidualUnits`；
 溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。
 
 pressure face 的 `1/rho` 系数按界面距离加权。面密度比、迁移率及压力矩阵系数使用 binary64，投影结果最终写入 binary32 MAC 速度。热学 Boussinesq 项从相同支撑上的逐载体温度和实际质量推导热密度变化，并沿相同的两段界面距离积分；库存密度、压力惯性和热密度修正各自保存明确的派生含义。
@@ -118,22 +119,18 @@ pressure face 的 `1/rho` 系数按界面距离加权。面密度比、迁移率
 - 玩家和发射器只向实际目标区域转移，单次物品计数必须为 1。
 - 容器与区域之间的物质变化通过同一 WAL 事务提交；任何不能被物品表示的结果在修改 solver 前拒绝。
 
-`FluidMixture` 最多保存 64 个按 stable ID 排序的 component；每项包含 `volumeNanos` 和 raw kg mass bits。
+`FluidMixture` 最多保存 64 个按 stable ID 排序的 component；每项包含 `volumeNanos` 和 `massUnits` 整数。
 构造时拒绝重复 ID、非正体积/质量和超过一桶的总量。物品中单材料可以使用紧凑 component 表示，多材料使用 canonical mixture 文本；
 进入 WAL 时两者都规范化为完整 mixture truth，reader 不现场合成缺失 component。
 
 抽取先以 double 精确量预检，再按整 marker 与必要尾拆分生成实际 settlement；物品必须能表示实际 volume、每材料 mass 和所有附加化学/热侧列。请求量与实际可表示量不一致时，WAL 记录实际量，不用请求量伪造闭合。
 
-材料混合物注入先规划完整 marker 列，每材料的最大质量片段接收原始请求质量减去其余片段精确和后的一次舍入余量；默认化学记录按最终片段质量重新预检。
-返回质量由最终片段的精确和舍入一次，必须与请求质量位模式相同。原始 marker 质量和与请求的差额最多为该最大片段质量的半个 ULP，保留在实际质量列中供精确汇总观察；
-体积片段保持原始 binary32 注入计划。
+材料混合物注入先规划完整 marker 列，按体积比例分配整数质量，最大片段接收整数余数。
+返回的逐材料质量必须与实际写入列精确相等；体积片段保持原始 binary32 注入计划。
+显式化学注入同时分配整数物种，片段质量余量由实际质量整数减去物种质量整数求得，逐组精确闭合。
+拆分或转移需要两侧具有正体积、正质量与可表示的化学组成；低于编码分辨率时保留来源库存。
+抽取回执从实际载体差额累计整数质量，体积仍按实际片段精确求和后输出。
 
-显式化学注入按每个完整 material/indicator 组执行同一质量余量分配。整数 species 仍由实际体积权重分配；
-各片段残差先由实际 kg 质量减去精确 species 质量得到，再由绝对值最大残差片段接收原始组残差减去其余残差精确和后的一次舍入余量。
-完整候选逐片段检查质量与组成闭合，无法同时表示时在写入前拒绝。原始组残差与最终残差和的表示差受该最大残差片段半个 ULP 限制。
-
-正请求必须规划出非空、具有正体积和质量增量的转移；小于现有 marker 可拆分分辨率时，在修改库存前拒绝，并继续允许从其他可表示的 marker 抽取。
-尾差容差只由已接受的拆分决定。逐材料返回量在提交前对计划中的原始体积、质量差精确求和，最后转为 double；不能用已舍入的全域总量相减计算微量转移。
 无材料参数的体积抽取选择默认载体（handle 0），混合抽取使用独立的 `tryExtractExactMixture`。
 
 ## 功能配置

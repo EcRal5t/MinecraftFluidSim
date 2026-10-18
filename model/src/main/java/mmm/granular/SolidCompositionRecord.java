@@ -14,10 +14,10 @@ import java.math.BigInteger;
 public final class SolidCompositionRecord {
 	private final int[] speciesHandles;
 	private final long[] amounts;
-	private final long massResidualBits;
+	private final long massResidualUnits;
 	private final int hash;
 
-	public SolidCompositionRecord(int[] speciesHandles, long[] amounts, long massResidualBits) {
+	public SolidCompositionRecord(int[] speciesHandles, long[] amounts, long massResidualUnits) {
 		if (speciesHandles == null || amounts == null || speciesHandles.length == 0
 				|| speciesHandles.length != amounts.length
 				|| speciesHandles.length > GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES) {
@@ -34,16 +34,15 @@ public final class SolidCompositionRecord {
 		if (total > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 			throw new IllegalArgumentException("Solid composition amount is over budget");
 		}
-		double residual = Double.longBitsToDouble(massResidualBits);
-		if (!Double.isFinite(residual)) throw new IllegalArgumentException("Solid mass residual is not finite");
+
 		this.speciesHandles = speciesHandles.clone(); this.amounts = amounts.clone();
-		this.massResidualBits = massResidualBits;
+		this.massResidualUnits = massResidualUnits;
 		this.hash = 31 * (31 * Arrays.hashCode(this.speciesHandles) + Arrays.hashCode(this.amounts))
-				+ Long.hashCode(massResidualBits);
+				+ Long.hashCode(massResidualUnits);
 	}
 
 	public static SolidCompositionRecord fromStableAmounts(
-			ChemicalRegistry registry, Map<String, Long> stableAmounts, double massResidual
+			ChemicalRegistry registry, Map<String, Long> stableAmounts, long massResidualUnits
 	) {
 		TreeMap<Integer, Long> handles = new TreeMap<>();
 		for (Map.Entry<String, Long> entry : stableAmounts.entrySet()) {
@@ -55,7 +54,7 @@ public final class SolidCompositionRecord {
 		for (Map.Entry<Integer, Long> entry : handles.entrySet()) {
 			species[index] = entry.getKey(); amounts[index++] = entry.getValue();
 		}
-		return new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(massResidual));
+		return new SolidCompositionRecord(species, amounts, massResidualUnits);
 	}
 
 	public int entryCount() { return speciesHandles.length; }
@@ -68,8 +67,8 @@ public final class SolidCompositionRecord {
 	public long totalQuanta() {
 		long result = 0L; for (long amount : amounts) result = Math.addExact(result, amount); return result;
 	}
-	public long massResidualBits() { return massResidualBits; }
-	public double massResidual() { return Double.longBitsToDouble(massResidualBits); }
+	public long massResidualUnits() { return massResidualUnits; }
+	public double massResidual() { return mmm.units.Mass.kilograms(massResidualUnits); }
 	public int[] copySpeciesHandles() { return speciesHandles.clone(); }
 	public long[] copyAmounts() { return amounts.clone(); }
 
@@ -82,7 +81,9 @@ public final class SolidCompositionRecord {
 		return result;
 	}
 
-	public double totalMass(ChemicalRegistry registry) { return exactSpeciesMass(registry).toDouble() + massResidual(); }
+	public long speciesMassUnits(ChemicalRegistry registry) { return mmm.units.Mass.exactUnits(exactSpeciesMass(registry).numerator(), exactSpeciesMass(registry).denominator()); }
+	public long massUnits(ChemicalRegistry registry) { return Math.addExact(mmm.units.Mass.exactUnits(exactSpeciesMass(registry).numerator(), exactSpeciesMass(registry).denominator()), massResidualUnits); }
+	public double totalMass(ChemicalRegistry registry) { return mmm.units.Mass.kilograms(massUnits(registry)); }
 	public long chargeQuanta(ChemicalRegistry registry) {
 		long result = 0L;
 		for (int index = 0; index < speciesHandles.length; index++) result = Math.addExact(result,
@@ -119,14 +120,12 @@ public final class SolidCompositionRecord {
 		for (int entry = 0; entry < combined.length; entry++) {
 			combined[entry] = Math.addExact(combined[entry], other.amounts[entry]);
 		}
-		double residual = massResidual() + other.massResidual();
-		if (!Double.isFinite(residual)) throw new ArithmeticException("Solid composition residual overflow");
-		return new SolidCompositionRecord(speciesHandles, combined, Double.doubleToRawLongBits(residual));
+		return new SolidCompositionRecord(speciesHandles, combined, Math.addExact(massResidualUnits, other.massResidualUnits));
 	}
 
 	@Override public boolean equals(Object other) {
 		return this == other || other instanceof SolidCompositionRecord record
-				&& massResidualBits == record.massResidualBits
+				&& massResidualUnits == record.massResidualUnits
 				&& Arrays.equals(speciesHandles, record.speciesHandles) && Arrays.equals(amounts, record.amounts);
 	}
 	@Override public int hashCode() { return hash; }

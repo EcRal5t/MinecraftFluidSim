@@ -180,7 +180,7 @@ final class GranularPressureCoupling {
 			double scale = dt * inverseMass[parcel];
 			double vx = p.velocityX() - scale * x, vy = p.velocityY() - scale * y, vz = p.velocityZ() - scale * z;
 			domain.granularState.parcels.overwrite(parcel, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(),
-					(float) vx, (float) vy, (float) vz, p.solidVolumeSvq(), p.mass(), p.materialHandle(),
+					(float) vx, (float) vy, (float) vz, p.solidVolumeSvq(), p.massUnits(), p.materialHandle(),
 					p.solidCompositionHandle(), p.contactAge(), p.flags()));
 			domain.lastGranularBoundaryImpulseX += p.mass() * (vx - (float) vx);
 			domain.lastGranularBoundaryImpulseY += p.mass() * (vy - (float) vy);

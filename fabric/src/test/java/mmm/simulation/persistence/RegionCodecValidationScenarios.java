@@ -65,9 +65,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		}
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
-				totalMass, liquids.materials(), positions, pure.copyParticleVelocities(), pure.copySolidMask(),
-				mass, new int[pure.particleCount()]));
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalMass), liquids.materials(), positions, pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[pure.particleCount()]));
 		liquids = region.domain().materialRegistry();
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
@@ -78,11 +76,11 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				region.sizeX(), region.sizeY(), region.sizeZ(), granular.fingerprint(),
 				granular.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
 				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F,
-						0.125F, -0.25F, 0.0625F, activeSvq, activeMass, sand, 0,
+						0.125F, -0.25F, 0.0625F, activeSvq, mmm.units.Mass.fromKilograms(activeMass), sand, 0,
 						2, mmm.granular.GranularParcelStore.FLAG_SUPPORTED, 0)),
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
-						sand, 0, depositSvq, depositMass)), Math.addExact(activeSvq, depositSvq),
-				Double.doubleToRawLongBits(activeMass + depositMass));
+						sand, 0, depositSvq, mmm.units.Mass.fromKilograms(depositMass))), Math.addExact(activeSvq, depositSvq),
+				mmm.units.Mass.fromKilograms(activeMass + depositMass));
 		region.domain().restoreGranularState(granularFixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
 		ThermalRegistry thermal = thermalRegistry(liquids, granular);
 		double insertionTemperatureK = Math.nextUp(300.0);
@@ -92,7 +90,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				thermal.fingerprint(), List.of(new FiniteThermalDeviceState(
 						"mmm:fabric_block", "mmm:persistence/4/5/6", "mmm:device/persistence",
 						new FiniteThermalBodyState(7L, thermal.fingerprint(),
-								"mmm:thermal/persistence_device", 2.0,
+								"mmm:thermal/persistence_device", mmm.units.Mass.fromKilograms(2.0),
 								thermalState.internalEnergyAtTemperature(
 										thermal.materialHandle("mmm:thermal/persistence_device"),
 										2.0, java.util.Map.of(), 350.0)))));
@@ -102,7 +100,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		region.domain().setThermalTemperatureInCell(1, 1, 1, 340.0);
 		region.domain().setThermalTemperatureInCell(5, 3, 5, 280.0);
 		region.domain().addCoherentPhaseExternal(3, 2, 3, "mmm:thermal/persistence_solid",
-				SolidVolume.SVQ_PER_CELL / 8L, 0.125, null, 6.25);
+				SolidVolume.SVQ_PER_CELL / 8L, mmm.units.Mass.fromKilograms(0.125), null, 6.25);
 		SignedDyadic fluidBeforeDeviceExchange = region.domain().exactInternalEnergy();
 		SignedDyadic deviceBeforeExchange = expectedDevices.exactInternalEnergy();
 		SignedDyadic fluidRoundoffBefore = region.domain().thermalAudit().roundoffResidual();
@@ -179,7 +177,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		}
 		CoherentPhaseStore.Composition composition = new CoherentPhaseStore.Composition(List.of(
 				new CoherentPhaseStore.Component("test:a", 7L),
-				new CoherentPhaseStore.Component("test:b", 11L)), Double.doubleToRawLongBits(0.25));
+				new CoherentPhaseStore.Component("test:b", 11L)), mmm.units.Mass.fromKilograms(0.25));
 		ThermalRegionStateCodec thermalCodec = new ThermalRegionStateCodec();
 		validateInsertionTemperaturePayload(thermalCodec, state);
 		ThermalRegionStateCodec.SectionData composed = new ThermalRegionStateCodec.SectionData(
@@ -283,7 +281,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		var manifest = new GasRegionStateCodec.ManifestData(GasRegionStateCodec.CAP_MATERIALS | GasRegionStateCodec.CAP_GAS,
 				snapshot.registryFingerprint(), "", snapshot.nodes().stream()
 				.map(n -> new GasRegionStateCodec.NodeData(n.topologyKey(), n.inventory())).toList(),
-				snapshot.externalSource(), snapshot.escapedSink(), snapshot.massRoundoff(), snapshot.residualRoundoff(),
+				snapshot.externalSource(), snapshot.escapedSink(),
 				List.of(new GasRegionStateCodec.SectionLedger(new RegionSectionState.SectionKey(0, 0, 0), 3)));
 		var decodedManifest = codec.decodeManifest(codec.encodeManifest(manifest));
 		require(decodedManifest.sectionLedgers().getFirst().sealedPieceCount() == 3
@@ -334,8 +332,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 			totalLiquidMass += liquidMass[marker];
 		}
 		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(pure.sizeX(), pure.sizeY(), pure.sizeZ(),
-				pure.cellSize(), pure.particleCount(), pure.totalVolume(), totalLiquidMass, BuiltinFluidMaterials.DEFAULT_PALETTE,
-				positions, pure.copyParticleVelocities(), pure.copySolidMask(), liquidMass, new int[pure.particleCount()]));
+				pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalLiquidMass), BuiltinFluidMaterials.DEFAULT_PALETTE,
+				positions, pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(liquidMass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[pure.particleCount()]));
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long activeSvq = GranularLimits.MAX_PARCEL_VOLUME_SVQ, depositSvq = activeSvq - 17L;
 		double activeMass = 3.25, depositMass = 4.75;
@@ -343,11 +341,11 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		GranularStateSnapshot fixture = new GranularStateSnapshot(region.sizeX(), region.sizeY(), region.sizeZ(),
 				granular.fingerprint(), granular.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
 				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F,
-						0.125F, -0.25F, 0.0625F, activeSvq, activeMass, sand, 0,
+						0.125F, -0.25F, 0.0625F, activeSvq, mmm.units.Mass.fromKilograms(activeMass), sand, 0,
 						2, mmm.granular.GranularParcelStore.FLAG_SUPPORTED, 0)),
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
-						sand, 0, depositSvq, depositMass)), Math.addExact(activeSvq, depositSvq),
-				Double.doubleToRawLongBits(activeMass + depositMass));
+						sand, 0, depositSvq, mmm.units.Mass.fromKilograms(depositMass))), Math.addExact(activeSvq, depositSvq),
+				mmm.units.Mass.fromKilograms(activeMass + depositMass));
 		region.domain().restoreGranularState(fixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
 		GranularStateSnapshot expected = region.domain().exportGranularState();
 		RegionState state = RegionCheckpointFixtures.captureGranular(region, 1L);
@@ -369,7 +367,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 					"granular region section did not round-trip");
 		}
 		GranularRegionStateCodec granularCodec = new GranularRegionStateCodec();
-		var selectedParcel = new GranularStateSnapshot.ActiveParcel(.5F, .75F, .75F, 0, 0, 0, 3, .001, sand, 0, 0, (byte) 0, 2);
+		var selectedParcel = new GranularStateSnapshot.ActiveParcel(.5F, .75F, .75F, 0, 0, 0, 3, mmm.units.Mass.fromKilograms(.001), sand, 0, 0, (byte) 0, 2);
 		var selectedSection = new GranularRegionStateCodec.SectionData(
 				List.of(new GranularRegionStateCodec.ActiveEntry(0, selectedParcel)), List.of());
 		byte[] selectedBytes = granularCodec.encodeSection(selectedSection);
@@ -406,13 +404,13 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		}
 		reactiveRegion.domain().restoreMaterialParticleState(new FlipMaterialParticleState(reactivePure.sizeX(),
 				reactivePure.sizeY(), reactivePure.sizeZ(), reactivePure.cellSize(), reactivePure.particleCount(),
-				reactivePure.totalVolume(), reactiveTotalMass, BuiltinFluidMaterials.DEFAULT_PALETTE, reactivePositions,
-				reactivePure.copyParticleVelocities(), reactivePure.copySolidMask(), reactiveLiquidMass,
+				reactivePure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(reactivePure.cellSize()).massUnitsForNormalized(reactiveTotalMass), BuiltinFluidMaterials.DEFAULT_PALETTE, reactivePositions,
+				reactivePure.copyParticleVelocities(), reactivePure.copySolidMask(), java.util.Arrays.stream(reactiveLiquidMass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(reactivePure.cellSize()).massUnitsForNormalized(m)).toArray(),
 				new int[reactivePure.particleCount()]));
 		reactiveRegion.domain().bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		SolidCompositionRecord composition = SolidCompositionRecord.fromStableAmounts(
 				BuiltinChemicalDefinitions.REGISTRY, java.util.Map.of(BuiltinChemicalDefinitions.NA_PLUS, 640L,
-						BuiltinChemicalDefinitions.CL_MINUS, 640L), 0.0);
+						BuiltinChemicalDefinitions.CL_MINUS, 640L), 0L);
 		GranularStateSnapshot reactiveFixture = new GranularStateSnapshot(reactiveRegion.sizeX(), reactiveRegion.sizeY(),
 				reactiveRegion.sizeZ(), granular.fingerprint(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
 				granular.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
@@ -421,9 +419,9 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 						new GranularStateSnapshot.CompositionComponent(BuiltinChemicalDefinitions.NA_PLUS, 640L)), 0L)),
 				java.util.Map.of(BuiltinChemicalDefinitions.CL_MINUS, 640L, BuiltinChemicalDefinitions.NA_PLUS, 640L),
 				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F, 0.0F, 0.0F, 0.0F,
-						10L, composition.totalMass(BuiltinChemicalDefinitions.REGISTRY),
+						10L, mmm.units.Mass.fromKilograms(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
 						granular.materialHandle(BuiltinGranularDefinitions.PRECIPITATE), 1, 0, (byte) 0, 0)), List.of(), 10L,
-				Double.doubleToRawLongBits(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)));
+				mmm.units.Mass.fromKilograms(composition.totalMass(BuiltinChemicalDefinitions.REGISTRY)));
 		reactiveRegion.domain().restoreGranularState(reactiveFixture, granular, liquids, BuiltinFluidMaterials.createRegistry());
 		var removedReactive = reactiveRegion.domain().tryExtractExactGranular(1, 1, 1, 10L, 0, true);
 		require(removedReactive.transferred()
@@ -476,9 +474,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 			totalMass += mass[marker];
 		}
 		region.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
-				totalMass, BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(),
-				pure.copySolidMask(), mass, material));
+				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalMass), BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(),
+				pure.copySolidMask(), java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), material));
 		region.domain().bindChemistry(chemistry);
 		region.domain().setMarkerChemical(0, java.util.Map.of(
 				BuiltinChemicalDefinitions.H2O, 123_457L,
@@ -504,7 +501,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 					&& Arrays.equals(decoded.chemicalMixtureIndex(), section.chemicalMixtureIndex())
 					&& Arrays.equals(decoded.indicator(), section.indicator())
 					&& Arrays.equals(decoded.chemicalSpeciesTotals(), section.chemicalSpeciesTotals())
-					&& decoded.chemicalResidualLedgerBits() == section.chemicalResidualLedgerBits(),
+					&& decoded.chemicalResidualLedgerUnits() == section.chemicalResidualLedgerUnits(),
 					"chemical region section did not round-trip");
 		}
 
@@ -516,9 +513,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		FluidRegion emptyRegion = emptyRegion(new UUID(21L, 22L));
 		FlipParticleState emptyPure = emptyRegion.domain().exportParticleState();
 		emptyRegion.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
-				emptyPure.sizeX(), emptyPure.sizeY(), emptyPure.sizeZ(), emptyPure.cellSize(), 0, 0.0, 0.0,
-				BuiltinFluidMaterials.DEFAULT_PALETTE, new float[0], new float[0], emptyPure.copySolidMask(),
-				new double[0], new int[0]));
+				emptyPure.sizeX(), emptyPure.sizeY(), emptyPure.sizeZ(), emptyPure.cellSize(), 0, 0.0, mmm.units.SolverUnitScale.forCellSize(emptyPure.cellSize()).massUnitsForNormalized(0.0),
+				BuiltinFluidMaterials.DEFAULT_PALETTE, new float[0], new float[0], emptyPure.copySolidMask(), java.util.Arrays.stream(new double[0]).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(emptyPure.cellSize()).massUnitsForNormalized(m)).toArray(), new int[0]));
 		emptyRegion.domain().bindChemistry(chemistry);
 		FlipChemicalParticleState emptyExpected = emptyRegion.domain().exportChemicalParticleState();
 		require(emptyExpected.particleCount() == 0 && emptyExpected.mixtures().isEmpty(),
@@ -566,7 +562,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 			totalMass += mass[ordinal];
 		}
 		return new FlipMaterialParticleState(pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
-				sumVolumes(positions), totalMass, palette, positions, pure.copyParticleVelocities(), pure.copySolidMask(), mass, materials);
+				sumVolumes(positions), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(totalMass), palette, positions, pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), materials);
 	}
 
 	static void validateMaterialCodec() throws Exception {
@@ -583,9 +579,9 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		var canonical = RegionCheckpointFixtures.captureMaterial(canonicalRegion, 1L);
 		canonical.validate();
 		List<Long> sectionChecksums = canonical.sections().stream().map(RegionSectionState::checksum).toList();
-		require(canonical.manifest().checksum() == 2_824_632_206L
+		require(canonical.manifest().checksum() == 98_240_481L
 				&& sectionChecksums.equals(List.of(
-				1_197_279_484L, 3_443_687_331L, 3_791_385_648L, 3_117_281_787L)),
+				2_075_357_792L, 1_943_647_370L, 1_600_143_129L, 1_511_734_552L)),
 				"material region canonical bytes changed: manifest=" + canonical.manifest().checksum()
 						+ " sections=" + sectionChecksums);
 		state.validate();
@@ -597,17 +593,17 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		require(decodedManifest.equals(state.manifest()), "material region manifest did not round-trip");
 		for (RegionSectionState section : state.sections()) {
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
-			require(decoded.layout() == RegionStateLayout.MATERIAL && Arrays.equals(decoded.markerMass(), section.markerMass())
+			require(decoded.layout() == RegionStateLayout.MATERIAL && Arrays.equals(decoded.markerMassUnits(), section.markerMassUnits())
 					&& Arrays.equals(decoded.materialPaletteIndex(), section.materialPaletteIndex())
 					&& decoded.checksum() == section.checksum(), "material region section did not round-trip");
 		}
 		CompoundTag missingMass = codec.encodeSection(state.sections().getFirst());
-		missingMass.remove("MassBits");
+		missingMass.remove("MassUnits");
 		expectIOException(() -> codec.decodeSection(missingMass), "material section missing marker mass was accepted");
 		int changedIndex = 0;
 		while (state.sections().get(changedIndex).markerCount() == 0) changedIndex++;
 		RegionSectionState originalSection = state.sections().get(changedIndex);
-		double[] changedMass = originalSection.markerMass();
+		long[] changedMass = originalSection.markerMassUnits();
 		changedMass[0] += 1.0;
 		RegionSectionState changedSection = signedSection(new RegionSectionState(RegionStateLayout.MATERIAL, originalSection.regionId(),
 				originalSection.dimensionId(), originalSection.checkpointGeneration(), originalSection.sectionX(), originalSection.sectionY(),
@@ -622,14 +618,14 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 			RegionManifest.SectionDescriptor current = changedDescriptors.get(descriptor);
 			if (current.key().equals(changedSection.key())) {
 				changedDescriptors.set(descriptor, new RegionManifest.SectionDescriptor(current.sectionX(), current.sectionY(), current.sectionZ(),
-						current.markerCount(), current.volumeBits(), Double.doubleToRawLongBits(sum(changedMass)), changedSection.checksum()));
+						current.markerCount(), current.volumeBits(), mmm.units.Mass.sum(changedMass), changedSection.checksum()));
 			}
 		}
 		RegionManifest base = state.manifest();
 		RegionManifest changedManifest = signedManifest(new RegionManifest(RegionStateLayout.MATERIAL, base.regionId(), base.dimensionId(), base.checkpointGeneration(),
 				base.networkGeneration(), base.origin(), base.sizeX(), base.sizeY(), base.sizeZ(), base.solverConfig(),
 				base.reservedMarkerCapacity(), base.runtime(), base.footprint(), base.totalMarkerCount(), base.totalVolumeBits(),
-				base.materialPalette(), base.totalMassBits(), base.materialLedgers(), changedDescriptors, base.extensions(), 0L));
+				base.materialPalette(), Math.addExact(base.totalMassUnits(), 1L), base.materialLedgers(), changedDescriptors, base.extensions(), 0L));
 		expectIOException(() -> new RegionState(changedManifest, changedSections).validate(),
 				"rechecksummed marker-mass corruption escaped exact material ledgers");
 		var pureRegion = populatedRegion(new UUID(17L, 18L));
@@ -640,14 +636,14 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		var canonicalPure = RegionCheckpointFixtures.capture(canonicalCodecRegion(new UUID(17L, 18L)), 1L);
 		canonicalPure.validate();
 		List<Long> pureSectionChecksums = canonicalPure.sections().stream().map(RegionSectionState::checksum).toList();
-		require(canonicalPure.manifest().checksum() == 1_511_261_536L
+		require(canonicalPure.manifest().checksum() == 2_835_776_687L
 				&& pureSectionChecksums.equals(List.of(
-				857_091_072L, 3_709_730_368L, 2_608_476_652L, 3_235_751_298L)),
+				3_033_121_834L, 3_584_227_317L, 1_082_770_293L, 3_749_385_149L)),
 				"pure region canonical bytes changed: manifest=" + canonicalPure.manifest().checksum()
 						+ " sections=" + pureSectionChecksums);
 		CompoundTag encodedPure = codec.encodeManifest(pureManifest);
-		require(encodedPure.get("Materials") == null && encodedPure.get("MassBits") == null,
-				"pure manifest acquired material fields");
+		require(encodedPure.get("Materials") == null && encodedPure.getLongOr("MassUnits", -1L) == pureManifest.totalMassUnits(),
+				"pure manifest changed its common mass column or acquired a material palette");
 
 		Path root = Files.createTempDirectory(Path.of("."), "material-region-");
 		RegionGenerationStore files = new RegionGenerationStore(root);

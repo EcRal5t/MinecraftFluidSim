@@ -89,10 +89,10 @@ final class MmmCommandHandlers {
 			stack = ContainerItemStacks.toStack(new FluidMixture(List.of(
 					new FluidMixture.Component(BuiltinFluidMaterials.WATER.id(),
 							ContainerFluidLedger.NANOS_PER_BLOCK / 2L,
-							0.5 * BuiltinFluidMaterials.WATER.referenceDensity()),
+							mmm.units.Mass.fromKilograms(0.5 * BuiltinFluidMaterials.WATER.referenceDensity())),
 					new FluidMixture.Component(BuiltinFluidMaterials.OIL.id(),
 							ContainerFluidLedger.NANOS_PER_BLOCK / 2L,
-							0.5 * BuiltinFluidMaterials.OIL.referenceDensity())
+							mmm.units.Mass.fromKilograms(0.5 * BuiltinFluidMaterials.OIL.referenceDensity()))
 			)));
 			description = "半水半油混合材料桶";
 		} else {
@@ -104,7 +104,7 @@ final class MmmCommandHandlers {
 			};
 			if (material == null) return fail(source, "未知材料：" + requested);
 			stack = ContainerItemStacks.toStack(new FluidMixture(List.of(new FluidMixture.Component(material.id(),
-					ContainerFluidLedger.NANOS_PER_BLOCK, material.referenceDensity()))));
+					ContainerFluidLedger.NANOS_PER_BLOCK, mmm.units.Mass.fromKilograms(material.referenceDensity())))));
 			description = material.id() + " 满材料桶";
 		}
 		if (!"empty".equals(requested)) {
@@ -137,7 +137,7 @@ final class MmmCommandHandlers {
 			long svq = SolidVolume.SVQ_PER_CUBIC_METER;
 			double mass = svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * material.referenceDensity();
 			GranularTransferLedger ledger = new GranularTransferLedger(List.of(
-					new GranularTransferLedger.Group(material.id(), svq, mass, null)));
+					new GranularTransferLedger.Group(material.id(), svq, mmm.units.Mass.fromKilograms(mass), null)));
 			stack = ContainerItemStacks.toStack(GranularContents.fromLedger(ledger, registry, null));
 			world.bindActualContainerProfile(stack);
 			description = material.id() + " 满干颗粒容器";
@@ -178,12 +178,12 @@ final class MmmCommandHandlers {
 				amounts.put(species, mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.of(1000)));
 			}
 			double mass = 1_000.0;
-			ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);
+			ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
 			ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
-					mass - exact.exactSpeciesMassKilograms(registry).toDouble());
+					Math.subtractExact(mmm.units.Mass.fromKilograms(mass), exact.speciesMassUnits(registry)));
 			ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-					BuiltinFluidMaterials.WATER.id(), false, 1.0, mass,
-					mixture.massResidualKilogramsBits(),
+					BuiltinFluidMaterials.WATER.id(), false, 1.0, mmm.units.Mass.fromKilograms(mass),
+					mixture.massResidualUnits(),
 					mixture.stableAmounts(registry))));
 			stack = ContainerItemStacks.toStack(
 					ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK));

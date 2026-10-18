@@ -38,8 +38,10 @@ final class DomainMetrics {
 
 	/** Exact marker-mass inventory; reconstructed grid density is never used for this ledger. */
 	double totalMass() {
-		return SignedDyadic.sum(domain.particles.directArrays().mass, domain.particles.count()).toDouble();
+		return domain.unitScale.normalizedMass(totalMassUnits());
 	}
+
+	long totalMassUnits() { return mmm.units.Mass.sum(domain.particles.directArrays().massUnits, domain.particles.count()); }
 
 	float maximumParticleSpeed() {
 		float maximumSquared = 0.0F;

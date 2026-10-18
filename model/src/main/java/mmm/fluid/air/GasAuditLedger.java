@@ -12,13 +12,13 @@ public final class GasAuditLedger {
 	public static final GasAuditLedger EMPTY = new GasAuditLedger(List.of());
 
 	public record Entry(
-			String componentId, long standardVolumeNanos, SignedDyadic mass,
-			List<GasComponentAmount.SpeciesAmount> species, SignedDyadic massResidual
+			String componentId, long standardVolumeNanos, long massUnits,
+			List<GasComponentAmount.SpeciesAmount> species, long massResidualUnits
 	) {
 		public Entry {
 			GasIds.require(componentId, "gas audit component id");
-			if (standardVolumeNanos <= 0L || mass == null || mass.compareTo(SignedDyadic.ZERO) <= 0
-					|| species == null || massResidual == null) {
+			if (standardVolumeNanos <= 0L || massUnits <= 0
+					|| species == null) {
 				throw new IllegalArgumentException("Invalid gas audit entry");
 			}
 			ArrayList<GasComponentAmount.SpeciesAmount> canonical = new ArrayList<>(species);
@@ -52,8 +52,8 @@ public final class GasAuditLedger {
 	public static GasAuditLedger of(GasInventory inventory) {
 		ArrayList<Entry> result = new ArrayList<>();
 		for (GasComponentAmount amount : inventory.components()) result.add(new Entry(
-				amount.componentId(), amount.standardVolumeNanos(), SignedDyadic.of(amount.mass()), amount.species(),
-				SignedDyadic.of(amount.massResidual())));
+				amount.componentId(), amount.standardVolumeNanos(), amount.massUnits(), amount.species(),
+				amount.massResidualUnits()));
 		return result.isEmpty() ? EMPTY : new GasAuditLedger(result);
 	}
 
@@ -91,12 +91,12 @@ public final class GasAuditLedger {
 
 	private static final class Mutable {
 		private long nanos;
-		private SignedDyadic mass = SignedDyadic.ZERO;
-		private SignedDyadic residual = SignedDyadic.ZERO;
+		private long massUnits;
+		private long residualUnits;
 		private final TreeMap<String, Long> species = new TreeMap<>();
 		void add(Entry entry) {
-			nanos = GasInventory.addColumn(nanos, entry.standardVolumeNanos(), "audit standard volume"); mass = mass.add(entry.mass());
-			residual = residual.add(entry.massResidual());
+			nanos = GasInventory.addColumn(nanos, entry.standardVolumeNanos(), "audit standard volume"); massUnits = Math.addExact(massUnits, entry.massUnits());
+			residualUnits = Math.addExact(residualUnits, entry.massResidualUnits());
 			for (GasComponentAmount.SpeciesAmount amount : entry.species()) {
 				species.merge(amount.speciesId(), amount.amountQuanta(), (left, right) -> GasInventory.addColumn(left, right, "audit species quantity"));
 			}
@@ -104,8 +104,8 @@ public final class GasAuditLedger {
 		Entry freeze(String id) {
 			if (species.size() > GasLimits.MAX_SPECIES_PER_COMPONENT)
 				throw new GasInventory.RepresentationException("Gas audit exceeds its species slots");
-			return new Entry(id, nanos, mass, species.entrySet().stream()
-					.map(entry -> new GasComponentAmount.SpeciesAmount(entry.getKey(), entry.getValue())).toList(), residual);
+			return new Entry(id, nanos, massUnits, species.entrySet().stream()
+					.map(entry -> new GasComponentAmount.SpeciesAmount(entry.getKey(), entry.getValue())).toList(), residualUnits);
 		}
 	}
 

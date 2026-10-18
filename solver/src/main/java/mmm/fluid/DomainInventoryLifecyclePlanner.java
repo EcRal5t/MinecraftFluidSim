@@ -41,7 +41,7 @@ final class DomainInventoryLifecyclePlanner {
 				granular.registry, granular.parcels, granular.deposits, granular.compositions);
 		GranularAuditLedger sinkAfter = granular.escapedSink.plus(removed);
 		return new FluidDomain.GranularClearPlan(removed, sinkAfter, granular.inventory.totalSolidVolumeSvq(),
-				Double.doubleToRawLongBits(granular.inventory.totalMass()), granular.parcels.count(),
+				granular.inventory.totalMassUnits(), granular.parcels.count(),
 				granular.deposits.groupCount(), domain.thermalState == null
 						? SignedDyadic.ZERO : domain.thermalState.granularColumn().exactEnergy(),
 				granularRevision);

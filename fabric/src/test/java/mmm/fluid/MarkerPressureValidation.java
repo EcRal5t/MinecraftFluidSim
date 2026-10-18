@@ -27,7 +27,7 @@ public final class MarkerPressureValidation {
                     positions[4*p+3] = .0625F;
                     velocities[3*p+axis] = constant ? .25F : ((p>>>axis)&1)==0 ? -1e-4F : 1e-4F;
                 }
-                d.restoreParticleState(new FlipParticleState(2,2,2,1,8,.5F,positions,velocities,new byte[8]));
+                d.restoreParticleState(new FlipParticleState(2,2,2,1,8,.5F,positions,velocities, mmm.units.Mass.createLiquid(1, 1000.0, positions),new byte[8]));
                 var ids = new ArrayList<Integer>(); double mass=0;
                 var moment = new double[3]; var momentum = new double[3];
                 for (int p=0;p<8;p++) {

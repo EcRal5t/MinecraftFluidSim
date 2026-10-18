@@ -53,7 +53,7 @@ abstract class RegionPersistenceValidationSupport {
 		float[] velocities = state.copyParticleVelocities();
 		for (int i = 0; i < velocities.length; i++) velocities[i] = (i % 7 - 3) * 0.03125F;
 		domain.restoreParticleState(new FlipParticleState(state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(),
-				state.particleCount(), state.totalVolume(), state.copyPositionVolume(), velocities, state.copySolidMask()));
+				state.particleCount(), state.totalVolume(), state.copyPositionVolume(), velocities, mmm.units.Mass.createLiquid(state.cellSize(), 1000.0, state.copyPositionVolume()), state.copySolidMask()));
 		return fixtureRegion(id, domain);
 	}
 	private static FluidRegion fixtureRegion(UUID id, FluidDomain domain) {
@@ -84,7 +84,7 @@ abstract class RegionPersistenceValidationSupport {
 		float[] velocities = new float[45];
 		for (int i = 0; i < velocities.length; i++) velocities[i] = (i % 7 - 3) * .03125F;
 		domain.restoreParticleState(new FlipParticleState(template.sizeX(), template.sizeY(), template.sizeZ(),
-				template.cellSize(), 15, 1.875F, positions, velocities, template.copySolidMask()));
+				template.cellSize(), 15, 1.875F, positions, velocities, mmm.units.Mass.createLiquid(template.cellSize(), 1000.0, positions), template.copySolidMask()));
 		return fixtureRegion(id, domain);
 	}
 
@@ -117,22 +117,20 @@ abstract class RegionPersistenceValidationSupport {
 				&& expected.nodes().equals(actual.nodes())
 				&& Arrays.equals(expected.pieceNodeOrdinal(), actual.pieceNodeOrdinal())
 				&& expected.externalSource().equals(actual.externalSource())
-				&& expected.escapedSink().equals(actual.escapedSink())
-				&& expected.massRoundoff().equals(actual.massRoundoff())
-				&& expected.residualRoundoff().equals(actual.residualRoundoff()),
+				&& expected.escapedSink().equals(actual.escapedSink()),
 				"gas component/topology/audit changed across persistence");
 	}
 
 	static void assertMaterialStateEquals(FlipMaterialParticleState expected, FlipMaterialParticleState actual) {
 		require(expected.materials().equals(actual.materials()), "material palette changed across persistence");
 		require(Double.doubleToRawLongBits(expected.totalVolume()) == Double.doubleToRawLongBits(actual.totalVolume())
-				&& Double.doubleToRawLongBits(expected.totalMass()) == Double.doubleToRawLongBits(actual.totalMass()),
+				&& expected.totalMassUnits() == actual.totalMassUnits(),
 				"material total ledger changed across persistence");
 		require(Arrays.equals(floatBits(expected.copyPositionVolume()), floatBits(actual.copyPositionVolume())),
 				"material marker order/position/particleVolume changed across persistence");
 		require(Arrays.equals(floatBits(expected.copyParticleVelocities()), floatBits(actual.copyParticleVelocities())),
 				"material marker velocity changed across persistence");
-		require(Arrays.equals(expected.copyParticleMass(), actual.copyParticleMass())
+		require(Arrays.equals(expected.copyParticleMassUnits(), actual.copyParticleMassUnits())
 				&& Arrays.equals(expected.copyMaterialPaletteIndex(), actual.copyMaterialPaletteIndex()),
 				"material marker mass or palette index changed across persistence");
 		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()), "material solid mask changed across persistence");
@@ -196,7 +194,7 @@ abstract class RegionPersistenceValidationSupport {
 				&& expected.externalSource().equals(actual.externalSource())
 				&& expected.escapedSink().equals(actual.escapedSink())
 				&& expected.totalSolidVolumeSvq() == actual.totalSolidVolumeSvq()
-				&& expected.totalMassBits() == actual.totalMassBits(),
+				&& expected.totalMassUnits() == actual.totalMassUnits(),
 				"granular inventory changed across persistence");
 	}
 
@@ -208,7 +206,7 @@ abstract class RegionPersistenceValidationSupport {
 				&& Arrays.equals(expected.copyMarkerMixtureIndex(), actual.copyMarkerMixtureIndex())
 				&& Arrays.equals(expected.copyIndicator(), actual.copyIndicator())
 				&& Arrays.equals(expected.copySpeciesTotals(), actual.copySpeciesTotals())
-				&& expected.residualLedgerBits() == actual.residualLedgerBits()
+				&& expected.residualLedgerUnits() == actual.residualLedgerUnits()
 				&& expected.externalSource().groups().equals(actual.externalSource().groups())
 				&& expected.escapedSink().groups().equals(actual.escapedSink().groups()),
 				"chemical handoff changed across persistence");
@@ -224,18 +222,18 @@ abstract class RegionPersistenceValidationSupport {
 		return new RegionSectionState(section.layout(), section.regionId(), section.dimensionId(), section.checkpointGeneration(), section.sectionX(),
 				section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
 				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(),
-				section.velocities(), section.markerMass(), section.materialPaletteIndex(), section.solidMask(), section.extensions(),
+				section.velocities(), section.markerMassUnits(), section.materialPaletteIndex(), section.solidMask(), section.extensions(),
 				section.chemicalMixtureIndex(), section.indicator(), section.chemicalSpeciesTotals(),
-				section.chemicalResidualLedgerBits(), RegionStateIntegrity.sectionChecksum(section));
+				section.chemicalResidualLedgerUnits(), RegionStateIntegrity.sectionChecksum(section));
 	}
 
 	static RegionManifest signedManifest(RegionManifest manifest) {
 		return new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(),
 				manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(), manifest.totalVolumeBits(),
-				manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(), manifest.sections(), manifest.extensions(),
+				manifest.materialPalette(), manifest.totalMassUnits(), manifest.materialLedgers(), manifest.sections(), manifest.extensions(),
 				manifest.registryFingerprint(), manifest.quantaPerMol(), manifest.speciesPalette(), manifest.chemicalMixtures(),
-				manifest.chemicalSpeciesTotals(), manifest.chemicalResidualLedgerBits(), RegionStateIntegrity.manifestChecksum(manifest));
+				manifest.chemicalSpeciesTotals(), manifest.chemicalResidualLedgerUnits(), RegionStateIntegrity.manifestChecksum(manifest));
 	}
 
 	static RegionManifest manifestWithExtensions(
@@ -244,10 +242,10 @@ abstract class RegionPersistenceValidationSupport {
 		RegionManifest unsigned = new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(),
 				manifest.checkpointGeneration(), manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(),
 				manifest.sizeZ(), manifest.solverConfig(), manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(),
-				manifest.totalMarkerCount(), manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(),
+				manifest.totalMarkerCount(), manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassUnits(),
 				manifest.materialLedgers(), manifest.sections(), extensions, manifest.registryFingerprint(), manifest.quantaPerMol(),
 				manifest.speciesPalette(), manifest.chemicalMixtures(), manifest.chemicalSpeciesTotals(),
-				manifest.chemicalResidualLedgerBits(), 0L);
+				manifest.chemicalResidualLedgerUnits(), 0L);
 		return signedManifest(unsigned);
 	}
 

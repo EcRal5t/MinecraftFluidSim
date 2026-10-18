@@ -18,7 +18,7 @@ import java.util.TreeMap;
 
 /** Canonical dry-container truth. SVQ, raw kilogram mass and optional solid composition remain independent. */
 public record GranularContents(String registryFingerprint, long svqPerCubicMeter, List<Group> groups) {
-	private static final String ENCODING_TAG = "mmm:granular-contents";
+	private static final String ENCODING_TAG = "mmm:granular-contents;" + mmm.units.Mass.ENCODING + "";
 	public static final int MAX_GROUPS = 16;
 	public static final int MAX_TOTAL_COMPOSITION_ENTRIES = 64;
 	public static final int MAX_ENCODED_LENGTH = 64 * 1024;
@@ -31,13 +31,13 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 		}
 		ArrayList<Group> canonical = new ArrayList<>(groups);
 		canonical.sort(Group.ORDER);
-		Set<String> keys = new HashSet<>(); long totalSvq = 0L; double totalMass = 0.0; int entries = 0;
+		Set<String> keys = new HashSet<>(); long totalSvq = 0L; long totalMass = 0; int entries = 0;
 		for (Group group : canonical) {
 			if (!keys.add(group.materialId())) {
 				throw new IllegalArgumentException("Duplicate granular material group");
 			}
 			totalSvq = Math.addExact(totalSvq, group.solidVolumeSvq());
-			totalMass += group.mass();
+			totalMass = Math.addExact(totalMass, group.massUnits());
 			entries = Math.addExact(entries, group.composition().size());
 		}
 		if (totalSvq > SolidVolume.SVQ_PER_CUBIC_METER || entries > MAX_TOTAL_COMPOSITION_ENTRIES
@@ -51,11 +51,12 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 		long result = 0L; for (Group group : groups) result = Math.addExact(result, group.solidVolumeSvq()); return result;
 	}
 
-	public double totalMass() {
-		double result = 0.0; for (Group group : groups) result += group.mass();
-		if (!(Double.isFinite(result) && result > 0.0)) throw new IllegalStateException("Granular contents mass overflow");
-		return result;
+	public long totalMassUnits() {
+		long total = 0;
+		for (Group value : groups) total = Math.addExact(total, value.massUnits());
+		return total;
 	}
+	public double totalMass() { return mmm.units.Mass.kilograms(totalMassUnits()); }
 
 	public void validateAgainst(GranularRegistry registry, ChemicalRegistry chemistry) {
 		if (registry == null || !registryFingerprint.equals(registry.fingerprint())) {
@@ -71,7 +72,7 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 				throw new IllegalArgumentException("Reactive granular contents require the authoritative chemical registry");
 			}
 			SolidCompositionRecord composition = group.toComposition(chemistry);
-			if (!massClose(composition.totalMass(chemistry), group.mass())) {
+			if (composition.massUnits(chemistry) != group.massUnits()) {
 				throw new IllegalArgumentException("Granular composition/mass ledger mismatch");
 			}
 		}
@@ -84,14 +85,14 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 		ArrayList<Group> groups = new ArrayList<>(ledger.groups().size());
 		for (GranularTransferLedger.Group source : ledger.groups()) {
 			registry.material(registry.materialHandle(source.materialId()));
-			if (source.composition() == null) groups.add(new Group(source.materialId(), source.solidVolumeSvq(), source.mass()));
+			if (source.composition() == null) groups.add(new Group(source.materialId(), source.solidVolumeSvq(), source.massUnits()));
 			else {
 				if (chemistry == null) throw new IllegalArgumentException("Reactive granular ledger requires chemistry");
 				List<SpeciesAmount> species = source.composition().stableAmounts(chemistry).entrySet().stream()
 						.sorted(Map.Entry.comparingByKey())
 						.map(entry -> new SpeciesAmount(entry.getKey(), entry.getValue())).toList();
-				groups.add(new Group(source.materialId(), source.solidVolumeSvq(), source.massBits(),
-						source.composition().massResidualBits(), species));
+				groups.add(new Group(source.materialId(), source.solidVolumeSvq(), source.massUnits(),
+						source.composition().massResidualUnits(), species));
 			}
 		}
 		GranularContents result = new GranularContents(registry.fingerprint(), SolidVolume.SVQ_PER_CUBIC_METER, groups);
@@ -102,7 +103,7 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 		validateAgainst(registry, chemistry);
 		ArrayList<GranularTransferLedger.Group> result = new ArrayList<>(groups.size());
 		for (Group group : groups) result.add(new GranularTransferLedger.Group(group.materialId(),
-				group.solidVolumeSvq(), group.massBits(), group.reactive() ? group.toComposition(chemistry) : null));
+				group.solidVolumeSvq(), group.massUnits(), group.reactive() ? group.toComposition(chemistry) : null));
 		return new GranularTransferLedger(result);
 	}
 
@@ -110,10 +111,10 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 		StringBuilder encoded = new StringBuilder(ENCODING_TAG).append('|').append(registryFingerprint).append('|').append(svqPerCubicMeter);
 		for (Group group : groups) {
 			encoded.append('|').append(group.materialId()).append(',').append(group.solidVolumeSvq()).append(',')
-					.append(Long.toUnsignedString(group.massBits(), 16)).append(',');
+					.append(Long.toUnsignedString(group.massUnits(), 16)).append(',');
 			if (!group.reactive()) encoded.append("-,-");
 			else {
-				encoded.append(Long.toUnsignedString(group.massResidualBits(), 16)).append(',');
+				encoded.append(Long.toUnsignedString(group.massResidualUnits(), 16)).append(',');
 				for (int entry = 0; entry < group.composition().size(); entry++) {
 					if (entry > 0) encoded.append('+');
 					SpeciesAmount amount = group.composition().get(entry);
@@ -140,13 +141,13 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 			if (fields.length != 5) throw new IllegalArgumentException("Malformed granular contents group");
 			try {
 				ArrayList<SpeciesAmount> composition = new ArrayList<>();
-				long residualBits;
-				if (fields[3].equals("-") && fields[4].equals("-")) residualBits = 0L;
+				long residualUnits;
+				if (fields[3].equals("-") && fields[4].equals("-")) residualUnits = 0L;
 				else {
 					if (fields[3].equals("-") || fields[4].isEmpty() || fields[4].equals("-")) {
 						throw new IllegalArgumentException("Malformed reactive granular composition");
 					}
-					residualBits = Long.parseUnsignedLong(fields[3], 16);
+					residualUnits = Long.parseUnsignedLong(fields[3], 16);
 					for (String entry : fields[4].split("\\+", -1)) {
 						String[] pair = entry.split("=", -1);
 						if (pair.length != 2) throw new IllegalArgumentException("Malformed granular species entry");
@@ -154,7 +155,7 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 					}
 				}
 				groups.add(new Group(fields[0], Long.parseLong(fields[1]),
-						Long.parseUnsignedLong(fields[2], 16), residualBits, composition));
+						Long.parseUnsignedLong(fields[2], 16), residualUnits, composition));
 			} catch (NumberFormatException invalid) {
 				throw new IllegalArgumentException("Malformed granular contents number", invalid);
 			}
@@ -164,12 +165,9 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 		return contents;
 	}
 
-	private static boolean massClose(double left, double right) {
-		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
-	}
 
 	public record Group(
-			String materialId, long solidVolumeSvq, long massBits, long massResidualBits,
+			String materialId, long solidVolumeSvq, long massUnits, long massResidualUnits,
 			List<SpeciesAmount> composition
 	) {
 		private static final Comparator<Group> ORDER = Comparator.comparing(Group::materialId);
@@ -177,7 +175,7 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 		public Group {
 			if (!StableId.isValid(materialId, 128) || solidVolumeSvq <= 0L
 					|| solidVolumeSvq > SolidVolume.SVQ_PER_CUBIC_METER
-					|| !(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)
+					|| !(massUnits > 0)
 					|| composition == null || composition.size() > GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES) {
 				throw new IllegalArgumentException("Invalid granular contents group");
 			}
@@ -187,22 +185,22 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 			Set<String> ids = new HashSet<>(); for (SpeciesAmount amount : canonical) if (!ids.add(amount.speciesId())) {
 				throw new IllegalArgumentException("Duplicate granular composition species");
 			}
-			if (canonical.isEmpty() && massResidualBits != 0L
-					|| !canonical.isEmpty() && !Double.isFinite(Double.longBitsToDouble(massResidualBits))) {
+			if (canonical.isEmpty() && massResidualUnits != 0L
+					|| !canonical.isEmpty() && !Double.isFinite(mmm.units.Mass.kilograms(massResidualUnits))) {
 				throw new IllegalArgumentException("Invalid granular composition residual");
 			}
 			composition = List.copyOf(canonical);
 		}
 
-		public Group(String materialId, long solidVolumeSvq, double mass) {
-			this(materialId, solidVolumeSvq, Double.doubleToRawLongBits(mass), 0L, List.of());
+		public Group(String materialId, long solidVolumeSvq, long mass) {
+			this(materialId, solidVolumeSvq, mass, 0L, List.of());
 		}
 
-		public double mass() { return Double.longBitsToDouble(massBits); }
+		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
 		public boolean reactive() { return !composition.isEmpty(); }
 		String compositionKey() {
 			if (!reactive()) return "-";
-			StringBuilder result = new StringBuilder(Long.toUnsignedString(massResidualBits, 16));
+			StringBuilder result = new StringBuilder(Long.toUnsignedString(massResidualUnits, 16));
 			for (SpeciesAmount amount : composition) result.append('|').append(amount.speciesId()).append('=').append(amount.amountQuanta());
 			return result.toString();
 		}
@@ -211,7 +209,7 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 			TreeMap<String, Long> amounts = new TreeMap<>();
 			for (SpeciesAmount amount : composition) amounts.put(amount.speciesId(), amount.amountQuanta());
 			return SolidCompositionRecord.fromStableAmounts(chemistry, amounts,
-					Double.longBitsToDouble(massResidualBits));
+					massResidualUnits);
 		}
 	}
 

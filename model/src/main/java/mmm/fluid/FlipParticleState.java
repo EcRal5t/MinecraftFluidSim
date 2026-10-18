@@ -20,11 +20,13 @@ public final class FlipParticleState {
 	private final float[] positionVolume;
 	private final float[] particleVelocities;
 	private final byte[] collisionMicroMasks;
+	private final long[] massUnits;
+	private final long totalMassUnits;
 
 
 	public FlipParticleState(int sizeX, int sizeY, int sizeZ, float cellSize, int particleCount,
 	                         float volumeLedger, float[] positionVolume, float[] particleVelocities,
-	                         byte[] collisionMicroMasks) {
+	                         long[] massUnits, byte[] collisionMicroMasks) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || !(cellSize > 0.0F) || !Float.isFinite(cellSize)) {
 			throw new IllegalArgumentException("Invalid particle-state grid");
 		}
@@ -95,6 +97,10 @@ public final class FlipParticleState {
 		this.positionVolume = positionVolume.clone();
 		this.particleVelocities = particleVelocities.clone();
 		this.collisionMicroMasks = collisionMicroMasks.clone();
+		if (massUnits == null || massUnits.length != particleCount) throw new IllegalArgumentException("Particle mass count mismatch");
+		for (long mass : massUnits) if (mass <= 0) throw new IllegalArgumentException("Non-positive particle mass");
+		this.massUnits = massUnits.clone();
+		this.totalMassUnits = mmm.units.Mass.sum(massUnits);
 	}
 
 	public int sizeX() { return sizeX; }
@@ -102,12 +108,15 @@ public final class FlipParticleState {
 	public int sizeZ() { return sizeZ; }
 	public float cellSize() { return cellSize; }
 	public int particleCount() { return particleCount; }
+	public long totalMassUnits() { return totalMassUnits; }
+	public long[] copyMassUnits() { return massUnits.clone(); }
+	long[] massUnits() { return massUnits; }
 	public float totalVolume() { return totalVolume; }
 	public float centerOfMassX() { return centerOfMassX; }
 	public int solidCellCount() { return solidCellCount; }
 	public long cpuBytes() {
 		long bytes = (long) positionVolume.length * Float.BYTES
-				+ (long) particleVelocities.length * Float.BYTES + collisionMicroMasks.length;
+				+ (long) particleVelocities.length * Float.BYTES + collisionMicroMasks.length + (long) massUnits.length * Long.BYTES;
 		return bytes;
 	}
 

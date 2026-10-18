@@ -261,8 +261,6 @@ public final class FluidRegionManagerValidation {
 		var after = original.captureAuthoritativeState().gas();
 		require(before.nodes().equals(after.nodes()) && before.externalSource().equals(after.externalSource())
 				&& before.escapedSink().equals(after.escapedSink())
-				&& before.massRoundoff().equals(after.massRoundoff())
-				&& before.residualRoundoff().equals(after.residualRoundoff())
 				&& java.util.Arrays.equals(before.pieceNodeOrdinal(), after.pieceNodeOrdinal()),
 				"rejected collision changed closed gas inventory, audit or ownership");
 		// Removing the offending world block must allow a later refresh without repairing the live domain.

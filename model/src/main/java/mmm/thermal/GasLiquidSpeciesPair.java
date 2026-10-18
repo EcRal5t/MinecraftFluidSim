@@ -60,8 +60,8 @@ public record GasLiquidSpeciesPair(
 			throw new IllegalArgumentException("Gas/liquid pair batch kilograms must be finite and positive");
 		}
 		if (!Double.isFinite(liquidResidualKilogramsPerBatch)
-				|| Double.doubleToRawLongBits(liquidResidualKilogramsPerBatch)
-						!= Double.doubleToRawLongBits(gasKilogramsPerBatch - liquidKilogramsPerBatch)) {
+				|| mmm.units.Mass.fromKilograms(liquidResidualKilogramsPerBatch)
+						!= Math.subtractExact(mmm.units.Mass.fromKilograms(gasKilogramsPerBatch), mmm.units.Mass.fromKilograms(liquidKilogramsPerBatch))) {
 			throw new IllegalArgumentException("Gas/liquid pair residual must close the batch mass exactly");
 		}
 		if (molesPerBatch == null || molesPerBatch.signum() <= 0

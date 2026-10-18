@@ -19,7 +19,6 @@ import static mmm.fluid.PhaseChangeStageSupport.PhaseCandidateUnavailableExcepti
 import static mmm.fluid.PhaseChangeStageSupport.PhaseCellInventory;
 import static mmm.fluid.PhaseChangeStageSupport.PhaseComposition;
 import static mmm.fluid.PhaseChangeStageSupport.PhaseRemovalPlan;
-import static mmm.fluid.PhaseChangeStageSupport.massTolerance;
 
 /** Owns sealed-interface liquid/gas planning and commit in the thermal axis. */
 final class GasLiquidPhaseChangeStage {
@@ -111,8 +110,7 @@ final class GasLiquidPhaseChangeStage {
 	) {
 		double batchMass = transition.massKgPerBatch().toDouble();
 		long byVolume = inventory.freezableUpperSvq() / transition.lowerVolumeSvqPerBatch();
-		long byMass = (long) Math.floor((inventory.freezableUpperMass()
-				+ massTolerance(inventory.freezableUpperMass())) / batchMass);
+		long byMass = inventory.freezableUpperMassUnits() / mmm.units.Mass.exactUnits(transition.massKgPerBatch().numerator(), transition.massKgPerBatch().denominator());
 		AirNetwork network = support.gasState().network;
 		long gasRoom = Math.min(Long.MAX_VALUE - network.inventory(node).standardVolumeNanos(),
 				Math.min(Long.MAX_VALUE - network.sealedInventoryNanos(),
@@ -152,11 +150,11 @@ final class GasLiquidPhaseChangeStage {
 			ChemicalParcelStore chemistry = support.chemistry();
 			GasDomainState gasState = support.gasState();
 			long removedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
-			double removedMass = transition.massKgPerBatch().multiply(batches).toDouble();
+			long removedMass = mmm.units.Mass.exactUnits(transition.massKgPerBatch().multiply(batches).numerator(), transition.massKgPerBatch().multiply(batches).denominator());
 			var removal = liquidSource.remove(liquidHandle, contact.supportMask(), removedSvq, removedMass, volatileSpecies, true);
 			GasInventory batch = chemistry == null ? phase.gasBatch(transition, batches)
 					: phase.gasBatch(transition, batches, removal.plan().movedComposition().amounts(),
-							removal.plan().movedComposition().massResidual());
+							removal.plan().movedComposition().massResidualUnits());
 			GasInventory candidateGas;
 			try { candidateGas = gasState.network.inventory(node).merge(batch); }
 			catch (GasInventory.RepresentationException capacity) {
@@ -302,7 +300,7 @@ final class GasLiquidPhaseChangeStage {
 			ChemicalParcelStore chemistry = support.chemistry();
 			GasDomainState gasState = support.gasState();
 			LiquidParticleStore particles = support.state().particles();
-			double requestedMass = transition.massKgPerBatch().multiply(batches).toDouble();
+			long requestedMass = mmm.units.Mass.exactUnits(transition.massKgPerBatch().multiply(batches).numerator(), transition.massKgPerBatch().multiply(batches).denominator());
 			if (!(Double.isFinite(requestedMass) && requestedMass > 0.0)) throw new PhaseCandidateUnavailableException(
 					"Condensation batch mass exceeds its finite representation");
 			GasInventory requestedBatch = phase.gasBatch(transition, batches);
@@ -310,10 +308,11 @@ final class GasLiquidPhaseChangeStage {
 			GasInventory.Split proportionalTake = gasState.network.previewComponentTake(
 					node, componentId, requestedBatch.standardVolumeNanos());
 			GasComponentAmount proportionalMoved = proportionalTake.first().components().getFirst();
-			double requestedResidual = requestedBatch.components().getFirst().massResidual();
+			long requestedResidual = requestedBatch.components().getFirst().massResidualUnits();
 			if (chemistry != null) {
-				requestedResidual = requestedMass - PhaseComposition.fromGas(proportionalMoved)
-						.exactSpeciesMass(chemistry.registry()).toDouble();
+				requestedResidual = Math.subtractExact(requestedMass, mmm.units.Mass.exactUnits(PhaseComposition.fromGas(proportionalMoved)
+						.exactSpeciesMass(chemistry.registry()).numerator(), PhaseComposition.fromGas(proportionalMoved)
+						.exactSpeciesMass(chemistry.registry()).denominator()));
 			}
 			GasInventory.Split take;
 			try {
@@ -326,7 +325,7 @@ final class GasLiquidPhaseChangeStage {
 			}
 			GasComponentAmount moved = take.first().components().getFirst();
 			support.representedGasMassTransfer(node, take.second(), componentId, -requestedMass);
-			if (!FluidDomain.massClose(moved.mass(), requestedMass)) {
+			if (moved.massUnits() != requestedMass) {
 				throw new FluidDomain.ThermalPhaseBlockedException(
 						"Condensation gas batch mass differs from its exact transition");
 			}
@@ -352,8 +351,8 @@ final class GasLiquidPhaseChangeStage {
 						&& (chemistry == null || !chemistry.indicator(marker))) {
 					try {
 						PhaseChangeStageSupport.adjustedMarkerVolume(particles.volume(marker), addedSvq, "Condensation");
-						double candidateMass = particles.mass(marker) + support.state().unitScale().solverMass(moved.mass());
-						support.representedMassTransfer(particles.mass(marker), candidateMass, moved.mass());
+						long candidateMass = Math.addExact(particles.massUnits(marker), moved.massUnits());
+						support.representedMassTransfer(particles.massUnits(marker), candidateMass, moved.massUnits());
 						if (chemistry != null) {
 							condensedMixture = PhaseComposition.fromMixture(chemistry.record(marker), chemistry.registry())
 									.plus(movedComposition).toMixture(chemistry.registry());
@@ -371,14 +370,14 @@ final class GasLiquidPhaseChangeStage {
 						"Gas species require liquid chemistry during condensation");
 			}
 			float targetVolume = 0.0F;
-			double targetMass = 0.0;
+			long targetMassUnits = 0L;
 			int slot = -1;
 			if (target >= 0) {
 				targetVolume = PhaseChangeStageSupport.adjustedMarkerVolume(
 						particles.volume(target), addedSvq, "Condensation");
-				targetMass = particles.mass(target) + support.state().unitScale().solverMass(moved.mass());
+				targetMassUnits = Math.addExact(particles.massUnits(target), moved.massUnits());
 			} else {
-				support.representedMassTransfer(0.0, support.state().unitScale().solverMass(moved.mass()), moved.mass());
+				support.representedMassTransfer(0L, moved.massUnits(), moved.massUnits());
 				if (chemistry != null) {
 					if (movedComposition.amounts().isEmpty()) throw new PhaseCandidateUnavailableException(
 							"Condensation needs an existing chemical receiver for a mass-only gas portion");
@@ -397,12 +396,12 @@ final class GasLiquidPhaseChangeStage {
 						"Condensation has no collision-valid marker slot");
 			}
 			var thermalTrial = thermal.trialPhaseCellEnergy(thermalCell,
-					liquidSource.afterCondensation(liquidHandle, target, targetMass, condensedMixture, moved.mass()),
+					liquidSource.afterCondensation(liquidHandle, target, targetMassUnits, condensedMixture, moved.massUnits()),
 					sourceGasEnergy, candidateGasEnergy);
 			var liquidGeometry = liquidSource.geometryAfterCondensation(target, targetVolume,
 					SolidVolume.toCellVolume(addedSvq), target < 0 ? support.markerSlotPosition(cell, slot) : null);
 			return new GasCondenseTrial(batches, take.first(), thermalTrial, candidateGasEnergy, target, condensedMixture,
-					targetVolume, targetMass, slot, addedSvq, moved.mass(), liquidGeometry);
+					targetVolume, targetMassUnits, slot, addedSvq, moved.massUnits(), liquidGeometry);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| ThermalStateFunction.EnergyRepresentationException
 				| AirNetwork.PhaseCapacityExceededException
@@ -424,16 +423,16 @@ final class GasLiquidPhaseChangeStage {
 			if (candidate.target() >= 0) {
 				var particles = support.state().particles();
 				try {
-					momentum = CarrierMassMomentum.plan(particles, new int[]{candidate.target()}, new double[]{candidate.targetMass()},
-							candidate.targetMass() - particles.mass(candidate.target()), 0, 0, 0);
+					momentum = CarrierMassMomentum.plan(particles, new int[]{candidate.target()}, new long[]{candidate.targetMassUnits()},
+							Math.subtractExact(candidate.targetMassUnits(), particles.massUnits(candidate.target())), 0, 0, 0);
 				} catch (CarrierMassMomentum.RepresentationException unrepresentableMomentum) {
 					throw new PhaseCandidateUnavailableException(
 							"Condensation momentum exceeds liquid carrier representation", unrepresentableMomentum);
 				}
 			}
 			return new GasCondensePlan(candidate.batches(), gasPlan, thermalPlan, candidate.candidateGasEnergy(),
-					candidate.target(), candidate.condensedMixture(), candidate.targetVolume(), candidate.targetMass(), momentum,
-					candidate.slot(), candidate.addedSvq(), candidate.movedMass(), topology);
+					candidate.target(), candidate.condensedMixture(), candidate.targetVolume(), candidate.targetMassUnits(), momentum,
+					candidate.slot(), candidate.addedSvq(), candidate.movedMassUnits(), topology);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
 				| ThermalStateFunction.EnergyRepresentationException
 				| AirNetwork.PhaseCapacityExceededException
@@ -459,12 +458,12 @@ final class GasLiquidPhaseChangeStage {
 			if (chemistry != null) chemistry.commitPlannedReplacements(
 					new int[]{plan.target()}, new ChemicalMixtureRecord[]{plan.condensedMixture()});
 			particles.setVolume(plan.target(), plan.targetVolume());
-			particles.setMass(plan.target(), plan.targetMass());
+			particles.setMassUnits(plan.target(), plan.targetMassUnits());
 			plan.momentum().apply(particles);
 		} else {
 			support.spawnParticle(
 					cell, plan.slot(), SolidVolume.toCellVolume(plan.addedSvq()), liquidHandle,
-					support.state().unitScale().solverMass(plan.movedMass()), plan.condensedMixture());
+					plan.movedMassUnits(), plan.condensedMixture());
 		}
 		support.commitPendingVolume(cell, plan.addedSvq());
 		support.markGridDirty();
@@ -475,23 +474,23 @@ final class GasLiquidPhaseChangeStage {
 	private PhaseCellInventory gasLiquidCellInventory(int cell, int liquidHandle, int supportMask) {
 		LiquidParticleStore particles = support.state().particles();
 		ChemicalParcelStore chemistry = support.chemistry();
-		double mass = 0.0, freezableMass = 0.0;
+		long mass = 0, freezableMass = 0;
 		long svq = 0L, freezableSvq = 0L;
 		boolean found = false;
 		for (int marker = support.state().markerGrid().cellMarkerHead[cell]; marker >= 0;
 				marker = support.state().markerGrid().particleCellNext[marker]) {
 			if (particles.materialHandle(marker) != liquidHandle || !markerInSupport(cell, marker, supportMask)) continue;
 			svq = Math.addExact(svq, SolidVolume.cellVolumeSvqAtLeast(particles.volume(marker)));
-			mass += support.state().unitScale().kilograms(particles.mass(marker));
+			mass = Math.addExact(mass, particles.massUnits(marker));
 			found = true;
 			if (chemistry == null || !chemistry.indicator(marker)) {
 				freezableSvq = Math.addExact(
 						freezableSvq, SolidVolume.cellVolumeSvqAtMost(particles.volume(marker)));
-				freezableMass += support.state().unitScale().kilograms(particles.mass(marker));
+				freezableMass = Math.addExact(freezableMass, particles.massUnits(marker));
 			}
 		}
 		return found ? new PhaseCellInventory(
-				0L, svq, 0.0, mass, freezableSvq, freezableMass) : null;
+				0L, svq, 0L, mass, freezableSvq, freezableMass) : null;
 	}
 
 	private boolean gasLiquidCellMatches(int cell, int liquidHandle) {
@@ -547,14 +546,14 @@ final class GasLiquidPhaseChangeStage {
 
 	private record GasCondenseTrial(long batches, GasInventory removedGas, ThermalDomainState.PhaseCellTrial thermalTrial,
 	                                double candidateGasEnergy, int target, ChemicalMixtureRecord condensedMixture,
-	                                float targetVolume, double targetMass, int slot, long addedSvq, double movedMass,
+	                                float targetVolume, long targetMassUnits, int slot, long addedSvq, long movedMassUnits,
 	                                PhaseLiquidGeometryEdit liquidGeometry) { }
 
 	private record GasCondensePlan(
 			long batches, AirNetwork.PhaseMutationPlan gasPlan, ThermalDomainState.PhaseCellEnergyPlan thermalPlan,
 			double candidateGasEnergy, int target,
-			ChemicalMixtureRecord condensedMixture, float targetVolume, double targetMass,
-			CarrierMassMomentum.Plan momentum, int slot, long addedSvq, double movedMass,
+			ChemicalMixtureRecord condensedMixture, float targetVolume, long targetMassUnits,
+			CarrierMassMomentum.Plan momentum, int slot, long addedSvq, long movedMassUnits,
 			GasTopologyCoordinator.GasTopologyPlan topology
 	) { }
 

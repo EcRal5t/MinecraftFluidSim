@@ -10,7 +10,7 @@ public final class SolidCompositionPool {
 	private final int capacity;
 	private byte[] entryCount;
 	private short[] species;
-	private long[] amounts, residualBits;
+	private long[] amounts, residualUnits;
 	private int[] freeHandles;
 	private int nextHandle = 1;
 	private int freeCount, liveCount;
@@ -26,7 +26,7 @@ public final class SolidCompositionPool {
 		int handleCapacity = Math.min(capacity + 1, 65);
 		entryCount = new byte[handleCapacity];
 		species = new short[Math.multiplyExact(handleCapacity, GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES)];
-		amounts = new long[species.length]; residualBits = new long[handleCapacity]; freeHandles = new int[handleCapacity - 1];
+		amounts = new long[species.length]; residualUnits = new long[handleCapacity]; freeHandles = new int[handleCapacity - 1];
 	}
 
 	public ChemicalRegistry registry() { return registry; }
@@ -49,7 +49,7 @@ public final class SolidCompositionPool {
 		for (int entry = 0; entry < count; entry++) {
 			recordSpecies[entry] = Short.toUnsignedInt(species[base + entry]); recordAmounts[entry] = amounts[base + entry];
 		}
-		return new SolidCompositionRecord(recordSpecies, recordAmounts, residualBits[handle]);
+		return new SolidCompositionRecord(recordSpecies, recordAmounts, residualUnits[handle]);
 	}
 
 	public void overwrite(int handle, SolidCompositionRecord record) {
@@ -72,7 +72,7 @@ public final class SolidCompositionPool {
 		requireLive(handle);
 		int count = Byte.toUnsignedInt(entryCount[handle]), base = handle * GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES;
 		Arrays.fill(species, base, base + count, (short) 0); Arrays.fill(amounts, base, base + count, 0L);
-		entryCount[handle] = 0; residualBits[handle] = 0L; freeHandles[freeCount++] = handle; liveCount--;
+		entryCount[handle] = 0; residualUnits[handle] = 0L; freeHandles[freeCount++] = handle; liveCount--;
 	}
 
 	public long[] speciesTotals() {
@@ -100,7 +100,7 @@ public final class SolidCompositionPool {
 		entryCount = Arrays.copyOf(entryCount, allocated);
 		species = Arrays.copyOf(species, allocated * GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES);
 		amounts = Arrays.copyOf(amounts, species.length);
-		residualBits = Arrays.copyOf(residualBits, allocated);
+		residualUnits = Arrays.copyOf(residualUnits, allocated);
 		freeHandles = Arrays.copyOf(freeHandles, allocated - 1);
 	}
 
@@ -109,7 +109,7 @@ public final class SolidCompositionPool {
 		for (int entry = 0; entry < record.entryCount(); entry++) {
 			species[base + entry] = (short) record.speciesHandle(entry); amounts[base + entry] = record.amountAt(entry);
 		}
-		residualBits[handle] = record.massResidualBits(); entryCount[handle] = (byte) record.entryCount();
+		residualUnits[handle] = record.massResidualUnits(); entryCount[handle] = (byte) record.entryCount();
 	}
 
 	private void requireLive(int handle) {

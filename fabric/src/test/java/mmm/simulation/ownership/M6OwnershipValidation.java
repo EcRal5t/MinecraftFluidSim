@@ -535,7 +535,7 @@ public final class M6OwnershipValidation {
 		float[] velocities = state.copyParticleVelocities();
 		for (int i = 0; i < velocities.length; i++) velocities[i] = (i % 7 - 3) * 0.03125F;
 		domain.restoreParticleState(new FlipParticleState(state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(),
-				state.particleCount(), state.totalVolume(), state.copyPositionVolume(), velocities, state.copySolidMask()));
+				state.particleCount(), state.totalVolume(), state.copyPositionVolume(), velocities, mmm.units.Mass.createLiquid(state.cellSize(), 1000.0, state.copyPositionVolume()), state.copySolidMask()));
 		Set<Long> interior = new HashSet<>();
 		for (int z = 15; z <= 17; z++) for (int y = 16; y <= 17; y++) for (int x = 15; x <= 17; x++) {
 			interior.add(new BlockPos(x, y, z).asLong());

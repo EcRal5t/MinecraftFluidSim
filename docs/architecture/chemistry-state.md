@@ -78,10 +78,10 @@ registry 校验未知 ID、重复 ID、非正质量、组成/电荷/质量不守
 质量关系为：
 
 ```text
-particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg
+massUnits = speciesMassUnits + massResidualUnits
 ```
 
-物种质量定义和 residual 使用 kg，`SolverUnitScale` 负责与液体 solver mass 换算。
+摩尔质量定义使用 kg/mol；整数 μmol 乘精确摩尔质量得到可表示的质量整数，质量余量沿用同一编码。
 拆并和转移按共同物质份额搬运质量余量，并保留对应审计。
 
 ## 反应模型
@@ -95,7 +95,7 @@ particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg
 
 反应后的物种按质量份额分配到可表示载体，来源总量保持精确。
 实际搬移质量携带原速度，接收者按输入动量混合，组成、质量与速度在同一计划提交。
-质量由原始 solver mass 与物种质量差经统一单位换算求得。
+候选质量由原始质量整数加上物种质量整数变化得到，整组总质量精确闭合。
 温度从候选质量、组成和原内能反演，完整计划通过后才写入。
 
 容量、物种槽位或有效热状态暂时受限时，保留原库存与待处理单元。

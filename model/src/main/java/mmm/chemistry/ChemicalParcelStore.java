@@ -12,7 +12,7 @@ import java.util.function.IntFunction;
 
 /**
  * Per-region marker-to-mixture ownership, indicator state, dirty cells and logical reactions.
- * Marker mass parameters use normalized solver mass; species and residual mass use kilograms.
+ * Marker mass and chemical residuals use integer 100 ng counts; solver mass is derived.
  */
 public final class ChemicalParcelStore {
 	private final ChemicalRegistry registry;
@@ -25,7 +25,7 @@ public final class ChemicalParcelStore {
 	private long mutationRevision;
 	private int reactionCursor;
 	private volatile DefaultParcel defaultParcel;
-	private record DefaultParcel(String materialId, int volumeBits, int cellSizeBits, long massBits,
+	private record DefaultParcel(String materialId, int volumeBits, int cellSizeBits, long massUnits,
 			boolean indicator, ChemicalMixtureRecord mixture) { }
 	public int reactionCursor() { return reactionCursor; }
 	public void restoreReactionCursor(int cell) {
@@ -122,9 +122,7 @@ public final class ChemicalParcelStore {
 				exactSpeciesMass = exactSpeciesMass.add(registry.species(handle).molarMassKgPerMol()
 						.multiply(species.getValue()).divide(ChemicalLimits.QUANTA_PER_MOL));
 			}
-			double tolerance = Math.max(1.0E-9, Math.ulp(group.massKilograms()) * 8.0);
-			if (Math.abs(exactSpeciesMass.toDouble() + group.massResidualKilograms()
-					- group.massKilograms()) > tolerance) {
+			if (Math.addExact(mmm.units.Mass.exactUnits(exactSpeciesMass.numerator(), exactSpeciesMass.denominator()), group.massResidualUnits()) != group.massUnits()) {
 				throw new IllegalArgumentException("Chemical audit species/mass ledger mismatch");
 			}
 		}
@@ -201,24 +199,26 @@ public final class ChemicalParcelStore {
 	}
 
 	public void assignDefault(
-			int marker, String materialId, float cellVolume, float cellSize, double markerMass, boolean indicator
+			int marker, String materialId, float cellVolume, float cellSize, long markerMassUnits, boolean indicator
 	) {
-		assign(marker, defaultRecord(materialId, cellVolume, cellSize, markerMass, indicator), indicator);
+		assign(marker, defaultRecord(materialId, cellVolume, cellSize, markerMassUnits, indicator), indicator);
 	}
 
 	/** Plans one registry default parcel without changing marker ownership or total inventory. */
 	public ChemicalMixtureRecord defaultRecord(
-			String materialId, float cellVolume, float cellSize, double markerMass, boolean indicator
+			String materialId, float cellVolume, float cellSize, long markerMassUnits, boolean indicator
 	) {
-		ChemicalMixtureRecord record = tryDefaultRecord(materialId, cellVolume, cellSize, markerMass, indicator);
+		ChemicalMixtureRecord record = tryDefaultRecord(materialId, cellVolume, cellSize, markerMassUnits, indicator);
 		if (record == null) throw new IllegalArgumentException("Marker is too small for one default carrier quantum");
 		return record;
 	}
 
 	/** Returns null when this volume cannot carry a default species quantum. */
 	public ChemicalMixtureRecord tryDefaultRecord(
-			String materialId, float cellVolume, float cellSize, double markerMass, boolean indicator
+			String materialId, float cellVolume, float cellSize, long markerMassUnits, boolean indicator
 	) {
+		if (markerMassUnits < 0) throw new IllegalArgumentException("Negative marker mass");
+		if (markerMassUnits == 0) return null;
 		int phaseHandle = registry.phaseHandleForMaterial(materialId);
 		ChemicalPhaseDefinition phase = registry.phase(phaseHandle);
 		if (indicator && !phase.acceptsIndicator()) throw new IllegalArgumentException("Chemical phase rejects indicator");
@@ -226,8 +226,8 @@ public final class ChemicalParcelStore {
 		if (previous != null && previous.materialId.equals(materialId)
 				&& previous.volumeBits == Float.floatToRawIntBits(cellVolume)
 				&& previous.cellSizeBits == Float.floatToRawIntBits(cellSize)
-				&& previous.massBits == Double.doubleToRawLongBits(markerMass) && previous.indicator == indicator) {
-			unitScale.kilograms(markerMass);
+				&& previous.massUnits == markerMassUnits && previous.indicator == indicator) {
+			if (markerMassUnits <= 0) throw new IllegalArgumentException("Non-positive marker mass");
 			requireCompatible(previous.mixture, materialId, indicator);
 			return previous.mixture;
 		}
@@ -242,12 +242,12 @@ public final class ChemicalParcelStore {
 			if (quanta > 0L) amounts.put(entry.getKey(), quanta);
 		}
 		if (amounts.isEmpty() && !phase.allowedSpecies().isEmpty()) return null;
-		ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);
-		double residual = unitScale.kilograms(markerMass) - withoutResidual.exactSpeciesMassKilograms(registry).toDouble();
+		ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
+		long residual = markerMassUnits - withoutResidual.speciesMassUnits(registry);
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, residual);
 		requireCompatible(record, materialId, indicator);
 		if (previous == null) defaultParcel = new DefaultParcel(materialId, Float.floatToRawIntBits(cellVolume),
-				Float.floatToRawIntBits(cellSize), Double.doubleToRawLongBits(markerMass), indicator, record);
+				Float.floatToRawIntBits(cellSize), markerMassUnits, indicator, record);
 		return record;
 	}
 
@@ -321,13 +321,13 @@ public final class ChemicalParcelStore {
 		return unique <= ChemicalLimits.MAX_SPECIES_PER_PARCEL;
 	}
 
-	public void merge(int target, int source, double mergedMass) {
+	public void merge(int target, int source, long mergedMass) {
 		if (!canMerge(target, source)) throw new IllegalStateException("Chemical parcels cannot merge");
 		ChemicalMixtureRecord left = record(target), right = record(source);
 		TreeMap<Integer, Long> amounts = new TreeMap<>();
 		copyAmounts(left, amounts); copyAmounts(right, amounts);
-		ChemicalMixtureRecord combined = recordFromHandles(amounts, 0.0);
-		double residual = unitScale.kilograms(mergedMass) - combined.exactSpeciesMassKilograms(registry).toDouble();
+		ChemicalMixtureRecord combined = recordFromHandles(amounts, 0L);
+		long residual = mergedMass - combined.speciesMassUnits(registry);
 		combined = recordFromHandles(amounts, residual);
 		pool.overwrite(markerHandles[target], combined);
 		pool.release(markerHandles[source]);
@@ -338,7 +338,7 @@ public final class ChemicalParcelStore {
 
 	public void split(
 			int source, int destination, float sourceVolume, float destinationVolume,
-			double sourceMass, double destinationMass
+			long sourceMass, long destinationMass
 	) {
 		requireAssigned(source);
 		if (markerHandles[destination] != 0) throw new IllegalStateException("Split destination already has chemical state");
@@ -351,12 +351,12 @@ public final class ChemicalParcelStore {
 			if (allocation[1] > 0L) second.put(original.speciesHandle(entry), allocation[1]);
 		}
 		if (original.entryCount() > 0 && (first.isEmpty() || second.isEmpty())) throw new IllegalStateException("Split produced an empty chemical parcel");
-		ChemicalMixtureRecord firstRecord = recordFromHandles(first, 0.0);
-		ChemicalMixtureRecord secondRecord = recordFromHandles(second, 0.0);
+		ChemicalMixtureRecord firstRecord = recordFromHandles(first, 0L);
+		ChemicalMixtureRecord secondRecord = recordFromHandles(second, 0L);
 		firstRecord = recordFromHandles(first,
-				unitScale.kilograms(sourceMass) - firstRecord.exactSpeciesMassKilograms(registry).toDouble());
+				sourceMass - firstRecord.speciesMassUnits(registry));
 		secondRecord = recordFromHandles(second,
-				unitScale.kilograms(destinationMass) - secondRecord.exactSpeciesMassKilograms(registry).toDouble());
+				destinationMass - secondRecord.speciesMassUnits(registry));
 		int newHandle = pool.create(secondRecord);
 		pool.overwrite(markerHandles[source], firstRecord);
 		markerHandles[destination] = newHandle;
@@ -407,7 +407,7 @@ public final class ChemicalParcelStore {
 	}
 
 	public SplitPlan planTruncate(
-			int marker, float keptVolume, float removedVolume, double keptMass, double removedMass
+			int marker, float keptVolume, float removedVolume, long keptMass, long removedMass
 	) {
 		SplitPlan plan = tryPlanTruncate(marker, keptVolume, removedVolume, keptMass, removedMass);
 		if (plan == null) throw new ChemicalReactionEngine.BudgetExceededException(
@@ -417,7 +417,7 @@ public final class ChemicalParcelStore {
 
 	/** Returns null when an otherwise valid split would leave either carrier without species. */
 	public SplitPlan tryPlanTruncate(
-			int marker, float keptVolume, float removedVolume, double keptMass, double removedMass
+			int marker, float keptVolume, float removedVolume, long keptMass, long removedMass
 	) {
 		requireAssigned(marker);
 		if (!(keptVolume >= 0.0F && removedVolume > 0.0F) || !(keptMass >= 0.0 && removedMass > 0.0)) {
@@ -433,12 +433,12 @@ public final class ChemicalParcelStore {
 			if (allocation[1] > 0L) removed.put(original.speciesHandle(entry), allocation[1]);
 		}
 		if (original.entryCount() > 0 && (kept.isEmpty() || removed.isEmpty())) return null;
-		ChemicalMixtureRecord keptRecord = recordFromHandles(kept, 0.0);
-		ChemicalMixtureRecord removedRecord = recordFromHandles(removed, 0.0);
+		ChemicalMixtureRecord keptRecord = recordFromHandles(kept, 0L);
+		ChemicalMixtureRecord removedRecord = recordFromHandles(removed, 0L);
 		keptRecord = recordFromHandles(kept,
-				unitScale.kilograms(keptMass) - keptRecord.exactSpeciesMassKilograms(registry).toDouble());
+				keptMass - keptRecord.speciesMassUnits(registry));
 		removedRecord = recordFromHandles(removed,
-				unitScale.kilograms(removedMass) - removedRecord.exactSpeciesMassKilograms(registry).toDouble());
+				removedMass - removedRecord.speciesMassUnits(registry));
 		return new SplitPlan(keptRecord, removedRecord);
 	}
 
@@ -448,7 +448,7 @@ public final class ChemicalParcelStore {
 	 * marker masses remain independently authoritative.
 	 */
 	public SplitPlan planSelectivePhaseTruncate(
-			int marker, float keptVolume, float removedVolume, double keptMass, double removedMass,
+			int marker, float keptVolume, float removedVolume, long keptMass, long removedMass,
 			boolean[] movedSpecies
 	) {
 		requireAssigned(marker);
@@ -486,14 +486,14 @@ public final class ChemicalParcelStore {
 		if (kept.isEmpty()) {
 			throw new ChemicalReactionEngine.BudgetExceededException("Retained liquid would have no chemical carrier");
 		}
-		ChemicalMixtureRecord removedZero = recordFromHandles(removed, 0.0);
-		double removedResidual = unitScale.kilograms(removedMass)
-				- removedZero.exactSpeciesMassKilograms(registry).toDouble();
+		ChemicalMixtureRecord removedZero = recordFromHandles(removed, 0L);
+		long removedResidual = removedMass
+				- removedZero.speciesMassUnits(registry);
 		ChemicalMixtureRecord removedRecord = recordFromHandles(removed, removedResidual);
 		ChemicalMixtureRecord keptRecord = recordFromHandles(
-				kept, original.massResidualKilograms() - removedResidual);
-		requireMassClose(removedRecord.massKilograms(registry), unitScale.kilograms(removedMass), "removed");
-		requireMassClose(keptRecord.massKilograms(registry), unitScale.kilograms(keptMass), "retained");
+				kept, original.massResidualUnits() - removedResidual);
+		requireMassClose(removedRecord.massUnits(registry), removedMass, "removed");
+		requireMassClose(keptRecord.massUnits(registry), keptMass, "retained");
 		return new SplitPlan(keptRecord, removedRecord);
 	}
 
@@ -503,7 +503,7 @@ public final class ChemicalParcelStore {
 		TreeMap<Integer, Long> closed = new TreeMap<>();
 		copyAmounts(plan.removed(), closed);
 		if (plan.kept() != null) copyAmounts(plan.kept(), closed);
-		if (!recordFromHandles(closed, original.massResidualKilograms()).stableAmounts(registry)
+		if (!recordFromHandles(closed, original.massResidualUnits()).stableAmounts(registry)
 				.equals(original.stableAmounts(registry))) {
 			throw new IllegalArgumentException("Chemical truncation species plan does not close");
 		}
@@ -513,9 +513,8 @@ public final class ChemicalParcelStore {
 		mutationRevision++;
 	}
 
-	private static void requireMassClose(double actual, double expected, String label) {
-		double tolerance = Math.max(1.0E-9, Math.max(Math.ulp(actual), Math.ulp(expected)) * 16.0);
-		if (Math.abs(actual - expected) > tolerance) {
+	private static void requireMassClose(long actual, long expected, String label) {
+		if (actual != expected) {
 			throw new IllegalArgumentException("Selective phase " + label + " mass does not close");
 		}
 	}
@@ -565,26 +564,26 @@ public final class ChemicalParcelStore {
 	/** Full plan/validate/commit logical step. A failure leaves all parcel records and dirty bits unchanged. */
 	public ReactionStats reactDirtyCells(
 			int sizeX, int sizeY, int sizeZ, float cellSize,
-			float[] x, float[] y, float[] z, double[] markerMass,
+			float[] x, float[] y, float[] z, long[] markerMassUnits,
 			int[] materialHandle, IntFunction<String> stableMaterialId, int particleCount
 	) {
-		return reactDirtyCells(sizeX, sizeY, sizeZ, cellSize, x, y, z, markerMass,
+		return reactDirtyCells(sizeX, sizeY, sizeZ, cellSize, x, y, z, markerMassUnits,
 				materialHandle, stableMaterialId, particleCount, (marker, mixture, mass) -> { });
 	}
 
 	public ReactionStats reactDirtyCells(
 			int sizeX, int sizeY, int sizeZ, float cellSize,
-			float[] x, float[] y, float[] z, double[] markerMass,
+			float[] x, float[] y, float[] z, long[] markerMassUnits,
 			int[] materialHandle, IntFunction<String> stableMaterialId, int particleCount,
 			ReactionValidator validator
 	) {
-		return reactDirtyCells(sizeX, sizeY, sizeZ, cellSize, x, y, z, markerMass,
+		return reactDirtyCells(sizeX, sizeY, sizeZ, cellSize, x, y, z, markerMassUnits,
 				materialHandle, stableMaterialId, particleCount, validator, (markers, masses) -> { });
 	}
 
 	public ReactionStats reactDirtyCells(
 			int sizeX, int sizeY, int sizeZ, float cellSize,
-			float[] x, float[] y, float[] z, double[] markerMass,
+			float[] x, float[] y, float[] z, long[] markerMassUnits,
 			int[] materialHandle, IntFunction<String> stableMaterialId, int particleCount,
 			ReactionValidator validator, ReactionGroupValidator groupValidator
 	) {
@@ -637,7 +636,7 @@ public final class ChemicalParcelStore {
 				try {
 					long[] reacted = engine.reactInventory(group.getKey(), inventory).inventory();
 					if (Arrays.equals(inventory, reacted)) continue;
-					ChemicalReactionAllocation.Plan plan = ChemicalReactionAllocation.plan(this, group.getValue(), reacted, markerMass);
+					ChemicalReactionAllocation.Plan plan = ChemicalReactionAllocation.plan(this, group.getValue(), reacted, markerMassUnits);
 					long nextTotal = Math.addExact(candidateTotal, plan.quantaDelta());
 					if (nextTotal > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 						retry = true;
@@ -658,7 +657,7 @@ public final class ChemicalParcelStore {
 		for (ChemicalReactionAllocation.Plan plan : plans) for (int i = 0; i < plan.markers().length; i++) {
 			int marker = plan.markers()[i];
 			pool.overwrite(markerHandles[marker], plan.mixtures()[i]);
-			markerMass[marker] = plan.masses()[i];
+			markerMassUnits[marker] = plan.masses()[i];
 		}
 		totalQuanta = candidateTotal;
 		reactionCursor = nextCursor;
@@ -686,11 +685,11 @@ public final class ChemicalParcelStore {
 				+ (long) (indicatorWords.length + dirtyCellWords.length) * Long.BYTES;
 	}
 
-	private ChemicalMixtureRecord recordFromHandles(Map<Integer, Long> values, double residual) {
-		return recordFromHandlesBits(values, Double.doubleToRawLongBits(residual));
+	private ChemicalMixtureRecord recordFromHandles(Map<Integer, Long> values, long residual) {
+		return recordFromHandlesUnits(values, residual);
 	}
 
-	private ChemicalMixtureRecord recordFromHandlesBits(Map<Integer, Long> values, long residualBits) {
+	private ChemicalMixtureRecord recordFromHandlesUnits(Map<Integer, Long> values, long residualUnits) {
 		if (values.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL) {
 			throw new ChemicalReactionEngine.BudgetExceededException("Parcel species entry budget exceeded");
 		}
@@ -698,7 +697,7 @@ public final class ChemicalParcelStore {
 		for (Map.Entry<Integer, Long> value : new TreeMap<>(values).entrySet()) {
 			species[entry] = value.getKey(); amounts[entry++] = value.getValue();
 		}
-		return new ChemicalMixtureRecord(species, amounts, residualBits);
+		return new ChemicalMixtureRecord(species, amounts, residualUnits);
 	}
 
 	private void validateRecord(ChemicalMixtureRecord record) {
@@ -735,12 +734,12 @@ public final class ChemicalParcelStore {
 	@FunctionalInterface
 	public interface ReactionValidator {
 		/** Called for every candidate after the whole reaction plan closes and before any store mutation. */
-		void validate(int marker, ChemicalMixtureRecord mixture, double markerMass);
+		void validate(int marker, ChemicalMixtureRecord mixture, long markerMassUnits);
 	}
 	@FunctionalInterface
 	public interface ReactionGroupValidator {
 		/** Checks the complete same-cell phase allocation before any marker is modified. */
-		void validate(int[] markers, double[] markerMasses);
+		void validate(int[] markers, long[] markerMasses);
 	}
 	public record SplitPlan(ChemicalMixtureRecord kept, ChemicalMixtureRecord removed) {
 		public SplitPlan {

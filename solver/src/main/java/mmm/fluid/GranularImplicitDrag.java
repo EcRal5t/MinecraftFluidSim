@@ -426,7 +426,7 @@ final class GranularImplicitDrag {
 			double vy = vector[faceCount + 3 * index + 1];
 			double vz = vector[faceCount + 3 * index + 2];
 			domain.granularState.parcels.overwrite(index, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(),
-					(float) vx, (float) vy, (float) vz, p.solidVolumeSvq(), p.mass(), p.materialHandle(),
+					(float) vx, (float) vy, (float) vz, p.solidVolumeSvq(), p.massUnits(), p.materialHandle(),
 					p.solidCompositionHandle(), p.contactAge(), p.flags()));
 			if (accountRounding) {
 				rounding[0] += p.mass() * (vx - (float) vx);

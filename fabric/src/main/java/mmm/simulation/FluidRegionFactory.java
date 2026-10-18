@@ -77,18 +77,18 @@ final class FluidRegionFactory {
 		if (domain.hasMaterialState()) return;
 		FlipParticleState pure = domain.exportParticleState();
 		float[] positionVolume = pure.copyPositionVolume();
-		double[] markerMass = new double[pure.particleCount()];
+		long[] markerMassUnits = new long[pure.particleCount()];
 		int[] material = new int[pure.particleCount()];
-		double totalVolume = 0.0, totalMass = 0.0;
+		double totalVolume = 0.0; long totalMass = 0;
 		for (int marker = 0; marker < pure.particleCount(); marker++) {
 			double volume = positionVolume[marker * 4 + 3];
-			markerMass[marker] = volume * BuiltinFluidMaterials.WATER.referenceDensity();
+			markerMassUnits[marker] = mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(volume * BuiltinFluidMaterials.WATER.referenceDensity());
 			totalVolume += volume;
-			totalMass += markerMass[marker];
+			totalMass = Math.addExact(totalMass, markerMassUnits[marker]);
 		}
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), totalVolume, totalMass,
-				BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMass, material
+				BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMassUnits, material
 		));
 	}
 

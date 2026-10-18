@@ -72,12 +72,12 @@ Minecraft 一个方块的边长标定为 1 m。物理定义统一使用 SI，化
 | 液体体积编码 | 1 nanos = 10⁻⁹ m³ | `ContainerFluidLedger` |
 | 气体体积编码 | 1 nanos = 10⁻⁹ 标准 m³；标准态为 101325 Pa、293.15 K | `GasRegistry`、`AirNetwork` |
 | 固体体积编码 | 1 SVQ = 2⁻²⁷ m³；默认单元为 2²⁴ SVQ | `SolidVolume` |
-| 液体内部归一化库存 | 体积和质量权重都乘 h³，分别得到 m³ 和 kg | `SolverUnitScale` |
-| 颗粒、气体、化学质量余量与设备 | 独立保存 kg | 各载体库存 |
+| 液体内部体积与求解质量 | 体积乘 h³ 得 m³；浮点质量权重由整数 kg 库存除 h³ 派生 | `SolverUnitScale` |
+| 全部载体的质量与化学质量余量 | `long massUnits`，每份 10⁻¹⁰ kg（100 ng），编码 `mmm:mass_1e-10_kg` | `Mass` 与各载体库存 |
 
 默认 h = 0.5 m，一格满水内部体积为 1、质量权重为 1000，对应 0.125 m³、125 kg。
-位置和速度采用 m 与 m/s。内部质量权重保留归一化含义；跨载体转移时由区域实际的 `SolverUnitScale` 转换。
-化学转移账本的 `normalizedVolume` 保存归一化体积，质量与余量保存 kg；容器库存的 nanos 保存物理体积。
+位置和速度采用 m 与 m/s。液体保存归一化体积与物理质量整数；质量权重供求解器计算使用，由 `SolverUnitScale.normalizedMass` 只读派生。
+化学转移账本的 `normalizedVolume` 保存归一化体积，质量与余量保存统一质量整数；容器库存的 nanos 保存物理体积。
 SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；binary32 的有效精度随数值大小变化，液体仍可具有小于一个 SVQ 的浮点尾项。
 整数占容、向上／向下换算及 float 可表示性沿现有算法执行。
 
@@ -90,11 +90,21 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；binary32 的有效�
 水、常见离子和 CO₂ 沿用整数原子量精度；水为 0.018 kg/mol，默认浓度为 500000/9 mol/m³。
 物种质量与余量共同核对机械 kg 库存。化学数量上限、默认批次及物性值分别由代码和数据定义维护。
 
+质量定点尺度兼顾微摩尔组成与区域容量：1 μmol 水为 180 份、H⁺ 为 10 份、Hg 为 2000 份。
+每列和受检总量的正值上限约为 9.223372×10⁸ kg；现有化学区域数量上限对应的 Hg 质量为 4×10⁸ kg，默认格长下 9216 格满汞约为 1.567×10⁷ kg。
+物性定义仍以 SI 保存。新建库存按最接近值、恰好中点取偶数量化一次，误差至多 50 ng；真实物种每个 μmol 的质量及相变批次须能精确换成整数。
+因此自定义摩尔质量采用 0.0001 kg/mol 的整数倍，沿用玩法所需的近似精度。
+拆分以整数比例分配，保留份额承接余数，合并和差额使用受检整数运算；不足一份质量的正体积片段在提交前拒绝，原库存保留。
+机械、热学、密度及显示读取派生 kg；物质审计、容器、内存交接与存档直接比较整数。
+纯液体 handoff 和 checkpoint 也携带质量列，恢复完整保存的库存。
+
+
 玩家展示由 `UnitFormat` 按数量选择 μmol/mmol/mol/kmol、mL/L/m³、J/kJ/MJ、Pa/kPa/MPa。
 当前温度输入和展示统一保留 K；绝对压力与标准态在文字中注明。
 显示舍入保持只读，原始整数编码留在开发诊断；一桶的游戏操作容量为一个方块体积，即 1 m³。
 
 - 单位与转换入口：
+  - [Mass](../../model/src/main/java/mmm/units/Mass.java)：质量编码、新建数量化与整数比例分配。
   - [SolverUnitScale](../../model/src/main/java/mmm/units/SolverUnitScale.java)
   - [ChemicalAmount](../../model/src/main/java/mmm/chemistry/ChemicalAmount.java)
   - [UnitFormat](../../model/src/main/java/mmm/units/UnitFormat.java)

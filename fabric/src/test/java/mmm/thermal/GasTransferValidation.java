@@ -123,8 +123,8 @@ public final class GasTransferValidation {
 	private static GasInventory inventory(long[] amounts) {
 		ArrayList<GasComponentAmount> components = new ArrayList<>();
 		for (int index = 0; index < amounts.length; index++) {
-			components.add(new GasComponentAmount("test:gas" + index, amounts[index], amounts[index] * 1.0E-9,
-					List.of(), amounts[index] * 1.0E-9));
+			components.add(new GasComponentAmount("test:gas" + index, amounts[index], mmm.units.Mass.fromKilograms(amounts[index] * 1.0E-9),
+					List.of(), mmm.units.Mass.fromKilograms(amounts[index] * 1.0E-9)));
 		}
 		return new GasInventory(components);
 	}

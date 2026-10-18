@@ -18,9 +18,10 @@ import java.util.function.IntToLongFunction;
 public final class GranularStateSnapshot {
 	public record ActiveParcel(
 			float x, float y, float z, float velocityX, float velocityY, float velocityZ,
-			long solidVolumeSvq, double mass, int materialPaletteIndex, int solidCompositionIndex,
+			long solidVolumeSvq, long massUnits, int materialPaletteIndex, int solidCompositionIndex,
 			int contactAge, byte flags, int ceilMask
 	) {
+		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
 		public ActiveParcel {
 			if (ceilMask < 0 || ceilMask > 254) throw new IllegalArgumentException("Persisted granular occupancy selection is invalid");
 		}
@@ -28,8 +29,9 @@ public final class GranularStateSnapshot {
 
 	public record DepositGroup(
 			int cell, int porosityQ, int materialPaletteIndex, int solidCompositionIndex,
-			long solidVolumeSvq, double mass
+			long solidVolumeSvq, long massUnits
 	) {
+		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
 		private static final Comparator<DepositGroup> ORDER = Comparator.comparingInt(DepositGroup::cell)
 				.thenComparingInt(DepositGroup::materialPaletteIndex)
 				.thenComparingInt(DepositGroup::solidCompositionIndex);
@@ -42,7 +44,7 @@ public final class GranularStateSnapshot {
 		}
 	}
 
-	public record StableComposition(List<CompositionComponent> components, long massResidualBits) {
+	public record StableComposition(List<CompositionComponent> components, long massResidualUnits) {
 		private static final Comparator<StableComposition> ORDER = (left, right) -> {
 			int size = Integer.compare(left.components.size(), right.components.size());
 			for (int index = 0; size == 0 && index < left.components.size(); index++) {
@@ -51,13 +53,12 @@ public final class GranularStateSnapshot {
 				int amount = Long.compare(left.components.get(index).amountQuanta(), right.components.get(index).amountQuanta());
 				if (amount != 0) return amount;
 			}
-			return size != 0 ? size : Long.compareUnsigned(left.massResidualBits, right.massResidualBits);
+			return size != 0 ? size : Long.compareUnsigned(left.massResidualUnits, right.massResidualUnits);
 		};
 
 		public StableComposition {
 			components = List.copyOf(components);
-			if (components.isEmpty() || components.size() > GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES
-					|| !Double.isFinite(Double.longBitsToDouble(massResidualBits))) {
+			if (components.isEmpty() || components.size() > GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES) {
 				throw new IllegalArgumentException("Invalid stable solid composition");
 			}
 			String previous = null;
@@ -74,14 +75,14 @@ public final class GranularStateSnapshot {
 			for (int entry = 0; entry < record.entryCount(); entry++) components.add(new CompositionComponent(
 					registry.species(record.speciesHandle(entry)).id(), record.amountAt(entry)));
 			components.sort(Comparator.comparing(CompositionComponent::speciesId));
-			return new StableComposition(components, record.massResidualBits());
+			return new StableComposition(components, record.massResidualUnits());
 		}
 
 		SolidCompositionRecord toRuntime(ChemicalRegistry registry) {
 			TreeMap<String, Long> amounts = new TreeMap<>();
 			for (CompositionComponent component : components) amounts.put(component.speciesId(), component.amountQuanta());
 			return SolidCompositionRecord.fromStableAmounts(registry, amounts,
-					Double.longBitsToDouble(massResidualBits));
+					massResidualUnits);
 		}
 	}
 
@@ -93,17 +94,17 @@ public final class GranularStateSnapshot {
 	private final List<ActiveParcel> activeParcels;
 	private final List<DepositGroup> depositGroups;
 	private final long totalSolidVolumeSvq;
-	private final long totalMassBits;
+	private final long totalMassUnits;
 	private final GranularAuditLedger externalSource, escapedSink;
 
 	/** Convenience constructor for inert fixtures. */
 	public GranularStateSnapshot(
 			int sizeX, int sizeY, int sizeZ, String registryFingerprint, List<String> materialPalette,
 			List<ActiveParcel> activeParcels, List<DepositGroup> depositGroups,
-			long totalSolidVolumeSvq, long totalMassBits
+			long totalSolidVolumeSvq, long totalMassUnits
 	) {
 		this(sizeX, sizeY, sizeZ, registryFingerprint, "", materialPalette, List.of(), Map.of(),
-				activeParcels, depositGroups, totalSolidVolumeSvq, totalMassBits,
+				activeParcels, depositGroups, totalSolidVolumeSvq, totalMassUnits,
 				GranularAuditLedger.EMPTY, GranularAuditLedger.EMPTY);
 	}
 
@@ -111,18 +112,18 @@ public final class GranularStateSnapshot {
 			int sizeX, int sizeY, int sizeZ, String registryFingerprint, String chemicalRegistryFingerprint,
 			List<String> materialPalette, List<StableComposition> solidCompositions,
 			Map<String, Long> solidSpeciesTotals, List<ActiveParcel> activeParcels, List<DepositGroup> depositGroups,
-			long totalSolidVolumeSvq, long totalMassBits
+			long totalSolidVolumeSvq, long totalMassUnits
 	) {
 		this(sizeX, sizeY, sizeZ, registryFingerprint, chemicalRegistryFingerprint, materialPalette,
 				solidCompositions, solidSpeciesTotals, activeParcels, depositGroups, totalSolidVolumeSvq,
-				totalMassBits, GranularAuditLedger.EMPTY, GranularAuditLedger.EMPTY);
+				totalMassUnits, GranularAuditLedger.EMPTY, GranularAuditLedger.EMPTY);
 	}
 
 	public GranularStateSnapshot(
 			int sizeX, int sizeY, int sizeZ, String registryFingerprint, String chemicalRegistryFingerprint,
 			List<String> materialPalette, List<StableComposition> solidCompositions,
 			Map<String, Long> solidSpeciesTotals, List<ActiveParcel> activeParcels, List<DepositGroup> depositGroups,
-			long totalSolidVolumeSvq, long totalMassBits,
+			long totalSolidVolumeSvq, long totalMassUnits,
 			GranularAuditLedger externalSource, GranularAuditLedger escapedSink
 	) {
 		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0) throw new IllegalArgumentException("Invalid granular snapshot dimensions");
@@ -182,10 +183,10 @@ public final class GranularStateSnapshot {
 			computedVolume = Math.addExact(computedVolume, group.solidVolumeSvq());
 		}
 		if (computedVolume != totalSolidVolumeSvq
-				|| canonicalTotalMassBits(this.activeParcels, this.depositGroups) != totalMassBits) {
+				|| canonicalTotalMassUnits(this.activeParcels, this.depositGroups) != totalMassUnits) {
 			throw new IllegalArgumentException("Granular snapshot total ledger mismatch");
 		}
-		this.totalSolidVolumeSvq = totalSolidVolumeSvq; this.totalMassBits = totalMassBits;
+		this.totalSolidVolumeSvq = totalSolidVolumeSvq; this.totalMassUnits = totalMassUnits;
 		this.externalSource = java.util.Objects.requireNonNull(externalSource, "externalSource");
 		this.escapedSink = java.util.Objects.requireNonNull(escapedSink, "escapedSink");
 		if ((this.externalSource.requiresChemistry() || this.escapedSink.requiresChemistry())
@@ -241,19 +242,19 @@ public final class GranularStateSnapshot {
 			// Standalone inventory drafts acquire their initial spatial selection at the supplied domain geometry.
 			if (mask < 0) { kernel.capture(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()); mask = kernel.canonicalMask(); }
 			active.add(new ActiveParcel(parcel.x(), parcel.y(), parcel.z(), parcel.velocityX(), parcel.velocityY(),
-					parcel.velocityZ(), parcel.solidVolumeSvq(), parcel.mass(), parcel.materialHandle(),
+					parcel.velocityZ(), parcel.solidVolumeSvq(), parcel.massUnits(), parcel.materialHandle(),
 					composition == null ? 0 : indices.get(composition), parcel.contactAge(), parcel.flags(), mask));
 		}
 		List<DepositGroup> deposit = new ArrayList<>(drafts.size());
 		for (DepositDraft draft : drafts) deposit.add(new DepositGroup(draft.cell(), draft.porosityQ(), draft.material(),
-				draft.composition() == null ? 0 : indices.get(draft.composition()), draft.volume(), draft.mass()));
+				draft.composition() == null ? 0 : indices.get(draft.composition()), draft.volume(), draft.massUnits()));
 		deposit.sort(DepositGroup.ORDER);
 		TreeMap<String, Long> totals = stableTotals(active, deposit, table);
 		long volume = Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq());
-		long massBits = Double.doubleToRawLongBits(parcels.exactMass().add(deposits.exactMass()).toDouble());
+		long massUnits = Math.addExact(parcels.totalMassUnits(), deposits.totalMassUnits());
 		return new GranularStateSnapshot(sizeX, sizeY, sizeZ, registry.fingerprint(),
 				pool == null ? "" : pool.registry().fingerprint(), palette, table, totals, active, deposit,
-				volume, massBits, externalSource, escapedSink);
+				volume, massUnits, externalSource, escapedSink);
 	}
 
 	public void restoreInto(
@@ -280,9 +281,9 @@ public final class GranularStateSnapshot {
 		externalSource.validateAgainst(registry, pool == null ? null : pool.registry());
 		escapedSink.validateAgainst(registry, pool == null ? null : pool.registry());
 		for (ActiveParcel parcel : activeParcels) {
-			int composition = restoreComposition(parcel.solidCompositionIndex(), parcel.mass(), pool);
+			int composition = restoreComposition(parcel.solidCompositionIndex(), parcel.massUnits(), pool);
 			parcels.add(new GranularParcelStore.Parcel(parcel.x(), parcel.y(), parcel.z(), parcel.velocityX(),
-					parcel.velocityY(), parcel.velocityZ(), parcel.solidVolumeSvq(), parcel.mass(),
+					parcel.velocityY(), parcel.velocityZ(), parcel.solidVolumeSvq(), parcel.massUnits(),
 					parcel.materialPaletteIndex(), composition, parcel.contactAge(), parcel.flags(), parcel.ceilMask()));
 		}
 		int previousCell = -1, expectedPorosity = 0;
@@ -290,9 +291,9 @@ public final class GranularStateSnapshot {
 			if (previousCell != group.cell() && previousCell >= 0 && deposits.porosityQ(previousCell) != expectedPorosity) {
 				throw new IllegalArgumentException("Persisted deposit porosity is not registry-derived");
 			}
-			int composition = restoreComposition(group.solidCompositionIndex(), group.mass(), pool);
+			int composition = restoreComposition(group.solidCompositionIndex(), group.massUnits(), pool);
 			if (!deposits.tryAdd(group.cell(), new GranularDepositStore.SolidPortion(group.materialPaletteIndex(), composition,
-					group.solidVolumeSvq(), group.mass()), geometricOpenSvq.applyAsLong(group.cell()))) {
+					group.solidVolumeSvq(), group.massUnits()), geometricOpenSvq.applyAsLong(group.cell()))) {
 				throw new IllegalArgumentException("Persisted granular deposit exceeds restored cell capacity");
 			}
 			previousCell = group.cell(); expectedPorosity = group.porosityQ();
@@ -301,8 +302,8 @@ public final class GranularStateSnapshot {
 			throw new IllegalArgumentException("Persisted deposit porosity is not registry-derived");
 		}
 		if (Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq()) != totalSolidVolumeSvq
-				|| Double.doubleToRawLongBits(parcels.exactMass().add(deposits.exactMass()).toDouble())
-				!= totalMassBits) {
+				|| Math.addExact(parcels.totalMassUnits(), deposits.totalMassUnits())
+				!= totalMassUnits) {
 			throw new IllegalStateException("Restored granular inventory does not match snapshot ledger");
 		}
 	}
@@ -315,11 +316,11 @@ public final class GranularStateSnapshot {
 		SolidCompositionRecord[] runtime = new SolidCompositionRecord[solidCompositions.size()];
 		for (int index = 0; index < runtime.length; index++) runtime[index] = solidCompositions.get(index).toRuntime(registry);
 		for (ActiveParcel parcel : activeParcels) if (parcel.solidCompositionIndex() > 0
-				&& !massClose(runtime[parcel.solidCompositionIndex() - 1].totalMass(registry), parcel.mass())) {
+				&& !massClose(runtime[parcel.solidCompositionIndex() - 1].massUnits(registry), parcel.massUnits())) {
 			throw new IllegalArgumentException("Active solid composition mass ledger mismatch");
 		}
 		for (DepositGroup group : depositGroups) if (group.solidCompositionIndex() > 0
-				&& !massClose(runtime[group.solidCompositionIndex() - 1].totalMass(registry), group.mass())) {
+				&& !massClose(runtime[group.solidCompositionIndex() - 1].massUnits(registry), group.massUnits())) {
 			throw new IllegalArgumentException("Deposit solid composition mass ledger mismatch");
 		}
 	}
@@ -335,10 +336,10 @@ public final class GranularStateSnapshot {
 		escapedSink.validateAgainst(registry, chemistry);
 	}
 
-	private int restoreComposition(int index, double expectedMass, SolidCompositionPool pool) {
+	private int restoreComposition(int index, long expectedMass, SolidCompositionPool pool) {
 		if (index == 0) return 0;
 		SolidCompositionRecord record = solidCompositions.get(index - 1).toRuntime(pool.registry());
-		if (!massClose(record.totalMass(pool.registry()), expectedMass)) {
+		if (!massClose(record.massUnits(pool.registry()), expectedMass)) {
 			throw new IllegalArgumentException("Solid composition mass does not match granular inventory");
 		}
 		return pool.create(record);
@@ -406,12 +407,10 @@ public final class GranularStateSnapshot {
 
 	private boolean validMaterial(int handle) { return handle >= 0 && handle < materialPalette.size(); }
 	private boolean validComposition(int index) { return index >= 0 && index <= solidCompositions.size(); }
-	private static boolean massClose(double left, double right) {
-		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
-	}
+	private static boolean massClose(long left, long right) { return left == right; }
 
 	private record DepositDraft(
-			int cell, int porosityQ, int material, StableComposition composition, long volume, double mass
+			int cell, int porosityQ, int material, StableComposition composition, long volume, long massUnits
 	) { }
 
 	public int sizeX() { return sizeX; }
@@ -428,18 +427,18 @@ public final class GranularStateSnapshot {
 	public List<ActiveParcel> activeParcels() { return activeParcels; }
 	public List<DepositGroup> depositGroups() { return depositGroups; }
 	public long totalSolidVolumeSvq() { return totalSolidVolumeSvq; }
-	public long totalMassBits() { return totalMassBits; }
-	public double totalMass() { return Double.longBitsToDouble(totalMassBits); }
+	public long totalMassUnits() { return totalMassUnits; }
+	public double totalMass() { return mmm.units.Mass.kilograms(totalMassUnits); }
 	public GranularAuditLedger externalSource() { return externalSource; }
 	public GranularAuditLedger escapedSink() { return escapedSink; }
 
 	/** Canonical one-rounding total over the complete active/deposit binary64 mass truth. */
-	public static long canonicalTotalMassBits(List<ActiveParcel> active, List<DepositGroup> deposits) {
+	public static long canonicalTotalMassUnits(List<ActiveParcel> active, List<DepositGroup> deposits) {
 		if (active == null || deposits == null) throw new IllegalArgumentException("Granular mass inventory is missing");
-		double[] masses = new double[Math.addExact(active.size(), deposits.size())];
+		long[] masses = new long[Math.addExact(active.size(), deposits.size())];
 		int index = 0;
-		for (ActiveParcel parcel : active) masses[index++] = parcel.mass();
-		for (DepositGroup group : deposits) masses[index++] = group.mass();
-		return Double.doubleToRawLongBits(SignedDyadic.sum(masses).toDouble());
+		for (ActiveParcel parcel : active) masses[index++] = parcel.massUnits();
+		for (DepositGroup group : deposits) masses[index++] = group.massUnits();
+		return mmm.units.Mass.sum(masses);
 	}
 }

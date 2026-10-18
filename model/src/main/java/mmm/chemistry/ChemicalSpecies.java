@@ -32,6 +32,7 @@ public record ChemicalSpecies(
 		if (molarMassKgPerMol == null || molarMassKgPerMol.signum() <= 0) {
 			throw new IllegalArgumentException("Species mass must be positive: " + id);
 		}
+		mmm.units.Mass.exactUnits(molarMassKgPerMol.divide(ChemicalLimits.QUANTA_PER_MOL).numerator(), molarMassKgPerMol.divide(ChemicalLimits.QUANTA_PER_MOL).denominator());
 		composition = Map.copyOf(canonical);
 	}
 }

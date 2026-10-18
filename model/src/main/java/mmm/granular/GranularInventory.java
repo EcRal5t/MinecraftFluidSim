@@ -104,8 +104,6 @@ public final class GranularInventory {
 		public long bulkVolumeSvq() { return onlyTarget().bulkVolumeSvq(); }
 		public SignedDyadic oldBedMass() { return onlyTarget().oldBedMass(); }
 		public long oldBedBulkVolumeSvq() { return onlyTarget().oldBedBulkVolumeSvq(); }
-		public SignedDyadic massStorageDelta() { return additions.massStorageDelta(); }
-		public SignedDyadic massStorageBound() { return additions.massStorageBound(); }
 	}
 
 	private static final class SettlementComposition {
@@ -174,7 +172,7 @@ public final class GranularInventory {
 					throw new IllegalStateException("Settlement has missing or shared composition ownership");
 				}
 				before.put(parcel.solidCompositionHandle(), compositions.record(parcel.solidCompositionHandle()));
-				requireCompositionMass(before.get(parcel.solidCompositionHandle()), parcel.mass());
+				requireCompositionMass(before.get(parcel.solidCompositionHandle()), parcel.massUnits());
 			}
 		}
 		if (!selectedHandles.isEmpty()) {
@@ -205,7 +203,7 @@ public final class GranularInventory {
 					throw new IllegalStateException("Settlement shares an active and deposit composition handle");
 				}
 				SolidCompositionRecord prototype = existing == null ? record : compositions.record(retained);
-				if (existing != null) requireCompositionMass(prototype, existing.mass());
+				if (existing != null) requireCompositionMass(prototype, existing.massUnits());
 				match = new SettlementComposition(parcel.materialHandle(), retained, existing != null, prototype,
 						existing == null ? parcel.solidVolumeSvq() : existing.solidVolumeSvq());
 				grouped.add(match); if (existing != null) before.put(retained, prototype);
@@ -229,7 +227,7 @@ public final class GranularInventory {
 			int cell = cells[slot];
 			GranularParcelStore.Parcel parcel = sources.get(slot);
 			additions.computeIfAbsent(cell, ignored -> new ArrayList<>()).add(new GranularDepositStore.SolidPortion(parcel.materialHandle(), targetHandle[slot],
-					parcel.solidVolumeSvq(), parcel.mass()));
+					parcel.solidVolumeSvq(), parcel.massUnits()));
 			addedMass.merge(cell, SignedDyadic.of(parcel.mass()), SignedDyadic::add);
 			addedSvq.merge(cell, parcel.solidVolumeSvq(), Math::addExact);
 			transfers.add(new DepositTransfer(indices[slot], cell, parcel.materialHandle(), targetHandle[slot]));
@@ -240,7 +238,7 @@ public final class GranularInventory {
 		if (depositPlan == null) return null;
 		for (var cellPlan : depositPlan.cells()) for (GranularDepositStore.Group group : cellPlan.groups()) {
 			SolidCompositionRecord composition = after.get(group.solidCompositionHandle());
-			if (composition != null && !compositionMassClose(composition.totalMass(compositions.registry()), group.mass())) return null;
+			if (composition != null && composition.massUnits(compositions.registry()) != group.massUnits()) return null;
 		}
 		EnergyPlan energy = thermalEnergy == null ? null : thermalEnergy.planActiveToDeposits(List.copyOf(transfers));
 		if (thermalEnergy != null && energy == null) return null;
@@ -256,25 +254,22 @@ public final class GranularInventory {
 		for (SolidCompositionRecord record : records) totalQuanta = totalQuanta.add(BigInteger.valueOf(record.totalQuanta()));
 		if (totalQuanta.compareTo(BigInteger.valueOf(ChemicalLimits.MAX_REGION_TOTAL_QUANTA)) > 0) return null;
 		long[] amounts = new long[records.getFirst().entryCount()];
-		SignedDyadic residual = SignedDyadic.ZERO;
+		long residual = 0L;
 		for (SolidCompositionRecord record : records) {
 			for (int entry = 0; entry < amounts.length; entry++) amounts[entry] = Math.addExact(amounts[entry], record.amountAt(entry));
-			residual = residual.add(SignedDyadic.of(record.massResidual()));
+			residual = Math.addExact(residual, record.massResidualUnits());
 		}
-		double storedResidual = residual.toDouble(); if (!Double.isFinite(storedResidual)) return null;
+
 		SolidCompositionRecord combined = new SolidCompositionRecord(records.getFirst().copySpeciesHandles(), amounts,
-				Double.doubleToRawLongBits(storedResidual));
+				residual);
 		double mass = combined.totalMass(compositions.registry());
 		return Double.isFinite(mass) && mass > 0 ? combined : null;
 	}
 
-	private void requireCompositionMass(SolidCompositionRecord record, double mass) {
-		if (!compositionMassClose(record.totalMass(compositions.registry()), mass)) {
+	private void requireCompositionMass(SolidCompositionRecord record, long mass) {
+		if (record.massUnits(compositions.registry()) != mass) {
 			throw new IllegalStateException("Settlement source composition does not match its mechanical mass");
 		}
-	}
-	private static boolean compositionMassClose(double left, double right) {
-		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
 	}
 
 	/** Checks every inventory, composition and thermal dependency before any participant is changed. */
@@ -389,7 +384,8 @@ public final class GranularInventory {
 			if (!left.proportionalTo(right, first.solidVolumeSvq(), second.solidVolumeSvq())) return null;
 			combinedComposition = left.plus(right);
 		}
-		double combinedMass = first.mass() + second.mass();
+		long combinedMassUnits = Math.addExact(first.massUnits(), second.massUnits());
+		double combinedMass = mmm.units.Mass.kilograms(combinedMassUnits);
 		GranularParcelStore.Parcel merged = new GranularParcelStore.Parcel(
 				weighted(first.x(), first.mass(), second.x(), second.mass(), combinedMass),
 				weighted(first.y(), first.mass(), second.y(), second.mass(), combinedMass),
@@ -397,7 +393,7 @@ public final class GranularInventory {
 				weighted(first.velocityX(), first.mass(), second.velocityX(), second.mass(), combinedMass),
 				weighted(first.velocityY(), first.mass(), second.velocityY(), second.mass(), combinedMass),
 				weighted(first.velocityZ(), first.mass(), second.velocityZ(), second.mass(), combinedMass),
-				combinedSvq, combinedMass, first.materialHandle(), first.solidCompositionHandle(),
+				combinedSvq, combinedMassUnits, first.materialHandle(), first.solidCompositionHandle(),
 				0, (byte) ((first.flags() & second.flags()) & ~GranularParcelStore.FLAG_SUPPORTED));
 		return new ActiveMerge(parcels.prepareOverwrite(firstIndex, merged), combinedComposition);
 	}
@@ -444,7 +440,7 @@ public final class GranularInventory {
 		var take = deposits.planTake(cell, materialHandle, compositionHandle, requestedSvq);
 		var planned = take.portion;
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(x, y, z,
-				velocityX, velocityY, velocityZ, planned.solidVolumeSvq(), planned.mass(),
+				velocityX, velocityY, velocityZ, planned.solidVolumeSvq(), planned.massUnits(),
 				planned.materialHandle(), planned.solidCompositionHandle(), 0, (byte) 0);
 		parcel = parcels.prepareAppend(parcel);
 		if (!parcels.canAdd(parcel)) return null;
@@ -455,7 +451,7 @@ public final class GranularInventory {
 		if (compositionHandle != 0) {
 			if (compositions == null) throw new IllegalStateException("Granular wake composition pool is missing");
 			composition = compositions.record(compositionHandle);
-			if (!compositionMassClose(composition.totalMass(compositions.registry()), planned.mass()))
+			if (composition.massUnits(compositions.registry()) != planned.massUnits())
 				throw new IllegalStateException("Wake source composition does not match its mechanical mass");
 		}
 		EnergyPlan energy = thermalEnergy == null ? null : thermalEnergy.planDepositWake(cell, materialHandle, compositionHandle,
@@ -484,8 +480,8 @@ public final class GranularInventory {
 		return Math.addExact(parcels.totalSolidVolumeSvq(), deposits.totalSolidVolumeSvq());
 	}
 
-	public SignedDyadic exactMass() { return parcels.exactMass().add(deposits.exactMass()); }
-	public double totalMass() { return exactMass().toDouble(); }
+	public long totalMassUnits() { return Math.addExact(parcels.totalMassUnits(), deposits.totalMassUnits()); }
+	public double totalMass() { return mmm.units.Mass.kilograms(totalMassUnits()); }
 
 	/** Validates unique, complete composition ownership without changing either inventory store. */
 	public void requireCanClear() {

@@ -102,20 +102,20 @@ public final class GranularPhaseTransferEngine {
 		long[] volumeDeltas = representableVolumeAllocation(solidSvq, liquid, ordinals, precipitation);
 		if (volumeDeltas == null) return null;
 		MarkerUpdate[] updates = new MarkerUpdate[liquid.size()];
-		SignedDyadic liquidMassChange = SignedDyadic.ZERO;
+		long liquidMassChange = 0;
 		for (int index = 0; index < liquid.size(); index++) {
 			LiquidParcel source = liquid.get(index);
 			ChemicalMixtureRecord replacement = record(
-					distributed[index], source.mixture().massResidualKilogramsBits());
+					distributed[index], source.mixture().massResidualUnits());
 			double massKilograms = replacement.massKilograms(chemistry);
 			if (!(Double.isFinite(massKilograms) && massKilograms > 0.0)) {
 				return null;
 			}
-			double solverMass;
+			long solverMass;
 			try {
-				solverMass = ChemicalMixtureRecord.solverMassAfterSpeciesChange(source.mass(),
+				solverMass = ChemicalMixtureRecord.massUnitsAfterSpeciesChange(source.massUnits(),
 						replacement.exactSpeciesMassKilograms(chemistry)
-								.subtract(source.mixture().exactSpeciesMassKilograms(chemistry)), unitScale);
+								.subtract(source.mixture().exactSpeciesMassKilograms(chemistry)));
 			} catch (IllegalArgumentException | ArithmeticException unrepresentable) {
 				return null;
 			}
@@ -127,15 +127,12 @@ public final class GranularPhaseTransferEngine {
 				throw new BlockedException("Liquid marker cannot represent the exact SVQ phase-transfer delta");
 			}
 			updates[index] = new MarkerUpdate(source.marker(), replacement, cellVolume, solverMass);
-			liquidMassChange = liquidMassChange.add(SignedDyadic.of(unitScale.kilograms(solverMass)))
-					.subtract(SignedDyadic.of(unitScale.kilograms(source.mass())));
+			liquidMassChange = Math.addExact(liquidMassChange, Math.subtractExact(solverMass, source.massUnits()));
 		}
 		SolidCompositionRecord solid = recordSolid(transferred);
-		double solidMass = solid.totalMass(chemistry);
-		double signedTransfer = precipitation ? -solidMass : solidMass;
-		double representedTransfer = liquidMassChange.toDouble();
-		if (!(Double.isFinite(representedTransfer) && representedTransfer * Math.signum(signedTransfer) > 0.0)
-				|| !massClose(representedTransfer, signedTransfer)) return null;
+		long solidMass = solid.massUnits(chemistry);
+		long signedTransfer = precipitation ? -solidMass : solidMass;
+		if (liquidMassChange != signedTransfer) throw new IllegalStateException("Solid/liquid mass counts do not close");
 		return new Plan(precipitation ? magnitude : -magnitude, precipitation ? solidSvq : -solidSvq,
 				precipitation ? solidMass : -solidMass, solid, List.of(updates), false);
 	}
@@ -195,7 +192,7 @@ public final class GranularPhaseTransferEngine {
 		return 0L;
 	}
 
-	private ChemicalMixtureRecord record(Map<Integer, Long> values, long residualBits) {
+	private ChemicalMixtureRecord record(Map<Integer, Long> values, long residualUnits) {
 		if (values.isEmpty() || values.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL) {
 			throw new BlockedException("Phase transfer exceeds the chemical marker entry budget");
 		}
@@ -203,7 +200,7 @@ public final class GranularPhaseTransferEngine {
 		for (Map.Entry<Integer, Long> entry : values.entrySet()) {
 			species[index] = entry.getKey(); amounts[index++] = entry.getValue();
 		}
-		return new ChemicalMixtureRecord(species, amounts, residualBits);
+		return new ChemicalMixtureRecord(species, amounts, residualUnits);
 	}
 
 	private SolidCompositionRecord recordSolid(Map<Integer, Long> values) {
@@ -265,23 +262,22 @@ public final class GranularPhaseTransferEngine {
 		return true;
 	}
 
-	private static boolean massClose(double left, double right) {
-		return Math.abs(left - right) <= Math.max(1.0E-9, Math.max(Math.ulp(left), Math.ulp(right)) * 8.0);
-	}
 
-	public record LiquidParcel(int marker, float cellVolume, double mass, ChemicalMixtureRecord mixture) {
+	public record LiquidParcel(int marker, float cellVolume, long massUnits, ChemicalMixtureRecord mixture) {
+		public double mass() { return unitMass(massUnits); }
 		public LiquidParcel {
 			if (marker < 0 || !(Float.isFinite(cellVolume) && cellVolume > 0.0F)
-					|| !(Double.isFinite(mass) && mass > 0.0) || mixture == null) {
+					|| massUnits <= 0 || mixture == null) {
 				throw new IllegalArgumentException("Invalid phase-transfer liquid parcel");
 			}
 		}
 	}
-	public record MarkerUpdate(int marker, ChemicalMixtureRecord mixture, float cellVolume, double mass) { }
-	public record Plan(long signedExtent, long signedSolidSvq, double signedSolidMass,
+	public record MarkerUpdate(int marker, ChemicalMixtureRecord mixture, float cellVolume, long massUnits) { public double mass() { return unitMass(massUnits); } }
+	public record Plan(long signedExtent, long signedSolidSvq, long signedSolidMassUnits,
 	                   SolidCompositionRecord transferredComposition, List<MarkerUpdate> markerUpdates, boolean retryRequired) {
-		static Plan none() { return new Plan(0L, 0L, 0.0, null, List.of(), false); }
-		static Plan deferred() { return new Plan(0L, 0L, 0.0, null, List.of(), true); }
+		static Plan none() { return new Plan(0L, 0L, 0L, null, List.of(), false); }
+		static Plan deferred() { return new Plan(0L, 0L, 0L, null, List.of(), true); }
+		public double signedSolidMass() { return mmm.units.Mass.kilograms(signedSolidMassUnits); }
 		public boolean changed() { return signedExtent != 0L; }
 		public boolean precipitation() { return signedExtent > 0L; }
 	}
@@ -294,6 +290,7 @@ public final class GranularPhaseTransferEngine {
 		}
 	}
 
+	private static double unitMass(long units) { return mmm.units.Mass.kilograms(units); }
 	private record Dyadic(int significand, int exponent) { }
 
 	public static final class BlockedException extends IllegalStateException {

@@ -28,11 +28,10 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 	public void setMarkerChemical(int marker, Map<String, Long> stableAmounts, boolean indicator) {
 		if (marker < 0 || marker >= particles.count()) throw new IllegalArgumentException("Unknown marker " + marker);
 		ChemicalMixtureRecord zeroResidual = ChemicalMixtureRecord.fromStableAmounts(
-				domain().chemicalParcels().registry(), stableAmounts, 0.0);
+				domain().chemicalParcels().registry(), stableAmounts, 0L);
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
 				chemicalParcels.registry(), stableAmounts,
-				unitScale.kilograms(particles.mass(marker))
-						- zeroResidual.exactSpeciesMassKilograms(chemicalParcels.registry()).toDouble());
+				Math.subtractExact(particles.massUnits(marker), zeroResidual.speciesMassUnits(chemicalParcels.registry())));
 		chemicalParcels.requireCompatible(record,
 				materialRegistry.material(particles.materialHandle(marker)).id(), indicator);
 		if (thermalState != null) thermalState.requireReactionState(
@@ -62,6 +61,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		ensureParticleCapacity(restoredCount);
 		float[] positionVolume = state.positionVolume();
 		float[] particleVelocities = state.particleVelocities();
+		long[] restoredMassUnits = state.massUnits();
 		byte[] collisionMasks = state.collisionMicroMasks();
 		geometry.cutCells.restoreMicroMasks(collisionMasks);
 		for (int i = 0; i < cellCount; i++) geometry.solid[i] = Byte.toUnsignedInt(collisionMasks[i]) == 0xff;
@@ -74,7 +74,9 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 			particles.setVelocityX(particle, particleVelocities[velocityBase]);
 			particles.setVelocityY(particle, particleVelocities[velocityBase + 1]);
 			particles.setVelocityZ(particle, particleVelocities[velocityBase + 2]);
-			setDefaultMaterialState(particle);
+			particles.setMassUnits(particle, restoredMassUnits[particle]);
+			particles.setMaterialHandle(particle, 0);
+			particles.setPhaseLabel(particle, 0);
 		}
 		coordinator.adoptWholesaleCount(
 				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()), restoredCount);
@@ -106,10 +108,10 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 			throw new IllegalArgumentException("Material handle 0 must match the domain default density");
 		}
 		restoreParticleColumns(state.particles());
-		double[] restoredMass = state.particleMass();
+		long[] restoredMass = state.particleMassUnits();
 		int[] restoredMaterial = state.materialPaletteIndex();
 		for (int particle = 0; particle < particles.count(); particle++) {
-			particles.setMass(particle, restoredMass[particle]);
+			particles.setMassUnits(particle, restoredMass[particle]);
 			particles.setMaterialHandle(particle, restoredMaterial[particle]);
 			particles.setPhaseLabel(particle, registry.phaseHandle(restoredMaterial[particle]));
 		}
@@ -241,7 +243,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 			throw new CollisionEditBlockedException("Granular collision displacement could not be planned", failure);
 		}
 		return new CollisionEditPlan((FluidDomain) this, List.copyOf(canonical), previousMasks, particles.count(),
-				Double.doubleToRawLongBits(totalVolumeExact()), Double.doubleToRawLongBits(totalMass()), granularPlan);
+				Double.doubleToRawLongBits(totalVolumeExact()), totalMassUnits(), granularPlan);
 	}
 
 	/** Commits the already validated cross-owner prelude; the supplied masks may then be applied without refusal. */
@@ -251,7 +253,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		}
 		if (particles.count() != plan.planMarkerCount
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != plan.totalVolumeBits
-				|| Double.doubleToRawLongBits(totalMass()) != plan.totalMassBits) {
+				|| totalMassUnits() != plan.totalMassUnits) {
 			throw new IllegalStateException("Liquid inventory changed after collision planning");
 		}
 		for (int index = 0; index < plan.edits.size(); index++) {
@@ -377,34 +379,34 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		}
 
 		long plannedSvq = 0L;
-		double plannedMass = 0.0;
+		long plannedMass = 0L;
 		for (int parcel = 0; parcel < selectedParcels.length; parcel++) if (selectedParcels[parcel]) {
 			GranularParcelStore.Parcel state = granularState.parcels.parcel(parcel);
 			plannedSvq = Math.addExact(plannedSvq, state.solidVolumeSvq());
-			plannedMass += state.mass();
+			plannedMass = Math.addExact(plannedMass, state.massUnits());
 		}
 		for (CollisionDeposit deposit : depositGroups) {
 			plannedSvq = Math.addExact(plannedSvq, deposit.group().solidVolumeSvq());
-			plannedMass += deposit.group().mass();
+			plannedMass = Math.addExact(plannedMass, deposit.group().massUnits());
 		}
 		long auditSvq = 0L;
-		double auditMass = 0.0;
+		long auditMass = 0L;
 		for (GranularAuditLedger.Entry entry : removed.entries()) {
 			auditSvq = Math.addExact(auditSvq, entry.solidVolumeSvq());
-			auditMass += entry.mass();
+			auditMass = Math.addExact(auditMass, entry.massUnits());
 		}
-		if (auditSvq != plannedSvq || !massClose(auditMass, plannedMass)) {
+		if (auditSvq != plannedSvq || auditMass != plannedMass) {
 			throw new IllegalStateException("Granular collision plan differs from its preflight audit");
 		}
 		return new GranularCollisionPlan(selectedParcels, List.copyOf(depositGroups), sinkAfter,
 				affectedCells.clone(), granularState.parcels.count(), granularState.inventory.totalSolidVolumeSvq(),
-				Double.doubleToRawLongBits(granularState.inventory.totalMass()));
+				granularState.inventory.totalMassUnits());
 	}
 
 	void commitGranularCollision(GranularCollisionPlan plan) {
 		if (granularState.parcels.count() != plan.parcelCount()
 				|| granularState.inventory.totalSolidVolumeSvq() != plan.totalSvq()
-				|| Double.doubleToRawLongBits(granularState.inventory.totalMass()) != plan.totalMassBits()) {
+				|| granularState.inventory.totalMassUnits() != plan.totalMassUnits()) {
 			throw new IllegalStateException("Granular inventory changed after collision planning");
 		}
 		for (int parcel = plan.selectedParcels().length - 1; parcel >= 0; parcel--) if (plan.selectedParcels()[parcel]) {
@@ -502,6 +504,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 	}
 
 	/** Exact marker-mass inventory; reconstructed grid density is never used for this ledger. */
+	public long totalMassUnits() { return metrics.totalMassUnits(); }
 	public double totalMass() { return metrics.totalMass(); }
 
 	/** Returns the material handle with the largest exact marker volume in the given cell. */
@@ -576,9 +579,9 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		double previousTemperature = thermalState == null ? Double.NaN : domain().thermalMarkerTemperature(particle);
 		SignedDyadic thermalBefore = thermalState == null ? SignedDyadic.ZERO : domain().exactInternalEnergy();
 		FluidMaterial material = registry.material(materialHandle);
-		double mass = (double) particles.volume(particle) * material.referenceDensity();
+		long mass = unitScale.massUnitsForNormalized((double) particles.volume(particle) * material.referenceDensity());
 		if (!(mass <= Float.MAX_VALUE)) throw new IllegalArgumentException("Material mass exceeds P2G range");
-		particles.setMass(particle, mass);
+		particles.setMassUnits(particle, mass);
 		particles.setMaterialHandle(particle, materialHandle);
 		particles.setPhaseLabel(particle, registry.phaseHandle(materialHandle));
 		if (thermalState != null) thermalState.resetMarkerTemperature(

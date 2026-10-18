@@ -42,9 +42,10 @@ final class RegionStateCodec {
 		root.put("Footprint", encodeFootprint(manifest.footprint()));
 		root.putInt("MarkerCount", manifest.totalMarkerCount());
 		root.putLong("VolumeBits", manifest.totalVolumeBits());
+		root.putLong("MassUnits", manifest.totalMassUnits());
 		if (manifest.layout().hasMaterials()) {
 			root.put("Materials", encodeMaterials(manifest.materialPalette()));
-			root.putLong("MassBits", manifest.totalMassBits());
+			root.putLong("MassUnits", manifest.totalMassUnits());
 			root.put("MaterialLedgers", encodeMaterialLedgers(manifest.materialLedgers()));
 		}
 		if (manifest.layout().permitsOptionalChemistry()) {
@@ -56,14 +57,14 @@ final class RegionStateCodec {
 			root.put("SpeciesPalette", encodeStrings(manifest.speciesPalette()));
 			root.put("ChemicalMixtures", encodeChemicalMixtures(manifest.chemicalMixtures(), manifest.speciesPalette()));
 			root.putLongArray("ChemicalSpeciesTotals", manifest.chemicalSpeciesTotals());
-			root.putLong("ChemicalResidualBits", manifest.chemicalResidualLedgerBits());
+			root.putLong("ChemicalResidualUnits", manifest.chemicalResidualLedgerUnits());
 		}
 		ListTag sections = new ListTag();
 		for (RegionManifest.SectionDescriptor descriptor : manifest.sections()) {
 			CompoundTag section = new CompoundTag();
 			section.putInt("X", descriptor.sectionX()); section.putInt("Y", descriptor.sectionY()); section.putInt("Z", descriptor.sectionZ());
 			section.putInt("MarkerCount", descriptor.markerCount()); section.putLong("VolumeBits", descriptor.volumeBits());
-			if (manifest.layout().hasMaterials()) section.putLong("MassBits", descriptor.massBits());
+			section.putLong("MassUnits", descriptor.massUnits());
 			section.putLong("Checksum", descriptor.checksum()); sections.add(section);
 		}
 		root.put("Sections", sections);
@@ -87,23 +88,21 @@ final class RegionStateCodec {
 			CompoundTag section = compoundAt(encodedSections, i, "section descriptor");
 			require(section, "X", Tag.TAG_INT); require(section, "Y", Tag.TAG_INT); require(section, "Z", Tag.TAG_INT);
 			require(section, "MarkerCount", Tag.TAG_INT); require(section, "VolumeBits", Tag.TAG_LONG); require(section, "Checksum", Tag.TAG_LONG);
-			long massBits = 0L;
-			if (identity.layout().hasMaterials()) {
-				require(section, "MassBits", Tag.TAG_LONG);
-				massBits = section.getLongOr("MassBits", 0L);
-			}
+			require(section, "MassUnits", Tag.TAG_LONG);
+			long massUnits = section.getLongOr("MassUnits", 0L);
 			sections.add(new RegionManifest.SectionDescriptor(section.getIntOr("X", 0), section.getIntOr("Y", 0), section.getIntOr("Z", 0),
-					section.getIntOr("MarkerCount", -1), section.getLongOr("VolumeBits", 0L), massBits,
+					section.getIntOr("MarkerCount", -1), section.getLongOr("VolumeBits", 0L), massUnits,
 					section.getLongOr("Checksum", -1L)));
 		}
 		List<FluidMaterial> materials = List.of();
-		long totalMassBits = 0L;
+		require(root, "MassUnits", Tag.TAG_LONG);
+		long totalMassUnits = root.getLongOr("MassUnits", 0L);
 		List<RegionManifest.MaterialLedger> materialLedgers = List.of();
 		if (identity.layout().hasMaterials()) {
-			require(root, "Materials", Tag.TAG_LIST); require(root, "MassBits", Tag.TAG_LONG);
+			require(root, "Materials", Tag.TAG_LIST); require(root, "MassUnits", Tag.TAG_LONG);
 			require(root, "MaterialLedgers", Tag.TAG_LIST);
 			materials = decodeMaterials(root.getListOrEmpty("Materials"));
-			totalMassBits = root.getLongOr("MassBits", 0L);
+			totalMassUnits = root.getLongOr("MassUnits", 0L);
 			materialLedgers = decodeMaterialLedgers(root.getListOrEmpty("MaterialLedgers"));
 		}
 		String registryFingerprint = "";
@@ -111,7 +110,7 @@ final class RegionStateCodec {
 		List<String> speciesPalette = List.of();
 		List<FlipChemicalParticleState.StableMixture> chemicalMixtures = List.of();
 		long[] chemicalSpeciesTotals = new long[0];
-		long chemicalResidualBits = 0L;
+		long chemicalResidualUnits = 0L;
 		boolean chemicalState = identity.layout().requiresChemistry();
 		if (identity.layout().permitsOptionalChemistry()) {
 			require(root, "ChemistryPresent", Tag.TAG_BYTE);
@@ -120,22 +119,22 @@ final class RegionStateCodec {
 		if (chemicalState) {
 			require(root, "RegistryFingerprint", Tag.TAG_STRING); require(root, "QuantaPerMol", Tag.TAG_LONG);
 			require(root, "SpeciesPalette", Tag.TAG_LIST); require(root, "ChemicalMixtures", Tag.TAG_LIST);
-			require(root, "ChemicalSpeciesTotals", Tag.TAG_LONG_ARRAY); require(root, "ChemicalResidualBits", Tag.TAG_LONG);
+			require(root, "ChemicalSpeciesTotals", Tag.TAG_LONG_ARRAY); require(root, "ChemicalResidualUnits", Tag.TAG_LONG);
 			registryFingerprint = root.getStringOr("RegistryFingerprint", "");
 			quantaPerMol = root.getLongOr("QuantaPerMol", -1L);
 			speciesPalette = decodeStrings(root.getListOrEmpty("SpeciesPalette"), ChemicalLimits.MAX_SPECIES, "species palette");
 			chemicalMixtures = decodeChemicalMixtures(root.getListOrEmpty("ChemicalMixtures"), speciesPalette);
 			chemicalSpeciesTotals = root.getLongArray("ChemicalSpeciesTotals").orElseThrow();
-			chemicalResidualBits = root.getLongOr("ChemicalResidualBits", 0L);
+			chemicalResidualUnits = root.getLongOr("ChemicalResidualUnits", 0L);
 		}
 		try {
 			return new RegionManifest(identity.layout(), identity.id(), identity.dimension(), identity.generation(), root.getLongOr("NetworkGeneration", -1L),
 					RegionGeometry.BlockPosition.fromPacked(root.getLongOr("Origin", 0L)), root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
 					decodeConfig(root.getCompoundOrEmpty("Solver")), root.getLongOr("MarkerBudget", -1L),
 					decodeRuntime(root.getCompoundOrEmpty("Runtime")), decodeFootprint(root.getCompoundOrEmpty("Footprint")),
-					root.getIntOr("MarkerCount", -1), root.getLongOr("VolumeBits", 0L), materials, totalMassBits, materialLedgers, sections,
+					root.getIntOr("MarkerCount", -1), root.getLongOr("VolumeBits", 0L), materials, totalMassUnits, materialLedgers, sections,
 					decodeExtensions(root.getListOrEmpty("Extensions")), registryFingerprint, quantaPerMol, speciesPalette,
-					chemicalMixtures, chemicalSpeciesTotals, chemicalResidualBits, root.getLongOr("Checksum", -1L));
+					chemicalMixtures, chemicalSpeciesTotals, chemicalResidualUnits, root.getLongOr("Checksum", -1L));
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid region manifest: " + exception.getMessage(), exception);
 		}
@@ -149,8 +148,8 @@ final class RegionStateCodec {
 		root.putIntArray("Ordinals", section.markerOrdinals());
 		root.putIntArray("PositionVolumeBits", floatBits(section.positionVolume()));
 		root.putIntArray("VelocityBits", floatBits(section.velocities()));
+		root.putLongArray("MassUnits", section.markerMassUnits());
 		if (section.layout().hasMaterials()) {
-			root.putLongArray("MassBits", doubleBits(section.markerMass()));
 			root.putIntArray("MaterialPaletteIndices", section.materialPaletteIndex());
 		}
 		if (section.layout().permitsOptionalChemistry()) {
@@ -160,7 +159,7 @@ final class RegionStateCodec {
 			root.putIntArray("ChemicalMixtureIndices", section.chemicalMixtureIndex());
 			root.putByteArray("Indicator", section.indicator());
 			root.putLongArray("ChemicalSpeciesTotals", section.chemicalSpeciesTotals());
-			root.putLong("ChemicalResidualBits", section.chemicalResidualLedgerBits());
+			root.putLong("ChemicalResidualUnits", section.chemicalResidualLedgerUnits());
 		}
 		root.putByteArray("Solids", section.solidMask());
 		root.put("Extensions", encodeExtensions(section.extensions()));
@@ -176,15 +175,15 @@ final class RegionStateCodec {
 		require(root, "Ordinals", Tag.TAG_INT_ARRAY); require(root, "PositionVolumeBits", Tag.TAG_INT_ARRAY);
 		require(root, "VelocityBits", Tag.TAG_INT_ARRAY); require(root, "Solids", Tag.TAG_BYTE_ARRAY);
 		require(root, "Extensions", Tag.TAG_LIST); require(root, "Checksum", Tag.TAG_LONG);
-		double[] markerMass = new double[0];
+		require(root, "MassUnits", Tag.TAG_LONG_ARRAY);
+		long[] markerMassUnits = root.getLongArray("MassUnits").orElseThrow();
 		int[] materialPaletteIndex = new int[0];
 		if (identity.layout().hasMaterials()) {
-			require(root, "MassBits", Tag.TAG_LONG_ARRAY); require(root, "MaterialPaletteIndices", Tag.TAG_INT_ARRAY);
-			markerMass = doubles(root.getLongArray("MassBits").orElseThrow());
+			require(root, "MassUnits", Tag.TAG_LONG_ARRAY); require(root, "MaterialPaletteIndices", Tag.TAG_INT_ARRAY);
 			materialPaletteIndex = root.getIntArray("MaterialPaletteIndices").orElseThrow();
 		}
 		int[] chemicalMixtureIndex = new int[0]; byte[] indicator = new byte[0];
-		long[] chemicalSpeciesTotals = new long[0]; long chemicalResidualBits = 0L;
+		long[] chemicalSpeciesTotals = new long[0]; long chemicalResidualUnits = 0L;
 		boolean chemicalState = identity.layout().requiresChemistry();
 		if (identity.layout().permitsOptionalChemistry()) {
 			require(root, "ChemistryPresent", Tag.TAG_BYTE);
@@ -192,11 +191,11 @@ final class RegionStateCodec {
 		}
 		if (chemicalState) {
 			require(root, "ChemicalMixtureIndices", Tag.TAG_INT_ARRAY); require(root, "Indicator", Tag.TAG_BYTE_ARRAY);
-			require(root, "ChemicalSpeciesTotals", Tag.TAG_LONG_ARRAY); require(root, "ChemicalResidualBits", Tag.TAG_LONG);
+			require(root, "ChemicalSpeciesTotals", Tag.TAG_LONG_ARRAY); require(root, "ChemicalResidualUnits", Tag.TAG_LONG);
 			chemicalMixtureIndex = root.getIntArray("ChemicalMixtureIndices").orElseThrow();
 			indicator = root.getByteArray("Indicator").orElseThrow();
 			chemicalSpeciesTotals = root.getLongArray("ChemicalSpeciesTotals").orElseThrow();
-			chemicalResidualBits = root.getLongOr("ChemicalResidualBits", 0L);
+			chemicalResidualUnits = root.getLongOr("ChemicalResidualUnits", 0L);
 		}
 		try {
 			return new RegionSectionState(identity.layout(), identity.id(), identity.dimension(), identity.generation(),
@@ -204,10 +203,10 @@ final class RegionStateCodec {
 					root.getIntOr("StartX", -1), root.getIntOr("StartY", -1), root.getIntOr("StartZ", -1),
 					root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
 					root.getIntArray("Ordinals").orElseThrow(), floats(root.getIntArray("PositionVolumeBits").orElseThrow()),
-					floats(root.getIntArray("VelocityBits").orElseThrow()), markerMass, materialPaletteIndex,
+					floats(root.getIntArray("VelocityBits").orElseThrow()), markerMassUnits, materialPaletteIndex,
 					root.getByteArray("Solids").orElseThrow(),
 					decodeExtensions(root.getListOrEmpty("Extensions")), chemicalMixtureIndex, indicator,
-					chemicalSpeciesTotals, chemicalResidualBits, root.getLongOr("Checksum", -1L));
+					chemicalSpeciesTotals, chemicalResidualUnits, root.getLongOr("Checksum", -1L));
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid region section: " + exception.getMessage(), exception);
 		}
@@ -215,6 +214,7 @@ final class RegionStateCodec {
 
 	private static CompoundTag identity(UUID id, String dimension, long generation, RegionStateLayout layout) {
 		CompoundTag tag = new CompoundTag();
+		tag.putString("MassEncoding", mmm.units.Mass.ENCODING);
 		tag.putString("Layout", layout.persistedId());
 		tag.putLong("UuidMost", id.getMostSignificantBits()); tag.putLong("UuidLeast", id.getLeastSignificantBits());
 		tag.putString("Dimension", dimension); tag.putLong("Generation", generation);
@@ -222,6 +222,8 @@ final class RegionStateCodec {
 	}
 
 	private static Identity decodeIdentity(CompoundTag tag, String context) throws IOException {
+		require(tag, "MassEncoding", Tag.TAG_STRING);
+		if (!mmm.units.Mass.ENCODING.equals(tag.getStringOr("MassEncoding", ""))) throw new IOException("Unsupported mass encoding in " + context);
 		require(tag, "Layout", Tag.TAG_STRING);
 		RegionStateLayout layout = RegionStateLayout.decode(tag.getStringOr("Layout", ""));
 		require(tag, "UuidMost", Tag.TAG_LONG); require(tag, "UuidLeast", Tag.TAG_LONG);
@@ -294,7 +296,7 @@ final class RegionStateCodec {
 				species[entry] = palette; amounts[entry] = mixture.components().get(entry).amountQuanta();
 			}
 			tag.putIntArray("Species", species); tag.putLongArray("Amounts", amounts);
-			tag.putLong("ResidualBits", mixture.massResidualBits()); list.add(tag);
+			tag.putLong("ResidualBits", mixture.massResidualUnits()); list.add(tag);
 		}
 		return list;
 	}
@@ -334,7 +336,7 @@ final class RegionStateCodec {
 		for (RegionManifest.MaterialLedger ledger : ledgers) {
 			CompoundTag tag = new CompoundTag();
 			tag.putInt("MarkerCount", ledger.markerCount()); tag.putLong("VolumeBits", ledger.volumeBits());
-			tag.putLong("MassBits", ledger.massBits()); list.add(tag);
+			tag.putLong("MassUnits", ledger.massUnits()); list.add(tag);
 		}
 		return list;
 	}
@@ -344,10 +346,10 @@ final class RegionStateCodec {
 		List<RegionManifest.MaterialLedger> result = new ArrayList<>(list.size());
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag tag = compoundAt(list, i, "material ledger");
-			require(tag, "MarkerCount", Tag.TAG_INT); require(tag, "VolumeBits", Tag.TAG_LONG); require(tag, "MassBits", Tag.TAG_LONG);
+			require(tag, "MarkerCount", Tag.TAG_INT); require(tag, "VolumeBits", Tag.TAG_LONG); require(tag, "MassUnits", Tag.TAG_LONG);
 			try {
 				result.add(new RegionManifest.MaterialLedger(tag.getIntOr("MarkerCount", -1), tag.getLongOr("VolumeBits", 0L),
-						tag.getLongOr("MassBits", 0L)));
+						tag.getLongOr("MassUnits", 0L)));
 			} catch (IllegalArgumentException exception) {
 				throw new IOException("Invalid material ledger", exception);
 			}
@@ -445,7 +447,6 @@ final class RegionStateCodec {
 	private static float bits(CompoundTag tag, String field) { return Float.intBitsToFloat(tag.getIntOr(field, 0)); }
 	private static int[] floatBits(float[] floats) { int[] bits = new int[floats.length]; for (int i = 0; i < floats.length; i++) bits[i] = Float.floatToRawIntBits(floats[i]); return bits; }
 	private static float[] floats(int[] bits) { float[] floats = new float[bits.length]; for (int i = 0; i < bits.length; i++) floats[i] = Float.intBitsToFloat(bits[i]); return floats; }
-	private static long[] doubleBits(double[] doubles) { long[] bits = new long[doubles.length]; for (int i = 0; i < doubles.length; i++) bits[i] = Double.doubleToRawLongBits(doubles[i]); return bits; }
 	private static double[] doubles(long[] bits) { double[] doubles = new double[bits.length]; for (int i = 0; i < bits.length; i++) doubles[i] = Double.longBitsToDouble(bits[i]); return doubles; }
 	private static long[] longs(Set<Long> values) { return values.stream().mapToLong(Long::longValue).sorted().toArray(); }
 	private static Set<Long> set(long[] values) { Set<Long> result = new HashSet<>(); Arrays.stream(values).forEach(result::add); return result; }

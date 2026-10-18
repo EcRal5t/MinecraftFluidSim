@@ -129,7 +129,7 @@ abstract class FluidDomainStorage {
 		this.maximumParticleCount = maximumParticleCount;
 		FluidDomain domain = (FluidDomain) this;
 		this.gasBoundary = new GasPressureBoundary(domain);
-		this.particles = new LiquidParticleStore(maximumParticleCount);
+		this.particles = new LiquidParticleStore(maximumParticleCount, unitScale);
 		int initialParticleCapacity = Math.min(16_384, maximumParticleCount);
 		this.geometry = new DomainGeometry(sizeX, sizeY, sizeZ, cellCount);
 		this.carrierPropertiesWorkspace = new LiquidCarrierProperties(cellCount);

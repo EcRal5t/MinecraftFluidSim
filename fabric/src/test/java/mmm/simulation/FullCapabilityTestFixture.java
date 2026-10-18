@@ -35,8 +35,8 @@ public final class FullCapabilityTestFixture {
 	public static FluidMaterialRegistry bindEmptyMaterialState(FluidDomain domain, FluidMaterialRegistry liquids) {
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				domain.sizeX(), domain.sizeY(), domain.sizeZ(), domain.config().cellSize(),
-				0, 0.0, 0.0, liquids.materials(), new float[0], new float[0],
-				new byte[domain.sizeX() * domain.sizeY() * domain.sizeZ()], new double[0], new int[0]));
+				0, 0.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(0.0), liquids.materials(), new float[0], new float[0],
+				new byte[domain.sizeX() * domain.sizeY() * domain.sizeZ()], java.util.Arrays.stream(new double[0]).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(m)).toArray(), new int[0]));
 		return domain.materialRegistry();
 	}
 

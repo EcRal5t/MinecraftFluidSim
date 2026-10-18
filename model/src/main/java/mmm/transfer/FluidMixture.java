@@ -12,7 +12,7 @@ import java.util.Set;
 public record FluidMixture(List<Component> components) {
 	public static final int MAX_COMPONENTS = 64;
 	public static final int MAX_ENCODED_LENGTH = 8192;
-	private static final String ENCODING_TAG = "mmm:fluid-mixture;";
+	private static final String ENCODING_TAG = "mmm:fluid-mixture;" + mmm.units.Mass.ENCODING + ";";
 
 	public FluidMixture {
 		if (components == null || components.isEmpty()) {
@@ -25,13 +25,13 @@ public record FluidMixture(List<Component> components) {
 		canonical.sort(Comparator.comparing(Component::materialId));
 		Set<String> ids = new HashSet<>();
 		long totalVolume = 0L;
-		double totalMass = 0.0;
+		long totalMass = 0;
 		for (Component component : canonical) {
 			if (!ids.add(component.materialId())) {
 				throw new IllegalArgumentException("Duplicate fluid-mixture material " + component.materialId());
 			}
 			totalVolume = Math.addExact(totalVolume, component.volumeNanos());
-			totalMass += component.mass();
+			totalMass = Math.addExact(totalMass, component.massUnits());
 		}
 		if (totalVolume > ContainerFluidLedger.NANOS_PER_BLOCK) {
 			throw new IllegalArgumentException("Fluid mixture exceeds one bucket");
@@ -48,12 +48,12 @@ public record FluidMixture(List<Component> components) {
 		return total;
 	}
 
-	public double totalMass() {
-		double total = 0.0;
-		for (Component component : components) total += component.mass();
-		if (!(Double.isFinite(total) && total > 0.0)) throw new IllegalStateException("Fluid mixture mass overflow");
+	public long totalMassUnits() {
+		long total = 0;
+		for (Component value : components) total = Math.addExact(total, value.massUnits());
 		return total;
 	}
+	public double totalMass() { return mmm.units.Mass.kilograms(totalMassUnits()); }
 
 	/** Canonical textual handle; ids cannot contain ',' or ';' under Minecraft identifier syntax. */
 	public String encode() {
@@ -63,7 +63,7 @@ public record FluidMixture(List<Component> components) {
 			Component component = components.get(i);
 			result.append(component.materialId()).append(',')
 					.append(component.volumeNanos()).append(',')
-					.append(Long.toUnsignedString(component.massBits(), 16));
+					.append(Long.toUnsignedString(component.massUnits(), 16));
 		}
 		if (result.length() > MAX_ENCODED_LENGTH) {
 			throw new IllegalArgumentException("Fluid-mixture handle exceeds the persisted component limit");
@@ -91,24 +91,21 @@ public record FluidMixture(List<Component> components) {
 		return new FluidMixture(components);
 	}
 
-	public record Component(String materialId, long volumeNanos, long massBits) {
-		public Component(String materialId, long volumeNanos, double mass) {
-			this(materialId, volumeNanos, Double.doubleToRawLongBits(mass));
-		}
+	public record Component(String materialId, long volumeNanos, long massUnits) {
 
 		public Component {
 			StableId.require(materialId, 128, "fluid-mixture material id");
 			if (volumeNanos <= 0L || volumeNanos > ContainerFluidLedger.NANOS_PER_BLOCK) {
 				throw new IllegalArgumentException("Invalid fluid-mixture component volume: " + volumeNanos);
 			}
-			double mass = Double.longBitsToDouble(massBits);
+			double mass = mmm.units.Mass.kilograms(massUnits);
 			if (!(Double.isFinite(mass) && mass > 0.0)) {
 				throw new IllegalArgumentException("Invalid fluid-mixture component mass");
 			}
 		}
 
 		public double mass() {
-			return Double.longBitsToDouble(massBits);
+			return mmm.units.Mass.kilograms(massUnits);
 		}
 	}
 }

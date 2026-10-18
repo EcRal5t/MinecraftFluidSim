@@ -117,8 +117,8 @@ final class FluidRegionWorldInteraction {
 			ChemicalTransferLedger displacedChemistry = ChemicalTransferLedger.EMPTY;
 			double[] displacedMaterialVolume = domain.hasMaterialState() && !domain.hasChemistryState()
 					? new double[domain.materialRegistry().size()] : null;
-			double[] displacedMaterialMass = displacedMaterialVolume == null ? null
-					: new double[displacedMaterialVolume.length];
+			long[] displacedMaterialMass = displacedMaterialVolume == null ? null
+					: new long[displacedMaterialVolume.length];
 			SignedDyadic displacedEnergy = SignedDyadic.ZERO;
 			for (FluidDomain.CollisionEdit edit : block.edits()) {
 				if (domain.hasChemistryState()) {
@@ -133,7 +133,7 @@ final class FluidRegionWorldInteraction {
 					displacedInBlock += material.volume();
 					for (FluidDomain.MaterialPortion portion : material.portions()) {
 						displacedMaterialVolume[portion.materialHandle()] += portion.volume();
-						displacedMaterialMass[portion.materialHandle()] += portion.mass();
+						displacedMaterialMass[portion.materialHandle()] = Math.addExact(displacedMaterialMass[portion.materialHandle()], portion.massUnits());
 					}
 					displacedEnergy = displacedEnergy.add(SignedDyadic.of(material.internalEnergy()));
 				} else {

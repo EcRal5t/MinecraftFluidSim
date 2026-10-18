@@ -39,12 +39,12 @@ public final class GasPhaseInterfaceValidation {
 		// The reconstructed half-cell interface must contact positive dry capacity.
 		var half = domain(0, false, new float[]{.5F,.25F,.5F,.5F});
 		try {
-			CarrierMassMomentum.plan(half.particles, new int[]{0}, new double[]{half.particles.mass(0) + 1}, 0, 0, 0, 0);
+			CarrierMassMomentum.plan(half.particles, new int[]{0}, new long[]{half.particles.massUnits(0) + 1}, 0, 0, 0, 0);
 			throw new AssertionError("Mass transfer without a donor was accepted");
 		} catch (CarrierMassMomentum.RepresentationException physical) {
 			throw new AssertionError("Missing mass donor was classified as a physical limit", physical);
 		} catch (IllegalArgumentException expected) { }
-		var removed = CarrierMassMomentum.plan(half.particles, new int[]{0}, new double[]{0}, 0, 0, 0, 0);
+		var removed = CarrierMassMomentum.plan(half.particles, new int[]{0}, new long[]{0}, 0, 0, 0, 0);
 		check(Float.isFinite(removed.x()[0]) && Float.isFinite(removed.y()[0]) && Float.isFinite(removed.z()[0]),
 				"Complete carrier removal generated an undefined velocity");
 		var halfFrame = GasRuntimeGeometry.capture(half, null, new long[8], true);
@@ -95,7 +95,7 @@ public final class GasPhaseInterfaceValidation {
 				float[] positions=partialNeighbor?new float[]{.25F,.125F,.25F,volume, .75F,.125F,.25F,.5F}
 						:new float[]{.25F,.125F,.25F,volume};
 				domain.restoreParticleState(new FlipParticleState(2,2,2,.5F,positions.length/4,volume+(partialNeighbor?.5F:0),positions,
-						new float[positions.length/4*3],masks));domain.sealDomainBoundary();
+						new float[positions.length/4*3], mmm.units.Mass.createLiquid(.5F, 1000.0, positions),masks));domain.sealDomainBoundary();
 				domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());domain.bootstrapGasState("");
 				int node=domain.gasState.frame.commonCellNode(0);
 
@@ -129,7 +129,7 @@ public final class GasPhaseInterfaceValidation {
 		FluidDomain domain = new FluidDomain(2, 2, 2,
 				new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0), 32);
 		domain.restoreParticleState(new FlipParticleState(2,2,2,1,markers.length/4,total,markers,
-				new float[markers.length/4*3],masks));
+				new float[markers.length/4*3], mmm.units.Mass.createLiquid(1, 1000.0, markers),masks));
 		domain.sealDomainBoundary();
 		return domain;
 	}

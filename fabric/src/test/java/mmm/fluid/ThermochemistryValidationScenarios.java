@@ -198,7 +198,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 			amounts.put("mmm:oh_minus", 19L);
 			amounts.put("mmm:h2o", 13L + index);
 			ChemicalRegistry currentChemistry = index % 3 == 0 ? shifted : chemistry;
-			var mixture = ChemicalMixtureRecord.fromStableAmounts(currentChemistry, amounts, index / 128.0);
+			var mixture = ChemicalMixtureRecord.fromStableAmounts(currentChemistry, amounts, mmm.units.Mass.fromKilograms(index / 128.0));
 			double expected = mass * registry.material(host).referenceSpecificEnergyJPerKg();
 			for (var entry : amounts.entrySet()) expected += registry.speciesOffset(host, entry.getKey())
 					.referenceInternalEnergyJPerMol().multiply(entry.getValue())
@@ -227,7 +227,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		ChemicalParcelStore parcels = new ChemicalParcelStore(
 				chemistry, SolverUnitScale.forCellSize(1.0F), 1, 8);
 		ChemicalMixtureRecord initial = ChemicalMixtureRecord.fromStableAmounts(
-				chemistry, Map.of(a, ChemicalLimits.QUANTA_PER_MOL), 0.0);
+				chemistry, Map.of(a, ChemicalLimits.QUANTA_PER_MOL), 0L);
 		parcels.assign(0, initial, false);
 		parcels.markDirtyCell(0);
 		double[] mass = {1.0};
@@ -254,19 +254,19 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 305.0, 10.0)))), invalidOffsets, List.of(),
 				chemistry.fingerprint(), ""), liquids, 300.0, 1, 2, 2, 2, 0.5F, markers);
 		ChemicalParcelStore.ReactionStats deferred = parcels.reactDirtyCells(2, 2, 2, 0.5F,
-				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, mass, new int[]{0},
+				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, java.util.Arrays.stream(mass).mapToLong(m -> SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[]{0},
 				handle -> materialId, 1,
 				(marker, mixture, candidateMass) -> ChemicalReactionStage.requireThermalCandidate(narrow,
-						marker, mixture, candidateMass, markers));
+						marker, mixture, SolverUnitScale.forCellSize(.5F).normalizedMass(candidateMass), markers));
 		require(deferred.changedMarkers() == 0 && parcels.hasDirtyCells()
 				&& parcels.record(0).amount(chemistry.speciesHandle(a)) == ChemicalLimits.QUANTA_PER_MOL,
 				"energy-limited reaction retains its source and retry state");
 		narrow.setTemperatureInCell(0, 1_000_300.0, markers);
 		SignedDyadic heated = narrow.exactEnergy(1);
 		require(parcels.reactDirtyCells(2, 2, 2, 0.5F,
-				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, mass, new int[]{0},
+				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, java.util.Arrays.stream(mass).mapToLong(m -> SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[]{0},
 				handle -> materialId, 1, (marker, mixture, candidateMass) ->
-				ChemicalReactionStage.requireThermalCandidate(narrow, marker, mixture, candidateMass, markers))
+				ChemicalReactionStage.requireThermalCandidate(narrow, marker, mixture, SolverUnitScale.forCellSize(.5F).normalizedMass(candidateMass), markers))
 				.changedMarkers() == 1 && narrow.exactEnergy(1).equals(heated) && !parcels.hasDirtyCells(),
 				"heating makes the same deferred reaction commit with conserved energy");
 		parcels.assign(0, initial, false);
@@ -278,10 +278,10 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 				chemistry.fingerprint(), ""), liquids, 300.0, 1, 2, 2, 2, 0.5F, markers);
 		SignedDyadic before = thermal.exactEnergy(1);
 		parcels.reactDirtyCells(2, 2, 2, 0.5F,
-				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, mass, new int[]{0},
+				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, java.util.Arrays.stream(mass).mapToLong(m -> SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[]{0},
 				handle -> materialId, 1,
 				(marker, mixture, candidateMass) -> thermal.requireReactionState(
-						marker, mixture, candidateMass, markers));
+						marker, mixture, SolverUnitScale.forCellSize(.5F).normalizedMass(candidateMass), markers));
 		require(thermal.exactEnergy(1).equals(before) && close(thermal.temperature(0, markers), 380.0),
 				"reaction heat was not derived from conserved marker internal energy");
 	}
